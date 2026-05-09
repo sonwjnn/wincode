@@ -1,0 +1,31 @@
+// Better-T-Stack
+//
+// Website: https://www.better-t-stack.dev/
+// Stack Builder: https://www.better-t-stack.dev/new
+// Analytics: https://www.better-t-stack.dev/analytics
+// Showcase: https://www.better-t-stack.dev/showcase
+// Sponsor: https://github.com/sponsors/AmanVarshney01
+//
+// Add new addons with: bun create better-t-stack add
+// This file is safe to delete
+
+{
+  "$schema": "https://r2.better-t-stack.dev/schema.json",
+  "version": "3.28.0",
+  "createdAt": "2026-05-09T09:27:28.320Z",
+  "reproducibleCommand": "bun create better-t-stack@latest wincode --frontend tanstack-start --backend hono --runtime bun --database postgres --orm prisma --api trpc --auth better-auth --payments polar --addons turborepo biome ultracite lefthook opentui --examples ai --db-setup prisma-postgres --web-deploy cloudflare --server-deploy none --git --package-manager bun --install",
+  "database": "postgres",
+  "orm": "prisma",
+  "backend": "hono",
+  "runtime": "bun",
+  "frontend": ["tanstack-start"],
+  "addons": ["turborepo", "biome", "ultracite", "lefthook", "opentui"],
+  "examples": ["ai"],
+  "auth": "better-auth",
+  "payments": "polar",
+  "packageManager": "bun",
+  "dbSetup": "prisma-postgres",
+  "api": "trpc",
+  "webDeploy": "cloudflare",
+  "serverDeploy": "none",
+}
