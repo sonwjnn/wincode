@@ -74,6 +74,9 @@
             "style": "type"
           }
         }
+      },
+      "suspicious": {
+        "useAwait": "warn"
       }
     }
   },

@@ -63,6 +63,7 @@ function RouteComponent() {
 											isAnimating={
 												status === "streaming" && message.role === "assistant"
 											}
+											// biome-ignore lint/suspicious/noArrayIndexKey: <>
 											key={index}
 										>
 											{part.text}
