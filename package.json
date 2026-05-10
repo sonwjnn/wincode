@@ -28,7 +28,7 @@
     "build": "turbo build",
     "check-types": "turbo check-types",
     "dev:web": "turbo -F web dev",
-    "dev:tui": "turbo -F tui dev",
+    "dev:cli": "turbo -F cli dev",
     "dev:server": "turbo -F server dev",
     "db:push": "turbo -F @wincode/db db:push",
     "db:studio": "turbo -F @wincode/db db:studio",
