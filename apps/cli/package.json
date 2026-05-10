@@ -10,10 +10,17 @@
   "dependencies": {
     "@opentui/core": "^0.2.1",
     "@opentui/react": "^0.2.1",
-    "react": "^19.2.4"
+    "react": "catalog:",
+    "@tanstack/react-router": "catalog:",
+    "@tanstack/react-query": "catalog:",
+    "@trpc/tanstack-react-query": "catalog:",
+    "@trpc/client": "catalog:",
+    "@trpc/server": "catalog:",
+    "@wincode/api": "workspace:*"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@tanstack/router-cli": "1.166.43"
   },
   "peerDependencies": {
     "typescript": "^5"
