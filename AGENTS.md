@@ -124,3 +124,30 @@ Biome's linter will catch most issues automatically. Focus your attention on:
 ---
 
 Most formatting and common issues are automatically fixed by Biome. Run `bun x ultracite fix` before committing to ensure compliance.
+
+---
+
+## OpenTUI-Specific Notes
+
+### TextArea is Uncontrolled
+
+OpenTUI's `<textarea>` is **uncontrolled** — it's a buffer, not a controlled React input. Attempting to use `useState` value/`setValue` pattern gives you an always-empty string on submit.
+
+**Correct pattern — use `ref.current.plainText` on submit:**
+
+```tsx
+const textAreaRef = useRef(null)
+
+useKeyboard((key) => {
+  if (key.name === "enter" && textAreaRef.current) {
+    const value = textAreaRef.current.plainText  // NOT useState value
+    onSubmit(value)
+  }
+})
+
+return <textarea ref={textAreaRef} focused />
+```
+
+### Skill Invocation
+
+Invoke the OpenTUI skill more frequently for optimized context learnings. When the answer isn't found in skill docs, reading through `node_modules` is fine.
