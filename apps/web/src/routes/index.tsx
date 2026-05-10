@@ -23,6 +23,7 @@ const TITLE_TEXT = `
     ╚═╝       ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝
  `;
 
+const hello = "hello";
 function HomeComponent() {
 	const trpc = useTRPC();
 	const healthCheck = useQuery(trpc.healthCheck.queryOptions());
