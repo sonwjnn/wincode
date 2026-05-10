@@ -26,7 +26,9 @@
       "!**/.svelte-kit",
       "!**/wrangler.jsonc",
       "!**/.source",
-      "!**/convex/_generated"
+      "!**/convex/_generated",
+      "!**/packages/ui/src/components",
+      "!**/packages/ui/src/lib/utils.ts"
     ]
   },
   "formatter": {
@@ -66,13 +68,19 @@
         "noUnusedTemplateLiteral": "error",
         "useNumberNamespace": "error",
         "noInferrableTypes": "error",
-        "noUselessElse": "error"
+        "noUselessElse": "error",
+        "useConsistentTypeDefinitions": {
+          "level": "error",
+          "options": {
+            "style": "type"
+          }
+        }
       }
     }
   },
   "javascript": {
     "formatter": {
-      "quoteStyle": "double"
+      "enabled": true
     }
   },
   "css": {
