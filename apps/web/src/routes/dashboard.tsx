@@ -5,7 +5,7 @@ import { Button } from "@wincode/ui/components/button";
 import { getPayment } from "@/functions/get-payment";
 import { getUser } from "@/functions/get-user";
 import { authClient } from "@/lib/auth-client";
-import { useTRPC } from "@/utils/trpc";
+import { honoClient } from "@/utils/trpc";
 
 export const Route = createFileRoute("/dashboard")({
 	component: RouteComponent,
@@ -26,8 +26,16 @@ export const Route = createFileRoute("/dashboard")({
 function RouteComponent() {
 	const { session, customerState } = Route.useRouteContext();
 
-	const trpc = useTRPC();
-	const privateData = useQuery(trpc.privateData.queryOptions());
+	const privateData = useQuery({
+		queryKey: ["private-data"],
+		queryFn: async () => {
+			const res = await honoClient.api["private-data"].$get();
+			if (!res.ok) {
+				throw new Error("Unauthorized");
+			}
+			return res.json();
+		},
+	});
 
 	const hasProSubscription =
 		(customerState?.activeSubscriptions?.length ?? 0) > 0;

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { useTRPC } from "@/utils/trpc";
+import { honoClient } from "@/utils/trpc";
 
 export const Route = createFileRoute("/")({
 	component: HomeComponent,
@@ -24,8 +24,13 @@ const TITLE_TEXT = `
  `;
 
 function HomeComponent() {
-	const trpc = useTRPC();
-	const healthCheck = useQuery(trpc.healthCheck.queryOptions());
+	const healthCheck = useQuery({
+		queryKey: ["health-check"],
+		queryFn: async () => {
+			const res = await honoClient.api["health-check"].$get();
+			return res.json();
+		},
+	});
 
 	return (
 		<div className="container mx-auto max-w-3xl px-4 py-2">

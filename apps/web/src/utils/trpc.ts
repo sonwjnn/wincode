@@ -1,5 +1,5 @@
-import { createTRPCContext } from "@trpc/tanstack-react-query";
-import type { AppRouter } from "@wincode/api/routers/index";
+import { env } from "@wincode/env/web";
+import { hc } from "hono/client";
+import type { AppType } from "server";
 
-export const { TRPCProvider, useTRPC, useTRPCClient } =
-	createTRPCContext<AppRouter>();
+export const honoClient = hc<AppType>(env.VITE_SERVER_URL);

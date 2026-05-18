@@ -127,6 +127,22 @@ Most formatting and common issues are automatically fixed by Biome. Run `bun x u
 
 ---
 
+## API Requests — Use Hono RPC
+
+**Always use Hono for API requests between server and CLI/web apps.** Never use raw `fetch()` with `env.SERVER_URL`.
+
+The tRPC client derives the URL automatically from the configured `httpBatchLink` — no manual URL construction needed.
+
+### Request Validation — Use `@hono/zod-validator`
+
+Prefer Hono's zod validator (`@hono/zod-validator`). Read validated typed input via `c.req.valid('json')`. Never use raw `await c.req.json()` with type assertions.
+
+### Client-Side Validation — Use Zod Schemas
+
+Use Zod schemas for all client-side parsing (router state, search params, localStorage, etc.). Never use `as` type assertions. Validate with `.parse()` or use TanStack Router's `validateSearch` with a Zod schema.
+
+---
+
 ## OpenTUI-Specific Notes
 
 ### TextArea is Uncontrolled

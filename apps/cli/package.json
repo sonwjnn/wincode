@@ -8,15 +8,15 @@
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
+    "@ai-sdk/react": "catalog:",
     "@opentui/core": "^0.2.1",
     "@opentui/react": "^0.2.1",
     "react": "catalog:",
     "@tanstack/react-router": "catalog:",
-    "@tanstack/react-query": "catalog:",
-    "@trpc/tanstack-react-query": "catalog:",
     "@trpc/client": "catalog:",
     "@trpc/server": "catalog:",
-    "@wincode/api": "workspace:*"
+    "@wincode/env": "workspace:*",
+    "hono": "catalog:"
   },
   "devDependencies": {
     "@types/bun": "latest",

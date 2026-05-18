@@ -1,5 +1,3 @@
-import type { QueryClient } from "@tanstack/react-query";
-import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import {
 	createRootRouteWithContext,
 	HeadContent,
@@ -7,19 +5,14 @@ import {
 	Scripts,
 } from "@tanstack/react-router";
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
-import type { TRPCOptionsProxy } from "@trpc/tanstack-react-query";
-import type { AppRouter } from "@wincode/api/routers/index";
-import { Toaster } from "@wincode/ui/components/sonner";
+// import { Toaster } from "@wincode-demo/ui/components/sonner";
 
 import Header from "../components/header";
 
 import appCss from "../index.css?url";
 
-// biome-ignore lint/style/useConsistentTypeDefinitions: <>
-export interface RouterAppContext {
-	queryClient: QueryClient;
-	trpc: TRPCOptionsProxy<AppRouter>;
-}
+// biome-ignore lint/complexity/noBannedTypes: <>
+export type RouterAppContext = {};
 
 export const Route = createRootRouteWithContext<RouterAppContext>()({
 	head: () => ({
@@ -57,9 +50,8 @@ function RootDocument() {
 					<Header />
 					<Outlet />
 				</div>
-				<Toaster richColors />
+				{/* <Toaster richColors /> */}
 				<TanStackRouterDevtools position="bottom-left" />
-				<ReactQueryDevtools buttonPosition="bottom-right" position="bottom" />
 				<Scripts />
 			</body>
 		</html>

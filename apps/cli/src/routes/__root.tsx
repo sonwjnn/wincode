@@ -6,7 +6,7 @@ import {
 	useRouter,
 	useRouterState,
 } from "@tanstack/react-router";
-import { useReducer } from "react";
+import { useEffect, useReducer } from "react";
 
 export const Route = createRootRoute({
 	component: RootLayout,
@@ -28,7 +28,6 @@ function NotFound() {
 	);
 }
 
-// Root layout component with navigation
 function RootLayout() {
 	const router = useRouter();
 	const renderer = useRenderer();
@@ -38,17 +37,27 @@ function RootLayout() {
 		select: (s) => s.location.pathname,
 	});
 
+	useEffect(() => {
+		const updateAfterLoadStarts = () => {
+			setTimeout(forceUpdate, 0);
+		};
+
+		const unsubscribeBeforeLoad = router.subscribe("onBeforeLoad", () => {
+			updateAfterLoadStarts();
+		});
+		const unsubscribeResolved = router.subscribe("onResolved", () => {
+			updateAfterLoadStarts();
+		});
+
+		return () => {
+			unsubscribeBeforeLoad();
+			unsubscribeResolved();
+		};
+	}, [router]);
+
 	useKeyboard(async (event: KeyEvent) => {
 		if (event.name === "1") {
 			await router.navigate({ to: "/" });
-			forceUpdate();
-		}
-		if (event.name === "2") {
-			await router.navigate({ to: "/about" });
-			forceUpdate();
-		}
-		if (event.name === "3") {
-			await router.navigate({ to: "/settings" });
 			forceUpdate();
 		}
 		if (event.name === "q") {
@@ -58,7 +67,6 @@ function RootLayout() {
 
 	return (
 		<box flexDirection="column" flexGrow={1}>
-			{/* Header */}
 			<box
 				border={["bottom"]}
 				borderStyle="single"
@@ -67,18 +75,14 @@ function RootLayout() {
 				paddingLeft={1}
 				paddingRight={1}
 			>
-				<text attributes={TextAttributes.BOLD}>
-					TanStack Router File-Based Demo
-				</text>
+				<text attributes={TextAttributes.BOLD}>WinCode</text>
 				<text attributes={TextAttributes.DIM}>Current: {currentPath}</text>
 			</box>
 
-			{/* Main content area */}
 			<box flexGrow={1} padding={1}>
-				<Outlet />
+				<Outlet key={currentPath} />
 			</box>
 
-			{/* Footer navigation */}
 			<box
 				border={["top"]}
 				borderStyle="single"
@@ -97,26 +101,6 @@ function RootLayout() {
 					}
 				>
 					[1] Home
-				</text>
-				<text
-					attributes={
-						currentPath === "/about"
-							? // biome-ignore lint/suspicious/noBitwiseOperators: <>
-								TextAttributes.BOLD | TextAttributes.UNDERLINE
-							: TextAttributes.NONE
-					}
-				>
-					[2] About
-				</text>
-				<text
-					attributes={
-						currentPath === "/settings"
-							? // biome-ignore lint/suspicious/noBitwiseOperators: <>
-								TextAttributes.BOLD | TextAttributes.UNDERLINE
-							: TextAttributes.NONE
-					}
-				>
-					[3] Settings
 				</text>
 				<text attributes={TextAttributes.DIM}>[q] Quit</text>
 			</box>
