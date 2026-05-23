@@ -1,5 +1,4 @@
-import { type KeyEvent, TextAttributes } from "@opentui/core";
-import { useKeyboard, useRenderer } from "@opentui/react";
+import { TextAttributes } from "@opentui/core";
 import {
 	createRootRoute,
 	Outlet,
@@ -30,7 +29,6 @@ function NotFound() {
 
 function RootLayout() {
 	const router = useRouter();
-	const renderer = useRenderer();
 	const [, forceUpdate] = useReducer((x) => x + 1, 0);
 
 	const currentPath = useRouterState({
@@ -55,16 +53,6 @@ function RootLayout() {
 		};
 	}, [router]);
 
-	useKeyboard(async (event: KeyEvent) => {
-		if (event.name === "1") {
-			await router.navigate({ to: "/" });
-			forceUpdate();
-		}
-		if (event.name === "q") {
-			renderer.destroy();
-		}
-	});
-
 	return (
 		<box flexDirection="column" flexGrow={1}>
 			<box
@@ -81,28 +69,6 @@ function RootLayout() {
 
 			<box flexGrow={1} padding={1}>
 				<Outlet key={currentPath} />
-			</box>
-
-			<box
-				border={["top"]}
-				borderStyle="single"
-				flexDirection="row"
-				gap={2}
-				justifyContent="center"
-				paddingBottom={1}
-				paddingTop={1}
-			>
-				<text
-					attributes={
-						currentPath === "/"
-							? // biome-ignore lint/suspicious/noBitwiseOperators: <>
-								TextAttributes.BOLD | TextAttributes.UNDERLINE
-							: TextAttributes.NONE
-					}
-				>
-					[1] Home
-				</text>
-				<text attributes={TextAttributes.DIM}>[q] Quit</text>
 			</box>
 		</box>
 	);

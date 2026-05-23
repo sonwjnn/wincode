@@ -1,19 +1,43 @@
-import { useCompletion } from "@ai-sdk/react";
+import { useChat } from "@ai-sdk/react";
+import { useTerminalDimensions } from "@opentui/react";
 import { useRouterState } from "@tanstack/react-router";
-import { useEffect, useRef } from "react";
+import { DefaultChatTransport } from "ai";
+import { useEffect, useReducer, useRef } from "react";
+import { ChatShell } from "../components/chat/chat-shell";
+import { getChatTextAreaWidth } from "../components/chat/chat-text-area";
 import { honoClient } from "../lib/client";
 
-const completionApi = honoClient.api.completion.$url().toString();
+const chatApi = honoClient.api.chat.$url().toString();
 
 export function ChatScreen() {
+	const { width } = useTerminalDimensions();
 	const prompt = useRouterState({
 		select: (state) => state.location.state.input ?? "",
 	});
 	const submittedPromptRef = useRef<string | null>(null);
-	const { complete, completion, error, isLoading } = useCompletion({
-		api: completionApi,
-		streamProtocol: "text",
+	const [inputKey, resetInput] = useReducer((key: number) => key + 1, 0);
+	const { error, messages, sendMessage, status } = useChat({
+		transport: new DefaultChatTransport({
+			api: chatApi,
+			body: { sendReasoning: true },
+		}),
 	});
+	const isBusy = status === "submitted" || status === "streaming";
+	const inputWidth = getChatTextAreaWidth(width, 88);
+
+	const submitMessage = (value: string) => {
+		if (isBusy) {
+			return;
+		}
+
+		const text = value.trim();
+		if (!text) {
+			return;
+		}
+
+		resetInput();
+		sendMessage({ text }).catch(() => undefined);
+	};
 
 	useEffect(() => {
 		const submittedPrompt = prompt.trim();
@@ -22,17 +46,17 @@ export function ChatScreen() {
 		}
 
 		submittedPromptRef.current = submittedPrompt;
-		complete(submittedPrompt).catch(() => undefined);
-	}, [complete, prompt]);
+		sendMessage({ text: submittedPrompt }).catch(() => undefined);
+	}, [prompt, sendMessage]);
 
 	return (
-		<box flexDirection="column">
-			<text>Prompt:</text>
-			<text>{prompt}</text>
-			<text>Response:</text>
-			<text>{completion}</text>
-			{isLoading ? <text>Streaming...</text> : null}
-			{error ? <text>{error.message}</text> : null}
-		</box>
+		<ChatShell
+			error={error}
+			inputKey={inputKey}
+			inputWidth={inputWidth}
+			isBusy={isBusy}
+			messages={messages}
+			onSubmit={submitMessage}
+		/>
 	);
 }

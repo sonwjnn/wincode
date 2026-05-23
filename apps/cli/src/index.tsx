@@ -38,5 +38,5 @@ function App() {
 await router.load();
 
 const renderer = await createCliRenderer();
-renderer.console.show();
+// renderer.console.show();
 createRoot(renderer).render(<App />);
