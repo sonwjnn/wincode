@@ -1,25 +1,40 @@
 import { useChat } from "@ai-sdk/react";
 import { useTerminalDimensions } from "@opentui/react";
-import { useRouterState } from "@tanstack/react-router";
-import { DefaultChatTransport } from "ai";
+import { DefaultChatTransport, type UIMessage } from "ai";
 import { useEffect, useReducer, useRef } from "react";
 import { ChatShell } from "../components/chat/chat-shell";
 import { getChatTextAreaWidth } from "../components/chat/chat-text-area";
 import { honoClient } from "../lib/client";
 
-const chatApi = honoClient.api.chat.$url().toString();
+type ChatScreenProps = {
+	initialMessages: UIMessage[];
+	initialPrompt: string;
+	sessionId: string;
+};
 
-export function ChatScreen() {
+export function ChatScreen({
+	initialMessages,
+	initialPrompt,
+	sessionId,
+}: ChatScreenProps) {
 	const { width } = useTerminalDimensions();
-	const prompt = useRouterState({
-		select: (state) => state.location.state.input ?? "",
-	});
 	const submittedPromptRef = useRef<string | null>(null);
+	const submittedInitialMessageRef = useRef<string | null>(null);
 	const [inputKey, resetInput] = useReducer((key: number) => key + 1, 0);
+
 	const { error, messages, sendMessage, status } = useChat({
+		id: sessionId,
+		messages: initialMessages,
 		transport: new DefaultChatTransport({
-			api: chatApi,
-			body: { sendReasoning: true },
+			api: honoClient.api.sessions[":id"].chat
+				.$url({ param: { id: sessionId } })
+				.toString(),
+			prepareSendMessagesRequest: ({ messages: requestMessages }) => ({
+				body: {
+					message: requestMessages.at(-1),
+					sendReasoning: true,
+				},
+			}),
 		}),
 	});
 	const isBusy = status === "submitted" || status === "streaming";
@@ -40,14 +55,37 @@ export function ChatScreen() {
 	};
 
 	useEffect(() => {
-		const submittedPrompt = prompt.trim();
-		if (!(submittedPrompt && submittedPromptRef.current !== submittedPrompt)) {
+		const submittedPrompt = initialPrompt.trim();
+		if (!submittedPrompt) {
+			return;
+		}
+
+		if (submittedPromptRef.current === submittedPrompt) {
 			return;
 		}
 
 		submittedPromptRef.current = submittedPrompt;
 		sendMessage({ text: submittedPrompt }).catch(() => undefined);
-	}, [prompt, sendMessage]);
+	}, [initialPrompt, sendMessage]);
+
+	useEffect(() => {
+		if (initialPrompt.trim()) {
+			return;
+		}
+
+		const lastInitialMessage = initialMessages.at(-1);
+
+		if (lastInitialMessage?.role !== "user") {
+			return;
+		}
+
+		if (submittedInitialMessageRef.current === lastInitialMessage.id) {
+			return;
+		}
+
+		submittedInitialMessageRef.current = lastInitialMessage.id;
+		sendMessage().catch(() => undefined);
+	}, [initialMessages, initialPrompt, sendMessage]);
 
 	return (
 		<ChatShell

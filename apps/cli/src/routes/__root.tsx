@@ -19,9 +19,6 @@ function NotFound() {
 				<text attributes={TextAttributes.BOLD} fg="red">
 					Screen Not Found
 				</text>
-				<text attributes={TextAttributes.DIM}>
-					Press [1] to go back to the home screen
-				</text>
 			</box>
 		</box>
 	);
@@ -54,20 +51,35 @@ function RootLayout() {
 	}, [router]);
 
 	return (
-		<box flexDirection="column" flexGrow={1}>
+		<box
+			flexDirection="column"
+			flexGrow={1}
+			height="100%"
+			overflow="hidden"
+			width="100%"
+		>
 			<box
 				border={["bottom"]}
 				borderStyle="single"
 				flexDirection="row"
+				flexShrink={0}
 				justifyContent="space-between"
 				paddingLeft={1}
 				paddingRight={1}
+				width="100%"
 			>
 				<text attributes={TextAttributes.BOLD}>WinCode</text>
 				<text attributes={TextAttributes.DIM}>Current: {currentPath}</text>
 			</box>
 
-			<box flexGrow={1} padding={1}>
+			<box
+				flexDirection="column"
+				flexGrow={1}
+				height="100%"
+				overflow="hidden"
+				padding={1}
+				width="100%"
+			>
 				<Outlet key={currentPath} />
 			</box>
 		</box>

@@ -22,8 +22,8 @@ export function ChatShell({
 	onSubmit,
 }: ChatShellProps) {
 	return (
-		<box flexDirection="column" flexGrow={1} gap={1}>
-			<scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
+		<box flexDirection="column" flexGrow={1} gap={1} height="100%" width="100%">
+			<scrollbox flexGrow={1} height="100%" stickyScroll stickyStart="bottom">
 				{messages.length === 0 ? (
 					<text attributes={TextAttributes.DIM}>No messages yet.</text>
 				) : (

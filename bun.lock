@@ -33,6 +33,7 @@
         "ai": "catalog:",
         "hono": "catalog:",
         "react": "catalog:",
+        "zod": "catalog:",
       },
       "devDependencies": {
         "@tanstack/router-cli": "1.166.43",

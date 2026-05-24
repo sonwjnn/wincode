@@ -17,7 +17,8 @@
     "@trpc/client": "catalog:",
     "@trpc/server": "catalog:",
     "@wincode/env": "workspace:*",
-    "hono": "catalog:"
+    "hono": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/bun": "latest",

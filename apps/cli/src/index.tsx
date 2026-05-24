@@ -7,8 +7,10 @@ import {
 } from "@tanstack/react-router";
 import { routeTree } from "./routeTree.gen";
 
+const bootSessionId = "";
+
 const memoryHistory = createMemoryHistory({
-	initialEntries: ["/"],
+	initialEntries: [bootSessionId ? `/sessions/${bootSessionId}` : "/"],
 });
 
 const router = createRouter({
@@ -38,5 +40,5 @@ function App() {
 await router.load();
 
 const renderer = await createCliRenderer();
-// renderer.console.show();
+
 createRoot(renderer).render(<App />);

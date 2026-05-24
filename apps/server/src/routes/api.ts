@@ -1,7 +1,7 @@
 import { Hono } from "hono";
-import { chatRoutes } from "./chat";
 import { privateDataRoutes } from "./private-data";
+import { sessionsRoutes } from "./sessions";
 
 export const apiRoutes = new Hono()
-	.route("/chat", chatRoutes)
-	.route("/private-data", privateDataRoutes);
+	.route("/private-data", privateDataRoutes)
+	.route("/sessions", sessionsRoutes);
