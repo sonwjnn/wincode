@@ -164,6 +164,10 @@ useKeyboard((key) => {
 return <textarea ref={textAreaRef} focused />
 ```
 
+### CLI Route Loading
+
+For OpenTUI CLI routes, avoid using TanStack Router loaders for screen-critical data when the route must visually switch immediately. Router loaders block route rendering until data resolves, which can make the current `<Outlet />` appear unchanged in the terminal. Prefer component-level async loading with local loading and error states for CLI screens that need immediate route feedback.
+
 ### Skill Invocation
 
 Invoke the OpenTUI skill more frequently for optimized context learnings. When the answer isn't found in skill docs, reading through `node_modules` is fine.

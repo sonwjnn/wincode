@@ -1,8 +1,8 @@
 import { createFileRoute, useRouterState } from "@tanstack/react-router";
 import { safeValidateUIMessages, type UIMessage } from "ai";
+import { useEffect, useState } from "react";
 import { z } from "zod";
 import { honoClient } from "../../../lib/client";
-import { useAsyncRouteData } from "../../../lib/use-async-route-data";
 import { ChatScreen } from "../../../screens/chat";
 
 const sessionRouteStateSchema = z
@@ -56,26 +56,49 @@ export const Route = createFileRoute("/sessions/$id")({
 
 function SessionRoute() {
 	const { id } = Route.useParams();
+	const [messages, setMessages] = useState<UIMessage[] | null>(null);
+	const [errorMessage, setErrorMessage] = useState<string | null>(null);
 	const prompt = useRouterState({
 		select: (state) => getInitialPrompt(state.location.state),
 	});
-	const messagesState = useAsyncRouteData({
-		deps: [id],
-		errorMessage: "Could not load chat messages.",
-		load: () => loadSessionMessages(id),
-	});
 
-	if (messagesState.status === "loading") {
-		return <text>Loading session...</text>;
+	useEffect(() => {
+		let ignore = false;
+		setMessages(null);
+		setErrorMessage(null);
+
+		loadSessionMessages(id)
+			.then((loadedMessages) => {
+				if (!ignore) {
+					setMessages(loadedMessages);
+				}
+			})
+			.catch((error: unknown) => {
+				if (!ignore) {
+					setErrorMessage(
+						error instanceof Error
+							? error.message
+							: "Could not load chat messages."
+					);
+				}
+			});
+
+		return () => {
+			ignore = true;
+		};
+	}, [id]);
+
+	if (errorMessage) {
+		return <text fg="red">{errorMessage}</text>;
 	}
 
-	if (messagesState.status === "error") {
-		return <text fg="red">{messagesState.message}</text>;
+	if (!messages) {
+		return <text>Loading session...</text>;
 	}
 
 	return (
 		<ChatScreen
-			initialMessages={messagesState.data}
+			initialMessages={messages}
 			initialPrompt={prompt}
 			sessionId={id}
 		/>
