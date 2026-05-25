@@ -30,6 +30,7 @@
         "@trpc/client": "catalog:",
         "@trpc/server": "catalog:",
         "@wincode/env": "workspace:*",
+        "@wincode/tools": "workspace:*",
         "ai": "catalog:",
         "hono": "catalog:",
         "react": "catalog:",
@@ -55,6 +56,7 @@
         "@wincode/auth": "workspace:*",
         "@wincode/db": "workspace:*",
         "@wincode/env": "workspace:*",
+        "@wincode/tools": "workspace:*",
         "ai": "catalog:",
         "better-auth": "catalog:",
         "dotenv": "catalog:",
@@ -176,6 +178,16 @@
       "devDependencies": {
         "@wincode/config": "workspace:*",
         "alchemy": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    "packages/tools": {
+      "name": "@wincode/tools",
+      "dependencies": {
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@wincode/config": "workspace:*",
         "typescript": "catalog:",
       },
     },
@@ -1132,6 +1144,8 @@
     "@wincode/env": ["@wincode/env@workspace:packages/env"],
 
     "@wincode/infra": ["@wincode/infra@workspace:packages/infra"],
+
+    "@wincode/tools": ["@wincode/tools@workspace:packages/tools"],
 
     "@wincode/ui": ["@wincode/ui@workspace:packages/ui"],
 

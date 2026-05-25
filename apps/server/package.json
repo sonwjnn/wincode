@@ -19,6 +19,7 @@
     "@wincode/auth": "workspace:*",
     "@wincode/db": "workspace:*",
     "@wincode/env": "workspace:*",
+    "@wincode/tools": "workspace:*",
     "ai": "catalog:",
     "better-auth": "catalog:",
     "dotenv": "catalog:",

@@ -7,12 +7,13 @@ import {
 	safeValidateUIMessages,
 	stepCountIs,
 	streamText,
-	tool,
 	type UIMessage,
 	wrapLanguageModel,
 } from "ai";
 import { Hono } from "hono";
 import { z } from "zod";
+import { codingTools } from "../agent";
+import { mergeChatMessage } from "./chat-message-merge";
 import {
 	createChatSession,
 	getChatMessages,
@@ -45,21 +46,10 @@ const createSessionRequestSchema = z.object({
 	message: uiMessageInputSchema,
 });
 
-const tools = {
-	get_weather: tool({
-		description: "Get the current weather in a given city",
-		inputSchema: z.object({
-			city: z.string().describe("The city to get the weather for"),
-		}),
-		execute: ({ city }) => {
-			const conditions = ["sunny", "cloudy", "rainy", "snowy"] as const;
-			const condition =
-				conditions[Math.floor(Math.random() * conditions.length)];
-
-			return { city, condition };
-		},
-	}),
-};
+const codingAgentPrompt = `You are a basic coding agent running in a user's CLI.
+Use tools to inspect and modify files before answering about code.
+All file tools are limited to the CLI workspace. Bash runs with cwd set to the workspace, but it is not sandboxed and can escape the workspace; prefer file tools when strict workspace containment matters.
+Use list, grep, and read before editing. Prefer edit for targeted changes and write for new files or full rewrites. Run relevant checks with bash after changes.`;
 
 const createChatStreamResponse = async (
 	id: string,
@@ -85,9 +75,9 @@ const createChatStreamResponse = async (
 				reasoningSummary: "detailed",
 			},
 		},
-		stopWhen: stepCountIs(5),
-		system: "Use get_weather for weather requests.",
-		tools,
+		stopWhen: stepCountIs(20),
+		system: codingAgentPrompt,
+		tools: codingTools,
 	});
 
 	return result.toUIMessageStreamResponse({
@@ -126,13 +116,7 @@ export const sessionsRoutes = new Hono()
 			const { id } = c.req.valid("param");
 			const { message, sendReasoning } = c.req.valid("json");
 			const persistedMessages = await getChatMessages(id);
-			const hasPersistedMessage = persistedMessages.some(
-				(persistedMessage) => persistedMessage.id === message?.id
-			);
-			const messages =
-				message && !hasPersistedMessage
-					? [...persistedMessages, message]
-					: persistedMessages;
+			const messages = mergeChatMessage(persistedMessages, message);
 			const validation = await safeValidateUIMessages({ messages });
 
 			if (!validation.success) {

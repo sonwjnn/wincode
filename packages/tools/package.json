@@ -1,0 +1,19 @@
+{
+  "name": "@wincode/tools",
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    },
+    "./*": {
+      "default": "./src/*/schema.ts"
+    }
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@wincode/config": "workspace:*",
+    "typescript": "catalog:"
+  }
+}

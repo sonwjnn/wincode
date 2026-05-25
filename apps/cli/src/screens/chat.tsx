@@ -1,10 +1,15 @@
 import { useChat } from "@ai-sdk/react";
 import { useTerminalDimensions } from "@opentui/react";
-import { DefaultChatTransport, type UIMessage } from "ai";
+import {
+	DefaultChatTransport,
+	lastAssistantMessageIsCompleteWithToolCalls,
+	type UIMessage,
+} from "ai";
 import { useEffect, useReducer, useRef } from "react";
 import { ChatShell } from "../components/chat/chat-shell";
 import { getChatTextAreaWidth } from "../components/chat/chat-text-area";
 import { honoClient } from "../lib/client";
+import { runTool } from "../tools/run-tool";
 
 type ChatScreenProps = {
 	initialMessages: UIMessage[];
@@ -22,9 +27,35 @@ export function ChatScreen({
 	const submittedInitialMessageRef = useRef<string | null>(null);
 	const [inputKey, resetInput] = useReducer((key: number) => key + 1, 0);
 
-	const { error, messages, sendMessage, status } = useChat({
+	const { addToolOutput, error, messages, sendMessage, status } = useChat({
 		id: sessionId,
 		messages: initialMessages,
+		async onToolCall({ toolCall }) {
+			if (toolCall.dynamic) {
+				return;
+			}
+
+			try {
+				const output = await runTool(toolCall.toolName, toolCall.input);
+
+				addToolOutput({
+					output,
+					tool: toolCall.toolName,
+					toolCallId: toolCall.toolCallId,
+				});
+			} catch (toolError) {
+				addToolOutput({
+					errorText:
+						toolError instanceof Error
+							? toolError.message
+							: "Tool execution failed.",
+					state: "output-error",
+					tool: toolCall.toolName,
+					toolCallId: toolCall.toolCallId,
+				});
+			}
+		},
+		sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
 		transport: new DefaultChatTransport({
 			api: honoClient.api.sessions[":id"].chat
 				.$url({ param: { id: sessionId } })

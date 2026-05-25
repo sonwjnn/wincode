@@ -141,6 +141,10 @@ Prefer Hono's zod validator (`@hono/zod-validator`). Read validated typed input 
 
 Use Zod schemas for all client-side parsing (router state, search params, localStorage, etc.). Never use `as` type assertions. Validate with `.parse()` or use TanStack Router's `validateSearch` with a Zod schema.
 
+### Agent Tools — CLI Execution Only
+
+Tool execution lives on the CLI. Tool schemas are shared through `packages/tools` so the server and CLI use the same Zod definitions. The server must never execute file-system tools; it only exposes schema-only tool definitions for the model, while the CLI runs the tool runtime in the user's current working directory.
+
 ---
 
 ## OpenTUI-Specific Notes
