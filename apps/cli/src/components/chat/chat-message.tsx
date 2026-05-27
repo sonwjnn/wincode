@@ -1,5 +1,5 @@
 import { TextAttributes } from "@opentui/core";
-import type { UIMessage } from "ai";
+import type { CodingAgentUIMessage } from "@wincode/ai";
 import {
 	ChatReasoningPart,
 	ChatTextPart,
@@ -7,7 +7,7 @@ import {
 	isToolPart,
 } from "./message-parts";
 
-const getMessageLabel = (message: UIMessage) => {
+const getMessageLabel = (message: CodingAgentUIMessage) => {
 	if (message.role === "user") {
 		return "You";
 	}
@@ -19,7 +19,7 @@ const getMessageLabel = (message: UIMessage) => {
 	return message.role;
 };
 
-export function ChatMessage({ message }: { message: UIMessage }) {
+export function ChatMessage({ message }: { message: CodingAgentUIMessage }) {
 	return (
 		<box flexDirection="column">
 			<text attributes={TextAttributes.BOLD}>{getMessageLabel(message)}:</text>

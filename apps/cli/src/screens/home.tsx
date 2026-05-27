@@ -1,6 +1,6 @@
 import { useTerminalDimensions } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
-import { generateId, type UIMessage } from "ai";
+import { createUserMessage } from "@wincode/ai/client";
 import { useState } from "react";
 import { AsciiArt } from "../components/ascii-art";
 import {
@@ -8,12 +8,6 @@ import {
 	getChatTextAreaWidth,
 } from "../components/chat/chat-text-area";
 import { honoClient } from "../lib/client";
-
-const createUserMessage = (text: string): UIMessage => ({
-	id: generateId(),
-	parts: [{ text, type: "text" }],
-	role: "user",
-});
 
 export function HomeScreen() {
 	const { width } = useTerminalDimensions();

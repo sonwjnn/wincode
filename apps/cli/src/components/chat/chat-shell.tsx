@@ -1,5 +1,5 @@
 import { TextAttributes } from "@opentui/core";
-import type { UIMessage } from "ai";
+import type { CodingAgentUIMessage } from "@wincode/ai";
 import { ChatMessage } from "./chat-message";
 import { ChatTextArea } from "./chat-text-area";
 import { ChatError } from "./message-parts";
@@ -9,7 +9,7 @@ type ChatShellProps = {
 	inputKey: number;
 	inputWidth: number;
 	isBusy: boolean;
-	messages: UIMessage[];
+	messages: CodingAgentUIMessage[];
 	onSubmit: (value: string) => void;
 };
 

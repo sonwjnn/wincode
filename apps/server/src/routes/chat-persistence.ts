@@ -1,11 +1,12 @@
+import type { CodingAgentUIMessage } from "@wincode/ai";
 import prisma, { type Prisma } from "@wincode/db";
-import { generateId, safeValidateUIMessages, type UIMessage } from "ai";
+import { generateId, safeValidateUIMessages } from "ai";
 
 type ChatMessagePayload = {
 	metadata?: Prisma.InputJsonValue;
 	parts: Prisma.InputJsonValue;
 	position: number;
-	role: UIMessage["role"];
+	role: CodingAgentUIMessage["role"];
 	sessionId: string;
 	uiMessageId: string;
 };
@@ -15,7 +16,7 @@ const toJsonValue = (value: unknown): Prisma.InputJsonValue =>
 
 const buildMessagePayload = (
 	sessionId: string,
-	message: UIMessage,
+	message: CodingAgentUIMessage,
 	position: number
 ): ChatMessagePayload => {
 	const payload: ChatMessagePayload = {
@@ -33,7 +34,9 @@ const buildMessagePayload = (
 	return payload;
 };
 
-export const createChatSession = async (messages: UIMessage[] = []) => {
+export const createChatSession = async (
+	messages: CodingAgentUIMessage[] = []
+) => {
 	const session = await prisma.chatSession.create({
 		data: {
 			id: generateId(),
@@ -52,7 +55,7 @@ export const createChatSession = async (messages: UIMessage[] = []) => {
 
 export const getChatMessages = async (
 	sessionId: string
-): Promise<UIMessage[]> => {
+): Promise<CodingAgentUIMessage[]> => {
 	const messages = await prisma.chatMessage.findMany({
 		orderBy: {
 			position: "asc",
@@ -72,7 +75,7 @@ export const getChatMessages = async (
 		return [];
 	}
 
-	const validation = await safeValidateUIMessages({
+	const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
 		messages: messages.map((message) => ({
 			id: message.uiMessageId,
 			metadata: message.metadata ?? undefined,
@@ -90,7 +93,7 @@ export const getChatMessages = async (
 
 export const persistChatMessages = async (
 	sessionId: string,
-	messages: UIMessage[]
+	messages: CodingAgentUIMessage[]
 ) => {
 	const lastMessageAt = new Date();
 

@@ -1,5 +1,6 @@
 import { createFileRoute, useRouterState } from "@tanstack/react-router";
-import { safeValidateUIMessages, type UIMessage } from "ai";
+import type { CodingAgentUIMessage } from "@wincode/ai";
+import { safeValidateUIMessages } from "ai";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { honoClient } from "../../../lib/client";
@@ -24,7 +25,9 @@ const getInitialPrompt = (state: unknown): string => {
 	return result.data.input ?? "";
 };
 
-const loadSessionMessages = async (id: string): Promise<UIMessage[]> => {
+const loadSessionMessages = async (
+	id: string
+): Promise<CodingAgentUIMessage[]> => {
 	const response = await honoClient.api.sessions[":id"].messages.$get({
 		param: { id },
 	});
@@ -39,7 +42,7 @@ const loadSessionMessages = async (id: string): Promise<UIMessage[]> => {
 		throw new Error("Invalid chat messages response.");
 	}
 
-	const validation = await safeValidateUIMessages({
+	const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
 		messages: data.messages,
 	});
 
@@ -56,7 +59,7 @@ export const Route = createFileRoute("/sessions/$id")({
 
 function SessionRoute() {
 	const { id } = Route.useParams();
-	const [messages, setMessages] = useState<UIMessage[] | null>(null);
+	const [messages, setMessages] = useState<CodingAgentUIMessage[] | null>(null);
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
 	const prompt = useRouterState({
 		select: (state) => getInitialPrompt(state.location.state),

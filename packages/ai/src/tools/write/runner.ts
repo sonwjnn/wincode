@@ -1,11 +1,11 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { WriteInput, WriteOutput } from "@wincode/tools";
-import { resolveWithinWorkspace } from "./resolve-within-workspace";
+import { defaultWorkspaceSandbox } from "../../workspace";
+import type { WriteInput, WriteOutput } from "./schema";
 
 export const runWriteTool = async (input: WriteInput): Promise<WriteOutput> => {
-	const resolvedPath = resolveWithinWorkspace(input.path);
-	const parentPath = resolveWithinWorkspace(path.dirname(input.path));
+	const resolvedPath = await defaultWorkspaceSandbox.resolveNewPath(input.path);
+	const parentPath = path.dirname(resolvedPath);
 
 	await mkdir(parentPath, { recursive: true });
 	await writeFile(resolvedPath, input.content, "utf8");

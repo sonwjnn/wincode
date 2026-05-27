@@ -91,5 +91,16 @@
       "tailwindDirectives": true
     }
   },
+  "overrides": [
+    {
+      "includes": ["packages/ai/src/server/index.ts"],
+      "linter": {
+        "rules": {
+          "performance": { "noBarrelFile": "off" },
+          "style": { "useImportType": "off" }
+        }
+      }
+    }
+  ],
   "extends": ["ultracite/biome/core", "ultracite/biome/react"]
 }

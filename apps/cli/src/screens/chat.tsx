@@ -1,18 +1,19 @@
 import { useChat } from "@ai-sdk/react";
 import { useTerminalDimensions } from "@opentui/react";
+import type { CodingAgentUIMessage } from "@wincode/ai";
+import { handleCodingAgentToolCall } from "@wincode/ai/client";
 import {
+	type ChatAddToolOutputFunction,
 	DefaultChatTransport,
 	lastAssistantMessageIsCompleteWithToolCalls,
-	type UIMessage,
 } from "ai";
 import { useEffect, useReducer, useRef } from "react";
 import { ChatShell } from "../components/chat/chat-shell";
 import { getChatTextAreaWidth } from "../components/chat/chat-text-area";
 import { honoClient } from "../lib/client";
-import { runTool } from "../tools/run-tool";
 
 type ChatScreenProps = {
-	initialMessages: UIMessage[];
+	initialMessages: CodingAgentUIMessage[];
 	initialPrompt: string;
 	sessionId: string;
 };
@@ -25,51 +26,37 @@ export function ChatScreen({
 	const { width } = useTerminalDimensions();
 	const submittedPromptRef = useRef<string | null>(null);
 	const submittedInitialMessageRef = useRef<string | null>(null);
+	const addToolOutputRef =
+		useRef<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>(null);
 	const [inputKey, resetInput] = useReducer((key: number) => key + 1, 0);
 
-	const { addToolOutput, error, messages, sendMessage, status } = useChat({
-		id: sessionId,
-		messages: initialMessages,
-		async onToolCall({ toolCall }) {
-			if (toolCall.dynamic) {
-				return;
-			}
+	const { addToolOutput, error, messages, sendMessage, status } =
+		useChat<CodingAgentUIMessage>({
+			id: sessionId,
+			messages: initialMessages,
+			onToolCall: async (options) => {
+				if (!addToolOutputRef.current) {
+					return;
+				}
 
-			try {
-				const output = await runTool(toolCall.toolName, toolCall.input);
-
-				addToolOutput({
-					output,
-					tool: toolCall.toolName,
-					toolCallId: toolCall.toolCallId,
-				});
-			} catch (toolError) {
-				addToolOutput({
-					errorText:
-						toolError instanceof Error
-							? toolError.message
-							: "Tool execution failed.",
-					state: "output-error",
-					tool: toolCall.toolName,
-					toolCallId: toolCall.toolCallId,
-				});
-			}
-		},
-		sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
-		transport: new DefaultChatTransport({
-			api: honoClient.api.sessions[":id"].chat
-				.$url({ param: { id: sessionId } })
-				.toString(),
-			prepareSendMessagesRequest: ({ messages: requestMessages }) => ({
-				body: {
-					message: requestMessages.at(-1),
-					sendReasoning: true,
-				},
+				await handleCodingAgentToolCall(addToolOutputRef.current)(options);
+			},
+			sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
+			transport: new DefaultChatTransport({
+				api: honoClient.api.sessions[":id"].chat
+					.$url({ param: { id: sessionId } })
+					.toString(),
+				prepareSendMessagesRequest: ({ messages: requestMessages }) => ({
+					body: {
+						message: requestMessages.at(-1),
+						sendReasoning: true,
+					},
+				}),
 			}),
-		}),
-	});
+		});
 	const isBusy = status === "submitted" || status === "streaming";
 	const inputWidth = getChatTextAreaWidth(width, 88);
+	addToolOutputRef.current = addToolOutput;
 
 	const submitMessage = (value: string) => {
 		if (isBusy) {

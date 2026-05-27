@@ -1,7 +1,7 @@
 import { TextAttributes } from "@opentui/core";
-import type { UIMessage } from "ai";
+import type { CodingAgentUIMessage } from "@wincode/ai";
 
-type MessagePart = UIMessage["parts"][number];
+type MessagePart = CodingAgentUIMessage["parts"][number];
 
 type TextPart = Extract<MessagePart, { type: "text" }>;
 type ReasoningPart = Extract<MessagePart, { type: "reasoning" }>;

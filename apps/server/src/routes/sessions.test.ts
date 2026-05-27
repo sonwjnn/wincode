@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { UIMessage } from "ai";
+import type { CodingAgentUIMessage } from "@wincode/ai";
 import { mergeChatMessage } from "./chat-message-merge";
 
 describe("mergeChatMessage", () => {
@@ -17,7 +17,7 @@ describe("mergeChatMessage", () => {
 				],
 				role: "assistant",
 			},
-		] as UIMessage[];
+		] as CodingAgentUIMessage[];
 		const updatedMessage = {
 			id: "assistant-1",
 			parts: [
@@ -30,7 +30,7 @@ describe("mergeChatMessage", () => {
 				},
 			],
 			role: "assistant",
-		} as UIMessage;
+		} as CodingAgentUIMessage;
 
 		expect(mergeChatMessage(persistedMessages, updatedMessage)).toEqual([
 			updatedMessage,
@@ -40,12 +40,12 @@ describe("mergeChatMessage", () => {
 	test("appends a new client message", () => {
 		const persistedMessages = [
 			{ id: "user-1", parts: [{ text: "hi", type: "text" }], role: "user" },
-		] as UIMessage[];
+		] as CodingAgentUIMessage[];
 		const nextMessage = {
 			id: "user-2",
 			parts: [{ text: "again", type: "text" }],
 			role: "user",
-		} as UIMessage;
+		} as CodingAgentUIMessage;
 
 		expect(mergeChatMessage(persistedMessages, nextMessage)).toEqual([
 			...persistedMessages,

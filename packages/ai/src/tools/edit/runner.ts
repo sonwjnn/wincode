@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
-import type { EditInput, EditOutput } from "@wincode/tools";
-import { resolveWithinWorkspace } from "./resolve-within-workspace";
+import { defaultWorkspaceSandbox } from "../../workspace";
+import type { EditInput, EditOutput } from "./schema";
 
 const countReplacements = (
 	content: string,
@@ -19,7 +19,9 @@ const countReplacements = (
 };
 
 export const runEditTool = async (input: EditInput): Promise<EditOutput> => {
-	const resolvedPath = resolveWithinWorkspace(input.path);
+	const resolvedPath = await defaultWorkspaceSandbox.resolveExistingPath(
+		input.path
+	);
 	const content = await readFile(resolvedPath, "utf8");
 	const replacements = countReplacements(content, input.find, input.replaceAll);
 
