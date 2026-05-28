@@ -34,12 +34,18 @@ export function ChatScreen({
 		useChat<CodingAgentUIMessage>({
 			id: sessionId,
 			messages: initialMessages,
-			onToolCall: async (options) => {
-				if (!addToolOutputRef.current) {
+			onToolCall: (options) => {
+				const addToolOutputForCall = addToolOutputRef.current;
+
+				if (!addToolOutputForCall) {
 					return;
 				}
 
-				await handleCodingAgentToolCall(addToolOutputRef.current)(options);
+				// AI SDK awaits onToolCall, but addToolOutput queues on the same chat executor.
+				// Do not await this call or tool execution can deadlock at input-available.
+				Promise.resolve(
+					handleCodingAgentToolCall(addToolOutputForCall)(options)
+				).catch(() => undefined);
 			},
 			sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
 			transport: new DefaultChatTransport({

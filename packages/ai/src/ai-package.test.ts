@@ -189,4 +189,13 @@ describe("type-safety guardrails", () => {
 			expect(source).not.toContain('from "@wincode/ai/server"');
 		}
 	});
+
+	test("CLI tool-call handler does not await chat tool output", async () => {
+		const chatScreenSource = await readFile(
+			new URL("../../../apps/cli/src/screens/chat.tsx", import.meta.url),
+			"utf8"
+		);
+
+		expect(chatScreenSource).not.toContain("await handleCodingAgentToolCall");
+	});
 });
