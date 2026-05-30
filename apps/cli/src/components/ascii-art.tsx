@@ -7,8 +7,8 @@ export function AsciiArt() {
 				gap={0.5}
 				justifyContent="center"
 			>
-				<ascii-font color="gray" font="tiny" text="Win" />
-				<ascii-font font="tiny" text="Code" />
+				<ascii-font color="gray" font="block" text="Win" />
+				<ascii-font font="block" text="Code" />
 			</box>
 		</box>
 	);

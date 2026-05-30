@@ -1,4 +1,5 @@
 import type { UIMessage } from "ai";
+import type { ModeType } from "./modes";
 import type {
 	CodingToolInput,
 	CodingToolName,
@@ -12,4 +13,10 @@ export type CodingAgentTools = {
 	};
 };
 
-export type CodingAgentUIMessage = UIMessage<unknown, never, CodingAgentTools>;
+export type CodingMessageMetadata = { mode?: ModeType };
+
+export type CodingAgentUIMessage = UIMessage<
+	CodingMessageMetadata,
+	never,
+	CodingAgentTools
+>;

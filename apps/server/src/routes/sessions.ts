@@ -33,7 +33,7 @@ const uiMessageInputSchema = z.object({
 
 const chatRequestSchema = z.object({
 	message: uiMessageInputSchema.optional(),
-	mode: codingModeNameSchema.optional(),
+	mode: codingModeNameSchema,
 	sendReasoning: z.boolean().optional(),
 });
 
@@ -45,15 +45,15 @@ const createSessionRequestSchema = z.object({
 const createChatStreamResponse = async (
 	id: string,
 	validatedMessages: CodingAgentUIMessage[],
-	mode: z.infer<typeof codingModeNameSchema> | undefined,
+	mode: z.infer<typeof codingModeNameSchema>,
 	sendReasoning = true
 ) => {
-	await persistChatMessages(id, validatedMessages);
+	await persistChatMessages(id, validatedMessages, mode);
 
 	return createCodingAgentStreamResponse({
 		mode,
 		onFinish: async ({ messages: finishedMessages }) => {
-			await persistChatMessages(id, finishedMessages);
+			await persistChatMessages(id, finishedMessages, mode);
 		},
 		sendReasoning,
 		uiMessages: validatedMessages,
@@ -62,7 +62,7 @@ const createChatStreamResponse = async (
 
 export const sessionsRoutes = new Hono()
 	.post("/", zValidator("json", createSessionRequestSchema), async (c) => {
-		const { message } = c.req.valid("json");
+		const { message, mode } = c.req.valid("json");
 		const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
 			messages: [message],
 			tools: codingServerTools,
@@ -72,7 +72,7 @@ export const sessionsRoutes = new Hono()
 			return c.json({ error: "Invalid chat message" }, 400);
 		}
 
-		return c.json(await createChatSession(validation.data), 201);
+		return c.json(await createChatSession(validation.data, mode), 201);
 	})
 	.get("/:id/messages", zValidator("param", sessionParamsSchema), async (c) => {
 		const { id } = c.req.valid("param");

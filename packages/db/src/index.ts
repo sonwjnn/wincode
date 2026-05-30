@@ -15,3 +15,7 @@ export function createPrismaClient() {
 
 const prisma = createPrismaClient();
 export default prisma;
+
+export type { Mode as ModeEnum } from "../prisma/generated/enums";
+// biome-ignore lint/performance/noBarrelFile: stable re-export required by project convention
+export { Mode } from "../prisma/generated/enums";

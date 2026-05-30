@@ -30,6 +30,31 @@ type ChatTextAreaProps = {
 	placeholder: string;
 };
 
+type SubmitChatTextAreaValueOptions = {
+	disabled: boolean;
+	onSubmit: (value: string) => void;
+	textArea: Pick<TextareaRenderable, "clear" | "plainText"> | null;
+};
+
+export const submitChatTextAreaValue = ({
+	disabled,
+	onSubmit,
+	textArea,
+}: SubmitChatTextAreaValueOptions) => {
+	if (disabled) {
+		return;
+	}
+
+	const value = textArea?.plainText.trim() ?? "";
+
+	if (!value) {
+		return;
+	}
+
+	onSubmit(value);
+	textArea?.clear();
+};
+
 export function ChatTextArea({
 	focused = true,
 	disabled = false,
@@ -49,7 +74,11 @@ export function ChatTextArea({
 	});
 
 	const handleSubmit = () => {
-		onSubmit(textAreaRef.current?.plainText.trim() ?? "");
+		submitChatTextAreaValue({
+			disabled,
+			onSubmit,
+			textArea: textAreaRef.current,
+		});
 	};
 
 	return (
@@ -68,8 +97,9 @@ export function ChatTextArea({
 					backgroundColor={colors.surface}
 					gap={1}
 					justifyContent="center"
+					paddingBottom={1}
+					paddingTop={1}
 					paddingX={2}
-					paddingY={1}
 					position="relative"
 					width="100%"
 				>

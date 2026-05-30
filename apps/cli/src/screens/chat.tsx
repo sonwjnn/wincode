@@ -77,7 +77,10 @@ export function ChatScreen({
 			return;
 		}
 
-		sendMessage({ text }).catch(() => undefined);
+		sendMessage({
+			metadata: { mode: modeRef.current },
+			text,
+		}).catch(() => undefined);
 	};
 
 	useEffect(() => {
@@ -91,7 +94,10 @@ export function ChatScreen({
 		}
 
 		submittedPromptRef.current = submittedPrompt;
-		sendMessage({ text: submittedPrompt }).catch(() => undefined);
+		sendMessage({
+			metadata: { mode: modeRef.current },
+			text: submittedPrompt,
+		}).catch(() => undefined);
 	}, [initialPrompt, sendMessage]);
 
 	useEffect(() => {

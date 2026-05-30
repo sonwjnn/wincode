@@ -4,6 +4,11 @@ enum ChatMessageRole {
   assistant
 }
 
+enum Mode {
+  build
+  plan
+}
+
 model ChatSession {
   id            String        @id
   title         String?
@@ -22,6 +27,7 @@ model ChatMessage {
   session     ChatSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   uiMessageId String
   role        ChatMessageRole
+  mode        Mode            @default(build)
   parts       Json
   metadata    Json?
   position    Int

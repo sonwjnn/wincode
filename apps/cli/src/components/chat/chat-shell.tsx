@@ -4,6 +4,7 @@ import { usePromptConfig } from "../../providers/prompt-config";
 import { Spinner } from "../spinner";
 import { ChatMessage } from "./chat-message";
 import { ChatTextArea } from "./chat-text-area";
+import { ErrorMessage } from "./messages";
 
 type ChatShellProps = {
 	error?: Error;
@@ -13,7 +14,7 @@ type ChatShellProps = {
 };
 
 export function ChatShell({
-	_error,
+	error,
 	isBusy,
 	messages,
 	onSubmit,
@@ -32,13 +33,14 @@ export function ChatShell({
 		>
 			<scrollbox flexGrow={1} height="100%" stickyScroll stickyStart="bottom">
 				<box>
-					{messages.length === 0 ? (
+					{messages.length === 0 && !error ? (
 						<text attributes={TextAttributes.DIM}>No messages yet.</text>
 					) : (
 						messages.map((message) => (
 							<ChatMessage key={message.id} message={message} />
 						))
 					)}
+					{error ? <ErrorMessage message={error.message} /> : null}
 				</box>
 			</scrollbox>
 
