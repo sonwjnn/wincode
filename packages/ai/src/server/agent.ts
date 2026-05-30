@@ -3,7 +3,7 @@ import { getSystemInstructions } from "../instructions";
 import {
 	type CodingAgentCallOptions,
 	codingAgentCallOptionsSchema,
-	defaultCodingMode,
+	defaultMode,
 	getCodingMode,
 } from "../modes";
 import { codingModel, codingProviderOptions } from "./model";
@@ -14,17 +14,15 @@ export const codingAgent = new ToolLoopAgent<
 	typeof codingServerTools
 >({
 	callOptionsSchema: codingAgentCallOptionsSchema,
-	instructions: getSystemInstructions(defaultCodingMode.name),
+	instructions: getSystemInstructions(defaultMode.value),
 	model: codingModel,
 	prepareCall: ({ options: callOptions, ...options }) => {
-		const codingMode = getCodingMode(
-			callOptions?.mode ?? defaultCodingMode.name
-		);
+		const codingMode = getCodingMode(callOptions?.mode ?? defaultMode.value);
 
 		return {
 			...options,
 			activeTools: [...codingMode.tools],
-			instructions: getSystemInstructions(codingMode.name),
+			instructions: getSystemInstructions(codingMode.value),
 		};
 	},
 	providerOptions: codingProviderOptions,

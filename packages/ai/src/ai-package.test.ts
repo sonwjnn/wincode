@@ -5,7 +5,7 @@ import {
 	codingModes,
 	codingToolDefinitions,
 	codingToolSchemas,
-	defaultCodingMode,
+	defaultMode,
 	getNextCodingModeName,
 	getSystemInstructions,
 	type ReadInput,
@@ -62,8 +62,8 @@ describe("@wincode/ai shared entry", () => {
 	});
 
 	test("defines ordered coding modes", () => {
-		expect(defaultCodingMode.name).toBe("build");
-		expect(codingModes.map((mode) => mode.name)).toEqual(["build", "plan"]);
+		expect(defaultMode.value).toBe("build");
+		expect(codingModes.map((mode) => mode.value)).toEqual(["build", "plan"]);
 		expect(getNextCodingModeName("build")).toBe("plan");
 		expect(getNextCodingModeName("plan")).toBe("build");
 	});

@@ -1,5 +1,4 @@
 import { useChat } from "@ai-sdk/react";
-import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import { handleCodingAgentToolCall } from "@wincode/ai/client";
 import {
@@ -7,11 +6,10 @@ import {
 	DefaultChatTransport,
 	lastAssistantMessageIsCompleteWithToolCalls,
 } from "ai";
-import { useEffect, useReducer, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { ChatShell } from "../components/chat/chat-shell";
-import { getChatTextAreaWidth } from "../components/chat/chat-text-area";
 import { honoClient } from "../lib/client";
-import { usePromptConfig } from "../providers/prompt-config-provider";
+import { usePromptConfig } from "../providers/prompt-config";
 
 type ChatScreenProps = {
 	initialMessages: CodingAgentUIMessage[];
@@ -24,14 +22,12 @@ export function ChatScreen({
 	initialPrompt,
 	sessionId,
 }: ChatScreenProps) {
-	const { width } = useTerminalDimensions();
-	const { cycleMode, modeName } = usePromptConfig();
+	const { mode } = usePromptConfig();
 	const submittedPromptRef = useRef<string | null>(null);
 	const submittedInitialMessageRef = useRef<string | null>(null);
 	const addToolOutputRef =
 		useRef<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>(null);
-	const modeRef = useRef(modeName);
-	const [inputKey, resetInput] = useReducer((key: number) => key + 1, 0);
+	const modeRef = useRef(mode);
 
 	const { addToolOutput, error, messages, sendMessage, status } =
 		useChat<CodingAgentUIMessage>({
@@ -68,17 +64,8 @@ export function ChatScreen({
 			}),
 		});
 	const isBusy = status === "submitted" || status === "streaming";
-	const inputWidth = getChatTextAreaWidth(width, 88);
 	addToolOutputRef.current = addToolOutput;
-	modeRef.current = modeName;
-
-	useKeyboard((key) => {
-		if (key.name !== "tab" || key.repeated || isBusy) {
-			return;
-		}
-
-		cycleMode();
-	});
+	modeRef.current = mode;
 
 	const submitMessage = (value: string) => {
 		if (isBusy) {
@@ -90,7 +77,6 @@ export function ChatScreen({
 			return;
 		}
 
-		resetInput();
 		sendMessage({ text }).catch(() => undefined);
 	};
 
@@ -130,8 +116,6 @@ export function ChatScreen({
 	return (
 		<ChatShell
 			error={error}
-			inputKey={inputKey}
-			inputWidth={inputWidth}
 			isBusy={isBusy}
 			messages={messages}
 			onSubmit={submitMessage}

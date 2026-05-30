@@ -1,58 +1,77 @@
 import { TextAttributes } from "@opentui/core";
-import { type CodingAgentUIMessage, getCodingMode } from "@wincode/ai";
+import type { CodingAgentUIMessage } from "@wincode/ai";
 import { usePromptConfig } from "../../providers/prompt-config";
+import { Spinner } from "../spinner";
 import { ChatMessage } from "./chat-message";
 import { ChatTextArea } from "./chat-text-area";
-import { ChatError } from "./message-parts";
 
 type ChatShellProps = {
 	error?: Error;
-	inputKey: number;
-	inputWidth: number;
 	isBusy: boolean;
 	messages: CodingAgentUIMessage[];
 	onSubmit: (value: string) => void;
 };
 
 export function ChatShell({
-	error,
-	inputKey,
-	inputWidth,
+	_error,
 	isBusy,
 	messages,
 	onSubmit,
 }: ChatShellProps) {
-	const { modeName } = usePromptConfig();
+	const { mode } = usePromptConfig();
 
 	return (
-		<box flexDirection="column" flexGrow={1} gap={1} height="100%" width="100%">
+		<box
+			flexDirection="column"
+			flexGrow={1}
+			gap={1}
+			height="100%"
+			paddingX={2}
+			paddingY={1}
+			width="100%"
+		>
 			<scrollbox flexGrow={1} height="100%" stickyScroll stickyStart="bottom">
-				{messages.length === 0 ? (
-					<text attributes={TextAttributes.DIM}>No messages yet.</text>
-				) : (
-					messages.map((message) => (
-						<ChatMessage key={message.id} message={message} />
-					))
-				)}
+				<box>
+					{messages.length === 0 ? (
+						<text attributes={TextAttributes.DIM}>No messages yet.</text>
+					) : (
+						messages.map((message) => (
+							<ChatMessage key={message.id} message={message} />
+						))
+					)}
+				</box>
 			</scrollbox>
 
-			<box flexDirection="column" gap={1} width={inputWidth}>
+			<box flexShrink={0}>
 				<ChatTextArea
+					disabled={isBusy}
 					focused={!isBusy}
 					onSubmit={onSubmit}
 					placeholder="Continue conversation..."
-					resetKey={inputKey}
 				/>
-				<box flexDirection="row" gap={2}>
-					<text attributes={TextAttributes.DIM}>
-						Mode: {getCodingMode(modeName).displayName}
-					</text>
-					<text attributes={TextAttributes.DIM}>Tab mode</text>
-					<text attributes={TextAttributes.DIM}>Enter send</text>
-					<text attributes={TextAttributes.DIM}>Shift+Enter newline</text>
-					{isBusy ? <text>Streaming...</text> : null}
+			</box>
+			<box
+				flexDirection="row"
+				flexShrink={0}
+				gap={2}
+				height={1}
+				justifyContent="space-between"
+				paddingLeft={1}
+				width="100%"
+			>
+				<box alignItems="center" flexDirection="row" gap={2}>
+					{isBusy ? (
+						<>
+							<Spinner mode={mode} />
+							{/*{interruptible ? <text>esc to interrupt</text> : null}*/}
+						</>
+					) : null}
 				</box>
-				{error ? <ChatError message={error.message} /> : null}
+
+				<box flexDirection="row" flexShrink={0} gap={1} marginLeft="auto">
+					<text>tab</text>
+					<text attributes={TextAttributes.DIM}>agents</text>
+				</box>
 			</box>
 		</box>
 	);

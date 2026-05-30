@@ -4,18 +4,18 @@ import {
 	type UIMessageStreamOnFinishCallback,
 } from "ai";
 import type { CodingAgentUIMessage } from "../message";
-import { type CodingAgentModeName, defaultCodingMode } from "../modes";
+import { defaultMode, type ModeType } from "../modes";
 import { codingAgent } from "./agent";
 
 type CreateCodingAgentStreamResponseOptions = {
-	mode?: CodingAgentModeName;
+	mode?: ModeType;
 	onFinish?: UIMessageStreamOnFinishCallback<CodingAgentUIMessage>;
 	sendReasoning?: boolean;
 	uiMessages: CodingAgentUIMessage[];
 };
 
 export const createCodingAgentStreamResponse = ({
-	mode = defaultCodingMode.name,
+	mode = defaultMode.value,
 	onFinish,
 	sendReasoning = true,
 	uiMessages,

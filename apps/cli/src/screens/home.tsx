@@ -1,5 +1,4 @@
 import { TextAttributes } from "@opentui/core";
-import { useKeyboard } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
 import { createUserMessage } from "@wincode/ai/client";
 import { useState } from "react";
@@ -12,15 +11,7 @@ export function HomeScreen() {
 	const router = useRouter();
 	const [_error, setError] = useState<string | null>(null);
 	const [isCreatingSession, setIsCreatingSession] = useState(false);
-	const { cycleMode, modeName } = usePromptConfig();
-
-	useKeyboard((key) => {
-		if (key.name !== "tab" || key.repeated || isCreatingSession) {
-			return;
-		}
-
-		cycleMode();
-	});
+	const { mode } = usePromptConfig();
 
 	const handleSubmit = async (input: string) => {
 		if (isCreatingSession) {
@@ -48,7 +39,7 @@ export function HomeScreen() {
 		const response = await honoClient.api.sessions.$post({
 			json: {
 				message: createUserMessage(input),
-				mode: modeName,
+				mode,
 			},
 		});
 
@@ -60,7 +51,7 @@ export function HomeScreen() {
 		const { id } = await response.json();
 		await router.navigate({
 			params: { id },
-			state: { mode: modeName },
+			state: { mode },
 			to: "/sessions/$id",
 		});
 	};
@@ -84,6 +75,7 @@ export function HomeScreen() {
 				width="100%"
 			>
 				<ChatTextArea
+					disabled={isCreatingSession}
 					focused={!isCreatingSession}
 					onSubmit={handleSubmit}
 					placeholder={

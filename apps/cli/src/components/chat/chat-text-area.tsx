@@ -1,14 +1,17 @@
 import type { TextareaOptions, TextareaRenderable } from "@opentui/core";
+import { useKeyboard } from "@opentui/react";
 import { useRef } from "react";
+import { usePromptConfig } from "../../providers/prompt-config";
+import { useTheme } from "../../providers/theme";
+import { EmptyBorder } from "../border";
+import { StatusBar } from "../status-bar";
 
 const CHAT_TEXT_AREA_KEY_BINDINGS: NonNullable<TextareaOptions["keyBindings"]> =
 	[
-		{ name: "return", action: "newline", shift: true },
-		{ name: "linefeed", action: "newline", shift: true },
 		{ name: "return", action: "submit" },
-		{ name: "linefeed", action: "submit" },
 		{ name: "enter", action: "submit" },
-		{ name: "kpenter", action: "submit" },
+		{ name: "return", shift: true, action: "newline" },
+		{ name: "enter", shift: true, action: "newline" },
 	];
 
 const TERMINAL_GUTTER_WIDTH = 8;
@@ -22,37 +25,64 @@ export const getChatTextAreaWidth = (terminalWidth: number, maxWidth: number) =>
 
 type ChatTextAreaProps = {
 	focused?: boolean;
-	height: number;
+	disabled?: boolean;
 	onSubmit: (value: string) => void;
 	placeholder: string;
-	resetKey?: number;
 };
 
 export function ChatTextArea({
 	focused = true,
-	height,
+	disabled = false,
 	onSubmit,
 	placeholder,
-	resetKey,
 }: ChatTextAreaProps) {
+	const { colors } = useTheme();
+	const { cycleMode, mode } = usePromptConfig();
 	const textAreaRef = useRef<TextareaRenderable>(null);
+
+	useKeyboard((key) => {
+		if (key.name !== "tab" || key.repeated || disabled) {
+			return;
+		}
+
+		cycleMode();
+	});
 
 	const handleSubmit = () => {
 		onSubmit(textAreaRef.current?.plainText.trim() ?? "");
 	};
 
 	return (
-		<box border borderStyle="rounded" flexDirection="column" paddingX={1}>
-			<textarea
-				focused={focused}
-				height={height}
-				key={resetKey}
-				keyBindings={CHAT_TEXT_AREA_KEY_BINDINGS}
-				onSubmit={handleSubmit}
-				placeholder={placeholder}
-				ref={textAreaRef}
-				wrapMode="word"
-			/>
+		<box alignItems="center" width="100%">
+			<box
+				border={["left"]}
+				borderColor={mode === "build" ? colors.primary : colors.planMode}
+				customBorderChars={{
+					...EmptyBorder,
+					vertical: "┃",
+					bottomLeft: "╹",
+				}}
+				width="100%"
+			>
+				<box
+					backgroundColor={colors.surface}
+					gap={1}
+					justifyContent="center"
+					paddingX={2}
+					paddingY={1}
+					position="relative"
+					width="100%"
+				>
+					<textarea
+						focused={focused}
+						keyBindings={CHAT_TEXT_AREA_KEY_BINDINGS}
+						onSubmit={handleSubmit}
+						placeholder={placeholder}
+						ref={textAreaRef}
+					/>
+					<StatusBar />
+				</box>
+			</box>
 		</box>
 	);
 }

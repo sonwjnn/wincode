@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PromptConfigProvider } from "../providers/prompt-config-provider";
+
 import { HomeScreen } from "../screens/home";
 
 export const Route = createFileRoute("/")({
@@ -7,9 +7,5 @@ export const Route = createFileRoute("/")({
 });
 
 function HomeRoute() {
-	return (
-		<PromptConfigProvider>
-			<HomeScreen />
-		</PromptConfigProvider>
-	);
+	return <HomeScreen />;
 }

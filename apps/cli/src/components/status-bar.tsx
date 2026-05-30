@@ -3,11 +3,11 @@ import { getCodingMode } from "@wincode/ai";
 import { usePromptConfig } from "../providers/prompt-config";
 
 export function StatusBar() {
-	const { modeName } = usePromptConfig();
+	const { mode } = usePromptConfig();
 
 	return (
 		<box flexDirection="row" gap={1}>
-			<text>{getCodingMode(modeName).displayName}</text>
+			<text>{getCodingMode(mode).displayName}</text>
 			<text attributes={TextAttributes.DIM}>›</text>
 		</box>
 	);

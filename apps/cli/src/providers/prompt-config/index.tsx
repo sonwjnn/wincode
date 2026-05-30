@@ -1,34 +1,30 @@
-import {
-	type CodingAgentModeName,
-	defaultCodingMode,
-	getNextCodingModeName,
-} from "@wincode/ai";
+import { defaultMode, getNextCodingModeName, type ModeType } from "@wincode/ai";
 import { createContext, type ReactNode, useContext, useState } from "react";
 
 type PromptConfig = {
 	cycleMode: () => void;
-	modeName: CodingAgentModeName;
+	mode: ModeType;
 };
 
 const PromptConfigContext = createContext<PromptConfig | null>(null);
 
 type PromptConfigProviderProps = {
 	children: ReactNode;
-	initialMode?: CodingAgentModeName;
+	initialMode?: ModeType;
 };
 
 export function PromptConfigProvider({
 	children,
-	initialMode = defaultCodingMode.name,
+	initialMode = defaultMode.value,
 }: PromptConfigProviderProps) {
-	const [modeName, setModeName] = useState<CodingAgentModeName>(initialMode);
+	const [mode, setModeName] = useState<ModeType>(initialMode);
 
 	const cycleMode = () => {
 		setModeName((currentModeName) => getNextCodingModeName(currentModeName));
 	};
 
 	return (
-		<PromptConfigContext.Provider value={{ cycleMode, modeName }}>
+		<PromptConfigContext.Provider value={{ cycleMode, mode }}>
 			{children}
 		</PromptConfigContext.Provider>
 	);
