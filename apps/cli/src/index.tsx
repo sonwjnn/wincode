@@ -31,6 +31,11 @@ declare module "@tanstack/react-router" {
 	interface Register {
 		router: typeof router;
 	}
+
+	// biome-ignore lint/style/useConsistentTypeDefinitions: <>
+	interface HistoryState {
+		mode?: string;
+	}
 }
 
 function App() {

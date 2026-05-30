@@ -1,5 +1,5 @@
 import { useChat } from "@ai-sdk/react";
-import { useTerminalDimensions } from "@opentui/react";
+import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import { handleCodingAgentToolCall } from "@wincode/ai/client";
 import {
@@ -11,6 +11,7 @@ import { useEffect, useReducer, useRef } from "react";
 import { ChatShell } from "../components/chat/chat-shell";
 import { getChatTextAreaWidth } from "../components/chat/chat-text-area";
 import { honoClient } from "../lib/client";
+import { usePromptConfig } from "../providers/prompt-config-provider";
 
 type ChatScreenProps = {
 	initialMessages: CodingAgentUIMessage[];
@@ -24,10 +25,12 @@ export function ChatScreen({
 	sessionId,
 }: ChatScreenProps) {
 	const { width } = useTerminalDimensions();
+	const { cycleMode, modeName } = usePromptConfig();
 	const submittedPromptRef = useRef<string | null>(null);
 	const submittedInitialMessageRef = useRef<string | null>(null);
 	const addToolOutputRef =
 		useRef<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>(null);
+	const modeRef = useRef(modeName);
 	const [inputKey, resetInput] = useReducer((key: number) => key + 1, 0);
 
 	const { addToolOutput, error, messages, sendMessage, status } =
@@ -44,7 +47,10 @@ export function ChatScreen({
 				// AI SDK awaits onToolCall, but addToolOutput queues on the same chat executor.
 				// Do not await this call or tool execution can deadlock at input-available.
 				Promise.resolve(
-					handleCodingAgentToolCall(addToolOutputForCall)(options)
+					handleCodingAgentToolCall(
+						addToolOutputForCall,
+						modeRef.current
+					)(options)
 				).catch(() => undefined);
 			},
 			sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
@@ -55,6 +61,7 @@ export function ChatScreen({
 				prepareSendMessagesRequest: ({ messages: requestMessages }) => ({
 					body: {
 						message: requestMessages.at(-1),
+						mode: modeRef.current,
 						sendReasoning: true,
 					},
 				}),
@@ -63,6 +70,15 @@ export function ChatScreen({
 	const isBusy = status === "submitted" || status === "streaming";
 	const inputWidth = getChatTextAreaWidth(width, 88);
 	addToolOutputRef.current = addToolOutput;
+	modeRef.current = modeName;
+
+	useKeyboard((key) => {
+		if (key.name !== "tab" || key.repeated || isBusy) {
+			return;
+		}
+
+		cycleMode();
+	});
 
 	const submitMessage = (value: string) => {
 		if (isBusy) {

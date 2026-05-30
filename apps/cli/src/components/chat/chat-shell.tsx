@@ -1,5 +1,6 @@
 import { TextAttributes } from "@opentui/core";
-import type { CodingAgentUIMessage } from "@wincode/ai";
+import { type CodingAgentUIMessage, getCodingMode } from "@wincode/ai";
+import { usePromptConfig } from "../../providers/prompt-config-provider";
 import { ChatMessage } from "./chat-message";
 import { ChatTextArea } from "./chat-text-area";
 import { ChatError } from "./message-parts";
@@ -21,6 +22,8 @@ export function ChatShell({
 	messages,
 	onSubmit,
 }: ChatShellProps) {
+	const { modeName } = usePromptConfig();
+
 	return (
 		<box flexDirection="column" flexGrow={1} gap={1} height="100%" width="100%">
 			<scrollbox flexGrow={1} height="100%" stickyScroll stickyStart="bottom">
@@ -42,6 +45,10 @@ export function ChatShell({
 					resetKey={inputKey}
 				/>
 				<box flexDirection="row" gap={2}>
+					<text attributes={TextAttributes.DIM}>
+						Mode: {getCodingMode(modeName).displayName}
+					</text>
+					<text attributes={TextAttributes.DIM}>Tab mode</text>
 					<text attributes={TextAttributes.DIM}>Enter send</text>
 					<text attributes={TextAttributes.DIM}>Shift+Enter newline</text>
 					{isBusy ? <text>Streaming...</text> : null}

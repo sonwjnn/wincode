@@ -1,15 +1,18 @@
 import { zValidator } from "@hono/zod-validator";
-import type { CodingAgentUIMessage } from "@wincode/ai";
-import { createCodingAgentStreamResponse } from "@wincode/ai/server";
+import { type CodingAgentUIMessage, codingModeNameSchema } from "@wincode/ai";
+import {
+	codingServerTools,
+	createCodingAgentStreamResponse,
+} from "@wincode/ai/server";
 import { safeValidateUIMessages } from "ai";
 import { Hono } from "hono";
 import { z } from "zod";
-import { mergeChatMessage } from "./chat-message-merge";
 import {
 	createChatSession,
 	getChatMessages,
 	persistChatMessages,
-} from "./chat-persistence";
+} from "../services/chat-persistence";
+import { mergeChatMessage } from "../utils/chat-message-merge";
 
 const sessionParamsSchema = z.object({
 	id: z.string().min(1),
@@ -30,21 +33,25 @@ const uiMessageInputSchema = z.object({
 
 const chatRequestSchema = z.object({
 	message: uiMessageInputSchema.optional(),
+	mode: codingModeNameSchema.optional(),
 	sendReasoning: z.boolean().optional(),
 });
 
 const createSessionRequestSchema = z.object({
 	message: uiMessageInputSchema,
+	mode: codingModeNameSchema,
 });
 
 const createChatStreamResponse = async (
 	id: string,
 	validatedMessages: CodingAgentUIMessage[],
+	mode: z.infer<typeof codingModeNameSchema> | undefined,
 	sendReasoning = true
 ) => {
 	await persistChatMessages(id, validatedMessages);
 
 	return createCodingAgentStreamResponse({
+		mode,
 		onFinish: async ({ messages: finishedMessages }) => {
 			await persistChatMessages(id, finishedMessages);
 		},
@@ -58,6 +65,7 @@ export const sessionsRoutes = new Hono()
 		const { message } = c.req.valid("json");
 		const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
 			messages: [message],
+			tools: codingServerTools,
 		});
 
 		if (!validation.success) {
@@ -76,17 +84,18 @@ export const sessionsRoutes = new Hono()
 		zValidator("json", chatRequestSchema),
 		async (c) => {
 			const { id } = c.req.valid("param");
-			const { message, sendReasoning } = c.req.valid("json");
+			const { message, mode, sendReasoning } = c.req.valid("json");
 			const persistedMessages = await getChatMessages(id);
 			const messages = mergeChatMessage(persistedMessages, message);
 			const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
 				messages,
+				tools: codingServerTools,
 			});
 
 			if (!validation.success) {
 				return c.json({ error: "Invalid chat messages" }, 400);
 			}
 
-			return createChatStreamResponse(id, validation.data, sendReasoning);
+			return createChatStreamResponse(id, validation.data, mode, sendReasoning);
 		}
 	);

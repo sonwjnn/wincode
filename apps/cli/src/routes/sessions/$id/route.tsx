@@ -1,19 +1,23 @@
 import { createFileRoute, useRouterState } from "@tanstack/react-router";
 import type { CodingAgentUIMessage } from "@wincode/ai";
+import {
+	type CodingAgentModeName,
+	codingModeNameSchema,
+	defaultCodingMode,
+} from "@wincode/ai";
 import { safeValidateUIMessages } from "ai";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { honoClient } from "../../../lib/client";
+import { PromptConfigProvider } from "../../../providers/prompt-config-provider";
 import { ChatScreen } from "../../../screens/chat";
 
 const sessionRouteStateSchema = z
 	.object({
 		input: z.string().optional(),
+		mode: codingModeNameSchema.optional(),
 	})
 	.passthrough();
-
-const isMessagesResponse = (value: unknown): value is { messages: unknown } =>
-	typeof value === "object" && value !== null && "messages" in value;
 
 const getInitialPrompt = (state: unknown): string => {
 	const result = sessionRouteStateSchema.safeParse(state);
@@ -24,6 +28,19 @@ const getInitialPrompt = (state: unknown): string => {
 
 	return result.data.input ?? "";
 };
+
+const getInitialMode = (state: unknown): CodingAgentModeName => {
+	const result = sessionRouteStateSchema.safeParse(state);
+
+	if (!result.success) {
+		return defaultCodingMode.name;
+	}
+
+	return result.data.mode ?? defaultCodingMode.name;
+};
+
+const isMessagesResponse = (value: unknown): value is { messages: unknown } =>
+	typeof value === "object" && value !== null && "messages" in value;
 
 const loadSessionMessages = async (
 	id: string
@@ -64,6 +81,9 @@ function SessionRoute() {
 	const prompt = useRouterState({
 		select: (state) => getInitialPrompt(state.location.state),
 	});
+	const initialMode = useRouterState({
+		select: (state) => getInitialMode(state.location.state),
+	});
 
 	useEffect(() => {
 		let ignore = false;
@@ -100,10 +120,12 @@ function SessionRoute() {
 	}
 
 	return (
-		<ChatScreen
-			initialMessages={messages}
-			initialPrompt={prompt}
-			sessionId={id}
-		/>
+		<PromptConfigProvider initialMode={initialMode}>
+			<ChatScreen
+				initialMessages={messages}
+				initialPrompt={prompt}
+				sessionId={id}
+			/>
+		</PromptConfigProvider>
 	);
 }

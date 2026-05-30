@@ -1,5 +1,7 @@
-import { useTerminalDimensions } from "@opentui/react";
+import { TextAttributes } from "@opentui/core";
+import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
+import { getCodingMode } from "@wincode/ai";
 import { createUserMessage } from "@wincode/ai/client";
 import { useState } from "react";
 import { AsciiArt } from "../components/ascii-art";
@@ -8,13 +10,23 @@ import {
 	getChatTextAreaWidth,
 } from "../components/chat/chat-text-area";
 import { honoClient } from "../lib/client";
+import { usePromptConfig } from "../providers/prompt-config-provider";
 
 export function HomeScreen() {
 	const { width } = useTerminalDimensions();
 	const router = useRouter();
 	const [error, setError] = useState<string | null>(null);
 	const [isCreatingSession, setIsCreatingSession] = useState(false);
+	const { cycleMode, modeName } = usePromptConfig();
 	const promptWidth = getChatTextAreaWidth(width, 72);
+
+	useKeyboard((key) => {
+		if (key.name !== "tab" || key.repeated || isCreatingSession) {
+			return;
+		}
+
+		cycleMode();
+	});
 
 	const handleSubmit = async (input: string) => {
 		if (isCreatingSession) {
@@ -40,7 +52,10 @@ export function HomeScreen() {
 
 	const createSession = async (input: string) => {
 		const response = await honoClient.api.sessions.$post({
-			json: { message: createUserMessage(input) },
+			json: {
+				message: createUserMessage(input),
+				mode: modeName,
+			},
 		});
 
 		if (!response.ok) {
@@ -51,6 +66,7 @@ export function HomeScreen() {
 		const { id } = await response.json();
 		await router.navigate({
 			params: { id },
+			state: { mode: modeName },
 			to: "/sessions/$id",
 		});
 	};
@@ -70,6 +86,12 @@ export function HomeScreen() {
 							: "What would you like to build?"
 					}
 				/>
+				<box flexDirection="row" gap={2} marginTop={1}>
+					<text attributes={TextAttributes.DIM}>
+						Mode: {getCodingMode(modeName).displayName}
+					</text>
+					<text attributes={TextAttributes.DIM}>Tab mode</text>
+				</box>
 			</box>
 		</box>
 	);
