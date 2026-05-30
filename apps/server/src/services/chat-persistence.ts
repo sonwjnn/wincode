@@ -1,4 +1,5 @@
 import type { CodingAgentUIMessage } from "@wincode/ai";
+import { codingServerTools } from "@wincode/ai/server";
 import prisma, { type Prisma } from "@wincode/db";
 import { generateId, safeValidateUIMessages } from "ai";
 
@@ -82,6 +83,7 @@ export const getChatMessages = async (
 			parts: message.parts,
 			role: message.role,
 		})),
+		tools: codingServerTools,
 	});
 
 	if (!validation.success) {

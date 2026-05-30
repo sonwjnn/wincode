@@ -1,11 +1,32 @@
 import { stepCountIs, ToolLoopAgent } from "ai";
-import { codingAgentInstructions } from "../instructions";
+import { getSystemInstructions } from "../instructions";
+import {
+	type CodingAgentCallOptions,
+	codingAgentCallOptionsSchema,
+	defaultCodingMode,
+	getCodingMode,
+} from "../modes";
 import { codingModel, codingProviderOptions } from "./model";
 import { codingServerTools } from "./tools";
 
-export const codingAgent = new ToolLoopAgent({
-	instructions: codingAgentInstructions,
+export const codingAgent = new ToolLoopAgent<
+	CodingAgentCallOptions,
+	typeof codingServerTools
+>({
+	callOptionsSchema: codingAgentCallOptionsSchema,
+	instructions: getSystemInstructions(defaultCodingMode.name),
 	model: codingModel,
+	prepareCall: ({ options: callOptions, ...options }) => {
+		const codingMode = getCodingMode(
+			callOptions?.mode ?? defaultCodingMode.name
+		);
+
+		return {
+			...options,
+			activeTools: [...codingMode.tools],
+			instructions: getSystemInstructions(codingMode.name),
+		};
+	},
 	providerOptions: codingProviderOptions,
 	stopWhen: stepCountIs(20),
 	tools: codingServerTools,

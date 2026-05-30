@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CodingAgentUIMessage } from "@wincode/ai";
-import { mergeChatMessage } from "./chat-message-merge";
+import { mergeChatMessage } from "../utils/chat-message-merge";
 
 describe("mergeChatMessage", () => {
 	test("replaces a persisted message when the client sends updated tool outputs", () => {

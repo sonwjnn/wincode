@@ -2,8 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import {
 	type CodingAgentUIMessage,
+	codingModes,
 	codingToolDefinitions,
 	codingToolSchemas,
+	defaultCodingMode,
+	getNextCodingModeName,
+	getSystemInstructions,
 	type ReadInput,
 	type ReadOutput,
 } from "@wincode/ai";
@@ -11,6 +15,7 @@ import {
 	createUserMessage,
 	handleCodingAgentToolCall,
 } from "@wincode/ai/client";
+import type { ChatAddToolOutputFunction, ChatOnToolCallCallback } from "ai";
 import { codingAgent } from "./server/agent";
 import { codingServerTools } from "./server/tools";
 import { codingToolRunners } from "./tools/runners";
@@ -56,6 +61,23 @@ describe("@wincode/ai shared entry", () => {
 		});
 	});
 
+	test("defines ordered coding modes", () => {
+		expect(defaultCodingMode.name).toBe("build");
+		expect(codingModes.map((mode) => mode.name)).toEqual(["build", "plan"]);
+		expect(getNextCodingModeName("build")).toBe("plan");
+		expect(getNextCodingModeName("plan")).toBe("build");
+	});
+
+	test("composes mode-specific system instructions", () => {
+		expect(getSystemInstructions("build")).toContain(
+			"Purpose: implement requested code changes"
+		);
+		expect(getSystemInstructions("plan")).toContain(
+			"read-only analysis and implementation planning"
+		);
+		expect(getSystemInstructions("plan")).toContain("Do not modify files");
+	});
+
 	test("exports the coding UI message type from the shared entry", () => {
 		const message: CodingAgentUIMessage = createUserMessage("hello");
 
@@ -77,6 +99,36 @@ describe("@wincode/ai server and client entries", () => {
 
 	test("client entry exports a typed tool-call handler", () => {
 		expect(typeof handleCodingAgentToolCall).toBe("function");
+	});
+
+	test("plan mode blocks write tool execution", async () => {
+		const emittedOutputs: Parameters<
+			ChatAddToolOutputFunction<CodingAgentUIMessage>
+		>[0][] = [];
+		const addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage> = (
+			output
+		) => {
+			emittedOutputs.push(output);
+		};
+		const toolCallOptions = {
+			toolCall: {
+				dynamic: false,
+				input: { content: "hello", path: "README.md" },
+				toolCallId: "call_1",
+				toolName: "write",
+			},
+		} satisfies Parameters<ChatOnToolCallCallback<CodingAgentUIMessage>>[0];
+
+		await handleCodingAgentToolCall(addToolOutput, "plan")(toolCallOptions);
+
+		expect(emittedOutputs).toEqual([
+			{
+				errorText: "Plan mode cannot use write.",
+				state: "output-error",
+				tool: "write",
+				toolCallId: "call_1",
+			},
+		]);
 	});
 
 	test("tool mirrors are complete for the registry", () => {
@@ -146,7 +198,7 @@ describe("type-safety guardrails", () => {
 		const outputEmissionCount =
 			clientSource.match(/await addToolOutput/g)?.length;
 
-		expect(outputEmissionCount).toBe(2);
+		expect(outputEmissionCount).toBe(3);
 	});
 
 	test("CLI message consumers do not import the server entry", async () => {

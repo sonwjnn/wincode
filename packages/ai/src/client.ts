@@ -4,6 +4,12 @@ import {
 	generateId,
 } from "ai";
 import type { CodingAgentTools, CodingAgentUIMessage } from "./message";
+import {
+	type CodingAgentModeName,
+	defaultCodingMode,
+	getCodingMode,
+	isCodingToolAllowedForMode,
+} from "./modes";
 import { codingToolRunners } from "./tools/runners";
 import type { CodingToolName } from "./tools/schemas";
 
@@ -61,10 +67,23 @@ export const createUserMessage = (text: string): CodingAgentUIMessage => ({
 
 export const handleCodingAgentToolCall =
 	(
-		addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>
+		addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>,
+		modeName: CodingAgentModeName = defaultCodingMode.name
 	): ChatOnToolCallCallback<CodingAgentUIMessage> =>
 	async ({ toolCall }) => {
 		if (toolCall.dynamic) {
+			return;
+		}
+
+		if (!isCodingToolAllowedForMode(modeName, toolCall.toolName)) {
+			const mode = getCodingMode(modeName);
+
+			await addToolOutput({
+				errorText: `${mode.displayName} mode cannot use ${toolCall.toolName}.`,
+				state: "output-error",
+				tool: toolCall.toolName,
+				toolCallId: toolCall.toolCallId,
+			});
 			return;
 		}
 
