@@ -1,6 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import { type CodingAgentUIMessage, getCodingMode } from "@wincode/ai";
-import { usePromptConfig } from "../../providers/prompt-config-provider";
+import { usePromptConfig } from "../../providers/prompt-config";
 import { ChatMessage } from "./chat-message";
 import { ChatTextArea } from "./chat-text-area";
 import { ChatError } from "./message-parts";
@@ -39,7 +39,6 @@ export function ChatShell({
 			<box flexDirection="column" gap={1} width={inputWidth}>
 				<ChatTextArea
 					focused={!isBusy}
-					height={4}
 					onSubmit={onSubmit}
 					placeholder="Continue conversation..."
 					resetKey={inputKey}

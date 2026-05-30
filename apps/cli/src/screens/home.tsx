@@ -1,24 +1,18 @@
 import { TextAttributes } from "@opentui/core";
-import { useKeyboard, useTerminalDimensions } from "@opentui/react";
+import { useKeyboard } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
-import { getCodingMode } from "@wincode/ai";
 import { createUserMessage } from "@wincode/ai/client";
 import { useState } from "react";
 import { AsciiArt } from "../components/ascii-art";
-import {
-	ChatTextArea,
-	getChatTextAreaWidth,
-} from "../components/chat/chat-text-area";
+import { ChatTextArea } from "../components/chat/chat-text-area";
 import { honoClient } from "../lib/client";
-import { usePromptConfig } from "../providers/prompt-config-provider";
+import { usePromptConfig } from "../providers/prompt-config";
 
 export function HomeScreen() {
-	const { width } = useTerminalDimensions();
 	const router = useRouter();
-	const [error, setError] = useState<string | null>(null);
+	const [_error, setError] = useState<string | null>(null);
 	const [isCreatingSession, setIsCreatingSession] = useState(false);
 	const { cycleMode, modeName } = usePromptConfig();
-	const promptWidth = getChatTextAreaWidth(width, 72);
 
 	useKeyboard((key) => {
 		if (key.name !== "tab" || key.repeated || isCreatingSession) {
@@ -72,13 +66,25 @@ export function HomeScreen() {
 	};
 
 	return (
-		<box alignItems="center" flexDirection="column" marginTop={4}>
+		<box
+			alignItems="center"
+			flexGrow={1}
+			gap={2}
+			height="100%"
+			justifyContent="center"
+			position="relative"
+			width="100%"
+		>
 			<AsciiArt />
-			<box flexDirection="column" marginTop={2} width={promptWidth}>
-				{error ? <text fg="red">{error}</text> : null}
+			<box
+				flexDirection="column"
+				gap={1}
+				maxWidth={78}
+				paddingX={2}
+				width="100%"
+			>
 				<ChatTextArea
 					focused={!isCreatingSession}
-					height={6}
 					onSubmit={handleSubmit}
 					placeholder={
 						isCreatingSession
@@ -86,11 +92,9 @@ export function HomeScreen() {
 							: "What would you like to build?"
 					}
 				/>
-				<box flexDirection="row" gap={2} marginTop={1}>
-					<text attributes={TextAttributes.DIM}>
-						Mode: {getCodingMode(modeName).displayName}
-					</text>
-					<text attributes={TextAttributes.DIM}>Tab mode</text>
+				<box flexDirection="row" flexShrink={0} gap={1} marginLeft="auto">
+					<text>tab</text>
+					<text attributes={TextAttributes.DIM}>agents</text>
 				</box>
 			</box>
 		</box>

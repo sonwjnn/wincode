@@ -20,7 +20,7 @@ export type Theme = {
 
 export const THEMES: Theme[] = [
 	{
-		name: "Sonfox",
+		name: "Sonvox",
 		colors: {
 			primary: "#56D6C2",
 			planMode: "#CF8EF4",
@@ -565,5 +565,5 @@ export const THEMES: Theme[] = [
 	},
 ];
 
-export const DEFAULT_THEME =
-	THEMES.find((t) => t.name === "Sonfox") ?? THEMES[0];
+export const DEFAULT_THEME: Theme =
+	THEMES.find((t) => t.name === "Sonfox") ?? (THEMES[0] as Theme);
