@@ -27,7 +27,6 @@ type ChatTextAreaProps = {
 	focused?: boolean;
 	disabled?: boolean;
 	onSubmit: (value: string) => void;
-	placeholder: string;
 };
 
 type SubmitChatTextAreaValueOptions = {
@@ -59,7 +58,6 @@ export function ChatTextArea({
 	focused = true,
 	disabled = false,
 	onSubmit,
-	placeholder,
 }: ChatTextAreaProps) {
 	const { colors } = useTheme();
 	const { cycleMode, mode } = usePromptConfig();
@@ -107,7 +105,7 @@ export function ChatTextArea({
 						focused={focused}
 						keyBindings={CHAT_TEXT_AREA_KEY_BINDINGS}
 						onSubmit={handleSubmit}
-						placeholder={placeholder}
+						placeholder={`Ask anything... "Fix broken tests"`}
 						ref={textAreaRef}
 					/>
 					<StatusBar />

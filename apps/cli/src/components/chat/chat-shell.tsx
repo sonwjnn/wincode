@@ -45,12 +45,7 @@ export function ChatShell({
 			</scrollbox>
 
 			<box flexShrink={0}>
-				<ChatTextArea
-					disabled={isBusy}
-					focused={!isBusy}
-					onSubmit={onSubmit}
-					placeholder="Continue conversation..."
-				/>
+				<ChatTextArea disabled={isBusy} focused={!isBusy} onSubmit={onSubmit} />
 			</box>
 			<box
 				flexDirection="row"

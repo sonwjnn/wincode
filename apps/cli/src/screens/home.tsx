@@ -78,11 +78,6 @@ export function HomeScreen() {
 					disabled={isCreatingSession}
 					focused={!isCreatingSession}
 					onSubmit={handleSubmit}
-					placeholder={
-						isCreatingSession
-							? "Creating session..."
-							: "What would you like to build?"
-					}
 				/>
 				<box flexDirection="row" flexShrink={0} gap={1} marginLeft="auto">
 					<text>tab</text>
