@@ -46,7 +46,7 @@ await router.load();
 
 const renderer = await createCliRenderer({
 	targetFps: 60,
-	exitOnCtrlC: false,
+	exitOnCtrlC: true,
 });
 
 createRoot(renderer).render(<App />);

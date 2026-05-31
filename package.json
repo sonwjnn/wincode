@@ -25,20 +25,22 @@
       "@tanstack/react-router": "^1.168.22"
     }
   },
+  "overrides": {
+    "unrun": "0.2.37"
+  },
   "type": "module",
   "scripts": {
-    "dev": "turbo dev",
-    "build": "turbo build",
-    "check-types": "turbo check-types",
-    "dev:web": "turbo -F web dev",
-    "dev:cli": "turbo -F cli dev",
-    "dev:server": "turbo -F server dev",
-    "db:push": "turbo -F @wincode/db db:push",
-    "db:studio": "turbo -F @wincode/db db:studio",
-    "db:generate": "turbo -F @wincode/db db:generate",
-    "db:migrate": "turbo -F @wincode/db db:migrate",
-    "deploy": "turbo -F @wincode/infra deploy",
-    "destroy": "turbo -F @wincode/infra destroy",
+    "build": "bun run --filter './apps/*' build",
+    "check-types": "bun run --filter '*' check-types",
+    "dev:web": "bun run --cwd apps/web dev",
+    "dev:cli": "bun run --cwd apps/cli dev",
+    "dev:server": "bun run --cwd apps/server dev",
+    "db:push": "bun run --filter @wincode/db db:push",
+    "db:studio": "bun run --filter @wincode/db db:studio",
+    "db:generate": "bun run --filter @wincode/db db:generate",
+    "db:migrate": "bun run --filter @wincode/db db:migrate",
+    "deploy": "bun run --filter @wincode/infra deploy",
+    "destroy": "bun run --filter @wincode/infra destroy",
     "check": "ultracite check",
     "fix": "ultracite fix"
   },
@@ -54,7 +56,6 @@
     "@types/bun": "catalog:",
     "@wincode/config": "workspace:*",
     "lefthook": "latest",
-    "turbo": "^2.8.12",
     "typescript": "catalog:",
     "ultracite": "7.6.5"
   },

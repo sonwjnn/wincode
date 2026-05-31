@@ -1,6 +1,7 @@
 import { TextAttributes } from "@opentui/core";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import { usePromptConfig } from "../../providers/prompt-config";
+import { useTheme } from "../../providers/theme";
 import { Spinner } from "../spinner";
 import { ChatMessage } from "./chat-message";
 import { ChatTextArea } from "./chat-text-area";
@@ -9,6 +10,7 @@ import { ErrorMessage } from "./messages";
 type ChatShellProps = {
 	error?: Error;
 	isBusy: boolean;
+	isInterruptArmed: boolean;
 	messages: CodingAgentUIMessage[];
 	onSubmit: (value: string) => void;
 };
@@ -16,10 +18,12 @@ type ChatShellProps = {
 export function ChatShell({
 	error,
 	isBusy,
+	isInterruptArmed,
 	messages,
 	onSubmit,
 }: ChatShellProps) {
 	const { mode } = usePromptConfig();
+	const { colors } = useTheme();
 
 	return (
 		<box
@@ -60,7 +64,12 @@ export function ChatShell({
 					{isBusy ? (
 						<>
 							<Spinner mode={mode} />
-							{/*{interruptible ? <text>esc to interrupt</text> : null}*/}
+							<text>
+								<span fg={colors.mode[mode]}>Esc</span>
+								<span fg={colors.dimSeparator}>
+									{isInterruptArmed ? " again to interrupt" : " interrupt"}
+								</span>
+							</text>
 						</>
 					) : null}
 				</box>

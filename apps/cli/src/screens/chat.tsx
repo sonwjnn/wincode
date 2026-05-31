@@ -1,9 +1,11 @@
 import { useKeyboard } from "@opentui/react";
 import type { CodingAgentUIMessage } from "@wincode/ai";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChatShell } from "../components/chat/chat-shell";
 import { useChat } from "../hooks/use-chat";
 import { usePromptConfig } from "../providers/prompt-config";
+
+const INTERRUPT_CONFIRMATION_TIMEOUT_MS = 3000;
 
 type ChatScreenProps = {
 	initialMessages: CodingAgentUIMessage[];
@@ -19,6 +21,11 @@ export function ChatScreen({
 	const { mode, model } = usePromptConfig();
 	const submittedPromptRef = useRef<string | null>(null);
 	const submittedInitialMessageRef = useRef<string | null>(null);
+	const interruptResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+		null
+	);
+	const interruptArmedRef = useRef(false);
+	const [isInterruptArmed, setIsInterruptArmed] = useState(false);
 	const {
 		abort,
 		continueLastMessage,
@@ -43,8 +50,55 @@ export function ChatScreen({
 		}
 
 		key.preventDefault();
-		interrupt();
+
+		if (interruptArmedRef.current) {
+			if (interruptResetTimeoutRef.current) {
+				clearTimeout(interruptResetTimeoutRef.current);
+				interruptResetTimeoutRef.current = null;
+			}
+
+			interruptArmedRef.current = false;
+			setIsInterruptArmed(false);
+			interrupt();
+			return;
+		}
+
+		interruptArmedRef.current = true;
+		setIsInterruptArmed(true);
+
+		if (interruptResetTimeoutRef.current) {
+			clearTimeout(interruptResetTimeoutRef.current);
+		}
+
+		interruptResetTimeoutRef.current = setTimeout(() => {
+			interruptArmedRef.current = false;
+			setIsInterruptArmed(false);
+			interruptResetTimeoutRef.current = null;
+		}, INTERRUPT_CONFIRMATION_TIMEOUT_MS);
 	});
+
+	useEffect(() => {
+		if (isBusy) {
+			return;
+		}
+
+		if (interruptResetTimeoutRef.current) {
+			clearTimeout(interruptResetTimeoutRef.current);
+			interruptResetTimeoutRef.current = null;
+		}
+
+		interruptArmedRef.current = false;
+		setIsInterruptArmed(false);
+	}, [isBusy]);
+
+	useEffect(
+		() => () => {
+			if (interruptResetTimeoutRef.current) {
+				clearTimeout(interruptResetTimeoutRef.current);
+			}
+		},
+		[]
+	);
 
 	const submitMessage = (value: string) => {
 		if (isBusy) {
@@ -99,6 +153,7 @@ export function ChatScreen({
 		<ChatShell
 			error={error}
 			isBusy={isBusy}
+			isInterruptArmed={isInterruptArmed}
 			messages={messages}
 			onSubmit={submitMessage}
 		/>

@@ -95,7 +95,6 @@ describe("@wincode/ai shared entry", () => {
 			"gpt-5.5",
 			"gpt-5.5-pro",
 			"gpt-5.4-mini",
-			"gpt-5.4-mini-fast",
 		]);
 		expect(new Set(supportedChatModels.map((model) => model.provider))).toEqual(
 			new Set(["anthropic", "google", "openai"])

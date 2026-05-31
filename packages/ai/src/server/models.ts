@@ -87,11 +87,6 @@ const OPENAI_PROVIDER_OPTIONS: Partial<Record<OpenAIModelId, ProviderOptions>> =
 				reasoningSummary: "detailed",
 			},
 		},
-		"gpt-5.4-mini-fast": {
-			openai: {
-				reasoningSummary: "detailed",
-			},
-		},
 	};
 
 function assertUnsupportedProvider(provider: never): never {

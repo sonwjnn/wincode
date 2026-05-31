@@ -10,7 +10,6 @@ export const supportedChatModelIds = [
 	"gpt-5.5",
 	"gpt-5.5-pro",
 	"gpt-5.4-mini",
-	"gpt-5.4-mini-fast",
 ] as const;
 
 export type SupportedChatModelId = (typeof supportedChatModelIds)[number];
@@ -69,11 +68,6 @@ export const supportedChatModels = [
 	{
 		displayName: "GPT-5.4 Mini",
 		id: "gpt-5.4-mini",
-		provider: "openai",
-	},
-	{
-		displayName: "GPT-5.4 Mini Fast",
-		id: "gpt-5.4-mini-fast",
 		provider: "openai",
 	},
 ] as const satisfies readonly SupportedChatModelDefinition[];
