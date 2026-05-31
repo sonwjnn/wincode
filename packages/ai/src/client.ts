@@ -3,7 +3,11 @@ import {
 	type ChatOnToolCallCallback,
 	generateId,
 } from "ai";
-import type { CodingAgentTools, CodingAgentUIMessage } from "./message";
+import type {
+	CodingAgentTools,
+	CodingAgentUIMessage,
+	CodingMessageMetadata,
+} from "./message";
 import {
 	defaultMode,
 	getCodingMode,
@@ -59,8 +63,12 @@ const runToolCall = async <ToolName extends CodingAgentToolName>({
 	}
 };
 
-export const createUserMessage = (text: string): CodingAgentUIMessage => ({
+export const createUserMessage = (
+	text: string,
+	metadata?: CodingMessageMetadata
+): CodingAgentUIMessage => ({
 	id: generateId(),
+	...(metadata ? { metadata } : {}),
 	parts: [{ text, type: "text" }],
 	role: "user",
 });

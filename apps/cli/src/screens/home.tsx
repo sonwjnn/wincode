@@ -11,7 +11,7 @@ export function HomeScreen() {
 	const router = useRouter();
 	const [_error, setError] = useState<string | null>(null);
 	const [isCreatingSession, setIsCreatingSession] = useState(false);
-	const { mode } = usePromptConfig();
+	const { mode, model } = usePromptConfig();
 
 	const handleSubmit = async (input: string) => {
 		if (isCreatingSession) {
@@ -38,8 +38,9 @@ export function HomeScreen() {
 	const createSession = async (input: string) => {
 		const response = await honoClient.api.sessions.$post({
 			json: {
-				message: createUserMessage(input),
+				message: createUserMessage(input, { mode, model }),
 				mode,
+				model,
 			},
 		});
 

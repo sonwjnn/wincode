@@ -1,14 +1,8 @@
-import { useChat } from "@ai-sdk/react";
+import { useKeyboard } from "@opentui/react";
 import type { CodingAgentUIMessage } from "@wincode/ai";
-import { handleCodingAgentToolCall } from "@wincode/ai/client";
-import {
-	type ChatAddToolOutputFunction,
-	DefaultChatTransport,
-	lastAssistantMessageIsCompleteWithToolCalls,
-} from "ai";
 import { useEffect, useRef } from "react";
 import { ChatShell } from "../components/chat/chat-shell";
-import { honoClient } from "../lib/client";
+import { useChat } from "../hooks/use-chat";
 import { usePromptConfig } from "../providers/prompt-config";
 
 type ChatScreenProps = {
@@ -22,50 +16,35 @@ export function ChatScreen({
 	initialPrompt,
 	sessionId,
 }: ChatScreenProps) {
-	const { mode } = usePromptConfig();
+	const { mode, model } = usePromptConfig();
 	const submittedPromptRef = useRef<string | null>(null);
 	const submittedInitialMessageRef = useRef<string | null>(null);
-	const addToolOutputRef =
-		useRef<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>(null);
-	const modeRef = useRef(mode);
-
-	const { addToolOutput, error, messages, sendMessage, status } =
-		useChat<CodingAgentUIMessage>({
-			id: sessionId,
-			messages: initialMessages,
-			onToolCall: (options) => {
-				const addToolOutputForCall = addToolOutputRef.current;
-
-				if (!addToolOutputForCall) {
-					return;
-				}
-
-				// AI SDK awaits onToolCall, but addToolOutput queues on the same chat executor.
-				// Do not await this call or tool execution can deadlock at input-available.
-				Promise.resolve(
-					handleCodingAgentToolCall(
-						addToolOutputForCall,
-						modeRef.current
-					)(options)
-				).catch(() => undefined);
-			},
-			sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
-			transport: new DefaultChatTransport({
-				api: honoClient.api.sessions[":id"].chat
-					.$url({ param: { id: sessionId } })
-					.toString(),
-				prepareSendMessagesRequest: ({ messages: requestMessages }) => ({
-					body: {
-						message: requestMessages.at(-1),
-						mode: modeRef.current,
-						sendReasoning: true,
-					},
-				}),
-			}),
-		});
+	const {
+		abort,
+		continueLastMessage,
+		error,
+		interrupt,
+		messages,
+		status,
+		submit,
+	} = useChat(sessionId, initialMessages);
 	const isBusy = status === "submitted" || status === "streaming";
-	addToolOutputRef.current = addToolOutput;
-	modeRef.current = mode;
+
+	useEffect(
+		() => () => {
+			abort();
+		},
+		[abort]
+	);
+
+	useKeyboard((key) => {
+		if (key.name !== "escape" || !isBusy) {
+			return;
+		}
+
+		key.preventDefault();
+		interrupt();
+	});
 
 	const submitMessage = (value: string) => {
 		if (isBusy) {
@@ -77,10 +56,7 @@ export function ChatScreen({
 			return;
 		}
 
-		sendMessage({
-			metadata: { mode: modeRef.current },
-			text,
-		}).catch(() => undefined);
+		submit({ mode, model, userText: text }).catch(() => undefined);
 	};
 
 	useEffect(() => {
@@ -94,11 +70,8 @@ export function ChatScreen({
 		}
 
 		submittedPromptRef.current = submittedPrompt;
-		sendMessage({
-			metadata: { mode: modeRef.current },
-			text: submittedPrompt,
-		}).catch(() => undefined);
-	}, [initialPrompt, sendMessage]);
+		submit({ mode, model, userText: submittedPrompt }).catch(() => undefined);
+	}, [initialPrompt, mode, model, submit]);
 
 	useEffect(() => {
 		if (initialPrompt.trim()) {
@@ -116,8 +89,11 @@ export function ChatScreen({
 		}
 
 		submittedInitialMessageRef.current = lastInitialMessage.id;
-		sendMessage().catch(() => undefined);
-	}, [initialMessages, initialPrompt, sendMessage]);
+		continueLastMessage(
+			lastInitialMessage.metadata?.mode ?? mode,
+			lastInitialMessage.metadata?.model ?? model
+		).catch(() => undefined);
+	}, [continueLastMessage, initialMessages, initialPrompt, mode, model]);
 
 	return (
 		<ChatShell

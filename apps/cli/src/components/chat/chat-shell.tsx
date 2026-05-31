@@ -32,7 +32,7 @@ export function ChatShell({
 			width="100%"
 		>
 			<scrollbox flexGrow={1} height="100%" stickyScroll stickyStart="bottom">
-				<box>
+				<box flexDirection="column" gap={1}>
 					{messages.length === 0 && !error ? (
 						<text attributes={TextAttributes.DIM}>No messages yet.</text>
 					) : (

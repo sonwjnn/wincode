@@ -1,4 +1,5 @@
 import type { UIMessage } from "ai";
+import type { SupportedChatModelId } from "./models";
 import type { ModeType } from "./modes";
 import type {
 	CodingToolInput,
@@ -13,7 +14,10 @@ export type CodingAgentTools = {
 	};
 };
 
-export type CodingMessageMetadata = { mode?: ModeType };
+export type CodingMessageMetadata = {
+	mode?: ModeType;
+	model?: SupportedChatModelId;
+};
 
 export type CodingAgentUIMessage = UIMessage<
 	CodingMessageMetadata,

@@ -1,4 +1,5 @@
-import { stepCountIs, ToolLoopAgent } from "ai";
+import type { ProviderOptions } from "@ai-sdk/provider-utils";
+import { type LanguageModel, stepCountIs, ToolLoopAgent } from "ai";
 import { getSystemInstructions } from "../instructions";
 import {
 	type CodingAgentCallOptions,
@@ -6,26 +7,31 @@ import {
 	defaultMode,
 	getCodingMode,
 } from "../modes";
-import { codingModel, codingProviderOptions } from "./model";
 import { codingServerTools } from "./tools";
 
-export const codingAgent = new ToolLoopAgent<
-	CodingAgentCallOptions,
-	typeof codingServerTools
->({
-	callOptionsSchema: codingAgentCallOptionsSchema,
-	instructions: getSystemInstructions(defaultMode.value),
-	model: codingModel,
-	prepareCall: ({ options: callOptions, ...options }) => {
-		const codingMode = getCodingMode(callOptions?.mode ?? defaultMode.value);
+type CreateCodingAgentOptions = {
+	model: LanguageModel;
+	providerOptions?: ProviderOptions;
+};
 
-		return {
-			...options,
-			activeTools: [...codingMode.tools],
-			instructions: getSystemInstructions(codingMode.value),
-		};
-	},
-	providerOptions: codingProviderOptions,
-	stopWhen: stepCountIs(20),
-	tools: codingServerTools,
-});
+export const createCodingAgent = ({
+	model,
+	providerOptions,
+}: CreateCodingAgentOptions) =>
+	new ToolLoopAgent<CodingAgentCallOptions, typeof codingServerTools>({
+		callOptionsSchema: codingAgentCallOptionsSchema,
+		instructions: getSystemInstructions(defaultMode.value),
+		model,
+		prepareCall: ({ options: callOptions, ...options }) => {
+			const codingMode = getCodingMode(callOptions?.mode ?? defaultMode.value);
+
+			return {
+				...options,
+				activeTools: [...codingMode.tools],
+				instructions: getSystemInstructions(codingMode.value),
+			};
+		},
+		providerOptions,
+		stopWhen: stepCountIs(20),
+		tools: codingServerTools,
+	});

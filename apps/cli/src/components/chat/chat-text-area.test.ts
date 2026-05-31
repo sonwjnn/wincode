@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
 import { submitChatTextAreaValue } from "./chat-text-area";
 
 describe("submitChatTextAreaValue", () => {
@@ -38,5 +39,19 @@ describe("submitChatTextAreaValue", () => {
 
 		expect(submitted).toEqual([]);
 		expect(clearCount).toBe(0);
+	});
+
+	test("does not bind shift tab to model cycling", async () => {
+		const [textAreaSource, promptConfigSource] = await Promise.all([
+			readFile(new URL("./chat-text-area.tsx", import.meta.url), "utf8"),
+			readFile(
+				new URL("../../providers/prompt-config/index.tsx", import.meta.url),
+				"utf8"
+			),
+		]);
+
+		expect(textAreaSource).not.toContain("cycleModel");
+		expect(textAreaSource).not.toContain("key.shift");
+		expect(promptConfigSource).not.toContain("cycleModel");
 	});
 });

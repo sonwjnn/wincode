@@ -2,21 +2,27 @@ import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import {
 	type CodingAgentUIMessage,
+	codingModeNames,
 	codingModes,
 	codingToolDefinitions,
 	codingToolSchemas,
+	defaultChatModel,
 	defaultMode,
+	findSupportedChatModel,
 	getNextCodingModeName,
 	getSystemInstructions,
+	parseMode,
 	type ReadInput,
 	type ReadOutput,
+	supportedChatModelIds,
+	supportedChatModels,
 } from "@wincode/ai";
 import {
 	createUserMessage,
 	handleCodingAgentToolCall,
 } from "@wincode/ai/client";
 import type { ChatAddToolOutputFunction, ChatOnToolCallCallback } from "ai";
-import { codingAgent } from "./server/agent";
+import { createCodingAgent } from "./server/agent";
 import { codingServerTools } from "./server/tools";
 import { codingToolRunners } from "./tools/runners";
 
@@ -61,11 +67,57 @@ describe("@wincode/ai shared entry", () => {
 		});
 	});
 
+	test("creates user messages with chat metadata", () => {
+		expect(
+			createUserMessage("hello", {
+				mode: "plan",
+				model: "gemini-3.5-flash",
+			})
+		).toMatchObject({
+			metadata: {
+				mode: "plan",
+				model: "gemini-3.5-flash",
+			},
+			parts: [{ text: "hello", type: "text" }],
+			role: "user",
+		});
+	});
+
+	test("defines supported chat models by provider", () => {
+		expect(defaultChatModel.value).toBe("gpt-5.4-mini");
+		expect(supportedChatModelIds).toEqual([
+			"claude-opus-4.8",
+			"claude-sonnet-4.6",
+			"claude-haiku-4.5",
+			"gemini-3.5-flash",
+			"gemini-3.1-pro-preview",
+			"gemini-2.5-pro",
+			"gpt-5.5",
+			"gpt-5.5-pro",
+			"gpt-5.4-mini",
+			"gpt-5.4-mini-fast",
+		]);
+		expect(new Set(supportedChatModels.map((model) => model.provider))).toEqual(
+			new Set(["anthropic", "google", "openai"])
+		);
+		expect(findSupportedChatModel("gemini-3.5-flash")).toMatchObject({
+			id: "gemini-3.5-flash",
+			provider: "google",
+		});
+		expect(findSupportedChatModel("unknown-model")).toBeNull();
+	});
+
 	test("defines ordered coding modes", () => {
 		expect(defaultMode.value).toBe("build");
+		expect(codingModes.map((mode) => mode.value)).toEqual([...codingModeNames]);
 		expect(codingModes.map((mode) => mode.value)).toEqual(["build", "plan"]);
 		expect(getNextCodingModeName("build")).toBe("plan");
 		expect(getNextCodingModeName("plan")).toBe("build");
+	});
+
+	test("parses persisted coding modes safely", () => {
+		expect(parseMode("plan")).toBe("plan");
+		expect(parseMode("unknown")).toBe(defaultMode.value);
 	});
 
 	test("composes mode-specific system instructions", () => {
@@ -87,6 +139,10 @@ describe("@wincode/ai shared entry", () => {
 
 describe("@wincode/ai server and client entries", () => {
 	test("server entry exports the coding agent", () => {
+		const codingAgent = createCodingAgent({
+			model: {} as never,
+		});
+
 		expect(codingAgent.tools).toBeDefined();
 		expect(Object.keys(codingAgent.tools ?? {})).toEqual([
 			"read",
@@ -219,9 +275,13 @@ describe("type-safety guardrails", () => {
 			),
 			readFile(
 				new URL(
-					"../../../apps/cli/src/components/chat/message-parts.tsx",
+					"../../../apps/cli/src/components/chat/messages/bot-message.tsx",
 					import.meta.url
 				),
+				"utf8"
+			),
+			readFile(
+				new URL("../../../apps/cli/src/hooks/use-chat.ts", import.meta.url),
 				"utf8"
 			),
 			readFile(

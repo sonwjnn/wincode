@@ -1,6 +1,9 @@
+import type { ModeType } from "@wincode/ai";
+
 export type ThemeColors = {
 	primary: string;
 	planMode: string;
+	mode: Record<ModeType, string>;
 	selection: string;
 	thinking: string;
 	success: string;
@@ -18,7 +21,20 @@ export type Theme = {
 	colors: ThemeColors;
 };
 
-export const THEMES: Theme[] = [
+type ThemeDefinition = {
+	name: string;
+	colors: Omit<ThemeColors, "mode">;
+};
+
+const createModeColors = (
+	colors: Omit<ThemeColors, "mode">
+): Record<ModeType, string> =>
+	({
+		build: colors.primary,
+		plan: colors.planMode,
+	}) satisfies Record<ModeType, string>;
+
+const THEME_DEFINITIONS = [
 	{
 		name: "Sonvox",
 		colors: {
@@ -563,7 +579,15 @@ export const THEMES: Theme[] = [
 			dimSeparator: "#555555",
 		},
 	},
-];
+] satisfies ThemeDefinition[];
+
+export const THEMES: Theme[] = THEME_DEFINITIONS.map(({ colors, name }) => ({
+	colors: {
+		...colors,
+		mode: createModeColors(colors),
+	},
+	name,
+}));
 
 export const DEFAULT_THEME: Theme =
 	THEMES.find((t) => t.name === "Sonfox") ?? (THEMES[0] as Theme);

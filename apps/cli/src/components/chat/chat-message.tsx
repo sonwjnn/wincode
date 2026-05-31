@@ -1,4 +1,4 @@
-import type { CodingAgentUIMessage } from "@wincode/ai";
+import { type CodingAgentUIMessage, defaultMode } from "@wincode/ai";
 import { BotMessage, UserMessage } from "./messages";
 
 type TextPart = Extract<
@@ -18,7 +18,10 @@ export function ChatMessage({ message }: { message: CodingAgentUIMessage }) {
 			.join("");
 
 		return (
-			<UserMessage message={text} mode={message.metadata?.mode ?? "build"} />
+			<UserMessage
+				message={text}
+				mode={message.metadata?.mode ?? defaultMode.value}
+			/>
 		);
 	}
 

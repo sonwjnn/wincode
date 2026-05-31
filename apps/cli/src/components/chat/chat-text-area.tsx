@@ -83,7 +83,7 @@ export function ChatTextArea({
 		<box alignItems="center" width="100%">
 			<box
 				border={["left"]}
-				borderColor={mode === "build" ? colors.primary : colors.planMode}
+				borderColor={colors.mode[mode]}
 				customBorderChars={{
 					...EmptyBorder,
 					vertical: "┃",

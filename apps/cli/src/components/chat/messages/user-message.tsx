@@ -9,7 +9,7 @@ type UserMessageProps = {
 
 export function UserMessage({ message, mode }: UserMessageProps) {
 	const { colors } = useTheme();
-	const borderColor = mode === "plan" ? colors.planMode : colors.primary;
+	const borderColor = colors.mode[mode];
 
 	return (
 		<box alignItems="center" width="100%">

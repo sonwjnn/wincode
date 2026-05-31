@@ -1,13 +1,20 @@
-import type { CodingAgentUIMessage, ModeType } from "@wincode/ai";
+import type {
+	CodingAgentUIMessage,
+	ModeType,
+	SupportedChatModelId,
+} from "@wincode/ai";
+import { parseMode } from "@wincode/ai";
 import { codingServerTools } from "@wincode/ai/server";
-import prisma, { Mode, type Prisma } from "@wincode/db";
+import prisma, { type Prisma } from "@wincode/db";
 import { generateId, safeValidateUIMessages } from "ai";
-
-// Prisma Mode enum values must stay in sync with AI ModeType ("build" | "plan").
+import {
+	resolveLoadedChatMessageMetadata,
+	resolvePersistedChatMessageMetadata,
+} from "./chat-message-metadata";
 
 type ChatMessagePayload = {
 	metadata?: Prisma.InputJsonValue;
-	mode: Mode;
+	mode: ModeType;
 	parts: Prisma.InputJsonValue;
 	position: number;
 	role: CodingAgentUIMessage["role"];
@@ -22,10 +29,17 @@ const buildMessagePayload = (
 	sessionId: string,
 	message: CodingAgentUIMessage,
 	position: number,
-	mode: Mode
+	fallbackMode: ModeType,
+	model: SupportedChatModelId
 ): ChatMessagePayload => {
+	const metadata = resolvePersistedChatMessageMetadata(
+		message.metadata,
+		fallbackMode,
+		model
+	);
 	const payload: ChatMessagePayload = {
-		mode,
+		metadata: toJsonValue(metadata),
+		mode: metadata.mode ?? fallbackMode,
 		parts: toJsonValue(message.parts),
 		position,
 		role: message.role,
@@ -33,16 +47,13 @@ const buildMessagePayload = (
 		uiMessageId: message.id,
 	};
 
-	if (message.metadata !== undefined) {
-		payload.metadata = toJsonValue(message.metadata);
-	}
-
 	return payload;
 };
 
 export const createChatSession = async (
 	messages: CodingAgentUIMessage[],
-	mode: ModeType
+	mode: ModeType,
+	model: SupportedChatModelId
 ) => {
 	const session = await prisma.chatSession.create({
 		data: {
@@ -54,7 +65,7 @@ export const createChatSession = async (
 	});
 
 	if (messages.length > 0) {
-		await persistChatMessages(session.id, messages, mode);
+		await persistChatMessages(session.id, messages, mode, model);
 	}
 
 	return session;
@@ -86,10 +97,10 @@ export const getChatMessages = async (
 	const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
 		messages: messages.map((message) => ({
 			id: message.uiMessageId,
-			metadata: {
-				...((message.metadata as Record<string, unknown> | null) ?? {}),
-				mode: message.mode,
-			},
+			metadata: resolveLoadedChatMessageMetadata(
+				message.metadata,
+				parseMode(message.mode)
+			),
 			parts: message.parts,
 			role: message.role,
 		})),
@@ -106,10 +117,10 @@ export const getChatMessages = async (
 export const persistChatMessages = async (
 	sessionId: string,
 	messages: CodingAgentUIMessage[],
-	mode: ModeType
+	mode: ModeType,
+	model: SupportedChatModelId
 ) => {
 	const lastMessageAt = new Date();
-	const modeEnum = mode === "plan" ? Mode.plan : Mode.build;
 
 	await prisma.chatSession.upsert({
 		create: {
@@ -128,12 +139,14 @@ export const persistChatMessages = async (
 				sessionId,
 				message,
 				position,
-				modeEnum
+				mode,
+				model
 			);
 			return prisma.chatMessage.upsert({
 				create: payload,
 				update: {
 					metadata: payload.metadata,
+					mode: payload.mode,
 					parts: payload.parts,
 					position: payload.position,
 					role: payload.role,
