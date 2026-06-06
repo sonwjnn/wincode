@@ -1,8 +1,11 @@
 import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import { useEffect, useReducer } from "react";
 import { ThemedRoot } from "../layouts/themed-root";
+import { DialogProvider } from "../providers/dialog";
+import { KeyboardLayerProvider } from "../providers/keyboard-layer";
 import { PromptConfigProvider } from "../providers/prompt-config";
 import { ThemeProvider } from "../providers/theme";
+import { ToastProvider } from "../providers/toast";
 
 export function RootLayout() {
 	const router = useRouter();
@@ -32,11 +35,17 @@ export function RootLayout() {
 
 	return (
 		<ThemeProvider>
-			<PromptConfigProvider>
-				<ThemedRoot>
-					<Outlet key={currentPath} />
-				</ThemedRoot>
-			</PromptConfigProvider>
+			<KeyboardLayerProvider>
+				<PromptConfigProvider>
+					<ToastProvider>
+						<DialogProvider>
+							<ThemedRoot>
+								<Outlet key={currentPath} />
+							</ThemedRoot>
+						</DialogProvider>
+					</ToastProvider>
+				</PromptConfigProvider>
+			</KeyboardLayerProvider>
 		</ThemeProvider>
 	);
 }

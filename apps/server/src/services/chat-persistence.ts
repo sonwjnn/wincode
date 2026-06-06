@@ -8,6 +8,7 @@ import { codingServerTools } from "@wincode/ai/server";
 import prisma, { type Prisma } from "@wincode/db";
 import { generateId, safeValidateUIMessages } from "ai";
 import {
+	getSessionTitle,
 	resolveLoadedChatMessageMetadata,
 	resolvePersistedChatMessageMetadata,
 } from "./chat-message-metadata";
@@ -58,6 +59,7 @@ export const createChatSession = async (
 	const session = await prisma.chatSession.create({
 		data: {
 			id: generateId(),
+			title: getSessionTitle(messages),
 		},
 		select: {
 			id: true,
@@ -69,6 +71,32 @@ export const createChatSession = async (
 	}
 
 	return session;
+};
+
+export const listChatSessions = async () => {
+	const sessions = await prisma.chatSession.findMany({
+		orderBy: [{ lastMessageAt: "desc" }, { createdAt: "desc" }],
+		select: {
+			createdAt: true,
+			id: true,
+			lastMessageAt: true,
+			messages: {
+				orderBy: { position: "asc" },
+				select: {
+					parts: true,
+					role: true,
+				},
+			},
+			title: true,
+		},
+	});
+
+	return sessions.map((session) => ({
+		createdAt: session.createdAt,
+		id: session.id,
+		lastMessageAt: session.lastMessageAt,
+		title: session.title ?? getSessionTitle(session.messages),
+	}));
 };
 
 export const getChatMessages = async (
@@ -121,14 +149,17 @@ export const persistChatMessages = async (
 	model: SupportedChatModelId
 ) => {
 	const lastMessageAt = new Date();
+	const title = getSessionTitle(messages);
 
 	await prisma.chatSession.upsert({
 		create: {
 			id: sessionId,
 			lastMessageAt,
+			title,
 		},
 		update: {
 			lastMessageAt,
+			title,
 		},
 		where: { id: sessionId },
 	});

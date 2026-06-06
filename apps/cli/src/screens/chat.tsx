@@ -3,6 +3,7 @@ import type { CodingAgentUIMessage } from "@wincode/ai";
 import { useEffect, useRef, useState } from "react";
 import { ChatShell } from "../components/chat/chat-shell";
 import { useChat } from "../hooks/use-chat";
+import { useKeyboardLayer } from "../providers/keyboard-layer";
 import { usePromptConfig } from "../providers/prompt-config";
 
 const INTERRUPT_CONFIRMATION_TIMEOUT_MS = 3000;
@@ -19,6 +20,7 @@ export function ChatScreen({
 	sessionId,
 }: ChatScreenProps) {
 	const { mode, model } = usePromptConfig();
+	const { isTopLayer } = useKeyboardLayer();
 	const submittedPromptRef = useRef<string | null>(null);
 	const submittedInitialMessageRef = useRef<string | null>(null);
 	const interruptResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -45,7 +47,7 @@ export function ChatScreen({
 	);
 
 	useKeyboard((key) => {
-		if (key.name !== "escape" || !isBusy) {
+		if (key.name !== "escape" || !isBusy || !isTopLayer("base")) {
 			return;
 		}
 

@@ -168,6 +168,14 @@ useKeyboard((key) => {
 return <textarea ref={textAreaRef} focused />
 ```
 
+### Imperative Handler State
+
+OpenTUI input callbacks are imperative. If a keyboard handler reads state that can change through keyboard navigation, mirror that state into a ref and read the ref inside the handler. This avoids stale closures where the UI highlights one item while Enter executes another.
+
+### Floating Overlays
+
+OpenTUI popovers and overlays should not consume layout space unless intentionally inline. Put the wrapper at `position="relative"` with `overflow="visible"`, then render the overlay with `position="absolute"`, a concrete `bottom`, and a higher `zIndex` so it floats above the input without pushing chat content.
+
 ### CLI Route Loading
 
 For OpenTUI CLI routes, avoid using TanStack Router loaders for screen-critical data when the route must visually switch immediately. Router loaders block route rendering until data resolves, which can make the current `<Outlet />` appear unchanged in the terminal. Prefer component-level async loading with local loading and error states for CLI screens that need immediate route feedback.

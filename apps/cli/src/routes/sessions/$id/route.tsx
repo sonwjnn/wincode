@@ -5,6 +5,7 @@ import { safeValidateUIMessages } from "ai";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { honoClient } from "../../../lib/client";
+import { getErrorMessage } from "../../../lib/error-response";
 import { ChatScreen } from "../../../screens/chat";
 
 const sessionRouteStateSchema = z
@@ -35,7 +36,7 @@ const loadSessionMessages = async (
 	});
 
 	if (!response.ok) {
-		throw new Error("Could not load chat messages.");
+		throw new Error(await getErrorMessage(response));
 	}
 
 	const data: unknown = await response.json();

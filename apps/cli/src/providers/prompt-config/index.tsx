@@ -11,6 +11,7 @@ type PromptConfig = {
 	cycleMode: () => void;
 	mode: ModeType;
 	model: SupportedChatModelId;
+	setMode: (mode: ModeType) => void;
 	setModel: (model: SupportedChatModelId) => void;
 };
 
@@ -34,7 +35,9 @@ export function PromptConfigProvider({
 	};
 
 	return (
-		<PromptConfigContext.Provider value={{ cycleMode, mode, model, setModel }}>
+		<PromptConfigContext.Provider
+			value={{ cycleMode, mode, model, setMode: setModeName, setModel }}
+		>
 			{children}
 		</PromptConfigContext.Provider>
 	);

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	getSessionTitle,
 	resolveLoadedChatMessageMetadata,
 	resolvePersistedChatMessageMetadata,
 } from "./chat-message-metadata";
@@ -43,5 +44,29 @@ describe("chat message metadata persistence", () => {
 			mode: "plan",
 			model: "gemini-3.5-flash",
 		});
+	});
+
+	test("derives session title from first user text part", () => {
+		expect(
+			getSessionTitle([
+				{
+					parts: [
+						{ text: "  Fix the dialog menu integration  ", type: "text" },
+					],
+					role: "user",
+				},
+			])
+		).toBe("Fix the dialog menu integration");
+	});
+
+	test("falls back to untitled session without user text", () => {
+		expect(
+			getSessionTitle([
+				{
+					parts: [{ text: "assistant reply", type: "text" }],
+					role: "assistant",
+				},
+			])
+		).toBe("Untitled session");
 	});
 });

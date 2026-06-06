@@ -16,6 +16,7 @@ import { z } from "zod";
 import {
 	createChatSession,
 	getChatMessages,
+	listChatSessions,
 	persistChatMessages,
 } from "../services/chat-persistence";
 import { mergeChatMessage } from "../utils/chat-message-merge";
@@ -90,6 +91,7 @@ const createChatStreamResponse = async (
 };
 
 export const sessionsRoutes = new Hono()
+	.get("/", async (c) => c.json(await listChatSessions()))
 	.post("/", zValidator("json", createSessionRequestSchema), async (c) => {
 		const { message, mode, model } = c.req.valid("json");
 		const validation = await safeValidateUIMessages<CodingAgentUIMessage>({

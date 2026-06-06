@@ -5,6 +5,7 @@ import { useState } from "react";
 import { AsciiArt } from "../components/ascii-art";
 import { ChatTextArea } from "../components/chat/chat-text-area";
 import { honoClient } from "../lib/client";
+import { getErrorMessage } from "../lib/error-response";
 import { usePromptConfig } from "../providers/prompt-config";
 
 export function HomeScreen() {
@@ -45,7 +46,7 @@ export function HomeScreen() {
 		});
 
 		if (!response.ok) {
-			setError("Could not create chat session.");
+			setError(await getErrorMessage(response));
 			return;
 		}
 
@@ -75,11 +76,7 @@ export function HomeScreen() {
 				paddingX={2}
 				width="100%"
 			>
-				<ChatTextArea
-					disabled={isCreatingSession}
-					focused={!isCreatingSession}
-					onSubmit={handleSubmit}
-				/>
+				<ChatTextArea disabled={isCreatingSession} onSubmit={handleSubmit} />
 				<box flexDirection="row" flexShrink={0} gap={1} marginLeft="auto">
 					<text>tab</text>
 					<text attributes={TextAttributes.DIM}>agents</text>
