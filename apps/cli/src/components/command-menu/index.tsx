@@ -1,8 +1,7 @@
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import type { RefObject } from "react";
 import { useTheme } from "../../providers/theme";
-import { COMMANDS } from "./commands";
-import { getFilteredCommands } from "./filter-commands";
+import { COMMANDS, type CommandSpec } from "./commands";
 
 const MAX_VISIBLE_ITEMS = 8;
 
@@ -13,7 +12,7 @@ const COMMAND_COL_WIDTH =
 	Math.max(...COMMANDS.map((cmd) => cmd.name.length)) + 4;
 
 type CommandMenuProps = {
-	query: string;
+	commands: CommandSpec[];
 	selectedIndex: number;
 	scrollRef: RefObject<ScrollBoxRenderable | null>;
 	onSelect: (index: number) => void;
@@ -21,17 +20,16 @@ type CommandMenuProps = {
 };
 
 export function CommandMenu({
-	query,
+	commands,
 	selectedIndex,
 	scrollRef,
 	onSelect,
 	onExecute,
 }: CommandMenuProps) {
 	const { colors } = useTheme();
-	const filtered = getFilteredCommands(query);
-	const visibleHeight = Math.min(filtered.length, MAX_VISIBLE_ITEMS);
+	const visibleHeight = Math.min(commands.length, MAX_VISIBLE_ITEMS);
 
-	if (filtered.length === 0) {
+	if (commands.length === 0) {
 		return (
 			<box paddingX={1}>
 				<text attributes={TextAttributes.DIM}>No matching commands</text>
@@ -41,7 +39,7 @@ export function CommandMenu({
 
 	return (
 		<scrollbox height={visibleHeight} ref={scrollRef}>
-			{filtered.map((cmd, i) => {
+			{commands.map((cmd, i) => {
 				const isSelected = i === selectedIndex;
 
 				return (

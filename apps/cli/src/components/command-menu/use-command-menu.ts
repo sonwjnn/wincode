@@ -8,6 +8,7 @@ import { getFilteredCommands } from "./filter-commands";
 type UseCommandMenuReturn = {
 	showCommandMenu: boolean;
 	commandQuery: string;
+	filteredCommands: CommandSpec[];
 	selectedIndex: number;
 	scrollRef: RefObject<ScrollBoxRenderable | null>;
 	handleContentChange: (text: string) => void;
@@ -121,6 +122,7 @@ export function useCommandMenu({
 	return {
 		showCommandMenu,
 		commandQuery,
+		filteredCommands,
 		selectedIndex,
 		scrollRef,
 		handleContentChange,

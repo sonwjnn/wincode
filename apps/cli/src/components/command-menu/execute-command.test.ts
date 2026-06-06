@@ -71,8 +71,7 @@ describe("createCommandExecutor", () => {
 		expect(messages).toEqual(["Nope"]);
 	});
 
-	test("catches adapter errors and calls onError", async () => {
-		const errors: unknown[] = [];
+	test("throws when adapter throws", () => {
 		const executor = createCommandExecutor({
 			exit: new ExitAdapter({
 				destroy: () => {
@@ -94,10 +93,8 @@ describe("createCommandExecutor", () => {
 			unavailable: new UnavailableAdapter({ show: () => undefined }),
 		});
 
-		await executor(
-			{ value: "/exit", name: "exit", description: "", kind: "exit" },
-			(error) => errors.push(error)
-		);
-		expect(errors).toHaveLength(1);
+		expect(() =>
+			executor({ value: "/exit", name: "exit", description: "", kind: "exit" })
+		).toThrow("boom");
 	});
 });

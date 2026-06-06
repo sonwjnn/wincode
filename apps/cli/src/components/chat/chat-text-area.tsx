@@ -1,32 +1,15 @@
 import type { TextareaRenderable } from "@opentui/core";
-import { useKeyboard, useRenderer } from "@opentui/react";
-import { useRouter } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef } from "react";
-import { useDialog } from "../../providers/dialog";
+import { useKeyboard } from "@opentui/react";
+import { useCallback, useEffect, useRef } from "react";
 import { useKeyboardLayer } from "../../providers/keyboard-layer";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "../../providers/keyboard-layer/constants";
 import { usePromptConfig } from "../../providers/prompt-config";
 import { useTheme } from "../../providers/theme";
-import { useToast } from "../../providers/toast";
 import { EmptyBorder } from "../border";
 import { CommandMenu } from "../command-menu";
-import {
-	DialogAdapter,
-	ExitAdapter,
-	ModeAdapter,
-	ModelsAdapter,
-	NewAdapter,
-	UnavailableAdapter,
-} from "../command-menu/adapters";
 import type { CommandSpec } from "../command-menu/commands";
-import { createCommandExecutor } from "../command-menu/execute-command";
+import { useCommandExecutor } from "../command-menu/use-command-executor";
 import { useCommandMenu } from "../command-menu/use-command-menu";
-import {
-	AgentsDialogContent,
-	ModelsDialogContent,
-	SessionsDialogContent,
-	ThemeDialogContent,
-} from "../dialogs";
 import { StatusBar } from "../status-bar";
 
 type ChatTextAreaProps = {
@@ -42,103 +25,28 @@ export const clearCommandText = (textarea: CommandTextBuffer | null) => {
 	}
 };
 
-const getCommandErrorMessage = (error: unknown) =>
-	error instanceof Error ? error.message : "Command failed";
-
 export function ChatTextArea({
 	disabled = false,
 	onSubmit,
 }: ChatTextAreaProps) {
-	const { mode, model, cycleMode, setMode, setModel } = usePromptConfig();
+	const { mode, cycleMode } = usePromptConfig();
 	const textAreaRef = useRef<TextareaRenderable>(null);
 	const onSubmitRef = useRef<() => void>(() => {
 		// default value
 	});
 
-	const renderer = useRenderer();
-	const router = useRouter();
-	const { isTopLayer, push, pop, setResponder } = useKeyboardLayer();
+	const { isTopLayer, setResponder } = useKeyboardLayer();
 	const { colors } = useTheme();
 	const {
 		showCommandMenu,
-		commandQuery,
+		filteredCommands,
 		selectedIndex,
 		scrollRef,
 		handleContentChange,
 		resolveCommand,
 		setSelectedIndex,
 	} = useCommandMenu();
-	const toast = useToast();
-	const dialog = useDialog();
-
-	const execute = useMemo(
-		() =>
-			createCommandExecutor({
-				exit: new ExitAdapter({ destroy: () => renderer.destroy() }),
-				new: new NewAdapter({
-					navigateHome: () => {
-						router.navigate({ to: "/" }).catch(() => undefined);
-					},
-				}),
-				dialog: new DialogAdapter({
-					open: (key, title) => {
-						switch (key) {
-							case "sessions":
-								dialog.open({
-									children: <SessionsDialogContent />,
-									title,
-								});
-								break;
-							case "theme":
-								dialog.open({
-									children: <ThemeDialogContent />,
-									title,
-								});
-								break;
-							default:
-								break;
-						}
-					},
-				}),
-				models: new ModelsAdapter({
-					open: ({ models, currentModel, onSelectModel }) => {
-						dialog.open({
-							children: (
-								<ModelsDialogContent
-									currentModel={currentModel}
-									models={models}
-									onSelectModel={onSelectModel}
-								/>
-							),
-							title: "Select Model",
-						});
-					},
-					currentModel: model,
-					setModel,
-				}),
-				mode: new ModeAdapter({
-					open: ({ currentMode, onSelectMode }) => {
-						dialog.open({
-							children: (
-								<AgentsDialogContent
-									currentMode={currentMode}
-									onSelectMode={onSelectMode}
-								/>
-							),
-							title: "Select Agent",
-						});
-					},
-					currentMode: mode,
-					setMode,
-				}),
-				unavailable: new UnavailableAdapter({
-					show: (message) => {
-						toast.show({ message, variant: "info" });
-					},
-				}),
-			}),
-		[dialog.open, renderer, router, mode, model, setMode, setModel, toast.show]
-	);
+	const { executeCommand } = useCommandExecutor();
 
 	const handleCommand = useCallback(
 		(command: CommandSpec | undefined) => {
@@ -148,14 +56,9 @@ export function ChatTextArea({
 			}
 
 			textarea.setText("");
-			execute(command, (error) => {
-				toast.show({
-					message: getCommandErrorMessage(error),
-					variant: "error",
-				});
-			});
+			executeCommand(command);
 		},
-		[execute, toast]
+		[executeCommand]
 	);
 
 	const handleCommandExecute = useCallback(
@@ -190,8 +93,6 @@ export function ChatTextArea({
 		if (!textarea) {
 			return;
 		}
-
-		const text = textarea.plainText;
 
 		handleContentChange(textarea.plainText);
 		// syncMentionMenu(text, textarea.cursorOffset);
@@ -295,9 +196,9 @@ export function ChatTextArea({
 							zIndex={10}
 						>
 							<CommandMenu
+								commands={filteredCommands}
 								onExecute={handleCommandExecute}
 								onSelect={setSelectedIndex}
-								query={commandQuery}
 								scrollRef={scrollRef}
 								selectedIndex={selectedIndex}
 							/>

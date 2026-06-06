@@ -18,32 +18,29 @@ export type AdapterMap = {
 };
 
 export function createCommandExecutor(adapters: AdapterMap) {
-	return function execute(
-		spec: CommandSpec,
-		onError?: (error: unknown) => void
-	) {
-		try {
-			switch (spec.kind) {
-				case "exit":
-					return adapters.exit.execute(spec);
-				case "new":
-					return adapters.new.execute(spec);
-				case "dialog":
-					return adapters.dialog.execute(spec);
-				case "models":
-					return adapters.models.execute(spec);
-				case "mode":
-					return adapters.mode.execute(spec);
-				case "unavailable":
-					return adapters.unavailable.execute(spec);
-				default: {
-					const _exhaustive: never = spec;
-					return _exhaustive;
-				}
-			}
-		} catch (error) {
-			if (onError) {
-				onError(error);
+	return function execute(spec: CommandSpec) {
+		switch (spec.kind) {
+			case "exit":
+				adapters.exit.execute(spec);
+				break;
+			case "new":
+				adapters.new.execute(spec);
+				break;
+			case "dialog":
+				adapters.dialog.execute(spec);
+				break;
+			case "models":
+				adapters.models.execute(spec);
+				break;
+			case "mode":
+				adapters.mode.execute(spec);
+				break;
+			case "unavailable":
+				adapters.unavailable.execute(spec);
+				break;
+			default: {
+				const _exhaustive: never = spec;
+				return _exhaustive;
 			}
 		}
 	};
