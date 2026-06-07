@@ -1,10 +1,10 @@
 import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type { ReactNode } from "react";
+import { useSearchableList } from "../hooks/use-searchable-list";
 import { useDialogLayer } from "../providers/dialog";
 import { useKeyboardLayer } from "../providers/keyboard-layer";
 import { useTheme } from "../providers/theme";
-import { useSearchableList } from "./hooks/use-searchable-list";
 
 const MAX_VISIBLE_ITEMS = 6;
 

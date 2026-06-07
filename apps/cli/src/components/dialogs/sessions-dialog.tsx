@@ -2,13 +2,13 @@ import { RGBA, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchableList } from "../../hooks/use-searchable-list";
 import { honoClient } from "../../lib/client";
 import { getErrorMessage } from "../../lib/error-response";
 import { useDialog, useDialogLayer } from "../../providers/dialog";
 import { useKeyboardLayer } from "../../providers/keyboard-layer";
 import { useTheme } from "../../providers/theme";
 import { useToast } from "../../providers/toast";
-import { useSearchableList } from "../hooks/use-searchable-list";
 import { RenameSessionDialog } from "./rename-session-dialog";
 
 const MAX_VISIBLE_ITEMS = 10;
