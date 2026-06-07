@@ -7,11 +7,13 @@ enum ChatMessageRole {
 model ChatSession {
   id            String        @id
   title         String?
+  pinned        Boolean       @default(false)
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
   lastMessageAt DateTime?
   messages      ChatMessage[]
 
+  @@index([pinned, lastMessageAt])
   @@index([updatedAt])
   @@map("chat_session")
 }

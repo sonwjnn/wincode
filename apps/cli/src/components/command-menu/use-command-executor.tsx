@@ -47,6 +47,8 @@ export function useCommandExecutor(): UseCommandExecutorReturn {
 							case "sessions":
 								dialog.open({
 									children: <SessionsDialogContent />,
+									padding: { bottom: 1, right: 0, top: 1, left: 0 },
+									titleMargin: { left: 4, right: 4 },
 									title,
 								});
 								break;

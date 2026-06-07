@@ -1,6 +1,6 @@
 import { codingModes, type ModeType } from "@wincode/ai";
 import { useCallback } from "react";
-import { useDialog } from "../../providers/dialog";
+import { useDialog, useDialogEscape } from "../../providers/dialog";
 import { DialogSearchList } from "../dialog-search-list";
 
 type AgentsDialogContentProps = {
@@ -21,6 +21,8 @@ export const AgentsDialogContent = ({
 		},
 		[onSelectMode, dialog]
 	);
+
+	useDialogEscape();
 
 	return (
 		<DialogSearchList

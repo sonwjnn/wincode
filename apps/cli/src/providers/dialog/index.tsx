@@ -1,7 +1,14 @@
 import { RGBA, TextAttributes } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { ReactNode } from "react";
-import { createContext, useCallback, useContext, useState } from "react";
+import {
+	createContext,
+	useCallback,
+	useContext,
+	useId,
+	useRef,
+	useState,
+} from "react";
 import { useKeyboardLayer } from "../keyboard-layer";
 import { useTheme } from "../theme";
 import type { DialogConfig } from "./types";
@@ -12,6 +19,7 @@ export type DialogContextValue = {
 };
 
 const DialogContext = createContext<DialogContextValue | null>(null);
+const DialogLayerContext = createContext<string>("dialog");
 
 export function useDialog(): DialogContextValue {
 	const value = useContext(DialogContext);
@@ -21,28 +29,75 @@ export function useDialog(): DialogContextValue {
 	return value;
 }
 
+export function useDialogLayer(): string {
+	return useContext(DialogLayerContext);
+}
+
+export function useDialogEscape(layerId?: string): void {
+	const dialog = useDialog();
+	const { isTopLayer } = useKeyboardLayer();
+	const dialogLayerId = useDialogLayer();
+	const resolvedLayerId = layerId ?? dialogLayerId;
+
+	useKeyboard((key) => {
+		if (!isTopLayer(resolvedLayerId)) {
+			return;
+		}
+		if (key.name === "escape") {
+			dialog.close();
+		}
+	});
+}
+
 type DialogProviderProps = {
 	children: ReactNode;
 };
 
 export function DialogProvider({ children }: DialogProviderProps) {
-	const [currentDialog, setCurrentDialog] = useState<DialogConfig | null>(null);
+	const [dialogStack, setDialogStack] = useState<DialogConfig[]>([]);
+	const layerIdsRef = useRef<string[]>([]);
+	const counter = useRef(0);
 	const { push, pop } = useKeyboardLayer();
+	const baseLayerId = useId();
+
+	const updateStack = useCallback(
+		(updater: (prev: DialogConfig[]) => DialogConfig[]) => {
+			setDialogStack((prev) => {
+				const next = updater(prev);
+				layerIdsRef.current = next.map((d) => d.layerId ?? "");
+				return next;
+			});
+		},
+		[]
+	);
 
 	const close = useCallback(() => {
-		setCurrentDialog(null);
-		pop("dialog");
-	}, [pop]);
+		const topId = layerIdsRef.current.at(-1);
+		if (!topId) {
+			return;
+		}
+		pop(topId);
+		updateStack((prev) => prev.slice(0, -1));
+	}, [pop, updateStack]);
 
 	const open = useCallback(
 		(config: DialogConfig) => {
-			setCurrentDialog(config);
-			push("dialog", () => {
-				close();
+			const layerId = config.layerId ?? `${baseLayerId}-${counter.current++}`;
+			const configWithLayer = { ...config, layerId };
+			updateStack((prev) => [...prev, configWithLayer]);
+			push(layerId, () => {
+				pop(layerId);
+				updateStack((prev) => {
+					const idx = prev.findIndex((d) => d.layerId === layerId);
+					if (idx === -1) {
+						return prev;
+					}
+					return prev.slice(0, idx);
+				});
 				return true;
 			});
 		},
-		[push, close]
+		[push, baseLayerId, updateStack, pop]
 	);
 
 	const value: DialogContextValue = {
@@ -53,36 +108,46 @@ export function DialogProvider({ children }: DialogProviderProps) {
 	return (
 		<DialogContext.Provider value={value}>
 			{children}
-			<Dialog close={close} currentDialog={currentDialog} />
+			{dialogStack.map((dialog, index) => (
+				<Dialog
+					close={close}
+					config={dialog}
+					isTop={index === dialogStack.length - 1}
+					key={dialog.layerId}
+					zIndex={100 + index}
+				/>
+			))}
 		</DialogContext.Provider>
 	);
 }
 
 type DialogProps = {
-	currentDialog: DialogConfig | null;
+	config: DialogConfig;
 	close: () => void;
+	isTop: boolean;
+	zIndex: number;
 };
 
-function Dialog({ currentDialog, close }: DialogProps) {
-	const { isTopLayer } = useKeyboardLayer();
+function Dialog({ config, close, zIndex }: DialogProps) {
 	const dimensions = useTerminalDimensions();
 	const { colors } = useTheme();
 
-	useKeyboard((key) => {
-		if (!(currentDialog && isTopLayer("dialog"))) {
-			return;
-		}
+	const layerId = config.layerId ?? "";
 
-		if (key.name === "escape") {
-			close();
-		}
-	});
+	const { title, children, padding, titleMargin } = config;
+	const padLeft = padding?.left ?? 4;
+	const padRight = padding?.right ?? 4;
+	const padTop = padding?.top ?? 1;
+	const padBottom = padding?.bottom ?? 1;
+	const titleMarLeft = titleMargin?.left ?? 0;
+	const titleMarRight = titleMargin?.right ?? 0;
+	const titleMarTop = titleMargin?.top ?? 0;
+	const titleMarBottom = titleMargin?.bottom ?? 0;
 
-	if (!currentDialog) {
-		return null;
-	}
-
-	const { title, children } = currentDialog;
+	const width =
+		dimensions.width >= 120
+			? Math.floor(dimensions.width * 0.67)
+			: Math.min(100, dimensions.width - 2);
 
 	return (
 		// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events.
@@ -96,7 +161,7 @@ function Dialog({ currentDialog, close }: DialogProps) {
 			position="absolute"
 			top={0}
 			width={dimensions.width}
-			zIndex={100}
+			zIndex={zIndex}
 		>
 			{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events. */}
 			<box
@@ -105,15 +170,20 @@ function Dialog({ currentDialog, close }: DialogProps) {
 				gap={1}
 				height="auto"
 				onMouseDown={(e) => e.stopPropagation()}
-				paddingX={4}
-				paddingY={1}
-				width={Math.min(60, dimensions.width - 4)}
+				paddingBottom={padBottom}
+				paddingLeft={padLeft}
+				paddingRight={padRight}
+				paddingTop={padTop}
+				width={width}
 			>
 				<box
 					alignItems="center"
 					flexDirection="row"
 					justifyContent="space-between"
-					paddingBottom={1}
+					marginBottom={titleMarBottom}
+					marginLeft={titleMarLeft}
+					marginRight={titleMarRight}
+					marginTop={titleMarTop}
 				>
 					<text attributes={TextAttributes.BOLD}>{title}</text>
 					{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI text handles terminal mouse events. */}
@@ -121,7 +191,9 @@ function Dialog({ currentDialog, close }: DialogProps) {
 						esc
 					</text>
 				</box>
-				<box flexGrow={1}>{children}</box>
+				<DialogLayerContext.Provider value={layerId}>
+					<box flexGrow={1}>{children}</box>
+				</DialogLayerContext.Provider>
 			</box>
 		</box>
 	);

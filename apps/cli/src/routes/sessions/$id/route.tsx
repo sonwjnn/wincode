@@ -28,6 +28,20 @@ const getInitialPrompt = (state: unknown): string => {
 const isMessagesResponse = (value: unknown): value is { messages: unknown } =>
 	typeof value === "object" && value !== null && "messages" in value;
 
+const loadSessionMetadata = async (id: string) => {
+	const res = await honoClient.api.sessions[":id"].$get({ param: { id } });
+	if (!res.ok) {
+		throw new Error(await getErrorMessage(res));
+	}
+	return (await res.json()) as {
+		createdAt: string;
+		id: string;
+		lastMessageAt: string | null;
+		pinned: boolean;
+		title: string | null;
+	};
+};
+
 const loadSessionMessages = async (
 	id: string
 ): Promise<CodingAgentUIMessage[]> => {
@@ -63,6 +77,7 @@ export const Route = createFileRoute("/sessions/$id")({
 function SessionRoute() {
 	const { id } = Route.useParams();
 	const [messages, setMessages] = useState<CodingAgentUIMessage[] | null>(null);
+	const [sessionTitle, setSessionTitle] = useState<string | null>(null);
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
 	const prompt = useRouterState({
 		select: (state) => getInitialPrompt(state.location.state),
@@ -71,20 +86,20 @@ function SessionRoute() {
 	useEffect(() => {
 		let ignore = false;
 		setMessages(null);
+		setSessionTitle(null);
 		setErrorMessage(null);
 
-		loadSessionMessages(id)
-			.then((loadedMessages) => {
+		Promise.all([loadSessionMessages(id), loadSessionMetadata(id)])
+			.then(([loadedMessages, metadata]) => {
 				if (!ignore) {
 					setMessages(loadedMessages);
+					setSessionTitle(metadata.title ?? "Untitled Session");
 				}
 			})
 			.catch((error: unknown) => {
 				if (!ignore) {
 					setErrorMessage(
-						error instanceof Error
-							? error.message
-							: "Could not load chat messages."
+						error instanceof Error ? error.message : "Could not load session."
 					);
 				}
 			});
@@ -98,7 +113,7 @@ function SessionRoute() {
 		return <text fg="red">{errorMessage}</text>;
 	}
 
-	if (!messages) {
+	if (!(messages && sessionTitle)) {
 		return <text>Loading session...</text>;
 	}
 
@@ -107,6 +122,7 @@ function SessionRoute() {
 			initialMessages={messages}
 			initialPrompt={prompt}
 			sessionId={id}
+			sessionTitle={sessionTitle}
 		/>
 	);
 }

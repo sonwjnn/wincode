@@ -75,7 +75,11 @@ export const createChatSession = async (
 
 export const listChatSessions = async () => {
 	const sessions = await prisma.chatSession.findMany({
-		orderBy: [{ lastMessageAt: "desc" }, { createdAt: "desc" }],
+		orderBy: [
+			{ pinned: "desc" },
+			{ lastMessageAt: "desc" },
+			{ createdAt: "desc" },
+		],
 		select: {
 			createdAt: true,
 			id: true,
@@ -87,6 +91,7 @@ export const listChatSessions = async () => {
 					role: true,
 				},
 			},
+			pinned: true,
 			title: true,
 		},
 	});
@@ -95,8 +100,44 @@ export const listChatSessions = async () => {
 		createdAt: session.createdAt,
 		id: session.id,
 		lastMessageAt: session.lastMessageAt,
+		pinned: session.pinned,
 		title: session.title ?? getSessionTitle(session.messages),
 	}));
+};
+
+export const getChatSession = async (sessionId: string) => {
+	const session = await prisma.chatSession.findUnique({
+		select: {
+			createdAt: true,
+			id: true,
+			lastMessageAt: true,
+			pinned: true,
+			title: true,
+		},
+		where: { id: sessionId },
+	});
+
+	if (!session) {
+		throw new Error("Session not found");
+	}
+
+	return session;
+};
+
+export const deleteChatSession = async (sessionId: string) => {
+	await prisma.chatSession.delete({
+		where: { id: sessionId },
+	});
+};
+
+export const updateChatSession = async (
+	sessionId: string,
+	data: { title?: string; pinned?: boolean }
+) => {
+	await prisma.chatSession.update({
+		data,
+		where: { id: sessionId },
+	});
 };
 
 export const getChatMessages = async (

@@ -15,9 +15,12 @@ import { Hono } from "hono";
 import { z } from "zod";
 import {
 	createChatSession,
+	deleteChatSession,
 	getChatMessages,
+	getChatSession,
 	listChatSessions,
 	persistChatMessages,
+	updateChatSession,
 } from "../services/chat-persistence";
 import { mergeChatMessage } from "../utils/chat-message-merge";
 
@@ -49,6 +52,11 @@ const createSessionRequestSchema = z.object({
 	message: uiMessageInputSchema,
 	mode: codingModeNameSchema,
 	model: supportedChatModelIdSchema,
+});
+
+const updateSessionRequestSchema = z.object({
+	title: z.string().min(1).optional(),
+	pinned: z.boolean().optional(),
 });
 
 const withChatMetadata = (
@@ -105,6 +113,26 @@ export const sessionsRoutes = new Hono()
 
 		return c.json(await createChatSession(validation.data, mode, model), 201);
 	})
+	.delete("/:id", zValidator("param", sessionParamsSchema), async (c) => {
+		const { id } = c.req.valid("param");
+		await deleteChatSession(id);
+		return c.body(null, 204);
+	})
+	.get("/:id", zValidator("param", sessionParamsSchema), async (c) => {
+		const { id } = c.req.valid("param");
+		return c.json(await getChatSession(id));
+	})
+	.patch(
+		"/:id",
+		zValidator("param", sessionParamsSchema),
+		zValidator("json", updateSessionRequestSchema),
+		async (c) => {
+			const { id } = c.req.valid("param");
+			const data = c.req.valid("json");
+			await updateChatSession(id, data);
+			return c.body(null, 204);
+		}
+	)
 	.get("/:id/messages", zValidator("param", sessionParamsSchema), async (c) => {
 		const { id } = c.req.valid("param");
 		return c.json({ messages: await getChatMessages(id) });

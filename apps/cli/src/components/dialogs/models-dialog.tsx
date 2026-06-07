@@ -1,6 +1,6 @@
 import type { SupportedChatModel, SupportedChatModelId } from "@wincode/ai";
 import { useCallback } from "react";
-import { useDialog } from "../../providers/dialog";
+import { useDialog, useDialogEscape } from "../../providers/dialog";
 import { DialogSearchList } from "../dialog-search-list";
 
 type ModelsDialogContentProps = {
@@ -23,6 +23,8 @@ export const ModelsDialogContent = ({
 		},
 		[dialog, onSelectModel]
 	);
+
+	useDialogEscape();
 
 	return (
 		<DialogSearchList

@@ -1,18 +1,10 @@
-import {
-	type InputRenderable,
-	type ScrollBoxRenderable,
-	TextAttributes,
-} from "@opentui/core";
+import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
-import {
-	type ReactNode,
-	useCallback,
-	useEffect,
-	useRef,
-	useState,
-} from "react";
+import type { ReactNode } from "react";
+import { useDialogLayer } from "../providers/dialog";
 import { useKeyboardLayer } from "../providers/keyboard-layer";
 import { useTheme } from "../providers/theme";
+import { useSearchableList } from "./hooks/use-searchable-list";
 
 const MAX_VISIBLE_ITEMS = 6;
 
@@ -37,97 +29,47 @@ export function DialogSearchList<T>({
 	placeholder = "Search",
 	emptyText = "No results",
 }: DialogSearchListProps<T>) {
-	const [selectedIndex, setSelectedIndex] = useState(0);
-	const [searchValue, setSearchValue] = useState("");
-	const inputRef = useRef<InputRenderable>(null);
-	const selectedIndexRef = useRef(0);
-	const scrollRef = useRef<ScrollBoxRenderable>(null);
+	const {
+		filtered,
+		selectedIndex,
+		selectedIndexRef,
+		setSelectedIndex,
+		inputRef,
+		scrollRef,
+		handleContentChange,
+		moveUp,
+		moveDown,
+		handleEnter,
+	} = useSearchableList(items, filterFn);
 	const { isTopLayer } = useKeyboardLayer();
+	const layerId = useDialogLayer();
 	const { colors } = useTheme();
-
-	const handleContentChange = useCallback(() => {
-		const text = inputRef.current?.value ?? "";
-		setSearchValue(text);
-		selectedIndexRef.current = 0;
-		setSelectedIndex(0);
-
-		const scrollbox = scrollRef.current;
-		if (scrollbox) {
-			scrollbox.scrollTo(0);
-		}
-	}, []);
-
-	const filtered = searchValue
-		? items.filter((item) => filterFn(item, searchValue))
-		: items;
 
 	const visibleHeight = Math.min(filtered.length, MAX_VISIBLE_ITEMS);
 
-	useEffect(() => {
-		selectedIndexRef.current = selectedIndex;
-	}, [selectedIndex]);
-
-	useEffect(() => {
-		if (selectedIndex < filtered.length || filtered.length === 0) {
-			return;
-		}
-
-		selectedIndexRef.current = filtered.length - 1;
-		setSelectedIndex(filtered.length - 1);
-	}, [filtered.length, selectedIndex]);
-
 	useKeyboard((key) => {
-		if (!isTopLayer("dialog")) {
+		if (!isTopLayer(layerId)) {
 			return;
 		}
 
 		if (key.name === "return" || key.name === "enter") {
 			key.preventDefault();
-			const item = filtered[selectedIndexRef.current];
-			if (item) {
-				onSelect(item);
-			}
+			handleEnter(onSelect);
 		} else if (key.name === "up") {
 			key.preventDefault();
-			if (filtered.length === 0) {
-				return;
-			}
-
-			setSelectedIndex((i) => {
-				const newIndex = Math.max(0, i - 1);
-				selectedIndexRef.current = newIndex;
-				const sb = scrollRef.current;
-				if (sb && newIndex < sb.scrollTop) {
-					sb.scrollTo(newIndex);
-				}
-				const item = filtered[newIndex];
+			moveUp(() => {
+				const item = filtered[selectedIndexRef.current];
 				if (item && onHighlight) {
 					onHighlight(item);
 				}
-				return newIndex;
 			});
 		} else if (key.name === "down") {
 			key.preventDefault();
-			if (filtered.length === 0) {
-				return;
-			}
-
-			setSelectedIndex((i) => {
-				const newIndex = Math.min(filtered.length - 1, i + 1);
-				selectedIndexRef.current = newIndex;
-				const sb = scrollRef.current;
-				if (sb) {
-					const viewportHeight = sb.viewport.height;
-					const visibleEnd = sb.scrollTop + viewportHeight - 1;
-					if (newIndex > visibleEnd) {
-						sb.scrollTo(newIndex - viewportHeight + 1);
-					}
-				}
-				const item = filtered[newIndex];
+			moveDown(() => {
+				const item = filtered[selectedIndexRef.current];
 				if (item && onHighlight) {
 					onHighlight(item);
 				}
-				return newIndex;
 			});
 		}
 	});

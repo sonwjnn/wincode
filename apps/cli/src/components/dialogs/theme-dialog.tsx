@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import { useDialog } from "../../providers/dialog";
+import { useDialog, useDialogEscape } from "../../providers/dialog";
 import { useTheme } from "../../providers/theme";
 import type { Theme } from "../../theme";
 import { THEMES } from "../../theme";
@@ -36,6 +36,8 @@ export const ThemeDialogContent = () => {
 		},
 		[setTheme]
 	);
+
+	useDialogEscape();
 
 	return (
 		<DialogSearchList
