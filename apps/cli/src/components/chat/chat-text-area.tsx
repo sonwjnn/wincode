@@ -1,4 +1,4 @@
-import type { TextareaRenderable } from "@opentui/core";
+import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { useCallback, useEffect, useRef } from "react";
 import { useKeyboardLayer } from "../../providers/keyboard-layer";
@@ -7,22 +7,13 @@ import { usePromptConfig } from "../../providers/prompt-config";
 import { useTheme } from "../../providers/theme";
 import { EmptyBorder } from "../border";
 import { CommandMenu } from "../command-menu";
-import type { CommandSpec } from "../command-menu/commands";
 import { useCommandExecutor } from "../command-menu/use-command-executor";
-import { useCommandMenu } from "../command-menu/use-command-menu";
 import { StatusBar } from "../status-bar";
+import { useChatInputController } from "./input-controller/use-chat-input-controller";
 
 type ChatTextAreaProps = {
 	disabled?: boolean;
 	onSubmit: (value: string) => void;
-};
-
-type CommandTextBuffer = Pick<TextareaRenderable, "plainText" | "setText">;
-
-export const clearCommandText = (textarea: CommandTextBuffer | null) => {
-	if (textarea?.plainText.startsWith("/")) {
-		textarea.setText("");
-	}
 };
 
 export function ChatTextArea({
@@ -31,62 +22,25 @@ export function ChatTextArea({
 }: ChatTextAreaProps) {
 	const { mode, cycleMode } = usePromptConfig();
 	const textAreaRef = useRef<TextareaRenderable>(null);
+	const commandScrollRef = useRef<ScrollBoxRenderable>(null);
+	const commandEscapeRef = useRef<() => void>(() => {
+		// default value
+	});
+	const ctrlCRef = useRef<() => boolean>(() => false);
 	const onSubmitRef = useRef<() => void>(() => {
 		// default value
 	});
 
-	const { isTopLayer, setResponder } = useKeyboardLayer();
+	const { isTopLayer, pop, push, setResponder } = useKeyboardLayer();
 	const { colors } = useTheme();
-	const {
-		showCommandMenu,
-		filteredCommands,
-		selectedIndex,
-		scrollRef,
-		handleContentChange,
-		resolveCommand,
-		setSelectedIndex,
-	} = useCommandMenu();
 	const { executeCommand } = useCommandExecutor();
 
-	const handleCommand = useCallback(
-		(command: CommandSpec | undefined) => {
-			const textarea = textAreaRef.current;
-			if (!(textarea && command)) {
-				return;
-			}
-
-			textarea.setText("");
-			executeCommand(command);
-		},
-		[executeCommand]
-	);
-
-	const handleCommandExecute = useCallback(
-		(index: number) => {
-			const command = resolveCommand(index);
-			handleCommand(command);
-		},
-		[resolveCommand, handleCommand]
-	);
-
-	const handleSubmit = useCallback(() => {
-		if (disabled) {
-			return;
-		}
-
-		const textarea = textAreaRef.current;
-		if (!textarea) {
-			return;
-		}
-
-		const text = textarea.plainText.trim();
-		if (text.length === 0) {
-			return;
-		}
-
-		onSubmit(text);
-		textarea.setText("");
-	}, [disabled, onSubmit]);
+	const { actions, state } = useChatInputController({
+		disabled,
+		executeCommand,
+		onSubmit,
+		onTab: cycleMode,
+	});
 
 	const handleTextareaContentChange = useCallback(() => {
 		const textarea = textAreaRef.current;
@@ -94,12 +48,18 @@ export function ChatTextArea({
 			return;
 		}
 
-		handleContentChange(textarea.plainText);
-		// syncMentionMenu(text, textarea.cursorOffset);
-	}, [
-		handleContentChange,
-		// ,syncMentionMenu
-	]);
+		actions.onTextChange(textarea.plainText, textarea.cursorOffset);
+		commandScrollRef.current?.scrollTo(0);
+	}, [actions]);
+
+	useEffect(() => {
+		const textarea = textAreaRef.current;
+		if (!textarea || textarea.plainText === state.text) {
+			return;
+		}
+
+		textarea.setText(state.text);
+	}, [state.text]);
 
 	useEffect(() => {
 		const textarea = textAreaRef.current;
@@ -112,57 +72,87 @@ export function ChatTextArea({
 		};
 	}, []);
 
-	onSubmitRef.current = () => {
-		if (disabled) {
+	onSubmitRef.current = actions.onEnter;
+	commandEscapeRef.current = actions.onEscape;
+	ctrlCRef.current = actions.onCtrlC;
+
+	useEffect(() => {
+		if (state.overlay.kind !== "command") {
 			return;
 		}
 
-		if (showCommandMenu) {
-			const command = resolveCommand(selectedIndex);
-			handleCommand(command);
+		push("command", () => {
+			commandEscapeRef.current();
+			return true;
+		});
+
+		return () => pop("command");
+	}, [pop, push, state.overlay.kind]);
+
+	useEffect(() => {
+		setResponder("base", () => ctrlCRef.current());
+
+		return () => setResponder("base", null);
+	}, [setResponder]);
+
+	useEffect(() => {
+		if (state.overlay.kind !== "command") {
 			return;
 		}
 
-		// if (showMentionMenu) {
-		//   const candidate = mentionCandidates[mentionSelectedIndex];
-		//   if (candidate) {
-		//     handleMentionExecute(mentionSelectedIndex);
-		//     return;
-		//   }
-		// }
+		const scrollbox = commandScrollRef.current;
+		if (!scrollbox) {
+			return;
+		}
 
-		handleSubmit();
-	};
+		const { selectedIndex } = state.overlay;
+		if (selectedIndex < scrollbox.scrollTop) {
+			scrollbox.scrollTo(selectedIndex);
+			return;
+		}
+
+		const visibleEnd = scrollbox.scrollTop + scrollbox.viewport.height - 1;
+		if (selectedIndex > visibleEnd) {
+			scrollbox.scrollTo(selectedIndex - scrollbox.viewport.height + 1);
+		}
+	}, [state.overlay]);
 
 	useKeyboard((key) => {
 		if (disabled) {
 			return;
 		}
+
+		if (state.overlay.kind === "command" && isTopLayer("command")) {
+			if (key.name === "escape") {
+				key.preventDefault();
+				actions.onEscape();
+				return;
+			}
+
+			if (key.name === "up") {
+				key.preventDefault();
+				actions.onArrowUp();
+				return;
+			}
+
+			if (key.name === "down") {
+				key.preventDefault();
+				actions.onArrowDown();
+				return;
+			}
+		}
+
 		if (!isTopLayer("base")) {
 			return;
 		}
+
 		if (key.name === "tab") {
 			key.preventDefault();
-			cycleMode();
+			actions.onTab();
 		}
 	});
 
-	useEffect(() => {
-		setResponder("base", () => {
-			if (disabled) {
-				return false;
-			}
-
-			const textarea = textAreaRef.current;
-			if (textarea && textarea.plainText.length > 0) {
-				textarea.setText("");
-				return true;
-			}
-			return false;
-		});
-
-		return () => setResponder("base", null);
-	}, [disabled, setResponder]);
+	const isFocused = !disabled && (isTopLayer("base") || isTopLayer("command"));
 
 	return (
 		<box alignItems="center" width="100%">
@@ -186,7 +176,7 @@ export function ChatTextArea({
 					position="relative"
 					width="100%"
 				>
-					{showCommandMenu && (
+					{state.overlay.kind === "command" && (
 						<box
 							backgroundColor={colors.surface}
 							bottom="100%"
@@ -196,22 +186,17 @@ export function ChatTextArea({
 							zIndex={10}
 						>
 							<CommandMenu
-								commands={filteredCommands}
-								onExecute={handleCommandExecute}
-								onSelect={setSelectedIndex}
-								scrollRef={scrollRef}
-								selectedIndex={selectedIndex}
+								commands={state.overlay.items}
+								onExecute={actions.onItemExecute}
+								onSelect={actions.onItemSelect}
+								scrollRef={commandScrollRef}
+								selectedIndex={state.overlay.selectedIndex}
 							/>
 						</box>
 					)}
 
 					<textarea
-						focused={
-							!disabled &&
-							(isTopLayer("base") ||
-								isTopLayer("command") ||
-								isTopLayer("mention"))
-						}
+						focused={isFocused}
 						keyBindings={CHAT_TEXT_AREA_KEY_BINDINGS}
 						onContentChange={handleTextareaContentChange}
 						placeholder={`Ask anything... "Fix broken tests"`}
