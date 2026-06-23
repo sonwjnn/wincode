@@ -1,12 +1,21 @@
 import type { CommandSpec } from "../../command-menu/commands";
 
+export type FileMentionOption = {
+	label: string;
+	path: string;
+	type: "directory" | "file";
+};
+
 export type InputOverlayState =
 	| { items: []; kind: null; selectedIndex: -1 }
-	| { items: CommandSpec[]; kind: "command"; selectedIndex: number };
+	| { items: CommandSpec[]; kind: "command"; selectedIndex: number }
+	| { items: FileMentionOption[]; kind: "file-mention"; selectedIndex: number };
 
 export type ChatInputControllerState = {
+	cursorOffset: number | null;
 	overlay: InputOverlayState;
 	text: string;
+	visibleStartIndex: number;
 };
 
 export type ChatInputControllerActions = {
@@ -31,4 +40,5 @@ export type ChatInputControllerOptions = {
 	executeCommand: (command: CommandSpec) => void | Promise<void>;
 	onSubmit: (value: string) => void;
 	onTab: () => void;
+	getFileMentionOptions: () => Promise<FileMentionOption[]>;
 };

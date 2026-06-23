@@ -1,5 +1,4 @@
-import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
-import type { RefObject } from "react";
+import { TextAttributes } from "@opentui/core";
 import { useTheme } from "../../providers/theme";
 import { COMMANDS, type CommandSpec } from "./commands";
 
@@ -14,7 +13,7 @@ const COMMAND_COL_WIDTH =
 type CommandMenuProps = {
 	commands: CommandSpec[];
 	selectedIndex: number;
-	scrollRef: RefObject<ScrollBoxRenderable | null>;
+	visibleStartIndex: number;
 	onSelect: (index: number) => void;
 	onExecute: (index: number) => void;
 };
@@ -22,7 +21,7 @@ type CommandMenuProps = {
 export function CommandMenu({
 	commands,
 	selectedIndex,
-	scrollRef,
+	visibleStartIndex,
 	onSelect,
 	onExecute,
 }: CommandMenuProps) {
@@ -37,10 +36,14 @@ export function CommandMenu({
 		);
 	}
 
+	const end = Math.min(visibleStartIndex + MAX_VISIBLE_ITEMS, commands.length);
+	const visibleSlice = commands.slice(visibleStartIndex, end);
+
 	return (
-		<scrollbox height={visibleHeight} ref={scrollRef}>
-			{commands.map((cmd, i) => {
-				const isSelected = i === selectedIndex;
+		<box flexDirection="column" height={visibleHeight}>
+			{visibleSlice.map((cmd, i) => {
+				const realIndex = visibleStartIndex + i;
+				const isSelected = realIndex === selectedIndex;
 
 				return (
 					// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events.
@@ -49,8 +52,8 @@ export function CommandMenu({
 						flexDirection="row"
 						height={1}
 						key={cmd.value}
-						onMouseDown={() => onExecute(i)}
-						onMouseMove={() => onSelect(i)}
+						onMouseDown={() => onExecute(realIndex)}
+						onMouseMove={() => onSelect(realIndex)}
 						overflow="hidden"
 						paddingX={1}
 					>
@@ -67,6 +70,6 @@ export function CommandMenu({
 					</box>
 				);
 			})}
-		</scrollbox>
+		</box>
 	);
 }

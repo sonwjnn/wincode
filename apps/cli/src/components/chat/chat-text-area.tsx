@@ -1,4 +1,4 @@
-import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
+import type { TextareaRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { useCallback, useEffect, useRef } from "react";
 import { useKeyboardLayer } from "../../providers/keyboard-layer";
@@ -8,7 +8,9 @@ import { useTheme } from "../../providers/theme";
 import { EmptyBorder } from "../border";
 import { CommandMenu } from "../command-menu";
 import { useCommandExecutor } from "../command-menu/use-command-executor";
+import { FileMentionMenu } from "../file-mention-menu";
 import { StatusBar } from "../status-bar";
+import { getFileMentionOptions } from "./input-controller/file-mention-options";
 import { useChatInputController } from "./input-controller/use-chat-input-controller";
 
 type ChatTextAreaProps = {
@@ -22,14 +24,9 @@ export function ChatTextArea({
 }: ChatTextAreaProps) {
 	const { mode, cycleMode } = usePromptConfig();
 	const textAreaRef = useRef<TextareaRenderable>(null);
-	const commandScrollRef = useRef<ScrollBoxRenderable>(null);
-	const commandEscapeRef = useRef<() => void>(() => {
-		// default value
-	});
+	const commandEscapeRef = useRef<() => void>(() => undefined);
 	const ctrlCRef = useRef<() => boolean>(() => false);
-	const onSubmitRef = useRef<() => void>(() => {
-		// default value
-	});
+	const onSubmitRef = useRef<() => void>(() => undefined);
 
 	const { isTopLayer, pop, push, setResponder } = useKeyboardLayer();
 	const { colors } = useTheme();
@@ -38,6 +35,7 @@ export function ChatTextArea({
 	const { actions, state } = useChatInputController({
 		disabled,
 		executeCommand,
+		getFileMentionOptions,
 		onSubmit,
 		onTab: cycleMode,
 	});
@@ -49,17 +47,22 @@ export function ChatTextArea({
 		}
 
 		actions.onTextChange(textarea.plainText, textarea.cursorOffset);
-		commandScrollRef.current?.scrollTo(0);
 	}, [actions]);
 
 	useEffect(() => {
 		const textarea = textAreaRef.current;
-		if (!textarea || textarea.plainText === state.text) {
+		if (!textarea) {
 			return;
 		}
 
-		textarea.setText(state.text);
-	}, [state.text]);
+		if (textarea.plainText !== state.text) {
+			textarea.setText(state.text);
+		}
+
+		if (state.cursorOffset !== null) {
+			textarea.cursorOffset = state.cursorOffset;
+		}
+	}, [state.cursorOffset, state.text]);
 
 	useEffect(() => {
 		const textarea = textAreaRef.current;
@@ -77,7 +80,7 @@ export function ChatTextArea({
 	ctrlCRef.current = actions.onCtrlC;
 
 	useEffect(() => {
-		if (state.overlay.kind !== "command") {
+		if (state.overlay.kind === null) {
 			return;
 		}
 
@@ -95,34 +98,12 @@ export function ChatTextArea({
 		return () => setResponder("base", null);
 	}, [setResponder]);
 
-	useEffect(() => {
-		if (state.overlay.kind !== "command") {
-			return;
-		}
-
-		const scrollbox = commandScrollRef.current;
-		if (!scrollbox) {
-			return;
-		}
-
-		const { selectedIndex } = state.overlay;
-		if (selectedIndex < scrollbox.scrollTop) {
-			scrollbox.scrollTo(selectedIndex);
-			return;
-		}
-
-		const visibleEnd = scrollbox.scrollTop + scrollbox.viewport.height - 1;
-		if (selectedIndex > visibleEnd) {
-			scrollbox.scrollTo(selectedIndex - scrollbox.viewport.height + 1);
-		}
-	}, [state.overlay]);
-
 	useKeyboard((key) => {
 		if (disabled) {
 			return;
 		}
 
-		if (state.overlay.kind === "command" && isTopLayer("command")) {
+		if (state.overlay.kind !== null && isTopLayer("command")) {
 			if (key.name === "escape") {
 				key.preventDefault();
 				actions.onEscape();
@@ -189,8 +170,27 @@ export function ChatTextArea({
 								commands={state.overlay.items}
 								onExecute={actions.onItemExecute}
 								onSelect={actions.onItemSelect}
-								scrollRef={commandScrollRef}
 								selectedIndex={state.overlay.selectedIndex}
+								visibleStartIndex={state.visibleStartIndex}
+							/>
+						</box>
+					)}
+
+					{state.overlay.kind === "file-mention" && (
+						<box
+							backgroundColor={colors.surface}
+							bottom="100%"
+							left={0}
+							position="absolute"
+							width="100%"
+							zIndex={10}
+						>
+							<FileMentionMenu
+								items={state.overlay.items}
+								onExecute={actions.onItemExecute}
+								onSelect={actions.onItemSelect}
+								selectedIndex={state.overlay.selectedIndex}
+								visibleStartIndex={state.visibleStartIndex}
 							/>
 						</box>
 					)}
