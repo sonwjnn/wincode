@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	applyFileMentionReplacement,
+	deleteFileMentionAfterTrailingCharacterDelete,
 	detectFileMentionAtCursor,
 	findFileMentionRanges,
 	normalizeFileMentionPath,
@@ -94,5 +95,37 @@ describe("mention grammar", () => {
 			cursorOffset: 21,
 			text: "see @packages/foo.ts now",
 		});
+	});
+
+	test("deletes whole mention after its trailing character is deleted", () => {
+		expect(
+			deleteFileMentionAfterTrailingCharacterDelete(
+				"see @apps/cli now",
+				"see @apps/cl now",
+				12
+			)
+		).toEqual({ cursorOffset: 4, text: "see  now" });
+
+		expect(
+			deleteFileMentionAfterTrailingCharacterDelete("@apps/cli", "@apps/cl", 8)
+		).toEqual({ cursorOffset: 0, text: "" });
+	});
+
+	test("keeps partial mention edits when deleted character is not trailing", () => {
+		expect(
+			deleteFileMentionAfterTrailingCharacterDelete(
+				"see @apps/cli now",
+				"see @app/cli now",
+				8
+			)
+		).toBeNull();
+
+		expect(
+			deleteFileMentionAfterTrailingCharacterDelete(
+				"see @apps/cli now",
+				"see @apps/cli no",
+				16
+			)
+		).toBeNull();
 	});
 });

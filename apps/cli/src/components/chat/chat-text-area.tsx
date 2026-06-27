@@ -1,7 +1,10 @@
 import { SyntaxStyle, type TextareaRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { findFileMentionRanges } from "../../lib/mention-grammar";
+import {
+	deleteFileMentionAfterTrailingCharacterDelete,
+	findFileMentionRanges,
+} from "../../lib/mention-grammar";
 import { useKeyboardLayer } from "../../providers/keyboard-layer";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "../../providers/keyboard-layer/constants";
 import { usePromptConfig } from "../../providers/prompt-config";
@@ -27,6 +30,7 @@ export function ChatTextArea({
 	const textAreaRef = useRef<TextareaRenderable>(null);
 	const commandEscapeRef = useRef<() => void>(() => undefined);
 	const ctrlCRef = useRef<() => boolean>(() => false);
+	const currentTextRef = useRef("");
 	const lastTextSyncRevisionRef = useRef(0);
 	const onSubmitRef = useRef<() => void>(() => undefined);
 
@@ -52,6 +56,18 @@ export function ChatTextArea({
 	const handleTextareaContentChange = useCallback(() => {
 		const textarea = textAreaRef.current;
 		if (!textarea) {
+			return;
+		}
+
+		const mentionDelete = deleteFileMentionAfterTrailingCharacterDelete(
+			currentTextRef.current,
+			textarea.plainText,
+			textarea.cursorOffset
+		);
+		if (mentionDelete) {
+			textarea.setText(mentionDelete.text);
+			textarea.cursorOffset = mentionDelete.cursorOffset;
+			actions.onTextChange(mentionDelete.text, mentionDelete.cursorOffset);
 			return;
 		}
 
@@ -115,6 +131,7 @@ export function ChatTextArea({
 
 	onSubmitRef.current = actions.onEnter;
 	commandEscapeRef.current = actions.onEscape;
+	currentTextRef.current = state.text;
 	ctrlCRef.current = actions.onCtrlC;
 
 	useEffect(() => {

@@ -9,6 +9,10 @@ export type FileMentionReplacement = {
 	text: string;
 };
 
+type RemovedCharacter = {
+	index: number;
+};
+
 const MENTION_BOUNDARY_RE = /[\w.-]/u;
 const MENTION_QUERY_INVALID_RE = /[^\w./-]/u;
 const MENTION_SPACE_BLOCKING_RE = /[,.;:!?)]/u;
@@ -122,6 +126,50 @@ export const replaceFileMentionRange = (
 	range: FileMentionRange,
 	replacement: string
 ) => `${text.slice(0, range.start)}${replacement}${text.slice(range.end)}`;
+
+const getRemovedCharacter = (
+	previousText: string,
+	nextText: string
+): RemovedCharacter | null => {
+	if (previousText.length !== nextText.length + 1) {
+		return null;
+	}
+
+	let index = 0;
+	while (index < nextText.length && previousText[index] === nextText[index]) {
+		index += 1;
+	}
+
+	if (previousText.slice(index + 1) !== nextText.slice(index)) {
+		return null;
+	}
+
+	return { index };
+};
+
+export const deleteFileMentionAfterTrailingCharacterDelete = (
+	previousText: string,
+	nextText: string,
+	cursorOffset: number
+): FileMentionReplacement | null => {
+	const removedCharacter = getRemovedCharacter(previousText, nextText);
+	if (!removedCharacter || removedCharacter.index !== cursorOffset) {
+		return null;
+	}
+
+	for (const range of findFileMentionRanges(previousText)) {
+		if (removedCharacter.index !== range.end - 1) {
+			continue;
+		}
+
+		return {
+			cursorOffset: range.start,
+			text: replaceFileMentionRange(previousText, range, ""),
+		};
+	}
+
+	return null;
+};
 
 export const applyFileMentionReplacement = (
 	text: string,
