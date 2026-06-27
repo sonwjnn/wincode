@@ -27,4 +27,15 @@ describe("ChatTextArea", () => {
 		expect(textAreaSource).not.toContain("key.shift");
 		expect(promptConfigSource).not.toContain("cycleModel");
 	});
+
+	test("syncs textarea text only for programmatic edits", async () => {
+		const textAreaSource = await readFile(
+			new URL("./chat-text-area.tsx", import.meta.url),
+			"utf8"
+		);
+
+		expect(textAreaSource).toContain("lastTextSyncRevisionRef");
+		expect(textAreaSource).toContain("state.textSyncRevision");
+		expect(textAreaSource).not.toContain("textarea.plainText !== state.text");
+	});
 });

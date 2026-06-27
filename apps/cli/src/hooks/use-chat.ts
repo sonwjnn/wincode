@@ -13,6 +13,7 @@ import {
 } from "ai";
 import { useMemo, useRef } from "react";
 import { honoClient } from "../lib/client";
+import { resolveFileMentionParts } from "../lib/file-mentions";
 import { prepareSendChatRequestBody } from "./chat-request";
 
 type SubmitChatParams = {
@@ -70,12 +71,14 @@ export function useChat(
 	});
 	addToolOutputRef.current = chat.addToolOutput;
 
-	const submit = ({ mode, model, userText }: SubmitChatParams) => {
+	const submit = async ({ mode, model, userText }: SubmitChatParams) => {
 		modeRef.current = mode;
 		modelRef.current = model;
+		const fileMentions = await resolveFileMentionParts(userText);
+
 		return chat.sendMessage({
 			metadata: { mode, model },
-			text: userText,
+			parts: [{ text: userText, type: "text" }, ...fileMentions],
 		});
 	};
 	const continueLastMessage = (mode: ModeType, model: SupportedChatModelId) => {

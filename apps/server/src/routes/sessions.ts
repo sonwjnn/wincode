@@ -1,6 +1,7 @@
 import { zValidator } from "@hono/zod-validator";
 import {
 	type CodingAgentUIMessage,
+	codingAgentDataSchemas,
 	codingModeNameSchema,
 	type SupportedChatModelId,
 	supportedChatModelIdSchema,
@@ -103,6 +104,7 @@ export const sessionsRoutes = new Hono()
 	.post("/", zValidator("json", createSessionRequestSchema), async (c) => {
 		const { message, mode, model } = c.req.valid("json");
 		const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
+			dataSchemas: codingAgentDataSchemas,
 			messages: [withChatMetadata(message, mode, model)],
 			tools: codingServerTools,
 		});
@@ -150,6 +152,7 @@ export const sessionsRoutes = new Hono()
 				message ? withChatMetadata(message, mode, model) : message
 			);
 			const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
+				dataSchemas: codingAgentDataSchemas,
 				messages,
 				tools: codingServerTools,
 			});

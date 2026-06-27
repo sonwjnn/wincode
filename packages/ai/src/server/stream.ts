@@ -5,6 +5,11 @@ import {
 	type LanguageModel,
 	type UIMessageStreamOnFinishCallback,
 } from "ai";
+import {
+	type CodingAgentModelUIMessage,
+	expandFileMentionPartsForModel,
+	restoreOriginalFileMentionParts,
+} from "../file-mentions";
 import type { CodingAgentUIMessage } from "../message";
 import type { SupportedChatModelId } from "../models";
 import { defaultMode, type ModeType } from "../modes";
@@ -28,16 +33,37 @@ export const createCodingAgentStreamResponse = ({
 	providerOptions,
 	sendReasoning = true,
 	uiMessages,
-}: CreateCodingAgentStreamResponseOptions) =>
-	createAgentUIStreamResponse({
+}: CreateCodingAgentStreamResponseOptions) => {
+	const modelMessages = expandFileMentionPartsForModel(uiMessages);
+	const handleFinish: UIMessageStreamOnFinishCallback<
+		CodingAgentModelUIMessage
+	> = async ({ messages, responseMessage, ...event }) => {
+		const [restoredResponseMessage] = restoreOriginalFileMentionParts(
+			[responseMessage],
+			uiMessages
+		);
+
+		if (!restoredResponseMessage) {
+			return;
+		}
+
+		await onFinish?.({
+			...event,
+			messages: restoreOriginalFileMentionParts(messages, uiMessages),
+			responseMessage: restoredResponseMessage,
+		});
+	};
+
+	return createAgentUIStreamResponse({
 		agent: createCodingAgent({ model, providerOptions }),
 		generateMessageId: createIdGenerator({
 			prefix: "msg",
 			size: 16,
 		}),
-		onFinish,
+		onFinish: handleFinish,
 		options: { mode, model: modelId },
-		originalMessages: uiMessages,
+		originalMessages: modelMessages,
 		sendReasoning,
-		uiMessages,
+		uiMessages: modelMessages,
 	});
+};

@@ -15,6 +15,7 @@ export type ChatInputControllerState = {
 	cursorOffset: number | null;
 	overlay: InputOverlayState;
 	text: string;
+	textSyncRevision: number;
 	visibleStartIndex: number;
 };
 

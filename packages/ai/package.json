@@ -10,6 +10,9 @@
     },
     "./client": {
       "default": "./src/client.ts"
+    },
+    "./workspace": {
+      "default": "./src/workspace.ts"
     }
   },
   "scripts": {

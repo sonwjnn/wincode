@@ -1,4 +1,5 @@
 import type { UIMessage } from "ai";
+import type { CodingAgentDataParts } from "./file-mentions";
 import type { SupportedChatModelId } from "./models";
 import type { ModeType } from "./modes";
 import type {
@@ -21,6 +22,6 @@ export type CodingMessageMetadata = {
 
 export type CodingAgentUIMessage = UIMessage<
 	CodingMessageMetadata,
-	never,
+	CodingAgentDataParts,
 	CodingAgentTools
 >;

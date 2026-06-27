@@ -1,6 +1,7 @@
-import type { TextareaRenderable } from "@opentui/core";
+import { SyntaxStyle, type TextareaRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { findFileMentionRanges } from "../../lib/mention-grammar";
 import { useKeyboardLayer } from "../../providers/keyboard-layer";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "../../providers/keyboard-layer/constants";
 import { usePromptConfig } from "../../providers/prompt-config";
@@ -26,11 +27,19 @@ export function ChatTextArea({
 	const textAreaRef = useRef<TextareaRenderable>(null);
 	const commandEscapeRef = useRef<() => void>(() => undefined);
 	const ctrlCRef = useRef<() => boolean>(() => false);
+	const lastTextSyncRevisionRef = useRef(0);
 	const onSubmitRef = useRef<() => void>(() => undefined);
 
 	const { isTopLayer, pop, push, setResponder } = useKeyboardLayer();
 	const { colors } = useTheme();
 	const { executeCommand } = useCommandExecutor();
+	const mentionSyntaxStyle = useMemo(
+		() =>
+			SyntaxStyle.fromStyles({
+				fileMention: { bold: true, fg: colors.primary },
+			}),
+		[colors.primary]
+	);
 
 	const { actions, state } = useChatInputController({
 		disabled,
@@ -50,19 +59,48 @@ export function ChatTextArea({
 	}, [actions]);
 
 	useEffect(() => {
+		if (lastTextSyncRevisionRef.current === state.textSyncRevision) {
+			return;
+		}
+
+		lastTextSyncRevisionRef.current = state.textSyncRevision;
+
 		const textarea = textAreaRef.current;
 		if (!textarea) {
 			return;
 		}
 
-		if (textarea.plainText !== state.text) {
-			textarea.setText(state.text);
-		}
+		textarea.setText(state.text);
 
 		if (state.cursorOffset !== null) {
 			textarea.cursorOffset = state.cursorOffset;
 		}
-	}, [state.cursorOffset, state.text]);
+	}, [state.cursorOffset, state.text, state.textSyncRevision]);
+
+	useEffect(() => {
+		const textarea = textAreaRef.current;
+		if (!textarea) {
+			return;
+		}
+
+		textarea.syntaxStyle = mentionSyntaxStyle;
+		textarea.clearAllHighlights();
+
+		const styleId = mentionSyntaxStyle.getStyleId("fileMention");
+		if (styleId === null) {
+			return;
+		}
+
+		for (const range of findFileMentionRanges(state.text)) {
+			textarea.addHighlightByCharRange({
+				end: range.end,
+				hlRef: range.start,
+				priority: 10,
+				start: range.start,
+				styleId,
+			});
+		}
+	}, [mentionSyntaxStyle, state.text]);
 
 	useEffect(() => {
 		const textarea = textAreaRef.current;

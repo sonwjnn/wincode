@@ -1,5 +1,16 @@
 // biome-ignore-all lint/performance/noBarrelFile: Public shared package entry point.
 
+export type {
+	CodingAgentDataParts,
+	FileMentionData,
+	FileMentionUIPart,
+} from "./file-mentions";
+export {
+	codingAgentDataSchemas,
+	expandFileMentionPartsForModel,
+	fileMentionDataSchema,
+	isFileMentionUIPart,
+} from "./file-mentions";
 export {
 	baseCodingAgentInstructions,
 	getSystemInstructions,

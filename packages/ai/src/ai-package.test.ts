@@ -2,12 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import {
 	type CodingAgentUIMessage,
+	codingAgentDataSchemas,
 	codingModeNames,
 	codingModes,
 	codingToolDefinitions,
 	codingToolSchemas,
 	defaultChatModel,
 	defaultMode,
+	expandFileMentionPartsForModel,
 	findSupportedChatModel,
 	getNextCodingModeName,
 	getSystemInstructions,
@@ -21,7 +23,15 @@ import {
 	createUserMessage,
 	handleCodingAgentToolCall,
 } from "@wincode/ai/client";
-import type { ChatAddToolOutputFunction, ChatOnToolCallCallback } from "ai";
+import {
+	type ChatAddToolOutputFunction,
+	type ChatOnToolCallCallback,
+	safeValidateUIMessages,
+} from "ai";
+import {
+	type CodingAgentModelUIMessage,
+	restoreOriginalFileMentionParts,
+} from "./file-mentions";
 import { createCodingAgent } from "./server/agent";
 import { codingServerTools } from "./server/tools";
 import { codingToolRunners } from "./tools/runners";
@@ -81,6 +91,131 @@ describe("@wincode/ai shared entry", () => {
 			parts: [{ text: "hello", type: "text" }],
 			role: "user",
 		});
+	});
+
+	test("creates user messages with file mention data", () => {
+		expect(
+			createUserMessage("hello @README.md", undefined, [
+				{
+					data: {
+						byteLength: 5,
+						content: "hello",
+						kind: "file",
+						path: "README.md",
+						truncated: false,
+					},
+					type: "data-fileMention",
+				},
+			])
+		).toMatchObject({
+			parts: [
+				{ text: "hello @README.md", type: "text" },
+				{
+					data: {
+						content: "hello",
+						path: "README.md",
+					},
+					type: "data-fileMention",
+				},
+			],
+			role: "user",
+		});
+	});
+
+	test("expands file mention data for model context", () => {
+		const [message] = expandFileMentionPartsForModel([
+			createUserMessage("hello @README.md", undefined, [
+				{
+					data: {
+						byteLength: 5,
+						content: "hello",
+						kind: "file",
+						path: "README.md",
+						truncated: false,
+					},
+					type: "data-fileMention",
+				},
+			]),
+		]);
+
+		expect(message?.parts).toEqual([
+			{ text: "hello @README.md", type: "text" },
+			{
+				text: [
+					"Referenced file mention:",
+					"Path: README.md",
+					"Kind: file",
+					"Truncated: no",
+					"Content:",
+					"hello",
+				].join("\n"),
+				type: "text",
+			},
+		]);
+	});
+
+	test("restores original file mention parts without discarding continuation updates", () => {
+		const originalUserMessage = createUserMessage(
+			"hello @README.md",
+			undefined,
+			[
+				{
+					data: {
+						byteLength: 5,
+						content: "hello",
+						kind: "file",
+						path: "README.md",
+						truncated: false,
+					},
+					type: "data-fileMention",
+				},
+			]
+		);
+		const originalAssistantMessage: CodingAgentUIMessage = {
+			id: "assistant-1",
+			parts: [{ text: "old", type: "text" }],
+			role: "assistant",
+		};
+		const continuedAssistantMessage: CodingAgentModelUIMessage = {
+			...originalAssistantMessage,
+			parts: [{ text: "old new", type: "text" as const }],
+		};
+		const expectedContinuedAssistantMessage: CodingAgentUIMessage = {
+			...originalAssistantMessage,
+			parts: [{ text: "old new", type: "text" }],
+		};
+
+		expect(
+			restoreOriginalFileMentionParts(
+				[
+					...expandFileMentionPartsForModel([originalUserMessage]),
+					continuedAssistantMessage,
+				],
+				[originalUserMessage, originalAssistantMessage]
+			)
+		).toEqual([originalUserMessage, expectedContinuedAssistantMessage]);
+	});
+
+	test("validates file mention data parts", async () => {
+		const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
+			dataSchemas: codingAgentDataSchemas,
+			messages: [
+				createUserMessage("hello @README.md", undefined, [
+					{
+						data: {
+							byteLength: 5,
+							content: "hello",
+							kind: "file",
+							path: "README.md",
+							truncated: false,
+						},
+						type: "data-fileMention",
+					},
+				]),
+			],
+		});
+
+		expect(validation.success).toBe(true);
 	});
 
 	test("defines supported chat models by provider", () => {

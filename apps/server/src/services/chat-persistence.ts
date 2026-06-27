@@ -3,7 +3,7 @@ import type {
 	ModeType,
 	SupportedChatModelId,
 } from "@wincode/ai";
-import { parseMode } from "@wincode/ai";
+import { codingAgentDataSchemas, parseMode } from "@wincode/ai";
 import { codingServerTools } from "@wincode/ai/server";
 import prisma, { type Prisma } from "@wincode/db";
 import { generateId, safeValidateUIMessages } from "ai";
@@ -164,6 +164,7 @@ export const getChatMessages = async (
 	}
 
 	const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
+		dataSchemas: codingAgentDataSchemas,
 		messages: messages.map((message) => ({
 			id: message.uiMessageId,
 			metadata: resolveLoadedChatMessageMetadata(

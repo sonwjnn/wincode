@@ -6,6 +6,7 @@ import { AsciiArt } from "../components/ascii-art";
 import { ChatTextArea } from "../components/chat/chat-text-area";
 import { honoClient } from "../lib/client";
 import { getErrorMessage } from "../lib/error-response";
+import { resolveFileMentionParts } from "../lib/file-mentions";
 import { usePromptConfig } from "../providers/prompt-config";
 
 export function HomeScreen() {
@@ -37,9 +38,10 @@ export function HomeScreen() {
 	};
 
 	const createSession = async (input: string) => {
+		const fileMentions = await resolveFileMentionParts(input);
 		const response = await honoClient.api.sessions.$post({
 			json: {
-				message: createUserMessage(input, { mode, model }),
+				message: createUserMessage(input, { mode, model }, fileMentions),
 				mode,
 				model,
 			},

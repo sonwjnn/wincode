@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { applyFileMentionReplacement } from "../../../lib/mention-grammar";
 import type { CommandSpec } from "../../command-menu/commands";
 import { getFilteredCommands } from "../../command-menu/filter-commands";
 import { filterFileMentionOptions } from "./file-mention-options";
-import {
-	type ActiveTrigger,
-	applyFileMentionReplacement,
-	detectTrigger,
-} from "./triggers";
+import { type ActiveTrigger, detectTrigger } from "./triggers";
 import type {
 	ChatInputController,
 	ChatInputControllerOptions,
@@ -40,11 +37,20 @@ export function useChatInputController({
 	const [fileMentionOptions, setFileMentionOptions] = useState<
 		FileMentionOption[]
 	>([]);
+	const [textSyncRevision, setTextSyncRevision] = useState(0);
 	const [visibleStartIndex, setVisibleStartIndex] = useState(0);
 	const selectedIndexRef = useRef(0);
 	selectedIndexRef.current = selectedIndex;
 	const onSubmitRef = useRef(onSubmit);
 	onSubmitRef.current = onSubmit;
+	const setProgrammaticText = useCallback(
+		(text: string, nextCursorOffset: number | null) => {
+			setTextValue(text);
+			setCursorOffset(nextCursorOffset);
+			setTextSyncRevision((revision) => revision + 1);
+		},
+		[]
+	);
 
 	useEffect(() => {
 		let active = true;
@@ -119,11 +125,10 @@ export function useChatInputController({
 			}
 
 			executeCommand(command);
-			setTextValue("");
-			setCursorOffset(null);
+			setProgrammaticText("", null);
 			closeOverlay();
 		},
-		[closeOverlay, executeCommand, resolveCommand]
+		[closeOverlay, executeCommand, resolveCommand, setProgrammaticText]
 	);
 
 	const executeFileMentionAtIndex = useCallback(
@@ -144,13 +149,19 @@ export function useChatInputController({
 			const replacement = applyFileMentionReplacement(
 				textValue,
 				activeTrigger,
-				option.path
+				`@${option.label}`
 			);
-			setTextValue(replacement.text);
-			setCursorOffset(replacement.cursorOffset);
+			setProgrammaticText(replacement.text, replacement.cursorOffset);
 			closeOverlay();
 		},
-		[activeTrigger, closeOverlay, filteredFileMentions, overlayKind, textValue]
+		[
+			activeTrigger,
+			closeOverlay,
+			filteredFileMentions,
+			overlayKind,
+			setProgrammaticText,
+			textValue,
+		]
 	);
 
 	const onEnter = useCallback(() => {
@@ -174,8 +185,7 @@ export function useChatInputController({
 		}
 
 		onSubmitRef.current(text);
-		setTextValue("");
-		setCursorOffset(null);
+		setProgrammaticText("", null);
 		closeOverlay();
 	}, [
 		closeOverlay,
@@ -184,6 +194,7 @@ export function useChatInputController({
 		executeFileMentionAtIndex,
 		overlayKind,
 		selectedIndex,
+		setProgrammaticText,
 		textValue,
 	]);
 
@@ -196,11 +207,16 @@ export function useChatInputController({
 			return false;
 		}
 
-		setTextValue("");
-		setCursorOffset(null);
+		setProgrammaticText("", null);
 		closeOverlay();
 		return true;
-	}, [closeOverlay, disabled, overlayKind, textValue.length]);
+	}, [
+		closeOverlay,
+		disabled,
+		overlayKind,
+		setProgrammaticText,
+		textValue.length,
+	]);
 
 	const onArrowUp = useCallback(() => {
 		if (overlayKind === null) {
@@ -301,6 +317,7 @@ export function useChatInputController({
 			cursorOffset,
 			overlay,
 			text: textValue,
+			textSyncRevision,
 			visibleStartIndex,
 		},
 	};

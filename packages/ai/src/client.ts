@@ -3,6 +3,7 @@ import {
 	type ChatOnToolCallCallback,
 	generateId,
 } from "ai";
+import type { FileMentionUIPart } from "./file-mentions";
 import type {
 	CodingAgentTools,
 	CodingAgentUIMessage,
@@ -65,11 +66,12 @@ const runToolCall = async <ToolName extends CodingAgentToolName>({
 
 export const createUserMessage = (
 	text: string,
-	metadata?: CodingMessageMetadata
+	metadata?: CodingMessageMetadata,
+	fileMentions: FileMentionUIPart[] = []
 ): CodingAgentUIMessage => ({
 	id: generateId(),
 	...(metadata ? { metadata } : {}),
-	parts: [{ text, type: "text" }],
+	parts: [{ text, type: "text" }, ...fileMentions],
 	role: "user",
 });
 
