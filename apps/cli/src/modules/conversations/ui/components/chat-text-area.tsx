@@ -11,9 +11,9 @@ import {
 } from "@/modules/file-mentions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { StatusBar } from "@/modules/prompt-settings/ui/prompt-status-bar";
-import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/terminal/keyboard-layer/constants";
-import { useKeyboardLayer } from "@/shared/terminal/keyboard-layer/keyboard-layer-provider";
-import { useTheme } from "@/shared/terminal/theme/theme-provider";
+import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
+import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
+import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { EmptyBorder } from "@/shared/terminal/ui/borders";
 import { useChatInputController } from "../../hooks/input-controller/use-chat-input-controller";
 

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useTheme } from "@/shared/terminal/theme/theme-provider";
+import { useTheme } from "@/shared/providers/theme/theme-provider";
 
 type Props = {
 	children: ReactNode;

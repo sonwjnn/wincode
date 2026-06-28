@@ -1,5 +1,5 @@
 import { TextAttributes } from "@opentui/core";
-import { useTheme } from "@/shared/terminal/theme/theme-provider";
+import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { EmptyBorder } from "@/shared/terminal/ui/borders";
 
 type ErrorMessageProps = {

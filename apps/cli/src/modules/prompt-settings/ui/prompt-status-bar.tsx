@@ -1,6 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import { findSupportedChatModel, getCodingMode } from "@wincode/ai";
-import { useTheme } from "@/shared/terminal/theme/theme-provider";
+import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { usePromptConfig } from "../context/prompt-config-provider";
 
 export function StatusBar() {

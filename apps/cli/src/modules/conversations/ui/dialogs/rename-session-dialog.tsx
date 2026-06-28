@@ -7,9 +7,9 @@ import {
 	useDialog,
 	useDialogEscape,
 	useDialogLayer,
-} from "@/shared/terminal/dialog/dialog-provider";
-import { useKeyboardLayer } from "@/shared/terminal/keyboard-layer/keyboard-layer-provider";
-import { useToast } from "@/shared/terminal/toast/toast-provider";
+} from "@/shared/providers/dialog/dialog-provider";
+import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
+import { useToast } from "@/shared/providers/toast/toast-provider";
 
 type RenameSessionDialogProps = {
 	session: { id: string; title: string };

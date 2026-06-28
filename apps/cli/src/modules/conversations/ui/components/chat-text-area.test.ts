@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
-import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/terminal/keyboard-layer/constants";
+import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
 
 describe("ChatTextArea", () => {
 	test("binds enter to submit and modified enter to newline", () => {

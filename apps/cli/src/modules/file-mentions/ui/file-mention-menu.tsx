@@ -1,5 +1,5 @@
 import { TextAttributes } from "@opentui/core";
-import { useTheme } from "@/shared/terminal/theme/theme-provider";
+import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { FileMentionOption } from "../types";
 
 const MAX_VISIBLE_ITEMS = 8;

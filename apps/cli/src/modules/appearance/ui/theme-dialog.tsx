@@ -2,11 +2,11 @@ import { useCallback, useEffect, useRef } from "react";
 import {
 	useDialog,
 	useDialogEscape,
-} from "@/shared/terminal/dialog/dialog-provider";
-import { SearchListDialogWrapper } from "@/shared/terminal/dialog/search-list-dialog-wrapper";
-import { useTheme } from "@/shared/terminal/theme/theme-provider";
-import type { Theme } from "@/shared/terminal/theme/themes";
-import { THEMES } from "@/shared/terminal/theme/themes";
+} from "@/shared/providers/dialog/dialog-provider";
+import { useTheme } from "@/shared/providers/theme/theme-provider";
+import type { Theme } from "@/shared/providers/theme/themes";
+import { THEMES } from "@/shared/providers/theme/themes";
+import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 
 export const ThemeDialogContent = () => {
 	const dialog = useDialog();

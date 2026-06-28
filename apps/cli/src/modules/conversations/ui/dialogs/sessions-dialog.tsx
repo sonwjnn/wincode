@@ -4,14 +4,14 @@ import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getErrorMessage } from "@/shared/api/error-response";
 import { honoClient } from "@/shared/api/hono-client";
+import { useSearchableList } from "@/shared/hooks/use-searchable-list";
 import {
 	useDialog,
 	useDialogLayer,
-} from "@/shared/terminal/dialog/dialog-provider";
-import { useSearchableList } from "@/shared/terminal/dialog/use-searchable-list";
-import { useKeyboardLayer } from "@/shared/terminal/keyboard-layer/keyboard-layer-provider";
-import { useTheme } from "@/shared/terminal/theme/theme-provider";
-import { useToast } from "@/shared/terminal/toast/toast-provider";
+} from "@/shared/providers/dialog/dialog-provider";
+import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
+import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { useToast } from "@/shared/providers/toast/toast-provider";
 import { RenameSessionDialog } from "./rename-session-dialog";
 
 const MAX_VISIBLE_ITEMS = 10;
