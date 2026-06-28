@@ -2,10 +2,10 @@ import { TextAttributes } from "@opentui/core";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { Spinner } from "@/shared/ui/spinner";
 import { ErrorMessage } from "../messages";
 import { ChatMessage } from "./chat-message";
 import { ChatTextArea } from "./chat-text-area";
-import { Spinner } from "./spinner";
 
 type ChatShellProps = {
 	error?: Error;
