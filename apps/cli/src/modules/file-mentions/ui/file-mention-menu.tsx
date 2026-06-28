@@ -1,6 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import { useTheme } from "@/shared/terminal/theme/theme-provider";
-import type { FileMentionOption } from "../../hooks/input-controller/types";
+import type { FileMentionOption } from "../types";
 
 const MAX_VISIBLE_ITEMS = 8;
 const HEX_COLOR_RE = /^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})/iu;

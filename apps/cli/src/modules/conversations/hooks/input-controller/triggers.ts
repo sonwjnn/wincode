@@ -1,4 +1,4 @@
-import { detectFileMentionAtCursor } from "../../utils/file-mentions/mention-grammar";
+import { detectFileMentionAtCursor } from "@/modules/file-mentions";
 
 export type CommandTrigger = {
 	kind: "command";

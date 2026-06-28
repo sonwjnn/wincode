@@ -3,19 +3,19 @@ import { useKeyboard } from "@opentui/react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useCommandExecutor } from "@/app/commands/use-app-command-executor";
 import { CommandMenu } from "@/modules/commands/ui/command-menu";
+import {
+	deleteFileMentionAfterTrailingCharacterDelete,
+	FileMentionMenu,
+	findFileMentionRanges,
+	getFileMentionOptions,
+} from "@/modules/file-mentions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { StatusBar } from "@/modules/prompt-settings/ui/prompt-status-bar";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/terminal/keyboard-layer/constants";
 import { useKeyboardLayer } from "@/shared/terminal/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/terminal/theme/theme-provider";
 import { EmptyBorder } from "@/shared/terminal/ui/borders";
-import { getFileMentionOptions } from "../../hooks/input-controller/file-mention-options";
 import { useChatInputController } from "../../hooks/input-controller/use-chat-input-controller";
-import {
-	deleteFileMentionAfterTrailingCharacterDelete,
-	findFileMentionRanges,
-} from "../../utils/file-mentions/mention-grammar";
-import { FileMentionMenu } from "./file-mention-menu";
 
 type ChatTextAreaProps = {
 	disabled?: boolean;

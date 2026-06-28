@@ -1,6 +1,6 @@
 import { traverseWorkspaceEntries } from "@wincode/ai/workspace";
 
-import type { FileMentionOption } from "./types";
+import type { FileMentionOption } from "../types";
 
 const MAX_DEPTH = 5;
 const MAX_FILE_MENTION_RESULTS = 100;

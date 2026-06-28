@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CommandSpec } from "@/modules/commands/commands";
 import { getFilteredCommands } from "@/modules/commands/filter-commands";
-import { applyFileMentionReplacement } from "../../utils/file-mentions/mention-grammar";
-import { filterFileMentionOptions } from "./file-mention-options";
+import type { FileMentionOption } from "@/modules/file-mentions";
+import {
+	applyFileMentionReplacement,
+	filterFileMentionOptions,
+} from "@/modules/file-mentions";
 import { type ActiveTrigger, detectTrigger } from "./triggers";
 import type {
 	ChatInputController,
 	ChatInputControllerOptions,
-	FileMentionOption,
 	InputOverlayState,
 } from "./types";
 

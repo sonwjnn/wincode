@@ -12,9 +12,9 @@ import {
 	lastAssistantMessageIsCompleteWithToolCalls,
 } from "ai";
 import { useMemo, useRef } from "react";
+import { resolveFileMentionParts } from "@/modules/file-mentions";
 import { honoClient } from "@/shared/api/hono-client";
 import { prepareSendChatRequestBody } from "../api/chat-request";
-import { resolveFileMentionParts } from "../utils/file-mentions/resolve-file-mention-parts";
 
 type SubmitChatParams = {
 	mode: ModeType;

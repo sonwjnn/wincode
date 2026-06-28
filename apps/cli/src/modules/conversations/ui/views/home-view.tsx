@@ -2,10 +2,10 @@ import { TextAttributes } from "@opentui/core";
 import { useRouter } from "@tanstack/react-router";
 import { createUserMessage } from "@wincode/ai/client";
 import { useState } from "react";
+import { resolveFileMentionParts } from "@/modules/file-mentions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { getErrorMessage } from "@/shared/api/error-response";
 import { honoClient } from "@/shared/api/hono-client";
-import { resolveFileMentionParts } from "../../utils/file-mentions/resolve-file-mention-parts";
 import { AsciiArt } from "../components/ascii-art";
 import { ChatTextArea } from "../components/chat-text-area";
 

@@ -1,10 +1,5 @@
 import type { CommandSpec } from "@/modules/commands/commands";
-
-export type FileMentionOption = {
-	label: string;
-	path: string;
-	type: "directory" | "file";
-};
+import type { FileMentionOption } from "@/modules/file-mentions";
 
 export type InputOverlayState =
 	| { items: []; kind: null; selectedIndex: -1 }
