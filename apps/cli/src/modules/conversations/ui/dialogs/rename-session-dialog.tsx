@@ -1,15 +1,15 @@
 import { type InputRenderable, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { useCallback, useEffect, useRef } from "react";
-import { getErrorMessage } from "../../../../shared/api/error-response";
-import { honoClient } from "../../../../shared/api/hono-client";
+import { getErrorMessage } from "@/shared/api/error-response";
+import { honoClient } from "@/shared/api/hono-client";
 import {
 	useDialog,
 	useDialogEscape,
 	useDialogLayer,
-} from "../../../../shared/terminal/dialog/dialog-provider";
-import { useKeyboardLayer } from "../../../../shared/terminal/keyboard-layer/keyboard-layer-provider";
-import { useToast } from "../../../../shared/terminal/toast/toast-provider";
+} from "@/shared/terminal/dialog/dialog-provider";
+import { useKeyboardLayer } from "@/shared/terminal/keyboard-layer/keyboard-layer-provider";
+import { useToast } from "@/shared/terminal/toast/toast-provider";
 
 type RenameSessionDialogProps = {
 	session: { id: string; title: string };

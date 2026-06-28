@@ -1,7 +1,7 @@
 import "opentui-spinner/react";
 
 import { defaultMode, type ModeType } from "@wincode/ai";
-import { useTheme } from "../../../../shared/terminal/theme/theme-provider";
+import { useTheme } from "@/shared/terminal/theme/theme-provider";
 
 type Props = {
 	mode?: ModeType;

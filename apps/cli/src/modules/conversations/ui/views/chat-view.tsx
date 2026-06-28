@@ -1,13 +1,13 @@
 import { useKeyboard } from "@opentui/react";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import { useEffect, useRef, useState } from "react";
-import { useDialog } from "../../../../shared/terminal/dialog/dialog-provider";
-import { useKeyboardLayer } from "../../../../shared/terminal/keyboard-layer/keyboard-layer-provider";
-import { useToast } from "../../../../shared/terminal/toast/toast-provider";
-import { usePromptConfig } from "../../../prompt-settings/context/prompt-config-provider";
+import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import { useDialog } from "@/shared/terminal/dialog/dialog-provider";
+import { useKeyboardLayer } from "@/shared/terminal/keyboard-layer/keyboard-layer-provider";
+import { useToast } from "@/shared/terminal/toast/toast-provider";
 import { useChat } from "../../hooks/use-chat";
 import { ChatShell } from "../components/chat-shell";
-import { RenameSessionDialog } from "../sessions/rename-session-dialog";
+import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
 
 const INTERRUPT_CONFIRMATION_TIMEOUT_MS = 3000;
 
@@ -18,7 +18,7 @@ type ChatScreenProps = {
 	sessionTitle: string;
 };
 
-export function ChatScreen({
+export function ChatView({
 	initialMessages,
 	initialPrompt,
 	sessionId,

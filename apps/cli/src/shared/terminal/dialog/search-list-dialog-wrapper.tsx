@@ -1,14 +1,14 @@
 import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type { ReactNode } from "react";
-import { useDialogLayer } from "../dialog/dialog-provider";
 import { useKeyboardLayer } from "../keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "../theme/theme-provider";
+import { useDialogLayer } from "./dialog-provider";
 import { useSearchableList } from "./use-searchable-list";
 
 const MAX_VISIBLE_ITEMS = 6;
 
-type DialogSearchListProps<T> = {
+type SearchListDialogWrapperProps<T> = {
 	items: readonly T[];
 	onSelect: (item: T) => void;
 	onHighlight?: (item: T) => void;
@@ -19,7 +19,7 @@ type DialogSearchListProps<T> = {
 	emptyText?: string;
 };
 
-export function DialogSearchList<T>({
+export function SearchListDialogWrapper<T>({
 	items,
 	onSelect,
 	onHighlight,
@@ -28,7 +28,7 @@ export function DialogSearchList<T>({
 	getKey,
 	placeholder = "Search",
 	emptyText = "No results",
-}: DialogSearchListProps<T>) {
+}: SearchListDialogWrapperProps<T>) {
 	const {
 		filtered,
 		selectedIndex,

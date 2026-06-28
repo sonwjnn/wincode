@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CommandSpec } from "../../../commands/commands";
-import { getFilteredCommands } from "../../../commands/filter-commands";
+import type { CommandSpec } from "@/modules/commands/commands";
+import { getFilteredCommands } from "@/modules/commands/filter-commands";
 import { applyFileMentionReplacement } from "../../utils/file-mentions/mention-grammar";
 import { filterFileMentionOptions } from "./file-mention-options";
 import { type ActiveTrigger, detectTrigger } from "./triggers";

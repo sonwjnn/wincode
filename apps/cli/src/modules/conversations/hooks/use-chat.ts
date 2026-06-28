@@ -12,7 +12,7 @@ import {
 	lastAssistantMessageIsCompleteWithToolCalls,
 } from "ai";
 import { useMemo, useRef } from "react";
-import { honoClient } from "../../../shared/api/hono-client";
+import { honoClient } from "@/shared/api/hono-client";
 import { prepareSendChatRequestBody } from "../api/chat-request";
 import { resolveFileMentionParts } from "../utils/file-mentions/resolve-file-mention-parts";
 

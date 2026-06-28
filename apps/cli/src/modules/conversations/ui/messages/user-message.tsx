@@ -1,7 +1,7 @@
 import type { ModeType } from "@wincode/ai";
 import type { ReactNode } from "react";
-import { useTheme } from "../../../../shared/terminal/theme/theme-provider";
-import { EmptyBorder } from "../../../../shared/terminal/ui/borders";
+import { useTheme } from "@/shared/terminal/theme/theme-provider";
+import { EmptyBorder } from "@/shared/terminal/ui/borders";
 import { findFileMentionRanges } from "../../utils/file-mentions/mention-grammar";
 
 type UserMessageProps = {

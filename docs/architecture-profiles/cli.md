@@ -3,7 +3,7 @@
 ## Project configuration
 
 - Framework/rendering: `OpenTUI React (Bun runtime)`
-- Source alias: `none`
+- Source alias: `@/* -> src/*`
 - Slice root/name: `src/modules`
 - Rendering contexts: `terminal`
 - Server state: `AI SDK useChat hook (no TanStack Query)`

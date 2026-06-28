@@ -1,6 +1,6 @@
 import { TextAttributes } from "@opentui/core";
-import { useTheme } from "../../../../shared/terminal/theme/theme-provider";
-import { EmptyBorder } from "../../../../shared/terminal/ui/borders";
+import { useTheme } from "@/shared/terminal/theme/theme-provider";
+import { EmptyBorder } from "@/shared/terminal/ui/borders";
 
 type ErrorMessageProps = {
 	message: string;

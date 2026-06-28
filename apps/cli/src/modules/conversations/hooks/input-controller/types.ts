@@ -1,4 +1,4 @@
-import type { CommandSpec } from "../../../commands/commands";
+import type { CommandSpec } from "@/modules/commands/commands";
 
 export type FileMentionOption = {
 	label: string;

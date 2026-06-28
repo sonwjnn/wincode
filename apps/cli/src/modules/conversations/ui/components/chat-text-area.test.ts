@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
-import { CHAT_TEXT_AREA_KEY_BINDINGS } from "../../../../shared/terminal/keyboard-layer/constants";
+import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/terminal/keyboard-layer/constants";
 
 describe("ChatTextArea", () => {
 	test("binds enter to submit and modified enter to newline", () => {
@@ -19,7 +19,7 @@ describe("ChatTextArea", () => {
 			readFile(new URL("./chat-text-area.tsx", import.meta.url), "utf8"),
 			readFile(
 				new URL(
-					"../../../../modules/prompt-settings/context/prompt-config-provider.tsx",
+					"../../../prompt-settings/context/prompt-config-provider.tsx",
 					import.meta.url
 				),
 				"utf8"

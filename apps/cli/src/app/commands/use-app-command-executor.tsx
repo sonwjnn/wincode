@@ -1,7 +1,7 @@
 import { useRenderer } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
-import { ThemeDialogContent } from "../../modules/appearance/ui/theme-dialog";
+import { ThemeDialogContent } from "@/modules/appearance/ui/theme-dialog";
 import {
 	DialogAdapter,
 	ExitAdapter,
@@ -9,15 +9,15 @@ import {
 	ModelsAdapter,
 	NewAdapter,
 	UnavailableAdapter,
-} from "../../modules/commands/adapters";
-import type { CommandSpec } from "../../modules/commands/commands";
-import { createCommandExecutor } from "../../modules/commands/execute-command";
-import { SessionsDialogContent } from "../../modules/conversations/ui/sessions/sessions-dialog";
-import { usePromptConfig } from "../../modules/prompt-settings/context/prompt-config-provider";
-import { AgentsDialogContent } from "../../modules/prompt-settings/ui/agents-dialog";
-import { ModelsDialogContent } from "../../modules/prompt-settings/ui/models-dialog";
-import { useDialog } from "../../shared/terminal/dialog/dialog-provider";
-import { useToast } from "../../shared/terminal/toast/toast-provider";
+} from "@/modules/commands/adapters";
+import type { CommandSpec } from "@/modules/commands/commands";
+import { createCommandExecutor } from "@/modules/commands/execute-command";
+import { SessionsDialogContent } from "@/modules/conversations/ui/dialogs/sessions-dialog";
+import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import { AgentsDialogContent } from "@/modules/prompt-settings/ui/agents-dialog";
+import { ModelsDialogContent } from "@/modules/prompt-settings/ui/models-dialog";
+import { useDialog } from "@/shared/terminal/dialog/dialog-provider";
+import { useToast } from "@/shared/terminal/toast/toast-provider";
 
 type UseCommandExecutorReturn = {
 	executeCommand: (spec: CommandSpec) => Promise<void>;

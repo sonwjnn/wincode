@@ -1,7 +1,7 @@
 import { TextAttributes } from "@opentui/core";
 import type { CodingAgentUIMessage } from "@wincode/ai";
-import { useTheme } from "../../../../shared/terminal/theme/theme-provider";
-import { EmptyBorder } from "../../../../shared/terminal/ui/borders";
+import { useTheme } from "@/shared/terminal/theme/theme-provider";
+import { EmptyBorder } from "@/shared/terminal/ui/borders";
 
 type MessagePart = CodingAgentUIMessage["parts"][number];
 type ToolPart = MessagePart & {

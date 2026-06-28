@@ -4,9 +4,9 @@ import { codingModeNameSchema } from "@wincode/ai";
 import { safeValidateUIMessages } from "ai";
 import { useEffect, useState } from "react";
 import { z } from "zod";
-import { ChatScreen } from "../../../../modules/conversations/ui/views/chat-screen";
-import { getErrorMessage } from "../../../../shared/api/error-response";
-import { honoClient } from "../../../../shared/api/hono-client";
+import { ChatView } from "@/modules/conversations/ui/views/chat-view";
+import { getErrorMessage } from "@/shared/api/error-response";
+import { honoClient } from "@/shared/api/hono-client";
 
 const sessionRouteStateSchema = z
 	.object({
@@ -118,7 +118,7 @@ function SessionRoute() {
 	}
 
 	return (
-		<ChatScreen
+		<ChatView
 			initialMessages={messages}
 			initialPrompt={prompt}
 			sessionId={id}

@@ -3,8 +3,8 @@ import { useCallback } from "react";
 import {
 	useDialog,
 	useDialogEscape,
-} from "../../../shared/terminal/dialog/dialog-provider";
-import { DialogSearchList } from "../../../shared/terminal/search-list/dialog-search-list";
+} from "@/shared/terminal/dialog/dialog-provider";
+import { SearchListDialogWrapper } from "@/shared/terminal/dialog/search-list-dialog-wrapper";
 
 type AgentsDialogContentProps = {
 	currentMode?: ModeType;
@@ -28,7 +28,7 @@ export const AgentsDialogContent = ({
 	useDialogEscape();
 
 	return (
-		<DialogSearchList
+		<SearchListDialogWrapper
 			emptyText="No matching agents"
 			filterFn={(item, query) =>
 				`${item.displayName} ${item.description}`

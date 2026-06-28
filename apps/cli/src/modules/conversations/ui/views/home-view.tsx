@@ -2,14 +2,14 @@ import { TextAttributes } from "@opentui/core";
 import { useRouter } from "@tanstack/react-router";
 import { createUserMessage } from "@wincode/ai/client";
 import { useState } from "react";
-import { getErrorMessage } from "../../../../shared/api/error-response";
-import { honoClient } from "../../../../shared/api/hono-client";
-import { usePromptConfig } from "../../../prompt-settings/context/prompt-config-provider";
+import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import { getErrorMessage } from "@/shared/api/error-response";
+import { honoClient } from "@/shared/api/hono-client";
 import { resolveFileMentionParts } from "../../utils/file-mentions/resolve-file-mention-parts";
 import { AsciiArt } from "../components/ascii-art";
 import { ChatTextArea } from "../components/chat-text-area";
 
-export function HomeScreen() {
+export function HomeView() {
 	const router = useRouter();
 	const [_error, setError] = useState<string | null>(null);
 	const [isCreatingSession, setIsCreatingSession] = useState(false);

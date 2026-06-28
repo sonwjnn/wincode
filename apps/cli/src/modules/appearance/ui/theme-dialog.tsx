@@ -2,11 +2,11 @@ import { useCallback, useEffect, useRef } from "react";
 import {
 	useDialog,
 	useDialogEscape,
-} from "../../../shared/terminal/dialog/dialog-provider";
-import { DialogSearchList } from "../../../shared/terminal/search-list/dialog-search-list";
-import { useTheme } from "../../../shared/terminal/theme/theme-provider";
-import type { Theme } from "../../../shared/terminal/theme/themes";
-import { THEMES } from "../../../shared/terminal/theme/themes";
+} from "@/shared/terminal/dialog/dialog-provider";
+import { SearchListDialogWrapper } from "@/shared/terminal/dialog/search-list-dialog-wrapper";
+import { useTheme } from "@/shared/terminal/theme/theme-provider";
+import type { Theme } from "@/shared/terminal/theme/themes";
+import { THEMES } from "@/shared/terminal/theme/themes";
 
 export const ThemeDialogContent = () => {
 	const dialog = useDialog();
@@ -43,7 +43,7 @@ export const ThemeDialogContent = () => {
 	useDialogEscape();
 
 	return (
-		<DialogSearchList
+		<SearchListDialogWrapper
 			emptyText="No matching themes"
 			filterFn={(t, query) =>
 				t.name.toLowerCase().includes(query.toLowerCase())

@@ -3,8 +3,8 @@ import { useCallback } from "react";
 import {
 	useDialog,
 	useDialogEscape,
-} from "../../../shared/terminal/dialog/dialog-provider";
-import { DialogSearchList } from "../../../shared/terminal/search-list/dialog-search-list";
+} from "@/shared/terminal/dialog/dialog-provider";
+import { SearchListDialogWrapper } from "@/shared/terminal/dialog/search-list-dialog-wrapper";
 
 type ModelsDialogContentProps = {
 	currentModel?: SupportedChatModelId;
@@ -30,7 +30,7 @@ export const ModelsDialogContent = ({
 	useDialogEscape();
 
 	return (
-		<DialogSearchList
+		<SearchListDialogWrapper
 			emptyText="No matching models"
 			filterFn={(model, query) =>
 				`${model.displayName} ${model.id} ${model.provider}`

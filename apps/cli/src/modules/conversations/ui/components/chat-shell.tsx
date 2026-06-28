@@ -1,7 +1,7 @@
 import { TextAttributes } from "@opentui/core";
 import type { CodingAgentUIMessage } from "@wincode/ai";
-import { useTheme } from "../../../../shared/terminal/theme/theme-provider";
-import { usePromptConfig } from "../../../prompt-settings/context/prompt-config-provider";
+import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import { useTheme } from "@/shared/terminal/theme/theme-provider";
 import { ErrorMessage } from "../messages";
 import { ChatMessage } from "./chat-message";
 import { ChatTextArea } from "./chat-text-area";

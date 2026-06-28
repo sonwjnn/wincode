@@ -1,11 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { HomeScreen } from "../../modules/conversations/ui/views/home-screen";
+import { HomeView } from "@/modules/conversations/ui/views/home-view";
 
 export const Route = createFileRoute("/")({
 	component: HomeRoute,
 });
 
 function HomeRoute() {
-	return <HomeScreen />;
+	return <HomeView />;
 }
