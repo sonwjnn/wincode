@@ -1,8 +1,8 @@
 import type { ModeType } from "@wincode/ai";
 import type { ReactNode } from "react";
 import { findFileMentionRanges } from "@/modules/file-mentions";
+import { EmptyBorder } from "@/shared/constants";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-import { EmptyBorder } from "@/shared/terminal/ui/borders";
 
 type UserMessageProps = {
 	message: string;

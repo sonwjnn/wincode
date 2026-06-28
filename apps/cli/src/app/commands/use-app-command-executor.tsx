@@ -1,7 +1,6 @@
 import { useRenderer } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
-import { ThemeDialogContent } from "@/modules/appearance/ui/theme-dialog";
 import {
 	DialogAdapter,
 	ExitAdapter,
@@ -16,6 +15,7 @@ import { SessionsDialogContent } from "@/modules/conversations/ui/dialogs/sessio
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { AgentsDialogContent } from "@/modules/prompt-settings/ui/agents-dialog";
 import { ModelsDialogContent } from "@/modules/prompt-settings/ui/models-dialog";
+import { ThemeDialogContent } from "@/modules/prompt-settings/ui/theme-dialog";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 

@@ -8,7 +8,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { SplitBorderChars } from "../../terminal/ui/borders";
+import { SplitBorderChars } from "../../constants";
 import { useTheme } from "../theme/theme-provider";
 import type { ToastOptions, ToastVariant } from "./types";
 import { DEFAULT_DURATION } from "./types";
