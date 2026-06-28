@@ -156,16 +156,16 @@ OpenTUI's `<textarea>` is **uncontrolled** — it's a buffer, not a controlled R
 **Correct pattern — use `ref.current.plainText` on submit:**
 
 ```tsx
-const textAreaRef = useRef(null)
+const textAreaRef = useRef(null);
 
 useKeyboard((key) => {
   if (key.name === "enter" && textAreaRef.current) {
-    const value = textAreaRef.current.plainText  // NOT useState value
-    onSubmit(value)
+    const value = textAreaRef.current.plainText; // NOT useState value
+    onSubmit(value);
   }
-})
+});
 
-return <textarea ref={textAreaRef} focused />
+return <textarea ref={textAreaRef} focused />;
 ```
 
 ### Imperative Handler State
@@ -183,3 +183,5 @@ For OpenTUI CLI routes, avoid using TanStack Router loaders for screen-critical 
 ### Skill Invocation
 
 Invoke the OpenTUI skill more frequently for optimized context learnings. When the answer isn't found in skill docs, reading through `node_modules` is fine.
+
+

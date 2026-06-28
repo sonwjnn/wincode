@@ -1,0 +1,265 @@
+import { SyntaxStyle, type TextareaRenderable } from "@opentui/core";
+import { useKeyboard } from "@opentui/react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCommandExecutor } from "../../../../app/commands/use-app-command-executor";
+import { CHAT_TEXT_AREA_KEY_BINDINGS } from "../../../../shared/terminal/keyboard-layer/constants";
+import { useKeyboardLayer } from "../../../../shared/terminal/keyboard-layer/keyboard-layer-provider";
+import { useTheme } from "../../../../shared/terminal/theme/theme-provider";
+import { EmptyBorder } from "../../../../shared/terminal/ui/borders";
+import { CommandMenu } from "../../../commands/ui/command-menu";
+import { usePromptConfig } from "../../../prompt-settings/context/prompt-config-provider";
+import { StatusBar } from "../../../prompt-settings/ui/prompt-status-bar";
+import { getFileMentionOptions } from "../../hooks/input-controller/file-mention-options";
+import { useChatInputController } from "../../hooks/input-controller/use-chat-input-controller";
+import {
+	deleteFileMentionAfterTrailingCharacterDelete,
+	findFileMentionRanges,
+} from "../../utils/file-mentions/mention-grammar";
+import { FileMentionMenu } from "./file-mention-menu";
+
+type ChatTextAreaProps = {
+	disabled?: boolean;
+	onSubmit: (value: string) => void;
+};
+
+export function ChatTextArea({
+	disabled = false,
+	onSubmit,
+}: ChatTextAreaProps) {
+	const { mode, cycleMode } = usePromptConfig();
+	const textAreaRef = useRef<TextareaRenderable>(null);
+	const commandEscapeRef = useRef<() => void>(() => undefined);
+	const ctrlCRef = useRef<() => boolean>(() => false);
+	const currentTextRef = useRef("");
+	const lastTextSyncRevisionRef = useRef(0);
+	const onSubmitRef = useRef<() => void>(() => undefined);
+
+	const { isTopLayer, pop, push, setResponder } = useKeyboardLayer();
+	const { colors } = useTheme();
+	const { executeCommand } = useCommandExecutor();
+	const mentionSyntaxStyle = useMemo(
+		() =>
+			SyntaxStyle.fromStyles({
+				fileMention: { bold: true, fg: colors.primary },
+			}),
+		[colors.primary]
+	);
+
+	const { actions, state } = useChatInputController({
+		disabled,
+		executeCommand,
+		getFileMentionOptions,
+		onSubmit,
+		onTab: cycleMode,
+	});
+
+	const handleTextareaContentChange = useCallback(() => {
+		const textarea = textAreaRef.current;
+		if (!textarea) {
+			return;
+		}
+
+		const mentionDelete = deleteFileMentionAfterTrailingCharacterDelete(
+			currentTextRef.current,
+			textarea.plainText,
+			textarea.cursorOffset
+		);
+		if (mentionDelete) {
+			textarea.setText(mentionDelete.text);
+			textarea.cursorOffset = mentionDelete.cursorOffset;
+			actions.onTextChange(mentionDelete.text, mentionDelete.cursorOffset);
+			return;
+		}
+
+		actions.onTextChange(textarea.plainText, textarea.cursorOffset);
+	}, [actions]);
+
+	useEffect(() => {
+		if (lastTextSyncRevisionRef.current === state.textSyncRevision) {
+			return;
+		}
+
+		lastTextSyncRevisionRef.current = state.textSyncRevision;
+
+		const textarea = textAreaRef.current;
+		if (!textarea) {
+			return;
+		}
+
+		textarea.setText(state.text);
+
+		if (state.cursorOffset !== null) {
+			textarea.cursorOffset = state.cursorOffset;
+		}
+	}, [state.cursorOffset, state.text, state.textSyncRevision]);
+
+	useEffect(() => {
+		const textarea = textAreaRef.current;
+		if (!textarea) {
+			return;
+		}
+
+		textarea.syntaxStyle = mentionSyntaxStyle;
+		textarea.clearAllHighlights();
+
+		const styleId = mentionSyntaxStyle.getStyleId("fileMention");
+		if (styleId === null) {
+			return;
+		}
+
+		for (const range of findFileMentionRanges(state.text)) {
+			textarea.addHighlightByCharRange({
+				end: range.end,
+				hlRef: range.start,
+				priority: 10,
+				start: range.start,
+				styleId,
+			});
+		}
+	}, [mentionSyntaxStyle, state.text]);
+
+	useEffect(() => {
+		const textarea = textAreaRef.current;
+		if (!textarea) {
+			return;
+		}
+
+		textarea.onSubmit = () => {
+			onSubmitRef.current();
+		};
+	}, []);
+
+	onSubmitRef.current = actions.onEnter;
+	commandEscapeRef.current = actions.onEscape;
+	currentTextRef.current = state.text;
+	ctrlCRef.current = actions.onCtrlC;
+
+	useEffect(() => {
+		if (state.overlay.kind === null) {
+			return;
+		}
+
+		push("command", () => {
+			commandEscapeRef.current();
+			return true;
+		});
+
+		return () => pop("command");
+	}, [pop, push, state.overlay.kind]);
+
+	useEffect(() => {
+		setResponder("base", () => ctrlCRef.current());
+
+		return () => setResponder("base", null);
+	}, [setResponder]);
+
+	useKeyboard((key) => {
+		if (disabled) {
+			return;
+		}
+
+		if (state.overlay.kind !== null && isTopLayer("command")) {
+			if (key.name === "escape") {
+				key.preventDefault();
+				actions.onEscape();
+				return;
+			}
+
+			if (key.name === "up") {
+				key.preventDefault();
+				actions.onArrowUp();
+				return;
+			}
+
+			if (key.name === "down") {
+				key.preventDefault();
+				actions.onArrowDown();
+				return;
+			}
+		}
+
+		if (!isTopLayer("base")) {
+			return;
+		}
+
+		if (key.name === "tab") {
+			key.preventDefault();
+			actions.onTab();
+		}
+	});
+
+	const isFocused = !disabled && (isTopLayer("base") || isTopLayer("command"));
+
+	return (
+		<box alignItems="center" width="100%">
+			<box
+				border={["left"]}
+				borderColor={colors.mode[mode]}
+				customBorderChars={{
+					...EmptyBorder,
+					vertical: "┃",
+					bottomLeft: "╹",
+				}}
+				gap={1}
+				width="100%"
+			>
+				<box
+					backgroundColor={colors.surface}
+					gap={1}
+					justifyContent="center"
+					paddingX={2}
+					paddingY={1}
+					position="relative"
+					width="100%"
+				>
+					{state.overlay.kind === "command" && (
+						<box
+							backgroundColor={colors.surface}
+							bottom="100%"
+							left={0}
+							position="absolute"
+							width="100%"
+							zIndex={10}
+						>
+							<CommandMenu
+								commands={state.overlay.items}
+								onExecute={actions.onItemExecute}
+								onSelect={actions.onItemSelect}
+								selectedIndex={state.overlay.selectedIndex}
+								visibleStartIndex={state.visibleStartIndex}
+							/>
+						</box>
+					)}
+
+					{state.overlay.kind === "file-mention" && (
+						<box
+							backgroundColor={colors.surface}
+							bottom="100%"
+							left={0}
+							position="absolute"
+							width="100%"
+							zIndex={10}
+						>
+							<FileMentionMenu
+								items={state.overlay.items}
+								onExecute={actions.onItemExecute}
+								onSelect={actions.onItemSelect}
+								selectedIndex={state.overlay.selectedIndex}
+								visibleStartIndex={state.visibleStartIndex}
+							/>
+						</box>
+					)}
+
+					<textarea
+						focused={isFocused}
+						keyBindings={CHAT_TEXT_AREA_KEY_BINDINGS}
+						onContentChange={handleTextareaContentChange}
+						placeholder={`Ask anything... "Fix broken tests"`}
+						ref={textAreaRef}
+					/>
+					<StatusBar />
+				</box>
+			</box>
+		</box>
+	);
+}
