@@ -12,9 +12,9 @@ Core architecture rules live in:
 
 Each app has a dedicated profile under `docs/architecture-profiles/`:
 
-| App | Profile | Description |
-| --- | ------- | ----------- |
-| `apps/cli` | `docs/architecture-profiles/cli.md` | OpenTUI React terminal app, Hono API client, TanStack Router |
-| `apps/web` | `docs/architecture-profiles/web.md` | TanStack Start SPA, tRPC, shadcn/ui, Cloudflare Workers |
+| App        | Profile                             | Description                                                        |
+| ---------- | ----------------------------------- | ------------------------------------------------------------------ |
+| `apps/cli` | `docs/architecture-profiles/cli.md` | OpenTUI React terminal app, Hono API client, TanStack Router       |
+| `apps/web` | `docs/architecture-profiles/web.md` | TanStack Start SPA, Hono API client, shadcn/ui, Cloudflare Workers |
 
 Do not add profile data here. Open the matching profile for the app you are editing.

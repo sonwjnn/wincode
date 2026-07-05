@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1783266111775,
+      "tag": "0000_cloud_baseline",
+      "breakpoints": true
+    }
+  ]
+}

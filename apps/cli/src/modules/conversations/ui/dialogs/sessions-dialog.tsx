@@ -2,8 +2,6 @@ import { RGBA, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getErrorMessage } from "@/shared/api/error-response";
-import { honoClient } from "@/shared/api/hono-client";
 import { useSearchableList } from "@/shared/hooks/use-searchable-list";
 import {
 	useDialog,
@@ -12,19 +10,15 @@ import {
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import type { ConversationSession } from "../../storage/conversation-store";
+import { getConversationStore } from "../../storage/get-conversation-store";
 import { RenameSessionDialog } from "./rename-session-dialog";
 
 const MAX_VISIBLE_ITEMS = 10;
 const MIN_VISIBLE_ITEMS = 8;
 const CONFIRM_DELETE_BG = RGBA.fromInts(60, 20, 20, 255);
 
-type Session = {
-	createdAt: string;
-	id: string;
-	lastMessageAt: string | null;
-	pinned: boolean;
-	title: string;
-};
+type Session = ConversationSession;
 
 type ListItem =
 	| { kind: "header"; label: string }
@@ -221,11 +215,7 @@ export const SessionsDialogContent = () => {
 	const fetchSessions = useCallback(
 		async (ignoreRef?: { current: boolean }) => {
 			try {
-				const res = await honoClient.api.sessions.$get();
-				if (!res.ok) {
-					throw new Error(await getErrorMessage(res));
-				}
-				const data = (await res.json()) as Session[];
+				const data = await getConversationStore().listSessions();
 				if (ignoreRef?.current) {
 					return;
 				}
@@ -311,13 +301,9 @@ export const SessionsDialogContent = () => {
 
 			setSessions(updated);
 			try {
-				const res = await honoClient.api.sessions[":id"].$patch({
-					param: { id: session.id },
-					json: { pinned: !session.pinned },
+				await getConversationStore().updateSession(session.id, {
+					pinned: !session.pinned,
 				});
-				if (!res.ok) {
-					throw new Error(await getErrorMessage(res));
-				}
 			} catch (error) {
 				setSessions(original);
 				show({
@@ -336,12 +322,7 @@ export const SessionsDialogContent = () => {
 			setSessions((prev) => prev.filter((s) => s.id !== session.id));
 			setPendingDeleteId(null);
 			try {
-				const res = await honoClient.api.sessions[":id"].$delete({
-					param: { id: session.id },
-				});
-				if (!res.ok) {
-					throw new Error(await getErrorMessage(res));
-				}
+				await getConversationStore().deleteSession(session.id);
 			} catch (error) {
 				setSessions(original);
 				show({

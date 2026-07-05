@@ -17,16 +17,19 @@
     "db:studio": "prisma studio"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
     "@prisma/adapter-pg": "^7.7.0",
     "@prisma/client": "^7.7.0",
     "@wincode/env": "workspace:*",
     "dotenv": "catalog:",
+    "drizzle-orm": "^0.45.2",
     "pg": "^8.17.1",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@types/pg": "^8.16.0",
     "@wincode/config": "workspace:*",
+    "drizzle-kit": "^0.31.10",
     "prisma": "^7.7.0",
     "typescript": "catalog:"
   }

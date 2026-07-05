@@ -1,8 +1,6 @@
 import { type InputRenderable, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { useCallback, useEffect, useRef } from "react";
-import { getErrorMessage } from "@/shared/api/error-response";
-import { honoClient } from "@/shared/api/hono-client";
 import {
 	useDialog,
 	useDialogEscape,
@@ -10,6 +8,7 @@ import {
 } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import { getConversationStore } from "../../storage/get-conversation-store";
 
 type RenameSessionDialogProps = {
 	session: { id: string; title: string };
@@ -41,13 +40,9 @@ export function RenameSessionDialog({
 		}
 
 		try {
-			const res = await honoClient.api.sessions[":id"].$patch({
-				param: { id: session.id },
-				json: { title: trimmed },
+			await getConversationStore().updateSession(session.id, {
+				title: trimmed,
 			});
-			if (!res.ok) {
-				throw new Error(await getErrorMessage(res));
-			}
 			onSuccess(trimmed);
 			close();
 		} catch (error) {

@@ -131,7 +131,7 @@ Most formatting and common issues are automatically fixed by Biome. Run `bun x u
 
 **Always use Hono for API requests between server and CLI/web apps.** Never use raw `fetch()` with `env.SERVER_URL`.
 
-The tRPC client derives the URL automatically from the configured `httpBatchLink` — no manual URL construction needed.
+The Hono client derives the URL automatically from the configured `httpBatchLink` — no manual URL construction needed.
 
 ### Request Validation — Use `@hono/zod-validator`
 
@@ -183,5 +183,3 @@ For OpenTUI CLI routes, avoid using TanStack Router loaders for screen-critical 
 ### Skill Invocation
 
 Invoke the OpenTUI skill more frequently for optimized context learnings. When the answer isn't found in skill docs, reading through `node_modules` is fine.
-
-

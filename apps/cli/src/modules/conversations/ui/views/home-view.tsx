@@ -4,8 +4,7 @@ import { createUserMessage } from "@wincode/ai/client";
 import { useState } from "react";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
-import { getErrorMessage } from "@/shared/api/error-response";
-import { honoClient } from "@/shared/api/hono-client";
+import { getConversationStore } from "../../storage/get-conversation-store";
 import { AsciiArt } from "../components/ascii-art";
 import { ChatTextArea } from "../components/chat-text-area";
 
@@ -39,23 +38,15 @@ export function HomeView() {
 
 	const createSession = async (input: string) => {
 		const fileMentions = await resolveFileMentionParts(input);
-		const response = await honoClient.api.sessions.$post({
-			json: {
-				message: createUserMessage(input, { mode, model }, fileMentions),
-				mode,
-				model,
-			},
+		const { id } = await getConversationStore().createSession({
+			message: createUserMessage(input, { mode, model }, fileMentions),
+			mode,
+			model,
 		});
 
-		if (!response.ok) {
-			setError(await getErrorMessage(response));
-			return;
-		}
-
-		const { id } = await response.json();
 		await router.navigate({
 			params: { id },
-			state: { mode },
+			state: { autoStart: true, mode },
 			to: "/sessions/$id",
 		});
 	};

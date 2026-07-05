@@ -15,7 +15,11 @@ export {
 	baseCodingAgentInstructions,
 	getSystemInstructions,
 } from "./instructions";
-export type { CodingAgentTools, CodingAgentUIMessage } from "./message";
+export type {
+	CodingAgentTools,
+	CodingAgentUIMessage,
+	CodingMessageMetadata,
+} from "./message";
 export * from "./models";
 export * from "./modes";
 export * from "./tools/schemas";

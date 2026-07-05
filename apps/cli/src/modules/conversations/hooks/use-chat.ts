@@ -13,8 +13,9 @@ import {
 } from "ai";
 import { useMemo, useRef } from "react";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
-import { honoClient } from "@/shared/api/hono-client";
+import { getHonoClient } from "@/shared/api/hono-client";
 import { prepareSendChatRequestBody } from "../api/chat-request";
+import { getConversationStore } from "../storage/get-conversation-store";
 
 type SubmitChatParams = {
 	mode: ModeType;
@@ -34,8 +35,8 @@ export function useChat(
 	const transport = useMemo(
 		() =>
 			new DefaultChatTransport<CodingAgentUIMessage>({
-				api: honoClient.api.sessions[":id"].chat
-					.$url({ param: { id: sessionId } })
+				api: getHonoClient()
+					.api.sessions[":id"].chat.$url({ param: { id: sessionId } })
 					.toString(),
 				prepareSendMessagesRequest: ({ messages }) => ({
 					body: prepareSendChatRequestBody(sessionId, messages, {
@@ -50,6 +51,16 @@ export function useChat(
 	const chat = useAiChat<CodingAgentUIMessage>({
 		id: sessionId,
 		messages: initialMessages,
+		onFinish: ({ messages }) => {
+			getConversationStore()
+				.persistMessages({
+					messages,
+					mode: modeRef.current,
+					model: modelRef.current,
+					sessionId,
+				})
+				.catch(() => undefined);
+		},
 		onToolCall: (options) => {
 			const addToolOutputForCall = addToolOutputRef.current;
 
