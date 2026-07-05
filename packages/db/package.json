@@ -10,27 +10,21 @@
     }
   },
   "scripts": {
-    "db:push": "prisma db push",
-    "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "postinstall": "prisma generate",
-    "db:studio": "prisma studio"
+    "db:generate": "drizzle-kit generate --config drizzle.cloud.config.ts",
+    "db:migrate": "drizzle-kit migrate --config drizzle.cloud.config.ts",
+    "db:push": "drizzle-kit push --config drizzle.cloud.config.ts",
+    "db:studio": "drizzle-kit studio --config drizzle.cloud.config.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
-    "@prisma/adapter-pg": "^7.7.0",
-    "@prisma/client": "^7.7.0",
     "@wincode/env": "workspace:*",
     "dotenv": "catalog:",
     "drizzle-orm": "^0.45.2",
-    "pg": "^8.17.1",
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@types/pg": "^8.16.0",
     "@wincode/config": "workspace:*",
     "drizzle-kit": "^0.31.10",
-    "prisma": "^7.7.0",
     "typescript": "catalog:"
   }
 }

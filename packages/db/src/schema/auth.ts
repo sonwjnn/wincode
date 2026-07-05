@@ -8,9 +8,9 @@ import {
 	unique,
 } from "drizzle-orm/pg-core";
 
-// Physical table/column names mirror the existing Prisma-managed PostgreSQL
-// schema. Prisma maps model DateTime -> timestamp(3) without time zone; field
-// names are used verbatim as column names (camelCase). Do not snake_case these.
+// Physical table/column names mirror the existing PostgreSQL schema managed by
+// Better Auth. DateTime maps to timestamp(3) without time zone; field names are
+// used verbatim as column names (camelCase). Do not snake_case these.
 
 export const user = pgTable(
 	"user",

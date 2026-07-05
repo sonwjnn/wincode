@@ -1,17 +1,23 @@
 import { checkout, polar, portal } from "@polar-sh/better-auth";
-import { createPrismaClient } from "@wincode/db";
+import { createDrizzleClient, schema } from "@wincode/db/client";
 import { env } from "@wincode/env/server";
 import { betterAuth } from "better-auth";
-import { prismaAdapter } from "better-auth/adapters/prisma";
+import { drizzleAdapter } from "better-auth/adapters/drizzle";
 
 import { polarClient } from "./lib/payments";
 
 export function createAuth() {
-	const prisma = createPrismaClient();
+	const db = createDrizzleClient();
 
 	return betterAuth({
-		database: prismaAdapter(prisma, {
-			provider: "postgresql",
+		database: drizzleAdapter(db, {
+			provider: "pg",
+			schema: {
+				account: schema.account,
+				session: schema.session,
+				user: schema.user,
+				verification: schema.verification,
+			},
 		}),
 
 		trustedOrigins: [env.CORS_ORIGIN],

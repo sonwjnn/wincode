@@ -6,9 +6,9 @@ import { drizzle } from "drizzle-orm/neon-serverless";
 import * as schema from "./schema";
 
 // Drizzle PostgreSQL client over the Neon serverless driver (WebSocket Pool,
-// pg-compatible). Runs on the Bun/Hono server runtime. Introduced alongside the
-// transitional Prisma client; consumers migrate incrementally. Do not import
-// into the Cloudflare web runtime without a driver compatibility review.
+// pg-compatible). Runs on the Bun/Hono server runtime and is the sole ORM for
+// cloud PostgreSQL (auth). Do not import into the Cloudflare web runtime without
+// a driver compatibility review.
 export function createDrizzleClient() {
 	const pool = new Pool({ connectionString: env.DATABASE_URL });
 	return drizzle(pool, { schema });
