@@ -6,12 +6,14 @@ import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { useChat } from "../../hooks/use-chat";
+import { shouldAutoStartAssistantTurn } from "../../utils";
 import { ChatShell } from "../components/chat-shell";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
 
 const INTERRUPT_CONFIRMATION_TIMEOUT_MS = 3000;
 
 type ChatScreenProps = {
+	autoStart: boolean;
 	initialMessages: CodingAgentUIMessage[];
 	initialPrompt: string;
 	sessionId: string;
@@ -19,6 +21,7 @@ type ChatScreenProps = {
 };
 
 export function ChatView({
+	autoStart,
 	initialMessages,
 	initialPrompt,
 	sessionId,
@@ -165,13 +168,18 @@ export function ChatView({
 	}, [initialPrompt, mode, model, submit]);
 
 	useEffect(() => {
-		if (initialPrompt.trim()) {
-			return;
-		}
-
 		const lastInitialMessage = initialMessages.at(-1);
 
-		if (lastInitialMessage?.role !== "user") {
+		if (
+			!(
+				lastInitialMessage &&
+				shouldAutoStartAssistantTurn(
+					autoStart,
+					initialPrompt,
+					lastInitialMessage
+				)
+			)
+		) {
 			return;
 		}
 
@@ -184,7 +192,14 @@ export function ChatView({
 			lastInitialMessage.metadata?.mode ?? mode,
 			lastInitialMessage.metadata?.model ?? model
 		).catch(() => undefined);
-	}, [continueLastMessage, initialMessages, initialPrompt, mode, model]);
+	}, [
+		autoStart,
+		continueLastMessage,
+		initialMessages,
+		initialPrompt,
+		mode,
+		model,
+	]);
 
 	return (
 		<ChatShell

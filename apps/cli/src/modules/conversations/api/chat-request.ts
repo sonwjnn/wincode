@@ -5,9 +5,10 @@ import type {
 } from "@wincode/ai";
 
 type SendChatRequestBody = {
-	message: CodingAgentUIMessage;
+	messages: CodingAgentUIMessage[];
 	mode: ModeType;
 	model: SupportedChatModelId;
+	persist: false;
 	sendReasoning: true;
 };
 
@@ -41,9 +42,10 @@ export const prepareSendChatRequestBody = (
 	}
 
 	return {
-		message,
+		messages,
 		mode,
 		model,
+		persist: false,
 		sendReasoning: true,
 	};
 };

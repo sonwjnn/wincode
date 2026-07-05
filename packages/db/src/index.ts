@@ -1,17 +1,6 @@
-import { PrismaPg } from "@prisma/adapter-pg";
-import { env } from "@wincode/env/server";
-
-import { PrismaClient } from "../prisma/generated/client";
-
-export type { Prisma } from "../prisma/generated/client";
-
-export function createPrismaClient() {
-	const adapter = new PrismaPg({
-		connectionString: env.DATABASE_URL,
-	});
-
-	return new PrismaClient({ adapter });
-}
-
-const prisma = createPrismaClient();
-export default prisma;
+// biome-ignore lint/performance/noBarrelFile: package entry re-exporting the Drizzle client.
+export {
+	createDrizzleClient,
+	type DrizzleClient,
+	schema,
+} from "./client";

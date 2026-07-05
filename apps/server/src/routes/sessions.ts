@@ -14,20 +14,6 @@ import {
 import { safeValidateUIMessages } from "ai";
 import { Hono } from "hono";
 import { z } from "zod";
-import {
-	createChatSession,
-	deleteChatSession,
-	getChatMessages,
-	getChatSession,
-	listChatSessions,
-	persistChatMessages,
-	updateChatSession,
-} from "../services/chat-persistence";
-import { mergeChatMessage } from "../utils/chat-message-merge";
-
-const sessionParamsSchema = z.object({
-	id: z.string().min(1),
-});
 
 const uiMessagePartSchema = z
 	.object({
@@ -43,21 +29,10 @@ const uiMessageInputSchema = z.object({
 });
 
 const chatRequestSchema = z.object({
-	message: uiMessageInputSchema.optional(),
+	messages: z.array(uiMessageInputSchema),
 	mode: codingModeNameSchema,
 	model: supportedChatModelIdSchema,
 	sendReasoning: z.boolean().optional(),
-});
-
-const createSessionRequestSchema = z.object({
-	message: uiMessageInputSchema,
-	mode: codingModeNameSchema,
-	model: supportedChatModelIdSchema,
-});
-
-const updateSessionRequestSchema = z.object({
-	title: z.string().min(1).optional(),
-	pinned: z.boolean().optional(),
 });
 
 const withChatMetadata = (
@@ -75,98 +50,39 @@ const withChatMetadata = (
 	},
 });
 
-const createChatStreamResponse = async (
-	id: string,
-	validatedMessages: CodingAgentUIMessage[],
+const withChatMetadataForMessages = (
+	messages: z.infer<typeof uiMessageInputSchema>[],
 	mode: z.infer<typeof codingModeNameSchema>,
-	modelId: SupportedChatModelId,
-	sendReasoning = true
-) => {
-	const resolvedModel = resolveChatModel(modelId);
+	model: SupportedChatModelId
+) => messages.map((message) => withChatMetadata(message, mode, model));
 
-	await persistChatMessages(id, validatedMessages, mode, modelId);
-
-	return createCodingAgentStreamResponse({
-		model: resolvedModel.model,
-		modelId: resolvedModel.modelId,
-		mode,
-		onFinish: async ({ messages: finishedMessages }) => {
-			await persistChatMessages(id, finishedMessages, mode, modelId);
-		},
-		providerOptions: resolvedModel.providerOptions,
-		sendReasoning,
-		uiMessages: validatedMessages,
-	});
-};
-
-export const sessionsRoutes = new Hono()
-	.get("/", async (c) => c.json(await listChatSessions()))
-	.post("/", zValidator("json", createSessionRequestSchema), async (c) => {
-		const { message, mode, model } = c.req.valid("json");
+// Transport-only chat stream for local-first CLI conversations. The CLI owns
+// conversation persistence in local SQLite; the server never reads or writes
+// PostgreSQL chat tables. Full UI message context arrives in the request body.
+export const sessionsRoutes = new Hono().post(
+	"/:id/chat",
+	zValidator("json", chatRequestSchema),
+	async (c) => {
+		const { messages, mode, model, sendReasoning } = c.req.valid("json");
+		const stagedMessages = withChatMetadataForMessages(messages, mode, model);
 		const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
 			dataSchemas: codingAgentDataSchemas,
-			messages: [withChatMetadata(message, mode, model)],
+			messages: stagedMessages,
 			tools: codingServerTools,
 		});
 
 		if (!validation.success) {
-			return c.json({ error: "Invalid chat message" }, 400);
+			return c.json({ error: "Invalid chat messages" }, 400);
 		}
 
-		return c.json(await createChatSession(validation.data, mode, model), 201);
-	})
-	.delete("/:id", zValidator("param", sessionParamsSchema), async (c) => {
-		const { id } = c.req.valid("param");
-		await deleteChatSession(id);
-		return c.body(null, 204);
-	})
-	.get("/:id", zValidator("param", sessionParamsSchema), async (c) => {
-		const { id } = c.req.valid("param");
-		return c.json(await getChatSession(id));
-	})
-	.patch(
-		"/:id",
-		zValidator("param", sessionParamsSchema),
-		zValidator("json", updateSessionRequestSchema),
-		async (c) => {
-			const { id } = c.req.valid("param");
-			const data = c.req.valid("json");
-			await updateChatSession(id, data);
-			return c.body(null, 204);
-		}
-	)
-	.get("/:id/messages", zValidator("param", sessionParamsSchema), async (c) => {
-		const { id } = c.req.valid("param");
-		return c.json({ messages: await getChatMessages(id) });
-	})
-	.post(
-		"/:id/chat",
-		zValidator("param", sessionParamsSchema),
-		zValidator("json", chatRequestSchema),
-		async (c) => {
-			const { id } = c.req.valid("param");
-			const { message, mode, model, sendReasoning } = c.req.valid("json");
-			const persistedMessages = await getChatMessages(id);
-			const messages = mergeChatMessage(
-				persistedMessages,
-				message ? withChatMetadata(message, mode, model) : message
-			);
-			const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
-				dataSchemas: codingAgentDataSchemas,
-				messages,
-				tools: codingServerTools,
-			});
-
-			if (!validation.success) {
-				return c.json({ error: "Invalid chat messages" }, 400);
-			}
-
-			return createChatStreamResponse(
-				id,
-				validation.data,
-				mode,
-				model,
-				sendReasoning
-			);
-		}
-	);
+		const resolvedModel = resolveChatModel(model);
+		return createCodingAgentStreamResponse({
+			model: resolvedModel.model,
+			modelId: resolvedModel.modelId,
+			mode,
+			providerOptions: resolvedModel.providerOptions,
+			sendReasoning,
+			uiMessages: validation.data,
+		});
+	}
+);

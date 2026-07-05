@@ -10,18 +10,18 @@ Read root `AGENTS.md` first. This file adds web-specific scope.
 
 Standard frontend terms apply (no re-mapping needed beyond the core docs):
 
-| Term | Web meaning |
-| ---- | ----------- |
-| `ui/` | React DOM: shadcn/ui components, Tailwind-styled layouts, form sections |
-| `ui/views` | page-level route components |
-| `ui/components` | reusable domain-specific widgets |
-| `hooks/` | TanStack Query hooks and form orchestration hooks |
-| `context/` | auth session context and provider state |
-| `store/` | independent client state when Context is not enough |
-| `utils/` | pure feature helpers and rules |
-| `api/` | tRPC client calls, server communication adapters |
-| `app/` | TanStack Start router, layouts, middleware, root providers |
-| `shared/` | domain-neutral web infrastructure: UI primitives, API transport, auth injection |
+| Term            | Web meaning                                                                     |
+| --------------- | ------------------------------------------------------------------------------- |
+| `ui/`           | React DOM: shadcn/ui components, Tailwind-styled layouts, form sections         |
+| `ui/views`      | page-level route components                                                     |
+| `ui/components` | reusable domain-specific widgets                                                |
+| `hooks/`        | TanStack Query hooks and form orchestration hooks                               |
+| `context/`      | auth session context and provider state                                         |
+| `store/`        | independent client state when Context is not enough                             |
+| `utils/`        | pure feature helpers and rules                                                  |
+| `api/`          | Hono client calls, server communication adapters                                |
+| `app/`          | TanStack Start router, layouts, middleware, root providers                      |
+| `shared/`       | domain-neutral web infrastructure: UI primitives, API transport, auth injection |
 
 ## Verification
 

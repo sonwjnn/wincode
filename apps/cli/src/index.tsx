@@ -34,6 +34,7 @@ declare module "@tanstack/react-router" {
 
 	// biome-ignore lint/style/useConsistentTypeDefinitions: <>
 	interface HistoryState {
+		autoStart?: boolean;
 		mode?: string;
 	}
 }

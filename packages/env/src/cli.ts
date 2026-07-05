@@ -11,7 +11,7 @@ const runtimeEnv = {
 
 export const env = createEnv({
 	server: {
-		SERVER_URL: z.url(),
+		SERVER_URL: z.url().optional(),
 	},
 	runtimeEnv,
 	emptyStringAsUndefined: true,

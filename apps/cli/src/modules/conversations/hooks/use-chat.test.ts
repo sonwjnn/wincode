@@ -31,11 +31,12 @@ const assistantMessage = {
 } satisfies CodingAgentUIMessage;
 
 describe("prepareSendChatRequestBody", () => {
-	test("sends latest user message with mode and model", () => {
+	test("sends full message context with mode and model", () => {
 		expect(prepareSendChatRequestBody("session-1", [userMessage])).toEqual({
-			message: userMessage,
+			messages: [userMessage],
 			mode: "plan",
 			model: "gemini-3.5-flash",
+			persist: false,
 			sendReasoning: true,
 		});
 	});
@@ -44,9 +45,10 @@ describe("prepareSendChatRequestBody", () => {
 		expect(
 			prepareSendChatRequestBody("session-1", [userMessage, assistantMessage])
 		).toEqual({
-			message: assistantMessage,
+			messages: [userMessage, assistantMessage],
 			mode: "plan",
 			model: "gemini-3.5-flash",
+			persist: false,
 			sendReasoning: true,
 		});
 	});
@@ -61,9 +63,10 @@ describe("prepareSendChatRequestBody", () => {
 		expect(
 			prepareSendChatRequestBody("session-1", [userMessage, nextMessage])
 		).toEqual({
-			message: nextMessage,
+			messages: [userMessage, nextMessage],
 			mode: "plan",
 			model: "gemini-3.5-flash",
+			persist: false,
 			sendReasoning: true,
 		});
 	});
@@ -81,9 +84,10 @@ describe("prepareSendChatRequestBody", () => {
 				model: "gpt-5.4-mini",
 			})
 		).toEqual({
-			message: nextMessage,
+			messages: [nextMessage],
 			mode: "build",
 			model: "gpt-5.4-mini",
+			persist: false,
 			sendReasoning: true,
 		});
 	});

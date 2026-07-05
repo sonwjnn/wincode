@@ -23,16 +23,16 @@
 
 Standard frontend terms apply (no re-mapping needed):
 
-| Frontend term | Web mapping |
-| ------------- | ----------- |
-| `ui/`          | React DOM components: shadcn/ui primitives, form layouts, page shells |
-| `hooks/`      | TanStack Query hooks and form orchestration hooks |
-| `context/`    | auth session context and provider state |
-| `store/`      | independent client state when Context is not enough |
-| `utils/`      | pure feature helpers and rules |
-| `api/`         | tRPC client calls, query options, DTO mapping |
-| `app/`         | TanStack Start router, layouts, middleware, root providers |
-| `shared/`      | domain-neutral web infrastructure: UI primitives, API transport, auth token injection |
+| Frontend term | Web mapping                                                                           |
+| ------------- | ------------------------------------------------------------------------------------- |
+| `ui/`         | React DOM components: shadcn/ui primitives, form layouts, page shells                 |
+| `hooks/`      | TanStack Query hooks and form orchestration hooks                                     |
+| `context/`    | auth session context and provider state                                               |
+| `store/`      | independent client state when Context is not enough                                   |
+| `utils/`      | pure feature helpers and rules                                                        |
+| `api/`        | Hono API client calls, query options, DTO mapping                                     |
+| `app/`        | TanStack Start router, layouts, middleware, root providers                            |
+| `shared/`     | domain-neutral web infrastructure: UI primitives, API transport, auth token injection |
 
 ## Public entrypoints
 

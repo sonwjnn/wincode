@@ -5,26 +5,32 @@
   "module": "src/index.tsx",
   "scripts": {
     "dev": "bun run --watch src/index.tsx",
-    "check-types": "tsc --noEmit"
+    "check-types": "tsc --noEmit",
+    "db:local:generate": "drizzle-kit generate --config drizzle.local.config.ts",
+    "db:local:migrate": "drizzle-kit migrate --config drizzle.local.config.ts",
+    "db:local:studio": "drizzle-kit studio --config drizzle.local.config.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "catalog:",
     "@opentui/core": "^0.2.1",
     "@opentui/react": "^0.2.1",
-    "opentui-spinner": "^0.0.6",
-    "ai": "catalog:",
-    "react": "catalog:",
     "@tanstack/react-router": "catalog:",
     "@trpc/client": "catalog:",
     "@trpc/server": "catalog:",
-    "@wincode/env": "workspace:*",
-    "hono": "catalog:",
     "@wincode/ai": "workspace:*",
+    "@wincode/env": "workspace:*",
+    "ai": "catalog:",
+    "drizzle-orm": "^0.45.2",
+    "hono": "catalog:",
+    "opentui-spinner": "^0.0.6",
+    "react": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@libsql/client": "^0.17.4",
+    "@tanstack/router-cli": "1.166.43",
     "@types/bun": "latest",
-    "@tanstack/router-cli": "1.166.43"
+    "drizzle-kit": "^0.31.10"
   },
   "peerDependencies": {
     "typescript": "^5"
