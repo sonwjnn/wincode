@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { COMMANDS } from "./commands";
 
 describe("CommandSpec registry", () => {
-	test("has 10 commands with discriminated kinds", () => {
-		expect(COMMANDS).toHaveLength(10);
+	test("has 9 commands with discriminated kinds", () => {
+		expect(COMMANDS).toHaveLength(9);
 	});
 
 	test("/exit is kind: 'exit'", () => {
@@ -39,14 +39,9 @@ describe("CommandSpec registry", () => {
 		}
 	});
 
-	test("/login is kind: 'unavailable' with message", () => {
-		const cmd = COMMANDS.find((c) => c.value === "/login");
+	test("/connect is kind: 'connect'", () => {
+		const cmd = COMMANDS.find((c) => c.value === "/connect");
 		expect(cmd).toBeDefined();
-		expect(cmd?.kind).toBe("unavailable");
-		if (cmd?.kind === "unavailable") {
-			expect(cmd.message).toBe(
-				"Login is not available in the CLI yet. Use the web app for now."
-			);
-		}
+		expect(cmd?.kind).toBe("connect");
 	});
 });

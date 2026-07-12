@@ -3,12 +3,12 @@ import {
 	HeadContent,
 	Outlet,
 	Scripts,
+	useRouterState,
 } from "@tanstack/react-router";
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 // import { Toaster } from "@wincode-demo/ui/components/sonner";
 
 import Header from "../components/header";
-
 import appCss from "../index.css?url";
 
 // biome-ignore lint/complexity/noBannedTypes: <>
@@ -40,14 +40,19 @@ export const Route = createRootRouteWithContext<RouterAppContext>()({
 });
 
 function RootDocument() {
+	const pathname = useRouterState({
+		select: (state) => state.location.pathname,
+	});
+	const showHeader = pathname !== "/login";
+
 	return (
 		<html className="dark" lang="en">
 			<head>
 				<HeadContent />
 			</head>
-			<body>
-				<div className="grid h-svh grid-rows-[auto_1fr]">
-					<Header />
+			<body className="bg-neutral-950 text-white antialiased">
+				<div className="min-h-svh bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.06),_transparent_40%),linear-gradient(180deg,_rgba(255,255,255,0.02),_transparent_28%)]">
+					{showHeader ? <Header /> : null}
 					<Outlet />
 				</div>
 				{/* <Toaster richColors /> */}

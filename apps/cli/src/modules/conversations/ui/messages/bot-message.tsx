@@ -1,5 +1,10 @@
 import { TextAttributes } from "@opentui/core";
-import type { CodingAgentUIMessage } from "@wincode/ai";
+import {
+	type ChatModelSelection,
+	type CodingAgentUIMessage,
+	findSupportedChatModelSelection,
+	normalizeChatModelSelection,
+} from "@wincode/ai";
 import { EmptyBorder } from "@/shared/constants";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 
@@ -19,8 +24,15 @@ type PartGroup = {
 	type: MessagePart["type"];
 };
 
+type FooterItem = {
+	color: string;
+	label: string;
+	separator?: "dot" | "space";
+};
+
 const CAMEL_CASE_BOUNDARY_REGEX = /([a-z0-9])([A-Z])/g;
 const FIRST_CHARACTER_REGEX = /^./;
+const FOOTER_ICON = "▣";
 
 const formatUnknown = (value: unknown) => {
 	if (value === undefined || value === null) {
@@ -77,7 +89,115 @@ const groupConsecutiveParts = (parts: MessagePart[]): PartGroup[] => {
 	return groups;
 };
 
+export const formatResponseTime = (responseTimeMs: number) => {
+	if (responseTimeMs < 1000) {
+		return `${responseTimeMs}ms`;
+	}
+
+	const totalSeconds = Math.round(responseTimeMs / 1000);
+	if (totalSeconds < 60) {
+		return `${(responseTimeMs / 1000).toFixed(1)}s`;
+	}
+
+	return `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`;
+};
+
+const formatMode = (mode: string) =>
+	`${mode.charAt(0).toUpperCase()}${mode.slice(1)}`;
+
+const formatModel = (model: string | ChatModelSelection) => {
+	const selection = normalizeChatModelSelection(model);
+	if (selection) {
+		return {
+			label:
+				findSupportedChatModelSelection(selection)?.displayName ??
+				selection.modelId,
+			providerId: selection.providerId,
+		};
+	}
+
+	if (typeof model === "string") {
+		return { label: model, providerId: undefined };
+	}
+
+	return { label: model.modelId, providerId: model.providerId };
+};
+
+const renderFooterSeparator = (
+	index: number,
+	item: FooterItem,
+	color: string
+) => {
+	if (index === 0) {
+		return null;
+	}
+
+	return item.separator === "space" ? " " : <span fg={color}> · </span>;
+};
+
+const resolveFooterItems = (
+	message: CodingAgentUIMessage,
+	colors: ReturnType<typeof useTheme>["colors"]
+): FooterItem[] => {
+	const metadata = message.metadata;
+	if (!metadata) {
+		return [];
+	}
+
+	const items: FooterItem[] = [];
+
+	if (metadata.mode) {
+		items.push({
+			color: colors.mode[metadata.mode],
+			label: formatMode(metadata.mode),
+		});
+	}
+
+	const model = metadata.model;
+	if (model) {
+		const { label, providerId } = formatModel(model);
+		items.push({ color: colors.dimSeparator, label });
+		if (!metadata.interrupted && providerId) {
+			items.push({
+				color: colors.dimSeparator,
+				label: providerId,
+				separator: "space",
+			});
+		}
+	}
+
+	if (!metadata.interrupted && metadata.responseTimeMs !== undefined) {
+		items.push({
+			color: colors.dimSeparator,
+			label: formatResponseTime(metadata.responseTimeMs),
+		});
+	}
+
+	if (metadata.interrupted === true) {
+		items.push({ color: colors.dimSeparator, label: "interrupted" });
+	}
+
+	return items;
+};
+
 export function BotMessage({
+	message,
+	parts,
+}: {
+	message: CodingAgentUIMessage;
+	parts: CodingAgentUIMessage["parts"];
+}) {
+	return (
+		<>
+			<BotMessageContent parts={parts} />
+			<box paddingTop={1} width="100%">
+				<BotMessageFooter message={message} />
+			</box>
+		</>
+	);
+}
+
+export function BotMessageContent({
 	parts,
 }: {
 	parts: CodingAgentUIMessage["parts"];
@@ -154,6 +274,33 @@ export function BotMessage({
 					})}
 				</box>
 			))}
+		</box>
+	);
+}
+
+export function BotMessageFooter({
+	message,
+}: {
+	message: CodingAgentUIMessage;
+}) {
+	const { colors } = useTheme();
+	const footerItems = resolveFooterItems(message, colors);
+
+	if (footerItems.length === 0) {
+		return null;
+	}
+
+	return (
+		<box paddingX={3} width="100%">
+			<text>
+				<span fg={colors.primary}>{FOOTER_ICON}</span>{" "}
+				{footerItems.map((item, index) => (
+					<span key={`${item.color}-${item.label}`}>
+						{renderFooterSeparator(index, item, colors.dimSeparator)}
+						<span fg={item.color}>{item.label}</span>
+					</span>
+				))}
+			</text>
 		</box>
 	);
 }

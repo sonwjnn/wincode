@@ -1,4 +1,5 @@
 import type {
+	ConnectAdapter,
 	DialogAdapter,
 	ExitAdapter,
 	ModeAdapter,
@@ -10,6 +11,7 @@ import type { CommandSpec } from "./commands";
 
 export type AdapterMap = {
 	exit: ExitAdapter;
+	connect: ConnectAdapter;
 	new: NewAdapter;
 	dialog: DialogAdapter;
 	models: ModelsAdapter;
@@ -23,6 +25,8 @@ export function createCommandExecutor(adapters: AdapterMap) {
 			case "exit":
 				adapters.exit.execute(spec);
 				break;
+			case "connect":
+				return adapters.connect.execute(spec);
 			case "new":
 				adapters.new.execute(spec);
 				break;

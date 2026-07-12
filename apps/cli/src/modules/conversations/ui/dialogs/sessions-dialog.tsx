@@ -143,7 +143,7 @@ function SessionListItem({
 			overflow="hidden"
 		>
 			{isActiveRoute && (
-				<text marginLeft={1} selectable={false} width={2}>
+				<text fg={fg} marginLeft={1} selectable={false} width={2}>
 					{"\u25cf"}
 				</text>
 			)}

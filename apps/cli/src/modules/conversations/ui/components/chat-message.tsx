@@ -1,5 +1,5 @@
 import { type CodingAgentUIMessage, defaultMode } from "@wincode/ai";
-import { BotMessage, UserMessage } from "../messages";
+import { BotMessageContent, BotMessageFooter, UserMessage } from "../messages";
 
 type TextPart = Extract<
 	CodingAgentUIMessage["parts"][number],
@@ -10,20 +10,40 @@ const isTextPart = (
 	part: CodingAgentUIMessage["parts"][number]
 ): part is TextPart => part.type === "text";
 
-export function ChatMessage({ message }: { message: CodingAgentUIMessage }) {
-	if (message.role === "user") {
-		const text = message.parts
-			.filter(isTextPart)
-			.map((part) => part.text)
-			.join("");
+export function ChatMessage({
+	footerMessage,
+	messages,
+}: {
+	footerMessage?: CodingAgentUIMessage;
+	messages: CodingAgentUIMessage[];
+}) {
+	return (
+		<box alignItems="flex-start" flexDirection="column" width="100%">
+			<box flexDirection="column" gap={1} width="100%">
+				{messages.map((message) => {
+					if (message.role === "user") {
+						const text = message.parts
+							.filter(isTextPart)
+							.map((part) => part.text)
+							.join("");
 
-		return (
-			<UserMessage
-				message={text}
-				mode={message.metadata?.mode ?? defaultMode.value}
-			/>
-		);
-	}
+						return (
+							<UserMessage
+								key={message.id}
+								message={text}
+								mode={message.metadata?.mode ?? defaultMode.value}
+							/>
+						);
+					}
 
-	return <BotMessage parts={message.parts} />;
+					return <BotMessageContent key={message.id} parts={message.parts} />;
+				})}
+			</box>
+			{footerMessage && messages.includes(footerMessage) ? (
+				<box paddingTop={1} width="100%">
+					<BotMessageFooter message={footerMessage} />
+				</box>
+			) : null}
+		</box>
+	);
 }

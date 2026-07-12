@@ -1,12 +1,15 @@
 import { useKeyboard } from "@opentui/react";
-import type { CodingAgentUIMessage } from "@wincode/ai";
+import {
+	type CodingAgentUIMessage,
+	normalizeChatModelSelection,
+} from "@wincode/ai";
 import { useEffect, useRef, useState } from "react";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { useChat } from "../../hooks/use-chat";
-import { shouldAutoStartAssistantTurn } from "../../utils";
+import { getLatestChatConfig, shouldAutoStartAssistantTurn } from "../../utils";
 import { ChatShell } from "../components/chat-shell";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
 
@@ -27,7 +30,7 @@ export function ChatView({
 	sessionId,
 	sessionTitle,
 }: ChatScreenProps) {
-	const { mode, model } = usePromptConfig();
+	const { mode, model, setMode, setModel } = usePromptConfig();
 	const { isTopLayer } = useKeyboardLayer();
 	const dialog = useDialog();
 	const { show } = useToast();
@@ -48,6 +51,16 @@ export function ChatView({
 		submit,
 	} = useChat(sessionId, initialMessages);
 	const isBusy = status === "submitted" || status === "streaming";
+
+	useEffect(() => {
+		const config = getLatestChatConfig(initialMessages);
+		if (!config) {
+			return;
+		}
+
+		setMode(config.mode);
+		setModel(config.model);
+	}, [initialMessages, setMode, setModel]);
 
 	useEffect(
 		() => () => {
@@ -190,7 +203,9 @@ export function ChatView({
 		submittedInitialMessageRef.current = lastInitialMessage.id;
 		continueLastMessage(
 			lastInitialMessage.metadata?.mode ?? mode,
-			lastInitialMessage.metadata?.model ?? model
+			normalizeChatModelSelection(
+				lastInitialMessage.metadata?.model ?? model
+			) ?? model
 		).catch(() => undefined);
 	}, [
 		autoStart,

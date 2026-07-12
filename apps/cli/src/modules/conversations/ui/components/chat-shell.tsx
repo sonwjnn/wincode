@@ -6,9 +6,13 @@ import { Spinner } from "@/shared/ui/spinner";
 import { ErrorMessage } from "../messages";
 import { ChatMessage } from "./chat-message";
 import { ChatTextArea } from "./chat-text-area";
+import {
+	groupMessagesByConversationTurn,
+	resolveConversationTurnFooterMessages,
+} from "./chat-turns";
 
 type ChatShellProps = {
-	error?: Error;
+	error?: unknown;
 	isBusy: boolean;
 	isInterruptArmed: boolean;
 	messages: CodingAgentUIMessage[];
@@ -24,6 +28,8 @@ export function ChatShell({
 }: ChatShellProps) {
 	const { mode } = usePromptConfig();
 	const { colors } = useTheme();
+	const turns = groupMessagesByConversationTurn(messages);
+	const footerMessages = resolveConversationTurnFooterMessages(turns);
 
 	return (
 		<box
@@ -40,11 +46,15 @@ export function ChatShell({
 					{messages.length === 0 && !error ? (
 						<text attributes={TextAttributes.DIM}>No messages yet.</text>
 					) : (
-						messages.map((message) => (
-							<ChatMessage key={message.id} message={message} />
+						turns.map((turn) => (
+							<ChatMessage
+								footerMessage={footerMessages.get(turn.id)}
+								key={turn.id}
+								messages={turn.messages}
+							/>
 						))
 					)}
-					{error ? <ErrorMessage message={error.message} /> : null}
+					{error ? <ErrorMessage error={error} /> : null}
 				</box>
 			</scrollbox>
 

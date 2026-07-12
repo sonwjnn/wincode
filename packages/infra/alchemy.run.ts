@@ -17,10 +17,13 @@ export const web = await TanStackStart("web", {
 		CORS_ORIGIN: alchemy.env.CORS_ORIGIN!,
 		BETTER_AUTH_SECRET: alchemy.secret.env.BETTER_AUTH_SECRET!,
 		BETTER_AUTH_URL: alchemy.env.BETTER_AUTH_URL!,
+		GITHUB_CLIENT_ID: alchemy.secret.env.GITHUB_CLIENT_ID!,
+		GITHUB_CLIENT_SECRET: alchemy.secret.env.GITHUB_CLIENT_SECRET!,
 		GOOGLE_GENERATIVE_AI_API_KEY:
 			alchemy.secret.env.GOOGLE_GENERATIVE_AI_API_KEY!,
-		POLAR_ACCESS_TOKEN: alchemy.secret.env.POLAR_ACCESS_TOKEN!,
-		POLAR_SUCCESS_URL: alchemy.env.POLAR_SUCCESS_URL!,
+		WINCODE_API_KEY_PEPPER: alchemy.secret.env.WINCODE_API_KEY_PEPPER!,
+		GOOGLE_CLIENT_ID: alchemy.secret.env.GOOGLE_CLIENT_ID!,
+		GOOGLE_CLIENT_SECRET: alchemy.secret.env.GOOGLE_CLIENT_SECRET!,
 	},
 });
 // biome-ignore-end lint/style/noNonNullAssertion: env vars are validated at runtime

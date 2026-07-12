@@ -22,4 +22,5 @@ export type {
 } from "./message";
 export * from "./models";
 export * from "./modes";
+export { sanitizeInterruptedMessagesForModel } from "./sanitize-interrupted-messages";
 export * from "./tools/schemas";

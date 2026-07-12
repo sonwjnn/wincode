@@ -16,6 +16,7 @@ import type { DialogConfig } from "./types";
 export type DialogContextValue = {
 	open: (config: DialogConfig) => void;
 	close: () => void;
+	closeAll: () => void;
 };
 
 const DialogContext = createContext<DialogContextValue | null>(null);
@@ -55,6 +56,7 @@ type DialogProviderProps = {
 
 export function DialogProvider({ children }: DialogProviderProps) {
 	const [dialogStack, setDialogStack] = useState<DialogConfig[]>([]);
+	const dialogStackRef = useRef<DialogConfig[]>([]);
 	const layerIdsRef = useRef<string[]>([]);
 	const counter = useRef(0);
 	const { push, pop } = useKeyboardLayer();
@@ -64,6 +66,7 @@ export function DialogProvider({ children }: DialogProviderProps) {
 		(updater: (prev: DialogConfig[]) => DialogConfig[]) => {
 			setDialogStack((prev) => {
 				const next = updater(prev);
+				dialogStackRef.current = next;
 				layerIdsRef.current = next.map((d) => d.layerId ?? "");
 				return next;
 			});
@@ -79,6 +82,24 @@ export function DialogProvider({ children }: DialogProviderProps) {
 		pop(topId);
 		updateStack((prev) => prev.slice(0, -1));
 	}, [pop, updateStack]);
+
+	const closeAll = useCallback(() => {
+		const currentStack = dialogStackRef.current;
+		if (currentStack.length === 0) {
+			return;
+		}
+
+		layerIdsRef.current = [];
+		dialogStackRef.current = [];
+		setDialogStack([]);
+
+		for (let index = currentStack.length - 1; index >= 0; index -= 1) {
+			const layerId = currentStack[index]?.layerId;
+			if (layerId) {
+				pop(layerId);
+			}
+		}
+	}, [pop]);
 
 	const open = useCallback(
 		(config: DialogConfig) => {
@@ -103,6 +124,7 @@ export function DialogProvider({ children }: DialogProviderProps) {
 	const value: DialogContextValue = {
 		open,
 		close,
+		closeAll,
 	};
 
 	return (
@@ -128,7 +150,7 @@ type DialogProps = {
 	zIndex: number;
 };
 
-function Dialog({ config, close, zIndex }: DialogProps) {
+function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 	const dimensions = useTerminalDimensions();
 	const { colors } = useTheme();
 
@@ -143,21 +165,27 @@ function Dialog({ config, close, zIndex }: DialogProps) {
 	const titleMarRight = titleMargin?.right ?? 0;
 	const titleMarTop = titleMargin?.top ?? 0;
 	const titleMarBottom = titleMargin?.bottom ?? 0;
+	const backdropColor = isTop ? RGBA.fromInts(0, 0, 0, 150) : undefined;
 
-	const width =
+	const defaultWidth =
 		dimensions.width >= 120
 			? Math.floor(dimensions.width * 0.67)
 			: Math.min(100, dimensions.width - 2);
+	const maxWidth = Math.max(1, dimensions.width - 2);
+	const width =
+		config.width === undefined
+			? defaultWidth
+			: Math.max(1, Math.min(config.width, maxWidth));
 
 	return (
 		// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events.
 		<box
 			alignItems="center"
-			backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
+			backgroundColor={backdropColor}
 			height={dimensions.height}
 			justifyContent="center"
 			left={0}
-			onMouseDown={() => close()}
+			onMouseDown={isTop ? () => close() : undefined}
 			position="absolute"
 			top={0}
 			width={dimensions.width}

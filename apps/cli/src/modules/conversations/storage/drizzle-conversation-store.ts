@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import type {
+	ChatModelSelection,
 	CodingAgentUIMessage,
 	ModeType,
-	SupportedChatModelId,
 } from "@wincode/ai";
 import { generateId, safeValidateUIMessages } from "ai";
 import { and, asc, desc, eq } from "drizzle-orm";
@@ -83,7 +83,7 @@ const resolveMode = (
 const resolveMetadata = (
 	message: CodingAgentUIMessage,
 	mode: ModeType,
-	model: SupportedChatModelId
+	model: ChatModelSelection
 ): CodingAgentUIMessage["metadata"] => ({
 	...(message.metadata ?? {}),
 	mode: message.metadata?.mode ?? mode,

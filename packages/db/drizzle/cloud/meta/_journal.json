@@ -8,6 +8,34 @@
       "when": 1783273895384,
       "tag": "0000_eager_ricochet",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1783770136178,
+      "tag": "0001_mature_proemial_gods",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783791470618,
+      "tag": "0002_colorful_eternals",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783830000000,
+      "tag": "0003_secure_hosted_api_keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1783811061408,
+      "tag": "0005_append_chat_write_to_wincode_cli",
+      "breakpoints": true
     }
   ]
 }

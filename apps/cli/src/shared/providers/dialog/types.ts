@@ -11,6 +11,7 @@ export type DialogConfig = {
 	title: string;
 	children: ReactNode;
 	layerId?: string;
+	width?: number;
 	padding?: DialogPadding;
 	titleMargin?: DialogPadding;
 };

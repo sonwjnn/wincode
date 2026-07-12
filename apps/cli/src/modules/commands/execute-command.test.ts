@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	ConnectAdapter,
 	DialogAdapter,
 	ExitAdapter,
 	ModeAdapter,
@@ -18,11 +19,12 @@ describe("createCommandExecutor", () => {
 					destroyed = true;
 				},
 			}),
+			connect: new ConnectAdapter({ open: async () => undefined }),
 			new: new NewAdapter({ navigateHome: () => undefined }),
 			dialog: new DialogAdapter({ open: () => undefined }),
 			models: new ModelsAdapter({
 				open: () => undefined,
-				currentModel: "gpt-5.5",
+				currentModel: { modelId: "gpt-5.5", providerId: "openai" },
 				setModel: () => undefined,
 			}),
 			mode: new ModeAdapter({
@@ -46,11 +48,12 @@ describe("createCommandExecutor", () => {
 		const messages: string[] = [];
 		const executor = createCommandExecutor({
 			exit: new ExitAdapter({ destroy: () => undefined }),
+			connect: new ConnectAdapter({ open: async () => undefined }),
 			new: new NewAdapter({ navigateHome: () => undefined }),
 			dialog: new DialogAdapter({ open: () => undefined }),
 			models: new ModelsAdapter({
 				open: () => undefined,
-				currentModel: "gpt-5.5",
+				currentModel: { modelId: "gpt-5.5", providerId: "openai" },
 				setModel: () => undefined,
 			}),
 			mode: new ModeAdapter({
@@ -62,13 +65,47 @@ describe("createCommandExecutor", () => {
 		});
 
 		await executor({
-			value: "/login",
-			name: "login",
+			value: "/connect",
+			name: "connect",
 			description: "",
 			kind: "unavailable",
 			message: "Nope",
 		});
 		expect(messages).toEqual(["Nope"]);
+	});
+
+	test("dispatches connect command to connect adapter", async () => {
+		let loggedIn = false;
+		const executor = createCommandExecutor({
+			exit: new ExitAdapter({ destroy: () => undefined }),
+			connect: new ConnectAdapter({
+				open: () => {
+					loggedIn = true;
+					return Promise.resolve();
+				},
+			}),
+			new: new NewAdapter({ navigateHome: () => undefined }),
+			dialog: new DialogAdapter({ open: () => undefined }),
+			models: new ModelsAdapter({
+				open: () => undefined,
+				currentModel: { modelId: "gpt-5.5", providerId: "openai" },
+				setModel: () => undefined,
+			}),
+			mode: new ModeAdapter({
+				open: () => undefined,
+				currentMode: "build",
+				setMode: () => undefined,
+			}),
+			unavailable: new UnavailableAdapter({ show: () => undefined }),
+		});
+
+		await executor({
+			value: "/connect",
+			name: "connect",
+			description: "",
+			kind: "connect",
+		});
+		expect(loggedIn).toBe(true);
 	});
 
 	test("throws when adapter throws", () => {
@@ -78,11 +115,12 @@ describe("createCommandExecutor", () => {
 					throw new Error("boom");
 				},
 			}),
+			connect: new ConnectAdapter({ open: async () => undefined }),
 			new: new NewAdapter({ navigateHome: () => undefined }),
 			dialog: new DialogAdapter({ open: () => undefined }),
 			models: new ModelsAdapter({
 				open: () => undefined,
-				currentModel: "gpt-5.5",
+				currentModel: { modelId: "gpt-5.5", providerId: "openai" },
 				setModel: () => undefined,
 			}),
 			mode: new ModeAdapter({

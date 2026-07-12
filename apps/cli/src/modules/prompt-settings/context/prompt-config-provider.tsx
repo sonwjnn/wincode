@@ -1,18 +1,18 @@
 import {
-	defaultChatModel,
+	type ChatModelSelection,
+	defaultChatModelSelection,
 	defaultMode,
 	getNextCodingModeName,
 	type ModeType,
-	type SupportedChatModelId,
 } from "@wincode/ai";
 import { createContext, type ReactNode, useContext, useState } from "react";
 
 type PromptConfig = {
 	cycleMode: () => void;
 	mode: ModeType;
-	model: SupportedChatModelId;
+	model: ChatModelSelection;
 	setMode: (mode: ModeType) => void;
-	setModel: (model: SupportedChatModelId) => void;
+	setModel: (model: ChatModelSelection) => void;
 };
 
 const PromptConfigContext = createContext<PromptConfig | null>(null);
@@ -20,15 +20,15 @@ const PromptConfigContext = createContext<PromptConfig | null>(null);
 type PromptConfigProviderProps = {
 	children: ReactNode;
 	initialMode?: ModeType;
-	initialModel?: SupportedChatModelId;
+	initialModel?: ChatModelSelection;
 };
 export function PromptConfigProvider({
 	children,
 	initialMode = defaultMode.value,
-	initialModel = defaultChatModel.value,
+	initialModel = defaultChatModelSelection,
 }: PromptConfigProviderProps) {
 	const [mode, setModeName] = useState<ModeType>(initialMode);
-	const [model, setModel] = useState<SupportedChatModelId>(initialModel);
+	const [model, setModel] = useState<ChatModelSelection>(initialModel);
 
 	const cycleMode = () => {
 		setModeName((currentModeName) => getNextCodingModeName(currentModeName));

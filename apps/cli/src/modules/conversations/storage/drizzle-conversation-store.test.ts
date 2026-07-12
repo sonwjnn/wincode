@@ -14,7 +14,10 @@ import {
 
 const userMessage = (id: string, text: string): CodingAgentUIMessage => ({
 	id,
-	metadata: { mode: "plan", model: "gemini-3.5-flash" },
+	metadata: {
+		mode: "plan",
+		model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+	},
 	parts: [{ text, type: "text" }],
 	role: "user",
 });
@@ -40,7 +43,7 @@ describe("drizzle conversation store", () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "Fix the login bug"),
 			mode: "plan",
-			model: "gemini-3.5-flash",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 
 		const session = await store.getSession(id);
@@ -53,7 +56,7 @@ describe("drizzle conversation store", () => {
 		await store.createSession({
 			message: userMessage("m1", "First"),
 			mode: "plan",
-			model: "gemini-3.5-flash",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 
 		const sessions = await store.listSessions();
@@ -72,12 +75,12 @@ describe("drizzle conversation store", () => {
 		await alphaStore.createSession({
 			message: userMessage("m1", "Alpha"),
 			mode: "plan",
-			model: "gemini-3.5-flash",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 		await betaStore.createSession({
 			message: userMessage("m2", "Beta"),
 			mode: "plan",
-			model: "gemini-3.5-flash",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 
 		expect((await alphaStore.listSessions()).map((s) => s.title)).toEqual([
@@ -93,13 +96,13 @@ describe("drizzle conversation store", () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "hello"),
 			mode: "plan",
-			model: "gemini-3.5-flash",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 
 		await store.persistMessages({
 			messages: [userMessage("m1", "hello"), userMessage("m2", "world")],
 			mode: "plan",
-			model: "gemini-3.5-flash",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 			sessionId: id,
 		});
 
@@ -107,17 +110,49 @@ describe("drizzle conversation store", () => {
 		expect(messages.map((m) => m.id)).toEqual(["m1", "m2"]);
 	});
 
+	test("preserves assistant response metadata", async () => {
+		const { id } = await store.createSession({
+			message: userMessage("m1", "hello"),
+			mode: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+
+		await store.persistMessages({
+			messages: [
+				userMessage("m1", "hello"),
+				{
+					id: "m2",
+					metadata: {
+						interrupted: true,
+						mode: "plan",
+						model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+						responseTimeMs: 431,
+					},
+					parts: [{ text: "done", type: "text" }],
+					role: "assistant",
+				},
+			],
+			mode: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+			sessionId: id,
+		});
+
+		const messages = await store.getMessages(id);
+		expect(messages.at(-1)?.metadata?.interrupted).toBeTrue();
+		expect(messages.at(-1)?.metadata?.responseTimeMs).toBe(431);
+	});
+
 	test("upserts messages idempotently by ui message id", async () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "hello"),
 			mode: "plan",
-			model: "gemini-3.5-flash",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 
 		await store.persistMessages({
 			messages: [userMessage("m1", "hello edited")],
 			mode: "plan",
-			model: "gemini-3.5-flash",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 			sessionId: id,
 		});
 
@@ -129,7 +164,7 @@ describe("drizzle conversation store", () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "hello"),
 			mode: "plan",
-			model: "gemini-3.5-flash",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 
 		await store.updateSession(id, { pinned: true, title: "Renamed" });
@@ -143,7 +178,7 @@ describe("drizzle conversation store", () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "hello"),
 			mode: "plan",
-			model: "gemini-3.5-flash",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 
 		await store.deleteSession(id);

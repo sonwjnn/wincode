@@ -1,4 +1,4 @@
-import type { SupportedChatModel, SupportedChatModelId } from "@wincode/ai";
+import type { ChatModelSelection, SupportedChatModel } from "@wincode/ai";
 import { useCallback } from "react";
 import {
 	useDialog,
@@ -7,9 +7,9 @@ import {
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 
 type ModelsDialogContentProps = {
-	currentModel?: SupportedChatModelId;
+	currentModel?: ChatModelSelection;
 	models: readonly SupportedChatModel[];
-	onSelectModel: (modelId: SupportedChatModelId) => void;
+	onSelectModel: (model: ChatModelSelection) => void;
 };
 
 export const ModelsDialogContent = ({
@@ -21,7 +21,10 @@ export const ModelsDialogContent = ({
 
 	const handleSelect = useCallback(
 		(model: SupportedChatModel) => {
-			onSelectModel(model.id);
+			onSelectModel({
+				modelId: model.id,
+				providerId: model.connectionProviderId,
+			} as ChatModelSelection);
 			dialog.close();
 		},
 		[dialog, onSelectModel]
@@ -37,14 +40,17 @@ export const ModelsDialogContent = ({
 					.toLowerCase()
 					.includes(query.toLowerCase())
 			}
-			getKey={(model) => model.id}
+			getKey={(model) => `${model.connectionProviderId}:${model.id}`}
 			items={models}
 			onSelect={handleSelect}
 			placeholder="Search models"
 			renderItem={(model, isSelected) => (
 				<text fg={isSelected ? "black" : "white"} selectable={false}>
-					{model.id === currentModel ? " • " : "   "}
-					{model.displayName}
+					{model.id === currentModel?.modelId &&
+					model.connectionProviderId === currentModel?.providerId
+						? " • "
+						: "   "}
+					{model.displayName} · {model.connectionProviderId}
 				</text>
 			)}
 		/>

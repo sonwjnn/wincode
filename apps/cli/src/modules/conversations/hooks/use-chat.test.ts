@@ -2,22 +2,23 @@ import { describe, expect, test } from "bun:test";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import { prepareSendChatRequestBody } from "../api/chat-request";
 
+const selection = {
+	modelId: "gemini-2.5-flash",
+	providerId: "wincode",
+} as const;
+
+const legacyModel = "gemini-3.5-flash";
+
 const userMessage = {
 	id: "user-1",
-	metadata: {
-		mode: "plan",
-		model: "gemini-3.5-flash",
-	},
+	metadata: { mode: "plan", model: legacyModel },
 	parts: [{ text: "hello", type: "text" }],
 	role: "user",
-} satisfies CodingAgentUIMessage;
+} as unknown as CodingAgentUIMessage;
 
 const assistantMessage = {
 	id: "assistant-1",
-	metadata: {
-		mode: "plan",
-		model: "gemini-3.5-flash",
-	},
+	metadata: { mode: "plan", model: selection },
 	parts: [
 		{
 			input: { path: "README.md" },
@@ -28,44 +29,26 @@ const assistantMessage = {
 		},
 	],
 	role: "assistant",
-} satisfies CodingAgentUIMessage;
+} as unknown as CodingAgentUIMessage;
 
 describe("prepareSendChatRequestBody", () => {
-	test("sends full message context with mode and model", () => {
+	test("normalizes legacy model metadata", () => {
 		expect(prepareSendChatRequestBody("session-1", [userMessage])).toEqual({
 			messages: [userMessage],
 			mode: "plan",
-			model: "gemini-3.5-flash",
+			model: "gemini-2.5-flash",
 			persist: false,
 			sendReasoning: true,
 		});
 	});
 
-	test("sends updated assistant message after local tool output", () => {
+	test("keeps canonical selection metadata", () => {
 		expect(
 			prepareSendChatRequestBody("session-1", [userMessage, assistantMessage])
 		).toEqual({
 			messages: [userMessage, assistantMessage],
 			mode: "plan",
-			model: "gemini-3.5-flash",
-			persist: false,
-			sendReasoning: true,
-		});
-	});
-
-	test("falls back to previous metadata when latest message has none", () => {
-		const nextMessage = {
-			id: "user-2",
-			parts: [{ text: "continue", type: "text" }],
-			role: "user",
-		} satisfies CodingAgentUIMessage;
-
-		expect(
-			prepareSendChatRequestBody("session-1", [userMessage, nextMessage])
-		).toEqual({
-			messages: [userMessage, nextMessage],
-			mode: "plan",
-			model: "gemini-3.5-flash",
+			model: "gemini-2.5-flash",
 			persist: false,
 			sendReasoning: true,
 		});
@@ -76,17 +59,17 @@ describe("prepareSendChatRequestBody", () => {
 			id: "user-2",
 			parts: [{ text: "continue", type: "text" }],
 			role: "user",
-		} satisfies CodingAgentUIMessage;
+		} as unknown as CodingAgentUIMessage;
 
 		expect(
 			prepareSendChatRequestBody("session-1", [nextMessage], {
 				mode: "build",
-				model: "gpt-5.4-mini",
+				model: selection,
 			})
 		).toEqual({
 			messages: [nextMessage],
 			mode: "build",
-			model: "gpt-5.4-mini",
+			model: "gemini-2.5-flash",
 			persist: false,
 			sendReasoning: true,
 		});

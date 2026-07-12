@@ -1,14 +1,15 @@
-import { type SupportedChatModelId, supportedChatModels } from "@wincode/ai";
+import type { ChatModelSelection } from "@wincode/ai";
+import { supportedChatModels } from "@wincode/ai";
 import type { CommandSpec } from "../commands";
 
 export type ModelsAdapterContext = {
 	open: (props: {
 		models: typeof supportedChatModels;
-		currentModel: SupportedChatModelId;
-		onSelectModel: (model: SupportedChatModelId) => void;
+		currentModel: ChatModelSelection;
+		onSelectModel: (model: ChatModelSelection) => void;
 	}) => void;
-	currentModel: SupportedChatModelId;
-	setModel: (model: SupportedChatModelId) => void;
+	currentModel: ChatModelSelection;
+	setModel: (model: ChatModelSelection) => void;
 };
 
 export class ModelsAdapter {

@@ -11,8 +11,10 @@ import { authClient } from "@/lib/auth-client";
 import Loader from "./loader";
 
 export default function SignUpForm({
+	isOAuthFlow,
 	onSwitchToSignIn,
 }: {
+	isOAuthFlow: boolean;
 	onSwitchToSignIn: () => void;
 }) {
 	const navigate = useNavigate({
@@ -35,8 +37,11 @@ export default function SignUpForm({
 				},
 				{
 					onSuccess: () => {
+						if (isOAuthFlow) {
+							return;
+						}
 						navigate({
-							to: "/dashboard",
+							to: "/",
 						});
 						toast.success("Sign up successful");
 					},

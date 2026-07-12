@@ -1,0 +1,63 @@
+import { TextAttributes } from "@opentui/core";
+import { useCallback } from "react";
+import { useDialogEscape } from "@/shared/providers/dialog/dialog-provider";
+import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
+import type { ProviderId } from "../types";
+import {
+	CONNECTION_LABEL_COLUMN_WIDTH,
+	type ConnectionMethodOption,
+	getConnectionMethodOptions,
+} from "./connection-dialog-options";
+
+type ConnectionMethodPickerDialogContentProps = {
+	providerId: ProviderId;
+	onSelectMethod: (methodId: "browser" | "api-key") => void;
+};
+
+export function ConnectionMethodPickerDialogContent({
+	providerId,
+	onSelectMethod,
+}: ConnectionMethodPickerDialogContentProps) {
+	const methods = getConnectionMethodOptions(providerId);
+
+	const handleSelect = useCallback(
+		(method: ConnectionMethodOption) => {
+			onSelectMethod(method.id);
+		},
+		[onSelectMethod]
+	);
+
+	useDialogEscape();
+
+	return (
+		<SearchListDialogWrapper<ConnectionMethodOption>
+			emptyText="No available methods"
+			filterFn={(method, query) => {
+				const value = `${method.label} ${method.details}`;
+				return value.toLowerCase().includes(query.toLowerCase());
+			}}
+			getKey={(method) => method.id}
+			items={methods}
+			onSelect={handleSelect}
+			placeholder="Search methods"
+			renderItem={(method, isSelected) => (
+				<box flexDirection="row" flexGrow={1} gap={1}>
+					<box flexShrink={0} width={CONNECTION_LABEL_COLUMN_WIDTH}>
+						<text fg={isSelected ? "black" : "white"} selectable={false}>
+							{method.label}
+						</text>
+					</box>
+					<box flexGrow={1} flexShrink={1} overflow="hidden">
+						<text
+							attributes={isSelected ? undefined : TextAttributes.DIM}
+							fg={isSelected ? "black" : "#9AA0A6"}
+							selectable={false}
+						>
+							{method.details}
+						</text>
+					</box>
+				</box>
+			)}
+		/>
+	);
+}

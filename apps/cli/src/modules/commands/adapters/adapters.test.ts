@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	ConnectAdapter,
 	DialogAdapter,
 	ExitAdapter,
 	ModeAdapter,
@@ -44,6 +45,25 @@ describe("NewAdapter", () => {
 	});
 });
 
+describe("ConnectAdapter", () => {
+	test("opens connect flow", async () => {
+		let called = false;
+		const adapter = new ConnectAdapter({
+			open: () => {
+				called = true;
+				return Promise.resolve();
+			},
+		});
+		await adapter.execute({
+			value: "/connect",
+			name: "connect",
+			description: "",
+			kind: "connect",
+		});
+		expect(called).toBe(true);
+	});
+});
+
 describe("UnavailableAdapter", () => {
 	test("shows message from spec", () => {
 		const messages: string[] = [];
@@ -51,8 +71,8 @@ describe("UnavailableAdapter", () => {
 			show: (message: string) => messages.push(message),
 		});
 		adapter.execute({
-			value: "/login",
-			name: "login",
+			value: "/connect",
+			name: "connect",
 			description: "",
 			kind: "unavailable",
 			message: "Not available",
@@ -83,8 +103,8 @@ describe("ModelsAdapter", () => {
 		const calls: unknown[] = [];
 		const adapter = new ModelsAdapter({
 			open: (props: unknown) => calls.push(props),
-			currentModel: "gpt-5.5",
-			setModel: (model: string) => calls.push({ setModel: model }),
+			currentModel: { modelId: "gpt-5.5", providerId: "openai" },
+			setModel: (model: unknown) => calls.push({ setModel: model }),
 		});
 		adapter.execute({
 			value: "/models",

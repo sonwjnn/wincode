@@ -1,10 +1,11 @@
 import { TextAttributes } from "@opentui/core";
 import { useRouter } from "@tanstack/react-router";
 import { createUserMessage } from "@wincode/ai/client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { getConversationStore } from "../../storage/get-conversation-store";
+import { getLatestChatConfig, getMostRecentSession } from "../../utils";
 import { AsciiArt } from "../components/ascii-art";
 import { ChatTextArea } from "../components/chat-text-area";
 
@@ -12,7 +13,33 @@ export function HomeView() {
 	const router = useRouter();
 	const [_error, setError] = useState<string | null>(null);
 	const [isCreatingSession, setIsCreatingSession] = useState(false);
-	const { mode, model } = usePromptConfig();
+	const { mode, model, setMode, setModel } = usePromptConfig();
+
+	useEffect(() => {
+		let ignore = false;
+
+		const restoreLatestSessionConfig = async () => {
+			const store = getConversationStore();
+			const session = getMostRecentSession(await store.listSessions());
+			if (!session) {
+				return;
+			}
+
+			const config = getLatestChatConfig(await store.getMessages(session.id));
+			if (ignore || !config) {
+				return;
+			}
+
+			setMode(config.mode);
+			setModel(config.model);
+		};
+
+		restoreLatestSessionConfig().catch(() => undefined);
+
+		return () => {
+			ignore = true;
+		};
+	}, [setMode, setModel]);
 
 	const handleSubmit = async (input: string) => {
 		if (isCreatingSession) {

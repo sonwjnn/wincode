@@ -3,6 +3,7 @@ type BaseSpec = { value: string; name: string; description: string };
 export type CommandSpec = BaseSpec &
 	(
 		| { kind: "exit" }
+		| { kind: "connect" }
 		| { kind: "new" }
 		| { kind: "dialog"; dialogKey: "sessions" | "theme" }
 		| { kind: "models" }
@@ -44,18 +45,10 @@ export const COMMANDS: CommandSpec[] = [
 		dialogKey: "theme",
 	},
 	{
-		description: "Sign in with your browser",
-		name: "login",
-		value: "/login",
-		kind: "unavailable",
-		message: "Login is not available in the CLI yet. Use the web app for now.",
-	},
-	{
-		description: "Sign out of your account",
-		name: "logout",
-		value: "/logout",
-		kind: "unavailable",
-		message: "Logout is not available in the CLI yet. Use the web app for now.",
+		description: "Connect an account or API key",
+		name: "connect",
+		value: "/connect",
+		kind: "connect",
 	},
 	{
 		description: "Buy more credits",

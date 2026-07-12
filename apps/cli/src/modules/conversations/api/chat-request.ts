@@ -1,26 +1,47 @@
 import type {
+	ChatModelSelection,
 	CodingAgentUIMessage,
 	ModeType,
-	SupportedChatModelId,
 } from "@wincode/ai";
 
 type SendChatRequestBody = {
 	messages: CodingAgentUIMessage[];
 	mode: ModeType;
-	model: SupportedChatModelId;
+	model: string;
 	persist: false;
 	sendReasoning: true;
 };
 
 type ChatMetadataFallback = {
 	mode: ModeType;
-	model: SupportedChatModelId;
+	model: ChatModelSelection;
 };
 
 const findLastChatMetadata = (messages: CodingAgentUIMessage[]) =>
 	messages.findLast(
 		(message) => message.metadata?.mode && message.metadata.model
 	)?.metadata;
+
+const normalizeSelection = (model: unknown): ChatModelSelection | null => {
+	if (
+		typeof model === "object" &&
+		model &&
+		"modelId" in model &&
+		"providerId" in model
+	) {
+		return model as ChatModelSelection;
+	}
+
+	if (String(model) === "gemini-3.5-flash") {
+		return { modelId: "gemini-2.5-flash", providerId: "wincode" };
+	}
+
+	if (model === "gpt-5.4-mini") {
+		return { modelId: "gpt-5.4-mini", providerId: "wincode" };
+	}
+
+	return null;
+};
 
 export const prepareSendChatRequestBody = (
 	_sessionId: string,
@@ -35,16 +56,23 @@ export const prepareSendChatRequestBody = (
 
 	const metadata = findLastChatMetadata(messages);
 	const mode = message.metadata?.mode ?? metadata?.mode ?? fallback?.mode;
-	const model = message.metadata?.model ?? metadata?.model ?? fallback?.model;
+	const model =
+		normalizeSelection(message.metadata?.model) ??
+		normalizeSelection(metadata?.model) ??
+		fallback?.model;
 
 	if (!(mode && model)) {
 		throw new Error("No chat mode or model to send");
 	}
 
+	if (model.providerId !== "wincode") {
+		throw new Error(`Connect ${model.providerId} with /connect`);
+	}
+
 	return {
 		messages,
 		mode,
-		model,
+		model: model.modelId,
 		persist: false,
 		sendReasoning: true,
 	};

@@ -13,7 +13,9 @@ import {
 import type { CodingAgentUIMessage } from "../message";
 import type { SupportedChatModelId } from "../models";
 import { defaultMode, type ModeType } from "../modes";
+import { sanitizeInterruptedMessagesForModel } from "../sanitize-interrupted-messages";
 import { createCodingAgent } from "./agent";
+import { getProviderErrorMessage } from "./error-message";
 
 type CreateCodingAgentStreamResponseOptions = {
 	mode?: ModeType;
@@ -34,7 +36,9 @@ export const createCodingAgentStreamResponse = ({
 	sendReasoning = true,
 	uiMessages,
 }: CreateCodingAgentStreamResponseOptions) => {
-	const modelMessages = expandFileMentionPartsForModel(uiMessages);
+	const modelMessages = expandFileMentionPartsForModel(
+		sanitizeInterruptedMessagesForModel(uiMessages)
+	);
 	const handleFinish: UIMessageStreamOnFinishCallback<
 		CodingAgentModelUIMessage
 	> = async ({ messages, responseMessage, ...event }) => {
@@ -61,6 +65,7 @@ export const createCodingAgentStreamResponse = ({
 			size: 16,
 		}),
 		onFinish: handleFinish,
+		onError: getProviderErrorMessage,
 		options: { mode, model: modelId },
 		originalMessages: modelMessages,
 		sendReasoning,

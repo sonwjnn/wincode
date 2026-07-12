@@ -8,6 +8,7 @@ import {
 	codingToolDefinitions,
 	codingToolSchemas,
 	defaultChatModel,
+	defaultChatModelSelection,
 	defaultMode,
 	expandFileMentionPartsForModel,
 	findSupportedChatModel,
@@ -16,6 +17,7 @@ import {
 	parseMode,
 	type ReadInput,
 	type ReadOutput,
+	sanitizeInterruptedMessagesForModel,
 	supportedChatModelIds,
 	supportedChatModels,
 } from "@wincode/ai";
@@ -81,12 +83,18 @@ describe("@wincode/ai shared entry", () => {
 		expect(
 			createUserMessage("hello", {
 				mode: "plan",
-				model: "gemini-3.5-flash",
+				model: {
+					modelId: "gpt-5.4-mini",
+					providerId: "wincode",
+				},
 			})
 		).toMatchObject({
 			metadata: {
 				mode: "plan",
-				model: "gemini-3.5-flash",
+				model: {
+					modelId: "gpt-5.4-mini",
+					providerId: "wincode",
+				},
 			},
 			parts: [{ text: "hello", type: "text" }],
 			role: "user",
@@ -151,6 +159,27 @@ describe("@wincode/ai shared entry", () => {
 				].join("\n"),
 				type: "text",
 			},
+		]);
+	});
+
+	test("removes cancelled OpenAI item metadata from interrupted assistant history", () => {
+		const [message] = sanitizeInterruptedMessagesForModel([
+			{
+				id: "assistant-1",
+				metadata: { interrupted: true },
+				parts: [
+					{
+						providerMetadata: { openai: { itemId: "msg_cancelled" } },
+						text: "Partial response",
+						type: "text",
+					},
+				],
+				role: "assistant",
+			},
+		]);
+
+		expect(message?.parts).toEqual([
+			{ text: "Partial response", type: "text" },
 		]);
 	});
 
@@ -220,22 +249,27 @@ describe("@wincode/ai shared entry", () => {
 
 	test("defines supported chat models by provider", () => {
 		expect(defaultChatModel.value).toBe("gpt-5.4-mini");
+		expect(defaultChatModelSelection).toEqual({
+			modelId: "gpt-5.4-mini",
+			providerId: "wincode",
+		});
 		expect(supportedChatModelIds).toEqual([
-			"claude-opus-4.8",
-			"claude-sonnet-4.6",
-			"claude-haiku-4.5",
-			"gemini-3.5-flash",
-			"gemini-3.1-pro-preview",
-			"gemini-2.5-pro",
-			"gpt-5.5",
-			"gpt-5.5-pro",
 			"gpt-5.4-mini",
+			"gemini-2.5-flash",
+			"gpt-5.6-sol",
+			"gpt-5.6-terra",
+			"gpt-5.6-luna",
+			"gpt-5.5",
+			"gpt-5.4-mini",
+			"claude-sonnet-5",
+			"claude-opus-4-8",
+			"claude-haiku-4-5",
 		]);
 		expect(new Set(supportedChatModels.map((model) => model.provider))).toEqual(
 			new Set(["anthropic", "google", "openai"])
 		);
-		expect(findSupportedChatModel("gemini-3.5-flash")).toMatchObject({
-			id: "gemini-3.5-flash",
+		expect(findSupportedChatModel("gemini-2.5-flash")).toMatchObject({
+			id: "gemini-2.5-flash",
 			provider: "google",
 		});
 		expect(findSupportedChatModel("unknown-model")).toBeNull();
@@ -395,36 +429,42 @@ describe("type-safety guardrails", () => {
 		const cliSources = await Promise.all([
 			readFile(
 				new URL(
-					"../../../apps/cli/src/components/chat/chat-message.tsx",
+					"../../../apps/cli/src/modules/conversations/ui/components/chat-message.tsx",
 					import.meta.url
 				),
 				"utf8"
 			),
 			readFile(
 				new URL(
-					"../../../apps/cli/src/components/chat/chat-shell.tsx",
+					"../../../apps/cli/src/modules/conversations/ui/components/chat-shell.tsx",
 					import.meta.url
 				),
 				"utf8"
 			),
 			readFile(
 				new URL(
-					"../../../apps/cli/src/components/chat/messages/bot-message.tsx",
+					"../../../apps/cli/src/modules/conversations/ui/messages/bot-message.tsx",
 					import.meta.url
 				),
 				"utf8"
 			),
 			readFile(
-				new URL("../../../apps/cli/src/hooks/use-chat.ts", import.meta.url),
-				"utf8"
-			),
-			readFile(
-				new URL("../../../apps/cli/src/screens/chat.tsx", import.meta.url),
+				new URL(
+					"../../../apps/cli/src/modules/conversations/hooks/use-chat.ts",
+					import.meta.url
+				),
 				"utf8"
 			),
 			readFile(
 				new URL(
-					"../../../apps/cli/src/routes/sessions/$id/route.tsx",
+					"../../../apps/cli/src/modules/conversations/ui/views/chat-view.tsx",
+					import.meta.url
+				),
+				"utf8"
+			),
+			readFile(
+				new URL(
+					"../../../apps/cli/src/modules/conversations/ui/messages/index.ts",
 					import.meta.url
 				),
 				"utf8"
@@ -438,10 +478,14 @@ describe("type-safety guardrails", () => {
 
 	test("CLI tool-call handler does not await chat tool output", async () => {
 		const chatScreenSource = await readFile(
-			new URL("../../../apps/cli/src/screens/chat.tsx", import.meta.url),
+			new URL(
+				"../../../apps/cli/src/modules/conversations/hooks/use-chat.ts",
+				import.meta.url
+			),
 			"utf8"
 		);
 
 		expect(chatScreenSource).not.toContain("await handleCodingAgentToolCall");
+		expect(chatScreenSource).not.toContain("await addToolOutput");
 	});
 });

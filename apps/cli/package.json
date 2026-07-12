@@ -22,7 +22,9 @@
     "ai": "catalog:",
     "drizzle-orm": "^0.45.2",
     "hono": "catalog:",
+    "oauth4webapi": "^3.8.3",
     "opentui-spinner": "^0.0.6",
+    "open": "^10.2.0",
     "react": "catalog:",
     "zod": "catalog:"
   },

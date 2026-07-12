@@ -1,7 +1,7 @@
 import type {
+	ChatModelSelection,
 	CodingAgentUIMessage,
 	ModeType,
-	SupportedChatModelId,
 } from "@wincode/ai";
 
 export type ConversationSession = {
@@ -15,7 +15,7 @@ export type ConversationSession = {
 export type CreateSessionInput = {
 	message: CodingAgentUIMessage;
 	mode: ModeType;
-	model: SupportedChatModelId;
+	model: ChatModelSelection;
 };
 
 export type UpdateSessionInput = {
@@ -26,7 +26,7 @@ export type UpdateSessionInput = {
 export type PersistMessagesInput = {
 	messages: CodingAgentUIMessage[];
 	mode: ModeType;
-	model: SupportedChatModelId;
+	model: ChatModelSelection;
 	sessionId: string;
 };
 

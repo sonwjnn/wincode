@@ -7,11 +7,17 @@ const runtimeEnv = {
 	SERVER_URL:
 		process.env.SERVER_URL ??
 		(process.env.NODE_ENV === "test" ? "http://localhost" : undefined),
+	WINCODE_OAUTH_ISSUER: process.env.WINCODE_OAUTH_ISSUER,
+	WINCODE_OAUTH_CLIENT_ID: process.env.WINCODE_OAUTH_CLIENT_ID,
+	WINCODE_OAUTH_REDIRECT_URI: process.env.WINCODE_OAUTH_REDIRECT_URI,
 };
 
 export const env = createEnv({
 	server: {
 		SERVER_URL: z.url().optional(),
+		WINCODE_OAUTH_ISSUER: z.url().optional(),
+		WINCODE_OAUTH_CLIENT_ID: z.string().min(1).optional(),
+		WINCODE_OAUTH_REDIRECT_URI: z.url().optional(),
 	},
 	runtimeEnv,
 	emptyStringAsUndefined: true,
