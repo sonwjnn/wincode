@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import type { ProviderId } from "../types";
 import { ConnectionApiKeyDialogContent } from "./connection-api-key-dialog";
@@ -54,6 +54,19 @@ export function ConnectDialogContent({
 	onProviderSelect,
 }: ConnectDialogContentProps) {
 	const dialog = useDialog();
+	const [activeProviderIds, setActiveProviderIds] = useState<
+		readonly ProviderId[]
+	>(() => connectedProviderIds ?? []);
+
+	const markProviderConnected = useCallback((providerId: ProviderId) => {
+		setActiveProviderIds((currentProviderIds) => {
+			if (currentProviderIds.includes(providerId)) {
+				return currentProviderIds;
+			}
+
+			return [...currentProviderIds, providerId];
+		});
+	}, []);
 
 	const openMethodDialog = useCallback(
 		(providerId: ProviderId) => {
@@ -66,9 +79,12 @@ export function ConnectDialogContent({
 								dialog.open({
 									children: (
 										<ConnectionApiKeyDialogContent
-											onSubmit={(apiKey) =>
-												onApiKeySubmit?.(providerId, apiKey)
-											}
+											onSubmit={async (apiKey) => {
+												await onApiKeySubmit?.(providerId, apiKey);
+												markProviderConnected(providerId);
+												dialog.close();
+												dialog.close();
+											}}
 											providerId={providerId}
 										/>
 									),
@@ -109,6 +125,7 @@ export function ConnectDialogContent({
 		},
 		[
 			dialog,
+			markProviderConnected,
 			onApiKeySubmit,
 			onBrowserConnect,
 			onBrowserCopyUrl,
@@ -127,7 +144,7 @@ export function ConnectDialogContent({
 
 	return (
 		<ConnectionProviderPickerDialogContent
-			connectedProviderIds={connectedProviderIds}
+			connectedProviderIds={activeProviderIds}
 			onSelectProvider={handleSelectProvider}
 		/>
 	);
