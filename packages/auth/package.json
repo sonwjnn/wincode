@@ -11,7 +11,7 @@
   },
   "scripts": {},
   "dependencies": {
-    "@better-auth/oauth-provider": "1.6.9",
+    "@better-auth/oauth-provider": "1.6.23",
     "@polar-sh/better-auth": "catalog:",
     "@polar-sh/sdk": "^0.42.2",
     "@wincode/db": "workspace:*",
