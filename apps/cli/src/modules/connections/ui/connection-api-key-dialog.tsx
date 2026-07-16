@@ -1,17 +1,17 @@
 import { type InputRenderable, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
-import { useCallback, useRef, useState } from "react";
+import type { ConnectionProviderId as ProviderId } from "@wincode/ai";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	useDialogEscape,
 	useDialogLayer,
 } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-import type { ProviderId } from "../types";
 
 type ConnectionApiKeyDialogContentProps = {
 	providerId: ProviderId;
-	onSubmit: (apiKey: string) => void | Promise<void>;
+	onSubmit: (apiKey: string, signal: AbortSignal) => void | Promise<void>;
 	placeholder?: string;
 };
 
@@ -30,11 +30,18 @@ export function ConnectionApiKeyDialogContent({
 }: ConnectionApiKeyDialogContentProps) {
 	const inputRef = useRef<InputRenderable>(null);
 	const isSubmittingRef = useRef(false);
+	const submissionControllerRef = useRef<AbortController | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const { isTopLayer } = useKeyboardLayer();
 	const layerId = useDialogLayer();
 	const { colors } = useTheme();
+	let description = "Paste an API key to connect.";
+	if (providerId === "anthropic") {
+		description = "Anthropic only supports API key sign-in.";
+	} else if (providerId === "google") {
+		description = "Google only supports API key sign-in.";
+	}
 
 	const handleSubmit = useCallback(async () => {
 		if (isSubmittingRef.current) {
@@ -47,21 +54,31 @@ export function ConnectionApiKeyDialogContent({
 		}
 
 		isSubmittingRef.current = true;
+		submissionControllerRef.current?.abort();
+		const controller = new AbortController();
+		submissionControllerRef.current = controller;
 		setIsSubmitting(true);
 		setError(null);
 
 		try {
-			await onSubmit(apiKey);
-			if (inputRef.current) {
+			await onSubmit(apiKey, controller.signal);
+			if (!controller.signal.aborted && inputRef.current) {
 				inputRef.current.value = "";
 			}
 		} catch (submitError) {
-			setError(getErrorMessage(submitError));
+			if (!controller.signal.aborted) {
+				setError(getErrorMessage(submitError));
+			}
 		} finally {
+			if (submissionControllerRef.current === controller) {
+				submissionControllerRef.current = null;
+			}
 			isSubmittingRef.current = false;
 			setIsSubmitting(false);
 		}
 	}, [onSubmit]);
+
+	useEffect(() => () => submissionControllerRef.current?.abort(), []);
 
 	useKeyboard((key) => {
 		if (!isTopLayer(layerId)) {
@@ -79,9 +96,7 @@ export function ConnectionApiKeyDialogContent({
 	return (
 		<box flexDirection="column" gap={1}>
 			<text attributes={TextAttributes.DIM} selectable={false}>
-				{providerId === "anthropic"
-					? "Anthropic only supports API key sign-in."
-					: "Paste an API key to connect."}
+				{description}
 			</text>
 			<input
 				focused

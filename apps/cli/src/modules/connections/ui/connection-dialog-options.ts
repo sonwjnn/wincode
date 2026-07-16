@@ -1,40 +1,12 @@
-import type { ProviderId } from "../types";
+import type { ConnectionProviderSummary } from "../contract";
 
 export type ConnectionMethodId = "browser" | "api-key";
-
-export type ConnectionProviderOption = {
-	id: ProviderId;
-	label: string;
-	details: string;
-	methods: readonly ConnectionMethodId[];
-};
 
 export type ConnectionMethodOption = {
 	id: ConnectionMethodId;
 	label: string;
 	details: string;
 };
-
-export const CONNECTION_PROVIDERS: readonly ConnectionProviderOption[] = [
-	{
-		id: "wincode",
-		label: "Wincode",
-		details: "Browser sign-in or API key",
-		methods: ["browser", "api-key"],
-	},
-	{
-		id: "openai",
-		label: "OpenAI",
-		details: "Browser sign-in or API key",
-		methods: ["browser", "api-key"],
-	},
-	{
-		id: "anthropic",
-		label: "Anthropic",
-		details: "API key only",
-		methods: ["api-key"],
-	},
-] as const;
 
 const CONNECTION_METHODS: readonly ConnectionMethodOption[] = [
 	{
@@ -58,26 +30,24 @@ function getMaxLabelWidth(labels: readonly string[]): number {
 
 export const CONNECTION_LABEL_COLUMN_WIDTH =
 	Math.max(
-		getMaxLabelWidth(CONNECTION_PROVIDERS.map((provider) => provider.label)),
+		getMaxLabelWidth(["Wincode", "OpenAI", "Anthropic", "Google"]),
 		getMaxLabelWidth(CONNECTION_METHODS.map((method) => method.label))
 	) + 2;
 
-export function getConnectionProviderOption(
-	providerId: ProviderId
-): ConnectionProviderOption {
-	const provider = CONNECTION_PROVIDERS.find((item) => item.id === providerId);
-	if (!provider) {
-		throw new Error(`Unknown connection provider: ${providerId}`);
-	}
-
-	return provider;
-}
-
 export function getConnectionMethodOptions(
-	providerId: ProviderId
+	provider: ConnectionProviderSummary
 ): readonly ConnectionMethodOption[] {
-	const provider = getConnectionProviderOption(providerId);
 	return CONNECTION_METHODS.filter((method) =>
 		provider.methods.includes(method.id)
 	);
+}
+
+export function getConnectionProviderDetails(
+	provider: ConnectionProviderSummary
+): string {
+	if (provider.methods.length === 2) {
+		return "Browser sign-in or API key";
+	}
+
+	return "API key only";
 }

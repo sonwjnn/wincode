@@ -1,11 +1,14 @@
 import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import { useEffect, useReducer } from "react";
+import { ConnectionsProvider, createConnections } from "@/modules/connections";
 import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { ThemedRoot } from "./themed-root";
+
+const connections = createConnections();
 
 export function RootLayout() {
 	const router = useRouter();
@@ -34,18 +37,20 @@ export function RootLayout() {
 	}, [router]);
 
 	return (
-		<ThemeProvider>
-			<KeyboardLayerProvider>
-				<PromptConfigProvider>
-					<ToastProvider>
-						<DialogProvider>
-							<ThemedRoot>
-								<Outlet key={currentPath} />
-							</ThemedRoot>
-						</DialogProvider>
-					</ToastProvider>
-				</PromptConfigProvider>
-			</KeyboardLayerProvider>
-		</ThemeProvider>
+		<ConnectionsProvider connections={connections}>
+			<ThemeProvider>
+				<KeyboardLayerProvider>
+					<PromptConfigProvider>
+						<ToastProvider>
+							<DialogProvider>
+								<ThemedRoot>
+									<Outlet key={currentPath} />
+								</ThemedRoot>
+							</DialogProvider>
+						</ToastProvider>
+					</PromptConfigProvider>
+				</KeyboardLayerProvider>
+			</ThemeProvider>
+		</ConnectionsProvider>
 	);
 }

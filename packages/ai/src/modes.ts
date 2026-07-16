@@ -33,9 +33,8 @@ export type CodingModeDefinition = {
 	value: ModeType;
 };
 
-const modeValues = codingModes.map((m) => m.value);
-export const codingModeNames = modeValues;
-export const codingModeNameSchema = z.enum(modeValues);
+export const codingModeNames = codingModes.map((mode) => mode.value);
+export const codingModeNameSchema = z.enum(codingModeNames);
 
 export const codingAgentCallOptionsSchema = z.object({
 	mode: codingModeNameSchema.optional(),

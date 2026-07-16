@@ -2,7 +2,7 @@ import { TextAttributes } from "@opentui/core";
 import { useCallback } from "react";
 import { useDialogEscape } from "@/shared/providers/dialog/dialog-provider";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
-import type { ProviderId } from "../types";
+import type { ConnectionProviderSummary } from "../contract";
 import {
 	CONNECTION_LABEL_COLUMN_WIDTH,
 	type ConnectionMethodOption,
@@ -10,15 +10,15 @@ import {
 } from "./connection-dialog-options";
 
 type ConnectionMethodPickerDialogContentProps = {
-	providerId: ProviderId;
+	provider: ConnectionProviderSummary;
 	onSelectMethod: (methodId: "browser" | "api-key") => void;
 };
 
 export function ConnectionMethodPickerDialogContent({
-	providerId,
+	provider,
 	onSelectMethod,
 }: ConnectionMethodPickerDialogContentProps) {
-	const methods = getConnectionMethodOptions(providerId);
+	const methods = getConnectionMethodOptions(provider);
 
 	const handleSelect = useCallback(
 		(method: ConnectionMethodOption) => {

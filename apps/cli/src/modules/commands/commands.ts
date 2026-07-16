@@ -7,6 +7,7 @@ export type CommandSpec = BaseSpec &
 		| { kind: "new" }
 		| { kind: "dialog"; dialogKey: "sessions" | "theme" }
 		| { kind: "models" }
+		| { kind: "variants" }
 		| { kind: "mode" }
 		| { kind: "unavailable"; message: string }
 	);
@@ -29,6 +30,12 @@ export const COMMANDS: CommandSpec[] = [
 		name: "models",
 		value: "/models",
 		kind: "models",
+	},
+	{
+		description: "Select model variant",
+		name: "variants",
+		value: "/variants",
+		kind: "variants",
 	},
 	{
 		description: "Browse past sessions",

@@ -5,6 +5,7 @@ import {
 	findSupportedChatModelSelection,
 	normalizeChatModelSelection,
 } from "@wincode/ai";
+import { connectionProviderDisplayNames } from "@/modules/connections";
 import { EmptyBorder } from "@/shared/constants";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 
@@ -33,7 +34,6 @@ type FooterItem = {
 const CAMEL_CASE_BOUNDARY_REGEX = /([a-z0-9])([A-Z])/g;
 const FIRST_CHARACTER_REGEX = /^./;
 const FOOTER_ICON = "▣";
-
 const formatUnknown = (value: unknown) => {
 	if (value === undefined || value === null) {
 		return "";
@@ -157,16 +157,16 @@ const resolveFooterItems = (
 	if (model) {
 		const { label, providerId } = formatModel(model);
 		items.push({ color: colors.dimSeparator, label });
-		if (!metadata.interrupted && providerId) {
+		if (providerId) {
 			items.push({
 				color: colors.dimSeparator,
-				label: providerId,
+				label: connectionProviderDisplayNames[providerId],
 				separator: "space",
 			});
 		}
 	}
 
-	if (!metadata.interrupted && metadata.responseTimeMs !== undefined) {
+	if (metadata.responseTimeMs !== undefined) {
 		items.push({
 			color: colors.dimSeparator,
 			label: formatResponseTime(metadata.responseTimeMs),

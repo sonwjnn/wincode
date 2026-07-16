@@ -21,6 +21,7 @@ type CreateCodingAgentStreamResponseOptions = {
 	mode?: ModeType;
 	model: LanguageModel;
 	modelId: SupportedChatModelId;
+	maxOutputTokens?: number;
 	onFinish?: UIMessageStreamOnFinishCallback<CodingAgentUIMessage>;
 	providerOptions?: ProviderOptions;
 	sendReasoning?: boolean;
@@ -31,6 +32,7 @@ export const createCodingAgentStreamResponse = ({
 	mode = defaultMode.value,
 	model,
 	modelId,
+	maxOutputTokens,
 	onFinish,
 	providerOptions,
 	sendReasoning = true,
@@ -59,7 +61,7 @@ export const createCodingAgentStreamResponse = ({
 	};
 
 	return createAgentUIStreamResponse({
-		agent: createCodingAgent({ model, providerOptions }),
+		agent: createCodingAgent({ model, maxOutputTokens, providerOptions }),
 		generateMessageId: createIdGenerator({
 			prefix: "msg",
 			size: 16,

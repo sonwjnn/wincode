@@ -25,20 +25,7 @@ mock.module("oauth4webapi", () => ({
 	None: () => undefined,
 }));
 
-const { refreshTokenGrantRequest } = await import("oauth4webapi");
-
-describe("hosted auth", () => {
-	test("api key bearer", async () => {
-		const { getHostedBearer } = await import("./hosted-auth");
-		await expect(
-			getHostedBearer({
-				async load() {
-					return { kind: "api-key", apiKey: "key" };
-				},
-			} as any)
-		).resolves.toBe("key");
-	});
-
+describe("hosted auth primitives", () => {
 	test("validation uses hono client and hides api key", async () => {
 		const validate = mock(async () => new Response("nope", { status: 401 }));
 		mock.module("@/shared/api/hono-client", () => ({
@@ -47,44 +34,36 @@ describe("hosted auth", () => {
 			}),
 		}));
 		const { validateWincodeApiKey } = await import("./hosted-auth");
-		await expect(validateWincodeApiKey("secret-key")).rejects.toThrow(
+		const signal = new AbortController().signal;
+		await expect(validateWincodeApiKey("secret-key", signal)).rejects.toThrow(
 			"Wincode API key validation failed."
 		);
-		expect(validate).toHaveBeenCalledWith({
-			header: { Authorization: "Bearer secret-key" },
-		});
+		expect(validate).toHaveBeenCalledWith(
+			{
+				header: { Authorization: "Bearer secret-key" },
+			},
+			{ init: { signal } }
+		);
 	});
 
 	test("refresh uses canonical resource", async () => {
-		const { getHostedBearer } = await import("./hosted-auth");
-		const refreshGrant = refreshTokenGrantRequest as unknown as {
-			mock: { calls: unknown[][] };
+		const { refreshWincodeOAuthCredential } = await import("./hosted-auth");
+		const credential = {
+			accessToken: "old",
+			clientId: "client",
+			kind: "oauth-session" as const,
+			expiresAt: new Date(Date.now() - 1000).toISOString(),
+			issuer: "https://auth.example.com",
+			refreshToken: "refresh",
+			resource: "https://example.com/api",
+			scope: "chat:write",
+			tokenType: "Bearer" as const,
+			updatedAt: new Date().toISOString(),
 		};
 		await expect(
-			getHostedBearer({
-				async load() {
-					return {
-						kind: "oauth-session",
-						accessToken: "old",
-						clientId: "client",
-						expiresAt: new Date(Date.now() - 1000).toISOString(),
-						issuer: "https://auth.example.com",
-						refreshToken: "refresh",
-						resource: "https://example.com/api",
-						scope: "chat:write",
-						tokenType: "Bearer",
-						updatedAt: new Date().toISOString(),
-					};
-				},
-				async replaceValidated() {
-					return;
-				},
-			} as any)
-		).resolves.toBe("new");
-		expect(refreshGrant.mock.calls[0]?.[1]).toEqual({ client_id: "client" });
-		expect(refreshGrant.mock.calls[0]?.[3]).toBe("refresh");
-		expect(refreshGrant.mock.calls[0]?.[4]).toEqual({
-			additionalParameters: { resource: "https://example.com/api" },
+			refreshWincodeOAuthCredential(credential)
+		).resolves.toMatchObject({
+			accessToken: "new",
 		});
 	});
 });

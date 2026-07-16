@@ -1,12 +1,14 @@
 import { useCallback, useState } from "react";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
-import type { ProviderId } from "../types";
+import { useConnections } from "../context/connections-provider";
+import {
+	type ConnectionProviderSummary,
+	connectionProviderDisplayNames,
+	isBrowserCapableProvider,
+} from "../contract";
 import { ConnectionApiKeyDialogContent } from "./connection-api-key-dialog";
 import { ConnectionBrowserWaitingDialogContent } from "./connection-browser-waiting-dialog";
-import {
-	CONNECTION_PROVIDERS,
-	type ConnectionMethodId,
-} from "./connection-dialog-options";
+import type { ConnectionMethodId } from "./connection-dialog-options";
 import { ConnectionMethodPickerDialogContent } from "./connection-method-picker-dialog";
 import { ConnectionProviderPickerDialogContent } from "./connection-provider-picker-dialog";
 
@@ -19,57 +21,98 @@ type BrowserConnectCallbacks = {
 };
 
 type ConnectDialogContentProps = {
-	connectedProviderIds?: readonly ProviderId[];
-	onApiKeySubmit?: (
-		providerId: ProviderId,
-		apiKey: string
-	) => void | Promise<void>;
-	onBrowserConnect?: (
-		providerId: ProviderId,
-		callbacks: BrowserConnectCallbacks
-	) => Promise<void>;
+	connectedProviders: readonly ConnectionProviderSummary[];
+	onConnected: (provider: ConnectionProviderSummary) => void;
 	onBrowserOpenUrl?: (url: string) => void | Promise<void>;
 	onBrowserCopyUrl?: (url: string) => void | Promise<void>;
 	onMethodSelect?: (
-		providerId: ProviderId,
+		providerId: ConnectionProviderSummary["id"],
 		methodId: ConnectionMethodId
 	) => void;
-	onProviderSelect?: (providerId: ProviderId) => void;
+	onProviderSelect?: (providerId: ConnectionProviderSummary["id"]) => void;
 };
 
-function getProviderLabel(providerId: ProviderId): string {
-	return (
-		CONNECTION_PROVIDERS.find((provider) => provider.id === providerId)
-			?.label ?? providerId
-	);
-}
+const getProviderLabel = (
+	provider: ConnectionProviderSummary | undefined
+): string =>
+	provider?.displayName ??
+	(provider ? connectionProviderDisplayNames[provider.id] : "");
+
+const getConnectedProvider = (
+	providers: readonly ConnectionProviderSummary[],
+	providerId: ConnectionProviderSummary["id"]
+): ConnectionProviderSummary => {
+	const provider = providers.find((item) => item.id === providerId);
+	if (!provider) {
+		throw new Error(`Unknown provider: ${providerId}`);
+	}
+	return provider;
+};
+
+export const connectProviderApiKey = async (
+	connections: ReturnType<typeof useConnections>,
+	providerId: ConnectionProviderSummary["id"],
+	apiKey: string,
+	signal?: AbortSignal
+): Promise<void> => {
+	await connections.connect({
+		apiKey,
+		method: "api-key",
+		providerId,
+		signal,
+	});
+};
+
+export const connectProviderBrowser = async (
+	connections: ReturnType<typeof useConnections>,
+	provider: ConnectionProviderSummary,
+	callbacks: BrowserConnectCallbacks
+): Promise<void> => {
+	if (!isBrowserCapableProvider(provider)) {
+		throw new Error("Browser sign-in unavailable.");
+	}
+	await connections.connect({
+		method: "browser",
+		onAuthorizationUrl: (authorizationUrl) =>
+			callbacks.setAuthorizationUrl(authorizationUrl.href),
+		onProgress: (status) => callbacks.setStatus(status),
+		providerId: provider.id,
+		signal: callbacks.signal,
+	});
+};
 
 export function ConnectDialogContent({
-	connectedProviderIds,
-	onApiKeySubmit,
-	onBrowserConnect,
+	connectedProviders,
+	onConnected,
 	onBrowserOpenUrl,
 	onBrowserCopyUrl,
 	onMethodSelect,
 	onProviderSelect,
 }: ConnectDialogContentProps) {
 	const dialog = useDialog();
+	const connections = useConnections();
 	const [activeProviderIds, setActiveProviderIds] = useState<
-		readonly ProviderId[]
-	>(() => connectedProviderIds ?? []);
+		readonly ConnectionProviderSummary["id"][]
+	>(() =>
+		connectedProviders
+			.filter((provider) => provider.connected)
+			.map((provider) => provider.id)
+	);
 
-	const markProviderConnected = useCallback((providerId: ProviderId) => {
-		setActiveProviderIds((currentProviderIds) => {
-			if (currentProviderIds.includes(providerId)) {
-				return currentProviderIds;
-			}
-
-			return [...currentProviderIds, providerId];
-		});
-	}, []);
+	const markProviderConnected = useCallback(
+		(providerId: ConnectionProviderSummary["id"]) => {
+			setActiveProviderIds((currentProviderIds) =>
+				currentProviderIds.includes(providerId)
+					? currentProviderIds
+					: [...currentProviderIds, providerId]
+			);
+		},
+		[]
+	);
 
 	const openMethodDialog = useCallback(
-		(providerId: ProviderId) => {
+		(providerId: ConnectionProviderSummary["id"]) => {
+			const provider = getConnectedProvider(connectedProviders, providerId);
 			dialog.open({
 				children: (
 					<ConnectionMethodPickerDialogContent
@@ -79,44 +122,54 @@ export function ConnectDialogContent({
 								dialog.open({
 									children: (
 										<ConnectionApiKeyDialogContent
-											onSubmit={async (apiKey) => {
-												await onApiKeySubmit?.(providerId, apiKey);
+											onSubmit={async (apiKey, signal) => {
+												await connectProviderApiKey(
+													connections,
+													providerId,
+													apiKey,
+													signal
+												);
+												if (signal.aborted) {
+													return;
+												}
 												markProviderConnected(providerId);
-												dialog.close();
+												onConnected(provider);
 												dialog.close();
 											}}
 											providerId={providerId}
 										/>
 									),
-									title: `${getProviderLabel(providerId)} API key`,
+									title: `${getProviderLabel(provider)} API key`,
 									width: CONNECTION_DIALOG_WIDTH,
 								});
 								return;
 							}
-
 							dialog.open({
 								children: (
 									<ConnectionBrowserWaitingDialogContent
 										onBrowserOpenUrl={onBrowserOpenUrl}
-										onConnect={async (
-											browserProviderId: ProviderId,
-											callbacks: BrowserConnectCallbacks
-										) => {
-											if (!onBrowserConnect) {
-												throw new Error("Browser sign-in unavailable.");
-											}
-
-											await onBrowserConnect(browserProviderId, callbacks);
+										onConnect={async (browserProviderId, callbacks) => {
+											const selectedProvider = getConnectedProvider(
+												connectedProviders,
+												browserProviderId
+											);
+											await connectProviderBrowser(
+												connections,
+												selectedProvider,
+												callbacks
+											);
+											markProviderConnected(browserProviderId);
+											onConnected(selectedProvider);
 										}}
 										onCopyUrl={onBrowserCopyUrl}
 										providerId={providerId}
 									/>
 								),
-								title: `${getProviderLabel(providerId)} browser`,
+								title: `${getProviderLabel(provider)} browser`,
 								width: CONNECTION_DIALOG_WIDTH,
 							});
 						}}
-						providerId={providerId}
+						provider={provider}
 					/>
 				),
 				title: "Choose method",
@@ -124,28 +177,25 @@ export function ConnectDialogContent({
 			});
 		},
 		[
+			connectedProviders,
+			connections,
 			dialog,
 			markProviderConnected,
-			onApiKeySubmit,
-			onBrowserConnect,
 			onBrowserCopyUrl,
 			onBrowserOpenUrl,
+			onConnected,
 			onMethodSelect,
 		]
-	);
-
-	const handleSelectProvider = useCallback(
-		(providerId: ProviderId) => {
-			onProviderSelect?.(providerId);
-			openMethodDialog(providerId);
-		},
-		[openMethodDialog, onProviderSelect]
 	);
 
 	return (
 		<ConnectionProviderPickerDialogContent
 			connectedProviderIds={activeProviderIds}
-			onSelectProvider={handleSelectProvider}
+			onSelectProvider={(providerId) => {
+				onProviderSelect?.(providerId);
+				openMethodDialog(providerId);
+			}}
+			providers={connectedProviders}
 		/>
 	);
 }

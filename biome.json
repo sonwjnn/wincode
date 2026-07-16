@@ -58,6 +58,7 @@
         }
       },
       "style": {
+        "noExportedImports": "error",
         "noParameterAssign": "error",
         "useAsConstAssertion": "error",
         "useDefaultParameterLast": "error",
@@ -76,7 +77,10 @@
         }
       },
       "suspicious": {
-        "useAwait": "warn"
+        "useAwait": "off"
+      },
+      "performance": {
+        "noBarrelFile": "off"
       }
     }
   },

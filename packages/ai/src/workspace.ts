@@ -43,8 +43,6 @@ export type WorkspacePolicy = {
 	) => Promise<WorkspaceTraversalResult>;
 };
 
-export type WorkspaceSandbox = WorkspacePolicy;
-
 const isInsidePath = (root: string, target: string) =>
 	target === root || target.startsWith(root + path.sep);
 
@@ -226,7 +224,7 @@ const collectWorkspaceEntries = async (
 
 export const createWorkspaceSandbox = (
 	root = process.cwd()
-): WorkspaceSandbox => {
+): WorkspacePolicy => {
 	const workspaceRoot = realpathSync(root);
 	const policy: WorkspacePolicy = {
 		isIgnoredDirectory: isIgnoredWorkspaceDirectory,

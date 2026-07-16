@@ -7,6 +7,7 @@ import {
 	ModelsAdapter,
 	NewAdapter,
 	UnavailableAdapter,
+	VariantsAdapter,
 } from "./adapters";
 import { createCommandExecutor } from "./execute-command";
 
@@ -26,6 +27,18 @@ describe("createCommandExecutor", () => {
 				open: () => undefined,
 				currentModel: { modelId: "gpt-5.5", providerId: "openai" },
 				setModel: () => undefined,
+			}),
+			variants: new VariantsAdapter({
+				open: () => undefined,
+				currentModel: {
+					connectionProviderId: "wincode",
+					displayName: "GPT-5.4 Mini",
+					id: "gpt-5.4-mini",
+					provider: "openai",
+					variants: ["none", "low", "medium", "high", "xhigh"],
+				},
+				currentVariant: undefined,
+				setVariant: () => undefined,
 			}),
 			mode: new ModeAdapter({
 				open: () => undefined,
@@ -55,6 +68,18 @@ describe("createCommandExecutor", () => {
 				open: () => undefined,
 				currentModel: { modelId: "gpt-5.5", providerId: "openai" },
 				setModel: () => undefined,
+			}),
+			variants: new VariantsAdapter({
+				open: () => undefined,
+				currentModel: {
+					connectionProviderId: "wincode",
+					displayName: "GPT-5.4 Mini",
+					id: "gpt-5.4-mini",
+					provider: "openai",
+					variants: ["none", "low", "medium", "high", "xhigh"],
+				},
+				currentVariant: undefined,
+				setVariant: () => undefined,
 			}),
 			mode: new ModeAdapter({
 				open: () => undefined,
@@ -91,6 +116,18 @@ describe("createCommandExecutor", () => {
 				currentModel: { modelId: "gpt-5.5", providerId: "openai" },
 				setModel: () => undefined,
 			}),
+			variants: new VariantsAdapter({
+				open: () => undefined,
+				currentModel: {
+					connectionProviderId: "wincode",
+					displayName: "GPT-5.4 Mini",
+					id: "gpt-5.4-mini",
+					provider: "openai",
+					variants: ["none", "low", "medium", "high", "xhigh"],
+				},
+				currentVariant: undefined,
+				setVariant: () => undefined,
+			}),
 			mode: new ModeAdapter({
 				open: () => undefined,
 				currentMode: "build",
@@ -108,6 +145,49 @@ describe("createCommandExecutor", () => {
 		expect(loggedIn).toBe(true);
 	});
 
+	test("dispatches variants command to variants adapter", async () => {
+		let opened = false;
+		const executor = createCommandExecutor({
+			exit: new ExitAdapter({ destroy: () => undefined }),
+			connect: new ConnectAdapter({ open: async () => undefined }),
+			new: new NewAdapter({ navigateHome: () => undefined }),
+			dialog: new DialogAdapter({ open: () => undefined }),
+			models: new ModelsAdapter({
+				open: () => undefined,
+				currentModel: { modelId: "gpt-5.5", providerId: "openai" },
+				setModel: () => undefined,
+			}),
+			variants: new VariantsAdapter({
+				open: () => {
+					opened = true;
+				},
+				currentModel: {
+					connectionProviderId: "wincode",
+					displayName: "GPT-5.4 Mini",
+					id: "gpt-5.4-mini",
+					provider: "openai",
+					variants: ["none", "low", "medium", "high", "xhigh"],
+				},
+				currentVariant: undefined,
+				setVariant: () => undefined,
+			}),
+			mode: new ModeAdapter({
+				open: () => undefined,
+				currentMode: "build",
+				setMode: () => undefined,
+			}),
+			unavailable: new UnavailableAdapter({ show: () => undefined }),
+		});
+
+		await executor({
+			value: "/variants",
+			name: "variants",
+			description: "",
+			kind: "variants",
+		});
+		expect(opened).toBe(true);
+	});
+
 	test("throws when adapter throws", () => {
 		const executor = createCommandExecutor({
 			exit: new ExitAdapter({
@@ -122,6 +202,18 @@ describe("createCommandExecutor", () => {
 				open: () => undefined,
 				currentModel: { modelId: "gpt-5.5", providerId: "openai" },
 				setModel: () => undefined,
+			}),
+			variants: new VariantsAdapter({
+				open: () => undefined,
+				currentModel: {
+					connectionProviderId: "wincode",
+					displayName: "GPT-5.4 Mini",
+					id: "gpt-5.4-mini",
+					provider: "openai",
+					variants: ["none", "low", "medium", "high", "xhigh"],
+				},
+				currentVariant: undefined,
+				setVariant: () => undefined,
 			}),
 			mode: new ModeAdapter({
 				open: () => undefined,

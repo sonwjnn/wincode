@@ -13,6 +13,15 @@ mock.module("@wincode/env/server", () => ({
 mock.module("@wincode/ai", () => ({
 	codingModeNameSchema: z.enum(["plan"]),
 	codingAgentDataSchemas: {},
+	codingMessageMetadataSchema: z.object({
+		mode: z.enum(["plan"]).optional(),
+		model: z
+			.object({ modelId: z.string(), providerId: z.enum(["wincode"]) })
+			.optional(),
+		responseTimeMs: z.number().int().nonnegative().optional(),
+		variant: z.enum(["high", "max"]).optional(),
+	}),
+	modelVariantSchema: z.enum(["high", "max"]),
 	supportedChatModelIdSchema: z.enum(["gpt-5.4-mini", "gpt-5.5"]),
 }));
 
@@ -91,6 +100,47 @@ describe("POST /:id/chat (transport-only)", () => {
 				],
 				mode: "plan",
 				model: "gpt-5.5",
+			}),
+			headers: { "content-type": "application/json" },
+			method: "POST",
+		});
+
+		expect(response.status).toBe(400);
+	});
+
+	test("rejects unsupported host model schema values", async () => {
+		const response = await sessionsRoutes.request("/session-1/chat", {
+			body: JSON.stringify({
+				messages: [
+					{
+						id: "user-1",
+						parts: [{ text: "hello", type: "text" }],
+						role: "user",
+					},
+				],
+				mode: "plan",
+				model: "gpt-5.5",
+			}),
+			headers: { "content-type": "application/json" },
+			method: "POST",
+		});
+
+		expect(response.status).toBe(400);
+	});
+
+	test("rejects malformed message metadata", async () => {
+		const response = await sessionsRoutes.request("/session-1/chat", {
+			body: JSON.stringify({
+				messages: [
+					{
+						id: "user-1",
+						metadata: { mode: "plan", model: "gpt-5.4-mini" },
+						parts: [{ text: "hello", type: "text" }],
+						role: "user",
+					},
+				],
+				mode: "plan",
+				model: "gpt-5.4-mini",
 			}),
 			headers: { "content-type": "application/json" },
 			method: "POST",

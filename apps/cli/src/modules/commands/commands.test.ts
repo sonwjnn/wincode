@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { COMMANDS } from "./commands";
 
 describe("CommandSpec registry", () => {
-	test("has 9 commands with discriminated kinds", () => {
-		expect(COMMANDS).toHaveLength(9);
+	test("has 10 commands with discriminated kinds", () => {
+		expect(COMMANDS).toHaveLength(10);
 	});
 
 	test("/exit is kind: 'exit'", () => {
@@ -28,6 +28,12 @@ describe("CommandSpec registry", () => {
 		const cmd = COMMANDS.find((c) => c.value === "/models");
 		expect(cmd).toBeDefined();
 		expect(cmd?.kind).toBe("models");
+	});
+
+	test("/variants is kind: 'variants'", () => {
+		const cmd = COMMANDS.find((c) => c.value === "/variants");
+		expect(cmd).toBeDefined();
+		expect(cmd?.kind).toBe("variants");
 	});
 
 	test("/theme is kind: 'dialog'", () => {

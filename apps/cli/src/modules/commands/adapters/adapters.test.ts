@@ -7,6 +7,7 @@ import {
 	ModelsAdapter,
 	NewAdapter,
 	UnavailableAdapter,
+	VariantsAdapter,
 } from ".";
 
 describe("ExitAdapter", () => {
@@ -111,6 +112,31 @@ describe("ModelsAdapter", () => {
 			name: "models",
 			description: "",
 			kind: "models",
+		});
+		expect(calls.length).toBeGreaterThan(0);
+	});
+});
+
+describe("VariantsAdapter", () => {
+	test("opens variants dialog with current model and setVariant", () => {
+		const calls: unknown[] = [];
+		const adapter = new VariantsAdapter({
+			open: (props: unknown) => calls.push(props),
+			currentModel: {
+				connectionProviderId: "wincode",
+				displayName: "GPT-5.4 Mini",
+				id: "gpt-5.4-mini",
+				provider: "openai",
+				variants: ["none", "low", "medium", "high", "xhigh"],
+			},
+			currentVariant: undefined,
+			setVariant: (variant: unknown) => calls.push({ setVariant: variant }),
+		});
+		adapter.execute({
+			value: "/variants",
+			name: "variants",
+			description: "",
+			kind: "variants",
 		});
 		expect(calls.length).toBeGreaterThan(0);
 	});

@@ -2,6 +2,7 @@ import { useKeyboard } from "@opentui/react";
 import {
 	type CodingAgentUIMessage,
 	normalizeChatModelSelection,
+	normalizeModelVariant,
 } from "@wincode/ai";
 import { useEffect, useRef, useState } from "react";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
@@ -30,7 +31,8 @@ export function ChatView({
 	sessionId,
 	sessionTitle,
 }: ChatScreenProps) {
-	const { mode, model, setMode, setModel } = usePromptConfig();
+	const { mode, model, setMode, setModel, setVariant, variant } =
+		usePromptConfig();
 	const { isTopLayer } = useKeyboardLayer();
 	const dialog = useDialog();
 	const { show } = useToast();
@@ -60,7 +62,8 @@ export function ChatView({
 
 		setMode(config.mode);
 		setModel(config.model);
-	}, [initialMessages, setMode, setModel]);
+		setVariant(config.variant);
+	}, [initialMessages, setMode, setModel, setVariant]);
 
 	useEffect(
 		() => () => {
@@ -163,7 +166,7 @@ export function ChatView({
 			return;
 		}
 
-		submit({ mode, model, userText: text }).catch(() => undefined);
+		submit({ mode, model, variant, userText: text }).catch(() => undefined);
 	};
 
 	useEffect(() => {
@@ -177,8 +180,10 @@ export function ChatView({
 		}
 
 		submittedPromptRef.current = submittedPrompt;
-		submit({ mode, model, userText: submittedPrompt }).catch(() => undefined);
-	}, [initialPrompt, mode, model, submit]);
+		submit({ mode, model, variant, userText: submittedPrompt }).catch(
+			() => undefined
+		);
+	}, [initialPrompt, mode, model, submit, variant]);
 
 	useEffect(() => {
 		const lastInitialMessage = initialMessages.at(-1);
@@ -201,11 +206,19 @@ export function ChatView({
 		}
 
 		submittedInitialMessageRef.current = lastInitialMessage.id;
-		continueLastMessage(
-			lastInitialMessage.metadata?.mode ?? mode,
+		const resolvedModel =
 			normalizeChatModelSelection(
 				lastInitialMessage.metadata?.model ?? model
-			) ?? model
+			) ?? model;
+		const persistedVariant = normalizeModelVariant(
+			resolvedModel,
+			lastInitialMessage.metadata?.variant
+		);
+
+		continueLastMessage(
+			lastInitialMessage.metadata?.mode ?? mode,
+			resolvedModel,
+			persistedVariant
 		).catch(() => undefined);
 	}, [
 		autoStart,

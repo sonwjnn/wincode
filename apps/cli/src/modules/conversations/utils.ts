@@ -1,6 +1,7 @@
 import {
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
+	type ModelVariant,
 	type ModeType,
 	normalizeChatModelSelection,
 } from "@wincode/ai";
@@ -17,16 +18,24 @@ export const shouldAutoStartAssistantTurn = (
 
 export const getLatestChatConfig = (
 	messages: CodingAgentUIMessage[]
-): { mode: ModeType; model: ChatModelSelection } | undefined => {
-	const metadata = messages.findLast(
-		(message) => message.metadata?.mode && message.metadata.model
-	)?.metadata;
-	if (!(metadata?.mode && metadata.model)) {
-		return;
+):
+	| { mode: ModeType; model: ChatModelSelection; variant?: ModelVariant }
+	| undefined => {
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const metadata = messages[index]?.metadata;
+		if (!(metadata?.mode && metadata.model)) {
+			continue;
+		}
+
+		const model = normalizeChatModelSelection(metadata.model);
+		if (!model) {
+			continue;
+		}
+
+		return { mode: metadata.mode, model, variant: metadata.variant };
 	}
 
-	const model = normalizeChatModelSelection(metadata.model);
-	return model ? { mode: metadata.mode, model } : undefined;
+	return;
 };
 
 export const getMostRecentSession = (

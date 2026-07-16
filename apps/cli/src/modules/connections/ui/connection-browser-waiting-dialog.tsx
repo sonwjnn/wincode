@@ -1,5 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
+import type { ConnectionProviderId as ProviderId } from "@wincode/ai";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	useDialog,
@@ -8,7 +9,6 @@ import {
 } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-import type { ProviderId } from "../types";
 
 type BrowserConnectCallbacks = {
 	setAuthorizationUrl: (authorizationUrl: string) => void;

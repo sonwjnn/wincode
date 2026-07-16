@@ -11,16 +11,19 @@ import { codingServerTools } from "./tools";
 
 type CreateCodingAgentOptions = {
 	model: LanguageModel;
+	maxOutputTokens?: number;
 	providerOptions?: ProviderOptions;
 };
 
 export const createCodingAgent = ({
 	model,
+	maxOutputTokens,
 	providerOptions,
 }: CreateCodingAgentOptions) =>
 	new ToolLoopAgent<CodingAgentCallOptions, typeof codingServerTools>({
 		callOptionsSchema: codingAgentCallOptionsSchema,
 		instructions: getSystemInstructions(defaultMode.value),
+		maxOutputTokens,
 		model,
 		prepareCall: ({ options: callOptions, ...options }) => {
 			const codingMode = getCodingMode(callOptions?.mode ?? defaultMode.value);

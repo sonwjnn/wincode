@@ -1,5 +1,6 @@
 import type { ChatModelSelection, SupportedChatModel } from "@wincode/ai";
 import { useCallback } from "react";
+import { connectionProviderDisplayNames } from "@/modules/connections";
 import {
 	useDialog,
 	useDialogEscape,
@@ -36,7 +37,7 @@ export const ModelsDialogContent = ({
 		<SearchListDialogWrapper
 			emptyText="No matching models"
 			filterFn={(model, query) =>
-				`${model.displayName} ${model.id} ${model.provider}`
+				`${model.displayName} ${model.id} ${connectionProviderDisplayNames[model.connectionProviderId]}`
 					.toLowerCase()
 					.includes(query.toLowerCase())
 			}
@@ -50,7 +51,8 @@ export const ModelsDialogContent = ({
 					model.connectionProviderId === currentModel?.providerId
 						? " • "
 						: "   "}
-					{model.displayName} · {model.connectionProviderId}
+					{model.displayName} ·{" "}
+					{connectionProviderDisplayNames[model.connectionProviderId]}
 				</text>
 			)}
 		/>

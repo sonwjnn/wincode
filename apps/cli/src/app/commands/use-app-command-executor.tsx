@@ -1,5 +1,6 @@
 import { useRenderer } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
+import { findSupportedChatModelSelection } from "@wincode/ai";
 import open from "open";
 import { createElement, useCallback, useMemo } from "react";
 import {
@@ -10,40 +11,27 @@ import {
 	ModelsAdapter,
 	NewAdapter,
 	UnavailableAdapter,
+	VariantsAdapter,
 } from "@/modules/commands/adapters";
 import type { CommandSpec } from "@/modules/commands/commands";
 import { createCommandExecutor } from "@/modules/commands/execute-command";
 import {
 	CONNECTION_DIALOG_WIDTH,
 	ConnectDialogContent,
-	connectOpenAIBrowser,
-	connectProvider,
-	connectWincodeBrowser,
-	createConnectionsStore,
-	getWincodeBrowserConfig,
-	migrateLegacyWincodeSession,
-	readLegacyWincodeSession,
-	validateWincodeApiKey,
+	useConnections,
 } from "@/modules/connections";
-import type { ProviderId } from "@/modules/connections/types";
 import { SessionsDialogContent } from "@/modules/conversations/ui/dialogs/sessions-dialog";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { AgentsDialogContent } from "@/modules/prompt-settings/ui/agents-dialog";
 import { ModelsDialogContent } from "@/modules/prompt-settings/ui/models-dialog";
 import { ThemeDialogContent } from "@/modules/prompt-settings/ui/theme-dialog";
+import { VariantsDialogContent } from "@/modules/prompt-settings/ui/variants-dialog";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 
 type UseCommandExecutorReturn = {
 	executeCommand: (spec: CommandSpec) => Promise<void>;
 };
-
-type BrowserConnectCallbacksWithSignal = {
-	setAuthorizationUrl: (authorizationUrl: string) => void;
-	setStatus: (status: string) => void;
-	signal?: AbortSignal;
-};
-
 export async function copyBrowserAuthorizationUrl(
 	renderer: Pick<ReturnType<typeof useRenderer>, "copyToClipboardOSC52">,
 	url: string,
@@ -52,11 +40,9 @@ export async function copyBrowserAuthorizationUrl(
 	if (renderer.copyToClipboardOSC52(url)) {
 		return;
 	}
-
 	if (process.platform !== "darwin") {
 		throw new Error("Clipboard is not supported by this terminal.");
 	}
-
 	const spawn =
 		spawnProcess ??
 		(async (command: [string], stdin: string) => {
@@ -68,11 +54,9 @@ export async function copyBrowserAuthorizationUrl(
 					) => { exited: Promise<number> };
 				};
 			};
-			const processHandle = bun.Bun.spawn(command, { stdin });
-			return await processHandle.exited;
+			return await bun.Bun.spawn(command, { stdin }).exited;
 		});
-	const exitCode = await spawn(["pbcopy"], url);
-	if (exitCode !== 0) {
+	if ((await spawn(["pbcopy"], url)) !== 0) {
 		throw new Error("Failed to copy URL.");
 	}
 }
@@ -82,7 +66,13 @@ export function useCommandExecutor(): UseCommandExecutorReturn {
 	const router = useRouter();
 	const dialog = useDialog();
 	const toast = useToast();
-	const { mode, model, setMode, setModel } = usePromptConfig();
+	const connections = useConnections();
+	const { mode, model, setMode, setModel, setVariant, variant } =
+		usePromptConfig();
+	const supportedModel = findSupportedChatModelSelection(model);
+	if (!supportedModel) {
+		throw new Error("Unsupported model selection.");
+	}
 
 	const execute = useMemo(
 		() =>
@@ -90,84 +80,10 @@ export function useCommandExecutor(): UseCommandExecutorReturn {
 				exit: new ExitAdapter({ destroy: () => renderer.destroy() }),
 				connect: new ConnectAdapter({
 					open: async () => {
-						const store = createConnectionsStore();
-						await migrateLegacyWincodeSession(readLegacyWincodeSession, store);
-						const connectedProviderIds = (
-							await Promise.all(
-								(["wincode", "openai", "anthropic"] as const).map(
-									async (providerId) => await store.getStatus(providerId)
-								)
-							)
-						)
-							.filter((status) => status.connected)
-							.map((status) => status.providerId);
+						const connectedProviders = await connections.listProviders();
 						dialog.open({
 							children: createElement(ConnectDialogContent, {
-								connectedProviderIds,
-								onApiKeySubmit: async (
-									providerId: ProviderId,
-									apiKey: string
-								) => {
-									await connectProvider(
-										store,
-										providerId,
-										{ kind: "api-key", apiKey },
-										providerId === "wincode"
-											? {
-													wincodeValidate: async (credential) => {
-														if (!("apiKey" in credential)) {
-															throw new Error(
-																"Wincode API key validation failed."
-															);
-														}
-														await validateWincodeApiKey(credential.apiKey);
-													},
-												}
-											: undefined
-									);
-									toast.show({
-										message: `${providerId} connected.`,
-										variant: "success",
-									});
-								},
-								onBrowserConnect: async (
-									providerId: ProviderId,
-									callbacks: BrowserConnectCallbacksWithSignal
-								) => {
-									const signal = callbacks.signal;
-									if (providerId === "openai") {
-										await connectOpenAIBrowser({
-											backend: store,
-											openBrowser: false,
-											onAuthorizationUrl: (authorizationUrl) =>
-												callbacks.setAuthorizationUrl(authorizationUrl.href),
-											onStatus: (status) => callbacks.setStatus(status),
-											signal,
-										});
-										toast.show({
-											message: "OpenAI connected.",
-											variant: "success",
-										});
-										return;
-									}
-									const config = getWincodeBrowserConfig();
-									await connectWincodeBrowser({
-										backend: store,
-										clientId: config.clientId,
-										issuer: config.issuer,
-										openBrowser: false,
-										resource: config.resource,
-										onAuthorizationUrl: (authorizationUrl) =>
-											callbacks.setAuthorizationUrl(authorizationUrl.href),
-										onStatus: (status) => callbacks.setStatus(status),
-										signal,
-										redirectUri: config.redirectUri,
-									});
-									toast.show({
-										message: "Wincode connected.",
-										variant: "success",
-									});
-								},
+								connectedProviders,
 								onBrowserCopyUrl: async (url: string) => {
 									await copyBrowserAuthorizationUrl(renderer, url);
 									toast.show({
@@ -177,6 +93,12 @@ export function useCommandExecutor(): UseCommandExecutorReturn {
 								},
 								onBrowserOpenUrl: async (url: string) => {
 									await open(url);
+								},
+								onConnected: (summary) => {
+									toast.show({
+										message: `${summary.displayName} connected.`,
+										variant: "success",
+									});
 								},
 							}),
 							title: "Connect",
@@ -201,10 +123,7 @@ export function useCommandExecutor(): UseCommandExecutorReturn {
 								});
 								break;
 							case "theme":
-								dialog.open({
-									children: <ThemeDialogContent />,
-									title,
-								});
+								dialog.open({ children: <ThemeDialogContent />, title });
 								break;
 							default:
 								break;
@@ -212,7 +131,7 @@ export function useCommandExecutor(): UseCommandExecutorReturn {
 					},
 				}),
 				models: new ModelsAdapter({
-					open: ({ models, currentModel, onSelectModel }) => {
+					open: ({ models, currentModel, onSelectModel }) =>
 						dialog.open({
 							children: (
 								<ModelsDialogContent
@@ -222,13 +141,28 @@ export function useCommandExecutor(): UseCommandExecutorReturn {
 								/>
 							),
 							title: "Select Model",
-						});
-					},
+						}),
 					currentModel: model,
 					setModel,
 				}),
+				variants: new VariantsAdapter({
+					open: ({ currentModel, currentVariant, onSelectVariant }) =>
+						dialog.open({
+							children: (
+								<VariantsDialogContent
+									currentModel={currentModel}
+									currentVariant={currentVariant}
+									onSelectVariant={onSelectVariant}
+								/>
+							),
+							title: "Select Variant",
+						}),
+					currentModel: supportedModel,
+					currentVariant: variant,
+					setVariant,
+				}),
 				mode: new ModeAdapter({
-					open: ({ currentMode, onSelectMode }) => {
+					open: ({ currentMode, onSelectMode }) =>
 						dialog.open({
 							children: (
 								<AgentsDialogContent
@@ -237,8 +171,7 @@ export function useCommandExecutor(): UseCommandExecutorReturn {
 								/>
 							),
 							title: "Select Agent",
-						});
-					},
+						}),
 					currentMode: mode,
 					setMode,
 				}),
@@ -248,7 +181,20 @@ export function useCommandExecutor(): UseCommandExecutorReturn {
 					},
 				}),
 			}),
-		[dialog, renderer, router, mode, model, setMode, setModel, toast.show]
+		[
+			connections,
+			dialog,
+			mode,
+			model,
+			renderer,
+			router,
+			setMode,
+			setModel,
+			setVariant,
+			supportedModel,
+			toast.show,
+			variant,
+		]
 	);
 
 	const executeCommand = useCallback(
@@ -264,6 +210,5 @@ export function useCommandExecutor(): UseCommandExecutorReturn {
 		},
 		[execute, toast.show]
 	);
-
 	return { executeCommand };
 }

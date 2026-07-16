@@ -1,56 +1,47 @@
 import type {
 	ChatModelSelection,
 	CodingAgentUIMessage,
+	ModelVariant,
 	ModeType,
 } from "@wincode/ai";
 import { normalizeChatModelSelection } from "@wincode/ai";
 import { type ChatTransport, DefaultChatTransport } from "ai";
-import { createConnectionsStore, getHostedBearer } from "@/modules/connections";
+import type { Connections } from "@/modules/connections";
 import { getHonoClient } from "@/shared/api/hono-client";
 import { prepareSendChatRequestBody } from "../api/chat-request";
+import { getLatestChatConfig } from "../utils";
 import { createLocalChatTransport } from "./local-chat-transport";
-
-type MutableRefObject<T> = { current: T };
 
 type RoutingChatTransport = ChatTransport<CodingAgentUIMessage>;
 
-const sharedConnectionsStore = createConnectionsStore();
+type MutableRefObject<T> = { current: T };
 
-const getLatestSelection = (
-	messages: CodingAgentUIMessage[],
-	fallback: ChatModelSelection
-): ChatModelSelection => {
-	const latestMetadata = messages.findLast(
-		(message) => message.metadata?.model
-	)?.metadata;
-	if (latestMetadata?.model !== undefined) {
-		const normalizedLatestSelection = normalizeChatModelSelection(
-			latestMetadata.model
-		);
-		if (!normalizedLatestSelection) {
-			throw new Error(
-				`Invalid chat model metadata: ${String(latestMetadata.model)}`
-			);
-		}
-
-		return normalizedLatestSelection;
-	}
-
-	return fallback;
-};
+const getBearerToken = (
+	authorization:
+		| { kind: "api-key"; apiKey: string }
+		| { kind: "bearer"; token: string }
+) =>
+	authorization.kind === "bearer" ? authorization.token : authorization.apiKey;
 
 export const createRoutingChatTransport = (
 	sessionId: string,
 	modeRef: MutableRefObject<ModeType>,
 	modelRef: MutableRefObject<ChatModelSelection>,
-	connectionsStore = sharedConnectionsStore
+	variantRef: MutableRefObject<ModelVariant | undefined>,
+	connections: Connections
 ): RoutingChatTransport => ({
 	sendMessages: async ({ abortSignal, messages }) => {
-		const selection = getLatestSelection(messages, modelRef.current);
+		const latestConfig = getLatestChatConfig(messages);
+		const selection = latestConfig?.model ?? modelRef.current;
+		const variant = latestConfig?.variant ?? variantRef.current;
 		if (selection.providerId !== "wincode") {
-			return createLocalChatTransport(sessionId, modeRef, {
-				current: selection,
-			}).sendMessages({
+			return createLocalChatTransport(
+				sessionId,
+				modeRef,
+				{ current: selection },
+				{ current: variant },
+				connections
+			).sendMessages({
 				abortSignal,
 				body: undefined,
 				chatId: sessionId,
@@ -62,7 +53,7 @@ export const createRoutingChatTransport = (
 			});
 		}
 
-		const authorization = await getHostedBearer(connectionsStore);
+		const authorization = await connections.authorize("wincode", abortSignal);
 		const transport = new DefaultChatTransport<CodingAgentUIMessage>({
 			api: getHonoClient()
 				.api.sessions[":id"].chat.$url({ param: { id: sessionId } })
@@ -72,6 +63,7 @@ export const createRoutingChatTransport = (
 				body: prepareSendChatRequestBody(sessionId, requestMessages, {
 					mode: modeRef.current,
 					model: selection,
+					variant,
 				}),
 			}),
 		});
@@ -80,7 +72,9 @@ export const createRoutingChatTransport = (
 			abortSignal,
 			body: undefined,
 			chatId: sessionId,
-			headers: new Headers({ Authorization: `Bearer ${authorization}` }),
+			headers: new Headers({
+				Authorization: `Bearer ${getBearerToken(authorization)}`,
+			}),
 			messageId: undefined,
 			metadata: undefined,
 			messages,
@@ -93,7 +87,7 @@ export const createRoutingChatTransport = (
 			return null;
 		}
 
-		const authorization = await getHostedBearer(connectionsStore);
+		const authorization = await connections.authorize("wincode");
 		const transport = new DefaultChatTransport<CodingAgentUIMessage>({
 			api: getHonoClient()
 				.api.sessions[":id"].chat.$url({ param: { id: chatId } })
@@ -106,7 +100,9 @@ export const createRoutingChatTransport = (
 
 		return transport.reconnectToStream({
 			chatId,
-			headers: new Headers({ Authorization: `Bearer ${authorization}` }),
+			headers: new Headers({
+				Authorization: `Bearer ${getBearerToken(authorization)}`,
+			}),
 		});
 	},
 });

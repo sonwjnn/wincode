@@ -13,21 +13,20 @@ import {
 	validateAuthResponse,
 } from "oauth4webapi";
 import open from "open";
-import type { ConnectionsBackend } from "./storage";
-import type { WincodeCredential } from "./types";
+import type {
+	AcquisitionProgress,
+	ConnectionProgress,
+	WincodeCredential,
+} from "./contract";
+
+export type { ConnectionProgress } from "./contract";
 
 const DEFAULT_REDIRECT_URI = "http://127.0.0.1:8765/callback";
 const DEFAULT_CLIENT_ID = "wincode-cli";
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 const OAUTH_SCOPE = "openid profile email offline_access chat:write";
 
-export type WincodeBrowserStatus =
-	| "opening-browser"
-	| "waiting-for-callback"
-	| "signed-in";
-
 export type ConnectWincodeBrowserOptions = {
-	backend: ConnectionsBackend;
 	browser?: (url: string) => Promise<void>;
 	clientId?: string;
 	openBrowser?: boolean;
@@ -47,7 +46,7 @@ export type ConnectWincodeBrowserOptions = {
 	issuer: string;
 	resource?: string;
 	onAuthorizationUrl?: (authorizationUrl: URL) => void;
-	onStatus?: (status: WincodeBrowserStatus) => void;
+	onStatus?: (status: ConnectionProgress) => void;
 	redirectUri?: string;
 	timeoutMs?: number;
 };
@@ -81,9 +80,11 @@ export function getWincodeBrowserConfigFromServerUrl(serverUrl: string): {
 	};
 }
 
-export async function connectWincodeBrowser(
-	options: ConnectWincodeBrowserOptions
-): Promise<void> {
+export async function acquireWincodeBrowserCredential(
+	options: Omit<ConnectWincodeBrowserOptions, "backend" | "onStatus"> & {
+		onStatus?: (status: AcquisitionProgress) => void;
+	}
+): Promise<Extract<WincodeCredential, { kind: "oauth-session" }>> {
 	const config = {
 		clientId: options.clientId ?? DEFAULT_CLIENT_ID,
 		issuer: options.issuer,
@@ -103,7 +104,7 @@ export async function connectWincodeBrowser(
 			: undefined;
 		const discoveryResponse = await (deps.discoveryRequest ?? discoveryRequest)(
 			issuer,
-			{ algorithm: "oauth2", ...insecureRequestOptions }
+			{ algorithm: "oauth2", signal: options.signal, ...insecureRequestOptions }
 		);
 		const authorizationServer = await (
 			deps.processDiscoveryResponse ?? processDiscoveryResponse
@@ -143,7 +144,7 @@ export async function connectWincodeBrowser(
 		const callbackParameters = (
 			deps.validateAuthResponse ?? validateAuthResponse
 		)(authorizationServer, client, callbackUrl, state);
-		options.onStatus?.("waiting-for-callback");
+		options.onStatus?.("exchanging-token");
 		const response = await (
 			deps.authorizationCodeGrantRequest ?? authorizationCodeGrantRequest
 		)(
@@ -155,18 +156,15 @@ export async function connectWincodeBrowser(
 			codeVerifier,
 			{
 				...insecureRequestOptions,
+				signal: options.signal,
 				additionalParameters: { resource: config.resource },
 			}
 		);
 		const tokenResponse = await (
 			deps.processAuthorizationCodeResponse ?? processAuthorizationCodeResponse
 		)(authorizationServer, client, response);
-		const credential = createStoredSession(tokenResponse, config);
-		await options.backend.replaceValidated("wincode", {
-			...credential,
-			kind: "oauth-session",
-		} as WincodeCredential);
-		options.onStatus?.("signed-in");
+		options.signal?.throwIfAborted();
+		return createStoredSession(tokenResponse, config);
 	} finally {
 		callbackServer.stop();
 	}
@@ -220,7 +218,7 @@ function createStoredSession(
 		token_type: string;
 	},
 	config: { clientId: string; issuer: string; resource: string }
-): Omit<WincodeCredential, "kind"> {
+): Extract<WincodeCredential, { kind: "oauth-session" }> {
 	if (!tokenResponse.refresh_token) {
 		throw new Error("OAuth server did not return a refresh token.");
 	}
@@ -238,6 +236,7 @@ function createStoredSession(
 			now.getTime() + tokenResponse.expires_in * 1000
 		).toISOString(),
 		issuer: config.issuer,
+		kind: "oauth-session",
 		refreshToken: tokenResponse.refresh_token,
 		resource: config.resource,
 		scope: tokenResponse.scope ?? OAUTH_SCOPE,

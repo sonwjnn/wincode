@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { CodingAgentUIMessage } from "@wincode/ai";
+import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { createDrizzleConversationStore } from "./drizzle-conversation-store";
@@ -137,9 +138,33 @@ describe("drizzle conversation store", () => {
 			sessionId: id,
 		});
 
-		const messages = await store.getMessages(id);
-		expect(messages.at(-1)?.metadata?.interrupted).toBeTrue();
-		expect(messages.at(-1)?.metadata?.responseTimeMs).toBe(431);
+		const rows = db.select().from(conversationMessage).all();
+		expect(
+			rows.find((row) => row.uiMessageId === "m2")?.metadataJson
+		).toMatchObject({ responseTimeMs: 431 });
+	});
+
+	test("rejects malformed persisted metadata on load", async () => {
+		const { id } = await store.createSession({
+			message: userMessage("m1", "hello"),
+			mode: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+
+		db.update(conversationMessage)
+			.set({
+				metadataJson: {
+					mode: "invalid",
+					model: {
+						modelId: "gemini-2.5-flash",
+						providerId: "wincode",
+					},
+				} as never,
+			})
+			.where(eq(conversationMessage.uiMessageId, "m1"))
+			.run();
+
+		expect(store.getMessages(id)).rejects.toThrow();
 	});
 
 	test("upserts messages idempotently by ui message id", async () => {

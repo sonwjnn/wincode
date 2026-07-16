@@ -1,10 +1,7 @@
 import type { UIMessage } from "ai";
 import { z } from "zod";
-import type {
-	CodingAgentTools,
-	CodingAgentUIMessage,
-	CodingMessageMetadata,
-} from "./message";
+import type { CodingAgentTools, CodingAgentUIMessage } from "./message";
+import type { CodingMessageMetadata } from "./metadata";
 
 export const fileMentionDataSchema = z.object({
 	byteLength: z.number().int().nonnegative(),

@@ -76,6 +76,7 @@ for streaming, not for local session CRUD.
 | --- | --- |
 | `modules/commands` | slash‑command specs, filtering, execution |
 | `modules/file-mentions` | `@path` detection, options, resolution, overlay |
+| `modules/connections` | provider auth + credential resolution for chat transport |
 | `modules/prompt-settings` | `usePromptConfig` — current mode/model |
 | `shared/api` | Hono RPC client transport (chat stream only) |
 | `shared/terminal/theme` | terminal colour tokens |

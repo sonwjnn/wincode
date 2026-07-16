@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import { prepareSendChatRequestBody } from "../api/chat-request";
+import {
+	finalizeAssistantMessageMetadata,
+	getContinuationChatParams,
+} from "./use-chat";
 
 const selection = {
 	modelId: "gemini-2.5-flash",
@@ -79,5 +83,54 @@ describe("prepareSendChatRequestBody", () => {
 		expect(() => prepareSendChatRequestBody("session-1", [])).toThrow(
 			"No message to send"
 		);
+	});
+});
+
+describe("useChat helpers", () => {
+	test("seeds continuation variant and retains assistant variant metadata", () => {
+		expect(getContinuationChatParams("plan", selection, "high")).toEqual({
+			mode: "plan",
+			model: selection,
+			variant: "high",
+		});
+
+		expect(
+			finalizeAssistantMessageMetadata(
+				{
+					id: "assistant-2",
+					parts: [],
+					role: "assistant",
+				} as CodingAgentUIMessage,
+				{
+					interrupted: false,
+					mode: "plan",
+					model: selection,
+					variant: "high",
+				}
+			)
+		).toMatchObject({
+			metadata: { mode: "plan", model: selection, variant: "high" },
+		});
+	});
+
+	test("keeps existing assistant variant metadata when continuing", () => {
+		expect(
+			finalizeAssistantMessageMetadata(
+				{
+					id: "assistant-3",
+					metadata: { model: selection, variant: "low" },
+					parts: [],
+					role: "assistant",
+				} as CodingAgentUIMessage,
+				{
+					interrupted: true,
+					mode: "plan",
+					model: selection,
+					variant: "high",
+				}
+			)
+		).toMatchObject({
+			metadata: { interrupted: true, model: selection, variant: "low" },
+		});
 	});
 });

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import {
 	type CodingAgentUIMessage,
 	codingAgentDataSchemas,
+	codingMessageMetadataSchema,
 	codingModeNames,
 	codingModes,
 	codingToolDefinitions,
@@ -247,24 +248,39 @@ describe("@wincode/ai shared entry", () => {
 		expect(validation.success).toBe(true);
 	});
 
+	test("validates coding message metadata", () => {
+		expect(
+			codingMessageMetadataSchema.safeParse({
+				mode: "plan",
+				model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+				responseTimeMs: 12,
+				variant: "high",
+			}).success
+		).toBe(true);
+		expect(
+			codingMessageMetadataSchema.safeParse({
+				mode: "plan",
+				model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+				variant: "minimal",
+			}).success
+		).toBe(false);
+	});
+
 	test("defines supported chat models by provider", () => {
 		expect(defaultChatModel.value).toBe("gpt-5.4-mini");
 		expect(defaultChatModelSelection).toEqual({
 			modelId: "gpt-5.4-mini",
 			providerId: "wincode",
 		});
-		expect(supportedChatModelIds).toEqual([
-			"gpt-5.4-mini",
-			"gemini-2.5-flash",
-			"gpt-5.6-sol",
-			"gpt-5.6-terra",
-			"gpt-5.6-luna",
-			"gpt-5.5",
-			"gpt-5.4-mini",
-			"claude-sonnet-5",
-			"claude-opus-4-8",
-			"claude-haiku-4-5",
-		]);
+		expect(supportedChatModelIds).toHaveLength(56);
+		expect(supportedChatModelIds).toEqual(
+			expect.arrayContaining([
+				"gpt-5.6-terra",
+				"claude-opus-4-8",
+				"gemini-3.5-flash",
+				"gemma-4-31b-it",
+			])
+		);
 		expect(new Set(supportedChatModels.map((model) => model.provider))).toEqual(
 			new Set(["anthropic", "google", "openai"])
 		);

@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { CodingAgentUIMessage } from "@wincode/ai";
-import {
+
+const {
 	getLatestChatConfig,
 	getMostRecentSession,
 	shouldAutoStartAssistantTurn,
-} from "./utils";
+} = await import("./utils");
 
 const userMessage = {
 	id: "user-1",
@@ -61,6 +62,7 @@ describe("getLatestChatConfig", () => {
 				metadata: {
 					mode: "build",
 					model: { modelId: "gpt-5.5", providerId: "openai" },
+					variant: "high",
 				},
 				parts: [{ text: "latest", type: "text" }],
 				role: "assistant",
@@ -70,6 +72,34 @@ describe("getLatestChatConfig", () => {
 		expect(getLatestChatConfig(messages)).toEqual({
 			mode: "build",
 			model: { modelId: "gpt-5.5", providerId: "openai" },
+			variant: "high",
+		});
+	});
+
+	test("skips invalid metadata and restores the latest valid selection", () => {
+		const messages = [
+			{
+				id: "assistant-1",
+				metadata: { mode: "plan", model: "bad-model" },
+				parts: [{ text: "old", type: "text" }],
+				role: "assistant",
+			},
+			{
+				id: "assistant-2",
+				metadata: {
+					mode: "build",
+					model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
+					variant: "low",
+				},
+				parts: [{ text: "new", type: "text" }],
+				role: "assistant",
+			},
+		] as unknown as CodingAgentUIMessage[];
+
+		expect(getLatestChatConfig(messages)).toEqual({
+			mode: "build",
+			model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
+			variant: "low",
 		});
 	});
 });

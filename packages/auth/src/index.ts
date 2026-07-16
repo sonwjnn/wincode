@@ -1,9 +1,19 @@
 import { oauthProvider } from "@better-auth/oauth-provider";
-import { createDrizzleClient, schema } from "@wincode/db/client";
+import { createDrizzleClient } from "@wincode/db/client";
+import {
+	account,
+	jwks,
+	oauthAccessToken,
+	oauthClient,
+	oauthConsent,
+	oauthRefreshToken,
+	session,
+	user,
+	verification,
+} from "@wincode/db/schema";
 import { env } from "@wincode/env/server";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { verifyAccessToken as oauth2VerifyAccessToken } from "better-auth/oauth2";
 import { jwt } from "better-auth/plugins";
 
 const canonicalServerUrl = new URL(env.BETTER_AUTH_URL).origin;
@@ -15,15 +25,15 @@ export function createAuth() {
 		database: drizzleAdapter(db, {
 			provider: "pg",
 			schema: {
-				account: schema.account,
-				oauthAccessToken: schema.oauthAccessToken,
-				oauthClient: schema.oauthClient,
-				oauthConsent: schema.oauthConsent,
-				oauthRefreshToken: schema.oauthRefreshToken,
-				jwks: schema.jwks,
-				session: schema.session,
-				user: schema.user,
-				verification: schema.verification,
+				account,
+				jwks,
+				oauthAccessToken,
+				oauthClient,
+				oauthConsent,
+				oauthRefreshToken,
+				session,
+				user,
+				verification,
 			},
 		}),
 
@@ -64,6 +74,6 @@ export function createAuth() {
 	});
 }
 
-export const verifyAccessToken = oauth2VerifyAccessToken;
+export { verifyAccessToken } from "better-auth/oauth2";
 
 export const auth = createAuth();

@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { CodingAgentUIMessage } from "@wincode/ai";
-import {
+
+const {
 	groupMessagesByConversationTurn,
 	resolveConversationTurnFooterMessages,
-} from "./chat-turns";
+	resolveTurnMetadataSignature,
+} = await import("./chat-turns");
 
 const makeUserMessage = (id: string, text: string): CodingAgentUIMessage => ({
 	id,
@@ -103,5 +105,25 @@ describe("resolveConversationTurnFooterMessages", () => {
 			"assistant-3",
 			"assistant-4",
 		]);
+	});
+
+	test("treats metadata signature as stable across response-time updates", () => {
+		const first = makeAssistantMessage("assistant-1", "one", {
+			mode: "build",
+			model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
+			variant: "high",
+			responseTimeMs: 100,
+		});
+		const second = makeAssistantMessage("assistant-2", "two", {
+			mode: "build",
+			model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
+			variant: "high",
+			responseTimeMs: 250,
+		});
+
+		expect(resolveTurnMetadataSignature(first)).not.toBeNull();
+		expect(resolveTurnMetadataSignature(first)).toBe(
+			resolveTurnMetadataSignature(second)
+		);
 	});
 });

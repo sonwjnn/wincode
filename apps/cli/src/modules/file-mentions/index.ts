@@ -1,5 +1,4 @@
 export type { FileMentionOption } from "./types";
-// biome-ignore lint/performance/noBarrelFile: intentional public API for cross-module access
 export { FileMentionMenu } from "./ui/file-mention-menu";
 export {
 	filterFileMentionOptions,

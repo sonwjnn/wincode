@@ -1,37 +1,75 @@
 import { describe, expect, test } from "bun:test";
 import {
-	CONNECTION_PROVIDERS,
 	getConnectionMethodOptions,
-	getConnectionProviderOption,
+	getConnectionProviderDetails,
 } from "./connection-dialog-options";
 
 describe("connection dialog options", () => {
 	test("lists only supported provider methods", () => {
-		expect(getConnectionMethodOptions("anthropic")).toEqual([
+		expect(
+			getConnectionMethodOptions({
+				connected: false,
+				displayName: "Anthropic",
+				id: "anthropic",
+				methods: ["api-key"],
+			})
+		).toEqual([
 			{
 				id: "api-key",
 				label: "API key",
 				details: "Paste a key directly into the terminal.",
 			},
 		]);
-		expect(getConnectionMethodOptions("wincode")).toHaveLength(2);
-		expect(getConnectionMethodOptions("openai")).toHaveLength(2);
+		expect(
+			getConnectionMethodOptions({
+				connected: false,
+				displayName: "Wincode",
+				id: "wincode",
+				methods: ["browser", "api-key"],
+			})
+		).toHaveLength(2);
+		expect(
+			getConnectionMethodOptions({
+				connected: false,
+				displayName: "OpenAI",
+				id: "openai",
+				methods: ["browser", "api-key"],
+			})
+		).toHaveLength(2);
+		expect(
+			getConnectionMethodOptions({
+				connected: false,
+				displayName: "Google",
+				id: "google",
+				methods: ["api-key"],
+			})
+		).toEqual([
+			{
+				id: "api-key",
+				label: "API key",
+				details: "Paste a key directly into the terminal.",
+			},
+		]);
 	});
 
 	test("provider metadata stays grounded", () => {
-		expect(CONNECTION_PROVIDERS.map((provider) => provider.id)).toEqual([
-			"wincode",
-			"openai",
-			"anthropic",
-		]);
-		expect(getConnectionProviderOption("openai")).toMatchObject({
-			label: "OpenAI",
-			details: "Browser sign-in or API key",
-		});
-		expect(getConnectionMethodOptions("wincode")).toContainEqual({
-			id: "browser",
-			label: "Browser sign-in",
-			details: "Open a browser and copy the URL.",
-		});
+		const openai = {
+			connected: true as const,
+			connectionMethod: "browser" as const,
+			displayName: "OpenAI",
+			id: "openai" as const,
+			methods: ["browser", "api-key"] as const,
+		};
+		expect(getConnectionProviderDetails(openai)).toBe(
+			"Browser sign-in or API key"
+		);
+		expect(
+			getConnectionProviderDetails({
+				connected: false,
+				displayName: "Google",
+				id: "google",
+				methods: ["api-key"],
+			})
+		).toBe("API key only");
 	});
 });

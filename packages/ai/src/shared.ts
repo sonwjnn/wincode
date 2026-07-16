@@ -18,8 +18,9 @@ export {
 export type {
 	CodingAgentTools,
 	CodingAgentUIMessage,
-	CodingMessageMetadata,
 } from "./message";
+export type { CodingMessageMetadata } from "./metadata";
+export { codingMessageMetadataSchema } from "./metadata";
 export * from "./models";
 export * from "./modes";
 export { sanitizeInterruptedMessagesForModel } from "./sanitize-interrupted-messages";

@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
 import { copyBrowserAuthorizationUrl } from "./use-app-command-executor";
 
 describe("copyBrowserAuthorizationUrl", () => {
@@ -40,16 +39,5 @@ describe("copyBrowserAuthorizationUrl", () => {
 		);
 
 		expect(stdin).toBe("https://example.com/auth");
-	});
-
-	test("connect open reads provider statuses before opening dialog", async () => {
-		const source = await readFile(
-			new URL("./use-app-command-executor.tsx", import.meta.url),
-			"utf8"
-		);
-
-		expect(source).toContain("getStatus(providerId)");
-		expect(source).toContain("connectedProviderIds");
-		expect(source).toContain('(["wincode", "openai", "anthropic"] as const)');
 	});
 });

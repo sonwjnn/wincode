@@ -1,8 +1,9 @@
 import {
 	type CodingAgentUIMessage,
 	codingAgentDataSchemas,
+	codingMessageMetadataSchema,
 	codingModeNameSchema,
-	supportedChatModelIdSchema,
+	modelVariantSchema,
 } from "@wincode/ai";
 import {
 	codingServerTools,
@@ -35,7 +36,7 @@ const uiMessagePartSchema = z
 
 const uiMessageInputSchema = z.object({
 	id: z.string().min(1).max(maxIdLength),
-	metadata: z.unknown().optional(),
+	metadata: codingMessageMetadataSchema.optional(),
 	parts: z.array(uiMessagePartSchema).max(maxPartsPerMessage),
 	role: z.enum(["system", "user", "assistant"]),
 });
@@ -43,7 +44,18 @@ const uiMessageInputSchema = z.object({
 const chatRequestSchema = z.object({
 	messages: z.array(uiMessageInputSchema).max(maxMessages),
 	mode: codingModeNameSchema,
-	model: supportedChatModelIdSchema,
+	model: z
+		.string()
+		.min(1)
+		.refine((value) => {
+			try {
+				resolveWincodeChatModelSelection(value);
+				return true;
+			} catch {
+				return false;
+			}
+		}, "Unsupported host model"),
+	variant: modelVariantSchema.optional(),
 	sendReasoning: z.boolean().optional(),
 });
 
@@ -56,23 +68,24 @@ const badRequest = () =>
 const withChatMetadata = (
 	message: z.infer<typeof uiMessageInputSchema>,
 	mode: z.infer<typeof codingModeNameSchema>,
-	model: string
+	model: { modelId: string; providerId: "wincode" },
+	variant?: string
 ) => ({
 	...message,
 	metadata: {
-		...(typeof message.metadata === "object" && message.metadata !== null
-			? message.metadata
-			: {}),
+		...message.metadata,
 		mode,
 		model,
+		...(variant === undefined ? {} : { variant }),
 	},
 });
 
 const withChatMetadataForMessages = (
 	messages: z.infer<typeof uiMessageInputSchema>[],
 	mode: z.infer<typeof codingModeNameSchema>,
-	model: string
-) => messages.map((message) => withChatMetadata(message, mode, model));
+	model: { modelId: string; providerId: "wincode" },
+	variant?: string
+) => messages.map((message) => withChatMetadata(message, mode, model, variant));
 
 const hasValidContentLength = (value: string | null) => {
 	if (!value) {
@@ -138,13 +151,29 @@ export const sessionsRoutes = new Hono().post("/:id/chat", async (c) => {
 		return badRequest();
 	}
 
-	const { messages, mode, model, sendReasoning } = parsed.data;
-	const stagedMessages = withChatMetadataForMessages(messages, mode, model).map(
-		(message) => ({
-			...message,
-			parts: message.parts,
-		})
-	);
+	const { messages, mode, model, sendReasoning, variant } = parsed.data;
+	let resolvedModel: ResolvedModel;
+	let resolvedSelection: ReturnType<typeof resolveWincodeChatModelSelection>;
+	try {
+		resolvedSelection = resolveWincodeChatModelSelection(model);
+		resolvedModel = resolveSupportedChatModel(resolvedSelection, { variant });
+	} catch {
+		return badRequest();
+	}
+	const modelSelection = {
+		modelId: resolvedSelection.id,
+		providerId: "wincode" as const,
+	};
+	const stagedMessages = withChatMetadataForMessages(
+		messages,
+		mode,
+		modelSelection,
+		variant
+	).map((message) => ({
+		...message,
+		metadata: message.metadata,
+		parts: message.parts,
+	}));
 
 	const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
 		dataSchemas: codingAgentDataSchemas,
@@ -156,17 +185,10 @@ export const sessionsRoutes = new Hono().post("/:id/chat", async (c) => {
 		return badRequest();
 	}
 
-	let resolvedModel: ResolvedModel;
-	try {
-		const resolvedSelection = resolveWincodeChatModelSelection(model);
-		resolvedModel = resolveSupportedChatModel(resolvedSelection);
-	} catch {
-		return badRequest();
-	}
-
 	return createCodingAgentStreamResponse({
 		model: resolvedModel.model,
 		modelId: resolvedModel.modelId,
+		maxOutputTokens: resolvedModel.maxOutputTokens,
 		mode,
 		providerOptions: resolvedModel.providerOptions,
 		sendReasoning,

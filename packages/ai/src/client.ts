@@ -4,11 +4,8 @@ import {
 	generateId,
 } from "ai";
 import type { FileMentionUIPart } from "./file-mentions";
-import type {
-	CodingAgentTools,
-	CodingAgentUIMessage,
-	CodingMessageMetadata,
-} from "./message";
+import type { CodingAgentTools, CodingAgentUIMessage } from "./message";
+import type { CodingMessageMetadata } from "./metadata";
 import {
 	defaultMode,
 	getCodingMode,

@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import type {
-	ChatModelSelection,
-	CodingAgentUIMessage,
-	ModeType,
+import {
+	type ChatModelSelection,
+	type CodingAgentUIMessage,
+	codingMessageMetadataSchema,
+	type ModeType,
 } from "@wincode/ai";
 import { generateId, safeValidateUIMessages } from "ai";
 import { and, asc, desc, eq } from "drizzle-orm";
@@ -128,7 +129,9 @@ const writeMessages = (
 			const values = {
 				createdAt: now,
 				id: generateId(),
-				metadataJson: resolveMetadata(message, mode, model),
+				metadataJson: codingMessageMetadataSchema.parse(
+					resolveMetadata(message, mode, model)
+				),
 				mode: resolveMode(message, mode),
 				partsJson: message.parts,
 				position,
@@ -238,7 +241,10 @@ export const createDrizzleConversationStore = (
 			const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
 				messages: rows.map((row) => ({
 					id: row.uiMessageId,
-					metadata: row.metadataJson ?? undefined,
+					metadata:
+						row.metadataJson === null || row.metadataJson === undefined
+							? undefined
+							: codingMessageMetadataSchema.parse(row.metadataJson),
 					parts: row.partsJson,
 					role: row.role,
 				})),

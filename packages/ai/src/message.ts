@@ -1,7 +1,6 @@
 import type { UIMessage } from "ai";
 import type { CodingAgentDataParts } from "./file-mentions";
-import type { ChatModelSelection, SupportedChatModelId } from "./models";
-import type { ModeType } from "./modes";
+import type { CodingMessageMetadata } from "./metadata";
 import type {
 	CodingToolInput,
 	CodingToolName,
@@ -13,13 +12,6 @@ export type CodingAgentTools = {
 		input: CodingToolInput<Name>;
 		output: CodingToolOutput<Name>;
 	};
-};
-
-export type CodingMessageMetadata = {
-	mode?: ModeType;
-	model?: SupportedChatModelId | ChatModelSelection;
-	interrupted?: boolean;
-	responseTimeMs?: number;
 };
 
 export type CodingAgentUIMessage = UIMessage<

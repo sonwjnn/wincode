@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
-	chatModelSelectionSchemaWithValidation,
+	chatModelSelectionSchema,
 	defaultChatModelSelection,
 	findSupportedChatModelSelection,
+	getSupportedModelVariants,
 	isSupportedChatModelSelection,
 	normalizeChatModelSelection,
+	normalizeModelVariant,
 } from "./models";
 
 describe("shared chat model selection", () => {
@@ -27,21 +29,21 @@ describe("shared chat model selection", () => {
 		});
 		expect(
 			findSupportedChatModelSelection({
-				modelId: "gpt-5.4-mini",
+				modelId: "gpt-5.5",
 				providerId: "openai",
 			})
 		).toMatchObject({
 			connectionProviderId: "openai",
-			id: "gpt-5.4-mini",
+			id: "gpt-5.5",
 		});
 		expect(
-			chatModelSelectionSchemaWithValidation.safeParse({
+			chatModelSelectionSchema.safeParse({
 				modelId: "gpt-5.4-mini",
 				providerId: "wincode",
 			})
 		).toMatchObject({ success: true });
 		expect(
-			chatModelSelectionSchemaWithValidation.safeParse({
+			chatModelSelectionSchema.safeParse({
 				modelId: "gpt-5.4-mini",
 				providerId: "anthropic",
 			})
@@ -56,9 +58,14 @@ describe("shared chat model selection", () => {
 
 	test("rejects invalid model/provider pairs", () => {
 		expect(
-			chatModelSelectionSchemaWithValidation.safeParse({
+			chatModelSelectionSchema.safeParse({
 				modelId: "gpt-5.4-mini",
 				providerId: "anthropic",
+			})
+		).toMatchObject({ success: false });
+		expect(
+			chatModelSelectionSchema.safeParse({
+				modelId: "gpt-5.4-mini",
 			})
 		).toMatchObject({ success: false });
 	});
@@ -70,5 +77,26 @@ describe("shared chat model selection", () => {
 		});
 		expect(normalizeChatModelSelection("claude-3.5-sonnet")).toBeNull();
 		expect(normalizeChatModelSelection("unknown-model")).toBeNull();
+	});
+
+	test("resolves supported variants for selections", () => {
+		expect(
+			getSupportedModelVariants({
+				modelId: "claude-sonnet-5",
+				providerId: "anthropic",
+			})
+		).toEqual(["low", "medium", "high", "xhigh", "max"]);
+		expect(
+			normalizeModelVariant(
+				{ modelId: "gemma-4-31b-it", providerId: "google" },
+				"high"
+			)
+		).toBeUndefined();
+		expect(
+			normalizeModelVariant(
+				{ modelId: "gpt-5.6", providerId: "openai" },
+				"none"
+			)
+		).toBe("none");
 	});
 });

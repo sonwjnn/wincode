@@ -13,7 +13,8 @@ export function HomeView() {
 	const router = useRouter();
 	const [_error, setError] = useState<string | null>(null);
 	const [isCreatingSession, setIsCreatingSession] = useState(false);
-	const { mode, model, setMode, setModel } = usePromptConfig();
+	const { mode, model, setMode, setModel, setVariant, variant } =
+		usePromptConfig();
 
 	useEffect(() => {
 		let ignore = false;
@@ -32,6 +33,7 @@ export function HomeView() {
 
 			setMode(config.mode);
 			setModel(config.model);
+			setVariant(config.variant);
 		};
 
 		restoreLatestSessionConfig().catch(() => undefined);
@@ -39,7 +41,7 @@ export function HomeView() {
 		return () => {
 			ignore = true;
 		};
-	}, [setMode, setModel]);
+	}, [setMode, setModel, setVariant]);
 
 	const handleSubmit = async (input: string) => {
 		if (isCreatingSession) {
@@ -66,7 +68,7 @@ export function HomeView() {
 	const createSession = async (input: string) => {
 		const fileMentions = await resolveFileMentionParts(input);
 		const { id } = await getConversationStore().createSession({
-			message: createUserMessage(input, { mode, model }, fileMentions),
+			message: createUserMessage(input, { mode, model, variant }, fileMentions),
 			mode,
 			model,
 		});

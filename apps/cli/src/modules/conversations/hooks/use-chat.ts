@@ -2,6 +2,7 @@ import { useChat as useAiChat } from "@ai-sdk/react";
 import type {
 	ChatModelSelection,
 	CodingAgentUIMessage,
+	ModelVariant,
 	ModeType,
 } from "@wincode/ai";
 import { defaultChatModelSelection, defaultMode } from "@wincode/ai";
@@ -11,6 +12,7 @@ import {
 	lastAssistantMessageIsCompleteWithToolCalls,
 } from "ai";
 import { useMemo, useRef } from "react";
+import { useConnections } from "@/modules/connections";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import { getConversationStore } from "../storage/get-conversation-store";
 import { createRoutingChatTransport } from "./routing-chat-transport";
@@ -18,13 +20,59 @@ import { createRoutingChatTransport } from "./routing-chat-transport";
 type SubmitChatParams = {
 	mode: ModeType;
 	model: ChatModelSelection;
+	variant?: ModelVariant;
 	userText: string;
 };
+
+export const getContinuationChatParams = (
+	mode: ModeType,
+	model: ChatModelSelection,
+	variant?: ModelVariant
+): { mode: ModeType; model: ChatModelSelection; variant?: ModelVariant } => ({
+	mode,
+	model,
+	...(variant === undefined ? {} : { variant }),
+});
+
+export const finalizeAssistantMessageMetadata = (
+	message: CodingAgentUIMessage,
+	context: {
+		mode: ModeType;
+		model: ChatModelSelection;
+		variant?: ModelVariant;
+		interrupted: boolean;
+		responseTimeMs?: number;
+	}
+): CodingAgentUIMessage => ({
+	...message,
+	metadata: (() => {
+		const metadata = message.metadata ?? {};
+		const nextMetadata: CodingAgentUIMessage["metadata"] = {
+			...metadata,
+			interrupted: context.interrupted,
+			mode: message.metadata?.mode ?? context.mode,
+			model: message.metadata?.model ?? context.model,
+		};
+
+		if (message.metadata?.variant !== undefined) {
+			nextMetadata.variant = message.metadata.variant;
+		} else if (context.variant !== undefined) {
+			nextMetadata.variant = context.variant;
+		}
+
+		if (context.responseTimeMs !== undefined) {
+			nextMetadata.responseTimeMs = context.responseTimeMs;
+		}
+
+		return nextMetadata;
+	})(),
+});
 
 export function useChat(
 	sessionId: string,
 	initialMessages: CodingAgentUIMessage[]
 ) {
+	const connections = useConnections();
 	const addToolOutputRef =
 		useRef<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>(null);
 	const interruptedMessageIdsRef = useRef(new Set<string>());
@@ -34,10 +82,18 @@ export function useChat(
 	>(undefined);
 	const modeRef = useRef<ModeType>(defaultMode.value);
 	const modelRef = useRef<ChatModelSelection>(defaultChatModelSelection);
+	const variantRef = useRef<ModelVariant | undefined>(undefined);
 
 	const transport = useMemo(
-		() => createRoutingChatTransport(sessionId, modeRef, modelRef),
-		[sessionId]
+		() =>
+			createRoutingChatTransport(
+				sessionId,
+				modeRef,
+				modelRef,
+				variantRef,
+				connections
+			),
+		[connections, sessionId]
 	);
 
 	const finalizeAssistantMessages = (messages: CodingAgentUIMessage[]) => {
@@ -58,19 +114,15 @@ export function useChat(
 			return messages;
 		}
 
-		const metadata = assistantMessage.metadata ?? {};
 		const nextMessages = [...messages];
 		nextMessages[assistantIndex] = {
-			...assistantMessage,
-			metadata: {
-				...metadata,
-				mode: metadata.mode ?? modeRef.current,
-				model: metadata.model ?? modelRef.current,
-				...(interruptedMessageIdsRef.current.has(assistantMessage.id)
-					? { interrupted: true }
-					: {}),
-				...(responseTimeMs === undefined ? {} : { responseTimeMs }),
-			},
+			...finalizeAssistantMessageMetadata(assistantMessage, {
+				interrupted: interruptedMessageIdsRef.current.has(assistantMessage.id),
+				mode: modeRef.current,
+				model: modelRef.current,
+				responseTimeMs,
+				variant: variantRef.current,
+			}),
 		};
 
 		return nextMessages;
@@ -87,20 +139,17 @@ export function useChat(
 			.catch(() => undefined);
 	};
 
+	const finalizeAndPersistMessages = (messages: CodingAgentUIMessage[]) => {
+		const finalizedMessages = finalizeAssistantMessages(messages);
+		setMessagesRef.current?.(finalizedMessages);
+		persistMessages(finalizedMessages);
+	};
+
 	const chat = useAiChat<CodingAgentUIMessage>({
 		id: sessionId,
 		messages: initialMessages,
 		onFinish: ({ messages }) => {
-			const finalizedMessages = finalizeAssistantMessages(messages);
-			setMessagesRef.current?.(finalizedMessages);
-			getConversationStore()
-				.persistMessages({
-					messages: finalizedMessages,
-					mode: modeRef.current,
-					model: modelRef.current,
-					sessionId,
-				})
-				.catch(() => undefined);
+			finalizeAndPersistMessages(messages);
 		},
 		onToolCall: (options) => {
 			const addToolOutputForCall = addToolOutputRef.current;
@@ -143,39 +192,47 @@ export function useChat(
 			return;
 		}
 
-		const metadata = assistantMessage.metadata ?? {};
 		interruptedMessageIdsRef.current.add(assistantMessage.id);
 		const nextMessages = [...chat.messages];
 		nextMessages[assistantIndex] = {
-			...assistantMessage,
-			metadata: {
-				...metadata,
+			...finalizeAssistantMessageMetadata(assistantMessage, {
 				interrupted: true,
-				mode: metadata.mode ?? modeRef.current,
-				model: metadata.model ?? modelRef.current,
-				...(responseTimeMs === undefined ? {} : { responseTimeMs }),
-			},
+				mode: modeRef.current,
+				model: modelRef.current,
+				responseTimeMs,
+				variant: variantRef.current,
+			}),
 		};
 
-		chat.setMessages(nextMessages);
-		persistMessages(nextMessages);
+		finalizeAndPersistMessages(nextMessages);
 		chat.stop();
 	};
 
-	const submit = async ({ mode, model, userText }: SubmitChatParams) => {
+	const submit = async ({
+		mode,
+		model,
+		variant,
+		userText,
+	}: SubmitChatParams) => {
 		modeRef.current = mode;
 		modelRef.current = model;
+		variantRef.current = variant;
 		requestStartedAtRef.current = Date.now();
 		const fileMentions = await resolveFileMentionParts(userText);
 
 		return chat.sendMessage({
-			metadata: { mode, model },
+			metadata: { mode, model, variant: variantRef.current },
 			parts: [{ text: userText, type: "text" }, ...fileMentions],
 		});
 	};
-	const continueLastMessage = (mode: ModeType, model: ChatModelSelection) => {
+	const continueLastMessage = (
+		mode: ModeType,
+		model: ChatModelSelection,
+		variant?: ModelVariant
+	) => {
 		modeRef.current = mode;
 		modelRef.current = model;
+		variantRef.current = variant;
 		requestStartedAtRef.current = Date.now();
 		return chat.sendMessage();
 	};

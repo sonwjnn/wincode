@@ -6,7 +6,7 @@ export type ConversationTurn = {
 	messages: CodingAgentUIMessage[];
 };
 
-const resolveMetadataSignature = (
+export const resolveTurnMetadataSignature = (
 	message: CodingAgentUIMessage
 ): string | null => {
 	const metadata = message.metadata;
@@ -26,8 +26,9 @@ const resolveMetadataSignature = (
 		modelKey = `${metadata.model.providerId}/${metadata.model.modelId}`;
 	}
 	const interrupted = metadata.interrupted === true ? "1" : "0";
+	const variant = metadata.variant ?? "";
 
-	return `${mode}|${modelKey}|${interrupted}`;
+	return `${mode}|${modelKey}|${variant}|${interrupted}`;
 };
 
 const resolveTurnFooterMessage = (
@@ -58,7 +59,9 @@ const resolveTurnFooterMessage = (
 		return current;
 	}
 
-	if (resolveMetadataSignature(current) === resolveMetadataSignature(next)) {
+	if (
+		resolveTurnMetadataSignature(current) === resolveTurnMetadataSignature(next)
+	) {
 		return;
 	}
 

@@ -1,12 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import {
-	connectWincodeBrowser,
+	acquireWincodeBrowserCredential,
 	createAuthorizationUrl,
 	getWincodeBrowserConfigFromServerUrl,
 } from "./connect-wincode-browser";
 
-describe("connectWincodeBrowser", () => {
+describe("wincode browser primitives", () => {
 	test("builds canonical issuer and resource from server url", () => {
 		expect(getWincodeBrowserConfigFromServerUrl("https://example.com")).toEqual(
 			{
@@ -27,7 +27,6 @@ describe("connectWincodeBrowser", () => {
 			resource: "https://example.com/api",
 			state: "state",
 		});
-
 		expect(url.searchParams.get("resource")).toBe("https://example.com/api");
 		expect(url.searchParams.get("scope")).toBe(
 			"openid profile email offline_access chat:write"
@@ -38,14 +37,7 @@ describe("connectWincodeBrowser", () => {
 		const browser = mock(async () => undefined);
 		const controller = new AbortController();
 		const stop = mock(() => undefined);
-		const backend = {
-			async replaceValidated() {
-				throw new Error("should not persist");
-			},
-		};
-
-		const promise = connectWincodeBrowser({
-			backend: backend as never,
+		const promise = acquireWincodeBrowserCredential({
 			browser,
 			deps: {
 				discoveryRequest: async () => ({}) as never,
@@ -56,6 +48,7 @@ describe("connectWincodeBrowser", () => {
 						authorization_endpoint: "https://auth.example.com/authorize",
 					}) as never,
 				serve: (() => ({ stop })) as never,
+				validateAuthResponse: () => ({}) as never,
 			},
 			issuer: "https://example.com/api/auth",
 			onAuthorizationUrl: () => undefined,
@@ -73,14 +66,7 @@ describe("connectWincodeBrowser", () => {
 	test("default opens browser", async () => {
 		const browser = mock(async () => undefined);
 		const controller = new AbortController();
-		const backend = {
-			async replaceValidated() {
-				throw new Error("should not persist");
-			},
-		};
-
-		const promise = connectWincodeBrowser({
-			backend: backend as never,
+		const promise = acquireWincodeBrowserCredential({
 			browser,
 			deps: {
 				discoveryRequest: async () => ({}) as never,
@@ -91,6 +77,7 @@ describe("connectWincodeBrowser", () => {
 						authorization_endpoint: "https://auth.example.com/authorize",
 					}) as never,
 				serve: (() => ({ stop: () => undefined })) as never,
+				validateAuthResponse: () => ({}) as never,
 			},
 			issuer: "https://example.com/api/auth",
 			onAuthorizationUrl: () => undefined,
@@ -103,46 +90,25 @@ describe("connectWincodeBrowser", () => {
 		expect(browser).toHaveBeenCalledTimes(1);
 	});
 
-	test("cancellation callback surfaces stable error and skips persistence", async () => {
-		let fetchHandler: ((request: Request) => Promise<Response>) | undefined;
-		const backend = {
-			async replaceValidated() {
-				throw new Error("should not persist");
-			},
-		};
-		const promise = connectWincodeBrowser({
-			backend: backend as never,
-			deps: {
-				discoveryRequest: async () => ({}) as never,
-				generateRandomCodeVerifier: () => "verifier",
-				generateRandomState: () => "state",
-				processDiscoveryResponse: async () =>
-					({
-						authorization_endpoint: "https://auth.example.com/authorize",
-					}) as never,
-				serve: ((server: {
-					fetch: (request: Request) => Promise<Response>;
-				}) => {
-					fetchHandler = server.fetch;
-					return { stop: () => undefined } as never;
-				}) as never,
-				validateAuthResponse: () => {
-					throw new Error("should not validate");
-				},
-			},
-			issuer: "https://example.com/api/auth",
-			onAuthorizationUrl: () => undefined,
-			onStatus: () => undefined,
-			timeoutMs: 100,
+	test("forwards abort signal to oauth requests and preserves abort error", async () => {
+		const controller = new AbortController();
+		const discoveryRequest = mock(async (_issuer, options) => {
+			expect(options.signal).toBe(controller.signal);
+			throw new DOMException("Aborted", "AbortError");
 		});
 
-		await fetchHandler?.(
-			new Request("http://127.0.0.1:8765/callback?error=access_denied")
-		);
-
-		await expect(promise).rejects.toThrow(
-			"Browser sign-in cancelled by provider. Try /connect again."
-		);
+		await expect(
+			acquireWincodeBrowserCredential({
+				browser: async () => undefined,
+				deps: {
+					discoveryRequest,
+					serve: (() => ({ stop: () => undefined })) as never,
+				},
+				issuer: "https://example.com/api/auth",
+				signal: controller.signal,
+				timeoutMs: 100,
+			})
+		).rejects.toThrow("Aborted");
 	});
 
 	test("callback html keeps black background and exact success copy", async () => {
@@ -150,7 +116,6 @@ describe("connectWincodeBrowser", () => {
 			new URL("./connect-wincode-browser.ts", import.meta.url),
 			"utf8"
 		);
-
 		expect(source).toContain("background:#000");
 		expect(source).toContain("Connected. You can close this tab.");
 		expect(source).not.toContain("window.close()");

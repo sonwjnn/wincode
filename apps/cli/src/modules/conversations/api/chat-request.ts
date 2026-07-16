@@ -1,7 +1,13 @@
 import type {
 	ChatModelSelection,
 	CodingAgentUIMessage,
+	ModelVariant,
 	ModeType,
+} from "@wincode/ai";
+import {
+	chatModelSelectionSchema,
+	codingMessageMetadataSchema,
+	normalizeChatModelSelection,
 } from "@wincode/ai";
 
 type SendChatRequestBody = {
@@ -9,35 +15,29 @@ type SendChatRequestBody = {
 	mode: ModeType;
 	model: string;
 	persist: false;
+	variant?: ModelVariant;
 	sendReasoning: true;
 };
 
 type ChatMetadataFallback = {
 	mode: ModeType;
 	model: ChatModelSelection;
+	variant?: ModelVariant;
 };
 
 const findLastChatMetadata = (messages: CodingAgentUIMessage[]) =>
 	messages.findLast(
-		(message) => message.metadata?.mode && message.metadata.model
+		(message) => codingMessageMetadataSchema.safeParse(message.metadata).success
 	)?.metadata;
 
 const normalizeSelection = (model: unknown): ChatModelSelection | null => {
-	if (
-		typeof model === "object" &&
-		model &&
-		"modelId" in model &&
-		"providerId" in model
-	) {
-		return model as ChatModelSelection;
+	if (typeof model === "string") {
+		return normalizeChatModelSelection(model);
 	}
 
-	if (String(model) === "gemini-3.5-flash") {
-		return { modelId: "gemini-2.5-flash", providerId: "wincode" };
-	}
-
-	if (model === "gpt-5.4-mini") {
-		return { modelId: "gpt-5.4-mini", providerId: "wincode" };
+	if (typeof model === "object" && model) {
+		const parsed = chatModelSelectionSchema.safeParse(model);
+		return parsed.success ? parsed.data : null;
 	}
 
 	return null;
@@ -60,6 +60,7 @@ export const prepareSendChatRequestBody = (
 		normalizeSelection(message.metadata?.model) ??
 		normalizeSelection(metadata?.model) ??
 		fallback?.model;
+	const variant = metadata?.variant ?? fallback?.variant;
 
 	if (!(mode && model)) {
 		throw new Error("No chat mode or model to send");
@@ -74,6 +75,7 @@ export const prepareSendChatRequestBody = (
 		mode,
 		model: model.modelId,
 		persist: false,
+		variant,
 		sendReasoning: true,
 	};
 };
