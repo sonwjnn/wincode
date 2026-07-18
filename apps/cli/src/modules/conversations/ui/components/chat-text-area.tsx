@@ -59,11 +59,14 @@ export function ChatTextArea({
 			return;
 		}
 
-		const mentionDelete = deleteFileMentionAfterTrailingCharacterDelete(
-			currentTextRef.current,
-			textarea.plainText,
-			textarea.cursorOffset
-		);
+		const mentionDelete =
+			state.overlay.kind === null
+				? deleteFileMentionAfterTrailingCharacterDelete(
+						currentTextRef.current,
+						textarea.plainText,
+						textarea.cursorOffset
+					)
+				: null;
 		if (mentionDelete) {
 			textarea.setText(mentionDelete.text);
 			textarea.cursorOffset = mentionDelete.cursorOffset;
@@ -72,7 +75,7 @@ export function ChatTextArea({
 		}
 
 		actions.onTextChange(textarea.plainText, textarea.cursorOffset);
-	}, [actions]);
+	}, [actions, state.overlay.kind]);
 
 	useEffect(() => {
 		if (lastTextSyncRevisionRef.current === state.textSyncRevision) {
@@ -191,7 +194,64 @@ export function ChatTextArea({
 	const isFocused = !disabled && (isTopLayer("base") || isTopLayer("command"));
 
 	return (
-		<box alignItems="center" width="100%">
+		<box
+			alignItems="center"
+			overflow="visible"
+			position="relative"
+			width="100%"
+		>
+			{state.overlay.kind === "command" && (
+				<box
+					border={["left", "right"]}
+					borderColor={colors.suggestionBorder}
+					bottom="100%"
+					customBorderChars={{
+						...EmptyBorder,
+						vertical: "┃",
+					}}
+					left={0}
+					position="absolute"
+					right={0}
+					zIndex={10}
+				>
+					<box backgroundColor={colors.surface} width="100%">
+						<CommandMenu
+							commands={state.overlay.items}
+							onExecute={actions.onItemExecute}
+							onSelect={actions.onItemSelect}
+							selectedIndex={state.overlay.selectedIndex}
+							visibleStartIndex={state.visibleStartIndex}
+						/>
+					</box>
+				</box>
+			)}
+
+			{state.overlay.kind === "file-mention" && (
+				<box
+					border={["left", "right"]}
+					borderColor={colors.suggestionBorder}
+					bottom="100%"
+					customBorderChars={{
+						...EmptyBorder,
+						vertical: "┃",
+					}}
+					left={0}
+					position="absolute"
+					right={0}
+					zIndex={10}
+				>
+					<box backgroundColor={colors.surface} width="100%">
+						<FileMentionMenu
+							items={state.overlay.items}
+							onExecute={actions.onItemExecute}
+							onSelect={actions.onItemSelect}
+							selectedIndex={state.overlay.selectedIndex}
+							visibleStartIndex={state.visibleStartIndex}
+						/>
+					</box>
+				</box>
+			)}
+
 			<box
 				border={["left"]}
 				borderColor={colors.mode[mode]}
@@ -209,47 +269,8 @@ export function ChatTextArea({
 					justifyContent="center"
 					paddingX={2}
 					paddingY={1}
-					position="relative"
 					width="100%"
 				>
-					{state.overlay.kind === "command" && (
-						<box
-							backgroundColor={colors.surface}
-							bottom="100%"
-							left={0}
-							position="absolute"
-							width="100%"
-							zIndex={10}
-						>
-							<CommandMenu
-								commands={state.overlay.items}
-								onExecute={actions.onItemExecute}
-								onSelect={actions.onItemSelect}
-								selectedIndex={state.overlay.selectedIndex}
-								visibleStartIndex={state.visibleStartIndex}
-							/>
-						</box>
-					)}
-
-					{state.overlay.kind === "file-mention" && (
-						<box
-							backgroundColor={colors.surface}
-							bottom="100%"
-							left={0}
-							position="absolute"
-							width="100%"
-							zIndex={10}
-						>
-							<FileMentionMenu
-								items={state.overlay.items}
-								onExecute={actions.onItemExecute}
-								onSelect={actions.onItemSelect}
-								selectedIndex={state.overlay.selectedIndex}
-								visibleStartIndex={state.visibleStartIndex}
-							/>
-						</box>
-					)}
-
 					<textarea
 						focused={isFocused}
 						keyBindings={CHAT_TEXT_AREA_KEY_BINDINGS}

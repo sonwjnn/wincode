@@ -1,3 +1,4 @@
+import { getPort } from "@wincode/env/ports";
 import { env } from "@wincode/env/server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -6,6 +7,8 @@ import { apiRoutes } from "./routes/api";
 import { authRoutes, authWellKnownRoutes } from "./routes/auth";
 
 const app = new Hono();
+
+export const port = getPort(3000);
 
 app.use(logger());
 app.use(
@@ -24,4 +27,7 @@ const routes = app
 	.route("/api", apiRoutes);
 
 export type AppType = typeof routes;
-export default app;
+export default {
+	fetch: app.fetch,
+	port,
+};
