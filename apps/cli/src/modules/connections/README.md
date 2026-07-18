@@ -25,6 +25,8 @@ Facade-only CLI connections module.
 
 ## Provider Onboarding Contract
 
+Canonical contributor and agent instructions: `docs/adding-a-provider.md`.
+
 Normal production provider onboarding has five source edits:
 
 1. **AI model catalog** — add the connection/runtime IDs and model entries in
