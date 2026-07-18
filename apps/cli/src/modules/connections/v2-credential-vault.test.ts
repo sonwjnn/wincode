@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { CredentialByProvider } from "./contract";
 import { CredentialVaultV2 } from "./v2-credential-vault";
 
 const paths: string[] = [];
@@ -44,6 +45,51 @@ describe("v2 credential vault", () => {
 				.slice(-3)
 		).toBe("700");
 		expect((await stat(path)).mode.toString(8).slice(-3)).toBe("600");
+	});
+
+	test("round-trips every provider credential with isolated file paths", async () => {
+		const root = await mkdtemp(join(tmpdir(), "wincode-v2-"));
+		paths.push(root);
+		const vault = new CredentialVaultV2({ fileRoot: root });
+		const credentials: {
+			[P in keyof CredentialByProvider]: CredentialByProvider[P];
+		} = {
+			anthropic: { kind: "api-key", apiKey: "sk-anthropic" },
+			google: { kind: "api-key", apiKey: "google-secret" },
+			openai: {
+				kind: "oauth-session",
+				accessToken: "openai-access",
+				accountId: "openai-account",
+				expiresAt: "2030-01-01T00:00:00.000Z",
+				refreshToken: "openai-refresh",
+				updatedAt: "2029-01-01T00:00:00.000Z",
+			},
+			wincode: {
+				kind: "oauth-session",
+				accessToken: "wincode-access",
+				clientId: "wincode-client",
+				expiresAt: "2030-01-01T00:00:00.000Z",
+				issuer: "https://auth.example.com",
+				refreshToken: "wincode-refresh",
+				resource: "https://api.example.com",
+				scope: "openid",
+				tokenType: "Bearer",
+				updatedAt: "2029-01-01T00:00:00.000Z",
+			},
+		};
+		for (const provider of [
+			"anthropic",
+			"google",
+			"openai",
+			"wincode",
+		] as const) {
+			await vault.replaceValidated(provider, credentials[provider]);
+			expect(await vault.load(provider)).toEqual(credentials[provider]);
+			expect(
+				await stat(join(root, ".wincode", "connections-v2", `${provider}.json`))
+			).toBeTruthy();
+		}
+		expect(await vault.load("anthropic")).not.toEqual(credentials.google);
 	});
 
 	test("rejects symlink target", async () => {
@@ -153,6 +199,54 @@ describe("v2 credential vault", () => {
 			expect(String(error)).not.toContain("sk-secret");
 			expect(String(error)).not.toContain("extraField");
 		}
+	});
+
+	test("labels invalid schemas per provider without exposing secrets", async () => {
+		const cases = [
+			["anthropic", "Anthropic", "anthropic-secret"],
+			["google", "Google", "google-secret"],
+			["openai", "OpenAI", "openai-secret"],
+			["wincode", "Wincode", "wincode-secret"],
+		] as const;
+		for (const [provider, label, secret] of cases) {
+			const vault = new CredentialVaultV2({
+				secretStore: {
+					get: async () => JSON.stringify({ kind: "bad", apiKey: secret }),
+					set: async () => undefined,
+				},
+			});
+			await expect(vault.load(provider)).rejects.toThrow(
+				`Stored ${label} connection is invalid. Reconnect with /connect.`
+			);
+			try {
+				await vault.load(provider);
+			} catch (error) {
+				expect(String(error)).not.toContain(secret);
+			}
+		}
+	});
+
+	test("isolates schema recovery per provider", async () => {
+		const secretStore = {
+			get: async (_service: string, account: string) => {
+				if (account === "connections-v2:openai") {
+					return JSON.stringify({ kind: "oauth-session", apiKey: "wrong" });
+				}
+				if (account === "connections-v2:anthropic") {
+					return JSON.stringify({ kind: "api-key", apiKey: "sk-anthropic" });
+				}
+				return null;
+			},
+			set: async () => undefined,
+		};
+		const vault = new CredentialVaultV2({ secretStore });
+		await expect(vault.load("openai")).rejects.toThrow(
+			"Stored OpenAI connection is invalid. Reconnect with /connect."
+		);
+		await expect(vault.load("anthropic")).resolves.toEqual({
+			kind: "api-key",
+			apiKey: "sk-anthropic",
+		});
 	});
 
 	test("stores Bun v2 account namespace per provider", async () => {

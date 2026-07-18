@@ -175,7 +175,7 @@ describe("createConnections", () => {
 			adapters: createTestAdapters({
 				openai: { authorize },
 			}),
-			vault: { ...createMemoryVault(), replaceValidated },
+			vault: { ...createMemoryVault({ openai: credential }), replaceValidated },
 		});
 
 		await connections.connect({
@@ -223,7 +223,10 @@ describe("createConnections", () => {
 					},
 				},
 			}),
-			vault: createMemoryVault(),
+			vault: createMemoryVault({
+				openai: credential,
+				google: { apiKey: "google", kind: "api-key" },
+			}),
 		});
 
 		await connections.connect({
@@ -246,7 +249,7 @@ describe("createConnections", () => {
 					},
 				},
 			}),
-			vault: createMemoryVault(),
+			vault: createMemoryVault({ openai: credential }),
 		});
 
 		await expect(
@@ -338,6 +341,73 @@ describe("createConnections", () => {
 		await expect(second).resolves.toEqual({ kind: "api-key", apiKey: "x" });
 	});
 
+	test("authorize waits for deferred replacement persistence", async () => {
+		let release!: () => void;
+		const replacement = { ...credential, accessToken: "replacement" };
+		const replaceValidated = mock(async () => {
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+		});
+		const connections = createConnections({
+			adapters: createTestAdapters({
+				openai: {
+					authorize: async () => ({
+						authorization: { kind: "api-key" as const, apiKey: "x" },
+						replacementCredential: replacement,
+					}),
+				},
+			}),
+			vault: { ...createMemoryVault({ openai: credential }), replaceValidated },
+		});
+		const result = connections.authorize("openai");
+		await tick();
+		expect(replaceValidated).toHaveBeenCalled();
+		let settled = false;
+		result.then(() => {
+			settled = true;
+		});
+		await tick();
+		expect(settled).toBe(false);
+		release();
+		await expect(result).resolves.toEqual({ kind: "api-key", apiKey: "x" });
+	});
+
+	test("blocked openai authorization does not block google", async () => {
+		const connections = createConnections({
+			adapters: createTestAdapters({
+				openai: { authorize: async () => await new Promise(() => undefined) },
+				google: {
+					authorize: async () => ({
+						authorization: { kind: "api-key" as const, apiKey: "google" },
+					}),
+				},
+			}),
+			vault: createMemoryVault({
+				openai: credential,
+				google: { apiKey: "google", kind: "api-key" },
+			}),
+		});
+		connections.authorize("openai");
+		await expect(connections.authorize("google")).resolves.toEqual({
+			kind: "api-key",
+			apiKey: "google",
+		});
+	});
+
+	test("sequential authorizations call adapter twice", async () => {
+		const authorize = mock(async () => ({
+			authorization: { kind: "api-key" as const, apiKey: "x" },
+		}));
+		const connections = createConnections({
+			adapters: createTestAdapters({ openai: { authorize } }),
+			vault: createMemoryVault({ openai: credential }),
+		});
+		await connections.authorize("openai");
+		await connections.authorize("openai");
+		expect(authorize).toHaveBeenCalledTimes(2);
+	});
+
 	test("authorize after blocked connect sees new credential", async () => {
 		let releaseConnect!: () => void;
 		const nextCredential = {
@@ -346,16 +416,17 @@ describe("createConnections", () => {
 			updatedAt: new Date().toISOString(),
 		};
 		const vault = createMemoryVault({ openai: credential });
+		const authorize = mock(async (stored) => ({
+			authorization: {
+				kind: "oauth" as const,
+				accessToken: stored.accessToken,
+				accountId: stored.accountId ?? "acct",
+			},
+		}));
 		const connections = createConnections({
 			adapters: createTestAdapters({
 				openai: {
-					authorize: mock(async (stored) => ({
-						authorization: {
-							kind: "oauth" as const,
-							accessToken: stored.accessToken,
-							accountId: stored.accountId ?? "acct",
-						},
-					})),
+					authorize,
 					connect: mock(async () => {
 						await new Promise<void>((resolve) => {
 							releaseConnect = resolve;
@@ -374,9 +445,17 @@ describe("createConnections", () => {
 			signal: new AbortController().signal,
 		});
 		await tick();
+		let authorizeSettled = false;
+		const authorizePromise = connections.authorize("openai");
+		authorizePromise.then(() => {
+			authorizeSettled = true;
+		});
+		await tick();
+		expect(authorizeSettled).toBe(false);
+		expect(authorize).not.toHaveBeenCalled();
 		releaseConnect();
 		await connectPromise;
-		await expect(connections.authorize("openai")).resolves.toEqual({
+		await expect(authorizePromise).resolves.toEqual({
 			kind: "oauth",
 			accessToken: "next",
 			accountId: "acct",

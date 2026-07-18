@@ -8,6 +8,10 @@ This project uses **Ultracite**, a zero-config preset that enforces strict code 
 - **Check for issues**: `bun x ultracite check`
 - **Diagnose setup**: `bun x ultracite doctor`
 
+## Provider Changes
+
+Before adding an AI/model provider, read `docs/adding-a-provider.md`. Provider onboarding is registry-driven; do not add provider branches to generic facade, vault, UI, transport, or model-dispatch code unless the behavior is an explicitly documented protocol exception.
+
 Biome (the underlying engine) provides robust linting and formatting. Most issues are automatically fixable.
 
 ---

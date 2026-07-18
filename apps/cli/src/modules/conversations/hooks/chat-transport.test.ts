@@ -13,15 +13,18 @@ const resolveOpenAIChatModelMock = mock(
 		variantOptions,
 	})
 );
+const resolveDirectChatModelMock = mock(
+	async (selection: ChatModelSelection, apiKey: string, options: unknown) => ({
+		model: {},
+		modelId: selection.modelId,
+		providerOptions: { apiKey, options },
+	})
+);
 
 mock.module("@wincode/ai/server", () => ({
 	createCodingAgent: () => ({}),
 	getProviderErrorMessage: () => new Error("provider"),
-	resolveDirectChatModel: async (selection: ChatModelSelection) => ({
-		model: {},
-		modelId: selection.modelId,
-		providerOptions: {},
-	}),
+	resolveDirectChatModel: resolveDirectChatModelMock,
 	resolveOpenAIChatModel: resolveOpenAIChatModelMock,
 }));
 
@@ -201,6 +204,32 @@ describe("chat transport", () => {
 		expect(createStream).toHaveBeenCalled();
 	});
 
+	test("local transport rejects hosted models with stable error", async () => {
+		const transport = createLocalChatTransport(
+			"session-1",
+			modeRef,
+			modelRef,
+			variantRef,
+			{
+				authorize: mock(async () => ({ kind: "api-key", apiKey: "key" })),
+			} as never,
+			mock(async () => new ReadableStream())
+		);
+
+		await expect(
+			transport.sendMessages({
+				abortSignal: undefined,
+				body: undefined,
+				chatId: "session-1",
+				headers: undefined,
+				messageId: undefined,
+				messages: [] as never,
+				metadata: undefined,
+				trigger: "submit-message",
+			})
+		).rejects.toThrow("Local transport requires a direct model");
+	});
+
 	test("openai oauth route passes variant to resolveOpenAIChatModel", async () => {
 		const createStream = mock(async () => new ReadableStream());
 		const transport = createLocalChatTransport(
@@ -235,6 +264,8 @@ describe("chat transport", () => {
 	});
 
 	test("openai api key route uses resolveDirectChatModel", async () => {
+		resolveOpenAIChatModelMock.mockClear();
+		resolveDirectChatModelMock.mockClear();
 		const createStream = mock(async () => new ReadableStream());
 		const transport = createLocalChatTransport(
 			"session-1",
@@ -257,5 +288,11 @@ describe("chat transport", () => {
 			trigger: "submit-message",
 		});
 		expect(createStream).toHaveBeenCalled();
+		expect(resolveDirectChatModelMock).toHaveBeenCalledWith(
+			{ modelId: "gpt-5.4-mini", providerId: "openai" },
+			"openai-key",
+			{ variant: undefined }
+		);
+		expect(resolveOpenAIChatModelMock).not.toHaveBeenCalled();
 	});
 });

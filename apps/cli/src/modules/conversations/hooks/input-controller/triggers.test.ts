@@ -19,9 +19,9 @@ describe("chat input controller triggers", () => {
 	});
 
 	test("detects active trigger with command priority", () => {
-		expect(detectTrigger("/theme", 6)).toEqual({
+		expect(detectTrigger("/themes", 7)).toEqual({
 			kind: "command",
-			query: "theme",
+			query: "themes",
 		});
 		expect(detectTrigger("hello", 5)).toBeNull();
 	});

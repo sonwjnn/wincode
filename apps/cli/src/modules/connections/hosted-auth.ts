@@ -7,7 +7,7 @@ import {
 	refreshTokenGrantRequest,
 } from "oauth4webapi";
 import { getHonoClient } from "@/shared/api/hono-client";
-import type { WincodeCredential } from "./contract";
+import type { WincodeCredential } from "./credential-schemas";
 
 const EXPIRY_SKEW_MS = 5 * 60 * 1000;
 

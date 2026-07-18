@@ -10,7 +10,14 @@ export const connectionProviderIds = [
 export type ConnectionProviderId = (typeof connectionProviderIds)[number];
 export const connectionProviderIdSchema = z.enum(connectionProviderIds);
 
-export type SupportedProvider = "anthropic" | "google" | "openai";
+export const modelRuntimeProviderIds = [
+	"anthropic",
+	"google",
+	"openai",
+] as const;
+export type ModelRuntimeProviderId = (typeof modelRuntimeProviderIds)[number];
+/** Compatibility alias. */
+export type SupportedProvider = ModelRuntimeProviderId;
 
 export const modelVariantIds = [
 	"none",
@@ -24,17 +31,30 @@ export const modelVariantIds = [
 export type ModelVariant = (typeof modelVariantIds)[number];
 export const modelVariantSchema = z.enum(modelVariantIds);
 
-type ModelCatalogEntry = {
+type ModelCatalogEntryBase = {
 	connectionProviderId: ConnectionProviderId;
 	displayName: string;
 	id: string;
-	provider: SupportedProvider;
+	provider: ModelRuntimeProviderId;
 	variants: readonly ModelVariant[];
 };
+type ModelCatalogEntry =
+	| (ModelCatalogEntryBase & {
+			route: "hosted";
+			connectionProviderId: ConnectionProviderId;
+	  })
+	| {
+			[K in ModelRuntimeProviderId]: ModelCatalogEntryBase & {
+				route: "direct";
+				connectionProviderId: K;
+				provider: K;
+			};
+	  }[ModelRuntimeProviderId];
 
 export const supportedChatModels = [
 	{
 		connectionProviderId: "wincode",
+		route: "hosted",
 		displayName: "GPT-5.4 Mini",
 		id: "gpt-5.4-mini",
 		provider: "openai",
@@ -42,6 +62,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "wincode",
+		route: "hosted",
 		displayName: "Gemini 2.5 Flash",
 		id: "gemini-2.5-flash",
 		provider: "google",
@@ -49,6 +70,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "O3",
 		id: "o3",
 		provider: "openai",
@@ -56,6 +78,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "O4 Mini",
 		id: "o4-mini",
 		provider: "openai",
@@ -63,6 +86,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "O3 Pro",
 		id: "o3-pro",
 		provider: "openai",
@@ -70,6 +94,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "O3 Mini",
 		id: "o3-mini",
 		provider: "openai",
@@ -77,6 +102,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "O1",
 		id: "o1",
 		provider: "openai",
@@ -84,6 +110,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "O1 Pro",
 		id: "o1-pro",
 		provider: "openai",
@@ -91,6 +118,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.1 Codex",
 		id: "gpt-5.1-codex",
 		provider: "openai",
@@ -98,6 +126,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5 Codex",
 		id: "gpt-5-codex",
 		provider: "openai",
@@ -105,6 +134,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.2 Pro",
 		id: "gpt-5.2-pro",
 		provider: "openai",
@@ -112,6 +142,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.4 Pro",
 		id: "gpt-5.4-pro",
 		provider: "openai",
@@ -119,6 +150,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.5 Pro",
 		id: "gpt-5.5-pro",
 		provider: "openai",
@@ -126,6 +158,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.6",
 		id: "gpt-5.6",
 		provider: "openai",
@@ -133,6 +166,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.6 Sol",
 		id: "gpt-5.6-sol",
 		provider: "openai",
@@ -140,6 +174,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.6 Terra",
 		id: "gpt-5.6-terra",
 		provider: "openai",
@@ -147,6 +182,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.6 Luna",
 		id: "gpt-5.6-luna",
 		provider: "openai",
@@ -154,6 +190,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5",
 		id: "gpt-5",
 		provider: "openai",
@@ -161,6 +198,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5 Mini",
 		id: "gpt-5-mini",
 		provider: "openai",
@@ -168,6 +206,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5 Nano",
 		id: "gpt-5-nano",
 		provider: "openai",
@@ -175,6 +214,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5 Pro",
 		id: "gpt-5-pro",
 		provider: "openai",
@@ -182,6 +222,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.4 Nano",
 		id: "gpt-5.4-nano",
 		provider: "openai",
@@ -189,6 +230,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.3 Codex Spark",
 		id: "gpt-5.3-codex-spark",
 		provider: "openai",
@@ -196,6 +238,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.2",
 		id: "gpt-5.2",
 		provider: "openai",
@@ -203,6 +246,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.3 Codex",
 		id: "gpt-5.3-codex",
 		provider: "openai",
@@ -210,6 +254,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.4",
 		id: "gpt-5.4",
 		provider: "openai",
@@ -217,6 +262,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.4 Mini",
 		id: "gpt-5.4-mini",
 		provider: "openai",
@@ -224,6 +270,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.5",
 		id: "gpt-5.5",
 		provider: "openai",
@@ -231,6 +278,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.1",
 		id: "gpt-5.1",
 		provider: "openai",
@@ -238,6 +286,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.1 Codex Max",
 		id: "gpt-5.1-codex-max",
 		provider: "openai",
@@ -245,6 +294,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.2 Codex",
 		id: "gpt-5.2-codex",
 		provider: "openai",
@@ -252,6 +302,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.1 Chat Latest",
 		id: "gpt-5.1-chat-latest",
 		provider: "openai",
@@ -259,6 +310,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-5.2 Chat Latest",
 		id: "gpt-5.2-chat-latest",
 		provider: "openai",
@@ -266,6 +318,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "anthropic",
+		route: "direct",
 		displayName: "Claude Opus 4.5",
 		id: "claude-opus-4-5",
 		provider: "anthropic",
@@ -273,6 +326,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "anthropic",
+		route: "direct",
 		displayName: "Claude Opus 4.5 20251101",
 		id: "claude-opus-4-5-20251101",
 		provider: "anthropic",
@@ -280,6 +334,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "anthropic",
+		route: "direct",
 		displayName: "Claude Opus 4.7",
 		id: "claude-opus-4-7",
 		provider: "anthropic",
@@ -287,6 +342,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "anthropic",
+		route: "direct",
 		displayName: "Claude Sonnet 5",
 		id: "claude-sonnet-5",
 		provider: "anthropic",
@@ -294,6 +350,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "anthropic",
+		route: "direct",
 		displayName: "Claude Opus 4.8",
 		id: "claude-opus-4-8",
 		provider: "anthropic",
@@ -301,6 +358,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "anthropic",
+		route: "direct",
 		displayName: "Claude Fable 5",
 		id: "claude-fable-5",
 		provider: "anthropic",
@@ -308,6 +366,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "anthropic",
+		route: "direct",
 		displayName: "Claude Opus 4.6",
 		id: "claude-opus-4-6",
 		provider: "anthropic",
@@ -315,6 +374,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "anthropic",
+		route: "direct",
 		displayName: "Claude Sonnet 4.6",
 		id: "claude-sonnet-4-6",
 		provider: "anthropic",
@@ -322,6 +382,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "anthropic",
+		route: "direct",
 		displayName: "Claude Haiku 4.5",
 		id: "claude-haiku-4-5",
 		provider: "anthropic",
@@ -329,6 +390,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "anthropic",
+		route: "direct",
 		displayName: "Claude Haiku 4.5 20251001",
 		id: "claude-haiku-4-5-20251001",
 		provider: "anthropic",
@@ -336,6 +398,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "anthropic",
+		route: "direct",
 		displayName: "Claude Sonnet 4.5",
 		id: "claude-sonnet-4-5",
 		provider: "anthropic",
@@ -343,6 +406,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "anthropic",
+		route: "direct",
 		displayName: "Claude Sonnet 4.5 20250929",
 		id: "claude-sonnet-4-5-20250929",
 		provider: "anthropic",
@@ -350,6 +414,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "google",
+		route: "direct",
 		displayName: "Gemini 3.1 Flash Lite",
 		id: "gemini-3.1-flash-lite",
 		provider: "google",
@@ -357,6 +422,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "google",
+		route: "direct",
 		displayName: "Gemini 3.5 Flash",
 		id: "gemini-3.5-flash",
 		provider: "google",
@@ -364,6 +430,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "google",
+		route: "direct",
 		displayName: "Gemini 3 Flash Preview",
 		id: "gemini-3-flash-preview",
 		provider: "google",
@@ -371,6 +438,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "google",
+		route: "direct",
 		displayName: "Gemini 3.1 Pro Preview",
 		id: "gemini-3.1-pro-preview",
 		provider: "google",
@@ -378,6 +446,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "google",
+		route: "direct",
 		displayName: "Gemini 3 Pro Preview",
 		id: "gemini-3-pro-preview",
 		provider: "google",
@@ -385,6 +454,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "google",
+		route: "direct",
 		displayName: "Gemini 2.5 Pro",
 		id: "gemini-2.5-pro",
 		provider: "google",
@@ -392,6 +462,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "google",
+		route: "direct",
 		displayName: "Gemini 2.5 Flash",
 		id: "gemini-2.5-flash",
 		provider: "google",
@@ -399,6 +470,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "google",
+		route: "direct",
 		displayName: "Gemini Flash Latest",
 		id: "gemini-flash-latest",
 		provider: "google",
@@ -406,6 +478,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "google",
+		route: "direct",
 		displayName: "Gemini Flash Lite Latest",
 		id: "gemini-flash-lite-latest",
 		provider: "google",
@@ -413,6 +486,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "google",
+		route: "direct",
 		displayName: "Gemini 2.5 Flash Lite",
 		id: "gemini-2.5-flash-lite",
 		provider: "google",
@@ -420,6 +494,7 @@ export const supportedChatModels = [
 	},
 	{
 		connectionProviderId: "google",
+		route: "direct",
 		displayName: "Gemma 4 31B IT",
 		id: "gemma-4-31b-it",
 		provider: "google",
@@ -478,6 +553,11 @@ export const isSupportedChatModelSelection = (
 	selection: ChatModelSelection
 ): boolean => findSupportedChatModelSelection(selection) !== null;
 
+export const getChatModelRoute = (
+	selection: ChatModelSelection
+): "hosted" | "direct" | null =>
+	findSupportedChatModelSelection(selection)?.route ?? null;
+
 export const getSupportedModelVariants = (
 	selection: ChatModelSelection
 ): readonly ModelVariant[] =>
@@ -497,7 +577,26 @@ export const normalizeModelVariant = (
 	if (!parsed.success) {
 		return;
 	}
-	return isSupportedModelVariant(selection, parsed.data)
+	return normalizeModelVariantForModel(
+		findSupportedChatModelSelection(selection),
+		parsed.data
+	);
+};
+
+/** Validate variant against the selected catalog entry, not its runtime provider. */
+export const normalizeModelVariantForModel = (
+	model: {
+		id: string;
+		connectionProviderId: ConnectionProviderId;
+		variants: readonly ModelVariant[];
+	} | null,
+	variant: string | undefined
+): ModelVariant | undefined => {
+	if (variant === undefined || !model) {
+		return;
+	}
+	const parsed = modelVariantSchema.safeParse(variant);
+	return parsed.success && model.variants.includes(parsed.data)
 		? parsed.data
 		: undefined;
 };
@@ -528,6 +627,4 @@ export const normalizeChatModelSelection = (
 
 export const isHostChatModelSelection = (
 	selection: ChatModelSelection
-): boolean =>
-	selection.providerId === "wincode" &&
-	findSupportedChatModelSelection(selection) !== null;
+): boolean => getChatModelRoute(selection) === "hosted";

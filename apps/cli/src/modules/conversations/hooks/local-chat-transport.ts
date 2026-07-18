@@ -2,6 +2,7 @@ import {
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
 	expandFileMentionPartsForModel,
+	getChatModelRoute,
 	type ModelVariant,
 	type ModeType,
 	sanitizeInterruptedMessagesForModel,
@@ -13,10 +14,7 @@ import {
 	resolveOpenAIChatModel,
 } from "@wincode/ai/server";
 import { type ChatTransport, createAgentUIStream } from "ai";
-import type {
-	AuthorizationByProvider,
-	Connections,
-} from "@/modules/connections";
+import type { Connections } from "@/modules/connections";
 
 type MutableRefObject<T> = { current: T };
 
@@ -33,10 +31,8 @@ export const createLocalChatTransport = (
 ): LocalChatTransport => ({
 	sendMessages: async ({ abortSignal, messages }) => {
 		const selection = modelRef.current;
-		if (selection.providerId === "wincode") {
-			throw new Error(
-				"Local transport only handles openai, anthropic, or google"
-			);
+		if (getChatModelRoute(selection) !== "direct") {
+			throw new Error("Local transport requires a direct model");
 		}
 
 		const resolvedModel = await resolveResolvedModel(
@@ -74,42 +70,16 @@ async function resolveResolvedModel(
 	variant?: ModelVariant,
 	signal?: AbortSignal
 ) {
-	switch (selection.providerId) {
-		case "openai":
-			return resolveOpenAIAuthorization(
-				selection,
-				await connections.authorize("openai", signal),
-				variant
-			);
-		case "anthropic":
-			return resolveDirectChatModel(
-				selection,
-				(await connections.authorize("anthropic", signal)).apiKey,
-				{ variant }
-			);
-		case "google":
-			return resolveDirectChatModel(
-				selection,
-				(await connections.authorize("google", signal)).apiKey,
-				{ variant }
-			);
-		default:
-			throw new Error(
-				"Local transport only handles openai, anthropic, or google"
-			);
-	}
-}
-
-async function resolveOpenAIAuthorization(
-	selection: ChatModelSelection,
-	authorization: AuthorizationByProvider["openai"],
-	variant?: ModelVariant
-) {
+	const authorization = await connections.authorize(
+		selection.providerId,
+		signal
+	);
 	if (authorization.kind === "api-key") {
 		return resolveDirectChatModel(selection, authorization.apiKey, { variant });
 	}
 
-	if (authorization.kind === "oauth") {
+	// OpenAI OAuth is the only supported OAuth direct route.
+	if (authorization.kind === "oauth" && selection.providerId === "openai") {
 		return resolveOpenAIChatModel(
 			selection.modelId,
 			{
@@ -121,5 +91,7 @@ async function resolveOpenAIAuthorization(
 		);
 	}
 
-	throw new Error("OpenAI auth must be api-key or oauth");
+	throw new Error(
+		"Local transport requires api-key or supported oauth authorization"
+	);
 }

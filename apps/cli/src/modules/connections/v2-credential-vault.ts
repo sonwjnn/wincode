@@ -10,8 +10,8 @@ import {
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ConnectionProviderId } from "@wincode/ai";
-import type { Credential, CredentialByProvider } from "./contract";
-import { credentialSchemas } from "./contract";
+import type { CredentialByProvider } from "./contract";
+import { defaultProviderRegistry } from "./provider-registry";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -59,19 +59,12 @@ export class CredentialVaultV2 {
 		this.fileRoot = options.fileRoot ?? homedir();
 	}
 
-	async load(
-		providerId: "anthropic"
-	): Promise<CredentialByProvider["anthropic"] | null>;
-	async load(
-		providerId: "google"
-	): Promise<CredentialByProvider["google"] | null>;
-	async load(
-		providerId: "openai"
-	): Promise<CredentialByProvider["openai"] | null>;
-	async load(
-		providerId: "wincode"
-	): Promise<CredentialByProvider["wincode"] | null>;
-	async load(providerId: ConnectionProviderId): Promise<Credential | null> {
+	async load<P extends ConnectionProviderId>(
+		providerId: P
+	): Promise<CredentialByProvider[P] | null>;
+	async load<P extends ConnectionProviderId>(
+		providerId: P
+	): Promise<CredentialByProvider[P] | null> {
 		const raw =
 			this.secretStore === null
 				? await this.readFile(providerId)
@@ -82,11 +75,11 @@ export class CredentialVaultV2 {
 		return raw === null ? null : parseStoredCredential(providerId, raw);
 	}
 
-	async replaceValidated(
-		providerId: ConnectionProviderId,
-		credential: unknown
+	async replaceValidated<P extends ConnectionProviderId>(
+		providerId: P,
+		credential: CredentialByProvider[P]
 	): Promise<void> {
-		const validated = credentialSchemas[providerId].parse(credential);
+		const validated = parseCredential(providerId, credential);
 		if (this.secretStore !== null) {
 			await this.secretStore.set(
 				SERVICE_NAME,
@@ -116,9 +109,9 @@ export class CredentialVaultV2 {
 		}
 	}
 
-	private async writeFile(
-		providerId: ConnectionProviderId,
-		credential: CredentialByProvider[ConnectionProviderId]
+	private async writeFile<P extends ConnectionProviderId>(
+		providerId: P,
+		credential: CredentialByProvider[P]
 	): Promise<void> {
 		const path = connectionFilePath(providerId, this.fileRoot);
 		const wincodeDirectory = dirname(dirname(path));
@@ -240,23 +233,23 @@ const assertSecureMode = (mode: number, message: string): void => {
 const isMissingFileError = (error: unknown): boolean =>
 	error instanceof Error && "code" in error && error.code === "ENOENT";
 
-const parseStoredCredential = (
-	providerId: ConnectionProviderId,
+const parseCredential = <P extends ConnectionProviderId>(
+	providerId: P,
+	input: unknown
+): CredentialByProvider[P] => {
+	// Indexed schemas are heterogeneous; this is the single localized Zod boundary.
+	const schema = defaultProviderRegistry[providerId].credentialSchema as {
+		parse(value: unknown): CredentialByProvider[P];
+	};
+	return schema.parse(input);
+};
+
+const parseStoredCredential = <P extends ConnectionProviderId>(
+	providerId: P,
 	raw: string
-): Credential => {
+): CredentialByProvider[P] => {
 	try {
-		switch (providerId) {
-			case "anthropic":
-				return credentialSchemas.anthropic.parse(JSON.parse(raw));
-			case "google":
-				return credentialSchemas.google.parse(JSON.parse(raw));
-			case "openai":
-				return credentialSchemas.openai.parse(JSON.parse(raw));
-			case "wincode":
-				return credentialSchemas.wincode.parse(JSON.parse(raw));
-			default:
-				throw new Error("Unknown provider.");
-		}
+		return parseCredential(providerId, JSON.parse(raw));
 	} catch {
 		throw new InvalidStoredConnectionError(providerId);
 	}
@@ -264,12 +257,5 @@ const parseStoredCredential = (
 
 const getInvalidStoredConnectionMessage = (
 	providerId: ConnectionProviderId
-): string => {
-	const providerLabels: Record<ConnectionProviderId, string> = {
-		anthropic: "Anthropic",
-		google: "Google",
-		openai: "OpenAI",
-		wincode: "Wincode",
-	};
-	return `Stored ${providerLabels[providerId]} connection is invalid. Reconnect with /connect.`;
-};
+): string =>
+	`Stored ${defaultProviderRegistry[providerId].displayName} connection is invalid. Reconnect with /connect.`;

@@ -10,7 +10,7 @@ import type {
 	AcquisitionProgress,
 	ConnectionProgress,
 	OpenAICredential,
-} from "./contract";
+} from "./credential-schemas";
 
 const OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OPENAI_ISSUER = "https://auth.openai.com";

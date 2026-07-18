@@ -4,7 +4,7 @@ import type {
 	ModelVariant,
 	ModeType,
 } from "@wincode/ai";
-import { normalizeChatModelSelection } from "@wincode/ai";
+import { getChatModelRoute, normalizeChatModelSelection } from "@wincode/ai";
 import { type ChatTransport, DefaultChatTransport } from "ai";
 import type { Connections } from "@/modules/connections";
 import { getHonoClient } from "@/shared/api/hono-client";
@@ -34,7 +34,7 @@ export const createRoutingChatTransport = (
 		const latestConfig = getLatestChatConfig(messages);
 		const selection = latestConfig?.model ?? modelRef.current;
 		const variant = latestConfig?.variant ?? variantRef.current;
-		if (selection.providerId !== "wincode") {
+		if (getChatModelRoute(selection) !== "hosted") {
 			return createLocalChatTransport(
 				sessionId,
 				modeRef,
@@ -83,7 +83,7 @@ export const createRoutingChatTransport = (
 	},
 	reconnectToStream: async ({ chatId }) => {
 		const selection = normalizeChatModelSelection(modelRef.current);
-		if (selection?.providerId !== "wincode") {
+		if (!selection || getChatModelRoute(selection) !== "hosted") {
 			return null;
 		}
 

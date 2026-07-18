@@ -36,8 +36,8 @@ describe("CommandSpec registry", () => {
 		expect(cmd?.kind).toBe("variants");
 	});
 
-	test("/theme is kind: 'dialog'", () => {
-		const cmd = COMMANDS.find((c) => c.value === "/theme");
+	test("/themes is kind: 'dialog'", () => {
+		const cmd = COMMANDS.find((c) => c.value === "/themes");
 		expect(cmd).toBeDefined();
 		expect(cmd?.kind).toBe("dialog");
 		if (cmd?.kind === "dialog") {
