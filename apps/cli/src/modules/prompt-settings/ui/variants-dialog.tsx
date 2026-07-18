@@ -10,6 +10,7 @@ import {
 	useDialogEscape,
 } from "@/shared/providers/dialog/dialog-provider";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
+import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 
 type VariantsDialogContentProps = {
 	currentModel: SupportedChatModel;
@@ -61,14 +62,24 @@ export const VariantsDialogContent = ({
 				`${variant.label}`.toLowerCase().includes(query.toLowerCase())
 			}
 			getKey={(variant) => variant.label}
+			isItemActive={(variant) => variant.value === currentVariant}
 			items={variants}
 			onSelect={handleSelect}
 			placeholder="Search variants"
-			renderItem={(variant, isSelected) => (
-				<text fg={isSelected ? "black" : "white"} selectable={false}>
-					{variant.value === currentVariant ? " • " : "   "}
-					{variant.label}
-				</text>
+			renderItem={(variant, isSelected, isActive) => (
+				<SelectableDialogItem
+					status={
+						isActive ? (
+							<text fg={isSelected ? "black" : "white"} selectable={false}>
+								{"●"}
+							</text>
+						) : null
+					}
+				>
+					<text fg={isSelected ? "black" : "white"} selectable={false}>
+						{variant.label}
+					</text>
+				</SelectableDialogItem>
 			)}
 		/>
 	);

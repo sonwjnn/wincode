@@ -101,7 +101,9 @@ export function useCommandExecutor(): UseCommandExecutorReturn {
 									});
 								},
 							}),
+							padding: { bottom: 1, left: 0, right: 0, top: 1 },
 							title: "Connect",
+							titleMargin: { left: 4, right: 4 },
 							width: CONNECTION_DIALOG_WIDTH,
 						});
 					},
@@ -123,7 +125,13 @@ export function useCommandExecutor(): UseCommandExecutorReturn {
 								});
 								break;
 							case "theme":
-								dialog.open({ children: <ThemeDialogContent />, title });
+								dialog.open({
+									children: <ThemeDialogContent />,
+									padding: { bottom: 1, left: 0, right: 0, top: 1 },
+									title,
+									titleMargin: { left: 4, right: 4 },
+									width: CONNECTION_DIALOG_WIDTH,
+								});
 								break;
 							default:
 								break;
@@ -131,16 +139,20 @@ export function useCommandExecutor(): UseCommandExecutorReturn {
 					},
 				}),
 				models: new ModelsAdapter({
-					open: ({ models, currentModel, onSelectModel }) =>
+					open: ({ models, currentModel, recentSelections, onSelectModel }) =>
 						dialog.open({
 							children: (
 								<ModelsDialogContent
 									currentModel={currentModel}
 									models={models}
 									onSelectModel={onSelectModel}
+									recentSelections={recentSelections}
 								/>
 							),
+							padding: { bottom: 1, left: 0, right: 0, top: 1 },
 							title: "Select Model",
+							titleMargin: { left: 4, right: 4 },
+							width: CONNECTION_DIALOG_WIDTH,
 						}),
 					currentModel: model,
 					setModel,
@@ -155,7 +167,10 @@ export function useCommandExecutor(): UseCommandExecutorReturn {
 									onSelectVariant={onSelectVariant}
 								/>
 							),
+							padding: { bottom: 1, left: 0, right: 0, top: 1 },
 							title: "Select Variant",
+							titleMargin: { left: 4, right: 4 },
+							width: CONNECTION_DIALOG_WIDTH,
 						}),
 					currentModel: supportedModel,
 					currentVariant: variant,
@@ -170,7 +185,10 @@ export function useCommandExecutor(): UseCommandExecutorReturn {
 									onSelectMode={onSelectMode}
 								/>
 							),
+							padding: { bottom: 1, left: 0, right: 0, top: 1 },
 							title: "Select Agent",
+							titleMargin: { left: 4, right: 4 },
+							width: CONNECTION_DIALOG_WIDTH,
 						}),
 					currentMode: mode,
 					setMode,

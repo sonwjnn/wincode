@@ -6,6 +6,7 @@ import {
 	applyFileMentionReplacement,
 	filterFileMentionOptions,
 } from "@/modules/file-mentions";
+import { removeTriggerText } from "./escape-trigger";
 import { type ActiveTrigger, detectTrigger } from "./triggers";
 import type {
 	ChatInputController,
@@ -201,8 +202,12 @@ export function useChatInputController({
 	]);
 
 	const onEscape = useCallback(() => {
+		if (activeTrigger) {
+			const result = removeTriggerText(textValue, activeTrigger);
+			setProgrammaticText(result.text, result.cursorOffset);
+		}
 		closeOverlay();
-	}, [closeOverlay]);
+	}, [activeTrigger, closeOverlay, setProgrammaticText, textValue]);
 
 	const onCtrlC = useCallback(() => {
 		if (disabled || (textValue.length === 0 && overlayKind === null)) {
@@ -225,12 +230,26 @@ export function useChatInputController({
 			return;
 		}
 
-		const nextIndex = Math.max(0, selectedIndexRef.current - 1);
+		const itemsLength =
+			overlayKind === "command"
+				? filteredCommands.length
+				: filteredFileMentions.length;
+		if (itemsLength === 0) {
+			return;
+		}
+
+		const nextIndex =
+			selectedIndexRef.current <= 0
+				? itemsLength - 1
+				: selectedIndexRef.current - 1;
+		selectedIndexRef.current = nextIndex;
 		setSelectedIndex(nextIndex);
 		setVisibleStartIndex((start) =>
-			nextIndex < start ? Math.max(0, nextIndex) : start
+			nextIndex < start || nextIndex >= start + MAX_VISIBLE_ITEMS
+				? Math.max(0, nextIndex - MAX_VISIBLE_ITEMS + 1)
+				: start
 		);
-	}, [overlayKind]);
+	}, [filteredCommands.length, filteredFileMentions.length, overlayKind]);
 
 	const onArrowDown = useCallback(() => {
 		if (overlayKind === null) {
@@ -246,13 +265,21 @@ export function useChatInputController({
 			return;
 		}
 
-		const nextIndex = Math.min(itemsLength - 1, selectedIndexRef.current + 1);
+		const nextIndex =
+			selectedIndexRef.current >= itemsLength - 1
+				? 0
+				: selectedIndexRef.current + 1;
+		selectedIndexRef.current = nextIndex;
 		setSelectedIndex(nextIndex);
-		setVisibleStartIndex((start) =>
-			nextIndex >= start + MAX_VISIBLE_ITEMS
-				? nextIndex - MAX_VISIBLE_ITEMS + 1
-				: start
-		);
+		setVisibleStartIndex((start) => {
+			if (nextIndex < start) {
+				return 0;
+			}
+			if (nextIndex >= start + MAX_VISIBLE_ITEMS) {
+				return nextIndex - MAX_VISIBLE_ITEMS + 1;
+			}
+			return start;
+		});
 	}, [filteredCommands.length, filteredFileMentions.length, overlayKind]);
 
 	const onItemSelect = useCallback(

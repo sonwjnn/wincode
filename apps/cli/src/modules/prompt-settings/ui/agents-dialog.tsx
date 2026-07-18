@@ -5,6 +5,7 @@ import {
 	useDialogEscape,
 } from "@/shared/providers/dialog/dialog-provider";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
+import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 
 type AgentsDialogContentProps = {
 	currentMode?: ModeType;
@@ -36,14 +37,24 @@ export const AgentsDialogContent = ({
 					.includes(query.toLowerCase())
 			}
 			getKey={(item) => item.value}
+			isItemActive={(item) => item.value === currentMode}
 			items={codingModes}
 			onSelect={handleSelect}
 			placeholder="Search agents"
-			renderItem={(item, isSelected) => (
-				<text fg={isSelected ? "black" : "white"} selectable={false}>
-					{item.value === currentMode ? " • " : "   "}
-					{item.displayName}
-				</text>
+			renderItem={(item, isSelected, isActive) => (
+				<SelectableDialogItem
+					status={
+						isActive ? (
+							<text fg={isSelected ? "black" : "white"} selectable={false}>
+								{"●"}
+							</text>
+						) : null
+					}
+				>
+					<text fg={isSelected ? "black" : "white"} selectable={false}>
+						{item.displayName}
+					</text>
+				</SelectableDialogItem>
 			)}
 		/>
 	);

@@ -45,8 +45,7 @@ describe("connection dialog ui", () => {
 
 		expect(providerSource).toContain("CONNECTION_LABEL_COLUMN_WIDTH");
 		expect(methodSource).toContain("CONNECTION_LABEL_COLUMN_WIDTH");
-		expect(providerSource).toContain("marginLeft={1}");
-		expect(providerSource).toContain("width={2}");
+		expect(providerSource).toContain("SelectableDialogItem");
 		expect(providerSource).toContain("✓");
 		expect(providerSource).not.toContain("✓ Connected");
 		expect(providerSource).toContain("#22C55E");

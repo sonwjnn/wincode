@@ -2,6 +2,7 @@ import { TextAttributes } from "@opentui/core";
 import { useCallback } from "react";
 import { useDialogEscape } from "@/shared/providers/dialog/dialog-provider";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
+import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 import type { ConnectionProviderSummary } from "../contract";
 import {
 	CONNECTION_LABEL_COLUMN_WIDTH,
@@ -41,22 +42,24 @@ export function ConnectionMethodPickerDialogContent({
 			onSelect={handleSelect}
 			placeholder="Search methods"
 			renderItem={(method, isSelected) => (
-				<box flexDirection="row" flexGrow={1} gap={1}>
-					<box flexShrink={0} width={CONNECTION_LABEL_COLUMN_WIDTH}>
-						<text fg={isSelected ? "black" : "white"} selectable={false}>
-							{method.label}
-						</text>
+				<SelectableDialogItem>
+					<box flexDirection="row" flexGrow={1} gap={1}>
+						<box flexShrink={0} width={CONNECTION_LABEL_COLUMN_WIDTH}>
+							<text fg={isSelected ? "black" : "white"} selectable={false}>
+								{method.label}
+							</text>
+						</box>
+						<box flexGrow={1} flexShrink={1} overflow="hidden">
+							<text
+								attributes={isSelected ? undefined : TextAttributes.DIM}
+								fg={isSelected ? "black" : "#9AA0A6"}
+								selectable={false}
+							>
+								{method.details}
+							</text>
+						</box>
 					</box>
-					<box flexGrow={1} flexShrink={1} overflow="hidden">
-						<text
-							attributes={isSelected ? undefined : TextAttributes.DIM}
-							fg={isSelected ? "black" : "#9AA0A6"}
-							selectable={false}
-						>
-							{method.details}
-						</text>
-					</box>
-				</box>
+				</SelectableDialogItem>
 			)}
 		/>
 	);

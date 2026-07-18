@@ -1,15 +1,10 @@
 import { RGBA, TextAttributes } from "@opentui/core";
-import { useKeyboard } from "@opentui/react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchableList } from "@/shared/hooks/use-searchable-list";
-import {
-	useDialog,
-	useDialogLayer,
-} from "@/shared/providers/dialog/dialog-provider";
-import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
-import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
+import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 import type { ConversationSession } from "../../storage/conversation-store";
 import { getConversationStore } from "../../storage/get-conversation-store";
 import { RenameSessionDialog } from "./rename-session-dialog";
@@ -61,20 +56,6 @@ function buildListItems(
 	return items;
 }
 
-function getItemBackgroundColor(
-	isPendingDelete: boolean,
-	isSelected: boolean,
-	selectionColor: string
-): string | RGBA | undefined {
-	if (isPendingDelete) {
-		return CONFIRM_DELETE_BG;
-	}
-	if (isSelected) {
-		return selectionColor;
-	}
-	return;
-}
-
 function getItemForeground(
 	isPendingDelete: boolean,
 	isSelected: boolean
@@ -106,10 +87,6 @@ type SessionListItemProps = {
 	isSelected: boolean;
 	isPendingDelete: boolean;
 	isActiveRoute: boolean;
-	isLastInGroup: boolean;
-	selectionColor: string;
-	onMouseDown: () => void;
-	onMouseMove: () => void;
 };
 
 function SessionListItem({
@@ -117,42 +94,20 @@ function SessionListItem({
 	isSelected,
 	isPendingDelete,
 	isActiveRoute,
-	isLastInGroup,
-	selectionColor,
-	onMouseDown,
-	onMouseMove,
 }: SessionListItemProps) {
-	const bg = getItemBackgroundColor(
-		isPendingDelete,
-		isSelected,
-		selectionColor
-	);
 	const fg = getItemForeground(isPendingDelete, isSelected);
 
 	return (
-		// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events.
-		<box
-			backgroundColor={bg}
-			flexDirection="row"
-			height={1}
-			key={session.id}
-			marginBottom={isLastInGroup ? 1 : 0}
-			marginX={1}
-			onMouseDown={onMouseDown}
-			onMouseMove={onMouseMove}
-			overflow="hidden"
+		<SelectableDialogItem
+			status={
+				isActiveRoute ? (
+					<text fg={fg} selectable={false}>
+						{"●"}
+					</text>
+				) : null
+			}
 		>
-			{isActiveRoute && (
-				<text fg={fg} marginLeft={1} selectable={false} width={2}>
-					{"\u25cf"}
-				</text>
-			)}
-			<box
-				flexDirection="row"
-				flexGrow={1}
-				marginLeft={isActiveRoute ? 0 : 3}
-				marginRight={3}
-			>
+			<box flexDirection="row" flexGrow={1} marginRight={3}>
 				<text fg={fg} selectable={false}>
 					{session.title}
 				</text>
@@ -167,7 +122,7 @@ function SessionListItem({
 					)}
 				</text>
 			</box>
-		</box>
+		</SelectableDialogItem>
 	);
 }
 
@@ -180,9 +135,6 @@ export const SessionsDialogContent = () => {
 	const { close, open: openDialog } = useDialog();
 	const navigate = useNavigate();
 	const { show } = useToast();
-	const { colors } = useTheme();
-	const { isTopLayer } = useKeyboardLayer();
-	const layerId = useDialogLayer();
 	const routerState = useRouterState();
 
 	const currentSessionId = useMemo(() => {
@@ -198,19 +150,6 @@ export const SessionsDialogContent = () => {
 			session.title.toLowerCase().includes(query.toLowerCase()),
 		[]
 	);
-
-	const {
-		filtered: filteredSessions,
-		searchValue,
-		selectedIndex,
-		setSelectedIndex,
-		inputRef,
-		scrollRef,
-		handleContentChange,
-		moveUp,
-		moveDown,
-		handleEnter,
-	} = useSearchableList(sessions, filterFn);
 
 	const fetchSessions = useCallback(
 		async (ignoreRef?: { current: boolean }) => {
@@ -245,34 +184,16 @@ export const SessionsDialogContent = () => {
 	}, [fetchSessions]);
 
 	useEffect(() => {
-		if (searchValue !== undefined) {
-			setPendingDeleteId(null);
-		}
-	}, [searchValue]);
-
-	const listItems = useMemo(
-		() => buildListItems(filteredSessions, searchValue.trim().length > 0),
-		[filteredSessions, searchValue]
-	);
-
-	const visibleHeight = useMemo(
-		() =>
-			Math.max(
-				MIN_VISIBLE_ITEMS,
-				Math.min(listItems.length, MAX_VISIBLE_ITEMS)
-			),
-		[listItems.length]
-	);
-
-	const selectedSession = filteredSessions[selectedIndex] ?? null;
-
-	useEffect(() => {
-		selectedSessionRef.current = selectedSession;
-	}, [selectedSession]);
-
-	useEffect(() => {
 		pendingDeleteIdRef.current = pendingDeleteId;
 	}, [pendingDeleteId]);
+
+	useEffect(() => {
+		selectedSessionRef.current =
+			sessions.find((session) => session.id === currentSessionId) ??
+			sessions.find((session) => session.pinned) ??
+			sessions[0] ??
+			null;
+	}, [currentSessionId, sessions]);
 
 	const navigateToSession = useCallback(
 		(session: Session) => {
@@ -359,14 +280,6 @@ export const SessionsDialogContent = () => {
 		[openDialog, handleRenameSuccess]
 	);
 
-	const handleUp = useCallback(() => {
-		moveUp(() => setPendingDeleteId(null));
-	}, [moveUp]);
-
-	const handleDown = useCallback(() => {
-		moveDown(() => setPendingDeleteId(null));
-	}, [moveDown]);
-
 	const handleActionKeysRef = useRef(
 		(_key: { ctrl: boolean; name: string }) => false as boolean
 	);
@@ -400,146 +313,95 @@ export const SessionsDialogContent = () => {
 		return false;
 	};
 
-	useKeyboard((key) => {
-		if (!isTopLayer(layerId)) {
-			return;
-		}
-
-		if (key.name === "escape") {
-			if (pendingDeleteIdRef.current) {
-				setPendingDeleteId(null);
-			} else {
-				close();
-			}
-			return;
-		}
-
-		if (key.name === "up") {
-			key.preventDefault();
-			handleUp();
-			return;
-		}
-
-		if (key.name === "down") {
-			key.preventDefault();
-			handleDown();
-			return;
-		}
-
-		if (key.name === "return" || key.name === "enter") {
-			key.preventDefault();
+	const handleHighlight = useCallback((item: ListItem) => {
+		if (item.kind === "session") {
+			selectedSessionRef.current = item.session;
 			setPendingDeleteId(null);
-			const session = selectedSessionRef.current;
-			if (session) {
-				handleEnter(() => navigateToSession(session));
-			}
-			return;
 		}
-
-		if (handleActionKeysRef.current(key)) {
-			key.preventDefault();
-		}
-	});
-
-	if (loading) {
-		return (
-			<box flexDirection="column">
-				<text attributes={TextAttributes.DIM} marginLeft={4}>
-					Loading sessions...
-				</text>
-			</box>
-		);
-	}
+	}, []);
 
 	const isConfirmDelete =
-		pendingDeleteId &&
-		selectedSession &&
-		pendingDeleteId === selectedSession.id;
+		pendingDeleteId && pendingDeleteId === selectedSessionRef.current?.id;
 
 	return (
-		<box flexDirection="column" gap={1}>
-			<input
-				focused
-				marginX={4}
-				onContentChange={handleContentChange}
-				placeholder="Search sessions"
-				ref={inputRef}
-			/>
-			{listItems.length === 0 ? (
-				<text
-					attributes={TextAttributes.DIM}
-					height={visibleHeight}
-					marginX={4}
-				>
-					No matching sessions
-				</text>
-			) : (
-				<scrollbox height={visibleHeight} ref={scrollRef}>
-					{listItems.map((item, index) => {
-						if (item.kind === "header") {
-							return (
-								<box height={1} key={item.label} marginX={4}>
-									<text attributes={TextAttributes.BOLD}>{item.label}</text>
-								</box>
-							);
-						}
-
-						const session = item.session;
-						const isSelected = session === selectedSession;
-						const isPendingDelete = pendingDeleteId === session.id;
-						const isActiveRoute = currentSessionId === session.id;
-						const isLastInGroup =
-							index === listItems.length - 1 ||
-							listItems[index + 1]?.kind === "header";
-
-						return (
-							<SessionListItem
-								isActiveRoute={isActiveRoute}
-								isLastInGroup={isLastInGroup}
-								isPendingDelete={isPendingDelete}
-								isSelected={isSelected}
-								key={session.id}
-								onMouseDown={() => {
-									setPendingDeleteId(null);
-									navigateToSession(session);
-								}}
-								onMouseMove={() => {
-									const idx = filteredSessions.findIndex(
-										(s) => s.id === session.id
-									);
-									if (idx !== -1) {
-										setSelectedIndex(idx);
-										if (pendingDeleteId && pendingDeleteId !== session.id) {
-											setPendingDeleteId(null);
-										}
-									}
-								}}
-								selectionColor={colors.selection}
-								session={session}
-							/>
-						);
-					})}
-				</scrollbox>
-			)}
-			<box flexDirection="row" gap={2} height={1} marginX={4}>
-				{isConfirmDelete ? (
-					<>
-						<text fg="#ff6666">delete</text>
-						<text attributes={TextAttributes.DIM}>ctrl+d again to confirm</text>
-						<text>esc</text>
-						<text attributes={TextAttributes.DIM}>cancel</text>
-					</>
+		<SearchListDialogWrapper<ListItem>
+			emptyText={loading ? "Loading sessions..." : "No matching sessions"}
+			filterFn={(item, query) =>
+				item.kind === "header"
+					? query.length === 0
+					: filterFn(item.session, query)
+			}
+			footer={
+				loading ? null : (
+					<box flexDirection="row" gap={2} height={1} marginX={4}>
+						{isConfirmDelete ? (
+							<>
+								<text fg="#ff6666">delete</text>
+								<text attributes={TextAttributes.DIM}>
+									ctrl+d again to confirm
+								</text>
+								<text>esc</text>
+								<text attributes={TextAttributes.DIM}>cancel</text>
+							</>
+						) : (
+							<>
+								<text>pin/unpin</text>
+								<text attributes={TextAttributes.DIM}>ctrl+f</text>
+								<text>delete</text>
+								<text attributes={TextAttributes.DIM}>ctrl+d</text>
+								<text>rename</text>
+								<text attributes={TextAttributes.DIM}>ctrl+r</text>
+							</>
+						)}
+					</box>
+				)
+			}
+			getItemBackgroundColor={(item) => {
+				if (item.kind === "session" && pendingDeleteId === item.session.id) {
+					return CONFIRM_DELETE_BG;
+				}
+				return;
+			}}
+			getKey={(item) =>
+				item.kind === "header" ? `header:${item.label}` : item.session.id
+			}
+			isItemActive={(item) =>
+				item.kind === "session" && item.session.id === currentSessionId
+			}
+			isItemSelectable={(item) => item.kind === "session"}
+			items={buildListItems(sessions, false)}
+			maxVisibleItems={MAX_VISIBLE_ITEMS}
+			minVisibleItems={MIN_VISIBLE_ITEMS}
+			onHighlight={handleHighlight}
+			onKey={(key) => {
+				if (key.name === "escape") {
+					if (pendingDeleteIdRef.current) {
+						setPendingDeleteId(null);
+					} else {
+						close();
+					}
+					return true;
+				}
+				return handleActionKeysRef.current(key);
+			}}
+			onSelect={(item) =>
+				item.kind === "session" && navigateToSession(item.session)
+			}
+			placeholder="Search sessions"
+			renderItem={(item, isSelected, isActive) =>
+				item.kind === "header" ? (
+					<text attributes={TextAttributes.BOLD} marginLeft={3}>
+						{item.label}
+					</text>
 				) : (
-					<>
-						<text>pin/unpin</text>
-						<text attributes={TextAttributes.DIM}>ctrl+f</text>
-						<text>delete</text>
-						<text attributes={TextAttributes.DIM}>ctrl+d</text>
-						<text>rename</text>
-						<text attributes={TextAttributes.DIM}>ctrl+r</text>
-					</>
-				)}
-			</box>
-		</box>
+					<SessionListItem
+						isActiveRoute={isActive}
+						isPendingDelete={pendingDeleteId === item.session.id}
+						isSelected={isSelected}
+						session={item.session}
+					/>
+				)
+			}
+		/>
 	);
 };
