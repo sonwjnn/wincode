@@ -32,6 +32,7 @@ describe("createCommandExecutor", () => {
 				open: () => undefined,
 				currentModel: {
 					connectionProviderId: "wincode",
+					route: "hosted",
 					displayName: "GPT-5.4 Mini",
 					id: "gpt-5.4-mini",
 					provider: "openai",
@@ -73,6 +74,7 @@ describe("createCommandExecutor", () => {
 				open: () => undefined,
 				currentModel: {
 					connectionProviderId: "wincode",
+					route: "hosted",
 					displayName: "GPT-5.4 Mini",
 					id: "gpt-5.4-mini",
 					provider: "openai",
@@ -120,6 +122,7 @@ describe("createCommandExecutor", () => {
 				open: () => undefined,
 				currentModel: {
 					connectionProviderId: "wincode",
+					route: "hosted",
 					displayName: "GPT-5.4 Mini",
 					id: "gpt-5.4-mini",
 					provider: "openai",
@@ -163,6 +166,7 @@ describe("createCommandExecutor", () => {
 				},
 				currentModel: {
 					connectionProviderId: "wincode",
+					route: "hosted",
 					displayName: "GPT-5.4 Mini",
 					id: "gpt-5.4-mini",
 					provider: "openai",
@@ -207,6 +211,7 @@ describe("createCommandExecutor", () => {
 				open: () => undefined,
 				currentModel: {
 					connectionProviderId: "wincode",
+					route: "hosted",
 					displayName: "GPT-5.4 Mini",
 					id: "gpt-5.4-mini",
 					provider: "openai",

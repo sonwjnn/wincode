@@ -89,8 +89,8 @@ describe("DialogAdapter", () => {
 			open: (key: string, title: string) => opened.push({ key, title }),
 		});
 		adapter.execute({
-			value: "/theme",
-			name: "theme",
+			value: "/themes",
+			name: "themes",
 			description: "",
 			kind: "dialog",
 			dialogKey: "theme",
@@ -124,6 +124,7 @@ describe("VariantsAdapter", () => {
 			open: (props: unknown) => calls.push(props),
 			currentModel: {
 				connectionProviderId: "wincode",
+				route: "hosted",
 				displayName: "GPT-5.4 Mini",
 				id: "gpt-5.4-mini",
 				provider: "openai",

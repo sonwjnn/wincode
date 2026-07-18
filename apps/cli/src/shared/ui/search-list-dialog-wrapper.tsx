@@ -140,6 +140,7 @@ export function SearchListDialogWrapper<T>({
 				<text
 					attributes={TextAttributes.DIM}
 					height={visibleHeight}
+					marginBottom={1}
 					marginX={4}
 				>
 					{emptyText}

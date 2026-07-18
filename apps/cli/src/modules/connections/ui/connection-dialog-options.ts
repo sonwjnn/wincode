@@ -1,4 +1,5 @@
 import type { ConnectionProviderSummary } from "../contract";
+import { providerDisplayNames, providerOrder } from "../provider-registry";
 
 export type ConnectionMethodId = "browser" | "api-key";
 
@@ -30,7 +31,9 @@ function getMaxLabelWidth(labels: readonly string[]): number {
 
 export const CONNECTION_LABEL_COLUMN_WIDTH =
 	Math.max(
-		getMaxLabelWidth(["Wincode", "OpenAI", "Anthropic", "Google"]),
+		getMaxLabelWidth(
+			providerOrder.map((providerId) => providerDisplayNames[providerId])
+		),
 		getMaxLabelWidth(CONNECTION_METHODS.map((method) => method.label))
 	) + 2;
 

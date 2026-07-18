@@ -1,6 +1,5 @@
 import { type InputRenderable, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
-import type { ConnectionProviderId as ProviderId } from "@wincode/ai";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	useDialogEscape,
@@ -8,9 +7,10 @@ import {
 } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import type { ConnectionProviderSummary } from "../contract";
 
 type ConnectionApiKeyDialogContentProps = {
-	providerId: ProviderId;
+	provider: ConnectionProviderSummary;
 	onSubmit: (apiKey: string, signal: AbortSignal) => void | Promise<void>;
 	placeholder?: string;
 };
@@ -24,7 +24,7 @@ function getErrorMessage(error: unknown): string {
 }
 
 export function ConnectionApiKeyDialogContent({
-	providerId,
+	provider,
 	onSubmit,
 	placeholder = "Paste API key",
 }: ConnectionApiKeyDialogContentProps) {
@@ -36,12 +36,10 @@ export function ConnectionApiKeyDialogContent({
 	const { isTopLayer } = useKeyboardLayer();
 	const layerId = useDialogLayer();
 	const { colors } = useTheme();
-	let description = "Paste an API key to connect.";
-	if (providerId === "anthropic") {
-		description = "Anthropic only supports API key sign-in.";
-	} else if (providerId === "google") {
-		description = "Google only supports API key sign-in.";
-	}
+	const description =
+		provider.methods.length === 1 && provider.methods[0] === "api-key"
+			? `${provider.displayName} only supports API key sign-in.`
+			: "Paste an API key to connect.";
 
 	const handleSubmit = useCallback(async () => {
 		if (isSubmittingRef.current) {

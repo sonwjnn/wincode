@@ -17,9 +17,9 @@ import type {
 	AcquisitionProgress,
 	ConnectionProgress,
 	WincodeCredential,
-} from "./contract";
+} from "./credential-schemas";
 
-export type { ConnectionProgress } from "./contract";
+export type { ConnectionProgress } from "./credential-schemas";
 
 const DEFAULT_REDIRECT_URI = "http://127.0.0.1:8765/callback";
 const DEFAULT_CLIENT_ID = "wincode-cli";

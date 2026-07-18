@@ -136,7 +136,7 @@ export function ConnectDialogContent({
 												onConnected(provider);
 												dialog.close();
 											}}
-											providerId={providerId}
+											provider={provider}
 										/>
 									),
 									title: `${getProviderLabel(provider)} API key`,

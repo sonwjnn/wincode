@@ -46,8 +46,8 @@ export const COMMANDS: CommandSpec[] = [
 	},
 	{
 		description: "Change color theme",
-		name: "theme",
-		value: "/theme",
+		name: "themes",
+		value: "/themes",
 		kind: "dialog",
 		dialogKey: "theme",
 	},

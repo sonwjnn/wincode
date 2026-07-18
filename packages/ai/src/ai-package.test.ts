@@ -36,6 +36,7 @@ import {
 	restoreOriginalFileMentionParts,
 } from "./file-mentions";
 import { createCodingAgent } from "./server/agent";
+import { resolveOpenAIChatModel as facadeResolveOpenAIChatModel } from "./server/index";
 import { codingServerTools } from "./server/tools";
 import { codingToolRunners } from "./tools/runners";
 
@@ -266,6 +267,19 @@ describe("@wincode/ai shared entry", () => {
 		).toBe(false);
 	});
 
+	test("accepts legacy model aliases and preserves default wincode selection", () => {
+		expect(
+			codingMessageMetadataSchema.safeParse({
+				model: "gemini-3.5-flash",
+			}).success
+		).toBe(true);
+		expect(
+			codingMessageMetadataSchema.parse({
+				model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
+			})
+		).toEqual({ model: { modelId: "gpt-5.4-mini", providerId: "wincode" } });
+	});
+
 	test("defines supported chat models by provider", () => {
 		expect(defaultChatModel.value).toBe("gpt-5.4-mini");
 		expect(defaultChatModelSelection).toEqual({
@@ -322,6 +336,9 @@ describe("@wincode/ai shared entry", () => {
 });
 
 describe("@wincode/ai server and client entries", () => {
+	test("server facade exports OpenAI model resolver", () => {
+		expect(typeof facadeResolveOpenAIChatModel).toBe("function");
+	});
 	test("server entry exports the coding agent", () => {
 		const codingAgent = createCodingAgent({
 			model: {} as never,
