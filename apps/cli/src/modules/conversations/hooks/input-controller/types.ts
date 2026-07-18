@@ -15,8 +15,8 @@ export type ChatInputControllerState = {
 };
 
 export type ChatInputControllerActions = {
-	onArrowDown: () => void;
-	onArrowUp: () => void;
+	onArrowDown: (cursorOffset?: number, textLength?: number) => boolean;
+	onArrowUp: (cursorOffset?: number, textLength?: number) => boolean;
 	onCtrlC: () => boolean;
 	onEnter: () => void;
 	onEscape: () => void;
@@ -24,6 +24,7 @@ export type ChatInputControllerActions = {
 	onItemSelect: (index: number) => void;
 	onTab: () => void;
 	onTextChange: (text: string, cursorOffset: number) => void;
+	onProgrammaticTextChange: (text: string, cursorOffset: number) => void;
 };
 
 export type ChatInputController = {
@@ -37,4 +38,6 @@ export type ChatInputControllerOptions = {
 	onSubmit: (value: string) => void;
 	onTab: () => void;
 	getFileMentionOptions: () => Promise<FileMentionOption[]>;
+	getPromptHistory: () => string[];
+	recordPrompt: (prompt: string) => void;
 };

@@ -21,7 +21,44 @@ import {
 	conversationMessage,
 	conversationSession,
 	conversationWorkspace,
+	promptHistory,
 } from "./schema";
+
+export const createPromptHistory = (db: LocalConversationDatabase) => ({
+	get: () =>
+		db
+			.select({ prompt: promptHistory.prompt })
+			.from(promptHistory)
+			.orderBy(desc(promptHistory.id))
+			.limit(50)
+			.all()
+			.map((row) => row.prompt),
+	record: (prompt: string) => {
+		if (!prompt.trim()) {
+			return;
+		}
+		const latest = db
+			.select({ prompt: promptHistory.prompt })
+			.from(promptHistory)
+			.orderBy(desc(promptHistory.id))
+			.limit(1)
+			.get();
+		if (latest?.prompt === prompt) {
+			return;
+		}
+		db.transaction((tx) => {
+			tx.insert(promptHistory).values({ prompt, createdAt: new Date() }).run();
+			const rows = tx
+				.select({ id: promptHistory.id })
+				.from(promptHistory)
+				.orderBy(desc(promptHistory.id))
+				.all();
+			for (const row of rows.slice(50)) {
+				tx.delete(promptHistory).where(eq(promptHistory.id, row.id)).run();
+			}
+		});
+	},
+});
 
 type SessionRow = typeof conversationSession.$inferSelect;
 
@@ -171,9 +208,12 @@ export const createDrizzleConversationStore = (
 	if (!database) {
 		runLocalMigrations(db);
 	}
+	const promptHistoryStore = createPromptHistory(db);
 	const workspace = ensureWorkspace(db, options.workspaceRoot ?? process.cwd());
 
 	return {
+		getPromptHistory: promptHistoryStore.get,
+		recordPrompt: promptHistoryStore.record,
 		createSession: ({ message, mode, model }: CreateSessionInput) => {
 			const id = generateId();
 			const now = new Date();

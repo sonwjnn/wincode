@@ -7,6 +7,14 @@ import {
 	filterFileMentionOptions,
 } from "@/modules/file-mentions";
 import { removeTriggerText } from "./escape-trigger";
+import {
+	decideDownAction,
+	decideUpAction,
+	navigateHistory as getHistoryNavigation,
+	prependPrompt,
+	resetHistoryNavigation,
+	shouldRecordCtrlC,
+} from "./history";
 import { type ActiveTrigger, detectTrigger } from "./triggers";
 import type {
 	ChatInputController,
@@ -28,6 +36,8 @@ export function useChatInputController({
 	getFileMentionOptions: getFileMentionOptionsFromOptions,
 	onSubmit,
 	onTab,
+	getPromptHistory,
+	recordPrompt,
 }: ChatInputControllerOptions): ChatInputController {
 	const [textValue, setTextValue] = useState("");
 	const [selectedIndex, setSelectedIndex] = useState(0);
@@ -42,6 +52,24 @@ export function useChatInputController({
 	>([]);
 	const [textSyncRevision, setTextSyncRevision] = useState(0);
 	const [visibleStartIndex, setVisibleStartIndex] = useState(0);
+	const historyRef = useRef<string[]>([]);
+	const historyIndexRef = useRef(-1);
+	const draftRef = useRef("");
+	const resetHistoryBaseline = useCallback((draft: string) => {
+		const baseline = resetHistoryNavigation(draft);
+		historyIndexRef.current = baseline.index;
+		draftRef.current = baseline.draft;
+	}, []);
+	const rememberPrompt = useCallback(
+		(prompt: string) => {
+			recordPrompt(prompt);
+			historyRef.current = prependPrompt(historyRef.current, prompt);
+		},
+		[recordPrompt]
+	);
+	useEffect(() => {
+		historyRef.current = getPromptHistory();
+	}, [getPromptHistory]);
 	const selectedIndexRef = useRef(0);
 	selectedIndexRef.current = selectedIndex;
 	const onSubmitRef = useRef(onSubmit);
@@ -99,6 +127,8 @@ export function useChatInputController({
 	}, []);
 
 	const onTextChange = useCallback((text: string, cursorOffset: number) => {
+		historyIndexRef.current = -1;
+		draftRef.current = text;
 		setTextValue(text);
 		setCursorOffset(null);
 		setSelectedIndex(0);
@@ -108,6 +138,33 @@ export function useChatInputController({
 		setActiveTrigger(nextTrigger);
 		setOverlayKind(nextTrigger?.kind ?? null);
 	}, []);
+	const onProgrammaticTextChange = useCallback(
+		(text: string, cursor: number) => {
+			setTextValue(text);
+			setCursorOffset(cursor);
+		},
+		[]
+	);
+
+	const navigateHistory = useCallback(
+		(direction: -1 | 1): boolean => {
+			const result = getHistoryNavigation(
+				{
+					draft: draftRef.current,
+					entries: historyRef.current,
+					index: historyIndexRef.current,
+				},
+				direction < 0 ? "up" : "down"
+			);
+			if (!result.consumed) {
+				return false;
+			}
+			historyIndexRef.current = result.state.index;
+			setProgrammaticText(result.text, direction < 0 ? 0 : result.text.length);
+			return true;
+		},
+		[setProgrammaticText]
+	);
 
 	const resolveCommand = useCallback(
 		(index: number): CommandSpec | undefined => {
@@ -188,6 +245,8 @@ export function useChatInputController({
 		}
 
 		onSubmitRef.current(text);
+		rememberPrompt(text);
+		resetHistoryBaseline("");
 		setProgrammaticText("", null);
 		closeOverlay();
 	}, [
@@ -199,6 +258,8 @@ export function useChatInputController({
 		selectedIndex,
 		setProgrammaticText,
 		textValue,
+		rememberPrompt,
+		resetHistoryBaseline,
 	]);
 
 	const onEscape = useCallback(() => {
@@ -213,7 +274,11 @@ export function useChatInputController({
 		if (disabled || (textValue.length === 0 && overlayKind === null)) {
 			return false;
 		}
+		if (shouldRecordCtrlC(textValue)) {
+			rememberPrompt(textValue);
+		}
 
+		resetHistoryBaseline("");
 		setProgrammaticText("", null);
 		closeOverlay();
 		return true;
@@ -222,65 +287,107 @@ export function useChatInputController({
 		disabled,
 		overlayKind,
 		setProgrammaticText,
-		textValue.length,
+		textValue,
+		rememberPrompt,
+		resetHistoryBaseline,
 	]);
 
-	const onArrowUp = useCallback(() => {
-		if (overlayKind === null) {
-			return;
-		}
-
-		const itemsLength =
-			overlayKind === "command"
-				? filteredCommands.length
-				: filteredFileMentions.length;
-		if (itemsLength === 0) {
-			return;
-		}
-
-		const nextIndex =
-			selectedIndexRef.current <= 0
-				? itemsLength - 1
-				: selectedIndexRef.current - 1;
-		selectedIndexRef.current = nextIndex;
-		setSelectedIndex(nextIndex);
-		setVisibleStartIndex((start) =>
-			nextIndex < start || nextIndex >= start + MAX_VISIBLE_ITEMS
-				? Math.max(0, nextIndex - MAX_VISIBLE_ITEMS + 1)
-				: start
-		);
-	}, [filteredCommands.length, filteredFileMentions.length, overlayKind]);
-
-	const onArrowDown = useCallback(() => {
-		if (overlayKind === null) {
-			return;
-		}
-
-		const itemsLength =
-			overlayKind === "command"
-				? filteredCommands.length
-				: filteredFileMentions.length;
-
-		if (itemsLength === 0) {
-			return;
-		}
-
-		const nextIndex =
-			selectedIndexRef.current >= itemsLength - 1
-				? 0
-				: selectedIndexRef.current + 1;
-		selectedIndexRef.current = nextIndex;
-		setSelectedIndex(nextIndex);
-		setVisibleStartIndex((start) => {
-			if (nextIndex < start) {
-				return 0;
+	const onArrowUp = useCallback(
+		(cursor?: number, _textLength?: number): boolean => {
+			if (overlayKind === null) {
+				if (cursor === undefined) {
+					return false;
+				}
+				if (decideUpAction(cursor) === "moveToStart") {
+					setProgrammaticText(textValue, 0);
+					return true;
+				}
+				return navigateHistory(-1);
 			}
-			if (nextIndex >= start + MAX_VISIBLE_ITEMS) {
-				return nextIndex - MAX_VISIBLE_ITEMS + 1;
+
+			const itemsLength =
+				overlayKind === "command"
+					? filteredCommands.length
+					: filteredFileMentions.length;
+			if (itemsLength === 0) {
+				return false;
 			}
-			return start;
-		});
-	}, [filteredCommands.length, filteredFileMentions.length, overlayKind]);
+
+			const nextIndex =
+				selectedIndexRef.current <= 0
+					? itemsLength - 1
+					: selectedIndexRef.current - 1;
+			selectedIndexRef.current = nextIndex;
+			setSelectedIndex(nextIndex);
+			setVisibleStartIndex((start) =>
+				nextIndex < start || nextIndex >= start + MAX_VISIBLE_ITEMS
+					? Math.max(0, nextIndex - MAX_VISIBLE_ITEMS + 1)
+					: start
+			);
+			return true;
+		},
+		[
+			filteredCommands.length,
+			filteredFileMentions.length,
+			navigateHistory,
+			overlayKind,
+			setProgrammaticText,
+			textValue,
+		]
+	);
+
+	const onArrowDown = useCallback(
+		(cursor?: number, length?: number): boolean => {
+			if (overlayKind === null) {
+				if (
+					cursor !== undefined &&
+					length !== undefined &&
+					decideDownAction(cursor, length) === "moveToEnd"
+				) {
+					setProgrammaticText(textValue, length);
+					return true;
+				}
+				if (cursor !== length) {
+					return false;
+				}
+				return navigateHistory(1);
+			}
+
+			const itemsLength =
+				overlayKind === "command"
+					? filteredCommands.length
+					: filteredFileMentions.length;
+
+			if (itemsLength === 0) {
+				return false;
+			}
+
+			const nextIndex =
+				selectedIndexRef.current >= itemsLength - 1
+					? 0
+					: selectedIndexRef.current + 1;
+			selectedIndexRef.current = nextIndex;
+			setSelectedIndex(nextIndex);
+			setVisibleStartIndex((start) => {
+				if (nextIndex < start) {
+					return 0;
+				}
+				if (nextIndex >= start + MAX_VISIBLE_ITEMS) {
+					return nextIndex - MAX_VISIBLE_ITEMS + 1;
+				}
+				return start;
+			});
+			return true;
+		},
+		[
+			filteredCommands.length,
+			filteredFileMentions.length,
+			navigateHistory,
+			overlayKind,
+			setProgrammaticText,
+			textValue,
+		]
+	);
 
 	const onItemSelect = useCallback(
 		(index: number) => {
@@ -341,6 +448,7 @@ export function useChatInputController({
 			onItemSelect,
 			onTab: handleTab,
 			onTextChange,
+			onProgrammaticTextChange,
 		},
 		state: {
 			cursorOffset,
