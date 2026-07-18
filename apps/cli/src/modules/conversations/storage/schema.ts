@@ -77,10 +77,17 @@ export const conversationMessage = sqliteTable(
 	]
 );
 
+export const promptHistory = sqliteTable("prompt_history", {
+	id: integer("id").primaryKey({ autoIncrement: true }),
+	prompt: text("prompt").notNull(),
+	createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+});
+
 export const localConversationSchema = {
 	conversationMessage,
 	conversationSession,
 	conversationWorkspace,
+	promptHistory,
 };
 
 export const CURRENT_USER_VERSION = 1;

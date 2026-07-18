@@ -27,7 +27,6 @@ describe("ChatTextArea", () => {
 		]);
 
 		expect(textAreaSource).not.toContain("cycleModel");
-		expect(textAreaSource).not.toContain("key.shift");
 		expect(promptConfigSource).not.toContain("cycleModel");
 	});
 

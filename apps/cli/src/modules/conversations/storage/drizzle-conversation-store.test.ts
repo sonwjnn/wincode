@@ -11,6 +11,7 @@ import {
 	conversationMessage,
 	conversationWorkspace,
 	localConversationSchema,
+	promptHistory,
 } from "./schema";
 
 const userMessage = (id: string, text: string): CodingAgentUIMessage => ({
@@ -40,6 +41,36 @@ beforeEach(() => {
 });
 
 describe("drizzle conversation store", () => {
+	test("stores global prompt history with retention rules", async () => {
+		await store.recordPrompt("  raw prompt  ");
+		await store.recordPrompt("  raw prompt  ");
+		await store.recordPrompt("next");
+		await store.recordPrompt("  raw prompt  ");
+		expect(await store.getPromptHistory()).toEqual([
+			"  raw prompt  ",
+			"next",
+			"  raw prompt  ",
+		]);
+		await store.recordPrompt("   ");
+		expect(await store.getPromptHistory()).toHaveLength(3);
+		for (let index = 0; index < 60; index++) {
+			await store.recordPrompt(`prompt-${index}`);
+		}
+		expect(await store.getPromptHistory()).toHaveLength(50);
+		expect((await store.getPromptHistory())[0]).toBe("prompt-59");
+	});
+
+	test("prompt history is global across workspaces", async () => {
+		const other = createDrizzleConversationStore(db, {
+			workspaceRoot: "/tmp/other",
+		});
+		await store.recordPrompt("global");
+		expect(await other.getPromptHistory()).toEqual(["global"]);
+	});
+
+	test("migration creates prompt_history", () => {
+		expect(db.select().from(promptHistory).all()).toEqual([]);
+	});
 	test("creates a session and derives title from first user text", async () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "Fix the login bug"),

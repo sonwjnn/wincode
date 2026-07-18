@@ -16,6 +16,7 @@ import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/c
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useChatInputController } from "../../hooks/input-controller/use-chat-input-controller";
+import { getConversationStore } from "../../storage/get-conversation-store";
 
 type ChatTextAreaProps = {
 	disabled?: boolean;
@@ -32,11 +33,13 @@ export function ChatTextArea({
 	const ctrlCRef = useRef<() => boolean>(() => false);
 	const currentTextRef = useRef("");
 	const lastTextSyncRevisionRef = useRef(0);
+	const programmaticTextRef = useRef<string | null>(null);
 	const onSubmitRef = useRef<() => void>(() => undefined);
 
 	const { isTopLayer, pop, push, setResponder } = useKeyboardLayer();
 	const { colors } = useTheme();
 	const { executeCommand } = useCommandExecutor();
+	const conversationStore = useMemo(() => getConversationStore(), []);
 	const mentionSyntaxStyle = useMemo(
 		() =>
 			SyntaxStyle.fromStyles({
@@ -51,6 +54,8 @@ export function ChatTextArea({
 		getFileMentionOptions,
 		onSubmit,
 		onTab: cycleMode,
+		getPromptHistory: conversationStore.getPromptHistory,
+		recordPrompt: conversationStore.recordPrompt,
 	});
 
 	const handleTextareaContentChange = useCallback(() => {
@@ -74,6 +79,14 @@ export function ChatTextArea({
 			return;
 		}
 
+		if (programmaticTextRef.current === textarea.plainText) {
+			programmaticTextRef.current = null;
+			actions.onProgrammaticTextChange(
+				textarea.plainText,
+				textarea.cursorOffset
+			);
+			return;
+		}
 		actions.onTextChange(textarea.plainText, textarea.cursorOffset);
 	}, [actions, state.overlay.kind]);
 
@@ -89,6 +102,7 @@ export function ChatTextArea({
 			return;
 		}
 
+		programmaticTextRef.current = state.text;
 		textarea.setText(state.text);
 
 		if (state.cursorOffset !== null) {
@@ -156,6 +170,7 @@ export function ChatTextArea({
 		return () => setResponder("base", null);
 	}, [setResponder]);
 
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keyboard priority branches are intentionally co-located.
 	useKeyboard((key) => {
 		if (disabled) {
 			return;
@@ -179,6 +194,26 @@ export function ChatTextArea({
 				actions.onArrowDown();
 				return;
 			}
+		}
+
+		if (
+			isTopLayer("base") &&
+			key.ctrl === false &&
+			key.shift === false &&
+			key.meta === false &&
+			key.option === false &&
+			(key.name === "up" || key.name === "down")
+		) {
+			const textarea = textAreaRef.current;
+			if (textarea) {
+				const consumed = (
+					key.name === "up" ? actions.onArrowUp : actions.onArrowDown
+				)(textarea.cursorOffset, textarea.plainText.length);
+				if (consumed) {
+					key.preventDefault();
+				}
+			}
+			return;
 		}
 
 		if (!isTopLayer("base")) {

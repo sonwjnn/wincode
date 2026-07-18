@@ -39,6 +39,8 @@ export type ConversationStore = {
 	listRecentModelSelections: (limit: number) => ChatModelSelection[];
 	persistMessages: (input: PersistMessagesInput) => Promise<void>;
 	updateSession: (sessionId: string, data: UpdateSessionInput) => Promise<void>;
+	getPromptHistory: () => string[];
+	recordPrompt: (prompt: string) => void;
 };
 
 export const UNTITLED_SESSION_TITLE = "Untitled Session";
