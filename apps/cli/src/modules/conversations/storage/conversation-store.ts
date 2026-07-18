@@ -36,6 +36,7 @@ export type ConversationStore = {
 	getMessages: (sessionId: string) => Promise<CodingAgentUIMessage[]>;
 	getSession: (sessionId: string) => Promise<ConversationSession>;
 	listSessions: () => Promise<ConversationSession[]>;
+	listRecentModelSelections: (limit: number) => ChatModelSelection[];
 	persistMessages: (input: PersistMessagesInput) => Promise<void>;
 	updateSession: (sessionId: string, data: UpdateSessionInput) => Promise<void>;
 };

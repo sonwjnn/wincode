@@ -12,7 +12,7 @@ import type { ConnectionMethodId } from "./connection-dialog-options";
 import { ConnectionMethodPickerDialogContent } from "./connection-method-picker-dialog";
 import { ConnectionProviderPickerDialogContent } from "./connection-provider-picker-dialog";
 
-export const CONNECTION_DIALOG_WIDTH = 72;
+export const CONNECTION_DIALOG_WIDTH = 60;
 
 type BrowserConnectCallbacks = {
 	setAuthorizationUrl: (authorizationUrl: string) => void;
@@ -172,7 +172,9 @@ export function ConnectDialogContent({
 						provider={provider}
 					/>
 				),
+				padding: { bottom: 1, left: 0, right: 0, top: 1 },
 				title: "Choose method",
+				titleMargin: { left: 4, right: 4 },
 				width: CONNECTION_DIALOG_WIDTH,
 			});
 		},

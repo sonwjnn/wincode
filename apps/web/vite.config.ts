@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
+import { getPort } from "@wincode/env/ports";
 import alchemy from "alchemy/cloudflare/tanstack-start";
 import { defineConfig } from "vite";
 
@@ -14,7 +15,7 @@ const shouldUseAlchemy = existsSync(alchemyConfigPath);
 const cloudflareWorkersShimPath = fileURLToPath(
 	new URL("../../packages/env/src/cloudflare-local.ts", import.meta.url)
 );
-const cloudflareWorkersAlias = shouldUseAlchemy
+const cloudflareWorkersAlias: Record<string, string> = shouldUseAlchemy
 	? {}
 	: {
 			"cloudflare:workers": cloudflareWorkersShimPath,
@@ -22,7 +23,7 @@ const cloudflareWorkersAlias = shouldUseAlchemy
 
 export default defineConfig({
 	server: {
-		port: 3001,
+		port: getPort(3001),
 	},
 	resolve: {
 		tsconfigPaths: true,

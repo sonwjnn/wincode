@@ -291,6 +291,43 @@ export const createDrizzleConversationStore = (
 			return Promise.resolve(rows.map(toConversationSession));
 		},
 
+		listRecentModelSelections: (limit: number) => {
+			if (limit <= 0) {
+				return [];
+			}
+			const rows = db
+				.select({ metadata: conversationMessage.metadataJson })
+				.from(conversationMessage)
+				.innerJoin(
+					conversationSession,
+					eq(conversationMessage.sessionId, conversationSession.id)
+				)
+				.where(eq(conversationSession.workspaceId, workspace.id))
+				.orderBy(desc(conversationMessage.createdAt))
+				.limit(Math.max(limit * 8, limit))
+				.all();
+			const result: ChatModelSelection[] = [];
+			const seen = new Set<string>();
+			for (const row of rows) {
+				const model = row.metadata
+					? codingMessageMetadataSchema.parse(row.metadata).model
+					: undefined;
+				if (!model) {
+					continue;
+				}
+				const key = `${model.providerId}:${model.modelId}`;
+				if (seen.has(key)) {
+					continue;
+				}
+				seen.add(key);
+				result.push(model);
+				if (result.length === limit) {
+					break;
+				}
+			}
+			return result;
+		},
+
 		persistMessages: (input: PersistMessagesInput) => {
 			writeMessages(db, workspace.id, input);
 			return Promise.resolve();

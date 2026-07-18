@@ -1,3 +1,4 @@
+import type { BoxRenderable } from "@opentui/core";
 import { RGBA, TextAttributes } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { ReactNode } from "react";
@@ -5,7 +6,9 @@ import {
 	createContext,
 	useCallback,
 	useContext,
+	useEffect,
 	useId,
+	useLayoutEffect,
 	useRef,
 	useState,
 } from "react";
@@ -153,6 +156,9 @@ type DialogProps = {
 function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 	const dimensions = useTerminalDimensions();
 	const { colors } = useTheme();
+	const dialogRef = useRef<BoxRenderable>(null);
+	const initialHeightRef = useRef<number | null>(null);
+	const [anchoredTop, setAnchoredTop] = useState<number | null>(null);
 
 	const layerId = config.layerId ?? "";
 
@@ -176,6 +182,33 @@ function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 		config.width === undefined
 			? defaultWidth
 			: Math.max(1, Math.min(config.width, maxWidth));
+
+	useLayoutEffect(() => {
+		const dialogHeight = initialHeightRef.current ?? dialogRef.current?.height;
+		if (!(dialogHeight && dialogHeight > 0)) {
+			return;
+		}
+
+		initialHeightRef.current = dialogHeight;
+		setAnchoredTop(
+			Math.max(0, Math.floor((dimensions.height - dialogHeight) / 2))
+		);
+	}, [dimensions.height]);
+
+	useEffect(() => {
+		if (anchoredTop !== null) {
+			return;
+		}
+		const dialogHeight = dialogRef.current?.height;
+		if (!(dialogHeight && dialogHeight > 0)) {
+			return;
+		}
+
+		initialHeightRef.current = dialogHeight;
+		setAnchoredTop(
+			Math.max(0, Math.floor((dimensions.height - dialogHeight) / 2))
+		);
+	}, [anchoredTop, dimensions.height]);
 
 	return (
 		// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events.
@@ -202,6 +235,9 @@ function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 				paddingLeft={padLeft}
 				paddingRight={padRight}
 				paddingTop={padTop}
+				position={anchoredTop === null ? "relative" : "absolute"}
+				ref={dialogRef}
+				top={anchoredTop ?? undefined}
 				width={width}
 			>
 				<box

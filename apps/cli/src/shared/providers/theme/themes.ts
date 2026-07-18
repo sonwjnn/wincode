@@ -14,6 +14,7 @@ export type ThemeColors = {
 	dialogSurface: string;
 	thinkingBorder: string;
 	dimSeparator: string;
+	suggestionBorder: string;
 };
 
 export type Theme = {
@@ -23,11 +24,29 @@ export type Theme = {
 
 type ThemeDefinition = {
 	name: string;
-	colors: Omit<ThemeColors, "mode">;
+	colors: Omit<ThemeColors, "mode" | "suggestionBorder">;
+};
+
+const SUGGESTION_BORDER_BRIGHTNESS = 0.25;
+
+const brightenColor = (color: string, amount: number) => {
+	const channels = [
+		Number.parseInt(color.slice(1, 3), 16),
+		Number.parseInt(color.slice(3, 5), 16),
+		Number.parseInt(color.slice(5, 7), 16),
+	];
+
+	return `#${channels
+		.map((channel) =>
+			Math.round(channel + (255 - channel) * amount)
+				.toString(16)
+				.padStart(2, "0")
+		)
+		.join("")}`;
 };
 
 const createModeColors = (
-	colors: Omit<ThemeColors, "mode">
+	colors: Omit<ThemeColors, "mode" | "suggestionBorder">
 ): Record<ModeType, string> =>
 	({
 		build: colors.primary,
@@ -585,6 +604,10 @@ export const THEMES: Theme[] = THEME_DEFINITIONS.map(({ colors, name }) => ({
 	colors: {
 		...colors,
 		mode: createModeColors(colors),
+		suggestionBorder: brightenColor(
+			colors.dimSeparator,
+			SUGGESTION_BORDER_BRIGHTNESS
+		),
 	},
 	name,
 }));

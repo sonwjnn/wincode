@@ -36,8 +36,7 @@ export function createCommandExecutor(adapters: AdapterMap) {
 				adapters.dialog.execute(spec);
 				break;
 			case "models":
-				adapters.models.execute(spec);
-				break;
+				return adapters.models.execute(spec);
 			case "variants":
 				adapters.variants.execute(spec);
 				break;
