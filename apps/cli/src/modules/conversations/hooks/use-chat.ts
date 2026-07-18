@@ -6,12 +6,15 @@ import type {
 	ModeType,
 } from "@wincode/ai";
 import { defaultChatModelSelection, defaultMode } from "@wincode/ai";
-import { handleCodingAgentToolCall } from "@wincode/ai/client";
+import {
+	createUserMessage,
+	handleCodingAgentToolCall,
+} from "@wincode/ai/client";
 import {
 	type ChatAddToolOutputFunction,
 	lastAssistantMessageIsCompleteWithToolCalls,
 } from "ai";
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useConnections } from "@/modules/connections";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import { getConversationStore } from "../storage/get-conversation-store";
@@ -33,6 +36,28 @@ export const getContinuationChatParams = (
 	model,
 	...(variant === undefined ? {} : { variant }),
 });
+
+export const findCurrentTurnAssistantIndex = (
+	messages: CodingAgentUIMessage[]
+): number => {
+	const userIndex = messages.findLastIndex(({ role }) => role === "user");
+	const assistantIndex = messages.findLastIndex(
+		({ role }) => role === "assistant"
+	);
+
+	return assistantIndex > userIndex ? assistantIndex : -1;
+};
+
+export const findCurrentTurnInterruptTargetIndex = (
+	messages: CodingAgentUIMessage[]
+): number => {
+	const assistantIndex = findCurrentTurnAssistantIndex(messages);
+	if (assistantIndex !== -1) {
+		return assistantIndex;
+	}
+
+	return messages.findLastIndex(({ role }) => role === "user");
+};
 
 export const finalizeAssistantMessageMetadata = (
 	message: CodingAgentUIMessage,
@@ -83,6 +108,7 @@ export function useChat(
 	const modeRef = useRef<ModeType>(defaultMode.value);
 	const modelRef = useRef<ChatModelSelection>(defaultChatModelSelection);
 	const variantRef = useRef<ModelVariant | undefined>(undefined);
+	const [isPreparingMessage, setIsPreparingMessage] = useState(false);
 
 	const transport = useMemo(
 		() =>
@@ -177,25 +203,25 @@ export function useChat(
 		const startedAt = requestStartedAtRef.current;
 		const responseTimeMs =
 			startedAt === null ? undefined : Math.max(0, Date.now() - startedAt);
-		const assistantIndex = chat.messages.findLastIndex(
-			(message) => message.role === "assistant"
-		);
+		const targetIndex = findCurrentTurnInterruptTargetIndex(chat.messages);
 
-		if (assistantIndex === -1) {
+		if (targetIndex === -1) {
 			chat.stop();
 			return;
 		}
 
-		const assistantMessage = chat.messages[assistantIndex];
-		if (!assistantMessage) {
+		const targetMessage = chat.messages[targetIndex];
+		if (!targetMessage) {
 			chat.stop();
 			return;
 		}
 
-		interruptedMessageIdsRef.current.add(assistantMessage.id);
+		if (targetMessage.role === "assistant") {
+			interruptedMessageIdsRef.current.add(targetMessage.id);
+		}
 		const nextMessages = [...chat.messages];
-		nextMessages[assistantIndex] = {
-			...finalizeAssistantMessageMetadata(assistantMessage, {
+		nextMessages[targetIndex] = {
+			...finalizeAssistantMessageMetadata(targetMessage, {
 				interrupted: true,
 				mode: modeRef.current,
 				model: modelRef.current,
@@ -204,7 +230,8 @@ export function useChat(
 			}),
 		};
 
-		finalizeAndPersistMessages(nextMessages);
+		setMessagesRef.current?.(nextMessages);
+		persistMessages(nextMessages);
 		chat.stop();
 	};
 
@@ -218,12 +245,26 @@ export function useChat(
 		modelRef.current = model;
 		variantRef.current = variant;
 		requestStartedAtRef.current = Date.now();
-		const fileMentions = await resolveFileMentionParts(userText);
+		const metadata = { mode, model, variant };
+		const optimisticMessage = createUserMessage(userText, metadata);
+		chat.setMessages((messages) => [...messages, optimisticMessage]);
+		setIsPreparingMessage(true);
 
-		return chat.sendMessage({
-			metadata: { mode, model, variant: variantRef.current },
-			parts: [{ text: userText, type: "text" }, ...fileMentions],
-		});
+		try {
+			const fileMentions = await resolveFileMentionParts(userText);
+			return await chat.sendMessage({
+				messageId: optimisticMessage.id,
+				metadata,
+				parts: [{ text: userText, type: "text" }, ...fileMentions],
+			});
+		} catch (error) {
+			chat.setMessages((messages) =>
+				messages.filter(({ id }) => id !== optimisticMessage.id)
+			);
+			throw error;
+		} finally {
+			setIsPreparingMessage(false);
+		}
 	};
 	const continueLastMessage = (
 		mode: ModeType,
@@ -244,6 +285,7 @@ export function useChat(
 		interrupt: interruptLatestAssistantMessage,
 		messages: chat.messages,
 		status: chat.status,
+		isPreparingMessage,
 		submit,
 	};
 }

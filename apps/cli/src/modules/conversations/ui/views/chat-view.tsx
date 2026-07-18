@@ -48,11 +48,13 @@ export function ChatView({
 		continueLastMessage,
 		error,
 		interrupt,
+		isPreparingMessage,
 		messages,
 		status,
 		submit,
 	} = useChat(sessionId, initialMessages);
-	const isBusy = status === "submitted" || status === "streaming";
+	const isBusy =
+		isPreparingMessage || status === "submitted" || status === "streaming";
 
 	useEffect(() => {
 		const config = getLatestChatConfig(initialMessages);

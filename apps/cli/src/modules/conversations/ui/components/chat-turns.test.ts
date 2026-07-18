@@ -7,8 +7,13 @@ const {
 	resolveTurnMetadataSignature,
 } = await import("./chat-turns");
 
-const makeUserMessage = (id: string, text: string): CodingAgentUIMessage => ({
+const makeUserMessage = (
+	id: string,
+	text: string,
+	metadata?: CodingAgentUIMessage["metadata"]
+): CodingAgentUIMessage => ({
 	id,
+	metadata,
 	parts: [{ text, type: "text" }],
 	role: "user",
 });
@@ -51,6 +56,18 @@ describe("groupMessagesByConversationTurn", () => {
 });
 
 describe("resolveConversationTurnFooterMessages", () => {
+	test("renders optimistic metadata from the latest user message", () => {
+		const turns = groupMessagesByConversationTurn([
+			makeUserMessage("user-1", "hello", {
+				mode: "build",
+				model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
+			}),
+		]);
+		const footers = resolveConversationTurnFooterMessages(turns);
+
+		expect(footers.get("user-1")?.id).toBe("user-1");
+	});
+
 	test("renders one footer for consecutive turns with matching metadata", () => {
 		const turns = groupMessagesByConversationTurn([
 			makeUserMessage("user-1", "hello"),

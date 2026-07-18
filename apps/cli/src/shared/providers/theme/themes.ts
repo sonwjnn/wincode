@@ -15,6 +15,10 @@ export type ThemeColors = {
 	thinkingBorder: string;
 	dimSeparator: string;
 	suggestionBorder: string;
+	fileBadgeBackground: string;
+	fileBadgeText: string;
+	filePathBackground: string;
+	filePath: string;
 };
 
 export type Theme = {
@@ -24,10 +28,19 @@ export type Theme = {
 
 type ThemeDefinition = {
 	name: string;
-	colors: Omit<ThemeColors, "mode" | "suggestionBorder">;
+	colors: Omit<
+		ThemeColors,
+		| "fileBadgeBackground"
+		| "fileBadgeText"
+		| "filePathBackground"
+		| "filePath"
+		| "mode"
+		| "suggestionBorder"
+	>;
 };
 
 const SUGGESTION_BORDER_BRIGHTNESS = 0.25;
+const FILE_PATH_BRIGHTNESS = 0.35;
 
 const brightenColor = (color: string, amount: number) => {
 	const channels = [
@@ -46,7 +59,7 @@ const brightenColor = (color: string, amount: number) => {
 };
 
 const createModeColors = (
-	colors: Omit<ThemeColors, "mode" | "suggestionBorder">
+	colors: ThemeDefinition["colors"]
 ): Record<ModeType, string> =>
 	({
 		build: colors.primary,
@@ -603,6 +616,10 @@ const THEME_DEFINITIONS = [
 export const THEMES: Theme[] = THEME_DEFINITIONS.map(({ colors, name }) => ({
 	colors: {
 		...colors,
+		fileBadgeBackground: colors.primary,
+		fileBadgeText: colors.background,
+		filePathBackground: colors.dialogSurface,
+		filePath: brightenColor(colors.dimSeparator, FILE_PATH_BRIGHTNESS),
 		mode: createModeColors(colors),
 		suggestionBorder: brightenColor(
 			colors.dimSeparator,

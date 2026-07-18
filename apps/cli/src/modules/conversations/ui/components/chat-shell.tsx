@@ -1,5 +1,6 @@
-import { TextAttributes } from "@opentui/core";
+import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import type { CodingAgentUIMessage } from "@wincode/ai";
+import { useEffect, useRef, useState } from "react";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { Spinner } from "@/shared/ui/spinner";
@@ -26,10 +27,25 @@ export function ChatShell({
 	messages,
 	onSubmit,
 }: ChatShellProps) {
+	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
+	const [scrollRequest, setScrollRequest] = useState(0);
 	const { mode } = usePromptConfig();
 	const { colors } = useTheme();
 	const turns = groupMessagesByConversationTurn(messages);
 	const footerMessages = resolveConversationTurnFooterMessages(turns);
+
+	useEffect(() => {
+		if (scrollRequest === 0) {
+			return;
+		}
+
+		scrollboxRef.current?.scrollTo(Number.MAX_SAFE_INTEGER);
+	}, [scrollRequest]);
+
+	const handleSubmit = (value: string) => {
+		onSubmit(value);
+		setScrollRequest((request) => request + 1);
+	};
 
 	return (
 		<box
@@ -41,7 +57,13 @@ export function ChatShell({
 			paddingY={1}
 			width="100%"
 		>
-			<scrollbox flexGrow={1} height="100%" stickyScroll stickyStart="bottom">
+			<scrollbox
+				flexGrow={1}
+				height="100%"
+				ref={scrollboxRef}
+				stickyScroll
+				stickyStart="bottom"
+			>
 				<box flexDirection="column" gap={1}>
 					{messages.length === 0 && !error ? (
 						<text attributes={TextAttributes.DIM}>No messages yet.</text>
@@ -59,7 +81,7 @@ export function ChatShell({
 			</scrollbox>
 
 			<box flexShrink={0}>
-				<ChatTextArea onSubmit={onSubmit} />
+				<ChatTextArea onSubmit={handleSubmit} />
 			</box>
 			<box
 				flexDirection="row"
