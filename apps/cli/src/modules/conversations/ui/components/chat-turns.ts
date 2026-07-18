@@ -42,7 +42,15 @@ const resolveTurnFooterMessage = (
 				message.role === "assistant" && message.metadata !== undefined
 		);
 	if (!current) {
-		return;
+		if (nextTurn) {
+			return;
+		}
+
+		return [...turn.messages]
+			.reverse()
+			.find(
+				(message) => message.role === "user" && message.metadata !== undefined
+			);
 	}
 
 	if (!nextTurn) {

@@ -3,6 +3,8 @@ import type { CodingAgentUIMessage } from "@wincode/ai";
 import { prepareSendChatRequestBody } from "../api/chat-request";
 import {
 	finalizeAssistantMessageMetadata,
+	findCurrentTurnAssistantIndex,
+	findCurrentTurnInterruptTargetIndex,
 	getContinuationChatParams,
 } from "./use-chat";
 
@@ -87,6 +89,48 @@ describe("prepareSendChatRequestBody", () => {
 });
 
 describe("useChat helpers", () => {
+	test("does not interrupt an assistant from the previous turn", () => {
+		const optimisticUserMessage = {
+			id: "user-2",
+			parts: [{ text: "next", type: "text" }],
+			role: "user",
+		} as CodingAgentUIMessage;
+
+		expect(
+			findCurrentTurnAssistantIndex([
+				userMessage,
+				assistantMessage,
+				optimisticUserMessage,
+			])
+		).toBe(-1);
+		expect(
+			findCurrentTurnInterruptTargetIndex([
+				userMessage,
+				assistantMessage,
+				optimisticUserMessage,
+			])
+		).toBe(2);
+	});
+
+	test("finds the assistant in the current turn", () => {
+		expect(
+			findCurrentTurnInterruptTargetIndex([
+				userMessage,
+				assistantMessage,
+				{
+					id: "user-2",
+					parts: [{ text: "next", type: "text" }],
+					role: "user",
+				} as CodingAgentUIMessage,
+				{
+					id: "assistant-2",
+					parts: [],
+					role: "assistant",
+				} as CodingAgentUIMessage,
+			])
+		).toBe(3);
+	});
+
 	test("seeds continuation variant and retains assistant variant metadata", () => {
 		expect(getContinuationChatParams("plan", selection, "high")).toEqual({
 			mode: "plan",
