@@ -26,6 +26,10 @@ import { AgentsDialogContent } from "@/modules/prompt-settings/ui/agents-dialog"
 import { ModelsDialogContent } from "@/modules/prompt-settings/ui/models-dialog";
 import { ThemeDialogContent } from "@/modules/prompt-settings/ui/theme-dialog";
 import { VariantsDialogContent } from "@/modules/prompt-settings/ui/variants-dialog";
+import {
+	type ClipboardSpawn,
+	writeClipboard,
+} from "@/shared/clipboard/clipboard";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 
@@ -35,30 +39,15 @@ type UseCommandExecutorReturn = {
 export async function copyBrowserAuthorizationUrl(
 	renderer: Pick<ReturnType<typeof useRenderer>, "copyToClipboardOSC52">,
 	url: string,
-	spawnProcess?: (command: [string], stdin: string) => Promise<number>
+	spawnProcess?: ClipboardSpawn
 ): Promise<void> {
-	if (renderer.copyToClipboardOSC52(url)) {
+	if (await writeClipboard(renderer, url, spawnProcess)) {
 		return;
 	}
 	if (process.platform !== "darwin") {
 		throw new Error("Clipboard is not supported by this terminal.");
 	}
-	const spawn =
-		spawnProcess ??
-		(async (command: [string], stdin: string) => {
-			const bun = globalThis as typeof globalThis & {
-				Bun: {
-					spawn: (
-						cmds: [string],
-						options: { stdin: string }
-					) => { exited: Promise<number> };
-				};
-			};
-			return await bun.Bun.spawn(command, { stdin }).exited;
-		});
-	if ((await spawn(["pbcopy"], url)) !== 0) {
-		throw new Error("Failed to copy URL.");
-	}
+	throw new Error("Failed to copy URL.");
 }
 
 export function useCommandExecutor(): UseCommandExecutorReturn {
