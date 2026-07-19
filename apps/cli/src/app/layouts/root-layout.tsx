@@ -2,6 +2,7 @@ import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import { useEffect, useReducer } from "react";
 import { ConnectionsProvider, createConnections } from "@/modules/connections";
 import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
+import { CopyOnSelect } from "@/shared/clipboard/copy-on-select";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
@@ -42,6 +43,7 @@ export function RootLayout() {
 				<KeyboardLayerProvider>
 					<PromptConfigProvider>
 						<ToastProvider>
+							<CopyOnSelect />
 							<DialogProvider>
 								<ThemedRoot>
 									<Outlet key={currentPath} />
