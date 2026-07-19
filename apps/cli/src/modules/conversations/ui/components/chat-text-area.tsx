@@ -2,6 +2,7 @@ import { readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import {
+	decodePasteBytes,
 	type Extmark,
 	type PasteEvent,
 	SyntaxStyle,
@@ -33,6 +34,7 @@ import {
 } from "../../hooks/input-controller/history";
 import { useChatInputController } from "../../hooks/input-controller/use-chat-input-controller";
 import { getConversationStore } from "../../storage/get-conversation-store";
+import { expandTrackedPastedText, summarizePastedText } from "./pasted-text";
 
 const MAX_IMAGE_ATTACHMENTS = 5;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -133,6 +135,18 @@ const getAttachmentFileTokens = (
 		return extmark ? [{ start: extmark.start, token: attachment.token }] : [];
 	});
 
+const getTrackedPastedTexts = (
+	textarea: TextareaRenderable,
+	pastedTexts: Array<{ extmarkId: number; text: string; token: string }>
+) =>
+	pastedTexts.flatMap(({ extmarkId, text, token }) => {
+		const extmark = textarea.extmarks.get(extmarkId);
+		return extmark &&
+			isAttachmentTokenExtant(textarea.plainText, token, extmark)
+			? [{ end: extmark.end, start: extmark.start, text, token }]
+			: [];
+	});
+
 export const normalizeFileTokensForTrimmedText = (
 	rawText: string,
 	fileTokens: Array<{ start: number; token: string }>
@@ -210,6 +224,22 @@ const readPastedImage = () =>
 			join(tmpdir(), `wincode-clipboard-${crypto.randomUUID()}.png`),
 	});
 
+const readPastedImageOrPath = async (pastedText: string) => {
+	const pathImage = pastedText
+		? await readImagePath(pastedText, {
+				readFile: (path) => readFile(path),
+				stat: async (path) => stat(path),
+			})
+		: { unavailable: true as const };
+	return {
+		image:
+			!pastedText || "unavailable" in pathImage
+				? await readPastedImage()
+				: pathImage,
+		pathImage,
+	};
+};
+
 export function ChatTextArea({
 	disabled = false,
 	onSubmit,
@@ -260,9 +290,39 @@ export function ChatTextArea({
 					fg: colors.background,
 				},
 				fileMention: { bold: true, fg: colors.primary },
+				pastedText: {
+					bg: colors.primary,
+					bold: true,
+					fg: colors.background,
+				},
 			}),
 		[colors.background, colors.primary]
 	);
+	const pastedTextStyleId = mentionSyntaxStyle.getStyleId("pastedText");
+	const pastedTextRef = useRef<
+		Array<{ extmarkId: number; text: string; token: string }>
+	>([]);
+	const syncPastedTexts = useCallback(() => {
+		const textarea = textAreaRef.current;
+		if (!textarea) {
+			return [];
+		}
+
+		pastedTextRef.current = pastedTextRef.current
+			.filter(({ extmarkId, token }) => {
+				const extmark = textarea.extmarks.get(extmarkId);
+				return (
+					extmark !== null &&
+					isAttachmentTokenExtant(textarea.plainText, token, extmark)
+				);
+			})
+			.sort(
+				(left, right) =>
+					(textarea.extmarks.get(left.extmarkId)?.start ?? 0) -
+					(textarea.extmarks.get(right.extmarkId)?.start ?? 0)
+			);
+		return pastedTextRef.current;
+	}, []);
 
 	const { actions, state } = useChatInputController({
 		disabled,
@@ -324,6 +384,7 @@ export function ChatTextArea({
 			return;
 		}
 		const attachments = syncAttachmentsRef.current();
+		syncPastedTexts();
 		actions.onTextChange(
 			textarea.plainText,
 			textarea.cursorOffset,
@@ -331,7 +392,7 @@ export function ChatTextArea({
 			getAttachmentFileTokens(textarea, attachments)
 		);
 		syncFileMentionExtmarksRef.current();
-	}, [actions, state.overlay.kind]);
+	}, [actions, state.overlay.kind, syncPastedTexts]);
 
 	const syncAttachments = useCallback(() => {
 		const textarea = textAreaRef.current;
@@ -444,10 +505,17 @@ export function ChatTextArea({
 
 		programmaticTextRef.current = state.text;
 		const previousAttachments = attachmentsRef.current;
+		const previousPastedTexts = syncPastedTexts();
 		const previousText = textarea.plainText;
 		const previousStarts = getAttachmentFileTokens(
 			textarea,
 			previousAttachments
+		).map(({ start }) =>
+			mapOffsetThroughTextReplacement(previousText, state.text, start)
+		);
+		const previousPastedStarts = getTrackedPastedTexts(
+			textarea,
+			previousPastedTexts
 		).map(({ start }) =>
 			mapOffsetThroughTextReplacement(previousText, state.text, start)
 		);
@@ -458,6 +526,40 @@ export function ChatTextArea({
 			previousAttachments,
 			previousStarts
 		);
+		const claimedPastedStarts = new Set<number>();
+		pastedTextRef.current = previousPastedTexts.flatMap((pasted, index) => {
+			const candidates: number[] = [];
+			let start = state.text.indexOf(pasted.token);
+			while (start !== -1) {
+				if (!claimedPastedStarts.has(start)) {
+					candidates.push(start);
+				}
+				start = state.text.indexOf(pasted.token, start + pasted.token.length);
+			}
+			const expectedStart = previousPastedStarts[index];
+			const matchedStart = candidates.toSorted(
+				(left, right) =>
+					Math.abs(left - (expectedStart ?? left)) -
+					Math.abs(right - (expectedStart ?? right))
+			)[0];
+			if (matchedStart === undefined) {
+				return [];
+			}
+			claimedPastedStarts.add(matchedStart);
+			return [
+				{
+					...pasted,
+					extmarkId: textarea.extmarks.create({
+						end: matchedStart + pasted.token.length,
+						start: matchedStart,
+						virtual: true,
+						...(pastedTextStyleId === null
+							? {}
+							: { styleId: pastedTextStyleId }),
+					}),
+				},
+			];
+		});
 		for (const id of fileMentionExtmarkIdsRef.current) {
 			textarea.extmarks.delete(id);
 		}
@@ -469,9 +571,11 @@ export function ChatTextArea({
 		}
 	}, [
 		restoreAttachmentsAfterSetText,
+		pastedTextStyleId,
 		state.cursorOffset,
 		state.text,
 		state.textSyncRevision,
+		syncPastedTexts,
 		syncFileMentionExtmarks,
 	]);
 
@@ -535,6 +639,36 @@ export function ChatTextArea({
 
 	useEffect(() => {
 		const textarea = textAreaRef.current;
+		if (!textarea || state.recalledPastedTextsRevision === 0) {
+			return;
+		}
+		for (const record of pastedTextRef.current) {
+			textarea.extmarks.delete(record.extmarkId);
+		}
+		pastedTextRef.current = [];
+		let searchStart = 0;
+		for (const pasted of state.recalledPastedTexts) {
+			const start = textarea.plainText.indexOf(pasted.token, searchStart);
+			if (start < 0) {
+				continue;
+			}
+			searchStart = start + pasted.token.length;
+			const extmarkId = textarea.extmarks.create({
+				end: start + pasted.token.length,
+				start,
+				virtual: true,
+				...(pastedTextStyleId === null ? {} : { styleId: pastedTextStyleId }),
+			});
+			pastedTextRef.current.push({ extmarkId, ...pasted });
+		}
+	}, [
+		pastedTextStyleId,
+		state.recalledPastedTexts,
+		state.recalledPastedTextsRevision,
+	]);
+
+	useEffect(() => {
+		const textarea = textAreaRef.current;
 		if (!textarea) {
 			return;
 		}
@@ -590,7 +724,11 @@ export function ChatTextArea({
 
 		const textarea = textAreaRef.current;
 		const rawText = textarea?.plainText ?? "";
-		const text = rawText.trim();
+		const pastedTexts = textarea
+			? getTrackedPastedTexts(textarea, syncPastedTexts())
+			: [];
+		const text = expandTrackedPastedText(rawText.trim(), pastedTexts);
+		const visibleText = rawText.trim();
 		const attachments = syncAttachments();
 		const files = attachments.map((attachment) => attachment.file);
 		const fileTokens = textarea
@@ -611,12 +749,20 @@ export function ChatTextArea({
 		for (const attachment of attachmentsRef.current) {
 			textarea?.extmarks.delete(attachment.extmarkId);
 		}
+		for (const pastedText of pastedTextRef.current) {
+			textarea?.extmarks.delete(pastedText.extmarkId);
+		}
 		attachmentsRef.current = [];
 		textAreaRef.current?.setText("");
+		pastedTextRef.current = [];
 		actions.onAcceptedSubmit({
 			fileTokens,
 			files,
-			text,
+			text: visibleText,
+			pastedText: pastedTexts.map(({ text: value, token }) => ({
+				text: value,
+				token,
+			})),
 		});
 	};
 	commandEscapeRef.current = actions.onEscape;
@@ -624,9 +770,11 @@ export function ChatTextArea({
 	ctrlCRef.current = () => {
 		const textarea = textAreaRef.current;
 		const attachments = syncAttachments();
+		const pastedTexts = textarea ? syncPastedTexts() : [];
 		return actions.onCtrlC(
 			attachments.map((attachment) => attachment.file),
-			textarea ? getAttachmentFileTokens(textarea, attachments) : []
+			textarea ? getAttachmentFileTokens(textarea, attachments) : [],
+			pastedTexts.map(({ text, token }) => ({ text, token }))
 		);
 	};
 
@@ -711,6 +859,33 @@ export function ChatTextArea({
 		[handleTextareaContentChange]
 	);
 
+	const stagePastedText = useCallback(
+		(pastedText: string): boolean => {
+			const summary = summarizePastedText(pastedText);
+			if (!summary) {
+				return false;
+			}
+
+			const textarea = textAreaRef.current;
+			if (!textarea) {
+				return true;
+			}
+
+			const start = textarea.cursorOffset;
+			textarea.insertText(`${summary.token} `);
+			const extmarkId = textarea.extmarks.create({
+				end: start + summary.token.length,
+				start,
+				...(pastedTextStyleId === null ? {} : { styleId: pastedTextStyleId }),
+				virtual: true,
+			});
+			pastedTextRef.current.push({ extmarkId, ...summary });
+			handleTextareaContentChange();
+			return true;
+		},
+		[handleTextareaContentChange, pastedTextStyleId]
+	);
+
 	const handlePasteEvent = useCallback(
 		async (event: PasteEvent) => {
 			const mediaType = event.metadata?.mimeType;
@@ -729,23 +904,16 @@ export function ChatTextArea({
 			}
 
 			event.preventDefault();
-			const pastedText = new TextDecoder().decode(event.bytes);
-			const pathImage = pastedText
-				? await readImagePath(pastedText, {
-						readFile: (path) => readFile(path),
-						stat: async (path) => stat(path),
-					})
-				: { unavailable: true as const };
-			const image =
-				!pastedText || "unavailable" in pathImage
-					? await readPastedImage()
-					: pathImage;
+			const pastedText = decodePasteBytes(event.bytes);
+			const { image, pathImage } = await readPastedImageOrPath(pastedText);
 			if (pasteSequence !== pasteSequenceRef.current) {
 				applyTextPaste(event);
 				return;
 			}
 			if ("unavailable" in image) {
-				applyTextPaste(event);
+				if (!stagePastedText(pastedText)) {
+					applyTextPaste(event);
+				}
 				return;
 			}
 
@@ -755,7 +923,7 @@ export function ChatTextArea({
 				"unavailable" in pathImage ? "clipboard" : basename(pastedText)
 			);
 		},
-		[applyTextPaste, disabled, isTopLayer, stageImage]
+		[applyTextPaste, disabled, isTopLayer, stageImage, stagePastedText]
 	);
 
 	usePaste((event) => {

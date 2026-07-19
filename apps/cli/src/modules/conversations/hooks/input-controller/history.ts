@@ -16,7 +16,13 @@ const sameFiles = (a: PromptHistoryEntry, b: PromptHistoryEntry): boolean =>
 const same = (a: PromptHistoryEntry, b: PromptHistoryEntry): boolean =>
 	a.text === b.text &&
 	JSON.stringify(a.fileTokens ?? []) === JSON.stringify(b.fileTokens ?? []) &&
+	JSON.stringify(a.pastedText ?? []) === JSON.stringify(b.pastedText ?? []) &&
 	sameFiles(a, b);
+const expandedText = (entry: PromptHistoryEntry): string =>
+	(entry.pastedText ?? []).reduce(
+		(text, pasted) => text.replace(pasted.token, pasted.text),
+		entry.text
+	);
 
 export const derivePromptHistory = (
 	messages: CodingAgentUIMessage[]
@@ -53,13 +59,15 @@ export const mergePromptHistory = (
 	const enrichedSessionEntries = sessionEntries.map((sessionEntry) => {
 		let matchingIndex = unmatchedGlobalEntries.findIndex(
 			(globalEntry) =>
-				globalEntry.text === sessionEntry.text &&
+				(globalEntry.text === sessionEntry.text ||
+					expandedText(globalEntry) === sessionEntry.text) &&
 				sameFiles(globalEntry, sessionEntry)
 		);
 		if (matchingIndex === -1 && sessionEntry.files.length > 0) {
 			matchingIndex = unmatchedGlobalEntries.findIndex(
 				(globalEntry) =>
-					globalEntry.text === sessionEntry.text &&
+					(globalEntry.text === sessionEntry.text ||
+						expandedText(globalEntry) === sessionEntry.text) &&
 					globalEntry.files.length === 0
 			);
 		}
@@ -71,16 +79,25 @@ export const mergePromptHistory = (
 			matchingIndex,
 			1
 		);
-		if (!matchingGlobalEntry?.fileTokens) {
+		if (!(matchingGlobalEntry?.fileTokens || matchingGlobalEntry?.pastedText)) {
 			return sessionEntry;
 		}
-		return { ...sessionEntry, fileTokens: matchingGlobalEntry.fileTokens };
+		return {
+			...sessionEntry,
+			fileTokens: matchingGlobalEntry.fileTokens,
+			pastedText: matchingGlobalEntry.pastedText,
+			text: matchingGlobalEntry.pastedText
+				? matchingGlobalEntry.text
+				: sessionEntry.text,
+		};
 	});
 
 	return [...enrichedSessionEntries, ...unmatchedGlobalEntries].slice(0, 50);
 };
-export const shouldRecordCtrlC = (text: string): boolean =>
-	text.trim().length >= 20;
+export const shouldRecordCtrlC = (
+	text: string,
+	hasPromptParts = false
+): boolean => hasPromptParts || text.trim().length >= 20;
 export const prependPrompt = (
 	entries: PromptHistoryEntry[],
 	prompt: PromptHistoryEntry

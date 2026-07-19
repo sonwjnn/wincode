@@ -57,6 +57,7 @@ describe("prompt history rules", () => {
 	test("applies exact Ctrl+C threshold and consecutive retention", () => {
 		expect(shouldRecordCtrlC("x".repeat(19))).toBe(false);
 		expect(shouldRecordCtrlC(`  ${"x".repeat(20)}`)).toBe(true);
+		expect(shouldRecordCtrlC("[Pasted ~3 lines]", true)).toBe(true);
 		const entries = prependPrompt(
 			prependPrompt([entry("same"), entry("old")], entry("same")),
 			entry("same")
@@ -180,6 +181,21 @@ describe("prompt history rules", () => {
 		expect(mergePromptHistory([sessionEntry], [globalB, globalA])).toEqual([
 			{ ...sessionEntry, fileTokens: globalA.fileTokens },
 			globalB,
+		]);
+	});
+
+	test("restores summarized pasted text instead of expanded session text", () => {
+		const token = "[Pasted ~3 lines]";
+		const pastedText = [{ text: "alpha\nbeta\ngamma", token }];
+		const sessionEntry = entry("before alpha\nbeta\ngamma after");
+		const globalEntry = {
+			files: [],
+			pastedText,
+			text: `before ${token} after`,
+		};
+
+		expect(mergePromptHistory([sessionEntry], [globalEntry])).toEqual([
+			globalEntry,
 		]);
 	});
 });

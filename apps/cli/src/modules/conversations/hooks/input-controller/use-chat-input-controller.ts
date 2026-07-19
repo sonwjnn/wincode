@@ -90,6 +90,11 @@ export function useChatInputController({
 		NonNullable<PromptHistoryEntry["fileTokens"]>
 	>([]);
 	const [recalledFilesRevision, setRecalledFilesRevision] = useState(0);
+	const [recalledPastedTexts, setRecalledPastedTexts] = useState<
+		NonNullable<PromptHistoryEntry["pastedText"]>
+	>([]);
+	const [recalledPastedTextsRevision, setRecalledPastedTextsRevision] =
+		useState(0);
 
 	useEffect(() => {
 		let active = true;
@@ -183,6 +188,8 @@ export function useChatInputController({
 			setRecalledFiles(result.entry.files);
 			setRecalledFileTokens(result.entry.fileTokens ?? []);
 			setRecalledFilesRevision((revision) => revision + 1);
+			setRecalledPastedTexts(result.entry.pastedText ?? []);
+			setRecalledPastedTextsRevision((revision) => revision + 1);
 			return true;
 		},
 		[setProgrammaticText]
@@ -308,13 +315,16 @@ export function useChatInputController({
 	const onCtrlC = useCallback(
 		(
 			files: PromptHistoryEntry["files"],
-			fileTokens: NonNullable<PromptHistoryEntry["fileTokens"]>
+			fileTokens: NonNullable<PromptHistoryEntry["fileTokens"]>,
+			pastedText: NonNullable<PromptHistoryEntry["pastedText"]>
 		) => {
 			if (disabled || (textValue.length === 0 && overlayKind === null)) {
 				return false;
 			}
-			if (shouldRecordCtrlC(textValue)) {
-				rememberPrompt({ fileTokens, files, text: textValue });
+			if (
+				shouldRecordCtrlC(textValue, files.length > 0 || pastedText.length > 0)
+			) {
+				rememberPrompt({ fileTokens, files, pastedText, text: textValue });
 			}
 
 			resetHistoryBaseline("");
@@ -500,6 +510,8 @@ export function useChatInputController({
 			recalledFiles,
 			recalledFileTokens,
 			recalledFilesRevision,
+			recalledPastedTexts,
+			recalledPastedTextsRevision,
 			visibleStartIndex,
 		},
 	};
