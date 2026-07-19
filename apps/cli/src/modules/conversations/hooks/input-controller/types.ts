@@ -1,5 +1,7 @@
+import type { FileUIPart } from "@wincode/ai/client";
 import type { CommandSpec } from "@/modules/commands/commands";
 import type { FileMentionOption } from "@/modules/file-mentions";
+import type { PromptHistoryEntry } from "./history";
 
 export type InputOverlayState =
 	| { items: []; kind: null; selectedIndex: -1 }
@@ -11,19 +13,31 @@ export type ChatInputControllerState = {
 	overlay: InputOverlayState;
 	text: string;
 	textSyncRevision: number;
+	recalledFiles: FileUIPart[];
+	recalledFileTokens: Array<{ start: number; token: string }>;
+	recalledFilesRevision: number;
 	visibleStartIndex: number;
 };
 
 export type ChatInputControllerActions = {
 	onArrowDown: (cursorOffset?: number, textLength?: number) => boolean;
 	onArrowUp: (cursorOffset?: number, textLength?: number) => boolean;
-	onCtrlC: () => boolean;
+	onCtrlC: (
+		files: FileUIPart[],
+		fileTokens: Array<{ start: number; token: string }>
+	) => boolean;
 	onEnter: () => void;
+	onAcceptedSubmit: (entry: PromptHistoryEntry) => void;
 	onEscape: () => void;
 	onItemExecute: (index: number) => void;
 	onItemSelect: (index: number) => void;
 	onTab: () => void;
-	onTextChange: (text: string, cursorOffset: number) => void;
+	onTextChange: (
+		text: string,
+		cursorOffset: number,
+		files: FileUIPart[],
+		fileTokens: Array<{ start: number; token: string }>
+	) => void;
 	onProgrammaticTextChange: (text: string, cursorOffset: number) => void;
 };
 
@@ -38,6 +52,6 @@ export type ChatInputControllerOptions = {
 	onSubmit: (value: string) => void;
 	onTab: () => void;
 	getFileMentionOptions: () => Promise<FileMentionOption[]>;
-	getPromptHistory: () => string[];
-	recordPrompt: (prompt: string) => void;
+	getPromptHistory: () => PromptHistoryEntry[];
+	recordPrompt: (entry: PromptHistoryEntry) => void;
 };

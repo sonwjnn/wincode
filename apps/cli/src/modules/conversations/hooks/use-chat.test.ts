@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import { prepareSendChatRequestBody } from "../api/chat-request";
 import {
+	createChatMessageParts,
 	finalizeAssistantMessageMetadata,
 	findCurrentTurnAssistantIndex,
 	findCurrentTurnInterruptTargetIndex,
@@ -89,6 +90,24 @@ describe("prepareSendChatRequestBody", () => {
 });
 
 describe("useChat helpers", () => {
+	test("preserves file parts in optimistic and sent part order", () => {
+		const mention = {
+			data: { path: "src/app.ts" },
+			type: "data-fileMention",
+		} as unknown as CodingAgentUIMessage["parts"][number];
+		const file = {
+			mediaType: "text/plain",
+			type: "file",
+			url: "file:///tmp/input.txt",
+		} as const;
+
+		expect(createChatMessageParts("inspect", [mention], [file])).toEqual([
+			{ text: "inspect", type: "text" },
+			mention,
+			file,
+		]);
+	});
+
 	test("does not interrupt an assistant from the previous turn", () => {
 		const optimisticUserMessage = {
 			id: "user-2",

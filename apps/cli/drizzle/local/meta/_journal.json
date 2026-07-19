@@ -15,6 +15,20 @@
       "when": 1784394194911,
       "tag": "0001_high_dark_phoenix",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1784449401644,
+      "tag": "0002_drop-prompt-history-unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1784459698449,
+      "tag": "0003_sad_forge",
+      "breakpoints": true
     }
   ]
 }

@@ -4,14 +4,16 @@ import {
 	normalizeChatModelSelection,
 	normalizeModelVariant,
 } from "@wincode/ai";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import { derivePromptHistory } from "../../hooks/input-controller/history";
 import { useChat } from "../../hooks/use-chat";
 import { getLatestChatConfig, shouldAutoStartAssistantTurn } from "../../utils";
 import { ChatShell } from "../components/chat-shell";
+import type { ChatPromptSubmission } from "../components/chat-text-area";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
 
 const INTERRUPT_CONFIRMATION_TIMEOUT_MS = 3000;
@@ -55,6 +57,10 @@ export function ChatView({
 	} = useChat(sessionId, initialMessages);
 	const isBusy =
 		isPreparingMessage || status === "submitted" || status === "streaming";
+	const promptHistory = useMemo(
+		() => derivePromptHistory(initialMessages),
+		[initialMessages]
+	);
 
 	useEffect(() => {
 		const config = getLatestChatConfig(initialMessages);
@@ -158,17 +164,18 @@ export function ChatView({
 		[]
 	);
 
-	const submitMessage = (value: string) => {
+	const submitMessage = ({ files, text }: ChatPromptSubmission) => {
 		if (isBusy) {
-			return;
+			return false;
 		}
 
-		const text = value.trim();
-		if (!text) {
-			return;
+		const userText = text.trim();
+		if (!userText && files.length === 0) {
+			return false;
 		}
 
-		submit({ mode, model, variant, userText: text }).catch(() => undefined);
+		submit({ files, mode, model, variant, userText }).catch(() => undefined);
+		return true;
 	};
 
 	useEffect(() => {
@@ -238,6 +245,7 @@ export function ChatView({
 			isInterruptArmed={isInterruptArmed}
 			messages={messages}
 			onSubmit={submitMessage}
+			promptHistory={promptHistory}
 		/>
 	);
 }

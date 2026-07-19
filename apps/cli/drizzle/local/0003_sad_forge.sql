@@ -1,0 +1,1 @@
+ALTER TABLE `prompt_history` ADD `entry_json` text;

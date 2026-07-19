@@ -1,27 +1,42 @@
-import type { ModeType } from "@wincode/ai";
+import type { CodingAgentUIMessage, ModeType } from "@wincode/ai";
 import { findFileMentionRanges } from "@/modules/file-mentions";
 import { EmptyBorder } from "@/shared/constants";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 
 type UserMessageProps = {
-	message: string;
 	mode: ModeType;
+	parts: CodingAgentUIMessage["parts"];
 };
+
+type TextPart = Extract<
+	CodingAgentUIMessage["parts"][number],
+	{ type: "text" }
+>;
+
+type FilePart = Extract<
+	CodingAgentUIMessage["parts"][number],
+	{ type: "file" }
+>;
+
+const INLINE_IMAGE_TOKEN = /\[Image \d+\]/u;
+
+export const hasInlineImageToken = (message: string) =>
+	INLINE_IMAGE_TOKEN.test(message);
+
+const isTextPart = (
+	part: CodingAgentUIMessage["parts"][number]
+): part is TextPart => part.type === "text";
+
+const isImagePart = (
+	part: CodingAgentUIMessage["parts"][number]
+): part is FilePart =>
+	part.type === "file" && part.mediaType.startsWith("image/");
 
 const getMessageParts = (message: string) => {
 	const fileMentionRanges = findFileMentionRanges(message);
-	let body = "";
-	let lastIndex = 0;
-
-	for (const range of fileMentionRanges) {
-		body += message.slice(lastIndex, range.start);
-		lastIndex = range.end;
-	}
-
-	body += message.slice(lastIndex);
 
 	return {
-		body: body.replace(/[ \t]{2,}/gu, " ").trim(),
+		body: message.trim(),
 		fileMentions: fileMentionRanges.map(({ query, start }) => ({
 			path: query,
 			start,
@@ -32,9 +47,14 @@ const getMessageParts = (message: string) => {
 const getMentionTypeLabel = (path: string) =>
 	path.endsWith("/") ? "Directory" : "File";
 
-export function UserMessage({ message, mode }: UserMessageProps) {
+export function UserMessage({ mode, parts }: UserMessageProps) {
 	const { colors } = useTheme();
 	const borderColor = colors.mode[mode];
+	const message = parts
+		.filter(isTextPart)
+		.map((part) => part.text)
+		.join("");
+	const imageParts = parts.filter(isImagePart);
 	const { body, fileMentions } = getMessageParts(message);
 
 	return (
@@ -60,7 +80,7 @@ export function UserMessage({ message, mode }: UserMessageProps) {
 						</box>
 					)}
 
-					{fileMentions.length > 0 && (
+					{(fileMentions.length > 0 || imageParts.length > 0) && (
 						<box
 							flexDirection="row"
 							flexWrap="wrap"
@@ -86,6 +106,29 @@ export function UserMessage({ message, mode }: UserMessageProps) {
 									</box>
 									<box backgroundColor={colors.filePathBackground} paddingX={1}>
 										<text fg={colors.filePath}>{path}</text>
+									</box>
+								</box>
+							))}
+
+							{imageParts.map((part) => (
+								<box
+									alignItems="center"
+									flexDirection="row"
+									flexShrink={0}
+									key={part.url}
+								>
+									<box
+										backgroundColor={colors.fileBadgeBackground}
+										paddingX={1}
+									>
+										<text fg={colors.fileBadgeText}>
+											<strong>File</strong>
+										</text>
+									</box>
+									<box backgroundColor={colors.filePathBackground} paddingX={1}>
+										<text fg={colors.filePath}>
+											{fileMentions.length > 0 ? "clipboard" : part.filename}
+										</text>
 									</box>
 								</box>
 							))}

@@ -12,6 +12,7 @@ import {
 } from "@wincode/ai/client";
 import {
 	type ChatAddToolOutputFunction,
+	type FileUIPart,
 	lastAssistantMessageIsCompleteWithToolCalls,
 } from "ai";
 import { useMemo, useRef, useState } from "react";
@@ -25,7 +26,14 @@ type SubmitChatParams = {
 	model: ChatModelSelection;
 	variant?: ModelVariant;
 	userText: string;
+	files?: FileUIPart[];
 };
+
+export const createChatMessageParts = (
+	userText: string,
+	fileMentions: CodingAgentUIMessage["parts"],
+	files: FileUIPart[]
+) => [{ text: userText, type: "text" as const }, ...fileMentions, ...files];
 
 export const getContinuationChatParams = (
 	mode: ModeType,
@@ -240,13 +248,14 @@ export function useChat(
 		model,
 		variant,
 		userText,
+		files = [],
 	}: SubmitChatParams) => {
 		modeRef.current = mode;
 		modelRef.current = model;
 		variantRef.current = variant;
 		requestStartedAtRef.current = Date.now();
 		const metadata = { mode, model, variant };
-		const optimisticMessage = createUserMessage(userText, metadata);
+		const optimisticMessage = createUserMessage(userText, metadata, [], files);
 		chat.setMessages((messages) => [...messages, optimisticMessage]);
 		setIsPreparingMessage(true);
 
@@ -255,7 +264,7 @@ export function useChat(
 			return await chat.sendMessage({
 				messageId: optimisticMessage.id,
 				metadata,
-				parts: [{ text: userText, type: "text" }, ...fileMentions],
+				parts: createChatMessageParts(userText, fileMentions, files),
 			});
 		} catch (error) {
 			chat.setMessages((messages) =>

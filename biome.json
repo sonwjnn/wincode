@@ -81,6 +81,9 @@
       },
       "performance": {
         "noBarrelFile": "off"
+      },
+      "complexity": {
+        "noVoid": "off"
       }
     }
   },

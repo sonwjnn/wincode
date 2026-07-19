@@ -11,6 +11,7 @@ import {
 	decideDownAction,
 	decideUpAction,
 	navigateHistory as getHistoryNavigation,
+	type PromptHistoryEntry,
 	prependPrompt,
 	resetHistoryNavigation,
 	shouldRecordCtrlC,
@@ -52,18 +53,18 @@ export function useChatInputController({
 	>([]);
 	const [textSyncRevision, setTextSyncRevision] = useState(0);
 	const [visibleStartIndex, setVisibleStartIndex] = useState(0);
-	const historyRef = useRef<string[]>([]);
+	const historyRef = useRef<PromptHistoryEntry[]>([]);
 	const historyIndexRef = useRef(-1);
-	const draftRef = useRef("");
+	const draftRef = useRef<PromptHistoryEntry>({ text: "", files: [] });
 	const resetHistoryBaseline = useCallback((draft: string) => {
 		const baseline = resetHistoryNavigation(draft);
 		historyIndexRef.current = baseline.index;
 		draftRef.current = baseline.draft;
 	}, []);
 	const rememberPrompt = useCallback(
-		(prompt: string) => {
-			recordPrompt(prompt);
-			historyRef.current = prependPrompt(historyRef.current, prompt);
+		(entry: PromptHistoryEntry) => {
+			recordPrompt(entry);
+			historyRef.current = prependPrompt(historyRef.current, entry);
 		},
 		[recordPrompt]
 	);
@@ -82,6 +83,13 @@ export function useChatInputController({
 		},
 		[]
 	);
+	const [recalledFiles, setRecalledFiles] = useState<
+		PromptHistoryEntry["files"]
+	>([]);
+	const [recalledFileTokens, setRecalledFileTokens] = useState<
+		NonNullable<PromptHistoryEntry["fileTokens"]>
+	>([]);
+	const [recalledFilesRevision, setRecalledFilesRevision] = useState(0);
 
 	useEffect(() => {
 		let active = true;
@@ -126,18 +134,26 @@ export function useChatInputController({
 		setVisibleStartIndex(0);
 	}, []);
 
-	const onTextChange = useCallback((text: string, cursorOffset: number) => {
-		historyIndexRef.current = -1;
-		draftRef.current = text;
-		setTextValue(text);
-		setCursorOffset(null);
-		setSelectedIndex(0);
-		setVisibleStartIndex(0);
+	const onTextChange = useCallback(
+		(
+			text: string,
+			cursorOffset: number,
+			files: PromptHistoryEntry["files"],
+			fileTokens: NonNullable<PromptHistoryEntry["fileTokens"]>
+		) => {
+			historyIndexRef.current = -1;
+			draftRef.current = { fileTokens, files, text };
+			setTextValue(text);
+			setCursorOffset(null);
+			setSelectedIndex(0);
+			setVisibleStartIndex(0);
 
-		const nextTrigger = detectTrigger(text, cursorOffset);
-		setActiveTrigger(nextTrigger);
-		setOverlayKind(nextTrigger?.kind ?? null);
-	}, []);
+			const nextTrigger = detectTrigger(text, cursorOffset);
+			setActiveTrigger(nextTrigger);
+			setOverlayKind(nextTrigger?.kind ?? null);
+		},
+		[]
+	);
 	const onProgrammaticTextChange = useCallback(
 		(text: string, cursor: number) => {
 			setTextValue(text);
@@ -160,7 +176,13 @@ export function useChatInputController({
 				return false;
 			}
 			historyIndexRef.current = result.state.index;
-			setProgrammaticText(result.text, direction < 0 ? 0 : result.text.length);
+			setProgrammaticText(
+				result.entry.text,
+				direction < 0 ? 0 : result.entry.text.length
+			);
+			setRecalledFiles(result.entry.files);
+			setRecalledFileTokens(result.entry.fileTokens ?? []);
+			setRecalledFilesRevision((revision) => revision + 1);
 			return true;
 		},
 		[setProgrammaticText]
@@ -245,7 +267,7 @@ export function useChatInputController({
 		}
 
 		onSubmitRef.current(text);
-		rememberPrompt(text);
+		rememberPrompt({ text, files: [] });
 		resetHistoryBaseline("");
 		setProgrammaticText("", null);
 		closeOverlay();
@@ -270,27 +292,46 @@ export function useChatInputController({
 		closeOverlay();
 	}, [activeTrigger, closeOverlay, setProgrammaticText, textValue]);
 
-	const onCtrlC = useCallback(() => {
-		if (disabled || (textValue.length === 0 && overlayKind === null)) {
-			return false;
-		}
-		if (shouldRecordCtrlC(textValue)) {
-			rememberPrompt(textValue);
-		}
+	const onAcceptedSubmit = useCallback(
+		(entry: PromptHistoryEntry) => {
+			const prompt = entry.text.trim();
+			if (prompt.length > 0) {
+				rememberPrompt({ ...entry, text: prompt });
+			}
+			resetHistoryBaseline("");
+			setProgrammaticText("", null);
+			closeOverlay();
+		},
+		[closeOverlay, rememberPrompt, resetHistoryBaseline, setProgrammaticText]
+	);
 
-		resetHistoryBaseline("");
-		setProgrammaticText("", null);
-		closeOverlay();
-		return true;
-	}, [
-		closeOverlay,
-		disabled,
-		overlayKind,
-		setProgrammaticText,
-		textValue,
-		rememberPrompt,
-		resetHistoryBaseline,
-	]);
+	const onCtrlC = useCallback(
+		(
+			files: PromptHistoryEntry["files"],
+			fileTokens: NonNullable<PromptHistoryEntry["fileTokens"]>
+		) => {
+			if (disabled || (textValue.length === 0 && overlayKind === null)) {
+				return false;
+			}
+			if (shouldRecordCtrlC(textValue)) {
+				rememberPrompt({ fileTokens, files, text: textValue });
+			}
+
+			resetHistoryBaseline("");
+			setProgrammaticText("", null);
+			closeOverlay();
+			return true;
+		},
+		[
+			closeOverlay,
+			disabled,
+			overlayKind,
+			setProgrammaticText,
+			textValue,
+			rememberPrompt,
+			resetHistoryBaseline,
+		]
+	);
 
 	const onArrowUp = useCallback(
 		(cursor?: number, _textLength?: number): boolean => {
@@ -441,6 +482,7 @@ export function useChatInputController({
 		actions: {
 			onArrowDown,
 			onArrowUp,
+			onAcceptedSubmit,
 			onCtrlC,
 			onEnter,
 			onEscape,
@@ -455,6 +497,9 @@ export function useChatInputController({
 			overlay,
 			text: textValue,
 			textSyncRevision,
+			recalledFiles,
+			recalledFileTokens,
+			recalledFilesRevision,
 			visibleStartIndex,
 		},
 	};

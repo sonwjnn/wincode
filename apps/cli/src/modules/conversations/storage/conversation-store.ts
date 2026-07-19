@@ -3,6 +3,13 @@ import type {
 	CodingAgentUIMessage,
 	ModeType,
 } from "@wincode/ai";
+import type { FileUIPart } from "@wincode/ai/client";
+
+export type PromptHistoryEntry = {
+	fileTokens?: Array<{ start: number; token: string }>;
+	files: FileUIPart[];
+	text: string;
+};
 
 export type ConversationSession = {
 	createdAt: Date;
@@ -39,8 +46,8 @@ export type ConversationStore = {
 	listRecentModelSelections: (limit: number) => ChatModelSelection[];
 	persistMessages: (input: PersistMessagesInput) => Promise<void>;
 	updateSession: (sessionId: string, data: UpdateSessionInput) => Promise<void>;
-	getPromptHistory: () => string[];
-	recordPrompt: (prompt: string) => void;
+	getPromptHistory: () => PromptHistoryEntry[];
+	recordPrompt: (entry: PromptHistoryEntry) => void;
 };
 
 export const UNTITLED_SESSION_TITLE = "Untitled Session";

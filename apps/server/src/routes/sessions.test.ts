@@ -78,6 +78,32 @@ describe("POST /:id/chat (transport-only)", () => {
 		expect(response.status).toBe(200);
 	});
 
+	test("forwards standard image file parts through server validation", async () => {
+		const response = await sessionsRoutes.request("/session-1/chat", {
+			body: JSON.stringify({
+				messages: [
+					{
+						id: "user-image",
+						parts: [
+							{
+								mediaType: "image/png",
+								type: "file",
+								url: "data:image/png;base64,aGVsbG8=",
+							},
+						],
+						role: "user",
+					},
+				],
+				mode: "plan",
+				model: "gpt-5.4-mini",
+			}),
+			headers: { "content-type": "application/json" },
+			method: "POST",
+		});
+
+		expect(response.status).toBe(200);
+	});
+
 	test("rejects a request missing mode/model", async () => {
 		const response = await sessionsRoutes.request("/session-1/chat", {
 			body: JSON.stringify({ messages: [] }),
@@ -188,7 +214,9 @@ describe("POST /:id/chat (transport-only)", () => {
 			start(controller) {
 				controller.enqueue(new TextEncoder().encode("{"));
 				controller.enqueue(
-					new TextEncoder().encode(`"messages":[]${"x".repeat(300_000)}`)
+					new TextEncoder().encode(
+						`"messages":[]${"x".repeat(80 * 1024 * 1024)}`
+					)
 				);
 				controller.close();
 			},

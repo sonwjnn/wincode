@@ -1,6 +1,7 @@
 import {
 	type ChatAddToolOutputFunction,
 	type ChatOnToolCallCallback,
+	type FileUIPart,
 	generateId,
 } from "ai";
 import type { FileMentionUIPart } from "./file-mentions";
@@ -14,6 +15,8 @@ import {
 } from "./modes";
 import { codingToolRunners } from "./tools/runners";
 import type { CodingToolName } from "./tools/schemas";
+
+export type { FileUIPart } from "ai";
 
 const getErrorMessage = (error: unknown) =>
 	error instanceof Error ? error.message : "Tool execution failed.";
@@ -64,11 +67,12 @@ const runToolCall = async <ToolName extends CodingAgentToolName>({
 export const createUserMessage = (
 	text: string,
 	metadata?: CodingMessageMetadata,
-	fileMentions: FileMentionUIPart[] = []
+	fileMentions: FileMentionUIPart[] = [],
+	files: FileUIPart[] = []
 ): CodingAgentUIMessage => ({
 	id: generateId(),
 	...(metadata ? { metadata } : {}),
-	parts: [{ text, type: "text" }, ...fileMentions],
+	parts: [{ text, type: "text" }, ...fileMentions, ...files],
 	role: "user",
 });
 

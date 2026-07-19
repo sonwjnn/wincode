@@ -26,6 +26,7 @@ import {
 	createUserMessage,
 	handleCodingAgentToolCall,
 } from "@wincode/ai/client";
+import type { FileUIPart } from "ai";
 import {
 	type ChatAddToolOutputFunction,
 	type ChatOnToolCallCallback,
@@ -130,6 +131,28 @@ describe("@wincode/ai shared entry", () => {
 			],
 			role: "user",
 		});
+	});
+
+	test("creates user messages in text, mention, then pasted file order", () => {
+		const mention = {
+			data: {
+				byteLength: 5,
+				content: "hello",
+				kind: "file" as const,
+				path: "README.md",
+				truncated: false,
+			},
+			type: "data-fileMention" as const,
+		};
+		const file = {
+			mediaType: "text/plain",
+			type: "file",
+			url: "data:text/plain;base64,aGVsbG8=",
+		} satisfies FileUIPart;
+
+		expect(
+			createUserMessage("hello", undefined, [mention], [file]).parts
+		).toEqual([{ text: "hello", type: "text" }, mention, file]);
 	});
 
 	test("expands file mention data for model context", () => {
@@ -243,6 +266,28 @@ describe("@wincode/ai shared entry", () => {
 						type: "data-fileMention",
 					},
 				]),
+			],
+		});
+
+		expect(validation.success).toBe(true);
+	});
+
+	test("validates standard file UI parts", async () => {
+		const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
+			dataSchemas: codingAgentDataSchemas,
+			messages: [
+				createUserMessage(
+					"attached",
+					undefined,
+					[],
+					[
+						{
+							mediaType: "text/plain",
+							type: "file",
+							url: "data:text/plain;base64,aGVsbG8=",
+						},
+					]
+				),
 			],
 		});
 

@@ -21,7 +21,9 @@ import {
 	verifyBearerAuth,
 } from "../auth/credentials";
 
-const maxRequestBytes = 256 * 1024;
+// Five 10 MiB raw files encoded as base64 require about 67 MiB, plus JSON
+// framing and message context. Keep generous headroom without unbounded bodies.
+const maxRequestBytes = 80 * 1024 * 1024;
 const maxMessages = 32;
 const maxPartsPerMessage = 16;
 const maxTextLength = 16 * 1024;

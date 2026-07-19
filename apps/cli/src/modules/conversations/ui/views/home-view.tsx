@@ -7,6 +7,7 @@ import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config
 import { getConversationStore } from "../../storage/get-conversation-store";
 import { getLatestChatConfig, getMostRecentSession } from "../../utils";
 import { AsciiArt } from "../components/ascii-art";
+import type { ChatPromptSubmission } from "../components/chat-text-area";
 import { ChatTextArea } from "../components/chat-text-area";
 
 export function HomeView() {
@@ -43,32 +44,42 @@ export function HomeView() {
 		};
 	}, [setMode, setModel, setVariant]);
 
-	const handleSubmit = async (input: string) => {
+	const handleSubmit = async ({ files, text }: ChatPromptSubmission) => {
 		if (isCreatingSession) {
-			return;
+			return false;
 		}
-		const prompt = input.trim();
+		const prompt = text.trim();
 
-		if (!prompt) {
-			return;
+		if (!(prompt || files.length > 0)) {
+			return false;
 		}
 
 		setError(null);
 		setIsCreatingSession(true);
 
 		try {
-			await createSession(prompt);
+			await createSession(prompt, files);
+			return true;
 		} catch {
 			setError("Could not create chat session.");
+			return false;
 		} finally {
 			setIsCreatingSession(false);
 		}
 	};
 
-	const createSession = async (input: string) => {
+	const createSession = async (
+		input: string,
+		files: ChatPromptSubmission["files"]
+	) => {
 		const fileMentions = await resolveFileMentionParts(input);
 		const { id } = await getConversationStore().createSession({
-			message: createUserMessage(input, { mode, model, variant }, fileMentions),
+			message: createUserMessage(
+				input,
+				{ mode, model, variant },
+				fileMentions,
+				files
+			),
 			mode,
 			model,
 		});
