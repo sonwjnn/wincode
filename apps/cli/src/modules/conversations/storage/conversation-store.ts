@@ -9,6 +9,7 @@ export type PromptHistoryEntry = {
 	fileTokens?: Array<{ start: number; token: string }>;
 	files: FileUIPart[];
 	text: string;
+	pastedText?: Array<{ token: string; text: string }>;
 };
 
 export type ConversationSession = {

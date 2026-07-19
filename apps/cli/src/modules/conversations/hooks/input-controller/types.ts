@@ -16,6 +16,8 @@ export type ChatInputControllerState = {
 	recalledFiles: FileUIPart[];
 	recalledFileTokens: Array<{ start: number; token: string }>;
 	recalledFilesRevision: number;
+	recalledPastedTexts: NonNullable<PromptHistoryEntry["pastedText"]>;
+	recalledPastedTextsRevision: number;
 	visibleStartIndex: number;
 };
 
@@ -24,7 +26,8 @@ export type ChatInputControllerActions = {
 	onArrowUp: (cursorOffset?: number, textLength?: number) => boolean;
 	onCtrlC: (
 		files: FileUIPart[],
-		fileTokens: Array<{ start: number; token: string }>
+		fileTokens: Array<{ start: number; token: string }>,
+		pastedText: Array<{ text: string; token: string }>
 	) => boolean;
 	onEnter: () => void;
 	onAcceptedSubmit: (entry: PromptHistoryEntry) => void;

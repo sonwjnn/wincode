@@ -38,6 +38,7 @@ export const createPromptHistory = (db: LocalConversationDatabase) => ({
 			.all()
 			.map((row) => ({
 				...(row.entry?.fileTokens ? { fileTokens: row.entry.fileTokens } : {}),
+				...(row.entry?.pastedText ? { pastedText: row.entry.pastedText } : {}),
 				files: row.entry?.files ?? [],
 				text: row.text,
 			})),
@@ -69,6 +70,7 @@ export const createPromptHistory = (db: LocalConversationDatabase) => ({
 					createdAt: new Date(),
 					entryJson: {
 						...(entry.fileTokens ? { fileTokens: entry.fileTokens } : {}),
+						...(entry.pastedText ? { pastedText: entry.pastedText } : {}),
 						files: entry.files,
 					},
 					prompt: entry.text,

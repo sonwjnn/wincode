@@ -89,7 +89,7 @@ describe("ChatTextArea", () => {
 		expect(textAreaSource).toContain('mediaType?.startsWith("image/")');
 		expect(textAreaSource).toContain("stageImage(event.bytes, mediaType)");
 		expect(textAreaSource).toContain(
-			"const pastedText = new TextDecoder().decode(event.bytes);"
+			"const pastedText = decodePasteBytes(event.bytes);"
 		);
 		expect(textAreaSource).toContain("? await readPastedImage()");
 		expect(textAreaSource).toContain("basename(pastedText)");
@@ -224,7 +224,7 @@ describe("ChatTextArea", () => {
 
 		expect(textAreaSource).toContain("return actions.onCtrlC(");
 		expect(controllerSource).toContain(
-			"rememberPrompt({ fileTokens, files, text: textValue })"
+			"rememberPrompt({ fileTokens, files, pastedText, text: textValue })"
 		);
 		expect(textAreaSource).not.toContain("textarea.clearAllHighlights()");
 	});
