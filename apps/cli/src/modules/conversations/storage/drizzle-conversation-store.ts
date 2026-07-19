@@ -13,6 +13,7 @@ import {
 	type ConversationStore,
 	type CreateSessionInput,
 	type PersistMessagesInput,
+	type PromptHistoryEntry,
 	UNTITLED_SESSION_TITLE,
 	type UpdateSessionInput,
 } from "./conversation-store";
@@ -27,27 +28,52 @@ import {
 export const createPromptHistory = (db: LocalConversationDatabase) => ({
 	get: () =>
 		db
-			.select({ prompt: promptHistory.prompt })
+			.select({
+				entry: promptHistory.entryJson,
+				text: promptHistory.prompt,
+			})
 			.from(promptHistory)
 			.orderBy(desc(promptHistory.id))
 			.limit(50)
 			.all()
-			.map((row) => row.prompt),
-	record: (prompt: string) => {
-		if (!prompt.trim()) {
+			.map((row) => ({
+				...(row.entry?.fileTokens ? { fileTokens: row.entry.fileTokens } : {}),
+				files: row.entry?.files ?? [],
+				text: row.text,
+			})),
+	record: (entry: PromptHistoryEntry) => {
+		if (!entry.text.trim()) {
 			return;
 		}
 		const latest = db
-			.select({ prompt: promptHistory.prompt })
+			.select({
+				entry: promptHistory.entryJson,
+				text: promptHistory.prompt,
+			})
 			.from(promptHistory)
 			.orderBy(desc(promptHistory.id))
 			.limit(1)
 			.get();
-		if (latest?.prompt === prompt) {
+		if (
+			latest?.text === entry.text &&
+			JSON.stringify(latest.entry?.files ?? []) ===
+				JSON.stringify(entry.files) &&
+			JSON.stringify(latest.entry?.fileTokens ?? []) ===
+				JSON.stringify(entry.fileTokens ?? [])
+		) {
 			return;
 		}
 		db.transaction((tx) => {
-			tx.insert(promptHistory).values({ prompt, createdAt: new Date() }).run();
+			tx.insert(promptHistory)
+				.values({
+					createdAt: new Date(),
+					entryJson: {
+						...(entry.fileTokens ? { fileTokens: entry.fileTokens } : {}),
+						files: entry.files,
+					},
+					prompt: entry.text,
+				})
+				.run();
 			const rows = tx
 				.select({ id: promptHistory.id })
 				.from(promptHistory)

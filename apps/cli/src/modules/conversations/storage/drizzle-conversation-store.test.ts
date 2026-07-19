@@ -1,10 +1,15 @@
 import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
-import { createDrizzleConversationStore } from "./drizzle-conversation-store";
+import {
+	createDrizzleConversationStore,
+	createPromptHistory,
+} from "./drizzle-conversation-store";
 import { localMigrationsFolder } from "./migrations";
 import { resolveLocalDatabasePath } from "./path";
 import {
@@ -24,6 +29,8 @@ const userMessage = (id: string, text: string): CodingAgentUIMessage => ({
 	role: "user",
 });
 
+const historyEntry = (text: string) => ({ files: [], text });
+
 const createMigratedDatabase = () => {
 	const sqlite = new Database(":memory:");
 	sqlite.exec("PRAGMA foreign_keys = ON;");
@@ -42,34 +49,93 @@ beforeEach(() => {
 
 describe("drizzle conversation store", () => {
 	test("stores global prompt history with retention rules", async () => {
-		await store.recordPrompt("  raw prompt  ");
-		await store.recordPrompt("  raw prompt  ");
-		await store.recordPrompt("next");
-		await store.recordPrompt("  raw prompt  ");
+		await store.recordPrompt(historyEntry("  raw prompt  "));
+		await store.recordPrompt(historyEntry("  raw prompt  "));
+		await store.recordPrompt(historyEntry("next"));
+		await store.recordPrompt(historyEntry("  raw prompt  "));
 		expect(await store.getPromptHistory()).toEqual([
-			"  raw prompt  ",
-			"next",
-			"  raw prompt  ",
+			historyEntry("  raw prompt  "),
+			historyEntry("next"),
+			historyEntry("  raw prompt  "),
 		]);
-		await store.recordPrompt("   ");
+		await store.recordPrompt(historyEntry("   "));
 		expect(await store.getPromptHistory()).toHaveLength(3);
 		for (let index = 0; index < 60; index++) {
-			await store.recordPrompt(`prompt-${index}`);
+			await store.recordPrompt(historyEntry(`prompt-${index}`));
 		}
 		expect(await store.getPromptHistory()).toHaveLength(50);
-		expect((await store.getPromptHistory())[0]).toBe("prompt-59");
+		expect((await store.getPromptHistory())[0]).toEqual(
+			historyEntry("prompt-59")
+		);
 	});
 
 	test("prompt history is global across workspaces", async () => {
 		const other = createDrizzleConversationStore(db, {
 			workspaceRoot: "/tmp/other",
 		});
-		await store.recordPrompt("global");
-		expect(await other.getPromptHistory()).toEqual(["global"]);
+		await store.recordPrompt(historyEntry("global"));
+		expect(await other.getPromptHistory()).toEqual([historyEntry("global")]);
+	});
+
+	test("reloads image parts and token metadata from prompt history", async () => {
+		const image = {
+			filename: "clipboard",
+			mediaType: "image/png",
+			type: "file",
+			url: "data:image/png;base64,aGVsbG8=",
+		} as const;
+		const entry = {
+			fileTokens: [{ start: 8, token: "[Image 1]" }],
+			files: [image],
+			text: "explain [Image 1]",
+		};
+
+		await store.recordPrompt(entry);
+		const reloadedStore = createDrizzleConversationStore(db);
+
+		expect(await reloadedStore.getPromptHistory()).toEqual([entry]);
 	});
 
 	test("migration creates prompt_history", () => {
 		expect(db.select().from(promptHistory).all()).toEqual([]);
+	});
+
+	test("migration removes the legacy unique prompt constraint", async () => {
+		const legacySqlite = new Database(":memory:");
+		legacySqlite.exec(`
+			CREATE TABLE prompt_history (
+				id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+				prompt TEXT NOT NULL UNIQUE,
+				created_at INTEGER NOT NULL
+			);
+			INSERT INTO prompt_history (prompt, created_at) VALUES ('repeat', 1);
+			INSERT INTO prompt_history (prompt, created_at) VALUES ('next', 2);
+		`);
+		const migration = await readFile(
+			join(localMigrationsFolder, "0002_drop-prompt-history-unique.sql"),
+			"utf8"
+		);
+		const structuredHistoryMigration = await readFile(
+			join(localMigrationsFolder, "0003_sad_forge.sql"),
+			"utf8"
+		);
+		legacySqlite.exec(
+			`${migration}\n${structuredHistoryMigration}`.replaceAll(
+				"--> statement-breakpoint",
+				""
+			)
+		);
+		const legacyDb = drizzle(legacySqlite, { schema: localConversationSchema });
+		const history = createPromptHistory(legacyDb);
+
+		history.record(historyEntry("repeat"));
+
+		expect(history.get()).toEqual([
+			historyEntry("repeat"),
+			historyEntry("next"),
+			historyEntry("repeat"),
+		]);
+		legacySqlite.close();
 	});
 	test("creates a session and derives title from first user text", async () => {
 		const { id } = await store.createSession({
@@ -140,6 +206,34 @@ describe("drizzle conversation store", () => {
 
 		const messages = await store.getMessages(id);
 		expect(messages.map((m) => m.id)).toEqual(["m1", "m2"]);
+	});
+
+	test("persists and reloads standard image file UI parts", async () => {
+		const { id } = await store.createSession({
+			message: userMessage("m1", "image"),
+			mode: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+		const imageMessage: CodingAgentUIMessage = {
+			id: "m2",
+			metadata: userMessage("m2", "").metadata,
+			parts: [
+				{
+					mediaType: "image/png",
+					type: "file",
+					url: "data:image/png;base64,aGVsbG8=",
+				},
+			],
+			role: "user",
+		};
+		await store.persistMessages({
+			messages: [userMessage("m1", "image"), imageMessage],
+			mode: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+			sessionId: id,
+		});
+
+		expect((await store.getMessages(id))[1]?.parts).toEqual(imageMessage.parts);
 	});
 
 	test("preserves assistant response metadata", async () => {

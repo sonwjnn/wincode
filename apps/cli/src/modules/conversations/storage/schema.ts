@@ -7,6 +7,7 @@ import {
 	text,
 	unique,
 } from "drizzle-orm/sqlite-core";
+import type { PromptHistoryEntry } from "./conversation-store";
 
 export const conversationWorkspace = sqliteTable("conversation_workspace", {
 	id: text("id").primaryKey(),
@@ -80,6 +81,9 @@ export const conversationMessage = sqliteTable(
 export const promptHistory = sqliteTable("prompt_history", {
 	id: integer("id").primaryKey({ autoIncrement: true }),
 	prompt: text("prompt").notNull(),
+	entryJson: text("entry_json", { mode: "json" }).$type<
+		Pick<PromptHistoryEntry, "files" | "fileTokens">
+	>(),
 	createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 });
 

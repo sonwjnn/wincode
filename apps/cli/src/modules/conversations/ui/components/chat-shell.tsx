@@ -4,8 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { Spinner } from "@/shared/ui/spinner";
+import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import { ErrorMessage } from "../messages";
 import { ChatMessage } from "./chat-message";
+import type { ChatPromptSubmission } from "./chat-text-area";
 import { ChatTextArea } from "./chat-text-area";
 import {
 	groupMessagesByConversationTurn,
@@ -17,7 +19,8 @@ type ChatShellProps = {
 	isBusy: boolean;
 	isInterruptArmed: boolean;
 	messages: CodingAgentUIMessage[];
-	onSubmit: (value: string) => void;
+	promptHistory: PromptHistoryEntry[];
+	onSubmit: (submission: ChatPromptSubmission) => boolean | undefined;
 };
 
 export function ChatShell({
@@ -25,6 +28,7 @@ export function ChatShell({
 	isBusy,
 	isInterruptArmed,
 	messages,
+	promptHistory,
 	onSubmit,
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
@@ -42,9 +46,13 @@ export function ChatShell({
 		scrollboxRef.current?.scrollTo(Number.MAX_SAFE_INTEGER);
 	}, [scrollRequest]);
 
-	const handleSubmit = (value: string) => {
-		onSubmit(value);
+	const handleSubmit = (submission: ChatPromptSubmission) => {
+		const accepted = onSubmit(submission);
+		if (accepted === false) {
+			return false;
+		}
 		setScrollRequest((request) => request + 1);
+		return true;
 	};
 
 	return (
@@ -81,7 +89,10 @@ export function ChatShell({
 			</scrollbox>
 
 			<box flexShrink={0}>
-				<ChatTextArea onSubmit={handleSubmit} />
+				<ChatTextArea
+					onSubmit={handleSubmit}
+					sessionPromptHistory={promptHistory}
+				/>
 			</box>
 			<box
 				flexDirection="row"
