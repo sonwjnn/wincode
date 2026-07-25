@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 
 mock.module("@wincode/env/server", () => ({
 	env: {
-		BETTER_AUTH_URL: "https://auth.example.com",
+		BETTER_AUTH_URL: "https://auth.example.com/api/auth",
 		DATABASE_URL: "postgres://example",
 		WINCODE_API_KEY_PEPPER: "pepperpepperpepperpepperpepperpepper",
 	},

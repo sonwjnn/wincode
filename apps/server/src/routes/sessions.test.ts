@@ -3,7 +3,7 @@ import { z } from "zod";
 
 mock.module("@wincode/env/server", () => ({
 	env: {
-		BETTER_AUTH_URL: "https://auth.example.com",
+		BETTER_AUTH_URL: "https://auth.example.com/api/auth",
 		CORS_ORIGIN: "https://app.example.com",
 		DATABASE_URL: "postgres://example",
 		WINCODE_API_KEY_PEPPER: "pepperpepperpepperpepperpepperpepper",
