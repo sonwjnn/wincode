@@ -11,9 +11,9 @@ import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-lay
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
 import { useChat } from "../../hooks/use-chat";
+import type { ChatPromptSubmission } from "../../utils";
 import { getLatestChatConfig, shouldAutoStartAssistantTurn } from "../../utils";
 import { ChatShell } from "../components/chat-shell";
-import type { ChatPromptSubmission } from "../components/chat-text-area";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
 
 const INTERRUPT_CONFIRMATION_TIMEOUT_MS = 3000;

@@ -10,7 +10,7 @@ import {
 	locateAttachmentTokens,
 	mapOffsetThroughTextReplacement,
 	normalizeFileTokensForTrimmedText,
-} from "./chat-text-area";
+} from "../../utils";
 
 describe("ChatTextArea", () => {
 	test("binds enter to submit and modified enter to newline", () => {

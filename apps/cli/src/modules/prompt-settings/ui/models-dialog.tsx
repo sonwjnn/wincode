@@ -3,6 +3,7 @@ import { useTerminalDimensions } from "@opentui/react";
 import {
 	type ChatModelSelection,
 	connectionProviderIds,
+	formatModelLabel,
 	type SupportedChatModel,
 } from "@wincode/ai";
 import { useCallback } from "react";
@@ -25,10 +26,6 @@ type Props = {
 	recentSelections: readonly ChatModelSelection[];
 	onSelectModel: (model: ChatModelSelection) => void;
 };
-
-const VERSION_SUFFIX = /\s+\d{8}$/;
-const formatModelLabel = (displayName: string): string =>
-	displayName.replace(VERSION_SUFFIX, " (latest)");
 
 export const ModelsDialogContent = ({
 	currentModel,
@@ -101,7 +98,7 @@ export const ModelsDialogContent = ({
 				if (row.kind !== "model") {
 					return query.length === 0;
 				}
-				return `${row.model.displayName} ${row.model.id} ${connectionProviderDisplayNames[row.model.connectionProviderId]}`
+				return `${formatModelLabel(row.model.displayName)} ${row.model.id} ${connectionProviderDisplayNames[row.model.connectionProviderId]}`
 					.toLowerCase()
 					.includes(query.toLowerCase());
 			}}

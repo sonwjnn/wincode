@@ -3,6 +3,7 @@ import {
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
 	findSupportedChatModelSelection,
+	formatModelLabel,
 	normalizeChatModelSelection,
 } from "@wincode/ai";
 import { connectionProviderDisplayNames } from "@/modules/connections";
@@ -109,9 +110,10 @@ const formatModel = (model: string | ChatModelSelection) => {
 	const selection = normalizeChatModelSelection(model);
 	if (selection) {
 		return {
-			label:
+			label: formatModelLabel(
 				findSupportedChatModelSelection(selection)?.displayName ??
-				selection.modelId,
+					selection.modelId
+			),
 			providerId: selection.providerId,
 		};
 	}

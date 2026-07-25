@@ -1,18 +1,21 @@
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import type { CodingAgentUIMessage } from "@wincode/ai";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useModelPricing } from "@/modules/model-pricing";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { Spinner } from "@/shared/ui/spinner";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
+import { summarizeSessionUsage } from "../../usage/session-usage";
+import type { ChatPromptSubmission } from "../../utils";
 import { ErrorMessage } from "../messages";
 import { ChatMessage } from "./chat-message";
-import type { ChatPromptSubmission } from "./chat-text-area";
 import { ChatTextArea } from "./chat-text-area";
 import {
 	groupMessagesByConversationTurn,
 	resolveConversationTurnFooterMessages,
 } from "./chat-turns";
+import { SessionUsageBar } from "./session-usage-bar";
 
 type ChatShellProps = {
 	error?: unknown;
@@ -33,10 +36,15 @@ export function ChatShell({
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
 	const [scrollRequest, setScrollRequest] = useState(0);
-	const { mode } = usePromptConfig();
+	const { mode, model } = usePromptConfig();
 	const { colors } = useTheme();
+	const { table } = useModelPricing();
 	const turns = groupMessagesByConversationTurn(messages);
 	const footerMessages = resolveConversationTurnFooterMessages(turns);
+	const usage = useMemo(
+		() => summarizeSessionUsage(messages, model, table),
+		[messages, model, table]
+	);
 
 	useEffect(() => {
 		if (scrollRequest === 0) {
@@ -117,9 +125,12 @@ export function ChatShell({
 					) : null}
 				</box>
 
-				<box flexDirection="row" flexShrink={0} gap={1} marginLeft="auto">
-					<text>tab</text>
-					<text attributes={TextAttributes.DIM}>agents</text>
+				<box flexDirection="row" flexShrink={0} gap={2} marginLeft="auto">
+					{usage ? <SessionUsageBar summary={usage} /> : null}
+					<box flexDirection="row" flexShrink={0} gap={1}>
+						<text>tab</text>
+						<text attributes={TextAttributes.DIM}>agents</text>
+					</box>
 				</box>
 			</box>
 		</box>
