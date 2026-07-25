@@ -18,6 +18,7 @@
     "@trpc/client": "catalog:",
     "@trpc/server": "catalog:",
     "@wincode/ai": "workspace:*",
+    "@wincode/billing": "workspace:*",
     "@wincode/env": "workspace:*",
     "ai": "catalog:",
     "drizzle-orm": "^0.45.2",

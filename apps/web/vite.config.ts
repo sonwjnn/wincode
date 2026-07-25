@@ -4,9 +4,9 @@ import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
-import { getPort } from "@wincode/env/ports";
 import alchemy from "alchemy/cloudflare/tanstack-start";
 import { defineConfig } from "vite";
+import { getPort } from "../../packages/env/src/ports.ts";
 
 const alchemyConfigPath = fileURLToPath(
 	new URL("./.alchemy/local/wrangler.jsonc", import.meta.url)

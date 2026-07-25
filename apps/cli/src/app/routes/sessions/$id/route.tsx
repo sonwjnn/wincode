@@ -3,6 +3,7 @@ import type { CodingAgentUIMessage } from "@wincode/ai";
 import { codingModeNameSchema } from "@wincode/ai";
 import { useEffect, useState } from "react";
 import { z } from "zod";
+import { useBilling } from "@/modules/billing";
 import { getConversationStore } from "@/modules/conversations/storage/get-conversation-store";
 import { ChatView } from "@/modules/conversations/ui/views/chat-view";
 
@@ -39,6 +40,7 @@ export const Route = createFileRoute("/sessions/$id")({
 });
 
 function SessionRoute() {
+	const { refresh: refreshBilling } = useBilling();
 	const { id } = Route.useParams();
 	const [messages, setMessages] = useState<CodingAgentUIMessage[] | null>(null);
 	const [sessionTitle, setSessionTitle] = useState<string | null>(null);
@@ -91,6 +93,9 @@ function SessionRoute() {
 			autoStart={autoStart}
 			initialMessages={messages}
 			initialPrompt={prompt}
+			onHostedCompletion={() => {
+				refreshBilling().catch(() => undefined);
+			}}
 			sessionId={id}
 			sessionTitle={sessionTitle}
 		/>

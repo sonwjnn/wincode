@@ -5,9 +5,9 @@ import { useEffect, useState } from "react";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { getConversationStore } from "../../storage/get-conversation-store";
+import type { ChatPromptSubmission } from "../../utils";
 import { getLatestChatConfig, getMostRecentSession } from "../../utils";
 import { AsciiArt } from "../components/ascii-art";
-import type { ChatPromptSubmission } from "../components/chat-text-area";
 import { ChatTextArea } from "../components/chat-text-area";
 
 export function HomeView() {

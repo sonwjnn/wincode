@@ -41,18 +41,18 @@ describe("server chat model resolver", () => {
 			],
 			[
 				"claude-opus-4-5-20251101",
-				{ variant: "low" as const },
+				{ variant: "high" as const },
 				{
 					anthropic: {
-						effort: "low",
+						effort: "high",
 						thinking: { type: "enabled", budgetTokens: 16_000 },
 					},
 				},
 			],
 			[
 				"claude-opus-4-6",
-				{ variant: "medium" as const },
-				{ anthropic: { effort: "medium", thinking: { type: "adaptive" } } },
+				{ variant: "high" as const },
+				{ anthropic: { effort: "high", thinking: { type: "adaptive" } } },
 			],
 			[
 				"claude-sonnet-4-6",
@@ -138,6 +138,18 @@ describe("server chat model resolver", () => {
 		).toMatchObject({
 			modelId: "gemini-2.5-flash",
 			provider: "google",
+			maxOutputTokens: 32_000,
+			providerOptions: {
+				google: { thinkingConfig: { thinkingBudget: 12_288 } },
+			},
+		});
+		expect(
+			resolveSupportedChatModel(actualModel("gemini-2.5-flash"), {
+				variant: "high",
+				maxOutputTokens: 20_000,
+			})
+		).toMatchObject({
+			maxOutputTokens: 20_000,
 			providerOptions: {
 				google: { thinkingConfig: { thinkingBudget: 12_288 } },
 			},
@@ -208,10 +220,10 @@ describe("server chat model resolver", () => {
 			resolveDirectChatModel(
 				{ modelId: "gpt-5.6", providerId: "openai" },
 				"sk-test",
-				{ variant: "low" }
+				{ variant: "high" }
 			)
 		).toMatchObject({
-			providerOptions: { openai: { reasoningEffort: "low" } },
+			providerOptions: { openai: { reasoningEffort: "high" } },
 		});
 		expect(() =>
 			resolveDirectChatModel(
@@ -349,11 +361,13 @@ describe("server chat model resolver", () => {
 			expect(
 				resolveDirectChatModel({ modelId, providerId: "google" }, "sk-test", {
 					variant: "high",
+					maxOutputTokens: 40_000,
 				})
 			).toMatchObject({
 				providerOptions: {
 					google: { thinkingConfig: { thinkingLevel: "high" } },
 				},
+				maxOutputTokens: 32_000,
 			});
 		}
 

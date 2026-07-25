@@ -16,6 +16,24 @@ export const env = createEnv({
 		CORS_ORIGIN: z.url(),
 		GOOGLE_GENERATIVE_AI_API_KEY: z.string().min(1),
 		OPENAI_API_KEY: z.string().min(1),
+		BILLING_MODE: z
+			.enum(["disabled", "allowlist-shadow", "canary-enforce", "enforce"])
+			.optional(),
+		BILLING_ALPHA_USER_ALLOWLIST: z.string().min(1).optional(),
+		BILLING_PROVIDER_KILL_SWITCHES: z.string().min(1).optional(),
+		BILLING_MODEL_KILL_SWITCHES: z.string().min(1).optional(),
+		BILLING_POLAR_ENVIRONMENT: z.enum(["sandbox", "production"]).optional(),
+		BILLING_POLAR_TOKEN: z.string().min(1).optional(),
+		BILLING_POLAR_WEBHOOK_SECRET: z.string().min(1).optional(),
+		BILLING_GO_PRODUCT_ID: z.string().min(1).optional(),
+		BILLING_GO_ROLLING_QUOTA_USD_MICROS: z.string().min(1).optional(),
+		BILLING_DAILY_GLOBAL_COST_CAP_USD_MICROS: z.string().min(1).optional(),
+		BILLING_FUNDED_REQUEST_INPUT_TOKEN_LIMIT: z.string().min(1).optional(),
+		BILLING_FUNDED_REQUEST_OUTPUT_TOKEN_LIMIT: z.string().min(1).optional(),
+		BILLING_FUNDED_REQUEST_STEP_LIMIT: z.string().min(1).optional(),
+		BILLING_FUNDED_REQUEST_TIME_WINDOW_SECONDS: z.string().min(1).optional(),
+		BILLING_PRICE_BOOK_VERSION: z.string().min(1).optional(),
+		BILLING_PRICE_BOOK_EFFECTIVE_DATE: z.string().min(1).optional(),
 		NODE_ENV: z
 			.enum(["development", "production", "test"])
 			.default("development"),

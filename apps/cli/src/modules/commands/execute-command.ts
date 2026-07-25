@@ -5,7 +5,6 @@ import type {
 	ModeAdapter,
 	ModelsAdapter,
 	NewAdapter,
-	UnavailableAdapter,
 	VariantsAdapter,
 } from "./adapters";
 import type { CommandSpec } from "./commands";
@@ -18,7 +17,6 @@ export type AdapterMap = {
 	models: ModelsAdapter;
 	variants: VariantsAdapter;
 	mode: ModeAdapter;
-	unavailable: UnavailableAdapter;
 };
 
 export function createCommandExecutor(adapters: AdapterMap) {
@@ -42,9 +40,6 @@ export function createCommandExecutor(adapters: AdapterMap) {
 				break;
 			case "mode":
 				adapters.mode.execute(spec);
-				break;
-			case "unavailable":
-				adapters.unavailable.execute(spec);
 				break;
 			default: {
 				const _exhaustive: never = spec;

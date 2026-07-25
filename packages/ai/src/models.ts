@@ -31,6 +31,14 @@ export const modelVariantIds = [
 export type ModelVariant = (typeof modelVariantIds)[number];
 export const modelVariantSchema = z.enum(modelVariantIds);
 
+/** USD per 1M tokens. `input` is uncached input. */
+export type ModelCost = {
+	input: number;
+	output: number;
+	cacheRead?: number;
+	cacheWrite?: number;
+};
+
 type ModelCatalogEntryBase = {
 	connectionProviderId: ConnectionProviderId;
 	displayName: string;
@@ -624,6 +632,11 @@ export const normalizeChatModelSelection = (
 	}
 	return { modelId: model.id, providerId: model.connectionProviderId };
 };
+
+export const MODEL_VERSION_SUFFIX = /\s+\d{8}$/;
+
+export const formatModelLabel = (displayName: string): string =>
+	displayName.replace(MODEL_VERSION_SUFFIX, " (latest)");
 
 export const isHostChatModelSelection = (
 	selection: ChatModelSelection

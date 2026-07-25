@@ -1,6 +1,7 @@
 import { TextAttributes } from "@opentui/core";
 import {
 	findSupportedChatModelSelection,
+	formatModelLabel,
 	getCodingMode,
 	normalizeModelVariant,
 } from "@wincode/ai";
@@ -12,7 +13,9 @@ export function StatusBar() {
 	const { mode, model, variant } = usePromptConfig();
 	const { colors } = useTheme();
 	const chatModel = findSupportedChatModelSelection(model);
-	const modelName = chatModel?.displayName ?? model.modelId;
+	const modelName = chatModel
+		? formatModelLabel(chatModel.displayName)
+		: model.modelId;
 	const providerName = connectionProviderDisplayNames[model.providerId];
 	const variantName = normalizeModelVariant(model, variant) ?? undefined;
 	return (

@@ -42,7 +42,8 @@
     "deploy": "bun run --filter @wincode/infra deploy",
     "destroy": "bun run --filter @wincode/infra destroy",
     "check": "ultracite check",
-    "fix": "ultracite fix"
+    "fix": "ultracite fix",
+    "sync:model-pricing": "bun run scripts/sync-model-pricing.ts"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.8.0",

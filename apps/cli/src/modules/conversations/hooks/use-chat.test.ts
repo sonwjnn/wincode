@@ -7,6 +7,7 @@ import {
 	findCurrentTurnAssistantIndex,
 	findCurrentTurnInterruptTargetIndex,
 	getContinuationChatParams,
+	notifyHostedCompletion,
 } from "./use-chat";
 
 const selection = {
@@ -195,5 +196,20 @@ describe("useChat helpers", () => {
 		).toMatchObject({
 			metadata: { interrupted: true, model: selection, variant: "low" },
 		});
+	});
+
+	test("refreshes billing only after hosted completion", () => {
+		let refreshCount = 0;
+		const refresh = () => {
+			refreshCount += 1;
+		};
+
+		notifyHostedCompletion(selection, refresh);
+		notifyHostedCompletion(
+			{ modelId: "gpt-5.5", providerId: "openai" },
+			refresh
+		);
+
+		expect(refreshCount).toBe(1);
 	});
 });
