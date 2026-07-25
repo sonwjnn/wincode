@@ -5,7 +5,11 @@ import type {
 	ModelVariant,
 	ModeType,
 } from "@wincode/ai";
-import { defaultChatModelSelection, defaultMode } from "@wincode/ai";
+import {
+	defaultChatModelSelection,
+	defaultMode,
+	getChatModelRoute,
+} from "@wincode/ai";
 import {
 	createUserMessage,
 	handleCodingAgentToolCall,
@@ -44,6 +48,15 @@ export const getContinuationChatParams = (
 	model,
 	...(variant === undefined ? {} : { variant }),
 });
+
+export const notifyHostedCompletion = (
+	model: ChatModelSelection,
+	onHostedCompletion?: () => void
+): void => {
+	if (getChatModelRoute(model) === "hosted") {
+		onHostedCompletion?.();
+	}
+};
 
 export const findCurrentTurnAssistantIndex = (
 	messages: CodingAgentUIMessage[]
@@ -103,7 +116,8 @@ export const finalizeAssistantMessageMetadata = (
 
 export function useChat(
 	sessionId: string,
-	initialMessages: CodingAgentUIMessage[]
+	initialMessages: CodingAgentUIMessage[],
+	onHostedCompletion?: () => void
 ) {
 	const connections = useConnections();
 	const addToolOutputRef =
@@ -184,6 +198,7 @@ export function useChat(
 		messages: initialMessages,
 		onFinish: ({ messages }) => {
 			finalizeAndPersistMessages(messages);
+			notifyHostedCompletion(modelRef.current, onHostedCompletion);
 		},
 		onToolCall: (options) => {
 			const addToolOutputForCall = addToolOutputRef.current;

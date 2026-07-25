@@ -1,7 +1,12 @@
 import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
-import { useEffect, useReducer } from "react";
+import { getChatModelRoute } from "@wincode/ai";
+import { type ReactNode, useEffect, useReducer } from "react";
+import { BillingProvider } from "@/modules/billing";
 import { ConnectionsProvider, createConnections } from "@/modules/connections";
-import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
+import {
+	PromptConfigProvider,
+	usePromptConfig,
+} from "@/modules/prompt-settings/context/prompt-config-provider";
 import { CopyOnSelect } from "@/shared/clipboard/copy-on-select";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -10,6 +15,15 @@ import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { ThemedRoot } from "./themed-root";
 
 const connections = createConnections();
+
+function BillingComposition({ children }: { children: ReactNode }) {
+	const { model } = usePromptConfig();
+	return (
+		<BillingProvider enabled={getChatModelRoute(model) === "hosted"}>
+			{children}
+		</BillingProvider>
+	);
+}
 
 export function RootLayout() {
 	const router = useRouter();
@@ -42,14 +56,16 @@ export function RootLayout() {
 			<ThemeProvider>
 				<KeyboardLayerProvider>
 					<PromptConfigProvider>
-						<ToastProvider>
-							<CopyOnSelect />
-							<DialogProvider>
-								<ThemedRoot>
-									<Outlet key={currentPath} />
-								</ThemedRoot>
-							</DialogProvider>
-						</ToastProvider>
+						<BillingComposition>
+							<ToastProvider>
+								<CopyOnSelect />
+								<DialogProvider>
+									<ThemedRoot>
+										<Outlet key={currentPath} />
+									</ThemedRoot>
+								</DialogProvider>
+							</ToastProvider>
+						</BillingComposition>
 					</PromptConfigProvider>
 				</KeyboardLayerProvider>
 			</ThemeProvider>

@@ -10,7 +10,6 @@ import {
 	ModeAdapter,
 	ModelsAdapter,
 	NewAdapter,
-	UnavailableAdapter,
 	VariantsAdapter,
 } from "@/modules/commands/adapters";
 import type { CommandSpec } from "@/modules/commands/commands";
@@ -181,11 +180,6 @@ export function useCommandExecutor(): UseCommandExecutorReturn {
 						}),
 					currentMode: mode,
 					setMode,
-				}),
-				unavailable: new UnavailableAdapter({
-					show: (message) => {
-						toast.show({ message, variant: "info" });
-					},
 				}),
 			}),
 		[

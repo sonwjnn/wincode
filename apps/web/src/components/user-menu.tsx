@@ -95,6 +95,12 @@ export default function UserMenu() {
 					<p className="truncate text-white/50 text-xs">{userEmail}</p>
 				</div>
 				<DropdownMenuSeparator className="mx-0 my-2 bg-white/10" />
+				<Link
+					className="mb-2 flex h-9 w-full items-center border border-white/10 bg-white/5 px-3 text-sm text-white transition-colors hover:border-white/20 hover:bg-white/10"
+					to="/billing"
+				>
+					Billing
+				</Link>
 				<Button
 					className="h-9 w-full justify-start rounded-none border border-white/10 bg-white/5 px-3 text-sm text-white shadow-none hover:border-white/20 hover:bg-white/10"
 					onClick={async () => {

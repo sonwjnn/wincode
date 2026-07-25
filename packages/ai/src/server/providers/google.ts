@@ -21,6 +21,8 @@ const budgets: Partial<Record<Model["id"], readonly [number, number]>> = {
 	"gemini-flash-lite-latest": [12_288, 24_576],
 	"gemini-2.5-flash-lite": [12_288, 24_576],
 };
+const getGoogleOutputCap = (maxOutputTokens: number | undefined): number =>
+	Math.min(maxOutputTokens ?? 32_000, 32_000);
 const options = (
 	m: Model,
 	variant: string | undefined,
@@ -40,7 +42,7 @@ const options = (
 	if (!budget || (v !== "high" && v !== "max")) {
 		throw new Error(`Unsupported model variant: google/${m.id}/${variant}`);
 	}
-	const limit = Math.min(max ?? 32_000, 32_000);
+	const limit = getGoogleOutputCap(max);
 	const selectedBudget = budget[v === "high" ? 0 : 1];
 	if (selectedBudget >= limit) {
 		throw new Error(
@@ -58,20 +60,18 @@ export const googleResolver = defineModelResolver(
 			modelId: m.id,
 			provider: "google",
 			providerOptions: options(m, opts.variant, opts.maxOutputTokens),
-			maxOutputTokens:
-				opts.variant && m.id in budgets
-					? Math.min(opts.maxOutputTokens ?? 32_000, 32_000)
-					: undefined,
+			maxOutputTokens: opts.variant
+				? getGoogleOutputCap(opts.maxOutputTokens)
+				: undefined,
 		}),
 		resolveWithEnvironment: (m, opts) => ({
 			model: google(m.id),
 			modelId: m.id,
 			provider: "google",
 			providerOptions: options(m, opts.variant, opts.maxOutputTokens),
-			maxOutputTokens:
-				opts.variant && m.id in budgets
-					? Math.min(opts.maxOutputTokens ?? 32_000, 32_000)
-					: undefined,
+			maxOutputTokens: opts.variant
+				? getGoogleOutputCap(opts.maxOutputTokens)
+				: undefined,
 		}),
 	}
 );

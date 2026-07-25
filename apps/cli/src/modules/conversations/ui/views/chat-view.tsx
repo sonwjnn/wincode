@@ -24,6 +24,7 @@ type ChatScreenProps = {
 	initialPrompt: string;
 	sessionId: string;
 	sessionTitle: string;
+	onHostedCompletion?: () => void;
 };
 
 export function ChatView({
@@ -32,6 +33,7 @@ export function ChatView({
 	initialPrompt,
 	sessionId,
 	sessionTitle,
+	onHostedCompletion,
 }: ChatScreenProps) {
 	const { mode, model, setMode, setModel, setVariant, variant } =
 		usePromptConfig();
@@ -54,7 +56,7 @@ export function ChatView({
 		messages,
 		status,
 		submit,
-	} = useChat(sessionId, initialMessages);
+	} = useChat(sessionId, initialMessages, onHostedCompletion);
 	const isBusy =
 		isPreparingMessage || status === "submitted" || status === "streaming";
 	const promptHistory = useMemo(

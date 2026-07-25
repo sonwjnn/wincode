@@ -2,8 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { COMMANDS } from "./commands";
 
 describe("CommandSpec registry", () => {
-	test("has 10 commands with discriminated kinds", () => {
-		expect(COMMANDS).toHaveLength(10);
+	test("has 8 commands with discriminated kinds", () => {
+		expect(COMMANDS).toHaveLength(8);
+	});
+
+	test("does not expose billing commands", () => {
+		expect(COMMANDS.some(({ value }) => value === "/upgrade")).toBe(false);
+		expect(COMMANDS.some(({ value }) => value === "/usage")).toBe(false);
 	});
 
 	test("/exit is kind: 'exit'", () => {

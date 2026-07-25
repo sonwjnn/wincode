@@ -9,7 +9,6 @@ export type CommandSpec = BaseSpec &
 		| { kind: "models" }
 		| { kind: "variants" }
 		| { kind: "mode" }
-		| { kind: "unavailable"; message: string }
 	);
 
 export const COMMANDS: CommandSpec[] = [
@@ -56,21 +55,6 @@ export const COMMANDS: CommandSpec[] = [
 		name: "connect",
 		value: "/connect",
 		kind: "connect",
-	},
-	{
-		description: "Buy more credits",
-		name: "upgrade",
-		value: "/upgrade",
-		kind: "unavailable",
-		message:
-			"Upgrade is not available in the CLI yet. Use the web app for now.",
-	},
-	{
-		description: "Open billing portal in your browser",
-		name: "usage",
-		value: "/usage",
-		kind: "unavailable",
-		message: "Usage is not available in the CLI yet. Use the web app for now.",
 	},
 	{
 		description: "Quit the application",

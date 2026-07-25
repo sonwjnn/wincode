@@ -6,7 +6,6 @@ import {
 	ModeAdapter,
 	ModelsAdapter,
 	NewAdapter,
-	UnavailableAdapter,
 	VariantsAdapter,
 } from ".";
 
@@ -62,23 +61,6 @@ describe("ConnectAdapter", () => {
 			kind: "connect",
 		});
 		expect(called).toBe(true);
-	});
-});
-
-describe("UnavailableAdapter", () => {
-	test("shows message from spec", () => {
-		const messages: string[] = [];
-		const adapter = new UnavailableAdapter({
-			show: (message: string) => messages.push(message),
-		});
-		adapter.execute({
-			value: "/connect",
-			name: "connect",
-			description: "",
-			kind: "unavailable",
-			message: "Not available",
-		});
-		expect(messages).toEqual(["Not available"]);
 	});
 });
 

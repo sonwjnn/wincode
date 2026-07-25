@@ -1,0 +1,107 @@
+import { afterEach, describe, expect, mock, test } from "bun:test";
+
+const createAgentUIStreamResponseMock = mock(
+	(input: {
+		agent: {
+			onFinish?: (event: unknown) => Promise<void>;
+			onStepFinish?: (event: unknown) => Promise<void>;
+		};
+		abortSignal?: AbortSignal;
+	}) => {
+		const stream = new ReadableStream<Uint8Array>({
+			start: async (controller) => {
+				if (input.abortSignal?.aborted) {
+					controller.error(new Error("aborted"));
+					return;
+				}
+
+				await input.agent.onStepFinish?.({ stepNumber: 0 });
+				await input.agent.onFinish?.({ steps: [{ stepNumber: 0 }] });
+				controller.enqueue(new TextEncoder().encode("ok"));
+				controller.close();
+			},
+		});
+
+		return new Response(stream, { status: 200 });
+	}
+);
+
+class MockToolLoopAgent {
+	constructor(config: Record<string, unknown>) {
+		Object.assign(this, config);
+	}
+}
+
+const loadSubject = async () => {
+	await mock.module("ai", () => ({
+		ToolLoopAgent: MockToolLoopAgent,
+		createAgentUIStreamResponse: createAgentUIStreamResponseMock,
+		createIdGenerator: () => () => "msg-1",
+		stepCountIs: () => () => true,
+	}));
+
+	return import(`./stream?test=${crypto.randomUUID()}`);
+};
+
+afterEach(() => {
+	mock.restore();
+	mock.clearAllMocks();
+});
+
+describe("createCodingAgentStreamResponse", () => {
+	test("fires step and end once when stream consumed", async () => {
+		const onStepEnd = mock(async () => undefined);
+		const onEnd = mock(async () => undefined);
+		const { createCodingAgentStreamResponse } = await loadSubject();
+
+		const response = (await createCodingAgentStreamResponse({
+			model: {} as never,
+			modelId: "gpt-5.4-mini",
+			mode: "plan",
+			onEnd,
+			onStepEnd,
+			uiMessages: [{ id: "1", parts: [], role: "user" } as never],
+		})) as Response;
+
+		const reader = response.body?.getReader();
+		if (!reader) {
+			throw new Error("missing reader");
+		}
+
+		for (;;) {
+			const { done } = await reader.read();
+			if (done) {
+				break;
+			}
+		}
+
+		await reader.cancel();
+
+		expect(createAgentUIStreamResponseMock).toHaveBeenCalledTimes(1);
+		expect(onStepEnd).toHaveBeenCalledTimes(1);
+		expect(onEnd).toHaveBeenCalledTimes(1);
+	});
+
+	test("skips callbacks on abort before consume", async () => {
+		const onStepEnd = mock(async () => undefined);
+		const onEnd = mock(async () => undefined);
+		const controller = new AbortController();
+		controller.abort();
+		const { createCodingAgentStreamResponse } = await loadSubject();
+
+		const response = (await createCodingAgentStreamResponse({
+			abortSignal: controller.signal,
+			model: {} as never,
+			modelId: "gpt-5.4-mini",
+			mode: "plan",
+			onEnd,
+			onStepEnd,
+			uiMessages: [{ id: "1", parts: [], role: "user" } as never],
+		})) as Response;
+
+		const reader = response.body?.getReader();
+		await expect(reader?.read()).rejects.toThrow("aborted");
+		expect(onStepEnd).not.toHaveBeenCalled();
+		expect(onEnd).not.toHaveBeenCalled();
+	});
+});

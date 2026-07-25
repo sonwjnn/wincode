@@ -6,7 +6,6 @@ import {
 	ModeAdapter,
 	ModelsAdapter,
 	NewAdapter,
-	UnavailableAdapter,
 	VariantsAdapter,
 } from "./adapters";
 import { createCommandExecutor } from "./execute-command";
@@ -46,7 +45,6 @@ describe("createCommandExecutor", () => {
 				currentMode: "build",
 				setMode: () => undefined,
 			}),
-			unavailable: new UnavailableAdapter({ show: () => undefined }),
 		});
 
 		await executor({
@@ -56,49 +54,6 @@ describe("createCommandExecutor", () => {
 			kind: "exit",
 		});
 		expect(destroyed).toBe(true);
-	});
-
-	test("dispatches unavailable command to unavailable adapter", async () => {
-		const messages: string[] = [];
-		const executor = createCommandExecutor({
-			exit: new ExitAdapter({ destroy: () => undefined }),
-			connect: new ConnectAdapter({ open: async () => undefined }),
-			new: new NewAdapter({ navigateHome: () => undefined }),
-			dialog: new DialogAdapter({ open: () => undefined }),
-			models: new ModelsAdapter({
-				open: () => undefined,
-				currentModel: { modelId: "gpt-5.5", providerId: "openai" },
-				setModel: () => undefined,
-			}),
-			variants: new VariantsAdapter({
-				open: () => undefined,
-				currentModel: {
-					connectionProviderId: "wincode",
-					route: "hosted",
-					displayName: "GPT-5.4 Mini",
-					id: "gpt-5.4-mini",
-					provider: "openai",
-					variants: ["none", "low", "medium", "high", "xhigh"],
-				},
-				currentVariant: undefined,
-				setVariant: () => undefined,
-			}),
-			mode: new ModeAdapter({
-				open: () => undefined,
-				currentMode: "build",
-				setMode: () => undefined,
-			}),
-			unavailable: new UnavailableAdapter({ show: (m) => messages.push(m) }),
-		});
-
-		await executor({
-			value: "/connect",
-			name: "connect",
-			description: "",
-			kind: "unavailable",
-			message: "Nope",
-		});
-		expect(messages).toEqual(["Nope"]);
 	});
 
 	test("dispatches connect command to connect adapter", async () => {
@@ -136,7 +91,6 @@ describe("createCommandExecutor", () => {
 				currentMode: "build",
 				setMode: () => undefined,
 			}),
-			unavailable: new UnavailableAdapter({ show: () => undefined }),
 		});
 
 		await executor({
@@ -180,7 +134,6 @@ describe("createCommandExecutor", () => {
 				currentMode: "build",
 				setMode: () => undefined,
 			}),
-			unavailable: new UnavailableAdapter({ show: () => undefined }),
 		});
 
 		await executor({
@@ -225,7 +178,6 @@ describe("createCommandExecutor", () => {
 				currentMode: "build",
 				setMode: () => undefined,
 			}),
-			unavailable: new UnavailableAdapter({ show: () => undefined }),
 		});
 
 		expect(() =>

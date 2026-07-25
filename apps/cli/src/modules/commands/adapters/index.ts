@@ -4,5 +4,4 @@ export { ExitAdapter } from "./exit-adapter";
 export { ModeAdapter } from "./mode-adapter";
 export { ModelsAdapter } from "./models-adapter";
 export { NewAdapter } from "./new-adapter";
-export { UnavailableAdapter } from "./unavailable-adapter";
 export { VariantsAdapter } from "./variants-adapter";
