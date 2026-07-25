@@ -3,6 +3,7 @@ import { getChatModelRoute } from "@wincode/ai";
 import { type ReactNode, useEffect, useReducer } from "react";
 import { BillingProvider } from "@/modules/billing";
 import { ConnectionsProvider, createConnections } from "@/modules/connections";
+import { ModelPricingProvider } from "@/modules/model-pricing";
 import {
 	PromptConfigProvider,
 	usePromptConfig,
@@ -56,16 +57,18 @@ export function RootLayout() {
 			<ThemeProvider>
 				<KeyboardLayerProvider>
 					<PromptConfigProvider>
-						<BillingComposition>
-							<ToastProvider>
-								<CopyOnSelect />
-								<DialogProvider>
-									<ThemedRoot>
-										<Outlet key={currentPath} />
-									</ThemedRoot>
-								</DialogProvider>
-							</ToastProvider>
-						</BillingComposition>
+						<ModelPricingProvider>
+							<BillingComposition>
+								<ToastProvider>
+									<CopyOnSelect />
+									<DialogProvider>
+										<ThemedRoot>
+											<Outlet key={currentPath} />
+										</ThemedRoot>
+									</DialogProvider>
+								</ToastProvider>
+							</BillingComposition>
+						</ModelPricingProvider>
 					</PromptConfigProvider>
 				</KeyboardLayerProvider>
 			</ThemeProvider>

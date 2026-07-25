@@ -4,6 +4,12 @@ import {
 	billingPricebookVersion,
 } from "./pricing";
 
+export {
+	billingPricebook,
+	billingPricebookEffectiveDate,
+	billingPricebookVersion,
+} from "./pricing";
+
 export const billingOperatingModeSchema = z.enum([
 	"disabled",
 	"allowlist-shadow",

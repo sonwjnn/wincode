@@ -312,6 +312,42 @@ describe("@wincode/ai shared entry", () => {
 		).toBe(false);
 	});
 
+	test("accepts usage in coding message metadata", () => {
+		expect(
+			codingMessageMetadataSchema.safeParse({
+				mode: "build",
+				model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
+				usage: {
+					cacheReadTokens: 100,
+					inputTokens: 1000,
+					outputTokens: 200,
+					reasoningTokens: 50,
+					totalTokens: 1200,
+				},
+			}).success
+		).toBe(true);
+	});
+
+	test("rejects unknown fields inside usage payload", () => {
+		expect(
+			codingMessageMetadataSchema.safeParse({
+				usage: {
+					inputTokens: 1,
+					outputTokens: 1,
+					unknown: true,
+				},
+			}).success
+		).toBe(false);
+	});
+
+	test("rejects usage with negative token counts", () => {
+		expect(
+			codingMessageMetadataSchema.safeParse({
+				usage: { inputTokens: -1, outputTokens: 0 },
+			}).success
+		).toBe(false);
+	});
+
 	test("accepts legacy model aliases and preserves default wincode selection", () => {
 		expect(
 			codingMessageMetadataSchema.safeParse({

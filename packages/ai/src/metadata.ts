@@ -27,12 +27,26 @@ const codingMessageModelSchema = z.union([
 	legacyChatModelSelectionSchema,
 ]);
 
+export const codingMessageUsageSchema = z
+	.object({
+		cacheReadTokens: z.number().int().nonnegative().optional(),
+		cacheWriteTokens: z.number().int().nonnegative().optional(),
+		inputTokens: z.number().int().nonnegative(),
+		outputTokens: z.number().int().nonnegative(),
+		reasoningTokens: z.number().int().nonnegative().optional(),
+		totalTokens: z.number().int().nonnegative().optional(),
+	})
+	.strict();
+
+export type CodingMessageUsage = z.infer<typeof codingMessageUsageSchema>;
+
 export const codingMessageMetadataSchema = z
 	.object({
 		interrupted: z.boolean().optional(),
 		mode: codingModeNameSchema.optional(),
 		model: codingMessageModelSchema.optional(),
 		responseTimeMs: z.number().int().nonnegative().optional(),
+		usage: codingMessageUsageSchema.optional(),
 		variant: modelVariantSchema.optional(),
 	})
 	.strict()

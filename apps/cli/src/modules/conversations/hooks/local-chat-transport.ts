@@ -1,4 +1,5 @@
 import {
+	buildUsageMessageMetadata,
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
 	expandFileMentionPartsForModel,
@@ -54,6 +55,7 @@ export const createLocalChatTransport = (
 		return createStream({
 			agent,
 			abortSignal,
+			messageMetadata: buildUsageMessageMetadata,
 			originalMessages: modelMessages,
 			options: { mode: modeRef.current, model: resolvedModel.modelId },
 			onError: getProviderErrorMessage,

@@ -14,6 +14,7 @@ import type { CodingAgentUIMessage } from "../message";
 import type { SupportedChatModelId } from "../models";
 import { defaultMode, type ModeType } from "../modes";
 import { sanitizeInterruptedMessagesForModel } from "../sanitize-interrupted-messages";
+import { buildUsageMessageMetadata } from "../usage";
 import { type CodingAgentLifecycleCallbacks, createCodingAgent } from "./agent";
 import { getProviderErrorMessage } from "./error-message";
 
@@ -88,6 +89,7 @@ export const createCodingAgentStreamResponse = ({
 			prefix: "msg",
 			size: 16,
 		}),
+		messageMetadata: buildUsageMessageMetadata,
 		onFinish: agentUiFinishHandler as never,
 		onError: getProviderErrorMessage,
 		abortSignal,

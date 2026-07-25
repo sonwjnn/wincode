@@ -15,6 +15,16 @@ const runtimeEnv = {
 export const env = createEnv({
 	server: {
 		SERVER_URL: z.url().optional(),
+		WINCODE_MODEL_PRICING_OFFLINE: z
+			.enum(["0", "1", "false", "true"])
+			.optional()
+			.transform((value) => value === "1" || value === "true"),
+		WINCODE_MODEL_PRICING_TTL_HOURS: z.coerce
+			.number()
+			.int()
+			.positive()
+			.optional(),
+		WINCODE_MODEL_PRICING_URL: z.url().optional(),
 		WINCODE_OAUTH_ISSUER: z.url().optional(),
 		WINCODE_OAUTH_CLIENT_ID: z.string().min(1).optional(),
 		WINCODE_OAUTH_REDIRECT_URI: z.url().optional(),
