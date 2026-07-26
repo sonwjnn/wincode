@@ -16,7 +16,7 @@ export function SessionUsageBar({ summary }: { summary: SessionUsageSummary }) {
 
 	return (
 		<box flexDirection="row" flexShrink={0}>
-			<text>
+			<text attributes={TextAttributes.DIM}>
 				<span>{tokensText}</span>
 				{summary.contextPercent === null ? null : (
 					<>
@@ -28,9 +28,7 @@ export function SessionUsageBar({ summary }: { summary: SessionUsageSummary }) {
 				{summary.costUsd === null ? null : (
 					<>
 						<span> · </span>
-						<span attributes={TextAttributes.DIM}>
-							{formatUsdAmount(summary.costUsd)}
-						</span>
+						<span>{formatUsdAmount(summary.costUsd)}</span>
 					</>
 				)}
 			</text>

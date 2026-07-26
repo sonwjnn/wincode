@@ -69,8 +69,9 @@ export function ChatShell({
 			flexGrow={1}
 			gap={1}
 			height="100%"
-			paddingX={2}
-			paddingY={1}
+			paddingBottom={1}
+			paddingTop={0}
+			paddingX={1}
 			width="100%"
 		>
 			<scrollbox
@@ -79,23 +80,24 @@ export function ChatShell({
 				ref={scrollboxRef}
 				stickyScroll
 				stickyStart="bottom"
+				verticalScrollbarOptions={{ visible: false }}
 			>
 				<box flexDirection="column" gap={1}>
 					{messages.length === 0 && !error ? (
 						<text attributes={TextAttributes.DIM}>No messages yet.</text>
 					) : (
-						turns.map((turn) => (
-							<ChatMessage
-								footerMessage={footerMessages.get(turn.id)}
-								key={turn.id}
-								messages={turn.messages}
-							/>
+						turns.map((turn, index) => (
+							<box key={turn.id} marginTop={index === 0 ? 1 : 0} width="100%">
+								<ChatMessage
+									footerMessage={footerMessages.get(turn.id)}
+									messages={turn.messages}
+								/>
+							</box>
 						))
 					)}
 					{error ? <ErrorMessage error={error} /> : null}
 				</box>
 			</scrollbox>
-
 			<box flexShrink={0}>
 				<ChatTextArea
 					onSubmit={handleSubmit}
@@ -105,13 +107,19 @@ export function ChatShell({
 			<box
 				flexDirection="row"
 				flexShrink={0}
+				flexWrap="wrap"
 				gap={2}
-				height={1}
 				justifyContent="space-between"
 				paddingLeft={1}
 				width="100%"
 			>
-				<box alignItems="center" flexDirection="row" gap={2}>
+				<box
+					alignItems="center"
+					flexDirection="row"
+					flexGrow={1}
+					flexShrink={1}
+					gap={2}
+				>
 					{isBusy ? (
 						<>
 							<Spinner mode={mode} />
@@ -122,7 +130,9 @@ export function ChatShell({
 								</span>
 							</text>
 						</>
-					) : null}
+					) : (
+						<text attributes={TextAttributes.DIM}>{process.cwd()}</text>
+					)}
 				</box>
 
 				<box flexDirection="row" flexShrink={0} gap={2} marginLeft="auto">

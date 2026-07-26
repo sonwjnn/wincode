@@ -65,6 +65,7 @@ export function UserMessage({ mode, parts }: UserMessageProps) {
 				customBorderChars={{
 					...EmptyBorder,
 					bottomLeft: "╹",
+					topLeft: "╻",
 					vertical: "┃",
 				}}
 				width="100%"
