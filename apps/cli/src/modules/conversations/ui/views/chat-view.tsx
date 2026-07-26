@@ -1,4 +1,4 @@
-import { useKeyboard } from "@opentui/react";
+import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import {
 	type CodingAgentUIMessage,
 	normalizeChatModelSelection,
@@ -14,9 +14,12 @@ import { useChat } from "../../hooks/use-chat";
 import type { ChatPromptSubmission } from "../../utils";
 import { getLatestChatConfig, shouldAutoStartAssistantTurn } from "../../utils";
 import { ChatShell } from "../components/chat-shell";
+import { SessionSidebar } from "../components/session-sidebar";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
 
 const INTERRUPT_CONFIRMATION_TIMEOUT_MS = 3000;
+const SIDEBAR_WIDTH = 48;
+const SIDEBAR_MIN_TERMINAL_WIDTH = 100;
 
 type ChatScreenProps = {
 	autoStart: boolean;
@@ -37,6 +40,8 @@ export function ChatView({
 }: ChatScreenProps) {
 	const { mode, model, setMode, setModel, setVariant, variant } =
 		usePromptConfig();
+	const { width: terminalWidth } = useTerminalDimensions();
+	const showSidebar = terminalWidth >= SIDEBAR_MIN_TERMINAL_WIDTH;
 	const { isTopLayer } = useKeyboardLayer();
 	const dialog = useDialog();
 	const { show } = useToast();
@@ -241,13 +246,24 @@ export function ChatView({
 	]);
 
 	return (
-		<ChatShell
-			error={error}
-			isBusy={isBusy}
-			isInterruptArmed={isInterruptArmed}
-			messages={messages}
-			onSubmit={submitMessage}
-			promptHistory={promptHistory}
-		/>
+		<box flexDirection="row" height="100%" width="100%">
+			<box flexGrow={1} height="100%" paddingX={1}>
+				<ChatShell
+					error={error}
+					isBusy={isBusy}
+					isInterruptArmed={isInterruptArmed}
+					messages={messages}
+					onSubmit={submitMessage}
+					promptHistory={promptHistory}
+				/>
+			</box>
+			{showSidebar ? (
+				<SessionSidebar
+					messages={messages}
+					sessionTitle={sessionTitle}
+					width={SIDEBAR_WIDTH}
+				/>
+			) : null}
+		</box>
 	);
 }

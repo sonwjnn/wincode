@@ -4,11 +4,13 @@ import { createUserMessage } from "@wincode/ai/client";
 import { useEffect, useState } from "react";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import { APP_VERSION } from "@/shared/app-info";
 import { getConversationStore } from "../../storage/get-conversation-store";
 import type { ChatPromptSubmission } from "../../utils";
 import { getLatestChatConfig, getMostRecentSession } from "../../utils";
 import { AsciiArt } from "../components/ascii-art";
 import { ChatTextArea } from "../components/chat-text-area";
+import { WorkspacePath } from "../components/workspace-path";
 
 export function HomeView() {
 	const router = useRouter();
@@ -92,28 +94,42 @@ export function HomeView() {
 	};
 
 	return (
-		<box
-			alignItems="center"
-			flexGrow={1}
-			gap={2}
-			height="100%"
-			justifyContent="center"
-			position="relative"
-			width="100%"
-		>
-			<AsciiArt />
+		<box flexDirection="column" height="100%" width="100%">
 			<box
-				flexDirection="column"
-				gap={1}
-				maxWidth={78}
+				alignItems="center"
+				flexGrow={1}
+				gap={2}
+				justifyContent="center"
+				position="relative"
+				width="100%"
+			>
+				<AsciiArt />
+				<box
+					flexDirection="column"
+					gap={1}
+					maxWidth={78}
+					paddingX={2}
+					width="100%"
+				>
+					<ChatTextArea disabled={isCreatingSession} onSubmit={handleSubmit} />
+					<box flexDirection="row" flexShrink={0} gap={1}>
+						<text>tab</text>
+						<text attributes={TextAttributes.DIM}>agents</text>
+					</box>
+				</box>
+			</box>
+
+			<box
+				flexDirection="row"
+				flexShrink={0}
+				gap={2}
+				justifyContent="space-between"
+				paddingBottom={1}
 				paddingX={2}
 				width="100%"
 			>
-				<ChatTextArea disabled={isCreatingSession} onSubmit={handleSubmit} />
-				<box flexDirection="row" flexShrink={0} gap={1} marginLeft="auto">
-					<text>tab</text>
-					<text attributes={TextAttributes.DIM}>agents</text>
-				</box>
+				<WorkspacePath />
+				<text attributes={TextAttributes.DIM}>{`v${APP_VERSION}`}</text>
 			</box>
 		</box>
 	);

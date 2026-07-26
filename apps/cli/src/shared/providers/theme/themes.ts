@@ -11,6 +11,7 @@ export type ThemeColors = {
 	info: string;
 	background: string;
 	surface: string;
+	sidebarBackground: string;
 	dialogSurface: string;
 	thinkingBorder: string;
 	dimSeparator: string;
@@ -35,6 +36,7 @@ type ThemeDefinition = {
 		| "filePathBackground"
 		| "filePath"
 		| "mode"
+		| "sidebarBackground"
 		| "suggestionBorder"
 	>;
 };
@@ -146,7 +148,7 @@ const THEME_DEFINITIONS = [
 			error: "#F7768E",
 			info: "#7DCFFF",
 			background: "#1A1B26",
-			surface: "#24283B",
+			surface: "#1E2030",
 			dialogSurface: "#16161E",
 			thinkingBorder: "#3B4261",
 			dimSeparator: "#565F89",
@@ -621,6 +623,7 @@ export const THEMES: Theme[] = THEME_DEFINITIONS.map(({ colors, name }) => ({
 		filePathBackground: colors.dialogSurface,
 		filePath: brightenColor(colors.dimSeparator, FILE_PATH_BRIGHTNESS),
 		mode: createModeColors(colors),
+		sidebarBackground: colors.surface,
 		suggestionBorder: brightenColor(
 			colors.dimSeparator,
 			SUGGESTION_BORDER_BRIGHTNESS
