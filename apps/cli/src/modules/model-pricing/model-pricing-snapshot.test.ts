@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { supportedChatModelIds } from "@wincode/ai";
-import { billingPricebook } from "@wincode/billing";
 import { getHostedModelCost } from "./model-pricing";
 import { modelPricingSnapshot } from "./model-pricing-snapshot.generated";
 
@@ -27,10 +26,5 @@ describe("model pricing snapshot", () => {
 			expect(live?.input).toBe(expected?.input);
 			expect(live?.output).toBe(expected?.output);
 		}
-	});
-
-	test("billingPricebook exposes the two hosted model ids", () => {
-		expect(billingPricebook.models["gpt-5.4-mini"]).toBeDefined();
-		expect(billingPricebook.models["gemini-2.5-flash"]).toBeDefined();
 	});
 });

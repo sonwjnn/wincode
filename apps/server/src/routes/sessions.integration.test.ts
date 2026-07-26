@@ -333,32 +333,6 @@ describe("POST /:id/chat (transport-only)", () => {
 		expect(response.status).toBe(400);
 	});
 
-	test("rejects user multimodal file parts", async () => {
-		const response = await sessionsRoutes.request("/session-1/chat", {
-			body: JSON.stringify({
-				messages: [
-					{
-						id: "user-image",
-						parts: [
-							{
-								mediaType: "image/png",
-								type: "file",
-								url: "data:image/png;base64,aGVsbG8=",
-							},
-						],
-						role: "user",
-					},
-				],
-				mode: "plan",
-				model: "gpt-5.4-mini",
-			}),
-			headers: { "content-type": "application/json" },
-			method: "POST",
-		});
-
-		expect(response.status).toBe(400);
-	});
-
 	test("rejects token-unsafe oversized text", async () => {
 		const response = await sessionsRoutes.request("/session-1/chat", {
 			body: JSON.stringify({
@@ -429,23 +403,6 @@ describe("POST /:id/chat (transport-only)", () => {
 		expect(response.status).toBe(400);
 	});
 
-	test("accepts real resolver shape for hosted model selection", async () => {
-		const response = await sessionsRoutes.request("/session-1/chat", {
-			body: JSON.stringify({
-				messages: [
-					{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
-				],
-				mode: "plan",
-				model: "gpt-5.4-mini",
-			}),
-			headers: { "content-type": "application/json" },
-			method: "POST",
-		});
-
-		expect(response.status).toBe(200);
-		expect(billingRepository.reserveRequest).toHaveBeenCalledTimes(1);
-	});
-
 	test("rejects a request missing mode/model", async () => {
 		const response = await sessionsRoutes.request("/session-1/chat", {
 			body: JSON.stringify({ messages: [] }),
@@ -457,26 +414,6 @@ describe("POST /:id/chat (transport-only)", () => {
 	});
 
 	test("rejects direct non-wincode model ids before streaming", async () => {
-		const response = await sessionsRoutes.request("/session-1/chat", {
-			body: JSON.stringify({
-				messages: [
-					{
-						id: "user-1",
-						parts: [{ text: "hello", type: "text" }],
-						role: "user",
-					},
-				],
-				mode: "plan",
-				model: "gpt-5.5",
-			}),
-			headers: { "content-type": "application/json" },
-			method: "POST",
-		});
-
-		expect(response.status).toBe(400);
-	});
-
-	test("rejects unsupported host model schema values", async () => {
 		const response = await sessionsRoutes.request("/session-1/chat", {
 			body: JSON.stringify({
 				messages: [

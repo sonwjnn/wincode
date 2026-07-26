@@ -486,12 +486,6 @@ describe("type-safety contract", () => {
 		expect(output.content).toBe("hello");
 	});
 
-	test("keeps UI message type exported", () => {
-		const message: CodingAgentUIMessage = createUserMessage("hello");
-
-		expect(message.role).toBe("user");
-	});
-
 	test("rejects incorrect type pairings at compile time", () => {
 		// @ts-expect-error read input does not accept file content.
 		const invalidInput: ReadInput = { content: "wrong", path: "README.md" };

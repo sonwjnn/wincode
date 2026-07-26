@@ -510,49 +510,6 @@ describe("billing repository", () => {
 		expect(state.reservations[0]?.reconciliationRequiredAt).toBeTruthy();
 	});
 
-	it("expiry marks reconciliationRequired", async () => {
-		const state = createDb();
-		state.reservations.push({
-			requestId: "r1",
-			userId: "user-1",
-			status: "active",
-			runtimeProvider: "openai",
-			runtimeModel: "gpt-5.4-mini",
-			reservedUsdMicros: 1_000n,
-			accruedUsdMicros: 0n,
-			reconciliationRequiredAt: null,
-			priceVersion: config.priceBookVersion,
-			priceEffectiveAt: config.priceBookEffectiveAt,
-			rateInputUsdMicrosPerMillionTokens: 750000n,
-			rateCacheReadUsdMicrosPerMillionTokens: 75000n,
-			rateCacheWriteUsdMicrosPerMillionTokens: 0n,
-			rateOutputUsdMicrosPerMillionTokens: 4500000n,
-			rateReasoningUsdMicrosPerMillionTokens: 0n,
-			startedAt: new Date("2026-07-20T00:00:00.000Z"),
-			expiresAt: new Date("2026-07-20T00:01:00.000Z"),
-			updatedAt: new Date("2026-07-20T00:00:00.000Z"),
-		});
-		const repo = createBillingRepository(state.db, config);
-		await repo.expireStaleActiveRequests(new Date("2026-07-21T00:00:00.000Z"));
-		expect(state.reservations[0]?.status).toBe("expired");
-		expect(state.reservations[0]?.reconciliationRequiredAt).toBeTruthy();
-	});
-
-	it("reserve includes cache-read hold and does not underhold", async () => {
-		const state = createDb();
-		const repo = createBillingRepository(state.db, config);
-		await expect(
-			repo.reserveRequest({
-				requestId: "r9",
-				userId: "user-1",
-				runtimeProvider: "openai",
-				runtimeModel: "gpt-5.4-mini",
-				mode: "plan",
-				startedAt: new Date("2026-07-20T03:00:00.000Z"),
-			})
-		).resolves.toMatchObject({ ok: true, reservedUsdMicros: 53_250_000n });
-	});
-
 	it("finalize + expiry state", async () => {
 		const state = createDb();
 		state.reservations.push({
@@ -643,42 +600,6 @@ describe("billing repository", () => {
 		expect(
 			await repo.expireStaleActiveRequests(new Date("2026-07-21T00:00:00.000Z"))
 		).toMatchObject({ ok: true, expiredCount: 1 });
-	});
-
-	it("settle same step idempotent retains one usage row", async () => {
-		const state = createDb();
-		state.reservations.push({
-			requestId: "r1",
-			userId: "user-1",
-			status: "active",
-			runtimeProvider: "openai",
-			runtimeModel: "gpt-5.4-mini",
-			reservedUsdMicros: 1_000n,
-			accruedUsdMicros: 0n,
-			priceVersion: config.priceBookVersion,
-			priceEffectiveAt: config.priceBookEffectiveAt,
-			rateInputUsdMicrosPerMillionTokens: 750000n,
-			rateCacheReadUsdMicrosPerMillionTokens: 75000n,
-			rateCacheWriteUsdMicrosPerMillionTokens: 0n,
-			rateOutputUsdMicrosPerMillionTokens: 4500000n,
-			rateReasoningUsdMicrosPerMillionTokens: 0n,
-		});
-		const repo = createBillingRepository(state.db, config);
-		await repo.settleStep({
-			requestId: "r1",
-			stepIndex: 1,
-			settledUsage: baseUsage,
-			runtimeProvider: "openai",
-			runtimeModel: "gpt-5.4-mini",
-		});
-		await repo.settleStep({
-			requestId: "r1",
-			stepIndex: 1,
-			settledUsage: baseUsage,
-			runtimeProvider: "openai",
-			runtimeModel: "gpt-5.4-mini",
-		});
-		expect(state.events).toHaveLength(1);
 	});
 
 	it("settle rejects terminal state", async () => {

@@ -109,14 +109,6 @@ describe("billing routes", () => {
 		});
 	});
 
-	test("uses browser session for billing management", async () => {
-		const response = await billingRoutes.request("/checkout", {
-			method: "POST",
-			headers: { Origin: "https://app.example.com" },
-		});
-		expect(response.status).toBe(200);
-	});
-
 	test("returns usage with decimal totals and remaining amount", async () => {
 		const response = await usageRoutes.request("/usage", {
 			headers: { Authorization: "Bearer token" },

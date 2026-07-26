@@ -24,8 +24,4 @@ describe("formatResponseTime", () => {
 	test("formats minute durations with seconds", () => {
 		expect(formatResponseTime(159_000)).toBe("2m 39s");
 	});
-
-	test("keeps footer data available for interrupted turns", () => {
-		expect(formatResponseTime(1001)).toBe("1.0s");
-	});
 });

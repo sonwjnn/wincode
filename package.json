@@ -32,6 +32,10 @@
   "scripts": {
     "build": "bun run --filter './apps/*' build",
     "check-types": "bun run --filter '*' check-types",
+    "test": "bun test apps/cli/src apps/server/src apps/web/src packages/ai/src packages/billing/src",
+    "test:unit": "bun test apps/cli/src apps/server/src apps/web/src packages/ai/src packages/billing/src",
+    "test:integration": "bun test integration.test.ts",
+    "test:postgres": "bun test apps/server/tests/integration/billing/repository.postgres.test.ts",
     "dev:web": "bun run --cwd apps/web dev",
     "dev:cli": "bun run --cwd apps/cli dev",
     "dev:server": "bun run --cwd apps/server dev",

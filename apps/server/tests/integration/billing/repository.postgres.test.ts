@@ -7,12 +7,9 @@ import {
 	billingUsageEvent,
 	user,
 } from "@wincode/db/schema";
-import { config as loadEnv } from "dotenv";
 import { like } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/neon-serverless";
-import { createBillingRepository } from "./repository";
-
-loadEnv({ path: "apps/server/.env" });
+import { createBillingRepository } from "../../../src/billing/repository";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
