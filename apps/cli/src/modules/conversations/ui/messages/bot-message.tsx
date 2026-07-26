@@ -7,7 +7,6 @@ import {
 	normalizeChatModelSelection,
 } from "@wincode/ai";
 import { connectionProviderDisplayNames } from "@/modules/connections";
-import { EmptyBorder } from "@/shared/constants";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 
 type MessagePart = CodingAgentUIMessage["parts"][number];
@@ -21,6 +20,7 @@ type ToolPart = MessagePart & {
 };
 
 type PartGroup = {
+	isToolGroup: boolean;
 	key: string;
 	parts: MessagePart[];
 	type: MessagePart["type"];
@@ -69,22 +69,42 @@ const getToolName = (part: ToolPart) => {
 	return part.type.slice("tool-".length);
 };
 
+const getToolKey = (part: ToolPart) => {
+	const state = formatUnknown(part.state);
+	const errorText = formatUnknown(part.errorText);
+
+	return (
+		formatUnknown(part.toolCallId) ||
+		`tool-${getToolName(part)}-${state}-${formatToolArgs(part)}-${errorText}`
+	);
+};
+
 const groupConsecutiveParts = (parts: MessagePart[]): PartGroup[] => {
 	const groups: PartGroup[] = [];
 
 	for (const [index, part] of parts.entries()) {
 		const lastGroup = groups.at(-1);
+		const isCurrentPartTool = isToolPart(part);
 
-		if (lastGroup && lastGroup.type === part.type) {
+		if (
+			lastGroup &&
+			(lastGroup.type === part.type ||
+				(lastGroup.isToolGroup && isCurrentPartTool))
+		) {
 			lastGroup.parts.push(part);
 			continue;
 		}
 
-		const key = isToolPart(part)
+		const key = isCurrentPartTool
 			? `group-tc-${formatUnknown(part.toolCallId) || index}`
 			: `group-${part.type}-${index}`;
 
-		groups.push({ key, parts: [part], type: part.type });
+		groups.push({
+			isToolGroup: isCurrentPartTool,
+			key,
+			parts: [part],
+			type: part.type,
+		});
 	}
 
 	return groups;
@@ -182,20 +202,21 @@ const resolveFooterItems = (
 	return items;
 };
 
-export function BotMessage({
-	message,
-	parts,
-}: {
-	message: CodingAgentUIMessage;
-	parts: CodingAgentUIMessage["parts"];
-}) {
+function ToolMessagePart({ part }: { part: ToolPart }) {
+	const { colors } = useTheme();
+	const state = formatUnknown(part.state);
+	const isInProgress = state !== "output-available" && state !== "output-error";
+	const errorText = formatUnknown(part.errorText);
+
 	return (
-		<>
-			<BotMessageContent parts={parts} />
-			<box paddingTop={1} width="100%">
-				<BotMessageFooter message={message} />
-			</box>
-		</>
+		<box marginBottom={1} paddingX={3} width="100%">
+			<text attributes={TextAttributes.DIM}>
+				<em fg={colors.info}>{formatToolName(getToolName(part))}:</em>{" "}
+				{formatToolArgs(part)}
+				{isInProgress ? " …" : ""}
+				{state === "output-error" ? ` ${errorText}` : ""}
+			</text>
+		</box>
 	);
 }
 
@@ -205,23 +226,19 @@ export function BotMessageContent({
 	parts: CodingAgentUIMessage["parts"];
 }) {
 	const { colors } = useTheme();
+	const groups = groupConsecutiveParts(parts);
 
 	return (
 		<box alignItems="center" width="100%">
-			{groupConsecutiveParts(parts).map((group, groupIndex) => (
-				<box key={group.key} paddingTop={groupIndex === 0 ? 0 : 1} width="100%">
+			{groups.map((group) => (
+				<box key={group.key} width="100%">
 					{group.parts.map((part) => {
 						if (part.type === "reasoning") {
 							return (
 								<box
-									border={["left"]}
-									borderColor={colors.thinkingBorder}
-									customBorderChars={{
-										...EmptyBorder,
-										vertical: "│",
-									}}
 									key={`reasoning-${part.text}`}
-									paddingX={2}
+									marginBottom={1}
+									paddingX={3}
 									width="100%"
 								>
 									<text attributes={TextAttributes.DIM}>
@@ -232,36 +249,7 @@ export function BotMessageContent({
 						}
 
 						if (isToolPart(part)) {
-							const state = formatUnknown(part.state);
-							const isInProgress =
-								state !== "output-available" && state !== "output-error";
-							const errorText = formatUnknown(part.errorText);
-							const toolKey =
-								formatUnknown(part.toolCallId) ||
-								`tool-${getToolName(part)}-${state}-${formatToolArgs(part)}-${errorText}`;
-
-							return (
-								<box
-									border={["left"]}
-									borderColor={colors.thinkingBorder}
-									customBorderChars={{
-										...EmptyBorder,
-										vertical: "│",
-									}}
-									key={toolKey}
-									paddingX={2}
-									width="100%"
-								>
-									<text attributes={TextAttributes.DIM}>
-										<em fg={colors.info}>
-											{formatToolName(getToolName(part))}:
-										</em>{" "}
-										{formatToolArgs(part)}
-										{isInProgress ? " …" : ""}
-										{state === "output-error" ? ` ${errorText}` : ""}
-									</text>
-								</box>
-							);
+							return <ToolMessagePart key={getToolKey(part)} part={part} />;
 						}
 
 						if (part.type === "text") {
