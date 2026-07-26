@@ -279,6 +279,9 @@ describe("POST /:id/chat (transport-only)", () => {
 			method: "POST",
 		});
 		expect(response.status).toBe(403);
+		expect(await response.json()).toEqual({
+			error: "Billing reserve denied: daily-cap",
+		});
 	});
 
 	test("rejects multimodal predispatch parts", async () => {

@@ -28,7 +28,7 @@ describe("billing lifecycle glue", () => {
 			})),
 		};
 		const lifecycle = createBillingLifecycle({
-			config: { mode: "allowlist-shadow" },
+			config: { mode: "enforce" },
 			repository: repo as never,
 			mode: "plan",
 			requestId: "r1",

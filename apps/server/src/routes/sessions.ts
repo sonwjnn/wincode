@@ -51,6 +51,12 @@ Do not modify files. Do not write files. Do not call edit or write tools.
 Use only read-only inspection tools to understand the workspace.
 Return a concrete plan, risks, and verification steps instead of implementing changes.`,
 } as const;
+
+const billingReserveDeniedMessage = (reason: unknown): string =>
+	typeof reason === "string"
+		? `Billing reserve denied: ${reason}`
+		: "Billing reserve denied";
+
 const billingConfig = {
 	providerKillSwitches: new Set<string>(),
 	modelKillSwitches: new Set<string>(),
@@ -393,11 +399,11 @@ const handleChatRequest = async (
 		userId: subject.userId,
 	});
 	const reservation = await lifecycle.reserve();
-	if (
-		!reservation ||
-		(typeof reservation === "object" && "ok" in reservation && !reservation.ok)
-	) {
+	if (!reservation) {
 		return forbidden("Billing reserve denied");
+	}
+	if (reservation.ok === false) {
+		return forbidden(billingReserveDeniedMessage(reservation.reason));
 	}
 
 	return deps.createCodingAgentStreamResponse({

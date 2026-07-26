@@ -110,12 +110,12 @@ export const verifyBearerAuth = async (
 		return verifyApiKey(token);
 	}
 	const verifyOptions = {
-		issuer: env.BETTER_AUTH_URL,
+		issuer: new URL("/api/auth", new URL(env.BETTER_AUTH_URL).origin).href,
 		audience: new URL("/api", new URL(env.BETTER_AUTH_URL).origin).href,
 	};
 	try {
 		const payload = await verifyAccessToken(token, {
-			jwksUrl: new URL("jwks", `${env.BETTER_AUTH_URL}/`).href,
+			jwksUrl: new URL("/api/auth/jwks", env.BETTER_AUTH_URL).href,
 			scopes: ["chat:write"],
 			verifyOptions,
 		});

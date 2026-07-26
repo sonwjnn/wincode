@@ -53,7 +53,7 @@ export type BillingLifecycle = {
 };
 
 const isBillingUnavailable = (config: BillingLifecycleConfig | null): boolean =>
-	config === null || config.mode !== "allowlist-shadow";
+	config === null || config.mode === "disabled";
 
 const toStepIndex = (stepNumber: number | undefined): number =>
 	typeof stepNumber === "number" && Number.isFinite(stepNumber)
