@@ -10,6 +10,7 @@ import {
 	ModeAdapter,
 	ModelsAdapter,
 	NewAdapter,
+	SkillsAdapter,
 	VariantsAdapter,
 } from "@/modules/commands/adapters";
 import type { CommandSpec } from "@/modules/commands/commands";
@@ -25,6 +26,10 @@ import { AgentsDialogContent } from "@/modules/prompt-settings/ui/agents-dialog"
 import { ModelsDialogContent } from "@/modules/prompt-settings/ui/models-dialog";
 import { ThemeDialogContent } from "@/modules/prompt-settings/ui/theme-dialog";
 import { VariantsDialogContent } from "@/modules/prompt-settings/ui/variants-dialog";
+import {
+	SKILLS_DIALOG_WIDTH,
+	SkillsDialogContent,
+} from "@/modules/skills/ui/skills-dialog";
 import {
 	type ClipboardSpawn,
 	writeClipboard,
@@ -49,7 +54,9 @@ export async function copyBrowserAuthorizationUrl(
 	throw new Error("Failed to copy URL.");
 }
 
-export function useCommandExecutor(): UseCommandExecutorReturn {
+export function useCommandExecutor(
+	onSelectSkill: (command: string) => void
+): UseCommandExecutorReturn {
 	const renderer = useRenderer();
 	const router = useRouter();
 	const dialog = useDialog();
@@ -145,6 +152,16 @@ export function useCommandExecutor(): UseCommandExecutorReturn {
 					currentModel: model,
 					setModel,
 				}),
+				skills: new SkillsAdapter({
+					open: () =>
+						dialog.open({
+							children: <SkillsDialogContent onSelectSkill={onSelectSkill} />,
+							padding: { bottom: 1, left: 0, right: 0, top: 1 },
+							title: "Skills",
+							titleMargin: { left: 4, right: 4 },
+							width: SKILLS_DIALOG_WIDTH,
+						}),
+				}),
 				variants: new VariantsAdapter({
 					open: ({ currentModel, currentVariant, onSelectVariant }) =>
 						dialog.open({
@@ -187,6 +204,7 @@ export function useCommandExecutor(): UseCommandExecutorReturn {
 			dialog,
 			mode,
 			model,
+			onSelectSkill,
 			renderer,
 			router,
 			setMode,

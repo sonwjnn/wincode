@@ -3,7 +3,9 @@ import {
 	codingAgentDataSchemas,
 	codingMessageMetadataSchema,
 	codingModeNameSchema,
+	formatSkillUserContext,
 	modelVariantSchema,
+	skillContextSchema,
 } from "@wincode/ai";
 import {
 	codingServerTools,
@@ -90,6 +92,7 @@ const chatRequestSchema = z.object({
 		}, "Unsupported host model"),
 	variant: modelVariantSchema.optional(),
 	sendReasoning: z.boolean().optional(),
+	skill: skillContextSchema.optional(),
 });
 
 const badRequest = () =>
@@ -172,7 +175,16 @@ const getStringTokenEstimate = (value: string): number =>
 const getMessageContextTokenEstimate = (
 	messages: z.infer<typeof uiMessageInputSchema>[]
 ) => {
-	const serialized = JSON.stringify(messages) ?? "";
+	const serialized =
+		JSON.stringify(
+			messages.map((message) => {
+				if (!message.metadata || typeof message.metadata !== "object") {
+					return message;
+				}
+				const { skill: _skill, ...metadata } = message.metadata;
+				return { ...message, metadata };
+			})
+		) ?? "";
 	return (
 		getStringTokenEstimate(serialized) +
 		conservativeInputHeadroomTokens +
@@ -294,7 +306,7 @@ const handleChatRequest = async (
 		return badRequest();
 	}
 
-	const { messages, mode, model, sendReasoning, variant } = parsed.data;
+	const { messages, mode, model, sendReasoning, variant, skill } = parsed.data;
 	const billingConfig = resolveBillingConfig();
 	if (
 		billingConfig === null ||
@@ -348,7 +360,9 @@ const handleChatRequest = async (
 		Math.min(
 			Number(billingConfig.fundedRequestInputTokenLimit),
 			conservativeHardInputTokenLimit
-		) - fundedContextOverhead
+		) -
+			fundedContextOverhead -
+			(skill ? getStringTokenEstimate(formatSkillUserContext(skill)) : 0)
 	);
 	if (!isAcceptableInput(messages, fundedInputTokenBudget)) {
 		return badRequest();
@@ -414,6 +428,7 @@ const handleChatRequest = async (
 		mode,
 		abortSignal,
 		providerOptions: resolvedModel.providerOptions,
+		skill,
 		sendReasoning,
 		uiMessages: validation.data,
 		onEnd: lifecycle.onEnd,

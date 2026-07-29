@@ -40,7 +40,8 @@ export const createRoutingChatTransport = (
 				modeRef,
 				{ current: selection },
 				{ current: variant },
-				connections
+				connections,
+				undefined
 			).sendMessages({
 				abortSignal,
 				body: undefined,

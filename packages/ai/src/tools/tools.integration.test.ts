@@ -263,8 +263,8 @@ describe("tool runners", () => {
 			path: sandboxRelPath,
 		});
 
-		expect(result.matches).toHaveLength(1000);
-		expect(result.matches.at(999)?.path).toBe(`${sandboxRelPath}/0999.txt`);
+		expect(result.matches.length).toBeLessThan(1000);
+		expect(result.truncated).toBe(true);
 	});
 
 	test("grep skips files above the internal byte limit", async () => {

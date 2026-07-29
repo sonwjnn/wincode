@@ -4,6 +4,7 @@ import type {
 	CodingAgentUIMessage,
 	ModelVariant,
 	ModeType,
+	SkillContext,
 } from "@wincode/ai";
 import {
 	defaultChatModelSelection,
@@ -23,6 +24,7 @@ import { useMemo, useRef, useState } from "react";
 import { useConnections } from "@/modules/connections";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import { getConversationStore } from "../storage/get-conversation-store";
+import { createSkillSnapshot } from "../utils";
 import { createRoutingChatTransport } from "./routing-chat-transport";
 
 type SubmitChatParams = {
@@ -31,6 +33,7 @@ type SubmitChatParams = {
 	variant?: ModelVariant;
 	userText: string;
 	files?: FileUIPart[];
+	skill?: SkillContext;
 };
 
 export const createChatMessageParts = (
@@ -79,6 +82,10 @@ export const findCurrentTurnInterruptTargetIndex = (
 
 	return messages.findLastIndex(({ role }) => role === "user");
 };
+
+export const getOriginatingUserMessageId = (
+	messages: CodingAgentUIMessage[]
+): string | undefined => messages.findLast(({ role }) => role === "user")?.id;
 
 export const finalizeAssistantMessageMetadata = (
 	message: CodingAgentUIMessage,
@@ -264,12 +271,18 @@ export function useChat(
 		variant,
 		userText,
 		files = [],
+		skill,
 	}: SubmitChatParams) => {
 		modeRef.current = mode;
 		modelRef.current = model;
 		variantRef.current = variant;
 		requestStartedAtRef.current = Date.now();
-		const metadata = { mode, model, variant };
+		const metadata = {
+			mode,
+			model,
+			variant,
+			...(skill ? { skill: createSkillSnapshot(skill) } : {}),
+		};
 		const optimisticMessage = createUserMessage(userText, metadata, [], files);
 		chat.setMessages((messages) => [...messages, optimisticMessage]);
 		setIsPreparingMessage(true);

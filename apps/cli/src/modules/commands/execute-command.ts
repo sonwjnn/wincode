@@ -5,6 +5,7 @@ import type {
 	ModeAdapter,
 	ModelsAdapter,
 	NewAdapter,
+	SkillsAdapter,
 	VariantsAdapter,
 } from "./adapters";
 import type { CommandSpec } from "./commands";
@@ -15,6 +16,7 @@ export type AdapterMap = {
 	new: NewAdapter;
 	dialog: DialogAdapter;
 	models: ModelsAdapter;
+	skills: SkillsAdapter;
 	variants: VariantsAdapter;
 	mode: ModeAdapter;
 };
@@ -35,6 +37,9 @@ export function createCommandExecutor(adapters: AdapterMap) {
 				break;
 			case "models":
 				return adapters.models.execute(spec);
+			case "skills":
+				adapters.skills.execute(spec);
+				break;
 			case "variants":
 				adapters.variants.execute(spec);
 				break;

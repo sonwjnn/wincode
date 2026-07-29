@@ -8,6 +8,7 @@ import {
 	type TextareaRenderable,
 } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
+import type { SkillContext } from "@wincode/ai";
 import { spawn } from "bun";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useCommandExecutor } from "@/app/commands/use-app-command-executor";
@@ -20,6 +21,11 @@ import {
 } from "@/modules/file-mentions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { StatusBar } from "@/modules/prompt-settings/ui/prompt-status-bar";
+import {
+	discoverSkills,
+	parseSkillInvocation,
+	type Skill,
+} from "@/modules/skills";
 import { EmptyBorder } from "@/shared/constants";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -49,6 +55,42 @@ import { expandTrackedPastedText, summarizePastedText } from "./pasted-text";
 const MAX_IMAGE_ATTACHMENTS = 5;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const EMPTY_PROMPT_HISTORY: PromptHistoryEntry[] = [];
+
+type SkillPrompt = {
+	skill?: SkillContext;
+	text: string;
+};
+
+type DiscoverSkills = () => Promise<Skill[]>;
+
+const getErrorMessage = (error: unknown): string =>
+	error instanceof Error ? error.message : String(error);
+
+export const resolveSkillPrompt = async (
+	text: string,
+	discover: DiscoverSkills = discoverSkills,
+	visibleText = text
+): Promise<SkillPrompt> => {
+	const invocation = parseSkillInvocation(text);
+	if (!invocation) {
+		return { text };
+	}
+
+	const skills = await discover();
+	const skill = skills.find(({ name }) => name === invocation.name);
+	if (!skill) {
+		return { text };
+	}
+
+	return {
+		skill: {
+			arguments: invocation.arguments,
+			instructions: skill.body,
+			name: skill.name,
+		},
+		text: visibleText,
+	};
+};
 
 const getAttachmentFileTokens = (
 	textarea: TextareaRenderable,
@@ -144,11 +186,17 @@ export function ChatTextArea({
 	>(() => []);
 	const syncAttachmentsRef = useRef<() => ChatAttachment[]>(() => []);
 	const syncFileMentionExtmarksRef = useRef<() => void>(() => undefined);
+	const insertSkillCommandRef = useRef<(command: string) => void>(
+		() => undefined
+	);
 
 	const { isTopLayer, pop, push, setResponder } = useKeyboardLayer();
 	const { colors } = useTheme();
 	const { show } = useToast();
-	const { executeCommand } = useCommandExecutor();
+	const handleSelectedSkillCommand = useCallback((command: string) => {
+		insertSkillCommandRef.current(command);
+	}, []);
+	const { executeCommand } = useCommandExecutor(handleSelectedSkillCommand);
 	const conversationStore = useMemo(() => getConversationStore(), []);
 	const getPromptHistory = useCallback(
 		() =>
@@ -270,6 +318,27 @@ export function ChatTextArea({
 		);
 		syncFileMentionExtmarksRef.current();
 	}, [actions, state.overlay.kind, syncPastedTexts]);
+	insertSkillCommandRef.current = (command) => {
+		const textarea = textAreaRef.current;
+		if (!textarea) {
+			return;
+		}
+		for (const attachment of attachmentsRef.current) {
+			textarea.extmarks.delete(attachment.extmarkId);
+		}
+		for (const pastedText of pastedTextRef.current) {
+			textarea.extmarks.delete(pastedText.extmarkId);
+		}
+		for (const id of fileMentionExtmarkIdsRef.current) {
+			textarea.extmarks.delete(id);
+		}
+		attachmentsRef.current = [];
+		pastedTextRef.current = [];
+		fileMentionExtmarkIdsRef.current = [];
+		textarea.setText(command);
+		textarea.cursorOffset = command.length;
+		handleTextareaContentChange();
+	};
 
 	const syncAttachments = useCallback(() => {
 		const textarea = textAreaRef.current;
@@ -618,7 +687,18 @@ export function ChatTextArea({
 			return;
 		}
 
-		const accepted = await onSubmit({ files, text });
+		let skillPrompt: SkillPrompt;
+		try {
+			skillPrompt = await resolveSkillPrompt(text, discoverSkills, visibleText);
+		} catch (error) {
+			show({
+				message: getErrorMessage(error),
+				variant: "error",
+			});
+			return;
+		}
+
+		const accepted = await onSubmit({ files, ...skillPrompt });
 		if (accepted === false) {
 			return;
 		}

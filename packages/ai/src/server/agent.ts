@@ -8,6 +8,7 @@ import {
 	defaultMode,
 	getCodingMode,
 } from "../modes";
+import type { SkillContext } from "../skill-context";
 import { codingServerTools } from "./tools";
 
 export type CodingAgentStepEndEvent = OnStepFinishEvent<
@@ -46,6 +47,7 @@ type CreateCodingAgentOptions = {
 	maxSteps?: number;
 	providerOptions?: ProviderOptions;
 	lifecycleCallbacks?: CodingAgentLifecycleCallbacks;
+	skill?: SkillContext;
 };
 
 export const createCodingAgent = ({
@@ -66,7 +68,6 @@ export const createCodingAgent = ({
 			return {
 				...options,
 				activeTools: [...codingMode.tools],
-				instructions: getSystemInstructions(codingMode.value),
 			};
 		},
 		onFinish: async (event) => {

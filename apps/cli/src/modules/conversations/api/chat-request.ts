@@ -3,10 +3,12 @@ import type {
 	CodingAgentUIMessage,
 	ModelVariant,
 	ModeType,
+	SkillContext,
 } from "@wincode/ai";
 import {
 	chatModelSelectionSchema,
 	codingMessageMetadataSchema,
+	codingMessageSkillSchema,
 	normalizeChatModelSelection,
 } from "@wincode/ai";
 
@@ -15,6 +17,7 @@ type SendChatRequestBody = {
 	mode: ModeType;
 	model: string;
 	persist: false;
+	skill?: SkillContext;
 	variant?: ModelVariant;
 	sendReasoning: true;
 };
@@ -23,12 +26,28 @@ type ChatMetadataFallback = {
 	mode: ModeType;
 	model: ChatModelSelection;
 	variant?: ModelVariant;
+	skill?: SkillContext;
 };
 
 const findLastChatMetadata = (messages: CodingAgentUIMessage[]) =>
 	messages.findLast(
 		(message) => codingMessageMetadataSchema.safeParse(message.metadata).success
 	)?.metadata;
+
+const findOriginatingUserSkill = (
+	messages: CodingAgentUIMessage[]
+): SkillContext | undefined => {
+	const message = [...messages].reverse().find(({ role }) => role === "user");
+	const parsed = codingMessageSkillSchema.safeParse(message?.metadata?.skill);
+
+	return parsed.success
+		? {
+				name: parsed.data.name,
+				arguments: parsed.data.arguments,
+				instructions: parsed.data.instructions,
+			}
+		: undefined;
+};
 
 const normalizeSelection = (model: unknown): ChatModelSelection | null => {
 	if (typeof model === "string") {
@@ -61,6 +80,7 @@ export const prepareSendChatRequestBody = (
 		normalizeSelection(metadata?.model) ??
 		fallback?.model;
 	const variant = metadata?.variant ?? fallback?.variant;
+	const skill = findOriginatingUserSkill(messages);
 
 	if (!(mode && model)) {
 		throw new Error("No chat mode or model to send");
@@ -75,6 +95,7 @@ export const prepareSendChatRequestBody = (
 		mode,
 		model: model.modelId,
 		persist: false,
+		...((skill ?? fallback?.skill) ? { skill: skill ?? fallback?.skill } : {}),
 		variant,
 		sendReasoning: true,
 	};

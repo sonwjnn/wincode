@@ -16,6 +16,7 @@ import {
 } from "@wincode/ai/server";
 import { type ChatTransport, createAgentUIStream } from "ai";
 import type { Connections } from "@/modules/connections";
+import { getOriginatingUserSkill } from "../utils";
 
 type MutableRefObject<T> = { current: T };
 
@@ -32,6 +33,7 @@ export const createLocalChatTransport = (
 ): LocalChatTransport => ({
 	sendMessages: async ({ abortSignal, messages }) => {
 		const selection = modelRef.current;
+		const skill = getOriginatingUserSkill(messages);
 		if (getChatModelRoute(selection) !== "direct") {
 			throw new Error("Local transport requires a direct model");
 		}
@@ -46,6 +48,7 @@ export const createLocalChatTransport = (
 			model: resolvedModel.model,
 			maxOutputTokens: resolvedModel.maxOutputTokens,
 			providerOptions: resolvedModel.providerOptions,
+			skill,
 		});
 
 		const modelMessages = expandFileMentionPartsForModel(

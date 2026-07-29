@@ -6,6 +6,7 @@ export const listInputSchema = z.object({
 });
 
 export const listOutputSchema = z.object({
+	truncated: z.boolean().optional(),
 	entries: z.array(
 		z.object({
 			path: z.string(),

@@ -43,6 +43,7 @@ type ThemeDefinition = {
 
 const SUGGESTION_BORDER_BRIGHTNESS = 0.25;
 const FILE_PATH_BRIGHTNESS = 0.35;
+const DIM_SEPARATOR_BRIGHTNESS = 0.08;
 
 const brightenColor = (color: string, amount: number) => {
 	const channels = [
@@ -615,22 +616,30 @@ const THEME_DEFINITIONS = [
 	},
 ] satisfies ThemeDefinition[];
 
-export const THEMES: Theme[] = THEME_DEFINITIONS.map(({ colors, name }) => ({
-	colors: {
-		...colors,
-		fileBadgeBackground: colors.primary,
-		fileBadgeText: colors.background,
-		filePathBackground: colors.dialogSurface,
-		filePath: brightenColor(colors.dimSeparator, FILE_PATH_BRIGHTNESS),
-		mode: createModeColors(colors),
-		sidebarBackground: colors.surface,
-		suggestionBorder: brightenColor(
-			colors.dimSeparator,
-			SUGGESTION_BORDER_BRIGHTNESS
-		),
-	},
-	name,
-}));
+export const THEMES: Theme[] = THEME_DEFINITIONS.map(({ colors, name }) => {
+	const dimSeparator = brightenColor(
+		colors.dimSeparator,
+		DIM_SEPARATOR_BRIGHTNESS
+	);
+
+	return {
+		colors: {
+			...colors,
+			dimSeparator,
+			fileBadgeBackground: colors.primary,
+			fileBadgeText: colors.background,
+			filePathBackground: colors.dialogSurface,
+			filePath: brightenColor(dimSeparator, FILE_PATH_BRIGHTNESS),
+			mode: createModeColors(colors),
+			sidebarBackground: colors.surface,
+			suggestionBorder: brightenColor(
+				dimSeparator,
+				SUGGESTION_BORDER_BRIGHTNESS
+			),
+		},
+		name,
+	};
+});
 
 export const DEFAULT_THEME: Theme =
 	THEMES.find((t) => t.name === "Sonfox") ?? (THEMES[0] as Theme);

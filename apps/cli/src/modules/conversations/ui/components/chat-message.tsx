@@ -1,5 +1,10 @@
 import { type CodingAgentUIMessage, defaultMode } from "@wincode/ai";
-import { BotMessageContent, BotMessageFooter, UserMessage } from "../messages";
+import {
+	BotMessageContent,
+	BotMessageFooter,
+	getAppliedSkill,
+	UserMessage,
+} from "../messages";
 
 export function ChatMessage({
 	footerMessage,
@@ -15,6 +20,7 @@ export function ChatMessage({
 					if (message.role === "user") {
 						return (
 							<UserMessage
+								appliedSkill={getAppliedSkill(message.metadata)}
 								key={message.id}
 								mode={message.metadata?.mode ?? defaultMode.value}
 								parts={message.parts}

@@ -14,6 +14,7 @@ import type { CodingAgentUIMessage } from "../message";
 import type { SupportedChatModelId } from "../models";
 import { defaultMode, type ModeType } from "../modes";
 import { sanitizeInterruptedMessagesForModel } from "../sanitize-interrupted-messages";
+import { formatSkillUserContext, type SkillContext } from "../skill-context";
 import { buildUsageMessageMetadata } from "../usage";
 import { type CodingAgentLifecycleCallbacks, createCodingAgent } from "./agent";
 import { getProviderErrorMessage } from "./error-message";
@@ -31,6 +32,7 @@ type CreateCodingAgentStreamResponseOptions = {
 	providerOptions?: ProviderOptions;
 	sendReasoning?: boolean;
 	uiMessages: CodingAgentUIMessage[];
+	skill?: SkillContext;
 };
 
 export const createCodingAgentStreamResponse = ({
@@ -46,10 +48,18 @@ export const createCodingAgentStreamResponse = ({
 	providerOptions,
 	sendReasoning = true,
 	uiMessages,
+	skill,
 }: CreateCodingAgentStreamResponseOptions) => {
 	const modelMessages = expandFileMentionPartsForModel(
 		sanitizeInterruptedMessagesForModel(uiMessages)
 	);
+	if (skill) {
+		modelMessages.push({
+			id: "skill-context",
+			role: "user",
+			parts: [{ type: "text", text: formatSkillUserContext(skill) }],
+		});
+	}
 	const handleFinish: UIMessageStreamOnFinishCallback<
 		CodingAgentModelUIMessage
 	> = async ({ messages, responseMessage, ...event }) => {
@@ -84,6 +94,7 @@ export const createCodingAgentStreamResponse = ({
 			maxOutputTokens,
 			maxSteps,
 			providerOptions,
+			skill,
 		}),
 		generateMessageId: createIdGenerator({
 			prefix: "msg",

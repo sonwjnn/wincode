@@ -18,7 +18,7 @@ import { SessionSidebar } from "../components/session-sidebar";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
 
 const INTERRUPT_CONFIRMATION_TIMEOUT_MS = 3000;
-const SIDEBAR_WIDTH = 48;
+const SIDEBAR_WIDTH = 42;
 const SIDEBAR_MIN_TERMINAL_WIDTH = 100;
 
 type ChatScreenProps = {
@@ -29,6 +29,13 @@ type ChatScreenProps = {
 	sessionTitle: string;
 	onHostedCompletion?: () => void;
 };
+
+export const hasChatPromptContent = ({
+	files,
+	skill,
+	text,
+}: ChatPromptSubmission): boolean =>
+	text.trim().length > 0 || files.length > 0 || skill !== undefined;
 
 export function ChatView({
 	autoStart,
@@ -171,17 +178,20 @@ export function ChatView({
 		[]
 	);
 
-	const submitMessage = ({ files, text }: ChatPromptSubmission) => {
+	const submitMessage = (submission: ChatPromptSubmission) => {
 		if (isBusy) {
 			return false;
 		}
 
+		const { files, text, skill } = submission;
 		const userText = text.trim();
-		if (!userText && files.length === 0) {
+		if (!hasChatPromptContent(submission)) {
 			return false;
 		}
 
-		submit({ files, mode, model, variant, userText }).catch(() => undefined);
+		submit({ files, mode, model, variant, userText, skill }).catch(
+			() => undefined
+		);
 		return true;
 	};
 

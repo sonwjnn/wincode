@@ -7,6 +7,7 @@ export const grepInputSchema = z.object({
 });
 
 export const grepOutputSchema = z.object({
+	truncated: z.boolean().optional(),
 	matches: z.array(
 		z.object({
 			line: z.string(),
