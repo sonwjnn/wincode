@@ -6,6 +6,7 @@ import {
 	ModeAdapter,
 	ModelsAdapter,
 	NewAdapter,
+	SkillsAdapter,
 	VariantsAdapter,
 } from "./adapters";
 import { createCommandExecutor } from "./execute-command";
@@ -27,6 +28,7 @@ describe("createCommandExecutor", () => {
 				currentModel: { modelId: "gpt-5.5", providerId: "openai" },
 				setModel: () => undefined,
 			}),
+			skills: new SkillsAdapter({ open: () => undefined }),
 			variants: new VariantsAdapter({
 				open: () => undefined,
 				currentModel: {
@@ -73,6 +75,7 @@ describe("createCommandExecutor", () => {
 				currentModel: { modelId: "gpt-5.5", providerId: "openai" },
 				setModel: () => undefined,
 			}),
+			skills: new SkillsAdapter({ open: () => undefined }),
 			variants: new VariantsAdapter({
 				open: () => undefined,
 				currentModel: {
@@ -114,6 +117,7 @@ describe("createCommandExecutor", () => {
 				currentModel: { modelId: "gpt-5.5", providerId: "openai" },
 				setModel: () => undefined,
 			}),
+			skills: new SkillsAdapter({ open: () => undefined }),
 			variants: new VariantsAdapter({
 				open: () => {
 					opened = true;
@@ -160,6 +164,7 @@ describe("createCommandExecutor", () => {
 				currentModel: { modelId: "gpt-5.5", providerId: "openai" },
 				setModel: () => undefined,
 			}),
+			skills: new SkillsAdapter({ open: () => undefined }),
 			variants: new VariantsAdapter({
 				open: () => undefined,
 				currentModel: {

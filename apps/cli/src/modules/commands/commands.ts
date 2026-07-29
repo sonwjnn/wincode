@@ -7,6 +7,7 @@ export type CommandSpec = BaseSpec &
 		| { kind: "new" }
 		| { kind: "dialog"; dialogKey: "sessions" | "theme" }
 		| { kind: "models" }
+		| { kind: "skills" }
 		| { kind: "variants" }
 		| { kind: "mode" }
 	);
@@ -35,6 +36,12 @@ export const COMMANDS: CommandSpec[] = [
 		name: "variants",
 		value: "/variants",
 		kind: "variants",
+	},
+	{
+		description: "Browse and insert available skills",
+		name: "skills",
+		value: "/skills",
+		kind: "skills",
 	},
 	{
 		description: "Browse past sessions",

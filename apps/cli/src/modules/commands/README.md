@@ -4,7 +4,7 @@ Slash-command registry and dispatch for the CLI chat input.
 
 ## Flows
 
-1. **Registration** — `CommandSpec` is a discriminated union of 10 commands kept in
+1. **Registration** — `CommandSpec` is a discriminated union of commands kept in
    `COMMANDS[]`. Each spec carries a `value` (`/new`, `/exit`, …), a display name, a
    description, and a `kind` discriminator.
 2. **Filter** — `getFilteredCommands` fuzzy-matches specs against the user's `/` query in
@@ -17,7 +17,7 @@ Slash-command registry and dispatch for the CLI chat input.
    - `DialogAdapter` → opens sessions / theme dialogs
    - `ModelsAdapter` / `VariantsAdapter` / `ModeAdapter` → open model‑picker /
      variant‑picker / agent‑picker dialogs
-   - `UnavailableAdapter` → toast notification
+   - `SkillsAdapter` → opens skill picker and queues selected skill command
 5. **Overlay** — `CommandMenu` renders the matched suggestions below the input. Arrow keys
    highlight, Enter executes.
 
@@ -28,7 +28,7 @@ Slash-command registry and dispatch for the CLI chat input.
 - `createCommandExecutor(adapters)`, `AdapterMap`
 - `CommandMenu`
 - Adapter classes: `ExitAdapter`, `NewAdapter`, `DialogAdapter`, `ModelsAdapter`,
-  `VariantsAdapter`, `ModeAdapter`, `UnavailableAdapter`
+  `VariantsAdapter`, `ModeAdapter`, `SkillsAdapter`
 
 ## Dependencies
 

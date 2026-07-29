@@ -1,10 +1,13 @@
+import { createHash } from "node:crypto";
 import type { Extmark } from "@opentui/core";
 import {
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
+	codingMessageSkillSchema,
 	type ModelVariant,
 	type ModeType,
 	normalizeChatModelSelection,
+	type SkillContext,
 } from "@wincode/ai";
 import type { FileUIPart } from "@wincode/ai/client";
 import type { ConversationSession } from "./storage/conversation-store";
@@ -56,6 +59,26 @@ export const getMostRecentSession = (
 export type ChatPromptSubmission = {
 	files: FileUIPart[];
 	text: string;
+	skill?: SkillContext;
+};
+
+export const createSkillSnapshot = (skill: SkillContext) => ({
+	...skill,
+	contentHash: createHash("sha256").update(skill.instructions).digest("hex"),
+});
+
+export const getOriginatingUserSkill = (
+	messages: CodingAgentUIMessage[]
+): SkillContext | undefined => {
+	const message = [...messages].reverse().find(({ role }) => role === "user");
+	const parsed = codingMessageSkillSchema.safeParse(message?.metadata?.skill);
+	return parsed.success
+		? {
+				name: parsed.data.name,
+				arguments: parsed.data.arguments,
+				instructions: parsed.data.instructions,
+			}
+		: undefined;
 };
 
 export type ChatAttachment = {

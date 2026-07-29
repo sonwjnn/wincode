@@ -7,6 +7,7 @@ export const readInputSchema = z.object({
 export const readOutputSchema = z.object({
 	content: z.string(),
 	path: z.string(),
+	truncated: z.boolean().optional(),
 });
 
 export const readToolSchema = {

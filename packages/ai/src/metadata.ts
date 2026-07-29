@@ -7,6 +7,12 @@ import {
 	normalizeChatModelSelection,
 } from "./models";
 import { codingModeNameSchema } from "./modes";
+import { skillContextSchema } from "./skill-context";
+
+export const codingMessageSkillSchema = skillContextSchema.extend({
+	contentHash: z.string().min(1),
+});
+export type CodingMessageSkill = z.infer<typeof codingMessageSkillSchema>;
 
 const legacyChatModelSelectionSchema = z
 	.string()
@@ -43,6 +49,7 @@ export type CodingMessageUsage = z.infer<typeof codingMessageUsageSchema>;
 export const codingMessageMetadataSchema = z
 	.object({
 		interrupted: z.boolean().optional(),
+		skill: codingMessageSkillSchema.optional(),
 		mode: codingModeNameSchema.optional(),
 		model: codingMessageModelSchema.optional(),
 		responseTimeMs: z.number().int().nonnegative().optional(),

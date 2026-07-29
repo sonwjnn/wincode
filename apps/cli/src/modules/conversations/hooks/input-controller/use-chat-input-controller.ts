@@ -213,11 +213,21 @@ export function useChatInputController({
 				return;
 			}
 
+			const nextText = activeTrigger
+				? removeTriggerText(textValue, activeTrigger)
+				: { cursorOffset: null, text: textValue };
+			setProgrammaticText(nextText.text, nextText.cursorOffset);
 			executeCommand(command);
-			setProgrammaticText("", null);
 			closeOverlay();
 		},
-		[closeOverlay, executeCommand, resolveCommand, setProgrammaticText]
+		[
+			activeTrigger,
+			closeOverlay,
+			executeCommand,
+			resolveCommand,
+			setProgrammaticText,
+			textValue,
+		]
 	);
 
 	const executeFileMentionAtIndex = useCallback(

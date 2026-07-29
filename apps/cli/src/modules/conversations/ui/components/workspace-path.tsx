@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
+import { TextAttributes } from "@opentui/core";
 import { useGitBranch } from "@/shared/git/use-git-branch";
-import { useTheme } from "@/shared/providers/theme/theme-provider";
 
 /** `/Users/me/src/app` -> `~/src/app`, so long paths stay readable in a narrow panel. */
 const shortenPath = (path: string): string => {
@@ -12,12 +12,11 @@ const shortenPath = (path: string): string => {
 
 /** Current workspace as `cwd:branch`, dropping the branch outside a git repo. */
 export function WorkspacePath() {
-	const { colors } = useTheme();
 	const cwd = process.cwd();
 	const branch = useGitBranch(cwd);
 
 	return (
-		<text fg={colors.dimSeparator}>
+		<text attributes={TextAttributes.DIM}>
 			<span>{shortenPath(cwd)}</span>
 			{branch ? (
 				<>

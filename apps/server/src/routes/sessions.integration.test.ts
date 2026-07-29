@@ -11,10 +11,27 @@ mock.module("@wincode/env/server", () => ({
 }));
 
 mock.module("@wincode/ai", () => ({
+	formatSkillUserContext: (skill: {
+		name: string;
+		instructions: string;
+		arguments: string;
+	}) => `${skill.name}${skill.instructions}${skill.arguments}`,
+	skillContextSchema: z.object({
+		name: z.string(),
+		instructions: z.string(),
+		arguments: z.string(),
+	}),
 	codingModeNameSchema: z.enum(["plan"]),
 	codingAgentDataSchemas: {},
 	codingMessageMetadataSchema: z.object({
 		mode: z.enum(["plan"]).optional(),
+		skill: z
+			.object({
+				name: z.string(),
+				instructions: z.string(),
+				arguments: z.string(),
+			})
+			.optional(),
 		model: z
 			.object({ modelId: z.string(), providerId: z.enum(["wincode"]) })
 			.optional(),
@@ -354,6 +371,47 @@ describe("POST /:id/chat (transport-only)", () => {
 		});
 
 		expect(response.status).toBe(400);
+	});
+
+	test("does not count durable skill metadata alongside top-level skill", async () => {
+		const skill = {
+			arguments: "",
+			instructions: "i".repeat(700),
+			name: "large-skill",
+		};
+		const response = await createSessionsRoutes({
+			codingServerTools,
+			createCodingAgentStreamResponse,
+			getBillingConfig: () =>
+				({
+					fundedRequestInputTokenLimit: 2000,
+					fundedRequestOutputTokenLimit: 8,
+					fundedRequestStepLimit: 3,
+					fundedRequestTimeWindowSeconds: 5,
+					mode: "allowlist-shadow",
+				}) as never,
+			getBillingRepository: () => billingRepository as never,
+			resolveSupportedChatModel,
+			resolveWincodeChatModelSelection,
+		}).request("/session-1/chat", {
+			body: JSON.stringify({
+				messages: [
+					{
+						id: "user-1",
+						metadata: { skill },
+						parts: [{ text: "hi", type: "text" }],
+						role: "user",
+					},
+				],
+				mode: "plan",
+				model: "gpt-5.4-mini",
+				skill,
+			}),
+			headers: { "content-type": "application/json" },
+			method: "POST",
+		});
+
+		expect(response.status).toBe(200);
 	});
 
 	test("rejects funded input after deterministic system/tool overhead", async () => {

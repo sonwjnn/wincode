@@ -10,7 +10,10 @@ export const removeTriggerText = (
 	trigger: ActiveTrigger
 ): EscapeTriggerResult => {
 	if (trigger.kind === "command") {
-		return { text: "", cursorOffset: null };
+		return {
+			text: `${text.slice(0, trigger.start)}${text.slice(trigger.end)}`,
+			cursorOffset: trigger.start,
+		};
 	}
 
 	return {
