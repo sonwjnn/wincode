@@ -3,25 +3,37 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ReactNode } from "react";
 import { createContext, useCallback, useContext, useState } from "react";
+import { z } from "zod";
 import type { Theme, ThemeColors } from "./themes";
 import { DEFAULT_THEME, THEMES } from "./themes";
 
 const CONFIG_DIR = join(homedir(), ".wincode");
 const THEME_PREFERENCES_PATH = join(CONFIG_DIR, "preferences.json");
 
-type ThemePreferences = {
-	themeName: string;
-};
+const themePreferenceSchema = z.object({ themeName: z.string().nonempty() });
+
+export function parseThemePreference(raw: string): Theme {
+	try {
+		const result = themePreferenceSchema.safeParse(JSON.parse(raw));
+		if (!result.success) {
+			return DEFAULT_THEME;
+		}
+		return (
+			THEMES.find((theme) => theme.name === result.data.themeName) ??
+			DEFAULT_THEME
+		);
+	} catch {
+		return DEFAULT_THEME;
+	}
+}
+
+export function serializeThemePreference(theme: Pick<Theme, "name">): string {
+	return JSON.stringify({ themeName: theme.name }, null, 2);
+}
 
 function getInitialTheme(): Theme {
 	try {
-		const preferences = JSON.parse(
-			readFileSync(THEME_PREFERENCES_PATH, "utf8")
-		) as Partial<ThemePreferences>;
-		const savedTheme = THEMES.find(
-			(theme) => theme.name === preferences.themeName
-		);
-		return savedTheme ?? DEFAULT_THEME;
+		return parseThemePreference(readFileSync(THEME_PREFERENCES_PATH, "utf8"));
 	} catch {
 		return DEFAULT_THEME;
 	}
@@ -32,11 +44,7 @@ function persistTheme(theme: Theme) {
 		mkdirSync(CONFIG_DIR, { recursive: true });
 		writeFileSync(
 			THEME_PREFERENCES_PATH,
-			JSON.stringify(
-				{ themeName: theme.name } satisfies ThemePreferences,
-				null,
-				2
-			),
+			serializeThemePreference(theme),
 			"utf8"
 		);
 	} catch {
