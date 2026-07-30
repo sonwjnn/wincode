@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const readSource = (path: string) =>
 	readFile(new URL(path, import.meta.url), "utf8");
@@ -27,7 +28,7 @@ const readProductionSources = async () => {
 		.map(async (entry) => {
 			const path = join(entry.parentPath, entry.name);
 			return {
-				path: relative(srcRoot.pathname, path),
+				path: relative(fileURLToPath(srcRoot), path),
 				source: await readFile(path, "utf8"),
 			};
 		});
@@ -81,12 +82,14 @@ describe("theme consumers", () => {
 				),
 			]);
 
-		expect(chatInputSource).toContain("colors.borderActive");
-		expect(chatInputSource).toContain("colors.backgroundElement");
-		expect(sidebarSource).toContain("colors.backgroundPanel");
-		expect(sidebarSource).toContain("colors.textMuted");
-		expect(shellSource).toContain("colors.textMuted");
-		expect(workspaceSource).toContain("colors.textMuted");
+		expect(chatInputSource).toContain("borderColor={colors.borderActive}");
+		expect(chatInputSource).toContain(
+			"backgroundColor={colors.backgroundElement}"
+		);
+		expect(sidebarSource).toContain("backgroundColor={colors.backgroundPanel}");
+		expect(sidebarSource).toContain("fg={colors.textMuted}");
+		expect(shellSource).toContain("fg={colors.textMuted}");
+		expect(workspaceSource).toContain("fg={colors.textMuted}");
 	});
 
 	test("conversation messages use semantic theme roles", async () => {
@@ -124,7 +127,7 @@ describe("theme consumers", () => {
 
 		expect(userSource).toContain("backgroundColor={colors.backgroundPanel}");
 		expect(errorSource).toContain("backgroundColor={colors.backgroundPanel}");
-		expect(botSource).toContain("colors.textMuted");
+		expect(botSource).toContain("fg={colors.textMuted}");
 		expect(statusSource).toContain("fg={colors.textMuted}");
 	});
 
@@ -141,12 +144,27 @@ describe("theme consumers", () => {
 			"../../../modules/connections/ui/connection-provider-picker-dialog.tsx",
 			"../../../modules/file-mentions/ui/file-mention-menu.tsx",
 			"../../../modules/conversations/ui/dialogs/sessions-dialog.tsx",
-		];
-		const combined = (await Promise.all(paths.map(readSource))).join("\n");
-
-		expect(combined).toContain("colors.text");
-		expect(combined).toContain("colors.textMuted");
-		expect(combined).not.toMatch(FIXED_TERMINAL_COLOR_RE);
+		] as const;
+		const expectedByPath = new Map([
+			[paths[0], ["fg={colors.text}", "fg={colors.textMuted}"]],
+			[paths[1], ["fg={colors.text}"]],
+			[paths[2], ["fg={isSelected ? selectedTextColor : colors.text}"]],
+			[paths[3], ["fg={isSelected ? selectedTextColor : colors.text}"]],
+			[paths[4], ["fg={primaryTextColor}"]],
+			[paths[5], ["fg={isSelected ? selectedTextColor : colors.text}"]],
+			[paths[6], ["fg={isSelected ? selectedTextColor : colors.text}"]],
+			[paths[7], [": colors.text"]],
+			[paths[8], ["fg={isSelected ? selectedTextColor : colors.text}"]],
+			[paths[9], ["fg={isSelected ? selectedTextColor : colors.text}"]],
+			[paths[10], ["fg={colors.text}", "fg={colors.textMuted}"]],
+		]);
+		for (const [path, expected] of expectedByPath) {
+			const source = await readSource(path);
+			for (const text of expected) {
+				expect(source, path).toContain(text);
+			}
+			expect(source, path).not.toMatch(FIXED_TERMINAL_COLOR_RE);
+		}
 	});
 
 	test("does not use legacy theme tokens", async () => {
