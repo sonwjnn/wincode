@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 const readSource = (path: string) =>
 	readFile(new URL(path, import.meta.url), "utf8");
@@ -24,10 +24,13 @@ const readProductionSources = async () => {
 				!entry.name.endsWith(".test.tsx") &&
 				entry.name !== "routeTree.gen.ts"
 		)
-		.map(async (entry) => ({
-			path: join(entry.parentPath, entry.name),
-			source: await readFile(join(entry.parentPath, entry.name), "utf8"),
-		}));
+		.map(async (entry) => {
+			const path = join(entry.parentPath, entry.name);
+			return {
+				path: relative(srcRoot.pathname, path),
+				source: await readFile(path, "utf8"),
+			};
+		});
 	return Promise.all(files);
 };
 
