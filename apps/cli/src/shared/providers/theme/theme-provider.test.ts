@@ -6,8 +6,6 @@ import {
 import { DEFAULT_THEME } from "./themes";
 
 describe("parseThemePreference", () => {
-	const validPreference = JSON.stringify({ themeName: DEFAULT_THEME.name });
-
 	test.each([
 		"not json",
 		"null",
@@ -19,7 +17,9 @@ describe("parseThemePreference", () => {
 	});
 
 	test("returns matching theme for valid preference", () => {
-		expect(parseThemePreference(validPreference)).toBe(DEFAULT_THEME);
+		expect(parseThemePreference('{"themeName":"Dracula"}').name).toBe(
+			"Dracula"
+		);
 	});
 });
 
