@@ -43,4 +43,14 @@ describe("dialog provider", () => {
 		expect(source).toContain("Math.floor(dimensions.width * 0.67)");
 		expect(source).toContain("Math.min(100, dimensions.width - 2)");
 	});
+
+	test("dialog surface uses menu background", async () => {
+		const source = await readFile(
+			new URL("./dialog-provider.tsx", import.meta.url),
+			"utf8"
+		);
+
+		expect(source).toContain("backgroundColor={colors.backgroundMenu}");
+		expect(source).not.toContain("colors.dialogSurface");
+	});
 });

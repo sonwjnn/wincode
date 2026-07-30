@@ -226,7 +226,7 @@ function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 		>
 			{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events. */}
 			<box
-				backgroundColor={colors.dialogSurface}
+				backgroundColor={colors.backgroundMenu}
 				flexDirection="column"
 				gap={1}
 				height="auto"

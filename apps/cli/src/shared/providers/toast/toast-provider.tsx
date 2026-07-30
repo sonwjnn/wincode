@@ -97,7 +97,7 @@ function Toast({ currentToast }: ToastProps) {
 	return (
 		<box
 			alignItems="flex-start"
-			backgroundColor={colors.surface}
+			backgroundColor={colors.backgroundMenu}
 			border={["left", "right"]}
 			borderColor={borderColor}
 			customBorderChars={SplitBorderChars}
