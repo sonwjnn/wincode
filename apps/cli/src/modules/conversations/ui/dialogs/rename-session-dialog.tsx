@@ -75,7 +75,6 @@ export function RenameSessionDialog({
 				focused
 				focusedTextColor={colors.text}
 				onContentChange={() => undefined}
-				placeholderColor={colors.textMuted}
 				ref={inputRef}
 				textColor={colors.text}
 			/>

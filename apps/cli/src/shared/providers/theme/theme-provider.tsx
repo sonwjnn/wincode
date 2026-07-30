@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { createContext, useCallback, useContext, useState } from "react";
 import { z } from "zod";
 import type { Theme, ThemeColors } from "./themes";
-import { DEFAULT_THEME, THEMES } from "./themes";
+import { DEFAULT_THEME, findThemeByName, THEMES } from "./themes";
 
 const CONFIG_DIR = join(homedir(), ".wincode");
 const THEME_PREFERENCES_PATH = join(CONFIG_DIR, "preferences.json");
@@ -18,10 +18,7 @@ export function parseThemePreference(raw: string): Theme {
 		if (!result.success) {
 			return DEFAULT_THEME;
 		}
-		return (
-			THEMES.find((theme) => theme.name === result.data.themeName) ??
-			DEFAULT_THEME
-		);
+		return findThemeByName(THEMES, result.data.themeName) ?? DEFAULT_THEME;
 	} catch {
 		return DEFAULT_THEME;
 	}

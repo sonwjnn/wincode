@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 const readSource = (path: string) =>
 	readFile(new URL(path, import.meta.url), "utf8");
@@ -23,15 +24,10 @@ const readProductionSources = async () => {
 				!entry.name.endsWith(".test.tsx") &&
 				entry.name !== "routeTree.gen.ts"
 		)
-		.map((entry) =>
-			readFile(
-				new URL(
-					entry.parentPath ? `${entry.parentPath}/${entry.name}` : entry.name,
-					srcRoot
-				),
-				"utf8"
-			)
-		);
+		.map(async (entry) => ({
+			path: join(entry.parentPath, entry.name),
+			source: await readFile(join(entry.parentPath, entry.name), "utf8"),
+		}));
 	return Promise.all(files);
 };
 
@@ -176,9 +172,9 @@ describe("theme consumers", () => {
 
 	test("all production TSX consumers use semantic foregrounds", async () => {
 		const sources = await readProductionSources();
-		for (const source of sources) {
-			expect(source).not.toMatch(LEGACY_THEME_TOKEN_RE);
-			expect(source).not.toMatch(LITERAL_FOREGROUND_RE);
+		for (const { path, source } of sources) {
+			expect(source, path).not.toMatch(LEGACY_THEME_TOKEN_RE);
+			expect(source, path).not.toMatch(LITERAL_FOREGROUND_RE);
 		}
 	});
 
@@ -218,10 +214,7 @@ describe("theme consumers", () => {
 			],
 			[
 				"../../../modules/conversations/ui/dialogs/rename-session-dialog.tsx",
-				[
-					"focusedTextColor={colors.text}",
-					"placeholderColor={colors.textMuted}",
-				],
+				["focusedTextColor={colors.text}"],
 			],
 		]);
 		for (const [path, expected] of checks) {

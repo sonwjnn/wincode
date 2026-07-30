@@ -12,7 +12,6 @@ import { CopyOnSelect } from "@/shared/clipboard/copy-on-select";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
-import { ThemedRoot } from "./themed-root";
 
 const connections = createConnections();
 
@@ -60,9 +59,7 @@ export function RootLayout() {
 							<ToastProvider>
 								<CopyOnSelect />
 								<DialogProvider>
-									<ThemedRoot>
-										<Outlet key={currentPath} />
-									</ThemedRoot>
+									<Outlet key={currentPath} />
 								</DialogProvider>
 							</ToastProvider>
 						</BillingComposition>

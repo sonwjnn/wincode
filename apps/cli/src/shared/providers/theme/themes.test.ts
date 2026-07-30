@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	DEFAULT_THEME,
-	getDefaultTheme,
+	findThemeByName,
 	resolveTheme,
 	THEMES,
 	type ThemeDefinition,
@@ -89,15 +89,13 @@ test("default theme is Sonvox", () => {
 	expect(DEFAULT_THEME.name).toBe("Sonvox");
 });
 
-test("getDefaultTheme selects Sonvox by exact name", () => {
+test("findThemeByName selects Sonvox by exact name", () => {
 	const nonSonvox = resolveTheme({ ...definition, name: "sonvox" });
 	const sonvox = resolveTheme({ ...definition, name: "Sonvox" });
 
-	expect(getDefaultTheme([nonSonvox, sonvox])).toBe(sonvox);
+	expect(findThemeByName([nonSonvox, sonvox], "Sonvox")).toBe(sonvox);
 });
 
-test("getDefaultTheme throws when Sonvox is absent", () => {
-	expect(() => getDefaultTheme([resolveTheme(definition)])).toThrow(
-		"Default theme not found: Sonvox"
-	);
+test("findThemeByName returns undefined when absent", () => {
+	expect(findThemeByName([resolveTheme(definition)], "Sonvox")).toBeUndefined();
 });

@@ -644,11 +644,14 @@ export const resolveTheme = ({ colors, name }: ThemeDefinition): Theme => ({
 export const THEMES: Theme[] = THEME_DEFINITIONS.map(resolveTheme);
 
 export const SONVOX_THEME_NAME = "Sonvox";
-export function getDefaultTheme(themes: readonly Theme[]): Theme {
-	const defaultTheme = themes.find((theme) => theme.name === SONVOX_THEME_NAME);
-	if (!defaultTheme) {
-		throw new Error(`Default theme not found: ${SONVOX_THEME_NAME}`);
-	}
-	return defaultTheme;
+export function findThemeByName(
+	themes: readonly Theme[],
+	name: string
+): Theme | undefined {
+	return themes.find((theme) => theme.name === name);
 }
-export const DEFAULT_THEME: Theme = getDefaultTheme(THEMES);
+const defaultTheme = findThemeByName(THEMES, SONVOX_THEME_NAME);
+if (!defaultTheme) {
+	throw new Error(`Default theme not found: ${SONVOX_THEME_NAME}`);
+}
+export const DEFAULT_THEME: Theme = defaultTheme;

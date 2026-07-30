@@ -9,6 +9,7 @@ import {
 	ThemeProvider,
 	useTheme,
 } from "@/shared/providers/theme/theme-provider";
+import { ThemedRoot } from "./app/layouts/themed-root";
 import { routeTree } from "./routeTree.gen";
 
 const bootSessionId = "";
@@ -20,21 +21,28 @@ const memoryHistory = createMemoryHistory({
 const router = createRouter({
 	routeTree,
 	history: memoryHistory,
-	defaultPendingComponent: () => {
-		const { colors } = useTheme();
-		return <text fg={colors.text}>Loading...</text>;
-	},
-	defaultNotFoundComponent: () => {
-		const { colors } = useTheme();
-		return <text fg={colors.text}>Not Found</text>;
-	},
-	defaultErrorComponent: ({ error }) => (
-		<box flexDirection="column">
-			<text fg={useTheme().colors.error}>Error</text>
-			<text fg={useTheme().colors.text}>{error.message}</text>
-		</box>
-	),
+	defaultPendingComponent: PendingFallback,
+	defaultNotFoundComponent: NotFoundFallback,
+	defaultErrorComponent: ErrorFallback,
 });
+
+function PendingFallback() {
+	const { colors } = useTheme();
+	return <text fg={colors.text}>Loading...</text>;
+}
+function NotFoundFallback() {
+	const { colors } = useTheme();
+	return <text fg={colors.text}>Not Found</text>;
+}
+function ErrorFallback({ error }: { error: Error }) {
+	const { colors } = useTheme();
+	return (
+		<box flexDirection="column">
+			<text fg={colors.error}>Error</text>
+			<text fg={colors.text}>{error.message}</text>
+		</box>
+	);
+}
 
 declare module "@tanstack/react-router" {
 	// biome-ignore lint/style/useConsistentTypeDefinitions: <>
@@ -52,7 +60,9 @@ declare module "@tanstack/react-router" {
 function App() {
 	return (
 		<ThemeProvider>
-			<RouterProvider router={router} />
+			<ThemedRoot>
+				<RouterProvider router={router} />
+			</ThemedRoot>
 		</ThemeProvider>
 	);
 }
