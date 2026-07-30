@@ -210,7 +210,7 @@ function ToolMessagePart({ part }: { part: ToolPart }) {
 
 	return (
 		<box marginBottom={1} paddingX={3} width="100%">
-			<text attributes={TextAttributes.DIM}>
+			<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 				<em fg={colors.info}>{formatToolName(getToolName(part))}:</em>{" "}
 				{formatToolArgs(part)}
 				{isInProgress ? " …" : ""}
@@ -241,7 +241,7 @@ export function BotMessageContent({
 									paddingX={3}
 									width="100%"
 								>
-									<text attributes={TextAttributes.DIM}>
+									<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 										<em fg={colors.thinking}>Thinking:</em> {part.text}
 									</text>
 								</box>
@@ -255,7 +255,7 @@ export function BotMessageContent({
 						if (part.type === "text") {
 							return (
 								<box key={`text-${part.text}`} paddingX={3} width="100%">
-									<text>{part.text}</text>
+									<text fg={colors.text}>{part.text}</text>
 								</box>
 							);
 						}

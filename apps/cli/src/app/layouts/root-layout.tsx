@@ -11,7 +11,6 @@ import {
 import { CopyOnSelect } from "@/shared/clipboard/copy-on-select";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
-import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { ThemedRoot } from "./themed-root";
 
@@ -54,24 +53,22 @@ export function RootLayout() {
 
 	return (
 		<ConnectionsProvider connections={connections}>
-			<ThemeProvider>
-				<KeyboardLayerProvider>
-					<PromptConfigProvider>
-						<ModelPricingProvider>
-							<BillingComposition>
-								<ToastProvider>
-									<CopyOnSelect />
-									<DialogProvider>
-										<ThemedRoot>
-											<Outlet key={currentPath} />
-										</ThemedRoot>
-									</DialogProvider>
-								</ToastProvider>
-							</BillingComposition>
-						</ModelPricingProvider>
-					</PromptConfigProvider>
-				</KeyboardLayerProvider>
-			</ThemeProvider>
+			<KeyboardLayerProvider>
+				<PromptConfigProvider>
+					<ModelPricingProvider>
+						<BillingComposition>
+							<ToastProvider>
+								<CopyOnSelect />
+								<DialogProvider>
+									<ThemedRoot>
+										<Outlet key={currentPath} />
+									</ThemedRoot>
+								</DialogProvider>
+							</ToastProvider>
+						</BillingComposition>
+					</ModelPricingProvider>
+				</PromptConfigProvider>
+			</KeyboardLayerProvider>
 		</ConnectionsProvider>
 	);
 }

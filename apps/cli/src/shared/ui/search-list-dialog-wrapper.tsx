@@ -131,14 +131,18 @@ export function SearchListDialogWrapper<T>({
 		<box flexDirection="column" gap={1}>
 			<input
 				focused
+				focusedTextColor={colors.text}
 				marginX={4}
 				onContentChange={handleContentChange}
 				placeholder={placeholder}
+				placeholderColor={colors.textMuted}
 				ref={inputRef}
+				textColor={colors.text}
 			/>
 			{filtered.length === 0 ? (
 				<text
 					attributes={TextAttributes.DIM}
+					fg={colors.textMuted}
 					height={visibleHeight}
 					marginBottom={1}
 					marginX={4}

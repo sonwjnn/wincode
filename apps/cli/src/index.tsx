@@ -5,6 +5,10 @@ import {
 	createRouter,
 	RouterProvider,
 } from "@tanstack/react-router";
+import {
+	ThemeProvider,
+	useTheme,
+} from "@/shared/providers/theme/theme-provider";
 import { routeTree } from "./routeTree.gen";
 
 const bootSessionId = "";
@@ -16,12 +20,18 @@ const memoryHistory = createMemoryHistory({
 const router = createRouter({
 	routeTree,
 	history: memoryHistory,
-	defaultPendingComponent: () => <text>Loading...</text>,
-	defaultNotFoundComponent: () => <text>Not Found</text>,
+	defaultPendingComponent: () => {
+		const { colors } = useTheme();
+		return <text fg={colors.text}>Loading...</text>;
+	},
+	defaultNotFoundComponent: () => {
+		const { colors } = useTheme();
+		return <text fg={colors.text}>Not Found</text>;
+	},
 	defaultErrorComponent: ({ error }) => (
 		<box flexDirection="column">
-			<text>Error</text>
-			<text>{error.message}</text>
+			<text fg={useTheme().colors.error}>Error</text>
+			<text fg={useTheme().colors.text}>{error.message}</text>
 		</box>
 	),
 });
@@ -40,7 +50,11 @@ declare module "@tanstack/react-router" {
 }
 
 function App() {
-	return <RouterProvider router={router} />;
+	return (
+		<ThemeProvider>
+			<RouterProvider router={router} />
+		</ThemeProvider>
+	);
 }
 
 await router.load();

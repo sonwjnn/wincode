@@ -1,3 +1,4 @@
+import { TextAttributes } from "@opentui/core";
 import {
 	type CodingAgentUIMessage,
 	codingModes,
@@ -23,7 +24,7 @@ type SessionSidebarProps = {
 };
 
 function SectionLabel({ text }: { text: string }) {
-	return <text>{text}</text>;
+	return <text attributes={TextAttributes.BOLD}>{text}</text>;
 }
 
 export function SessionSidebar({
@@ -65,7 +66,9 @@ export function SessionSidebar({
 				width="100%"
 			>
 				<box flexDirection="column" gap={1}>
-					<text>{sessionTitle}</text>
+					<text attributes={TextAttributes.BOLD} fg={colors.text}>
+						{sessionTitle}
+					</text>
 
 					<box flexDirection="column">
 						<SectionLabel text="Context" />
@@ -117,7 +120,7 @@ export function SessionSidebar({
 				<text>
 					<span fg={colors.primary}>{"• "}</span>
 					<span fg={colors.textMuted}>Win</span>
-					<b>Code</b>
+					<b fg={colors.text}>Code</b>
 					<span fg={colors.textMuted}>{` ${APP_VERSION}`}</span>
 				</text>
 			</box>
