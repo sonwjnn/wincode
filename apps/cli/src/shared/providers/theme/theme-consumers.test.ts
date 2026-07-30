@@ -10,6 +10,8 @@ const LEGACY_THEME_TOKEN_RE =
 	/\b(?:dialogSurface|dimSeparator|sidebarBackground|suggestionBorder|thinkingBorder)\b|colors\.surface/;
 const LITERAL_FOREGROUND_RE =
 	/(?:fg|textColor|focusedTextColor|placeholderColor)="(?:[A-Za-z]+|#[0-9A-Fa-f]{3,8})"/;
+const countOccurrences = (source: string, text: string) =>
+	source.split(text).length - 1;
 
 const readProductionSources = async () => {
 	const srcRoot = new URL("../../../", import.meta.url);
@@ -153,7 +155,7 @@ describe("theme consumers", () => {
 			[paths[4], ["fg={primaryTextColor}"]],
 			[paths[5], ["fg={isSelected ? selectedTextColor : colors.text}"]],
 			[paths[6], ["fg={isSelected ? selectedTextColor : colors.text}"]],
-			[paths[7], ["fg={\n"]],
+			[paths[7], []],
 			[paths[8], ["fg={isSelected ? selectedTextColor : colors.text}"]],
 			[paths[9], ["fg={isSelected ? selectedTextColor : colors.text}"]],
 			[paths[10], ["fg={primaryTextColor}", "fg={secondaryTextColor}"]],
@@ -165,6 +167,30 @@ describe("theme consumers", () => {
 			}
 			expect(source, path).not.toMatch(FIXED_TERMINAL_COLOR_RE);
 		}
+
+		const themeDialogSource = await readSource(paths[7]);
+		const themeSelectionForeground =
+			/fg={\n\s+isSelected\n\s+\? getContrastingTextColor\(colors\.selection\)\n\s+: colors\.text\n\s+}/g;
+		expect(
+			themeDialogSource.match(themeSelectionForeground)?.length ?? 0,
+			paths[7]
+		).toBe(2);
+
+		const sessionsSource = await readSource(paths[10]);
+		expect(sessionsSource, paths[10]).toContain(
+			"const primaryTextColor =\n\t\tisSelected && !isPendingDelete ? selectedTextColor : colors.text;"
+		);
+		expect(sessionsSource, paths[10]).toContain(
+			"const secondaryTextColor =\n\t\tisSelected && !isPendingDelete ? selectedTextColor : colors.textMuted;"
+		);
+		expect(
+			countOccurrences(sessionsSource, "fg={primaryTextColor}"),
+			paths[10]
+		).toBe(2);
+		expect(
+			countOccurrences(sessionsSource, "fg={secondaryTextColor}"),
+			paths[10]
+		).toBe(1);
 	});
 
 	test("does not use legacy theme tokens", async () => {
