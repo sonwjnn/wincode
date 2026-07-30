@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 const readSource = (path: string) =>
 	readFile(new URL(path, import.meta.url), "utf8");
 const FIXED_TERMINAL_COLOR_RE = /(?:fg|color)="(?:white|gray|#E1E1E1)"/;
+const LEGACY_THEME_TOKEN_RE =
+	/\b(?:dialogSurface|dimSeparator|sidebarBackground|suggestionBorder|thinkingBorder)\b|colors\.surface/;
 
 describe("theme consumers", () => {
 	test("floating overlays use menu background", async () => {
@@ -118,5 +120,29 @@ describe("theme consumers", () => {
 		expect(combined).toContain("colors.text");
 		expect(combined).toContain("colors.textMuted");
 		expect(combined).not.toMatch(FIXED_TERMINAL_COLOR_RE);
+	});
+
+	test("does not use legacy theme tokens", async () => {
+		const paths = [
+			"./themes.ts",
+			"./theme-provider.tsx",
+			"../dialog/dialog-provider.tsx",
+			"../toast/toast-provider.tsx",
+			"../../../modules/conversations/ui/components/chat-text-area.tsx",
+			"../../../modules/conversations/ui/components/chat-shell.tsx",
+			"../../../modules/conversations/ui/components/session-sidebar.tsx",
+			"../../../modules/conversations/ui/components/workspace-path.tsx",
+			"../../../modules/conversations/ui/components/session-usage-bar.tsx",
+			"../../../modules/conversations/ui/dialogs/rename-session-dialog.tsx",
+			"../../../modules/conversations/ui/dialogs/sessions-dialog.tsx",
+			"../../../modules/conversations/ui/messages/bot-message.tsx",
+			"../../../modules/conversations/ui/messages/error-message.tsx",
+			"../../../modules/conversations/ui/messages/user-message.tsx",
+		];
+		const sources = await Promise.all(paths.map(readSource));
+
+		for (const [index, source] of sources.entries()) {
+			expect(source, paths[index]).not.toMatch(LEGACY_THEME_TOKEN_RE);
+		}
 	});
 });
