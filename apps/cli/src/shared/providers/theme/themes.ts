@@ -9,13 +9,16 @@ export type ThemeColors = {
 	success: string;
 	error: string;
 	info: string;
+	text: string;
+	textMuted: string;
+	textDisabled: string;
 	background: string;
-	surface: string;
-	sidebarBackground: string;
-	dialogSurface: string;
-	thinkingBorder: string;
-	dimSeparator: string;
-	suggestionBorder: string;
+	backgroundPanel: string;
+	backgroundElement: string;
+	backgroundMenu: string;
+	border: string;
+	borderSubtle: string;
+	borderActive: string;
 	fileBadgeBackground: string;
 	fileBadgeText: string;
 	filePathBackground: string;
@@ -27,21 +30,29 @@ export type Theme = {
 	colors: ThemeColors;
 };
 
-type ThemeDefinition = {
+export type ThemeDefinition = {
 	name: string;
-	colors: Omit<
+	colors: Pick<
 		ThemeColors,
-		| "fileBadgeBackground"
-		| "fileBadgeText"
-		| "filePathBackground"
-		| "filePath"
-		| "mode"
-		| "sidebarBackground"
-		| "suggestionBorder"
-	>;
+		| "primary"
+		| "planMode"
+		| "selection"
+		| "thinking"
+		| "success"
+		| "error"
+		| "info"
+		| "background"
+		| "backgroundPanel"
+		| "backgroundMenu"
+		| "border"
+		| "borderSubtle"
+	> &
+		Partial<Omit<ThemeColors, "mode">>;
 };
 
-const SUGGESTION_BORDER_BRIGHTNESS = 0.25;
+const TEXT_BRIGHTNESS = 0.88;
+const MUTED_TEXT_BRIGHTNESS = 0.58;
+const DISABLED_TEXT_BRIGHTNESS = 0.38;
 const FILE_PATH_BRIGHTNESS = 0.35;
 
 const brightenColor = (color: string, amount: number) => {
@@ -60,14 +71,6 @@ const brightenColor = (color: string, amount: number) => {
 		.join("")}`;
 };
 
-const createModeColors = (
-	colors: ThemeDefinition["colors"]
-): Record<ModeType, string> =>
-	({
-		build: colors.primary,
-		plan: colors.planMode,
-	}) satisfies Record<ModeType, string>;
-
 const THEME_DEFINITIONS = [
 	{
 		name: "Sonvox",
@@ -80,10 +83,10 @@ const THEME_DEFINITIONS = [
 			error: "#E74C5E",
 			info: "#56D6C2",
 			background: "#0D0D12",
-			surface: "#1A1A24",
-			dialogSurface: "#0A0A10",
-			thinkingBorder: "#34344A",
-			dimSeparator: "#4E4E66",
+			backgroundPanel: "#1A1A24",
+			backgroundMenu: "#0A0A10",
+			border: "#34344A",
+			borderSubtle: "#4E4E66",
 		},
 	},
 	{
@@ -97,10 +100,10 @@ const THEME_DEFINITIONS = [
 			error: "#F7768E",
 			info: "#7AA2F7",
 			background: "#11111B",
-			surface: "#1E1E2E",
-			dialogSurface: "#13131D",
-			thinkingBorder: "#45475A",
-			dimSeparator: "#585B70",
+			backgroundPanel: "#1E1E2E",
+			backgroundMenu: "#13131D",
+			border: "#45475A",
+			borderSubtle: "#585B70",
 		},
 	},
 	{
@@ -114,10 +117,10 @@ const THEME_DEFINITIONS = [
 			error: "#FF5555",
 			info: "#8BE9FD",
 			background: "#282A36",
-			surface: "#343746",
-			dialogSurface: "#21222C",
-			thinkingBorder: "#6272A4",
-			dimSeparator: "#44475A",
+			backgroundPanel: "#343746",
+			backgroundMenu: "#21222C",
+			border: "#6272A4",
+			borderSubtle: "#44475A",
 		},
 	},
 	{
@@ -131,10 +134,10 @@ const THEME_DEFINITIONS = [
 			error: "#FF6188",
 			info: "#78DCE8",
 			background: "#2D2A2E",
-			surface: "#403E41",
-			dialogSurface: "#221F22",
-			thinkingBorder: "#5B595C",
-			dimSeparator: "#727072",
+			backgroundPanel: "#403E41",
+			backgroundMenu: "#221F22",
+			border: "#5B595C",
+			borderSubtle: "#727072",
 		},
 	},
 	{
@@ -148,10 +151,10 @@ const THEME_DEFINITIONS = [
 			error: "#F7768E",
 			info: "#7DCFFF",
 			background: "#1A1B26",
-			surface: "#1E2030",
-			dialogSurface: "#16161E",
-			thinkingBorder: "#3B4261",
-			dimSeparator: "#565F89",
+			backgroundPanel: "#1E2030",
+			backgroundMenu: "#16161E",
+			border: "#3B4261",
+			borderSubtle: "#565F89",
 		},
 	},
 	{
@@ -165,10 +168,10 @@ const THEME_DEFINITIONS = [
 			error: "#BF616A",
 			info: "#88C0D0",
 			background: "#2E3440",
-			surface: "#3B4252",
-			dialogSurface: "#272C36",
-			thinkingBorder: "#4C566A",
-			dimSeparator: "#616E88",
+			backgroundPanel: "#3B4252",
+			backgroundMenu: "#272C36",
+			border: "#4C566A",
+			borderSubtle: "#616E88",
 		},
 	},
 	{
@@ -182,10 +185,10 @@ const THEME_DEFINITIONS = [
 			error: "#EF4444",
 			info: "#C084FC",
 			background: "#0A0A0A",
-			surface: "#171717",
-			dialogSurface: "#0D0D0D",
-			thinkingBorder: "#404040",
-			dimSeparator: "#525252",
+			backgroundPanel: "#171717",
+			backgroundMenu: "#0D0D0D",
+			border: "#404040",
+			borderSubtle: "#525252",
 		},
 	},
 	{
@@ -199,10 +202,10 @@ const THEME_DEFINITIONS = [
 			error: "#E8555A",
 			info: "#7DCFFF",
 			background: "#0A0E14",
-			surface: "#141A22",
-			dialogSurface: "#0E1319",
-			thinkingBorder: "#4A5A6E",
-			dimSeparator: "#607080",
+			backgroundPanel: "#141A22",
+			backgroundMenu: "#0E1319",
+			border: "#4A5A6E",
+			borderSubtle: "#607080",
 		},
 	},
 	{
@@ -216,10 +219,10 @@ const THEME_DEFINITIONS = [
 			error: "#F04858",
 			info: "#E86ACA",
 			background: "#0C0814",
-			surface: "#18122A",
-			dialogSurface: "#110C1E",
-			thinkingBorder: "#5C4878",
-			dimSeparator: "#745E90",
+			backgroundPanel: "#18122A",
+			backgroundMenu: "#110C1E",
+			border: "#5C4878",
+			borderSubtle: "#745E90",
 		},
 	},
 	{
@@ -233,10 +236,10 @@ const THEME_DEFINITIONS = [
 			error: "#F43F5E",
 			info: "#06B6D4",
 			background: "#050505",
-			surface: "#131313",
-			dialogSurface: "#0A0A0A",
-			thinkingBorder: "#2E2E2E",
-			dimSeparator: "#454545",
+			backgroundPanel: "#131313",
+			backgroundMenu: "#0A0A0A",
+			border: "#2E2E2E",
+			borderSubtle: "#454545",
 		},
 	},
 	{
@@ -250,10 +253,10 @@ const THEME_DEFINITIONS = [
 			error: "#E06C75",
 			info: "#61AFEF",
 			background: "#1E2127",
-			surface: "#282C34",
-			dialogSurface: "#191C21",
-			thinkingBorder: "#3E4451",
-			dimSeparator: "#5C6370",
+			backgroundPanel: "#282C34",
+			backgroundMenu: "#191C21",
+			border: "#3E4451",
+			borderSubtle: "#5C6370",
 		},
 	},
 	{
@@ -267,10 +270,10 @@ const THEME_DEFINITIONS = [
 			error: "#FF6961",
 			info: "#B281EB",
 			background: "#1F1F24",
-			surface: "#2A2A30",
-			dialogSurface: "#18181D",
-			thinkingBorder: "#3E3E45",
-			dimSeparator: "#57575F",
+			backgroundPanel: "#2A2A30",
+			backgroundMenu: "#18181D",
+			border: "#3E3E45",
+			borderSubtle: "#57575F",
 		},
 	},
 	{
@@ -284,10 +287,10 @@ const THEME_DEFINITIONS = [
 			error: "#E78284",
 			info: "#85C1DC",
 			background: "#232634",
-			surface: "#303446",
-			dialogSurface: "#1E2030",
-			thinkingBorder: "#51576D",
-			dimSeparator: "#626880",
+			backgroundPanel: "#303446",
+			backgroundMenu: "#1E2030",
+			border: "#51576D",
+			borderSubtle: "#626880",
 		},
 	},
 	{
@@ -301,10 +304,10 @@ const THEME_DEFINITIONS = [
 			error: "#EF4444",
 			info: "#3B82F6",
 			background: "#030712",
-			surface: "#111827",
-			dialogSurface: "#060C18",
-			thinkingBorder: "#1F2937",
-			dimSeparator: "#374151",
+			backgroundPanel: "#111827",
+			backgroundMenu: "#060C18",
+			border: "#1F2937",
+			borderSubtle: "#374151",
 		},
 	},
 	{
@@ -318,10 +321,10 @@ const THEME_DEFINITIONS = [
 			error: "#FF5370",
 			info: "#89DDFF",
 			background: "#0F111A",
-			surface: "#1A1C2A",
-			dialogSurface: "#090B16",
-			thinkingBorder: "#3B3F5C",
-			dimSeparator: "#4B5178",
+			backgroundPanel: "#1A1C2A",
+			backgroundMenu: "#090B16",
+			border: "#3B3F5C",
+			borderSubtle: "#4B5178",
 		},
 	},
 	{
@@ -335,10 +338,10 @@ const THEME_DEFINITIONS = [
 			error: "#E25A6E",
 			info: "#C9A0DC",
 			background: "#110D16",
-			surface: "#1E1726",
-			dialogSurface: "#15101C",
-			thinkingBorder: "#6B5880",
-			dimSeparator: "#7E6E94",
+			backgroundPanel: "#1E1726",
+			backgroundMenu: "#15101C",
+			border: "#6B5880",
+			borderSubtle: "#7E6E94",
 		},
 	},
 	{
@@ -352,10 +355,10 @@ const THEME_DEFINITIONS = [
 			error: "#D94F4F",
 			info: "#3B9ECF",
 			background: "#0B1218",
-			surface: "#152028",
-			dialogSurface: "#0F181F",
-			thinkingBorder: "#4A6A7A",
-			dimSeparator: "#5E7888",
+			backgroundPanel: "#152028",
+			backgroundMenu: "#0F181F",
+			border: "#4A6A7A",
+			borderSubtle: "#5E7888",
 		},
 	},
 	{
@@ -369,10 +372,10 @@ const THEME_DEFINITIONS = [
 			error: "#FCA5A5",
 			info: "#67E8F9",
 			background: "#0F172A",
-			surface: "#1E293B",
-			dialogSurface: "#0C1322",
-			thinkingBorder: "#334155",
-			dimSeparator: "#475569",
+			backgroundPanel: "#1E293B",
+			backgroundMenu: "#0C1322",
+			border: "#334155",
+			borderSubtle: "#475569",
 		},
 	},
 	{
@@ -386,10 +389,10 @@ const THEME_DEFINITIONS = [
 			error: "#FB7185",
 			info: "#22D3EE",
 			background: "#09090B",
-			surface: "#18181B",
-			dialogSurface: "#0C0C0F",
-			thinkingBorder: "#3F3F46",
-			dimSeparator: "#52525B",
+			backgroundPanel: "#18181B",
+			backgroundMenu: "#0C0C0F",
+			border: "#3F3F46",
+			borderSubtle: "#52525B",
 		},
 	},
 	{
@@ -403,10 +406,10 @@ const THEME_DEFINITIONS = [
 			error: "#DC322F",
 			info: "#2AA198",
 			background: "#002B36",
-			surface: "#073642",
-			dialogSurface: "#00212B",
-			thinkingBorder: "#586E75",
-			dimSeparator: "#657B83",
+			backgroundPanel: "#073642",
+			backgroundMenu: "#00212B",
+			border: "#586E75",
+			borderSubtle: "#657B83",
 		},
 	},
 	{
@@ -420,10 +423,10 @@ const THEME_DEFINITIONS = [
 			error: "#FB4934",
 			info: "#83A598",
 			background: "#282828",
-			surface: "#3C3836",
-			dialogSurface: "#1D2021",
-			thinkingBorder: "#504945",
-			dimSeparator: "#665C54",
+			backgroundPanel: "#3C3836",
+			backgroundMenu: "#1D2021",
+			border: "#504945",
+			borderSubtle: "#665C54",
 		},
 	},
 	{
@@ -437,10 +440,10 @@ const THEME_DEFINITIONS = [
 			error: "#EB6F92",
 			info: "#9CCFD8",
 			background: "#191724",
-			surface: "#1F1D2E",
-			dialogSurface: "#16141F",
-			thinkingBorder: "#26233A",
-			dimSeparator: "#524F67",
+			backgroundPanel: "#1F1D2E",
+			backgroundMenu: "#16141F",
+			border: "#26233A",
+			borderSubtle: "#524F67",
 		},
 	},
 	{
@@ -454,10 +457,10 @@ const THEME_DEFINITIONS = [
 			error: "#EB6F92",
 			info: "#9CCFD8",
 			background: "#232136",
-			surface: "#2A273F",
-			dialogSurface: "#1E1C31",
-			thinkingBorder: "#393552",
-			dimSeparator: "#56526E",
+			backgroundPanel: "#2A273F",
+			backgroundMenu: "#1E1C31",
+			border: "#393552",
+			borderSubtle: "#56526E",
 		},
 	},
 	{
@@ -471,10 +474,10 @@ const THEME_DEFINITIONS = [
 			error: "#C34043",
 			info: "#7E9CD8",
 			background: "#1F1F28",
-			surface: "#2A2A37",
-			dialogSurface: "#16161D",
-			thinkingBorder: "#54546D",
-			dimSeparator: "#727169",
+			backgroundPanel: "#2A2A37",
+			backgroundMenu: "#16161D",
+			border: "#54546D",
+			borderSubtle: "#727169",
 		},
 	},
 	{
@@ -488,10 +491,10 @@ const THEME_DEFINITIONS = [
 			error: "#E67E80",
 			info: "#7FBBB3",
 			background: "#2D353B",
-			surface: "#343F44",
-			dialogSurface: "#272E33",
-			thinkingBorder: "#4F585E",
-			dimSeparator: "#859289",
+			backgroundPanel: "#343F44",
+			backgroundMenu: "#272E33",
+			border: "#4F585E",
+			borderSubtle: "#859289",
 		},
 	},
 	{
@@ -505,10 +508,10 @@ const THEME_DEFINITIONS = [
 			error: "#D95757",
 			info: "#59C2FF",
 			background: "#0B0E14",
-			surface: "#11151C",
-			dialogSurface: "#080A0F",
-			thinkingBorder: "#2D3640",
-			dimSeparator: "#475266",
+			backgroundPanel: "#11151C",
+			backgroundMenu: "#080A0F",
+			border: "#2D3640",
+			borderSubtle: "#475266",
 		},
 	},
 	{
@@ -522,10 +525,10 @@ const THEME_DEFINITIONS = [
 			error: "#F85149",
 			info: "#58A6FF",
 			background: "#0D1117",
-			surface: "#161B22",
-			dialogSurface: "#090D13",
-			thinkingBorder: "#30363D",
-			dimSeparator: "#484F58",
+			backgroundPanel: "#161B22",
+			backgroundMenu: "#090D13",
+			border: "#30363D",
+			borderSubtle: "#484F58",
 		},
 	},
 	{
@@ -539,10 +542,10 @@ const THEME_DEFINITIONS = [
 			error: "#FF5370",
 			info: "#89DDFF",
 			background: "#292D3E",
-			surface: "#343850",
-			dialogSurface: "#232738",
-			thinkingBorder: "#4E5272",
-			dimSeparator: "#676E95",
+			backgroundPanel: "#343850",
+			backgroundMenu: "#232738",
+			border: "#4E5272",
+			borderSubtle: "#676E95",
 		},
 	},
 	{
@@ -556,10 +559,10 @@ const THEME_DEFINITIONS = [
 			error: "#EF4444",
 			info: "#FFC799",
 			background: "#101010",
-			surface: "#1C1C1C",
-			dialogSurface: "#0C0C0C",
-			thinkingBorder: "#333333",
-			dimSeparator: "#505050",
+			backgroundPanel: "#1C1C1C",
+			backgroundMenu: "#0C0C0C",
+			border: "#333333",
+			borderSubtle: "#505050",
 		},
 	},
 	{
@@ -573,10 +576,10 @@ const THEME_DEFINITIONS = [
 			error: "#D0679D",
 			info: "#89DDFF",
 			background: "#1B1E28",
-			surface: "#252B37",
-			dialogSurface: "#161922",
-			thinkingBorder: "#3B4058",
-			dimSeparator: "#506477",
+			backgroundPanel: "#252B37",
+			backgroundMenu: "#161922",
+			border: "#3B4058",
+			borderSubtle: "#506477",
 		},
 	},
 	{
@@ -590,10 +593,10 @@ const THEME_DEFINITIONS = [
 			error: "#FF757F",
 			info: "#77E0C6",
 			background: "#1E2030",
-			surface: "#2B2F44",
-			dialogSurface: "#191B28",
-			thinkingBorder: "#3E4265",
-			dimSeparator: "#5B5E7A",
+			backgroundPanel: "#2B2F44",
+			backgroundMenu: "#191B28",
+			border: "#3E4265",
+			borderSubtle: "#5B5E7A",
 		},
 	},
 	{
@@ -607,30 +610,38 @@ const THEME_DEFINITIONS = [
 			error: "#E45649",
 			info: "#4FC1FF",
 			background: "#121212",
-			surface: "#1E1E1E",
-			dialogSurface: "#0E0E0E",
-			thinkingBorder: "#333333",
-			dimSeparator: "#555555",
+			backgroundPanel: "#1E1E1E",
+			backgroundMenu: "#0E0E0E",
+			border: "#333333",
+			borderSubtle: "#555555",
 		},
 	},
 ] satisfies ThemeDefinition[];
 
-export const THEMES: Theme[] = THEME_DEFINITIONS.map(({ colors, name }) => ({
+export const resolveTheme = ({ colors, name }: ThemeDefinition): Theme => ({
 	colors: {
 		...colors,
-		fileBadgeBackground: colors.primary,
-		fileBadgeText: colors.background,
-		filePathBackground: colors.dialogSurface,
-		filePath: brightenColor(colors.dimSeparator, FILE_PATH_BRIGHTNESS),
-		mode: createModeColors(colors),
-		sidebarBackground: colors.surface,
-		suggestionBorder: brightenColor(
-			colors.dimSeparator,
-			SUGGESTION_BORDER_BRIGHTNESS
-		),
+		backgroundElement: colors.backgroundElement ?? colors.backgroundPanel,
+		borderActive: colors.borderActive ?? colors.primary,
+		fileBadgeBackground: colors.fileBadgeBackground ?? colors.primary,
+		fileBadgeText: colors.fileBadgeText ?? colors.background,
+		filePath:
+			colors.filePath ??
+			brightenColor(colors.borderSubtle, FILE_PATH_BRIGHTNESS),
+		filePathBackground: colors.filePathBackground ?? colors.backgroundMenu,
+		mode: { build: colors.primary, plan: colors.planMode },
+		text: colors.text ?? brightenColor(colors.background, TEXT_BRIGHTNESS),
+		textDisabled:
+			colors.textDisabled ??
+			brightenColor(colors.background, DISABLED_TEXT_BRIGHTNESS),
+		textMuted:
+			colors.textMuted ??
+			brightenColor(colors.background, MUTED_TEXT_BRIGHTNESS),
 	},
 	name,
-}));
+});
+
+export const THEMES: Theme[] = THEME_DEFINITIONS.map(resolveTheme);
 
 export const DEFAULT_THEME: Theme =
-	THEMES.find((t) => t.name === "Sonfox") ?? (THEMES[0] as Theme);
+	THEMES.find((theme) => theme.name === "Sonvox") ?? (THEMES[0] as Theme);
