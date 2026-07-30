@@ -2,6 +2,8 @@ import { RGBA, TextAttributes } from "@opentui/core";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
+import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
+import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
@@ -56,32 +58,6 @@ function buildListItems(
 	return items;
 }
 
-function getItemForeground(
-	isPendingDelete: boolean,
-	isSelected: boolean
-): string {
-	if (isPendingDelete) {
-		return "white";
-	}
-	if (isSelected) {
-		return "black";
-	}
-	return "white";
-}
-
-function getTimeForegroundColor(
-	isPendingDelete: boolean,
-	isSelected: boolean
-): string | undefined {
-	if (isPendingDelete) {
-		return "white";
-	}
-	if (isSelected) {
-		return "black";
-	}
-	return;
-}
-
 type SessionListItemProps = {
 	session: Session;
 	isSelected: boolean;
@@ -95,26 +71,31 @@ function SessionListItem({
 	isPendingDelete,
 	isActiveRoute,
 }: SessionListItemProps) {
-	const fg = getItemForeground(isPendingDelete, isSelected);
+	const { colors } = useTheme();
+	const selectedTextColor = getContrastingTextColor(colors.selection);
+	const primaryTextColor =
+		isSelected && !isPendingDelete ? selectedTextColor : colors.text;
+	const secondaryTextColor =
+		isSelected && !isPendingDelete ? selectedTextColor : colors.textMuted;
 
 	return (
 		<SelectableDialogItem
 			status={
 				isActiveRoute ? (
-					<text fg={fg} selectable={false}>
+					<text fg={primaryTextColor} selectable={false}>
 						{"●"}
 					</text>
 				) : null
 			}
 		>
 			<box flexDirection="row" flexGrow={1} marginRight={3}>
-				<text fg={fg} selectable={false}>
+				<text fg={primaryTextColor} selectable={false}>
 					{session.title}
 				</text>
 				<box flexGrow={1} />
 				<text
 					attributes={TextAttributes.DIM}
-					fg={getTimeForegroundColor(isPendingDelete, isSelected)}
+					fg={secondaryTextColor}
 					selectable={false}
 				>
 					{timeFormatter.format(
@@ -135,6 +116,7 @@ export const SessionsDialogContent = () => {
 	const { close, open: openDialog } = useDialog();
 	const navigate = useNavigate();
 	const { show } = useToast();
+	const { colors } = useTheme();
 	const routerState = useRouterState();
 
 	const currentSessionId = useMemo(() => {
@@ -336,21 +318,29 @@ export const SessionsDialogContent = () => {
 					<box flexDirection="row" gap={2} height={1} marginX={4}>
 						{isConfirmDelete ? (
 							<>
-								<text fg="#ff6666">delete</text>
-								<text attributes={TextAttributes.DIM}>
+								<text fg={colors.error}>delete</text>
+								<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 									ctrl+d again to confirm
 								</text>
-								<text>esc</text>
-								<text attributes={TextAttributes.DIM}>cancel</text>
+								<text fg={colors.text}>esc</text>
+								<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+									cancel
+								</text>
 							</>
 						) : (
 							<>
-								<text>pin/unpin</text>
-								<text attributes={TextAttributes.DIM}>ctrl+f</text>
-								<text>delete</text>
-								<text attributes={TextAttributes.DIM}>ctrl+d</text>
-								<text>rename</text>
-								<text attributes={TextAttributes.DIM}>ctrl+r</text>
+								<text fg={colors.text}>pin/unpin</text>
+								<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+									ctrl+f
+								</text>
+								<text fg={colors.text}>delete</text>
+								<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+									ctrl+d
+								</text>
+								<text fg={colors.text}>rename</text>
+								<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+									ctrl+r
+								</text>
 							</>
 						)}
 					</box>
@@ -390,7 +380,11 @@ export const SessionsDialogContent = () => {
 			placeholder="Search sessions"
 			renderItem={(item, isSelected, isActive) =>
 				item.kind === "header" ? (
-					<text attributes={TextAttributes.BOLD} marginLeft={3}>
+					<text
+						attributes={TextAttributes.BOLD}
+						fg={colors.text}
+						marginLeft={3}
+					>
 						{item.label}
 					</text>
 				) : (

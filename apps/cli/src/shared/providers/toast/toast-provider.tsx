@@ -112,7 +112,7 @@ function Toast({ currentToast }: ToastProps) {
 			width={Math.max(1, Math.min(currentToast.width ?? 60, width - 6))}
 		>
 			<box flexDirection="column" gap={1} width="100%">
-				<text fg="#E1E1E1" width="100%" wrapMode="word">
+				<text fg={colors.text} width="100%" wrapMode="word">
 					{currentToast.message}
 				</text>
 			</box>

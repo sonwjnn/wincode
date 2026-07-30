@@ -12,11 +12,11 @@ export function SessionUsageBar({ summary }: { summary: SessionUsageSummary }) {
 		summary.contextPercent !== null &&
 		summary.contextPercent >= CONTEXT_WARNING_PERCENT
 			? colors.error
-			: undefined;
+			: colors.textMuted;
 
 	return (
 		<box flexDirection="row" flexShrink={0}>
-			<text attributes={TextAttributes.DIM}>
+			<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 				<span>{tokensText}</span>
 				{summary.contextPercent === null ? null : (
 					<>

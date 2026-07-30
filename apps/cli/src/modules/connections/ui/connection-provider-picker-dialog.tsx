@@ -1,6 +1,8 @@
 import { TextAttributes } from "@opentui/core";
 import { useCallback } from "react";
 import { useDialogEscape } from "@/shared/providers/dialog/dialog-provider";
+import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
+import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 import type { ConnectionProviderSummary } from "../contract";
@@ -21,6 +23,8 @@ export function ConnectionProviderPickerDialogContent({
 	providers,
 }: ConnectionProviderPickerDialogContentProps) {
 	const connectedProviders = new Set(connectedProviderIds ?? []);
+	const { colors } = useTheme();
+	const selectedTextColor = getContrastingTextColor(colors.selection);
 
 	const handleSelect = useCallback(
 		(provider: ConnectionProviderSummary) => {
@@ -47,7 +51,10 @@ export function ConnectionProviderPickerDialogContent({
 				<SelectableDialogItem
 					status={
 						isActive ? (
-							<text fg={isSelected ? "black" : "#22C55E"} selectable={false}>
+							<text
+								fg={isSelected ? selectedTextColor : colors.success}
+								selectable={false}
+							>
 								{"✓"}
 							</text>
 						) : null
@@ -55,14 +62,17 @@ export function ConnectionProviderPickerDialogContent({
 				>
 					<box flexDirection="row" gap={1}>
 						<box flexShrink={0} width={CONNECTION_LABEL_COLUMN_WIDTH}>
-							<text fg={isSelected ? "black" : "white"} selectable={false}>
+							<text
+								fg={isSelected ? selectedTextColor : colors.text}
+								selectable={false}
+							>
 								{provider.displayName}
 							</text>
 						</box>
 						<box flexGrow={1} flexShrink={1} overflow="hidden">
 							<text
 								attributes={isSelected ? undefined : TextAttributes.DIM}
-								fg={isSelected ? "black" : "#9AA0A6"}
+								fg={isSelected ? selectedTextColor : colors.textMuted}
 								selectable={false}
 							>
 								{getConnectionProviderDetails(provider)}

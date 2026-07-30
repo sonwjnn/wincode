@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 
+const readSource = (path: string) =>
+	readFile(new URL(path, import.meta.url), "utf8");
+
 describe("theme consumers", () => {
 	test("floating overlays use menu background", async () => {
 		const [dialogSource, toastSource] = await Promise.all([
@@ -93,5 +96,24 @@ describe("theme consumers", () => {
 		expect(errorSource).toContain("backgroundColor={colors.backgroundPanel}");
 		expect(botSource).toContain("colors.textMuted");
 		expect(statusSource).toContain("fg={colors.textMuted}");
+	});
+
+	test("uses semantic foregrounds instead of fixed terminal colors", async () => {
+		const paths = [
+			"../dialog/dialog-provider.tsx",
+			"../toast/toast-provider.tsx",
+			"../../../modules/commands/ui/command-menu.tsx",
+			"../../../modules/prompt-settings/ui/models-dialog.tsx",
+			"../../../modules/prompt-settings/ui/theme-dialog.tsx",
+			"../../../modules/connections/ui/connection-provider-picker-dialog.tsx",
+			"../../../modules/conversations/ui/dialogs/sessions-dialog.tsx",
+		];
+		const combined = (await Promise.all(paths.map(readSource))).join("\n");
+
+		expect(combined).toContain("colors.text");
+		expect(combined).toContain("colors.textMuted");
+		for (const fixedColor of ['fg="white"', 'fg="gray"', 'fg="#E1E1E1"']) {
+			expect(combined).not.toContain(fixedColor);
+		}
 	});
 });

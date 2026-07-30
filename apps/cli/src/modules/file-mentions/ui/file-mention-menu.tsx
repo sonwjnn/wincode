@@ -1,24 +1,9 @@
 import { TextAttributes } from "@opentui/core";
+import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { FileMentionOption } from "../types";
 
 const MAX_VISIBLE_ITEMS = 8;
-const HEX_COLOR_RE = /^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})/iu;
-
-const getContrastingTextColor = (backgroundColor: string) => {
-	const match = backgroundColor.match(HEX_COLOR_RE);
-	if (!match) {
-		return "black";
-	}
-
-	const red = Number.parseInt(match[1] ?? "0", 16);
-	const green = Number.parseInt(match[2] ?? "0", 16);
-	const blue = Number.parseInt(match[3] ?? "0", 16);
-	const luminance = (0.299 * red + 0.587 * green + 0.114 * blue) / 255;
-
-	return luminance > 0.55 ? "black" : "white";
-};
-
 type FileMentionMenuProps = {
 	items: FileMentionOption[];
 	selectedIndex: number;
@@ -41,7 +26,9 @@ export function FileMentionMenu({
 	if (items.length === 0) {
 		return (
 			<box paddingX={1}>
-				<text attributes={TextAttributes.DIM}>No matching files</text>
+				<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+					No matching files
+				</text>
 			</box>
 		);
 	}
@@ -68,7 +55,7 @@ export function FileMentionMenu({
 						paddingX={1}
 					>
 						<text
-							fg={isSelected ? selectedTextColor : "white"}
+							fg={isSelected ? selectedTextColor : colors.text}
 							selectable={false}
 						>
 							{isSelected ? <strong>{item.label}</strong> : item.label}

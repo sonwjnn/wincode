@@ -9,6 +9,8 @@ import {
 	useDialog,
 	useDialogEscape,
 } from "@/shared/providers/dialog/dialog-provider";
+import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
+import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 
@@ -29,6 +31,8 @@ export const VariantsDialogContent = ({
 	onSelectVariant,
 }: VariantsDialogContentProps) => {
 	const dialog = useDialog();
+	const { colors } = useTheme();
+	const selectedTextColor = getContrastingTextColor(colors.selection);
 	const modelSelection: ChatModelSelection = {
 		modelId: currentModel.id,
 		providerId: currentModel.connectionProviderId,
@@ -70,13 +74,19 @@ export const VariantsDialogContent = ({
 				<SelectableDialogItem
 					status={
 						isActive ? (
-							<text fg={isSelected ? "black" : "white"} selectable={false}>
+							<text
+								fg={isSelected ? selectedTextColor : colors.text}
+								selectable={false}
+							>
 								{"●"}
 							</text>
 						) : null
 					}
 				>
-					<text fg={isSelected ? "black" : "white"} selectable={false}>
+					<text
+						fg={isSelected ? selectedTextColor : colors.text}
+						selectable={false}
+					>
 						{variant.label}
 					</text>
 				</SelectableDialogItem>

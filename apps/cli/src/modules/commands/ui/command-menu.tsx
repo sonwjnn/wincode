@@ -1,4 +1,5 @@
 import { TextAttributes } from "@opentui/core";
+import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { COMMANDS, type CommandSpec } from "../commands";
 
@@ -31,7 +32,9 @@ export function CommandMenu({
 	if (commands.length === 0) {
 		return (
 			<box paddingX={1}>
-				<text attributes={TextAttributes.DIM}>No matching commands</text>
+				<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+					No matching commands
+				</text>
 			</box>
 		);
 	}
@@ -44,6 +47,7 @@ export function CommandMenu({
 			{visibleSlice.map((cmd, i) => {
 				const realIndex = visibleStartIndex + i;
 				const isSelected = realIndex === selectedIndex;
+				const selectedTextColor = getContrastingTextColor(colors.selection);
 
 				return (
 					// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events.
@@ -58,12 +62,18 @@ export function CommandMenu({
 						paddingX={1}
 					>
 						<box flexShrink={0} width={COMMAND_COL_WIDTH}>
-							<text fg={isSelected ? "black" : "white"} selectable={false}>
+							<text
+								fg={isSelected ? selectedTextColor : colors.text}
+								selectable={false}
+							>
 								/{cmd.name}
 							</text>
 						</box>
 						<box flexGrow={1} flexShrink={1} overflow="hidden">
-							<text fg={isSelected ? "black" : "gray"} selectable={false}>
+							<text
+								fg={isSelected ? selectedTextColor : colors.textMuted}
+								selectable={false}
+							>
 								{cmd.description}
 							</text>
 						</box>

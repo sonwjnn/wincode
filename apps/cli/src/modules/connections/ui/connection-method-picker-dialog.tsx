@@ -1,6 +1,8 @@
 import { TextAttributes } from "@opentui/core";
 import { useCallback } from "react";
 import { useDialogEscape } from "@/shared/providers/dialog/dialog-provider";
+import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
+import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 import type { ConnectionProviderSummary } from "../contract";
@@ -20,6 +22,8 @@ export function ConnectionMethodPickerDialogContent({
 	onSelectMethod,
 }: ConnectionMethodPickerDialogContentProps) {
 	const methods = getConnectionMethodOptions(provider);
+	const { colors } = useTheme();
+	const selectedTextColor = getContrastingTextColor(colors.selection);
 
 	const handleSelect = useCallback(
 		(method: ConnectionMethodOption) => {
@@ -45,14 +49,17 @@ export function ConnectionMethodPickerDialogContent({
 				<SelectableDialogItem>
 					<box flexDirection="row" flexGrow={1} gap={1}>
 						<box flexShrink={0} width={CONNECTION_LABEL_COLUMN_WIDTH}>
-							<text fg={isSelected ? "black" : "white"} selectable={false}>
+							<text
+								fg={isSelected ? selectedTextColor : colors.text}
+								selectable={false}
+							>
 								{method.label}
 							</text>
 						</box>
 						<box flexGrow={1} flexShrink={1} overflow="hidden">
 							<text
 								attributes={isSelected ? undefined : TextAttributes.DIM}
-								fg={isSelected ? "black" : "#9AA0A6"}
+								fg={isSelected ? selectedTextColor : colors.textMuted}
 								selectable={false}
 							>
 								{method.details}

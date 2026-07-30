@@ -93,7 +93,11 @@ export function ConnectionApiKeyDialogContent({
 
 	return (
 		<box flexDirection="column" gap={1}>
-			<text attributes={TextAttributes.DIM} selectable={false}>
+			<text
+				attributes={TextAttributes.DIM}
+				fg={colors.textMuted}
+				selectable={false}
+			>
 				{description}
 			</text>
 			<input
@@ -106,8 +110,8 @@ export function ConnectionApiKeyDialogContent({
 			/>
 			{error ? <text fg={colors.error}>{error}</text> : null}
 			<box flexDirection="row" gap={2} height={1}>
-				<text>{isSubmitting ? "..." : "enter"}</text>
-				<text attributes={TextAttributes.DIM}>
+				<text fg={colors.text}>{isSubmitting ? "..." : "enter"}</text>
+				<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 					{isSubmitting ? "saving" : "save key"}
 				</text>
 			</box>
