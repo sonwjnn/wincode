@@ -36,6 +36,9 @@ describe("resolveTheme", () => {
 			plan: colors.planMode,
 		});
 		expect(colors.filePathBackground).toBe(colors.backgroundMenu);
+		expect(colors.fileBadgeBackground).toBe(colors.primary);
+		expect(colors.fileBadgeText).toBe(colors.background);
+		expect(colors.filePath).toBe("#838383");
 		expect(colors.text).toBe("#e0e0e0");
 		expect(colors.textMuted).toBe("#949494");
 		expect(colors.textDisabled).toBe("#616161");
@@ -65,9 +68,19 @@ describe("resolveTheme", () => {
 
 test("all built-in themes resolve complete semantic colors", () => {
 	for (const theme of THEMES) {
-		expect(theme.colors.text).toMatch(HEX_COLOR);
-		expect(theme.colors.backgroundElement).toBeTruthy();
-		expect(theme.colors.borderActive).toBeTruthy();
+		for (const color of [
+			theme.colors.text,
+			theme.colors.textMuted,
+			theme.colors.textDisabled,
+			theme.colors.backgroundPanel,
+			theme.colors.backgroundElement,
+			theme.colors.backgroundMenu,
+			theme.colors.border,
+			theme.colors.borderSubtle,
+			theme.colors.borderActive,
+		]) {
+			expect(color).toMatch(HEX_COLOR);
+		}
 	}
 });
 
