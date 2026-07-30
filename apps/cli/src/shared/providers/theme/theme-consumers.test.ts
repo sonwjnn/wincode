@@ -55,4 +55,43 @@ describe("theme consumers", () => {
 		expect(shellSource).toContain("colors.textMuted");
 		expect(workspaceSource).toContain("colors.textMuted");
 	});
+
+	test("conversation messages use semantic theme roles", async () => {
+		const [userSource, errorSource, botSource, statusSource] =
+			await Promise.all([
+				readFile(
+					new URL(
+						"../../../modules/conversations/ui/messages/user-message.tsx",
+						import.meta.url
+					),
+					"utf8"
+				),
+				readFile(
+					new URL(
+						"../../../modules/conversations/ui/messages/error-message.tsx",
+						import.meta.url
+					),
+					"utf8"
+				),
+				readFile(
+					new URL(
+						"../../../modules/conversations/ui/messages/bot-message.tsx",
+						import.meta.url
+					),
+					"utf8"
+				),
+				readFile(
+					new URL(
+						"../../../modules/prompt-settings/ui/prompt-status-bar.tsx",
+						import.meta.url
+					),
+					"utf8"
+				),
+			]);
+
+		expect(userSource).toContain("backgroundColor={colors.backgroundPanel}");
+		expect(errorSource).toContain("backgroundColor={colors.backgroundPanel}");
+		expect(botSource).toContain("colors.textMuted");
+		expect(statusSource).toContain("fg={colors.textMuted}");
+	});
 });

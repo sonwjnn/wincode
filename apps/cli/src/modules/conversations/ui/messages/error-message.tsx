@@ -57,7 +57,7 @@ export function ErrorMessage({ error }: ErrorMessageProps) {
 				width="100%"
 			>
 				<box
-					backgroundColor={colors.surface}
+					backgroundColor={colors.backgroundPanel}
 					justifyContent="center"
 					paddingBottom={1}
 					paddingTop={1}

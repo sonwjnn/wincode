@@ -21,12 +21,18 @@ export function StatusBar() {
 	return (
 		<box flexDirection="row" gap={1}>
 			<text fg={colors.mode[mode]}>{getCodingMode(mode).displayName}</text>
-			<text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
+			<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 				∙
 			</text>
 			<text>{modelName}</text>
-			<text attributes={TextAttributes.DIM}>{providerName}</text>
-			{variantName ? <text attributes={TextAttributes.DIM}>∙</text> : null}
+			<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+				{providerName}
+			</text>
+			{variantName ? (
+				<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+					∙
+				</text>
+			) : null}
 			{variantName ? <text fg={colors.mode[mode]}>{variantName}</text> : null}
 		</box>
 	);

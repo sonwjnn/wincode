@@ -71,7 +71,7 @@ export function UserMessage({ mode, parts }: UserMessageProps) {
 				width="100%"
 			>
 				<box
-					backgroundColor={colors.surface}
+					backgroundColor={colors.backgroundPanel}
 					flexDirection="column"
 					width="100%"
 				>
