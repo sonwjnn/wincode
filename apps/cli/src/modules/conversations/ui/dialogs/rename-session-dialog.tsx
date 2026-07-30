@@ -71,7 +71,14 @@ export function RenameSessionDialog({
 
 	return (
 		<box flexDirection="column" gap={1}>
-			<input focused onContentChange={() => undefined} ref={inputRef} />
+			<input
+				focused
+				focusedTextColor={colors.text}
+				onContentChange={() => undefined}
+				placeholderColor={colors.textMuted}
+				ref={inputRef}
+				textColor={colors.text}
+			/>
 			<box flexDirection="row" gap={2} height={1} marginTop={2}>
 				<text fg={colors.text}>enter</text>
 				<text attributes={TextAttributes.DIM} fg={colors.textMuted}>

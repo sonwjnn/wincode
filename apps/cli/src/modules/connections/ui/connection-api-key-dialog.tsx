@@ -102,11 +102,14 @@ export function ConnectionApiKeyDialogContent({
 			</text>
 			<input
 				focused
+				focusedTextColor={colors.text}
 				onContentChange={() => {
 					setError(null);
 				}}
 				placeholder={placeholder}
+				placeholderColor={colors.textMuted}
 				ref={inputRef}
+				textColor={colors.text}
 			/>
 			{error ? <text fg={colors.error}>{error}</text> : null}
 			<box flexDirection="row" gap={2} height={1}>
