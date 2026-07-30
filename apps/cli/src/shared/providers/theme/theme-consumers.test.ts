@@ -153,10 +153,10 @@ describe("theme consumers", () => {
 			[paths[4], ["fg={primaryTextColor}"]],
 			[paths[5], ["fg={isSelected ? selectedTextColor : colors.text}"]],
 			[paths[6], ["fg={isSelected ? selectedTextColor : colors.text}"]],
-			[paths[7], [": colors.text"]],
+			[paths[7], ["fg={\n"]],
 			[paths[8], ["fg={isSelected ? selectedTextColor : colors.text}"]],
 			[paths[9], ["fg={isSelected ? selectedTextColor : colors.text}"]],
-			[paths[10], ["fg={colors.text}", "fg={colors.textMuted}"]],
+			[paths[10], ["fg={primaryTextColor}", "fg={secondaryTextColor}"]],
 		]);
 		for (const [path, expected] of expectedByPath) {
 			const source = await readSource(path);
