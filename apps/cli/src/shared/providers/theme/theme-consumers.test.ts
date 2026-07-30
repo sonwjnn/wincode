@@ -14,4 +14,45 @@ describe("theme consumers", () => {
 		expect(dialogSource).toContain("backgroundColor={colors.backgroundMenu}");
 		expect(toastSource).toContain("backgroundColor={colors.backgroundMenu}");
 	});
+
+	test("conversation shell uses semantic theme roles", async () => {
+		const [chatInputSource, sidebarSource, shellSource, workspaceSource] =
+			await Promise.all([
+				readFile(
+					new URL(
+						"../../../modules/conversations/ui/components/chat-text-area.tsx",
+						import.meta.url
+					),
+					"utf8"
+				),
+				readFile(
+					new URL(
+						"../../../modules/conversations/ui/components/session-sidebar.tsx",
+						import.meta.url
+					),
+					"utf8"
+				),
+				readFile(
+					new URL(
+						"../../../modules/conversations/ui/components/chat-shell.tsx",
+						import.meta.url
+					),
+					"utf8"
+				),
+				readFile(
+					new URL(
+						"../../../modules/conversations/ui/components/workspace-path.tsx",
+						import.meta.url
+					),
+					"utf8"
+				),
+			]);
+
+		expect(chatInputSource).toContain("colors.borderActive");
+		expect(chatInputSource).toContain("colors.backgroundElement");
+		expect(sidebarSource).toContain("colors.backgroundPanel");
+		expect(sidebarSource).toContain("colors.textMuted");
+		expect(shellSource).toContain("colors.textMuted");
+		expect(workspaceSource).toContain("colors.textMuted");
+	});
 });

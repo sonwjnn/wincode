@@ -125,7 +125,7 @@ export function ChatShell({
 							<Spinner mode={mode} />
 							<text>
 								<span fg={colors.mode[mode]}>Esc</span>
-								<span fg={colors.dimSeparator}>
+								<span fg={colors.textMuted}>
 									{isInterruptArmed ? " again to interrupt" : " interrupt"}
 								</span>
 							</text>

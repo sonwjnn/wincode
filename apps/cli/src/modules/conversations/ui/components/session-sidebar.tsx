@@ -47,11 +47,11 @@ export function SessionSidebar({
 		usage?.contextPercent !== undefined &&
 		usage.contextPercent >= CONTEXT_WARNING_PERCENT
 			? colors.error
-			: colors.dimSeparator;
+			: colors.textMuted;
 
 	return (
 		<box
-			backgroundColor={colors.sidebarBackground}
+			backgroundColor={colors.backgroundPanel}
 			flexDirection="column"
 			flexShrink={0}
 			height="100%"
@@ -71,7 +71,7 @@ export function SessionSidebar({
 						<SectionLabel text="Context" />
 						{usage ? (
 							<>
-								<text fg={colors.dimSeparator}>
+								<text fg={colors.textMuted}>
 									{`${formatTokenCount(usage.contextTokens)} tokens`}
 								</text>
 								{usage.contextPercent === null ? null : (
@@ -80,13 +80,13 @@ export function SessionSidebar({
 									>{`${usage.contextPercent}% used`}</text>
 								)}
 								{usage.costUsd === null ? null : (
-									<text fg={colors.dimSeparator}>
+									<text fg={colors.textMuted}>
 										{`${formatUsdAmount(usage.costUsd)} spent`}
 									</text>
 								)}
 							</>
 						) : (
-							<text fg={colors.dimSeparator}>No usage yet</text>
+							<text fg={colors.textMuted}>No usage yet</text>
 						)}
 					</box>
 
@@ -101,10 +101,10 @@ export function SessionSidebar({
 									key={codingMode.value}
 									width="100%"
 								>
-									<text fg={isActive ? colors.mode[mode] : colors.dimSeparator}>
+									<text fg={isActive ? colors.mode[mode] : colors.textMuted}>
 										{codingMode.displayName}
 									</text>
-									<text fg={colors.dimSeparator}>{modelLabel}</text>
+									<text fg={colors.textMuted}>{modelLabel}</text>
 								</box>
 							);
 						})}
@@ -116,9 +116,9 @@ export function SessionSidebar({
 				<WorkspacePath />
 				<text>
 					<span fg={colors.primary}>{"• "}</span>
-					<span fg={colors.dimSeparator}>Win</span>
+					<span fg={colors.textMuted}>Win</span>
 					<b>Code</b>
-					<span fg={colors.dimSeparator}>{` ${APP_VERSION}`}</span>
+					<span fg={colors.textMuted}>{` ${APP_VERSION}`}</span>
 				</text>
 			</box>
 		</box>
