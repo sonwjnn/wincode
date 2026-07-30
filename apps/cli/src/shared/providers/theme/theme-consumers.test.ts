@@ -1,11 +1,39 @@
 import { describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 
 const readSource = (path: string) =>
 	readFile(new URL(path, import.meta.url), "utf8");
 const FIXED_TERMINAL_COLOR_RE = /(?:fg|color)="(?:white|gray|#E1E1E1)"/;
 const LEGACY_THEME_TOKEN_RE =
 	/\b(?:dialogSurface|dimSeparator|sidebarBackground|suggestionBorder|thinkingBorder)\b|colors\.surface/;
+const LITERAL_FOREGROUND_RE =
+	/(?:fg|textColor|focusedTextColor|placeholderColor)="(?:[A-Za-z]+|#[0-9A-Fa-f]{3,8})"/;
+
+const readProductionSources = async () => {
+	const srcRoot = new URL("../../../", import.meta.url);
+	const entries = await readdir(srcRoot, {
+		recursive: true,
+		withFileTypes: true,
+	});
+	const files = entries
+		.filter(
+			(entry) =>
+				entry.isFile() &&
+				entry.name.endsWith(".tsx") &&
+				!entry.name.endsWith(".test.tsx") &&
+				entry.name !== "routeTree.gen.ts"
+		)
+		.map((entry) =>
+			readFile(
+				new URL(
+					entry.parentPath ? `${entry.parentPath}/${entry.name}` : entry.name,
+					srcRoot
+				),
+				"utf8"
+			)
+		);
+	return Promise.all(files);
+};
 
 describe("theme consumers", () => {
 	test("floating overlays use menu background", async () => {
@@ -143,6 +171,64 @@ describe("theme consumers", () => {
 
 		for (const [index, source] of sources.entries()) {
 			expect(source, paths[index]).not.toMatch(LEGACY_THEME_TOKEN_RE);
+		}
+	});
+
+	test("all production TSX consumers use semantic foregrounds", async () => {
+		const sources = await readProductionSources();
+		for (const source of sources) {
+			expect(source).not.toMatch(LEGACY_THEME_TOKEN_RE);
+			expect(source).not.toMatch(LITERAL_FOREGROUND_RE);
+		}
+	});
+
+	test("representative consumers expose semantic text roles", async () => {
+		const checks = new Map([
+			[
+				"../../../modules/conversations/ui/components/chat-text-area.tsx",
+				[
+					"disabled ? colors.textDisabled : colors.text",
+					"placeholderColor={colors.textMuted}",
+				],
+			],
+			[
+				"../../../modules/conversations/ui/components/session-sidebar.tsx",
+				["color={colors.text}", "colors.textMuted"],
+			],
+			[
+				"../../../modules/conversations/ui/messages/bot-message.tsx",
+				["colors.text"],
+			],
+			[
+				"../../ui/search-list-dialog-wrapper.tsx",
+				[
+					"focusedTextColor={colors.text}",
+					"placeholderColor={colors.textMuted}",
+					"emptyText",
+				],
+			],
+			["../../../index.tsx", ["colors.text"]],
+			["../../../app/routes/__root.tsx", ["colors.error"]],
+			[
+				"../../../modules/connections/ui/connection-api-key-dialog.tsx",
+				[
+					"focusedTextColor={colors.text}",
+					"placeholderColor={colors.textMuted}",
+				],
+			],
+			[
+				"../../../modules/conversations/ui/dialogs/rename-session-dialog.tsx",
+				[
+					"focusedTextColor={colors.text}",
+					"placeholderColor={colors.textMuted}",
+				],
+			],
+		]);
+		for (const [path, expected] of checks) {
+			const source = await readSource(path);
+			for (const text of expected) {
+				expect(source, path).toContain(text);
+			}
 		}
 	});
 });

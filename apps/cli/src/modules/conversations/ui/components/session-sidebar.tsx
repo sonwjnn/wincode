@@ -23,8 +23,12 @@ type SessionSidebarProps = {
 	width: number;
 };
 
-function SectionLabel({ text }: { text: string }) {
-	return <text attributes={TextAttributes.BOLD}>{text}</text>;
+function SectionLabel({ text, color }: { text: string; color: string }) {
+	return (
+		<text attributes={TextAttributes.BOLD} fg={color}>
+			{text}
+		</text>
+	);
 }
 
 export function SessionSidebar({
@@ -71,7 +75,7 @@ export function SessionSidebar({
 					</text>
 
 					<box flexDirection="column">
-						<SectionLabel text="Context" />
+						<SectionLabel color={colors.text} text="Context" />
 						{usage ? (
 							<>
 								<text fg={colors.textMuted}>
@@ -94,7 +98,7 @@ export function SessionSidebar({
 					</box>
 
 					<box flexDirection="column">
-						<SectionLabel text="Agents" />
+						<SectionLabel color={colors.text} text="Agents" />
 						{codingModes.map((codingMode) => {
 							const isActive = codingMode.value === mode;
 							return (

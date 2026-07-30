@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	DEFAULT_THEME,
+	getDefaultTheme,
 	resolveTheme,
 	THEMES,
 	type ThemeDefinition,
@@ -86,4 +87,17 @@ test("all built-in themes resolve complete semantic colors", () => {
 
 test("default theme is Sonvox", () => {
 	expect(DEFAULT_THEME.name).toBe("Sonvox");
+});
+
+test("getDefaultTheme selects Sonvox by exact name", () => {
+	const nonSonvox = resolveTheme({ ...definition, name: "sonvox" });
+	const sonvox = resolveTheme({ ...definition, name: "Sonvox" });
+
+	expect(getDefaultTheme([nonSonvox, sonvox])).toBe(sonvox);
+});
+
+test("getDefaultTheme throws when Sonvox is absent", () => {
+	expect(() => getDefaultTheme([resolveTheme(definition)])).toThrow(
+		"Default theme not found: Sonvox"
+	);
 });
