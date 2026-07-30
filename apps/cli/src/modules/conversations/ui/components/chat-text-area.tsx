@@ -946,10 +946,13 @@ export function ChatTextArea({
 				>
 					<textarea
 						focused={isFocused}
+						focusedTextColor={disabled ? colors.textDisabled : colors.text}
 						keyBindings={CHAT_TEXT_AREA_KEY_BINDINGS}
 						onContentChange={handleTextareaContentChange}
 						placeholder={`Ask anything... "Fix broken tests"`}
+						placeholderColor={colors.textMuted}
 						ref={textAreaRef}
+						textColor={disabled ? colors.textDisabled : colors.text}
 					/>
 					<StatusBar />
 				</box>

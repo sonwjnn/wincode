@@ -77,7 +77,7 @@ export function UserMessage({ mode, parts }: UserMessageProps) {
 				>
 					{body && (
 						<box justifyContent="center" paddingX={2} paddingY={1} width="100%">
-							<text>{body}</text>
+							<text fg={colors.text}>{body}</text>
 						</box>
 					)}
 

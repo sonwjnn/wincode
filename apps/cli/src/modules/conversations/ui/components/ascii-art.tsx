@@ -1,4 +1,7 @@
+import { useTheme } from "@/shared/providers/theme/theme-provider";
+
 export function AsciiArt() {
+	const { colors } = useTheme();
 	return (
 		<box alignItems="center" justifyContent="center">
 			<box
@@ -7,8 +10,8 @@ export function AsciiArt() {
 				gap={0.5}
 				justifyContent="center"
 			>
-				<ascii-font color="gray" font="block" text="Win" />
-				<ascii-font font="block" text="Code" />
+				<ascii-font color={colors.textMuted} font="block" text="Win" />
+				<ascii-font color={colors.text} font="block" text="Code" />
 			</box>
 		</box>
 	);

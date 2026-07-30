@@ -24,7 +24,7 @@ export function StatusBar() {
 			<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 				∙
 			</text>
-			<text>{modelName}</text>
+			<text fg={colors.text}>{modelName}</text>
 			<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 				{providerName}
 			</text>

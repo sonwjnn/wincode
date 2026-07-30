@@ -6,6 +6,7 @@ import { z } from "zod";
 import { useBilling } from "@/modules/billing";
 import { getConversationStore } from "@/modules/conversations/storage/get-conversation-store";
 import { ChatView } from "@/modules/conversations/ui/views/chat-view";
+import { useTheme } from "@/shared/providers/theme/theme-provider";
 
 const sessionRouteStateSchema = z
 	.object({
@@ -41,6 +42,7 @@ export const Route = createFileRoute("/sessions/$id")({
 
 function SessionRoute() {
 	const { refresh: refreshBilling } = useBilling();
+	const { colors } = useTheme();
 	const { id } = Route.useParams();
 	const [messages, setMessages] = useState<CodingAgentUIMessage[] | null>(null);
 	const [sessionTitle, setSessionTitle] = useState<string | null>(null);
@@ -81,11 +83,11 @@ function SessionRoute() {
 	}, [id]);
 
 	if (errorMessage) {
-		return <text fg="red">{errorMessage}</text>;
+		return <text fg={colors.error}>{errorMessage}</text>;
 	}
 
 	if (!(messages && sessionTitle)) {
-		return <text>Loading session...</text>;
+		return <text fg={colors.text}>Loading session...</text>;
 	}
 
 	return (

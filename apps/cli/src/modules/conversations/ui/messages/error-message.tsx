@@ -64,7 +64,9 @@ export function ErrorMessage({ error }: ErrorMessageProps) {
 					paddingX={2}
 					width="100%"
 				>
-					<text attributes={TextAttributes.DIM}>{displayMessage}</text>
+					<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+						{displayMessage}
+					</text>
 				</box>
 			</box>
 		</box>

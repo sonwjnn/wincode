@@ -643,5 +643,9 @@ export const resolveTheme = ({ colors, name }: ThemeDefinition): Theme => ({
 
 export const THEMES: Theme[] = THEME_DEFINITIONS.map(resolveTheme);
 
-export const DEFAULT_THEME: Theme =
-	THEMES.find((theme) => theme.name === "Sonvox") ?? (THEMES[0] as Theme);
+export const SONVOX_THEME_NAME = "Sonvox";
+const defaultTheme = THEMES.find((theme) => theme.name === SONVOX_THEME_NAME);
+if (!defaultTheme) {
+	throw new Error(`Default theme not found: ${SONVOX_THEME_NAME}`);
+}
+export const DEFAULT_THEME: Theme = defaultTheme;
