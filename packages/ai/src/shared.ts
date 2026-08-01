@@ -16,6 +16,23 @@ export {
 	getSystemInstructions,
 } from "./instructions";
 export type {
+	JsonValue,
+	McpTool,
+	McpToolManifest,
+	McpToolManifestEntry,
+} from "./mcp-tools";
+export {
+	MAX_MCP_MANIFEST_BYTES,
+	MAX_MCP_RESULT_BYTES,
+	MAX_MCP_TOOL_COUNT,
+	MAX_MCP_TOOL_DESCRIPTION_BYTES,
+	MAX_MCP_TOOL_NAME_LENGTH,
+	MAX_MCP_TOOL_SCHEMA_BYTES,
+	mcpToolManifestEntrySchema,
+	mcpToolManifestSchema,
+	mcpToolSchema,
+} from "./mcp-tools";
+export type {
 	CodingAgentTools,
 	CodingAgentUIMessage,
 } from "./message";
