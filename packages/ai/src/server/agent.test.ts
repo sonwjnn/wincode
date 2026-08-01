@@ -37,7 +37,7 @@ describe("invokeCodingAgentLifecycleCallback", () => {
 describe("prepareCodingAgentCall", () => {
 	const manifest = [
 		{
-			name: "search_docs",
+			name: "mcp_search_docs",
 			description: "Search docs",
 			inputSchema: { type: "object" },
 		},
@@ -49,8 +49,8 @@ describe("prepareCodingAgentCall", () => {
 			messages: [],
 		});
 
-		expect(prepared.activeTools).toContain("search_docs");
-		expect(prepared.tools).toHaveProperty("search_docs");
+		expect(prepared.activeTools).toContain("mcp_search_docs");
+		expect(prepared.tools).toHaveProperty("mcp_search_docs");
 	});
 
 	it("keeps read-only built-ins active and excludes MCP in Plan", () => {
@@ -59,6 +59,22 @@ describe("prepareCodingAgentCall", () => {
 		});
 
 		expect(prepared.activeTools).toEqual(["read", "list", "grep"]);
-		expect(prepared.tools).toHaveProperty("search_docs");
+		expect(prepared.tools).toHaveProperty("mcp_search_docs");
+	});
+
+	it("does not let MCP names replace built-ins in either mode", () => {
+		const collisionManifest = [
+			{
+				name: "mcp_read",
+				description: "Search docs",
+				inputSchema: { type: "object" },
+			},
+		];
+		for (const mode of ["build", "plan"] as const) {
+			const prepared = prepareCodingAgentCall({
+				options: { mode, mcpTools: collisionManifest },
+			});
+			expect(prepared.tools.read?.type).not.toBe("dynamic");
+		}
 	});
 });

@@ -103,6 +103,7 @@ export const mcpToolManifestEntrySchema: z.ZodType<McpToolManifestEntry> =
 				typeof entry.name !== "string" ||
 				entry.name.length < 1 ||
 				entry.name.length > MAX_MCP_TOOL_NAME_LENGTH ||
+				!entry.name.startsWith("mcp_") ||
 				!MCP_TOOL_NAME_REGEX.test(entry.name)
 			) {
 				return false;

@@ -1,18 +1,16 @@
-import { jsonSchema, type Tool } from "ai";
+import { jsonSchema, type ToolSet } from "ai";
 import type { McpToolManifest } from "../mcp-tools";
 
-export type DynamicMcpTool = Tool<unknown, never> & { type: "dynamic" };
+type DynamicMcpTool = ToolSet[string] & { type: "dynamic" };
 
-export const convertMcpToolManifest = (
-	manifest: McpToolManifest
-): Record<string, DynamicMcpTool> => {
-	const tools: Record<string, DynamicMcpTool> = {};
-	for (const entry of manifest) {
-		tools[entry.name] = {
-			type: "dynamic",
-			description: entry.description,
-			inputSchema: jsonSchema(entry.inputSchema),
-		};
-	}
-	return tools;
-};
+export const convertMcpToolManifest = (manifest: McpToolManifest): ToolSet =>
+	Object.fromEntries(
+		manifest.map((entry) => [
+			entry.name,
+			{
+				type: "dynamic",
+				description: entry.description,
+				inputSchema: jsonSchema(entry.inputSchema),
+			} satisfies DynamicMcpTool,
+		])
+	);

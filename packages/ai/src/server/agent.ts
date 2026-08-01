@@ -47,7 +47,7 @@ export const prepareCodingAgentCall = <T extends Record<string, unknown>>({
 	options?: CodingAgentCallOptions;
 } & T): Omit<T, "options"> & {
 	activeTools: string[];
-	tools: typeof codingServerTools;
+	tools: ToolSet;
 } => {
 	const codingMode = getCodingMode(options?.mode ?? defaultMode.value);
 	const mcpTools = convertMcpToolManifest(options?.mcpTools ?? []);

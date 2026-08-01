@@ -11,7 +11,7 @@ import {
 import { convertMcpToolManifest } from "./server/mcp-tools";
 
 const validTool = {
-	name: "read_file",
+	name: "mcp_read_file",
 	description: "Read a file.",
 	inputSchema: { type: "object", properties: { path: { type: "string" } } },
 };
@@ -78,7 +78,7 @@ describe("MCP tool wire contracts", () => {
 	it("bounds full manifest using individually valid entries", () => {
 		const tools = Array.from({ length: MAX_MCP_TOOL_COUNT }, (_, index) => ({
 			...validTool,
-			name: `tool_${index}`,
+			name: `mcp_tool_${index}`,
 			description: "d".repeat(2048),
 		}));
 		expect(() => mcpToolManifestSchema.parse(tools)).toThrow(
@@ -93,6 +93,11 @@ describe("MCP tool wire contracts", () => {
 		expect(() =>
 			mcpToolManifestEntrySchema.parse({ ...validTool, name: "bad name" })
 		).toThrow();
+		for (const name of ["read", "constructor", "__proto__", "toString"]) {
+			expect(() =>
+				mcpToolManifestEntrySchema.parse({ ...validTool, name })
+			).toThrow();
+		}
 		expect(() =>
 			mcpToolManifestEntrySchema.parse({
 				...validTool,
