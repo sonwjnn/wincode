@@ -309,4 +309,71 @@ describe("loadMcpConfig", () => {
 			"/p/opencode.json:mcp.servers.unsupported.type",
 		]);
 	});
+
+	test("project malformed entry omits inherited server and reports project scope", async () => {
+		const result = await loadMcpConfig({
+			workspace: "/p",
+			globalRoot: "/g",
+			env: {},
+			fs: fileSystem({
+				"/g/opencode.json":
+					'{"mcp":{"servers":{"shared":{"type":"remote","url":"https://global"}}}}',
+				"/p/opencode.json": '{"mcp":{"servers":{"shared":null}}}',
+			}),
+		});
+
+		expect(result.servers.shared).toBeUndefined();
+		expect(result.diagnostics).toContainEqual({
+			scope: "project",
+			code: "invalid-server",
+			message: "Server entry must be an object",
+			path: "/p/opencode.json:mcp.servers.shared",
+			serverName: "shared",
+		});
+	});
+
+	test("isolates project-only scalar server entries", async () => {
+		const result = await loadMcpConfig({
+			workspace: "/p",
+			globalRoot: "/g",
+			env: {},
+			fs: fileSystem({
+				"/p/opencode.json": '{"mcp":{"servers":{"scalar":"invalid"}}}',
+			}),
+		});
+
+		expect(result.servers.scalar).toBeUndefined();
+		expect(result.diagnostics).toContainEqual({
+			scope: "project",
+			code: "invalid-server",
+			message: "Server entry must be an object",
+			path: "/p/opencode.json:mcp.servers.scalar",
+			serverName: "scalar",
+		});
+	});
+
+	test("valid project entry recovers malformed global entry", async () => {
+		const result = await loadMcpConfig({
+			workspace: "/p",
+			globalRoot: "/g",
+			env: {},
+			fs: fileSystem({
+				"/g/opencode.json": '{"mcp":{"servers":{"shared":null}}}',
+				"/p/opencode.json":
+					'{"mcp":{"servers":{"shared":{"type":"remote","url":"https://project"}}}}',
+			}),
+		});
+
+		expect(result.servers.shared).toMatchObject({
+			type: "remote",
+			url: "https://project/",
+		});
+		expect(result.diagnostics).toContainEqual({
+			scope: "global",
+			code: "invalid-server",
+			message: "Server entry must be an object",
+			path: "/g/opencode.json:mcp.servers.shared",
+			serverName: "shared",
+		});
+	});
 });

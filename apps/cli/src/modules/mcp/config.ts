@@ -277,8 +277,35 @@ export async function loadMcpConfig(
 	);
 	const servers: Record<string, ResolvedMcpServerConfig> = {};
 	for (const name of new Set([...Object.keys(gs), ...Object.keys(ps)])) {
-		const gv = isObject(gs[name]) ? gs[name] : {};
-		const pv = isObject(ps[name]) ? ps[name] : {};
+		const globalEntry = gs[name];
+		const projectEntry = ps[name];
+		const hasGlobalEntry = globalEntry !== undefined;
+		const hasProjectEntry = projectEntry !== undefined;
+		const globalValid = !hasGlobalEntry || isObject(globalEntry);
+		const projectValid = !hasProjectEntry || isObject(projectEntry);
+		if (!globalValid) {
+			add(
+				diagnostics,
+				global.scope,
+				"invalid-server",
+				"Server entry must be an object",
+				`${global.path}:mcp.servers.${name}`,
+				name
+			);
+		}
+		if (!projectValid) {
+			add(
+				diagnostics,
+				project.scope,
+				"invalid-server",
+				"Server entry must be an object",
+				`${project.path}:mcp.servers.${name}`,
+				name
+			);
+			continue;
+		}
+		const gv = globalValid ? (globalEntry ?? {}) : {};
+		const pv = projectValid ? (projectEntry ?? {}) : {};
 		const raw = merge(gv, pv);
 		const scope = Object.keys(pv).length ? project : global;
 		const timeout = timeoutValue(
