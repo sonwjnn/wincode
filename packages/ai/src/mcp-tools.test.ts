@@ -32,17 +32,33 @@ describe("MCP tool wire contracts", () => {
 		).toThrow();
 	});
 
-	it("bounds description and schema UTF-8 bytes", () => {
+	it("enforces exact and over UTF-8 byte boundaries", () => {
+		expect(
+			mcpToolManifestEntrySchema.parse({
+				...validTool,
+				description: "é".repeat(MAX_MCP_TOOL_DESCRIPTION_BYTES / 2),
+			}).description
+		).toHaveLength(MAX_MCP_TOOL_DESCRIPTION_BYTES / 2);
 		expect(() =>
 			mcpToolManifestEntrySchema.parse({
 				...validTool,
-				description: "é".repeat(MAX_MCP_TOOL_DESCRIPTION_BYTES),
+				description: `${"é".repeat(MAX_MCP_TOOL_DESCRIPTION_BYTES / 2)}é`,
 			})
 		).toThrow("description exceeds");
+		const schemaOverhead = JSON.stringify({ value: "" }).length;
+		const exactSchema = {
+			value: "x".repeat(MAX_MCP_TOOL_SCHEMA_BYTES - schemaOverhead),
+		};
+		expect(
+			mcpToolManifestEntrySchema.parse({
+				...validTool,
+				inputSchema: exactSchema,
+			}).inputSchema
+		).toBe(exactSchema);
 		expect(() =>
 			mcpToolManifestEntrySchema.parse({
 				...validTool,
-				inputSchema: { value: "x".repeat(MAX_MCP_TOOL_SCHEMA_BYTES) },
+				inputSchema: { value: `${exactSchema.value}x` },
 			})
 		).toThrow("inputSchema exceeds");
 	});
@@ -86,6 +102,30 @@ describe("MCP tool wire contracts", () => {
 				inputSchema: { value: BigInt(1) },
 			})
 		).toThrow();
+	});
+
+	it("preserves own __proto__ keys", () => {
+		const inputSchema = JSON.parse('{"__proto__":{"value":true}}');
+		const parsed = mcpToolManifestEntrySchema.parse({
+			...validTool,
+			inputSchema,
+		});
+		expect(
+			typeof parsed.inputSchema === "object" &&
+				parsed.inputSchema !== null &&
+				Object.hasOwn(parsed.inputSchema, "__proto__")
+		).toBe(true);
+		expect(parsed.inputSchema).toBe(inputSchema);
+	});
+
+	it("rejects deeply nested values without overflowing the stack", () => {
+		let inputSchema: unknown = "x";
+		for (let index = 0; index < 65; index += 1) {
+			inputSchema = { value: inputSchema };
+		}
+		expect(() =>
+			mcpToolManifestEntrySchema.parse({ ...validTool, inputSchema })
+		).toThrow("inputSchema must contain only JSON values");
 	});
 
 	it("exports result byte bound", () => {
