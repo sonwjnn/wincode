@@ -297,7 +297,33 @@ describe("POST /:id/chat (transport-only)", () => {
 	});
 
 	test("forwards valid Build MCP manifest as active tools", async () => {
-		const response = await sessionsRoutes.request("/session-mcp/chat", {
+		const buildStream = mock(async (input: any) => {
+			await input.onStepEnd?.({
+				stepNumber: 0,
+				usage: { inputTokens: 1n, outputTokens: 1n, totalTokens: 2n },
+			});
+			await input.onEnd?.({
+				steps: [],
+				totalUsage: { inputTokens: 1n, outputTokens: 1n, totalTokens: 2n },
+			});
+			return new Response(null, { status: 200 });
+		});
+		const buildRoutes = createSessionsRoutes({
+			codingServerTools,
+			createCodingAgentStreamResponse: buildStream as never,
+			getBillingConfig: () =>
+				({
+					fundedRequestInputTokenLimit: 2000,
+					fundedRequestOutputTokenLimit: 8,
+					fundedRequestStepLimit: 3,
+					fundedRequestTimeWindowSeconds: 5,
+					mode: "allowlist-shadow",
+				}) as never,
+			getBillingRepository: () => billingRepository as never,
+			resolveSupportedChatModel,
+			resolveWincodeChatModelSelection,
+		});
+		const response = await buildRoutes.request("/session-mcp/chat", {
 			body: JSON.stringify({
 				messages: [
 					{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
@@ -310,7 +336,69 @@ describe("POST /:id/chat (transport-only)", () => {
 			method: "POST",
 		});
 
-		expect(response.status).toBe(400);
+		expect(response.status).toBe(200);
+		expect(buildStream).toHaveBeenCalledWith(
+			expect.objectContaining({ mcpTools: [validMcpTool] })
+		);
+	});
+
+	test("forwards completed historical dynamic tool parts without activating tool", async () => {
+		const historicalRoutes = createSessionsRoutes({
+			codingServerTools,
+			createCodingAgentStreamResponse,
+			getBillingConfig: () =>
+				({
+					fundedRequestInputTokenLimit: 2000,
+					fundedRequestOutputTokenLimit: 8,
+					fundedRequestStepLimit: 3,
+					fundedRequestTimeWindowSeconds: 5,
+					mode: "allowlist-shadow",
+				}) as never,
+			getBillingRepository: () => billingRepository as never,
+			resolveSupportedChatModel,
+			resolveWincodeChatModelSelection,
+		});
+		const response = await historicalRoutes.request(
+			"/session-mcp-history/chat",
+			{
+				body: JSON.stringify({
+					messages: [
+						{
+							id: "assistant-1",
+							parts: [
+								{
+									input: { path: "README.md" },
+									output: "historical contents",
+									state: "output-available",
+									toolCallId: "call_dynamic_1",
+									type: "tool-historical_read",
+								},
+							],
+							role: "assistant",
+						},
+						{
+							id: "user-2",
+							parts: [{ text: "continue", type: "text" }],
+							role: "user",
+						},
+					],
+					mode: "build",
+					model: "gpt-5.4-mini",
+				}),
+				headers: { "content-type": "application/json" },
+				method: "POST",
+			}
+		);
+
+		expect(response.status).toBe(200);
+		expect(createCodingAgentStreamResponse).toHaveBeenCalledWith(
+			expect.objectContaining({
+				mcpTools: [],
+				uiMessages: expect.arrayContaining([
+					expect.objectContaining({ id: "assistant-1" }),
+				]),
+			})
+		);
 	});
 
 	test("rejects malformed MCP manifest entries and oversized manifests", async () => {
@@ -508,28 +596,39 @@ describe("POST /:id/chat (transport-only)", () => {
 	});
 
 	test("rejects funded input after deterministic system/tool overhead", async () => {
-		const response = await createSessionsRoutes({
-			getBillingConfig: () =>
-				({
-					fundedRequestInputTokenLimit: 200,
-					fundedRequestOutputTokenLimit: 8,
-					fundedRequestStepLimit: 3,
-					fundedRequestTimeWindowSeconds: 5,
-					mode: "allowlist-shadow",
-				}) as never,
+		const config = () =>
+			({
+				fundedRequestInputTokenLimit: 1100,
+				fundedRequestOutputTokenLimit: 8,
+				fundedRequestStepLimit: 3,
+				fundedRequestTimeWindowSeconds: 5,
+				mode: "allowlist-shadow",
+			}) as never;
+		const request = {
+			messages: [
+				{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
+			],
+			mode: "plan",
+			model: "gpt-5.4-mini",
+		};
+		const withoutManifest = await createSessionsRoutes({
+			getBillingConfig: config,
 			getBillingRepository: () => billingRepository as never,
 		}).request("/session-16/chat", {
-			body: JSON.stringify({
-				messages: [
-					{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
-				],
-				mode: "plan",
-				model: "gpt-5.4-mini",
-			}),
+			body: JSON.stringify(request),
+			headers: { "content-type": "application/json" },
+			method: "POST",
+		});
+		const response = await createSessionsRoutes({
+			getBillingConfig: () => config(),
+			getBillingRepository: () => billingRepository as never,
+		}).request("/session-16/chat", {
+			body: JSON.stringify({ ...request, mcpTools: [validMcpTool] }),
 			headers: { "content-type": "application/json" },
 			method: "POST",
 		});
 
+		expect(withoutManifest.status).toBe(200);
 		expect(response.status).toBe(400);
 	});
 
