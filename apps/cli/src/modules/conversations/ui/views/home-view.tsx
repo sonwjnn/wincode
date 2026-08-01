@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { APP_VERSION } from "@/shared/app-info";
+import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getConversationStore } from "../../storage/get-conversation-store";
 import type { ChatPromptSubmission } from "../../utils";
 import {
@@ -22,6 +23,7 @@ export function HomeView() {
 	const [isCreatingSession, setIsCreatingSession] = useState(false);
 	const { mode, model, setMode, setModel, setVariant, variant } =
 		usePromptConfig();
+	const { colors } = useTheme();
 
 	useEffect(() => {
 		let ignore = false;
@@ -123,8 +125,10 @@ export function HomeView() {
 				>
 					<ChatTextArea disabled={isCreatingSession} onSubmit={handleSubmit} />
 					<box flexDirection="row" flexShrink={0} gap={1}>
-						<text>tab</text>
-						<text attributes={TextAttributes.DIM}>agents</text>
+						<text fg={colors.text}>tab</text>
+						<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+							agents
+						</text>
 					</box>
 				</box>
 			</box>
@@ -139,7 +143,9 @@ export function HomeView() {
 				width="100%"
 			>
 				<WorkspacePath />
-				<text attributes={TextAttributes.DIM}>{`v${APP_VERSION}`}</text>
+				<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+					{`v${APP_VERSION}`}
+				</text>
 			</box>
 		</box>
 	);

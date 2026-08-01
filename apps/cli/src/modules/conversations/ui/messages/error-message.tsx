@@ -57,14 +57,16 @@ export function ErrorMessage({ error }: ErrorMessageProps) {
 				width="100%"
 			>
 				<box
-					backgroundColor={colors.surface}
+					backgroundColor={colors.backgroundPanel}
 					justifyContent="center"
 					paddingBottom={1}
 					paddingTop={1}
 					paddingX={2}
 					width="100%"
 				>
-					<text attributes={TextAttributes.DIM}>{displayMessage}</text>
+					<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+						{displayMessage}
+					</text>
 				</box>
 			</box>
 		</box>

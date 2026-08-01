@@ -18,7 +18,7 @@ import { SessionSidebar } from "../components/session-sidebar";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
 
 const INTERRUPT_CONFIRMATION_TIMEOUT_MS = 3000;
-const SIDEBAR_WIDTH = 42;
+const SIDEBAR_WIDTH = "30%";
 const SIDEBAR_MIN_TERMINAL_WIDTH = 100;
 
 type ChatScreenProps = {

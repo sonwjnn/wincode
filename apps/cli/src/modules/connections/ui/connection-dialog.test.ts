@@ -28,7 +28,7 @@ describe("connection dialog ui", () => {
 		expect(source).toContain("onBrowserOpenUrl");
 		expect(source).toContain('key.name === "c"');
 		expect(source).toContain("colors.error");
-		expect(source).toContain('fg="#58A6FF"');
+		expect(source).toContain("fg={colors.info}");
 		expect(source).toContain('wrapMode="char"');
 		expect(source).not.toContain('enter" || key.name === "return"');
 	});
@@ -48,7 +48,7 @@ describe("connection dialog ui", () => {
 		expect(providerSource).toContain("SelectableDialogItem");
 		expect(providerSource).toContain("✓");
 		expect(providerSource).not.toContain("✓ Connected");
-		expect(providerSource).toContain("#22C55E");
+		expect(providerSource).toContain("colors.success");
 		expect(providerSource).toContain("connectedProviders.has(provider.id)");
 		expect(providerSource).toContain("displayName");
 		expect(providerSource).toContain("getConnectionProviderDetails");

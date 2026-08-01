@@ -152,10 +152,12 @@ export function ConnectionBrowserWaitingDialogContent({
 
 	return (
 		<box flexDirection="column" gap={1}>
-			<text selectable={false}>{status}</text>
+			<text fg={colors.text} selectable={false}>
+				{status}
+			</text>
 			{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI text handles terminal mouse events. */}
 			<text
-				fg="#58A6FF"
+				fg={colors.info}
 				onMouseDown={() => {
 					handleOpenUrl().catch(() => undefined);
 				}}
@@ -168,8 +170,10 @@ export function ConnectionBrowserWaitingDialogContent({
 			{error ? <text fg={colors.error}>{error}</text> : null}
 			<box flexDirection="row" gap={2} height={1}>
 				<box flexDirection="row" gap={1}>
-					<text>c</text>
-					<text attributes={TextAttributes.DIM}>copy</text>
+					<text fg={colors.text}>c</text>
+					<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+						copy
+					</text>
 				</box>
 			</box>
 		</box>

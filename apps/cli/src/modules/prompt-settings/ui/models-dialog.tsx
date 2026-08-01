@@ -12,6 +12,7 @@ import {
 	useDialog,
 	useDialogEscape,
 } from "@/shared/providers/dialog/dialog-provider";
+import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
@@ -121,7 +122,6 @@ export const ModelsDialogContent = ({
 			maxVisibleItems={Math.max(1, Math.floor(height * 0.5))}
 			onSelect={(row) => row.kind === "model" && handleSelect(row.model)}
 			placeholder="Search models"
-			// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: grouped and search row variants share selection styling.
 			renderItem={(row, isSelected, isActive, isSearching) => {
 				if (row.kind === "spacer") {
 					return null;
@@ -133,13 +133,14 @@ export const ModelsDialogContent = ({
 						</SelectableDialogItem>
 					);
 				}
+				const selectedTextColor = getContrastingTextColor(colors.selection);
+				const primaryTextColor = isSelected ? selectedTextColor : colors.text;
+				const secondaryTextColor = isSelected
+					? selectedTextColor
+					: colors.textMuted;
 				return (
 					<SelectableDialogItem
-						status={
-							isActive ? (
-								<text fg={isSelected ? "black" : "white"}>●</text>
-							) : null
-						}
+						status={isActive ? <text fg={primaryTextColor}>●</text> : null}
 					>
 						<box
 							flexDirection="row"
@@ -147,17 +148,15 @@ export const ModelsDialogContent = ({
 							justifyContent={isSearching ? "space-between" : "flex-start"}
 							paddingRight={isSearching ? 3 : 0}
 						>
-							<text fg={isSelected ? "black" : "white"}>
+							<text fg={primaryTextColor}>
 								{formatModelLabel(row.model.displayName)}
 							</text>
 							{(row.recent || isSearching) && (
 								<>
-									{!isSearching && (
-										<text fg={isSelected ? "black" : "white"}> · </text>
-									)}
+									{!isSearching && <text fg={primaryTextColor}> · </text>}
 									<text
 										attributes={isSelected ? undefined : TextAttributes.DIM}
-										fg={isSelected ? "black" : "#9AA0A6"}
+										fg={secondaryTextColor}
 									>
 										{
 											connectionProviderDisplayNames[

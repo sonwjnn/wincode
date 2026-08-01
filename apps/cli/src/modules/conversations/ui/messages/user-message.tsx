@@ -113,13 +113,13 @@ export function UserMessage({ appliedSkill, mode, parts }: UserMessageProps) {
 				width="100%"
 			>
 				<box
-					backgroundColor={colors.surface}
+					backgroundColor={colors.backgroundPanel}
 					flexDirection="column"
 					width="100%"
 				>
 					{body && (
 						<box justifyContent="center" paddingX={2} paddingY={1} width="100%">
-							<text>{body}</text>
+							<text fg={colors.text}>{body}</text>
 						</box>
 					)}
 

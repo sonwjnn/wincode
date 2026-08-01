@@ -7,6 +7,7 @@ import {
 	useDialogLayer,
 } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
+import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { getConversationStore } from "../../storage/get-conversation-store";
 
@@ -21,6 +22,7 @@ export function RenameSessionDialog({
 }: RenameSessionDialogProps) {
 	const inputRef = useRef<InputRenderable>(null);
 	const { close } = useDialog();
+	const { colors } = useTheme();
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: Only prefill once on mount.
 	useEffect(() => {
@@ -69,10 +71,18 @@ export function RenameSessionDialog({
 
 	return (
 		<box flexDirection="column" gap={1}>
-			<input focused onContentChange={() => undefined} ref={inputRef} />
+			<input
+				focused
+				focusedTextColor={colors.text}
+				onContentChange={() => undefined}
+				ref={inputRef}
+				textColor={colors.text}
+			/>
 			<box flexDirection="row" gap={2} height={1} marginTop={2}>
-				<text>enter</text>
-				<text attributes={TextAttributes.DIM}>submit</text>
+				<text fg={colors.text}>enter</text>
+				<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+					submit
+				</text>
 			</box>
 		</box>
 	);

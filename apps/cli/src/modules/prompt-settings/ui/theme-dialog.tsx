@@ -4,6 +4,7 @@ import {
 	useDialog,
 	useDialogEscape,
 } from "@/shared/providers/dialog/dialog-provider";
+import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { Theme } from "@/shared/providers/theme/themes";
 import { THEMES } from "@/shared/providers/theme/themes";
@@ -13,7 +14,7 @@ import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 export const ThemeDialogContent = () => {
 	const dialog = useDialog();
 	const { height } = useTerminalDimensions();
-	const { setTheme, currentTheme } = useTheme();
+	const { colors, setTheme, currentTheme } = useTheme();
 	const originalThemeRef = useRef(currentTheme);
 	const confirmedRef = useRef(false);
 
@@ -62,13 +63,27 @@ export const ThemeDialogContent = () => {
 				<SelectableDialogItem
 					status={
 						isActive ? (
-							<text fg={isSelected ? "black" : "white"} selectable={false}>
+							<text
+								fg={
+									isSelected
+										? getContrastingTextColor(colors.selection)
+										: colors.text
+								}
+								selectable={false}
+							>
 								{"●"}
 							</text>
 						) : null
 					}
 				>
-					<text fg={isSelected ? "black" : "white"} selectable={false}>
+					<text
+						fg={
+							isSelected
+								? getContrastingTextColor(colors.selection)
+								: colors.text
+						}
+						selectable={false}
+					>
 						{theme.name}
 					</text>
 				</SelectableDialogItem>

@@ -84,7 +84,9 @@ export function ChatShell({
 			>
 				<box flexDirection="column" gap={1}>
 					{messages.length === 0 && !error ? (
-						<text attributes={TextAttributes.DIM}>No messages yet.</text>
+						<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+							No messages yet.
+						</text>
 					) : (
 						turns.map((turn, index) => (
 							<box key={turn.id} marginTop={index === 0 ? 1 : 0} width="100%">
@@ -125,21 +127,25 @@ export function ChatShell({
 							<Spinner mode={mode} />
 							<text>
 								<span fg={colors.mode[mode]}>Esc</span>
-								<span fg={colors.dimSeparator}>
+								<span fg={colors.textMuted}>
 									{isInterruptArmed ? " again to interrupt" : " interrupt"}
 								</span>
 							</text>
 						</>
 					) : (
-						<text attributes={TextAttributes.DIM}>{process.cwd()}</text>
+						<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+							{process.cwd()}
+						</text>
 					)}
 				</box>
 
 				<box flexDirection="row" flexShrink={0} gap={2} marginLeft="auto">
 					{usage ? <SessionUsageBar summary={usage} /> : null}
 					<box flexDirection="row" flexShrink={0} gap={1}>
-						<text>tab</text>
-						<text attributes={TextAttributes.DIM}>agents</text>
+						<text fg={colors.text}>tab</text>
+						<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+							agents
+						</text>
 					</box>
 				</box>
 			</box>

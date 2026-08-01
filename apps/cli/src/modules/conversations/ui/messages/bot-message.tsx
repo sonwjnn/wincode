@@ -178,10 +178,10 @@ const resolveFooterItems = (
 	const model = metadata.model;
 	if (model) {
 		const { label, providerId } = formatModel(model);
-		items.push({ color: colors.dimSeparator, label });
+		items.push({ color: colors.textMuted, label });
 		if (providerId) {
 			items.push({
-				color: colors.dimSeparator,
+				color: colors.textMuted,
 				label: connectionProviderDisplayNames[providerId],
 				separator: "space",
 			});
@@ -190,13 +190,13 @@ const resolveFooterItems = (
 
 	if (metadata.responseTimeMs !== undefined) {
 		items.push({
-			color: colors.dimSeparator,
+			color: colors.textMuted,
 			label: formatResponseTime(metadata.responseTimeMs),
 		});
 	}
 
 	if (metadata.interrupted === true) {
-		items.push({ color: colors.dimSeparator, label: "interrupted" });
+		items.push({ color: colors.textMuted, label: "interrupted" });
 	}
 
 	return items;
@@ -210,7 +210,7 @@ function ToolMessagePart({ part }: { part: ToolPart }) {
 
 	return (
 		<box marginBottom={1} paddingX={3} width="100%">
-			<text attributes={TextAttributes.DIM}>
+			<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 				<em fg={colors.info}>{formatToolName(getToolName(part))}:</em>{" "}
 				{formatToolArgs(part)}
 				{isInProgress ? " …" : ""}
@@ -241,7 +241,7 @@ export function BotMessageContent({
 									paddingX={3}
 									width="100%"
 								>
-									<text attributes={TextAttributes.DIM}>
+									<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 										<em fg={colors.thinking}>Thinking:</em> {part.text}
 									</text>
 								</box>
@@ -255,7 +255,7 @@ export function BotMessageContent({
 						if (part.type === "text") {
 							return (
 								<box key={`text-${part.text}`} paddingX={3} width="100%">
-									<text>{part.text}</text>
+									<text fg={colors.text}>{part.text}</text>
 								</box>
 							);
 						}
@@ -287,7 +287,7 @@ export function BotMessageFooter({
 				{"  "}
 				{footerItems.map((item, index) => (
 					<span key={`${item.color}-${item.label}`}>
-						{renderFooterSeparator(index, item, colors.dimSeparator)}
+						{renderFooterSeparator(index, item, colors.textMuted)}
 						<span fg={item.color}>{item.label}</span>
 					</span>
 				))}

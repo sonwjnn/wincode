@@ -20,11 +20,15 @@ const CONTEXT_WARNING_PERCENT = 80;
 type SessionSidebarProps = {
 	messages: CodingAgentUIMessage[];
 	sessionTitle: string;
-	width: number;
+	width: `${number}%`;
 };
 
-function SectionLabel({ text }: { text: string }) {
-	return <text>{text}</text>;
+function SectionLabel({ text, color }: { text: string; color: string }) {
+	return (
+		<text attributes={TextAttributes.BOLD} fg={color}>
+			{text}
+		</text>
+	);
 }
 
 export function SessionSidebar({
@@ -50,7 +54,7 @@ export function SessionSidebar({
 
 	return (
 		<box
-			backgroundColor={colors.sidebarBackground}
+			backgroundColor={colors.backgroundPanel}
 			flexDirection="column"
 			flexShrink={0}
 			height="100%"
@@ -65,36 +69,35 @@ export function SessionSidebar({
 				width="100%"
 			>
 				<box flexDirection="column" gap={1}>
-					<text>{sessionTitle}</text>
+					<text attributes={TextAttributes.BOLD} fg={colors.text}>
+						{sessionTitle}
+					</text>
 
 					<box flexDirection="column">
-						<SectionLabel text="Context" />
+						<SectionLabel color={colors.text} text="Context" />
 						{usage ? (
 							<>
-								<text attributes={TextAttributes.DIM}>
+								<text fg={colors.textMuted}>
 									{`${formatTokenCount(usage.contextTokens)} tokens`}
 								</text>
 								{usage.contextPercent === null ? null : (
 									<text
-										attributes={
-											isContextWarning ? undefined : TextAttributes.DIM
-										}
-										fg={isContextWarning ? colors.error : undefined}
+										fg={isContextWarning ? colors.error : colors.textMuted}
 									>{`${usage.contextPercent}% used`}</text>
 								)}
 								{usage.costUsd === null ? null : (
-									<text attributes={TextAttributes.DIM}>
+									<text fg={colors.textMuted}>
 										{`${formatUsdAmount(usage.costUsd)} spent`}
 									</text>
 								)}
 							</>
 						) : (
-							<text attributes={TextAttributes.DIM}>No usage yet</text>
+							<text fg={colors.textMuted}>No usage yet</text>
 						)}
 					</box>
 
 					<box flexDirection="column">
-						<SectionLabel text="Agents" />
+						<SectionLabel color={colors.text} text="Agents" />
 						{codingModes.map((codingMode) => (
 							<box
 								flexDirection="row"
@@ -102,12 +105,10 @@ export function SessionSidebar({
 								key={codingMode.value}
 								width="100%"
 							>
-								<text attributes={TextAttributes.DIM}>
+								<text fg={colors.textMuted}>
 									{codingMode.displayName.toLowerCase()}
 								</text>
-								<text attributes={TextAttributes.DIM}>
-									{modelLabel.toLowerCase()}
-								</text>
+								<text fg={colors.textMuted}>{modelLabel.toLowerCase()}</text>
 							</box>
 						))}
 					</box>
@@ -118,9 +119,9 @@ export function SessionSidebar({
 				<WorkspacePath />
 				<text>
 					<span fg={colors.primary}>{"• "}</span>
-					<span attributes={TextAttributes.DIM}>Win</span>
-					<b>Code</b>
-					<span attributes={TextAttributes.DIM}>{` ${APP_VERSION}`}</span>
+					<span fg={colors.textMuted}>Win</span>
+					<b fg={colors.text}>Code</b>
+					<span fg={colors.textMuted}>{` ${APP_VERSION}`}</span>
 				</text>
 			</box>
 		</box>
