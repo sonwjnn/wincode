@@ -1,3 +1,4 @@
+import path from "node:path";
 import { type ParseError, parse as parseJsonc } from "jsonc-parser";
 
 export type McpTimeouts = {
@@ -44,11 +45,11 @@ export type McpConfigResult = {
 	diagnostics: McpConfigDiagnostic[];
 };
 
-const DEFAULT_TIMEOUTS: McpTimeouts = {
+export const DEFAULT_MCP_TIMEOUTS = {
 	startup: 30_000,
 	catalog: 30_000,
 	execution: 43_200_000,
-};
+} as const satisfies McpTimeouts;
 const ENV_PATTERN = /^\{env:([^{}]+)\}$/;
 const defaultFs = {
 	readFile: (path: string) => globalThis.Bun.file(path).text(),
@@ -99,22 +100,22 @@ const readScope = async (
 		}
 	}
 	try {
+		await fs.readFile(path === jsonc ? json : jsonc);
+		add(
+			diagnostics,
+			scope,
+			"duplicate-config",
+			`Ignored duplicate config ${path === jsonc ? json : jsonc}`,
+			path
+		);
+	} catch {
+		// Alternate config absent.
+	}
+	try {
 		const errors: ParseError[] = [];
 		const value = parseJsonc(source, errors, { allowTrailingComma: true });
 		if (errors.length || !isObject(value)) {
 			throw new Error("invalid");
-		}
-		try {
-			await fs.readFile(path === jsonc ? json : jsonc);
-			add(
-				diagnostics,
-				scope,
-				"duplicate-config",
-				`Ignored duplicate config ${path === jsonc ? json : jsonc}`,
-				path
-			);
-		} catch {
-			/* absent */
 		}
 		return { value, path, scope };
 	} catch {
@@ -154,7 +155,7 @@ const resolveString = (
 			diagnostics,
 			scope.scope,
 			"missing-env",
-			"Missing environment variable",
+			`Missing environment variable ${variable} for server ${name}`,
 			path,
 			name
 		);
@@ -226,19 +227,51 @@ export async function loadMcpConfig(
 		readScope(input.globalRoot, "global", fs, diagnostics),
 		readScope(input.workspace, "project", fs, diagnostics),
 	]);
-	const gm = isObject(global.value.mcp) ? global.value.mcp : {};
-	const pm = isObject(project.value.mcp) ? project.value.mcp : {};
-	const gs = isObject(gm.servers) ? gm.servers : {};
-	const ps = isObject(pm.servers) ? pm.servers : {};
+	const readMcp = (scope: ScopeData): Record<string, unknown> => {
+		if (scope.value.mcp === undefined) {
+			return {};
+		}
+		if (!isObject(scope.value.mcp)) {
+			add(
+				diagnostics,
+				scope.scope,
+				"invalid-scope",
+				"mcp must be object",
+				`${scope.path}:mcp`
+			);
+			return {};
+		}
+		return scope.value.mcp;
+	};
+	const readServers = (scope: ScopeData, mcp: Record<string, unknown>) => {
+		if (mcp.servers === undefined) {
+			return {};
+		}
+		if (!isObject(mcp.servers)) {
+			add(
+				diagnostics,
+				scope.scope,
+				"invalid-scope",
+				"mcp.servers must be object",
+				`${scope.path}:mcp.servers`
+			);
+			return {};
+		}
+		return mcp.servers;
+	};
+	const gm = readMcp(global);
+	const pm = readMcp(project);
+	const gs = readServers(global, gm);
+	const ps = readServers(project, pm);
 	const globalTimeout = timeoutValue(
 		gm.timeout,
-		DEFAULT_TIMEOUTS,
+		DEFAULT_MCP_TIMEOUTS,
 		diagnostics,
 		global
 	);
 	const projectTimeout = timeoutValue(
 		pm.timeout,
-		globalTimeout ?? DEFAULT_TIMEOUTS,
+		globalTimeout ?? DEFAULT_MCP_TIMEOUTS,
 		diagnostics,
 		project
 	);
@@ -250,27 +283,12 @@ export async function loadMcpConfig(
 		const scope = Object.keys(pv).length ? project : global;
 		const timeout = timeoutValue(
 			raw.timeout,
-			projectTimeout ?? globalTimeout ?? DEFAULT_TIMEOUTS,
+			projectTimeout ?? globalTimeout ?? DEFAULT_MCP_TIMEOUTS,
 			diagnostics,
 			scope,
 			name
 		);
 		if (!timeout) {
-			continue;
-		}
-		const allowed =
-			raw.type === "local"
-				? ["type", "command", "cwd", "environment", "disabled", "timeout"]
-				: ["type", "url", "headers", "oauth", "disabled", "timeout"];
-		if (Object.keys(raw).some((key) => !allowed.includes(key))) {
-			add(
-				diagnostics,
-				scope.scope,
-				"invalid-field",
-				"Unsupported server field",
-				`${scope.path}:mcp.servers.${name}`,
-				name
-			);
 			continue;
 		}
 		if (
@@ -365,9 +383,10 @@ export async function loadMcpConfig(
 				command: raw.command as [string, ...string[]],
 				...(raw.cwd
 					? {
-							cwd: raw.cwd.startsWith("/")
-								? raw.cwd
-								: `${input.workspace}/${raw.cwd}`,
+							cwd:
+								path.isAbsolute(raw.cwd) || path.win32.isAbsolute(raw.cwd)
+									? raw.cwd
+									: `${input.workspace}/${raw.cwd}`,
 						}
 					: {}),
 				...(Object.keys(env).length ? { environment: env } : {}),
