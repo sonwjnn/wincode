@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { mcpToolManifestSchema } from "./mcp-tools";
 import { supportedChatModelIdSchema } from "./models";
 import type { CodingToolName } from "./tools/schemas";
 
@@ -39,6 +40,7 @@ export const codingModeNameSchema = z.enum(codingModeNames);
 export const codingAgentCallOptionsSchema = z.object({
 	mode: codingModeNameSchema.optional(),
 	model: supportedChatModelIdSchema.optional(),
+	mcpTools: mcpToolManifestSchema.optional(),
 });
 
 export type CodingAgentCallOptions = z.infer<

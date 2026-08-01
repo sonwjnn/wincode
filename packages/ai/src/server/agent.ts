@@ -1,5 +1,5 @@
 import type { ProviderOptions } from "@ai-sdk/provider-utils";
-import type { OnFinishEvent, OnStepFinishEvent } from "ai";
+import type { OnFinishEvent, OnStepFinishEvent, ToolSet } from "ai";
 import { type LanguageModel, stepCountIs, ToolLoopAgent } from "ai";
 import { getSystemInstructions } from "../instructions";
 import {
@@ -9,12 +9,11 @@ import {
 	getCodingMode,
 } from "../modes";
 import type { SkillContext } from "../skill-context";
+import { convertMcpToolManifest } from "./mcp-tools";
 import { codingServerTools } from "./tools";
 
-export type CodingAgentStepEndEvent = OnStepFinishEvent<
-	typeof codingServerTools
->;
-export type CodingAgentEndEvent = OnFinishEvent<typeof codingServerTools>;
+export type CodingAgentStepEndEvent = OnStepFinishEvent<ToolSet>;
+export type CodingAgentEndEvent = OnFinishEvent<ToolSet>;
 
 export type CodingAgentLifecycleCallbacks = {
 	onStepEnd?: (event: CodingAgentStepEndEvent) => Promise<void> | void;
@@ -57,17 +56,21 @@ export const createCodingAgent = ({
 	lifecycleCallbacks,
 	providerOptions,
 }: CreateCodingAgentOptions) =>
-	new ToolLoopAgent<CodingAgentCallOptions, typeof codingServerTools>({
+	new ToolLoopAgent<CodingAgentCallOptions, ToolSet>({
 		callOptionsSchema: codingAgentCallOptionsSchema,
 		instructions: getSystemInstructions(defaultMode.value),
 		maxOutputTokens,
 		model,
 		prepareCall: ({ options: callOptions, ...options }) => {
 			const codingMode = getCodingMode(callOptions?.mode ?? defaultMode.value);
+			const mcpTools = convertMcpToolManifest(callOptions?.mcpTools ?? []);
+			const activeMcpTools =
+				codingMode.value === "plan" ? [] : Object.keys(mcpTools);
 
 			return {
 				...options,
-				activeTools: [...codingMode.tools],
+				activeTools: [...codingMode.tools, ...activeMcpTools],
+				tools: { ...codingServerTools, ...mcpTools },
 			};
 		},
 		onFinish: async (event) => {

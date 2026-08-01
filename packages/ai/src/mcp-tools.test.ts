@@ -8,6 +8,7 @@ import {
 	mcpToolManifestEntrySchema,
 	mcpToolManifestSchema,
 } from "./mcp-tools";
+import { convertMcpToolManifest } from "./server/mcp-tools";
 
 const validTool = {
 	name: "read_file",
@@ -16,6 +17,17 @@ const validTool = {
 };
 
 describe("MCP tool wire contracts", () => {
+	it("converts manifests to schema-only dynamic tools", () => {
+		const [tool] = Object.values(convertMcpToolManifest([validTool]));
+
+		expect(tool).toMatchObject({
+			description: validTool.description,
+			type: "dynamic",
+		});
+		expect(tool?.inputSchema).toBeDefined();
+		expect("execute" in (tool ?? {})).toBe(false);
+	});
+
 	it("accepts valid tools and manifests", () => {
 		expect(mcpToolManifestEntrySchema.parse(validTool)).toEqual(validTool);
 		expect(mcpToolManifestSchema.parse([validTool])).toEqual([validTool]);
