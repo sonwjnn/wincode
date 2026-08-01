@@ -1,4 +1,4 @@
-const HEX_COLOR_RE = /^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})$/iu;
+const HEX_COLOR_RE = /^#?([\da-f]{3,4}|[\da-f]{6}(?:[\da-f]{2})?)$/iu;
 
 const getRelativeLuminance = (backgroundColor: string): number | null => {
 	const match = backgroundColor.match(HEX_COLOR_RE);
@@ -6,9 +6,22 @@ const getRelativeLuminance = (backgroundColor: string): number | null => {
 		return null;
 	}
 
-	const channels = match.slice(1).map((channel) => {
+	const hex = match[1] ?? "";
+	const expanded =
+		hex.length <= 4
+			? [...hex].map((value) => `${value}${value}`).join("")
+			: hex;
+	const alpha = Number.parseInt(expanded.slice(6) || "ff", 16) / 255;
+	const channels = [
+		expanded.slice(0, 2),
+		expanded.slice(2, 4),
+		expanded.slice(4, 6),
+	].map((channel) => {
 		const srgb = Number.parseInt(channel ?? "0", 16) / 255;
-		return srgb <= 0.039_28 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4;
+		const composited = srgb * alpha;
+		return composited <= 0.039_28
+			? composited / 12.92
+			: ((composited + 0.055) / 1.055) ** 2.4;
 	});
 
 	return (

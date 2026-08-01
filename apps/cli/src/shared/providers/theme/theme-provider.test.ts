@@ -16,9 +16,9 @@ describe("parseThemePreference", () => {
 		expect(parseThemePreference(raw)).toBe(DEFAULT_THEME);
 	});
 
-	test("returns matching theme for valid preference", () => {
-		expect(parseThemePreference('{"themeName":"Dracula"}').name).toBe(
-			"Dracula"
+	test("returns matching theme for valid default preference", () => {
+		expect(parseThemePreference('{"themeName":"opencode"}').name).toBe(
+			"opencode"
 		);
 	});
 });

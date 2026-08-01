@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { getContrastRatio } from "./color-contrast";
 import {
 	DEFAULT_THEME,
 	findThemeByName,
@@ -7,7 +8,44 @@ import {
 	type ThemeDefinition,
 } from "./themes";
 
-const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+const OPENCODE_THEME_NAMES = [
+	"aura",
+	"ayu",
+	"carbonfox",
+	"catppuccin-frappe",
+	"catppuccin-macchiato",
+	"catppuccin",
+	"cobalt2",
+	"cursor",
+	"dracula",
+	"everforest",
+	"flexoki",
+	"github",
+	"gruvbox",
+	"kanagawa",
+	"lucent-orng",
+	"material",
+	"matrix",
+	"mercury",
+	"monokai",
+	"nightowl",
+	"nord",
+	"one-dark",
+	"opencode",
+	"orng",
+	"osaka-jade",
+	"palenight",
+	"rosepine",
+	"solarized",
+	"synthwave84",
+	"tokyonight",
+	"vercel",
+	"vesper",
+	"zenburn",
+] as const;
+
+const THEME_COLOR =
+	/^(?:#[0-9a-f]{3,4}|#[0-9a-f]{6}(?:[0-9a-f]{2})?|transparent)$/i;
 
 const definition: ThemeDefinition = {
 	name: "Test",
@@ -65,14 +103,74 @@ describe("resolveTheme", () => {
 		expect(colors.borderActive).toBe("#dddddd");
 		expect(colors.filePath).toBe("#eeeeee");
 	});
+
+	test("preserves alpha in derived colors", () => {
+		const colors = resolveTheme({
+			...definition,
+			colors: {
+				...definition.colors,
+				background: "#00000080",
+				borderSubtle: "#40404066",
+			},
+		}).colors;
+
+		expect(colors.text).toBe("#e0e0e080");
+		expect(colors.textMuted).toBe("#94949480");
+		expect(colors.textDisabled).toBe("#61616180");
+		expect(colors.filePath).toBe("#83838366");
+	});
+
+	test("normalizes shorthand derived colors and preserves alpha", () => {
+		const colors = resolveTheme({
+			...definition,
+			colors: {
+				...definition.colors,
+				background: "#0008",
+				borderSubtle: "#468a",
+			},
+		}).colors;
+
+		expect(colors.text).toBe("#e0e0e088");
+		expect(colors.textMuted).toBe("#94949488");
+		expect(colors.textDisabled).toBe("#61616188");
+		expect(colors.filePath).toBe("#859cb2aa");
+	});
+
+	test("chooses accessible badge text for transparent backgrounds", () => {
+		const colors = resolveTheme({
+			...definition,
+			colors: { ...definition.colors, background: "transparent" },
+		}).colors;
+
+		expect(["black", "white"]).toContain(colors.fileBadgeText);
+		expect(colors.fileBadgeText).not.toBe("transparent");
+		expect(
+			getContrastRatio(
+				definition.colors.primary,
+				colors.fileBadgeText as "black" | "white"
+			)
+		).toBeGreaterThanOrEqual(4.5);
+	});
 });
 
-test("all built-in themes resolve complete semantic colors", () => {
+test("contains the pinned OpenCode theme catalog", () => {
+	expect(THEMES).toHaveLength(33);
+	expect(THEMES.map(({ name }) => name)).toEqual([...OPENCODE_THEME_NAMES]);
+});
+
+test("maps OpenCode semantic colors consistently", () => {
 	for (const theme of THEMES) {
 		for (const color of [
+			theme.colors.primary,
+			theme.colors.planMode,
+			theme.colors.selection,
+			theme.colors.thinking,
+			theme.colors.success,
+			theme.colors.error,
+			theme.colors.info,
 			theme.colors.text,
 			theme.colors.textMuted,
-			theme.colors.textDisabled,
+			theme.colors.background,
 			theme.colors.backgroundPanel,
 			theme.colors.backgroundElement,
 			theme.colors.backgroundMenu,
@@ -80,22 +178,29 @@ test("all built-in themes resolve complete semantic colors", () => {
 			theme.colors.borderSubtle,
 			theme.colors.borderActive,
 		]) {
-			expect(color).toMatch(HEX_COLOR);
+			expect(color).toMatch(THEME_COLOR);
 		}
+
+		expect(theme.colors.selection).toBe(theme.colors.primary);
+		expect(theme.colors.planMode).toBe(theme.colors.mode.plan);
+		expect(theme.colors.thinking).toBe(theme.colors.mode.plan);
+		expect(theme.colors.backgroundMenu).toBe(theme.colors.backgroundElement);
 	}
 });
 
-test("default theme is Sonvox", () => {
-	expect(DEFAULT_THEME.name).toBe("Sonvox");
+test("default theme is opencode", () => {
+	expect(DEFAULT_THEME.name).toBe("opencode");
 });
 
-test("findThemeByName selects Sonvox by exact name", () => {
-	const nonSonvox = resolveTheme({ ...definition, name: "sonvox" });
-	const sonvox = resolveTheme({ ...definition, name: "Sonvox" });
+test("findThemeByName selects opencode by exact name", () => {
+	const nonDefault = resolveTheme({ ...definition, name: "Opencode" });
+	const opencode = resolveTheme({ ...definition, name: "opencode" });
 
-	expect(findThemeByName([nonSonvox, sonvox], "Sonvox")).toBe(sonvox);
+	expect(findThemeByName([nonDefault, opencode], "opencode")).toBe(opencode);
 });
 
 test("findThemeByName returns undefined when absent", () => {
-	expect(findThemeByName([resolveTheme(definition)], "Sonvox")).toBeUndefined();
+	expect(
+		findThemeByName([resolveTheme(definition)], "opencode")
+	).toBeUndefined();
 });

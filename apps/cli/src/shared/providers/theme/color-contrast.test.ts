@@ -35,4 +35,21 @@ describe("getContrastingTextColor", () => {
 	test("uses dark text for an invalid color fallback", () => {
 		expect(getContrastingTextColor("invalid")).toBe("black");
 	});
+
+	test("supports 8-digit hex colors", () => {
+		expect(getContrastingTextColor("#ffffff80")).toBe("black");
+		expect(getContrastingTextColor("#00000000")).toBe("white");
+	});
+
+	test("supports shorthand hex colors with alpha", () => {
+		expect(getContrastRatio("#f008", "white")).toBe(
+			getContrastRatio("#ff000088", "white")
+		);
+	});
+
+	test("composites alpha colors against black", () => {
+		expect(getContrastRatio("#ff000080", "white")).toBeGreaterThan(
+			getContrastRatio("#ff000080", "black")
+		);
+	});
 });
