@@ -37,7 +37,7 @@ export function SessionSidebar({
 	width,
 }: SessionSidebarProps) {
 	const { colors } = useTheme();
-	const { mode, model } = usePromptConfig();
+	const { model } = usePromptConfig();
 	const { table } = useModelPricing();
 	const usage = useMemo(
 		() => summarizeSessionUsage(messages, model, table),
@@ -47,12 +47,10 @@ export function SessionSidebar({
 	const modelLabel = chatModel
 		? formatModelLabel(chatModel.displayName)
 		: model.modelId;
-	const percentColor =
+	const isContextWarning =
 		usage?.contextPercent !== null &&
 		usage?.contextPercent !== undefined &&
-		usage.contextPercent >= CONTEXT_WARNING_PERCENT
-			? colors.error
-			: colors.textMuted;
+		usage.contextPercent >= CONTEXT_WARNING_PERCENT;
 
 	return (
 		<box
@@ -60,7 +58,8 @@ export function SessionSidebar({
 			flexDirection="column"
 			flexShrink={0}
 			height="100%"
-			paddingX={2}
+			paddingLeft={2}
+			paddingRight={3}
 			paddingY={1}
 			width={width}
 		>
@@ -83,7 +82,7 @@ export function SessionSidebar({
 								</text>
 								{usage.contextPercent === null ? null : (
 									<text
-										fg={percentColor}
+										fg={isContextWarning ? colors.error : colors.textMuted}
 									>{`${usage.contextPercent}% used`}</text>
 								)}
 								{usage.costUsd === null ? null : (
@@ -99,22 +98,19 @@ export function SessionSidebar({
 
 					<box flexDirection="column">
 						<SectionLabel color={colors.text} text="Agents" />
-						{codingModes.map((codingMode) => {
-							const isActive = codingMode.value === mode;
-							return (
-								<box
-									flexDirection="row"
-									justifyContent="space-between"
-									key={codingMode.value}
-									width="100%"
-								>
-									<text fg={isActive ? colors.mode[mode] : colors.textMuted}>
-										{codingMode.displayName}
-									</text>
-									<text fg={colors.textMuted}>{modelLabel}</text>
-								</box>
-							);
-						})}
+						{codingModes.map((codingMode) => (
+							<box
+								flexDirection="row"
+								justifyContent="space-between"
+								key={codingMode.value}
+								width="100%"
+							>
+								<text fg={colors.textMuted}>
+									{codingMode.displayName.toLowerCase()}
+								</text>
+								<text fg={colors.textMuted}>{modelLabel.toLowerCase()}</text>
+							</box>
+						))}
 					</box>
 				</box>
 			</scrollbox>

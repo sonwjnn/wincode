@@ -8,7 +8,11 @@ import { APP_VERSION } from "@/shared/app-info";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getConversationStore } from "../../storage/get-conversation-store";
 import type { ChatPromptSubmission } from "../../utils";
-import { getLatestChatConfig, getMostRecentSession } from "../../utils";
+import {
+	createSkillSnapshot,
+	getLatestChatConfig,
+	getMostRecentSession,
+} from "../../utils";
 import { AsciiArt } from "../components/ascii-art";
 import { ChatTextArea } from "../components/chat-text-area";
 import { WorkspacePath } from "../components/workspace-path";
@@ -48,7 +52,7 @@ export function HomeView() {
 		};
 	}, [setMode, setModel, setVariant]);
 
-	const handleSubmit = async ({ files, text }: ChatPromptSubmission) => {
+	const handleSubmit = async ({ files, skill, text }: ChatPromptSubmission) => {
 		if (isCreatingSession) {
 			return false;
 		}
@@ -62,7 +66,7 @@ export function HomeView() {
 		setIsCreatingSession(true);
 
 		try {
-			await createSession(prompt, files);
+			await createSession(prompt, files, skill);
 			return true;
 		} catch {
 			setError("Could not create chat session.");
@@ -74,13 +78,19 @@ export function HomeView() {
 
 	const createSession = async (
 		input: string,
-		files: ChatPromptSubmission["files"]
+		files: ChatPromptSubmission["files"],
+		skill: ChatPromptSubmission["skill"]
 	) => {
 		const fileMentions = await resolveFileMentionParts(input);
 		const { id } = await getConversationStore().createSession({
 			message: createUserMessage(
 				input,
-				{ mode, model, variant },
+				{
+					mode,
+					model,
+					variant,
+					...(skill ? { skill: createSkillSnapshot(skill) } : {}),
+				},
 				fileMentions,
 				files
 			),

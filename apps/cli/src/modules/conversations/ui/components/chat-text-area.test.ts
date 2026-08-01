@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
+import type { Skill } from "@/modules/skills";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
 import {
 	areFileMentionExtmarksCurrent,
@@ -11,8 +12,99 @@ import {
 	mapOffsetThroughTextReplacement,
 	normalizeFileTokensForTrimmedText,
 } from "../../utils";
+import { resolveSkillPrompt } from "./chat-text-area";
+
+const TEST_SKILL: Skill = {
+	body: "Review the implementation carefully.",
+	description: "Reviews implementation",
+	filePath: "/tmp/review/SKILL.md",
+	name: "review",
+	scope: "project",
+};
 
 describe("ChatTextArea", () => {
+	test("resolves recognized skill invocations to request-scoped context", async () => {
+		await expect(
+			resolveSkillPrompt("/review focus on auth", async () => [TEST_SKILL])
+		).resolves.toEqual({
+			skill: {
+				arguments: "focus on auth",
+				instructions: TEST_SKILL.body,
+				name: "review",
+			},
+			text: "/review focus on auth",
+		});
+	});
+
+	test("accepts recognized zero-argument skill invocations", async () => {
+		await expect(
+			resolveSkillPrompt("/review", async () => [TEST_SKILL])
+		).resolves.toEqual({
+			skill: {
+				arguments: "",
+				instructions: TEST_SKILL.body,
+				name: "review",
+			},
+			text: "/review",
+		});
+	});
+
+	test("keeps visible pasted-text tokens while resolving expanded skill args", async () => {
+		await expect(
+			resolveSkillPrompt(
+				"/review expanded pasted content",
+				async () => [TEST_SKILL],
+				"/review [Pasted Text 1]"
+			)
+		).resolves.toEqual({
+			skill: {
+				arguments: "expanded pasted content",
+				instructions: TEST_SKILL.body,
+				name: "review",
+			},
+			text: "/review [Pasted Text 1]",
+		});
+	});
+
+	test("submits unknown slash text normally", async () => {
+		await expect(
+			resolveSkillPrompt("/unknown keep this", async () => [TEST_SKILL])
+		).resolves.toEqual({ text: "/unknown keep this" });
+	});
+
+	test("surfaces skill discovery failures", async () => {
+		const failure = new Error("Skill directory is unavailable");
+		await expect(
+			resolveSkillPrompt("/review", async () => {
+				throw failure;
+			})
+		).rejects.toBe(failure);
+	});
+
+	test("keeps original skill command as visible history text", async () => {
+		const textAreaSource = await readFile(
+			new URL("./chat-text-area.tsx", import.meta.url),
+			"utf8"
+		);
+
+		expect(textAreaSource).toContain("const visibleText = rawText.trim();");
+		expect(textAreaSource).toContain("text: visibleText");
+		expect(textAreaSource).toContain(
+			"resolveSkillPrompt(text, discoverSkills, visibleText)"
+		);
+	});
+
+	test("replaces the full prompt when a skill command is selected", async () => {
+		const textAreaSource = await readFile(
+			new URL("./chat-text-area.tsx", import.meta.url),
+			"utf8"
+		);
+
+		expect(textAreaSource).toContain("textarea.setText(command);");
+		expect(textAreaSource).toContain("textarea.cursorOffset = command.length;");
+		expect(textAreaSource).not.toContain("textarea.insertText(command);");
+	});
+
 	test("binds enter to submit and modified enter to newline", () => {
 		expect(CHAT_TEXT_AREA_KEY_BINDINGS).toEqual([
 			{ action: "submit", name: "return" },
@@ -67,7 +159,7 @@ describe("ChatTextArea", () => {
 			"utf8"
 		);
 
-		expect(textAreaSource).toContain("export type ChatPromptSubmission");
+		expect(textAreaSource).toContain("type ChatPromptSubmission");
 		expect(textAreaSource).toContain("MAX_IMAGE_ATTACHMENTS = 5");
 		expect(textAreaSource).toContain("MAX_IMAGE_BYTES = 10 * 1024 * 1024");
 		expect(textAreaSource).toContain("if (!text && files.length === 0)");

@@ -283,7 +283,8 @@ export function BotMessageFooter({
 	return (
 		<box paddingX={3} width="100%">
 			<text>
-				<span fg={colors.primary}>{FOOTER_ICON}</span>{" "}
+				<span fg={colors.primary}>{FOOTER_ICON}</span>
+				{"  "}
 				{footerItems.map((item, index) => (
 					<span key={`${item.color}-${item.label}`}>
 						{renderFooterSeparator(index, item, colors.textMuted)}

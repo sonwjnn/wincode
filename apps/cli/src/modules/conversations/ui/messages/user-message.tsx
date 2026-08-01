@@ -4,8 +4,16 @@ import { EmptyBorder } from "@/shared/constants";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 
 type UserMessageProps = {
+	appliedSkill?: AppliedSkill;
 	mode: ModeType;
 	parts: CodingAgentUIMessage["parts"];
+};
+
+export type AppliedSkill = {
+	arguments: string;
+	contentHash: string;
+	instructions: string;
+	name: string;
 };
 
 type TextPart = Extract<
@@ -47,7 +55,39 @@ const getMessageParts = (message: string) => {
 const getMentionTypeLabel = (path: string) =>
 	path.endsWith("/") ? "Directory" : "File";
 
-export function UserMessage({ mode, parts }: UserMessageProps) {
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === "object" && value !== null;
+
+export const getAppliedSkill = (
+	metadata: unknown
+): AppliedSkill | undefined => {
+	if (!isRecord(metadata)) {
+		return;
+	}
+	if (!isRecord(metadata.skill)) {
+		return;
+	}
+
+	const skill = metadata.skill;
+	if (
+		typeof skill.arguments !== "string" ||
+		typeof skill.contentHash !== "string" ||
+		typeof skill.instructions !== "string" ||
+		typeof skill.name !== "string" ||
+		skill.name.length === 0
+	) {
+		return;
+	}
+
+	return {
+		arguments: skill.arguments,
+		contentHash: skill.contentHash,
+		instructions: skill.instructions,
+		name: skill.name,
+	};
+};
+
+export function UserMessage({ appliedSkill, mode, parts }: UserMessageProps) {
 	const { colors } = useTheme();
 	const borderColor = colors.mode[mode];
 	const message = parts
@@ -56,6 +96,8 @@ export function UserMessage({ mode, parts }: UserMessageProps) {
 		.join("");
 	const imageParts = parts.filter(isImagePart);
 	const { body, fileMentions } = getMessageParts(message);
+	const hasAttachmentBadges = fileMentions.length > 0 || imageParts.length > 0;
+	const hasBadges = appliedSkill !== undefined || hasAttachmentBadges;
 
 	return (
 		<box alignItems="center" width="100%">
@@ -81,7 +123,7 @@ export function UserMessage({ mode, parts }: UserMessageProps) {
 						</box>
 					)}
 
-					{(fileMentions.length > 0 || imageParts.length > 0) && (
+					{hasBadges && (
 						<box
 							flexDirection="row"
 							flexWrap="wrap"
@@ -90,6 +132,22 @@ export function UserMessage({ mode, parts }: UserMessageProps) {
 							paddingX={2}
 							width="100%"
 						>
+							{appliedSkill && (
+								<box alignItems="center" flexDirection="row" flexShrink={0}>
+									<box
+										backgroundColor={colors.fileBadgeBackground}
+										paddingX={1}
+									>
+										<text fg={colors.fileBadgeText}>
+											<strong>Skill</strong>
+										</text>
+									</box>
+									<box backgroundColor={colors.filePathBackground} paddingX={1}>
+										<text fg={colors.filePath}>{appliedSkill.name}</text>
+									</box>
+								</box>
+							)}
+
 							{fileMentions.map(({ path, start }) => (
 								<box
 									alignItems="center"

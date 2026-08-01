@@ -1,4 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
+import { fitsSerializedBytes, truncateUtf8 } from "../output-bounds";
 import { traverseWorkspace } from "../traversal";
 import type { GrepInput, GrepOutput } from "./schema";
 
@@ -6,6 +7,8 @@ const GREP_MAX_DEPTH = 5;
 const GREP_MAX_FILE_BYTES = 1_000_000;
 const GREP_MAX_FILES = 1000;
 const GREP_MAX_MATCHES = 1000;
+const GREP_OUTPUT_MAX_BYTES = 6000;
+const GREP_LINE_MAX_BYTES = 1000;
 
 const createRegex = (input: GrepInput) => {
 	try {
@@ -39,14 +42,23 @@ export const runGrepTool = async (input: GrepInput): Promise<GrepOutput> => {
 			regex.lastIndex = 0;
 
 			if (regex.test(line)) {
-				matches.push({
-					line,
+				const match = {
+					line: truncateUtf8(line, GREP_LINE_MAX_BYTES),
 					lineNumber: index + 1,
 					path: entry.relativePath,
-				});
+				};
+				if (
+					!fitsSerializedBytes(
+						{ matches: [...matches, match] },
+						GREP_OUTPUT_MAX_BYTES
+					)
+				) {
+					return { matches, truncated: true };
+				}
+				matches.push(match);
 
 				if (matches.length >= GREP_MAX_MATCHES) {
-					return { matches };
+					return { matches, truncated: true };
 				}
 			}
 		}

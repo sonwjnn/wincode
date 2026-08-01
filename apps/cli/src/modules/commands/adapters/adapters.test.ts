@@ -6,6 +6,7 @@ import {
 	ModeAdapter,
 	ModelsAdapter,
 	NewAdapter,
+	SkillsAdapter,
 	VariantsAdapter,
 } from ".";
 
@@ -78,6 +79,24 @@ describe("DialogAdapter", () => {
 			dialogKey: "theme",
 		});
 		expect(opened).toEqual([{ key: "theme", title: "Select Theme" }]);
+	});
+});
+
+describe("SkillsAdapter", () => {
+	test("opens skills dialog", () => {
+		let opened = false;
+		const adapter = new SkillsAdapter({
+			open: () => {
+				opened = true;
+			},
+		});
+		adapter.execute({
+			description: "",
+			kind: "skills",
+			name: "skills",
+			value: "/skills",
+		});
+		expect(opened).toBe(true);
 	});
 });
 

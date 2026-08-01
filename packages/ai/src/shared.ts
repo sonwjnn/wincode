@@ -19,13 +19,20 @@ export type {
 	CodingAgentTools,
 	CodingAgentUIMessage,
 } from "./message";
-export type { CodingMessageMetadata, CodingMessageUsage } from "./metadata";
+export type {
+	CodingMessageMetadata,
+	CodingMessageSkill,
+	CodingMessageUsage,
+} from "./metadata";
 export {
 	codingMessageMetadataSchema,
+	codingMessageSkillSchema,
 	codingMessageUsageSchema,
 } from "./metadata";
 export * from "./models";
 export * from "./modes";
 export { sanitizeInterruptedMessagesForModel } from "./sanitize-interrupted-messages";
+export type { SkillContext } from "./skill-context";
+export { formatSkillUserContext, skillContextSchema } from "./skill-context";
 export * from "./tools/schemas";
 export * from "./usage";

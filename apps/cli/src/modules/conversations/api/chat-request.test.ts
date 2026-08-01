@@ -2,6 +2,66 @@ import { describe, expect, test } from "bun:test";
 import { prepareSendChatRequestBody } from "./chat-request";
 
 describe("prepareSendChatRequestBody", () => {
+	const model = { modelId: "gpt-5.4-mini", providerId: "wincode" } as const;
+
+	test("uses most recent user skill when assistant is last", () => {
+		const body = prepareSendChatRequestBody("session-1", [
+			{
+				id: "1",
+				role: "user",
+				parts: [],
+				metadata: {
+					mode: "build",
+					model,
+					skill: {
+						name: "review",
+						arguments: "focus",
+						instructions: "Review code",
+						contentHash: "hash-review",
+					},
+				},
+			},
+			{
+				id: "2",
+				role: "assistant",
+				parts: [],
+				metadata: { mode: "build", model },
+			},
+		]);
+
+		expect(body.skill).toEqual({
+			name: "review",
+			arguments: "focus",
+			instructions: "Review code",
+		});
+	});
+
+	test("uses skill snapshot on latest user message", () => {
+		const body = prepareSendChatRequestBody("session-1", [
+			{
+				id: "1",
+				role: "user",
+				parts: [],
+				metadata: {
+					mode: "build",
+					model,
+					skill: {
+						name: "plan",
+						arguments: "",
+						instructions: "Make a plan",
+						contentHash: "hash-plan",
+					},
+				},
+			},
+		]);
+
+		expect(body.skill).toEqual({
+			name: "plan",
+			arguments: "",
+			instructions: "Make a plan",
+		});
+	});
+
 	test("keeps undefined variant on latest metadata turn", () => {
 		const body = prepareSendChatRequestBody(
 			"session-1",
