@@ -1,80 +1,125 @@
 import { type ParseError, parse as parseJsonc } from "jsonc-parser";
 
-export type LocalMcpServer = {
+export type McpTimeouts = {
+	startup: number;
+	catalog: number;
+	execution: number;
+};
+export type McpConfigDiagnostic = {
+	serverName?: string;
+	scope: "global" | "project";
+	code: string;
+	message: string;
+	path: string;
+};
+export type LocalMcpServerConfig = {
 	name: string;
 	type: "local";
 	command: [string, ...string[]];
 	cwd?: string;
 	environment?: Record<string, string>;
 	disabled: boolean;
-	timeout: number;
+	timeout: McpTimeouts;
 };
-export type RemoteMcpServer = {
+export type RemoteMcpServerConfig = {
 	name: string;
 	type: "remote";
 	url: string;
 	headers?: Record<string, string>;
 	oauth?: false;
 	disabled: boolean;
-	timeout: number;
+	timeout: McpTimeouts;
 };
-export type McpServer = LocalMcpServer | RemoteMcpServer;
+export type ResolvedMcpServerConfig =
+	| LocalMcpServerConfig
+	| RemoteMcpServerConfig;
 export type McpConfigInput = {
 	workspace: string;
 	globalRoot: string;
 	env: Record<string, string | undefined>;
 	fs?: { readFile(path: string): Promise<string> };
 };
-export type McpConfigResult = { servers: McpServer[]; diagnostics: string[] };
+export type McpConfigResult = {
+	servers: Record<string, ResolvedMcpServerConfig>;
+	diagnostics: McpConfigDiagnostic[];
+};
 
-const DEFAULT_TIMEOUT = 30_000;
+const DEFAULT_TIMEOUTS: McpTimeouts = {
+	startup: 30_000,
+	catalog: 30_000,
+	execution: 43_200_000,
+};
 const ENV_PATTERN = /^\{env:([^{}]+)\}$/;
-const HTTP_URL_PATTERN = /^https?:\/\//;
 const defaultFs = {
 	readFile: (path: string) => globalThis.Bun.file(path).text(),
 };
 const isObject = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
-const isCommand = (value: unknown): value is [string, ...string[]] =>
-	Array.isArray(value) &&
-	value.length > 0 &&
-	value.every((item) => typeof item === "string");
+const validPositive = (value: unknown): value is number =>
+	typeof value === "number" && Number.isInteger(value) && value > 0;
+const add = (
+	diagnostics: McpConfigDiagnostic[],
+	scope: "global" | "project",
+	code: string,
+	message: string,
+	path: string,
+	serverName?: string
+) =>
+	diagnostics.push({
+		scope,
+		code,
+		message,
+		path,
+		...(serverName ? { serverName } : {}),
+	});
 
+type ScopeData = {
+	value: Record<string, unknown>;
+	path: string;
+	scope: "global" | "project";
+};
 const readScope = async (
 	root: string,
+	scope: ScopeData["scope"],
 	fs: { readFile(path: string): Promise<string> },
-	diagnostics: string[]
-) => {
+	diagnostics: McpConfigDiagnostic[]
+): Promise<ScopeData> => {
 	const json = `${root}/opencode.json`;
 	const jsonc = `${root}/opencode.jsonc`;
-	let source: string | undefined;
+	let path = json;
+	let source: string;
 	try {
 		source = await fs.readFile(jsonc);
+		path = jsonc;
 	} catch {
 		try {
 			source = await fs.readFile(json);
 		} catch {
-			return {};
-		}
-	}
-	if (source !== undefined) {
-		try {
-			await fs.readFile(json);
-			diagnostics.push(`Ignored duplicate config ${json}`);
-		} catch {
-			/* absent */
+			return { value: {}, path, scope };
 		}
 	}
 	try {
 		const errors: ParseError[] = [];
-		const value: unknown = parseJsonc(source, errors);
-		if (errors.length > 0 || !isObject(value)) {
-			throw new Error("invalid JSONC");
+		const value = parseJsonc(source, errors, { allowTrailingComma: true });
+		if (errors.length || !isObject(value)) {
+			throw new Error("invalid");
 		}
-		return value;
+		try {
+			await fs.readFile(path === jsonc ? json : jsonc);
+			add(
+				diagnostics,
+				scope,
+				"duplicate-config",
+				`Ignored duplicate config ${path === jsonc ? json : jsonc}`,
+				path
+			);
+		} catch {
+			/* absent */
+		}
+		return { value, path, scope };
 	} catch {
-		diagnostics.push(`Could not parse ${jsonc}`);
-		return {};
+		add(diagnostics, scope, "parse-error", `Could not parse ${path}`, path);
+		return { value: {}, path, scope };
 	}
 };
 
@@ -82,149 +127,345 @@ const merge = (
 	base: Record<string, unknown>,
 	overlay: Record<string, unknown>
 ) => {
-	const result: Record<string, unknown> = { ...base, ...overlay };
-	for (const key of ["headers", "environment"]) {
+	const result = { ...base, ...overlay };
+	for (const key of ["headers", "environment", "timeout"]) {
 		if (isObject(base[key]) && isObject(overlay[key])) {
 			result[key] = { ...base[key], ...overlay[key] };
 		}
 	}
 	return result;
 };
-const resolve = (
+const resolveString = (
 	value: string,
 	env: Record<string, string | undefined>,
+	diagnostics: McpConfigDiagnostic[],
+	scope: ScopeData,
 	name: string,
-	diagnostics: string[]
-) => {
+	path: string
+): string | undefined => {
 	const match = ENV_PATTERN.exec(value);
 	if (!match) {
 		return value;
 	}
 	const variable = match[1];
-	if (variable === undefined) {
-		return value;
-	}
-	const resolved = env[variable];
+	const resolved = variable ? env[variable] : undefined;
 	if (resolved === undefined) {
-		diagnostics.push(
-			`MCP server ${name} unavailable: missing environment variable ${variable}`
+		add(
+			diagnostics,
+			scope.scope,
+			"missing-env",
+			"Missing environment variable",
+			path,
+			name
 		);
 		return;
 	}
 	return resolved;
 };
+const timeoutValue = (
+	value: unknown,
+	fallback: McpTimeouts,
+	diagnostics: McpConfigDiagnostic[],
+	scope: ScopeData,
+	name?: string
+): McpTimeouts | undefined => {
+	if (value === undefined) {
+		return fallback;
+	}
+	if (!isObject(value)) {
+		add(
+			diagnostics,
+			scope.scope,
+			"invalid-timeout",
+			"Timeout must be object",
+			`${scope.path}:mcp.timeout`,
+			name
+		);
+		return;
+	}
+	const result = { ...fallback };
+	for (const phase of ["startup", "catalog", "execution"] as const) {
+		if (value[phase] !== undefined) {
+			if (!validPositive(value[phase])) {
+				add(
+					diagnostics,
+					scope.scope,
+					"invalid-timeout",
+					`Invalid ${phase} timeout`,
+					`${scope.path}:mcp.timeout.${phase}`,
+					name
+				);
+				return;
+			}
+			result[phase] = value[phase];
+		}
+	}
+	for (const key of Object.keys(value)) {
+		if (!["startup", "catalog", "execution"].includes(key)) {
+			add(
+				diagnostics,
+				scope.scope,
+				"invalid-timeout",
+				"Unknown timeout phase",
+				`${scope.path}:mcp.timeout.${key}`,
+				name
+			);
+			return;
+		}
+	}
+	return result;
+};
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: validation must isolate each server.
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: configuration validation must isolate each server
 export async function loadMcpConfig(
 	input: McpConfigInput
 ): Promise<McpConfigResult> {
-	const diagnostics: string[] = [];
+	const diagnostics: McpConfigDiagnostic[] = [];
 	const fs = input.fs ?? defaultFs;
 	const [global, project] = await Promise.all([
-		readScope(input.globalRoot, fs, diagnostics),
-		readScope(input.workspace, fs, diagnostics),
+		readScope(input.globalRoot, "global", fs, diagnostics),
+		readScope(input.workspace, "project", fs, diagnostics),
 	]);
-	const globalMcp = isObject(global.mcp) ? global.mcp : {};
-	const projectMcp = isObject(project.mcp) ? project.mcp : {};
-	const globalServers = isObject(globalMcp.servers) ? globalMcp.servers : {};
-	const projectServers = isObject(projectMcp.servers) ? projectMcp.servers : {};
-	const names = new Set([
-		...Object.keys(globalServers),
-		...Object.keys(projectServers),
-	]);
-	const globalTimeout =
-		typeof globalMcp.timeout === "number" &&
-		Number.isInteger(globalMcp.timeout) &&
-		globalMcp.timeout > 0
-			? globalMcp.timeout
-			: DEFAULT_TIMEOUT;
-	const servers: McpServer[] = [];
-	for (const name of names) {
-		const raw = merge(
-			isObject(globalServers[name]) ? globalServers[name] : {},
-			isObject(projectServers[name]) ? projectServers[name] : {}
+	const gm = isObject(global.value.mcp) ? global.value.mcp : {};
+	const pm = isObject(project.value.mcp) ? project.value.mcp : {};
+	const gs = isObject(gm.servers) ? gm.servers : {};
+	const ps = isObject(pm.servers) ? pm.servers : {};
+	const globalTimeout = timeoutValue(
+		gm.timeout,
+		DEFAULT_TIMEOUTS,
+		diagnostics,
+		global
+	);
+	const projectTimeout = timeoutValue(
+		pm.timeout,
+		globalTimeout ?? DEFAULT_TIMEOUTS,
+		diagnostics,
+		project
+	);
+	const servers: Record<string, ResolvedMcpServerConfig> = {};
+	for (const name of new Set([...Object.keys(gs), ...Object.keys(ps)])) {
+		const gv = isObject(gs[name]) ? gs[name] : {};
+		const pv = isObject(ps[name]) ? ps[name] : {};
+		const raw = merge(gv, pv);
+		const scope = Object.keys(pv).length ? project : global;
+		const timeout = timeoutValue(
+			raw.timeout,
+			projectTimeout ?? globalTimeout ?? DEFAULT_TIMEOUTS,
+			diagnostics,
+			scope,
+			name
 		);
-		const timeout =
-			typeof raw.timeout === "number" &&
-			Number.isInteger(raw.timeout) &&
-			raw.timeout > 0
-				? raw.timeout
-				: globalTimeout;
-		if (
-			raw.timeout !== undefined &&
-			timeout === globalTimeout &&
-			raw.timeout !== globalTimeout
-		) {
-			diagnostics.push(`MCP server ${name} has invalid timeout`);
+		if (!timeout) {
+			continue;
 		}
-		if (raw.type === "local" && isCommand(raw.command)) {
-			const environment: Record<string, string> = {};
-			let unavailable = false;
-			if (isObject(raw.environment)) {
-				for (const [key, value] of Object.entries(raw.environment)) {
-					if (typeof value === "string") {
-						const resolved = resolve(value, input.env, name, diagnostics);
-						if (resolved === undefined) {
-							unavailable = true;
-						} else {
-							environment[key] = resolved;
-						}
-					}
-				}
-			}
-			if (!unavailable) {
-				servers.push({
-					name,
-					type: "local",
-					command: raw.command,
-					...(typeof raw.cwd === "string"
-						? {
-								cwd: raw.cwd.startsWith("/")
-									? raw.cwd
-									: `${input.workspace}/${raw.cwd}`,
-							}
-						: {}),
-					...(Object.keys(environment).length > 0 ? { environment } : {}),
-					disabled: raw.disabled === true,
-					timeout,
-				});
-			}
+		const allowed =
+			raw.type === "local"
+				? ["type", "command", "cwd", "environment", "disabled", "timeout"]
+				: ["type", "url", "headers", "oauth", "disabled", "timeout"];
+		if (Object.keys(raw).some((key) => !allowed.includes(key))) {
+			add(
+				diagnostics,
+				scope.scope,
+				"invalid-field",
+				"Unsupported server field",
+				`${scope.path}:mcp.servers.${name}`,
+				name
+			);
 			continue;
 		}
 		if (
-			raw.type === "remote" &&
-			typeof raw.url === "string" &&
-			HTTP_URL_PATTERN.test(raw.url) &&
-			(raw.oauth === undefined || raw.oauth === false)
+			typeof raw.disabled !== "undefined" &&
+			typeof raw.disabled !== "boolean"
 		) {
-			const headers: Record<string, string> = {};
-			let unavailable = false;
-			if (isObject(raw.headers)) {
-				for (const [key, value] of Object.entries(raw.headers)) {
-					if (typeof value === "string") {
-						const resolved = resolve(value, input.env, name, diagnostics);
-						if (resolved === undefined) {
-							unavailable = true;
-						} else {
-							headers[key] = resolved;
-						}
-					}
-				}
-			}
-			if (!unavailable) {
-				servers.push({
-					name,
-					type: "remote",
-					url: raw.url,
-					...(Object.keys(headers).length > 0 ? { headers } : {}),
-					...(raw.oauth === false ? { oauth: false } : {}),
-					disabled: raw.disabled === true,
-					timeout,
-				});
-			}
+			add(
+				diagnostics,
+				scope.scope,
+				"invalid-field",
+				"disabled must be boolean",
+				`${scope.path}:mcp.servers.${name}.disabled`,
+				name
+			);
 			continue;
 		}
-		diagnostics.push(`MCP server ${name} is invalid or unavailable`);
+		if (raw.type === "local") {
+			if (
+				!Array.isArray(raw.command) ||
+				raw.command.length === 0 ||
+				raw.command.some((v) => typeof v !== "string")
+			) {
+				add(
+					diagnostics,
+					scope.scope,
+					"invalid-server",
+					"Invalid local command",
+					`${scope.path}:mcp.servers.${name}.command`,
+					name
+				);
+				continue;
+			}
+			if (raw.cwd !== undefined && typeof raw.cwd !== "string") {
+				add(
+					diagnostics,
+					scope.scope,
+					"invalid-field",
+					"cwd must be string",
+					`${scope.path}:mcp.servers.${name}.cwd`,
+					name
+				);
+				continue;
+			}
+			const env: Record<string, string> = {};
+			if (raw.environment !== undefined && !isObject(raw.environment)) {
+				add(
+					diagnostics,
+					scope.scope,
+					"invalid-field",
+					"environment must be object",
+					`${scope.path}:mcp.servers.${name}.environment`,
+					name
+				);
+				continue;
+			}
+			let bad = false;
+			for (const [key, value] of Object.entries(
+				(raw.environment as Record<string, unknown>) ?? {}
+			)) {
+				if (typeof value === "string") {
+					const resolved = resolveString(
+						value,
+						input.env,
+						diagnostics,
+						scope,
+						name,
+						`${scope.path}:mcp.servers.${name}.environment.${key}`
+					);
+					if (resolved === undefined) {
+						bad = true;
+					} else {
+						env[key] = resolved;
+					}
+				} else {
+					bad = true;
+					add(
+						diagnostics,
+						scope.scope,
+						"invalid-field",
+						"environment values must be strings",
+						`${scope.path}:mcp.servers.${name}.environment.${key}`,
+						name
+					);
+				}
+			}
+			if (bad) {
+				continue;
+			}
+			servers[name] = {
+				name,
+				type: "local",
+				command: raw.command as [string, ...string[]],
+				...(raw.cwd
+					? {
+							cwd: raw.cwd.startsWith("/")
+								? raw.cwd
+								: `${input.workspace}/${raw.cwd}`,
+						}
+					: {}),
+				...(Object.keys(env).length ? { environment: env } : {}),
+				disabled: raw.disabled === true,
+				timeout,
+			};
+			continue;
+		}
+		if (raw.oauth !== undefined && raw.oauth !== false) {
+			add(
+				diagnostics,
+				scope.scope,
+				"unsupported-auth",
+				"OAuth configuration is unsupported",
+				`${scope.path}:mcp.servers.${name}.oauth`,
+				name
+			);
+			continue;
+		}
+		let url: URL;
+		try {
+			if (typeof raw.url !== "string") {
+				throw new Error("URL is not a string");
+			}
+			url = new URL(raw.url);
+			if (
+				!(
+					["http:", "https:"].includes(url.protocol.toLowerCase()) &&
+					url.hostname
+				)
+			) {
+				throw new Error("URL must use HTTP or HTTPS and include hostname");
+			}
+		} catch {
+			add(
+				diagnostics,
+				scope.scope,
+				"invalid-url",
+				"URL must be absolute http or https URL",
+				`${scope.path}:mcp.servers.${name}.url`,
+				name
+			);
+			continue;
+		}
+		const headers: Record<string, string> = {};
+		if (raw.headers !== undefined && !isObject(raw.headers)) {
+			add(
+				diagnostics,
+				scope.scope,
+				"invalid-field",
+				"headers must be object",
+				`${scope.path}:mcp.servers.${name}.headers`,
+				name
+			);
+			continue;
+		}
+		let bad = false;
+		for (const [key, value] of Object.entries(
+			(raw.headers as Record<string, unknown>) ?? {}
+		)) {
+			if (typeof value === "string") {
+				const resolved = resolveString(
+					value,
+					input.env,
+					diagnostics,
+					scope,
+					name,
+					`${scope.path}:mcp.servers.${name}.headers.${key}`
+				);
+				if (resolved === undefined) {
+					bad = true;
+				} else {
+					headers[key] = resolved;
+				}
+			} else {
+				bad = true;
+				add(
+					diagnostics,
+					scope.scope,
+					"invalid-field",
+					"header values must be strings",
+					`${scope.path}:mcp.servers.${name}.headers.${key}`,
+					name
+				);
+			}
+		}
+		if (bad) {
+			continue;
+		}
+		servers[name] = {
+			name,
+			type: "remote",
+			url: url.toString(),
+			...(Object.keys(headers).length ? { headers } : {}),
+			...(raw.oauth === false ? { oauth: false } : {}),
+			disabled: raw.disabled === true,
+			timeout,
+		};
 	}
 	return { servers, diagnostics };
 }
