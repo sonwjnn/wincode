@@ -44,7 +44,7 @@ describe("MCP tool wire contracts", () => {
 				...validTool,
 				description: `${"é".repeat(MAX_MCP_TOOL_DESCRIPTION_BYTES / 2)}é`,
 			})
-		).toThrow("description exceeds");
+		).toThrow();
 		const schemaOverhead = JSON.stringify({ value: "" }).length;
 		const exactSchema = {
 			value: "x".repeat(MAX_MCP_TOOL_SCHEMA_BYTES - schemaOverhead),
@@ -60,7 +60,7 @@ describe("MCP tool wire contracts", () => {
 				...validTool,
 				inputSchema: { value: `${exactSchema.value}x` },
 			})
-		).toThrow("inputSchema exceeds");
+		).toThrow();
 	});
 
 	it("bounds full manifest using individually valid entries", () => {
@@ -104,6 +104,14 @@ describe("MCP tool wire contracts", () => {
 		).toThrow();
 	});
 
+	it("requires inputSchema to be a plain object", () => {
+		for (const inputSchema of [null, "schema", 42, []]) {
+			expect(
+				mcpToolManifestEntrySchema.safeParse({ ...validTool, inputSchema })
+			).toMatchObject({ success: false });
+		}
+	});
+
 	it("preserves own __proto__ keys", () => {
 		const inputSchema = JSON.parse('{"__proto__":{"value":true}}');
 		const parsed = mcpToolManifestEntrySchema.parse({
@@ -123,9 +131,26 @@ describe("MCP tool wire contracts", () => {
 		for (let index = 0; index < 65; index += 1) {
 			inputSchema = { value: inputSchema };
 		}
-		expect(() =>
-			mcpToolManifestEntrySchema.parse({ ...validTool, inputSchema })
-		).toThrow("inputSchema must contain only JSON values");
+		expect(
+			mcpToolManifestEntrySchema.safeParse({ ...validTool, inputSchema })
+		).toMatchObject({ success: false });
+	});
+
+	it("returns failure for cyclic and oversized schemas", () => {
+		const cyclic: Record<string, unknown> = {};
+		cyclic.self = cyclic;
+		expect(
+			mcpToolManifestEntrySchema.safeParse({
+				...validTool,
+				inputSchema: cyclic,
+			})
+		).toMatchObject({ success: false });
+		expect(
+			mcpToolManifestEntrySchema.safeParse({
+				...validTool,
+				inputSchema: { value: "x".repeat(MAX_MCP_TOOL_SCHEMA_BYTES) },
+			})
+		).toMatchObject({ success: false });
 	});
 
 	it("exports result byte bound", () => {

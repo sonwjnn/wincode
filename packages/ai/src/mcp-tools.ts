@@ -16,6 +16,8 @@ export type JsonValue =
 	| JsonValue[]
 	| { [key: string]: JsonValue };
 
+export type JsonObject = { [key: string]: JsonValue };
+
 const MAX_JSON_NESTING_DEPTH = 64;
 
 const isJsonPrimitive = (
@@ -28,46 +30,50 @@ const isJsonPrimitive = (
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: iterative traversal deliberately handles every JSON container type
 const isJsonValue = (value: unknown): value is JsonValue => {
-	const pending: Array<{ value: unknown; depth: number }> = [
-		{ value, depth: 0 },
-	];
-	const visited = new WeakSet<object>();
+	try {
+		const pending: Array<{ value: unknown; depth: number }> = [
+			{ value, depth: 0 },
+		];
+		const visited = new WeakSet<object>();
 
-	while (pending.length > 0) {
-		const item = pending.pop();
-		if (!item) {
-			continue;
-		}
-		const { value: current, depth } = item;
-		if (depth > MAX_JSON_NESTING_DEPTH) {
-			return false;
-		}
-		if (isJsonPrimitive(current)) {
-			continue;
-		}
-		if (typeof current !== "object") {
-			return false;
-		}
-		if (visited.has(current)) {
-			return false;
-		}
-		visited.add(current);
+		while (pending.length > 0) {
+			const item = pending.pop();
+			if (!item) {
+				continue;
+			}
+			const { value: current, depth } = item;
+			if (depth > MAX_JSON_NESTING_DEPTH) {
+				return false;
+			}
+			if (isJsonPrimitive(current)) {
+				continue;
+			}
+			if (typeof current !== "object") {
+				return false;
+			}
+			if (visited.has(current)) {
+				return false;
+			}
+			visited.add(current);
 
-		if (Array.isArray(current)) {
-			for (const child of current) {
+			if (Array.isArray(current)) {
+				for (const child of current) {
+					pending.push({ value: child, depth: depth + 1 });
+				}
+				continue;
+			}
+			const prototype = Object.getPrototypeOf(current);
+			if (prototype !== Object.prototype && prototype !== null) {
+				return false;
+			}
+			for (const child of Object.values(current)) {
 				pending.push({ value: child, depth: depth + 1 });
 			}
-			continue;
 		}
-		const prototype = Object.getPrototypeOf(current);
-		if (prototype !== Object.prototype && prototype !== null) {
-			return false;
-		}
-		for (const child of Object.values(current)) {
-			pending.push({ value: child, depth: depth + 1 });
-		}
+		return true;
+	} catch {
+		return false;
 	}
-	return true;
 };
 
 const byteLength = (value: string): number =>
@@ -76,7 +82,7 @@ const byteLength = (value: string): number =>
 export type McpToolManifestEntry = {
 	name: string;
 	description: string;
-	inputSchema: JsonValue;
+	inputSchema: JsonObject;
 };
 
 export const mcpToolManifestEntrySchema: z.ZodType<McpToolManifestEntry> =
@@ -105,16 +111,34 @@ export const mcpToolManifestEntrySchema: z.ZodType<McpToolManifestEntry> =
 				return false;
 			}
 			if (byteLength(entry.description) > MAX_MCP_TOOL_DESCRIPTION_BYTES) {
-				throw new Error("description exceeds byte limit");
-			}
-			if (!isJsonValue(entry.inputSchema)) {
-				throw new Error("inputSchema must contain only JSON values");
+				return false;
 			}
 			if (
-				byteLength(JSON.stringify(entry.inputSchema)) >
-				MAX_MCP_TOOL_SCHEMA_BYTES
+				typeof entry.inputSchema !== "object" ||
+				entry.inputSchema === null ||
+				Array.isArray(entry.inputSchema)
 			) {
-				throw new Error("inputSchema exceeds byte limit");
+				return false;
+			}
+			const inputSchemaPrototype = Object.getPrototypeOf(entry.inputSchema);
+			if (
+				inputSchemaPrototype !== Object.prototype &&
+				inputSchemaPrototype !== null
+			) {
+				return false;
+			}
+			if (!isJsonValue(entry.inputSchema)) {
+				return false;
+			}
+			try {
+				if (
+					byteLength(JSON.stringify(entry.inputSchema)) >
+					MAX_MCP_TOOL_SCHEMA_BYTES
+				) {
+					return false;
+				}
+			} catch {
+				return false;
 			}
 			return true;
 		},
