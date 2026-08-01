@@ -8,7 +8,9 @@ const fileSystem = (files: Record<string, string>) => ({
 	readFile: async (path: string) => {
 		const value = files[path];
 		if (value === undefined) {
-			throw new Error("missing");
+			const error = new Error("missing") as Error & { code: string };
+			error.code = "ENOENT";
+			throw error;
 		}
 		return value;
 	},

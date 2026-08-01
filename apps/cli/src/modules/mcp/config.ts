@@ -9,7 +9,17 @@ export type McpTimeouts = {
 export type McpConfigDiagnostic = {
 	serverName?: string;
 	scope: "global" | "project";
-	code: string;
+	code:
+		| "duplicate-config"
+		| "parse-error"
+		| "read-error"
+		| "invalid-scope"
+		| "invalid-server"
+		| "invalid-timeout"
+		| "invalid-field"
+		| "missing-env"
+		| "unsupported-auth"
+		| "invalid-url";
 	message: string;
 	path: string;
 };
@@ -54,14 +64,24 @@ const ENV_PATTERN = /^\{env:([^{}]+)\}$/;
 const defaultFs = {
 	readFile: (path: string) => globalThis.Bun.file(path).text(),
 };
+const isNotFound = (error: unknown): boolean =>
+	isObject(error) && error.code === "ENOENT";
 const isObject = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
+const ownObject = (value: Record<string, unknown>): Record<string, unknown> => {
+	const result = Object.create(null) as Record<string, unknown>;
+	for (const key of Object.keys(value)) {
+		const child = value[key];
+		result[key] = isObject(child) ? ownObject(child) : child;
+	}
+	return result;
+};
 const validPositive = (value: unknown): value is number =>
 	typeof value === "number" && Number.isInteger(value) && value > 0;
 const add = (
 	diagnostics: McpConfigDiagnostic[],
 	scope: "global" | "project",
-	code: string,
+	code: McpConfigDiagnostic["code"],
 	message: string,
 	path: string,
 	serverName?: string
@@ -85,30 +105,58 @@ const readScope = async (
 	fs: { readFile(path: string): Promise<string> },
 	diagnostics: McpConfigDiagnostic[]
 ): Promise<ScopeData> => {
-	const json = `${root}/opencode.json`;
-	const jsonc = `${root}/opencode.jsonc`;
-	let path = json;
+	const json = path.join(root, "opencode.json");
+	const jsonc = path.join(root, "opencode.jsonc");
+	let selectedPath = json;
 	let source: string;
 	try {
 		source = await fs.readFile(jsonc);
-		path = jsonc;
-	} catch {
+		selectedPath = jsonc;
+	} catch (error) {
+		if (!isNotFound(error)) {
+			add(
+				diagnostics,
+				scope,
+				"read-error",
+				"Could not read config file",
+				jsonc
+			);
+			return { value: {}, path: jsonc, scope };
+		}
 		try {
 			source = await fs.readFile(json);
-		} catch {
-			return { value: {}, path, scope };
+		} catch (error) {
+			if (!isNotFound(error)) {
+				add(
+					diagnostics,
+					scope,
+					"read-error",
+					"Could not read config file",
+					json
+				);
+			}
+			return { value: {}, path: json, scope };
 		}
 	}
 	try {
-		await fs.readFile(path === jsonc ? json : jsonc);
+		await fs.readFile(selectedPath === jsonc ? json : jsonc);
 		add(
 			diagnostics,
 			scope,
 			"duplicate-config",
-			`Ignored duplicate config ${path === jsonc ? json : jsonc}`,
-			path
+			`Ignored duplicate config ${selectedPath === jsonc ? json : jsonc}`,
+			selectedPath
 		);
-	} catch {
+	} catch (error) {
+		if (!isNotFound(error)) {
+			add(
+				diagnostics,
+				scope,
+				"read-error",
+				"Could not inspect duplicate config",
+				selectedPath === jsonc ? json : jsonc
+			);
+		}
 		// Alternate config absent.
 	}
 	try {
@@ -117,10 +165,16 @@ const readScope = async (
 		if (errors.length || !isObject(value)) {
 			throw new Error("invalid");
 		}
-		return { value, path, scope };
+		return { value: ownObject(value), path: selectedPath, scope };
 	} catch {
-		add(diagnostics, scope, "parse-error", `Could not parse ${path}`, path);
-		return { value: {}, path, scope };
+		add(
+			diagnostics,
+			scope,
+			"parse-error",
+			`Could not parse ${selectedPath}`,
+			selectedPath
+		);
+		return { value: {}, path: selectedPath, scope };
 	}
 };
 
@@ -149,8 +203,9 @@ const resolveString = (
 		return value;
 	}
 	const variable = match[1];
-	const resolved = variable ? env[variable] : undefined;
-	if (resolved === undefined) {
+	const resolved =
+		variable && Object.hasOwn(env, variable) ? env[variable] : undefined;
+	if (typeof resolved !== "string") {
 		add(
 			diagnostics,
 			scope.scope,
@@ -424,7 +479,7 @@ export async function loadMcpConfig(
 							cwd:
 								path.isAbsolute(raw.cwd) || path.win32.isAbsolute(raw.cwd)
 									? raw.cwd
-									: `${input.workspace}/${raw.cwd}`,
+									: path.resolve(input.workspace, raw.cwd),
 						}
 					: {}),
 				...(Object.keys(env).length ? { environment: env } : {}),
