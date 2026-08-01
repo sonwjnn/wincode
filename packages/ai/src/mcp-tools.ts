@@ -6,6 +6,7 @@ export const MAX_MCP_TOOL_DESCRIPTION_BYTES = 8 * 1024;
 export const MAX_MCP_TOOL_SCHEMA_BYTES = 64 * 1024;
 export const MAX_MCP_MANIFEST_BYTES = 256 * 1024;
 export const MAX_MCP_RESULT_BYTES = 256 * 1024;
+export const MCP_TOOL_NAME_REGEX = /^[A-Za-z0-9_-]+$/;
 
 export type JsonValue =
 	| boolean
@@ -29,13 +30,13 @@ const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
 const byteLength = (value: string): number =>
 	new TextEncoder().encode(value).byteLength;
 
-export const mcpToolSchema = z
+export const mcpToolManifestEntrySchema = z
 	.object({
 		name: z
 			.string()
 			.min(1)
 			.max(MAX_MCP_TOOL_NAME_LENGTH)
-			.regex(/^[A-Za-z0-9_-]+$/),
+			.regex(MCP_TOOL_NAME_REGEX),
 		description: z.string().superRefine((value, context) => {
 			if (byteLength(value) > MAX_MCP_TOOL_DESCRIPTION_BYTES) {
 				context.addIssue({
@@ -57,12 +58,10 @@ export const mcpToolSchema = z
 	})
 	.strict();
 
-export type McpTool = z.infer<typeof mcpToolSchema>;
-export const mcpToolManifestEntrySchema = mcpToolSchema;
-export type McpToolManifestEntry = McpTool;
+export type McpToolManifestEntry = z.infer<typeof mcpToolManifestEntrySchema>;
 
 export const mcpToolManifestSchema = z
-	.array(mcpToolSchema)
+	.array(mcpToolManifestEntrySchema)
 	.max(MAX_MCP_TOOL_COUNT)
 	.superRefine((tools, context) => {
 		const names = new Set<string>();

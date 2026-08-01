@@ -17,7 +17,6 @@ export {
 } from "./instructions";
 export type {
 	JsonValue,
-	McpTool,
 	McpToolManifest,
 	McpToolManifestEntry,
 } from "./mcp-tools";
@@ -28,9 +27,9 @@ export {
 	MAX_MCP_TOOL_DESCRIPTION_BYTES,
 	MAX_MCP_TOOL_NAME_LENGTH,
 	MAX_MCP_TOOL_SCHEMA_BYTES,
+	MCP_TOOL_NAME_REGEX,
 	mcpToolManifestEntrySchema,
 	mcpToolManifestSchema,
-	mcpToolSchema,
 } from "./mcp-tools";
 export type {
 	CodingAgentTools,
