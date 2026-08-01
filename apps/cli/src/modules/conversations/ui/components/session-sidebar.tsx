@@ -20,7 +20,7 @@ const CONTEXT_WARNING_PERCENT = 80;
 type SessionSidebarProps = {
 	messages: CodingAgentUIMessage[];
 	sessionTitle: string;
-	width: number;
+	width: `${number}%`;
 };
 
 function SectionLabel({ text, color }: { text: string; color: string }) {

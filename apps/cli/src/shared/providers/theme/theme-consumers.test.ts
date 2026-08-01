@@ -94,6 +94,18 @@ describe("theme consumers", () => {
 		expect(workspaceSource).toContain("fg={colors.textMuted}");
 	});
 
+	test("session sidebar width is relative to the terminal", async () => {
+		const chatViewSource = await readFile(
+			new URL(
+				"../../../modules/conversations/ui/views/chat-view.tsx",
+				import.meta.url
+			),
+			"utf8"
+		);
+
+		expect(chatViewSource).toContain('const SIDEBAR_WIDTH = "30%";');
+	});
+
 	test("conversation messages use semantic theme roles", async () => {
 		const [userSource, errorSource, botSource, statusSource] =
 			await Promise.all([
