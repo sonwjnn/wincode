@@ -3,32 +3,32 @@ import { Hono } from "hono";
 import type { Schema } from "hono/types";
 
 type ApiRouteDeps<
-	TBillingRoutes extends Hono<Env, Schema, string>,
-	TBillingWebhookRoutes extends Hono<Env, Schema, string>,
-	TCredentialsRoutes extends Hono<Env, Schema, string>,
-	TSessionsRoutes extends Hono<Env, Schema, string>,
+	TBillingSchema extends Schema,
+	TBillingWebhookSchema extends Schema,
+	TCredentialsSchema extends Schema,
+	TSessionsSchema extends Schema,
 > = {
-	billingRoutes: TBillingRoutes;
-	billingWebhookRoutes: TBillingWebhookRoutes;
-	credentialsRoutes: TCredentialsRoutes;
-	sessionsRoutes: TSessionsRoutes;
+	billingRoutes: Hono<Env, TBillingSchema, string>;
+	billingWebhookRoutes: Hono<Env, TBillingWebhookSchema, string>;
+	credentialsRoutes: Hono<Env, TCredentialsSchema, string>;
+	sessionsRoutes: Hono<Env, TSessionsSchema, string>;
 };
 
 export const createApiRoutes = <
-	TBillingRoutes extends Hono<Env, Schema, string>,
-	TBillingWebhookRoutes extends Hono<Env, Schema, string>,
-	TCredentialsRoutes extends Hono<Env, Schema, string>,
-	TSessionsRoutes extends Hono<Env, Schema, string>,
+	TBillingSchema extends Schema,
+	TBillingWebhookSchema extends Schema,
+	TCredentialsSchema extends Schema,
+	TSessionsSchema extends Schema,
 >({
 	billingRoutes,
 	billingWebhookRoutes,
 	credentialsRoutes,
 	sessionsRoutes,
 }: ApiRouteDeps<
-	TBillingRoutes,
-	TBillingWebhookRoutes,
-	TCredentialsRoutes,
-	TSessionsRoutes
+	TBillingSchema,
+	TBillingWebhookSchema,
+	TCredentialsSchema,
+	TSessionsSchema
 >) =>
 	new Hono()
 		.route("/sessions", sessionsRoutes)
