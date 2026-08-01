@@ -597,6 +597,9 @@ describe("POST /:id/chat (transport-only)", () => {
 	});
 
 	test("rejects funded input after deterministic system/tool overhead", async () => {
+		(
+			createCodingAgentStreamResponse as unknown as { mockClear: () => void }
+		).mockClear();
 		const config = () =>
 			({
 				fundedRequestInputTokenLimit: 1000,
@@ -613,16 +616,24 @@ describe("POST /:id/chat (transport-only)", () => {
 			model: "gpt-5.4-mini",
 		};
 		const withoutManifest = await createSessionsRoutes({
+			codingServerTools,
+			createCodingAgentStreamResponse,
 			getBillingConfig: config,
 			getBillingRepository: () => billingRepository as never,
+			resolveSupportedChatModel,
+			resolveWincodeChatModelSelection,
 		}).request("/session-16/chat", {
 			body: JSON.stringify(request),
 			headers: { "content-type": "application/json" },
 			method: "POST",
 		});
 		const response = await createSessionsRoutes({
+			codingServerTools,
+			createCodingAgentStreamResponse,
 			getBillingConfig: () => config(),
 			getBillingRepository: () => billingRepository as never,
+			resolveSupportedChatModel,
+			resolveWincodeChatModelSelection,
 		}).request("/session-16/chat", {
 			body: JSON.stringify({ ...request, mcpTools: [validMcpTool] }),
 			headers: { "content-type": "application/json" },
@@ -631,6 +642,7 @@ describe("POST /:id/chat (transport-only)", () => {
 
 		expect(withoutManifest.status).toBe(200);
 		expect(response.status).toBe(400);
+		expect(createCodingAgentStreamResponse).toHaveBeenCalledTimes(1);
 	});
 
 	test("rejects oversized all-context metadata", async () => {
