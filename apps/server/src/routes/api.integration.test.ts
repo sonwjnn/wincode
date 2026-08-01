@@ -1,5 +1,6 @@
-import { expect, mock, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { Hono } from "hono";
+import { createApiRoutes } from "./create-api-routes";
 
 const billingRoutes = new Hono()
 	.post("/checkout", (c) => c.text("checkout"))
@@ -8,12 +9,12 @@ const billingWebhookRoutes = new Hono().post("/polar", (c) =>
 	c.text("webhook")
 );
 
-mock.module("./billing", () => ({ billingRoutes }));
-mock.module("./billing-webhooks", () => ({ billingWebhookRoutes }));
-mock.module("./credentials", () => ({ credentialsRoutes: new Hono() }));
-mock.module("./sessions", () => ({ sessionsRoutes: new Hono() }));
-
-const { apiRoutes } = await import("./api");
+const apiRoutes = createApiRoutes({
+	billingRoutes,
+	billingWebhookRoutes,
+	credentialsRoutes: new Hono(),
+	sessionsRoutes: new Hono(),
+});
 
 test("composes billing webhook and management routes", async () => {
 	const webhook = await apiRoutes.request("/billing/webhooks/polar", {
