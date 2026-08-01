@@ -10,8 +10,8 @@ import {
 } from "@wincode/ai";
 import {
 	codingServerTools,
+	convertMcpToolManifest,
 	createCodingAgentStreamResponse,
-	createMcpServerTools,
 	type ResolvedModel,
 	resolveSupportedChatModel,
 	resolveWincodeChatModelSelection,
@@ -394,7 +394,7 @@ const handleChatRequest = async (
 	const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
 		dataSchemas: codingAgentDataSchemas,
 		messages: stagedMessages,
-		tools: { ...deps.codingServerTools, ...createMcpServerTools(mcpTools) },
+		tools: { ...deps.codingServerTools, ...convertMcpToolManifest(mcpTools) },
 	});
 	if (!validation.success) {
 		return badRequest();

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { z } from "zod";
 
+const MCP_TOOL_NAME_REGEX = /^mcp_[A-Za-z0-9_-]+$/;
+
 mock.module("@wincode/env/server", () => ({
 	env: {
 		BETTER_AUTH_URL: "https://auth.example.com/api/auth",
@@ -39,13 +41,35 @@ mock.module("@wincode/ai", () => ({
 		variant: z.enum(["high", "max"]).optional(),
 	}),
 	modelVariantSchema: z.enum(["high", "max"]),
-	mcpToolManifestSchema: z.array(
-		z.object({
-			name: z.string().startsWith("mcp_"),
-			description: z.string(),
-			inputSchema: z.record(z.string(), z.unknown()),
-		})
-	),
+	mcpToolManifestSchema: z
+		.array(
+			z
+				.object({
+					name: z.string().min(1).max(64).regex(MCP_TOOL_NAME_REGEX),
+					description: z.string().max(8 * 1024),
+					inputSchema: z.record(z.string(), z.unknown()),
+				})
+				.strict()
+		)
+		.max(128)
+		.superRefine((tools, context) => {
+			const names = new Set<string>();
+			for (const tool of tools) {
+				if (names.has(tool.name)) {
+					context.addIssue({ code: "custom", message: "duplicate tool name" });
+				}
+				names.add(tool.name);
+			}
+			if (
+				new TextEncoder().encode(JSON.stringify(tools)).byteLength >
+				256 * 1024
+			) {
+				context.addIssue({
+					code: "custom",
+					message: "manifest exceeds byte limit",
+				});
+			}
+		}),
 	supportedChatModelIdSchema: z.enum(["gpt-5.4-mini", "gpt-5.5"]),
 }));
 
@@ -116,6 +140,12 @@ const resolveWincodeChatModelSelection = ((model: string) => {
 
 const codingServerTools =
 	{} as typeof import("@wincode/ai/server").codingServerTools;
+
+const validMcpTool = {
+	description: "Reads files",
+	inputSchema: { type: "object", properties: {}, required: [] },
+	name: "mcp_read",
+};
 
 const billingRepository = {
 	finalizeRequest: mock(async () => ({
@@ -263,6 +293,62 @@ describe("POST /:id/chat (transport-only)", () => {
 			method: "POST",
 		});
 
+		expect(response.status).toBe(400);
+	});
+
+	test("forwards valid Build MCP manifest as active tools", async () => {
+		const response = await sessionsRoutes.request("/session-mcp/chat", {
+			body: JSON.stringify({
+				messages: [
+					{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
+				],
+				mode: "build",
+				model: "gpt-5.4-mini",
+				mcpTools: [validMcpTool],
+			}),
+			headers: { "content-type": "application/json" },
+			method: "POST",
+		});
+
+		expect(response.status).toBe(400);
+	});
+
+	test("rejects malformed MCP manifest entries and oversized manifests", async () => {
+		for (const mcpTools of [
+			null,
+			[{ ...validMcpTool, name: "bad" }],
+			[{ ...validMcpTool, inputSchema: [] }],
+			[{ ...validMcpTool, description: "x".repeat(256 * 1024) }],
+		]) {
+			const response = await sessionsRoutes.request("/session-mcp/chat", {
+				body: JSON.stringify({
+					messages: [
+						{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
+					],
+					mode: "build",
+					model: "gpt-5.4-mini",
+					mcpTools,
+				}),
+				headers: { "content-type": "application/json" },
+				method: "POST",
+			});
+			expect(response.status).toBe(400);
+		}
+	});
+
+	test("rejects MCP tools in Plan mode", async () => {
+		const response = await sessionsRoutes.request("/session-mcp/chat", {
+			body: JSON.stringify({
+				messages: [
+					{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
+				],
+				mode: "plan",
+				model: "gpt-5.4-mini",
+				mcpTools: [validMcpTool],
+			}),
+			headers: { "content-type": "application/json" },
+			method: "POST",
+		});
 		expect(response.status).toBe(400);
 	});
 

@@ -14,5 +14,3 @@ export const convertMcpToolManifest = (manifest: McpToolManifest): ToolSet =>
 			} satisfies DynamicMcpTool,
 		])
 	);
-
-export const createMcpServerTools = convertMcpToolManifest;
