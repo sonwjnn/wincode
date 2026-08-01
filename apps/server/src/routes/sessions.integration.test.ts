@@ -367,11 +367,12 @@ describe("POST /:id/chat (transport-only)", () => {
 							id: "assistant-1",
 							parts: [
 								{
-									input: { path: "README.md" },
-									output: "historical contents",
+									input: {},
+									output: {},
 									state: "output-available",
-									toolCallId: "call_dynamic_1",
-									type: "tool-historical_read",
+									toolCallId: "call-history",
+									toolName: "mcp_historical_read_12345678",
+									type: "dynamic-tool",
 								},
 							],
 							role: "assistant",
@@ -598,7 +599,7 @@ describe("POST /:id/chat (transport-only)", () => {
 	test("rejects funded input after deterministic system/tool overhead", async () => {
 		const config = () =>
 			({
-				fundedRequestInputTokenLimit: 1100,
+				fundedRequestInputTokenLimit: 1000,
 				fundedRequestOutputTokenLimit: 8,
 				fundedRequestStepLimit: 3,
 				fundedRequestTimeWindowSeconds: 5,
@@ -608,7 +609,7 @@ describe("POST /:id/chat (transport-only)", () => {
 			messages: [
 				{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
 			],
-			mode: "plan",
+			mode: "build",
 			model: "gpt-5.4-mini",
 		};
 		const withoutManifest = await createSessionsRoutes({
