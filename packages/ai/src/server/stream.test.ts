@@ -7,6 +7,7 @@ const createAgentUIStreamResponseMock = mock(
 			onStepFinish?: (event: unknown) => Promise<void>;
 		};
 		abortSignal?: AbortSignal;
+		options?: Record<string, unknown>;
 	}) => {
 		const stream = new ReadableStream<Uint8Array>({
 			start: async (controller) => {
@@ -49,6 +50,32 @@ afterEach(() => {
 });
 
 describe("createCodingAgentStreamResponse", () => {
+	test("forwards default and supplied MCP manifests to agent options", async () => {
+		const { createCodingAgentStreamResponse } = await loadSubject();
+		const base = {
+			model: {} as never,
+			modelId: "gpt-5.4-mini" as const,
+			uiMessages: [{ id: "1", parts: [], role: "user" } as never],
+		};
+
+		await createCodingAgentStreamResponse(base);
+		await createCodingAgentStreamResponse({
+			...base,
+			mcpTools: [{ name: "search", description: "", inputSchema: {} }],
+		});
+
+		expect(createAgentUIStreamResponseMock.mock.calls[0]?.[0].options).toEqual({
+			mode: "build",
+			model: "gpt-5.4-mini",
+			mcpTools: [],
+		});
+		expect(createAgentUIStreamResponseMock.mock.calls[1]?.[0].options).toEqual({
+			mode: "build",
+			model: "gpt-5.4-mini",
+			mcpTools: [{ name: "search", description: "", inputSchema: {} }],
+		});
+	});
+
 	test("fires step and end once when stream consumed", async () => {
 		const onStepEnd = mock(async () => undefined);
 		const onEnd = mock(async () => undefined);

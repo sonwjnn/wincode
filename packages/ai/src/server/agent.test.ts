@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	getSafePositiveMaxSteps,
 	invokeCodingAgentLifecycleCallback,
+	prepareCodingAgentCall,
 } from "./agent";
 
 describe("invokeCodingAgentLifecycleCallback", () => {
@@ -30,5 +31,34 @@ describe("invokeCodingAgentLifecycleCallback", () => {
 		expect(getSafePositiveMaxSteps(undefined)).toBe(1);
 		expect(getSafePositiveMaxSteps(0)).toBe(1);
 		expect(getSafePositiveMaxSteps(3)).toBe(3);
+	});
+});
+
+describe("prepareCodingAgentCall", () => {
+	const manifest = [
+		{
+			name: "search_docs",
+			description: "Search docs",
+			inputSchema: { type: "object" },
+		},
+	];
+
+	it("merges MCP tools into Build activeTools and tools", () => {
+		const prepared = prepareCodingAgentCall({
+			options: { mode: "build", mcpTools: manifest },
+			messages: [],
+		});
+
+		expect(prepared.activeTools).toContain("search_docs");
+		expect(prepared.tools).toHaveProperty("search_docs");
+	});
+
+	it("keeps read-only built-ins active and excludes MCP in Plan", () => {
+		const prepared = prepareCodingAgentCall({
+			options: { mode: "plan", mcpTools: manifest },
+		});
+
+		expect(prepared.activeTools).toEqual(["read", "list", "grep"]);
+		expect(prepared.tools).toHaveProperty("search_docs");
 	});
 });

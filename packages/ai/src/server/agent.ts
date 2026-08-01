@@ -40,6 +40,27 @@ export const getSafePositiveMaxSteps = (
 		? maxSteps
 		: 1;
 
+export const prepareCodingAgentCall = <T extends Record<string, unknown>>({
+	options,
+	...call
+}: {
+	options?: CodingAgentCallOptions;
+} & T): Omit<T, "options"> & {
+	activeTools: string[];
+	tools: typeof codingServerTools;
+} => {
+	const codingMode = getCodingMode(options?.mode ?? defaultMode.value);
+	const mcpTools = convertMcpToolManifest(options?.mcpTools ?? []);
+	const activeMcpTools =
+		codingMode.value === "plan" ? [] : Object.keys(mcpTools);
+
+	return {
+		...call,
+		activeTools: [...codingMode.tools, ...activeMcpTools],
+		tools: { ...codingServerTools, ...mcpTools },
+	};
+};
+
 type CreateCodingAgentOptions = {
 	model: LanguageModel;
 	maxOutputTokens?: number;
@@ -61,18 +82,7 @@ export const createCodingAgent = ({
 		instructions: getSystemInstructions(defaultMode.value),
 		maxOutputTokens,
 		model,
-		prepareCall: ({ options: callOptions, ...options }) => {
-			const codingMode = getCodingMode(callOptions?.mode ?? defaultMode.value);
-			const mcpTools = convertMcpToolManifest(callOptions?.mcpTools ?? []);
-			const activeMcpTools =
-				codingMode.value === "plan" ? [] : Object.keys(mcpTools);
-
-			return {
-				...options,
-				activeTools: [...codingMode.tools, ...activeMcpTools],
-				tools: { ...codingServerTools, ...mcpTools },
-			};
-		},
+		prepareCall: prepareCodingAgentCall,
 		onFinish: async (event) => {
 			const callback =
 				lifecycleCallbacks?.onEnd ?? lifecycleCallbacks?.onFinish;
