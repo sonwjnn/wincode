@@ -4,12 +4,14 @@ import {
 	codingMessageMetadataSchema,
 	codingModeNameSchema,
 	formatSkillUserContext,
+	mcpToolManifestSchema,
 	modelVariantSchema,
 	skillContextSchema,
 } from "@wincode/ai";
 import {
 	codingServerTools,
 	createCodingAgentStreamResponse,
+	createMcpServerTools,
 	type ResolvedModel,
 	resolveSupportedChatModel,
 	resolveWincodeChatModelSelection,
@@ -93,6 +95,7 @@ const chatRequestSchema = z.object({
 	variant: modelVariantSchema.optional(),
 	sendReasoning: z.boolean().optional(),
 	skill: skillContextSchema.optional(),
+	mcpTools: mcpToolManifestSchema.default([]),
 });
 
 const badRequest = () =>
@@ -282,6 +285,7 @@ const handleChatRequest = async (
 			| "resolveWincodeChatModelSelection"
 		>
 	>
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: request validation and billing gates are intentionally explicit
 ) => {
 	const subject = await verifyBearerAuth(c.req.header("authorization") ?? null);
 	if (!subject) {
@@ -306,7 +310,11 @@ const handleChatRequest = async (
 		return badRequest();
 	}
 
-	const { messages, mode, model, sendReasoning, variant, skill } = parsed.data;
+	const { messages, mode, model, sendReasoning, variant, skill, mcpTools } =
+		parsed.data;
+	if (mode === "plan" && mcpTools.length > 0) {
+		return badRequest();
+	}
 	const billingConfig = resolveBillingConfig();
 	if (
 		billingConfig === null ||
@@ -362,7 +370,8 @@ const handleChatRequest = async (
 			conservativeHardInputTokenLimit
 		) -
 			fundedContextOverhead -
-			(skill ? getStringTokenEstimate(formatSkillUserContext(skill)) : 0)
+			(skill ? getStringTokenEstimate(formatSkillUserContext(skill)) : 0) -
+			getStringTokenEstimate(JSON.stringify(mcpTools))
 	);
 	if (!isAcceptableInput(messages, fundedInputTokenBudget)) {
 		return badRequest();
@@ -385,7 +394,7 @@ const handleChatRequest = async (
 	const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
 		dataSchemas: codingAgentDataSchemas,
 		messages: stagedMessages,
-		tools: deps.codingServerTools,
+		tools: { ...deps.codingServerTools, ...createMcpServerTools(mcpTools) },
 	});
 	if (!validation.success) {
 		return badRequest();
@@ -430,6 +439,7 @@ const handleChatRequest = async (
 		providerOptions: resolvedModel.providerOptions,
 		skill,
 		sendReasoning,
+		mcpTools,
 		uiMessages: validation.data,
 		onEnd: lifecycle.onEnd,
 		onStepEnd: lifecycle.onStepEnd,

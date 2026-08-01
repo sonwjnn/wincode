@@ -1,6 +1,6 @@
 export { createCodingAgent } from "./agent";
 export { getProviderErrorMessage } from "./error-message";
-export { convertMcpToolManifest } from "./mcp-tools";
+export { convertMcpToolManifest, createMcpServerTools } from "./mcp-tools";
 export type { ResolvedModel } from "./models";
 export {
 	isSupportedChatModel,

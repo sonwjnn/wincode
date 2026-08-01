@@ -21,10 +21,10 @@ mock.module("@wincode/ai", () => ({
 		instructions: z.string(),
 		arguments: z.string(),
 	}),
-	codingModeNameSchema: z.enum(["plan"]),
+	codingModeNameSchema: z.enum(["build", "plan"]),
 	codingAgentDataSchemas: {},
 	codingMessageMetadataSchema: z.object({
-		mode: z.enum(["plan"]).optional(),
+		mode: z.enum(["build", "plan"]).optional(),
 		skill: z
 			.object({
 				name: z.string(),
@@ -39,6 +39,13 @@ mock.module("@wincode/ai", () => ({
 		variant: z.enum(["high", "max"]).optional(),
 	}),
 	modelVariantSchema: z.enum(["high", "max"]),
+	mcpToolManifestSchema: z.array(
+		z.object({
+			name: z.string().startsWith("mcp_"),
+			description: z.string(),
+			inputSchema: z.record(z.string(), z.unknown()),
+		})
+	),
 	supportedChatModelIdSchema: z.enum(["gpt-5.4-mini", "gpt-5.5"]),
 }));
 
