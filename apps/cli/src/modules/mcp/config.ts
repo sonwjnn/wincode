@@ -305,6 +305,17 @@ export async function loadMcpConfig(
 			);
 			continue;
 		}
+		if (raw.type !== "local" && raw.type !== "remote") {
+			add(
+				diagnostics,
+				scope.scope,
+				"invalid-server",
+				"Server type must be local or remote",
+				`${scope.path}:mcp.servers.${name}.type`,
+				name
+			);
+			continue;
+		}
 		if (raw.type === "local") {
 			if (
 				!Array.isArray(raw.command) ||

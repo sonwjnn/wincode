@@ -283,4 +283,30 @@ describe("loadMcpConfig", () => {
 			)
 		).toBe(false);
 	});
+
+	test("isolates servers with missing or unsupported types", async () => {
+		const result = await loadMcpConfig({
+			workspace: "/p",
+			globalRoot: "/g",
+			env: {},
+			fs: fileSystem({
+				"/p/opencode.json":
+					'{"mcp":{"servers":{"missing":{"url":"https://missing"},"unsupported":{"type":"custom","url":"https://unsupported"},"valid":{"type":"remote","url":"https://valid"}}}}',
+			}),
+		});
+
+		expect(Object.keys(result.servers)).toEqual(["valid"]);
+		const typeDiagnostics = result.diagnostics.filter(
+			(diagnostic) => diagnostic.code === "invalid-server"
+		);
+		expect(typeDiagnostics).toHaveLength(2);
+		expect(typeDiagnostics.map((diagnostic) => diagnostic.serverName)).toEqual([
+			"missing",
+			"unsupported",
+		]);
+		expect(typeDiagnostics.map((diagnostic) => diagnostic.path)).toEqual([
+			"/p/opencode.json:mcp.servers.missing.type",
+			"/p/opencode.json:mcp.servers.unsupported.type",
+		]);
+	});
 });
