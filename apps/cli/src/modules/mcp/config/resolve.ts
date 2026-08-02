@@ -314,6 +314,119 @@ type ResolveInput = {
 	env: Record<string, string | undefined>;
 	workspace: string;
 };
+
+const resolveScopeTimeouts = (
+	scope: ScopeData,
+	fallback: McpTimeouts,
+	diagnostics: Diagnostic[]
+): McpTimeouts | undefined => {
+	const mcp = object(scope.value.mcp) ? scope.value.mcp : {};
+	return resolveTimeouts(mcp.timeout, fallback, diagnostics, scope);
+};
+
+const collectServerNames = (
+	globalServers: Record<string, unknown>,
+	projectServers: Record<string, unknown>
+): Set<string> =>
+	new Set([...Object.keys(globalServers), ...Object.keys(projectServers)]);
+
+const validateServerPatch = (
+	merged: ReturnType<typeof merge>,
+	projectEntry: unknown,
+	global: ScopeData,
+	project: ScopeData,
+	name: string,
+	diagnostics: Diagnostic[]
+): ReturnType<typeof rawServerPatchSchema.parse> | undefined => {
+	const validated = rawServerPatchSchema.safeParse(merged.value);
+	if (validated.success) {
+		return validated.data;
+	}
+	for (const issue of validated.error.issues) {
+		const field = issue.path.map(String).join(".");
+		const sourceData =
+			merged.sources.get(field) ?? merged.sources.get(String(issue.path[0]));
+		const diagnosticScope =
+			sourceData ?? (projectEntry === undefined ? global : project);
+		let code: Diagnostic["code"] = "invalid-field";
+		if (field.startsWith("timeout")) {
+			code = "invalid-timeout";
+		}
+		if (field === "command" || field === "type") {
+			code = "invalid-server";
+		}
+		diagnostics.push({
+			scope: diagnosticScope.scope,
+			code,
+			message: issue.message,
+			path: `${diagnosticScope.path}:mcp.servers.${name}.${field}`,
+			serverName: name,
+		});
+	}
+};
+
+const resolveNamedServer = (
+	name: string,
+	globalEntry: unknown,
+	projectEntry: unknown,
+	global: ScopeData,
+	project: ScopeData,
+	mergedTimeout: McpTimeouts,
+	diagnostics: Diagnostic[],
+	env: Record<string, string | undefined>,
+	workspace: string
+): ResolvedMcpServerConfig | undefined => {
+	if (globalEntry !== undefined && !object(globalEntry)) {
+		addDiagnostic(
+			diagnostics,
+			global,
+			"invalid-server",
+			"Server entry must be an object",
+			`mcp.servers.${name}`,
+			name
+		);
+	}
+	if (projectEntry !== undefined && !object(projectEntry)) {
+		addDiagnostic(
+			diagnostics,
+			project,
+			"invalid-server",
+			"Server entry must be an object",
+			`mcp.servers.${name}`,
+			name
+		);
+		return;
+	}
+	const merged = merge(
+		object(globalEntry) ? globalEntry : {},
+		object(projectEntry) ? projectEntry : {},
+		source(global),
+		source(project)
+	);
+	const validated = validateServerPatch(
+		merged,
+		projectEntry,
+		global,
+		project,
+		name,
+		diagnostics
+	);
+	if (!validated) {
+		return;
+	}
+	return resolveServer({
+		merged: { ...merged, value: validated },
+		mergedTimeout,
+		global,
+		project,
+		projectEntry,
+		name,
+		diagnostics,
+		env,
+		workspace,
+	});
+};
+
 export const resolveServers = ({
 	global,
 	project,
@@ -326,88 +439,29 @@ export const resolveServers = ({
 } => {
 	const gs = readSection(global, diagnostics);
 	const ps = readSection(project, diagnostics);
-	const globalMcp = object(global.value.mcp) ? global.value.mcp : {};
-	const projectMcp = object(project.value.mcp) ? project.value.mcp : {};
-	const globalTimeout = resolveTimeouts(
-		globalMcp.timeout,
+	const globalTimeout = resolveScopeTimeouts(
+		global,
 		DEFAULT_MCP_TIMEOUTS,
-		diagnostics,
-		global
+		diagnostics
 	);
-	const projectTimeout = resolveTimeouts(
-		projectMcp.timeout,
+	const projectTimeout = resolveScopeTimeouts(
+		project,
 		globalTimeout ?? DEFAULT_MCP_TIMEOUTS,
-		diagnostics,
-		project
+		diagnostics
 	);
 	const servers: Record<string, ResolvedMcpServerConfig> = {};
-	for (const name of new Set([...Object.keys(gs), ...Object.keys(ps)])) {
-		const gv = gs[name];
-		const pv = ps[name];
-		if (gv !== undefined && !object(gv)) {
-			addDiagnostic(
-				diagnostics,
-				global,
-				"invalid-server",
-				"Server entry must be an object",
-				`mcp.servers.${name}`,
-				name
-			);
-		}
-		if (pv !== undefined && !object(pv)) {
-			addDiagnostic(
-				diagnostics,
-				project,
-				"invalid-server",
-				"Server entry must be an object",
-				`mcp.servers.${name}`,
-				name
-			);
-			continue;
-		}
-		const merged = merge(
-			object(gv) ? gv : {},
-			object(pv) ? pv : {},
-			source(global),
-			source(project)
-		);
-		const validated = rawServerPatchSchema.safeParse(merged.value);
-		if (!validated.success) {
-			for (const issue of validated.error.issues) {
-				const field = issue.path.map(String).join(".");
-				const sourceData =
-					merged.sources.get(field) ??
-					merged.sources.get(String(issue.path[0]));
-				const diagnosticScope =
-					sourceData ?? (pv === undefined ? global : project);
-				let code: Diagnostic["code"] = "invalid-field";
-				if (field.startsWith("timeout")) {
-					code = "invalid-timeout";
-				}
-				if (field === "command" || field === "type") {
-					code = "invalid-server";
-				}
-				diagnostics.push({
-					scope: diagnosticScope.scope,
-					code,
-					message: issue.message,
-					path: `${diagnosticScope.path}:mcp.servers.${name}.${field}`,
-					serverName: name,
-				});
-			}
-			continue;
-		}
-		const result = resolveServer({
-			merged: { ...merged, value: validated.data },
-			mergedTimeout: projectTimeout ?? globalTimeout ?? DEFAULT_MCP_TIMEOUTS,
+	for (const name of collectServerNames(gs, ps)) {
+		const result = resolveNamedServer(
+			name,
+			gs[name],
+			ps[name],
 			global,
 			project,
-			projectEntry: pv,
-			name,
+			projectTimeout ?? globalTimeout ?? DEFAULT_MCP_TIMEOUTS,
 			diagnostics,
 			env,
-			workspace,
-		});
+			workspace
+		);
 		if (result) {
 			servers[name] = result;
 		}
