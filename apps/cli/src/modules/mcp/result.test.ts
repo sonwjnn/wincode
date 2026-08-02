@@ -25,4 +25,38 @@ describe("MCP result normalization", () => {
 			new TextEncoder().encode(JSON.stringify(result)).byteLength
 		).toBeLessThanOrEqual(MAX_MCP_RESULT_BYTES);
 	});
+	test("preserves embedded resource text beyond metadata bounds", () => {
+		const text = "resource text ".repeat(300);
+		const result = normalizeMcpResult({
+			content: [{ type: "resource", resource: { uri: "file://x", text } }],
+		});
+
+		expect(result.truncated).toBe(false);
+		expect(result.content[0]).toMatchObject({ type: "resource", text });
+	});
+	test("truncates huge embedded resource text at the global cap", () => {
+		const result = normalizeMcpResult({
+			content: [
+				{
+					type: "resource",
+					resource: { uri: "file://x", text: "😀".repeat(100_000) },
+				},
+			],
+		});
+
+		expect(result.truncated).toBe(true);
+		expect(
+			new TextEncoder().encode(JSON.stringify(result)).byteLength
+		).toBeLessThanOrEqual(MAX_MCP_RESULT_BYTES);
+		const resource = result.content[0];
+		if (
+			typeof resource === "object" &&
+			resource !== null &&
+			"text" in resource
+		) {
+			expect(
+				new TextEncoder().encode(resource.text as string).byteLength % 4
+			).toBe(0);
+		}
+	});
 });

@@ -80,7 +80,7 @@ function normalizeContent(value: unknown): JsonValue[] {
 					{
 						type: "resource",
 						uri: bounded(stringValue(resource.uri)),
-						text: bounded(resource.text),
+						text: resource.text,
 						mediaType: stringValue(resource.mimeType),
 					},
 				];
@@ -132,8 +132,8 @@ export function normalizeMcpResult(
 	result.structuredContent = { truncated: true };
 	const marker = { type: "text", text: "[MCP output truncated]" } as JsonValue;
 	const texts = result.content.filter(
-		(item): item is { type: "text"; text: string } =>
-			record(item) && item.type === "text" && typeof item.text === "string"
+		(item): item is { text: string } =>
+			record(item) && typeof item.text === "string"
 	);
 	const originals = texts.map((text) => text.text);
 	const lengths = texts.map((text) => Array.from(text.text).length);
