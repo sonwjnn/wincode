@@ -39,6 +39,24 @@ describe("MCP result normalization", () => {
 			new TextEncoder().encode(JSON.stringify(result)).byteLength
 		).toBeLessThanOrEqual(MAX_MCP_RESULT_BYTES);
 	});
+	test("does not return unpaired surrogates when truncating U+1FFFF", () => {
+		const result = normalizeMcpResult({
+			content: [{ type: "text", text: "\u{1ffff}".repeat(100_000) }],
+		});
+		const serialized = JSON.stringify(result);
+		for (let index = 0; index < serialized.length; index += 1) {
+			const codeUnit = serialized.charCodeAt(index);
+			if (codeUnit >= 0xd8_00 && codeUnit <= 0xdb_ff) {
+				expect(serialized.charCodeAt(index + 1)).toBeGreaterThanOrEqual(
+					0xdc_00
+				);
+				expect(serialized.charCodeAt(index + 1)).toBeLessThanOrEqual(0xdf_ff);
+				index += 1;
+			} else {
+				expect(codeUnit < 0xdc_00 || codeUnit > 0xdf_ff).toBe(true);
+			}
+		}
+	});
 	test("preserves embedded resource text beyond metadata bounds", () => {
 		const text = "resource text ".repeat(300);
 		const result = normalizeMcpResult({

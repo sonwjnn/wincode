@@ -19,6 +19,36 @@ const record = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 const stringValue = (value: unknown): string =>
 	typeof value === "string" ? value : "unknown";
+const HIGH_SURROGATE_START = 0xd8_00;
+const HIGH_SURROGATE_END = 0xdb_ff;
+const LOW_SURROGATE_START = 0xdc_00;
+const LOW_SURROGATE_END = 0xdf_ff;
+const prefix = (value: string, length: number): string => {
+	const end = Math.min(value.length, length);
+	let index = 0;
+	while (index < end) {
+		const codeUnit = value.charCodeAt(index);
+		if (codeUnit >= HIGH_SURROGATE_START && codeUnit <= HIGH_SURROGATE_END) {
+			if (index + 1 >= end) {
+				break;
+			}
+			const nextCodeUnit = value.charCodeAt(index + 1);
+			if (
+				nextCodeUnit < LOW_SURROGATE_START ||
+				nextCodeUnit > LOW_SURROGATE_END
+			) {
+				break;
+			}
+			index += 2;
+			continue;
+		}
+		if (codeUnit >= LOW_SURROGATE_START && codeUnit <= LOW_SURROGATE_END) {
+			break;
+		}
+		index += 1;
+	}
+	return value.slice(0, index);
+};
 const bounded = (value: string, max = 2048): string => {
 	const end = Math.min(value.length, max);
 	const chunks: string[] = [];
@@ -173,12 +203,6 @@ export function normalizeMcpResult(input: unknown): McpNormalizedResult {
 	}
 	let low = 0;
 	let high = lengths.reduce((sum, length) => sum + length, 0);
-	const prefix = (value: string, length: number): string => {
-		const candidate = value.slice(0, length);
-		return candidate.endsWith("\uD800") || candidate.endsWith("\uDFFF")
-			? candidate.slice(0, -1)
-			: candidate;
-	};
 	while (low < high) {
 		const mid = Math.ceil((low + high) / 2);
 		let left = mid;
