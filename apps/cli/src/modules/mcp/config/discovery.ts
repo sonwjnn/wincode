@@ -61,6 +61,21 @@ const ownObject = (value: Record<string, unknown>): Record<string, unknown> => {
 	return result;
 };
 const notFound = (e: unknown): boolean => isObject(e) && e.code === "ENOENT";
+const reportReadError = (
+	e: unknown,
+	scope: Scope,
+	path: string,
+	diagnostics: Diagnostic[]
+): void => {
+	if (!notFound(e)) {
+		diagnostics.push({
+			scope,
+			code: "read-error",
+			message: "Could not read config file",
+			path,
+		});
+	}
+};
 export async function readScope(
 	root: string,
 	scope: Scope,
@@ -75,25 +90,11 @@ export async function readScope(
 		source = await fs.readFile(jsonc);
 		selected = jsonc;
 	} catch (e) {
-		if (!notFound(e)) {
-			diagnostics.push({
-				scope,
-				code: "read-error",
-				message: "Could not read config file",
-				path: jsonc,
-			});
-		}
+		reportReadError(e, scope, jsonc, diagnostics);
 		try {
 			source = await fs.readFile(json);
 		} catch (error) {
-			if (!notFound(error)) {
-				diagnostics.push({
-					scope,
-					code: "read-error",
-					message: "Could not read config file",
-					path: json,
-				});
-			}
+			reportReadError(error, scope, json, diagnostics);
 			return { value: {}, path: json, scope };
 		}
 	}

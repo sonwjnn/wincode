@@ -378,4 +378,93 @@ describe("loadMcpConfig", () => {
 			serverName: "shared",
 		});
 	});
+	test("rejects unsafe prototype keys", async () => {
+		const result = await loadMcpConfig({
+			workspace: "/p",
+			globalRoot: "/g",
+			env: {},
+			fs: fileSystem({ "/p/opencode.json": '{"__proto__":{},"mcp":{}}' }),
+		});
+		expect(result.diagnostics.some((d) => d.code === "unsafe-key")).toBe(true);
+	});
+	test("rejects invalid local command", async () => {
+		const result = await loadMcpConfig({
+			workspace: "/p",
+			globalRoot: "/g",
+			env: {},
+			fs: fileSystem({
+				"/p/opencode.json":
+					'{"mcp":{"servers":{"x":{"type":"local","command":[]}}}}',
+			}),
+		});
+		expect(result.servers.x).toBeUndefined();
+	});
+	test("resolves environment placeholders", async () => {
+		const result = await loadMcpConfig({
+			workspace: "/p",
+			globalRoot: "/g",
+			env: { A: "b" },
+			fs: fileSystem({
+				"/p/opencode.json":
+					'{"mcp":{"servers":{"x":{"type":"local","command":["x"],"environment":{"a":"{env:A}"}}}}}',
+			}),
+		});
+		expect(
+			result.servers.x?.type === "local" && result.servers.x.environment
+		).toEqual({ a: "b" });
+	});
+	test("keeps literal braces", async () => {
+		const result = await loadMcpConfig({
+			workspace: "/p",
+			globalRoot: "/g",
+			env: {},
+			fs: fileSystem({
+				"/p/opencode.json":
+					'{"mcp":{"servers":{"x":{"type":"local","command":["x"],"environment":{"a":"literal"}}}}}',
+			}),
+		});
+		expect(
+			result.servers.x?.type === "local" && result.servers.x.environment
+		).toEqual({ a: "literal" });
+	});
+	test("rejects non-string headers", async () => {
+		const result = await loadMcpConfig({
+			workspace: "/p",
+			globalRoot: "/g",
+			env: {},
+			fs: fileSystem({
+				"/p/opencode.json":
+					'{"mcp":{"servers":{"x":{"type":"remote","url":"https://x","headers":{"a":1}}}}}',
+			}),
+		});
+		expect(result.servers.x).toBeUndefined();
+	});
+	test("accepts oauth false", async () => {
+		const result = await loadMcpConfig({
+			workspace: "/p",
+			globalRoot: "/g",
+			env: {},
+			fs: fileSystem({
+				"/p/opencode.json":
+					'{"mcp":{"servers":{"x":{"type":"remote","url":"https://x","oauth":false}}}}',
+			}),
+		});
+		expect(result.servers.x?.type === "remote" && result.servers.x.oauth).toBe(
+			false
+		);
+	});
+	test("normalizes remote URLs", async () => {
+		const result = await loadMcpConfig({
+			workspace: "/p",
+			globalRoot: "/g",
+			env: {},
+			fs: fileSystem({
+				"/p/opencode.json":
+					'{"mcp":{"servers":{"x":{"type":"remote","url":"https://x/path"}}}}',
+			}),
+		});
+		expect(result.servers.x?.type === "remote" && result.servers.x.url).toBe(
+			"https://x/path"
+		);
+	});
 });
