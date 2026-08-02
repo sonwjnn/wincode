@@ -8,7 +8,7 @@ export const mcpPolicySchema = z.object({
 export type McpExecutionPolicy = z.infer<typeof mcpExecutionPolicySchema>;
 export type McpPolicyDecision = McpExecutionPolicy;
 export type McpPolicyDiagnostic = {
-	code: "malformed" | "unknown-server";
+	code: "malformed" | "unknown-server" | "read-error";
 	message: string;
 	server?: string;
 };
@@ -33,7 +33,15 @@ export async function loadMcpPolicy(
 	let raw: string;
 	try {
 		raw = await fs.readFile(file);
-	} catch {
+	} catch (error) {
+		if ((error as { code?: string }).code !== "ENOENT") {
+			return {
+				policy: { servers: {} },
+				diagnostics: [
+					{ code: "read-error", message: "Unable to read mcp.json" },
+				],
+			};
+		}
 		return {
 			policy: { servers: {} },
 			diagnostics: unknownServers({}, input.configuredServers),
@@ -81,7 +89,8 @@ function unknownServers(
 export const resolveMcpPolicy = (
 	policies: Readonly<Record<string, McpExecutionPolicy>>,
 	serverName: string
-): McpExecutionPolicy => policies[serverName] ?? "ask";
+): McpExecutionPolicy =>
+	Object.hasOwn(policies, serverName) ? (policies[serverName] ?? "ask") : "ask";
 
 export function getMcpPolicyDecision(
 	policy: McpPolicy,

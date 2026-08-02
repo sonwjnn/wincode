@@ -23,7 +23,7 @@ const bounded = (value: string, max = 2048): string =>
 	Array.from(value).slice(0, max).join("");
 function safeJson(
 	value: unknown,
-	seen = new WeakSet<object>(),
+	ancestors = new WeakSet<object>(),
 	depth = 0
 ): JsonValue | undefined {
 	if (
@@ -36,22 +36,26 @@ function safeJson(
 	if (typeof value === "number") {
 		return Number.isFinite(value) ? value : null;
 	}
-	if (typeof value !== "object" || depth > 32 || seen.has(value)) {
+	if (typeof value !== "object" || depth > 32 || ancestors.has(value)) {
 		return;
 	}
-	seen.add(value);
+	ancestors.add(value);
+	let result: JsonValue | undefined;
 	if (Array.isArray(value)) {
-		return value.flatMap((item) => {
-			const safe = safeJson(item, seen, depth + 1);
+		result = value.flatMap((item) => {
+			const safe = safeJson(item, ancestors, depth + 1);
 			return safe === undefined ? [] : [safe];
 		});
+	} else {
+		result = Object.fromEntries(
+			Object.entries(value).flatMap(([key, item]) => {
+				const safe = safeJson(item, ancestors, depth + 1);
+				return safe === undefined ? [] : [[bounded(key), safe]];
+			})
+		);
 	}
-	return Object.fromEntries(
-		Object.entries(value).flatMap(([key, item]) => {
-			const safe = safeJson(item, seen, depth + 1);
-			return safe === undefined ? [] : [[bounded(key), safe]];
-		})
-	);
+	ancestors.delete(value);
+	return result;
 }
 function normalizeContent(value: unknown): JsonValue[] {
 	if (!Array.isArray(value)) {
@@ -107,14 +111,8 @@ function normalizeContent(value: unknown): JsonValue[] {
 	});
 }
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: bounded normalization handles protocol variants and cap fallback in one pass
-export function normalizeMcpResult(
-	input: unknown,
-	requestedCap?: number
-): McpNormalizedResult {
-	const cap = Math.max(
-		1,
-		Math.min(requestedCap ?? MAX_MCP_RESULT_BYTES, MAX_MCP_RESULT_BYTES)
-	);
+export function normalizeMcpResult(input: unknown): McpNormalizedResult {
+	const cap = MAX_MCP_RESULT_BYTES;
 	const source = record(input) ? input : {};
 	const result: McpNormalizedResult = {
 		content: normalizeContent(source.content),
@@ -129,18 +127,20 @@ export function normalizeMcpResult(
 		return result;
 	}
 	result.truncated = true;
-	result.structuredContent = { truncated: true };
 	const marker = { type: "text", text: "[MCP output truncated]" } as JsonValue;
 	const texts = result.content.filter(
 		(item): item is { text: string } =>
 			record(item) && typeof item.text === "string"
 	);
 	const originals = texts.map((text) => text.text);
-	const lengths = texts.map((text) => Array.from(text.text).length);
+	const lengths = texts.map((text) => text.text.length);
 	for (const text of texts) {
 		text.text = "";
 	}
 	result.content = [...result.content, marker];
+	if (size(result) > cap) {
+		result.structuredContent = undefined;
+	}
 	if (size(result) > cap) {
 		result.content = [marker];
 	}
@@ -149,6 +149,12 @@ export function normalizeMcpResult(
 	}
 	let low = 0;
 	let high = lengths.reduce((sum, length) => sum + length, 0);
+	const prefix = (value: string, length: number): string => {
+		const candidate = value.slice(0, length);
+		return candidate.endsWith("\uD800") || candidate.endsWith("\uDFFF")
+			? candidate.slice(0, -1)
+			: candidate;
+	};
 	while (low < high) {
 		const mid = Math.ceil((low + high) / 2);
 		let left = mid;
@@ -157,8 +163,10 @@ export function normalizeMcpResult(
 			if (!text) {
 				continue;
 			}
-			const chars = Array.from(originals[index] ?? "");
-			text.text = chars.slice(0, Math.min(left, lengths[index] ?? 0)).join("");
+			text.text = prefix(
+				originals[index] ?? "",
+				Math.min(left, lengths[index] ?? 0)
+			);
 			left = Math.max(0, left - (lengths[index] ?? 0));
 		}
 		if (size(result) <= cap) {
@@ -173,8 +181,10 @@ export function normalizeMcpResult(
 		if (!text) {
 			continue;
 		}
-		const chars = Array.from(originals[index] ?? "");
-		text.text = chars.slice(0, Math.min(left, lengths[index] ?? 0)).join("");
+		text.text = prefix(
+			originals[index] ?? "",
+			Math.min(left, lengths[index] ?? 0)
+		);
 		left = Math.max(0, left - (lengths[index] ?? 0));
 	}
 	return result;

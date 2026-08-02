@@ -2,11 +2,11 @@ const MAX_NAME_LENGTH = 64;
 const sanitize = (value: string): string =>
 	value.normalize("NFKD").replace(/[^a-zA-Z0-9_-]/g, "_");
 
-export async function mcpToolIdentity(
+export async function qualifyMcpToolName(
 	server: string,
 	tool: string
 ): Promise<string> {
-	const bytes = new TextEncoder().encode(`${server}\0${tool}`);
+	const bytes = new TextEncoder().encode(JSON.stringify([server, tool]));
 	const digest = Array.from(
 		new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))
 	)
@@ -21,7 +21,3 @@ export async function mcpToolIdentity(
 	const toolLength = Math.min(toolPart.length, available - serverLength);
 	return `mcp_${serverPart.slice(0, serverLength)}_${toolPart.slice(0, toolLength)}_${digest}`;
 }
-
-export const qualifyMcpToolName = mcpToolIdentity;
-
-export const createMcpToolIdentity = mcpToolIdentity;
