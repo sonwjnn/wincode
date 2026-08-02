@@ -16,6 +16,20 @@ describe("MCP result normalization", () => {
 		expect(JSON.stringify(result)).not.toContain("base64-secret");
 		expect(result.structuredContent).toEqual({ n: 1 });
 	});
+	test("bounds a huge resource link URI without scanning into the tail", () => {
+		const tail = "resource-link-tail";
+		const uri = `${"x".repeat(20 * 1024 * 1024)}${tail}`;
+		const result = normalizeMcpResult({
+			content: [{ type: "resource_link", uri }],
+		});
+
+		const resourceLink = result.content[0];
+		expect(resourceLink).toMatchObject({
+			type: "resource_link",
+			uri: "x".repeat(2048),
+		});
+		expect(JSON.stringify(resourceLink)).not.toContain(tail);
+	});
 	test("truncates UTF-8 output within bound", () => {
 		const result = normalizeMcpResult({
 			content: [{ type: "text", text: "😀".repeat(100_000) }],

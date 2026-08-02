@@ -19,8 +19,32 @@ const record = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 const stringValue = (value: unknown): string =>
 	typeof value === "string" ? value : "unknown";
-const bounded = (value: string, max = 2048): string =>
-	Array.from(value).slice(0, max).join("");
+const bounded = (value: string, max = 2048): string => {
+	const end = Math.min(value.length, max);
+	const chunks: string[] = [];
+	let index = 0;
+	while (index < end) {
+		const codeUnit = value.charCodeAt(index);
+		if (codeUnit >= 55_296 && codeUnit <= 56_319) {
+			if (
+				index + 1 < end &&
+				value.charCodeAt(index + 1) >= 56_320 &&
+				value.charCodeAt(index + 1) <= 57_343
+			) {
+				chunks.push(value.slice(index, index + 2));
+				index += 2;
+				continue;
+			}
+			chunks.push("\uFFFD");
+		} else if (codeUnit >= 56_320 && codeUnit <= 57_343) {
+			chunks.push("\uFFFD");
+		} else {
+			chunks.push(value[index] ?? "");
+		}
+		index += 1;
+	}
+	return chunks.join("");
+};
 function safeJson(
 	value: unknown,
 	ancestors = new WeakSet<object>(),
