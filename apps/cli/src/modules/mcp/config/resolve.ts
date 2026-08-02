@@ -1,9 +1,11 @@
 import path from "node:path";
+import type { ZodError } from "zod";
 import type { Diagnostic, ScopeData } from "./discovery";
 import { merge, type Source } from "./merge";
 import {
 	DEFAULT_MCP_TIMEOUTS,
 	type McpTimeouts,
+	mergedServerSchema,
 	type ResolvedMcpServerConfig,
 	rawServerPatchSchema,
 	resolvedServerSchema,
@@ -31,6 +33,30 @@ const addDiagnostic = (
 		path: `${scope.path}:${suffix}`,
 		...(name ? { serverName: name } : {}),
 	});
+};
+
+const addSchemaDiagnostics = (
+	context: ResolutionContext,
+	error: ZodError
+): void => {
+	for (const issue of error.issues) {
+		const field = issue.path.map(String).join(".");
+		const sourceData =
+			context.merged.sources.get(field) ??
+			context.merged.sources.get(String(issue.path[0]));
+		const scope = sourceData ?? context.project;
+		const code: Diagnostic["code"] =
+			field === "command" || field === "type"
+				? "invalid-server"
+				: "invalid-field";
+		context.diagnostics.push({
+			scope: scope.scope,
+			code,
+			message: issue.message,
+			path: `${scope.path}:mcp.servers.${context.name}.${field}`,
+			serverName: context.name,
+		});
+	}
 };
 
 const resolveString = (
@@ -196,7 +222,11 @@ const resolveLocalServer = (
 		...(Object.keys(environment).length ? { environment } : {}),
 	};
 	const parsed = resolvedServerSchema.safeParse(result);
-	return parsed.success ? parsed.data : undefined;
+	if (!parsed.success) {
+		addSchemaDiagnostics(context, parsed.error);
+		return;
+	}
+	return parsed.data;
 };
 
 const resolveRemoteServer = (
@@ -256,7 +286,11 @@ const resolveRemoteServer = (
 		...(Object.keys(headers).length ? { headers } : {}),
 		...(raw.oauth === false ? { oauth: false as const } : {}),
 	});
-	return parsed.success ? parsed.data : undefined;
+	if (!parsed.success) {
+		addSchemaDiagnostics(context, parsed.error);
+		return;
+	}
+	return parsed.data;
 };
 
 const resolveServer = (
@@ -414,7 +448,7 @@ const resolveNamedServer = (
 	if (!validated) {
 		return;
 	}
-	return resolveServer({
+	const context: ResolutionContext = {
 		merged: { ...merged, value: validated },
 		mergedTimeout,
 		global,
@@ -424,6 +458,15 @@ const resolveNamedServer = (
 		diagnostics,
 		env,
 		workspace,
+	};
+	const mergedValidated = mergedServerSchema.safeParse(validated);
+	if (!mergedValidated.success) {
+		addSchemaDiagnostics(context, mergedValidated.error);
+		return;
+	}
+	return resolveServer({
+		...context,
+		merged: { ...merged, value: mergedValidated.data },
 	});
 };
 

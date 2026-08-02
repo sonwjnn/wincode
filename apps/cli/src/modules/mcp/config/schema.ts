@@ -16,7 +16,9 @@ export const rawServerPatchSchema = z
 		environment: z.record(z.string(), z.string()).optional(),
 		url: z.string().optional(),
 		headers: z.record(z.string(), z.string()).optional(),
-		oauth: z.literal(false).optional(),
+		oauth: z
+			.union([z.literal(false), z.record(z.string(), z.unknown())])
+			.optional(),
 		disabled: z.boolean().optional(),
 		timeout: timeoutPatchSchema.optional(),
 	})
@@ -50,6 +52,18 @@ export const remoteServerSchema = z.object({
 export const resolvedServerSchema = z.discriminatedUnion("type", [
 	localServerSchema,
 	remoteServerSchema,
+]);
+const mergedLocalServerSchema = rawServerPatchSchema.extend({
+	type: z.literal("local"),
+	command: z.array(z.string()).min(1),
+});
+const mergedRemoteServerSchema = rawServerPatchSchema.extend({
+	type: z.literal("remote"),
+	url: z.string().min(1),
+});
+export const mergedServerSchema = z.discriminatedUnion("type", [
+	mergedLocalServerSchema,
+	mergedRemoteServerSchema,
 ]);
 export type McpTimeouts = z.infer<typeof timeoutPatchSchema> & {
 	startup: number;
