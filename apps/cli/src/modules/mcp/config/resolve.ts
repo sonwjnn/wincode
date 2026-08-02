@@ -5,6 +5,7 @@ import {
 	DEFAULT_MCP_TIMEOUTS,
 	type McpTimeouts,
 	type ResolvedMcpServerConfig,
+	rawServerPatchSchema,
 	resolvedServerSchema,
 } from "./schema";
 
@@ -96,7 +97,8 @@ const resolveTimeouts = (
 	fallback: McpTimeouts,
 	out: Diagnostic[],
 	scope: ScopeData,
-	name?: string
+	name?: string,
+	phaseScope?: (phase: "startup" | "catalog" | "execution") => ScopeData
 ): McpTimeouts | undefined => {
 	if (value === undefined) {
 		return fallback;
@@ -123,7 +125,7 @@ const resolveTimeouts = (
 		) {
 			addDiagnostic(
 				out,
-				scope,
+				phaseScope?.(phase) ?? scope,
 				"invalid-timeout",
 				`Invalid ${phase} timeout`,
 				`mcp.timeout.${phase}`,
@@ -161,21 +163,6 @@ const resolveLocalServer = (
 	base: object,
 	raw: Record<string, unknown>
 ): ResolvedMcpServerConfig | undefined => {
-	if (
-		!Array.isArray(raw.command) ||
-		raw.command.length === 0 ||
-		raw.command.some((value) => typeof value !== "string")
-	) {
-		addDiagnostic(
-			context.diagnostics,
-			owner(context, "type"),
-			"invalid-server",
-			"Invalid local command",
-			`mcp.servers.${context.name}.command`,
-			context.name
-		);
-		return;
-	}
 	const environment: Record<string, string> = {};
 	for (const [key, value] of Object.entries(
 		object(raw.environment) ? raw.environment : {}
@@ -197,10 +184,7 @@ const resolveLocalServer = (
 	const result = {
 		...base,
 		type: "local" as const,
-		command: [String(raw.command[0]), ...raw.command.slice(1).map(String)] as [
-			string,
-			...string[],
-		],
+		command: raw.command,
 		...(cwd
 			? {
 					cwd:
@@ -285,7 +269,8 @@ const resolveServer = (
 		context.mergedTimeout,
 		context.diagnostics,
 		owner(context, "timeout"),
-		context.name
+		context.name,
+		(phase) => owner(context, `timeout.${phase}`)
 	);
 	if (!timeout || (raw.type !== "local" && raw.type !== "remote")) {
 		if (timeout) {
@@ -386,8 +371,34 @@ export const resolveServers = ({
 			source(global),
 			source(project)
 		);
+		const validated = rawServerPatchSchema.safeParse(merged.value);
+		if (!validated.success) {
+			for (const issue of validated.error.issues) {
+				const field = issue.path.map(String).join(".");
+				const sourceData =
+					merged.sources.get(field) ??
+					merged.sources.get(String(issue.path[0]));
+				const diagnosticScope =
+					sourceData ?? (pv === undefined ? global : project);
+				let code: Diagnostic["code"] = "invalid-field";
+				if (field.startsWith("timeout")) {
+					code = "invalid-timeout";
+				}
+				if (field === "command" || field === "type") {
+					code = "invalid-server";
+				}
+				diagnostics.push({
+					scope: diagnosticScope.scope,
+					code,
+					message: issue.message,
+					path: `${diagnosticScope.path}:mcp.servers.${name}.${field}`,
+					serverName: name,
+				});
+			}
+			continue;
+		}
 		const result = resolveServer({
-			merged,
+			merged: { ...merged, value: validated.data },
 			mergedTimeout: projectTimeout ?? globalTimeout ?? DEFAULT_MCP_TIMEOUTS,
 			global,
 			project,

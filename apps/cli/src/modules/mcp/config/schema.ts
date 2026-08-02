@@ -11,11 +11,11 @@ export const timeoutPatchSchema = z
 export const rawServerPatchSchema = z
 	.object({
 		type: z.enum(["local", "remote"]).optional(),
-		command: z.array(z.string()).min(1).optional(),
+		command: z.tuple([z.string()]).rest(z.string()).optional(),
 		cwd: z.string().optional(),
-		environment: z.record(z.string(), z.unknown()).optional(),
+		environment: z.record(z.string(), z.string()).optional(),
 		url: z.string().optional(),
-		headers: z.record(z.string(), z.unknown()).optional(),
+		headers: z.record(z.string(), z.string()).optional(),
 		oauth: z.literal(false).optional(),
 		disabled: z.boolean().optional(),
 		timeout: timeoutPatchSchema.optional(),

@@ -91,6 +91,9 @@ export async function readScope(
 		selected = jsonc;
 	} catch (e) {
 		reportReadError(e, scope, jsonc, diagnostics);
+		if (!notFound(e)) {
+			return { value: {}, path: jsonc, scope };
+		}
 		try {
 			source = await fs.readFile(json);
 		} catch (error) {
