@@ -57,6 +57,29 @@ describe("MCP result normalization", () => {
 			}
 		}
 	});
+	test("does not end with a replacement after a prefix cuts before a pair", () => {
+		const result = normalizeMcpResult({
+			content: [{ type: "text", text: `a${"😀".repeat(100_000)}` }],
+		});
+		const text = result.content[0];
+		expect(text).toMatchObject({ type: "text" });
+		if (
+			typeof text === "object" &&
+			text !== null &&
+			"text" in text &&
+			typeof text.text === "string"
+		) {
+			expect(text.text.endsWith("\ufffd")).toBe(false);
+			const lastCodeUnit = text.text.charCodeAt(text.text.length - 1);
+			if (lastCodeUnit >= 0xdc_00 && lastCodeUnit <= 0xdf_ff) {
+				const precedingCodeUnit = text.text.charCodeAt(text.text.length - 2);
+				expect(precedingCodeUnit).toBeGreaterThanOrEqual(0xd8_00);
+				expect(precedingCodeUnit).toBeLessThanOrEqual(0xdb_ff);
+			} else {
+				expect(lastCodeUnit).not.toBeGreaterThanOrEqual(0xd8_00);
+			}
+		}
+	});
 	test("retains text after malformed surrogates in oversized output", () => {
 		const result = normalizeMcpResult({
 			content: [{ type: "text", text: `\ud800${"x".repeat(300_000)}` }],

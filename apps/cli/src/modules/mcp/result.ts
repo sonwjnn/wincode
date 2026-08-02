@@ -30,16 +30,18 @@ const prefix = (value: string, length: number): string => {
 	while (index < end) {
 		const codeUnit = value.charCodeAt(index);
 		if (codeUnit >= HIGH_SURROGATE_START && codeUnit <= HIGH_SURROGATE_END) {
-			if (index + 1 < end) {
-				const nextCodeUnit = value.charCodeAt(index + 1);
-				if (
-					nextCodeUnit >= LOW_SURROGATE_START &&
-					nextCodeUnit <= LOW_SURROGATE_END
-				) {
-					chunks.push(value.slice(index, index + 2));
-					index += 2;
-					continue;
-				}
+			const nextCodeUnit = value.charCodeAt(index + 1);
+			const hasLowSurrogate =
+				index + 1 < value.length &&
+				nextCodeUnit >= LOW_SURROGATE_START &&
+				nextCodeUnit <= LOW_SURROGATE_END;
+			if (hasLowSurrogate && index + 1 >= end) {
+				break;
+			}
+			if (hasLowSurrogate) {
+				chunks.push(value.slice(index, index + 2));
+				index += 2;
+				continue;
 			}
 			chunks.push("\uFFFD");
 		} else if (
