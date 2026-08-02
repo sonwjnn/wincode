@@ -15,7 +15,8 @@ export async function mcpToolIdentity(
 		.slice(0, 8);
 	const serverPart = sanitize(server);
 	const toolPart = sanitize(tool);
-	const available = MAX_NAME_LENGTH - 9;
+	const available =
+		MAX_NAME_LENGTH - "mcp_".length - 2 - "_".length - digest.length;
 	const serverLength = Math.min(serverPart.length, Math.ceil(available / 2));
 	const toolLength = Math.min(toolPart.length, available - serverLength);
 	return `mcp_${serverPart.slice(0, serverLength)}_${toolPart.slice(0, toolLength)}_${digest}`;

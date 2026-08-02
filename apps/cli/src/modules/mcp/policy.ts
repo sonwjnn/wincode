@@ -5,7 +5,8 @@ export const mcpPolicySchema = z.object({
 	servers: z.record(z.string(), mcpExecutionPolicySchema).default({}),
 });
 
-export type McpPolicyDecision = "allow" | "ask" | "deny";
+export type McpExecutionPolicy = z.infer<typeof mcpExecutionPolicySchema>;
+export type McpPolicyDecision = McpExecutionPolicy;
 export type McpPolicyDiagnostic = {
 	code: "malformed" | "unknown-server";
 	message: string;
@@ -77,11 +78,14 @@ function unknownServers(
 		}));
 }
 
+export const resolveMcpPolicy = (
+	policies: Readonly<Record<string, McpExecutionPolicy>>,
+	serverName: string
+): McpExecutionPolicy => policies[serverName] ?? "ask";
+
 export function getMcpPolicyDecision(
 	policy: McpPolicy,
 	server: string
 ): McpPolicyDecision {
-	return policy.servers[server] ?? "ask";
+	return resolveMcpPolicy(policy.servers, server);
 }
-
-export const resolveMcpPolicy = getMcpPolicyDecision;

@@ -1,8 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { getMcpPolicyDecision, loadMcpPolicy } from "./policy";
+import {
+	getMcpPolicyDecision,
+	loadMcpPolicy,
+	resolveMcpPolicy,
+} from "./policy";
 
 const fs = (value: string) => ({ readFile: async () => value });
 describe("MCP policy", () => {
+	test("resolves missing and explicit server policies", () => {
+		expect(resolveMcpPolicy({}, "github")).toBe("ask");
+		expect(resolveMcpPolicy({ github: "allow", slack: "deny" }, "github")).toBe(
+			"allow"
+		);
+		expect(resolveMcpPolicy({ github: "allow", slack: "deny" }, "slack")).toBe(
+			"deny"
+		);
+	});
 	test("loads exact policy and defaults to ask", async () => {
 		const result = await loadMcpPolicy({
 			workspace: "/p",
