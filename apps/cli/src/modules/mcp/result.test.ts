@@ -57,6 +57,34 @@ describe("MCP result normalization", () => {
 			}
 		}
 	});
+	test("retains text after malformed surrogates in oversized output", () => {
+		const result = normalizeMcpResult({
+			content: [{ type: "text", text: `\ud800${"x".repeat(300_000)}` }],
+		});
+		const text = result.content[0];
+		expect(text).toMatchObject({ type: "text" });
+		if (
+			typeof text === "object" &&
+			text !== null &&
+			"text" in text &&
+			typeof text.text === "string"
+		) {
+			expect(text.text.startsWith("\ufffdx")).toBe(true);
+		}
+
+		const midStringResult = normalizeMcpResult({
+			content: [{ type: "text", text: `x\udc00${"x".repeat(300_000)}` }],
+		});
+		const midText = midStringResult.content[0];
+		if (
+			typeof midText === "object" &&
+			midText !== null &&
+			"text" in midText &&
+			typeof midText.text === "string"
+		) {
+			expect(midText.text.startsWith("x\ufffdx")).toBe(true);
+		}
+	});
 	test("preserves embedded resource text beyond metadata bounds", () => {
 		const text = "resource text ".repeat(300);
 		const result = normalizeMcpResult({

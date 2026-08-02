@@ -25,29 +25,34 @@ const LOW_SURROGATE_START = 0xdc_00;
 const LOW_SURROGATE_END = 0xdf_ff;
 const prefix = (value: string, length: number): string => {
 	const end = Math.min(value.length, length);
+	const chunks: string[] = [];
 	let index = 0;
 	while (index < end) {
 		const codeUnit = value.charCodeAt(index);
 		if (codeUnit >= HIGH_SURROGATE_START && codeUnit <= HIGH_SURROGATE_END) {
-			if (index + 1 >= end) {
-				break;
+			if (index + 1 < end) {
+				const nextCodeUnit = value.charCodeAt(index + 1);
+				if (
+					nextCodeUnit >= LOW_SURROGATE_START &&
+					nextCodeUnit <= LOW_SURROGATE_END
+				) {
+					chunks.push(value.slice(index, index + 2));
+					index += 2;
+					continue;
+				}
 			}
-			const nextCodeUnit = value.charCodeAt(index + 1);
-			if (
-				nextCodeUnit < LOW_SURROGATE_START ||
-				nextCodeUnit > LOW_SURROGATE_END
-			) {
-				break;
-			}
-			index += 2;
-			continue;
-		}
-		if (codeUnit >= LOW_SURROGATE_START && codeUnit <= LOW_SURROGATE_END) {
-			break;
+			chunks.push("\uFFFD");
+		} else if (
+			codeUnit >= LOW_SURROGATE_START &&
+			codeUnit <= LOW_SURROGATE_END
+		) {
+			chunks.push("\uFFFD");
+		} else {
+			chunks.push(value.charAt(index));
 		}
 		index += 1;
 	}
-	return value.slice(0, index);
+	return chunks.join("");
 };
 const bounded = (value: string, max = 2048): string => {
 	const end = Math.min(value.length, max);
