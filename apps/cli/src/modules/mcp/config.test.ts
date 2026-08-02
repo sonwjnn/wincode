@@ -120,6 +120,58 @@ describe("loadMcpConfig", () => {
 			}
 		);
 	});
+	test("project arrays replace nested values and preserve project provenance", async () => {
+		const cases = [
+			{
+				field: "headers",
+				global: { headers: { global: "value" }, url: "https://x" },
+			},
+			{
+				field: "environment",
+				global: { environment: { GLOBAL: "value" }, command: ["x"] },
+			},
+			{
+				field: "timeout",
+				global: {
+					timeout: { startup: 1, catalog: 2, execution: 3 },
+					url: "https://x",
+				},
+			},
+		] as const;
+
+		for (const testCase of cases) {
+			await withRoots(
+				{
+					global: {
+						"opencode.json": JSON.stringify({
+							mcp: { servers: { x: testCase.global } },
+						}),
+					},
+					project: {
+						"opencode.json": JSON.stringify({
+							mcp: { servers: { x: { [testCase.field]: [] } } },
+						}),
+					},
+				},
+				async (globalRoot, workspace) => {
+					const result = await loadMcpConfig({
+						globalRoot,
+						workspace,
+						env: {},
+					});
+					expect(result.servers.x).toBeUndefined();
+					expect(result.diagnostics).toContainEqual(
+						expect.objectContaining({
+							scope: "project",
+							path: expect.stringContaining(
+								`opencode.json:mcp.servers.x.${testCase.field}`
+							),
+						})
+					);
+				}
+			);
+		}
+	});
 	test("reports every invalid timeout phase", async () => {
 		for (const [phase, value] of Object.entries({
 			startup: 0,

@@ -4,6 +4,8 @@ export type Merged = {
 	sources: Map<string, Source>;
 };
 const nested = new Set(["headers", "environment", "timeout"]);
+const record = (value: unknown): value is Record<string, unknown> =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
 export const merge = (
 	base: Record<string, unknown>,
 	overlay: Record<string, unknown>,
@@ -22,16 +24,10 @@ export const merge = (
 		}
 	}
 	for (const [key, val] of Object.entries(overlay)) {
-		if (
-			nested.has(key) &&
-			typeof value[key] === "object" &&
-			value[key] !== null &&
-			typeof val === "object" &&
-			val !== null
-		) {
+		if (nested.has(key) && record(value[key]) && record(val)) {
 			value[key] = {
-				...(value[key] as Record<string, unknown>),
-				...(val as Record<string, unknown>),
+				...value[key],
+				...val,
 			};
 		} else {
 			value[key] = val;
