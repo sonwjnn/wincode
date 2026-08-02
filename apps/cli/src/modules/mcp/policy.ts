@@ -1,7 +1,8 @@
 import { z } from "zod";
 
-const policySchema = z.object({
-	servers: z.record(z.string(), z.enum(["allow", "ask", "deny"])),
+export const mcpExecutionPolicySchema = z.enum(["allow", "ask", "deny"]);
+export const mcpPolicySchema = z.object({
+	servers: z.record(z.string(), mcpExecutionPolicySchema).default({}),
 });
 
 export type McpPolicyDecision = "allow" | "ask" | "deny";
@@ -48,7 +49,7 @@ export async function loadMcpPolicy(
 			],
 		};
 	}
-	const result = policySchema.safeParse(parsed);
+	const result = mcpPolicySchema.safeParse(parsed);
 	if (!result.success) {
 		return {
 			policy: { servers: {} },
@@ -67,8 +68,8 @@ function unknownServers(
 	policy: Record<string, McpPolicyDecision>,
 	configured?: string[]
 ): McpPolicyDiagnostic[] {
-	return (configured ?? [])
-		.filter((name) => !(name in policy))
+	return Object.keys(policy)
+		.filter((name) => !(configured ?? []).includes(name))
 		.map((server) => ({
 			code: "unknown-server",
 			message: `No policy configured for MCP server '${server}'`,
@@ -82,3 +83,5 @@ export function getMcpPolicyDecision(
 ): McpPolicyDecision {
 	return policy.servers[server] ?? "ask";
 }
+
+export const resolveMcpPolicy = getMcpPolicyDecision;
