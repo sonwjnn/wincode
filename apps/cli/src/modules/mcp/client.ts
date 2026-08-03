@@ -195,7 +195,7 @@ export function createSdkMcpClient(
 			}
 		},
 		async close() {
-			await getClient().close();
+			return guard(async () => getClient().close());
 		},
 		async listTools(signal?: AbortSignal) {
 			return guard(async () => {

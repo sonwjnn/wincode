@@ -490,6 +490,66 @@ describe("createSdkMcpClient", () => {
 		]);
 	});
 
+	test("listTools sanitizes thrown errors so tokens and urls never leak", async () => {
+		const adapter = createSdkMcpClient(
+			remoteConfig({
+				url: "https://x",
+				headers: { Authorization: "Bearer leaked-token" },
+			}),
+			baseDeps({
+				createStdioTransport: failStdio,
+				createClient: () => ({
+					close: async () => {
+						return;
+					},
+					connect: async () => {
+						return;
+					},
+					listTools: () =>
+						Promise.reject(new Error("Bearer leaked-token https://x")),
+					callTool: async () => ({ content: [] }),
+				}),
+			})
+		);
+		const error = await rejectedMcpError(adapter.listTools());
+		expect(error).toMatchObject({ serverName: "remote-demo" });
+		expect(error.message).toContain("remote-demo");
+		expect(error.message).not.toContain("leaked-token");
+		expect(error.message).not.toContain("https://x");
+		expect(error.message).not.toContain("Bearer");
+	});
+
+	test("callTool sanitizes thrown errors so tokens and urls never leak", async () => {
+		const adapter = createSdkMcpClient(
+			remoteConfig({
+				url: "https://x",
+				headers: { Authorization: "Bearer leaked-token" },
+			}),
+			baseDeps({
+				createStdioTransport: failStdio,
+				createClient: () => ({
+					close: async () => {
+						return;
+					},
+					connect: async () => {
+						return;
+					},
+					listTools: async () => ({ tools: [] }),
+					callTool: () =>
+						Promise.reject(new Error("Bearer leaked-token https://x")),
+				}),
+			})
+		);
+		const error = await rejectedMcpError(
+			adapter.callTool("echo", { text: "hi" })
+		);
+		expect(error).toMatchObject({ serverName: "remote-demo" });
+		expect(error.message).toContain("remote-demo");
+		expect(error.message).not.toContain("leaked-token");
+		expect(error.message).not.toContain("https://x");
+		expect(error.message).not.toContain("Bearer");
+	});
+
 	test("close delegates to the SDK client", async () => {
 		let closed = 0;
 		const adapter = createSdkMcpClient(
@@ -510,5 +570,29 @@ describe("createSdkMcpClient", () => {
 		);
 		await adapter.close();
 		expect(closed).toBe(1);
+	});
+
+	test("close sanitizes thrown errors so env secrets never leak", async () => {
+		const adapter = createSdkMcpClient(
+			localConfig({ environment: { API_KEY: "close-super-secret" } }),
+			baseDeps({
+				createClient: () => ({
+					close: () =>
+						Promise.reject(
+							new Error("shutdown failed with close-super-secret")
+						),
+					connect: async () => {
+						return;
+					},
+					listTools: async () => ({ tools: [] }),
+					callTool: async () => ({ content: [] }),
+				}),
+				createHttpTransport: failHttp,
+			})
+		);
+		const error = await rejectedMcpError(adapter.close());
+		expect(error).toMatchObject({ serverName: "demo" });
+		expect(error.message).toContain("demo");
+		expect(error.message).not.toContain("close-super-secret");
 	});
 });
