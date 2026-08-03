@@ -8,3 +8,4 @@ export {
 	type McpServerStatus,
 	type McpSnapshotTool,
 } from "./registry";
+export { McpStatusDialogContent } from "./ui/mcp-status-dialog";

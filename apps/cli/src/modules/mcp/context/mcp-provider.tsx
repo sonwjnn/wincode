@@ -11,6 +11,7 @@ import {
 	useSyncExternalStore,
 } from "react";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
+import { useToast } from "@/shared/providers/toast/toast-provider";
 import {
 	createMcpRegistry,
 	type McpApprovalRequest,
@@ -222,6 +223,29 @@ export type McpContextValue = {
 	statuses: readonly McpServerStatus[];
 };
 
+/**
+ * Builds the one-time startup summary for a build catalog. Returns null when
+ * nothing meaningful initialized (no connected or failed servers), so callers
+ * only surface a toast once the MCP catalog actually resolved.
+ */
+export function buildMcpSummary(
+	statuses: readonly McpServerStatus[]
+): string | null {
+	let connected = 0;
+	let failed = 0;
+	for (const status of statuses) {
+		if (status.state === "connected") {
+			connected += 1;
+		} else if (status.state === "failed") {
+			failed += 1;
+		}
+	}
+	if (connected === 0 && failed === 0) {
+		return null;
+	}
+	return `MCP: ${connected} connected, ${failed} failed.`;
+}
+
 const McpContext = createContext<McpContextValue | null>(null);
 
 export function useMcp(): McpContextValue {
@@ -244,12 +268,14 @@ export function McpProvider({
 	workspace,
 }: McpProviderProps) {
 	const dialog = useDialog();
+	const toast = useToast();
 	const [registry] = useState<McpRegistry>(() =>
 		(createRegistry ?? createMcpRegistry)({ workspace })
 	);
 	// Latest catalog snapshot is tracked in a ref so tool calls resolve against
 	// it synchronously, without waiting for a re-render after createSnapshot.
 	const latestSnapshotRef = useRef<McpCatalogSnapshot | null>(null);
+	const summaryToastShownRef = useRef(false);
 
 	useEffect(
 		() => () => {
@@ -275,9 +301,16 @@ export function McpProvider({
 		async (mode: ModeType): Promise<McpCatalogSnapshot> => {
 			const snapshot = await registry.createSnapshot(mode);
 			latestSnapshotRef.current = snapshot;
+			if (mode === "build" && !summaryToastShownRef.current) {
+				const summary = buildMcpSummary(registry.getStatuses());
+				if (summary !== null) {
+					summaryToastShownRef.current = true;
+					toast.show({ message: summary });
+				}
+			}
 			return snapshot;
 		},
-		[registry]
+		[registry, toast.show]
 	);
 
 	const handleDynamicToolCall = useCallback(

@@ -3,6 +3,7 @@ import { getChatModelRoute } from "@wincode/ai";
 import { type ReactNode, useEffect, useReducer } from "react";
 import { BillingProvider } from "@/modules/billing";
 import { ConnectionsProvider, createConnections } from "@/modules/connections";
+import { createMcpRegistry, McpProvider } from "@/modules/mcp";
 import { ModelPricingProvider } from "@/modules/model-pricing";
 import {
 	PromptConfigProvider,
@@ -14,6 +15,9 @@ import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboar
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 
 const connections = createConnections();
+// One registry for the whole app process; closed on exit (via the command
+// executor's ExitAdapter) and on provider unmount.
+const mcpRegistry = createMcpRegistry({ workspace: process.cwd() });
 
 function BillingComposition({ children }: { children: ReactNode }) {
 	const { model } = usePromptConfig();
@@ -57,9 +61,23 @@ export function RootLayout() {
 					<ModelPricingProvider>
 						<BillingComposition>
 							<ToastProvider>
-								<CopyOnSelect />
 								<DialogProvider>
-									<Outlet key={currentPath} />
+									<McpProvider
+										createRegistry={() => mcpRegistry}
+										workspace={process.cwd()}
+									>
+										<CopyOnSelect />
+										{/*
+										 * The McpProvider renders the approval dialog through the
+										 * outer DialogProvider (it must sit below a DialogProvider),
+										 * while app dialogs mount through this inner DialogProvider so
+										 * dialog content can consume useMcp (status dialog, approvals
+										 * opened by the command executor).
+										 */}
+										<DialogProvider>
+											<Outlet key={currentPath} />
+										</DialogProvider>
+									</McpProvider>
 								</DialogProvider>
 							</ToastProvider>
 						</BillingComposition>

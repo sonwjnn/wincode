@@ -6,6 +6,7 @@ import { act } from "react";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import type { McpClient, McpClientTool } from "../client";
 import type {
 	McpApprovalRequest,
@@ -127,11 +128,13 @@ const renderProvider = async (registry: McpRegistry) => {
 	const setup = await testRender(
 		<ThemeProvider>
 			<KeyboardLayerProvider>
-				<DialogProvider>
-					<McpProvider createRegistry={() => registry} workspace="/tmp">
-						<Consumer />
-					</McpProvider>
-				</DialogProvider>
+				<ToastProvider>
+					<DialogProvider>
+						<McpProvider createRegistry={() => registry} workspace="/tmp">
+							<Consumer />
+						</McpProvider>
+					</DialogProvider>
+				</ToastProvider>
 			</KeyboardLayerProvider>
 		</ThemeProvider>,
 		{ height: 40, width: 120 }
@@ -515,5 +518,56 @@ test("provider handleDynamicToolCall rejects on escape", async () => {
 			toolCallId: "call_1",
 		},
 	]);
+	setup.renderer.destroy();
+});
+
+test("provider shows a single summary toast after the first build snapshot", async () => {
+	let statuses: readonly McpServerStatus[] = [
+		{ name: "demo", state: "connected", toolCount: 2, transport: "local" },
+		{ name: "broken", state: "failed", toolCount: 0, transport: "remote" },
+	];
+	const registry: McpRegistry = {
+		...makeRegistry(),
+		getStatuses: () => statuses,
+	};
+	const { captured, setup } = await renderProvider(registry);
+
+	await captured.value?.createSnapshot("build");
+	await flushUi(setup);
+	expect(setup.captureCharFrame()).toContain("MCP: 1 connected, 1 failed.");
+
+	// A later snapshot with different server counts must not emit a second
+	// summary toast; the first-init flag holds.
+	statuses = [
+		{ name: "demo", state: "connected", toolCount: 2, transport: "local" },
+		{ name: "broken", state: "failed", toolCount: 0, transport: "remote" },
+		{ name: "broken2", state: "failed", toolCount: 0, transport: "remote" },
+	];
+	await captured.value?.createSnapshot("build");
+	await flushUi(setup);
+
+	const frame = setup.captureCharFrame();
+	expect(frame).not.toContain("MCP: 1 connected, 2 failed.");
+	expect(frame).toContain("MCP: 1 connected, 1 failed.");
+	setup.renderer.destroy();
+});
+
+test("provider shows no summary toast without connected or failed servers", async () => {
+	const registry: McpRegistry = {
+		...makeRegistry(),
+		getStatuses: () => [
+			{ name: "demo", state: "connecting", toolCount: 0, transport: "local" },
+		],
+	};
+	const { captured, setup } = await renderProvider(registry);
+
+	await captured.value?.createSnapshot("build");
+	await flushUi(setup);
+	expect(setup.captureCharFrame()).not.toContain("MCP:");
+
+	// A plan-mode snapshot never summarizes either.
+	await captured.value?.createSnapshot("plan");
+	await flushUi(setup);
+	expect(setup.captureCharFrame()).not.toContain("MCP:");
 	setup.renderer.destroy();
 });

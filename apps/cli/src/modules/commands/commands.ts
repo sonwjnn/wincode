@@ -5,7 +5,7 @@ export type CommandSpec = BaseSpec &
 		| { kind: "exit" }
 		| { kind: "connect" }
 		| { kind: "new" }
-		| { kind: "dialog"; dialogKey: "sessions" | "theme" }
+		| { kind: "dialog"; dialogKey: "sessions" | "theme" | "mcp" }
 		| { kind: "models" }
 		| { kind: "skills" }
 		| { kind: "variants" }
@@ -62,6 +62,13 @@ export const COMMANDS: CommandSpec[] = [
 		name: "connect",
 		value: "/connect",
 		kind: "connect",
+	},
+	{
+		description: "Inspect MCP servers and reconnect failures",
+		name: "mcp",
+		value: "/mcp",
+		kind: "dialog",
+		dialogKey: "mcp",
 	},
 	{
 		description: "Quit the application",
