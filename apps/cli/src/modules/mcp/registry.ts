@@ -31,14 +31,14 @@ import {
 	type McpPolicyResult,
 } from "./policy";
 import { type McpNormalizedResult, normalizeMcpResult } from "./result";
+import { sanitizeMessage } from "./sanitize";
 import { qualifyMcpToolName } from "./tool-identity";
 
 export type McpServerState =
-	| "idle"
+	| "disabled"
 	| "connecting"
 	| "connected"
 	| "degraded"
-	| "disabled"
 	| "failed";
 
 export type McpServerStatus = {
@@ -106,27 +106,6 @@ type ServerEntry = {
 const DEFAULT_GLOBAL_CONFIG_ROOT = (): string =>
 	path.join(homedir(), ".config", "opencode");
 
-const collectSecrets = (config: ResolvedMcpServerConfig): readonly string[] =>
-	config.type === "remote"
-		? [...Object.values(config.headers ?? {}), config.url]
-		: Object.values(config.environment ?? {});
-
-const sanitizeMessage = (
-	config: ResolvedMcpServerConfig | undefined,
-	error: unknown
-): string => {
-	const message =
-		error instanceof Error ? error.message : "unknown MCP registry error";
-	if (config === undefined) {
-		return message;
-	}
-	return collectSecrets(config).reduce(
-		(acc, secret) =>
-			secret.length > 0 ? acc.split(secret).join("[redacted]") : acc,
-		message
-	);
-};
-
 const outputError = (message: string): McpNormalizedResult => ({
 	content: [{ type: "text", text: message }],
 	isError: true,
@@ -181,6 +160,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	const closeController = new AbortController();
 	let closed = false;
 	let initPromise: Promise<void> | undefined;
+	const reconnects = new Map<string, Promise<void>>();
 	let latestSnapshotId: string | undefined;
 	let policy: McpPolicy = { servers: {} };
 
@@ -191,11 +171,13 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	};
 
 	const closeClient = async (entry: ServerEntry): Promise<void> => {
-		if (entry.client === undefined) {
+		const client = entry.client;
+		if (client === undefined) {
 			return;
 		}
+		entry.client = undefined;
 		try {
-			await entry.client.close();
+			await client.close();
 		} catch {
 			// closing is best-effort; errors are sanitized upstream
 		}
@@ -228,7 +210,11 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			entry.error = undefined;
 		} catch (error) {
 			entry.state = "failed";
-			entry.error = sanitizeMessage(entry.config, error);
+			entry.error = sanitizeMessage(
+				entry.config,
+				error,
+				"unknown MCP registry error"
+			);
 			await closeClient(entry);
 		}
 	};
@@ -245,7 +231,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				client: undefined,
 				config,
 				error: undefined,
-				state: config.disabled ? "disabled" : "idle",
+				state: config.disabled ? "disabled" : "connecting",
 				tools: [],
 			});
 		}
@@ -350,16 +336,20 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	const executionError = (
 		toolName: string,
 		timeout: AbortSignal,
+		callerSignal: AbortSignal | undefined,
 		config: ResolvedMcpServerConfig | undefined,
 		error: unknown
 	): string => {
+		if (callerSignal?.aborted) {
+			return `MCP tool '${toolName}' was cancelled`;
+		}
 		if (timeout.aborted) {
 			return `MCP tool '${toolName}' timed out`;
 		}
 		if (closeController.signal.aborted) {
 			return "MCP registry is closing";
 		}
-		return sanitizeMessage(config, error);
+		return sanitizeMessage(config, error, "unknown MCP registry error");
 	};
 
 	const gateApproval = async (
@@ -417,6 +407,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			signals.push(signal);
 		}
 		const combined = AbortSignal.any(signals);
+		const callerAborted = signal?.aborted === true;
 		try {
 			const raw = await tool.client.callTool(
 				tool.originalToolName,
@@ -425,8 +416,17 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			);
 			return normalizeMcpResult(raw);
 		} catch (error) {
-			const message = executionError(toolName, timeout, entry?.config, error);
-			if (!closeController.signal.aborted && entry !== undefined) {
+			const message = executionError(
+				toolName,
+				timeout,
+				signal,
+				entry?.config,
+				error
+			);
+			if (
+				!(callerAborted || closeController.signal.aborted) &&
+				entry !== undefined
+			) {
 				await closeClient(entry);
 				entry.state = "degraded";
 				entry.error = message;
@@ -436,18 +436,12 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		}
 	};
 
-	const reconnect = async (serverName: string): Promise<void> => {
-		const entry = serverEntries.get(serverName);
-		if (entry === undefined) {
-			return;
-		}
-		if (entry.client === undefined) {
-			entry.client = createClient(entry.config);
-			entry.client.setToolsChangedListener((tools) => {
-				entry.tools = tools;
-			});
-		}
+	const doReconnect = async (entry: ServerEntry): Promise<void> => {
 		await closeClient(entry);
+		entry.client = createClient(entry.config);
+		entry.client.setToolsChangedListener((tools) => {
+			entry.tools = tools;
+		});
 		entry.state = "connecting";
 		entry.error = undefined;
 		try {
@@ -457,10 +451,42 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			entry.error = undefined;
 		} catch (error) {
 			entry.state = "failed";
-			entry.error = sanitizeMessage(entry.config, error);
+			entry.error = sanitizeMessage(
+				entry.config,
+				error,
+				"unknown MCP registry error"
+			);
 			await closeClient(entry);
 		}
 		emit();
+	};
+
+	const reconnect = (serverName: string): Promise<void> => {
+		const entry = serverEntries.get(serverName);
+		if (entry === undefined) {
+			return Promise.resolve();
+		}
+		if (entry.config.disabled || entry.state === "disabled") {
+			return Promise.resolve();
+		}
+		const inFlight = reconnects.get(serverName);
+		if (inFlight !== undefined) {
+			return inFlight;
+		}
+		if (entry.state === "connecting") {
+			return Promise.resolve();
+		}
+		const run = doReconnect(entry);
+		reconnects.set(serverName, run);
+		run.then(
+			() => {
+				reconnects.delete(serverName);
+			},
+			() => {
+				reconnects.delete(serverName);
+			}
+		);
+		return run;
 	};
 
 	const getStatuses = (): readonly McpServerStatus[] =>
@@ -485,6 +511,13 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		}
 		closed = true;
 		closeController.abort();
+		if (initPromise !== undefined) {
+			try {
+				await initPromise;
+			} catch {
+				// init is best-effort; individual connect failures are already surfaced
+			}
+		}
 		await Promise.allSettled([...serverEntries.values()].map(closeClient));
 		listeners.clear();
 	};

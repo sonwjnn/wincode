@@ -35,8 +35,13 @@ class FakeMcpClient implements McpClient {
 		this.tools = tools;
 	}
 
+	connectImpl: ((signal?: AbortSignal) => Promise<void>) | undefined;
+
 	async connect(signal?: AbortSignal): Promise<void> {
 		this.connectCount += 1;
+		if (this.connectImpl !== undefined) {
+			return this.connectImpl(signal);
+		}
 		if (signal?.aborted) {
 			throw new DOMException("Aborted", "AbortError");
 		}
@@ -477,12 +482,22 @@ describe("createMcpRegistry", () => {
 		expect(result.isError).toBe(false);
 	});
 
-	test("reconnects a failed server and recovers its tools", async () => {
-		const broken = new FakeMcpClient("broken", [tool("echo")]);
-		broken.connectFailure = new Error("down");
+	test("reconnects a failed server with a fresh client and recovers its tools", async () => {
+		const created: FakeMcpClient[] = [];
+		let first = true;
 		const { registry } = harness({
-			clients: { broken },
 			configs: [serverConfig("broken")],
+			deps: {
+				createClient: (config) => {
+					const client = new FakeMcpClient(config.name, [tool("echo")]);
+					if (first) {
+						client.connectFailure = new Error("down");
+						first = false;
+					}
+					created.push(client);
+					return client;
+				},
+			},
 		});
 		await registry.createSnapshot("build");
 		expect(registry.getStatuses()).toEqual(
@@ -490,8 +505,13 @@ describe("createMcpRegistry", () => {
 				expect.objectContaining({ name: "broken", state: "failed" }),
 			])
 		);
-		broken.connectFailure = null;
+		expect(created).toHaveLength(1);
+		expect(created[0]?.connectCount).toBe(1);
 		await registry.reconnect("broken");
+		expect(created).toHaveLength(2);
+		expect(created[1]).not.toBe(created[0]);
+		expect(created[1]?.connectCount).toBe(1);
+		expect(created[0]?.closeCount).toBeGreaterThan(0);
 		expect(registry.getStatuses()).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
@@ -503,8 +523,130 @@ describe("createMcpRegistry", () => {
 		);
 		const snapshot = await registry.createSnapshot("build");
 		expect(snapshot.manifest).toHaveLength(1);
-		expect(broken.connectCount).toBe(2);
-		expect(broken.closeCount).toBeGreaterThan(0);
+	});
+
+	test("dedupes concurrent reconnects for the same server", async () => {
+		const releases: (() => void)[] = [];
+		const created: FakeMcpClient[] = [];
+		const gatedConnect = (signal: AbortSignal | undefined): Promise<void> =>
+			new Promise<void>((resolve, reject) => {
+				if (signal?.aborted) {
+					reject(new DOMException("Aborted", "AbortError"));
+					return;
+				}
+				signal?.addEventListener("abort", () =>
+					reject(new DOMException("Aborted", "AbortError"))
+				);
+				releases.push(() => resolve());
+			});
+		const { registry } = harness({
+			configs: [serverConfig("demo")],
+			deps: {
+				createClient: (config) => {
+					const client = new FakeMcpClient(config.name, [tool("echo")]);
+					created.push(client);
+					if (created.length > 1) {
+						client.connectImpl = gatedConnect;
+					}
+					return client;
+				},
+			},
+		});
+		await registry.createSnapshot("build");
+		expect(created).toHaveLength(1);
+		const first = registry.reconnect("demo");
+		const second = registry.reconnect("demo");
+		expect(second).toBe(first);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(created).toHaveLength(2);
+		expect(created[1]?.connectCount).toBe(1);
+		for (const release of releases) {
+			release();
+		}
+		await first;
+		expect(registry.getStatuses()).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ name: "demo", state: "connected" }),
+			])
+		);
+		expect(created).toHaveLength(2);
+	});
+
+	test("reconnect on a disabled server is a no-op", async () => {
+		const { clients, registry } = harness({
+			configs: [serverConfig("off", { disabled: true })],
+		});
+		await registry.createSnapshot("build");
+		await registry.reconnect("off");
+		expect(registry.getStatuses()).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ name: "off", state: "disabled" }),
+			])
+		);
+		expect(clients.size).toBe(0);
+	});
+
+	test("close awaits in-flight init so the SDK client is closed exactly once", async () => {
+		const created: FakeMcpClient[] = [];
+		const { registry } = harness({
+			configs: [serverConfig("demo")],
+			deps: {
+				createClient: (config) => {
+					const client = new FakeMcpClient(config.name, [tool("echo")]);
+					created.push(client);
+					client.connectImpl = (signal) =>
+						new Promise<void>((_resolve, reject) => {
+							if (signal?.aborted) {
+								reject(new DOMException("Aborted", "AbortError"));
+								return;
+							}
+							signal?.addEventListener("abort", () =>
+								reject(new DOMException("Aborted", "AbortError"))
+							);
+						});
+					return client;
+				},
+			},
+		});
+		const pending = registry.createSnapshot("build");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(created).toHaveLength(1);
+		await registry.close();
+		const snapshot = await pending;
+		expect(snapshot.manifest).toEqual([]);
+		expect(created[0]?.closeCount).toBe(1);
+	});
+
+	test("returns a distinct cancelled result when the caller aborts execution", async () => {
+		const demo = new FakeMcpClient("demo", [tool("echo")]);
+		demo.callImpl = hangingCall();
+		const { registry } = harness({
+			clients: { demo },
+			configs: [serverConfig("demo")],
+		});
+		const snapshot = await registry.createSnapshot("build");
+		const name = snapshot.manifest[0]?.name ?? "";
+		const controller = new AbortController();
+		const pending = registry.execute(
+			snapshot,
+			name,
+			{},
+			async () => true,
+			controller.signal
+		);
+		controller.abort();
+		const result = await pending;
+		expect(result.isError).toBe(true);
+		const text = JSON.stringify(result.content);
+		expect(text).toContain("cancelled");
+		expect(text).not.toContain("timed out");
+		expect(text).not.toContain("closing");
+		expect(demo.closeCount).toBe(0);
+		expect(registry.getStatuses()).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ name: "demo", state: "connected" }),
+			])
+		);
 	});
 
 	test("reconnect for an unknown server is a no-op", async () => {

@@ -8,6 +8,7 @@ import {
 } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import type { ResolvedMcpServerConfig } from "./config";
+import { sanitizeMessage } from "./sanitize";
 
 export type McpClientTool = {
 	description?: string;
@@ -119,26 +120,14 @@ const localTransportOptions = (
 	};
 };
 
-const collectSecrets = (config: ResolvedMcpServerConfig): readonly string[] => {
-	if (config.type === "remote") {
-		return [...Object.values(config.headers ?? {}), config.url];
-	}
-	return Object.values(config.environment ?? {});
-};
-
 const sanitizeError = (
 	config: ResolvedMcpServerConfig,
 	error: unknown
-): McpClientError => {
-	const message =
-		error instanceof Error ? error.message : "unknown MCP client error";
-	const sanitized = collectSecrets(config).reduce(
-		(acc, secret) =>
-			secret.length > 0 ? acc.split(secret).join("[redacted]") : acc,
-		message
+): McpClientError =>
+	new McpClientError(
+		config.name,
+		sanitizeMessage(config, error, "unknown MCP client error")
 	);
-	return new McpClientError(config.name, sanitized);
-};
 
 export function createSdkMcpClient(
 	config: ResolvedMcpServerConfig,
