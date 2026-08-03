@@ -15,9 +15,11 @@ never runs file-system tools.
   `reconnect(serverName)`, and `close()`. The registry is created once and closed on unmount.
 - Types: `McpServerStatus`, `McpApprovalRequest`, `McpCatalogSnapshot`, `McpSnapshotTool`,
   `McpExecutionPolicy`.
+- `McpStatusDialogContent` — the pure status surface (list of servers, transport, state, tool
+  counts, reconnectable rows). Rendered from `McpServerStatus` only, so no config, env, headers,
+  or URLs can appear.
 
-The approval dialog and status dialog UI are module-internal and intentionally not part of the
-public entrypoint yet.
+The approval dialog UI is module-internal and intentionally not part of the public entrypoint.
 
 ## Config sources
 

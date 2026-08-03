@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+// Capture the real namespace before registering the module mock so the mock can
+// spread it and stay complete. bun test runs every file in one process, so a
+// partial mock.module("@wincode/ai") would otherwise break sibling test files
+// that import names the partial mock omits.
+// biome-ignore lint/performance/noNamespaceImport: mock spread needs the full namespace
+import * as realAi from "@wincode/ai";
 import { z } from "zod";
 
 const MCP_TOOL_NAME_REGEX = /^mcp_[A-Za-z0-9_-]+$/;
@@ -13,6 +19,7 @@ mock.module("@wincode/env/server", () => ({
 }));
 
 mock.module("@wincode/ai", () => ({
+	...realAi,
 	formatSkillUserContext: (skill: {
 		name: string;
 		instructions: string;

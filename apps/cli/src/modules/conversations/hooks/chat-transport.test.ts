@@ -1,5 +1,11 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { ChatModelSelection } from "@wincode/ai";
+// Capture the real namespace before registering the module mock so the mock can
+// spread it and stay complete. bun test runs every file in one process, so a
+// partial mock.module("@wincode/ai/server") would otherwise break sibling test
+// files that import names the partial mock omits.
+// biome-ignore lint/performance/noNamespaceImport: mock spread needs the full namespace
+import * as realServer from "@wincode/ai/server";
 import type { McpCatalogSnapshot, McpContextValue } from "@/modules/mcp";
 
 const resolveOpenAIChatModelMock = mock(
@@ -23,6 +29,7 @@ const resolveDirectChatModelMock = mock(
 );
 
 mock.module("@wincode/ai/server", () => ({
+	...realServer,
 	createCodingAgent: () => ({}),
 	getProviderErrorMessage: () => new Error("provider"),
 	resolveDirectChatModel: resolveDirectChatModelMock,
