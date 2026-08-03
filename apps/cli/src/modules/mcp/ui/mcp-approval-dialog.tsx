@@ -1,6 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
 	useDialog,
 	useDialogEscape,
@@ -12,6 +12,7 @@ import type { McpApprovalController } from "../context/approval-controller";
 import type { McpApprovalRequest } from "../registry";
 
 const MAX_INPUT_CHARS = 2048;
+export const MAX_DESCRIPTION_CHARS = 2048;
 const FORMATTED_INPUT_OVERFLOW = "…";
 
 /**
@@ -32,6 +33,17 @@ export function formatApprovalInput(input: unknown): string {
 	return `${text.slice(0, MAX_INPUT_CHARS)}${FORMATTED_INPUT_OVERFLOW}`;
 }
 
+/**
+ * Formats the tool description for display, bounded so a hostile or enormous
+ * tool schema cannot flood the dialog.
+ */
+export function formatApprovalDescription(description: string): string {
+	if (description.length <= MAX_DESCRIPTION_CHARS) {
+		return description;
+	}
+	return `${description.slice(0, MAX_DESCRIPTION_CHARS)}${FORMATTED_INPUT_OVERFLOW}`;
+}
+
 type McpApprovalDialogContentProps = {
 	controller: McpApprovalController;
 	onClose: () => void;
@@ -44,6 +56,7 @@ export function McpApprovalDialogContent({
 	request,
 }: McpApprovalDialogContentProps) {
 	const [selectedAction, setSelectedAction] = useState<0 | 1>(0);
+	const selectedActionRef = useRef<0 | 1>(0);
 	const { isTopLayer } = useKeyboardLayer();
 	const layerId = useDialogLayer();
 	const { colors } = useTheme();
@@ -51,6 +64,19 @@ export function McpApprovalDialogContent({
 	// Closing the dialog (escape, backdrop, or action) unmounts this content and
 	// settles any still-pending approval request with `false`.
 	useEffect(() => () => controller.cancel(), [controller]);
+
+	// OpenTUI keyboard callbacks are imperative and several keys can land before
+	// React commits the next render. Mirror the selection into a ref and toggle
+	// it synchronously so enter always resolves against the latest selection.
+	useEffect(() => {
+		selectedActionRef.current = selectedAction;
+	}, [selectedAction]);
+
+	const toggleSelectedAction = () => {
+		const next: 0 | 1 = selectedActionRef.current === 0 ? 1 : 0;
+		selectedActionRef.current = next;
+		setSelectedAction(next);
+	};
 
 	useKeyboard((key) => {
 		if (!isTopLayer(layerId)) {
@@ -64,12 +90,12 @@ export function McpApprovalDialogContent({
 			key.name === "up"
 		) {
 			key.preventDefault();
-			setSelectedAction((previous) => (previous === 0 ? 1 : 0));
+			toggleSelectedAction();
 			return;
 		}
 		if (key.name === "enter" || key.name === "return") {
 			key.preventDefault();
-			if (selectedAction === 0) {
+			if (selectedActionRef.current === 0) {
 				controller.allow();
 			} else {
 				controller.deny();
@@ -93,7 +119,9 @@ export function McpApprovalDialogContent({
 					<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 						description
 					</text>
-					<text fg={colors.text}>{request.description}</text>
+					<text fg={colors.text}>
+						{formatApprovalDescription(request.description)}
+					</text>
 				</>
 			)}
 			<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
