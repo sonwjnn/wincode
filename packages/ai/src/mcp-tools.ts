@@ -29,7 +29,7 @@ const isJsonPrimitive = (
 	(typeof value === "number" && Number.isFinite(value));
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: iterative traversal deliberately handles every JSON container type
-const isJsonValue = (value: unknown): value is JsonValue => {
+export const isJsonValue = (value: unknown): value is JsonValue => {
 	try {
 		const pending: Array<{ value: unknown; depth: number }> = [
 			{ value, depth: 0 },

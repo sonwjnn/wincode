@@ -16,11 +16,13 @@ export {
 	getSystemInstructions,
 } from "./instructions";
 export type {
+	JsonObject,
 	JsonValue,
 	McpToolManifest,
 	McpToolManifestEntry,
 } from "./mcp-tools";
 export {
+	isJsonValue,
 	MAX_MCP_MANIFEST_BYTES,
 	MAX_MCP_RESULT_BYTES,
 	MAX_MCP_TOOL_COUNT,
