@@ -1,6 +1,7 @@
 import type {
 	ChatModelSelection,
 	CodingAgentUIMessage,
+	McpToolManifest,
 	ModelVariant,
 	ModeType,
 	SkillContext,
@@ -14,6 +15,7 @@ import {
 
 type SendChatRequestBody = {
 	messages: CodingAgentUIMessage[];
+	mcpTools?: McpToolManifest;
 	mode: ModeType;
 	model: string;
 	persist: false;
@@ -65,7 +67,8 @@ const normalizeSelection = (model: unknown): ChatModelSelection | null => {
 export const prepareSendChatRequestBody = (
 	_sessionId: string,
 	messages: CodingAgentUIMessage[],
-	fallback?: ChatMetadataFallback
+	fallback?: ChatMetadataFallback,
+	mcpTools?: McpToolManifest
 ): SendChatRequestBody => {
 	const message = messages.at(-1);
 
@@ -90,6 +93,9 @@ export const prepareSendChatRequestBody = (
 		throw new Error(`Connect ${model.providerId} with /connect`);
 	}
 
+	const requestMcpTools =
+		mode === "plan" || !mcpTools?.length ? undefined : mcpTools;
+
 	return {
 		messages,
 		mode,
@@ -97,6 +103,7 @@ export const prepareSendChatRequestBody = (
 		persist: false,
 		...((skill ?? fallback?.skill) ? { skill: skill ?? fallback?.skill } : {}),
 		variant,
+		...(requestMcpTools ? { mcpTools: requestMcpTools } : {}),
 		sendReasoning: true,
 	};
 };

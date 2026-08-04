@@ -13,6 +13,7 @@ const DIALOG_TITLES: Record<
 > = {
 	sessions: "Sessions",
 	theme: "Select Theme",
+	mcp: "MCP Servers",
 };
 
 export class DialogAdapter {

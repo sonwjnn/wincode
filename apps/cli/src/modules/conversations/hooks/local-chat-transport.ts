@@ -16,6 +16,7 @@ import {
 } from "@wincode/ai/server";
 import { type ChatTransport, createAgentUIStream } from "ai";
 import type { Connections } from "@/modules/connections";
+import type { McpCatalogSnapshot } from "@/modules/mcp";
 import { getOriginatingUserSkill } from "../utils";
 
 type MutableRefObject<T> = { current: T };
@@ -29,7 +30,8 @@ export const createLocalChatTransport = (
 	modelRef: MutableRefObject<ChatModelSelection>,
 	variantRef: MutableRefObject<ModelVariant | undefined>,
 	connections: Connections,
-	createStream: CreateAgentUIStream = createAgentUIStream
+	createStream: CreateAgentUIStream = createAgentUIStream,
+	snapshot?: McpCatalogSnapshot
 ): LocalChatTransport => ({
 	sendMessages: async ({ abortSignal, messages }) => {
 		const selection = modelRef.current;
@@ -60,7 +62,11 @@ export const createLocalChatTransport = (
 			abortSignal,
 			messageMetadata: buildUsageMessageMetadata,
 			originalMessages: modelMessages,
-			options: { mode: modeRef.current, model: resolvedModel.modelId },
+			options: {
+				mode: modeRef.current,
+				model: resolvedModel.modelId,
+				...(snapshot?.manifest.length ? { mcpTools: snapshot.manifest } : {}),
+			},
 			onError: getProviderErrorMessage,
 			sendReasoning: true,
 			uiMessages: modelMessages,

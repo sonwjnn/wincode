@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@ai-sdk/react": "catalog:",
+    "@modelcontextprotocol/client": "^2.0.0",
     "@opentui/core": "^0.2.1",
     "@opentui/react": "^0.2.1",
     "@tanstack/react-router": "catalog:",
@@ -25,14 +26,17 @@
     "ai": "catalog:",
     "drizzle-orm": "^0.45.2",
     "hono": "catalog:",
+    "jsonc-parser": "^3.3.1",
     "oauth4webapi": "^3.8.3",
-    "opentui-spinner": "^0.0.6",
     "open": "^10.2.0",
+    "opentui-spinner": "^0.0.6",
     "react": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@libsql/client": "^0.17.4",
+    "@modelcontextprotocol/hono": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
     "@tanstack/router-cli": "1.166.43",
     "@types/bun": "latest",
     "drizzle-kit": "^0.31.10"

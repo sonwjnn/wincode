@@ -10,6 +10,7 @@ import {
 	expandFileMentionPartsForModel,
 	restoreOriginalFileMentionParts,
 } from "../file-mentions";
+import type { McpToolManifest } from "../mcp-tools";
 import type { CodingAgentUIMessage } from "../message";
 import type { SupportedChatModelId } from "../models";
 import { defaultMode, type ModeType } from "../modes";
@@ -33,6 +34,7 @@ type CreateCodingAgentStreamResponseOptions = {
 	sendReasoning?: boolean;
 	uiMessages: CodingAgentUIMessage[];
 	skill?: SkillContext;
+	mcpTools?: McpToolManifest;
 };
 
 export const createCodingAgentStreamResponse = ({
@@ -49,6 +51,7 @@ export const createCodingAgentStreamResponse = ({
 	sendReasoning = true,
 	uiMessages,
 	skill,
+	mcpTools = [],
 }: CreateCodingAgentStreamResponseOptions) => {
 	const modelMessages = expandFileMentionPartsForModel(
 		sanitizeInterruptedMessagesForModel(uiMessages)
@@ -104,7 +107,7 @@ export const createCodingAgentStreamResponse = ({
 		onFinish: agentUiFinishHandler as never,
 		onError: getProviderErrorMessage,
 		abortSignal,
-		options: { mode, model: modelId },
+		options: { mode, model: modelId, mcpTools },
 		originalMessages: modelMessages,
 		sendReasoning,
 		uiMessages: modelMessages,

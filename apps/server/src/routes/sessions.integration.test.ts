@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+// Capture the real namespace before registering the module mock so the mock can
+// spread it and stay complete. bun test runs every file in one process, so a
+// partial mock.module("@wincode/ai") would otherwise break sibling test files
+// that import names the partial mock omits.
+// biome-ignore lint/performance/noNamespaceImport: mock spread needs the full namespace
+import * as realAi from "@wincode/ai";
 import { z } from "zod";
+
+const MCP_TOOL_NAME_REGEX = /^mcp_[A-Za-z0-9_-]+$/;
 
 mock.module("@wincode/env/server", () => ({
 	env: {
@@ -11,6 +19,7 @@ mock.module("@wincode/env/server", () => ({
 }));
 
 mock.module("@wincode/ai", () => ({
+	...realAi,
 	formatSkillUserContext: (skill: {
 		name: string;
 		instructions: string;
@@ -21,10 +30,10 @@ mock.module("@wincode/ai", () => ({
 		instructions: z.string(),
 		arguments: z.string(),
 	}),
-	codingModeNameSchema: z.enum(["plan"]),
+	codingModeNameSchema: z.enum(["build", "plan"]),
 	codingAgentDataSchemas: {},
 	codingMessageMetadataSchema: z.object({
-		mode: z.enum(["plan"]).optional(),
+		mode: z.enum(["build", "plan"]).optional(),
 		skill: z
 			.object({
 				name: z.string(),
@@ -39,6 +48,35 @@ mock.module("@wincode/ai", () => ({
 		variant: z.enum(["high", "max"]).optional(),
 	}),
 	modelVariantSchema: z.enum(["high", "max"]),
+	mcpToolManifestSchema: z
+		.array(
+			z
+				.object({
+					name: z.string().min(1).max(64).regex(MCP_TOOL_NAME_REGEX),
+					description: z.string().max(8 * 1024),
+					inputSchema: z.record(z.string(), z.unknown()),
+				})
+				.strict()
+		)
+		.max(128)
+		.superRefine((tools, context) => {
+			const names = new Set<string>();
+			for (const tool of tools) {
+				if (names.has(tool.name)) {
+					context.addIssue({ code: "custom", message: "duplicate tool name" });
+				}
+				names.add(tool.name);
+			}
+			if (
+				new TextEncoder().encode(JSON.stringify(tools)).byteLength >
+				256 * 1024
+			) {
+				context.addIssue({
+					code: "custom",
+					message: "manifest exceeds byte limit",
+				});
+			}
+		}),
 	supportedChatModelIdSchema: z.enum(["gpt-5.4-mini", "gpt-5.5"]),
 }));
 
@@ -109,6 +147,12 @@ const resolveWincodeChatModelSelection = ((model: string) => {
 
 const codingServerTools =
 	{} as typeof import("@wincode/ai/server").codingServerTools;
+
+const validMcpTool = {
+	description: "Reads files",
+	inputSchema: { type: "object", properties: {}, required: [] },
+	name: "mcp_read",
+};
 
 const billingRepository = {
 	finalizeRequest: mock(async () => ({
@@ -256,6 +300,151 @@ describe("POST /:id/chat (transport-only)", () => {
 			method: "POST",
 		});
 
+		expect(response.status).toBe(400);
+	});
+
+	test("forwards valid Build MCP manifest as active tools", async () => {
+		const buildStream = mock(async (input: any) => {
+			await input.onStepEnd?.({
+				stepNumber: 0,
+				usage: { inputTokens: 1n, outputTokens: 1n, totalTokens: 2n },
+			});
+			await input.onEnd?.({
+				steps: [],
+				totalUsage: { inputTokens: 1n, outputTokens: 1n, totalTokens: 2n },
+			});
+			return new Response(null, { status: 200 });
+		});
+		const buildRoutes = createSessionsRoutes({
+			codingServerTools,
+			createCodingAgentStreamResponse: buildStream as never,
+			getBillingConfig: () =>
+				({
+					fundedRequestInputTokenLimit: 2000,
+					fundedRequestOutputTokenLimit: 8,
+					fundedRequestStepLimit: 3,
+					fundedRequestTimeWindowSeconds: 5,
+					mode: "allowlist-shadow",
+				}) as never,
+			getBillingRepository: () => billingRepository as never,
+			resolveSupportedChatModel,
+			resolveWincodeChatModelSelection,
+		});
+		const response = await buildRoutes.request("/session-mcp/chat", {
+			body: JSON.stringify({
+				messages: [
+					{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
+				],
+				mode: "build",
+				model: "gpt-5.4-mini",
+				mcpTools: [validMcpTool],
+			}),
+			headers: { "content-type": "application/json" },
+			method: "POST",
+		});
+
+		expect(response.status).toBe(200);
+		expect(buildStream).toHaveBeenCalledWith(
+			expect.objectContaining({ mcpTools: [validMcpTool] })
+		);
+	});
+
+	test("forwards completed historical dynamic tool parts without activating tool", async () => {
+		const historicalRoutes = createSessionsRoutes({
+			codingServerTools,
+			createCodingAgentStreamResponse,
+			getBillingConfig: () =>
+				({
+					fundedRequestInputTokenLimit: 2000,
+					fundedRequestOutputTokenLimit: 8,
+					fundedRequestStepLimit: 3,
+					fundedRequestTimeWindowSeconds: 5,
+					mode: "allowlist-shadow",
+				}) as never,
+			getBillingRepository: () => billingRepository as never,
+			resolveSupportedChatModel,
+			resolveWincodeChatModelSelection,
+		});
+		const response = await historicalRoutes.request(
+			"/session-mcp-history/chat",
+			{
+				body: JSON.stringify({
+					messages: [
+						{
+							id: "assistant-1",
+							parts: [
+								{
+									input: {},
+									output: {},
+									state: "output-available",
+									toolCallId: "call-history",
+									toolName: "mcp_historical_read_12345678",
+									type: "dynamic-tool",
+								},
+							],
+							role: "assistant",
+						},
+						{
+							id: "user-2",
+							parts: [{ text: "continue", type: "text" }],
+							role: "user",
+						},
+					],
+					mode: "build",
+					model: "gpt-5.4-mini",
+				}),
+				headers: { "content-type": "application/json" },
+				method: "POST",
+			}
+		);
+
+		expect(response.status).toBe(200);
+		expect(createCodingAgentStreamResponse).toHaveBeenCalledWith(
+			expect.objectContaining({
+				mcpTools: [],
+				uiMessages: expect.arrayContaining([
+					expect.objectContaining({ id: "assistant-1" }),
+				]),
+			})
+		);
+	});
+
+	test("rejects malformed MCP manifest entries and oversized manifests", async () => {
+		for (const mcpTools of [
+			null,
+			[{ ...validMcpTool, name: "bad" }],
+			[{ ...validMcpTool, inputSchema: [] }],
+			[{ ...validMcpTool, description: "x".repeat(256 * 1024) }],
+		]) {
+			const response = await sessionsRoutes.request("/session-mcp/chat", {
+				body: JSON.stringify({
+					messages: [
+						{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
+					],
+					mode: "build",
+					model: "gpt-5.4-mini",
+					mcpTools,
+				}),
+				headers: { "content-type": "application/json" },
+				method: "POST",
+			});
+			expect(response.status).toBe(400);
+		}
+	});
+
+	test("rejects MCP tools in Plan mode", async () => {
+		const response = await sessionsRoutes.request("/session-mcp/chat", {
+			body: JSON.stringify({
+				messages: [
+					{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
+				],
+				mode: "plan",
+				model: "gpt-5.4-mini",
+				mcpTools: [validMcpTool],
+			}),
+			headers: { "content-type": "application/json" },
+			method: "POST",
+		});
 		expect(response.status).toBe(400);
 	});
 
@@ -415,29 +604,52 @@ describe("POST /:id/chat (transport-only)", () => {
 	});
 
 	test("rejects funded input after deterministic system/tool overhead", async () => {
-		const response = await createSessionsRoutes({
-			getBillingConfig: () =>
-				({
-					fundedRequestInputTokenLimit: 200,
-					fundedRequestOutputTokenLimit: 8,
-					fundedRequestStepLimit: 3,
-					fundedRequestTimeWindowSeconds: 5,
-					mode: "allowlist-shadow",
-				}) as never,
+		(
+			createCodingAgentStreamResponse as unknown as { mockClear: () => void }
+		).mockClear();
+		const config = () =>
+			({
+				fundedRequestInputTokenLimit: 1000,
+				fundedRequestOutputTokenLimit: 8,
+				fundedRequestStepLimit: 3,
+				fundedRequestTimeWindowSeconds: 5,
+				mode: "allowlist-shadow",
+			}) as never;
+		const request = {
+			messages: [
+				{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
+			],
+			mode: "build",
+			model: "gpt-5.4-mini",
+		};
+		const withoutManifest = await createSessionsRoutes({
+			codingServerTools,
+			createCodingAgentStreamResponse,
+			getBillingConfig: config,
 			getBillingRepository: () => billingRepository as never,
+			resolveSupportedChatModel,
+			resolveWincodeChatModelSelection,
 		}).request("/session-16/chat", {
-			body: JSON.stringify({
-				messages: [
-					{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
-				],
-				mode: "plan",
-				model: "gpt-5.4-mini",
-			}),
+			body: JSON.stringify(request),
+			headers: { "content-type": "application/json" },
+			method: "POST",
+		});
+		const response = await createSessionsRoutes({
+			codingServerTools,
+			createCodingAgentStreamResponse,
+			getBillingConfig: () => config(),
+			getBillingRepository: () => billingRepository as never,
+			resolveSupportedChatModel,
+			resolveWincodeChatModelSelection,
+		}).request("/session-16/chat", {
+			body: JSON.stringify({ ...request, mcpTools: [validMcpTool] }),
 			headers: { "content-type": "application/json" },
 			method: "POST",
 		});
 
+		expect(withoutManifest.status).toBe(200);
 		expect(response.status).toBe(400);
+		expect(createCodingAgentStreamResponse).toHaveBeenCalledTimes(1);
 	});
 
 	test("rejects oversized all-context metadata", async () => {

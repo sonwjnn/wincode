@@ -130,4 +130,76 @@ describe("prepareSendChatRequestBody", () => {
 			])
 		).toThrow("No chat mode or model to send");
 	});
+
+	test("includes Build MCP manifest", () => {
+		const body = prepareSendChatRequestBody(
+			"session-1",
+			[
+				{
+					id: "1",
+					role: "user",
+					parts: [],
+					metadata: { mode: "build", model },
+				},
+			],
+			undefined,
+			[
+				{
+					description: "Echo tool",
+					inputSchema: { type: "object" },
+					name: "mcp_demo_echo",
+				},
+			]
+		);
+
+		expect(body.mcpTools).toEqual([
+			{
+				description: "Echo tool",
+				inputSchema: { type: "object" },
+				name: "mcp_demo_echo",
+			},
+		]);
+	});
+
+	test("omits MCP manifest in Plan mode", () => {
+		const body = prepareSendChatRequestBody(
+			"session-1",
+			[
+				{
+					id: "1",
+					role: "user",
+					parts: [],
+					metadata: { mode: "plan", model },
+				},
+			],
+			undefined,
+			[
+				{
+					description: "Echo tool",
+					inputSchema: { type: "object" },
+					name: "mcp_demo_echo",
+				},
+			]
+		);
+
+		expect(body.mcpTools).toBeUndefined();
+	});
+
+	test("omits an empty MCP manifest in Build mode", () => {
+		const body = prepareSendChatRequestBody(
+			"session-1",
+			[
+				{
+					id: "1",
+					role: "user",
+					parts: [],
+					metadata: { mode: "build", model },
+				},
+			],
+			undefined,
+			[]
+		);
+
+		expect(body.mcpTools).toBeUndefined();
+	});
 });

@@ -21,6 +21,7 @@ import {
 	useConnections,
 } from "@/modules/connections";
 import { SessionsDialogContent } from "@/modules/conversations/ui/dialogs/sessions-dialog";
+import { McpStatusDialogContent, useMcp } from "@/modules/mcp";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { AgentsDialogContent } from "@/modules/prompt-settings/ui/agents-dialog";
 import { ModelsDialogContent } from "@/modules/prompt-settings/ui/models-dialog";
@@ -62,6 +63,7 @@ export function useCommandExecutor(
 	const dialog = useDialog();
 	const toast = useToast();
 	const connections = useConnections();
+	const mcp = useMcp();
 	const { mode, model, setMode, setModel, setVariant, variant } =
 		usePromptConfig();
 	const supportedModel = findSupportedChatModelSelection(model);
@@ -72,7 +74,14 @@ export function useCommandExecutor(
 	const execute = useMemo(
 		() =>
 			createCommandExecutor({
-				exit: new ExitAdapter({ destroy: () => renderer.destroy() }),
+				exit: new ExitAdapter({
+					destroy: () => {
+						// Close the MCP registry (abort in-flight connects and close
+						// clients) before tearing down the renderer.
+						void mcp.close();
+						renderer.destroy();
+					},
+				}),
 				connect: new ConnectAdapter({
 					open: async () => {
 						const connectedProviders = await connections.listProviders();
@@ -122,6 +131,15 @@ export function useCommandExecutor(
 							case "theme":
 								dialog.open({
 									children: <ThemeDialogContent />,
+									padding: { bottom: 1, left: 0, right: 0, top: 1 },
+									title,
+									titleMargin: { left: 4, right: 4 },
+									width: CONNECTION_DIALOG_WIDTH,
+								});
+								break;
+							case "mcp":
+								dialog.open({
+									children: <McpStatusDialogContent />,
 									padding: { bottom: 1, left: 0, right: 0, top: 1 },
 									title,
 									titleMargin: { left: 4, right: 4 },
@@ -202,6 +220,7 @@ export function useCommandExecutor(
 		[
 			connections,
 			dialog,
+			mcp,
 			mode,
 			model,
 			onSelectSkill,

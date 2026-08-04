@@ -1,8 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import type { CodingAgentUIMessage } from "@wincode/ai";
+import type { handleCodingAgentToolCall } from "@wincode/ai/client";
+import type { ChatAddToolOutputFunction } from "ai";
+import type { McpCatalogSnapshot, McpContextValue } from "@/modules/mcp";
 import { prepareSendChatRequestBody } from "../api/chat-request";
 import {
 	createChatMessageParts,
+	createChatToolCallHandler,
 	finalizeAssistantMessageMetadata,
 	findCurrentTurnAssistantIndex,
 	findCurrentTurnInterruptTargetIndex,
@@ -211,5 +215,109 @@ describe("useChat helpers", () => {
 		);
 
 		expect(refreshCount).toBe(1);
+	});
+});
+
+describe("createChatToolCallHandler", () => {
+	const addToolOutput = mock(() => undefined);
+	const addToolOutputRef = {
+		current:
+			addToolOutput as ChatAddToolOutputFunction<CodingAgentUIMessage> | null,
+	};
+	const modeRef = { current: "build" as const };
+	const mcpSnapshotRef = { current: null as McpCatalogSnapshot | null };
+	const handleDynamicToolCall = mock(() => undefined);
+	const mcp = {
+		handleDynamicToolCall,
+	} as Pick<McpContextValue, "handleDynamicToolCall">;
+	const staticToolCallHandler = mock(() => undefined);
+
+	const makeHandler = () =>
+		createChatToolCallHandler({
+			addToolOutputRef,
+			handleCodingAgentToolCall: (() =>
+				staticToolCallHandler) as typeof handleCodingAgentToolCall,
+			mcp,
+			mcpSnapshotRef,
+			modeRef,
+		});
+
+	const call = (toolCall: Record<string, unknown>) =>
+		makeHandler()({ toolCall } as never);
+
+	afterEach(() => {
+		handleDynamicToolCall.mockClear();
+		staticToolCallHandler.mockClear();
+	});
+
+	test("routes dynamic tool calls to handleDynamicToolCall with the active snapshot", () => {
+		const snapshot = { id: "snap-1" } as McpCatalogSnapshot;
+		mcpSnapshotRef.current = snapshot;
+
+		call({
+			dynamic: true,
+			input: { text: "hello" },
+			toolCallId: "call-1",
+			toolName: "mcp_demo_echo",
+		});
+
+		expect(handleDynamicToolCall).toHaveBeenCalledWith(
+			snapshot,
+			expect.objectContaining({ toolName: "mcp_demo_echo" }),
+			addToolOutput
+		);
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+	});
+
+	test("routes static tool calls to handleCodingAgentToolCall", () => {
+		call({
+			input: { path: "src/app.ts" },
+			toolCallId: "call-2",
+			toolName: "read",
+		});
+
+		expect(staticToolCallHandler).toHaveBeenCalled();
+		expect(handleDynamicToolCall).not.toHaveBeenCalled();
+	});
+
+	test("handles a missing or stale snapshot ref without crashing", () => {
+		mcpSnapshotRef.current = null;
+		call({
+			dynamic: true,
+			toolCallId: "call-3",
+			toolName: "mcp_demo_echo",
+		});
+		expect(handleDynamicToolCall).toHaveBeenCalledWith(
+			null,
+			expect.objectContaining({ toolName: "mcp_demo_echo" }),
+			addToolOutput
+		);
+
+		const stale = { id: "snap-stale" } as McpCatalogSnapshot;
+		mcpSnapshotRef.current = stale;
+		call({
+			dynamic: true,
+			toolCallId: "call-4",
+			toolName: "mcp_demo_echo",
+		});
+		expect(handleDynamicToolCall).toHaveBeenCalledWith(
+			stale,
+			expect.objectContaining({ toolName: "mcp_demo_echo" }),
+			addToolOutput
+		);
+	});
+
+	test("returns early when addToolOutput is not yet available", () => {
+		addToolOutputRef.current = null;
+
+		call({
+			dynamic: true,
+			toolCallId: "call-5",
+			toolName: "mcp_demo_echo",
+		});
+
+		expect(handleDynamicToolCall).not.toHaveBeenCalled();
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+		addToolOutputRef.current = addToolOutput;
 	});
 });

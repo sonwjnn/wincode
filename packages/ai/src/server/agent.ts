@@ -1,5 +1,5 @@
 import type { ProviderOptions } from "@ai-sdk/provider-utils";
-import type { OnFinishEvent, OnStepFinishEvent } from "ai";
+import type { OnFinishEvent, OnStepFinishEvent, ToolSet } from "ai";
 import { type LanguageModel, stepCountIs, ToolLoopAgent } from "ai";
 import { getSystemInstructions } from "../instructions";
 import {
@@ -9,12 +9,11 @@ import {
 	getCodingMode,
 } from "../modes";
 import type { SkillContext } from "../skill-context";
+import { convertMcpToolManifest } from "./mcp-tools";
 import { codingServerTools } from "./tools";
 
-export type CodingAgentStepEndEvent = OnStepFinishEvent<
-	typeof codingServerTools
->;
-export type CodingAgentEndEvent = OnFinishEvent<typeof codingServerTools>;
+export type CodingAgentStepEndEvent = OnStepFinishEvent<ToolSet>;
+export type CodingAgentEndEvent = OnFinishEvent<ToolSet>;
 
 export type CodingAgentLifecycleCallbacks = {
 	onStepEnd?: (event: CodingAgentStepEndEvent) => Promise<void> | void;
@@ -41,6 +40,27 @@ export const getSafePositiveMaxSteps = (
 		? maxSteps
 		: 1;
 
+export const prepareCodingAgentCall = <T extends Record<string, unknown>>({
+	options,
+	...call
+}: {
+	options?: CodingAgentCallOptions;
+} & T): Omit<T, "options"> & {
+	activeTools: string[];
+	tools: ToolSet;
+} => {
+	const codingMode = getCodingMode(options?.mode ?? defaultMode.value);
+	const mcpTools = convertMcpToolManifest(options?.mcpTools ?? []);
+	const activeMcpTools =
+		codingMode.value === "plan" ? [] : Object.keys(mcpTools);
+
+	return {
+		...call,
+		activeTools: [...codingMode.tools, ...activeMcpTools],
+		tools: { ...codingServerTools, ...mcpTools },
+	};
+};
+
 type CreateCodingAgentOptions = {
 	model: LanguageModel;
 	maxOutputTokens?: number;
@@ -57,19 +77,12 @@ export const createCodingAgent = ({
 	lifecycleCallbacks,
 	providerOptions,
 }: CreateCodingAgentOptions) =>
-	new ToolLoopAgent<CodingAgentCallOptions, typeof codingServerTools>({
+	new ToolLoopAgent<CodingAgentCallOptions, ToolSet>({
 		callOptionsSchema: codingAgentCallOptionsSchema,
 		instructions: getSystemInstructions(defaultMode.value),
 		maxOutputTokens,
 		model,
-		prepareCall: ({ options: callOptions, ...options }) => {
-			const codingMode = getCodingMode(callOptions?.mode ?? defaultMode.value);
-
-			return {
-				...options,
-				activeTools: [...codingMode.tools],
-			};
-		},
+		prepareCall: prepareCodingAgentCall,
 		onFinish: async (event) => {
 			const callback =
 				lifecycleCallbacks?.onEnd ?? lifecycleCallbacks?.onFinish;

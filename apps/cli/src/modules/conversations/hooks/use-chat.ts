@@ -17,12 +17,19 @@ import {
 } from "@wincode/ai/client";
 import {
 	type ChatAddToolOutputFunction,
+	type ChatOnToolCallCallback,
 	type FileUIPart,
 	lastAssistantMessageIsCompleteWithToolCalls,
 } from "ai";
 import { useMemo, useRef, useState } from "react";
 import { useConnections } from "@/modules/connections";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
+import {
+	type McpAddToolOutput,
+	type McpCatalogSnapshot,
+	type McpContextValue,
+	useMcp,
+} from "@/modules/mcp";
 import { getConversationStore } from "../storage/get-conversation-store";
 import { createSkillSnapshot } from "../utils";
 import { createRoutingChatTransport } from "./routing-chat-transport";
@@ -35,6 +42,57 @@ type SubmitChatParams = {
 	files?: FileUIPart[];
 	skill?: SkillContext;
 };
+
+type MutableRefObject<T> = { current: T };
+
+export type ChatToolCallHandlerDeps = {
+	addToolOutputRef: MutableRefObject<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>;
+	handleCodingAgentToolCall?: typeof handleCodingAgentToolCall;
+	mcp: Pick<McpContextValue, "handleDynamicToolCall">;
+	mcpSnapshotRef: MutableRefObject<McpCatalogSnapshot | null>;
+	modeRef: MutableRefObject<ModeType>;
+};
+
+/**
+ * Dispatches AI SDK tool calls to the MCP handler for dynamic tools and to the
+ * coding-agent handler otherwise. The AI SDK awaits `onToolCall`, but
+ * `addToolOutput` queues on the same chat executor, so neither promise is
+ * returned or awaited here or tool execution deadlocks at input-available.
+ */
+export const createChatToolCallHandler =
+	({
+		addToolOutputRef,
+		handleCodingAgentToolCall: runStaticToolCall = handleCodingAgentToolCall,
+		mcp,
+		mcpSnapshotRef,
+		modeRef,
+	}: ChatToolCallHandlerDeps): ChatOnToolCallCallback<CodingAgentUIMessage> =>
+	(options) => {
+		const addToolOutput = addToolOutputRef.current;
+
+		if (!addToolOutput) {
+			return;
+		}
+
+		if (options.toolCall.dynamic) {
+			// The AI SDK types addToolOutput for static coding tools, but dynamic
+			// MCP tools carry arbitrary names; runtime matching is by toolCallId,
+			// so bridge the type here.
+			const mcpAddToolOutput = addToolOutput as unknown as McpAddToolOutput;
+			Promise.resolve(
+				mcp.handleDynamicToolCall(
+					mcpSnapshotRef.current,
+					options.toolCall,
+					mcpAddToolOutput
+				)
+			).catch(() => undefined);
+			return;
+		}
+
+		Promise.resolve(
+			runStaticToolCall(addToolOutput, modeRef.current)(options)
+		).catch(() => undefined);
+	};
 
 export const createChatMessageParts = (
 	userText: string,
@@ -127,6 +185,7 @@ export function useChat(
 	onHostedCompletion?: () => void
 ) {
 	const connections = useConnections();
+	const mcp = useMcp();
 	const addToolOutputRef =
 		useRef<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>(null);
 	const interruptedMessageIdsRef = useRef(new Set<string>());
@@ -137,19 +196,31 @@ export function useChat(
 	const modeRef = useRef<ModeType>(defaultMode.value);
 	const modelRef = useRef<ChatModelSelection>(defaultChatModelSelection);
 	const variantRef = useRef<ModelVariant | undefined>(undefined);
+	const mcpSnapshotRef = useRef<McpCatalogSnapshot | null>(null);
 	const [isPreparingMessage, setIsPreparingMessage] = useState(false);
 
-	const transport = useMemo(
-		() =>
-			createRoutingChatTransport(
-				sessionId,
-				modeRef,
-				modelRef,
-				variantRef,
-				connections
-			),
-		[connections, sessionId]
-	);
+	const transport = useMemo(() => {
+		// The transport snapshots the MCP catalog once per send; mirror the same
+		// immutable snapshot into a ref so dynamic tool dispatch resolves against
+		// the exact catalog the request was built from.
+		const mcpWithSnapshotRef: McpContextValue = {
+			...mcp,
+			createSnapshot: async (mode: ModeType) => {
+				const snapshot = await mcp.createSnapshot(mode);
+				mcpSnapshotRef.current = snapshot;
+				return snapshot;
+			},
+		};
+
+		return createRoutingChatTransport(
+			sessionId,
+			modeRef,
+			modelRef,
+			variantRef,
+			connections,
+			mcpWithSnapshotRef
+		);
+	}, [connections, mcp, sessionId]);
 
 	const finalizeAssistantMessages = (messages: CodingAgentUIMessage[]) => {
 		const startedAt = requestStartedAtRef.current;
@@ -207,22 +278,12 @@ export function useChat(
 			finalizeAndPersistMessages(messages);
 			notifyHostedCompletion(modelRef.current, onHostedCompletion);
 		},
-		onToolCall: (options) => {
-			const addToolOutputForCall = addToolOutputRef.current;
-
-			if (!addToolOutputForCall) {
-				return;
-			}
-
-			// AI SDK awaits onToolCall, but addToolOutput queues on the same chat executor.
-			// Do not await this call or tool execution can deadlock at input-available.
-			Promise.resolve(
-				handleCodingAgentToolCall(
-					addToolOutputForCall,
-					modeRef.current
-				)(options)
-			).catch(() => undefined);
-		},
+		onToolCall: createChatToolCallHandler({
+			addToolOutputRef,
+			mcp,
+			mcpSnapshotRef,
+			modeRef,
+		}),
 		sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
 		transport,
 	});

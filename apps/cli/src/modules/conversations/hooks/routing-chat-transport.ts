@@ -7,6 +7,7 @@ import type {
 import { getChatModelRoute, normalizeChatModelSelection } from "@wincode/ai";
 import { type ChatTransport, DefaultChatTransport } from "ai";
 import type { Connections } from "@/modules/connections";
+import type { McpContextValue } from "@/modules/mcp";
 import { getHonoClient } from "@/shared/api/hono-client";
 import { prepareSendChatRequestBody } from "../api/chat-request";
 import { getLatestChatConfig } from "../utils";
@@ -28,9 +29,13 @@ export const createRoutingChatTransport = (
 	modeRef: MutableRefObject<ModeType>,
 	modelRef: MutableRefObject<ChatModelSelection>,
 	variantRef: MutableRefObject<ModelVariant | undefined>,
-	connections: Connections
+	connections: Connections,
+	mcp: McpContextValue
 ): RoutingChatTransport => ({
 	sendMessages: async ({ abortSignal, messages }) => {
+		// One immutable snapshot per send so the request manifest and any dynamic
+		// tool dispatch resolve against the same catalog.
+		const snapshot = await mcp.createSnapshot(modeRef.current);
 		const latestConfig = getLatestChatConfig(messages);
 		const selection = latestConfig?.model ?? modelRef.current;
 		const variant = latestConfig?.variant ?? variantRef.current;
@@ -41,7 +46,8 @@ export const createRoutingChatTransport = (
 				{ current: selection },
 				{ current: variant },
 				connections,
-				undefined
+				undefined,
+				snapshot
 			).sendMessages({
 				abortSignal,
 				body: undefined,
@@ -61,11 +67,16 @@ export const createRoutingChatTransport = (
 				.toString(),
 			prepareSendMessagesRequest: ({ messages: requestMessages, api }) => ({
 				api,
-				body: prepareSendChatRequestBody(sessionId, requestMessages, {
-					mode: modeRef.current,
-					model: selection,
-					variant,
-				}),
+				body: prepareSendChatRequestBody(
+					sessionId,
+					requestMessages,
+					{
+						mode: modeRef.current,
+						model: selection,
+						variant,
+					},
+					snapshot.manifest
+				),
 			}),
 		});
 
