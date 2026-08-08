@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { openCodeGoVariantsByModel } from "./generated/opencode-go-variants.generated";
 
 export const connectionProviderIds = [
 	"wincode",
@@ -74,6 +75,12 @@ type ModelCatalogEntry =
 			connectionProviderId: "opencode-go";
 			provider: "opencode-go";
 			sdk: OpenCodeGoSdk;
+			/**
+			 * OpenCode Go variants come from the generated models.dev snapshot
+			 * (opencode-go-variants.generated.ts), not the catalog. Entries keep
+			 * an empty list here.
+			 */
+			variants: readonly [];
 	  });
 
 export const supportedChatModels = [
@@ -532,7 +539,7 @@ export const supportedChatModels = [
 		id: "gpt-5.6-luna",
 		provider: "opencode-go",
 		sdk: "openai",
-		variants: ["none", "low", "medium", "high", "xhigh"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "opencode-go",
@@ -541,7 +548,7 @@ export const supportedChatModels = [
 		id: "grok-4.5",
 		provider: "opencode-go",
 		sdk: "openai-compatible",
-		variants: ["low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "opencode-go",
@@ -550,7 +557,7 @@ export const supportedChatModels = [
 		id: "glm-5.2",
 		provider: "opencode-go",
 		sdk: "openai-compatible",
-		variants: ["low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "opencode-go",
@@ -559,7 +566,7 @@ export const supportedChatModels = [
 		id: "glm-5.1",
 		provider: "opencode-go",
 		sdk: "openai-compatible",
-		variants: ["low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "opencode-go",
@@ -568,7 +575,7 @@ export const supportedChatModels = [
 		id: "kimi-k3",
 		provider: "opencode-go",
 		sdk: "openai-compatible",
-		variants: ["low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "opencode-go",
@@ -577,7 +584,7 @@ export const supportedChatModels = [
 		id: "kimi-k2.7-code",
 		provider: "opencode-go",
 		sdk: "openai-compatible",
-		variants: ["minimal", "low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "opencode-go",
@@ -586,7 +593,7 @@ export const supportedChatModels = [
 		id: "kimi-k2.6",
 		provider: "opencode-go",
 		sdk: "openai-compatible",
-		variants: ["minimal", "low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "opencode-go",
@@ -595,7 +602,7 @@ export const supportedChatModels = [
 		id: "mimo-v2.5",
 		provider: "opencode-go",
 		sdk: "openai-compatible",
-		variants: ["minimal", "low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "opencode-go",
@@ -604,7 +611,7 @@ export const supportedChatModels = [
 		id: "mimo-v2.5-pro",
 		provider: "opencode-go",
 		sdk: "openai-compatible",
-		variants: ["minimal", "low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "opencode-go",
@@ -613,7 +620,7 @@ export const supportedChatModels = [
 		id: "minimax-m3",
 		provider: "opencode-go",
 		sdk: "anthropic",
-		variants: ["low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "opencode-go",
@@ -622,7 +629,7 @@ export const supportedChatModels = [
 		id: "minimax-m2.7",
 		provider: "opencode-go",
 		sdk: "anthropic",
-		variants: ["low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "opencode-go",
@@ -631,7 +638,7 @@ export const supportedChatModels = [
 		id: "qwen3.8-max",
 		provider: "opencode-go",
 		sdk: "anthropic",
-		variants: ["low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "opencode-go",
@@ -640,7 +647,7 @@ export const supportedChatModels = [
 		id: "qwen3.7-max",
 		provider: "opencode-go",
 		sdk: "anthropic",
-		variants: ["low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "opencode-go",
@@ -649,7 +656,7 @@ export const supportedChatModels = [
 		id: "qwen3.7-plus",
 		provider: "opencode-go",
 		sdk: "anthropic",
-		variants: ["minimal", "low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "opencode-go",
@@ -658,7 +665,7 @@ export const supportedChatModels = [
 		id: "qwen3.6-plus",
 		provider: "opencode-go",
 		sdk: "anthropic",
-		variants: ["minimal", "low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "opencode-go",
@@ -667,7 +674,7 @@ export const supportedChatModels = [
 		id: "deepseek-v4-pro",
 		provider: "opencode-go",
 		sdk: "openai-compatible",
-		variants: ["low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "opencode-go",
@@ -676,7 +683,7 @@ export const supportedChatModels = [
 		id: "deepseek-v4-flash",
 		provider: "opencode-go",
 		sdk: "openai-compatible",
-		variants: ["minimal", "low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "opencode-go",
@@ -685,7 +692,7 @@ export const supportedChatModels = [
 		id: "hy3",
 		provider: "opencode-go",
 		sdk: "openai-compatible",
-		variants: ["minimal", "low", "medium", "high"],
+		variants: [],
 	},
 ] as const satisfies readonly ModelCatalogEntry[];
 
@@ -745,10 +752,23 @@ export const getChatModelRoute = (
 ): "hosted" | "direct" | null =>
 	findSupportedChatModelSelection(selection)?.route ?? null;
 
+const getCatalogVariants = (model: {
+	connectionProviderId: ConnectionProviderId;
+	id: string;
+	variants: readonly ModelVariant[];
+}): readonly ModelVariant[] =>
+	model.connectionProviderId === "opencode-go"
+		? (openCodeGoVariantsByModel[
+				model.id as keyof typeof openCodeGoVariantsByModel
+			] ?? [])
+		: model.variants;
+
 export const getSupportedModelVariants = (
 	selection: ChatModelSelection
-): readonly ModelVariant[] =>
-	findSupportedChatModelSelection(selection)?.variants ?? [];
+): readonly ModelVariant[] => {
+	const model = findSupportedChatModelSelection(selection);
+	return model ? getCatalogVariants(model) : [];
+};
 export const isSupportedModelVariant = (
 	selection: ChatModelSelection,
 	variant: ModelVariant
@@ -783,7 +803,7 @@ export const normalizeModelVariantForModel = (
 		return;
 	}
 	const parsed = modelVariantSchema.safeParse(variant);
-	return parsed.success && model.variants.includes(parsed.data)
+	return parsed.success && getCatalogVariants(model).includes(parsed.data)
 		? parsed.data
 		: undefined;
 };

@@ -593,6 +593,15 @@ describe("server chat model resolver", () => {
 		).toThrow("Unsupported model variant: opencode-go/hy3/xhigh");
 		expect(() =>
 			resolveDirectChatModel(
+				{ modelId: "deepseek-v4-flash", providerId: "opencode-go" },
+				"ocg-secret",
+				{ variant: "medium" }
+			)
+		).toThrow(
+			"Unsupported model variant: opencode-go/deepseek-v4-flash/medium"
+		);
+		expect(() =>
+			resolveDirectChatModel(
 				{ modelId: "gpt-5.4-mini", providerId: "opencode-go" },
 				"ocg-secret"
 			)

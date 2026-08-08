@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { openCodeGoVariantsByModel } from "./generated/opencode-go-variants.generated";
 import {
 	chatModelSelectionSchema,
 	defaultChatModelSelection,
@@ -7,6 +8,7 @@ import {
 	getSupportedModelVariants,
 	isHostChatModelSelection,
 	isSupportedChatModelSelection,
+	modelVariantIds,
 	normalizeChatModelSelection,
 	normalizeModelVariant,
 	normalizeModelVariantForModel,
@@ -208,25 +210,49 @@ describe("shared chat model selection", () => {
 		}
 	});
 
-	test("validates opencode-go variants against the catalog", () => {
+	test("validates opencode-go variants against the models.dev snapshot", () => {
 		expect(
 			getSupportedModelVariants({
 				modelId: "gpt-5.6-luna",
 				providerId: "opencode-go",
 			})
-		).toEqual(["none", "low", "medium", "high", "xhigh"]);
+		).toEqual(["none", "low", "medium", "high", "xhigh", "max"]);
+		expect(
+			getSupportedModelVariants({
+				modelId: "deepseek-v4-flash",
+				providerId: "opencode-go",
+			})
+		).toEqual(["low", "high", "max"]);
+		expect(
+			getSupportedModelVariants({
+				modelId: "deepseek-v4-pro",
+				providerId: "opencode-go",
+			})
+		).toEqual(["high", "max"]);
+		expect(
+			getSupportedModelVariants({
+				modelId: "glm-5.2",
+				providerId: "opencode-go",
+			})
+		).toEqual(["high", "max"]);
+		expect(
+			getSupportedModelVariants({
+				modelId: "mimo-v2.5",
+				providerId: "opencode-go",
+			})
+		).toEqual([]);
 		expect(
 			normalizeModelVariant(
 				{ modelId: "deepseek-v4-flash", providerId: "opencode-go" },
-				"xhigh"
+				"medium"
 			)
 		).toBeUndefined();
 		expect(
 			normalizeModelVariant(
 				{ modelId: "deepseek-v4-flash", providerId: "opencode-go" },
-				"high"
+				"max"
 			)
-		).toBe("high");
+		).toBe("max");
 		expect(
 			chatModelSelectionSchema.safeParse({
 				modelId: "hy3",
@@ -239,5 +265,21 @@ describe("shared chat model selection", () => {
 				providerId: "anthropic",
 			})
 		).toMatchObject({ success: false });
+	});
+
+	test("keeps generated opencode-go variants complete and valid", () => {
+		const goModels = supportedChatModels.filter(
+			(model) => model.connectionProviderId === "opencode-go"
+		);
+		for (const model of goModels) {
+			const generated =
+				openCodeGoVariantsByModel[
+					model.id as keyof typeof openCodeGoVariantsByModel
+				];
+			expect(generated).toBeDefined();
+			for (const variant of generated ?? []) {
+				expect(modelVariantIds).toContain(variant);
+			}
+		}
 	});
 });
