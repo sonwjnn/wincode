@@ -122,7 +122,7 @@ The definition owns:
 For an API-key-only provider:
 
 ```ts
-methods: ["api-key"]
+methods: ["api-key"];
 ```
 
 The derived request type must reject browser connection requests at compile time.
@@ -241,5 +241,3 @@ bun run build
 - Caller abort does not cancel shared OAuth refresh.
 - Credential errors redact secrets.
 - Public exports and compatibility behavior remain stable.
-
-For reviewing the full registry architecture, see `docs/provider-refactor-review-guide.md`.

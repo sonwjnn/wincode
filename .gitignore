@@ -51,5 +51,7 @@ tmp
 temp
 .devtools
 
-# Local implementation worklogs
-.slim/deepwork/
+.slim
+.opencode
+.claude
+.agents
