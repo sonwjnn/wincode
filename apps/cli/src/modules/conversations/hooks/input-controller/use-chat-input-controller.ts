@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getFilteredCommands } from "@/modules/commands/filter-commands";
-import { extractArguments } from "@/modules/custom-commands/expand";
 import { filterCustomCommands } from "@/modules/custom-commands/filter";
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import type { FileMentionOption } from "@/modules/file-mentions";
@@ -249,8 +248,7 @@ export function useChatInputController({
 			}
 
 			if (command.kind === "custom") {
-				const args = activeTrigger ? extractArguments(activeTrigger.query) : "";
-				const invocation = `/${command.name}${args ? ` ${args}` : " "}`;
+				const invocation = `/${command.name} `;
 				setProgrammaticText(invocation, invocation.length);
 				closeOverlay();
 				return;

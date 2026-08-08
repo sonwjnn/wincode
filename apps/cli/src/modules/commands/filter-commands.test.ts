@@ -12,13 +12,8 @@ describe("getFilteredCommands", () => {
 		]);
 	});
 
-	test("matches on the first token when the query carries arguments", () => {
-		expect(getFilteredCommands("new session").map((cmd) => cmd.name)).toEqual([
-			"new",
-		]);
-	});
-
-	test("returns no commands when the first token matches nothing", () => {
-		expect(getFilteredCommands("zzz flag")).toEqual([]);
+	test("returns no commands when the query does not prefix-match", () => {
+		expect(getFilteredCommands("new session")).toEqual([]);
+		expect(getFilteredCommands("zzz")).toEqual([]);
 	});
 });

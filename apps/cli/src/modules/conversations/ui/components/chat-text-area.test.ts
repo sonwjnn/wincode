@@ -170,7 +170,8 @@ describe("ChatTextArea", () => {
 		expect(textAreaSource).toContain(
 			"expandCustomCommandTemplate(command.template"
 		);
-		expect(controllerSource).toContain("extractArguments(activeTrigger.query)");
+		expect(controllerSource).toContain("invocation =");
+		expect(controllerSource).toContain("command.name");
 		expect(controllerSource).toContain("setProgrammaticText(invocation");
 		expect(controllerSource).not.toContain(
 			'command.kind === "custom" && executeCommand'

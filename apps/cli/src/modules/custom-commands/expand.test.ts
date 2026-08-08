@@ -1,19 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { expandCustomCommandTemplate, extractArguments } from "./expand";
-
-describe("extractArguments", () => {
-	test("returns an empty string when the query has no arguments", () => {
-		expect(extractArguments("test")).toBe("");
-	});
-
-	test("returns the text after the command name", () => {
-		expect(extractArguments("test Button")).toBe("Button");
-	});
-
-	test("preserves internal spacing and trims edges", () => {
-		expect(extractArguments("test  a   b ")).toBe("a   b");
-	});
-});
+import { expandCustomCommandTemplate } from "./expand";
 
 describe("expandCustomCommandTemplate", () => {
 	test("substitutes all arguments into $ARGUMENTS", () => {

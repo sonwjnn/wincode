@@ -26,11 +26,13 @@ Status: accepted
   remaining read of `~/.config/opencode/opencode.json` is a fork leftover, not a
   pattern to copy.
 - **Insert the invocation, expand at submit, not into the textarea** — selecting a
-  custom command inserts `/<name> ` into the textarea (preserving typed
-  arguments); on submit the template is expanded into the sent prompt while
-  history keeps the visible invocation. Mirrors the existing skills flow
-  (`resolveSkillPrompt`) instead of opencode's paste-the-template behaviour. If
-  the text matches a skill and a custom command, the skill wins.
+  custom command inserts `/<name> ` into the textarea; on submit the template is
+  expanded into the sent prompt while history keeps the visible invocation.
+  Mirrors the existing skills flow (`resolveSkillPrompt`) instead of opencode's
+  paste-the-template behaviour. If the text matches a skill and a custom
+  command, the skill wins. Arguments are typed after selection and parsed from
+  the submitted invocation; the slash trigger ignores text after whitespace, so
+  the command overlay never re-opens while typing arguments.
 - **Global and project scopes now, not deferred** — both from day one; only the
   global scope was initially planned.
 

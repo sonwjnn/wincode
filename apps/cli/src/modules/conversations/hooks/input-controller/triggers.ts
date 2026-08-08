@@ -1,5 +1,7 @@
 import { detectFileMentionAtCursor } from "@/modules/file-mentions";
 
+const WHITESPACE_PATTERN = /\s/u;
+
 export type CommandTrigger = {
 	end: number;
 	kind: "command";
@@ -27,6 +29,10 @@ export const detectCommandTrigger = (
 	}
 
 	const query = prefix.slice(slashIndex + 1);
+
+	if (WHITESPACE_PATTERN.test(query)) {
+		return null;
+	}
 
 	return { end: cursorOffset, kind: "command", query, start: 0 };
 };

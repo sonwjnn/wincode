@@ -35,11 +35,8 @@ describe("filterCustomCommands", () => {
 		expect(names(filterCustomCommands(SPECS, "REV"))).toEqual(["review"]);
 	});
 
-	test("matches on the first token when the query carries arguments", () => {
-		expect(names(filterCustomCommands(SPECS, "test Button"))).toEqual(["test"]);
-	});
-
-	test("returns no commands when the first token matches nothing", () => {
-		expect(filterCustomCommands(SPECS, "zzz flag")).toEqual([]);
+	test("returns no commands when the query does not prefix-match", () => {
+		expect(filterCustomCommands(SPECS, "test Button")).toEqual([]);
+		expect(filterCustomCommands(SPECS, "zzz")).toEqual([]);
 	});
 });

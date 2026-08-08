@@ -13,19 +13,19 @@ Built-in Commands in the `/` overlay.
    project winning over global, and drops commands that collide with Built-in
    Commands. Invalid files are skipped best-effort.
 3. **Filter** — `filterCustomCommands` prefix-matches the command name against
-   the first token of the `/` query, so `test Button` still selects `test`.
+   the `/` query (queries cannot carry arguments; the slash trigger ignores
+   text after whitespace).
 4. **Expand** — `expandCustomCommandTemplate` substitutes `$ARGUMENTS`,
    `$1..$n` (positional, split on whitespace), and `$$` (literal dollar).
-   Unknown `$TOKENS` are left untouched. `extractArguments` pulls the text
-   after the command name from a `/` query.
+   Unknown `$TOKENS` are left untouched. Arguments come from the invocation
+   parsed from the submitted prompt.
 5. **Invoke** — `parseCustomCommandInvocation` parses `/name args` from the
    submitted prompt text.
 6. **Execute** — selecting a custom command in the input controller inserts
-   `/<name> ` into the textarea (preserving typed arguments). On submit the
-   template is expanded into the sent prompt, mirroring the skills flow; the
-   visible invocation stays in history. If a skill and a custom command both
-   match the text, the skill wins. There is no adapter dispatch for custom
-   commands.
+   `/<name> ` into the textarea. On submit the template is expanded into the
+   sent prompt, mirroring the skills flow; the visible invocation stays in
+   history. If a skill and a custom command both match the text, the skill
+   wins. There is no adapter dispatch for custom commands.
 
 ## Public API
 
@@ -34,7 +34,7 @@ Built-in Commands in the `/` overlay.
   (`loader.ts`)
 - `parseCustomCommandFile`, `CustomCommandValidationError` (`parse.ts`)
 - `parseCustomCommandInvocation`, `CustomCommandInvocation` (`invocation.ts`)
-- `expandCustomCommandTemplate`, `extractArguments` (`expand.ts`)
+- `expandCustomCommandTemplate` (`expand.ts`)
 - `filterCustomCommands` (`filter.ts`)
 - Types: `CustomCommandSpec`, `CustomCommandCandidate` (`types.ts`)
 

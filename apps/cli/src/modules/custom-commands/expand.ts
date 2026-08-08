@@ -1,14 +1,5 @@
 const TOKEN_PATTERN = /\$\$|\$ARGUMENTS|\$\d+/g;
 const WHITESPACE_PATTERN = /\s+/;
-const FIRST_WHITESPACE_PATTERN = /\s/;
-
-export function extractArguments(query: string): string {
-	const firstWhitespace = query.search(FIRST_WHITESPACE_PATTERN);
-	if (firstWhitespace === -1) {
-		return "";
-	}
-	return query.slice(firstWhitespace + 1).trim();
-}
 
 export function expandCustomCommandTemplate(
 	template: string,
