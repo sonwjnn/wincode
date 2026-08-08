@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { openCodeGoVariantsByModel } from "./generated/opencode-go-variants.generated";
+import { modelVariantsByProviderModel } from "./generated/model-variants.generated";
 
 export const connectionProviderIds = [
 	"wincode",
@@ -77,8 +77,8 @@ type ModelCatalogEntry =
 			sdk: OpenCodeGoSdk;
 			/**
 			 * OpenCode Go variants come from the generated models.dev snapshot
-			 * (opencode-go-variants.generated.ts), not the catalog. Entries keep
-			 * an empty list here.
+			 * (model-variants.generated.ts), not the catalog. Entries keep an
+			 * empty list here.
 			 */
 			variants: readonly [];
 	  });
@@ -106,7 +106,7 @@ export const supportedChatModels = [
 		displayName: "O3",
 		id: "o3",
 		provider: "openai",
-		variants: ["low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -114,7 +114,7 @@ export const supportedChatModels = [
 		displayName: "O4 Mini",
 		id: "o4-mini",
 		provider: "openai",
-		variants: ["low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -122,7 +122,7 @@ export const supportedChatModels = [
 		displayName: "O3 Pro",
 		id: "o3-pro",
 		provider: "openai",
-		variants: ["low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -130,7 +130,7 @@ export const supportedChatModels = [
 		displayName: "O3 Mini",
 		id: "o3-mini",
 		provider: "openai",
-		variants: ["low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -138,7 +138,7 @@ export const supportedChatModels = [
 		displayName: "O1",
 		id: "o1",
 		provider: "openai",
-		variants: ["low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -146,7 +146,7 @@ export const supportedChatModels = [
 		displayName: "O1 Pro",
 		id: "o1-pro",
 		provider: "openai",
-		variants: ["low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -170,7 +170,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5.2 Pro",
 		id: "gpt-5.2-pro",
 		provider: "openai",
-		variants: ["medium", "high", "xhigh"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -178,7 +178,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5.4 Pro",
 		id: "gpt-5.4-pro",
 		provider: "openai",
-		variants: ["medium", "high", "xhigh"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -186,7 +186,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5.5 Pro",
 		id: "gpt-5.5-pro",
 		provider: "openai",
-		variants: ["medium", "high", "xhigh"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -194,7 +194,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5.6",
 		id: "gpt-5.6",
 		provider: "openai",
-		variants: ["none", "low", "medium", "high", "xhigh", "max"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -202,7 +202,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5.6 Sol",
 		id: "gpt-5.6-sol",
 		provider: "openai",
-		variants: ["none", "low", "medium", "high", "xhigh", "max"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -210,7 +210,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5.6 Terra",
 		id: "gpt-5.6-terra",
 		provider: "openai",
-		variants: ["none", "low", "medium", "high", "xhigh", "max"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -218,7 +218,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5.6 Luna",
 		id: "gpt-5.6-luna",
 		provider: "openai",
-		variants: ["none", "low", "medium", "high", "xhigh", "max"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -226,7 +226,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5",
 		id: "gpt-5",
 		provider: "openai",
-		variants: ["minimal", "low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -234,7 +234,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5 Mini",
 		id: "gpt-5-mini",
 		provider: "openai",
-		variants: ["minimal", "low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -242,7 +242,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5 Nano",
 		id: "gpt-5-nano",
 		provider: "openai",
-		variants: ["minimal", "low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -250,7 +250,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5 Pro",
 		id: "gpt-5-pro",
 		provider: "openai",
-		variants: ["high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -258,7 +258,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5.4 Nano",
 		id: "gpt-5.4-nano",
 		provider: "openai",
-		variants: ["none", "low", "medium", "high", "xhigh"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -266,7 +266,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5.3 Codex Spark",
 		id: "gpt-5.3-codex-spark",
 		provider: "openai",
-		variants: ["none", "low", "medium", "high", "xhigh"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -274,7 +274,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5.2",
 		id: "gpt-5.2",
 		provider: "openai",
-		variants: ["none", "low", "medium", "high", "xhigh"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -282,7 +282,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5.3 Codex",
 		id: "gpt-5.3-codex",
 		provider: "openai",
-		variants: ["none", "low", "medium", "high", "xhigh"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -290,7 +290,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5.4",
 		id: "gpt-5.4",
 		provider: "openai",
-		variants: ["none", "low", "medium", "high", "xhigh"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -298,7 +298,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5.4 Mini",
 		id: "gpt-5.4-mini",
 		provider: "openai",
-		variants: ["none", "low", "medium", "high", "xhigh"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -306,7 +306,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5.5",
 		id: "gpt-5.5",
 		provider: "openai",
-		variants: ["none", "low", "medium", "high", "xhigh"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -314,7 +314,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5.1",
 		id: "gpt-5.1",
 		provider: "openai",
-		variants: ["none", "low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "openai",
@@ -346,7 +346,7 @@ export const supportedChatModels = [
 		displayName: "GPT-5.2 Chat Latest",
 		id: "gpt-5.2-chat-latest",
 		provider: "openai",
-		variants: ["medium"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "anthropic",
@@ -354,7 +354,7 @@ export const supportedChatModels = [
 		displayName: "Claude Opus 4.5",
 		id: "claude-opus-4-5",
 		provider: "anthropic",
-		variants: ["low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "anthropic",
@@ -362,7 +362,7 @@ export const supportedChatModels = [
 		displayName: "Claude Opus 4.5 20251101",
 		id: "claude-opus-4-5-20251101",
 		provider: "anthropic",
-		variants: ["low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "anthropic",
@@ -370,7 +370,7 @@ export const supportedChatModels = [
 		displayName: "Claude Opus 4.7",
 		id: "claude-opus-4-7",
 		provider: "anthropic",
-		variants: ["low", "medium", "high", "xhigh", "max"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "anthropic",
@@ -378,7 +378,7 @@ export const supportedChatModels = [
 		displayName: "Claude Sonnet 5",
 		id: "claude-sonnet-5",
 		provider: "anthropic",
-		variants: ["low", "medium", "high", "xhigh", "max"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "anthropic",
@@ -386,7 +386,7 @@ export const supportedChatModels = [
 		displayName: "Claude Opus 4.8",
 		id: "claude-opus-4-8",
 		provider: "anthropic",
-		variants: ["low", "medium", "high", "xhigh", "max"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "anthropic",
@@ -394,7 +394,7 @@ export const supportedChatModels = [
 		displayName: "Claude Fable 5",
 		id: "claude-fable-5",
 		provider: "anthropic",
-		variants: ["low", "medium", "high", "xhigh", "max"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "anthropic",
@@ -402,7 +402,7 @@ export const supportedChatModels = [
 		displayName: "Claude Opus 4.6",
 		id: "claude-opus-4-6",
 		provider: "anthropic",
-		variants: ["low", "medium", "high", "max"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "anthropic",
@@ -410,7 +410,7 @@ export const supportedChatModels = [
 		displayName: "Claude Sonnet 4.6",
 		id: "claude-sonnet-4-6",
 		provider: "anthropic",
-		variants: ["low", "medium", "high", "max"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "anthropic",
@@ -450,7 +450,7 @@ export const supportedChatModels = [
 		displayName: "Gemini 3.1 Flash Lite",
 		id: "gemini-3.1-flash-lite",
 		provider: "google",
-		variants: ["minimal", "low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "google",
@@ -458,7 +458,7 @@ export const supportedChatModels = [
 		displayName: "Gemini 3.5 Flash",
 		id: "gemini-3.5-flash",
 		provider: "google",
-		variants: ["minimal", "low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "google",
@@ -466,7 +466,7 @@ export const supportedChatModels = [
 		displayName: "Gemini 3 Flash Preview",
 		id: "gemini-3-flash-preview",
 		provider: "google",
-		variants: ["minimal", "low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "google",
@@ -474,7 +474,7 @@ export const supportedChatModels = [
 		displayName: "Gemini 3.1 Pro Preview",
 		id: "gemini-3.1-pro-preview",
 		provider: "google",
-		variants: ["low", "medium", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "google",
@@ -482,7 +482,7 @@ export const supportedChatModels = [
 		displayName: "Gemini 3 Pro Preview",
 		id: "gemini-3-pro-preview",
 		provider: "google",
-		variants: ["low", "high"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "google",
@@ -752,16 +752,25 @@ export const getChatModelRoute = (
 ): "hosted" | "direct" | null =>
 	findSupportedChatModelSelection(selection)?.route ?? null;
 
+/**
+ * Catalog variants are a manual override; entries without curated variants
+ * fall back to the generated models.dev snapshot, keyed by
+ * `${connectionProviderId}/${modelId}`.
+ */
 const getCatalogVariants = (model: {
 	connectionProviderId: ConnectionProviderId;
 	id: string;
 	variants: readonly ModelVariant[];
-}): readonly ModelVariant[] =>
-	model.connectionProviderId === "opencode-go"
-		? (openCodeGoVariantsByModel[
-				model.id as keyof typeof openCodeGoVariantsByModel
-			] ?? [])
-		: model.variants;
+}): readonly ModelVariant[] => {
+	if (model.variants.length > 0) {
+		return model.variants;
+	}
+	const generated =
+		modelVariantsByProviderModel[
+			`${model.connectionProviderId}/${model.id}` as keyof typeof modelVariantsByProviderModel
+		];
+	return generated ?? [];
+};
 
 export const getSupportedModelVariants = (
 	selection: ChatModelSelection

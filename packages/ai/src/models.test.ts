@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { openCodeGoVariantsByModel } from "./generated/opencode-go-variants.generated";
+import { modelVariantsByProviderModel } from "./generated/model-variants.generated";
 import {
 	chatModelSelectionSchema,
 	defaultChatModelSelection,
@@ -267,14 +267,14 @@ describe("shared chat model selection", () => {
 		).toMatchObject({ success: false });
 	});
 
-	test("keeps generated opencode-go variants complete and valid", () => {
-		const goModels = supportedChatModels.filter(
-			(model) => model.connectionProviderId === "opencode-go"
+	test("keeps generated variants complete and valid for direct entries", () => {
+		const directModels = supportedChatModels.filter(
+			(model) => model.connectionProviderId !== "wincode"
 		);
-		for (const model of goModels) {
+		for (const model of directModels) {
 			const generated =
-				openCodeGoVariantsByModel[
-					model.id as keyof typeof openCodeGoVariantsByModel
+				modelVariantsByProviderModel[
+					`${model.connectionProviderId}/${model.id}` as keyof typeof modelVariantsByProviderModel
 				];
 			expect(generated).toBeDefined();
 			for (const variant of generated ?? []) {

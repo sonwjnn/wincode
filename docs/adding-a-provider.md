@@ -66,7 +66,7 @@ Edit `packages/ai/src/models.ts`.
 - Add direct catalog entries.
 - Set `route: "direct"`.
 - Keep `connectionProviderId` equal to `provider`.
-- Declare variants on each catalog entry. OpenCode Go entries are the exception: their variants come from the generated models.dev snapshot (`packages/ai/src/generated/opencode-go-variants.generated.ts`, written by `scripts/sync-model-pricing.ts`), so keep their catalog variants empty.
+- Declare variants on each catalog entry. Variants on catalog entries are a manual override: an entry with non-empty variants keeps them (use this for hosted entries or providers whose models.dev data is missing or unsuitable). Empty variants fall back to the generated models.dev snapshot (`packages/ai/src/generated/model-variants.generated.ts`, written by `scripts/sync-model-pricing.ts`), so run the sync script when adding direct models.
 - Preserve unique `(connectionProviderId, modelId)` pairs.
 
 Do not assume model IDs are globally unique. The same model ID may exist under different connection providers.
