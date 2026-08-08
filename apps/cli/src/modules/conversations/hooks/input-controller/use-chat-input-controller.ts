@@ -17,7 +17,7 @@ import {
 	resetHistoryNavigation,
 	shouldRecordCtrlC,
 } from "./history";
-import { scrollCommandSelection } from "./scroll-command";
+import { scrollCommandViewport } from "./scroll-command";
 import { type ActiveTrigger, detectTrigger } from "./triggers";
 import type {
 	ChatInputController,
@@ -514,16 +514,14 @@ export function useChatInputController({
 			if (overlayKind !== "command") {
 				return;
 			}
-			const result = scrollCommandSelection(
-				selectedIndexRef.current,
-				visibleStartIndex,
-				direction,
-				filteredCommands.length,
-				MAX_VISIBLE_ITEMS
+			setVisibleStartIndex(
+				scrollCommandViewport(
+					visibleStartIndex,
+					direction,
+					filteredCommands.length,
+					MAX_VISIBLE_ITEMS
+				)
 			);
-			selectedIndexRef.current = result.selectedIndex;
-			setSelectedIndex(result.selectedIndex);
-			setVisibleStartIndex(result.visibleStartIndex);
 		},
 		[filteredCommands.length, overlayKind, visibleStartIndex]
 	);
