@@ -41,6 +41,7 @@ Status: accepted
 - v1 supports `$ARGUMENTS`, `$1..$n`, and `$$` escape only; shell injection
   (!\`cmd\`) and file references (`@file`) are deferred — they add a new security
   surface that needs its own design.
-- Commands are scanned lazily each time the `/` menu opens; no watcher or startup
-  cache.
+- All commands are fetched eagerly once at startup; the overlay limits display
+  to a fixed viewport of 8 items with arrow-key scrolling. New command files
+  require a restart (no watcher).
 - Only `.md` files are read; subfolders are ignored (filename = command name).

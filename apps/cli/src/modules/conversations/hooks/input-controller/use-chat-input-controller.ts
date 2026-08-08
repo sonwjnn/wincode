@@ -115,18 +115,6 @@ export function useChatInputController({
 				}
 			});
 
-		return () => {
-			active = false;
-		};
-	}, [getFileMentionOptionsFromOptions]);
-
-	const commandOverlayOpen = overlayKind === "command";
-	useEffect(() => {
-		if (!commandOverlayOpen) {
-			return;
-		}
-		let active = true;
-
 		getCustomCommandsFromOptions()
 			.then((specs) => {
 				if (active) {
@@ -142,7 +130,7 @@ export function useChatInputController({
 		return () => {
 			active = false;
 		};
-	}, [commandOverlayOpen, getCustomCommandsFromOptions]);
+	}, [getCustomCommandsFromOptions, getFileMentionOptionsFromOptions]);
 
 	const commandQuery =
 		activeTrigger?.kind === "command" ? activeTrigger.query : undefined;
