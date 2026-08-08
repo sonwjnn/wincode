@@ -13,8 +13,7 @@ import {
 } from "./contract";
 
 type Model = Extract<SupportedChatModel, { provider: "opencode-go" }>;
-const ZEN_GO_BASE_URL = "https://opencode.ai/zen/go";
-const ZEN_GO_RESPONSES_BASE_URL = "https://opencode.ai/zen/go/v1";
+const ZEN_GO_BASE_URL = "https://opencode.ai/zen/go/v1";
 const OPENCODE_GO_ENV_KEY = "OPENCODE_GO_API_KEY";
 const reasoningSummaryModels = new Set<Model["id"]>(["gpt-5.6-luna"]);
 const validateVariantOrThrow = (
@@ -64,7 +63,7 @@ const resolve = (
 				...base,
 				model: createOpenAI({
 					apiKey,
-					baseURL: ZEN_GO_RESPONSES_BASE_URL,
+					baseURL: ZEN_GO_BASE_URL,
 				}).responses(model.id),
 			};
 		case "anthropic":
@@ -81,7 +80,7 @@ const resolve = (
 				model: createOpenAICompatible({
 					name: "opencode-go",
 					apiKey,
-					baseURL: ZEN_GO_RESPONSES_BASE_URL,
+					baseURL: ZEN_GO_BASE_URL,
 				})(model.id),
 			};
 		default:
