@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
+import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import type { Skill } from "@/modules/skills";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
 import {
@@ -12,7 +13,10 @@ import {
 	mapOffsetThroughTextReplacement,
 	normalizeFileTokensForTrimmedText,
 } from "../../utils";
-import { resolveSkillPrompt } from "./chat-text-area";
+import {
+	resolveCustomCommandPrompt,
+	resolveSkillPrompt,
+} from "./chat-text-area";
 
 const TEST_SKILL: Skill = {
 	body: "Review the implementation carefully.",
@@ -20,6 +24,14 @@ const TEST_SKILL: Skill = {
 	filePath: "/tmp/review/SKILL.md",
 	name: "review",
 	scope: "project",
+};
+
+const TEST_CUSTOM_COMMAND: CustomCommandSpec = {
+	description: "Commit with conventional commits",
+	kind: "custom",
+	name: "git-commit",
+	template: "Commit the staged changes with a conventional message.",
+	value: "/git-commit",
 };
 
 describe("ChatTextArea", () => {
@@ -72,6 +84,43 @@ describe("ChatTextArea", () => {
 		).resolves.toEqual({ text: "/unknown keep this" });
 	});
 
+	test("expands recognized custom command invocations into prompt text", async () => {
+		await expect(
+			resolveCustomCommandPrompt("/git-commit staged files", async () => [
+				TEST_CUSTOM_COMMAND,
+			])
+		).resolves.toEqual({
+			text: "Commit the staged changes with a conventional message.",
+		});
+	});
+
+	test("accepts recognized zero-argument custom command invocations", async () => {
+		await expect(
+			resolveCustomCommandPrompt("/git-commit", async () => [
+				TEST_CUSTOM_COMMAND,
+			])
+		).resolves.toEqual({
+			text: "Commit the staged changes with a conventional message.",
+		});
+	});
+
+	test("keeps unknown slash text as a plain prompt", async () => {
+		await expect(
+			resolveCustomCommandPrompt("/unknown keep this", async () => [
+				TEST_CUSTOM_COMMAND,
+			])
+		).resolves.toEqual({ text: "/unknown keep this" });
+	});
+
+	test("surfaces custom command discovery failures", async () => {
+		const failure = new Error("Command directory is unavailable");
+		await expect(
+			resolveCustomCommandPrompt("/git-commit", async () => {
+				throw failure;
+			})
+		).rejects.toBe(failure);
+	});
+
 	test("surfaces skill discovery failures", async () => {
 		const failure = new Error("Skill directory is unavailable");
 		await expect(
@@ -105,7 +154,7 @@ describe("ChatTextArea", () => {
 		expect(textAreaSource).not.toContain("textarea.insertText(command);");
 	});
 
-	test("expands custom commands into the textarea instead of dispatching", async () => {
+	test("inserts custom command invocations and expands them on submit", async () => {
 		const [textAreaSource, controllerSource] = await Promise.all([
 			readFile(new URL("./chat-text-area.tsx", import.meta.url), "utf8"),
 			readFile(
@@ -117,12 +166,12 @@ describe("ChatTextArea", () => {
 			),
 		]);
 
-		expect(textAreaSource).toContain("getCustomCommands");
-		expect(controllerSource).toContain("expandCustomCommandTemplate(");
-		expect(controllerSource).toContain(
-			"setProgrammaticText(expanded, expanded.length)"
+		expect(textAreaSource).toContain("resolveCustomCommandPrompt(");
+		expect(textAreaSource).toContain(
+			"expandCustomCommandTemplate(command.template"
 		);
-		expect(controllerSource).toContain('command.kind === "custom"');
+		expect(controllerSource).toContain("extractArguments(activeTrigger.query)");
+		expect(controllerSource).toContain("setProgrammaticText(invocation");
 		expect(controllerSource).not.toContain(
 			'command.kind === "custom" && executeCommand'
 		);

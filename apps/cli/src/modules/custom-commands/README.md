@@ -18,9 +18,14 @@ Built-in Commands in the `/` overlay.
    `$1..$n` (positional, split on whitespace), and `$$` (literal dollar).
    Unknown `$TOKENS` are left untouched. `extractArguments` pulls the text
    after the command name from a `/` query.
-5. **Execute** — selecting a custom command in the input controller replaces
-   the textarea with the expanded template; the user reviews before sending.
-   There is no adapter dispatch for custom commands.
+5. **Invoke** — `parseCustomCommandInvocation` parses `/name args` from the
+   submitted prompt text.
+6. **Execute** — selecting a custom command in the input controller inserts
+   `/<name> ` into the textarea (preserving typed arguments). On submit the
+   template is expanded into the sent prompt, mirroring the skills flow; the
+   visible invocation stays in history. If a skill and a custom command both
+   match the text, the skill wins. There is no adapter dispatch for custom
+   commands.
 
 ## Public API
 
@@ -28,6 +33,7 @@ Built-in Commands in the `/` overlay.
 - `discoverCustomCommandCandidates` (`discovery.ts`), `loadCustomCommands`
   (`loader.ts`)
 - `parseCustomCommandFile`, `CustomCommandValidationError` (`parse.ts`)
+- `parseCustomCommandInvocation`, `CustomCommandInvocation` (`invocation.ts`)
 - `expandCustomCommandTemplate`, `extractArguments` (`expand.ts`)
 - `filterCustomCommands` (`filter.ts`)
 - Types: `CustomCommandSpec`, `CustomCommandCandidate` (`types.ts`)

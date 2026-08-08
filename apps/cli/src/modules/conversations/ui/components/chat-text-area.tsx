@@ -13,7 +13,10 @@ import { spawn } from "bun";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useCommandExecutor } from "@/app/commands/use-app-command-executor";
 import { CommandMenu } from "@/modules/commands/ui/command-menu";
+import { expandCustomCommandTemplate } from "@/modules/custom-commands/expand";
+import { parseCustomCommandInvocation } from "@/modules/custom-commands/invocation";
 import { getCustomCommands } from "@/modules/custom-commands/loader";
+import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import {
 	deleteFileMentionAfterTrailingCharacterDelete,
 	FileMentionMenu,
@@ -90,6 +93,28 @@ export const resolveSkillPrompt = async (
 			name: skill.name,
 		},
 		text: visibleText,
+	};
+};
+
+type DiscoverCustomCommands = () => Promise<CustomCommandSpec[]>;
+
+export const resolveCustomCommandPrompt = async (
+	text: string,
+	discover: DiscoverCustomCommands = getCustomCommands
+): Promise<SkillPrompt> => {
+	const invocation = parseCustomCommandInvocation(text);
+	if (!invocation) {
+		return { text };
+	}
+
+	const commands = await discover();
+	const command = commands.find(({ name }) => name === invocation.name);
+	if (!command) {
+		return { text };
+	}
+
+	return {
+		text: expandCustomCommandTemplate(command.template, invocation.arguments),
 	};
 };
 
@@ -692,6 +717,12 @@ export function ChatTextArea({
 		let skillPrompt: SkillPrompt;
 		try {
 			skillPrompt = await resolveSkillPrompt(text, discoverSkills, visibleText);
+			if (!skillPrompt.skill) {
+				skillPrompt = await resolveCustomCommandPrompt(
+					skillPrompt.text,
+					getCustomCommands
+				);
+			}
 		} catch (error) {
 			show({
 				message: getErrorMessage(error),

@@ -25,8 +25,12 @@ Status: accepted
   or `~/.opencode/...`; `~/.wincode` is its own namespace. The MCP module's
   remaining read of `~/.config/opencode/opencode.json` is a fork leftover, not a
   pattern to copy.
-- **Expand into the textarea, not send** — consistent with the skills flow; the
-  user reviews the expanded prompt before sending.
+- **Insert the invocation, expand at submit, not into the textarea** — selecting a
+  custom command inserts `/<name> ` into the textarea (preserving typed
+  arguments); on submit the template is expanded into the sent prompt while
+  history keeps the visible invocation. Mirrors the existing skills flow
+  (`resolveSkillPrompt`) instead of opencode's paste-the-template behaviour. If
+  the text matches a skill and a custom command, the skill wins.
 - **Global and project scopes now, not deferred** — both from day one; only the
   global scope was initially planned.
 
