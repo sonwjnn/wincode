@@ -415,5 +415,154 @@ export const modelPricingSnapshot: ModelPricingTable = Object.freeze({
       "input": 1.1,
       "output": 4.4
     }
+  },
+  "opencode-go/deepseek-v4-flash": {
+    "contextLimit": 1000000,
+    "cost": {
+      "cacheRead": 0.0014,
+      "input": 0.07,
+      "output": 0.14
+    }
+  },
+  "opencode-go/deepseek-v4-pro": {
+    "contextLimit": 1000000,
+    "cost": {
+      "cacheRead": 0.003625,
+      "input": 0.435,
+      "output": 0.87
+    }
+  },
+  "opencode-go/glm-5.1": {
+    "contextLimit": 202752,
+    "cost": {
+      "cacheRead": 0.26,
+      "input": 1.4,
+      "output": 4.4
+    }
+  },
+  "opencode-go/glm-5.2": {
+    "contextLimit": 1000000,
+    "cost": {
+      "cacheRead": 0.26,
+      "input": 1.4,
+      "output": 4.4
+    }
+  },
+  "opencode-go/gpt-5.6-luna": {
+    "contextLimit": 1050000,
+    "cost": {
+      "cacheRead": 0.01,
+      "cacheWrite": 0.125,
+      "input": 0.1,
+      "output": 0.6
+    }
+  },
+  "opencode-go/grok-4.5": {
+    "contextLimit": 500000,
+    "cost": {
+      "cacheRead": 0.5,
+      "input": 2,
+      "output": 6
+    }
+  },
+  "opencode-go/hy3": {
+    "contextLimit": 256000,
+    "cost": {
+      "cacheRead": 0.035,
+      "input": 0.14,
+      "output": 0.58
+    }
+  },
+  "opencode-go/kimi-k2.6": {
+    "contextLimit": 262144,
+    "cost": {
+      "cacheRead": 0.16,
+      "input": 0.95,
+      "output": 4
+    }
+  },
+  "opencode-go/kimi-k2.7-code": {
+    "contextLimit": 262144,
+    "cost": {
+      "cacheRead": 0.19,
+      "input": 0.95,
+      "output": 4
+    }
+  },
+  "opencode-go/kimi-k3": {
+    "contextLimit": 1048576,
+    "cost": {
+      "cacheRead": 0.3,
+      "input": 3,
+      "output": 15
+    }
+  },
+  "opencode-go/mimo-v2.5": {
+    "contextLimit": 1000000,
+    "cost": {
+      "cacheRead": 0.0028,
+      "input": 0.14,
+      "output": 0.28
+    }
+  },
+  "opencode-go/mimo-v2.5-pro": {
+    "contextLimit": 1048576,
+    "cost": {
+      "cacheRead": 0.003625,
+      "input": 0.435,
+      "output": 0.87
+    }
+  },
+  "opencode-go/minimax-m2.7": {
+    "contextLimit": 204800,
+    "cost": {
+      "cacheRead": 0.06,
+      "input": 0.3,
+      "output": 1.2
+    }
+  },
+  "opencode-go/minimax-m3": {
+    "contextLimit": 1000000,
+    "cost": {
+      "cacheRead": 0.06,
+      "input": 0.3,
+      "output": 1.2
+    }
+  },
+  "opencode-go/qwen3.6-plus": {
+    "contextLimit": 1000000,
+    "cost": {
+      "cacheRead": 0.05,
+      "cacheWrite": 0.625,
+      "input": 0.5,
+      "output": 3
+    }
+  },
+  "opencode-go/qwen3.7-max": {
+    "contextLimit": 1000000,
+    "cost": {
+      "cacheRead": 0.5,
+      "cacheWrite": 3.125,
+      "input": 2.5,
+      "output": 7.5
+    }
+  },
+  "opencode-go/qwen3.7-plus": {
+    "contextLimit": 1000000,
+    "cost": {
+      "cacheRead": 0.04,
+      "cacheWrite": 0.5,
+      "input": 0.4,
+      "output": 1.6
+    }
+  },
+  "opencode-go/qwen3.8-max": {
+    "contextLimit": 1000000,
+    "cost": {
+      "cacheRead": 0.25,
+      "cacheWrite": 2.5,
+      "input": 2,
+      "output": 6
+    }
   }
 });

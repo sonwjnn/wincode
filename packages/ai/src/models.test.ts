@@ -122,7 +122,7 @@ describe("shared chat model selection", () => {
 		const provider: SupportedProvider = "openai";
 		const exactProviderType: AssertEqual<
 			SupportedProvider,
-			"anthropic" | "google" | "openai"
+			"anthropic" | "google" | "openai" | "opencode-go"
 		> = true;
 
 		expect(provider).toBe("openai");
@@ -189,5 +189,55 @@ describe("shared chat model selection", () => {
 
 		expect(normalizeModelVariantForModel(hostedModel, "none")).toBe("none");
 		expect(normalizeModelVariantForModel(hostedModel, "max")).toBeUndefined();
+	});
+
+	test("keeps opencode-go entries direct with declared sdk per model", () => {
+		for (const model of supportedChatModels) {
+			if (model.connectionProviderId !== "opencode-go") {
+				continue;
+			}
+			expect(model.route).toBe("direct");
+			expect(model.provider).toBe("opencode-go");
+			expect(["openai", "anthropic", "openai-compatible"]).toContain(model.sdk);
+			expect(
+				findSupportedChatModelSelection({
+					modelId: model.id,
+					providerId: "opencode-go",
+				})
+			).toEqual(model);
+		}
+	});
+
+	test("validates opencode-go variants against the catalog", () => {
+		expect(
+			getSupportedModelVariants({
+				modelId: "gpt-5.6-luna",
+				providerId: "opencode-go",
+			})
+		).toEqual(["none", "low", "medium", "high", "xhigh"]);
+		expect(
+			normalizeModelVariant(
+				{ modelId: "deepseek-v4-flash", providerId: "opencode-go" },
+				"xhigh"
+			)
+		).toBeUndefined();
+		expect(
+			normalizeModelVariant(
+				{ modelId: "deepseek-v4-flash", providerId: "opencode-go" },
+				"high"
+			)
+		).toBe("high");
+		expect(
+			chatModelSelectionSchema.safeParse({
+				modelId: "hy3",
+				providerId: "opencode-go",
+			})
+		).toMatchObject({ success: true });
+		expect(
+			chatModelSelectionSchema.safeParse({
+				modelId: "hy3",
+				providerId: "anthropic",
+			})
+		).toMatchObject({ success: false });
 	});
 });

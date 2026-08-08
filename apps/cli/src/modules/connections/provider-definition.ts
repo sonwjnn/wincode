@@ -5,6 +5,7 @@ import {
 	validateAnthropicKey,
 	validateGoogleKey,
 	validateOpenAIKey,
+	validateOpenCodeGoKey,
 } from "./api-key-validation";
 import {
 	acquireWincodeBrowserCredential,
@@ -16,6 +17,7 @@ import {
 	type ConnectionProgress,
 	googleCredentialSchema,
 	openAICredentialSchema,
+	opencodeGoCredentialSchema,
 	wincodeCredentialSchema,
 } from "./credential-schemas";
 import {
@@ -33,6 +35,10 @@ export type ProviderAdapterDependencies = {
 		signal?: AbortSignal
 	) => Promise<void>;
 	validateGoogleApiKey?: (
+		apiKey: string,
+		signal?: AbortSignal
+	) => Promise<void>;
+	validateOpenCodeGoApiKey?: (
 		apiKey: string,
 		signal?: AbortSignal
 	) => Promise<void>;
@@ -121,12 +127,14 @@ export type ProviderSummary =
 const names = {
 	anthropic: "Anthropic",
 	google: "Google",
+	"opencode-go": "OpenCode Go",
 	openai: "OpenAI",
 	wincode: "Wincode",
 } as const;
 const methods = {
 	anthropic: ["api-key"],
 	google: ["api-key"],
+	"opencode-go": ["api-key"],
 	openai: ["api-key", "browser"],
 	wincode: ["api-key", "browser"],
 } as const;
@@ -194,6 +202,24 @@ export const createGoogleProviderDefinition = (
 			authorization: { kind: "api-key", apiKey: credential.apiKey },
 		}),
 		status: (credential) => summary("google", credential),
+	});
+export const createOpenCodeGoProviderDefinition = (
+	deps: ProviderAdapterDependencies
+) =>
+	defineProvider({
+		id: "opencode-go",
+		displayName: names["opencode-go"],
+		methods: methods["opencode-go"],
+		credentialSchema: opencodeGoCredentialSchema,
+		connect: (request) =>
+			apiKey(
+				request,
+				deps.validateOpenCodeGoApiKey ?? wrap(validateOpenCodeGoKey)
+			),
+		authorize: async (credential) => ({
+			authorization: { kind: "api-key", apiKey: credential.apiKey },
+		}),
+		status: (credential) => summary("opencode-go", credential),
 	});
 export const createOpenAIProviderDefinition = (
 	deps: ProviderAdapterDependencies

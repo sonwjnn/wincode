@@ -476,6 +476,131 @@ describe("server chat model resolver", () => {
 		).toMatchObject({ modelId: "gpt-5.5", provider: "openai" });
 	});
 
+	test("resolves opencode-go models per declared sdk", () => {
+		expect(
+			resolveDirectChatModel(
+				{ modelId: "gpt-5.6-luna", providerId: "opencode-go" },
+				"ocg-secret"
+			)
+		).toMatchObject({
+			modelId: "gpt-5.6-luna",
+			provider: "opencode-go",
+			providerOptions: {
+				openai: { reasoningSummary: "detailed", store: false },
+			},
+		});
+		expect(
+			resolveDirectChatModel(
+				{ modelId: "gpt-5.6-luna", providerId: "opencode-go" },
+				"ocg-secret",
+				{ variant: "high" }
+			)
+		).toMatchObject({
+			providerOptions: {
+				openai: {
+					reasoningSummary: "detailed",
+					reasoningEffort: "high",
+					store: false,
+				},
+			},
+		});
+		expect(
+			resolveDirectChatModel(
+				{ modelId: "deepseek-v4-flash", providerId: "opencode-go" },
+				"ocg-secret",
+				{ variant: "high" }
+			)
+		).toMatchObject({
+			modelId: "deepseek-v4-flash",
+			provider: "opencode-go",
+			providerOptions: undefined,
+		});
+		expect(
+			resolveDirectChatModel(
+				{ modelId: "qwen3.7-max", providerId: "opencode-go" },
+				"ocg-secret"
+			)
+		).toMatchObject({
+			modelId: "qwen3.7-max",
+			provider: "opencode-go",
+			providerOptions: undefined,
+		});
+	});
+
+	test("passes opencode-go output token bounds through", () => {
+		expect(
+			resolveDirectChatModel(
+				{ modelId: "gpt-5.6-luna", providerId: "opencode-go" },
+				"ocg-secret",
+				{ maxOutputTokens: 24_000 }
+			)
+		).toMatchObject({
+			modelId: "gpt-5.6-luna",
+			provider: "opencode-go",
+			maxOutputTokens: 24_000,
+		});
+		expect(
+			resolveDirectChatModel(
+				{ modelId: "deepseek-v4-flash", providerId: "opencode-go" },
+				"ocg-secret",
+				{ maxOutputTokens: 24_000 }
+			)
+		).toMatchObject({ maxOutputTokens: 24_000 });
+	});
+
+	test("resolves opencode-go models from the environment key", () => {
+		const findModel = (modelId: string) => {
+			const model = findSupportedChatModel(modelId);
+			if (!model) {
+				throw new Error(`Missing catalog model: ${modelId}`);
+			}
+			return model;
+		};
+		const previous = process.env.OPENCODE_GO_API_KEY;
+		try {
+			process.env.OPENCODE_GO_API_KEY = "env-secret";
+			expect(resolveSupportedChatModel(findModel("hy3"))).toMatchObject({
+				modelId: "hy3",
+				provider: "opencode-go",
+			});
+			expect(resolveSupportedChatModel(findModel("minimax-m3"))).toMatchObject({
+				modelId: "minimax-m3",
+				provider: "opencode-go",
+			});
+		} finally {
+			if (previous === undefined) {
+				delete process.env.OPENCODE_GO_API_KEY;
+			} else {
+				process.env.OPENCODE_GO_API_KEY = previous;
+			}
+		}
+	});
+
+	test("rejects unsupported opencode-go variants and models", () => {
+		expect(() =>
+			resolveDirectChatModel(
+				{ modelId: "gpt-5.6-luna", providerId: "opencode-go" },
+				"ocg-secret",
+				{ variant: "minimal" }
+			)
+		).toThrow("Unsupported model variant: opencode-go/gpt-5.6-luna/minimal");
+		expect(() =>
+			resolveDirectChatModel(
+				{ modelId: "hy3", providerId: "opencode-go" },
+				"ocg-secret",
+				{ variant: "xhigh" }
+			)
+		).toThrow("Unsupported model variant: opencode-go/hy3/xhigh");
+		expect(() =>
+			resolveDirectChatModel(
+				{ modelId: "gpt-5.4-mini", providerId: "opencode-go" },
+				"ocg-secret"
+			)
+		).toThrow(
+			"Unsupported direct chat model selection: opencode-go/gpt-5.4-mini"
+		);
+	});
+
 	test("rejects unsupported model ids", () => {
 		expect(() => resolveChatModel("unknown-model")).toThrow(
 			"Unsupported model: unknown-model"

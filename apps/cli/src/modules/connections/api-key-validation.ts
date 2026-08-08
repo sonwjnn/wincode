@@ -7,6 +7,7 @@ const OPENAI_KEY_URL = "https://api.openai.com/v1/models";
 const ANTHROPIC_KEY_URL = "https://api.anthropic.com/v1/models";
 const GOOGLE_KEY_URL =
 	"https://generativelanguage.googleapis.com/v1beta/models";
+const OPENCODE_GO_KEY_URL = "https://opencode.ai/zen/go/v1/models";
 const ANTHROPIC_VERSION = "2023-06-01";
 
 export type ApiKeyCredential = { kind: "api-key"; apiKey: string };
@@ -53,5 +54,18 @@ export const validateGoogleKey = async (
 	);
 	if (!response.ok) {
 		throw new Error("Google API key validation failed.");
+	}
+};
+
+export const validateOpenCodeGoKey = async (
+	credential: ApiKeyCredential,
+	fetchImpl?: ValidationFetch
+): Promise<void> => {
+	const response = await (fetchImpl ?? globalThis.fetch.bind(globalThis))(
+		OPENCODE_GO_KEY_URL,
+		{ headers: { Authorization: `Bearer ${credential.apiKey}` }, method: "GET" }
+	);
+	if (!response.ok) {
+		throw new Error("OpenCode Go API key validation failed.");
 	}
 };

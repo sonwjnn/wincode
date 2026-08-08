@@ -3,6 +3,7 @@ import {
 	createAnthropicProviderDefinition,
 	createGoogleProviderDefinition,
 	createOpenAIProviderDefinition,
+	createOpenCodeGoProviderDefinition,
 	createWincodeProviderDefinition,
 	type ProviderAdapterDependencies,
 	type ProviderSummary,
@@ -12,12 +13,14 @@ export const providerOrder = [
 	"anthropic",
 	"google",
 	"openai",
+	"opencode-go",
 	"wincode",
 ] as const satisfies readonly ConnectionProviderId[];
 const providerFactories = {
 	anthropic: createAnthropicProviderDefinition,
 	google: createGoogleProviderDefinition,
 	openai: createOpenAIProviderDefinition,
+	"opencode-go": createOpenCodeGoProviderDefinition,
 	wincode: createWincodeProviderDefinition,
 } satisfies {
 	[P in ConnectionProviderId]: (deps: ProviderAdapterDependencies) => {
@@ -62,6 +65,7 @@ export const createProviderRegistry = (
 	anthropic: providerFactories.anthropic(deps),
 	google: providerFactories.google(deps),
 	openai: providerFactories.openai(deps),
+	"opencode-go": providerFactories["opencode-go"](deps),
 	wincode: providerFactories.wincode(deps),
 });
 
@@ -70,12 +74,14 @@ export const providerDisplayNames = {
 	anthropic: defaultProviderRegistry.anthropic.displayName,
 	google: defaultProviderRegistry.google.displayName,
 	openai: defaultProviderRegistry.openai.displayName,
+	"opencode-go": defaultProviderRegistry["opencode-go"].displayName,
 	wincode: defaultProviderRegistry.wincode.displayName,
 } satisfies { [P in ConnectionProviderId]: ProviderRegistry[P]["displayName"] };
 export const credentialSchemas = {
 	anthropic: defaultProviderRegistry.anthropic.credentialSchema,
 	google: defaultProviderRegistry.google.credentialSchema,
 	openai: defaultProviderRegistry.openai.credentialSchema,
+	"opencode-go": defaultProviderRegistry["opencode-go"].credentialSchema,
 	wincode: defaultProviderRegistry.wincode.credentialSchema,
 } satisfies {
 	[P in ConnectionProviderId]: ProviderRegistry[P]["credentialSchema"];
@@ -111,6 +117,7 @@ export function composeProviderServices(
 		anthropic: create("anthropic", adapters.anthropic),
 		google: create("google", adapters.google),
 		openai: create("openai", adapters.openai),
+		"opencode-go": create("opencode-go", adapters["opencode-go"]),
 		wincode: create("wincode", adapters.wincode),
 	};
 }

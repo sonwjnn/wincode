@@ -166,4 +166,54 @@ describe("provider adapters", () => {
 		const result = await adapters.openai.authorize(credential);
 		expect(result.replacementCredential).toBeUndefined();
 	});
+
+	test("opencode-go api key connect validates via zen go models endpoint", async () => {
+		await restoreFetch(async () => {
+			const fetchMock = mock(async () => new Response(null, { status: 200 }));
+			globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+			const adapters = createProviderAdapters({});
+			await expect(
+				adapters["opencode-go"].connect({
+					apiKey: "ocg-secret",
+					method: "api-key",
+					providerId: "opencode-go",
+				})
+			).resolves.toEqual({ kind: "api-key", apiKey: "ocg-secret" });
+			expect(fetchMock).toHaveBeenCalledWith(
+				"https://opencode.ai/zen/go/v1/models",
+				expect.objectContaining({
+					headers: { Authorization: "Bearer ocg-secret" },
+					method: "GET",
+				})
+			);
+		});
+	});
+
+	test("opencode-go api key connect rejects invalid keys", async () => {
+		await restoreFetch(async () => {
+			globalThis.fetch = mock(
+				async () => new Response(null, { status: 401 })
+			) as unknown as typeof globalThis.fetch;
+			const adapters = createProviderAdapters({});
+			await expect(
+				adapters["opencode-go"].connect({
+					apiKey: "bad",
+					method: "api-key",
+					providerId: "opencode-go",
+				})
+			).rejects.toThrow("OpenCode Go API key validation failed.");
+		});
+	});
+
+	test("opencode-go authorize returns api-key authorization", async () => {
+		const adapters = createProviderAdapters({});
+		await expect(
+			adapters["opencode-go"].authorize({
+				apiKey: "ocg-secret",
+				kind: "api-key",
+			})
+		).resolves.toEqual({
+			authorization: { kind: "api-key", apiKey: "ocg-secret" },
+		});
+	});
 });

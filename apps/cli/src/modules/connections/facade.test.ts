@@ -22,7 +22,7 @@ const credential = {
 };
 
 const baseSummary = (
-	id: "anthropic" | "google" | "openai" | "wincode",
+	id: "anthropic" | "google" | "openai" | "opencode-go" | "wincode",
 	displayName: string,
 	methods: readonly ProviderMethod[]
 ): ConnectionProviderSummary => ({
@@ -62,6 +62,15 @@ const createTestAdapters = (
 		status: () => baseSummary("openai", "OpenAI", ["api-key", "browser"]),
 		...overrides.openai,
 	},
+	"opencode-go": {
+		authorize: async () => ({
+			authorization: { kind: "api-key", apiKey: "x" },
+		}),
+		connect: async () => ({ apiKey: "x", kind: "api-key" }),
+		methods: ["api-key"],
+		status: () => baseSummary("opencode-go", "OpenCode Go", ["api-key"]),
+		...overrides["opencode-go"],
+	},
 	wincode: {
 		authorize: async () => ({
 			authorization: { kind: "api-key", apiKey: "x" },
@@ -78,6 +87,7 @@ const createMemoryVault = (
 		anthropic: CredentialByProvider["anthropic"] | null;
 		google: CredentialByProvider["google"] | null;
 		openai: CredentialByProvider["openai"] | null;
+		"opencode-go": CredentialByProvider["opencode-go"] | null;
 		wincode: CredentialByProvider["wincode"] | null;
 	}> = {}
 ): ConnectionsVault => {
@@ -85,11 +95,13 @@ const createMemoryVault = (
 		anthropic: CredentialByProvider["anthropic"] | null;
 		google: CredentialByProvider["google"] | null;
 		openai: CredentialByProvider["openai"] | null;
+		"opencode-go": CredentialByProvider["opencode-go"] | null;
 		wincode: CredentialByProvider["wincode"] | null;
 	} = {
 		anthropic: initial.anthropic ?? null,
 		google: initial.google ?? null,
 		openai: initial.openai ?? null,
+		"opencode-go": initial["opencode-go"] ?? null,
 		wincode: initial.wincode ?? null,
 	};
 
@@ -103,6 +115,9 @@ const createMemoryVault = (
 		providerId: "openai"
 	): Promise<CredentialByProvider["openai"] | null>;
 	async function load(
+		providerId: "opencode-go"
+	): Promise<CredentialByProvider["opencode-go"] | null>;
+	async function load(
 		providerId: "wincode"
 	): Promise<CredentialByProvider["wincode"] | null>;
 	async function load(providerId: keyof ProviderAdapterMap) {
@@ -113,6 +128,8 @@ const createMemoryVault = (
 				return state.google;
 			case "openai":
 				return state.openai;
+			case "opencode-go":
+				return state["opencode-go"];
 			case "wincode":
 				return state.wincode;
 			default:
@@ -133,6 +150,10 @@ const createMemoryVault = (
 		next: CredentialByProvider["openai"]
 	): Promise<void>;
 	async function replaceValidated(
+		providerId: "opencode-go",
+		next: CredentialByProvider["opencode-go"]
+	): Promise<void>;
+	async function replaceValidated(
 		providerId: "wincode",
 		next: CredentialByProvider["wincode"]
 	): Promise<void>;
@@ -149,6 +170,9 @@ const createMemoryVault = (
 				return;
 			case "openai":
 				state.openai = next;
+				return;
+			case "opencode-go":
+				state["opencode-go"] = next;
 				return;
 			case "wincode":
 				state.wincode = next;
@@ -269,7 +293,7 @@ describe("createConnections", () => {
 			vault: createMemoryVault(),
 		});
 
-		await expect(connections.listProviders()).resolves.toHaveLength(4);
+		await expect(connections.listProviders()).resolves.toHaveLength(5);
 	});
 
 	test("listProviders treats corrupt record as disconnected and propagates operational errors", async () => {
@@ -285,6 +309,8 @@ describe("createConnections", () => {
 							throw new Error("disk offline");
 						case "openai":
 							throw new InvalidStoredConnectionError("openai");
+						case "opencode-go":
+							return null;
 						case "wincode":
 							return null;
 						default:
@@ -313,6 +339,7 @@ describe("createConnections", () => {
 			adapters.anthropic.status(null),
 			adapters.google.status(null),
 			adapters.openai.status(null),
+			adapters["opencode-go"].status(null),
 			adapters.wincode.status(null),
 		]);
 	});

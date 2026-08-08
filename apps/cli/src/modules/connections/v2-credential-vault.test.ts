@@ -64,6 +64,7 @@ describe("v2 credential vault", () => {
 				refreshToken: "openai-refresh",
 				updatedAt: "2029-01-01T00:00:00.000Z",
 			},
+			"opencode-go": { kind: "api-key", apiKey: "opencode-go-secret" },
 			wincode: {
 				kind: "oauth-session",
 				accessToken: "wincode-access",
@@ -81,6 +82,7 @@ describe("v2 credential vault", () => {
 			"anthropic",
 			"google",
 			"openai",
+			"opencode-go",
 			"wincode",
 		] as const) {
 			await vault.replaceValidated(provider, credentials[provider]);

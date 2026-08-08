@@ -5,6 +5,7 @@ export const connectionProviderIds = [
 	"openai",
 	"anthropic",
 	"google",
+	"opencode-go",
 ] as const;
 
 export type ConnectionProviderId = (typeof connectionProviderIds)[number];
@@ -14,6 +15,7 @@ export const modelRuntimeProviderIds = [
 	"anthropic",
 	"google",
 	"openai",
+	"opencode-go",
 ] as const;
 export type ModelRuntimeProviderId = (typeof modelRuntimeProviderIds)[number];
 /** Compatibility alias. */
@@ -30,6 +32,12 @@ export const modelVariantIds = [
 ] as const;
 export type ModelVariant = (typeof modelVariantIds)[number];
 export const modelVariantSchema = z.enum(modelVariantIds);
+
+/**
+ * OpenCode Go model families are served by different AI SDK providers behind
+ * one connection. The SDK identifies the runtime construction, not the model.
+ */
+export type OpenCodeGoSdk = "openai" | "anthropic" | "openai-compatible";
 
 /** USD per 1M tokens. `input` is uncached input. */
 export type ModelCost = {
@@ -52,12 +60,21 @@ type ModelCatalogEntry =
 			connectionProviderId: ConnectionProviderId;
 	  })
 	| {
-			[K in ModelRuntimeProviderId]: ModelCatalogEntryBase & {
+			[K in Exclude<
+				ModelRuntimeProviderId,
+				"opencode-go"
+			>]: ModelCatalogEntryBase & {
 				route: "direct";
 				connectionProviderId: K;
 				provider: K;
 			};
-	  }[ModelRuntimeProviderId];
+	  }[Exclude<ModelRuntimeProviderId, "opencode-go">]
+	| (ModelCatalogEntryBase & {
+			route: "direct";
+			connectionProviderId: "opencode-go";
+			provider: "opencode-go";
+			sdk: OpenCodeGoSdk;
+	  });
 
 export const supportedChatModels = [
 	{
@@ -507,6 +524,168 @@ export const supportedChatModels = [
 		id: "gemma-4-31b-it",
 		provider: "google",
 		variants: [],
+	},
+	{
+		connectionProviderId: "opencode-go",
+		route: "direct",
+		displayName: "GPT 5.6 Luna",
+		id: "gpt-5.6-luna",
+		provider: "opencode-go",
+		sdk: "openai",
+		variants: ["none", "low", "medium", "high", "xhigh"],
+	},
+	{
+		connectionProviderId: "opencode-go",
+		route: "direct",
+		displayName: "Grok 4.5",
+		id: "grok-4.5",
+		provider: "opencode-go",
+		sdk: "openai-compatible",
+		variants: ["low", "medium", "high"],
+	},
+	{
+		connectionProviderId: "opencode-go",
+		route: "direct",
+		displayName: "GLM 5.2",
+		id: "glm-5.2",
+		provider: "opencode-go",
+		sdk: "openai-compatible",
+		variants: ["low", "medium", "high"],
+	},
+	{
+		connectionProviderId: "opencode-go",
+		route: "direct",
+		displayName: "GLM 5.1",
+		id: "glm-5.1",
+		provider: "opencode-go",
+		sdk: "openai-compatible",
+		variants: ["low", "medium", "high"],
+	},
+	{
+		connectionProviderId: "opencode-go",
+		route: "direct",
+		displayName: "Kimi K3",
+		id: "kimi-k3",
+		provider: "opencode-go",
+		sdk: "openai-compatible",
+		variants: ["low", "medium", "high"],
+	},
+	{
+		connectionProviderId: "opencode-go",
+		route: "direct",
+		displayName: "Kimi K2.7 Code",
+		id: "kimi-k2.7-code",
+		provider: "opencode-go",
+		sdk: "openai-compatible",
+		variants: ["minimal", "low", "medium", "high"],
+	},
+	{
+		connectionProviderId: "opencode-go",
+		route: "direct",
+		displayName: "Kimi K2.6",
+		id: "kimi-k2.6",
+		provider: "opencode-go",
+		sdk: "openai-compatible",
+		variants: ["minimal", "low", "medium", "high"],
+	},
+	{
+		connectionProviderId: "opencode-go",
+		route: "direct",
+		displayName: "MiMo V2.5",
+		id: "mimo-v2.5",
+		provider: "opencode-go",
+		sdk: "openai-compatible",
+		variants: ["minimal", "low", "medium", "high"],
+	},
+	{
+		connectionProviderId: "opencode-go",
+		route: "direct",
+		displayName: "MiMo V2.5 Pro",
+		id: "mimo-v2.5-pro",
+		provider: "opencode-go",
+		sdk: "openai-compatible",
+		variants: ["minimal", "low", "medium", "high"],
+	},
+	{
+		connectionProviderId: "opencode-go",
+		route: "direct",
+		displayName: "MiniMax M3",
+		id: "minimax-m3",
+		provider: "opencode-go",
+		sdk: "anthropic",
+		variants: ["low", "medium", "high"],
+	},
+	{
+		connectionProviderId: "opencode-go",
+		route: "direct",
+		displayName: "MiniMax M2.7",
+		id: "minimax-m2.7",
+		provider: "opencode-go",
+		sdk: "anthropic",
+		variants: ["low", "medium", "high"],
+	},
+	{
+		connectionProviderId: "opencode-go",
+		route: "direct",
+		displayName: "Qwen3.8 Max",
+		id: "qwen3.8-max",
+		provider: "opencode-go",
+		sdk: "anthropic",
+		variants: ["low", "medium", "high"],
+	},
+	{
+		connectionProviderId: "opencode-go",
+		route: "direct",
+		displayName: "Qwen3.7 Max",
+		id: "qwen3.7-max",
+		provider: "opencode-go",
+		sdk: "anthropic",
+		variants: ["low", "medium", "high"],
+	},
+	{
+		connectionProviderId: "opencode-go",
+		route: "direct",
+		displayName: "Qwen3.7 Plus",
+		id: "qwen3.7-plus",
+		provider: "opencode-go",
+		sdk: "anthropic",
+		variants: ["minimal", "low", "medium", "high"],
+	},
+	{
+		connectionProviderId: "opencode-go",
+		route: "direct",
+		displayName: "Qwen3.6 Plus",
+		id: "qwen3.6-plus",
+		provider: "opencode-go",
+		sdk: "anthropic",
+		variants: ["minimal", "low", "medium", "high"],
+	},
+	{
+		connectionProviderId: "opencode-go",
+		route: "direct",
+		displayName: "DeepSeek V4 Pro",
+		id: "deepseek-v4-pro",
+		provider: "opencode-go",
+		sdk: "openai-compatible",
+		variants: ["low", "medium", "high"],
+	},
+	{
+		connectionProviderId: "opencode-go",
+		route: "direct",
+		displayName: "DeepSeek V4 Flash",
+		id: "deepseek-v4-flash",
+		provider: "opencode-go",
+		sdk: "openai-compatible",
+		variants: ["minimal", "low", "medium", "high"],
+	},
+	{
+		connectionProviderId: "opencode-go",
+		route: "direct",
+		displayName: "Hy3",
+		id: "hy3",
+		provider: "opencode-go",
+		sdk: "openai-compatible",
+		variants: ["minimal", "low", "medium", "high"],
 	},
 ] as const satisfies readonly ModelCatalogEntry[];
 

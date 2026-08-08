@@ -367,17 +367,21 @@ describe("@wincode/ai shared entry", () => {
 			modelId: "gpt-5.4-mini",
 			providerId: "wincode",
 		});
-		expect(supportedChatModelIds).toHaveLength(56);
+		expect(supportedChatModelIds).toHaveLength(74);
 		expect(supportedChatModelIds).toEqual(
 			expect.arrayContaining([
 				"gpt-5.6-terra",
 				"claude-opus-4-8",
 				"gemini-3.5-flash",
 				"gemma-4-31b-it",
+				"gpt-5.6-luna",
+				"grok-4.5",
+				"deepseek-v4-pro",
+				"hy3",
 			])
 		);
 		expect(new Set(supportedChatModels.map((model) => model.provider))).toEqual(
-			new Set(["anthropic", "google", "openai"])
+			new Set(["anthropic", "google", "openai", "opencode-go"])
 		);
 		expect(findSupportedChatModel("gemini-2.5-flash")).toMatchObject({
 			id: "gemini-2.5-flash",

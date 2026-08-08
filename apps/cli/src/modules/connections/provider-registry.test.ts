@@ -26,7 +26,13 @@ describe("provider registry", () => {
 	});
 
 	test("has canonical, complete order", () => {
-		expect(providerOrder).toEqual(["anthropic", "google", "openai", "wincode"]);
+		expect(providerOrder).toEqual([
+			"anthropic",
+			"google",
+			"openai",
+			"opencode-go",
+			"wincode",
+		]);
 		expect(new Set(providerOrder).size).toBe(providerOrder.length);
 		expect([...providerOrder].sort()).toEqual(
 			[...connectionProviderIds].sort()
@@ -39,6 +45,7 @@ describe("provider registry", () => {
 		}
 		expect(registry.anthropic.methods).toEqual(["api-key"]);
 		expect(registry.google.methods).toEqual(["api-key"]);
+		expect(registry["opencode-go"].methods).toEqual(["api-key"]);
 		expect(registry.openai.methods).toEqual(["api-key", "browser"]);
 		expect(registry.wincode.methods).toEqual(["api-key", "browser"]);
 	});
@@ -79,6 +86,12 @@ type ExpectedRequests = {
 				onProgress?: (status: ConnectionProgress) => void;
 				onAuthorizationUrl?: (url: URL) => void;
 		  };
+	"opencode-go": {
+		providerId: "opencode-go";
+		method: "api-key";
+		apiKey: string;
+		signal?: AbortSignal;
+	};
 	wincode:
 		| {
 				providerId: "wincode";
@@ -100,6 +113,7 @@ type ExpectedAuth = {
 	openai:
 		| { kind: "api-key"; apiKey: string }
 		| { kind: "oauth"; accessToken: string; accountId: string };
+	"opencode-go": { kind: "api-key"; apiKey: string };
 	wincode:
 		| { kind: "api-key"; apiKey: string }
 		| { kind: "bearer"; token: string };
@@ -117,6 +131,7 @@ type ExpectedCredentials = {
 				refreshToken: string;
 				updatedAt: string;
 		  };
+	"opencode-go": { kind: "api-key"; apiKey: string };
 	wincode:
 		| { kind: "api-key"; apiKey: string }
 		| {
@@ -137,12 +152,18 @@ type RequestChecks = Assert<
 > &
 	Assert<Equal<ConnectRequestFor<"google">, ExpectedRequests["google"]>> &
 	Assert<Equal<ConnectRequestFor<"openai">, ExpectedRequests["openai"]>> &
+	Assert<
+		Equal<ConnectRequestFor<"opencode-go">, ExpectedRequests["opencode-go"]>
+	> &
 	Assert<Equal<ConnectRequestFor<"wincode">, ExpectedRequests["wincode"]>>;
 type AuthChecks = Assert<
 	Equal<AuthorizationByProvider["anthropic"], ExpectedAuth["anthropic"]>
 > &
 	Assert<Equal<AuthorizationByProvider["google"], ExpectedAuth["google"]>> &
 	Assert<Equal<AuthorizationByProvider["openai"], ExpectedAuth["openai"]>> &
+	Assert<
+		Equal<AuthorizationByProvider["opencode-go"], ExpectedAuth["opencode-go"]>
+	> &
 	Assert<Equal<AuthorizationByProvider["wincode"], ExpectedAuth["wincode"]>>;
 type CredentialChecks = Assert<
 	Equal<CredentialByProvider, ExpectedCredentials>
@@ -153,6 +174,9 @@ type MethodChecks = Assert<
 	Assert<Equal<typeof registry.google.methods, readonly ["api-key"]>> &
 	Assert<
 		Equal<typeof registry.openai.methods, readonly ["api-key", "browser"]>
+	> &
+	Assert<
+		Equal<(typeof registry)["opencode-go"]["methods"], readonly ["api-key"]>
 	> &
 	Assert<
 		Equal<typeof registry.wincode.methods, readonly ["api-key", "browser"]>
@@ -180,4 +204,14 @@ const invalidGoogleBrowser: ConnectRequestFor<"google"> = {
 	method: "browser",
 	signal: undefined,
 };
-expect([invalidAnthropicBrowser, invalidGoogleBrowser]).toHaveLength(2);
+const invalidOpenCodeGoBrowser: ConnectRequestFor<"opencode-go"> = {
+	providerId: "opencode-go",
+	// @ts-expect-error OpenCode Go has no browser connection method.
+	method: "browser",
+	signal: undefined,
+};
+expect([
+	invalidAnthropicBrowser,
+	invalidGoogleBrowser,
+	invalidOpenCodeGoBrowser,
+]).toHaveLength(3);
