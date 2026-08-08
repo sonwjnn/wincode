@@ -24,6 +24,7 @@ export type SupportedProvider = ModelRuntimeProviderId;
 
 export const modelVariantIds = [
 	"none",
+	"thinking",
 	"minimal",
 	"low",
 	"medium",
@@ -506,7 +507,7 @@ export const supportedChatModels = [
 		displayName: "Gemini Flash Latest",
 		id: "gemini-flash-latest",
 		provider: "google",
-		variants: ["high", "max"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "google",
@@ -514,7 +515,7 @@ export const supportedChatModels = [
 		displayName: "Gemini Flash Lite Latest",
 		id: "gemini-flash-lite-latest",
 		provider: "google",
-		variants: ["high", "max"],
+		variants: [],
 	},
 	{
 		connectionProviderId: "google",
@@ -769,7 +770,7 @@ const getCatalogVariants = (model: {
 		modelVariantsByProviderModel[
 			`${model.connectionProviderId}/${model.id}` as keyof typeof modelVariantsByProviderModel
 		];
-	return generated ?? [];
+	return generated?.variants ?? [];
 };
 
 export const getSupportedModelVariants = (

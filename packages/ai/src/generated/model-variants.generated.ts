@@ -2,307 +2,554 @@
 // Snapshot date: 2026-08-08. Source: https://models.dev/api.json.
 
 export const modelVariantsByProviderModel = {
-  "openai/o3": [
-    "low",
-    "medium",
-    "high"
-  ],
-  "openai/o4-mini": [
-    "low",
-    "medium",
-    "high"
-  ],
-  "openai/o3-pro": [
-    "low",
-    "medium",
-    "high"
-  ],
-  "openai/o3-mini": [
-    "low",
-    "medium",
-    "high"
-  ],
-  "openai/o1": [
-    "low",
-    "medium",
-    "high"
-  ],
-  "openai/o1-pro": [
-    "low",
-    "medium",
-    "high"
-  ],
-  "openai/gpt-5.1-codex": [],
-  "openai/gpt-5-codex": [],
-  "openai/gpt-5.2-pro": [
-    "medium",
-    "high",
-    "xhigh"
-  ],
-  "openai/gpt-5.4-pro": [
-    "medium",
-    "high",
-    "xhigh"
-  ],
-  "openai/gpt-5.5-pro": [
-    "medium",
-    "high",
-    "xhigh"
-  ],
-  "openai/gpt-5.6": [
-    "none",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max"
-  ],
-  "openai/gpt-5.6-sol": [
-    "none",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max"
-  ],
-  "openai/gpt-5.6-terra": [
-    "none",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max"
-  ],
-  "openai/gpt-5.6-luna": [
-    "none",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max"
-  ],
-  "openai/gpt-5": [
-    "minimal",
-    "low",
-    "medium",
-    "high"
-  ],
-  "openai/gpt-5-mini": [
-    "minimal",
-    "low",
-    "medium",
-    "high"
-  ],
-  "openai/gpt-5-nano": [
-    "minimal",
-    "low",
-    "medium",
-    "high"
-  ],
-  "openai/gpt-5-pro": [
-    "high"
-  ],
-  "openai/gpt-5.4-nano": [
-    "none",
-    "low",
-    "medium",
-    "high",
-    "xhigh"
-  ],
-  "openai/gpt-5.3-codex-spark": [
-    "none",
-    "low",
-    "medium",
-    "high",
-    "xhigh"
-  ],
-  "openai/gpt-5.2": [
-    "none",
-    "low",
-    "medium",
-    "high",
-    "xhigh"
-  ],
-  "openai/gpt-5.3-codex": [
-    "none",
-    "low",
-    "medium",
-    "high",
-    "xhigh"
-  ],
-  "openai/gpt-5.4": [
-    "none",
-    "low",
-    "medium",
-    "high",
-    "xhigh"
-  ],
-  "openai/gpt-5.4-mini": [
-    "none",
-    "low",
-    "medium",
-    "high",
-    "xhigh"
-  ],
-  "openai/gpt-5.5": [
-    "none",
-    "low",
-    "medium",
-    "high",
-    "xhigh"
-  ],
-  "openai/gpt-5.1": [
-    "none",
-    "low",
-    "medium",
-    "high"
-  ],
-  "openai/gpt-5.1-codex-max": [],
-  "openai/gpt-5.2-codex": [],
-  "openai/gpt-5.1-chat-latest": [],
-  "openai/gpt-5.2-chat-latest": [
-    "medium"
-  ],
-  "anthropic/claude-opus-4-5": [
-    "low",
-    "medium",
-    "high"
-  ],
-  "anthropic/claude-opus-4-5-20251101": [
-    "low",
-    "medium",
-    "high"
-  ],
-  "anthropic/claude-opus-4-7": [
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max"
-  ],
-  "anthropic/claude-sonnet-5": [
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max"
-  ],
-  "anthropic/claude-opus-4-8": [
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max"
-  ],
-  "anthropic/claude-fable-5": [
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max"
-  ],
-  "anthropic/claude-opus-4-6": [
-    "low",
-    "medium",
-    "high",
-    "max"
-  ],
-  "anthropic/claude-sonnet-4-6": [
-    "low",
-    "medium",
-    "high",
-    "max"
-  ],
-  "anthropic/claude-haiku-4-5": [],
-  "anthropic/claude-haiku-4-5-20251001": [],
-  "anthropic/claude-sonnet-4-5": [],
-  "anthropic/claude-sonnet-4-5-20250929": [],
-  "google/gemini-3.1-flash-lite": [
-    "minimal",
-    "low",
-    "medium",
-    "high"
-  ],
-  "google/gemini-3.5-flash": [
-    "minimal",
-    "low",
-    "medium",
-    "high"
-  ],
-  "google/gemini-3-flash-preview": [
-    "minimal",
-    "low",
-    "medium",
-    "high"
-  ],
-  "google/gemini-3.1-pro-preview": [
-    "low",
-    "medium",
-    "high"
-  ],
-  "google/gemini-3-pro-preview": [
-    "low",
-    "high"
-  ],
-  "google/gemini-2.5-pro": [],
-  "google/gemini-2.5-flash": [],
-  "google/gemini-flash-latest": [
-    "minimal",
-    "low",
-    "medium",
-    "high"
-  ],
-  "google/gemini-flash-lite-latest": [
-    "minimal",
-    "low",
-    "medium",
-    "high"
-  ],
-  "google/gemini-2.5-flash-lite": [],
-  "google/gemma-4-31b-it": [],
-  "opencode-go/gpt-5.6-luna": [
-    "none",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max"
-  ],
-  "opencode-go/grok-4.5": [
-    "low",
-    "medium",
-    "high"
-  ],
-  "opencode-go/glm-5.2": [
-    "high",
-    "max"
-  ],
-  "opencode-go/glm-5.1": [],
-  "opencode-go/kimi-k3": [
-    "max"
-  ],
-  "opencode-go/kimi-k2.7-code": [],
-  "opencode-go/kimi-k2.6": [],
-  "opencode-go/mimo-v2.5": [],
-  "opencode-go/mimo-v2.5-pro": [],
-  "opencode-go/minimax-m3": [],
-  "opencode-go/minimax-m2.7": [],
-  "opencode-go/qwen3.8-max": [],
-  "opencode-go/qwen3.7-max": [],
-  "opencode-go/qwen3.7-plus": [],
-  "opencode-go/qwen3.6-plus": [],
-  "opencode-go/deepseek-v4-pro": [
-    "high",
-    "max"
-  ],
-  "opencode-go/deepseek-v4-flash": [
-    "low",
-    "high",
-    "max"
-  ],
-  "opencode-go/hy3": [
-    "none",
-    "low",
-    "high"
-  ]
+  "openai/o3": {
+    "variants": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "openai/o4-mini": {
+    "variants": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "openai/o3-pro": {
+    "variants": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "openai/o3-mini": {
+    "variants": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "openai/o1": {
+    "variants": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "openai/o1-pro": {
+    "variants": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "openai/gpt-5.1-codex": {
+    "variants": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "openai/gpt-5-codex": {
+    "variants": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "openai/gpt-5.2-pro": {
+    "variants": [
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
+  "openai/gpt-5.4-pro": {
+    "variants": [
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
+  "openai/gpt-5.5-pro": {
+    "variants": [
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
+  "openai/gpt-5.6": {
+    "variants": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  "openai/gpt-5.6-sol": {
+    "variants": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  "openai/gpt-5.6-terra": {
+    "variants": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  "openai/gpt-5.6-luna": {
+    "variants": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  "openai/gpt-5": {
+    "variants": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "openai/gpt-5-mini": {
+    "variants": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "openai/gpt-5-nano": {
+    "variants": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "openai/gpt-5-pro": {
+    "variants": [
+      "high"
+    ]
+  },
+  "openai/gpt-5.4-nano": {
+    "variants": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
+  "openai/gpt-5.3-codex-spark": {
+    "variants": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
+  "openai/gpt-5.2": {
+    "variants": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
+  "openai/gpt-5.3-codex": {
+    "variants": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
+  "openai/gpt-5.4": {
+    "variants": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
+  "openai/gpt-5.4-mini": {
+    "variants": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
+  "openai/gpt-5.5": {
+    "variants": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
+  "openai/gpt-5.1": {
+    "variants": [
+      "none",
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "openai/gpt-5.1-codex-max": {
+    "variants": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
+  "openai/gpt-5.2-codex": {
+    "variants": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
+  "openai/gpt-5.1-chat-latest": {
+    "variants": [
+      "medium"
+    ]
+  },
+  "openai/gpt-5.2-chat-latest": {
+    "variants": [
+      "medium"
+    ]
+  },
+  "anthropic/claude-opus-4-5": {
+    "variants": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "anthropic/claude-opus-4-5-20251101": {
+    "variants": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "anthropic/claude-opus-4-7": {
+    "variants": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  "anthropic/claude-sonnet-5": {
+    "variants": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  "anthropic/claude-opus-4-8": {
+    "variants": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  "anthropic/claude-fable-5": {
+    "variants": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  "anthropic/claude-opus-4-6": {
+    "variants": [
+      "low",
+      "medium",
+      "high",
+      "max"
+    ]
+  },
+  "anthropic/claude-sonnet-4-6": {
+    "variants": [
+      "low",
+      "medium",
+      "high",
+      "max"
+    ]
+  },
+  "anthropic/claude-haiku-4-5": {
+    "variants": [
+      "high",
+      "max"
+    ],
+    "budget": {
+      "high": 16000,
+      "max": 31999
+    }
+  },
+  "anthropic/claude-haiku-4-5-20251001": {
+    "variants": [
+      "high",
+      "max"
+    ],
+    "budget": {
+      "high": 16000,
+      "max": 31999
+    }
+  },
+  "anthropic/claude-sonnet-4-5": {
+    "variants": [
+      "high",
+      "max"
+    ],
+    "budget": {
+      "high": 16000,
+      "max": 31999
+    }
+  },
+  "anthropic/claude-sonnet-4-5-20250929": {
+    "variants": [
+      "high",
+      "max"
+    ],
+    "budget": {
+      "high": 16000,
+      "max": 31999
+    }
+  },
+  "google/gemini-3.1-flash-lite": {
+    "variants": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "google/gemini-3.5-flash": {
+    "variants": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "google/gemini-3-flash-preview": {
+    "variants": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "google/gemini-3.1-pro-preview": {
+    "variants": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "google/gemini-3-pro-preview": {
+    "variants": [
+      "low",
+      "high"
+    ]
+  },
+  "google/gemini-2.5-pro": {
+    "variants": [
+      "high",
+      "max"
+    ],
+    "budget": {
+      "high": 16000,
+      "max": 31999
+    }
+  },
+  "google/gemini-2.5-flash": {
+    "variants": [
+      "high",
+      "max"
+    ],
+    "budget": {
+      "high": 12288,
+      "max": 24576
+    }
+  },
+  "google/gemini-flash-latest": {
+    "variants": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "google/gemini-flash-lite-latest": {
+    "variants": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "google/gemini-2.5-flash-lite": {
+    "variants": [
+      "high",
+      "max"
+    ],
+    "budget": {
+      "high": 12288,
+      "max": 24576
+    }
+  },
+  "google/gemma-4-31b-it": {
+    "variants": [
+      "low",
+      "high"
+    ]
+  },
+  "opencode-go/gpt-5.6-luna": {
+    "variants": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  "opencode-go/grok-4.5": {
+    "variants": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "opencode-go/glm-5.2": {
+    "variants": [
+      "high",
+      "max"
+    ]
+  },
+  "opencode-go/glm-5.1": {
+    "variants": []
+  },
+  "opencode-go/kimi-k3": {
+    "variants": [
+      "max"
+    ]
+  },
+  "opencode-go/kimi-k2.7-code": {
+    "variants": []
+  },
+  "opencode-go/kimi-k2.6": {
+    "variants": []
+  },
+  "opencode-go/mimo-v2.5": {
+    "variants": []
+  },
+  "opencode-go/mimo-v2.5-pro": {
+    "variants": []
+  },
+  "opencode-go/minimax-m3": {
+    "variants": [
+      "none",
+      "thinking"
+    ]
+  },
+  "opencode-go/minimax-m2.7": {
+    "variants": []
+  },
+  "opencode-go/qwen3.8-max": {
+    "variants": [
+      "high",
+      "max"
+    ],
+    "budget": {
+      "high": 16000,
+      "max": 31999
+    }
+  },
+  "opencode-go/qwen3.7-max": {
+    "variants": [
+      "high",
+      "max"
+    ],
+    "budget": {
+      "high": 16000,
+      "max": 31999
+    }
+  },
+  "opencode-go/qwen3.7-plus": {
+    "variants": [
+      "high",
+      "max"
+    ],
+    "budget": {
+      "high": 16000,
+      "max": 31999
+    }
+  },
+  "opencode-go/qwen3.6-plus": {
+    "variants": [
+      "high",
+      "max"
+    ],
+    "budget": {
+      "high": 16000,
+      "max": 31999
+    }
+  },
+  "opencode-go/deepseek-v4-pro": {
+    "variants": [
+      "high",
+      "max"
+    ]
+  },
+  "opencode-go/deepseek-v4-flash": {
+    "variants": [
+      "low",
+      "high",
+      "max"
+    ]
+  },
+  "opencode-go/hy3": {
+    "variants": [
+      "none",
+      "low",
+      "high"
+    ]
+  }
 } as const;

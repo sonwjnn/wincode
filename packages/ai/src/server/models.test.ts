@@ -356,6 +356,8 @@ describe("server chat model resolver", () => {
 			"gemini-3-flash-preview",
 			"gemini-3.1-pro-preview",
 			"gemini-3-pro-preview",
+			"gemini-flash-latest",
+			"gemini-flash-lite-latest",
 		];
 		for (const modelId of googleLevelIds) {
 			expect(
@@ -374,8 +376,6 @@ describe("server chat model resolver", () => {
 		const googleBudgetCases = [
 			["gemini-2.5-pro", 16_000],
 			["gemini-2.5-flash", 12_288],
-			["gemini-flash-latest", 12_288],
-			["gemini-flash-lite-latest", 12_288],
 			["gemini-2.5-flash-lite", 12_288],
 		] as const;
 		for (const [modelId, budgetTokens] of googleBudgetCases) {
@@ -524,6 +524,50 @@ describe("server chat model resolver", () => {
 			modelId: "qwen3.7-max",
 			provider: "opencode-go",
 			providerOptions: undefined,
+		});
+		expect(
+			resolveDirectChatModel(
+				{ modelId: "qwen3.7-max", providerId: "opencode-go" },
+				"ocg-secret",
+				{ variant: "high" }
+			)
+		).toMatchObject({
+			providerOptions: {
+				anthropic: {
+					thinking: { type: "enabled", budgetTokens: 16_000 },
+				},
+			},
+		});
+		expect(
+			resolveDirectChatModel(
+				{ modelId: "qwen3.7-max", providerId: "opencode-go" },
+				"ocg-secret",
+				{ variant: "max" }
+			)
+		).toMatchObject({
+			providerOptions: {
+				anthropic: {
+					thinking: { type: "enabled", budgetTokens: 31_999 },
+				},
+			},
+		});
+		expect(
+			resolveDirectChatModel(
+				{ modelId: "minimax-m3", providerId: "opencode-go" },
+				"ocg-secret",
+				{ variant: "none" }
+			)
+		).toMatchObject({
+			providerOptions: { anthropic: { thinking: { type: "disabled" } } },
+		});
+		expect(
+			resolveDirectChatModel(
+				{ modelId: "minimax-m3", providerId: "opencode-go" },
+				"ocg-secret",
+				{ variant: "thinking" }
+			)
+		).toMatchObject({
+			providerOptions: { anthropic: { thinking: { type: "adaptive" } } },
 		});
 	});
 

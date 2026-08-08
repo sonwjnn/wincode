@@ -169,9 +169,21 @@ describe("shared chat model selection", () => {
 			})
 		).toEqual(["low", "medium", "high", "xhigh", "max"]);
 		expect(
+			getSupportedModelVariants({
+				modelId: "gemma-4-31b-it",
+				providerId: "google",
+			})
+		).toEqual(["low", "high"]);
+		expect(
 			normalizeModelVariant(
 				{ modelId: "gemma-4-31b-it", providerId: "google" },
 				"high"
+			)
+		).toBe("high");
+		expect(
+			normalizeModelVariant(
+				{ modelId: "gemma-4-31b-it", providerId: "google" },
+				"max"
 			)
 		).toBeUndefined();
 		expect(
@@ -242,6 +254,18 @@ describe("shared chat model selection", () => {
 			})
 		).toEqual([]);
 		expect(
+			getSupportedModelVariants({
+				modelId: "qwen3.7-max",
+				providerId: "opencode-go",
+			})
+		).toEqual(["high", "max"]);
+		expect(
+			getSupportedModelVariants({
+				modelId: "minimax-m3",
+				providerId: "opencode-go",
+			})
+		).toEqual(["none", "thinking"]);
+		expect(
 			normalizeModelVariant(
 				{ modelId: "deepseek-v4-flash", providerId: "opencode-go" },
 				"medium"
@@ -277,7 +301,7 @@ describe("shared chat model selection", () => {
 					`${model.connectionProviderId}/${model.id}` as keyof typeof modelVariantsByProviderModel
 				];
 			expect(generated).toBeDefined();
-			for (const variant of generated ?? []) {
+			for (const variant of generated?.variants ?? []) {
 				expect(modelVariantIds).toContain(variant);
 			}
 		}

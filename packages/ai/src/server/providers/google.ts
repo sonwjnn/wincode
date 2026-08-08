@@ -13,12 +13,12 @@ const levels = new Set<Model["id"]>([
 	"gemini-3-flash-preview",
 	"gemini-3.1-pro-preview",
 	"gemini-3-pro-preview",
+	"gemini-flash-latest",
+	"gemini-flash-lite-latest",
 ]);
 const budgets: Partial<Record<Model["id"], readonly [number, number]>> = {
 	"gemini-2.5-pro": [16_000, 31_999],
 	"gemini-2.5-flash": [12_288, 24_576],
-	"gemini-flash-latest": [12_288, 24_576],
-	"gemini-flash-lite-latest": [12_288, 24_576],
 	"gemini-2.5-flash-lite": [12_288, 24_576],
 };
 const getGoogleOutputCap = (maxOutputTokens: number | undefined): number =>
