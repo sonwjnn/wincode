@@ -45,7 +45,8 @@ const options = (
 				},
 			};
 		case "anthropic": {
-			if (model.id === "minimax-m3") {
+			const entry = generatedEntry(model);
+			if (entry?.kind === "toggle") {
 				if (variant === "none") {
 					return { anthropic: { thinking: { type: "disabled" } } };
 				}
@@ -54,7 +55,7 @@ const options = (
 				}
 				return;
 			}
-			const budget = generatedEntry(model)?.budget;
+			const budget = entry?.budget;
 			if (budget && (variant === "high" || variant === "max")) {
 				return {
 					anthropic: {

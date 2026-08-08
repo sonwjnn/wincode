@@ -41,8 +41,9 @@ const BUDGET_MAX_CAP = 31_999;
 const BUDGET_CAPABLE_SDK = new Set(["anthropic", "google"]);
 
 export type ModelVariantsEntry = {
-	variants: readonly ModelVariant[];
+	kind?: "toggle";
 	budget?: { high: number; max: number };
+	variants: readonly ModelVariant[];
 };
 
 const effortVariants = (options: unknown): readonly ModelVariant[] => {
@@ -265,7 +266,7 @@ const toModelVariantsEntry = (
 		return { variants: effort };
 	}
 	if (model.id === "minimax-m3") {
-		return { variants: ["none", "thinking"] };
+		return { kind: "toggle", variants: ["none", "thinking"] };
 	}
 	if (Array.isArray(options)) {
 		if (options.length === 0) {
@@ -403,8 +404,9 @@ export const modelPricingSnapshot: ModelPricingTable = Object.freeze(${JSON.stri
 import type { ModelVariant } from "../models";
 
 export type ModelVariantsEntry = {
-	variants: readonly ModelVariant[];
+	kind?: "toggle";
 	budget?: { high: number; max: number };
+	variants: readonly ModelVariant[];
 };
 
 export const modelVariantsByProviderModel: Readonly<Record<string, ModelVariantsEntry>> = ${JSON.stringify(directVariants, null, 2)};

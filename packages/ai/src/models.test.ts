@@ -265,6 +265,9 @@ describe("shared chat model selection", () => {
 				providerId: "opencode-go",
 			})
 		).toEqual(["none", "thinking"]);
+		expect(modelVariantsByProviderModel["opencode-go/minimax-m3"]?.kind).toBe(
+			"toggle"
+		);
 		expect(
 			normalizeModelVariant(
 				{ modelId: "deepseek-v4-flash", providerId: "opencode-go" },

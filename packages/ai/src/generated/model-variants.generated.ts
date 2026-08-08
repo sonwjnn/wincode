@@ -4,8 +4,9 @@
 import type { ModelVariant } from "../models";
 
 export type ModelVariantsEntry = {
-	variants: readonly ModelVariant[];
+	kind?: "toggle";
 	budget?: { high: number; max: number };
+	variants: readonly ModelVariant[];
 };
 
 export const modelVariantsByProviderModel: Readonly<Record<string, ModelVariantsEntry>> = {
@@ -491,6 +492,7 @@ export const modelVariantsByProviderModel: Readonly<Record<string, ModelVariants
     "variants": []
   },
   "opencode-go/minimax-m3": {
+    "kind": "toggle",
     "variants": [
       "none",
       "thinking"
