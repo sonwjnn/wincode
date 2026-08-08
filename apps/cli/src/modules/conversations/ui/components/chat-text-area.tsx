@@ -1003,6 +1003,7 @@ export function ChatTextArea({
 						<CommandMenu
 							commands={state.overlay.items}
 							onExecute={actions.onItemExecute}
+							onScroll={actions.onItemScroll}
 							onSelect={actions.onItemSelect}
 							selectedIndex={state.overlay.selectedIndex}
 							visibleStartIndex={state.visibleStartIndex}

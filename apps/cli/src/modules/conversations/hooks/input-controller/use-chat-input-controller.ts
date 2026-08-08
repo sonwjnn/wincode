@@ -508,6 +508,20 @@ export function useChatInputController({
 		[disabled, executeCommandAtIndex, executeFileMentionAtIndex, overlayKind]
 	);
 
+	const onItemScroll = useCallback(
+		(direction: "up" | "down") => {
+			if (overlayKind !== "command") {
+				return;
+			}
+			if (direction === "down") {
+				onArrowDown();
+			} else {
+				onArrowUp();
+			}
+		},
+		[onArrowDown, onArrowUp, overlayKind]
+	);
+
 	const handleTab = useCallback(() => {
 		if (disabled) {
 			return;
@@ -536,6 +550,7 @@ export function useChatInputController({
 			onEnter,
 			onEscape,
 			onItemExecute,
+			onItemScroll,
 			onItemSelect,
 			onTab: handleTab,
 			onTextChange,

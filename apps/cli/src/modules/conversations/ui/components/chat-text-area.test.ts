@@ -189,6 +189,20 @@ describe("ChatTextArea", () => {
 		]);
 	});
 
+	test("binds mouse wheel scrolling to command list navigation", async () => {
+		const [textAreaSource, menuSource] = await Promise.all([
+			readFile(new URL("./chat-text-area.tsx", import.meta.url), "utf8"),
+			readFile(
+				new URL("../../../commands/ui/command-menu.tsx", import.meta.url),
+				"utf8"
+			),
+		]);
+
+		expect(textAreaSource).toContain("onScroll={actions.onItemScroll}");
+		expect(menuSource).toContain("onMouseScroll");
+		expect(menuSource).toContain('event.scroll?.direction === "down"');
+	});
+
 	test("does not bind shift tab to model cycling", async () => {
 		const [textAreaSource, promptConfigSource] = await Promise.all([
 			readFile(new URL("./chat-text-area.tsx", import.meta.url), "utf8"),

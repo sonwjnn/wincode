@@ -15,6 +15,7 @@ type CommandMenuProps = {
 	commands: BaseSpec[];
 	selectedIndex: number;
 	visibleStartIndex: number;
+	onScroll: (direction: "up" | "down") => void;
 	onSelect: (index: number) => void;
 	onExecute: (index: number) => void;
 };
@@ -23,6 +24,7 @@ export function CommandMenu({
 	commands,
 	selectedIndex,
 	visibleStartIndex,
+	onScroll,
 	onSelect,
 	onExecute,
 }: CommandMenuProps) {
@@ -43,7 +45,17 @@ export function CommandMenu({
 	const visibleSlice = commands.slice(visibleStartIndex, end);
 
 	return (
-		<box flexDirection="column" height={visibleHeight}>
+		<box
+			flexDirection="column"
+			height={visibleHeight}
+			onMouseScroll={(event) => {
+				if (event.scroll?.direction === "down") {
+					onScroll("down");
+				} else if (event.scroll?.direction === "up") {
+					onScroll("up");
+				}
+			}}
+		>
 			{visibleSlice.map((cmd, i) => {
 				const realIndex = visibleStartIndex + i;
 				const isSelected = realIndex === selectedIndex;

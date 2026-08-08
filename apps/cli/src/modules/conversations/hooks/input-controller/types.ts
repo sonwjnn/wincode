@@ -36,6 +36,7 @@ export type ChatInputControllerActions = {
 	onAcceptedSubmit: (entry: PromptHistoryEntry) => void;
 	onEscape: () => void;
 	onItemExecute: (index: number) => void;
+	onItemScroll: (direction: "up" | "down") => void;
 	onItemSelect: (index: number) => void;
 	onTab: () => void;
 	onTextChange: (
