@@ -17,9 +17,17 @@ describe("chat input controller triggers", () => {
 		});
 	});
 
-	test("ignores non-command and spaced command text", () => {
+	test("ignores non-command text", () => {
 		expect(detectCommandTrigger("hello")).toBeNull();
-		expect(detectCommandTrigger("/new session")).toBeNull();
+	});
+
+	test("keeps command query including arguments", () => {
+		expect(detectCommandTrigger("/new session")).toEqual({
+			end: 12,
+			kind: "command",
+			query: "new session",
+			start: 0,
+		});
 	});
 
 	test("detects active trigger with command priority", () => {

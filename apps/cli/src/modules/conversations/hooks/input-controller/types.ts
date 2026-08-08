@@ -1,11 +1,14 @@
 import type { FileUIPart } from "@wincode/ai/client";
 import type { CommandSpec } from "@/modules/commands/commands";
+import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import type { FileMentionOption } from "@/modules/file-mentions";
 import type { PromptHistoryEntry } from "./history";
 
+export type CommandItem = CommandSpec | CustomCommandSpec;
+
 export type InputOverlayState =
 	| { items: []; kind: null; selectedIndex: -1 }
-	| { items: CommandSpec[]; kind: "command"; selectedIndex: number }
+	| { items: CommandItem[]; kind: "command"; selectedIndex: number }
 	| { items: FileMentionOption[]; kind: "file-mention"; selectedIndex: number };
 
 export type ChatInputControllerState = {
@@ -52,6 +55,7 @@ export type ChatInputController = {
 export type ChatInputControllerOptions = {
 	disabled: boolean;
 	executeCommand: (command: CommandSpec) => void | Promise<void>;
+	getCustomCommands: () => Promise<CustomCommandSpec[]>;
 	onSubmit: (value: string) => void;
 	onTab: () => void;
 	getFileMentionOptions: () => Promise<FileMentionOption[]>;

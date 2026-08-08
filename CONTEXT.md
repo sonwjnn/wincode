@@ -29,3 +29,13 @@ while users reconnect providers into the new format.
 The Model Catalog is the static product definition of supported models and
 variants. It references a Connection Provider by ID but does not own credentials
 or authentication behavior.
+
+## Language
+
+**Built-in Command**:
+A fixed UI action the CLI ships with, dispatched by kind to an adapter
+(`/new`, `/models`, `/exit`). _Avoid_: Command, slash command
+
+**Custom Command**:
+A user-defined prompt template loaded from a command folder, inserted into the
+conversation as a user message when executed. _Avoid_: Command, slash command

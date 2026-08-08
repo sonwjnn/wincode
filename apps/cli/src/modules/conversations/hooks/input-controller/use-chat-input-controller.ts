@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CommandSpec } from "@/modules/commands/commands";
 import { getFilteredCommands } from "@/modules/commands/filter-commands";
+import {
+	expandCustomCommandTemplate,
+	extractArguments,
+} from "@/modules/custom-commands/expand";
+import { filterCustomCommands } from "@/modules/custom-commands/filter";
+import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import type { FileMentionOption } from "@/modules/file-mentions";
 import {
 	applyFileMentionReplacement,
@@ -20,6 +25,7 @@ import { type ActiveTrigger, detectTrigger } from "./triggers";
 import type {
 	ChatInputController,
 	ChatInputControllerOptions,
+	CommandItem,
 	InputOverlayState,
 } from "./types";
 
@@ -34,6 +40,7 @@ const EMPTY_OVERLAY: InputOverlayState = {
 export function useChatInputController({
 	disabled,
 	executeCommand,
+	getCustomCommands: getCustomCommandsFromOptions,
 	getFileMentionOptions: getFileMentionOptionsFromOptions,
 	onSubmit,
 	onTab,
@@ -51,6 +58,7 @@ export function useChatInputController({
 	const [fileMentionOptions, setFileMentionOptions] = useState<
 		FileMentionOption[]
 	>([]);
+	const [customCommands, setCustomCommands] = useState<CustomCommandSpec[]>([]);
 	const [textSyncRevision, setTextSyncRevision] = useState(0);
 	const [visibleStartIndex, setVisibleStartIndex] = useState(0);
 	const historyRef = useRef<PromptHistoryEntry[]>([]);
@@ -116,13 +124,43 @@ export function useChatInputController({
 		};
 	}, [getFileMentionOptionsFromOptions]);
 
+	const commandOverlayOpen = overlayKind === "command";
+	useEffect(() => {
+		if (!commandOverlayOpen) {
+			return;
+		}
+		let active = true;
+
+		getCustomCommandsFromOptions()
+			.then((specs) => {
+				if (active) {
+					setCustomCommands(specs);
+				}
+			})
+			.catch(() => {
+				if (active) {
+					setCustomCommands([]);
+				}
+			});
+
+		return () => {
+			active = false;
+		};
+	}, [commandOverlayOpen, getCustomCommandsFromOptions]);
+
 	const commandQuery =
 		activeTrigger?.kind === "command" ? activeTrigger.query : undefined;
 	const fileMentionQuery =
 		activeTrigger?.kind === "file-mention" ? activeTrigger.query : undefined;
 	const filteredCommands = useMemo(
-		() => (commandQuery === undefined ? [] : getFilteredCommands(commandQuery)),
-		[commandQuery]
+		() =>
+			commandQuery === undefined
+				? []
+				: [
+						...getFilteredCommands(commandQuery),
+						...filterCustomCommands(customCommands, commandQuery),
+					],
+		[commandQuery, customCommands]
 	);
 	const filteredFileMentions = useMemo(
 		() =>
@@ -196,7 +234,7 @@ export function useChatInputController({
 	);
 
 	const resolveCommand = useCallback(
-		(index: number): CommandSpec | undefined => {
+		(index: number): CommandItem | undefined => {
 			if (overlayKind !== "command") {
 				return;
 			}
@@ -210,6 +248,16 @@ export function useChatInputController({
 		(index: number) => {
 			const command = resolveCommand(index);
 			if (!command) {
+				return;
+			}
+
+			if (command.kind === "custom") {
+				const expanded = expandCustomCommandTemplate(
+					command.template,
+					activeTrigger ? extractArguments(activeTrigger.query) : ""
+				);
+				setProgrammaticText(expanded, expanded.length);
+				closeOverlay();
 				return;
 			}
 

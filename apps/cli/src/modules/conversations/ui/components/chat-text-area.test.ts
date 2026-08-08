@@ -105,6 +105,29 @@ describe("ChatTextArea", () => {
 		expect(textAreaSource).not.toContain("textarea.insertText(command);");
 	});
 
+	test("expands custom commands into the textarea instead of dispatching", async () => {
+		const [textAreaSource, controllerSource] = await Promise.all([
+			readFile(new URL("./chat-text-area.tsx", import.meta.url), "utf8"),
+			readFile(
+				new URL(
+					"../../hooks/input-controller/use-chat-input-controller.ts",
+					import.meta.url
+				),
+				"utf8"
+			),
+		]);
+
+		expect(textAreaSource).toContain("getCustomCommands");
+		expect(controllerSource).toContain("expandCustomCommandTemplate(");
+		expect(controllerSource).toContain(
+			"setProgrammaticText(expanded, expanded.length)"
+		);
+		expect(controllerSource).toContain('command.kind === "custom"');
+		expect(controllerSource).not.toContain(
+			'command.kind === "custom" && executeCommand'
+		);
+	});
+
 	test("binds enter to submit and modified enter to newline", () => {
 		expect(CHAT_TEXT_AREA_KEY_BINDINGS).toEqual([
 			{ action: "submit", name: "return" },

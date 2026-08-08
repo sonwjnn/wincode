@@ -1,7 +1,7 @@
 import { TextAttributes } from "@opentui/core";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-import { COMMANDS, type CommandSpec } from "../commands";
+import { type BaseSpec, COMMANDS } from "../commands";
 
 const MAX_VISIBLE_ITEMS = 8;
 
@@ -12,7 +12,7 @@ const COMMAND_COL_WIDTH =
 	Math.max(...COMMANDS.map((cmd) => cmd.name.length)) + 4;
 
 type CommandMenuProps = {
-	commands: CommandSpec[];
+	commands: BaseSpec[];
 	selectedIndex: number;
 	visibleStartIndex: number;
 	onSelect: (index: number) => void;

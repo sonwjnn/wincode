@@ -13,6 +13,7 @@ import { spawn } from "bun";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useCommandExecutor } from "@/app/commands/use-app-command-executor";
 import { CommandMenu } from "@/modules/commands/ui/command-menu";
+import { getCustomCommands } from "@/modules/custom-commands/loader";
 import {
 	deleteFileMentionAfterTrailingCharacterDelete,
 	FileMentionMenu,
@@ -252,6 +253,7 @@ export function ChatTextArea({
 	const { actions, state } = useChatInputController({
 		disabled,
 		executeCommand,
+		getCustomCommands,
 		getFileMentionOptions,
 		onSubmit: () => undefined,
 		onTab: cycleMode,

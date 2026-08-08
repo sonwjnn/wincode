@@ -1,5 +1,7 @@
 type BaseSpec = { value: string; name: string; description: string };
 
+export type { BaseSpec };
+
 export type CommandSpec = BaseSpec &
 	(
 		| { kind: "exit" }
