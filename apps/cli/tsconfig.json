@@ -13,9 +13,8 @@
     // Bundler mode
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["./src/*"]
     },
     "ignoreDeprecations": "6.0",
     "allowImportingTsExtensions": true,
