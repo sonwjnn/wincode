@@ -767,9 +767,7 @@ const getCatalogVariants = (model: {
 		return model.variants;
 	}
 	const generated =
-		modelVariantsByProviderModel[
-			`${model.connectionProviderId}/${model.id}` as keyof typeof modelVariantsByProviderModel
-		];
+		modelVariantsByProviderModel[`${model.connectionProviderId}/${model.id}`];
 	return generated?.variants ?? [];
 };
 

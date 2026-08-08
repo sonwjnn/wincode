@@ -298,7 +298,7 @@ describe("shared chat model selection", () => {
 		for (const model of directModels) {
 			const generated =
 				modelVariantsByProviderModel[
-					`${model.connectionProviderId}/${model.id}` as keyof typeof modelVariantsByProviderModel
+					`${model.connectionProviderId}/${model.id}`
 				];
 			expect(generated).toBeDefined();
 			for (const variant of generated?.variants ?? []) {

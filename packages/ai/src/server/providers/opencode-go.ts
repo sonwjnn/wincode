@@ -4,7 +4,6 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { ProviderOptions } from "@ai-sdk/provider-utils";
 import { modelVariantsByProviderModel } from "../../generated/model-variants.generated";
 import {
-	type ModelVariant,
 	normalizeModelVariantForModel,
 	type SupportedChatModel,
 } from "../../models";
@@ -18,14 +17,8 @@ type Model = Extract<SupportedChatModel, { provider: "opencode-go" }>;
 const ZEN_GO_BASE_URL = "https://opencode.ai/zen/go/v1";
 const OPENCODE_GO_ENV_KEY = "OPENCODE_GO_API_KEY";
 const reasoningSummaryModels = new Set<Model["id"]>(["gpt-5.6-luna"]);
-type GeneratedVariantsEntry = {
-	budget?: { high: number; max: number };
-	variants: readonly ModelVariant[];
-};
-const generatedEntry = (model: Model): GeneratedVariantsEntry | undefined =>
-	modelVariantsByProviderModel[
-		`opencode-go/${model.id}` as keyof typeof modelVariantsByProviderModel
-	] as GeneratedVariantsEntry | undefined;
+const generatedEntry = (model: Model) =>
+	modelVariantsByProviderModel[`opencode-go/${model.id}`];
 const validateVariantOrThrow = (
 	model: Model,
 	variant: ResolverOptions["variant"]
@@ -63,10 +56,9 @@ const options = (
 			}
 			const budget = generatedEntry(model)?.budget;
 			if (budget && (variant === "high" || variant === "max")) {
-				const budgetTokens = budget[variant as keyof typeof budget];
 				return {
 					anthropic: {
-						thinking: { type: "enabled", budgetTokens },
+						thinking: { type: "enabled", budgetTokens: budget[variant] },
 					},
 				};
 			}
