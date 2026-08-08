@@ -8,7 +8,11 @@ import {
 	type TextareaRenderable,
 } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
-import type { SkillContext } from "@wincode/ai";
+import {
+	findSupportedChatModelSelection,
+	getSupportedModelVariants,
+	type SkillContext,
+} from "@wincode/ai";
 import { spawn } from "bun";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useCommandExecutor } from "@/app/commands/use-app-command-executor";
@@ -190,7 +194,14 @@ export function ChatTextArea({
 	onSubmit,
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
 }: ChatTextAreaProps) {
-	const { mode, cycleMode } = usePromptConfig();
+	const { mode, cycleMode, model } = usePromptConfig();
+	const supportedModel = findSupportedChatModelSelection(model);
+	const hideVariants =
+		supportedModel === null ||
+		getSupportedModelVariants({
+			modelId: supportedModel.id,
+			providerId: supportedModel.connectionProviderId,
+		}).length === 0;
 	const textAreaRef = useRef<TextareaRenderable>(null);
 	const commandEscapeRef = useRef<() => void>(() => undefined);
 	const ctrlCRef = useRef<() => boolean>(() => false);
@@ -280,6 +291,7 @@ export function ChatTextArea({
 		executeCommand,
 		getCustomCommands,
 		getFileMentionOptions,
+		hideVariants,
 		onSubmit: () => undefined,
 		onTab: cycleMode,
 		getPromptHistory,

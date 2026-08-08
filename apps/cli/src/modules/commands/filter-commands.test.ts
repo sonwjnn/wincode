@@ -16,4 +16,14 @@ describe("getFilteredCommands", () => {
 		expect(getFilteredCommands("new session")).toEqual([]);
 		expect(getFilteredCommands("zzz")).toEqual([]);
 	});
+
+	test("hides the variants command when the model has no variants", () => {
+		const commands = getFilteredCommands("", { hideVariants: true });
+		expect(commands.map((cmd) => cmd.name)).not.toContain("variants");
+		expect(commands).toHaveLength(9);
+		expect(getFilteredCommands("var", { hideVariants: true })).toEqual([]);
+		expect(getFilteredCommands("var").map((cmd) => cmd.name)).toEqual([
+			"variants",
+		]);
+	});
 });

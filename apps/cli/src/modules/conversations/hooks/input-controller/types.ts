@@ -57,6 +57,7 @@ export type ChatInputControllerOptions = {
 	disabled: boolean;
 	executeCommand: (command: CommandSpec) => void | Promise<void>;
 	getCustomCommands: () => Promise<CustomCommandSpec[]>;
+	hideVariants?: boolean;
 	onSubmit: (value: string) => void;
 	onTab: () => void;
 	getFileMentionOptions: () => Promise<FileMentionOption[]>;
