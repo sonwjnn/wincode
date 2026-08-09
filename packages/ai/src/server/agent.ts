@@ -1,7 +1,10 @@
 import type { ProviderOptions } from "@ai-sdk/provider-utils";
 import type { OnFinishEvent, OnStepFinishEvent, ToolSet } from "ai";
 import { type LanguageModel, stepCountIs, ToolLoopAgent } from "ai";
-import { getSystemInstructions } from "../instructions";
+import {
+	getSystemInstructions,
+	getSystemInstructionsForAgent,
+} from "../instructions";
 import {
 	type CodingAgentCallOptions,
 	codingAgentCallOptionsSchema,
@@ -47,16 +50,33 @@ export const prepareCodingAgentCall = <T extends Record<string, unknown>>({
 	options?: CodingAgentCallOptions;
 } & T): Omit<T, "options"> & {
 	activeTools: string[];
+	instructions: string;
 	tools: ToolSet;
 } => {
-	const codingMode = getCodingMode(options?.mode ?? defaultMode.value);
+	const resolvedAgent = options?.resolvedAgent;
 	const mcpTools = convertMcpToolManifest(options?.mcpTools ?? []);
-	const activeMcpTools =
-		codingMode.value === "plan" ? [] : Object.keys(mcpTools);
+	let activeMcpTools: string[];
+	let instructions: string;
+	let visibleCodingTools: readonly string[];
+
+	if (resolvedAgent) {
+		activeMcpTools = Object.keys(mcpTools);
+		instructions = getSystemInstructionsForAgent(resolvedAgent.instructions);
+		visibleCodingTools = resolvedAgent.visibleCodingTools;
+	} else {
+		const codingMode = getCodingMode(options?.mode ?? defaultMode.value);
+		const existingInstructions =
+			typeof call.instructions === "string" ? call.instructions : undefined;
+		activeMcpTools = codingMode.value === "plan" ? [] : Object.keys(mcpTools);
+		instructions =
+			existingInstructions ?? getSystemInstructions(codingMode.value);
+		visibleCodingTools = codingMode.tools;
+	}
 
 	return {
 		...call,
-		activeTools: [...codingMode.tools, ...activeMcpTools],
+		activeTools: [...visibleCodingTools, ...activeMcpTools],
+		instructions,
 		tools: { ...codingServerTools, ...mcpTools },
 	};
 };

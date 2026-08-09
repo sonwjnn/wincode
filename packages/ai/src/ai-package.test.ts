@@ -1,12 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import {
+	agentIdSchema,
+	baseCodingAgentInstructions,
+	buildAgent,
+	builtInAgents,
 	type CodingAgentUIMessage,
 	codingAgentDataSchemas,
 	codingMessageMetadataSchema,
 	codingModeNames,
 	codingModes,
 	codingToolDefinitions,
+	codingToolNames,
 	codingToolSchemas,
 	defaultChatModel,
 	defaultChatModelSelection,
@@ -15,7 +20,9 @@ import {
 	findSupportedChatModel,
 	getNextCodingModeName,
 	getSystemInstructions,
+	getSystemInstructionsForAgent,
 	parseMode,
+	planAgent,
 	type ReadInput,
 	type ReadOutput,
 	sanitizeInterruptedMessagesForModel,
@@ -59,6 +66,7 @@ describe("@wincode/ai shared entry", () => {
 	});
 
 	test("exports Zod-only coding tool schemas", () => {
+		expect(Object.keys(codingToolDefinitions)).toEqual([...codingToolNames]);
 		expect(Object.keys(codingToolSchemas)).toEqual([
 			"read",
 			"write",
@@ -398,6 +406,32 @@ describe("@wincode/ai shared entry", () => {
 		expect(getNextCodingModeName("plan")).toBe("build");
 	});
 
+	test("validates canonical Agent IDs", () => {
+		for (const id of ["build", "code-review", "agent-2"]) {
+			expect(agentIdSchema.safeParse(id).success).toBe(true);
+		}
+
+		for (const id of ["", "Code-Review", "code_review", "-build", "build-"]) {
+			expect(agentIdSchema.safeParse(id).success).toBe(false);
+		}
+		expect(agentIdSchema.safeParse("a".repeat(65)).success).toBe(false);
+	});
+
+	test("defines Build and Plan as Built-in Primary Agents", () => {
+		expect(builtInAgents.map(({ id, role }) => ({ id, role }))).toEqual([
+			{ id: "build", role: "primary" },
+			{ id: "plan", role: "primary" },
+		]);
+		expect(buildAgent.visibleCodingTools).toEqual([
+			"read",
+			"write",
+			"edit",
+			"list",
+			"grep",
+		]);
+		expect(planAgent.visibleCodingTools).toEqual(["read", "list", "grep"]);
+	});
+
 	test("parses persisted coding modes safely", () => {
 		expect(parseMode("plan")).toBe("plan");
 		expect(parseMode("unknown")).toBe(defaultMode.value);
@@ -411,6 +445,16 @@ describe("@wincode/ai shared entry", () => {
 			"read-only analysis and implementation planning"
 		);
 		expect(getSystemInstructions("plan")).toContain("Do not modify files");
+	});
+
+	test("composes immutable base and Agent-specific instructions", () => {
+		const instructions = getSystemInstructionsForAgent(
+			"Review code carefully."
+		);
+
+		expect(instructions).toBe(
+			`${baseCodingAgentInstructions}\n\nReview code carefully.`
+		);
 	});
 
 	test("exports the coding UI message type from the shared entry", () => {

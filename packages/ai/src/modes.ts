@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { buildAgent, planAgent, resolvedAgentRuntimeSchema } from "./agents";
 import { mcpToolManifestSchema } from "./mcp-tools";
 import { supportedChatModelIdSchema } from "./models";
 import type { CodingToolName } from "./tools/schemas";
@@ -10,23 +11,26 @@ type CodingModeShape = {
 	value: string;
 };
 
+/** @deprecated Temporary compatibility adapter while consumers migrate to Agents. */
 export const codingModes = [
 	{
-		description: "Implement changes with read and write access.",
-		displayName: "Build",
-		tools: ["read", "write", "edit", "list", "grep"],
-		value: "build",
+		description: buildAgent.description,
+		displayName: buildAgent.displayName,
+		tools: buildAgent.visibleCodingTools,
+		value: buildAgent.id,
 	},
 	{
-		description: "Read-only analysis and planning.",
-		displayName: "Plan",
-		tools: ["read", "list", "grep"],
-		value: "plan",
+		description: planAgent.description,
+		displayName: planAgent.displayName,
+		tools: planAgent.visibleCodingTools,
+		value: planAgent.id,
 	},
 ] as const satisfies readonly CodingModeShape[];
 
+/** @deprecated Temporary compatibility alias while consumers migrate to AgentId. */
 export type ModeType = (typeof codingModes)[number]["value"];
 
+/** @deprecated Temporary compatibility shape while consumers migrate to Agents. */
 export type CodingModeDefinition = {
 	description: string;
 	displayName: string;
@@ -34,35 +38,43 @@ export type CodingModeDefinition = {
 	value: ModeType;
 };
 
+/** @deprecated Temporary compatibility API while consumers migrate to Agents. */
 export const codingModeNames = codingModes.map((mode) => mode.value);
+/** @deprecated Temporary compatibility API while consumers migrate to Agents. */
 export const codingModeNameSchema = z.enum(codingModeNames);
 
 export const codingAgentCallOptionsSchema = z.object({
 	mode: codingModeNameSchema.optional(),
 	model: supportedChatModelIdSchema.optional(),
 	mcpTools: mcpToolManifestSchema.optional(),
+	resolvedAgent: resolvedAgentRuntimeSchema.optional(),
 });
 
 export type CodingAgentCallOptions = z.infer<
 	typeof codingAgentCallOptionsSchema
 >;
 
+/** @deprecated Temporary compatibility API while consumers migrate to Agents. */
 export const defaultMode = codingModes[0];
 
+/** @deprecated Temporary compatibility API while consumers migrate to Agents. */
 export const parseMode = (value: string): ModeType => {
 	const result = codingModeNameSchema.safeParse(value);
 	return result.success ? result.data : defaultMode.value;
 };
 
+/** @deprecated Temporary compatibility API while consumers migrate to Agents. */
 export const getCodingMode = (mode: ModeType): CodingModeDefinition =>
 	codingModes.find((item) => item.value === mode) ?? defaultMode;
 
+/** @deprecated Temporary compatibility API while consumers migrate to Agents. */
 export const getNextCodingModeName = (mode: ModeType): ModeType => {
 	const currentIndex = codingModes.findIndex((item) => item.value === mode);
 	const nextIndex = (currentIndex + 1) % codingModes.length;
 	return codingModes[nextIndex]?.value ?? defaultMode.value;
 };
 
+/** @deprecated Temporary compatibility API while consumers migrate to Agents. */
 export const isCodingToolAllowedForMode = (
 	mode: ModeType,
 	toolName: CodingToolName

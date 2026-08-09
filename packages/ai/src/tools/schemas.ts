@@ -1,5 +1,5 @@
 // biome-ignore-all lint/performance/noBarrelFile: Public Zod-only tool schema entry point.
-import type { z } from "zod";
+import { z } from "zod";
 
 export type { EditInput, EditOutput } from "./edit/schema";
 export {
@@ -105,6 +105,15 @@ export const codingToolDefinitions = {
 };
 
 export type CodingToolName = keyof typeof codingToolDefinitions;
+
+export const codingToolNames = [
+	"read",
+	"write",
+	"edit",
+	"list",
+	"grep",
+] as const satisfies readonly CodingToolName[];
+export const codingToolNameSchema = z.enum(codingToolNames);
 
 export type CodingToolInput<Name extends CodingToolName> = z.infer<
 	(typeof codingToolDefinitions)[Name]["inputSchema"]

@@ -77,4 +77,46 @@ describe("prepareCodingAgentCall", () => {
 			expect(prepared.tools.read?.type).not.toBe("dynamic");
 		}
 	});
+
+	it("uses an explicit resolved Agent runtime without a mode lookup", () => {
+		const prepared = prepareCodingAgentCall({
+			options: {
+				resolvedAgent: {
+					instructions: "Review code without editing it.",
+					visibleCodingTools: ["read", "grep"],
+				},
+				mcpTools: manifest,
+			},
+		});
+
+		expect(prepared.activeTools).toEqual(["read", "grep", "mcp_search_docs"]);
+		expect(prepared.instructions).toContain(
+			"You are a basic coding agent running in a user's CLI."
+		);
+		expect(prepared.instructions).toContain("Review code without editing it.");
+	});
+
+	it("preserves legacy call instructions", () => {
+		const prepared = prepareCodingAgentCall({
+			instructions: "Existing system instructions",
+			options: { mode: "plan" },
+		});
+
+		expect(prepared.instructions).toBe("Existing system instructions");
+	});
+
+	it("replaces constructor instructions with resolved Agent instructions", () => {
+		const prepared = prepareCodingAgentCall({
+			instructions: "Default Build instructions",
+			options: {
+				resolvedAgent: {
+					instructions: "Resolved Agent instructions",
+					visibleCodingTools: ["read"],
+				},
+			},
+		});
+
+		expect(prepared.instructions).not.toContain("Default Build instructions");
+		expect(prepared.instructions).toContain("Resolved Agent instructions");
+	});
 });
