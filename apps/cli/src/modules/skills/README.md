@@ -5,8 +5,10 @@ conversation persistence.
 
 ## Public API
 
-- `discoverSkills()` — discover, validate, load, de-duplicate, and sort available skills.
-- `discoverSkillCandidates(cwd?, home?)` — return deterministic `SKILL.md` candidates.
+- `discoverSkills({ configStore, homeRoot, workspace })` — load the shared config snapshot, then
+  discover, validate, de-duplicate, and sort available skills.
+- `discoverSkillCandidates({ homeRoot, snapshot, workspace })` — return deterministic `SKILL.md`
+  candidates.
 - `loadSkill(candidate)` / `loadSkills(candidates)` — load validated skill bodies.
 - `parseSkillFile(source)` — parse frontmatter and body; throws `SkillValidationError` on invalid
   input.
@@ -16,14 +18,35 @@ conversation persistence.
 
 ## Discovery and precedence
 
-OpenCode-compatible sources are global `~/.agents/skills`, `~/.claude/skills`, and exactly
-`~/.config/opencode/skills`, plus project `.agents/skills`, `.claude/skills`, and
-`.opencode/skills` directories while walking from CWD to the Git worktree root. Project skills
-override global skills. A nearer project ancestor overrides a farther one; within one root,
-`.opencode` overrides `.claude`, which overrides `.agents`; ties use deterministic path ordering.
-Invalid or unreadable candidates are skipped. Discovered files are local filesystem input and are
-trusted only as explicitly configured by the user; skill bodies are sent with the current request
-when selected.
+Wincode sources are global `${XDG_CONFIG_HOME:-~/.config}/wincode/skills` and
+`~/.wincode/skills`, project `.wincode/skills` directories while walking from the Git worktree root
+to the workspace, and optional `skills.paths` entries from Wincode JSON. Legacy compatibility
+sources remain global `~/.agents/skills`, `~/.claude/skills`, `~/.opencode/skills`, and
+`~/.config/opencode/skills`, plus project `.agents/skills`, `.claude/skills`, and `.opencode/skills`
+at each traversed root.
+
+Project skills override global skills. A nearer project ancestor overrides a farther one. Within a
+scope, Wincode folders override legacy folders, configured paths override conventional folders,
+the home Wincode folder overrides the XDG Wincode folder, and a later configured path overrides an
+earlier one. Invalid or unreadable candidates are skipped. Discovered files are local filesystem
+input and are trusted only as explicitly configured by the user; skill bodies are sent with the
+current request when selected.
+
+## Configured paths
+
+```json
+{
+	"skills": {
+		"paths": ["./skills", "/absolute/shared/skills"]
+	}
+}
+```
+
+Each path names a directory whose direct child directories may contain `SKILL.md`. Relative paths
+resolve from the directory containing the `wincode.json` or `wincode.jsonc` source that supplied the
+array; absolute paths remain absolute. Shared config merge rules apply, so a higher-precedence
+`paths` array replaces a lower one. Conventional Wincode and retained legacy folders always
+participate alongside the configured list.
 
 ## `SKILL.md`
 

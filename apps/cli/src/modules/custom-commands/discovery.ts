@@ -1,24 +1,18 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
+import type { ConfigSnapshot } from "@/shared/config/config-store";
+import { resolveConfigRelativePath } from "@/shared/config/resolve-config-relative-path";
+import { getProjectRoots } from "@/shared/paths/project-roots";
 import type { CustomCommandCandidate } from "./types";
 
 const COMMANDS_DIR = join(".wincode", "commands");
 const MARKDOWN_EXTENSION = ".md";
 
-function gitRoot(start: string): string {
-	let current = resolve(start);
-	while (true) {
-		if (existsSync(join(current, ".git"))) {
-			return current;
-		}
-		const parent = dirname(current);
-		if (parent === current) {
-			return resolve(start);
-		}
-		current = parent;
-	}
-}
+export type CustomCommandDiscoveryInput = {
+	homeRoot: string;
+	snapshot: ConfigSnapshot;
+	workspace: string;
+};
 
 function collect(
 	base: string,
@@ -34,27 +28,47 @@ function collect(
 		.map((entry) => ({ filePath: join(base, entry.name), scope }));
 }
 
-export function discoverCustomCommandCandidates(
-	cwd = process.cwd(),
-	home = homedir()
-): CustomCommandCandidate[] {
-	const result = [collect(join(home, COMMANDS_DIR), "global")].flat();
-	const boundary = gitRoot(cwd);
-	const projectRoots: string[] = [];
-	let current = resolve(cwd);
-	while (true) {
-		projectRoots.push(current);
-		if (current === boundary) {
-			break;
-		}
-		const parent = dirname(current);
-		if (parent === current) {
-			break;
-		}
-		current = parent;
+const configuredRoots = (snapshot: ConfigSnapshot) => {
+	const commands = snapshot.document.commands;
+	if (
+		typeof commands !== "object" ||
+		commands === null ||
+		Array.isArray(commands) ||
+		!("paths" in commands) ||
+		!Array.isArray(commands.paths)
+	) {
+		return [];
 	}
-	for (const root of projectRoots.reverse()) {
+	return commands.paths.flatMap((configuredPath, index) => {
+		if (typeof configuredPath !== "string" || configuredPath.length === 0) {
+			return [];
+		}
+		const resolved = resolveConfigRelativePath(
+			snapshot,
+			["commands", "paths", String(index)],
+			configuredPath
+		);
+		return resolved === undefined ? [] : [resolved];
+	});
+};
+
+export function discoverCustomCommandCandidates(
+	input: CustomCommandDiscoveryInput
+): CustomCommandCandidate[] {
+	const configured = configuredRoots(input.snapshot);
+	const result = collect(join(input.homeRoot, COMMANDS_DIR), "global");
+	for (const root of configured) {
+		if (root.scope === "global") {
+			result.push(...collect(root.path, root.scope));
+		}
+	}
+	for (const root of getProjectRoots(input.workspace)) {
 		result.push(...collect(join(root, COMMANDS_DIR), "project"));
+	}
+	for (const root of configured) {
+		if (root.scope === "project") {
+			result.push(...collect(root.path, root.scope));
+		}
 	}
 	return result;
 }

@@ -2,6 +2,8 @@
 
 Domain-neutral Wincode configuration infrastructure for CLI capabilities. `createConfigStore()`
 returns memoized, immutable snapshots through one `getSnapshot(workspace)` interface.
+App composition creates one process-lifetime store and injects it into MCP, Custom Commands, and
+Skills; capability modules do not reread Wincode JSON independently.
 
 Each snapshot loads `wincode.jsonc` or `wincode.json` from four locations, from lowest to highest
 precedence:

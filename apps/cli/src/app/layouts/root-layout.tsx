@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import { getChatModelRoute } from "@wincode/ai";
 import { type ReactNode, useEffect, useReducer } from "react";
@@ -10,6 +11,7 @@ import {
 	usePromptConfig,
 } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { CopyOnSelect } from "@/shared/clipboard/copy-on-select";
+import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -18,6 +20,11 @@ import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 const connections = createConnections();
 const workspace = process.cwd();
 const configStore = createConfigStore();
+const configContext = Object.freeze({
+	configStore,
+	homeRoot: homedir(),
+	workspace,
+});
 // Process-lifetime infrastructure is composed once and injected into modules.
 const mcpRegistry = createMcpRegistry({ configStore, workspace });
 
@@ -57,35 +64,37 @@ export function RootLayout() {
 	}, [router]);
 
 	return (
-		<ConnectionsProvider connections={connections}>
-			<KeyboardLayerProvider>
-				<PromptConfigProvider>
-					<ModelPricingProvider>
-						<BillingComposition>
-							<ToastProvider>
-								<DialogProvider>
-									<McpProvider
-										createRegistry={() => mcpRegistry}
-										workspace={workspace}
-									>
-										<CopyOnSelect />
-										{/*
-										 * The McpProvider renders the approval dialog through the
-										 * outer DialogProvider (it must sit below a DialogProvider),
-										 * while app dialogs mount through this inner DialogProvider so
-										 * dialog content can consume useMcp (status dialog, approvals
-										 * opened by the command executor).
-										 */}
-										<DialogProvider>
-											<Outlet key={currentPath} />
-										</DialogProvider>
-									</McpProvider>
-								</DialogProvider>
-							</ToastProvider>
-						</BillingComposition>
-					</ModelPricingProvider>
-				</PromptConfigProvider>
-			</KeyboardLayerProvider>
-		</ConnectionsProvider>
+		<ConfigProvider value={configContext}>
+			<ConnectionsProvider connections={connections}>
+				<KeyboardLayerProvider>
+					<PromptConfigProvider>
+						<ModelPricingProvider>
+							<BillingComposition>
+								<ToastProvider>
+									<DialogProvider>
+										<McpProvider
+											createRegistry={() => mcpRegistry}
+											workspace={workspace}
+										>
+											<CopyOnSelect />
+											{/*
+											 * The McpProvider renders the approval dialog through the
+											 * outer DialogProvider (it must sit below a DialogProvider),
+											 * while app dialogs mount through this inner DialogProvider so
+											 * dialog content can consume useMcp (status dialog, approvals
+											 * opened by the command executor).
+											 */}
+											<DialogProvider>
+												<Outlet key={currentPath} />
+											</DialogProvider>
+										</McpProvider>
+									</DialogProvider>
+								</ToastProvider>
+							</BillingComposition>
+						</ModelPricingProvider>
+					</PromptConfigProvider>
+				</KeyboardLayerProvider>
+			</ConnectionsProvider>
+		</ConfigProvider>
 	);
 }

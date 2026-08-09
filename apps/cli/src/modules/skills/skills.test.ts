@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createConfigStore } from "@/shared/config/config-store";
 import { discoverSkillCandidates } from "./discovery";
 import { parseSkillFile } from "./frontmatter";
 import { parseSkillInvocation } from "./invocation";
@@ -62,7 +63,15 @@ describe("skills", () => {
 				`---\nname: same\ndescription: ${path}\n---\nbody`
 			);
 		}
-		const candidates = discoverSkillCandidates(cwd, home);
+		const snapshot = await createConfigStore({
+			homeRoot: home,
+			xdgConfigHome: join(root, "xdg"),
+		}).getSnapshot(cwd);
+		const candidates = discoverSkillCandidates({
+			homeRoot: home,
+			snapshot,
+			workspace: cwd,
+		});
 		const same = candidates.filter((candidate) =>
 			candidate.filePath.endsWith("same/SKILL.md")
 		);

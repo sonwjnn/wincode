@@ -1,10 +1,11 @@
 # Custom Commands
 
 Custom Commands are user-defined prompt templates loaded from `~/.wincode/commands/`
-(global) and `.wincode/commands/` (project), defined as markdown files with YAML
-frontmatter (`description`) and a template body; project commands win over global
-commands on name collisions, and Built-in Commands always win over Custom Commands
-with the same name.
+(global), `.wincode/commands/` (project), and optional `commands.paths` entries in
+`wincode.json` or `wincode.jsonc`. They are markdown files with YAML frontmatter
+(`description`) and a template body. Configured paths override conventional folders
+within their scope, project commands win over global commands on name collisions, and
+Built-in Commands always win over Custom Commands with the same name.
 
 Status: accepted
 
@@ -20,7 +21,11 @@ Status: accepted
   adapters (`/exit`, `/new`); letting a template shadow them would surprise users.
   Colliding custom commands are ignored with a warning.
 - **Project wins over global** — mirrors Wincode's merged project-over-global
-  configuration precedence.
+	configuration precedence.
+- **JSON configures paths, not command payloads** — `commands.paths` is an array of
+  directories. Relative entries resolve from the config file that supplied the array;
+  higher config layers replace the whole array under the shared merge contract. Markdown
+  and frontmatter remain owned by the Custom Commands module.
 - **No opencode directories** — wincode does not read `~/.config/opencode/commands/`
   or `~/.opencode/...`; Wincode uses `~/.config/wincode`, `~/.wincode`, and
   project-local Wincode configuration only.
@@ -44,3 +49,6 @@ Status: accepted
   to a fixed viewport of 8 items with arrow-key scrolling. New command files
   require a restart (no watcher).
 - Only `.md` files are read; subfolders are ignored (filename = command name).
+- Conventional folders always participate. Configured folders are additive to the
+  conventional folders, even though the configured path array itself follows replacement
+  semantics across Wincode config layers.

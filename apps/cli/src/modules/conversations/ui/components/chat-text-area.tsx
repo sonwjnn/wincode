@@ -34,6 +34,7 @@ import {
 	parseSkillInvocation,
 	type Skill,
 } from "@/modules/skills";
+import { useConfig } from "@/shared/config/config-provider";
 import { EmptyBorder } from "@/shared/constants";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -76,7 +77,7 @@ const getErrorMessage = (error: unknown): string =>
 
 export const resolveSkillPrompt = async (
 	text: string,
-	discover: DiscoverSkills = discoverSkills,
+	discover: DiscoverSkills,
 	visibleText = text
 ): Promise<SkillPrompt> => {
 	const invocation = parseSkillInvocation(text);
@@ -104,7 +105,7 @@ type DiscoverCustomCommands = () => Promise<CustomCommandSpec[]>;
 
 export const resolveCustomCommandPrompt = async (
 	text: string,
-	discover: DiscoverCustomCommands = getCustomCommands
+	discover: DiscoverCustomCommands
 ): Promise<SkillPrompt> => {
 	const invocation = parseCustomCommandInvocation(text);
 	if (!invocation) {
@@ -230,6 +231,15 @@ export function ChatTextArea({
 	const { isTopLayer, pop, push, setResponder } = useKeyboardLayer();
 	const { colors } = useTheme();
 	const { show } = useToast();
+	const config = useConfig();
+	const discoverCustomCommands = useCallback(
+		() => getCustomCommands(config),
+		[config]
+	);
+	const discoverAvailableSkills = useCallback(
+		() => discoverSkills(config),
+		[config]
+	);
 	const handleSelectedSkillCommand = useCallback((command: string) => {
 		insertSkillCommandRef.current(command);
 	}, []);
@@ -289,7 +299,7 @@ export function ChatTextArea({
 	const { actions, state } = useChatInputController({
 		disabled,
 		executeCommand,
-		getCustomCommands,
+		getCustomCommands: discoverCustomCommands,
 		getFileMentionOptions,
 		hideVariants,
 		onSubmit: () => undefined,
@@ -728,11 +738,15 @@ export function ChatTextArea({
 
 		let skillPrompt: SkillPrompt;
 		try {
-			skillPrompt = await resolveSkillPrompt(text, discoverSkills, visibleText);
+			skillPrompt = await resolveSkillPrompt(
+				text,
+				discoverAvailableSkills,
+				visibleText
+			);
 			if (!skillPrompt.skill) {
 				skillPrompt = await resolveCustomCommandPrompt(
 					skillPrompt.text,
-					getCustomCommands
+					discoverCustomCommands
 				);
 			}
 		} catch (error) {

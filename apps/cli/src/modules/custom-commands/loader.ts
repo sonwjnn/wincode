@@ -1,12 +1,14 @@
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { basename } from "node:path";
 import { COMMANDS } from "@/modules/commands/commands";
+import type { ConfigRuntime } from "@/shared/config/config-store";
 import { discoverCustomCommandCandidates } from "./discovery";
 import { parseCustomCommandFile } from "./parse";
 import type { CustomCommandCandidate, CustomCommandSpec } from "./types";
 
 const BUILTIN_NAMES = new Set(COMMANDS.map((command) => command.name));
+
+export type CustomCommandLoaderInput = ConfigRuntime;
 
 export async function loadCustomCommands(
 	candidates: CustomCommandCandidate[]
@@ -43,8 +45,14 @@ export async function loadCustomCommands(
 }
 
 export async function getCustomCommands(
-	cwd = process.cwd(),
-	home = homedir()
+	input: CustomCommandLoaderInput
 ): Promise<CustomCommandSpec[]> {
-	return loadCustomCommands(discoverCustomCommandCandidates(cwd, home));
+	const snapshot = await input.configStore.getSnapshot(input.workspace);
+	return loadCustomCommands(
+		discoverCustomCommandCandidates({
+			homeRoot: input.homeRoot,
+			snapshot,
+			workspace: input.workspace,
+		})
+	);
 }

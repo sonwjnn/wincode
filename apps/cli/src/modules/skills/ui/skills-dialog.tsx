@@ -1,6 +1,7 @@
 import { TextAttributes } from "@opentui/core";
 import { useCallback, useEffect, useState } from "react";
 import { discoverSkills, type Skill } from "@/modules/skills";
+import { useConfig } from "@/shared/config/config-provider";
 import {
 	useDialog,
 	useDialogEscape,
@@ -33,6 +34,7 @@ export function SkillsDialogContent({
 	);
 	const dialog = useDialog();
 	const { colors } = useTheme();
+	const config = useConfig();
 	const skillNameColumnWidth = Math.max(
 		MIN_SKILL_NAME_COLUMN_WIDTH,
 		...skills.map((skill) => skill.name.length)
@@ -43,7 +45,7 @@ export function SkillsDialogContent({
 
 		const loadSkills = async () => {
 			try {
-				const discovered = await discoverSkills();
+				const discovered = await discoverSkills(config);
 				if (!cancelled) {
 					setSkills(discovered);
 					setStatus("ready");
@@ -59,7 +61,7 @@ export function SkillsDialogContent({
 		return () => {
 			cancelled = true;
 		};
-	}, []);
+	}, [config]);
 
 	const handleSelect = useCallback(
 		(skill: Skill) => {

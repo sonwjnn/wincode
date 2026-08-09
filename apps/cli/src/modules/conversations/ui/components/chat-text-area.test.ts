@@ -33,6 +33,8 @@ const TEST_CUSTOM_COMMAND: CustomCommandSpec = {
 	template: "Commit the staged changes with a conventional message.",
 	value: "/git-commit",
 };
+const RESOLVE_SKILL_PROMPT_CALL =
+	/resolveSkillPrompt\(\s*text,\s*discoverAvailableSkills,\s*visibleText\s*\)/;
 
 describe("ChatTextArea", () => {
 	test("resolves recognized skill invocations to request-scoped context", async () => {
@@ -138,9 +140,7 @@ describe("ChatTextArea", () => {
 
 		expect(textAreaSource).toContain("const visibleText = rawText.trim();");
 		expect(textAreaSource).toContain("text: visibleText");
-		expect(textAreaSource).toContain(
-			"resolveSkillPrompt(text, discoverSkills, visibleText)"
-		);
+		expect(textAreaSource).toMatch(RESOLVE_SKILL_PROMPT_CALL);
 	});
 
 	test("replaces the full prompt when a skill command is selected", async () => {

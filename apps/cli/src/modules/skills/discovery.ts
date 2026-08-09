@@ -1,6 +1,8 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
+import type { ConfigSnapshot } from "@/shared/config/config-store";
+import { resolveConfigRelativePath } from "@/shared/config/resolve-config-relative-path";
+import { getProjectRoots } from "@/shared/paths/project-roots";
 import type { SkillCandidate } from "./types";
 
 const locations = [
@@ -8,20 +10,13 @@ const locations = [
 	".claude/skills",
 	".opencode/skills",
 ] as const;
+const WINCODE_SKILLS_DIR = join(".wincode", "skills");
 
-function gitRoot(start: string): string {
-	let current = resolve(start);
-	while (true) {
-		if (existsSync(join(current, ".git"))) {
-			return current;
-		}
-		const parent = dirname(current);
-		if (parent === current) {
-			return resolve(start);
-		}
-		current = parent;
-	}
-}
+export type SkillDiscoveryInput = {
+	homeRoot: string;
+	snapshot: ConfigSnapshot;
+	workspace: string;
+};
 
 function collect(
 	root: string,
@@ -47,7 +42,8 @@ function collect(
 
 function collectSkillRoot(
 	base: string,
-	scope: SkillCandidate["scope"]
+	scope: SkillCandidate["scope"],
+	candidateRoot: string
 ): SkillCandidate[] {
 	if (!(existsSync(base) && statSync(base).isDirectory())) {
 		return [];
@@ -59,35 +55,71 @@ function collectSkillRoot(
 		)
 		.map((entry) => ({
 			filePath: join(base, entry.name, "SKILL.md"),
-			root: dirname(dirname(base)),
+			root: candidateRoot,
 			scope,
 		}));
 }
 
-export function discoverSkillCandidates(
-	cwd = process.cwd(),
-	home = homedir()
-): SkillCandidate[] {
-	const result = [
-		...collect(home, "global"),
-		...collectSkillRoot(join(home, ".config", "opencode", "skills"), "global"),
-	];
-	const boundary = gitRoot(cwd);
-	let current = resolve(cwd);
-	const projectRoots: string[] = [];
-	while (true) {
-		projectRoots.push(current);
-		if (current === boundary) {
-			break;
-		}
-		const parent = dirname(current);
-		if (parent === current) {
-			break;
-		}
-		current = parent;
+const configuredRoots = (snapshot: ConfigSnapshot) => {
+	const skills = snapshot.document.skills;
+	if (
+		typeof skills !== "object" ||
+		skills === null ||
+		Array.isArray(skills) ||
+		!("paths" in skills) ||
+		!Array.isArray(skills.paths)
+	) {
+		return [];
 	}
-	for (const root of projectRoots.reverse()) {
+	return skills.paths.flatMap((configuredPath, index) => {
+		if (typeof configuredPath !== "string" || configuredPath.length === 0) {
+			return [];
+		}
+		const resolved = resolveConfigRelativePath(
+			snapshot,
+			["skills", "paths", String(index)],
+			configuredPath
+		);
+		return resolved === undefined ? [] : [resolved];
+	});
+};
+
+export function discoverSkillCandidates(
+	input: SkillDiscoveryInput
+): SkillCandidate[] {
+	const configured = configuredRoots(input.snapshot);
+	const result = [
+		...collect(input.homeRoot, "global"),
+		...collectSkillRoot(
+			join(input.homeRoot, ".config", "opencode", "skills"),
+			"global",
+			join(input.homeRoot, ".config")
+		),
+		...input.snapshot.sources.flatMap((source) =>
+			source.scope === "global"
+				? collectSkillRoot(
+						join(dirname(source.path), "skills"),
+						source.scope,
+						dirname(dirname(source.path))
+					)
+				: []
+		),
+	];
+	for (const root of configured) {
+		if (root.scope === "global") {
+			result.push(...collectSkillRoot(root.path, root.scope, root.path));
+		}
+	}
+	for (const root of getProjectRoots(input.workspace)) {
 		result.push(...collect(root, "project"));
+		result.push(
+			...collectSkillRoot(join(root, WINCODE_SKILLS_DIR), "project", root)
+		);
+	}
+	for (const root of configured) {
+		if (root.scope === "project") {
+			result.push(...collectSkillRoot(root.path, root.scope, root.path));
+		}
 	}
 	return result;
 }

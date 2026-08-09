@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { createConfigStore } from "@/shared/config/config-store";
 import { discoverCustomCommandCandidates } from "./discovery";
 import { loadCustomCommands } from "./loader";
 import type { CustomCommandCandidate } from "./types";
@@ -155,7 +156,15 @@ describe("discoverCustomCommandCandidates", () => {
 			await mkdir(dirname(filePath), { recursive: true });
 			await writeFile(filePath, source);
 		}
-		const candidates = discoverCustomCommandCandidates(cwd, home);
+		const snapshot = await createConfigStore({
+			homeRoot: home,
+			xdgConfigHome: join(root, "xdg"),
+		}).getSnapshot(cwd);
+		const candidates = discoverCustomCommandCandidates({
+			homeRoot: home,
+			snapshot,
+			workspace: cwd,
+		});
 		expect(candidates.map((candidate) => candidate.scope)).toEqual([
 			"global",
 			"project",

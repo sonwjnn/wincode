@@ -33,6 +33,11 @@ export type ConfigSnapshot = {
 export type ConfigStore = {
 	getSnapshot(workspace: string): Promise<ConfigSnapshot>;
 };
+export type ConfigRuntime = {
+	configStore: ConfigStore;
+	homeRoot: string;
+	workspace: string;
+};
 
 type ConfigFileSystem = {
 	readFile(path: string): Promise<string>;
