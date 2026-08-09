@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createConfigStore } from "./config-store";
 
 const CONFIG_ROOT = "/home/user/.config/wincode";
@@ -255,5 +258,73 @@ describe("createConfigStore", () => {
 		expect(Object.isFrozen(settings.nested)).toBe(true);
 		expect(Object.isFrozen(snapshot.sources)).toBe(true);
 		expect(Object.isFrozen(snapshot.diagnostics)).toBe(true);
+	});
+
+	test("loads JSON and JSONC documents from the real filesystem", async () => {
+		const root = await mkdtemp(join(tmpdir(), "wincode-config-"));
+		const homeRoot = join(root, "home");
+		const xdgConfigHome = join(root, "xdg");
+		const configRoot = join(xdgConfigHome, "wincode");
+		const workspace = join(root, "workspace");
+		const projectConfigRoot = join(workspace, ".wincode");
+		const projectJsonPath = join(projectConfigRoot, "wincode.json");
+		const projectJsoncPath = join(projectConfigRoot, "wincode.jsonc");
+
+		try {
+			await Promise.all([
+				mkdir(configRoot, { recursive: true }),
+				mkdir(join(homeRoot, ".wincode"), { recursive: true }),
+				mkdir(projectConfigRoot, { recursive: true }),
+			]);
+			await Promise.all([
+				writeFile(
+					join(configRoot, "wincode.json"),
+					JSON.stringify({
+						settings: { layers: { xdg: true }, selected: "xdg" },
+					})
+				),
+				writeFile(
+					join(homeRoot, ".wincode", "wincode.json"),
+					JSON.stringify({ settings: { layers: { home: true } } })
+				),
+				writeFile(
+					join(workspace, "wincode.json"),
+					JSON.stringify({ settings: { layers: { workspace: true } } })
+				),
+				writeFile(
+					projectJsonPath,
+					JSON.stringify({
+						settings: { layers: { ignoredJson: true }, selected: "json" },
+					})
+				),
+				writeFile(
+					projectJsoncPath,
+					'// JSONC wins\n{"settings":{"layers":{"project":true},"selected":"jsonc",},}'
+				),
+			]);
+
+			const store = createConfigStore({ homeRoot, xdgConfigHome });
+			const snapshot = await store.getSnapshot(workspace);
+
+			expect(snapshot.document).toEqual({
+				settings: {
+					layers: {
+						home: true,
+						project: true,
+						workspace: true,
+						xdg: true,
+					},
+					selected: "jsonc",
+				},
+			});
+			expect(snapshot.diagnostics).toContainEqual({
+				code: "duplicate-config",
+				message: `Ignored duplicate config ${projectJsonPath}`,
+				path: projectJsoncPath,
+				scope: "project",
+			});
+		} finally {
+			await rm(root, { force: true, recursive: true });
+		}
 	});
 });
