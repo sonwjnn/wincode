@@ -57,6 +57,18 @@ export type CodingAgentCallOptions = z.infer<
 /** @deprecated Temporary compatibility API while consumers migrate to Agents. */
 export const defaultMode = codingModes[0];
 
+/**
+ * Maps a canonical Agent ID to the legacy Coding Mode it still represents.
+ * Built-in Agents keep their identity; Configured Agents fall back to the
+ * default mode so legacy consumers (hosted requests, persistence, MCP
+ * snapshots) keep compiling until the mode to agent migration completes.
+ * @deprecated Temporary compatibility helper while consumers migrate to Agent identity.
+ */
+export const getLegacyModeForAgent = (agentId: string): ModeType => {
+	const parsed = codingModeNameSchema.safeParse(agentId);
+	return parsed.success ? parsed.data : defaultMode.value;
+};
+
 /** @deprecated Temporary compatibility API while consumers migrate to Agents. */
 export const parseMode = (value: string): ModeType => {
 	const result = codingModeNameSchema.safeParse(value);

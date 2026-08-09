@@ -1,9 +1,8 @@
-import type { ModelVariant } from "@wincode/ai";
+import type { AgentId, ModelVariant } from "@wincode/ai";
 import {
 	type ChatModelSelection,
 	defaultChatModelSelection,
-	defaultMode,
-	getNextCodingModeName,
+	getLegacyModeForAgent,
 	type ModeType,
 	normalizeModelVariant,
 } from "@wincode/ai";
@@ -16,14 +15,16 @@ import {
 } from "react";
 
 type PromptConfigState = {
-	mode: ModeType;
+	agent: AgentId;
 	model: ChatModelSelection;
 	variant: ModelVariant | undefined;
 };
 
 export type PromptConfig = PromptConfigState & {
-	cycleMode: () => void;
-	setMode: (mode: ModeType) => void;
+	cycleAgent: (selectableAgents: readonly { id: AgentId }[]) => void;
+	/** @deprecated Temporary compatibility view while consumers migrate to Agent identity. */
+	mode: ModeType;
+	setAgent: (agent: AgentId) => void;
 	setModel: (model: ChatModelSelection) => void;
 	setVariant: (variant: ModelVariant | undefined) => void;
 };
@@ -46,31 +47,42 @@ export const updatePromptConfigModel = (
 
 type PromptConfigProviderProps = {
 	children: ReactNode;
-	initialMode?: ModeType;
+	initialAgent?: AgentId;
 	initialModel?: ChatModelSelection;
 	initialVariant?: ModelVariant;
 };
 export function PromptConfigProvider({
 	children,
-	initialMode = defaultMode.value,
+	initialAgent = "build",
 	initialModel = defaultChatModelSelection,
 	initialVariant,
 }: PromptConfigProviderProps) {
 	const [config, setConfig] = useState<PromptConfigState>({
-		mode: initialMode,
+		agent: initialAgent,
 		model: initialModel,
 		variant: normalizeModelVariant(initialModel, initialVariant),
 	});
 
-	const cycleMode = useCallback(() => {
-		setConfig((current) => ({
-			...current,
-			mode: getNextCodingModeName(current.mode),
-		}));
-	}, []);
+	const cycleAgent = useCallback(
+		(selectableAgents: readonly { id: AgentId }[]) => {
+			setConfig((current) => {
+				if (selectableAgents.length === 0) {
+					return current;
+				}
 
-	const setMode = useCallback((mode: ModeType) => {
-		setConfig((current) => ({ ...current, mode }));
+				const currentIndex = selectableAgents.findIndex(
+					({ id }) => id === current.agent
+				);
+				const next =
+					selectableAgents[(currentIndex + 1) % selectableAgents.length];
+				return next === undefined ? current : { ...current, agent: next.id };
+			});
+		},
+		[]
+	);
+
+	const setAgent = useCallback((agent: AgentId) => {
+		setConfig((current) => ({ ...current, agent }));
 	}, []);
 
 	const setModel = useCallback((model: ChatModelSelection) => {
@@ -87,10 +99,11 @@ export function PromptConfigProvider({
 	return (
 		<PromptConfigContext.Provider
 			value={{
-				cycleMode,
-				mode: config.mode,
+				agent: config.agent,
+				cycleAgent,
+				mode: getLegacyModeForAgent(config.agent),
 				model: config.model,
-				setMode,
+				setAgent,
 				setModel,
 				setVariant,
 				variant: config.variant,

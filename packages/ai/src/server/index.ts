@@ -1,4 +1,8 @@
-export { createCodingAgent } from "./agent";
+export {
+	createCodingAgent,
+	getSafePositiveMaxSteps,
+	prepareCodingAgentCall,
+} from "./agent";
 export { getProviderErrorMessage } from "./error-message";
 export { convertMcpToolManifest } from "./mcp-tools";
 export type { ResolvedModel } from "./models";

@@ -4,10 +4,10 @@ import { findSupportedChatModelSelection } from "@wincode/ai";
 import open from "open";
 import { createElement, useCallback, useMemo } from "react";
 import {
+	AgentsAdapter,
 	ConnectAdapter,
 	DialogAdapter,
 	ExitAdapter,
-	ModeAdapter,
 	ModelsAdapter,
 	NewAdapter,
 	SkillsAdapter,
@@ -64,7 +64,7 @@ export function useCommandExecutor(
 	const toast = useToast();
 	const connections = useConnections();
 	const mcp = useMcp();
-	const { mode, model, setMode, setModel, setVariant, variant } =
+	const { agent, model, setAgent, setModel, setVariant, variant } =
 		usePromptConfig();
 	const supportedModel = findSupportedChatModelSelection(model);
 	if (!supportedModel) {
@@ -199,13 +199,13 @@ export function useCommandExecutor(
 					currentVariant: variant,
 					setVariant,
 				}),
-				mode: new ModeAdapter({
-					open: ({ currentMode, onSelectMode }) =>
+				agents: new AgentsAdapter({
+					open: ({ currentAgent, onSelectAgent }) =>
 						dialog.open({
 							children: (
 								<AgentsDialogContent
-									currentMode={currentMode}
-									onSelectMode={onSelectMode}
+									currentAgent={currentAgent}
+									onSelectAgent={onSelectAgent}
 								/>
 							),
 							padding: { bottom: 1, left: 0, right: 0, top: 1 },
@@ -213,20 +213,20 @@ export function useCommandExecutor(
 							titleMargin: { left: 4, right: 4 },
 							width: CONNECTION_DIALOG_WIDTH,
 						}),
-					currentMode: mode,
-					setMode,
+					currentAgent: agent,
+					setAgent,
 				}),
 			}),
 		[
+			agent,
 			connections,
 			dialog,
 			mcp,
-			mode,
 			model,
 			onSelectSkill,
 			renderer,
 			router,
-			setMode,
+			setAgent,
 			setModel,
 			setVariant,
 			supportedModel,

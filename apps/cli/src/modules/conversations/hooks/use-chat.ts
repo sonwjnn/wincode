@@ -1,20 +1,22 @@
 import { useChat as useAiChat } from "@ai-sdk/react";
-import type {
-	ChatModelSelection,
-	CodingAgentUIMessage,
-	ModelVariant,
-	ModeType,
-	SkillContext,
-} from "@wincode/ai";
 import {
+	type AgentId,
+	type ChatModelSelection,
+	type CodingAgentUIMessage,
 	defaultChatModelSelection,
-	defaultMode,
 	getChatModelRoute,
+	getLegacyModeForAgent,
+	type ModelVariant,
+	type ModeType,
+	type ResolvedAgentRuntime,
+	readToolSchema,
+	type SkillContext,
 } from "@wincode/ai";
 import {
 	createUserMessage,
 	handleCodingAgentToolCall,
 } from "@wincode/ai/client";
+import type { WorkspacePolicy } from "@wincode/ai/workspace";
 import {
 	type ChatAddToolOutputFunction,
 	type ChatOnToolCallCallback,
@@ -30,14 +32,23 @@ import {
 	type McpContextValue,
 	useMcp,
 } from "@/modules/mcp";
+import {
+	canonicalizeReadResource,
+	type ToolPermission,
+	type ToolPermissionRuntime,
+	useToolPermission,
+} from "@/modules/permissions";
+import { createApprovalController } from "@/shared/providers/approval/approval-controller";
+import type { ToolApprovalRequest } from "@/shared/providers/approval/ui/tool-approval-dialog";
 import { getConversationStore } from "../storage/get-conversation-store";
 import { createSkillSnapshot } from "../utils";
 import { createRoutingChatTransport } from "./routing-chat-transport";
 
 type SubmitChatParams = {
-	mode: ModeType;
+	agent: AgentId;
 	model: ChatModelSelection;
 	variant?: ModelVariant;
+	resolvedAgent?: ResolvedAgentRuntime;
 	userText: string;
 	files?: FileUIPart[];
 	skill?: SkillContext;
@@ -51,6 +62,96 @@ export type ChatToolCallHandlerDeps = {
 	mcp: Pick<McpContextValue, "handleDynamicToolCall">;
 	mcpSnapshotRef: MutableRefObject<McpCatalogSnapshot | null>;
 	modeRef: MutableRefObject<ModeType>;
+	openApproval: ToolPermissionRuntime["openApproval"];
+	permissionRef: MutableRefObject<ToolPermission>;
+	resolvePermission?: ToolPermissionRuntime["resolvePermission"];
+	sandbox: WorkspacePolicy;
+};
+
+const getReadInputPath = (input: unknown): string | undefined => {
+	if (typeof input !== "object" || input === null || Array.isArray(input)) {
+		return;
+	}
+	const candidate = (input as { path?: unknown }).path;
+	return typeof candidate === "string" ? candidate : undefined;
+};
+
+const READ_TOOL_IDENTITY = [{ label: "tool", value: "read" }] as const;
+
+/**
+ * Enforces the Tool Permission policy for a static coding tool call. Only
+ * `read` is gated in this slice: the input path is canonicalized through the
+ * workspace sandbox, and a `deny` decision or a rejected/cancelled `ask`
+ * decision settles the call with an observable tool error without invoking
+ * the static tool runner. An allowed or approved call runs the runner.
+ */
+const gateStaticReadToolCall = async (
+	options: Parameters<ChatOnToolCallCallback<CodingAgentUIMessage>>[0],
+	addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>,
+	permission: ToolPermission,
+	openApproval: ToolPermissionRuntime["openApproval"],
+	sandbox: WorkspacePolicy
+): Promise<boolean> => {
+	const toolCall = options.toolCall;
+	const inputPath = getReadInputPath(toolCall.input);
+	if (toolCall.toolName !== "read" || inputPath === undefined) {
+		return true;
+	}
+
+	let resource: string;
+	try {
+		resource = await canonicalizeReadResource(inputPath, sandbox);
+	} catch {
+		Promise.resolve(
+			addToolOutput({
+				errorText: `Read path is outside the workspace: ${inputPath}`,
+				state: "output-error",
+				tool: toolCall.toolName,
+				toolCallId: toolCall.toolCallId,
+			})
+		).catch(() => undefined);
+		return false;
+	}
+	const decision = permission.decide("read", resource);
+
+	if (decision === "deny") {
+		// Policy errors are emitted without awaiting, mirroring the tool-call
+		// dispatch below: awaiting chat tool output here would deadlock the
+		// chat executor at input-available.
+		Promise.resolve(
+			addToolOutput({
+				errorText: `Read denied by policy: ${resource}`,
+				state: "output-error",
+				tool: toolCall.toolName,
+				toolCallId: toolCall.toolCallId,
+			})
+		).catch(() => undefined);
+		return false;
+	}
+
+	if (decision === "ask") {
+		const request: ToolApprovalRequest = {
+			description: readToolSchema.description,
+			identity: [...READ_TOOL_IDENTITY, { label: "resource", value: resource }],
+			input: toolCall.input,
+		};
+		const controller = createApprovalController<ToolApprovalRequest>();
+		openApproval(request, controller);
+		const approved = await controller.request(request);
+		if (!approved) {
+			Promise.resolve(
+				addToolOutput({
+					errorText: `Read was not approved: ${resource}`,
+					state: "output-error",
+					tool: toolCall.toolName,
+					toolCallId: toolCall.toolCallId,
+				})
+			).catch(() => undefined);
+			return false;
+		}
+	}
+
+	return true;
 };
 
 /**
@@ -66,6 +167,10 @@ export const createChatToolCallHandler =
 		mcp,
 		mcpSnapshotRef,
 		modeRef,
+		openApproval,
+		permissionRef,
+		resolvePermission,
+		sandbox,
 	}: ChatToolCallHandlerDeps): ChatOnToolCallCallback<CodingAgentUIMessage> =>
 	(options) => {
 		const addToolOutput = addToolOutputRef.current;
@@ -90,7 +195,22 @@ export const createChatToolCallHandler =
 		}
 
 		Promise.resolve(
-			runStaticToolCall(addToolOutput, modeRef.current)(options)
+			(async () => {
+				if (
+					!(await gateStaticReadToolCall(
+						options,
+						addToolOutput,
+						resolvePermission
+							? await resolvePermission()
+							: permissionRef.current,
+						openApproval,
+						sandbox
+					))
+				) {
+					return;
+				}
+				await runStaticToolCall(addToolOutput, modeRef.current)(options);
+			})()
 		).catch(() => undefined);
 	};
 
@@ -101,11 +221,11 @@ export const createChatMessageParts = (
 ) => [{ text: userText, type: "text" as const }, ...fileMentions, ...files];
 
 export const getContinuationChatParams = (
-	mode: ModeType,
+	agent: AgentId,
 	model: ChatModelSelection,
 	variant?: ModelVariant
-): { mode: ModeType; model: ChatModelSelection; variant?: ModelVariant } => ({
-	mode,
+): { agent: AgentId; model: ChatModelSelection; variant?: ModelVariant } => ({
+	agent,
 	model,
 	...(variant === undefined ? {} : { variant }),
 });
@@ -148,6 +268,7 @@ export const getOriginatingUserMessageId = (
 export const finalizeAssistantMessageMetadata = (
 	message: CodingAgentUIMessage,
 	context: {
+		agent: AgentId;
 		mode: ModeType;
 		model: ChatModelSelection;
 		variant?: ModelVariant;
@@ -160,6 +281,7 @@ export const finalizeAssistantMessageMetadata = (
 		const metadata = message.metadata ?? {};
 		const nextMetadata: CodingAgentUIMessage["metadata"] = {
 			...metadata,
+			agent: message.metadata?.agent ?? context.agent,
 			interrupted: context.interrupted,
 			mode: message.metadata?.mode ?? context.mode,
 			model: message.metadata?.model ?? context.model,
@@ -186,6 +308,8 @@ export function useChat(
 ) {
 	const connections = useConnections();
 	const mcp = useMcp();
+	const { openApproval, permissionRef, resolvePermission, sandbox } =
+		useToolPermission();
 	const addToolOutputRef =
 		useRef<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>(null);
 	const interruptedMessageIdsRef = useRef(new Set<string>());
@@ -193,7 +317,9 @@ export function useChat(
 	const setMessagesRef = useRef<
 		((messages: CodingAgentUIMessage[]) => void) | undefined
 	>(undefined);
-	const modeRef = useRef<ModeType>(defaultMode.value);
+	const agentRef = useRef<AgentId>("build");
+	const modeRef = useRef<ModeType>(getLegacyModeForAgent("build"));
+	const resolvedAgentRef = useRef<ResolvedAgentRuntime | undefined>(undefined);
 	const modelRef = useRef<ChatModelSelection>(defaultChatModelSelection);
 	const variantRef = useRef<ModelVariant | undefined>(undefined);
 	const mcpSnapshotRef = useRef<McpCatalogSnapshot | null>(null);
@@ -215,6 +341,7 @@ export function useChat(
 		return createRoutingChatTransport(
 			sessionId,
 			modeRef,
+			resolvedAgentRef,
 			modelRef,
 			variantRef,
 			connections,
@@ -243,6 +370,7 @@ export function useChat(
 		const nextMessages = [...messages];
 		nextMessages[assistantIndex] = {
 			...finalizeAssistantMessageMetadata(assistantMessage, {
+				agent: agentRef.current,
 				interrupted: interruptedMessageIdsRef.current.has(assistantMessage.id),
 				mode: modeRef.current,
 				model: modelRef.current,
@@ -257,6 +385,7 @@ export function useChat(
 	const persistMessages = (messages: CodingAgentUIMessage[]) => {
 		getConversationStore()
 			.persistMessages({
+				agent: agentRef.current,
 				messages,
 				mode: modeRef.current,
 				model: modelRef.current,
@@ -283,6 +412,10 @@ export function useChat(
 			mcp,
 			mcpSnapshotRef,
 			modeRef,
+			openApproval,
+			permissionRef,
+			resolvePermission,
+			sandbox,
 		}),
 		sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
 		transport,
@@ -313,6 +446,7 @@ export function useChat(
 		const nextMessages = [...chat.messages];
 		nextMessages[targetIndex] = {
 			...finalizeAssistantMessageMetadata(targetMessage, {
+				agent: agentRef.current,
 				interrupted: true,
 				mode: modeRef.current,
 				model: modelRef.current,
@@ -327,19 +461,23 @@ export function useChat(
 	};
 
 	const submit = async ({
-		mode,
+		agent,
 		model,
 		variant,
+		resolvedAgent,
 		userText,
 		files = [],
 		skill,
 	}: SubmitChatParams) => {
-		modeRef.current = mode;
+		agentRef.current = agent;
+		modeRef.current = getLegacyModeForAgent(agent);
+		resolvedAgentRef.current = resolvedAgent;
 		modelRef.current = model;
 		variantRef.current = variant;
 		requestStartedAtRef.current = Date.now();
 		const metadata = {
-			mode,
+			agent,
+			mode: modeRef.current,
 			model,
 			variant,
 			...(skill ? { skill: createSkillSnapshot(skill) } : {}),
@@ -365,11 +503,14 @@ export function useChat(
 		}
 	};
 	const continueLastMessage = (
-		mode: ModeType,
+		agent: AgentId,
 		model: ChatModelSelection,
-		variant?: ModelVariant
+		variant?: ModelVariant,
+		resolvedAgent?: ResolvedAgentRuntime
 	) => {
-		modeRef.current = mode;
+		agentRef.current = agent;
+		modeRef.current = getLegacyModeForAgent(agent);
+		resolvedAgentRef.current = resolvedAgent;
 		modelRef.current = model;
 		variantRef.current = variant;
 		requestStartedAtRef.current = Date.now();

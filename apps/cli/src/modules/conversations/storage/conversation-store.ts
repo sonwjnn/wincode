@@ -1,4 +1,5 @@
 import type {
+	AgentId,
 	ChatModelSelection,
 	CodingAgentUIMessage,
 	ModeType,
@@ -21,6 +22,7 @@ export type ConversationSession = {
 };
 
 export type CreateSessionInput = {
+	agent: AgentId;
 	message: CodingAgentUIMessage;
 	mode: ModeType;
 	model: ChatModelSelection;
@@ -32,6 +34,7 @@ export type UpdateSessionInput = {
 };
 
 export type PersistMessagesInput = {
+	agent: AgentId;
 	messages: CodingAgentUIMessage[];
 	mode: ModeType;
 	model: ChatModelSelection;

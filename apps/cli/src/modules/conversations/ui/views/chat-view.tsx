@@ -5,6 +5,10 @@ import {
 	normalizeModelVariant,
 } from "@wincode/ai";
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+	resolveExecutableAgentRuntime,
+	useAgentRegistry,
+} from "@/modules/agents";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -45,10 +49,11 @@ export function ChatView({
 	sessionTitle,
 	onHostedCompletion,
 }: ChatScreenProps) {
-	const { mode, model, setMode, setModel, setVariant, variant } =
+	const { agent, model, setAgent, setModel, setVariant, variant } =
 		usePromptConfig();
 	const { width: terminalWidth } = useTerminalDimensions();
 	const showSidebar = terminalWidth >= SIDEBAR_MIN_TERMINAL_WIDTH;
+	const registry = useAgentRegistry();
 	const { isTopLayer } = useKeyboardLayer();
 	const dialog = useDialog();
 	const { show } = useToast();
@@ -82,10 +87,10 @@ export function ChatView({
 			return;
 		}
 
-		setMode(config.mode);
+		setAgent(config.agent);
 		setModel(config.model);
 		setVariant(config.variant);
-	}, [initialMessages, setMode, setModel, setVariant]);
+	}, [initialMessages, setAgent, setModel, setVariant]);
 
 	useEffect(
 		() => () => {
@@ -189,9 +194,15 @@ export function ChatView({
 			return false;
 		}
 
-		submit({ files, mode, model, variant, userText, skill }).catch(
-			() => undefined
-		);
+		submit({
+			agent,
+			files,
+			model,
+			resolvedAgent: resolveExecutableAgentRuntime(registry, agent),
+			variant,
+			userText,
+			skill,
+		}).catch(() => undefined);
 		return true;
 	};
 
@@ -206,10 +217,14 @@ export function ChatView({
 		}
 
 		submittedPromptRef.current = submittedPrompt;
-		submit({ mode, model, variant, userText: submittedPrompt }).catch(
-			() => undefined
-		);
-	}, [initialPrompt, mode, model, submit, variant]);
+		submit({
+			agent,
+			model,
+			resolvedAgent: resolveExecutableAgentRuntime(registry, agent),
+			variant,
+			userText: submittedPrompt,
+		}).catch(() => undefined);
+	}, [agent, initialPrompt, model, registry, submit, variant]);
 
 	useEffect(() => {
 		const lastInitialMessage = initialMessages.at(-1);
@@ -242,17 +257,22 @@ export function ChatView({
 		);
 
 		continueLastMessage(
-			lastInitialMessage.metadata?.mode ?? mode,
+			lastInitialMessage.metadata?.agent ?? agent,
 			resolvedModel,
-			persistedVariant
+			persistedVariant,
+			resolveExecutableAgentRuntime(
+				registry,
+				lastInitialMessage.metadata?.agent ?? agent
+			)
 		).catch(() => undefined);
 	}, [
+		agent,
 		autoStart,
 		continueLastMessage,
 		initialMessages,
 		initialPrompt,
-		mode,
 		model,
+		registry,
 	]);
 
 	return (

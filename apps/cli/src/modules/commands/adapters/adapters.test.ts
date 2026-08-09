@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+	AgentsAdapter,
 	ConnectAdapter,
 	DialogAdapter,
 	ExitAdapter,
-	ModeAdapter,
 	ModelsAdapter,
 	NewAdapter,
 	SkillsAdapter,
@@ -159,20 +159,25 @@ describe("VariantsAdapter", () => {
 	});
 });
 
-describe("ModeAdapter", () => {
-	test("opens mode dialog with current mode and setMode", () => {
+describe("AgentsAdapter", () => {
+	test("opens agents dialog with current agent and setAgent", () => {
 		const calls: unknown[] = [];
-		const adapter = new ModeAdapter({
+		const adapter = new AgentsAdapter({
 			open: (props: unknown) => calls.push(props),
-			currentMode: "build",
-			setMode: (mode: string) => calls.push({ setMode: mode }),
+			currentAgent: "build",
+			setAgent: (agent: string) => calls.push({ setAgent: agent }),
 		});
 		adapter.execute({
 			value: "/agents",
 			name: "agents",
 			description: "",
-			kind: "mode",
+			kind: "agents",
 		});
-		expect(calls.length).toBeGreaterThan(0);
+		expect(calls).toEqual([
+			{
+				currentAgent: "build",
+				onSelectAgent: expect.any(Function),
+			},
+		]);
 	});
 });

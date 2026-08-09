@@ -9,6 +9,7 @@ import {
 } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import {
+	builtInAgents,
 	findSupportedChatModelSelection,
 	getSupportedModelVariants,
 	type SkillContext,
@@ -16,6 +17,7 @@ import {
 import { spawn } from "bun";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useCommandExecutor } from "@/app/commands/use-app-command-executor";
+import { useAgentRegistry } from "@/modules/agents";
 import { CommandMenu } from "@/modules/commands/ui/command-menu";
 import { expandCustomCommandTemplate } from "@/modules/custom-commands/expand";
 import { parseCustomCommandInvocation } from "@/modules/custom-commands/invocation";
@@ -195,8 +197,9 @@ export function ChatTextArea({
 	onSubmit,
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
 }: ChatTextAreaProps) {
-	const { mode, cycleMode, model } = usePromptConfig();
+	const { cycleAgent, mode, model } = usePromptConfig();
 	const supportedModel = findSupportedChatModelSelection(model);
+	const registry = useAgentRegistry();
 	const hideVariants =
 		supportedModel === null ||
 		getSupportedModelVariants({
@@ -303,7 +306,7 @@ export function ChatTextArea({
 		getFileMentionOptions,
 		hideVariants,
 		onSubmit: () => undefined,
-		onTab: cycleMode,
+		onTab: () => cycleAgent(registry?.selectableAgents ?? builtInAgents),
 		getPromptHistory,
 		recordPrompt: conversationStore.recordPrompt,
 	});

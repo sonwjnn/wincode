@@ -1,8 +1,8 @@
 import type {
+	AgentsAdapter,
 	ConnectAdapter,
 	DialogAdapter,
 	ExitAdapter,
-	ModeAdapter,
 	ModelsAdapter,
 	NewAdapter,
 	SkillsAdapter,
@@ -18,7 +18,7 @@ export type AdapterMap = {
 	models: ModelsAdapter;
 	skills: SkillsAdapter;
 	variants: VariantsAdapter;
-	mode: ModeAdapter;
+	agents: AgentsAdapter;
 };
 
 export function createCommandExecutor(adapters: AdapterMap) {
@@ -43,8 +43,8 @@ export function createCommandExecutor(adapters: AdapterMap) {
 			case "variants":
 				adapters.variants.execute(spec);
 				break;
-			case "mode":
-				adapters.mode.execute(spec);
+			case "agents":
+				adapters.agents.execute(spec);
 				break;
 			default: {
 				const _exhaustive: never = spec;

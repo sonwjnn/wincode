@@ -1,8 +1,15 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import type { handleCodingAgentToolCall } from "@wincode/ai/client";
+import { createWorkspaceSandbox } from "@wincode/ai/workspace";
 import type { ChatAddToolOutputFunction } from "ai";
 import type { McpCatalogSnapshot, McpContextValue } from "@/modules/mcp";
+import { createToolPermission } from "@/modules/permissions";
+import type { ApprovalController } from "@/shared/providers/approval/approval-controller";
+import type { ToolApprovalRequest } from "@/shared/providers/approval/ui/tool-approval-dialog";
 import { prepareSendChatRequestBody } from "../api/chat-request";
 import {
 	createChatMessageParts,
@@ -155,9 +162,9 @@ describe("useChat helpers", () => {
 		).toBe(3);
 	});
 
-	test("seeds continuation variant and retains assistant variant metadata", () => {
+	test("seeds continuation agent and retains assistant variant metadata", () => {
 		expect(getContinuationChatParams("plan", selection, "high")).toEqual({
-			mode: "plan",
+			agent: "plan",
 			model: selection,
 			variant: "high",
 		});
@@ -170,6 +177,7 @@ describe("useChat helpers", () => {
 					role: "assistant",
 				} as CodingAgentUIMessage,
 				{
+					agent: "plan",
 					interrupted: false,
 					mode: "plan",
 					model: selection,
@@ -177,7 +185,12 @@ describe("useChat helpers", () => {
 				}
 			)
 		).toMatchObject({
-			metadata: { mode: "plan", model: selection, variant: "high" },
+			metadata: {
+				agent: "plan",
+				mode: "plan",
+				model: selection,
+				variant: "high",
+			},
 		});
 	});
 
@@ -191,6 +204,7 @@ describe("useChat helpers", () => {
 					role: "assistant",
 				} as CodingAgentUIMessage,
 				{
+					agent: "plan",
 					interrupted: true,
 					mode: "plan",
 					model: selection,
@@ -198,7 +212,13 @@ describe("useChat helpers", () => {
 				}
 			)
 		).toMatchObject({
-			metadata: { interrupted: true, model: selection, variant: "low" },
+			metadata: {
+				agent: "plan",
+				interrupted: true,
+				mode: "plan",
+				model: selection,
+				variant: "low",
+			},
 		});
 	});
 
@@ -219,7 +239,10 @@ describe("useChat helpers", () => {
 });
 
 describe("createChatToolCallHandler", () => {
-	const addToolOutput = mock(() => undefined);
+	type ToolOutput = Parameters<
+		ChatAddToolOutputFunction<CodingAgentUIMessage>
+	>[0];
+	const addToolOutput = mock((_config: ToolOutput) => undefined);
 	const addToolOutputRef = {
 		current:
 			addToolOutput as ChatAddToolOutputFunction<CodingAgentUIMessage> | null,
@@ -231,8 +254,13 @@ describe("createChatToolCallHandler", () => {
 		handleDynamicToolCall,
 	} as Pick<McpContextValue, "handleDynamicToolCall">;
 	const staticToolCallHandler = mock(() => undefined);
+	const openApproval = mock(() => undefined);
+	const permissionRef = { current: createToolPermission() };
+	const sandbox = createWorkspaceSandbox(process.cwd());
 
-	const makeHandler = () =>
+	const makeHandler = (
+		overrides: Partial<Parameters<typeof createChatToolCallHandler>[0]> = {}
+	) =>
 		createChatToolCallHandler({
 			addToolOutputRef,
 			handleCodingAgentToolCall: (() =>
@@ -240,14 +268,37 @@ describe("createChatToolCallHandler", () => {
 			mcp,
 			mcpSnapshotRef,
 			modeRef,
+			openApproval,
+			permissionRef,
+			sandbox,
+			...overrides,
 		});
 
 	const call = (toolCall: Record<string, unknown>) =>
 		makeHandler()({ toolCall } as never);
 
+	const callWith = (
+		toolCall: Record<string, unknown>,
+		overrides: Partial<Parameters<typeof createChatToolCallHandler>[0]>
+	) => makeHandler(overrides)({ toolCall } as never);
+
+	// The handler never returns its tool-call promise (returning it would
+	// deadlock the chat executor), so tests flush the microtask queue.
+	const flush = () =>
+		new Promise<void>((resolve) => {
+			setTimeout(resolve, 20);
+		});
+
+	const settleCall = async (result: unknown) => {
+		await result;
+		await flush();
+	};
+
 	afterEach(() => {
 		handleDynamicToolCall.mockClear();
 		staticToolCallHandler.mockClear();
+		openApproval.mockClear();
+		addToolOutput.mockClear();
 	});
 
 	test("routes dynamic tool calls to handleDynamicToolCall with the active snapshot", () => {
@@ -269,12 +320,14 @@ describe("createChatToolCallHandler", () => {
 		expect(staticToolCallHandler).not.toHaveBeenCalled();
 	});
 
-	test("routes static tool calls to handleCodingAgentToolCall", () => {
-		call({
-			input: { path: "src/app.ts" },
-			toolCallId: "call-2",
-			toolName: "read",
-		});
+	test("routes static tool calls to handleCodingAgentToolCall", async () => {
+		await settleCall(
+			call({
+				input: { path: "src/app.ts" },
+				toolCallId: "call-2",
+				toolName: "read",
+			})
+		);
 
 		expect(staticToolCallHandler).toHaveBeenCalled();
 		expect(handleDynamicToolCall).not.toHaveBeenCalled();
@@ -319,5 +372,310 @@ describe("createChatToolCallHandler", () => {
 		expect(handleDynamicToolCall).not.toHaveBeenCalled();
 		expect(staticToolCallHandler).not.toHaveBeenCalled();
 		addToolOutputRef.current = addToolOutput;
+	});
+
+	test("denies a policy-denied read with an observable error and never runs the tool", async () => {
+		await settleCall(
+			callWith(
+				{
+					input: { path: ".env" },
+					toolCallId: "call-deny",
+					toolName: "read",
+				},
+				{
+					permissionRef: {
+						current: createToolPermission({ read: { ".env": "deny" } }),
+					},
+				}
+			)
+		);
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+		expect(addToolOutput).toHaveBeenCalledWith({
+			errorText: "Read denied by policy: .env",
+			state: "output-error",
+			tool: "read",
+			toolCallId: "call-deny",
+		});
+	});
+
+	test("waits for configured permission before evaluating the read", async () => {
+		await settleCall(
+			callWith(
+				{
+					input: { path: ".env" },
+					toolCallId: "call-loaded-deny",
+					toolName: "read",
+				},
+				{
+					permissionRef: { current: createToolPermission({ read: "allow" }) },
+					resolvePermission: async () => createToolPermission({ read: "deny" }),
+				}
+			)
+		);
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+		expect(addToolOutput).toHaveBeenCalledWith({
+			errorText: "Read denied by policy: .env",
+			state: "output-error",
+			tool: "read",
+			toolCallId: "call-loaded-deny",
+		});
+	});
+
+	test("asks before .env reads by default and runs after allow once", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "wincode-permission-"));
+		await writeFile(join(dir, ".env"), "SECRET=1");
+		const approvalRequests: ToolApprovalRequest[] = [];
+		const open = mock(
+			(
+				request: ToolApprovalRequest,
+				controller: ApprovalController<ToolApprovalRequest>
+			) => {
+				approvalRequests.push(request);
+				// The dialog settles after the gate registers the request.
+				queueMicrotask(() => controller.allow());
+			}
+		);
+
+		await settleCall(
+			callWith(
+				{
+					input: { path: ".env" },
+					toolCallId: "call-ask",
+					toolName: "read",
+				},
+				{
+					openApproval: open,
+					permissionRef: { current: createToolPermission() },
+					sandbox: createWorkspaceSandbox(dir),
+				}
+			)
+		);
+		expect(approvalRequests).toHaveLength(1);
+		expect(approvalRequests[0]).toMatchObject({
+			description: "Read a UTF-8 text file inside the workspace.",
+			identity: [
+				{ label: "tool", value: "read" },
+				{ label: "resource", value: ".env" },
+			],
+		});
+		expect(staticToolCallHandler).toHaveBeenCalledTimes(1);
+		expect(addToolOutput).not.toHaveBeenCalled();
+	});
+
+	test("rejects an ask read with an observable error and never runs the tool", async () => {
+		const open = mock(
+			(
+				_request: ToolApprovalRequest,
+				controller: ApprovalController<ToolApprovalRequest>
+			) => {
+				queueMicrotask(() => controller.deny());
+			}
+		);
+
+		await settleCall(
+			callWith(
+				{
+					input: { path: ".env" },
+					toolCallId: "call-reject",
+					toolName: "read",
+				},
+				{
+					openApproval: open,
+					permissionRef: { current: createToolPermission() },
+					sandbox: createWorkspaceSandbox(process.cwd()),
+				}
+			)
+		);
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+		expect(addToolOutput).toHaveBeenCalledWith({
+			errorText: "Read was not approved: .env",
+			state: "output-error",
+			tool: "read",
+			toolCallId: "call-reject",
+		});
+	});
+
+	test("cancels an ask read with an observable error and never runs the tool", async () => {
+		const open = mock(
+			(
+				_request: ToolApprovalRequest,
+				controller: ApprovalController<ToolApprovalRequest>
+			) => {
+				queueMicrotask(() => controller.cancel());
+			}
+		);
+
+		await settleCall(
+			callWith(
+				{
+					input: { path: ".env" },
+					toolCallId: "call-cancel",
+					toolName: "read",
+				},
+				{
+					openApproval: open,
+					permissionRef: { current: createToolPermission() },
+					sandbox: createWorkspaceSandbox(process.cwd()),
+				}
+			)
+		);
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+		expect(addToolOutput).toHaveBeenCalledWith({
+			errorText: "Read was not approved: .env",
+			state: "output-error",
+			tool: "read",
+			toolCallId: "call-cancel",
+		});
+	});
+
+	test("allows ordinary reads by default without an approval request", async () => {
+		await settleCall(
+			callWith(
+				{
+					input: { path: "package.json" },
+					toolCallId: "call-allow",
+					toolName: "read",
+				},
+				{
+					permissionRef: { current: createToolPermission() },
+					sandbox: createWorkspaceSandbox(process.cwd()),
+				}
+			)
+		);
+		expect(openApproval).not.toHaveBeenCalled();
+		expect(staticToolCallHandler).toHaveBeenCalledTimes(1);
+		expect(addToolOutput).not.toHaveBeenCalled();
+	});
+
+	test("allows .env.example reads by default", async () => {
+		await settleCall(
+			callWith(
+				{
+					input: { path: ".env.example" },
+					toolCallId: "call-example",
+					toolName: "read",
+				},
+				{
+					permissionRef: { current: createToolPermission() },
+					sandbox: createWorkspaceSandbox(process.cwd()),
+				}
+			)
+		);
+		expect(openApproval).not.toHaveBeenCalled();
+		expect(staticToolCallHandler).toHaveBeenCalledTimes(1);
+		expect(addToolOutput).not.toHaveBeenCalled();
+	});
+
+	test("canonicalizes the read resource through the sandbox before matching", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "wincode-canonical-"));
+		await writeFile(join(dir, ".env"), "SECRET=1");
+		await symlink(join(dir, ".env"), join(dir, "link.env"));
+		const open = mock(
+			(
+				_request: ToolApprovalRequest,
+				controller: ApprovalController<ToolApprovalRequest>
+			) => {
+				queueMicrotask(() => controller.deny());
+			}
+		);
+
+		await settleCall(
+			callWith(
+				{
+					input: { path: "link.env" },
+					toolCallId: "call-canonical",
+					toolName: "read",
+				},
+				{
+					openApproval: open,
+					permissionRef: { current: createToolPermission() },
+					sandbox: createWorkspaceSandbox(dir),
+				}
+			)
+		);
+		expect(open).toHaveBeenCalled();
+		expect(addToolOutput).toHaveBeenCalledWith({
+			errorText: "Read was not approved: .env",
+			state: "output-error",
+			tool: "read",
+			toolCallId: "call-canonical",
+		});
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+	});
+
+	test("rejects paths outside the workspace before running the tool", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "wincode-outside-"));
+		await settleCall(
+			callWith(
+				{
+					input: { path: "../outside.txt" },
+					toolCallId: "call-outside",
+					toolName: "read",
+				},
+				{
+					permissionRef: { current: createToolPermission({ read: "allow" }) },
+					sandbox: createWorkspaceSandbox(dir),
+				}
+			)
+		);
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+		expect(addToolOutput).toHaveBeenCalledWith({
+			errorText: "Read path is outside the workspace: ../outside.txt",
+			state: "output-error",
+			tool: "read",
+			toolCallId: "call-outside",
+		});
+	});
+
+	test("executes the real static tool runner only when the policy allows", async () => {
+		const handler = createChatToolCallHandler({
+			addToolOutputRef,
+			mcp,
+			mcpSnapshotRef,
+			modeRef,
+			openApproval: mock(() => undefined),
+			permissionRef: {
+				current: createToolPermission({ read: { ".env": "deny" } }),
+			},
+			sandbox: createWorkspaceSandbox(),
+		});
+
+		await settleCall(
+			handler({
+				toolCall: {
+					input: { path: "apps/cli/.env" },
+					toolCallId: "call-real-deny",
+					toolName: "read",
+				},
+			} as never)
+		);
+
+		expect(addToolOutput).toHaveBeenCalledWith({
+			errorText: "Read denied by policy: apps/cli/.env",
+			state: "output-error",
+			tool: "read",
+			toolCallId: "call-real-deny",
+		});
+
+		await settleCall(
+			handler({
+				toolCall: {
+					input: { path: "package.json" },
+					toolCallId: "call-real-allow",
+					toolName: "read",
+				},
+			} as never)
+		);
+
+		expect(addToolOutput.mock.calls.map(([output]) => output)).toContainEqual(
+			expect.objectContaining({
+				output: expect.objectContaining({
+					content: expect.stringContaining("name"),
+					path: "package.json",
+				}),
+				tool: "read",
+				toolCallId: "call-real-allow",
+			})
+		);
 	});
 });

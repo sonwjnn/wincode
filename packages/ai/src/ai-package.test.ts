@@ -18,6 +18,7 @@ import {
 	defaultMode,
 	expandFileMentionPartsForModel,
 	findSupportedChatModel,
+	getLegacyModeForAgent,
 	getNextCodingModeName,
 	getSystemInstructions,
 	getSystemInstructionsForAgent,
@@ -320,6 +321,47 @@ describe("@wincode/ai shared entry", () => {
 		).toBe(false);
 	});
 
+	test("accepts canonical agent identity in coding message metadata", () => {
+		const parsed = codingMessageMetadataSchema.safeParse({
+			agent: "build",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+		expect(parsed.success).toBe(true);
+		expect(parsed.data?.agent).toBe("build");
+
+		expect(
+			codingMessageMetadataSchema.safeParse({
+				agent: "Build",
+				model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+			}).success
+		).toBe(false);
+	});
+
+	test("normalizes legacy mode into canonical agent identity on read", () => {
+		const parsed = codingMessageMetadataSchema.safeParse({
+			mode: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+		expect(parsed.success).toBe(true);
+		expect(parsed.data).toMatchObject({
+			agent: "plan",
+			mode: "plan",
+		});
+	});
+
+	test("keeps canonical agent identity when both agent and legacy mode are present", () => {
+		const parsed = codingMessageMetadataSchema.safeParse({
+			agent: "build",
+			mode: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+		expect(parsed.success).toBe(true);
+		expect(parsed.data).toMatchObject({
+			agent: "build",
+			mode: "plan",
+		});
+	});
+
 	test("accepts usage in coding message metadata", () => {
 		expect(
 			codingMessageMetadataSchema.safeParse({
@@ -435,6 +477,12 @@ describe("@wincode/ai shared entry", () => {
 	test("parses persisted coding modes safely", () => {
 		expect(parseMode("plan")).toBe("plan");
 		expect(parseMode("unknown")).toBe(defaultMode.value);
+	});
+
+	test("maps canonical Agent IDs to legacy coding modes", () => {
+		expect(getLegacyModeForAgent("build")).toBe("build");
+		expect(getLegacyModeForAgent("plan")).toBe("plan");
+		expect(getLegacyModeForAgent("code-reviewer")).toBe(defaultMode.value);
 	});
 
 	test("composes mode-specific system instructions", () => {

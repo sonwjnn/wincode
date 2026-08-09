@@ -3,6 +3,7 @@ import type {
 	CodingAgentUIMessage,
 	ModelVariant,
 	ModeType,
+	ResolvedAgentRuntime,
 } from "@wincode/ai";
 import { getChatModelRoute, normalizeChatModelSelection } from "@wincode/ai";
 import { type ChatTransport, DefaultChatTransport } from "ai";
@@ -25,6 +26,7 @@ const getBearerToken = (
 export const createRoutingChatTransport = (
 	sessionId: string,
 	modeRef: MutableRefObject<ModeType>,
+	resolvedAgentRef: MutableRefObject<ResolvedAgentRuntime | undefined>,
 	modelRef: MutableRefObject<ChatModelSelection>,
 	variantRef: MutableRefObject<ModelVariant | undefined>,
 	connections: Connections,
@@ -41,6 +43,7 @@ export const createRoutingChatTransport = (
 			return createLocalChatTransport(
 				sessionId,
 				modeRef,
+				resolvedAgentRef,
 				{ current: selection },
 				{ current: variant },
 				connections,

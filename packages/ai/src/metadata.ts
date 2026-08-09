@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { agentIdSchema } from "./agents";
 import {
 	chatModelSelectionSchema,
 	findSupportedChatModelSelection,
@@ -50,6 +51,7 @@ export const codingMessageMetadataSchema = z
 	.object({
 		interrupted: z.boolean().optional(),
 		skill: codingMessageSkillSchema.optional(),
+		agent: agentIdSchema.optional(),
 		mode: codingModeNameSchema.optional(),
 		model: codingMessageModelSchema.optional(),
 		responseTimeMs: z.number().int().nonnegative().optional(),
@@ -78,6 +80,11 @@ export const codingMessageMetadataSchema = z
 				message: "Variant is not supported for selected model",
 			});
 		}
-	});
+	})
+	.transform((metadata) =>
+		metadata.agent === undefined && metadata.mode !== undefined
+			? { ...metadata, agent: metadata.mode }
+			: metadata
+	);
 
 export type CodingMessageMetadata = z.infer<typeof codingMessageMetadataSchema>;

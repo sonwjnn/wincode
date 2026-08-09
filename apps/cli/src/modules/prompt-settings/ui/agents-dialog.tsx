@@ -1,5 +1,6 @@
-import { codingModes, type ModeType } from "@wincode/ai";
+import { type AgentDefinition, type AgentId, builtInAgents } from "@wincode/ai";
 import { useCallback } from "react";
+import { useAgentRegistry } from "@/modules/agents";
 import {
 	useDialog,
 	useDialogEscape,
@@ -10,24 +11,27 @@ import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper"
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 
 type AgentsDialogContentProps = {
-	currentMode?: ModeType;
-	onSelectMode: (mode: ModeType) => void;
+	currentAgent?: AgentId;
+	onSelectAgent: (agent: AgentId) => void;
 };
 
 export const AgentsDialogContent = ({
-	currentMode,
-	onSelectMode,
+	currentAgent,
+	onSelectAgent,
 }: AgentsDialogContentProps) => {
 	const dialog = useDialog();
 	const { colors } = useTheme();
+	const registry = useAgentRegistry();
+	const agents: readonly AgentDefinition[] =
+		registry?.selectableAgents ?? builtInAgents;
 	const selectedTextColor = getContrastingTextColor(colors.selection);
 
 	const handleSelect = useCallback(
-		(nextMode: (typeof codingModes)[number]) => {
-			onSelectMode(nextMode.value);
+		(agent: AgentDefinition) => {
+			onSelectAgent(agent.id);
 			dialog.close();
 		},
-		[onSelectMode, dialog]
+		[onSelectAgent, dialog]
 	);
 
 	useDialogEscape();
@@ -40,9 +44,9 @@ export const AgentsDialogContent = ({
 					.toLowerCase()
 					.includes(query.toLowerCase())
 			}
-			getKey={(item) => item.value}
-			isItemActive={(item) => item.value === currentMode}
-			items={codingModes}
+			getKey={(item) => item.id}
+			isItemActive={(item) => item.id === currentAgent}
+			items={agents}
 			onSelect={handleSelect}
 			placeholder="Search agents"
 			renderItem={(item, isSelected, isActive) => (

@@ -14,11 +14,15 @@ describe("updatePromptConfigModel", () => {
 	test("keeps variant when model provider and id stay same", () => {
 		expect(
 			updatePromptConfigModel(
-				{ mode: "build", model: model("gpt-5.5", "openai"), variant: "high" },
+				{
+					agent: "code-reviewer",
+					model: model("gpt-5.5", "openai"),
+					variant: "high",
+				},
 				model("gpt-5.5", "openai")
 			)
 		).toEqual({
-			mode: "build",
+			agent: "code-reviewer",
 			model: model("gpt-5.5", "openai"),
 			variant: "high",
 		});
@@ -27,11 +31,15 @@ describe("updatePromptConfigModel", () => {
 	test("resets variant when model provider changes", () => {
 		expect(
 			updatePromptConfigModel(
-				{ mode: "build", model: model("gpt-5.5", "openai"), variant: "high" },
+				{
+					agent: "code-reviewer",
+					model: model("gpt-5.5", "openai"),
+					variant: "high",
+				},
 				model("claude-sonnet-5", "anthropic")
 			)
 		).toEqual({
-			mode: "build",
+			agent: "code-reviewer",
 			model: model("claude-sonnet-5", "anthropic"),
 			variant: undefined,
 		});
@@ -40,11 +48,15 @@ describe("updatePromptConfigModel", () => {
 	test("resets variant when model id changes within same provider", () => {
 		expect(
 			updatePromptConfigModel(
-				{ mode: "build", model: model("gpt-5.5", "openai"), variant: "high" },
+				{
+					agent: "code-reviewer",
+					model: model("gpt-5.5", "openai"),
+					variant: "high",
+				},
 				model("gpt-5.6", "openai")
 			)
 		).toEqual({
-			mode: "build",
+			agent: "code-reviewer",
 			model: model("gpt-5.6", "openai"),
 			variant: undefined,
 		});

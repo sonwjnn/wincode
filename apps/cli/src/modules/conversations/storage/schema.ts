@@ -1,4 +1,4 @@
-import type { CodingAgentUIMessage, ModeType } from "@wincode/ai";
+import type { AgentId, CodingAgentUIMessage, ModeType } from "@wincode/ai";
 import { sql } from "drizzle-orm";
 import {
 	index,
@@ -52,6 +52,7 @@ export const conversationMessage = sqliteTable(
 		uiMessageId: text("ui_message_id").notNull(),
 		role: text("role").$type<CodingAgentUIMessage["role"]>().notNull(),
 		mode: text("mode").$type<ModeType>().notNull(),
+		agent: text("agent").$type<AgentId>(),
 		partsJson: text("parts_json", { mode: "json" })
 			.$type<CodingAgentUIMessage["parts"]>()
 			.notNull(),

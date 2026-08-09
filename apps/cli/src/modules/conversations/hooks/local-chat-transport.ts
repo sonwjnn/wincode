@@ -6,6 +6,7 @@ import {
 	getChatModelRoute,
 	type ModelVariant,
 	type ModeType,
+	type ResolvedAgentRuntime,
 	sanitizeInterruptedMessagesForModel,
 } from "@wincode/ai";
 import {
@@ -26,6 +27,7 @@ type CreateAgentUIStream = typeof createAgentUIStream;
 export const createLocalChatTransport = (
 	_sessionId: string,
 	modeRef: MutableRefObject<ModeType>,
+	resolvedAgentRef: MutableRefObject<ResolvedAgentRuntime | undefined>,
 	modelRef: MutableRefObject<ChatModelSelection>,
 	variantRef: MutableRefObject<ModelVariant | undefined>,
 	connections: Connections,
@@ -64,6 +66,9 @@ export const createLocalChatTransport = (
 			options: {
 				mode: modeRef.current,
 				model: resolvedModel.modelId,
+				...(resolvedAgentRef.current
+					? { resolvedAgent: resolvedAgentRef.current }
+					: {}),
 				...(snapshot?.manifest.length ? { mcpTools: snapshot.manifest } : {}),
 			},
 			onError: getProviderErrorMessage,

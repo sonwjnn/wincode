@@ -1,5 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import { useRouter } from "@tanstack/react-router";
+import { getLegacyModeForAgent } from "@wincode/ai";
 import { createUserMessage } from "@wincode/ai/client";
 import { useEffect, useState } from "react";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
@@ -21,7 +22,7 @@ export function HomeView() {
 	const router = useRouter();
 	const [_error, setError] = useState<string | null>(null);
 	const [isCreatingSession, setIsCreatingSession] = useState(false);
-	const { mode, model, setMode, setModel, setVariant, variant } =
+	const { agent, model, setAgent, setModel, setVariant, variant } =
 		usePromptConfig();
 	const { colors } = useTheme();
 
@@ -40,7 +41,7 @@ export function HomeView() {
 				return;
 			}
 
-			setMode(config.mode);
+			setAgent(config.agent);
 			setModel(config.model);
 			setVariant(config.variant);
 		};
@@ -50,7 +51,7 @@ export function HomeView() {
 		return () => {
 			ignore = true;
 		};
-	}, [setMode, setModel, setVariant]);
+	}, [setAgent, setModel, setVariant]);
 
 	const handleSubmit = async ({ files, skill, text }: ChatPromptSubmission) => {
 		if (isCreatingSession) {
@@ -83,10 +84,12 @@ export function HomeView() {
 	) => {
 		const fileMentions = await resolveFileMentionParts(input);
 		const { id } = await getConversationStore().createSession({
+			agent,
 			message: createUserMessage(
 				input,
 				{
-					mode,
+					agent,
+					mode: getLegacyModeForAgent(agent),
 					model,
 					variant,
 					...(skill ? { skill: createSkillSnapshot(skill) } : {}),
@@ -94,13 +97,13 @@ export function HomeView() {
 				fileMentions,
 				files
 			),
-			mode,
+			mode: getLegacyModeForAgent(agent),
 			model,
 		});
 
 		await router.navigate({
 			params: { id },
-			state: { autoStart: true, mode },
+			state: { agent, autoStart: true },
 			to: "/sessions/$id",
 		});
 	};

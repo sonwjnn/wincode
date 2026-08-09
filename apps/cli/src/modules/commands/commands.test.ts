@@ -23,10 +23,10 @@ describe("CommandSpec registry", () => {
 		expect(cmd?.kind).toBe("new");
 	});
 
-	test("/agents is kind: 'mode'", () => {
+	test("/agents is kind: 'agents'", () => {
 		const cmd = COMMANDS.find((c) => c.value === "/agents");
 		expect(cmd).toBeDefined();
-		expect(cmd?.kind).toBe("mode");
+		expect(cmd?.kind).toBe("agents");
 	});
 
 	test("/models is kind: 'models'", () => {

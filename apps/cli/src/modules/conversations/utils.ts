@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import type { Extmark } from "@opentui/core";
 import {
+	type AgentId,
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
 	codingMessageSkillSchema,
+	getLegacyModeForAgent,
 	type ModelVariant,
 	type ModeType,
 	normalizeChatModelSelection,
@@ -24,11 +26,21 @@ export const shouldAutoStartAssistantTurn = (
 export const getLatestChatConfig = (
 	messages: CodingAgentUIMessage[]
 ):
-	| { mode: ModeType; model: ChatModelSelection; variant?: ModelVariant }
+	| {
+			agent: AgentId;
+			mode: ModeType;
+			model: ChatModelSelection;
+			variant?: ModelVariant;
+	  }
 	| undefined => {
 	for (let index = messages.length - 1; index >= 0; index -= 1) {
 		const metadata = messages[index]?.metadata;
-		if (!(metadata?.mode && metadata.model)) {
+		if (!metadata?.model) {
+			continue;
+		}
+
+		const agent = metadata.agent ?? metadata.mode;
+		if (!agent) {
 			continue;
 		}
 
@@ -37,7 +49,12 @@ export const getLatestChatConfig = (
 			continue;
 		}
 
-		return { mode: metadata.mode, model, variant: metadata.variant };
+		return {
+			agent,
+			mode: metadata.mode ?? getLegacyModeForAgent(agent),
+			model,
+			variant: metadata.variant,
+		};
 	}
 
 	return;

@@ -70,6 +70,7 @@ describe("getLatestChatConfig", () => {
 		] satisfies CodingAgentUIMessage[];
 
 		expect(getLatestChatConfig(messages)).toEqual({
+			agent: "build",
 			mode: "build",
 			model: { modelId: "gpt-5.5", providerId: "openai" },
 			variant: "high",
@@ -87,6 +88,7 @@ describe("getLatestChatConfig", () => {
 			{
 				id: "assistant-2",
 				metadata: {
+					agent: "code-reviewer",
 					mode: "build",
 					model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
 					variant: "low",
@@ -97,6 +99,7 @@ describe("getLatestChatConfig", () => {
 		] as unknown as CodingAgentUIMessage[];
 
 		expect(getLatestChatConfig(messages)).toEqual({
+			agent: "code-reviewer",
 			mode: "build",
 			model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
 			variant: "low",

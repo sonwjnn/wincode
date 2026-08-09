@@ -140,6 +140,7 @@ describe("drizzle conversation store", () => {
 	test("creates a session and derives title from first user text", async () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "Fix the login bug"),
+			agent: "plan",
 			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
@@ -153,6 +154,7 @@ describe("drizzle conversation store", () => {
 	test("lists created sessions", async () => {
 		await store.createSession({
 			message: userMessage("m1", "First"),
+			agent: "plan",
 			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
@@ -172,11 +174,13 @@ describe("drizzle conversation store", () => {
 
 		await alphaStore.createSession({
 			message: userMessage("m1", "Alpha"),
+			agent: "plan",
 			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 		await betaStore.createSession({
 			message: userMessage("m2", "Beta"),
+			agent: "plan",
 			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
@@ -193,12 +197,14 @@ describe("drizzle conversation store", () => {
 	test("persists and reloads messages in order", async () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "hello"),
+			agent: "plan",
 			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 
 		await store.persistMessages({
 			messages: [userMessage("m1", "hello"), userMessage("m2", "world")],
+			agent: "plan",
 			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 			sessionId: id,
@@ -211,6 +217,7 @@ describe("drizzle conversation store", () => {
 	test("persists and reloads standard image file UI parts", async () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "image"),
+			agent: "plan",
 			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
@@ -228,6 +235,7 @@ describe("drizzle conversation store", () => {
 		};
 		await store.persistMessages({
 			messages: [userMessage("m1", "image"), imageMessage],
+			agent: "plan",
 			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 			sessionId: id,
@@ -239,6 +247,7 @@ describe("drizzle conversation store", () => {
 	test("preserves assistant response metadata", async () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "hello"),
+			agent: "plan",
 			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
@@ -250,6 +259,7 @@ describe("drizzle conversation store", () => {
 					id: "m2",
 					metadata: {
 						interrupted: true,
+						agent: "plan",
 						mode: "plan",
 						model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 						responseTimeMs: 431,
@@ -258,6 +268,7 @@ describe("drizzle conversation store", () => {
 					role: "assistant",
 				},
 			],
+			agent: "plan",
 			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 			sessionId: id,
@@ -272,6 +283,7 @@ describe("drizzle conversation store", () => {
 	test("rejects malformed persisted metadata on load", async () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "hello"),
+			agent: "plan",
 			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
@@ -295,12 +307,14 @@ describe("drizzle conversation store", () => {
 	test("upserts messages idempotently by ui message id", async () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "hello"),
+			agent: "plan",
 			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 
 		await store.persistMessages({
 			messages: [userMessage("m1", "hello edited")],
+			agent: "plan",
 			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 			sessionId: id,
@@ -313,6 +327,7 @@ describe("drizzle conversation store", () => {
 	test("updates title and pinned state", async () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "hello"),
+			agent: "plan",
 			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
@@ -327,6 +342,7 @@ describe("drizzle conversation store", () => {
 	test("deletes a session and cascades messages", async () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "hello"),
+			agent: "plan",
 			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
@@ -403,5 +419,148 @@ describe("local migrations", () => {
 		const localStore = createDrizzleConversationStore(migratedDb);
 		expect(sqlite).toBeDefined();
 		expect(localStore).toBeDefined();
+	});
+
+	test("migrates the prior schema, backfills agent identity, and round trips", async () => {
+		const sqlite = new Database(":memory:");
+		sqlite.exec("PRAGMA foreign_keys = ON;");
+
+		for (const migrationName of [
+			"0000_ancient_harrier.sql",
+			"0001_high_dark_phoenix.sql",
+			"0002_drop-prompt-history-unique.sql",
+			"0003_sad_forge.sql",
+		]) {
+			const migration = await readFile(
+				join(localMigrationsFolder, migrationName),
+				"utf8"
+			);
+			sqlite.exec(migration.replaceAll("--> statement-breakpoint", "\n"));
+		}
+
+		const priorSchemaDb = drizzle(sqlite, {
+			schema: localConversationSchema,
+		});
+		const legacyStore = createDrizzleConversationStore(priorSchemaDb, {
+			workspaceRoot: "/tmp/legacy-workspace",
+		});
+		const workspace = sqlite
+			.query(
+				"SELECT id FROM conversation_workspace WHERE root_path = '/tmp/legacy-workspace'"
+			)
+			.get() as { id: string };
+
+		sqlite.exec(`
+			INSERT INTO conversation_session (id, workspace_id, title, pinned, created_at, updated_at, last_message_at)
+			VALUES ('session-legacy', '${workspace.id}', 'Legacy Plan', 0, 1735772645000, 1735772745000, 1735772745000);
+			INSERT INTO conversation_message (id, session_id, ui_message_id, role, mode, parts_json, metadata_json, position, created_at, updated_at)
+			VALUES
+				('m-legacy-1', 'session-legacy', 'm1', 'user', 'plan', '[{"type":"text","text":"Plan the work"}]', '{"mode":"plan","model":{"providerId":"wincode","modelId":"gemini-2.5-flash"}}', 0, 1735772645000, 1735772645000),
+				('m-legacy-2', 'session-legacy', 'm2', 'user', 'build', '[{"type":"text","text":"Build it"}]', '{"mode":"build","model":{"providerId":"wincode","modelId":"gemini-2.5-flash"}}', 1, 1735772700000, 1735772700000);
+			INSERT INTO prompt_history (prompt, entry_json, created_at)
+			VALUES ('legacy prompt', '{"files":[],"text":"legacy prompt"}', 1735772645000);
+		`);
+
+		const agentMigration = await readFile(
+			join(localMigrationsFolder, "0004_fast_the_phantom.sql"),
+			"utf8"
+		);
+		sqlite.exec(agentMigration.replaceAll("--> statement-breakpoint", "\n"));
+
+		const backfilled = sqlite
+			.query(
+				"SELECT ui_message_id, mode, agent FROM conversation_message ORDER BY position"
+			)
+			.all() as { agent: string | null; mode: string; ui_message_id: string }[];
+		expect(backfilled).toEqual([
+			{ agent: "plan", mode: "plan", ui_message_id: "m1" },
+			{ agent: "build", mode: "build", ui_message_id: "m2" },
+		]);
+
+		const session = sqlite
+			.query(
+				"SELECT title, pinned, created_at, updated_at, last_message_at FROM conversation_session WHERE id = 'session-legacy'"
+			)
+			.get() as Record<string, unknown>;
+		expect(session).toEqual({
+			created_at: 1_735_772_645_000,
+			last_message_at: 1_735_772_745_000,
+			pinned: 0,
+			title: "Legacy Plan",
+			updated_at: 1_735_772_745_000,
+		});
+		expect(sqlite.query("SELECT prompt FROM prompt_history").all()).toEqual([
+			{ prompt: "legacy prompt" },
+		]);
+
+		const restoredMessages = await legacyStore.getMessages("session-legacy");
+		expect(
+			restoredMessages.map((message) => ({
+				agent: message.metadata?.agent,
+				id: message.id,
+				mode: message.metadata?.mode,
+				parts: message.parts,
+				role: message.role,
+			}))
+		).toEqual([
+			{
+				agent: "plan",
+				id: "m1",
+				mode: "plan",
+				parts: [{ text: "Plan the work", type: "text" }],
+				role: "user",
+			},
+			{
+				agent: "build",
+				id: "m2",
+				mode: "build",
+				parts: [{ text: "Build it", type: "text" }],
+				role: "user",
+			},
+		]);
+
+		await legacyStore.persistMessages({
+			agent: "build",
+			messages: [
+				...restoredMessages,
+				userMessage("m3", "Plan the round trip"),
+				{
+					id: "m3b",
+					parts: [{ text: "Build the round trip", type: "text" }],
+					role: "user",
+				},
+			],
+			mode: "build",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+			sessionId: "session-legacy",
+		});
+
+		const persistedAgents = sqlite
+			.query(
+				"SELECT ui_message_id, agent FROM conversation_message ORDER BY position"
+			)
+			.all() as { agent: string | null; ui_message_id: string }[];
+		expect(persistedAgents).toEqual([
+			{ agent: "plan", ui_message_id: "m1" },
+			{ agent: "build", ui_message_id: "m2" },
+			{ agent: "plan", ui_message_id: "m3" },
+			{ agent: "build", ui_message_id: "m3b" },
+		]);
+
+		const roundTripped = await legacyStore.getMessages("session-legacy");
+		expect(
+			roundTripped.map((message) => ({
+				agent: message.metadata?.agent,
+				id: message.id,
+				mode: message.metadata?.mode,
+			}))
+		).toEqual([
+			{ agent: "plan", id: "m1", mode: "plan" },
+			{ agent: "build", id: "m2", mode: "build" },
+			{ agent: "plan", id: "m3", mode: "plan" },
+			{ agent: "build", id: "m3b", mode: "build" },
+		]);
+
+		sqlite.close();
 	});
 });

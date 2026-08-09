@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { ChatModelSelection } from "@wincode/ai";
+import type { ChatModelSelection, ResolvedAgentRuntime } from "@wincode/ai";
 // Capture the real namespace before registering the module mock so the mock can
 // spread it and stay complete. bun test runs every file in one process, so a
 // partial mock.module("@wincode/ai/server") would otherwise break sibling test
@@ -39,6 +39,9 @@ mock.module("@wincode/ai/server", () => ({
 const { createLocalChatTransport } = await import("./local-chat-transport");
 
 const modeRef = { current: "build" as const };
+const resolvedAgentRef = {
+	current: undefined as ResolvedAgentRuntime | undefined,
+};
 const modelRef = {
 	current: { modelId: "gpt-5.4-mini", providerId: "wincode" } as const,
 };
@@ -118,6 +121,7 @@ describe("chat transport", () => {
 			const transport = createRoutingChatTransport(
 				"session-1",
 				modeRef,
+				resolvedAgentRef,
 				modelRef,
 				variantRef,
 				{
@@ -182,6 +186,7 @@ describe("chat transport", () => {
 			const transport = createRoutingChatTransport(
 				"session-1",
 				modeRef,
+				resolvedAgentRef,
 				modelRef,
 				variantRef,
 				{
@@ -251,6 +256,7 @@ describe("chat transport", () => {
 			const transport = createRoutingChatTransport(
 				"session-1",
 				modeRef,
+				resolvedAgentRef,
 				modelRef,
 				variantRef,
 				{
@@ -289,6 +295,7 @@ describe("chat transport", () => {
 			createLocalChatTransport: (
 				_sessionId: string,
 				_modeRef: unknown,
+				_resolvedAgentRef: unknown,
 				_modelRef: unknown,
 				_variantRef: unknown,
 				_connections: unknown,
@@ -310,6 +317,7 @@ describe("chat transport", () => {
 		const transport = createRoutingChatTransport(
 			"session-1",
 			modeRef,
+			resolvedAgentRef,
 			{ current: { modelId: "gemini-2.5-flash", providerId: "google" } },
 			{ current: undefined },
 			{
@@ -338,6 +346,7 @@ describe("chat transport", () => {
 		const transport = createLocalChatTransport(
 			"session-1",
 			modeRef,
+			resolvedAgentRef,
 			{ current: { modelId: "gemini-2.5-flash", providerId: "google" } },
 			{ current: undefined },
 			{
@@ -365,12 +374,60 @@ describe("chat transport", () => {
 		).toBeUndefined();
 	});
 
+	test("local transport passes the resolved agent runtime into call options", async () => {
+		const createStream = mock(
+			async (_input: { options?: unknown }) => new ReadableStream()
+		);
+		const transport = createLocalChatTransport(
+			"session-1",
+			modeRef,
+			{
+				current: {
+					instructions: "Agent-specific instructions.",
+					visibleCodingTools: ["read", "list", "grep"],
+				},
+			},
+			{ current: { modelId: "gemini-2.5-flash", providerId: "google" } },
+			{ current: undefined },
+			{
+				authorize: async () => ({ kind: "api-key", apiKey: "google-key" }),
+			} as never,
+			createStream
+		);
+		await transport.sendMessages({
+			abortSignal: undefined,
+			body: undefined,
+			chatId: "session-1",
+			headers: undefined,
+			messageId: undefined,
+			messages: [] as never,
+			metadata: undefined,
+			trigger: "submit-message",
+		});
+		const input = createStream.mock.calls[0]?.[0] as {
+			options?: {
+				mode: string;
+				model: string;
+				resolvedAgent?: { instructions: string; visibleCodingTools: string[] };
+			};
+		};
+		expect(input.options).toEqual({
+			mode: "build",
+			model: "gemini-2.5-flash",
+			resolvedAgent: {
+				instructions: "Agent-specific instructions.",
+				visibleCodingTools: ["read", "list", "grep"],
+			},
+		});
+	});
+
 	test("google route uses direct auth", async () => {
 		const createStream = mock(async () => new ReadableStream());
 		const signal = new AbortController().signal;
 		const transport = createLocalChatTransport(
 			"session-1",
 			modeRef,
+			resolvedAgentRef,
 			{ current: { modelId: "gemini-2.5-flash", providerId: "google" } },
 			{ current: undefined },
 			{
@@ -399,6 +456,7 @@ describe("chat transport", () => {
 		const transport = createLocalChatTransport(
 			"session-1",
 			modeRef,
+			resolvedAgentRef,
 			modelRef,
 			variantRef,
 			{
@@ -426,6 +484,7 @@ describe("chat transport", () => {
 		const transport = createLocalChatTransport(
 			"session-1",
 			modeRef,
+			resolvedAgentRef,
 			{ current: { modelId: "gpt-5.4-mini", providerId: "openai" } },
 			{ current: "high" },
 			{
@@ -461,6 +520,7 @@ describe("chat transport", () => {
 		const transport = createLocalChatTransport(
 			"session-1",
 			modeRef,
+			resolvedAgentRef,
 			{ current: { modelId: "gpt-5.4-mini", providerId: "openai" } },
 			{ current: undefined },
 			{

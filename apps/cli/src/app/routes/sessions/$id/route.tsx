@@ -1,6 +1,6 @@
 import { createFileRoute, useRouterState } from "@tanstack/react-router";
 import type { CodingAgentUIMessage } from "@wincode/ai";
-import { codingModeNameSchema } from "@wincode/ai";
+import { agentIdSchema } from "@wincode/ai";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { useBilling } from "@/modules/billing";
@@ -10,9 +10,10 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 
 const sessionRouteStateSchema = z
 	.object({
+		agent: agentIdSchema.optional(),
 		autoStart: z.boolean().optional(),
 		input: z.string().optional(),
-		mode: codingModeNameSchema.optional(),
+		mode: z.string().optional(),
 	})
 	.passthrough();
 

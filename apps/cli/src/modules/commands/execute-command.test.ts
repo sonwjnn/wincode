@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+	AgentsAdapter,
 	ConnectAdapter,
 	DialogAdapter,
 	ExitAdapter,
-	ModeAdapter,
 	ModelsAdapter,
 	NewAdapter,
 	SkillsAdapter,
@@ -42,10 +42,10 @@ describe("createCommandExecutor", () => {
 				currentVariant: undefined,
 				setVariant: () => undefined,
 			}),
-			mode: new ModeAdapter({
+			agents: new AgentsAdapter({
 				open: () => undefined,
-				currentMode: "build",
-				setMode: () => undefined,
+				currentAgent: "build",
+				setAgent: () => undefined,
 			}),
 		});
 
@@ -89,10 +89,10 @@ describe("createCommandExecutor", () => {
 				currentVariant: undefined,
 				setVariant: () => undefined,
 			}),
-			mode: new ModeAdapter({
+			agents: new AgentsAdapter({
 				open: () => undefined,
-				currentMode: "build",
-				setMode: () => undefined,
+				currentAgent: "build",
+				setAgent: () => undefined,
 			}),
 		});
 
@@ -133,10 +133,10 @@ describe("createCommandExecutor", () => {
 				currentVariant: undefined,
 				setVariant: () => undefined,
 			}),
-			mode: new ModeAdapter({
+			agents: new AgentsAdapter({
 				open: () => undefined,
-				currentMode: "build",
-				setMode: () => undefined,
+				currentAgent: "build",
+				setAgent: () => undefined,
 			}),
 		});
 
@@ -178,10 +178,10 @@ describe("createCommandExecutor", () => {
 				currentVariant: undefined,
 				setVariant: () => undefined,
 			}),
-			mode: new ModeAdapter({
+			agents: new AgentsAdapter({
 				open: () => undefined,
-				currentMode: "build",
-				setMode: () => undefined,
+				currentAgent: "build",
+				setAgent: () => undefined,
 			}),
 		});
 

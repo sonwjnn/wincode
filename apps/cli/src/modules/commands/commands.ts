@@ -11,7 +11,7 @@ export type CommandSpec = BaseSpec &
 		| { kind: "models" }
 		| { kind: "skills" }
 		| { kind: "variants" }
-		| { kind: "mode" }
+		| { kind: "agents" }
 	);
 
 export const COMMANDS: CommandSpec[] = [
@@ -25,7 +25,7 @@ export const COMMANDS: CommandSpec[] = [
 		description: "Switch agents",
 		name: "agents",
 		value: "/agents",
-		kind: "mode",
+		kind: "agents",
 	},
 	{
 		description: "Select AI model for generation",

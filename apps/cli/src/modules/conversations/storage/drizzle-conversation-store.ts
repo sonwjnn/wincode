@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+	type AgentId,
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
 	codingMessageMetadataSchema,
@@ -146,12 +147,30 @@ const resolveMode = (
 	fallback: ModeType
 ): ModeType => message.metadata?.mode ?? fallback;
 
+const resolveAgent = (
+	message: CodingAgentUIMessage,
+	fallback: AgentId
+): AgentId => message.metadata?.agent ?? message.metadata?.mode ?? fallback;
+
+const normalizeMessageMetadata = (
+	metadata: CodingAgentUIMessage["metadata"],
+	agent: AgentId | null
+): CodingAgentUIMessage["metadata"] => {
+	if (metadata?.agent === undefined && agent !== null) {
+		return { ...metadata, agent };
+	}
+
+	return metadata;
+};
+
 const resolveMetadata = (
 	message: CodingAgentUIMessage,
 	mode: ModeType,
-	model: ChatModelSelection
+	model: ChatModelSelection,
+	agent: AgentId
 ): CodingAgentUIMessage["metadata"] => ({
 	...(message.metadata ?? {}),
+	agent: message.metadata?.agent ?? message.metadata?.mode ?? agent,
 	mode: message.metadata?.mode ?? mode,
 	model: message.metadata?.model ?? model,
 });
@@ -159,7 +178,7 @@ const resolveMetadata = (
 const writeMessages = (
 	db: LocalConversationDatabase,
 	workspaceId: string,
-	{ messages, mode, model, sessionId }: PersistMessagesInput
+	{ agent, messages, mode, model, sessionId }: PersistMessagesInput
 ): void => {
 	const now = new Date();
 	const title = deriveSessionTitle(messages);
@@ -192,10 +211,11 @@ const writeMessages = (
 
 		messages.forEach((message, position) => {
 			const values = {
+				agent: resolveAgent(message, agent),
 				createdAt: now,
 				id: generateId(),
 				metadataJson: codingMessageMetadataSchema.parse(
-					resolveMetadata(message, mode, model)
+					resolveMetadata(message, mode, model, agent)
 				),
 				mode: resolveMode(message, mode),
 				partsJson: message.parts,
@@ -210,6 +230,7 @@ const writeMessages = (
 				.values(values)
 				.onConflictDoUpdate({
 					set: {
+						agent: values.agent,
 						metadataJson: values.metadataJson,
 						mode: values.mode,
 						partsJson: values.partsJson,
@@ -242,7 +263,7 @@ export const createDrizzleConversationStore = (
 	return {
 		getPromptHistory: promptHistoryStore.get,
 		recordPrompt: promptHistoryStore.record,
-		createSession: ({ message, mode, model }: CreateSessionInput) => {
+		createSession: ({ agent, message, mode, model }: CreateSessionInput) => {
 			const id = generateId();
 			const now = new Date();
 
@@ -259,6 +280,7 @@ export const createDrizzleConversationStore = (
 				.run();
 
 			writeMessages(db, workspace.id, {
+				agent,
 				messages: [message],
 				mode,
 				model,
@@ -283,6 +305,7 @@ export const createDrizzleConversationStore = (
 		getMessages: async (sessionId: string) => {
 			const rows = db
 				.select({
+					agent: conversationMessage.agent,
 					metadataJson: conversationMessage.metadataJson,
 					partsJson: conversationMessage.partsJson,
 					role: conversationMessage.role,
@@ -312,7 +335,10 @@ export const createDrizzleConversationStore = (
 					metadata:
 						row.metadataJson === null || row.metadataJson === undefined
 							? undefined
-							: codingMessageMetadataSchema.parse(row.metadataJson),
+							: normalizeMessageMetadata(
+									codingMessageMetadataSchema.parse(row.metadataJson),
+									row.agent
+								),
 					parts: row.partsJson,
 					role: row.role,
 				})),
