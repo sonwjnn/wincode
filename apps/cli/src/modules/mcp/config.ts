@@ -1,6 +1,10 @@
-import { type Diagnostic, readScope } from "./config/discovery";
+import {
+	type ConfigStore,
+	createConfigStore,
+} from "@/shared/config/config-store";
 import { resolveServers } from "./config/resolve";
 
+export type { McpConfigDiagnostic } from "./config/resolve";
 export type {
 	LocalMcpServerConfig,
 	McpTimeouts,
@@ -8,11 +12,12 @@ export type {
 	ResolvedMcpServerConfig,
 } from "./config/schema";
 export { DEFAULT_MCP_TIMEOUTS } from "./config/schema";
-export type McpConfigDiagnostic = Diagnostic;
 export type McpConfigInput = {
 	workspace: string;
-	globalRoot: string;
 	env: Record<string, string | undefined>;
+	configStore?: ConfigStore;
+	configRoot?: string;
+	homeRoot?: string;
 	fs?: { readFile(path: string): Promise<string> };
 };
 export type McpConfigResult = ReturnType<typeof resolveServers>;
@@ -20,19 +25,20 @@ export type McpConfigResult = ReturnType<typeof resolveServers>;
 export async function loadMcpConfig(
 	input: McpConfigInput
 ): Promise<McpConfigResult> {
-	const diagnostics: Diagnostic[] = [];
-	const fs = input.fs ?? {
-		readFile: (file: string) => globalThis.Bun.file(file).text(),
-	};
-	const [global, project] = await Promise.all([
-		readScope(input.globalRoot, "global", fs, diagnostics),
-		readScope(input.workspace, "project", fs, diagnostics),
-	]);
+	const configStore =
+		input.configStore ??
+		createConfigStore({
+			...(input.configRoot === undefined
+				? {}
+				: { configRoot: input.configRoot }),
+			...(input.fs === undefined ? {} : { fs: input.fs }),
+			...(input.homeRoot === undefined ? {} : { homeRoot: input.homeRoot }),
+			xdgConfigHome: input.env.XDG_CONFIG_HOME ?? "",
+		});
+	const snapshot = await configStore.getSnapshot(input.workspace);
 	return resolveServers({
-		global,
-		project,
-		diagnostics,
 		env: input.env,
+		snapshot,
 		workspace: input.workspace,
 	});
 }

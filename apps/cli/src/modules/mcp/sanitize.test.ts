@@ -7,6 +7,7 @@ const localConfig = (): ResolvedMcpServerConfig => ({
 	type: "local",
 	command: ["bun", "x", "demo"],
 	disabled: false,
+	permission: "ask",
 	timeout: { startup: 30_000, catalog: 30_000, execution: 43_200_000 },
 	environment: { API_KEY: "env-super-secret" },
 });
@@ -16,6 +17,7 @@ const remoteConfig = (): ResolvedMcpServerConfig => ({
 	type: "remote",
 	url: "https://secret-host.example/mcp",
 	disabled: false,
+	permission: "ask",
 	timeout: { startup: 30_000, catalog: 30_000, execution: 43_200_000 },
 	headers: { Authorization: "Bearer super-secret-token" },
 });

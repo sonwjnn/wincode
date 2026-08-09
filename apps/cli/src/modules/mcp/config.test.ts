@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { loadMcpConfig } from "./config";
 
-const fileSystem = (files: Record<string, string>) => ({
-	readFile: async (path: string) => {
-		const value = files[path];
+const CONFIG_ROOT = "/home/user/.config/wincode";
+const HOME_ROOT = "/home/user";
+const WORKSPACE = "/workspace";
+
+const fileSystem = (files: Record<string, string>, reads?: string[]) => ({
+	readFile: async (file: string): Promise<string> => {
+		reads?.push(file);
+		const value = files[file];
 		if (value === undefined) {
 			const error = new Error("missing") as Error & { code: string };
 			error.code = "ENOENT";
@@ -16,111 +18,149 @@ const fileSystem = (files: Record<string, string>) => ({
 	},
 });
 
-describe("loadMcpConfig", () => {
-	const withRoots = async (
-		files: {
-			global?: Record<string, string>;
-			project?: Record<string, string>;
-		},
-		fn: (globalRoot: string, projectRoot: string) => Promise<void>
-	) => {
-		const root = await mkdtemp(path.join(os.tmpdir(), "mcp-config-"));
-		const globalRoot = path.join(root, "global");
-		const projectRoot = path.join(root, "project");
-		await Promise.all([
-			mkdir(globalRoot, { recursive: true }),
-			mkdir(projectRoot, { recursive: true }),
-		]);
-		for (const [scope, values] of Object.entries(files)) {
-			const target = scope === "global" ? globalRoot : projectRoot;
-			for (const [name, contents] of Object.entries(values ?? {})) {
-				// biome-ignore lint/correctness/noUndeclaredVariables: Bun runtime API
-				await Bun.write(path.join(target, name), contents);
-			}
-		}
-		try {
-			await fn(globalRoot, projectRoot);
-		} finally {
-			await rm(root, { recursive: true, force: true });
-		}
-	};
+type LoadOptions = {
+	configRoot?: string;
+	env?: Record<string, string | undefined>;
+	homeRoot?: string;
+	reads?: string[];
+	workspace?: string;
+};
 
-	test("prefers jsonc and warns about duplicate json", async () => {
-		await withRoots(
-			{
-				project: {
-					"opencode.jsonc":
-						'{"mcp":{"servers":{"x":{"type":"remote","url":"https://x"}}}}',
-					"opencode.json": "{}",
-				},
-			},
-			async (globalRoot, workspace) => {
-				const result = await loadMcpConfig({ globalRoot, workspace, env: {} });
-				expect(result.servers.x).toMatchObject({ url: "https://x/" });
-				expect(
-					result.diagnostics.some((d) => d.code === "duplicate-config")
-				).toBe(true);
-			}
-		);
+const load = (
+	files: Record<string, string>,
+	options: LoadOptions = {}
+): ReturnType<typeof loadMcpConfig> =>
+	loadMcpConfig({
+		configRoot: options.configRoot ?? CONFIG_ROOT,
+		env: options.env ?? {},
+		fs: fileSystem(files, options.reads),
+		homeRoot: options.homeRoot ?? HOME_ROOT,
+		workspace: options.workspace ?? WORKSPACE,
 	});
-	test("loads JSON only without duplicate warning and accepts comments/trailing commas", async () => {
-		await withRoots(
-			{
-				project: {
-					"opencode.json":
-						'{// comment\n"mcp":{"servers":{"x":{"type":"remote","url":"https://x",},},},}',
+
+describe("loadMcpConfig", () => {
+	test("loads and merges every Wincode config layer in precedence order", async () => {
+		const result = await load({
+			[`${CONFIG_ROOT}/wincode.json`]: JSON.stringify({
+				mcp: {
+					shared: {
+						type: "remote",
+						url: "https://global.example/mcp",
+						headers: { xdg: "yes" },
+					},
 				},
-			},
-			async (globalRoot, workspace) => {
-				const result = await loadMcpConfig({ globalRoot, workspace, env: {} });
-				expect(result.servers.x).toBeDefined();
-				expect(
-					result.diagnostics.some((d) => d.code === "duplicate-config")
-				).toBe(false);
-			}
-		);
+			}),
+			[`${HOME_ROOT}/.wincode/wincode.json`]: JSON.stringify({
+				mcp: { shared: { headers: { home: "yes" } } },
+			}),
+			[`${WORKSPACE}/wincode.json`]: JSON.stringify({
+				mcp: { shared: { permission: "allow" } },
+			}),
+			[`${WORKSPACE}/.wincode/wincode.json`]: JSON.stringify({
+				mcp: {
+					shared: {
+						url: "https://project.example/mcp",
+						headers: { project: "yes" },
+					},
+				},
+			}),
+		});
+
+		expect(result.servers.shared).toMatchObject({
+			disabled: false,
+			headers: { xdg: "yes", home: "yes", project: "yes" },
+			permission: "allow",
+			url: "https://project.example/mcp",
+		});
 	});
-	test("exports true timeout defaults", async () => {
-		await withRoots(
-			{
-				project: {
-					"opencode.json":
-						'{"mcp":{"servers":{"x":{"type":"remote","url":"https://x"}}}}',
+
+	test("reads flat MCP entries and resolves enabled and permission defaults", async () => {
+		const result = await load({
+			[`${WORKSPACE}/wincode.json`]: JSON.stringify({
+				mcp: {
+					disabled: {
+						type: "local",
+						command: ["disabled"],
+						enabled: false,
+						permission: "deny",
+					},
+					enabled: {
+						type: "local",
+						command: ["enabled"],
+					},
 				},
-			},
-			async (globalRoot, workspace) => {
-				const result = await loadMcpConfig({ globalRoot, workspace, env: {} });
-				expect(result.servers.x?.timeout).toEqual({
-					startup: 30_000,
-					catalog: 30_000,
-					execution: 43_200_000,
-				});
-			}
-		);
+			}),
+		});
+
+		expect(result.servers.disabled).toMatchObject({
+			disabled: true,
+			permission: "deny",
+		});
+		expect(result.servers.enabled).toMatchObject({
+			disabled: false,
+			permission: "ask",
+		});
 	});
-	test("merges partial global, project, and server phases", async () => {
-		await withRoots(
-			{
-				global: {
-					"opencode.json":
-						'{"mcp":{"timeout":{"startup":1,"catalog":2},"servers":{"x":{"type":"remote","url":"https://x","timeout":{"execution":3}}}}}',
-				},
-				project: {
-					"opencode.json":
-						'{"mcp":{"timeout":{"catalog":4},"servers":{"x":{"headers":{"a":"b"}}}}}',
-				},
-			},
-			async (globalRoot, workspace) => {
-				const result = await loadMcpConfig({ globalRoot, workspace, env: {} });
-				expect(result.servers.x?.timeout).toEqual({
-					startup: 1,
-					catalog: 4,
-					execution: 3,
-				});
-			}
-		);
+
+	test("prefers JSONC and warns about duplicate JSON at one location", async () => {
+		const result = await load({
+			[`${WORKSPACE}/wincode.jsonc`]:
+				'{"mcp":{"x":{"type":"remote","url":"https://x"}}}',
+			[`${WORKSPACE}/wincode.json`]: "{}",
+		});
+
+		expect(result.servers.x).toMatchObject({ url: "https://x/" });
+		expect(
+			result.diagnostics.some(
+				(diagnostic) => diagnostic.code === "duplicate-config"
+			)
+		).toBe(true);
 	});
-	test("project arrays replace nested values and preserve project provenance", async () => {
+
+	test("accepts comments and trailing commas in JSON files", async () => {
+		const result = await load({
+			[`${WORKSPACE}/wincode.json`]:
+				'{// comment\n"mcp":{"x":{"type":"remote","url":"https://x",},},}',
+		});
+
+		expect(result.servers.x).toBeDefined();
+		expect(
+			result.diagnostics.some(
+				(diagnostic) => diagnostic.code === "duplicate-config"
+			)
+		).toBe(false);
+	});
+
+	test("applies timeout defaults and merges per-server phases", async () => {
+		const result = await load({
+			[`${CONFIG_ROOT}/wincode.json`]: JSON.stringify({
+				mcp: {
+					x: {
+						type: "remote",
+						url: "https://x",
+						timeout: { startup: 1, execution: 3 },
+					},
+					y: { type: "remote", url: "https://y" },
+				},
+			}),
+			[`${WORKSPACE}/wincode.json`]: JSON.stringify({
+				mcp: { x: { timeout: { catalog: 4 } } },
+			}),
+		});
+
+		expect(result.servers.x?.timeout).toEqual({
+			startup: 1,
+			catalog: 4,
+			execution: 3,
+		});
+		expect(result.servers.y?.timeout).toEqual({
+			startup: 30_000,
+			catalog: 30_000,
+			execution: 43_200_000,
+		});
+	});
+
+	test("arrays replace nested values and preserve the overriding provenance", async () => {
 		const cases = [
 			{
 				field: "headers",
@@ -140,171 +180,171 @@ describe("loadMcpConfig", () => {
 		] as const;
 
 		for (const testCase of cases) {
-			await withRoots(
-				{
-					global: {
-						"opencode.json": JSON.stringify({
-							mcp: { servers: { x: testCase.global } },
-						}),
-					},
-					project: {
-						"opencode.json": JSON.stringify({
-							mcp: { servers: { x: { [testCase.field]: [] } } },
-						}),
-					},
-				},
-				async (globalRoot, workspace) => {
-					const result = await loadMcpConfig({
-						globalRoot,
-						workspace,
-						env: {},
-					});
-					expect(result.servers.x).toBeUndefined();
-					expect(result.diagnostics).toContainEqual(
-						expect.objectContaining({
-							scope: "project",
-							path: expect.stringContaining(
-								`opencode.json:mcp.servers.x.${testCase.field}`
-							),
-						})
-					);
-				}
+			const result = await load({
+				[`${CONFIG_ROOT}/wincode.json`]: JSON.stringify({
+					mcp: { x: { type: "remote", ...testCase.global } },
+				}),
+				[`${WORKSPACE}/wincode.json`]: JSON.stringify({
+					mcp: { x: { [testCase.field]: [] } },
+				}),
+			});
+
+			expect(result.servers.x).toBeUndefined();
+			expect(result.diagnostics).toContainEqual(
+				expect.objectContaining({
+					scope: "project",
+					path: expect.stringContaining(`wincode.json:mcp.x.${testCase.field}`),
+				})
 			);
 		}
 	});
+
 	test("reports every invalid timeout phase", async () => {
 		for (const [phase, value] of Object.entries({
 			startup: 0,
 			catalog: 1.5,
 			execution: "x",
 		})) {
-			await withRoots(
-				{
-					project: {
-						"opencode.json": JSON.stringify({
-							mcp: { timeout: { [phase]: value } },
-						}),
+			const result = await load({
+				[`${WORKSPACE}/wincode.json`]: JSON.stringify({
+					mcp: {
+						x: {
+							type: "remote",
+							url: "https://x",
+							timeout: { [phase]: value },
+						},
 					},
-				},
-				async (globalRoot, workspace) => {
-					const result = await loadMcpConfig({
-						globalRoot,
-						workspace,
-						env: {},
-					});
-					expect(
-						result.diagnostics.some(
-							(d) => d.code === "invalid-timeout" && d.path.endsWith(phase)
-						)
-					).toBe(true);
-				}
-			);
+				}),
+			});
+
+			expect(
+				result.diagnostics.some(
+					(diagnostic) =>
+						diagnostic.code === "invalid-timeout" &&
+						diagnostic.path.endsWith(phase)
+				)
+			).toBe(true);
 		}
 	});
-	test("ignores codemode and unrelated fields while validating supported fields", async () => {
-		await withRoots(
-			{
-				project: {
-					"opencode.json":
-						'{"mcp":{"servers":{"x":{"type":"remote","url":"https://x","codemode":true,"unrelated":1}}}}',
-				},
-			},
-			async (globalRoot, workspace) => {
-				const result = await loadMcpConfig({ globalRoot, workspace, env: {} });
-				expect(result.servers.x).toBeDefined();
-			}
+
+	test("rejects unknown server fields so typos cannot enable a server", async () => {
+		const result = await load({
+			[`${WORKSPACE}/wincode.json`]:
+				'{"mcp":{"typo":{"type":"local","command":["x"],"enbled":false},"legacy":{"type":"local","command":["x"],"disabled":true}}}',
+		});
+
+		expect(result.servers.typo).toBeUndefined();
+		expect(result.servers.legacy).toBeUndefined();
+		expect(
+			result.diagnostics.filter(
+				(diagnostic) => diagnostic.code === "invalid-field"
+			)
+		).toHaveLength(2);
+		expect(result.diagnostics.map((diagnostic) => diagnostic.path)).toEqual(
+			expect.arrayContaining([
+				`${WORKSPACE}/wincode.json:mcp.typo.enbled`,
+				`${WORKSPACE}/wincode.json:mcp.legacy.disabled`,
+			])
 		);
 	});
-	test("isolates invalid mcp and servers scopes", async () => {
-		await withRoots(
-			{
-				global: { "opencode.json": '{"mcp":[]}' },
-				project: {
-					"opencode.json": '{"mcp":{"servers":[],"timeout":{"startup":1}}}',
-				},
-			},
-			async (globalRoot, workspace) => {
-				const result = await loadMcpConfig({ globalRoot, workspace, env: {} });
-				expect(
-					result.diagnostics.filter((d) => d.code === "invalid-scope")
-				).toHaveLength(2);
-			}
+
+	test("isolates invalid MCP scopes", async () => {
+		const result = await load({
+			[`${CONFIG_ROOT}/wincode.json`]: '{"mcp":[]}',
+			[`${HOME_ROOT}/.wincode/wincode.json`]: '{"mcp":"invalid"}',
+		});
+
+		expect(
+			result.diagnostics.filter(
+				(diagnostic) => diagnostic.code === "invalid-scope"
+			)
+		).toHaveLength(2);
+	});
+
+	test("reports missing env variables without leaking placeholders", async () => {
+		const result = await load({
+			[`${WORKSPACE}/wincode.json`]:
+				'{"mcp":{"named":{"type":"remote","url":"https://x","headers":{"authorization":"{env:SECRET}"}}}}',
+		});
+		const diagnostic = result.diagnostics.find(
+			(entry) => entry.code === "missing-env"
+		);
+
+		expect(diagnostic?.message).toContain("SECRET");
+		expect(diagnostic?.message).toContain("named");
+		expect(JSON.stringify(diagnostic)).not.toContain("{env:SECRET}");
+		expect(result.servers.named).toBeUndefined();
+	});
+
+	test("attributes missing env diagnostics to the layer that supplied the value", async () => {
+		const result = await load({
+			[`${CONFIG_ROOT}/wincode.json`]:
+				'{"mcp":{"x":{"type":"remote","url":"https://x","headers":{"authorization":"{env:GLOBAL_SECRET}"}}}}',
+			[`${WORKSPACE}/.wincode/wincode.json`]:
+				'{"mcp":{"x":{"headers":{"project":"yes"}}}}',
+		});
+
+		expect(result.diagnostics).toContainEqual(
+			expect.objectContaining({
+				code: "missing-env",
+				path: `${CONFIG_ROOT}/wincode.json:mcp.x.headers.authorization`,
+				scope: "global",
+			})
+		);
+		expect(JSON.stringify(result.diagnostics)).not.toContain(
+			"{env:GLOBAL_SECRET}"
 		);
 	});
-	test("reports missing env variable and server without secret", async () => {
-		await withRoots(
-			{
-				project: {
-					"opencode.json":
-						'{"mcp":{"servers":{"named":{"type":"remote","url":"https://x","headers":{"authorization":"{env:SECRET}"}}}}}',
-				},
-			},
-			async (globalRoot, workspace) => {
-				const result = await loadMcpConfig({ globalRoot, workspace, env: {} });
-				const diagnostic = result.diagnostics.find(
-					(d) => d.code === "missing-env"
-				);
-				expect(diagnostic?.message).toContain("SECRET");
-				expect(diagnostic?.message).toContain("named");
-				expect(JSON.stringify(diagnostic)).not.toContain("{env:SECRET}");
-			}
-		);
+
+	test("isolates invalid URLs and unsupported OAuth", async () => {
+		const result = await load({
+			[`${WORKSPACE}/wincode.json`]:
+				'{"mcp":{"good":{"type":"remote","url":"https://x"},"bad":{"type":"remote","url":"ftp://x"},"oauth":{"type":"remote","url":"https://y","oauth":{}}}}',
+		});
+
+		expect(result.servers.good).toBeDefined();
+		expect(result.servers.bad).toBeUndefined();
+		expect(result.servers.oauth).toBeUndefined();
+		expect(JSON.stringify(result.diagnostics)).not.toContain("ftp://x");
 	});
-	test("accepts placeholder only and isolates invalid URLs/oauth", async () => {
-		await withRoots(
-			{
-				project: {
-					"opencode.json":
-						'{"mcp":{"servers":{"good":{"type":"remote","url":"https://x"},"bad":{"type":"remote","url":"ftp://x"},"oauth":{"type":"remote","url":"https://y","oauth":{}}}}}',
-				},
-			},
-			async (globalRoot, workspace) => {
-				const result = await loadMcpConfig({ globalRoot, workspace, env: {} });
-				expect(result.servers.good).toBeDefined();
-				expect(result.servers.bad).toBeUndefined();
-				expect(result.servers.oauth).toBeUndefined();
-			}
-		);
-	});
+
 	test("supports POSIX and Windows absolute cwd", async () => {
-		await withRoots(
-			{
-				project: {
-					"opencode.json": JSON.stringify({
-						mcp: {
-							servers: {
-								posix: { type: "local", command: ["x"], cwd: "/tmp" },
-								windows: { type: "local", command: ["x"], cwd: "C:\\tools" },
-							},
-						},
-					}),
+		const result = await load({
+			[`${WORKSPACE}/wincode.json`]: JSON.stringify({
+				mcp: {
+					posix: { type: "local", command: ["x"], cwd: "/tmp" },
+					windows: {
+						type: "local",
+						command: ["x"],
+						cwd: "C:\\tools",
+					},
 				},
-			},
-			async (globalRoot, workspace) => {
-				const result = await loadMcpConfig({ globalRoot, workspace, env: {} });
-				expect(result.servers.posix).toMatchObject({ cwd: "/tmp" });
-				expect(result.servers.windows).toMatchObject({ cwd: "C:\\tools" });
-			}
-		);
-	});
-	test("loads JSONC, merges scopes, resolves values, and applies defaults", async () => {
-		const result = await loadMcpConfig({
-			workspace: "/project",
-			globalRoot: "/home/user",
-			env: { TOKEN: "secret" },
-			fs: fileSystem({
-				"/home/user/opencode.jsonc": `// global\n{"mcp":{"timeout":{"startup":5000,"catalog":5000,"execution":5000},"servers":{"one":{"type":"local","command":["x"],"environment":{"TOKEN":"{env:TOKEN}"}},"remote":{"type":"remote","url":"https://example.com","headers":{"x":"g"}}}}}`,
-				"/project/opencode.json": `{"mcp":{"servers":{"one":{"cwd":"tools","disabled":true},"remote":{"headers":{"y":"p"}}}}}`,
 			}),
 		});
+
+		expect(result.servers.posix).toMatchObject({ cwd: "/tmp" });
+		expect(result.servers.windows).toMatchObject({ cwd: "C:\\tools" });
+	});
+
+	test("merges sources, resolves values, and applies status defaults", async () => {
+		const result = await load(
+			{
+				[`${CONFIG_ROOT}/wincode.jsonc`]: `// global\n{"mcp":{"one":{"type":"local","command":["x"],"environment":{"TOKEN":"{env:TOKEN}"},"timeout":{"startup":5000,"catalog":5000,"execution":5000}},"remote":{"type":"remote","url":"https://example.com","headers":{"x":"g"}}}}`,
+				[`${WORKSPACE}/wincode.json`]:
+					'{"mcp":{"one":{"cwd":"tools","enabled":false,"permission":"deny"},"remote":{"headers":{"y":"p"}}}}',
+			},
+			{ env: { TOKEN: "secret" } }
+		);
+
 		expect(result.servers).toEqual({
 			one: {
 				name: "one",
 				type: "local",
 				command: ["x"],
-				cwd: "/project/tools",
+				cwd: "/workspace/tools",
 				environment: { TOKEN: "secret" },
 				disabled: true,
+				permission: "deny",
 				timeout: { startup: 5000, catalog: 5000, execution: 5000 },
 			},
 			remote: {
@@ -313,67 +353,41 @@ describe("loadMcpConfig", () => {
 				url: "https://example.com/",
 				headers: { x: "g", y: "p" },
 				disabled: false,
-				timeout: { startup: 5000, catalog: 5000, execution: 5000 },
+				permission: "ask",
+				timeout: {
+					startup: 30_000,
+					catalog: 30_000,
+					execution: 43_200_000,
+				},
 			},
 		});
 	});
 
-	test("isolates invalid servers and sanitizes missing env diagnostics", async () => {
-		const result = await loadMcpConfig({
-			workspace: "/p",
-			globalRoot: "/g",
-			env: {},
-			fs: fileSystem({
-				"/p/opencode.json": `{"mcp":{"servers":{"bad":{"type":"remote","url":"ftp://x"},"missing":{"type":"remote","url":"https://x","headers":{"authorization":"{env:SECRET}"}},"ok":{"type":"remote","url":"https://ok","oauth":false}}}}`,
-			}),
-		});
-		expect(Object.keys(result.servers)).toEqual(["ok"]);
-		expect(
-			result.diagnostics.some((diagnostic) => diagnostic.code === "missing-env")
-		).toBe(true);
-		expect(
-			result.diagnostics.some((diagnostic) =>
-				diagnostic.message.includes("ftp://x")
-			)
-		).toBe(false);
-	});
-
 	test("isolates servers with missing or unsupported types", async () => {
-		const result = await loadMcpConfig({
-			workspace: "/p",
-			globalRoot: "/g",
-			env: {},
-			fs: fileSystem({
-				"/p/opencode.json":
-					'{"mcp":{"servers":{"missing":{"url":"https://missing"},"unsupported":{"type":"custom","url":"https://unsupported"},"valid":{"type":"remote","url":"https://valid"}}}}',
-			}),
+		const result = await load({
+			[`${WORKSPACE}/wincode.json`]:
+				'{"mcp":{"missing":{"url":"https://missing"},"unsupported":{"type":"custom","url":"https://unsupported"},"valid":{"type":"remote","url":"https://valid"}}}',
 		});
 
 		expect(Object.keys(result.servers)).toEqual(["valid"]);
-		const typeDiagnostics = result.diagnostics.filter(
-			(diagnostic) => diagnostic.code === "invalid-server"
+		const diagnostics = result.diagnostics.filter(
+			(entry) => entry.code === "invalid-server"
 		);
-		expect(typeDiagnostics).toHaveLength(2);
-		expect(typeDiagnostics.map((diagnostic) => diagnostic.serverName)).toEqual([
+		expect(diagnostics.map((entry) => entry.serverName)).toEqual([
 			"missing",
 			"unsupported",
 		]);
-		expect(typeDiagnostics.map((diagnostic) => diagnostic.path)).toEqual([
-			"/p/opencode.json:mcp.servers.missing.type",
-			"/p/opencode.json:mcp.servers.unsupported.type",
+		expect(diagnostics.map((entry) => entry.path)).toEqual([
+			`${WORKSPACE}/wincode.json:mcp.missing.type`,
+			`${WORKSPACE}/wincode.json:mcp.unsupported.type`,
 		]);
 	});
 
-	test("project malformed entry omits inherited server and reports project scope", async () => {
-		const result = await loadMcpConfig({
-			workspace: "/p",
-			globalRoot: "/g",
-			env: {},
-			fs: fileSystem({
-				"/g/opencode.json":
-					'{"mcp":{"servers":{"shared":{"type":"remote","url":"https://global"}}}}',
-				"/p/opencode.json": '{"mcp":{"servers":{"shared":null}}}',
-			}),
+	test("a malformed highest-precedence entry omits an inherited server", async () => {
+		const result = await load({
+			[`${CONFIG_ROOT}/wincode.json`]:
+				'{"mcp":{"shared":{"type":"remote","url":"https://global"}}}',
+			[`${WORKSPACE}/.wincode/wincode.json`]: '{"mcp":{"shared":null}}',
 		});
 
 		expect(result.servers.shared).toBeUndefined();
@@ -381,19 +395,33 @@ describe("loadMcpConfig", () => {
 			scope: "project",
 			code: "invalid-server",
 			message: "Server entry must be an object",
-			path: "/p/opencode.json:mcp.servers.shared",
+			path: `${WORKSPACE}/.wincode/wincode.json:mcp.shared`,
 			serverName: "shared",
 		});
 	});
 
-	test("isolates project-only scalar server entries", async () => {
-		const result = await loadMcpConfig({
-			workspace: "/p",
-			globalRoot: "/g",
-			env: {},
-			fs: fileSystem({
-				"/p/opencode.json": '{"mcp":{"servers":{"scalar":"invalid"}}}',
-			}),
+	test("does not resurrect fields below a malformed intermediate entry", async () => {
+		const result = await load({
+			[`${CONFIG_ROOT}/wincode.json`]:
+				'{"mcp":{"shared":{"type":"remote","url":"https://global"}}}',
+			[`${HOME_ROOT}/.wincode/wincode.json`]: '{"mcp":{"shared":null}}',
+			[`${WORKSPACE}/wincode.json`]:
+				'{"mcp":{"shared":{"permission":"allow"}}}',
+		});
+
+		expect(result.servers.shared).toBeUndefined();
+		expect(result.diagnostics).toContainEqual({
+			scope: "global",
+			code: "invalid-server",
+			message: "Server entry must be an object",
+			path: `${HOME_ROOT}/.wincode/wincode.json:mcp.shared`,
+			serverName: "shared",
+		});
+	});
+
+	test("isolates scalar server entries", async () => {
+		const result = await load({
+			[`${WORKSPACE}/wincode.json`]: '{"mcp":{"scalar":"invalid"}}',
 		});
 
 		expect(result.servers.scalar).toBeUndefined();
@@ -401,21 +429,16 @@ describe("loadMcpConfig", () => {
 			scope: "project",
 			code: "invalid-server",
 			message: "Server entry must be an object",
-			path: "/p/opencode.json:mcp.servers.scalar",
+			path: `${WORKSPACE}/wincode.json:mcp.scalar`,
 			serverName: "scalar",
 		});
 	});
 
-	test("valid project entry recovers malformed global entry", async () => {
-		const result = await loadMcpConfig({
-			workspace: "/p",
-			globalRoot: "/g",
-			env: {},
-			fs: fileSystem({
-				"/g/opencode.json": '{"mcp":{"servers":{"shared":null}}}',
-				"/p/opencode.json":
-					'{"mcp":{"servers":{"shared":{"type":"remote","url":"https://project"}}}}',
-			}),
+	test("a valid later entry recovers an earlier malformed entry", async () => {
+		const result = await load({
+			[`${CONFIG_ROOT}/wincode.json`]: '{"mcp":{"shared":null}}',
+			[`${WORKSPACE}/wincode.json`]:
+				'{"mcp":{"shared":{"type":"remote","url":"https://project"}}}',
 		});
 
 		expect(result.servers.shared).toMatchObject({
@@ -426,97 +449,93 @@ describe("loadMcpConfig", () => {
 			scope: "global",
 			code: "invalid-server",
 			message: "Server entry must be an object",
-			path: "/g/opencode.json:mcp.servers.shared",
+			path: `${CONFIG_ROOT}/wincode.json:mcp.shared`,
 			serverName: "shared",
 		});
 	});
+
 	test("rejects unsafe prototype keys", async () => {
-		const result = await loadMcpConfig({
-			workspace: "/p",
-			globalRoot: "/g",
-			env: {},
-			fs: fileSystem({ "/p/opencode.json": '{"__proto__":{},"mcp":{}}' }),
+		const result = await load({
+			[`${WORKSPACE}/wincode.json`]: '{"__proto__":{},"mcp":{}}',
 		});
-		expect(result.diagnostics.some((d) => d.code === "unsafe-key")).toBe(true);
+
+		expect(
+			result.diagnostics.some((entry) => entry.code === "unsafe-key")
+		).toBe(true);
 	});
-	test("rejects invalid local command", async () => {
-		const result = await loadMcpConfig({
-			workspace: "/p",
-			globalRoot: "/g",
-			env: {},
-			fs: fileSystem({
-				"/p/opencode.json":
-					'{"mcp":{"servers":{"x":{"type":"local","command":[]}}}}',
-			}),
+
+	test("rejects invalid local commands", async () => {
+		const result = await load({
+			[`${WORKSPACE}/wincode.json`]:
+				'{"mcp":{"x":{"type":"local","command":[]}}}',
 		});
+
 		expect(result.servers.x).toBeUndefined();
 	});
-	test("resolves environment placeholders", async () => {
-		const result = await loadMcpConfig({
-			workspace: "/p",
-			globalRoot: "/g",
-			env: { A: "b" },
-			fs: fileSystem({
-				"/p/opencode.json":
-					'{"mcp":{"servers":{"x":{"type":"local","command":["x"],"environment":{"a":"{env:A}"}}}}}',
-			}),
-		});
+
+	test("resolves environment placeholders and keeps literal values", async () => {
+		const result = await load(
+			{
+				[`${WORKSPACE}/wincode.json`]:
+					'{"mcp":{"x":{"type":"local","command":["x"],"environment":{"resolved":"{env:A}","literal":"value"}}}}',
+			},
+			{ env: { A: "b" } }
+		);
+
 		expect(
 			result.servers.x?.type === "local" && result.servers.x.environment
-		).toEqual({ a: "b" });
+		).toEqual({ resolved: "b", literal: "value" });
 	});
-	test("keeps literal braces", async () => {
-		const result = await loadMcpConfig({
-			workspace: "/p",
-			globalRoot: "/g",
-			env: {},
-			fs: fileSystem({
-				"/p/opencode.json":
-					'{"mcp":{"servers":{"x":{"type":"local","command":["x"],"environment":{"a":"literal"}}}}}',
-			}),
+
+	test("rejects non-string headers and invalid permissions", async () => {
+		const result = await load({
+			[`${WORKSPACE}/wincode.json`]:
+				'{"mcp":{"headers":{"type":"remote","url":"https://x","headers":{"a":1}},"permission":{"type":"remote","url":"https://x","permission":"always"}}}',
 		});
-		expect(
-			result.servers.x?.type === "local" && result.servers.x.environment
-		).toEqual({ a: "literal" });
-	});
-	test("rejects non-string headers", async () => {
-		const result = await loadMcpConfig({
-			workspace: "/p",
-			globalRoot: "/g",
-			env: {},
-			fs: fileSystem({
-				"/p/opencode.json":
-					'{"mcp":{"servers":{"x":{"type":"remote","url":"https://x","headers":{"a":1}}}}}',
-			}),
-		});
-		expect(result.servers.x).toBeUndefined();
-	});
-	test("accepts oauth false", async () => {
-		const result = await loadMcpConfig({
-			workspace: "/p",
-			globalRoot: "/g",
-			env: {},
-			fs: fileSystem({
-				"/p/opencode.json":
-					'{"mcp":{"servers":{"x":{"type":"remote","url":"https://x","oauth":false}}}}',
-			}),
-		});
-		expect(result.servers.x?.type === "remote" && result.servers.x.oauth).toBe(
-			false
+
+		expect(result.servers.headers).toBeUndefined();
+		expect(result.servers.permission).toBeUndefined();
+		expect(result.diagnostics).toContainEqual(
+			expect.objectContaining({
+				code: "invalid-field",
+				path: `${WORKSPACE}/wincode.json:mcp.permission.permission`,
+			})
 		);
 	});
-	test("normalizes remote URLs", async () => {
-		const result = await loadMcpConfig({
-			workspace: "/p",
-			globalRoot: "/g",
-			env: {},
-			fs: fileSystem({
-				"/p/opencode.json":
-					'{"mcp":{"servers":{"x":{"type":"remote","url":"https://x/path"}}}}',
-			}),
+
+	test("accepts oauth false and normalizes remote URLs", async () => {
+		const result = await load({
+			[`${WORKSPACE}/wincode.json`]:
+				'{"mcp":{"x":{"type":"remote","url":"https://x/path","oauth":false}}}',
 		});
-		expect(result.servers.x?.type === "remote" && result.servers.x.url).toBe(
-			"https://x/path"
-		);
+
+		expect(result.servers.x).toMatchObject({
+			oauth: false,
+			url: "https://x/path",
+		});
+	});
+
+	test("uses XDG_CONFIG_HOME when no explicit config root is provided", async () => {
+		const result = await loadMcpConfig({
+			env: { XDG_CONFIG_HOME: "/xdg" },
+			fs: fileSystem({
+				"/xdg/wincode/wincode.json":
+					'{"mcp":{"x":{"type":"remote","url":"https://x"}}}',
+			}),
+			homeRoot: HOME_ROOT,
+			workspace: WORKSPACE,
+		});
+
+		expect(result.servers.x).toBeDefined();
+	});
+
+	test("never reads OpenCode config or the retired MCP policy file", async () => {
+		const reads: string[] = [];
+		await load({}, { reads });
+
+		expect(reads.some((file) => file.includes("opencode"))).toBe(false);
+		expect(reads.some((file) => file.endsWith("/mcp.json"))).toBe(false);
+		expect(reads).toContain(`${HOME_ROOT}/.wincode/wincode.json`);
+		expect(reads).toContain(`${WORKSPACE}/.wincode/wincode.json`);
 	});
 });

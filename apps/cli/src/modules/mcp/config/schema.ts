@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { mcpExecutionPolicySchema } from "../policy";
 
 export const phaseTimeoutSchema = z.number().int().positive();
 export const timeoutPatchSchema = z
@@ -7,7 +8,7 @@ export const timeoutPatchSchema = z
 		catalog: phaseTimeoutSchema.optional(),
 		execution: phaseTimeoutSchema.optional(),
 	})
-	.strip();
+	.strict();
 export const rawServerPatchSchema = z
 	.object({
 		type: z.enum(["local", "remote"]).optional(),
@@ -19,10 +20,11 @@ export const rawServerPatchSchema = z
 		oauth: z
 			.union([z.literal(false), z.record(z.string(), z.unknown())])
 			.optional(),
-		disabled: z.boolean().optional(),
+		enabled: z.boolean().optional(),
+		permission: mcpExecutionPolicySchema.optional(),
 		timeout: timeoutPatchSchema.optional(),
 	})
-	.strip();
+	.strict();
 export const localServerSchema = z.object({
 	name: z.string(),
 	type: z.literal("local"),
@@ -30,6 +32,7 @@ export const localServerSchema = z.object({
 	cwd: z.string().optional(),
 	environment: z.record(z.string(), z.string()).optional(),
 	disabled: z.boolean(),
+	permission: mcpExecutionPolicySchema,
 	timeout: z.object({
 		startup: phaseTimeoutSchema,
 		catalog: phaseTimeoutSchema,
@@ -43,6 +46,7 @@ export const remoteServerSchema = z.object({
 	headers: z.record(z.string(), z.string()).optional(),
 	oauth: z.literal(false).optional(),
 	disabled: z.boolean(),
+	permission: mcpExecutionPolicySchema,
 	timeout: z.object({
 		startup: phaseTimeoutSchema,
 		catalog: phaseTimeoutSchema,

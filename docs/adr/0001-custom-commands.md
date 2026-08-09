@@ -19,12 +19,11 @@ Status: accepted
   commands override built-ins. Wincode's built-ins are UI actions dispatched to
   adapters (`/exit`, `/new`); letting a template shadow them would surprise users.
   Colliding custom commands are ignored with a warning.
-- **Project wins over global** — mirrors project-config-overrides-global and the
-  existing `.wincode/mcp.json` policy precedence.
+- **Project wins over global** — mirrors Wincode's merged project-over-global
+  configuration precedence.
 - **No opencode directories** — wincode does not read `~/.config/opencode/commands/`
-  or `~/.opencode/...`; `~/.wincode` is its own namespace. The MCP module's
-  remaining read of `~/.config/opencode/opencode.json` is a fork leftover, not a
-  pattern to copy.
+  or `~/.opencode/...`; Wincode uses `~/.config/wincode`, `~/.wincode`, and
+  project-local Wincode configuration only.
 - **Insert the invocation, expand at submit, not into the textarea** — selecting a
   custom command inserts `/<name> ` into the textarea; on submit the template is
   expanded into the sent prompt while history keeps the visible invocation.

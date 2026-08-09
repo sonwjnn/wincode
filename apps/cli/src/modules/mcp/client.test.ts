@@ -75,6 +75,7 @@ const baseLocal: LocalMcpServerConfig = {
 	type: "local",
 	command: ["bun", "x", "demo"],
 	disabled: false,
+	permission: "ask",
 	timeout: { startup: 30_000, catalog: 30_000, execution: 43_200_000 },
 };
 const baseRemote: RemoteMcpServerConfig = {
@@ -82,6 +83,7 @@ const baseRemote: RemoteMcpServerConfig = {
 	type: "remote",
 	url: "https://mcp.example.com/mcp",
 	disabled: false,
+	permission: "ask",
 	timeout: { startup: 30_000, catalog: 30_000, execution: 43_200_000 },
 };
 const localConfig = (

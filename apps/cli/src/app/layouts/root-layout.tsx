@@ -10,14 +10,16 @@ import {
 	usePromptConfig,
 } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { CopyOnSelect } from "@/shared/clipboard/copy-on-select";
+import { createConfigStore } from "@/shared/config/config-store";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 
 const connections = createConnections();
-// One registry for the whole app process; closed on exit (via the command
-// executor's ExitAdapter) and on provider unmount.
-const mcpRegistry = createMcpRegistry({ workspace: process.cwd() });
+const workspace = process.cwd();
+const configStore = createConfigStore();
+// Process-lifetime infrastructure is composed once and injected into modules.
+const mcpRegistry = createMcpRegistry({ configStore, workspace });
 
 function BillingComposition({ children }: { children: ReactNode }) {
 	const { model } = usePromptConfig();
@@ -64,7 +66,7 @@ export function RootLayout() {
 								<DialogProvider>
 									<McpProvider
 										createRegistry={() => mcpRegistry}
-										workspace={process.cwd()}
+										workspace={workspace}
 									>
 										<CopyOnSelect />
 										{/*

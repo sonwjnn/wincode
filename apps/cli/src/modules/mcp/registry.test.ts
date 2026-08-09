@@ -8,7 +8,7 @@ import type {
 	RemoteMcpServerConfig,
 	ResolvedMcpServerConfig,
 } from "./config";
-import type { McpExecutionPolicy, McpPolicyResult } from "./policy";
+import type { McpExecutionPolicy } from "./policy";
 import {
 	createMcpRegistry,
 	type McpApprovalRequest,
@@ -112,6 +112,7 @@ const DEFAULT_TIMEOUTS = {
 
 type ServerConfigPatch = {
 	disabled?: boolean;
+	permission?: McpExecutionPolicy;
 	timeout?: McpTimeouts;
 	type?: "local" | "remote";
 } & Partial<Pick<LocalMcpServerConfig, "command" | "cwd" | "environment">> &
@@ -127,6 +128,7 @@ const serverConfig = (
 			type: "remote",
 			url: patch.url ?? "https://mcp.example.com/mcp",
 			disabled: patch.disabled ?? false,
+			permission: patch.permission ?? "ask",
 			timeout: patch.timeout ?? DEFAULT_TIMEOUTS,
 			...(patch.headers === undefined ? {} : { headers: patch.headers }),
 		};
@@ -136,6 +138,7 @@ const serverConfig = (
 		type: "local",
 		command: patch.command ?? ["bun", "x", name],
 		disabled: patch.disabled ?? false,
+		permission: patch.permission ?? "ask",
 		timeout: patch.timeout ?? DEFAULT_TIMEOUTS,
 	};
 };
@@ -144,7 +147,6 @@ type HarnessOptions = {
 	clients?: Record<string, FakeMcpClient>;
 	configs?: ResolvedMcpServerConfig[];
 	deps?: Partial<McpRegistryDeps>;
-	policies?: Record<string, McpExecutionPolicy>;
 };
 
 type Harness = {
@@ -158,10 +160,8 @@ const harness = (options: HarnessOptions = {}): Harness => {
 		clients.set(name, client);
 	}
 	const configs = options.configs ?? [];
-	const policies = options.policies ?? {};
 	const registry = createMcpRegistry({
 		env: {},
-		globalRoot: "/global",
 		workspace: "/workspace",
 		createClient: (config) => {
 			const existing = clients.get(config.name);
@@ -177,10 +177,6 @@ const harness = (options: HarnessOptions = {}): Harness => {
 			servers: Object.fromEntries(
 				configs.map((config) => [config.name, config])
 			),
-		}),
-		loadPolicy: async (): Promise<McpPolicyResult> => ({
-			diagnostics: [],
-			policy: { servers: policies },
 		}),
 		...options.deps,
 	});
@@ -249,8 +245,7 @@ describe("createMcpRegistry", () => {
 		const github = new FakeMcpClient("github", [tool("read"), tool("write")]);
 		const { registry } = harness({
 			clients: { github },
-			configs: [serverConfig("github")],
-			policies: { github: "deny" },
+			configs: [serverConfig("github", { permission: "deny" })],
 		});
 		const snapshot = await registry.createSnapshot("build");
 		expect(snapshot.manifest).toEqual([]);
@@ -272,8 +267,7 @@ describe("createMcpRegistry", () => {
 		const demo = new FakeMcpClient("demo", [tool("echo", "Echo text back")]);
 		const { registry } = harness({
 			clients: { demo },
-			configs: [serverConfig("demo")],
-			policies: { demo: "ask" },
+			configs: [serverConfig("demo", { permission: "ask" })],
 		});
 		const snapshot = await registry.createSnapshot("build");
 		const name = snapshot.manifest[0]?.name ?? "";
@@ -303,8 +297,7 @@ describe("createMcpRegistry", () => {
 		const demo = new FakeMcpClient("demo", [tool("echo")]);
 		const { registry } = harness({
 			clients: { demo },
-			configs: [serverConfig("demo")],
-			policies: { demo: "ask" },
+			configs: [serverConfig("demo", { permission: "ask" })],
 		});
 		const snapshot = await registry.createSnapshot("build");
 		const name = snapshot.manifest[0]?.name ?? "";
@@ -322,8 +315,7 @@ describe("createMcpRegistry", () => {
 		const demo = new FakeMcpClient("demo", [tool("echo")]);
 		const { registry } = harness({
 			clients: { demo },
-			configs: [serverConfig("demo")],
-			policies: { demo: "allow" },
+			configs: [serverConfig("demo", { permission: "allow" })],
 		});
 		const snapshot = await registry.createSnapshot("build");
 		const name = snapshot.manifest[0]?.name ?? "";
@@ -337,8 +329,7 @@ describe("createMcpRegistry", () => {
 		const demo = new FakeMcpClient("demo", [tool("echo")]);
 		const { registry } = harness({
 			clients: { demo },
-			configs: [serverConfig("demo")],
-			policies: { demo: "ask" },
+			configs: [serverConfig("demo", { permission: "ask" })],
 		});
 		const snapshot = await registry.createSnapshot("build");
 		const name = snapshot.manifest[0]?.name ?? "";

@@ -16,7 +16,6 @@ import path from "node:path";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { McpConfigResult, ResolvedMcpServerConfig } from "./config";
-import type { McpPolicyResult } from "./policy";
 import {
 	createMcpRegistry,
 	type McpCatalogSnapshot,
@@ -40,6 +39,7 @@ const stdioServerConfig = (
 	command,
 	cwd: import.meta.dir,
 	disabled: false,
+	permission: "allow",
 	timeout: timeouts,
 });
 
@@ -51,24 +51,20 @@ const remoteServerConfig = (
 	type: "remote",
 	url,
 	disabled: false,
+	permission: "allow",
 	timeout: timeouts,
 });
 
-// Real registry with the production SDK client factory wiring; only the
-// file-based config/policy loaders are injected so the tests point at the
-// real transports without touching the user's opencode.json/.wincode/mcp.json.
+// Real registry with the production SDK client factory wiring. Only the
+// file-based config loader is injected so tests point at real transports
+// without touching the user's Wincode configuration.
 const createRegistry = (config: ResolvedMcpServerConfig): McpRegistry =>
 	createMcpRegistry({
 		env: { ...process.env },
-		globalRoot: path.join(import.meta.dir, ".integration-global"),
 		workspace: import.meta.dir,
 		loadConfig: async (): Promise<McpConfigResult> => ({
 			diagnostics: [],
 			servers: { [config.name]: config },
-		}),
-		loadPolicy: async (): Promise<McpPolicyResult> => ({
-			diagnostics: [],
-			policy: { servers: { [config.name]: "allow" } },
 		}),
 	});
 

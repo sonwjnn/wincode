@@ -1,5 +1,3 @@
-import { homedir } from "node:os";
-import path from "node:path";
 import {
 	isJsonValue,
 	type JsonObject,
@@ -8,6 +6,7 @@ import {
 	type McpToolManifestEntry,
 	type ModeType,
 } from "@wincode/ai";
+import type { ConfigStore } from "@/shared/config/config-store";
 import {
 	createSdkMcpClient,
 	createSdkMcpClientDeps,
@@ -22,14 +21,7 @@ import {
 	type McpConfigResult,
 	type ResolvedMcpServerConfig,
 } from "./config";
-import {
-	getMcpPolicyDecision,
-	type LoadMcpPolicyInput,
-	loadMcpPolicy,
-	type McpExecutionPolicy,
-	type McpPolicy,
-	type McpPolicyResult,
-} from "./policy";
+import type { McpExecutionPolicy } from "./policy";
 import { type McpNormalizedResult, normalizeMcpResult } from "./result";
 import { sanitizeMessage } from "./sanitize";
 import { qualifyMcpToolName } from "./tool-identity";
@@ -87,11 +79,12 @@ export type McpRegistry = {
 };
 
 export type McpRegistryDeps = {
+	configRoot?: string;
+	configStore?: ConfigStore;
 	createClient?: (config: ResolvedMcpServerConfig) => McpClient;
 	env?: Record<string, string | undefined>;
-	globalRoot?: string;
+	homeRoot?: string;
 	loadConfig?: (input: McpConfigInput) => Promise<McpConfigResult>;
-	loadPolicy?: (input: LoadMcpPolicyInput) => Promise<McpPolicyResult>;
 	workspace: string;
 };
 
@@ -102,9 +95,6 @@ type ServerEntry = {
 	state: McpServerState;
 	tools: readonly McpClientTool[];
 };
-
-const DEFAULT_GLOBAL_CONFIG_ROOT = (): string =>
-	path.join(homedir(), ".config", "opencode");
 
 const outputError = (message: string): McpNormalizedResult => ({
 	content: [{ type: "text", text: message }],
@@ -148,10 +138,8 @@ const defaultSdkClientFactory = (
 
 export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	const workspace = input.workspace;
-	const globalRoot = input.globalRoot ?? DEFAULT_GLOBAL_CONFIG_ROOT();
 	const env = input.env ?? { ...process.env };
 	const loadConfig = input.loadConfig ?? loadMcpConfig;
-	const loadPolicy = input.loadPolicy ?? loadMcpPolicy;
 	const createClient =
 		input.createClient ?? defaultSdkClientFactory(workspace, env);
 
@@ -162,7 +150,6 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	let initPromise: Promise<void> | undefined;
 	const reconnects = new Map<string, Promise<void>>();
 	let latestSnapshotId: string | undefined;
-	let policy: McpPolicy = { servers: {} };
 
 	const emit = (): void => {
 		for (const listener of [...listeners]) {
@@ -220,12 +207,13 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	};
 
 	const doInit = async (): Promise<void> => {
-		const configResult = await loadConfig({ env, globalRoot, workspace });
-		const policyResult = await loadPolicy({
-			configuredServers: Object.keys(configResult.servers),
+		const configResult = await loadConfig({
+			env,
 			workspace,
+			...(input.configRoot ? { configRoot: input.configRoot } : {}),
+			...(input.configStore ? { configStore: input.configStore } : {}),
+			...(input.homeRoot ? { homeRoot: input.homeRoot } : {}),
 		});
-		policy = policyResult.policy;
 		for (const [name, config] of Object.entries(configResult.servers)) {
 			serverEntries.set(name, {
 				client: undefined,
@@ -264,7 +252,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			if (entry.client === undefined) {
 				continue;
 			}
-			const decision = getMcpPolicyDecision(policy, entry.config.name);
+			const decision = entry.config.permission;
 			for (const tool of entry.tools) {
 				candidates.push({
 					client: entry.client,
