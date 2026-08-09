@@ -1,10 +1,13 @@
 import {
 	createContext,
 	type ReactNode,
+	useCallback,
 	useContext,
 	useEffect,
+	useMemo,
 	useState,
 } from "react";
+import { useConnections } from "@/modules/connections";
 import { useConfig } from "@/shared/config/config-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import {
@@ -13,7 +16,14 @@ import {
 	summarizeAgentDiagnostics,
 } from "./registry";
 
-const AgentRegistryContext = createContext<AgentRegistry | null>(null);
+type AgentRegistryContextValue = {
+	readonly refresh: () => void;
+	readonly registry: AgentRegistry | null;
+};
+
+const AgentRegistryContext = createContext<AgentRegistryContextValue | null>(
+	null
+);
 const storesWithDiagnosticsToast = new WeakSet<object>();
 
 export const claimAgentDiagnosticsToast = (configStore: object): boolean => {
@@ -31,12 +41,25 @@ export const claimAgentDiagnosticsToast = (configStore: object): boolean => {
  */
 export function AgentRegistryProvider({ children }: { children: ReactNode }) {
 	const config = useConfig();
+	const connections = useConnections();
 	const toast = useToast();
 	const [registry, setRegistry] = useState<AgentRegistry | null>(null);
+	const [revision, setRevision] = useState(0);
+	const refresh = useCallback(() => setRevision((current) => current + 1), []);
 
 	useEffect(() => {
 		let ignore = false;
-		resolveAgentRegistry(config)
+		const resolveCurrentRegistry = async (
+			_refreshRevision: number
+		): Promise<AgentRegistry> => {
+			const providers = await connections.listProviders();
+			return resolveAgentRegistry(config, {
+				connectedProviderIds: new Set(
+					providers.filter(({ connected }) => connected).map(({ id }) => id)
+				),
+			});
+		};
+		resolveCurrentRegistry(revision)
 			.then((resolved) => {
 				if (!ignore) {
 					setRegistry(resolved);
@@ -46,7 +69,7 @@ export function AgentRegistryProvider({ children }: { children: ReactNode }) {
 		return () => {
 			ignore = true;
 		};
-	}, [config]);
+	}, [config, connections, revision]);
 
 	useEffect(() => {
 		if (
@@ -64,13 +87,31 @@ export function AgentRegistryProvider({ children }: { children: ReactNode }) {
 		});
 	}, [config.configStore, registry, toast]);
 
+	const value = useMemo(() => ({ refresh, registry }), [refresh, registry]);
+
 	return (
-		<AgentRegistryContext.Provider value={registry}>
+		<AgentRegistryContext.Provider value={value}>
 			{children}
 		</AgentRegistryContext.Provider>
 	);
 }
 
 export function useAgentRegistry(): AgentRegistry | null {
-	return useContext(AgentRegistryContext);
+	const context = useContext(AgentRegistryContext);
+	if (context === null) {
+		throw new Error(
+			"useAgentRegistry must be used within AgentRegistryProvider"
+		);
+	}
+	return context.registry;
+}
+
+export function useRefreshAgentRegistry(): () => void {
+	const context = useContext(AgentRegistryContext);
+	if (context === null) {
+		throw new Error(
+			"useRefreshAgentRegistry must be used within AgentRegistryProvider"
+		);
+	}
+	return context.refresh;
 }

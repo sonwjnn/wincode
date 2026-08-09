@@ -9,10 +9,75 @@ import { writeFixture } from "@/shared/config/filesystem-test-utils";
 import {
 	configuredAgentVisibleCodingTools,
 	resolveAgentRegistry,
+	resolveEffectiveAgentSelection,
 	resolveExecutableAgentRuntime,
 } from "./registry";
 
 describe("configured Agents", () => {
+	test("resolves a catalog model pin and available default from real config", async () => {
+		const root = await mkdtemp(join(tmpdir(), "wincode-agents-model-default-"));
+		const homeRoot = join(root, "home");
+		const workspace = join(root, "workspace");
+		const xdgConfigHome = join(root, "xdg");
+
+		try {
+			await writeFixture(
+				join(workspace, "wincode.json"),
+				JSON.stringify({
+					agents: {
+						reviewer: {
+							description: "Reviews code",
+							model: "openai/gpt-5.5",
+							role: "primary",
+							variant: "high",
+						},
+					},
+					default_agent: "reviewer",
+				})
+			);
+			const runtime = {
+				configStore: createConfigStore({ homeRoot, xdgConfigHome }),
+				homeRoot,
+				workspace,
+			};
+			const available = await resolveAgentRegistry(runtime, {
+				connectedProviderIds: new Set(["openai"]),
+			});
+
+			expect(available.defaultAgentId).toBe("reviewer");
+			expect(available.selectableAgents[0]).toMatchObject({
+				id: "reviewer",
+				model: { modelId: "gpt-5.5", providerId: "openai" },
+				variant: "high",
+			});
+			expect(
+				resolveEffectiveAgentSelection(
+					available,
+					"reviewer",
+					{ modelId: "gpt-5.4-mini", providerId: "wincode" },
+					undefined
+				)
+			).toMatchObject({
+				agent: "reviewer",
+				model: { modelId: "gpt-5.5", providerId: "openai" },
+				variant: "high",
+			});
+
+			const unavailable = await resolveAgentRegistry(runtime, {
+				connectedProviderIds: new Set(["wincode"]),
+			});
+			expect(unavailable.defaultAgentId).toBe("build");
+			expect(
+				unavailable.selectableAgents.find(({ id }) => id === "reviewer")
+			).toMatchObject({ isAvailable: false });
+			expect(unavailable.diagnostics).toMatchObject([
+				{ configPath: ["default_agent"], severity: "error" },
+			]);
+		} finally {
+			await rm(root, { force: true, recursive: true });
+		}
+	});
+
 	test("defines, lists, selects, and prepares local execution from real wincode.json", async () => {
 		const root = await mkdtemp(join(tmpdir(), "wincode-agents-json-"));
 		const homeRoot = join(root, "home");

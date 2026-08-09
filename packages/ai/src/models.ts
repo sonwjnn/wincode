@@ -748,6 +748,24 @@ export const isSupportedChatModelSelection = (
 	selection: ChatModelSelection
 ): boolean => findSupportedChatModelSelection(selection) !== null;
 
+/** Resolve the Agent config form `<connectionProviderId>/<modelId>`. */
+export const parseCatalogModelSelection = (
+	value: string
+): ChatModelSelection | null => {
+	const separatorIndex = value.indexOf("/");
+	if (separatorIndex <= 0 || separatorIndex === value.length - 1) {
+		return null;
+	}
+	const selection = {
+		modelId: value.slice(separatorIndex + 1),
+		providerId: value.slice(0, separatorIndex),
+	};
+	const parsed = chatModelSelectionBaseSchema.safeParse(selection);
+	return parsed.success && findSupportedChatModelSelection(parsed.data)
+		? parsed.data
+		: null;
+};
+
 export const getChatModelRoute = (
 	selection: ChatModelSelection
 ): "hosted" | "direct" | null =>

@@ -280,6 +280,45 @@ describe("drizzle conversation store", () => {
 		).toMatchObject({ responseTimeMs: 431 });
 	});
 
+	test("round trips the effective configured Agent and pinned model", async () => {
+		const effectiveMessage: CodingAgentUIMessage = {
+			id: "m-effective",
+			metadata: {
+				agent: "code-reviewer",
+				mode: "build",
+				model: { modelId: "gpt-5.5", providerId: "openai" },
+				variant: "high",
+			},
+			parts: [{ text: "review this", type: "text" }],
+			role: "user",
+		};
+		const { id } = await store.createSession({
+			agent: "code-reviewer",
+			message: effectiveMessage,
+			mode: "build",
+			model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
+			variant: "low",
+		});
+
+		const [restored] = await store.getMessages(id);
+		expect(await store.getSession(id)).toMatchObject({
+			model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
+			variant: "low",
+		});
+		expect(restored?.metadata).toMatchObject({
+			agent: "code-reviewer",
+			model: { modelId: "gpt-5.5", providerId: "openai" },
+			variant: "high",
+		});
+		expect(
+			db
+				.select()
+				.from(conversationMessage)
+				.where(eq(conversationMessage.uiMessageId, "m-effective"))
+				.get()?.agent
+		).toBe("code-reviewer");
+	});
+
 	test("rejects malformed persisted metadata on load", async () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "hello"),
@@ -492,6 +531,11 @@ describe("local migrations", () => {
 		expect(sqlite.query("SELECT prompt FROM prompt_history").all()).toEqual([
 			{ prompt: "legacy prompt" },
 		]);
+		const fallbackMigration = await readFile(
+			join(localMigrationsFolder, "0005_wild_blindfold.sql"),
+			"utf8"
+		);
+		sqlite.exec(fallbackMigration.replaceAll("--> statement-breakpoint", "\n"));
 
 		const restoredMessages = await legacyStore.getMessages("session-legacy");
 		expect(

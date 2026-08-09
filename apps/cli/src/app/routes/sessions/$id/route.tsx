@@ -47,6 +47,10 @@ function SessionRoute() {
 	const { id } = Route.useParams();
 	const [messages, setMessages] = useState<CodingAgentUIMessage[] | null>(null);
 	const [sessionTitle, setSessionTitle] = useState<string | null>(null);
+	const [sessionConfig, setSessionConfig] = useState<{
+		model?: import("@wincode/ai").ChatModelSelection;
+		variant?: import("@wincode/ai").ModelVariant;
+	} | null>(null);
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
 	const prompt = useRouterState({
 		select: (state) => getInitialPrompt(state.location.state),
@@ -59,6 +63,7 @@ function SessionRoute() {
 		let ignore = false;
 		setMessages(null);
 		setSessionTitle(null);
+		setSessionConfig(null);
 		setErrorMessage(null);
 
 		const store = getConversationStore();
@@ -67,6 +72,10 @@ function SessionRoute() {
 			.then(([loadedMessages, session]) => {
 				if (!ignore) {
 					setMessages(loadedMessages);
+					setSessionConfig({
+						...(session.model ? { model: session.model } : {}),
+						...(session.variant ? { variant: session.variant } : {}),
+					});
 					setSessionTitle(session.title);
 				}
 			})
@@ -87,7 +96,7 @@ function SessionRoute() {
 		return <text fg={colors.error}>{errorMessage}</text>;
 	}
 
-	if (!(messages && sessionTitle)) {
+	if (!(messages && sessionTitle && sessionConfig)) {
 		return <text fg={colors.text}>Loading session...</text>;
 	}
 
@@ -95,7 +104,9 @@ function SessionRoute() {
 		<ChatView
 			autoStart={autoStart}
 			initialMessages={messages}
+			initialModel={sessionConfig.model}
 			initialPrompt={prompt}
+			initialVariant={sessionConfig.variant}
 			onHostedCompletion={() => {
 				refreshBilling().catch(() => undefined);
 			}}

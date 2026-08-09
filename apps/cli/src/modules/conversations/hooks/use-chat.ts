@@ -46,6 +46,8 @@ import { createRoutingChatTransport } from "./routing-chat-transport";
 
 type SubmitChatParams = {
 	agent: AgentId;
+	conversationModel: ChatModelSelection;
+	conversationVariant?: ModelVariant;
 	model: ChatModelSelection;
 	variant?: ModelVariant;
 	resolvedAgent?: ResolvedAgentRuntime;
@@ -321,6 +323,10 @@ export function useChat(
 	const modeRef = useRef<ModeType>(getLegacyModeForAgent("build"));
 	const resolvedAgentRef = useRef<ResolvedAgentRuntime | undefined>(undefined);
 	const modelRef = useRef<ChatModelSelection>(defaultChatModelSelection);
+	const conversationModelRef = useRef<ChatModelSelection>(
+		defaultChatModelSelection
+	);
+	const conversationVariantRef = useRef<ModelVariant | undefined>(undefined);
 	const variantRef = useRef<ModelVariant | undefined>(undefined);
 	const mcpSnapshotRef = useRef<McpCatalogSnapshot | null>(null);
 	const [isPreparingMessage, setIsPreparingMessage] = useState(false);
@@ -388,8 +394,9 @@ export function useChat(
 				agent: agentRef.current,
 				messages,
 				mode: modeRef.current,
-				model: modelRef.current,
+				model: conversationModelRef.current,
 				sessionId,
+				variant: conversationVariantRef.current,
 			})
 			.catch(() => undefined);
 	};
@@ -462,6 +469,8 @@ export function useChat(
 
 	const submit = async ({
 		agent,
+		conversationModel,
+		conversationVariant,
 		model,
 		variant,
 		resolvedAgent,
@@ -472,6 +481,8 @@ export function useChat(
 		agentRef.current = agent;
 		modeRef.current = getLegacyModeForAgent(agent);
 		resolvedAgentRef.current = resolvedAgent;
+		conversationModelRef.current = conversationModel;
+		conversationVariantRef.current = conversationVariant;
 		modelRef.current = model;
 		variantRef.current = variant;
 		requestStartedAtRef.current = Date.now();
@@ -506,11 +517,15 @@ export function useChat(
 		agent: AgentId,
 		model: ChatModelSelection,
 		variant?: ModelVariant,
-		resolvedAgent?: ResolvedAgentRuntime
+		resolvedAgent?: ResolvedAgentRuntime,
+		conversationModel: ChatModelSelection = model,
+		conversationVariant: ModelVariant | undefined = variant
 	) => {
 		agentRef.current = agent;
 		modeRef.current = getLegacyModeForAgent(agent);
 		resolvedAgentRef.current = resolvedAgent;
+		conversationModelRef.current = conversationModel;
+		conversationVariantRef.current = conversationVariant;
 		modelRef.current = model;
 		variantRef.current = variant;
 		requestStartedAtRef.current = Date.now();

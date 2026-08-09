@@ -12,6 +12,7 @@ import {
 	normalizeChatModelSelection,
 	normalizeModelVariant,
 	normalizeModelVariantForModel,
+	parseCatalogModelSelection,
 	type SupportedProvider,
 	supportedChatModels,
 } from "./models";
@@ -91,6 +92,16 @@ describe("shared chat model selection", () => {
 		).toMatchObject({
 			success: false,
 		});
+	});
+
+	test("resolves Agent model strings only through provider/model catalog pairs", () => {
+		expect(parseCatalogModelSelection("openai/gpt-5.5")).toEqual({
+			modelId: "gpt-5.5",
+			providerId: "openai",
+		});
+		expect(parseCatalogModelSelection("anthropic/gpt-5.5")).toBeNull();
+		expect(parseCatalogModelSelection("gpt-5.5")).toBeNull();
+		expect(parseCatalogModelSelection("openai/")).toBeNull();
 	});
 
 	test("rejects invalid model/provider pairs", () => {

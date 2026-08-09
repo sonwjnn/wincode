@@ -11,6 +11,8 @@ import {
 	MAX_CONFIGURED_AGENT_DESCRIPTION_LENGTH,
 	MAX_CONFIGURED_AGENT_INSTRUCTIONS_LENGTH,
 	MAX_CONFIGURED_AGENTS,
+	resolveActiveAgentId,
+	resolveEffectiveAgentSelection,
 	resolveExecutableAgentRuntime,
 	summarizeAgentDiagnostics,
 } from "./registry";
@@ -69,6 +71,129 @@ describe("buildAgentRegistry", () => {
 			"plan",
 		]);
 		expect(registry.diagnostics).toEqual([]);
+	});
+
+	test("resolves catalog model pins and supported variants", () => {
+		const registry = buildAgentRegistry(
+			makeSnapshot({
+				agents: {
+					reviewer: {
+						description: "Reviews code",
+						model: "openai/gpt-5.5",
+						role: "primary",
+						variant: "high",
+					},
+				},
+			})
+		);
+
+		expect(registry.configuredAgents[0]).toMatchObject({
+			model: { modelId: "gpt-5.5", providerId: "openai" },
+			variant: "high",
+		});
+		expect(registry.diagnostics).toEqual([]);
+	});
+
+	test("rejects unknown model pins and variants without a supported model", () => {
+		const registry = buildAgentRegistry(
+			makeSnapshot({
+				agents: {
+					"bad-model": {
+						description: "Bad model",
+						model: "anthropic/gpt-5.5",
+						role: "primary",
+					},
+					"bad-variant": {
+						description: "Bad variant",
+						role: "primary",
+						variant: "high",
+					},
+				},
+			})
+		);
+
+		expect(registry.configuredAgents).toEqual([]);
+		expect(registry.diagnostics).toHaveLength(2);
+	});
+
+	test("puts a valid available default first and falls back visibly to Build", () => {
+		const configured = makeSnapshot({
+			agents: {
+				reviewer: {
+					description: "Reviews code",
+					role: "primary",
+				},
+			},
+			default_agent: "reviewer",
+		});
+		const valid = buildAgentRegistry(configured);
+		expect(valid.defaultAgentId).toBe("reviewer");
+		expect(valid.selectableAgents[0]?.id).toBe("reviewer");
+		expect(resolveActiveAgentId(valid)).toBe("reviewer");
+		expect(resolveActiveAgentId(valid, "plan")).toBe("plan");
+		expect(resolveActiveAgentId(valid, "removed-agent")).toBe("build");
+
+		const invalid = buildAgentRegistry(
+			makeSnapshot({ default_agent: "removed-agent" })
+		);
+		expect(invalid.defaultAgentId).toBe("build");
+		expect(invalid.diagnostics).toMatchObject([
+			{ configPath: ["default_agent"], severity: "error" },
+		]);
+	});
+
+	test("keeps disconnected model-pinned Agents visible but unavailable", () => {
+		const registry = buildAgentRegistry(
+			makeSnapshot({
+				agents: {
+					reviewer: {
+						description: "Reviews code",
+						model: "openai/gpt-5.5",
+						role: "primary",
+					},
+				},
+				default_agent: "reviewer",
+			}),
+			{ connectedProviderIds: new Set(["wincode"]) }
+		);
+
+		expect(
+			registry.selectableAgents.find(({ id }) => id === "reviewer")
+		).toMatchObject({
+			isAvailable: false,
+			unavailableReason: "Connect openai to use this Agent",
+		});
+		expect(registry.defaultAgentId).toBe("build");
+	});
+
+	test("uses Agent pins per request without changing fallback selection", () => {
+		const registry = buildAgentRegistry(
+			makeSnapshot({
+				agents: {
+					reviewer: {
+						description: "Reviews code",
+						model: "openai/gpt-5.5",
+						role: "primary",
+						variant: "high",
+					},
+				},
+			})
+		);
+		const fallbackModel = {
+			modelId: "gpt-5.4-mini",
+			providerId: "wincode",
+		} as const;
+
+		expect(
+			resolveEffectiveAgentSelection(registry, "reviewer", fallbackModel, "low")
+		).toMatchObject({
+			agent: "reviewer",
+			model: { modelId: "gpt-5.5", providerId: "openai" },
+			variant: "high",
+		});
+		expect(
+			resolveEffectiveAgentSelection(registry, "plan", fallbackModel, "low")
+		).toMatchObject({ agent: "plan", model: fallbackModel, variant: "low" });
 	});
 
 	test("retains subagent definitions without making them selectable", () => {

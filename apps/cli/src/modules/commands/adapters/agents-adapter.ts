@@ -5,7 +5,7 @@ export type AgentsAdapterContext = {
 	open: (props: {
 		currentAgent: AgentId;
 		onSelectAgent: (agent: AgentId) => void;
-	}) => void;
+	}) => unknown;
 	currentAgent: AgentId;
 	setAgent: (agent: AgentId) => void;
 };
@@ -17,8 +17,8 @@ export class AgentsAdapter {
 		this.ctx = ctx;
 	}
 
-	execute(_spec: Extract<CommandSpec, { kind: "agents" }>) {
-		this.ctx.open({
+	async execute(_spec: Extract<CommandSpec, { kind: "agents" }>) {
+		await this.ctx.open({
 			currentAgent: this.ctx.currentAgent,
 			onSelectAgent: this.ctx.setAgent,
 		});

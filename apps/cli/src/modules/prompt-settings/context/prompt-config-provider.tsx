@@ -11,8 +11,11 @@ import {
 	type ReactNode,
 	useCallback,
 	useContext,
+	useEffect,
+	useRef,
 	useState,
 } from "react";
+import { resolveActiveAgentId, useAgentRegistry } from "@/modules/agents";
 
 type PromptConfigState = {
 	agent: AgentId;
@@ -57,14 +60,27 @@ export function PromptConfigProvider({
 	initialModel = defaultChatModelSelection,
 	initialVariant,
 }: PromptConfigProviderProps) {
+	const registry = useAgentRegistry();
+	const hasExplicitAgent = useRef(initialAgent !== "build");
 	const [config, setConfig] = useState<PromptConfigState>({
 		agent: initialAgent,
 		model: initialModel,
 		variant: normalizeModelVariant(initialModel, initialVariant),
 	});
 
+	useEffect(() => {
+		if (registry === null || hasExplicitAgent.current) {
+			return;
+		}
+		setConfig((current) => ({
+			...current,
+			agent: resolveActiveAgentId(registry),
+		}));
+	}, [registry]);
+
 	const cycleAgent = useCallback(
 		(selectableAgents: readonly { id: AgentId }[]) => {
+			hasExplicitAgent.current = true;
 			setConfig((current) => {
 				if (selectableAgents.length === 0) {
 					return current;
@@ -82,6 +98,7 @@ export function PromptConfigProvider({
 	);
 
 	const setAgent = useCallback((agent: AgentId) => {
+		hasExplicitAgent.current = true;
 		setConfig((current) => ({ ...current, agent }));
 	}, []);
 

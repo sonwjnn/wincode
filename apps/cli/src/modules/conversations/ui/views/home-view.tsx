@@ -3,6 +3,10 @@ import { useRouter } from "@tanstack/react-router";
 import { getLegacyModeForAgent } from "@wincode/ai";
 import { createUserMessage } from "@wincode/ai/client";
 import { useEffect, useState } from "react";
+import {
+	resolveEffectiveAgentSelection,
+	useAgentRegistry,
+} from "@/modules/agents";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { APP_VERSION } from "@/shared/app-info";
@@ -22,9 +26,21 @@ export function HomeView() {
 	const router = useRouter();
 	const [_error, setError] = useState<string | null>(null);
 	const [isCreatingSession, setIsCreatingSession] = useState(false);
+	const [initializedDefaultAgentId, setInitializedDefaultAgentId] = useState<
+		string | undefined
+	>();
 	const { agent, model, setAgent, setModel, setVariant, variant } =
 		usePromptConfig();
 	const { colors } = useTheme();
+	const registry = useAgentRegistry();
+	const defaultAgentId = registry?.defaultAgentId;
+
+	useEffect(() => {
+		if (defaultAgentId !== undefined) {
+			setAgent(defaultAgentId);
+			setInitializedDefaultAgentId(defaultAgentId);
+		}
+	}, [defaultAgentId, setAgent]);
 
 	useEffect(() => {
 		let ignore = false;
@@ -36,12 +52,13 @@ export function HomeView() {
 				return;
 			}
 
-			const config = getLatestChatConfig(await store.getMessages(session.id));
+			const config = session.model
+				? { model: session.model, variant: session.variant }
+				: getLatestChatConfig(await store.getMessages(session.id));
 			if (ignore || !config) {
 				return;
 			}
 
-			setAgent(config.agent);
 			setModel(config.model);
 			setVariant(config.variant);
 		};
@@ -51,10 +68,14 @@ export function HomeView() {
 		return () => {
 			ignore = true;
 		};
-	}, [setAgent, setModel, setVariant]);
+	}, [setModel, setVariant]);
 
 	const handleSubmit = async ({ files, skill, text }: ChatPromptSubmission) => {
-		if (isCreatingSession) {
+		if (
+			isCreatingSession ||
+			registry === null ||
+			initializedDefaultAgentId !== defaultAgentId
+		) {
 			return false;
 		}
 		const prompt = text.trim();
@@ -83,27 +104,34 @@ export function HomeView() {
 		skill: ChatPromptSubmission["skill"]
 	) => {
 		const fileMentions = await resolveFileMentionParts(input);
-		const { id } = await getConversationStore().createSession({
+		const effective = resolveEffectiveAgentSelection(
+			registry,
 			agent,
+			model,
+			variant
+		);
+		const { id } = await getConversationStore().createSession({
+			agent: effective.agent,
 			message: createUserMessage(
 				input,
 				{
-					agent,
-					mode: getLegacyModeForAgent(agent),
-					model,
-					variant,
+					agent: effective.agent,
+					mode: getLegacyModeForAgent(effective.agent),
+					model: effective.model,
+					variant: effective.variant,
 					...(skill ? { skill: createSkillSnapshot(skill) } : {}),
 				},
 				fileMentions,
 				files
 			),
-			mode: getLegacyModeForAgent(agent),
+			mode: getLegacyModeForAgent(effective.agent),
 			model,
+			variant,
 		});
 
 		await router.navigate({
 			params: { id },
-			state: { agent, autoStart: true },
+			state: { agent: effective.agent, autoStart: true },
 			to: "/sessions/$id",
 		});
 	};

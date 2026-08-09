@@ -1,4 +1,10 @@
-import type { AgentId, CodingAgentUIMessage, ModeType } from "@wincode/ai";
+import type {
+	AgentId,
+	ChatModelSelection,
+	CodingAgentUIMessage,
+	ModelVariant,
+	ModeType,
+} from "@wincode/ai";
 import { sql } from "drizzle-orm";
 import {
 	index,
@@ -29,6 +35,8 @@ export const conversationSession = sqliteTable(
 		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 		updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 		lastMessageAt: integer("last_message_at", { mode: "timestamp_ms" }),
+		modelJson: text("model_json", { mode: "json" }).$type<ChatModelSelection>(),
+		variant: text("variant").$type<ModelVariant>(),
 	},
 	(table) => [
 		index("idx_conversation_session_pinned_last_message").on(

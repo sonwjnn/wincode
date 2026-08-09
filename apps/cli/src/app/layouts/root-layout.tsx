@@ -67,8 +67,8 @@ export function RootLayout() {
 	return (
 		<ConfigProvider value={configContext}>
 			<ToastProvider>
-				<AgentRegistryProvider>
-					<ConnectionsProvider connections={connections}>
+				<ConnectionsProvider connections={connections}>
+					<AgentRegistryProvider>
 						<KeyboardLayerProvider>
 							<PromptConfigProvider>
 								<ModelPricingProvider>
@@ -95,8 +95,8 @@ export function RootLayout() {
 								</ModelPricingProvider>
 							</PromptConfigProvider>
 						</KeyboardLayerProvider>
-					</ConnectionsProvider>
-				</AgentRegistryProvider>
+					</AgentRegistryProvider>
+				</ConnectionsProvider>
 			</ToastProvider>
 		</ConfigProvider>
 	);

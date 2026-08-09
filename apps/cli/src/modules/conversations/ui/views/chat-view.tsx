@@ -1,12 +1,15 @@
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import {
+	type ChatModelSelection,
 	type CodingAgentUIMessage,
+	type ModelVariant,
 	normalizeChatModelSelection,
 	normalizeModelVariant,
 } from "@wincode/ai";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-	resolveExecutableAgentRuntime,
+	resolveActiveAgentId,
+	resolveEffectiveAgentSelection,
 	useAgentRegistry,
 } from "@/modules/agents";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
@@ -28,7 +31,9 @@ const SIDEBAR_MIN_TERMINAL_WIDTH = 100;
 type ChatScreenProps = {
 	autoStart: boolean;
 	initialMessages: CodingAgentUIMessage[];
+	initialModel?: ChatModelSelection;
 	initialPrompt: string;
+	initialVariant?: ModelVariant;
 	sessionId: string;
 	sessionTitle: string;
 	onHostedCompletion?: () => void;
@@ -44,7 +49,9 @@ export const hasChatPromptContent = ({
 export function ChatView({
 	autoStart,
 	initialMessages,
+	initialModel,
 	initialPrompt,
+	initialVariant,
 	sessionId,
 	sessionTitle,
 	onHostedCompletion,
@@ -64,6 +71,9 @@ export function ChatView({
 	);
 	const interruptArmedRef = useRef(false);
 	const [isInterruptArmed, setIsInterruptArmed] = useState(false);
+	const [restoredMessages, setRestoredMessages] = useState<
+		CodingAgentUIMessage[] | null
+	>(null);
 	const {
 		abort,
 		continueLastMessage,
@@ -80,17 +90,51 @@ export function ChatView({
 		() => derivePromptHistory(initialMessages),
 		[initialMessages]
 	);
+	const restoredConfig = useMemo(() => {
+		if (registry === null) {
+			return null;
+		}
+		const persisted = getLatestChatConfig(initialMessages);
+		if (!persisted) {
+			return null;
+		}
+		return {
+			agent: resolveActiveAgentId(registry, persisted.agent),
+			model: initialModel ?? persisted.model,
+			persistedAgent: persisted.agent,
+			variant: initialModel ? initialVariant : persisted.variant,
+		};
+	}, [initialMessages, initialModel, initialVariant, registry]);
+	const isPromptConfigRestored = restoredMessages === initialMessages;
 
 	useEffect(() => {
-		const config = getLatestChatConfig(initialMessages);
-		if (!config) {
+		if (registry === null) {
+			return;
+		}
+		if (!restoredConfig) {
+			setRestoredMessages(initialMessages);
 			return;
 		}
 
-		setAgent(config.agent);
-		setModel(config.model);
-		setVariant(config.variant);
-	}, [initialMessages, setAgent, setModel, setVariant]);
+		setModel(restoredConfig.model);
+		setVariant(restoredConfig.variant);
+		setAgent(restoredConfig.agent);
+		setRestoredMessages(initialMessages);
+		if (restoredConfig.agent !== restoredConfig.persistedAgent) {
+			show({
+				message: `Saved Agent "${restoredConfig.persistedAgent}" is unavailable. Using Build.`,
+				variant: "error",
+			});
+		}
+	}, [
+		initialMessages,
+		registry,
+		restoredConfig,
+		setAgent,
+		setModel,
+		setVariant,
+		show,
+	]);
 
 	useEffect(
 		() => () => {
@@ -184,7 +228,7 @@ export function ChatView({
 	);
 
 	const submitMessage = (submission: ChatPromptSubmission) => {
-		if (isBusy) {
+		if (isBusy || registry === null || !isPromptConfigRestored) {
 			return false;
 		}
 
@@ -194,12 +238,20 @@ export function ChatView({
 			return false;
 		}
 
-		submit({
+		const effective = resolveEffectiveAgentSelection(
+			registry,
 			agent,
-			files,
 			model,
-			resolvedAgent: resolveExecutableAgentRuntime(registry, agent),
-			variant,
+			variant
+		);
+		submit({
+			agent: effective.agent,
+			conversationModel: model,
+			conversationVariant: variant,
+			files,
+			model: effective.model,
+			resolvedAgent: effective.resolvedAgent,
+			variant: effective.variant,
 			userText,
 			skill,
 		}).catch(() => undefined);
@@ -208,7 +260,7 @@ export function ChatView({
 
 	useEffect(() => {
 		const submittedPrompt = initialPrompt.trim();
-		if (!submittedPrompt) {
+		if (!submittedPrompt || registry === null || !isPromptConfigRestored) {
 			return;
 		}
 
@@ -217,19 +269,41 @@ export function ChatView({
 		}
 
 		submittedPromptRef.current = submittedPrompt;
+		const conversationAgent = restoredConfig?.agent ?? agent;
+		const conversationModel = restoredConfig?.model ?? model;
+		const conversationVariant = restoredConfig?.variant ?? variant;
+		const effective = resolveEffectiveAgentSelection(
+			registry,
+			conversationAgent,
+			conversationModel,
+			conversationVariant
+		);
 		submit({
-			agent,
-			model,
-			resolvedAgent: resolveExecutableAgentRuntime(registry, agent),
-			variant,
+			agent: effective.agent,
+			conversationModel,
+			conversationVariant,
+			model: effective.model,
+			resolvedAgent: effective.resolvedAgent,
+			variant: effective.variant,
 			userText: submittedPrompt,
 		}).catch(() => undefined);
-	}, [agent, initialPrompt, model, registry, submit, variant]);
+	}, [
+		agent,
+		initialPrompt,
+		isPromptConfigRestored,
+		model,
+		registry,
+		restoredConfig,
+		submit,
+		variant,
+	]);
 
 	useEffect(() => {
 		const lastInitialMessage = initialMessages.at(-1);
 
 		if (
+			registry === null ||
+			!isPromptConfigRestored ||
 			!(
 				lastInitialMessage &&
 				shouldAutoStartAssistantTurn(
@@ -256,14 +330,26 @@ export function ChatView({
 			lastInitialMessage.metadata?.variant
 		);
 
+		const conversationModel = restoredConfig?.model ?? model;
+		const conversationVariant = restoredConfig?.variant ?? variant;
+		const persistedAgentId =
+			lastInitialMessage.metadata?.agent ?? restoredConfig?.agent ?? agent;
+		const persistedAgentIsAvailable = registry.selectableAgents.some(
+			({ id, isAvailable }) => id === persistedAgentId && isAvailable
+		);
+		const effective = resolveEffectiveAgentSelection(
+			registry,
+			persistedAgentId,
+			persistedAgentIsAvailable ? resolvedModel : conversationModel,
+			persistedAgentIsAvailable ? persistedVariant : conversationVariant
+		);
 		continueLastMessage(
-			lastInitialMessage.metadata?.agent ?? agent,
-			resolvedModel,
-			persistedVariant,
-			resolveExecutableAgentRuntime(
-				registry,
-				lastInitialMessage.metadata?.agent ?? agent
-			)
+			effective.agent,
+			effective.model,
+			effective.variant,
+			effective.resolvedAgent,
+			conversationModel,
+			conversationVariant
 		).catch(() => undefined);
 	}, [
 		agent,
@@ -271,8 +357,11 @@ export function ChatView({
 		continueLastMessage,
 		initialMessages,
 		initialPrompt,
+		isPromptConfigRestored,
 		model,
 		registry,
+		restoredConfig,
+		variant,
 	]);
 
 	return (

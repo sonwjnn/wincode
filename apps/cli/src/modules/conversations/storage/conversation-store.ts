@@ -17,8 +17,10 @@ export type ConversationSession = {
 	createdAt: Date;
 	id: string;
 	lastMessageAt: Date | null;
+	model?: ChatModelSelection;
 	pinned: boolean;
 	title: string;
+	variant?: import("@wincode/ai").ModelVariant;
 };
 
 export type CreateSessionInput = {
@@ -26,6 +28,7 @@ export type CreateSessionInput = {
 	message: CodingAgentUIMessage;
 	mode: ModeType;
 	model: ChatModelSelection;
+	variant?: import("@wincode/ai").ModelVariant;
 };
 
 export type UpdateSessionInput = {
@@ -39,6 +42,7 @@ export type PersistMessagesInput = {
 	mode: ModeType;
 	model: ChatModelSelection;
 	sessionId: string;
+	variant?: import("@wincode/ai").ModelVariant;
 };
 
 export type ConversationStore = {

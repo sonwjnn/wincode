@@ -4,8 +4,14 @@ import {
 	agentIdSchema,
 	agentRoleSchema,
 	builtInAgents,
+	type ChatModelSelection,
 	type CodingToolName,
+	type ConnectionProviderId,
+	isSupportedModelVariant,
 	MAX_AGENT_ID_LENGTH,
+	type ModelVariant,
+	modelVariantSchema,
+	parseCatalogModelSelection,
 	type ResolvedAgentRuntime,
 } from "@wincode/ai";
 import { z } from "zod";
@@ -86,18 +92,25 @@ export type AgentDiagnostic = {
 
 export type RegistryAgent = AgentDefinition & {
 	readonly isConfigured: boolean;
+	readonly isAvailable: boolean;
 	readonly isSelectable: boolean;
-	readonly model?: string;
+	readonly model?: ChatModelSelection;
 	readonly permission?: PermissionRules;
 	readonly requiresManualApproval: boolean;
-	readonly variant?: string;
+	readonly unavailableReason?: string;
+	readonly variant?: ModelVariant;
 };
 
 export type AgentRegistry = {
 	readonly agents: readonly RegistryAgent[];
 	readonly configuredAgents: readonly RegistryAgent[];
+	readonly defaultAgentId: AgentId;
 	readonly diagnostics: readonly AgentDiagnostic[];
 	readonly selectableAgents: readonly RegistryAgent[];
+};
+
+type AgentRegistryOptions = {
+	readonly connectedProviderIds?: ReadonlySet<ConnectionProviderId>;
 };
 
 const logicalConfigPath = (path: readonly string[]): string =>
@@ -283,7 +296,8 @@ type ConfiguredAgentEntryResult = {
 const resolveConfiguredAgentEntry = (
 	agentId: string,
 	rawDefinition: unknown,
-	snapshot: ConfigSnapshot
+	snapshot: ConfigSnapshot,
+	options: AgentRegistryOptions
 ): ConfiguredAgentEntryResult => {
 	const agentPath = ["agents", agentId];
 	const idResult = agentIdSchema.safeParse(agentId);
@@ -325,25 +339,75 @@ const resolveConfiguredAgentEntry = (
 			),
 		};
 	}
+	const parsedModel =
+		definition.data.model === undefined
+			? undefined
+			: parseCatalogModelSelection(definition.data.model);
+	if (definition.data.model !== undefined && parsedModel === null) {
+		return {
+			diagnostic: validationDiagnostic(
+				"invalid-agent",
+				agentId,
+				{
+					code: "custom",
+					message:
+						"Model must be a supported Model Catalog selection in <connectionProviderId>/<modelId> form",
+					path: ["model"],
+				},
+				snapshot
+			),
+		};
+	}
+	const model = parsedModel ?? undefined;
+	const variant =
+		definition.data.variant === undefined
+			? undefined
+			: modelVariantSchema.safeParse(definition.data.variant);
+	const hasInvalidVariant =
+		definition.data.variant !== undefined &&
+		(model === undefined ||
+			variant?.success !== true ||
+			!isSupportedModelVariant(model, variant.data));
+	if (hasInvalidVariant) {
+		return {
+			diagnostic: validationDiagnostic(
+				"invalid-agent",
+				agentId,
+				{
+					code: "custom",
+					message:
+						"Variant requires a configured model and must be supported by its Model Catalog entry",
+					path: ["variant"],
+				},
+				snapshot
+			),
+		};
+	}
+	const isAvailable =
+		model === undefined ||
+		options.connectedProviderIds === undefined ||
+		options.connectedProviderIds.has(model.providerId);
 	return {
 		agent: {
 			description: definition.data.description,
 			displayName: agentLabelFromId(agentId),
 			id: idResult.data,
 			instructions: definition.data.instructions ?? "",
+			isAvailable,
 			isConfigured: true,
 			isSelectable: definition.data.role !== "subagent",
-			...(definition.data.model === undefined
-				? {}
-				: { model: definition.data.model }),
+			...(model ? { model } : {}),
 			...(definition.data.permission === undefined
 				? {}
 				: { permission: definition.data.permission as PermissionRules }),
 			requiresManualApproval: false,
 			role: definition.data.role,
-			...(definition.data.variant === undefined
+			...(isAvailable
 				? {}
-				: { variant: definition.data.variant }),
+				: {
+						unavailableReason: `Connect ${model?.providerId} to use this Agent`,
+					}),
+			...(variant?.success ? { variant: variant.data } : {}),
 			visibleCodingTools: configuredAgentVisibleCodingTools,
 		},
 	};
@@ -352,7 +416,8 @@ const resolveConfiguredAgentEntry = (
 const collectConfiguredAgents = (
 	configured: Record<string, unknown>,
 	snapshot: ConfigSnapshot,
-	diagnostics: AgentDiagnostic[]
+	diagnostics: AgentDiagnostic[],
+	options: AgentRegistryOptions
 ): RegistryAgent[] => {
 	const entries = Object.entries(configured).filter(
 		([agentId]) => !builtInAgentIds.has(agentId)
@@ -363,7 +428,8 @@ const collectConfiguredAgents = (
 		const { agent, diagnostic } = resolveConfiguredAgentEntry(
 			agentId,
 			rawDefinition,
-			snapshot
+			snapshot,
+			options
 		);
 		if (diagnostic !== undefined) {
 			diagnostics.push(diagnostic);
@@ -395,12 +461,14 @@ const resolveBuiltInAgent = (
 	configured: Record<string, unknown>,
 	snapshot: ConfigSnapshot,
 	diagnostics: AgentDiagnostic[],
-	hasInvalidSourcePatch: boolean
+	hasInvalidSourcePatch: boolean,
+	options: AgentRegistryOptions
 ): RegistryAgent => {
 	const rawPatch = configured[shippedAgent.id];
 	if (hasInvalidSourcePatch) {
 		return {
 			...shippedAgent,
+			isAvailable: true,
 			isConfigured: false,
 			isSelectable: true,
 			requiresManualApproval: true,
@@ -409,6 +477,7 @@ const resolveBuiltInAgent = (
 	if (rawPatch === undefined) {
 		return {
 			...shippedAgent,
+			isAvailable: true,
 			isConfigured: false,
 			isSelectable: true,
 			requiresManualApproval: false,
@@ -426,20 +495,77 @@ const resolveBuiltInAgent = (
 		);
 		return {
 			...shippedAgent,
+			isAvailable: true,
 			isConfigured: false,
 			isSelectable: true,
 			requiresManualApproval: true,
 		};
 	}
+	const parsedModel =
+		patch.data.model === undefined
+			? undefined
+			: parseCatalogModelSelection(patch.data.model);
+	const variant =
+		patch.data.variant === undefined
+			? undefined
+			: modelVariantSchema.safeParse(patch.data.variant);
+	const hasInvalidModel =
+		patch.data.model !== undefined && parsedModel === null;
+	const hasInvalidVariant =
+		patch.data.variant !== undefined &&
+		(parsedModel === undefined ||
+			parsedModel === null ||
+			variant?.success !== true ||
+			!isSupportedModelVariant(parsedModel, variant.data));
+	if (hasInvalidModel || hasInvalidVariant) {
+		diagnostics.push(
+			validationDiagnostic(
+				"invalid-built-in-agent",
+				shippedAgent.id,
+				{
+					code: "custom",
+					message:
+						"Configured model or variant is not supported by the Model Catalog",
+					path: [hasInvalidModel ? "model" : "variant"],
+				},
+				snapshot
+			)
+		);
+		return {
+			...shippedAgent,
+			isAvailable: true,
+			isConfigured: false,
+			isSelectable: true,
+			requiresManualApproval: true,
+		};
+	}
+	const model = parsedModel ?? undefined;
+	const isAvailable =
+		model === undefined ||
+		options.connectedProviderIds === undefined ||
+		options.connectedProviderIds.has(model.providerId);
+	const {
+		model: _configuredModel,
+		variant: _configuredVariant,
+		...validatedPatch
+	} = patch.data;
 	return {
 		...shippedAgent,
-		...patch.data,
+		...validatedPatch,
+		...(model ? { model } : {}),
+		...(variant?.success ? { variant: variant.data } : {}),
+		isAvailable,
 		isConfigured: false,
 		isSelectable: true,
 		...(patch.data.permission === undefined
 			? {}
 			: { permission: patch.data.permission as PermissionRules }),
 		requiresManualApproval: false,
+		...(isAvailable
+			? {}
+			: {
+					unavailableReason: `Connect ${model?.providerId} to use this Agent`,
+				}),
 	};
 };
 
@@ -473,7 +599,10 @@ export const agentLabelFromId = (agentId: string): string =>
 		.map((segment) => `${segment.charAt(0).toUpperCase()}${segment.slice(1)}`)
 		.join(" ");
 
-export const buildAgentRegistry = (snapshot: ConfigSnapshot): AgentRegistry => {
+export const buildAgentRegistry = (
+	snapshot: ConfigSnapshot,
+	options: AgentRegistryOptions = {}
+): AgentRegistry => {
 	const diagnostics: AgentDiagnostic[] = [];
 	const configuredAgents: RegistryAgent[] = [];
 	const configured = snapshot.document.agents;
@@ -486,7 +615,7 @@ export const buildAgentRegistry = (snapshot: ConfigSnapshot): AgentRegistry => {
 	if (configured !== undefined) {
 		if (isRecord(configured)) {
 			configuredAgents.push(
-				...collectConfiguredAgents(configured, snapshot, diagnostics)
+				...collectConfiguredAgents(configured, snapshot, diagnostics, options)
 			);
 		} else {
 			diagnostics.push(
@@ -510,18 +639,40 @@ export const buildAgentRegistry = (snapshot: ConfigSnapshot): AgentRegistry => {
 			configuredRecord,
 			snapshot,
 			diagnostics,
-			invalidBuiltInSourcePatches.has(agent.id)
+			invalidBuiltInSourcePatches.has(agent.id),
+			options
 		)
 	);
 
 	const agents = [...builtInAgentsView, ...configuredAgents];
+	const rawDefaultAgent = snapshot.document.default_agent;
+	const configuredDefault =
+		typeof rawDefaultAgent === "string"
+			? agents.find(({ id }) => id === rawDefaultAgent)
+			: undefined;
+	const validDefault =
+		configuredDefault?.isSelectable === true && configuredDefault.isAvailable;
+	const defaultAgentId = validDefault ? configuredDefault.id : "build";
+	if (rawDefaultAgent !== undefined && !validDefault) {
+		diagnostics.push(
+			agentDiagnostic(
+				{
+					code: "invalid-agent",
+					configPath: ["default_agent"],
+					message: `Default Agent "${String(rawDefaultAgent)}" is missing, disabled, Subagent-only, or unavailable; using Build`,
+					severity: "error",
+				},
+				snapshot.sourceFor(["default_agent"])
+			)
+		);
+	}
 	const selectableAgents = agents
 		.filter(({ isSelectable }) => isSelectable)
 		.toSorted((left, right) => {
-			if (left.id === "build") {
+			if (left.id === defaultAgentId) {
 				return -1;
 			}
-			if (right.id === "build") {
+			if (right.id === defaultAgentId) {
 				return 1;
 			}
 			return left.id.localeCompare(right.id);
@@ -530,15 +681,71 @@ export const buildAgentRegistry = (snapshot: ConfigSnapshot): AgentRegistry => {
 	return {
 		agents,
 		configuredAgents,
+		defaultAgentId,
 		diagnostics: deduplicateDiagnostics(diagnostics),
 		selectableAgents,
 	};
 };
 
 export const resolveAgentRegistry = async (
-	input: ConfigRuntime
+	input: ConfigRuntime,
+	options: AgentRegistryOptions = {}
 ): Promise<AgentRegistry> =>
-	buildAgentRegistry(await input.configStore.getSnapshot(input.workspace));
+	buildAgentRegistry(
+		await input.configStore.getSnapshot(input.workspace),
+		options
+	);
+
+export type EffectiveAgentSelection = {
+	readonly agent: AgentId;
+	readonly model: ChatModelSelection;
+	readonly resolvedAgent?: ResolvedAgentRuntime;
+	readonly variant?: ModelVariant;
+};
+
+/** Resolve a restored selection first, or the configured default for new chats. */
+export const resolveActiveAgentId = (
+	registry: AgentRegistry,
+	restoredAgentId?: AgentId
+): AgentId => {
+	if (restoredAgentId === undefined) {
+		return registry.defaultAgentId;
+	}
+	return registry.selectableAgents.some(
+		({ id, isAvailable }) => id === restoredAgentId && isAvailable
+	)
+		? restoredAgentId
+		: "build";
+};
+
+export const resolveEffectiveAgentSelection = (
+	registry: AgentRegistry | null,
+	agentId: AgentId,
+	fallbackModel: ChatModelSelection,
+	fallbackVariant: ModelVariant | undefined
+): EffectiveAgentSelection => {
+	const selected = registry?.selectableAgents.find(
+		(agent) => agent.id === agentId && agent.isAvailable
+	);
+	const fallbackAgent = registry?.selectableAgents.find(
+		(agent) => agent.id === "build" && agent.isAvailable
+	);
+	const effectiveAgent = selected ?? fallbackAgent;
+	const effectiveAgentId = effectiveAgent?.id ?? (registry ? "build" : agentId);
+	return {
+		agent: effectiveAgentId,
+		model: effectiveAgent?.model ?? fallbackModel,
+		...(effectiveAgent
+			? {
+					resolvedAgent: {
+						instructions: effectiveAgent.instructions,
+						visibleCodingTools: [...effectiveAgent.visibleCodingTools],
+					},
+				}
+			: {}),
+		variant: effectiveAgent?.model ? effectiveAgent.variant : fallbackVariant,
+	};
+};
 
 /**
  * Resolves the runtime descriptor used by local execution for a selected

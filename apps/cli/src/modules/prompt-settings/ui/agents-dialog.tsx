@@ -1,4 +1,10 @@
-import { type AgentDefinition, type AgentId, builtInAgents } from "@wincode/ai";
+import { TextAttributes } from "@opentui/core";
+import {
+	type AgentDefinition,
+	type AgentId,
+	builtInAgents,
+	type ConnectionProviderId,
+} from "@wincode/ai";
 import { useCallback } from "react";
 import {
 	type AgentDiagnostic,
@@ -16,7 +22,26 @@ import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 
 type AgentsDialogContentProps = {
 	currentAgent?: AgentId;
+	connectedProviderIds?: ReadonlySet<ConnectionProviderId>;
 	onSelectAgent: (agent: AgentId) => void;
+};
+
+type AgentDialogItem = AgentDefinition & {
+	readonly isAvailable?: boolean;
+	readonly model?: { readonly providerId: ConnectionProviderId };
+	readonly unavailableReason?: string;
+};
+
+export const getAgentUnavailableReason = (
+	agent: AgentDialogItem,
+	connectedProviderIds: ReadonlySet<ConnectionProviderId> | undefined
+): string | undefined => {
+	if (agent.model && connectedProviderIds !== undefined) {
+		return connectedProviderIds.has(agent.model.providerId)
+			? undefined
+			: `Connect ${agent.model.providerId}`;
+	}
+	return agent.isAvailable === false ? agent.unavailableReason : undefined;
 };
 
 export const AgentDiagnosticsFooter = ({
@@ -51,12 +76,13 @@ export const AgentDiagnosticsFooter = ({
 
 export const AgentsDialogContent = ({
 	currentAgent,
+	connectedProviderIds,
 	onSelectAgent,
 }: AgentsDialogContentProps) => {
 	const dialog = useDialog();
 	const { colors } = useTheme();
 	const registry = useAgentRegistry();
-	const agents: readonly AgentDefinition[] =
+	const agents: readonly AgentDialogItem[] =
 		registry?.selectableAgents ?? builtInAgents;
 	const selectedTextColor = getContrastingTextColor(colors.selection);
 
@@ -85,6 +111,9 @@ export const AgentsDialogContent = ({
 			}
 			getKey={(item) => item.id}
 			isItemActive={(item) => item.id === currentAgent}
+			isItemSelectable={(item) =>
+				getAgentUnavailableReason(item, connectedProviderIds) === undefined
+			}
 			items={agents}
 			onSelect={handleSelect}
 			placeholder="Search agents"
@@ -102,10 +131,17 @@ export const AgentsDialogContent = ({
 					}
 				>
 					<text
+						attributes={
+							getAgentUnavailableReason(item, connectedProviderIds)
+								? TextAttributes.DIM
+								: undefined
+						}
 						fg={isSelected ? selectedTextColor : colors.text}
 						selectable={false}
 					>
-						{item.displayName}
+						{getAgentUnavailableReason(item, connectedProviderIds)
+							? `${item.displayName} (${getAgentUnavailableReason(item, connectedProviderIds)})`
+							: item.displayName}
 					</text>
 				</SelectableDialogItem>
 			)}

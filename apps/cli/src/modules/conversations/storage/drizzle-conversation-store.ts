@@ -138,8 +138,10 @@ const toConversationSession = (row: SessionRow): ConversationSession => ({
 	createdAt: row.createdAt,
 	id: row.id,
 	lastMessageAt: row.lastMessageAt ?? null,
+	...(row.modelJson ? { model: row.modelJson } : {}),
 	pinned: row.pinned,
 	title: row.title ?? UNTITLED_SESSION_TITLE,
+	...(row.variant ? { variant: row.variant } : {}),
 });
 
 const resolveMode = (
@@ -178,7 +180,7 @@ const resolveMetadata = (
 const writeMessages = (
 	db: LocalConversationDatabase,
 	workspaceId: string,
-	{ agent, messages, mode, model, sessionId }: PersistMessagesInput
+	{ agent, messages, mode, model, sessionId, variant }: PersistMessagesInput
 ): void => {
 	const now = new Date();
 	const title = deriveSessionTitle(messages);
@@ -200,7 +202,13 @@ const writeMessages = (
 		}
 
 		tx.update(conversationSession)
-			.set({ lastMessageAt: now, title, updatedAt: now })
+			.set({
+				lastMessageAt: now,
+				modelJson: model,
+				title,
+				updatedAt: now,
+				variant: variant ?? null,
+			})
 			.where(
 				and(
 					eq(conversationSession.id, sessionId),
@@ -263,7 +271,13 @@ export const createDrizzleConversationStore = (
 	return {
 		getPromptHistory: promptHistoryStore.get,
 		recordPrompt: promptHistoryStore.record,
-		createSession: ({ agent, message, mode, model }: CreateSessionInput) => {
+		createSession: ({
+			agent,
+			message,
+			mode,
+			model,
+			variant,
+		}: CreateSessionInput) => {
 			const id = generateId();
 			const now = new Date();
 
@@ -272,9 +286,11 @@ export const createDrizzleConversationStore = (
 					createdAt: now,
 					id,
 					lastMessageAt: now,
+					modelJson: model,
 					pinned: false,
 					title: deriveSessionTitle([message]),
 					updatedAt: now,
+					variant,
 					workspaceId: workspace.id,
 				})
 				.run();
@@ -285,6 +301,7 @@ export const createDrizzleConversationStore = (
 				mode,
 				model,
 				sessionId: id,
+				variant,
 			});
 
 			return Promise.resolve({ id });

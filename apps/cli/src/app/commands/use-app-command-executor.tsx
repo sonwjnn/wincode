@@ -3,6 +3,7 @@ import { useRouter } from "@tanstack/react-router";
 import { findSupportedChatModelSelection } from "@wincode/ai";
 import open from "open";
 import { createElement, useCallback, useMemo } from "react";
+import { useRefreshAgentRegistry } from "@/modules/agents";
 import {
 	AgentsAdapter,
 	ConnectAdapter,
@@ -63,6 +64,7 @@ export function useCommandExecutor(
 	const dialog = useDialog();
 	const toast = useToast();
 	const connections = useConnections();
+	const refreshAgentRegistry = useRefreshAgentRegistry();
 	const mcp = useMcp();
 	const { agent, model, setAgent, setModel, setVariant, variant } =
 		usePromptConfig();
@@ -99,6 +101,7 @@ export function useCommandExecutor(
 									await open(url);
 								},
 								onConnected: (summary) => {
+									refreshAgentRegistry();
 									toast.show({
 										message: `${summary.displayName} connected.`,
 										variant: "success",
@@ -200,10 +203,18 @@ export function useCommandExecutor(
 					setVariant,
 				}),
 				agents: new AgentsAdapter({
-					open: ({ currentAgent, onSelectAgent }) =>
+					open: async ({ currentAgent, onSelectAgent }) => {
+						const providers = await connections.listProviders();
 						dialog.open({
 							children: (
 								<AgentsDialogContent
+									connectedProviderIds={
+										new Set(
+											providers
+												.filter(({ connected }) => connected)
+												.map(({ id }) => id)
+										)
+									}
 									currentAgent={currentAgent}
 									onSelectAgent={onSelectAgent}
 								/>
@@ -212,7 +223,8 @@ export function useCommandExecutor(
 							title: "Select Agent",
 							titleMargin: { left: 4, right: 4 },
 							width: CONNECTION_DIALOG_WIDTH,
-						}),
+						});
+					},
 					currentAgent: agent,
 					setAgent,
 				}),
@@ -225,6 +237,7 @@ export function useCommandExecutor(
 			model,
 			onSelectSkill,
 			renderer,
+			refreshAgentRegistry,
 			router,
 			setAgent,
 			setModel,
