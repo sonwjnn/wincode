@@ -1,5 +1,6 @@
 export { canonicalizeReadResource } from "./canonical";
 export {
+	applyManualApprovalSafetyCeiling,
 	createToolPermission,
 	DEFAULT_PERMISSION_RULES,
 	DEFAULT_READ_PERMISSION_RULES,

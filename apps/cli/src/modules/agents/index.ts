@@ -12,9 +12,11 @@ export {
 	agentLabelFromId,
 	buildAgentRegistry,
 	configuredAgentVisibleCodingTools,
+	formatAgentDiagnostic,
 	MAX_CONFIGURED_AGENT_DESCRIPTION_LENGTH,
 	MAX_CONFIGURED_AGENT_INSTRUCTIONS_LENGTH,
 	MAX_CONFIGURED_AGENTS,
 	resolveAgentRegistry,
 	resolveExecutableAgentRuntime,
+	summarizeAgentDiagnostics,
 } from "./registry";

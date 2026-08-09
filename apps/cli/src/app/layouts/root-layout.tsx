@@ -66,13 +66,13 @@ export function RootLayout() {
 
 	return (
 		<ConfigProvider value={configContext}>
-			<AgentRegistryProvider>
-				<ConnectionsProvider connections={connections}>
-					<KeyboardLayerProvider>
-						<PromptConfigProvider>
-							<ModelPricingProvider>
-								<BillingComposition>
-									<ToastProvider>
+			<ToastProvider>
+				<AgentRegistryProvider>
+					<ConnectionsProvider connections={connections}>
+						<KeyboardLayerProvider>
+							<PromptConfigProvider>
+								<ModelPricingProvider>
+									<BillingComposition>
 										<DialogProvider>
 											<McpProvider
 												createRegistry={() => mcpRegistry}
@@ -91,13 +91,13 @@ export function RootLayout() {
 												</DialogProvider>
 											</McpProvider>
 										</DialogProvider>
-									</ToastProvider>
-								</BillingComposition>
-							</ModelPricingProvider>
-						</PromptConfigProvider>
-					</KeyboardLayerProvider>
-				</ConnectionsProvider>
-			</AgentRegistryProvider>
+									</BillingComposition>
+								</ModelPricingProvider>
+							</PromptConfigProvider>
+						</KeyboardLayerProvider>
+					</ConnectionsProvider>
+				</AgentRegistryProvider>
+			</ToastProvider>
 		</ConfigProvider>
 	);
 }

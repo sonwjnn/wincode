@@ -7,8 +7,12 @@ import {
 	agentLabelFromId,
 	buildAgentRegistry,
 	configuredAgentVisibleCodingTools,
+	formatAgentDiagnostic,
+	MAX_CONFIGURED_AGENT_DESCRIPTION_LENGTH,
+	MAX_CONFIGURED_AGENT_INSTRUCTIONS_LENGTH,
 	MAX_CONFIGURED_AGENTS,
 	resolveExecutableAgentRuntime,
+	summarizeAgentDiagnostics,
 } from "./registry";
 
 const makeSnapshot = (document: Record<string, unknown>): ConfigSnapshot => ({
@@ -209,22 +213,92 @@ describe("buildAgentRegistry", () => {
 		expect(registry.diagnostics).toMatchObject([{ code: "invalid-agent" }]);
 	});
 
-	test("rejects configured definitions for reserved built-in ids", () => {
+	test("patches supported built-in fields without changing identity or role", () => {
 		const registry = buildAgentRegistry(
 			makeSnapshot({
 				agents: {
-					build: { description: "Custom build", role: "primary" },
-					plan: { description: "Custom plan", role: "primary" },
+					build: {
+						description: "Project build",
+						instructions: "Use the project conventions.",
+					},
+					plan: { description: "Project plan" },
 				},
 			})
 		);
 
 		expect(registry.configuredAgents).toEqual([]);
 		expect(registry.agents.map(({ id }) => id)).toEqual(["build", "plan"]);
-		expect(registry.diagnostics).toMatchObject([
-			{ code: "reserved-agent-id" },
-			{ code: "reserved-agent-id" },
+		expect(registry.agents[0]).toMatchObject({
+			description: "Project build",
+			id: "build",
+			instructions: "Use the project conventions.",
+			role: "primary",
+		});
+		expect(registry.agents[1]).toMatchObject({
+			description: "Project plan",
+			id: "plan",
+			role: "primary",
+		});
+		expect(registry.diagnostics).toEqual([]);
+	});
+
+	test("retains shipped built-ins under a safety ceiling for invalid patches", () => {
+		const registry = buildAgentRegistry(
+			makeSnapshot({
+				agents: {
+					build: { disable: true },
+					plan: { description: "Unsafe plan", role: "all" },
+				},
+			})
+		);
+
+		expect(registry.agents).toMatchObject([
+			{
+				description: "Implement changes with read and write access.",
+				id: "build",
+				requiresManualApproval: true,
+				role: "primary",
+			},
+			{
+				description: "Read-only analysis and planning.",
+				id: "plan",
+				requiresManualApproval: true,
+				role: "primary",
+			},
 		]);
+		expect(registry.diagnostics).toMatchObject([
+			{ code: "invalid-built-in-agent", severity: "error" },
+			{ code: "invalid-built-in-agent", severity: "error" },
+		]);
+	});
+
+	test("applies configured-agent tombstones and re-enabled definitions", () => {
+		const disabled = buildAgentRegistry(
+			makeSnapshot({
+				agents: {
+					helper: {
+						description: "Inherited helper",
+						disable: true,
+						role: "primary",
+					},
+				},
+			})
+		);
+		expect(disabled.configuredAgents).toEqual([]);
+		expect(disabled.diagnostics).toEqual([]);
+
+		const enabled = buildAgentRegistry(
+			makeSnapshot({
+				agents: {
+					helper: {
+						description: "Inherited helper",
+						disable: false,
+						role: "primary",
+					},
+				},
+			})
+		);
+		expect(enabled.configuredAgents.map(({ id }) => id)).toEqual(["helper"]);
 	});
 
 	test("bounds configured agents to 64 with a diagnostic", () => {
@@ -237,6 +311,50 @@ describe("buildAgentRegistry", () => {
 
 		expect(registry.configuredAgents).toHaveLength(MAX_CONFIGURED_AGENTS);
 		expect(registry.diagnostics).toMatchObject([{ code: "too-many-agents" }]);
+	});
+
+	test("does not count disabled tombstones toward the configured-agent limit", () => {
+		const agents: Record<string, unknown> = {};
+		for (let index = 0; index < MAX_CONFIGURED_AGENTS; index += 1) {
+			agents[`disabled-${index}`] = { disable: true };
+		}
+		agents.helper = { description: "Included", role: "primary" };
+
+		const registry = buildAgentRegistry(makeSnapshot({ agents }));
+
+		expect(registry.configuredAgents.map(({ id }) => id)).toEqual(["helper"]);
+		expect(registry.diagnostics).toEqual([]);
+	});
+
+	test("enforces description and instruction bounds for configured and built-in agents", () => {
+		const registry = buildAgentRegistry(
+			makeSnapshot({
+				agents: {
+					build: {
+						description: "x".repeat(
+							MAX_CONFIGURED_AGENT_DESCRIPTION_LENGTH + 1
+						),
+					},
+					helper: {
+						description: "Helper",
+						instructions: "x".repeat(
+							MAX_CONFIGURED_AGENT_INSTRUCTIONS_LENGTH + 1
+						),
+						role: "primary",
+					},
+				},
+			})
+		);
+
+		expect(registry.configuredAgents).toEqual([]);
+		expect(registry.agents[0]).toMatchObject({
+			description: "Implement changes with read and write access.",
+			requiresManualApproval: true,
+		});
+		expect(registry.diagnostics).toMatchObject([
+			{ code: "invalid-agent" },
+			{ code: "invalid-built-in-agent" },
+		]);
 	});
 
 	test("rejects a non-object agents record", () => {
@@ -272,8 +390,64 @@ describe("buildAgentRegistry", () => {
 
 		expect(registry.diagnostics[0]).toMatchObject({
 			code: "invalid-agent",
+			configPath: ["agents", "helper", "role"],
 			origin: { path: "/tmp/project/wincode.json", scope: "project" },
+			severity: "error",
 		});
+	});
+
+	test("attributes unknown fields to the source that supplied that field", () => {
+		const lowerOrigin: ConfigOrigin = {
+			path: "/home/user/.config/wincode/wincode.json",
+			scope: "global",
+		};
+		const higherOrigin: ConfigOrigin = {
+			path: "/workspace/wincode.json",
+			scope: "project",
+		};
+		const snapshot: ConfigSnapshot = {
+			diagnostics: [],
+			document: {
+				agents: {
+					helper: {
+						description: "Project helper",
+						prompt: "Unsupported lower field",
+						role: "primary",
+					},
+				},
+			},
+			sourceFor: (path) =>
+				path.at(-1) === "prompt" ? lowerOrigin : higherOrigin,
+			sources: [],
+		};
+
+		const registry = buildAgentRegistry(snapshot);
+
+		expect(registry.configuredAgents).toEqual([]);
+		expect(registry.diagnostics).toMatchObject([
+			{
+				configPath: ["agents", "helper", "prompt"],
+				origin: lowerOrigin,
+			},
+		]);
+	});
+
+	test("orders Build first and remaining selectable ids alphabetically", () => {
+		const registry = buildAgentRegistry(
+			makeSnapshot({
+				agents: {
+					zebra: { description: "Z", role: "primary" },
+					alpha: { description: "A", role: "all" },
+				},
+			})
+		);
+
+		expect(registry.selectableAgents.map(({ id }) => id)).toEqual([
+			"build",
+			"alpha",
+			"plan",
+			"zebra",
+		]);
 	});
 });
 
@@ -301,6 +475,25 @@ describe("agentLabelFromId", () => {
 		expect(
 			registry.agents.find(({ id }) => id === "my-reviewer")?.displayName
 		).toBe("My Reviewer");
+	});
+});
+
+describe("Agent diagnostics", () => {
+	test("formats source-attributed details and a bounded startup summary", () => {
+		const diagnostic = {
+			code: "invalid-agent" as const,
+			configPath: ["agents", "helper", "role"],
+			message: "Expected a valid role",
+			origin: { path: "/workspace/wincode.json", scope: "project" as const },
+			severity: "error" as const,
+		};
+
+		expect(formatAgentDiagnostic(diagnostic)).toBe(
+			"[error] invalid-agent (project /workspace/wincode.json, agents.helper.role): Expected a valid role"
+		);
+		expect(summarizeAgentDiagnostics([diagnostic])).toBe(
+			"Agent config: 1 error, 0 warnings. Open /agents for details."
+		);
 	});
 });
 

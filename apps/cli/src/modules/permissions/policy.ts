@@ -16,6 +16,17 @@ export type ToolPermission = {
 	decide(action: PermissionAction, resource: string): PermissionDecision;
 };
 
+/** Tightens every non-denied decision to an approval that must be handled manually. */
+export function applyManualApprovalSafetyCeiling(
+	permission: ToolPermission
+): ToolPermission {
+	return {
+		decide(action, resource) {
+			return permission.decide(action, resource) === "deny" ? "deny" : "ask";
+		},
+	};
+}
+
 /**
  * Default read policy: ordinary reads are allowed, `.env` and `.env.*` reads
  * ask, and `.env.example` reads remain allowed. Order matters: the last

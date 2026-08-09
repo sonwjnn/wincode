@@ -1,6 +1,8 @@
 import type { WorkspacePolicy } from "@wincode/ai/workspace";
 import { createWorkspaceSandbox } from "@wincode/ai/workspace";
 import { useCallback, useMemo, useRef } from "react";
+import { resolveAgentRegistry } from "@/modules/agents";
+import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useConfig } from "@/shared/config/config-provider";
 import type { ApprovalController } from "@/shared/providers/approval/approval-controller";
 import {
@@ -8,7 +10,11 @@ import {
 	type ToolApprovalRequest,
 } from "@/shared/providers/approval/ui/tool-approval-dialog";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
-import { createToolPermission, type ToolPermission } from "./policy";
+import {
+	applyManualApprovalSafetyCeiling,
+	createToolPermission,
+	type ToolPermission,
+} from "./policy";
 import { resolveTopLevelPermission } from "./schema";
 
 type MutableRefObject<T> = { current: T };
@@ -33,6 +39,7 @@ export type ToolPermissionRuntime = {
 export function useToolPermission(): ToolPermissionRuntime {
 	const config = useConfig();
 	const dialog = useDialog();
+	const { agent } = usePromptConfig();
 	const permissionRef = useRef<ToolPermission>(createToolPermission());
 	const sandbox = useMemo(
 		() => createWorkspaceSandbox(config.workspace),
@@ -40,16 +47,22 @@ export function useToolPermission(): ToolPermissionRuntime {
 	);
 	const permissionPromise = useMemo(
 		() =>
-			config.configStore
-				.getSnapshot(config.workspace)
-				.then((snapshot) => {
-					permissionRef.current = createToolPermission(
+			Promise.all([
+				config.configStore.getSnapshot(config.workspace),
+				resolveAgentRegistry(config),
+			])
+				.then(([snapshot, registry]) => {
+					const permission = createToolPermission(
 						resolveTopLevelPermission(snapshot)
 					);
+					const selectedAgent = registry.agents.find(({ id }) => id === agent);
+					permissionRef.current = selectedAgent?.requiresManualApproval
+						? applyManualApprovalSafetyCeiling(permission)
+						: permission;
 					return permissionRef.current;
 				})
 				.catch(() => permissionRef.current),
-		[config]
+		[agent, config]
 	);
 	const resolvePermission = useCallback(
 		() => permissionPromise,

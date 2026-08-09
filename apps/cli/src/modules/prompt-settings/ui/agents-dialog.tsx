@@ -1,6 +1,10 @@
 import { type AgentDefinition, type AgentId, builtInAgents } from "@wincode/ai";
 import { useCallback } from "react";
-import { useAgentRegistry } from "@/modules/agents";
+import {
+	type AgentDiagnostic,
+	formatAgentDiagnostic,
+	useAgentRegistry,
+} from "@/modules/agents";
 import {
 	useDialog,
 	useDialogEscape,
@@ -13,6 +17,36 @@ import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 type AgentsDialogContentProps = {
 	currentAgent?: AgentId;
 	onSelectAgent: (agent: AgentId) => void;
+};
+
+export const AgentDiagnosticsFooter = ({
+	diagnostics,
+}: {
+	diagnostics: readonly AgentDiagnostic[];
+}) => {
+	const { colors } = useTheme();
+	return (
+		<box flexDirection="column" marginX={2}>
+			<text fg={colors.error} selectable={false}>
+				Agent configuration diagnostics
+			</text>
+			<scrollbox height={Math.min(5, diagnostics.length)}>
+				{diagnostics.map((diagnostic) => {
+					const detail = formatAgentDiagnostic(diagnostic);
+					return (
+						<text
+							fg={colors.textMuted}
+							key={detail}
+							selectable={false}
+							wrapMode="word"
+						>
+							{detail}
+						</text>
+					);
+				})}
+			</scrollbox>
+		</box>
+	);
 };
 
 export const AgentsDialogContent = ({
@@ -43,6 +77,11 @@ export const AgentsDialogContent = ({
 				`${item.displayName} ${item.description}`
 					.toLowerCase()
 					.includes(query.toLowerCase())
+			}
+			footer={
+				registry !== null && registry.diagnostics.length > 0 ? (
+					<AgentDiagnosticsFooter diagnostics={registry.diagnostics} />
+				) : undefined
 			}
 			getKey={(item) => item.id}
 			isItemActive={(item) => item.id === currentAgent}

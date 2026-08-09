@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	applyManualApprovalSafetyCeiling,
 	createToolPermission,
 	DEFAULT_READ_PERMISSION_RULES,
 	matchesResourcePattern,
@@ -39,6 +40,18 @@ describe("matchesResourcePattern", () => {
 	test("? matches a single non-slash character", () => {
 		expect(matchesResourcePattern("file?.txt", "file1.txt")).toBe(true);
 		expect(matchesResourcePattern("file?.txt", "file12.txt")).toBe(false);
+	});
+});
+
+describe("manual approval safety ceiling", () => {
+	test("converts allows to asks while preserving asks and denies", () => {
+		const permission = applyManualApprovalSafetyCeiling(
+			createToolPermission({ read: "deny", write: "allow" })
+		);
+
+		expect(permission.decide("write", "src/app.ts")).toBe("ask");
+		expect(permission.decide("list", ".")).toBe("ask");
+		expect(permission.decide("read", ".env")).toBe("deny");
 	});
 });
 
