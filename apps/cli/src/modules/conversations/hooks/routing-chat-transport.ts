@@ -13,8 +13,6 @@ import { prepareSendChatRequestBody } from "../api/chat-request";
 import { getLatestChatConfig } from "../utils";
 import { createLocalChatTransport } from "./local-chat-transport";
 
-type RoutingChatTransport = ChatTransport<CodingAgentUIMessage>;
-
 type MutableRefObject<T> = { current: T };
 
 const getBearerToken = (
@@ -31,7 +29,7 @@ export const createRoutingChatTransport = (
 	variantRef: MutableRefObject<ModelVariant | undefined>,
 	connections: Connections,
 	mcp: McpContextValue
-): RoutingChatTransport => ({
+): ChatTransport<CodingAgentUIMessage> => ({
 	sendMessages: async ({ abortSignal, messages }) => {
 		// One immutable snapshot per send so the request manifest and any dynamic
 		// tool dispatch resolve against the same catalog.

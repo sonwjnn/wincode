@@ -13,11 +13,9 @@ import {
 } from "./connect-wincode-browser";
 import {
 	type ApiKeyCredential,
-	anthropicCredentialSchema,
+	apiKeyCredentialSchema,
 	type ConnectionProgress,
-	googleCredentialSchema,
 	openAICredentialSchema,
-	opencodeGoCredentialSchema,
 	wincodeCredentialSchema,
 } from "./credential-schemas";
 import {
@@ -177,7 +175,7 @@ export const createAnthropicProviderDefinition = (
 		id: "anthropic",
 		displayName: names.anthropic,
 		methods: methods.anthropic,
-		credentialSchema: anthropicCredentialSchema,
+		credentialSchema: apiKeyCredentialSchema,
 		connect: (request) =>
 			apiKey(
 				request,
@@ -195,7 +193,7 @@ export const createGoogleProviderDefinition = (
 		id: "google",
 		displayName: names.google,
 		methods: methods.google,
-		credentialSchema: googleCredentialSchema,
+		credentialSchema: apiKeyCredentialSchema,
 		connect: (request) =>
 			apiKey(request, deps.validateGoogleApiKey ?? wrap(validateGoogleKey)),
 		authorize: async (credential) => ({
@@ -210,7 +208,7 @@ export const createOpenCodeGoProviderDefinition = (
 		id: "opencode-go",
 		displayName: names["opencode-go"],
 		methods: methods["opencode-go"],
-		credentialSchema: opencodeGoCredentialSchema,
+		credentialSchema: apiKeyCredentialSchema,
 		connect: (request) =>
 			apiKey(
 				request,

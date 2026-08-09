@@ -15,11 +15,9 @@ const MAX_VISIBLE_ITEMS = 10;
 const MIN_VISIBLE_ITEMS = 8;
 const CONFIRM_DELETE_BG = RGBA.fromInts(60, 20, 20, 255);
 
-type Session = ConversationSession;
-
 type ListItem =
 	| { kind: "header"; label: string }
-	| { kind: "session"; session: Session };
+	| { kind: "session"; session: ConversationSession };
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
 	hour: "numeric",
@@ -27,7 +25,7 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
 });
 
 function buildListItems(
-	sessions: readonly Session[],
+	sessions: readonly ConversationSession[],
 	isSearching: boolean
 ): ListItem[] {
 	if (isSearching) {
@@ -59,7 +57,7 @@ function buildListItems(
 }
 
 type SessionListItemProps = {
-	session: Session;
+	session: ConversationSession;
 	isSelected: boolean;
 	isPendingDelete: boolean;
 	isActiveRoute: boolean;
@@ -108,11 +106,11 @@ function SessionListItem({
 }
 
 export const SessionsDialogContent = () => {
-	const [sessions, setSessions] = useState<Session[]>([]);
+	const [sessions, setSessions] = useState<ConversationSession[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 	const pendingDeleteIdRef = useRef<string | null>(null);
-	const selectedSessionRef = useRef<Session | null>(null);
+	const selectedSessionRef = useRef<ConversationSession | null>(null);
 	const { close, open: openDialog } = useDialog();
 	const navigate = useNavigate();
 	const { show } = useToast();
@@ -128,7 +126,7 @@ export const SessionsDialogContent = () => {
 	}, [routerState.location.pathname]);
 
 	const filterFn = useCallback(
-		(session: Session, query: string) =>
+		(session: ConversationSession, query: string) =>
 			session.title.toLowerCase().includes(query.toLowerCase()),
 		[]
 	);
@@ -178,7 +176,7 @@ export const SessionsDialogContent = () => {
 	}, [currentSessionId, sessions]);
 
 	const navigateToSession = useCallback(
-		(session: Session) => {
+		(session: ConversationSession) => {
 			close();
 			navigate({ params: { id: session.id }, to: "/sessions/$id" }).catch(
 				() => undefined
@@ -188,7 +186,7 @@ export const SessionsDialogContent = () => {
 	);
 
 	const togglePin = useCallback(
-		async (session: Session) => {
+		async (session: ConversationSession) => {
 			const original = sessions.slice();
 			const updated = original
 				.map((s) => (s.id === session.id ? { ...s, pinned: !s.pinned } : s))
@@ -220,7 +218,7 @@ export const SessionsDialogContent = () => {
 	);
 
 	const confirmDelete = useCallback(
-		async (session: Session) => {
+		async (session: ConversationSession) => {
 			const original = sessions.slice();
 			setSessions((prev) => prev.filter((s) => s.id !== session.id));
 			setPendingDeleteId(null);
@@ -248,7 +246,7 @@ export const SessionsDialogContent = () => {
 	);
 
 	const openRename = useCallback(
-		(session: Session) => {
+		(session: ConversationSession) => {
 			openDialog({
 				children: (
 					<RenameSessionDialog

@@ -21,7 +21,6 @@ import { getOriginatingUserSkill } from "../utils";
 
 type MutableRefObject<T> = { current: T };
 
-type LocalChatTransport = ChatTransport<CodingAgentUIMessage>;
 type CreateAgentUIStream = typeof createAgentUIStream;
 
 export const createLocalChatTransport = (
@@ -32,7 +31,7 @@ export const createLocalChatTransport = (
 	connections: Connections,
 	createStream: CreateAgentUIStream = createAgentUIStream,
 	snapshot?: McpCatalogSnapshot
-): LocalChatTransport => ({
+): ChatTransport<CodingAgentUIMessage> => ({
 	sendMessages: async ({ abortSignal, messages }) => {
 		const selection = modelRef.current;
 		const skill = getOriginatingUserSkill(messages);

@@ -19,9 +19,6 @@ export const billingRuntimePairSchema = z.union([
 
 export type BillingRuntimePair = z.infer<typeof billingRuntimePairSchema>;
 
-export const billingRuntimePairSnapshotSchema = billingRuntimePairSchema;
-export type BillingRuntimePairSnapshot = BillingRuntimePair;
-
 export const billingUsageSchema = z
 	.object({
 		provider: billingProviderSchema,

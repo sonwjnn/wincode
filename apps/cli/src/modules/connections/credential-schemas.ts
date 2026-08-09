@@ -39,9 +39,6 @@ export const wincodeOauthCredentialSchema = z
 	})
 	.strict();
 
-export const anthropicCredentialSchema = apiKeyCredentialSchema;
-export const googleCredentialSchema = apiKeyCredentialSchema;
-export const opencodeGoCredentialSchema = apiKeyCredentialSchema;
 export const openAICredentialSchema = z.discriminatedUnion("kind", [
 	apiKeyCredentialSchema,
 	openaiOauthCredentialSchema,
@@ -54,6 +51,3 @@ export const wincodeCredentialSchema = z.discriminatedUnion("kind", [
 export type ApiKeyCredential = z.infer<typeof apiKeyCredentialSchema>;
 export type OpenAICredential = z.infer<typeof openAICredentialSchema>;
 export type WincodeCredential = z.infer<typeof wincodeCredentialSchema>;
-export type AnthropicCredential = z.infer<typeof anthropicCredentialSchema>;
-export type GoogleCredential = z.infer<typeof googleCredentialSchema>;
-export type OpenCodeGoCredential = z.infer<typeof opencodeGoCredentialSchema>;

@@ -13,9 +13,7 @@ import type { ConfigRuntime } from "@/shared/config/config-store";
 import { discoverSkillCandidates } from "./discovery";
 import { loadSkills } from "./loader";
 
-export type SkillLoaderInput = ConfigRuntime;
-
-export async function discoverSkills(input: SkillLoaderInput) {
+export async function discoverSkills(input: ConfigRuntime) {
 	const snapshot = await input.configStore.getSnapshot(input.workspace);
 	return loadSkills(
 		discoverSkillCandidates({

@@ -33,7 +33,6 @@ export type ProviderRegistry = {
 		(typeof providerFactories)[P]
 	>;
 };
-export type ProviderDefinitionMap = ProviderRegistry;
 export type ProviderAdapterMap = {
 	[P in keyof ProviderRegistry]: Pick<
 		ProviderRegistry[P],

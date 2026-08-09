@@ -8,8 +8,6 @@ import type { CustomCommandCandidate, CustomCommandSpec } from "./types";
 
 const BUILTIN_NAMES = new Set(COMMANDS.map((command) => command.name));
 
-export type CustomCommandLoaderInput = ConfigRuntime;
-
 export async function loadCustomCommands(
 	candidates: CustomCommandCandidate[]
 ): Promise<CustomCommandSpec[]> {
@@ -45,7 +43,7 @@ export async function loadCustomCommands(
 }
 
 export async function getCustomCommands(
-	input: CustomCommandLoaderInput
+	input: ConfigRuntime
 ): Promise<CustomCommandSpec[]> {
 	const snapshot = await input.configStore.getSnapshot(input.workspace);
 	return loadCustomCommands(

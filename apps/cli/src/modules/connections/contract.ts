@@ -10,10 +10,8 @@ import { providerDisplayNames } from "./provider-registry";
 
 export type {
 	AcquisitionProgress,
-	AnthropicCredential,
 	ApiKeyCredential,
 	ConnectionProgress,
-	GoogleCredential,
 	OpenAICredential,
 	WincodeCredential,
 } from "./credential-schemas";
