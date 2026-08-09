@@ -1,5 +1,9 @@
 import { createFileRoute, useRouterState } from "@tanstack/react-router";
-import type { CodingAgentUIMessage } from "@wincode/ai";
+import type {
+	ChatModelSelection,
+	CodingAgentUIMessage,
+	ModelVariant,
+} from "@wincode/ai";
 import { agentIdSchema } from "@wincode/ai";
 import { useEffect, useState } from "react";
 import { z } from "zod";
@@ -48,8 +52,8 @@ function SessionRoute() {
 	const [messages, setMessages] = useState<CodingAgentUIMessage[] | null>(null);
 	const [sessionTitle, setSessionTitle] = useState<string | null>(null);
 	const [sessionConfig, setSessionConfig] = useState<{
-		model?: import("@wincode/ai").ChatModelSelection;
-		variant?: import("@wincode/ai").ModelVariant;
+		model?: ChatModelSelection;
+		variant?: ModelVariant;
 	} | null>(null);
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
 	const prompt = useRouterState({

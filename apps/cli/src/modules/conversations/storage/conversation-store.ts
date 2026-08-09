@@ -2,6 +2,7 @@ import type {
 	AgentId,
 	ChatModelSelection,
 	CodingAgentUIMessage,
+	ModelVariant,
 	ModeType,
 } from "@wincode/ai";
 import type { FileUIPart } from "@wincode/ai/client";
@@ -20,7 +21,7 @@ export type ConversationSession = {
 	model?: ChatModelSelection;
 	pinned: boolean;
 	title: string;
-	variant?: import("@wincode/ai").ModelVariant;
+	variant?: ModelVariant;
 };
 
 export type CreateSessionInput = {
@@ -28,7 +29,7 @@ export type CreateSessionInput = {
 	message: CodingAgentUIMessage;
 	mode: ModeType;
 	model: ChatModelSelection;
-	variant?: import("@wincode/ai").ModelVariant;
+	variant?: ModelVariant;
 };
 
 export type UpdateSessionInput = {
@@ -42,7 +43,7 @@ export type PersistMessagesInput = {
 	mode: ModeType;
 	model: ChatModelSelection;
 	sessionId: string;
-	variant?: import("@wincode/ai").ModelVariant;
+	variant?: ModelVariant;
 };
 
 export type ConversationStore = {
