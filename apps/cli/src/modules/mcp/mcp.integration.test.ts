@@ -15,13 +15,23 @@ import net from "node:net";
 import path from "node:path";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import type { PermissionRules } from "@/modules/permissions";
+import { createMcpApprovalGate } from "@/modules/conversations/hooks/use-chat";
+import {
+	createPermissionService,
+	type PermissionRules,
+} from "@/modules/permissions";
+import { createApprovalQueue } from "@/shared/providers/approval/approval-queue";
+import type {
+	ToolApprovalActions,
+	ToolApprovalRequest,
+} from "@/shared/providers/approval/ui/tool-approval-dialog";
 import type { McpConfigResult, ResolvedMcpServerConfig } from "./config";
 import {
 	type McpApprovalGate,
 	type McpToolOutputConfig,
 	runDynamicToolCall,
 } from "./context/mcp-provider";
+import type { McpExecutionPolicy } from "./policy";
 import {
 	createMcpRegistry,
 	type McpAgentPolicy,
@@ -40,14 +50,15 @@ const timeouts = {
 
 const stdioServerConfig = (
 	name: string,
-	command: string[]
+	command: string[],
+	permission: McpExecutionPolicy = "allow"
 ): ResolvedMcpServerConfig => ({
 	name,
 	type: "local",
 	command,
 	cwd: import.meta.dir,
 	disabled: false,
-	permission: "allow",
+	permission,
 	timeout: timeouts,
 });
 
@@ -456,5 +467,239 @@ describe("MCP policy composition over the real catalog", () => {
 		} finally {
 			await registry.close();
 		}
+	}, 15_000);
+
+	test("a server-level ask composes to ask under a permissive agent", async () => {
+		const registry = createRegistry(
+			stdioServerConfig("stdio-echo", [process.execPath, "run", FIXTURE], "ask")
+		);
+		try {
+			const snapshot = await registry.createSnapshot("build", permissive);
+			expect(snapshot.manifest).toHaveLength(1);
+			expect(firstTool(snapshot).policy).toBe("ask");
+		} finally {
+			await registry.close();
+		}
+	}, 15_000);
+
+	test("a server-level deny hides the tool even under a permissive agent", async () => {
+		const registry = createRegistry(
+			stdioServerConfig(
+				"stdio-echo",
+				[process.execPath, "run", FIXTURE],
+				"deny"
+			)
+		);
+		try {
+			const snapshot = await registry.createSnapshot("build", permissive);
+			expect(snapshot.manifest).toEqual([]);
+			expect(snapshot.tools.size).toBe(1);
+			expect(firstTool(snapshot).policy).toBe("deny");
+		} finally {
+			await registry.close();
+		}
+	}, 15_000);
+
+	test("a server ask stays ask when the agent also allows, and a server allow rises to ask when the agent asks", async () => {
+		const askServer = createRegistry(
+			stdioServerConfig("stdio-echo", [process.execPath, "run", FIXTURE], "ask")
+		);
+		try {
+			// server ask + agent allow -> ask (neither side loosens the other).
+			const snapshot = await askServer.createSnapshot("build", {
+				rules: openRules({ "stdio-echo_*": "allow" }),
+				safety: false,
+			});
+			expect(firstTool(snapshot).policy).toBe("ask");
+		} finally {
+			await askServer.close();
+		}
+	}, 15_000);
+});
+
+describe("MCP generic approval against a real server", () => {
+	const ASK_POLICY: McpAgentPolicy = {
+		rules: openRules({ "stdio-echo_*": "ask" }),
+		safety: false,
+	};
+
+	const ECHO_OUTPUT = (text: string) => ({
+		output: {
+			content: [{ type: "text", text }],
+			isError: false,
+			truncated: false,
+		},
+		state: "output-available",
+	});
+
+	type ApprovalCtx = {
+		dispatchName: string;
+		registry: McpRegistry;
+		snapshot: McpCatalogSnapshot;
+	};
+
+	// Build a real stdio catalog whose only tool composes to `ask`, so every call
+	// exercises the shared approval dialog rather than short-circuiting.
+	const withAskCatalog = async (
+		run: (ctx: ApprovalCtx) => Promise<void>
+	): Promise<void> => {
+		const registry = createRegistry(
+			stdioServerConfig("stdio-echo", [process.execPath, "run", FIXTURE])
+		);
+		try {
+			const snapshot = await registry.createSnapshot("build", ASK_POLICY);
+			expect(firstTool(snapshot).policy).toBe("ask");
+			await run({
+				dispatchName: dispatchNameOf(snapshot),
+				registry,
+				snapshot,
+			});
+		} finally {
+			await registry.close();
+		}
+	};
+
+	const runCall = (
+		ctx: ApprovalCtx,
+		deps: {
+			approvalQueue: ReturnType<
+				typeof createApprovalQueue<ToolApprovalRequest>
+			>;
+			openApproval: (
+				request: ToolApprovalRequest,
+				actions: ToolApprovalActions
+			) => void;
+			service: ReturnType<typeof createPermissionService>;
+			text?: string;
+		}
+	): Promise<McpToolOutputConfig[]> => {
+		const outputs: McpToolOutputConfig[] = [];
+		const gate: McpApprovalGate = createMcpApprovalGate({
+			approvalQueue: deps.approvalQueue,
+			openApproval: deps.openApproval,
+			service: deps.service,
+		});
+		return runDynamicToolCall({
+			addToolOutput: (config) => {
+				outputs.push(config);
+			},
+			gate,
+			latestSnapshot: ctx.snapshot,
+			registry: ctx.registry,
+			snapshot: ctx.snapshot,
+			toolCall: {
+				dynamic: true,
+				input: { text: deps.text ?? "hi" },
+				toolCallId: "call_1",
+				toolName: ctx.dispatchName,
+			},
+		}).then(() => outputs);
+	};
+
+	const neverPrompt = (): void => {
+		throw new Error("approval dialog must not open for this call");
+	};
+
+	test("allow once executes without recording a grant", async () => {
+		await withAskCatalog(async (ctx) => {
+			const service = createPermissionService();
+			let prompts = 0;
+			const outputs = await runCall(ctx, {
+				approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
+				openApproval: (_request, actions) => {
+					prompts += 1;
+					actions.allow(false);
+				},
+				service,
+				text: "once please",
+			});
+			expect(prompts).toBe(1);
+			expect(outputs[0]).toMatchObject(ECHO_OUTPUT("once please"));
+			expect(service.isGranted("stdio-echo_echo", "*")).toBe(false);
+		});
+	}, 15_000);
+
+	test("allow always records a grant that auto-allows the next call", async () => {
+		await withAskCatalog(async (ctx) => {
+			const service = createPermissionService();
+			const first = await runCall(ctx, {
+				approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
+				openApproval: (_request, actions) => actions.allow(true),
+				service,
+				text: "remember me",
+			});
+			expect(first[0]).toMatchObject(ECHO_OUTPUT("remember me"));
+			expect(service.isGranted("stdio-echo_echo", "*")).toBe(true);
+
+			// The remembered grant satisfies the ask without opening a dialog.
+			const second = await runCall(ctx, {
+				approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
+				openApproval: neverPrompt,
+				service,
+				text: "no prompt",
+			});
+			expect(second[0]).toMatchObject(ECHO_OUTPUT("no prompt"));
+		});
+	}, 15_000);
+
+	test("rejecting with feedback blocks execution and returns the correction", async () => {
+		await withAskCatalog(async (ctx) => {
+			const service = createPermissionService();
+			const outputs = await runCall(ctx, {
+				approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
+				openApproval: (_request, actions) =>
+					actions.reject("use the read tool instead"),
+				service,
+			});
+			expect(outputs[0]?.state).toBe("output-error");
+			// The runner reports the dispatch name (the tool the model called),
+			// while grants are keyed by the logical name.
+			expect(outputs[0]?.errorText).toBe(
+				`MCP tool '${ctx.dispatchName}' was not approved — use the read tool instead`
+			);
+			expect(service.isGranted("stdio-echo_echo", "*")).toBe(false);
+		});
+	}, 15_000);
+
+	test("revoking a remembered grant restores the prompt", async () => {
+		await withAskCatalog(async (ctx) => {
+			const service = createPermissionService();
+			await runCall(ctx, {
+				approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
+				openApproval: (_request, actions) => actions.allow(true),
+				service,
+			});
+			expect(service.isGranted("stdio-echo_echo", "*")).toBe(true);
+
+			service.revoke("stdio-echo_echo", "*");
+			expect(service.isGranted("stdio-echo_echo", "*")).toBe(false);
+
+			// With the grant gone the next call must prompt again.
+			let prompts = 0;
+			const outputs = await runCall(ctx, {
+				approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
+				openApproval: (_request, actions) => {
+					prompts += 1;
+					actions.allow(false);
+				},
+				service,
+				text: "prompt again",
+			});
+			expect(prompts).toBe(1);
+			expect(outputs[0]).toMatchObject(ECHO_OUTPUT("prompt again"));
+		});
+	}, 15_000);
+
+	test("auto approval clears an ask without prompting", async () => {
+		await withAskCatalog(async (ctx) => {
+			const service = createPermissionService({ autoApproval: true });
+			const outputs = await runCall(ctx, {
+				approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
+				openApproval: neverPrompt,
+				service,
+				text: "auto",
+			});
+			expect(outputs[0]).toMatchObject(ECHO_OUTPUT("auto"));
+		});
 	}, 15_000);
 });

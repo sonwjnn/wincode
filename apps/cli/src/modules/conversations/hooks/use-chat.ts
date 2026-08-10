@@ -40,6 +40,7 @@ import {
 } from "@/modules/mcp";
 import {
 	canonicalizeResource,
+	type PermissionDecision,
 	type PermissionService,
 	resolveApproval,
 	STATIC_TOOL_PERMISSION_ACTIONS,
@@ -176,6 +177,81 @@ type StaticToolGateDeps = {
 	service: PermissionService;
 };
 
+/**
+ * The settled outcome of gating one tool call through the shared Permission
+ * engine and approval machinery: `deny` blocked it by policy, `reject` means the
+ * user declined an ask (carrying any bounded correction feedback), and `allow`
+ * clears it to run. Callers map this onto their own emit/return shape.
+ */
+type ToolApprovalGateResult =
+	| { kind: "allow" }
+	| { kind: "deny" }
+	| { kind: "reject"; feedback?: string };
+
+type ResolveToolApprovalDeps = {
+	action: string;
+	approvalQueue: ApprovalQueue<ToolApprovalRequest>;
+	decision: PermissionDecision;
+	openApproval: ToolPermissionRuntime["openApproval"];
+	request: ToolApprovalRequest;
+	resource: string;
+	safety: boolean;
+	service: PermissionService;
+};
+
+/**
+ * The single approval path shared by static coding tools and dynamic MCP tools.
+ * It applies temporary grants and auto approval to the raw policy `decision`
+ * (`resolveApproval`), and for an `ask` enqueues the request on the conversation
+ * approval queue, opens the shared dialog, awaits the outcome, records an
+ * "always" grant against the exact `(action, resource)` key, and surfaces reject
+ * feedback. Both tool families resolve through this one function so their
+ * once/always/reject/auto behaviour can never drift apart.
+ */
+const resolveToolApproval = async ({
+	action,
+	approvalQueue,
+	decision,
+	openApproval,
+	request,
+	resource,
+	safety,
+	service,
+}: ResolveToolApprovalDeps): Promise<ToolApprovalGateResult> => {
+	const effective = resolveApproval({
+		action,
+		decision,
+		isAutoApproval: () => service.isAutoApproval(),
+		isGranted: (grantedAction, grantedResource) =>
+			service.isGranted(grantedAction, grantedResource),
+		resource,
+		safety,
+	});
+	if (effective === "deny") {
+		return { kind: "deny" };
+	}
+	if (effective === "allow") {
+		return { kind: "allow" };
+	}
+	const handle = approvalQueue.request(request);
+	openApproval(request, {
+		allow: (remember) => handle.allow(remember),
+		cancel: () => handle.rejectSelf(),
+		reject: (feedback) => approvalQueue.rejectAll(feedback),
+	});
+	const outcome = await handle.outcome;
+	if (outcome.decision === "reject") {
+		return {
+			feedback: formatRejectionFeedback(outcome.feedback),
+			kind: "reject",
+		};
+	}
+	if (outcome.remember) {
+		service.grant(action, resource);
+	}
+	return { kind: "allow" };
+};
+
 const gateStaticToolCall = async (
 	options: Parameters<ChatOnToolCallCallback<CodingAgentUIMessage>>[0],
 	{
@@ -217,17 +293,27 @@ const gateStaticToolCall = async (
 	}
 
 	const action = STATIC_TOOL_PERMISSION_ACTIONS[tool];
-	const effective = resolveApproval({
+	const request: ToolApprovalRequest = {
+		description: codingToolDefinitions[tool].description,
+		identity: [
+			{ label: "tool", value: tool },
+			{ label: "resource", value: resource },
+		],
+		input: toolCall.input,
+		safety: permission.safety,
+	};
+	const result = await resolveToolApproval({
 		action,
+		approvalQueue,
 		decision: permission.decide(action, resource),
-		isAutoApproval: () => service.isAutoApproval(),
-		isGranted: (grantedAction, grantedResource) =>
-			service.isGranted(grantedAction, grantedResource),
+		openApproval,
+		request,
 		resource,
 		safety: permission.safety,
+		service,
 	});
 
-	if (effective === "deny") {
+	if (result.kind === "deny") {
 		emitToolCallError(
 			addToolOutput,
 			tool,
@@ -237,38 +323,16 @@ const gateStaticToolCall = async (
 		return false;
 	}
 
-	if (effective === "ask") {
-		const request: ToolApprovalRequest = {
-			description: codingToolDefinitions[tool].description,
-			identity: [
-				{ label: "tool", value: tool },
-				{ label: "resource", value: resource },
-			],
-			input: toolCall.input,
-			safety: permission.safety,
-		};
-		const handle = approvalQueue.request(request);
-		openApproval(request, {
-			allow: (remember) => handle.allow(remember),
-			cancel: () => handle.rejectSelf(),
-			reject: (feedback) => approvalQueue.rejectAll(feedback),
-		});
-		const outcome = await handle.outcome;
-		if (outcome.decision === "reject") {
-			const feedback = formatRejectionFeedback(outcome.feedback);
-			emitToolCallError(
-				addToolOutput,
-				tool,
-				toolCall.toolCallId,
-				feedback === undefined
-					? `${label} was not approved: ${resource}`
-					: `${label} was not approved: ${resource} — ${feedback}`
-			);
-			return false;
-		}
-		if (outcome.remember) {
-			service.grant(action, resource);
-		}
+	if (result.kind === "reject") {
+		emitToolCallError(
+			addToolOutput,
+			tool,
+			toolCall.toolCallId,
+			result.feedback === undefined
+				? `${label} was not approved: ${resource}`
+				: `${label} was not approved: ${resource} — ${result.feedback}`
+		);
+		return false;
 	}
 
 	return true;
@@ -281,12 +345,12 @@ type McpApprovalGateDeps = {
 };
 
 /**
- * Builds the shared-approval gate for one dynamic MCP tool call. It reuses the
- * exact machinery static coding tools use — the same `resolveApproval` policy
- * resolution, temporary-grant store, auto-approval flag, conversation approval
- * queue, and approval dialog — so MCP tools no longer carry a separate approval
- * flow. The composed decision already baked the Agent+server policy and any
- * safety ceiling into `tool.policy`/`tool.safety`; here grants and auto approval
+ * Builds the shared-approval gate for one dynamic MCP tool call. It resolves
+ * through the same {@link resolveToolApproval} helper as static coding tools —
+ * one temporary-grant store, auto-approval flag, conversation approval queue,
+ * and approval dialog — keyed by the tool's logical name and the single `*`
+ * resource. The composed decision already baked the Agent+server policy and any
+ * safety ceiling into `tool.policy`/`tool.safety`, so grants and auto approval
  * may satisfy an ordinary ask, a safety ask always prompts, and an explicit deny
  * is never bypassed. An "always" outcome grants the exact logical name.
  */
@@ -296,53 +360,30 @@ export const createMcpApprovalGate =
 		openApproval,
 		service,
 	}: McpApprovalGateDeps): McpApprovalGate =>
-	async (
-		tool: McpSnapshotTool,
-		input: unknown
-	): Promise<McpApprovalDecision> => {
-		const action = tool.logicalName;
-		const resource = MCP_PERMISSION_RESOURCE;
-		const effective = resolveApproval({
-			action,
-			decision: tool.policy,
-			isAutoApproval: () => service.isAutoApproval(),
-			isGranted: (grantedAction, grantedResource) =>
-				service.isGranted(grantedAction, grantedResource),
-			resource,
-			safety: tool.safety,
-		});
-		if (effective === "deny") {
-			return { kind: "deny" };
-		}
-		if (effective === "allow") {
-			return { kind: "allow" };
-		}
+	(tool: McpSnapshotTool, input: unknown): Promise<McpApprovalDecision> => {
 		const request: ToolApprovalRequest = {
 			description: tool.description,
 			identity: [
 				{ label: "tool", value: tool.logicalName },
-				{ label: "resource", value: resource },
+				{ label: "resource", value: MCP_PERMISSION_RESOURCE },
 			],
 			input,
 			safety: tool.safety,
 		};
-		const handle = approvalQueue.request(request);
-		openApproval(request, {
-			allow: (remember) => handle.allow(remember),
-			cancel: () => handle.rejectSelf(),
-			reject: (feedback) => approvalQueue.rejectAll(feedback),
+		// The composed decision already folded the Agent+server policy and any
+		// safety ceiling into tool.policy/tool.safety, so the shared resolver
+		// applies grants/auto/ask exactly as it does for a static coding tool. Its
+		// `ToolApprovalGateResult` is a subset of `McpApprovalDecision`.
+		return resolveToolApproval({
+			action: tool.logicalName,
+			approvalQueue,
+			decision: tool.policy,
+			openApproval,
+			request,
+			resource: MCP_PERMISSION_RESOURCE,
+			safety: tool.safety,
+			service,
 		});
-		const outcome = await handle.outcome;
-		if (outcome.decision === "reject") {
-			const feedback = formatRejectionFeedback(outcome.feedback);
-			return feedback === undefined
-				? { kind: "reject" }
-				: { kind: "reject", feedback };
-		}
-		if (outcome.remember) {
-			service.grant(action, resource);
-		}
-		return { kind: "allow" };
 	};
 
 /**
