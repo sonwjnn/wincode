@@ -14,6 +14,29 @@ export type PermissionRules = Readonly<
 	>
 >;
 
+/**
+ * A snapshot of one Agent's effective Tool Permission as it applies to
+ * open-glob-action tools such as MCP: the folded rules to match logical tool
+ * names against, and whether the Agent runs under the manual-only safety
+ * ceiling. Tool-family neutral so the engine — not any one tool module — owns
+ * the shape.
+ */
+export type EffectiveAgentPolicy = {
+	rules: PermissionRules;
+	safety: boolean;
+};
+
+/**
+ * The permissive default effective policy: no rules and no safety ceiling. A
+ * consumer that resolves a tool family's policy (e.g. MCP snapshots) uses this
+ * until the executing Agent's real policy is known, so composition starts from
+ * "the Agent imposes nothing" rather than from a hidden restriction.
+ */
+export const DEFAULT_EFFECTIVE_AGENT_POLICY: EffectiveAgentPolicy = {
+	rules: {},
+	safety: false,
+};
+
 export type ToolPermission = {
 	decide(action: PermissionAction, resource: string): PermissionDecision;
 	/**
@@ -93,12 +116,18 @@ export const DEFAULT_PERMISSION_RULES: PermissionRules = {
 /**
  * Shipped per-Agent Permission restrictions applied at the defaults layer, below
  * every config source. Plan denies `edit`, which also hides the write and edit
- * tools, until a valid higher policy explicitly overrides it.
+ * tools, and denies every MCP tool through the `*` action glob, until a valid
+ * higher policy explicitly overrides either restriction.
+ *
+ * The `*` deny only reaches MCP tools: static coding-tool gating consults the
+ * exact `STATIC_TOOL_PERMISSION_ACTIONS` keys and never honors an action glob, so
+ * Plan keeps its read, list, and grep tools while every discovered MCP tool is
+ * denied unless a higher layer re-allows a specific logical name.
  */
 export const SHIPPED_AGENT_PERMISSION_RULES: Readonly<
 	Record<string, PermissionRules>
 > = {
-	plan: { edit: "deny" },
+	plan: { edit: "deny", "*": "deny" } as PermissionRules,
 };
 
 /** Resolves the shipped defaults-layer Permission rules for an Agent id. */
@@ -196,9 +225,30 @@ export function matchesResourcePattern(
 	return new RegExp(`^(?:[^/]+/)*${source}$`).test(resource);
 }
 
-type NormalizedActionRule =
-	| PermissionDecision
-	| readonly { decision: PermissionDecision; pattern: string }[];
+type ResourcePatternRule = { decision: PermissionDecision; pattern: string };
+
+/**
+ * Applies a resource-map rule with last-matching-pattern-wins semantics.
+ * Returns `fallback` when no pattern matches the resource, so a caller composing
+ * across several action rules can pass the decision accumulated so far and a
+ * non-matching map preserves it rather than silently loosening an earlier
+ * explicit decision to `allow`.
+ */
+const decideByResourceMap = (
+	entries: readonly ResourcePatternRule[],
+	resource: string,
+	fallback: PermissionDecision
+): PermissionDecision => {
+	let decision = fallback;
+	for (const entry of entries) {
+		if (matchesResourcePattern(entry.pattern, resource)) {
+			decision = entry.decision;
+		}
+	}
+	return decision;
+};
+
+type NormalizedActionRule = PermissionDecision | readonly ResourcePatternRule[];
 
 const normalizeRules = (
 	rules: PermissionRules
@@ -241,13 +291,7 @@ export function createResolvedToolPermission(
 			if (typeof rule === "string") {
 				return rule;
 			}
-			let decision: PermissionDecision = "allow";
-			for (const entry of rule) {
-				if (matchesResourcePattern(entry.pattern, resource)) {
-					decision = entry.decision;
-				}
-			}
-			return decision;
+			return decideByResourceMap(rule, resource, "allow");
 		},
 		safety: false,
 	};
@@ -320,3 +364,66 @@ export const findUnmatchedActionKeys = (
 		(actionKey) =>
 			!knownActions.some((name) => matchesResourcePattern(actionKey, name))
 	);
+
+/** Orders decisions from least to most restrictive: allow < ask < deny. */
+const PERMISSION_DECISION_RANK: Record<PermissionDecision, number> = {
+	allow: 0,
+	ask: 1,
+	deny: 2,
+};
+
+/**
+ * Composes two Permission decisions most-restrictively: a `deny` from either
+ * side denies, otherwise an `ask` from either side asks, and only two allows
+ * compose to an automatic allow. Used to combine an Agent's policy with the MCP
+ * server's independent execution policy so neither source can loosen the other.
+ */
+export const composePermissionDecisions = (
+	first: PermissionDecision,
+	second: PermissionDecision
+): PermissionDecision =>
+	PERMISSION_DECISION_RANK[first] >= PERMISSION_DECISION_RANK[second]
+		? first
+		: second;
+
+/**
+ * Evaluates a policy for an open-glob action such as a logical MCP tool name,
+ * where the action key itself is a `*`/`?` glob rather than a fixed coding-tool
+ * action. Every action key is matched against the action as a glob and the last
+ * matching key wins, mirroring the last-match-wins resource semantics. A scalar
+ * action rule applies directly; a resource map applies its last matching pattern
+ * for the resource. An action that matches no key falls back to `allow` so an
+ * Agent with no MCP rules composes to the server policy unchanged.
+ */
+export const decideOpenActionPermission = (
+	rules: PermissionRules,
+	action: string,
+	resource: string
+): PermissionDecision => {
+	let decision: PermissionDecision = "allow";
+	for (const key of Object.keys(rules)) {
+		if (!matchesResourcePattern(key, action)) {
+			continue;
+		}
+		const rule = rules[key as PermissionAction];
+		if (rule === undefined) {
+			continue;
+		}
+		if (typeof rule === "string") {
+			decision = rule;
+			continue;
+		}
+		// Preserve the decision accumulated from earlier matching keys when this
+		// map matches no resource pattern, so a later `demo_*: { "some/path": ... }`
+		// rule can never silently bypass an earlier explicit `"*": "deny"`.
+		decision = decideByResourceMap(
+			Object.entries(rule).map(([pattern, patternDecision]) => ({
+				decision: patternDecision,
+				pattern,
+			})),
+			resource,
+			decision
+		);
+	}
+	return decision;
+};

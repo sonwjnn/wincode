@@ -10,11 +10,10 @@ import {
 	useState,
 	useSyncExternalStore,
 } from "react";
-import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import {
 	createMcpRegistry,
-	type McpApprovalRequest,
+	type McpAgentPolicy,
 	type McpCatalogSnapshot,
 	type McpRegistry,
 	type McpRegistryDeps,
@@ -22,14 +21,24 @@ import {
 	type McpSnapshotTool,
 } from "../registry";
 import type { McpNormalizedResult } from "../result";
-import { McpApprovalDialog } from "../ui/mcp-approval-dialog";
-import {
-	createMcpApprovalController,
-	type McpApprovalController,
-} from "./approval-controller";
 
-export type { McpApprovalController } from "./approval-controller";
-export { createMcpApprovalController } from "./approval-controller";
+/**
+ * The generic gate that decides one ask-gated MCP tool call. Given the resolved
+ * snapshot tool and its input, it applies the composed Permission decision plus
+ * any temporary grant, auto approval, or interactive approval and returns the
+ * settled outcome. It lives outside this module (in the chat tool-call handler)
+ * so MCP tools share the same approval queue, grant store, and dialog as static
+ * coding tools instead of a separate MCP-only controller.
+ */
+export type McpApprovalDecision =
+	| { kind: "allow" }
+	| { kind: "deny" }
+	| { kind: "reject"; feedback?: string };
+
+export type McpApprovalGate = (
+	tool: McpSnapshotTool,
+	input: unknown
+) => Promise<McpApprovalDecision>;
 
 export type McpDynamicToolCall = {
 	dynamic?: boolean;
@@ -85,11 +94,8 @@ const mcpResultErrorText = (
 
 export type RunDynamicToolCallDeps = {
 	addToolOutput: McpAddToolOutput;
+	gate: McpApprovalGate;
 	latestSnapshot: McpCatalogSnapshot | null;
-	openApproval: (
-		request: McpApprovalRequest,
-		controller: McpApprovalController
-	) => void;
 	registry: Pick<McpRegistry, "execute">;
 	snapshot: McpCatalogSnapshot | null;
 	toolCall: McpDynamicToolCall;
@@ -100,25 +106,20 @@ export type RunDynamicToolCallDeps = {
  * schedules this; it never awaits an AI SDK `onToolCall` synchronously.
  *
  * - Snapshot missing or stale -> stable output-error.
- * - Policy `deny` -> stable output-error, no execution.
- * - Policy `ask` -> opens the approval dialog through `openApproval`; a denied
- *   or cancelled request becomes a stable output-error.
- * - Policy `allow` (or approved) -> executes through the registry. Every
- *   outcome is emitted through `addToolOutput` with the AI SDK output shape.
+ * - The `gate` applies the composed Permission decision, temporary grants, auto
+ *   approval, and (for an ask) the shared approval dialog:
+ *   - `deny` -> stable output-error, no execution.
+ *   - `reject` -> stable output-error carrying the optional bounded feedback.
+ *   - `allow` -> executes through the registry. Every outcome is emitted
+ *     through `addToolOutput` with the AI SDK output shape.
  * - Errors that escape the registry are reduced to a stable message so no
  *   secret, header, URL, or command can reach tool output.
  */
 export function runDynamicToolCall(
 	deps: RunDynamicToolCallDeps
 ): Promise<void> {
-	const {
-		addToolOutput,
-		latestSnapshot,
-		openApproval,
-		registry,
-		snapshot,
-		toolCall,
-	} = deps;
+	const { addToolOutput, gate, latestSnapshot, registry, snapshot, toolCall } =
+		deps;
 
 	return (async () => {
 		if (
@@ -146,7 +147,8 @@ export function runDynamicToolCall(
 			return;
 		}
 
-		if (tool.policy === "deny") {
+		const decision = await gate(tool, toolCall.input);
+		if (decision.kind === "deny") {
 			await outputErrorText(
 				addToolOutput,
 				toolCall,
@@ -154,25 +156,15 @@ export function runDynamicToolCall(
 			);
 			return;
 		}
-
-		if (tool.policy === "ask") {
-			const request: McpApprovalRequest = {
-				description: tool.description,
-				input: toolCall.input,
-				originalToolName: tool.originalToolName,
-				serverName: tool.serverName,
-			};
-			const controller = createMcpApprovalController();
-			openApproval(request, controller);
-			const approved = await controller.request(request);
-			if (!approved) {
-				await outputErrorText(
-					addToolOutput,
-					toolCall,
-					`MCP tool '${toolCall.toolName}' was not approved`
-				);
-				return;
-			}
+		if (decision.kind === "reject") {
+			await outputErrorText(
+				addToolOutput,
+				toolCall,
+				decision.feedback === undefined
+					? `MCP tool '${toolCall.toolName}' was not approved`
+					: `MCP tool '${toolCall.toolName}' was not approved — ${decision.feedback}`
+			);
+			return;
 		}
 
 		const approve = (): Promise<boolean> => Promise.resolve(true);
@@ -213,11 +205,15 @@ export function runDynamicToolCall(
 
 export type McpContextValue = {
 	close(): Promise<void>;
-	createSnapshot(mode: ModeType): Promise<McpCatalogSnapshot>;
+	createSnapshot(
+		mode: ModeType,
+		agentPolicy?: McpAgentPolicy
+	): Promise<McpCatalogSnapshot>;
 	handleDynamicToolCall(
 		snapshot: McpCatalogSnapshot | null,
 		toolCall: McpDynamicToolCall,
-		addToolOutput: McpAddToolOutput
+		addToolOutput: McpAddToolOutput,
+		gate: McpApprovalGate
 	): void;
 	reconnect(serverName: string): Promise<void>;
 	statuses: readonly McpServerStatus[];
@@ -267,7 +263,6 @@ export function McpProvider({
 	createRegistry,
 	workspace,
 }: McpProviderProps) {
-	const dialog = useDialog();
 	const toast = useToast();
 	const [registry] = useState<McpRegistry>(() =>
 		(createRegistry ?? createMcpRegistry)({ workspace })
@@ -284,22 +279,12 @@ export function McpProvider({
 		[registry]
 	);
 
-	const openApproval = useCallback(
-		(request: McpApprovalRequest, controller: McpApprovalController) => {
-			dialog.open({
-				children: (
-					<McpApprovalDialog controller={controller} request={request} />
-				),
-				title: "MCP tool approval",
-				width: 100,
-			});
-		},
-		[dialog]
-	);
-
 	const createSnapshot = useCallback(
-		async (mode: ModeType): Promise<McpCatalogSnapshot> => {
-			const snapshot = await registry.createSnapshot(mode);
+		async (
+			mode: ModeType,
+			agentPolicy?: McpAgentPolicy
+		): Promise<McpCatalogSnapshot> => {
+			const snapshot = await registry.createSnapshot(mode, agentPolicy);
 			latestSnapshotRef.current = snapshot;
 			if (mode === "build" && !summaryToastShownRef.current) {
 				const summary = buildMcpSummary(registry.getStatuses());
@@ -317,18 +302,19 @@ export function McpProvider({
 		(
 			snapshot: McpCatalogSnapshot | null,
 			toolCall: McpDynamicToolCall,
-			addToolOutput: McpAddToolOutput
+			addToolOutput: McpAddToolOutput,
+			gate: McpApprovalGate
 		): void => {
 			void runDynamicToolCall({
 				addToolOutput,
+				gate,
 				latestSnapshot: latestSnapshotRef.current,
-				openApproval,
 				registry,
 				snapshot,
 				toolCall,
 			});
 		},
-		[openApproval, registry]
+		[registry]
 	);
 
 	const statusesCacheRef = useRef<readonly McpServerStatus[] | null>(null);

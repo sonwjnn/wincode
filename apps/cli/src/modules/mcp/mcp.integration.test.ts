@@ -15,11 +15,19 @@ import net from "node:net";
 import path from "node:path";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import type { PermissionRules } from "@/modules/permissions";
 import type { McpConfigResult, ResolvedMcpServerConfig } from "./config";
 import {
+	type McpApprovalGate,
+	type McpToolOutputConfig,
+	runDynamicToolCall,
+} from "./context/mcp-provider";
+import {
 	createMcpRegistry,
+	type McpAgentPolicy,
 	type McpCatalogSnapshot,
 	type McpRegistry,
+	type McpSnapshotTool,
 } from "./registry";
 
 const FIXTURE = path.join(import.meta.dir, "fixtures", "stdio-server.ts");
@@ -264,5 +272,189 @@ describe("MCP transport integration", () => {
 			await server.stop();
 		}
 		expect(await portReleased(Number(url.port))).toBe(true);
+	}, 15_000);
+});
+
+const STDIO_ECHO_DISPATCH_PATTERN = /^mcp_stdio-echo_echo_/;
+
+// Open-glob agent policy keys sit outside the nominal PermissionAction union;
+// the registry matches them as globs, so cast the literals as the policy module
+// does.
+const openRules = (rules: Record<string, "allow" | "ask" | "deny">) =>
+	rules as PermissionRules;
+
+const firstTool = (snapshot: McpCatalogSnapshot): McpSnapshotTool => {
+	const entry = snapshot.tools.values().next().value;
+	if (entry === undefined) {
+		throw new Error("expected at least one dispatch entry in the catalog");
+	}
+	return entry;
+};
+
+const dispatchNameOf = (snapshot: McpCatalogSnapshot): string => {
+	const name = snapshot.tools.keys().next().value;
+	if (name === undefined) {
+		throw new Error("expected at least one dispatch entry in the catalog");
+	}
+	return name;
+};
+
+describe("MCP policy composition over the real catalog", () => {
+	const buildStdioRegistry = (): McpRegistry =>
+		createRegistry(
+			stdioServerConfig("stdio-echo", [process.execPath, "run", FIXTURE])
+		);
+
+	const permissive: McpAgentPolicy = { rules: {}, safety: false };
+
+	test("exposes and names an allowed tool logically", async () => {
+		const registry = buildStdioRegistry();
+		try {
+			const snapshot = await registry.createSnapshot("build", permissive);
+			expect(snapshot.manifest).toHaveLength(1);
+			const tool = firstTool(snapshot);
+			expect(tool.policy).toBe("allow");
+			// Logical name is the hash-free `<server>_<tool>` Permission action,
+			// distinct from the hashed dispatch key the manifest advertises.
+			expect(tool.logicalName).toBe("stdio-echo_echo");
+			expect(dispatchNameOf(snapshot)).not.toBe(tool.logicalName);
+			expect(dispatchNameOf(snapshot)).toMatch(STDIO_ECHO_DISPATCH_PATTERN);
+		} finally {
+			await registry.close();
+		}
+	}, 15_000);
+
+	test("an ask policy keeps the tool visible but gated", async () => {
+		const registry = buildStdioRegistry();
+		try {
+			const snapshot = await registry.createSnapshot("build", {
+				rules: openRules({ "stdio-echo_*": "ask" }),
+				safety: false,
+			});
+			expect(snapshot.manifest).toHaveLength(1);
+			expect(firstTool(snapshot).policy).toBe("ask");
+		} finally {
+			await registry.close();
+		}
+	}, 15_000);
+
+	test("a deny policy hides the tool but keeps its dispatch entry", async () => {
+		const registry = buildStdioRegistry();
+		try {
+			const snapshot = await registry.createSnapshot("build", {
+				rules: openRules({ "*": "deny" }),
+				safety: false,
+			});
+			expect(snapshot.manifest).toEqual([]);
+			expect(snapshot.tools.size).toBe(1);
+			expect(firstTool(snapshot).policy).toBe("deny");
+		} finally {
+			await registry.close();
+		}
+	}, 15_000);
+
+	test("runs an allowed tool through the generic gate", async () => {
+		const registry = buildStdioRegistry();
+		try {
+			const snapshot = await registry.createSnapshot("build", permissive);
+			const outputs: McpToolOutputConfig[] = [];
+			const gate: McpApprovalGate = () => Promise.resolve({ kind: "allow" });
+			await runDynamicToolCall({
+				addToolOutput: (config) => {
+					outputs.push(config);
+				},
+				gate,
+				latestSnapshot: snapshot,
+				registry,
+				snapshot,
+				toolCall: {
+					dynamic: true,
+					input: { text: "gated hello" },
+					toolCallId: "call_1",
+					toolName: dispatchNameOf(snapshot),
+				},
+			});
+			expect(outputs).toEqual([
+				{
+					output: {
+						content: [{ type: "text", text: "gated hello" }],
+						isError: false,
+						truncated: false,
+					},
+					state: "output-available",
+					tool: dispatchNameOf(snapshot),
+					toolCallId: "call_1",
+				},
+			]);
+		} finally {
+			await registry.close();
+		}
+	}, 15_000);
+
+	test("a gate denial blocks execution against the real server", async () => {
+		const registry = buildStdioRegistry();
+		try {
+			const snapshot = await registry.createSnapshot("build", permissive);
+			const outputs: McpToolOutputConfig[] = [];
+			const gate: McpApprovalGate = () => Promise.resolve({ kind: "deny" });
+			await runDynamicToolCall({
+				addToolOutput: (config) => {
+					outputs.push(config);
+				},
+				gate,
+				latestSnapshot: snapshot,
+				registry,
+				snapshot,
+				toolCall: {
+					dynamic: true,
+					input: { text: "should not run" },
+					toolCallId: "call_1",
+					toolName: dispatchNameOf(snapshot),
+				},
+			});
+			expect(outputs[0]?.state).toBe("output-error");
+			expect(outputs[0]?.errorText).toContain("is denied by policy");
+		} finally {
+			await registry.close();
+		}
+	}, 15_000);
+
+	test("fails closed when the snapshot is stale", async () => {
+		const registry = buildStdioRegistry();
+		try {
+			const stale = await registry.createSnapshot("build", permissive);
+			// A second snapshot supersedes the first; the older one must no longer
+			// dispatch.
+			const latest = await registry.createSnapshot("build", permissive);
+			const outputs: McpToolOutputConfig[] = [];
+			await runDynamicToolCall({
+				addToolOutput: (config) => {
+					outputs.push(config);
+				},
+				gate: () => Promise.resolve({ kind: "allow" }),
+				latestSnapshot: latest,
+				registry,
+				snapshot: stale,
+				toolCall: {
+					dynamic: true,
+					input: { text: "hello" },
+					toolCallId: "call_1",
+					toolName: dispatchNameOf(stale),
+				},
+			});
+			expect(outputs[0]?.state).toBe("output-error");
+			expect(outputs[0]?.errorText).toBe("MCP tool call has no active catalog");
+
+			// The registry-level guard fails closed too, independent of the runner.
+			const direct = await registry.execute(
+				stale,
+				dispatchNameOf(stale),
+				{ text: "hello" },
+				async () => true
+			);
+			expect(direct.isError).toBe(true);
+		} finally {
+			await registry.close();
+		}
 	}, 15_000);
 });

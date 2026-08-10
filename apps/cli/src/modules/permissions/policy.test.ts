@@ -1,14 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import {
 	applyManualApprovalSafetyCeiling,
+	composePermissionDecisions,
 	countFlattenedPermissionRules,
 	createResolvedToolPermission,
 	createToolPermission,
 	DEFAULT_READ_PERMISSION_RULES,
+	decideOpenActionPermission,
 	findUnmatchedActionKeys,
 	foldPermissionRules,
 	matchesResourcePattern,
 	mergePermissionRules,
+	type PermissionDecision,
 	type PermissionRules,
 	resolveVisibleCodingTools,
 	STATIC_TOOL_PERMISSION_ACTIONS,
@@ -257,10 +260,123 @@ describe("foldPermissionRules", () => {
 });
 
 describe("shippedAgentPermissionRules", () => {
-	test("denies edit for Plan and stays empty for other agents", () => {
-		expect(shippedAgentPermissionRules("plan")).toEqual({ edit: "deny" });
+	test("denies edit and every open-glob action for Plan", () => {
+		// The `*` deny is honored only by the MCP open-glob evaluator, so it makes
+		// Plan's baseline expose no MCP tools while leaving static tool visibility
+		// (which matches exact action keys) unchanged.
+		expect(shippedAgentPermissionRules("plan")).toEqual({
+			"*": "deny",
+			edit: "deny",
+		} as PermissionRules);
 		expect(shippedAgentPermissionRules("build")).toEqual({});
 		expect(shippedAgentPermissionRules("code-reviewer")).toEqual({});
+	});
+});
+
+describe("composePermissionDecisions", () => {
+	test("takes the most-restrictive of the two decisions", () => {
+		expect(composePermissionDecisions("allow", "allow")).toBe("allow");
+		expect(composePermissionDecisions("allow", "ask")).toBe("ask");
+		expect(composePermissionDecisions("ask", "allow")).toBe("ask");
+		expect(composePermissionDecisions("ask", "ask")).toBe("ask");
+		expect(composePermissionDecisions("allow", "deny")).toBe("deny");
+		expect(composePermissionDecisions("deny", "allow")).toBe("deny");
+		expect(composePermissionDecisions("ask", "deny")).toBe("deny");
+		expect(composePermissionDecisions("deny", "ask")).toBe("deny");
+		expect(composePermissionDecisions("deny", "deny")).toBe("deny");
+	});
+});
+
+describe("decideOpenActionPermission", () => {
+	// Open-glob keys (`*`, `demo_*`) sit outside the nominal PermissionAction
+	// union, exactly like the shipped Plan rule; the evaluator matches them as
+	// globs, so the tests cast the literals the same way the policy module does.
+	const openRules = (
+		rules: Record<
+			string,
+			PermissionDecision | Record<string, PermissionDecision>
+		>
+	): PermissionRules => rules as PermissionRules;
+
+	test("falls back to allow when no key matches the action", () => {
+		expect(decideOpenActionPermission({}, "demo_echo", "*")).toBe("allow");
+		expect(decideOpenActionPermission({ edit: "deny" }, "demo_echo", "*")).toBe(
+			"allow"
+		);
+	});
+
+	test("matches a scalar action rule by glob", () => {
+		expect(
+			decideOpenActionPermission(openRules({ "*": "deny" }), "demo_echo", "*")
+		).toBe("deny");
+		expect(
+			decideOpenActionPermission(
+				openRules({ "demo_*": "ask" }),
+				"demo_echo",
+				"*"
+			)
+		).toBe("ask");
+		expect(
+			decideOpenActionPermission(
+				openRules({ "demo_*": "ask" }),
+				"other_echo",
+				"*"
+			)
+		).toBe("allow");
+	});
+
+	test("lets the last matching key win", () => {
+		expect(
+			decideOpenActionPermission(
+				openRules({ "*": "deny", "demo_*": "allow" }),
+				"demo_echo",
+				"*"
+			)
+		).toBe("allow");
+		expect(
+			decideOpenActionPermission(
+				openRules({ "demo_*": "allow", "*": "deny" }),
+				"demo_echo",
+				"*"
+			)
+		).toBe("deny");
+	});
+
+	test("applies the last matching resource pattern for a map rule", () => {
+		expect(
+			decideOpenActionPermission(
+				openRules({ "demo_*": { "*": "ask", secret: "deny" } }),
+				"demo_echo",
+				"secret"
+			)
+		).toBe("deny");
+		expect(
+			decideOpenActionPermission(
+				openRules({ "demo_*": { "*": "ask", secret: "deny" } }),
+				"demo_echo",
+				"public"
+			)
+		).toBe("ask");
+	});
+
+	test("a non-matching map never loosens an earlier explicit deny", () => {
+		// A later `demo_*` map whose patterns miss the resource must not reset an
+		// earlier `"*": "deny"` back to allow — an explicit deny stays deny.
+		expect(
+			decideOpenActionPermission(
+				openRules({ "*": "deny", "demo_*": { "some/path": "ask" } }),
+				"demo_echo",
+				"*"
+			)
+		).toBe("deny");
+		// An explicit matching pattern may still override, honoring last-match-wins.
+		expect(
+			decideOpenActionPermission(
+				openRules({ "*": "deny", "demo_*": { "*": "allow" } }),
+				"demo_echo",
+				"*"
+			)
+		).toBe("allow");
 	});
 });
 

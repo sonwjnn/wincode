@@ -8,18 +8,22 @@ user's working directory — the server never runs file-system tools.
 ## Public API
 
 - `createMcpRegistry(deps)` — build the MCP registry for a workspace. Loads config, connects
-  servers, exposes `createSnapshot(mode)`, `execute(...)`, `reconnect(serverName)`,
+  servers, exposes `createSnapshot(mode, agentPolicy?)`, `execute(...)`, `reconnect(serverName)`,
   `getStatuses()`, `subscribe(listener)`, and `close()`.
 - `McpProvider` / `useMcp()` — React context provider that owns a single registry per provider
-  tree and exposes `statuses`, `createSnapshot(mode)`, `handleDynamicToolCall(...)`,
-  `reconnect(serverName)`, and `close()`. The registry is created once and closed on unmount.
+  tree and exposes `statuses`, `createSnapshot(mode, agentPolicy?)`,
+  `handleDynamicToolCall(snapshot, toolCall, addToolOutput, gate)`, `reconnect(serverName)`, and
+  `close()`. The registry is created once and closed on unmount.
 - Types: `McpServerStatus`, `McpApprovalRequest`, `McpCatalogSnapshot`, `McpSnapshotTool`,
-  `McpExecutionPolicy`.
+  `McpAgentPolicy`, `McpApprovalGate`, `McpApprovalDecision`, `McpExecutionPolicy`.
 - `McpStatusDialogContent` — the pure status surface (list of servers, transport, state, tool
   counts, reconnectable rows). Rendered from `McpServerStatus` only, so no config, env, headers,
   or URLs can appear.
 
-The approval dialog UI is module-internal and intentionally not part of the public entrypoint.
+MCP tools resolve approvals through the same generic Permission engine, approval queue, and
+approval dialog as static coding tools — there is no MCP-specific approval controller or dialog.
+The caller (the chat tool-call handler) supplies an `McpApprovalGate` that owns that shared
+machinery; the registry and provider only apply the composed decision.
 
 ## Config sources
 
@@ -59,26 +63,48 @@ executed.
 ## Execution policy
 
 Each server accepts `permission: "allow" | "ask" | "deny"`; missing permission defaults to
-`ask`. `enabled: false` prevents connection or local process startup. Permission controls tool
-visibility and execution after an enabled server connects.
+`ask`. `enabled: false` prevents connection or local process startup.
+
+Every tool's effective decision is the **composition** of two independent sources, taken
+most-restrictively (`deny` over `ask` over `allow`) so neither side can loosen the other:
+
+1. The active **Agent** policy, evaluated against the tool's logical
+   `<sanitizedServer>_<sanitizedTool>` name as an open-glob action (last-match-wins, defaulting to
+   `allow` when no rule matches). This is the same Permission-rule shape static coding tools use.
+2. The **server**'s own `permission`.
+
+When the governing Agent runs under the manual-only safety ceiling, any non-`deny` composed
+decision is raised to `ask`, so malformed configuration can never auto-run an MCP tool. A `deny`
+from either source is always preserved.
+
+Permission rules target the stable logical name; the collision-resistant hashed name
+(`mcp_<server>_<tool>_<digest>`) remains the only dispatch identity used to actually execute a
+tool.
 
 ## Build/Plan semantics
 
-- **Build** mode produces a full catalog snapshot of connected servers' tools; `deny`-policy
-  tools are hidden from the model.
-- **Plan** mode produces an empty snapshot — MCP tools are never surfaced or executed in read-only
-  planning.
+Catalog contents are purely policy-driven — neither mode is special-cased:
+
+- **Build** connects servers and produces a catalog; a tool whose composed decision is `deny` is
+  hidden from the model but kept in the dispatch map so a stray call fails closed with a policy
+  denial rather than an unknown-tool error.
+- **Plan** connects the same way, but its shipped baseline policy denies every open-glob action
+  (`"*": "deny"`), so a default Plan exposes and executes no MCP tools. A higher-precedence policy
+  that explicitly overrides that rule can re-enable specific tools, since the rule composes like
+  any other.
 
 ## Tool-call handling
 
-`handleDynamicToolCall(snapshot, toolCall, addToolOutput)` resolves one dynamic MCP tool call:
+`handleDynamicToolCall(snapshot, toolCall, addToolOutput, gate)` resolves one dynamic MCP tool
+call:
 
 1. Missing or stale snapshot -> `output-error`: "MCP tool call has no active catalog".
-2. `deny` policy -> `output-error` without execution.
-3. `ask` policy -> opens the approval dialog (`Allow once` / `Deny`); denied or cancelled calls
-   become `output-error` without execution.
-4. Otherwise executes through the registry and emits a normalized result or a stable, sanitized
-   error. No config, credentials, headers, URL, or command ever reach tool output.
+2. The `gate` resolves the composed decision through the shared approval machinery (temporary
+   grants, auto approval, and — for an `ask` — the shared approval dialog):
+   - `deny` -> `output-error` without execution.
+   - `reject` -> `output-error` carrying the optional bounded correction feedback.
+   - `allow` -> executes through the registry and emits a normalized result or a stable, sanitized
+     error. No config, credentials, headers, URL, or command ever reach tool output.
 
 The provider never awaits an AI SDK `onToolCall` synchronously — calls are scheduled so tool
 execution cannot deadlock the chat executor.

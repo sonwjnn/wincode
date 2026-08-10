@@ -6,6 +6,12 @@ import {
 	type McpToolManifestEntry,
 	type ModeType,
 } from "@wincode/ai";
+import {
+	composePermissionDecisions,
+	DEFAULT_EFFECTIVE_AGENT_POLICY,
+	decideOpenActionPermission,
+	type EffectiveAgentPolicy,
+} from "@/modules/permissions";
 import type { ConfigStore } from "@/shared/config/config-store";
 import {
 	createSdkMcpClient,
@@ -24,7 +30,44 @@ import {
 import type { McpExecutionPolicy } from "./policy";
 import { type McpNormalizedResult, normalizeMcpResult } from "./result";
 import { sanitizeMessage } from "./sanitize";
-import { qualifyMcpToolName } from "./tool-identity";
+import { logicalMcpToolName, qualifyMcpToolName } from "./tool-identity";
+
+/**
+ * The Agent's effective Permission policy as it applies to MCP tools: the folded
+ * rules matched against logical tool names and whether the Agent runs under the
+ * manual-only safety ceiling. Composed most-restrictively with each server's own
+ * execution policy when a snapshot is built. Defaults to an empty, non-safety
+ * policy so callers without an Agent see the server policy unchanged.
+ */
+export type McpAgentPolicy = EffectiveAgentPolicy;
+
+// Every MCP tool gates against the single `*` resource in this version; only the
+// logical tool name distinguishes rules. Exported so the chat approval gate keys
+// grants against the identical resource the snapshot composed with.
+export const MCP_PERMISSION_RESOURCE = "*";
+
+/**
+ * Composes an Agent's MCP policy for one logical tool name with the server's
+ * independent execution policy, most-restrictively, then applies the Agent's
+ * manual-only safety ceiling: under the ceiling every non-deny decision becomes
+ * a manual `ask` so remembered grants and auto approval cannot bypass it.
+ */
+const composeMcpToolDecision = (
+	serverPolicy: McpExecutionPolicy,
+	agentPolicy: McpAgentPolicy,
+	logicalName: string
+): McpExecutionPolicy => {
+	const agentDecision = decideOpenActionPermission(
+		agentPolicy.rules,
+		logicalName,
+		MCP_PERMISSION_RESOURCE
+	);
+	const composed = composePermissionDecisions(serverPolicy, agentDecision);
+	if (agentPolicy.safety && composed !== "deny") {
+		return "ask";
+	}
+	return composed;
+};
 
 export type McpServerState =
 	| "disabled"
@@ -51,8 +94,20 @@ export type McpApprovalRequest = {
 export type McpSnapshotTool = {
 	client: McpClient;
 	description: string;
+	/**
+	 * The stable logical Permission action name (`<sanitizedServer>_<sanitizedTool>`)
+	 * this tool's decision was evaluated against and that a remembered grant is
+	 * keyed by. Distinct from the hashed dispatch identity used as the map key.
+	 */
+	logicalName: string;
 	originalToolName: string;
+	/** The composed Agent + server decision after any safety ceiling. */
 	policy: McpExecutionPolicy;
+	/**
+	 * True when the governing Agent policy is a manual-only safety ceiling, so an
+	 * `ask` here must never be satisfied by a remembered grant or auto approval.
+	 */
+	safety: boolean;
 	serverName: string;
 };
 
@@ -65,7 +120,10 @@ export type McpCatalogSnapshot = {
 
 export type McpRegistry = {
 	close(): Promise<void>;
-	createSnapshot(mode: ModeType): Promise<McpCatalogSnapshot>;
+	createSnapshot(
+		mode: ModeType,
+		agentPolicy?: McpAgentPolicy
+	): Promise<McpCatalogSnapshot>;
 	execute(
 		snapshot: McpCatalogSnapshot,
 		toolName: string,
@@ -240,11 +298,14 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		return initPromise;
 	};
 
-	const buildSnapshot = async (): Promise<McpCatalogSnapshot> => {
+	const buildSnapshot = async (
+		mode: ModeType,
+		agentPolicy: McpAgentPolicy
+	): Promise<McpCatalogSnapshot> => {
 		type Candidate = {
 			client: McpClient;
 			config: ResolvedMcpServerConfig;
-			policy: McpExecutionPolicy;
+			serverPolicy: McpExecutionPolicy;
 			tool: McpClientTool;
 		};
 		const candidates: Candidate[] = [];
@@ -252,12 +313,12 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			if (entry.client === undefined) {
 				continue;
 			}
-			const decision = entry.config.permission;
+			const serverPolicy = entry.config.permission;
 			for (const tool of entry.tools) {
 				candidates.push({
 					client: entry.client,
 					config: entry.config,
-					policy: decision,
+					serverPolicy,
 					tool,
 				});
 			}
@@ -277,15 +338,26 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				candidate.config.name,
 				candidate.tool.name
 			);
+			const logicalName = logicalMcpToolName(
+				candidate.config.name,
+				candidate.tool.name
+			);
+			const policy = composeMcpToolDecision(
+				candidate.serverPolicy,
+				agentPolicy,
+				logicalName
+			);
 			const description = candidate.tool.description ?? "";
 			tools.set(name, {
 				client: candidate.client,
 				description,
+				logicalName,
 				originalToolName: candidate.tool.name,
-				policy: candidate.policy,
+				policy,
+				safety: agentPolicy.safety,
 				serverName: candidate.config.name,
 			});
-			if (candidate.policy !== "deny" && visibleCount < MAX_MCP_TOOL_COUNT) {
+			if (policy !== "deny" && visibleCount < MAX_MCP_TOOL_COUNT) {
 				manifest.push({
 					name,
 					description,
@@ -297,15 +369,16 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		return {
 			id: crypto.randomUUID(),
 			manifest,
-			mode: "build",
+			mode,
 			tools,
 		};
 	};
 
 	const createSnapshot = async (
-		mode: ModeType
+		mode: ModeType,
+		agentPolicy: McpAgentPolicy = DEFAULT_EFFECTIVE_AGENT_POLICY
 	): Promise<McpCatalogSnapshot> => {
-		if (mode === "plan" || closed) {
+		if (closed) {
 			const snapshot: McpCatalogSnapshot = {
 				id: crypto.randomUUID(),
 				manifest: [],
@@ -316,7 +389,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			return snapshot;
 		}
 		await init();
-		const snapshot = await buildSnapshot();
+		const snapshot = await buildSnapshot(mode, agentPolicy);
 		latestSnapshotId = snapshot.id;
 		return snapshot;
 	};
@@ -375,7 +448,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		approve: (request: McpApprovalRequest) => Promise<boolean>,
 		signal?: AbortSignal
 	): Promise<McpNormalizedResult> => {
-		if (snapshot.id !== latestSnapshotId || snapshot.mode !== "build") {
+		if (snapshot.id !== latestSnapshotId) {
 			return outputError("MCP tool snapshot is stale or not executable");
 		}
 		const tool = snapshot.tools.get(toolName);

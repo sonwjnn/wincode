@@ -2,6 +2,17 @@ const MAX_NAME_LENGTH = 64;
 const sanitize = (value: string): string =>
 	value.normalize("NFKD").replace(/[^a-zA-Z0-9_-]/g, "_");
 
+/**
+ * The stable logical Permission action name for an MCP tool:
+ * `<sanitizedServer>_<sanitizedTool>`. Unlike {@link qualifyMcpToolName}, this
+ * carries no collision-resistant hash and no length bound — it is the name
+ * Agent Permission Rules target, never a runtime dispatch identifier. Two tools
+ * that sanitize to the same logical name share one Permission rule by design;
+ * their distinct hashed identities keep dispatch unambiguous.
+ */
+export const logicalMcpToolName = (server: string, tool: string): string =>
+	`${sanitize(server)}_${sanitize(tool)}`;
+
 export async function qualifyMcpToolName(
 	server: string,
 	tool: string

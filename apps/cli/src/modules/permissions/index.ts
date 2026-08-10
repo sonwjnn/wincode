@@ -7,6 +7,7 @@ export { canonicalizeResource } from "./canonical";
 export {
 	type CreatePermissionServiceOptions,
 	createPermissionService,
+	type PermissionGrantAction,
 	type PermissionService,
 	type TemporaryGrant,
 } from "./permission-service";
@@ -17,11 +18,15 @@ export {
 } from "./permission-service-provider";
 export {
 	applyManualApprovalSafetyCeiling,
+	composePermissionDecisions,
 	countFlattenedPermissionRules,
 	createResolvedToolPermission,
 	createToolPermission,
+	DEFAULT_EFFECTIVE_AGENT_POLICY,
 	DEFAULT_PERMISSION_RULES,
 	DEFAULT_READ_PERMISSION_RULES,
+	decideOpenActionPermission,
+	type EffectiveAgentPolicy,
 	findUnmatchedActionKeys,
 	foldPermissionRules,
 	isStaticToolUnconditionallyDenied,

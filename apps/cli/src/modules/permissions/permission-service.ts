@@ -1,4 +1,10 @@
-import type { PermissionAction } from "./policy";
+/**
+ * The action a grant or approval is keyed by. Static coding tools use a fixed
+ * `PermissionAction` (`read`, `edit`, ...); MCP tools use their logical
+ * `<sanitizedServer>_<sanitizedTool>` name. Both are plain strings here so the
+ * service stays independent of any one tool family.
+ */
+export type PermissionGrantAction = string;
 
 /**
  * One remembered "always" approval: the exact evaluated Permission action and
@@ -6,7 +12,7 @@ import type { PermissionAction } from "./policy";
  * identical, so a grant never widens to cover a sibling resource or action.
  */
 export type TemporaryGrant = {
-	action: PermissionAction;
+	action: PermissionGrantAction;
 	resource: string;
 };
 
@@ -20,9 +26,9 @@ export type PermissionServiceListener = () => void;
  * future tools all resolve approvals through the same state.
  */
 export type PermissionService = {
-	isGranted(action: PermissionAction, resource: string): boolean;
-	grant(action: PermissionAction, resource: string): void;
-	revoke(action: PermissionAction, resource: string): void;
+	isGranted(action: PermissionGrantAction, resource: string): boolean;
+	grant(action: PermissionGrantAction, resource: string): void;
+	revoke(action: PermissionGrantAction, resource: string): void;
 	listGrants(): TemporaryGrant[];
 	isAutoApproval(): boolean;
 	setAutoApproval(enabled: boolean): void;
@@ -30,12 +36,13 @@ export type PermissionService = {
 	subscribe(listener: PermissionServiceListener): () => void;
 };
 
-// Action names are a fixed set with no spaces, so the first space unambiguously
-// delimits the action from the resource; two distinct (action, resource) pairs
-// therefore never collide onto one key even when a resource contains spaces.
+// Static action names are a fixed set and logical MCP names are sanitized, so
+// neither contains a space; the first space therefore unambiguously delimits the
+// action from the resource, and two distinct (action, resource) pairs never
+// collide onto one key even when a resource contains spaces.
 const GRANT_KEY_SEPARATOR = " ";
 
-const grantKey = (action: PermissionAction, resource: string): string =>
+const grantKey = (action: PermissionGrantAction, resource: string): string =>
 	`${action}${GRANT_KEY_SEPARATOR}${resource}`;
 
 export type CreatePermissionServiceOptions = {

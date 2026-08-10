@@ -12,10 +12,12 @@ import {
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import type { PermissionService } from "./permission-service";
 import { usePermissionService } from "./permission-service-provider";
+import type { EffectiveAgentPolicy } from "./policy";
 import {
 	applyManualApprovalSafetyCeiling,
 	createResolvedToolPermission,
 	createToolPermission,
+	DEFAULT_EFFECTIVE_AGENT_POLICY,
 	DEFAULT_PERMISSION_RULES,
 	type ToolPermission,
 } from "./policy";
@@ -28,6 +30,7 @@ export type ToolPermissionRuntime = {
 		actions: ToolApprovalActions
 	) => void;
 	permissionRef: MutableRefObject<ToolPermission>;
+	resolveMcpPolicy: () => Promise<EffectiveAgentPolicy>;
 	resolvePermission: () => Promise<ToolPermission>;
 	sandbox: WorkspacePolicy;
 	service: PermissionService;
@@ -46,11 +49,14 @@ export function useToolPermission(): ToolPermissionRuntime {
 	const service = usePermissionService();
 	const { agent } = usePromptConfig();
 	const permissionRef = useRef<ToolPermission>(createToolPermission());
+	const mcpPolicyRef = useRef<EffectiveAgentPolicy>(
+		DEFAULT_EFFECTIVE_AGENT_POLICY
+	);
 	const sandbox = useMemo(
 		() => createWorkspaceSandbox(config.workspace),
 		[config]
 	);
-	const permissionPromise = useMemo(
+	const resolvedPromise = useMemo(
 		() =>
 			resolveAgentRegistry(config)
 				.then((registry) => {
@@ -62,20 +68,34 @@ export function useToolPermission(): ToolPermissionRuntime {
 						registry.agents.find(
 							({ id, isAvailable }) => id === agent && isAvailable
 						) ?? registry.agents.find(({ id }) => id === "build");
-					const permission = createResolvedToolPermission(
-						effectiveAgent?.permission ?? DEFAULT_PERMISSION_RULES
-					);
-					permissionRef.current = effectiveAgent?.requiresManualApproval
+					const rules = effectiveAgent?.permission ?? DEFAULT_PERMISSION_RULES;
+					const safety = effectiveAgent?.requiresManualApproval ?? false;
+					const permission = createResolvedToolPermission(rules);
+					permissionRef.current = safety
 						? applyManualApprovalSafetyCeiling(permission)
 						: permission;
-					return permissionRef.current;
+					// MCP composition consumes the raw folded rules plus the safety flag;
+					// the ceiling is applied by the registry when it composes with each
+					// server's own policy, so it must not be pre-applied here.
+					mcpPolicyRef.current = { rules, safety };
+					return {
+						mcpPolicy: mcpPolicyRef.current,
+						permission: permissionRef.current,
+					};
 				})
-				.catch(() => permissionRef.current),
+				.catch(() => ({
+					mcpPolicy: mcpPolicyRef.current,
+					permission: permissionRef.current,
+				})),
 		[agent, config]
 	);
 	const resolvePermission = useCallback(
-		() => permissionPromise,
-		[permissionPromise]
+		() => resolvedPromise.then((resolved) => resolved.permission),
+		[resolvedPromise]
+	);
+	const resolveMcpPolicy = useCallback(
+		() => resolvedPromise.then((resolved) => resolved.mcpPolicy),
+		[resolvedPromise]
 	);
 
 	const openApproval = useCallback(
@@ -89,5 +109,12 @@ export function useToolPermission(): ToolPermissionRuntime {
 		[dialog]
 	);
 
-	return { openApproval, permissionRef, resolvePermission, sandbox, service };
+	return {
+		openApproval,
+		permissionRef,
+		resolveMcpPolicy,
+		resolvePermission,
+		sandbox,
+		service,
+	};
 }

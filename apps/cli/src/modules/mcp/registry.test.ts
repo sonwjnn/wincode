@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CallToolResult } from "@modelcontextprotocol/client";
+import type { PermissionRules } from "@/modules/permissions";
 import type { McpClient, McpClientTool } from "./client";
 import type {
 	LocalMcpServerConfig,
@@ -11,6 +12,7 @@ import type {
 import type { McpExecutionPolicy } from "./policy";
 import {
 	createMcpRegistry,
+	type McpAgentPolicy,
 	type McpApprovalRequest,
 	type McpRegistry,
 	type McpRegistryDeps,
@@ -85,6 +87,12 @@ class FakeMcpClient implements McpClient {
 }
 
 const ECHO_NAME_PATTERN = /^mcp_demo_echo_/;
+
+// Agent policies target MCP tools by open-glob keys (`*`, `demo_*`) that sit
+// outside the nominal PermissionAction union; the registry evaluates them as
+// globs, so tests cast the literals just as the policy module does.
+const openRules = (rules: Record<string, "allow" | "ask" | "deny">) =>
+	rules as PermissionRules;
 
 const hangingCall =
 	(): NonNullable<FakeMcpClient["callImpl"]> => (_name, _input, signal) =>
@@ -184,16 +192,42 @@ const harness = (options: HarnessOptions = {}): Harness => {
 };
 
 describe("createMcpRegistry", () => {
-	test("returns an empty plan snapshot without connecting", async () => {
-		const { clients, registry } = harness({
-			configs: [serverConfig("demo")],
+	test("plan mode connects and builds a catalog under the default policy", async () => {
+		// Plan no longer short-circuits: visibility is purely policy-driven, so a
+		// plan snapshot with the permissive default policy connects and exposes
+		// tools exactly like build. The empty-Plan baseline comes from the shipped
+		// Plan policy denying every open-glob action (see the next test).
+		const demo = new FakeMcpClient("demo", [tool("echo")]);
+		const { registry } = harness({
+			clients: { demo },
+			configs: [serverConfig("demo", { permission: "allow" })],
 		});
 		const snapshot = await registry.createSnapshot("plan");
 		expect(snapshot.mode).toBe("plan");
+		expect(snapshot.manifest).toHaveLength(1);
+		expect(snapshot.tools.size).toBe(1);
+		expect(demo.connectCount).toBe(1);
+	});
+
+	test("an all-deny agent policy empties the manifest but keeps dispatch entries", async () => {
+		const demo = new FakeMcpClient("demo", [tool("echo")]);
+		const { registry } = harness({
+			clients: { demo },
+			configs: [serverConfig("demo", { permission: "allow" })],
+		});
+		const snapshot = await registry.createSnapshot("plan", {
+			rules: openRules({ "*": "deny" }),
+			safety: false,
+		});
+		// A denied tool is absent from the manifest the model sees, yet retained in
+		// the dispatch map marked deny so a stray call resolves to a policy denial
+		// rather than an unknown-tool error.
 		expect(snapshot.manifest).toEqual([]);
-		expect(snapshot.tools.size).toBe(0);
-		expect(clients.size).toBe(0);
-		expect(registry.getStatuses()).toEqual([]);
+		expect(snapshot.tools.size).toBe(1);
+		for (const entry of snapshot.tools.values()) {
+			expect(entry.policy).toBe("deny");
+			expect(entry.logicalName).toBe("demo_echo");
+		}
 	});
 
 	test("connects enabled servers concurrently and isolates failures", async () => {
@@ -711,4 +745,93 @@ describe("createMcpRegistry", () => {
 		await registry.close();
 		expect(demo.closeCount).toBe(afterFirstClose);
 	});
+});
+
+describe("agent + server policy composition", () => {
+	const findByLogicalName = (
+		snapshot: Awaited<ReturnType<McpRegistry["createSnapshot"]>>,
+		logicalName: string
+	) => {
+		for (const entry of snapshot.tools.values()) {
+			if (entry.logicalName === logicalName) {
+				return entry;
+			}
+		}
+		return;
+	};
+
+	const composedPolicy = async (
+		serverPolicy: McpExecutionPolicy,
+		agentPolicy: McpAgentPolicy
+	) => {
+		const demo = new FakeMcpClient("demo", [tool("echo")]);
+		const { registry } = harness({
+			clients: { demo },
+			configs: [serverConfig("demo", { permission: serverPolicy })],
+		});
+		const snapshot = await registry.createSnapshot("build", agentPolicy);
+		const entry = findByLogicalName(snapshot, "demo_echo");
+		return { entry, snapshot };
+	};
+
+	const permissive: McpAgentPolicy = { rules: {}, safety: false };
+
+	const cases: {
+		agent: McpAgentPolicy;
+		expected: "allow" | "ask" | "deny";
+		name: string;
+		server: McpExecutionPolicy;
+	}[] = [
+		{
+			agent: permissive,
+			expected: "allow",
+			name: "allow + allow",
+			server: "allow",
+		},
+		{
+			agent: { rules: openRules({ "demo_*": "ask" }), safety: false },
+			expected: "ask",
+			name: "server allow + agent ask",
+			server: "allow",
+		},
+		{
+			agent: permissive,
+			expected: "ask",
+			name: "server ask + agent allow",
+			server: "ask",
+		},
+		{
+			agent: permissive,
+			expected: "deny",
+			name: "server deny + agent allow",
+			server: "deny",
+		},
+		{
+			agent: { rules: openRules({ "*": "deny" }), safety: false },
+			expected: "deny",
+			name: "server allow + agent deny",
+			server: "allow",
+		},
+		{
+			agent: { rules: {}, safety: true },
+			expected: "ask",
+			name: "safety ceiling turns allow into ask",
+			server: "allow",
+		},
+		{
+			agent: { rules: openRules({ "*": "deny" }), safety: true },
+			expected: "deny",
+			name: "safety ceiling never loosens a deny",
+			server: "allow",
+		},
+	];
+
+	for (const { agent, expected, name, server } of cases) {
+		test(`composes ${name} to ${expected}`, async () => {
+			const { entry, snapshot } = await composedPolicy(server, agent);
+			expect(entry?.policy).toBe(expected);
+			// Only non-deny tools reach the manifest the model sees.
+			expect(snapshot.manifest.length).toBe(expected === "deny" ? 0 : 1);
+		});
+	}
 });

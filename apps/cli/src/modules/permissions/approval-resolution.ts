@@ -1,4 +1,4 @@
-import type { PermissionAction, PermissionDecision } from "./policy";
+import type { PermissionDecision } from "./policy";
 
 /**
  * The effective approval outcome after temporary grants and auto approval are
@@ -11,9 +11,10 @@ export type ApprovalResolutionContext = {
 	decision: PermissionDecision;
 	/** True when the governing evaluator is under the manual-only safety ceiling. */
 	safety: boolean;
-	action: PermissionAction;
+	/** Static coding action (`read`, `edit`, ...) or a logical MCP tool name. */
+	action: string;
 	resource: string;
-	isGranted: (action: PermissionAction, resource: string) => boolean;
+	isGranted: (action: string, resource: string) => boolean;
 	isAutoApproval: () => boolean;
 };
 

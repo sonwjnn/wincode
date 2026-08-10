@@ -9,7 +9,6 @@ import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import type { McpClient, McpClientTool } from "../client";
 import type {
-	McpApprovalRequest,
 	McpCatalogSnapshot,
 	McpRegistry,
 	McpServerStatus,
@@ -17,9 +16,9 @@ import type {
 } from "../registry";
 import type { McpNormalizedResult } from "../result";
 import {
-	createMcpApprovalController,
 	type McpAddToolOutput,
-	type McpApprovalController,
+	type McpApprovalDecision,
+	type McpApprovalGate,
 	type McpContextValue,
 	type McpDynamicToolCall,
 	McpProvider,
@@ -58,20 +57,15 @@ const successResult = (): McpNormalizedResult => ({
 	truncated: false,
 });
 
-const makeRequest = (): McpApprovalRequest => ({
-	description: "A demo tool",
-	input: { text: "hello" },
-	originalToolName: "echo",
-	serverName: "demo",
-});
-
 const makeTool = (
 	overrides: Partial<McpSnapshotTool> = {}
 ): McpSnapshotTool => ({
 	client: new FakeMcpClient(),
 	description: "A demo tool",
+	logicalName: "demo_echo",
 	originalToolName: "echo",
 	policy: "allow",
+	safety: false,
 	serverName: "demo",
 	...overrides,
 });
@@ -92,6 +86,13 @@ const makeToolCall = (): McpDynamicToolCall => ({
 	toolCallId: "call_1",
 	toolName: "mcp_demo_echo",
 });
+
+// A fixed-decision gate stands in for the shared approval machinery the chat
+// handler injects; provider/runner tests only need the settled outcome.
+const fixedGate =
+	(decision: McpApprovalDecision): McpApprovalGate =>
+	() =>
+		Promise.resolve(decision);
 
 const EMPTY_STATUSES: readonly McpServerStatus[] = [];
 
@@ -153,61 +154,12 @@ const flushUi = async (
 	await setup.renderOnce();
 };
 
-test("approval controller resolves true when allowed", async () => {
-	const controller = createMcpApprovalController();
-	const promise = controller.request(makeRequest());
-	controller.allow();
-	await expect(promise).resolves.toBe(true);
-});
-
-test("approval controller resolves false when denied", async () => {
-	const controller = createMcpApprovalController();
-	const promise = controller.request(makeRequest());
-	controller.deny();
-	await expect(promise).resolves.toBe(false);
-});
-
-test("approval controller resolves false when cancelled", async () => {
-	const controller = createMcpApprovalController();
-	const promise = controller.request(makeRequest());
-	controller.cancel();
-	await expect(promise).resolves.toBe(false);
-});
-
-test("approval controller supports multiple concurrent requests", async () => {
-	const controller = createMcpApprovalController();
-	const first = controller.request(makeRequest());
-	const second = controller.request(makeRequest());
-	// allow/deny settle the most recent pending request first (dialog stack order).
-	controller.allow();
-	await expect(second).resolves.toBe(true);
-	controller.deny();
-	await expect(first).resolves.toBe(false);
-});
-
-test("approval controller cancel resolves all pending requests false", async () => {
-	const controller = createMcpApprovalController();
-	const first = controller.request(makeRequest());
-	const second = controller.request(makeRequest());
-	controller.cancel();
-	await expect(first).resolves.toBe(false);
-	await expect(second).resolves.toBe(false);
-});
-
-test("approval controller resolves only once per request", async () => {
-	const controller = createMcpApprovalController();
-	const promise = controller.request(makeRequest());
-	controller.allow();
-	controller.deny();
-	await expect(promise).resolves.toBe(true);
-});
-
 test("runDynamicToolCall emits no-active-catalog error for null snapshot", async () => {
 	const { addToolOutput, outputs } = makeAddToolOutput();
 	await runDynamicToolCall({
 		addToolOutput,
+		gate: fixedGate({ kind: "allow" }),
 		latestSnapshot: makeSnapshot(),
-		openApproval: () => undefined,
 		registry: makeRegistry(),
 		snapshot: null,
 		toolCall: makeToolCall(),
@@ -226,8 +178,8 @@ test("runDynamicToolCall emits no-active-catalog error for stale snapshot", asyn
 	const { addToolOutput, outputs } = makeAddToolOutput();
 	await runDynamicToolCall({
 		addToolOutput,
+		gate: fixedGate({ kind: "allow" }),
 		latestSnapshot: makeSnapshot({ id: "snap-newest" }),
-		openApproval: () => undefined,
 		registry: makeRegistry(),
 		snapshot: makeSnapshot({ id: "snap-old" }),
 		toolCall: makeToolCall(),
@@ -235,20 +187,31 @@ test("runDynamicToolCall emits no-active-catalog error for stale snapshot", asyn
 	expect(outputs[0]?.errorText).toBe("MCP tool call has no active catalog");
 });
 
-test("runDynamicToolCall denies without executing", async () => {
+test("runDynamicToolCall emits unknown-tool error when the tool is absent", async () => {
+	const { addToolOutput, outputs } = makeAddToolOutput();
+	await runDynamicToolCall({
+		addToolOutput,
+		gate: fixedGate({ kind: "allow" }),
+		latestSnapshot: makeSnapshot({ tools: new Map() }),
+		registry: makeRegistry(),
+		snapshot: makeSnapshot({ tools: new Map() }),
+		toolCall: makeToolCall(),
+	});
+	expect(outputs[0]?.errorText).toBe("Unknown MCP tool 'mcp_demo_echo'");
+});
+
+test("runDynamicToolCall denies without executing when the gate denies", async () => {
 	let executed = false;
 	const { addToolOutput, outputs } = makeAddToolOutput();
 	await runDynamicToolCall({
 		addToolOutput,
+		gate: fixedGate({ kind: "deny" }),
 		latestSnapshot: makeSnapshot(),
-		openApproval: () => undefined,
 		registry: makeRegistry(async () => {
 			executed = true;
 			return successResult();
 		}),
-		snapshot: makeSnapshot({
-			tools: new Map([["mcp_demo_echo", makeTool({ policy: "deny" })]]),
-		}),
+		snapshot: makeSnapshot(),
 		toolCall: makeToolCall(),
 	});
 	expect(executed).toBe(false);
@@ -262,85 +225,51 @@ test("runDynamicToolCall denies without executing", async () => {
 	]);
 });
 
-test("runDynamicToolCall executes ask tool after approval", async () => {
-	let capturedController: McpApprovalController | undefined;
-	let capturedRequest: McpApprovalRequest | undefined;
-	const openApproval = (
-		request: McpApprovalRequest,
-		controller: McpApprovalController
-	) => {
-		capturedRequest = request;
-		capturedController = controller;
-	};
-	const { addToolOutput, outputs } = makeAddToolOutput();
-	const promise = runDynamicToolCall({
-		addToolOutput,
-		latestSnapshot: makeSnapshot(),
-		openApproval,
-		registry: makeRegistry(async (_snapshot, _toolName, _input, approve) => {
-			await expect(approve(makeRequest())).resolves.toBe(true);
-			return successResult();
-		}),
-		snapshot: makeSnapshot({
-			tools: new Map([["mcp_demo_echo", makeTool({ policy: "ask" })]]),
-		}),
-		toolCall: makeToolCall(),
-	});
-	expect(capturedRequest).toMatchObject({
-		serverName: "demo",
-		originalToolName: "echo",
-	});
-	expect(capturedController).toBeDefined();
-	capturedController?.allow();
-	await promise;
-	expect(outputs).toEqual([
-		{
-			output: successResult(),
-			state: "output-available",
-			tool: "mcp_demo_echo",
-			toolCallId: "call_1",
-		},
-	]);
-});
-
-test("runDynamicToolCall rejects ask tool after denial without executing", async () => {
+test("runDynamicToolCall rejects without executing and carries feedback", async () => {
 	let executed = false;
-	let capturedController: McpApprovalController | undefined;
 	const { addToolOutput, outputs } = makeAddToolOutput();
-	const promise = runDynamicToolCall({
+	await runDynamicToolCall({
 		addToolOutput,
+		gate: fixedGate({ feedback: "use read instead", kind: "reject" }),
 		latestSnapshot: makeSnapshot(),
-		openApproval: (_request, controller) => {
-			capturedController = controller;
-		},
 		registry: makeRegistry(async () => {
 			executed = true;
 			return successResult();
 		}),
-		snapshot: makeSnapshot({
-			tools: new Map([["mcp_demo_echo", makeTool({ policy: "ask" })]]),
-		}),
+		snapshot: makeSnapshot(),
 		toolCall: makeToolCall(),
 	});
-	capturedController?.deny();
-	await promise;
 	expect(executed).toBe(false);
-	expect(outputs).toEqual([
-		{
-			errorText: "MCP tool 'mcp_demo_echo' was not approved",
-			state: "output-error",
-			tool: "mcp_demo_echo",
-			toolCallId: "call_1",
-		},
-	]);
+	expect(outputs[0]?.errorText).toBe(
+		"MCP tool 'mcp_demo_echo' was not approved — use read instead"
+	);
 });
 
-test("runDynamicToolCall executes allow tool via registry", async () => {
+test("runDynamicToolCall rejects without feedback", async () => {
 	const { addToolOutput, outputs } = makeAddToolOutput();
 	await runDynamicToolCall({
 		addToolOutput,
+		gate: fixedGate({ kind: "reject" }),
 		latestSnapshot: makeSnapshot(),
-		openApproval: () => undefined,
+		registry: makeRegistry(),
+		snapshot: makeSnapshot(),
+		toolCall: makeToolCall(),
+	});
+	expect(outputs[0]?.errorText).toBe(
+		"MCP tool 'mcp_demo_echo' was not approved"
+	);
+});
+
+test("runDynamicToolCall executes and passes the gated tool to the registry", async () => {
+	const { addToolOutput, outputs } = makeAddToolOutput();
+	let capturedTool: McpSnapshotTool | undefined;
+	await runDynamicToolCall({
+		addToolOutput,
+		gate: (tool) => {
+			capturedTool = tool;
+			return Promise.resolve({ kind: "allow" });
+		},
+		latestSnapshot: makeSnapshot(),
 		registry: makeRegistry(async (snapshot, toolName, input) => {
 			expect(snapshot).toBeDefined();
 			expect(toolName).toBe("mcp_demo_echo");
@@ -350,6 +279,7 @@ test("runDynamicToolCall executes allow tool via registry", async () => {
 		snapshot: makeSnapshot(),
 		toolCall: makeToolCall(),
 	});
+	expect(capturedTool?.logicalName).toBe("demo_echo");
 	expect(outputs).toEqual([
 		{
 			output: successResult(),
@@ -364,8 +294,8 @@ test("runDynamicToolCall sanitizes thrown errors to a stable message", async () 
 	const { addToolOutput, outputs } = makeAddToolOutput();
 	await runDynamicToolCall({
 		addToolOutput,
+		gate: fixedGate({ kind: "allow" }),
 		latestSnapshot: makeSnapshot(),
-		openApproval: () => undefined,
 		registry: makeRegistry(async () => {
 			throw new Error("connection failed secret-token-abc");
 		}),
@@ -444,9 +374,8 @@ test("provider exposes statuses, createSnapshot, reconnect, and close", async ()
 	expect(calls.filter((call) => call === "close")).toHaveLength(2);
 });
 
-test("provider handleDynamicToolCall opens approval dialog and allow executes", async () => {
-	const askRegistry = makeRegistry(async () => successResult());
-	const { captured, setup } = await renderProvider(askRegistry);
+test("provider handleDynamicToolCall runs the gate and executes an allow", async () => {
+	const { captured } = await renderProvider(makeRegistry());
 	const outputs: McpToolOutputConfig[] = [];
 	const snapshot = await captured.value?.createSnapshot("build");
 	if (snapshot === undefined) {
@@ -454,22 +383,14 @@ test("provider handleDynamicToolCall opens approval dialog and allow executes", 
 	}
 
 	captured.value?.handleDynamicToolCall(
-		{
-			...snapshot,
-			tools: new Map([["mcp_demo_echo", makeTool({ policy: "ask" })]]),
-		},
+		snapshot,
 		makeToolCall(),
 		(config) => {
 			outputs.push(config);
-		}
+		},
+		fixedGate({ kind: "allow" })
 	);
-	// Wait for React passive effects (useKeyboard registration) and the
-	// async stdin parser, then draw the dialog.
-	await flushUi(setup);
-	expect(setup.captureCharFrame()).toContain("Allow once");
-
-	setup.mockInput.pressEnter();
-	await flushUi(setup);
+	await new Promise((resolve) => setTimeout(resolve, 20));
 
 	expect(outputs).toEqual([
 		{
@@ -479,12 +400,10 @@ test("provider handleDynamicToolCall opens approval dialog and allow executes", 
 			toolCallId: "call_1",
 		},
 	]);
-	setup.renderer.destroy();
 });
 
-test("provider handleDynamicToolCall rejects on escape", async () => {
-	const askRegistry = makeRegistry(async () => successResult());
-	const { captured, setup } = await renderProvider(askRegistry);
+test("provider handleDynamicToolCall emits an error when the gate denies", async () => {
+	const { captured } = await renderProvider(makeRegistry());
 	const outputs: McpToolOutputConfig[] = [];
 	const snapshot = await captured.value?.createSnapshot("build");
 	if (snapshot === undefined) {
@@ -494,31 +413,24 @@ test("provider handleDynamicToolCall rejects on escape", async () => {
 	captured.value?.handleDynamicToolCall(
 		{
 			...snapshot,
-			tools: new Map([["mcp_demo_echo", makeTool({ policy: "ask" })]]),
+			tools: new Map([["mcp_demo_echo", makeTool({ policy: "deny" })]]),
 		},
 		makeToolCall(),
 		(config) => {
 			outputs.push(config);
-		}
+		},
+		fixedGate({ kind: "deny" })
 	);
-	await flushUi(setup);
-	expect(setup.captureCharFrame()).toContain("Deny");
-
-	setup.mockInput.pressEscape();
-	// Escape closes the dialog; the unmount cleanup settles the pending request.
-	// Allow the unmount and the follow-up store commit before asserting.
-	await flushUi(setup);
-	await flushUi(setup);
+	await new Promise((resolve) => setTimeout(resolve, 20));
 
 	expect(outputs).toEqual([
 		{
-			errorText: "MCP tool 'mcp_demo_echo' was not approved",
+			errorText: "MCP tool 'mcp_demo_echo' is denied by policy",
 			state: "output-error",
 			tool: "mcp_demo_echo",
 			toolCallId: "call_1",
 		},
 	]);
-	setup.renderer.destroy();
 });
 
 test("provider shows a single summary toast after the first build snapshot", async () => {

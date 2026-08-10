@@ -6,11 +6,16 @@ import type { CodingAgentUIMessage } from "@wincode/ai";
 import type { handleCodingAgentToolCall } from "@wincode/ai/client";
 import { createWorkspaceSandbox } from "@wincode/ai/workspace";
 import type { ChatAddToolOutputFunction } from "ai";
-import type { McpCatalogSnapshot, McpContextValue } from "@/modules/mcp";
+import type {
+	McpCatalogSnapshot,
+	McpContextValue,
+	McpSnapshotTool,
+} from "@/modules/mcp";
 import {
 	applyManualApprovalSafetyCeiling,
 	createPermissionService,
 	createToolPermission,
+	type ToolPermissionRuntime,
 } from "@/modules/permissions";
 import { createApprovalQueue } from "@/shared/providers/approval/approval-queue";
 import type {
@@ -21,6 +26,7 @@ import { prepareSendChatRequestBody } from "../api/chat-request";
 import {
 	createChatMessageParts,
 	createChatToolCallHandler,
+	createMcpApprovalGate,
 	finalizeAssistantMessageMetadata,
 	findCurrentTurnAssistantIndex,
 	findCurrentTurnInterruptTargetIndex,
@@ -329,7 +335,8 @@ describe("createChatToolCallHandler", () => {
 		expect(handleDynamicToolCall).toHaveBeenCalledWith(
 			snapshot,
 			expect.objectContaining({ toolName: "mcp_demo_echo" }),
-			addToolOutput
+			addToolOutput,
+			expect.any(Function)
 		);
 		expect(staticToolCallHandler).not.toHaveBeenCalled();
 	});
@@ -357,7 +364,8 @@ describe("createChatToolCallHandler", () => {
 		expect(handleDynamicToolCall).toHaveBeenCalledWith(
 			null,
 			expect.objectContaining({ toolName: "mcp_demo_echo" }),
-			addToolOutput
+			addToolOutput,
+			expect.any(Function)
 		);
 
 		const stale = { id: "snap-stale" } as McpCatalogSnapshot;
@@ -370,7 +378,8 @@ describe("createChatToolCallHandler", () => {
 		expect(handleDynamicToolCall).toHaveBeenCalledWith(
 			stale,
 			expect.objectContaining({ toolName: "mcp_demo_echo" }),
-			addToolOutput
+			addToolOutput,
+			expect.any(Function)
 		);
 	});
 
@@ -996,5 +1005,134 @@ describe("createChatToolCallHandler", () => {
 		expect(openApproval).not.toHaveBeenCalled();
 		expect(staticToolCallHandler).toHaveBeenCalledTimes(calls.length);
 		expect(addToolOutput).not.toHaveBeenCalled();
+	});
+});
+
+describe("createMcpApprovalGate", () => {
+	const makeTool = (
+		overrides: Partial<McpSnapshotTool> = {}
+	): McpSnapshotTool =>
+		({
+			description: "Echo the input",
+			logicalName: "demo_echo",
+			originalToolName: "echo",
+			policy: "allow",
+			safety: false,
+			serverName: "demo",
+			...overrides,
+		}) as McpSnapshotTool;
+
+	const gateDeps = (
+		openApproval: ToolPermissionRuntimeOpenApproval,
+		service = createPermissionService()
+	) => ({
+		approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
+		openApproval,
+		service,
+	});
+
+	type ToolPermissionRuntimeOpenApproval =
+		ToolPermissionRuntime["openApproval"];
+
+	const neverPrompt: ToolPermissionRuntimeOpenApproval = () => {
+		throw new Error("openApproval must not be called for a non-ask decision");
+	};
+
+	test("allows an allow-policy tool without prompting", async () => {
+		const gate = createMcpApprovalGate(gateDeps(neverPrompt));
+		await expect(gate(makeTool({ policy: "allow" }), {})).resolves.toEqual({
+			kind: "allow",
+		});
+	});
+
+	test("denies a deny-policy tool without prompting", async () => {
+		const gate = createMcpApprovalGate(gateDeps(neverPrompt));
+		await expect(gate(makeTool({ policy: "deny" }), {})).resolves.toEqual({
+			kind: "deny",
+		});
+	});
+
+	test("auto approval satisfies an ordinary ask without prompting", async () => {
+		const service = createPermissionService({ autoApproval: true });
+		const gate = createMcpApprovalGate(gateDeps(neverPrompt, service));
+		await expect(gate(makeTool({ policy: "ask" }), {})).resolves.toEqual({
+			kind: "allow",
+		});
+	});
+
+	test("a matching temporary grant satisfies an ask without prompting", async () => {
+		const service = createPermissionService();
+		service.grant("demo_echo", "*");
+		const gate = createMcpApprovalGate(gateDeps(neverPrompt, service));
+		await expect(gate(makeTool({ policy: "ask" }), {})).resolves.toEqual({
+			kind: "allow",
+		});
+	});
+
+	test("a safety ask always prompts even under auto approval", async () => {
+		const service = createPermissionService({ autoApproval: true });
+		let prompted = false;
+		const openApproval: ToolPermissionRuntimeOpenApproval = (
+			_request,
+			actions
+		) => {
+			prompted = true;
+			actions.allow(false);
+		};
+		const gate = createMcpApprovalGate(gateDeps(openApproval, service));
+		await expect(
+			gate(makeTool({ policy: "ask", safety: true }), {})
+		).resolves.toEqual({ kind: "allow" });
+		expect(prompted).toBe(true);
+	});
+
+	test("an interactive allow with remember records a grant for the logical name", async () => {
+		const service = createPermissionService();
+		const openApproval: ToolPermissionRuntimeOpenApproval = (
+			request,
+			actions
+		) => {
+			// The dialog identifies the tool by its logical name and the wildcard
+			// resource, not the hashed dispatch name.
+			expect(request.identity).toEqual([
+				{ label: "tool", value: "demo_echo" },
+				{ label: "resource", value: "*" },
+			]);
+			actions.allow(true);
+		};
+		const gate = createMcpApprovalGate(gateDeps(openApproval, service));
+		await expect(gate(makeTool({ policy: "ask" }), {})).resolves.toEqual({
+			kind: "allow",
+		});
+		expect(service.isGranted("demo_echo", "*")).toBe(true);
+	});
+
+	test("a rejection carries the typed feedback back to the agent", async () => {
+		const openApproval: ToolPermissionRuntimeOpenApproval = (
+			_request,
+			actions
+		) => {
+			actions.reject("use the read tool instead");
+		};
+		const gate = createMcpApprovalGate(gateDeps(openApproval));
+		await expect(gate(makeTool({ policy: "ask" }), {})).resolves.toEqual({
+			feedback: "use the read tool instead",
+			kind: "reject",
+		});
+	});
+
+	test("a cancel rejects without feedback and grants nothing", async () => {
+		const service = createPermissionService();
+		const openApproval: ToolPermissionRuntimeOpenApproval = (
+			_request,
+			actions
+		) => {
+			actions.cancel();
+		};
+		const gate = createMcpApprovalGate(gateDeps(openApproval, service));
+		await expect(gate(makeTool({ policy: "ask" }), {})).resolves.toEqual({
+			kind: "reject",
+		});
+		expect(service.isGranted("demo_echo", "*")).toBe(false);
 	});
 });

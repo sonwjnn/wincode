@@ -29,9 +29,13 @@ import { useMemo, useRef, useState } from "react";
 import { useConnections } from "@/modules/connections";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import {
+	MCP_PERMISSION_RESOURCE,
 	type McpAddToolOutput,
+	type McpApprovalDecision,
+	type McpApprovalGate,
 	type McpCatalogSnapshot,
 	type McpContextValue,
+	type McpSnapshotTool,
 	useMcp,
 } from "@/modules/mcp";
 import {
@@ -270,6 +274,77 @@ const gateStaticToolCall = async (
 	return true;
 };
 
+type McpApprovalGateDeps = {
+	approvalQueue: ApprovalQueue<ToolApprovalRequest>;
+	openApproval: ToolPermissionRuntime["openApproval"];
+	service: PermissionService;
+};
+
+/**
+ * Builds the shared-approval gate for one dynamic MCP tool call. It reuses the
+ * exact machinery static coding tools use — the same `resolveApproval` policy
+ * resolution, temporary-grant store, auto-approval flag, conversation approval
+ * queue, and approval dialog — so MCP tools no longer carry a separate approval
+ * flow. The composed decision already baked the Agent+server policy and any
+ * safety ceiling into `tool.policy`/`tool.safety`; here grants and auto approval
+ * may satisfy an ordinary ask, a safety ask always prompts, and an explicit deny
+ * is never bypassed. An "always" outcome grants the exact logical name.
+ */
+export const createMcpApprovalGate =
+	({
+		approvalQueue,
+		openApproval,
+		service,
+	}: McpApprovalGateDeps): McpApprovalGate =>
+	async (
+		tool: McpSnapshotTool,
+		input: unknown
+	): Promise<McpApprovalDecision> => {
+		const action = tool.logicalName;
+		const resource = MCP_PERMISSION_RESOURCE;
+		const effective = resolveApproval({
+			action,
+			decision: tool.policy,
+			isAutoApproval: () => service.isAutoApproval(),
+			isGranted: (grantedAction, grantedResource) =>
+				service.isGranted(grantedAction, grantedResource),
+			resource,
+			safety: tool.safety,
+		});
+		if (effective === "deny") {
+			return { kind: "deny" };
+		}
+		if (effective === "allow") {
+			return { kind: "allow" };
+		}
+		const request: ToolApprovalRequest = {
+			description: tool.description,
+			identity: [
+				{ label: "tool", value: tool.logicalName },
+				{ label: "resource", value: resource },
+			],
+			input,
+			safety: tool.safety,
+		};
+		const handle = approvalQueue.request(request);
+		openApproval(request, {
+			allow: (remember) => handle.allow(remember),
+			cancel: () => handle.rejectSelf(),
+			reject: (feedback) => approvalQueue.rejectAll(feedback),
+		});
+		const outcome = await handle.outcome;
+		if (outcome.decision === "reject") {
+			const feedback = formatRejectionFeedback(outcome.feedback);
+			return feedback === undefined
+				? { kind: "reject" }
+				: { kind: "reject", feedback };
+		}
+		if (outcome.remember) {
+			service.grant(action, resource);
+		}
+		return { kind: "allow" };
+	};
+
 /**
  * Dispatches AI SDK tool calls to the MCP handler for dynamic tools and to the
  * coding-agent handler otherwise. The AI SDK awaits `onToolCall`, but
@@ -306,7 +381,8 @@ export const createChatToolCallHandler =
 				mcp.handleDynamicToolCall(
 					mcpSnapshotRef.current,
 					options.toolCall,
-					mcpAddToolOutput
+					mcpAddToolOutput,
+					createMcpApprovalGate({ approvalQueue, openApproval, service })
 				)
 			).catch(() => undefined);
 			return;
@@ -427,8 +503,19 @@ export function useChat(
 ) {
 	const connections = useConnections();
 	const mcp = useMcp();
-	const { openApproval, permissionRef, resolvePermission, sandbox, service } =
-		useToolPermission();
+	const {
+		openApproval,
+		permissionRef,
+		resolveMcpPolicy,
+		resolvePermission,
+		sandbox,
+		service,
+	} = useToolPermission();
+	// The transport is memoized on a coarser dependency set than the Agent-scoped
+	// policy resolver, so read the latest resolver through a ref to avoid building
+	// a snapshot against a stale Agent's MCP policy.
+	const resolveMcpPolicyRef = useRef(resolveMcpPolicy);
+	resolveMcpPolicyRef.current = resolveMcpPolicy;
 	// The approval queue is conversation-scoped: rejecting one request settles
 	// every pending approval in this conversation without touching other
 	// conversations' queues. Created once per conversation via lazy ref init.
@@ -464,7 +551,10 @@ export function useChat(
 		const mcpWithSnapshotRef: McpContextValue = {
 			...mcp,
 			createSnapshot: async (mode: ModeType) => {
-				const snapshot = await mcp.createSnapshot(mode);
+				// Resolve the snapshot for the executing Agent's effective MCP policy
+				// so deny composes out unavailable tools and ask/allow are visible.
+				const agentPolicy = await resolveMcpPolicyRef.current();
+				const snapshot = await mcp.createSnapshot(mode, agentPolicy);
 				mcpSnapshotRef.current = snapshot;
 				return snapshot;
 			},
