@@ -1,10 +1,6 @@
-import { expect, test } from "bun:test";
+import { expect, mock, test } from "bun:test";
 import { testRender } from "@opentui/react/test-utils";
 import { useEffect } from "react";
-import {
-	type ApprovalController,
-	createApprovalController,
-} from "@/shared/providers/approval/approval-controller";
 import {
 	DialogProvider,
 	useDialog,
@@ -16,6 +12,7 @@ import {
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { formatApprovalDescription, MAX_DESCRIPTION_CHARS } from "../format";
 import {
+	type ToolApprovalActions,
 	ToolApprovalDialog,
 	type ToolApprovalRequest,
 } from "./tool-approval-dialog";
@@ -32,8 +29,14 @@ const makeRequest = (
 	...overrides,
 });
 
+const makeActions = (): ToolApprovalActions => ({
+	allow: mock(() => undefined),
+	reject: mock(() => undefined),
+	cancel: mock(() => undefined),
+});
+
 type ApprovalDialogSetup = {
-	controller: ApprovalController<ToolApprovalRequest>;
+	actions: ToolApprovalActions;
 	setup: Awaited<ReturnType<typeof testRender>>;
 };
 
@@ -46,7 +49,7 @@ const flushUi = async (
 
 const renderApprovalDialog = async (
 	request: ToolApprovalRequest,
-	controller: ApprovalController<ToolApprovalRequest>
+	actions: ToolApprovalActions
 ): Promise<ApprovalDialogSetup> => {
 	// Open the dialog through the provider so escape can close it through the
 	// dialog stack, exactly like the app opens it via useToolPermission.
@@ -56,9 +59,7 @@ const renderApprovalDialog = async (
 		useEffect(() => {
 			push("dialog");
 			open({
-				children: (
-					<ToolApprovalDialog controller={controller} request={request} />
-				),
+				children: <ToolApprovalDialog actions={actions} request={request} />,
 				title: "Tool approval",
 				width: 100,
 			});
@@ -77,13 +78,11 @@ const renderApprovalDialog = async (
 	);
 	await setup.renderOnce();
 	await flushUi(setup);
-	return { controller, setup };
+	return { actions, setup };
 };
 
-test("renders tool identity, resource, description, and input", async () => {
-	const controller = createApprovalController<ToolApprovalRequest>();
-	const approval = controller.request(makeRequest());
-	const { setup } = await renderApprovalDialog(makeRequest(), controller);
+test("renders identity, description, input, and every approval option", async () => {
+	const { setup } = await renderApprovalDialog(makeRequest(), makeActions());
 	const frame = setup.captureCharFrame();
 
 	expect(frame).toContain("tool");
@@ -93,104 +92,134 @@ test("renders tool identity, resource, description, and input", async () => {
 	expect(frame).toContain("description");
 	expect(frame).toContain("Read a UTF-8 text file inside the workspace.");
 	expect(frame).toContain("input");
+	expect(frame).toContain("rejection feedback");
 	expect(frame).toContain("> Allow once");
-	expect(frame).toContain("Deny");
+	expect(frame).toContain("Always allow");
+	expect(frame).toContain("Reject");
 	setup.renderer.destroy();
-	await expect(approval).resolves.toBe(false);
 });
 
-test("shows a safety-ceiling warning only for safety approvals", async () => {
-	const safeController = createApprovalController<ToolApprovalRequest>();
-	const safeApproval = safeController.request(makeRequest());
-	const { setup: safeSetup } = await renderApprovalDialog(
+test("hides the always option and warns under the safety ceiling", async () => {
+	const { setup } = await renderApprovalDialog(
 		makeRequest({ safety: true }),
-		safeController
+		makeActions()
 	);
-	expect(safeSetup.captureCharFrame()).toContain("Safety ceiling");
-	safeSetup.renderer.destroy();
-	await expect(safeApproval).resolves.toBe(false);
-
-	const plainController = createApprovalController<ToolApprovalRequest>();
-	const plainApproval = plainController.request(makeRequest());
-	const { setup: plainSetup } = await renderApprovalDialog(
-		makeRequest(),
-		plainController
-	);
-	expect(plainSetup.captureCharFrame()).not.toContain("Safety ceiling");
-	plainSetup.renderer.destroy();
-	await expect(plainApproval).resolves.toBe(false);
+	const frame = setup.captureCharFrame();
+	expect(frame).toContain("Safety ceiling");
+	expect(frame).toContain("Allow once");
+	expect(frame).toContain("Reject");
+	// A safety ask must never mint a grant, so "always" is absent.
+	expect(frame).not.toContain("Always allow");
+	setup.renderer.destroy();
 });
 
-test("allow once settles the request with true", async () => {
-	const controller = createApprovalController<ToolApprovalRequest>();
-	const approval = controller.request(makeRequest());
-	const { setup } = await renderApprovalDialog(makeRequest(), controller);
+test("allow once settles with allow(false)", async () => {
+	const { actions, setup } = await renderApprovalDialog(
+		makeRequest(),
+		makeActions()
+	);
 
 	setup.mockInput.pressEnter();
 	await flushUi(setup);
 
-	await expect(approval).resolves.toBe(true);
+	expect(actions.allow).toHaveBeenCalledWith(false);
+	expect(actions.reject).not.toHaveBeenCalled();
 	setup.renderer.destroy();
 });
 
-test("deny settles the request with false", async () => {
-	const controller = createApprovalController<ToolApprovalRequest>();
-	const approval = controller.request(makeRequest());
-	const { setup } = await renderApprovalDialog(makeRequest(), controller);
+test("selecting always settles with allow(true)", async () => {
+	const { actions, setup } = await renderApprovalDialog(
+		makeRequest(),
+		makeActions()
+	);
 
 	setup.mockInput.pressArrow("down");
 	setup.mockInput.pressEnter();
 	await flushUi(setup);
 
-	await expect(approval).resolves.toBe(false);
+	expect(actions.allow).toHaveBeenCalledWith(true);
+	setup.renderer.destroy();
+});
+
+test("rapid keyboard selection resolves against the latest option", async () => {
+	const { actions, setup } = await renderApprovalDialog(
+		makeRequest(),
+		makeActions()
+	);
+
+	// Several selection keys land before a render commits; enter must resolve the
+	// final selection (Allow once -> Always -> Reject -> back to Allow once).
+	setup.mockInput.pressArrow("down");
+	setup.mockInput.pressArrow("down");
+	setup.mockInput.pressArrow("down");
+	setup.mockInput.pressEnter();
+	await flushUi(setup);
+
+	expect(actions.allow).toHaveBeenCalledWith(false);
+	setup.renderer.destroy();
+});
+
+test("reject settles with the typed feedback", async () => {
+	const { actions, setup } = await renderApprovalDialog(
+		makeRequest(),
+		makeActions()
+	);
+
+	await setup.mockInput.typeText("use the config loader");
+	await flushUi(setup);
+	// Move to the Reject option (Allow once -> Always -> Reject) and confirm.
+	setup.mockInput.pressArrow("down");
+	setup.mockInput.pressArrow("down");
+	setup.mockInput.pressEnter();
+	await flushUi(setup);
+
+	expect(actions.reject).toHaveBeenCalledTimes(1);
+	const feedback = (actions.reject as ReturnType<typeof mock>).mock
+		.calls[0]?.[0];
+	expect(feedback).toContain("use the config loader");
+	expect(actions.allow).not.toHaveBeenCalled();
 	setup.renderer.destroy();
 });
 
 test("escape closes the dialog and cancels the request", async () => {
-	const controller = createApprovalController<ToolApprovalRequest>();
-	const approval = controller.request(makeRequest());
-	const { setup } = await renderApprovalDialog(makeRequest(), controller);
+	const { actions, setup } = await renderApprovalDialog(
+		makeRequest(),
+		makeActions()
+	);
 
 	setup.mockInput.pressEscape();
-	// Escape closes the dialog; the unmount cleanup settles the pending request.
-	// Allow the unmount and the follow-up store commit before asserting.
+	// Escape closes the dialog; the unmount cleanup cancels the pending request.
 	await flushUi(setup);
 	await flushUi(setup);
 
-	await expect(approval).resolves.toBe(false);
+	expect(actions.cancel).toHaveBeenCalled();
+	expect(actions.allow).not.toHaveBeenCalled();
 	setup.renderer.destroy();
 });
 
 test("bounds runaway descriptions in the dialog", async () => {
-	const controller = createApprovalController<ToolApprovalRequest>();
 	const tail = "RUNAWAYDESCRIPTION";
 	const { setup } = await renderApprovalDialog(
 		makeRequest({ description: `${"y".repeat(4096)}${tail}` }),
-		controller
+		makeActions()
 	);
 	const frame = setup.captureCharFrame();
 	expect(frame).not.toContain(tail);
 	setup.renderer.destroy();
-	controller.cancel();
 });
 
 test("bounds runaway inputs in the dialog", async () => {
-	const controller = createApprovalController<ToolApprovalRequest>();
 	const tail = "RUNAWAYINPUT";
 	const { setup } = await renderApprovalDialog(
-		makeRequest({
-			input: { path: `${"x".repeat(8192)}${tail}` },
-		}),
-		controller
+		makeRequest({ input: { path: `${"x".repeat(8192)}${tail}` } }),
+		makeActions()
 	);
 	const frame = setup.captureCharFrame();
 	expect(frame).not.toContain(tail);
 	setup.renderer.destroy();
-	controller.cancel();
 });
 
 test("bounds runaway identity and resource values in the dialog", async () => {
-	const controller = createApprovalController<ToolApprovalRequest>();
 	const tail = "RUNAWAYIDENTITY";
 	const { setup } = await renderApprovalDialog(
 		makeRequest({
@@ -199,12 +228,11 @@ test("bounds runaway identity and resource values in the dialog", async () => {
 				{ label: "resource", value: `${"r".repeat(1024)}${tail}` },
 			],
 		}),
-		controller
+		makeActions()
 	);
 	const frame = setup.captureCharFrame();
 	expect(frame).not.toContain(tail);
 	setup.renderer.destroy();
-	controller.cancel();
 });
 
 test("formatApprovalDescription bounds oversized descriptions", () => {

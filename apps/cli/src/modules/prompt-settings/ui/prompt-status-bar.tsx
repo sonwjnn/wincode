@@ -6,6 +6,7 @@ import {
 } from "@wincode/ai";
 import { agentLabelFromId, useAgentRegistry } from "@/modules/agents";
 import { connectionProviderDisplayNames } from "@/modules/connections";
+import { AutoApprovalIndicator } from "@/modules/permissions";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { usePromptConfig } from "../context/prompt-config-provider";
 
@@ -38,6 +39,7 @@ export function StatusBar() {
 				</text>
 			) : null}
 			{variantName ? <text fg={colors.mode[mode]}>{variantName}</text> : null}
+			<AutoApprovalIndicator />
 		</box>
 	);
 }

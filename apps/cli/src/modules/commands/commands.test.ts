@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { COMMANDS } from "./commands";
 
 describe("CommandSpec registry", () => {
-	test("has 10 commands with discriminated kinds", () => {
-		expect(COMMANDS).toHaveLength(10);
+	test("has 11 commands with discriminated kinds", () => {
+		expect(COMMANDS).toHaveLength(11);
 	});
 
 	test("does not expose billing commands", () => {
@@ -64,6 +64,16 @@ describe("CommandSpec registry", () => {
 		expect(cmd?.kind).toBe("dialog");
 		if (cmd?.kind === "dialog") {
 			expect(cmd.dialogKey).toBe("mcp");
+		}
+	});
+
+	test("/permissions is kind: 'dialog'", () => {
+		const cmd = COMMANDS.find((c) => c.value === "/permissions");
+		expect(cmd).toBeDefined();
+		expect(cmd?.name).toBe("permissions");
+		expect(cmd?.kind).toBe("dialog");
+		if (cmd?.kind === "dialog") {
+			expect(cmd.dialogKey).toBe("permissions");
 		}
 	});
 

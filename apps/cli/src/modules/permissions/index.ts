@@ -1,4 +1,20 @@
+export {
+	type ApprovalResolutionContext,
+	type EffectiveApproval,
+	resolveApproval,
+} from "./approval-resolution";
 export { canonicalizeResource } from "./canonical";
+export {
+	type CreatePermissionServiceOptions,
+	createPermissionService,
+	type PermissionService,
+	type TemporaryGrant,
+} from "./permission-service";
+export {
+	PermissionServiceProvider,
+	usePermissionService,
+	useWatchedPermissionService,
+} from "./permission-service-provider";
 export {
 	applyManualApprovalSafetyCeiling,
 	countFlattenedPermissionRules,
@@ -31,6 +47,8 @@ export {
 	resolveAgentPermission,
 } from "./resolve";
 export { resolveTopLevelPermission } from "./schema";
+export { AutoApprovalIndicator } from "./ui/auto-approval-indicator";
+export { PermissionsDialogContent } from "./ui/permissions-dialog";
 export {
 	type ToolPermissionRuntime,
 	useToolPermission,

@@ -7,9 +7,16 @@ import type { handleCodingAgentToolCall } from "@wincode/ai/client";
 import { createWorkspaceSandbox } from "@wincode/ai/workspace";
 import type { ChatAddToolOutputFunction } from "ai";
 import type { McpCatalogSnapshot, McpContextValue } from "@/modules/mcp";
-import { createToolPermission } from "@/modules/permissions";
-import type { ApprovalController } from "@/shared/providers/approval/approval-controller";
-import type { ToolApprovalRequest } from "@/shared/providers/approval/ui/tool-approval-dialog";
+import {
+	applyManualApprovalSafetyCeiling,
+	createPermissionService,
+	createToolPermission,
+} from "@/modules/permissions";
+import { createApprovalQueue } from "@/shared/providers/approval/approval-queue";
+import type {
+	ToolApprovalActions,
+	ToolApprovalRequest,
+} from "@/shared/providers/approval/ui/tool-approval-dialog";
 import { prepareSendChatRequestBody } from "../api/chat-request";
 import {
 	createChatMessageParts,
@@ -263,6 +270,9 @@ describe("createChatToolCallHandler", () => {
 	) =>
 		createChatToolCallHandler({
 			addToolOutputRef,
+			// Fresh per handler so pending approvals and grants never leak between
+			// tests through a shared queue or service.
+			approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
 			handleCodingAgentToolCall: (() =>
 				staticToolCallHandler) as typeof handleCodingAgentToolCall,
 			mcp,
@@ -271,6 +281,7 @@ describe("createChatToolCallHandler", () => {
 			openApproval,
 			permissionRef,
 			sandbox,
+			service: createPermissionService(),
 			...overrides,
 		});
 
@@ -283,10 +294,13 @@ describe("createChatToolCallHandler", () => {
 	) => makeHandler(overrides)({ toolCall } as never);
 
 	// The handler never returns its tool-call promise (returning it would
-	// deadlock the chat executor), so tests flush the microtask queue.
+	// deadlock the chat executor), so tests flush the queue to let the
+	// fire-and-forget gate settle. The gate awaits a real filesystem
+	// canonicalization, so the delay is generous enough to absorb that latency
+	// under load and keep these timing-based assertions deterministic.
 	const flush = () =>
 		new Promise<void>((resolve) => {
-			setTimeout(resolve, 20);
+			setTimeout(resolve, 75);
 		});
 
 	const settleCall = async (result: unknown) => {
@@ -426,13 +440,10 @@ describe("createChatToolCallHandler", () => {
 		await writeFile(join(dir, ".env"), "SECRET=1");
 		const approvalRequests: ToolApprovalRequest[] = [];
 		const open = mock(
-			(
-				request: ToolApprovalRequest,
-				controller: ApprovalController<ToolApprovalRequest>
-			) => {
+			(request: ToolApprovalRequest, actions: ToolApprovalActions) => {
 				approvalRequests.push(request);
 				// The dialog settles after the gate registers the request.
-				queueMicrotask(() => controller.allow());
+				queueMicrotask(() => actions.allow(false));
 			}
 		);
 
@@ -464,11 +475,8 @@ describe("createChatToolCallHandler", () => {
 
 	test("rejects an ask read with an observable error and never runs the tool", async () => {
 		const open = mock(
-			(
-				_request: ToolApprovalRequest,
-				controller: ApprovalController<ToolApprovalRequest>
-			) => {
-				queueMicrotask(() => controller.deny());
+			(_request: ToolApprovalRequest, actions: ToolApprovalActions) => {
+				queueMicrotask(() => actions.reject());
 			}
 		);
 
@@ -497,11 +505,8 @@ describe("createChatToolCallHandler", () => {
 
 	test("cancels an ask read with an observable error and never runs the tool", async () => {
 		const open = mock(
-			(
-				_request: ToolApprovalRequest,
-				controller: ApprovalController<ToolApprovalRequest>
-			) => {
-				queueMicrotask(() => controller.cancel());
+			(_request: ToolApprovalRequest, actions: ToolApprovalActions) => {
+				queueMicrotask(() => actions.cancel());
 			}
 		);
 
@@ -571,11 +576,8 @@ describe("createChatToolCallHandler", () => {
 		await writeFile(join(dir, ".env"), "SECRET=1");
 		await symlink(join(dir, ".env"), join(dir, "link.env"));
 		const open = mock(
-			(
-				_request: ToolApprovalRequest,
-				controller: ApprovalController<ToolApprovalRequest>
-			) => {
-				queueMicrotask(() => controller.deny());
+			(_request: ToolApprovalRequest, actions: ToolApprovalActions) => {
+				queueMicrotask(() => actions.reject());
 			}
 		);
 
@@ -630,6 +632,7 @@ describe("createChatToolCallHandler", () => {
 	test("executes the real static tool runner only when the policy allows", async () => {
 		const handler = createChatToolCallHandler({
 			addToolOutputRef,
+			approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
 			mcp,
 			mcpSnapshotRef,
 			modeRef,
@@ -638,6 +641,7 @@ describe("createChatToolCallHandler", () => {
 				current: createToolPermission({ read: { ".env": "deny" } }),
 			},
 			sandbox: createWorkspaceSandbox(),
+			service: createPermissionService(),
 		});
 
 		await settleCall(
@@ -778,12 +782,9 @@ describe("createChatToolCallHandler", () => {
 	test("asks before a write and runs after allow once", async () => {
 		const approvalRequests: ToolApprovalRequest[] = [];
 		const open = mock(
-			(
-				request: ToolApprovalRequest,
-				controller: ApprovalController<ToolApprovalRequest>
-			) => {
+			(request: ToolApprovalRequest, actions: ToolApprovalActions) => {
 				approvalRequests.push(request);
-				queueMicrotask(() => controller.allow());
+				queueMicrotask(() => actions.allow(false));
 			}
 		);
 
@@ -811,6 +812,156 @@ describe("createChatToolCallHandler", () => {
 		});
 		expect(staticToolCallHandler).toHaveBeenCalledTimes(1);
 		expect(addToolOutput).not.toHaveBeenCalled();
+	});
+
+	test("an always grant skips later approvals for the exact resource", async () => {
+		const service = createPermissionService();
+		const permissionRef = { current: createToolPermission({ edit: "ask" }) };
+		const sandbox = createWorkspaceSandbox(process.cwd());
+		const open = mock(
+			(_request: ToolApprovalRequest, actions: ToolApprovalActions) => {
+				// Remember the grant on the first approval.
+				queueMicrotask(() => actions.allow(true));
+			}
+		);
+
+		await settleCall(
+			callWith(
+				{
+					input: { content: "x", path: "notes.txt" },
+					toolCallId: "call-grant-1",
+					toolName: "write",
+				},
+				{ openApproval: open, permissionRef, sandbox, service }
+			)
+		);
+		expect(open).toHaveBeenCalledTimes(1);
+		expect(service.isGranted("edit", "notes.txt")).toBe(true);
+
+		// The second call for the same action/resource is not prompted again.
+		await settleCall(
+			callWith(
+				{
+					input: { content: "y", path: "notes.txt" },
+					toolCallId: "call-grant-2",
+					toolName: "write",
+				},
+				{ openApproval: open, permissionRef, sandbox, service }
+			)
+		);
+		expect(open).toHaveBeenCalledTimes(1);
+		expect(staticToolCallHandler).toHaveBeenCalledTimes(2);
+		expect(addToolOutput).not.toHaveBeenCalled();
+	});
+
+	test("auto approval satisfies an ordinary ask without a dialog", async () => {
+		await settleCall(
+			callWith(
+				{
+					input: { content: "x", path: "notes.txt" },
+					toolCallId: "call-auto",
+					toolName: "write",
+				},
+				{
+					permissionRef: { current: createToolPermission({ edit: "ask" }) },
+					sandbox: createWorkspaceSandbox(process.cwd()),
+					service: createPermissionService({ autoApproval: true }),
+				}
+			)
+		);
+		expect(openApproval).not.toHaveBeenCalled();
+		expect(staticToolCallHandler).toHaveBeenCalledTimes(1);
+		expect(addToolOutput).not.toHaveBeenCalled();
+	});
+
+	test("auto approval and grants never bypass an explicit deny", async () => {
+		const service = createPermissionService({ autoApproval: true });
+		service.grant("edit", "notes.txt");
+		await settleCall(
+			callWith(
+				{
+					input: { content: "x", path: "notes.txt" },
+					toolCallId: "call-deny-auto",
+					toolName: "write",
+				},
+				{
+					permissionRef: { current: createToolPermission({ edit: "deny" }) },
+					sandbox: createWorkspaceSandbox(process.cwd()),
+					service,
+				}
+			)
+		);
+		expect(openApproval).not.toHaveBeenCalled();
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+		expect(addToolOutput).toHaveBeenCalledWith({
+			errorText: "Write denied by policy: notes.txt",
+			state: "output-error",
+			tool: "write",
+			toolCallId: "call-deny-auto",
+		});
+	});
+
+	test("a safety ask is not bypassed by auto approval or a grant", async () => {
+		const service = createPermissionService({ autoApproval: true });
+		service.grant("edit", "notes.txt");
+		const open = mock(
+			(_request: ToolApprovalRequest, actions: ToolApprovalActions) => {
+				queueMicrotask(() => actions.reject());
+			}
+		);
+		await settleCall(
+			callWith(
+				{
+					input: { content: "x", path: "notes.txt" },
+					toolCallId: "call-safety",
+					toolName: "write",
+				},
+				{
+					openApproval: open,
+					permissionRef: {
+						current: applyManualApprovalSafetyCeiling(
+							createToolPermission({ edit: "allow" })
+						),
+					},
+					sandbox: createWorkspaceSandbox(process.cwd()),
+					service,
+				}
+			)
+		);
+		// The manual-only ceiling forces the dialog even with auto + grant present.
+		expect(open).toHaveBeenCalledTimes(1);
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+	});
+
+	test("returns bounded rejection feedback to the agent", async () => {
+		const open = mock(
+			(_request: ToolApprovalRequest, actions: ToolApprovalActions) => {
+				queueMicrotask(() => actions.reject(`  ${"z".repeat(4096)}  `));
+			}
+		);
+		await settleCall(
+			callWith(
+				{
+					input: { content: "x", path: "notes.txt" },
+					toolCallId: "call-feedback",
+					toolName: "write",
+				},
+				{
+					openApproval: open,
+					permissionRef: { current: createToolPermission({ edit: "ask" }) },
+					sandbox: createWorkspaceSandbox(process.cwd()),
+				}
+			)
+		);
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+		const call = addToolOutput.mock.calls.at(0)?.[0] as
+			| { errorText: string }
+			| undefined;
+		expect(
+			call?.errorText.startsWith("Write was not approved: notes.txt — ")
+		).toBe(true);
+		// Bounded: 2048 feedback chars plus the overflow marker, never the full 4096.
+		expect(call?.errorText.length).toBeLessThan(2200);
 	});
 
 	test("allows write, edit, list, and grep by default without approval", async () => {

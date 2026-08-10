@@ -3,7 +3,7 @@ import { getFilteredCommands } from "./filter-commands";
 
 describe("getFilteredCommands", () => {
 	test("returns all commands for an empty query", () => {
-		expect(getFilteredCommands("")).toHaveLength(10);
+		expect(getFilteredCommands("")).toHaveLength(11);
 	});
 
 	test("matches commands by name prefix", () => {
@@ -20,7 +20,7 @@ describe("getFilteredCommands", () => {
 	test("hides the variants command when the model has no variants", () => {
 		const commands = getFilteredCommands("", { hideVariants: true });
 		expect(commands.map((cmd) => cmd.name)).not.toContain("variants");
-		expect(commands).toHaveLength(9);
+		expect(commands).toHaveLength(10);
 		expect(getFilteredCommands("var", { hideVariants: true })).toEqual([]);
 		expect(getFilteredCommands("var").map((cmd) => cmd.name)).toEqual([
 			"variants",

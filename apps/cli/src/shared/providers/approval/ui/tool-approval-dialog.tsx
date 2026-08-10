@@ -1,4 +1,4 @@
-import { TextAttributes } from "@opentui/core";
+import { type InputRenderable, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import {
@@ -8,7 +8,6 @@ import {
 } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-import type { ApprovalControllerActions } from "../approval-controller";
 import {
 	formatApprovalDescription,
 	formatApprovalIdentity,
@@ -25,7 +24,8 @@ export type ApprovalIdentityRow = {
  * identity and canonical resource rows (for example `tool`/`resource`), while
  * `description` and `input` are the bounded tool description and call input.
  * `safety` marks an approval raised by the manual-only safety ceiling, so the
- * dialog can warn that the governing config is untrusted.
+ * dialog can warn that the governing config is untrusted and suppress the
+ * "always" grant that a safety ask must never create.
  */
 export type ToolApprovalRequest = {
 	description: string;
@@ -34,63 +34,106 @@ export type ToolApprovalRequest = {
 	safety?: boolean;
 };
 
+/**
+ * The imperative surface the dialog drives. `allow` runs the tool once, and
+ * `remember` records a temporary grant for the exact action/resource. `reject`
+ * blocks the tool and returns the optional typed correction to the Agent, and —
+ * because the queue behind it is conversation-scoped — settles every other
+ * pending approval in the same conversation. `cancel` rejects without feedback
+ * when the dialog unmounts.
+ */
+export type ToolApprovalActions = {
+	allow(remember: boolean): void;
+	reject(feedback?: string): void;
+	cancel(): void;
+};
+
+type ApprovalOption =
+	| { kind: "allow-once"; label: string }
+	| { kind: "always"; label: string }
+	| { kind: "reject"; label: string };
+
+const buildOptions = (safety: boolean): ApprovalOption[] => {
+	const allowOnce: ApprovalOption = {
+		kind: "allow-once",
+		label: "Allow once",
+	};
+	const reject: ApprovalOption = { kind: "reject", label: "Reject" };
+	// A safety ask must never mint a grant, so "always" is omitted under the
+	// manual-only ceiling; only allow-once and reject remain.
+	return safety
+		? [allowOnce, reject]
+		: [allowOnce, { kind: "always", label: "Always allow" }, reject];
+};
+
 type ToolApprovalDialogContentProps = {
-	controller: ApprovalControllerActions;
+	actions: ToolApprovalActions;
 	onClose: () => void;
 	request: ToolApprovalRequest;
 };
 
 export function ToolApprovalDialogContent({
-	controller,
+	actions,
 	onClose,
 	request,
 }: ToolApprovalDialogContentProps) {
-	const [selectedAction, setSelectedAction] = useState<0 | 1>(0);
-	const selectedActionRef = useRef<0 | 1>(0);
+	const options = buildOptions(request.safety === true);
+	const [selectedIndex, setSelectedIndex] = useState(0);
+	const selectedIndexRef = useRef(0);
+	const feedbackRef = useRef<InputRenderable>(null);
 	const { isTopLayer } = useKeyboardLayer();
 	const layerId = useDialogLayer();
 	const { colors } = useTheme();
 
 	// Closing the dialog (escape, backdrop, or action) unmounts this content and
-	// settles any still-pending approval request with `false`.
-	useEffect(() => () => controller.cancel(), [controller]);
+	// rejects any still-pending approval requests in the conversation.
+	useEffect(() => () => actions.cancel(), [actions]);
 
 	// OpenTUI keyboard callbacks are imperative and several keys can land before
-	// React commits the next render. Mirror the selection into a ref and toggle
-	// it synchronously so enter always resolves against the latest selection.
+	// React commits the next render. Mirror the selection into a ref and advance
+	// it synchronously so enter always resolves against the latest selection even
+	// under rapid input.
 	useEffect(() => {
-		selectedActionRef.current = selectedAction;
-	}, [selectedAction]);
+		selectedIndexRef.current = selectedIndex;
+	}, [selectedIndex]);
 
-	const toggleSelectedAction = () => {
-		const next: 0 | 1 = selectedActionRef.current === 0 ? 1 : 0;
-		selectedActionRef.current = next;
-		setSelectedAction(next);
+	const moveSelection = (delta: number) => {
+		const count = options.length;
+		const next = (selectedIndexRef.current + delta + count) % count;
+		selectedIndexRef.current = next;
+		setSelectedIndex(next);
+	};
+
+	const confirm = (index: number) => {
+		const option = options[index];
+		if (option === undefined) {
+			return;
+		}
+		if (option.kind === "reject") {
+			actions.reject(feedbackRef.current?.value ?? undefined);
+		} else {
+			actions.allow(option.kind === "always");
+		}
+		onClose();
 	};
 
 	useKeyboard((key) => {
 		if (!isTopLayer(layerId)) {
 			return;
 		}
-		if (
-			key.name === "down" ||
-			key.name === "left" ||
-			key.name === "right" ||
-			key.name === "tab" ||
-			key.name === "up"
-		) {
+		if (key.name === "up") {
 			key.preventDefault();
-			toggleSelectedAction();
+			moveSelection(-1);
+			return;
+		}
+		if (key.name === "down" || key.name === "tab") {
+			key.preventDefault();
+			moveSelection(1);
 			return;
 		}
 		if (key.name === "enter" || key.name === "return") {
 			key.preventDefault();
-			if (selectedActionRef.current === 0) {
-				controller.allow();
-			} else {
-				controller.deny();
-			}
-			onClose();
+			confirm(selectedIndexRef.current);
 		}
 	});
 
@@ -128,48 +171,52 @@ export function ToolApprovalDialogContent({
 					{formatApprovalInput(request.input)}
 				</text>
 			</box>
+			<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+				rejection feedback (optional)
+			</text>
+			<input
+				focused
+				focusedTextColor={colors.text}
+				onContentChange={() => undefined}
+				ref={feedbackRef}
+				textColor={colors.text}
+			/>
 			<box flexDirection="row" gap={3} height={1} marginTop={1}>
-				{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI text handles terminal mouse events. */}
-				<text
-					attributes={selectedAction === 0 ? TextAttributes.BOLD : undefined}
-					fg={selectedAction === 0 ? colors.primary : colors.text}
-					onMouseDown={() => {
-						controller.allow();
-						onClose();
-					}}
-				>
-					{selectedAction === 0 ? "> Allow once" : "Allow once"}
-				</text>
-				{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI text handles terminal mouse events. */}
-				<text
-					attributes={selectedAction === 1 ? TextAttributes.BOLD : undefined}
-					fg={selectedAction === 1 ? colors.error : colors.text}
-					onMouseDown={() => {
-						controller.deny();
-						onClose();
-					}}
-				>
-					{selectedAction === 1 ? "> Deny" : "Deny"}
-				</text>
+				{options.map((option, index) => {
+					const isSelected = index === selectedIndex;
+					const color =
+						option.kind === "reject" ? colors.error : colors.primary;
+					return (
+						// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI text handles terminal mouse events.
+						<text
+							attributes={isSelected ? TextAttributes.BOLD : undefined}
+							fg={isSelected ? color : colors.text}
+							key={option.kind}
+							onMouseDown={() => confirm(index)}
+						>
+							{isSelected ? `> ${option.label}` : option.label}
+						</text>
+					);
+				})}
 			</box>
 		</box>
 	);
 }
 
 type ToolApprovalDialogProps = {
-	controller: ApprovalControllerActions;
+	actions: ToolApprovalActions;
 	request: ToolApprovalRequest;
 };
 
 export function ToolApprovalDialog({
-	controller,
+	actions,
 	request,
 }: ToolApprovalDialogProps) {
 	const { close } = useDialog();
 	useDialogEscape();
 	return (
 		<ToolApprovalDialogContent
-			controller={controller}
+			actions={actions}
 			onClose={close}
 			request={request}
 		/>

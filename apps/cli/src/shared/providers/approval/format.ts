@@ -1,6 +1,7 @@
 const MAX_INPUT_CHARS = 2048;
 export const MAX_DESCRIPTION_CHARS = 2048;
 export const MAX_IDENTITY_CHARS = 512;
+export const MAX_FEEDBACK_CHARS = 2048;
 const FORMATTED_INPUT_OVERFLOW = "…";
 
 const truncateWithOverflow = (text: string, maxChars: number): string => {
@@ -35,4 +36,22 @@ export function formatApprovalDescription(description: string): string {
 
 export function formatApprovalIdentity(identity: string): string {
 	return truncateWithOverflow(identity, MAX_IDENTITY_CHARS);
+}
+
+/**
+ * Bounds the user's rejection feedback before it is returned to the Agent, so a
+ * pasted or runaway correction cannot flood the Agent's next turn. Returns
+ * undefined when the trimmed feedback is empty so no empty correction is sent.
+ */
+export function formatRejectionFeedback(
+	feedback: string | undefined
+): string | undefined {
+	if (feedback === undefined) {
+		return;
+	}
+	const trimmed = feedback.trim();
+	if (trimmed.length === 0) {
+		return;
+	}
+	return truncateWithOverflow(trimmed, MAX_FEEDBACK_CHARS);
 }

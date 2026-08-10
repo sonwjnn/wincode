@@ -23,6 +23,7 @@ import {
 } from "@/modules/connections";
 import { SessionsDialogContent } from "@/modules/conversations/ui/dialogs/sessions-dialog";
 import { McpStatusDialogContent, useMcp } from "@/modules/mcp";
+import { PermissionsDialogContent } from "@/modules/permissions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { AgentsDialogContent } from "@/modules/prompt-settings/ui/agents-dialog";
 import { ModelsDialogContent } from "@/modules/prompt-settings/ui/models-dialog";
@@ -143,6 +144,15 @@ export function useCommandExecutor(
 							case "mcp":
 								dialog.open({
 									children: <McpStatusDialogContent />,
+									padding: { bottom: 1, left: 0, right: 0, top: 1 },
+									title,
+									titleMargin: { left: 4, right: 4 },
+									width: CONNECTION_DIALOG_WIDTH,
+								});
+								break;
+							case "permissions":
+								dialog.open({
+									children: <PermissionsDialogContent />,
 									padding: { bottom: 1, left: 0, right: 0, top: 1 },
 									title,
 									titleMargin: { left: 4, right: 4 },

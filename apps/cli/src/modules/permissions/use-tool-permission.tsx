@@ -4,12 +4,14 @@ import { useCallback, useMemo, useRef } from "react";
 import { resolveAgentRegistry } from "@/modules/agents";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useConfig } from "@/shared/config/config-provider";
-import type { ApprovalController } from "@/shared/providers/approval/approval-controller";
 import {
+	type ToolApprovalActions,
 	ToolApprovalDialog,
 	type ToolApprovalRequest,
 } from "@/shared/providers/approval/ui/tool-approval-dialog";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
+import type { PermissionService } from "./permission-service";
+import { usePermissionService } from "./permission-service-provider";
 import {
 	applyManualApprovalSafetyCeiling,
 	createResolvedToolPermission,
@@ -23,11 +25,12 @@ type MutableRefObject<T> = { current: T };
 export type ToolPermissionRuntime = {
 	openApproval: (
 		request: ToolApprovalRequest,
-		controller: ApprovalController<ToolApprovalRequest>
+		actions: ToolApprovalActions
 	) => void;
 	permissionRef: MutableRefObject<ToolPermission>;
 	resolvePermission: () => Promise<ToolPermission>;
 	sandbox: WorkspacePolicy;
+	service: PermissionService;
 };
 
 /**
@@ -40,6 +43,7 @@ export type ToolPermissionRuntime = {
 export function useToolPermission(): ToolPermissionRuntime {
 	const config = useConfig();
 	const dialog = useDialog();
+	const service = usePermissionService();
 	const { agent } = usePromptConfig();
 	const permissionRef = useRef<ToolPermission>(createToolPermission());
 	const sandbox = useMemo(
@@ -75,14 +79,9 @@ export function useToolPermission(): ToolPermissionRuntime {
 	);
 
 	const openApproval = useCallback(
-		(
-			request: ToolApprovalRequest,
-			controller: ApprovalController<ToolApprovalRequest>
-		) => {
+		(request: ToolApprovalRequest, actions: ToolApprovalActions) => {
 			dialog.open({
-				children: (
-					<ToolApprovalDialog controller={controller} request={request} />
-				),
+				children: <ToolApprovalDialog actions={actions} request={request} />,
 				title: "Tool approval",
 				width: 100,
 			});
@@ -90,5 +89,5 @@ export function useToolPermission(): ToolPermissionRuntime {
 		[dialog]
 	);
 
-	return { openApproval, permissionRef, resolvePermission, sandbox };
+	return { openApproval, permissionRef, resolvePermission, sandbox, service };
 }

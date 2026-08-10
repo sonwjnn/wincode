@@ -36,12 +36,18 @@ import {
 } from "@/modules/mcp";
 import {
 	canonicalizeResource,
+	type PermissionService,
+	resolveApproval,
 	STATIC_TOOL_PERMISSION_ACTIONS,
 	type ToolPermission,
 	type ToolPermissionRuntime,
 	useToolPermission,
 } from "@/modules/permissions";
-import { createApprovalController } from "@/shared/providers/approval/approval-controller";
+import {
+	type ApprovalQueue,
+	createApprovalQueue,
+} from "@/shared/providers/approval/approval-queue";
+import { formatRejectionFeedback } from "@/shared/providers/approval/format";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/ui/tool-approval-dialog";
 import { getConversationStore } from "../storage/get-conversation-store";
 import { createSkillSnapshot } from "../utils";
@@ -63,6 +69,7 @@ type MutableRefObject<T> = { current: T };
 
 export type ChatToolCallHandlerDeps = {
 	addToolOutputRef: MutableRefObject<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>;
+	approvalQueue: ApprovalQueue<ToolApprovalRequest>;
 	handleCodingAgentToolCall?: typeof handleCodingAgentToolCall;
 	mcp: Pick<McpContextValue, "handleDynamicToolCall">;
 	mcpSnapshotRef: MutableRefObject<McpCatalogSnapshot | null>;
@@ -71,6 +78,7 @@ export type ChatToolCallHandlerDeps = {
 	permissionRef: MutableRefObject<ToolPermission>;
 	resolvePermission?: ToolPermissionRuntime["resolvePermission"];
 	sandbox: WorkspacePolicy;
+	service: PermissionService;
 };
 
 const STATIC_TOOL_LABELS = {
@@ -155,12 +163,25 @@ const emitToolCallError = (
  * observable tool error without invoking the static tool runner. An allowed or
  * approved call runs the runner.
  */
+type StaticToolGateDeps = {
+	addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>;
+	approvalQueue: ApprovalQueue<ToolApprovalRequest>;
+	openApproval: ToolPermissionRuntime["openApproval"];
+	permission: ToolPermission;
+	sandbox: WorkspacePolicy;
+	service: PermissionService;
+};
+
 const gateStaticToolCall = async (
 	options: Parameters<ChatOnToolCallCallback<CodingAgentUIMessage>>[0],
-	addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>,
-	permission: ToolPermission,
-	openApproval: ToolPermissionRuntime["openApproval"],
-	sandbox: WorkspacePolicy
+	{
+		addToolOutput,
+		approvalQueue,
+		openApproval,
+		permission,
+		sandbox,
+		service,
+	}: StaticToolGateDeps
 ): Promise<boolean> => {
 	const toolCall = options.toolCall;
 	if (!isCodingToolName(toolCall.toolName)) {
@@ -191,12 +212,18 @@ const gateStaticToolCall = async (
 		resource = gate.value;
 	}
 
-	const decision = permission.decide(
-		STATIC_TOOL_PERMISSION_ACTIONS[tool],
-		resource
-	);
+	const action = STATIC_TOOL_PERMISSION_ACTIONS[tool];
+	const effective = resolveApproval({
+		action,
+		decision: permission.decide(action, resource),
+		isAutoApproval: () => service.isAutoApproval(),
+		isGranted: (grantedAction, grantedResource) =>
+			service.isGranted(grantedAction, grantedResource),
+		resource,
+		safety: permission.safety,
+	});
 
-	if (decision === "deny") {
+	if (effective === "deny") {
 		emitToolCallError(
 			addToolOutput,
 			tool,
@@ -206,7 +233,7 @@ const gateStaticToolCall = async (
 		return false;
 	}
 
-	if (decision === "ask") {
+	if (effective === "ask") {
 		const request: ToolApprovalRequest = {
 			description: codingToolDefinitions[tool].description,
 			identity: [
@@ -216,17 +243,27 @@ const gateStaticToolCall = async (
 			input: toolCall.input,
 			safety: permission.safety,
 		};
-		const controller = createApprovalController<ToolApprovalRequest>();
-		openApproval(request, controller);
-		const approved = await controller.request(request);
-		if (!approved) {
+		const handle = approvalQueue.request(request);
+		openApproval(request, {
+			allow: (remember) => handle.allow(remember),
+			cancel: () => handle.rejectSelf(),
+			reject: (feedback) => approvalQueue.rejectAll(feedback),
+		});
+		const outcome = await handle.outcome;
+		if (outcome.decision === "reject") {
+			const feedback = formatRejectionFeedback(outcome.feedback);
 			emitToolCallError(
 				addToolOutput,
 				tool,
 				toolCall.toolCallId,
-				`${label} was not approved: ${resource}`
+				feedback === undefined
+					? `${label} was not approved: ${resource}`
+					: `${label} was not approved: ${resource} — ${feedback}`
 			);
 			return false;
+		}
+		if (outcome.remember) {
+			service.grant(action, resource);
 		}
 	}
 
@@ -242,6 +279,7 @@ const gateStaticToolCall = async (
 export const createChatToolCallHandler =
 	({
 		addToolOutputRef,
+		approvalQueue,
 		handleCodingAgentToolCall: runStaticToolCall = handleCodingAgentToolCall,
 		mcp,
 		mcpSnapshotRef,
@@ -250,6 +288,7 @@ export const createChatToolCallHandler =
 		permissionRef,
 		resolvePermission,
 		sandbox,
+		service,
 	}: ChatToolCallHandlerDeps): ChatOnToolCallCallback<CodingAgentUIMessage> =>
 	(options) => {
 		const addToolOutput = addToolOutputRef.current;
@@ -276,15 +315,16 @@ export const createChatToolCallHandler =
 		Promise.resolve(
 			(async () => {
 				if (
-					!(await gateStaticToolCall(
-						options,
+					!(await gateStaticToolCall(options, {
 						addToolOutput,
-						resolvePermission
+						approvalQueue,
+						openApproval,
+						permission: resolvePermission
 							? await resolvePermission()
 							: permissionRef.current,
-						openApproval,
-						sandbox
-					))
+						sandbox,
+						service,
+					}))
 				) {
 					return;
 				}
@@ -387,8 +427,17 @@ export function useChat(
 ) {
 	const connections = useConnections();
 	const mcp = useMcp();
-	const { openApproval, permissionRef, resolvePermission, sandbox } =
+	const { openApproval, permissionRef, resolvePermission, sandbox, service } =
 		useToolPermission();
+	// The approval queue is conversation-scoped: rejecting one request settles
+	// every pending approval in this conversation without touching other
+	// conversations' queues. Created once per conversation via lazy ref init.
+	const approvalQueueRef = useRef<ApprovalQueue<ToolApprovalRequest> | null>(
+		null
+	);
+	if (approvalQueueRef.current === null) {
+		approvalQueueRef.current = createApprovalQueue<ToolApprovalRequest>();
+	}
 	const addToolOutputRef =
 		useRef<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>(null);
 	const interruptedMessageIdsRef = useRef(new Set<string>());
@@ -493,6 +542,7 @@ export function useChat(
 		},
 		onToolCall: createChatToolCallHandler({
 			addToolOutputRef,
+			approvalQueue: approvalQueueRef.current,
 			mcp,
 			mcpSnapshotRef,
 			modeRef,
@@ -500,6 +550,7 @@ export function useChat(
 			permissionRef,
 			resolvePermission,
 			sandbox,
+			service,
 		}),
 		sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
 		transport,
