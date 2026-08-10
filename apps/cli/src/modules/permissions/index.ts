@@ -1,14 +1,19 @@
 export { canonicalizeResource } from "./canonical";
 export {
 	applyManualApprovalSafetyCeiling,
+	countFlattenedPermissionRules,
 	createResolvedToolPermission,
 	createToolPermission,
 	DEFAULT_PERMISSION_RULES,
 	DEFAULT_READ_PERMISSION_RULES,
+	findUnmatchedActionKeys,
 	foldPermissionRules,
 	isStaticToolUnconditionallyDenied,
+	MAX_FLATTENED_PERMISSION_RULES,
+	MAX_PERMISSION_PATTERN_LENGTH,
 	matchesResourcePattern,
 	mergePermissionRules,
+	PERMISSION_TOOL_ACTIONS,
 	type PermissionAction,
 	type PermissionDecision,
 	type PermissionResourceRules,
@@ -19,7 +24,12 @@ export {
 	shippedAgentPermissionRules,
 	type ToolPermission,
 } from "./policy";
-export { resolveAgentPermissionRules } from "./resolve";
+export {
+	type PermissionDiagnostic,
+	type PermissionDiagnosticCode,
+	type ResolvedAgentPermission,
+	resolveAgentPermission,
+} from "./resolve";
 export { resolveTopLevelPermission } from "./schema";
 export {
 	type ToolPermissionRuntime,

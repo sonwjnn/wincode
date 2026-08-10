@@ -24,11 +24,14 @@ export type ApprovalIdentityRow = {
  * One generic bounded tool-approval request. `identity` carries the tool
  * identity and canonical resource rows (for example `tool`/`resource`), while
  * `description` and `input` are the bounded tool description and call input.
+ * `safety` marks an approval raised by the manual-only safety ceiling, so the
+ * dialog can warn that the governing config is untrusted.
  */
 export type ToolApprovalRequest = {
 	description: string;
 	identity: readonly ApprovalIdentityRow[];
 	input: unknown;
+	safety?: boolean;
 };
 
 type ToolApprovalDialogContentProps = {
@@ -93,6 +96,12 @@ export function ToolApprovalDialogContent({
 
 	return (
 		<box flexDirection="column" gap={1}>
+			{request.safety === true && (
+				<text attributes={TextAttributes.BOLD} fg={colors.error}>
+					Safety ceiling: the governing Tool Permission config is malformed, so
+					every action must be approved manually.
+				</text>
+			)}
 			{request.identity.map((row) => (
 				<Fragment key={row.label}>
 					<text attributes={TextAttributes.DIM} fg={colors.textMuted}>

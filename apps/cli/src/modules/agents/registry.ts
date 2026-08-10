@@ -16,8 +16,9 @@ import {
 } from "@wincode/ai";
 import { z } from "zod";
 import {
+	type PermissionDiagnostic,
 	type PermissionRules,
-	resolveAgentPermissionRules,
+	resolveAgentPermission,
 	resolveVisibleCodingTools,
 } from "@/modules/permissions";
 import { topLevelPermissionSchema } from "@/modules/permissions/schema";
@@ -80,6 +81,7 @@ const builtInAgentPatchSchema = z
 
 export type AgentDiagnosticCode =
 	| ConfigDiagnostic["code"]
+	| PermissionDiagnostic["code"]
 	| "invalid-agent"
 	| "invalid-agent-id"
 	| "invalid-agents-record"
@@ -644,15 +646,23 @@ export const buildAgentRegistry = (
 
 	// Resolve each Agent's layered Permission policy once, then derive its model
 	// tool visibility from the same rules so unconditionally denied tools are
-	// hidden while granular and ask-gated tools stay visible.
-	const agents = [...builtInAgentsView, ...configuredAgents].map((agent) => {
-		const permission = resolveAgentPermissionRules(snapshot, agent.id);
-		return {
+	// hidden while granular and ask-gated tools stay visible. A malformed
+	// top-level policy or an over-bound effective policy raises the same
+	// manual-only safety ceiling used for malformed Built-in Agent patches.
+	const agents: RegistryAgent[] = [];
+	for (const agent of [...builtInAgentsView, ...configuredAgents]) {
+		const resolution = resolveAgentPermission(snapshot, agent.id);
+		for (const diagnostic of resolution.diagnostics) {
+			diagnostics.push(diagnostic);
+		}
+		agents.push({
 			...agent,
-			permission,
-			visibleCodingTools: resolveVisibleCodingTools(permission),
-		};
-	});
+			permission: resolution.rules,
+			requiresManualApproval:
+				agent.requiresManualApproval || resolution.safetyCeiling,
+			visibleCodingTools: resolveVisibleCodingTools(resolution.rules),
+		});
+	}
 	const configuredAgentsView = agents.filter(
 		({ isConfigured }) => isConfigured
 	);

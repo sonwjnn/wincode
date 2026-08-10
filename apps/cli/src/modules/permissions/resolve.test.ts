@@ -4,7 +4,13 @@ import type {
 	ConfigSnapshot,
 	ConfigSource,
 } from "@/shared/config/config-store";
-import { resolveAgentPermissionRules } from "./resolve";
+import { MAX_FLATTENED_PERMISSION_RULES, type PermissionRules } from "./policy";
+import { resolveAgentPermission } from "./resolve";
+
+// The effective folded rules are the common assertion target; resolve them
+// directly so each ordering/precedence test reads only the rule it exercises.
+const resolveRules = (snap: ConfigSnapshot, agentId: string): PermissionRules =>
+	resolveAgentPermission(snap, agentId).rules;
 
 const source = (
 	path: string,
@@ -22,9 +28,9 @@ const snapshot = (sources: ConfigSource[]): ConfigSnapshot => ({
 	sources,
 });
 
-describe("resolveAgentPermissionRules", () => {
+describe("resolveAgentPermission effective rules", () => {
 	test("seeds defaults and shipped Agent restrictions with no sources", () => {
-		const build = resolveAgentPermissionRules(snapshot([]), "build");
+		const build = resolveRules(snapshot([]), "build");
 		expect(build.edit).toBe("allow");
 		expect(build.read).toEqual({
 			".env": "ask",
@@ -32,12 +38,12 @@ describe("resolveAgentPermissionRules", () => {
 			".env.example": "allow",
 		});
 
-		const plan = resolveAgentPermissionRules(snapshot([]), "plan");
+		const plan = resolveRules(snapshot([]), "plan");
 		expect(plan.edit).toBe("deny");
 	});
 
 	test("a valid higher policy overrides the shipped Plan edit restriction", () => {
-		const rules = resolveAgentPermissionRules(
+		const rules = resolveRules(
 			snapshot([
 				source("/w/wincode.json", {
 					agents: { plan: { permission: { edit: "allow" } } },
@@ -49,7 +55,7 @@ describe("resolveAgentPermissionRules", () => {
 	});
 
 	test("higher precedence sources win over lower ones", () => {
-		const rules = resolveAgentPermissionRules(
+		const rules = resolveRules(
 			snapshot([
 				source("/home/.config/wincode/wincode.json", {
 					permission: { edit: "deny" },
@@ -62,7 +68,7 @@ describe("resolveAgentPermissionRules", () => {
 	});
 
 	test("within one source the Agent policy applies after the top-level policy", () => {
-		const rules = resolveAgentPermissionRules(
+		const rules = resolveRules(
 			snapshot([
 				source("/w/wincode.json", {
 					agents: { build: { permission: { edit: "allow" } } },
@@ -75,7 +81,7 @@ describe("resolveAgentPermissionRules", () => {
 	});
 
 	test("a project-wide rule overrides a global Agent rule", () => {
-		const rules = resolveAgentPermissionRules(
+		const rules = resolveRules(
 			snapshot([
 				source("/home/.config/wincode/wincode.json", {
 					agents: { build: { permission: { list: "deny" } } },
@@ -88,7 +94,7 @@ describe("resolveAgentPermissionRules", () => {
 	});
 
 	test("a project Agent rule overrides a project-wide rule", () => {
-		const rules = resolveAgentPermissionRules(
+		const rules = resolveRules(
 			snapshot([
 				source("/w/wincode.json", {
 					agents: { build: { permission: { list: "deny" } } },
@@ -101,7 +107,7 @@ describe("resolveAgentPermissionRules", () => {
 	});
 
 	test("object and scalar transitions follow the replacement contract", () => {
-		const rules = resolveAgentPermissionRules(
+		const rules = resolveRules(
 			snapshot([
 				source("/home/.config/wincode/wincode.json", {
 					permission: { read: { ".env.example": "deny" } },
@@ -114,7 +120,7 @@ describe("resolveAgentPermissionRules", () => {
 	});
 
 	test("malformed permission subtrees are skipped so lower precedence rules stay", () => {
-		const rules = resolveAgentPermissionRules(
+		const rules = resolveRules(
 			snapshot([
 				source("/home/.config/wincode/wincode.json", {
 					permission: { edit: "deny" },
@@ -127,5 +133,125 @@ describe("resolveAgentPermissionRules", () => {
 			"build"
 		);
 		expect(rules.edit).toBe("deny");
+	});
+});
+
+describe("resolveAgentPermission safety ceiling", () => {
+	test("valid policy resolves with no ceiling and no diagnostics", () => {
+		const resolved = resolveAgentPermission(
+			snapshot([source("/w/wincode.json", { permission: { edit: "deny" } })]),
+			"build"
+		);
+		expect(resolved.safetyCeiling).toBe(false);
+		expect(resolved.diagnostics).toEqual([]);
+		expect(resolved.rules.edit).toBe("deny");
+	});
+
+	test("malformed top-level policy raises the ceiling without permissive fallback", () => {
+		const resolved = resolveAgentPermission(
+			snapshot([
+				source("/home/.config/wincode/wincode.json", {
+					permission: { edit: "deny" },
+				}),
+				source("/w/wincode.json", { permission: "not-an-object" }),
+			]),
+			"build"
+		);
+		expect(resolved.safetyCeiling).toBe(true);
+		// The preserved deny from the lower source survives; the malformed source
+		// contributes nothing and does not restore a permissive default.
+		expect(resolved.rules.edit).toBe("deny");
+		expect(resolved.diagnostics).toMatchObject([
+			{
+				code: "invalid-permission-policy",
+				configPath: ["permission"],
+				origin: { path: "/w/wincode.json", scope: "project" },
+				severity: "error",
+			},
+		]);
+	});
+
+	test("a malformed low-precedence policy still latches the ceiling under a valid higher policy", () => {
+		const resolved = resolveAgentPermission(
+			snapshot([
+				source("/home/.config/wincode/wincode.json", {
+					permission: "not-an-object",
+				}),
+				source("/w/wincode.json", { permission: { edit: "deny" } }),
+			]),
+			"build"
+		);
+		// The ceiling latches on the malformed global source and is never cleared
+		// by the valid project source; the valid layer's deny is still folded in.
+		expect(resolved.safetyCeiling).toBe(true);
+		expect(resolved.rules.edit).toBe("deny");
+		expect(resolved.diagnostics).toMatchObject([
+			{
+				code: "invalid-permission-policy",
+				origin: { path: "/home/.config/wincode/wincode.json", scope: "global" },
+				severity: "error",
+			},
+		]);
+	});
+
+	test("a malformed top-level policy cannot alter rule order or drop a lower deny", () => {
+		const resolved = resolveAgentPermission(
+			snapshot([
+				source("/home/.config/wincode/wincode.json", {
+					permission: { list: { "src/**": "deny", "**": "allow" } },
+				}),
+				source("/w/wincode.json", { permission: { list: 42 } }),
+			]),
+			"build"
+		);
+		expect(resolved.safetyCeiling).toBe(true);
+		// Partial parsing of the malformed higher source must not reorder or
+		// override the lower source's ordered rules.
+		expect(
+			Object.entries(resolved.rules.list as Record<string, string>)
+		).toEqual([
+			["src/**", "deny"],
+			["**", "allow"],
+		]);
+	});
+
+	test("an effective policy over the flattened-rule limit raises the ceiling", () => {
+		const patterns: Record<string, string> = {};
+		for (let index = 0; index <= MAX_FLATTENED_PERMISSION_RULES; index += 1) {
+			patterns[`src/file-${index}.ts`] = "allow";
+		}
+		const resolved = resolveAgentPermission(
+			snapshot([source("/w/wincode.json", { permission: { read: patterns } })]),
+			"build"
+		);
+		expect(resolved.safetyCeiling).toBe(true);
+		expect(resolved.diagnostics).toMatchObject([
+			{ code: "permission-rule-limit", severity: "error" },
+		]);
+	});
+
+	test("an action glob matching no known tool stays active with a warning", () => {
+		const resolved = resolveAgentPermission(
+			snapshot([
+				source("/w/wincode.json", { permission: { webfetch: "deny" } }),
+			]),
+			"build"
+		);
+		expect(resolved.safetyCeiling).toBe(false);
+		// The unmatched action is retained in the effective policy.
+		expect((resolved.rules as Record<string, unknown>).webfetch).toBe("deny");
+		expect(resolved.diagnostics).toMatchObject([
+			{
+				code: "unmatched-permission-action",
+				configPath: ["permission", "webfetch"],
+				severity: "warning",
+			},
+		]);
+	});
+
+	test("the shipped defaults raise no unmatched-action warnings", () => {
+		const resolved = resolveAgentPermission(snapshot([]), "build");
+		expect(resolved.diagnostics).toEqual([]);
+		expect(resolved.safetyCeiling).toBe(false);
 	});
 });

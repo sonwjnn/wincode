@@ -214,6 +214,7 @@ const gateStaticToolCall = async (
 				{ label: "resource", value: resource },
 			],
 			input: toolCall.input,
+			safety: permission.safety,
 		};
 		const controller = createApprovalController<ToolApprovalRequest>();
 		openApproval(request, controller);

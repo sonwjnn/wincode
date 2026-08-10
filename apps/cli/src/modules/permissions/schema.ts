@@ -1,11 +1,15 @@
 import { z } from "zod";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
-import type { PermissionRules } from "./policy";
+import { MAX_PERMISSION_PATTERN_LENGTH, type PermissionRules } from "./policy";
 
 export const permissionDecisionSchema = z.enum(["allow", "ask", "deny"]);
 
+// Resource patterns are bounded so a malformed or hostile config cannot smuggle
+// in an unbounded glob that is expensive to compile or match.
+const permissionPatternSchema = z.string().max(MAX_PERMISSION_PATTERN_LENGTH);
+
 export const permissionResourceMapSchema = z.record(
-	z.string(),
+	permissionPatternSchema,
 	permissionDecisionSchema
 );
 
@@ -14,10 +18,11 @@ export const permissionActionSchema = z.union([
 	permissionResourceMapSchema,
 ]);
 
-// Action keys stay unconstrained: unknown action globs remain valid for MCP
-// and future tools, and the policy evaluator ignores actions it does not gate.
+// Action keys stay semantically unconstrained: unknown action globs remain
+// valid for MCP and future tools, and the policy evaluator ignores actions it
+// does not gate. They are only length-bounded like resource patterns.
 export const topLevelPermissionSchema = z.record(
-	z.string(),
+	permissionPatternSchema,
 	permissionActionSchema
 );
 

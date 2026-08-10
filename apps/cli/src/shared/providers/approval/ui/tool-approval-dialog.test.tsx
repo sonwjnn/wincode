@@ -99,6 +99,28 @@ test("renders tool identity, resource, description, and input", async () => {
 	await expect(approval).resolves.toBe(false);
 });
 
+test("shows a safety-ceiling warning only for safety approvals", async () => {
+	const safeController = createApprovalController<ToolApprovalRequest>();
+	const safeApproval = safeController.request(makeRequest());
+	const { setup: safeSetup } = await renderApprovalDialog(
+		makeRequest({ safety: true }),
+		safeController
+	);
+	expect(safeSetup.captureCharFrame()).toContain("Safety ceiling");
+	safeSetup.renderer.destroy();
+	await expect(safeApproval).resolves.toBe(false);
+
+	const plainController = createApprovalController<ToolApprovalRequest>();
+	const plainApproval = plainController.request(makeRequest());
+	const { setup: plainSetup } = await renderApprovalDialog(
+		makeRequest(),
+		plainController
+	);
+	expect(plainSetup.captureCharFrame()).not.toContain("Safety ceiling");
+	plainSetup.renderer.destroy();
+	await expect(plainApproval).resolves.toBe(false);
+});
+
 test("allow once settles the request with true", async () => {
 	const controller = createApprovalController<ToolApprovalRequest>();
 	const approval = controller.request(makeRequest());

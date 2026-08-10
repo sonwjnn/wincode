@@ -737,3 +737,89 @@ describe("layered permission visibility", () => {
 		]);
 	});
 });
+
+describe("malformed top-level policy safety ceiling", () => {
+	const withSources = (
+		sources: {
+			document: Record<string, unknown>;
+			path: string;
+			scope: "global" | "project";
+		}[]
+	): ConfigSnapshot => ({
+		diagnostics: [],
+		document: {} as ConfigSnapshot["document"],
+		sourceFor: () => undefined,
+		sources: sources as unknown as ConfigSnapshot["sources"],
+	});
+
+	test("drives every Agent under a manual-only ceiling and surfaces one diagnostic", () => {
+		const registry = buildAgentRegistry(
+			withSources([
+				{
+					document: { permission: "not-an-object" },
+					path: "/w/wincode.json",
+					scope: "project",
+				},
+			])
+		);
+
+		expect(
+			registry.agents.every(
+				({ requiresManualApproval }) => requiresManualApproval
+			)
+		).toBe(true);
+		// The same source-level policy fault collapses to a single diagnostic even
+		// though it is resolved once per Agent.
+		expect(
+			registry.diagnostics.filter(
+				({ code }) => code === "invalid-permission-policy"
+			)
+		).toHaveLength(1);
+		expect(registry.diagnostics).toContainEqual(
+			expect.objectContaining({
+				code: "invalid-permission-policy",
+				origin: { path: "/w/wincode.json", scope: "project" },
+				severity: "error",
+			})
+		);
+	});
+
+	test("valid Agents stay off the ceiling when unrelated definitions are invalid", () => {
+		const registry = buildAgentRegistry(
+			makeSnapshot({
+				agents: {
+					"bad-agent": { role: "primary" },
+					"good-agent": { description: "Fine", role: "primary" },
+				},
+			})
+		);
+
+		const good = registry.agents.find(({ id }) => id === "good-agent");
+		expect(good?.requiresManualApproval).toBe(false);
+		expect(good?.isSelectable).toBe(true);
+		// The invalid sibling is reported but does not gate the valid Agent.
+		expect(
+			registry.diagnostics.some(({ code }) => code === "invalid-agent")
+		).toBe(true);
+	});
+
+	test("an unmatched action glob surfaces a non-fatal warning without a ceiling", () => {
+		const registry = buildAgentRegistry(
+			withSources([
+				{
+					document: { permission: { webfetch: "deny" } },
+					path: "/w/wincode.json",
+					scope: "project",
+				},
+			])
+		);
+
+		const build = registry.agents.find(({ id }) => id === "build");
+		expect(build?.requiresManualApproval).toBe(false);
+		expect(
+			registry.diagnostics.filter(
+				({ code }) => code === "unmatched-permission-action"
+			)
+		).toHaveLength(1);
+	});
+});

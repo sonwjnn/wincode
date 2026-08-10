@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import { writeFixture } from "@/shared/config/filesystem-test-utils";
+import { MAX_PERMISSION_PATTERN_LENGTH } from "./policy";
 import { resolveTopLevelPermission } from "./schema";
 
 const CONFIG_ROOT = "/home/user/.config/wincode";
@@ -88,6 +89,32 @@ describe("resolveTopLevelPermission", () => {
 	test("returns undefined for a non-object permission section", async () => {
 		const snapshot = await loadSnapshot('{"permission":["read","ask"]}');
 		expect(resolveTopLevelPermission(snapshot)).toBeUndefined();
+	});
+
+	test("returns undefined when a resource pattern exceeds the length limit", async () => {
+		const pattern = "a".repeat(MAX_PERMISSION_PATTERN_LENGTH + 1);
+		const snapshot = await loadSnapshot(
+			JSON.stringify({ permission: { read: { [pattern]: "deny" } } })
+		);
+		expect(resolveTopLevelPermission(snapshot)).toBeUndefined();
+	});
+
+	test("returns undefined when an action key exceeds the length limit", async () => {
+		const action = "a".repeat(MAX_PERMISSION_PATTERN_LENGTH + 1);
+		const snapshot = await loadSnapshot(
+			JSON.stringify({ permission: { [action]: "deny" } })
+		);
+		expect(resolveTopLevelPermission(snapshot)).toBeUndefined();
+	});
+
+	test("accepts a resource pattern exactly at the length limit", async () => {
+		const pattern = "a".repeat(MAX_PERMISSION_PATTERN_LENGTH);
+		const snapshot = await loadSnapshot(
+			JSON.stringify({ permission: { read: { [pattern]: "deny" } } })
+		);
+		expect(resolveTopLevelPermission(snapshot)).toEqual({
+			read: { [pattern]: "deny" },
+		});
 	});
 });
 

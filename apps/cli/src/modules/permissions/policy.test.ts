@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
 	applyManualApprovalSafetyCeiling,
+	countFlattenedPermissionRules,
 	createResolvedToolPermission,
 	createToolPermission,
 	DEFAULT_READ_PERMISSION_RULES,
+	findUnmatchedActionKeys,
 	foldPermissionRules,
 	matchesResourcePattern,
 	mergePermissionRules,
@@ -59,6 +61,69 @@ describe("manual approval safety ceiling", () => {
 		expect(permission.decide("write", "src/app.ts")).toBe("ask");
 		expect(permission.decide("list", ".")).toBe("ask");
 		expect(permission.decide("read", ".env")).toBe("deny");
+	});
+
+	test("marks the evaluator as a safety ceiling and never returns an allow", () => {
+		const ceiling = applyManualApprovalSafetyCeiling(
+			createToolPermission({ edit: "allow", read: { ".env": "deny" } })
+		);
+
+		expect(ceiling.safety).toBe(true);
+		// A preserved deny is never weakened into an automatic allow or ask.
+		expect(ceiling.decide("read", ".env")).toBe("deny");
+		// Every non-deny decision becomes a manual-only ask, never an allow.
+		expect(ceiling.decide("edit", "src/app.ts")).toBe("ask");
+		expect(ceiling.decide("list", ".")).toBe("ask");
+	});
+
+	test("an ordinary evaluator is not a safety ceiling", () => {
+		expect(createToolPermission().safety).toBe(false);
+		expect(createResolvedToolPermission({ edit: "deny" }).safety).toBe(false);
+	});
+});
+
+describe("countFlattenedPermissionRules", () => {
+	test("counts one per scalar action and one per resource-map pattern", () => {
+		expect(
+			countFlattenedPermissionRules({
+				edit: "allow",
+				list: "deny",
+				read: { ".env": "ask", ".env.*": "ask", "**": "allow" },
+			})
+		).toBe(5);
+	});
+
+	test("counts nothing for an empty policy", () => {
+		expect(countFlattenedPermissionRules({})).toBe(0);
+	});
+});
+
+describe("findUnmatchedActionKeys", () => {
+	test("flags action globs matching no known tool action", () => {
+		expect(
+			findUnmatchedActionKeys({
+				edit: "allow",
+				read: "allow",
+				webfetch: "deny",
+			} as unknown as PermissionRules)
+		).toEqual(["webfetch"]);
+	});
+
+	test("treats a wildcard action key as matching every known action", () => {
+		expect(
+			findUnmatchedActionKeys({
+				"*": "deny",
+			} as unknown as PermissionRules)
+		).toEqual([]);
+	});
+
+	test("matches against discovered tool actions when supplied", () => {
+		expect(
+			findUnmatchedActionKeys(
+				{ github_search: "ask" } as unknown as PermissionRules,
+				["read", "edit", "list", "grep", "github_search"]
+			)
+		).toEqual([]);
 	});
 });
 

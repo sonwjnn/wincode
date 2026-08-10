@@ -16,7 +16,35 @@ export type PermissionRules = Readonly<
 
 export type ToolPermission = {
 	decide(action: PermissionAction, resource: string): PermissionDecision;
+	/**
+	 * True when a manual-only safety ceiling is in force. Every `ask` this
+	 * evaluator returns is then a safety ask that later auto-approval and
+	 * remembered-grant behavior must not bypass, distinguishing it from an
+	 * ordinary `ask` produced by a trusted rule.
+	 */
+	readonly safety: boolean;
 };
+
+/**
+ * Effective Agents are bounded so a malformed or hostile config cannot inflate
+ * the policy without limit. A policy exceeding these bounds is treated as
+ * malformed and driven under the manual-only safety ceiling.
+ */
+export const MAX_FLATTENED_PERMISSION_RULES = 256;
+export const MAX_PERMISSION_PATTERN_LENGTH = 512;
+
+/**
+ * The tool-action names Wincode currently gates for static coding tools. Action
+ * globs that match none of these (and none of the discovered MCP tool actions)
+ * are inert today but remain in the effective policy in case a future or
+ * temporarily unavailable tool matches them.
+ */
+export const PERMISSION_TOOL_ACTIONS = [
+	"read",
+	"edit",
+	"list",
+	"grep",
+] as const satisfies readonly PermissionAction[];
 
 /**
  * Maps each static coding tool to the Permission action that governs it. The
@@ -39,6 +67,7 @@ export function applyManualApprovalSafetyCeiling(
 		decide(action, resource) {
 			return permission.decide(action, resource) === "deny" ? "deny" : "ask";
 		},
+		safety: true,
 	};
 }
 
@@ -220,6 +249,7 @@ export function createResolvedToolPermission(
 			}
 			return decision;
 		},
+		safety: false,
 	};
 }
 
@@ -253,4 +283,40 @@ export const resolveVisibleCodingTools = (
 ): CodingToolName[] =>
 	codingToolNames.filter(
 		(tool) => !isStaticToolUnconditionallyDenied(rules, tool)
+	);
+
+/**
+ * Counts the flattened Permission Rules an effective policy expands to: one for
+ * each scalar action and one for every pattern inside a resource map. Bounding
+ * this count keeps a malformed or hostile policy from ballooning past the
+ * effective-Agent limit.
+ */
+export const countFlattenedPermissionRules = (
+	rules: PermissionRules
+): number => {
+	let count = 0;
+	for (const action of Object.keys(rules)) {
+		const rule = rules[action as PermissionAction];
+		if (rule === undefined) {
+			continue;
+		}
+		count += typeof rule === "string" ? 1 : Object.keys(rule).length;
+	}
+	return count;
+};
+
+/**
+ * Finds action globs in the effective policy that match no known tool action.
+ * Each action key is treated as a glob and tested against every known action
+ * name; a key matching none is unmatched. Unmatched actions stay in the policy
+ * (they may match a future or temporarily unavailable tool) but are surfaced so
+ * a typo does not silently do nothing.
+ */
+export const findUnmatchedActionKeys = (
+	rules: PermissionRules,
+	knownActions: readonly string[] = PERMISSION_TOOL_ACTIONS
+): string[] =>
+	Object.keys(rules).filter(
+		(actionKey) =>
+			!knownActions.some((name) => matchesResourcePattern(actionKey, name))
 	);
