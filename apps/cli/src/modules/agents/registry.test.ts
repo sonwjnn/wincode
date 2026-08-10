@@ -685,3 +685,55 @@ describe("resolveExecutableAgentRuntime", () => {
 		expect(resolveExecutableAgentRuntime(null, "build")).toBe(undefined);
 	});
 });
+
+describe("layered permission visibility", () => {
+	const withSources = (
+		sources: {
+			document: Record<string, unknown>;
+			path: string;
+			scope: "global" | "project";
+		}[]
+	): ConfigSnapshot => ({
+		diagnostics: [],
+		document: {} as ConfigSnapshot["document"],
+		sourceFor: () => undefined,
+		sources: sources as unknown as ConfigSnapshot["sources"],
+	});
+
+	test("hides unconditionally denied tools and keeps granular tools visible", () => {
+		const registry = buildAgentRegistry(
+			withSources([
+				{
+					document: { permission: { edit: "deny", grep: { "x*": "deny" } } },
+					path: "/w/wincode.json",
+					scope: "project",
+				},
+			])
+		);
+		const build = registry.agents.find(({ id }) => id === "build");
+
+		expect(build?.visibleCodingTools).toEqual(["read", "list", "grep"]);
+		expect(build?.permission?.edit).toBe("deny");
+	});
+
+	test("a valid higher policy restores Plan's hidden write and edit tools", () => {
+		const registry = buildAgentRegistry(
+			withSources([
+				{
+					document: { agents: { plan: { permission: { edit: "allow" } } } },
+					path: "/w/wincode.json",
+					scope: "project",
+				},
+			])
+		);
+		const plan = registry.agents.find(({ id }) => id === "plan");
+
+		expect(plan?.visibleCodingTools).toEqual([
+			"read",
+			"write",
+			"edit",
+			"list",
+			"grep",
+		]);
+	});
+});

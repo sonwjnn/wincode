@@ -3,16 +3,16 @@ import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createWorkspaceSandbox } from "@wincode/ai/workspace";
-import { canonicalizeReadResource } from "./canonical";
+import { canonicalizeResource } from "./canonical";
 
-describe("canonicalizeReadResource", () => {
+describe("canonicalizeResource", () => {
 	test("resolves to the workspace-relative POSIX path of the real file", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "wincode-canonical-test-"));
 		await writeFile(join(dir, ".env"), "SECRET=1");
 		const sandbox = createWorkspaceSandbox(dir);
 
-		expect(await canonicalizeReadResource(".env", sandbox)).toBe(".env");
-		expect(await canonicalizeReadResource("./.env", sandbox)).toBe(".env");
+		expect(await canonicalizeResource(".env", sandbox)).toBe(".env");
+		expect(await canonicalizeResource("./.env", sandbox)).toBe(".env");
 	});
 
 	test("normalizes dot segments after sandbox resolution", async () => {
@@ -20,7 +20,7 @@ describe("canonicalizeReadResource", () => {
 		await writeFile(join(dir, ".env"), "SECRET=1");
 		const sandbox = createWorkspaceSandbox(dir);
 
-		expect(await canonicalizeReadResource("sub/../.env", sandbox)).toBe(".env");
+		expect(await canonicalizeResource("sub/../.env", sandbox)).toBe(".env");
 	});
 
 	test("resolves symlinks to the canonical target path", async () => {
@@ -29,19 +29,17 @@ describe("canonicalizeReadResource", () => {
 		await symlink(join(dir, "secret.txt"), join(dir, "link.txt"));
 		const sandbox = createWorkspaceSandbox(dir);
 
-		expect(await canonicalizeReadResource("link.txt", sandbox)).toBe(
-			"secret.txt"
-		);
+		expect(await canonicalizeResource("link.txt", sandbox)).toBe("secret.txt");
 	});
 
 	test("normalizes missing files through sandbox new-path resolution", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "wincode-canonical-test-"));
 		const sandbox = createWorkspaceSandbox(dir);
 
-		expect(await canonicalizeReadResource("missing.txt", sandbox)).toBe(
+		expect(await canonicalizeResource("missing.txt", sandbox)).toBe(
 			"missing.txt"
 		);
-		expect(await canonicalizeReadResource("sub/../missing.txt", sandbox)).toBe(
+		expect(await canonicalizeResource("sub/../missing.txt", sandbox)).toBe(
 			"missing.txt"
 		);
 	});
@@ -51,7 +49,7 @@ describe("canonicalizeReadResource", () => {
 		const sandbox = createWorkspaceSandbox(dir);
 
 		await expect(
-			canonicalizeReadResource("../outside.txt", sandbox)
+			canonicalizeResource("../outside.txt", sandbox)
 		).rejects.toThrow("Path escapes workspace");
 	});
 
@@ -61,7 +59,7 @@ describe("canonicalizeReadResource", () => {
 		await writeFile(join(dir, "nested", "file.txt"), "x");
 		const sandbox = createWorkspaceSandbox(dir);
 
-		expect(await canonicalizeReadResource("nested/file.txt", sandbox)).toBe(
+		expect(await canonicalizeResource("nested/file.txt", sandbox)).toBe(
 			"nested/file.txt"
 		);
 	});

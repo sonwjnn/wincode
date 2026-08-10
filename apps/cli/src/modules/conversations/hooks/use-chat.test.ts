@@ -678,4 +678,172 @@ describe("createChatToolCallHandler", () => {
 			})
 		);
 	});
+
+	test("denies a write through the edit action and never runs the tool", async () => {
+		await settleCall(
+			callWith(
+				{
+					input: { content: "SECRET=1", path: "secret.txt" },
+					toolCallId: "call-write-deny",
+					toolName: "write",
+				},
+				{
+					permissionRef: { current: createToolPermission({ edit: "deny" }) },
+					sandbox: createWorkspaceSandbox(process.cwd()),
+				}
+			)
+		);
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+		expect(addToolOutput).toHaveBeenCalledWith({
+			errorText: "Write denied by policy: secret.txt",
+			state: "output-error",
+			tool: "write",
+			toolCallId: "call-write-deny",
+		});
+	});
+
+	test("denies an edit through the edit action and never runs the tool", async () => {
+		await settleCall(
+			callWith(
+				{
+					input: { find: "a", path: "src/app.ts", replace: "b" },
+					toolCallId: "call-edit-deny",
+					toolName: "edit",
+				},
+				{
+					permissionRef: {
+						current: createToolPermission({ edit: { "src/*": "deny" } }),
+					},
+					sandbox: createWorkspaceSandbox(process.cwd()),
+				}
+			)
+		);
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+		expect(addToolOutput).toHaveBeenCalledWith({
+			errorText: "Edit denied by policy: src/app.ts",
+			state: "output-error",
+			tool: "edit",
+			toolCallId: "call-edit-deny",
+		});
+	});
+
+	test("gates list against its default workspace-root resource", async () => {
+		await settleCall(
+			callWith(
+				{
+					input: {},
+					toolCallId: "call-list-deny",
+					toolName: "list",
+				},
+				{
+					permissionRef: { current: createToolPermission({ list: "deny" }) },
+					sandbox: createWorkspaceSandbox(process.cwd()),
+				}
+			)
+		);
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+		expect(addToolOutput).toHaveBeenCalledWith({
+			errorText: "List denied by policy: .",
+			state: "output-error",
+			tool: "list",
+			toolCallId: "call-list-deny",
+		});
+	});
+
+	test("gates grep against its requested regular expression", async () => {
+		await settleCall(
+			callWith(
+				{
+					input: { pattern: "TODO.*" },
+					toolCallId: "call-grep-deny",
+					toolName: "grep",
+				},
+				{
+					permissionRef: {
+						current: createToolPermission({ grep: { "TODO.*": "deny" } }),
+					},
+					sandbox: createWorkspaceSandbox(process.cwd()),
+				}
+			)
+		);
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+		expect(addToolOutput).toHaveBeenCalledWith({
+			errorText: "Grep denied by policy: TODO.*",
+			state: "output-error",
+			tool: "grep",
+			toolCallId: "call-grep-deny",
+		});
+	});
+
+	test("asks before a write and runs after allow once", async () => {
+		const approvalRequests: ToolApprovalRequest[] = [];
+		const open = mock(
+			(
+				request: ToolApprovalRequest,
+				controller: ApprovalController<ToolApprovalRequest>
+			) => {
+				approvalRequests.push(request);
+				queueMicrotask(() => controller.allow());
+			}
+		);
+
+		await settleCall(
+			callWith(
+				{
+					input: { content: "x", path: "notes.txt" },
+					toolCallId: "call-write-ask",
+					toolName: "write",
+				},
+				{
+					openApproval: open,
+					permissionRef: { current: createToolPermission({ edit: "ask" }) },
+					sandbox: createWorkspaceSandbox(process.cwd()),
+				}
+			)
+		);
+		expect(approvalRequests[0]).toMatchObject({
+			description:
+				"Create or overwrite a UTF-8 text file inside the workspace. Parent directories are created inside the workspace.",
+			identity: [
+				{ label: "tool", value: "write" },
+				{ label: "resource", value: "notes.txt" },
+			],
+		});
+		expect(staticToolCallHandler).toHaveBeenCalledTimes(1);
+		expect(addToolOutput).not.toHaveBeenCalled();
+	});
+
+	test("allows write, edit, list, and grep by default without approval", async () => {
+		const calls = [
+			{
+				input: { content: "x", path: "notes.txt" },
+				toolCallId: "call-write-allow",
+				toolName: "write",
+			},
+			{
+				input: { find: "a", path: "notes.txt", replace: "b" },
+				toolCallId: "call-edit-allow",
+				toolName: "edit",
+			},
+			{ input: {}, toolCallId: "call-list-allow", toolName: "list" },
+			{
+				input: { pattern: "TODO" },
+				toolCallId: "call-grep-allow",
+				toolName: "grep",
+			},
+		];
+
+		for (const toolCall of calls) {
+			await settleCall(
+				callWith(toolCall, {
+					permissionRef: { current: createToolPermission() },
+					sandbox: createWorkspaceSandbox(process.cwd()),
+				})
+			);
+		}
+
+		expect(openApproval).not.toHaveBeenCalled();
+		expect(staticToolCallHandler).toHaveBeenCalledTimes(calls.length);
+		expect(addToolOutput).not.toHaveBeenCalled();
+	});
 });

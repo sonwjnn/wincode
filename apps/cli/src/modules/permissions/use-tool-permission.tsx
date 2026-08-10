@@ -12,10 +12,11 @@ import {
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import {
 	applyManualApprovalSafetyCeiling,
+	createResolvedToolPermission,
 	createToolPermission,
+	DEFAULT_PERMISSION_RULES,
 	type ToolPermission,
 } from "./policy";
-import { resolveTopLevelPermission } from "./schema";
 
 type MutableRefObject<T> = { current: T };
 
@@ -47,16 +48,20 @@ export function useToolPermission(): ToolPermissionRuntime {
 	);
 	const permissionPromise = useMemo(
 		() =>
-			Promise.all([
-				config.configStore.getSnapshot(config.workspace),
-				resolveAgentRegistry(config),
-			])
-				.then(([snapshot, registry]) => {
-					const permission = createToolPermission(
-						resolveTopLevelPermission(snapshot)
+			resolveAgentRegistry(config)
+				.then((registry) => {
+					// Enforce against the Agent that actually runs: an unavailable
+					// selection falls back to Build, mirroring the effective-selection
+					// resolution used when the message is sent, so tool visibility and
+					// policy stay consistent with the executing Agent.
+					const effectiveAgent =
+						registry.agents.find(
+							({ id, isAvailable }) => id === agent && isAvailable
+						) ?? registry.agents.find(({ id }) => id === "build");
+					const permission = createResolvedToolPermission(
+						effectiveAgent?.permission ?? DEFAULT_PERMISSION_RULES
 					);
-					const selectedAgent = registry.agents.find(({ id }) => id === agent);
-					permissionRef.current = selectedAgent?.requiresManualApproval
+					permissionRef.current = effectiveAgent?.requiresManualApproval
 						? applyManualApprovalSafetyCeiling(permission)
 						: permission;
 					return permissionRef.current;

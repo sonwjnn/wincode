@@ -6,7 +6,7 @@ import type { WorkspacePolicy } from "@wincode/ai/workspace";
  * assertions). Missing paths use the sandbox's new-path resolution so parent
  * symlinks and workspace boundaries remain enforced before policy evaluation.
  */
-export async function canonicalizeReadResource(
+export async function canonicalizeResource(
 	input: string,
 	sandbox: WorkspacePolicy
 ): Promise<string> {

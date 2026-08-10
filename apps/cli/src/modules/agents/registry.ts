@@ -15,7 +15,11 @@ import {
 	type ResolvedAgentRuntime,
 } from "@wincode/ai";
 import { z } from "zod";
-import type { PermissionRules } from "@/modules/permissions";
+import {
+	type PermissionRules,
+	resolveAgentPermissionRules,
+	resolveVisibleCodingTools,
+} from "@/modules/permissions";
 import { topLevelPermissionSchema } from "@/modules/permissions/schema";
 import type {
 	ConfigDiagnostic,
@@ -397,9 +401,6 @@ const resolveConfiguredAgentEntry = (
 			isConfigured: true,
 			isSelectable: definition.data.role !== "subagent",
 			...(model ? { model } : {}),
-			...(definition.data.permission === undefined
-				? {}
-				: { permission: definition.data.permission as PermissionRules }),
 			requiresManualApproval: false,
 			role: definition.data.role,
 			...(isAvailable
@@ -557,9 +558,6 @@ const resolveBuiltInAgent = (
 		isAvailable,
 		isConfigured: false,
 		isSelectable: true,
-		...(patch.data.permission === undefined
-			? {}
-			: { permission: patch.data.permission as PermissionRules }),
 		requiresManualApproval: false,
 		...(isAvailable
 			? {}
@@ -644,7 +642,20 @@ export const buildAgentRegistry = (
 		)
 	);
 
-	const agents = [...builtInAgentsView, ...configuredAgents];
+	// Resolve each Agent's layered Permission policy once, then derive its model
+	// tool visibility from the same rules so unconditionally denied tools are
+	// hidden while granular and ask-gated tools stay visible.
+	const agents = [...builtInAgentsView, ...configuredAgents].map((agent) => {
+		const permission = resolveAgentPermissionRules(snapshot, agent.id);
+		return {
+			...agent,
+			permission,
+			visibleCodingTools: resolveVisibleCodingTools(permission),
+		};
+	});
+	const configuredAgentsView = agents.filter(
+		({ isConfigured }) => isConfigured
+	);
 	const rawDefaultAgent = snapshot.document.default_agent;
 	const configuredDefault =
 		typeof rawDefaultAgent === "string"
@@ -680,7 +691,7 @@ export const buildAgentRegistry = (
 
 	return {
 		agents,
-		configuredAgents,
+		configuredAgents: configuredAgentsView,
 		defaultAgentId,
 		diagnostics: deduplicateDiagnostics(diagnostics),
 		selectableAgents,

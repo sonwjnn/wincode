@@ -3,13 +3,15 @@ import {
 	type AgentId,
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
+	type CodingToolName,
+	codingToolDefinitions,
+	codingToolNames,
 	defaultChatModelSelection,
 	getChatModelRoute,
 	getLegacyModeForAgent,
 	type ModelVariant,
 	type ModeType,
 	type ResolvedAgentRuntime,
-	readToolSchema,
 	type SkillContext,
 } from "@wincode/ai";
 import {
@@ -33,7 +35,8 @@ import {
 	useMcp,
 } from "@/modules/mcp";
 import {
-	canonicalizeReadResource,
+	canonicalizeResource,
+	STATIC_TOOL_PERMISSION_ACTIONS,
 	type ToolPermission,
 	type ToolPermissionRuntime,
 	useToolPermission,
@@ -70,24 +73,89 @@ export type ChatToolCallHandlerDeps = {
 	sandbox: WorkspacePolicy;
 };
 
-const getReadInputPath = (input: unknown): string | undefined => {
+const STATIC_TOOL_LABELS = {
+	read: "Read",
+	write: "Write",
+	edit: "Edit",
+	list: "List",
+	grep: "Grep",
+} as const satisfies Record<CodingToolName, string>;
+
+// The workspace-relative POSIX resource that `list` gates against when no path
+// is supplied and the sandbox canonicalizes the workspace root to an empty path.
+const WORKSPACE_ROOT_RESOURCE = ".";
+
+const isCodingToolName = (name: string): name is CodingToolName =>
+	(codingToolNames as readonly string[]).includes(name);
+
+const getStringField = (input: unknown, field: string): string | undefined => {
 	if (typeof input !== "object" || input === null || Array.isArray(input)) {
 		return;
 	}
-	const candidate = (input as { path?: unknown }).path;
+	const candidate = (input as Record<string, unknown>)[field];
 	return typeof candidate === "string" ? candidate : undefined;
 };
 
-const READ_TOOL_IDENTITY = [{ label: "tool", value: "read" }] as const;
+type GateResource =
+	| { kind: "path"; input: string }
+	| { kind: "literal"; value: string };
 
 /**
- * Enforces the Tool Permission policy for a static coding tool call. Only
- * `read` is gated in this slice: the input path is canonicalized through the
- * workspace sandbox, and a `deny` decision or a rejected/cancelled `ask`
- * decision settles the call with an observable tool error without invoking
- * the static tool runner. An allowed or approved call runs the runner.
+ * Resolves the Permission resource for a static coding tool call. Read, write,
+ * edit, and list gate against a filesystem path (list defaults to the workspace
+ * root), while grep gates against its requested regular expression verbatim. A
+ * tool call missing its required input is left ungated so the runner reports the
+ * validation error.
  */
-const gateStaticReadToolCall = async (
+const resolveGateResource = (
+	tool: CodingToolName,
+	input: unknown
+): GateResource | undefined => {
+	if (tool === "grep") {
+		const pattern = getStringField(input, "pattern");
+		return pattern === undefined
+			? undefined
+			: { kind: "literal", value: pattern };
+	}
+	if (tool === "list") {
+		return {
+			input: getStringField(input, "path") ?? WORKSPACE_ROOT_RESOURCE,
+			kind: "path",
+		};
+	}
+	const path = getStringField(input, "path");
+	return path === undefined ? undefined : { input: path, kind: "path" };
+};
+
+const emitToolCallError = (
+	addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>,
+	tool: CodingToolName,
+	toolCallId: string,
+	errorText: string
+): void => {
+	// Policy errors are emitted without awaiting, mirroring the tool-call
+	// dispatch below: awaiting chat tool output here would deadlock the chat
+	// executor at input-available.
+	Promise.resolve(
+		addToolOutput({
+			errorText,
+			state: "output-error",
+			tool,
+			toolCallId,
+		})
+	).catch(() => undefined);
+};
+
+/**
+ * Enforces the Tool Permission policy for a static coding tool call. The tool's
+ * actual resource is normalized immediately before execution — path resources
+ * are canonicalized through the workspace sandbox, grep uses its regex — and the
+ * governing action (`edit` covers both write and edit) is evaluated. A `deny`
+ * decision or a rejected/cancelled `ask` decision settles the call with an
+ * observable tool error without invoking the static tool runner. An allowed or
+ * approved call runs the runner.
+ */
+const gateStaticToolCall = async (
 	options: Parameters<ChatOnToolCallCallback<CodingAgentUIMessage>>[0],
 	addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>,
 	permission: ToolPermission,
@@ -95,60 +163,68 @@ const gateStaticReadToolCall = async (
 	sandbox: WorkspacePolicy
 ): Promise<boolean> => {
 	const toolCall = options.toolCall;
-	const inputPath = getReadInputPath(toolCall.input);
-	if (toolCall.toolName !== "read" || inputPath === undefined) {
+	if (!isCodingToolName(toolCall.toolName)) {
 		return true;
 	}
+	const tool = toolCall.toolName;
+	const gate = resolveGateResource(tool, toolCall.input);
+	if (gate === undefined) {
+		return true;
+	}
+	const label = STATIC_TOOL_LABELS[tool];
 
 	let resource: string;
-	try {
-		resource = await canonicalizeReadResource(inputPath, sandbox);
-	} catch {
-		Promise.resolve(
-			addToolOutput({
-				errorText: `Read path is outside the workspace: ${inputPath}`,
-				state: "output-error",
-				tool: toolCall.toolName,
-				toolCallId: toolCall.toolCallId,
-			})
-		).catch(() => undefined);
-		return false;
+	if (gate.kind === "path") {
+		try {
+			const canonical = await canonicalizeResource(gate.input, sandbox);
+			resource = canonical === "" ? WORKSPACE_ROOT_RESOURCE : canonical;
+		} catch {
+			emitToolCallError(
+				addToolOutput,
+				tool,
+				toolCall.toolCallId,
+				`${label} path is outside the workspace: ${gate.input}`
+			);
+			return false;
+		}
+	} else {
+		resource = gate.value;
 	}
-	const decision = permission.decide("read", resource);
+
+	const decision = permission.decide(
+		STATIC_TOOL_PERMISSION_ACTIONS[tool],
+		resource
+	);
 
 	if (decision === "deny") {
-		// Policy errors are emitted without awaiting, mirroring the tool-call
-		// dispatch below: awaiting chat tool output here would deadlock the
-		// chat executor at input-available.
-		Promise.resolve(
-			addToolOutput({
-				errorText: `Read denied by policy: ${resource}`,
-				state: "output-error",
-				tool: toolCall.toolName,
-				toolCallId: toolCall.toolCallId,
-			})
-		).catch(() => undefined);
+		emitToolCallError(
+			addToolOutput,
+			tool,
+			toolCall.toolCallId,
+			`${label} denied by policy: ${resource}`
+		);
 		return false;
 	}
 
 	if (decision === "ask") {
 		const request: ToolApprovalRequest = {
-			description: readToolSchema.description,
-			identity: [...READ_TOOL_IDENTITY, { label: "resource", value: resource }],
+			description: codingToolDefinitions[tool].description,
+			identity: [
+				{ label: "tool", value: tool },
+				{ label: "resource", value: resource },
+			],
 			input: toolCall.input,
 		};
 		const controller = createApprovalController<ToolApprovalRequest>();
 		openApproval(request, controller);
 		const approved = await controller.request(request);
 		if (!approved) {
-			Promise.resolve(
-				addToolOutput({
-					errorText: `Read was not approved: ${resource}`,
-					state: "output-error",
-					tool: toolCall.toolName,
-					toolCallId: toolCall.toolCallId,
-				})
-			).catch(() => undefined);
+			emitToolCallError(
+				addToolOutput,
+				tool,
+				toolCall.toolCallId,
+				`${label} was not approved: ${resource}`
+			);
 			return false;
 		}
 	}
@@ -199,7 +275,7 @@ export const createChatToolCallHandler =
 		Promise.resolve(
 			(async () => {
 				if (
-					!(await gateStaticReadToolCall(
+					!(await gateStaticToolCall(
 						options,
 						addToolOutput,
 						resolvePermission
