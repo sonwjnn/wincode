@@ -16,8 +16,6 @@ export {
 	baseCodingAgentInstructions,
 	getSystemInstructionsForAgent,
 } from "./instructions";
-export type { LegacyMode } from "./legacy-metadata";
-export { legacyModeSchema } from "./legacy-metadata";
 export type {
 	JsonObject,
 	JsonValue,

@@ -1,5 +1,6 @@
 import type { AgentId, ModelVariant } from "@wincode/ai";
 import {
+	buildAgent,
 	type ChatModelSelection,
 	defaultChatModelSelection,
 	normalizeModelVariant,
@@ -52,12 +53,12 @@ type PromptConfigProviderProps = {
 };
 export function PromptConfigProvider({
 	children,
-	initialAgent = "build",
+	initialAgent = buildAgent.id,
 	initialModel = defaultChatModelSelection,
 	initialVariant,
 }: PromptConfigProviderProps) {
 	const registry = useAgentRegistry();
-	const hasExplicitAgent = useRef(initialAgent !== "build");
+	const hasExplicitAgent = useRef(initialAgent !== buildAgent.id);
 	const [config, setConfig] = useState<PromptConfigState>({
 		agent: initialAgent,
 		model: initialModel,

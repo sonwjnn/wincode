@@ -1,6 +1,7 @@
 import { useChat as useAiChat } from "@ai-sdk/react";
 import {
 	type AgentId,
+	buildAgent,
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
 	type CodingToolName,
@@ -445,7 +446,7 @@ export const createChatToolCallHandler =
 				}
 				await runStaticToolCall(
 					addToolOutput,
-					resolvedAgentRef.current?.visibleCodingTools ?? codingToolNames
+					resolvedAgentRef.current?.visibleCodingTools ?? []
 				)(options);
 			})()
 		).catch(() => undefined);
@@ -456,16 +457,6 @@ export const createChatMessageParts = (
 	fileMentions: CodingAgentUIMessage["parts"],
 	files: FileUIPart[]
 ) => [{ text: userText, type: "text" as const }, ...fileMentions, ...files];
-
-export const getContinuationChatParams = (
-	agent: AgentId,
-	model: ChatModelSelection,
-	variant?: ModelVariant
-): { agent: AgentId; model: ChatModelSelection; variant?: ModelVariant } => ({
-	agent,
-	model,
-	...(variant === undefined ? {} : { variant }),
-});
 
 export const notifyHostedCompletion = (
 	model: ChatModelSelection,
@@ -572,7 +563,7 @@ export function useChat(
 	const setMessagesRef = useRef<
 		((messages: CodingAgentUIMessage[]) => void) | undefined
 	>(undefined);
-	const agentRef = useRef<AgentId>("build");
+	const agentRef = useRef<AgentId>(buildAgent.id);
 	const resolvedAgentRef = useRef<ResolvedAgentRuntime | undefined>(undefined);
 	const modelRef = useRef<ChatModelSelection>(defaultChatModelSelection);
 	const conversationModelRef = useRef<ChatModelSelection>(

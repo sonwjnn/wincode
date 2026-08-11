@@ -101,12 +101,6 @@ const withChatMetadata = (
 	};
 };
 
-const withChatMetadataForMessages = (
-	messages: z.infer<typeof uiMessageInputSchema>[],
-	model: { modelId: string; providerId: string },
-	variant?: string
-) => messages.map((message) => withChatMetadata(message, model, variant));
-
 const hasValidContentLength = (value: string | null) => {
 	if (!value) {
 		return true;
@@ -354,15 +348,9 @@ const handleChatRequest = async (
 		return forbidden("Billing disabled for model/provider");
 	}
 
-	const stagedMessages = withChatMetadataForMessages(
-		messages,
-		modelSelection,
-		variant
-	).map((message) => ({
-		...message,
-		metadata: message.metadata,
-		parts: message.parts,
-	}));
+	const stagedMessages = messages.map((message) =>
+		withChatMetadata(message, modelSelection, variant)
+	);
 
 	const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
 		dataSchemas: codingAgentDataSchemas,

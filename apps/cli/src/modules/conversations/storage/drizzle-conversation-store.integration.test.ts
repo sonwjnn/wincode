@@ -476,7 +476,7 @@ describe("local migrations", () => {
 			VALUES ('session-legacy', '${workspace.id}', 'Legacy Plan', 0, 1735772645000, 1735772745000, 1735772745000);
 			INSERT INTO conversation_message (id, session_id, ui_message_id, role, mode, parts_json, metadata_json, position, created_at, updated_at)
 			VALUES
-				('m-legacy-1', 'session-legacy', 'm1', 'user', 'plan', '[{"type":"text","text":"Plan the work"}]', '{"mode":"plan","model":{"providerId":"wincode","modelId":"gemini-2.5-flash"}}', 0, 1735772645000, 1735772645000),
+				('m-legacy-1', 'session-legacy', 'm1', 'user', 'plan', '[{"type":"text","text":"Plan the work"}]', '{"agent":"plan","mode":"build","model":{"providerId":"wincode","modelId":"gemini-2.5-flash"}}', 0, 1735772645000, 1735772645000),
 				('m-legacy-2', 'session-legacy', 'm2', 'user', 'build', '[{"type":"text","text":"Build it"}]', '{"mode":"build","model":{"providerId":"wincode","modelId":"gemini-2.5-flash"}}', 1, 1735772700000, 1735772700000);
 			INSERT INTO prompt_history (prompt, entry_json, created_at)
 			VALUES ('legacy prompt', '{"files":[],"text":"legacy prompt"}', 1735772645000);

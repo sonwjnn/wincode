@@ -11,10 +11,10 @@
 > The closed `ModeType` / `codingModes` Coding Mode contract was removed from
 > `packages/ai`, the CLI, and the hosted API; the canonical selection is the
 > `AgentId` / resolved `Agent` runtime. The only retained Coding Mode surface is
-> the narrow legacy metadata reader (`packages/ai/src/legacy-metadata.ts`,
-> `codingMessageMetadataSchema`), which normalizes historical `mode: build|plan`
-> message metadata into `agent` at the persistence boundary, and the historical
-> database migrations in `apps/cli/drizzle/local/`. Line references below
+> the private persistence-boundary normalizer in
+> `apps/cli/src/modules/conversations/storage/drizzle-conversation-store.ts`,
+> which converts historical `mode: build|plan` message metadata into `agent`, and
+> the historical database migrations in `apps/cli/drizzle/local/`. Line references below
 > describe the pre-migration state and are intentionally historical.
 
 ---

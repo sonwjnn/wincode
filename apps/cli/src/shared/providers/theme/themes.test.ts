@@ -3,6 +3,7 @@ import { getContrastRatio } from "./color-contrast";
 import {
 	DEFAULT_THEME,
 	findThemeByName,
+	getAgentColor,
 	resolveTheme,
 	THEMES,
 	type ThemeDefinition,
@@ -182,8 +183,8 @@ test("maps OpenCode semantic colors consistently", () => {
 		}
 
 		expect(theme.colors.selection).toBe(theme.colors.primary);
-		expect(theme.colors.planMode).toBe(theme.colors.agent.plan ?? "");
-		expect(theme.colors.thinking).toBe(theme.colors.agent.plan ?? "");
+		expect(theme.colors.planMode).toBe(getAgentColor(theme.colors, "plan"));
+		expect(theme.colors.thinking).toBe(getAgentColor(theme.colors, "plan"));
 		expect(theme.colors.backgroundMenu).toBe(theme.colors.backgroundElement);
 	}
 });

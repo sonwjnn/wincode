@@ -16,7 +16,6 @@ import {
 	expandFileMentionPartsForModel,
 	findSupportedChatModel,
 	getSystemInstructionsForAgent,
-	legacyModeSchema,
 	planAgent,
 	type ReadInput,
 	type ReadOutput,
@@ -428,12 +427,6 @@ describe("@wincode/ai shared entry", () => {
 
 	test("defines ordered built-in Agents", () => {
 		expect(builtInAgents.map(({ id }) => id)).toEqual(["build", "plan"]);
-	});
-
-	test("accepts only legacy build/plan values through the metadata reader", () => {
-		expect(legacyModeSchema.safeParse("build").success).toBe(true);
-		expect(legacyModeSchema.safeParse("plan").success).toBe(true);
-		expect(legacyModeSchema.safeParse("unknown").success).toBe(false);
 	});
 
 	test("validates canonical Agent IDs", () => {

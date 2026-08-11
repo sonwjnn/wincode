@@ -30,7 +30,6 @@ import {
 	finalizeAssistantMessageMetadata,
 	findCurrentTurnAssistantIndex,
 	findCurrentTurnInterruptTargetIndex,
-	getContinuationChatParams,
 	notifyHostedCompletion,
 } from "./use-chat";
 
@@ -218,13 +217,7 @@ describe("useChat helpers", () => {
 		).toBe(3);
 	});
 
-	test("seeds continuation agent and retains assistant variant metadata", () => {
-		expect(getContinuationChatParams("plan", selection, "high")).toEqual({
-			agent: "plan",
-			model: selection,
-			variant: "high",
-		});
-
+	test("retains assistant variant metadata", () => {
 		expect(
 			finalizeAssistantMessageMetadata(
 				{
@@ -393,6 +386,29 @@ describe("createChatToolCallHandler", () => {
 
 		expect(staticToolCallHandler).toHaveBeenCalled();
 		expect(handleDynamicToolCall).not.toHaveBeenCalled();
+	});
+
+	test("fails closed when the resolved Agent is unavailable", async () => {
+		const gatedHandler = mock(
+			(..._arguments_: Parameters<typeof handleCodingAgentToolCall>) =>
+				staticToolCallHandler
+		) as typeof handleCodingAgentToolCall;
+
+		await settleCall(
+			callWith(
+				{
+					input: { path: "src/app.ts" },
+					toolCallId: "call-unresolved-agent",
+					toolName: "read",
+				},
+				{
+					handleCodingAgentToolCall: gatedHandler,
+					resolvedAgentRef: { current: undefined },
+				}
+			)
+		);
+
+		expect(gatedHandler).toHaveBeenCalledWith(addToolOutput, []);
 	});
 
 	test("handles a missing or stale snapshot ref without crashing", () => {
@@ -689,7 +705,12 @@ describe("createChatToolCallHandler", () => {
 			permissionRef: {
 				current: createToolPermission({ read: { ".env": "deny" } }),
 			},
-			resolvedAgentRef,
+			resolvedAgentRef: {
+				current: {
+					instructions: "Read files.",
+					visibleCodingTools: ["read"],
+				},
+			},
 			sandbox: createWorkspaceSandbox(),
 			service: createPermissionService(),
 		});

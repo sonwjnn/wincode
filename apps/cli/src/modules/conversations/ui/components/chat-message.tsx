@@ -1,4 +1,4 @@
-import type { CodingAgentUIMessage } from "@wincode/ai";
+import { buildAgent, type CodingAgentUIMessage } from "@wincode/ai";
 import {
 	BotMessageContent,
 	BotMessageFooter,
@@ -20,7 +20,7 @@ export function ChatMessage({
 					if (message.role === "user") {
 						return (
 							<UserMessage
-								agent={message.metadata?.agent ?? "build"}
+								agent={message.metadata?.agent ?? buildAgent.id}
 								appliedSkill={getAppliedSkill(message.metadata)}
 								key={message.id}
 								parts={message.parts}

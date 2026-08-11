@@ -3,6 +3,7 @@ import {
 	type AgentId,
 	agentIdSchema,
 	agentRoleSchema,
+	buildAgent,
 	builtInAgents,
 	type ChatModelSelection,
 	type CodingToolName,
@@ -673,7 +674,7 @@ export const buildAgentRegistry = (
 			: undefined;
 	const validDefault =
 		configuredDefault?.isSelectable === true && configuredDefault.isAvailable;
-	const defaultAgentId = validDefault ? configuredDefault.id : "build";
+	const defaultAgentId = validDefault ? configuredDefault.id : buildAgent.id;
 	if (rawDefaultAgent !== undefined && !validDefault) {
 		diagnostics.push(
 			agentDiagnostic(

@@ -15,7 +15,7 @@ Slash-command registry and dispatch for the CLI chat input.
    - `ExitAdapter` → `renderer.destroy()`
    - `NewAdapter` → TanStack Router navigation
    - `DialogAdapter` → opens sessions / theme dialogs
-   - `ModelsAdapter` / `VariantsAdapter` / `ModeAdapter` → open model‑picker /
+   - `ModelsAdapter` / `VariantsAdapter` / `AgentsAdapter` → open model‑picker /
      variant‑picker / agent‑picker dialogs
    - `SkillsAdapter` → opens skill picker and queues selected skill command
 5. **Overlay** — `CommandMenu` renders the matched suggestions below the input. Arrow keys
@@ -28,7 +28,7 @@ Slash-command registry and dispatch for the CLI chat input.
 - `createCommandExecutor(adapters)`, `AdapterMap`
 - `CommandMenu`
 - Adapter classes: `ExitAdapter`, `NewAdapter`, `DialogAdapter`, `ModelsAdapter`,
-  `VariantsAdapter`, `ModeAdapter`, `SkillsAdapter`
+  `VariantsAdapter`, `AgentsAdapter`, `SkillsAdapter`
 
 ## Dependencies
 

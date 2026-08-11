@@ -3,6 +3,7 @@ import {
 	type AgentId,
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
+	type CodingMessageMetadata,
 	codingMessageMetadataSchema,
 } from "@wincode/ai";
 import { generateId, safeValidateUIMessages } from "ai";
@@ -95,7 +96,12 @@ type DrizzleConversationStoreOptions = {
 	workspaceRoot?: string;
 };
 
-const legacyModeSchema = z.enum(["build", "plan"]);
+const legacyPersistedMetadataSchema = z
+	.object({
+		agent: z.string().optional(),
+		mode: z.enum(["build", "plan"]),
+	})
+	.passthrough();
 
 const hashWorkspace = (rootPath: string): string =>
 	createHash("sha256").update(rootPath).digest("hex").slice(0, 16);
@@ -162,16 +168,16 @@ const normalizeMessageMetadata = (
 	return metadata;
 };
 
-const parsePersistedMetadata = (value: unknown) => {
-	if (value && typeof value === "object") {
-		const record = value as Record<string, unknown>;
-		if (
-			record.agent === undefined &&
-			legacyModeSchema.safeParse(record.mode).success
-		) {
-			const { mode, ...metadata } = record;
-			return codingMessageMetadataSchema.parse({ ...metadata, agent: mode });
-		}
+const parseAndNormalizePersistedMetadata = (
+	value: unknown
+): CodingMessageMetadata => {
+	const legacyMetadata = legacyPersistedMetadataSchema.safeParse(value);
+	if (legacyMetadata.success) {
+		const { mode, ...metadata } = legacyMetadata.data;
+		return codingMessageMetadataSchema.parse({
+			...metadata,
+			agent: metadata.agent ?? mode,
+		});
 	}
 	return codingMessageMetadataSchema.parse(value);
 };
@@ -353,7 +359,7 @@ export const createDrizzleConversationStore = (
 						row.metadataJson === null || row.metadataJson === undefined
 							? undefined
 							: normalizeMessageMetadata(
-									parsePersistedMetadata(row.metadataJson),
+									parseAndNormalizePersistedMetadata(row.metadataJson),
 									row.agent
 								),
 					parts: row.partsJson,
@@ -421,7 +427,7 @@ export const createDrizzleConversationStore = (
 			const seen = new Set<string>();
 			for (const row of rows) {
 				const model = row.metadata
-					? parsePersistedMetadata(row.metadata).model
+					? parseAndNormalizePersistedMetadata(row.metadata).model
 					: undefined;
 				if (!model) {
 					continue;
