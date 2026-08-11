@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { testRender } from "@opentui/react/test-utils";
-import type { ModeType } from "@wincode/ai";
+import type { AgentId } from "@wincode/ai";
 import { useEffect } from "react";
 import {
 	DialogProvider,
@@ -39,10 +39,10 @@ const makeRegistry = (
 	reconnect?: (serverName: string) => Promise<void>
 ): McpRegistry => ({
 	close: async () => undefined,
-	createSnapshot: async (mode: ModeType): Promise<McpCatalogSnapshot> => ({
+	createSnapshot: async (agent: AgentId): Promise<McpCatalogSnapshot> => ({
+		agent,
 		id: "snap-1",
 		manifest: [],
-		mode,
 		tools: new Map(),
 	}),
 	execute: async () => ({ content: [], isError: false, truncated: false }),

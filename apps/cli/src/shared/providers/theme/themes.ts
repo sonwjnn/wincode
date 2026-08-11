@@ -1,10 +1,9 @@
-import type { ModeType } from "@wincode/ai";
 import { getContrastingTextColor } from "./color-contrast";
 
 export type ThemeColors = {
+	agent: Record<string, string>;
 	primary: string;
 	planMode: string;
-	mode: Record<ModeType, string>;
 	selection: string;
 	thinking: string;
 	success: string;
@@ -48,7 +47,7 @@ export type ThemeDefinition = {
 		| "border"
 		| "borderSubtle"
 	> &
-		Partial<Omit<ThemeColors, "mode">>;
+		Partial<Omit<ThemeColors, "agent">>;
 };
 
 const TEXT_BRIGHTNESS = 0.88;
@@ -782,6 +781,7 @@ const THEME_DEFINITIONS = [
 export const resolveTheme = ({ colors, name }: ThemeDefinition): Theme => ({
 	colors: {
 		...colors,
+		agent: { build: colors.primary, plan: colors.planMode },
 		backgroundElement: colors.backgroundElement ?? colors.backgroundPanel,
 		borderActive: colors.borderActive ?? colors.primary,
 		fileBadgeBackground: colors.fileBadgeBackground ?? colors.primary,
@@ -794,7 +794,6 @@ export const resolveTheme = ({ colors, name }: ThemeDefinition): Theme => ({
 			colors.filePath ??
 			brightenColor(colors.borderSubtle, FILE_PATH_BRIGHTNESS),
 		filePathBackground: colors.filePathBackground ?? colors.backgroundMenu,
-		mode: { build: colors.primary, plan: colors.planMode },
 		text: colors.text ?? brightenColor(colors.background, TEXT_BRIGHTNESS),
 		textDisabled:
 			colors.textDisabled ??
@@ -807,6 +806,9 @@ export const resolveTheme = ({ colors, name }: ThemeDefinition): Theme => ({
 });
 
 export const THEMES: Theme[] = THEME_DEFINITIONS.map(resolveTheme);
+
+export const getAgentColor = (colors: ThemeColors, agent: string): string =>
+	colors.agent[agent] ?? colors.primary;
 
 export const OPENCODE_THEME_NAME = "opencode";
 export function findThemeByName(

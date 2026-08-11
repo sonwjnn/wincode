@@ -8,21 +8,15 @@ import {
 	type CodingAgentUIMessage,
 	codingAgentDataSchemas,
 	codingMessageMetadataSchema,
-	codingModeNames,
-	codingModes,
 	codingToolDefinitions,
 	codingToolNames,
 	codingToolSchemas,
 	defaultChatModel,
 	defaultChatModelSelection,
-	defaultMode,
 	expandFileMentionPartsForModel,
 	findSupportedChatModel,
-	getLegacyModeForAgent,
-	getNextCodingModeName,
-	getSystemInstructions,
 	getSystemInstructionsForAgent,
-	parseMode,
+	legacyModeSchema,
 	planAgent,
 	type ReadInput,
 	type ReadOutput,
@@ -94,7 +88,7 @@ describe("@wincode/ai shared entry", () => {
 	test("creates user messages with chat metadata", () => {
 		expect(
 			createUserMessage("hello", {
-				mode: "plan",
+				agent: "plan",
 				model: {
 					modelId: "gpt-5.4-mini",
 					providerId: "wincode",
@@ -102,7 +96,7 @@ describe("@wincode/ai shared entry", () => {
 			})
 		).toMatchObject({
 			metadata: {
-				mode: "plan",
+				agent: "plan",
 				model: {
 					modelId: "gpt-5.4-mini",
 					providerId: "wincode",
@@ -306,7 +300,7 @@ describe("@wincode/ai shared entry", () => {
 	test("validates coding message metadata", () => {
 		expect(
 			codingMessageMetadataSchema.safeParse({
-				mode: "plan",
+				agent: "plan",
 				model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 				responseTimeMs: 12,
 				variant: "high",
@@ -314,7 +308,7 @@ describe("@wincode/ai shared entry", () => {
 		).toBe(true);
 		expect(
 			codingMessageMetadataSchema.safeParse({
-				mode: "plan",
+				agent: "plan",
 				model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 				variant: "minimal",
 			}).success
@@ -337,35 +331,27 @@ describe("@wincode/ai shared entry", () => {
 		).toBe(false);
 	});
 
-	test("normalizes legacy mode into canonical agent identity on read", () => {
+	test("rejects legacy mode in canonical metadata", () => {
 		const parsed = codingMessageMetadataSchema.safeParse({
 			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
-		expect(parsed.success).toBe(true);
-		expect(parsed.data).toMatchObject({
-			agent: "plan",
-			mode: "plan",
-		});
+		expect(parsed.success).toBe(false);
 	});
 
-	test("keeps canonical agent identity when both agent and legacy mode are present", () => {
+	test("rejects legacy mode alongside canonical agent identity", () => {
 		const parsed = codingMessageMetadataSchema.safeParse({
 			agent: "build",
 			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
-		expect(parsed.success).toBe(true);
-		expect(parsed.data).toMatchObject({
-			agent: "build",
-			mode: "plan",
-		});
+		expect(parsed.success).toBe(false);
 	});
 
 	test("accepts usage in coding message metadata", () => {
 		expect(
 			codingMessageMetadataSchema.safeParse({
-				mode: "build",
+				agent: "build",
 				model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
 				usage: {
 					cacheReadTokens: 100,
@@ -440,12 +426,14 @@ describe("@wincode/ai shared entry", () => {
 		expect(findSupportedChatModel("unknown-model")).toBeNull();
 	});
 
-	test("defines ordered coding modes", () => {
-		expect(defaultMode.value).toBe("build");
-		expect(codingModes.map((mode) => mode.value)).toEqual([...codingModeNames]);
-		expect(codingModes.map((mode) => mode.value)).toEqual(["build", "plan"]);
-		expect(getNextCodingModeName("build")).toBe("plan");
-		expect(getNextCodingModeName("plan")).toBe("build");
+	test("defines ordered built-in Agents", () => {
+		expect(builtInAgents.map(({ id }) => id)).toEqual(["build", "plan"]);
+	});
+
+	test("accepts only legacy build/plan values through the metadata reader", () => {
+		expect(legacyModeSchema.safeParse("build").success).toBe(true);
+		expect(legacyModeSchema.safeParse("plan").success).toBe(true);
+		expect(legacyModeSchema.safeParse("unknown").success).toBe(false);
 	});
 
 	test("validates canonical Agent IDs", () => {
@@ -472,27 +460,6 @@ describe("@wincode/ai shared entry", () => {
 			"grep",
 		]);
 		expect(planAgent.visibleCodingTools).toEqual(["read", "list", "grep"]);
-	});
-
-	test("parses persisted coding modes safely", () => {
-		expect(parseMode("plan")).toBe("plan");
-		expect(parseMode("unknown")).toBe(defaultMode.value);
-	});
-
-	test("maps canonical Agent IDs to legacy coding modes", () => {
-		expect(getLegacyModeForAgent("build")).toBe("build");
-		expect(getLegacyModeForAgent("plan")).toBe("plan");
-		expect(getLegacyModeForAgent("code-reviewer")).toBe(defaultMode.value);
-	});
-
-	test("composes mode-specific system instructions", () => {
-		expect(getSystemInstructions("build")).toContain(
-			"Purpose: implement requested code changes"
-		);
-		expect(getSystemInstructions("plan")).toContain(
-			"read-only analysis and implementation planning"
-		);
-		expect(getSystemInstructions("plan")).toContain("Do not modify files");
 	});
 
 	test("composes immutable base and Agent-specific instructions", () => {
@@ -535,7 +502,7 @@ describe("@wincode/ai server and client entries", () => {
 		expect(typeof handleCodingAgentToolCall).toBe("function");
 	});
 
-	test("plan mode blocks write tool execution", async () => {
+	test("Agent tool visibility blocks write tool execution", async () => {
 		const emittedOutputs: Parameters<
 			ChatAddToolOutputFunction<CodingAgentUIMessage>
 		>[0][] = [];
@@ -553,11 +520,14 @@ describe("@wincode/ai server and client entries", () => {
 			},
 		} satisfies Parameters<ChatOnToolCallCallback<CodingAgentUIMessage>>[0];
 
-		await handleCodingAgentToolCall(addToolOutput, "plan")(toolCallOptions);
+		await handleCodingAgentToolCall(
+			addToolOutput,
+			planAgent.visibleCodingTools
+		)(toolCallOptions);
 
 		expect(emittedOutputs).toEqual([
 			{
-				errorText: "Plan mode cannot use write.",
+				errorText: "This Agent cannot use write.",
 				state: "output-error",
 				tool: "write",
 				toolCallId: "call_1",

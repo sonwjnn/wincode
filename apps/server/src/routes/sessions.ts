@@ -1,5 +1,4 @@
 import {
-	type AgentBillingKind,
 	type CodingAgentUIMessage,
 	codingAgentDataSchemas,
 	codingMessageMetadataSchema,
@@ -88,7 +87,6 @@ const forbidden = (error = "Forbidden") =>
 
 const withChatMetadata = (
 	message: z.infer<typeof uiMessageInputSchema>,
-	billingKind: AgentBillingKind,
 	model: { modelId: string; providerId: string },
 	variant?: string
 ) => {
@@ -97,25 +95,17 @@ const withChatMetadata = (
 		...message,
 		metadata: {
 			...metadata,
-			mode: getLegacyModeForBillingKind(billingKind),
 			model,
 			...(variant === undefined ? {} : { variant }),
 		},
 	};
 };
 
-const getLegacyModeForBillingKind = (billingKind: AgentBillingKind) =>
-	billingKind === "plan" ? "plan" : "build";
-
 const withChatMetadataForMessages = (
 	messages: z.infer<typeof uiMessageInputSchema>[],
-	billingKind: AgentBillingKind,
 	model: { modelId: string; providerId: string },
 	variant?: string
-) =>
-	messages.map((message) =>
-		withChatMetadata(message, billingKind, model, variant)
-	);
+) => messages.map((message) => withChatMetadata(message, model, variant));
 
 const hasValidContentLength = (value: string | null) => {
 	if (!value) {
@@ -366,7 +356,6 @@ const handleChatRequest = async (
 
 	const stagedMessages = withChatMetadataForMessages(
 		messages,
-		agent.billingKind,
 		modelSelection,
 		variant
 	).map((message) => ({
@@ -421,7 +410,6 @@ const handleChatRequest = async (
 		modelId: resolvedModel.modelId,
 		maxOutputTokens: boundedMaxOutputTokens,
 		maxSteps: fundedMaxSteps,
-		mode: getLegacyModeForBillingKind(agent.billingKind),
 		resolvedAgent: {
 			instructions: agent.instructions,
 			visibleCodingTools: agent.visibleCodingTools,

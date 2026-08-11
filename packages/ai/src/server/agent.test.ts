@@ -42,27 +42,42 @@ describe("prepareCodingAgentCall", () => {
 			inputSchema: { type: "object" },
 		},
 	];
+	const buildAgent = {
+		instructions: "Implement changes with read and write access.",
+		visibleCodingTools: ["read", "write", "edit", "list", "grep"],
+	} as const;
 
-	it("merges MCP tools into Build activeTools and tools", () => {
+	it("merges MCP tools into Agent activeTools and tools", () => {
 		const prepared = prepareCodingAgentCall({
-			options: { mode: "build", mcpTools: manifest },
+			options: { mcpTools: manifest, resolvedAgent: buildAgent },
 			messages: [],
 		});
 
-		expect(prepared.activeTools).toContain("mcp_search_docs");
+		expect(prepared.activeTools).toEqual([
+			"read",
+			"write",
+			"edit",
+			"list",
+			"grep",
+			"mcp_search_docs",
+		]);
 		expect(prepared.tools).toHaveProperty("mcp_search_docs");
 	});
 
-	it("keeps read-only built-ins active and excludes MCP in Plan", () => {
+	it("activates only the resolved Agent's coding tools", () => {
 		const prepared = prepareCodingAgentCall({
-			options: { mode: "plan", mcpTools: manifest },
+			options: {
+				resolvedAgent: {
+					instructions: "Read-only analysis.",
+					visibleCodingTools: ["read", "list", "grep"],
+				},
+			},
 		});
 
 		expect(prepared.activeTools).toEqual(["read", "list", "grep"]);
-		expect(prepared.tools).toHaveProperty("mcp_search_docs");
 	});
 
-	it("does not let MCP names replace built-ins in either mode", () => {
+	it("does not let MCP names replace built-ins", () => {
 		const collisionManifest = [
 			{
 				name: "mcp_read",
@@ -70,15 +85,19 @@ describe("prepareCodingAgentCall", () => {
 				inputSchema: { type: "object" },
 			},
 		];
-		for (const mode of ["build", "plan"] as const) {
-			const prepared = prepareCodingAgentCall({
-				options: { mode, mcpTools: collisionManifest },
-			});
-			expect(prepared.tools.read?.type).not.toBe("dynamic");
-		}
+		const prepared = prepareCodingAgentCall({
+			options: {
+				mcpTools: collisionManifest,
+				resolvedAgent: {
+					instructions: "Implement changes.",
+					visibleCodingTools: ["read", "write"],
+				},
+			},
+		});
+		expect(prepared.tools.read?.type).not.toBe("dynamic");
 	});
 
-	it("uses an explicit resolved Agent runtime without a mode lookup", () => {
+	it("composes Agent instructions over the immutable base", () => {
 		const prepared = prepareCodingAgentCall({
 			options: {
 				resolvedAgent: {
@@ -96,15 +115,6 @@ describe("prepareCodingAgentCall", () => {
 		expect(prepared.instructions).toContain("Review code without editing it.");
 	});
 
-	it("preserves legacy call instructions", () => {
-		const prepared = prepareCodingAgentCall({
-			instructions: "Existing system instructions",
-			options: { mode: "plan" },
-		});
-
-		expect(prepared.instructions).toBe("Existing system instructions");
-	});
-
 	it("replaces constructor instructions with resolved Agent instructions", () => {
 		const prepared = prepareCodingAgentCall({
 			instructions: "Default Build instructions",
@@ -118,5 +128,11 @@ describe("prepareCodingAgentCall", () => {
 
 		expect(prepared.instructions).not.toContain("Default Build instructions");
 		expect(prepared.instructions).toContain("Resolved Agent instructions");
+	});
+
+	it("fails closed without a resolved Agent", () => {
+		expect(() => prepareCodingAgentCall({ options: {}, messages: [] })).toThrow(
+			"Missing resolved Agent for coding agent call"
+		);
 	});
 });

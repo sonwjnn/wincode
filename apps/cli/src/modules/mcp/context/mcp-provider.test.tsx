@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import type { CallToolResult } from "@modelcontextprotocol/client";
 import { testRender } from "@opentui/react/test-utils";
-import type { ModeType } from "@wincode/ai";
+import type { AgentId } from "@wincode/ai";
 import { act } from "react";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -75,7 +75,7 @@ const makeSnapshot = (
 ): McpCatalogSnapshot => ({
 	id: "snap-1",
 	manifest: [],
-	mode: "build",
+	agent: "build",
 	tools: new Map([["mcp_demo_echo", makeTool()]]),
 	...overrides,
 });
@@ -98,8 +98,7 @@ const EMPTY_STATUSES: readonly McpServerStatus[] = [];
 
 const makeRegistry = (execute?: McpRegistry["execute"]): McpRegistry => ({
 	close: async () => undefined,
-	createSnapshot: async (mode: ModeType) =>
-		makeSnapshot({ id: "snap-latest", mode }),
+	createSnapshot: async (agent: AgentId) => makeSnapshot({ agent }),
 	execute: execute ?? (async () => successResult()),
 	getStatuses: () => EMPTY_STATUSES,
 	reconnect: async () => undefined,
@@ -317,10 +316,10 @@ test("provider exposes statuses, createSnapshot, reconnect, and close", async ()
 		close: async () => {
 			calls.push("close");
 		},
-		createSnapshot: async (mode: ModeType) => ({
+		createSnapshot: async (agent: AgentId) => ({
 			id: "snap-1",
 			manifest: [],
-			mode,
+			agent,
 			tools: new Map(),
 		}),
 		execute: async () => successResult(),
@@ -341,9 +340,9 @@ test("provider exposes statuses, createSnapshot, reconnect, and close", async ()
 	expect(captured.value?.statuses).toEqual(statuses);
 
 	await expect(captured.value?.createSnapshot("build")).resolves.toEqual({
+		agent: "build",
 		id: "snap-1",
 		manifest: [],
-		mode: "build",
 		tools: new Map(),
 	});
 
@@ -477,7 +476,7 @@ test("provider shows no summary toast without connected or failed servers", asyn
 	await flushUi(setup);
 	expect(setup.captureCharFrame()).not.toContain("MCP:");
 
-	// A plan-mode snapshot never summarizes either.
+	// A plan snapshot never summarizes either.
 	await captured.value?.createSnapshot("plan");
 	await flushUi(setup);
 	expect(setup.captureCharFrame()).not.toContain("MCP:");

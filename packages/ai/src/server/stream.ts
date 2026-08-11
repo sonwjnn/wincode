@@ -14,7 +14,6 @@ import {
 import type { McpToolManifest } from "../mcp-tools";
 import type { CodingAgentUIMessage } from "../message";
 import type { SupportedChatModelId } from "../models";
-import { defaultMode, type ModeType } from "../modes";
 import { sanitizeInterruptedMessagesForModel } from "../sanitize-interrupted-messages";
 import { formatSkillUserContext, type SkillContext } from "../skill-context";
 import { buildUsageMessageMetadata } from "../usage";
@@ -22,7 +21,6 @@ import { type CodingAgentLifecycleCallbacks, createCodingAgent } from "./agent";
 import { getProviderErrorMessage } from "./error-message";
 
 type CreateCodingAgentStreamResponseOptions = {
-	mode?: ModeType;
 	model: LanguageModel;
 	modelId: SupportedChatModelId;
 	maxOutputTokens?: number;
@@ -40,7 +38,6 @@ type CreateCodingAgentStreamResponseOptions = {
 };
 
 export const createCodingAgentStreamResponse = ({
-	mode = defaultMode.value,
 	model,
 	modelId,
 	maxOutputTokens,
@@ -110,7 +107,7 @@ export const createCodingAgentStreamResponse = ({
 		onFinish: agentUiFinishHandler as never,
 		onError: getProviderErrorMessage,
 		abortSignal,
-		options: { mode, model: modelId, mcpTools, resolvedAgent },
+		options: { model: modelId, mcpTools, resolvedAgent },
 		originalMessages: modelMessages,
 		sendReasoning,
 		uiMessages: modelMessages,

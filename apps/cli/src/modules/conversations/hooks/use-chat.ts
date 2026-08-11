@@ -8,9 +8,7 @@ import {
 	codingToolNames,
 	defaultChatModelSelection,
 	getChatModelRoute,
-	getLegacyModeForAgent,
 	type ModelVariant,
-	type ModeType,
 	type ResolvedAgentRuntime,
 	type SkillContext,
 } from "@wincode/ai";
@@ -78,9 +76,9 @@ export type ChatToolCallHandlerDeps = {
 	handleCodingAgentToolCall?: typeof handleCodingAgentToolCall;
 	mcp: Pick<McpContextValue, "handleDynamicToolCall">;
 	mcpSnapshotRef: MutableRefObject<McpCatalogSnapshot | null>;
-	modeRef: MutableRefObject<ModeType>;
 	openApproval: ToolPermissionRuntime["openApproval"];
 	permissionRef: MutableRefObject<ToolPermission>;
+	resolvedAgentRef: MutableRefObject<ResolvedAgentRuntime | undefined>;
 	resolvePermission?: ToolPermissionRuntime["resolvePermission"];
 	sandbox: WorkspacePolicy;
 	service: PermissionService;
@@ -399,9 +397,9 @@ export const createChatToolCallHandler =
 		handleCodingAgentToolCall: runStaticToolCall = handleCodingAgentToolCall,
 		mcp,
 		mcpSnapshotRef,
-		modeRef,
 		openApproval,
 		permissionRef,
+		resolvedAgentRef,
 		resolvePermission,
 		sandbox,
 		service,
@@ -445,7 +443,10 @@ export const createChatToolCallHandler =
 				) {
 					return;
 				}
-				await runStaticToolCall(addToolOutput, modeRef.current)(options);
+				await runStaticToolCall(
+					addToolOutput,
+					resolvedAgentRef.current?.visibleCodingTools ?? codingToolNames
+				)(options);
 			})()
 		).catch(() => undefined);
 	};
@@ -505,7 +506,6 @@ export const finalizeAssistantMessageMetadata = (
 	message: CodingAgentUIMessage,
 	context: {
 		agent: AgentId;
-		mode: ModeType;
 		model: ChatModelSelection;
 		variant?: ModelVariant;
 		interrupted: boolean;
@@ -519,7 +519,6 @@ export const finalizeAssistantMessageMetadata = (
 			...metadata,
 			agent: message.metadata?.agent ?? context.agent,
 			interrupted: context.interrupted,
-			mode: message.metadata?.mode ?? context.mode,
 			model: message.metadata?.model ?? context.model,
 		};
 
@@ -574,7 +573,6 @@ export function useChat(
 		((messages: CodingAgentUIMessage[]) => void) | undefined
 	>(undefined);
 	const agentRef = useRef<AgentId>("build");
-	const modeRef = useRef<ModeType>(getLegacyModeForAgent("build"));
 	const resolvedAgentRef = useRef<ResolvedAgentRuntime | undefined>(undefined);
 	const modelRef = useRef<ChatModelSelection>(defaultChatModelSelection);
 	const conversationModelRef = useRef<ChatModelSelection>(
@@ -591,11 +589,11 @@ export function useChat(
 		// the exact catalog the request was built from.
 		const mcpWithSnapshotRef: McpContextValue = {
 			...mcp,
-			createSnapshot: async (mode: ModeType) => {
+			createSnapshot: async (agent: AgentId) => {
 				// Resolve the snapshot for the executing Agent's effective MCP policy
 				// so deny composes out unavailable tools and ask/allow are visible.
 				const agentPolicy = await resolveMcpPolicyRef.current();
-				const snapshot = await mcp.createSnapshot(mode, agentPolicy);
+				const snapshot = await mcp.createSnapshot(agent, agentPolicy);
 				mcpSnapshotRef.current = snapshot;
 				return snapshot;
 			},
@@ -603,7 +601,7 @@ export function useChat(
 
 		return createRoutingChatTransport(
 			sessionId,
-			modeRef,
+			agentRef,
 			resolvedAgentRef,
 			modelRef,
 			variantRef,
@@ -635,7 +633,6 @@ export function useChat(
 			...finalizeAssistantMessageMetadata(assistantMessage, {
 				agent: agentRef.current,
 				interrupted: interruptedMessageIdsRef.current.has(assistantMessage.id),
-				mode: modeRef.current,
 				model: modelRef.current,
 				responseTimeMs,
 				variant: variantRef.current,
@@ -650,7 +647,6 @@ export function useChat(
 			.persistMessages({
 				agent: agentRef.current,
 				messages,
-				mode: modeRef.current,
 				model: conversationModelRef.current,
 				sessionId,
 				variant: conversationVariantRef.current,
@@ -676,9 +672,9 @@ export function useChat(
 			approvalQueue: approvalQueueRef.current,
 			mcp,
 			mcpSnapshotRef,
-			modeRef,
 			openApproval,
 			permissionRef,
+			resolvedAgentRef,
 			resolvePermission,
 			sandbox,
 			service,
@@ -714,7 +710,6 @@ export function useChat(
 			...finalizeAssistantMessageMetadata(targetMessage, {
 				agent: agentRef.current,
 				interrupted: true,
-				mode: modeRef.current,
 				model: modelRef.current,
 				responseTimeMs,
 				variant: variantRef.current,
@@ -738,7 +733,6 @@ export function useChat(
 		skill,
 	}: SubmitChatParams) => {
 		agentRef.current = agent;
-		modeRef.current = getLegacyModeForAgent(agent);
 		resolvedAgentRef.current = resolvedAgent;
 		conversationModelRef.current = conversationModel;
 		conversationVariantRef.current = conversationVariant;
@@ -747,7 +741,6 @@ export function useChat(
 		requestStartedAtRef.current = Date.now();
 		const metadata = {
 			agent,
-			mode: modeRef.current,
 			model,
 			variant,
 			...(skill ? { skill: createSkillSnapshot(skill) } : {}),
@@ -781,7 +774,6 @@ export function useChat(
 		conversationVariant: ModelVariant | undefined = variant
 	) => {
 		agentRef.current = agent;
-		modeRef.current = getLegacyModeForAgent(agent);
 		resolvedAgentRef.current = resolvedAgent;
 		conversationModelRef.current = conversationModel;
 		conversationVariantRef.current = conversationVariant;

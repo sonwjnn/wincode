@@ -1,16 +1,11 @@
 import type { ProviderOptions } from "@ai-sdk/provider-utils";
 import type { OnFinishEvent, OnStepFinishEvent, ToolSet } from "ai";
 import { type LanguageModel, stepCountIs, ToolLoopAgent } from "ai";
-import {
-	getSystemInstructions,
-	getSystemInstructionsForAgent,
-} from "../instructions";
-import {
-	type CodingAgentCallOptions,
-	codingAgentCallOptionsSchema,
-	defaultMode,
-	getCodingMode,
-} from "../modes";
+import { z } from "zod";
+import { buildAgent, resolvedAgentRuntimeSchema } from "../agents";
+import { getSystemInstructionsForAgent } from "../instructions";
+import { mcpToolManifestSchema } from "../mcp-tools";
+import { supportedChatModelIdSchema } from "../models";
 import type { SkillContext } from "../skill-context";
 import { convertMcpToolManifest } from "./mcp-tools";
 import { codingServerTools } from "./tools";
@@ -43,6 +38,16 @@ export const getSafePositiveMaxSteps = (
 		? maxSteps
 		: 1;
 
+export const codingAgentCallOptionsSchema = z.object({
+	model: supportedChatModelIdSchema.optional(),
+	mcpTools: mcpToolManifestSchema.optional(),
+	resolvedAgent: resolvedAgentRuntimeSchema.optional(),
+});
+
+export type CodingAgentCallOptions = z.infer<
+	typeof codingAgentCallOptionsSchema
+>;
+
 export const prepareCodingAgentCall = <T extends Record<string, unknown>>({
 	options,
 	...call
@@ -54,29 +59,18 @@ export const prepareCodingAgentCall = <T extends Record<string, unknown>>({
 	tools: ToolSet;
 } => {
 	const resolvedAgent = options?.resolvedAgent;
-	const mcpTools = convertMcpToolManifest(options?.mcpTools ?? []);
-	let activeMcpTools: string[];
-	let instructions: string;
-	let visibleCodingTools: readonly string[];
-
-	if (resolvedAgent) {
-		activeMcpTools = Object.keys(mcpTools);
-		instructions = getSystemInstructionsForAgent(resolvedAgent.instructions);
-		visibleCodingTools = resolvedAgent.visibleCodingTools;
-	} else {
-		const codingMode = getCodingMode(options?.mode ?? defaultMode.value);
-		const existingInstructions =
-			typeof call.instructions === "string" ? call.instructions : undefined;
-		activeMcpTools = codingMode.value === "plan" ? [] : Object.keys(mcpTools);
-		instructions =
-			existingInstructions ?? getSystemInstructions(codingMode.value);
-		visibleCodingTools = codingMode.tools;
+	if (!resolvedAgent) {
+		throw new Error("Missing resolved Agent for coding agent call");
 	}
+	const mcpTools = convertMcpToolManifest(options?.mcpTools ?? []);
 
 	return {
 		...call,
-		activeTools: [...visibleCodingTools, ...activeMcpTools],
-		instructions,
+		activeTools: [
+			...resolvedAgent.visibleCodingTools,
+			...Object.keys(mcpTools),
+		],
+		instructions: getSystemInstructionsForAgent(resolvedAgent.instructions),
 		tools: { ...codingServerTools, ...mcpTools },
 	};
 };
@@ -99,7 +93,7 @@ export const createCodingAgent = ({
 }: CreateCodingAgentOptions) =>
 	new ToolLoopAgent<CodingAgentCallOptions, ToolSet>({
 		callOptionsSchema: codingAgentCallOptionsSchema,
-		instructions: getSystemInstructions(defaultMode.value),
+		instructions: getSystemInstructionsForAgent(buildAgent.instructions),
 		maxOutputTokens,
 		model,
 		prepareCall: prepareCodingAgentCall,

@@ -5,7 +5,6 @@ describe("prepareSendChatRequestBody", () => {
 	const model = { modelId: "gpt-5.4-mini", providerId: "wincode" } as const;
 	const buildFallback = {
 		agent: "build",
-		mode: "build",
 		model,
 		resolvedAgent: {
 			instructions: "Build safely.",
@@ -14,7 +13,6 @@ describe("prepareSendChatRequestBody", () => {
 	} as const;
 	const planFallback = {
 		agent: "plan",
-		mode: "plan",
 		model,
 		resolvedAgent: {
 			instructions: "Plan without editing.",
@@ -31,7 +29,7 @@ describe("prepareSendChatRequestBody", () => {
 					role: "user",
 					parts: [],
 					metadata: {
-						mode: "build",
+						agent: "build",
 						model,
 						skill: {
 							name: "review",
@@ -45,7 +43,7 @@ describe("prepareSendChatRequestBody", () => {
 					id: "2",
 					role: "assistant",
 					parts: [],
-					metadata: { mode: "build", model },
+					metadata: { agent: "build", model },
 				},
 			],
 			buildFallback
@@ -67,7 +65,7 @@ describe("prepareSendChatRequestBody", () => {
 					role: "user",
 					parts: [],
 					metadata: {
-						mode: "build",
+						agent: "build",
 						model,
 						skill: {
 							name: "plan",
@@ -97,7 +95,7 @@ describe("prepareSendChatRequestBody", () => {
 					role: "user",
 					parts: [],
 					metadata: {
-						mode: "build",
+						agent: "build",
 						model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
 						variant: "high",
 					},
@@ -107,7 +105,7 @@ describe("prepareSendChatRequestBody", () => {
 					role: "user",
 					parts: [],
 					metadata: {
-						mode: "build",
+						agent: "build",
 						model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
 						variant: undefined,
 					},
@@ -115,7 +113,6 @@ describe("prepareSendChatRequestBody", () => {
 			],
 			{
 				agent: "build",
-				mode: "build",
 				model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
 				resolvedAgent: buildFallback.resolvedAgent,
 				variant: "high",
@@ -135,7 +132,7 @@ describe("prepareSendChatRequestBody", () => {
 						role: "user",
 						parts: [],
 						metadata: {
-							mode: "build",
+							agent: "build",
 							model: JSON.parse('{"modelId":"gpt-5.4-mini"}'),
 						},
 					},
@@ -155,7 +152,7 @@ describe("prepareSendChatRequestBody", () => {
 						role: "user",
 						parts: [],
 						metadata: {
-							mode: "build",
+							agent: "build",
 							model: JSON.parse(
 								'{"modelId":"gpt-5.4-mini","providerId":"anthropic"}'
 							),
@@ -167,7 +164,7 @@ describe("prepareSendChatRequestBody", () => {
 		).toThrow("No resolved Agent or model to send");
 	});
 
-	test("includes Build MCP manifest", () => {
+	test("includes the Agent MCP manifest", () => {
 		const body = prepareSendChatRequestBody(
 			"session-1",
 			[
@@ -175,7 +172,7 @@ describe("prepareSendChatRequestBody", () => {
 					id: "1",
 					role: "user",
 					parts: [],
-					metadata: { mode: "build", model },
+					metadata: { agent: "build", model },
 				},
 			],
 			buildFallback,
@@ -197,7 +194,7 @@ describe("prepareSendChatRequestBody", () => {
 		]);
 	});
 
-	test("omits MCP manifest in Plan mode", () => {
+	test("omits an empty MCP manifest", () => {
 		const body = prepareSendChatRequestBody(
 			"session-1",
 			[
@@ -205,28 +202,10 @@ describe("prepareSendChatRequestBody", () => {
 					id: "1",
 					role: "user",
 					parts: [],
-					metadata: { mode: "plan", model },
+					metadata: { agent: "plan", model },
 				},
 			],
 			planFallback,
-			[]
-		);
-
-		expect(body.agent.mcpTools).toEqual([]);
-	});
-
-	test("omits an empty MCP manifest in Build mode", () => {
-		const body = prepareSendChatRequestBody(
-			"session-1",
-			[
-				{
-					id: "1",
-					role: "user",
-					parts: [],
-					metadata: { mode: "build", model },
-				},
-			],
-			buildFallback,
 			[]
 		);
 
@@ -241,7 +220,7 @@ describe("prepareSendChatRequestBody", () => {
 					id: "1",
 					role: "user",
 					parts: [],
-					metadata: { agent: "private-reviewer", mode: "build", model },
+					metadata: { agent: "private-reviewer", model },
 				},
 			],
 			{

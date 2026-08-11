@@ -8,6 +8,7 @@ import {
 } from "@wincode/ai";
 import { connectionProviderDisplayNames } from "@/modules/connections";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { getAgentColor } from "@/shared/providers/theme/themes";
 
 type MessagePart = CodingAgentUIMessage["parts"][number];
 type ToolPart = MessagePart & {
@@ -123,8 +124,8 @@ export const formatResponseTime = (responseTimeMs: number) => {
 	return `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`;
 };
 
-const formatMode = (mode: string) =>
-	`${mode.charAt(0).toUpperCase()}${mode.slice(1)}`;
+const formatAgent = (agent: string) =>
+	`${agent.charAt(0).toUpperCase()}${agent.slice(1)}`;
 
 const formatModel = (model: string | ChatModelSelection) => {
 	const selection = normalizeChatModelSelection(model);
@@ -168,10 +169,10 @@ const resolveFooterItems = (
 
 	const items: FooterItem[] = [];
 
-	if (metadata.mode) {
+	if (metadata.agent) {
 		items.push({
-			color: colors.mode[metadata.mode],
-			label: formatMode(metadata.mode),
+			color: getAgentColor(colors, metadata.agent),
+			label: formatAgent(metadata.agent),
 		});
 	}
 

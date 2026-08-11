@@ -1,4 +1,4 @@
-import type { ModeType } from "@wincode/ai";
+import type { AgentId } from "@wincode/ai";
 import {
 	createContext,
 	type ReactNode,
@@ -206,7 +206,7 @@ export function runDynamicToolCall(
 export type McpContextValue = {
 	close(): Promise<void>;
 	createSnapshot(
-		mode: ModeType,
+		agent: AgentId,
 		agentPolicy?: McpAgentPolicy
 	): Promise<McpCatalogSnapshot>;
 	handleDynamicToolCall(
@@ -281,12 +281,12 @@ export function McpProvider({
 
 	const createSnapshot = useCallback(
 		async (
-			mode: ModeType,
+			agent: AgentId,
 			agentPolicy?: McpAgentPolicy
 		): Promise<McpCatalogSnapshot> => {
-			const snapshot = await registry.createSnapshot(mode, agentPolicy);
+			const snapshot = await registry.createSnapshot(agent, agentPolicy);
 			latestSnapshotRef.current = snapshot;
-			if (mode === "build" && !summaryToastShownRef.current) {
+			if (agent === "build" && !summaryToastShownRef.current) {
 				const summary = buildMcpSummary(registry.getStatuses());
 				if (summary !== null) {
 					summaryToastShownRef.current = true;

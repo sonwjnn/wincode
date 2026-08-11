@@ -7,6 +7,16 @@
 | Relevant commits | `03b9bb5` feat(cli): load commands and skills from Wincode config; `e3afe8e` feat(cli)!: add shared Wincode config store; `8ccd853` feat(commands): add custom commands from `.wincode/commands` folders; `f77efd3` test(cli): exercise config store with real files |
 | Scope | Research only — no implementation code was changed |
 
+> **Status: superseded.** The migration this note researched has been completed.
+> The closed `ModeType` / `codingModes` Coding Mode contract was removed from
+> `packages/ai`, the CLI, and the hosted API; the canonical selection is the
+> `AgentId` / resolved `Agent` runtime. The only retained Coding Mode surface is
+> the narrow legacy metadata reader (`packages/ai/src/legacy-metadata.ts`,
+> `codingMessageMetadataSchema`), which normalizes historical `mode: build|plan`
+> message metadata into `agent` at the persistence boundary, and the historical
+> database migrations in `apps/cli/drizzle/local/`. Line references below
+> describe the pre-migration state and are intentionally historical.
+
 ---
 
 ## Executive summary

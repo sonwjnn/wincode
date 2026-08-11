@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useModelPricing } from "@/modules/model-pricing";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { getAgentColor } from "@/shared/providers/theme/themes";
 import { Spinner } from "@/shared/ui/spinner";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import { summarizeSessionUsage } from "../../usage/session-usage";
@@ -36,8 +37,9 @@ export function ChatShell({
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
 	const [scrollRequest, setScrollRequest] = useState(0);
-	const { mode, model } = usePromptConfig();
+	const { agent, model } = usePromptConfig();
 	const { colors } = useTheme();
+	const agentColor = getAgentColor(colors, agent);
 	const { table } = useModelPricing();
 	const turns = groupMessagesByConversationTurn(messages);
 	const footerMessages = resolveConversationTurnFooterMessages(turns);
@@ -124,9 +126,9 @@ export function ChatShell({
 				>
 					{isBusy ? (
 						<>
-							<Spinner mode={mode} />
+							<Spinner agent={agent} />
 							<text>
-								<span fg={colors.mode[mode]}>Esc</span>
+								<span fg={agentColor}>Esc</span>
 								<span fg={colors.textMuted}>
 									{isInterruptArmed ? " again to interrupt" : " interrupt"}
 								</span>

@@ -16,7 +16,7 @@ into the AI SDK `useChat` hook.
 
 ### Send a message
 `ChatView` accepts user text → `useChat.submit()` → `prepareSendChatRequestBody` serialises
-the latest message + mode/model metadata + resolved file mentions → Hono transport → AI SDK
+the latest message + agent/model metadata + resolved file mentions → Hono transport → AI SDK
 streams assistant response.
 
 ### Interrupt
@@ -77,7 +77,7 @@ for streaming, not for local session CRUD.
 | `modules/commands` | slash‑command specs, filtering, execution |
 | `modules/file-mentions` | `@path` detection, options, resolution, overlay |
 | `modules/connections` | provider auth + credential resolution for chat transport |
-| `modules/prompt-settings` | `usePromptConfig` — current mode/model |
+| `modules/prompt-settings` | `usePromptConfig` — current Agent/model |
 | `shared/api` | Hono RPC client transport (chat stream only) |
 | `shared/terminal/theme` | terminal colour tokens |
 | `shared/terminal/keyboard-layer` | keyboard event stack |

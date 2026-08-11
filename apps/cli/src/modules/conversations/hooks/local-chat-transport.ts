@@ -5,7 +5,6 @@ import {
 	expandFileMentionPartsForModel,
 	getChatModelRoute,
 	type ModelVariant,
-	type ModeType,
 	type ResolvedAgentRuntime,
 	sanitizeInterruptedMessagesForModel,
 } from "@wincode/ai";
@@ -26,7 +25,6 @@ type CreateAgentUIStream = typeof createAgentUIStream;
 
 export const createLocalChatTransport = (
 	_sessionId: string,
-	modeRef: MutableRefObject<ModeType>,
 	resolvedAgentRef: MutableRefObject<ResolvedAgentRuntime | undefined>,
 	modelRef: MutableRefObject<ChatModelSelection>,
 	variantRef: MutableRefObject<ModelVariant | undefined>,
@@ -64,7 +62,6 @@ export const createLocalChatTransport = (
 			messageMetadata: buildUsageMessageMetadata,
 			originalMessages: modelMessages,
 			options: {
-				mode: modeRef.current,
 				model: resolvedModel.modelId,
 				...(resolvedAgentRef.current
 					? { resolvedAgent: resolvedAgentRef.current }

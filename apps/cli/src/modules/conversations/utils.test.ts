@@ -51,7 +51,7 @@ describe("getLatestChatConfig", () => {
 			{
 				id: "user-1",
 				metadata: {
-					mode: "plan",
+					agent: "plan",
 					model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
 				},
 				parts: [{ text: "first", type: "text" }],
@@ -60,7 +60,7 @@ describe("getLatestChatConfig", () => {
 			{
 				id: "assistant-1",
 				metadata: {
-					mode: "build",
+					agent: "build",
 					model: { modelId: "gpt-5.5", providerId: "openai" },
 					variant: "high",
 				},
@@ -71,7 +71,6 @@ describe("getLatestChatConfig", () => {
 
 		expect(getLatestChatConfig(messages)).toEqual({
 			agent: "build",
-			mode: "build",
 			model: { modelId: "gpt-5.5", providerId: "openai" },
 			variant: "high",
 		});
@@ -81,7 +80,7 @@ describe("getLatestChatConfig", () => {
 		const messages = [
 			{
 				id: "assistant-1",
-				metadata: { mode: "plan", model: "bad-model" },
+				metadata: { agent: "plan", model: "bad-model" },
 				parts: [{ text: "old", type: "text" }],
 				role: "assistant",
 			},
@@ -89,7 +88,6 @@ describe("getLatestChatConfig", () => {
 				id: "assistant-2",
 				metadata: {
 					agent: "code-reviewer",
-					mode: "build",
 					model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
 					variant: "low",
 				},
@@ -100,7 +98,6 @@ describe("getLatestChatConfig", () => {
 
 		expect(getLatestChatConfig(messages)).toEqual({
 			agent: "code-reviewer",
-			mode: "build",
 			model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
 			variant: "low",
 		});

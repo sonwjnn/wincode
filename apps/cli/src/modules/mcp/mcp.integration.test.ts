@@ -152,7 +152,7 @@ describe("MCP transport integration", () => {
 		);
 		try {
 			const snapshot = await registry.createSnapshot("build");
-			expect(snapshot.mode).toBe("build");
+			expect(snapshot.agent).toBe("build");
 			expect(snapshot.manifest).toHaveLength(1);
 			expect(snapshot.manifest[0]?.inputSchema).toMatchObject({
 				type: "object",

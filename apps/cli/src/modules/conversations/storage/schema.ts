@@ -3,7 +3,6 @@ import type {
 	ChatModelSelection,
 	CodingAgentUIMessage,
 	ModelVariant,
-	ModeType,
 } from "@wincode/ai";
 import { sql } from "drizzle-orm";
 import {
@@ -59,8 +58,7 @@ export const conversationMessage = sqliteTable(
 			}),
 		uiMessageId: text("ui_message_id").notNull(),
 		role: text("role").$type<CodingAgentUIMessage["role"]>().notNull(),
-		mode: text("mode").$type<ModeType>().notNull(),
-		agent: text("agent").$type<AgentId>(),
+		agent: text("agent").$type<AgentId>().notNull(),
 		partsJson: text("parts_json", { mode: "json" })
 			.$type<CodingAgentUIMessage["parts"]>()
 			.notNull(),

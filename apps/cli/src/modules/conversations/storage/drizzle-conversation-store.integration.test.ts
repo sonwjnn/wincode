@@ -22,7 +22,7 @@ import {
 const userMessage = (id: string, text: string): CodingAgentUIMessage => ({
 	id,
 	metadata: {
-		mode: "plan",
+		agent: "plan",
 		model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 	},
 	parts: [{ text, type: "text" }],
@@ -141,7 +141,6 @@ describe("drizzle conversation store", () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "Fix the login bug"),
 			agent: "plan",
-			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 
@@ -155,7 +154,6 @@ describe("drizzle conversation store", () => {
 		await store.createSession({
 			message: userMessage("m1", "First"),
 			agent: "plan",
-			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 
@@ -175,13 +173,11 @@ describe("drizzle conversation store", () => {
 		await alphaStore.createSession({
 			message: userMessage("m1", "Alpha"),
 			agent: "plan",
-			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 		await betaStore.createSession({
 			message: userMessage("m2", "Beta"),
 			agent: "plan",
-			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 
@@ -198,14 +194,12 @@ describe("drizzle conversation store", () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "hello"),
 			agent: "plan",
-			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 
 		await store.persistMessages({
 			messages: [userMessage("m1", "hello"), userMessage("m2", "world")],
 			agent: "plan",
-			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 			sessionId: id,
 		});
@@ -218,7 +212,6 @@ describe("drizzle conversation store", () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "image"),
 			agent: "plan",
-			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 		const imageMessage: CodingAgentUIMessage = {
@@ -236,7 +229,6 @@ describe("drizzle conversation store", () => {
 		await store.persistMessages({
 			messages: [userMessage("m1", "image"), imageMessage],
 			agent: "plan",
-			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 			sessionId: id,
 		});
@@ -248,7 +240,6 @@ describe("drizzle conversation store", () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "hello"),
 			agent: "plan",
-			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 
@@ -260,7 +251,6 @@ describe("drizzle conversation store", () => {
 					metadata: {
 						interrupted: true,
 						agent: "plan",
-						mode: "plan",
 						model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 						responseTimeMs: 431,
 					},
@@ -269,7 +259,6 @@ describe("drizzle conversation store", () => {
 				},
 			],
 			agent: "plan",
-			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 			sessionId: id,
 		});
@@ -285,7 +274,6 @@ describe("drizzle conversation store", () => {
 			id: "m-effective",
 			metadata: {
 				agent: "code-reviewer",
-				mode: "build",
 				model: { modelId: "gpt-5.5", providerId: "openai" },
 				variant: "high",
 			},
@@ -295,7 +283,6 @@ describe("drizzle conversation store", () => {
 		const { id } = await store.createSession({
 			agent: "code-reviewer",
 			message: effectiveMessage,
-			mode: "build",
 			model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
 			variant: "low",
 		});
@@ -323,7 +310,6 @@ describe("drizzle conversation store", () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "hello"),
 			agent: "plan",
-			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 
@@ -347,14 +333,12 @@ describe("drizzle conversation store", () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "hello"),
 			agent: "plan",
-			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 
 		await store.persistMessages({
 			messages: [userMessage("m1", "hello edited")],
 			agent: "plan",
-			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 			sessionId: id,
 		});
@@ -367,7 +351,6 @@ describe("drizzle conversation store", () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "hello"),
 			agent: "plan",
-			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 
@@ -382,7 +365,6 @@ describe("drizzle conversation store", () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "hello"),
 			agent: "plan",
-			mode: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 
@@ -508,12 +490,12 @@ describe("local migrations", () => {
 
 		const backfilled = sqlite
 			.query(
-				"SELECT ui_message_id, mode, agent FROM conversation_message ORDER BY position"
+				"SELECT ui_message_id, agent FROM conversation_message ORDER BY position"
 			)
-			.all() as { agent: string | null; mode: string; ui_message_id: string }[];
+			.all() as { agent: string | null; ui_message_id: string }[];
 		expect(backfilled).toEqual([
-			{ agent: "plan", mode: "plan", ui_message_id: "m1" },
-			{ agent: "build", mode: "build", ui_message_id: "m2" },
+			{ agent: "plan", ui_message_id: "m1" },
+			{ agent: "build", ui_message_id: "m2" },
 		]);
 
 		const session = sqlite
@@ -536,13 +518,17 @@ describe("local migrations", () => {
 			"utf8"
 		);
 		sqlite.exec(fallbackMigration.replaceAll("--> statement-breakpoint", "\n"));
+		const modeColumnDrop = await readFile(
+			join(localMigrationsFolder, "0006_remove_conversation_mode.sql"),
+			"utf8"
+		);
+		sqlite.exec(modeColumnDrop.replaceAll("--> statement-breakpoint", "\n"));
 
 		const restoredMessages = await legacyStore.getMessages("session-legacy");
 		expect(
 			restoredMessages.map((message) => ({
 				agent: message.metadata?.agent,
 				id: message.id,
-				mode: message.metadata?.mode,
 				parts: message.parts,
 				role: message.role,
 			}))
@@ -550,14 +536,12 @@ describe("local migrations", () => {
 			{
 				agent: "plan",
 				id: "m1",
-				mode: "plan",
 				parts: [{ text: "Plan the work", type: "text" }],
 				role: "user",
 			},
 			{
 				agent: "build",
 				id: "m2",
-				mode: "build",
 				parts: [{ text: "Build it", type: "text" }],
 				role: "user",
 			},
@@ -574,7 +558,6 @@ describe("local migrations", () => {
 					role: "user",
 				},
 			],
-			mode: "build",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 			sessionId: "session-legacy",
 		});
@@ -596,13 +579,12 @@ describe("local migrations", () => {
 			roundTripped.map((message) => ({
 				agent: message.metadata?.agent,
 				id: message.id,
-				mode: message.metadata?.mode,
 			}))
 		).toEqual([
-			{ agent: "plan", id: "m1", mode: "plan" },
-			{ agent: "build", id: "m2", mode: "build" },
-			{ agent: "plan", id: "m3", mode: "plan" },
-			{ agent: "build", id: "m3b", mode: "build" },
+			{ agent: "plan", id: "m1" },
+			{ agent: "build", id: "m2" },
+			{ agent: "plan", id: "m3" },
+			{ agent: "build", id: "m3b" },
 		]);
 
 		sqlite.close();

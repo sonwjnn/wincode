@@ -1,7 +1,7 @@
 import { TextAttributes } from "@opentui/core";
 import {
+	builtInAgents,
 	type CodingAgentUIMessage,
-	codingModes,
 	findSupportedChatModelSelection,
 	formatModelLabel,
 	formatTokenCount,
@@ -98,15 +98,15 @@ export function SessionSidebar({
 
 					<box flexDirection="column">
 						<SectionLabel color={colors.text} text="Agents" />
-						{codingModes.map((codingMode) => (
+						{builtInAgents.map((agent) => (
 							<box
 								flexDirection="row"
 								justifyContent="space-between"
-								key={codingMode.value}
+								key={agent.id}
 								width="100%"
 							>
 								<text fg={colors.textMuted}>
-									{codingMode.displayName.toLowerCase()}
+									{agent.displayName.toLowerCase()}
 								</text>
 								<text fg={colors.textMuted}>{modelLabel.toLowerCase()}</text>
 							</box>

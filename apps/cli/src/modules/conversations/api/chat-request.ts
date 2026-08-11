@@ -6,7 +6,6 @@ import type {
 	HostedAgentDescriptor,
 	McpToolManifest,
 	ModelVariant,
-	ModeType,
 	ResolvedAgentRuntime,
 	SkillContext,
 } from "@wincode/ai";
@@ -29,7 +28,6 @@ type SendChatRequestBody = {
 
 type ChatMetadataFallback = {
 	agent: AgentId;
-	mode: ModeType;
 	model: ChatModelSelection;
 	resolvedAgent: ResolvedAgentRuntime;
 	variant?: ModelVariant;
@@ -101,7 +99,6 @@ export const prepareSendChatRequestBody = (
 
 	const metadata = findLastChatMetadata(messages);
 	const agent = message.metadata?.agent ?? metadata?.agent ?? fallback?.agent;
-	const mode = message.metadata?.mode ?? metadata?.mode ?? fallback?.mode;
 	const model =
 		normalizeSelection(message.metadata?.model) ??
 		normalizeSelection(metadata?.model) ??
@@ -109,7 +106,7 @@ export const prepareSendChatRequestBody = (
 	const variant = metadata?.variant ?? fallback?.variant;
 	const skill = findOriginatingUserSkill(messages);
 
-	if (!(agent && mode && model && fallback?.resolvedAgent)) {
+	if (!(agent && model && fallback?.resolvedAgent)) {
 		throw new Error("No resolved Agent or model to send");
 	}
 

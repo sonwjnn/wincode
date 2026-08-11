@@ -30,7 +30,6 @@ mock.module("@wincode/ai", () => ({
 		instructions: z.string(),
 		arguments: z.string(),
 	}),
-	codingModeNameSchema: z.enum(["build", "plan"]),
 	codingAgentDataSchemas: {},
 	mcpToolManifestSchema: z
 		.array(
@@ -464,7 +463,6 @@ describe("POST /:id/chat (transport-only)", () => {
 						id: "u1",
 						metadata: {
 							agent: "private-reviewer",
-							mode: "build",
 							model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
 						},
 						parts: [{ text: "hi", type: "text" }],
@@ -730,7 +728,7 @@ describe("POST /:id/chat (transport-only)", () => {
 					{
 						id: "user-1",
 						metadata: {
-							mode: "plan",
+							agent: "plan",
 							model: { modelId: "x".repeat(5000), providerId: "wincode" },
 						},
 						parts: [{ text: "hi", type: "text" }],
@@ -793,7 +791,7 @@ describe("POST /:id/chat (transport-only)", () => {
 		expect(response.status).toBe(400);
 	});
 
-	test("replaces untrusted request metadata with effective hosted metadata", async () => {
+	test("rejects legacy mode metadata in hosted requests", async () => {
 		const response = await sessionsRoutes.request("/session-1/chat", {
 			body: JSON.stringify({
 				messages: [
@@ -811,7 +809,7 @@ describe("POST /:id/chat (transport-only)", () => {
 			method: "POST",
 		});
 
-		expect(response.status).toBe(200);
+		expect(response.status).toBe(400);
 	});
 
 	test("rejects unauthenticated requests before body validation", async () => {

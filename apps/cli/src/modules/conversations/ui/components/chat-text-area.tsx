@@ -41,6 +41,7 @@ import { EmptyBorder } from "@/shared/constants";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { getAgentColor } from "@/shared/providers/theme/themes";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { readClipboardImage, readImagePath } from "../../clipboard-image";
 import {
@@ -197,7 +198,7 @@ export function ChatTextArea({
 	onSubmit,
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
 }: ChatTextAreaProps) {
-	const { cycleAgent, mode, model } = usePromptConfig();
+	const { agent, cycleAgent, model } = usePromptConfig();
 	const supportedModel = findSupportedChatModelSelection(model);
 	const registry = useAgentRegistry();
 	const hideVariants =
@@ -1069,7 +1070,7 @@ export function ChatTextArea({
 
 			<box
 				border={["left"]}
-				borderColor={colors.mode[mode]}
+				borderColor={getAgentColor(colors, agent)}
 				customBorderChars={{
 					...EmptyBorder,
 					vertical: "┃",

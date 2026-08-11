@@ -1,10 +1,10 @@
 import {
+	type AgentId,
 	isJsonValue,
 	type JsonObject,
 	MAX_MCP_TOOL_COUNT,
 	type McpToolManifest,
 	type McpToolManifestEntry,
-	type ModeType,
 } from "@wincode/ai";
 import {
 	composePermissionDecisions,
@@ -112,16 +112,16 @@ export type McpSnapshotTool = {
 };
 
 export type McpCatalogSnapshot = {
+	agent: AgentId;
 	id: string;
 	manifest: McpToolManifest;
-	mode: ModeType;
 	tools: ReadonlyMap<string, McpSnapshotTool>;
 };
 
 export type McpRegistry = {
 	close(): Promise<void>;
 	createSnapshot(
-		mode: ModeType,
+		agent: AgentId,
 		agentPolicy?: McpAgentPolicy
 	): Promise<McpCatalogSnapshot>;
 	execute(
@@ -299,7 +299,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	};
 
 	const buildSnapshot = async (
-		mode: ModeType,
+		agent: AgentId,
 		agentPolicy: McpAgentPolicy
 	): Promise<McpCatalogSnapshot> => {
 		type Candidate = {
@@ -367,29 +367,29 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			}
 		}
 		return {
+			agent,
 			id: crypto.randomUUID(),
 			manifest,
-			mode,
 			tools,
 		};
 	};
 
 	const createSnapshot = async (
-		mode: ModeType,
+		agent: AgentId,
 		agentPolicy: McpAgentPolicy = DEFAULT_EFFECTIVE_AGENT_POLICY
 	): Promise<McpCatalogSnapshot> => {
 		if (closed) {
 			const snapshot: McpCatalogSnapshot = {
+				agent,
 				id: crypto.randomUUID(),
 				manifest: [],
-				mode,
 				tools: new Map(),
 			};
 			latestSnapshotId = snapshot.id;
 			return snapshot;
 		}
 		await init();
-		const snapshot = await buildSnapshot(mode, agentPolicy);
+		const snapshot = await buildSnapshot(agent, agentPolicy);
 		latestSnapshotId = snapshot.id;
 		return snapshot;
 	};

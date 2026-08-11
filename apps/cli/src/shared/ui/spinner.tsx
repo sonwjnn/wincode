@@ -1,15 +1,15 @@
 import "opentui-spinner/react";
 
-import { defaultMode, type ModeType } from "@wincode/ai";
+import type { AgentId } from "@wincode/ai";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { getAgentColor } from "@/shared/providers/theme/themes";
 
 type Props = {
-	mode?: ModeType;
+	agent: AgentId;
 };
 
-export function Spinner({ mode = defaultMode.value }: Props) {
+export function Spinner({ agent }: Props) {
 	const { colors } = useTheme();
-	const activeColor = colors.mode[mode];
 
-	return <spinner color={activeColor} name="material" />;
+	return <spinner color={getAgentColor(colors, agent)} name="material" />;
 }

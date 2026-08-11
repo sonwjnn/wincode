@@ -7,12 +7,6 @@ import {
 import type { FileMentionUIPart } from "./file-mentions";
 import type { CodingAgentTools, CodingAgentUIMessage } from "./message";
 import type { CodingMessageMetadata } from "./metadata";
-import {
-	defaultMode,
-	getCodingMode,
-	isCodingToolAllowedForMode,
-	type ModeType,
-} from "./modes";
 import { codingToolRunners } from "./tools/runners";
 import type { CodingToolName } from "./tools/schemas";
 
@@ -79,18 +73,16 @@ export const createUserMessage = (
 export const handleCodingAgentToolCall =
 	(
 		addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>,
-		modeValue: ModeType = defaultMode.value
+		agentTools: readonly CodingToolName[]
 	): ChatOnToolCallCallback<CodingAgentUIMessage> =>
 	async ({ toolCall }) => {
 		if (toolCall.dynamic) {
 			return;
 		}
 
-		if (!isCodingToolAllowedForMode(modeValue, toolCall.toolName)) {
-			const mode = getCodingMode(modeValue);
-
+		if (!agentTools.includes(toolCall.toolName)) {
 			await addToolOutput({
-				errorText: `${mode.displayName} mode cannot use ${toolCall.toolName}.`,
+				errorText: `This Agent cannot use ${toolCall.toolName}.`,
 				state: "output-error",
 				tool: toolCall.toolName,
 				toolCallId: toolCall.toolCallId,

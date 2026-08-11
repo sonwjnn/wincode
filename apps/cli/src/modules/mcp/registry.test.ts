@@ -221,7 +221,7 @@ describe("createMcpRegistry", () => {
 		}
 	});
 
-	test("plan mode connects and builds a catalog under the default policy", async () => {
+	test("plan snapshot connects and builds a catalog under the default policy", async () => {
 		// Plan no longer short-circuits: visibility is purely policy-driven, so a
 		// plan snapshot with the permissive default policy connects and exposes
 		// tools exactly like build. The empty-Plan baseline comes from the shipped
@@ -232,7 +232,7 @@ describe("createMcpRegistry", () => {
 			configs: [serverConfig("demo", { permission: "allow" })],
 		});
 		const snapshot = await registry.createSnapshot("plan");
-		expect(snapshot.mode).toBe("plan");
+		expect(snapshot.agent).toBe("plan");
 		expect(snapshot.manifest).toHaveLength(1);
 		expect(snapshot.tools.size).toBe(1);
 		expect(demo.connectCount).toBe(1);

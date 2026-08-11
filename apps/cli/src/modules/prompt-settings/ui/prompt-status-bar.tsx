@@ -8,11 +8,13 @@ import { agentLabelFromId, useAgentRegistry } from "@/modules/agents";
 import { connectionProviderDisplayNames } from "@/modules/connections";
 import { AutoApprovalIndicator } from "@/modules/permissions";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { getAgentColor } from "@/shared/providers/theme/themes";
 import { usePromptConfig } from "../context/prompt-config-provider";
 
 export function StatusBar() {
-	const { agent, mode, model, variant } = usePromptConfig();
+	const { agent, model, variant } = usePromptConfig();
 	const { colors } = useTheme();
+	const agentColor = getAgentColor(colors, agent);
 	const registry = useAgentRegistry();
 	const agentLabel =
 		registry?.agents.find(({ id }) => id === agent)?.displayName ??
@@ -25,7 +27,7 @@ export function StatusBar() {
 	const variantName = normalizeModelVariant(model, variant) ?? undefined;
 	return (
 		<box flexDirection="row" gap={1}>
-			<text fg={colors.mode[mode]}>{agentLabel}</text>
+			<text fg={agentColor}>{agentLabel}</text>
 			<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 				∙
 			</text>
@@ -38,7 +40,7 @@ export function StatusBar() {
 					∙
 				</text>
 			) : null}
-			{variantName ? <text fg={colors.mode[mode]}>{variantName}</text> : null}
+			{variantName ? <text fg={agentColor}>{variantName}</text> : null}
 			<AutoApprovalIndicator />
 		</box>
 	);

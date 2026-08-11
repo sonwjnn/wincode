@@ -70,7 +70,7 @@ describe("resolveTheme", () => {
 		const colors = resolveTheme(definition).colors;
 		expect(colors.backgroundElement).toBe(colors.backgroundPanel);
 		expect(colors.borderActive).toBe(colors.primary);
-		expect(colors.mode).toEqual({
+		expect(colors.agent).toEqual({
 			build: colors.primary,
 			plan: colors.planMode,
 		});
@@ -182,8 +182,8 @@ test("maps OpenCode semantic colors consistently", () => {
 		}
 
 		expect(theme.colors.selection).toBe(theme.colors.primary);
-		expect(theme.colors.planMode).toBe(theme.colors.mode.plan);
-		expect(theme.colors.thinking).toBe(theme.colors.mode.plan);
+		expect(theme.colors.planMode).toBe(theme.colors.agent.plan ?? "");
+		expect(theme.colors.thinking).toBe(theme.colors.agent.plan ?? "");
 		expect(theme.colors.backgroundMenu).toBe(theme.colors.backgroundElement);
 	}
 });

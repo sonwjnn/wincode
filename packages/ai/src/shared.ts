@@ -14,9 +14,10 @@ export {
 } from "./file-mentions";
 export {
 	baseCodingAgentInstructions,
-	getSystemInstructions,
 	getSystemInstructionsForAgent,
 } from "./instructions";
+export type { LegacyMode } from "./legacy-metadata";
+export { legacyModeSchema } from "./legacy-metadata";
 export type {
 	JsonObject,
 	JsonValue,
@@ -50,7 +51,6 @@ export {
 	codingMessageUsageSchema,
 } from "./metadata";
 export * from "./models";
-export * from "./modes";
 export { sanitizeInterruptedMessagesForModel } from "./sanitize-interrupted-messages";
 export type { SkillContext } from "./skill-context";
 export { formatSkillUserContext, skillContextSchema } from "./skill-context";

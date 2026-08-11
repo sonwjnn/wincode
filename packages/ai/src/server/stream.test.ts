@@ -65,12 +65,10 @@ describe("createCodingAgentStreamResponse", () => {
 		});
 
 		expect(createAgentUIStreamResponseMock.mock.calls[0]?.[0].options).toEqual({
-			mode: "build",
 			model: "gpt-5.4-mini",
 			mcpTools: [],
 		});
 		expect(createAgentUIStreamResponseMock.mock.calls[1]?.[0].options).toEqual({
-			mode: "build",
 			model: "gpt-5.4-mini",
 			mcpTools: [{ name: "search", description: "", inputSchema: {} }],
 		});
@@ -84,7 +82,6 @@ describe("createCodingAgentStreamResponse", () => {
 		const response = (await createCodingAgentStreamResponse({
 			model: {} as never,
 			modelId: "gpt-5.4-mini",
-			mode: "plan",
 			onEnd,
 			onStepEnd,
 			uiMessages: [{ id: "1", parts: [], role: "user" } as never],
@@ -120,7 +117,6 @@ describe("createCodingAgentStreamResponse", () => {
 			abortSignal: controller.signal,
 			model: {} as never,
 			modelId: "gpt-5.4-mini",
-			mode: "plan",
 			onEnd,
 			onStepEnd,
 			uiMessages: [{ id: "1", parts: [], role: "user" } as never],

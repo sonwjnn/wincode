@@ -4,10 +4,10 @@ import {
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
 	codingMessageMetadataSchema,
-	type ModeType,
 } from "@wincode/ai";
 import { generateId, safeValidateUIMessages } from "ai";
 import { and, asc, desc, eq } from "drizzle-orm";
+import { z } from "zod";
 import { createLocalDatabase, type LocalConversationDatabase } from "./client";
 import {
 	type ConversationSession,
@@ -95,6 +95,8 @@ type DrizzleConversationStoreOptions = {
 	workspaceRoot?: string;
 };
 
+const legacyModeSchema = z.enum(["build", "plan"]);
+
 const hashWorkspace = (rootPath: string): string =>
 	createHash("sha256").update(rootPath).digest("hex").slice(0, 16);
 
@@ -144,15 +146,10 @@ const toConversationSession = (row: SessionRow): ConversationSession => ({
 	...(row.variant ? { variant: row.variant } : {}),
 });
 
-const resolveMode = (
-	message: CodingAgentUIMessage,
-	fallback: ModeType
-): ModeType => message.metadata?.mode ?? fallback;
-
 const resolveAgent = (
 	message: CodingAgentUIMessage,
 	fallback: AgentId
-): AgentId => message.metadata?.agent ?? message.metadata?.mode ?? fallback;
+): AgentId => message.metadata?.agent ?? fallback;
 
 const normalizeMessageMetadata = (
 	metadata: CodingAgentUIMessage["metadata"],
@@ -165,22 +162,34 @@ const normalizeMessageMetadata = (
 	return metadata;
 };
 
+const parsePersistedMetadata = (value: unknown) => {
+	if (value && typeof value === "object") {
+		const record = value as Record<string, unknown>;
+		if (
+			record.agent === undefined &&
+			legacyModeSchema.safeParse(record.mode).success
+		) {
+			const { mode, ...metadata } = record;
+			return codingMessageMetadataSchema.parse({ ...metadata, agent: mode });
+		}
+	}
+	return codingMessageMetadataSchema.parse(value);
+};
+
 const resolveMetadata = (
 	message: CodingAgentUIMessage,
-	mode: ModeType,
 	model: ChatModelSelection,
 	agent: AgentId
 ): CodingAgentUIMessage["metadata"] => ({
 	...(message.metadata ?? {}),
-	agent: message.metadata?.agent ?? message.metadata?.mode ?? agent,
-	mode: message.metadata?.mode ?? mode,
+	agent: message.metadata?.agent ?? agent,
 	model: message.metadata?.model ?? model,
 });
 
 const writeMessages = (
 	db: LocalConversationDatabase,
 	workspaceId: string,
-	{ agent, messages, mode, model, sessionId, variant }: PersistMessagesInput
+	{ agent, messages, model, sessionId, variant }: PersistMessagesInput
 ): void => {
 	const now = new Date();
 	const title = deriveSessionTitle(messages);
@@ -223,9 +232,8 @@ const writeMessages = (
 				createdAt: now,
 				id: generateId(),
 				metadataJson: codingMessageMetadataSchema.parse(
-					resolveMetadata(message, mode, model, agent)
+					resolveMetadata(message, model, agent)
 				),
-				mode: resolveMode(message, mode),
 				partsJson: message.parts,
 				position,
 				role: message.role,
@@ -240,7 +248,6 @@ const writeMessages = (
 					set: {
 						agent: values.agent,
 						metadataJson: values.metadataJson,
-						mode: values.mode,
 						partsJson: values.partsJson,
 						position: values.position,
 						role: values.role,
@@ -271,13 +278,7 @@ export const createDrizzleConversationStore = (
 	return {
 		getPromptHistory: promptHistoryStore.get,
 		recordPrompt: promptHistoryStore.record,
-		createSession: ({
-			agent,
-			message,
-			mode,
-			model,
-			variant,
-		}: CreateSessionInput) => {
+		createSession: ({ agent, message, model, variant }: CreateSessionInput) => {
 			const id = generateId();
 			const now = new Date();
 
@@ -298,7 +299,6 @@ export const createDrizzleConversationStore = (
 			writeMessages(db, workspace.id, {
 				agent,
 				messages: [message],
-				mode,
 				model,
 				sessionId: id,
 				variant,
@@ -353,7 +353,7 @@ export const createDrizzleConversationStore = (
 						row.metadataJson === null || row.metadataJson === undefined
 							? undefined
 							: normalizeMessageMetadata(
-									codingMessageMetadataSchema.parse(row.metadataJson),
+									parsePersistedMetadata(row.metadataJson),
 									row.agent
 								),
 					parts: row.partsJson,
@@ -421,7 +421,7 @@ export const createDrizzleConversationStore = (
 			const seen = new Set<string>();
 			for (const row of rows) {
 				const model = row.metadata
-					? codingMessageMetadataSchema.parse(row.metadata).model
+					? parsePersistedMetadata(row.metadata).model
 					: undefined;
 				if (!model) {
 					continue;

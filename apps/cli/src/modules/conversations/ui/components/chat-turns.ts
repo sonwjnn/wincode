@@ -14,7 +14,7 @@ export const resolveTurnMetadataSignature = (
 		return null;
 	}
 
-	const mode = metadata.mode ?? "";
+	const agent = metadata.agent ?? "";
 	const normalizedModel = normalizeChatModelSelection(metadata.model ?? "");
 	let modelKey = "";
 
@@ -28,7 +28,7 @@ export const resolveTurnMetadataSignature = (
 	const interrupted = metadata.interrupted === true ? "1" : "0";
 	const variant = metadata.variant ?? "";
 
-	return `${mode}|${modelKey}|${variant}|${interrupted}`;
+	return `${agent}|${modelKey}|${variant}|${interrupted}`;
 };
 
 const resolveTurnFooterMessage = (

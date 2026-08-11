@@ -2,7 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CodingAgentUIMessage } from "@wincode/ai";
+import type { CodingAgentUIMessage, ResolvedAgentRuntime } from "@wincode/ai";
 import type { handleCodingAgentToolCall } from "@wincode/ai/client";
 import { createWorkspaceSandbox } from "@wincode/ai/workspace";
 import type { ChatAddToolOutputFunction } from "ai";
@@ -42,7 +42,6 @@ const selection = {
 const legacyModel = "gemini-3.5-flash";
 const planFallback = {
 	agent: "plan",
-	mode: "plan",
 	model: selection,
 	resolvedAgent: {
 		instructions: "Plan without editing.",
@@ -52,14 +51,14 @@ const planFallback = {
 
 const userMessage = {
 	id: "user-1",
-	metadata: { mode: "plan", model: legacyModel },
+	metadata: { agent: "plan", model: legacyModel },
 	parts: [{ text: "hello", type: "text" }],
 	role: "user",
 } as unknown as CodingAgentUIMessage;
 
 const assistantMessage = {
 	id: "assistant-1",
-	metadata: { mode: "plan", model: selection },
+	metadata: { agent: "plan", model: selection },
 	parts: [
 		{
 			input: { path: "README.md" },
@@ -73,6 +72,13 @@ const assistantMessage = {
 } as unknown as CodingAgentUIMessage;
 
 describe("prepareSendChatRequestBody", () => {
+	const privateAgentStripped = (
+		message: CodingAgentUIMessage
+	): CodingAgentUIMessage => {
+		const { agent: _agent, ...metadata } = message.metadata ?? {};
+		return { ...message, metadata };
+	};
+
 	test("normalizes legacy model metadata", () => {
 		expect(
 			prepareSendChatRequestBody("session-1", [userMessage], planFallback)
@@ -83,7 +89,7 @@ describe("prepareSendChatRequestBody", () => {
 				mcpTools: [],
 				visibleCodingTools: ["read", "list", "grep"],
 			},
-			messages: [userMessage],
+			messages: [privateAgentStripped(userMessage)],
 			model: "gemini-2.5-flash",
 			persist: false,
 			sendReasoning: true,
@@ -104,7 +110,10 @@ describe("prepareSendChatRequestBody", () => {
 				mcpTools: [],
 				visibleCodingTools: ["read", "list", "grep"],
 			},
-			messages: [userMessage, assistantMessage],
+			messages: [
+				privateAgentStripped(userMessage),
+				privateAgentStripped(assistantMessage),
+			],
 			model: "gemini-2.5-flash",
 			persist: false,
 			sendReasoning: true,
@@ -121,7 +130,6 @@ describe("prepareSendChatRequestBody", () => {
 		expect(
 			prepareSendChatRequestBody("session-1", [nextMessage], {
 				agent: "build",
-				mode: "build",
 				model: selection,
 				resolvedAgent: {
 					instructions: "Build safely.",
@@ -227,7 +235,6 @@ describe("useChat helpers", () => {
 				{
 					agent: "plan",
 					interrupted: false,
-					mode: "plan",
 					model: selection,
 					variant: "high",
 				}
@@ -235,7 +242,6 @@ describe("useChat helpers", () => {
 		).toMatchObject({
 			metadata: {
 				agent: "plan",
-				mode: "plan",
 				model: selection,
 				variant: "high",
 			},
@@ -254,7 +260,6 @@ describe("useChat helpers", () => {
 				{
 					agent: "plan",
 					interrupted: true,
-					mode: "plan",
 					model: selection,
 					variant: "high",
 				}
@@ -263,7 +268,6 @@ describe("useChat helpers", () => {
 			metadata: {
 				agent: "plan",
 				interrupted: true,
-				mode: "plan",
 				model: selection,
 				variant: "low",
 			},
@@ -295,7 +299,9 @@ describe("createChatToolCallHandler", () => {
 		current:
 			addToolOutput as ChatAddToolOutputFunction<CodingAgentUIMessage> | null,
 	};
-	const modeRef = { current: "build" as const };
+	const resolvedAgentRef = {
+		current: undefined as ResolvedAgentRuntime | undefined,
+	};
 	const mcpSnapshotRef = { current: null as McpCatalogSnapshot | null };
 	const handleDynamicToolCall = mock(() => undefined);
 	const mcp = {
@@ -318,9 +324,9 @@ describe("createChatToolCallHandler", () => {
 				staticToolCallHandler) as typeof handleCodingAgentToolCall,
 			mcp,
 			mcpSnapshotRef,
-			modeRef,
 			openApproval,
 			permissionRef,
+			resolvedAgentRef,
 			sandbox,
 			service: createPermissionService(),
 			...overrides,
@@ -679,11 +685,11 @@ describe("createChatToolCallHandler", () => {
 			approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
 			mcp,
 			mcpSnapshotRef,
-			modeRef,
 			openApproval: mock(() => undefined),
 			permissionRef: {
 				current: createToolPermission({ read: { ".env": "deny" } }),
 			},
+			resolvedAgentRef,
 			sandbox: createWorkspaceSandbox(),
 			service: createPermissionService(),
 		});

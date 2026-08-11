@@ -7,7 +7,6 @@ import {
 	modelVariantSchema,
 	normalizeChatModelSelection,
 } from "./models";
-import { codingModeNameSchema } from "./modes";
 import { skillContextSchema } from "./skill-context";
 
 export const codingMessageSkillSchema = skillContextSchema.extend({
@@ -52,7 +51,6 @@ export const codingMessageMetadataSchema = z
 		interrupted: z.boolean().optional(),
 		skill: codingMessageSkillSchema.optional(),
 		agent: agentIdSchema.optional(),
-		mode: codingModeNameSchema.optional(),
 		model: codingMessageModelSchema.optional(),
 		responseTimeMs: z.number().int().nonnegative().optional(),
 		usage: codingMessageUsageSchema.optional(),
@@ -80,11 +78,6 @@ export const codingMessageMetadataSchema = z
 				message: "Variant is not supported for selected model",
 			});
 		}
-	})
-	.transform((metadata) =>
-		metadata.agent === undefined && metadata.mode !== undefined
-			? { ...metadata, agent: metadata.mode }
-			: metadata
-	);
+	});
 
 export type CodingMessageMetadata = z.infer<typeof codingMessageMetadataSchema>;

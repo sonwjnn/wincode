@@ -1,6 +1,5 @@
 import { TextAttributes } from "@opentui/core";
 import { useRouter } from "@tanstack/react-router";
-import { getLegacyModeForAgent } from "@wincode/ai";
 import { createUserMessage } from "@wincode/ai/client";
 import { useEffect, useState } from "react";
 import {
@@ -116,7 +115,6 @@ export function HomeView() {
 				input,
 				{
 					agent: effective.agent,
-					mode: getLegacyModeForAgent(effective.agent),
 					model: effective.model,
 					variant: effective.variant,
 					...(skill ? { skill: createSkillSnapshot(skill) } : {}),
@@ -124,7 +122,6 @@ export function HomeView() {
 				fileMentions,
 				files
 			),
-			mode: getLegacyModeForAgent(effective.agent),
 			model,
 			variant,
 		});

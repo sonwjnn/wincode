@@ -2,8 +2,6 @@ import type { AgentId, ModelVariant } from "@wincode/ai";
 import {
 	type ChatModelSelection,
 	defaultChatModelSelection,
-	getLegacyModeForAgent,
-	type ModeType,
 	normalizeModelVariant,
 } from "@wincode/ai";
 import {
@@ -25,8 +23,6 @@ type PromptConfigState = {
 
 export type PromptConfig = PromptConfigState & {
 	cycleAgent: (selectableAgents: readonly { id: AgentId }[]) => void;
-	/** @deprecated Temporary compatibility view while consumers migrate to Agent identity. */
-	mode: ModeType;
 	setAgent: (agent: AgentId) => void;
 	setModel: (model: ChatModelSelection) => void;
 	setVariant: (variant: ModelVariant | undefined) => void;
@@ -118,7 +114,6 @@ export function PromptConfigProvider({
 			value={{
 				agent: config.agent,
 				cycleAgent,
-				mode: getLegacyModeForAgent(config.agent),
 				model: config.model,
 				setAgent,
 				setModel,

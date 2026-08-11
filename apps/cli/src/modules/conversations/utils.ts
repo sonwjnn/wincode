@@ -5,9 +5,7 @@ import {
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
 	codingMessageSkillSchema,
-	getLegacyModeForAgent,
 	type ModelVariant,
-	type ModeType,
 	normalizeChatModelSelection,
 	type SkillContext,
 } from "@wincode/ai";
@@ -28,7 +26,6 @@ export const getLatestChatConfig = (
 ):
 	| {
 			agent: AgentId;
-			mode: ModeType;
 			model: ChatModelSelection;
 			variant?: ModelVariant;
 	  }
@@ -39,7 +36,7 @@ export const getLatestChatConfig = (
 			continue;
 		}
 
-		const agent = metadata.agent ?? metadata.mode;
+		const agent = metadata.agent;
 		if (!agent) {
 			continue;
 		}
@@ -51,7 +48,6 @@ export const getLatestChatConfig = (
 
 		return {
 			agent,
-			mode: metadata.mode ?? getLegacyModeForAgent(agent),
 			model,
 			variant: metadata.variant,
 		};

@@ -1,11 +1,12 @@
-import type { CodingAgentUIMessage, ModeType } from "@wincode/ai";
+import type { AgentId, CodingAgentUIMessage } from "@wincode/ai";
 import { findFileMentionRanges } from "@/modules/file-mentions";
 import { EmptyBorder } from "@/shared/constants";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { getAgentColor } from "@/shared/providers/theme/themes";
 
 type UserMessageProps = {
+	agent: AgentId;
 	appliedSkill?: AppliedSkill;
-	mode: ModeType;
 	parts: CodingAgentUIMessage["parts"];
 };
 
@@ -87,9 +88,9 @@ export const getAppliedSkill = (
 	};
 };
 
-export function UserMessage({ appliedSkill, mode, parts }: UserMessageProps) {
+export function UserMessage({ agent, appliedSkill, parts }: UserMessageProps) {
 	const { colors } = useTheme();
-	const borderColor = colors.mode[mode];
+	const borderColor = getAgentColor(colors, agent);
 	const message = parts
 		.filter(isTextPart)
 		.map((part) => part.text)

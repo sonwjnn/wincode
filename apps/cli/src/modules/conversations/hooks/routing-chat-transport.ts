@@ -1,8 +1,8 @@
 import type {
+	AgentId,
 	ChatModelSelection,
 	CodingAgentUIMessage,
 	ModelVariant,
-	ModeType,
 	ResolvedAgentRuntime,
 } from "@wincode/ai";
 import { getChatModelRoute, normalizeChatModelSelection } from "@wincode/ai";
@@ -25,7 +25,7 @@ const getBearerToken = (
 
 export const createRoutingChatTransport = (
 	sessionId: string,
-	modeRef: MutableRefObject<ModeType>,
+	agentRef: MutableRefObject<AgentId>,
 	resolvedAgentRef: MutableRefObject<ResolvedAgentRuntime | undefined>,
 	modelRef: MutableRefObject<ChatModelSelection>,
 	variantRef: MutableRefObject<ModelVariant | undefined>,
@@ -35,14 +35,13 @@ export const createRoutingChatTransport = (
 	sendMessages: async ({ abortSignal, messages }) => {
 		// One immutable snapshot per send so the request manifest and any dynamic
 		// tool dispatch resolve against the same catalog.
-		const snapshot = await mcp.createSnapshot(modeRef.current);
+		const snapshot = await mcp.createSnapshot(agentRef.current);
 		const latestConfig = getLatestChatConfig(messages);
 		const selection = latestConfig?.model ?? modelRef.current;
 		const variant = latestConfig?.variant ?? variantRef.current;
 		if (getChatModelRoute(selection) !== "hosted") {
 			return createLocalChatTransport(
 				sessionId,
-				modeRef,
 				resolvedAgentRef,
 				{ current: selection },
 				{ current: variant },
@@ -76,8 +75,7 @@ export const createRoutingChatTransport = (
 					sessionId,
 					requestMessages,
 					{
-						agent: latestConfig?.agent ?? modeRef.current,
-						mode: modeRef.current,
+						agent: latestConfig?.agent ?? agentRef.current,
 						model: selection,
 						resolvedAgent,
 						variant,
