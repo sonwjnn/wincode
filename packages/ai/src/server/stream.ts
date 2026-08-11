@@ -5,6 +5,7 @@ import {
 	type LanguageModel,
 	type UIMessageStreamOnFinishCallback,
 } from "ai";
+import type { ResolvedAgentRuntime } from "../agents";
 import {
 	type CodingAgentModelUIMessage,
 	expandFileMentionPartsForModel,
@@ -35,6 +36,7 @@ type CreateCodingAgentStreamResponseOptions = {
 	uiMessages: CodingAgentUIMessage[];
 	skill?: SkillContext;
 	mcpTools?: McpToolManifest;
+	resolvedAgent?: ResolvedAgentRuntime;
 };
 
 export const createCodingAgentStreamResponse = ({
@@ -52,6 +54,7 @@ export const createCodingAgentStreamResponse = ({
 	uiMessages,
 	skill,
 	mcpTools = [],
+	resolvedAgent,
 }: CreateCodingAgentStreamResponseOptions) => {
 	const modelMessages = expandFileMentionPartsForModel(
 		sanitizeInterruptedMessagesForModel(uiMessages)
@@ -107,7 +110,7 @@ export const createCodingAgentStreamResponse = ({
 		onFinish: agentUiFinishHandler as never,
 		onError: getProviderErrorMessage,
 		abortSignal,
-		options: { mode, model: modelId, mcpTools },
+		options: { mode, model: modelId, mcpTools, resolvedAgent },
 		originalMessages: modelMessages,
 		sendReasoning,
 		uiMessages: modelMessages,

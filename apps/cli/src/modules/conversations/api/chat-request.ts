@@ -1,9 +1,13 @@
 import type {
+	AgentBillingKind,
+	AgentId,
 	ChatModelSelection,
 	CodingAgentUIMessage,
+	HostedAgentDescriptor,
 	McpToolManifest,
 	ModelVariant,
 	ModeType,
+	ResolvedAgentRuntime,
 	SkillContext,
 } from "@wincode/ai";
 import {
@@ -14,9 +18,8 @@ import {
 } from "@wincode/ai";
 
 type SendChatRequestBody = {
+	agent: HostedAgentDescriptor;
 	messages: CodingAgentUIMessage[];
-	mcpTools?: McpToolManifest;
-	mode: ModeType;
 	model: string;
 	persist: false;
 	skill?: SkillContext;
@@ -25,11 +28,31 @@ type SendChatRequestBody = {
 };
 
 type ChatMetadataFallback = {
+	agent: AgentId;
 	mode: ModeType;
 	model: ChatModelSelection;
+	resolvedAgent: ResolvedAgentRuntime;
 	variant?: ModelVariant;
 	skill?: SkillContext;
 };
+
+const getBillingKind = (agent: AgentId): AgentBillingKind => {
+	if (agent === "build" || agent === "plan") {
+		return agent;
+	}
+	return "custom";
+};
+
+const removePrivateAgentMetadata = (
+	messages: CodingAgentUIMessage[]
+): CodingAgentUIMessage[] =>
+	messages.map((message) => {
+		if (!message.metadata?.agent) {
+			return message;
+		}
+		const { agent: _agent, ...metadata } = message.metadata;
+		return { ...message, metadata };
+	});
 
 const findLastChatMetadata = (messages: CodingAgentUIMessage[]) =>
 	messages.findLast(
@@ -77,6 +100,7 @@ export const prepareSendChatRequestBody = (
 	}
 
 	const metadata = findLastChatMetadata(messages);
+	const agent = message.metadata?.agent ?? metadata?.agent ?? fallback?.agent;
 	const mode = message.metadata?.mode ?? metadata?.mode ?? fallback?.mode;
 	const model =
 		normalizeSelection(message.metadata?.model) ??
@@ -85,25 +109,26 @@ export const prepareSendChatRequestBody = (
 	const variant = metadata?.variant ?? fallback?.variant;
 	const skill = findOriginatingUserSkill(messages);
 
-	if (!(mode && model)) {
-		throw new Error("No chat mode or model to send");
+	if (!(agent && mode && model && fallback?.resolvedAgent)) {
+		throw new Error("No resolved Agent or model to send");
 	}
 
 	if (model.providerId !== "wincode") {
 		throw new Error(`Connect ${model.providerId} with /connect`);
 	}
 
-	const requestMcpTools =
-		mode === "plan" || !mcpTools?.length ? undefined : mcpTools;
-
 	return {
-		messages,
-		mode,
+		agent: {
+			billingKind: getBillingKind(agent),
+			instructions: fallback.resolvedAgent.instructions,
+			mcpTools: mcpTools ?? [],
+			visibleCodingTools: fallback.resolvedAgent.visibleCodingTools,
+		},
+		messages: removePrivateAgentMetadata(messages),
 		model: model.modelId,
 		persist: false,
 		...((skill ?? fallback?.skill) ? { skill: skill ?? fallback?.skill } : {}),
 		variant,
-		...(requestMcpTools ? { mcpTools: requestMcpTools } : {}),
 		sendReasoning: true,
 	};
 };

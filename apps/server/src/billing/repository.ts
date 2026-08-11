@@ -1,3 +1,4 @@
+import type { AgentBillingKind } from "@wincode/ai";
 import {
 	billingNormalizedUsageSchema,
 	billingPricebook,
@@ -42,7 +43,7 @@ export type BillingRequestReservationInput = {
 	userId: string;
 	runtimeProvider: string;
 	runtimeModel: string;
-	mode: string;
+	mode: AgentBillingKind;
 	startedAt: Date;
 };
 

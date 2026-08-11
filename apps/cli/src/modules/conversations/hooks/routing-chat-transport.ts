@@ -61,6 +61,10 @@ export const createRoutingChatTransport = (
 			});
 		}
 
+		const resolvedAgent = resolvedAgentRef.current;
+		if (!resolvedAgent) {
+			throw new Error("No resolved Agent to send");
+		}
 		const authorization = await connections.authorize("wincode", abortSignal);
 		const transport = new DefaultChatTransport<CodingAgentUIMessage>({
 			api: getHonoClient()
@@ -72,8 +76,10 @@ export const createRoutingChatTransport = (
 					sessionId,
 					requestMessages,
 					{
+						agent: latestConfig?.agent ?? modeRef.current,
 						mode: modeRef.current,
 						model: selection,
+						resolvedAgent,
 						variant,
 					},
 					snapshot.manifest

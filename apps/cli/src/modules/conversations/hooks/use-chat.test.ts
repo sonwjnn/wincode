@@ -40,6 +40,15 @@ const selection = {
 } as const;
 
 const legacyModel = "gemini-3.5-flash";
+const planFallback = {
+	agent: "plan",
+	mode: "plan",
+	model: selection,
+	resolvedAgent: {
+		instructions: "Plan without editing.",
+		visibleCodingTools: ["read", "list", "grep"],
+	},
+} as const;
 
 const userMessage = {
 	id: "user-1",
@@ -65,9 +74,16 @@ const assistantMessage = {
 
 describe("prepareSendChatRequestBody", () => {
 	test("normalizes legacy model metadata", () => {
-		expect(prepareSendChatRequestBody("session-1", [userMessage])).toEqual({
+		expect(
+			prepareSendChatRequestBody("session-1", [userMessage], planFallback)
+		).toEqual({
+			agent: {
+				billingKind: "plan",
+				instructions: "Plan without editing.",
+				mcpTools: [],
+				visibleCodingTools: ["read", "list", "grep"],
+			},
 			messages: [userMessage],
-			mode: "plan",
 			model: "gemini-2.5-flash",
 			persist: false,
 			sendReasoning: true,
@@ -76,10 +92,19 @@ describe("prepareSendChatRequestBody", () => {
 
 	test("keeps canonical selection metadata", () => {
 		expect(
-			prepareSendChatRequestBody("session-1", [userMessage, assistantMessage])
+			prepareSendChatRequestBody(
+				"session-1",
+				[userMessage, assistantMessage],
+				planFallback
+			)
 		).toEqual({
+			agent: {
+				billingKind: "plan",
+				instructions: "Plan without editing.",
+				mcpTools: [],
+				visibleCodingTools: ["read", "list", "grep"],
+			},
 			messages: [userMessage, assistantMessage],
-			mode: "plan",
 			model: "gemini-2.5-flash",
 			persist: false,
 			sendReasoning: true,
@@ -95,12 +120,22 @@ describe("prepareSendChatRequestBody", () => {
 
 		expect(
 			prepareSendChatRequestBody("session-1", [nextMessage], {
+				agent: "build",
 				mode: "build",
 				model: selection,
+				resolvedAgent: {
+					instructions: "Build safely.",
+					visibleCodingTools: ["read", "write", "edit", "list", "grep"],
+				},
 			})
 		).toEqual({
+			agent: {
+				billingKind: "build",
+				instructions: "Build safely.",
+				mcpTools: [],
+				visibleCodingTools: ["read", "write", "edit", "list", "grep"],
+			},
 			messages: [nextMessage],
-			mode: "build",
 			model: "gemini-2.5-flash",
 			persist: false,
 			sendReasoning: true,

@@ -153,6 +153,18 @@ const validMcpTool = {
 	inputSchema: { type: "object", properties: {}, required: [] },
 	name: "mcp_read",
 };
+const buildAgent = {
+	billingKind: "build",
+	instructions: "Build safely.",
+	mcpTools: [],
+	visibleCodingTools: ["read", "write", "edit", "list", "grep"],
+} as const;
+const planAgent = {
+	billingKind: "plan",
+	instructions: "Plan without editing.",
+	mcpTools: [],
+	visibleCodingTools: ["read", "list", "grep"],
+} as const;
 
 const billingRepository = {
 	finalizeRequest: mock(async () => ({
@@ -213,8 +225,9 @@ describe("POST /:id/chat (transport-only)", () => {
 						role: "user",
 					},
 				],
-				mode: "plan",
+				agent: planAgent,
 				model: "gpt-5.4-mini",
+				persist: false,
 				sendReasoning: true,
 			}),
 			headers: { "content-type": "application/json" },
@@ -232,7 +245,7 @@ describe("POST /:id/chat (transport-only)", () => {
 				messages: [
 					{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
 				],
-				mode: "plan",
+				agent: planAgent,
 				model: "gpt-5.4-mini",
 			}),
 			headers: { "content-type": "application/json" },
@@ -251,7 +264,7 @@ describe("POST /:id/chat (transport-only)", () => {
 				messages: [
 					{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
 				],
-				mode: "plan",
+				agent: planAgent,
 				model: "gpt-5.4-mini",
 			}),
 			headers: { "content-type": "application/json" },
@@ -268,7 +281,7 @@ describe("POST /:id/chat (transport-only)", () => {
 				messages: [
 					{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
 				],
-				mode: "plan",
+				agent: planAgent,
 				model: "gpt-5.4-mini",
 			}),
 			headers: { "content-type": "application/json" },
@@ -293,7 +306,7 @@ describe("POST /:id/chat (transport-only)", () => {
 						role: "user",
 					},
 				],
-				mode: "plan",
+				agent: planAgent,
 				model: "gpt-5.4-mini",
 			}),
 			headers: { "content-type": "application/json" },
@@ -335,9 +348,8 @@ describe("POST /:id/chat (transport-only)", () => {
 				messages: [
 					{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
 				],
-				mode: "build",
+				agent: { ...buildAgent, mcpTools: [validMcpTool] },
 				model: "gpt-5.4-mini",
-				mcpTools: [validMcpTool],
 			}),
 			headers: { "content-type": "application/json" },
 			method: "POST",
@@ -390,7 +402,7 @@ describe("POST /:id/chat (transport-only)", () => {
 							role: "user",
 						},
 					],
-					mode: "build",
+					agent: buildAgent,
 					model: "gpt-5.4-mini",
 				}),
 				headers: { "content-type": "application/json" },
@@ -421,9 +433,8 @@ describe("POST /:id/chat (transport-only)", () => {
 					messages: [
 						{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
 					],
-					mode: "build",
+					agent: { ...buildAgent, mcpTools },
 					model: "gpt-5.4-mini",
-					mcpTools,
 				}),
 				headers: { "content-type": "application/json" },
 				method: "POST",
@@ -432,20 +443,90 @@ describe("POST /:id/chat (transport-only)", () => {
 		}
 	});
 
-	test("rejects MCP tools in Plan mode", async () => {
+	test("rejects invalid or privacy-expanding Agent descriptors", async () => {
+		for (const agent of [
+			{ ...buildAgent, instructions: "" },
+			{ ...buildAgent, instructions: "x".repeat(12_001) },
+			{ ...buildAgent, visibleCodingTools: ["read", "read"] },
+			{ ...buildAgent, visibleCodingTools: ["read", "shell"] },
+			{ ...buildAgent, configuredAgentName: "private-reviewer" },
+		]) {
+			const response = await sessionsRoutes.request("/session-agent/chat", {
+				body: JSON.stringify({
+					agent,
+					messages: [
+						{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
+					],
+					model: "gpt-5.4-mini",
+				}),
+				headers: { "content-type": "application/json" },
+				method: "POST",
+			});
+			expect(response.status).toBe(400);
+		}
+	});
+
+	test("persists custom billing identity and removes configured Agent identity", async () => {
+		const response = await sessionsRoutes.request("/session-custom/chat", {
+			body: JSON.stringify({
+				agent: {
+					billingKind: "custom",
+					instructions: "Review carefully.",
+					mcpTools: [],
+					visibleCodingTools: ["read", "grep"],
+				},
+				messages: [
+					{
+						id: "u1",
+						metadata: {
+							agent: "private-reviewer",
+							mode: "build",
+							model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
+						},
+						parts: [{ text: "hi", type: "text" }],
+						role: "user",
+					},
+				],
+				model: "gpt-5.4-mini",
+			}),
+			headers: { "content-type": "application/json" },
+			method: "POST",
+		});
+
+		expect(response.status).toBe(200);
+		expect(billingRepository.reserveRequest).toHaveBeenCalledWith(
+			expect.objectContaining({ mode: "custom" })
+		);
+		expect(createCodingAgentStreamResponse).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				resolvedAgent: {
+					instructions: "Review carefully.",
+					visibleCodingTools: ["read", "grep"],
+				},
+				uiMessages: [
+					expect.objectContaining({
+						metadata: expect.not.objectContaining({
+							agent: "private-reviewer",
+						}),
+					}),
+				],
+			})
+		);
+	});
+
+	test("accepts policy-filtered MCP tools for a Plan descriptor", async () => {
 		const response = await sessionsRoutes.request("/session-mcp/chat", {
 			body: JSON.stringify({
 				messages: [
 					{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
 				],
-				mode: "plan",
+				agent: { ...planAgent, mcpTools: [validMcpTool] },
 				model: "gpt-5.4-mini",
-				mcpTools: [validMcpTool],
 			}),
 			headers: { "content-type": "application/json" },
 			method: "POST",
 		});
-		expect(response.status).toBe(400);
+		expect(response.status).toBe(200);
 	});
 
 	test("rejects disabled billing config as unavailable", async () => {
@@ -457,7 +538,7 @@ describe("POST /:id/chat (transport-only)", () => {
 				messages: [
 					{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
 				],
-				mode: "plan",
+				agent: planAgent,
 				model: "gpt-5.4-mini",
 			}),
 			headers: { "content-type": "application/json" },
@@ -478,7 +559,7 @@ describe("POST /:id/chat (transport-only)", () => {
 				messages: [
 					{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
 				],
-				mode: "plan",
+				agent: planAgent,
 				model: "gpt-5.4-mini",
 			}),
 			headers: { "content-type": "application/json" },
@@ -506,7 +587,7 @@ describe("POST /:id/chat (transport-only)", () => {
 						role: "user",
 					},
 				],
-				mode: "plan",
+				agent: planAgent,
 				model: "gpt-5.4-mini",
 			}),
 			headers: { "content-type": "application/json" },
@@ -532,7 +613,7 @@ describe("POST /:id/chat (transport-only)", () => {
 					},
 					{ id: "user-1", parts: [{ text: "hi", type: "text" }], role: "user" },
 				],
-				mode: "plan",
+				agent: planAgent,
 				model: "gpt-5.4-mini",
 			}),
 			headers: { "content-type": "application/json" },
@@ -552,7 +633,7 @@ describe("POST /:id/chat (transport-only)", () => {
 						role: "user",
 					},
 				],
-				mode: "plan",
+				agent: planAgent,
 				model: "gpt-5.4-mini",
 			}),
 			headers: { "content-type": "application/json" },
@@ -592,7 +673,7 @@ describe("POST /:id/chat (transport-only)", () => {
 						role: "user",
 					},
 				],
-				mode: "plan",
+				agent: planAgent,
 				model: "gpt-5.4-mini",
 				skill,
 			}),
@@ -619,7 +700,7 @@ describe("POST /:id/chat (transport-only)", () => {
 			messages: [
 				{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
 			],
-			mode: "build",
+			agent: buildAgent,
 			model: "gpt-5.4-mini",
 		};
 		const withoutManifest = await createSessionsRoutes({
@@ -642,7 +723,13 @@ describe("POST /:id/chat (transport-only)", () => {
 			resolveSupportedChatModel,
 			resolveWincodeChatModelSelection,
 		}).request("/session-16/chat", {
-			body: JSON.stringify({ ...request, mcpTools: [validMcpTool] }),
+			body: JSON.stringify({
+				...request,
+				agent: {
+					...buildAgent,
+					mcpTools: [{ ...validMcpTool, description: "x".repeat(4000) }],
+				},
+			}),
 			headers: { "content-type": "application/json" },
 			method: "POST",
 		});
@@ -666,7 +753,7 @@ describe("POST /:id/chat (transport-only)", () => {
 						role: "user",
 					},
 				],
-				mode: "plan",
+				agent: planAgent,
 				model: "gpt-5.4-mini",
 			}),
 			headers: { "content-type": "application/json" },
@@ -676,9 +763,25 @@ describe("POST /:id/chat (transport-only)", () => {
 		expect(response.status).toBe(400);
 	});
 
-	test("rejects a request missing mode/model", async () => {
+	test("rejects a request missing Agent descriptor and model", async () => {
 		const response = await sessionsRoutes.request("/session-1/chat", {
 			body: JSON.stringify({ messages: [] }),
+			headers: { "content-type": "application/json" },
+			method: "POST",
+		});
+
+		expect(response.status).toBe(400);
+	});
+
+	test("rejects the legacy hosted mode payload", async () => {
+		const response = await sessionsRoutes.request("/session-legacy/chat", {
+			body: JSON.stringify({
+				messages: [
+					{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
+				],
+				mode: "build",
+				model: "gpt-5.4-mini",
+			}),
 			headers: { "content-type": "application/json" },
 			method: "POST",
 		});
@@ -696,7 +799,7 @@ describe("POST /:id/chat (transport-only)", () => {
 						role: "user",
 					},
 				],
-				mode: "plan",
+				agent: planAgent,
 				model: "gpt-5.5",
 			}),
 			headers: { "content-type": "application/json" },
@@ -717,7 +820,7 @@ describe("POST /:id/chat (transport-only)", () => {
 						role: "user",
 					},
 				],
-				mode: "plan",
+				agent: planAgent,
 				model: "gpt-5.4-mini",
 			}),
 			headers: { "content-type": "application/json" },

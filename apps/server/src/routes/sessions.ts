@@ -1,10 +1,12 @@
 import {
+	type AgentBillingKind,
 	type CodingAgentUIMessage,
 	codingAgentDataSchemas,
 	codingMessageMetadataSchema,
-	codingModeNameSchema,
+	codingToolDefinitions,
 	formatSkillUserContext,
-	mcpToolManifestSchema,
+	getSystemInstructionsForAgent,
+	hostedAgentDescriptorSchema,
 	modelVariantSchema,
 	skillContextSchema,
 } from "@wincode/ai";
@@ -36,25 +38,7 @@ const maxPartsPerMessage = 16;
 const maxIdLength = 256;
 const conservativeHardInputTokenLimit = 16_384;
 const conservativeInputHeadroomTokens = 512;
-const conservativeToolPolicyTokens = 256;
-const deterministicSystemInstructionTokenOverhead = 128;
-const deterministicSystemInstructions = {
-	build: `You are a basic coding agent running in a user's CLI.
-All file tools are limited to the CLI workspace.
-
-Mode: BUILD.
-Purpose: implement requested code changes in the workspace.
-Use tools to inspect and modify files before answering about code.
-Prefer list, grep, and read before editing. Prefer edit for targeted changes and write for new files or full rewrites.`,
-	plan: `You are a basic coding agent running in a user's CLI.
-All file tools are limited to the CLI workspace.
-
-Mode: PLAN.
-Purpose: read-only analysis and implementation planning.
-Do not modify files. Do not write files. Do not call edit or write tools.
-Use only read-only inspection tools to understand the workspace.
-Return a concrete plan, risks, and verification steps instead of implementing changes.`,
-} as const;
+const estimatedUtf8BytesPerToken = 4;
 
 const billingReserveDeniedMessage = (reason: unknown): string =>
 	typeof reason === "string"
@@ -78,25 +62,17 @@ const uiMessageInputSchema = z.object({
 	parts: z.array(uiMessagePartSchema).max(maxPartsPerMessage),
 	role: z.enum(["system", "user", "assistant"]),
 });
-const chatRequestSchema = z.object({
-	messages: z.array(uiMessageInputSchema).max(maxMessages),
-	mode: codingModeNameSchema,
-	model: z
-		.string()
-		.min(1)
-		.refine((value) => {
-			try {
-				resolveWincodeChatModelSelection(value);
-				return true;
-			} catch {
-				return false;
-			}
-		}, "Unsupported host model"),
-	variant: modelVariantSchema.optional(),
-	sendReasoning: z.boolean().optional(),
-	skill: skillContextSchema.optional(),
-	mcpTools: mcpToolManifestSchema.default([]),
-});
+const chatRequestSchema = z
+	.object({
+		agent: hostedAgentDescriptorSchema,
+		messages: z.array(uiMessageInputSchema).max(maxMessages),
+		model: z.string().min(1),
+		persist: z.literal(false).optional(),
+		variant: modelVariantSchema.optional(),
+		sendReasoning: z.boolean().optional(),
+		skill: skillContextSchema.optional(),
+	})
+	.strict();
 
 const badRequest = () =>
 	new Response(JSON.stringify({ error: "Bad Request" }), {
@@ -112,25 +88,34 @@ const forbidden = (error = "Forbidden") =>
 
 const withChatMetadata = (
 	message: z.infer<typeof uiMessageInputSchema>,
-	mode: z.infer<typeof codingModeNameSchema>,
+	billingKind: AgentBillingKind,
 	model: { modelId: string; providerId: string },
 	variant?: string
-) => ({
-	...message,
-	metadata: {
-		...message.metadata,
-		mode,
-		model,
-		...(variant === undefined ? {} : { variant }),
-	},
-});
+) => {
+	const { agent: _agent, ...metadata } = message.metadata ?? {};
+	return {
+		...message,
+		metadata: {
+			...metadata,
+			mode: getLegacyModeForBillingKind(billingKind),
+			model,
+			...(variant === undefined ? {} : { variant }),
+		},
+	};
+};
+
+const getLegacyModeForBillingKind = (billingKind: AgentBillingKind) =>
+	billingKind === "plan" ? "plan" : "build";
 
 const withChatMetadataForMessages = (
 	messages: z.infer<typeof uiMessageInputSchema>[],
-	mode: z.infer<typeof codingModeNameSchema>,
+	billingKind: AgentBillingKind,
 	model: { modelId: string; providerId: string },
 	variant?: string
-) => messages.map((message) => withChatMetadata(message, mode, model, variant));
+) =>
+	messages.map((message) =>
+		withChatMetadata(message, billingKind, model, variant)
+	);
 
 const hasValidContentLength = (value: string | null) => {
 	if (!value) {
@@ -173,7 +158,7 @@ const isKillSwitched = (providerId: string, modelId: string) =>
 	billingConfig.modelKillSwitches.has(modelId);
 
 const getStringTokenEstimate = (value: string): number =>
-	Buffer.byteLength(value, "utf8");
+	Math.ceil(Buffer.byteLength(value, "utf8") / estimatedUtf8BytesPerToken);
 
 const getMessageContextTokenEstimate = (
 	messages: z.infer<typeof uiMessageInputSchema>[]
@@ -188,20 +173,29 @@ const getMessageContextTokenEstimate = (
 				return { ...message, metadata };
 			})
 		) ?? "";
-	return (
-		getStringTokenEstimate(serialized) +
-		conservativeInputHeadroomTokens +
-		conservativeToolPolicyTokens
-	);
+	return getStringTokenEstimate(serialized) + conservativeInputHeadroomTokens;
 };
 
-const getDeterministicFundedContextTokenOverhead = (
-	mode: z.infer<typeof codingModeNameSchema>
-): number =>
-	Math.min(
-		deterministicSystemInstructionTokenOverhead,
-		getStringTokenEstimate(deterministicSystemInstructions[mode])
-	);
+const getFundedContextTokenEstimate = ({
+	agent,
+	messages,
+	skill,
+}: Pick<z.infer<typeof chatRequestSchema>, "agent" | "messages" | "skill">) =>
+	getMessageContextTokenEstimate(messages) +
+	getStringTokenEstimate(getSystemInstructionsForAgent(agent.instructions)) +
+	getStringTokenEstimate(
+		JSON.stringify(
+			agent.visibleCodingTools.map((name) => ({
+				description: codingToolDefinitions[name].description,
+				inputSchema: z.toJSONSchema(codingToolDefinitions[name].inputSchema, {
+					io: "input",
+				}),
+				name,
+			}))
+		)
+	) +
+	getStringTokenEstimate(JSON.stringify(agent.mcpTools)) +
+	(skill ? getStringTokenEstimate(formatSkillUserContext(skill)) : 0);
 
 const hasOnlyTextParts = (messages: z.infer<typeof uiMessageInputSchema>[]) =>
 	messages
@@ -209,11 +203,14 @@ const hasOnlyTextParts = (messages: z.infer<typeof uiMessageInputSchema>[]) =>
 		.every((message) => message.parts.every((part) => part.type === "text"));
 
 const isAcceptableInput = (
-	messages: z.infer<typeof uiMessageInputSchema>[],
+	request: Pick<
+		z.infer<typeof chatRequestSchema>,
+		"agent" | "messages" | "skill"
+	>,
 	inputTokenLimit: number
 ): boolean =>
-	hasOnlyTextParts(messages) &&
-	getMessageContextTokenEstimate(messages) <= inputTokenLimit;
+	hasOnlyTextParts(request.messages) &&
+	getFundedContextTokenEstimate(request) <= inputTokenLimit;
 
 export type SessionsRouteDeps = {
 	readonly codingServerTools?: typeof codingServerTools;
@@ -285,7 +282,6 @@ const handleChatRequest = async (
 			| "resolveWincodeChatModelSelection"
 		>
 	>
-	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: request validation and billing gates are intentionally explicit
 ) => {
 	const subject = await verifyBearerAuth(c.req.header("authorization") ?? null);
 	if (!subject) {
@@ -310,11 +306,7 @@ const handleChatRequest = async (
 		return badRequest();
 	}
 
-	const { messages, mode, model, sendReasoning, variant, skill, mcpTools } =
-		parsed.data;
-	if (mode === "plan" && mcpTools.length > 0) {
-		return badRequest();
-	}
+	const { agent, messages, model, sendReasoning, variant, skill } = parsed.data;
 	const billingConfig = resolveBillingConfig();
 	if (
 		billingConfig === null ||
@@ -361,19 +353,11 @@ const handleChatRequest = async (
 		modelId: resolvedSelection.id,
 		providerId: resolvedSelection.provider,
 	};
-	const fundedContextOverhead =
-		getDeterministicFundedContextTokenOverhead(mode);
-	const fundedInputTokenBudget = Math.max(
-		0,
-		Math.min(
-			Number(billingConfig.fundedRequestInputTokenLimit),
-			conservativeHardInputTokenLimit
-		) -
-			fundedContextOverhead -
-			(skill ? getStringTokenEstimate(formatSkillUserContext(skill)) : 0) -
-			getStringTokenEstimate(JSON.stringify(mcpTools))
+	const fundedInputTokenBudget = Math.min(
+		Number(billingConfig.fundedRequestInputTokenLimit),
+		conservativeHardInputTokenLimit
 	);
-	if (!isAcceptableInput(messages, fundedInputTokenBudget)) {
+	if (!isAcceptableInput({ agent, messages, skill }, fundedInputTokenBudget)) {
 		return badRequest();
 	}
 	if (isKillSwitched(modelSelection.providerId, modelSelection.modelId)) {
@@ -382,7 +366,7 @@ const handleChatRequest = async (
 
 	const stagedMessages = withChatMetadataForMessages(
 		messages,
-		mode,
+		agent.billingKind,
 		modelSelection,
 		variant
 	).map((message) => ({
@@ -394,7 +378,10 @@ const handleChatRequest = async (
 	const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
 		dataSchemas: codingAgentDataSchemas,
 		messages: stagedMessages,
-		tools: { ...deps.codingServerTools, ...convertMcpToolManifest(mcpTools) },
+		tools: {
+			...deps.codingServerTools,
+			...convertMcpToolManifest(agent.mcpTools),
+		},
 	});
 	if (!validation.success) {
 		return badRequest();
@@ -414,7 +401,7 @@ const handleChatRequest = async (
 	const lifecycle = createBillingLifecycle({
 		config: billingConfig,
 		repository: resolveBillingRepository(),
-		mode,
+		mode: agent.billingKind,
 		requestId: `${c.req.param("id")}:${crypto.randomUUID()}`,
 		runtimeModel: billingRuntimeSelection.modelId,
 		runtimeProvider: billingRuntimeSelection.providerId,
@@ -434,12 +421,16 @@ const handleChatRequest = async (
 		modelId: resolvedModel.modelId,
 		maxOutputTokens: boundedMaxOutputTokens,
 		maxSteps: fundedMaxSteps,
-		mode,
+		mode: getLegacyModeForBillingKind(agent.billingKind),
+		resolvedAgent: {
+			instructions: agent.instructions,
+			visibleCodingTools: agent.visibleCodingTools,
+		},
 		abortSignal,
 		providerOptions: resolvedModel.providerOptions,
 		skill,
 		sendReasoning,
-		mcpTools,
+		mcpTools: agent.mcpTools,
 		uiMessages: validation.data,
 		onEnd: lifecycle.onEnd,
 		onStepEnd: lifecycle.onStepEnd,

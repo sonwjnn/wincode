@@ -1,3 +1,4 @@
+import type { AgentBillingKind } from "@wincode/ai";
 import type { BillingRepository } from "./repository";
 import type { BillingNormalizedUsage } from "./types";
 import { adaptBillingUsage } from "./usage-adapter";
@@ -14,7 +15,7 @@ export type BillingLifecycleContext = {
 	readonly startedAt: Date;
 	readonly runtimeProvider: string;
 	readonly runtimeModel: string;
-	readonly mode: string;
+	readonly mode: AgentBillingKind;
 };
 
 export type BillingLifecycleDeps = {

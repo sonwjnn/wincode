@@ -42,6 +42,12 @@ const modeRef = { current: "build" as const };
 const resolvedAgentRef = {
 	current: undefined as ResolvedAgentRuntime | undefined,
 };
+const hostedResolvedAgentRef = {
+	current: {
+		instructions: "Build safely.",
+		visibleCodingTools: ["read", "write", "edit", "list", "grep"],
+	} satisfies ResolvedAgentRuntime,
+};
 const modelRef = {
 	current: { modelId: "gpt-5.4-mini", providerId: "wincode" } as const,
 };
@@ -121,7 +127,7 @@ describe("chat transport", () => {
 			const transport = createRoutingChatTransport(
 				"session-1",
 				modeRef,
-				resolvedAgentRef,
+				hostedResolvedAgentRef,
 				modelRef,
 				variantRef,
 				{
@@ -186,7 +192,7 @@ describe("chat transport", () => {
 			const transport = createRoutingChatTransport(
 				"session-1",
 				modeRef,
-				resolvedAgentRef,
+				hostedResolvedAgentRef,
 				modelRef,
 				variantRef,
 				{
@@ -256,7 +262,7 @@ describe("chat transport", () => {
 			const transport = createRoutingChatTransport(
 				"session-1",
 				modeRef,
-				resolvedAgentRef,
+				hostedResolvedAgentRef,
 				modelRef,
 				variantRef,
 				{
@@ -280,7 +286,11 @@ describe("chat transport", () => {
 				{ body?: string },
 			];
 			expect(JSON.parse(requestInit.body ?? "{}")).toMatchObject({
-				mcpTools: manifest,
+				agent: {
+					billingKind: "build",
+					mcpTools: manifest,
+					visibleCodingTools: ["read", "write", "edit", "list", "grep"],
+				},
 			});
 		} finally {
 			globalThis.fetch = originalFetch;
