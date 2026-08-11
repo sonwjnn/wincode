@@ -1,3 +1,4 @@
+import type { AgentId } from "@wincode/ai";
 import type { WorkspacePolicy } from "@wincode/ai/workspace";
 import { createWorkspaceSandbox } from "@wincode/ai/workspace";
 import { useCallback, useMemo, useRef } from "react";
@@ -36,6 +37,50 @@ export type ToolPermissionRuntime = {
 	service: PermissionService;
 };
 
+type ResolvedToolPermissionPolicies = {
+	mcpPolicy: EffectiveAgentPolicy;
+	permission: ToolPermission;
+};
+
+const FAIL_CLOSED_MCP_POLICY: EffectiveAgentPolicy = {
+	rules: { "*": "deny" } as EffectiveAgentPolicy["rules"],
+	safety: true,
+};
+
+/** Resolves one Agent's static and MCP policies without loosening MCP on failure. */
+export const resolveToolPermissionPolicies = (
+	registryPromise: ReturnType<typeof resolveAgentRegistry>,
+	agent: AgentId,
+	getFallbackPermission: () => ToolPermission
+): Promise<ResolvedToolPermissionPolicies> =>
+	registryPromise
+		.then((registry) => {
+			// Enforce against the Agent that actually runs: an unavailable
+			// selection falls back to Build, mirroring the effective-selection
+			// resolution used when the message is sent, so tool visibility and
+			// policy stay consistent with the executing Agent.
+			const effectiveAgent =
+				registry.agents.find(
+					({ id, isAvailable }) => id === agent && isAvailable
+				) ?? registry.agents.find(({ id }) => id === "build");
+			const rules = effectiveAgent?.permission ?? DEFAULT_PERMISSION_RULES;
+			const safety = effectiveAgent?.requiresManualApproval ?? false;
+			const permission = createResolvedToolPermission(rules);
+			return {
+				// MCP composition consumes the raw folded rules plus the safety flag;
+				// the ceiling is applied by the registry when it composes with each
+				// server's own policy, so it must not be pre-applied here.
+				mcpPolicy: { rules, safety },
+				permission: safety
+					? applyManualApprovalSafetyCeiling(permission)
+					: permission,
+			};
+		})
+		.catch(() => ({
+			mcpPolicy: FAIL_CLOSED_MCP_POLICY,
+			permission: getFallbackPermission(),
+		}));
+
 /**
  * Composes the Tool Permission runtime for chat tool dispatch: the policy
  * evaluator seeded with defaults and refreshed from the top-level config
@@ -58,35 +103,18 @@ export function useToolPermission(): ToolPermissionRuntime {
 	);
 	const resolvedPromise = useMemo(
 		() =>
-			resolveAgentRegistry(config)
-				.then((registry) => {
-					// Enforce against the Agent that actually runs: an unavailable
-					// selection falls back to Build, mirroring the effective-selection
-					// resolution used when the message is sent, so tool visibility and
-					// policy stay consistent with the executing Agent.
-					const effectiveAgent =
-						registry.agents.find(
-							({ id, isAvailable }) => id === agent && isAvailable
-						) ?? registry.agents.find(({ id }) => id === "build");
-					const rules = effectiveAgent?.permission ?? DEFAULT_PERMISSION_RULES;
-					const safety = effectiveAgent?.requiresManualApproval ?? false;
-					const permission = createResolvedToolPermission(rules);
-					permissionRef.current = safety
-						? applyManualApprovalSafetyCeiling(permission)
-						: permission;
-					// MCP composition consumes the raw folded rules plus the safety flag;
-					// the ceiling is applied by the registry when it composes with each
-					// server's own policy, so it must not be pre-applied here.
-					mcpPolicyRef.current = { rules, safety };
-					return {
-						mcpPolicy: mcpPolicyRef.current,
-						permission: permissionRef.current,
-					};
-				})
-				.catch(() => ({
+			resolveToolPermissionPolicies(
+				resolveAgentRegistry(config),
+				agent,
+				() => permissionRef.current
+			).then((resolved) => {
+				permissionRef.current = resolved.permission;
+				mcpPolicyRef.current = resolved.mcpPolicy;
+				return {
 					mcpPolicy: mcpPolicyRef.current,
 					permission: permissionRef.current,
-				})),
+				};
+			}),
 		[agent, config]
 	);
 	const resolvePermission = useCallback(

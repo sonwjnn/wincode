@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { CallToolResult } from "@modelcontextprotocol/client";
-import type { PermissionRules } from "@/modules/permissions";
+import {
+	createToolPermission,
+	type PermissionRules,
+} from "@/modules/permissions";
+import { resolveToolPermissionPolicies } from "@/modules/permissions/use-tool-permission";
 import type { McpClient, McpClientTool } from "./client";
 import type {
 	LocalMcpServerConfig,
@@ -192,6 +196,31 @@ const harness = (options: HarnessOptions = {}): Harness => {
 };
 
 describe("createMcpRegistry", () => {
+	test("a rejected Agent Registry resolution leaves Plan with no visible MCP tools", async () => {
+		let fallbackPermission = createToolPermission({ edit: "deny" });
+		const resolution = resolveToolPermissionPolicies(
+			Promise.reject(new Error("Agent Registry unavailable")),
+			"plan",
+			() => fallbackPermission
+		);
+		fallbackPermission = createToolPermission();
+		const resolved = await resolution;
+		const demo = new FakeMcpClient("demo", [tool("echo")]);
+		const { registry } = harness({
+			clients: { demo },
+			configs: [serverConfig("demo", { permission: "allow" })],
+		});
+
+		const snapshot = await registry.createSnapshot("plan", resolved.mcpPolicy);
+
+		expect(resolved.permission).toBe(fallbackPermission);
+		expect(snapshot.manifest).toEqual([]);
+		expect(snapshot.tools.size).toBe(1);
+		for (const entry of snapshot.tools.values()) {
+			expect(entry.policy).toBe("deny");
+		}
+	});
+
 	test("plan mode connects and builds a catalog under the default policy", async () => {
 		// Plan no longer short-circuits: visibility is purely policy-driven, so a
 		// plan snapshot with the permissive default policy connects and exposes
