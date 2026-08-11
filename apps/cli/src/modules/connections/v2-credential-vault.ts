@@ -55,7 +55,10 @@ export class CredentialVaultV2 {
 
 	constructor(options: V2CredentialVaultOptions = {}) {
 		this.secretStore =
-			options.secretStore ?? getBunSecretStore(options.bunSecrets);
+			options.secretStore ??
+			(options.fileRoot === undefined
+				? getBunSecretStore(options.bunSecrets)
+				: null);
 		this.fileRoot = options.fileRoot ?? homedir();
 	}
 

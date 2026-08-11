@@ -32,22 +32,6 @@ mock.module("@wincode/ai", () => ({
 	}),
 	codingModeNameSchema: z.enum(["build", "plan"]),
 	codingAgentDataSchemas: {},
-	codingMessageMetadataSchema: z.object({
-		mode: z.enum(["build", "plan"]).optional(),
-		skill: z
-			.object({
-				name: z.string(),
-				instructions: z.string(),
-				arguments: z.string(),
-			})
-			.optional(),
-		model: z
-			.object({ modelId: z.string(), providerId: z.enum(["wincode"]) })
-			.optional(),
-		responseTimeMs: z.number().int().nonnegative().optional(),
-		variant: z.enum(["high", "max"]).optional(),
-	}),
-	modelVariantSchema: z.enum(["high", "max"]),
 	mcpToolManifestSchema: z
 		.array(
 			z
@@ -668,7 +652,7 @@ describe("POST /:id/chat (transport-only)", () => {
 				messages: [
 					{
 						id: "user-1",
-						metadata: { skill },
+						metadata: { skill: { ...skill, contentHash: "skill-hash" } },
 						parts: [{ text: "hi", type: "text" }],
 						role: "user",
 					},
@@ -809,7 +793,7 @@ describe("POST /:id/chat (transport-only)", () => {
 		expect(response.status).toBe(400);
 	});
 
-	test("rejects malformed message metadata", async () => {
+	test("replaces untrusted request metadata with effective hosted metadata", async () => {
 		const response = await sessionsRoutes.request("/session-1/chat", {
 			body: JSON.stringify({
 				messages: [
@@ -827,7 +811,7 @@ describe("POST /:id/chat (transport-only)", () => {
 			method: "POST",
 		});
 
-		expect(response.status).toBe(400);
+		expect(response.status).toBe(200);
 	});
 
 	test("rejects unauthenticated requests before body validation", async () => {

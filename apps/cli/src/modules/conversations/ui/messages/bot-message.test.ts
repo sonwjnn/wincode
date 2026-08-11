@@ -1,14 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
-
-mock.module("@wincode/ai", () => ({
-	findSupportedChatModelSelection: () => null,
-	normalizeChatModelSelection: (
-		selection: string | { modelId: string; providerId: string }
-	) =>
-		typeof selection === "string"
-			? { modelId: selection, providerId: "wincode" }
-			: selection,
-}));
+import { describe, expect, test } from "bun:test";
 
 const { formatResponseTime } = await import("./bot-message");
 

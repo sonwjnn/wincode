@@ -12,9 +12,7 @@ import { drizzle } from "drizzle-orm/neon-serverless";
 import { createBillingRepository } from "../../../src/billing/repository";
 
 const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) {
-	throw new Error("DATABASE_URL missing");
-}
+const hasDatabaseUrl = Boolean(databaseUrl);
 
 const schema = {
 	billingRequestReservation,
@@ -22,7 +20,12 @@ const schema = {
 	billingUsageEvent,
 	user,
 };
-const db = drizzle(new Pool({ connectionString: databaseUrl }), { schema });
+const db = drizzle(
+	new Pool({
+		connectionString: databaseUrl ?? "postgres://localhost/wincode-test",
+	}),
+	{ schema }
+);
 const repo = createBillingRepository(db, {
 	alphaUserAllowlist: new Set<string>(),
 	dailyGlobalCostCapUsdMicros: 100_000_000n,
@@ -87,7 +90,7 @@ const cleanupFixture = async () => {
 	await db.delete(user).where(like(user.id, `${prefix}%`));
 };
 
-describe("billing repository pg", () => {
+describe.skipIf(!hasDatabaseUrl)("billing repository pg", () => {
 	it("expired entitlement reserve/settle/finalize", async () => {
 		const userId = `${prefix}_u1`;
 		try {
