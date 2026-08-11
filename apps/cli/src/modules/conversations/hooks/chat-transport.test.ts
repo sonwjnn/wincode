@@ -87,8 +87,10 @@ const makeMcp = (
 	close: async () => undefined,
 	createSnapshot: async () => makeSnapshot(),
 	handleDynamicToolCall: () => undefined,
+	initialize: async () => undefined,
 	reconnect: async () => undefined,
 	statuses: [],
+	toggle: async () => undefined,
 	...overrides,
 });
 

@@ -8,17 +8,17 @@ user's working directory — the server never runs file-system tools.
 ## Public API
 
 - `createMcpRegistry(deps)` — build the MCP registry for a workspace. Loads config, connects
-  servers, exposes `createSnapshot(mode, agentPolicy?)`, `execute(...)`, `reconnect(serverName)`,
-  `getStatuses()`, `subscribe(listener)`, and `close()`.
+	servers, exposes `createSnapshot(mode, agentPolicy?)`, `execute(...)`, `reconnect(serverName)`,
+	`toggle(serverName)`, `getStatuses()`, `subscribe(listener)`, and `close()`.
 - `McpProvider` / `useMcp()` — React context provider that owns a single registry per provider
-  tree and exposes `statuses`, `createSnapshot(mode, agentPolicy?)`,
-  `handleDynamicToolCall(snapshot, toolCall, addToolOutput, gate)`, `reconnect(serverName)`, and
-  `close()`. The registry is created once and closed on unmount.
+	tree and exposes `statuses`, `createSnapshot(mode, agentPolicy?)`,
+	`handleDynamicToolCall(snapshot, toolCall, addToolOutput, gate)`, `reconnect(serverName)`, and
+	`toggle(serverName)`, and `close()`. The registry is created once and closed on unmount.
 - Types: `McpServerStatus`, `McpApprovalRequest`, `McpCatalogSnapshot`, `McpSnapshotTool`,
   `McpAgentPolicy`, `McpApprovalGate`, `McpApprovalDecision`, `McpExecutionPolicy`.
-- `McpStatusDialogContent` — the pure status surface (list of servers, transport, state, tool
-  counts, reconnectable rows). Rendered from `McpServerStatus` only, so no config, env, headers,
-  or URLs can appear.
+- `McpStatusDialogContent` — the `/mcps` runtime status surface. Arrow keys navigate servers and
+	Space enables or disables the highlighted server without editing configuration. Rendered from
+	`McpServerStatus` only, so no config, env, headers, or URLs can appear.
 
 MCP tools resolve approvals through the same generic Permission engine, approval queue, and
 approval dialog as static coding tools — there is no MCP-specific approval controller or dialog.
@@ -32,8 +32,8 @@ are merged in this order, with later sources overriding earlier ones:
 
 1. `${XDG_CONFIG_HOME:-~/.config}/wincode/wincode.json` (or `.jsonc`).
 2. `~/.wincode/wincode.json` (or `.jsonc`).
-3. `<workspace>/wincode.json` (or `.jsonc`).
-4. `<workspace>/.wincode/wincode.json` (or `.jsonc`).
+3. Each directory from the Git root through `<workspace>`, in ascending precedence:
+   `<directory>/wincode.json` then `<directory>/.wincode/wincode.json` (or `.jsonc`).
 
 At one location, `.jsonc` wins when both formats exist and emits a duplicate-config diagnostic.
 The process-level shared config store loads each workspace once. Objects merge recursively while

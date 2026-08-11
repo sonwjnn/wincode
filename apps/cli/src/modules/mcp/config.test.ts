@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { loadMcpConfig } from "./config";
 
 const CONFIG_ROOT = "/home/user/.config/wincode";
@@ -39,6 +42,36 @@ const load = (
 	});
 
 describe("loadMcpConfig", () => {
+	test("loads project MCP config from the Git root for a nested workspace", async () => {
+		const root = await mkdtemp(join(tmpdir(), "wincode-mcp-config-"));
+		const workspace = join(root, "apps", "cli");
+		try {
+			await Promise.all([
+				mkdir(join(root, ".git")),
+				mkdir(workspace, { recursive: true }),
+			]);
+			await writeFile(
+				join(root, "wincode.json"),
+				JSON.stringify({
+					mcp: {
+						context7: { type: "local", command: ["context7"] },
+					},
+				})
+			);
+
+			const result = await loadMcpConfig({
+				configRoot: join(root, "config"),
+				env: {},
+				homeRoot: join(root, "home"),
+				workspace,
+			});
+
+			expect(Object.keys(result.servers)).toEqual(["context7"]);
+		} finally {
+			await rm(root, { force: true, recursive: true });
+		}
+	});
+
 	test("loads and merges every Wincode config layer in precedence order", async () => {
 		const result = await load({
 			[`${CONFIG_ROOT}/wincode.json`]: JSON.stringify({

@@ -97,7 +97,7 @@ bun run dev:server    # API server on http://localhost:3000
 bun run dev:web       # web app on http://localhost:3001
 ```
 
-Inside the CLI, use slash commands to manage your session — for example `/connect` to add a provider, `/models` to switch models, `/mcp` to inspect MCP servers, and `/sessions` to browse history.
+Inside the CLI, use slash commands to manage your session — for example `/connect` to add a provider, `/models` to switch models, `/mcps` to manage MCP servers, and `/sessions` to browse history.
 
 ### Common tasks
 

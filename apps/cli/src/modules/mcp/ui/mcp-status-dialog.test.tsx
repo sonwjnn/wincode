@@ -13,10 +13,11 @@ import {
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { McpProvider } from "../context/mcp-provider";
-import type {
-	McpCatalogSnapshot,
-	McpRegistry,
-	McpServerStatus,
+import {
+	createMcpRegistry,
+	type McpCatalogSnapshot,
+	type McpRegistry,
+	type McpServerStatus,
 } from "../registry";
 import {
 	formatStatusRow,
@@ -36,7 +37,7 @@ const makeStatus = (
 
 const makeRegistry = (
 	statuses: readonly McpServerStatus[],
-	reconnect?: (serverName: string) => Promise<void>
+	toggle?: (serverName: string) => Promise<void>
 ): McpRegistry => ({
 	close: async () => undefined,
 	createSnapshot: async (agent: AgentId): Promise<McpCatalogSnapshot> => ({
@@ -47,8 +48,10 @@ const makeRegistry = (
 	}),
 	execute: async () => ({ content: [], isError: false, truncated: false }),
 	getStatuses: () => statuses,
-	reconnect: reconnect ?? (async () => undefined),
+	initialize: async () => undefined,
+	reconnect: async () => undefined,
 	subscribe: () => () => undefined,
+	toggle: toggle ?? (async () => undefined),
 });
 
 const flushUi = async (
@@ -69,7 +72,7 @@ const renderStatusDialog = async (registry: McpRegistry) => {
 			open({
 				children: <McpStatusDialogContent />,
 				padding: { bottom: 1, left: 0, right: 0, top: 1 },
-				title: "MCP Servers",
+				title: "MCPs",
 				titleMargin: { left: 4, right: 4 },
 				width: 118,
 			});
@@ -146,6 +149,16 @@ test("formatStatusRow marks connected, connecting, and disabled rows non-reconne
 	);
 });
 
+test("formatStatusRow derives runtime enabled state", () => {
+	expect(formatStatusRow(makeStatus({ state: "connected" })).enabled).toBe(
+		true
+	);
+	expect(formatStatusRow(makeStatus({ state: "failed" })).enabled).toBe(true);
+	expect(formatStatusRow(makeStatus({ state: "disabled" })).enabled).toBe(
+		false
+	);
+});
+
 test("formatStatusRow never exposes config, env, headers, or urls in the error", () => {
 	const row = formatStatusRow(
 		makeStatus({
@@ -164,7 +177,7 @@ test("formatStatusRow omits the error when the status has none", () => {
 	expect(row.error).toBeUndefined();
 });
 
-test("dialog lists server rows with transport, state, tool count, and local warning", async () => {
+test("dialog renders MCP state and runtime enabled status", async () => {
 	const registry = makeRegistry([
 		makeStatus({ name: "alpha", state: "connected", toolCount: 2 }),
 		makeStatus({
@@ -180,63 +193,113 @@ test("dialog lists server rows with transport, state, tool count, and local warn
 	const frame = setup.captureCharFrame();
 	expect(frame).toContain("alpha");
 	expect(frame).toContain("beta");
-	expect(frame).toContain("local");
-	expect(frame).toContain("remote");
+	expect(frame).toContain("connected");
 	expect(frame).toContain("failed");
-	expect(frame).toContain("2 tools");
-	expect(frame).toContain(MCP_LOCAL_WARNING);
-	// The already-sanitized error surfaces, never a raw secret.
-	expect(frame).toContain("connection refused");
+	expect(frame).toContain("Enabled");
+	expect(frame).toContain("toggle space");
+	const headerLine = frame.split("\n").find((line) => line.includes("esc"));
+	const enabledLine = frame.split("\n").find((line) => line.includes("alpha"));
+	expect((headerLine?.lastIndexOf("esc") ?? -3) + "esc".length).toBe(
+		(enabledLine?.lastIndexOf("Enabled") ?? -7) + "Enabled".length
+	);
 	setup.renderer.destroy();
 });
 
-test("enter on a failed row triggers reconnect for that server", async () => {
-	const reconnected: string[] = [];
+test("dialog initializes configured servers before a catalog snapshot exists", async () => {
+	const registry = createMcpRegistry({
+		workspace: "/tmp",
+		loadConfig: async () => ({
+			diagnostics: [],
+			servers: {
+				context7: {
+					name: "context7",
+					type: "local",
+					command: ["context7"],
+					disabled: false,
+					permission: "allow",
+					timeout: { startup: 1000, catalog: 1000, execution: 1000 },
+				},
+			},
+		}),
+		createClient: () => ({
+			callTool: async () => ({ content: [] }),
+			close: async () => undefined,
+			connect: async () => undefined,
+			listTools: async () => [],
+			setToolsChangedListener: () => undefined,
+		}),
+	});
+	const { setup } = await renderStatusDialog(registry);
+
+	const frame = setup.captureCharFrame();
+	expect(frame).toContain("context7");
+	expect(frame).not.toContain("No MCPs");
+	setup.renderer.destroy();
+});
+
+test("space toggles the highlighted MCP without changing the search input", async () => {
+	const toggled: string[] = [];
+	let finishToggle: (() => void) | undefined;
+	const pendingToggle = new Promise<void>((resolve) => {
+		finishToggle = resolve;
+	});
 	const registry = makeRegistry(
 		[
+			makeStatus({ name: "healthy", state: "connected", toolCount: 3 }),
 			makeStatus({
-				name: "broken",
-				state: "failed",
+				name: "off",
+				state: "disabled",
 				toolCount: 0,
 				transport: "remote",
 			}),
-			makeStatus({ name: "healthy", state: "connected", toolCount: 3 }),
 		],
 		async (serverName) => {
-			reconnected.push(serverName);
+			toggled.push(serverName);
+			await pendingToggle;
 		}
 	);
 	const { setup } = await renderStatusDialog(registry);
+	const initialFrame = setup.captureCharFrame();
+	expect(initialFrame).toContain("Disabled");
+	expect(initialFrame).toContain("Search");
 
-	setup.mockInput.pressEnter();
+	await setup.mockInput.typeText(" ");
+	await setup.mockInput.typeText(" ");
+	await flushUi(setup);
+	expect(toggled).toEqual(["healthy"]);
+	expect(setup.captureCharFrame()).toContain("Loading...");
+	expect(setup.captureCharFrame()).toContain("loading...");
+	expect(setup.captureCharFrame()).toContain("Search");
+
+	finishToggle?.();
 	await flushUi(setup);
 
-	expect(reconnected).toEqual(["broken"]);
+	setup.mockInput.pressArrow("down");
+	await flushUi(setup);
+	await setup.mockInput.typeText(" ");
+	await flushUi(setup);
+
+	expect(toggled).toEqual(["healthy", "off"]);
 	setup.renderer.destroy();
 });
 
-test("enter on a connected row does not trigger reconnect", async () => {
-	const reconnected: string[] = [];
+test("space does not toggle a server hidden by the search filter", async () => {
+	const toggled: string[] = [];
 	const registry = makeRegistry(
-		[
-			makeStatus({ name: "healthy", state: "connected", toolCount: 3 }),
-			makeStatus({
-				name: "broken",
-				state: "degraded",
-				toolCount: 1,
-				transport: "remote",
-			}),
-		],
+		[makeStatus({ name: "context7" })],
 		async (serverName) => {
-			reconnected.push(serverName);
+			toggled.push(serverName);
 		}
 	);
 	const { setup } = await renderStatusDialog(registry);
 
-	setup.mockInput.pressEnter();
+	await setup.mockInput.typeText("missing");
 	await flushUi(setup);
+	expect(setup.captureCharFrame()).toContain("No MCPs");
 
-	expect(reconnected).toEqual(["broken"]);
+	await setup.mockInput.typeText(" ");
+	await flushUi(setup);
+	expect(toggled).toEqual([]);
 	setup.renderer.destroy();
 });
 
@@ -246,14 +309,14 @@ test("escape closes the status dialog", async () => {
 	]);
 	const { setup } = await renderStatusDialog(registry);
 
-	expect(setup.captureCharFrame()).toContain("MCP Servers");
+	expect(setup.captureCharFrame()).toContain("MCPs");
 
 	setup.mockInput.pressEscape();
 	await flushUi(setup);
 	await flushUi(setup);
 
 	const frame = setup.captureCharFrame();
-	expect(frame).not.toContain("MCP Servers");
+	expect(frame).not.toContain("MCPs");
 	expect(frame).toContain("base");
 	setup.renderer.destroy();
 });

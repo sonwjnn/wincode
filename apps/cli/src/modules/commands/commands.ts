@@ -9,7 +9,7 @@ export type CommandSpec = BaseSpec &
 		| { kind: "new" }
 		| {
 				kind: "dialog";
-				dialogKey: "sessions" | "theme" | "mcp" | "permissions";
+				dialogKey: "sessions" | "theme" | "mcps" | "permissions";
 		  }
 		| { kind: "models" }
 		| { kind: "skills" }
@@ -69,11 +69,11 @@ export const COMMANDS: CommandSpec[] = [
 		kind: "connect",
 	},
 	{
-		description: "Inspect MCP servers and reconnect failures",
-		name: "mcp",
-		value: "/mcp",
+		description: "Enable, disable, and inspect MCP servers",
+		name: "mcps",
+		value: "/mcps",
 		kind: "dialog",
-		dialogKey: "mcp",
+		dialogKey: "mcps",
 	},
 	{
 		description: "Manage tool approvals, temporary grants, and auto mode",

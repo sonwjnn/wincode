@@ -81,19 +81,19 @@ describe("DialogAdapter", () => {
 		expect(opened).toEqual([{ key: "theme", title: "Select Theme" }]);
 	});
 
-	test("opens mcp dialog with its title", () => {
+	test("opens mcps dialog with its title", () => {
 		const opened: { key: string; title: string }[] = [];
 		const adapter = new DialogAdapter({
 			open: (key: string, title: string) => opened.push({ key, title }),
 		});
 		adapter.execute({
-			value: "/mcp",
-			name: "mcp",
-			description: "Inspect MCP servers and reconnect failures",
+			value: "/mcps",
+			name: "mcps",
+			description: "Enable, disable, and inspect MCP servers",
 			kind: "dialog",
-			dialogKey: "mcp",
+			dialogKey: "mcps",
 		});
-		expect(opened).toEqual([{ key: "mcp", title: "MCP Servers" }]);
+		expect(opened).toEqual([{ key: "mcps", title: "MCPs" }]);
 	});
 });
 

@@ -6,6 +6,7 @@ import {
 	parse as parseJsonc,
 	parseTree,
 } from "jsonc-parser";
+import { getProjectRoots } from "@/shared/paths/project-roots";
 
 export type ConfigScope = "global" | "project";
 export type ConfigOrigin = {
@@ -362,11 +363,14 @@ const loadSnapshot = async (
 	workspace: string,
 	options: Required<Pick<ConfigStoreOptions, "configRoot" | "fs" | "homeRoot">>
 ): Promise<ConfigSnapshot> => {
+	const projectLocations = getProjectRoots(workspace).flatMap((root) => [
+		{ root, scope: "project" as const },
+		{ root: path.join(root, ".wincode"), scope: "project" as const },
+	]);
 	const locations = [
 		{ root: options.configRoot, scope: "global" as const },
 		{ root: path.join(options.homeRoot, ".wincode"), scope: "global" as const },
-		{ root: workspace, scope: "project" as const },
-		{ root: path.join(workspace, ".wincode"), scope: "project" as const },
+		...projectLocations,
 	];
 	const loaded = await Promise.all(
 		locations.map(({ root, scope }) => readSource(root, scope, options.fs))

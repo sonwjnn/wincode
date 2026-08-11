@@ -1,0 +1,27 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "context7": {
+      "type": "local",
+      "command": ["npx", "-y", "@upstash/context7-mcp"],
+      "enabled": true,
+      "permission": "allow",
+      "timeout": {
+        "startup": 30000,
+        "catalog": 30000,
+        "execution": 43200000
+      }
+    },
+    "websearch": {
+      "type": "remote",
+      "url": "https://mcp.exa.ai/mcp?tools=web_search_exa",
+      "enabled": true,
+      "permission": "allow",
+      "timeout": {
+        "startup": 30000,
+        "catalog": 30000,
+        "execution": 43200000
+      }
+    }
+  }
+}

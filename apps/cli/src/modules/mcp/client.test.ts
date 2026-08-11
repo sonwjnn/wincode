@@ -125,6 +125,7 @@ describe("createSdkMcpClient", () => {
 				command: "bun",
 				cwd: "/workspace",
 				env: { LOG_LEVEL: "info", PATH: "/bin" },
+				stderr: "ignore",
 			},
 		]);
 	});

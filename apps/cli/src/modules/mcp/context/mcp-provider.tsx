@@ -147,7 +147,17 @@ export function runDynamicToolCall(
 			return;
 		}
 
-		const decision = await gate(tool, toolCall.input);
+		let decision: McpApprovalDecision;
+		try {
+			decision = await gate(tool, toolCall.input);
+		} catch {
+			await outputErrorText(
+				addToolOutput,
+				toolCall,
+				MCP_TOOL_CALL_FAILED_ERROR
+			);
+			return;
+		}
 		if (decision.kind === "deny") {
 			await outputErrorText(
 				addToolOutput,
@@ -205,6 +215,7 @@ export function runDynamicToolCall(
 
 export type McpContextValue = {
 	close(): Promise<void>;
+	initialize(): Promise<void>;
 	createSnapshot(
 		agent: AgentId,
 		agentPolicy?: McpAgentPolicy
@@ -217,6 +228,7 @@ export type McpContextValue = {
 	): void;
 	reconnect(serverName: string): Promise<void>;
 	statuses: readonly McpServerStatus[];
+	toggle(serverName: string): Promise<void>;
 };
 
 /**
@@ -312,7 +324,7 @@ export function McpProvider({
 				registry,
 				snapshot,
 				toolCall,
-			});
+			}).catch(() => undefined);
 		},
 		[registry]
 	);
@@ -348,8 +360,10 @@ export function McpProvider({
 			close: () => registry.close(),
 			createSnapshot,
 			handleDynamicToolCall,
+			initialize: () => registry.initialize(),
 			reconnect: (serverName) => registry.reconnect(serverName),
 			statuses,
+			toggle: (serverName) => registry.toggle(serverName),
 		}),
 		[createSnapshot, handleDynamicToolCall, registry, statuses]
 	);

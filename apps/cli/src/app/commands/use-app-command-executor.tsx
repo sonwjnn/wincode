@@ -141,7 +141,7 @@ export function useCommandExecutor(
 									width: CONNECTION_DIALOG_WIDTH,
 								});
 								break;
-							case "mcp":
+							case "mcps":
 								dialog.open({
 									children: <McpStatusDialogContent />,
 									padding: { bottom: 1, left: 0, right: 0, top: 1 },

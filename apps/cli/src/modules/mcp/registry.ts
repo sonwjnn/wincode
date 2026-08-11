@@ -21,7 +21,6 @@ import {
 	type McpClientTool,
 } from "./client";
 import {
-	DEFAULT_MCP_TIMEOUTS,
 	loadMcpConfig,
 	type McpConfigInput,
 	type McpConfigResult,
@@ -120,6 +119,7 @@ export type McpCatalogSnapshot = {
 
 export type McpRegistry = {
 	close(): Promise<void>;
+	initialize(): Promise<void>;
 	createSnapshot(
 		agent: AgentId,
 		agentPolicy?: McpAgentPolicy
@@ -134,6 +134,7 @@ export type McpRegistry = {
 	getStatuses(): readonly McpServerStatus[];
 	reconnect(serverName: string): Promise<void>;
 	subscribe(listener: () => void): () => void;
+	toggle(serverName: string): Promise<void>;
 };
 
 export type McpRegistryDeps = {
@@ -150,6 +151,7 @@ type ServerEntry = {
 	client: McpClient | undefined;
 	config: ResolvedMcpServerConfig;
 	error: string | undefined;
+	executionController: AbortController;
 	state: McpServerState;
 	tools: readonly McpClientTool[];
 };
@@ -207,7 +209,9 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	let closed = false;
 	let initPromise: Promise<void> | undefined;
 	const reconnects = new Map<string, Promise<void>>();
+	const toggles = new Map<string, Promise<void>>();
 	let latestSnapshotId: string | undefined;
+	let catalogGeneration = 0;
 
 	const emit = (): void => {
 		for (const listener of [...listeners]) {
@@ -277,10 +281,12 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				client: undefined,
 				config,
 				error: undefined,
+				executionController: new AbortController(),
 				state: config.disabled ? "disabled" : "connecting",
 				tools: [],
 			});
 		}
+		emit();
 		const connects: Promise<void>[] = [];
 		for (const entry of serverEntries.values()) {
 			if (entry.state !== "disabled") {
@@ -310,7 +316,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		};
 		const candidates: Candidate[] = [];
 		for (const entry of serverEntries.values()) {
-			if (entry.client === undefined) {
+			if (entry.client === undefined || entry.state !== "connected") {
 				continue;
 			}
 			const serverPolicy = entry.config.permission;
@@ -389,9 +395,20 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			return snapshot;
 		}
 		await init();
-		const snapshot = await buildSnapshot(agent, agentPolicy);
-		latestSnapshotId = snapshot.id;
-		return snapshot;
+		while (!closed) {
+			const generation = catalogGeneration;
+			const snapshot = await buildSnapshot(agent, agentPolicy);
+			if (generation === catalogGeneration) {
+				latestSnapshotId = snapshot.id;
+				return snapshot;
+			}
+		}
+		return {
+			agent,
+			id: crypto.randomUUID(),
+			manifest: [],
+			tools: new Map(),
+		};
 	};
 
 	const executionError = (
@@ -460,15 +477,23 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			return blocked;
 		}
 		const entry = serverEntries.get(tool.serverName);
-		const timeout = AbortSignal.timeout(
-			entry?.config.timeout.execution ?? DEFAULT_MCP_TIMEOUTS.execution
-		);
-		const signals: AbortSignal[] = [timeout, closeController.signal];
+		if (
+			entry === undefined ||
+			entry.state !== "connected" ||
+			entry.client !== tool.client
+		) {
+			return outputError(`MCP server '${tool.serverName}' is not enabled`);
+		}
+		const timeout = AbortSignal.timeout(entry.config.timeout.execution);
+		const signals: AbortSignal[] = [
+			timeout,
+			closeController.signal,
+			entry.executionController.signal,
+		];
 		if (signal !== undefined) {
 			signals.push(signal);
 		}
 		const combined = AbortSignal.any(signals);
-		const callerAborted = signal?.aborted === true;
 		try {
 			const raw = await tool.client.callTool(
 				tool.originalToolName,
@@ -485,8 +510,10 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				error
 			);
 			if (
-				!(callerAborted || closeController.signal.aborted) &&
-				entry !== undefined
+				signal?.aborted !== true &&
+				!closeController.signal.aborted &&
+				entry.client === tool.client &&
+				!entry.executionController.signal.aborted
 			) {
 				await closeClient(entry);
 				entry.state = "degraded";
@@ -498,6 +525,10 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	};
 
 	const doReconnect = async (entry: ServerEntry): Promise<void> => {
+		catalogGeneration += 1;
+		latestSnapshotId = undefined;
+		entry.executionController.abort();
+		entry.executionController = new AbortController();
 		await closeClient(entry);
 		entry.client = createClient(entry.config);
 		entry.client.setToolsChangedListener((tools) => {
@@ -519,25 +550,32 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			);
 			await closeClient(entry);
 		}
+		catalogGeneration += 1;
+		latestSnapshotId = undefined;
 		emit();
 	};
 
 	const reconnect = (serverName: string): Promise<void> => {
-		const entry = serverEntries.get(serverName);
-		if (entry === undefined) {
-			return Promise.resolve();
-		}
-		if (entry.config.disabled || entry.state === "disabled") {
-			return Promise.resolve();
-		}
 		const inFlight = reconnects.get(serverName);
 		if (inFlight !== undefined) {
 			return inFlight;
 		}
-		if (entry.state === "connecting") {
-			return Promise.resolve();
-		}
-		const run = doReconnect(entry);
+		const run = (async () => {
+			const activeToggle = toggles.get(serverName);
+			if (activeToggle !== undefined) {
+				await activeToggle;
+			}
+			const entry = serverEntries.get(serverName);
+			if (
+				entry === undefined ||
+				entry.config.disabled ||
+				entry.state === "disabled" ||
+				entry.state === "connecting"
+			) {
+				return;
+			}
+			await doReconnect(entry);
+		})();
 		reconnects.set(serverName, run);
 		run.then(
 			() => {
@@ -546,6 +584,42 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			() => {
 				reconnects.delete(serverName);
 			}
+		);
+		return run;
+	};
+
+	const toggle = (serverName: string): Promise<void> => {
+		const inFlight = toggles.get(serverName);
+		if (inFlight !== undefined) {
+			return inFlight;
+		}
+		const run = (async () => {
+			const activeReconnect = reconnects.get(serverName);
+			if (activeReconnect !== undefined) {
+				await activeReconnect;
+			}
+			await init();
+			const entry = serverEntries.get(serverName);
+			if (entry === undefined) {
+				return;
+			}
+			if (entry.state === "disabled") {
+				await doReconnect(entry);
+				return;
+			}
+			catalogGeneration += 1;
+			latestSnapshotId = undefined;
+			entry.executionController.abort();
+			await closeClient(entry);
+			entry.error = undefined;
+			entry.state = "disabled";
+			entry.tools = [];
+			emit();
+		})();
+		toggles.set(serverName, run);
+		run.then(
+			() => toggles.delete(serverName),
+			() => toggles.delete(serverName)
 		);
 		return run;
 	};
@@ -588,7 +662,9 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		createSnapshot,
 		execute,
 		getStatuses,
+		initialize: init,
 		reconnect,
 		subscribe,
+		toggle,
 	};
 }

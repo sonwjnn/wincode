@@ -1,5 +1,5 @@
 import { TextAttributes } from "@opentui/core";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDialogEscape } from "@/shared/providers/dialog/dialog-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -12,6 +12,7 @@ export const MCP_LOCAL_WARNING =
 	"Local commands run with your OS permissions and inherited environment.";
 
 export type StatusRowFormat = {
+	enabled: boolean;
 	error?: string;
 	reconnectable: boolean;
 	server: string;
@@ -37,6 +38,7 @@ export function sanitizeStatusError(error: string): string {
 
 export function formatStatusRow(status: McpServerStatus): StatusRowFormat {
 	const row: StatusRowFormat = {
+		enabled: status.state !== "disabled",
 		reconnectable: status.state === "degraded" || status.state === "failed",
 		server: status.name,
 		state: status.state,
@@ -52,32 +54,116 @@ export function formatStatusRow(status: McpServerStatus): StatusRowFormat {
 	return row;
 }
 
+type McpStatusRowProps = {
+	isLoading: boolean;
+	isSelected: boolean;
+	row: StatusRowFormat;
+};
+
+function McpStatusRow({ isLoading, isSelected, row }: McpStatusRowProps) {
+	const { colors } = useTheme();
+	const selectedTextColor = getContrastingTextColor(colors.selection);
+	const primaryTextColor = isSelected ? selectedTextColor : colors.text;
+	const secondaryTextColor = isSelected ? selectedTextColor : colors.textMuted;
+	let enabledColor = colors.textMuted;
+	if (isSelected) {
+		enabledColor = selectedTextColor;
+	} else if (row.enabled) {
+		enabledColor = colors.success;
+	}
+	const stateLabel = isLoading ? "loading..." : row.state;
+	let enabledLabel = "Disabled";
+	if (isLoading) {
+		enabledLabel = "Loading...";
+	} else if (row.enabled) {
+		enabledLabel = "Enabled";
+	}
+	const indicator = isLoading || !row.enabled ? "○" : "✓";
+
+	return (
+		<SelectableDialogItem>
+			<box
+				flexDirection="row"
+				flexGrow={1}
+				gap={1}
+				marginRight={3}
+				overflow="hidden"
+			>
+				<box flexDirection="row" flexShrink={0} gap={1}>
+					<text
+						attributes={isSelected ? TextAttributes.BOLD : undefined}
+						fg={primaryTextColor}
+						selectable={false}
+						wrapMode="none"
+					>
+						{row.server}
+					</text>
+					<text
+						attributes={TextAttributes.DIM}
+						fg={secondaryTextColor}
+						selectable={false}
+					>
+						{stateLabel}
+					</text>
+				</box>
+				<box flexGrow={1} />
+				<box flexDirection="row" flexShrink={0} gap={1}>
+					<text fg={enabledColor} selectable={false}>
+						{indicator}
+					</text>
+					<text fg={enabledColor} selectable={false}>
+						{enabledLabel}
+					</text>
+				</box>
+			</box>
+		</SelectableDialogItem>
+	);
+}
+
 /**
- * Pure status dialog. Lists MCP servers with their transport, state, and tool
- * count; local rows surface the OS-permissions warning and failed/degraded rows
- * can be reconnected with enter. Only fields derived from McpServerStatus are
- * rendered, so no config, env, headers, or urls can appear.
+ * Lists MCP servers and lets the highlighted server be enabled or disabled at
+ * runtime with Space. Only fields derived from McpServerStatus are rendered, so
+ * no config, environment, headers, or URLs can appear.
  */
 export function McpStatusDialogContent() {
-	const { reconnect, statuses } = useMcp();
+	const { initialize, statuses, toggle } = useMcp();
 	const { colors } = useTheme();
+	const loadingServersRef = useRef(new Set<string>());
+	const mountedRef = useRef(true);
+	const [loadingServers, setLoadingServers] = useState<ReadonlySet<string>>(
+		() => new Set()
+	);
 
 	useDialogEscape();
+	useEffect(() => {
+		mountedRef.current = true;
+		void initialize().catch(() => undefined);
+		return () => {
+			mountedRef.current = false;
+		};
+	}, [initialize]);
 
 	const rows = useMemo(
 		() => statuses.map((status) => formatStatusRow(status)),
 		[statuses]
 	);
-	const hasLocalRows = rows.some((row) => row.transport === "local");
-	const hasReconnectableRows = rows.some((row) => row.reconnectable);
-
-	const handleSelect = useCallback(
-		(row: StatusRowFormat) => {
-			if (row.reconnectable) {
-				void reconnect(row.server);
+	const handleToggle = useCallback(
+		(serverName: string) => {
+			if (loadingServersRef.current.has(serverName)) {
+				return;
 			}
+			loadingServersRef.current.add(serverName);
+			setLoadingServers(new Set(loadingServersRef.current));
+			void toggle(serverName)
+				.finally(() => {
+					loadingServersRef.current.delete(serverName);
+					if (mountedRef.current) {
+						setLoadingServers(new Set(loadingServersRef.current));
+					}
+				})
+				.catch(() => undefined);
 		},
-		[reconnect]
+		[toggle]
 	);
 
 	const filterFn = useCallback((row: StatusRowFormat, query: string) => {
@@ -87,104 +173,40 @@ export function McpStatusDialogContent() {
 			.includes(q);
 	}, []);
 
-	const stateColorFor = (row: StatusRowFormat, fallback: string): string => {
-		switch (row.state) {
-			case "failed":
-				return colors.error;
-			case "connected":
-				return colors.success;
-			case "degraded":
-				return colors.info;
-			default:
-				return fallback;
-		}
-	};
-
 	return (
 		<SearchListDialogWrapper<StatusRowFormat>
-			emptyText="No MCP servers"
+			emptyText="No MCPs"
 			filterFn={filterFn}
 			footer={
-				hasLocalRows || hasReconnectableRows ? (
-					<box flexDirection="column" gap={0} marginX={4}>
-						{hasLocalRows && (
-							<text
-								attributes={TextAttributes.DIM}
-								fg={colors.textMuted}
-								wrapMode="word"
-							>
-								{MCP_LOCAL_WARNING}
-							</text>
-						)}
-						{hasReconnectableRows && (
-							<box flexDirection="row" gap={1} height={1}>
-								<text fg={colors.text}>enter</text>
-								<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-									reconnect failed server
-								</text>
-							</box>
-						)}
-					</box>
-				) : undefined
+				<box flexDirection="row" gap={1} height={1} marginX={4}>
+					<text fg={colors.text}>toggle</text>
+					<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+						space
+					</text>
+				</box>
 			}
 			getKey={(row) => row.server}
-			isItemSelectable={(row) => row.reconnectable}
 			items={rows}
-			onSelect={handleSelect}
-			placeholder="Search MCP servers"
-			renderItem={(row, isSelected) => {
-				const selectedTextColor = getContrastingTextColor(colors.selection);
-				const primaryTextColor = isSelected ? selectedTextColor : colors.text;
-				const secondaryTextColor = isSelected
-					? selectedTextColor
-					: colors.textMuted;
-				const stateColor = stateColorFor(row, secondaryTextColor);
-
-				return (
-					<SelectableDialogItem>
-						<box flexDirection="row" flexGrow={1} gap={2} overflow="hidden">
-							<box flexShrink={0}>
-								<text fg={primaryTextColor} selectable={false} wrapMode="none">
-									{row.server}
-								</text>
-							</box>
-							<box flexGrow={1} />
-							<text
-								attributes={TextAttributes.DIM}
-								fg={secondaryTextColor}
-								selectable={false}
-							>
-								{row.transport}
-							</text>
-							<text fg={stateColor} selectable={false}>
-								{row.state}
-							</text>
-							<text
-								attributes={TextAttributes.DIM}
-								fg={secondaryTextColor}
-								selectable={false}
-							>
-								{row.toolCount} tools
-							</text>
-							{row.reconnectable && (
-								<text fg={stateColor} selectable={false}>
-									reconnect
-								</text>
-							)}
-							{row.error !== undefined && (
-								<text
-									attributes={TextAttributes.DIM}
-									fg={secondaryTextColor}
-									selectable={false}
-									wrapMode="none"
-								>
-									{row.error}
-								</text>
-							)}
-						</box>
-					</SelectableDialogItem>
-				);
+			onKey={(key, highlightedRow) => {
+				if (key.name !== "space") {
+					return false;
+				}
+				if (highlightedRow !== undefined) {
+					handleToggle(highlightedRow.server);
+				}
+				return true;
 			}}
+			onSelect={() => undefined}
+			placeholder="Search"
+			renderItem={(row, isSelected) => (
+				<McpStatusRow
+					isLoading={
+						loadingServers.has(row.server) || row.state === "connecting"
+					}
+					isSelected={isSelected}
+					row={row}
+				/>
+			)}
 		/>
 	);
 }

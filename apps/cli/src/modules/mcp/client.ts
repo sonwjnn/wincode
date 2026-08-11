@@ -35,6 +35,7 @@ export type McpStdioTransportOptions = {
 	command: string;
 	cwd: string;
 	env: Record<string, string>;
+	stderr: "ignore";
 };
 
 export type McpHttpTransportOptions = {
@@ -117,6 +118,7 @@ const localTransportOptions = (
 		args,
 		cwd,
 		env: { ...deps.environment, ...config.environment },
+		stderr: "ignore",
 	};
 };
 

@@ -626,6 +626,34 @@ describe("createMcpRegistry", () => {
 		expect(created).toHaveLength(2);
 	});
 
+	test("toggle waits for an in-flight reconnect and leaves the server disabled", async () => {
+		const demo = new FakeMcpClient("demo", [tool("echo")]);
+		const { registry } = harness({
+			clients: { demo },
+			configs: [serverConfig("demo")],
+		});
+		await registry.initialize();
+		let releaseReconnect: (() => void) | undefined;
+		demo.connectImpl = () =>
+			new Promise<void>((resolve) => {
+				releaseReconnect = resolve;
+			});
+
+		const reconnecting = registry.reconnect("demo");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const toggling = registry.toggle("demo");
+		releaseReconnect?.();
+		await Promise.all([reconnecting, toggling]);
+
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({
+				name: "demo",
+				state: "disabled",
+				toolCount: 0,
+			})
+		);
+	});
+
 	test("reconnect on a disabled server is a no-op", async () => {
 		const { clients, registry } = harness({
 			configs: [serverConfig("off", { disabled: true })],
@@ -638,6 +666,102 @@ describe("createMcpRegistry", () => {
 			])
 		);
 		expect(clients.size).toBe(0);
+	});
+
+	test("toggle disables a connected server and clears its tools", async () => {
+		const demo = new FakeMcpClient("demo", [tool("echo")]);
+		const { registry } = harness({
+			clients: { demo },
+			configs: [serverConfig("demo")],
+		});
+		const snapshot = await registry.createSnapshot("build");
+
+		await registry.toggle("demo");
+
+		expect(demo.closeCount).toBe(1);
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({
+				name: "demo",
+				state: "disabled",
+				toolCount: 0,
+			})
+		);
+		const staleResult = await registry.execute(
+			snapshot,
+			snapshot.manifest[0]?.name ?? "",
+			{},
+			async () => true
+		);
+		expect(staleResult).toMatchObject({
+			isError: true,
+			content: [
+				{ type: "text", text: "MCP tool snapshot is stale or not executable" },
+			],
+		});
+	});
+
+	test("toggle enables a disabled server and discovers its tools", async () => {
+		const off = new FakeMcpClient("off", [tool("echo")]);
+		const { registry } = harness({
+			clients: { off },
+			configs: [serverConfig("off", { disabled: true })],
+		});
+		await registry.initialize();
+
+		await registry.toggle("off");
+
+		expect(off.connectCount).toBe(1);
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({
+				name: "off",
+				state: "connected",
+				toolCount: 1,
+			})
+		);
+	});
+
+	test("does not publish tools from a snapshot racing with disable", async () => {
+		const demo = new FakeMcpClient("demo", [tool("echo")]);
+		const { registry } = harness({
+			clients: { demo },
+			configs: [serverConfig("demo")],
+		});
+		await registry.initialize();
+
+		const snapshotPromise = registry.createSnapshot("build");
+		const togglePromise = registry.toggle("demo");
+		const [snapshot] = await Promise.all([snapshotPromise, togglePromise]);
+
+		expect(snapshot.manifest).toEqual([]);
+		expect(snapshot.tools.size).toBe(0);
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({ name: "demo", state: "disabled" })
+		);
+	});
+
+	test("disabling aborts an in-flight tool execution", async () => {
+		const demo = new FakeMcpClient("demo", [tool("echo")]);
+		demo.callImpl = hangingCall();
+		const { registry } = harness({
+			clients: { demo },
+			configs: [serverConfig("demo")],
+		});
+		const snapshot = await registry.createSnapshot("build");
+		const execution = registry.execute(
+			snapshot,
+			snapshot.manifest[0]?.name ?? "",
+			{},
+			async () => true
+		);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		await registry.toggle("demo");
+		const result = await execution;
+
+		expect(result.isError).toBe(true);
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({ name: "demo", state: "disabled" })
+		);
 	});
 
 	test("close awaits in-flight init so the SDK client is closed exactly once", async () => {
@@ -673,7 +797,12 @@ describe("createMcpRegistry", () => {
 
 	test("returns a distinct cancelled result when the caller aborts execution", async () => {
 		const demo = new FakeMcpClient("demo", [tool("echo")]);
-		demo.callImpl = hangingCall();
+		let callStarted = false;
+		const hang = hangingCall();
+		demo.callImpl = (name, input, signal) => {
+			callStarted = true;
+			return hang(name, input, signal);
+		};
 		const { registry } = harness({
 			clients: { demo },
 			configs: [serverConfig("demo")],
@@ -688,6 +817,8 @@ describe("createMcpRegistry", () => {
 			async () => true,
 			controller.signal
 		);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(callStarted).toBe(true);
 		controller.abort();
 		const result = await pending;
 		expect(result.isError).toBe(true);
@@ -737,7 +868,7 @@ describe("createMcpRegistry", () => {
 		]);
 	});
 
-	test("notifies subscribers once per init batch and supports unsubscribe", async () => {
+	test("notifies subscribers when servers are discovered and settled", async () => {
 		const broken = new FakeMcpClient("broken", [tool("echo")]);
 		broken.connectFailure = new Error("down");
 		let notifications = 0;
@@ -749,11 +880,11 @@ describe("createMcpRegistry", () => {
 			notifications += 1;
 		});
 		await registry.createSnapshot("build");
-		expect(notifications).toBe(1);
+		expect(notifications).toBe(2);
 		unsubscribe();
 		broken.connectFailure = null;
 		await registry.reconnect("broken");
-		expect(notifications).toBe(1);
+		expect(notifications).toBe(2);
 	});
 
 	test("close cancels in-flight work, closes clients, and is idempotent", async () => {

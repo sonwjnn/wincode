@@ -101,8 +101,10 @@ const makeRegistry = (execute?: McpRegistry["execute"]): McpRegistry => ({
 	createSnapshot: async (agent: AgentId) => makeSnapshot({ agent }),
 	execute: execute ?? (async () => successResult()),
 	getStatuses: () => EMPTY_STATUSES,
+	initialize: async () => undefined,
 	reconnect: async () => undefined,
 	subscribe: () => () => undefined,
+	toggle: async () => undefined,
 });
 
 const makeAddToolOutput = (): {
@@ -306,7 +308,25 @@ test("runDynamicToolCall sanitizes thrown errors to a stable message", async () 
 	expect(outputs[0]?.errorText).not.toContain("secret-token-abc");
 });
 
-test("provider exposes statuses, createSnapshot, reconnect, and close", async () => {
+test("runDynamicToolCall converts a rejected approval gate to a stable error", async () => {
+	const { addToolOutput, outputs } = makeAddToolOutput();
+	await runDynamicToolCall({
+		addToolOutput,
+		gate: async () => {
+			throw new Error("approval failed secret-token-abc");
+		},
+		latestSnapshot: makeSnapshot(),
+		registry: makeRegistry(),
+		snapshot: makeSnapshot(),
+		toolCall: makeToolCall(),
+	});
+
+	expect(outputs[0]?.state).toBe("output-error");
+	expect(outputs[0]?.errorText).toBe("MCP tool call failed");
+	expect(outputs[0]?.errorText).not.toContain("secret-token-abc");
+});
+
+test("provider exposes statuses, snapshots, runtime controls, and close", async () => {
 	const listeners = new Set<() => void>();
 	let statuses: readonly McpServerStatus[] = [
 		{ name: "demo", state: "connected", toolCount: 2, transport: "local" },
@@ -324,6 +344,9 @@ test("provider exposes statuses, createSnapshot, reconnect, and close", async ()
 		}),
 		execute: async () => successResult(),
 		getStatuses: () => statuses,
+		initialize: async () => {
+			calls.push("initialize");
+		},
 		reconnect: async (serverName: string) => {
 			calls.push(`reconnect:${serverName}`);
 		},
@@ -333,11 +356,16 @@ test("provider exposes statuses, createSnapshot, reconnect, and close", async ()
 				listeners.delete(listener);
 			};
 		},
+		toggle: async (serverName: string) => {
+			calls.push(`toggle:${serverName}`);
+		},
 	};
 	const { captured, setup } = await renderProvider(registry);
 	expect(captured).toBeDefined();
 
 	expect(captured.value?.statuses).toEqual(statuses);
+	await captured.value?.initialize();
+	expect(calls).toContain("initialize");
 
 	await expect(captured.value?.createSnapshot("build")).resolves.toEqual({
 		agent: "build",
@@ -348,6 +376,8 @@ test("provider exposes statuses, createSnapshot, reconnect, and close", async ()
 
 	await captured.value?.reconnect("demo");
 	expect(calls).toContain("reconnect:demo");
+	await captured.value?.toggle("demo");
+	expect(calls).toContain("toggle:demo");
 
 	statuses = [
 		...statuses,

@@ -56,14 +56,14 @@ describe("CommandSpec registry", () => {
 		}
 	});
 
-	test("/mcp is kind: 'dialog'", () => {
-		const cmd = COMMANDS.find((c) => c.value === "/mcp");
+	test("/mcps is kind: 'dialog'", () => {
+		const cmd = COMMANDS.find((c) => c.value === "/mcps");
 		expect(cmd).toBeDefined();
-		expect(cmd?.name).toBe("mcp");
-		expect(cmd?.description).toBe("Inspect MCP servers and reconnect failures");
+		expect(cmd?.name).toBe("mcps");
+		expect(cmd?.description).toBe("Enable, disable, and inspect MCP servers");
 		expect(cmd?.kind).toBe("dialog");
 		if (cmd?.kind === "dialog") {
-			expect(cmd.dialogKey).toBe("mcp");
+			expect(cmd.dialogKey).toBe("mcps");
 		}
 	});
 

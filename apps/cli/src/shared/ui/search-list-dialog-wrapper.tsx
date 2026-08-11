@@ -46,7 +46,7 @@ type SearchListDialogWrapperProps<T> = {
 		item: T,
 		isSelected: boolean
 	) => string | RGBA | undefined;
-	onKey?: (key: KeyboardKey) => boolean;
+	onKey?: (key: KeyboardKey, highlightedItem: T | undefined) => boolean;
 };
 
 export function SearchListDialogWrapper<T>({
@@ -110,7 +110,7 @@ export function SearchListDialogWrapper<T>({
 		if (!isTopLayer(layerId)) {
 			return;
 		}
-		if (onKey?.(key)) {
+		if (onKey?.(key, highlightedItem)) {
 			key.preventDefault();
 			return;
 		}
