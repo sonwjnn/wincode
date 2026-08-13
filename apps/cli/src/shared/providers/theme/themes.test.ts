@@ -82,6 +82,8 @@ describe("resolveTheme", () => {
 		expect(colors.text).toBe("#e0e0e0");
 		expect(colors.textMuted).toBe("#949494");
 		expect(colors.textDisabled).toBe("#616161");
+		expect(colors.thinkingText).toBe("#b2b2b2");
+		expect(colors.tool).toBe(colors.textMuted);
 	});
 
 	test("preserves explicit overrides", () => {
@@ -95,6 +97,7 @@ describe("resolveTheme", () => {
 				backgroundElement: "#121212",
 				borderActive: "#dddddd",
 				filePath: "#eeeeee",
+				tool: "#abcdef",
 			},
 		}).colors;
 		expect(colors.text).toBe("#aaaaaa");
@@ -103,6 +106,7 @@ describe("resolveTheme", () => {
 		expect(colors.backgroundElement).toBe("#121212");
 		expect(colors.borderActive).toBe("#dddddd");
 		expect(colors.filePath).toBe("#eeeeee");
+		expect(colors.tool).toBe("#abcdef");
 	});
 
 	test("preserves alpha in derived colors", () => {
@@ -152,6 +156,23 @@ describe("resolveTheme", () => {
 			)
 		).toBeGreaterThanOrEqual(4.5);
 	});
+
+	test("uses a visible tool color for transparent backgrounds", () => {
+		const colors = resolveTheme({
+			...definition,
+			colors: {
+				...definition.colors,
+				background: "transparent",
+				textMuted: undefined,
+			},
+		}).colors;
+
+		expect(colors.tool).toBe(colors.borderSubtle);
+		expect(colors.tool).not.toBe("transparent");
+		expect(colors.text).toBe(colors.primary);
+		expect(colors.textMuted).toBe(colors.borderSubtle);
+		expect(colors.textDisabled).toBe(colors.border);
+	});
 });
 
 test("contains the pinned OpenCode theme catalog", () => {
@@ -166,11 +187,14 @@ test("maps OpenCode semantic colors consistently", () => {
 			theme.colors.planMode,
 			theme.colors.selection,
 			theme.colors.thinking,
+			theme.colors.thinkingText,
 			theme.colors.success,
 			theme.colors.error,
 			theme.colors.info,
+			theme.colors.tool,
 			theme.colors.text,
 			theme.colors.textMuted,
+			theme.colors.textDisabled,
 			theme.colors.background,
 			theme.colors.backgroundPanel,
 			theme.colors.backgroundElement,
@@ -181,6 +205,7 @@ test("maps OpenCode semantic colors consistently", () => {
 		]) {
 			expect(color).toMatch(THEME_COLOR);
 		}
+		expect(theme.colors.tool).not.toBe("transparent");
 
 		expect(theme.colors.selection).toBe(theme.colors.primary);
 		expect(theme.colors.planMode).toBe(getAgentColor(theme.colors, "plan"));

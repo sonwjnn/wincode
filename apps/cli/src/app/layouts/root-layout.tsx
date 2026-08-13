@@ -87,6 +87,7 @@ export function RootLayout() {
 										<BillingComposition>
 											<DialogProvider>
 												<McpProvider
+													closeRegistryOnUnmount={false}
 													createRegistry={() => mcpRegistry}
 													workspace={workspace}
 												>

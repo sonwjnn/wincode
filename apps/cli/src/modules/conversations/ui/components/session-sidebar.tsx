@@ -8,6 +8,11 @@ import {
 	formatUsdAmount,
 } from "@wincode/ai";
 import { useMemo } from "react";
+import {
+	type McpServerState,
+	type McpServerStatus,
+	useMcp,
+} from "@/modules/mcp";
 import { useModelPricing } from "@/modules/model-pricing";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { APP_VERSION } from "@/shared/app-info";
@@ -16,6 +21,9 @@ import { summarizeSessionUsage } from "../../usage/session-usage";
 import { WorkspacePath } from "./workspace-path";
 
 const CONTEXT_WARNING_PERCENT = 80;
+
+const formatMcpSidebarState = (state: McpServerState): string =>
+	`${state.charAt(0).toUpperCase()}${state.slice(1)}`;
 
 type SessionSidebarProps = {
 	messages: CodingAgentUIMessage[];
@@ -31,12 +39,48 @@ function SectionLabel({ text, color }: { text: string; color: string }) {
 	);
 }
 
+export function McpSidebarSection({
+	statuses,
+}: {
+	statuses: readonly McpServerStatus[];
+}) {
+	const { colors } = useTheme();
+	return (
+		<box flexDirection="column">
+			<SectionLabel color={colors.text} text="MCP" />
+			{statuses.length === 0 ? (
+				<text fg={colors.textMuted}>No MCPs</text>
+			) : (
+				statuses.map((status) => {
+					const isConnected = status.state === "connected";
+					return (
+						<box flexDirection="row" gap={1} key={status.name} width="100%">
+							<text fg={isConnected ? colors.success : colors.textDisabled}>
+								●
+							</text>
+							<box flexGrow={1} overflow="hidden">
+								<text fg={colors.text} wrapMode="none">
+									{status.name}
+								</text>
+							</box>
+							<text fg={colors.textMuted} flexShrink={0} wrapMode="none">
+								{formatMcpSidebarState(status.state)}
+							</text>
+						</box>
+					);
+				})
+			)}
+		</box>
+	);
+}
+
 export function SessionSidebar({
 	messages,
 	sessionTitle,
 	width,
 }: SessionSidebarProps) {
 	const { colors } = useTheme();
+	const { statuses } = useMcp();
 	const { model } = usePromptConfig();
 	const { table } = useModelPricing();
 	const usage = useMemo(
@@ -95,6 +139,8 @@ export function SessionSidebar({
 							<text fg={colors.textMuted}>No usage yet</text>
 						)}
 					</box>
+
+					<McpSidebarSection statuses={statuses} />
 
 					<box flexDirection="column">
 						<SectionLabel color={colors.text} text="Agents" />

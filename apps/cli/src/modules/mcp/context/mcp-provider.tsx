@@ -76,22 +76,6 @@ const outputErrorText = (
 		toolCallId: toolCall.toolCallId,
 	});
 
-const mcpResultErrorText = (
-	result: McpNormalizedResult
-): string | undefined => {
-	for (const item of result.content) {
-		if (
-			typeof item === "object" &&
-			item !== null &&
-			!Array.isArray(item) &&
-			item.type === "text" &&
-			typeof item.text === "string"
-		) {
-			return item.text;
-		}
-	}
-};
-
 export type RunDynamicToolCallDeps = {
 	addToolOutput: McpAddToolOutput;
 	gate: McpApprovalGate;
@@ -199,7 +183,7 @@ export function runDynamicToolCall(
 			await outputErrorText(
 				addToolOutput,
 				toolCall,
-				mcpResultErrorText(result) ?? MCP_TOOL_CALL_FAILED_ERROR
+				MCP_TOOL_CALL_FAILED_ERROR
 			);
 			return;
 		}
@@ -232,26 +216,22 @@ export type McpContextValue = {
 };
 
 /**
- * Builds the one-time startup summary for a build catalog. Returns null when
- * nothing meaningful initialized (no connected or failed servers), so callers
- * only surface a toast once the MCP catalog actually resolved.
+ * Builds the one-time startup failure summary for a build catalog. Successful
+ * connections remain visible in the sidebar without producing a toast.
  */
 export function buildMcpSummary(
 	statuses: readonly McpServerStatus[]
 ): string | null {
-	let connected = 0;
 	let failed = 0;
 	for (const status of statuses) {
-		if (status.state === "connected") {
-			connected += 1;
-		} else if (status.state === "failed") {
+		if (status.state === "failed") {
 			failed += 1;
 		}
 	}
-	if (connected === 0 && failed === 0) {
+	if (failed === 0) {
 		return null;
 	}
-	return `MCP: ${connected} connected, ${failed} failed.`;
+	return `MCP: ${failed} failed.`;
 }
 
 const McpContext = createContext<McpContextValue | null>(null);
@@ -266,12 +246,14 @@ export function useMcp(): McpContextValue {
 
 export type McpProviderProps = {
 	children: ReactNode;
+	closeRegistryOnUnmount?: boolean;
 	createRegistry?: (deps: McpRegistryDeps) => McpRegistry;
 	workspace: string;
 };
 
 export function McpProvider({
 	children,
+	closeRegistryOnUnmount = true,
 	createRegistry,
 	workspace,
 }: McpProviderProps) {
@@ -283,13 +265,20 @@ export function McpProvider({
 	// it synchronously, without waiting for a re-render after createSnapshot.
 	const latestSnapshotRef = useRef<McpCatalogSnapshot | null>(null);
 	const summaryToastShownRef = useRef(false);
+	const initializePromiseRef = useRef<Promise<void> | null>(null);
+	const initialize = useCallback((): Promise<void> => {
+		initializePromiseRef.current ??= registry.initialize();
+		return initializePromiseRef.current;
+	}, [registry]);
 
-	useEffect(
-		() => () => {
-			void registry.close();
-		},
-		[registry]
-	);
+	useEffect(() => {
+		void initialize().catch(() => undefined);
+		return () => {
+			if (closeRegistryOnUnmount) {
+				void registry.close();
+			}
+		};
+	}, [closeRegistryOnUnmount, initialize, registry]);
 
 	const createSnapshot = useCallback(
 		async (
@@ -360,12 +349,12 @@ export function McpProvider({
 			close: () => registry.close(),
 			createSnapshot,
 			handleDynamicToolCall,
-			initialize: () => registry.initialize(),
+			initialize,
 			reconnect: (serverName) => registry.reconnect(serverName),
 			statuses,
 			toggle: (serverName) => registry.toggle(serverName),
 		}),
-		[createSnapshot, handleDynamicToolCall, registry, statuses]
+		[createSnapshot, handleDynamicToolCall, initialize, registry, statuses]
 	);
 
 	return <McpContext.Provider value={value}>{children}</McpContext.Provider>;

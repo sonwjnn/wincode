@@ -12,6 +12,7 @@ export {
 	type McpAgentPolicy,
 	type McpApprovalRequest,
 	type McpCatalogSnapshot,
+	type McpServerState,
 	type McpServerStatus,
 	type McpSnapshotTool,
 } from "./registry";

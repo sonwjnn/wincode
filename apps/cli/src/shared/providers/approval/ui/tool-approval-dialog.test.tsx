@@ -10,7 +10,11 @@ import {
 	useKeyboardLayer,
 } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
-import { formatApprovalDescription, MAX_DESCRIPTION_CHARS } from "../format";
+import {
+	formatApprovalDescription,
+	formatApprovalInput,
+	MAX_DESCRIPTION_CHARS,
+} from "../format";
 import {
 	type ToolApprovalActions,
 	ToolApprovalDialog,
@@ -241,4 +245,20 @@ test("formatApprovalDescription bounds oversized descriptions", () => {
 	expect(formatted).not.toContain(tail);
 	expect(formatted.length).toBeLessThanOrEqual(MAX_DESCRIPTION_CHARS + 1);
 	expect(formatted.endsWith("…")).toBe(true);
+});
+
+test("formatApprovalInput bounds traversal and redacts secrets", () => {
+	const input: Record<string, unknown> = {
+		auth: "hidden-auth",
+		headers: "Authorization: Bearer hidden-token",
+		oversized: `${"x".repeat(4096)}TAIL`,
+	};
+	input.self = input;
+	const formatted = formatApprovalInput(input);
+
+	expect(formatted).toContain("[redacted]");
+	expect(formatted).toContain("[circular]");
+	expect(formatted).not.toContain("hidden-auth");
+	expect(formatted).not.toContain("hidden-token");
+	expect(formatted).not.toContain("TAIL");
 });

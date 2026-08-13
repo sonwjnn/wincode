@@ -27,6 +27,55 @@ import {
 	promptHistory,
 } from "./schema";
 
+const MCP_STATIC_TOOL_PART_PREFIX = "tool-mcp_";
+
+const failedStaticMcpToolPartSchema = z
+	.object({
+		errorText: z.string(),
+		input: z.unknown().optional(),
+		rawInput: z.unknown().optional(),
+		state: z.literal("output-error"),
+		toolCallId: z.string(),
+		type: z.string().startsWith(MCP_STATIC_TOOL_PART_PREFIX),
+	})
+	.passthrough();
+
+const parsePersistedMcpInput = (input: unknown): unknown => {
+	if (typeof input !== "string") {
+		return input;
+	}
+	try {
+		const parsed: unknown = JSON.parse(input);
+		return typeof parsed === "object" && parsed !== null ? parsed : input;
+	} catch {
+		return input;
+	}
+};
+
+type MessagePart = CodingAgentUIMessage["parts"][number];
+
+const normalizeMcpToolPart = (part: MessagePart): MessagePart => {
+	const failedMcpPart = failedStaticMcpToolPartSchema.safeParse(part);
+	if (!failedMcpPart.success) {
+		return part;
+	}
+
+	const { rawInput, ...normalizedPart } = failedMcpPart.data;
+	const input = Object.hasOwn(failedMcpPart.data, "input")
+		? failedMcpPart.data.input
+		: rawInput;
+	return {
+		...normalizedPart,
+		input: parsePersistedMcpInput(input),
+		toolName: failedMcpPart.data.type.slice("tool-".length),
+		type: "dynamic-tool",
+	};
+};
+
+const normalizeMcpToolParts = (
+	parts: CodingAgentUIMessage["parts"]
+): CodingAgentUIMessage["parts"] => parts.map(normalizeMcpToolPart);
+
 export const createPromptHistory = (db: LocalConversationDatabase) => ({
 	get: () =>
 		db
@@ -240,7 +289,7 @@ const writeMessages = (
 				metadataJson: codingMessageMetadataSchema.parse(
 					resolveMetadata(message, model, agent)
 				),
-				partsJson: message.parts,
+				partsJson: normalizeMcpToolParts(message.parts),
 				position,
 				role: message.role,
 				sessionId,
@@ -362,7 +411,7 @@ export const createDrizzleConversationStore = (
 									parseAndNormalizePersistedMetadata(row.metadataJson),
 									row.agent
 								),
-					parts: row.partsJson,
+					parts: normalizeMcpToolParts(row.partsJson),
 					role: row.role,
 				})),
 			});

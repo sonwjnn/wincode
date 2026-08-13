@@ -6,6 +6,8 @@ export type ThemeColors = {
 	planMode: string;
 	selection: string;
 	thinking: string;
+	thinkingText: string;
+	tool: string;
 	success: string;
 	error: string;
 	info: string;
@@ -52,6 +54,7 @@ export type ThemeDefinition = {
 
 const TEXT_BRIGHTNESS = 0.88;
 const MUTED_TEXT_BRIGHTNESS = 0.58;
+const THINKING_TEXT_BRIGHTNESS = 0.28;
 const DISABLED_TEXT_BRIGHTNESS = 0.38;
 const FILE_PATH_BRIGHTNESS = 0.35;
 const HEX_COLOR_RE = /^#([\da-f]{3,4}|[\da-f]{6}(?:[\da-f]{2})?)$/iu;
@@ -794,13 +797,34 @@ export const resolveTheme = ({ colors, name }: ThemeDefinition): Theme => ({
 			colors.filePath ??
 			brightenColor(colors.borderSubtle, FILE_PATH_BRIGHTNESS),
 		filePathBackground: colors.filePathBackground ?? colors.backgroundMenu,
-		text: colors.text ?? brightenColor(colors.background, TEXT_BRIGHTNESS),
+		text:
+			colors.text ??
+			(colors.background === "transparent"
+				? colors.primary
+				: brightenColor(colors.background, TEXT_BRIGHTNESS)),
 		textDisabled:
 			colors.textDisabled ??
-			brightenColor(colors.background, DISABLED_TEXT_BRIGHTNESS),
+			(colors.background === "transparent"
+				? colors.border
+				: brightenColor(colors.background, DISABLED_TEXT_BRIGHTNESS)),
 		textMuted:
 			colors.textMuted ??
-			brightenColor(colors.background, MUTED_TEXT_BRIGHTNESS),
+			(colors.background === "transparent"
+				? colors.borderSubtle
+				: brightenColor(colors.background, MUTED_TEXT_BRIGHTNESS)),
+		thinkingText:
+			colors.thinkingText ??
+			brightenColor(
+				colors.textMuted ??
+					brightenColor(colors.background, MUTED_TEXT_BRIGHTNESS),
+				THINKING_TEXT_BRIGHTNESS
+			),
+		tool:
+			colors.tool ??
+			colors.textMuted ??
+			(colors.background === "transparent"
+				? colors.borderSubtle
+				: brightenColor(colors.background, MUTED_TEXT_BRIGHTNESS)),
 	},
 	name,
 });

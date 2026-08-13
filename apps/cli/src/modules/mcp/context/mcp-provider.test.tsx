@@ -308,6 +308,30 @@ test("runDynamicToolCall sanitizes thrown errors to a stable message", async () 
 	expect(outputs[0]?.errorText).not.toContain("secret-token-abc");
 });
 
+test("runDynamicToolCall sanitizes MCP-declared errors to a stable message", async () => {
+	const { addToolOutput, outputs } = makeAddToolOutput();
+	await runDynamicToolCall({
+		addToolOutput,
+		gate: fixedGate({ kind: "allow" }),
+		latestSnapshot: makeSnapshot(),
+		registry: makeRegistry(async () => ({
+			content: [
+				{
+					text: `Authorization: Bearer hidden-token ${"x".repeat(4096)}`,
+					type: "text",
+				},
+			],
+			isError: true,
+			truncated: false,
+		})),
+		snapshot: makeSnapshot(),
+		toolCall: makeToolCall(),
+	});
+
+	expect(outputs[0]?.errorText).toBe("MCP tool call failed");
+	expect(outputs[0]?.errorText).not.toContain("hidden-token");
+});
+
 test("runDynamicToolCall converts a rejected approval gate to a stable error", async () => {
 	const { addToolOutput, outputs } = makeAddToolOutput();
 	await runDynamicToolCall({
@@ -364,8 +388,10 @@ test("provider exposes statuses, snapshots, runtime controls, and close", async 
 	expect(captured).toBeDefined();
 
 	expect(captured.value?.statuses).toEqual(statuses);
+	await flushUi(setup);
+	expect(calls.filter((call) => call === "initialize")).toHaveLength(1);
 	await captured.value?.initialize();
-	expect(calls).toContain("initialize");
+	expect(calls.filter((call) => call === "initialize")).toHaveLength(1);
 
 	await expect(captured.value?.createSnapshot("build")).resolves.toEqual({
 		agent: "build",
@@ -401,6 +427,39 @@ test("provider exposes statuses, snapshots, runtime controls, and close", async 
 	// asserting the registry was closed on unmount.
 	await flushUi(setup);
 	expect(calls.filter((call) => call === "close")).toHaveLength(2);
+});
+
+test("provider does not close an externally owned registry on unmount", async () => {
+	let closeCalls = 0;
+	const registry: McpRegistry = {
+		...makeRegistry(),
+		close: async () => {
+			closeCalls += 1;
+		},
+	};
+	const setup = await testRender(
+		<ThemeProvider>
+			<KeyboardLayerProvider>
+				<ToastProvider>
+					<DialogProvider>
+						<McpProvider
+							closeRegistryOnUnmount={false}
+							createRegistry={() => registry}
+							workspace="/tmp"
+						>
+							<text>consumer</text>
+						</McpProvider>
+					</DialogProvider>
+				</ToastProvider>
+			</KeyboardLayerProvider>
+		</ThemeProvider>,
+		{ height: 10, width: 40 }
+	);
+	await setup.renderOnce();
+	setup.renderer.destroy();
+	await flushUi(setup);
+
+	expect(closeCalls).toBe(0);
 });
 
 test("provider handleDynamicToolCall runs the gate and executes an allow", async () => {
@@ -475,7 +534,7 @@ test("provider shows a single summary toast after the first build snapshot", asy
 
 	await captured.value?.createSnapshot("build");
 	await flushUi(setup);
-	expect(setup.captureCharFrame()).toContain("MCP: 1 connected, 1 failed.");
+	expect(setup.captureCharFrame()).toContain("MCP: 1 failed.");
 
 	// A later snapshot with different server counts must not emit a second
 	// summary toast; the first-init flag holds.
@@ -488,16 +547,16 @@ test("provider shows a single summary toast after the first build snapshot", asy
 	await flushUi(setup);
 
 	const frame = setup.captureCharFrame();
-	expect(frame).not.toContain("MCP: 1 connected, 2 failed.");
-	expect(frame).toContain("MCP: 1 connected, 1 failed.");
+	expect(frame).not.toContain("MCP: 2 failed.");
+	expect(frame).toContain("MCP: 1 failed.");
 	setup.renderer.destroy();
 });
 
-test("provider shows no summary toast without connected or failed servers", async () => {
+test("provider shows no summary toast when all MCP servers connect", async () => {
 	const registry: McpRegistry = {
 		...makeRegistry(),
 		getStatuses: () => [
-			{ name: "demo", state: "connecting", toolCount: 0, transport: "local" },
+			{ name: "demo", state: "connected", toolCount: 2, transport: "local" },
 		],
 	};
 	const { captured, setup } = await renderProvider(registry);

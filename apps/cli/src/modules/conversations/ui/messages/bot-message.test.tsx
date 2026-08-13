@@ -1,0 +1,306 @@
+import { describe, expect, test } from "bun:test";
+import { testRender } from "@opentui/react/test-utils";
+import type { CodingAgentUIMessage } from "@wincode/ai";
+import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+
+const { BotMessageContent, formatResponseTime } = await import("./bot-message");
+type MessagePart = CodingAgentUIMessage["parts"][number];
+type DynamicToolPart = Extract<MessagePart, { type: "dynamic-tool" }>;
+type GrepToolPart = Extract<MessagePart, { type: "tool-grep" }>;
+type ReadToolPart = Extract<MessagePart, { type: "tool-read" }>;
+
+const renderFrame = async (
+	parts: CodingAgentUIMessage["parts"],
+	height = 4
+): Promise<string> => {
+	const setup = await testRender(
+		<ThemeProvider>
+			<BotMessageContent parts={parts} />
+		</ThemeProvider>,
+		{ height, width: 160 }
+	);
+
+	try {
+		await setup.renderOnce();
+		return setup.captureCharFrame();
+	} finally {
+		setup.renderer.destroy();
+	}
+};
+
+describe("formatResponseTime", () => {
+	test("formats sub-second durations in milliseconds", () => {
+		expect(formatResponseTime(431)).toBe("431ms");
+	});
+
+	test("formats seconds with one decimal place", () => {
+		expect(formatResponseTime(4300)).toBe("4.3s");
+	});
+
+	test("formats minute durations with seconds", () => {
+		expect(formatResponseTime(159_000)).toBe("2m 39s");
+	});
+});
+
+describe("BotMessageContent", () => {
+	test("renders completed MCP calls as compact rows without runtime details", async () => {
+		const part = {
+			input: {
+				libraryName: "Model Context Protocol",
+				query: "How to test an MCP server",
+			},
+			output: {},
+			state: "output-available",
+			toolCallId: "call-1",
+			toolName: "mcp_context7_resolve-library-id_a4f486fc",
+			type: "dynamic-tool",
+		} satisfies DynamicToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain(
+			"⚙ context7_resolve-library-id [libraryName=Model Context Protocol, query=How to test an MCP server]"
+		);
+		expect(frame).not.toContain("a4f486fc");
+	});
+
+	test("renders MCP arguments while a call is running", async () => {
+		const part = {
+			input: { query: "sensitive or verbose query" },
+			state: "input-available",
+			toolCallId: "call-2",
+			toolName: "mcp_context7_query-docs_3f6b8a11",
+			type: "dynamic-tool",
+		} satisfies DynamicToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain(
+			"⚙ context7_query-docs [query=sensitive or verbose query]"
+		);
+		expect(frame).not.toContain("running");
+	});
+
+	test("renders failed MCP calls without runtime details", async () => {
+		const part = {
+			errorText: "Chat request failed.",
+			input: { query: "verbose failed query" },
+			state: "output-error",
+			toolCallId: "call-3",
+			toolName: "mcp_context_7_query_docs_3f6b8a11",
+			type: "dynamic-tool",
+		} satisfies DynamicToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain(
+			"⚙ context_7_query_docs [query=verbose failed query]"
+		);
+		expect(frame).toContain("Chat request failed.");
+		expect(frame).not.toContain("failed Chat request failed.");
+		expect(frame).not.toContain("3f6b8a11");
+	});
+
+	test("preserves static tool names and arguments", async () => {
+		const part = {
+			input: { path: "README.md" },
+			state: "input-available",
+			toolCallId: "call-4",
+			type: "tool-read",
+		} satisfies ReadToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain("→ Read README.md");
+	});
+
+	test("renders grep tools with the search style", async () => {
+		const part = {
+			input: { path: "packages/ai/src", pattern: "dynamic-tool" },
+			output: { matches: [] },
+			state: "output-available",
+			toolCallId: "call-grep",
+			type: "tool-grep",
+		} satisfies GrepToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain('✱ Grep "dynamic-tool" in packages/ai/src');
+	});
+
+	test("sanitizes control characters in tool rows", async () => {
+		const part = {
+			input: { path: "packages\nai", pattern: 'dynamic"\ttool' },
+			output: { matches: [] },
+			state: "output-available",
+			toolCallId: "call-grep-controls",
+			type: "tool-grep",
+		} satisfies GrepToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain('✱ Grep "dynamic\\" tool" in packages ai');
+		expect(frame).not.toContain("packages\nai");
+	});
+
+	test("renders denied MCP calls as denied", async () => {
+		const part = {
+			approval: { approved: false, id: "approval-1" },
+			input: {},
+			state: "output-denied",
+			toolCallId: "call-5",
+			toolName: "mcp_context7_query-docs_3f6b8a11",
+			type: "dynamic-tool",
+		} satisfies DynamicToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain("⚙ context7_query-docs [] denied");
+		expect(frame).not.toContain("failed");
+		expect(frame).not.toContain("running");
+	});
+
+	test("humanizes unhashed historical MCP names", async () => {
+		const part = {
+			input: {},
+			output: {},
+			state: "output-available",
+			toolCallId: "call-6",
+			toolName: "mcp_search_docs",
+			type: "dynamic-tool",
+		} satisfies DynamicToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain("⚙ search_docs []");
+		expect(frame).not.toContain("Mcp");
+	});
+
+	test("preserves unhashed MCP names ending in eight hex characters", async () => {
+		const part = {
+			input: {},
+			output: {},
+			state: "output-available",
+			toolCallId: "call-7",
+			toolName: "mcp_server_abc12345",
+			type: "dynamic-tool",
+		} satisfies DynamicToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain("⚙ server_abc12345 []");
+	});
+
+	test("redacts sensitive MCP arguments", async () => {
+		const part = {
+			input: { apiKey: "secret-value", query: "safe query" },
+			state: "input-available",
+			toolCallId: "call-8",
+			toolName: "mcp_websearch_web_search_exa_f487e108",
+			type: "dynamic-tool",
+		} satisfies DynamicToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain(
+			"⚙ websearch_web_search_exa [apiKey=[redacted], query=safe query]"
+		);
+		expect(frame).not.toContain("secret-value");
+	});
+
+	test("redacts common secret keys and secret-looking values", async () => {
+		const part = {
+			input: {
+				"a\nuth": "hidden-auth",
+				cookie: "hidden-cookie",
+				headers: "Authorization: Bearer hidden-bearer",
+				privateKey: "hidden-key",
+				session: "hidden-session",
+			},
+			state: "input-available",
+			toolCallId: "call-secrets",
+			toolName: "mcp_server_tool_12345678",
+			type: "dynamic-tool",
+		} satisfies DynamicToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain("[redacted]");
+		for (const secret of [
+			"hidden-auth",
+			"hidden-cookie",
+			"hidden-bearer",
+			"hidden-key",
+			"hidden-session",
+		]) {
+			expect(frame).not.toContain(secret);
+		}
+	});
+
+	test("sanitizes and redacts tool errors", async () => {
+		const part = {
+			errorText: "failed\nAuthorization: Bearer hidden-error",
+			input: {},
+			state: "output-error",
+			toolCallId: "call-error",
+			toolName: "mcp_server_tool_12345678",
+			type: "dynamic-tool",
+		} satisfies DynamicToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain("failed [redacted]");
+		expect(frame).not.toContain("hidden-error");
+		expect(frame).not.toContain("failed\n");
+	});
+
+	test("renders duplicate text and reasoning parts", async () => {
+		const frame = await renderFrame(
+			[
+				{ text: "same thought", type: "reasoning" },
+				{ text: "same thought", type: "reasoning" },
+				{ text: "same answer", type: "text" },
+				{ text: "same answer", type: "text" },
+			],
+			8
+		);
+
+		expect(frame.match(/same thought/g)).toHaveLength(2);
+		expect(frame.match(/same answer/g)).toHaveLength(2);
+	});
+
+	test("renders repeated tool call ids", async () => {
+		const part = {
+			input: { path: "README.md" },
+			state: "input-available",
+			toolCallId: "duplicate-call",
+			type: "tool-read",
+		} satisfies ReadToolPart;
+		const frame = await renderFrame([part, part], 6);
+
+		expect(frame.match(/→ Read README\.md/g)).toHaveLength(2);
+	});
+
+	test("bounds and sanitizes unknown static tool arguments", async () => {
+		const circularInput: Record<string, unknown> = {
+			apiToken: "secret-value",
+			query: `unsafe\n${"x".repeat(700)}`,
+		};
+		circularInput.self = circularInput;
+		const part = {
+			input: circularInput,
+			state: "input-available",
+			toolCallId: "call-unknown",
+			type: "tool-legacy",
+		} as unknown as MessagePart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain("✱ Legacy");
+		expect(frame).toContain("[redacted]");
+		expect(frame).not.toContain("secret-value");
+		expect(frame).not.toContain("unsafe\n");
+		expect(frame).not.toContain("x".repeat(513));
+	});
+
+	test("bounds nested MCP arguments", async () => {
+		const part = {
+			input: { nested: { child: { grandchild: { value: "hidden" } } } },
+			state: "input-available",
+			toolCallId: "call-nested",
+			toolName: "mcp_server_tool_12345678",
+			type: "dynamic-tool",
+		} satisfies DynamicToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain('nested={"child":{"grandchild":"[…]"}}');
+		expect(frame).not.toContain("hidden");
+	});
+});

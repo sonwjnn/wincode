@@ -24,7 +24,11 @@ const remoteConfig = (): ResolvedMcpServerConfig => ({
 
 describe("mcp sanitize", () => {
 	test("collectSecrets returns environment values for local servers", () => {
-		expect(collectSecrets(localConfig())).toEqual(["env-super-secret"]);
+		expect(collectSecrets(localConfig())).toEqual([
+			"x",
+			"demo",
+			"env-super-secret",
+		]);
 	});
 
 	test("collectSecrets returns headers and url for remote servers", () => {
@@ -56,10 +60,26 @@ describe("mcp sanitize", () => {
 		expect(message).not.toContain("Bearer");
 	});
 
-	test("sanitizeMessage keeps the raw message when config is undefined", () => {
+	test("sanitizeMessage uses the fallback when config is undefined", () => {
 		expect(sanitizeMessage(undefined, new Error("raw error"), "fallback")).toBe(
-			"raw error"
+			"fallback"
 		);
+	});
+
+	test("sanitizeMessage strips controls, generic secrets, and oversized tails", () => {
+		const message = sanitizeMessage(
+			localConfig(),
+			new Error(
+				`boom\nAuthorization: Bearer generic-secret ${"x".repeat(4096)}TAIL`
+			),
+			"fallback"
+		);
+
+		expect(message).toContain("boom [redacted]");
+		expect(message).not.toContain("generic-secret");
+		expect(message).not.toContain("boom\n");
+		expect(message).not.toContain("TAIL");
+		expect(message.length).toBeLessThanOrEqual(2048);
 	});
 
 	test("sanitizeMessage falls back to the given fallback for non-errors", () => {

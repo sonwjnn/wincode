@@ -208,6 +208,210 @@ describe("drizzle conversation store", () => {
 		expect(messages.map((m) => m.id)).toEqual(["m1", "m2"]);
 	});
 
+	test("reloads failed MCP calls persisted with a static tool part shape", async () => {
+		const { id } = await store.createSession({
+			message: userMessage("m1", "test MCP"),
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+		await store.persistMessages({
+			messages: [
+				userMessage("m1", "test MCP"),
+				{
+					id: "m2",
+					parts: [{ text: "before tool", type: "text" }],
+					role: "assistant",
+				},
+			],
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+			sessionId: id,
+		});
+		db.update(conversationMessage)
+			.set({
+				partsJson: [
+					{
+						errorText: "Chat request failed.",
+						rawInput: '{"query":"test"}',
+						state: "output-error",
+						toolCallId: "call-1",
+						type: "tool-mcp_context7_query-docs_3f6b8a11",
+					},
+				] as unknown as CodingAgentUIMessage["parts"],
+			})
+			.where(eq(conversationMessage.uiMessageId, "m2"))
+			.run();
+
+		const messages = await store.getMessages(id);
+
+		expect(messages[1]?.parts).toEqual([
+			{
+				errorText: "Chat request failed.",
+				input: { query: "test" },
+				state: "output-error",
+				toolCallId: "call-1",
+				toolName: "mcp_context7_query-docs_3f6b8a11",
+				type: "dynamic-tool",
+			},
+		]);
+	});
+
+	test("canonicalizes failed MCP calls before persisting", async () => {
+		const { id } = await store.createSession({
+			message: userMessage("m1", "test MCP"),
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+		const malformedRuntimeMessage = {
+			id: "m2",
+			parts: [
+				{
+					errorText: "Chat request failed.",
+					rawInput: '{"query":"test"}',
+					state: "output-error",
+					toolCallId: "call-1",
+					type: "tool-mcp_context7_query-docs_3f6b8a11",
+				},
+			],
+			role: "assistant",
+		} as unknown as CodingAgentUIMessage;
+
+		await store.persistMessages({
+			messages: [userMessage("m1", "test MCP"), malformedRuntimeMessage],
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+			sessionId: id,
+		});
+
+		const persistedPart = db
+			.select({ parts: conversationMessage.partsJson })
+			.from(conversationMessage)
+			.where(eq(conversationMessage.uiMessageId, "m2"))
+			.get()?.parts[0];
+		expect(persistedPart).toEqual({
+			errorText: "Chat request failed.",
+			input: { query: "test" },
+			state: "output-error",
+			toolCallId: "call-1",
+			toolName: "mcp_context7_query-docs_3f6b8a11",
+			type: "dynamic-tool",
+		});
+		expect((await store.getMessages(id))[1]?.parts[0]).toEqual(persistedPart);
+	});
+
+	test("preserves non-failed static MCP-shaped parts", async () => {
+		const { id } = await store.createSession({
+			message: userMessage("m1", "test MCP"),
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+		await store.persistMessages({
+			messages: [
+				userMessage("m1", "test MCP"),
+				{
+					id: "m2",
+					parts: [
+						{
+							input: { query: "test" },
+							state: "input-available",
+							toolCallId: "call-1",
+							type: "tool-mcp_context7_query-docs_3f6b8a11",
+						},
+					] as unknown as CodingAgentUIMessage["parts"],
+					role: "assistant",
+				},
+			],
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+			sessionId: id,
+		});
+
+		const persistedPart = db
+			.select({ parts: conversationMessage.partsJson })
+			.from(conversationMessage)
+			.where(eq(conversationMessage.uiMessageId, "m2"))
+			.get()?.parts[0];
+		expect(JSON.stringify(persistedPart)).toBe(
+			JSON.stringify({
+				input: { query: "test" },
+				state: "input-available",
+				toolCallId: "call-1",
+				type: "tool-mcp_context7_query-docs_3f6b8a11",
+			})
+		);
+	});
+
+	test("preserves invalid JSON raw input while repairing failed MCP parts", async () => {
+		const { id } = await store.createSession({
+			message: userMessage("m1", "test MCP"),
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+		await store.persistMessages({
+			messages: [
+				userMessage("m1", "test MCP"),
+				{
+					id: "m2",
+					parts: [
+						{
+							errorText: "Chat request failed.",
+							rawInput: "not-json",
+							state: "output-error",
+							toolCallId: "call-1",
+							type: "tool-mcp_context7_query-docs_3f6b8a11",
+						},
+					] as unknown as CodingAgentUIMessage["parts"],
+					role: "assistant",
+				},
+			],
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+			sessionId: id,
+		});
+
+		expect((await store.getMessages(id))[1]?.parts[0]).toMatchObject({
+			input: "not-json",
+			state: "output-error",
+			type: "dynamic-tool",
+		});
+	});
+
+	test("preserves explicit null input while repairing failed MCP parts", async () => {
+		const { id } = await store.createSession({
+			message: userMessage("m1", "test MCP"),
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+		await store.persistMessages({
+			messages: [
+				userMessage("m1", "test MCP"),
+				{
+					id: "m2",
+					parts: [
+						{
+							errorText: "Chat request failed.",
+							input: null,
+							rawInput: '{"query":"wrong"}',
+							state: "output-error",
+							toolCallId: "call-1",
+							type: "tool-mcp_context7_query-docs_3f6b8a11",
+						},
+					] as unknown as CodingAgentUIMessage["parts"],
+					role: "assistant",
+				},
+			],
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+			sessionId: id,
+		});
+
+		expect((await store.getMessages(id))[1]?.parts[0]).toMatchObject({
+			input: null,
+			state: "output-error",
+			type: "dynamic-tool",
+		});
+	});
+
 	test("persists and reloads standard image file UI parts", async () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "image"),
