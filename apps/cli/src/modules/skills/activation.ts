@@ -13,7 +13,7 @@ import type { Skill } from "./types";
 
 export const MAX_ACTIVE_SKILLS = 3;
 export const MAX_SKILL_NAME_LENGTH = 64;
-export const MAX_SKILL_DESCRIPTION_LENGTH = 300;
+export const MAX_SKILL_DESCRIPTION_LENGTH = 1024;
 export const MAX_SKILL_BODY_LENGTH = 12_000;
 export const MAX_SKILL_RESOURCE_PATH_LENGTH = 1024;
 export const MAX_SKILL_RESOURCE_PATHS = 10;

@@ -50,7 +50,7 @@ describe("buildSkillCatalog", () => {
 			[
 				skill("fine"),
 				skill("long-name", { name: "a".repeat(65) }),
-				skill("long-description", { description: "d".repeat(301) }),
+				skill("long-description", { description: "d".repeat(1025) }),
 				skill("long-body", { body: "b".repeat(12_001) }),
 			],
 			allowAll()
@@ -68,7 +68,7 @@ describe("buildSkillCatalog", () => {
 	test("disables the tool when the catalog exceeds its total budget", () => {
 		const manySkills = Array.from({ length: 100 }, (_, index) =>
 			skill(`skill-${String(index).padStart(3, "0")}`, {
-				description: "d".repeat(300),
+				description: "d".repeat(1024),
 			})
 		);
 		const catalog = buildSkillCatalog(manySkills, allowAll());

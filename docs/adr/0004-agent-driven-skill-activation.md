@@ -75,8 +75,9 @@ Status: accepted
   those resources. External paths require `external_directory` permission in addition
   to the underlying operation permission; it defaults to `ask`, uses canonical absolute
   paths, and evaluates resolved symlink targets.
-- Validation caps Skill names at 64 characters, descriptions at 300 characters, bodies
-  at 12,000 characters, sampled resource paths at 1,024 characters each, and resource
-  samples at ten paths. The permission-filtered catalog is capped at 24 KiB of UTF-8.
+- Validation caps Skill names at 64 characters, descriptions at 1,024 characters
+  (matching the frontmatter contract), bodies at 12,000 characters, sampled resource
+  paths at 1,024 characters each, and resource samples at ten paths. The
+  permission-filtered catalog is capped at 24 KiB of UTF-8.
   Individual invalid Skills are omitted with diagnostics; an oversized catalog disables
   the tool with a diagnostic rather than truncating model-visible content.
