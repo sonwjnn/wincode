@@ -9,6 +9,7 @@ import {
 import { generateId, safeValidateUIMessages } from "ai";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
+import { isSkillToolPart, sanitizeSkillToolPart } from "@/modules/skills";
 import { createLocalDatabase, type LocalConversationDatabase } from "./client";
 import {
 	type ConversationSession,
@@ -28,15 +29,16 @@ import {
 } from "./schema";
 
 const MCP_STATIC_TOOL_PART_PREFIX = "tool-mcp_";
+const STATIC_TOOL_PART_PREFIX = "tool-";
 
-const failedStaticMcpToolPartSchema = z
+const failedStaticToolPartSchema = z
 	.object({
 		errorText: z.string(),
 		input: z.unknown().optional(),
 		rawInput: z.unknown().optional(),
 		state: z.literal("output-error"),
 		toolCallId: z.string(),
-		type: z.string().startsWith(MCP_STATIC_TOOL_PART_PREFIX),
+		type: z.string().startsWith(STATIC_TOOL_PART_PREFIX),
 	})
 	.passthrough();
 
@@ -54,20 +56,36 @@ const parsePersistedMcpInput = (input: unknown): unknown => {
 
 type MessagePart = CodingAgentUIMessage["parts"][number];
 
+/**
+ * Collapses a live `skill` tool part to its sanitized activation metadata:
+ * name, content hash, source, and status survive; the body, absolute base
+ * directory, and bundled resource paths never reach durable storage.
+ */
+const sanitizeSkillPart = (part: MessagePart): MessagePart =>
+	isSkillToolPart(part) ? sanitizeSkillToolPart(part) : part;
+
 const normalizeMcpToolPart = (part: MessagePart): MessagePart => {
-	const failedMcpPart = failedStaticMcpToolPartSchema.safeParse(part);
-	if (!failedMcpPart.success) {
-		return part;
+	const failedToolPart = failedStaticToolPartSchema.safeParse(part);
+	if (!failedToolPart.success) {
+		return sanitizeSkillPart(part);
 	}
 
-	const { rawInput, ...normalizedPart } = failedMcpPart.data;
-	const input = Object.hasOwn(failedMcpPart.data, "input")
-		? failedMcpPart.data.input
+	const { rawInput, ...normalizedPart } = failedToolPart.data;
+	const input = Object.hasOwn(failedToolPart.data, "input")
+		? failedToolPart.data.input
 		: rawInput;
+	const normalizedInput = parsePersistedMcpInput(input);
+	if (!failedToolPart.data.type.startsWith(MCP_STATIC_TOOL_PART_PREFIX)) {
+		return {
+			...normalizedPart,
+			input: normalizedInput,
+		} as MessagePart;
+	}
+
 	return {
 		...normalizedPart,
-		input: parsePersistedMcpInput(input),
-		toolName: failedMcpPart.data.type.slice("tool-".length),
+		input: normalizedInput,
+		toolName: failedToolPart.data.type.slice(STATIC_TOOL_PART_PREFIX.length),
 		type: "dynamic-tool",
 	};
 };
@@ -223,12 +241,56 @@ const parseAndNormalizePersistedMetadata = (
 	const legacyMetadata = legacyPersistedMetadataSchema.safeParse(value);
 	if (legacyMetadata.success) {
 		const { mode, ...metadata } = legacyMetadata.data;
-		return codingMessageMetadataSchema.parse({
-			...metadata,
-			agent: metadata.agent ?? mode,
-		});
+		return normalizePersistedSkillMetadata(
+			codingMessageMetadataSchema.parse({
+				...metadata,
+				agent: metadata.agent ?? mode,
+			})
+		);
 	}
-	return codingMessageMetadataSchema.parse(value);
+	return normalizePersistedSkillMetadata(
+		codingMessageMetadataSchema.parse(value)
+	);
+};
+
+/**
+ * Normalizes persisted Skill metadata to sanitized activation metadata:
+ * legacy rows that still carry instructions stay readable but never re-inject
+ * a body into a later execution, and legacy records without a source are
+ * attributed to the explicit path that produced them.
+ */
+const normalizePersistedSkillMetadata = (
+	metadata: CodingMessageMetadata
+): CodingMessageMetadata => {
+	const skill = metadata.skill;
+	if (skill === undefined || !("instructions" in skill)) {
+		return metadata;
+	}
+	const { instructions: _instructions, source, ...activation } = skill;
+	return {
+		...metadata,
+		skill: { ...activation, source: source ?? "explicit" },
+	};
+};
+
+/**
+ * Strips Skill instructions from in-memory message metadata before writing so
+ * durable history keeps only name, content hash, source, and arguments. The
+ * in-memory snapshot always carries a source; legacy-shaped snapshots are
+ * attributed to the explicit path.
+ */
+const sanitizeSkillMetadataForWrite = (
+	metadata: CodingAgentUIMessage["metadata"]
+): CodingAgentUIMessage["metadata"] => {
+	const skill = metadata?.skill;
+	if (skill === undefined || !("instructions" in skill)) {
+		return metadata;
+	}
+	const { instructions: _instructions, source, ...activation } = skill;
+	return {
+		...metadata,
+		skill: { ...activation, source: source ?? "explicit" },
+	};
 };
 
 const resolveMetadata = (
@@ -287,7 +349,7 @@ const writeMessages = (
 				createdAt: now,
 				id: generateId(),
 				metadataJson: codingMessageMetadataSchema.parse(
-					resolveMetadata(message, model, agent)
+					sanitizeSkillMetadataForWrite(resolveMetadata(message, model, agent))
 				),
 				partsJson: normalizeMcpToolParts(message.parts),
 				position,

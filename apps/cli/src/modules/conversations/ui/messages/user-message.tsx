@@ -11,10 +11,10 @@ type UserMessageProps = {
 };
 
 export type AppliedSkill = {
-	arguments: string;
+	arguments?: string;
 	contentHash: string;
-	instructions: string;
 	name: string;
+	source?: "agent" | "explicit";
 };
 
 type TextPart = Extract<
@@ -71,9 +71,7 @@ export const getAppliedSkill = (
 
 	const skill = metadata.skill;
 	if (
-		typeof skill.arguments !== "string" ||
 		typeof skill.contentHash !== "string" ||
-		typeof skill.instructions !== "string" ||
 		typeof skill.name !== "string" ||
 		skill.name.length === 0
 	) {
@@ -81,10 +79,14 @@ export const getAppliedSkill = (
 	}
 
 	return {
-		arguments: skill.arguments,
+		...(typeof skill.arguments === "string"
+			? { arguments: skill.arguments }
+			: {}),
 		contentHash: skill.contentHash,
-		instructions: skill.instructions,
 		name: skill.name,
+		...(skill.source === "agent" || skill.source === "explicit"
+			? { source: skill.source }
+			: {}),
 	};
 };
 

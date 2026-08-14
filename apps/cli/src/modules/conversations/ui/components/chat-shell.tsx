@@ -24,7 +24,9 @@ type ChatShellProps = {
 	isInterruptArmed: boolean;
 	messages: CodingAgentUIMessage[];
 	promptHistory: PromptHistoryEntry[];
-	onSubmit: (submission: ChatPromptSubmission) => boolean | undefined;
+	onSubmit: (
+		submission: ChatPromptSubmission
+	) => boolean | Promise<boolean> | undefined;
 };
 
 export function ChatShell({

@@ -1,12 +1,16 @@
 # Skills
 
-Pure skill discovery, validation, loading, and slash-invocation parsing. No UI, context, or
-conversation persistence.
+Skill discovery, validation, loading, slash-invocation parsing, and Agent-driven
+Skill Activation. No UI or conversation persistence; activation state lives per
+execution turn.
 
 ## Public API
 
 - `discoverSkills({ configStore, homeRoot, workspace })` — load the shared config snapshot, then
-  discover, validate, de-duplicate, and sort available skills.
+  discover, validate, de-duplicate, and sort available skills (with a parsed-file cache keyed by
+  path and file metadata).
+- `discoverSkillCatalog({ configStore, homeRoot, workspace }, decideSkill)` — build the
+  permission-filtered catalog snapshot for one execution turn.
 - `discoverSkillCandidates({ homeRoot, snapshot, workspace })` — return deterministic `SKILL.md`
   candidates.
 - `loadSkill(candidate)` / `loadSkills(candidates)` — load validated skill bodies.
@@ -14,7 +18,16 @@ conversation persistence.
   input.
 - `parseSkillInvocation(input)` — parse `/skill-name arguments` into `{ name, arguments }`, or
   return `null`.
-- Types: `Skill`, `SkillCandidate`, `SkillFrontmatter`, `SkillInvocation`.
+- `buildSkillCatalog(skills, decideSkill)` — filter denied Skills, validate hard limits, and build
+  the catalog (including the 24 KiB tool-description budget and diagnostics).
+- `buildSkillToolDefinition(catalog)` — the native `skill` tool definition sent to the model loop,
+  or `undefined` when the catalog is empty or disabled.
+- `createSkillExecution(catalog)` — the turn-scoped activation engine: at most three distinct
+  Skills, idempotent re-loads, a rejected set, and structured `SKILL_LIMIT_REACHED` results.
+- `sampleSkillResources(baseDirectory)` — bounded, deterministic sample of bundled resource paths.
+- `sanitizeSkillToolResult(result)` — collapse a live tool result to activation metadata.
+- Types: `Skill`, `SkillCandidate`, `SkillFrontmatter`, `SkillInvocation`, `SkillCatalog`,
+  `SkillExecution`, `SkillActivationSnapshot`, `SkillToolResult`, `SanitizedSkillToolResult`.
 
 ## Discovery and precedence
 
@@ -62,5 +75,24 @@ The remaining file content is the skill body.
 
 `/skills` opens the picker. Selecting a skill creates a request-scoped skill invocation;
 `/skill-name arguments` parses the named skill and raw arguments for that request. The selected
-skill body and arguments propagate through both local and hosted chat execution paths. Skills are
-not stored in conversation/session history and have no session persistence.
+skill body and arguments propagate through both local and hosted chat execution paths.
+
+## Skill Activation
+
+A native `skill` tool is exposed to Primary Agents and Subagents whenever at least one local Skill
+is not denied. Its description carries the permission-filtered `<available_skills>` catalog; the
+Agent selects by exact name and the CLI executes the load — for local and hosted models alike.
+
+- Explicit `/skill-name arguments` is resolved and authorized before the first model call and
+  consumes one activation slot; rejection preserves the input and sends no prompt.
+- An execution turn may activate at most three distinct Skills. Re-loading an active Skill is
+  idempotent; rejected or failed loads consume no slot; a fourth distinct load returns a
+  non-retryable `SKILL_LIMIT_REACHED` result.
+- Skill bodies are snapshotted at activation and treated as untrusted, turn-scoped context. They
+  are preserved through tool loops and compaction until the turn ends, then discarded. Durable
+  history stores only sanitized activation metadata (name, content hash, source, arguments).
+- Bundled references, templates, and scripts resolve from the Skill directory; the tool result
+  samples up to ten absolute resource paths. Resources outside the workspace require
+  `external_directory` permission in addition to the underlying operation permission.
+- Skill access is governed by the `skill` Permission action (default `allow`, with
+  allow/ask/deny and Skill-name globs); `external_directory` defaults to `ask`.

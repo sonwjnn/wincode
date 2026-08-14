@@ -304,3 +304,86 @@ describe("BotMessageContent", () => {
 		expect(frame).not.toContain("hidden");
 	});
 });
+
+describe("BotMessageContent skill activity row", () => {
+	test("renders a loaded Skill activation row without the body", async () => {
+		const part = {
+			input: { name: "review" },
+			output: {
+				contentHash: "abcdef1234567890",
+				name: "review",
+				source: "agent",
+				status: "loaded",
+			},
+			state: "output-available",
+			toolCallId: "skill-call-1",
+			toolName: "skill",
+			type: "dynamic-tool",
+		} satisfies DynamicToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain("◆ Skill review");
+		expect(frame).toContain("loaded");
+		expect(frame).toContain("agent");
+		expect(frame).toContain("abcdef123456…");
+		expect(frame).not.toContain("secret instructions");
+	});
+
+	test("renders rejected, failed, and limit-reached states", async () => {
+		const rejected = {
+			input: { name: "lint" },
+			output: { name: "lint", status: "rejected" },
+			state: "output-available",
+			toolCallId: "skill-call-2",
+			toolName: "skill",
+			type: "dynamic-tool",
+		} satisfies DynamicToolPart;
+		const failed = {
+			input: { name: "missing" },
+			output: { error: "Unknown Skill", name: "missing", status: "failed" },
+			state: "output-available",
+			toolCallId: "skill-call-3",
+			toolName: "skill",
+			type: "dynamic-tool",
+		} satisfies DynamicToolPart;
+		const limited = {
+			input: { name: "commit" },
+			output: {
+				activeSkillNames: ["review", "lint", "commit"],
+				limit: 3,
+				name: "commit",
+				status: "limit-reached",
+			},
+			state: "output-available",
+			toolCallId: "skill-call-4",
+			toolName: "skill",
+			type: "dynamic-tool",
+		} satisfies DynamicToolPart;
+		const frame = await renderFrame([rejected, failed, limited], 6);
+
+		expect(frame).toContain("Skill lint — rejected");
+		expect(frame).toContain("Skill missing — failed");
+		expect(frame).toContain("Unknown Skill");
+		expect(frame).toContain("Skill commit — limit reached");
+		expect(frame).toContain("review, lint, commit");
+	});
+
+	test("renders an explicit source and already-loaded state", async () => {
+		const part = {
+			input: { name: "review" },
+			output: {
+				contentHash: "hash-1",
+				name: "review",
+				status: "already-loaded",
+			},
+			state: "output-available",
+			toolCallId: "skill-call-5",
+			toolName: "skill",
+			type: "dynamic-tool",
+		} satisfies DynamicToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain("Skill review — already loaded");
+		expect(frame).toContain("hash-1");
+	});
+});

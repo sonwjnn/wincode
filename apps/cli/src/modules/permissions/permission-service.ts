@@ -1,3 +1,5 @@
+import { matchesResourcePattern } from "./policy";
+
 /**
  * The action a grant or approval is keyed by. Static coding tools use a fixed
  * `PermissionAction` (`read`, `edit`, ...); MCP tools use their logical
@@ -17,6 +19,14 @@ export type TemporaryGrant = {
 };
 
 export type PermissionServiceListener = () => void;
+
+/**
+ * The resource key that makes `external_directory` grants parent-directory
+ * scoped: grants are stored against the canonical parent-directory glob of the
+ * approved target, and a later request matches when the canonical resource sits
+ * below it.
+ */
+const EXTERNAL_DIRECTORY_GRANT_ACTION = "external_directory";
 
 /**
  * The generic Permission approval service. It owns the process-lifetime,
@@ -69,7 +79,23 @@ export function createPermissionService(
 
 	return {
 		isGranted(action, resource) {
-			return grants.has(grantKey(action, resource));
+			if (grants.has(grantKey(action, resource))) {
+				return true;
+			}
+			if (action !== EXTERNAL_DIRECTORY_GRANT_ACTION) {
+				return false;
+			}
+			// Parent-directory glob grants cover every canonical path below the
+			// approved real directory; exact keys above already matched.
+			for (const grant of grants.values()) {
+				if (
+					grant.action === EXTERNAL_DIRECTORY_GRANT_ACTION &&
+					matchesResourcePattern(grant.resource, resource)
+				) {
+					return true;
+				}
+			}
+			return false;
 		},
 		grant(action, resource) {
 			const key = grantKey(action, resource);

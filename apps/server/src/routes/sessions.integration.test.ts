@@ -24,7 +24,10 @@ mock.module("@wincode/ai", () => ({
 		name: string;
 		instructions: string;
 		arguments: string;
-	}) => `${skill.name}${skill.instructions}${skill.arguments}`,
+		contentHash: string;
+		source: "agent" | "explicit";
+	}) =>
+		`<untrusted-skill-context name="${skill.name}" source="${skill.source}" content-hash="${skill.contentHash}">\n${skill.instructions}\n<arguments>${skill.arguments}</arguments>\n</untrusted-skill-context>`,
 	skillContextSchema: z.object({
 		name: z.string(),
 		instructions: z.string(),
@@ -628,8 +631,10 @@ describe("POST /:id/chat (transport-only)", () => {
 	test("does not count durable skill metadata alongside top-level skill", async () => {
 		const skill = {
 			arguments: "",
+			contentHash: "skill-hash",
 			instructions: "i".repeat(700),
 			name: "large-skill",
+			source: "explicit",
 		};
 		const response = await createSessionsRoutes({
 			codingServerTools,
@@ -863,6 +868,91 @@ describe("POST /:id/chat (transport-only)", () => {
 			headers: { "content-type": "application/json" },
 			method: "POST",
 		});
+		expect(response.status).toBe(400);
+	});
+});
+
+describe("hosted session skill tool forwarding", () => {
+	const skillTool = {
+		description: "<available_skills>\n- review: review code",
+		inputSchema: {
+			additionalProperties: false,
+			properties: { name: { type: "string" } },
+			required: ["name"],
+			type: "object",
+		},
+		name: "skill",
+	};
+
+	beforeEach(() => {
+		(
+			createCodingAgentStreamResponse as unknown as { mockClear: () => void }
+		).mockClear();
+	});
+
+	test("forwards the CLI-built skill tool definition to the model loop", async () => {
+		const response = await sessionsRoutes.request("/session-skill/chat", {
+			body: JSON.stringify({
+				messages: [
+					{
+						id: "user-1",
+						metadata: {
+							skill: {
+								arguments: "focus",
+								contentHash: "hash-skill",
+								instructions: "Review code.",
+								name: "review",
+								source: "explicit",
+							},
+						},
+						parts: [{ text: "/review", type: "text" }],
+						role: "user",
+					},
+				],
+				agent: planAgent,
+				model: "gpt-5.4-mini",
+				skill: {
+					arguments: "focus",
+					contentHash: "hash-skill",
+					instructions: "Review code.",
+					name: "review",
+					source: "explicit",
+				},
+				skillTool,
+			}),
+			headers: { "content-type": "application/json" },
+			method: "POST",
+		});
+
+		expect(response.status).toBe(200);
+		expect(createCodingAgentStreamResponse).toHaveBeenCalledWith(
+			expect.objectContaining({
+				skill: {
+					arguments: "focus",
+					contentHash: "hash-skill",
+					instructions: "Review code.",
+					name: "review",
+					source: "explicit",
+				},
+				skillTool,
+			})
+		);
+	});
+
+	test("rejects malformed skill tool definitions", async () => {
+		const response = await sessionsRoutes.request("/session-skill-bad/chat", {
+			body: JSON.stringify({
+				messages: [
+					{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
+				],
+				agent: planAgent,
+				model: "gpt-5.4-mini",
+				skillTool: { description: "x", name: "load_skill" },
+			}),
+			headers: { "content-type": "application/json" },
+			method: "POST",
+		});
+
 		expect(response.status).toBe(400);
 	});
 });

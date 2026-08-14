@@ -50,7 +50,23 @@ export {
 } from "./metadata";
 export * from "./models";
 export { sanitizeInterruptedMessagesForModel } from "./sanitize-interrupted-messages";
-export type { SkillContext } from "./skill-context";
-export { formatSkillUserContext, skillContextSchema } from "./skill-context";
+export type {
+	SkillActivation,
+	SkillActivationSource,
+	SkillContext,
+	SkillRequestContext,
+	SkillToolDefinition,
+} from "./skill-context";
+export {
+	formatSkillUserContext,
+	SKILL_ACTIVATION_SOURCES,
+	SKILL_TOOL_INPUT_JSON_SCHEMA,
+	skillActivationSchema,
+	skillActivationSourceSchema,
+	skillContextSchema,
+	skillRequestContextSchema,
+	skillToolDefinitionSchema,
+	skillToolInputSchema,
+} from "./skill-context";
 export * from "./tools/schemas";
 export * from "./usage";

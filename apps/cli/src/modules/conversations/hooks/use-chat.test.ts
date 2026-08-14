@@ -13,10 +13,18 @@ import type {
 } from "@/modules/mcp";
 import {
 	applyManualApprovalSafetyCeiling,
+	canonicalizeExternalPath,
 	createPermissionService,
 	createToolPermission,
+	type PermissionDecision,
 	type ToolPermissionRuntime,
 } from "@/modules/permissions";
+import {
+	buildSkillCatalog,
+	createSkillExecution,
+	hashSkillBody,
+	type SkillExecution,
+} from "@/modules/skills";
 import { createApprovalQueue } from "@/shared/providers/approval/approval-queue";
 import type {
 	ToolApprovalActions,
@@ -24,6 +32,7 @@ import type {
 } from "@/shared/providers/approval/ui/tool-approval-dialog";
 import { prepareSendChatRequestBody } from "../api/chat-request";
 import {
+	activateExplicitSkill,
 	createChatMessageParts,
 	createChatToolCallHandler,
 	createMcpApprovalGate,
@@ -31,6 +40,7 @@ import {
 	findCurrentTurnAssistantIndex,
 	findCurrentTurnInterruptTargetIndex,
 	notifyHostedCompletion,
+	sanitizeSkillToolParts,
 } from "./use-chat";
 
 const selection = {
@@ -671,7 +681,7 @@ describe("createChatToolCallHandler", () => {
 		expect(staticToolCallHandler).not.toHaveBeenCalled();
 	});
 
-	test("rejects paths outside the workspace before running the tool", async () => {
+	test("denies paths outside the workspace when external_directory is denied", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "wincode-outside-"));
 		await settleCall(
 			callWith(
@@ -681,18 +691,61 @@ describe("createChatToolCallHandler", () => {
 					toolName: "read",
 				},
 				{
-					permissionRef: { current: createToolPermission({ read: "allow" }) },
+					permissionRef: {
+						current: createToolPermission({
+							external_directory: "deny",
+							read: "allow",
+						}),
+					},
 					sandbox: createWorkspaceSandbox(dir),
 				}
 			)
 		);
 		expect(staticToolCallHandler).not.toHaveBeenCalled();
 		expect(addToolOutput).toHaveBeenCalledWith({
-			errorText: "Read path is outside the workspace: ../outside.txt",
+			errorText: `Read denied by policy: ${await canonicalizeExternalPath(
+				"../outside.txt",
+				dir
+			)}`,
 			state: "output-error",
 			tool: "read",
 			toolCallId: "call-outside",
 		});
+	});
+
+	test("asks before reading paths outside the workspace by default", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "wincode-outside-ask-"));
+		const approvalRequests: ToolApprovalRequest[] = [];
+		const open = mock((request: ToolApprovalRequest, actions) => {
+			approvalRequests.push(request);
+			queueMicrotask(() => actions.allow(false));
+		});
+		await settleCall(
+			callWith(
+				{
+					input: { path: "../outside.txt" },
+					toolCallId: "call-outside-ask",
+					toolName: "read",
+				},
+				{
+					openApproval: open,
+					permissionRef: { current: createToolPermission() },
+					sandbox: createWorkspaceSandbox(dir),
+				}
+			)
+		);
+		expect(approvalRequests).toHaveLength(1);
+		expect(approvalRequests[0]).toMatchObject({
+			identity: [
+				{ label: "tool", value: "read" },
+				{
+					label: "resource",
+					value: await canonicalizeExternalPath("../outside.txt", dir),
+				},
+				{ label: "scope", value: "external" },
+			],
+		});
+		expect(staticToolCallHandler).toHaveBeenCalledTimes(1);
 	});
 
 	test("executes the real static tool runner only when the policy allows", async () => {
@@ -1196,5 +1249,476 @@ describe("createMcpApprovalGate", () => {
 			kind: "reject",
 		});
 		expect(service.isGranted("demo_echo", "*")).toBe(false);
+	});
+});
+
+describe("skill tool activation", () => {
+	const addToolOutput = mock(() => undefined);
+	const addToolOutputRef = {
+		current:
+			addToolOutput as unknown as ChatAddToolOutputFunction<CodingAgentUIMessage>,
+	};
+	const staticToolCallHandler = mock(() => undefined);
+	const openApproval = mock(() => undefined);
+	const sandbox = createWorkspaceSandbox(process.cwd());
+
+	const makeSkill = (name: string, body: string) => ({
+		body,
+		description: `Description of ${name}`,
+		filePath: `/skills/${name}/SKILL.md`,
+		name,
+		scope: "project" as const,
+	});
+
+	const makeExecution = (
+		skills: ReturnType<typeof makeSkill>[],
+		decision: (name: string) => PermissionDecision = () => "allow"
+	) => {
+		const catalog = buildSkillCatalog(skills, decision);
+		return createSkillExecution(catalog);
+	};
+
+	const makeHandler = (
+		execution: SkillExecution,
+		overrides: Partial<Parameters<typeof createChatToolCallHandler>[0]> = {}
+	) =>
+		createChatToolCallHandler({
+			addToolOutputRef: addToolOutputRef as never,
+			approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
+			handleCodingAgentToolCall: (() =>
+				staticToolCallHandler) as typeof handleCodingAgentToolCall,
+			mcp: { handleDynamicToolCall: mock(() => undefined) },
+			mcpSnapshotRef: { current: null },
+			openApproval,
+			permissionRef: { current: createToolPermission() },
+			resolvedAgentRef: { current: undefined },
+			sandbox,
+			service: createPermissionService(),
+			skillExecutionRef: { current: execution },
+			...overrides,
+		});
+
+	const settleCall = async (handler: ReturnType<typeof makeHandler>) => {
+		handler({
+			toolCall: {
+				dynamic: true,
+				input: { name: "review" },
+				toolCallId: "skill-call-1",
+				toolName: "skill",
+			},
+		} as never);
+		await new Promise((resolve) => setTimeout(resolve, 75));
+	};
+
+	afterEach(() => {
+		addToolOutput.mockClear();
+		openApproval.mockClear();
+	});
+
+	test("loads a Skill and emits the live body with metadata", async () => {
+		const execution = makeExecution([makeSkill("review", "Review body")]);
+		await settleCall(makeHandler(execution));
+		expect(addToolOutput).toHaveBeenCalledWith({
+			output: {
+				baseDirectory: "/skills/review",
+				body: "Review body",
+				contentHash: hashSkillBody("Review body"),
+				name: "review",
+				resourcePaths: [],
+				source: "agent",
+				status: "loaded",
+			},
+			state: "output-available",
+			tool: "skill",
+			toolCallId: "skill-call-1",
+		});
+		expect(execution.activeSnapshots().map(({ name }) => name)).toEqual([
+			"review",
+		]);
+	});
+
+	test("a policy-denied Skill is rejected without a slot and cannot be retried", async () => {
+		const execution = makeExecution(
+			[makeSkill("review", "Review body")],
+			() => "deny"
+		);
+		await settleCall(
+			makeHandler(execution, {
+				permissionRef: { current: createToolPermission({ skill: "deny" }) },
+			})
+		);
+		expect(addToolOutput).toHaveBeenCalledWith({
+			output: { name: "review", status: "rejected" },
+			state: "output-available",
+			tool: "skill",
+			toolCallId: "skill-call-1",
+		});
+		expect(execution.activeSnapshots()).toHaveLength(0);
+		// A second attempt is short-circuited by the rejected set.
+		await settleCall(
+			makeHandler(execution, {
+				permissionRef: { current: createToolPermission({ skill: "deny" }) },
+			})
+		);
+		expect(addToolOutput).toHaveBeenCalledTimes(2);
+	});
+
+	test("an ask Skill runs after interactive approval", async () => {
+		const requests: ToolApprovalRequest[] = [];
+		const approval = mock((request: ToolApprovalRequest, actions) => {
+			requests.push(request);
+			queueMicrotask(() => actions.allow(false));
+		});
+		const execution = makeExecution(
+			[makeSkill("review", "Review body")],
+			() => "ask"
+		);
+		const handler = makeHandler(execution, {
+			openApproval: approval,
+			permissionRef: { current: createToolPermission({ skill: "ask" }) },
+		});
+		await settleCall(handler);
+		expect(requests).toHaveLength(1);
+		expect(requests[0]).toMatchObject({
+			description: "Description of review",
+			identity: [
+				{ label: "tool", value: "skill" },
+				{ label: "skill", value: "review" },
+			],
+		});
+		expect(addToolOutput).toHaveBeenCalledWith(
+			expect.objectContaining({
+				output: expect.objectContaining({ name: "review", status: "loaded" }),
+			})
+		);
+	});
+
+	test("a rejected ask marks the Skill rejected and consumes no slot", async () => {
+		const execution = makeExecution(
+			[makeSkill("review", "Review body")],
+			() => "ask"
+		);
+		const approval = mock((_request: ToolApprovalRequest, actions) => {
+			queueMicrotask(() => actions.reject());
+		});
+		await settleCall(
+			makeHandler(execution, {
+				openApproval: approval,
+				permissionRef: { current: createToolPermission({ skill: "ask" }) },
+			})
+		);
+		expect(addToolOutput).toHaveBeenCalledWith({
+			output: { name: "review", status: "rejected" },
+			state: "output-available",
+			tool: "skill",
+			toolCallId: "skill-call-1",
+		});
+		expect(execution.activeSnapshots()).toHaveLength(0);
+		expect(execution.activate("review", "agent").status).toBe("rejected");
+	});
+
+	test("re-loading an active Skill is idempotent without a slot", async () => {
+		const execution = makeExecution([makeSkill("review", "Review body")]);
+		await settleCall(makeHandler(execution));
+		await settleCall(makeHandler(execution));
+		expect(addToolOutput).toHaveBeenCalledTimes(2);
+		expect(addToolOutput).toHaveBeenLastCalledWith({
+			output: {
+				contentHash: hashSkillBody("Review body"),
+				name: "review",
+				status: "already-loaded",
+			},
+			state: "output-available",
+			tool: "skill",
+			toolCallId: "skill-call-1",
+		});
+		expect(execution.activeSnapshots()).toHaveLength(1);
+	});
+
+	test("a fourth distinct Skill reports the limit without replacing active Skills", async () => {
+		const execution = makeExecution([
+			makeSkill("a", "a"),
+			makeSkill("b", "b"),
+			makeSkill("c", "c"),
+			makeSkill("d", "d"),
+		]);
+		const callSkill = async (name: string) => {
+			const handler = makeHandler(execution);
+			handler({
+				toolCall: {
+					dynamic: true,
+					input: { name },
+					toolCallId: `skill-call-${name}`,
+					toolName: "skill",
+				},
+			} as never);
+			await new Promise((resolve) => setTimeout(resolve, 75));
+		};
+		await callSkill("a");
+		// Activate two more Skills directly, then load the fourth through the tool.
+		execution.activate("b", "agent");
+		execution.activate("c", "agent");
+		addToolOutput.mockClear();
+		await callSkill("d");
+		expect(addToolOutput).toHaveBeenCalledWith({
+			output: {
+				activeSkillNames: ["a", "b", "c"],
+				limit: 3,
+				name: "d",
+				status: "limit-reached",
+			},
+			state: "output-available",
+			tool: "skill",
+			toolCallId: "skill-call-d",
+		});
+	});
+
+	test("an unknown Skill fails without consuming a slot", async () => {
+		const execution = makeExecution([makeSkill("review", "Review body")]);
+		const handler = makeHandler(execution);
+		handler({
+			toolCall: {
+				dynamic: true,
+				input: { name: "missing" },
+				toolCallId: "skill-call-2",
+				toolName: "skill",
+			},
+		} as never);
+		await new Promise((resolve) => setTimeout(resolve, 75));
+		expect(addToolOutput).toHaveBeenCalledWith({
+			output: {
+				error: 'Unknown Skill "missing"',
+				name: "missing",
+				status: "failed",
+			},
+			state: "output-available",
+			tool: "skill",
+			toolCallId: "skill-call-2",
+		});
+		expect(execution.activeSnapshots()).toHaveLength(0);
+	});
+
+	test("invalid tool input fails without touching the catalog", async () => {
+		const execution = makeExecution([makeSkill("review", "Review body")]);
+		const handler = makeHandler(execution);
+		handler({
+			toolCall: {
+				dynamic: true,
+				input: { nane: "review" },
+				toolCallId: "skill-call-3",
+				toolName: "skill",
+			},
+		} as never);
+		await new Promise((resolve) => setTimeout(resolve, 75));
+		expect(addToolOutput).toHaveBeenCalledWith({
+			output: {
+				error: "Invalid skill input; expected { name }",
+				name: "",
+				status: "failed",
+			},
+			state: "output-available",
+			tool: "skill",
+			toolCallId: "skill-call-3",
+		});
+	});
+
+	test("sanitizeSkillToolParts strips bodies from finished turns", () => {
+		const messages = [
+			{
+				id: "a1",
+				parts: [
+					{
+						output: {
+							baseDirectory: "/skills/review",
+							body: "Review body",
+							contentHash: "hash-1",
+							name: "review",
+							resourcePaths: ["/skills/review/a.txt"],
+							source: "agent",
+							status: "loaded",
+						},
+						state: "output-available",
+						toolCallId: "skill-call-1",
+						toolName: "skill",
+						type: "dynamic-tool",
+					},
+				],
+				role: "assistant",
+			},
+		] as unknown as CodingAgentUIMessage[];
+		const sanitized = sanitizeSkillToolParts(messages);
+		expect(sanitized[0]?.parts).toEqual([
+			{
+				input: undefined,
+				output: {
+					contentHash: "hash-1",
+					name: "review",
+					source: "agent",
+					status: "loaded",
+				},
+				state: "output-available",
+				toolCallId: "skill-call-1",
+				toolName: "skill",
+				type: "dynamic-tool",
+			},
+		]);
+		expect(JSON.stringify(sanitized)).not.toContain("Review body");
+		expect(JSON.stringify(sanitized)).not.toContain("skills/review");
+	});
+
+	test("sanitizeSkillToolParts leaves failed parts as output errors", () => {
+		const messages = [
+			{
+				id: "a2",
+				parts: [
+					{
+						output: { error: "boom", name: "x", status: "failed" },
+						state: "output-available",
+						toolCallId: "skill-call-4",
+						toolName: "skill",
+						type: "dynamic-tool",
+					},
+				],
+				role: "assistant",
+			},
+		] as unknown as CodingAgentUIMessage[];
+		const sanitized = sanitizeSkillToolParts(messages);
+		expect(sanitized[0]?.parts).toEqual([
+			{
+				errorText: "boom",
+				state: "output-error",
+				toolCallId: "skill-call-4",
+				toolName: "skill",
+				type: "dynamic-tool",
+			} as CodingAgentUIMessage["parts"][number],
+		]);
+	});
+});
+
+describe("activateExplicitSkill", () => {
+	const makeSkill = (name: string, body: string) => ({
+		body,
+		description: `Description of ${name}`,
+		filePath: `/skills/${name}/SKILL.md`,
+		name,
+		scope: "project" as const,
+	});
+
+	const makeExecution = (
+		skills: ReturnType<typeof makeSkill>[],
+		decision: (name: string) => PermissionDecision = () => "allow"
+	) => createSkillExecution(buildSkillCatalog(skills, decision));
+
+	const deps = (
+		execution: SkillExecution,
+		permission = createToolPermission(),
+		openApproval: (
+			request: ToolApprovalRequest,
+			actions: { allow: (remember: boolean) => void; reject: () => void }
+		) => void = () => undefined
+	) => ({
+		approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
+		execution,
+		openApproval:
+			openApproval as unknown as ToolPermissionRuntime["openApproval"],
+		permission,
+		service: createPermissionService(),
+	});
+
+	test("activates an allowed explicit Skill and returns the request payload", async () => {
+		const execution = makeExecution([makeSkill("review", "Review body")]);
+		const result = await activateExplicitSkill(
+			{
+				arguments: "focus on auth",
+				instructions: "Review body",
+				name: "review",
+			},
+			deps(execution)
+		);
+		expect(result).toEqual({
+			ok: true,
+			skill: {
+				arguments: "focus on auth",
+				contentHash: hashSkillBody("Review body"),
+				instructions: "Review body",
+				name: "review",
+				source: "explicit",
+			},
+		});
+		expect(execution.activeSnapshots().map(({ name }) => name)).toEqual([
+			"review",
+		]);
+	});
+
+	test("rejects denied explicit Skills without sending and marks them rejected", async () => {
+		const execution = makeExecution(
+			[makeSkill("review", "Review body")],
+			() => "deny"
+		);
+		const result = await activateExplicitSkill(
+			{ arguments: "", instructions: "Review body", name: "review" },
+			deps(execution, createToolPermission({ skill: "deny" }))
+		);
+		expect(result).toEqual({
+			ok: false,
+			reason: 'Skill "review" is denied by policy',
+		});
+		expect(execution.activeSnapshots()).toHaveLength(0);
+		expect(execution.activate("review", "agent").status).toBe("rejected");
+	});
+
+	test("asks and approves an ask-gated explicit Skill", async () => {
+		const execution = makeExecution([makeSkill("review", "Review body")]);
+		const requests: ToolApprovalRequest[] = [];
+		const approval = mock(
+			(
+				request: ToolApprovalRequest,
+				actions: { allow: (remember: boolean) => void }
+			) => {
+				requests.push(request);
+				queueMicrotask(() => actions.allow(false));
+			}
+		);
+		const result = await activateExplicitSkill(
+			{ arguments: "", instructions: "Review body", name: "review" },
+			deps(execution, createToolPermission({ skill: "ask" }), approval)
+		);
+		expect(result.ok).toBe(true);
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.identity).toEqual([
+			{ label: "tool", value: "skill" },
+			{ label: "skill", value: "review" },
+		]);
+	});
+
+	test("rejects on user disapproval and preserves nothing for the prompt", async () => {
+		const execution = makeExecution([makeSkill("review", "Review body")]);
+		const approval = mock(
+			(_request: ToolApprovalRequest, actions: { reject: () => void }) => {
+				queueMicrotask(() => actions.reject());
+			}
+		);
+		const result = await activateExplicitSkill(
+			{ arguments: "", instructions: "Review body", name: "review" },
+			deps(execution, createToolPermission({ skill: "ask" }), approval)
+		);
+		expect(result).toEqual({
+			ok: false,
+			reason: 'Skill "review" was not approved',
+		});
+		expect(execution.activeSnapshots()).toHaveLength(0);
+	});
+
+	test("fails unknown Skills before any approval", async () => {
+		const execution = makeExecution([makeSkill("review", "Review body")]);
+		const result = await activateExplicitSkill(
+			{ arguments: "", instructions: "x", name: "missing" },
+			deps(execution)
+		);
+		expect(result).toEqual({
+			ok: false,
+			reason: 'Unknown or unavailable Skill "missing"',
+		});
+		expect(execution.activeSnapshots()).toHaveLength(0);
 	});
 });

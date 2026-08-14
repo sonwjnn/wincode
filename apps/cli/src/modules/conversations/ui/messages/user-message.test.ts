@@ -18,15 +18,31 @@ describe("getAppliedSkill", () => {
 				skill: {
 					arguments: "focus",
 					contentHash: "sha256:abc",
-					instructions: "Review code",
 					name: "review",
+					source: "explicit",
 				},
 			})
 		).toEqual({
 			arguments: "focus",
 			contentHash: "sha256:abc",
-			instructions: "Review code",
 			name: "review",
+			source: "explicit",
+		});
+	});
+
+	test("accepts sanitized activation metadata without instructions", () => {
+		expect(
+			getAppliedSkill({
+				skill: {
+					contentHash: "sha256:abc",
+					name: "review",
+					source: "explicit",
+				},
+			})
+		).toEqual({
+			contentHash: "sha256:abc",
+			name: "review",
+			source: "explicit",
 		});
 	});
 

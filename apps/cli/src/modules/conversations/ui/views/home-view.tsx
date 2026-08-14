@@ -117,7 +117,7 @@ export function HomeView() {
 					agent: effective.agent,
 					model: effective.model,
 					variant: effective.variant,
-					...(skill ? { skill: createSkillSnapshot(skill) } : {}),
+					...(skill ? { skill: createSkillSnapshot(skill, "explicit") } : {}),
 				},
 				fileMentions,
 				files

@@ -45,10 +45,11 @@ Status: accepted
   Agent definitions. Built-in defaults allow current tools, ask before reading
   `.env`-style files, and preserve Plan's shipped restrictions until a valid higher
   policy explicitly overrides them.
-- Wincode gates only tools it exposes now: `read`, `write`, `edit`, `list`, `grep`, and
-  discovered MCP tools. Permission action `edit` covers both write and edit tools.
-  User-initiated file mentions, config loading, Skills, and Custom Commands are outside
-  Tool Permission.
+- Wincode gates coding tools, discovered MCP tools, Skill Activation, and access outside
+  the workspace. Permission action `edit` covers both write and edit tools. Skill
+  Activation uses the Skill name as its resource; external-directory access uses the
+  canonical absolute path. User-initiated file mentions, config loading, and Custom
+  Commands remain outside Tool Permission. See ADR-0004 for the Skill-specific boundary.
 - Filesystem resources are canonical workspace-relative POSIX paths. Grep uses its
   regex as the resource; MCP tools use `*`. MCP permission actions use OpenCode-style
   logical `<sanitizedServer>_<sanitizedTool>` names while collision-safe hashed names
@@ -65,6 +66,11 @@ Status: accepted
 - Auto approval is off by default, can be initialized with `--auto`, and can be changed
   through `/permissions`; explicit deny remains enforced. The status bar displays an
   `auto` indicator while enabled.
+- Skill access defaults to `allow`; external-directory access defaults to `ask`.
+  External access composes with, rather than replaces, the permission for the underlying
+  read, list, grep, write, edit, or shell operation. Targets are canonicalized and
+  symlinks resolved before evaluation. Process-scoped `always` grants use exact Skill
+  names or canonical parent-directory globs.
 - Hosted request validation bounds Agent instructions and tool manifests. Full composed
   instructions and manifests consume the funded input budget; an oversized request is
   rejected without truncation or fallback. Billing persists only `build`, `plan`, or

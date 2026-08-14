@@ -3,9 +3,11 @@ import {
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
 	expandFileMentionPartsForModel,
+	formatSkillUserContext,
 	getChatModelRoute,
 	type ModelVariant,
 	type ResolvedAgentRuntime,
+	type SkillToolDefinition,
 	sanitizeInterruptedMessagesForModel,
 } from "@wincode/ai";
 import {
@@ -30,7 +32,8 @@ export const createLocalChatTransport = (
 	variantRef: MutableRefObject<ModelVariant | undefined>,
 	connections: Connections,
 	createStream: CreateAgentUIStream = createAgentUIStream,
-	snapshot?: McpCatalogSnapshot
+	snapshot?: McpCatalogSnapshot,
+	skillToolRef?: MutableRefObject<SkillToolDefinition | undefined>
 ): ChatTransport<CodingAgentUIMessage> => ({
 	sendMessages: async ({ abortSignal, messages }) => {
 		const selection = modelRef.current;
@@ -50,11 +53,22 @@ export const createLocalChatTransport = (
 			maxOutputTokens: resolvedModel.maxOutputTokens,
 			providerOptions: resolvedModel.providerOptions,
 			skill,
+			skillTool: skillToolRef?.current,
 		});
 
 		const modelMessages = expandFileMentionPartsForModel(
 			sanitizeInterruptedMessagesForModel(messages)
 		);
+		if (skill) {
+			// The direct-model path rebuilds messages on every loop send, so the
+			// Skill context is re-injected here rather than appended once: the
+			// body stays part of the current user turn for the whole execution.
+			modelMessages.push({
+				id: "skill-context",
+				role: "user",
+				parts: [{ type: "text", text: formatSkillUserContext(skill) }],
+			});
+		}
 
 		return createStream({
 			agent,

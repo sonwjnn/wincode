@@ -4,6 +4,7 @@ import type {
 	CodingAgentUIMessage,
 	ModelVariant,
 	ResolvedAgentRuntime,
+	SkillToolDefinition,
 } from "@wincode/ai";
 import { getChatModelRoute, normalizeChatModelSelection } from "@wincode/ai";
 import { type ChatTransport, DefaultChatTransport } from "ai";
@@ -30,7 +31,8 @@ export const createRoutingChatTransport = (
 	modelRef: MutableRefObject<ChatModelSelection>,
 	variantRef: MutableRefObject<ModelVariant | undefined>,
 	connections: Connections,
-	mcp: McpContextValue
+	mcp: McpContextValue,
+	skillToolRef?: MutableRefObject<SkillToolDefinition | undefined>
 ): ChatTransport<CodingAgentUIMessage> => ({
 	sendMessages: async ({ abortSignal, messages }) => {
 		// One immutable snapshot per send so the request manifest and any dynamic
@@ -47,7 +49,8 @@ export const createRoutingChatTransport = (
 				{ current: variant },
 				connections,
 				undefined,
-				snapshot
+				snapshot,
+				skillToolRef
 			).sendMessages({
 				abortSignal,
 				body: undefined,
@@ -80,7 +83,8 @@ export const createRoutingChatTransport = (
 						resolvedAgent,
 						variant,
 					},
-					snapshot.manifest
+					snapshot.manifest,
+					skillToolRef?.current
 				),
 			}),
 		});

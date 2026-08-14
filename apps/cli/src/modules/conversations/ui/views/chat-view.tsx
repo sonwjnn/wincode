@@ -76,6 +76,7 @@ export function ChatView({
 	>(null);
 	const {
 		abort,
+		catalogDiagnostic,
 		continueLastMessage,
 		error,
 		interrupt,
@@ -227,7 +228,7 @@ export function ChatView({
 		[]
 	);
 
-	const submitMessage = (submission: ChatPromptSubmission) => {
+	const submitMessage = async (submission: ChatPromptSubmission) => {
 		if (isBusy || registry === null || !isPromptConfigRestored) {
 			return false;
 		}
@@ -244,7 +245,7 @@ export function ChatView({
 			model,
 			variant
 		);
-		submit({
+		const outcome = await submit({
 			agent: effective.agent,
 			conversationModel: model,
 			conversationVariant: variant,
@@ -254,9 +255,21 @@ export function ChatView({
 			variant: effective.variant,
 			userText,
 			skill,
-		}).catch(() => undefined);
+		}).catch(() => ({ rejected: true, reason: "Could not submit the prompt" }));
+		if (outcome.rejected) {
+			// The input and attachments stay in the textarea so a rejected
+			// explicit Skill submission never silently changes intent.
+			show({ message: outcome.reason, variant: "error" });
+			return false;
+		}
 		return true;
 	};
+
+	useEffect(() => {
+		if (catalogDiagnostic !== null) {
+			show({ message: catalogDiagnostic, variant: "error" });
+		}
+	}, [catalogDiagnostic, show]);
 
 	useEffect(() => {
 		const submittedPrompt = initialPrompt.trim();
@@ -350,7 +363,13 @@ export function ChatView({
 			effective.resolvedAgent,
 			conversationModel,
 			conversationVariant
-		).catch(() => undefined);
+		)
+			.then((outcome) => {
+				if (outcome?.rejected) {
+					show({ message: outcome.reason, variant: "error" });
+				}
+			})
+			.catch(() => undefined);
 	}, [
 		agent,
 		autoStart,
@@ -361,6 +380,7 @@ export function ChatView({
 		model,
 		registry,
 		restoredConfig,
+		show,
 		variant,
 	]);
 

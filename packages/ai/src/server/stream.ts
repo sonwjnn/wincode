@@ -15,7 +15,11 @@ import type { McpToolManifest } from "../mcp-tools";
 import type { CodingAgentUIMessage } from "../message";
 import type { SupportedChatModelId } from "../models";
 import { sanitizeInterruptedMessagesForModel } from "../sanitize-interrupted-messages";
-import { formatSkillUserContext, type SkillContext } from "../skill-context";
+import {
+	formatSkillUserContext,
+	type SkillRequestContext,
+	type SkillToolDefinition,
+} from "../skill-context";
 import { buildUsageMessageMetadata } from "../usage";
 import { type CodingAgentLifecycleCallbacks, createCodingAgent } from "./agent";
 import { getProviderErrorMessage } from "./error-message";
@@ -32,7 +36,8 @@ type CreateCodingAgentStreamResponseOptions = {
 	providerOptions?: ProviderOptions;
 	sendReasoning?: boolean;
 	uiMessages: CodingAgentUIMessage[];
-	skill?: SkillContext;
+	skill?: SkillRequestContext;
+	skillTool?: SkillToolDefinition;
 	mcpTools?: McpToolManifest;
 	resolvedAgent?: ResolvedAgentRuntime;
 };
@@ -50,6 +55,7 @@ export const createCodingAgentStreamResponse = ({
 	sendReasoning = true,
 	uiMessages,
 	skill,
+	skillTool,
 	mcpTools = [],
 	resolvedAgent,
 }: CreateCodingAgentStreamResponseOptions) => {
@@ -98,6 +104,7 @@ export const createCodingAgentStreamResponse = ({
 			maxSteps,
 			providerOptions,
 			skill,
+			skillTool,
 		}),
 		generateMessageId: createIdGenerator({
 			prefix: "msg",

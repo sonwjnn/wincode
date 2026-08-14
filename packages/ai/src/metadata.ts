@@ -7,11 +7,25 @@ import {
 	modelVariantSchema,
 	normalizeChatModelSelection,
 } from "./models";
-import { skillContextSchema } from "./skill-context";
+import {
+	skillActivationSchema,
+	skillActivationSourceSchema,
+	skillContextSchema,
+} from "./skill-context";
 
-export const codingMessageSkillSchema = skillContextSchema.extend({
-	contentHash: z.string().min(1),
-});
+/**
+ * The Skill shape attached to message metadata. It is a union of:
+ * - the sanitized activation metadata (persisted rows and explicit activation),
+ * - the full snapshot carried in memory (and by legacy persisted rows) so the
+ *   transport can wrap the body into the current user turn.
+ */
+export const codingMessageSkillSchema = z.union([
+	skillActivationSchema,
+	skillContextSchema.extend({
+		contentHash: z.string().min(1),
+		source: skillActivationSourceSchema.optional(),
+	}),
+]);
 export type CodingMessageSkill = z.infer<typeof codingMessageSkillSchema>;
 
 const legacyChatModelSelectionSchema = z

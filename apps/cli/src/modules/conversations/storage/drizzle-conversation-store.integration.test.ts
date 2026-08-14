@@ -256,6 +256,53 @@ describe("drizzle conversation store", () => {
 		]);
 	});
 
+	test("reloads failed built-in tool calls persisted without input", async () => {
+		const { id } = await store.createSession({
+			message: userMessage("m1", "test list"),
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+		await store.persistMessages({
+			messages: [
+				userMessage("m1", "test list"),
+				{
+					id: "m2",
+					parts: [{ text: "before tool", type: "text" }],
+					role: "assistant",
+				},
+			],
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+			sessionId: id,
+		});
+		db.update(conversationMessage)
+			.set({
+				partsJson: [
+					{
+						errorText: "Invalid tool input.",
+						rawInput: '{"path":"src"}',
+						state: "output-error",
+						toolCallId: "call-1",
+						type: "tool-list",
+					},
+				] as unknown as CodingAgentUIMessage["parts"],
+			})
+			.where(eq(conversationMessage.uiMessageId, "m2"))
+			.run();
+
+		const messages = await store.getMessages(id);
+
+		expect(messages[1]?.parts).toEqual([
+			{
+				errorText: "Invalid tool input.",
+				input: { path: "src" },
+				state: "output-error",
+				toolCallId: "call-1",
+				type: "tool-list",
+			},
+		]);
+	});
+
 	test("canonicalizes failed MCP calls before persisting", async () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "test MCP"),
@@ -792,5 +839,214 @@ describe("local migrations", () => {
 		]);
 
 		sqlite.close();
+	});
+});
+
+describe("drizzle conversation store skill activation", () => {
+	test("persists explicit skill metadata without instructions", async () => {
+		await store.createSession({
+			message: {
+				id: "m-skill",
+				metadata: {
+					agent: "plan",
+					model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+					skill: {
+						arguments: "focus on auth",
+						contentHash: "hash-skill",
+						instructions: "secret review instructions",
+						name: "review",
+						source: "explicit",
+					},
+				},
+				parts: [{ text: "/review focus on auth", type: "text" }],
+				role: "user",
+			},
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+
+		const rows = db.select().from(conversationMessage).all();
+		const persisted = rows.find(
+			(row) => row.uiMessageId === "m-skill"
+		)?.metadataJson;
+		expect(persisted?.skill).toEqual({
+			arguments: "focus on auth",
+			contentHash: "hash-skill",
+			name: "review",
+			source: "explicit",
+		});
+		expect(JSON.stringify(persisted)).not.toContain(
+			"secret review instructions"
+		);
+	});
+
+	test("reloads sanitized activation metadata without a body", async () => {
+		const { id } = await store.createSession({
+			message: {
+				id: "m-skill",
+				metadata: {
+					agent: "plan",
+					model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+					skill: {
+						arguments: "focus",
+						contentHash: "hash-skill",
+						instructions: "secret review instructions",
+						name: "review",
+						source: "explicit",
+					},
+				},
+				parts: [{ text: "/review", type: "text" }],
+				role: "user",
+			},
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+
+		const [restored] = await store.getMessages(id);
+		expect(restored?.metadata?.skill).toEqual({
+			arguments: "focus",
+			contentHash: "hash-skill",
+			name: "review",
+			source: "explicit",
+		});
+	});
+
+	test("legacy rows with full instructions remain readable and normalize", async () => {
+		const { id } = await store.createSession({
+			message: userMessage("m1", "hello"),
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+		db.update(conversationMessage)
+			.set({
+				metadataJson: {
+					agent: "plan",
+					model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+					skill: {
+						arguments: "",
+						contentHash: "legacy-hash",
+						instructions: "legacy body",
+						name: "legacy-skill",
+					},
+				},
+			})
+			.where(eq(conversationMessage.uiMessageId, "m1"))
+			.run();
+
+		const [restored] = await store.getMessages(id);
+		expect(restored?.metadata?.skill).toEqual({
+			arguments: "",
+			contentHash: "legacy-hash",
+			name: "legacy-skill",
+			source: "explicit",
+		});
+	});
+
+	test("persists agent-loaded skill tool parts without the body or paths", async () => {
+		const { id } = await store.createSession({
+			message: userMessage("m1", "use a skill"),
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+		await store.persistMessages({
+			messages: [
+				userMessage("m1", "use a skill"),
+				{
+					id: "m2",
+					parts: [
+						{
+							input: { name: "review" },
+							output: {
+								baseDirectory: "/skills/review",
+								body: "secret skill body",
+								contentHash: "hash-loaded",
+								name: "review",
+								resourcePaths: ["/skills/review/template.md"],
+								source: "agent",
+								status: "loaded",
+							},
+							state: "output-available",
+							toolCallId: "skill-call-1",
+							toolName: "skill",
+							type: "dynamic-tool",
+						},
+					],
+					role: "assistant",
+				},
+			],
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+			sessionId: id,
+		});
+
+		const rows = db.select().from(conversationMessage).all();
+		const persisted = rows.find((row) => row.uiMessageId === "m2")
+			?.partsJson as Record<string, unknown>[];
+		expect(persisted[0]).toEqual({
+			input: { name: "review" },
+			output: {
+				contentHash: "hash-loaded",
+				name: "review",
+				source: "agent",
+				status: "loaded",
+			},
+			state: "output-available",
+			toolCallId: "skill-call-1",
+			toolName: "skill",
+			type: "dynamic-tool",
+		});
+		expect(JSON.stringify(persisted)).not.toContain("secret skill body");
+		expect(JSON.stringify(persisted)).not.toContain("skills/review");
+
+		const messages = await store.getMessages(id);
+		expect(messages[1]?.parts).toEqual(
+			persisted as CodingAgentUIMessage["parts"]
+		);
+	});
+
+	test("failed skill tool calls persist as output errors", async () => {
+		const { id } = await store.createSession({
+			message: userMessage("m1", "use a skill"),
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+		await store.persistMessages({
+			messages: [
+				userMessage("m1", "use a skill"),
+				{
+					id: "m2",
+					parts: [
+						{
+							input: { name: "missing" },
+							output: {
+								error: 'Unknown Skill "missing"',
+								name: "missing",
+								status: "failed",
+							},
+							state: "output-available",
+							toolCallId: "skill-call-2",
+							toolName: "skill",
+							type: "dynamic-tool",
+						},
+					],
+					role: "assistant",
+				},
+			],
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+			sessionId: id,
+		});
+
+		const messages = await store.getMessages(id);
+		expect(messages[1]?.parts).toEqual([
+			{
+				errorText: 'Unknown Skill "missing"',
+				input: { name: "missing" },
+				state: "output-error",
+				toolCallId: "skill-call-2",
+				toolName: "skill",
+				type: "dynamic-tool",
+			} as CodingAgentUIMessage["parts"][number],
+		]);
 	});
 });

@@ -7,7 +7,8 @@ import {
 	getSystemInstructionsForAgent,
 	hostedAgentDescriptorSchema,
 	modelVariantSchema,
-	skillContextSchema,
+	skillRequestContextSchema,
+	skillToolDefinitionSchema,
 } from "@wincode/ai";
 import {
 	codingServerTools,
@@ -69,7 +70,8 @@ const chatRequestSchema = z
 		persist: z.literal(false).optional(),
 		variant: modelVariantSchema.optional(),
 		sendReasoning: z.boolean().optional(),
-		skill: skillContextSchema.optional(),
+		skill: skillRequestContextSchema.optional(),
+		skillTool: skillToolDefinitionSchema.optional(),
 	})
 	.strict();
 
@@ -164,7 +166,11 @@ const getFundedContextTokenEstimate = ({
 	agent,
 	messages,
 	skill,
-}: Pick<z.infer<typeof chatRequestSchema>, "agent" | "messages" | "skill">) =>
+	skillTool,
+}: Pick<
+	z.infer<typeof chatRequestSchema>,
+	"agent" | "messages" | "skill" | "skillTool"
+>) =>
 	getMessageContextTokenEstimate(messages) +
 	getStringTokenEstimate(getSystemInstructionsForAgent(agent.instructions)) +
 	getStringTokenEstimate(
@@ -179,7 +185,8 @@ const getFundedContextTokenEstimate = ({
 		)
 	) +
 	getStringTokenEstimate(JSON.stringify(agent.mcpTools)) +
-	(skill ? getStringTokenEstimate(formatSkillUserContext(skill)) : 0);
+	(skill ? getStringTokenEstimate(formatSkillUserContext(skill)) : 0) +
+	(skillTool ? getStringTokenEstimate(skillTool.description) : 0);
 
 const hasOnlyTextParts = (messages: z.infer<typeof uiMessageInputSchema>[]) =>
 	messages
@@ -189,7 +196,7 @@ const hasOnlyTextParts = (messages: z.infer<typeof uiMessageInputSchema>[]) =>
 const isAcceptableInput = (
 	request: Pick<
 		z.infer<typeof chatRequestSchema>,
-		"agent" | "messages" | "skill"
+		"agent" | "messages" | "skill" | "skillTool"
 	>,
 	inputTokenLimit: number
 ): boolean =>
@@ -290,7 +297,8 @@ const handleChatRequest = async (
 		return badRequest();
 	}
 
-	const { agent, messages, model, sendReasoning, variant, skill } = parsed.data;
+	const { agent, messages, model, sendReasoning, skill, skillTool, variant } =
+		parsed.data;
 	const billingConfig = resolveBillingConfig();
 	if (
 		billingConfig === null ||
@@ -405,6 +413,7 @@ const handleChatRequest = async (
 		abortSignal,
 		providerOptions: resolvedModel.providerOptions,
 		skill,
+		skillTool,
 		sendReasoning,
 		mcpTools: agent.mcpTools,
 		uiMessages: validation.data,

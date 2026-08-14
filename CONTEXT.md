@@ -40,6 +40,15 @@ A fixed UI action the CLI ships with, dispatched by kind to an adapter
 A user-defined prompt template loaded from a command folder, inserted into the
 conversation as a user message when executed. _Avoid_: Command, slash command
 
+**Skill**:
+A named set of instructions that augments an Agent for one user turn. A Skill may
+be selected explicitly by the user or activated by the Agent. _Avoid_: Agent,
+session mode, Custom Command
+
+**Skill Activation**:
+The selection of a Skill for the current user turn. Activation does not persist
+to later turns. _Avoid_: Skill installation, session Skill
+
 **Agent**:
 A named AI behavior that can lead a conversation, execute a delegated task, or
 both. Its role and tool permissions are separate concerns. _Avoid_: Coding Mode,

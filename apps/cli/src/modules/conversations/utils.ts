@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { Extmark } from "@opentui/core";
 import {
 	type AgentId,
@@ -7,9 +6,12 @@ import {
 	codingMessageSkillSchema,
 	type ModelVariant,
 	normalizeChatModelSelection,
+	type SkillActivationSource,
 	type SkillContext,
+	type SkillRequestContext,
 } from "@wincode/ai";
 import type { FileUIPart } from "@wincode/ai/client";
+import { hashSkillBody } from "@/modules/skills";
 import type { ConversationSession } from "./storage/conversation-store";
 
 export const shouldAutoStartAssistantTurn = (
@@ -75,23 +77,40 @@ export type ChatPromptSubmission = {
 	skill?: SkillContext;
 };
 
-export const createSkillSnapshot = (skill: SkillContext) => ({
+export const createSkillSnapshot = (
+	skill: SkillContext,
+	source: SkillActivationSource
+) => ({
 	...skill,
-	contentHash: createHash("sha256").update(skill.instructions).digest("hex"),
+	contentHash: hashSkillBody(skill.instructions),
+	source,
 });
 
+/**
+ * Resolves the Skill payload the current user turn carries for the model loop.
+ * Only snapshots that still hold the body (in-memory or legacy persisted
+ * records) resolve; sanitized activation metadata without instructions means
+ * the Skill no longer applies and returns `undefined`.
+ */
 export const getOriginatingUserSkill = (
 	messages: CodingAgentUIMessage[]
-): SkillContext | undefined => {
+): SkillRequestContext | undefined => {
 	const message = [...messages].reverse().find(({ role }) => role === "user");
 	const parsed = codingMessageSkillSchema.safeParse(message?.metadata?.skill);
-	return parsed.success
-		? {
-				name: parsed.data.name,
-				arguments: parsed.data.arguments,
-				instructions: parsed.data.instructions,
-			}
-		: undefined;
+	if (!parsed.success) {
+		return;
+	}
+	const skill = parsed.data;
+	if (!("instructions" in skill)) {
+		return;
+	}
+	return {
+		arguments: skill.arguments,
+		contentHash: skill.contentHash,
+		instructions: skill.instructions,
+		name: skill.name,
+		source: skill.source ?? "explicit",
+	};
 };
 
 export type ChatAttachment = {

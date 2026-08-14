@@ -7,7 +7,8 @@ import type {
 	McpToolManifest,
 	ModelVariant,
 	ResolvedAgentRuntime,
-	SkillContext,
+	SkillRequestContext,
+	SkillToolDefinition,
 } from "@wincode/ai";
 import {
 	chatModelSelectionSchema,
@@ -21,7 +22,8 @@ type SendChatRequestBody = {
 	messages: CodingAgentUIMessage[];
 	model: string;
 	persist: false;
-	skill?: SkillContext;
+	skill?: SkillRequestContext;
+	skillTool?: SkillToolDefinition;
 	variant?: ModelVariant;
 	sendReasoning: true;
 };
@@ -31,7 +33,7 @@ type ChatMetadataFallback = {
 	model: ChatModelSelection;
 	resolvedAgent: ResolvedAgentRuntime;
 	variant?: ModelVariant;
-	skill?: SkillContext;
+	skill?: SkillRequestContext;
 };
 
 const getBillingKind = (agent: AgentId): AgentBillingKind => {
@@ -59,17 +61,23 @@ const findLastChatMetadata = (messages: CodingAgentUIMessage[]) =>
 
 const findOriginatingUserSkill = (
 	messages: CodingAgentUIMessage[]
-): SkillContext | undefined => {
+): SkillRequestContext | undefined => {
 	const message = [...messages].reverse().find(({ role }) => role === "user");
 	const parsed = codingMessageSkillSchema.safeParse(message?.metadata?.skill);
-
-	return parsed.success
-		? {
-				name: parsed.data.name,
-				arguments: parsed.data.arguments,
-				instructions: parsed.data.instructions,
-			}
-		: undefined;
+	if (!parsed.success) {
+		return;
+	}
+	const skill = parsed.data;
+	if (!("instructions" in skill)) {
+		return;
+	}
+	return {
+		arguments: skill.arguments,
+		contentHash: skill.contentHash,
+		instructions: skill.instructions,
+		name: skill.name,
+		source: skill.source ?? "explicit",
+	};
 };
 
 const normalizeSelection = (model: unknown): ChatModelSelection | null => {
@@ -89,7 +97,8 @@ export const prepareSendChatRequestBody = (
 	_sessionId: string,
 	messages: CodingAgentUIMessage[],
 	fallback?: ChatMetadataFallback,
-	mcpTools?: McpToolManifest
+	mcpTools?: McpToolManifest,
+	skillTool?: SkillToolDefinition
 ): SendChatRequestBody => {
 	const message = messages.at(-1);
 
@@ -125,6 +134,7 @@ export const prepareSendChatRequestBody = (
 		model: model.modelId,
 		persist: false,
 		...((skill ?? fallback?.skill) ? { skill: skill ?? fallback?.skill } : {}),
+		...(skillTool ? { skillTool } : {}),
 		variant,
 		sendReasoning: true,
 	};

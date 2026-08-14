@@ -1,8 +1,16 @@
 import { type CodingToolName, codingToolNames } from "@wincode/ai";
+import { expandHomeInPath } from "./external-directory";
 
 export type PermissionDecision = "allow" | "ask" | "deny";
 
-export type PermissionAction = "read" | "write" | "edit" | "list" | "grep";
+export type PermissionAction =
+	| "read"
+	| "write"
+	| "edit"
+	| "list"
+	| "grep"
+	| "skill"
+	| "external_directory";
 
 export type PermissionResourceRules = Readonly<
 	Record<string, PermissionDecision>
@@ -67,6 +75,8 @@ export const PERMISSION_TOOL_ACTIONS = [
 	"edit",
 	"list",
 	"grep",
+	"skill",
+	"external_directory",
 ] as const satisfies readonly PermissionAction[];
 
 /**
@@ -111,6 +121,9 @@ export const DEFAULT_PERMISSION_RULES: PermissionRules = {
 	edit: "allow",
 	list: "allow",
 	grep: "allow",
+	// Access outside the workspace is a visible boundary: it always requires
+	// explicit approval unless a configured rule or remembered grant allows it.
+	external_directory: "ask",
 };
 
 /**
@@ -266,7 +279,9 @@ const normalizeRules = (
 		}
 		normalized[action] = Object.entries(rule).map(([pattern, decision]) => ({
 			decision,
-			pattern,
+			// Expand `~` and `$HOME` once while compiling so external-directory
+			// patterns are portable across user environments.
+			pattern: expandHomeInPath(pattern),
 		}));
 	}
 	return normalized;
@@ -276,7 +291,10 @@ const normalizeRules = (
  * Builds a policy evaluator from fully resolved rules without seeding defaults.
  * A missing action falls back to `allow`, a scalar action applies to every
  * resource, and a resource map applies the last matching pattern's decision,
- * falling back to `allow` when nothing matches.
+ * falling back to `allow` when nothing matches. `external_directory` is the
+ * exception: its boundary default is `ask`, so a configured resource map that
+ * matches nothing must not loosen the boundary — the ask default is preserved
+ * for both missing actions and unmatched patterns.
  */
 export function createResolvedToolPermission(
 	rules: PermissionRules
@@ -286,12 +304,16 @@ export function createResolvedToolPermission(
 		decide(action: PermissionAction, resource: string): PermissionDecision {
 			const rule = normalized[action];
 			if (rule === undefined) {
-				return "allow";
+				return action === "external_directory" ? "ask" : "allow";
 			}
 			if (typeof rule === "string") {
 				return rule;
 			}
-			return decideByResourceMap(rule, resource, "allow");
+			return decideByResourceMap(
+				rule,
+				resource,
+				action === "external_directory" ? "ask" : "allow"
+			);
 		},
 		safety: false,
 	};

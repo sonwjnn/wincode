@@ -34,8 +34,9 @@ describe("prepareSendChatRequestBody", () => {
 						skill: {
 							name: "review",
 							arguments: "focus",
-							instructions: "Review code",
 							contentHash: "hash-review",
+							instructions: "Review code",
+							source: "explicit",
 						},
 					},
 				},
@@ -52,7 +53,9 @@ describe("prepareSendChatRequestBody", () => {
 		expect(body.skill).toEqual({
 			name: "review",
 			arguments: "focus",
+			contentHash: "hash-review",
 			instructions: "Review code",
+			source: "explicit",
 		});
 	});
 
@@ -70,8 +73,9 @@ describe("prepareSendChatRequestBody", () => {
 						skill: {
 							name: "plan",
 							arguments: "",
-							instructions: "Make a plan",
 							contentHash: "hash-plan",
+							instructions: "Make a plan",
+							source: "explicit",
 						},
 					},
 				},
@@ -82,7 +86,9 @@ describe("prepareSendChatRequestBody", () => {
 		expect(body.skill).toEqual({
 			name: "plan",
 			arguments: "",
+			contentHash: "hash-plan",
 			instructions: "Make a plan",
+			source: "explicit",
 		});
 	});
 

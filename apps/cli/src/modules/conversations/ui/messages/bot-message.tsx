@@ -337,6 +337,14 @@ const resolveFooterItems = (
 
 function ToolMessagePart({ part }: { part: ToolPart }) {
 	const { colors } = useTheme();
+	const isSkillCall =
+		part.type === "dynamic-tool" &&
+		part.toolName === "skill" &&
+		(part.state === "output-available" || part.state === "output-error");
+	if (isSkillCall) {
+		return <SkillActivityRow part={part} />;
+	}
+
 	const errorText = redactSensitiveDisplayText(
 		sanitizeDisplayText(formatUnknown(part.errorText))
 	);
@@ -368,6 +376,76 @@ function ToolMessagePart({ part }: { part: ToolPart }) {
 					{errorText ? <span fg={colors.error}>{` ${errorText}`}</span> : null}
 				</text>
 			)}
+		</box>
+	);
+}
+
+type SkillActivityState =
+	| "already-loaded"
+	| "approval-requested"
+	| "failed"
+	| "limit-reached"
+	| "loaded"
+	| "rejected";
+
+const SKILL_ACTIVITY_LABELS: Record<SkillActivityState, string> = {
+	"already-loaded": "already loaded",
+	"approval-requested": "requesting approval",
+	failed: "failed",
+	"limit-reached": "limit reached",
+	loaded: "loaded",
+	rejected: "rejected",
+};
+
+const formatSkillHash = (hash: unknown): string => {
+	const value = typeof hash === "string" ? hash : "";
+	return value.length > 12 ? `${value.slice(0, 12)}…` : value;
+};
+
+/**
+ * The audit row for one Agent-driven Skill activation: name, source, state,
+ * and a short content hash identify the exact snapshot without ever rendering
+ * the instructions. The state is derived from the sanitized tool result, so
+ * the same row renders from live memory and from durable history.
+ */
+function SkillActivityRow({ part }: { part: ToolPart }) {
+	const { colors } = useTheme();
+	const output =
+		part.state === "output-available" &&
+		typeof part.output === "object" &&
+		part.output !== null &&
+		!Array.isArray(part.output)
+			? (part.output as Record<string, unknown>)
+			: undefined;
+	const status = formatUnknown(output?.status) as SkillActivityState;
+	const stateLabel = SKILL_ACTIVITY_LABELS[status] ?? formatToolName(status);
+	const name = sanitizeDisplayText(
+		formatUnknown(output?.name ?? (part.input as { name?: unknown })?.name),
+		64
+	);
+	const source =
+		output?.source === "explicit" || output?.source === "agent"
+			? output.source
+			: undefined;
+	const hash = formatSkillHash(output?.contentHash);
+	const failed =
+		status === "failed" || part.state === "output-error"
+			? sanitizeDisplayText(formatUnknown(output?.error ?? part.errorText))
+			: "";
+	const activeNames =
+		status === "limit-reached" && Array.isArray(output?.activeSkillNames)
+			? ` · ${output.activeSkillNames.join(", ")}`
+			: "";
+
+	return (
+		<box marginBottom={1} paddingX={3} width="100%">
+			<text fg={colors.tool}>
+				{`◆ Skill ${name || "?"} — ${stateLabel}`}
+				{source ? <span fg={colors.textMuted}>{` · ${source}`}</span> : null}
+				{hash ? <span fg={colors.textMuted}>{` · ${hash}`}</span> : null}
+				{activeNames ? <span fg={colors.textMuted}>{activeNames}</span> : null}
+				{failed ? <span fg={colors.error}>{` · ${failed}`}</span> : null}
+			</text>
 		</box>
 	);
 }

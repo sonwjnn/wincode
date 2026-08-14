@@ -5,6 +5,11 @@ export {
 } from "./approval-resolution";
 export { canonicalizeResource } from "./canonical";
 export {
+	canonicalizeExternalPath,
+	expandHomeInPath,
+	externalParentDirectoryGlob,
+} from "./external-directory";
+export {
 	type CreatePermissionServiceOptions,
 	createPermissionService,
 	type PermissionGrantAction,

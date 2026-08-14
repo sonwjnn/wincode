@@ -20,6 +20,7 @@ Multi-provider models · MCP tools · usage-based billing · local session histo
 - **Bring your own model** — first-class connections to Anthropic, OpenAI, and Google, via API keys or browser OAuth. Provider onboarding is registry-driven.
 - **MCP support** — connect Model Context Protocol servers (stdio & HTTP) with per-tool approval policies and a live status view.
 - **Agent tools** — file read/write/edit, grep, and directory listing run locally in your working directory; the server only ever sees schema-only tool definitions.
+- **Skills** — local `SKILL.md` workflows invoked explicitly with `/skill-name` or activated on demand by the Agent through a native `skill` tool. Instructions are turn-scoped untrusted context, gated by Tool Permission, and only activation metadata is persisted.
 - **Usage & billing** — end-to-end token accounting with a session usage bar, model-pricing sync, and [Polar](https://polar.sh)-backed subscriptions.
 - **Type-safe end to end** — Hono RPC + tRPC contracts and Zod validation shared across every app.
 

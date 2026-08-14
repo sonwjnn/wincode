@@ -27,10 +27,11 @@ const resolveDirectChatModelMock = mock(
 		providerOptions: { apiKey, options },
 	})
 );
+const createCodingAgentMock = mock((_options: unknown) => ({}));
 
 mock.module("@wincode/ai/server", () => ({
 	...realServer,
-	createCodingAgent: () => ({}),
+	createCodingAgent: createCodingAgentMock,
 	getProviderErrorMessage: () => new Error("provider"),
 	resolveDirectChatModel: resolveDirectChatModelMock,
 	resolveOpenAIChatModel: resolveOpenAIChatModelMock,
@@ -299,6 +300,113 @@ describe("chat transport", () => {
 		}
 	});
 
+	test("routing transport forwards the skill tool and explicit skill to hosted requests", async () => {
+		mock.module("@/shared/api/hono-client", () => ({
+			getHonoClient: () => ({
+				api: {
+					sessions: {
+						":id": {
+							chat: {
+								$url: ({ param }: { param: { id: string } }) =>
+									new URL(`https://example.test/sessions/${param.id}/chat`),
+							},
+						},
+					},
+				},
+			}),
+		}));
+		const { createRoutingChatTransport } = await import(
+			"./routing-chat-transport"
+		);
+		const fetchMock = mock(
+			async () =>
+				new Response(
+					new ReadableStream({
+						start(controller) {
+							controller.close();
+						},
+					})
+				)
+		);
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
+		try {
+			const skillMessage = {
+				id: "msg-skill",
+				metadata: {
+					agent: "build",
+					model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
+					skill: {
+						arguments: "focus",
+						contentHash: "hash-skill",
+						instructions: "Review code.",
+						name: "review",
+						source: "explicit",
+					},
+				},
+				parts: [{ text: "/review", type: "text" }],
+				role: "user",
+			} as const;
+			const transport = createRoutingChatTransport(
+				"session-1",
+				agentRef,
+				hostedResolvedAgentRef,
+				modelRef,
+				variantRef,
+				{
+					authorize: async () => ({ kind: "api-key", apiKey: "key" }),
+				} as never,
+				makeMcp({ createSnapshot: async () => makeSnapshot() }),
+				{
+					current: {
+						description: "<available_skills>\n- review: review skills",
+						inputSchema: {
+							additionalProperties: false as const,
+							properties: { name: { type: "string" as const } },
+							required: ["name"] as const,
+							type: "object" as const,
+						},
+						name: "skill" as const,
+					},
+				}
+			);
+			await transport.sendMessages({
+				abortSignal: undefined,
+				body: undefined,
+				chatId: "session-1",
+				headers: undefined,
+				messageId: undefined,
+				messages: [skillMessage] as never,
+				metadata: undefined,
+				trigger: "submit-message",
+			});
+			const [, requestInit] = fetchMock.mock.calls[0] as unknown as [
+				unknown,
+				{ body?: string },
+			];
+			const body = JSON.parse(requestInit.body ?? "{}");
+			expect(body.skill).toEqual({
+				arguments: "focus",
+				contentHash: "hash-skill",
+				instructions: "Review code.",
+				name: "review",
+				source: "explicit",
+			});
+			expect(body.skillTool).toEqual({
+				description: "<available_skills>\n- review: review skills",
+				inputSchema: {
+					additionalProperties: false,
+					properties: { name: { type: "string" } },
+					required: ["name"],
+					type: "object",
+				},
+				name: "skill",
+			});
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
 	test("routing transport passes the snapshot to the direct transport", async () => {
 		const capturedSnapshot: { current: McpCatalogSnapshot | undefined } = {
 			current: undefined,
@@ -548,5 +656,141 @@ describe("chat transport", () => {
 			{ variant: undefined }
 		);
 		expect(resolveOpenAIChatModelMock).not.toHaveBeenCalled();
+	});
+});
+
+describe("chat transport skill activation", () => {
+	const skillMessage = {
+		id: "msg-skill",
+		metadata: {
+			agent: "build",
+			model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
+			skill: {
+				arguments: "focus on auth",
+				contentHash: "hash-skill",
+				instructions: "Review code thoroughly.",
+				name: "review",
+				source: "explicit",
+			},
+		},
+		parts: [{ text: "/review focus on auth", type: "text" }],
+		role: "user",
+	} as const;
+
+	test("local transport re-injects the skill context into the model loop", async () => {
+		const createStream = mock(
+			async (_input: { originalMessages?: unknown }) => new ReadableStream()
+		);
+		const transport = createLocalChatTransport(
+			"session-1",
+			resolvedAgentRef,
+			{ current: { modelId: "gemini-2.5-flash", providerId: "google" } },
+			{ current: undefined },
+			{
+				authorize: async () => ({ kind: "api-key", apiKey: "google-key" }),
+			} as never,
+			createStream
+		);
+		await transport.sendMessages({
+			abortSignal: undefined,
+			body: undefined,
+			chatId: "session-1",
+			headers: undefined,
+			messageId: undefined,
+			messages: [skillMessage] as never,
+			metadata: undefined,
+			trigger: "submit-message",
+		});
+		const input = createStream.mock.calls[0]?.[0] as {
+			originalMessages?: Array<{
+				id?: string;
+				parts?: Array<{ text?: string }>;
+			}>;
+		};
+		const skillContextMessage = input.originalMessages?.find(
+			({ id }) => id === "skill-context"
+		);
+		expect(skillContextMessage).toBeDefined();
+		expect(skillContextMessage?.parts?.[0]?.text).toContain(
+			'<untrusted-skill-context name="review" source="explicit" content-hash="hash-skill">'
+		);
+		expect(skillContextMessage?.parts?.[0]?.text).toContain(
+			"Review code thoroughly."
+		);
+		expect(skillContextMessage?.parts?.[0]?.text).toContain(
+			"<arguments>focus on auth</arguments>"
+		);
+	});
+
+	test("local transport passes the skill tool definition to the agent", async () => {
+		createCodingAgentMock.mockClear();
+		const createStream = mock(async () => new ReadableStream());
+		const skillToolRef = {
+			current: {
+				description: "<available_skills>\n- review: review skills",
+				inputSchema: {
+					additionalProperties: false as const,
+					properties: { name: { type: "string" as const } },
+					required: ["name"] as ["name"],
+					type: "object" as const,
+				},
+				name: "skill" as const,
+			},
+		};
+		const transport = createLocalChatTransport(
+			"session-1",
+			resolvedAgentRef,
+			{ current: { modelId: "gemini-2.5-flash", providerId: "google" } },
+			{ current: undefined },
+			{
+				authorize: async () => ({ kind: "api-key", apiKey: "google-key" }),
+			} as never,
+			createStream,
+			makeSnapshot(),
+			skillToolRef
+		);
+		await transport.sendMessages({
+			abortSignal: undefined,
+			body: undefined,
+			chatId: "session-1",
+			headers: undefined,
+			messageId: undefined,
+			messages: [] as never,
+			metadata: undefined,
+			trigger: "submit-message",
+		});
+		const options = createCodingAgentMock.mock.calls[0]?.[0] as {
+			skillTool?: { name: string; description: string };
+		};
+		expect(options.skillTool).toEqual(skillToolRef.current);
+	});
+
+	test("local transport omits the skill tool when no catalog is active", async () => {
+		createCodingAgentMock.mockClear();
+		const createStream = mock(async () => new ReadableStream());
+		const transport = createLocalChatTransport(
+			"session-1",
+			resolvedAgentRef,
+			{ current: { modelId: "gemini-2.5-flash", providerId: "google" } },
+			{ current: undefined },
+			{
+				authorize: async () => ({ kind: "api-key", apiKey: "google-key" }),
+			} as never,
+			createStream
+		);
+		await transport.sendMessages({
+			abortSignal: undefined,
+			body: undefined,
+			chatId: "session-1",
+			headers: undefined,
+			messageId: undefined,
+			messages: [] as never,
+			metadata: undefined,
+			trigger: "submit-message",
+		});
+		const options = createCodingAgentMock.mock.calls[0]?.[0] as {
+			skillTool?: unknown;
+		};
+		expect(options.skillTool).toBeUndefined();
 	});
 });
