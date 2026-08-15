@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import type { CallToolResult } from "@modelcontextprotocol/client";
 import { testRender } from "@opentui/react/test-utils";
 import type { AgentId } from "@wincode/ai";
-import { act } from "react";
+import { act, useState } from "react";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
@@ -15,7 +15,9 @@ import type {
 	McpSnapshotTool,
 } from "../registry";
 import type { McpNormalizedResult } from "../result";
+import { McpActiveIndicator } from "../ui/mcp-active-indicator";
 import {
+	buildMcpSummary,
 	type McpAddToolOutput,
 	type McpApprovalDecision,
 	type McpApprovalGate,
@@ -391,7 +393,7 @@ test("provider exposes statuses, snapshots, runtime controls, and close", async 
 	await flushUi(setup);
 	expect(calls.filter((call) => call === "initialize")).toHaveLength(1);
 	await captured.value?.initialize();
-	expect(calls.filter((call) => call === "initialize")).toHaveLength(1);
+	expect(calls.filter((call) => call === "initialize")).toHaveLength(2);
 
 	await expect(captured.value?.createSnapshot("build")).resolves.toEqual({
 		agent: "build",
@@ -521,10 +523,38 @@ test("provider handleDynamicToolCall emits an error when the gate denies", async
 	]);
 });
 
+test("MCP failure summary identifies every failed server and reason", () => {
+	expect(
+		buildMcpSummary([
+			{
+				error: "Invalid MCP server configuration",
+				name: "websearch",
+				state: "failed",
+				toolCount: 0,
+				transport: "remote",
+			},
+			{
+				name: "context7",
+				state: "failed",
+				toolCount: 0,
+				transport: "local",
+			},
+		])
+	).toBe(
+		"MCP failed:\nwebsearch: Invalid MCP server configuration\ncontext7: Connection failed"
+	);
+});
+
 test("provider shows a single summary toast after the first build snapshot", async () => {
 	let statuses: readonly McpServerStatus[] = [
 		{ name: "demo", state: "connected", toolCount: 2, transport: "local" },
-		{ name: "broken", state: "failed", toolCount: 0, transport: "remote" },
+		{
+			error: "Connection refused",
+			name: "broken",
+			state: "failed",
+			toolCount: 0,
+			transport: "remote",
+		},
 	];
 	const registry: McpRegistry = {
 		...makeRegistry(),
@@ -534,21 +564,163 @@ test("provider shows a single summary toast after the first build snapshot", asy
 
 	await captured.value?.createSnapshot("build");
 	await flushUi(setup);
-	expect(setup.captureCharFrame()).toContain("MCP: 1 failed.");
+	expect(setup.captureCharFrame()).toContain("broken: Connection refused");
 
 	// A later snapshot with different server counts must not emit a second
 	// summary toast; the first-init flag holds.
 	statuses = [
 		{ name: "demo", state: "connected", toolCount: 2, transport: "local" },
-		{ name: "broken", state: "failed", toolCount: 0, transport: "remote" },
+		{
+			error: "Connection refused",
+			name: "broken",
+			state: "failed",
+			toolCount: 0,
+			transport: "remote",
+		},
 		{ name: "broken2", state: "failed", toolCount: 0, transport: "remote" },
 	];
 	await captured.value?.createSnapshot("build");
 	await flushUi(setup);
 
 	const frame = setup.captureCharFrame();
-	expect(frame).not.toContain("MCP: 2 failed.");
-	expect(frame).toContain("MCP: 1 failed.");
+	expect(frame).not.toContain("broken2");
+	expect(frame).toContain("broken: Connection refused");
+	setup.renderer.destroy();
+});
+
+test("provider refreshes without closing the registry when the route changes", async () => {
+	let setRoute: ((route: string) => void) | undefined;
+	let initializeCount = 0;
+	let closeCount = 0;
+	let statuses: readonly McpServerStatus[] = [
+		{ name: "demo", state: "connected", toolCount: 1, transport: "local" },
+	];
+	const registry: McpRegistry = {
+		...makeRegistry(),
+		close: async () => {
+			closeCount += 1;
+		},
+		initialize: async () => {
+			initializeCount += 1;
+		},
+		getStatuses: () => statuses,
+	};
+	function Harness() {
+		const [route, updateRoute] = useState("/sessions/one");
+		setRoute = updateRoute;
+		return (
+			<McpProvider
+				createRegistry={() => registry}
+				refreshKey={route}
+				workspace="/tmp"
+			>
+				<text>consumer</text>
+			</McpProvider>
+		);
+	}
+	const setup = await testRender(
+		<ThemeProvider>
+			<ToastProvider>
+				<Harness />
+			</ToastProvider>
+		</ThemeProvider>,
+		{ height: 40, width: 120 }
+	);
+	await flushUi(setup);
+	expect(initializeCount).toBe(1);
+	statuses = [
+		{
+			error: "Invalid MCP server configuration",
+			name: "demo",
+			state: "failed",
+			toolCount: 0,
+			transport: "local",
+		},
+	];
+
+	await act(async () => {
+		setRoute?.("/sessions/two");
+	});
+	await flushUi(setup);
+
+	expect(initializeCount).toBe(2);
+	expect(closeCount).toBe(0);
+	expect(setup.captureCharFrame()).toContain(
+		"demo: Invalid MCP server configuration"
+	);
+	setup.renderer.destroy();
+});
+
+test("provider exposes loading state through the MCP active indicator", async () => {
+	let finishInitialize: (() => void) | undefined;
+	const pendingInitialize = new Promise<void>((resolve) => {
+		finishInitialize = resolve;
+	});
+	const registry: McpRegistry = {
+		...makeRegistry(),
+		getStatuses: () => [
+			{ name: "demo", state: "connected", toolCount: 1, transport: "local" },
+			{
+				name: "websearch",
+				state: "connected",
+				toolCount: 1,
+				transport: "remote",
+			},
+		],
+		initialize: () => pendingInitialize,
+	};
+	const setup = await testRender(
+		<ThemeProvider>
+			<ToastProvider>
+				<McpProvider createRegistry={() => registry} workspace="/tmp">
+					<McpActiveIndicator />
+				</McpProvider>
+			</ToastProvider>
+		</ThemeProvider>,
+		{ height: 40, width: 120 }
+	);
+	await flushUi(setup);
+	expect(setup.captureCharFrame()).toContain("Loading...");
+
+	finishInitialize?.();
+	await flushUi(setup);
+
+	expect(setup.captureCharFrame()).toContain("2 MCPs");
+	setup.renderer.destroy();
+});
+
+test("provider keeps loading state active during reconnect and toggle", async () => {
+	let finishReconnect: (() => void) | undefined;
+	let finishToggle: (() => void) | undefined;
+	const pendingReconnect = new Promise<void>((resolve) => {
+		finishReconnect = resolve;
+	});
+	const pendingToggle = new Promise<void>((resolve) => {
+		finishToggle = resolve;
+	});
+	const registry: McpRegistry = {
+		...makeRegistry(),
+		reconnect: () => pendingReconnect,
+		toggle: () => pendingToggle,
+	};
+	const { captured, setup } = await renderProvider(registry);
+	await flushUi(setup);
+
+	const reconnect = captured.value?.reconnect("demo");
+	await flushUi(setup);
+	expect(captured.value?.isLoading).toBe(true);
+	finishReconnect?.();
+	await reconnect;
+	await flushUi(setup);
+	expect(captured.value?.isLoading).toBe(false);
+
+	const toggle = captured.value?.toggle("demo");
+	await flushUi(setup);
+	expect(captured.value?.isLoading).toBe(true);
+	finishToggle?.();
+	await toggle;
+	await flushUi(setup);
+	expect(captured.value?.isLoading).toBe(false);
 	setup.renderer.destroy();
 });
 
@@ -569,5 +741,29 @@ test("provider shows no summary toast when all MCP servers connect", async () =>
 	await captured.value?.createSnapshot("plan");
 	await flushUi(setup);
 	expect(setup.captureCharFrame()).not.toContain("MCP:");
+	setup.renderer.destroy();
+});
+
+test("provider shows a toast when reconnect leaves an MCP failed", async () => {
+	const registry: McpRegistry = {
+		...makeRegistry(),
+		getStatuses: () => [
+			{
+				error: "URL must be absolute http or https URL",
+				name: "websearch",
+				state: "failed",
+				toolCount: 0,
+				transport: "remote",
+			},
+		],
+	};
+	const { captured, setup } = await renderProvider(registry);
+
+	await captured.value?.reconnect("websearch");
+	await flushUi(setup);
+
+	expect(setup.captureCharFrame()).toContain(
+		"websearch: URL must be absolute http or https URL"
+	);
 	setup.renderer.destroy();
 });

@@ -16,4 +16,5 @@ export {
 	type McpServerStatus,
 	type McpSnapshotTool,
 } from "./registry";
+export { McpActiveIndicator } from "./ui/mcp-active-indicator";
 export { McpStatusDialogContent } from "./ui/mcp-status-dialog";

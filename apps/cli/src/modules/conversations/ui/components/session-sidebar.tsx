@@ -56,7 +56,7 @@ export function McpSidebarSection({
 					return (
 						<box flexDirection="row" gap={1} key={status.name} width="100%">
 							<text fg={isConnected ? colors.success : colors.textDisabled}>
-								●
+								•
 							</text>
 							<box flexGrow={1} overflow="hidden">
 								<text fg={colors.text} wrapMode="none">

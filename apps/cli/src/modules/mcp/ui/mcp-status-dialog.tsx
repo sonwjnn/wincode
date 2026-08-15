@@ -65,20 +65,25 @@ function McpStatusRow({ isLoading, isSelected, row }: McpStatusRowProps) {
 	const selectedTextColor = getContrastingTextColor(colors.selection);
 	const primaryTextColor = isSelected ? selectedTextColor : colors.text;
 	const secondaryTextColor = isSelected ? selectedTextColor : colors.textMuted;
-	let enabledColor = colors.textMuted;
+	let connectionColor = colors.textMuted;
 	if (isSelected) {
-		enabledColor = selectedTextColor;
-	} else if (row.enabled) {
-		enabledColor = colors.success;
+		connectionColor = selectedTextColor;
+	} else if (row.state === "connected") {
+		connectionColor = colors.success;
+	} else if (row.reconnectable) {
+		connectionColor = colors.error;
 	}
 	const stateLabel = isLoading ? "loading..." : row.state;
-	let enabledLabel = "Disabled";
+	const showStateLabel = isLoading || row.state !== "connected";
+	let connectionLabel = "Disabled";
 	if (isLoading) {
-		enabledLabel = "Loading...";
-	} else if (row.enabled) {
-		enabledLabel = "Enabled";
+		connectionLabel = "Loading...";
+	} else if (row.state === "connected") {
+		connectionLabel = "Connected";
+	} else if (row.reconnectable) {
+		connectionLabel = isSelected ? "Reconnect" : "Failed";
 	}
-	const indicator = isLoading || !row.enabled ? "○" : "✓";
+	const indicator = row.state === "connected" && !isLoading ? "✓" : "○";
 
 	return (
 		<SelectableDialogItem>
@@ -98,21 +103,23 @@ function McpStatusRow({ isLoading, isSelected, row }: McpStatusRowProps) {
 					>
 						{row.server}
 					</text>
-					<text
-						attributes={TextAttributes.DIM}
-						fg={secondaryTextColor}
-						selectable={false}
-					>
-						{stateLabel}
-					</text>
+					{showStateLabel ? (
+						<text
+							attributes={TextAttributes.DIM}
+							fg={secondaryTextColor}
+							selectable={false}
+						>
+							{stateLabel}
+						</text>
+					) : null}
 				</box>
 				<box flexGrow={1} />
 				<box flexDirection="row" flexShrink={0} gap={1}>
-					<text fg={enabledColor} selectable={false}>
-						{indicator}
+					<text fg={connectionColor} selectable={false}>
+						{connectionLabel}
 					</text>
-					<text fg={enabledColor} selectable={false}>
-						{enabledLabel}
+					<text fg={connectionColor} selectable={false}>
+						{indicator}
 					</text>
 				</box>
 			</box>
@@ -126,7 +133,7 @@ function McpStatusRow({ isLoading, isSelected, row }: McpStatusRowProps) {
  * no config, environment, headers, or URLs can appear.
  */
 export function McpStatusDialogContent() {
-	const { initialize, statuses, toggle } = useMcp();
+	const { initialize, reconnect, statuses, toggle } = useMcp();
 	const { colors } = useTheme();
 	const loadingServersRef = useRef(new Set<string>());
 	const mountedRef = useRef(true);
@@ -147,14 +154,21 @@ export function McpStatusDialogContent() {
 		() => statuses.map((status) => formatStatusRow(status)),
 		[statuses]
 	);
-	const handleToggle = useCallback(
-		(serverName: string) => {
-			if (loadingServersRef.current.has(serverName)) {
+	const handleAction = useCallback(
+		(row: StatusRowFormat) => {
+			const serverName = row.server;
+			if (
+				row.state === "connecting" ||
+				loadingServersRef.current.has(serverName)
+			) {
 				return;
 			}
 			loadingServersRef.current.add(serverName);
 			setLoadingServers(new Set(loadingServersRef.current));
-			void toggle(serverName)
+			const action = row.reconnectable
+				? reconnect(serverName)
+				: toggle(serverName);
+			void action
 				.finally(() => {
 					loadingServersRef.current.delete(serverName);
 					if (mountedRef.current) {
@@ -163,7 +177,7 @@ export function McpStatusDialogContent() {
 				})
 				.catch(() => undefined);
 		},
-		[toggle]
+		[reconnect, toggle]
 	);
 
 	const filterFn = useCallback((row: StatusRowFormat, query: string) => {
@@ -179,7 +193,7 @@ export function McpStatusDialogContent() {
 			filterFn={filterFn}
 			footer={
 				<box flexDirection="row" gap={1} height={1} marginX={4}>
-					<text fg={colors.text}>toggle</text>
+					<text fg={colors.text}>toggle/reconnect</text>
 					<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 						space
 					</text>
@@ -192,7 +206,7 @@ export function McpStatusDialogContent() {
 					return false;
 				}
 				if (highlightedRow !== undefined) {
-					handleToggle(highlightedRow.server);
+					handleAction(highlightedRow);
 				}
 				return true;
 			}}

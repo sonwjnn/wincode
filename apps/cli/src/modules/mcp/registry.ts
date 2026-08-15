@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
 	type AgentId,
 	isJsonValue,
@@ -174,6 +175,24 @@ const toJsonObject = (value: Record<string, unknown>): JsonObject => {
 	return { type: "object" };
 };
 
+const requestedRemoteTools = (
+	config: ResolvedMcpServerConfig
+): readonly string[] => {
+	if (config.type !== "remote") {
+		return [];
+	}
+	const requested = new Set<string>();
+	for (const value of new URL(config.url).searchParams.getAll("tools")) {
+		for (const name of value.split(",")) {
+			const trimmed = name.trim();
+			if (trimmed.length > 0) {
+				requested.add(trimmed);
+			}
+		}
+	}
+	return [...requested];
+};
+
 const defaultSdkClientFactory = (
 	workspace: string,
 	env: Record<string, string | undefined>
@@ -204,10 +223,14 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		input.createClient ?? defaultSdkClientFactory(workspace, env);
 
 	const serverEntries = new Map<string, ServerEntry>();
+	const invalidStatuses = new Map<string, McpServerStatus>();
 	const listeners = new Set<() => void>();
 	const closeController = new AbortController();
 	let closed = false;
 	let initPromise: Promise<void> | undefined;
+	let initialized = false;
+	let refreshPromise: Promise<void> | undefined;
+	const entryOperations = new Map<string, Promise<void>>();
 	const reconnects = new Map<string, Promise<void>>();
 	const toggles = new Map<string, Promise<void>>();
 	let latestSnapshotId: string | undefined;
@@ -217,6 +240,28 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		for (const listener of [...listeners]) {
 			listener();
 		}
+	};
+
+	const runEntryOperation = (
+		serverName: string,
+		operation: () => Promise<void>
+	): Promise<void> => {
+		const previous = entryOperations.get(serverName) ?? Promise.resolve();
+		const run = previous.catch(() => undefined).then(operation);
+		entryOperations.set(serverName, run);
+		run.then(
+			() => {
+				if (entryOperations.get(serverName) === run) {
+					entryOperations.delete(serverName);
+				}
+			},
+			() => {
+				if (entryOperations.get(serverName) === run) {
+					entryOperations.delete(serverName);
+				}
+			}
+		);
+		return run;
 	};
 
 	const closeClient = async (entry: ServerEntry): Promise<void> => {
@@ -244,21 +289,79 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			closeController.signal,
 		]);
 
+	const listEntryTools = async (
+		entry: ServerEntry,
+		client: McpClient
+	): Promise<readonly McpClientTool[]> => {
+		const tools = await client.listTools(catalogSignal(entry));
+		const available = new Set(tools.map((tool) => tool.name));
+		const hasMissingRequestedTool = requestedRemoteTools(entry.config).some(
+			(name) => !available.has(name)
+		);
+		if (hasMissingRequestedTool) {
+			throw new Error("MCP server did not expose all requested tools");
+		}
+		return tools;
+	};
+
+	const loadCurrentConfig = (refresh = false): Promise<McpConfigResult> =>
+		loadConfig({
+			env,
+			refresh,
+			workspace,
+			...(input.configRoot ? { configRoot: input.configRoot } : {}),
+			...(input.configStore ? { configStore: input.configStore } : {}),
+			...(input.homeRoot ? { homeRoot: input.homeRoot } : {}),
+		});
+
+	const refreshEntryConfig = async (
+		entry: ServerEntry,
+		serverName: string
+	): Promise<boolean> => {
+		const configResult = await loadCurrentConfig(true);
+		const config = configResult.servers[serverName];
+		if (config !== undefined) {
+			entry.config = config;
+			return true;
+		}
+
+		const diagnostic = configResult.diagnostics.find(
+			(item) => item.serverName === serverName
+		);
+		catalogGeneration += 1;
+		latestSnapshotId = undefined;
+		entry.executionController.abort();
+		entry.executionController = new AbortController();
+		await closeClient(entry);
+		entry.error = sanitizeMessage(
+			entry.config,
+			diagnostic?.message ?? "MCP server configuration is missing or invalid",
+			"Invalid MCP server configuration"
+		);
+		entry.state = "failed";
+		entry.tools = [];
+		emit();
+		return false;
+	};
+
 	const connectEntry = async (entry: ServerEntry): Promise<void> => {
 		const client = entry.client ?? createClient(entry.config);
 		entry.client = client;
 		client.setToolsChangedListener((tools) => {
-			entry.tools = tools;
+			if (entry.client === client) {
+				entry.tools = tools;
+			}
 		});
 		entry.state = "connecting";
 		entry.error = undefined;
 		try {
 			await client.connect(startupSignal(entry));
-			entry.tools = await client.listTools(catalogSignal(entry));
+			entry.tools = await listEntryTools(entry, client);
 			entry.state = "connected";
 			entry.error = undefined;
 		} catch (error) {
 			entry.state = "failed";
+			entry.tools = [];
 			entry.error = sanitizeMessage(
 				entry.config,
 				error,
@@ -269,13 +372,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	};
 
 	const doInit = async (): Promise<void> => {
-		const configResult = await loadConfig({
-			env,
-			workspace,
-			...(input.configRoot ? { configRoot: input.configRoot } : {}),
-			...(input.configStore ? { configStore: input.configStore } : {}),
-			...(input.homeRoot ? { homeRoot: input.homeRoot } : {}),
-		});
+		const configResult = await loadCurrentConfig();
 		for (const [name, config] of Object.entries(configResult.servers)) {
 			serverEntries.set(name, {
 				client: undefined,
@@ -284,6 +381,18 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				executionController: new AbortController(),
 				state: config.disabled ? "disabled" : "connecting",
 				tools: [],
+			});
+		}
+		for (const invalid of Object.values(configResult.invalidServers ?? {})) {
+			if (serverEntries.has(invalid.name)) {
+				continue;
+			}
+			invalidStatuses.set(invalid.name, {
+				error: "Invalid MCP server configuration",
+				name: invalid.name,
+				state: "failed",
+				toolCount: 0,
+				transport: invalid.transport,
 			});
 		}
 		emit();
@@ -299,7 +408,9 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 
 	const init = (): Promise<void> => {
 		if (initPromise === undefined) {
-			initPromise = doInit();
+			initPromise = doInit().then(() => {
+				initialized = true;
+			});
 		}
 		return initPromise;
 	};
@@ -517,6 +628,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			) {
 				await closeClient(entry);
 				entry.state = "degraded";
+				entry.tools = [];
 				entry.error = message;
 				emit();
 			}
@@ -530,19 +642,23 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		entry.executionController.abort();
 		entry.executionController = new AbortController();
 		await closeClient(entry);
-		entry.client = createClient(entry.config);
-		entry.client.setToolsChangedListener((tools) => {
-			entry.tools = tools;
+		const client = createClient(entry.config);
+		entry.client = client;
+		client.setToolsChangedListener((tools) => {
+			if (entry.client === client) {
+				entry.tools = tools;
+			}
 		});
 		entry.state = "connecting";
 		entry.error = undefined;
 		try {
 			await entry.client.connect(startupSignal(entry));
-			entry.tools = await entry.client.listTools(catalogSignal(entry));
+			entry.tools = await listEntryTools(entry, entry.client);
 			entry.state = "connected";
 			entry.error = undefined;
 		} catch (error) {
 			entry.state = "failed";
+			entry.tools = [];
 			entry.error = sanitizeMessage(
 				entry.config,
 				error,
@@ -555,27 +671,174 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		emit();
 	};
 
+	const deactivateEntry = async (
+		entry: ServerEntry,
+		state: "disabled" | "failed",
+		error?: string
+	): Promise<void> => {
+		catalogGeneration += 1;
+		latestSnapshotId = undefined;
+		entry.executionController.abort();
+		entry.executionController = new AbortController();
+		await closeClient(entry);
+		entry.error = error;
+		entry.state = state;
+		entry.tools = [];
+	};
+
+	const refreshExistingEntry = async (
+		entry: ServerEntry,
+		configResult: McpConfigResult
+	): Promise<boolean> => {
+		const config = configResult.servers[entry.config.name];
+		if (config === undefined) {
+			await deactivateEntry(
+				entry,
+				"failed",
+				"Invalid MCP server configuration"
+			);
+			return false;
+		}
+		const configChanged = !isDeepStrictEqual(entry.config, config);
+		entry.config = config;
+		if (config.disabled) {
+			if (entry.state !== "disabled") {
+				await deactivateEntry(entry, "disabled");
+			}
+			return false;
+		}
+		return (
+			entry.state !== "disabled" &&
+			(configChanged || entry.state === "failed" || entry.state === "degraded")
+		);
+	};
+
+	const addNewResolvedEntries = (
+		configResult: McpConfigResult,
+		reconnectEntries: ServerEntry[]
+	): void => {
+		for (const [name, config] of Object.entries(configResult.servers)) {
+			if (serverEntries.has(name)) {
+				continue;
+			}
+			invalidStatuses.delete(name);
+			const entry: ServerEntry = {
+				client: undefined,
+				config,
+				error: undefined,
+				executionController: new AbortController(),
+				state: config.disabled ? "disabled" : "connecting",
+				tools: [],
+			};
+			serverEntries.set(name, entry);
+			if (!config.disabled) {
+				reconnectEntries.push(entry);
+			}
+		}
+	};
+
+	const syncInvalidStatuses = (configResult: McpConfigResult): void => {
+		for (const invalid of Object.values(configResult.invalidServers ?? {})) {
+			if (serverEntries.has(invalid.name)) {
+				continue;
+			}
+			invalidStatuses.set(invalid.name, {
+				error: "Invalid MCP server configuration",
+				name: invalid.name,
+				state: "failed",
+				toolCount: 0,
+				transport: invalid.transport,
+			});
+		}
+	};
+
+	const doRefresh = async (): Promise<void> => {
+		const configResult = await loadCurrentConfig(true);
+		const reconnectEntries: ServerEntry[] = [];
+		const operations: Promise<void>[] = [];
+		for (const entry of serverEntries.values()) {
+			operations.push(
+				runEntryOperation(entry.config.name, async () => {
+					if (await refreshExistingEntry(entry, configResult)) {
+						await doReconnect(entry);
+					}
+				})
+			);
+		}
+		addNewResolvedEntries(configResult, reconnectEntries);
+		for (const entry of reconnectEntries) {
+			operations.push(
+				runEntryOperation(entry.config.name, () => doReconnect(entry))
+			);
+		}
+		syncInvalidStatuses(configResult);
+		await Promise.allSettled(operations);
+		emit();
+	};
+
+	const initialize = (): Promise<void> => {
+		if (!initialized) {
+			return init();
+		}
+		if (refreshPromise !== undefined) {
+			return refreshPromise;
+		}
+		const refresh = doRefresh();
+		refreshPromise = refresh;
+		refresh.then(
+			() => {
+				refreshPromise = undefined;
+			},
+			() => {
+				refreshPromise = undefined;
+			}
+		);
+		return refresh;
+	};
+
 	const reconnect = (serverName: string): Promise<void> => {
 		const inFlight = reconnects.get(serverName);
 		if (inFlight !== undefined) {
 			return inFlight;
 		}
-		const run = (async () => {
-			const activeToggle = toggles.get(serverName);
-			if (activeToggle !== undefined) {
-				await activeToggle;
+		const run = runEntryOperation(serverName, async () => {
+			await init();
+			let entry = serverEntries.get(serverName);
+			if (entry === undefined && invalidStatuses.has(serverName)) {
+				const config = (await loadCurrentConfig(true)).servers[serverName];
+				if (config === undefined) {
+					emit();
+					return;
+				}
+				if (serverEntries.has(serverName)) {
+					return;
+				}
+				entry = {
+					client: undefined,
+					config,
+					error: undefined,
+					executionController: new AbortController(),
+					state: "connecting",
+					tools: [],
+				};
+				invalidStatuses.delete(serverName);
+				serverEntries.set(serverName, entry);
+				await connectEntry(entry);
+				emit();
+				return;
 			}
-			const entry = serverEntries.get(serverName);
 			if (
 				entry === undefined ||
-				entry.config.disabled ||
 				entry.state === "disabled" ||
 				entry.state === "connecting"
 			) {
 				return;
 			}
+			if (!(await refreshEntryConfig(entry, serverName))) {
+				return;
+			}
 			await doReconnect(entry);
-		})();
+		});
 		reconnects.set(serverName, run);
 		run.then(
 			() => {
@@ -593,17 +856,16 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		if (inFlight !== undefined) {
 			return inFlight;
 		}
-		const run = (async () => {
-			const activeReconnect = reconnects.get(serverName);
-			if (activeReconnect !== undefined) {
-				await activeReconnect;
-			}
+		const run = runEntryOperation(serverName, async () => {
 			await init();
 			const entry = serverEntries.get(serverName);
 			if (entry === undefined) {
 				return;
 			}
 			if (entry.state === "disabled") {
+				if (!(await refreshEntryConfig(entry, serverName))) {
+					return;
+				}
 				await doReconnect(entry);
 				return;
 			}
@@ -615,7 +877,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			entry.state = "disabled";
 			entry.tools = [];
 			emit();
-		})();
+		});
 		toggles.set(serverName, run);
 		run.then(
 			() => toggles.delete(serverName),
@@ -624,14 +886,16 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		return run;
 	};
 
-	const getStatuses = (): readonly McpServerStatus[] =>
-		[...serverEntries.values()].map((entry) => ({
+	const getStatuses = (): readonly McpServerStatus[] => [
+		...[...serverEntries.values()].map((entry) => ({
 			error: entry.error,
 			name: entry.config.name,
 			state: entry.state,
 			toolCount: entry.tools.length,
 			transport: entry.config.type,
-		}));
+		})),
+		...invalidStatuses.values(),
+	];
 
 	const subscribe = (listener: () => void): (() => void) => {
 		listeners.add(listener);
@@ -662,7 +926,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		createSnapshot,
 		execute,
 		getStatuses,
-		initialize: init,
+		initialize,
 		reconnect,
 		subscribe,
 		toggle,

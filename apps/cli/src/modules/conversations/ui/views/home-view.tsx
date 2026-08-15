@@ -7,6 +7,7 @@ import {
 	useAgentRegistry,
 } from "@/modules/agents";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
+import { McpActiveIndicator } from "@/modules/mcp";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { createSkillSnapshot } from "@/modules/skills";
 import { APP_VERSION } from "@/shared/app-info";
@@ -152,16 +153,26 @@ export function HomeView() {
 					width="100%"
 				>
 					<ChatTextArea disabled={isCreatingSession} onSubmit={handleSubmit} />
-					<box flexDirection="row" flexShrink={0} gap={1}>
-						<text fg={colors.text}>tab</text>
-						<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-							agents
-						</text>
+					<box
+						flexDirection="row"
+						flexShrink={0}
+						gap={2}
+						justifyContent="space-between"
+						width="100%"
+					>
+						<WorkspacePath />
+						<box flexDirection="row" flexShrink={0} gap={1}>
+							<text fg={colors.text}>tab</text>
+							<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+								agents
+							</text>
+						</box>
 					</box>
 				</box>
 			</box>
 
 			<box
+				alignItems="center"
 				flexDirection="row"
 				flexShrink={0}
 				gap={2}
@@ -170,7 +181,7 @@ export function HomeView() {
 				paddingX={2}
 				width="100%"
 			>
-				<WorkspacePath />
+				<McpActiveIndicator />
 				<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 					{`v${APP_VERSION}`}
 				</text>

@@ -338,6 +338,10 @@ describe("loadMcpConfig", () => {
 		expect(result.servers.good).toBeDefined();
 		expect(result.servers.bad).toBeUndefined();
 		expect(result.servers.oauth).toBeUndefined();
+		expect(result.invalidServers).toMatchObject({
+			bad: { name: "bad", transport: "remote" },
+			oauth: { name: "oauth", transport: "remote" },
+		});
 		expect(JSON.stringify(result.diagnostics)).not.toContain("ftp://x");
 	});
 

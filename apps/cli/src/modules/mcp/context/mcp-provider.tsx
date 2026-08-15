@@ -201,6 +201,7 @@ export function runDynamicToolCall(
 export type McpContextValue = {
 	close(): Promise<void>;
 	initialize(): Promise<void>;
+	isLoading: boolean;
 	createSnapshot(
 		agent: AgentId,
 		agentPolicy?: McpAgentPolicy
@@ -223,16 +224,16 @@ export type McpContextValue = {
 export function buildMcpSummary(
 	statuses: readonly McpServerStatus[]
 ): string | null {
-	let failed = 0;
+	const failures: string[] = [];
 	for (const status of statuses) {
 		if (status.state === "failed") {
-			failed += 1;
+			failures.push(`${status.name}: ${status.error ?? "Connection failed"}`);
 		}
 	}
-	if (failed === 0) {
+	if (failures.length === 0) {
 		return null;
 	}
-	return `MCP: ${failed} failed.`;
+	return `MCP failed:\n${failures.join("\n")}`;
 }
 
 const McpContext = createContext<McpContextValue | null>(null);
@@ -249,6 +250,7 @@ export type McpProviderProps = {
 	children: ReactNode;
 	closeRegistryOnUnmount?: boolean;
 	createRegistry?: (deps: McpRegistryDeps) => McpRegistry;
+	refreshKey?: string;
 	workspace: string;
 };
 
@@ -256,6 +258,7 @@ export function McpProvider({
 	children,
 	closeRegistryOnUnmount = true,
 	createRegistry,
+	refreshKey,
 	workspace,
 }: McpProviderProps) {
 	const toast = useToast();
@@ -266,20 +269,52 @@ export function McpProvider({
 	// it synchronously, without waiting for a re-render after createSnapshot.
 	const latestSnapshotRef = useRef<McpCatalogSnapshot | null>(null);
 	const summaryToastShownRef = useRef(false);
-	const initializePromiseRef = useRef<Promise<void> | null>(null);
-	const initialize = useCallback((): Promise<void> => {
-		initializePromiseRef.current ??= registry.initialize();
-		return initializePromiseRef.current;
-	}, [registry]);
+	const initializeCountRef = useRef(0);
+	const [isLoading, setIsLoading] = useState(true);
+	const runWithLoading = useCallback(
+		async (operation: () => Promise<void>): Promise<void> => {
+			initializeCountRef.current += 1;
+			setIsLoading(true);
+			try {
+				await operation();
+			} finally {
+				initializeCountRef.current -= 1;
+				if (initializeCountRef.current === 0) {
+					setIsLoading(false);
+				}
+			}
+		},
+		[]
+	);
+	const initialize = useCallback(async (): Promise<void> => {
+		await runWithLoading(async () => {
+			try {
+				await registry.initialize();
+				const summary = buildMcpSummary(registry.getStatuses());
+				if (summary !== null) {
+					summaryToastShownRef.current = true;
+					toast.show({ message: summary, variant: "error" });
+				}
+			} catch (error) {
+				toast.show({ message: "MCP refresh failed.", variant: "error" });
+				throw error;
+			}
+		});
+	}, [registry, runWithLoading, toast.show]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey intentionally retriggers config reconciliation.
 	useEffect(() => {
 		void initialize().catch(() => undefined);
-		return () => {
+	}, [initialize, refreshKey]);
+
+	useEffect(
+		() => () => {
 			if (closeRegistryOnUnmount) {
 				void registry.close();
 			}
-		};
-	}, [closeRegistryOnUnmount, initialize, registry]);
+		},
+		[closeRegistryOnUnmount, registry]
+	);
 
 	const createSnapshot = useCallback(
 		async (
@@ -292,7 +327,7 @@ export function McpProvider({
 				const summary = buildMcpSummary(registry.getStatuses());
 				if (summary !== null) {
 					summaryToastShownRef.current = true;
-					toast.show({ message: summary });
+					toast.show({ message: summary, variant: "error" });
 				}
 			}
 			return snapshot;
@@ -322,15 +357,16 @@ export function McpProvider({
 	const statusesCacheRef = useRef<readonly McpServerStatus[] | null>(null);
 
 	// `registry.getStatuses()` builds a fresh array on every call. useSyncExternalStore
-	// requires a stable snapshot between notifications, so cache it here and invalidate
-	// on every registry emit. This keeps the exact subscribe/getStatuses contract while
-	// avoiding render-triggered snapshot churn.
-	useEffect(() => {
-		const unsubscribe = registry.subscribe(() => {
-			statusesCacheRef.current = null;
-		});
-		return unsubscribe;
-	}, [registry]);
+	// requires a stable snapshot between notifications. Invalidate the cache before
+	// notifying React so every registry emission produces a fresh snapshot.
+	const subscribeStatuses = useCallback(
+		(listener: () => void): (() => void) =>
+			registry.subscribe(() => {
+				statusesCacheRef.current = null;
+				listener();
+			}),
+		[registry]
+	);
 
 	const getStatusesSnapshot = useCallback((): readonly McpServerStatus[] => {
 		if (statusesCacheRef.current === null) {
@@ -340,9 +376,39 @@ export function McpProvider({
 	}, [registry]);
 
 	const statuses = useSyncExternalStore(
-		registry.subscribe,
+		subscribeStatuses,
 		getStatusesSnapshot,
 		getStatusesSnapshot
+	);
+	const showActionFailure = useCallback(
+		(serverName: string): void => {
+			statusesCacheRef.current = null;
+			const status = getStatusesSnapshot().find(
+				(item) => item.name === serverName
+			);
+			const summary = status === undefined ? null : buildMcpSummary([status]);
+			if (summary !== null) {
+				toast.show({
+					message: summary,
+					variant: "error",
+				});
+			}
+		},
+		[getStatusesSnapshot, toast.show]
+	);
+	const reconnect = useCallback(
+		async (serverName: string): Promise<void> => {
+			await runWithLoading(() => registry.reconnect(serverName));
+			showActionFailure(serverName);
+		},
+		[registry, runWithLoading, showActionFailure]
+	);
+	const toggle = useCallback(
+		async (serverName: string): Promise<void> => {
+			await runWithLoading(() => registry.toggle(serverName));
+			showActionFailure(serverName);
+		},
+		[registry, runWithLoading, showActionFailure]
 	);
 
 	const value = useMemo<McpContextValue>(
@@ -351,11 +417,21 @@ export function McpProvider({
 			createSnapshot,
 			handleDynamicToolCall,
 			initialize,
-			reconnect: (serverName) => registry.reconnect(serverName),
+			isLoading,
+			reconnect,
 			statuses,
-			toggle: (serverName) => registry.toggle(serverName),
+			toggle,
 		}),
-		[createSnapshot, handleDynamicToolCall, initialize, registry, statuses]
+		[
+			createSnapshot,
+			handleDynamicToolCall,
+			initialize,
+			isLoading,
+			reconnect,
+			registry,
+			statuses,
+			toggle,
+		]
 	);
 
 	return <McpContext.Provider value={value}>{children}</McpContext.Provider>;

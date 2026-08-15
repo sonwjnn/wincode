@@ -31,6 +31,12 @@ export type McpConfigDiagnostic = Omit<ConfigDiagnostic, "code"> & {
 	serverName?: string;
 };
 
+export type InvalidMcpServerConfig = {
+	error: string;
+	name: string;
+	transport: "local" | "remote";
+};
+
 const object = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -292,6 +298,7 @@ export const resolveServers = ({
 	workspace,
 }: ResolveInput): {
 	diagnostics: McpConfigDiagnostic[];
+	invalidServers?: Record<string, InvalidMcpServerConfig>;
 	servers: Record<string, ResolvedMcpServerConfig>;
 } => {
 	const diagnostics: McpConfigDiagnostic[] = snapshot.diagnostics.map(
@@ -326,5 +333,21 @@ export const resolveServers = ({
 			servers[name] = resolved;
 		}
 	}
-	return { diagnostics, servers };
+	const invalidServers: Record<string, InvalidMcpServerConfig> = {};
+	for (const [name, raw] of Object.entries(section)) {
+		if (
+			servers[name] !== undefined ||
+			!object(raw) ||
+			(raw.type !== "local" && raw.type !== "remote")
+		) {
+			continue;
+		}
+		const diagnostic = diagnostics.find((item) => item.serverName === name);
+		invalidServers[name] = {
+			error: diagnostic?.message ?? "Invalid MCP server configuration",
+			name,
+			transport: raw.type,
+		};
+	}
+	return { diagnostics, invalidServers, servers };
 };

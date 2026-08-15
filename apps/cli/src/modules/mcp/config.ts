@@ -4,7 +4,10 @@ import {
 } from "@/shared/config/config-store";
 import { resolveServers } from "./config/resolve";
 
-export type { McpConfigDiagnostic } from "./config/resolve";
+export type {
+	InvalidMcpServerConfig,
+	McpConfigDiagnostic,
+} from "./config/resolve";
 export type {
 	LocalMcpServerConfig,
 	McpTimeouts,
@@ -19,6 +22,7 @@ export type McpConfigInput = {
 	configRoot?: string;
 	homeRoot?: string;
 	fs?: { readFile(path: string): Promise<string> };
+	refresh?: boolean;
 };
 export type McpConfigResult = ReturnType<typeof resolveServers>;
 
@@ -35,7 +39,9 @@ export async function loadMcpConfig(
 			...(input.homeRoot === undefined ? {} : { homeRoot: input.homeRoot }),
 			xdgConfigHome: input.env.XDG_CONFIG_HOME ?? "",
 		});
-	const snapshot = await configStore.getSnapshot(input.workspace);
+	const snapshot = await (input.refresh
+		? configStore.refreshSnapshot(input.workspace)
+		: configStore.getSnapshot(input.workspace));
 	return resolveServers({
 		env: input.env,
 		snapshot,

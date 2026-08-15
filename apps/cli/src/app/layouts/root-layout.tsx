@@ -95,6 +95,7 @@ export function RootLayout() {
 													<McpProvider
 														closeRegistryOnUnmount={false}
 														createRegistry={() => mcpRegistry}
+														refreshKey={currentPath}
 														workspace={workspace}
 													>
 														<CopyOnSelect />

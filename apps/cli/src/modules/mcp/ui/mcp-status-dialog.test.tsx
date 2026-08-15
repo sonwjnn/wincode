@@ -37,7 +37,8 @@ const makeStatus = (
 
 const makeRegistry = (
 	statuses: readonly McpServerStatus[],
-	toggle?: (serverName: string) => Promise<void>
+	toggle?: (serverName: string) => Promise<void>,
+	reconnect?: (serverName: string) => Promise<void>
 ): McpRegistry => ({
 	close: async () => undefined,
 	createSnapshot: async (agent: AgentId): Promise<McpCatalogSnapshot> => ({
@@ -49,7 +50,7 @@ const makeRegistry = (
 	execute: async () => ({ content: [], isError: false, truncated: false }),
 	getStatuses: () => statuses,
 	initialize: async () => undefined,
-	reconnect: async () => undefined,
+	reconnect: reconnect ?? (async () => undefined),
 	subscribe: () => () => undefined,
 	toggle: toggle ?? (async () => undefined),
 });
@@ -177,7 +178,7 @@ test("formatStatusRow omits the error when the status has none", () => {
 	expect(row.error).toBeUndefined();
 });
 
-test("dialog renders MCP state and runtime enabled status", async () => {
+test("dialog renders MCP state and connection status", async () => {
 	const registry = makeRegistry([
 		makeStatus({ name: "alpha", state: "connected", toolCount: 2 }),
 		makeStatus({
@@ -189,18 +190,28 @@ test("dialog renders MCP state and runtime enabled status", async () => {
 		}),
 	]);
 	const { setup } = await renderStatusDialog(registry);
+	for (let attempt = 0; attempt < 5; attempt += 1) {
+		if (setup.captureCharFrame().includes("alpha")) {
+			break;
+		}
+		await flushUi(setup);
+	}
 
 	const frame = setup.captureCharFrame();
 	expect(frame).toContain("alpha");
 	expect(frame).toContain("beta");
-	expect(frame).toContain("connected");
+	expect(frame).not.toContain("alpha connected");
 	expect(frame).toContain("failed");
-	expect(frame).toContain("Enabled");
-	expect(frame).toContain("toggle space");
+	expect(frame).toContain("Failed ○");
+	expect(frame).toContain("Connected ✓");
+	expect(frame).not.toContain("✓ Connected");
+	expect(frame).toContain("toggle/reconnect space");
 	const headerLine = frame.split("\n").find((line) => line.includes("esc"));
-	const enabledLine = frame.split("\n").find((line) => line.includes("alpha"));
+	const connectionLine = frame
+		.split("\n")
+		.find((line) => line.includes("alpha"));
 	expect((headerLine?.lastIndexOf("esc") ?? -3) + "esc".length).toBe(
-		(enabledLine?.lastIndexOf("Enabled") ?? -7) + "Enabled".length
+		(connectionLine?.lastIndexOf("✓") ?? -1) + "✓".length
 	);
 	setup.renderer.destroy();
 });
@@ -230,6 +241,12 @@ test("dialog initializes configured servers before a catalog snapshot exists", a
 		}),
 	});
 	const { setup } = await renderStatusDialog(registry);
+	for (let attempt = 0; attempt < 5; attempt += 1) {
+		if (setup.captureCharFrame().includes("context7")) {
+			break;
+		}
+		await flushUi(setup);
+	}
 
 	const frame = setup.captureCharFrame();
 	expect(frame).toContain("context7");
@@ -280,6 +297,52 @@ test("space toggles the highlighted MCP without changing the search input", asyn
 	await flushUi(setup);
 
 	expect(toggled).toEqual(["healthy", "off"]);
+	setup.renderer.destroy();
+});
+
+test("space reconnects a failed MCP instead of disabling it", async () => {
+	const toggled: string[] = [];
+	const reconnected: string[] = [];
+	const registry = makeRegistry(
+		[makeStatus({ name: "websearch", state: "failed", toolCount: 0 })],
+		async (serverName) => {
+			toggled.push(serverName);
+		},
+		async (serverName) => {
+			reconnected.push(serverName);
+		}
+	);
+	const { setup } = await renderStatusDialog(registry);
+	expect(setup.captureCharFrame()).toContain("Reconnect ○");
+
+	await setup.mockInput.typeText(" ");
+	await flushUi(setup);
+
+	expect(reconnected).toEqual(["websearch"]);
+	expect(toggled).toEqual([]);
+	setup.renderer.destroy();
+});
+
+test("space ignores an MCP that is already connecting", async () => {
+	const toggled: string[] = [];
+	const reconnected: string[] = [];
+	const registry = makeRegistry(
+		[makeStatus({ name: "websearch", state: "connecting", toolCount: 0 })],
+		async (serverName) => {
+			toggled.push(serverName);
+		},
+		async (serverName) => {
+			reconnected.push(serverName);
+		}
+	);
+	const { setup } = await renderStatusDialog(registry);
+	expect(setup.captureCharFrame()).toContain("Loading...");
+
+	await setup.mockInput.typeText(" ");
+	await flushUi(setup);
+
+	expect(toggled).toEqual([]);
+	expect(reconnected).toEqual([]);
 	setup.renderer.destroy();
 });
 

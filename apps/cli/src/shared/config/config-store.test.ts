@@ -240,6 +240,27 @@ describe("createConfigStore", () => {
 		expect(reads).toHaveLength(readCount);
 	});
 
+	test("refreshes a memoized workspace snapshot on demand", async () => {
+		const configPath = `${WORKSPACE}/wincode.json`;
+		const files = {
+			[configPath]: '{"settings":{"version":1}}',
+		};
+		const store = createConfigStore({
+			configRoot: CONFIG_ROOT,
+			fs: fileSystem(files),
+			homeRoot: HOME_ROOT,
+		});
+		const first = await store.getSnapshot(WORKSPACE);
+		files[configPath] = '{"settings":{"version":2}}';
+
+		const cached = await store.getSnapshot(WORKSPACE);
+		const refreshed = await store.refreshSnapshot(WORKSPACE);
+
+		expect(cached).toBe(first);
+		expect(refreshed.document).toMatchObject({ settings: { version: 2 } });
+		expect(await store.getSnapshot(WORKSPACE)).toBe(refreshed);
+	});
+
 	test("returns an immutable snapshot that can be shared across capabilities", async () => {
 		const store = createConfigStore({
 			configRoot: CONFIG_ROOT,

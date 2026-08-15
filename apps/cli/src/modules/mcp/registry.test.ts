@@ -287,6 +287,52 @@ describe("createMcpRegistry", () => {
 		expect(broken.connectCount).toBe(1);
 	});
 
+	test("fails when a remote tools filter requests a missing tool", async () => {
+		const websearch = new FakeMcpClient("websearch", [tool("web_search_exa")]);
+		const { registry } = harness({
+			clients: { websearch },
+			configs: [
+				serverConfig("websearch", {
+					type: "remote",
+					url: "https://mcp.example.com/mcp?tools=web_search_ex",
+				}),
+			],
+		});
+
+		await registry.initialize();
+
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({
+				error: "MCP server did not expose all requested tools",
+				name: "websearch",
+				state: "failed",
+			})
+		);
+	});
+
+	test("connects when a remote tools filter matches the exposed catalog", async () => {
+		const websearch = new FakeMcpClient("websearch", [tool("web_search_exa")]);
+		const { registry } = harness({
+			clients: { websearch },
+			configs: [
+				serverConfig("websearch", {
+					type: "remote",
+					url: "https://mcp.example.com/mcp?tools=web_search_exa",
+				}),
+			],
+		});
+
+		await registry.initialize();
+
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({
+				name: "websearch",
+				state: "connected",
+				toolCount: 1,
+			})
+		);
+	});
+
 	test("reports disabled servers without connecting", async () => {
 		const { clients, registry } = harness({
 			configs: [
@@ -575,8 +621,44 @@ describe("createMcpRegistry", () => {
 				}),
 			])
 		);
+		created[0]?.publishTools([tool("stale-one"), tool("stale-two")]);
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({
+				name: "broken",
+				state: "connected",
+				toolCount: 1,
+			})
+		);
 		const snapshot = await registry.createSnapshot("build");
 		expect(snapshot.manifest).toHaveLength(1);
+	});
+
+	test("clears stale tools when reconnect fails", async () => {
+		let createCount = 0;
+		const { registry } = harness({
+			configs: [serverConfig("demo")],
+			deps: {
+				createClient: (config) => {
+					createCount += 1;
+					const client = new FakeMcpClient(config.name, [tool("echo")]);
+					if (createCount > 1) {
+						client.connectFailure = new Error("down");
+					}
+					return client;
+				},
+			},
+		});
+		await registry.initialize();
+
+		await registry.reconnect("demo");
+
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({
+				name: "demo",
+				state: "failed",
+				toolCount: 0,
+			})
+		);
 	});
 
 	test("dedupes concurrent reconnects for the same server", async () => {
@@ -717,6 +799,250 @@ describe("createMcpRegistry", () => {
 				state: "connected",
 				toolCount: 1,
 			})
+		);
+	});
+
+	test("toggle marks a server failed when its config becomes invalid", async () => {
+		let servers: McpConfigResult["servers"] = {
+			websearch: serverConfig("websearch", { type: "remote" }),
+		};
+		let diagnostics: McpConfigResult["diagnostics"] = [];
+		const { registry } = harness({
+			deps: {
+				loadConfig: async (): Promise<McpConfigResult> => ({
+					diagnostics,
+					servers,
+				}),
+			},
+		});
+		await registry.initialize();
+		servers = {};
+		diagnostics = [
+			{
+				code: "invalid-url",
+				message: "URL must be absolute http or https URL",
+				path: "/workspace/wincode.json:mcp.websearch.url",
+				scope: "project",
+				serverName: "websearch",
+			},
+		];
+
+		await registry.toggle("websearch");
+		await registry.toggle("websearch");
+
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({
+				error: "Invalid MCP server configuration",
+				name: "websearch",
+				state: "failed",
+			})
+		);
+	});
+
+	test("reconnect reloads repaired server config", async () => {
+		let config = serverConfig("websearch", { type: "remote" });
+		const configsUsed: ResolvedMcpServerConfig[] = [];
+		const { registry } = harness({
+			deps: {
+				createClient: (server) => {
+					configsUsed.push(server);
+					return new FakeMcpClient(server.name);
+				},
+				loadConfig: async (): Promise<McpConfigResult> => ({
+					diagnostics: [],
+					servers: { websearch: config },
+				}),
+			},
+		});
+		await registry.initialize();
+		config = serverConfig("websearch", {
+			type: "remote",
+			url: "https://repaired.example.com/mcp",
+		});
+
+		await registry.reconnect("websearch");
+
+		expect(configsUsed.at(-1)).toMatchObject({
+			url: "https://repaired.example.com/mcp",
+		});
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({ name: "websearch", state: "connected" })
+		);
+	});
+
+	test("keeps an invalid startup config visible and reconnects after repair", async () => {
+		const refreshes: Array<boolean | undefined> = [];
+		let configResult: McpConfigResult = {
+			diagnostics: [],
+			invalidServers: {
+				websearch: {
+					error: "URL must be absolute http or https URL",
+					name: "websearch",
+					transport: "remote",
+				},
+			},
+			servers: {},
+		};
+		const { registry } = harness({
+			deps: {
+				loadConfig: async (input): Promise<McpConfigResult> => {
+					refreshes.push(input.refresh);
+					return configResult;
+				},
+			},
+		});
+		await registry.initialize();
+		expect(registry.getStatuses()).toContainEqual({
+			error: "Invalid MCP server configuration",
+			name: "websearch",
+			state: "failed",
+			toolCount: 0,
+			transport: "remote",
+		});
+
+		configResult = {
+			diagnostics: [],
+			servers: {
+				websearch: serverConfig("websearch", { type: "remote" }),
+			},
+		};
+		await registry.reconnect("websearch");
+
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({ name: "websearch", state: "connected" })
+		);
+		expect(refreshes).toEqual([false, true]);
+	});
+
+	test("does not duplicate a repaired server during concurrent reconnect and refresh", async () => {
+		const invalidConfig: McpConfigResult = {
+			diagnostics: [],
+			invalidServers: {
+				websearch: {
+					error: "URL must be absolute http or https URL",
+					name: "websearch",
+					transport: "remote",
+				},
+			},
+			servers: {},
+		};
+		const repairedConfig: McpConfigResult = {
+			diagnostics: [],
+			servers: {
+				websearch: serverConfig("websearch", { type: "remote" }),
+			},
+		};
+		let loadCount = 0;
+		let releaseReconnectLoad: (() => void) | undefined;
+		const clients: FakeMcpClient[] = [];
+		const { registry } = harness({
+			deps: {
+				createClient: (config) => {
+					const client = new FakeMcpClient(config.name, [
+						tool("web_search_exa"),
+					]);
+					clients.push(client);
+					return client;
+				},
+				loadConfig: async (): Promise<McpConfigResult> => {
+					loadCount += 1;
+					if (loadCount === 1) {
+						return invalidConfig;
+					}
+					if (loadCount === 2) {
+						return new Promise((resolve) => {
+							releaseReconnectLoad = () => resolve(repairedConfig);
+						});
+					}
+					return repairedConfig;
+				},
+			},
+		});
+		await registry.initialize();
+
+		const reconnecting = registry.reconnect("websearch");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const refreshing = registry.initialize();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(clients).toHaveLength(0);
+
+		releaseReconnectLoad?.();
+		await Promise.all([reconnecting, refreshing]);
+		expect(clients).toHaveLength(1);
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({ name: "websearch", state: "connected" })
+		);
+	});
+
+	test("refreshes a connected server when initialize is called again", async () => {
+		let configResult: McpConfigResult = {
+			diagnostics: [],
+			servers: {
+				websearch: serverConfig("websearch", { type: "remote" }),
+			},
+		};
+		const { registry } = harness({
+			deps: {
+				loadConfig: async (): Promise<McpConfigResult> => configResult,
+			},
+		});
+		await registry.initialize();
+		configResult = {
+			diagnostics: [],
+			invalidServers: {
+				websearch: {
+					error: "URL must be absolute http or https URL",
+					name: "websearch",
+					transport: "remote",
+				},
+			},
+			servers: {},
+		};
+
+		await registry.initialize();
+
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({ name: "websearch", state: "failed" })
+		);
+	});
+
+	test("serializes refresh with an in-flight reconnect for the same server", async () => {
+		let config = serverConfig("demo");
+		let releaseReconnect: (() => void) | undefined;
+		const created: FakeMcpClient[] = [];
+		const { registry } = harness({
+			deps: {
+				createClient: (server) => {
+					const client = new FakeMcpClient(server.name, [tool("echo")]);
+					created.push(client);
+					if (created.length === 2) {
+						client.connectImpl = () =>
+							new Promise<void>((resolve) => {
+								releaseReconnect = resolve;
+							});
+					}
+					return client;
+				},
+				loadConfig: async (): Promise<McpConfigResult> => ({
+					diagnostics: [],
+					servers: { demo: config },
+				}),
+			},
+		});
+		await registry.initialize();
+		const reconnecting = registry.reconnect("demo");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		config = serverConfig("demo", { command: ["bun", "x", "demo-next"] });
+
+		const refreshing = registry.initialize();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(created).toHaveLength(2);
+
+		releaseReconnect?.();
+		await Promise.all([reconnecting, refreshing]);
+		expect(created).toHaveLength(3);
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({ name: "demo", state: "connected" })
 		);
 	});
 

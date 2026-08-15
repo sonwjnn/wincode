@@ -33,6 +33,7 @@ export type ConfigSnapshot = {
 };
 export type ConfigStore = {
 	getSnapshot(workspace: string): Promise<ConfigSnapshot>;
+	refreshSnapshot(workspace: string): Promise<ConfigSnapshot>;
 };
 export type ConfigRuntime = {
 	configStore: ConfigStore;
@@ -424,6 +425,12 @@ export const createConfigStore = (
 		readFile: (file: string) => globalThis.Bun.file(file).text(),
 	};
 	const snapshots = new Map<string, Promise<ConfigSnapshot>>();
+	const refreshSnapshot = (workspace: string): Promise<ConfigSnapshot> => {
+		const key = path.resolve(workspace);
+		const snapshot = loadSnapshot(key, { configRoot, fs, homeRoot });
+		snapshots.set(key, snapshot);
+		return snapshot;
+	};
 	return {
 		getSnapshot: (workspace) => {
 			const key = path.resolve(workspace);
@@ -435,5 +442,6 @@ export const createConfigStore = (
 			snapshots.set(key, snapshot);
 			return snapshot;
 		},
+		refreshSnapshot,
 	};
 };
