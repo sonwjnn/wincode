@@ -639,7 +639,6 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 	return (
 		// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI box handles terminal mouse events; keyboard output navigation lands in a separate issue.
 		<box
-			backgroundColor={colors.backgroundElement}
 			border={["left"]}
 			borderColor={colors.borderSubtle}
 			customBorderChars={{
@@ -647,7 +646,6 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 				vertical: "┃",
 			}}
 			flexDirection="column"
-			gap={1}
 			marginBottom={1}
 			onMouseDown={() => {
 				if (canExpand) {
@@ -655,23 +653,32 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 				}
 			}}
 			onSizeChange={handleBlockResize}
-			paddingX={SHELL_BLOCK_PADDING_X}
-			paddingY={1}
 			ref={blockRef}
 			width="100%"
 		>
-			<text fg={colors.text} wrapMode="char">
-				{header}
-			</text>
-			{markers.length > 0 ? (
-				<text fg={hasFailed ? colors.error : colors.textMuted}>{markers}</text>
-			) : null}
-			<text fg={colors.text} wrapMode="char">
-				{expanded ? sanitizedText : preview.text}
-			</text>
-			{expanded || indicator === null ? null : (
-				<text fg={colors.textMuted}>{indicator}</text>
-			)}
+			<box
+				backgroundColor={colors.backgroundElement}
+				flexDirection="column"
+				gap={1}
+				paddingX={SHELL_BLOCK_PADDING_X}
+				paddingY={1}
+				width="100%"
+			>
+				<text fg={colors.text} wrapMode="char">
+					{header}
+				</text>
+				{markers.length > 0 ? (
+					<text fg={hasFailed ? colors.error : colors.textMuted}>
+						{markers}
+					</text>
+				) : null}
+				<text fg={colors.text} wrapMode="char">
+					{expanded ? sanitizedText : preview.text}
+				</text>
+				{expanded || indicator === null ? null : (
+					<text fg={colors.textMuted}>{indicator}</text>
+				)}
+			</box>
 		</box>
 	);
 }
