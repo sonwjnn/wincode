@@ -9,6 +9,7 @@ import {
 } from "@wincode/ai";
 import { memo, type ReactNode, useMemo, useRef, useState } from "react";
 import { connectionProviderDisplayNames } from "@/modules/connections";
+import { EmptyBorder } from "@/shared/constants";
 import { ToolApprovalPanel } from "@/shared/providers/approval/ui/tool-approval-panel";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
@@ -401,7 +402,7 @@ const MAX_SHELL_PREVIEW_ROWS = 6;
 const MAX_SHELL_HEADER_ROWS = 2;
 const SHELL_BLOCK_PADDING_X = 2;
 const SHELL_BLOCK_BORDER_WIDTH = 1;
-const SHELL_BLOCK_HORIZONTAL_BORDER_SIDES = 2;
+const SHELL_BLOCK_BORDER_SIDES = 1;
 
 /** Terminal columns for one character: tabs occupy one cell, wide characters two. */
 const measureShellDisplayChar = (character: string): number =>
@@ -619,7 +620,7 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 			0,
 			width -
 				SHELL_BLOCK_PADDING_X * 2 -
-				SHELL_BLOCK_BORDER_WIDTH * SHELL_BLOCK_HORIZONTAL_BORDER_SIDES
+				SHELL_BLOCK_BORDER_WIDTH * SHELL_BLOCK_BORDER_SIDES
 		);
 		queueMicrotask(() => {
 			setContentWidth((current) => (current === measured ? current : measured));
@@ -639,8 +640,12 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 		// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI box handles terminal mouse events; keyboard output navigation lands in a separate issue.
 		<box
 			backgroundColor={colors.backgroundElement}
+			border={["left"]}
 			borderColor={colors.borderSubtle}
-			borderStyle="rounded"
+			customBorderChars={{
+				...EmptyBorder,
+				vertical: "┃",
+			}}
 			flexDirection="column"
 			gap={1}
 			marginBottom={1}

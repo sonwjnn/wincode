@@ -186,7 +186,7 @@ const blockContentWidth = (terminalWidth: number): number =>
 	terminalWidth -
 	CHAT_SHELL_PADDING_X * 2 -
 	SHELL_BLOCK_PADDING_X * 2 -
-	SHELL_BLOCK_BORDER_WIDTH * 2;
+	SHELL_BLOCK_BORDER_WIDTH;
 
 describe("ChatShell shell output blocks", () => {
 	test("shows short output fully with its natural height and no expansion affordance", async () => {
