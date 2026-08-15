@@ -1,3 +1,4 @@
+import type { BoxRenderable } from "@opentui/core";
 import {
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
@@ -6,7 +7,7 @@ import {
 	normalizeChatModelSelection,
 	SHELL_OUTPUT_TAIL_BYTES,
 } from "@wincode/ai";
-import { memo, useState } from "react";
+import { memo, type ReactNode, useMemo, useRef, useState } from "react";
 import { connectionProviderDisplayNames } from "@/modules/connections";
 import { ToolApprovalPanel } from "@/shared/providers/approval/ui/tool-approval-panel";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -165,6 +166,13 @@ const getToolInputRecord = (part: ToolPart): Record<string, unknown> =>
 	part.input !== null &&
 	!Array.isArray(part.input)
 		? (part.input as Record<string, unknown>)
+		: {};
+
+const getToolOutputRecord = (part: ToolPart): Record<string, unknown> =>
+	typeof part.output === "object" &&
+	part.output !== null &&
+	!Array.isArray(part.output)
+		? (part.output as Record<string, unknown>)
 		: {};
 
 const formatStaticToolSummary = (name: string, part: ToolPart): string => {
@@ -354,6 +362,7 @@ const SHELL_OUTPUT_ANSI_OSC_REGEX = new RegExp(
 	`${SHELL_OUTPUT_ESC}][^${SHELL_OUTPUT_BELL}]*${SHELL_OUTPUT_BELL}`,
 	"g"
 );
+const SHELL_OUTPUT_TRAILING_NEWLINE_REGEX = /\n$/;
 
 /** Printable output characters: tab, newline, and everything above C1. */
 const isPrintableShellOutputCharacter = (code: number): boolean =>
@@ -369,7 +378,9 @@ const stripShellOutputControlCharacters = (value: string): string =>
 /**
  * Sanitizes command output for display: ANSI escape sequences are stripped,
  * CRLF collapses to LF, and control characters are replaced, while newlines
- * and tabs survive so multi-line output renders faithfully.
+ * and tabs survive so multi-line output renders faithfully. The trailing
+ * newline is dropped because it terminates the last line rather than creating
+ * an empty final line, so bounded previews count real lines only.
  */
 const sanitizeShellOutputText = (
 	value: string,
@@ -382,8 +393,149 @@ const sanitizeShellOutputText = (
 				.replace(SHELL_OUTPUT_ANSI_OSC_REGEX, "")
 				.replace(/\r\n/g, "\n")
 				.replace(/\r/g, "")
+				.replace(SHELL_OUTPUT_TRAILING_NEWLINE_REGEX, "")
 		)
 	).slice(0, maxChars);
+
+const MAX_SHELL_PREVIEW_ROWS = 6;
+const MAX_SHELL_HEADER_ROWS = 2;
+const SHELL_BLOCK_PADDING_X = 2;
+const SHELL_BLOCK_BORDER_WIDTH = 1;
+const SHELL_BLOCK_HORIZONTAL_BORDER_SIDES = 2;
+
+/** Terminal columns for one character: tabs occupy one cell, wide characters two. */
+const measureShellDisplayChar = (character: string): number =>
+	character === "\t" ? 1 : globalThis.Bun.stringWidth(character);
+
+/**
+ * Wraps one logical line into rows that each fit the given content width,
+ * using terminal-cell semantics so wide characters never overflow a row.
+ */
+const wrapShellLineToWidth = (line: string, contentWidth: number): string[] => {
+	if (contentWidth <= 0) {
+		return [""];
+	}
+	const rows: string[] = [];
+	let row = "";
+	let rowWidth = 0;
+	for (const character of line) {
+		const characterWidth = measureShellDisplayChar(character);
+		if (rowWidth + characterWidth > contentWidth) {
+			rows.push(row);
+			row = character;
+			rowWidth = characterWidth;
+		} else {
+			row += character;
+			rowWidth += characterWidth;
+		}
+	}
+	rows.push(row);
+	return rows;
+};
+
+/** Cuts a line to the given cell width, never splitting a wide character. */
+const truncateShellLineToWidth = (line: string, maxWidth: number): string => {
+	if (maxWidth <= 0) {
+		return "";
+	}
+	let result = "";
+	let width = 0;
+	for (const character of line) {
+		const characterWidth = measureShellDisplayChar(character);
+		if (width + characterWidth > maxWidth) {
+			break;
+		}
+		result += character;
+		width += characterWidth;
+	}
+	return result;
+};
+
+type ShellOutputPreview = {
+	hasOverflow: boolean;
+	hiddenLogicalLines: number;
+	text: string;
+};
+
+/**
+ * Bounds sanitized shell output to six visual rows measured against the
+ * block's measured content width. Rows come from the beginning of the result,
+ * and the returned text contains only those visible rows, so the collapsed
+ * renderer never receives the complete result behind the bound.
+ */
+const computeShellOutputPreview = (
+	text: string,
+	contentWidth: number
+): ShellOutputPreview => {
+	if (contentWidth <= 0) {
+		return { hasOverflow: false, hiddenLogicalLines: 0, text: "" };
+	}
+	const logicalLines = text.split("\n");
+	const rows: string[] = [];
+	let remainingRows = MAX_SHELL_PREVIEW_ROWS;
+	for (const [index, line] of logicalLines.entries()) {
+		if (remainingRows === 0) {
+			return {
+				hasOverflow: true,
+				hiddenLogicalLines: logicalLines.length - index,
+				text: rows.join("\n"),
+			};
+		}
+		const wrappedRows = wrapShellLineToWidth(line, contentWidth);
+		if (wrappedRows.length <= remainingRows) {
+			rows.push(...wrappedRows);
+			remainingRows -= wrappedRows.length;
+			continue;
+		}
+		rows.push(...wrappedRows.slice(0, remainingRows));
+		return {
+			hasOverflow: true,
+			hiddenLogicalLines: logicalLines.length - index - 1,
+			text: rows.join("\n"),
+		};
+	}
+	return { hasOverflow: false, hiddenLogicalLines: 0, text: rows.join("\n") };
+};
+
+/**
+ * The hidden-content indicator: fully hidden logical lines are reported as
+ * `… N more lines`, while overflow caused only by wrapping a long line is
+ * reported as `… more output`.
+ */
+const resolveShellOutputIndicator = (
+	preview: ShellOutputPreview
+): string | null => {
+	if (!preview.hasOverflow) {
+		return null;
+	}
+	return preview.hiddenLogicalLines > 0
+		? `… ${preview.hiddenLogicalLines} more lines`
+		: "… more output";
+};
+
+/**
+ * Bounds the command header to two visual rows. Overflowing headers end with
+ * an ellipsis so a very long command can never dominate a collapsed block.
+ */
+const boundShellCommandHeader = (
+	command: string,
+	contentWidth: number
+): string => {
+	if (contentWidth <= 0) {
+		return "";
+	}
+	const rows = wrapShellLineToWidth(`$ ${command}`, contentWidth);
+	if (rows.length <= MAX_SHELL_HEADER_ROWS) {
+		return rows.join("\n");
+	}
+	const kept = rows.slice(0, MAX_SHELL_HEADER_ROWS);
+	const lastRow = kept[MAX_SHELL_HEADER_ROWS - 1] ?? "";
+	kept[MAX_SHELL_HEADER_ROWS - 1] = `${truncateShellLineToWidth(
+		lastRow,
+		contentWidth - 1
+	)}…`;
+	return kept.join("\n");
+};
 
 function ToolMessagePart({ part }: { part: ToolPart }) {
 	const { colors } = useTheme();
@@ -394,11 +546,14 @@ function ToolMessagePart({ part }: { part: ToolPart }) {
 	const isShellOutput =
 		part.type === "tool-shell" && part.state === "output-available";
 
-	const toolLine = isSkillCall ? (
-		<SkillActivityRow part={part} />
-	) : (
-		<ToolCallLine colors={colors} part={part} />
-	);
+	let toolLine: ReactNode = <ToolCallLine colors={colors} part={part} />;
+	if (isSkillCall) {
+		toolLine = <SkillActivityRow part={part} />;
+	} else if (isShellOutput) {
+		// The shell block groups the command header itself, so the standalone
+		// tool row is skipped for completed shell calls.
+		toolLine = null;
+	}
 
 	return (
 		<>
@@ -414,60 +569,104 @@ function ToolMessagePart({ part }: { part: ToolPart }) {
 const MemoizedToolMessagePart = memo(ToolMessagePart);
 
 /**
- * The sanitized output body of a completed `shell` call. Memoized on the raw
- * output so streamed updates of neighboring parts never re-run the sanitize
- * passes over multi-kilobyte command output.
- */
-const ShellOutputText = memo(function ShellOutputTextInner({
-	rawText,
-}: {
-	rawText: string;
-}) {
-	const { colors } = useTheme();
-	const text = sanitizeShellOutputText(rawText);
-	return (
-		<text fg={colors.text} wrapMode="char">
-			{text}
-		</text>
-	);
-});
-
-/**
- * The inline output block for completed `shell` calls: a one-line summary
- * (exit code, timeout, truncation) above a collapsible output body, collapsed
- * by default so a busy turn's re-layout stays cheap. Clicking the header
- * toggles it.
+ * The themed conversation block for a completed `shell` call: the bounded
+ * command header, execution status, and a preview of the beginning of the
+ * sanitized result. Collapsed output is bounded to six visual rows measured
+ * against the block's content width, and only overflowing blocks are
+ * expandable; clicking the block toggles between the preview and the full
+ * bounded result. Sanitization and preview layout are memoized on the raw
+ * output and the measured width, so streamed updates of neighboring parts
+ * never re-sanitize or re-lay-out settled results.
  */
 function ShellOutputBlock({ part }: { part: ToolPart }) {
 	const { colors } = useTheme();
+	const blockRef = useRef<BoxRenderable>(null);
+	const [contentWidth, setContentWidth] = useState(0);
 	const [expanded, setExpanded] = useState(false);
-	const output =
-		typeof part.output === "object" &&
-		part.output !== null &&
-		!Array.isArray(part.output)
-			? (part.output as Record<string, unknown>)
-			: {};
+	const output = getToolOutputRecord(part);
 	const rawText = formatUnknown(output.output);
 	const exitCode = typeof output.exitCode === "number" ? output.exitCode : null;
 	const timedOut = output.timedOut === true;
 	const truncated = output.truncated === true;
+	const command = sanitizeDisplayText(
+		formatUnknown(getToolInputRecord(part).command)
+	);
+
+	const sanitizedText = useMemo(
+		() => sanitizeShellOutputText(rawText),
+		[rawText]
+	);
+	const preview = useMemo(
+		() => computeShellOutputPreview(sanitizedText, contentWidth),
+		[sanitizedText, contentWidth]
+	);
+	const header = useMemo(
+		() => boundShellCommandHeader(command, contentWidth),
+		[command, contentWidth]
+	);
+	const indicator = resolveShellOutputIndicator(preview);
+	const canExpand = preview.hasOverflow;
+
+	// The measured content width drives preview wrapping and the header bound.
+	// Reflowing on real size changes (terminal resize, sidebar toggle) keeps the
+	// collapsed preview bounded while never touching the expansion state.
+	const handleBlockResize = () => {
+		const width = blockRef.current?.width ?? 0;
+		if (width <= 0) {
+			return;
+		}
+		const measured = Math.max(
+			0,
+			width -
+				SHELL_BLOCK_PADDING_X * 2 -
+				SHELL_BLOCK_BORDER_WIDTH * SHELL_BLOCK_HORIZONTAL_BORDER_SIDES
+		);
+		queueMicrotask(() => {
+			setContentWidth((current) => (current === measured ? current : measured));
+		});
+	};
+
 	const markers = [
-		...(exitCode === null ? [] : [`exit ${exitCode}`]),
-		...(timedOut ? ["timed out"] : []),
-		...(truncated ? ["truncated"] : []),
-	].join(" · ");
-	const header = `${expanded ? "▾" : "▸"} Output${markers ? ` · ${markers}` : ""}`;
+		exitCode === null ? null : `exit ${exitCode}`,
+		timedOut ? "timed out" : null,
+		truncated ? "truncated" : null,
+	]
+		.filter((marker): marker is string => marker !== null)
+		.join(" · ");
+	const hasFailed = (exitCode !== null && exitCode !== 0) || timedOut;
 
 	return (
-		<box marginBottom={1} paddingX={3} width="100%">
-			{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI text handles terminal mouse events. */}
-			<text
-				fg={colors.textMuted}
-				onMouseDown={() => setExpanded((value) => !value)}
-			>
-				{expanded ? header : `${header} (click to expand)`}
+		// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI box handles terminal mouse events; keyboard output navigation lands in a separate issue.
+		<box
+			backgroundColor={colors.backgroundElement}
+			borderColor={colors.borderSubtle}
+			borderStyle="rounded"
+			flexDirection="column"
+			gap={1}
+			marginBottom={1}
+			onMouseDown={() => {
+				if (canExpand) {
+					setExpanded((value) => !value);
+				}
+			}}
+			onSizeChange={handleBlockResize}
+			paddingX={SHELL_BLOCK_PADDING_X}
+			paddingY={1}
+			ref={blockRef}
+			width="100%"
+		>
+			<text fg={colors.text} wrapMode="char">
+				{header}
 			</text>
-			{expanded ? <ShellOutputText rawText={rawText} /> : null}
+			{markers.length > 0 ? (
+				<text fg={hasFailed ? colors.error : colors.textMuted}>{markers}</text>
+			) : null}
+			<text fg={colors.text} wrapMode="char">
+				{expanded ? sanitizedText : preview.text}
+			</text>
+			{expanded || indicator === null ? null : (
+				<text fg={colors.textMuted}>{indicator}</text>
+			)}
 		</box>
 	);
 }

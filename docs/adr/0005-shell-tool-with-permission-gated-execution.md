@@ -37,10 +37,20 @@ Status: accepted
   or times out so orphaned background processes do not survive the tool call. Output
   keeps the tail at 30 KiB with a truncation banner. Interactive commands fail fast
   instead of hanging the Agent loop.
-- **Inline collapsible output over summary-only rendering** - shell is the first coding
-  tool whose output renders in the conversation: a one-line summary plus an inline,
-  collapsible, expanded-by-default block holding the truncated result. Other tools keep
-  their summary-only rendering.
+- **Bounded preview with on-demand expansion over expanded-by-default output** -
+  shell is the first coding tool whose output renders in the conversation: one
+  themed block groups the command header (bounded to two visual rows, ending in
+  an ellipsis when longer), the execution status (exit code, timeout,
+  truncation, with failures using the theme's error treatment), and a preview
+  of the beginning of the sanitized result (bounded to six visual rows measured
+  against the block's content width with terminal-cell semantics). Output that
+  fits the preview stays fully visible without an expansion affordance;
+  overflowing blocks report the hidden content (`… N more lines`, or
+  `… more output` when only wrapping hides it) and expand inline on click.
+  Expansion is transient UI state, and settled tool parts keep an immutable
+  rendering boundary so streamed updates of neighboring messages never
+  re-sanitize or re-lay-out large results. Other tools keep their summary-only
+  rendering.
 - **Workspace-root walk-up over the fixed process working directory** - the CLI resolves
   its workspace root by walking up to the nearest `.git` (bounded), replacing the fixed
   `process.cwd()` root. Launching the CLI from a subdirectory no longer places the
