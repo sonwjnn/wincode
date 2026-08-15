@@ -80,10 +80,7 @@ export const VariantsDialogContent = ({
 					<SelectableDialogItem
 						status={
 							isActive ? (
-								<text
-									fg={isSelected ? selectedTextColor : colors.text}
-									selectable={false}
-								>
+								<text fg={labelColor} selectable={false}>
 									{"●"}
 								</text>
 							) : null
