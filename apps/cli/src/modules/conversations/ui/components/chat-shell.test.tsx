@@ -189,6 +189,39 @@ const blockContentWidth = (terminalWidth: number): number =>
 	SHELL_BLOCK_BORDER_WIDTH;
 
 describe("ChatShell shell output blocks", () => {
+	test("spaces the first shell block from preceding text without widening later gaps", async () => {
+		const earlierShell = shellPart({ toolCallId: "call-earlier" });
+		const firstShell = shellPart({ toolCallId: "call-first" });
+		const secondShell = shellPart({ toolCallId: "call-second" });
+		const { setup } = await renderChatShell(
+			[
+				assistantMessage([
+					earlierShell,
+					{ text: "Running checks", type: "text" },
+					firstShell,
+					secondShell,
+				]),
+			],
+			{ height: 40, width: 100 }
+		);
+
+		try {
+			await setup.renderOnce();
+			await flushUi(setup);
+			const rows = setup.captureCharFrame().split("\n");
+			const textRow = rows.findIndex((row) => row.includes("Running checks"));
+			const headerRows = rows.flatMap((row, index) =>
+				row.includes("$ bun test") ? [index] : []
+			);
+
+			expect(headerRows).toHaveLength(3);
+			expect(headerRows[1]).toBe(textRow + 3);
+			expect((headerRows[2] ?? 0) - (headerRows[1] ?? 0)).toBe(9);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
 	test("shows short output fully with its natural height and no expansion affordance", async () => {
 		const { setup } = await renderChatShell(
 			[

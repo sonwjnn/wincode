@@ -538,13 +538,7 @@ const boundShellCommandHeader = (
 	return kept.join("\n");
 };
 
-function ToolMessagePart({
-	isFirstShellOutput = false,
-	part,
-}: {
-	isFirstShellOutput?: boolean;
-	part: ToolPart;
-}) {
+function ToolMessagePart({ part }: { part: ToolPart }) {
 	const { colors } = useTheme();
 	const isSkillCall =
 		part.type === "dynamic-tool" &&
@@ -565,9 +559,7 @@ function ToolMessagePart({
 	return (
 		<>
 			{toolLine}
-			{isShellOutput ? (
-				<ShellOutputBlock isFirstShellOutput={isFirstShellOutput} part={part} />
-			) : null}
+			{isShellOutput ? <ShellOutputBlock part={part} /> : null}
 			{typeof part.toolCallId === "string" ? (
 				<ToolApprovalPanel id={part.toolCallId} />
 			) : null}
@@ -587,13 +579,7 @@ const MemoizedToolMessagePart = memo(ToolMessagePart);
  * output and the measured width, so streamed updates of neighboring parts
  * never re-sanitize or re-lay-out settled results.
  */
-function ShellOutputBlock({
-	isFirstShellOutput,
-	part,
-}: {
-	isFirstShellOutput: boolean;
-	part: ToolPart;
-}) {
+function ShellOutputBlock({ part }: { part: ToolPart }) {
 	const { colors } = useTheme();
 	const blockRef = useRef<BoxRenderable>(null);
 	const [contentWidth, setContentWidth] = useState(0);
@@ -661,7 +647,6 @@ function ShellOutputBlock({
 			}}
 			flexDirection="column"
 			marginBottom={1}
-			marginTop={isFirstShellOutput ? 1 : 0}
 			onMouseDown={() => {
 				if (canExpand) {
 					setExpanded((value) => !value);
@@ -817,17 +802,21 @@ export function BotMessageContent({
 }) {
 	const { colors } = useTheme();
 	const groups = groupConsecutiveParts(parts);
-	// Only the first shell output block carries a top margin: it separates the
-	// block from a preceding text part, while later blocks already sit one row
-	// below the previous block's bottom margin.
-	const firstShellOutputPart = parts.find(
-		(part) => part.type === "tool-shell" && part.state === "output-available"
-	);
 
 	return (
 		<box alignItems="center" width="100%">
-			{groups.map((group) => (
-				<box key={group.key} width="100%">
+			{groups.map((group, groupIndex) => (
+				<box
+					key={group.key}
+					paddingTop={
+						groups[groupIndex - 1]?.type === "text" &&
+						group.parts[0]?.type === "tool-shell" &&
+						group.parts[0].state === "output-available"
+							? 1
+							: 0
+					}
+					width="100%"
+				>
 					{group.parts.map((part, index) => {
 						if (part.type === "reasoning") {
 							return (
@@ -847,7 +836,6 @@ export function BotMessageContent({
 						if (isToolPart(part)) {
 							return (
 								<MemoizedToolMessagePart
-									isFirstShellOutput={part === firstShellOutputPart}
 									key={getToolKey(part, index)}
 									part={part}
 								/>
