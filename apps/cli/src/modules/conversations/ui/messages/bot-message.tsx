@@ -6,7 +6,7 @@ import {
 	normalizeChatModelSelection,
 	SHELL_OUTPUT_TAIL_BYTES,
 } from "@wincode/ai";
-import { useState } from "react";
+import { memo, useState } from "react";
 import { connectionProviderDisplayNames } from "@/modules/connections";
 import { ToolApprovalPanel } from "@/shared/providers/approval/ui/tool-approval-panel";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -411,21 +411,43 @@ function ToolMessagePart({ part }: { part: ToolPart }) {
 	);
 }
 
+const MemoizedToolMessagePart = memo(ToolMessagePart);
+
+/**
+ * The sanitized output body of a completed `shell` call. Memoized on the raw
+ * output so streamed updates of neighboring parts never re-run the sanitize
+ * passes over multi-kilobyte command output.
+ */
+const ShellOutputText = memo(function ShellOutputTextInner({
+	rawText,
+}: {
+	rawText: string;
+}) {
+	const { colors } = useTheme();
+	const text = sanitizeShellOutputText(rawText);
+	return (
+		<text fg={colors.text} wrapMode="char">
+			{text}
+		</text>
+	);
+});
+
 /**
  * The inline output block for completed `shell` calls: a one-line summary
- * (exit code, timeout, truncation) above a collapsible output body, expanded
- * by default. Clicking the header toggles it.
+ * (exit code, timeout, truncation) above a collapsible output body, collapsed
+ * by default so a busy turn's re-layout stays cheap. Clicking the header
+ * toggles it.
  */
 function ShellOutputBlock({ part }: { part: ToolPart }) {
 	const { colors } = useTheme();
-	const [expanded, setExpanded] = useState(true);
+	const [expanded, setExpanded] = useState(false);
 	const output =
 		typeof part.output === "object" &&
 		part.output !== null &&
 		!Array.isArray(part.output)
 			? (part.output as Record<string, unknown>)
 			: {};
-	const text = sanitizeShellOutputText(formatUnknown(output.output));
+	const rawText = formatUnknown(output.output);
 	const exitCode = typeof output.exitCode === "number" ? output.exitCode : null;
 	const timedOut = output.timedOut === true;
 	const truncated = output.truncated === true;
@@ -445,11 +467,7 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 			>
 				{expanded ? header : `${header} (click to expand)`}
 			</text>
-			{expanded ? (
-				<text fg={colors.text} wrapMode="char">
-					{text}
-				</text>
-			) : null}
+			{expanded ? <ShellOutputText rawText={rawText} /> : null}
 		</box>
 	);
 }
@@ -596,7 +614,10 @@ export function BotMessageContent({
 
 						if (isToolPart(part)) {
 							return (
-								<ToolMessagePart key={getToolKey(part, index)} part={part} />
+								<MemoizedToolMessagePart
+									key={getToolKey(part, index)}
+									part={part}
+								/>
 							);
 						}
 
