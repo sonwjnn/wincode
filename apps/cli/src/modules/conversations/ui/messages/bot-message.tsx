@@ -647,6 +647,7 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 			}}
 			flexDirection="column"
 			marginBottom={1}
+			marginTop={1}
 			onMouseDown={() => {
 				if (canExpand) {
 					setExpanded((value) => !value);
