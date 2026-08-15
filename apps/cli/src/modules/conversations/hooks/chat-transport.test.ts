@@ -300,6 +300,96 @@ describe("chat transport", () => {
 		}
 	});
 
+	test("routing transport carries the last-used variant when the newest turn omits it", async () => {
+		mock.module("@/shared/api/hono-client", () => ({
+			getHonoClient: () => ({
+				api: {
+					sessions: {
+						":id": {
+							chat: {
+								$url: ({ param }: { param: { id: string } }) =>
+									new URL(`https://example.test/sessions/${param.id}/chat`),
+							},
+						},
+					},
+				},
+			}),
+		}));
+		const { createRoutingChatTransport } = await import(
+			"./routing-chat-transport"
+		);
+		const fetchMock = mock(
+			async () =>
+				new Response(
+					new ReadableStream({
+						start(controller) {
+							controller.close();
+						},
+					})
+				)
+		);
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
+		try {
+			// A resumed conversation: the assistant turn used "high", then a
+			// new user message was submitted without re-picking a variant, so
+			// the optimistic message metadata dropped it at the JSON round
+			// trip and the prompt-config variant ref is undefined.
+			const resumedMessages = [
+				{
+					id: "assistant-1",
+					metadata: {
+						agent: "build",
+						model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
+						variant: "high",
+					},
+					parts: [{ text: "done", type: "text" }],
+					role: "assistant",
+				},
+				{
+					id: "user-2",
+					metadata: {
+						agent: "build",
+						model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
+						variant: undefined,
+					},
+					parts: [{ text: "continue", type: "text" }],
+					role: "user",
+				},
+			] as const;
+			const transport = createRoutingChatTransport(
+				"session-1",
+				agentRef,
+				hostedResolvedAgentRef,
+				modelRef,
+				{ current: undefined },
+				{
+					authorize: async () => ({ kind: "api-key", apiKey: "key" }),
+				} as never,
+				makeMcp({ createSnapshot: async () => makeSnapshot() })
+			);
+			await transport.sendMessages({
+				abortSignal: undefined,
+				body: undefined,
+				chatId: "session-1",
+				headers: undefined,
+				messageId: undefined,
+				messages: resumedMessages as never,
+				metadata: undefined,
+				trigger: "submit-message",
+			});
+			const [, requestInit] = fetchMock.mock.calls[0] as unknown as [
+				unknown,
+				{ body?: string },
+			];
+			const body = JSON.parse(requestInit.body ?? "{}");
+			expect(body.variant).toBe("high");
+			expect(body.model).toBe("gpt-5.4-mini");
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
 	test("routing transport forwards the skill tool and explicit skill to hosted requests", async () => {
 		mock.module("@/shared/api/hono-client", () => ({
 			getHonoClient: () => ({

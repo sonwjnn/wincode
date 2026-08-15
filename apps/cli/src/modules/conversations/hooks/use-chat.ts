@@ -61,6 +61,7 @@ import {
 import {
 	buildSkillToolDefinition,
 	createSkillExecution,
+	createSkillSnapshot,
 	discoverSkillCatalog,
 	isSkillToolPart,
 	type SkillActivationResult,
@@ -78,7 +79,6 @@ import {
 import { formatRejectionFeedback } from "@/shared/providers/approval/format";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import { getConversationStore } from "../storage/get-conversation-store";
-import { createSkillSnapshot } from "../utils";
 import { createRoutingChatTransport } from "./routing-chat-transport";
 
 type SubmitChatParams = {
@@ -1277,6 +1277,9 @@ export function useChat(
 	const agentRef = useRef<AgentId>(buildAgent.id);
 	const resolvedAgentRef = useRef<ResolvedAgentRuntime | undefined>(undefined);
 	const modelRef = useRef<ChatModelSelection>(defaultChatModelSelection);
+	// The conversation-level choice (prompt-config selection) and the
+	// effective selection are separate values on purpose (ADR-0006): the
+	// session row records the choice, message metadata records what ran.
 	const conversationModelRef = useRef<ChatModelSelection>(
 		defaultChatModelSelection
 	);

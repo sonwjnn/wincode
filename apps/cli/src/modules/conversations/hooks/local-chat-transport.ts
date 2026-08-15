@@ -21,7 +21,7 @@ import {
 import { type ChatTransport, createAgentUIStream } from "ai";
 import type { Connections } from "@/modules/connections";
 import type { McpCatalogSnapshot } from "@/modules/mcp";
-import { getOriginatingUserSkill } from "../utils";
+import { getOriginatingUserSkill } from "../selection";
 
 type MutableRefObject<T> = { current: T };
 

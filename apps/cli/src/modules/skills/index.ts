@@ -10,6 +10,7 @@ export {
 	buildSkillCatalog,
 	buildSkillToolDefinition,
 	createSkillExecution,
+	createSkillSnapshot,
 	hashSkillBody,
 	isSkillToolPart,
 	MAX_ACTIVE_SKILLS,

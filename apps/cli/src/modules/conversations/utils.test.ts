@@ -1,11 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 
-const {
-	getLatestChatConfig,
-	getMostRecentSession,
-	shouldAutoStartAssistantTurn,
-} = await import("./utils");
+const { getMostRecentSession, shouldAutoStartAssistantTurn } = await import(
+	"./utils"
+);
 
 const userMessage = {
 	id: "user-1",
@@ -42,65 +40,6 @@ describe("shouldAutoStartAssistantTurn", () => {
 
 	test("does not auto-start when there are no messages", () => {
 		expect(shouldAutoStartAssistantTurn(true, "", undefined)).toBe(false);
-	});
-});
-
-describe("getLatestChatConfig", () => {
-	test("returns metadata from the latest configured turn", () => {
-		const messages = [
-			{
-				id: "user-1",
-				metadata: {
-					agent: "plan",
-					model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
-				},
-				parts: [{ text: "first", type: "text" }],
-				role: "user",
-			},
-			{
-				id: "assistant-1",
-				metadata: {
-					agent: "build",
-					model: { modelId: "gpt-5.5", providerId: "openai" },
-					variant: "high",
-				},
-				parts: [{ text: "latest", type: "text" }],
-				role: "assistant",
-			},
-		] satisfies CodingAgentUIMessage[];
-
-		expect(getLatestChatConfig(messages)).toEqual({
-			agent: "build",
-			model: { modelId: "gpt-5.5", providerId: "openai" },
-			variant: "high",
-		});
-	});
-
-	test("skips invalid metadata and restores the latest valid selection", () => {
-		const messages = [
-			{
-				id: "assistant-1",
-				metadata: { agent: "plan", model: "bad-model" },
-				parts: [{ text: "old", type: "text" }],
-				role: "assistant",
-			},
-			{
-				id: "assistant-2",
-				metadata: {
-					agent: "code-reviewer",
-					model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
-					variant: "low",
-				},
-				parts: [{ text: "new", type: "text" }],
-				role: "assistant",
-			},
-		] as unknown as CodingAgentUIMessage[];
-
-		expect(getLatestChatConfig(messages)).toEqual({
-			agent: "code-reviewer",
-			model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
-			variant: "low",
-		});
 	});
 });
 

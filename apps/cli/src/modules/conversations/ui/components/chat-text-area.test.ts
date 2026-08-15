@@ -12,7 +12,7 @@ import {
 	locateAttachmentTokens,
 	mapOffsetThroughTextReplacement,
 	normalizeFileTokensForTrimmedText,
-} from "../../utils";
+} from "../../attachments";
 import {
 	resolveCustomCommandPrompt,
 	resolveSkillPrompt,
@@ -246,7 +246,7 @@ describe("ChatTextArea", () => {
 			"utf8"
 		);
 
-		expect(textAreaSource).toContain("type ChatPromptSubmission");
+		expect(textAreaSource).toContain("submission: ChatPromptSubmission");
 		expect(textAreaSource).toContain("MAX_IMAGE_ATTACHMENTS = 5");
 		expect(textAreaSource).toContain("MAX_IMAGE_BYTES = 10 * 1024 * 1024");
 		expect(textAreaSource).toContain("if (!text && files.length === 0)");

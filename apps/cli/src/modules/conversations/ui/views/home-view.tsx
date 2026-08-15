@@ -8,15 +8,13 @@ import {
 } from "@/modules/agents";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import { createSkillSnapshot } from "@/modules/skills";
 import { APP_VERSION } from "@/shared/app-info";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { resolveConversationSelection } from "../../selection";
 import { getConversationStore } from "../../storage/get-conversation-store";
 import type { ChatPromptSubmission } from "../../utils";
-import {
-	createSkillSnapshot,
-	getLatestChatConfig,
-	getMostRecentSession,
-} from "../../utils";
+import { getMostRecentSession } from "../../utils";
 import { AsciiArt } from "../components/ascii-art";
 import { ChatTextArea } from "../components/chat-text-area";
 import { WorkspacePath } from "../components/workspace-path";
@@ -51,15 +49,17 @@ export function HomeView() {
 				return;
 			}
 
-			const config = session.model
-				? { model: session.model, variant: session.variant }
-				: getLatestChatConfig(await store.getMessages(session.id));
-			if (ignore || !config) {
+			const selection = resolveConversationSelection({
+				messages: await store.getMessages(session.id),
+				sessionModel: session.model,
+				sessionVariant: session.variant,
+			});
+			if (ignore || !selection) {
 				return;
 			}
 
-			setModel(config.model);
-			setVariant(config.variant);
+			setModel(selection.model);
+			setVariant(selection.variant);
 		};
 
 		restoreLatestSessionConfig().catch(() => undefined);

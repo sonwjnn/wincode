@@ -18,8 +18,9 @@ import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-lay
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
 import { useChat } from "../../hooks/use-chat";
+import { resolveConversationSelection } from "../../selection";
 import type { ChatPromptSubmission } from "../../utils";
-import { getLatestChatConfig, shouldAutoStartAssistantTurn } from "../../utils";
+import { shouldAutoStartAssistantTurn } from "../../utils";
 import { ChatShell } from "../components/chat-shell";
 import { SessionSidebar } from "../components/session-sidebar";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
@@ -95,16 +96,12 @@ export function ChatView({
 		if (registry === null) {
 			return null;
 		}
-		const persisted = getLatestChatConfig(initialMessages);
-		if (!persisted) {
-			return null;
-		}
-		return {
-			agent: resolveActiveAgentId(registry, persisted.agent),
-			model: initialModel ?? persisted.model,
-			persistedAgent: persisted.agent,
-			variant: initialModel ? initialVariant : persisted.variant,
-		};
+		return resolveConversationSelection({
+			messages: initialMessages,
+			resolveAgent: (agentId) => resolveActiveAgentId(registry, agentId),
+			sessionModel: initialModel,
+			sessionVariant: initialVariant,
+		});
 	}, [initialMessages, initialModel, initialVariant, registry]);
 	const isPromptConfigRestored = restoredMessages === initialMessages;
 
@@ -117,11 +114,16 @@ export function ChatView({
 			return;
 		}
 
+		if (restoredConfig.agent) {
+			setAgent(restoredConfig.agent);
+		}
 		setModel(restoredConfig.model);
 		setVariant(restoredConfig.variant);
-		setAgent(restoredConfig.agent);
 		setRestoredMessages(initialMessages);
-		if (restoredConfig.agent !== restoredConfig.persistedAgent) {
+		if (
+			restoredConfig.persistedAgent !== undefined &&
+			restoredConfig.agent !== restoredConfig.persistedAgent
+		) {
 			show({
 				message: `Saved Agent "${restoredConfig.persistedAgent}" is unavailable. Using Build.`,
 				variant: "error",
@@ -340,7 +342,7 @@ export function ChatView({
 			) ?? model;
 		const persistedVariant = normalizeModelVariant(
 			resolvedModel,
-			lastInitialMessage.metadata?.variant
+			restoredConfig?.variant ?? lastInitialMessage.metadata?.variant
 		);
 
 		const conversationModel = restoredConfig?.model ?? model;

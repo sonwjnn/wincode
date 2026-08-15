@@ -43,17 +43,9 @@ import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-lay
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
 import { useToast } from "@/shared/providers/toast/toast-provider";
-import { readClipboardImage, readImagePath } from "../../clipboard-image";
-import {
-	mergePromptHistory,
-	type PromptHistoryEntry,
-} from "../../hooks/input-controller/history";
-import { useChatInputController } from "../../hooks/input-controller/use-chat-input-controller";
-import { getConversationStore } from "../../storage/get-conversation-store";
 import {
 	areFileMentionExtmarksCurrent,
 	type ChatAttachment,
-	type ChatPromptSubmission,
 	findImageTokenRanges,
 	getImageToken,
 	getNextImageLabel,
@@ -61,7 +53,15 @@ import {
 	locateAttachmentTokens,
 	mapOffsetThroughTextReplacement,
 	normalizeFileTokensForTrimmedText,
-} from "../../utils";
+} from "../../attachments";
+import { readClipboardImage, readImagePath } from "../../clipboard-image";
+import {
+	mergePromptHistory,
+	type PromptHistoryEntry,
+} from "../../hooks/input-controller/history";
+import { useChatInputController } from "../../hooks/input-controller/use-chat-input-controller";
+import { getConversationStore } from "../../storage/get-conversation-store";
+import type { ChatPromptSubmission } from "../../utils";
 import { expandTrackedPastedText, summarizePastedText } from "./pasted-text";
 
 const MAX_IMAGE_ATTACHMENTS = 5;

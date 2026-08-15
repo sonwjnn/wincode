@@ -12,7 +12,7 @@ import type { Connections } from "@/modules/connections";
 import type { McpContextValue } from "@/modules/mcp";
 import { getHonoClient } from "@/shared/api/hono-client";
 import { prepareSendChatRequestBody } from "../api/chat-request";
-import { getLatestChatConfig } from "../utils";
+import { resolveConversationSelection } from "../selection";
 import { createLocalChatTransport } from "./local-chat-transport";
 
 type MutableRefObject<T> = { current: T };
@@ -38,15 +38,24 @@ export const createRoutingChatTransport = (
 		// One immutable snapshot per send so the request manifest and any dynamic
 		// tool dispatch resolve against the same catalog.
 		const snapshot = await mcp.createSnapshot(agentRef.current);
-		const latestConfig = getLatestChatConfig(messages);
-		const selection = latestConfig?.model ?? modelRef.current;
-		const variant = latestConfig?.variant ?? variantRef.current;
-		if (getChatModelRoute(selection) !== "hosted") {
+		const selection = resolveConversationSelection({
+			messages,
+			refs: {
+				agent: agentRef.current,
+				model: modelRef.current,
+				variant: variantRef.current,
+			},
+		});
+		if (!selection?.agent) {
+			throw new Error("No resolved Agent or model to send");
+		}
+		const agent = selection.agent;
+		if (getChatModelRoute(selection.model) !== "hosted") {
 			return createLocalChatTransport(
 				sessionId,
 				resolvedAgentRef,
-				{ current: selection },
-				{ current: variant },
+				{ current: selection.model },
+				{ current: selection.variant },
 				connections,
 				undefined,
 				snapshot,
@@ -78,10 +87,10 @@ export const createRoutingChatTransport = (
 					sessionId,
 					requestMessages,
 					{
-						agent: latestConfig?.agent ?? agentRef.current,
-						model: selection,
+						agent,
+						model: selection.model,
 						resolvedAgent,
-						variant,
+						variant: selection.variant,
 					},
 					snapshot.manifest,
 					skillToolRef?.current

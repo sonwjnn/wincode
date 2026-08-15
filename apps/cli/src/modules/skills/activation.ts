@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type {
 	CodingAgentUIMessage,
 	SkillActivationSource,
+	SkillContext,
 	SkillToolDefinition,
 } from "@wincode/ai";
 import { SKILL_TOOL_INPUT_JSON_SCHEMA } from "@wincode/ai";
@@ -309,6 +310,20 @@ export const buildSkillToolDefinition = (
 
 export const hashSkillBody = (body: string): string =>
 	createHash("sha256").update(body).digest("hex");
+
+/**
+ * Snapshots an activated Skill into the payload a user message carries: the
+ * body hash and activation source freeze the activation so later turns can
+ * tell a live snapshot from sanitized activation metadata.
+ */
+export const createSkillSnapshot = (
+	skill: SkillContext,
+	source: SkillActivationSource
+) => ({
+	...skill,
+	contentHash: hashSkillBody(skill.instructions),
+	source,
+});
 
 /**
  * Samples a bounded set of absolute resource paths from the Skill directory so

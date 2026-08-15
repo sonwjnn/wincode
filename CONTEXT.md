@@ -30,6 +30,18 @@ The Model Catalog is the static product definition of supported models and
 variants. It references a Connection Provider by ID but does not own credentials
 or authentication behavior.
 
+## Conversation Selection
+
+The last-used Agent, Model, and variant recorded in a conversation's message
+metadata, resolved when a session opens or a turn is sent. Two tiers are
+recorded on write and merged on read: the session row holds the
+conversation-level choice (the user's prompt-config selection), and message
+metadata holds the effective selection (what a turn actually ran with,
+including Agent pins). Restore reads leniently (a selection survives partially
+broken metadata); the request body reads it strictly (only schema-valid pairs
+reach the send). Sources merge in a fixed order — session row, then message
+metadata, then prompt-config refs. _Avoid_: chat config, latest config
+
 ## Language
 
 **Built-in Command**:
