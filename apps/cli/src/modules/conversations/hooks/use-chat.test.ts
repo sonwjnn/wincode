@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { realpathSync } from "node:fs";
 import { mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { CodingAgentUIMessage, ResolvedAgentRuntime } from "@wincode/ai";
+import { dirname, join } from "node:path";
+import {
+	type CodingAgentUIMessage,
+	codingToolDefinitions,
+	type ResolvedAgentRuntime,
+} from "@wincode/ai";
 import type { handleCodingAgentToolCall } from "@wincode/ai/client";
 import { createWorkspaceSandbox } from "@wincode/ai/workspace";
 import type { ChatAddToolOutputFunction } from "ai";
@@ -16,6 +21,7 @@ import {
 	canonicalizeExternalPath,
 	createPermissionService,
 	createToolPermission,
+	DESTRUCTIVE_SHELL_SAFETY_MESSAGE,
 	type PermissionDecision,
 	type ToolPermissionRuntime,
 } from "@/modules/permissions";
@@ -1120,6 +1126,365 @@ describe("createChatToolCallHandler", () => {
 		expect(openApproval).not.toHaveBeenCalled();
 		expect(staticToolCallHandler).toHaveBeenCalledTimes(calls.length);
 		expect(addToolOutput).not.toHaveBeenCalled();
+	});
+});
+
+describe("shell tool gating", () => {
+	type ToolOutput = Parameters<
+		ChatAddToolOutputFunction<CodingAgentUIMessage>
+	>[0];
+	const addToolOutput = mock((_config: ToolOutput) => undefined);
+	const addToolOutputRef = {
+		current:
+			addToolOutput as ChatAddToolOutputFunction<CodingAgentUIMessage> | null,
+	};
+	const mcpSnapshotRef = { current: null as McpCatalogSnapshot | null };
+	const handleDynamicToolCall = mock(() => undefined);
+	const mcp = {
+		handleDynamicToolCall,
+	} as Pick<McpContextValue, "handleDynamicToolCall">;
+	const staticToolCallHandler = mock(() => undefined);
+	const openApproval = mock(() => undefined);
+	const sandbox = createWorkspaceSandbox(process.cwd());
+
+	const makeHandler = (
+		overrides: Partial<Parameters<typeof createChatToolCallHandler>[0]> = {}
+	) =>
+		createChatToolCallHandler({
+			addToolOutputRef,
+			approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
+			handleCodingAgentToolCall: (() =>
+				staticToolCallHandler) as typeof handleCodingAgentToolCall,
+			mcp,
+			mcpSnapshotRef,
+			openApproval,
+			permissionRef: { current: createToolPermission() },
+			resolvedAgentRef: {
+				current: {
+					instructions: "Run commands.",
+					visibleCodingTools: [
+						"read",
+						"write",
+						"edit",
+						"list",
+						"grep",
+						"shell",
+					],
+				},
+			},
+			sandbox,
+			service: createPermissionService(),
+			...overrides,
+		});
+
+	const settleCallWith = async (
+		toolCall: Record<string, unknown>,
+		overrides: Partial<Parameters<typeof createChatToolCallHandler>[0]>
+	) => {
+		makeHandler(overrides)({ toolCall } as never);
+		await new Promise((resolve) => setTimeout(resolve, 75));
+	};
+
+	afterEach(() => {
+		staticToolCallHandler.mockClear();
+		openApproval.mockClear();
+		addToolOutput.mockClear();
+	});
+
+	test("asks before a shell command by default and runs after allow once", async () => {
+		const requests: ToolApprovalRequest[] = [];
+		const approval = mock(
+			(request: ToolApprovalRequest, actions: ToolApprovalActions) => {
+				requests.push(request);
+				queueMicrotask(() => actions.allow(false));
+			}
+		);
+
+		await settleCallWith(
+			{
+				input: { command: "bun test" },
+				toolCallId: "call-shell-ask",
+				toolName: "shell",
+			},
+			{ openApproval: approval }
+		);
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0]).toMatchObject({
+			description: codingToolDefinitions.shell.description,
+			identity: [
+				{ label: "tool", value: "shell" },
+				{ label: "resource", value: "bun test" },
+			],
+		});
+		expect(staticToolCallHandler).toHaveBeenCalledTimes(1);
+		expect(addToolOutput).not.toHaveBeenCalled();
+	});
+
+	test("denies a policy-denied shell command with an observable error", async () => {
+		await settleCallWith(
+			{
+				input: { command: "bun test" },
+				toolCallId: "call-shell-deny",
+				toolName: "shell",
+			},
+			{
+				permissionRef: {
+					current: createToolPermission({ shell: "deny" }),
+				},
+			}
+		);
+		expect(openApproval).not.toHaveBeenCalled();
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+		expect(addToolOutput).toHaveBeenCalledWith({
+			errorText: "Shell denied by policy: bun test",
+			state: "output-error",
+			tool: "shell",
+			toolCallId: "call-shell-deny",
+		});
+	});
+
+	test("rejects a shell ask with an observable error and never runs", async () => {
+		const approval = mock(
+			(_request: ToolApprovalRequest, actions: ToolApprovalActions) => {
+				queueMicrotask(() => actions.reject());
+			}
+		);
+		await settleCallWith(
+			{
+				input: { command: "bun test" },
+				toolCallId: "call-shell-reject",
+				toolName: "shell",
+			},
+			{ openApproval: approval }
+		);
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+		expect(addToolOutput).toHaveBeenCalledWith({
+			errorText: "Shell was not approved: bun test",
+			state: "output-error",
+			tool: "shell",
+			toolCallId: "call-shell-reject",
+		});
+	});
+
+	test("an always grant persists shell * and skips later commands", async () => {
+		const service = createPermissionService();
+		const approval = mock(
+			(_request: ToolApprovalRequest, actions: ToolApprovalActions) => {
+				queueMicrotask(() => actions.allow(true));
+			}
+		);
+
+		await settleCallWith(
+			{
+				input: { command: "bun test" },
+				toolCallId: "call-shell-grant-1",
+				toolName: "shell",
+			},
+			{ openApproval: approval, service }
+		);
+		expect(service.isGranted("shell", "*")).toBe(true);
+
+		await settleCallWith(
+			{
+				input: { command: "git status" },
+				toolCallId: "call-shell-grant-2",
+				toolName: "shell",
+			},
+			{ openApproval: approval, service }
+		);
+		expect(approval).toHaveBeenCalledTimes(1);
+		expect(staticToolCallHandler).toHaveBeenCalledTimes(2);
+		expect(addToolOutput).not.toHaveBeenCalled();
+	});
+
+	test("auto approval satisfies an ordinary shell ask without a dialog", async () => {
+		await settleCallWith(
+			{
+				input: { command: "bun test" },
+				toolCallId: "call-shell-auto",
+				toolName: "shell",
+			},
+			{
+				service: createPermissionService({ autoApproval: true }),
+			}
+		);
+		expect(openApproval).not.toHaveBeenCalled();
+		expect(staticToolCallHandler).toHaveBeenCalledTimes(1);
+	});
+
+	test("a destructive command prompts even under auto approval, grants, and allow policy", async () => {
+		const service = createPermissionService({ autoApproval: true });
+		service.grant("shell", "*");
+		const requests: ToolApprovalRequest[] = [];
+		const approval = mock(
+			(request: ToolApprovalRequest, actions: ToolApprovalActions) => {
+				requests.push(request);
+				queueMicrotask(() => actions.allow(false));
+			}
+		);
+
+		await settleCallWith(
+			{
+				input: { command: "rm -rf /" },
+				toolCallId: "call-shell-destructive",
+				toolName: "shell",
+			},
+			{
+				openApproval: approval,
+				permissionRef: { current: createToolPermission({ shell: "allow" }) },
+				service,
+			}
+		);
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0]).toMatchObject({
+			safety: true,
+			safetyReason: DESTRUCTIVE_SHELL_SAFETY_MESSAGE,
+		});
+		expect(staticToolCallHandler).toHaveBeenCalledTimes(1);
+	});
+
+	test("a destructive command with an explicit deny stays denied", async () => {
+		const service = createPermissionService({ autoApproval: true });
+		service.grant("shell", "*");
+		const approval = mock(() => undefined);
+
+		await settleCallWith(
+			{
+				input: { command: "rm -rf /" },
+				toolCallId: "call-shell-destructive-deny",
+				toolName: "shell",
+			},
+			{
+				openApproval: approval,
+				permissionRef: { current: createToolPermission({ shell: "deny" }) },
+				service,
+			}
+		);
+		expect(approval).not.toHaveBeenCalled();
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+		expect(addToolOutput).toHaveBeenCalledWith({
+			errorText: "Shell denied by policy: rm -rf /",
+			state: "output-error",
+			tool: "shell",
+			toolCallId: "call-shell-destructive-deny",
+		});
+	});
+
+	test("an external cwd composes the external-directory ask and grants shell *", async () => {
+		const dir = realpathSync(
+			await mkdtemp(join(tmpdir(), "wincode-shell-external-"))
+		);
+		const requests: ToolApprovalRequest[] = [];
+		const approval = mock(
+			(request: ToolApprovalRequest, actions: ToolApprovalActions) => {
+				requests.push(request);
+				queueMicrotask(() => actions.allow(true));
+			}
+		);
+		const service = createPermissionService();
+
+		await settleCallWith(
+			{
+				input: { command: "pwd", cwd: "../shell-external-dir" },
+				toolCallId: "call-shell-external",
+				toolName: "shell",
+			},
+			{
+				openApproval: approval,
+				sandbox: createWorkspaceSandbox(dir),
+				service,
+			}
+		);
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0]).toMatchObject({
+			identity: [
+				{ label: "tool", value: "shell" },
+				{ label: "resource", value: "pwd" },
+				{ label: "scope", value: "external" },
+			],
+		});
+		expect(service.isGranted("shell", "*")).toBe(true);
+		expect(
+			service.isGranted(
+				"external_directory",
+				`${dirname(dir)}/shell-external-dir`
+			)
+		).toBe(true);
+		expect(staticToolCallHandler).toHaveBeenCalledTimes(1);
+	});
+
+	test("a workspace-internal cwd gates without the external scope", async () => {
+		const requests: ToolApprovalRequest[] = [];
+		const approval = mock(
+			(request: ToolApprovalRequest, actions: ToolApprovalActions) => {
+				requests.push(request);
+				queueMicrotask(() => actions.allow(false));
+			}
+		);
+
+		await settleCallWith(
+			{
+				input: { command: "pwd", cwd: "apps/cli" },
+				toolCallId: "call-shell-inside-cwd",
+				toolName: "shell",
+			},
+			{ openApproval: approval }
+		);
+
+		expect(requests).toHaveLength(1);
+		const identity = requests[0]?.identity.map(({ label }) => label);
+		expect(identity).toEqual(["tool", "resource"]);
+		expect(staticToolCallHandler).toHaveBeenCalledTimes(1);
+	});
+
+	test("a home-directory cwd raises the external-directory boundary", async () => {
+		const dir = realpathSync(
+			await mkdtemp(join(tmpdir(), "wincode-shell-home-"))
+		);
+		const requests: ToolApprovalRequest[] = [];
+		const approval = mock(
+			(request: ToolApprovalRequest, actions: ToolApprovalActions) => {
+				requests.push(request);
+				queueMicrotask(() => actions.allow(false));
+			}
+		);
+
+		await settleCallWith(
+			{
+				input: { command: "pwd", cwd: "~" },
+				toolCallId: "call-shell-home-cwd",
+				toolName: "shell",
+			},
+			{
+				openApproval: approval,
+				sandbox: createWorkspaceSandbox(dir),
+			}
+		);
+
+		expect(requests).toHaveLength(1);
+		const identity = requests[0]?.identity.map(({ label }) => label);
+		expect(identity).toEqual(["tool", "resource", "scope"]);
+		expect(requests[0]?.identity[2]).toEqual({
+			label: "scope",
+			value: "external",
+		});
+		expect(staticToolCallHandler).toHaveBeenCalledTimes(1);
+	});
+
+	test("a shell call without a command is left for the runner to validate", async () => {
+		await settleCallWith(
+			{
+				input: {},
+				toolCallId: "call-shell-no-command",
+				toolName: "shell",
+			},
+			{}
+		);
+		expect(openApproval).not.toHaveBeenCalled();
+		expect(staticToolCallHandler).toHaveBeenCalledTimes(1);
 	});
 });
 

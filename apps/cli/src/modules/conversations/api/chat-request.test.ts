@@ -248,4 +248,41 @@ describe("prepareSendChatRequestBody", () => {
 		expect(JSON.stringify(body)).not.toContain("private-reviewer");
 		expect(body).not.toHaveProperty("mode");
 	});
+
+	test("strips the CLI-only shell tool from hosted descriptors", () => {
+		const body = prepareSendChatRequestBody(
+			"session-1",
+			[
+				{
+					id: "1",
+					role: "user",
+					parts: [],
+					metadata: { agent: "build", model },
+				},
+			],
+			{
+				...buildFallback,
+				resolvedAgent: {
+					instructions: "Build safely.",
+					visibleCodingTools: [
+						"read",
+						"write",
+						"edit",
+						"list",
+						"grep",
+						"shell",
+					],
+				},
+			}
+		);
+
+		expect(body.agent.visibleCodingTools).toEqual([
+			"read",
+			"write",
+			"edit",
+			"list",
+			"grep",
+		]);
+		expect(JSON.stringify(body)).not.toContain("shell");
+	});
 });

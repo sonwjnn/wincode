@@ -9,6 +9,7 @@ import {
 	codingAgentDataSchemas,
 	codingMessageMetadataSchema,
 	codingToolDefinitions,
+	codingToolNameSchema,
 	codingToolNames,
 	codingToolSchemas,
 	defaultChatModel,
@@ -16,6 +17,7 @@ import {
 	expandFileMentionPartsForModel,
 	findSupportedChatModel,
 	getSystemInstructionsForAgent,
+	hostedAgentDescriptorSchema,
 	planAgent,
 	type ReadInput,
 	type ReadOutput,
@@ -50,6 +52,7 @@ describe("@wincode/ai shared entry", () => {
 			"edit",
 			"list",
 			"grep",
+			"shell",
 		]);
 
 		for (const definition of Object.values(codingToolDefinitions)) {
@@ -67,6 +70,7 @@ describe("@wincode/ai shared entry", () => {
 			"edit",
 			"list",
 			"grep",
+			"shell",
 		]);
 
 		for (const schema of Object.values(codingToolSchemas)) {
@@ -429,6 +433,34 @@ describe("@wincode/ai shared entry", () => {
 		expect(builtInAgents.map(({ id }) => id)).toEqual(["build", "plan"]);
 	});
 
+	test("shell is a known tool name but rejected from hosted execution", () => {
+		expect(codingToolNameSchema.safeParse("shell").success).toBe(true);
+		const descriptor = {
+			...buildAgent,
+			visibleCodingTools: ["read", "write", "edit", "list", "grep", "shell"],
+		};
+		expect(hostedAgentDescriptorSchema.safeParse(descriptor).success).toBe(
+			false
+		);
+	});
+
+	test("bounds shell input parameters", () => {
+		const parse = (input: unknown) =>
+			codingToolSchemas.shell.schema.safeParse(input);
+		expect(parse({ command: "bun test" }).success).toBe(true);
+		expect(
+			parse({ command: "bun test", cwd: "apps/cli", timeout: 60 }).success
+		).toBe(true);
+		// Command is required and bounded.
+		expect(parse({}).success).toBe(false);
+		expect(parse({ command: "x".repeat(4097) }).success).toBe(false);
+		// Timeout is bounded to the 1-300 s window and must be an integer.
+		expect(parse({ command: "x", timeout: 0 }).success).toBe(false);
+		expect(parse({ command: "x", timeout: 301 }).success).toBe(false);
+		expect(parse({ command: "x", timeout: 1.5 }).success).toBe(false);
+		expect(parse({ command: "x", timeout: 300 }).success).toBe(true);
+	});
+
 	test("validates canonical Agent IDs", () => {
 		for (const id of ["build", "code-review", "agent-2"]) {
 			expect(agentIdSchema.safeParse(id).success).toBe(true);
@@ -532,7 +564,11 @@ describe("@wincode/ai server and client entries", () => {
 		const registryKeys = Object.keys(codingToolDefinitions);
 
 		expect(Object.keys(codingToolRunners)).toEqual(registryKeys);
-		expect(Object.keys(codingServerTools)).toEqual(registryKeys);
+		// `shell` is CLI-only (ADR-0005): the hosted server manifest deliberately
+		// excludes it, so the server mirror is the registry minus shell.
+		expect(Object.keys(codingServerTools)).toEqual(
+			registryKeys.filter((name) => name !== "shell")
+		);
 	});
 });
 

@@ -162,6 +162,7 @@ describe("configured Agents", () => {
 				"edit",
 				"list",
 				"grep",
+				"shell",
 			]);
 
 			expect(resolveExecutableAgentRuntime(registry, "issue-researcher")).toBe(

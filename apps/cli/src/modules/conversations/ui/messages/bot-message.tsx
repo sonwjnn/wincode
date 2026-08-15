@@ -4,7 +4,9 @@ import {
 	findSupportedChatModelSelection,
 	formatModelLabel,
 	normalizeChatModelSelection,
+	SHELL_OUTPUT_TAIL_BYTES,
 } from "@wincode/ai";
+import { useState } from "react";
 import { connectionProviderDisplayNames } from "@/modules/connections";
 import { ToolApprovalPanel } from "@/shared/providers/approval/ui/tool-approval-panel";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -175,6 +177,12 @@ const formatStaticToolSummary = (name: string, part: ToolPart): string => {
 		);
 		return `✱ Grep ${pattern} in ${path}`;
 	}
+	if (name === "shell") {
+		const command = sanitizeDisplayText(
+			typeof input.command === "string" ? input.command : ""
+		);
+		return `$ ${command}`;
+	}
 	if (name === "read") {
 		return `→ Read ${path}`;
 	}
@@ -336,12 +344,55 @@ const resolveFooterItems = (
 	return items;
 };
 
+const SHELL_OUTPUT_ESC = String.fromCharCode(0x1b);
+const SHELL_OUTPUT_BELL = String.fromCharCode(0x07);
+const SHELL_OUTPUT_ANSI_CSI_REGEX = new RegExp(
+	`${SHELL_OUTPUT_ESC}[0-9;]*[A-Za-z]`,
+	"g"
+);
+const SHELL_OUTPUT_ANSI_OSC_REGEX = new RegExp(
+	`${SHELL_OUTPUT_ESC}][^${SHELL_OUTPUT_BELL}]*${SHELL_OUTPUT_BELL}`,
+	"g"
+);
+
+/** Printable output characters: tab, newline, and everything above C1. */
+const isPrintableShellOutputCharacter = (code: number): boolean =>
+	code === 0x09 ||
+	code === 0x0a ||
+	(code >= 0x20 && (code < 0x7f || code > 0x9f));
+
+const stripShellOutputControlCharacters = (value: string): string =>
+	Array.from(value, (character) =>
+		isPrintableShellOutputCharacter(character.charCodeAt(0)) ? character : ""
+	).join("");
+
+/**
+ * Sanitizes command output for display: ANSI escape sequences are stripped,
+ * CRLF collapses to LF, and control characters are replaced, while newlines
+ * and tabs survive so multi-line output renders faithfully.
+ */
+const sanitizeShellOutputText = (
+	value: string,
+	maxChars = SHELL_OUTPUT_TAIL_BYTES
+): string =>
+	redactSensitiveDisplayText(
+		stripShellOutputControlCharacters(
+			value
+				.replace(SHELL_OUTPUT_ANSI_CSI_REGEX, "")
+				.replace(SHELL_OUTPUT_ANSI_OSC_REGEX, "")
+				.replace(/\r\n/g, "\n")
+				.replace(/\r/g, "")
+		)
+	).slice(0, maxChars);
+
 function ToolMessagePart({ part }: { part: ToolPart }) {
 	const { colors } = useTheme();
 	const isSkillCall =
 		part.type === "dynamic-tool" &&
 		part.toolName === "skill" &&
 		(part.state === "output-available" || part.state === "output-error");
+	const isShellOutput =
+		part.type === "tool-shell" && part.state === "output-available";
 
 	const toolLine = isSkillCall ? (
 		<SkillActivityRow part={part} />
@@ -352,10 +403,54 @@ function ToolMessagePart({ part }: { part: ToolPart }) {
 	return (
 		<>
 			{toolLine}
+			{isShellOutput ? <ShellOutputBlock part={part} /> : null}
 			{typeof part.toolCallId === "string" ? (
 				<ToolApprovalPanel id={part.toolCallId} />
 			) : null}
 		</>
+	);
+}
+
+/**
+ * The inline output block for completed `shell` calls: a one-line summary
+ * (exit code, timeout, truncation) above a collapsible output body, expanded
+ * by default. Clicking the header toggles it.
+ */
+function ShellOutputBlock({ part }: { part: ToolPart }) {
+	const { colors } = useTheme();
+	const [expanded, setExpanded] = useState(true);
+	const output =
+		typeof part.output === "object" &&
+		part.output !== null &&
+		!Array.isArray(part.output)
+			? (part.output as Record<string, unknown>)
+			: {};
+	const text = sanitizeShellOutputText(formatUnknown(output.output));
+	const exitCode = typeof output.exitCode === "number" ? output.exitCode : null;
+	const timedOut = output.timedOut === true;
+	const truncated = output.truncated === true;
+	const markers = [
+		...(exitCode === null ? [] : [`exit ${exitCode}`]),
+		...(timedOut ? ["timed out"] : []),
+		...(truncated ? ["truncated"] : []),
+	].join(" · ");
+	const header = `${expanded ? "▾" : "▸"} Output${markers ? ` · ${markers}` : ""}`;
+
+	return (
+		<box marginBottom={1} paddingX={3} width="100%">
+			{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI text handles terminal mouse events. */}
+			<text
+				fg={colors.textMuted}
+				onMouseDown={() => setExpanded((value) => !value)}
+			>
+				{expanded ? header : `${header} (click to expand)`}
+			</text>
+			{expanded ? (
+				<text fg={colors.text} wrapMode="char">
+					{text}
+				</text>
+			) : null}
+		</box>
 	);
 }
 

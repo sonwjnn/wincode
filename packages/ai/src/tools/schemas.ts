@@ -25,6 +25,20 @@ export {
 	readOutputSchema,
 	readToolSchema,
 } from "./read/schema";
+export type { ShellInput, ShellOutput, ShellPlatform } from "./shell/schema";
+export {
+	composeShellToolDescription,
+	SHELL_COMMAND_MAX_CHARS,
+	SHELL_CWD_MAX_CHARS,
+	SHELL_OUTPUT_TAIL_BYTES,
+	SHELL_TIMEOUT_DEFAULT_SECONDS,
+	SHELL_TIMEOUT_MAX_SECONDS,
+	shellInputSchema,
+	shellOutputSchema,
+	shellPlatformFromNode,
+	shellToolDescription,
+	shellToolSchema,
+} from "./shell/schema";
 export type { WriteInput, WriteOutput } from "./write/schema";
 export {
 	writeInputSchema,
@@ -52,6 +66,11 @@ import {
 	readOutputSchema,
 	readToolSchema,
 } from "./read/schema";
+import {
+	shellInputSchema,
+	shellOutputSchema,
+	shellToolDescription,
+} from "./shell/schema";
 import {
 	writeInputSchema,
 	writeOutputSchema,
@@ -93,6 +112,11 @@ export const codingToolDefinitions = {
 		inputSchema: grepInputSchema,
 		outputSchema: grepOutputSchema,
 	},
+	shell: {
+		description: shellToolDescription,
+		inputSchema: shellInputSchema,
+		outputSchema: shellOutputSchema,
+	},
 } satisfies {
 	read: CodingToolDefinition<typeof readInputSchema, typeof readOutputSchema>;
 	write: CodingToolDefinition<
@@ -102,6 +126,10 @@ export const codingToolDefinitions = {
 	edit: CodingToolDefinition<typeof editInputSchema, typeof editOutputSchema>;
 	list: CodingToolDefinition<typeof listInputSchema, typeof listOutputSchema>;
 	grep: CodingToolDefinition<typeof grepInputSchema, typeof grepOutputSchema>;
+	shell: CodingToolDefinition<
+		typeof shellInputSchema,
+		typeof shellOutputSchema
+	>;
 };
 
 export type CodingToolName = keyof typeof codingToolDefinitions;
@@ -112,6 +140,7 @@ export const codingToolNames = [
 	"edit",
 	"list",
 	"grep",
+	"shell",
 ] as const satisfies readonly CodingToolName[];
 export const codingToolNameSchema = z.enum(codingToolNames);
 
@@ -149,6 +178,11 @@ export const codingToolSchemas = {
 		name: "grep",
 		schema: codingToolDefinitions.grep.inputSchema,
 	},
+	shell: {
+		description: codingToolDefinitions.shell.description,
+		name: "shell",
+		schema: codingToolDefinitions.shell.inputSchema,
+	},
 } satisfies {
 	[Name in CodingToolName]: {
 		description: string;
@@ -163,4 +197,5 @@ export const codingToolSchemaList = [
 	codingToolSchemas.edit,
 	codingToolSchemas.list,
 	codingToolSchemas.grep,
+	codingToolSchemas.shell,
 ] as const;

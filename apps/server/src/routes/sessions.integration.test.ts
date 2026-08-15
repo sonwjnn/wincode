@@ -434,7 +434,6 @@ describe("POST /:id/chat (transport-only)", () => {
 			{ ...buildAgent, instructions: "" },
 			{ ...buildAgent, instructions: "x".repeat(12_001) },
 			{ ...buildAgent, visibleCodingTools: ["read", "read"] },
-			{ ...buildAgent, visibleCodingTools: ["read", "shell"] },
 			{ ...buildAgent, configuredAgentName: "private-reviewer" },
 		]) {
 			const response = await sessionsRoutes.request("/session-agent/chat", {
@@ -450,6 +449,28 @@ describe("POST /:id/chat (transport-only)", () => {
 			});
 			expect(response.status).toBe(400);
 		}
+	});
+
+	test("rejects shell from hosted descriptors even though it is a known tool name", async () => {
+		// `shell` joined the coding tool catalog but is CLI-only (ADR-0005):
+		// the hosted descriptor accepts the name in isolation yet rejects any
+		// descriptor that would execute it on the hosted runtime.
+		const response = await sessionsRoutes.request("/session-shell/chat", {
+			body: JSON.stringify({
+				agent: {
+					...buildAgent,
+					visibleCodingTools: ["read", "shell"],
+				},
+				messages: [
+					{ id: "u1", parts: [{ text: "hi", type: "text" }], role: "user" },
+				],
+				model: "gpt-5.4-mini",
+			}),
+			headers: { "content-type": "application/json" },
+			method: "POST",
+		});
+		expect(response.status).toBe(400);
+		expect(await response.text()).toContain("Bad Request");
 	});
 
 	test("persists custom billing identity and removes configured Agent identity", async () => {

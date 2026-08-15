@@ -141,6 +141,16 @@ export const handleCodingAgentToolCall =
 				});
 				return;
 
+			case "shell":
+				await runToolCall({
+					addToolOutput,
+					input: toolCall.input,
+					run: codingToolRunners.shell,
+					tool: "shell",
+					toolCallId: toolCall.toolCallId,
+				});
+				return;
+
 			default:
 				assertNever(toolCall);
 		}

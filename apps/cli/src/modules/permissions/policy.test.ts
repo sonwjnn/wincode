@@ -155,6 +155,14 @@ describe("createToolPermission defaults", () => {
 			expect(permission.decide(action, "anything")).toBe("allow");
 		}
 	});
+
+	test("seeds shell execution as ask", () => {
+		expect(permission.decide("shell", "bun test")).toBe("ask");
+		expect(permission.decide("shell", "rm dist")).toBe("ask");
+		expect(
+			createToolPermission({ shell: "allow" }).decide("shell", "bun test")
+		).toBe("allow");
+	});
 });
 
 describe("createToolPermission configured rules", () => {
@@ -204,13 +212,14 @@ describe("createToolPermission configured rules", () => {
 });
 
 describe("STATIC_TOOL_PERMISSION_ACTIONS", () => {
-	test("routes the write tool through the edit action", () => {
+	test("routes the write tool through the edit action and shell through shell", () => {
 		expect(STATIC_TOOL_PERMISSION_ACTIONS).toEqual({
 			read: "read",
 			write: "edit",
 			edit: "edit",
 			list: "list",
 			grep: "grep",
+			shell: "shell",
 		});
 	});
 });
@@ -260,13 +269,14 @@ describe("foldPermissionRules", () => {
 });
 
 describe("shippedAgentPermissionRules", () => {
-	test("denies edit and every open-glob action for Plan", () => {
+	test("denies edit, shell, and every open-glob action for Plan", () => {
 		// The `*` deny is honored only by the MCP open-glob evaluator, so it makes
 		// Plan's baseline expose no MCP tools while leaving static tool visibility
 		// (which matches exact action keys) unchanged.
 		expect(shippedAgentPermissionRules("plan")).toEqual({
 			"*": "deny",
 			edit: "deny",
+			shell: "deny",
 		} as PermissionRules);
 		expect(shippedAgentPermissionRules("build")).toEqual({});
 		expect(shippedAgentPermissionRules("code-reviewer")).toEqual({});
@@ -389,26 +399,31 @@ describe("resolveVisibleCodingTools", () => {
 		{
 			name: "shows every tool with no denies",
 			rules: { read: "allow", edit: "allow", list: "allow", grep: "allow" },
-			visible: ["read", "write", "edit", "list", "grep"],
+			visible: ["read", "write", "edit", "list", "grep", "shell"],
 		},
 		{
 			name: "hides write and edit when edit is unconditionally denied",
 			rules: { edit: "deny" },
-			visible: ["read", "list", "grep"],
+			visible: ["read", "list", "grep", "shell"],
 		},
 		{
 			name: "hides only read when read is unconditionally denied",
 			rules: { read: "deny" },
-			visible: ["write", "edit", "list", "grep"],
+			visible: ["write", "edit", "list", "grep", "shell"],
 		},
 		{
 			name: "keeps a granular edit map visible",
 			rules: { edit: { "src/**": "deny" } },
-			visible: ["read", "write", "edit", "list", "grep"],
+			visible: ["read", "write", "edit", "list", "grep", "shell"],
 		},
 		{
 			name: "keeps an ask-gated tool visible",
 			rules: { list: "ask" },
+			visible: ["read", "write", "edit", "list", "grep", "shell"],
+		},
+		{
+			name: "hides shell when the shell action is unconditionally denied",
+			rules: { shell: "deny" },
 			visible: ["read", "write", "edit", "list", "grep"],
 		},
 	];

@@ -123,12 +123,19 @@ export const prepareSendChatRequestBody = (
 		throw new Error(`Connect ${model.providerId} with /connect`);
 	}
 
+	// The hosted runtime never executes shell (ADR-0005), so the CLI-only tool
+	// is stripped from the descriptor; the server rejects it defensively too.
+	const hostedVisibleCodingTools =
+		fallback.resolvedAgent.visibleCodingTools.filter(
+			(tool) => tool !== "shell"
+		);
+
 	return {
 		agent: {
 			billingKind: getBillingKind(agent),
 			instructions: fallback.resolvedAgent.instructions,
 			mcpTools: mcpTools ?? [],
-			visibleCodingTools: fallback.resolvedAgent.visibleCodingTools,
+			visibleCodingTools: hostedVisibleCodingTools,
 		},
 		messages: removePrivateAgentMetadata(messages),
 		model: model.modelId,

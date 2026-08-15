@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import { getChatModelRoute } from "@wincode/ai";
+import { resolveWorkspaceRoot } from "@wincode/ai/workspace";
 import { type ReactNode, useEffect, useReducer } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { BillingProvider } from "@/modules/billing";
@@ -25,7 +26,10 @@ import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboar
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 
 const connections = createConnections();
-const workspace = process.cwd();
+// The workspace root walks up to the nearest `.git` so launching the CLI from
+// a repository subdirectory still places the whole repository in the sandbox
+// (ADR-0005), which shell-dependent Skills rely on for their working directory.
+const workspace = resolveWorkspaceRoot(process.cwd());
 const configStore = createConfigStore();
 const configContext = Object.freeze({
 	configStore,

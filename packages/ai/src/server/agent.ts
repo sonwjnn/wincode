@@ -1,5 +1,5 @@
 import type { ProviderOptions } from "@ai-sdk/provider-utils";
-import type { OnFinishEvent, OnStepFinishEvent } from "ai";
+import type { OnFinishEvent, OnStepFinishEvent, Tool } from "ai";
 import {
 	jsonSchema,
 	type LanguageModel,
@@ -58,7 +58,8 @@ export type CodingAgentCallOptions = z.infer<
 >;
 export const prepareCodingAgentCall = <T extends Record<string, unknown>>(
 	call: T & { options?: CodingAgentCallOptions },
-	skillTool?: SkillToolDefinition
+	skillTool?: SkillToolDefinition,
+	shellTool?: Tool
 ): Omit<T, "options"> & {
 	activeTools: string[];
 	instructions: string;
@@ -77,6 +78,11 @@ export const prepareCodingAgentCall = <T extends Record<string, unknown>>(
 			description: skillTool.description,
 			inputSchema: jsonSchema(skillTool.inputSchema),
 		};
+	}
+	// The CLI-only shell declaration joins the model loop through this option:
+	// the hosted runtime never passes it, so its manifests keep excluding shell.
+	if (shellTool !== undefined) {
+		tools.shell = shellTool;
 	}
 
 	return {
@@ -99,6 +105,11 @@ type CreateCodingAgentOptions = {
 	lifecycleCallbacks?: CodingAgentLifecycleCallbacks;
 	skill?: SkillRequestContext;
 	skillTool?: SkillToolDefinition;
+	/**
+	 * The CLI-only `shell` declaration, composed per platform. The hosted
+	 * runtime never passes it, so its tool manifests keep excluding shell.
+	 */
+	shellTool?: Tool;
 };
 
 export const createCodingAgent = ({
@@ -108,13 +119,14 @@ export const createCodingAgent = ({
 	lifecycleCallbacks,
 	providerOptions,
 	skillTool,
+	shellTool,
 }: CreateCodingAgentOptions) =>
 	new ToolLoopAgent<CodingAgentCallOptions, ToolSet>({
 		callOptionsSchema: codingAgentCallOptionsSchema,
 		instructions: getSystemInstructionsForAgent(buildAgent.instructions),
 		maxOutputTokens,
 		model,
-		prepareCall: (call) => prepareCodingAgentCall(call, skillTool),
+		prepareCall: (call) => prepareCodingAgentCall(call, skillTool, shellTool),
 		onFinish: async (event) => {
 			const callback =
 				lifecycleCallbacks?.onEnd ?? lifecycleCallbacks?.onFinish;

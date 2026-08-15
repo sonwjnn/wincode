@@ -9,8 +9,10 @@ import {
 	type ResolvedAgentRuntime,
 	type SkillToolDefinition,
 	sanitizeInterruptedMessagesForModel,
+	shellPlatformFromNode,
 } from "@wincode/ai";
 import {
+	buildShellServerTool,
 	createCodingAgent,
 	getProviderErrorMessage,
 	resolveDirectChatModel,
@@ -48,10 +50,16 @@ export const createLocalChatTransport = (
 			variantRef.current,
 			abortSignal
 		);
+		// The CLI-only shell declaration is composed per platform so the model
+		// knows which shell syntax to write; the hosted path never receives it.
+		const shellTool = buildShellServerTool(
+			shellPlatformFromNode(process.platform)
+		);
 		const agent = createCodingAgent({
 			model: resolvedModel.model,
 			maxOutputTokens: resolvedModel.maxOutputTokens,
 			providerOptions: resolvedModel.providerOptions,
+			shellTool,
 			skill,
 			skillTool: skillToolRef?.current,
 		});

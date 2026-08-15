@@ -793,4 +793,35 @@ describe("chat transport skill activation", () => {
 		};
 		expect(options.skillTool).toBeUndefined();
 	});
+
+	test("local transport declares the platform shell tool for the model loop", async () => {
+		createCodingAgentMock.mockClear();
+		const createStream = mock(async () => new ReadableStream());
+		const transport = createLocalChatTransport(
+			"session-1",
+			resolvedAgentRef,
+			{ current: { modelId: "gemini-2.5-flash", providerId: "google" } },
+			{ current: undefined },
+			{
+				authorize: async () => ({ kind: "api-key", apiKey: "google-key" }),
+			} as never,
+			createStream
+		);
+		await transport.sendMessages({
+			abortSignal: undefined,
+			body: undefined,
+			chatId: "session-1",
+			headers: undefined,
+			messageId: undefined,
+			messages: [] as never,
+			metadata: undefined,
+			trigger: "submit-message",
+		});
+		const options = createCodingAgentMock.mock.calls[0]?.[0] as {
+			shellTool?: { description: string; inputSchema: unknown };
+		};
+		expect(options.shellTool).toBeDefined();
+		expect(options.shellTool?.description).toContain("/bin/bash -c");
+		expect(options.shellTool?.inputSchema).toBeDefined();
+	});
 });

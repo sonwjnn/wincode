@@ -15,4 +15,4 @@ export {
 	resolveWincodeChatModelSelection,
 } from "./models";
 export { createCodingAgentStreamResponse } from "./stream";
-export { codingServerTools } from "./tools";
+export { buildShellServerTool, codingServerTools } from "./tools";

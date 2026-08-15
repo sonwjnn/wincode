@@ -5,9 +5,27 @@ import {
 	type CodingToolOutput,
 	codingToolDefinitions,
 } from "../tools/schemas";
+import {
+	composeShellToolDescription,
+	type ShellInput,
+	type ShellOutput,
+	type ShellPlatform,
+	shellInputSchema,
+	shellOutputSchema,
+} from "../tools/shell/schema";
+
+/**
+ * The server-declared coding tools. `shell` is deliberately absent: the hosted
+ * runtime never advertises it, and the CLI composes the platform-specific
+ * shell declaration locally through {@link buildShellServerTool}.
+ */
+export type CodingServerToolName = Exclude<CodingToolName, "shell">;
 
 export type CodingServerToolMap = {
-	[Name in CodingToolName]: Tool<CodingToolInput<Name>, CodingToolOutput<Name>>;
+	[Name in CodingServerToolName]: Tool<
+		CodingToolInput<Name>,
+		CodingToolOutput<Name>
+	>;
 };
 
 export const codingServerTools = {
@@ -37,3 +55,17 @@ export const codingServerTools = {
 		outputSchema: codingToolDefinitions.grep.outputSchema,
 	}),
 } satisfies CodingServerToolMap;
+
+/**
+ * The CLI-only `shell` declaration for the local model loop, composed per
+ * platform so the system prompt names the active shell syntax. The hosted
+ * runtime never receives it.
+ */
+export const buildShellServerTool = (
+	platform: ShellPlatform
+): Tool<ShellInput, ShellOutput> =>
+	tool({
+		description: composeShellToolDescription(platform),
+		inputSchema: shellInputSchema,
+		outputSchema: shellOutputSchema,
+	});

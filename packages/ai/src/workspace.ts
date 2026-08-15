@@ -12,6 +12,46 @@ export const WORKSPACE_IGNORED_DIRECTORY_NAMES = new Set([
 	"node_modules",
 ]);
 
+/**
+ * The maximum number of parent directories the workspace-root walk-up visits
+ * before giving up, so a hostile or enormous filesystem cannot stall startup.
+ */
+export const MAX_WORKSPACE_WALK_DEPTH = 16;
+
+export type ResolveWorkspaceRootOptions = {
+	/** Injectable existence probe so the walk-up stays pure and unit-testable. */
+	exists?: (candidatePath: string) => boolean;
+	maxDepth?: number;
+};
+
+/**
+ * Resolves the workspace root by walking up from `start` to the nearest
+ * ancestor containing a `.git` directory, bounded by {@link MAX_WORKSPACE_WALK_DEPTH}.
+ * When no ancestor is a git root, the start path itself is the workspace, so
+ * launching the CLI from a repository subdirectory still places the whole
+ * repository inside the sandbox.
+ */
+export const resolveWorkspaceRoot = (
+	start: string,
+	options: ResolveWorkspaceRootOptions = {}
+): string => {
+	const exists = options.exists ?? existsSync;
+	const maxDepth = options.maxDepth ?? MAX_WORKSPACE_WALK_DEPTH;
+	const resolvedStart = path.resolve(start);
+	let current = resolvedStart;
+	for (let depth = 0; depth < maxDepth; depth += 1) {
+		if (exists(path.join(current, ".git"))) {
+			return current;
+		}
+		const parent = path.dirname(current);
+		if (parent === current) {
+			break;
+		}
+		current = parent;
+	}
+	return resolvedStart;
+};
+
 export type WorkspaceTraversalEntry = {
 	absolutePath: string;
 	depth: number;
@@ -223,7 +263,7 @@ const collectWorkspaceEntries = async (
 };
 
 export const createWorkspaceSandbox = (
-	root = process.cwd()
+	root = resolveWorkspaceRoot(process.cwd())
 ): WorkspacePolicy => {
 	const workspaceRoot = realpathSync(root);
 	const policy: WorkspacePolicy = {

@@ -9,6 +9,7 @@ export type PermissionAction =
 	| "edit"
 	| "list"
 	| "grep"
+	| "shell"
 	| "skill"
 	| "external_directory";
 
@@ -75,6 +76,7 @@ export const PERMISSION_TOOL_ACTIONS = [
 	"edit",
 	"list",
 	"grep",
+	"shell",
 	"skill",
 	"external_directory",
 ] as const satisfies readonly PermissionAction[];
@@ -90,6 +92,7 @@ export const STATIC_TOOL_PERMISSION_ACTIONS = {
 	edit: "edit",
 	list: "list",
 	grep: "grep",
+	shell: "shell",
 } as const satisfies Record<CodingToolName, PermissionAction>;
 
 /** Tightens every non-denied decision to an approval that must be handled manually. */
@@ -121,6 +124,9 @@ export const DEFAULT_PERMISSION_RULES: PermissionRules = {
 	edit: "allow",
 	list: "allow",
 	grep: "allow",
+	// Shell execution is a real side effect on the user's machine: nothing
+	// runs until the user approves or grants shell access.
+	shell: "ask",
 	// Access outside the workspace is a visible boundary: it always requires
 	// explicit approval unless a configured rule or remembered grant allows it.
 	external_directory: "ask",
@@ -129,8 +135,9 @@ export const DEFAULT_PERMISSION_RULES: PermissionRules = {
 /**
  * Shipped per-Agent Permission restrictions applied at the defaults layer, below
  * every config source. Plan denies `edit`, which also hides the write and edit
- * tools, and denies every MCP tool through the `*` action glob, until a valid
- * higher policy explicitly overrides either restriction.
+ * tools, denies `shell`, which hides command execution, and denies every MCP
+ * tool through the `*` action glob, until a valid higher policy explicitly
+ * overrides either restriction.
  *
  * The `*` deny only reaches MCP tools: static coding-tool gating consults the
  * exact `STATIC_TOOL_PERMISSION_ACTIONS` keys and never honors an action glob, so
@@ -140,7 +147,7 @@ export const DEFAULT_PERMISSION_RULES: PermissionRules = {
 export const SHIPPED_AGENT_PERMISSION_RULES: Readonly<
 	Record<string, PermissionRules>
 > = {
-	plan: { edit: "deny", "*": "deny" } as PermissionRules,
+	plan: { edit: "deny", shell: "deny", "*": "deny" } as PermissionRules,
 };
 
 /** Resolves the shipped defaults-layer Permission rules for an Agent id. */

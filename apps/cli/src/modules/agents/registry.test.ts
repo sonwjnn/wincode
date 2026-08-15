@@ -675,7 +675,7 @@ describe("resolveExecutableAgentRuntime", () => {
 
 		expect(
 			resolveExecutableAgentRuntime(registry, "build")?.visibleCodingTools
-		).toEqual(["read", "write", "edit", "list", "grep"]);
+		).toEqual(["read", "write", "edit", "list", "grep", "shell"]);
 		expect(
 			resolveExecutableAgentRuntime(registry, "plan")?.visibleCodingTools
 		).toEqual(["read", "list", "grep"]);
@@ -712,7 +712,12 @@ describe("layered permission visibility", () => {
 		);
 		const build = registry.agents.find(({ id }) => id === "build");
 
-		expect(build?.visibleCodingTools).toEqual(["read", "list", "grep"]);
+		expect(build?.visibleCodingTools).toEqual([
+			"read",
+			"list",
+			"grep",
+			"shell",
+		]);
 		expect(build?.permission?.edit).toBe("deny");
 	});
 

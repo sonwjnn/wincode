@@ -82,6 +82,12 @@ export function createPermissionService(
 			if (grants.has(grantKey(action, resource))) {
 				return true;
 			}
+			// A literal `*` grant covers every resource for the action: shell
+			// always-approvals persist `shell *` (ADR-0005), and MCP
+			// always-approvals already key the `*` resource.
+			if (grants.has(grantKey(action, "*"))) {
+				return true;
+			}
 			if (action !== EXTERNAL_DIRECTORY_GRANT_ACTION) {
 				return false;
 			}

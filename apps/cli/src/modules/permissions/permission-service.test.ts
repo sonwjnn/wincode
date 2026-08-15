@@ -28,6 +28,27 @@ describe("createPermissionService", () => {
 		expect(service.isGranted("read", "src/app.ts")).toBe(false);
 	});
 
+	test("a wildcard grant covers every resource for its action only", () => {
+		const service = createPermissionService();
+		service.grant("shell", "*");
+
+		expect(service.isGranted("shell", "bun test")).toBe(true);
+		expect(service.isGranted("shell", "rm dist")).toBe(true);
+		// The wildcard never crosses actions.
+		expect(service.isGranted("read", "package.json")).toBe(false);
+		// The exact grant is stored verbatim.
+		expect(service.listGrants()).toEqual([{ action: "shell", resource: "*" }]);
+	});
+
+	test("an exact grant outranks nothing but the same key and the wildcard", () => {
+		const service = createPermissionService();
+		service.grant("edit", "*");
+
+		expect(service.isGranted("edit", "anything")).toBe(true);
+		service.grant("edit", "src/app.ts");
+		expect(service.isGranted("edit", "src/app.ts")).toBe(true);
+	});
+
 	test("lists grants by action then resource and revoking removes one", () => {
 		const service = createPermissionService();
 		service.grant("edit", "src/b.ts");

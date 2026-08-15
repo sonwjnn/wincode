@@ -85,6 +85,16 @@ export const hostedAgentDescriptorSchema = z
 				path: ["visibleCodingTools"],
 			});
 		}
+		// `shell` is a known coding tool name but CLI-only: the hosted runtime
+		// has no local approval path for its side effects, so a descriptor that
+		// tries to execute it on the hosted runtime is rejected.
+		if (agent.visibleCodingTools.includes("shell")) {
+			context.addIssue({
+				code: "custom",
+				message: "shell is CLI-only and cannot execute on the hosted runtime",
+				path: ["visibleCodingTools"],
+			});
+		}
 	});
 
 export type AgentBillingKind = z.infer<typeof agentBillingKindSchema>;

@@ -64,3 +64,31 @@ export const fitsSerializedBytes = (
 	value: unknown,
 	maxBytes: number
 ): boolean => Buffer.byteLength(JSON.stringify(value), "utf8") <= maxBytes;
+
+/**
+ * Keeps the final `maxBytes` UTF-8 bytes of a string. The retained tail may
+ * start inside a multi-byte character, so the leading continuation bytes are
+ * dropped to avoid emitting a lone surrogate or an invalid sequence.
+ */
+export const keepTailUtf8 = (value: string, maxBytes: number): string => {
+	if (maxBytes <= 0) {
+		return "";
+	}
+	const buffer = Buffer.from(value, "utf8");
+	if (buffer.length <= maxBytes) {
+		return value;
+	}
+	const tail = buffer.subarray(buffer.length - maxBytes);
+	let drop = 0;
+	for (const byte of tail) {
+		if (drop >= 3 || !isUtf8ContinuationByte(byte)) {
+			break;
+		}
+		drop += 1;
+	}
+	return tail.subarray(drop).toString("utf8");
+};
+
+/** A `10xxxxxx` byte: part of a multi-byte sequence, never a lead byte. */
+const isUtf8ContinuationByte = (byte: number): boolean =>
+	byte >= 0x80 && byte <= 0xbf;

@@ -41,6 +41,7 @@ export const configuredAgentVisibleCodingTools = [
 	"edit",
 	"list",
 	"grep",
+	"shell",
 ] as const satisfies readonly CodingToolName[];
 
 const agentPatchFields = {

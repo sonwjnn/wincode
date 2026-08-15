@@ -45,7 +45,10 @@ import {
 	canonicalizeExternalPath,
 	canonicalizeResource,
 	composePermissionDecisions,
+	DESTRUCTIVE_SHELL_SAFETY_MESSAGE,
+	expandHomeInPath,
 	externalParentDirectoryGlob,
+	isDestructiveShellCommand,
 	type PermissionAction,
 	type PermissionDecision,
 	type PermissionService,
@@ -122,11 +125,16 @@ const STATIC_TOOL_LABELS = {
 	edit: "Edit",
 	list: "List",
 	grep: "Grep",
+	shell: "Shell",
 } as const satisfies Record<CodingToolName, string>;
 
 // The workspace-relative POSIX resource that `list` gates against when no path
 // is supplied and the sandbox canonicalizes the workspace root to an empty path.
 const WORKSPACE_ROOT_RESOURCE = ".";
+
+// Shell always-approvals persist a process-scoped `shell *` grant: any later
+// command for the action is satisfied unless the policy or safety ceiling asks.
+const SHELL_GRANT_RESOURCE = "*";
 
 const isCodingToolName = (name: string): name is CodingToolName =>
 	(codingToolNames as readonly string[]).includes(name);
@@ -293,7 +301,8 @@ const resolveToolApproval = async ({
  * boundary so neither source can loosen the other. An "always" outcome grants
  * the canonical parent-directory glob for `external_directory` and the exact
  * canonical path for the operation, so approval scope stays bounded and
- * revocable.
+ * revocable. `grantResource` overrides the operation grant key (shell always
+ * grants the process-scoped `*` resource instead of the external path).
  */
 const resolveExternalDirectoryApproval = async ({
 	action,
@@ -302,6 +311,7 @@ const resolveExternalDirectoryApproval = async ({
 	openApproval,
 	request,
 	resource,
+	grantResource = resource,
 	safety,
 	service,
 }: {
@@ -311,6 +321,7 @@ const resolveExternalDirectoryApproval = async ({
 	openApproval: ToolPermissionRuntime["openApproval"];
 	request: ToolApprovalRequest;
 	resource: string;
+	grantResource?: string;
 	safety: boolean;
 	service: PermissionService;
 }): Promise<ToolApprovalGateResult> => {
@@ -344,7 +355,7 @@ const resolveExternalDirectoryApproval = async ({
 	}
 	if (outcome.remember) {
 		service.grant("external_directory", externalParentDirectoryGlob(resource));
-		service.grant(action, resource);
+		service.grant(action, grantResource);
 	}
 	return { kind: "allow" };
 };
@@ -444,28 +455,50 @@ const gateByDecision = async (
 		service,
 	});
 
+	return emitGateOutcome(
+		addToolOutput,
+		tool,
+		options.toolCall.toolCallId,
+		label,
+		resource,
+		result
+	);
+};
+
+/**
+ * Maps one settled gate outcome onto the conversation: policy denies and
+ * rejections emit an observable tool error, an allow clears the call to run.
+ * Every static-tool gate settles through this one helper so their deny and
+ * reject semantics never drift apart.
+ */
+const emitGateOutcome = (
+	addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>,
+	tool: CodingToolName,
+	toolCallId: string,
+	label: string,
+	resource: string,
+	result: ToolApprovalGateResult
+): boolean => {
 	if (result.kind === "deny") {
 		emitToolCallError(
 			addToolOutput,
 			tool,
-			options.toolCall.toolCallId,
+			toolCallId,
 			`${label} denied by policy: ${resource}`
 		);
 		return false;
 	}
-
 	if (result.kind === "reject") {
 		emitToolCallError(
 			addToolOutput,
 			tool,
-			options.toolCall.toolCallId,
+			toolCallId,
 			result.feedback === undefined
 				? `${label} was not approved: ${resource}`
 				: `${label} was not approved: ${resource} — ${result.feedback}`
 		);
 		return false;
 	}
-
 	return true;
 };
 
@@ -537,29 +570,136 @@ const gateExternalPath = async (
 		service,
 	});
 
-	if (result.kind === "deny") {
-		emitToolCallError(
-			addToolOutput,
-			tool,
-			options.toolCall.toolCallId,
-			`${label} denied by policy: ${resource}`
-		);
-		return false;
+	return emitGateOutcome(
+		addToolOutput,
+		tool,
+		options.toolCall.toolCallId,
+		label,
+		resource,
+		result
+	);
+};
+
+/**
+ * Enforces the Tool Permission policy for a `shell` tool call. The command is
+ * the evaluated resource; a workspace-internal `cwd` runs directly, while a
+ * `cwd` outside the workspace composes the `external_directory` boundary
+ * (canonicalized and symlink-resolved like file tools). Always approvals
+ * persist a process-scoped `shell *` grant. Destructive commands raise the
+ * safety ceiling on top of the policy: they always prompt, and neither
+ * `--auto`, a remembered grant, nor a permissive configured rule can run them
+ * without a fresh approval.
+ */
+const gateShellToolCall = async (
+	options: Parameters<ChatOnToolCallCallback<CodingAgentUIMessage>>[0],
+	{
+		addToolOutput,
+		approvalQueue,
+		openApproval,
+		permission,
+		sandbox,
+		service,
+	}: StaticToolGateDeps
+): Promise<boolean> => {
+	const toolCall = options.toolCall;
+	const command = getStringField(toolCall.input, "command");
+	if (!command) {
+		// Missing command: left ungated so the runner reports the validation
+		// error, mirroring the other static tools.
+		return true;
+	}
+	const cwd = getStringField(toolCall.input, "cwd");
+	const destructive = isDestructiveShellCommand(command);
+	const request: ToolApprovalRequest = {
+		description: codingToolDefinitions.shell.description,
+		identity: [
+			{ label: "tool", value: "shell" },
+			{ label: "resource", value: command },
+		],
+		input: toolCall.input,
+		safety: permission.safety || destructive,
+		...(destructive ? { safetyReason: DESTRUCTIVE_SHELL_SAFETY_MESSAGE } : {}),
+		toolCallId: toolCall.toolCallId,
+	};
+	const rawDecision = permission.decide("shell", command);
+	// The classifier is a ceiling, not a bypass: an explicit policy deny still
+	// denies, every other destructive command becomes a manual-only ask.
+	const operationDecision =
+		rawDecision === "deny" || !destructive ? rawDecision : "ask";
+	const safety = permission.safety || destructive;
+
+	let externalResource: string | undefined;
+	if (cwd !== undefined) {
+		// `~` and `$HOME` point outside the workspace, so they are expanded
+		// before canonicalization exactly like the runner does; otherwise a
+		// `cwd: "~"` would silently resolve inside the workspace at gate time
+		// and run in the home directory after approval.
+		const expandedCwd = expandHomeInPath(cwd);
+		try {
+			await canonicalizeResource(expandedCwd, sandbox);
+		} catch {
+			try {
+				externalResource = await canonicalizeExternalPath(
+					expandedCwd,
+					sandbox.root
+				);
+			} catch {
+				emitToolCallError(
+					addToolOutput,
+					"shell",
+					toolCall.toolCallId,
+					`Shell working directory is outside the workspace: ${cwd}`
+				);
+				return false;
+			}
+		}
 	}
 
-	if (result.kind === "reject") {
-		emitToolCallError(
-			addToolOutput,
-			tool,
-			options.toolCall.toolCallId,
-			result.feedback === undefined
-				? `${label} was not approved: ${resource}`
-				: `${label} was not approved: ${resource} — ${result.feedback}`
-		);
-		return false;
-	}
+	const decision =
+		externalResource === undefined
+			? operationDecision
+			: composePermissionDecisions(
+					operationDecision,
+					permission.decide("external_directory", externalResource)
+				);
+	const result =
+		externalResource === undefined
+			? await resolveToolApproval({
+					action: "shell",
+					approvalQueue,
+					decision,
+					openApproval,
+					request,
+					resource: SHELL_GRANT_RESOURCE,
+					safety,
+					service,
+				})
+			: await resolveExternalDirectoryApproval({
+					action: "shell",
+					approvalQueue,
+					decision,
+					grantResource: SHELL_GRANT_RESOURCE,
+					openApproval,
+					request: {
+						...request,
+						identity: [
+							...request.identity,
+							{ label: "scope", value: "external" },
+						],
+					},
+					resource: externalResource,
+					safety,
+					service,
+				});
 
-	return true;
+	return emitGateOutcome(
+		addToolOutput,
+		"shell",
+		toolCall.toolCallId,
+		"Shell",
+		command,
+		result
+	);
 };
 
 type McpApprovalGateDeps = {
@@ -683,6 +823,37 @@ export const createChatToolCallHandler =
 					mcpAddToolOutput,
 					createMcpApprovalGate({ approvalQueue, openApproval, service })
 				)
+			).catch(() => undefined);
+			return;
+		}
+
+		if (options.toolCall.toolName === "shell") {
+			// Shell is a static coding tool with its own gate: the command is the
+			// evaluated resource, `cwd` composes the external-directory boundary,
+			// and destructive commands raise the safety ceiling. It is intercepted
+			// before the shared static gate because its inputs carry no path to
+			// resolve and its always-approval grants `shell *`.
+			Promise.resolve(
+				(async () => {
+					const permission = resolvePermission
+						? await resolvePermission()
+						: permissionRef.current;
+					if (
+						await gateShellToolCall(options, {
+							addToolOutput,
+							approvalQueue,
+							openApproval,
+							permission,
+							sandbox,
+							service,
+						})
+					) {
+						await runStaticToolCall(
+							addToolOutput,
+							resolvedAgentRef.current?.visibleCodingTools ?? []
+						)(options);
+					}
+				})()
 			).catch(() => undefined);
 			return;
 		}

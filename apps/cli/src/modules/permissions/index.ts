@@ -57,6 +57,11 @@ export {
 	resolveAgentPermission,
 } from "./resolve";
 export { resolveTopLevelPermission } from "./schema";
+export {
+	DESTRUCTIVE_SHELL_SAFETY_MESSAGE,
+	isDestructiveShellCommand,
+	normalizeShellCommand,
+} from "./shell-safety";
 export { AutoApprovalIndicator } from "./ui/auto-approval-indicator";
 export { PermissionsDialogContent } from "./ui/permissions-dialog";
 export {

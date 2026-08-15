@@ -9,12 +9,14 @@ import type {
 	CodingToolName,
 	CodingToolOutput,
 } from "./schemas";
+import { runShellTool } from "./shell/runner";
 import { runWriteTool } from "./write/runner";
 
 export { runEditTool } from "./edit/runner";
 export { runGrepTool } from "./grep/runner";
 export { runListTool } from "./list/runner";
 export { runReadTool } from "./read/runner";
+export { runShellTool } from "./shell/runner";
 export { runWriteTool } from "./write/runner";
 
 export type CodingToolRunnerMap = {
@@ -29,4 +31,5 @@ export const codingToolRunners = {
 	edit: runEditTool,
 	list: runListTool,
 	grep: runGrepTool,
+	shell: runShellTool,
 } satisfies CodingToolRunnerMap;
