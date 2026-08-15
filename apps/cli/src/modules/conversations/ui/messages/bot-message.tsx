@@ -640,7 +640,7 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 		// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI box handles terminal mouse events; keyboard output navigation lands in a separate issue.
 		<box
 			border={["left"]}
-			borderColor={colors.borderSubtle}
+			borderColor={colors.backgroundElement}
 			customBorderChars={{
 				...EmptyBorder,
 				vertical: "┃",
