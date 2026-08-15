@@ -52,11 +52,13 @@ const definition: ThemeDefinition = {
 	name: "Test",
 	colors: {
 		primary: "#112233",
+		secondary: "#a1b2c3",
 		planMode: "#223344",
 		selection: "#334455",
 		thinking: "#445566",
 		success: "#556677",
 		error: "#667788",
+		warning: "#c3b2a1",
 		info: "#778899",
 		background: "#000000",
 		backgroundPanel: "#101010",
@@ -64,6 +66,45 @@ const definition: ThemeDefinition = {
 		border: "#303030",
 		borderSubtle: "#404040",
 	},
+};
+
+const OPENCODE_VARIANT_COLORS: Record<
+	string,
+	{ secondary: string; warning: string }
+> = {
+	aura: { secondary: "#f694ff", warning: "#ffca85" },
+	ayu: { secondary: "#D2A6FF", warning: "#E6B673" },
+	carbonfox: { secondary: "#78a9ff", warning: "#f1c21b" },
+	"catppuccin-frappe": { secondary: "#ca9ee6", warning: "#e5c890" },
+	"catppuccin-macchiato": { secondary: "#c6a0f6", warning: "#eed49f" },
+	catppuccin: { secondary: "#cba6f7", warning: "#f9e2af" },
+	cobalt2: { secondary: "#9a5feb", warning: "#ffc600" },
+	cursor: { secondary: "#81a1c1", warning: "#f1b467" },
+	dracula: { secondary: "#ff79c6", warning: "#f1fa8c" },
+	everforest: { secondary: "#7fbbb3", warning: "#e69875" },
+	flexoki: { secondary: "#4385BE", warning: "#DA702C" },
+	github: { secondary: "#bc8cff", warning: "#e3b341" },
+	gruvbox: { secondary: "#d3869b", warning: "#fe8019" },
+	kanagawa: { secondary: "#957FB8", warning: "#D7A657" },
+	"lucent-orng": { secondary: "#EE7948", warning: "#EC5B2B" },
+	material: { secondary: "#c792ea", warning: "#ffcb6b" },
+	matrix: { secondary: "#00efff", warning: "#e6ff57" },
+	mercury: { secondary: "#a7b6f8", warning: "#fc9b6f" },
+	monokai: { secondary: "#ae81ff", warning: "#e6db74" },
+	nightowl: { secondary: "#7fdbca", warning: "#ecc48d" },
+	nord: { secondary: "#81A1C1", warning: "#D08770" },
+	"one-dark": { secondary: "#c678dd", warning: "#e5c07b" },
+	opencode: { secondary: "#5c9cf5", warning: "#f5a742" },
+	orng: { secondary: "#EE7948", warning: "#EC5B2B" },
+	"osaka-jade": { secondary: "#D2689C", warning: "#E5C736" },
+	palenight: { secondary: "#c792ea", warning: "#ffcb6b" },
+	rosepine: { secondary: "#c4a7e7", warning: "#f6c177" },
+	solarized: { secondary: "#6c71c4", warning: "#b58900" },
+	synthwave84: { secondary: "#ff7edb", warning: "#fede5d" },
+	tokyonight: { secondary: "#c099ff", warning: "#ff966c" },
+	vercel: { secondary: "#52A8FF", warning: "#FFB224" },
+	vesper: { secondary: "#99FFE4", warning: "#FFC799" },
+	zenburn: { secondary: "#dc8cc3", warning: "#f0dfaf" },
 };
 
 describe("resolveTheme", () => {
@@ -180,16 +221,29 @@ test("contains the pinned OpenCode theme catalog", () => {
 	expect(THEMES.map(({ name }) => name)).toEqual([...OPENCODE_THEME_NAMES]);
 });
 
+test("pins variant colors copied from the OpenCode theme catalog", () => {
+	for (const theme of THEMES) {
+		const expected = OPENCODE_VARIANT_COLORS[theme.name];
+		if (!expected) {
+			throw new Error(`No pinned variant colors for theme: ${theme.name}`);
+		}
+		expect(theme.colors.secondary, theme.name).toBe(expected.secondary);
+		expect(theme.colors.warning, theme.name).toBe(expected.warning);
+	}
+});
+
 test("maps OpenCode semantic colors consistently", () => {
 	for (const theme of THEMES) {
 		for (const color of [
 			theme.colors.primary,
+			theme.colors.secondary,
 			theme.colors.planMode,
 			theme.colors.selection,
 			theme.colors.thinking,
 			theme.colors.thinkingText,
 			theme.colors.success,
 			theme.colors.error,
+			theme.colors.warning,
 			theme.colors.info,
 			theme.colors.tool,
 			theme.colors.text,
@@ -211,6 +265,9 @@ test("maps OpenCode semantic colors consistently", () => {
 		expect(theme.colors.planMode).toBe(getAgentColor(theme.colors, "plan"));
 		expect(theme.colors.thinking).toBe(getAgentColor(theme.colors, "plan"));
 		expect(theme.colors.backgroundMenu).toBe(theme.colors.backgroundElement);
+		expect(theme.colors.secondary).not.toBe(theme.colors.primary);
+		expect(theme.colors.secondary).not.toBe(theme.colors.planMode);
+		expect(theme.colors.warning).not.toBe(theme.colors.secondary);
 	}
 });
 

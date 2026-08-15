@@ -40,7 +40,7 @@ export function StatusBar() {
 					∙
 				</text>
 			) : null}
-			{variantName ? <text fg={agentColor}>{variantName}</text> : null}
+			{variantName ? <text fg={colors.secondary}>{variantName}</text> : null}
 			<AutoApprovalIndicator />
 		</box>
 	);

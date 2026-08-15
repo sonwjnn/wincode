@@ -70,27 +70,31 @@ export const VariantsDialogContent = ({
 			items={variants}
 			onSelect={handleSelect}
 			placeholder="Search variants"
-			renderItem={(variant, isSelected, isActive) => (
-				<SelectableDialogItem
-					status={
-						isActive ? (
-							<text
-								fg={isSelected ? selectedTextColor : colors.text}
-								selectable={false}
-							>
-								{"●"}
-							</text>
-						) : null
-					}
-				>
-					<text
-						fg={isSelected ? selectedTextColor : colors.text}
-						selectable={false}
+			renderItem={(variant, isSelected, isActive) => {
+				const activeTextColor =
+					isActive && variant.value !== undefined
+						? colors.secondary
+						: colors.text;
+				const labelColor = isSelected ? selectedTextColor : activeTextColor;
+				return (
+					<SelectableDialogItem
+						status={
+							isActive ? (
+								<text
+									fg={isSelected ? selectedTextColor : colors.text}
+									selectable={false}
+								>
+									{"●"}
+								</text>
+							) : null
+						}
 					>
-						{variant.label}
-					</text>
-				</SelectableDialogItem>
-			)}
+						<text fg={labelColor} selectable={false}>
+							{variant.label}
+						</text>
+					</SelectableDialogItem>
+				);
+			}}
 		/>
 	);
 };

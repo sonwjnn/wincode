@@ -143,6 +143,7 @@ describe("theme consumers", () => {
 		expect(errorSource).toContain("backgroundColor={colors.backgroundPanel}");
 		expect(botSource).toContain("fg={colors.textMuted}");
 		expect(statusSource).toContain("fg={colors.textMuted}");
+		expect(statusSource).toContain("fg={colors.secondary}");
 	});
 
 	test("uses semantic foregrounds instead of fixed terminal colors", async () => {
@@ -166,7 +167,14 @@ describe("theme consumers", () => {
 			[paths[3], ["fg={isSelected ? selectedTextColor : colors.text}"]],
 			[paths[4], ["fg={primaryTextColor}"]],
 			[paths[5], ["fg={isSelected ? selectedTextColor : colors.text}"]],
-			[paths[6], ["fg={isSelected ? selectedTextColor : colors.text}"]],
+			[
+				paths[6],
+				[
+					"fg={isSelected ? selectedTextColor : colors.text}",
+					"fg={labelColor}",
+					"colors.secondary",
+				],
+			],
 			[paths[7], []],
 			[paths[8], ["fg={isSelected ? selectedTextColor : colors.text}"]],
 			[paths[9], ["fg={isSelected ? selectedTextColor : colors.text}"]],
