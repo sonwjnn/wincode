@@ -538,7 +538,13 @@ const boundShellCommandHeader = (
 	return kept.join("\n");
 };
 
-function ToolMessagePart({ part }: { part: ToolPart }) {
+function ToolMessagePart({
+	isFirstShellOutput = false,
+	part,
+}: {
+	isFirstShellOutput?: boolean;
+	part: ToolPart;
+}) {
 	const { colors } = useTheme();
 	const isSkillCall =
 		part.type === "dynamic-tool" &&
@@ -559,7 +565,9 @@ function ToolMessagePart({ part }: { part: ToolPart }) {
 	return (
 		<>
 			{toolLine}
-			{isShellOutput ? <ShellOutputBlock part={part} /> : null}
+			{isShellOutput ? (
+				<ShellOutputBlock isFirstShellOutput={isFirstShellOutput} part={part} />
+			) : null}
 			{typeof part.toolCallId === "string" ? (
 				<ToolApprovalPanel id={part.toolCallId} />
 			) : null}
@@ -579,7 +587,13 @@ const MemoizedToolMessagePart = memo(ToolMessagePart);
  * output and the measured width, so streamed updates of neighboring parts
  * never re-sanitize or re-lay-out settled results.
  */
-function ShellOutputBlock({ part }: { part: ToolPart }) {
+function ShellOutputBlock({
+	isFirstShellOutput,
+	part,
+}: {
+	isFirstShellOutput: boolean;
+	part: ToolPart;
+}) {
 	const { colors } = useTheme();
 	const blockRef = useRef<BoxRenderable>(null);
 	const [contentWidth, setContentWidth] = useState(0);
@@ -647,7 +661,7 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 			}}
 			flexDirection="column"
 			marginBottom={1}
-			marginTop={1}
+			marginTop={isFirstShellOutput ? 1 : 0}
 			onMouseDown={() => {
 				if (canExpand) {
 					setExpanded((value) => !value);
@@ -803,6 +817,12 @@ export function BotMessageContent({
 }) {
 	const { colors } = useTheme();
 	const groups = groupConsecutiveParts(parts);
+	// Only the first shell output block carries a top margin: it separates the
+	// block from a preceding text part, while later blocks already sit one row
+	// below the previous block's bottom margin.
+	const firstShellOutputPart = parts.find(
+		(part) => part.type === "tool-shell" && part.state === "output-available"
+	);
 
 	return (
 		<box alignItems="center" width="100%">
@@ -827,6 +847,7 @@ export function BotMessageContent({
 						if (isToolPart(part)) {
 							return (
 								<MemoizedToolMessagePart
+									isFirstShellOutput={part === firstShellOutputPart}
 									key={getToolKey(part, index)}
 									part={part}
 								/>
