@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { testRender } from "@opentui/react/test-utils";
 import type { CodingAgentUIMessage } from "@wincode/ai";
+import { useEffect } from "react";
+import {
+	type ApprovalPanelsContextValue,
+	ApprovalPanelsProvider,
+	useApprovalPanels,
+} from "@/shared/providers/approval/approval-panels-provider";
+import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
+import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 
 const { BotMessageContent, formatResponseTime } = await import("./bot-message");
@@ -15,7 +23,11 @@ const renderFrame = async (
 ): Promise<string> => {
 	const setup = await testRender(
 		<ThemeProvider>
-			<BotMessageContent parts={parts} />
+			<KeyboardLayerProvider>
+				<ApprovalPanelsProvider>
+					<BotMessageContent parts={parts} />
+				</ApprovalPanelsProvider>
+			</KeyboardLayerProvider>
 		</ThemeProvider>,
 		{ height, width: 160 }
 	);
@@ -26,6 +38,51 @@ const renderFrame = async (
 	} finally {
 		setup.renderer.destroy();
 	}
+};
+
+const flushUi = async (
+	setup: Awaited<ReturnType<typeof testRender>>
+): Promise<void> => {
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	await setup.renderOnce();
+};
+
+type ApprovalFrame = {
+	api: ApprovalPanelsContextValue | null;
+	setup: Awaited<ReturnType<typeof testRender>>;
+};
+
+const renderFrameWithApproval = async (
+	parts: CodingAgentUIMessage["parts"],
+	request: ToolApprovalRequest,
+	height = 8
+): Promise<ApprovalFrame> => {
+	const holder: { api: ApprovalPanelsContextValue | null } = { api: null };
+	function Probe() {
+		holder.api = useApprovalPanels();
+		useEffect(() => {
+			holder.api?.add(request, {
+				allow: () => undefined,
+				cancel: () => undefined,
+				reject: () => undefined,
+			});
+		}, []);
+		return null;
+	}
+	const setup = await testRender(
+		<ThemeProvider>
+			<KeyboardLayerProvider>
+				<ApprovalPanelsProvider>
+					<Probe />
+					<BotMessageContent parts={parts} />
+				</ApprovalPanelsProvider>
+			</KeyboardLayerProvider>
+		</ThemeProvider>,
+		{ height, width: 160 }
+	);
+	await setup.renderOnce();
+	await flushUi(setup);
+	return { api: holder.api, setup };
 };
 
 describe("formatResponseTime", () => {
@@ -302,6 +359,67 @@ describe("BotMessageContent", () => {
 
 		expect(frame).toContain('nested={"child":{"grandchild":"[…]"}}');
 		expect(frame).not.toContain("hidden");
+	});
+
+	test("renders an inline approval panel under the pending tool call", async () => {
+		const part = {
+			input: { path: "README.md" },
+			state: "input-available",
+			toolCallId: "call-approval",
+			type: "tool-read",
+		} satisfies ReadToolPart;
+		const { setup } = await renderFrameWithApproval(
+			[part],
+			{
+				description: "Read a UTF-8 text file inside the workspace.",
+				identity: [
+					{ label: "tool", value: "read" },
+					{ label: "resource", value: "README.md" },
+				],
+				input: { path: "README.md" },
+				toolCallId: "call-approval",
+			},
+			8
+		);
+
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("→ Read README.md");
+		expect(frame).toContain(
+			"tool: read · resource: README.md — Read a UTF-8 text file inside the workspace."
+		);
+		expect(frame).toContain("Allow once");
+		expect(frame).toContain("Always allow");
+		expect(frame).toContain("Reject");
+		setup.renderer.destroy();
+	});
+
+	test("collapses a settled approval to a dim audit line", async () => {
+		const part = {
+			input: { path: "README.md" },
+			state: "input-available",
+			toolCallId: "call-approval-settled",
+			type: "tool-read",
+		} satisfies ReadToolPart;
+		const { api, setup } = await renderFrameWithApproval(
+			[part],
+			{
+				description: "Read a UTF-8 text file inside the workspace.",
+				identity: [
+					{ label: "tool", value: "read" },
+					{ label: "resource", value: "README.md" },
+				],
+				input: { path: "README.md" },
+				toolCallId: "call-approval-settled",
+			},
+			8
+		);
+
+		api?.resolve("call-approval-settled", "always");
+		await flushUi(setup);
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("always allowed");
+		expect(frame).not.toContain("Allow once");
+		setup.renderer.destroy();
 	});
 });
 

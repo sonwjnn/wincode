@@ -27,8 +27,8 @@ import type { McpNormalizedResult } from "../result";
  * snapshot tool and its input, it applies the composed Permission decision plus
  * any temporary grant, auto approval, or interactive approval and returns the
  * settled outcome. It lives outside this module (in the chat tool-call handler)
- * so MCP tools share the same approval queue, grant store, and dialog as static
- * coding tools instead of a separate MCP-only controller.
+ * so MCP tools share the same approval queue, grant store, and inline approval
+ * panel as static coding tools instead of a separate MCP-only controller.
  */
 export type McpApprovalDecision =
 	| { kind: "allow" }
@@ -37,7 +37,8 @@ export type McpApprovalDecision =
 
 export type McpApprovalGate = (
 	tool: McpSnapshotTool,
-	input: unknown
+	input: unknown,
+	toolCallId: string
 ) => Promise<McpApprovalDecision>;
 
 export type McpDynamicToolCall = {
@@ -91,7 +92,7 @@ export type RunDynamicToolCallDeps = {
  *
  * - Snapshot missing or stale -> stable output-error.
  * - The `gate` applies the composed Permission decision, temporary grants, auto
- *   approval, and (for an ask) the shared approval dialog:
+ *   approval, and (for an ask) the shared inline approval panel:
  *   - `deny` -> stable output-error, no execution.
  *   - `reject` -> stable output-error carrying the optional bounded feedback.
  *   - `allow` -> executes through the registry. Every outcome is emitted
@@ -133,7 +134,7 @@ export function runDynamicToolCall(
 
 		let decision: McpApprovalDecision;
 		try {
-			decision = await gate(tool, toolCall.input);
+			decision = await gate(tool, toolCall.input, toolCall.toolCallId);
 		} catch {
 			await outputErrorText(
 				addToolOutput,

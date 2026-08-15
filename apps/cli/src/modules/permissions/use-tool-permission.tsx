@@ -5,12 +5,11 @@ import { useCallback, useMemo, useRef } from "react";
 import { resolveAgentRegistry } from "@/modules/agents";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useConfig } from "@/shared/config/config-provider";
-import {
-	type ToolApprovalActions,
-	ToolApprovalDialog,
-	type ToolApprovalRequest,
-} from "@/shared/providers/approval/ui/tool-approval-dialog";
-import { useDialog } from "@/shared/providers/dialog/dialog-provider";
+import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
+import type {
+	ToolApprovalActions,
+	ToolApprovalRequest,
+} from "@/shared/providers/approval/types";
 import type { PermissionService } from "./permission-service";
 import { usePermissionService } from "./permission-service-provider";
 import type { EffectiveAgentPolicy } from "./policy";
@@ -85,12 +84,12 @@ export const resolveToolPermissionPolicies = (
  * Composes the Tool Permission runtime for chat tool dispatch: the policy
  * evaluator seeded with defaults and refreshed from the top-level config
  * `permission` section once the ConfigStore snapshot resolves, the workspace
- * sandbox used to canonicalize read resources, and the dialog opener for
- * `ask` decisions.
+ * sandbox used to canonicalize read resources, and the inline approval panel
+ * registry for `ask` decisions.
  */
 export function useToolPermission(): ToolPermissionRuntime {
 	const config = useConfig();
-	const dialog = useDialog();
+	const { add } = useApprovalPanels();
 	const service = usePermissionService();
 	const { agent } = usePromptConfig();
 	const permissionRef = useRef<ToolPermission>(createToolPermission());
@@ -128,13 +127,9 @@ export function useToolPermission(): ToolPermissionRuntime {
 
 	const openApproval = useCallback(
 		(request: ToolApprovalRequest, actions: ToolApprovalActions) => {
-			dialog.open({
-				children: <ToolApprovalDialog actions={actions} request={request} />,
-				title: "Tool approval",
-				width: 100,
-			});
+			add(request, actions);
 		},
-		[dialog]
+		[add]
 	);
 
 	return {

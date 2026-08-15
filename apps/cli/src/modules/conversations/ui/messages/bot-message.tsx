@@ -6,6 +6,7 @@ import {
 	normalizeChatModelSelection,
 } from "@wincode/ai";
 import { connectionProviderDisplayNames } from "@/modules/connections";
+import { ToolApprovalPanel } from "@/shared/providers/approval/ui/tool-approval-panel";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
 
@@ -341,10 +342,30 @@ function ToolMessagePart({ part }: { part: ToolPart }) {
 		part.type === "dynamic-tool" &&
 		part.toolName === "skill" &&
 		(part.state === "output-available" || part.state === "output-error");
-	if (isSkillCall) {
-		return <SkillActivityRow part={part} />;
-	}
 
+	const toolLine = isSkillCall ? (
+		<SkillActivityRow part={part} />
+	) : (
+		<ToolCallLine colors={colors} part={part} />
+	);
+
+	return (
+		<>
+			{toolLine}
+			{typeof part.toolCallId === "string" ? (
+				<ToolApprovalPanel id={part.toolCallId} />
+			) : null}
+		</>
+	);
+}
+
+function ToolCallLine({
+	colors,
+	part,
+}: {
+	colors: ReturnType<typeof useTheme>["colors"];
+	part: ToolPart;
+}) {
 	const errorText = redactSensitiveDisplayText(
 		sanitizeDisplayText(formatUnknown(part.errorText))
 	);

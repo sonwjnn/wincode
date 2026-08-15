@@ -19,6 +19,7 @@ import { parseCliOptions } from "@/shared/cli-options";
 import { CopyOnSelect } from "@/shared/clipboard/copy-on-select";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
+import { ApprovalPanelsProvider } from "@/shared/providers/approval/approval-panels-provider";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
@@ -82,31 +83,32 @@ export function RootLayout() {
 					<PermissionServiceProvider service={permissionService}>
 						<AgentRegistryProvider>
 							<KeyboardLayerProvider>
-								<PromptConfigProvider>
-									<ModelPricingProvider>
-										<BillingComposition>
-											<DialogProvider>
-												<McpProvider
-													closeRegistryOnUnmount={false}
-													createRegistry={() => mcpRegistry}
-													workspace={workspace}
-												>
-													<CopyOnSelect />
-													{/*
-													 * The McpProvider renders the approval dialog through the
-													 * outer DialogProvider (it must sit below a DialogProvider),
-													 * while app dialogs mount through this inner DialogProvider so
-													 * dialog content can consume useMcp (status dialog, approvals
-													 * opened by the command executor).
-													 */}
-													<DialogProvider>
-														<Outlet key={currentPath} />
-													</DialogProvider>
-												</McpProvider>
-											</DialogProvider>
-										</BillingComposition>
-									</ModelPricingProvider>
-								</PromptConfigProvider>
+								<ApprovalPanelsProvider>
+									<PromptConfigProvider>
+										<ModelPricingProvider>
+											<BillingComposition>
+												<DialogProvider>
+													<McpProvider
+														closeRegistryOnUnmount={false}
+														createRegistry={() => mcpRegistry}
+														workspace={workspace}
+													>
+														<CopyOnSelect />
+														{/*
+														 * Approval panels render inline through the shared registry,
+														 * while app dialogs mount through this inner DialogProvider so
+														 * dialog content can consume useMcp (status dialog, approvals
+														 * opened by the command executor).
+														 */}
+														<DialogProvider>
+															<Outlet key={currentPath} />
+														</DialogProvider>
+													</McpProvider>
+												</DialogProvider>
+											</BillingComposition>
+										</ModelPricingProvider>
+									</PromptConfigProvider>
+								</ApprovalPanelsProvider>
 							</KeyboardLayerProvider>
 						</AgentRegistryProvider>
 					</PermissionServiceProvider>

@@ -73,7 +73,7 @@ import {
 	createApprovalQueue,
 } from "@/shared/providers/approval/approval-queue";
 import { formatRejectionFeedback } from "@/shared/providers/approval/format";
-import type { ToolApprovalRequest } from "@/shared/providers/approval/ui/tool-approval-dialog";
+import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import { getConversationStore } from "../storage/get-conversation-store";
 import { createSkillSnapshot } from "../utils";
 import { createRoutingChatTransport } from "./routing-chat-transport";
@@ -238,10 +238,10 @@ type ResolveToolApprovalDeps = {
  * The single approval path shared by static coding tools and dynamic MCP tools.
  * It applies temporary grants and auto approval to the raw policy `decision`
  * (`resolveApproval`), and for an `ask` enqueues the request on the conversation
- * approval queue, opens the shared dialog, awaits the outcome, records an
- * "always" grant against the exact `(action, resource)` key, and surfaces reject
- * feedback. Both tool families resolve through this one function so their
- * once/always/reject/auto behaviour can never drift apart.
+ * approval queue, opens the shared inline approval panel, awaits the outcome,
+ * records an "always" grant against the exact `(action, resource)` key, and
+ * surfaces reject feedback. Both tool families resolve through this one function
+ * so their once/always/reject/auto behaviour can never drift apart.
  */
 const resolveToolApproval = async ({
 	action,
@@ -431,6 +431,7 @@ const gateByDecision = async (
 		],
 		input: options.toolCall.input,
 		safety: permission.safety,
+		toolCallId: options.toolCall.toolCallId,
 	};
 	const result = await resolveToolApproval({
 		action,
@@ -523,6 +524,7 @@ const gateExternalPath = async (
 		],
 		input: options.toolCall.input,
 		safety: permission.safety,
+		toolCallId: options.toolCall.toolCallId,
 	};
 	const result = await resolveExternalDirectoryApproval({
 		action,
@@ -570,11 +572,12 @@ type McpApprovalGateDeps = {
  * Builds the shared-approval gate for one dynamic MCP tool call. It resolves
  * through the same {@link resolveToolApproval} helper as static coding tools —
  * one temporary-grant store, auto-approval flag, conversation approval queue,
- * and approval dialog — keyed by the tool's logical name and the single `*`
- * resource. The composed decision already baked the Agent+server policy and any
- * safety ceiling into `tool.policy`/`tool.safety`, so grants and auto approval
- * may satisfy an ordinary ask, a safety ask always prompts, and an explicit deny
- * is never bypassed. An "always" outcome grants the exact logical name.
+ * and inline approval panel — keyed by the tool's logical name and the single
+ * `*` resource. The composed decision already baked the Agent+server policy and
+ * any safety ceiling into `tool.policy`/`tool.safety`, so grants and auto
+ * approval may satisfy an ordinary ask, a safety ask always prompts, and an
+ * explicit deny is never bypassed. An "always" outcome grants the exact logical
+ * name.
  */
 export const createMcpApprovalGate =
 	({
@@ -582,7 +585,11 @@ export const createMcpApprovalGate =
 		openApproval,
 		service,
 	}: McpApprovalGateDeps): McpApprovalGate =>
-	(tool: McpSnapshotTool, input: unknown): Promise<McpApprovalDecision> => {
+	(
+		tool: McpSnapshotTool,
+		input: unknown,
+		toolCallId: string
+	): Promise<McpApprovalDecision> => {
 		const request: ToolApprovalRequest = {
 			description: tool.description,
 			identity: [
@@ -591,6 +598,7 @@ export const createMcpApprovalGate =
 			],
 			input,
 			safety: tool.safety,
+			toolCallId,
 		};
 		// The composed decision already folded the Agent+server policy and any
 		// safety ceiling into tool.policy/tool.safety, so the shared resolver
@@ -802,6 +810,7 @@ export const runSkillToolCall = async ({
 				],
 				input: { name },
 				safety: permission.safety,
+				toolCallId: toolCall.toolCallId,
 			},
 			resource: name,
 			safety: permission.safety,

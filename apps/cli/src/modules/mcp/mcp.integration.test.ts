@@ -24,7 +24,7 @@ import { createApprovalQueue } from "@/shared/providers/approval/approval-queue"
 import type {
 	ToolApprovalActions,
 	ToolApprovalRequest,
-} from "@/shared/providers/approval/ui/tool-approval-dialog";
+} from "@/shared/providers/approval/types";
 import type { McpConfigResult, ResolvedMcpServerConfig } from "./config";
 import {
 	type McpApprovalGate,

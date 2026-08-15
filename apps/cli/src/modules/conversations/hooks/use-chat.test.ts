@@ -29,7 +29,7 @@ import { createApprovalQueue } from "@/shared/providers/approval/approval-queue"
 import type {
 	ToolApprovalActions,
 	ToolApprovalRequest,
-} from "@/shared/providers/approval/ui/tool-approval-dialog";
+} from "@/shared/providers/approval/types";
 import { prepareSendChatRequestBody } from "../api/chat-request";
 import {
 	activateExplicitSkill,
@@ -1155,14 +1155,18 @@ describe("createMcpApprovalGate", () => {
 
 	test("allows an allow-policy tool without prompting", async () => {
 		const gate = createMcpApprovalGate(gateDeps(neverPrompt));
-		await expect(gate(makeTool({ policy: "allow" }), {})).resolves.toEqual({
+		await expect(
+			gate(makeTool({ policy: "allow" }), {}, "call-1")
+		).resolves.toEqual({
 			kind: "allow",
 		});
 	});
 
 	test("denies a deny-policy tool without prompting", async () => {
 		const gate = createMcpApprovalGate(gateDeps(neverPrompt));
-		await expect(gate(makeTool({ policy: "deny" }), {})).resolves.toEqual({
+		await expect(
+			gate(makeTool({ policy: "deny" }), {}, "call-1")
+		).resolves.toEqual({
 			kind: "deny",
 		});
 	});
@@ -1170,7 +1174,9 @@ describe("createMcpApprovalGate", () => {
 	test("auto approval satisfies an ordinary ask without prompting", async () => {
 		const service = createPermissionService({ autoApproval: true });
 		const gate = createMcpApprovalGate(gateDeps(neverPrompt, service));
-		await expect(gate(makeTool({ policy: "ask" }), {})).resolves.toEqual({
+		await expect(
+			gate(makeTool({ policy: "ask" }), {}, "call-1")
+		).resolves.toEqual({
 			kind: "allow",
 		});
 	});
@@ -1179,7 +1185,9 @@ describe("createMcpApprovalGate", () => {
 		const service = createPermissionService();
 		service.grant("demo_echo", "*");
 		const gate = createMcpApprovalGate(gateDeps(neverPrompt, service));
-		await expect(gate(makeTool({ policy: "ask" }), {})).resolves.toEqual({
+		await expect(
+			gate(makeTool({ policy: "ask" }), {}, "call-1")
+		).resolves.toEqual({
 			kind: "allow",
 		});
 	});
@@ -1196,7 +1204,7 @@ describe("createMcpApprovalGate", () => {
 		};
 		const gate = createMcpApprovalGate(gateDeps(openApproval, service));
 		await expect(
-			gate(makeTool({ policy: "ask", safety: true }), {})
+			gate(makeTool({ policy: "ask", safety: true }), {}, "call-1")
 		).resolves.toEqual({ kind: "allow" });
 		expect(prompted).toBe(true);
 	});
@@ -1216,7 +1224,9 @@ describe("createMcpApprovalGate", () => {
 			actions.allow(true);
 		};
 		const gate = createMcpApprovalGate(gateDeps(openApproval, service));
-		await expect(gate(makeTool({ policy: "ask" }), {})).resolves.toEqual({
+		await expect(
+			gate(makeTool({ policy: "ask" }), {}, "call-1")
+		).resolves.toEqual({
 			kind: "allow",
 		});
 		expect(service.isGranted("demo_echo", "*")).toBe(true);
@@ -1230,7 +1240,9 @@ describe("createMcpApprovalGate", () => {
 			actions.reject("use the read tool instead");
 		};
 		const gate = createMcpApprovalGate(gateDeps(openApproval));
-		await expect(gate(makeTool({ policy: "ask" }), {})).resolves.toEqual({
+		await expect(
+			gate(makeTool({ policy: "ask" }), {}, "call-1")
+		).resolves.toEqual({
 			feedback: "use the read tool instead",
 			kind: "reject",
 		});
@@ -1245,7 +1257,9 @@ describe("createMcpApprovalGate", () => {
 			actions.cancel();
 		};
 		const gate = createMcpApprovalGate(gateDeps(openApproval, service));
-		await expect(gate(makeTool({ policy: "ask" }), {})).resolves.toEqual({
+		await expect(
+			gate(makeTool({ policy: "ask" }), {}, "call-1")
+		).resolves.toEqual({
 			kind: "reject",
 		});
 		expect(service.isGranted("demo_echo", "*")).toBe(false);

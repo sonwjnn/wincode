@@ -3,6 +3,8 @@ import type { CodingAgentUIMessage } from "@wincode/ai";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useModelPricing } from "@/modules/model-pricing";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
+import { ToolApprovalPanel } from "@/shared/providers/approval/ui/tool-approval-panel";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
 import { Spinner } from "@/shared/ui/spinner";
@@ -58,6 +60,27 @@ export function ChatShell({
 		scrollboxRef.current?.scrollTo(Number.MAX_SAFE_INTEGER);
 	}, [scrollRequest]);
 
+	// Approvals without a pending tool call (explicit `/skill` activation before
+	// the first model call) anchor to the composer instead of the timeline.
+	const approvalEntries = useApprovalPanels().entries;
+	const conversationApprovals = approvalEntries.filter(
+		(entry) => entry.target === "conversation"
+	);
+	const pendingApprovalCount = approvalEntries.filter(
+		(entry) => entry.resolution === undefined
+	).length;
+
+	// A new pending approval appears mid-turn (a tool call asked for approval
+	// while the user scrolled up): bring it into view so the decision is never
+	// missed. The sticky-bottom scrollbox already pins when at the bottom.
+	const pendingApprovalCountRef = useRef(0);
+	useEffect(() => {
+		if (pendingApprovalCount > pendingApprovalCountRef.current) {
+			scrollboxRef.current?.scrollTo(Number.MAX_SAFE_INTEGER);
+		}
+		pendingApprovalCountRef.current = pendingApprovalCount;
+	}, [pendingApprovalCount]);
+
 	const handleSubmit = (submission: ChatPromptSubmission) => {
 		const accepted = onSubmit(submission);
 		if (accepted === false) {
@@ -105,6 +128,9 @@ export function ChatShell({
 				</box>
 			</scrollbox>
 			<box flexShrink={0}>
+				{conversationApprovals.map((entry) => (
+					<ToolApprovalPanel id={entry.id} key={entry.id} />
+				))}
 				<ChatTextArea
 					onSubmit={handleSubmit}
 					sessionPromptHistory={promptHistory}
