@@ -17,7 +17,7 @@ import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
-import { useChat } from "../../hooks/use-chat";
+import { hasPendingToolExecutionStep, useChat } from "../../hooks/use-chat";
 import { resolveConversationSelection } from "../../selection";
 import type { ChatPromptSubmission } from "../../utils";
 import { shouldAutoStartAssistantTurn } from "../../utils";
@@ -65,6 +65,13 @@ export function ChatView({
 	const { isTopLayer } = useKeyboardLayer();
 	const dialog = useDialog();
 	const { show } = useToast();
+	// Messages restored from storage carry no in-flight tool executions (the
+	// owning process died with them). Their ids keep a persisted
+	// interrupted-turn part from holding isBusy true forever after reload.
+	const loadedMessageIds = useMemo(
+		() => new Set(initialMessages.map((message) => message.id)),
+		[initialMessages]
+	);
 	const submittedPromptRef = useRef<string | null>(null);
 	const submittedInitialMessageRef = useRef<string | null>(null);
 	const interruptResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -87,7 +94,13 @@ export function ChatView({
 		submit,
 	} = useChat(sessionId, initialMessages, onHostedCompletion);
 	const isBusy =
-		isPreparingMessage || status === "submitted" || status === "streaming";
+		isPreparingMessage ||
+		status === "submitted" ||
+		status === "streaming" ||
+		// Between agentic steps the SDK drops to status "ready" while tool
+		// executions are still in flight; without this the turn looks stopped
+		// (spinner gone) and Esc interrupt cannot be armed. See use-chat.ts.
+		hasPendingToolExecutionStep(messages, loadedMessageIds);
 	const promptHistory = useMemo(
 		() => derivePromptHistory(initialMessages),
 		[initialMessages]
