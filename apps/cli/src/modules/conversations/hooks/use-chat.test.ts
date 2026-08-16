@@ -44,10 +44,10 @@ import type {
 	ToolApprovalRequest,
 } from "@/shared/providers/approval/types";
 import { prepareSendChatRequestBody } from "../api/chat-request";
+import { createChatToolCallHandler as createProductionChatToolCallHandler } from "./tool-dispatch";
 import {
 	activateExplicitSkill,
 	createChatMessageParts,
-	createChatToolCallHandler as createProductionChatToolCallHandler,
 	finalizeAssistantMessageMetadata,
 	findCurrentTurnAssistantIndex,
 	findCurrentTurnInterruptTargetIndex,

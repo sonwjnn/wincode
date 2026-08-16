@@ -10,7 +10,7 @@
  *
  * The S2/S3 tests drive the REAL `AbstractChat` from the installed `ai`
  * package with the app's `createAutoSendGate`, so they lock the bug pattern
- * at the exact seam `useChat` configures.
+ * at the exact seam `useChat` configures (see auto-send-gate.ts).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -22,7 +22,10 @@ import {
 	type ChatStatus,
 	lastAssistantMessageIsCompleteWithToolCalls,
 } from "ai";
-import { createAutoSendGate, hasPendingToolExecutionStep } from "./use-chat";
+import {
+	createAutoSendGate,
+	hasPendingToolExecutionStep,
+} from "./auto-send-gate";
 
 const TOOL_CALL_ID = "call-1";
 const POLL_INTERVAL_MS = 10;

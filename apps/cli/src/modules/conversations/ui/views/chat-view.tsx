@@ -16,8 +16,9 @@ import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import { hasPendingToolExecutionStep } from "../../hooks/auto-send-gate";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
-import { hasPendingToolExecutionStep, useChat } from "../../hooks/use-chat";
+import { useChat } from "../../hooks/use-chat";
 import { resolveConversationSelection } from "../../selection";
 import type { ChatPromptSubmission } from "../../utils";
 import { shouldAutoStartAssistantTurn } from "../../utils";
