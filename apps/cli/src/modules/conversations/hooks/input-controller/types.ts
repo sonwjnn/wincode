@@ -2,7 +2,10 @@ import type { FileUIPart } from "@wincode/ai/client";
 import type { CommandSpec } from "@/modules/commands/commands";
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import type { FileMentionOption } from "@/modules/file-mentions";
+import type { Skill } from "@/modules/skills";
+import type { ChatPromptSubmission } from "../../utils";
 import type { PromptHistoryEntry } from "./history";
+import type { SubmitSnapshot } from "./submit";
 
 export type CommandItem = CommandSpec | CustomCommandSpec;
 
@@ -33,7 +36,6 @@ export type ChatInputControllerActions = {
 		pastedText: Array<{ text: string; token: string }>
 	) => boolean;
 	onEnter: () => void;
-	onAcceptedSubmit: (entry: PromptHistoryEntry) => void;
 	onEscape: () => void;
 	onItemExecute: (index: number) => void;
 	onItemScroll: (direction: "up" | "down") => void;
@@ -46,6 +48,7 @@ export type ChatInputControllerActions = {
 		fileTokens: Array<{ start: number; token: string }>
 	) => void;
 	onProgrammaticTextChange: (text: string, cursorOffset: number) => void;
+	submit: (snapshot: SubmitSnapshot) => Promise<boolean>;
 };
 
 export type ChatInputController = {
@@ -57,10 +60,13 @@ export type ChatInputControllerOptions = {
 	disabled: boolean;
 	executeCommand: (command: CommandSpec) => void | Promise<void>;
 	getCustomCommands: () => Promise<CustomCommandSpec[]>;
-	hideVariants?: boolean;
-	onSubmit: (value: string) => void;
-	onTab: () => void;
 	getFileMentionOptions: () => Promise<FileMentionOption[]>;
-	getPromptHistory: () => PromptHistoryEntry[];
-	recordPrompt: (entry: PromptHistoryEntry) => void;
+	getSkills: () => Promise<Skill[]>;
+	hideVariants?: boolean;
+	onError: (message: string) => void;
+	onSubmit: (
+		submission: ChatPromptSubmission
+	) => boolean | Promise<boolean> | void | Promise<void>;
+	onTab: () => void;
+	sessionPromptHistory: PromptHistoryEntry[];
 };

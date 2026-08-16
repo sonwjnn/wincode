@@ -7,17 +7,20 @@ import {
 	applyFileMentionReplacement,
 	filterFileMentionOptions,
 } from "@/modules/file-mentions";
+import { getConversationStore } from "../../storage/get-conversation-store";
 import { removeTriggerText } from "./escape-trigger";
 import {
 	decideDownAction,
 	decideUpAction,
 	navigateHistory as getHistoryNavigation,
+	mergePromptHistory,
 	type PromptHistoryEntry,
 	prependPrompt,
 	resetHistoryNavigation,
 	shouldRecordCtrlC,
 } from "./history";
 import { scrollCommandViewport } from "./scroll-command";
+import { type SubmitSnapshot, submitPrompt } from "./submit";
 import { type ActiveTrigger, detectTrigger } from "./triggers";
 import type {
 	ChatInputController,
@@ -39,11 +42,12 @@ export function useChatInputController({
 	executeCommand,
 	getCustomCommands: getCustomCommandsFromOptions,
 	getFileMentionOptions: getFileMentionOptionsFromOptions,
+	getSkills: getSkillsFromOptions,
 	hideVariants,
+	onError,
 	onSubmit,
 	onTab,
-	getPromptHistory,
-	recordPrompt,
+	sessionPromptHistory,
 }: ChatInputControllerOptions): ChatInputController {
 	const [textValue, setTextValue] = useState("");
 	const [selectedIndex, setSelectedIndex] = useState(0);
@@ -67,16 +71,16 @@ export function useChatInputController({
 		historyIndexRef.current = baseline.index;
 		draftRef.current = baseline.draft;
 	}, []);
-	const rememberPrompt = useCallback(
-		(entry: PromptHistoryEntry) => {
-			recordPrompt(entry);
-			historyRef.current = prependPrompt(historyRef.current, entry);
-		},
-		[recordPrompt]
-	);
+	const rememberPrompt = useCallback((entry: PromptHistoryEntry) => {
+		getConversationStore().recordPrompt(entry);
+		historyRef.current = prependPrompt(historyRef.current, entry);
+	}, []);
 	useEffect(() => {
-		historyRef.current = getPromptHistory();
-	}, [getPromptHistory]);
+		historyRef.current = mergePromptHistory(
+			sessionPromptHistory,
+			getConversationStore().getPromptHistory()
+		);
+	}, [sessionPromptHistory]);
 	const selectedIndexRef = useRef(0);
 	selectedIndexRef.current = selectedIndex;
 	const onSubmitRef = useRef(onSubmit);
@@ -306,30 +310,13 @@ export function useChatInputController({
 
 		if (overlayKind === "file-mention") {
 			executeFileMentionAtIndex(selectedIndex);
-			return;
 		}
-
-		const text = textValue.trim();
-		if (text.length === 0) {
-			return;
-		}
-
-		onSubmitRef.current(text);
-		rememberPrompt({ text, files: [] });
-		resetHistoryBaseline("");
-		setProgrammaticText("", null);
-		closeOverlay();
 	}, [
-		closeOverlay,
 		disabled,
 		executeCommandAtIndex,
 		executeFileMentionAtIndex,
 		overlayKind,
 		selectedIndex,
-		setProgrammaticText,
-		textValue,
-		rememberPrompt,
-		resetHistoryBaseline,
 	]);
 
 	const onEscape = useCallback(() => {
@@ -340,17 +327,49 @@ export function useChatInputController({
 		closeOverlay();
 	}, [activeTrigger, closeOverlay, setProgrammaticText, textValue]);
 
-	const onAcceptedSubmit = useCallback(
-		(entry: PromptHistoryEntry) => {
-			const prompt = entry.text.trim();
+	const submit = useCallback(
+		async (snapshot: SubmitSnapshot): Promise<boolean> => {
+			const accepted = await submitPrompt(
+				{
+					disabled,
+					discoverCustomCommands: getCustomCommandsFromOptions,
+					discoverSkills: getSkillsFromOptions,
+					onError,
+					onSubmit: onSubmitRef.current,
+				},
+				snapshot
+			);
+			if (!accepted) {
+				return false;
+			}
+
+			const prompt = snapshot.rawText.trim();
 			if (prompt.length > 0) {
-				rememberPrompt({ ...entry, text: prompt });
+				rememberPrompt({
+					fileTokens: snapshot.fileTokens,
+					files: snapshot.files,
+					pastedText: snapshot.pastedTexts.map(({ text, token }) => ({
+						text,
+						token,
+					})),
+					text: prompt,
+				});
 			}
 			resetHistoryBaseline("");
 			setProgrammaticText("", null);
 			closeOverlay();
+			return true;
 		},
-		[closeOverlay, rememberPrompt, resetHistoryBaseline, setProgrammaticText]
+		[
+			closeOverlay,
+			disabled,
+			getCustomCommandsFromOptions,
+			getSkillsFromOptions,
+			onError,
+			rememberPrompt,
+			resetHistoryBaseline,
+			setProgrammaticText,
+		]
 	);
 
 	const onCtrlC = useCallback(
@@ -550,7 +569,6 @@ export function useChatInputController({
 		actions: {
 			onArrowDown,
 			onArrowUp,
-			onAcceptedSubmit,
 			onCtrlC,
 			onEnter,
 			onEscape,
@@ -560,6 +578,7 @@ export function useChatInputController({
 			onTab: handleTab,
 			onTextChange,
 			onProgrammaticTextChange,
+			submit,
 		},
 		state: {
 			cursorOffset,

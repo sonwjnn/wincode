@@ -1,5 +1,4 @@
 export type PastedText = { token: string; text: string };
-export type TrackedPastedText = PastedText & { end: number; start: number };
 
 export const normalizePastedText = (text: string): string =>
 	text.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
@@ -42,16 +41,3 @@ export const expandPastedText = (
 			text
 		);
 };
-
-/** Expand extmark-backed markers without replacing literal lookalikes. */
-export const expandTrackedPastedText = (
-	text: string,
-	markers: readonly TrackedPastedText[]
-): string =>
-	markers
-		.toSorted((left, right) => right.start - left.start)
-		.reduce(
-			(result, marker) =>
-				result.slice(0, marker.start) + marker.text + result.slice(marker.end),
-			text
-		);

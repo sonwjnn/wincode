@@ -12,17 +12,13 @@ import {
 	builtInAgents,
 	findSupportedChatModelSelection,
 	getSupportedModelVariants,
-	type SkillContext,
 } from "@wincode/ai";
 import { spawn } from "bun";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useCommandExecutor } from "@/app/commands/use-app-command-executor";
 import { useAgentRegistry } from "@/modules/agents";
 import { CommandMenu } from "@/modules/commands/ui/command-menu";
-import { expandCustomCommandTemplate } from "@/modules/custom-commands/expand";
-import { parseCustomCommandInvocation } from "@/modules/custom-commands/invocation";
 import { getCustomCommands } from "@/modules/custom-commands/loader";
-import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import {
 	deleteFileMentionAfterTrailingCharacterDelete,
 	FileMentionMenu,
@@ -31,11 +27,7 @@ import {
 } from "@/modules/file-mentions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { StatusBar } from "@/modules/prompt-settings/ui/prompt-status-bar";
-import {
-	discoverSkills,
-	parseSkillInvocation,
-	type Skill,
-} from "@/modules/skills";
+import { discoverSkills } from "@/modules/skills";
 import { useConfig } from "@/shared/config/config-provider";
 import { EmptyBorder } from "@/shared/constants";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
@@ -55,76 +47,15 @@ import {
 	normalizeFileTokensForTrimmedText,
 } from "../../attachments";
 import { readClipboardImage, readImagePath } from "../../clipboard-image";
-import {
-	mergePromptHistory,
-	type PromptHistoryEntry,
-} from "../../hooks/input-controller/history";
+import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
+import type { TrackedPastedText } from "../../hooks/input-controller/submit";
 import { useChatInputController } from "../../hooks/input-controller/use-chat-input-controller";
-import { getConversationStore } from "../../storage/get-conversation-store";
 import type { ChatPromptSubmission } from "../../utils";
-import { expandTrackedPastedText, summarizePastedText } from "./pasted-text";
+import { summarizePastedText } from "./pasted-text";
 
 const MAX_IMAGE_ATTACHMENTS = 5;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const EMPTY_PROMPT_HISTORY: PromptHistoryEntry[] = [];
-
-type SkillPrompt = {
-	skill?: SkillContext;
-	text: string;
-};
-
-type DiscoverSkills = () => Promise<Skill[]>;
-
-const getErrorMessage = (error: unknown): string =>
-	error instanceof Error ? error.message : String(error);
-
-export const resolveSkillPrompt = async (
-	text: string,
-	discover: DiscoverSkills,
-	visibleText = text
-): Promise<SkillPrompt> => {
-	const invocation = parseSkillInvocation(text);
-	if (!invocation) {
-		return { text };
-	}
-
-	const skills = await discover();
-	const skill = skills.find(({ name }) => name === invocation.name);
-	if (!skill) {
-		return { text };
-	}
-
-	return {
-		skill: {
-			arguments: invocation.arguments,
-			instructions: skill.body,
-			name: skill.name,
-		},
-		text: visibleText,
-	};
-};
-
-type DiscoverCustomCommands = () => Promise<CustomCommandSpec[]>;
-
-export const resolveCustomCommandPrompt = async (
-	text: string,
-	discover: DiscoverCustomCommands
-): Promise<SkillPrompt> => {
-	const invocation = parseCustomCommandInvocation(text);
-	if (!invocation) {
-		return { text };
-	}
-
-	const commands = await discover();
-	const command = commands.find(({ name }) => name === invocation.name);
-	if (!command) {
-		return { text };
-	}
-
-	return {
-		text: expandCustomCommandTemplate(command.template, invocation.arguments),
-	};
-};
 
 const getAttachmentFileTokens = (
 	textarea: TextareaRenderable,
@@ -138,7 +69,7 @@ const getAttachmentFileTokens = (
 const getTrackedPastedTexts = (
 	textarea: TextareaRenderable,
 	pastedTexts: Array<{ extmarkId: number; text: string; token: string }>
-) =>
+): TrackedPastedText[] =>
 	pastedTexts.flatMap(({ extmarkId, text, token }) => {
 		const extmark = textarea.extmarks.get(extmarkId);
 		return extmark &&
@@ -248,15 +179,6 @@ export function ChatTextArea({
 		insertSkillCommandRef.current(command);
 	}, []);
 	const { executeCommand } = useCommandExecutor(handleSelectedSkillCommand);
-	const conversationStore = useMemo(() => getConversationStore(), []);
-	const getPromptHistory = useCallback(
-		() =>
-			mergePromptHistory(
-				sessionPromptHistory,
-				conversationStore.getPromptHistory()
-			),
-		[conversationStore, sessionPromptHistory]
-	);
 	const mentionSyntaxStyle = useMemo(
 		() =>
 			SyntaxStyle.fromStyles({
@@ -300,16 +222,23 @@ export function ChatTextArea({
 		return pastedTextRef.current;
 	}, []);
 
+	const handleSubmitError = useCallback(
+		(message: string) => {
+			show({ message, variant: "error" });
+		},
+		[show]
+	);
 	const { actions, state } = useChatInputController({
 		disabled,
 		executeCommand,
 		getCustomCommands: discoverCustomCommands,
 		getFileMentionOptions,
+		getSkills: discoverAvailableSkills,
 		hideVariants,
-		onSubmit: () => undefined,
+		onError: handleSubmitError,
+		onSubmit,
 		onTab: () => cycleAgent(registry?.selectableAgents ?? builtInAgents),
-		getPromptHistory,
-		recordPrompt: conversationStore.recordPrompt,
+		sessionPromptHistory,
 	});
 
 	const handleTextareaContentChange = useCallback(() => {
@@ -726,43 +655,19 @@ export function ChatTextArea({
 		const pastedTexts = textarea
 			? getTrackedPastedTexts(textarea, syncPastedTexts())
 			: [];
-		const text = expandTrackedPastedText(rawText.trim(), pastedTexts);
-		const visibleText = rawText.trim();
 		const attachments = syncAttachments();
-		const files = attachments.map((attachment) => attachment.file);
-		const fileTokens = textarea
-			? normalizeFileTokensForTrimmedText(
-					rawText,
-					getAttachmentFileTokens(textarea, attachments)
-				)
-			: [];
-		if (!text && files.length === 0) {
-			return;
-		}
-
-		let skillPrompt: SkillPrompt;
-		try {
-			skillPrompt = await resolveSkillPrompt(
-				text,
-				discoverAvailableSkills,
-				visibleText
-			);
-			if (!skillPrompt.skill) {
-				skillPrompt = await resolveCustomCommandPrompt(
-					skillPrompt.text,
-					discoverCustomCommands
-				);
-			}
-		} catch (error) {
-			show({
-				message: getErrorMessage(error),
-				variant: "error",
-			});
-			return;
-		}
-
-		const accepted = await onSubmit({ files, ...skillPrompt });
-		if (accepted === false) {
+		const accepted = await actions.submit({
+			fileTokens: textarea
+				? normalizeFileTokensForTrimmedText(
+						rawText,
+						getAttachmentFileTokens(textarea, attachments)
+					)
+				: [],
+			files: attachments.map((attachment) => attachment.file),
+			pastedTexts,
+			rawText,
+		});
+		if (!accepted) {
 			return;
 		}
 
@@ -775,15 +680,6 @@ export function ChatTextArea({
 		attachmentsRef.current = [];
 		textAreaRef.current?.setText("");
 		pastedTextRef.current = [];
-		actions.onAcceptedSubmit({
-			fileTokens,
-			files,
-			text: visibleText,
-			pastedText: pastedTexts.map(({ text: value, token }) => ({
-				text: value,
-				token,
-			})),
-		});
 	};
 	commandEscapeRef.current = actions.onEscape;
 	currentTextRef.current = state.text;
