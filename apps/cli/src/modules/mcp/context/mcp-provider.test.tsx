@@ -346,6 +346,46 @@ test("runDynamicToolCall sanitizes MCP-declared errors to a stable message", asy
 	expect(outputs[0]?.errorText).not.toContain("hidden-token");
 });
 
+test("runDynamicToolCall surfaces registry-owned guard errors verbatim", async () => {
+	const { addToolOutput, outputs } = makeAddToolOutput();
+	await runDynamicToolCall({
+		addToolOutput,
+		gate: fixedGate({ kind: "allow" }),
+		latestSnapshot: makeSnapshot(),
+		registry: makeRegistry(async () => ({
+			content: [{ text: "MCP server 'demo' is not enabled", type: "text" }],
+			isError: true,
+			owner: "registry",
+			truncated: false,
+		})),
+		snapshot: makeSnapshot(),
+		toolCall: makeToolCall(),
+	});
+
+	expect(outputs[0]?.state).toBe("output-error");
+	expect(outputs[0]?.errorText).toBe("MCP server 'demo' is not enabled");
+});
+
+test("runDynamicToolCall surfaces sanitized execution failures verbatim", async () => {
+	const { addToolOutput, outputs } = makeAddToolOutput();
+	await runDynamicToolCall({
+		addToolOutput,
+		gate: fixedGate({ kind: "allow" }),
+		latestSnapshot: makeSnapshot(),
+		registry: makeRegistry(async () => ({
+			content: [{ text: "MCP tool 'mcp_demo_echo' timed out", type: "text" }],
+			isError: true,
+			owner: "registry",
+			truncated: false,
+		})),
+		snapshot: makeSnapshot(),
+		toolCall: makeToolCall(),
+	});
+
+	expect(outputs[0]?.state).toBe("output-error");
+	expect(outputs[0]?.errorText).toBe("MCP tool 'mcp_demo_echo' timed out");
+});
+
 test("runDynamicToolCall converts a rejected approval gate to a stable error", async () => {
 	const { addToolOutput, outputs } = makeAddToolOutput();
 	await runDynamicToolCall({

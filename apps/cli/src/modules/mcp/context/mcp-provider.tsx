@@ -21,7 +21,7 @@ import {
 	type McpServerStatus,
 	type McpSnapshotTool,
 } from "../registry";
-import type { McpNormalizedResult } from "../result";
+import type { JsonValue, McpNormalizedResult } from "../result";
 
 /**
  * The generic gate that decides one ask-gated MCP tool call. Given the resolved
@@ -62,6 +62,18 @@ export const MCP_NO_ACTIVE_CATALOG_ERROR =
 	"MCP tool call has no active catalog";
 
 const MCP_TOOL_CALL_FAILED_ERROR = "MCP tool call failed";
+
+// Registry-owned guard errors are single sanitized text parts (stale snapshot,
+// unknown tool, policy denial, disabled server, execution failure); MCP server
+// content is untrusted and must never surface through the error path.
+const isRegistryOwnedTextPart = (
+	value: JsonValue | undefined
+): value is { text: string; type: "text" } =>
+	typeof value === "object" &&
+	value !== null &&
+	!Array.isArray(value) &&
+	value.type === "text" &&
+	typeof value.text === "string";
 
 const outputErrorText = (
 	addToolOutput: McpAddToolOutput,
@@ -105,6 +117,10 @@ export function runDynamicToolCall(
 		deps;
 
 	return (async () => {
+		// The pre-gate staleness check is deliberate: a catalog refresh must never
+		// gate — and therefore never prompt for — a snapshot that is no longer
+		// current. The registry repeats the check at execute time as a TOCTOU
+		// guard; the two guards protect different moments.
 		if (
 			snapshot === null ||
 			latestSnapshot === null ||
@@ -167,11 +183,12 @@ export function runDynamicToolCall(
 		}
 
 		if (result.isError) {
-			await outputErrorText(
-				addToolOutput,
-				toolCall,
-				MCP_TOOL_CALL_FAILED_ERROR
-			);
+			const firstPart = result.content[0];
+			const errorText =
+				result.owner === "registry" && isRegistryOwnedTextPart(firstPart)
+					? firstPart.text
+					: MCP_TOOL_CALL_FAILED_ERROR;
+			await outputErrorText(addToolOutput, toolCall, errorText);
 			return;
 		}
 

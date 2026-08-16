@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { createWorkspaceSandbox } from "@wincode/ai/workspace";
+import { mcpDeniedByPolicyText } from "@/modules/mcp/registry";
 import {
 	canonicalizeExternalPath,
 	createPermissionService,
@@ -95,6 +96,27 @@ test("MCP policy and safety are composed inside the gate", async () => {
 		})
 	).resolves.toEqual({ kind: "allow" });
 	expect(approvalCount).toBe(1);
+});
+
+test("MCP denial wording is the shared registry constant", async () => {
+	const gate = createGate(createToolPermission());
+
+	await expect(
+		gate.gate({
+			action: "demo_echo",
+			agentDecision: "deny",
+			description: "Echo",
+			family: "mcp",
+			input: {},
+			safety: false,
+			serverDecision: "deny",
+			toolCallId: "call-mcp",
+			toolName: "mcp_demo_echo",
+		})
+	).resolves.toEqual({
+		errorText: mcpDeniedByPolicyText("mcp_demo_echo"),
+		kind: "deny",
+	});
 });
 
 test("an external-directory grant does not satisfy an operation ask", async () => {

@@ -8,6 +8,14 @@ export type JsonValue =
 export type McpNormalizedResult = {
 	content: JsonValue[];
 	isError: boolean;
+	/**
+	 * Marks a result authored by the registry itself (stale snapshot, unknown
+	 * tool, policy denial, disabled server, sanitized execution failure) so
+	 * callers may surface that text verbatim. Results produced by an MCP server
+	 * are untrusted tool content and carry no owner; callers must not surface
+	 * their text through an error path.
+	 */
+	owner?: "registry";
 	structuredContent?: JsonValue;
 	truncated: boolean;
 };

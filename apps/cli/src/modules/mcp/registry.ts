@@ -47,6 +47,14 @@ export type McpAgentPolicy = EffectiveAgentPolicy;
 export const MCP_PERMISSION_RESOURCE = "*";
 
 /**
+ * The single denial wording for MCP tools, owned here so the gate and the
+ * registry guard can never drift. The registry emits it for a denied dispatch
+ * entry and the Tool Gate emits it for a composed policy deny.
+ */
+export const mcpDeniedByPolicyText = (toolName: string): string =>
+	`MCP tool '${toolName}' is denied by policy`;
+
+/**
  * Composes an Agent's MCP policy for one logical tool name with the server's
  * independent execution policy, most-restrictively, then applies the Agent's
  * manual-only safety ceiling: under the ceiling every non-deny decision becomes
@@ -154,6 +162,7 @@ type ServerEntry = {
 const outputError = (message: string): McpNormalizedResult => ({
 	content: [{ type: "text", text: message }],
 	isError: true,
+	owner: "registry",
 	truncated: false,
 });
 
@@ -548,6 +557,11 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		input: unknown,
 		signal?: AbortSignal
 	): Promise<McpNormalizedResult> => {
+		// TOCTOU guard, not duplicate validation: between the provider's pre-gate
+		// staleness check and this execute, an approval may have been pending while
+		// the catalog refreshed (reconnect, toggle, policy change). The gate may
+		// pass a snapshot that was current when asked, but execution must still
+		// refuse it now.
 		if (snapshot.id !== latestSnapshotId) {
 			return outputError("MCP tool snapshot is stale or not executable");
 		}
@@ -556,7 +570,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			return outputError(`Unknown MCP tool '${toolName}'`);
 		}
 		if (tool.policy === "deny") {
-			return outputError(`MCP tool '${toolName}' is denied by policy`);
+			return outputError(mcpDeniedByPolicyText(toolName));
 		}
 		const entry = serverEntries.get(tool.serverName);
 		if (

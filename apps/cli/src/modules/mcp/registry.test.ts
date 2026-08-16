@@ -19,6 +19,7 @@ import {
 	type McpAgentPolicy,
 	type McpRegistry,
 	type McpRegistryDeps,
+	mcpDeniedByPolicyText,
 } from "./registry";
 
 class FakeMcpClient implements McpClient {
@@ -442,6 +443,25 @@ describe("createMcpRegistry", () => {
 		);
 		expect(result.isError).toBe(true);
 		expect(JSON.stringify(result.content)).toContain("Unknown");
+	});
+
+	test("returns a registry-owned policy denial for a denied dispatch entry", async () => {
+		const demo = new FakeMcpClient("demo", [tool("echo")]);
+		const { registry } = harness({
+			clients: { demo },
+			configs: [serverConfig("demo", { permission: "allow" })],
+		});
+		const snapshot = await registry.createSnapshot("plan", {
+			rules: openRules({ "*": "deny" }),
+			safety: false,
+		});
+		const name = [...snapshot.tools.keys()][0] ?? "";
+		const result = await registry.execute(snapshot, name, {});
+		expect(result).toMatchObject({
+			content: [{ text: mcpDeniedByPolicyText(name), type: "text" }],
+			isError: true,
+			owner: "registry",
+		});
 	});
 
 	test("rejects snapshots that are no longer current", async () => {

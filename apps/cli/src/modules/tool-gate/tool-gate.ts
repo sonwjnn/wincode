@@ -4,7 +4,10 @@ import {
 	codingToolNames,
 } from "@wincode/ai";
 import type { WorkspacePolicy } from "@wincode/ai/workspace";
-import { MCP_PERMISSION_RESOURCE } from "@/modules/mcp/registry";
+import {
+	MCP_PERMISSION_RESOURCE,
+	mcpDeniedByPolicyText,
+} from "@/modules/mcp/registry";
 import {
 	canonicalizeExternalPath,
 	canonicalizeResource,
@@ -166,9 +169,6 @@ const staticRejectionText = (
 	feedback === undefined
 		? `${label} was not approved: ${resource}`
 		: `${label} was not approved: ${resource} — ${feedback}`;
-
-const mcpDenialText = (toolName: string): string =>
-	`MCP tool '${toolName}' is denied by policy`;
 
 const mcpRejectionText = (toolName: string, feedback?: string): string =>
 	feedback === undefined
@@ -597,8 +597,10 @@ export const createToolGate = ({
 			approvalDeps,
 			() => service.grant(call.action, MCP_PERMISSION_RESOURCE)
 		);
-		return withErrorText(settled, mcpDenialText(call.toolName), (feedback) =>
-			mcpRejectionText(call.toolName, feedback)
+		return withErrorText(
+			settled,
+			mcpDeniedByPolicyText(call.toolName),
+			(feedback) => mcpRejectionText(call.toolName, feedback)
 		);
 	};
 
