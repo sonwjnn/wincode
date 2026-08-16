@@ -1,79 +1,21 @@
-const MAX_INPUT_CHARS = 2048;
-const MAX_INPUT_DEPTH = 4;
-const MAX_INPUT_ENTRIES = 24;
-const MAX_INPUT_STRING_CHARS = 512;
+import {
+	sanitizeArgumentTree,
+	truncateWithOverflow,
+} from "@/shared/display-sanitize";
+
 export const MAX_DESCRIPTION_CHARS = 2048;
 export const MAX_IDENTITY_CHARS = 512;
 export const MAX_FEEDBACK_CHARS = 2048;
-const FORMATTED_INPUT_OVERFLOW = "…";
-const REDACTED_INPUT = "[redacted]";
-const SENSITIVE_INPUT_KEY_REGEX =
-	/(?:apikey|auth|authorization|bearer|cookie|credential|password|privatekey|secret|session|token)/i;
-const SENSITIVE_INPUT_VALUE_REGEX =
-	/\b(?:(?:api[ _-]?key|auth(?:orization)?|cookie|credential|password|private[ _-]?key|secret|session|token)\s*[:=]\s*(?:bearer\s+)?[^\s,;}\]]+|bearer\s+[^\s,;}\]]+)/gi;
+const MAX_INPUT_CHARS = 2048;
 
-const stripInputControlCharacters = (value: string): string =>
-	Array.from(value, (character) => {
-		const code = character.charCodeAt(0);
-		return code <= 31 || (code >= 127 && code <= 159) ? " " : character;
-	}).join("");
-
-const truncateWithOverflow = (text: string, maxChars: number): string => {
-	if (text.length <= maxChars) {
-		return text;
-	}
-	return `${text.slice(0, maxChars)}${FORMATTED_INPUT_OVERFLOW}`;
-};
-
-const sanitizeInputString = (value: string): string =>
-	truncateWithOverflow(
-		stripInputControlCharacters(value).replace(
-			SENSITIVE_INPUT_VALUE_REGEX,
-			REDACTED_INPUT
-		),
-		MAX_INPUT_STRING_CHARS
-	);
-
-const isSensitiveInputKey = (key: string): boolean =>
-	SENSITIVE_INPUT_KEY_REGEX.test(
-		stripInputControlCharacters(key).replace(/[^a-z0-9]/gi, "")
-	);
-
-const sanitizeApprovalInput = (
-	input: unknown,
-	depth: number,
-	seen: WeakSet<object>
-): unknown => {
-	if (typeof input === "string") {
-		return sanitizeInputString(input);
-	}
-	if (typeof input !== "object" || input === null) {
-		return input;
-	}
-	if (seen.has(input)) {
-		return "[circular]";
-	}
-	if (depth >= MAX_INPUT_DEPTH) {
-		return FORMATTED_INPUT_OVERFLOW;
-	}
-	seen.add(input);
-	if (Array.isArray(input)) {
-		return input
-			.slice(0, MAX_INPUT_ENTRIES)
-			.map((entry) => sanitizeApprovalInput(entry, depth + 1, seen));
-	}
-	const result: Record<string, unknown> = {};
-	for (const [key, value] of Object.entries(input).slice(
-		0,
-		MAX_INPUT_ENTRIES
-	)) {
-		const sanitizedKey = sanitizeInputString(key);
-		result[sanitizedKey] = isSensitiveInputKey(key)
-			? REDACTED_INPUT
-			: sanitizeApprovalInput(value, depth + 1, seen);
-	}
-	return result;
-};
+// The approval dialog shows more of the input than the compact chat rows:
+// deeper traversal, more entries, and a plain ellipsis for the depth bound.
+const APPROVAL_ARGUMENT_OPTIONS = {
+	depthOverflow: "…",
+	maxDepth: 4,
+	maxEntries: 24,
+	redactValuesInKeys: true,
+} as const;
 
 /**
  * Formats the tool-call input for display, bounded so a hostile or enormous
@@ -82,8 +24,11 @@ const sanitizeApprovalInput = (
  */
 export function formatApprovalInput(input: unknown): string {
 	const text =
-		JSON.stringify(sanitizeApprovalInput(input, 0, new WeakSet()), null, 2) ??
-		"";
+		JSON.stringify(
+			sanitizeArgumentTree(input, APPROVAL_ARGUMENT_OPTIONS),
+			null,
+			2
+		) ?? "";
 	return truncateWithOverflow(text, MAX_INPUT_CHARS);
 }
 

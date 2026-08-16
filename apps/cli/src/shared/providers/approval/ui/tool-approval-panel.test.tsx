@@ -56,7 +56,7 @@ function Register({
 	const { add } = useApprovalPanels();
 	useEffect(() => {
 		add(request, actions);
-	}, [add]);
+	}, [add, actions, request]);
 	return null;
 }
 

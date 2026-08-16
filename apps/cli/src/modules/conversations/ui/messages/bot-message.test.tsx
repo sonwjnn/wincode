@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { testRender } from "@opentui/react/test-utils";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import { useEffect } from "react";
+import { formatResponseTime } from "@/shared/display-sanitize";
 import {
 	type ApprovalPanelsContextValue,
 	ApprovalPanelsProvider,
@@ -11,7 +12,7 @@ import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 
-const { BotMessageContent, formatResponseTime } = await import("./bot-message");
+const { BotMessageContent } = await import("./bot-message");
 type MessagePart = CodingAgentUIMessage["parts"][number];
 type DynamicToolPart = Extract<MessagePart, { type: "dynamic-tool" }>;
 type GrepToolPart = Extract<MessagePart, { type: "tool-grep" }>;

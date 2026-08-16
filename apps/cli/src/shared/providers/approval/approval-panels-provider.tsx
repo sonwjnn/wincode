@@ -52,6 +52,35 @@ const ApprovalPanelsContext = createContext<ApprovalPanelsContextValue | null>(
 );
 
 /**
+ * Settles matching pending entries: conversation entries are removed on
+ * resolution because they have no message part to anchor to, while tool-call
+ * entries collapse to an audit line. Pure, so it lives outside the component.
+ */
+const withResolution = (
+	prev: ApprovalPanelEntry[],
+	id: string | undefined,
+	outcome: ApprovalOutcome,
+	feedback: string | undefined,
+	settleAll: boolean
+): ApprovalPanelEntry[] => {
+	const matches = (entry: ApprovalPanelEntry) => settleAll || entry.id === id;
+	return prev
+		.filter(
+			(entry) =>
+				!(
+					matches(entry) &&
+					entry.target === "conversation" &&
+					entry.resolution === undefined
+				)
+		)
+		.map((entry) =>
+			matches(entry) && entry.resolution === undefined
+				? { ...entry, resolution: { feedback, outcome } }
+				: entry
+		);
+};
+
+/**
  * Session-scoped registry of pending and recently settled approvals. The chat
  * UI renders one inline panel per entry — anchored to the assistant message
  * whose tool call is pending, or above the composer for conversation-level
@@ -83,30 +112,6 @@ export function ApprovalPanelsProvider({ children }: { children: ReactNode }) {
 		},
 		[]
 	);
-
-	const withResolution = (
-		prev: ApprovalPanelEntry[],
-		id: string | undefined,
-		outcome: ApprovalOutcome,
-		feedback: string | undefined,
-		settleAll: boolean
-	): ApprovalPanelEntry[] => {
-		const matches = (entry: ApprovalPanelEntry) => settleAll || entry.id === id;
-		return prev
-			.filter(
-				(entry) =>
-					!(
-						matches(entry) &&
-						entry.target === "conversation" &&
-						entry.resolution === undefined
-					)
-			)
-			.map((entry) =>
-				matches(entry) && entry.resolution === undefined
-					? { ...entry, resolution: { feedback, outcome } }
-					: entry
-			);
-	};
 
 	const resolve = useCallback(
 		(id: string, outcome: ApprovalOutcome, feedback?: string) => {

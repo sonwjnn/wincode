@@ -1,5 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { redactSensitiveText } from "@/shared/display-sanitize";
 import { useDialogEscape } from "@/shared/providers/dialog/dialog-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -25,15 +26,9 @@ export type StatusRowFormat = {
 // Registry errors are already sanitized against each server's config, but the
 // dialog must never render config, env, headers, or urls even if a future code
 // path leaks them into a status error. Scrub URL-like and credential-like
-// tokens as defense in depth.
-const URL_LIKE_PATTERN = /https?:\/\/[^\s,;]+/gi;
-const CREDENTIAL_LIKE_PATTERN =
-	/(api[_-]?key|authorization|bearer|token)\s*[=:]\s*[^\s,;"']+/gi;
-
+// tokens as defense in depth, preserving the key name for readable output.
 export function sanitizeStatusError(error: string): string {
-	return error
-		.replace(URL_LIKE_PATTERN, "[redacted]")
-		.replace(CREDENTIAL_LIKE_PATTERN, "$1=[redacted]");
+	return redactSensitiveText(error, { keepKey: true, redactUrls: true });
 }
 
 export function formatStatusRow(status: McpServerStatus): StatusRowFormat {
