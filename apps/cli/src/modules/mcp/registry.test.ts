@@ -194,24 +194,25 @@ const harness = (options: HarnessOptions = {}): Harness => {
 };
 
 describe("createMcpRegistry", () => {
-	test("a rejected Agent Registry resolution leaves Plan with no visible MCP tools", async () => {
-		let fallbackPermission = createToolPermission({ edit: "deny" });
+	test("a null Agent Registry leaves Plan with no visible MCP tools", async () => {
+		const fallbackPermission = createToolPermission({ edit: "deny" });
 		const resolution = resolveToolPermissionPolicies(
-			Promise.reject(new Error("Agent Registry unavailable")),
+			null,
 			"plan",
 			() => fallbackPermission
 		);
-		fallbackPermission = createToolPermission();
-		const resolved = await resolution;
 		const demo = new FakeMcpClient("demo", [tool("echo")]);
 		const { registry } = harness({
 			clients: { demo },
 			configs: [serverConfig("demo", { permission: "allow" })],
 		});
 
-		const snapshot = await registry.createSnapshot("plan", resolved.mcpPolicy);
+		const snapshot = await registry.createSnapshot(
+			"plan",
+			resolution.mcpPolicy
+		);
 
-		expect(resolved.permission).toBe(fallbackPermission);
+		expect(resolution.permission).toBe(fallbackPermission);
 		expect(snapshot.manifest).toEqual([]);
 		expect(snapshot.tools.size).toBe(1);
 		for (const entry of snapshot.tools.values()) {

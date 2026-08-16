@@ -3,17 +3,15 @@ import type {
 	ConfigOrigin,
 	ConfigSnapshot,
 } from "@/shared/config/config-store";
+import { resolveEffectiveAgentSelection } from "./agent-call";
 import {
 	agentLabelFromId,
 	buildAgentRegistry,
-	configuredAgentVisibleCodingTools,
 	formatAgentDiagnostic,
 	MAX_CONFIGURED_AGENT_DESCRIPTION_LENGTH,
 	MAX_CONFIGURED_AGENT_INSTRUCTIONS_LENGTH,
 	MAX_CONFIGURED_AGENTS,
 	resolveActiveAgentId,
-	resolveEffectiveAgentSelection,
-	resolveExecutableAgentRuntime,
 	summarizeAgentDiagnostics,
 } from "./registry";
 
@@ -619,70 +617,6 @@ describe("Agent diagnostics", () => {
 		expect(summarizeAgentDiagnostics([diagnostic])).toBe(
 			"Agent config: 1 error, 0 warnings. Open /agents for details."
 		);
-	});
-});
-
-describe("resolveExecutableAgentRuntime", () => {
-	test("resolves primary and all agents to the selected runtime", () => {
-		const registry = buildAgentRegistry(
-			makeSnapshot({
-				agents: {
-					"code-reviewer": {
-						description: "Reviews diffs",
-						instructions: "Review diffs.",
-						role: "primary",
-					},
-					"docs-writer": {
-						description: "Writes docs",
-						role: "all",
-					},
-				},
-			})
-		);
-
-		expect(resolveExecutableAgentRuntime(registry, "code-reviewer")).toEqual({
-			instructions: "Review diffs.",
-			visibleCodingTools: [...configuredAgentVisibleCodingTools],
-		});
-		expect(
-			resolveExecutableAgentRuntime(registry, "docs-writer")?.instructions
-		).toBe("");
-	});
-
-	test("never resolves subagent or unknown ids", () => {
-		const registry = buildAgentRegistry(
-			makeSnapshot({
-				agents: {
-					"issue-researcher": {
-						description: "Researches issues",
-						instructions: "Summarize issues.",
-						role: "subagent",
-					},
-				},
-			})
-		);
-
-		expect(resolveExecutableAgentRuntime(registry, "issue-researcher")).toBe(
-			undefined
-		);
-		expect(resolveExecutableAgentRuntime(registry, "does-not-exist")).toBe(
-			undefined
-		);
-	});
-
-	test("resolves built-in agents from the registry", () => {
-		const registry = buildAgentRegistry(makeSnapshot({}));
-
-		expect(
-			resolveExecutableAgentRuntime(registry, "build")?.visibleCodingTools
-		).toEqual(["read", "write", "edit", "list", "grep", "shell"]);
-		expect(
-			resolveExecutableAgentRuntime(registry, "plan")?.visibleCodingTools
-		).toEqual(["read", "list", "grep"]);
-	});
-
-	test("returns undefined when the registry is unavailable", () => {
-		expect(resolveExecutableAgentRuntime(null, "build")).toBe(undefined);
 	});
 });
 

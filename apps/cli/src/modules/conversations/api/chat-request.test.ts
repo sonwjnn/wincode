@@ -1,24 +1,39 @@
 import { describe, expect, test } from "bun:test";
+import type { PreparedAgentCall } from "@/modules/agents";
 import { prepareSendChatRequestBody } from "./chat-request";
 
 describe("prepareSendChatRequestBody", () => {
 	const model = { modelId: "gpt-5.4-mini", providerId: "wincode" } as const;
-	const buildFallback = {
+	const buildPrepared = {
 		agent: "build",
 		model,
+		variant: undefined,
 		resolvedAgent: {
 			instructions: "Build safely.",
 			visibleCodingTools: ["read", "write", "edit", "list", "grep"],
 		},
-	} as const;
-	const planFallback = {
+		hostedDescriptor: {
+			billingKind: "build",
+			instructions: "Build safely.",
+			mcpTools: [],
+			visibleCodingTools: ["read", "write", "edit", "list", "grep"],
+		},
+	} as const satisfies PreparedAgentCall;
+	const planPrepared = {
 		agent: "plan",
 		model,
+		variant: undefined,
 		resolvedAgent: {
 			instructions: "Plan without editing.",
 			visibleCodingTools: ["read", "list", "grep"],
 		},
-	} as const;
+		hostedDescriptor: {
+			billingKind: "plan",
+			instructions: "Plan without editing.",
+			mcpTools: [],
+			visibleCodingTools: ["read", "list", "grep"],
+		},
+	} as const satisfies PreparedAgentCall;
 
 	test("rejects malformed model metadata", () => {
 		expect(() =>
@@ -35,7 +50,7 @@ describe("prepareSendChatRequestBody", () => {
 						},
 					},
 				],
-				{ ...buildFallback, model: undefined as never }
+				{ ...buildPrepared, model: undefined as never }
 			)
 		).toThrow("No resolved Agent or model to send");
 	});
@@ -57,12 +72,12 @@ describe("prepareSendChatRequestBody", () => {
 						},
 					},
 				],
-				{ ...buildFallback, model: undefined as never }
+				{ ...buildPrepared, model: undefined as never }
 			)
 		).toThrow("No resolved Agent or model to send");
 	});
 
-	test("includes the Agent MCP manifest", () => {
+	test("includes the Agent MCP manifest from the prepared descriptor", () => {
 		const body = prepareSendChatRequestBody(
 			"session-1",
 			[
@@ -73,14 +88,19 @@ describe("prepareSendChatRequestBody", () => {
 					metadata: { agent: "build", model },
 				},
 			],
-			buildFallback,
-			[
-				{
-					description: "Echo tool",
-					inputSchema: { type: "object" },
-					name: "mcp_demo_echo",
+			{
+				...buildPrepared,
+				hostedDescriptor: {
+					...buildPrepared.hostedDescriptor,
+					mcpTools: [
+						{
+							description: "Echo tool",
+							inputSchema: { type: "object" },
+							name: "mcp_demo_echo",
+						},
+					],
 				},
-			]
+			}
 		);
 
 		expect(body.agent.mcpTools).toEqual([
@@ -103,8 +123,7 @@ describe("prepareSendChatRequestBody", () => {
 					metadata: { agent: "plan", model },
 				},
 			],
-			planFallback,
-			[]
+			planPrepared
 		);
 
 		expect(body.agent.mcpTools).toEqual([]);
@@ -122,9 +141,15 @@ describe("prepareSendChatRequestBody", () => {
 				},
 			],
 			{
-				...buildFallback,
+				...buildPrepared,
 				agent: "private-reviewer",
 				resolvedAgent: {
+					instructions: "Review carefully.",
+					visibleCodingTools: ["read", "grep"],
+				},
+				hostedDescriptor: {
+					...buildPrepared.hostedDescriptor,
+					billingKind: "custom",
 					instructions: "Review carefully.",
 					visibleCodingTools: ["read", "grep"],
 				},
@@ -141,40 +166,22 @@ describe("prepareSendChatRequestBody", () => {
 		expect(body).not.toHaveProperty("mode");
 	});
 
-	test("strips the CLI-only shell tool from hosted descriptors", () => {
-		const body = prepareSendChatRequestBody(
-			"session-1",
-			[
-				{
-					id: "1",
-					role: "user",
-					parts: [],
-					metadata: { agent: "build", model },
-				},
-			],
-			{
-				...buildFallback,
-				resolvedAgent: {
-					instructions: "Build safely.",
-					visibleCodingTools: [
-						"read",
-						"write",
-						"edit",
-						"list",
-						"grep",
-						"shell",
-					],
-				},
-			}
-		);
-
-		expect(body.agent.visibleCodingTools).toEqual([
-			"read",
-			"write",
-			"edit",
-			"list",
-			"grep",
-		]);
-		expect(JSON.stringify(body)).not.toContain("shell");
+	test("throws without a hosted descriptor", () => {
+		const { hostedDescriptor: _hostedDescriptor, ...directPrepared } =
+			buildPrepared;
+		expect(() =>
+			prepareSendChatRequestBody(
+				"session-1",
+				[
+					{
+						id: "1",
+						role: "user",
+						parts: [],
+						metadata: { agent: "build", model },
+					},
+				],
+				directPrepared
+			)
+		).toThrow("No hosted descriptor for this Agent call");
 	});
 });

@@ -6,11 +6,10 @@ import { baseCodingAgentInstructions } from "@wincode/ai";
 import { prepareCodingAgentCall } from "@wincode/ai/server";
 import { createConfigStore } from "@/shared/config/config-store";
 import { writeFixture } from "@/shared/config/filesystem-test-utils";
+import { prepareAgentCall, resolveEffectiveAgentSelection } from "./agent-call";
 import {
 	configuredAgentVisibleCodingTools,
 	resolveAgentRegistry,
-	resolveEffectiveAgentSelection,
-	resolveExecutableAgentRuntime,
 } from "./registry";
 
 describe("configured Agents", () => {
@@ -143,20 +142,27 @@ describe("configured Agents", () => {
 				role: "subagent",
 			});
 
-			const runtime = resolveExecutableAgentRuntime(registry, "code-reviewer");
-			expect(runtime).toEqual({
+			const prepared = prepareAgentCall(registry, {
+				agent: "code-reviewer",
+				model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
+				variant: undefined,
+			});
+			expect(prepared.resolvedAgent).toEqual({
 				instructions: "Review diffs and flag regressions.",
 				visibleCodingTools: [...configuredAgentVisibleCodingTools],
 			});
 
-			const prepared = prepareCodingAgentCall({
+			const call = prepareCodingAgentCall({
 				instructions: "ignored legacy prompt",
-				options: { model: "gemini-2.5-flash", resolvedAgent: runtime },
+				options: {
+					model: "gemini-2.5-flash",
+					resolvedAgent: prepared.resolvedAgent,
+				},
 			});
-			expect(prepared.instructions).toBe(
+			expect(call.instructions).toBe(
 				`${baseCodingAgentInstructions}\n\nReview diffs and flag regressions.`
 			);
-			expect(prepared.activeTools).toEqual([
+			expect(call.activeTools).toEqual([
 				"read",
 				"write",
 				"edit",
@@ -165,9 +171,22 @@ describe("configured Agents", () => {
 				"shell",
 			]);
 
-			expect(resolveExecutableAgentRuntime(registry, "issue-researcher")).toBe(
-				undefined
-			);
+			// Subagent definitions never produce an executable runtime; the
+			// effective selection falls back to Build instead.
+			const subagentCall = prepareAgentCall(registry, {
+				agent: "issue-researcher",
+				model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
+				variant: undefined,
+			});
+			expect(subagentCall.agent).toBe("build");
+			expect(subagentCall.resolvedAgent.visibleCodingTools).toEqual([
+				"read",
+				"write",
+				"edit",
+				"list",
+				"grep",
+				"shell",
+			]);
 		} finally {
 			await rm(root, { force: true, recursive: true });
 		}

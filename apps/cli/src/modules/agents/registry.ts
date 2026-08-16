@@ -13,7 +13,6 @@ import {
 	type ModelVariant,
 	modelVariantSchema,
 	parseCatalogModelSelection,
-	type ResolvedAgentRuntime,
 } from "@wincode/ai";
 import { z } from "zod";
 import {
@@ -719,13 +718,6 @@ export const resolveAgentRegistry = async (
 		options
 	);
 
-export type EffectiveAgentSelection = {
-	readonly agent: AgentId;
-	readonly model: ChatModelSelection;
-	readonly resolvedAgent?: ResolvedAgentRuntime;
-	readonly variant?: ModelVariant;
-};
-
 /** Resolve a restored selection first, or the configured default for new chats. */
 export const resolveActiveAgentId = (
 	registry: AgentRegistry,
@@ -739,55 +731,4 @@ export const resolveActiveAgentId = (
 	)
 		? restoredAgentId
 		: "build";
-};
-
-export const resolveEffectiveAgentSelection = (
-	registry: AgentRegistry | null,
-	agentId: AgentId,
-	fallbackModel: ChatModelSelection,
-	fallbackVariant: ModelVariant | undefined
-): EffectiveAgentSelection => {
-	const selected = registry?.selectableAgents.find(
-		(agent) => agent.id === agentId && agent.isAvailable
-	);
-	const fallbackAgent = registry?.selectableAgents.find(
-		(agent) => agent.id === "build" && agent.isAvailable
-	);
-	const effectiveAgent = selected ?? fallbackAgent;
-	const effectiveAgentId = effectiveAgent?.id ?? (registry ? "build" : agentId);
-	return {
-		agent: effectiveAgentId,
-		model: effectiveAgent?.model ?? fallbackModel,
-		...(effectiveAgent
-			? {
-					resolvedAgent: {
-						instructions: effectiveAgent.instructions,
-						visibleCodingTools: [...effectiveAgent.visibleCodingTools],
-					},
-				}
-			: {}),
-		variant: effectiveAgent?.model ? effectiveAgent.variant : fallbackVariant,
-	};
-};
-
-/**
- * Resolves the runtime descriptor used by local execution for a selected
- * Agent. Only selectable (`primary` and `all`) Agents resolve; `subagent`
- * definitions and unknown IDs never produce an executable runtime.
- */
-export const resolveExecutableAgentRuntime = (
-	registry: AgentRegistry | null,
-	agentId: AgentId
-): ResolvedAgentRuntime | undefined => {
-	if (!registry) {
-		return;
-	}
-	const agent = registry.selectableAgents.find(({ id }) => id === agentId);
-	if (!agent) {
-		return;
-	}
-	return {
-		instructions: agent.instructions,
-		visibleCodingTools: [...agent.visibleCodingTools],
-	};
 };

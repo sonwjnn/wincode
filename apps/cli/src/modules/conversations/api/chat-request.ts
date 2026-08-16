@@ -1,15 +1,11 @@
 import type {
-	AgentBillingKind,
-	AgentId,
 	CodingAgentUIMessage,
 	HostedAgentDescriptor,
-	McpToolManifest,
 	ModelVariant,
-	ResolvedAgentRuntime,
 	SkillRequestContext,
 	SkillToolDefinition,
 } from "@wincode/ai";
-import type { SelectionFallback } from "../selection";
+import type { PreparedAgentCall } from "@/modules/agents";
 import { resolveOutgoingSelection } from "../selection";
 
 type SendChatRequestBody = {
@@ -23,17 +19,6 @@ type SendChatRequestBody = {
 	sendReasoning: true;
 };
 
-type ChatMetadataFallback = SelectionFallback & {
-	resolvedAgent: ResolvedAgentRuntime;
-};
-
-const getBillingKind = (agent: AgentId): AgentBillingKind => {
-	if (agent === "build" || agent === "plan") {
-		return agent;
-	}
-	return "custom";
-};
-
 const removePrivateAgentMetadata = (
 	messages: CodingAgentUIMessage[]
 ): CodingAgentUIMessage[] =>
@@ -45,16 +30,21 @@ const removePrivateAgentMetadata = (
 		return { ...message, metadata };
 	});
 
+/**
+ * Packs the hosted request body over a prepared Agent call. The uniform
+ * hosted descriptor (ADR-0003) is projected by the Agent call-preparation
+ * seam; this function only merges the outgoing message selection and strips
+ * private metadata from the wire.
+ */
 export const prepareSendChatRequestBody = (
 	_sessionId: string,
 	messages: CodingAgentUIMessage[],
-	fallback?: ChatMetadataFallback,
-	mcpTools?: McpToolManifest,
+	prepared: PreparedAgentCall,
 	skillTool?: SkillToolDefinition
 ): SendChatRequestBody => {
-	const selection = resolveOutgoingSelection(messages, fallback);
+	const selection = resolveOutgoingSelection(messages, prepared);
 
-	if (!(selection.agent && selection.model && fallback?.resolvedAgent)) {
+	if (!(selection.agent && selection.model)) {
 		throw new Error("No resolved Agent or model to send");
 	}
 
@@ -62,20 +52,12 @@ export const prepareSendChatRequestBody = (
 		throw new Error(`Connect ${selection.model.providerId} with /connect`);
 	}
 
-	// The hosted runtime never executes shell (ADR-0005), so the CLI-only tool
-	// is stripped from the descriptor; the server rejects it defensively too.
-	const hostedVisibleCodingTools =
-		fallback.resolvedAgent.visibleCodingTools.filter(
-			(tool) => tool !== "shell"
-		);
+	if (prepared.hostedDescriptor === undefined) {
+		throw new Error("No hosted descriptor for this Agent call");
+	}
 
 	return {
-		agent: {
-			billingKind: getBillingKind(selection.agent),
-			instructions: fallback.resolvedAgent.instructions,
-			mcpTools: mcpTools ?? [],
-			visibleCodingTools: hostedVisibleCodingTools,
-		},
+		agent: prepared.hostedDescriptor,
 		messages: removePrivateAgentMetadata(messages),
 		model: selection.model.modelId,
 		persist: false,

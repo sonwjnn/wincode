@@ -3,11 +3,12 @@ import type {
 	ChatModelSelection,
 	CodingAgentUIMessage,
 	ModelVariant,
-	ResolvedAgentRuntime,
 	SkillToolDefinition,
 } from "@wincode/ai";
 import { getChatModelRoute, normalizeChatModelSelection } from "@wincode/ai";
 import { type ChatTransport, DefaultChatTransport } from "ai";
+import type { AgentRegistry } from "@/modules/agents";
+import { prepareAgentCall } from "@/modules/agents";
 import type { Connections } from "@/modules/connections";
 import type { McpContextValue } from "@/modules/mcp";
 import { getHonoClient } from "@/shared/api/hono-client";
@@ -27,9 +28,9 @@ const getBearerToken = (
 export const createRoutingChatTransport = (
 	sessionId: string,
 	agentRef: MutableRefObject<AgentId>,
-	resolvedAgentRef: MutableRefObject<ResolvedAgentRuntime | undefined>,
 	modelRef: MutableRefObject<ChatModelSelection>,
 	variantRef: MutableRefObject<ModelVariant | undefined>,
+	registry: AgentRegistry | null,
 	connections: Connections,
 	mcp: McpContextValue,
 	skillToolRef?: MutableRefObject<SkillToolDefinition | undefined>
@@ -49,11 +50,21 @@ export const createRoutingChatTransport = (
 		if (!selection?.agent) {
 			throw new Error("No resolved Agent or model to send");
 		}
-		const agent = selection.agent;
+		// Both transports cross the same preparation seam, so the direct and
+		// hosted runtimes are derived from the exact selection that runs.
+		const prepared = prepareAgentCall(
+			registry,
+			{
+				agent: selection.agent,
+				model: selection.model,
+				variant: selection.variant,
+			},
+			snapshot.manifest
+		);
 		if (getChatModelRoute(selection.model) !== "hosted") {
 			return createLocalChatTransport(
 				sessionId,
-				resolvedAgentRef,
+				{ current: prepared.resolvedAgent },
 				{ current: selection.model },
 				{ current: selection.variant },
 				connections,
@@ -72,10 +83,6 @@ export const createRoutingChatTransport = (
 			});
 		}
 
-		const resolvedAgent = resolvedAgentRef.current;
-		if (!resolvedAgent) {
-			throw new Error("No resolved Agent to send");
-		}
 		const authorization = await connections.authorize("wincode", abortSignal);
 		const transport = new DefaultChatTransport<CodingAgentUIMessage>({
 			api: getHonoClient()
@@ -86,13 +93,7 @@ export const createRoutingChatTransport = (
 				body: prepareSendChatRequestBody(
 					sessionId,
 					requestMessages,
-					{
-						agent,
-						model: selection.model,
-						resolvedAgent,
-						variant: selection.variant,
-					},
-					snapshot.manifest,
+					prepared,
 					skillToolRef?.current
 				),
 			}),

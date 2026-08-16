@@ -27,6 +27,7 @@ import {
 	lastAssistantMessageIsCompleteWithToolCalls,
 } from "ai";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useAgentRegistry } from "@/modules/agents";
 import { useConnections } from "@/modules/connections";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import {
@@ -586,6 +587,7 @@ export function useChat(
 	const connections = useConnections();
 	const mcp = useMcp();
 	const config = useConfig();
+	const registry = useAgentRegistry();
 	const {
 		closeApprovals,
 		openApproval,
@@ -673,14 +675,14 @@ export function useChat(
 		return createRoutingChatTransport(
 			sessionId,
 			agentRef,
-			resolvedAgentRef,
 			modelRef,
 			variantRef,
+			registry,
 			connections,
 			mcpWithSnapshotRef,
 			skillToolRef
 		);
-	}, [connections, mcp, sessionId]);
+	}, [connections, mcp, registry, sessionId]);
 
 	const finalizeAssistantMessages = (messages: CodingAgentUIMessage[]) => {
 		const startedAt = requestStartedAtRef.current;

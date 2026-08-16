@@ -6,7 +6,9 @@ import type { ChatModelSelection, ResolvedAgentRuntime } from "@wincode/ai";
 // files that import names the partial mock omits.
 // biome-ignore lint/performance/noNamespaceImport: mock spread needs the full namespace
 import * as realServer from "@wincode/ai/server";
+import { buildAgentRegistry } from "@/modules/agents";
 import type { McpCatalogSnapshot, McpContextValue } from "@/modules/mcp";
+import type { ConfigSnapshot } from "@/shared/config/config-store";
 
 const resolveOpenAIChatModelMock = mock(
 	async (
@@ -42,12 +44,6 @@ const { createLocalChatTransport } = await import("./local-chat-transport");
 const agentRef = { current: "build" as const };
 const resolvedAgentRef = {
 	current: undefined as ResolvedAgentRuntime | undefined,
-};
-const hostedResolvedAgentRef = {
-	current: {
-		instructions: "Build safely.",
-		visibleCodingTools: ["read", "write", "edit", "list", "grep"],
-	} satisfies ResolvedAgentRuntime,
 };
 const modelRef = {
 	current: { modelId: "gpt-5.4-mini", providerId: "wincode" } as const,
@@ -96,6 +92,15 @@ const makeMcp = (
 	...overrides,
 });
 
+// The default registry: only the shipped built-ins, all models available.
+const makeRegistry = () =>
+	buildAgentRegistry({
+		diagnostics: [],
+		document: {} as ConfigSnapshot["document"],
+		sourceFor: () => undefined,
+		sources: [],
+	});
+
 describe("chat transport", () => {
 	test("routing transport uses wincode authorization dto", async () => {
 		mock.module("@/shared/api/hono-client", () => ({
@@ -131,9 +136,9 @@ describe("chat transport", () => {
 			const transport = createRoutingChatTransport(
 				"session-1",
 				agentRef,
-				hostedResolvedAgentRef,
 				modelRef,
 				variantRef,
+				makeRegistry(),
 				{
 					authorize: async () => ({ kind: "api-key", apiKey: "key" }),
 				} as never,
@@ -196,9 +201,9 @@ describe("chat transport", () => {
 			const transport = createRoutingChatTransport(
 				"session-1",
 				agentRef,
-				hostedResolvedAgentRef,
 				modelRef,
 				variantRef,
+				makeRegistry(),
 				{
 					authorize: async (providerId: string, received?: AbortSignal) => {
 						expect(providerId).toBe("wincode");
@@ -266,9 +271,9 @@ describe("chat transport", () => {
 			const transport = createRoutingChatTransport(
 				"session-1",
 				agentRef,
-				hostedResolvedAgentRef,
 				modelRef,
 				variantRef,
+				makeRegistry(),
 				{
 					authorize: async () => ({ kind: "api-key", apiKey: "key" }),
 				} as never,
@@ -361,9 +366,9 @@ describe("chat transport", () => {
 			const transport = createRoutingChatTransport(
 				"session-1",
 				agentRef,
-				hostedResolvedAgentRef,
 				modelRef,
 				{ current: undefined },
+				makeRegistry(),
 				{
 					authorize: async () => ({ kind: "api-key", apiKey: "key" }),
 				} as never,
@@ -441,9 +446,9 @@ describe("chat transport", () => {
 			const transport = createRoutingChatTransport(
 				"session-1",
 				agentRef,
-				hostedResolvedAgentRef,
 				modelRef,
 				variantRef,
+				makeRegistry(),
 				{
 					authorize: async () => ({ kind: "api-key", apiKey: "key" }),
 				} as never,
@@ -527,9 +532,9 @@ describe("chat transport", () => {
 		const transport = createRoutingChatTransport(
 			"session-1",
 			agentRef,
-			resolvedAgentRef,
 			{ current: { modelId: "gemini-2.5-flash", providerId: "google" } },
 			{ current: undefined },
+			makeRegistry(),
 			{
 				authorize: async () => ({ kind: "api-key", apiKey: "google-key" }),
 			} as never,

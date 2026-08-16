@@ -1,3 +1,12 @@
+export type {
+	AgentCallSelection,
+	EffectiveAgentSelection,
+	PreparedAgentCall,
+} from "./agent-call";
+export {
+	prepareAgentCall,
+	resolveEffectiveAgentSelection,
+} from "./agent-call";
 export {
 	AgentRegistryProvider,
 	useAgentRegistry,
@@ -19,7 +28,5 @@ export {
 	MAX_CONFIGURED_AGENTS,
 	resolveActiveAgentId,
 	resolveAgentRegistry,
-	resolveEffectiveAgentSelection,
-	resolveExecutableAgentRuntime,
 	summarizeAgentDiagnostics,
 } from "./registry";

@@ -11,6 +11,7 @@ import {
 import type { handleCodingAgentToolCall } from "@wincode/ai/client";
 import { createWorkspaceSandbox } from "@wincode/ai/workspace";
 import type { ChatAddToolOutputFunction } from "ai";
+import type { PreparedAgentCall } from "@/modules/agents";
 import type {
 	McpAddToolOutput,
 	McpCatalogSnapshot,
@@ -95,14 +96,21 @@ const selection = {
 } as const;
 
 const legacyModel = "gemini-3.5-flash";
-const planFallback = {
+const planPrepared: PreparedAgentCall = {
 	agent: "plan",
 	model: selection,
+	variant: undefined,
 	resolvedAgent: {
 		instructions: "Plan without editing.",
 		visibleCodingTools: ["read", "list", "grep"],
 	},
-} as const;
+	hostedDescriptor: {
+		billingKind: "plan",
+		instructions: "Plan without editing.",
+		mcpTools: [],
+		visibleCodingTools: ["read", "list", "grep"],
+	},
+};
 
 const userMessage = {
 	id: "user-1",
@@ -136,7 +144,7 @@ describe("prepareSendChatRequestBody", () => {
 
 	test("normalizes legacy model metadata", () => {
 		expect(
-			prepareSendChatRequestBody("session-1", [userMessage], planFallback)
+			prepareSendChatRequestBody("session-1", [userMessage], planPrepared)
 		).toEqual({
 			agent: {
 				billingKind: "plan",
@@ -156,7 +164,7 @@ describe("prepareSendChatRequestBody", () => {
 			prepareSendChatRequestBody(
 				"session-1",
 				[userMessage, assistantMessage],
-				planFallback
+				planPrepared
 			)
 		).toEqual({
 			agent: {
@@ -184,10 +192,16 @@ describe("prepareSendChatRequestBody", () => {
 
 		expect(
 			prepareSendChatRequestBody("session-1", [nextMessage], {
+				...planPrepared,
 				agent: "build",
-				model: selection,
 				resolvedAgent: {
 					instructions: "Build safely.",
+					visibleCodingTools: ["read", "write", "edit", "list", "grep"],
+				},
+				hostedDescriptor: {
+					billingKind: "build",
+					instructions: "Build safely.",
+					mcpTools: [],
 					visibleCodingTools: ["read", "write", "edit", "list", "grep"],
 				},
 			})
@@ -206,9 +220,9 @@ describe("prepareSendChatRequestBody", () => {
 	});
 
 	test("throws when no message can be sent", () => {
-		expect(() => prepareSendChatRequestBody("session-1", [])).toThrow(
-			"No message to send"
-		);
+		expect(() =>
+			prepareSendChatRequestBody("session-1", [], planPrepared)
+		).toThrow("No message to send");
 	});
 });
 
