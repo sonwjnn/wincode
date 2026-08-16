@@ -25,6 +25,7 @@ import {
 type MutableRefObject<T> = { current: T };
 
 export type ToolPermissionRuntime = {
+	closeApprovals: () => void;
 	openApproval: (
 		request: ToolApprovalRequest,
 		actions: ToolApprovalActions
@@ -89,7 +90,7 @@ export const resolveToolPermissionPolicies = (
  */
 export function useToolPermission(): ToolPermissionRuntime {
 	const config = useConfig();
-	const { add } = useApprovalPanels();
+	const { add, resolveAll } = useApprovalPanels();
 	const service = usePermissionService();
 	const { agent } = usePromptConfig();
 	const permissionRef = useRef<ToolPermission>(createToolPermission());
@@ -131,8 +132,12 @@ export function useToolPermission(): ToolPermissionRuntime {
 		},
 		[add]
 	);
+	const closeApprovals = useCallback(() => {
+		resolveAll("rejected");
+	}, [resolveAll]);
 
 	return {
+		closeApprovals,
 		openApproval,
 		permissionRef,
 		resolveMcpPolicy,

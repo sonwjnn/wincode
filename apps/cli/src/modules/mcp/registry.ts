@@ -84,14 +84,8 @@ export type McpServerStatus = {
 	transport: "local" | "remote";
 };
 
-export type McpApprovalRequest = {
-	description: string;
-	input: unknown;
-	originalToolName: string;
-	serverName: string;
-};
-
 export type McpSnapshotTool = {
+	agentDecision: McpExecutionPolicy;
 	client: McpClient;
 	description: string;
 	/**
@@ -108,6 +102,7 @@ export type McpSnapshotTool = {
 	 * `ask` here must never be satisfied by a remembered grant or auto approval.
 	 */
 	safety: boolean;
+	serverDecision: McpExecutionPolicy;
 	serverName: string;
 };
 
@@ -129,7 +124,6 @@ export type McpRegistry = {
 		snapshot: McpCatalogSnapshot,
 		toolName: string,
 		input: unknown,
-		approve: (request: McpApprovalRequest) => Promise<boolean>,
 		signal?: AbortSignal
 	): Promise<McpNormalizedResult>;
 	getStatuses(): readonly McpServerStatus[];
@@ -465,13 +459,20 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				logicalName
 			);
 			const description = candidate.tool.description ?? "";
+			const agentDecision = decideOpenActionPermission(
+				agentPolicy.rules,
+				logicalName,
+				MCP_PERMISSION_RESOURCE
+			);
 			tools.set(name, {
+				agentDecision,
 				client: candidate.client,
 				description,
 				logicalName,
 				originalToolName: candidate.tool.name,
 				policy,
 				safety: agentPolicy.safety,
+				serverDecision: candidate.serverPolicy,
 				serverName: candidate.config.name,
 			});
 			if (policy !== "deny" && visibleCount < MAX_MCP_TOOL_COUNT) {
@@ -541,39 +542,10 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		return sanitizeMessage(config, error, "unknown MCP registry error");
 	};
 
-	const gateApproval = async (
-		tool: McpSnapshotTool,
-		toolName: string,
-		input: unknown,
-		approve: (request: McpApprovalRequest) => Promise<boolean>
-	): Promise<McpNormalizedResult | undefined> => {
-		if (tool.policy === "deny") {
-			return outputError(`MCP tool '${toolName}' is denied by policy`);
-		}
-		if (tool.policy === "ask") {
-			let approved = false;
-			try {
-				approved = await approve({
-					description: tool.description,
-					input,
-					originalToolName: tool.originalToolName,
-					serverName: tool.serverName,
-				});
-			} catch {
-				approved = false;
-			}
-			if (!approved) {
-				return outputError(`MCP tool '${toolName}' was not approved`);
-			}
-		}
-		return;
-	};
-
 	const execute = async (
 		snapshot: McpCatalogSnapshot,
 		toolName: string,
 		input: unknown,
-		approve: (request: McpApprovalRequest) => Promise<boolean>,
 		signal?: AbortSignal
 	): Promise<McpNormalizedResult> => {
 		if (snapshot.id !== latestSnapshotId) {
@@ -583,9 +555,8 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		if (tool === undefined) {
 			return outputError(`Unknown MCP tool '${toolName}'`);
 		}
-		const blocked = await gateApproval(tool, toolName, input, approve);
-		if (blocked !== undefined) {
-			return blocked;
+		if (tool.policy === "deny") {
+			return outputError(`MCP tool '${toolName}' is denied by policy`);
 		}
 		const entry = serverEntries.get(tool.serverName);
 		if (

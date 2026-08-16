@@ -62,12 +62,14 @@ const successResult = (): McpNormalizedResult => ({
 const makeTool = (
 	overrides: Partial<McpSnapshotTool> = {}
 ): McpSnapshotTool => ({
+	agentDecision: "allow",
 	client: new FakeMcpClient(),
 	description: "A demo tool",
 	logicalName: "demo_echo",
 	originalToolName: "echo",
 	policy: "allow",
 	safety: false,
+	serverDecision: "allow",
 	serverName: "demo",
 	...overrides,
 });
@@ -208,7 +210,10 @@ test("runDynamicToolCall denies without executing when the gate denies", async (
 	const { addToolOutput, outputs } = makeAddToolOutput();
 	await runDynamicToolCall({
 		addToolOutput,
-		gate: fixedGate({ kind: "deny" }),
+		gate: fixedGate({
+			errorText: "MCP tool 'mcp_demo_echo' is denied by policy",
+			kind: "deny",
+		}),
 		latestSnapshot: makeSnapshot(),
 		registry: makeRegistry(async () => {
 			executed = true;
@@ -233,7 +238,11 @@ test("runDynamicToolCall rejects without executing and carries feedback", async 
 	const { addToolOutput, outputs } = makeAddToolOutput();
 	await runDynamicToolCall({
 		addToolOutput,
-		gate: fixedGate({ feedback: "use read instead", kind: "reject" }),
+		gate: fixedGate({
+			errorText: "MCP tool 'mcp_demo_echo' was not approved — use read instead",
+			feedback: "use read instead",
+			kind: "reject",
+		}),
 		latestSnapshot: makeSnapshot(),
 		registry: makeRegistry(async () => {
 			executed = true;
@@ -252,7 +261,10 @@ test("runDynamicToolCall rejects without feedback", async () => {
 	const { addToolOutput, outputs } = makeAddToolOutput();
 	await runDynamicToolCall({
 		addToolOutput,
-		gate: fixedGate({ kind: "reject" }),
+		gate: fixedGate({
+			errorText: "MCP tool 'mcp_demo_echo' was not approved",
+			kind: "reject",
+		}),
 		latestSnapshot: makeSnapshot(),
 		registry: makeRegistry(),
 		snapshot: makeSnapshot(),
@@ -509,7 +521,10 @@ test("provider handleDynamicToolCall emits an error when the gate denies", async
 		(config) => {
 			outputs.push(config);
 		},
-		fixedGate({ kind: "deny" })
+		fixedGate({
+			errorText: "MCP tool 'mcp_demo_echo' is denied by policy",
+			kind: "deny",
+		})
 	);
 	await new Promise((resolve) => setTimeout(resolve, 20));
 

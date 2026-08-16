@@ -96,3 +96,13 @@ Role. _Avoid_: Agent Role, tool availability
 An ordered policy entry that matches a tool action and optionally a resource
 pattern to produce a Tool Permission. When multiple rules match, the later rule
 wins. _Avoid_: ACL entry, tool toggle
+
+**Tool Gate**:
+The runtime enforcement of Tool Permission for one tool call. The gate
+evaluates the effective decision against the call's actual resource, applies
+temporary grants and auto approval, and routes a surviving `ask` through the
+conversation approval queue and inline panel. It owns the safety ceiling at
+execution time: a remembered grant is never recorded for a safety ask. Coding
+tools, shell, MCP tools, and Skill Activation all resolve through the one
+gate, and the gate owns the deny/reject wording each family emits. _Avoid_:
+approval service, permission middleware

@@ -12,6 +12,11 @@ export type CodingAgentTools = {
 		input: CodingToolInput<Name>;
 		output: CodingToolOutput<Name>;
 	};
+} & {
+	__dynamic: {
+		input: unknown;
+		output: unknown;
+	};
 };
 
 export type CodingAgentUIMessage = UIMessage<

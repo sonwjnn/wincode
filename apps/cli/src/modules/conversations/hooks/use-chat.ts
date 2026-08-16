@@ -6,7 +6,6 @@ import {
 	type CodingAgentUIMessage,
 	type CodingToolName,
 	codingMessageSkillSchema,
-	codingToolDefinitions,
 	codingToolNames,
 	defaultChatModelSelection,
 	getChatModelRoute,
@@ -21,43 +20,22 @@ import {
 	createUserMessage,
 	handleCodingAgentToolCall,
 } from "@wincode/ai/client";
-import type { WorkspacePolicy } from "@wincode/ai/workspace";
 import {
 	type ChatAddToolOutputFunction,
 	type ChatOnToolCallCallback,
 	type FileUIPart,
 	lastAssistantMessageIsCompleteWithToolCalls,
 } from "ai";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useConnections } from "@/modules/connections";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import {
-	MCP_PERMISSION_RESOURCE,
 	type McpAddToolOutput,
-	type McpApprovalDecision,
-	type McpApprovalGate,
 	type McpCatalogSnapshot,
 	type McpContextValue,
-	type McpSnapshotTool,
 	useMcp,
 } from "@/modules/mcp";
-import {
-	canonicalizeExternalPath,
-	canonicalizeResource,
-	composePermissionDecisions,
-	DESTRUCTIVE_SHELL_SAFETY_MESSAGE,
-	expandHomeInPath,
-	externalParentDirectoryGlob,
-	isDestructiveShellCommand,
-	type PermissionAction,
-	type PermissionDecision,
-	type PermissionService,
-	resolveApproval,
-	STATIC_TOOL_PERMISSION_ACTIONS,
-	type ToolPermission,
-	type ToolPermissionRuntime,
-	useToolPermission,
-} from "@/modules/permissions";
+import { useToolPermission } from "@/modules/permissions";
 import {
 	buildSkillToolDefinition,
 	createSkillExecution,
@@ -71,12 +49,9 @@ import {
 	sampleSkillResources,
 	sanitizeSkillToolPart,
 } from "@/modules/skills";
+import { createToolGate, type ToolGate } from "@/modules/tool-gate/tool-gate";
 import { useConfig } from "@/shared/config/config-provider";
-import {
-	type ApprovalQueue,
-	createApprovalQueue,
-} from "@/shared/providers/approval/approval-queue";
-import { formatRejectionFeedback } from "@/shared/providers/approval/format";
+import { createApprovalQueue } from "@/shared/providers/approval/approval-queue";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import { getConversationStore } from "../storage/get-conversation-store";
 import { createRoutingChatTransport } from "./routing-chat-transport";
@@ -104,84 +79,8 @@ export type SubmitChatOutcome =
 
 type MutableRefObject<T> = { current: T };
 
-export type ChatToolCallHandlerDeps = {
-	addToolOutputRef: MutableRefObject<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>;
-	approvalQueue: ApprovalQueue<ToolApprovalRequest>;
-	handleCodingAgentToolCall?: typeof handleCodingAgentToolCall;
-	mcp: Pick<McpContextValue, "handleDynamicToolCall">;
-	mcpSnapshotRef: MutableRefObject<McpCatalogSnapshot | null>;
-	openApproval: ToolPermissionRuntime["openApproval"];
-	permissionRef: MutableRefObject<ToolPermission>;
-	resolvedAgentRef: MutableRefObject<ResolvedAgentRuntime | undefined>;
-	resolvePermission?: ToolPermissionRuntime["resolvePermission"];
-	sandbox: WorkspacePolicy;
-	service: PermissionService;
-	skillExecutionRef?: MutableRefObject<SkillExecution | null>;
-};
-
-const STATIC_TOOL_LABELS = {
-	read: "Read",
-	write: "Write",
-	edit: "Edit",
-	list: "List",
-	grep: "Grep",
-	shell: "Shell",
-} as const satisfies Record<CodingToolName, string>;
-
-// The workspace-relative POSIX resource that `list` gates against when no path
-// is supplied and the sandbox canonicalizes the workspace root to an empty path.
-const WORKSPACE_ROOT_RESOURCE = ".";
-
-// Shell always-approvals persist a process-scoped `shell *` grant: any later
-// command for the action is satisfied unless the policy or safety ceiling asks.
-const SHELL_GRANT_RESOURCE = "*";
-
 const isCodingToolName = (name: string): name is CodingToolName =>
-	(codingToolNames as readonly string[]).includes(name);
-
-const getStringField = (input: unknown, field: string): string | undefined => {
-	if (typeof input !== "object" || input === null || Array.isArray(input)) {
-		return;
-	}
-	const candidate = (input as Record<string, unknown>)[field];
-	return typeof candidate === "string" ? candidate : undefined;
-};
-
-type GateResource =
-	| { kind: "path"; input: string; pattern?: string }
-	| { kind: "literal"; value: string };
-
-/**
- * Resolves the Permission resource for a static coding tool call. Read, write,
- * edit, and list gate against a filesystem path (list defaults to the workspace
- * root); grep gates against its requested regular expression verbatim, and its
- * optional path is carried for the external-directory boundary. A tool call
- * missing its required input is left ungated so the runner reports the
- * validation error.
- */
-const resolveGateResource = (
-	tool: CodingToolName,
-	input: unknown
-): GateResource | undefined => {
-	if (tool === "grep") {
-		const pattern = getStringField(input, "pattern");
-		if (!pattern) {
-			return;
-		}
-		const path = getStringField(input, "path");
-		return path === undefined
-			? { kind: "literal", value: pattern }
-			: { input: path, kind: "path", pattern };
-	}
-	if (tool === "list") {
-		return {
-			input: getStringField(input, "path") ?? WORKSPACE_ROOT_RESOURCE,
-			kind: "path",
-		};
-	}
-	const path = getStringField(input, "path");
-	return path === undefined ? undefined : { input: path, kind: "path" };
-};
+	codingToolNames.some((tool) => tool === name);
 
 const emitToolCallError = (
 	addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>,
@@ -189,9 +88,6 @@ const emitToolCallError = (
 	toolCallId: string,
 	errorText: string
 ): void => {
-	// Policy errors are emitted without awaiting, mirroring the tool-call
-	// dispatch below: awaiting chat tool output here would deadlock the chat
-	// executor at input-available.
 	Promise.resolve(
 		addToolOutput({
 			errorText,
@@ -202,559 +98,29 @@ const emitToolCallError = (
 	).catch(() => undefined);
 };
 
-/**
- * Enforces the Tool Permission policy for a static coding tool call. The tool's
- * actual resource is normalized immediately before execution — path resources
- * are canonicalized through the workspace sandbox, grep uses its regex — and the
- * governing action (`edit` covers both write and edit) is evaluated. A `deny`
- * decision or a rejected/cancelled `ask` decision settles the call with an
- * observable tool error without invoking the static tool runner. An allowed or
- * approved call runs the runner.
- */
-type StaticToolGateDeps = {
-	addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>;
-	approvalQueue: ApprovalQueue<ToolApprovalRequest>;
-	openApproval: ToolPermissionRuntime["openApproval"];
-	permission: ToolPermission;
-	sandbox: WorkspacePolicy;
-	service: PermissionService;
-};
-
-/**
- * The settled outcome of gating one tool call through the shared Permission
- * engine and approval machinery: `deny` blocked it by policy, `reject` means the
- * user declined an ask (carrying any bounded correction feedback), and `allow`
- * clears it to run. Callers map this onto their own emit/return shape.
- */
-type ToolApprovalGateResult =
-	| { kind: "allow" }
-	| { kind: "deny" }
-	| { kind: "reject"; feedback?: string };
-
-type ResolveToolApprovalDeps = {
-	action: string;
-	approvalQueue: ApprovalQueue<ToolApprovalRequest>;
-	decision: PermissionDecision;
-	openApproval: ToolPermissionRuntime["openApproval"];
-	request: ToolApprovalRequest;
-	resource: string;
-	safety: boolean;
-	service: PermissionService;
-};
-
-/**
- * The single approval path shared by static coding tools and dynamic MCP tools.
- * It applies temporary grants and auto approval to the raw policy `decision`
- * (`resolveApproval`), and for an `ask` enqueues the request on the conversation
- * approval queue, opens the shared inline approval panel, awaits the outcome,
- * records an "always" grant against the exact `(action, resource)` key, and
- * surfaces reject feedback. Both tool families resolve through this one function
- * so their once/always/reject/auto behaviour can never drift apart.
- */
-const resolveToolApproval = async ({
-	action,
-	approvalQueue,
-	decision,
-	openApproval,
-	request,
-	resource,
-	safety,
-	service,
-}: ResolveToolApprovalDeps): Promise<ToolApprovalGateResult> => {
-	const effective = resolveApproval({
-		action,
-		decision,
-		isAutoApproval: () => service.isAutoApproval(),
-		isGranted: (grantedAction, grantedResource) =>
-			service.isGranted(grantedAction, grantedResource),
-		resource,
-		safety,
-	});
-	if (effective === "deny") {
-		return { kind: "deny" };
-	}
-	if (effective === "allow") {
-		return { kind: "allow" };
-	}
-	const handle = approvalQueue.request(request);
-	openApproval(request, {
-		allow: (remember) => handle.allow(remember),
-		cancel: () => handle.rejectSelf(),
-		reject: (feedback) => approvalQueue.rejectAll(feedback),
-	});
-	const outcome = await handle.outcome;
-	if (outcome.decision === "reject") {
-		return {
-			feedback: formatRejectionFeedback(outcome.feedback),
-			kind: "reject",
-		};
-	}
-	if (outcome.remember) {
-		service.grant(action, resource);
-	}
-	return { kind: "allow" };
-};
-
-/**
- * The approval flow for a path outside the workspace. The composed decision
- * folds the operation policy (`read`, `edit`, ...) with the `external_directory`
- * boundary so neither source can loosen the other. An "always" outcome grants
- * the canonical parent-directory glob for `external_directory` and the exact
- * canonical path for the operation, so approval scope stays bounded and
- * revocable. `grantResource` overrides the operation grant key (shell always
- * grants the process-scoped `*` resource instead of the external path).
- */
-const resolveExternalDirectoryApproval = async ({
-	action,
-	approvalQueue,
-	decision,
-	openApproval,
-	request,
-	resource,
-	grantResource = resource,
-	safety,
-	service,
-}: {
-	action: string;
-	approvalQueue: ApprovalQueue<ToolApprovalRequest>;
-	decision: PermissionDecision;
-	openApproval: ToolPermissionRuntime["openApproval"];
-	request: ToolApprovalRequest;
-	resource: string;
-	grantResource?: string;
-	safety: boolean;
-	service: PermissionService;
-}): Promise<ToolApprovalGateResult> => {
-	const effective = resolveApproval({
-		action: "external_directory",
-		decision,
-		isAutoApproval: () => service.isAutoApproval(),
-		isGranted: (grantedAction, grantedResource) =>
-			service.isGranted(grantedAction, grantedResource),
-		resource,
-		safety,
-	});
-	if (effective === "deny") {
-		return { kind: "deny" };
-	}
-	if (effective === "allow") {
-		return { kind: "allow" };
-	}
-	const handle = approvalQueue.request(request);
-	openApproval(request, {
-		allow: (remember) => handle.allow(remember),
-		cancel: () => handle.rejectSelf(),
-		reject: (feedback) => approvalQueue.rejectAll(feedback),
-	});
-	const outcome = await handle.outcome;
-	if (outcome.decision === "reject") {
-		return {
-			feedback: formatRejectionFeedback(outcome.feedback),
-			kind: "reject",
-		};
-	}
-	if (outcome.remember) {
-		service.grant("external_directory", externalParentDirectoryGlob(resource));
-		service.grant(action, grantResource);
-	}
-	return { kind: "allow" };
-};
-
-const gateStaticToolCall = async (
-	options: Parameters<ChatOnToolCallCallback<CodingAgentUIMessage>>[0],
-	{
-		addToolOutput,
-		approvalQueue,
-		openApproval,
-		permission,
-		sandbox,
-		service,
-	}: StaticToolGateDeps
-): Promise<boolean> => {
-	const toolCall = options.toolCall;
-	if (!isCodingToolName(toolCall.toolName)) {
-		return true;
-	}
-	const tool = toolCall.toolName;
-	const gate = resolveGateResource(tool, toolCall.input);
-	if (gate === undefined) {
-		return true;
-	}
-	const label = STATIC_TOOL_LABELS[tool];
-	const action = STATIC_TOOL_PERMISSION_ACTIONS[tool];
-
-	if (gate.kind === "literal") {
-		return gateByDecision(
-			options,
-			{ action, label, permission, resource: gate.value },
-			{ addToolOutput, approvalQueue, openApproval, service }
-		);
-	}
-
-	try {
-		const canonical = await canonicalizeResource(gate.input, sandbox);
-		// Grep gates its operation against the regex; its path only decides the
-		// external boundary. Other path tools gate against the canonical path.
-		const resource =
-			gate.pattern ?? (canonical === "" ? WORKSPACE_ROOT_RESOURCE : canonical);
-		return gateByDecision(
-			options,
-			{ action, label, permission, resource },
-			{ addToolOutput, approvalQueue, openApproval, service }
-		);
-	} catch {
-		// The path is outside the workspace: the external_directory boundary
-		// applies in addition to the operation policy.
-		return gateExternalPath(
-			options,
-			{ action, label, operationResource: gate.pattern, permission, sandbox },
-			{ addToolOutput, approvalQueue, openApproval, service }
-		);
-	}
-};
-
-type GateDecisionDeps = {
-	addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>;
-	approvalQueue: ApprovalQueue<ToolApprovalRequest>;
-	openApproval: ToolPermissionRuntime["openApproval"];
-	service: PermissionService;
-};
-
-type GatePermissionContext = {
-	action: PermissionAction;
-	label: string;
-	permission: ToolPermission;
-	resource: string;
-};
-
-const gateByDecision = async (
-	options: Parameters<ChatOnToolCallCallback<CodingAgentUIMessage>>[0],
-	{ action, label, permission, resource }: GatePermissionContext,
-	deps: GateDecisionDeps
-): Promise<boolean> => {
-	const { addToolOutput, approvalQueue, openApproval, service } = deps;
-	const tool = options.toolCall.toolName as CodingToolName;
-	const request: ToolApprovalRequest = {
-		description: codingToolDefinitions[tool].description,
-		identity: [
-			{ label: "tool", value: tool },
-			{ label: "resource", value: resource },
-		],
-		input: options.toolCall.input,
-		safety: permission.safety,
-		toolCallId: options.toolCall.toolCallId,
-	};
-	const result = await resolveToolApproval({
-		action,
-		approvalQueue,
-		decision: permission.decide(action, resource),
-		openApproval,
-		request,
-		resource,
-		safety: permission.safety,
-		service,
-	});
-
-	return emitGateOutcome(
-		addToolOutput,
-		tool,
-		options.toolCall.toolCallId,
-		label,
-		resource,
-		result
-	);
-};
-
-/**
- * Maps one settled gate outcome onto the conversation: policy denies and
- * rejections emit an observable tool error, an allow clears the call to run.
- * Every static-tool gate settles through this one helper so their deny and
- * reject semantics never drift apart.
- */
-const emitGateOutcome = (
-	addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>,
-	tool: CodingToolName,
+const emitDynamicToolCallError = (
+	addToolOutput: McpAddToolOutput,
+	tool: string,
 	toolCallId: string,
-	label: string,
-	resource: string,
-	result: ToolApprovalGateResult
-): boolean => {
-	if (result.kind === "deny") {
-		emitToolCallError(
-			addToolOutput,
-			tool,
-			toolCallId,
-			`${label} denied by policy: ${resource}`
-		);
-		return false;
-	}
-	if (result.kind === "reject") {
-		emitToolCallError(
-			addToolOutput,
-			tool,
-			toolCallId,
-			result.feedback === undefined
-				? `${label} was not approved: ${resource}`
-				: `${label} was not approved: ${resource} — ${result.feedback}`
-		);
-		return false;
-	}
-	return true;
+	errorText: string
+): void => {
+	Promise.resolve(
+		addToolOutput({ errorText, state: "output-error", tool, toolCallId })
+	).catch(() => undefined);
 };
 
-const gateExternalPath = async (
-	options: Parameters<ChatOnToolCallCallback<CodingAgentUIMessage>>[0],
-	{
-		action,
-		label,
-		operationResource,
-		permission,
-		sandbox,
-	}: {
-		action: PermissionAction;
-		label: string;
-		operationResource?: string;
-		permission: ToolPermission;
-		sandbox: WorkspacePolicy;
-	},
-	deps: GateDecisionDeps
-): Promise<boolean> => {
-	const { addToolOutput, approvalQueue, openApproval, service } = deps;
-	const tool = options.toolCall.toolName as CodingToolName;
-	const inputRecord =
-		typeof options.toolCall.input === "object" &&
-		options.toolCall.input !== null &&
-		!Array.isArray(options.toolCall.input)
-			? (options.toolCall.input as Record<string, unknown>)
-			: {};
-	const pathInput =
-		typeof inputRecord.path === "string" ? inputRecord.path : "";
-	let resource: string;
-	try {
-		resource = await canonicalizeExternalPath(pathInput, sandbox.root);
-	} catch {
-		emitToolCallError(
-			addToolOutput,
-			tool,
-			options.toolCall.toolCallId,
-			`${label} path is outside the workspace: ${pathInput}`
-		);
-		return false;
-	}
-
-	// The operation keeps its own resource (the regex for grep, the canonical
-	// path otherwise); external_directory adds a boundary on top of it.
-	const decision = composePermissionDecisions(
-		permission.decide(action, operationResource ?? resource),
-		permission.decide("external_directory", resource)
-	);
-	const request: ToolApprovalRequest = {
-		description: codingToolDefinitions[tool].description,
-		identity: [
-			{ label: "tool", value: tool },
-			{ label: "resource", value: resource },
-			{ label: "scope", value: "external" },
-		],
-		input: options.toolCall.input,
-		safety: permission.safety,
-		toolCallId: options.toolCall.toolCallId,
-	};
-	const result = await resolveExternalDirectoryApproval({
-		action,
-		approvalQueue,
-		decision,
-		openApproval,
-		request,
-		resource,
-		safety: permission.safety,
-		service,
-	});
-
-	return emitGateOutcome(
-		addToolOutput,
-		tool,
-		options.toolCall.toolCallId,
-		label,
-		resource,
-		result
-	);
+type ChatToolCallHandlerCommonDeps = {
+	addToolOutputRef: MutableRefObject<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>;
+	dynamicToolOutputRef: MutableRefObject<McpAddToolOutput | null>;
+	handleCodingAgentToolCall?: typeof handleCodingAgentToolCall;
+	mcp: Pick<McpContextValue, "handleDynamicToolCall">;
+	mcpSnapshotRef: MutableRefObject<McpCatalogSnapshot | null>;
+	resolvedAgentRef: MutableRefObject<ResolvedAgentRuntime | undefined>;
+	skillExecutionRef?: MutableRefObject<SkillExecution | null>;
+	gate: ToolGate;
 };
 
-/**
- * Enforces the Tool Permission policy for a `shell` tool call. The command is
- * the evaluated resource; a workspace-internal `cwd` runs directly, while a
- * `cwd` outside the workspace composes the `external_directory` boundary
- * (canonicalized and symlink-resolved like file tools). Always approvals
- * persist a process-scoped `shell *` grant. Destructive commands raise the
- * safety ceiling on top of the policy: they always prompt, and neither
- * `--auto`, a remembered grant, nor a permissive configured rule can run them
- * without a fresh approval.
- */
-const gateShellToolCall = async (
-	options: Parameters<ChatOnToolCallCallback<CodingAgentUIMessage>>[0],
-	{
-		addToolOutput,
-		approvalQueue,
-		openApproval,
-		permission,
-		sandbox,
-		service,
-	}: StaticToolGateDeps
-): Promise<boolean> => {
-	const toolCall = options.toolCall;
-	const command = getStringField(toolCall.input, "command");
-	if (!command) {
-		// Missing command: left ungated so the runner reports the validation
-		// error, mirroring the other static tools.
-		return true;
-	}
-	const cwd = getStringField(toolCall.input, "cwd");
-	const destructive = isDestructiveShellCommand(command);
-	const request: ToolApprovalRequest = {
-		description: codingToolDefinitions.shell.description,
-		identity: [
-			{ label: "tool", value: "shell" },
-			{ label: "resource", value: command },
-		],
-		input: toolCall.input,
-		safety: permission.safety || destructive,
-		...(destructive ? { safetyReason: DESTRUCTIVE_SHELL_SAFETY_MESSAGE } : {}),
-		toolCallId: toolCall.toolCallId,
-	};
-	const rawDecision = permission.decide("shell", command);
-	// The classifier is a ceiling, not a bypass: an explicit policy deny still
-	// denies, every other destructive command becomes a manual-only ask.
-	const operationDecision =
-		rawDecision === "deny" || !destructive ? rawDecision : "ask";
-	const safety = permission.safety || destructive;
-
-	let externalResource: string | undefined;
-	if (cwd !== undefined) {
-		// `~` and `$HOME` point outside the workspace, so they are expanded
-		// before canonicalization exactly like the runner does; otherwise a
-		// `cwd: "~"` would silently resolve inside the workspace at gate time
-		// and run in the home directory after approval.
-		const expandedCwd = expandHomeInPath(cwd);
-		try {
-			await canonicalizeResource(expandedCwd, sandbox);
-		} catch {
-			try {
-				externalResource = await canonicalizeExternalPath(
-					expandedCwd,
-					sandbox.root
-				);
-			} catch {
-				emitToolCallError(
-					addToolOutput,
-					"shell",
-					toolCall.toolCallId,
-					`Shell working directory is outside the workspace: ${cwd}`
-				);
-				return false;
-			}
-		}
-	}
-
-	const decision =
-		externalResource === undefined
-			? operationDecision
-			: composePermissionDecisions(
-					operationDecision,
-					permission.decide("external_directory", externalResource)
-				);
-	const result =
-		externalResource === undefined
-			? await resolveToolApproval({
-					action: "shell",
-					approvalQueue,
-					decision,
-					openApproval,
-					request,
-					resource: SHELL_GRANT_RESOURCE,
-					safety,
-					service,
-				})
-			: await resolveExternalDirectoryApproval({
-					action: "shell",
-					approvalQueue,
-					decision,
-					grantResource: SHELL_GRANT_RESOURCE,
-					openApproval,
-					request: {
-						...request,
-						identity: [
-							...request.identity,
-							{ label: "scope", value: "external" },
-						],
-					},
-					resource: externalResource,
-					safety,
-					service,
-				});
-
-	return emitGateOutcome(
-		addToolOutput,
-		"shell",
-		toolCall.toolCallId,
-		"Shell",
-		command,
-		result
-	);
-};
-
-type McpApprovalGateDeps = {
-	approvalQueue: ApprovalQueue<ToolApprovalRequest>;
-	openApproval: ToolPermissionRuntime["openApproval"];
-	service: PermissionService;
-};
-
-/**
- * Builds the shared-approval gate for one dynamic MCP tool call. It resolves
- * through the same {@link resolveToolApproval} helper as static coding tools —
- * one temporary-grant store, auto-approval flag, conversation approval queue,
- * and inline approval panel — keyed by the tool's logical name and the single
- * `*` resource. The composed decision already baked the Agent+server policy and
- * any safety ceiling into `tool.policy`/`tool.safety`, so grants and auto
- * approval may satisfy an ordinary ask, a safety ask always prompts, and an
- * explicit deny is never bypassed. An "always" outcome grants the exact logical
- * name.
- */
-export const createMcpApprovalGate =
-	({
-		approvalQueue,
-		openApproval,
-		service,
-	}: McpApprovalGateDeps): McpApprovalGate =>
-	(
-		tool: McpSnapshotTool,
-		input: unknown,
-		toolCallId: string
-	): Promise<McpApprovalDecision> => {
-		const request: ToolApprovalRequest = {
-			description: tool.description,
-			identity: [
-				{ label: "tool", value: tool.logicalName },
-				{ label: "resource", value: MCP_PERMISSION_RESOURCE },
-			],
-			input,
-			safety: tool.safety,
-			toolCallId,
-		};
-		// The composed decision already folded the Agent+server policy and any
-		// safety ceiling into tool.policy/tool.safety, so the shared resolver
-		// applies grants/auto/ask exactly as it does for a static coding tool. Its
-		// `ToolApprovalGateResult` is a subset of `McpApprovalDecision`.
-		return resolveToolApproval({
-			action: tool.logicalName,
-			approvalQueue,
-			decision: tool.policy,
-			openApproval,
-			request,
-			resource: MCP_PERMISSION_RESOURCE,
-			safety: tool.safety,
-			service,
-		});
-	};
+export type ChatToolCallHandlerDeps = ChatToolCallHandlerCommonDeps;
 
 /**
  * Dispatches AI SDK tool calls to the MCP handler for dynamic tools, to the
@@ -763,51 +129,53 @@ export const createMcpApprovalGate =
  * queues on the same chat executor, so neither promise is returned or awaited
  * here or tool execution deadlocks at input-available.
  */
-export const createChatToolCallHandler =
-	({
+export const createChatToolCallHandler = (
+	deps: ChatToolCallHandlerDeps
+): ChatOnToolCallCallback<CodingAgentUIMessage> => {
+	const {
 		addToolOutputRef,
-		approvalQueue,
+		dynamicToolOutputRef,
 		handleCodingAgentToolCall: runStaticToolCall = handleCodingAgentToolCall,
 		mcp,
 		mcpSnapshotRef,
-		openApproval,
-		permissionRef,
 		resolvedAgentRef,
-		resolvePermission,
-		sandbox,
-		service,
 		skillExecutionRef,
-	}: ChatToolCallHandlerDeps): ChatOnToolCallCallback<CodingAgentUIMessage> =>
-	(options) => {
+		gate,
+	} = deps;
+	return (options) => {
 		const addToolOutput = addToolOutputRef.current;
 
 		if (!addToolOutput) {
 			return;
 		}
-
 		if (options.toolCall.toolName === "skill") {
 			// The `skill` tool is declared as a dynamic tool on the model loop but
 			// executed entirely in the CLI, so it is intercepted before the MCP
 			// dispatch below.
-			const skillAddToolOutput = addToolOutput as unknown as McpAddToolOutput;
+			const skillAddToolOutput = dynamicToolOutputRef.current;
+			if (!skillAddToolOutput) {
+				return;
+			}
 			Promise.resolve(
 				(async () => {
-					const permission = resolvePermission
-						? await resolvePermission()
-						: permissionRef.current;
 					await runSkillToolCall({
 						addToolOutput: skillAddToolOutput,
-						approvalQueue,
 						executionRef: skillExecutionRef,
-						openApproval,
-						permission,
-						service,
-						toolCall: options.toolCall as Parameters<
-							typeof runSkillToolCall
-						>[0]["toolCall"],
+						gate,
+						toolCall: {
+							input: options.toolCall.input,
+							toolCallId: options.toolCall.toolCallId,
+						},
 					});
 				})()
-			).catch(() => undefined);
+			).catch(() => {
+				emitDynamicToolCallError(
+					skillAddToolOutput,
+					"skill",
+					options.toolCall.toolCallId,
+					"Skill Activation failed"
+				);
+			});
 			return;
 		}
 
@@ -815,15 +183,36 @@ export const createChatToolCallHandler =
 			// The AI SDK types addToolOutput for static coding tools, but dynamic
 			// MCP tools carry arbitrary names; runtime matching is by toolCallId,
 			// so bridge the type here.
-			const mcpAddToolOutput = addToolOutput as unknown as McpAddToolOutput;
+			const mcpAddToolOutput = dynamicToolOutputRef.current;
+			if (!mcpAddToolOutput) {
+				return;
+			}
 			Promise.resolve(
 				mcp.handleDynamicToolCall(
 					mcpSnapshotRef.current,
 					options.toolCall,
 					mcpAddToolOutput,
-					createMcpApprovalGate({ approvalQueue, openApproval, service })
+					(tool, input, toolCallId) =>
+						gate.gate({
+							action: tool.logicalName,
+							agentDecision: tool.agentDecision,
+							description: tool.description,
+							family: "mcp",
+							input,
+							safety: tool.safety,
+							serverDecision: tool.serverDecision,
+							toolCallId,
+							toolName: options.toolCall.toolName,
+						})
 				)
-			).catch(() => undefined);
+			).catch(() => {
+				emitDynamicToolCallError(
+					mcpAddToolOutput,
+					options.toolCall.toolName,
+					options.toolCall.toolCallId,
+					"MCP tool call failed"
+				);
+			});
 			return;
 		}
 
@@ -835,43 +224,53 @@ export const createChatToolCallHandler =
 			// resolve and its always-approval grants `shell *`.
 			Promise.resolve(
 				(async () => {
-					const permission = resolvePermission
-						? await resolvePermission()
-						: permissionRef.current;
-					if (
-						await gateShellToolCall(options, {
-							addToolOutput,
-							approvalQueue,
-							openApproval,
-							permission,
-							sandbox,
-							service,
-						})
-					) {
+					const outcome = await gate.gate({
+						family: "shell",
+						toolCall: options.toolCall,
+					});
+					if (outcome.kind === "allow") {
 						await runStaticToolCall(
 							addToolOutput,
 							resolvedAgentRef.current?.visibleCodingTools ?? []
 						)(options);
+						return;
 					}
+					emitToolCallError(
+						addToolOutput,
+						"shell",
+						options.toolCall.toolCallId,
+						outcome.errorText ?? "Shell tool call was blocked"
+					);
 				})()
-			).catch(() => undefined);
+			).catch(() => {
+				emitToolCallError(
+					addToolOutput,
+					"shell",
+					options.toolCall.toolCallId,
+					"Shell tool call failed"
+				);
+			});
 			return;
 		}
 
+		if (!isCodingToolName(options.toolCall.toolName)) {
+			return;
+		}
+		const toolName = options.toolCall.toolName;
+
 		Promise.resolve(
 			(async () => {
-				if (
-					!(await gateStaticToolCall(options, {
+				const outcome = await gate.gate({
+					family: "coding",
+					toolCall: options.toolCall,
+				});
+				if (outcome.kind !== "allow") {
+					emitToolCallError(
 						addToolOutput,
-						approvalQueue,
-						openApproval,
-						permission: resolvePermission
-							? await resolvePermission()
-							: permissionRef.current,
-						sandbox,
-						service,
-					}))
-				) {
+						toolName,
+						options.toolCall.toolCallId,
+						outcome.errorText ?? "Tool call was blocked"
+					);
 					return;
 				}
 				await runStaticToolCall(
@@ -879,16 +278,21 @@ export const createChatToolCallHandler =
 					resolvedAgentRef.current?.visibleCodingTools ?? []
 				)(options);
 			})()
-		).catch(() => undefined);
+		).catch(() => {
+			emitToolCallError(
+				addToolOutput,
+				toolName,
+				options.toolCall.toolCallId,
+				"Tool call failed"
+			);
+		});
 	};
+};
 
 export type SkillToolCallDeps = {
 	addToolOutput: McpAddToolOutput;
-	approvalQueue: ApprovalQueue<ToolApprovalRequest>;
 	executionRef?: MutableRefObject<SkillExecution | null>;
-	openApproval: ToolPermissionRuntime["openApproval"];
-	permission: ToolPermission;
-	service: PermissionService;
+	gate: ToolGate;
 	toolCall: { input?: unknown; toolCallId: string };
 };
 
@@ -915,11 +319,8 @@ const emitSkillToolResult = (
  */
 export const runSkillToolCall = async ({
 	addToolOutput,
-	approvalQueue,
 	executionRef,
-	openApproval,
-	permission,
-	service,
+	gate,
 	toolCall,
 }: SkillToolCallDeps): Promise<void> => {
 	const execution = executionRef?.current ?? null;
@@ -944,8 +345,17 @@ export const runSkillToolCall = async ({
 
 	// The policy is evaluated before the catalog lookup so a denied Skill —
 	// hidden from the catalog by design — settles as rejected, not failed.
-	const decision = permission.decide("skill", name);
-	if (decision === "deny") {
+	const entry = execution.catalog.entries.find(
+		({ name: entryName }) => entryName === name
+	);
+	const outcome = await gate.gate({
+		available: entry !== undefined,
+		description: entry?.description ?? `Activate Skill ${name}`,
+		family: "skill",
+		name,
+		toolCallId: toolCall.toolCallId,
+	});
+	if (outcome.kind !== "allow") {
 		execution.markRejected(name);
 		await emitSkillToolResult(addToolOutput, toolCall.toolCallId, {
 			name,
@@ -954,9 +364,6 @@ export const runSkillToolCall = async ({
 		return;
 	}
 
-	const entry = execution.catalog.entries.find(
-		({ name: entryName }) => entryName === name
-	);
 	if (!entry) {
 		const result = execution.activate(name, "agent");
 		await emitSkillToolResult(
@@ -965,36 +372,6 @@ export const runSkillToolCall = async ({
 			resultToToolResult(result)
 		);
 		return;
-	}
-
-	if (decision === "ask") {
-		const outcome = await resolveToolApproval({
-			action: "skill",
-			approvalQueue,
-			decision,
-			openApproval,
-			request: {
-				description: entry.description,
-				identity: [
-					{ label: "tool", value: "skill" },
-					{ label: "skill", value: name },
-				],
-				input: { name },
-				safety: permission.safety,
-				toolCallId: toolCall.toolCallId,
-			},
-			resource: name,
-			safety: permission.safety,
-			service,
-		});
-		if (outcome.kind !== "allow") {
-			execution.markRejected(name);
-			await emitSkillToolResult(addToolOutput, toolCall.toolCallId, {
-				name,
-				status: "rejected",
-			});
-			return;
-		}
 	}
 
 	const result = execution.activate(name, "agent");
@@ -1147,11 +524,8 @@ export const finalizeAssistantMessageMetadata = (
 });
 
 export type ActivateExplicitSkillDeps = {
-	approvalQueue: ApprovalQueue<ToolApprovalRequest>;
 	execution: SkillExecution;
-	openApproval: ToolPermissionRuntime["openApproval"];
-	permission: ToolPermission;
-	service: PermissionService;
+	gate: ToolGate;
 };
 
 /**
@@ -1162,61 +536,28 @@ export type ActivateExplicitSkillDeps = {
  */
 export const activateExplicitSkill = async (
 	skill: SkillContext,
-	{
-		approvalQueue,
-		execution,
-		openApproval,
-		permission,
-		service,
-	}: ActivateExplicitSkillDeps
+	{ execution, gate }: ActivateExplicitSkillDeps
 ): Promise<
 	{ ok: true; skill: SkillRequestContext } | { ok: false; reason: string }
 > => {
-	// The policy is evaluated before the catalog lookup so a denied Skill —
-	// hidden from the catalog by design — settles as a policy rejection.
-	const decision = permission.decide("skill", skill.name);
-	if (decision === "deny") {
-		execution.markRejected(skill.name);
-		return { ok: false, reason: `Skill "${skill.name}" is denied by policy` };
-	}
 	const entry = execution.catalog.entries.find(
 		({ name }) => name === skill.name
 	);
+	const policyOutcome = await gate.gate({
+		available: entry !== undefined,
+		description: entry?.description ?? `Activate Skill ${skill.name}`,
+		family: "skill",
+		name: skill.name,
+	});
+	if (policyOutcome.kind !== "allow") {
+		execution.markRejected(skill.name);
+		return { ok: false, reason: policyOutcome.errorText };
+	}
 	if (!entry) {
 		return {
 			ok: false,
 			reason: `Unknown or unavailable Skill "${skill.name}"`,
 		};
-	}
-	if (decision === "ask") {
-		const outcome = await resolveToolApproval({
-			action: "skill",
-			approvalQueue,
-			decision,
-			openApproval,
-			request: {
-				description: entry.description,
-				identity: [
-					{ label: "tool", value: "skill" },
-					{ label: "skill", value: entry.name },
-				],
-				input: { name: entry.name },
-				safety: permission.safety,
-			},
-			resource: entry.name,
-			safety: permission.safety,
-			service,
-		});
-		if (outcome.kind !== "allow") {
-			execution.markRejected(entry.name);
-			return {
-				ok: false,
-				reason:
-					outcome.kind === "deny"
-						? `Skill "${entry.name}" is denied by policy`
-						: `Skill "${entry.name}" was not approved`,
-			};
-		}
 	}
 	const result = execution.activate(entry.name, "explicit");
 	if (result.status !== "loaded") {
@@ -1246,8 +587,8 @@ export function useChat(
 	const mcp = useMcp();
 	const config = useConfig();
 	const {
+		closeApprovals,
 		openApproval,
-		permissionRef,
 		resolveMcpPolicy,
 		resolvePermission,
 		sandbox,
@@ -1258,17 +599,35 @@ export function useChat(
 	// a snapshot against a stale Agent's MCP policy.
 	const resolveMcpPolicyRef = useRef(resolveMcpPolicy);
 	resolveMcpPolicyRef.current = resolveMcpPolicy;
-	// The approval queue is conversation-scoped: rejecting one request settles
-	// every pending approval in this conversation without touching other
-	// conversations' queues. Created once per conversation via lazy ref init.
-	const approvalQueueRef = useRef<ApprovalQueue<ToolApprovalRequest> | null>(
-		null
+	const resolvePermissionRef = useRef(resolvePermission);
+	resolvePermissionRef.current = resolvePermission;
+	// Rebuild the conversation-scoped gate when its conversation or authorization
+	// dependencies change, rejecting pending requests from the previous scope.
+	const toolGateState = useMemo(() => {
+		const approvalQueue = createApprovalQueue<ToolApprovalRequest>();
+		return {
+			approvalQueue,
+			gate: createToolGate({
+				approvalQueue,
+				openApproval,
+				resolvePermission: () => resolvePermissionRef.current(),
+				sandbox,
+				service,
+			}),
+			scope: sessionId,
+		};
+	}, [openApproval, sandbox, service, sessionId]);
+	useEffect(
+		() => () => {
+			toolGateState.approvalQueue.rejectAll();
+			closeApprovals();
+		},
+		[closeApprovals, toolGateState]
 	);
-	if (approvalQueueRef.current === null) {
-		approvalQueueRef.current = createApprovalQueue<ToolApprovalRequest>();
-	}
+	const toolGate = toolGateState.gate;
 	const addToolOutputRef =
 		useRef<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>(null);
+	const dynamicToolOutputRef = useRef<McpAddToolOutput | null>(null);
 	const interruptedMessageIdsRef = useRef(new Set<string>());
 	const requestStartedAtRef = useRef<number | null>(null);
 	const setMessagesRef = useRef<
@@ -1382,21 +741,35 @@ export function useChat(
 		},
 		onToolCall: createChatToolCallHandler({
 			addToolOutputRef,
-			approvalQueue: approvalQueueRef.current,
+			dynamicToolOutputRef,
+			gate: toolGate,
 			mcp,
 			mcpSnapshotRef,
-			openApproval,
-			permissionRef,
 			resolvedAgentRef,
-			resolvePermission,
-			sandbox,
-			service,
 			skillExecutionRef,
 		}),
 		sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
 		transport,
 	});
 	addToolOutputRef.current = chat.addToolOutput;
+	dynamicToolOutputRef.current = (config) => {
+		// AI SDK matches dynamic output by toolCallId. The reserved type-only tool
+		// supplies its unknown output channel without pretending an MCP tool is one
+		// of the concrete coding tools.
+		if (config.state === "output-error") {
+			return chat.addToolOutput({
+				errorText: config.errorText ?? "Tool call failed",
+				state: "output-error",
+				tool: "__dynamic",
+				toolCallId: config.toolCallId,
+			});
+		}
+		return chat.addToolOutput({
+			output: config.output,
+			tool: "__dynamic",
+			toolCallId: config.toolCallId,
+		});
+	};
 	setMessagesRef.current = chat.setMessages;
 
 	const interruptLatestAssistantMessage = () => {
@@ -1469,20 +842,13 @@ export function useChat(
 		await createTurnSkillExecution();
 		let explicitSkill: SkillRequestContext | undefined;
 		if (skill) {
-			const permission = await resolvePermission();
 			const execution = skillExecutionRef.current;
 			if (execution === null) {
 				return { rejected: true, reason: "Skill catalog is unavailable" };
 			}
-			if (approvalQueueRef.current === null) {
-				approvalQueueRef.current = createApprovalQueue<ToolApprovalRequest>();
-			}
 			const activation = await activateExplicitSkill(skill, {
-				approvalQueue: approvalQueueRef.current,
 				execution,
-				openApproval,
-				permission,
-				service,
+				gate: toolGate,
 			});
 			if (!activation.ok) {
 				return { rejected: true, reason: activation.reason };
@@ -1558,9 +924,6 @@ export function useChat(
 		if (parsedSkill.success) {
 			const execution = skillExecutionRef.current;
 			if (execution !== null) {
-				if (approvalQueueRef.current === null) {
-					approvalQueueRef.current = createApprovalQueue<ToolApprovalRequest>();
-				}
 				const activation = await activateExplicitSkill(
 					{
 						arguments: parsedSkill.data.arguments ?? "",
@@ -1568,11 +931,8 @@ export function useChat(
 						name: parsedSkill.data.name,
 					},
 					{
-						approvalQueue: approvalQueueRef.current,
 						execution,
-						openApproval,
-						permission: await resolvePermission(),
-						service,
+						gate: toolGate,
 					}
 				);
 				if (!activation.ok) {

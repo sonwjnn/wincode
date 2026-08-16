@@ -10,7 +10,6 @@ export {
 	createMcpRegistry,
 	MCP_PERMISSION_RESOURCE,
 	type McpAgentPolicy,
-	type McpApprovalRequest,
 	type McpCatalogSnapshot,
 	type McpServerState,
 	type McpServerStatus,

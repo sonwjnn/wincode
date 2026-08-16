@@ -14,12 +14,14 @@ import { describe, expect, test } from "bun:test";
 import net from "node:net";
 import path from "node:path";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
+import { createWorkspaceSandbox } from "@wincode/ai/workspace";
 import { z } from "zod";
-import { createMcpApprovalGate } from "@/modules/conversations/hooks/use-chat";
 import {
 	createPermissionService,
+	createToolPermission,
 	type PermissionRules,
 } from "@/modules/permissions";
+import { createToolGate } from "@/modules/tool-gate/tool-gate";
 import { createApprovalQueue } from "@/shared/providers/approval/approval-queue";
 import type {
 	ToolApprovalActions,
@@ -168,12 +170,9 @@ describe("MCP transport integration", () => {
 					}),
 				])
 			);
-			const result = await registry.execute(
-				snapshot,
-				echoToolName(snapshot),
-				{ text: "hello transport" },
-				async () => true
-			);
+			const result = await registry.execute(snapshot, echoToolName(snapshot), {
+				text: "hello transport",
+			});
 			expect(result).toEqual({
 				content: [{ type: "text", text: "hello transport" }],
 				isError: false,
@@ -247,12 +246,9 @@ describe("MCP transport integration", () => {
 					}),
 				])
 			);
-			const result = await registry.execute(
-				snapshot,
-				echoToolName(snapshot),
-				{ text: "hello over http" },
-				async () => true
-			);
+			const result = await registry.execute(snapshot, echoToolName(snapshot), {
+				text: "hello over http",
+			});
 			expect(result).toEqual({
 				content: [{ type: "text", text: "hello over http" }],
 				isError: false,
@@ -407,7 +403,11 @@ describe("MCP policy composition over the real catalog", () => {
 		try {
 			const snapshot = await registry.createSnapshot("build", permissive);
 			const outputs: McpToolOutputConfig[] = [];
-			const gate: McpApprovalGate = () => Promise.resolve({ kind: "deny" });
+			const gate: McpApprovalGate = () =>
+				Promise.resolve({
+					errorText: "MCP tool 'mcp_demo_echo' is denied by policy",
+					kind: "deny",
+				});
 			await runDynamicToolCall({
 				addToolOutput: (config) => {
 					outputs.push(config);
@@ -457,12 +457,9 @@ describe("MCP policy composition over the real catalog", () => {
 			expect(outputs[0]?.errorText).toBe("MCP tool call has no active catalog");
 
 			// The registry-level guard fails closed too, independent of the runner.
-			const direct = await registry.execute(
-				stale,
-				dispatchNameOf(stale),
-				{ text: "hello" },
-				async () => true
-			);
+			const direct = await registry.execute(stale, dispatchNameOf(stale), {
+				text: "hello",
+			});
 			expect(direct.isError).toBe(true);
 		} finally {
 			await registry.close();
@@ -574,11 +571,24 @@ describe("MCP generic approval against a real server", () => {
 		}
 	): Promise<McpToolOutputConfig[]> => {
 		const outputs: McpToolOutputConfig[] = [];
-		const gate: McpApprovalGate = createMcpApprovalGate({
-			approvalQueue: deps.approvalQueue,
+		const toolGate = createToolGate({
 			openApproval: deps.openApproval,
+			resolvePermission: async () => createToolPermission(),
+			sandbox: createWorkspaceSandbox(import.meta.dir),
 			service: deps.service,
 		});
+		const gate: McpApprovalGate = (tool, input, toolCallId) =>
+			toolGate.gate({
+				action: tool.logicalName,
+				agentDecision: tool.agentDecision,
+				description: tool.description,
+				family: "mcp",
+				input,
+				safety: tool.safety,
+				serverDecision: tool.serverDecision,
+				toolCallId,
+				toolName: ctx.dispatchName,
+			});
 		return runDynamicToolCall({
 			addToolOutput: (config) => {
 				outputs.push(config);

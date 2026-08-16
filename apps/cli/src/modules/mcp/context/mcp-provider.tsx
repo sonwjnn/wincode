@@ -10,6 +10,7 @@ import {
 	useState,
 	useSyncExternalStore,
 } from "react";
+import type { GateOutcome } from "@/modules/tool-gate/tool-gate";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import {
 	createMcpRegistry,
@@ -30,10 +31,7 @@ import type { McpNormalizedResult } from "../result";
  * so MCP tools share the same approval queue, grant store, and inline approval
  * panel as static coding tools instead of a separate MCP-only controller.
  */
-export type McpApprovalDecision =
-	| { kind: "allow" }
-	| { kind: "deny" }
-	| { kind: "reject"; feedback?: string };
+export type McpApprovalDecision = GateOutcome;
 
 export type McpApprovalGate = (
 	tool: McpSnapshotTool,
@@ -144,32 +142,20 @@ export function runDynamicToolCall(
 			return;
 		}
 		if (decision.kind === "deny") {
-			await outputErrorText(
-				addToolOutput,
-				toolCall,
-				`MCP tool '${toolCall.toolName}' is denied by policy`
-			);
+			await outputErrorText(addToolOutput, toolCall, decision.errorText);
 			return;
 		}
 		if (decision.kind === "reject") {
-			await outputErrorText(
-				addToolOutput,
-				toolCall,
-				decision.feedback === undefined
-					? `MCP tool '${toolCall.toolName}' was not approved`
-					: `MCP tool '${toolCall.toolName}' was not approved — ${decision.feedback}`
-			);
+			await outputErrorText(addToolOutput, toolCall, decision.errorText);
 			return;
 		}
 
-		const approve = (): Promise<boolean> => Promise.resolve(true);
 		let result: McpNormalizedResult;
 		try {
 			result = await registry.execute(
 				snapshot,
 				toolCall.toolName,
-				toolCall.input,
-				approve
+				toolCall.input
 			);
 		} catch {
 			await outputErrorText(

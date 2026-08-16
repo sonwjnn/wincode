@@ -12,9 +12,9 @@ import type { handleCodingAgentToolCall } from "@wincode/ai/client";
 import { createWorkspaceSandbox } from "@wincode/ai/workspace";
 import type { ChatAddToolOutputFunction } from "ai";
 import type {
+	McpAddToolOutput,
 	McpCatalogSnapshot,
 	McpContextValue,
-	McpSnapshotTool,
 } from "@/modules/mcp";
 import {
 	applyManualApprovalSafetyCeiling,
@@ -23,6 +23,7 @@ import {
 	createToolPermission,
 	DESTRUCTIVE_SHELL_SAFETY_MESSAGE,
 	type PermissionDecision,
+	type ToolPermission,
 	type ToolPermissionRuntime,
 } from "@/modules/permissions";
 import {
@@ -31,6 +32,11 @@ import {
 	hashSkillBody,
 	type SkillExecution,
 } from "@/modules/skills";
+import {
+	createToolGate,
+	type ToolGate,
+	type ToolGateDeps,
+} from "@/modules/tool-gate/tool-gate";
 import { createApprovalQueue } from "@/shared/providers/approval/approval-queue";
 import type {
 	ToolApprovalActions,
@@ -40,14 +46,48 @@ import { prepareSendChatRequestBody } from "../api/chat-request";
 import {
 	activateExplicitSkill,
 	createChatMessageParts,
-	createChatToolCallHandler,
-	createMcpApprovalGate,
+	createChatToolCallHandler as createProductionChatToolCallHandler,
 	finalizeAssistantMessageMetadata,
 	findCurrentTurnAssistantIndex,
 	findCurrentTurnInterruptTargetIndex,
 	notifyHostedCompletion,
 	sanitizeSkillToolParts,
 } from "./use-chat";
+
+type TestChatToolCallHandlerDeps = Omit<
+	Parameters<typeof createProductionChatToolCallHandler>[0],
+	"gate"
+> &
+	Omit<ToolGateDeps, "approvalQueue" | "resolvePermission"> & {
+		approvalQueue?: ToolGateDeps["approvalQueue"];
+		gate?: ToolGate;
+		permissionRef: { current: ToolPermission };
+		resolvePermission?: ToolGateDeps["resolvePermission"];
+	};
+
+const createChatToolCallHandler = ({
+	approvalQueue,
+	gate,
+	openApproval,
+	permissionRef,
+	resolvePermission,
+	sandbox,
+	service,
+	...deps
+}: TestChatToolCallHandlerDeps) =>
+	createProductionChatToolCallHandler({
+		...deps,
+		gate:
+			gate ??
+			createToolGate({
+				approvalQueue,
+				openApproval,
+				resolvePermission:
+					resolvePermission ?? (() => Promise.resolve(permissionRef.current)),
+				sandbox,
+				service,
+			}),
+	});
 
 const selection = {
 	modelId: "gemini-2.5-flash",
@@ -303,10 +343,17 @@ describe("createChatToolCallHandler", () => {
 	type ToolOutput = Parameters<
 		ChatAddToolOutputFunction<CodingAgentUIMessage>
 	>[0];
-	const addToolOutput = mock((_config: ToolOutput) => undefined);
-	const addToolOutputRef = {
-		current:
-			addToolOutput as ChatAddToolOutputFunction<CodingAgentUIMessage> | null,
+	type DynamicToolOutput = Parameters<McpAddToolOutput>[0];
+	const addToolOutput = mock(
+		(_config: ToolOutput | DynamicToolOutput) => undefined
+	);
+	const addToolOutputRef: {
+		current: ChatAddToolOutputFunction<CodingAgentUIMessage> | null;
+	} = {
+		current: addToolOutput,
+	};
+	const dynamicToolOutputRef: { current: McpAddToolOutput | null } = {
+		current: addToolOutput,
 	};
 	const resolvedAgentRef = {
 		current: undefined as ResolvedAgentRuntime | undefined,
@@ -326,6 +373,7 @@ describe("createChatToolCallHandler", () => {
 	) =>
 		createChatToolCallHandler({
 			addToolOutputRef,
+			dynamicToolOutputRef,
 			// Fresh per handler so pending approvals and grants never leak between
 			// tests through a shared queue or service.
 			approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
@@ -757,6 +805,7 @@ describe("createChatToolCallHandler", () => {
 	test("executes the real static tool runner only when the policy allows", async () => {
 		const handler = createChatToolCallHandler({
 			addToolOutputRef,
+			dynamicToolOutputRef,
 			approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
 			mcp,
 			mcpSnapshotRef,
@@ -1133,10 +1182,17 @@ describe("shell tool gating", () => {
 	type ToolOutput = Parameters<
 		ChatAddToolOutputFunction<CodingAgentUIMessage>
 	>[0];
-	const addToolOutput = mock((_config: ToolOutput) => undefined);
-	const addToolOutputRef = {
-		current:
-			addToolOutput as ChatAddToolOutputFunction<CodingAgentUIMessage> | null,
+	type DynamicToolOutput = Parameters<McpAddToolOutput>[0];
+	const addToolOutput = mock(
+		(_config: ToolOutput | DynamicToolOutput) => undefined
+	);
+	const addToolOutputRef: {
+		current: ChatAddToolOutputFunction<CodingAgentUIMessage> | null;
+	} = {
+		current: addToolOutput,
+	};
+	const dynamicToolOutputRef: { current: McpAddToolOutput | null } = {
+		current: addToolOutput,
 	};
 	const mcpSnapshotRef = { current: null as McpCatalogSnapshot | null };
 	const handleDynamicToolCall = mock(() => undefined);
@@ -1152,6 +1208,7 @@ describe("shell tool gating", () => {
 	) =>
 		createChatToolCallHandler({
 			addToolOutputRef,
+			dynamicToolOutputRef,
 			approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
 			handleCodingAgentToolCall: (() =>
 				staticToolCallHandler) as typeof handleCodingAgentToolCall,
@@ -1488,154 +1545,19 @@ describe("shell tool gating", () => {
 	});
 });
 
-describe("createMcpApprovalGate", () => {
-	const makeTool = (
-		overrides: Partial<McpSnapshotTool> = {}
-	): McpSnapshotTool =>
-		({
-			description: "Echo the input",
-			logicalName: "demo_echo",
-			originalToolName: "echo",
-			policy: "allow",
-			safety: false,
-			serverName: "demo",
-			...overrides,
-		}) as McpSnapshotTool;
-
-	const gateDeps = (
-		openApproval: ToolPermissionRuntimeOpenApproval,
-		service = createPermissionService()
-	) => ({
-		approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
-		openApproval,
-		service,
-	});
-
-	type ToolPermissionRuntimeOpenApproval =
-		ToolPermissionRuntime["openApproval"];
-
-	const neverPrompt: ToolPermissionRuntimeOpenApproval = () => {
-		throw new Error("openApproval must not be called for a non-ask decision");
-	};
-
-	test("allows an allow-policy tool without prompting", async () => {
-		const gate = createMcpApprovalGate(gateDeps(neverPrompt));
-		await expect(
-			gate(makeTool({ policy: "allow" }), {}, "call-1")
-		).resolves.toEqual({
-			kind: "allow",
-		});
-	});
-
-	test("denies a deny-policy tool without prompting", async () => {
-		const gate = createMcpApprovalGate(gateDeps(neverPrompt));
-		await expect(
-			gate(makeTool({ policy: "deny" }), {}, "call-1")
-		).resolves.toEqual({
-			kind: "deny",
-		});
-	});
-
-	test("auto approval satisfies an ordinary ask without prompting", async () => {
-		const service = createPermissionService({ autoApproval: true });
-		const gate = createMcpApprovalGate(gateDeps(neverPrompt, service));
-		await expect(
-			gate(makeTool({ policy: "ask" }), {}, "call-1")
-		).resolves.toEqual({
-			kind: "allow",
-		});
-	});
-
-	test("a matching temporary grant satisfies an ask without prompting", async () => {
-		const service = createPermissionService();
-		service.grant("demo_echo", "*");
-		const gate = createMcpApprovalGate(gateDeps(neverPrompt, service));
-		await expect(
-			gate(makeTool({ policy: "ask" }), {}, "call-1")
-		).resolves.toEqual({
-			kind: "allow",
-		});
-	});
-
-	test("a safety ask always prompts even under auto approval", async () => {
-		const service = createPermissionService({ autoApproval: true });
-		let prompted = false;
-		const openApproval: ToolPermissionRuntimeOpenApproval = (
-			_request,
-			actions
-		) => {
-			prompted = true;
-			actions.allow(false);
-		};
-		const gate = createMcpApprovalGate(gateDeps(openApproval, service));
-		await expect(
-			gate(makeTool({ policy: "ask", safety: true }), {}, "call-1")
-		).resolves.toEqual({ kind: "allow" });
-		expect(prompted).toBe(true);
-	});
-
-	test("an interactive allow with remember records a grant for the logical name", async () => {
-		const service = createPermissionService();
-		const openApproval: ToolPermissionRuntimeOpenApproval = (
-			request,
-			actions
-		) => {
-			// The dialog identifies the tool by its logical name and the wildcard
-			// resource, not the hashed dispatch name.
-			expect(request.identity).toEqual([
-				{ label: "tool", value: "demo_echo" },
-				{ label: "resource", value: "*" },
-			]);
-			actions.allow(true);
-		};
-		const gate = createMcpApprovalGate(gateDeps(openApproval, service));
-		await expect(
-			gate(makeTool({ policy: "ask" }), {}, "call-1")
-		).resolves.toEqual({
-			kind: "allow",
-		});
-		expect(service.isGranted("demo_echo", "*")).toBe(true);
-	});
-
-	test("a rejection carries the typed feedback back to the agent", async () => {
-		const openApproval: ToolPermissionRuntimeOpenApproval = (
-			_request,
-			actions
-		) => {
-			actions.reject("use the read tool instead");
-		};
-		const gate = createMcpApprovalGate(gateDeps(openApproval));
-		await expect(
-			gate(makeTool({ policy: "ask" }), {}, "call-1")
-		).resolves.toEqual({
-			feedback: "use the read tool instead",
-			kind: "reject",
-		});
-	});
-
-	test("a cancel rejects without feedback and grants nothing", async () => {
-		const service = createPermissionService();
-		const openApproval: ToolPermissionRuntimeOpenApproval = (
-			_request,
-			actions
-		) => {
-			actions.cancel();
-		};
-		const gate = createMcpApprovalGate(gateDeps(openApproval, service));
-		await expect(
-			gate(makeTool({ policy: "ask" }), {}, "call-1")
-		).resolves.toEqual({
-			kind: "reject",
-		});
-		expect(service.isGranted("demo_echo", "*")).toBe(false);
-	});
-});
-
 describe("skill tool activation", () => {
-	const addToolOutput = mock(() => undefined);
-	const addToolOutputRef = {
-		current:
-			addToolOutput as unknown as ChatAddToolOutputFunction<CodingAgentUIMessage>,
+	type ToolOutput = Parameters<
+		ChatAddToolOutputFunction<CodingAgentUIMessage>
+	>[0];
+	type DynamicToolOutput = Parameters<McpAddToolOutput>[0];
+	const addToolOutput = mock(
+		(_config: ToolOutput | DynamicToolOutput) => undefined
+	);
+	const addToolOutputRef: {
+		current: ChatAddToolOutputFunction<CodingAgentUIMessage> | null;
+	} = { current: addToolOutput };
+	const dynamicToolOutputRef: { current: McpAddToolOutput | null } = {
+		current: addToolOutput,
 	};
 	const staticToolCallHandler = mock(() => undefined);
 	const openApproval = mock(() => undefined);
@@ -1662,7 +1584,8 @@ describe("skill tool activation", () => {
 		overrides: Partial<Parameters<typeof createChatToolCallHandler>[0]> = {}
 	) =>
 		createChatToolCallHandler({
-			addToolOutputRef: addToolOutputRef as never,
+			addToolOutputRef,
+			dynamicToolOutputRef,
 			approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
 			handleCodingAgentToolCall: (() =>
 				staticToolCallHandler) as typeof handleCodingAgentToolCall,
@@ -1991,17 +1914,17 @@ describe("activateExplicitSkill", () => {
 	const deps = (
 		execution: SkillExecution,
 		permission = createToolPermission(),
-		openApproval: (
-			request: ToolApprovalRequest,
-			actions: { allow: (remember: boolean) => void; reject: () => void }
-		) => void = () => undefined
+		openApproval: ToolPermissionRuntime["openApproval"] = () => undefined
 	) => ({
-		approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
 		execution,
-		openApproval:
-			openApproval as unknown as ToolPermissionRuntime["openApproval"],
+		gate: createToolGate({
+			approvalQueue: createApprovalQueue<ToolApprovalRequest>(),
+			openApproval,
+			resolvePermission: async () => permission,
+			sandbox: createWorkspaceSandbox(import.meta.dir),
+			service: createPermissionService(),
+		}),
 		permission,
-		service: createPermissionService(),
 	});
 
 	test("activates an allowed explicit Skill and returns the request payload", async () => {

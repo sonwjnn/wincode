@@ -17,7 +17,6 @@ import type { McpExecutionPolicy } from "./policy";
 import {
 	createMcpRegistry,
 	type McpAgentPolicy,
-	type McpApprovalRequest,
 	type McpRegistry,
 	type McpRegistryDeps,
 } from "./registry";
@@ -89,8 +88,6 @@ class FakeMcpClient implements McpClient {
 		this.listener?.([...tools]);
 	}
 }
-
-const ECHO_NAME_PATTERN = /^mcp_demo_echo_/;
 
 // Agent policies target MCP tools by open-glob keys (`*`, `demo_*`) that sit
 // outside the nominal PermissionAction union; the registry evaluates them as
@@ -362,62 +359,9 @@ describe("createMcpRegistry", () => {
 		const readName = [...snapshot.tools.keys()].find(
 			(name) => snapshot.tools.get(name)?.originalToolName === "read"
 		);
-		const result = await registry.execute(
-			snapshot,
-			readName ?? "",
-			{},
-			async () => true
-		);
+		const result = await registry.execute(snapshot, readName ?? "", {});
 		expect(result.isError).toBe(true);
 		expect(JSON.stringify(result.content)).toContain("denied");
-	});
-
-	test("asks for approval exactly once and includes request details", async () => {
-		const demo = new FakeMcpClient("demo", [tool("echo", "Echo text back")]);
-		const { registry } = harness({
-			clients: { demo },
-			configs: [serverConfig("demo", { permission: "ask" })],
-		});
-		const snapshot = await registry.createSnapshot("build");
-		const name = snapshot.manifest[0]?.name ?? "";
-		expect(name).toMatch(ECHO_NAME_PATTERN);
-		const requests: McpApprovalRequest[] = [];
-		const result = await registry.execute(
-			snapshot,
-			name,
-			{ text: "hi" },
-			async (request) => {
-				requests.push(request);
-				return true;
-			}
-		);
-		expect(result.isError).toBe(false);
-		expect(requests).toEqual([
-			{
-				serverName: "demo",
-				originalToolName: "echo",
-				description: "Echo text back",
-				input: { text: "hi" },
-			},
-		]);
-	});
-
-	test("returns an output error when approval is denied", async () => {
-		const demo = new FakeMcpClient("demo", [tool("echo")]);
-		const { registry } = harness({
-			clients: { demo },
-			configs: [serverConfig("demo", { permission: "ask" })],
-		});
-		const snapshot = await registry.createSnapshot("build");
-		const name = snapshot.manifest[0]?.name ?? "";
-		const result = await registry.execute(
-			snapshot,
-			name,
-			{},
-			async () => false
-		);
-		expect(result.isError).toBe(true);
-		expect(JSON.stringify(result.content)).toContain("not approved");
 	});
 
 	test("bypasses approval when the policy allows", async () => {
@@ -428,28 +372,8 @@ describe("createMcpRegistry", () => {
 		});
 		const snapshot = await registry.createSnapshot("build");
 		const name = snapshot.manifest[0]?.name ?? "";
-		const result = await registry.execute(snapshot, name, {}, async () => {
-			throw new Error("approval must not be requested");
-		});
+		const result = await registry.execute(snapshot, name, {});
 		expect(result.isError).toBe(false);
-	});
-
-	test("re-asks for approval on every call instead of reusing a decision", async () => {
-		const demo = new FakeMcpClient("demo", [tool("echo")]);
-		const { registry } = harness({
-			clients: { demo },
-			configs: [serverConfig("demo", { permission: "ask" })],
-		});
-		const snapshot = await registry.createSnapshot("build");
-		const name = snapshot.manifest[0]?.name ?? "";
-		let approvals = 0;
-		const approve = async (): Promise<boolean> => {
-			approvals += 1;
-			return true;
-		};
-		await registry.execute(snapshot, name, {}, approve);
-		await registry.execute(snapshot, name, {}, approve);
-		expect(approvals).toBe(2);
 	});
 
 	test("times out execution, sanitizes the error, closes, and degrades the server", async () => {
@@ -469,7 +393,7 @@ describe("createMcpRegistry", () => {
 		});
 		const snapshot = await registry.createSnapshot("build");
 		const name = snapshot.manifest[0]?.name ?? "";
-		const result = await registry.execute(snapshot, name, {}, async () => true);
+		const result = await registry.execute(snapshot, name, {});
 		expect(result.isError).toBe(true);
 		expect(JSON.stringify(result.content)).toContain("timed out");
 		expect(JSON.stringify(result.content)).not.toContain("AbortError");
@@ -498,7 +422,7 @@ describe("createMcpRegistry", () => {
 		});
 		const snapshot = await registry.createSnapshot("build");
 		const name = snapshot.manifest[0]?.name ?? "";
-		const result = await registry.execute(snapshot, name, {}, async () => true);
+		const result = await registry.execute(snapshot, name, {});
 		expect(result.isError).toBe(true);
 		expect(JSON.stringify(result.content)).not.toContain("super-secret-token");
 		expect(JSON.stringify(result.content)).not.toContain("secret.example.com");
@@ -514,8 +438,7 @@ describe("createMcpRegistry", () => {
 		const result = await registry.execute(
 			snapshot,
 			"mcp_unknown_tool_00000000",
-			{},
-			async () => true
+			{}
 		);
 		expect(result.isError).toBe(true);
 		expect(JSON.stringify(result.content)).toContain("Unknown");
@@ -530,7 +453,7 @@ describe("createMcpRegistry", () => {
 		const first = await registry.createSnapshot("build");
 		await registry.createSnapshot("build");
 		const name = first.manifest[0]?.name ?? "";
-		const result = await registry.execute(first, name, {}, async () => true);
+		const result = await registry.execute(first, name, {});
 		expect(result.isError).toBe(true);
 		expect(JSON.stringify(result.content)).toContain("stale");
 	});
@@ -544,12 +467,7 @@ describe("createMcpRegistry", () => {
 		const first = await registry.createSnapshot("build");
 		const firstName = first.manifest[0]?.name ?? "";
 		demo.publishTools([tool("two")]);
-		const result = await registry.execute(
-			first,
-			firstName,
-			{},
-			async () => true
-		);
+		const result = await registry.execute(first, firstName, {});
 		expect(result.isError).toBe(false);
 		const second = await registry.createSnapshot("build");
 		expect(second.manifest).toHaveLength(1);
@@ -572,7 +490,7 @@ describe("createMcpRegistry", () => {
 		});
 		const snapshot = await registry.createSnapshot("build");
 		const name = snapshot.manifest[0]?.name ?? "";
-		const pending = registry.execute(snapshot, name, {}, async () => true);
+		const pending = registry.execute(snapshot, name, {});
 		demo.publishTools([tool("two")]);
 		await registry.createSnapshot("build");
 		expect(snapshot.tools.get(name)?.originalToolName).toBe("one");
@@ -771,8 +689,7 @@ describe("createMcpRegistry", () => {
 		const staleResult = await registry.execute(
 			snapshot,
 			snapshot.manifest[0]?.name ?? "",
-			{},
-			async () => true
+			{}
 		);
 		expect(staleResult).toMatchObject({
 			isError: true,
@@ -1076,8 +993,7 @@ describe("createMcpRegistry", () => {
 		const execution = registry.execute(
 			snapshot,
 			snapshot.manifest[0]?.name ?? "",
-			{},
-			async () => true
+			{}
 		);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -1136,13 +1052,7 @@ describe("createMcpRegistry", () => {
 		const snapshot = await registry.createSnapshot("build");
 		const name = snapshot.manifest[0]?.name ?? "";
 		const controller = new AbortController();
-		const pending = registry.execute(
-			snapshot,
-			name,
-			{},
-			async () => true,
-			controller.signal
-		);
+		const pending = registry.execute(snapshot, name, {}, controller.signal);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(callStarted).toBe(true);
 		controller.abort();
@@ -1222,7 +1132,7 @@ describe("createMcpRegistry", () => {
 		});
 		const snapshot = await registry.createSnapshot("build");
 		const name = snapshot.manifest[0]?.name ?? "";
-		const pending = registry.execute(snapshot, name, {}, async () => true);
+		const pending = registry.execute(snapshot, name, {});
 		await registry.close();
 		const result = await pending;
 		expect(result.isError).toBe(true);

@@ -14,16 +14,16 @@ user's working directory — the server never runs file-system tools.
 	tree and exposes `statuses`, `createSnapshot(mode, agentPolicy?)`,
 	`handleDynamicToolCall(snapshot, toolCall, addToolOutput, gate)`, `reconnect(serverName)`, and
 	`toggle(serverName)`, and `close()`. The registry is created once and closed on unmount.
-- Types: `McpServerStatus`, `McpApprovalRequest`, `McpCatalogSnapshot`, `McpSnapshotTool`,
+- Types: `McpServerStatus`, `McpCatalogSnapshot`, `McpSnapshotTool`,
   `McpAgentPolicy`, `McpApprovalGate`, `McpApprovalDecision`, `McpExecutionPolicy`.
 - `McpStatusDialogContent` — the `/mcps` runtime status surface. Arrow keys navigate servers and
 	Space enables or disables the highlighted server without editing configuration. Rendered from
 	`McpServerStatus` only, so no config, env, headers, or URLs can appear.
 
-MCP tools resolve approvals through the same generic Permission engine, approval queue, and
-approval dialog as static coding tools — there is no MCP-specific approval controller or dialog.
-The caller (the chat tool-call handler) supplies an `McpApprovalGate` that owns that shared
-machinery; the registry and provider only apply the composed decision.
+MCP tools resolve approvals through the Tool Gate, sharing the generic Permission engine,
+conversation approval queue, and approval panel with static coding tools. The registry owns only
+snapshot validity, dispatch, normalization, and the deny defense-in-depth check; the provider
+adapts an MCP snapshot tool to the Tool Gate's primitive call shape.
 
 ## Config sources
 

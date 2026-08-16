@@ -79,6 +79,9 @@ export const handleCodingAgentToolCall =
 		if (toolCall.dynamic) {
 			return;
 		}
+		if (toolCall.toolName === "__dynamic") {
+			return;
+		}
 
 		if (!agentTools.includes(toolCall.toolName)) {
 			await addToolOutput({
