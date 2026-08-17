@@ -3,6 +3,7 @@ import { MockTreeSitterClient } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { useEffect, useState } from "react";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import {
 	MarkdownMessagePart,
 	setMarkdownTreeSitterClientForTests,
@@ -32,6 +33,16 @@ function GrowingMarkdown() {
 	return <MarkdownMessagePart isStreaming text={content} />;
 }
 
+/** Settles the async highlight/block pass before capturing output. */
+const settleRenders = async (
+	setup: Awaited<ReturnType<typeof testRender>>
+): Promise<void> => {
+	for (let index = 0; index < 3; index++) {
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		await setup.renderOnce();
+	}
+};
+
 const renderFrame = async (
 	text: string,
 	{
@@ -47,15 +58,88 @@ const renderFrame = async (
 	);
 
 	try {
-		for (let index = 0; index < 3; index++) {
-			await new Promise((resolve) => setTimeout(resolve, 10));
-			await setup.renderOnce();
-		}
+		await settleRenders(setup);
 		return setup.captureCharFrame();
 	} finally {
 		setup.renderer.destroy();
 	}
 };
+
+describe("MarkdownMessagePart color mapping", () => {
+	type Highlight = [number, number, string, Record<string, unknown>];
+
+	const rgb = (hex: string): [number, number, number] => [
+		Number.parseInt(hex.slice(1, 3), 16),
+		Number.parseInt(hex.slice(3, 5), 16),
+		Number.parseInt(hex.slice(5, 7), 16),
+	];
+
+	const renderSpans = async (text: string, highlights: Highlight[]) => {
+		const client = new MockTreeSitterClient({ autoResolveTimeout: 0 });
+		client.setMockResult({ highlights });
+		setMarkdownTreeSitterClientForTests(client);
+		try {
+			const setup = await testRender(
+				<ThemeProvider>
+					<MarkdownMessagePart isStreaming={false} text={text} />
+				</ThemeProvider>,
+				{ height: 20, width: 160 }
+			);
+			try {
+				await settleRenders(setup);
+				return setup.captureSpans();
+			} finally {
+				setup.renderer.destroy();
+			}
+		} finally {
+			setMarkdownTreeSitterClientForTests(null);
+		}
+	};
+
+	const findSpanFg = (
+		frame: Awaited<ReturnType<typeof renderSpans>>,
+		text: string
+	): [number, number, number] | null => {
+		for (const line of frame.lines) {
+			for (const span of line.spans) {
+				if (span.text.includes(text)) {
+					return [
+						span.fg.buffer[0] ?? 0,
+						span.fg.buffer[1] ?? 0,
+						span.fg.buffer[2] ?? 0,
+					];
+				}
+			}
+		}
+		return null;
+	};
+
+	test("colors headings with the mdHeading token", async () => {
+		const frame = await renderSpans("# Title", [[0, 7, "markup.heading", {}]]);
+
+		expect(findSpanFg(frame, "Title")).toEqual(
+			rgb(DEFAULT_THEME.colors.mdHeading)
+		);
+	});
+
+	test("colors strong text with the mdStrong token", async () => {
+		const frame = await renderSpans("**bold**", [[0, 8, "markup.strong", {}]]);
+
+		expect(findSpanFg(frame, "bold")).toEqual(
+			rgb(DEFAULT_THEME.colors.mdStrong)
+		);
+	});
+
+	test("colors fenced code keywords with the syntaxKeyword token", async () => {
+		const frame = await renderSpans("```ts\nconst x = 1\n```", [
+			[0, 11, "keyword", {}],
+		]);
+
+		expect(findSpanFg(frame, "const x = 1")).toEqual(
+			rgb(DEFAULT_THEME.colors.syntaxKeyword)
+		);
+	});
+});
 
 describe("MarkdownMessagePart", () => {
 	beforeAll(() => {

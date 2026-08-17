@@ -27,6 +27,25 @@ export type ThemeColors = {
 	fileBadgeText: string;
 	filePathBackground: string;
 	filePath: string;
+	/** Markdown prose tokens (hybrid of pi/opencode palettes). */
+	mdHeading: string;
+	mdLink: string;
+	mdLinkUrl: string;
+	mdCode: string;
+	mdQuote: string;
+	mdStrong: string;
+	mdEmph: string;
+	mdListBullet: string;
+	/** Tree-sitter syntax scopes for fenced code blocks (VS Code Dark+). */
+	syntaxComment: string;
+	syntaxKeyword: string;
+	syntaxFunction: string;
+	syntaxVariable: string;
+	syntaxString: string;
+	syntaxNumber: string;
+	syntaxType: string;
+	syntaxOperator: string;
+	syntaxPunctuation: string;
 };
 
 export type Theme = {
@@ -61,6 +80,36 @@ const MUTED_TEXT_BRIGHTNESS = 0.58;
 const THINKING_TEXT_BRIGHTNESS = 0.28;
 const DISABLED_TEXT_BRIGHTNESS = 0.38;
 const FILE_PATH_BRIGHTNESS = 0.35;
+
+/**
+ * Canonical markdown prose palette, tuned from pi's dark theme (gold
+ * headings, muted blue-gray links, cyan inline code, gray quotes) plus
+ * opencode's strong/emphasis hues. All bundled themes are dark, so the
+ * canonical values work everywhere; a theme overrides any token it wants.
+ */
+const MD_HEADING_COLOR = "#f0c674";
+const MD_LINK_COLOR = "#81a2be";
+const MD_LINK_URL_COLOR = "#808080";
+const MD_CODE_COLOR = "#56b6c2";
+const MD_QUOTE_COLOR = "#808080";
+const MD_STRONG_COLOR = "#f5a742";
+const MD_EMPH_COLOR = "#e5c07b";
+const MD_LIST_BULLET_COLOR = "#56b6c2";
+
+/**
+ * Canonical syntax palette for fenced code blocks, following pi's choice of
+ * the VS Code Dark+ scopes.
+ */
+const SYNTAX_COMMENT_COLOR = "#6a9955";
+const SYNTAX_KEYWORD_COLOR = "#569cd6";
+const SYNTAX_FUNCTION_COLOR = "#dcdcaa";
+const SYNTAX_VARIABLE_COLOR = "#9cdcfe";
+const SYNTAX_STRING_COLOR = "#ce9178";
+const SYNTAX_NUMBER_COLOR = "#b5cea8";
+const SYNTAX_TYPE_COLOR = "#4ec9b0";
+const SYNTAX_OPERATOR_COLOR = "#d4d4d4";
+const SYNTAX_PUNCTUATION_COLOR = "#d4d4d4";
+
 const HEX_COLOR_RE = /^#([\da-f]{3,4}|[\da-f]{6}(?:[\da-f]{2})?)$/iu;
 
 const brightenColor = (color: string, amount: number) => {
@@ -851,9 +900,52 @@ const THEME_DEFINITIONS = [
 	},
 ] satisfies ThemeDefinition[];
 
+/** Resolves the markdown and syntax tokens, falling back to canonicals. */
+const resolveMarkdownAndSyntaxTokens = (
+	colors: ThemeDefinition["colors"]
+): Pick<
+	ThemeColors,
+	| "mdHeading"
+	| "mdLink"
+	| "mdLinkUrl"
+	| "mdCode"
+	| "mdQuote"
+	| "mdStrong"
+	| "mdEmph"
+	| "mdListBullet"
+	| "syntaxComment"
+	| "syntaxKeyword"
+	| "syntaxFunction"
+	| "syntaxVariable"
+	| "syntaxString"
+	| "syntaxNumber"
+	| "syntaxType"
+	| "syntaxOperator"
+	| "syntaxPunctuation"
+> => ({
+	mdHeading: colors.mdHeading ?? MD_HEADING_COLOR,
+	mdLink: colors.mdLink ?? MD_LINK_COLOR,
+	mdLinkUrl: colors.mdLinkUrl ?? MD_LINK_URL_COLOR,
+	mdCode: colors.mdCode ?? MD_CODE_COLOR,
+	mdQuote: colors.mdQuote ?? MD_QUOTE_COLOR,
+	mdStrong: colors.mdStrong ?? MD_STRONG_COLOR,
+	mdEmph: colors.mdEmph ?? MD_EMPH_COLOR,
+	mdListBullet: colors.mdListBullet ?? MD_LIST_BULLET_COLOR,
+	syntaxComment: colors.syntaxComment ?? SYNTAX_COMMENT_COLOR,
+	syntaxKeyword: colors.syntaxKeyword ?? SYNTAX_KEYWORD_COLOR,
+	syntaxFunction: colors.syntaxFunction ?? SYNTAX_FUNCTION_COLOR,
+	syntaxVariable: colors.syntaxVariable ?? SYNTAX_VARIABLE_COLOR,
+	syntaxString: colors.syntaxString ?? SYNTAX_STRING_COLOR,
+	syntaxNumber: colors.syntaxNumber ?? SYNTAX_NUMBER_COLOR,
+	syntaxType: colors.syntaxType ?? SYNTAX_TYPE_COLOR,
+	syntaxOperator: colors.syntaxOperator ?? SYNTAX_OPERATOR_COLOR,
+	syntaxPunctuation: colors.syntaxPunctuation ?? SYNTAX_PUNCTUATION_COLOR,
+});
+
 export const resolveTheme = ({ colors, name }: ThemeDefinition): Theme => ({
 	colors: {
 		...colors,
+		...resolveMarkdownAndSyntaxTokens(colors),
 		agent: { build: colors.primary, plan: colors.planMode },
 		backgroundElement: colors.backgroundElement ?? colors.backgroundPanel,
 		borderActive: colors.borderActive ?? colors.primary,

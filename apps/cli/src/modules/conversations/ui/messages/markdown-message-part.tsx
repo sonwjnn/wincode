@@ -31,36 +31,46 @@ const buildMarkdownStyles = (
 ): Record<string, StyleDefinitionInput> => ({
 	default: { fg: colors.text },
 	conceal: { fg: colors.textDisabled },
-	"markup.heading": { fg: colors.primary, bold: true },
-	"markup.strong": { fg: colors.text, bold: true },
-	"markup.italic": { fg: colors.text, italic: true },
+	"markup.heading": { fg: colors.mdHeading, bold: true },
+	"markup.strong": { fg: colors.mdStrong, bold: true },
+	"markup.italic": { fg: colors.mdEmph, italic: true },
 	"markup.strikethrough": { fg: colors.textMuted },
-	"markup.raw": { fg: colors.tool },
-	"markup.link": { fg: colors.info },
-	"markup.link.label": { fg: colors.info },
-	"markup.link.url": { fg: colors.info, underline: true },
-	"markup.quote": { fg: colors.textMuted, italic: true },
+	"markup.raw": { fg: colors.mdCode },
+	"markup.link": { fg: colors.mdLink },
+	"markup.link.label": { fg: colors.mdLink },
+	"markup.link.url": { fg: colors.mdLinkUrl, dim: true, underline: true },
+	"markup.quote": { fg: colors.mdQuote, italic: true },
+	"markup.list": { fg: colors.mdListBullet },
+	// Tree-sitter scopes in fenced code blocks. Dotted captures (for example
+	// `keyword.conditional` or `function.call`) fall back to these bases.
+	comment: { fg: colors.syntaxComment },
+	keyword: { fg: colors.syntaxKeyword },
+	function: { fg: colors.syntaxFunction },
+	variable: { fg: colors.syntaxVariable },
+	string: { fg: colors.syntaxString },
+	number: { fg: colors.syntaxNumber },
+	type: { fg: colors.syntaxType },
+	operator: { fg: colors.syntaxOperator },
+	punctuation: { fg: colors.syntaxPunctuation },
+	// Aliases so constants and constructors read with their VS Code Dark+
+	// siblings instead of falling through to the default text color.
+	constant: { fg: colors.syntaxKeyword },
+	constructor: { fg: colors.syntaxFunction },
 });
 
-const markdownStyleCacheKey = (colors: ThemeColors): string =>
-	[
-		colors.text,
-		colors.textDisabled,
-		colors.textMuted,
-		colors.primary,
-		colors.tool,
-		colors.info,
-	].join("|");
-
+// The cache key is the serialized style map itself, so adding or removing a
+// token can never silently leave the cached SyntaxStyle stale (the manual
+// key list this replaced drifted from the map in review).
 let cachedMarkdownStyle: { key: string; style: SyntaxStyle } | null = null;
 
 const resolveMarkdownSyntaxStyle = (colors: ThemeColors): SyntaxStyle => {
-	const key = markdownStyleCacheKey(colors);
+	const styles = buildMarkdownStyles(colors);
+	const key = JSON.stringify(styles);
 	if (cachedMarkdownStyle?.key === key) {
 		return cachedMarkdownStyle.style;
 	}
 	cachedMarkdownStyle?.style.destroy();
-	const style = SyntaxStyle.fromStyles(buildMarkdownStyles(colors));
+	const style = SyntaxStyle.fromStyles(styles);
 	cachedMarkdownStyle = { key, style };
 	return style;
 };
