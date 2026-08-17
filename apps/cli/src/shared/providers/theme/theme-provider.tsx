@@ -2,7 +2,13 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ReactNode } from "react";
-import { createContext, useCallback, useContext, useState } from "react";
+import {
+	createContext,
+	useCallback,
+	useContext,
+	useEffect,
+	useState,
+} from "react";
 import { z } from "zod";
 import type { Theme, ThemeColors } from "./themes";
 import { DEFAULT_THEME, findThemeByName, THEMES } from "./themes";
@@ -67,10 +73,29 @@ export function useTheme(): ThemeContextValue {
 
 type ThemeProviderProps = {
 	children: ReactNode;
+	/**
+	 * Pins the theme instead of the persisted preference. Used by tests that
+	 * assert colors, where the user's `preferences.json` must not leak into
+	 * expectations; a changed prop re-pins on the next render.
+	 */
+	themeName?: string;
 };
 
-export function ThemeProvider({ children }: ThemeProviderProps) {
-	const [currentTheme, setCurrentTheme] = useState<Theme>(getInitialTheme);
+const resolveThemeValue = (themeName: string | undefined): Theme =>
+	themeName === undefined
+		? getInitialTheme()
+		: (findThemeByName(THEMES, themeName) ?? DEFAULT_THEME);
+
+export function ThemeProvider({ children, themeName }: ThemeProviderProps) {
+	const [currentTheme, setCurrentTheme] = useState<Theme>(() =>
+		resolveThemeValue(themeName)
+	);
+
+	useEffect(() => {
+		if (themeName !== undefined) {
+			setCurrentTheme(resolveThemeValue(themeName));
+		}
+	}, [themeName]);
 
 	const setTheme = useCallback((theme: Theme) => {
 		setCurrentTheme(theme);

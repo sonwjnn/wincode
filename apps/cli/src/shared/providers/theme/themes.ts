@@ -1,4 +1,8 @@
 import { getContrastingTextColor } from "./color-contrast";
+import {
+	MARKDOWN_TOKEN_OVERRIDES,
+	type MarkdownTokenOverrides,
+} from "./markdown-token-overrides";
 
 export type ThemeColors = {
 	agent: Record<string, string>;
@@ -900,52 +904,56 @@ const THEME_DEFINITIONS = [
 	},
 ] satisfies ThemeDefinition[];
 
-/** Resolves the markdown and syntax tokens, falling back to canonicals. */
+/** Resolves the markdown and syntax tokens: definition override, then the
+ * opencode-sourced per-theme table, then canonical fallbacks. */
 const resolveMarkdownAndSyntaxTokens = (
-	colors: ThemeDefinition["colors"]
-): Pick<
-	ThemeColors,
-	| "mdHeading"
-	| "mdLink"
-	| "mdLinkUrl"
-	| "mdCode"
-	| "mdQuote"
-	| "mdStrong"
-	| "mdEmph"
-	| "mdListBullet"
-	| "syntaxComment"
-	| "syntaxKeyword"
-	| "syntaxFunction"
-	| "syntaxVariable"
-	| "syntaxString"
-	| "syntaxNumber"
-	| "syntaxType"
-	| "syntaxOperator"
-	| "syntaxPunctuation"
-> => ({
-	mdHeading: colors.mdHeading ?? MD_HEADING_COLOR,
-	mdLink: colors.mdLink ?? MD_LINK_COLOR,
-	mdLinkUrl: colors.mdLinkUrl ?? MD_LINK_URL_COLOR,
-	mdCode: colors.mdCode ?? MD_CODE_COLOR,
-	mdQuote: colors.mdQuote ?? MD_QUOTE_COLOR,
-	mdStrong: colors.mdStrong ?? MD_STRONG_COLOR,
-	mdEmph: colors.mdEmph ?? MD_EMPH_COLOR,
-	mdListBullet: colors.mdListBullet ?? MD_LIST_BULLET_COLOR,
-	syntaxComment: colors.syntaxComment ?? SYNTAX_COMMENT_COLOR,
-	syntaxKeyword: colors.syntaxKeyword ?? SYNTAX_KEYWORD_COLOR,
-	syntaxFunction: colors.syntaxFunction ?? SYNTAX_FUNCTION_COLOR,
-	syntaxVariable: colors.syntaxVariable ?? SYNTAX_VARIABLE_COLOR,
-	syntaxString: colors.syntaxString ?? SYNTAX_STRING_COLOR,
-	syntaxNumber: colors.syntaxNumber ?? SYNTAX_NUMBER_COLOR,
-	syntaxType: colors.syntaxType ?? SYNTAX_TYPE_COLOR,
-	syntaxOperator: colors.syntaxOperator ?? SYNTAX_OPERATOR_COLOR,
-	syntaxPunctuation: colors.syntaxPunctuation ?? SYNTAX_PUNCTUATION_COLOR,
-});
+	colors: ThemeDefinition["colors"],
+	name: string
+): MarkdownTokenOverrides => {
+	const overrides: Partial<MarkdownTokenOverrides> =
+		MARKDOWN_TOKEN_OVERRIDES[name] ?? {};
+	return {
+		mdHeading: colors.mdHeading ?? overrides.mdHeading ?? MD_HEADING_COLOR,
+		mdLink: colors.mdLink ?? overrides.mdLink ?? MD_LINK_COLOR,
+		mdLinkUrl: colors.mdLinkUrl ?? overrides.mdLinkUrl ?? MD_LINK_URL_COLOR,
+		mdCode: colors.mdCode ?? overrides.mdCode ?? MD_CODE_COLOR,
+		mdQuote: colors.mdQuote ?? overrides.mdQuote ?? MD_QUOTE_COLOR,
+		mdStrong: colors.mdStrong ?? overrides.mdStrong ?? MD_STRONG_COLOR,
+		mdEmph: colors.mdEmph ?? overrides.mdEmph ?? MD_EMPH_COLOR,
+		mdListBullet:
+			colors.mdListBullet ?? overrides.mdListBullet ?? MD_LIST_BULLET_COLOR,
+		syntaxComment:
+			colors.syntaxComment ?? overrides.syntaxComment ?? SYNTAX_COMMENT_COLOR,
+		syntaxKeyword:
+			colors.syntaxKeyword ?? overrides.syntaxKeyword ?? SYNTAX_KEYWORD_COLOR,
+		syntaxFunction:
+			colors.syntaxFunction ??
+			overrides.syntaxFunction ??
+			SYNTAX_FUNCTION_COLOR,
+		syntaxVariable:
+			colors.syntaxVariable ??
+			overrides.syntaxVariable ??
+			SYNTAX_VARIABLE_COLOR,
+		syntaxString:
+			colors.syntaxString ?? overrides.syntaxString ?? SYNTAX_STRING_COLOR,
+		syntaxNumber:
+			colors.syntaxNumber ?? overrides.syntaxNumber ?? SYNTAX_NUMBER_COLOR,
+		syntaxType: colors.syntaxType ?? overrides.syntaxType ?? SYNTAX_TYPE_COLOR,
+		syntaxOperator:
+			colors.syntaxOperator ??
+			overrides.syntaxOperator ??
+			SYNTAX_OPERATOR_COLOR,
+		syntaxPunctuation:
+			colors.syntaxPunctuation ??
+			overrides.syntaxPunctuation ??
+			SYNTAX_PUNCTUATION_COLOR,
+	};
+};
 
 export const resolveTheme = ({ colors, name }: ThemeDefinition): Theme => ({
 	colors: {
 		...colors,
-		...resolveMarkdownAndSyntaxTokens(colors),
+		...resolveMarkdownAndSyntaxTokens(colors, name),
 		agent: { build: colors.primary, plan: colors.planMode },
 		backgroundElement: colors.backgroundElement ?? colors.backgroundPanel,
 		borderActive: colors.borderActive ?? colors.primary,

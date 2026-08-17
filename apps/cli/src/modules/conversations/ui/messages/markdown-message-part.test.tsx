@@ -51,7 +51,7 @@ const renderFrame = async (
 	}: { height?: number; isStreaming?: boolean } = {}
 ): Promise<string> => {
 	const setup = await testRender(
-		<ThemeProvider>
+		<ThemeProvider themeName="opencode">
 			<MarkdownMessagePart isStreaming={isStreaming} text={text} />
 		</ThemeProvider>,
 		{ height, width: 160 }
@@ -80,7 +80,7 @@ describe("MarkdownMessagePart color mapping", () => {
 		setMarkdownTreeSitterClientForTests(client);
 		try {
 			const setup = await testRender(
-				<ThemeProvider>
+				<ThemeProvider themeName="opencode">
 					<MarkdownMessagePart isStreaming={false} text={text} />
 				</ThemeProvider>,
 				{ height: 20, width: 160 }
@@ -218,7 +218,7 @@ describe("MarkdownMessagePart", () => {
 
 	test("streaming growth keeps previously rendered content", async () => {
 		const setup = await testRender(
-			<ThemeProvider>
+			<ThemeProvider themeName="opencode">
 				<GrowingMarkdown />
 			</ThemeProvider>,
 			{ height: 10, width: 160 }

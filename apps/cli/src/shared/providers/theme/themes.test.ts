@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { MARKDOWN_TOKEN_OVERRIDES } from "./markdown-token-overrides";
 import type { ThemeDefinition } from "./themes";
-import { DEFAULT_THEME, resolveTheme, THEMES } from "./themes";
+import { DEFAULT_THEME, findThemeByName, resolveTheme, THEMES } from "./themes";
 
 const MINIMAL_COLORS: ThemeDefinition["colors"] = {
 	primary: "#fab283",
@@ -39,7 +40,7 @@ const MD_TOKEN_KEYS = [
 	"syntaxPunctuation",
 ] as const;
 
-const HEX_COLOR_RE = /^#[0-9a-f]{3,8}$/i;
+const HEX_COLOR_RE = /^#([\da-f]{3,4}|[\da-f]{6}(?:[\da-f]{2})?)$/i;
 
 describe("markdown and syntax token resolution", () => {
 	test("fills canonical markdown tokens for themes that do not define them", () => {
@@ -99,8 +100,41 @@ describe("markdown and syntax token resolution", () => {
 		}
 	});
 
-	test("the default theme carries the canonical markdown palette", () => {
-		expect(DEFAULT_THEME.colors.mdHeading).toBe("#f0c674");
-		expect(DEFAULT_THEME.colors.syntaxString).toBe("#ce9178");
+	test("every bundled theme has a complete opencode-sourced override entry", () => {
+		const overrideNames = Object.keys(MARKDOWN_TOKEN_OVERRIDES);
+		expect(overrideNames).toHaveLength(THEMES.length);
+		for (const theme of THEMES) {
+			const entry = MARKDOWN_TOKEN_OVERRIDES[theme.name];
+			expect(entry, theme.name).toBeDefined();
+			for (const key of MD_TOKEN_KEYS) {
+				expect(entry?.[key], `${theme.name}.${key}`).toMatch(HEX_COLOR_RE);
+			}
+		}
+	});
+
+	test("resolved themes carry their opencode-sourced markdown identity", () => {
+		// The default theme is opencode's own asset: heading = its accent, not
+		// the shared canonical gold.
+		expect(DEFAULT_THEME.colors.mdHeading).toBe("#9d7cd8");
+		expect(DEFAULT_THEME.colors.mdLink).toBe("#56b6c2");
+		expect(DEFAULT_THEME.colors.mdLinkUrl).toBe("#fab283");
+		expect(DEFAULT_THEME.colors.mdCode).toBe("#7fd88f");
+
+		const dracula = findThemeByName(THEMES, "dracula");
+		expect(dracula?.colors.mdHeading).toBe("#bd93f9");
+		expect(dracula?.colors.syntaxKeyword).toBe("#ff79c6");
+
+		const monokai = findThemeByName(THEMES, "monokai");
+		expect(monokai?.colors.mdCode).toBe("#a6e22e");
+		expect(monokai?.colors.syntaxKeyword).toBe("#f92672");
+	});
+
+	test("an explicit theme definition override beats the opencode table", () => {
+		const theme = resolveTheme({
+			name: "opencode",
+			colors: { ...MINIMAL_COLORS, mdHeading: "#123456" },
+		});
+
+		expect(theme.colors.mdHeading).toBe("#123456");
 	});
 });
