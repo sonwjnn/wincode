@@ -16,20 +16,9 @@ const sessionRouteStateSchema = z
 	.object({
 		agent: agentIdSchema.optional(),
 		autoStart: z.boolean().optional(),
-		input: z.string().optional(),
 		mode: z.string().optional(),
 	})
 	.passthrough();
-
-const getInitialPrompt = (state: unknown): string => {
-	const result = sessionRouteStateSchema.safeParse(state);
-
-	if (!result.success) {
-		return "";
-	}
-
-	return result.data.input ?? "";
-};
 
 const getAutoStart = (state: unknown): boolean => {
 	const result = sessionRouteStateSchema.safeParse(state);
@@ -56,9 +45,6 @@ function SessionRoute() {
 		variant?: ModelVariant;
 	} | null>(null);
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
-	const prompt = useRouterState({
-		select: (state) => getInitialPrompt(state.location.state),
-	});
 	const autoStart = useRouterState({
 		select: (state) => getAutoStart(state.location.state),
 	});
@@ -109,7 +95,6 @@ function SessionRoute() {
 			autoStart={autoStart}
 			initialMessages={messages}
 			initialModel={sessionConfig.model}
-			initialPrompt={prompt}
 			initialVariant={sessionConfig.variant}
 			onHostedCompletion={() => {
 				refreshBilling().catch(() => undefined);

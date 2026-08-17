@@ -34,7 +34,6 @@ type ChatScreenProps = {
 	autoStart: boolean;
 	initialMessages: CodingAgentUIMessage[];
 	initialModel?: ChatModelSelection;
-	initialPrompt: string;
 	initialVariant?: ModelVariant;
 	sessionId: string;
 	sessionTitle: string;
@@ -52,7 +51,6 @@ export function ChatView({
 	autoStart,
 	initialMessages,
 	initialModel,
-	initialPrompt,
 	initialVariant,
 	sessionId,
 	sessionTitle,
@@ -73,7 +71,6 @@ export function ChatView({
 		() => new Set(initialMessages.map((message) => message.id)),
 		[initialMessages]
 	);
-	const submittedPromptRef = useRef<string | null>(null);
 	const submittedInitialMessageRef = useRef<string | null>(null);
 	const interruptResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
 		null
@@ -86,7 +83,6 @@ export function ChatView({
 	const {
 		abort,
 		catalogDiagnostic,
-		continueLastMessage,
 		error,
 		interrupt,
 		isPreparingMessage,
@@ -288,46 +284,6 @@ export function ChatView({
 	}, [catalogDiagnostic, show]);
 
 	useEffect(() => {
-		const submittedPrompt = initialPrompt.trim();
-		if (!submittedPrompt || registry === null || !isPromptConfigRestored) {
-			return;
-		}
-
-		if (submittedPromptRef.current === submittedPrompt) {
-			return;
-		}
-
-		submittedPromptRef.current = submittedPrompt;
-		const conversationAgent = restoredConfig?.agent ?? agent;
-		const conversationModel = restoredConfig?.model ?? model;
-		const conversationVariant = restoredConfig?.variant ?? variant;
-		const effective = resolveEffectiveAgentSelection(
-			registry,
-			conversationAgent,
-			conversationModel,
-			conversationVariant
-		);
-		submit({
-			agent: effective.agent,
-			conversationModel,
-			conversationVariant,
-			model: effective.model,
-			resolvedAgent: effective.resolvedAgent,
-			variant: effective.variant,
-			userText: submittedPrompt,
-		}).catch(() => undefined);
-	}, [
-		agent,
-		initialPrompt,
-		isPromptConfigRestored,
-		model,
-		registry,
-		restoredConfig,
-		submit,
-		variant,
-	]);
-
-	useEffect(() => {
 		const lastInitialMessage = initialMessages.at(-1);
 
 		if (
@@ -335,11 +291,7 @@ export function ChatView({
 			!isPromptConfigRestored ||
 			!(
 				lastInitialMessage &&
-				shouldAutoStartAssistantTurn(
-					autoStart,
-					initialPrompt,
-					lastInitialMessage
-				)
+				shouldAutoStartAssistantTurn(autoStart, lastInitialMessage)
 			)
 		) {
 			return;
@@ -372,14 +324,15 @@ export function ChatView({
 			persistedAgentIsAvailable ? resolvedModel : conversationModel,
 			persistedAgentIsAvailable ? persistedVariant : conversationVariant
 		);
-		continueLastMessage(
-			effective.agent,
-			effective.model,
-			effective.variant,
-			effective.resolvedAgent,
+		submit({
+			agent: effective.agent,
 			conversationModel,
-			conversationVariant
-		)
+			conversationVariant,
+			messageId: lastInitialMessage.id,
+			model: effective.model,
+			resolvedAgent: effective.resolvedAgent,
+			variant: effective.variant,
+		})
 			.then((outcome) => {
 				if (outcome?.rejected) {
 					show({ message: outcome.reason, variant: "error" });
@@ -389,14 +342,13 @@ export function ChatView({
 	}, [
 		agent,
 		autoStart,
-		continueLastMessage,
 		initialMessages,
-		initialPrompt,
 		isPromptConfigRestored,
 		model,
 		registry,
 		restoredConfig,
 		show,
+		submit,
 		variant,
 	]);
 

@@ -4,12 +4,8 @@ import type { ConversationSession } from "./storage/conversation-store";
 
 export const shouldAutoStartAssistantTurn = (
 	autoStart: boolean,
-	initialPrompt: string,
 	lastMessage: CodingAgentUIMessage | undefined
-): boolean =>
-	autoStart &&
-	initialPrompt.trim().length === 0 &&
-	lastMessage?.role === "user";
+): boolean => autoStart && lastMessage?.role === "user";
 
 export const getMostRecentSession = (
 	sessions: ConversationSession[]

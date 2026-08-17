@@ -19,27 +19,19 @@ const assistantMessage = {
 
 describe("shouldAutoStartAssistantTurn", () => {
 	test("starts the first assistant turn for a freshly created session", () => {
-		expect(shouldAutoStartAssistantTurn(true, "", userMessage)).toBe(true);
+		expect(shouldAutoStartAssistantTurn(true, userMessage)).toBe(true);
 	});
 
 	test("does not auto-start when opening an existing session from the dialog", () => {
-		expect(shouldAutoStartAssistantTurn(false, "", userMessage)).toBe(false);
+		expect(shouldAutoStartAssistantTurn(false, userMessage)).toBe(false);
 	});
 
 	test("does not auto-start when the last message is from the assistant", () => {
-		expect(shouldAutoStartAssistantTurn(true, "", assistantMessage)).toBe(
-			false
-		);
-	});
-
-	test("does not auto-start when an initial prompt will be submitted instead", () => {
-		expect(shouldAutoStartAssistantTurn(true, "hello", userMessage)).toBe(
-			false
-		);
+		expect(shouldAutoStartAssistantTurn(true, assistantMessage)).toBe(false);
 	});
 
 	test("does not auto-start when there are no messages", () => {
-		expect(shouldAutoStartAssistantTurn(true, "", undefined)).toBe(false);
+		expect(shouldAutoStartAssistantTurn(true, undefined)).toBe(false);
 	});
 });
 

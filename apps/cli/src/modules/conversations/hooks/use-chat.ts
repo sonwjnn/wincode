@@ -52,9 +52,20 @@ type SubmitChatParams = {
 	model: ChatModelSelection;
 	variant?: ModelVariant;
 	resolvedAgent?: ResolvedAgentRuntime;
-	userText: string;
+	/**
+	 * The prompt to submit as a fresh user message. Omit it (and pass
+	 * `messageId`) to run the turn anchored at an already-stored user message.
+	 */
+	userText?: string;
 	files?: FileUIPart[];
 	skill?: SkillContext;
+	/**
+	 * Anchor the turn at an existing stored user message instead of appending a
+	 * new one. Used by the HomeView auto-start path: the session row already
+	 * carries the prompt message, so the turn re-sends that exact message with
+	 * freshly resolved Agent/model/Skill state.
+	 */
+	messageId?: string;
 };
 /**
  * The settled outcome of submitting a chat prompt. Explicit Skill rejection
@@ -372,6 +383,12 @@ export function useChat(
 			finalizeAndPersistMessages(messages);
 			notifyHostedCompletion(modelRef.current, onHostedCompletion);
 		},
+		onError: () => {
+			// A stream error leaves the partial assistant message in state;
+			// persist it so a reload shows the turn as it failed instead of
+			// dropping the visible transcript.
+			finalizeAndPersistMessages(chat.messages);
+		},
 		onToolCall: createChatToolCallHandler({
 			addToolOutputRef,
 			dynamicToolOutputRef,
@@ -454,6 +471,105 @@ export function useChat(
 		return execution;
 	};
 
+	/**
+	 * Re-authorizes a Skill carried by an anchored message (explicit Skill at
+	 * session creation, or a retried turn): sanitized activation metadata after
+	 * a reload, the full snapshot in memory. Either way the Skill is
+	 * re-snapshotted from current content so the transport injects the live body.
+	 */
+	const reauthorizeAnchoredSkill = async (
+		anchoredMessage: CodingAgentUIMessage
+	): Promise<
+		| { ok: true; skill: SkillRequestContext | undefined }
+		| { ok: false; reason: string }
+	> => {
+		const parsedSkill = codingMessageSkillSchema.safeParse(
+			anchoredMessage.metadata?.skill
+		);
+		if (!parsedSkill.success) {
+			return { ok: true, skill: undefined };
+		}
+
+		const execution = skillExecutionRef.current;
+		if (execution === null) {
+			return { ok: true, skill: undefined };
+		}
+
+		const activation = await activateExplicitSkill(
+			{
+				arguments: parsedSkill.data.arguments ?? "",
+				instructions: "",
+				name: parsedSkill.data.name,
+			},
+			{
+				execution,
+				gate: toolGate,
+			}
+		);
+		if (!activation.ok) {
+			return { ok: false, reason: activation.reason };
+		}
+		return { ok: true, skill: activation.skill };
+	};
+
+	/**
+	 * Resolves the Skill for a submit: an explicit `/skill` submission wins;
+	 * otherwise an anchored message's Skill metadata is re-authorized.
+	 */
+	const resolveSkillForSubmit = async (
+		explicitSkillInput: SkillContext | undefined,
+		anchoredMessage: CodingAgentUIMessage | undefined
+	): Promise<
+		| { ok: true; skill: SkillRequestContext | undefined }
+		| { ok: false; reason: string }
+	> => {
+		if (explicitSkillInput) {
+			const execution = skillExecutionRef.current;
+			if (execution === null) {
+				return { ok: false, reason: "Skill catalog is unavailable" };
+			}
+			const activation = await activateExplicitSkill(explicitSkillInput, {
+				execution,
+				gate: toolGate,
+			});
+			if (!activation.ok) {
+				return { ok: false, reason: activation.reason };
+			}
+			return { ok: true, skill: activation.skill };
+		}
+
+		if (anchoredMessage) {
+			return reauthorizeAnchoredSkill(anchoredMessage);
+		}
+
+		return { ok: true, skill: undefined };
+	};
+
+	/**
+	 * Re-sends an already-stored user message (HomeView auto-start): the
+	 * message stays in place with freshly resolved metadata, skill tool parts
+	 * are sanitized, and the turn runs against the exact stored content.
+	 */
+	const submitAnchoredMessage = async (
+		anchoredMessage: CodingAgentUIMessage,
+		metadata: CodingAgentUIMessage["metadata"]
+	): Promise<SubmitChatOutcome> => {
+		const nextMessages = sanitizeSkillToolParts(chat.messages);
+		chat.setMessages(nextMessages);
+		persistMessages(nextMessages);
+		setIsPreparingMessage(true);
+		try {
+			await chat.sendMessage({
+				messageId: anchoredMessage.id,
+				metadata,
+				parts: anchoredMessage.parts,
+			});
+			return { rejected: false };
+		} finally {
+			setIsPreparingMessage(false);
+		}
+	};
+
 	const submit = async ({
 		agent,
 		conversationModel,
@@ -464,6 +580,7 @@ export function useChat(
 		userText,
 		files = [],
 		skill,
+		messageId,
 	}: SubmitChatParams): Promise<SubmitChatOutcome> => {
 		autoSendGate.enable();
 		agentRef.current = agent;
@@ -475,35 +592,50 @@ export function useChat(
 		requestStartedAtRef.current = Date.now();
 
 		await createTurnSkillExecution();
-		let explicitSkill: SkillRequestContext | undefined;
-		if (skill) {
-			const execution = skillExecutionRef.current;
-			if (execution === null) {
-				return { rejected: true, reason: "Skill catalog is unavailable" };
+
+		// An anchored turn (HomeView auto-start) re-executes the prompt message
+		// the session row already stores instead of appending a new one.
+		let anchoredMessage: CodingAgentUIMessage | undefined;
+		if (messageId !== undefined) {
+			anchoredMessage = chat.messages.find(({ id }) => id === messageId);
+			if (anchoredMessage?.role !== "user") {
+				return {
+					rejected: true,
+					reason: "The stored message to continue is unavailable",
+				};
 			}
-			const activation = await activateExplicitSkill(skill, {
-				execution,
-				gate: toolGate,
-			});
-			if (!activation.ok) {
-				return { rejected: true, reason: activation.reason };
-			}
-			explicitSkill = activation.skill;
 		}
 
+		const resolution = await resolveSkillForSubmit(skill, anchoredMessage);
+		if (!resolution.ok) {
+			return { rejected: true, reason: resolution.reason };
+		}
 		const metadata = {
 			agent,
 			model,
 			variant,
-			...(explicitSkill
-				? { skill: createSkillSnapshot(explicitSkill, "explicit") }
+			...(resolution.skill
+				? { skill: createSkillSnapshot(resolution.skill, "explicit") }
 				: {}),
 		};
+
+		if (anchoredMessage) {
+			return submitAnchoredMessage(anchoredMessage, metadata);
+		}
+
+		if (userText === undefined) {
+			return { rejected: true, reason: "No prompt to submit" };
+		}
+
 		const optimisticMessage = createUserMessage(userText, metadata, [], files);
-		chat.setMessages((messages) => [
-			...sanitizeSkillToolParts(messages),
+		const optimisticMessages = [
+			...sanitizeSkillToolParts(chat.messages),
 			optimisticMessage,
-		]);
+		];
+		chat.setMessages(optimisticMessages);
+		// Persist the user message before the stream starts so a hard kill
+		// leaves the turn visible in storage instead of a dangling send.
+		persistMessages(optimisticMessages);
 		setIsPreparingMessage(true);
 
 		try {
@@ -515,90 +647,20 @@ export function useChat(
 			});
 			return { rejected: false };
 		} catch (error) {
-			chat.setMessages((messages) =>
-				messages.filter(({ id }) => id !== optimisticMessage.id)
+			const nextMessages = chat.messages.filter(
+				({ id }) => id !== optimisticMessage.id
 			);
+			chat.setMessages(nextMessages);
+			persistMessages(nextMessages);
 			throw error;
 		} finally {
 			setIsPreparingMessage(false);
 		}
 	};
 
-	const continueLastMessage = async (
-		agent: AgentId,
-		model: ChatModelSelection,
-		variant?: ModelVariant,
-		resolvedAgent?: ResolvedAgentRuntime,
-		conversationModel: ChatModelSelection = model,
-		conversationVariant: ModelVariant | undefined = variant
-	): Promise<SubmitChatOutcome> => {
-		autoSendGate.enable();
-		agentRef.current = agent;
-		resolvedAgentRef.current = resolvedAgent;
-		conversationModelRef.current = conversationModel;
-		conversationVariantRef.current = conversationVariant;
-		modelRef.current = model;
-		variantRef.current = variant;
-		requestStartedAtRef.current = Date.now();
-
-		// A retry or auto-start is a new execution: permissions and Skill
-		// contents are re-evaluated from current state.
-		await createTurnSkillExecution();
-
-		// A session created with an explicit Skill (for example the initial
-		// command-line prompt) or retried after an interruption carries Skill
-		// metadata on its user message — sanitized activation metadata after a
-		// reload, the full snapshot in memory. Either way the Skill is
-		// re-authorized and re-snapshotted from current content, and the user
-		// message metadata is refreshed so the transport injects the live body.
-		const originatingUserMessage = [...chat.messages]
-			.reverse()
-			.find(({ role }) => role === "user");
-		const parsedSkill = codingMessageSkillSchema.safeParse(
-			originatingUserMessage?.metadata?.skill
-		);
-		if (parsedSkill.success) {
-			const execution = skillExecutionRef.current;
-			if (execution !== null) {
-				const activation = await activateExplicitSkill(
-					{
-						arguments: parsedSkill.data.arguments ?? "",
-						instructions: "",
-						name: parsedSkill.data.name,
-					},
-					{
-						execution,
-						gate: toolGate,
-					}
-				);
-				if (!activation.ok) {
-					return { rejected: true, reason: activation.reason };
-				}
-				chat.setMessages((messages) =>
-					messages.map((message) =>
-						message.id === originatingUserMessage?.id
-							? {
-									...message,
-									metadata: {
-										...message.metadata,
-										skill: createSkillSnapshot(activation.skill, "explicit"),
-									},
-								}
-							: message
-					)
-				);
-			}
-		}
-
-		chat.setMessages((messages) => sanitizeSkillToolParts(messages));
-		await chat.sendMessage();
-		return { rejected: false };
-	};
-
 	return {
 		abort: chat.stop,
 		catalogDiagnostic,
-		continueLastMessage,
 		error: chat.error,
 		interrupt: interruptLatestAssistantMessage,
 		messages: chat.messages,
