@@ -26,6 +26,7 @@ import {
 import { ToolApprovalPanel } from "@/shared/providers/approval/ui/tool-approval-panel";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
+import { MarkdownMessagePart } from "./markdown-message-part";
 
 type MessagePart = CodingAgentUIMessage["parts"][number];
 type ToolPart = Extract<
@@ -152,7 +153,7 @@ const getToolKey = (part: ToolPart, index: number) => {
 const getContentPartKey = (
 	part: Extract<MessagePart, { type: "reasoning" | "text" }>,
 	index: number
-): string => `${part.type}-${index}-${part.text}`;
+): string => `${part.type}-${index}`;
 
 const groupConsecutiveParts = (parts: MessagePart[]): PartGroup[] => {
 	const groups: PartGroup[] = [];
@@ -489,8 +490,15 @@ function SkillActivityRow({ part }: { part: ToolPart }) {
 }
 
 export function BotMessageContent({
+	isStreaming = false,
 	parts,
 }: {
+	/**
+	 * True while the message's text parts can still grow. Keeps the markdown
+	 * mapping in streaming mode so trailing blocks parse incrementally
+	 * instead of re-parsing from scratch on every token delta.
+	 */
+	isStreaming?: boolean;
 	parts: CodingAgentUIMessage["parts"];
 }) {
 	const { colors } = useTheme();
@@ -537,13 +545,11 @@ export function BotMessageContent({
 
 						if (part.type === "text") {
 							return (
-								<box
+								<MarkdownMessagePart
+									isStreaming={isStreaming}
 									key={getContentPartKey(part, index)}
-									paddingX={3}
-									width="100%"
-								>
-									<text fg={colors.text}>{part.text}</text>
-								</box>
+									text={part.text}
+								/>
 							);
 						}
 

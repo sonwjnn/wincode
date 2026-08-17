@@ -2,9 +2,10 @@
 // enabled, so tests opt out before any app module evaluates the environment.
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
+import { MockTreeSitterClient } from "@opentui/core/testing";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import { useEffect, useState } from "react";
 
@@ -45,6 +46,21 @@ const { ToastProvider } = await import(
 	"@/shared/providers/toast/toast-provider"
 );
 const { ChatShell } = await import("./chat-shell");
+const { setMarkdownTreeSitterClientForTests } = await import(
+	"../messages/markdown-message-part"
+);
+
+beforeAll(() => {
+	// Text parts map through MarkdownMessagePart; the mock client keeps block
+	// rendering deterministic without the tree-sitter worker.
+	setMarkdownTreeSitterClientForTests(
+		new MockTreeSitterClient({ autoResolveTimeout: 0 })
+	);
+});
+
+afterAll(() => {
+	setMarkdownTreeSitterClientForTests(null);
+});
 
 type ShellToolPart = Extract<
 	CodingAgentUIMessage["parts"][number],

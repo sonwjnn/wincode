@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { MockTreeSitterClient } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import { useEffect } from "react";
@@ -13,10 +14,43 @@ import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboar
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 
 const { BotMessageContent } = await import("./bot-message");
+const { setMarkdownTreeSitterClientForTests } = await import(
+	"./markdown-message-part"
+);
+
+// Eagerly evaluate the CLI env schema before any test renderer can create
+// the global `window` shim that @opentui/core's CliRenderer installs. Once
+// `window` exists, @t3-oss/env-core treats the process as a client and every
+// server-side env access throws — racing with other test files that import
+// `@wincode/env/cli` lazily in the same process.
+await import("@wincode/env/cli");
+
+beforeAll(() => {
+	// Text parts map through MarkdownMessagePart; the mock client keeps the
+	// block rendering deterministic without the tree-sitter worker.
+	setMarkdownTreeSitterClientForTests(
+		new MockTreeSitterClient({ autoResolveTimeout: 0 })
+	);
+});
+
+afterAll(() => {
+	setMarkdownTreeSitterClientForTests(null);
+});
 type MessagePart = CodingAgentUIMessage["parts"][number];
 type DynamicToolPart = Extract<MessagePart, { type: "dynamic-tool" }>;
 type GrepToolPart = Extract<MessagePart, { type: "tool-grep" }>;
 type ReadToolPart = Extract<MessagePart, { type: "tool-read" }>;
+
+const flushRenderPasses = async (
+	setup: Awaited<ReturnType<typeof testRender>>
+) => {
+	// Markdown blocks resolve their (mocked) highlight asynchronously, so
+	// settle a few passes before capturing the frame.
+	for (let pass = 0; pass < 3; pass += 1) {
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		await setup.renderOnce();
+	}
+};
 
 const renderFrame = async (
 	parts: CodingAgentUIMessage["parts"],
@@ -34,7 +68,7 @@ const renderFrame = async (
 	);
 
 	try {
-		await setup.renderOnce();
+		await flushRenderPasses(setup);
 		return setup.captureCharFrame();
 	} finally {
 		setup.renderer.destroy();
