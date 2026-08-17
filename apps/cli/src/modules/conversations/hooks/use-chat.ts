@@ -384,9 +384,19 @@ export function useChat(
 			notifyHostedCompletion(modelRef.current, onHostedCompletion);
 		},
 		onError: () => {
-			// A stream error leaves the partial assistant message in state;
-			// persist it so a reload shows the turn as it failed instead of
-			// dropping the visible transcript.
+			// A stream error leaves the partial assistant message in state.
+			// Mark it interrupted so the next request reduces it like any cut-off
+			// turn (its unfinished tool calls must never replay), and persist it
+			// so a reload shows the turn as it failed.
+			const lastAssistantIndex = chat.messages.findLastIndex(
+				({ role }) => role === "assistant"
+			);
+			if (lastAssistantIndex !== -1) {
+				const lastAssistant = chat.messages[lastAssistantIndex];
+				if (lastAssistant) {
+					interruptedMessageIdsRef.current.add(lastAssistant.id);
+				}
+			}
 			finalizeAndPersistMessages(chat.messages);
 		},
 		onToolCall: createChatToolCallHandler({
