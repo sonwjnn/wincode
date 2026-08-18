@@ -129,6 +129,17 @@ describe("markdown and syntax token resolution", () => {
 		expect(monokai?.colors.syntaxKeyword).toBe("#f92672");
 	});
 
+	test("resolves backgroundElement from backgroundPanel so surfaces match", () => {
+		// Shell output blocks and the input box (backgroundElement) must look
+		// identical to message panels (backgroundPanel).
+		for (const theme of THEMES) {
+			expect(
+				theme.colors.backgroundElement,
+				`${theme.name}.backgroundElement`
+			).toBe(theme.colors.backgroundPanel);
+		}
+	});
+
 	test("an explicit theme definition override beats the opencode table", () => {
 		const theme = resolveTheme({
 			name: "opencode",
