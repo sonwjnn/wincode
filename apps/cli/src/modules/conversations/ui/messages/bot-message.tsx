@@ -1,7 +1,6 @@
 import type { BoxRenderable } from "@opentui/core";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import { memo, type ReactNode, useMemo, useRef, useState } from "react";
-import { connectionProviderDisplayNames } from "@/modules/connections";
 import { EmptyBorder } from "@/shared/constants";
 import {
 	boundCommandHeader,
@@ -47,7 +46,6 @@ type FooterItem = {
 	separator?: "dot" | "space";
 };
 
-const FOOTER_ICON = "▣";
 const MAX_TOOL_ARGUMENTS_LENGTH = 512;
 const MAX_TOOL_ARGUMENT_ENTRIES = 12;
 
@@ -218,15 +216,18 @@ const resolveFooterItems = (
 
 	const model = metadata.model;
 	if (model) {
-		const { label, providerId } = formatModel(model);
+		const {
+			label,
+			// providerId
+		} = formatModel(model);
 		items.push({ color: colors.textMuted, label });
-		if (providerId) {
-			items.push({
-				color: colors.textMuted,
-				label: connectionProviderDisplayNames[providerId],
-				separator: "space",
-			});
-		}
+		// if (providerId) {
+		// 	items.push({
+		// 		color: colors.textMuted,
+		// 		label: connectionProviderDisplayNames[providerId],
+		// 		separator: "space",
+		// 	});
+		// }
 	}
 
 	if (metadata.responseTimeMs !== undefined) {
@@ -237,7 +238,7 @@ const resolveFooterItems = (
 	}
 
 	if (metadata.interrupted === true) {
-		items.push({ color: colors.textMuted, label: "interrupted" });
+		items.push({ color: colors.warning, label: "interrupted" });
 	}
 
 	return items;
@@ -576,8 +577,6 @@ export function BotMessageFooter({
 	return (
 		<box paddingX={3} width="100%">
 			<text>
-				<span fg={colors.primary}>{FOOTER_ICON}</span>
-				{"  "}
 				{footerItems.map((item, index) => (
 					<span key={`${item.color}-${item.label}`}>
 						{renderFooterSeparator(index, item, colors.textMuted)}
