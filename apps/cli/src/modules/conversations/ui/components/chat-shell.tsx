@@ -41,6 +41,7 @@ export function ChatShell({
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
 	const [scrollRequest, setScrollRequest] = useState(0);
+	const [chatViewportHeight, setChatViewportHeight] = useState(0);
 	const { agent, model } = usePromptConfig();
 	const { colors } = useTheme();
 	const agentColor = getAgentColor(colors, agent);
@@ -89,6 +90,17 @@ export function ChatShell({
 		setScrollRequest((request) => request + 1);
 		return true;
 	};
+	const handleScrollboxResize = () => {
+		const height = scrollboxRef.current?.height ?? 0;
+		if (height <= 0) {
+			return;
+		}
+		queueMicrotask(() => {
+			setChatViewportHeight((current) =>
+				current === height ? current : height
+			);
+		});
+	};
 
 	return (
 		<box
@@ -104,6 +116,7 @@ export function ChatShell({
 			<scrollbox
 				flexGrow={1}
 				height="100%"
+				onSizeChange={handleScrollboxResize}
 				ref={scrollboxRef}
 				stickyScroll
 				stickyStart="bottom"
@@ -118,6 +131,7 @@ export function ChatShell({
 						turns.map((turn, index) => (
 							<box key={turn.id} marginTop={index === 0 ? 1 : 0} width="100%">
 								<ChatMessage
+									chatViewportHeight={chatViewportHeight}
 									footerMessage={footerMessages.get(turn.id)}
 									isStreaming={isBusy && turn === turns.at(-1)}
 									messages={turn.messages}

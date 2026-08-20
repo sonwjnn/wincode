@@ -54,7 +54,8 @@ const flushRenderPasses = async (
 
 const renderFrame = async (
 	parts: CodingAgentUIMessage["parts"],
-	height = 4
+	height = 4,
+	width = 160
 ): Promise<string> => {
 	const setup = await testRender(
 		<ThemeProvider>
@@ -64,7 +65,7 @@ const renderFrame = async (
 				</ApprovalPanelsProvider>
 			</KeyboardLayerProvider>
 		</ThemeProvider>,
-		{ height, width: 160 }
+		{ height, width }
 	);
 
 	try {
@@ -153,6 +154,159 @@ describe("BotMessageContent", () => {
 			"⚙ context7_resolve-library-id [libraryName=Model Context Protocol, query=How to test an MCP server]"
 		);
 		expect(frame).not.toContain("a4f486fc");
+	});
+	test("renders successful edit output as a responsive diff block", async () => {
+		const part = {
+			input: {
+				find: "const value = 1;",
+				path: "src/example.ts",
+				replace: "const value = 3;",
+			},
+			output: {
+				editDiff: {
+					additions: 1,
+					deletions: 1,
+					omittedHunks: 0,
+					patch:
+						"Index: src/example.ts\n" +
+						"===================================================================\n" +
+						"--- src/example.ts\n" +
+						"+++ src/example.ts\n" +
+						"@@ -1,2 +1,2 @@\n" +
+						"-const value = 1;\n" +
+						"+const value = 3;\n" +
+						" const other = 2;\n",
+					truncated: false,
+				},
+				path: "src/example.ts",
+				replacements: 1,
+			},
+			state: "output-available",
+			toolCallId: "edit-1",
+			type: "tool-edit",
+		} satisfies MessagePart;
+
+		const narrowFrame = await renderFrame([part], 12, 80);
+		const wideFrame = await renderFrame([part], 12, 140);
+
+		for (const frame of [narrowFrame, wideFrame]) {
+			expect(frame).toContain("← Edit src/example.ts +1 −1");
+			expect(frame).toContain("const value = 3;");
+			expect(frame).not.toContain("→ Edit src/example.ts");
+		}
+		expect(narrowFrame.split("const other = 2;").length - 1).toBe(1);
+		expect(wideFrame.split("const other = 2;").length - 1).toBe(2);
+	});
+	test("keeps legacy edits and invalid or empty diffs honest", async () => {
+		const legacy = {
+			input: { find: "old", path: "legacy.ts", replace: "new" },
+			output: { path: "legacy.ts", replacements: 1 },
+			state: "output-available",
+			toolCallId: "edit-legacy",
+			type: "tool-edit",
+		} satisfies MessagePart;
+		const empty = {
+			input: { find: "old", path: "empty.ts", replace: "new" },
+			output: {
+				editDiff: {
+					additions: 0,
+					deletions: 0,
+					omittedHunks: 0,
+					patch: "",
+					truncated: false,
+				},
+				path: "empty.ts",
+				replacements: 1,
+			},
+			state: "output-available",
+			toolCallId: "edit-empty",
+			type: "tool-edit",
+		} satisfies MessagePart;
+		const invalid = {
+			input: { find: "old", path: "invalid.ts", replace: "new" },
+			output: {
+				editDiff: {
+					additions: 1,
+					deletions: 1,
+					omittedHunks: 0,
+					patch: "not a patch",
+					truncated: false,
+				},
+				path: "invalid.ts",
+				replacements: 1,
+			},
+			state: "output-available",
+			toolCallId: "edit-invalid",
+			type: "tool-edit",
+		} satisfies MessagePart;
+
+		const frame = await renderFrame([legacy, empty, invalid], 12, 100);
+
+		expect(frame).toContain("→ Edit legacy.ts");
+		expect(frame).toContain("← Edit empty.ts · No content changes");
+		expect(frame).toContain("← Edit invalid.ts");
+		expect(frame).toContain("Diff unavailable");
+	});
+	test("collapses long diffs and toggles them from the header", async () => {
+		const patch = [
+			"Index: src/large.ts",
+			"===================================================================",
+			"--- src/large.ts",
+			"+++ src/large.ts",
+			"@@ -1,1 +1,25 @@",
+			"-old",
+			...Array.from({ length: 25 }, (_, index) => `+line ${index + 1}`),
+			"",
+		].join("\n");
+		const part = {
+			input: { find: "old", path: "src/large.ts", replace: "new" },
+			output: {
+				editDiff: {
+					additions: 25,
+					deletions: 1,
+					omittedHunks: 0,
+					patch,
+					truncated: false,
+				},
+				path: "src/large.ts",
+				replacements: 1,
+			},
+			state: "output-available",
+			toolCallId: "edit-large",
+			type: "tool-edit",
+		} satisfies MessagePart;
+		const setup = await testRender(
+			<ThemeProvider>
+				<KeyboardLayerProvider>
+					<ApprovalPanelsProvider>
+						<BotMessageContent parts={[part]} />
+					</ApprovalPanelsProvider>
+				</KeyboardLayerProvider>
+			</ThemeProvider>,
+			{ height: 40, width: 100 }
+		);
+
+		try {
+			await flushRenderPasses(setup);
+			let frame = setup.captureCharFrame();
+			expect(frame).toContain("← Edit src/large.ts +25 −1");
+			expect(frame).not.toContain("+line 25");
+
+			const headerRow = frame
+				.split("\n")
+				.findIndex((row) => row.includes("← Edit src/large.ts"));
+			await setup.mockMouse.click(10, headerRow);
+			await flushUi(setup);
+			frame = setup.captureCharFrame();
+			expect(frame).toContain("+ line 25");
+
+			await setup.mockMouse.click(10, headerRow);
+			await flushUi(setup);
+			frame = setup.captureCharFrame();
+			expect(frame).not.toContain("+ line 25");
+		} finally {
+			setup.renderer.destroy();
+		}
 	});
 
 	test("renders MCP arguments while a call is running", async () => {

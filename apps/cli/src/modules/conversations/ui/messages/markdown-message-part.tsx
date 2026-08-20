@@ -1,11 +1,12 @@
-import {
-	type StyleDefinitionInput,
-	SyntaxStyle,
-	type TreeSitterClient,
-} from "@opentui/core";
 import { memo, useMemo } from "react";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-import type { ThemeColors } from "@/shared/providers/theme/themes";
+import {
+	getTreeSitterClientForTests,
+	resolveSyntaxStyle,
+	setTreeSitterClientForTests,
+} from "./syntax-style";
+
+export const setMarkdownTreeSitterClientForTests = setTreeSitterClientForTests;
 
 /** Printable output characters plus tab and newline (structure must survive). */
 const isMarkdownSafeCharacter = (code: number): boolean =>
@@ -26,70 +27,6 @@ const stripMarkdownControlCharacters = (value: string): string =>
 		isMarkdownSafeCharacter(character.charCodeAt(0)) ? character : " "
 	).join("");
 
-const buildMarkdownStyles = (
-	colors: ThemeColors
-): Record<string, StyleDefinitionInput> => ({
-	default: { fg: colors.text },
-	conceal: { fg: colors.textDisabled },
-	"markup.heading": { fg: colors.mdHeading, bold: true },
-	"markup.strong": { fg: colors.mdStrong, bold: true },
-	"markup.italic": { fg: colors.mdEmph, italic: true },
-	"markup.strikethrough": { fg: colors.textMuted },
-	"markup.raw": { fg: colors.mdCode },
-	"markup.link": { fg: colors.mdLink },
-	"markup.link.label": { fg: colors.mdLink },
-	"markup.link.url": { fg: colors.mdLinkUrl, dim: true, underline: true },
-	"markup.quote": { fg: colors.mdQuote, italic: true },
-	"markup.list": { fg: colors.mdListBullet },
-	// Tree-sitter scopes in fenced code blocks. Dotted captures (for example
-	// `keyword.conditional` or `function.call`) fall back to these bases.
-	comment: { fg: colors.syntaxComment },
-	keyword: { fg: colors.syntaxKeyword },
-	function: { fg: colors.syntaxFunction },
-	variable: { fg: colors.syntaxVariable },
-	string: { fg: colors.syntaxString },
-	number: { fg: colors.syntaxNumber },
-	type: { fg: colors.syntaxType },
-	operator: { fg: colors.syntaxOperator },
-	punctuation: { fg: colors.syntaxPunctuation },
-	// Aliases so constants and constructors read with their VS Code Dark+
-	// siblings instead of falling through to the default text color.
-	constant: { fg: colors.syntaxKeyword },
-	constructor: { fg: colors.syntaxFunction },
-});
-
-// The cache key is the serialized style map itself, so adding or removing a
-// token can never silently leave the cached SyntaxStyle stale (the manual
-// key list this replaced drifted from the map in review).
-let cachedMarkdownStyle: { key: string; style: SyntaxStyle } | null = null;
-
-const resolveMarkdownSyntaxStyle = (colors: ThemeColors): SyntaxStyle => {
-	const styles = buildMarkdownStyles(colors);
-	const key = JSON.stringify(styles);
-	if (cachedMarkdownStyle?.key === key) {
-		return cachedMarkdownStyle.style;
-	}
-	cachedMarkdownStyle?.style.destroy();
-	const style = SyntaxStyle.fromStyles(styles);
-	cachedMarkdownStyle = { key, style };
-	return style;
-};
-
-/**
- * Test seam: swaps the tree-sitter client used by every rendered markdown
- * part. Production keeps `undefined` so OpenTUI resolves its shared client
- * (real syntax highlighting); tests inject a `MockTreeSitterClient` so block
- * rendering resolves deterministically without the worker.
- */
-let markdownTreeSitterClientOverride: TreeSitterClient | null = null;
-
-export const setMarkdownTreeSitterClientForTests = (
-	client: TreeSitterClient | null
-): TreeSitterClient | null => {
-	markdownTreeSitterClientOverride = client;
-	return client;
-};
-
 /**
  * Renders one assistant text part as mapped markdown: headings, emphasis,
  * inline code, fenced code blocks, tables, links and lists are laid out by
@@ -107,10 +44,7 @@ export const MarkdownMessagePart = memo(function MarkdownMessagePart({
 	isStreaming: boolean;
 }) {
 	const { colors } = useTheme();
-	const syntaxStyle = useMemo(
-		() => resolveMarkdownSyntaxStyle(colors),
-		[colors]
-	);
+	const syntaxStyle = useMemo(() => resolveSyntaxStyle(colors), [colors]);
 	const sanitized = useMemo(() => stripMarkdownControlCharacters(text), [text]);
 
 	return (
@@ -120,7 +54,7 @@ export const MarkdownMessagePart = memo(function MarkdownMessagePart({
 				content={sanitized}
 				streaming={isStreaming}
 				syntaxStyle={syntaxStyle}
-				treeSitterClient={markdownTreeSitterClientOverride ?? undefined}
+				treeSitterClient={getTreeSitterClientForTests()}
 				width="100%"
 			/>
 		</box>

@@ -131,15 +131,47 @@ describe("tool runners", () => {
 			path: filePath,
 		});
 
-		await expect(
-			runEditTool({
-				find: "world",
-				path: filePath,
-				replace: "agent",
-			})
-		).resolves.toEqual({ path: filePath, replacements: 1 });
+		const result = await runEditTool({
+			find: "world",
+			path: filePath,
+			replace: "agent",
+		});
+
+		expect(result.path).toBe(filePath);
+		expect(result.replacements).toBe(1);
+		expect(result.editDiff).toMatchObject({
+			additions: 1,
+			deletions: 1,
+			omittedHunks: 0,
+			truncated: false,
+		});
+		expect(result.editDiff?.patch).toContain("-hello world");
+		expect(result.editDiff?.patch).toContain("+hello agent");
 		expect(readFileSync(path.join(workspace, filePath), "utf8")).toBe(
 			"hello agent"
+		);
+	});
+	test("reports every replacement in a multi-replacement edit diff", async () => {
+		const filePath = `${sandboxRelPath}/unicode.txt`;
+		const before = "café\ncafé\n";
+		writeFileSync(path.join(workspace, filePath), before);
+
+		const result = await runEditTool({
+			find: "café",
+			path: filePath,
+			replace: "茶",
+			replaceAll: true,
+		});
+
+		expect(result.replacements).toBe(2);
+		expect(result.editDiff).toMatchObject({
+			additions: 2,
+			deletions: 2,
+			omittedHunks: 0,
+			truncated: false,
+		});
+		expect(readFileSync(path.join(workspace, filePath), "utf8")).toBe(
+			"茶\n茶\n"
 		);
 	});
 

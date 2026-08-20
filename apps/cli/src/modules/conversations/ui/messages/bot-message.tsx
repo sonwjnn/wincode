@@ -25,6 +25,7 @@ import {
 import { ToolApprovalPanel } from "@/shared/providers/approval/ui/tool-approval-panel";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
+import { EditDiffBlock } from "./edit-diff-block";
 import { MarkdownMessagePart } from "./markdown-message-part";
 
 type MessagePart = CodingAgentUIMessage["parts"][number];
@@ -244,7 +245,13 @@ const resolveFooterItems = (
 	return items;
 };
 
-function ToolMessagePart({ part }: { part: ToolPart }) {
+function ToolMessagePart({
+	chatViewportHeight,
+	part,
+}: {
+	chatViewportHeight?: number;
+	part: ToolPart;
+}) {
 	const { colors } = useTheme();
 	const isSkillCall =
 		part.type === "dynamic-tool" &&
@@ -252,13 +259,16 @@ function ToolMessagePart({ part }: { part: ToolPart }) {
 		(part.state === "output-available" || part.state === "output-error");
 	const isShellOutput =
 		part.type === "tool-shell" && part.state === "output-available";
+	const isEditOutput =
+		part.type === "tool-edit" &&
+		part.state === "output-available" &&
+		"editDiff" in getToolOutputRecord(part);
 
 	let toolLine: ReactNode = <ToolCallLine colors={colors} part={part} />;
 	if (isSkillCall) {
 		toolLine = <SkillActivityRow part={part} />;
-	} else if (isShellOutput) {
-		// The shell block groups the command header itself, so the standalone
-		// tool row is skipped for completed shell calls.
+	} else if (isShellOutput || isEditOutput) {
+		// Specialized blocks group their own successful tool header.
 		toolLine = null;
 	}
 
@@ -266,6 +276,9 @@ function ToolMessagePart({ part }: { part: ToolPart }) {
 		<>
 			{toolLine}
 			{isShellOutput ? <ShellOutputBlock part={part} /> : null}
+			{isEditOutput ? (
+				<EditDiffBlock chatViewportHeight={chatViewportHeight} part={part} />
+			) : null}
 			{typeof part.toolCallId === "string" ? (
 				<ToolApprovalPanel id={part.toolCallId} />
 			) : null}
@@ -491,9 +504,11 @@ function SkillActivityRow({ part }: { part: ToolPart }) {
 }
 
 export function BotMessageContent({
+	chatViewportHeight,
 	isStreaming = false,
 	parts,
 }: {
+	chatViewportHeight?: number;
 	/**
 	 * True while the message's text parts can still grow. Keeps the markdown
 	 * mapping in streaming mode so trailing blocks parse incrementally
@@ -538,6 +553,7 @@ export function BotMessageContent({
 						if (isToolPart(part)) {
 							return (
 								<MemoizedToolMessagePart
+									chatViewportHeight={chatViewportHeight}
 									key={getToolKey(part, index)}
 									part={part}
 								/>

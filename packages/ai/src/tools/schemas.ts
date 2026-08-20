@@ -1,7 +1,7 @@
 // biome-ignore-all lint/performance/noBarrelFile: Public Zod-only tool schema entry point.
 import { z } from "zod";
 
-export type { EditInput, EditOutput } from "./edit/schema";
+export type { EditDiff, EditInput, EditOutput } from "./edit/schema";
 export {
 	editInputSchema,
 	editOutputSchema,

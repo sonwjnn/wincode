@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { defaultWorkspaceSandbox } from "../../workspace";
+import { buildEditDiff } from "./diff";
 import type { EditInput, EditOutput } from "./schema";
 
 const countReplacements = (
@@ -32,8 +33,9 @@ export const runEditTool = async (input: EditInput): Promise<EditOutput> => {
 	const nextContent = input.replaceAll
 		? content.split(input.find).join(input.replace)
 		: content.replace(input.find, input.replace);
+	const editDiff = buildEditDiff(content, nextContent, input.path);
 
 	await writeFile(resolvedPath, nextContent, "utf8");
 
-	return { path: input.path, replacements };
+	return { editDiff, path: input.path, replacements };
 };

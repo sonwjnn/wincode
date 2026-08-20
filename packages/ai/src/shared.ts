@@ -68,5 +68,6 @@ export {
 	skillToolDefinitionSchema,
 	skillToolInputSchema,
 } from "./skill-context";
+export { isRenderableEditDiff } from "./tools/edit/diff";
 export * from "./tools/schemas";
 export * from "./usage";

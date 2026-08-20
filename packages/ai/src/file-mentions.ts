@@ -53,26 +53,62 @@ const formatMentionContext = (mention: FileMentionData) => {
 	return [...header, "Content:", mention.content].join("\n");
 };
 
+const stripEditDiffFromModelMessages = (
+	messages: CodingAgentModelUIMessage[]
+): CodingAgentModelUIMessage[] =>
+	messages.map((message) => ({
+		...message,
+		parts: message.parts.map((part) => {
+			if (
+				part.type !== "tool-edit" ||
+				typeof part.output !== "object" ||
+				part.output === null ||
+				Array.isArray(part.output)
+			) {
+				return part;
+			}
+
+			const output = part.output as Record<string, unknown>;
+			if (
+				typeof output.path !== "string" ||
+				typeof output.replacements !== "number" ||
+				!("editDiff" in output)
+			) {
+				return part;
+			}
+
+			return {
+				...part,
+				output: {
+					path: output.path,
+					replacements: output.replacements,
+				},
+			};
+		}),
+	})) as CodingAgentModelUIMessage[];
+
 export const expandFileMentionPartsForModel = (
 	messages: CodingAgentUIMessage[]
 ): CodingAgentModelUIMessage[] =>
-	messages.map((message) => {
-		const parts: CodingAgentModelUIMessage["parts"] = [];
+	stripEditDiffFromModelMessages(
+		messages.map((message) => {
+			const parts: CodingAgentModelUIMessage["parts"] = [];
 
-		for (const part of message.parts) {
-			if (isFileMentionUIPart(part)) {
-				parts.push({ text: formatMentionContext(part.data), type: "text" });
-				continue;
+			for (const part of message.parts) {
+				if (isFileMentionUIPart(part)) {
+					parts.push({ text: formatMentionContext(part.data), type: "text" });
+					continue;
+				}
+
+				parts.push(part);
 			}
 
-			parts.push(part);
-		}
-
-		return {
-			...message,
-			parts,
-		};
-	});
+			return {
+				...message,
+				parts,
+			};
+		})
+	);
 
 const restoreModelParts = (parts: CodingAgentModelUIMessage["parts"]) => {
 	const restoredParts: CodingAgentUIMessage["parts"] = [];

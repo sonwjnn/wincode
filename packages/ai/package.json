@@ -27,6 +27,7 @@
     "@ai-sdk/openai-compatible": "^2.0.63",
     "@ai-sdk/provider-utils": "^4.0.27",
     "ai": "catalog:",
+    "diff": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

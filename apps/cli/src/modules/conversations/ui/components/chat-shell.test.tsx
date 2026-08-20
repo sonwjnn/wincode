@@ -66,6 +66,10 @@ type ShellToolPart = Extract<
 	CodingAgentUIMessage["parts"][number],
 	{ type: "tool-shell" }
 >;
+type EditToolPart = Extract<
+	CodingAgentUIMessage["parts"][number],
+	{ type: "tool-edit" }
+>;
 
 /** Trims the border, padding, and trailing whitespace from a captured cell row. */
 const TRIM_CELL_SUFFIX_REGEX = /[│ ].*$/;
@@ -681,6 +685,60 @@ describe("ChatShell shell output blocks", () => {
 			expect(frame).toContain("… 194 more lines");
 			expect(frame).toContain("second stream");
 			expect(frame).not.toContain("first stream");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+});
+
+describe("ChatShell edit diff blocks", () => {
+	test("renders and toggles an edit diff through the full TUI surface", async () => {
+		const patch = [
+			"Index: src/large.ts",
+			"===================================================================",
+			"--- src/large.ts",
+			"+++ src/large.ts",
+			"@@ -1,1 +1,25 @@",
+			"-old",
+			...Array.from({ length: 25 }, (_, index) => `+line ${index + 1}`),
+			"",
+		].join("\n");
+		const part = {
+			input: { find: "old", path: "src/large.ts", replace: "new" },
+			output: {
+				editDiff: {
+					additions: 25,
+					deletions: 1,
+					omittedHunks: 0,
+					patch,
+					truncated: false,
+				},
+				path: "src/large.ts",
+				replacements: 1,
+			},
+			state: "output-available",
+			toolCallId: "edit-full-surface",
+			type: "tool-edit",
+		} satisfies EditToolPart;
+		const { setup } = await renderChatShell([assistantMessage([part])], {
+			height: 40,
+			width: 140,
+		});
+
+		try {
+			await setup.renderOnce();
+			await flushUi(setup);
+			let frame = setup.captureCharFrame();
+			expect(frame).toContain("← Edit src/large.ts +25 −1");
+			expect(frame).not.toContain("+ line 25");
+
+			const headerRow = frame
+				.split("\n")
+				.findIndex((row) => row.includes("← Edit src/large.ts"));
+			await setup.mockMouse.click(10, headerRow);
+			await flushUi(setup);
+			frame = setup.captureCharFrame();
+			expect(frame).toContain("+ line 18");
 		} finally {
 			setup.renderer.destroy();
 		}
