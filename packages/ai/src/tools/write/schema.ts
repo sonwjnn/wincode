@@ -12,7 +12,7 @@ export const writeOutputSchema = z.object({
 
 export const writeToolSchema = {
 	description:
-		"Create or overwrite a UTF-8 text file inside the workspace. Parent directories are created inside the workspace.",
+		"Create a new UTF-8 text file inside the workspace. This tool refuses to overwrite an existing file; use edit to modify existing files. Parent directories are created inside the workspace.",
 	name: "write",
 	schema: writeInputSchema,
 } as const;

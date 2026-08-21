@@ -2,28 +2,20 @@ import { describe, expect, test } from "bun:test";
 import { buildEditDiff, isRenderableEditDiff } from "./diff";
 
 describe("buildEditDiff", () => {
-	test("builds a four-line-context unified patch with full stats", () => {
-		expect(
-			buildEditDiff(
-				"const value = 1;\nconst other = 2;\n",
-				"const value = 3;\nconst other = 2;\n",
-				"src/example.ts"
-			)
-		).toEqual({
+	test("builds eight lines of context around a change", () => {
+		const before = `${Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n")}\n`;
+		const after = before.replace("line 7", "changed 7");
+		const result = buildEditDiff(before, after, "src/example.ts");
+
+		expect(result).toMatchObject({
 			additions: 1,
 			deletions: 1,
 			omittedHunks: 0,
-			patch:
-				"Index: src/example.ts\n" +
-				"===================================================================\n" +
-				"--- src/example.ts\n" +
-				"+++ src/example.ts\n" +
-				"@@ -1,2 +1,2 @@\n" +
-				"-const value = 1;\n" +
-				"+const value = 3;\n" +
-				" const other = 2;\n",
 			truncated: false,
 		});
+		expect(result.patch).toContain(" line 1\n");
+		expect(result.patch).toContain(" line 12\n");
+		expect(result.patch).toContain("-line 7\n+changed 7\n");
 	});
 	test("normalizes CRLF and removes common indentation from the patch", () => {
 		const result = buildEditDiff(

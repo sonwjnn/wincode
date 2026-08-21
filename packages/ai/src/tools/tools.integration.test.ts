@@ -151,6 +151,19 @@ describe("tool runners", () => {
 			"hello agent"
 		);
 	});
+	test("refuses to overwrite an existing file", async () => {
+		const filePath = `${sandboxRelPath}/existing.txt`;
+		writeFileSync(path.join(workspace, filePath), "original");
+
+		await expect(
+			runWriteTool({ content: "replacement", path: filePath })
+		).rejects.toThrow(
+			`File already exists: ${filePath}. Use the edit tool to modify it.`
+		);
+		expect(readFileSync(path.join(workspace, filePath), "utf8")).toBe(
+			"original"
+		);
+	});
 	test("reports every replacement in a multi-replacement edit diff", async () => {
 		const filePath = `${sandboxRelPath}/unicode.txt`;
 		const before = "café\ncafé\n";

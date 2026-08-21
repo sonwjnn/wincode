@@ -7,12 +7,10 @@ import {
 } from "../messages";
 
 export function ChatMessage({
-	chatViewportHeight,
 	footerMessage,
 	isStreaming = false,
 	messages,
 }: {
-	chatViewportHeight?: number;
 	footerMessage?: CodingAgentUIMessage;
 	/**
 	 * True while the last assistant message can still grow; only the final
@@ -38,7 +36,6 @@ export function ChatMessage({
 
 					return (
 						<BotMessageContent
-							chatViewportHeight={chatViewportHeight}
 							isStreaming={isStreaming && message === messages.at(-1)}
 							key={message.id}
 							parts={message.parts}

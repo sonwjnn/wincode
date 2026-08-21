@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "module": "src/index.tsx",
+  "bin": {
+    "wincode": "./src/index.tsx"
+  },
   "scripts": {
     "dev": "bun run --watch src/index.tsx",
     "test": "bun test src",

@@ -197,12 +197,15 @@ export const buildEditDiff = (
 	const normalizedBefore = normalizeLineEndings(before);
 	const normalizedAfter = normalizeLineEndings(after);
 	const patchPath = filePath.replace(/[\r\n]/gu, "");
-	// jsdiff 8.0.2 defaults to four unchanged context lines.
+	// Show four additional unchanged lines above and below the default context.
 	const rawPatch = createTwoFilesPatch(
 		patchPath,
 		patchPath,
 		normalizedBefore,
-		normalizedAfter
+		normalizedAfter,
+		undefined,
+		undefined,
+		{ context: 8 }
 	);
 	const trimmedPatch = trimDiff(rawPatch);
 	const { additions, deletions } = countChanges(trimmedPatch);

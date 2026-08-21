@@ -51,6 +51,7 @@ import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import type { TrackedPastedText } from "../../hooks/input-controller/submit";
 import { useChatInputController } from "../../hooks/input-controller/use-chat-input-controller";
 import type { ChatPromptSubmission } from "../../utils";
+import { ConversationBlock } from "../messages/conversation-block";
 import { summarizePastedText } from "./pasted-text";
 
 const MAX_IMAGE_ATTACHMENTS = 5;
@@ -964,39 +965,28 @@ export function ChatTextArea({
 				</box>
 			)}
 
-			<box
-				border={["left"]}
+			<ConversationBlock
 				borderColor={getAgentColor(colors, agent)}
-				customBorderChars={{
-					...EmptyBorder,
-					vertical: "┃",
-					bottomLeft: "╹",
-				}}
-				gap={1}
-				width="100%"
+				colors={colors}
+				contentGap={1}
+				contentJustifyContent="center"
+				customBorderChars={{ bottomLeft: "╹" }}
+				marginBottom={0}
+				paddingX={2}
+				paddingY={1}
 			>
-				<box
-					backgroundColor={colors.backgroundElement}
-					flexDirection="column"
-					gap={1}
-					justifyContent="center"
-					paddingX={2}
-					paddingY={1}
-					width="100%"
-				>
-					<textarea
-						focused={isFocused}
-						focusedTextColor={disabled ? colors.textDisabled : colors.text}
-						keyBindings={CHAT_TEXT_AREA_KEY_BINDINGS}
-						onContentChange={handleTextareaContentChange}
-						placeholder={`Ask anything... "Fix broken tests"`}
-						placeholderColor={colors.textMuted}
-						ref={textAreaRef}
-						textColor={disabled ? colors.textDisabled : colors.text}
-					/>
-					<StatusBar />
-				</box>
-			</box>
+				<textarea
+					focused={isFocused}
+					focusedTextColor={disabled ? colors.textDisabled : colors.text}
+					keyBindings={CHAT_TEXT_AREA_KEY_BINDINGS}
+					onContentChange={handleTextareaContentChange}
+					placeholder={`Ask anything... "Fix broken tests"`}
+					placeholderColor={colors.textMuted}
+					ref={textAreaRef}
+					textColor={disabled ? colors.textDisabled : colors.text}
+				/>
+				<StatusBar />
+			</ConversationBlock>
 		</box>
 	);
 }

@@ -48,7 +48,7 @@ export const MarkdownMessagePart = memo(function MarkdownMessagePart({
 	const sanitized = useMemo(() => stripMarkdownControlCharacters(text), [text]);
 
 	return (
-		<box paddingX={3} width="100%">
+		<box backgroundColor={colors.background} paddingX={3} width="100%">
 			<markdown
 				conceal
 				content={sanitized}

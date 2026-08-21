@@ -1,7 +1,6 @@
 import type { BoxRenderable } from "@opentui/core";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import { memo, type ReactNode, useMemo, useRef, useState } from "react";
-import { EmptyBorder } from "@/shared/constants";
 import {
 	boundCommandHeader,
 	boundPreview,
@@ -25,6 +24,7 @@ import {
 import { ToolApprovalPanel } from "@/shared/providers/approval/ui/tool-approval-panel";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
+import { ConversationBlock } from "./conversation-block";
 import { EditDiffBlock } from "./edit-diff-block";
 import { MarkdownMessagePart } from "./markdown-message-part";
 
@@ -245,13 +245,7 @@ const resolveFooterItems = (
 	return items;
 };
 
-function ToolMessagePart({
-	chatViewportHeight,
-	part,
-}: {
-	chatViewportHeight?: number;
-	part: ToolPart;
-}) {
+function ToolMessagePart({ part }: { part: ToolPart }) {
 	const { colors } = useTheme();
 	const isSkillCall =
 		part.type === "dynamic-tool" &&
@@ -276,9 +270,7 @@ function ToolMessagePart({
 		<>
 			{toolLine}
 			{isShellOutput ? <ShellOutputBlock part={part} /> : null}
-			{isEditOutput ? (
-				<EditDiffBlock chatViewportHeight={chatViewportHeight} part={part} />
-			) : null}
+			{isEditOutput ? <EditDiffBlock part={part} /> : null}
 			{typeof part.toolCallId === "string" ? (
 				<ToolApprovalPanel id={part.toolCallId} />
 			) : null}
@@ -349,49 +341,30 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 	const hasFailed = (exitCode !== null && exitCode !== 0) || timedOut;
 
 	return (
-		// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI box handles terminal mouse events; keyboard output navigation lands in a separate issue.
-		<box
-			border={["left"]}
-			borderColor={colors.backgroundElement}
-			customBorderChars={{
-				...EmptyBorder,
-				vertical: "┃",
-			}}
-			flexDirection="column"
-			marginBottom={1}
+		<ConversationBlock
+			blockRef={blockRef}
+			colors={colors}
 			onMouseDown={() => {
 				if (canExpand) {
 					setExpanded((value) => !value);
 				}
 			}}
 			onSizeChange={handleBlockResize}
-			ref={blockRef}
-			width="100%"
+			paddingX={SHELL_BLOCK_PADDING_X}
 		>
-			<box
-				backgroundColor={colors.backgroundElement}
-				flexDirection="column"
-				gap={1}
-				paddingX={SHELL_BLOCK_PADDING_X}
-				paddingY={1}
-				width="100%"
-			>
-				<text fg={colors.text} wrapMode="char">
-					{header}
-				</text>
-				{markers.length > 0 ? (
-					<text fg={hasFailed ? colors.error : colors.textMuted}>
-						{markers}
-					</text>
-				) : null}
-				<text fg={colors.text} wrapMode="char">
-					{expanded ? sanitizedText : preview.text}
-				</text>
-				{expanded || indicator === null ? null : (
-					<text fg={colors.textMuted}>{indicator}</text>
-				)}
-			</box>
-		</box>
+			<text fg={colors.text} wrapMode="char">
+				{header}
+			</text>
+			{markers.length > 0 ? (
+				<text fg={hasFailed ? colors.error : colors.textMuted}>{markers}</text>
+			) : null}
+			<text fg={colors.text} wrapMode="char">
+				{expanded ? sanitizedText : preview.text}
+			</text>
+			{expanded || indicator === null ? null : (
+				<text fg={colors.textMuted}>{indicator}</text>
+			)}
+		</ConversationBlock>
 	);
 }
 
@@ -504,11 +477,9 @@ function SkillActivityRow({ part }: { part: ToolPart }) {
 }
 
 export function BotMessageContent({
-	chatViewportHeight,
 	isStreaming = false,
 	parts,
 }: {
-	chatViewportHeight?: number;
 	/**
 	 * True while the message's text parts can still grow. Keeps the markdown
 	 * mapping in streaming mode so trailing blocks parse incrementally
@@ -553,7 +524,6 @@ export function BotMessageContent({
 						if (isToolPart(part)) {
 							return (
 								<MemoizedToolMessagePart
-									chatViewportHeight={chatViewportHeight}
 									key={getToolKey(part, index)}
 									part={part}
 								/>

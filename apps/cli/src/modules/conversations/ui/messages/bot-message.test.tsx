@@ -12,6 +12,7 @@ import {
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+import { buildAddedPreviewPatch } from "./edit-diff-block";
 
 const { BotMessageContent } = await import("./bot-message");
 const { setMarkdownTreeSitterClientForTests } = await import(
@@ -247,22 +248,72 @@ describe("BotMessageContent", () => {
 		expect(frame).toContain("← Edit invalid.ts");
 		expect(frame).toContain("Diff unavailable");
 	});
-	test("collapses long diffs and toggles them from the header", async () => {
+	test("keeps diffs below the line threshold expanded regardless of viewport", async () => {
+		const patch = [
+			"Index: src/compact.ts",
+			"===================================================================",
+			"--- src/compact.ts",
+			"+++ src/compact.ts",
+			"@@ -1,1 +1,42 @@",
+			"-old",
+			...Array.from({ length: 42 }, (_, index) => `+line ${index + 1}`),
+			"",
+		].join("\n");
+		const part = {
+			input: { find: "old", path: "src/compact.ts", replace: "new" },
+			output: {
+				editDiff: {
+					additions: 42,
+					deletions: 1,
+					omittedHunks: 0,
+					patch,
+					truncated: false,
+				},
+				path: "src/compact.ts",
+				replacements: 1,
+			},
+			state: "output-available",
+			toolCallId: "edit-compact",
+			type: "tool-edit",
+		} satisfies MessagePart;
+
+		const frame = await renderFrame([part], 100, 100);
+
+		expect(frame).toContain("+ line 14");
+	});
+	test("previews collapsed diffs and expands them with Ctrl+O", async () => {
 		const patch = [
 			"Index: src/large.ts",
 			"===================================================================",
 			"--- src/large.ts",
 			"+++ src/large.ts",
-			"@@ -1,1 +1,25 @@",
+			"@@ -1,1 +1,1001 @@",
 			"-old",
-			...Array.from({ length: 25 }, (_, index) => `+line ${index + 1}`),
+			...Array.from({ length: 1001 }, (_, index) => `+line ${index + 1}`),
 			"",
 		].join("\n");
+		const preview = buildAddedPreviewPatch(patch, 1000);
+		expect(preview).toContain("+line 995\n");
+		expect(preview).not.toContain("-old\n");
+		expect(preview).not.toContain("+line 996\n");
+		const mixedPreview = buildAddedPreviewPatch(
+			"Index: src/mixed.ts\n" +
+				"===================================================================\n" +
+				"--- src/mixed.ts\n" +
+				"+++ src/mixed.ts\n" +
+				"@@ -1,2 +1,2 @@\n" +
+				"-old\n" +
+				"+new\n" +
+				" context\n",
+			8
+		);
+		expect(mixedPreview).toContain("+new\n-old\n");
+		expect(mixedPreview).toContain(" context\n");
 		const part = {
 			input: { find: "old", path: "src/large.ts", replace: "new" },
 			output: {
 				editDiff: {
-					additions: 25,
+					additions: 1001,
 					deletions: 1,
 					omittedHunks: 0,
 					patch,
@@ -283,14 +334,17 @@ describe("BotMessageContent", () => {
 					</ApprovalPanelsProvider>
 				</KeyboardLayerProvider>
 			</ThemeProvider>,
-			{ height: 40, width: 100 }
+			{ height: 50, width: 100 }
 		);
 
 		try {
 			await flushRenderPasses(setup);
 			let frame = setup.captureCharFrame();
-			expect(frame).toContain("← Edit src/large.ts +25 −1");
-			expect(frame).not.toContain("+line 25");
+			expect(frame).toContain("← Edit src/large.ts +1001 −1");
+			expect(frame).not.toContain("▸");
+			expect(frame).not.toContain("▾");
+			expect(frame).toContain("+ line 14");
+			expect(frame).not.toContain("+ line 1001");
 
 			const headerRow = frame
 				.split("\n")
@@ -298,12 +352,14 @@ describe("BotMessageContent", () => {
 			await setup.mockMouse.click(10, headerRow);
 			await flushUi(setup);
 			frame = setup.captureCharFrame();
-			expect(frame).toContain("+ line 25");
+			expect(frame).toContain("+ line 14");
 
-			await setup.mockMouse.click(10, headerRow);
+			setup.mockInput.pressKey("o", { ctrl: true });
 			await flushUi(setup);
 			frame = setup.captureCharFrame();
-			expect(frame).not.toContain("+ line 25");
+			expect(frame).toContain("+ line 14");
+			expect(frame).not.toContain("▸");
+			expect(frame).not.toContain("▾");
 		} finally {
 			setup.renderer.destroy();
 		}

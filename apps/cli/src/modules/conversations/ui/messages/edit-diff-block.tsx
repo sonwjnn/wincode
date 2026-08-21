@@ -5,11 +5,12 @@ import {
 	type EditDiff,
 	isRenderableEditDiff,
 } from "@wincode/ai";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { EmptyBorder } from "@/shared/constants";
+import { type ReactNode, useMemo, useRef, useState } from "react";
 import { stripControlCharacters } from "@/shared/display-sanitize";
+import { useToggleShortcut } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { ThemeColors } from "@/shared/providers/theme/themes";
+import { ConversationBlock } from "./conversation-block";
 import {
 	getTreeSitterClientForTests,
 	resolveSyntaxStyle,
@@ -22,13 +23,10 @@ type EditToolPart = Extract<
 
 type EditDiffBlockProps = {
 	part: EditToolPart;
-	chatViewportHeight?: number;
 };
 
 const DIFF_BREAKPOINT_COLUMNS = 120;
-const DIFF_COLLAPSE_LINES = 20;
-const DIFF_COLLAPSE_VIEWPORT_RATIO = 0.4;
-const DIFF_EXPANDED_VIEWPORT_RATIO = 0.6;
+const DIFF_COLLAPSE_LINES = 30;
 const DIFF_BLOCK_PADDING_X = 2;
 const DIFF_BACKGROUND_ALPHA = 0.18;
 const DIFF_LINE_NUMBER_ALPHA = 0.1;
@@ -108,6 +106,127 @@ const patchLineCount = (patch: string): number =>
 	patch.length === 0
 		? 0
 		: patch.split("\n").length - (patch.endsWith("\n") ? 1 : 0);
+const HUNK_HEADER_RE = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/u;
+
+type PreviewHunk = {
+	lines: string[];
+	newStart: string;
+	oldStart: string;
+	suffix: string;
+};
+type GreenPreviewHunk = PreviewHunk & {
+	otherLines: string[];
+};
+
+const countHunkLines = (lines: string[]) => {
+	let oldCount = 0;
+	let newCount = 0;
+	for (const line of lines) {
+		if (line.startsWith(" ") || line.startsWith("-")) {
+			oldCount += 1;
+		}
+		if (line.startsWith(" ") || line.startsWith("+")) {
+			newCount += 1;
+		}
+	}
+	return { newCount, oldCount };
+};
+
+export const limitPatchLines = (patch: string, maxLines: number): string => {
+	if (patchLineCount(patch) <= maxLines) {
+		return patch;
+	}
+
+	const previewLines = patch.split("\n").slice(0, maxLines);
+	const output: string[] = [];
+	let currentHunk: PreviewHunk | undefined;
+	const flushHunk = () => {
+		if (!currentHunk || currentHunk.lines.length === 0) {
+			return;
+		}
+		const { newCount, oldCount } = countHunkLines(currentHunk.lines);
+		output.push(
+			`@@ -${currentHunk.oldStart},${oldCount} +${currentHunk.newStart},${newCount} @@${currentHunk.suffix}`
+		);
+		output.push(...currentHunk.lines);
+		currentHunk = undefined;
+	};
+
+	for (const line of previewLines) {
+		const header = line.match(HUNK_HEADER_RE);
+		if (header) {
+			flushHunk();
+			currentHunk = {
+				lines: [],
+				newStart: header[2] ?? "1",
+				oldStart: header[1] ?? "1",
+				suffix: header[3] ?? "",
+			};
+			continue;
+		}
+		if (currentHunk) {
+			currentHunk.lines.push(line);
+		} else {
+			output.push(line);
+		}
+	}
+	flushHunk();
+	return `${output.join("\n")}\n`;
+};
+export const buildAddedPreviewPatch = (
+	patch: string,
+	maxLines: number
+): string => {
+	const output: string[] = [];
+	let currentHunk: GreenPreviewHunk | undefined;
+	let addedLineCount = 0;
+	const flushHunk = () => {
+		if (!currentHunk) {
+			return;
+		}
+		const lines = [...currentHunk.lines, ...currentHunk.otherLines];
+		if (lines.length === 0) {
+			return;
+		}
+		const { newCount, oldCount } = countHunkLines(lines);
+		output.push(
+			`@@ -${currentHunk.oldStart},${oldCount} +${currentHunk.newStart},${newCount} @@${currentHunk.suffix}`
+		);
+		output.push(...lines);
+		addedLineCount += currentHunk.lines.length;
+		currentHunk = undefined;
+	};
+
+	for (const line of patch.split("\n")) {
+		const header = line.match(HUNK_HEADER_RE);
+		if (header) {
+			flushHunk();
+			currentHunk = {
+				lines: [],
+				newStart: header[2] ?? "1",
+				oldStart: header[1] ?? "1",
+				otherLines: [],
+				suffix: header[3] ?? "",
+			};
+			continue;
+		}
+		if (currentHunk) {
+			if (line.startsWith("+")) {
+				currentHunk.lines.push(line);
+			} else {
+				currentHunk.otherLines.push(line);
+			}
+			continue;
+		}
+		output.push(line);
+	}
+	flushHunk();
+
+	if (addedLineCount === 0) {
+		return limitPatchLines(patch, maxLines);
+	}
+	return limitPatchLines(`${output.join("\n")}\n`, maxLines);
+};
 
 const isEditOutputWithDiff = (
 	part: EditToolPart
@@ -133,23 +252,21 @@ const isEditOutputWithDiff = (
 
 const DiffHeader = ({
 	colors,
-	expanded,
 	path,
-	stats,
-	onToggle,
+	additions,
+	deletions,
 }: {
 	colors: ThemeColors;
-	expanded: boolean;
 	path: string;
-	stats: string;
-	onToggle: () => void;
+	additions: number;
+	deletions: number;
 }) => (
-	// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI header owns terminal mouse interaction.
-	<box flexDirection="row" gap={1} onMouseDown={onToggle} width="100%">
-		<text fg={colors.text}>{expanded ? "▾" : "▸"}</text>
+	<box flexDirection="row" gap={1} width="100%">
 		<text fg={colors.text} wrapMode="char">
-			{`← Edit ${path} ${stats}`}
+			{`← Edit ${path}`}
 		</text>
+		<text fg={colors.success}>{`+${additions}`}</text>
+		<text fg={colors.error}>{`−${deletions}`}</text>
 	</box>
 );
 const DiffStatusPanel = ({
@@ -159,25 +276,12 @@ const DiffStatusPanel = ({
 	children: ReactNode;
 	colors: ThemeColors;
 }) => (
-	<box
-		backgroundColor={colors.backgroundElement}
-		border={["left"]}
-		borderColor={colors.borderSubtle}
-		customBorderChars={{ ...EmptyBorder, vertical: "┃" }}
-		flexDirection="column"
-		marginBottom={1}
-		paddingX={DIFF_BLOCK_PADDING_X}
-		paddingY={1}
-		width="100%"
-	>
+	<ConversationBlock colors={colors} paddingX={DIFF_BLOCK_PADDING_X}>
 		{children}
-	</box>
+	</ConversationBlock>
 );
 
-export function EditDiffBlock({
-	chatViewportHeight = 0,
-	part,
-}: EditDiffBlockProps) {
+export function EditDiffBlock({ part }: EditDiffBlockProps) {
 	const { colors } = useTheme();
 	const blockRef = useRef<BoxRenderable>(null);
 	const [blockWidth, setBlockWidth] = useState(0);
@@ -190,18 +294,19 @@ export function EditDiffBlock({
 		[editDiff?.patch]
 	);
 	const logicalLines = patchLineCount(patch);
-	const shouldCollapse =
-		logicalLines > DIFF_COLLAPSE_LINES ||
-		(chatViewportHeight > 0 &&
-			logicalLines > chatViewportHeight * DIFF_COLLAPSE_VIEWPORT_RATIO);
+	const shouldCollapse = logicalLines > DIFF_COLLAPSE_LINES;
 	const [expanded, setExpanded] = useState(() => !shouldCollapse);
-	const [hasInteracted, setHasInteracted] = useState(false);
-
-	useEffect(() => {
-		if (!hasInteracted && chatViewportHeight > 0) {
-			setExpanded(!shouldCollapse);
-		}
-	}, [chatViewportHeight, hasInteracted, shouldCollapse]);
+	const visiblePatch = expanded
+		? patch
+		: buildAddedPreviewPatch(patch, DIFF_COLLAPSE_LINES);
+	const toggleExpanded = () => {
+		setExpanded((value) => !value);
+	};
+	useToggleShortcut(
+		"ctrl+o",
+		toggleExpanded,
+		editDiff?.patch !== undefined && editDiff.patch.length > 0
+	);
 
 	if (!result) {
 		return null;
@@ -233,19 +338,7 @@ export function EditDiffBlock({
 			setBlockWidth((current) => (current === width ? current : width));
 		});
 	};
-	const toggleExpanded = () => {
-		setHasInteracted(true);
-		setExpanded((value) => !value);
-	};
 	const view = blockWidth > DIFF_BREAKPOINT_COLUMNS ? "split" : "unified";
-	const maxHeight =
-		chatViewportHeight > 0
-			? Math.max(
-					3,
-					Math.floor(chatViewportHeight * DIFF_EXPANDED_VIEWPORT_RATIO)
-				)
-			: undefined;
-	const stats = `+${editDiff.additions} −${editDiff.deletions}`;
 	const syntaxStyle = resolveSyntaxStyle(colors);
 	const addedBg = blendColor(
 		colors.backgroundElement,
@@ -269,25 +362,17 @@ export function EditDiffBlock({
 	);
 
 	return (
-		<box
-			backgroundColor={colors.backgroundElement}
-			border={["left"]}
-			borderColor={colors.borderSubtle}
-			customBorderChars={{ ...EmptyBorder, vertical: "┃" }}
-			flexDirection="column"
-			marginBottom={1}
+		<ConversationBlock
+			blockRef={blockRef}
+			colors={colors}
 			onSizeChange={handleBlockResize}
 			paddingX={DIFF_BLOCK_PADDING_X}
-			paddingY={1}
-			ref={blockRef}
-			width="100%"
 		>
 			<DiffHeader
+				additions={editDiff.additions}
 				colors={colors}
-				expanded={expanded}
-				onToggle={toggleExpanded}
+				deletions={editDiff.deletions}
 				path={path}
-				stats={stats}
 			/>
 			{editDiff.truncated ? (
 				<text fg={colors.textMuted}>
@@ -296,37 +381,30 @@ export function EditDiffBlock({
 						: `… ${editDiff.omittedHunks} hunks omitted`}
 				</text>
 			) : null}
-			{expanded ? (
-				<scrollbox
-					height={maxHeight}
-					verticalScrollbarOptions={{ visible: true }}
+			<box width="100%">
+				<diff
+					addedBg={addedBg}
+					addedContentBg={addedBg}
+					addedLineNumberBg={addedLineNumberBg}
+					addedSignColor={colors.success}
+					contextBg={colors.backgroundElement}
+					contextContentBg={colors.backgroundElement}
+					diff={visiblePatch}
+					filetype={filetypeForPath(path)}
+					lineNumberBg={colors.backgroundElement}
+					lineNumberFg={colors.textMuted}
+					removedBg={removedBg}
+					removedContentBg={removedBg}
+					removedLineNumberBg={removedLineNumberBg}
+					removedSignColor={colors.error}
+					showLineNumbers
+					syntaxStyle={syntaxStyle}
+					treeSitterClient={getTreeSitterClientForTests()}
+					view={view}
 					width="100%"
-				>
-					<diff
-						addedBg={addedBg}
-						addedContentBg={addedBg}
-						addedLineNumberBg={addedLineNumberBg}
-						addedSignColor={colors.success}
-						contextBg={colors.backgroundElement}
-						contextContentBg={colors.backgroundElement}
-						diff={patch}
-						filetype={filetypeForPath(path)}
-						lineNumberBg={colors.backgroundElement}
-						lineNumberFg={colors.textMuted}
-						removedBg={removedBg}
-						removedContentBg={removedBg}
-						removedLineNumberBg={removedLineNumberBg}
-						removedSignColor={colors.error}
-						showLineNumbers
-						syncScroll={view === "split"}
-						syntaxStyle={syntaxStyle}
-						treeSitterClient={getTreeSitterClientForTests()}
-						view={view}
-						width="100%"
-						wrapMode="word"
-					/>
-				</scrollbox>
-			) : null}
-		</box>
+					wrapMode="word"
+				/>
+			</box>
+		</ConversationBlock>
 	);
 }

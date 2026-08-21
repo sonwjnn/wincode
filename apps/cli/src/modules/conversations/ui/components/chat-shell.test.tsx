@@ -5,6 +5,7 @@ process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
+import { RGBA, type ScrollBoxRenderable } from "@opentui/core";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import { useEffect, useState } from "react";
@@ -42,6 +43,7 @@ const { KeyboardLayerProvider } = await import(
 const { ThemeProvider } = await import(
 	"@/shared/providers/theme/theme-provider"
 );
+const { DEFAULT_THEME } = await import("@/shared/providers/theme/themes");
 const { ToastProvider } = await import(
 	"@/shared/providers/toast/toast-provider"
 );
@@ -143,7 +145,7 @@ const renderChatShell = async (
 	const holder: { current: ChatShellProbeHandle | null } = { current: null };
 	const router = buildTestRouter();
 	const setup = await testRender(
-		<ThemeProvider>
+		<ThemeProvider themeName={DEFAULT_THEME.name}>
 			<ConfigProvider value={{ configStore, homeRoot: homedir(), workspace }}>
 				<ToastProvider>
 					<ConnectionsProvider connections={createConnections()}>
@@ -692,7 +694,7 @@ describe("ChatShell shell output blocks", () => {
 });
 
 describe("ChatShell edit diff blocks", () => {
-	test("renders and toggles an edit diff through the full TUI surface", async () => {
+	test("renders an edit diff with the shared conversation block style", async () => {
 		const patch = [
 			"Index: src/large.ts",
 			"===================================================================",
@@ -728,17 +730,85 @@ describe("ChatShell edit diff blocks", () => {
 		try {
 			await setup.renderOnce();
 			await flushUi(setup);
-			let frame = setup.captureCharFrame();
+			const frame = setup.captureCharFrame();
 			expect(frame).toContain("← Edit src/large.ts +25 −1");
-			expect(frame).not.toContain("+ line 25");
+			expect(frame).toContain("+ line 25");
+			expect(frame).toContain("┃");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
 
-			const headerRow = frame
-				.split("\n")
-				.findIndex((row) => row.includes("← Edit src/large.ts"));
-			await setup.mockMouse.click(10, headerRow);
+	test("does not carry diff backgrounds into summary text while scrolling", async () => {
+		const patch = [
+			"Index: src/config.ts",
+			"===================================================================",
+			"--- src/config.ts",
+			"+++ src/config.ts",
+			"@@ -1,8 +1,1 @@",
+			"+replacement",
+			...Array.from({ length: 8 }, (_, index) => `-removed ${index + 1}`),
+			"",
+		].join("\n");
+		const part = {
+			input: { find: "old", path: "src/config.ts", replace: "new" },
+			output: {
+				editDiff: {
+					additions: 1,
+					deletions: 8,
+					omittedHunks: 0,
+					patch,
+					truncated: false,
+				},
+				path: "src/config.ts",
+				replacements: 1,
+			},
+			state: "output-available",
+			toolCallId: "edit-scroll-background",
+			type: "tool-edit",
+		} satisfies EditToolPart;
+		const summary = {
+			text: "- Installed `lefthook` as a dev dependency",
+			type: "text",
+		} satisfies CodingAgentUIMessage["parts"][number];
+		const { setup } = await renderChatShell(
+			[assistantMessage([part, summary])],
+			{ height: 18, width: 100 }
+		);
+
+		try {
+			await setup.renderOnce();
 			await flushUi(setup);
-			frame = setup.captureCharFrame();
-			expect(frame).toContain("+ line 18");
+			const scrollbox = setup.renderer.root.findDescendantById(
+				"conversation-scrollbox"
+			) as ScrollBoxRenderable | undefined;
+			expect(scrollbox).toBeDefined();
+
+			scrollbox?.scrollTo(0);
+			await setup.renderOnce();
+			let observedSummary = false;
+			const expectedBackground = RGBA.fromHex(DEFAULT_THEME.colors.background);
+			for (let scrollStep = 0; scrollStep < 30; scrollStep += 1) {
+				await setup.mockMouse.scroll(50, 5, "down");
+				await setup.renderOnce();
+				const summaryLine = setup
+					.captureSpans()
+					.lines.find((line) =>
+						line.spans.some((span) => span.text.includes("Installed"))
+					);
+				if (!summaryLine) {
+					continue;
+				}
+				observedSummary = true;
+
+				const contentSpans = summaryLine.spans.filter(
+					(span) => span.text !== " "
+				);
+				expect(
+					contentSpans.every((span) => span.bg.equals(expectedBackground))
+				).toBe(true);
+			}
+			expect(observedSummary).toBe(true);
 		} finally {
 			setup.renderer.destroy();
 		}
