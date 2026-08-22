@@ -739,6 +739,151 @@ describe("ChatShell edit diff blocks", () => {
 		}
 	});
 
+	test("keeps an added-only blank line green while the diff remains visible", async () => {
+		const patch = [
+			"@@ -1,0 +1,5 @@",
+			"+before blank",
+			"+",
+			"+after blank",
+			"+tail 1",
+			"+tail 2",
+			"",
+		].join("\n");
+		const part = {
+			input: { find: "", path: "README.md", replace: "new" },
+			output: {
+				editDiff: {
+					additions: 5,
+					deletions: 0,
+					omittedHunks: 0,
+					patch,
+					truncated: false,
+				},
+				path: "README.md",
+				replacements: 1,
+			},
+			state: "output-available",
+			toolCallId: "edit-added-only-blank",
+			type: "tool-edit",
+		} satisfies EditToolPart;
+		const summary = {
+			text: Array.from(
+				{ length: 12 },
+				(_, index) => `Following summary ${index + 1}`
+			).join("\n"),
+			type: "text",
+		} satisfies CodingAgentUIMessage["parts"][number];
+		const { setup } = await renderChatShell(
+			[assistantMessage([part, summary])],
+			{ height: 18, width: 140 }
+		);
+
+		try {
+			await setup.renderOnce();
+			await flushUi(setup);
+			const scrollbox = setup.renderer.root.findDescendantById(
+				"conversation-scrollbox"
+			) as ScrollBoxRenderable | undefined;
+			expect(scrollbox).toBeDefined();
+			const addedBackground = RGBA.fromHex(DEFAULT_THEME.colors.diffAddedBg);
+			let observedBlankAddedLine = false;
+
+			for (let offset = 0; offset < 30; offset += 1) {
+				scrollbox?.scrollTo(offset);
+				await setup.renderOnce();
+				const rows = setup.captureCharFrame().split("\n");
+				if (
+					!rows[1]?.includes("after blank") ||
+					rows[0]?.includes("before blank")
+				) {
+					continue;
+				}
+				observedBlankAddedLine = true;
+				expect(
+					setup
+						.captureSpans()
+						.lines[0]?.spans.some((span) => span.bg.equals(addedBackground))
+				).toBe(true);
+				break;
+			}
+			expect(observedBlankAddedLine).toBe(true);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("does not pin an empty green split lane beside visible removals", async () => {
+		const patch = [
+			"@@ -1,8 +1,1 @@",
+			"+replacement",
+			...Array.from({ length: 8 }, (_, index) => `-removed ${index + 1}`),
+			"",
+		].join("\n");
+		const part = {
+			input: { find: "old", path: "src/config.ts", replace: "new" },
+			output: {
+				editDiff: {
+					additions: 1,
+					deletions: 8,
+					omittedHunks: 0,
+					patch,
+					truncated: false,
+				},
+				path: "src/config.ts",
+				replacements: 1,
+			},
+			state: "output-available",
+			toolCallId: "edit-split-empty-added-lane",
+			type: "tool-edit",
+		} satisfies EditToolPart;
+		const summary = {
+			text: Array.from(
+				{ length: 12 },
+				(_, index) => `Following summary ${index + 1}`
+			).join("\n"),
+			type: "text",
+		} satisfies CodingAgentUIMessage["parts"][number];
+		const { setup } = await renderChatShell(
+			[assistantMessage([part, summary])],
+			{ height: 18, width: 140 }
+		);
+
+		try {
+			await setup.renderOnce();
+			await flushUi(setup);
+			const scrollbox = setup.renderer.root.findDescendantById(
+				"conversation-scrollbox"
+			) as ScrollBoxRenderable | undefined;
+			expect(scrollbox).toBeDefined();
+			const addedBackground = RGBA.fromHex(DEFAULT_THEME.colors.diffAddedBg);
+			const removedBackground = RGBA.fromHex(
+				DEFAULT_THEME.colors.diffRemovedBg
+			);
+			let observedUnpairedRemoval = false;
+
+			for (let offset = 0; offset < 30; offset += 1) {
+				scrollbox?.scrollTo(offset);
+				await setup.renderOnce();
+				const topRow = setup.captureCharFrame().split("\n")[0] ?? "";
+				if (!topRow.includes("removed") || topRow.includes("replacement")) {
+					continue;
+				}
+				observedUnpairedRemoval = true;
+				const topSpans = setup.captureSpans().lines[0]?.spans ?? [];
+				expect(topSpans.some((span) => span.bg.equals(removedBackground))).toBe(
+					true
+				);
+				expect(topSpans.some((span) => span.bg.equals(addedBackground))).toBe(
+					false
+				);
+				break;
+			}
+			expect(observedUnpairedRemoval).toBe(true);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
 	test("does not carry diff backgrounds into summary text while scrolling", async () => {
 		const patch = [
 			"Index: src/config.ts",
@@ -768,12 +913,26 @@ describe("ChatShell edit diff blocks", () => {
 			type: "tool-edit",
 		} satisfies EditToolPart;
 		const summary = {
-			text: "- Installed `lefthook` as a dev dependency",
+			text: [
+				"Done — I added Lefthook pre-commit support.",
+				"",
+				"What changed:",
+				"- Installed `lefthook` as a dev dependency",
+				"- Created `lefthook.yml`",
+				"- Added a pre-commit hook that runs linting",
+				"- Synced the git hooks with `lefthook install`",
+				"",
+				"Current hook config:",
+				"- pre-commit → runs `bun run lint`",
+				"",
+				"Verification:",
+				"- `bunx lefthook run pre-commit` succeeds",
+			].join("\n"),
 			type: "text",
 		} satisfies CodingAgentUIMessage["parts"][number];
 		const { setup } = await renderChatShell(
 			[assistantMessage([part, summary])],
-			{ height: 18, width: 100 }
+			{ height: 18, width: 140 }
 		);
 
 		try {
@@ -786,27 +945,31 @@ describe("ChatShell edit diff blocks", () => {
 
 			scrollbox?.scrollTo(0);
 			await setup.renderOnce();
+			const diffBackgrounds = [
+				RGBA.fromHex(DEFAULT_THEME.colors.diffAddedBg),
+				RGBA.fromHex(DEFAULT_THEME.colors.diffRemovedBg),
+			];
 			let observedSummary = false;
-			const expectedBackground = RGBA.fromHex(DEFAULT_THEME.colors.background);
 			for (let scrollStep = 0; scrollStep < 30; scrollStep += 1) {
 				await setup.mockMouse.scroll(50, 5, "down");
 				await setup.renderOnce();
-				const summaryLine = setup
-					.captureSpans()
-					.lines.find((line) =>
-						line.spans.some((span) => span.text.includes("Installed"))
-					);
-				if (!summaryLine) {
+				const frame = setup.captureCharFrame();
+				if (
+					!frame.includes("Installed") ||
+					frame.includes("replacement") ||
+					frame.includes("removed")
+				) {
 					continue;
 				}
 				observedSummary = true;
-
-				const contentSpans = summaryLine.spans.filter(
-					(span) => span.text !== " "
-				);
-				expect(
-					contentSpans.every((span) => span.bg.equals(expectedBackground))
-				).toBe(true);
+				const leakedSpans = setup
+					.captureSpans()
+					.lines.flatMap((line) => line.spans)
+					.filter((span) =>
+						diffBackgrounds.some((background) => span.bg.equals(background))
+					);
+				expect(leakedSpans).toEqual([]);
+				break;
 			}
 			expect(observedSummary).toBe(true);
 		} finally {

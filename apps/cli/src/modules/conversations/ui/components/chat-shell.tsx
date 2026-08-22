@@ -1,6 +1,11 @@
-import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
+import {
+	type OptimizedBuffer,
+	RGBA,
+	type ScrollBoxRenderable,
+	TextAttributes,
+} from "@opentui/core";
 import type { CodingAgentUIMessage } from "@wincode/ai";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useModelPricing } from "@/modules/model-pricing";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
@@ -20,6 +25,90 @@ import {
 } from "./chat-turns";
 import { SessionUsageBar } from "./session-usage-bar";
 
+const COLOR_CHANNEL_COUNT = 4;
+const SPACE_CODE_POINT = 0x20;
+
+const cellHasBackground = (
+	backgrounds: Uint16Array,
+	offset: number,
+	color: RGBA
+): boolean => {
+	const channels = color.buffer;
+	return (
+		backgrounds[offset] === channels[0] &&
+		backgrounds[offset + 1] === channels[1] &&
+		backgrounds[offset + 2] === channels[2] &&
+		backgrounds[offset + 3] === channels[3]
+	);
+};
+
+const cellHasDiffBackground = (
+	backgrounds: Uint16Array,
+	offset: number,
+	diffBackgrounds: readonly RGBA[]
+): boolean => {
+	for (const diffBackground of diffBackgrounds) {
+		if (cellHasBackground(backgrounds, offset, diffBackground)) {
+			return true;
+		}
+	}
+	return false;
+};
+
+const replaceCellBackground = (
+	backgrounds: Uint16Array,
+	offset: number,
+	color: RGBA
+): void => {
+	backgrounds.set(color.buffer, offset);
+};
+
+const clearBlankDiffLanesAtViewportTop = (
+	buffer: OptimizedBuffer,
+	viewport: ScrollBoxRenderable,
+	diffBackgroundGroups: readonly (readonly RGBA[])[],
+	replacement: RGBA
+): void => {
+	const row = viewport.y;
+	if (row < 0 || row >= buffer.height) {
+		return;
+	}
+	const startColumn = Math.max(0, viewport.x);
+	const endColumn = Math.min(buffer.width, viewport.x + viewport.width);
+	const { bg: backgrounds, char: characters } = buffer.buffers;
+
+	for (const diffBackgrounds of diffBackgroundGroups) {
+		let hasLaneBackground = false;
+		let hasVisibleContent = false;
+		for (let column = startColumn; column < endColumn; column += 1) {
+			const cellIndex = row * buffer.width + column;
+			const backgroundOffset = cellIndex * COLOR_CHANNEL_COUNT;
+			if (
+				!cellHasDiffBackground(backgrounds, backgroundOffset, diffBackgrounds)
+			) {
+				continue;
+			}
+			hasLaneBackground = true;
+			const character = characters[cellIndex];
+			if (character !== 0 && character !== SPACE_CODE_POINT) {
+				hasVisibleContent = true;
+				break;
+			}
+		}
+		if (!hasLaneBackground || hasVisibleContent) {
+			continue;
+		}
+		for (let column = startColumn; column < endColumn; column += 1) {
+			const backgroundOffset =
+				(row * buffer.width + column) * COLOR_CHANNEL_COUNT;
+			if (
+				cellHasDiffBackground(backgrounds, backgroundOffset, diffBackgrounds)
+			) {
+				replaceCellBackground(backgrounds, backgroundOffset, replacement);
+			}
+		}
+	}
+};
 type ChatShellProps = {
 	error?: unknown;
 	isBusy: boolean;
@@ -51,7 +140,43 @@ export function ChatShell({
 		() => summarizeSessionUsage(messages, model, table),
 		[messages, model, table]
 	);
-
+	const diffLaneBackgroundGroups = useMemo(
+		() => [
+			[
+				RGBA.fromHex(colors.diffAddedBg),
+				RGBA.fromHex(colors.diffAddedLineNumberBg),
+			],
+			[
+				RGBA.fromHex(colors.diffRemovedBg),
+				RGBA.fromHex(colors.diffRemovedLineNumberBg),
+			],
+		],
+		[
+			colors.diffAddedBg,
+			colors.diffAddedLineNumberBg,
+			colors.diffRemovedBg,
+			colors.diffRemovedLineNumberBg,
+		]
+	);
+	const conversationBackground = useMemo(
+		() => RGBA.fromHex(colors.background),
+		[colors.background]
+	);
+	const clearEscapedDiffBackground = useCallback(
+		(buffer: OptimizedBuffer) => {
+			const scrollbox = scrollboxRef.current;
+			if (!scrollbox) {
+				return;
+			}
+			clearBlankDiffLanesAtViewportTop(
+				buffer,
+				scrollbox,
+				diffLaneBackgroundGroups,
+				conversationBackground
+			);
+		},
+		[conversationBackground, diffLaneBackgroundGroups]
+	);
 	useEffect(() => {
 		if (scrollRequest === 0) {
 			return;
@@ -128,6 +253,15 @@ export function ChatShell({
 					)}
 					{error ? <ErrorMessage error={error} /> : null}
 				</box>
+				{/* OpenTUI clips diff glyphs at the scroll boundary but can leave
+				    full-row backgrounds behind. This post-content render pass removes
+				    only background lanes with no visible cells. */}
+				<box
+					height={1}
+					position="absolute"
+					renderBefore={clearEscapedDiffBackground}
+					width={1}
+				/>
 			</scrollbox>
 			<box flexShrink={0}>
 				{conversationApprovals.map((entry) => (

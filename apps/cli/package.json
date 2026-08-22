@@ -18,8 +18,8 @@
   "dependencies": {
     "@ai-sdk/react": "catalog:",
     "@modelcontextprotocol/client": "^2.0.0",
-    "@opentui/core": "^0.2.1",
-    "@opentui/react": "^0.2.1",
+    "@opentui/core": "0.4.5",
+    "@opentui/react": "0.4.5",
     "@tanstack/react-router": "catalog:",
     "@trpc/client": "catalog:",
     "@trpc/server": "catalog:",
@@ -32,7 +32,6 @@
     "jsonc-parser": "^3.3.1",
     "oauth4webapi": "^3.8.3",
     "open": "^10.2.0",
-    "opentui-spinner": "^0.0.6",
     "react": "catalog:",
     "zod": "catalog:"
   },
