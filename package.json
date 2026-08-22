@@ -66,5 +66,8 @@
     "typescript": "catalog:",
     "ultracite": "7.6.5"
   },
-  "packageManager": "bun@1.2.20"
+  "packageManager": "bun@1.2.20",
+  "patchedDependencies": {
+    "@opentui/core@0.4.5": "patches/@opentui%2Fcore@0.4.5.patch"
+  }
 }

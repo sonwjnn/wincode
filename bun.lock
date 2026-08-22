@@ -248,6 +248,9 @@
       },
     },
   },
+  "patchedDependencies": {
+    "@opentui/core@0.4.5": "patches/@opentui%2Fcore@0.4.5.patch",
+  },
   "overrides": {
     "unrun": "0.2.37",
   },

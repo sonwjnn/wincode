@@ -1,0 +1,36 @@
+diff --git a/chunk-bun-t2myhmwd.js b/chunk-bun-t2myhmwd.js
+index 701d70dea2174e98ab56f4d614e678e868561479..25e9a90e3d46b96f4f4a4123938bf24ae1ff60b2 100644
+--- a/chunk-bun-t2myhmwd.js
++++ b/chunk-bun-t2myhmwd.js
+@@ -10667,7 +10667,12 @@ class OptimizedBuffer {
+   }
+   fillRect(x, y, width, height, bg2) {
+     this.guard();
+-    this.lib.bufferFillRect(this.bufferPtr, x, y, width, height, bg2);
++    const clippedX = Math.max(0, x);
++    const clippedY = Math.max(0, y);
++    const clippedWidth = width - (clippedX - x);
++    const clippedHeight = height - (clippedY - y);
++    if (clippedWidth <= 0 || clippedHeight <= 0) return;
++    this.lib.bufferFillRect(this.bufferPtr, clippedX, clippedY, clippedWidth, clippedHeight, bg2);
+   }
+   colorMatrix(matrix, cellMask, strength = 1, target = 3 /* Both */) {
+     this.guard();
+diff --git a/chunk-node-q0cwyvm9.js b/chunk-node-q0cwyvm9.js
+index be7df0e11bc6eac9ac8aacacdf2a4686670f09e1..58b122618e68a9d0b13340c3ffd645e2da964889 100644
+--- a/chunk-node-q0cwyvm9.js
++++ b/chunk-node-q0cwyvm9.js
+@@ -10646,7 +10646,12 @@ class OptimizedBuffer {
+   }
+   fillRect(x, y, width, height, bg2) {
+     this.guard();
+-    this.lib.bufferFillRect(this.bufferPtr, x, y, width, height, bg2);
++    const clippedX = Math.max(0, x);
++    const clippedY = Math.max(0, y);
++    const clippedWidth = width - (clippedX - x);
++    const clippedHeight = height - (clippedY - y);
++    if (clippedWidth <= 0 || clippedHeight <= 0) return;
++    this.lib.bufferFillRect(this.bufferPtr, clippedX, clippedY, clippedWidth, clippedHeight, bg2);
+   }
+   colorMatrix(matrix, cellMask, strength = 1, target = 3 /* Both */) {
+     this.guard();

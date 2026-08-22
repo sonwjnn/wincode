@@ -209,6 +209,95 @@ const blockContentWidth = (terminalWidth: number): number =>
 	CHAT_SHELL_PADDING_X * 2 -
 	SHELL_BLOCK_PADDING_X * 2 -
 	SHELL_BLOCK_BORDER_WIDTH;
+type SummaryDiffClippingCase = {
+	summaryMarker: string;
+	summaryText: string;
+	toolCallId: string;
+	width: number;
+};
+
+const assertSummaryDiffClipping = async ({
+	summaryMarker,
+	summaryText,
+	toolCallId,
+	width,
+}: SummaryDiffClippingCase): Promise<void> => {
+	const patch = [
+		"Index: src/config.ts",
+		"===================================================================",
+		"--- src/config.ts",
+		"+++ src/config.ts",
+		"@@ -1,8 +1,1 @@",
+		"+replacement",
+		...Array.from({ length: 8 }, (_, index) => `-removed ${index + 1}`),
+		"",
+	].join("\n");
+	const part = {
+		input: { find: "old", path: "src/config.ts", replace: "new" },
+		output: {
+			editDiff: {
+				additions: 1,
+				deletions: 8,
+				omittedHunks: 0,
+				patch,
+				truncated: false,
+			},
+			path: "src/config.ts",
+			replacements: 1,
+		},
+		state: "output-available",
+		toolCallId,
+		type: "tool-edit",
+	} satisfies EditToolPart;
+	const summary = {
+		text: summaryText,
+		type: "text",
+	} satisfies CodingAgentUIMessage["parts"][number];
+	const { setup } = await renderChatShell([assistantMessage([part, summary])], {
+		height: 18,
+		width,
+	});
+
+	try {
+		await setup.renderOnce();
+		await flushUi(setup);
+		const scrollbox = setup.renderer.root.findDescendantById(
+			"conversation-scrollbox"
+		) as ScrollBoxRenderable | undefined;
+		expect(scrollbox).toBeDefined();
+		scrollbox?.scrollTo(0);
+		await setup.renderOnce();
+		const diffBackgrounds = [
+			RGBA.fromHex(DEFAULT_THEME.colors.diffAddedBg),
+			RGBA.fromHex(DEFAULT_THEME.colors.diffRemovedBg),
+		];
+		let observedSummary = false;
+		for (let scrollStep = 0; scrollStep < 30; scrollStep += 1) {
+			await setup.mockMouse.scroll(50, 5, "down");
+			await setup.renderOnce();
+			const frame = setup.captureCharFrame();
+			if (
+				!frame.includes(summaryMarker) ||
+				frame.includes("replacement") ||
+				frame.includes("removed")
+			) {
+				continue;
+			}
+			observedSummary = true;
+			const leakedSpans = setup
+				.captureSpans()
+				.lines.flatMap((line) => line.spans)
+				.filter((span) =>
+					diffBackgrounds.some((background) => span.bg.equals(background))
+				);
+			expect(leakedSpans).toEqual([]);
+			break;
+		}
+		expect(observedSummary).toBe(true);
+	} finally {
+		setup.renderer.destroy();
+	}
+};
 
 describe("ChatShell shell output blocks", () => {
 	test("spaces the first shell block from preceding text without widening later gaps", async () => {
@@ -885,35 +974,9 @@ describe("ChatShell edit diff blocks", () => {
 	});
 
 	test("does not carry diff backgrounds into summary text while scrolling", async () => {
-		const patch = [
-			"Index: src/config.ts",
-			"===================================================================",
-			"--- src/config.ts",
-			"+++ src/config.ts",
-			"@@ -1,8 +1,1 @@",
-			"+replacement",
-			...Array.from({ length: 8 }, (_, index) => `-removed ${index + 1}`),
-			"",
-		].join("\n");
-		const part = {
-			input: { find: "old", path: "src/config.ts", replace: "new" },
-			output: {
-				editDiff: {
-					additions: 1,
-					deletions: 8,
-					omittedHunks: 0,
-					patch,
-					truncated: false,
-				},
-				path: "src/config.ts",
-				replacements: 1,
-			},
-			state: "output-available",
-			toolCallId: "edit-scroll-background",
-			type: "tool-edit",
-		} satisfies EditToolPart;
-		const summary = {
-			text: [
+		await assertSummaryDiffClipping({
+			summaryMarker: "Installed",
+			summaryText: [
 				"Done — I added Lefthook pre-commit support.",
 				"",
 				"What changed:",
@@ -928,52 +991,19 @@ describe("ChatShell edit diff blocks", () => {
 				"Verification:",
 				"- `bunx lefthook run pre-commit` succeeds",
 			].join("\n"),
-			type: "text",
-		} satisfies CodingAgentUIMessage["parts"][number];
-		const { setup } = await renderChatShell(
-			[assistantMessage([part, summary])],
-			{ height: 18, width: 140 }
-		);
-
-		try {
-			await setup.renderOnce();
-			await flushUi(setup);
-			const scrollbox = setup.renderer.root.findDescendantById(
-				"conversation-scrollbox"
-			) as ScrollBoxRenderable | undefined;
-			expect(scrollbox).toBeDefined();
-
-			scrollbox?.scrollTo(0);
-			await setup.renderOnce();
-			const diffBackgrounds = [
-				RGBA.fromHex(DEFAULT_THEME.colors.diffAddedBg),
-				RGBA.fromHex(DEFAULT_THEME.colors.diffRemovedBg),
-			];
-			let observedSummary = false;
-			for (let scrollStep = 0; scrollStep < 30; scrollStep += 1) {
-				await setup.mockMouse.scroll(50, 5, "down");
-				await setup.renderOnce();
-				const frame = setup.captureCharFrame();
-				if (
-					!frame.includes("Installed") ||
-					frame.includes("replacement") ||
-					frame.includes("removed")
-				) {
-					continue;
-				}
-				observedSummary = true;
-				const leakedSpans = setup
-					.captureSpans()
-					.lines.flatMap((line) => line.spans)
-					.filter((span) =>
-						diffBackgrounds.some((background) => span.bg.equals(background))
-					);
-				expect(leakedSpans).toEqual([]);
-				break;
-			}
-			expect(observedSummary).toBe(true);
-		} finally {
-			setup.renderer.destroy();
-		}
+			toolCallId: "edit-scroll-background",
+			width: 140,
+		});
+	});
+	test("clips diff backgrounds in unified layout while scrolling", async () => {
+		await assertSummaryDiffClipping({
+			summaryMarker: "Unified summary",
+			summaryText: Array.from(
+				{ length: 12 },
+				(_, index) => `Unified summary ${index + 1}`
+			).join("\n"),
+			toolCallId: "edit-unified-scroll-background",
+			width: 100,
+		});
 	});
 });
