@@ -215,7 +215,7 @@ describe("BotMessageContent", () => {
 		expect(narrowFrame.split("const other = 2;").length - 1).toBe(1);
 		expect(wideFrame.split("const other = 2;").length - 1).toBe(2);
 	});
-	test("renders running edits with an Editing status", async () => {
+	test("renders running edits with an Edit status", async () => {
 		const part = {
 			input: {
 				find: "const value = 1;",
@@ -229,7 +229,7 @@ describe("BotMessageContent", () => {
 
 		const frame = await renderFrame([part]);
 
-		expect(frame).toContain("← Editing src/running.ts");
+		expect(frame).toContain("← Edit src/running.ts");
 		expect(frame).not.toContain("→ Edit src/running.ts");
 	});
 	test("collapses a completed edit after a running edit with the same call id", async () => {
@@ -325,7 +325,7 @@ describe("BotMessageContent", () => {
 		try {
 			await flushRenderPasses(setup);
 			let frame = setup.captureCharFrame();
-			expect(frame).toContain("Writing src/generated.ts · 48 lines");
+			expect(frame).toContain("Write src/generated.ts · 48 lines");
 			expect(frame).toContain("const line10 = 10;");
 			expect(frame).not.toContain("const line11 = 11;");
 			expect(frame).toContain("… 38 more lines (Ctrl+O: Expand)");

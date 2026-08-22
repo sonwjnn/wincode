@@ -33,6 +33,9 @@ export const runEditTool = async (input: EditInput): Promise<EditOutput> => {
 	const nextContent = input.replaceAll
 		? content.split(input.find).join(input.replace)
 		: content.replace(input.find, input.replace);
+	if (nextContent === content) {
+		throw new Error(`Edit produced no content changes: ${input.path}`);
+	}
 	const editDiff = buildEditDiff(content, nextContent, input.path);
 
 	await writeFile(resolvedPath, nextContent, "utf8");

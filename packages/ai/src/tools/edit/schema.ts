@@ -8,12 +8,17 @@ const editDiffSchema = z.object({
 	truncated: z.boolean(),
 });
 
-export const editInputSchema = z.object({
-	find: z.string().min(1),
-	path: z.string().min(1),
-	replace: z.string(),
-	replaceAll: z.boolean().optional(),
-});
+export const editInputSchema = z
+	.object({
+		find: z.string().min(1),
+		path: z.string().min(1),
+		replace: z.string(),
+		replaceAll: z.boolean().optional(),
+	})
+	.refine(({ find, replace }) => find !== replace, {
+		message: "find and replace must differ",
+		path: ["replace"],
+	});
 
 export const editOutputSchema = z.object({
 	editDiff: editDiffSchema.optional(),
@@ -23,7 +28,7 @@ export const editOutputSchema = z.object({
 
 export const editToolSchema = {
 	description:
-		"Edit a UTF-8 text file inside the workspace by replacing an exact string.",
+		"Edit a UTF-8 file by replacing a small exact unique substring with different content.",
 	name: "edit",
 	schema: editInputSchema,
 } as const;

@@ -153,7 +153,6 @@ export function WriteBlock({ part }: { part: WriteToolPart }) {
 		? sanitizeWriteContent(content)
 		: displayData.preview;
 	const remainingLines = lineCount - WRITE_COLLAPSE_LINES;
-	const isRunning = part.state === "input-available";
 	const isFailed = part.state === "output-error";
 
 	useToggleShortcut("ctrl+o", () => setExpanded((value) => !value), canExpand);
@@ -162,7 +161,6 @@ export function WriteBlock({ part }: { part: WriteToolPart }) {
 		return null;
 	}
 
-	const action = isRunning ? "Writing" : "Write";
 	const status = isFailed ? " · Failed" : "";
 	const footer = expanded
 		? "(Ctrl+O: Collapse)"
@@ -171,7 +169,7 @@ export function WriteBlock({ part }: { part: WriteToolPart }) {
 	return (
 		<ConversationBlock colors={colors} paddingX={2}>
 			<text fg={colors.text} wrapMode="char">
-				{`${action} ${path} · ${formatLineCount(lineCount)}${status}`}
+				{`Write ${path} · ${formatLineCount(lineCount)}${status}`}
 			</text>
 			{isFailed ? <text fg={colors.error}>{getWriteError(part)}</text> : null}
 			{lineCount === 0 ? (

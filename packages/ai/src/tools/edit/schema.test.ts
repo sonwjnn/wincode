@@ -1,5 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { editOutputSchema } from "./schema";
+import { editInputSchema, editOutputSchema } from "./schema";
+
+describe("editInputSchema", () => {
+	test("rejects replacements that cannot change the file", () => {
+		expect(
+			editInputSchema.safeParse({
+				find: "unchanged",
+				path: "README.md",
+				replace: "unchanged",
+			})
+		).toMatchObject({ success: false });
+	});
+});
 
 describe("editOutputSchema", () => {
 	test("accepts legacy outputs without display metadata", () => {

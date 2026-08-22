@@ -274,7 +274,7 @@ export function EditDiffBlock({ part }: EditDiffBlockProps) {
 		if (part.state === "input-available") {
 			return (
 				<DiffStatusPanel colors={colors}>
-					<text fg={colors.text}>{`← Editing ${path}`}</text>
+					<text fg={colors.text}>{`← Edit ${path}`}</text>
 				</DiffStatusPanel>
 			);
 		}
