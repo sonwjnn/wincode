@@ -243,6 +243,36 @@ const DiffStatusPanel = ({
 	</ConversationBlock>
 );
 
+const EmptyPatchStatus = ({
+	colors,
+	editDiff,
+	path,
+}: {
+	colors: ThemeColors;
+	editDiff: EditDiff;
+	path: string;
+}) => {
+	if (editDiff.additions === 0 && editDiff.deletions === 0) {
+		return (
+			<DiffStatusPanel colors={colors}>
+				<text fg={colors.text}>{`← Edit ${path} · No content changes`}</text>
+			</DiffStatusPanel>
+		);
+	}
+
+	return (
+		<DiffStatusPanel colors={colors}>
+			<DiffHeader
+				additions={editDiff.additions}
+				colors={colors}
+				deletions={editDiff.deletions}
+				path={path}
+			/>
+			<text fg={colors.textMuted}>Diff preview omitted</text>
+		</DiffStatusPanel>
+	);
+};
+
 export function EditDiffBlock({ part }: EditDiffBlockProps) {
 	const { colors } = useTheme();
 	const blockRef = useRef<BoxRenderable>(null);
@@ -291,11 +321,7 @@ export function EditDiffBlock({ part }: EditDiffBlockProps) {
 	}
 
 	if (editDiff.patch.length === 0) {
-		return (
-			<DiffStatusPanel colors={colors}>
-				<text fg={colors.text}>{`← Edit ${path} · No content changes`}</text>
-			</DiffStatusPanel>
-		);
+		return <EmptyPatchStatus colors={colors} editDiff={editDiff} path={path} />;
 	}
 
 	const handleBlockResize = () => {

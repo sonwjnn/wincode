@@ -256,6 +256,34 @@ export const buildEditDiff = (
 	};
 };
 
+export const buildFullFileEditDiff = (
+	before: string,
+	after: string,
+	filePath: string
+): EditDiff => {
+	const normalizedBefore = normalizeLineEndings(before);
+	const normalizedAfter = normalizeLineEndings(after);
+	const combinedLines =
+		patchLineCount(normalizedBefore) + patchLineCount(normalizedAfter);
+	const combinedBytes =
+		patchByteLength(normalizedBefore) + patchByteLength(normalizedAfter);
+
+	if (
+		combinedLines > EDIT_DIFF_MAX_LINES ||
+		combinedBytes > EDIT_DIFF_MAX_BYTES
+	) {
+		return {
+			additions: patchLineCount(normalizedAfter),
+			deletions: patchLineCount(normalizedBefore),
+			omittedHunks: 1,
+			patch: "",
+			truncated: true,
+		};
+	}
+
+	return buildEditDiff(normalizedBefore, normalizedAfter, filePath);
+};
+
 export const isRenderableEditDiff = (value: unknown): value is EditDiff => {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
 		return false;

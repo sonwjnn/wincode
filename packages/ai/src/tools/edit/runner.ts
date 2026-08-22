@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { defaultWorkspaceSandbox } from "../../workspace";
-import { buildEditDiff } from "./diff";
+import { buildEditDiff, buildFullFileEditDiff } from "./diff";
 import type { EditInput, EditOutput } from "./schema";
 
 const countReplacements = (
@@ -24,19 +24,31 @@ export const runEditTool = async (input: EditInput): Promise<EditOutput> => {
 		input.path
 	);
 	const content = await readFile(resolvedPath, "utf8");
-	const replacements = countReplacements(content, input.find, input.replaceAll);
-
-	if (replacements === 0) {
-		throw new Error(`Could not find text in ${input.path}`);
+	const isFullFileEdit = input.content !== undefined;
+	let nextContent: string;
+	let replacements: number;
+	if (isFullFileEdit) {
+		nextContent = input.content ?? "";
+		replacements = 1;
+	} else {
+		const { find, replace } = input;
+		if (find === undefined || replace === undefined) {
+			throw new Error("Invalid edit input: find and replace are required");
+		}
+		replacements = countReplacements(content, find, input.replaceAll);
+		if (replacements === 0) {
+			throw new Error(`Could not find text in ${input.path}`);
+		}
+		nextContent = input.replaceAll
+			? content.split(find).join(replace)
+			: content.replace(find, replace);
 	}
-
-	const nextContent = input.replaceAll
-		? content.split(input.find).join(input.replace)
-		: content.replace(input.find, input.replace);
 	if (nextContent === content) {
 		throw new Error(`Edit produced no content changes: ${input.path}`);
 	}
-	const editDiff = buildEditDiff(content, nextContent, input.path);
+	const editDiff = isFullFileEdit
+		? buildFullFileEditDiff(content, nextContent, input.path)
+		: buildEditDiff(content, nextContent, input.path);
 
 	await writeFile(resolvedPath, nextContent, "utf8");
 

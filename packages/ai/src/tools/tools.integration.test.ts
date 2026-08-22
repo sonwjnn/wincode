@@ -221,6 +221,25 @@ describe("tool runners", () => {
 			replacement
 		);
 	});
+	test("replaces a long existing file without resending its original content", async () => {
+		const filePath = `${sandboxRelPath}/long-existing.txt`;
+		const replacement = Array.from(
+			{ length: 1000 },
+			(_, index) => `replacement line ${index + 1}`
+		).join("\n");
+		writeFileSync(path.join(workspace, filePath), "old content");
+
+		const result = await runEditTool({
+			content: replacement,
+			path: filePath,
+		});
+
+		expect(result.replacements).toBe(1);
+		expect(result.editDiff?.additions).toBe(1000);
+		expect(readFileSync(path.join(workspace, filePath), "utf8")).toBe(
+			replacement
+		);
+	});
 
 	test("lists files and greps text within the workspace", async () => {
 		writeFileSync(path.join(sandboxPath, "alpha.txt"), "alpha\nbeta\n");

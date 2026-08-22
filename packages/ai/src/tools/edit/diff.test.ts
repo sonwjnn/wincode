@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { buildEditDiff, isRenderableEditDiff } from "./diff";
+import {
+	buildEditDiff,
+	buildFullFileEditDiff,
+	isRenderableEditDiff,
+} from "./diff";
 
 describe("buildEditDiff", () => {
 	test("builds eight lines of context around a change", () => {
@@ -68,6 +72,29 @@ describe("buildEditDiff", () => {
 		expect(result).toEqual({
 			additions: 1,
 			deletions: 1,
+			omittedHunks: 1,
+			patch: "",
+			truncated: true,
+		});
+	});
+
+	test("bounds full-file diff work for large rewrites", () => {
+		const before = `${Array.from(
+			{ length: 5000 },
+			(_, index) => `old line ${index + 1}`
+		).join("\n")}\n`;
+		const after = `${Array.from(
+			{ length: 5000 },
+			(_, index) => `new line ${index + 1}`
+		).join("\n")}\n`;
+		const startedAt = performance.now();
+
+		const result = buildFullFileEditDiff(before, after, "README.md");
+
+		expect(performance.now() - startedAt).toBeLessThan(500);
+		expect(result).toEqual({
+			additions: 5000,
+			deletions: 5000,
 			omittedHunks: 1,
 			patch: "",
 			truncated: true,

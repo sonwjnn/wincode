@@ -11,6 +11,28 @@ describe("editInputSchema", () => {
 			})
 		).toMatchObject({ success: false });
 	});
+
+	test("accepts full-file content without duplicating the original text", () => {
+		expect(
+			editInputSchema.safeParse({
+				content: "replacement content",
+				path: "README.md",
+			})
+		).toMatchObject({ success: true });
+	});
+
+	test.each([
+		{ path: "README.md" },
+		{
+			content: "whole file",
+			find: "old",
+			path: "README.md",
+			replace: "new",
+		},
+		{ find: "old", path: "README.md" },
+	])("rejects missing or mixed edit modes", (input) => {
+		expect(editInputSchema.safeParse(input)).toMatchObject({ success: false });
+	});
 });
 
 describe("editOutputSchema", () => {

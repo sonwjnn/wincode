@@ -10,14 +10,42 @@ const editDiffSchema = z.object({
 
 export const editInputSchema = z
 	.object({
-		find: z.string().min(1),
+		content: z.string().optional(),
+		find: z.string().min(1).optional(),
 		path: z.string().min(1),
-		replace: z.string(),
+		replace: z.string().optional(),
 		replaceAll: z.boolean().optional(),
 	})
-	.refine(({ find, replace }) => find !== replace, {
-		message: "find and replace must differ",
-		path: ["replace"],
+	.superRefine((input, context) => {
+		const hasContent = input.content !== undefined;
+		const hasExactFields =
+			input.find !== undefined ||
+			input.replace !== undefined ||
+			input.replaceAll !== undefined;
+		if (hasContent === hasExactFields) {
+			context.addIssue({
+				code: "custom",
+				message: "provide either content or find and replace",
+			});
+			return;
+		}
+		if (
+			hasExactFields &&
+			(input.find === undefined || input.replace === undefined)
+		) {
+			context.addIssue({
+				code: "custom",
+				message: "find and replace are both required",
+			});
+			return;
+		}
+		if (input.find !== undefined && input.find === input.replace) {
+			context.addIssue({
+				code: "custom",
+				message: "find and replace must differ",
+				path: ["replace"],
+			});
+		}
 	});
 
 export const editOutputSchema = z.object({
@@ -28,7 +56,7 @@ export const editOutputSchema = z.object({
 
 export const editToolSchema = {
 	description:
-		"Edit a UTF-8 file by replacing a small exact unique substring with different content.",
+		"Modify an existing UTF-8 file. Use content for the whole file, or find and replace for one exact change.",
 	name: "edit",
 	schema: editInputSchema,
 } as const;

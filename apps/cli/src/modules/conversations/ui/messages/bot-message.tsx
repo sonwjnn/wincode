@@ -99,13 +99,15 @@ const formatStaticToolSummary = (name: string, part: ToolPart): string => {
 	const path =
 		typeof input.path === "string"
 			? stripControlCharacters(input.path, MAX_TOOL_ARGUMENTS_LENGTH)
-			: ".";
+			: "";
+	const pathSuffix = path ? ` ${path}` : "";
+	const pathOrCurrentDirectory = path || ".";
 	if (name === "grep") {
 		const pattern = stripControlCharacters(
 			JSON.stringify(formatToolArgumentValue(input.pattern)),
 			MAX_TOOL_ARGUMENTS_LENGTH
 		);
-		return `✱ Grep ${pattern} in ${path}`;
+		return `✱ Grep ${pattern} in ${pathOrCurrentDirectory}`;
 	}
 	if (name === "shell") {
 		const command = stripControlCharacters(
@@ -115,16 +117,16 @@ const formatStaticToolSummary = (name: string, part: ToolPart): string => {
 		return `$ ${command}`;
 	}
 	if (name === "read") {
-		return `→ Read ${path}`;
+		return `→ Read${pathSuffix}`;
 	}
 	if (name === "write") {
-		return `→ Write ${path}`;
+		return `→ Write${pathSuffix}`;
 	}
 	if (name === "edit") {
-		return `→ Edit ${path}`;
+		return `→ Edit${pathSuffix}`;
 	}
 	if (name === "list") {
-		return `→ List ${path}`;
+		return `→ List ${pathOrCurrentDirectory}`;
 	}
 	return `✱ ${formatToolName(name)} ${formatToolArgumentValue(part.input)}`;
 };

@@ -339,6 +339,28 @@ describe("BotMessageContent", () => {
 			setup.renderer.destroy();
 		}
 	});
+	test("omits meaningless paths while write and edit inputs stream", async () => {
+		const write = {
+			input: {},
+			state: "input-streaming",
+			toolCallId: "write-streaming",
+			type: "tool-write",
+		} satisfies MessagePart;
+		const edit = {
+			input: {},
+			state: "input-streaming",
+			toolCallId: "edit-streaming",
+			type: "tool-edit",
+		} satisfies MessagePart;
+
+		const frame = await renderFrame([write, edit]);
+
+		expect(frame).toContain("→ Write");
+		expect(frame).toContain("→ Edit");
+		expect(frame).not.toContain("Write .");
+		expect(frame).not.toContain("Edit .");
+	});
+
 	test("renders completed, failed, empty, and partial writes honestly", async () => {
 		const success = {
 			input: { content: "const value = 1;\n", path: "src/value.ts" },
@@ -539,6 +561,23 @@ describe("BotMessageContent", () => {
 			toolCallId: "edit-empty",
 			type: "tool-edit",
 		} satisfies MessagePart;
+		const statsOnly = {
+			input: { content: "large replacement", path: "large.ts" },
+			output: {
+				editDiff: {
+					additions: 5000,
+					deletions: 5000,
+					omittedHunks: 1,
+					patch: "",
+					truncated: true,
+				},
+				path: "large.ts",
+				replacements: 1,
+			},
+			state: "output-available",
+			toolCallId: "edit-stats-only",
+			type: "tool-edit",
+		} satisfies MessagePart;
 		const invalid = {
 			input: { find: "old", path: "invalid.ts", replace: "new" },
 			output: {
@@ -557,10 +596,16 @@ describe("BotMessageContent", () => {
 			type: "tool-edit",
 		} satisfies MessagePart;
 
-		const frame = await renderFrame([legacy, empty, invalid], 12, 100);
+		const frame = await renderFrame(
+			[legacy, empty, statsOnly, invalid],
+			15,
+			100
+		);
 
 		expect(frame).toContain("→ Edit legacy.ts");
 		expect(frame).toContain("← Edit empty.ts · No content changes");
+		expect(frame).toContain("← Edit large.ts +5000 −5000");
+		expect(frame).toContain("Diff preview omitted");
 		expect(frame).toContain("← Edit invalid.ts");
 		expect(frame).toContain("Diff unavailable");
 	});
