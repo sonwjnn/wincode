@@ -27,6 +27,7 @@ import { getAgentColor } from "@/shared/providers/theme/themes";
 import { ConversationBlock } from "./conversation-block";
 import { EditDiffBlock } from "./edit-diff-block";
 import { MarkdownMessagePart } from "./markdown-message-part";
+import { isRenderableWritePart, WriteBlock } from "./write-block";
 
 type MessagePart = CodingAgentUIMessage["parts"][number];
 type ToolPart = Extract<
@@ -257,12 +258,14 @@ function ToolMessagePart({ part }: { part: ToolPart }) {
 		part.type === "tool-edit" &&
 		part.state === "output-available" &&
 		"editDiff" in getToolOutputRecord(part);
+	const isWritePreview =
+		part.type === "tool-write" && isRenderableWritePart(part);
 
 	let toolLine: ReactNode = <ToolCallLine colors={colors} part={part} />;
 	if (isSkillCall) {
 		toolLine = <SkillActivityRow part={part} />;
-	} else if (isShellOutput || isEditOutput) {
-		// Specialized blocks group their own successful tool header.
+	} else if (isShellOutput || isEditOutput || isWritePreview) {
+		// Specialized blocks group their own tool header.
 		toolLine = null;
 	}
 
@@ -271,6 +274,7 @@ function ToolMessagePart({ part }: { part: ToolPart }) {
 			{toolLine}
 			{isShellOutput ? <ShellOutputBlock part={part} /> : null}
 			{isEditOutput ? <EditDiffBlock part={part} /> : null}
+			{isWritePreview ? <WriteBlock part={part} /> : null}
 			{typeof part.toolCallId === "string" ? (
 				<ToolApprovalPanel id={part.toolCallId} />
 			) : null}

@@ -15,6 +15,7 @@ import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { buildAddedPreviewPatch } from "./edit-diff-block";
 import { setTreeSitterClientForTests } from "./syntax-style";
+import { buildWritePreview, countWriteLines } from "./write-block";
 
 const { BotMessageContent } = await import("./bot-message");
 const { setMarkdownTreeSitterClientForTests } = await import(
@@ -213,6 +214,92 @@ describe("BotMessageContent", () => {
 		}
 		expect(narrowFrame.split("const other = 2;").length - 1).toBe(1);
 		expect(wideFrame.split("const other = 2;").length - 1).toBe(2);
+	});
+	test("renders write previews with line metadata and Unicode collapse hint", async () => {
+		const content = Array.from(
+			{ length: 48 },
+			(_, index) => `const line${index + 1} = ${index + 1};`
+		).join("\n");
+		const part = {
+			input: { content, path: "src/generated.ts" },
+			state: "input-available",
+			toolCallId: "write-running",
+			type: "tool-write",
+		} satisfies MessagePart;
+
+		expect(countWriteLines("a\r\nb\r\n")).toBe(2);
+		expect(buildWritePreview(content)).toBe(
+			Array.from(
+				{ length: 10 },
+				(_, index) => `const line${index + 1} = ${index + 1};`
+			).join("\n")
+		);
+
+		const setup = await testRender(
+			<ThemeProvider>
+				<KeyboardLayerProvider>
+					<ApprovalPanelsProvider>
+						<BotMessageContent parts={[part]} />
+					</ApprovalPanelsProvider>
+				</KeyboardLayerProvider>
+			</ThemeProvider>,
+			{ height: 60, width: 120 }
+		);
+		try {
+			await flushRenderPasses(setup);
+			let frame = setup.captureCharFrame();
+			expect(frame).toContain("Writing src/generated.ts · 48 lines");
+			expect(frame).toContain("const line10 = 10;");
+			expect(frame).not.toContain("const line11 = 11;");
+			expect(frame).toContain("… 38 more lines (Ctrl+O: Expand)");
+
+			setup.mockInput.pressKey("o", { ctrl: true });
+			await flushUi(setup);
+			frame = setup.captureCharFrame();
+			expect(frame).toContain("const line48 = 48;");
+			expect(frame).toContain("(Ctrl+O: Collapse)");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+	test("renders completed, failed, empty, and partial writes honestly", async () => {
+		const success = {
+			input: { content: "const value = 1;\n", path: "src/value.ts" },
+			output: { bytesWritten: 16, path: "src/value.ts" },
+			state: "output-available",
+			toolCallId: "write-success",
+			type: "tool-write",
+		} satisfies MessagePart;
+		const failed = {
+			errorText: "File already exists",
+			input: { content: "const value = 2;", path: "src/existing.ts" },
+			state: "output-error",
+			toolCallId: "write-failed",
+			type: "tool-write",
+		} satisfies MessagePart;
+		const empty = {
+			input: { content: "", path: "src/empty.ts" },
+			output: { bytesWritten: 0, path: "src/empty.ts" },
+			state: "output-available",
+			toolCallId: "write-empty",
+			type: "tool-write",
+		} satisfies MessagePart;
+		const partial = {
+			input: { path: "src/partial.ts" },
+			state: "input-streaming",
+			toolCallId: "write-partial",
+			type: "tool-write",
+		} satisfies MessagePart;
+
+		const frame = await renderFrame([success, failed, empty, partial], 20, 120);
+
+		expect(frame).toContain("Write src/value.ts · 1 line");
+		expect(frame).not.toContain("16 bytes");
+		expect(frame).toContain("Write src/existing.ts · 1 line · Failed");
+		expect(frame).toContain("File already exists");
+		expect(frame).toContain("Write src/empty.ts · 0 lines");
+		expect(frame).toContain("Empty file");
+		expect(frame).toContain("→ Write src/partial.ts");
 	});
 	test("uses OpenTUI filetype resolution for diff paths", async () => {
 		const client = new RecordingTreeSitterClient({ autoResolveTimeout: 0 });
