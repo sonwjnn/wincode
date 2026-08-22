@@ -1,5 +1,5 @@
 import { extname, isAbsolute } from "node:path";
-import { type BoxRenderable, RGBA } from "@opentui/core";
+import type { BoxRenderable } from "@opentui/core";
 import {
 	type CodingAgentUIMessage,
 	type EditDiff,
@@ -28,8 +28,6 @@ type EditDiffBlockProps = {
 const DIFF_BREAKPOINT_COLUMNS = 120;
 const DIFF_COLLAPSE_LINES = 30;
 const DIFF_BLOCK_PADDING_X = 2;
-const DIFF_BACKGROUND_ALPHA = 0.18;
-const DIFF_LINE_NUMBER_ALPHA = 0.1;
 
 const FILETYPE_BY_EXTENSION: Record<string, string> = {
 	".bash": "bash",
@@ -59,20 +57,6 @@ const sanitizeDiffPatch = (patch: string): string =>
 	Array.from(patch, (character) =>
 		isSafeDiffCharacter(character.charCodeAt(0)) ? character : " "
 	).join("");
-
-const blendColor = (
-	background: string,
-	foreground: string,
-	alpha: number
-): RGBA => {
-	const base = RGBA.fromHex(background);
-	const tint = RGBA.fromHex(foreground);
-	return RGBA.fromValues(
-		base.r * (1 - alpha) + tint.r * alpha,
-		base.g * (1 - alpha) + tint.g * alpha,
-		base.b * (1 - alpha) + tint.b * alpha
-	);
-};
 
 const filetypeForPath = (filePath: string): string | undefined =>
 	FILETYPE_BY_EXTENSION[extname(filePath).toLowerCase()];
@@ -265,8 +249,8 @@ const DiffHeader = ({
 		<text fg={colors.text} wrapMode="char">
 			{`← Edit ${path}`}
 		</text>
-		<text fg={colors.success}>{`+${additions}`}</text>
-		<text fg={colors.error}>{`−${deletions}`}</text>
+		<text fg={colors.diffAdded}>{`+${additions}`}</text>
+		<text fg={colors.diffRemoved}>{`−${deletions}`}</text>
 	</box>
 );
 const DiffStatusPanel = ({
@@ -340,26 +324,6 @@ export function EditDiffBlock({ part }: EditDiffBlockProps) {
 	};
 	const view = blockWidth > DIFF_BREAKPOINT_COLUMNS ? "split" : "unified";
 	const syntaxStyle = resolveSyntaxStyle(colors);
-	const addedBg = blendColor(
-		colors.backgroundElement,
-		colors.success,
-		DIFF_BACKGROUND_ALPHA
-	);
-	const removedBg = blendColor(
-		colors.backgroundElement,
-		colors.error,
-		DIFF_BACKGROUND_ALPHA
-	);
-	const addedLineNumberBg = blendColor(
-		colors.backgroundElement,
-		colors.success,
-		DIFF_LINE_NUMBER_ALPHA
-	);
-	const removedLineNumberBg = blendColor(
-		colors.backgroundElement,
-		colors.error,
-		DIFF_LINE_NUMBER_ALPHA
-	);
 
 	return (
 		<ConversationBlock
@@ -383,20 +347,17 @@ export function EditDiffBlock({ part }: EditDiffBlockProps) {
 			) : null}
 			<box width="100%">
 				<diff
-					addedBg={addedBg}
-					addedContentBg={addedBg}
-					addedLineNumberBg={addedLineNumberBg}
-					addedSignColor={colors.success}
-					contextBg={colors.backgroundElement}
-					contextContentBg={colors.backgroundElement}
+					addedBg={colors.diffAddedBg}
+					addedLineNumberBg={colors.diffAddedLineNumberBg}
+					addedSignColor={colors.diffHighlightAdded}
+					contextBg={colors.diffContextBg}
 					diff={visiblePatch}
 					filetype={filetypeForPath(path)}
-					lineNumberBg={colors.backgroundElement}
-					lineNumberFg={colors.textMuted}
-					removedBg={removedBg}
-					removedContentBg={removedBg}
-					removedLineNumberBg={removedLineNumberBg}
-					removedSignColor={colors.error}
+					lineNumberBg={colors.diffContextBg}
+					lineNumberFg={colors.diffLineNumber}
+					removedBg={colors.diffRemovedBg}
+					removedLineNumberBg={colors.diffRemovedLineNumberBg}
+					removedSignColor={colors.diffHighlightRemoved}
 					showLineNumbers
 					syntaxStyle={syntaxStyle}
 					treeSitterClient={getTreeSitterClientForTests()}

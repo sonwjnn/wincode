@@ -12,6 +12,7 @@ import {
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { buildAddedPreviewPatch } from "./edit-diff-block";
 
 const { BotMessageContent } = await import("./bot-message");
@@ -52,6 +53,12 @@ const flushRenderPasses = async (
 		await setup.renderOnce();
 	}
 };
+
+const rgb = (hex: string): [number, number, number] => [
+	Number.parseInt(hex.slice(1, 3), 16),
+	Number.parseInt(hex.slice(3, 5), 16),
+	Number.parseInt(hex.slice(5, 7), 16),
+];
 
 const renderFrame = async (
 	parts: CodingAgentUIMessage["parts"],
@@ -197,6 +204,105 @@ describe("BotMessageContent", () => {
 		}
 		expect(narrowFrame.split("const other = 2;").length - 1).toBe(1);
 		expect(wideFrame.split("const other = 2;").length - 1).toBe(2);
+	});
+
+	test("renders diff spans with the current theme palette", async () => {
+		const part = {
+			input: {
+				find: "const value = 1;",
+				path: "src/example.ts",
+				replace: "const value = 3;",
+			},
+			output: {
+				editDiff: {
+					additions: 1,
+					deletions: 1,
+					omittedHunks: 0,
+					patch:
+						"@@ -1,2 +1,2 @@\n" +
+						"-const value = 1;\n" +
+						"+const value = 3;\n" +
+						" const other = 2;\n",
+					truncated: false,
+				},
+				path: "src/example.ts",
+				replacements: 1,
+			},
+			state: "output-available",
+			toolCallId: "edit-themed",
+			type: "tool-edit",
+		} satisfies MessagePart;
+		const setup = await testRender(
+			<ThemeProvider themeName="opencode">
+				<KeyboardLayerProvider>
+					<ApprovalPanelsProvider>
+						<BotMessageContent parts={[part]} />
+					</ApprovalPanelsProvider>
+				</KeyboardLayerProvider>
+			</ThemeProvider>,
+			{ height: 12, width: 100 }
+		);
+
+		try {
+			await flushRenderPasses(setup);
+			const spans = setup.captureSpans().lines.flatMap((line) => line.spans);
+			const additions = spans.find((span) => span.text.includes("+1"));
+			const deletions = spans.find((span) => span.text.includes("−1"));
+			const hasBackground = (text: string, color: string): boolean =>
+				spans.some(
+					(span) =>
+						span.text.includes(text) &&
+						[...span.bg.buffer.slice(0, 3)].join(",") === rgb(color).join(",")
+				);
+			const hasGutter = (color: string): boolean =>
+				spans.some(
+					(span) =>
+						span.text.trim() === "1" &&
+						[...span.bg.buffer.slice(0, 3)].join(",") === rgb(color).join(",")
+				);
+			const hasForeground = (text: string, color: string): boolean =>
+				spans.some(
+					(span) =>
+						span.text.includes(text) &&
+						[...span.fg.buffer.slice(0, 3)].join(",") === rgb(color).join(",")
+				);
+
+			expect(
+				hasBackground("const value = 3;", DEFAULT_THEME.colors.diffAddedBg)
+			).toBe(true);
+			expect(
+				hasBackground("const value = 1;", DEFAULT_THEME.colors.diffRemovedBg)
+			).toBe(true);
+			expect(
+				hasBackground("const other = 2;", DEFAULT_THEME.colors.diffContextBg)
+			).toBe(true);
+			expect(hasGutter(DEFAULT_THEME.colors.diffAddedLineNumberBg)).toBe(true);
+			expect(hasGutter(DEFAULT_THEME.colors.diffRemovedLineNumberBg)).toBe(
+				true
+			);
+			expect(hasForeground(" +", DEFAULT_THEME.colors.diffHighlightAdded)).toBe(
+				true
+			);
+			expect(
+				hasForeground(" -", DEFAULT_THEME.colors.diffHighlightRemoved)
+			).toBe(true);
+			expect(
+				spans.some(
+					(span) =>
+						span.text.trim() === "1" &&
+						[...span.fg.buffer.slice(0, 3)].join(",") ===
+							rgb(DEFAULT_THEME.colors.diffLineNumber).join(",")
+				)
+			).toBe(true);
+			expect([...(additions?.fg.buffer.slice(0, 3) ?? [])]).toEqual(
+				rgb(DEFAULT_THEME.colors.diffAdded)
+			);
+			expect([...(deletions?.fg.buffer.slice(0, 3) ?? [])]).toEqual(
+				rgb(DEFAULT_THEME.colors.diffRemoved)
+			);
+		} finally {
+			setup.renderer.destroy();
+		}
 	});
 	test("keeps legacy edits and invalid or empty diffs honest", async () => {
 		const legacy = {

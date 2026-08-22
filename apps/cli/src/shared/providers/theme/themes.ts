@@ -1,5 +1,9 @@
 import { getContrastingTextColor } from "./color-contrast";
 import {
+	DIFF_TOKEN_OVERRIDES,
+	type DiffTokenOverrides,
+} from "./diff-token-overrides";
+import {
 	MARKDOWN_TOKEN_OVERRIDES,
 	type MarkdownTokenOverrides,
 } from "./markdown-token-overrides";
@@ -31,6 +35,16 @@ export type ThemeColors = {
 	fileBadgeText: string;
 	filePathBackground: string;
 	filePath: string;
+	diffAdded: string;
+	diffRemoved: string;
+	diffHighlightAdded: string;
+	diffHighlightRemoved: string;
+	diffAddedBg: string;
+	diffRemovedBg: string;
+	diffContextBg: string;
+	diffLineNumber: string;
+	diffAddedLineNumberBg: string;
+	diffRemovedLineNumberBg: string;
 	/** Markdown prose tokens (hybrid of pi/opencode palettes). */
 	mdHeading: string;
 	mdLink: string;
@@ -84,6 +98,8 @@ const MUTED_TEXT_BRIGHTNESS = 0.58;
 const THINKING_TEXT_BRIGHTNESS = 0.28;
 const DISABLED_TEXT_BRIGHTNESS = 0.38;
 const FILE_PATH_BRIGHTNESS = 0.35;
+const DIFF_BACKGROUND_ALPHA = 0.18;
+const DIFF_LINE_NUMBER_ALPHA = 0.1;
 
 /**
  * Canonical markdown prose palette, tuned from pi's dark theme (gold
@@ -140,6 +156,42 @@ const brightenColor = (color: string, amount: number) => {
 				.padStart(2, "0")
 		)
 		.join("")}${expanded.slice(6)}`;
+};
+const blendColor = (
+	background: string,
+	foreground: string,
+	alpha: number
+): string => {
+	const backgroundMatch = background.match(HEX_COLOR_RE);
+	const foregroundMatch = foreground.match(HEX_COLOR_RE);
+	if (!(backgroundMatch && foregroundMatch)) {
+		return background;
+	}
+
+	const baseHex = backgroundMatch[1] ?? "";
+	const tintHex = foregroundMatch[1] ?? "";
+	const base =
+		baseHex.length <= 4
+			? [...baseHex].map((value) => `${value}${value}`).join("")
+			: baseHex;
+	const tint =
+		tintHex.length <= 4
+			? [...tintHex].map((value) => `${value}${value}`).join("")
+			: tintHex;
+	const channels = [0, 1, 2].map((index) => {
+		const baseChannel = Number.parseInt(
+			base.slice(index * 2, index * 2 + 2),
+			16
+		);
+		const tintChannel = Number.parseInt(
+			tint.slice(index * 2, index * 2 + 2),
+			16
+		);
+		return Math.round(baseChannel * (1 - alpha) + tintChannel * alpha)
+			.toString(16)
+			.padStart(2, "0");
+	});
+	return `#${channels.join("")}`;
 };
 
 const THEME_DEFINITIONS = [
@@ -945,54 +997,126 @@ const resolveMarkdownAndSyntaxTokens = (
 	};
 };
 
-export const resolveTheme = ({ colors, name }: ThemeDefinition): Theme => ({
-	colors: {
-		...colors,
-		...resolveMarkdownAndSyntaxTokens(colors, name),
-		agent: { build: colors.primary, plan: colors.planMode },
-		backgroundElement: colors.backgroundElement ?? colors.backgroundPanel,
-		borderActive: colors.borderActive ?? colors.primary,
-		fileBadgeBackground: colors.fileBadgeBackground ?? colors.primary,
-		fileBadgeText:
-			colors.fileBadgeText ??
-			(colors.background === "transparent"
-				? getContrastingTextColor(colors.primary)
-				: colors.background),
-		filePath:
-			colors.filePath ??
-			brightenColor(colors.borderSubtle, FILE_PATH_BRIGHTNESS),
-		filePathBackground: colors.filePathBackground ?? colors.backgroundMenu,
-		text:
-			colors.text ??
-			(colors.background === "transparent"
-				? colors.primary
-				: brightenColor(colors.background, TEXT_BRIGHTNESS)),
-		textDisabled:
-			colors.textDisabled ??
-			(colors.background === "transparent"
-				? colors.border
-				: brightenColor(colors.background, DISABLED_TEXT_BRIGHTNESS)),
-		textMuted:
-			colors.textMuted ??
-			(colors.background === "transparent"
-				? colors.borderSubtle
-				: brightenColor(colors.background, MUTED_TEXT_BRIGHTNESS)),
-		thinkingText:
-			colors.thinkingText ??
-			brightenColor(
-				colors.textMuted ??
-					brightenColor(colors.background, MUTED_TEXT_BRIGHTNESS),
-				THINKING_TEXT_BRIGHTNESS
-			),
-		tool:
-			colors.tool ??
-			colors.textMuted ??
-			(colors.background === "transparent"
-				? colors.borderSubtle
-				: brightenColor(colors.background, MUTED_TEXT_BRIGHTNESS)),
-	},
-	name,
-});
+const resolveDiffTokens = (
+	colors: ThemeDefinition["colors"],
+	name: string,
+	backgroundElement: string,
+	textMuted: string
+): DiffTokenOverrides => {
+	const overrides: Partial<DiffTokenOverrides> =
+		DIFF_TOKEN_OVERRIDES[name] ?? {};
+	const fallback: DiffTokenOverrides = {
+		diffAdded: colors.success,
+		diffRemoved: colors.error,
+		diffHighlightAdded: colors.success,
+		diffHighlightRemoved: colors.error,
+		diffAddedBg: blendColor(
+			backgroundElement,
+			colors.success,
+			DIFF_BACKGROUND_ALPHA
+		),
+		diffRemovedBg: blendColor(
+			backgroundElement,
+			colors.error,
+			DIFF_BACKGROUND_ALPHA
+		),
+		diffContextBg: backgroundElement,
+		diffLineNumber: textMuted,
+		diffAddedLineNumberBg: blendColor(
+			backgroundElement,
+			colors.success,
+			DIFF_LINE_NUMBER_ALPHA
+		),
+		diffRemovedLineNumberBg: blendColor(
+			backgroundElement,
+			colors.error,
+			DIFF_LINE_NUMBER_ALPHA
+		),
+	};
+	return {
+		diffAdded: colors.diffAdded ?? overrides.diffAdded ?? fallback.diffAdded,
+		diffRemoved:
+			colors.diffRemoved ?? overrides.diffRemoved ?? fallback.diffRemoved,
+		diffHighlightAdded:
+			colors.diffHighlightAdded ??
+			overrides.diffHighlightAdded ??
+			fallback.diffHighlightAdded,
+		diffHighlightRemoved:
+			colors.diffHighlightRemoved ??
+			overrides.diffHighlightRemoved ??
+			fallback.diffHighlightRemoved,
+		diffAddedBg:
+			colors.diffAddedBg ?? overrides.diffAddedBg ?? fallback.diffAddedBg,
+		diffRemovedBg:
+			colors.diffRemovedBg ?? overrides.diffRemovedBg ?? fallback.diffRemovedBg,
+		diffContextBg:
+			colors.diffContextBg ?? overrides.diffContextBg ?? fallback.diffContextBg,
+		diffLineNumber:
+			colors.diffLineNumber ??
+			overrides.diffLineNumber ??
+			fallback.diffLineNumber,
+		diffAddedLineNumberBg:
+			colors.diffAddedLineNumberBg ??
+			overrides.diffAddedLineNumberBg ??
+			fallback.diffAddedLineNumberBg,
+		diffRemovedLineNumberBg:
+			colors.diffRemovedLineNumberBg ??
+			overrides.diffRemovedLineNumberBg ??
+			fallback.diffRemovedLineNumberBg,
+	};
+};
+
+export const resolveTheme = ({ colors, name }: ThemeDefinition): Theme => {
+	const backgroundElement = colors.backgroundElement ?? colors.backgroundPanel;
+	const textMuted =
+		colors.textMuted ??
+		(colors.background === "transparent"
+			? colors.borderSubtle
+			: brightenColor(colors.background, MUTED_TEXT_BRIGHTNESS));
+
+	return {
+		colors: {
+			...colors,
+			...resolveDiffTokens(colors, name, backgroundElement, textMuted),
+			...resolveMarkdownAndSyntaxTokens(colors, name),
+			agent: { build: colors.primary, plan: colors.planMode },
+			backgroundElement,
+			borderActive: colors.borderActive ?? colors.primary,
+			fileBadgeBackground: colors.fileBadgeBackground ?? colors.primary,
+			fileBadgeText:
+				colors.fileBadgeText ??
+				(colors.background === "transparent"
+					? getContrastingTextColor(colors.primary)
+					: colors.background),
+			filePath:
+				colors.filePath ??
+				brightenColor(colors.borderSubtle, FILE_PATH_BRIGHTNESS),
+			filePathBackground: colors.filePathBackground ?? colors.backgroundMenu,
+			text:
+				colors.text ??
+				(colors.background === "transparent"
+					? colors.primary
+					: brightenColor(colors.background, TEXT_BRIGHTNESS)),
+			textDisabled:
+				colors.textDisabled ??
+				(colors.background === "transparent"
+					? colors.border
+					: brightenColor(colors.background, DISABLED_TEXT_BRIGHTNESS)),
+			textMuted,
+			thinkingText:
+				colors.thinkingText ??
+				brightenColor(
+					colors.textMuted ??
+						(colors.background === "transparent"
+							? colors.borderSubtle
+							: brightenColor(colors.background, MUTED_TEXT_BRIGHTNESS)),
+					THINKING_TEXT_BRIGHTNESS
+				),
+			tool: colors.tool ?? textMuted,
+		},
+		name,
+	};
+};
 
 export const THEMES: Theme[] = THEME_DEFINITIONS.map(resolveTheme);
 

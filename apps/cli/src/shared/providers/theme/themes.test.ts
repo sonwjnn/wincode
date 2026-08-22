@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { DIFF_TOKEN_OVERRIDES } from "./diff-token-overrides";
 import { MARKDOWN_TOKEN_OVERRIDES } from "./markdown-token-overrides";
 import type { ThemeDefinition } from "./themes";
 import { DEFAULT_THEME, findThemeByName, resolveTheme, THEMES } from "./themes";
@@ -40,9 +41,24 @@ const MD_TOKEN_KEYS = [
 	"syntaxPunctuation",
 ] as const;
 
+const DIFF_TOKEN_KEYS = [
+	"diffAdded",
+	"diffRemoved",
+	"diffHighlightAdded",
+	"diffHighlightRemoved",
+	"diffAddedBg",
+	"diffRemovedBg",
+	"diffContextBg",
+	"diffLineNumber",
+	"diffAddedLineNumberBg",
+	"diffRemovedLineNumberBg",
+] as const;
+
+const COLOR_RE = /^(?:transparent|#[\da-f]{3,4}|#[\da-f]{6}(?:[\da-f]{2})?)$/iu;
+
 const HEX_COLOR_RE = /^#([\da-f]{3,4}|[\da-f]{6}(?:[\da-f]{2})?)$/i;
 
-describe("markdown and syntax token resolution", () => {
+describe("theme token resolution", () => {
 	test("fills canonical markdown tokens for themes that do not define them", () => {
 		const theme = resolveTheme({
 			name: "test",
@@ -127,6 +143,70 @@ describe("markdown and syntax token resolution", () => {
 		const monokai = findThemeByName(THEMES, "monokai");
 		expect(monokai?.colors.mdCode).toBe("#a6e22e");
 		expect(monokai?.colors.syntaxKeyword).toBe("#f92672");
+	});
+
+	test("resolves every bundled theme with complete diff tokens", () => {
+		for (const theme of THEMES) {
+			for (const key of DIFF_TOKEN_KEYS) {
+				expect(theme.colors[key], `${theme.name}.${key}`).toMatch(COLOR_RE);
+			}
+		}
+	});
+
+	test("every bundled theme has a complete OpenCode diff override entry", () => {
+		const overrideNames = Object.keys(DIFF_TOKEN_OVERRIDES);
+		expect(overrideNames).toHaveLength(THEMES.length);
+		for (const theme of THEMES) {
+			const entry = DIFF_TOKEN_OVERRIDES[theme.name];
+			expect(entry, theme.name).toBeDefined();
+			for (const key of DIFF_TOKEN_KEYS) {
+				expect(entry?.[key], `${theme.name}.${key}`).toMatch(COLOR_RE);
+			}
+		}
+	});
+
+	test("resolves the opencode diff palette from its upstream dark asset", () => {
+		expect(DEFAULT_THEME.colors.diffAdded).toBe("#4fd6be");
+		expect(DEFAULT_THEME.colors.diffRemoved).toBe("#c53b53");
+		expect(DEFAULT_THEME.colors.diffHighlightAdded).toBe("#b8db87");
+		expect(DEFAULT_THEME.colors.diffHighlightRemoved).toBe("#e26a75");
+		expect(DEFAULT_THEME.colors.diffAddedBg).toBe("#20303b");
+		expect(DEFAULT_THEME.colors.diffRemovedBg).toBe("#37222c");
+		expect(DEFAULT_THEME.colors.diffContextBg).toBe("#141414");
+		expect(DEFAULT_THEME.colors.diffLineNumber).toBe("#8f8f8f");
+		expect(DEFAULT_THEME.colors.diffAddedLineNumberBg).toBe("#1b2b34");
+		expect(DEFAULT_THEME.colors.diffRemovedLineNumberBg).toBe("#2d1f26");
+	});
+
+	test("allows explicit diff definition overrides", () => {
+		const theme = resolveTheme({
+			name: "opencode",
+			colors: {
+				...MINIMAL_COLORS,
+				diffAdded: "#123456",
+			},
+		});
+
+		expect(theme.colors.diffAdded).toBe("#123456");
+		expect(theme.colors.diffRemoved).toBe("#c53b53");
+	});
+
+	test("falls back to blended current-theme diff colors for custom themes", () => {
+		const theme = resolveTheme({
+			name: "custom",
+			colors: MINIMAL_COLORS,
+		});
+
+		expect(theme.colors.diffAdded).toBe(MINIMAL_COLORS.success);
+		expect(theme.colors.diffRemoved).toBe(MINIMAL_COLORS.error);
+		expect(theme.colors.diffHighlightAdded).toBe(MINIMAL_COLORS.success);
+		expect(theme.colors.diffHighlightRemoved).toBe(MINIMAL_COLORS.error);
+		expect(theme.colors.diffAddedBg).toBe("#27372a");
+		expect(theme.colors.diffRemovedBg).toBe("#392425");
+		expect(theme.colors.diffContextBg).toBe(MINIMAL_COLORS.backgroundPanel);
+		expect(theme.colors.diffLineNumber).toBe("#989898");
+		expect(theme.colors.diffAddedLineNumberBg).toBe("#1f2820");
+		expect(theme.colors.diffRemovedLineNumberBg).toBe("#281d1e");
 	});
 
 	test("an explicit theme definition override beats the opencode table", () => {
