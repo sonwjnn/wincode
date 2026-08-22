@@ -267,10 +267,17 @@ export function EditDiffBlock({ part }: EditDiffBlockProps) {
 	useToggleShortcut(
 		"ctrl+o",
 		toggleExpanded,
-		editDiff?.patch !== undefined && editDiff.patch.length > 0
+		logicalLines > DIFF_COLLAPSE_LINES
 	);
 
 	if (!result) {
+		if (part.state === "input-available") {
+			return (
+				<DiffStatusPanel colors={colors}>
+					<text fg={colors.text}>{`← Editing ${path}`}</text>
+				</DiffStatusPanel>
+			);
+		}
 		return null;
 	}
 
@@ -344,6 +351,15 @@ export function EditDiffBlock({ part }: EditDiffBlockProps) {
 					wrapMode="word"
 				/>
 			</box>
+			{logicalLines > DIFF_COLLAPSE_LINES ? (
+				<text fg={colors.textMuted}>
+					{expanded
+						? "(Ctrl+O: Collapse)"
+						: `… ${logicalLines - DIFF_COLLAPSE_LINES} more ${
+								logicalLines - DIFF_COLLAPSE_LINES === 1 ? "line" : "lines"
+							} (Ctrl+O: Expand)`}
+				</text>
+			) : null}
 		</ConversationBlock>
 	);
 }

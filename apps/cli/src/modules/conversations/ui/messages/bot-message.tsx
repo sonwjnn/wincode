@@ -146,8 +146,9 @@ const getToolKey = (part: ToolPart, index: number) => {
 		formatUnknown(part.errorText),
 		MAX_TOOL_ARGUMENTS_LENGTH
 	);
+	const lifecycleState = part.type === "tool-edit" ? `-${state}` : "";
 
-	return `${formatUnknown(part.toolCallId) || `tool-${getToolName(part)}-${state}-${errorText}`}-${index}`;
+	return `${formatUnknown(part.toolCallId) || `tool-${getToolName(part)}-${state}-${errorText}`}${lifecycleState}-${index}`;
 };
 
 const getContentPartKey = (
@@ -258,13 +259,16 @@ function ToolMessagePart({ part }: { part: ToolPart }) {
 		part.type === "tool-edit" &&
 		part.state === "output-available" &&
 		"editDiff" in getToolOutputRecord(part);
+	const isEditRunning =
+		part.type === "tool-edit" && part.state === "input-available";
+	const isEditPreview = isEditRunning || isEditOutput;
 	const isWritePreview =
 		part.type === "tool-write" && isRenderableWritePart(part);
 
 	let toolLine: ReactNode = <ToolCallLine colors={colors} part={part} />;
 	if (isSkillCall) {
 		toolLine = <SkillActivityRow part={part} />;
-	} else if (isShellOutput || isEditOutput || isWritePreview) {
+	} else if (isShellOutput || isEditPreview || isWritePreview) {
 		// Specialized blocks group their own tool header.
 		toolLine = null;
 	}
@@ -273,7 +277,7 @@ function ToolMessagePart({ part }: { part: ToolPart }) {
 		<>
 			{toolLine}
 			{isShellOutput ? <ShellOutputBlock part={part} /> : null}
-			{isEditOutput ? <EditDiffBlock part={part} /> : null}
+			{isEditPreview ? <EditDiffBlock part={part} /> : null}
 			{isWritePreview ? <WriteBlock part={part} /> : null}
 			{typeof part.toolCallId === "string" ? (
 				<ToolApprovalPanel id={part.toolCallId} />

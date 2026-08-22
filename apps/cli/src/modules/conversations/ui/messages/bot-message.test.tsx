@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import type { CodingAgentUIMessage } from "@wincode/ai";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { formatResponseTime } from "@/shared/display-sanitize";
 import {
 	type ApprovalPanelsContextValue,
@@ -214,6 +214,83 @@ describe("BotMessageContent", () => {
 		}
 		expect(narrowFrame.split("const other = 2;").length - 1).toBe(1);
 		expect(wideFrame.split("const other = 2;").length - 1).toBe(2);
+	});
+	test("renders running edits with an Editing status", async () => {
+		const part = {
+			input: {
+				find: "const value = 1;",
+				path: "src/running.ts",
+				replace: "const value = 2;",
+			},
+			state: "input-available",
+			toolCallId: "edit-running",
+			type: "tool-edit",
+		} satisfies MessagePart;
+
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain("← Editing src/running.ts");
+		expect(frame).not.toContain("→ Edit src/running.ts");
+	});
+	test("collapses a completed edit after a running edit with the same call id", async () => {
+		const patch = [
+			"@@ -1,1 +1,40 @@",
+			"-old",
+			...Array.from({ length: 40 }, (_, index) => `+line ${index + 1}`),
+			"",
+		].join("\n");
+		const running = {
+			input: { find: "old", path: "src/lifecycle.ts", replace: "new" },
+			state: "input-available",
+			toolCallId: "edit-lifecycle",
+			type: "tool-edit",
+		} satisfies MessagePart;
+		const completed = {
+			input: running.input,
+			output: {
+				editDiff: {
+					additions: 40,
+					deletions: 1,
+					omittedHunks: 0,
+					patch,
+					truncated: false,
+				},
+				path: "src/lifecycle.ts",
+				replacements: 1,
+			},
+			state: "output-available",
+			toolCallId: running.toolCallId,
+			type: "tool-edit",
+		} satisfies MessagePart;
+
+		function Probe() {
+			const [part, setPart] = useState<MessagePart>(running);
+			useEffect(() => {
+				setPart(completed);
+			}, []);
+			return <BotMessageContent parts={[part]} />;
+		}
+
+		const setup = await testRender(
+			<ThemeProvider>
+				<KeyboardLayerProvider>
+					<ApprovalPanelsProvider>
+						<Probe />
+					</ApprovalPanelsProvider>
+				</KeyboardLayerProvider>
+			</ThemeProvider>,
+			{ height: 20, width: 100 }
+		);
+
+		try {
+			await flushRenderPasses(setup);
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain("← Edit src/lifecycle.ts +40 −1");
+			expect(frame).toContain("(Ctrl+O: Expand)");
+			expect(frame).not.toContain("line 40");
+		} finally {
+			setup.renderer.destroy();
+		}
 	});
 	test("renders write previews with line metadata and Unicode collapse hint", async () => {
 		const content = Array.from(
@@ -584,6 +661,7 @@ describe("BotMessageContent", () => {
 			expect(frame).not.toContain("▾");
 			expect(frame).toContain("+ line 14");
 			expect(frame).not.toContain("+ line 1001");
+			expect(frame).toContain("(Ctrl+O: Expand)");
 
 			const headerRow = frame
 				.split("\n")
@@ -599,6 +677,7 @@ describe("BotMessageContent", () => {
 			expect(frame).toContain("+ line 14");
 			expect(frame).not.toContain("▸");
 			expect(frame).not.toContain("▾");
+			expect(frame).toContain("(Ctrl+O: Collapse)");
 		} finally {
 			setup.renderer.destroy();
 		}
