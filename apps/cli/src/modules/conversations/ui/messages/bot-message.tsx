@@ -1,5 +1,9 @@
 import type { BoxRenderable } from "@opentui/core";
-import type { CodingAgentUIMessage } from "@wincode/ai";
+import {
+	type AgentId,
+	buildAgent,
+	type CodingAgentUIMessage,
+} from "@wincode/ai";
 import { memo, type ReactNode, useMemo, useRef, useState } from "react";
 import {
 	boundCommandHeader,
@@ -249,7 +253,7 @@ const resolveFooterItems = (
 	return items;
 };
 
-function ToolMessagePart({ part }: { part: ToolPart }) {
+function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 	const { colors } = useTheme();
 	const isSkillCall =
 		part.type === "dynamic-tool" &&
@@ -262,10 +266,14 @@ function ToolMessagePart({ part }: { part: ToolPart }) {
 		part.state === "output-available" &&
 		"editDiff" in getToolOutputRecord(part);
 	const isEditRunning =
-		part.type === "tool-edit" && part.state === "input-available";
+		part.type === "tool-edit" &&
+		(part.state === "input-streaming" || part.state === "input-available");
 	const isEditPreview = isEditRunning || isEditOutput;
 	const isWritePreview =
-		part.type === "tool-write" && isRenderableWritePart(part);
+		part.type === "tool-write" &&
+		(part.state === "input-streaming" ||
+			part.state === "input-available" ||
+			isRenderableWritePart(part));
 
 	let toolLine: ReactNode = <ToolCallLine colors={colors} part={part} />;
 	if (isSkillCall) {
@@ -279,8 +287,8 @@ function ToolMessagePart({ part }: { part: ToolPart }) {
 		<>
 			{toolLine}
 			{isShellOutput ? <ShellOutputBlock part={part} /> : null}
-			{isEditPreview ? <EditDiffBlock part={part} /> : null}
-			{isWritePreview ? <WriteBlock part={part} /> : null}
+			{isEditPreview ? <EditDiffBlock agent={agent} part={part} /> : null}
+			{isWritePreview ? <WriteBlock agent={agent} part={part} /> : null}
 			{typeof part.toolCallId === "string" ? (
 				<ToolApprovalPanel id={part.toolCallId} />
 			) : null}
@@ -487,9 +495,12 @@ function SkillActivityRow({ part }: { part: ToolPart }) {
 }
 
 export function BotMessageContent({
+	agent = buildAgent.id,
 	isStreaming = false,
 	parts,
 }: {
+	/** The agent that produced the message; drives the running-tool spinner color. */
+	agent?: AgentId;
 	/**
 	 * True while the message's text parts can still grow. Keeps the markdown
 	 * mapping in streaming mode so trailing blocks parse incrementally
@@ -534,6 +545,7 @@ export function BotMessageContent({
 						if (isToolPart(part)) {
 							return (
 								<MemoizedToolMessagePart
+									agent={agent}
 									key={getToolKey(part, index)}
 									part={part}
 								/>

@@ -33,7 +33,7 @@ export const buildAgent = {
 	instructions: `Mode: BUILD.
 Purpose: implement requested code changes in the workspace.
 Use tools to inspect and modify files before answering about code.
-Prefer list, grep, and read before editing. Use edit for every change to an existing file. Use write only to create a new file; write refuses to overwrite existing files.`,
+Prefer list, grep, and read before editing. Use edit for targeted changes to existing files. Use write for new files or intentional complete rewrites.`,
 	role: "primary",
 	visibleCodingTools: ["read", "write", "edit", "list", "grep"],
 } as const satisfies AgentDefinition;

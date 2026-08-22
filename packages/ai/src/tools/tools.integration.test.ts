@@ -151,18 +151,27 @@ describe("tool runners", () => {
 			"hello agent"
 		);
 	});
-	test("refuses to overwrite an existing file", async () => {
+	test("overwrites an existing file with complete replacement content", async () => {
 		const filePath = `${sandboxRelPath}/existing.txt`;
 		writeFileSync(path.join(workspace, filePath), "original");
 
 		await expect(
 			runWriteTool({ content: "replacement", path: filePath })
-		).rejects.toThrow(
-			`File already exists: ${filePath}. Use the edit tool to modify it.`
-		);
+		).resolves.toEqual({ bytesWritten: 11, path: filePath });
 		expect(readFileSync(path.join(workspace, filePath), "utf8")).toBe(
-			"original"
+			"replacement"
 		);
+	});
+	test("rejects overwriting a symlink target outside the workspace", async () => {
+		const outsideFile = path.join(outsidePath, "outside.txt");
+		const linkPath = `${sandboxRelPath}/outside-write-link.txt`;
+		writeFileSync(outsideFile, "outside");
+		symlinkSync(outsideFile, path.join(workspace, linkPath));
+
+		await expect(
+			runWriteTool({ content: "replacement", path: linkPath })
+		).rejects.toThrow(`Path escapes workspace: ${linkPath}`);
+		expect(readFileSync(outsideFile, "utf8")).toBe("outside");
 	});
 	test("reports every replacement in a multi-replacement edit diff", async () => {
 		const filePath = `${sandboxRelPath}/unicode.txt`;

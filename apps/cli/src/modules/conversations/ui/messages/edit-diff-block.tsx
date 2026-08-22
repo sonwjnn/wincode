@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path";
 import { type BoxRenderable, pathToFiletype } from "@opentui/core";
 import {
+	type AgentId,
 	type CodingAgentUIMessage,
 	type EditDiff,
 	isRenderableEditDiff,
@@ -10,6 +11,7 @@ import { stripControlCharacters } from "@/shared/display-sanitize";
 import { useToggleShortcut } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { ThemeColors } from "@/shared/providers/theme/themes";
+import { Spinner } from "@/shared/ui/spinner";
 import { ConversationBlock } from "./conversation-block";
 import {
 	getTreeSitterClientForTests,
@@ -22,6 +24,7 @@ type EditToolPart = Extract<
 >;
 
 type EditDiffBlockProps = {
+	agent: AgentId;
 	part: EditToolPart;
 };
 
@@ -224,7 +227,7 @@ const DiffHeader = ({
 	deletions: number;
 }) => (
 	<box flexDirection="row" gap={1} width="100%">
-		<text fg={colors.text} wrapMode="char">
+		<text fg={colors.textMuted} wrapMode="char">
 			{`← Edit ${path}`}
 		</text>
 		<text fg={colors.diffAdded}>{`+${additions}`}</text>
@@ -255,7 +258,9 @@ const EmptyPatchStatus = ({
 	if (editDiff.additions === 0 && editDiff.deletions === 0) {
 		return (
 			<DiffStatusPanel colors={colors}>
-				<text fg={colors.text}>{`← Edit ${path} · No content changes`}</text>
+				<text
+					fg={colors.textMuted}
+				>{`← Edit ${path} · No content changes`}</text>
 			</DiffStatusPanel>
 		);
 	}
@@ -273,7 +278,28 @@ const EmptyPatchStatus = ({
 	);
 };
 
-export function EditDiffBlock({ part }: EditDiffBlockProps) {
+const isEditRunningState = (state: EditToolPart["state"]): boolean =>
+	state === "input-available" || state === "input-streaming";
+
+const EditRunningStatus = ({
+	agent,
+	path,
+}: {
+	agent: AgentId;
+	path: string;
+}) => {
+	const { colors } = useTheme();
+	return (
+		<DiffStatusPanel colors={colors}>
+			<box alignItems="center" flexDirection="row" gap={1} width="100%">
+				<Spinner agent={agent} />
+				<text fg={colors.textMuted}>{`Editing${path ? ` ${path}` : ""}`}</text>
+			</box>
+		</DiffStatusPanel>
+	);
+};
+
+export function EditDiffBlock({ agent, part }: EditDiffBlockProps) {
 	const { colors } = useTheme();
 	const blockRef = useRef<BoxRenderable>(null);
 	const [blockWidth, setBlockWidth] = useState(0);
@@ -301,20 +327,20 @@ export function EditDiffBlock({ part }: EditDiffBlockProps) {
 	);
 
 	if (!result) {
-		if (part.state === "input-available") {
-			return (
-				<DiffStatusPanel colors={colors}>
-					<text fg={colors.text}>{`← Edit ${path}`}</text>
-				</DiffStatusPanel>
-			);
+		if (!isEditRunningState(part.state)) {
+			return null;
 		}
-		return null;
+		const runningPath =
+			typeof part.input?.path === "string"
+				? formatEditPath(part.input.path)
+				: "";
+		return <EditRunningStatus agent={agent} path={runningPath} />;
 	}
 
 	if (result.invalid || !editDiff) {
 		return (
 			<DiffStatusPanel colors={colors}>
-				<text fg={colors.text}>{`← Edit ${path}`}</text>
+				<text fg={colors.textMuted}>{`← Edit ${path}`}</text>
 				<text fg={colors.error}>Diff unavailable</text>
 			</DiffStatusPanel>
 		);

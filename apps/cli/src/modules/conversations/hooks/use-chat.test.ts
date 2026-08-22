@@ -997,7 +997,7 @@ describe("createChatToolCallHandler", () => {
 		);
 		expect(approvalRequests[0]).toMatchObject({
 			description:
-				"Create a new UTF-8 text file inside the workspace. This tool refuses to overwrite an existing file; use edit to modify existing files. Parent directories are created inside the workspace.",
+				"Create or completely rewrite a UTF-8 text file inside the workspace. Existing files are overwritten; prefer edit for targeted changes. Parent directories are created inside the workspace.",
 			identity: [
 				{ label: "tool", value: "write" },
 				{ label: "resource", value: "notes.txt" },

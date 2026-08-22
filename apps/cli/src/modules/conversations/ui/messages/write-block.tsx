@@ -1,10 +1,11 @@
 import { isAbsolute } from "node:path";
 import { pathToFiletype } from "@opentui/core";
-import type { CodingAgentUIMessage } from "@wincode/ai";
+import type { AgentId, CodingAgentUIMessage } from "@wincode/ai";
 import { useMemo, useState } from "react";
 import { stripControlCharacters } from "@/shared/display-sanitize";
 import { useToggleShortcut } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { Spinner } from "@/shared/ui/spinner";
 import { ConversationBlock } from "./conversation-block";
 import {
 	getTreeSitterClientForTests,
@@ -122,6 +123,25 @@ export const buildWritePreview = (content: string): string =>
 const formatLineCount = (lineCount: number): string =>
 	`${lineCount} ${lineCount === 1 ? "line" : "lines"}`;
 
+/**
+ * Renders write content as an all-added unified diff so the block shares the
+ * diff view's line-number gutter, syntax highlighting, and readable contrast.
+ */
+export const buildWriteDiffPatch = (
+	filePath: string,
+	content: string
+): string => {
+	const lines = content.split("\n");
+	return [
+		`Index: ${filePath}`,
+		"===================================================================",
+		"--- /dev/null",
+		`+++ ${filePath}`,
+		`@@ -0,0 +1,${lines.length} @@`,
+		...lines.map((line) => `+${line}`),
+	].join("\n");
+};
+
 const getWriteError = (part: WriteToolPart): string => {
 	const error = stripControlCharacters(
 		typeof part.errorText === "string" ? part.errorText : "",
@@ -139,25 +159,100 @@ export function isRenderableWritePart(part: WriteToolPart): boolean {
 	);
 }
 
-export function WriteBlock({ part }: { part: WriteToolPart }) {
+const WriteRunningStatus = ({
+	agent,
+	path,
+}: {
+	agent: AgentId;
+	path: string;
+}) => {
 	const { colors } = useTheme();
-	const input = getWriteInput(part);
-	const content = input?.content ?? "";
-	const path = formatWritePath(input?.path ?? ".");
+	return (
+		<box alignItems="center" flexDirection="row" gap={1} width="100%">
+			<Spinner agent={agent} />
+			<text fg={colors.textMuted}>{`Writing${path ? ` ${path}` : ""}`}</text>
+		</box>
+	);
+};
+
+const WritePreview = ({
+	content,
+	isRunning,
+	lineCount,
+	path,
+	visibleContent,
+}: {
+	content: string;
+	isRunning: boolean;
+	lineCount: number;
+	path: string;
+	visibleContent: string;
+}) => {
+	const { colors } = useTheme();
+	const syntaxStyle = useMemo(() => resolveSyntaxStyle(colors), [colors]);
+
+	if (isRunning && content.length === 0) {
+		return null;
+	}
+	if (lineCount === 0) {
+		return <text fg={colors.textMuted}>Empty file</text>;
+	}
+	return (
+		<diff
+			addedBg={colors.diffContextBg}
+			addedContentBg={colors.diffContextBg}
+			addedLineNumberBg={colors.diffContextBg}
+			contextBg={colors.diffContextBg}
+			diff={buildWriteDiffPatch(path, visibleContent)}
+			filetype={pathToFiletype(path)}
+			lineNumberBg={colors.diffContextBg}
+			lineNumberFg={colors.diffLineNumber}
+			removedBg={colors.diffRemovedBg}
+			removedLineNumberBg={colors.diffRemovedLineNumberBg}
+			removedSignColor={colors.diffHighlightRemoved}
+			showLineNumbers
+			syntaxStyle={syntaxStyle}
+			treeSitterClient={getTreeSitterClientForTests()}
+			view="unified"
+			width="100%"
+			wrapMode="word"
+		/>
+	);
+};
+
+export function WriteBlock({
+	agent,
+	part,
+}: {
+	agent: AgentId;
+	part: WriteToolPart;
+}) {
+	const { colors } = useTheme();
+	const rawInput =
+		typeof part.input === "object" &&
+		part.input !== null &&
+		!Array.isArray(part.input)
+			? (part.input as Record<string, unknown>)
+			: {};
+	const content = typeof rawInput.content === "string" ? rawInput.content : "";
+	const path = formatWritePath(
+		typeof rawInput.path === "string" ? rawInput.path : ""
+	);
 	const displayData = useMemo(() => getWriteDisplayData(content), [content]);
 	const lineCount = displayData.lineCount;
-	const canExpand = lineCount > WRITE_COLLAPSE_LINES;
+	const isFailed = part.state === "output-error";
+	const canExpand = lineCount > WRITE_COLLAPSE_LINES && !isFailed;
 	const [expanded, setExpanded] = useState(false);
-	const syntaxStyle = useMemo(() => resolveSyntaxStyle(colors), [colors]);
 	const visibleContent = expanded
 		? sanitizeWriteContent(content)
 		: displayData.preview;
 	const remainingLines = lineCount - WRITE_COLLAPSE_LINES;
-	const isFailed = part.state === "output-error";
+	const isRunning =
+		part.state === "input-streaming" || part.state === "input-available";
 
 	useToggleShortcut("ctrl+o", () => setExpanded((value) => !value), canExpand);
 
-	if (!(input && isRenderableWritePart(part))) {
+	if (!(isRunning || isRenderableWritePart(part))) {
 		return null;
 	}
 
@@ -168,20 +263,22 @@ export function WriteBlock({ part }: { part: WriteToolPart }) {
 
 	return (
 		<ConversationBlock colors={colors} paddingX={2}>
-			<text fg={colors.text} wrapMode="char">
-				{`Write ${path} · ${formatLineCount(lineCount)}${status}`}
-			</text>
-			{isFailed ? <text fg={colors.error}>{getWriteError(part)}</text> : null}
-			{lineCount === 0 ? (
-				<text fg={colors.textMuted}>Empty file</text>
+			{isRunning ? (
+				<WriteRunningStatus agent={agent} path={path} />
 			) : (
-				<code
-					content={visibleContent}
-					filetype={pathToFiletype(path)}
-					syntaxStyle={syntaxStyle}
-					treeSitterClient={getTreeSitterClientForTests()}
-					width="100%"
-					wrapMode="none"
+				<text fg={colors.textMuted} wrapMode="char">
+					{`→ Write ${path} · ${formatLineCount(lineCount)}`}
+					{isFailed ? <span fg={colors.error}>{status}</span> : null}
+				</text>
+			)}
+			{isFailed ? <text fg={colors.error}>{getWriteError(part)}</text> : null}
+			{isFailed ? null : (
+				<WritePreview
+					content={content}
+					isRunning={isRunning}
+					lineCount={lineCount}
+					path={path}
+					visibleContent={visibleContent}
 				/>
 			)}
 			{canExpand ? <text fg={colors.textMuted}>{footer}</text> : null}

@@ -36,6 +36,7 @@ export function ChatMessage({
 
 					return (
 						<BotMessageContent
+							agent={message.metadata?.agent ?? buildAgent.id}
 							isStreaming={isStreaming && message === messages.at(-1)}
 							key={message.id}
 							parts={message.parts}

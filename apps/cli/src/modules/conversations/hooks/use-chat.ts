@@ -12,6 +12,7 @@ import {
 	type SkillContext,
 	type SkillRequestContext,
 	type SkillToolDefinition,
+	sanitizeInterruptedMessagesForModel,
 } from "@wincode/ai";
 import { createUserMessage } from "@wincode/ai/client";
 import type { ChatAddToolOutputFunction, FileUIPart } from "ai";
@@ -371,7 +372,12 @@ export function useChat(
 	};
 
 	const finalizeAndPersistMessages = (messages: CodingAgentUIMessage[]) => {
-		const finalizedMessages = finalizeAssistantMessages(messages);
+		// An interrupted/cut-off turn drops its unfinished tool calls (no result
+		// ever lands for them): persisting them would restore a stuck running
+		// tool block on the next session load.
+		const finalizedMessages = sanitizeInterruptedMessagesForModel(
+			finalizeAssistantMessages(messages)
+		);
 		setMessagesRef.current?.(finalizedMessages);
 		persistMessages(finalizedMessages);
 	};
@@ -463,9 +469,12 @@ export function useChat(
 				variant: variantRef.current,
 			}),
 		};
+		// Drop the in-flight tool calls of the interrupted turn so the UI never
+		// shows a stuck running block and the next reload cannot restore one.
+		const sanitizedMessages = sanitizeInterruptedMessagesForModel(nextMessages);
 
-		setMessagesRef.current?.(nextMessages);
-		persistMessages(nextMessages);
+		setMessagesRef.current?.(sanitizedMessages);
+		persistMessages(sanitizedMessages);
 		chat.stop();
 	};
 

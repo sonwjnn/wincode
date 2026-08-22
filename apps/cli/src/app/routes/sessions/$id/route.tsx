@@ -4,7 +4,10 @@ import type {
 	CodingAgentUIMessage,
 	ModelVariant,
 } from "@wincode/ai";
-import { agentIdSchema } from "@wincode/ai";
+import {
+	agentIdSchema,
+	sanitizeInterruptedMessagesForModel,
+} from "@wincode/ai";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { useBilling } from "@/modules/billing";
@@ -61,7 +64,9 @@ function SessionRoute() {
 		Promise.all([store.getMessages(id), store.getSession(id)])
 			.then(([loadedMessages, session]) => {
 				if (!ignore) {
-					setMessages(loadedMessages);
+					// A turn interrupted before its tool calls finished must not
+					// restore as stuck running blocks: strip their unfinished parts.
+					setMessages(sanitizeInterruptedMessagesForModel(loadedMessages));
 					setSessionConfig({
 						...(session.model ? { model: session.model } : {}),
 						...(session.variant ? { variant: session.variant } : {}),

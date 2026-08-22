@@ -215,7 +215,7 @@ describe("BotMessageContent", () => {
 		expect(narrowFrame.split("const other = 2;").length - 1).toBe(1);
 		expect(wideFrame.split("const other = 2;").length - 1).toBe(2);
 	});
-	test("renders running edits with an Edit status", async () => {
+	test("renders running edits with a spinner and Editing status", async () => {
 		const part = {
 			input: {
 				find: "const value = 1;",
@@ -229,7 +229,8 @@ describe("BotMessageContent", () => {
 
 		const frame = await renderFrame([part]);
 
-		expect(frame).toContain("← Edit src/running.ts");
+		expect(frame).toContain("Editing src/running.ts");
+		expect(frame).not.toContain("← Edit src/running.ts");
 		expect(frame).not.toContain("→ Edit src/running.ts");
 	});
 	test("collapses a completed edit after a running edit with the same call id", async () => {
@@ -325,8 +326,12 @@ describe("BotMessageContent", () => {
 		try {
 			await flushRenderPasses(setup);
 			let frame = setup.captureCharFrame();
-			expect(frame).toContain("Write src/generated.ts · 48 lines");
+			expect(frame).toContain("Writing src/generated.ts");
+			expect(frame).not.toContain("Write src/generated.ts · 48 lines");
 			expect(frame).toContain("const line10 = 10;");
+			expect(frame).toContain("1 + const line1 = 1;");
+			expect(frame).toContain("10 + const line10 = 10;");
+			expect(frame).not.toContain("11 + const line11 = 11;");
 			expect(frame).not.toContain("const line11 = 11;");
 			expect(frame).toContain("… 38 more lines (Ctrl+O: Expand)");
 
@@ -334,6 +339,7 @@ describe("BotMessageContent", () => {
 			await flushUi(setup);
 			frame = setup.captureCharFrame();
 			expect(frame).toContain("const line48 = 48;");
+			expect(frame).toContain("48 + const line48 = 48;");
 			expect(frame).toContain("(Ctrl+O: Collapse)");
 		} finally {
 			setup.renderer.destroy();
@@ -355,10 +361,12 @@ describe("BotMessageContent", () => {
 
 		const frame = await renderFrame([write, edit]);
 
-		expect(frame).toContain("→ Write");
-		expect(frame).toContain("→ Edit");
-		expect(frame).not.toContain("Write .");
-		expect(frame).not.toContain("Edit .");
+		expect(frame).toContain("Writing");
+		expect(frame).toContain("Editing");
+		expect(frame).not.toContain("Writing .");
+		expect(frame).not.toContain("Editing .");
+		expect(frame).not.toContain("→ Write");
+		expect(frame).not.toContain("→ Edit");
 	});
 
 	test("renders completed, failed, empty, and partial writes honestly", async () => {
@@ -396,9 +404,10 @@ describe("BotMessageContent", () => {
 		expect(frame).not.toContain("16 bytes");
 		expect(frame).toContain("Write src/existing.ts · 1 line · Failed");
 		expect(frame).toContain("File already exists");
+		expect(frame).not.toContain("const value = 2;");
 		expect(frame).toContain("Write src/empty.ts · 0 lines");
 		expect(frame).toContain("Empty file");
-		expect(frame).toContain("→ Write src/partial.ts");
+		expect(frame).toContain("Writing src/partial.ts");
 	});
 	test("uses OpenTUI filetype resolution for diff paths", async () => {
 		const client = new RecordingTreeSitterClient({ autoResolveTimeout: 0 });
@@ -533,6 +542,54 @@ describe("BotMessageContent", () => {
 				rgb(DEFAULT_THEME.colors.diffRemoved)
 			);
 		} finally {
+			setup.renderer.destroy();
+		}
+	});
+	test("renders write content with added diff contrast and JavaScript syntax", async () => {
+		const client = new RecordingTreeSitterClient({ autoResolveTimeout: 0 });
+		client.setMockResult({ highlights: [] });
+		const previousClient = setTreeSitterClientForTests(client);
+		const part = {
+			input: {
+				content: 'const value = 1;\nconsole.log("ready");',
+				path: "src/example.js",
+			},
+			output: { bytesWritten: 38, path: "src/example.js" },
+			state: "output-available",
+			toolCallId: "write-themed",
+			type: "tool-write",
+		} satisfies MessagePart;
+
+		const setup = await testRender(
+			<ThemeProvider themeName="opencode">
+				<KeyboardLayerProvider>
+					<ApprovalPanelsProvider>
+						<BotMessageContent parts={[part]} />
+					</ApprovalPanelsProvider>
+				</KeyboardLayerProvider>
+			</ThemeProvider>,
+			{ height: 10, width: 120 }
+		);
+
+		try {
+			await flushRenderPasses(setup);
+			const spans = setup.captureSpans().lines.flatMap((line) => line.spans);
+			const hasBackground = (text: string, color: string): boolean =>
+				spans.some(
+					(span) =>
+						span.text.includes(text) &&
+						[...span.bg.buffer.slice(0, 3)].join(",") === rgb(color).join(",")
+				);
+
+			expect(client.filetypes).toContain("javascript");
+			expect(
+				hasBackground("const value = 1;", DEFAULT_THEME.colors.diffContextBg)
+			).toBe(true);
+			expect(
+				hasBackground("const value = 1;", DEFAULT_THEME.colors.diffAddedBg)
+			).toBe(false);
+		} finally {
+			setTreeSitterClientForTests(previousClient);
 			setup.renderer.destroy();
 		}
 	});
