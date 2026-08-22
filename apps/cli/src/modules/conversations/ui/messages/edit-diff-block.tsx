@@ -1,5 +1,5 @@
-import { extname, isAbsolute } from "node:path";
-import type { BoxRenderable } from "@opentui/core";
+import { isAbsolute } from "node:path";
+import { type BoxRenderable, pathToFiletype } from "@opentui/core";
 import {
 	type CodingAgentUIMessage,
 	type EditDiff,
@@ -29,25 +29,6 @@ const DIFF_BREAKPOINT_COLUMNS = 120;
 const DIFF_COLLAPSE_LINES = 30;
 const DIFF_BLOCK_PADDING_X = 2;
 
-const FILETYPE_BY_EXTENSION: Record<string, string> = {
-	".bash": "bash",
-	".css": "css",
-	".go": "go",
-	".html": "html",
-	".js": "javascript",
-	".jsx": "javascript",
-	".json": "json",
-	".md": "markdown",
-	".py": "python",
-	".rs": "rust",
-	".sh": "bash",
-	".toml": "toml",
-	".ts": "typescript",
-	".tsx": "typescript",
-	".yaml": "yaml",
-	".yml": "yaml",
-};
-
 const isSafeDiffCharacter = (code: number): boolean =>
 	code === 0x09 ||
 	code === 0x0a ||
@@ -57,9 +38,6 @@ const sanitizeDiffPatch = (patch: string): string =>
 	Array.from(patch, (character) =>
 		isSafeDiffCharacter(character.charCodeAt(0)) ? character : " "
 	).join("");
-
-const filetypeForPath = (filePath: string): string | undefined =>
-	FILETYPE_BY_EXTENSION[extname(filePath).toLowerCase()];
 
 const formatEditPath = (filePath: string): string => {
 	const sanitized = stripControlCharacters(filePath, 512);
@@ -352,7 +330,7 @@ export function EditDiffBlock({ part }: EditDiffBlockProps) {
 					addedSignColor={colors.diffHighlightAdded}
 					contextBg={colors.diffContextBg}
 					diff={visiblePatch}
-					filetype={filetypeForPath(path)}
+					filetype={pathToFiletype(path)}
 					lineNumberBg={colors.diffContextBg}
 					lineNumberFg={colors.diffLineNumber}
 					removedBg={colors.diffRemovedBg}

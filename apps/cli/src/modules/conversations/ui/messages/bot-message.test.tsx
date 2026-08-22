@@ -14,12 +14,12 @@ import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboar
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { buildAddedPreviewPatch } from "./edit-diff-block";
+import { setTreeSitterClientForTests } from "./syntax-style";
 
 const { BotMessageContent } = await import("./bot-message");
 const { setMarkdownTreeSitterClientForTests } = await import(
 	"./markdown-message-part"
 );
-
 // Eagerly evaluate the CLI env schema before any test renderer can create
 // the global `window` shim that @opentui/core's CliRenderer installs. Once
 // `window` exists, @t3-oss/env-core treats the process as a client and every
@@ -42,6 +42,15 @@ type MessagePart = CodingAgentUIMessage["parts"][number];
 type DynamicToolPart = Extract<MessagePart, { type: "dynamic-tool" }>;
 type GrepToolPart = Extract<MessagePart, { type: "tool-grep" }>;
 type ReadToolPart = Extract<MessagePart, { type: "tool-read" }>;
+
+class RecordingTreeSitterClient extends MockTreeSitterClient {
+	filetypes: string[] = [];
+
+	override async highlightOnce(content: string, filetype: string) {
+		this.filetypes.push(filetype);
+		return super.highlightOnce(content, filetype);
+	}
+}
 
 const flushRenderPasses = async (
 	setup: Awaited<ReturnType<typeof testRender>>
@@ -204,6 +213,43 @@ describe("BotMessageContent", () => {
 		}
 		expect(narrowFrame.split("const other = 2;").length - 1).toBe(1);
 		expect(wideFrame.split("const other = 2;").length - 1).toBe(2);
+	});
+	test("uses OpenTUI filetype resolution for diff paths", async () => {
+		const client = new RecordingTreeSitterClient({ autoResolveTimeout: 0 });
+		client.setMockResult({ highlights: [] });
+		const previousClient = setTreeSitterClientForTests(client);
+		const cases = [
+			{ expected: "dockerfile", path: "Dockerfile" },
+			{ expected: "typescriptreact", path: "src\\component.tsx" },
+			{ expected: "python", path: "scripts/build.py" },
+		] as const;
+
+		try {
+			for (const [index, { expected, path }] of cases.entries()) {
+				const part = {
+					input: { find: "old", path, replace: "new" },
+					output: {
+						editDiff: {
+							additions: 1,
+							deletions: 1,
+							omittedHunks: 0,
+							patch: "@@ -1,1 +1,1 @@\n-old\n+new\n",
+							truncated: false,
+						},
+						path,
+						replacements: 1,
+					},
+					state: "output-available",
+					toolCallId: `edit-filetype-${index}`,
+					type: "tool-edit",
+				} satisfies MessagePart;
+
+				await renderFrame([part], 8, 100);
+				expect(client.filetypes).toContain(expected);
+			}
+		} finally {
+			setTreeSitterClientForTests(previousClient);
+		}
 	});
 
 	test("renders diff spans with the current theme palette", async () => {
