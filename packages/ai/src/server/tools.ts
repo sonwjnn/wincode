@@ -1,4 +1,8 @@
-import { type Tool, tool } from "ai";
+import { jsonSchema, type Tool, tool } from "ai";
+import {
+	editInputSchema,
+	editModelInputJsonSchema,
+} from "../tools/edit/schema";
 import {
 	type CodingToolInput,
 	type CodingToolName,
@@ -28,6 +32,18 @@ export type CodingServerToolMap = {
 	>;
 };
 
+const editServerInputSchema = jsonSchema<CodingToolInput<"edit">>(
+	editModelInputJsonSchema,
+	{
+		validate: (value) => {
+			const result = editInputSchema.safeParse(value);
+			return result.success
+				? { success: true, value: result.data }
+				: { error: result.error, success: false };
+		},
+	}
+);
+
 export const codingServerTools = {
 	read: tool({
 		description: codingToolDefinitions.read.description,
@@ -41,7 +57,7 @@ export const codingServerTools = {
 	}),
 	edit: tool({
 		description: codingToolDefinitions.edit.description,
-		inputSchema: codingToolDefinitions.edit.inputSchema,
+		inputSchema: editServerInputSchema,
 		outputSchema: codingToolDefinitions.edit.outputSchema,
 	}),
 	list: tool({

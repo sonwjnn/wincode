@@ -24,11 +24,11 @@ export const runEditTool = async (input: EditInput): Promise<EditOutput> => {
 		input.path
 	);
 	const content = await readFile(resolvedPath, "utf8");
-	const isFullFileEdit = input.content !== undefined;
+	const isFullFileEdit = "content" in input;
 	let nextContent: string;
 	let replacements: number;
 	if (isFullFileEdit) {
-		nextContent = input.content ?? "";
+		nextContent = input.content;
 		replacements = 1;
 	} else {
 		const { find, replace } = input;

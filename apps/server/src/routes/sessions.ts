@@ -3,6 +3,7 @@ import {
 	codingAgentDataSchemas,
 	codingMessageMetadataSchema,
 	codingToolDefinitions,
+	editModelInputJsonSchema,
 	formatSkillUserContext,
 	getSystemInstructionsForAgent,
 	hostedAgentDescriptorSchema,
@@ -177,9 +178,12 @@ const getFundedContextTokenEstimate = ({
 		JSON.stringify(
 			agent.visibleCodingTools.map((name) => ({
 				description: codingToolDefinitions[name].description,
-				inputSchema: z.toJSONSchema(codingToolDefinitions[name].inputSchema, {
-					io: "input",
-				}),
+				inputSchema:
+					name === "edit"
+						? editModelInputJsonSchema
+						: z.toJSONSchema(codingToolDefinitions[name].inputSchema, {
+								io: "input",
+							}),
 				name,
 			}))
 		)

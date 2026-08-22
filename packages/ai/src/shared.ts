@@ -69,5 +69,6 @@ export {
 	skillToolInputSchema,
 } from "./skill-context";
 export { isRenderableEditDiff } from "./tools/edit/diff";
+export { editModelInputJsonSchema } from "./tools/edit/schema";
 export * from "./tools/schemas";
 export * from "./usage";

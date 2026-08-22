@@ -1,7 +1,23 @@
 import { describe, expect, test } from "bun:test";
+import { codingServerTools } from "../../server/tools";
 import { editInputSchema, editOutputSchema } from "./schema";
 
 describe("editInputSchema", () => {
+	test("requires an edit body in the model-facing JSON schema", async () => {
+		const { inputSchema } = codingServerTools.edit;
+		if (!("jsonSchema" in inputSchema)) {
+			throw new Error("Edit server tool must expose its model JSON schema");
+		}
+		const jsonSchema = await inputSchema.jsonSchema;
+
+		expect(jsonSchema).toMatchObject({
+			oneOf: [
+				{ required: ["content", "path"] },
+				{ required: ["find", "path", "replace"] },
+			],
+		});
+	});
+
 	test("rejects replacements that cannot change the file", () => {
 		expect(
 			editInputSchema.safeParse({

@@ -8,45 +8,51 @@ const editDiffSchema = z.object({
 	truncated: z.boolean(),
 });
 
-export const editInputSchema = z
-	.object({
-		content: z.string().optional(),
-		find: z.string().min(1).optional(),
-		path: z.string().min(1),
-		replace: z.string().optional(),
-		replaceAll: z.boolean().optional(),
-	})
-	.superRefine((input, context) => {
-		const hasContent = input.content !== undefined;
-		const hasExactFields =
-			input.find !== undefined ||
-			input.replace !== undefined ||
-			input.replaceAll !== undefined;
-		if (hasContent === hasExactFields) {
-			context.addIssue({
-				code: "custom",
-				message: "provide either content or find and replace",
-			});
-			return;
-		}
-		if (
-			hasExactFields &&
-			(input.find === undefined || input.replace === undefined)
-		) {
-			context.addIssue({
-				code: "custom",
-				message: "find and replace are both required",
-			});
-			return;
-		}
-		if (input.find !== undefined && input.find === input.replace) {
-			context.addIssue({
-				code: "custom",
-				message: "find and replace must differ",
-				path: ["replace"],
-			});
-		}
-	});
+export const editInputSchema = z.union([
+	z
+		.object({
+			content: z.string(),
+			path: z.string().min(1),
+		})
+		.strict(),
+	z
+		.object({
+			find: z.string().min(1),
+			path: z.string().min(1),
+			replace: z.string(),
+			replaceAll: z.boolean().optional(),
+		})
+		.strict()
+		.refine((input) => input.find !== input.replace, {
+			message: "find and replace must differ",
+			path: ["replace"],
+		}),
+]);
+
+export const editModelInputJsonSchema = {
+	oneOf: [
+		{
+			additionalProperties: false,
+			properties: {
+				content: { type: "string" },
+				path: { minLength: 1, type: "string" },
+			},
+			required: ["content", "path"],
+			type: "object",
+		},
+		{
+			additionalProperties: false,
+			properties: {
+				find: { minLength: 1, type: "string" },
+				path: { minLength: 1, type: "string" },
+				replace: { type: "string" },
+				replaceAll: { type: "boolean" },
+			},
+			required: ["find", "path", "replace"],
+			type: "object",
+		},
+	],
+} as const;
 
 export const editOutputSchema = z.object({
 	editDiff: editDiffSchema.optional(),
@@ -55,8 +61,7 @@ export const editOutputSchema = z.object({
 });
 
 export const editToolSchema = {
-	description:
-		"Modify an existing UTF-8 file. Use content for the whole file, or find and replace for one exact change.",
+	description: "Edit an existing file.",
 	name: "edit",
 	schema: editInputSchema,
 } as const;
