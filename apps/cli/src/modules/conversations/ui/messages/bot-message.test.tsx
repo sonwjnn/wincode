@@ -286,7 +286,7 @@ describe("BotMessageContent", () => {
 					</ApprovalPanelsProvider>
 				</KeyboardLayerProvider>
 			</ThemeProvider>,
-			{ height: 12, width: 100 }
+			{ height: 12, width: 140 }
 		);
 
 		try {

@@ -1,4 +1,4 @@
-import { useKeyboard, useTerminalDimensions } from "@opentui/react";
+import { useKeyboard } from "@opentui/react";
 import {
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
@@ -23,12 +23,9 @@ import { resolveConversationSelection } from "../../selection";
 import type { ChatPromptSubmission } from "../../utils";
 import { shouldAutoStartAssistantTurn } from "../../utils";
 import { ChatShell } from "../components/chat-shell";
-import { SessionSidebar } from "../components/session-sidebar";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
 
 const INTERRUPT_CONFIRMATION_TIMEOUT_MS = 3000;
-const SIDEBAR_WIDTH = "30%";
-const SIDEBAR_MIN_TERMINAL_WIDTH = 100;
 
 type ChatScreenProps = {
 	autoStart: boolean;
@@ -58,8 +55,6 @@ export function ChatView({
 }: ChatScreenProps) {
 	const { agent, model, setAgent, setModel, setVariant, variant } =
 		usePromptConfig();
-	const { width: terminalWidth } = useTerminalDimensions();
-	const showSidebar = terminalWidth >= SIDEBAR_MIN_TERMINAL_WIDTH;
 	const registry = useAgentRegistry();
 	const { isTopLayer } = useKeyboardLayer();
 	const dialog = useDialog();
@@ -364,13 +359,6 @@ export function ChatView({
 					promptHistory={promptHistory}
 				/>
 			</box>
-			{showSidebar ? (
-				<SessionSidebar
-					messages={messages}
-					sessionTitle={sessionTitle}
-					width={SIDEBAR_WIDTH}
-				/>
-			) : null}
 		</box>
 	);
 }
