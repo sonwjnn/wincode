@@ -2,7 +2,7 @@ import type { AgentId, CodingAgentUIMessage } from "@wincode/ai";
 import { findFileMentionRanges } from "@/modules/file-mentions";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
-import { ConversationBlock } from "./conversation-block";
+import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 
 type UserMessageProps = {
 	agent: AgentId;
@@ -104,7 +104,7 @@ export function UserMessage({ agent, appliedSkill, parts }: UserMessageProps) {
 
 	return (
 		<box alignItems="center" width="100%">
-			<ConversationBlock
+			<BorderedContentBlock
 				borderColor={borderColor}
 				colors={colors}
 				contentBackgroundColor={colors.backgroundPanel}
@@ -184,7 +184,7 @@ export function UserMessage({ agent, appliedSkill, parts }: UserMessageProps) {
 						))}
 					</box>
 				)}
-			</ConversationBlock>
+			</BorderedContentBlock>
 		</box>
 	);
 }

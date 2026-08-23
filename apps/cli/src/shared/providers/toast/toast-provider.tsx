@@ -8,6 +8,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import { SplitBorderChars } from "../../constants";
 import { useTheme } from "../theme/theme-provider";
 import type { ToastOptions, ToastVariant } from "./types";
@@ -96,26 +97,25 @@ function Toast({ currentToast }: ToastProps) {
 
 	return (
 		<box
-			alignItems="flex-start"
-			backgroundColor={colors.backgroundMenu}
-			border={["left", "right"]}
-			borderColor={borderColor}
-			customBorderChars={SplitBorderChars}
-			justifyContent="center"
-			paddingBottom={1}
-			paddingLeft={2}
-			paddingRight={2}
-			paddingTop={1}
 			position="absolute"
 			right={2}
 			top={2}
 			width={Math.max(1, Math.min(currentToast.width ?? 60, width - 6))}
 		>
-			<box flexDirection="column" gap={1} width="100%">
+			<BorderedContentBlock
+				border={["left", "right"]}
+				borderColor={borderColor}
+				colors={colors}
+				contentBackgroundColor={colors.backgroundMenu}
+				customBorderChars={SplitBorderChars}
+				marginBottom={0}
+				paddingX={2}
+				paddingY={1}
+			>
 				<text fg={colors.text} width="100%" wrapMode="word">
 					{currentToast.message}
 				</text>
-			</box>
+			</BorderedContentBlock>
 		</box>
 	);
 }

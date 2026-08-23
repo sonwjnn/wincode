@@ -29,12 +29,12 @@ import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config
 import { StatusBar } from "@/modules/prompt-settings/ui/prompt-status-bar";
 import { discoverSkills } from "@/modules/skills";
 import { useConfig } from "@/shared/config/config-provider";
-import { EmptyBorder } from "@/shared/constants";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import {
 	areFileMentionExtmarksCurrent,
 	type ChatAttachment,
@@ -51,7 +51,6 @@ import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import type { TrackedPastedText } from "../../hooks/input-controller/submit";
 import { useChatInputController } from "../../hooks/input-controller/use-chat-input-controller";
 import type { ChatPromptSubmission } from "../../utils";
-import { ConversationBlock } from "../messages/conversation-block";
 import { summarizePastedText } from "./pasted-text";
 
 const MAX_IMAGE_ATTACHMENTS = 5;
@@ -913,20 +912,17 @@ export function ChatTextArea({
 			width="100%"
 		>
 			{state.overlay.kind === "command" && (
-				<box
-					border={["left", "right"]}
-					borderColor={colors.borderActive}
-					bottom="100%"
-					customBorderChars={{
-						...EmptyBorder,
-						vertical: "┃",
-					}}
-					left={0}
-					position="absolute"
-					right={0}
-					zIndex={10}
-				>
-					<box backgroundColor={colors.backgroundElement} width="100%">
+				<box bottom="100%" left={0} position="absolute" right={0} zIndex={10}>
+					<BorderedContentBlock
+						border={["left", "right"]}
+						borderColor={colors.borderActive}
+						colors={colors}
+						contentGap={0}
+						customBorderChars={{ vertical: "┃" }}
+						marginBottom={0}
+						paddingX={0}
+						paddingY={0}
+					>
 						<CommandMenu
 							commands={state.overlay.items}
 							onExecute={actions.onItemExecute}
@@ -935,25 +931,22 @@ export function ChatTextArea({
 							selectedIndex={state.overlay.selectedIndex}
 							visibleStartIndex={state.visibleStartIndex}
 						/>
-					</box>
+					</BorderedContentBlock>
 				</box>
 			)}
 
 			{state.overlay.kind === "file-mention" && (
-				<box
-					border={["left", "right"]}
-					borderColor={colors.borderActive}
-					bottom="100%"
-					customBorderChars={{
-						...EmptyBorder,
-						vertical: "┃",
-					}}
-					left={0}
-					position="absolute"
-					right={0}
-					zIndex={10}
-				>
-					<box backgroundColor={colors.backgroundElement} width="100%">
+				<box bottom="100%" left={0} position="absolute" right={0} zIndex={10}>
+					<BorderedContentBlock
+						border={["left", "right"]}
+						borderColor={colors.borderActive}
+						colors={colors}
+						contentGap={0}
+						customBorderChars={{ vertical: "┃" }}
+						marginBottom={0}
+						paddingX={0}
+						paddingY={0}
+					>
 						<FileMentionMenu
 							items={state.overlay.items}
 							onExecute={actions.onItemExecute}
@@ -961,11 +954,11 @@ export function ChatTextArea({
 							selectedIndex={state.overlay.selectedIndex}
 							visibleStartIndex={state.visibleStartIndex}
 						/>
-					</box>
+					</BorderedContentBlock>
 				</box>
 			)}
 
-			<ConversationBlock
+			<BorderedContentBlock
 				borderColor={getAgentColor(colors, agent)}
 				colors={colors}
 				contentGap={1}
@@ -986,7 +979,7 @@ export function ChatTextArea({
 					textColor={disabled ? colors.textDisabled : colors.text}
 				/>
 				<StatusBar />
-			</ConversationBlock>
+			</BorderedContentBlock>
 		</box>
 	);
 }

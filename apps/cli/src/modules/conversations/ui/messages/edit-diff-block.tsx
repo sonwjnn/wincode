@@ -11,8 +11,8 @@ import { stripControlCharacters } from "@/shared/display-sanitize";
 import { useToggleShortcut } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { ThemeColors } from "@/shared/providers/theme/themes";
+import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import { Spinner } from "@/shared/ui/spinner";
-import { ConversationBlock } from "./conversation-block";
 import {
 	getTreeSitterClientForTests,
 	resolveSyntaxStyle,
@@ -241,9 +241,9 @@ const DiffStatusPanel = ({
 	children: ReactNode;
 	colors: ThemeColors;
 }) => (
-	<ConversationBlock colors={colors} paddingX={DIFF_BLOCK_PADDING_X}>
+	<BorderedContentBlock colors={colors} paddingX={DIFF_BLOCK_PADDING_X}>
 		{children}
-	</ConversationBlock>
+	</BorderedContentBlock>
 );
 
 const EmptyPatchStatus = ({
@@ -363,7 +363,7 @@ export function EditDiffBlock({ agent, part }: EditDiffBlockProps) {
 	const syntaxStyle = resolveSyntaxStyle(colors);
 
 	return (
-		<ConversationBlock
+		<BorderedContentBlock
 			blockRef={blockRef}
 			colors={colors}
 			onSizeChange={handleBlockResize}
@@ -412,6 +412,6 @@ export function EditDiffBlock({ agent, part }: EditDiffBlockProps) {
 							} (Ctrl+O: Expand)`}
 				</text>
 			) : null}
-		</ConversationBlock>
+		</BorderedContentBlock>
 	);
 }

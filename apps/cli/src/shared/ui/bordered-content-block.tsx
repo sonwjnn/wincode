@@ -3,8 +3,9 @@ import type { ReactNode, Ref } from "react";
 import { EmptyBorder } from "@/shared/constants";
 import type { ThemeColors } from "@/shared/providers/theme/themes";
 
-type ConversationBlockProps = {
+type BorderedContentBlockProps = {
 	blockRef?: Ref<BoxRenderable>;
+	border?: Array<"left" | "right">;
 	borderColor?: string;
 	children: ReactNode;
 	colors: ThemeColors;
@@ -19,8 +20,9 @@ type ConversationBlockProps = {
 	paddingY?: number;
 };
 
-export function ConversationBlock({
+export function BorderedContentBlock({
 	blockRef,
+	border = ["left"],
 	borderColor,
 	children,
 	colors,
@@ -33,15 +35,15 @@ export function ConversationBlock({
 	onSizeChange,
 	paddingX = 2,
 	paddingY = 1,
-}: ConversationBlockProps) {
+}: BorderedContentBlockProps) {
 	const resolvedBorderColor = borderColor ?? colors.backgroundElement;
 	const resolvedContentBackground =
 		contentBackgroundColor ?? colors.backgroundElement;
 
 	return (
-		// biome-ignore lint/a11y/noStaticElementInteractions: Conversation blocks own terminal mouse interaction when a caller provides it.
+		// biome-ignore lint/a11y/noStaticElementInteractions: Bordered content blocks own terminal mouse interaction when a caller provides it.
 		<box
-			border={["left"]}
+			border={border}
 			borderColor={resolvedBorderColor}
 			customBorderChars={{
 				...EmptyBorder,

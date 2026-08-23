@@ -5,8 +5,8 @@ import { useMemo, useState } from "react";
 import { stripControlCharacters } from "@/shared/display-sanitize";
 import { useToggleShortcut } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import { Spinner } from "@/shared/ui/spinner";
-import { ConversationBlock } from "./conversation-block";
 import {
 	getTreeSitterClientForTests,
 	resolveSyntaxStyle,
@@ -262,7 +262,7 @@ export function WriteBlock({
 		: `… ${remainingLines} more ${remainingLines === 1 ? "line" : "lines"} (Ctrl+O: Expand)`;
 
 	return (
-		<ConversationBlock colors={colors} paddingX={2}>
+		<BorderedContentBlock colors={colors} paddingX={2}>
 			{isRunning ? (
 				<WriteRunningStatus agent={agent} path={path} />
 			) : (
@@ -282,6 +282,6 @@ export function WriteBlock({
 				/>
 			)}
 			{canExpand ? <text fg={colors.textMuted}>{footer}</text> : null}
-		</ConversationBlock>
+		</BorderedContentBlock>
 	);
 }

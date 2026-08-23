@@ -28,7 +28,7 @@ import {
 import { ToolApprovalPanel } from "@/shared/providers/approval/ui/tool-approval-panel";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
-import { ConversationBlock } from "./conversation-block";
+import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import { EditDiffBlock } from "./edit-diff-block";
 import { MarkdownMessagePart } from "./markdown-message-part";
 import { isRenderableWritePart, WriteBlock } from "./write-block";
@@ -359,7 +359,7 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 	const hasFailed = (exitCode !== null && exitCode !== 0) || timedOut;
 
 	return (
-		<ConversationBlock
+		<BorderedContentBlock
 			blockRef={blockRef}
 			colors={colors}
 			onMouseDown={() => {
@@ -382,7 +382,7 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 			{expanded || indicator === null ? null : (
 				<text fg={colors.textMuted}>{indicator}</text>
 			)}
-		</ConversationBlock>
+		</BorderedContentBlock>
 	);
 }
 
