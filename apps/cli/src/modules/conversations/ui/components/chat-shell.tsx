@@ -97,7 +97,6 @@ export function ChatShell({
 		<box
 			flexDirection="column"
 			flexGrow={1}
-			gap={1}
 			height="100%"
 			paddingTop={0}
 			paddingX={1}
@@ -136,7 +135,7 @@ export function ChatShell({
 				flexDirection="column"
 				flexShrink={0}
 				gap={1}
-				paddingBottom={1}
+				paddingY={1}
 				width="100%"
 			>
 				<box flexShrink={0}>
