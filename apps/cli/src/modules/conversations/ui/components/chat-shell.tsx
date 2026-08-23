@@ -5,6 +5,7 @@ import { useModelPricing } from "@/modules/model-pricing";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
 import { ToolApprovalPanel } from "@/shared/providers/approval/ui/tool-approval-panel";
+import { useToggleShortcut } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
 import { ProgressBar } from "@/shared/ui/progress-bar";
@@ -58,6 +59,9 @@ export function ChatShell({
 
 		scrollboxRef.current?.scrollTo(Number.MAX_SAFE_INTEGER);
 	}, [scrollRequest]);
+	useToggleShortcut("ctrl+o", () => {
+		setScrollRequest((request) => request + 1);
+	});
 
 	// Approvals without a pending tool call (explicit `/skill` activation before
 	// the first model call) anchor to the composer instead of the timeline.
