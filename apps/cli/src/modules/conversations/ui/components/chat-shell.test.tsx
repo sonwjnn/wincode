@@ -75,6 +75,7 @@ type EditToolPart = Extract<
 
 /** Trims the border, padding, and trailing whitespace from a captured cell row. */
 const TRIM_CELL_SUFFIX_REGEX = /[│ ].*$/;
+const PROGRESS_BAR_REGEX = /[■⬝]{12}/u;
 
 const shellPart = (overrides: Partial<ShellToolPart> = {}): ShellToolPart =>
 	({
@@ -109,9 +110,16 @@ const buildTestRouter = () =>
 type ChatShellProbeProps = {
 	holder: { current: ChatShellProbeHandle | null };
 	initialMessages: CodingAgentUIMessage[];
+	isBusy?: boolean;
+	isInterruptArmed?: boolean;
 };
 
-function ChatShellProbe({ holder, initialMessages }: ChatShellProbeProps) {
+function ChatShellProbe({
+	holder,
+	initialMessages,
+	isBusy = false,
+	isInterruptArmed = false,
+}: ChatShellProbeProps) {
 	const [messages, setMessages] = useState(initialMessages);
 	useEffect(() => {
 		holder.current = { setMessages };
@@ -122,8 +130,8 @@ function ChatShellProbe({ holder, initialMessages }: ChatShellProbeProps) {
 	return (
 		<ChatShell
 			error={undefined}
-			isBusy={false}
-			isInterruptArmed={false}
+			isBusy={isBusy}
+			isInterruptArmed={isInterruptArmed}
 			messages={messages}
 			onSubmit={() => true}
 			promptHistory={[]}
@@ -136,9 +144,21 @@ type ChatShellSetup = {
 	setup: Awaited<ReturnType<typeof testRender>>;
 };
 
+type ChatShellRenderOptions = {
+	height: number;
+	width: number;
+	isBusy?: boolean;
+	isInterruptArmed?: boolean;
+};
+
 const renderChatShell = async (
 	initialMessages: CodingAgentUIMessage[],
-	{ height, width }: { height: number; width: number }
+	{
+		height,
+		width,
+		isBusy = false,
+		isInterruptArmed = false,
+	}: ChatShellRenderOptions
 ): Promise<ChatShellSetup> => {
 	const configStore = createConfigStore();
 	const workspace = process.cwd();
@@ -173,6 +193,8 @@ const renderChatShell = async (
 															<ChatShellProbe
 																holder={holder}
 																initialMessages={initialMessages}
+																isBusy={isBusy}
+																isInterruptArmed={isInterruptArmed}
 															/>
 														</RouterContextProvider>
 													</McpProvider>
@@ -298,6 +320,46 @@ const assertSummaryDiffClipping = async ({
 		setup.renderer.destroy();
 	}
 };
+
+describe("ChatShell activity footer", () => {
+	test("renders a fading progress trail and keeps the interrupt hint while busy", async () => {
+		const { setup } = await renderChatShell([], {
+			height: 12,
+			isBusy: true,
+			isInterruptArmed: true,
+			width: 100,
+		});
+
+		try {
+			await setup.renderOnce();
+			await flushUi(setup);
+			const frame = setup.captureCharFrame();
+
+			expect(frame).toMatch(PROGRESS_BAR_REGEX);
+			expect(frame).toContain("Esc");
+			expect(frame).toContain("again to interrupt");
+			expect(frame).not.toContain(process.cwd());
+
+			const { promise: trailDelay, resolve: resolveTrailDelay } =
+				Promise.withResolvers<void>();
+			setTimeout(resolveTrailDelay, 450);
+			await trailDelay;
+			await setup.renderOnce();
+			const trailSpans = setup
+				.captureSpans()
+				.lines.flatMap((line) => line.spans)
+				.filter((span) => span.text.includes("■"));
+			const trailColors = new Set(
+				trailSpans.map((span) => [...span.fg.buffer.slice(0, 3)].join(","))
+			);
+
+			expect(trailSpans.length).toBeGreaterThan(2);
+			expect(trailColors.size).toBeGreaterThan(2);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+});
 
 describe("ChatShell shell output blocks", () => {
 	test("spaces the first shell block from preceding text without widening later gaps", async () => {

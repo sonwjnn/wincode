@@ -43,6 +43,7 @@ type MessagePart = CodingAgentUIMessage["parts"][number];
 type DynamicToolPart = Extract<MessagePart, { type: "dynamic-tool" }>;
 type GrepToolPart = Extract<MessagePart, { type: "tool-grep" }>;
 type ReadToolPart = Extract<MessagePart, { type: "tool-read" }>;
+const SPINNER_FRAME_REGEX = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/u;
 
 class RecordingTreeSitterClient extends MockTreeSitterClient {
 	filetypes: string[] = [];
@@ -785,7 +786,7 @@ describe("BotMessageContent", () => {
 		}
 	});
 
-	test("renders MCP arguments while a call is running", async () => {
+	test("renders MCP arguments and a spinner while a call is running", async () => {
 		const part = {
 			input: { query: "sensitive or verbose query" },
 			state: "input-available",
@@ -794,6 +795,7 @@ describe("BotMessageContent", () => {
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
 		const frame = await renderFrame([part]);
+		expect(frame).toMatch(SPINNER_FRAME_REGEX);
 
 		expect(frame).toContain(
 			"⚙ context7_query-docs [query=sensitive or verbose query]"

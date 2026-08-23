@@ -7,7 +7,7 @@ import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-p
 import { ToolApprovalPanel } from "@/shared/providers/approval/ui/tool-approval-panel";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
-import { Spinner } from "@/shared/ui/spinner";
+import { ProgressBar } from "@/shared/ui/progress-bar";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import { summarizeSessionUsage } from "../../usage/session-usage";
 import type { ChatPromptSubmission } from "../../utils";
@@ -155,7 +155,7 @@ export function ChatShell({
 				>
 					{isBusy ? (
 						<>
-							<Spinner agent={agent} />
+							<ProgressBar agent={agent} />
 							<text>
 								<span fg={agentColor}>Esc</span>
 								<span fg={colors.textMuted}>

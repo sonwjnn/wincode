@@ -27,8 +27,12 @@ import {
 } from "@/shared/display-sanitize";
 import { ToolApprovalPanel } from "@/shared/providers/approval/ui/tool-approval-panel";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-import { getAgentColor } from "@/shared/providers/theme/themes";
+import {
+	getAgentColor,
+	type ThemeColors,
+} from "@/shared/providers/theme/themes";
 import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
+import { Spinner } from "@/shared/ui/spinner";
 import { EditDiffBlock } from "./edit-diff-block";
 import { MarkdownMessagePart } from "./markdown-message-part";
 import { isRenderableWritePart, WriteBlock } from "./write-block";
@@ -207,7 +211,7 @@ const renderFooterSeparator = (
 
 const resolveFooterItems = (
 	message: CodingAgentUIMessage,
-	colors: ReturnType<typeof useTheme>["colors"]
+	colors: ThemeColors
 ): FooterItem[] => {
 	const metadata = message.metadata;
 	if (!metadata) {
@@ -275,7 +279,9 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 			part.state === "input-available" ||
 			isRenderableWritePart(part));
 
-	let toolLine: ReactNode = <ToolCallLine colors={colors} part={part} />;
+	let toolLine: ReactNode = (
+		<ToolCallLine agent={agent} colors={colors} part={part} />
+	);
 	if (isSkillCall) {
 		toolLine = <SkillActivityRow part={part} />;
 	} else if (isShellOutput || isEditPreview || isWritePreview) {
@@ -387,10 +393,12 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 }
 
 function ToolCallLine({
+	agent,
 	colors,
 	part,
 }: {
-	colors: ReturnType<typeof useTheme>["colors"];
+	agent: AgentId;
+	colors: ThemeColors;
 	part: ToolPart;
 }) {
 	const errorText = sanitizeText(formatUnknown(part.errorText));
@@ -399,29 +407,46 @@ function ToolCallLine({
 	const label = isMcpTool ? formatMcpToolName(name) : formatToolName(name);
 	const hasFailed = part.state === "output-error";
 	const wasDenied = part.state === "output-denied";
+	const isRunning =
+		part.state === "input-streaming" || part.state === "input-available";
 	const staticSummary = formatStaticToolSummary(name, part);
+	const toolContent = isMcpTool ? (
+		<text fg={colors.tool} flexGrow={1} flexShrink={1} wrapMode="char">
+			{`⚙ ${label} [${formatMcpToolArgs(part)}]`}
+			{hasFailed && !errorText ? <span fg={colors.error}> failed</span> : null}
+			{wasDenied ? <span fg={colors.textMuted}> denied</span> : null}
+			{errorText ? <span fg={colors.error}>{` ${errorText}`}</span> : null}
+		</text>
+	) : (
+		<text fg={colors.tool} flexGrow={1} flexShrink={1} wrapMode="char">
+			{staticSummary}
+			{hasFailed && !errorText ? <span fg={colors.error}> failed</span> : null}
+			{wasDenied ? <span fg={colors.textMuted}> denied</span> : null}
+			{errorText ? <span fg={colors.error}>{` ${errorText}`}</span> : null}
+		</text>
+	);
+
+	if (!isRunning) {
+		return (
+			<box marginBottom={1} paddingX={3} width="100%">
+				{toolContent}
+			</box>
+		);
+	}
 
 	return (
-		<box marginBottom={1} paddingX={3} width="100%">
-			{isMcpTool ? (
-				<text fg={colors.tool}>
-					{`⚙ ${label} [${formatMcpToolArgs(part)}]`}
-					{hasFailed && !errorText ? (
-						<span fg={colors.error}> failed</span>
-					) : null}
-					{wasDenied ? <span fg={colors.textMuted}> denied</span> : null}
-					{errorText ? <span fg={colors.error}>{` ${errorText}`}</span> : null}
-				</text>
-			) : (
-				<text fg={colors.tool}>
-					{staticSummary}
-					{hasFailed && !errorText ? (
-						<span fg={colors.error}> failed</span>
-					) : null}
-					{wasDenied ? <span fg={colors.textMuted}> denied</span> : null}
-					{errorText ? <span fg={colors.error}>{` ${errorText}`}</span> : null}
-				</text>
-			)}
+		<box
+			alignItems="center"
+			flexDirection="row"
+			gap={1}
+			marginBottom={1}
+			paddingX={3}
+			width="100%"
+		>
+			<Spinner agent={agent} />
+			<box flexGrow={1} flexShrink={1} width="100%">
+				{toolContent}
+			</box>
 		</box>
 	);
 }
