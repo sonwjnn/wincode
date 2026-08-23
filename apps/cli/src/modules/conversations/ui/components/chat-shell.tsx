@@ -95,7 +95,6 @@ export function ChatShell({
 			flexGrow={1}
 			gap={1}
 			height="100%"
-			paddingBottom={1}
 			paddingTop={0}
 			paddingX={1}
 			width="100%"
@@ -128,55 +127,64 @@ export function ChatShell({
 					{error ? <ErrorMessage error={error} /> : null}
 				</box>
 			</scrollbox>
-			<box flexShrink={0}>
-				{conversationApprovals.map((entry) => (
-					<ToolApprovalPanel id={entry.id} key={entry.id} />
-				))}
-				<ChatTextArea
-					onSubmit={handleSubmit}
-					sessionPromptHistory={promptHistory}
-				/>
-			</box>
 			<box
-				flexDirection="row"
+				backgroundColor={colors.background}
+				flexDirection="column"
 				flexShrink={0}
-				flexWrap="wrap"
-				gap={2}
-				justifyContent="space-between"
-				paddingLeft={1}
+				gap={1}
+				paddingBottom={1}
 				width="100%"
 			>
-				<box
-					alignItems="center"
-					flexDirection="row"
-					flexGrow={1}
-					flexShrink={1}
-					gap={2}
-				>
-					{isBusy ? (
-						<>
-							<ProgressBar agent={agent} />
-							<text>
-								<span fg={agentColor}>Esc</span>
-								<span fg={colors.textMuted}>
-									{isInterruptArmed ? " again to interrupt" : " interrupt"}
-								</span>
-							</text>
-						</>
-					) : (
-						<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-							{process.cwd()}
-						</text>
-					)}
+				<box flexShrink={0}>
+					{conversationApprovals.map((entry) => (
+						<ToolApprovalPanel id={entry.id} key={entry.id} />
+					))}
+					<ChatTextArea
+						onSubmit={handleSubmit}
+						sessionPromptHistory={promptHistory}
+					/>
 				</box>
+				<box
+					flexDirection="row"
+					flexShrink={0}
+					flexWrap="wrap"
+					gap={2}
+					justifyContent="space-between"
+					paddingLeft={1}
+					width="100%"
+				>
+					<box
+						alignItems="center"
+						flexDirection="row"
+						flexGrow={1}
+						flexShrink={1}
+						gap={2}
+					>
+						{isBusy ? (
+							<>
+								<ProgressBar agent={agent} />
+								<text>
+									<span fg={agentColor}>Esc</span>
+									<span fg={colors.textMuted}>
+										{isInterruptArmed ? " again to interrupt" : " interrupt"}
+									</span>
+								</text>
+							</>
+						) : (
+							<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+								{process.cwd()}
+							</text>
+						)}
+					</box>
 
-				<box flexDirection="row" flexShrink={0} gap={2} marginLeft="auto">
-					{usage ? <SessionUsageBar summary={usage} /> : null}
-					<box flexDirection="row" flexShrink={0} gap={1}>
-						<text fg={colors.text}>tab</text>
-						<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-							agents
-						</text>
+					<box flexDirection="row" flexShrink={0} gap={2} marginLeft="auto">
+						{usage ? <SessionUsageBar summary={usage} /> : null}
+						<box flexDirection="row" flexShrink={0} gap={1}>
+							<text fg={colors.text}>tab</text>
+							<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+								agents
+							</text>
+						</box>
 					</box>
 				</box>
 			</box>

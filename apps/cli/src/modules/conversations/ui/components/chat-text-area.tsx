@@ -963,7 +963,6 @@ export function ChatTextArea({
 				colors={colors}
 				contentGap={1}
 				contentJustifyContent="center"
-				customBorderChars={{ bottomLeft: "╹" }}
 				marginBottom={0}
 				paddingX={2}
 				paddingY={1}
