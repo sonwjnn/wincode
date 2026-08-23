@@ -11,14 +11,7 @@ const PROGRESS_FORWARD_POSITIONS = [
 ] as const;
 const PROGRESS_BACKWARD_POSITIONS = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0] as const;
 const PROGRESS_HOLD_OFFSETS = [1, 2, 3, 4, 5, 6] as const;
-const PROGRESS_TRAIL_STYLES = [
-	{ alpha: 1, brightness: 1 },
-	{ alpha: 0.9, brightness: 1.15 },
-	{ alpha: 0.65, brightness: 1 },
-	{ alpha: 0.42, brightness: 1 },
-	{ alpha: 0.27, brightness: 1 },
-	{ alpha: 0.18, brightness: 1 },
-] as const;
+const PROGRESS_TRAIL_BRIGHTNESSES = [1, 1.15, 0.85, 0.65, 0.48, 0.32] as const;
 const PROGRESS_ACTIVE_GLYPH = "■";
 const PROGRESS_INACTIVE_GLYPH = "⬝";
 
@@ -40,7 +33,8 @@ const createProgressFrame = (
 				? headPosition - position
 				: position - headPosition;
 		const trailIndex = distance + fadeOffset;
-		const isActive = distance >= 0 && trailIndex < PROGRESS_TRAIL_STYLES.length;
+		const isActive =
+			distance >= 0 && trailIndex < PROGRESS_TRAIL_BRIGHTNESSES.length;
 
 		return {
 			position,
@@ -74,16 +68,15 @@ export function ProgressBar({ agent }: Props) {
 	const agentColor = getAgentColor(colors, agent);
 	const trailColors = useMemo(() => {
 		const baseColor = RGBA.fromHex(agentColor);
-		return PROGRESS_TRAIL_STYLES.map(({ alpha, brightness }) =>
+		return PROGRESS_TRAIL_BRIGHTNESSES.map((brightness) =>
 			RGBA.fromValues(
 				Math.min(1, baseColor.r * brightness),
 				Math.min(1, baseColor.g * brightness),
 				Math.min(1, baseColor.b * brightness),
-				alpha
+				1
 			)
 		);
 	}, [agentColor]);
-
 	useEffect(() => {
 		const timer = setInterval(() => {
 			setFrameIndex((index) => (index + 1) % PROGRESS_FRAMES.length);

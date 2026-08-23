@@ -67,7 +67,7 @@ OpenCode also has a compact reusable spinner using the same ten Braille frames a
 
 ## 4. Wincode implementation — directly observed
 
-Wincode's revised component uses a fixed width of twelve and an `80 ms` interval, moving a six-cell square trail across the bar and back with endpoint fade holds ([source](../../apps/cli/src/shared/ui/progress-bar.tsx)). Agent-colored `■` cells use OpenCode's six-step treatment—full-opacity head, a `0.9` alpha/`1.15` brightness bloom, then `0.65`, `0.42`, `0.27`, and `0.18` alpha—over a muted `⬝` track. The 35-frame cycle preserves Prime Agent's economical cadence while reproducing OpenCode's alpha/color-trail principle.
+Wincode's revised component uses a fixed width of twelve and an `80 ms` interval, moving a six-cell square trail across the bar and back with endpoint fade holds ([source](../../apps/cli/src/shared/ui/progress-bar.tsx)). Agent-colored `■` cells use an opaque same-hue brightness trail—head at `1.0`, bloom at `1.15`, then `0.85`, `0.65`, `0.48`, and `0.32`—over a muted `⬝` track. Using opaque shades instead of increasingly transparent alpha avoids compositing the tail toward gray terminal backgrounds while preserving the agent hue.
 
 The chat footer renders the progress component only while busy and follows it with an agent-colored `Esc` plus a muted interrupt hint ([source](../../apps/cli/src/modules/conversations/ui/components/chat-shell.tsx#L156-L166)). This textual hint preserves meaning independently of color or motion.
 
