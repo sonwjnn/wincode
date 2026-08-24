@@ -1,5 +1,5 @@
 import { expect, mock, test } from "bun:test";
-import type { ScrollBoxRenderable } from "@opentui/core";
+import type { ScrollBoxRenderable, Selection } from "@opentui/core";
 import { testRender } from "@opentui/react/test-utils";
 import { useEffect } from "react";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -308,6 +308,85 @@ test("abort settles separately from rejecting one tool", async () => {
 	expect(actions.abort).toHaveBeenCalledTimes(1);
 	expect(actions.reject).not.toHaveBeenCalled();
 	expect(setup.captureCharFrame()).toContain("aborted");
+	setup.renderer.destroy();
+});
+
+test("confirming always on the head does not leak the overlay into the next request", async () => {
+	const firstActions = makeActions();
+	const secondActions = makeActions();
+	const setup = await testRender(
+		<ThemeProvider>
+			<KeyboardLayerProvider>
+				<ApprovalPanelsProvider>
+					<Register actions={firstActions} request={makeRequest()} />
+					<Register
+						actions={secondActions}
+						request={makeRequest({
+							description: "Second queued approval.",
+							toolCallId: "call-2",
+						})}
+					/>
+					<PendingApprovalDock />
+				</ApprovalPanelsProvider>
+			</KeyboardLayerProvider>
+		</ThemeProvider>,
+		{ height: 40, width: 120 }
+	);
+	await setup.renderOnce();
+	await flushUi(setup);
+
+	// Arm the overlay on the head request and confirm the always grant.
+	await hoverAction(setup, "Always allow");
+	setup.mockInput.pressEnter();
+	await flushUi(setup);
+	expect(setup.captureCharFrame()).toContain(
+		"Always allow lets this tool run without asking again."
+	);
+	setup.mockInput.pressEnter();
+	await flushUi(setup);
+	await flushUi(setup);
+
+	expect(firstActions.allow).toHaveBeenCalledWith(true);
+
+	// The next queued request presents the plain permission panel again: the
+	// overlay must not carry over to a request the user never armed.
+	const frame = setup.captureCharFrame();
+	expect(frame).toContain("Second queued approval.");
+	expect(frame).toContain("Permission required");
+	expect(frame).toContain("Allow once");
+	expect(frame).not.toContain("Always allow lets this tool run");
+	setup.renderer.destroy();
+});
+
+test("micro-drag over an action button never selects or copies", async () => {
+	const { setup } = await renderPanel(makeRequest(), makeActions());
+	const selections: string[] = [];
+	(
+		setup.renderer as unknown as {
+			on(event: string, listener: (selection: Selection) => void): void;
+		}
+	).on("selection", (selection) => {
+		selections.push(selection.getSelectedText());
+	});
+
+	// A sloppy click drifts across the label cells; the label must not start a
+	// selection, so the copy-on-select surface never sees it.
+	const rows = setup.captureCharFrame().split("\n");
+	const row = rows.findIndex(
+		(candidate) =>
+			candidate.includes("Always allow") && candidate.includes("Reject")
+	);
+	const column = rows[row]?.indexOf("Always allow") ?? -1;
+	expect(row).toBeGreaterThanOrEqual(0);
+	expect(column).toBeGreaterThanOrEqual(0);
+
+	await setup.mockMouse.moveTo(column, row);
+	await setup.mockMouse.pressDown(column, row);
+	await setup.mockMouse.moveTo(column + 2, row);
+	await setup.mockMouse.release(column + 2, row);
+	await flushUi(setup);
+
+	expect(selections).toEqual([]);
 	setup.renderer.destroy();
 });
 

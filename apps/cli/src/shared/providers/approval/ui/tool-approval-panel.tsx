@@ -192,6 +192,7 @@ export function PendingApprovalDock({
 			<box width="100%">
 				<ToolApprovalPanel
 					id={pendingEntry.id}
+					key={pendingEntry.id}
 					pendingCount={pendingEntries.length}
 					position={1}
 				/>
@@ -542,6 +543,7 @@ function ApprovalPendingPanel({
 									>
 										<text
 											fg={isSelected ? selectedTextColor : colors.textMuted}
+											selectable={false}
 										>
 											{option.label}
 										</text>
@@ -700,7 +702,10 @@ function ConfirmAlwaysOverlay({
 								}}
 								paddingX={1}
 							>
-								<text fg={isSelected ? selectedTextColor : colors.textMuted}>
+								<text
+									fg={isSelected ? selectedTextColor : colors.textMuted}
+									selectable={false}
+								>
 									{option.label}
 								</text>
 							</box>
