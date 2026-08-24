@@ -102,7 +102,11 @@ const formatMcpToolArgs = (part: ToolPart): string => {
 		: `${formatted.slice(0, MAX_TOOL_ARGUMENTS_LENGTH)}…`;
 };
 
-const formatStaticToolSummary = (name: string, part: ToolPart): string => {
+const formatStaticToolSummary = (
+	name: string,
+	part: ToolPart,
+	isRunning = false
+): string => {
 	const input = getToolInputRecord(part);
 	const path =
 		typeof input.path === "string"
@@ -125,16 +129,16 @@ const formatStaticToolSummary = (name: string, part: ToolPart): string => {
 		return `$ ${command}`;
 	}
 	if (name === "read") {
-		return `→ Read${pathSuffix}`;
+		return `${isRunning ? "" : "→ "}Read${pathSuffix}`;
 	}
 	if (name === "write") {
-		return `→ Write${pathSuffix}`;
+		return `${isRunning ? "" : "→ "}Write${pathSuffix}`;
 	}
 	if (name === "edit") {
-		return `→ Edit${pathSuffix}`;
+		return `${isRunning ? "" : "→ "}Edit${pathSuffix}`;
 	}
 	if (name === "list") {
-		return `→ List ${pathOrCurrentDirectory}`;
+		return `${isRunning ? "" : "→ "}List ${pathOrCurrentDirectory}`;
 	}
 	return `✱ ${formatToolName(name)} ${formatToolArgumentValue(part.input)}`;
 };
@@ -392,6 +396,16 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 	);
 }
 
+const formatApprovalErrorText = (
+	errorText: string,
+	wasDenied: boolean
+): string => {
+	if (!(wasDenied || errorText.toLowerCase().includes("was not approved"))) {
+		return errorText;
+	}
+	return wasDenied ? "Rejected" : "Aborted";
+};
+
 function ToolCallLine({
 	agent,
 	colors,
@@ -406,10 +420,12 @@ function ToolCallLine({
 	const name = getToolName(part);
 	const label = isMcpTool ? formatMcpToolName(name) : formatToolName(name);
 	const hasFailed = part.state === "output-error";
+	const isReadTool = name === "read";
 	const wasDenied = part.state === "output-denied";
 	const isRunning =
 		part.state === "input-streaming" || part.state === "input-available";
-	const staticSummary = formatStaticToolSummary(name, part);
+	const displayErrorText = formatApprovalErrorText(errorText, wasDenied);
+	const staticSummary = formatStaticToolSummary(name, part, isRunning);
 	const toolContent = isMcpTool ? (
 		<text fg={colors.tool} flexGrow={1} flexShrink={1} wrapMode="char">
 			{`⚙ ${label} [${formatMcpToolArgs(part)}]`}
@@ -420,9 +436,9 @@ function ToolCallLine({
 	) : (
 		<text fg={colors.tool} flexGrow={1} flexShrink={1} wrapMode="char">
 			{staticSummary}
-			{hasFailed && !errorText ? <span fg={colors.error}> failed</span> : null}
-			{wasDenied ? <span fg={colors.textMuted}> denied</span> : null}
-			{errorText ? <span fg={colors.error}>{` ${errorText}`}</span> : null}
+			{displayErrorText ? (
+				<span fg={colors.error}>{` ${displayErrorText}`}</span>
+			) : null}
 		</text>
 	);
 
@@ -433,21 +449,33 @@ function ToolCallLine({
 			</box>
 		);
 	}
+	if (isMcpTool || isReadTool) {
+		return (
+			<box
+				alignItems="center"
+				flexDirection="row"
+				gap={1}
+				marginBottom={1}
+				paddingX={3}
+				width="100%"
+			>
+				<Spinner agent={agent} />
+				<box flexGrow={1} flexShrink={1} width="100%">
+					{toolContent}
+				</box>
+			</box>
+		);
+	}
 
 	return (
-		<box
-			alignItems="center"
-			flexDirection="row"
-			gap={1}
-			marginBottom={1}
-			paddingX={3}
-			width="100%"
-		>
-			<Spinner agent={agent} />
-			<box flexGrow={1} flexShrink={1} width="100%">
-				{toolContent}
+		<BorderedContentBlock colors={colors} paddingX={2}>
+			<box alignItems="center" flexDirection="row" gap={1} width="100%">
+				<Spinner agent={agent} />
+				<box flexGrow={1} flexShrink={1} width="100%">
+					{toolContent}
+				</box>
 			</box>
-		</box>
+		</BorderedContentBlock>
 	);
 }
 

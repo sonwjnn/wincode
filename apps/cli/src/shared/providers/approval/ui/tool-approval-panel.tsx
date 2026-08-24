@@ -157,8 +157,7 @@ function ApprovalWaitingCard({
 							"Safety ceiling: the governing Tool Permission config is malformed, so every action must be approved manually."}
 					</text>
 				)}
-				<box flexDirection="row" gap={1} paddingLeft={2}>
-					<text fg={colors.textMuted}>→</text>
+				<box flexDirection="row" paddingLeft={2}>
 					<text
 						attributes={TextAttributes.DIM}
 						fg={colors.textMuted}
@@ -400,8 +399,8 @@ function ApprovalPendingPanel({
 							"Safety ceiling: the governing Tool Permission config is malformed, so every action must be approved manually."}
 					</text>
 				)}
-				<box flexDirection="row" gap={1} paddingLeft={2}>
-					<text fg={colors.textMuted}>→</text>
+				<box flexDirection="row" paddingLeft={2}>
+					<text fg={colors.textMuted}>{"→ "}</text>
 					<text fg={colors.text} wrapMode="word">
 						{formatApprovalHeader(request)}
 					</text>

@@ -803,6 +803,19 @@ describe("BotMessageContent", () => {
 		);
 		expect(frame).not.toContain("running");
 	});
+	test("hides static tool arrow icons while a call is running", async () => {
+		const part = {
+			input: { path: "README.md" },
+			state: "input-available",
+			toolCallId: "call-running-read",
+			type: "tool-read",
+		} satisfies ReadToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toMatch(SPINNER_FRAME_REGEX);
+		expect(frame).toContain("Read README.md");
+		expect(frame).not.toContain("→ Read README.md");
+	});
 
 	test("renders failed MCP calls without runtime details", async () => {
 		const part = {
@@ -826,7 +839,7 @@ describe("BotMessageContent", () => {
 	test("preserves static tool names and arguments", async () => {
 		const part = {
 			input: { path: "README.md" },
-			state: "input-available",
+			state: "output-available",
 			toolCallId: "call-4",
 			type: "tool-read",
 		} satisfies ReadToolPart;
@@ -985,7 +998,7 @@ describe("BotMessageContent", () => {
 	test("renders repeated tool call ids", async () => {
 		const part = {
 			input: { path: "README.md" },
-			state: "input-available",
+			state: "output-available",
 			toolCallId: "duplicate-call",
 			type: "tool-read",
 		} satisfies ReadToolPart;
@@ -1051,7 +1064,8 @@ describe("BotMessageContent", () => {
 		);
 
 		const frame = setup.captureCharFrame();
-		expect(frame).toContain("→ Read README.md");
+		expect(frame).toContain("Read README.md");
+		expect(frame).not.toContain("→ Read README.md");
 		expect(frame).not.toContain("Permission required");
 		expect(frame).not.toContain("Allow once");
 		expect(frame).not.toContain("Always allow");
