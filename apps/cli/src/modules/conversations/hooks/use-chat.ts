@@ -15,7 +15,11 @@ import {
 	sanitizeInterruptedMessagesForModel,
 } from "@wincode/ai";
 import { createUserMessage } from "@wincode/ai/client";
-import type { ChatAddToolOutputFunction, FileUIPart } from "ai";
+import {
+	type ChatAddToolOutputFunction,
+	type FileUIPart,
+	isToolUIPart,
+} from "ai";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAgentRegistry } from "@/modules/agents";
 import { useConnections } from "@/modules/connections";
@@ -120,19 +124,57 @@ export const findCurrentTurnAssistantIndex = (
 
 	return assistantIndex > userIndex ? assistantIndex : -1;
 };
+/**
+ * `chat.stop()` can run before the asynchronous approval gate emits its
+ * output-error part. Keep the approved-input part terminal so that late output
+ * can update it instead of finding that interruption already removed it.
+ */
+const INTERRUPTED_TOOL_ERROR = "Tool call interrupted";
+
+const preserveInterruptedToolCall = (
+	message: CodingAgentUIMessage,
+	toolCallId: string
+): CodingAgentUIMessage => {
+	if (message.role !== "assistant" || message.metadata?.interrupted !== true) {
+		return message;
+	}
+	const parts = message.parts.map(
+		(part): CodingAgentUIMessage["parts"][number] => {
+			if (
+				!isToolUIPart(part) ||
+				part.toolCallId !== toolCallId ||
+				part.state !== "input-available"
+			) {
+				return part;
+			}
+			return {
+				...part,
+				errorText: INTERRUPTED_TOOL_ERROR,
+				state: "output-error",
+			};
+		}
+	);
+	return { ...message, parts };
+};
+
 export const sanitizeInterruptedMessagesForConversation = (
-	messages: CodingAgentUIMessage[]
+	messages: CodingAgentUIMessage[],
+	preserveToolCallId?: string
 ): CodingAgentUIMessage[] =>
 	messages.flatMap((message) => {
-		const sanitized = sanitizeInterruptedMessagesForModel([message]);
+		const preparedMessage =
+			preserveToolCallId === undefined
+				? message
+				: preserveInterruptedToolCall(message, preserveToolCallId);
+		const sanitized = sanitizeInterruptedMessagesForModel([preparedMessage]);
 		if (sanitized.length > 0) {
 			return sanitized;
 		}
 		if (
-			message.role === "assistant" &&
-			message.metadata?.interrupted === true
+			preparedMessage.role === "assistant" &&
+			preparedMessage.metadata?.interrupted === true
 		) {
-			return [{ ...message, parts: [] }];
+			return [{ ...preparedMessage, parts: [] }];
 		}
 		return [];
 	});
@@ -259,7 +301,9 @@ export function useChat(
 	const resolvePermissionRef = useRef(resolvePermission);
 	resolvePermissionRef.current = resolvePermission;
 	const approvalAbortHandledRef = useRef(false);
-	const abortApprovalTurnRef = useRef<() => void>(() => undefined);
+	const abortApprovalTurnRef = useRef<(toolCallId: string) => void>(
+		() => undefined
+	);
 	// Rebuild the conversation-scoped gate when its conversation or authorization
 	// dependencies change, rejecting pending requests from the previous scope.
 	const toolGateState = useMemo(() => {
@@ -270,7 +314,7 @@ export function useChat(
 				approvalQueue,
 				onAbort: (request) => {
 					if (request.toolCallId !== undefined) {
-						abortApprovalTurnRef.current();
+						abortApprovalTurnRef.current(request.toolCallId);
 					}
 				},
 				openApproval,
@@ -396,9 +440,9 @@ export function useChat(
 	};
 
 	const finalizeAndPersistMessages = (messages: CodingAgentUIMessage[]) => {
-		// An interrupted/cut-off turn drops its unfinished tool calls (no result
-		// ever lands for them): persisting them would restore a stuck running
-		// tool block on the next session load.
+		// An interrupted/cut-off turn drops tool calls without a terminal output.
+		// An aborted approval is converted to output-error before this step, so
+		// its late result remains replay-safe.
 		const finalizedMessages = sanitizeInterruptedMessagesForConversation(
 			finalizeAssistantMessages(messages)
 		);
@@ -462,7 +506,7 @@ export function useChat(
 	};
 	setMessagesRef.current = chat.setMessages;
 
-	const interruptLatestAssistantMessage = () => {
+	const interruptLatestAssistantMessage = (preserveToolCallId?: string) => {
 		autoSendGate.disable();
 		const startedAt = requestStartedAtRef.current;
 		const responseTimeMs =
@@ -493,23 +537,26 @@ export function useChat(
 				variant: variantRef.current,
 			}),
 		};
-		// Drop the in-flight tool calls of the interrupted turn so the UI never
-		// shows a stuck running block and the next reload cannot restore one.
-		const sanitizedMessages =
-			sanitizeInterruptedMessagesForConversation(nextMessages);
+		// Drop unfinished tool calls from the interrupted turn. The approval call
+		// identified above is converted to a terminal fallback so its late
+		// output-error can replace it after chat.stop() settles.
+		const sanitizedMessages = sanitizeInterruptedMessagesForConversation(
+			nextMessages,
+			preserveToolCallId
+		);
 
 		setMessagesRef.current?.(sanitizedMessages);
 		persistMessages(sanitizedMessages);
 		chat.stop();
 	};
-	const abortApprovalTurn = () => {
+	const abortApprovalTurn = (toolCallId: string) => {
 		if (approvalAbortHandledRef.current) {
 			return;
 		}
 		approvalAbortHandledRef.current = true;
 		toolGateState.approvalQueue.rejectAll();
 		closeApprovals();
-		interruptLatestAssistantMessage();
+		interruptLatestAssistantMessage(toolCallId);
 	};
 	abortApprovalTurnRef.current = abortApprovalTurn;
 

@@ -338,7 +338,7 @@ describe("useChat helpers", () => {
 		});
 	});
 
-	test("keeps interrupted metadata when an aborted approval was the only assistant part", () => {
+	test("keeps an aborted approval visible for its late tool error", () => {
 		const interruptedAssistant = {
 			id: "assistant-approval",
 			metadata: { interrupted: true },
@@ -351,20 +351,24 @@ describe("useChat helpers", () => {
 				},
 			],
 			role: "assistant",
-		} as unknown as CodingAgentUIMessage;
+		} satisfies CodingAgentUIMessage;
 
-		expect(
-			sanitizeInterruptedMessagesForConversation([
-				userMessage,
-				interruptedAssistant,
-			])
-		).toEqual([
-			userMessage,
-			{
-				...interruptedAssistant,
-				parts: [],
-			},
-		]);
+		const [, sanitized] = sanitizeInterruptedMessagesForConversation(
+			[userMessage, interruptedAssistant],
+			"call-read"
+		);
+
+		expect(sanitized).toMatchObject({
+			id: "assistant-approval",
+			metadata: { interrupted: true },
+			parts: [
+				{
+					errorText: "Tool call interrupted",
+					state: "output-error",
+					toolCallId: "call-read",
+				},
+			],
+		});
 	});
 
 	test("refreshes billing only after hosted completion", () => {
