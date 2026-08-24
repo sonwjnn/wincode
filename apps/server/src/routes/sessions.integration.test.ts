@@ -33,7 +33,6 @@ mock.module("@wincode/ai", () => ({
 		instructions: z.string(),
 		arguments: z.string(),
 	}),
-	codingAgentDataSchemas: {},
 	mcpToolManifestSchema: z
 		.array(
 			z
@@ -698,7 +697,7 @@ describe("POST /:id/chat (transport-only)", () => {
 		).mockClear();
 		const config = () =>
 			({
-				fundedRequestInputTokenLimit: 1000,
+				fundedRequestInputTokenLimit: 2000,
 				fundedRequestOutputTokenLimit: 8,
 				fundedRequestStepLimit: 3,
 				fundedRequestTimeWindowSeconds: 5,

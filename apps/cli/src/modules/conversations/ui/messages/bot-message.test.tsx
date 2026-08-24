@@ -117,6 +117,7 @@ const renderFrameWithApproval = async (
 		holder.api = useApprovalPanels();
 		useEffect(() => {
 			holder.api?.add(request, {
+				abort: () => undefined,
 				allow: () => undefined,
 				cancel: () => undefined,
 				reject: () => undefined,
@@ -1028,7 +1029,7 @@ describe("BotMessageContent", () => {
 		expect(frame).not.toContain("hidden");
 	});
 
-	test("renders an inline approval panel under the pending tool call", async () => {
+	test("keeps pending approval controls out of the timeline", async () => {
 		const part = {
 			input: { path: "README.md" },
 			state: "input-available",
@@ -1051,12 +1052,10 @@ describe("BotMessageContent", () => {
 
 		const frame = setup.captureCharFrame();
 		expect(frame).toContain("→ Read README.md");
-		expect(frame).toContain(
-			"tool: read · resource: README.md — Read a UTF-8 text file inside the workspace."
-		);
-		expect(frame).toContain("Allow once");
-		expect(frame).toContain("Always allow");
-		expect(frame).toContain("Reject");
+		expect(frame).not.toContain("Permission required");
+		expect(frame).not.toContain("Allow once");
+		expect(frame).not.toContain("Always allow");
+		expect(frame).not.toContain("Reject");
 		setup.renderer.destroy();
 	});
 

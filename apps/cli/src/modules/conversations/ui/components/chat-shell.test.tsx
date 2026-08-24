@@ -2,13 +2,17 @@
 // enabled, so tests opt out before any app module evaluates the environment.
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { RGBA, type ScrollBoxRenderable } from "@opentui/core";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import { useEffect, useState } from "react";
+import type {
+	ToolApprovalActions,
+	ToolApprovalRequest,
+} from "@/shared/providers/approval/types";
 
 const { testRender } = await import("@opentui/react/test-utils");
 const {
@@ -29,7 +33,7 @@ const { createPermissionService, PermissionServiceProvider } = await import(
 const { PromptConfigProvider } = await import(
 	"@/modules/prompt-settings/context/prompt-config-provider"
 );
-const { ApprovalPanelsProvider } = await import(
+const { ApprovalPanelsProvider, useApprovalPanels } = await import(
 	"@/shared/providers/approval/approval-panels-provider"
 );
 const { ConfigProvider } = await import("@/shared/config/config-provider");
@@ -98,6 +102,10 @@ const lines = (prefix: string, count: number): string =>
 	);
 
 type ChatShellProbeHandle = {
+	addApproval: (
+		request: ToolApprovalRequest,
+		actions: ToolApprovalActions
+	) => string;
 	setMessages: (messages: CodingAgentUIMessage[]) => void;
 };
 
@@ -120,13 +128,14 @@ function ChatShellProbe({
 	isBusy = false,
 	isInterruptArmed = false,
 }: ChatShellProbeProps) {
+	const { add: addApproval } = useApprovalPanels();
 	const [messages, setMessages] = useState(initialMessages);
 	useEffect(() => {
-		holder.current = { setMessages };
+		holder.current = { addApproval, setMessages };
 		return () => {
 			holder.current = null;
 		};
-	}, [holder]);
+	}, [addApproval, holder]);
 	return (
 		<ChatShell
 			error={undefined}
@@ -320,6 +329,130 @@ const assertSummaryDiffClipping = async ({
 		setup.renderer.destroy();
 	}
 };
+
+describe("ChatShell approval dock", () => {
+	test("replaces the composer with pending controls and leaves one audit line", async () => {
+		const part = shellPart({
+			input: { command: "pwd" },
+			output: undefined,
+			state: "input-available",
+			toolCallId: "call-approval-sticky",
+		});
+		const { holder, setup } = await renderChatShell(
+			[assistantMessage([part])],
+			{ height: 18, width: 120 }
+		);
+
+		try {
+			await flushUi(setup);
+			const cancelFirstApproval = mock(() => undefined);
+			const firstActions = {
+				abort: () => undefined,
+				allow: () => undefined,
+				cancel: cancelFirstApproval,
+				reject: () => undefined,
+			};
+			holder.current?.addApproval(
+				{
+					description: "First queued approval.",
+					identity: [
+						{ label: "tool", value: "shell" },
+						{ label: "resource", value: "pwd" },
+					],
+					input: { command: "pwd" },
+					toolCallId: "call-approval-sticky",
+				},
+				firstActions
+			);
+			holder.current?.addApproval(
+				{
+					description: "Second queued approval.",
+					identity: [
+						{ label: "tool", value: "shell" },
+						{ label: "resource", value: "whoami" },
+					],
+					input: { command: "whoami" },
+					toolCallId: "call-approval-second",
+				},
+				{
+					abort: () => undefined,
+					allow: () => undefined,
+					cancel: () => undefined,
+					reject: () => undefined,
+				}
+			);
+			await flushUi(setup);
+
+			let frame = setup.captureCharFrame();
+			// Minimized: the dock replaces the composer AND the session footer,
+			// showing only the queue head.
+			expect(frame).toContain("Permission required");
+			expect(frame).not.toContain("Ask anything");
+			expect(frame).not.toContain("tab agents");
+			expect(frame.match(/Permission required/gu)).toHaveLength(1);
+			expect(frame).toContain("1 of 2");
+			expect(frame).toContain("First queued approval.");
+			expect(frame).not.toContain("Second queued approval.");
+			expect(frame).toContain("ctrl+f fullscreen");
+			expect(
+				setup.renderer.root.findDescendantById("conversation-scrollbox")
+			).toBeDefined();
+
+			setup.mockInput.pressKey("f", { ctrl: true });
+			await flushUi(setup);
+			frame = setup.captureCharFrame();
+			// Fullscreen: the active head fills the viewport and the rest of the
+			// queue stacks below it in a hidden-scrollbar scrollbox; the
+			// conversation area is replaced.
+			expect(frame).toContain("ctrl+f minimize");
+			expect(frame).toContain("First queued approval.");
+			expect(frame).not.toContain("tab agents");
+			expect(
+				setup.renderer.root.findDescendantById("conversation-scrollbox")
+			).toBeUndefined();
+			const stackScrollbox = setup.renderer.root.findDescendantById(
+				"approval-stack-scrollbox"
+			) as ScrollBoxRenderable | undefined;
+			expect(stackScrollbox).toBeDefined();
+			expect(
+				frame.split("\n").findIndex((row) => row.includes("Allow once"))
+			).toBeGreaterThan(12);
+			stackScrollbox?.scrollTo(Number.MAX_SAFE_INTEGER);
+			await setup.renderOnce();
+			frame = setup.captureCharFrame();
+			expect(frame).toContain("Second queued approval.");
+			expect(frame).toContain("2 of 2");
+
+			setup.mockInput.pressKey("f", { ctrl: true });
+			await flushUi(setup);
+			frame = setup.captureCharFrame();
+			expect(frame).toContain("ctrl+f fullscreen");
+			expect(frame).toContain("First queued approval.");
+			expect(frame).not.toContain("Second queued approval.");
+			expect(
+				setup.renderer.root.findDescendantById("conversation-scrollbox")
+			).toBeDefined();
+			expect(cancelFirstApproval).not.toHaveBeenCalled();
+			setup.mockInput.pressEnter();
+			await flushUi(setup);
+			const nextFrame = setup.captureCharFrame();
+			expect(nextFrame).toContain("Second queued approval.");
+			expect(nextFrame).not.toContain("1 of 2");
+			expect(nextFrame).not.toContain("First queued approval.");
+			expect(nextFrame).not.toContain("Ask anything");
+
+			setup.mockInput.pressEnter();
+			await flushUi(setup);
+			const settledFrame = setup.captureCharFrame();
+			expect(settledFrame).toContain("allowed once");
+			expect(settledFrame).not.toContain("Permission required");
+			expect(settledFrame).toContain("Ask anything");
+			expect(settledFrame).toContain("tab agents");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+});
 
 describe("ChatShell activity footer", () => {
 	test("renders a fading progress trail and keeps the interrupt hint while busy", async () => {

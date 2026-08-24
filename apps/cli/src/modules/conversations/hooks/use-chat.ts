@@ -120,6 +120,23 @@ export const findCurrentTurnAssistantIndex = (
 
 	return assistantIndex > userIndex ? assistantIndex : -1;
 };
+export const sanitizeInterruptedMessagesForConversation = (
+	messages: CodingAgentUIMessage[]
+): CodingAgentUIMessage[] =>
+	messages.flatMap((message) => {
+		const sanitized = sanitizeInterruptedMessagesForModel([message]);
+		if (sanitized.length > 0) {
+			return sanitized;
+		}
+		if (
+			message.role === "assistant" &&
+			message.metadata?.interrupted === true
+		) {
+			return [{ ...message, parts: [] }];
+		}
+		return [];
+	});
+
 export const findCurrentTurnInterruptTargetIndex = (
 	messages: CodingAgentUIMessage[]
 ): number => {
@@ -241,6 +258,8 @@ export function useChat(
 	resolveMcpPolicyRef.current = resolveMcpPolicy;
 	const resolvePermissionRef = useRef(resolvePermission);
 	resolvePermissionRef.current = resolvePermission;
+	const approvalAbortHandledRef = useRef(false);
+	const abortApprovalTurnRef = useRef<() => void>(() => undefined);
 	// Rebuild the conversation-scoped gate when its conversation or authorization
 	// dependencies change, rejecting pending requests from the previous scope.
 	const toolGateState = useMemo(() => {
@@ -249,6 +268,11 @@ export function useChat(
 			approvalQueue,
 			gate: createToolGate({
 				approvalQueue,
+				onAbort: (request) => {
+					if (request.toolCallId !== undefined) {
+						abortApprovalTurnRef.current();
+					}
+				},
 				openApproval,
 				resolvePermission: () => resolvePermissionRef.current(),
 				sandbox,
@@ -375,7 +399,7 @@ export function useChat(
 		// An interrupted/cut-off turn drops its unfinished tool calls (no result
 		// ever lands for them): persisting them would restore a stuck running
 		// tool block on the next session load.
-		const finalizedMessages = sanitizeInterruptedMessagesForModel(
+		const finalizedMessages = sanitizeInterruptedMessagesForConversation(
 			finalizeAssistantMessages(messages)
 		);
 		setMessagesRef.current?.(finalizedMessages);
@@ -471,12 +495,23 @@ export function useChat(
 		};
 		// Drop the in-flight tool calls of the interrupted turn so the UI never
 		// shows a stuck running block and the next reload cannot restore one.
-		const sanitizedMessages = sanitizeInterruptedMessagesForModel(nextMessages);
+		const sanitizedMessages =
+			sanitizeInterruptedMessagesForConversation(nextMessages);
 
 		setMessagesRef.current?.(sanitizedMessages);
 		persistMessages(sanitizedMessages);
 		chat.stop();
 	};
+	const abortApprovalTurn = () => {
+		if (approvalAbortHandledRef.current) {
+			return;
+		}
+		approvalAbortHandledRef.current = true;
+		toolGateState.approvalQueue.rejectAll();
+		closeApprovals();
+		interruptLatestAssistantMessage();
+	};
+	abortApprovalTurnRef.current = abortApprovalTurn;
 
 	const createTurnSkillExecution = async (): Promise<SkillExecution> => {
 		const permission = await resolvePermission();
@@ -601,6 +636,7 @@ export function useChat(
 		skill,
 		messageId,
 	}: SubmitChatParams): Promise<SubmitChatOutcome> => {
+		approvalAbortHandledRef.current = false;
 		autoSendGate.enable();
 		agentRef.current = agent;
 		resolvedAgentRef.current = resolvedAgent;

@@ -1,14 +1,19 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { defaultWorkspaceSandbox } from "../../workspace";
 import { truncateUtf8 } from "../output-bounds";
 import type { ReadInput, ReadOutput } from "./schema";
 
 const READ_CONTENT_MAX_BYTES = 6000;
 
-export const runReadTool = async (input: ReadInput): Promise<ReadOutput> => {
-	const resolvedPath = await defaultWorkspaceSandbox.resolveExistingPath(
-		input.path
-	);
+export const runReadTool = async (
+	input: ReadInput,
+	options: { allowExternalPath?: boolean } = {}
+): Promise<ReadOutput> => {
+	const resolvedPath =
+		options.allowExternalPath === true && path.isAbsolute(input.path)
+			? input.path
+			: await defaultWorkspaceSandbox.resolveExistingPath(input.path);
 	const content = await readFile(resolvedPath, "utf8");
 
 	const truncatedContent = truncateUtf8(content, READ_CONTENT_MAX_BYTES);

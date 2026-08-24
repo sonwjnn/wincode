@@ -1,23 +1,18 @@
 /**
- * The outcome of one approval request. `allow` runs the tool once, and when
- * `remember` is set the caller also records a temporary grant. `reject` blocks
- * the tool; `feedback` is the optional correction the user typed, returned to
- * the Agent for the selected request only.
+ * The outcome of one approval request. Reject blocks only that request. Abort
+ * identifies the request whose user action must interrupt the active turn.
  */
 export type ApprovalOutcome =
+	| { decision: "abort" }
 	| { decision: "allow"; remember: boolean }
 	| { decision: "reject"; feedback?: string };
 
-/**
- * A handle to one enqueued approval. `outcome` settles when the request is
- * resolved. `allow` and `rejectSelf` settle only this request (used by the
- * dialog bound to it and by its unmount cleanup), so resolving one dialog never
- * disturbs a sibling dialog for a parallel tool call.
- */
+/** A handle settles exactly one queued approval request. */
 export type ApprovalHandle = {
 	outcome: Promise<ApprovalOutcome>;
+	abort(): void;
 	allow(remember: boolean): void;
-	rejectSelf(): void;
+	reject(feedback?: string): void;
 };
 
 /**
@@ -62,12 +57,20 @@ export function createApprovalQueue<Request>(): ApprovalQueue<Request> {
 				pending.add(entry);
 			});
 			return {
+				abort() {
+					settle(entry, { decision: "abort" });
+				},
 				outcome,
 				allow(remember) {
 					settle(entry, { decision: "allow", remember });
 				},
-				rejectSelf() {
-					settle(entry, { decision: "reject" });
+				reject(feedback) {
+					settle(
+						entry,
+						feedback === undefined
+							? { decision: "reject" }
+							: { decision: "reject", feedback }
+					);
 				},
 			};
 		},

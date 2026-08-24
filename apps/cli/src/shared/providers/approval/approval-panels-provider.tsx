@@ -14,11 +14,10 @@ import type {
 } from "./types";
 
 /**
- * One live or recently settled approval panel. Tool-call entries (identified by
- * the pending tool call's `toolCallId`) stay in the registry after resolution
- * so the inline panel collapses to an audit line; conversation entries (explicit
- * Skill activation, no tool call yet) are removed on resolution because they
- * have no message part to anchor to.
+ * One live or recently settled approval. Pending entries replace the composer
+ * with the approval controls. Tool-call entries remain after resolution so
+ * their message part can render a compact audit line; conversation entries
+ * have no timeline anchor and are removed when settled.
  */
 export type ApprovalPanelEntry = {
 	actions: ToolApprovalActions;
@@ -81,13 +80,10 @@ const withResolution = (
 };
 
 /**
- * Session-scoped registry of pending and recently settled approvals. The chat
- * UI renders one inline panel per entry — anchored to the assistant message
- * whose tool call is pending, or above the composer for conversation-level
- * approvals — replacing the previous modal dialog. Entries carry the exact
- * `ToolApprovalActions` the queue wired for the request, so the panel can
- * allow once, grant, reject with feedback, or cancel through the shared
- * conversation approval queue.
+ * Session-scoped registry for the composer approval surface and timeline audit
+ * records. Entries carry the exact `ToolApprovalActions` wired by the queue, so
+ * the surface can allow once, grant, reject with feedback, or cancel without a
+ * modal or scroll-dependent interaction.
  */
 export function ApprovalPanelsProvider({ children }: { children: ReactNode }) {
 	const [entries, setEntries] = useState<ApprovalPanelEntry[]>([]);

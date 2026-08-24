@@ -20,6 +20,7 @@ const makeRequest = (
 });
 
 const makeActions = (): ToolApprovalActions => ({
+	abort: mock(() => undefined),
 	allow: mock(() => undefined),
 	cancel: mock(() => undefined),
 	reject: mock(() => undefined),

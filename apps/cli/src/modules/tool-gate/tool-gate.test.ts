@@ -15,9 +15,11 @@ import { createToolGate } from "./tool-gate";
 const createGate = (
 	permission = createToolPermission(),
 	openApproval: Parameters<typeof createToolGate>[0]["openApproval"] = () =>
-		undefined
+		undefined,
+	onAbort?: Parameters<typeof createToolGate>[0]["onAbort"]
 ) =>
 	createToolGate({
+		onAbort,
 		openApproval,
 		resolvePermission: async () => permission,
 		sandbox: createWorkspaceSandbox(process.cwd()),
@@ -98,6 +100,88 @@ test("MCP policy and safety are composed inside the gate", async () => {
 	expect(approvalCount).toBe(1);
 });
 
+test("rejects one approval without notifying the conversation abort path", async () => {
+	let abortCount = 0;
+	const gate = createGate(
+		createToolPermission(),
+		(_request, actions) => actions.reject(),
+		() => {
+			abortCount += 1;
+		}
+	);
+
+	await expect(
+		gate.gate({
+			action: "demo_echo",
+			agentDecision: "ask",
+			description: "Echo",
+			family: "mcp",
+			input: {},
+			safety: false,
+			serverDecision: "allow",
+			toolCallId: "call-rejected",
+			toolName: "mcp_demo_echo",
+		})
+	).resolves.toEqual({
+		errorText: "MCP tool 'mcp_demo_echo' was not approved",
+		kind: "reject",
+	});
+	expect(abortCount).toBe(0);
+});
+
+test("abort notifies the conversation with the active tool call", async () => {
+	let abortedToolCallId: string | undefined;
+	const gate = createGate(
+		createToolPermission(),
+		(_request, actions) => actions.abort(),
+		(request) => {
+			abortedToolCallId = request.toolCallId;
+		}
+	);
+
+	await expect(
+		gate.gate({
+			action: "demo_echo",
+			agentDecision: "ask",
+			description: "Echo",
+			family: "mcp",
+			input: {},
+			safety: false,
+			serverDecision: "allow",
+			toolCallId: "call-aborted",
+			toolName: "mcp_demo_echo",
+		})
+	).resolves.toEqual({
+		errorText: "MCP tool 'mcp_demo_echo' was not approved",
+		kind: "reject",
+	});
+	expect(abortedToolCallId).toBe("call-aborted");
+});
+
+test("identifies an explicit Skill abort without an in-flight tool call", async () => {
+	let abortedToolCallId: string | undefined = "unexpected";
+	const gate = createGate(
+		createToolPermission({ skill: "ask" }),
+		(_request, actions) => actions.abort(),
+		(request) => {
+			abortedToolCallId = request.toolCallId;
+		}
+	);
+
+	await expect(
+		gate.gate({
+			available: true,
+			description: "Activate demo",
+			family: "skill",
+			name: "demo",
+		})
+	).resolves.toEqual({
+		errorText: 'Skill "demo" was not approved',
+		kind: "reject",
+	});
+	expect(abortedToolCallId).toBeUndefined();
+});
+
 test("MCP denial wording is the shared registry constant", async () => {
 	const gate = createGate(createToolPermission());
 
@@ -157,7 +241,10 @@ test("an external-directory grant does not satisfy an operation ask", async () =
 				toolName: "read",
 			},
 		})
-	).resolves.toEqual({ kind: "allow" });
+	).resolves.toEqual({
+		input: { path: resource },
+		kind: "allow",
+	});
 	// The call still reaches the approval panel because only the boundary was
 	// granted; the operation itself remained ask-gated.
 	expect(requests).toHaveLength(1);

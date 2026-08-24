@@ -3,6 +3,7 @@ import { useRouter } from "@tanstack/react-router";
 import { createUserMessage } from "@wincode/ai/client";
 import { useEffect, useState } from "react";
 import {
+	resolveActiveAgentId,
 	resolveEffectiveAgentSelection,
 	useAgentRegistry,
 } from "@/modules/agents";
@@ -12,7 +13,7 @@ import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config
 import { createSkillSnapshot } from "@/modules/skills";
 import { APP_VERSION } from "@/shared/app-info";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-import { resolveConversationSelection } from "../../selection";
+import { resolveLastUsedConversationSelection } from "../../selection";
 import { getConversationStore } from "../../storage/get-conversation-store";
 import type { ChatPromptSubmission } from "../../utils";
 import { getMostRecentSession } from "../../utils";
@@ -20,10 +21,31 @@ import { AsciiArt } from "../components/ascii-art";
 import { ChatTextArea } from "../components/chat-text-area";
 import { WorkspacePath } from "../components/workspace-path";
 
+type HomePromptReadiness = {
+	defaultAgentId: string | undefined;
+	initializedDefaultAgentId: string | undefined;
+	isCreatingSession: boolean;
+	isPromptConfigRestored: boolean;
+	registryReady: boolean;
+};
+
+export const canSubmitHomePrompt = ({
+	defaultAgentId,
+	initializedDefaultAgentId,
+	isCreatingSession,
+	isPromptConfigRestored,
+	registryReady,
+}: HomePromptReadiness): boolean =>
+	!isCreatingSession &&
+	isPromptConfigRestored &&
+	registryReady &&
+	initializedDefaultAgentId === defaultAgentId;
+
 export function HomeView() {
 	const router = useRouter();
 	const [_error, setError] = useState<string | null>(null);
 	const [isCreatingSession, setIsCreatingSession] = useState(false);
+	const [isPromptConfigRestored, setIsPromptConfigRestored] = useState(false);
 	const [initializedDefaultAgentId, setInitializedDefaultAgentId] = useState<
 		string | undefined
 	>();
@@ -41,26 +63,41 @@ export function HomeView() {
 	}, [defaultAgentId, setAgent]);
 
 	useEffect(() => {
+		if (registry === null) {
+			setIsPromptConfigRestored(false);
+			return;
+		}
 		let ignore = false;
+		setIsPromptConfigRestored(false);
 
 		const restoreLatestSessionConfig = async () => {
-			const store = getConversationStore();
-			const session = getMostRecentSession(await store.listSessions());
-			if (!session) {
-				return;
-			}
+			try {
+				const store = getConversationStore();
+				const session = getMostRecentSession(await store.listSessions());
+				if (!session) {
+					return;
+				}
 
-			const selection = resolveConversationSelection({
-				messages: await store.getMessages(session.id),
-				sessionModel: session.model,
-				sessionVariant: session.variant,
-			});
-			if (ignore || !selection) {
-				return;
-			}
+				const selection = resolveLastUsedConversationSelection({
+					messages: await store.getMessages(session.id),
+					resolveAgent: (agentId) => resolveActiveAgentId(registry, agentId),
+					sessionModel: session.model,
+					sessionVariant: session.variant,
+				});
+				if (ignore || !selection) {
+					return;
+				}
+				if (selection.agent !== undefined) {
+					setAgent(selection.agent);
+				}
 
-			setModel(selection.model);
-			setVariant(selection.variant);
+				setModel(selection.model);
+				setVariant(selection.variant);
+			} finally {
+				if (!ignore) {
+					setIsPromptConfigRestored(true);
+				}
+			}
 		};
 
 		restoreLatestSessionConfig().catch(() => undefined);
@@ -68,13 +105,17 @@ export function HomeView() {
 		return () => {
 			ignore = true;
 		};
-	}, [setModel, setVariant]);
+	}, [registry, setAgent, setModel, setVariant]);
 
 	const handleSubmit = async ({ files, skill, text }: ChatPromptSubmission) => {
 		if (
-			isCreatingSession ||
-			registry === null ||
-			initializedDefaultAgentId !== defaultAgentId
+			!canSubmitHomePrompt({
+				defaultAgentId,
+				initializedDefaultAgentId,
+				isCreatingSession,
+				isPromptConfigRestored,
+				registryReady: registry !== null,
+			})
 		) {
 			return false;
 		}

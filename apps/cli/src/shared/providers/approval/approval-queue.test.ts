@@ -34,9 +34,22 @@ describe("createApprovalQueue", () => {
 		});
 		expect(queue.pendingCount()).toBe(1);
 
-		first.rejectSelf();
+		first.reject();
 		await expect(first.outcome).resolves.toEqual({ decision: "reject" });
 		expect(queue.pendingCount()).toBe(0);
+	});
+
+	test("abort identifies one request without settling its siblings", async () => {
+		const queue = createApprovalQueue<string>();
+		const first = queue.request("first");
+		const second = queue.request("second");
+
+		first.abort();
+		await expect(first.outcome).resolves.toEqual({ decision: "abort" });
+		expect(queue.pendingCount()).toBe(1);
+
+		second.reject();
+		await expect(second.outcome).resolves.toEqual({ decision: "reject" });
 	});
 
 	test("rejectAll settles every pending request, feedback on the selected one", async () => {
@@ -57,16 +70,19 @@ describe("createApprovalQueue", () => {
 		expect(queue.pendingCount()).toBe(0);
 	});
 
-	test("rejectSelf rejects only that request without feedback", async () => {
+	test("reject settles only that request and preserves its feedback", async () => {
 		const queue = createApprovalQueue<string>();
 		const first = queue.request("first");
 		const second = queue.request("second");
 
-		second.rejectSelf();
-		await expect(second.outcome).resolves.toEqual({ decision: "reject" });
+		second.reject("use another file");
+		await expect(second.outcome).resolves.toEqual({
+			decision: "reject",
+			feedback: "use another file",
+		});
 		expect(queue.pendingCount()).toBe(1);
 
-		first.rejectSelf();
+		first.reject();
 		await expect(first.outcome).resolves.toEqual({ decision: "reject" });
 	});
 
@@ -98,7 +114,7 @@ describe("createApprovalQueue", () => {
 		const handle = queue.request("a");
 		handle.allow(false);
 		queue.rejectAll("late feedback");
-		handle.rejectSelf();
+		handle.reject();
 		await expect(handle.outcome).resolves.toEqual({
 			decision: "allow",
 			remember: false,

@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { realpathSync } from "node:fs";
-import { mkdtemp, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
 	type CodingAgentUIMessage,
 	codingToolDefinitions,
 	type ResolvedAgentRuntime,
 } from "@wincode/ai";
-import type { handleCodingAgentToolCall } from "@wincode/ai/client";
+import { handleCodingAgentToolCall } from "@wincode/ai/client";
 import { createWorkspaceSandbox } from "@wincode/ai/workspace";
 import type { ChatAddToolOutputFunction } from "ai";
 import type { PreparedAgentCall } from "@/modules/agents";
@@ -52,6 +52,7 @@ import {
 	findCurrentTurnAssistantIndex,
 	findCurrentTurnInterruptTargetIndex,
 	notifyHostedCompletion,
+	sanitizeInterruptedMessagesForConversation,
 	sanitizeSkillToolParts,
 } from "./use-chat";
 
@@ -337,6 +338,35 @@ describe("useChat helpers", () => {
 		});
 	});
 
+	test("keeps interrupted metadata when an aborted approval was the only assistant part", () => {
+		const interruptedAssistant = {
+			id: "assistant-approval",
+			metadata: { interrupted: true },
+			parts: [
+				{
+					input: { path: "/outside/settings.json" },
+					state: "input-available",
+					toolCallId: "call-read",
+					type: "tool-read",
+				},
+			],
+			role: "assistant",
+		} as unknown as CodingAgentUIMessage;
+
+		expect(
+			sanitizeInterruptedMessagesForConversation([
+				userMessage,
+				interruptedAssistant,
+			])
+		).toEqual([
+			userMessage,
+			{
+				...interruptedAssistant,
+				parts: [],
+			},
+		]);
+	});
+
 	test("refreshes billing only after hosted completion", () => {
 		let refreshCount = 0;
 		const refresh = () => {
@@ -486,7 +516,84 @@ describe("createChatToolCallHandler", () => {
 			)
 		);
 
-		expect(gatedHandler).toHaveBeenCalledWith(addToolOutput, []);
+		expect(gatedHandler).toHaveBeenCalledWith(addToolOutput, [], {
+			allowExternalPaths: false,
+		});
+	});
+
+	test("executes an approved external read with the gate's canonical path", async () => {
+		const canonicalPath = join(tmpdir(), "approved-settings.json");
+		const gate = {
+			gate: mock(async () => ({
+				input: { path: canonicalPath },
+				kind: "allow" as const,
+			})),
+		};
+		const gatedHandler = mock(
+			(..._arguments_: Parameters<typeof handleCodingAgentToolCall>) =>
+				staticToolCallHandler
+		) as typeof handleCodingAgentToolCall;
+
+		await settleCall(
+			callWith(
+				{
+					input: { path: "~/.claude/settings.json" },
+					toolCallId: "call-home-read",
+					toolName: "read",
+				},
+				{ gate, handleCodingAgentToolCall: gatedHandler }
+			)
+		);
+
+		expect(gatedHandler).toHaveBeenCalledWith(addToolOutput, [], {
+			allowExternalPaths: true,
+		});
+		expect(staticToolCallHandler).toHaveBeenCalledWith({
+			toolCall: {
+				input: { path: canonicalPath },
+				toolCallId: "call-home-read",
+				toolName: "read",
+			},
+		});
+	});
+
+	test("reads an approved home-relative path end to end", async () => {
+		const filename = `.wincode-approved-read-${crypto.randomUUID()}`;
+		const absolutePath = join(homedir(), filename);
+		await writeFile(absolutePath, "approved home content");
+		try {
+			await settleCall(
+				callWith(
+					{
+						input: { path: `~/${filename}` },
+						toolCallId: "call-approved-home-read",
+						toolName: "read",
+					},
+					{
+						handleCodingAgentToolCall,
+						openApproval: (_request, actions) => actions.allow(false),
+						permissionRef: { current: createToolPermission() },
+						resolvedAgentRef: {
+							current: {
+								...planPrepared.resolvedAgent,
+								visibleCodingTools: ["read"],
+							},
+						},
+					}
+				)
+			);
+
+			expect(addToolOutput).toHaveBeenCalledWith({
+				output: {
+					content: "approved home content",
+					path: absolutePath,
+				},
+				tool: "read",
+				toolCallId: "call-approved-home-read",
+			});
+		} finally {
+			await rm(absolutePath, { force: true });
+		}
 	});
 
 	test("handles a missing or stale snapshot ref without crashing", () => {
@@ -607,7 +714,8 @@ describe("createChatToolCallHandler", () => {
 		);
 		expect(approvalRequests).toHaveLength(1);
 		expect(approvalRequests[0]).toMatchObject({
-			description: "Read a UTF-8 text file inside the workspace.",
+			description:
+				"Read a UTF-8 text file. Preserve ~ paths; never guess an absolute home.",
 			identity: [
 				{ label: "tool", value: "read" },
 				{ label: "resource", value: ".env" },

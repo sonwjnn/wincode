@@ -4,6 +4,7 @@ import {
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
 	type CodingMessageMetadata,
+	codingAgentDataSchemas,
 	codingMessageMetadataSchema,
 } from "@wincode/ai";
 import { generateId, safeValidateUIMessages } from "ai";
@@ -93,6 +94,23 @@ const normalizeMcpToolPart = (part: MessagePart): MessagePart => {
 const normalizeMcpToolParts = (
 	parts: CodingAgentUIMessage["parts"]
 ): CodingAgentUIMessage["parts"] => parts.map(normalizeMcpToolPart);
+
+const normalizeInterruptedAssistantMessage = (
+	message: CodingAgentUIMessage
+): CodingAgentUIMessage => {
+	if (
+		message.role !== "assistant" ||
+		message.metadata?.interrupted !== true ||
+		message.parts.length > 0
+	) {
+		return message;
+	}
+
+	return {
+		...message,
+		parts: [{ text: "", type: "text" }],
+	};
+};
 
 export const createPromptHistory = (db: LocalConversationDatabase) => ({
 	get: () =>
@@ -344,18 +362,21 @@ const writeMessages = (
 			.run();
 
 		messages.forEach((message, position) => {
+			const normalizedMessage = normalizeInterruptedAssistantMessage(message);
 			const values = {
-				agent: resolveAgent(message, agent),
+				agent: resolveAgent(normalizedMessage, agent),
 				createdAt: now,
 				id: generateId(),
 				metadataJson: codingMessageMetadataSchema.parse(
-					sanitizeSkillMetadataForWrite(resolveMetadata(message, model, agent))
+					sanitizeSkillMetadataForWrite(
+						resolveMetadata(normalizedMessage, model, agent)
+					)
 				),
-				partsJson: normalizeMcpToolParts(message.parts),
+				partsJson: normalizeMcpToolParts(normalizedMessage.parts),
 				position,
-				role: message.role,
+				role: normalizedMessage.role,
 				sessionId,
-				uiMessageId: message.id,
+				uiMessageId: normalizedMessage.id,
 				updatedAt: now,
 			};
 
@@ -464,18 +485,21 @@ export const createDrizzleConversationStore = (
 			}
 
 			const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
-				messages: rows.map((row) => ({
-					id: row.uiMessageId,
-					metadata:
-						row.metadataJson === null || row.metadataJson === undefined
-							? undefined
-							: normalizeMessageMetadata(
-									parseAndNormalizePersistedMetadata(row.metadataJson),
-									row.agent
-								),
-					parts: normalizeMcpToolParts(row.partsJson),
-					role: row.role,
-				})),
+				dataSchemas: codingAgentDataSchemas,
+				messages: rows.map((row) =>
+					normalizeInterruptedAssistantMessage({
+						id: row.uiMessageId,
+						metadata:
+							row.metadataJson === null || row.metadataJson === undefined
+								? undefined
+								: normalizeMessageMetadata(
+										parseAndNormalizePersistedMetadata(row.metadataJson),
+										row.agent
+									),
+						parts: normalizeMcpToolParts(row.partsJson),
+						role: row.role,
+					})
+				),
 			});
 
 			if (!validation.success) {

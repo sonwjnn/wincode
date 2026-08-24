@@ -222,10 +222,18 @@ export const createChatToolCallHandler = (
 					);
 					return;
 				}
+				const executionOptions =
+					outcome.input === undefined
+						? options
+						: {
+								...options,
+								toolCall: { ...options.toolCall, input: outcome.input },
+							};
 				await runStaticToolCall(
 					addToolOutput,
-					resolvedAgentRef.current?.visibleCodingTools ?? []
-				)(options);
+					resolvedAgentRef.current?.visibleCodingTools ?? [],
+					{ allowExternalPaths: outcome.input !== undefined }
+				)(executionOptions as typeof options);
 			})()
 		).catch(() => {
 			emitToolCallError(

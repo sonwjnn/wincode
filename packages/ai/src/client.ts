@@ -73,7 +73,8 @@ export const createUserMessage = (
 export const handleCodingAgentToolCall =
 	(
 		addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>,
-		agentTools: readonly CodingToolName[]
+		agentTools: readonly CodingToolName[],
+		options: { allowExternalPaths?: boolean } = {}
 	): ChatOnToolCallCallback<CodingAgentUIMessage> =>
 	async ({ toolCall }) => {
 		if (toolCall.dynamic) {
@@ -98,7 +99,10 @@ export const handleCodingAgentToolCall =
 				await runToolCall({
 					addToolOutput,
 					input: toolCall.input,
-					run: codingToolRunners.read,
+					run: (input) =>
+						codingToolRunners.read(input, {
+							allowExternalPath: options.allowExternalPaths,
+						}),
 					tool: "read",
 					toolCallId: toolCall.toolCallId,
 				});

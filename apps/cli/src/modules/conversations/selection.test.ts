@@ -4,6 +4,7 @@ import {
 	getLastUsedSelection,
 	getOriginatingUserSkill,
 	resolveConversationSelection,
+	resolveLastUsedConversationSelection,
 	resolveOutgoingSelection,
 } from "./selection";
 
@@ -227,6 +228,65 @@ describe("resolveConversationSelection", () => {
 
 	test("returns null when no source carries a model", () => {
 		expect(resolveConversationSelection({ messages: [] })).toBeNull();
+	});
+});
+
+describe("resolveLastUsedConversationSelection", () => {
+	test("prefers the last message prompt config over a stale session row", () => {
+		const sessionModel = {
+			modelId: "gpt-5.4-mini",
+			providerId: "wincode",
+		} as const;
+		const messageModel = {
+			modelId: "gpt-5.5",
+			providerId: "openai",
+		} as const;
+		const messages = [
+			{
+				id: "assistant-latest",
+				metadata: {
+					agent: "code-reviewer",
+					model: messageModel,
+					variant: "high",
+				},
+				parts: [{ text: "latest", type: "text" }],
+				role: "assistant",
+			},
+		] satisfies CodingAgentUIMessage[];
+
+		expect(
+			resolveLastUsedConversationSelection({
+				messages,
+				resolveAgent: (agent) => agent ?? "build",
+				sessionModel,
+				sessionVariant: "low",
+			})
+		).toEqual({
+			agent: "code-reviewer",
+			persistedAgent: "code-reviewer",
+			model: messageModel,
+			variant: "high",
+		});
+	});
+
+	test("falls back to the session row without usable message metadata", () => {
+		const sessionModel = {
+			modelId: "gpt-5.4-mini",
+			providerId: "wincode",
+		} as const;
+
+		expect(
+			resolveLastUsedConversationSelection({
+				messages: [],
+				sessionModel,
+				sessionVariant: "low",
+			})
+		).toEqual({
+			agent: undefined,
+			persistedAgent: undefined,
+			model: sessionModel,
+			variant: "low",
+		});
 	});
 });
 

@@ -11,7 +11,8 @@ type BorderedContentBlockProps = {
 	colors: ThemeColors;
 	contentBackgroundColor?: string;
 	contentGap?: number;
-	contentJustifyContent?: "center";
+	fill?: boolean;
+	contentJustifyContent?: "center" | "space-between";
 	customBorderChars?: Partial<typeof EmptyBorder>;
 	marginBottom?: number;
 	onMouseDown?: () => void;
@@ -28,6 +29,7 @@ export function BorderedContentBlock({
 	colors,
 	contentBackgroundColor,
 	contentGap = 1,
+	fill = false,
 	contentJustifyContent,
 	customBorderChars,
 	marginBottom = 1,
@@ -51,6 +53,8 @@ export function BorderedContentBlock({
 				...customBorderChars,
 			}}
 			flexDirection="column"
+			flexGrow={fill ? 1 : 0}
+			height={fill ? "100%" : undefined}
 			marginBottom={marginBottom}
 			onMouseDown={onMouseDown}
 			onSizeChange={onSizeChange}
@@ -60,6 +64,7 @@ export function BorderedContentBlock({
 			<box
 				backgroundColor={resolvedContentBackground}
 				flexDirection="column"
+				flexGrow={fill ? 1 : 0}
 				gap={contentGap}
 				justifyContent={contentJustifyContent}
 				paddingX={paddingX}

@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
+// Keep the process-global Bun module mock complete: test files execute in one
+// process and may import unrelated AI SDK exports while this mock is active.
+// biome-ignore lint/performance/noNamespaceImport: mock spread needs the full namespace
+import * as realAi from "ai";
 
 const createAgentUIStreamResponseMock = mock(
 	(input: {
@@ -35,6 +39,7 @@ class MockToolLoopAgent {
 
 const loadSubject = async () => {
 	await mock.module("ai", () => ({
+		...realAi,
 		ToolLoopAgent: MockToolLoopAgent,
 		createAgentUIStreamResponse: createAgentUIStreamResponseMock,
 		createIdGenerator: () => () => "msg-1",

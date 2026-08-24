@@ -296,7 +296,7 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 			{isEditPreview ? <EditDiffBlock agent={agent} part={part} /> : null}
 			{isWritePreview ? <WriteBlock agent={agent} part={part} /> : null}
 			{typeof part.toolCallId === "string" ? (
-				<ToolApprovalPanel id={part.toolCallId} />
+				<ToolApprovalPanel id={part.toolCallId} mode="resolved-only" />
 			) : null}
 		</>
 	);

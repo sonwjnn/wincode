@@ -26,17 +26,16 @@ export type ToolApprovalRequest = {
 };
 
 /**
- * The imperative surface the panel drives. `allow` runs the tool once, and
- * `remember` records a temporary grant for the exact action/resource. `reject`
- * blocks the tool and returns the optional typed correction to the Agent, and —
- * because the queue behind it is conversation-scoped — settles every other
- * pending approval in the same conversation. `cancel` rejects without feedback
- * when the panel unmounts or the user presses escape.
+ * The imperative surface the panel drives. `reject` blocks only the selected
+ * tool call so the Agent may continue, while `abort` rejects the conversation's
+ * pending approvals and interrupts the active turn. `cancel` rejects only the
+ * selected request when the panel is dismissed.
  */
 export type ToolApprovalActions = {
+	abort(): void;
 	allow(remember: boolean): void;
 	reject(feedback?: string): void;
 	cancel(): void;
 };
 
-export type ApprovalOutcome = "allow-once" | "always" | "rejected";
+export type ApprovalOutcome = "aborted" | "allow-once" | "always" | "rejected";

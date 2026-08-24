@@ -40,7 +40,7 @@ import type {
  * it (coding, shell, and MCP).
  */
 export type GateOutcome =
-	| { kind: "allow" }
+	| { kind: "allow"; input?: unknown }
 	| { kind: "deny"; errorText: string }
 	| { kind: "reject"; errorText: string; feedback?: string };
 
@@ -85,6 +85,7 @@ export type ToolGate = {
 
 export type ToolGateDeps = {
 	approvalQueue?: ApprovalQueue<ToolApprovalRequest>;
+	onAbort?: (request: ToolApprovalRequest) => void;
 	openApproval: (
 		request: ToolApprovalRequest,
 		actions: ToolApprovalActions
@@ -183,6 +184,7 @@ const skillRejectionText = (name: string): string =>
 
 type InternalApprovalDeps = {
 	approvalQueue: ApprovalQueue<ToolApprovalRequest>;
+	onAbort?: (request: ToolApprovalRequest) => void;
 	openApproval: ToolGateDeps["openApproval"];
 	service: PermissionService;
 };
@@ -208,7 +210,7 @@ type InternalApprovalRequest = {
  */
 const settleApproval = async (
 	{ checks, request, safety }: InternalApprovalRequest,
-	{ approvalQueue, openApproval, service }: InternalApprovalDeps,
+	{ approvalQueue, onAbort, openApproval, service }: InternalApprovalDeps,
 	recordGrant: () => void
 ): Promise<GateOutcome> => {
 	const effective = checks.map(({ action, decision, resource }) =>
@@ -230,11 +232,21 @@ const settleApproval = async (
 	}
 	const handle = approvalQueue.request(request);
 	openApproval(request, {
+		abort: () => {
+			handle.abort();
+			onAbort?.(request);
+		},
 		allow: (remember) => handle.allow(remember),
-		cancel: () => handle.rejectSelf(),
-		reject: (feedback) => approvalQueue.rejectAll(feedback),
+		cancel: () => handle.reject(),
+		reject: (feedback) => handle.reject(feedback),
 	});
 	const outcome = await handle.outcome;
+	if (outcome.decision === "abort") {
+		return {
+			errorText: request.description,
+			kind: "reject",
+		};
+	}
 	if (outcome.decision === "reject") {
 		return {
 			errorText: request.description,
@@ -276,6 +288,7 @@ const withErrorText = (
  */
 export const createToolGate = ({
 	approvalQueue: providedApprovalQueue,
+	onAbort,
 	openApproval,
 	resolvePermission,
 	sandbox,
@@ -283,7 +296,7 @@ export const createToolGate = ({
 }: ToolGateDeps): ToolGate => {
 	const approvalQueue =
 		providedApprovalQueue ?? createApprovalQueue<ToolApprovalRequest>();
-	const approvalDeps = { approvalQueue, openApproval, service };
+	const approvalDeps = { approvalQueue, onAbort, openApproval, service };
 
 	const gateCodingToolCall = async (
 		toolCall: { input: unknown; toolCallId: string; toolName: string },
@@ -352,7 +365,10 @@ export const createToolGate = ({
 		}
 
 		try {
-			const canonical = await canonicalizeResource(gateResource.input, sandbox);
+			const canonical = await canonicalizeResource(
+				expandHomeInPath(gateResource.input),
+				sandbox
+			);
 			// Grep gates its operation against the regex; its path only decides the
 			// external boundary. Other path tools gate against the canonical path.
 			const resource =
@@ -424,12 +440,24 @@ export const createToolGate = ({
 					service.grant(action, gateResource.pattern ?? resource);
 				}
 			);
-			return withErrorText(
+			const outcome = withErrorText(
 				settled,
 				staticDenialText(label, gateResource.pattern ?? resource),
 				(feedback) =>
 					staticRejectionText(label, gateResource.pattern ?? resource, feedback)
 			);
+			if (outcome.kind !== "allow" || gateResource.pattern !== undefined) {
+				return outcome;
+			}
+			return {
+				...outcome,
+				input:
+					typeof toolCall.input === "object" &&
+					toolCall.input !== null &&
+					!Array.isArray(toolCall.input)
+						? { ...toolCall.input, path: resource }
+						: { path: resource },
+			};
 		}
 	};
 

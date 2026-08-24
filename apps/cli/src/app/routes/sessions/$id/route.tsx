@@ -4,13 +4,11 @@ import type {
 	CodingAgentUIMessage,
 	ModelVariant,
 } from "@wincode/ai";
-import {
-	agentIdSchema,
-	sanitizeInterruptedMessagesForModel,
-} from "@wincode/ai";
+import { agentIdSchema } from "@wincode/ai";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { useBilling } from "@/modules/billing";
+import { sanitizeInterruptedMessagesForConversation } from "@/modules/conversations/hooks/use-chat";
 import { getConversationStore } from "@/modules/conversations/storage/get-conversation-store";
 import { ChatView } from "@/modules/conversations/ui/views/chat-view";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -66,7 +64,9 @@ function SessionRoute() {
 				if (!ignore) {
 					// A turn interrupted before its tool calls finished must not
 					// restore as stuck running blocks: strip their unfinished parts.
-					setMessages(sanitizeInterruptedMessagesForModel(loadedMessages));
+					setMessages(
+						sanitizeInterruptedMessagesForConversation(loadedMessages)
+					);
 					setSessionConfig({
 						...(session.model ? { model: session.model } : {}),
 						...(session.variant ? { variant: session.variant } : {}),

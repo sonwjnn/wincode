@@ -162,6 +162,14 @@ export type ConversationSelectionRefs = {
 	variant?: ModelVariant;
 };
 
+type ResolveConversationSelectionInput = {
+	messages: CodingAgentUIMessage[];
+	resolveAgent?: (agentId: AgentId | undefined) => AgentId;
+	sessionModel?: ChatModelSelection;
+	sessionVariant?: ModelVariant;
+	refs?: ConversationSelectionRefs;
+};
+
 /**
  * Resolves the selection a conversation uses, merging sources in a fixed
  * order — session row, then message metadata, then prompt-config refs —
@@ -179,13 +187,7 @@ export const resolveConversationSelection = ({
 	sessionModel,
 	sessionVariant,
 	refs,
-}: {
-	messages: CodingAgentUIMessage[];
-	resolveAgent?: (agentId: AgentId | undefined) => AgentId;
-	sessionModel?: ChatModelSelection;
-	sessionVariant?: ModelVariant;
-	refs?: ConversationSelectionRefs;
-}): ResolvedConversationSelection | null => {
+}: ResolveConversationSelectionInput): ResolvedConversationSelection | null => {
 	const persisted = getLastUsedSelection(messages);
 	const model = sessionModel ?? persisted?.model ?? refs?.model;
 	if (!model) {
@@ -204,6 +206,39 @@ export const resolveConversationSelection = ({
 			model,
 			sessionVariant ?? persisted?.variant ?? refs?.variant
 		),
+	};
+};
+
+/**
+ * Restores the prompt config used by the newest message. Session-row values
+ * remain a fallback for legacy conversations without usable message metadata.
+ * This policy is intentionally narrower than resolveConversationSelection:
+ * Home uses it for the next-chat default, while active conversations retain
+ * the session-row choice/effective-message two-tier policy.
+ */
+export const resolveLastUsedConversationSelection = ({
+	messages,
+	resolveAgent,
+	sessionModel,
+	sessionVariant,
+	refs,
+}: ResolveConversationSelectionInput): ResolvedConversationSelection | null => {
+	const persisted = getLastUsedSelection(messages);
+	if (!persisted) {
+		return resolveConversationSelection({
+			messages,
+			resolveAgent,
+			sessionModel,
+			sessionVariant,
+			refs,
+		});
+	}
+
+	return {
+		agent: resolveAgent ? resolveAgent(persisted.agent) : persisted.agent,
+		persistedAgent: persisted.agent,
+		model: persisted.model,
+		variant: normalizeModelVariant(persisted.model, persisted.variant),
 	};
 };
 

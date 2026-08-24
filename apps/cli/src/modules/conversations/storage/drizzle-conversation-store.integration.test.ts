@@ -459,6 +459,35 @@ describe("drizzle conversation store", () => {
 		});
 	});
 
+	test("reloads persisted file mention data parts", async () => {
+		const fileMentionStore = createDrizzleConversationStore(db, {
+			workspaceRoot: "/tmp/wincode-file-mention-test",
+		});
+		const message: CodingAgentUIMessage = {
+			...userMessage("m-file-mention", "inspect @README.md"),
+			parts: [
+				{ text: "inspect @README.md", type: "text" },
+				{
+					data: {
+						byteLength: 7,
+						content: "fixture",
+						kind: "file",
+						path: "README.md",
+						truncated: false,
+					},
+					type: "data-fileMention",
+				},
+			],
+		};
+		const { id } = await fileMentionStore.createSession({
+			message,
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+
+		await expect(fileMentionStore.getMessages(id)).resolves.toEqual([message]);
+	});
+
 	test("persists and reloads standard image file UI parts", async () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "image"),
@@ -518,6 +547,54 @@ describe("drizzle conversation store", () => {
 		expect(
 			rows.find((row) => row.uiMessageId === "m2")?.metadataJson
 		).toMatchObject({ responseTimeMs: 431 });
+	});
+
+	test("repairs an interrupted assistant persisted without parts", async () => {
+		const model = {
+			modelId: "gemini-2.5-flash",
+			providerId: "wincode",
+		} as const;
+		const { id } = await store.createSession({
+			message: userMessage("m1", "hello"),
+			agent: "plan",
+			model,
+		});
+		await store.persistMessages({
+			messages: [
+				userMessage("m1", "hello"),
+				{
+					id: "m-interrupted",
+					metadata: {
+						agent: "plan",
+						interrupted: true,
+						model,
+					},
+					parts: [],
+					role: "assistant",
+				},
+			],
+			agent: "plan",
+			model,
+			sessionId: id,
+		});
+		db.update(conversationMessage)
+			.set({ partsJson: [] })
+			.where(eq(conversationMessage.uiMessageId, "m-interrupted"))
+			.run();
+
+		await expect(store.getMessages(id)).resolves.toEqual([
+			userMessage("m1", "hello"),
+			{
+				id: "m-interrupted",
+				metadata: {
+					agent: "plan",
+					interrupted: true,
+					model,
+				},
+				parts: [{ text: "", type: "text" }],
+				role: "assistant",
+			},
+		]);
 	});
 
 	test("round trips the effective configured Agent and pinned model", async () => {

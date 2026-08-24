@@ -1,4 +1,5 @@
 import { expect, mock, test } from "bun:test";
+import type { ScrollBoxRenderable } from "@opentui/core";
 import { testRender } from "@opentui/react/test-utils";
 import { useEffect } from "react";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -13,7 +14,7 @@ import {
 	MAX_DESCRIPTION_CHARS,
 } from "../format";
 import type { ToolApprovalActions, ToolApprovalRequest } from "../types";
-import { ToolApprovalPanel } from "./tool-approval-panel";
+import { PendingApprovalDock, ToolApprovalPanel } from "./tool-approval-panel";
 
 const makeRequest = (
 	overrides: Partial<ToolApprovalRequest> = {}
@@ -29,6 +30,7 @@ const makeRequest = (
 });
 
 const makeActions = (): ToolApprovalActions => ({
+	abort: mock(() => undefined),
 	allow: mock(() => undefined),
 	reject: mock(() => undefined),
 	cancel: mock(() => undefined),
@@ -44,6 +46,18 @@ const flushUi = async (
 ): Promise<void> => {
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	await setup.renderOnce();
+};
+const hoverAction = async (
+	setup: Awaited<ReturnType<typeof testRender>>,
+	label: string
+): Promise<void> => {
+	const rows = setup.captureCharFrame().split("\n");
+	const row = rows.findIndex((candidate) => candidate.includes(label));
+	const column = rows[row]?.indexOf(label) ?? -1;
+	expect(row).toBeGreaterThanOrEqual(0);
+	expect(column).toBeGreaterThanOrEqual(0);
+	await setup.mockMouse.moveTo(column, row);
+	await flushUi(setup);
 };
 
 function Register({
@@ -62,14 +76,18 @@ function Register({
 
 const renderPanel = async (
 	request: ToolApprovalRequest,
-	actions: ToolApprovalActions
+	actions: ToolApprovalActions,
+	pendingCount = 1
 ): Promise<PanelSetup> => {
 	const setup = await testRender(
 		<ThemeProvider>
 			<KeyboardLayerProvider>
 				<ApprovalPanelsProvider>
 					<Register actions={actions} request={request} />
-					<ToolApprovalPanel id={request.toolCallId ?? "call-1"} />
+					<ToolApprovalPanel
+						id={request.toolCallId ?? "call-1"}
+						pendingCount={pendingCount}
+					/>
 				</ApprovalPanelsProvider>
 			</KeyboardLayerProvider>
 		</ThemeProvider>,
@@ -80,18 +98,20 @@ const renderPanel = async (
 	return { actions, setup };
 };
 
-test("renders a compact inline header with options and no dialog chrome", async () => {
+test("renders the OpenCode-style dock with context and actions", async () => {
 	const { setup } = await renderPanel(makeRequest(), makeActions());
 	const frame = setup.captureCharFrame();
 
+	expect(frame).toContain("Permission required");
 	expect(frame).toContain(
 		"tool: read · resource: .env — Read a UTF-8 text file inside the workspace."
 	);
 	expect(frame).toContain("Allow once");
 	expect(frame).toContain("Always allow");
 	expect(frame).toContain("Reject");
-	// The inline panel replaces the modal dialog: no title, no always-visible
-	// feedback field, and the input stays collapsed until expanded.
+	expect(frame).not.toContain("Abort");
+	// The dock stays inline: no modal title, no always-visible feedback field,
+	// and the input stays collapsed until expanded.
 	expect(frame).not.toContain("Tool approval");
 	expect(frame).not.toContain("rejection feedback");
 	expect(frame).not.toContain('"path"');
@@ -107,6 +127,7 @@ test("hides the always option and warns under the safety ceiling", async () => {
 	expect(frame).toContain("Safety ceiling");
 	expect(frame).toContain("Allow once");
 	expect(frame).toContain("Reject");
+	expect(frame).not.toContain("Abort");
 	// A safety ask must never mint a grant, so "always" is absent.
 	expect(frame).not.toContain("Always allow");
 	setup.renderer.destroy();
@@ -129,12 +150,30 @@ test("allow once settles with allow(false) and collapses to a dim line", async (
 test("selecting always settles with allow(true)", async () => {
 	const { actions, setup } = await renderPanel(makeRequest(), makeActions());
 
-	setup.mockInput.pressArrow("down");
+	await hoverAction(setup, "Always allow");
 	setup.mockInput.pressEnter();
+	await flushUi(setup);
 	await flushUi(setup);
 
 	expect(actions.allow).toHaveBeenCalledWith(true);
 	expect(setup.captureCharFrame()).toContain("always allowed");
+	setup.renderer.destroy();
+});
+
+test("hovering an action applies its selected background and enter target", async () => {
+	const { actions, setup } = await renderPanel(makeRequest(), makeActions());
+	const rows = setup.captureCharFrame().split("\n");
+	const actionRow = rows.findIndex((row) => row.includes("Always allow"));
+	const actionColumn = rows[actionRow]?.indexOf("Always allow") ?? -1;
+	expect(actionRow).toBeGreaterThanOrEqual(0);
+	expect(actionColumn).toBeGreaterThanOrEqual(0);
+
+	await setup.mockMouse.moveTo(actionColumn, actionRow);
+	await flushUi(setup);
+	setup.mockInput.pressEnter();
+	await flushUi(setup);
+
+	expect(actions.allow).toHaveBeenCalledWith(true);
 	setup.renderer.destroy();
 });
 
@@ -143,9 +182,8 @@ test("rapid keyboard selection resolves against the latest option", async () => 
 
 	// Several selection keys land before a render commits; enter must resolve the
 	// final selection (Allow once -> Always -> Reject -> back to Allow once).
-	setup.mockInput.pressArrow("down");
-	setup.mockInput.pressArrow("down");
-	setup.mockInput.pressArrow("down");
+	await hoverAction(setup, "Reject");
+	await hoverAction(setup, "Allow once");
 	setup.mockInput.pressEnter();
 	await flushUi(setup);
 
@@ -153,59 +191,62 @@ test("rapid keyboard selection resolves against the latest option", async () => 
 	setup.renderer.destroy();
 });
 
-test("reject reveals the optional feedback input and settles with feedback", async () => {
-	const { actions, setup } = await renderPanel(makeRequest(), makeActions());
+test("reject settles only the selected tool when approvals remain", async () => {
+	const { actions, setup } = await renderPanel(makeRequest(), makeActions(), 2);
 
-	setup.mockInput.pressArrow("down");
-	setup.mockInput.pressArrow("down");
-	await flushUi(setup);
-	expect(setup.captureCharFrame()).toContain("feedback (optional)");
-
-	await setup.mockInput.typeText("use the config loader");
-	setup.mockInput.pressEnter();
-	await flushUi(setup);
-
-	expect(actions.reject).toHaveBeenCalledTimes(1);
-	const feedback = (actions.reject as ReturnType<typeof mock>).mock
-		.calls[0]?.[0];
-	expect(feedback).toContain("use the config loader");
-	expect(actions.allow).not.toHaveBeenCalled();
-	const frame = setup.captureCharFrame();
-	expect(frame).toContain("rejected");
-	expect(frame).toContain("use the config loader");
-	setup.renderer.destroy();
-});
-
-test("rejecting without feedback settles with reject(undefined)", async () => {
-	const { actions, setup } = await renderPanel(makeRequest(), makeActions());
-
-	setup.mockInput.pressArrow("down");
-	setup.mockInput.pressArrow("down");
+	await hoverAction(setup, "Reject");
 	setup.mockInput.pressEnter();
 	await flushUi(setup);
 
 	expect(actions.reject).toHaveBeenCalledWith(undefined);
+	expect(actions.abort).not.toHaveBeenCalled();
 	expect(setup.captureCharFrame()).toContain("rejected");
 	setup.renderer.destroy();
 });
 
-test("rejecting one panel settles sibling panels to their audit lines", async () => {
-	// The last registered panel owns the keyboard layer, so the keys drive the
-	// sibling; the earlier panel's actions must never be invoked because the
-	// registry-wide rejection settles it without touching its queue handle.
+test("reject aborts the turn when it is the only approval", async () => {
+	const { actions, setup } = await renderPanel(makeRequest(), makeActions());
+
+	expect(setup.captureCharFrame()).not.toContain("Abort");
+	await hoverAction(setup, "Reject");
+	setup.mockInput.pressEnter();
+	await flushUi(setup);
+
+	expect(actions.abort).toHaveBeenCalledTimes(1);
+	expect(actions.reject).not.toHaveBeenCalled();
+	expect(setup.captureCharFrame()).toContain("aborted");
+	setup.renderer.destroy();
+});
+
+test("abort settles separately from rejecting one tool", async () => {
+	const { actions, setup } = await renderPanel(makeRequest(), makeActions(), 2);
+
+	await hoverAction(setup, "Abort");
+	setup.mockInput.pressEnter();
+	await flushUi(setup);
+
+	expect(actions.abort).toHaveBeenCalledTimes(1);
+	expect(actions.reject).not.toHaveBeenCalled();
+	expect(setup.captureCharFrame()).toContain("aborted");
+	setup.renderer.destroy();
+});
+
+test("fullscreen dock stacks every queued approval and settles head-first", async () => {
 	const firstActions = makeActions();
-	const siblingActions = makeActions();
+	const secondActions = makeActions();
 	const setup = await testRender(
 		<ThemeProvider>
 			<KeyboardLayerProvider>
 				<ApprovalPanelsProvider>
 					<Register actions={firstActions} request={makeRequest()} />
 					<Register
-						actions={siblingActions}
-						request={makeRequest({ toolCallId: "call-2" })}
+						actions={secondActions}
+						request={makeRequest({
+							description: "Second queued approval.",
+							toolCallId: "call-2",
+						})}
 					/>
-					<ToolApprovalPanel id="call-1" />
-					<ToolApprovalPanel id="call-2" />
+					<PendingApprovalDock fullscreen />
 				</ApprovalPanelsProvider>
 			</KeyboardLayerProvider>
 		</ThemeProvider>,
@@ -214,36 +255,101 @@ test("rejecting one panel settles sibling panels to their audit lines", async ()
 	await setup.renderOnce();
 	await flushUi(setup);
 
-	// Reject on the top panel: the queue rejects every pending approval in the
-	// conversation, so the earlier panel collapses to its audit line too and is
-	// no longer interactive.
-	setup.mockInput.pressArrow("down");
-	setup.mockInput.pressArrow("down");
+	let frame = setup.captureCharFrame();
+	// The active head fills the viewport; the waiting card sits below it.
+	expect(frame).toContain("1 of 2");
+	expect(frame).toContain("Read a UTF-8 text file inside the workspace.");
+	expect(frame.match(/Permission required/gu)).toHaveLength(1);
+	// Only the active head offers controls; the waiting card is read-only.
+	expect(frame.match(/Allow once/gu)).toHaveLength(1);
+
+	// Scroll the hidden-scrollbar stack to review the queued request.
+	const stackScrollbox = setup.renderer.root.findDescendantById(
+		"approval-stack-scrollbox"
+	) as ScrollBoxRenderable | undefined;
+	expect(stackScrollbox).toBeDefined();
+	stackScrollbox?.scrollTo(Number.MAX_SAFE_INTEGER);
+	await setup.renderOnce();
+	frame = setup.captureCharFrame();
+	expect(frame).toContain("2 of 2");
+	expect(frame).toContain("Second queued approval.");
+
 	setup.mockInput.pressEnter();
 	await flushUi(setup);
-	await flushUi(setup);
+	expect(firstActions.allow).toHaveBeenCalledWith(false);
+	const remainingScrollbox = setup.renderer.root.findDescendantById(
+		"approval-stack-scrollbox"
+	) as ScrollBoxRenderable | undefined;
+	remainingScrollbox?.scrollTo(0);
+	await setup.renderOnce();
+	frame = setup.captureCharFrame();
+	expect(frame).toContain("Second queued approval.");
+	expect(frame).not.toContain("1 of 2");
+	expect(frame).not.toContain("2 of 2");
+	expect(frame.match(/Permission required/gu)).toHaveLength(1);
+	expect(frame).toContain("Allow once");
 
-	expect(siblingActions.reject).toHaveBeenCalledWith(undefined);
-	expect(firstActions.reject).not.toHaveBeenCalled();
-	expect(firstActions.allow).not.toHaveBeenCalled();
-	const frame = setup.captureCharFrame();
-	expect(frame).toContain("rejected");
-	expect(frame).not.toContain("Allow once");
-	expect(frame).not.toContain("Always allow");
+	await hoverAction(setup, "Reject");
+	setup.mockInput.pressEnter();
+	await flushUi(setup);
+	expect(secondActions.abort).toHaveBeenCalledTimes(1);
+	expect(secondActions.reject).not.toHaveBeenCalled();
+	expect(firstActions.abort).not.toHaveBeenCalled();
 	setup.renderer.destroy();
 });
 
-test("escape cancels the pending request and collapses to rejected", async () => {
+test("minimized dock renders only the queue head", async () => {
+	const firstActions = makeActions();
+	const secondActions = makeActions();
+	const setup = await testRender(
+		<ThemeProvider>
+			<KeyboardLayerProvider>
+				<ApprovalPanelsProvider>
+					<Register actions={firstActions} request={makeRequest()} />
+					<Register
+						actions={secondActions}
+						request={makeRequest({
+							description: "Second queued approval.",
+							toolCallId: "call-2",
+						})}
+					/>
+					<PendingApprovalDock />
+				</ApprovalPanelsProvider>
+			</KeyboardLayerProvider>
+		</ThemeProvider>,
+		{ height: 40, width: 120 }
+	);
+	await setup.renderOnce();
+	await flushUi(setup);
+
+	let frame = setup.captureCharFrame();
+	expect(frame).toContain("1 of 2");
+	expect(frame).toContain("Read a UTF-8 text file inside the workspace.");
+	expect(frame).not.toContain("Second queued approval.");
+	expect(frame.match(/Permission required/gu)).toHaveLength(1);
+	expect(frame.match(/Allow once/gu)).toHaveLength(1);
+
+	setup.mockInput.pressEnter();
+	await flushUi(setup);
+	expect(firstActions.allow).toHaveBeenCalledWith(false);
+	frame = setup.captureCharFrame();
+	expect(frame).toContain("Second queued approval.");
+	expect(frame).not.toContain("1 of 2");
+	expect(frame.match(/Permission required/gu)).toHaveLength(1);
+	setup.renderer.destroy();
+});
+
+test("escape aborts the approval flow", async () => {
 	const { actions, setup } = await renderPanel(makeRequest(), makeActions());
 
 	setup.mockInput.pressEscape();
-	// Escape settles the request; a second flush commits the collapsed line.
 	await flushUi(setup);
 	await flushUi(setup);
 
-	expect(actions.cancel).toHaveBeenCalled();
+	expect(actions.abort).toHaveBeenCalledTimes(1);
+	expect(actions.cancel).not.toHaveBeenCalled();
 	expect(actions.allow).not.toHaveBeenCalled();
-	expect(setup.captureCharFrame()).toContain("rejected");
+	expect(setup.captureCharFrame()).toContain("aborted");
 	setup.renderer.destroy();
 });
 

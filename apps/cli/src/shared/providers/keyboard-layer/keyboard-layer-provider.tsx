@@ -10,7 +10,7 @@ import {
 } from "react";
 
 type Responder = () => boolean;
-export type ToggleShortcut = "ctrl+o";
+export type ToggleShortcut = "ctrl+f" | "ctrl+o";
 export type ToggleHandler = () => void;
 type ToggleKeyEvent = {
 	ctrl: boolean;
@@ -97,17 +97,26 @@ export function KeyboardLayerProvider({
 		[]
 	);
 	const handleToggleShortcut = useCallback((key: ToggleKeyEvent): boolean => {
-		if (!key.ctrl || key.name !== "o") {
+		if (!key.ctrl) {
+			return false;
+		}
+		const shortcut = `ctrl+${key.name}` as ToggleShortcut;
+		const handlers = toggleHandlers.current.get(shortcut);
+		if (handlers === undefined || handlers.size === 0) {
 			return false;
 		}
 
 		const currentStack = stackRef.current;
-		if (currentStack.length !== 0 && currentStack.at(-1) !== "base") {
+		if (
+			shortcut === "ctrl+o" &&
+			currentStack.length !== 0 &&
+			currentStack.at(-1) !== "base"
+		) {
 			return true;
 		}
 
 		key.preventDefault();
-		for (const toggle of toggleHandlers.current.get("ctrl+o") ?? []) {
+		for (const toggle of handlers) {
 			toggle();
 		}
 		return true;

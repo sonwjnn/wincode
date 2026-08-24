@@ -9,7 +9,7 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { createWorkspaceSandbox, resolveWithinWorkspace } from "../workspace";
 import { runEditTool } from "./edit/runner";
@@ -150,6 +150,21 @@ describe("tool runners", () => {
 		expect(readFileSync(path.join(workspace, filePath), "utf8")).toBe(
 			"hello agent"
 		);
+	});
+	test("reads an approved absolute path outside the workspace", async () => {
+		const filename = `.wincode-read-test-${crypto.randomUUID()}`;
+		const absolutePath = path.join(homedir(), filename);
+		writeFileSync(absolutePath, "home content");
+		try {
+			await expect(
+				runReadTool({ path: absolutePath }, { allowExternalPath: true })
+			).resolves.toEqual({
+				content: "home content",
+				path: absolutePath,
+			});
+		} finally {
+			rmSync(absolutePath, { force: true });
+		}
 	});
 	test("overwrites an existing file with complete replacement content", async () => {
 		const filePath = `${sandboxRelPath}/existing.txt`;
