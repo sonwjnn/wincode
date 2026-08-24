@@ -1,6 +1,7 @@
 import { TextAttributes } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { useEffect, useRef, useState } from "react";
+import { sanitizeText } from "@/shared/display-sanitize";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -67,6 +68,7 @@ const formatApprovalHeader = (request: ToolApprovalRequest): string => {
  */
 export function ToolApprovalPanel({
 	active = true,
+	errorText,
 	fullscreen = false,
 	id,
 	mode = "all",
@@ -74,6 +76,7 @@ export function ToolApprovalPanel({
 	position = 1,
 }: {
 	active?: boolean;
+	errorText?: string;
 	fullscreen?: boolean;
 	id: string;
 	mode?: "all" | "resolved-only";
@@ -86,7 +89,7 @@ export function ToolApprovalPanel({
 		return null;
 	}
 	if (entry.resolution !== undefined) {
-		return <ApprovalResolvedLine resolution={entry.resolution} />;
+		return <ApprovalResolvedLine entry={entry} errorText={errorText} />;
 	}
 	if (mode === "resolved-only") {
 		return null;
@@ -226,21 +229,44 @@ const APPROVAL_RESOLUTION_LABELS: Record<ApprovalOutcome, string> = {
 };
 
 function ApprovalResolvedLine({
-	resolution,
+	entry,
+	errorText,
 }: {
-	resolution: NonNullable<ApprovalPanelEntry["resolution"]>;
+	entry: ApprovalPanelEntry;
+	errorText?: string;
 }) {
 	const { colors } = useTheme();
+	const resolution = entry.resolution;
+	if (resolution === undefined) {
+		return null;
+	}
 	const isDenied =
 		resolution.outcome === "aborted" || resolution.outcome === "rejected";
+	const sanitizedErrorText =
+		errorText === undefined ? "" : sanitizeText(errorText);
+	// The gated resource already renders on the tool row above, so the audit
+	// line strips the trailing `: resource` identity from the reason instead
+	// of repeating it. Feedback and non-gate wording stay untouched.
+	const identityResource = entry.request.identity.find(
+		(row) => row.label === "resource"
+	)?.value;
+	const displayErrorText =
+		identityResource === undefined
+			? sanitizedErrorText
+			: sanitizedErrorText.replace(`: ${identityResource}`, "");
+	const denialReason = displayErrorText || resolution.feedback;
+	const displayLabel =
+		isDenied && denialReason !== undefined
+			? denialReason
+			: APPROVAL_RESOLUTION_LABELS[resolution.outcome];
 	return (
 		<box marginBottom={1} paddingX={3} width="100%">
 			<text fg={isDenied ? colors.error : colors.textMuted}>
 				{isDenied ? "✗ " : "✓ "}
-				{APPROVAL_RESOLUTION_LABELS[resolution.outcome]}
-				{resolution.feedback === undefined ? null : (
+				{displayLabel}
+				{!isDenied && resolution.feedback !== undefined ? (
 					<span fg={colors.textMuted}>{` — ${resolution.feedback}`}</span>
-				)}
+				) : null}
 			</text>
 		</box>
 	);

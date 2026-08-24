@@ -404,7 +404,8 @@ describe("BotMessageContent", () => {
 
 		expect(frame).toContain("Write src/value.ts · 1 line");
 		expect(frame).not.toContain("16 bytes");
-		expect(frame).toContain("Write src/existing.ts · 1 line · Failed");
+		expect(frame).toContain("Write src/existing.ts · 1 line");
+		expect(frame).not.toContain("Failed");
 		expect(frame).toContain("File already exists");
 		expect(frame).not.toContain("const value = 2;");
 		expect(frame).toContain("Write src/empty.ts · 0 lines");
@@ -839,6 +840,7 @@ describe("BotMessageContent", () => {
 	test("preserves static tool names and arguments", async () => {
 		const part = {
 			input: { path: "README.md" },
+			output: { content: "", path: "README.md" },
 			state: "output-available",
 			toolCallId: "call-4",
 			type: "tool-read",
@@ -846,6 +848,106 @@ describe("BotMessageContent", () => {
 		const frame = await renderFrame([part]);
 
 		expect(frame).toContain("→ Read README.md");
+	});
+	test("renders an aborted read as a red tool row without a status suffix", async () => {
+		const part = {
+			errorText: "Read was not approved: ~/.claude/settings.json",
+			input: { path: "~/.claude/settings.json" },
+			state: "output-error",
+			toolCallId: "call-aborted-read",
+			type: "tool-read",
+		} satisfies ReadToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain(
+			"→ Read ~/.claude/settings.json Read was not approved: ~/.claude/settings.json"
+		);
+		expect(frame).not.toContain("Aborted");
+	});
+	test("hides the inline error when the denied audit line owns it", async () => {
+		const part = {
+			errorText: "Read was not approved: ~/.claude/settings.json",
+			input: { path: "~/.claude/settings.json" },
+			state: "output-error",
+			toolCallId: "call-owned-error",
+			type: "tool-read",
+		} satisfies ReadToolPart;
+		const { api, setup } = await renderFrameWithApproval(
+			[part],
+			{
+				description: "Read a UTF-8 text file inside the workspace.",
+				identity: [
+					{ label: "tool", value: "read" },
+					{ label: "resource", value: "~/.claude/settings.json" },
+				],
+				input: { path: "~/.claude/settings.json" },
+				toolCallId: "call-owned-error",
+			},
+			8
+		);
+
+		api?.resolve("call-owned-error", "rejected");
+		await flushUi(setup);
+		const frame = setup.captureCharFrame();
+
+		// The path stays on the tool row; the audit line owns the reason and
+		// drops the repeated resource instead of duplicating it inline.
+		expect(frame).toContain("→ Read ~/.claude/settings.json");
+		expect(frame).toContain("✗ Read was not approved");
+		expect(frame).not.toContain(
+			"Read was not approved: ~/.claude/settings.json"
+		);
+		expect(frame).not.toContain("rejected");
+		setup.renderer.destroy();
+	});
+	test("keeps the inline error when a tool fails after approval", async () => {
+		const part = {
+			errorText: "Chat request failed.",
+			input: { query: "verbose failed query" },
+			state: "output-error",
+			toolCallId: "call-approved-failed",
+			toolName: "mcp_context_7_query_docs_3f6b8a11",
+			type: "dynamic-tool",
+		} satisfies DynamicToolPart;
+		const { api, setup } = await renderFrameWithApproval(
+			[part],
+			{
+				description: "Search the documentation.",
+				identity: [
+					{ label: "tool", value: "mcp_context_7_query_docs_3f6b8a11" },
+					{ label: "resource", value: "*" },
+				],
+				input: { query: "verbose failed query" },
+				toolCallId: "call-approved-failed",
+			},
+			8
+		);
+
+		api?.resolve("call-approved-failed", "allow-once");
+		await flushUi(setup);
+		const frame = setup.captureCharFrame();
+
+		// An approved tool can still fail at runtime; the `✓` line is not an
+		// error surface, so the row keeps its inline reason.
+		expect(frame).toContain("Chat request failed.");
+		expect(frame).toContain("✓ allowed once");
+		setup.renderer.destroy();
+	});
+	test("renders the original MCP rejection reason without a status suffix", async () => {
+		const part = {
+			errorText: "MCP tool 'mcp_demo_echo' was not approved",
+			input: { query: "echo" },
+			state: "output-error",
+			toolCallId: "call-mcp-rejected",
+			toolName: "mcp_demo_echo",
+			type: "dynamic-tool",
+		} satisfies DynamicToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain(
+			"⚙ demo_echo [query=echo] MCP tool 'mcp_demo_echo' was not approved"
+		);
+		expect(frame).not.toContain("Rejected");
 	});
 
 	test("renders grep tools with the search style", async () => {
@@ -998,6 +1100,7 @@ describe("BotMessageContent", () => {
 	test("renders repeated tool call ids", async () => {
 		const part = {
 			input: { path: "README.md" },
+			output: { content: "", path: "README.md" },
 			state: "output-available",
 			toolCallId: "duplicate-call",
 			type: "tool-read",

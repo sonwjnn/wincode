@@ -77,7 +77,8 @@ function Register({
 const renderPanel = async (
 	request: ToolApprovalRequest,
 	actions: ToolApprovalActions,
-	pendingCount = 1
+	pendingCount = 1,
+	errorText?: string
 ): Promise<PanelSetup> => {
 	const setup = await testRender(
 		<ThemeProvider>
@@ -85,6 +86,7 @@ const renderPanel = async (
 				<ApprovalPanelsProvider>
 					<Register actions={actions} request={request} />
 					<ToolApprovalPanel
+						errorText={errorText}
 						id={request.toolCallId ?? "call-1"}
 						pendingCount={pendingCount}
 					/>
@@ -201,6 +203,24 @@ test("reject settles only the selected tool when approvals remain", async () => 
 	expect(actions.reject).toHaveBeenCalledWith(undefined);
 	expect(actions.abort).not.toHaveBeenCalled();
 	expect(setup.captureCharFrame()).toContain("rejected");
+	setup.renderer.destroy();
+});
+test("strips the repeated resource from the resolved audit line", async () => {
+	const { setup } = await renderPanel(
+		makeRequest(),
+		makeActions(),
+		1,
+		"Read was not approved: .env"
+	);
+
+	await hoverAction(setup, "Reject");
+	setup.mockInput.pressEnter();
+	await flushUi(setup);
+
+	const frame = setup.captureCharFrame();
+	expect(frame).toContain("✗ Read was not approved");
+	expect(frame).not.toContain("Read was not approved: .env");
+	expect(frame).not.toContain("✗ rejected");
 	setup.renderer.destroy();
 });
 

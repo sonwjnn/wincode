@@ -25,6 +25,7 @@ import {
 	sanitizeText,
 	stripControlCharacters,
 } from "@/shared/display-sanitize";
+import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
 import { ToolApprovalPanel } from "@/shared/providers/approval/ui/tool-approval-panel";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import {
@@ -263,6 +264,18 @@ const resolveFooterItems = (
 
 function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 	const { colors } = useTheme();
+	const { entries } = useApprovalPanels();
+	// A denied approval audit line (`✗`) renders the failure reason for gated
+	// calls; the tool row then hides its inline copy so the error text never
+	// renders twice. Approved resolutions never hide it: the tool can still
+	// fail at runtime after `✓ allowed`, and replayed history has no entry, so
+	// the row stays the only error surface there.
+	const hideInlineError = entries.some(
+		(entry) =>
+			entry.id === part.toolCallId &&
+			(entry.resolution?.outcome === "aborted" ||
+				entry.resolution?.outcome === "rejected")
+	);
 	const isSkillCall =
 		part.type === "dynamic-tool" &&
 		part.toolName === "skill" &&
@@ -284,10 +297,17 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 			isRenderableWritePart(part));
 
 	let toolLine: ReactNode = (
-		<ToolCallLine agent={agent} colors={colors} part={part} />
+		<ToolCallLine
+			agent={agent}
+			colors={colors}
+			hideInlineError={hideInlineError}
+			part={part}
+		/>
 	);
 	if (isSkillCall) {
-		toolLine = <SkillActivityRow part={part} />;
+		toolLine = (
+			<SkillActivityRow hideInlineError={hideInlineError} part={part} />
+		);
 	} else if (isShellOutput || isEditPreview || isWritePreview) {
 		// Specialized blocks group their own tool header.
 		toolLine = null;
@@ -298,9 +318,23 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 			{toolLine}
 			{isShellOutput ? <ShellOutputBlock part={part} /> : null}
 			{isEditPreview ? <EditDiffBlock agent={agent} part={part} /> : null}
-			{isWritePreview ? <WriteBlock agent={agent} part={part} /> : null}
+			{isWritePreview ? (
+				<WriteBlock
+					agent={agent}
+					hideInlineError={hideInlineError}
+					part={part}
+				/>
+			) : null}
 			{typeof part.toolCallId === "string" ? (
-				<ToolApprovalPanel id={part.toolCallId} mode="resolved-only" />
+				<ToolApprovalPanel
+					errorText={
+						part.state === "output-error"
+							? sanitizeText(formatUnknown(part.errorText))
+							: undefined
+					}
+					id={part.toolCallId}
+					mode="resolved-only"
+				/>
 			) : null}
 		</>
 	);
@@ -380,7 +414,7 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 			onSizeChange={handleBlockResize}
 			paddingX={SHELL_BLOCK_PADDING_X}
 		>
-			<text fg={colors.text} wrapMode="char">
+			<text fg={hasFailed ? colors.error : colors.text} wrapMode="char">
 				{header}
 			</text>
 			{markers.length > 0 ? (
@@ -396,23 +430,30 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 	);
 }
 
-const formatApprovalErrorText = (
+/**
+ * The failure reason rendered on the tool row itself. Hidden when the denied
+ * approval audit line (`✗`) owns the text for the same call, so the error
+ * never renders twice; without a panel entry the row stays the only surface.
+ */
+const renderInlineToolError = (
 	errorText: string,
-	wasDenied: boolean
-): string => {
-	if (!(wasDenied || errorText.toLowerCase().includes("was not approved"))) {
-		return errorText;
-	}
-	return wasDenied ? "Rejected" : "Aborted";
-};
+	hideInlineError: boolean,
+	color: string
+): ReactNode =>
+	!hideInlineError && errorText !== "" ? (
+		<span fg={color}>{` ${errorText}`}</span>
+	) : null;
 
 function ToolCallLine({
 	agent,
 	colors,
+	hideInlineError = false,
 	part,
 }: {
 	agent: AgentId;
 	colors: ThemeColors;
+	/** True when the resolved approval audit line owns the failure reason. */
+	hideInlineError?: boolean;
 	part: ToolPart;
 }) {
 	const errorText = sanitizeText(formatUnknown(part.errorText));
@@ -422,23 +463,24 @@ function ToolCallLine({
 	const hasFailed = part.state === "output-error";
 	const isReadTool = name === "read";
 	const wasDenied = part.state === "output-denied";
+	const hasFailure = hasFailed || wasDenied;
 	const isRunning =
 		part.state === "input-streaming" || part.state === "input-available";
-	const displayErrorText = formatApprovalErrorText(errorText, wasDenied);
+	const displayErrorText = errorText;
+	const toolColor = hasFailure ? colors.error : colors.tool;
 	const staticSummary = formatStaticToolSummary(name, part, isRunning);
 	const toolContent = isMcpTool ? (
-		<text fg={colors.tool} flexGrow={1} flexShrink={1} wrapMode="char">
+		<text fg={toolColor} flexGrow={1} flexShrink={1} wrapMode="char">
 			{`⚙ ${label} [${formatMcpToolArgs(part)}]`}
 			{hasFailed && !errorText ? <span fg={colors.error}> failed</span> : null}
-			{wasDenied ? <span fg={colors.textMuted}> denied</span> : null}
-			{errorText ? <span fg={colors.error}>{` ${errorText}`}</span> : null}
+			{wasDenied ? <span fg={toolColor}> denied</span> : null}
+			{renderInlineToolError(displayErrorText, hideInlineError, colors.error)}
 		</text>
 	) : (
-		<text fg={colors.tool} flexGrow={1} flexShrink={1} wrapMode="char">
+		<text fg={toolColor} flexGrow={1} flexShrink={1} wrapMode="char">
 			{staticSummary}
-			{displayErrorText ? (
-				<span fg={colors.error}>{` ${displayErrorText}`}</span>
-			) : null}
+			{wasDenied ? <span fg={toolColor}> denied</span> : null}
+			{renderInlineToolError(displayErrorText, hideInlineError, colors.error)}
 		</text>
 	);
 
@@ -502,7 +544,14 @@ const SKILL_ACTIVITY_LABELS: Record<SkillActivityState, string> = {
  * the instructions. The state is derived from the sanitized tool result, so
  * the same row renders from live memory and from durable history.
  */
-function SkillActivityRow({ part }: { part: ToolPart }) {
+function SkillActivityRow({
+	hideInlineError = false,
+	part,
+}: {
+	/** True when the denied approval audit line owns the failure reason. */
+	hideInlineError?: boolean;
+	part: ToolPart;
+}) {
 	const { colors } = useTheme();
 	const output =
 		part.state === "output-available" &&
@@ -541,7 +590,9 @@ function SkillActivityRow({ part }: { part: ToolPart }) {
 				{source ? <span fg={colors.textMuted}>{` · ${source}`}</span> : null}
 				{hash ? <span fg={colors.textMuted}>{` · ${hash}`}</span> : null}
 				{activeNames ? <span fg={colors.textMuted}>{activeNames}</span> : null}
-				{failed ? <span fg={colors.error}>{` · ${failed}`}</span> : null}
+				{!hideInlineError && failed ? (
+					<span fg={colors.error}>{` · ${failed}`}</span>
+				) : null}
 			</text>
 		</box>
 	);

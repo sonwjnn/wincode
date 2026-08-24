@@ -222,9 +222,12 @@ const WritePreview = ({
 
 export function WriteBlock({
 	agent,
+	hideInlineError = false,
 	part,
 }: {
 	agent: AgentId;
+	/** True when the denied approval audit line owns the failure reason. */
+	hideInlineError?: boolean;
 	part: WriteToolPart;
 }) {
 	const { colors } = useTheme();
@@ -256,7 +259,6 @@ export function WriteBlock({
 		return null;
 	}
 
-	const status = isFailed ? " · Failed" : "";
 	const footer = expanded
 		? "(Ctrl+O: Collapse)"
 		: `… ${remainingLines} more ${remainingLines === 1 ? "line" : "lines"} (Ctrl+O: Expand)`;
@@ -266,12 +268,13 @@ export function WriteBlock({
 			{isRunning ? (
 				<WriteRunningStatus agent={agent} path={path} />
 			) : (
-				<text fg={colors.textMuted} wrapMode="char">
+				<text fg={isFailed ? colors.error : colors.textMuted} wrapMode="char">
 					{`→ Write ${path} · ${formatLineCount(lineCount)}`}
-					{isFailed ? <span fg={colors.error}>{status}</span> : null}
 				</text>
 			)}
-			{isFailed ? <text fg={colors.error}>{getWriteError(part)}</text> : null}
+			{isFailed && !hideInlineError ? (
+				<text fg={colors.error}>{getWriteError(part)}</text>
+			) : null}
 			{isFailed ? null : (
 				<WritePreview
 					content={content}
