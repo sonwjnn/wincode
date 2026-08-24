@@ -149,10 +149,19 @@ test("allow once settles with allow(false) and collapses to a dim line", async (
 	setup.renderer.destroy();
 });
 
-test("selecting always settles with allow(true)", async () => {
+test("selecting always requires a second confirm before granting", async () => {
 	const { actions, setup } = await renderPanel(makeRequest(), makeActions());
 
 	await hoverAction(setup, "Always allow");
+	setup.mockInput.pressEnter();
+	await flushUi(setup);
+
+	// The first enter only arms the confirm: no grant is minted yet.
+	expect(actions.allow).not.toHaveBeenCalled();
+	expect(setup.captureCharFrame()).toContain(
+		"Always allow lets this tool run without asking again."
+	);
+
 	setup.mockInput.pressEnter();
 	await flushUi(setup);
 	await flushUi(setup);
@@ -175,7 +184,58 @@ test("hovering an action applies its selected background and enter target", asyn
 	setup.mockInput.pressEnter();
 	await flushUi(setup);
 
+	// Enter resolves against the hovered option: the always confirm arms for it.
+	expect(setup.captureCharFrame()).toContain(
+		"Always allow lets this tool run without asking again."
+	);
+
+	setup.mockInput.pressEnter();
+	await flushUi(setup);
+
 	expect(actions.allow).toHaveBeenCalledWith(true);
+	setup.renderer.destroy();
+});
+
+test("a click on the overlay confirm button grants", async () => {
+	const { actions, setup } = await renderPanel(makeRequest(), makeActions());
+	const locate = (
+		label: string,
+		alsoOnRow: string
+	): { column: number; row: number } => {
+		// The disambiguator tells the option bar from the overlay buttons row:
+		// the panel row carries "Reject", the overlay row carries "Cancel".
+		const rows = setup.captureCharFrame().split("\n");
+		const row = rows.findIndex(
+			(candidate) => candidate.includes(label) && candidate.includes(alsoOnRow)
+		);
+		const column = rows[row]?.indexOf(label) ?? -1;
+		expect(row).toBeGreaterThanOrEqual(0);
+		expect(column).toBeGreaterThanOrEqual(0);
+		return { column, row };
+	};
+
+	// Clicking the panel's always option only arms the confirm overlay.
+	const panelButton = locate("Always allow", "Reject");
+	await setup.mockMouse.click(panelButton.column, panelButton.row);
+	await flushUi(setup);
+	expect(actions.allow).not.toHaveBeenCalled();
+	const overlayFrame = setup.captureCharFrame();
+	expect(overlayFrame).toContain(
+		"Always allow lets this tool run without asking again."
+	);
+	// The overlay is pushed on top of the permission block and the panel's
+	// action bar is unmounted: its options and hints are not rendered at all.
+	expect(overlayFrame).toContain("Cancel");
+	expect(overlayFrame).not.toContain("Reject");
+	expect(overlayFrame).not.toContain("ctrl+f");
+
+	// Clicking the overlay's confirm button grants.
+	const overlayButton = locate("Confirm", "Cancel");
+	await setup.mockMouse.click(overlayButton.column, overlayButton.row);
+	await flushUi(setup);
+
+	expect(actions.allow).toHaveBeenCalledWith(true);
+	expect(setup.captureCharFrame()).toContain("always allowed");
 	setup.renderer.destroy();
 });
 
@@ -370,6 +430,63 @@ test("escape aborts the approval flow", async () => {
 	expect(actions.cancel).not.toHaveBeenCalled();
 	expect(actions.allow).not.toHaveBeenCalled();
 	expect(setup.captureCharFrame()).toContain("aborted");
+	setup.renderer.destroy();
+});
+
+test("escape cancels an armed always-allow confirm without aborting", async () => {
+	const { actions, setup } = await renderPanel(makeRequest(), makeActions());
+
+	await hoverAction(setup, "Always allow");
+	setup.mockInput.pressEnter();
+	await flushUi(setup);
+	expect(setup.captureCharFrame()).toContain(
+		"Always allow lets this tool run without asking again."
+	);
+
+	setup.mockInput.pressEscape();
+	await flushUi(setup);
+	await flushUi(setup);
+
+	expect(actions.abort).not.toHaveBeenCalled();
+	expect(actions.allow).not.toHaveBeenCalled();
+	const frame = setup.captureCharFrame();
+	expect(frame).not.toContain("Always allow lets this tool run");
+	expect(frame).toContain("Always allow");
+
+	// Re-arming with enter still requires the second confirm before granting.
+	setup.mockInput.pressEnter();
+	await flushUi(setup);
+	expect(actions.allow).not.toHaveBeenCalled();
+	expect(setup.captureCharFrame()).toContain(
+		"Always allow lets this tool run without asking again."
+	);
+	setup.renderer.destroy();
+});
+
+test("the overlay cancel action pops back without granting", async () => {
+	const { actions, setup } = await renderPanel(makeRequest(), makeActions());
+
+	await hoverAction(setup, "Always allow");
+	setup.mockInput.pressEnter();
+	await flushUi(setup);
+	expect(setup.captureCharFrame()).toContain(
+		"Always allow lets this tool run without asking again."
+	);
+
+	// The overlay owns the keyboard layer while armed: arrow onto the Cancel
+	// button and enter pops the overlay back to the permission panel without
+	// granting or aborting the turn.
+	setup.mockInput.pressArrow("right");
+	await flushUi(setup);
+	setup.mockInput.pressEnter();
+	await flushUi(setup);
+	await flushUi(setup);
+
+	expect(actions.allow).not.toHaveBeenCalled();
+	expect(actions.abort).not.toHaveBeenCalled();
+	const frame = setup.captureCharFrame();
+	expect(frame).not.toContain("Always allow lets this tool run");
+	expect(frame).toContain("Always allow");
 	setup.renderer.destroy();
 });
 

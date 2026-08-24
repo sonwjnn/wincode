@@ -5,6 +5,7 @@ import { sanitizeText } from "@/shared/display-sanitize";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import type { ThemeColors } from "@/shared/providers/theme/themes";
 import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import {
 	type ApprovalPanelEntry,
@@ -290,11 +291,16 @@ function ApprovalPendingPanel({
 	const { isTopLayer, pop, push } = useKeyboardLayer();
 	const { resolve } = useApprovalPanels();
 	const layerId = `approval-panel-${entry.id}`;
+	const confirmLayerId = `approval-confirm-${entry.id}`;
 	const { actions, request } = entry;
 	const options = buildOptions(request.safety === true, pendingCount > 1);
 	const [selectedIndex, setSelectedIndex] = useState(0);
+	const [confirmAlways, setConfirmAlways] = useState(false);
 	const [inputExpanded, setInputExpanded] = useState(false);
 	const selectedIndexRef = useRef(0);
+	// Imperative keys can land before a render commits, so the armed confirm is
+	// also tracked in a ref like the selection itself.
+	const confirmAlwaysRef = useRef(false);
 
 	// Leaving approval mode is an explicit turn abort: settle every pending
 	// request through the conversation abort path instead of rejecting one tool.
@@ -309,6 +315,19 @@ function ApprovalPendingPanel({
 		};
 	}, [actions, entry.id, layerId, pop, push, resolve]);
 
+	// The always-allow confirm is a pushed overlay: it owns the keyboard layer
+	// while armed, so enter/escape resolve against the confirm and the
+	// permission panel regains the keys as soon as the overlay pops.
+	useEffect(() => {
+		if (!confirmAlways) {
+			return;
+		}
+		push(confirmLayerId);
+		return () => {
+			pop(confirmLayerId);
+		};
+	}, [confirmAlways, confirmLayerId, pop, push]);
+
 	// OpenTUI keyboard callbacks are imperative and several keys can land before
 	// it synchronously so enter always resolves against the latest selection even
 	// under rapid input.
@@ -316,7 +335,24 @@ function ApprovalPendingPanel({
 		selectedIndexRef.current = selectedIndex;
 	}, [selectedIndex]);
 
+	const armConfirm = () => {
+		confirmAlwaysRef.current = true;
+		setConfirmAlways(true);
+	};
+
+	const cancelConfirm = () => {
+		confirmAlwaysRef.current = false;
+		setConfirmAlways(false);
+	};
+
 	const selectIndex = (index: number) => {
+		// Moving the selection to a different option cancels an armed
+		// always-allow confirm so a stray arrow or hover can never mint a
+		// persistent grant. Re-selecting the same option keeps it armed so a
+		// second click on the armed option confirms it.
+		if (index !== selectedIndexRef.current) {
+			cancelConfirm();
+		}
 		selectedIndexRef.current = index;
 		setSelectedIndex(index);
 	};
@@ -328,6 +364,11 @@ function ApprovalPendingPanel({
 
 	const settle = (outcome: ApprovalOutcome) => {
 		resolve(entry.id, outcome);
+	};
+
+	const grantAlways = () => {
+		actions.allow(true);
+		settle("always");
 	};
 
 	const confirm = (index: number) => {
@@ -350,6 +391,13 @@ function ApprovalPendingPanel({
 			}
 			return;
 		}
+		if (option.kind === "always" && !confirmAlwaysRef.current) {
+			// "Always allow" mints a persistent grant: require a second explicit
+			// enter/click so one stray keypress cannot authorize every future call.
+			selectIndex(index);
+			armConfirm();
+			return;
+		}
 		const remember = option.kind === "always";
 		actions.allow(remember);
 		settle(remember ? "always" : "allow-once");
@@ -361,6 +409,10 @@ function ApprovalPendingPanel({
 		}
 		if (key.name === "escape") {
 			key.preventDefault();
+			if (confirmAlwaysRef.current) {
+				cancelConfirm();
+				return;
+			}
 			actions.abort();
 			settle("aborted");
 			return;
@@ -392,87 +444,260 @@ function ApprovalPendingPanel({
 	});
 
 	return (
+		<box
+			flexGrow={fullscreen ? 1 : 0}
+			height={fullscreen ? "100%" : undefined}
+			position="relative"
+			width="100%"
+		>
+			<BorderedContentBlock
+				borderColor={request.safety === true ? colors.error : colors.warning}
+				colors={colors}
+				contentBackgroundColor={colors.backgroundPanel}
+				contentGap={0}
+				contentJustifyContent={fullscreen ? "space-between" : undefined}
+				fill={fullscreen}
+				marginBottom={0}
+				paddingX={0}
+				paddingY={0}
+			>
+				<box flexDirection="column" gap={1} padding={1} paddingLeft={2}>
+					<box flexDirection="row" gap={1} justifyContent="space-between">
+						<box flexDirection="row" gap={1}>
+							<text
+								fg={request.safety === true ? colors.error : colors.warning}
+							>
+								△
+							</text>
+							<text fg={colors.text}>
+								<strong>Permission required</strong>
+							</text>
+						</box>
+						{pendingCount > 1 ? (
+							<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+								{position} of {pendingCount}
+							</text>
+						) : null}
+					</box>
+					{request.safety === true && (
+						<text attributes={TextAttributes.BOLD} fg={colors.error}>
+							{request.safetyReason ??
+								"Safety ceiling: the governing Tool Permission config is malformed, so every action must be approved manually."}
+						</text>
+					)}
+					<box flexDirection="row" paddingLeft={2}>
+						<text fg={colors.textMuted}>{"→ "}</text>
+						<text fg={colors.text} wrapMode="word">
+							{formatApprovalHeader(request)}
+						</text>
+					</box>
+					{inputExpanded ? (
+						<box paddingLeft={2}>
+							<text
+								attributes={TextAttributes.DIM}
+								fg={colors.textMuted}
+								wrapMode="word"
+							>
+								{formatApprovalInput(request.input)}
+							</text>
+						</box>
+					) : (
+						<box paddingLeft={2}>
+							<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+								e input
+							</text>
+						</box>
+					)}
+				</box>
+				{!confirmAlways && (
+					<box
+						alignItems={dimensions.width < 80 ? "flex-start" : "center"}
+						backgroundColor={colors.backgroundElement}
+						flexDirection={dimensions.width < 80 ? "column" : "row"}
+						gap={1}
+						justifyContent={
+							dimensions.width < 80 ? "flex-start" : "space-between"
+						}
+						padding={1}
+						paddingLeft={2}
+					>
+						<box flexDirection="row" gap={1}>
+							{options.map((option, index) => {
+								const isSelected = index === selectedIndex;
+								const accent =
+									option.kind === "abort" || option.kind === "reject"
+										? colors.error
+										: colors.warning;
+								const selectedTextColor = getContrastingTextColor(accent);
+								return (
+									// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events.
+									<box
+										backgroundColor={
+											isSelected ? accent : colors.backgroundMenu
+										}
+										key={option.kind}
+										onMouseDown={() => confirm(index)}
+										onMouseMove={() => selectIndex(index)}
+										paddingX={1}
+									>
+										<text
+											fg={isSelected ? selectedTextColor : colors.textMuted}
+										>
+											{option.label}
+										</text>
+									</box>
+								);
+							})}
+						</box>
+						<box flexDirection="row" gap={2}>
+							<text fg={colors.text}>
+								ctrl+f{" "}
+								<span fg={colors.textMuted}>
+									{fullscreen ? "minimize" : "fullscreen"}
+								</span>
+							</text>
+							<text fg={colors.text}>
+								⇄ <span fg={colors.textMuted}>select</span>
+							</text>
+							<text fg={colors.text}>
+								enter <span fg={colors.textMuted}>confirm</span>
+							</text>
+						</box>
+					</box>
+				)}
+			</BorderedContentBlock>
+			{confirmAlways && (
+				<box
+					backgroundColor={colors.backgroundPanel}
+					bottom={0}
+					left={0}
+					position="absolute"
+					right={0}
+					top={0}
+					zIndex={10}
+				>
+					<ConfirmAlwaysOverlay
+						colors={colors}
+						fullscreen={fullscreen}
+						layerId={confirmLayerId}
+						onCancel={cancelConfirm}
+						onConfirm={grantAlways}
+					/>
+				</box>
+			)}
+		</box>
+	);
+}
+
+const CONFIRM_ALWAYS_OPTIONS = [
+	{ kind: "always", label: "Confirm" },
+	{ kind: "cancel", label: "Cancel" },
+] as const;
+
+/**
+ * The overlay pushed on top of the permission block once "Always allow" is
+ * armed: it owns the top keyboard layer, so enter grants, escape pops back to
+ * the permission panel, and the panel's own keys stay inert underneath.
+ */
+function ConfirmAlwaysOverlay({
+	colors,
+	fullscreen,
+	layerId,
+	onCancel,
+	onConfirm,
+}: {
+	colors: ThemeColors;
+	fullscreen: boolean;
+	layerId: string;
+	onCancel: () => void;
+	onConfirm: () => void;
+}) {
+	const { isTopLayer } = useKeyboardLayer();
+	const [selectedIndex, setSelectedIndex] = useState(0);
+	const selectedIndexRef = useRef(0);
+
+	useEffect(() => {
+		selectedIndexRef.current = selectedIndex;
+	}, [selectedIndex]);
+
+	const activate = (index: number) => {
+		if (index === 0) {
+			onConfirm();
+		} else {
+			onCancel();
+		}
+	};
+
+	useKeyboard((key) => {
+		if (!isTopLayer(layerId)) {
+			return;
+		}
+		if (key.name === "escape") {
+			key.preventDefault();
+			onCancel();
+			return;
+		}
+		if (key.name === "left" || key.name === "up") {
+			key.preventDefault();
+			selectedIndexRef.current = (selectedIndexRef.current + 1) % 2;
+			setSelectedIndex(selectedIndexRef.current);
+			return;
+		}
+		if (key.name === "right" || key.name === "down" || key.name === "tab") {
+			key.preventDefault();
+			selectedIndexRef.current = (selectedIndexRef.current + 1) % 2;
+			setSelectedIndex(selectedIndexRef.current);
+			return;
+		}
+		if (key.name === "enter" || key.name === "return") {
+			key.preventDefault();
+			activate(selectedIndexRef.current);
+			return;
+		}
+	});
+
+	return (
 		<BorderedContentBlock
-			borderColor={request.safety === true ? colors.error : colors.warning}
+			borderColor={colors.error}
 			colors={colors}
 			contentBackgroundColor={colors.backgroundPanel}
-			contentGap={0}
-			contentJustifyContent={fullscreen ? "space-between" : undefined}
+			contentGap={1}
 			fill={fullscreen}
 			marginBottom={0}
-			paddingX={0}
-			paddingY={0}
+			paddingX={2}
+			paddingY={1}
 		>
-			<box flexDirection="column" gap={1} padding={1} paddingLeft={2}>
-				<box flexDirection="row" gap={1} justifyContent="space-between">
-					<box flexDirection="row" gap={1}>
-						<text fg={request.safety === true ? colors.error : colors.warning}>
-							△
-						</text>
-						<text fg={colors.text}>
-							<strong>Permission required</strong>
-						</text>
-					</box>
-					{pendingCount > 1 ? (
-						<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-							{position} of {pendingCount}
-						</text>
-					) : null}
-				</box>
-				{request.safety === true && (
-					<text attributes={TextAttributes.BOLD} fg={colors.error}>
-						{request.safetyReason ??
-							"Safety ceiling: the governing Tool Permission config is malformed, so every action must be approved manually."}
-					</text>
-				)}
-				<box flexDirection="row" paddingLeft={2}>
-					<text fg={colors.textMuted}>{"→ "}</text>
-					<text fg={colors.text} wrapMode="word">
-						{formatApprovalHeader(request)}
-					</text>
-				</box>
-				{inputExpanded ? (
-					<box paddingLeft={2}>
-						<text
-							attributes={TextAttributes.DIM}
-							fg={colors.textMuted}
-							wrapMode="word"
-						>
-							{formatApprovalInput(request.input)}
-						</text>
-					</box>
-				) : (
-					<box paddingLeft={2}>
-						<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-							e input
-						</text>
-					</box>
-				)}
+			<box flexDirection="row" gap={1}>
+				<text fg={colors.error}>⚠</text>
+				<text attributes={TextAttributes.BOLD} fg={colors.text}>
+					Confirm always allow
+				</text>
 			</box>
+			<text attributes={TextAttributes.BOLD} fg={colors.error} wrapMode="word">
+				Always allow lets this tool run without asking again.
+			</text>
 			<box
-				alignItems={dimensions.width < 80 ? "flex-start" : "center"}
-				backgroundColor={colors.backgroundElement}
-				flexDirection={dimensions.width < 80 ? "column" : "row"}
+				alignItems="center"
+				flexDirection="row"
 				gap={1}
-				justifyContent={dimensions.width < 80 ? "flex-start" : "space-between"}
-				padding={1}
-				paddingLeft={2}
+				justifyContent="space-between"
 			>
 				<box flexDirection="row" gap={1}>
-					{options.map((option, index) => {
+					{CONFIRM_ALWAYS_OPTIONS.map((option, index) => {
 						const isSelected = index === selectedIndex;
 						const accent =
-							option.kind === "abort" || option.kind === "reject"
-								? colors.error
-								: colors.warning;
+							option.kind === "always" ? colors.error : colors.warning;
 						const selectedTextColor = getContrastingTextColor(accent);
 						return (
 							// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events.
 							<box
 								backgroundColor={isSelected ? accent : colors.backgroundMenu}
 								key={option.kind}
-								onMouseDown={() => confirm(index)}
-								onMouseMove={() => selectIndex(index)}
+								onMouseDown={() => activate(index)}
+								onMouseMove={() => {
+									selectedIndexRef.current = index;
+									setSelectedIndex(index);
+								}}
 								paddingX={1}
 							>
 								<text fg={isSelected ? selectedTextColor : colors.textMuted}>
@@ -484,16 +709,13 @@ function ApprovalPendingPanel({
 				</box>
 				<box flexDirection="row" gap={2}>
 					<text fg={colors.text}>
-						ctrl+f{" "}
-						<span fg={colors.textMuted}>
-							{fullscreen ? "minimize" : "fullscreen"}
-						</span>
-					</text>
-					<text fg={colors.text}>
 						⇄ <span fg={colors.textMuted}>select</span>
 					</text>
 					<text fg={colors.text}>
 						enter <span fg={colors.textMuted}>confirm</span>
+					</text>
+					<text fg={colors.text}>
+						esc <span fg={colors.textMuted}>cancel</span>
 					</text>
 				</box>
 			</box>
