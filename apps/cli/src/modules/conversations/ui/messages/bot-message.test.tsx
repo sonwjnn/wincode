@@ -832,7 +832,7 @@ describe("BotMessageContent", () => {
 		expect(frame).toContain(
 			"⚙ context_7_query_docs [query=verbose failed query]"
 		);
-		expect(frame).toContain("Chat request failed.");
+		expect(frame).toContain("✗ Chat request failed.");
 		expect(frame).not.toContain("failed Chat request failed.");
 		expect(frame).not.toContain("3f6b8a11");
 	});
@@ -849,6 +849,20 @@ describe("BotMessageContent", () => {
 
 		expect(frame).toContain("→ Read README.md");
 	});
+	test("renders an interrupted tool as a row and a fallback error line", async () => {
+		const part = {
+			errorText: "Tool call interrupted",
+			input: { path: "README.md" },
+			state: "output-error",
+			toolCallId: "call-interrupted",
+			type: "tool-read",
+		} satisfies ReadToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain("→ Read README.md");
+		expect(frame).toContain("✗ Tool call interrupted");
+		expect(frame).not.toContain("→ Read README.md Tool call interrupted");
+	});
 	test("renders an aborted read as a red tool row without a status suffix", async () => {
 		const part = {
 			errorText: "Read was not approved: ~/.claude/settings.json",
@@ -859,12 +873,14 @@ describe("BotMessageContent", () => {
 		} satisfies ReadToolPart;
 		const frame = await renderFrame([part]);
 
-		expect(frame).toContain(
-			"→ Read ~/.claude/settings.json Read was not approved: ~/.claude/settings.json"
+		expect(frame).toContain("→ Read ~/.claude/settings.json");
+		expect(frame).toContain("✗ Read was not approved");
+		expect(frame).not.toContain(
+			"Read was not approved: ~/.claude/settings.json"
 		);
 		expect(frame).not.toContain("Aborted");
 	});
-	test("hides the inline error when the denied audit line owns it", async () => {
+	test("lets the denied audit line own the failure reason", async () => {
 		const part = {
 			errorText: "Read was not approved: ~/.claude/settings.json",
 			input: { path: "~/.claude/settings.json" },
@@ -900,7 +916,7 @@ describe("BotMessageContent", () => {
 		expect(frame).not.toContain("rejected");
 		setup.renderer.destroy();
 	});
-	test("keeps the inline error when a tool fails after approval", async () => {
+	test("shows the fallback error line when a tool fails after approval", async () => {
 		const part = {
 			errorText: "Chat request failed.",
 			input: { query: "verbose failed query" },
@@ -927,10 +943,10 @@ describe("BotMessageContent", () => {
 		await flushUi(setup);
 		const frame = setup.captureCharFrame();
 
-		// An approved tool can still fail at runtime; the `✓` line is not an
-		// error surface, so the row keeps its inline reason.
-		expect(frame).toContain("Chat request failed.");
+		// An approved tool can still fail at runtime; the `✓` audit line is not
+		// an error surface, so the fallback error line renders below it.
 		expect(frame).toContain("✓ allowed once");
+		expect(frame).toContain("✗ Chat request failed.");
 		setup.renderer.destroy();
 	});
 	test("renders the original MCP rejection reason without a status suffix", async () => {
@@ -944,9 +960,8 @@ describe("BotMessageContent", () => {
 		} satisfies DynamicToolPart;
 		const frame = await renderFrame([part]);
 
-		expect(frame).toContain(
-			"⚙ demo_echo [query=echo] MCP tool 'mcp_demo_echo' was not approved"
-		);
+		expect(frame).toContain("⚙ demo_echo [query=echo]");
+		expect(frame).toContain("✗ MCP tool 'mcp_demo_echo' was not approved");
 		expect(frame).not.toContain("Rejected");
 	});
 
@@ -1077,7 +1092,7 @@ describe("BotMessageContent", () => {
 		} satisfies DynamicToolPart;
 		const frame = await renderFrame([part]);
 
-		expect(frame).toContain("failed [redacted]");
+		expect(frame).toContain("✗ failed [redacted]");
 		expect(frame).not.toContain("hidden-error");
 		expect(frame).not.toContain("failed\n");
 	});
@@ -1264,7 +1279,7 @@ describe("BotMessageContent skill activity row", () => {
 
 		expect(frame).toContain("Skill lint — rejected");
 		expect(frame).toContain("Skill missing — failed");
-		expect(frame).toContain("Unknown Skill");
+		expect(frame).toContain("✗ Unknown Skill");
 		expect(frame).toContain("Skill commit — limit reached");
 		expect(frame).toContain("review, lint, commit");
 	});

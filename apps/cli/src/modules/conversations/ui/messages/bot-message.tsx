@@ -79,6 +79,70 @@ const formatToolArgumentValue = (value: unknown): string => {
 	return formatUnknown(sanitized).slice(0, MAX_TOOL_ARGUMENTS_LENGTH);
 };
 
+const getToolResource = (part: ToolPart): string | undefined => {
+	const input = getToolInputRecord(part);
+	if (part.type === "tool-shell") {
+		return typeof input.command === "string" ? input.command : undefined;
+	}
+	if (part.type === "tool-grep") {
+		return typeof input.pattern === "string" ? input.pattern : undefined;
+	}
+	const path = typeof input.path === "string" ? input.path : undefined;
+	return path ?? (part.type === "tool-list" ? "." : undefined);
+};
+
+/**
+ * The failure reason without the `: resource` identity suffix: the tool row
+ * above already shows the path/command/pattern, so the error line never
+ * repeats it. Non-gate wording (interruptions, MCP errors) has no such suffix
+ * and passes through unchanged.
+ */
+const stripErrorResource = (errorText: string, part: ToolPart): string => {
+	const resource = getToolResource(part);
+	return resource === undefined
+		? errorText
+		: errorText.replace(`: ${resource}`, "");
+};
+
+/**
+ * The live failure reason of a `skill` activation: the runtime result carries
+ * `output.status === "failed"` with the error before persistence collapses it
+ * to an `output-error` part with `errorText`.
+ */
+const getSkillFailedError = (part: ToolPart): string => {
+	if (
+		part.type !== "dynamic-tool" ||
+		part.toolName !== "skill" ||
+		part.state !== "output-available"
+	) {
+		return "";
+	}
+	const output = getToolOutputRecord(part);
+	return formatUnknown(output.status) === "failed"
+		? formatUnknown(output.error)
+		: "";
+};
+
+/**
+ * The failure reason for the fallback error line, or "" when none renders:
+ * denied calls are owned by the audit line, and non-failed parts carry no
+ * error. Live skill failures surface their reason through the sanitized
+ * output result, every other failure through `errorText`.
+ */
+const getFallbackError = (part: ToolPart, auditOwnsError: boolean): string => {
+	if (auditOwnsError) {
+		return "";
+	}
+	const skillError = getSkillFailedError(part);
+	if (part.state !== "output-error" && skillError === "") {
+		return "";
+	}
+	return stripErrorResource(
+		sanitizeText(formatUnknown(part.errorText) || skillError),
+		part
+	);
+};
+
 const formatMcpToolArgs = (part: ToolPart): string => {
 	if (
 		typeof part.input !== "object" ||
@@ -265,17 +329,16 @@ const resolveFooterItems = (
 function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 	const { colors } = useTheme();
 	const { entries } = useApprovalPanels();
-	// A denied approval audit line (`✗`) renders the failure reason for gated
-	// calls; the tool row then hides its inline copy so the error text never
-	// renders twice. Approved resolutions never hide it: the tool can still
-	// fail at runtime after `✓ allowed`, and replayed history has no entry, so
-	// the row stays the only error surface there.
-	const hideInlineError = entries.some(
+	// The denied approval audit line (`✗`) already renders the failure reason
+	// for gated calls; every other failed call gets the fallback error line
+	// below. Either way the error text never renders on the tool row itself.
+	const auditOwnsError = entries.some(
 		(entry) =>
 			entry.id === part.toolCallId &&
 			(entry.resolution?.outcome === "aborted" ||
 				entry.resolution?.outcome === "rejected")
 	);
+	const fallbackError = getFallbackError(part, auditOwnsError);
 	const isSkillCall =
 		part.type === "dynamic-tool" &&
 		part.toolName === "skill" &&
@@ -297,17 +360,10 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 			isRenderableWritePart(part));
 
 	let toolLine: ReactNode = (
-		<ToolCallLine
-			agent={agent}
-			colors={colors}
-			hideInlineError={hideInlineError}
-			part={part}
-		/>
+		<ToolCallLine agent={agent} colors={colors} part={part} />
 	);
 	if (isSkillCall) {
-		toolLine = (
-			<SkillActivityRow hideInlineError={hideInlineError} part={part} />
-		);
+		toolLine = <SkillActivityRow part={part} />;
 	} else if (isShellOutput || isEditPreview || isWritePreview) {
 		// Specialized blocks group their own tool header.
 		toolLine = null;
@@ -318,13 +374,7 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 			{toolLine}
 			{isShellOutput ? <ShellOutputBlock part={part} /> : null}
 			{isEditPreview ? <EditDiffBlock agent={agent} part={part} /> : null}
-			{isWritePreview ? (
-				<WriteBlock
-					agent={agent}
-					hideInlineError={hideInlineError}
-					part={part}
-				/>
-			) : null}
+			{isWritePreview ? <WriteBlock agent={agent} part={part} /> : null}
 			{typeof part.toolCallId === "string" ? (
 				<ToolApprovalPanel
 					errorText={
@@ -336,6 +386,11 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 					mode="resolved-only"
 				/>
 			) : null}
+			{fallbackError === "" ? null : (
+				<box marginBottom={1} paddingX={3} width="100%">
+					<text fg={colors.error}>{`✗ ${fallbackError}`}</text>
+				</box>
+			)}
 		</>
 	);
 }
@@ -430,30 +485,13 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 	);
 }
 
-/**
- * The failure reason rendered on the tool row itself. Hidden when the denied
- * approval audit line (`✗`) owns the text for the same call, so the error
- * never renders twice; without a panel entry the row stays the only surface.
- */
-const renderInlineToolError = (
-	errorText: string,
-	hideInlineError: boolean,
-	color: string
-): ReactNode =>
-	!hideInlineError && errorText !== "" ? (
-		<span fg={color}>{` ${errorText}`}</span>
-	) : null;
-
 function ToolCallLine({
 	agent,
 	colors,
-	hideInlineError = false,
 	part,
 }: {
 	agent: AgentId;
 	colors: ThemeColors;
-	/** True when the resolved approval audit line owns the failure reason. */
-	hideInlineError?: boolean;
 	part: ToolPart;
 }) {
 	const errorText = sanitizeText(formatUnknown(part.errorText));
@@ -466,7 +504,6 @@ function ToolCallLine({
 	const hasFailure = hasFailed || wasDenied;
 	const isRunning =
 		part.state === "input-streaming" || part.state === "input-available";
-	const displayErrorText = errorText;
 	const toolColor = hasFailure ? colors.error : colors.tool;
 	const staticSummary = formatStaticToolSummary(name, part, isRunning);
 	const toolContent = isMcpTool ? (
@@ -474,13 +511,11 @@ function ToolCallLine({
 			{`⚙ ${label} [${formatMcpToolArgs(part)}]`}
 			{hasFailed && !errorText ? <span fg={colors.error}> failed</span> : null}
 			{wasDenied ? <span fg={toolColor}> denied</span> : null}
-			{renderInlineToolError(displayErrorText, hideInlineError, colors.error)}
 		</text>
 	) : (
 		<text fg={toolColor} flexGrow={1} flexShrink={1} wrapMode="char">
 			{staticSummary}
 			{wasDenied ? <span fg={toolColor}> denied</span> : null}
-			{renderInlineToolError(displayErrorText, hideInlineError, colors.error)}
 		</text>
 	);
 
@@ -544,14 +579,7 @@ const SKILL_ACTIVITY_LABELS: Record<SkillActivityState, string> = {
  * the instructions. The state is derived from the sanitized tool result, so
  * the same row renders from live memory and from durable history.
  */
-function SkillActivityRow({
-	hideInlineError = false,
-	part,
-}: {
-	/** True when the denied approval audit line owns the failure reason. */
-	hideInlineError?: boolean;
-	part: ToolPart;
-}) {
+function SkillActivityRow({ part }: { part: ToolPart }) {
 	const { colors } = useTheme();
 	const output =
 		part.state === "output-available" &&
@@ -571,13 +599,6 @@ function SkillActivityRow({
 			? output.source
 			: undefined;
 	const hash = formatSkillHash(output?.contentHash);
-	const failed =
-		status === "failed" || part.state === "output-error"
-			? stripControlCharacters(
-					formatUnknown(output?.error ?? part.errorText),
-					MAX_TOOL_ARGUMENTS_LENGTH
-				)
-			: "";
 	const activeNames =
 		status === "limit-reached" && Array.isArray(output?.activeSkillNames)
 			? ` · ${output.activeSkillNames.join(", ")}`
@@ -590,9 +611,6 @@ function SkillActivityRow({
 				{source ? <span fg={colors.textMuted}>{` · ${source}`}</span> : null}
 				{hash ? <span fg={colors.textMuted}>{` · ${hash}`}</span> : null}
 				{activeNames ? <span fg={colors.textMuted}>{activeNames}</span> : null}
-				{!hideInlineError && failed ? (
-					<span fg={colors.error}>{` · ${failed}`}</span>
-				) : null}
 			</text>
 		</box>
 	);

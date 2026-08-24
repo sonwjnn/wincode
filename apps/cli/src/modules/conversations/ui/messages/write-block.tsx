@@ -142,14 +142,6 @@ export const buildWriteDiffPatch = (
 	].join("\n");
 };
 
-const getWriteError = (part: WriteToolPart): string => {
-	const error = stripControlCharacters(
-		typeof part.errorText === "string" ? part.errorText : "",
-		MAX_ERROR_LENGTH
-	);
-	return error || "Write failed";
-};
-
 export function isRenderableWritePart(part: WriteToolPart): boolean {
 	return (
 		(part.state === "input-available" ||
@@ -222,12 +214,9 @@ const WritePreview = ({
 
 export function WriteBlock({
 	agent,
-	hideInlineError = false,
 	part,
 }: {
 	agent: AgentId;
-	/** True when the denied approval audit line owns the failure reason. */
-	hideInlineError?: boolean;
 	part: WriteToolPart;
 }) {
 	const { colors } = useTheme();
@@ -272,9 +261,6 @@ export function WriteBlock({
 					{`→ Write ${path} · ${formatLineCount(lineCount)}`}
 				</text>
 			)}
-			{isFailed && !hideInlineError ? (
-				<text fg={colors.error}>{getWriteError(part)}</text>
-			) : null}
 			{isFailed ? null : (
 				<WritePreview
 					content={content}
