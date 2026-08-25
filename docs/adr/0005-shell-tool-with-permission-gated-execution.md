@@ -7,7 +7,7 @@ runtime. Every execution is bounded (timeout, output cap, no stdin, process-tree
 and a command safety classifier keeps destructive commands behind an approval even when
 shell access has already been granted.
 
-Status: accepted
+Status: superseded by ADR-0008 (shell-permissive-posture)
 
 ## Considered Options
 

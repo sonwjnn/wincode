@@ -1,0 +1,18 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Breaking changes
+
+- **Shell permission flips to a permissive posture (0.1.0).** Shell commands
+  default to `allow` instead of `ask`; `rm *` and `sudo *` deny by default as
+  overridable rules. Commands are matched as string globs and evaluated per
+  command node via a tree-sitter parse (fail-closed), cd-family nodes are
+  exempt, "Always allow" records the exact normalized command, and a doom_loop
+  guard asks on the third identical tool call. The manual-approval safety
+  ceiling is unchanged. See ADR-0008.
