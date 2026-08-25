@@ -105,6 +105,69 @@ describe("shell posture defaults", () => {
 		expect(requests).toHaveLength(0);
 	});
 
+	test("compound commands deny on the sudo node", async () => {
+		const { openApproval, requests } = settlingApproval();
+		const gate = createGate(createToolPermission(), openApproval);
+
+		// `git status` alone is allowed, but the sudo node inside the compound
+		// command carries its own deny and composes most-restrictively.
+		await expect(
+			gate.gate(shellCall("git status && sudo whoami"))
+		).resolves.toEqual({
+			errorText: "Shell denied by policy: git status && sudo whoami",
+			kind: "deny",
+		});
+		expect(requests).toHaveLength(0);
+	});
+
+	test("a compound command with one ask node and one allow node prompts once and runs only on approval", async () => {
+		const askPolicy = createToolPermission({ shell: { "git status": "ask" } });
+		const { openApproval, requests } = settlingApproval();
+		const gate = createGate(askPolicy, openApproval);
+
+		// The ask node makes the whole compound an ask; the single approval
+		// covers the call, and approving it runs the command.
+		await expect(gate.gate(shellCall("git status && ls -la"))).resolves.toEqual(
+			{
+				kind: "allow",
+			}
+		);
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.identity[1]).toEqual({
+			label: "resource",
+			value: "git status && ls -la",
+		});
+
+		// Rejecting that same ask never runs the command.
+		const rejectingGate = createGate(askPolicy, (_request, actions) =>
+			actions.reject()
+		);
+		await expect(
+			rejectingGate.gate(shellCall("git status && ls -la"))
+		).resolves.toEqual({
+			errorText: "Shell was not approved: git status && ls -la",
+			kind: "reject",
+		});
+	});
+
+	test("a compound command with one deny node never prompts even when another node asks", async () => {
+		const { openApproval, requests } = settlingApproval();
+		const gate = createGate(
+			createToolPermission({ shell: { "ls *": "ask" } }),
+			openApproval
+		);
+
+		// The ask node would prompt on its own, but the rm node's deny composes
+		// most-restrictively: no dialog opens and nothing runs.
+		await expect(
+			gate.gate(shellCall("ls -la && rm file.txt"))
+		).resolves.toEqual({
+			errorText: "Shell denied by policy: ls -la && rm file.txt",
+			kind: "deny",
+		});
+		expect(requests).toHaveLength(0);
+	});
+
 	test("cd-family commands are exempt from the shell ask", async () => {
 		const { openApproval, requests } = settlingApproval();
 		const gate = createGate(createToolPermission(), openApproval);
