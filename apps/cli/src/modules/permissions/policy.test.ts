@@ -6,10 +6,12 @@ import {
 	createResolvedToolPermission,
 	createToolPermission,
 	DEFAULT_READ_PERMISSION_RULES,
+	DEFAULT_SHELL_PERMISSION_RULES,
 	decideOpenActionPermission,
 	findUnmatchedActionKeys,
 	foldPermissionRules,
 	matchesResourcePattern,
+	matchesStringPattern,
 	mergePermissionRules,
 	type PermissionDecision,
 	type PermissionRules,
@@ -52,6 +54,76 @@ describe("matchesResourcePattern", () => {
 	test("? matches a single non-slash character", () => {
 		expect(matchesResourcePattern("file?.txt", "file1.txt")).toBe(true);
 		expect(matchesResourcePattern("file?.txt", "file12.txt")).toBe(false);
+	});
+});
+
+describe("matchesStringPattern", () => {
+	test("a star crosses slashes in string resources", () => {
+		expect(matchesStringPattern("rm *", "rm src/index.ts")).toBe(true);
+		expect(matchesStringPattern("rm *", "rm file.txt")).toBe(true);
+		expect(matchesStringPattern("rm *", "rm")).toBe(false);
+		expect(matchesStringPattern("rm *", "nrm src")).toBe(false);
+	});
+
+	test("? matches exactly one character including slashes", () => {
+		expect(matchesStringPattern("a?c", "a/c")).toBe(true);
+		expect(matchesStringPattern("a?c", "ac")).toBe(false);
+	});
+
+	test("the catch-all matches every command", () => {
+		expect(matchesStringPattern("*", "pwd")).toBe(true);
+		expect(matchesStringPattern("*", "rm -rf /")).toBe(true);
+		expect(matchesStringPattern("*", "")).toBe(true);
+	});
+
+	test("no directory-prefix widening for bare patterns", () => {
+		// Shell commands are strings, not workspace-relative paths: a bare
+		// pattern matches the whole command only, unlike the path matcher.
+		expect(matchesStringPattern("rm", "rm")).toBe(true);
+		expect(matchesStringPattern("rm", "git rm")).toBe(false);
+		expect(matchesResourcePattern("rm", "x/rm")).toBe(true);
+	});
+});
+
+describe("shell resource-map semantics", () => {
+	test("string globs apply to shell decisions with last-match-wins", () => {
+		const permission = createToolPermission({
+			shell: { "*": "allow", "rm *": "deny" },
+		});
+		expect(permission.decide("shell", "ls -la")).toBe("allow");
+		expect(permission.decide("shell", "rm src/index.ts")).toBe("deny");
+	});
+
+	test("an override ask later in the map wins over the shipped deny", () => {
+		const permission = createToolPermission({
+			shell: { "*": "allow", "rm *": "ask", "sudo *": "deny" },
+		});
+		expect(permission.decide("shell", "rm src/index.ts")).toBe("ask");
+		expect(permission.decide("shell", "sudo apt-get update")).toBe("deny");
+		expect(permission.decide("shell", "pwd")).toBe("allow");
+	});
+
+	test("unmatched shell resources fall back to allow", () => {
+		const permission = createToolPermission({
+			shell: { "rm *": "deny" },
+		});
+		expect(permission.decide("shell", "pwd")).toBe("allow");
+	});
+
+	test("file-path actions keep path-glob semantics for slash-bearing resources", () => {
+		const permission = createToolPermission({
+			read: { "src/*": "ask" },
+		});
+		// The path glob `*` stops at `/`: `src/app.ts` matches, deeper paths do
+		// not, while a shell deny crosses the slash freely.
+		expect(permission.decide("read", "src/app.ts")).toBe("ask");
+		expect(permission.decide("read", "src/deep/app.ts")).toBe("allow");
+		expect(
+			createToolPermission({ shell: { "src/*": "deny" } }).decide(
+				"shell",
+				"src/deep/app.ts"
+			)
+		).toBe("deny");
 	});
 });
 
@@ -156,9 +228,17 @@ describe("createToolPermission defaults", () => {
 		}
 	});
 
-	test("seeds shell execution as ask", () => {
-		expect(permission.decide("shell", "bun test")).toBe("ask");
-		expect(permission.decide("shell", "rm dist")).toBe("ask");
+	test("seeds shell allow with rm and sudo denies (catch-all first)", () => {
+		expect(Object.keys(DEFAULT_SHELL_PERMISSION_RULES)).toEqual([
+			"*",
+			"rm *",
+			"sudo *",
+		]);
+		expect(permission.decide("shell", "bun test")).toBe("allow");
+		expect(permission.decide("shell", "pwd")).toBe("allow");
+		expect(permission.decide("shell", "git status")).toBe("allow");
+		expect(permission.decide("shell", "rm file.txt")).toBe("deny");
+		expect(permission.decide("shell", "sudo npm install -g")).toBe("deny");
 		expect(
 			createToolPermission({ shell: "allow" }).decide("shell", "bun test")
 		).toBe("allow");

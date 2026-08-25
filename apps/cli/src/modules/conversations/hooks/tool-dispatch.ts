@@ -166,11 +166,11 @@ export const createChatToolCallHandler = (
 		}
 
 		if (options.toolCall.toolName === "shell") {
-			// Shell is a static coding tool with its own gate: the command is the
-			// evaluated resource, `cwd` composes the external-directory boundary,
-			// and destructive commands raise the safety ceiling. It is intercepted
-			// before the shared static gate because its inputs carry no path to
-			// resolve and its always-approval grants `shell *`.
+			// Shell is a static coding tool with its own gate: command nodes are
+			// the evaluated resources, `cwd` composes the external-directory
+			// boundary, and always approvals record the exact normalized command
+			// (ADR-0008). It is intercepted before the shared static gate because
+			// its inputs carry no path to resolve.
 			Promise.resolve(
 				(async () => {
 					const outcome = await gate.gate({

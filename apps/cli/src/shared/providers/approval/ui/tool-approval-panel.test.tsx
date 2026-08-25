@@ -126,12 +126,17 @@ test("hides the always option and warns under the safety ceiling", async () => {
 		makeActions()
 	);
 	const frame = setup.captureCharFrame();
-	expect(frame).toContain("Safety ceiling");
+	// The banner is the manual-ceiling wording only: the destructive-command
+	// safety reason is gone with the classifier (ADR-0008).
+	expect(frame).toContain(
+		"Safety ceiling: the governing Tool Permission config is malformed, so every action must be approved manually."
+	);
 	expect(frame).toContain("Allow once");
 	expect(frame).toContain("Reject");
 	expect(frame).not.toContain("Abort");
 	// A safety ask must never mint a grant, so "always" is absent.
 	expect(frame).not.toContain("Always allow");
+	expect(frame).not.toContain("Destructive command");
 	setup.renderer.destroy();
 });
 

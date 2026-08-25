@@ -30,6 +30,7 @@ export {
 	DEFAULT_EFFECTIVE_AGENT_POLICY,
 	DEFAULT_PERMISSION_RULES,
 	DEFAULT_READ_PERMISSION_RULES,
+	DEFAULT_SHELL_PERMISSION_RULES,
 	decideOpenActionPermission,
 	type EffectiveAgentPolicy,
 	findUnmatchedActionKeys,
@@ -38,6 +39,7 @@ export {
 	MAX_FLATTENED_PERMISSION_RULES,
 	MAX_PERMISSION_PATTERN_LENGTH,
 	matchesResourcePattern,
+	matchesStringPattern,
 	mergePermissionRules,
 	PERMISSION_TOOL_ACTIONS,
 	type PermissionAction,
@@ -58,10 +60,12 @@ export {
 } from "./resolve";
 export { resolveTopLevelPermission } from "./schema";
 export {
-	DESTRUCTIVE_SHELL_SAFETY_MESSAGE,
-	isDestructiveShellCommand,
+	CD_FAMILY_COMMANDS,
+	isCdFamilyCommand,
 	normalizeShellCommand,
-} from "./shell-safety";
+	parseShellCommandNodes,
+	type ShellCommandNode,
+} from "./shell-command";
 export { AutoApprovalIndicator } from "./ui/auto-approval-indicator";
 export { PermissionsDialogContent } from "./ui/permissions-dialog";
 export {

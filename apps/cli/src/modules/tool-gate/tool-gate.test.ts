@@ -1,30 +1,425 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { createWorkspaceSandbox } from "@wincode/ai/workspace";
 import { mcpDeniedByPolicyText } from "@/modules/mcp/registry";
 import {
+	applyManualApprovalSafetyCeiling,
 	canonicalizeExternalPath,
 	createPermissionService,
 	createToolPermission,
 	externalParentDirectoryGlob,
+	type PermissionService,
 } from "@/modules/permissions";
-import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
+import type {
+	ToolApprovalActions,
+	ToolApprovalRequest,
+} from "@/shared/providers/approval/types";
 import { createToolGate } from "./tool-gate";
 
 const createGate = (
 	permission = createToolPermission(),
 	openApproval: Parameters<typeof createToolGate>[0]["openApproval"] = () =>
 		undefined,
-	onAbort?: Parameters<typeof createToolGate>[0]["onAbort"]
+	onAbort?: Parameters<typeof createToolGate>[0]["onAbort"],
+	service: PermissionService = createPermissionService()
 ) =>
 	createToolGate({
 		onAbort,
 		openApproval,
 		resolvePermission: async () => permission,
 		sandbox: createWorkspaceSandbox(process.cwd()),
-		service: createPermissionService(),
+		service,
 	});
+
+const shellCall = (
+	command: string,
+	toolCallId = "call-shell",
+	cwd?: string
+) => ({
+	family: "shell" as const,
+	toolCall: {
+		input: cwd === undefined ? { command } : { command, cwd },
+		toolCallId,
+	},
+});
+
+const settlingApproval = () => {
+	const requests: ToolApprovalRequest[] = [];
+	const openApproval = (
+		request: ToolApprovalRequest,
+		actions: ToolApprovalActions
+	) => {
+		requests.push(request);
+		actions.allow(false);
+	};
+	return { openApproval, requests };
+};
+
+describe("shell posture defaults", () => {
+	test("pwd, ls -la, and git status run without any approval", async () => {
+		const { openApproval, requests } = settlingApproval();
+		const gate = createGate(createToolPermission(), openApproval);
+
+		for (const command of ["pwd", "ls -la", "git status"]) {
+			await expect(gate.gate(shellCall(command))).resolves.toEqual({
+				kind: "allow",
+			});
+		}
+		expect(requests).toHaveLength(0);
+	});
+
+	test("rm and sudo are denied without an approval dialog", async () => {
+		const { openApproval, requests } = settlingApproval();
+		const gate = createGate(createToolPermission(), openApproval);
+
+		await expect(gate.gate(shellCall("rm file.txt"))).resolves.toEqual({
+			errorText: "Shell denied by policy: rm file.txt",
+			kind: "deny",
+		});
+		await expect(gate.gate(shellCall("rm -rf src/"))).resolves.toEqual({
+			errorText: "Shell denied by policy: rm -rf src/",
+			kind: "deny",
+		});
+		await expect(gate.gate(shellCall("sudo npm install -g"))).resolves.toEqual({
+			errorText: "Shell denied by policy: sudo npm install -g",
+			kind: "deny",
+		});
+		expect(requests).toHaveLength(0);
+	});
+
+	test("compound commands deny on the rm node", async () => {
+		const { openApproval, requests } = settlingApproval();
+		const gate = createGate(createToolPermission(), openApproval);
+
+		await expect(gate.gate(shellCall("cd ~ && rm -rf *"))).resolves.toEqual({
+			errorText: "Shell denied by policy: cd ~ && rm -rf *",
+			kind: "deny",
+		});
+		await expect(
+			gate.gate(shellCall("git stash && rm -rf src/ 2>/dev/null"))
+		).resolves.toEqual({
+			errorText: "Shell denied by policy: git stash && rm -rf src/ 2>/dev/null",
+			kind: "deny",
+		});
+		expect(requests).toHaveLength(0);
+	});
+
+	test("cd-family commands are exempt from the shell ask", async () => {
+		const { openApproval, requests } = settlingApproval();
+		const gate = createGate(createToolPermission(), openApproval);
+
+		for (const command of ["cd ~", "cd apps/cli", "pushd /tmp", "popd"]) {
+			await expect(gate.gate(shellCall(command))).resolves.toEqual({
+				kind: "allow",
+			});
+		}
+		expect(requests).toHaveLength(0);
+	});
+
+	test("cd-family commands stay exempt under an ask policy but an explicit deny still holds", async () => {
+		const { openApproval, requests } = settlingApproval();
+		const askGate = createGate(
+			createToolPermission({ shell: "ask" }),
+			openApproval
+		);
+		await expect(askGate.gate(shellCall("cd ~"))).resolves.toEqual({
+			kind: "allow",
+		});
+		expect(requests).toHaveLength(0);
+
+		const denyGate = createGate(
+			createToolPermission({ shell: "deny" }),
+			openApproval
+		);
+		await expect(denyGate.gate(shellCall("cd ~"))).resolves.toEqual({
+			errorText: "Shell denied by policy: cd ~",
+			kind: "deny",
+		});
+	});
+
+	test("a command without any command node still honors explicit shell rules", async () => {
+		const { openApproval, requests } = settlingApproval();
+		const denyGate = createGate(
+			createToolPermission({ shell: "deny" }),
+			openApproval
+		);
+		// A bare assignment parses cleanly with no command node; an explicit
+		// deny must still block it (and never silently allow it).
+		await expect(denyGate.gate(shellCall("FOO=bar"))).resolves.toEqual({
+			errorText: "Shell denied by policy: FOO=bar",
+			kind: "deny",
+		});
+
+		const askGate = createGate(
+			createToolPermission({ shell: "ask" }),
+			openApproval
+		);
+		await expect(askGate.gate(shellCall("FOO=bar"))).resolves.toEqual({
+			kind: "allow",
+		});
+		expect(requests).toHaveLength(1);
+
+		const defaultGate = createGate(createToolPermission(), openApproval);
+		await expect(defaultGate.gate(shellCall("FOO=bar"))).resolves.toEqual({
+			kind: "allow",
+		});
+	});
+
+	test("an unparseable command fails closed to an ask", async () => {
+		const { openApproval, requests } = settlingApproval();
+		const gate = createGate(createToolPermission(), openApproval);
+
+		await expect(gate.gate(shellCall('echo "unterminated'))).resolves.toEqual({
+			kind: "allow",
+		});
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.identity[1]).toEqual({
+			label: "resource",
+			value: 'echo "unterminated',
+		});
+	});
+});
+
+describe("shell override and grants", () => {
+	test("a configured rm * ask turns rm into an ordinary ask where allow-once and always work", async () => {
+		const { openApproval, requests } = settlingApproval();
+		const gate = createGate(
+			createToolPermission({ shell: { "rm *": "ask" } }),
+			openApproval
+		);
+
+		await expect(gate.gate(shellCall("rm file.txt"))).resolves.toEqual({
+			kind: "allow",
+		});
+		expect(requests).toHaveLength(1);
+		// The shipped sudo deny stays in force under the override.
+		await expect(gate.gate(shellCall("sudo npm install -g"))).resolves.toEqual({
+			errorText: "Shell denied by policy: sudo npm install -g",
+			kind: "deny",
+		});
+
+		// An always approval on the override path records the exact command and
+		// satisfies only an identical repeat.
+		const service = createPermissionService();
+		const alwaysRequests: ToolApprovalRequest[] = [];
+		const alwaysGate = createToolGate({
+			openApproval: (request, actions) => {
+				alwaysRequests.push(request);
+				actions.allow(true);
+			},
+			resolvePermission: async () =>
+				createToolPermission({ shell: { "rm *": "ask" } }),
+			sandbox: createWorkspaceSandbox(process.cwd()),
+			service,
+		});
+		await alwaysGate.gate(shellCall("rm file.txt", "call-always-1"));
+		expect(service.isGranted("shell", "rm file.txt")).toBe(true);
+		await alwaysGate.gate(shellCall("rm file.txt", "call-always-2"));
+		expect(alwaysRequests).toHaveLength(1);
+		// A sibling rm command is not covered by the exact grant.
+		await alwaysGate.gate(shellCall("rm other.txt", "call-always-3"));
+		expect(alwaysRequests).toHaveLength(2);
+	});
+
+	test("always approval records the exact normalized command", async () => {
+		const service = createPermissionService();
+		const requests: ToolApprovalRequest[] = [];
+		const gate = createToolGate({
+			openApproval: (request, actions) => {
+				requests.push(request);
+				actions.allow(true);
+			},
+			resolvePermission: async () =>
+				createToolPermission({ shell: { "*": "ask" } }),
+			sandbox: createWorkspaceSandbox(process.cwd()),
+			service,
+		});
+
+		await expect(gate.gate(shellCall("git commit -m init"))).resolves.toEqual({
+			kind: "allow",
+		});
+		expect(service.isGranted("shell", "git commit -m init")).toBe(true);
+		expect(service.isGranted("shell", "*")).toBe(false);
+
+		// An identical subsequent command is satisfied by the grant; a sibling
+		// command still asks.
+		await expect(
+			gate.gate(shellCall("git commit -m init", "call-grant-repeat"))
+		).resolves.toEqual({ kind: "allow" });
+		expect(requests).toHaveLength(1);
+		await expect(
+			gate.gate(shellCall("git status", "call-grant-sibling"))
+		).resolves.toEqual({ kind: "allow" });
+		expect(requests).toHaveLength(2);
+	});
+
+	test("an explicit deny is never bypassed by grants or auto approval", async () => {
+		const service = createPermissionService({ autoApproval: true });
+		service.grant("shell", "rm -rf src/");
+		const { openApproval, requests } = settlingApproval();
+		const gate = createGate(
+			createToolPermission(),
+			openApproval,
+			undefined,
+			service
+		);
+
+		await expect(gate.gate(shellCall("rm -rf src/"))).resolves.toEqual({
+			errorText: "Shell denied by policy: rm -rf src/",
+			kind: "deny",
+		});
+		expect(requests).toHaveLength(0);
+	});
+
+	test("an external cwd composes the external-directory ask and grants the exact command", async () => {
+		const parent = await mkdtemp(
+			join(process.env.TMPDIR ?? "/tmp", "wincode-gate-")
+		);
+		const workspace = join(parent, "workspace");
+		await mkdir(workspace);
+		const service = createPermissionService();
+		const requests: ToolApprovalRequest[] = [];
+		const gate = createToolGate({
+			openApproval: (request, actions) => {
+				requests.push(request);
+				actions.allow(true);
+			},
+			resolvePermission: async () => createToolPermission(),
+			sandbox: createWorkspaceSandbox(workspace),
+			service,
+		});
+
+		await expect(
+			gate.gate(shellCall("pwd", "call-shell-external", "../outside"))
+		).resolves.toEqual({ kind: "allow" });
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.identity[2]).toEqual({
+			label: "scope",
+			value: "external",
+		});
+		expect(service.isGranted("shell", "pwd")).toBe(true);
+		expect(service.isGranted("shell", "*")).toBe(false);
+		const resource = await canonicalizeExternalPath("../outside", workspace);
+		expect(service.isGranted("external_directory", resource)).toBe(true);
+	});
+
+	test("a workspace-internal cwd gates without the external scope", async () => {
+		const { openApproval, requests } = settlingApproval();
+		const gate = createGate(
+			createToolPermission({ shell: { "*": "ask" } }),
+			openApproval
+		);
+
+		await expect(
+			gate.gate(shellCall("pwd", "call-shell-inside", "apps/cli"))
+		).resolves.toEqual({ kind: "allow" });
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.identity.map(({ label }) => label)).toEqual([
+			"tool",
+			"resource",
+		]);
+	});
+});
+
+describe("doom_loop", () => {
+	test("the third identical shell call asks and a differing call resets the run", async () => {
+		const { openApproval, requests } = settlingApproval();
+		const gate = createGate(createToolPermission(), openApproval);
+
+		await gate.gate(shellCall("pwd", "call-1"));
+		await gate.gate(shellCall("pwd", "call-2"));
+		// A differing call resets the repeat run.
+		await gate.gate(shellCall("ls -la", "call-3"));
+		await gate.gate(shellCall("pwd", "call-4"));
+		await gate.gate(shellCall("pwd", "call-5"));
+		// The third consecutive pwd is an ordinary ask, allow-once runs it.
+		await expect(gate.gate(shellCall("pwd", "call-6"))).resolves.toEqual({
+			kind: "allow",
+		});
+		expect(requests).toHaveLength(1);
+	});
+
+	test("--auto bypasses the doom_loop ask but an explicit deny never does", async () => {
+		const service = createPermissionService({ autoApproval: true });
+		const { openApproval, requests } = settlingApproval();
+		const gate = createGate(
+			createToolPermission(),
+			openApproval,
+			undefined,
+			service
+		);
+
+		await gate.gate(shellCall("pwd", "call-1"));
+		await gate.gate(shellCall("pwd", "call-2"));
+		await expect(gate.gate(shellCall("pwd", "call-3"))).resolves.toEqual({
+			kind: "allow",
+		});
+		expect(requests).toHaveLength(0);
+
+		await gate.gate(shellCall("rm file.txt", "call-4"));
+		await gate.gate(shellCall("rm file.txt", "call-5"));
+		await expect(
+			gate.gate(shellCall("rm file.txt", "call-6"))
+		).resolves.toEqual({
+			errorText: "Shell denied by policy: rm file.txt",
+			kind: "deny",
+		});
+		expect(requests).toHaveLength(0);
+	});
+
+	test("doom_loop applies to coding tools too", async () => {
+		const { openApproval, requests } = settlingApproval();
+		const gate = createGate(createToolPermission(), openApproval);
+
+		const readCall = (toolCallId: string) => ({
+			family: "coding" as const,
+			toolCall: {
+				input: { path: "package.json" },
+				toolCallId,
+				toolName: "read",
+			},
+		});
+		await gate.gate(readCall("call-1"));
+		await gate.gate(readCall("call-2"));
+		await expect(gate.gate(readCall("call-3"))).resolves.toEqual({
+			kind: "allow",
+		});
+		expect(requests).toHaveLength(1);
+	});
+});
+
+describe("shell manual safety ceiling", () => {
+	test("the manual ceiling still forces an ask that grants never bypass", async () => {
+		const service = createPermissionService();
+		service.grant("shell", "git status");
+		const requests: ToolApprovalRequest[] = [];
+		const permission = applyManualApprovalSafetyCeiling(createToolPermission());
+		const gate = createToolGate({
+			openApproval: (request, actions) => {
+				requests.push(request);
+				actions.allow(true);
+			},
+			resolvePermission: async () => permission,
+			sandbox: createWorkspaceSandbox(process.cwd()),
+			service,
+		});
+
+		await expect(
+			gate.gate(shellCall("git status", "call-safety"))
+		).resolves.toEqual({ kind: "allow" });
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.safety).toBe(true);
+		// The manual-only ask records no new grant, so the next call asks again.
+		await expect(
+			gate.gate(shellCall("git status", "call-safety-2"))
+		).resolves.toEqual({ kind: "allow" });
+		expect(requests).toHaveLength(2);
+		expect(service.listGrants()).toEqual([
+			{ action: "shell", resource: "git status" },
+		]);
+	});
+});
 
 test("coding-family calls fail closed for shell and unknown tools", async () => {
 	const gate = createGate();

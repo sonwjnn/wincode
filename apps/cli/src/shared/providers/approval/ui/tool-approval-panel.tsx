@@ -368,8 +368,8 @@ function ApprovalPendingPanel({
 					</box>
 					{request.safety === true && (
 						<text attributes={TextAttributes.BOLD} fg={colors.error}>
-							{request.safetyReason ??
-								"Safety ceiling: the governing Tool Permission config is malformed, so every action must be approved manually."}
+							Safety ceiling: the governing Tool Permission config is malformed,
+							so every action must be approved manually.
 						</text>
 					)}
 					<box flexDirection="row" paddingLeft={2}>

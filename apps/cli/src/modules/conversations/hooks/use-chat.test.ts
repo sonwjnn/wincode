@@ -22,7 +22,6 @@ import {
 	canonicalizeExternalPath,
 	createPermissionService,
 	createToolPermission,
-	DESTRUCTIVE_SHELL_SAFETY_MESSAGE,
 	type PermissionDecision,
 	type ToolPermission,
 	type ToolPermissionRuntime,
@@ -1374,7 +1373,21 @@ describe("shell tool gating", () => {
 		addToolOutput.mockClear();
 	});
 
-	test("asks before a shell command by default and runs after allow once", async () => {
+	test("runs an ordinary shell command without approval by default", async () => {
+		await settleCallWith(
+			{
+				input: { command: "bun test" },
+				toolCallId: "call-shell-ask",
+				toolName: "shell",
+			},
+			{}
+		);
+		expect(openApproval).not.toHaveBeenCalled();
+		expect(staticToolCallHandler).toHaveBeenCalledTimes(1);
+		expect(addToolOutput).not.toHaveBeenCalled();
+	});
+
+	test("asks before a shell ask-gated command and runs after allow once", async () => {
 		const requests: ToolApprovalRequest[] = [];
 		const approval = mock(
 			(request: ToolApprovalRequest, actions: ToolApprovalActions) => {
@@ -1389,7 +1402,12 @@ describe("shell tool gating", () => {
 				toolCallId: "call-shell-ask",
 				toolName: "shell",
 			},
-			{ openApproval: approval }
+			{
+				openApproval: approval,
+				permissionRef: {
+					current: createToolPermission({ shell: "ask" }),
+				},
+			}
 		);
 
 		expect(requests).toHaveLength(1);
@@ -1439,7 +1457,12 @@ describe("shell tool gating", () => {
 				toolCallId: "call-shell-reject",
 				toolName: "shell",
 			},
-			{ openApproval: approval }
+			{
+				openApproval: approval,
+				permissionRef: {
+					current: createToolPermission({ shell: "ask" }),
+				},
+			}
 		);
 		expect(staticToolCallHandler).not.toHaveBeenCalled();
 		expect(addToolOutput).toHaveBeenCalledWith({
@@ -1450,7 +1473,7 @@ describe("shell tool gating", () => {
 		});
 	});
 
-	test("an always grant persists shell * and skips later commands", async () => {
+	test("an always grant persists the exact command and skips only later siblings", async () => {
 		const service = createPermissionService();
 		const approval = mock(
 			(_request: ToolApprovalRequest, actions: ToolApprovalActions) => {
@@ -1464,21 +1487,52 @@ describe("shell tool gating", () => {
 				toolCallId: "call-shell-grant-1",
 				toolName: "shell",
 			},
-			{ openApproval: approval, service }
+			{
+				openApproval: approval,
+				permissionRef: {
+					current: createToolPermission({ shell: { "*": "ask" } }),
+				},
+				service,
+			}
 		);
-		expect(service.isGranted("shell", "*")).toBe(true);
+		expect(service.isGranted("shell", "bun test")).toBe(true);
+		expect(service.isGranted("shell", "*")).toBe(false);
 
 		await settleCallWith(
 			{
-				input: { command: "git status" },
+				input: { command: "bun test" },
 				toolCallId: "call-shell-grant-2",
 				toolName: "shell",
 			},
-			{ openApproval: approval, service }
+			{
+				openApproval: approval,
+				permissionRef: {
+					current: createToolPermission({ shell: { "*": "ask" } }),
+				},
+				service,
+			}
 		);
 		expect(approval).toHaveBeenCalledTimes(1);
 		expect(staticToolCallHandler).toHaveBeenCalledTimes(2);
 		expect(addToolOutput).not.toHaveBeenCalled();
+
+		// A sibling command is not covered by the exact grant: it asks again.
+		await settleCallWith(
+			{
+				input: { command: "git status" },
+				toolCallId: "call-shell-grant-3",
+				toolName: "shell",
+			},
+			{
+				openApproval: approval,
+				permissionRef: {
+					current: createToolPermission({ shell: { "*": "ask" } }),
+				},
+				service,
+			}
+		);
+		expect(approval).toHaveBeenCalledTimes(2);
+		expect(staticToolCallHandler).toHaveBeenCalledTimes(3);
 	});
 
 	test("auto approval satisfies an ordinary shell ask without a dialog", async () => {
@@ -1489,6 +1543,9 @@ describe("shell tool gating", () => {
 				toolName: "shell",
 			},
 			{
+				permissionRef: {
+					current: createToolPermission({ shell: "ask" }),
+				},
 				service: createPermissionService({ autoApproval: true }),
 			}
 		);
@@ -1496,41 +1553,9 @@ describe("shell tool gating", () => {
 		expect(staticToolCallHandler).toHaveBeenCalledTimes(1);
 	});
 
-	test("a destructive command prompts even under auto approval, grants, and allow policy", async () => {
+	test("rm and sudo are denied by default even under auto approval and grants", async () => {
 		const service = createPermissionService({ autoApproval: true });
-		service.grant("shell", "*");
-		const requests: ToolApprovalRequest[] = [];
-		const approval = mock(
-			(request: ToolApprovalRequest, actions: ToolApprovalActions) => {
-				requests.push(request);
-				queueMicrotask(() => actions.allow(false));
-			}
-		);
-
-		await settleCallWith(
-			{
-				input: { command: "rm -rf /" },
-				toolCallId: "call-shell-destructive",
-				toolName: "shell",
-			},
-			{
-				openApproval: approval,
-				permissionRef: { current: createToolPermission({ shell: "allow" }) },
-				service,
-			}
-		);
-
-		expect(requests).toHaveLength(1);
-		expect(requests[0]).toMatchObject({
-			safety: true,
-			safetyReason: DESTRUCTIVE_SHELL_SAFETY_MESSAGE,
-		});
-		expect(staticToolCallHandler).toHaveBeenCalledTimes(1);
-	});
-
-	test("a destructive command with an explicit deny stays denied", async () => {
-		const service = createPermissionService({ autoApproval: true });
-		service.grant("shell", "*");
+		service.grant("shell", "rm -rf /");
 		const approval = mock(() => undefined);
 
 		await settleCallWith(
@@ -1541,7 +1566,6 @@ describe("shell tool gating", () => {
 			},
 			{
 				openApproval: approval,
-				permissionRef: { current: createToolPermission({ shell: "deny" }) },
 				service,
 			}
 		);
@@ -1555,7 +1579,7 @@ describe("shell tool gating", () => {
 		});
 	});
 
-	test("an external cwd composes the external-directory ask and grants shell *", async () => {
+	test("an external cwd composes the external-directory ask and grants the exact command", async () => {
 		const dir = realpathSync(
 			await mkdtemp(join(tmpdir(), "wincode-shell-external-"))
 		);
@@ -1589,7 +1613,9 @@ describe("shell tool gating", () => {
 				{ label: "scope", value: "external" },
 			],
 		});
-		expect(service.isGranted("shell", "*")).toBe(true);
+		// The always approval records the exact normalized command, not `shell *`.
+		expect(service.isGranted("shell", "pwd")).toBe(true);
+		expect(service.isGranted("shell", "*")).toBe(false);
 		expect(
 			service.isGranted(
 				"external_directory",
@@ -1614,7 +1640,12 @@ describe("shell tool gating", () => {
 				toolCallId: "call-shell-inside-cwd",
 				toolName: "shell",
 			},
-			{ openApproval: approval }
+			{
+				openApproval: approval,
+				permissionRef: {
+					current: createToolPermission({ shell: "ask" }),
+				},
+			}
 		);
 
 		expect(requests).toHaveLength(1);

@@ -119,14 +119,27 @@ export const DEFAULT_READ_PERMISSION_RULES: PermissionResourceRules = {
 	".env.example": "allow",
 };
 
+/**
+ * The shipped default shell rules (ADR-0008): harmless commands run without
+ * approval while `rm` and `sudo` are denied by default. The catch-all must
+ * come first: last-match-wins would otherwise let `"*"` silently override
+ * every specific rule. The denies are ordinary overridable rules, so a
+ * configured `shell` map can turn them back into `ask` or `allow` per family.
+ */
+export const DEFAULT_SHELL_PERMISSION_RULES: PermissionResourceRules = {
+	"*": "allow",
+	"rm *": "deny",
+	"sudo *": "deny",
+};
+
 export const DEFAULT_PERMISSION_RULES: PermissionRules = {
 	read: DEFAULT_READ_PERMISSION_RULES,
 	edit: "allow",
 	list: "allow",
 	grep: "allow",
-	// Shell execution is a real side effect on the user's machine: nothing
-	// runs until the user approves or grants shell access.
-	shell: "ask",
+	// Shell defaults to permissive allow with shipped `rm *`/`sudo *` denies
+	// that users can override through config (ADR-0008).
+	shell: DEFAULT_SHELL_PERMISSION_RULES,
 	// Access outside the workspace is a visible boundary: it always requires
 	// explicit approval unless a configured rule or remembered grant allows it.
 	external_directory: "ask",
@@ -245,7 +258,49 @@ export function matchesResourcePattern(
 	return new RegExp(`^(?:[^/]+/)*${source}$`).test(resource);
 }
 
+const stringGlobToRegExpSource = (pattern: string): string => {
+	let source = "";
+	let index = 0;
+	while (index < pattern.length) {
+		const char = pattern[index] as string;
+		if (char === "*") {
+			source += ".*";
+			index += 1;
+			continue;
+		}
+		if (char === "?") {
+			source += ".";
+			index += 1;
+			continue;
+		}
+		source += escapeRegexChar(char);
+		index += 1;
+	}
+	return source;
+};
+
+/**
+ * Matches a pattern against a plain string resource (ADR-0008). `*` matches
+ * any run of characters including `/`, so a deny like `rm *` catches
+ * `rm src/index.ts`; `?` matches exactly one character. The whole string must
+ * match and there is no directory-prefix widening — shell commands are not
+ * file paths. The policy engine selects this matcher for the `shell` action
+ * while file-path actions keep path-glob semantics.
+ */
+export function matchesStringPattern(
+	pattern: string,
+	resource: string
+): boolean {
+	return new RegExp(`^${stringGlobToRegExpSource(pattern)}$`).test(resource);
+}
+
 type ResourcePatternRule = { decision: PermissionDecision; pattern: string };
+
+/** Selects the pattern matcher for an action: string globs for `shell`, path globs otherwise (ADR-0008). */
+const matcherForAction = (
+	action: PermissionAction
+): ((pattern: string, resource: string) => boolean) =>
+	action === "shell" ? matchesStringPattern : matchesResourcePattern;
 
 /**
  * Applies a resource-map rule with last-matching-pattern-wins semantics.
@@ -257,11 +312,15 @@ type ResourcePatternRule = { decision: PermissionDecision; pattern: string };
 const decideByResourceMap = (
 	entries: readonly ResourcePatternRule[],
 	resource: string,
-	fallback: PermissionDecision
+	fallback: PermissionDecision,
+	matcher: (
+		pattern: string,
+		resource: string
+	) => boolean = matchesResourcePattern
 ): PermissionDecision => {
 	let decision = fallback;
 	for (const entry of entries) {
-		if (matchesResourcePattern(entry.pattern, resource)) {
+		if (matcher(entry.pattern, resource)) {
 			decision = entry.decision;
 		}
 	}
@@ -287,8 +346,10 @@ const normalizeRules = (
 		normalized[action] = Object.entries(rule).map(([pattern, decision]) => ({
 			decision,
 			// Expand `~` and `$HOME` once while compiling so external-directory
-			// patterns are portable across user environments.
-			pattern: expandHomeInPath(pattern),
+			// patterns are portable across user environments. Shell command
+			// patterns are matched against raw command text, so they are never
+			// home-expanded.
+			pattern: action === "shell" ? pattern : expandHomeInPath(pattern),
 		}));
 	}
 	return normalized;
@@ -319,7 +380,8 @@ export function createResolvedToolPermission(
 			return decideByResourceMap(
 				rule,
 				resource,
-				action === "external_directory" ? "ask" : "allow"
+				action === "external_directory" ? "ask" : "allow",
+				matcherForAction(action)
 			);
 		},
 		safety: false,

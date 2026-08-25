@@ -33,15 +33,17 @@ export type ShellPlatform = "posix" | "win32";
 export const shellPlatformFromNode = (platform: string): ShellPlatform =>
 	platform === "win32" ? "win32" : "posix";
 
+// The permissive shell posture is recorded in ADR-0008; the model-facing copy
+// below deliberately stays free of internal document references.
 const SHELL_TOOL_BOUNDS_DESCRIPTION =
-	"Commands are non-interactive: no stdin is provided, output keeps the final 30 KiB, and the default timeout is 30 s (max 300 s). Execution requires your approval until shell access is granted.";
+	'Commands are non-interactive: no stdin is provided, output keeps the final 30 KiB, and the default timeout is 30 s (max 300 s). Harmless commands run without approval; `rm` and `sudo` are denied by default and can be re-enabled or turned into asks with a `permission.shell` config rule (for example `{ "rm *": "ask" }`).';
 
 /**
  * The generic catalog description used by the approval panel and the shared
  * tool registry. The model-facing description is composed per platform by
  * {@link composeShellToolDescription} so the Agent knows which syntax to write.
  */
-export const shellToolDescription = `Run a bounded shell command on the user's machine. Execution always goes through Tool Permission, so expect an approval ask until shell access is granted. ${SHELL_TOOL_BOUNDS_DESCRIPTION}`;
+export const shellToolDescription = `Run a bounded shell command on the user's machine. Shell runs permissively by default: harmless commands like pwd, ls, and git status execute without approval. ${SHELL_TOOL_BOUNDS_DESCRIPTION}`;
 
 /** Composes the system-prompt tool description naming the active shell syntax. */
 export const composeShellToolDescription = (platform: ShellPlatform): string =>

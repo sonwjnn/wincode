@@ -12,13 +12,15 @@ import {
 	canonicalizeExternalPath,
 	canonicalizeResource,
 	composePermissionDecisions,
-	DESTRUCTIVE_SHELL_SAFETY_MESSAGE,
 	expandHomeInPath,
 	externalParentDirectoryGlob,
-	isDestructiveShellCommand,
+	isCdFamilyCommand,
+	normalizeShellCommand,
 	type PermissionDecision,
 	type PermissionService,
+	parseShellCommandNodes,
 	resolveApproval,
+	type ShellCommandNode,
 	STATIC_TOOL_PERMISSION_ACTIONS,
 	type ToolPermission,
 } from "@/modules/permissions";
@@ -108,10 +110,6 @@ const STATIC_TOOL_LABELS = {
 // is supplied and the sandbox canonicalizes the workspace root to an empty path.
 const WORKSPACE_ROOT_RESOURCE = ".";
 
-// Shell always-approvals persist a process-scoped `shell *` grant: any later
-// command for the action is satisfied unless the policy or safety ceiling asks.
-const SHELL_GRANT_RESOURCE = "*";
-
 const isCodingToolName = (name: string): name is CodingToolName =>
 	codingToolNames.some((tool) => tool === name);
 
@@ -195,6 +193,8 @@ type InternalApprovalRequest = {
 		decision: PermissionDecision;
 		resource: string;
 	}>;
+	/** True when this is the third identical call (doom_loop, ADR-0008). */
+	doomAsk?: boolean;
 	request: ToolApprovalRequest;
 	safety: boolean;
 };
@@ -209,14 +209,20 @@ type InternalApprovalRequest = {
  * bounded before it reaches the Agent.
  */
 const settleApproval = async (
-	{ checks, request, safety }: InternalApprovalRequest,
+	{ checks, doomAsk, request, safety }: InternalApprovalRequest,
 	{ approvalQueue, onAbort, openApproval, service }: InternalApprovalDeps,
 	recordGrant: () => void
 ): Promise<GateOutcome> => {
 	const effective = checks.map(({ action, decision, resource }) =>
 		resolveApproval({
 			action,
-			decision,
+			// The doom_loop ask is ordinary: composed before grants and auto
+			// approval so `--auto` still bypasses it while an explicit deny
+			// (already most-restrictive) never does (ADR-0008).
+			decision: composePermissionDecisions(
+				decision,
+				doomAsk === true ? "ask" : "allow"
+			),
 			isAutoApproval: () => service.isAutoApproval(),
 			isGranted: (grantedAction, grantedResource) =>
 				service.isGranted(grantedAction, grantedResource),
@@ -257,11 +263,50 @@ const settleApproval = async (
 	// The safety ceiling is enforced at the single grant-recording site: a
 	// remembered "always" outcome for a safety ask records nothing, so no
 	// grant can bypass a manual-only ask regardless of who presents the
-	// option (ADR-0003, ADR-0005).
+	// option (ADR-0003, ADR-0008).
 	if (outcome.remember && !safety) {
 		recordGrant();
 	}
 	return { kind: "allow" };
+};
+
+/**
+ * Composes the shell policy decision for one command (ADR-0008). Every
+ * command node is its own resource, composed most-restrictively, with
+ * cd-family nodes exempt; the raw-command decision seeds the composition so
+ * an explicit deny or ask holds even when the parse yields no command node
+ * (for example a bare assignment or a redirect-only command). An unparseable
+ * command fails closed to ask.
+ */
+const decideShellCommand = (
+	command: string,
+	nodes: ShellCommandNode[] | undefined,
+	permission: ToolPermission
+): PermissionDecision => {
+	if (nodes === undefined) {
+		return composePermissionDecisions(
+			permission.decide("shell", command),
+			"ask"
+		);
+	}
+	let decision = permission.decide("shell", command);
+	let hasExecutableNode = false;
+	for (const node of nodes) {
+		if (isCdFamilyCommand(node.command)) {
+			continue;
+		}
+		hasExecutableNode = true;
+		decision = composePermissionDecisions(
+			decision,
+			permission.decide("shell", node.text)
+		);
+	}
+	if (!hasExecutableNode && nodes.length > 0) {
+		// Every node is cd-family: the shell ask is skipped entirely, but an
+		// explicit deny on the command still holds.
+		return decision === "deny" ? "deny" : "allow";
+	}
+	return decision;
 };
 
 const withErrorText = (
@@ -281,10 +326,11 @@ const withErrorText = (
 /**
  * The deep Tool Gate module: one interface enforcing Tool Permission at
  * execution time for every tool family. It owns resource resolution and
- * canonicalization, the external-directory composition, the destructive-shell
- * ceiling, the conversation approval queue, temporary-grant recording, and the
- * deny/reject wording each family emits. Callers map the settled outcome onto
- * their own output channel; the gate emits nothing.
+ * canonicalization, the external-directory composition, per-node shell
+ * evaluation, the doom_loop repeat guard, the conversation approval queue,
+ * exact temporary-grant recording, and the deny/reject wording each family
+ * emits. Callers map the settled outcome onto their own output channel; the
+ * gate emits nothing.
  */
 export const createToolGate = ({
 	approvalQueue: providedApprovalQueue,
@@ -300,7 +346,8 @@ export const createToolGate = ({
 
 	const gateCodingToolCall = async (
 		toolCall: { input: unknown; toolCallId: string; toolName: string },
-		permission: ToolPermission
+		permission: ToolPermission,
+		doomAsk: boolean
 		// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: authorization branches are intentionally kept in one gate
 	): Promise<GateOutcome> => {
 		if (!isCodingToolName(toolCall.toolName)) {
@@ -351,6 +398,7 @@ export const createToolGate = ({
 							resource: gateResource.value,
 						},
 					],
+					doomAsk,
 					request: requestFor(gateResource.value, false),
 					safety: permission.safety,
 				},
@@ -379,6 +427,7 @@ export const createToolGate = ({
 					checks: [
 						{ action, decision: permission.decide(action, resource), resource },
 					],
+					doomAsk,
 					request: requestFor(resource, false),
 					safety: permission.safety,
 				},
@@ -424,6 +473,7 @@ export const createToolGate = ({
 							resource: gateResource.pattern ?? resource,
 						},
 					],
+					doomAsk,
 					request: requestFor(
 						gateResource.pattern ?? resource,
 						true,
@@ -462,18 +512,20 @@ export const createToolGate = ({
 	};
 
 	/**
-	 * Enforces the Tool Permission policy for a `shell` tool call. The command is
-	 * the evaluated resource; a workspace-internal `cwd` runs directly, while a
-	 * `cwd` outside the workspace composes the `external_directory` boundary
-	 * (canonicalized and symlink-resolved like file tools). Always approvals
-	 * persist a process-scoped `shell *` grant. Destructive commands raise the
-	 * safety ceiling on top of the policy: they always prompt, and neither
-	 * `--auto`, a remembered grant, nor a permissive configured rule can run them
-	 * without a fresh approval.
+	 * Enforces the Tool Permission policy for a `shell` tool call (ADR-0008).
+	 * The command is parsed per node: each command node is its own resource
+	 * evaluated against the shell rules, composed most-restrictively, and
+	 * cd-family nodes are exempt. An unparseable command fails closed to ask,
+	 * so a parser bug never silently allows. Always approvals persist the exact
+	 * normalized command as the grant key, so approving one command never
+	 * unlocks its siblings. A `cwd` outside the workspace still composes the
+	 * `external_directory` boundary (canonicalized and symlink-resolved like
+	 * file tools).
 	 */
 	const gateShellToolCall = async (
 		toolCall: { input: unknown; toolCallId: string },
-		permission: ToolPermission
+		permission: ToolPermission,
+		doomAsk: boolean
 	): Promise<GateOutcome> => {
 		const command = getStringField(toolCall.input, "command");
 		if (!command) {
@@ -481,8 +533,10 @@ export const createToolGate = ({
 			// error, mirroring the other static tools.
 			return { kind: "allow" };
 		}
+		const normalized = normalizeShellCommand(command);
+		const nodes = await parseShellCommandNodes(command);
+		const operationDecision = decideShellCommand(command, nodes, permission);
 		const cwd = getStringField(toolCall.input, "cwd");
-		const destructive = isDestructiveShellCommand(command);
 		const request = (external: boolean): ToolApprovalRequest => ({
 			description: codingToolDefinitions.shell.description,
 			identity: [
@@ -491,18 +545,9 @@ export const createToolGate = ({
 				...(external ? [{ label: "scope", value: "external" }] : []),
 			],
 			input: toolCall.input,
-			safety: permission.safety || destructive,
-			...(destructive
-				? { safetyReason: DESTRUCTIVE_SHELL_SAFETY_MESSAGE }
-				: {}),
+			safety: permission.safety,
 			toolCallId: toolCall.toolCallId,
 		});
-		const rawDecision = permission.decide("shell", command);
-		// The classifier is a ceiling, not a bypass: an explicit policy deny still
-		// denies, every other destructive command becomes a manual-only ask.
-		const operationDecision =
-			rawDecision === "deny" || !destructive ? rawDecision : "ask";
-		const safety = permission.safety || destructive;
 
 		let externalResource: string | undefined;
 		if (cwd !== undefined) {
@@ -535,14 +580,15 @@ export const createToolGate = ({
 						{
 							action: "shell",
 							decision: operationDecision,
-							resource: SHELL_GRANT_RESOURCE,
+							resource: normalized,
 						},
 					],
+					doomAsk,
 					request: request(false),
-					safety,
+					safety: permission.safety,
 				},
 				approvalDeps,
-				() => service.grant("shell", SHELL_GRANT_RESOURCE)
+				() => service.grant("shell", normalized)
 			);
 			return withErrorText(
 				settled,
@@ -562,11 +608,12 @@ export const createToolGate = ({
 					{
 						action: "shell",
 						decision: operationDecision,
-						resource: SHELL_GRANT_RESOURCE,
+						resource: normalized,
 					},
 				],
+				doomAsk,
 				request: request(true),
-				safety,
+				safety: permission.safety,
 			},
 			approvalDeps,
 			() => {
@@ -574,7 +621,7 @@ export const createToolGate = ({
 					"external_directory",
 					externalParentDirectoryGlob(externalResource ?? "")
 				);
-				service.grant("shell", SHELL_GRANT_RESOURCE);
+				service.grant("shell", normalized);
 			}
 		);
 		return withErrorText(
@@ -593,7 +640,8 @@ export const createToolGate = ({
 	 * "always" outcome grants the exact logical name.
 	 */
 	const gateMcpToolCall = async (
-		call: Extract<GateCall, { family: "mcp" }>
+		call: Extract<GateCall, { family: "mcp" }>,
+		doomAsk: boolean
 	) => {
 		const composedDecision = composePermissionDecisions(
 			call.serverDecision,
@@ -610,6 +658,7 @@ export const createToolGate = ({
 						resource: MCP_PERMISSION_RESOURCE,
 					},
 				],
+				doomAsk,
 				request: {
 					description: call.description,
 					identity: [
@@ -638,7 +687,8 @@ export const createToolGate = ({
 	 * structured rejection result instead.
 	 */
 	const gateSkillCall = async (
-		call: Extract<GateCall, { family: "skill" }>
+		call: Extract<GateCall, { family: "skill" }>,
+		doomAsk: boolean
 	): Promise<GateOutcome> => {
 		const permission = await resolvePermission();
 		const decision = permission.decide("skill", call.name);
@@ -654,6 +704,7 @@ export const createToolGate = ({
 						resource: call.name,
 					},
 				],
+				doomAsk,
 				request: {
 					description: call.description,
 					identity: [
@@ -674,20 +725,50 @@ export const createToolGate = ({
 		);
 	};
 
-	const gate = async (call: GateCall): Promise<GateOutcome> => {
+	// doom_loop (ADR-0008): per-conversation repeat tracking keyed by the
+	// (family, tool, input) triple. The third identical call turns the decision
+	// into an ordinary ask that `--auto` may bypass but an explicit deny never
+	// does; any differing call resets the run.
+	const DOOM_LOOP_THRESHOLD = 3;
+	let lastDoomKey: string | undefined;
+	let doomRepeatCount = 0;
+	const doomKeyOf = (call: GateCall): string => {
 		if (call.family === "mcp") {
-			return gateMcpToolCall(call);
+			return `mcp:${call.action}:${JSON.stringify(call.input)}`;
 		}
 		if (call.family === "skill") {
-			return gateSkillCall(call);
+			return `skill:${call.name}:${JSON.stringify({ name: call.name })}`;
+		}
+		if (call.family === "shell") {
+			return `shell:${JSON.stringify(call.toolCall.input)}`;
+		}
+		return `coding:${call.toolCall.toolName}:${JSON.stringify(call.toolCall.input)}`;
+	};
+	const trackDoomLoop = (call: GateCall): boolean => {
+		const key = doomKeyOf(call);
+		if (key === lastDoomKey) {
+			doomRepeatCount += 1;
+		} else {
+			lastDoomKey = key;
+			doomRepeatCount = 1;
+		}
+		return doomRepeatCount >= DOOM_LOOP_THRESHOLD;
+	};
+
+	const gate = async (call: GateCall): Promise<GateOutcome> => {
+		if (call.family === "mcp") {
+			return gateMcpToolCall(call, trackDoomLoop(call));
+		}
+		if (call.family === "skill") {
+			return gateSkillCall(call, trackDoomLoop(call));
 		}
 		if (call.family === "shell") {
 			const permission = await resolvePermission();
-			return gateShellToolCall(call.toolCall, permission);
+			return gateShellToolCall(call.toolCall, permission, trackDoomLoop(call));
 		}
 		if (call.family === "coding") {
 			const permission = await resolvePermission();
-			return gateCodingToolCall(call.toolCall, permission);
+			return gateCodingToolCall(call.toolCall, permission, trackDoomLoop(call));
 		}
 		return { errorText: "Unknown tool authorization family", kind: "deny" };
 	};
