@@ -42,7 +42,6 @@ export function ChatShell({
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
 	const [scrollRequest, setScrollRequest] = useState(0);
-	const [approvalFullscreen, setApprovalFullscreen] = useState(false);
 	const { agent, model } = usePromptConfig();
 	const { colors } = useTheme();
 	const agentColor = getAgentColor(colors, agent);
@@ -63,21 +62,9 @@ export function ChatShell({
 
 		scrollboxRef.current?.scrollTo(Number.MAX_SAFE_INTEGER);
 	}, [scrollRequest]);
-	useEffect(() => {
-		if (!hasPendingApproval) {
-			setApprovalFullscreen(false);
-		}
-	}, [hasPendingApproval]);
 	useToggleShortcut("ctrl+o", () => {
 		setScrollRequest((request) => request + 1);
 	});
-	useToggleShortcut(
-		"ctrl+f",
-		() => {
-			setApprovalFullscreen((fullscreen) => !fullscreen);
-		},
-		hasPendingApproval
-	);
 
 	const handleSubmit = (submission: ChatPromptSubmission) => {
 		const accepted = onSubmit(submission);
@@ -97,125 +84,104 @@ export function ChatShell({
 			paddingX={1}
 			width="100%"
 		>
-			{hasPendingApproval && approvalFullscreen ? (
-				<PendingApprovalDock fullscreen />
-			) : (
-				<>
-					<scrollbox
-						flexGrow={1}
-						height="100%"
-						id="conversation-scrollbox"
-						ref={scrollboxRef}
-						stickyScroll
-						stickyStart="bottom"
-						verticalScrollbarOptions={{ visible: false }}
-					>
-						<box flexDirection="column" gap={1}>
-							{messages.length === 0 && !error ? (
-								<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-									No messages yet.
-								</text>
-							) : (
-								turns.map((turn, index) => (
-									<box
-										key={turn.id}
-										marginTop={index === 0 ? 1 : 0}
-										width="100%"
-									>
-										<ChatMessage
-											footerMessage={footerMessages.get(turn.id)}
-											isStreaming={isBusy && turn === turns.at(-1)}
-											messages={turn.messages}
-										/>
-									</box>
-								))
-							)}
-							{error ? <ErrorMessage error={error} /> : null}
-						</box>
-					</scrollbox>
-					<box
-						backgroundColor={colors.background}
-						flexDirection="column"
-						flexShrink={0}
-						gap={1}
-						paddingY={1}
-						width="100%"
-					>
-						{hasPendingApproval ? (
-							// The pending dock replaces the composer AND the session
-							// footer row while a decision is owed.
-							<box flexShrink={0} width="100%">
-								<PendingApprovalDock />
+			<scrollbox
+				flexGrow={1}
+				height="100%"
+				id="conversation-scrollbox"
+				ref={scrollboxRef}
+				stickyScroll
+				stickyStart="bottom"
+				verticalScrollbarOptions={{ visible: false }}
+			>
+				<box flexDirection="column" gap={1}>
+					{messages.length === 0 && !error ? (
+						<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+							No messages yet.
+						</text>
+					) : (
+						turns.map((turn, index) => (
+							<box key={turn.id} marginTop={index === 0 ? 1 : 0} width="100%">
+								<ChatMessage
+									footerMessage={footerMessages.get(turn.id)}
+									isStreaming={isBusy && turn === turns.at(-1)}
+									messages={turn.messages}
+								/>
 							</box>
-						) : (
-							<>
-								<box flexShrink={0} width="100%">
-									<ChatTextArea
-										onSubmit={handleSubmit}
-										sessionPromptHistory={promptHistory}
-									/>
-								</box>
-								<box
-									flexDirection="row"
-									flexShrink={0}
-									flexWrap="wrap"
-									gap={2}
-									justifyContent="space-between"
-									paddingLeft={1}
-									width="100%"
-								>
-									<box
-										alignItems="center"
-										flexDirection="row"
-										flexGrow={1}
-										flexShrink={1}
-										gap={2}
-									>
-										{isBusy ? (
-											<>
-												<ProgressBar agent={agent} />
-												<text>
-													<span fg={agentColor}>Esc</span>
-													<span fg={colors.textMuted}>
-														{isInterruptArmed
-															? " again to interrupt"
-															: " interrupt"}
-													</span>
-												</text>
-											</>
-										) : (
-											<text
-												attributes={TextAttributes.DIM}
-												fg={colors.textMuted}
-											>
-												{process.cwd()}
-											</text>
-										)}
-									</box>
-
-									<box
-										flexDirection="row"
-										flexShrink={0}
-										gap={2}
-										marginLeft="auto"
-									>
-										{usage ? <SessionUsageBar summary={usage} /> : null}
-										<box flexDirection="row" flexShrink={0} gap={1}>
-											<text fg={colors.text}>tab</text>
-											<text
-												attributes={TextAttributes.DIM}
-												fg={colors.textMuted}
-											>
-												agents
-											</text>
-										</box>
-									</box>
-								</box>
-							</>
-						)}
+						))
+					)}
+					{error ? <ErrorMessage error={error} /> : null}
+				</box>
+			</scrollbox>
+			<box
+				backgroundColor={colors.background}
+				flexDirection="column"
+				flexShrink={0}
+				gap={1}
+				paddingY={1}
+				width="100%"
+			>
+				{hasPendingApproval ? (
+					// The pending dock replaces the composer AND the session
+					// footer row while a decision is owed.
+					<box flexShrink={0} width="100%">
+						<PendingApprovalDock />
 					</box>
-				</>
-			)}
+				) : (
+					<>
+						<box flexShrink={0} width="100%">
+							<ChatTextArea
+								onSubmit={handleSubmit}
+								sessionPromptHistory={promptHistory}
+							/>
+						</box>
+						<box
+							flexDirection="row"
+							flexShrink={0}
+							flexWrap="wrap"
+							gap={2}
+							justifyContent="space-between"
+							paddingLeft={1}
+							width="100%"
+						>
+							<box
+								alignItems="center"
+								flexDirection="row"
+								flexGrow={1}
+								flexShrink={1}
+								gap={2}
+							>
+								{isBusy ? (
+									<>
+										<ProgressBar agent={agent} />
+										<text>
+											<span fg={agentColor}>Esc</span>
+											<span fg={colors.textMuted}>
+												{isInterruptArmed
+													? " again to interrupt"
+													: " interrupt"}
+											</span>
+										</text>
+									</>
+								) : (
+									<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+										{process.cwd()}
+									</text>
+								)}
+							</box>
+
+							<box flexDirection="row" flexShrink={0} gap={2} marginLeft="auto">
+								{usage ? <SessionUsageBar summary={usage} /> : null}
+								<box flexDirection="row" flexShrink={0} gap={1}>
+									<text fg={colors.text}>tab</text>
+									<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+										agents
+									</text>
+								</box>
+							</box>
+						</box>
+					</>
+				)}
+			</box>
 		</box>
 	);
 }

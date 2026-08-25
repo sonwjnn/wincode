@@ -68,17 +68,13 @@ const formatApprovalHeader = (request: ToolApprovalRequest): string => {
  * mode so the timeline retains only the durable audit record.
  */
 export function ToolApprovalPanel({
-	active = true,
 	errorText,
-	fullscreen = false,
 	id,
 	mode = "all",
 	pendingCount = 1,
 	position = 1,
 }: {
-	active?: boolean;
 	errorText?: string;
-	fullscreen?: boolean;
 	id: string;
 	mode?: "all" | "resolved-only";
 	pendingCount?: number;
@@ -95,91 +91,15 @@ export function ToolApprovalPanel({
 	if (mode === "resolved-only") {
 		return null;
 	}
-	if (!active) {
-		return (
-			<ApprovalWaitingCard
-				entry={entry}
-				pendingCount={pendingCount}
-				position={position}
-			/>
-		);
-	}
 	return (
 		<ApprovalPendingPanel
 			entry={entry}
-			fullscreen={fullscreen}
 			pendingCount={pendingCount}
 			position={position}
 		/>
 	);
 }
-
-/**
- * A read-only queued card in the fullscreen stack: it shows the request
- * context and its position but no controls, keyboard layer, or focus target.
- */
-function ApprovalWaitingCard({
-	entry,
-	pendingCount,
-	position,
-}: {
-	entry: ApprovalPanelEntry;
-	pendingCount: number;
-	position: number;
-}) {
-	const { colors } = useTheme();
-	const { request } = entry;
-	return (
-		<BorderedContentBlock
-			borderColor={request.safety === true ? colors.error : colors.warning}
-			colors={colors}
-			contentBackgroundColor={colors.backgroundPanel}
-			contentGap={0}
-			marginBottom={0}
-			paddingX={0}
-			paddingY={0}
-		>
-			<box flexDirection="column" gap={1} padding={1} paddingLeft={2}>
-				<box flexDirection="row" gap={1} justifyContent="space-between">
-					<box flexDirection="row" gap={1}>
-						<text fg={request.safety === true ? colors.error : colors.warning}>
-							△
-						</text>
-						<text fg={colors.textMuted}>
-							<strong>Permission required</strong>
-						</text>
-					</box>
-					{pendingCount > 1 ? (
-						<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-							{position} of {pendingCount}
-						</text>
-					) : null}
-				</box>
-				{request.safety === true && (
-					<text attributes={TextAttributes.BOLD} fg={colors.error}>
-						{request.safetyReason ??
-							"Safety ceiling: the governing Tool Permission config is malformed, so every action must be approved manually."}
-					</text>
-				)}
-				<box flexDirection="row" paddingLeft={2}>
-					<text
-						attributes={TextAttributes.DIM}
-						fg={colors.textMuted}
-						wrapMode="word"
-					>
-						{formatApprovalHeader(request)}
-					</text>
-				</box>
-			</box>
-		</BorderedContentBlock>
-	);
-}
-
-export function PendingApprovalDock({
-	fullscreen = false,
-}: {
-	fullscreen?: boolean;
-}) {
+export function PendingApprovalDock() {
 	const pendingEntries = useApprovalPanels().entries.filter(
 		(entry) => entry.resolution === undefined
 	);
@@ -187,39 +107,14 @@ export function PendingApprovalDock({
 	if (pendingEntry === undefined) {
 		return null;
 	}
-	if (!fullscreen) {
-		return (
-			<box width="100%">
-				<ToolApprovalPanel
-					id={pendingEntry.id}
-					key={pendingEntry.id}
-					pendingCount={pendingEntries.length}
-					position={1}
-				/>
-			</box>
-		);
-	}
 	return (
-		<box flexGrow={1} height="100%" paddingY={1} width="100%">
-			<scrollbox
-				flexGrow={1}
-				height="100%"
-				id="approval-stack-scrollbox"
-				verticalScrollbarOptions={{ visible: false }}
-			>
-				<box flexDirection="column" gap={1} width="100%">
-					{pendingEntries.map((entry, index) => (
-						<ToolApprovalPanel
-							active={index === 0}
-							fullscreen={index === 0}
-							id={entry.id}
-							key={entry.id}
-							pendingCount={pendingEntries.length}
-							position={index + 1}
-						/>
-					))}
-				</box>
-			</scrollbox>
+		<box width="100%">
+			<ToolApprovalPanel
+				id={pendingEntry.id}
+				key={pendingEntry.id}
+				pendingCount={pendingEntries.length}
+				position={1}
+			/>
 		</box>
 	);
 }
@@ -276,14 +171,12 @@ function ApprovalResolvedLine({
 
 type ApprovalPendingPanelProps = {
 	entry: ApprovalPanelEntry;
-	fullscreen: boolean;
 	pendingCount: number;
 	position: number;
 };
 
 function ApprovalPendingPanel({
 	entry,
-	fullscreen,
 	pendingCount,
 	position,
 }: ApprovalPendingPanelProps) {
@@ -445,19 +338,12 @@ function ApprovalPendingPanel({
 	});
 
 	return (
-		<box
-			flexGrow={fullscreen ? 1 : 0}
-			height={fullscreen ? "100%" : undefined}
-			position="relative"
-			width="100%"
-		>
+		<box position="relative" width="100%">
 			<BorderedContentBlock
 				borderColor={request.safety === true ? colors.error : colors.warning}
 				colors={colors}
 				contentBackgroundColor={colors.backgroundPanel}
 				contentGap={0}
-				contentJustifyContent={fullscreen ? "space-between" : undefined}
-				fill={fullscreen}
 				marginBottom={0}
 				paddingX={0}
 				paddingY={0}
@@ -553,12 +439,6 @@ function ApprovalPendingPanel({
 						</box>
 						<box flexDirection="row" gap={2}>
 							<text fg={colors.text}>
-								ctrl+f{" "}
-								<span fg={colors.textMuted}>
-									{fullscreen ? "minimize" : "fullscreen"}
-								</span>
-							</text>
-							<text fg={colors.text}>
 								⇄ <span fg={colors.textMuted}>select</span>
 							</text>
 							<text fg={colors.text}>
@@ -580,7 +460,6 @@ function ApprovalPendingPanel({
 				>
 					<ConfirmAlwaysOverlay
 						colors={colors}
-						fullscreen={fullscreen}
 						layerId={confirmLayerId}
 						onCancel={cancelConfirm}
 						onConfirm={grantAlways}
@@ -603,13 +482,11 @@ const CONFIRM_ALWAYS_OPTIONS = [
  */
 function ConfirmAlwaysOverlay({
 	colors,
-	fullscreen,
 	layerId,
 	onCancel,
 	onConfirm,
 }: {
 	colors: ThemeColors;
-	fullscreen: boolean;
 	layerId: string;
 	onCancel: () => void;
 	onConfirm: () => void;
@@ -664,7 +541,6 @@ function ConfirmAlwaysOverlay({
 			colors={colors}
 			contentBackgroundColor={colors.backgroundPanel}
 			contentGap={1}
-			fill={fullscreen}
 			marginBottom={0}
 			paddingX={2}
 			paddingY={1}

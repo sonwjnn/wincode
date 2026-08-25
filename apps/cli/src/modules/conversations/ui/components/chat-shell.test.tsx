@@ -383,50 +383,14 @@ describe("ChatShell approval dock", () => {
 			);
 			await flushUi(setup);
 
-			let frame = setup.captureCharFrame();
-			// Minimized: the dock replaces the composer AND the session footer,
-			// showing only the queue head.
+			const frame = setup.captureCharFrame();
+			// The dock replaces the composer AND the session footer, showing only
+			// the queue head.
 			expect(frame).toContain("Permission required");
 			expect(frame).not.toContain("Ask anything");
 			expect(frame).not.toContain("tab agents");
 			expect(frame.match(/Permission required/gu)).toHaveLength(1);
 			expect(frame).toContain("1 of 2");
-			expect(frame).toContain("First queued approval.");
-			expect(frame).not.toContain("Second queued approval.");
-			expect(frame).toContain("ctrl+f fullscreen");
-			expect(
-				setup.renderer.root.findDescendantById("conversation-scrollbox")
-			).toBeDefined();
-
-			setup.mockInput.pressKey("f", { ctrl: true });
-			await flushUi(setup);
-			frame = setup.captureCharFrame();
-			// Fullscreen: the active head fills the viewport and the rest of the
-			// queue stacks below it in a hidden-scrollbar scrollbox; the
-			// conversation area is replaced.
-			expect(frame).toContain("ctrl+f minimize");
-			expect(frame).toContain("First queued approval.");
-			expect(frame).not.toContain("tab agents");
-			expect(
-				setup.renderer.root.findDescendantById("conversation-scrollbox")
-			).toBeUndefined();
-			const stackScrollbox = setup.renderer.root.findDescendantById(
-				"approval-stack-scrollbox"
-			) as ScrollBoxRenderable | undefined;
-			expect(stackScrollbox).toBeDefined();
-			expect(
-				frame.split("\n").findIndex((row) => row.includes("Allow once"))
-			).toBeGreaterThan(12);
-			stackScrollbox?.scrollTo(Number.MAX_SAFE_INTEGER);
-			await setup.renderOnce();
-			frame = setup.captureCharFrame();
-			expect(frame).toContain("Second queued approval.");
-			expect(frame).toContain("2 of 2");
-
-			setup.mockInput.pressKey("f", { ctrl: true });
-			await flushUi(setup);
-			frame = setup.captureCharFrame();
-			expect(frame).toContain("ctrl+f fullscreen");
 			expect(frame).toContain("First queued approval.");
 			expect(frame).not.toContain("Second queued approval.");
 			expect(

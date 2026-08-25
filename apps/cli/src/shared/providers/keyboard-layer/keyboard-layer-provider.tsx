@@ -10,7 +10,7 @@ import {
 } from "react";
 
 type Responder = () => boolean;
-export type ToggleShortcut = "ctrl+f" | "ctrl+o";
+export type ToggleShortcut = "ctrl+o";
 export type ToggleHandler = () => void;
 type ToggleKeyEvent = {
 	ctrl: boolean;

@@ -1,5 +1,5 @@
 import { expect, mock, test } from "bun:test";
-import type { ScrollBoxRenderable, Selection } from "@opentui/core";
+import type { Selection } from "@opentui/core";
 import { testRender } from "@opentui/react/test-utils";
 import { useEffect } from "react";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -390,74 +390,7 @@ test("micro-drag over an action button never selects or copies", async () => {
 	setup.renderer.destroy();
 });
 
-test("fullscreen dock stacks every queued approval and settles head-first", async () => {
-	const firstActions = makeActions();
-	const secondActions = makeActions();
-	const setup = await testRender(
-		<ThemeProvider>
-			<KeyboardLayerProvider>
-				<ApprovalPanelsProvider>
-					<Register actions={firstActions} request={makeRequest()} />
-					<Register
-						actions={secondActions}
-						request={makeRequest({
-							description: "Second queued approval.",
-							toolCallId: "call-2",
-						})}
-					/>
-					<PendingApprovalDock fullscreen />
-				</ApprovalPanelsProvider>
-			</KeyboardLayerProvider>
-		</ThemeProvider>,
-		{ height: 40, width: 120 }
-	);
-	await setup.renderOnce();
-	await flushUi(setup);
-
-	let frame = setup.captureCharFrame();
-	// The active head fills the viewport; the waiting card sits below it.
-	expect(frame).toContain("1 of 2");
-	expect(frame).toContain("Read a UTF-8 text file inside the workspace.");
-	expect(frame.match(/Permission required/gu)).toHaveLength(1);
-	// Only the active head offers controls; the waiting card is read-only.
-	expect(frame.match(/Allow once/gu)).toHaveLength(1);
-
-	// Scroll the hidden-scrollbar stack to review the queued request.
-	const stackScrollbox = setup.renderer.root.findDescendantById(
-		"approval-stack-scrollbox"
-	) as ScrollBoxRenderable | undefined;
-	expect(stackScrollbox).toBeDefined();
-	stackScrollbox?.scrollTo(Number.MAX_SAFE_INTEGER);
-	await setup.renderOnce();
-	frame = setup.captureCharFrame();
-	expect(frame).toContain("2 of 2");
-	expect(frame).toContain("Second queued approval.");
-
-	setup.mockInput.pressEnter();
-	await flushUi(setup);
-	expect(firstActions.allow).toHaveBeenCalledWith(false);
-	const remainingScrollbox = setup.renderer.root.findDescendantById(
-		"approval-stack-scrollbox"
-	) as ScrollBoxRenderable | undefined;
-	remainingScrollbox?.scrollTo(0);
-	await setup.renderOnce();
-	frame = setup.captureCharFrame();
-	expect(frame).toContain("Second queued approval.");
-	expect(frame).not.toContain("1 of 2");
-	expect(frame).not.toContain("2 of 2");
-	expect(frame.match(/Permission required/gu)).toHaveLength(1);
-	expect(frame).toContain("Allow once");
-
-	await hoverAction(setup, "Reject");
-	setup.mockInput.pressEnter();
-	await flushUi(setup);
-	expect(secondActions.abort).toHaveBeenCalledTimes(1);
-	expect(secondActions.reject).not.toHaveBeenCalled();
-	expect(firstActions.abort).not.toHaveBeenCalled();
-	setup.renderer.destroy();
-});
-
-test("minimized dock renders only the queue head", async () => {
+test("dock renders only the queue head", async () => {
 	const firstActions = makeActions();
 	const secondActions = makeActions();
 	const setup = await testRender(

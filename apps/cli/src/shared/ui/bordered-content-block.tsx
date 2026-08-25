@@ -19,6 +19,7 @@ type BorderedContentBlockProps = {
 	onSizeChange?: () => void;
 	paddingX?: number;
 	paddingY?: number;
+	paddingBottom?: number;
 };
 
 export function BorderedContentBlock({
@@ -35,6 +36,7 @@ export function BorderedContentBlock({
 	marginBottom = 1,
 	onMouseDown,
 	onSizeChange,
+	paddingBottom,
 	paddingX = 2,
 	paddingY = 1,
 }: BorderedContentBlockProps) {
@@ -67,8 +69,9 @@ export function BorderedContentBlock({
 				flexGrow={fill ? 1 : 0}
 				gap={contentGap}
 				justifyContent={contentJustifyContent}
+				paddingBottom={paddingBottom ?? paddingY}
+				paddingTop={paddingY}
 				paddingX={paddingX}
-				paddingY={paddingY}
 				width="100%"
 			>
 				{children}
