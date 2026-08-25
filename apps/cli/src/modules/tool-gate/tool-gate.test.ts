@@ -168,6 +168,49 @@ describe("shell posture defaults", () => {
 		expect(requests).toHaveLength(0);
 	});
 
+	test("in a compound command only the cd node is exempt: the other node still evaluates", async () => {
+		const { openApproval, requests } = settlingApproval();
+		const askGate = createGate(
+			createToolPermission({ shell: { "git commit *": "ask" } }),
+			openApproval
+		);
+
+		// The cd node is exempt, but the git node's ask still prompts once for
+		// the whole call and approval runs it.
+		await expect(
+			askGate.gate(shellCall("cd tmp && git commit -m x"))
+		).resolves.toEqual({ kind: "allow" });
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.identity[1]).toEqual({
+			label: "resource",
+			value: "cd tmp && git commit -m x",
+		});
+
+		// A deny on the git node still denies the whole compound.
+		const denyGate = createGate(
+			createToolPermission({ shell: { "git *": "deny" } }),
+			openApproval
+		);
+		await expect(
+			denyGate.gate(shellCall("cd tmp && git commit -m x"))
+		).resolves.toEqual({
+			errorText: "Shell denied by policy: cd tmp && git commit -m x",
+			kind: "deny",
+		});
+		expect(requests).toHaveLength(1);
+
+		// A rule targeting the cd node itself never prompts either: the node is
+		// exempt inside compounds while the other node still evaluates.
+		const cdAskGate = createGate(
+			createToolPermission({ shell: { "cd tmp": "ask" } }),
+			openApproval
+		);
+		await expect(
+			cdAskGate.gate(shellCall("cd tmp && ls -la"))
+		).resolves.toEqual({ kind: "allow" });
+		expect(requests).toHaveLength(1);
+	});
+
 	test("cd-family commands are exempt from the shell ask", async () => {
 		const { openApproval, requests } = settlingApproval();
 		const gate = createGate(createToolPermission(), openApproval);
@@ -186,9 +229,18 @@ describe("shell posture defaults", () => {
 			createToolPermission({ shell: "ask" }),
 			openApproval
 		);
-		await expect(askGate.gate(shellCall("cd ~"))).resolves.toEqual({
-			kind: "allow",
-		});
+		for (const command of [
+			"cd apps/cli",
+			"chdir src",
+			"push-location src",
+			"pushd src",
+			"popd",
+			"set-location src",
+		]) {
+			await expect(askGate.gate(shellCall(command))).resolves.toEqual({
+				kind: "allow",
+			});
+		}
 		expect(requests).toHaveLength(0);
 
 		const denyGate = createGate(
@@ -315,6 +367,71 @@ describe("shell override and grants", () => {
 			gate.gate(shellCall("git status", "call-grant-sibling"))
 		).resolves.toEqual({ kind: "allow" });
 		expect(requests).toHaveLength(2);
+		// A sibling with the same command word and different arguments is not
+		// covered by the exact grant either.
+		await expect(
+			gate.gate(shellCall("git commit -m wip", "call-grant-sibling-wip"))
+		).resolves.toEqual({ kind: "allow" });
+		expect(requests).toHaveLength(3);
+	});
+
+	test("revoking a shell exact grant makes the identical command prompt again", async () => {
+		const service = createPermissionService();
+		const requests: ToolApprovalRequest[] = [];
+		const gate = createToolGate({
+			openApproval: (request, actions) => {
+				requests.push(request);
+				actions.allow(true);
+			},
+			resolvePermission: async () =>
+				createToolPermission({ shell: { "*": "ask" } }),
+			sandbox: createWorkspaceSandbox(process.cwd()),
+			service,
+		});
+
+		await gate.gate(shellCall("git commit -m init", "call-grant-1"));
+		expect(service.listGrants()).toEqual([
+			{ action: "shell", resource: "git commit -m init" },
+		]);
+		// The grant satisfies the identical command without prompting.
+		await gate.gate(shellCall("git commit -m init", "call-grant-2"));
+		expect(requests).toHaveLength(1);
+
+		// Revoking the grant (as /permissions does) makes it prompt again. A
+		// differing call first resets the doom_loop counter so the observed ask
+		// is solely the revoked policy ask.
+		await gate.gate(shellCall("git status", "call-interrupt"));
+		service.revoke("shell", "git commit -m init");
+		await gate.gate(shellCall("git commit -m init", "call-revoked"));
+		expect(requests).toHaveLength(3);
+	});
+
+	test("a shell exact grant never satisfies another tool family", async () => {
+		const service = createPermissionService();
+		const requests: ToolApprovalRequest[] = [];
+		const gate = createToolGate({
+			openApproval: (request, actions) => {
+				requests.push(request);
+				actions.allow(false);
+			},
+			resolvePermission: async () => createToolPermission({ read: "ask" }),
+			sandbox: createWorkspaceSandbox(process.cwd()),
+			service,
+		});
+
+		service.grant("shell", "git commit -m init");
+		// The shell grant does not leak: the read-family call still asks.
+		await expect(
+			gate.gate({
+				family: "coding",
+				toolCall: {
+					input: { path: "package.json" },
+					toolCallId: "call-read",
+					toolName: "read",
+				},
+			})
+		).resolves.toEqual({ kind: "allow" });
+		expect(requests).toHaveLength(1);
 	});
 
 	test("an explicit deny is never bypassed by grants or auto approval", async () => {
@@ -365,6 +482,46 @@ describe("shell override and grants", () => {
 		expect(service.isGranted("shell", "*")).toBe(false);
 		const resource = await canonicalizeExternalPath("../outside", workspace);
 		expect(service.isGranted("external_directory", resource)).toBe(true);
+	});
+
+	test("a cd-family command with an external cwd still composes the external-directory ask", async () => {
+		const parent = await mkdtemp(
+			join(process.env.TMPDIR ?? "/tmp", "wincode-gate-")
+		);
+		const workspace = join(parent, "workspace");
+		await mkdir(workspace);
+		const service = createPermissionService();
+		const requests: ToolApprovalRequest[] = [];
+		const gate = createToolGate({
+			openApproval: (request, actions) => {
+				requests.push(request);
+				actions.allow(true);
+			},
+			resolvePermission: async () => createToolPermission(),
+			sandbox: createWorkspaceSandbox(workspace),
+			service,
+		});
+
+		// cd skips the shell ask entirely, but the cwd outside the workspace
+		// still composes the external_directory boundary ask on the call.
+		await expect(
+			gate.gate(
+				shellCall("cd ~/projects/other", "call-shell-cd-external", "../outside")
+			)
+		).resolves.toEqual({ kind: "allow" });
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.identity.map(({ label }) => label)).toEqual([
+			"tool",
+			"resource",
+			"scope",
+		]);
+		expect(requests[0]?.identity[2]).toEqual({
+			label: "scope",
+			value: "external",
+		});
+		const resource = await canonicalizeExternalPath("../outside", workspace);
+		expect(service.isGranted("external_directory", resource)).toBe(true);
+		expect(service.isGranted("shell", "cd ~/projects/other")).toBe(true);
 	});
 
 	test("a workspace-internal cwd gates without the external scope", async () => {
@@ -446,6 +603,72 @@ describe("doom_loop", () => {
 		await gate.gate(readCall("call-1"));
 		await gate.gate(readCall("call-2"));
 		await expect(gate.gate(readCall("call-3"))).resolves.toEqual({
+			kind: "allow",
+		});
+		expect(requests).toHaveLength(1);
+	});
+
+	test("doom_loop applies to MCP tools and a differing input resets the run", async () => {
+		const { openApproval, requests } = settlingApproval();
+		const gate = createGate(createToolPermission(), openApproval);
+
+		const mcpCall = (text: string, toolCallId: string) => ({
+			action: "demo_echo",
+			agentDecision: "allow" as const,
+			description: "Echo",
+			family: "mcp" as const,
+			input: { text },
+			safety: false,
+			serverDecision: "allow" as const,
+			toolCallId,
+			toolName: "mcp_demo_echo",
+		});
+		await gate.gate(mcpCall("hello", "call-1"));
+		await gate.gate(mcpCall("hello", "call-2"));
+		// A differing input resets the run.
+		await gate.gate(mcpCall("other", "call-3"));
+		await gate.gate(mcpCall("hello", "call-4"));
+		await gate.gate(mcpCall("hello", "call-5"));
+		// The third identical echo is an ordinary ask, allow-once runs it.
+		await expect(gate.gate(mcpCall("hello", "call-6"))).resolves.toEqual({
+			kind: "allow",
+		});
+		expect(requests).toHaveLength(1);
+	});
+
+	test("a differing family or tool resets the doom run", async () => {
+		const { openApproval, requests } = settlingApproval();
+		const gate = createGate(createToolPermission(), openApproval);
+
+		const mcpCall = (toolCallId: string) => ({
+			action: "demo_echo",
+			agentDecision: "allow" as const,
+			description: "Echo",
+			family: "mcp" as const,
+			input: { text: "hello" },
+			safety: false,
+			serverDecision: "allow" as const,
+			toolCallId,
+			toolName: "mcp_demo_echo",
+		});
+		const readCall = (toolCallId: string) => ({
+			family: "coding" as const,
+			toolCall: {
+				input: { path: "package.json" },
+				toolCallId,
+				toolName: "read",
+			},
+		});
+
+		await gate.gate(shellCall("pwd", "call-1"));
+		await gate.gate(shellCall("pwd", "call-2"));
+		// An MCP call is a different family and resets the repeat run.
+		await gate.gate(mcpCall("call-3"));
+		// A coding tool call is a different tool and resets the run again.
+		await gate.gate(readCall("call-4"));
+		await gate.gate(readCall("call-5"));
+		// The third consecutive read call is an ordinary ask.
+		await expect(gate.gate(readCall("call-6"))).resolves.toEqual({
 			kind: "allow",
 		});
 		expect(requests).toHaveLength(1);
