@@ -4,8 +4,10 @@ export type LineRange = {
 };
 
 const LINE_RANGE_CHUNK = /^L?(\d+)(?:(\.\.|[-+])L?(\d+)?)?$/iu;
+const SELECTOR_LIKE_SUFFIX = /^[Ll]?\d/u;
 type LineRangeSelectorSyntax = {
 	chunks?: string[];
+	malformed?: boolean;
 	path: string;
 	selector?: string;
 };
@@ -23,7 +25,13 @@ const splitLineRangeSelectorSyntax = (
 		chunks.length === 0 ||
 		!chunks.every((chunk) => LINE_RANGE_CHUNK.test(chunk))
 	) {
-		return { path: target };
+		return SELECTOR_LIKE_SUFFIX.test(selector)
+			? {
+					malformed: true,
+					path: target.slice(0, colonIndex),
+					selector,
+				}
+			: { path: target };
 	}
 	return {
 		chunks,
@@ -105,6 +113,9 @@ export const splitLineRangeSelector = (
 	target: string
 ): { path: string; ranges?: LineRange[]; selector?: string } => {
 	const syntax = splitLineRangeSelectorSyntax(target);
+	if (syntax.malformed && syntax.selector) {
+		throw new Error(`Invalid line range selector: ${syntax.selector}`);
+	}
 	if (!(syntax.chunks && syntax.selector)) {
 		return { path: syntax.path };
 	}

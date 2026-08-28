@@ -64,11 +64,7 @@ const readTextTarget = async (
 	}
 	const target = splitLineRangeSelector(inputPath);
 	if (!target.ranges) {
-		const resolvedPath = await resolvePath(inputPath);
-		return {
-			content: await readFile(resolvedPath, "utf8"),
-			path: inputPath,
-		};
+		throw missingLiteralError;
 	}
 	const resolvedPath = await resolvePath(target.path);
 	return {
@@ -133,11 +129,11 @@ const continuationNotice = (
 	return `[Output capped at ${READ_CONTENT_MAX_BYTES} bytes. Continue with path \`${filePath}:${selector}\`.]`;
 };
 
-const buildNumberedLines = (
+const buildDisplayRanges = (
 	lines: readonly string[],
 	selectedRanges: readonly LineRange[]
-): NumberedLine[] => {
-	const displayRanges = normalizeLineRanges(
+): LineRange[] =>
+	normalizeLineRanges(
 		selectedRanges.map((range) => ({
 			endLine: Math.min(
 				lines.length,
@@ -146,39 +142,93 @@ const buildNumberedLines = (
 			startLine: Math.max(1, range.startLine - RANGE_LEADING_CONTEXT_LINES),
 		}))
 	);
-	const numberedLines: NumberedLine[] = [];
+
+function* numberedLinesInRanges(
+	lines: readonly string[],
+	displayRanges: readonly LineRange[]
+): Generator<NumberedLine> {
 	for (const [rangeIndex, range] of displayRanges.entries()) {
 		if (rangeIndex > 0) {
-			numberedLines.push({ text: "…" });
+			yield { text: "…" };
 		}
 		for (
 			let lineNumber = range.startLine;
 			lineNumber <= (range.endLine ?? lines.length);
 			lineNumber += 1
 		) {
-			numberedLines.push({
+			yield {
 				lineNumber,
-				text: `${lineNumber}:${lines[lineNumber - 1]}`,
-			});
+				text: `${lineNumber}:${lines[lineNumber - 1] ?? ""}`,
+			};
 		}
 	}
-	return numberedLines;
+}
+
+const fitsOutputBudget = (
+	lines: readonly string[],
+	displayRanges: readonly LineRange[]
+): boolean => {
+	let bytes = 0;
+	let lineCount = 0;
+	for (const numberedLine of numberedLinesInRanges(lines, displayRanges)) {
+		bytes +=
+			(lineCount === 0 ? 0 : 1) + Buffer.byteLength(numberedLine.text, "utf8");
+		if (bytes > READ_CONTENT_MAX_BYTES) {
+			return false;
+		}
+		lineCount += 1;
+	}
+	return true;
+};
+
+const continuationRangesAfter = (
+	selectedRanges: readonly LineRange[],
+	displayRanges: readonly LineRange[],
+	lastSelectedLine: number | undefined,
+	lastDisplayedLine: number | undefined,
+	totalLines: number
+): LineRange[] => {
+	const selectedRemaining = remainingRangesAfter(
+		selectedRanges,
+		lastSelectedLine,
+		totalLines
+	);
+	const displayRemaining = remainingRangesAfter(
+		displayRanges,
+		lastDisplayedLine,
+		totalLines
+	);
+	const firstSelectedStart = selectedRemaining[0]?.startLine;
+	if (firstSelectedStart === undefined) {
+		return displayRemaining;
+	}
+	const omittedTrailingContext = displayRemaining.filter(
+		(range) => (range.endLine ?? totalLines) < firstSelectedStart
+	);
+	return normalizeLineRanges([...omittedTrailingContext, ...selectedRemaining]);
 };
 
 const boundNumberedLines = (
-	numberedLines: readonly NumberedLine[],
+	lines: readonly string[],
 	selectedRanges: readonly LineRange[],
-	filePath: string,
-	totalLines: number
+	displayRanges: readonly LineRange[],
+	filePath: string
 ): NumberedContent => {
-	const completeContent = numberedLines.map(({ text }) => text).join("\n");
-	if (Buffer.byteLength(completeContent, "utf8") <= READ_CONTENT_MAX_BYTES) {
-		return { content: completeContent, truncated: false };
+	if (fitsOutputBudget(lines, displayRanges)) {
+		return {
+			content: Array.from(
+				numberedLinesInRanges(lines, displayRanges),
+				({ text }) => text
+			).join("\n"),
+			truncated: false,
+		};
 	}
 	const acceptedLines: string[] = [];
 	let acceptedBytes = 0;
+	let failedLine: NumberedLine | undefined;
+	let lastDisplayedLine: number | undefined;
 	let lastSelectedLine: number | undefined;
-	for (const numberedLine of numberedLines) {
+	for (const numberedLine of numberedLinesInRanges(lines, displayRanges)) {
 		const separatorBytes = acceptedLines.length === 0 ? 0 : 1;
 		const lineBytes = Buffer.byteLength(numberedLine.text, "utf8");
 		const isSelectedLine =
@@ -190,13 +240,16 @@ const boundNumberedLines = (
 					(range.endLine === undefined ||
 						numberedLine.lineNumber <= range.endLine)
 			);
+		const nextLastDisplayedLine = numberedLine.lineNumber ?? lastDisplayedLine;
 		const nextLastSelectedLine = isSelectedLine
 			? numberedLine.lineNumber
 			: lastSelectedLine;
-		const remainingRanges = remainingRangesAfter(
+		const remainingRanges = continuationRangesAfter(
 			selectedRanges,
+			displayRanges,
 			nextLastSelectedLine,
-			totalLines
+			nextLastDisplayedLine,
+			lines.length
 		);
 		const noticeBytes =
 			remainingRanges.length === 0
@@ -209,25 +262,35 @@ const boundNumberedLines = (
 			acceptedBytes + separatorBytes + lineBytes + noticeBytes >
 			READ_CONTENT_MAX_BYTES
 		) {
+			failedLine = numberedLine;
 			break;
 		}
 		acceptedLines.push(numberedLine.text);
 		acceptedBytes += separatorBytes + lineBytes;
+		lastDisplayedLine = nextLastDisplayedLine;
 		lastSelectedLine = nextLastSelectedLine;
 	}
 	if (acceptedLines.length === 0) {
+		const failedLineBytes = Buffer.byteLength(failedLine?.text ?? "", "utf8");
+		if (
+			failedLine?.lineNumber !== undefined &&
+			failedLineBytes > READ_CONTENT_MAX_BYTES
+		) {
+			throw new Error(
+				`Line ${failedLine.lineNumber} exceeds the ${READ_CONTENT_MAX_BYTES}-byte read limit`
+			);
+		}
 		throw new Error(
-			`The first selected line exceeds the ${READ_CONTENT_MAX_BYTES}-byte read limit`
+			`The first output line cannot fit with its continuation notice within the ${READ_CONTENT_MAX_BYTES}-byte read limit`
 		);
 	}
-	const remainingRanges = remainingRangesAfter(
+	const remainingRanges = continuationRangesAfter(
 		selectedRanges,
+		displayRanges,
 		lastSelectedLine,
-		totalLines
+		lastDisplayedLine,
+		lines.length
 	);
-	if (remainingRanges.length === 0) {
-		return { content: acceptedLines.join("\n"), truncated: false };
-	}
 	return {
 		content: `${acceptedLines.join("\n")}\n\n${continuationNotice(
 			filePath,
@@ -257,12 +320,8 @@ const formatNumberedContent = (
 	const selectedRanges = normalizeLineRanges(
 		ranges ?? [{ endLine: lines.length, startLine: 1 }]
 	);
-	return boundNumberedLines(
-		buildNumberedLines(lines, selectedRanges),
-		selectedRanges,
-		filePath,
-		lines.length
-	);
+	const displayRanges = buildDisplayRanges(lines, selectedRanges);
+	return boundNumberedLines(lines, selectedRanges, displayRanges, filePath);
 };
 
 export const runReadTool = async (

@@ -217,6 +217,9 @@ describe("tool runners", () => {
 		await expect(runReadTool({ path: `${filePath}:4-2` })).rejects.toThrow(
 			"Invalid line range 4-2: end must not precede start"
 		);
+		await expect(runReadTool({ path: `${filePath}:3--4` })).rejects.toThrow(
+			"Invalid line range selector: 3--4"
+		);
 	});
 	test("prefers an existing literal path over a line range selector", async () => {
 		const filePath = `${sandboxRelPath}/literal:1-2`;
@@ -258,6 +261,23 @@ describe("tool runners", () => {
 		expect(result.content).not.toContain(`57:${line}`);
 		expect(result.content).toEndWith(
 			`[Output capped at 6000 bytes. Continue with path \`${filePath}:57-100,150-160\`.]`
+		);
+	});
+	test("continues when the byte cap cuts trailing range context", async () => {
+		const filePath = `${sandboxRelPath}/bounded-context.txt`;
+		const line = "x".repeat(112);
+		writeFileSync(
+			path.join(workspace, filePath),
+			Array.from({ length: 60 }, () => line).join("\n")
+		);
+
+		const result = await runReadTool({ path: `${filePath}:1-50` });
+
+		expect(result).toMatchObject({ path: filePath, truncated: true });
+		expect(result.content).toContain(`50:${line}`);
+		expect(result.content).not.toContain(`51:${line}`);
+		expect(result.content).toEndWith(
+			`[Output capped at 6000 bytes. Continue with path \`${filePath}:51-53\`.]`
 		);
 	});
 	test("reads an approved absolute path outside the workspace", async () => {
