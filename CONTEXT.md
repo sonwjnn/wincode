@@ -44,6 +44,17 @@ metadata, then prompt-config refs. _Avoid_: chat config, latest config
 
 ## Language
 
+**Line Range**:
+A 1-indexed, inclusive selection of consecutive lines in a text file. Multiple
+Line Ranges in one read form a single ordered selection; overlapping or
+adjacent ranges collapse into one. _Avoid_: line slice, offset window
+
+**Line Range Selector**:
+The optional part of a Read Tool target that names one or more Line Ranges.
+When a complete target also names an existing literal file, the literal file
+takes precedence over interpreting its suffix as a Line Range Selector.
+_Avoid_: pagination, read offset
+
 **Built-in Command**:
 A fixed UI action the CLI ships with, dispatched by kind to an adapter
 (`/new`, `/models`, `/exit`). _Avoid_: Command, slash command

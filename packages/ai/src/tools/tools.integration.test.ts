@@ -127,7 +127,7 @@ describe("tool runners", () => {
 		expect(existsSync(path.join(workspace, filePath))).toBe(true);
 
 		await expect(runReadTool({ path: filePath })).resolves.toEqual({
-			content: "hello world",
+			content: "1:hello world",
 			path: filePath,
 		});
 
@@ -151,6 +151,115 @@ describe("tool runners", () => {
 			"hello agent"
 		);
 	});
+	test("reads a line range with Oh My Pi context", async () => {
+		const filePath = `${sandboxRelPath}/range.txt`;
+		writeFileSync(
+			path.join(workspace, filePath),
+			"one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine"
+		);
+
+		await expect(runReadTool({ path: `${filePath}:4-5` })).resolves.toEqual({
+			content: "3:three\n4:four\n5:five\n6:six\n7:seven\n8:eight",
+			path: filePath,
+		});
+	});
+	test("reads normalized Oh My Pi multi-range aliases", async () => {
+		const filePath = `${sandboxRelPath}/multi-range.txt`;
+		const lines = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`);
+		writeFileSync(path.join(workspace, filePath), lines.join("\n"));
+
+		await expect(
+			runReadTool({ path: `${filePath}:12+2,L4..L5` })
+		).resolves.toEqual({
+			content: [
+				"3:line 3",
+				"4:line 4",
+				"5:line 5",
+				"6:line 6",
+				"7:line 7",
+				"8:line 8",
+				"…",
+				"11:line 11",
+				"12:line 12",
+				"13:line 13",
+				"14:line 14",
+				"15:line 15",
+				"16:line 16",
+			].join("\n"),
+			path: filePath,
+		});
+	});
+	test("treats bare and trailing-dash selectors as open-ended", async () => {
+		const filePath = `${sandboxRelPath}/open-range.txt`;
+		writeFileSync(
+			path.join(workspace, filePath),
+			"one\ntwo\nthree\nfour\nfive\nsix"
+		);
+		const expected = {
+			content: "3:three\n4:four\n5:five\n6:six",
+			path: filePath,
+		};
+
+		await expect(runReadTool({ path: `${filePath}:4` })).resolves.toEqual(
+			expected
+		);
+		await expect(runReadTool({ path: `${filePath}:L4..` })).resolves.toEqual(
+			expected
+		);
+		await expect(runReadTool({ path: `${filePath}:4-` })).resolves.toEqual(
+			expected
+		);
+	});
+	test("rejects malformed selector bounds", async () => {
+		const filePath = `${sandboxRelPath}/malformed-range.txt`;
+		writeFileSync(path.join(workspace, filePath), "one\ntwo\nthree\nfour");
+
+		await expect(runReadTool({ path: `${filePath}:4-2` })).rejects.toThrow(
+			"Invalid line range 4-2: end must not precede start"
+		);
+	});
+	test("prefers an existing literal path over a line range selector", async () => {
+		const filePath = `${sandboxRelPath}/literal:1-2`;
+		writeFileSync(path.join(workspace, filePath), "literal\npath");
+
+		await expect(runReadTool({ path: filePath })).resolves.toEqual({
+			content: "1:literal\n2:path",
+			path: filePath,
+		});
+	});
+	test("does not reinterpret a dangling literal path as a selector", async () => {
+		const filePath = `${sandboxRelPath}/dangling:1-2`;
+		symlinkSync("missing-target", path.join(workspace, filePath));
+
+		await expect(runReadTool({ path: filePath })).rejects.toThrow(filePath);
+	});
+	test("rejects a multi-range when any range begins beyond EOF", async () => {
+		const filePath = `${sandboxRelPath}/short.txt`;
+		writeFileSync(path.join(workspace, filePath), "one\ntwo\nthree\nfour");
+
+		await expect(
+			runReadTool({ path: `${filePath}:2-3,99-100` })
+		).rejects.toThrow("Line range starts at 99, beyond end of file (4 lines)");
+	});
+	test("truncates on a line boundary with a remaining multi-range selector", async () => {
+		const filePath = `${sandboxRelPath}/bounded.txt`;
+		const line = "x".repeat(100);
+		writeFileSync(
+			path.join(workspace, filePath),
+			Array.from({ length: 160 }, () => line).join("\n")
+		);
+
+		const result = await runReadTool({
+			path: `${filePath}:1-100,150-160`,
+		});
+
+		expect(result).toMatchObject({ path: filePath, truncated: true });
+		expect(result.content).toContain(`56:${line}`);
+		expect(result.content).not.toContain(`57:${line}`);
+		expect(result.content).toEndWith(
+			`[Output capped at 6000 bytes. Continue with path \`${filePath}:57-100,150-160\`.]`
+		);
+	});
 	test("reads an approved absolute path outside the workspace", async () => {
 		const filename = `.wincode-read-test-${crypto.randomUUID()}`;
 		const absolutePath = path.join(homedir(), filename);
@@ -159,7 +268,7 @@ describe("tool runners", () => {
 			await expect(
 				runReadTool({ path: absolutePath }, { allowExternalPath: true })
 			).resolves.toEqual({
-				content: "home content",
+				content: "1:home content",
 				path: absolutePath,
 			});
 		} finally {

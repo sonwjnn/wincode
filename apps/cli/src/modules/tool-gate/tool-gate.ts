@@ -1,7 +1,9 @@
+import { lstat } from "node:fs/promises";
 import {
 	type CodingToolName,
 	codingToolDefinitions,
 	codingToolNames,
+	getReadResourcePath,
 } from "@wincode/ai";
 import type { WorkspacePolicy } from "@wincode/ai/workspace";
 import {
@@ -155,6 +157,38 @@ const resolveGateResource = (
 	}
 	const path = getStringField(input, "path");
 	return path === undefined ? undefined : { input: path, kind: "path" };
+};
+const resolveReadGatePath = async (
+	input: string,
+	sandbox: WorkspacePolicy
+): Promise<string> => {
+	const resourcePath = getReadResourcePath(input);
+	if (resourcePath === input) {
+		return input;
+	}
+	try {
+		await sandbox.resolveExistingPath(expandHomeInPath(input));
+		return input;
+	} catch {
+		const canonicalLiteralPath = await canonicalizeExternalPath(
+			input,
+			sandbox.root
+		);
+		try {
+			await lstat(canonicalLiteralPath);
+			return input;
+		} catch (error) {
+			if (
+				typeof error === "object" &&
+				error !== null &&
+				"code" in error &&
+				error.code === "ENOENT"
+			) {
+				return resourcePath;
+			}
+			return input;
+		}
+	}
 };
 
 const staticDenialText = (label: string, resource: string): string =>
@@ -411,10 +445,14 @@ export const createToolGate = ({
 				(feedback) => staticRejectionText(label, gateResource.value, feedback)
 			);
 		}
+		const pathInput =
+			tool === "read"
+				? await resolveReadGatePath(gateResource.input, sandbox)
+				: gateResource.input;
 
 		try {
 			const canonical = await canonicalizeResource(
-				expandHomeInPath(gateResource.input),
+				expandHomeInPath(pathInput),
 				sandbox
 			);
 			// Grep gates its operation against the regex; its path only decides the
@@ -443,13 +481,16 @@ export const createToolGate = ({
 		} catch {
 			// The path is outside the workspace: the external_directory boundary
 			// applies in addition to the operation policy.
-			const pathInput = getStringField(toolCall.input, "path") ?? "";
+			const externalPathInput = pathInput;
 			let resource: string;
 			try {
-				resource = await canonicalizeExternalPath(pathInput, sandbox.root);
+				resource = await canonicalizeExternalPath(
+					externalPathInput,
+					sandbox.root
+				);
 			} catch {
 				return {
-					errorText: `${label} path is outside the workspace: ${pathInput}`,
+					errorText: `${label} path is outside the workspace: ${externalPathInput}`,
 					kind: "deny",
 				};
 			}

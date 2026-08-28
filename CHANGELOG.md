@@ -16,3 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exempt, "Always allow" records the exact normalized command, and a doom_loop
   guard asks on the third identical tool call. The manual-approval safety
   ceiling is unchanged. See ADR-0008.
+
+- **Read output is line-addressed.** Text reads now prefix every line with its
+  1-indexed line number. Read targets accept Oh My Pi-compatible single and
+  multi-range selectors, preserve literal colon-containing paths, add bounded
+  code context, and return a continuation selector when the output byte limit
+  is reached.

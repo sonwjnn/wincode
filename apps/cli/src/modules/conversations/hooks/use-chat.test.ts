@@ -588,7 +588,7 @@ describe("createChatToolCallHandler", () => {
 
 			expect(addToolOutput).toHaveBeenCalledWith({
 				output: {
-					content: "approved home content",
+					content: "1:approved home content",
 					path: absolutePath,
 				},
 				tool: "read",
@@ -718,7 +718,7 @@ describe("createChatToolCallHandler", () => {
 		expect(approvalRequests).toHaveLength(1);
 		expect(approvalRequests[0]).toMatchObject({
 			description:
-				"Read a UTF-8 text file. Preserve ~ paths; never guess an absolute home.",
+				"Read a UTF-8 text file with numbered lines. A path may select inclusive line ranges with :N, :N-M, :N+K, :N-, or comma-separated ranges; existing literal paths take precedence. Preserve ~ paths; never guess an absolute home.",
 			identity: [
 				{ label: "tool", value: "read" },
 				{ label: "resource", value: ".env" },

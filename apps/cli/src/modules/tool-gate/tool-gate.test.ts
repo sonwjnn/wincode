@@ -433,6 +433,25 @@ describe("shell override and grants", () => {
 		).resolves.toEqual({ kind: "allow" });
 		expect(requests).toHaveLength(1);
 	});
+	test("gates a ranged read against its base file", async () => {
+		const gate = createGate(
+			createToolPermission({ read: { "**": "allow", "package.json": "deny" } })
+		);
+
+		await expect(
+			gate.gate({
+				family: "coding",
+				toolCall: {
+					input: { path: "package.json:1-2" },
+					toolCallId: "call-ranged-read",
+					toolName: "read",
+				},
+			})
+		).resolves.toEqual({
+			errorText: "Read denied by policy: package.json",
+			kind: "deny",
+		});
+	});
 
 	test("an explicit deny is never bypassed by grants or auto approval", async () => {
 		const service = createPermissionService({ autoApproval: true });
