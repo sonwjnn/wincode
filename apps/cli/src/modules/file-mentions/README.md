@@ -11,8 +11,9 @@ for AI context.
    once for the input lifecycle; it applies fixed ignored-directory, `.gitignore`, and symlink
    policy through the workspace sandbox. `filterFileMentionOptions` ranks the in-memory options by
    exact basename or extensionless stem, basename prefix, basename contains, path segment, and
-   subsequence matches. Slash-containing queries retain their relative path context. Results are
-   sorted deterministically before the existing 100-option limit is applied.
+   subsequence matches. Slash-containing queries retain their relative path context; a trailing
+   slash scopes results to recursive descendants and omits the queried directory itself. Results
+   are sorted deterministically before the existing 100-option limit is applied.
 3. **Overlay** — `FileMentionMenu` renders the active suggestion list inside the chat input
    area. Keyboard events cycle selection; Enter applies the chosen mention.
 4. **Replacement** — `applyFileMentionReplacement` inserts the selected label into the

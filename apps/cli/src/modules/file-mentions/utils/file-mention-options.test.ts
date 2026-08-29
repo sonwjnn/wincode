@@ -100,6 +100,16 @@ describe("file mention options", () => {
 	test("keeps slash-containing queries in path context", () => {
 		const options = [
 			{
+				label: "apps/cli/",
+				path: "apps/cli",
+				type: "directory" as const,
+			},
+			{
+				label: "apps/cli/src/",
+				path: "apps/cli/src",
+				type: "directory" as const,
+			},
+			{
 				label: "apps/cli/src/index.ts",
 				path: "apps/cli/src/index.ts",
 				type: "file" as const,
@@ -125,7 +135,27 @@ describe("file mention options", () => {
 			filterFileMentionOptions(options, "apps/cli/").map(
 				(option) => option.path
 			)
-		).toEqual(["apps/cli/src/index.ts"]);
+		).toEqual(["apps/cli/src", "apps/cli/src/index.ts"]);
+
+		expect(
+			filterFileMentionOptions(options, "apps/cli").map(
+				(option) => option.path
+			)[0]
+		).toBe("apps/cli");
+
+		expect(
+			filterFileMentionOptions(options, "apps/cli//").map(
+				(option) => option.path
+			)
+		).toEqual(["apps/cli/src", "apps/cli/src/index.ts"]);
+
+		expect(
+			filterFileMentionOptions(options, "cli/").map((option) => option.path)
+		).toEqual([
+			"apps/cli/src",
+			"apps/cli/src/index.ts",
+			"packages/cli/src/index.ts",
+		]);
 	});
 
 	test("orders equal-quality matches by canonical path", () => {
@@ -165,5 +195,28 @@ describe("file mention options", () => {
 
 		expect(matches).toHaveLength(100);
 		expect(matches[0]?.path).toBe("deep/target.ts");
+	});
+	test("scopes trailing-slash queries to recursive descendants", () => {
+		const options = [
+			{
+				label: "src/",
+				path: "src",
+				type: "directory" as const,
+			},
+			{
+				label: "src/components/",
+				path: "src/components",
+				type: "directory" as const,
+			},
+			{
+				label: "src/components/button.tsx",
+				path: "src/components/button.tsx",
+				type: "file" as const,
+			},
+		];
+
+		expect(
+			filterFileMentionOptions(options, "src/").map((option) => option.path)
+		).toEqual(["src/components", "src/components/button.tsx"]);
 	});
 });

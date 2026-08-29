@@ -248,15 +248,7 @@ const getPathMatch = (
 	query: string,
 	trailingSlash: boolean
 ): Match | null => {
-	if (optionPath === query) {
-		return {
-			gaps: 0,
-			rank: EXACT_MATCH_RANK,
-			specificity: DEFAULT_MATCH_SPECIFICITY,
-			start: 0,
-		};
-	}
-
+	// A trailing slash scopes to descendants and excludes the queried directory.
 	if (trailingSlash) {
 		if (optionPath.startsWith(`${query}/`)) {
 			return {
@@ -279,6 +271,15 @@ const getPathMatch = (
 		}
 
 		return null;
+	}
+
+	if (optionPath === query) {
+		return {
+			gaps: 0,
+			rank: EXACT_MATCH_RANK,
+			specificity: DEFAULT_MATCH_SPECIFICITY,
+			start: 0,
+		};
 	}
 
 	if (
