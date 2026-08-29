@@ -4,6 +4,7 @@ import type { FileMentionUIPart } from "@wincode/ai";
 import {
 	createWorkspaceSandbox,
 	type WorkspacePolicy,
+	type WorkspaceTraversalEntry,
 } from "@wincode/ai/workspace";
 import {
 	findFileMentionRanges,
@@ -15,6 +16,8 @@ const DEFAULT_MAX_TOTAL_BYTES = 48_000;
 const DEFAULT_MAX_DIRECTORY_DEPTH = 3;
 const DEFAULT_MAX_DIRECTORY_ENTRIES = 200;
 const BINARY_SAMPLE_BYTES = 8000;
+const MAX_AMBIGUOUS_FALLBACK_CANDIDATES = 8;
+const UNLIMITED_DISCOVERY_DEPTH = Number.POSITIVE_INFINITY;
 
 type ResolveFileMentionPartsOptions = {
 	maxDirectoryDepth?: number;
@@ -28,6 +31,15 @@ type ByteLimitResult = {
 	content: string;
 	truncated: boolean;
 };
+
+type ResolvedMention = {
+	canonicalPath: string;
+	realPath: string;
+};
+
+type FindFallbackMatches = (
+	mentionPath: string
+) => Promise<WorkspaceTraversalEntry[]>;
 
 const getMentionPaths = (text: string) => {
 	const paths: string[] = [];
@@ -45,6 +57,123 @@ const getMentionPaths = (text: string) => {
 
 	return paths;
 };
+
+const getExtensionlessStem = (basename: string) => {
+	const extension = path.posix.extname(basename);
+	return extension ? basename.slice(0, -extension.length) : basename;
+};
+
+const compareTraversalEntries = (
+	left: WorkspaceTraversalEntry,
+	right: WorkspaceTraversalEntry
+) => {
+	const leftPath = left.relativePath.toLowerCase();
+	const rightPath = right.relativePath.toLowerCase();
+	if (leftPath !== rightPath) {
+		return leftPath < rightPath ? -1 : 1;
+	}
+
+	if (left.relativePath !== right.relativePath) {
+		return left.relativePath < right.relativePath ? -1 : 1;
+	}
+
+	return 0;
+};
+
+const getFallbackFileMatches = (
+	entries: WorkspaceTraversalEntry[],
+	mentionPath: string
+) => {
+	const normalizedMentionPath = mentionPath.toLowerCase();
+
+	return entries
+		.filter((entry) => {
+			const basename = path.posix.basename(entry.relativePath).toLowerCase();
+			return (
+				basename === normalizedMentionPath ||
+				getExtensionlessStem(basename) === normalizedMentionPath
+			);
+		})
+		.toSorted(compareTraversalEntries);
+};
+
+const formatAmbiguousMentionError = (
+	mentionPath: string,
+	matches: WorkspaceTraversalEntry[]
+) => {
+	const candidates = matches
+		.slice(0, MAX_AMBIGUOUS_FALLBACK_CANDIDATES)
+		.map((entry) => entry.relativePath);
+	const omittedCount = matches.length - candidates.length;
+	const omittedText =
+		omittedCount > 0 ? `; ${omittedCount} more candidate(s) omitted` : "";
+
+	return `Ambiguous file mention "${mentionPath}". Use a relative path to choose one. Candidates: ${candidates.join(", ")}${omittedText}.`;
+};
+
+const createFallbackMatcher = (
+	policy: WorkspacePolicy
+): FindFallbackMatches => {
+	let entriesPromise: Promise<WorkspaceTraversalEntry[]> | undefined;
+
+	return async (mentionPath) => {
+		entriesPromise ??= policy
+			.traverse({
+				includeDirectories: false,
+				includeFiles: true,
+				maxDepth: UNLIMITED_DISCOVERY_DEPTH,
+			})
+			.then((result) => result.entries);
+
+		const entries = await entriesPromise;
+		return getFallbackFileMatches(entries, mentionPath);
+	};
+};
+
+const resolveMentionPath = async (
+	policy: WorkspacePolicy,
+	mentionPath: string,
+	findFallbackMatches: FindFallbackMatches
+): Promise<ResolvedMention> => {
+	try {
+		const realPath = await policy.resolveExistingPath(mentionPath);
+		return {
+			canonicalPath: policy.relativePath(realPath) || mentionPath,
+			realPath,
+		};
+	} catch (literalError) {
+		if (mentionPath.includes("/") || isWorkspaceEscapeError(literalError)) {
+			throw literalError;
+		}
+
+		let matches: WorkspaceTraversalEntry[];
+		try {
+			matches = await findFallbackMatches(mentionPath);
+		} catch {
+			throw literalError;
+		}
+
+		if (matches.length === 0) {
+			throw literalError;
+		}
+
+		if (matches.length > 1) {
+			throw new Error(formatAmbiguousMentionError(mentionPath, matches));
+		}
+
+		const match = matches[0];
+		if (!match) {
+			throw literalError;
+		}
+
+		return {
+			canonicalPath: match.relativePath,
+			realPath: match.absolutePath,
+		};
+	}
+};
+const isWorkspaceEscapeError = (error: unknown) =>
+	error instanceof Error && error.message.startsWith("Path escapes workspace:");
 
 const clampContentToBytes = (
 	content: string,
@@ -183,9 +312,11 @@ export const resolveFileMentionParts = async (
 	options: ResolveFileMentionPartsOptions = {}
 ): Promise<FileMentionUIPart[]> => {
 	const policy = createWorkspaceSandbox(options.root ?? process.cwd());
+	const findFallbackMatches = createFallbackMatcher(policy);
 	const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
 	let remainingBytes = options.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES;
 	const mentionPaths = getMentionPaths(text);
+	const resolvedPaths = new Set<string>();
 	const parts: FileMentionUIPart[] = [];
 
 	for (const mentionPath of mentionPaths) {
@@ -196,19 +327,34 @@ export const resolveFileMentionParts = async (
 			continue;
 		}
 
+		let canonicalMentionPath = mentionPath;
 		try {
-			const realPath = await policy.resolveExistingPath(mentionPath);
-			const fileStats = await stat(realPath);
+			const resolvedMention = await resolveMentionPath(
+				policy,
+				mentionPath,
+				findFallbackMatches
+			);
+			canonicalMentionPath = resolvedMention.canonicalPath;
+			if (resolvedPaths.has(canonicalMentionPath)) {
+				continue;
+			}
+			resolvedPaths.add(canonicalMentionPath);
+
+			const fileStats = await stat(resolvedMention.realPath);
 			const part = fileStats.isDirectory()
 				? await readDirectoryMention(
 						policy,
-						realPath,
-						mentionPath,
+						resolvedMention.realPath,
+						canonicalMentionPath,
 						maxFileBytes,
 						options.maxDirectoryDepth ?? DEFAULT_MAX_DIRECTORY_DEPTH,
 						options.maxDirectoryEntries ?? DEFAULT_MAX_DIRECTORY_ENTRIES
 					)
-				: await readFileMention(realPath, mentionPath, maxFileBytes);
+				: await readFileMention(
+						resolvedMention.realPath,
+						canonicalMentionPath,
+						maxFileBytes
+					);
 			const budgetedPart = applyRemainingBudget(part, remainingBytes);
 
 			remainingBytes -= Buffer.byteLength(budgetedPart.data.content, "utf8");
@@ -216,7 +362,7 @@ export const resolveFileMentionParts = async (
 		} catch (error) {
 			parts.push(
 				createErrorPart(
-					mentionPath,
+					canonicalMentionPath,
 					error instanceof Error ? error.message : "Could not resolve mention."
 				)
 			);

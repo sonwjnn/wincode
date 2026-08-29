@@ -7,16 +7,22 @@ for AI context.
 
 1. **Detection** — `detectFileMentionAtCursor` recognises a live `@path` pattern while the user
    types, returning range and query boundary.
-2. **Options** — `getFileMentionOptions` traverses the workspace filesystem producing a flat
-   `FileMentionOption[]`; `filterFileMentionOptions` narrows it by partial query.
+2. **Options** — `getFileMentionOptions` asynchronously indexes every eligible workspace entry
+   once for the input lifecycle; it applies ignored-directory and symlink policy through the
+   workspace sandbox. `filterFileMentionOptions` ranks the in-memory options by exact basename or
+   extensionless stem, basename prefix, basename contains, path segment, and subsequence matches.
+   Slash-containing queries retain their relative path context. Results are sorted deterministically
+   before the existing 100-option limit is applied.
 3. **Overlay** — `FileMentionMenu` renders the active suggestion list inside the chat input
    area. Keyboard events cycle selection; Enter applies the chosen mention.
 4. **Replacement** — `applyFileMentionReplacement` inserts the selected label into the
    textarea, replacing the raw trigger text. `deleteFileMentionAfterTrailingCharacterDelete`
    handles backspace-to-remove behaviour.
-5. **Resolution** — `resolveFileMentionParts` scans the finished message text for mention
-   ranges, normalises paths, reads workspace files within safety bounds, and returns
-   `FileMentionUIPart[]` ready for the AI SDK submit payload.
+5. **Resolution** — `resolveFileMentionParts` first resolves the exact literal path inside the
+   workspace. A bare token can fall back only to one exact basename or extensionless-stem file;
+   ambiguous matches return bounded canonical candidates and fuzzy matches never attach silently.
+   Resolved parts use canonical workspace-relative POSIX paths and retain existing file, directory,
+   binary, and aggregate-byte limits.
 
 ## Public API
 
