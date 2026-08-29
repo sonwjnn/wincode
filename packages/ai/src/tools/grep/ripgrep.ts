@@ -11,7 +11,7 @@ import type {
 } from "./backend";
 import { RipgrepUnavailableError, resolveRipgrepExecutable } from "./binary";
 
-const RIPGREP_TIMEOUT_MS = getToolResourceLimits().grep.maxDurationMs;
+const DEFAULT_RIPGREP_TIMEOUT_MS = getToolResourceLimits().grep.maxDurationMs;
 const RIPGREP_ERROR_MAX_BYTES = 8 * 1024;
 const RIPGREP_RECORD_MAX_BYTES = 64 * 1024;
 const LINE_ENDING = /\r?\n$/u;
@@ -123,7 +123,7 @@ export const runRipgrepSearch: GrepSearch = async (
 	input: GrepSearchInput,
 	options: RipgrepSearchOptions = {}
 ): Promise<GrepSearchResult> => {
-	const timeoutMs = input.maxDurationMs ?? RIPGREP_TIMEOUT_MS;
+	const timeoutMs = input.maxDurationMs ?? DEFAULT_RIPGREP_TIMEOUT_MS;
 	const executable =
 		options.executable ??
 		(await (options.resolveExecutable ?? resolveRipgrepExecutable)());

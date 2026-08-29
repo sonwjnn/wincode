@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { defaultWorkspaceSandbox } from "../../workspace";
 import {
 	getToolResourceLimits,
-	type ToolResourceLimits,
+	type ResourceLimitOptions,
 } from "../resource-limits";
 import { buildEditDiff, buildFullFileEditDiff } from "./diff";
 import type { EditInput, EditOutput } from "./schema";
@@ -25,7 +25,7 @@ const countReplacements = (
 
 export const runEditTool = async (
 	input: EditInput,
-	options: { resourceLimits?: ToolResourceLimits } = {}
+	options: ResourceLimitOptions = {}
 ): Promise<EditOutput> => {
 	const resolvedPath = await defaultWorkspaceSandbox.resolveExistingPath(
 		input.path
