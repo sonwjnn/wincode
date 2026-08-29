@@ -1,5 +1,9 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { defaultWorkspaceSandbox } from "../../workspace";
+import {
+	getToolResourceLimits,
+	type ToolResourceLimits,
+} from "../resource-limits";
 import { buildEditDiff, buildFullFileEditDiff } from "./diff";
 import type { EditInput, EditOutput } from "./schema";
 
@@ -19,7 +23,10 @@ const countReplacements = (
 	return 0;
 };
 
-export const runEditTool = async (input: EditInput): Promise<EditOutput> => {
+export const runEditTool = async (
+	input: EditInput,
+	options: { resourceLimits?: ToolResourceLimits } = {}
+): Promise<EditOutput> => {
 	const resolvedPath = await defaultWorkspaceSandbox.resolveExistingPath(
 		input.path
 	);
@@ -46,9 +53,10 @@ export const runEditTool = async (input: EditInput): Promise<EditOutput> => {
 	if (nextContent === content) {
 		throw new Error(`Edit produced no content changes: ${input.path}`);
 	}
+	const limits = options.resourceLimits ?? getToolResourceLimits();
 	const editDiff = isFullFileEdit
-		? buildFullFileEditDiff(content, nextContent, input.path)
-		: buildEditDiff(content, nextContent, input.path);
+		? buildFullFileEditDiff(content, nextContent, input.path, limits.edit)
+		: buildEditDiff(content, nextContent, input.path, limits.edit);
 
 	await writeFile(resolvedPath, nextContent, "utf8");
 

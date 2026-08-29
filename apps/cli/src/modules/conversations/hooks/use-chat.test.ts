@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import {
 	type CodingAgentUIMessage,
 	codingToolDefinitions,
+	getToolResourceLimits,
 	type ResolvedAgentRuntime,
 } from "@wincode/ai";
 import { handleCodingAgentToolCall } from "@wincode/ai/client";
@@ -72,12 +73,14 @@ const createChatToolCallHandler = ({
 	openApproval,
 	permissionRef,
 	resolvePermission,
+	resolveResourceLimits,
 	sandbox,
 	service,
 	...deps
 }: TestChatToolCallHandlerDeps) =>
 	createProductionChatToolCallHandler({
 		...deps,
+		resolveResourceLimits,
 		gate:
 			gate ??
 			createToolGate({
@@ -85,6 +88,7 @@ const createChatToolCallHandler = ({
 				openApproval,
 				resolvePermission:
 					resolvePermission ?? (() => Promise.resolve(permissionRef.current)),
+				resolveResourceLimits,
 				sandbox,
 				service,
 			}),
@@ -497,6 +501,33 @@ describe("createChatToolCallHandler", () => {
 
 		expect(staticToolCallHandler).toHaveBeenCalled();
 		expect(handleDynamicToolCall).not.toHaveBeenCalled();
+	});
+	test("passes the active resource profile to static tool execution", async () => {
+		const gatedHandler = mock(
+			(..._arguments_: Parameters<typeof handleCodingAgentToolCall>) =>
+				staticToolCallHandler
+		) as typeof handleCodingAgentToolCall;
+		const resourceLimits = getToolResourceLimits("extended");
+
+		await settleCall(
+			callWith(
+				{
+					input: { path: "src/app.ts" },
+					toolCallId: "call-extended-profile",
+					toolName: "read",
+				},
+				{
+					handleCodingAgentToolCall: gatedHandler,
+					openApproval: (_request, actions) => actions.allow(false),
+					resolveResourceLimits: async () => resourceLimits,
+				}
+			)
+		);
+
+		expect(gatedHandler).toHaveBeenCalledWith(addToolOutput, [], {
+			allowExternalPaths: false,
+			resourceLimits,
+		});
 	});
 
 	test("fails closed when the resolved Agent is unavailable", async () => {

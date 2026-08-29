@@ -1,8 +1,14 @@
 import { createTwoFilesPatch, parsePatch } from "diff";
+import {
+	getToolResourceLimits,
+	type ToolResourceLimits,
+} from "../resource-limits";
 import type { EditDiff } from "./schema";
 
-export const EDIT_DIFF_MAX_BYTES = 256 * 1024;
-export const EDIT_DIFF_MAX_LINES = 2000;
+const DEFAULT_EDIT_DIFF_LIMITS = getToolResourceLimits().edit;
+const HARD_EDIT_DIFF_LIMITS = getToolResourceLimits("deep").edit;
+export const EDIT_DIFF_MAX_BYTES = DEFAULT_EDIT_DIFF_LIMITS.maxDiffBytes;
+export const EDIT_DIFF_MAX_LINES = DEFAULT_EDIT_DIFF_LIMITS.maxDiffLines;
 
 const PATCH_CONTENT_PREFIX_RE = /^[+\- ]/u;
 const LEADING_WHITESPACE_RE = /^\s*/u;
@@ -114,9 +120,12 @@ const renderPatch = (header: string[], hunks: string[][]): string => {
 	return `${[...header, ...hunks.flat()].join("\n")}\n`;
 };
 
-const isWithinLimits = (patch: string): boolean =>
-	patchByteLength(patch) <= EDIT_DIFF_MAX_BYTES &&
-	patchLineCount(patch) <= EDIT_DIFF_MAX_LINES;
+const isWithinLimits = (
+	patch: string,
+	limits: ToolResourceLimits["edit"]
+): boolean =>
+	patchByteLength(patch) <= limits.maxDiffBytes &&
+	patchLineCount(patch) <= limits.maxDiffLines;
 
 const isValidPatch = (patch: string): boolean => {
 	if (patch.length === 0) {
@@ -134,9 +143,12 @@ const isValidPatch = (patch: string): boolean => {
 const selectTruncatedHunks = ({
 	header,
 	hunks,
-}: PatchHunks): { patch: string; omittedHunks: number } => {
-	const firstBudgetBytes = Math.floor(EDIT_DIFF_MAX_BYTES * 0.75);
-	const firstBudgetLines = Math.floor(EDIT_DIFF_MAX_LINES * 0.75);
+	limits,
+}: PatchHunks & {
+	limits: ToolResourceLimits["edit"];
+}): { patch: string; omittedHunks: number } => {
+	const firstBudgetBytes = Math.floor(limits.maxDiffBytes * 0.75);
+	const firstBudgetLines = Math.floor(limits.maxDiffLines * 0.75);
 	const selected = new Set<number>();
 
 	for (let index = 0; index < hunks.length; index += 1) {
@@ -164,15 +176,15 @@ const selectTruncatedHunks = ({
 			header,
 			candidate.map((hunkIndex) => hunks[hunkIndex] ?? [])
 		);
-		if (isWithinLimits(candidatePatch)) {
+		if (isWithinLimits(candidatePatch, limits)) {
 			selected.add(index);
 		}
 	}
 
 	if (selected.size === 0) {
 		for (let index = 0; index < hunks.length; index += 1) {
-			const candidatePatch = renderPatch(header, [hunks[index] ?? []]);
-			if (isWithinLimits(candidatePatch)) {
+			const candidate = renderPatch(header, [hunks[index] ?? []]);
+			if (isWithinLimits(candidate, limits)) {
 				selected.add(index);
 				break;
 			}
@@ -192,7 +204,8 @@ const selectTruncatedHunks = ({
 export const buildEditDiff = (
 	before: string,
 	after: string,
-	filePath: string
+	filePath: string,
+	limits: ToolResourceLimits["edit"] = DEFAULT_EDIT_DIFF_LIMITS
 ): EditDiff => {
 	const normalizedBefore = normalizeLineEndings(before);
 	const normalizedAfter = normalizeLineEndings(after);
@@ -226,7 +239,7 @@ export const buildEditDiff = (
 		throw new Error("Generated edit diff is invalid.");
 	}
 
-	if (isWithinLimits(fullPatch)) {
+	if (isWithinLimits(fullPatch, limits)) {
 		return {
 			additions,
 			deletions,
@@ -236,7 +249,7 @@ export const buildEditDiff = (
 		};
 	}
 
-	const truncated = selectTruncatedHunks({ header, hunks });
+	const truncated = selectTruncatedHunks({ header, hunks, limits });
 	if (!isValidPatch(truncated.patch)) {
 		return {
 			additions,
@@ -259,7 +272,8 @@ export const buildEditDiff = (
 export const buildFullFileEditDiff = (
 	before: string,
 	after: string,
-	filePath: string
+	filePath: string,
+	limits: ToolResourceLimits["edit"] = DEFAULT_EDIT_DIFF_LIMITS
 ): EditDiff => {
 	const normalizedBefore = normalizeLineEndings(before);
 	const normalizedAfter = normalizeLineEndings(after);
@@ -269,8 +283,8 @@ export const buildFullFileEditDiff = (
 		patchByteLength(normalizedBefore) + patchByteLength(normalizedAfter);
 
 	if (
-		combinedLines > EDIT_DIFF_MAX_LINES ||
-		combinedBytes > EDIT_DIFF_MAX_BYTES
+		combinedLines > limits.maxDiffLines ||
+		combinedBytes > limits.maxDiffBytes
 	) {
 		return {
 			additions: patchLineCount(normalizedAfter),
@@ -281,10 +295,13 @@ export const buildFullFileEditDiff = (
 		};
 	}
 
-	return buildEditDiff(normalizedBefore, normalizedAfter, filePath);
+	return buildEditDiff(normalizedBefore, normalizedAfter, filePath, limits);
 };
 
-export const isRenderableEditDiff = (value: unknown): value is EditDiff => {
+export const isRenderableEditDiff = (
+	value: unknown,
+	limits: ToolResourceLimits["edit"] = HARD_EDIT_DIFF_LIMITS
+): value is EditDiff => {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
 		return false;
 	}
@@ -308,7 +325,7 @@ export const isRenderableEditDiff = (value: unknown): value is EditDiff => {
 
 	if (
 		candidate.patch.length > 0 &&
-		!(isWithinLimits(candidate.patch) && isValidPatch(candidate.patch))
+		!(isWithinLimits(candidate.patch, limits) && isValidPatch(candidate.patch))
 	) {
 		return false;
 	}

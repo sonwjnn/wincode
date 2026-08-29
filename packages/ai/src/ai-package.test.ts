@@ -451,14 +451,15 @@ describe("@wincode/ai shared entry", () => {
 		expect(
 			parse({ command: "bun test", cwd: "apps/cli", timeout: 60 }).success
 		).toBe(true);
-		// Command is required and bounded.
+		// Command and timeout are bounded by the hard deep-profile ceiling.
 		expect(parse({}).success).toBe(false);
-		expect(parse({ command: "x".repeat(4097) }).success).toBe(false);
-		// Timeout is bounded to the 1-300 s window and must be an integer.
+		expect(parse({ command: "x".repeat(16_385) }).success).toBe(false);
+		expect(parse({ command: "x".repeat(4097) }).success).toBe(true);
+		// Timeout is bounded to the 1-900 s window and must be an integer.
 		expect(parse({ command: "x", timeout: 0 }).success).toBe(false);
-		expect(parse({ command: "x", timeout: 301 }).success).toBe(false);
+		expect(parse({ command: "x", timeout: 901 }).success).toBe(false);
 		expect(parse({ command: "x", timeout: 1.5 }).success).toBe(false);
-		expect(parse({ command: "x", timeout: 300 }).success).toBe(true);
+		expect(parse({ command: "x", timeout: 900 }).success).toBe(true);
 	});
 
 	test("validates canonical Agent IDs", () => {

@@ -2,6 +2,7 @@ export type GrepSearchInput = {
 	cwd: string;
 	ignoredDirectoryNames: readonly string[];
 	maxDepth: number;
+	maxDurationMs?: number;
 	maxFileBytes: number;
 	maxFiles: number;
 	maxLineBytes: number;

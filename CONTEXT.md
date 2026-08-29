@@ -118,3 +118,9 @@ safety ask. Coding tools, shell (per-node evaluation with a doom_loop repeat
 guard, ADR-0008), MCP tools, and Skill Activation all resolve through the one
 gate, and the gate owns the deny/reject wording each family emits. _Avoid_:
 approval service, permission middleware
+
+## Tool Resource Profile
+
+A named execution budget for local coding tools. The standard profile is the
+normal bounded posture; elevated profiles permit larger bounded inspection,
+search, execution, and preview results and require a Tool Gate approval.

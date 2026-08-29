@@ -17,6 +17,7 @@ import { RipgrepUnavailableError } from "./grep/ripgrep";
 import { createGrepRunner, runGrepTool } from "./grep/runner";
 import { runListTool } from "./list/runner";
 import { runReadTool } from "./read/runner";
+import { getToolResourceLimits } from "./resource-limits";
 import { runWriteTool } from "./write/runner";
 
 const workspace = process.cwd();
@@ -281,6 +282,24 @@ describe("tool runners", () => {
 			`[Output capped at 51200 bytes. Continue with path \`${filePath}:43-50\`.]`
 		);
 	});
+	test("uses the selected resource profile for large reads", async () => {
+		const filePath = `${sandboxRelPath}/large-read.txt`;
+		const content = "x".repeat(60 * 1024);
+		writeFileSync(path.join(workspace, filePath), content);
+
+		await expect(runReadTool({ path: filePath })).rejects.toThrow(
+			"exceeds the 51200-byte read limit"
+		);
+		await expect(
+			runReadTool(
+				{ path: filePath },
+				{ resourceLimits: getToolResourceLimits("extended") }
+			)
+		).resolves.toEqual({
+			content: `1:${content}`,
+			path: filePath,
+		});
+	});
 	test("reads an approved absolute path outside the workspace", async () => {
 		const filename = `.wincode-read-test-${crypto.randomUUID()}`;
 		const absolutePath = path.join(homedir(), filename);
@@ -525,6 +544,32 @@ describe("tool runners", () => {
 			],
 		});
 	});
+	test("uses an elevated resource profile for deeper listings", async () => {
+		let currentPath = sandboxPath;
+		for (const directory of ["a", "b", "c", "d", "e", "f"]) {
+			currentPath = path.join(currentPath, directory);
+			mkdirSync(currentPath);
+		}
+		writeFileSync(path.join(currentPath, "deep.txt"), "deep\n");
+
+		const standard = await runListTool(
+			{ depth: 10, path: sandboxRelPath },
+			{ resourceLimits: getToolResourceLimits("standard") }
+		);
+		expect(standard.entries).not.toContainEqual({
+			path: `${sandboxRelPath}/a/b/c/d/e/f/deep.txt`,
+			type: "file",
+		});
+
+		const extended = await runListTool(
+			{ depth: 10, path: sandboxRelPath },
+			{ resourceLimits: getToolResourceLimits("extended") }
+		);
+		expect(extended.entries).toContainEqual({
+			path: `${sandboxRelPath}/a/b/c/d/e/f/deep.txt`,
+			type: "file",
+		});
+	});
 
 	test("grep skips ignored directories", async () => {
 		mkdirSync(path.join(sandboxPath, ".git"));
@@ -608,6 +653,34 @@ describe("tool runners", () => {
 					line: "needle",
 					lineNumber: 1,
 					path: `${sandboxRelPath}/small.txt`,
+				},
+			],
+		});
+	});
+	test("uses an elevated resource profile for larger search files", async () => {
+		const filePath = `${sandboxRelPath}/large-search.txt`;
+		writeFileSync(
+			path.join(workspace, filePath),
+			`needle\n${"x".repeat(2 * 1024 * 1024)}`
+		);
+
+		await expect(
+			runGrepTool(
+				{ pattern: "needle", path: sandboxRelPath },
+				{ resourceLimits: getToolResourceLimits("standard") }
+			)
+		).resolves.toEqual({ matches: [] });
+		await expect(
+			runGrepTool(
+				{ pattern: "needle", path: sandboxRelPath },
+				{ resourceLimits: getToolResourceLimits("extended") }
+			)
+		).resolves.toEqual({
+			matches: [
+				{
+					line: "needle",
+					lineNumber: 1,
+					path: filePath,
 				},
 			],
 		});

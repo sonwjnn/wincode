@@ -4,6 +4,10 @@ import {
 	WORKSPACE_IGNORED_DIRECTORY_NAMES,
 } from "../../workspace";
 import { fitsSerializedBytes } from "../output-bounds";
+import {
+	getToolResourceLimits,
+	type ToolResourceLimits,
+} from "../resource-limits";
 import type { GrepSearch, GrepSearchInput, GrepSearchResult } from "./backend";
 import { runJavascriptGrep, validateGrepPattern } from "./javascript";
 import {
@@ -13,15 +17,13 @@ import {
 } from "./ripgrep";
 import type { GrepInput, GrepOutput } from "./schema";
 
-const GREP_MAX_DEPTH = 5;
-const GREP_MAX_FILE_BYTES = 1_000_000;
-const GREP_MAX_FILES = 1000;
-const GREP_MAX_MATCHES = 1000;
-const GREP_OUTPUT_MAX_BYTES = 6000;
-const GREP_LINE_MAX_BYTES = 1000;
+export type GrepRunnerOptions = {
+	resourceLimits?: ToolResourceLimits;
+};
 
 const resolveSearchInput = async (
-	input: GrepInput
+	input: GrepInput,
+	limits: ToolResourceLimits
 ): Promise<GrepSearchInput> => {
 	const resolvedPath = await defaultWorkspaceSandbox.resolveExistingPath(
 		input.path ?? "."
@@ -29,21 +31,25 @@ const resolveSearchInput = async (
 	return {
 		cwd: WORKSPACE,
 		ignoredDirectoryNames: [...WORKSPACE_IGNORED_DIRECTORY_NAMES],
-		maxDepth: GREP_MAX_DEPTH,
-		maxFileBytes: GREP_MAX_FILE_BYTES,
-		maxFiles: GREP_MAX_FILES,
-		maxLineBytes: GREP_LINE_MAX_BYTES,
-		maxMatches: GREP_MAX_MATCHES,
+		maxDepth: limits.grep.maxDepth,
+		maxDurationMs: limits.grep.maxDurationMs,
+		maxFileBytes: limits.grep.maxFileBytes,
+		maxFiles: limits.grep.maxFiles,
+		maxLineBytes: limits.grep.maxLineBytes,
+		maxMatches: limits.grep.maxMatches,
 		path: defaultWorkspaceSandbox.relativePath(resolvedPath) || ".",
 		pattern: input.pattern,
 	};
 };
 
-const formatGrepOutput = (result: GrepSearchResult): GrepOutput => {
+const formatGrepOutput = (
+	result: GrepSearchResult,
+	maxOutputBytes: number
+): GrepOutput => {
 	const matches: GrepOutput["matches"] = [];
 	for (const match of result.matches) {
 		matches.push(match);
-		if (!fitsSerializedBytes({ matches }, GREP_OUTPUT_MAX_BYTES)) {
+		if (!fitsSerializedBytes({ matches }, maxOutputBytes)) {
 			matches.pop();
 			return { matches, truncated: true };
 		}
@@ -61,9 +67,13 @@ export const createGrepRunner =
 		fallbackSearch = runJavascriptGrep,
 		search = runRipgrepSearch,
 	}: GrepRunnerDeps = {}) =>
-	async (input: GrepInput): Promise<GrepOutput> => {
+	async (
+		input: GrepInput,
+		options: GrepRunnerOptions = {}
+	): Promise<GrepOutput> => {
 		validateGrepPattern(input.pattern);
-		const searchInput = await resolveSearchInput(input);
+		const limits = options.resourceLimits ?? getToolResourceLimits();
+		const searchInput = await resolveSearchInput(input, limits);
 
 		let result: GrepSearchResult;
 		try {
@@ -80,7 +90,7 @@ export const createGrepRunner =
 			result = await fallbackSearch(searchInput);
 		}
 
-		return formatGrepOutput(result);
+		return formatGrepOutput(result, limits.grep.maxOutputBytes);
 	};
 
 export const runGrepTool = createGrepRunner();

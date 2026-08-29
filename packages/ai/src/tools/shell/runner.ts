@@ -6,9 +6,11 @@ import { promisify } from "node:util";
 import { defaultWorkspaceSandbox } from "../../workspace";
 import { keepTailUtf8 } from "../output-bounds";
 import {
+	getToolResourceLimits,
+	type ToolResourceLimits,
+} from "../resource-limits";
+import {
 	SHELL_OUTPUT_TAIL_BYTES,
-	SHELL_TIMEOUT_DEFAULT_SECONDS,
-	SHELL_TIMEOUT_MAX_SECONDS,
 	type ShellInput,
 	type ShellOutput,
 	type ShellPlatform,
@@ -17,7 +19,12 @@ import {
 
 const runPs = promisify(execFile);
 
-export const SHELL_OUTPUT_TRUNCATION_BANNER = `\n[output truncated — kept the final ${SHELL_OUTPUT_TAIL_BYTES} bytes]\n`;
+export const composeShellTruncationBanner = (maxOutputBytes: number): string =>
+	`\n[output truncated — kept the final ${maxOutputBytes} bytes]\n`;
+
+export const SHELL_OUTPUT_TRUNCATION_BANNER = composeShellTruncationBanner(
+	SHELL_OUTPUT_TAIL_BYTES
+);
 
 export const composeShellTimeoutMessage = (timeoutSeconds: number): string =>
 	`\n[command timed out after ${timeoutSeconds}s and was terminated]\n`;
@@ -124,6 +131,22 @@ export type ShellRunnerDeps = {
 	platform?: ShellPlatform;
 };
 
+const assertShellInputWithinLimits = (
+	input: ShellInput,
+	limits: ToolResourceLimits
+): void => {
+	if (input.command.length > limits.shell.maxCommandChars) {
+		throw new Error(
+			`Shell command exceeds the ${limits.shell.maxCommandChars}-character limit for the ${limits.profile} resource profile.`
+		);
+	}
+	if (input.cwd !== undefined && input.cwd.length > limits.shell.maxCwdChars) {
+		throw new Error(
+			`Shell cwd exceeds the ${limits.shell.maxCwdChars}-character limit for the ${limits.profile} resource profile.`
+		);
+	}
+};
+
 const PS_LINE_FIELDS_REGEX = /\s+/;
 
 /**
@@ -225,52 +248,65 @@ const killProcessTree = async (
 const composeShellOutput = (
 	rawOutput: string,
 	timedOut: boolean,
-	timeoutSeconds: number
+	timeoutSeconds: number,
+	maxOutputBytes: number
 ): { output: string; truncated?: boolean } => {
-	if (Buffer.byteLength(rawOutput, "utf8") <= SHELL_OUTPUT_TAIL_BYTES) {
+	if (Buffer.byteLength(rawOutput, "utf8") <= maxOutputBytes) {
 		return {
 			output: timedOut
 				? `${rawOutput}${composeShellTimeoutMessage(timeoutSeconds)}`
 				: rawOutput,
 		};
 	}
-	const output = `${SHELL_OUTPUT_TRUNCATION_BANNER}${keepTailUtf8(
+	const output = `${composeShellTruncationBanner(maxOutputBytes)}${keepTailUtf8(
 		rawOutput,
-		SHELL_OUTPUT_TAIL_BYTES
+		maxOutputBytes
 	)}${timedOut ? composeShellTimeoutMessage(timeoutSeconds) : ""}`;
 	return { output, truncated: true };
 };
 
 /**
- * The runner keeps at most this much captured output in memory (twice the
- * model-visible tail) so a chatty command within a long timeout cannot balloon
- * the CLI's memory; older bytes are dropped as new ones arrive.
+ * The runner keeps at most twice the active profile's model-visible output
+ * budget in memory so a chatty command within a long timeout cannot balloon the
+ * CLI's memory; older bytes are dropped as new ones arrive.
  */
-const MAX_BUFFERED_OUTPUT_BYTES = SHELL_OUTPUT_TAIL_BYTES * 2;
 
 /** How long after the main process exits the runner waits for trailing output. */
 const OUTPUT_DRAIN_MS = 100;
 
+export type ShellRunnerOptions = {
+	resourceLimits?: ToolResourceLimits;
+};
+
 /**
  * Executes a bounded shell command: no stdin, inherited environment, process
  * tree killed on completion and on timeout, merged stdout+stderr output kept
- * to its final 30 KiB with a model-visible truncation banner. The platform
- * builder is injected so tests can pin the PowerShell branch without a
- * Windows host; every other execution primitive is real.
+ * to the active resource profile's tail with a truncation banner. The platform
+ * builder is injected so tests can pin the PowerShell branch without a Windows
+ * host; every other execution primitive is real.
  */
 export const createShellRunner = (
 	deps: ShellRunnerDeps = {}
-): ((input: ShellInput) => Promise<ShellOutput>) => {
+): ((
+	input: ShellInput,
+	options?: ShellRunnerOptions
+) => Promise<ShellOutput>) => {
 	const buildInvocation = deps.buildInvocation ?? buildShellInvocation;
 	const platform = deps.platform ?? shellPlatformFromNode(process.platform);
 
-	return async (input: ShellInput): Promise<ShellOutput> => {
+	return async (
+		input: ShellInput,
+		options: ShellRunnerOptions = {}
+	): Promise<ShellOutput> => {
+		const limits = options.resourceLimits ?? getToolResourceLimits();
+		assertShellInputWithinLimits(input, limits);
 		const invocation = buildInvocation(input.command, platform);
 		const cwd = await resolveShellCwd(input.cwd);
 		const timeoutSeconds = Math.min(
-			input.timeout ?? SHELL_TIMEOUT_DEFAULT_SECONDS,
-			SHELL_TIMEOUT_MAX_SECONDS
+			input.timeout ?? limits.shell.defaultTimeoutSeconds,
+			limits.shell.maxTimeoutSeconds
 		);
+		const maxBufferedOutputBytes = limits.shell.maxOutputBytes * 2;
 
 		return await new Promise<ShellOutput>((resolve, reject) => {
 			let retainedOutput: Buffer = Buffer.alloc(0);
@@ -287,18 +323,18 @@ export const createShellRunner = (
 			});
 
 			const collect = (chunk: Buffer): void => {
-				if (chunk.length >= MAX_BUFFERED_OUTPUT_BYTES) {
+				if (chunk.length >= maxBufferedOutputBytes) {
 					retainedOutput = chunk.subarray(
-						chunk.length - MAX_BUFFERED_OUTPUT_BYTES
+						chunk.length - maxBufferedOutputBytes
 					);
 					return;
 				}
-				if (retainedOutput.length + chunk.length <= MAX_BUFFERED_OUTPUT_BYTES) {
+				if (retainedOutput.length + chunk.length <= maxBufferedOutputBytes) {
 					retainedOutput = Buffer.concat([retainedOutput, chunk]);
 					return;
 				}
 				retainedOutput = Buffer.concat([retainedOutput, chunk]).subarray(
-					retainedOutput.length + chunk.length - MAX_BUFFERED_OUTPUT_BYTES
+					retainedOutput.length + chunk.length - maxBufferedOutputBytes
 				);
 			};
 
@@ -329,7 +365,8 @@ export const createShellRunner = (
 				const { output, truncated } = composeShellOutput(
 					rawOutput,
 					timedOut,
-					timeoutSeconds
+					timeoutSeconds,
+					limits.shell.maxOutputBytes
 				);
 				resolve({
 					exitCode: timedOut ? null : exitCode,

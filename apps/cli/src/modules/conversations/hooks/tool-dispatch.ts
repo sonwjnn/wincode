@@ -15,6 +15,7 @@ import {
 	codingToolNames,
 	type ResolvedAgentRuntime,
 	skillToolInputSchema,
+	type ToolResourceLimits,
 } from "@wincode/ai";
 import { handleCodingAgentToolCall } from "@wincode/ai/client";
 import type { ChatAddToolOutputFunction, ChatOnToolCallCallback } from "ai";
@@ -66,6 +67,7 @@ type ChatToolCallHandlerCommonDeps = {
 	mcp: Pick<McpContextValue, "handleDynamicToolCall">;
 	mcpSnapshotRef: MutableRefObject<McpCatalogSnapshot | null>;
 	resolvedAgentRef: MutableRefObject<ResolvedAgentRuntime | undefined>;
+	resolveResourceLimits?: () => Promise<ToolResourceLimits>;
 	skillExecutionRef?: MutableRefObject<SkillExecution | null>;
 	gate: ToolGate;
 };
@@ -88,6 +90,7 @@ export const createChatToolCallHandler = (
 		mcp,
 		mcpSnapshotRef,
 		resolvedAgentRef,
+		resolveResourceLimits,
 		skillExecutionRef,
 		gate,
 	} = deps;
@@ -178,9 +181,14 @@ export const createChatToolCallHandler = (
 						toolCall: options.toolCall,
 					});
 					if (outcome.kind === "allow") {
+						const resourceOptions =
+							resolveResourceLimits === undefined
+								? {}
+								: { resourceLimits: await resolveResourceLimits() };
 						await runStaticToolCall(
 							addToolOutput,
-							resolvedAgentRef.current?.visibleCodingTools ?? []
+							resolvedAgentRef.current?.visibleCodingTools ?? [],
+							resourceOptions
 						)(options);
 						return;
 					}
@@ -229,10 +237,17 @@ export const createChatToolCallHandler = (
 								...options,
 								toolCall: { ...options.toolCall, input: outcome.input },
 							};
+				const resourceOptions =
+					resolveResourceLimits === undefined
+						? {}
+						: { resourceLimits: await resolveResourceLimits() };
 				await runStaticToolCall(
 					addToolOutput,
 					resolvedAgentRef.current?.visibleCodingTools ?? [],
-					{ allowExternalPaths: outcome.input !== undefined }
+					{
+						allowExternalPaths: outcome.input !== undefined,
+						...resourceOptions,
+					}
 				)(executionOptions as typeof options);
 			})()
 		).catch(() => {

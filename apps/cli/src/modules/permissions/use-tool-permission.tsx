@@ -1,4 +1,9 @@
-import type { AgentId } from "@wincode/ai";
+import {
+	type AgentId,
+	DEFAULT_RESOURCE_LIMIT_PROFILE,
+	getToolResourceLimits,
+	type ToolResourceLimits,
+} from "@wincode/ai";
 import type { WorkspacePolicy } from "@wincode/ai/workspace";
 import { createWorkspaceSandbox } from "@wincode/ai/workspace";
 import { useCallback, useMemo, useRef } from "react";
@@ -33,6 +38,7 @@ export type ToolPermissionRuntime = {
 	permissionRef: MutableRefObject<ToolPermission>;
 	resolveMcpPolicy: () => Promise<EffectiveAgentPolicy>;
 	resolvePermission: () => Promise<ToolPermission>;
+	resolveResourceLimits: () => Promise<ToolResourceLimits>;
 	sandbox: WorkspacePolicy;
 	service: PermissionService;
 };
@@ -40,6 +46,7 @@ export type ToolPermissionRuntime = {
 type ResolvedToolPermissionPolicies = {
 	mcpPolicy: EffectiveAgentPolicy;
 	permission: ToolPermission;
+	resourceLimits: ToolResourceLimits;
 };
 
 const FAIL_CLOSED_MCP_POLICY: EffectiveAgentPolicy = {
@@ -59,6 +66,7 @@ export const resolveToolPermissionPolicies = (
 		return {
 			mcpPolicy: FAIL_CLOSED_MCP_POLICY,
 			permission: getFallbackPermission(),
+			resourceLimits: getToolResourceLimits(DEFAULT_RESOURCE_LIMIT_PROFILE),
 		};
 	}
 	// Enforce against the Agent that actually runs: an unavailable
@@ -72,6 +80,10 @@ export const resolveToolPermissionPolicies = (
 	const rules = effectiveAgent?.permission ?? DEFAULT_PERMISSION_RULES;
 	const safety = effectiveAgent?.requiresManualApproval ?? false;
 	const permission = createResolvedToolPermission(rules);
+	const resourceProfile =
+		effectiveAgent?.resourceProfile ??
+		registry.resourceProfile ??
+		DEFAULT_RESOURCE_LIMIT_PROFILE;
 	return {
 		// MCP composition consumes the raw folded rules plus the safety flag;
 		// the ceiling is applied by the registry when it composes with each
@@ -80,15 +92,16 @@ export const resolveToolPermissionPolicies = (
 		permission: safety
 			? applyManualApprovalSafetyCeiling(permission)
 			: permission,
+		resourceLimits: getToolResourceLimits(resourceProfile),
 	};
 };
 
 /**
  * Composes the Tool Permission runtime for chat tool dispatch: the policy
  * evaluator seeded with defaults and refreshed from the top-level config
- * `permission` section once the ConfigStore snapshot resolves, the workspace
- * sandbox used to canonicalize read resources, and the inline approval panel
- * registry for `ask` decisions.
+ * `permission` section once the ConfigStore snapshot resolves, the active
+ * Agent's Tool Resource Profile, the workspace sandbox used to canonicalize
+ * read resources, and the inline approval panel registry for `ask` decisions.
  */
 export function useToolPermission(): ToolPermissionRuntime {
 	const config = useConfig();
@@ -127,6 +140,10 @@ export function useToolPermission(): ToolPermissionRuntime {
 		() => resolvedPromise.then((resolved) => resolved.mcpPolicy),
 		[resolvedPromise]
 	);
+	const resolveResourceLimits = useCallback(
+		() => resolvedPromise.then((resolved) => resolved.resourceLimits),
+		[resolvedPromise]
+	);
 
 	const openApproval = useCallback(
 		(request: ToolApprovalRequest, actions: ToolApprovalActions) => {
@@ -144,6 +161,7 @@ export function useToolPermission(): ToolPermissionRuntime {
 		permissionRef,
 		resolveMcpPolicy,
 		resolvePermission,
+		resolveResourceLimits,
 		sandbox,
 		service,
 	};

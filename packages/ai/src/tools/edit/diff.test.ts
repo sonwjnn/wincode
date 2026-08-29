@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { getToolResourceLimits } from "../resource-limits";
 import {
 	buildEditDiff,
 	buildFullFileEditDiff,
@@ -60,6 +61,21 @@ describe("buildEditDiff", () => {
 		expect(result.additions).toBeGreaterThan(0);
 		expect(result.deletions).toBe(result.additions);
 		expect(isRenderableEditDiff(result)).toBe(true);
+	});
+	test("uses an elevated resource profile for a large replacement diff", () => {
+		const before = `${"a".repeat(300_000)}\n`;
+		const after = `${"b".repeat(300_000)}\n`;
+
+		const result = buildEditDiff(
+			before,
+			after,
+			"src/example.ts",
+			getToolResourceLimits("extended").edit
+		);
+
+		expect(result.truncated).toBe(false);
+		expect(result.patch).toContain(`-${"a".repeat(300_000)}`);
+		expect(result.patch).toContain(`+${"b".repeat(300_000)}`);
 	});
 
 	test("falls back to stats when one hunk cannot fit", () => {

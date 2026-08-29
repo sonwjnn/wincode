@@ -7,7 +7,10 @@ import {
 import type { FileMentionUIPart } from "./file-mentions";
 import type { CodingAgentTools, CodingAgentUIMessage } from "./message";
 import type { CodingMessageMetadata } from "./metadata";
-import { codingToolRunners } from "./tools/runners";
+import {
+	type CodingToolRunnerOptions,
+	codingToolRunners,
+} from "./tools/runners";
 import type { CodingToolName } from "./tools/schemas";
 
 export type { FileUIPart } from "ai";
@@ -18,13 +21,15 @@ const getErrorMessage = (error: unknown) =>
 type CodingAgentToolName = keyof CodingAgentTools & CodingToolName;
 
 type ToolRunner<ToolName extends CodingAgentToolName> = (
-	input: CodingAgentTools[ToolName]["input"]
+	input: CodingAgentTools[ToolName]["input"],
+	options?: CodingToolRunnerOptions
 ) => Promise<CodingAgentTools[ToolName]["output"]>;
 
 type RunToolCallOptions<ToolName extends CodingAgentToolName> = {
 	addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>;
 	input: CodingAgentTools[ToolName]["input"];
 	run: ToolRunner<ToolName>;
+	runnerOptions?: CodingToolRunnerOptions;
 	tool: ToolName;
 	toolCallId: string;
 };
@@ -37,11 +42,12 @@ const runToolCall = async <ToolName extends CodingAgentToolName>({
 	addToolOutput,
 	input,
 	run,
+	runnerOptions,
 	tool,
 	toolCallId,
 }: RunToolCallOptions<ToolName>) => {
 	try {
-		const output = await run(input);
+		const output = await run(input, runnerOptions);
 
 		await addToolOutput({
 			output,
@@ -74,7 +80,10 @@ export const handleCodingAgentToolCall =
 	(
 		addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>,
 		agentTools: readonly CodingToolName[],
-		options: { allowExternalPaths?: boolean } = {}
+		options: {
+			allowExternalPaths?: boolean;
+			resourceLimits?: CodingToolRunnerOptions["resourceLimits"];
+		} = {}
 	): ChatOnToolCallCallback<CodingAgentUIMessage> =>
 	async ({ toolCall }) => {
 		if (toolCall.dynamic) {
@@ -93,16 +102,18 @@ export const handleCodingAgentToolCall =
 			});
 			return;
 		}
+		const runnerOptions: CodingToolRunnerOptions = {
+			allowExternalPath: options.allowExternalPaths,
+			resourceLimits: options.resourceLimits,
+		};
 
 		switch (toolCall.toolName) {
 			case "read":
 				await runToolCall({
 					addToolOutput,
 					input: toolCall.input,
-					run: (input) =>
-						codingToolRunners.read(input, {
-							allowExternalPath: options.allowExternalPaths,
-						}),
+					run: codingToolRunners.read,
+					runnerOptions,
 					tool: "read",
 					toolCallId: toolCall.toolCallId,
 				});
@@ -113,6 +124,7 @@ export const handleCodingAgentToolCall =
 					addToolOutput,
 					input: toolCall.input,
 					run: codingToolRunners.write,
+					runnerOptions,
 					tool: "write",
 					toolCallId: toolCall.toolCallId,
 				});
@@ -123,6 +135,7 @@ export const handleCodingAgentToolCall =
 					addToolOutput,
 					input: toolCall.input,
 					run: codingToolRunners.edit,
+					runnerOptions,
 					tool: "edit",
 					toolCallId: toolCall.toolCallId,
 				});
@@ -133,6 +146,7 @@ export const handleCodingAgentToolCall =
 					addToolOutput,
 					input: toolCall.input,
 					run: codingToolRunners.list,
+					runnerOptions,
 					tool: "list",
 					toolCallId: toolCall.toolCallId,
 				});
@@ -143,6 +157,7 @@ export const handleCodingAgentToolCall =
 					addToolOutput,
 					input: toolCall.input,
 					run: codingToolRunners.grep,
+					runnerOptions,
 					tool: "grep",
 					toolCallId: toolCall.toolCallId,
 				});
@@ -153,6 +168,7 @@ export const handleCodingAgentToolCall =
 					addToolOutput,
 					input: toolCall.input,
 					run: codingToolRunners.shell,
+					runnerOptions,
 					tool: "shell",
 					toolCallId: toolCall.toolCallId,
 				});

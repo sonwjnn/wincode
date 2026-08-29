@@ -290,6 +290,7 @@ export function useChat(
 		openApproval,
 		resolveMcpPolicy,
 		resolvePermission,
+		resolveResourceLimits,
 		sandbox,
 		service,
 	} = useToolPermission();
@@ -300,6 +301,8 @@ export function useChat(
 	resolveMcpPolicyRef.current = resolveMcpPolicy;
 	const resolvePermissionRef = useRef(resolvePermission);
 	resolvePermissionRef.current = resolvePermission;
+	const resolveResourceLimitsRef = useRef(resolveResourceLimits);
+	resolveResourceLimitsRef.current = resolveResourceLimits;
 	const approvalAbortHandledRef = useRef(false);
 	const abortApprovalTurnRef = useRef<(toolCallId: string) => void>(
 		() => undefined
@@ -319,6 +322,7 @@ export function useChat(
 				},
 				openApproval,
 				resolvePermission: () => resolvePermissionRef.current(),
+				resolveResourceLimits: () => resolveResourceLimitsRef.current(),
 				sandbox,
 				service,
 			}),
@@ -480,6 +484,7 @@ export function useChat(
 			mcp,
 			mcpSnapshotRef,
 			resolvedAgentRef,
+			resolveResourceLimits: () => resolveResourceLimitsRef.current(),
 			skillExecutionRef,
 		}),
 		sendAutomaticallyWhen: autoSendGate.shouldAutoSend,

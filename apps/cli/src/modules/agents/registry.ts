@@ -8,11 +8,14 @@ import {
 	type ChatModelSelection,
 	type CodingToolName,
 	type ConnectionProviderId,
+	DEFAULT_RESOURCE_LIMIT_PROFILE,
 	isSupportedModelVariant,
 	MAX_AGENT_ID_LENGTH,
 	type ModelVariant,
 	modelVariantSchema,
 	parseCatalogModelSelection,
+	type ResourceLimitProfile,
+	resourceLimitProfileSchema,
 } from "@wincode/ai";
 import { z } from "zod";
 import {
@@ -49,6 +52,7 @@ const agentPatchFields = {
 	instructions: z.string().max(MAX_CONFIGURED_AGENT_INSTRUCTIONS_LENGTH),
 	model: z.string().min(1),
 	permission: topLevelPermissionSchema,
+	resource_limits: resourceLimitProfileSchema,
 	role: agentRoleSchema,
 	variant: z.string().min(1),
 } as const;
@@ -60,6 +64,7 @@ const configuredAgentPatchSchema = z
 		instructions: agentPatchFields.instructions.optional(),
 		model: agentPatchFields.model.optional(),
 		permission: agentPatchFields.permission.optional(),
+		resource_limits: agentPatchFields.resource_limits.optional(),
 		role: agentPatchFields.role.optional(),
 		variant: agentPatchFields.variant.optional(),
 	})
@@ -76,6 +81,7 @@ const builtInAgentPatchSchema = z
 		instructions: agentPatchFields.instructions.optional(),
 		model: agentPatchFields.model.optional(),
 		permission: agentPatchFields.permission.optional(),
+		resource_limits: agentPatchFields.resource_limits.optional(),
 		variant: agentPatchFields.variant.optional(),
 	})
 	.strict();
@@ -87,6 +93,7 @@ export type AgentDiagnosticCode =
 	| "invalid-agent-id"
 	| "invalid-agents-record"
 	| "invalid-built-in-agent"
+	| "invalid-resource-limits"
 	| "too-many-agents";
 
 export type AgentDiagnostic = {
@@ -104,6 +111,7 @@ export type RegistryAgent = AgentDefinition & {
 	readonly model?: ChatModelSelection;
 	readonly permission?: PermissionRules;
 	readonly requiresManualApproval: boolean;
+	readonly resourceProfile: ResourceLimitProfile;
 	readonly unavailableReason?: string;
 	readonly variant?: ModelVariant;
 };
@@ -113,6 +121,7 @@ export type AgentRegistry = {
 	readonly configuredAgents: readonly RegistryAgent[];
 	readonly defaultAgentId: AgentId;
 	readonly diagnostics: readonly AgentDiagnostic[];
+	readonly resourceProfile: ResourceLimitProfile;
 	readonly selectableAgents: readonly RegistryAgent[];
 };
 
@@ -149,6 +158,31 @@ const agentDiagnostic = (
 	entry: Omit<AgentDiagnostic, "origin">,
 	origin: ConfigOrigin | undefined
 ): AgentDiagnostic => (origin === undefined ? entry : { ...entry, origin });
+const resolveResourceProfile = (
+	snapshot: ConfigSnapshot,
+	diagnostics: AgentDiagnostic[]
+): ResourceLimitProfile => {
+	const rawProfile = snapshot.document.resource_limits;
+	if (rawProfile === undefined) {
+		return DEFAULT_RESOURCE_LIMIT_PROFILE;
+	}
+	const parsed = resourceLimitProfileSchema.safeParse(rawProfile);
+	if (parsed.success) {
+		return parsed.data;
+	}
+	diagnostics.push(
+		agentDiagnostic(
+			{
+				code: "invalid-resource-limits",
+				configPath: ["resource_limits"],
+				message: '"resource_limits" must be one of: standard, extended, deep',
+				severity: "error",
+			},
+			snapshot.sourceFor(["resource_limits"])
+		)
+	);
+	return DEFAULT_RESOURCE_LIMIT_PROFILE;
+};
 
 const issuePath = (issue: z.core.$ZodIssue | undefined): string[] => {
 	if (issue?.code === "unrecognized_keys") {
@@ -304,7 +338,8 @@ const resolveConfiguredAgentEntry = (
 	agentId: string,
 	rawDefinition: unknown,
 	snapshot: ConfigSnapshot,
-	options: AgentRegistryOptions
+	options: AgentRegistryOptions,
+	defaultResourceProfile: ResourceLimitProfile
 ): ConfiguredAgentEntryResult => {
 	const agentPath = ["agents", agentId];
 	const idResult = agentIdSchema.safeParse(agentId);
@@ -404,6 +439,8 @@ const resolveConfiguredAgentEntry = (
 			isConfigured: true,
 			isSelectable: definition.data.role !== "subagent",
 			...(model ? { model } : {}),
+			resourceProfile:
+				definition.data.resource_limits ?? defaultResourceProfile,
 			requiresManualApproval: false,
 			role: definition.data.role,
 			...(isAvailable
@@ -421,7 +458,8 @@ const collectConfiguredAgents = (
 	configured: Record<string, unknown>,
 	snapshot: ConfigSnapshot,
 	diagnostics: AgentDiagnostic[],
-	options: AgentRegistryOptions
+	options: AgentRegistryOptions,
+	defaultResourceProfile: ResourceLimitProfile
 ): RegistryAgent[] => {
 	const entries = Object.entries(configured).filter(
 		([agentId]) => !builtInAgentIds.has(agentId)
@@ -433,7 +471,8 @@ const collectConfiguredAgents = (
 			agentId,
 			rawDefinition,
 			snapshot,
-			options
+			options,
+			defaultResourceProfile
 		);
 		if (diagnostic !== undefined) {
 			diagnostics.push(diagnostic);
@@ -466,7 +505,8 @@ const resolveBuiltInAgent = (
 	snapshot: ConfigSnapshot,
 	diagnostics: AgentDiagnostic[],
 	hasInvalidSourcePatch: boolean,
-	options: AgentRegistryOptions
+	options: AgentRegistryOptions,
+	defaultResourceProfile: ResourceLimitProfile
 ): RegistryAgent => {
 	const rawPatch = configured[shippedAgent.id];
 	if (hasInvalidSourcePatch) {
@@ -475,6 +515,7 @@ const resolveBuiltInAgent = (
 			isAvailable: true,
 			isConfigured: false,
 			isSelectable: true,
+			resourceProfile: defaultResourceProfile,
 			requiresManualApproval: true,
 		};
 	}
@@ -484,6 +525,7 @@ const resolveBuiltInAgent = (
 			isAvailable: true,
 			isConfigured: false,
 			isSelectable: true,
+			resourceProfile: defaultResourceProfile,
 			requiresManualApproval: false,
 		};
 	}
@@ -502,6 +544,7 @@ const resolveBuiltInAgent = (
 			isAvailable: true,
 			isConfigured: false,
 			isSelectable: true,
+			resourceProfile: defaultResourceProfile,
 			requiresManualApproval: true,
 		};
 	}
@@ -540,6 +583,7 @@ const resolveBuiltInAgent = (
 			isAvailable: true,
 			isConfigured: false,
 			isSelectable: true,
+			resourceProfile: defaultResourceProfile,
 			requiresManualApproval: true,
 		};
 	}
@@ -561,6 +605,7 @@ const resolveBuiltInAgent = (
 		isAvailable,
 		isConfigured: false,
 		isSelectable: true,
+		resourceProfile: patch.data.resource_limits ?? defaultResourceProfile,
 		requiresManualApproval: false,
 		...(isAvailable
 			? {}
@@ -605,6 +650,7 @@ export const buildAgentRegistry = (
 	options: AgentRegistryOptions = {}
 ): AgentRegistry => {
 	const diagnostics: AgentDiagnostic[] = [];
+	const resourceProfile = resolveResourceProfile(snapshot, diagnostics);
 	const configuredAgents: RegistryAgent[] = [];
 	const configured = snapshot.document.agents;
 	includeConfigDiagnostics(snapshot, diagnostics);
@@ -616,7 +662,13 @@ export const buildAgentRegistry = (
 	if (configured !== undefined) {
 		if (isRecord(configured)) {
 			configuredAgents.push(
-				...collectConfiguredAgents(configured, snapshot, diagnostics, options)
+				...collectConfiguredAgents(
+					configured,
+					snapshot,
+					diagnostics,
+					options,
+					resourceProfile
+				)
 			);
 		} else {
 			diagnostics.push(
@@ -641,7 +693,8 @@ export const buildAgentRegistry = (
 			snapshot,
 			diagnostics,
 			invalidBuiltInSourcePatches.has(agent.id),
-			options
+			options,
+			resourceProfile
 		)
 	);
 
@@ -705,6 +758,7 @@ export const buildAgentRegistry = (
 		configuredAgents: configuredAgentsView,
 		defaultAgentId,
 		diagnostics: deduplicateDiagnostics(diagnostics),
+		resourceProfile,
 		selectableAgents,
 	};
 };

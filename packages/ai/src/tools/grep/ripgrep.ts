@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { truncateUtf8 } from "../output-bounds";
+import { getToolResourceLimits } from "../resource-limits";
 import type {
 	GrepSearch,
 	GrepSearchInput,
@@ -10,7 +11,7 @@ import type {
 } from "./backend";
 import { RipgrepUnavailableError, resolveRipgrepExecutable } from "./binary";
 
-const RIPGREP_TIMEOUT_MS = 30_000;
+const RIPGREP_TIMEOUT_MS = getToolResourceLimits().grep.maxDurationMs;
 const RIPGREP_ERROR_MAX_BYTES = 8 * 1024;
 const RIPGREP_RECORD_MAX_BYTES = 64 * 1024;
 const LINE_ENDING = /\r?\n$/u;
@@ -122,6 +123,7 @@ export const runRipgrepSearch: GrepSearch = async (
 	input: GrepSearchInput,
 	options: RipgrepSearchOptions = {}
 ): Promise<GrepSearchResult> => {
+	const timeoutMs = input.maxDurationMs ?? RIPGREP_TIMEOUT_MS;
 	const executable =
 		options.executable ??
 		(await (options.resolveExecutable ?? resolveRipgrepExecutable)());
@@ -275,10 +277,8 @@ export const runRipgrepSearch: GrepSearch = async (
 	child.on("close", finish);
 
 	timer = setTimeout(() => {
-		rejectResult(
-			new Error(`ripgrep search timed out after ${RIPGREP_TIMEOUT_MS}ms.`)
-		);
-	}, RIPGREP_TIMEOUT_MS);
+		rejectResult(new Error(`ripgrep search timed out after ${timeoutMs}ms.`));
+	}, timeoutMs);
 
 	return promise;
 };

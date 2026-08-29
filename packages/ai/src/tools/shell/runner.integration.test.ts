@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { getToolResourceLimits } from "../resource-limits";
 import {
 	buildShellInvocation,
 	composeShellTimeoutMessage,
@@ -160,6 +161,29 @@ describe("runShellTool", () => {
 		expect(Buffer.byteLength(tail, "utf8")).toBeLessThanOrEqual(30 * 1024);
 		expect(result.output).toContain("100000");
 		expect(result.output).not.toContain("1\n2\n3\n");
+	});
+	test("uses the selected resource profile for output retention", async () => {
+		const result = await runShellTool(
+			{ command: "seq 1 100000" },
+			{ resourceLimits: getToolResourceLimits("extended") }
+		);
+		expect(result.truncated).toBe(true);
+		expect(result.output).toContain(
+			"[output truncated — kept the final 65536 bytes]"
+		);
+	});
+	test("enforces the active profile's command-size ceiling", async () => {
+		const longCommand = `true # ${"x".repeat(4090)}`;
+
+		await expect(runShellTool({ command: longCommand })).rejects.toThrow(
+			"exceeds the 4096-character limit"
+		);
+		await expect(
+			runShellTool(
+				{ command: longCommand },
+				{ resourceLimits: getToolResourceLimits("extended") }
+			)
+		).resolves.toMatchObject({ exitCode: 0 });
 	});
 
 	test("kills background processes whose output escapes the captured pipes", async () => {

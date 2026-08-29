@@ -1,12 +1,10 @@
-import {
-	defaultWorkspaceSandbox,
-	type WorkspaceTraversalEntry,
-} from "../workspace";
+import { defaultWorkspaceSandbox } from "../workspace";
 
 type TraverseWorkspaceOptions = {
 	includeDirectories: boolean;
 	includeFiles: boolean;
 	maxDepth: number;
+	maxEntries?: number;
 	path?: string;
 };
 
@@ -14,14 +12,13 @@ export const traverseWorkspace = async ({
 	includeDirectories,
 	includeFiles,
 	maxDepth,
+	maxEntries,
 	path: inputPath,
-}: TraverseWorkspaceOptions): Promise<WorkspaceTraversalEntry[]> => {
-	const result = await defaultWorkspaceSandbox.traverse({
+}: TraverseWorkspaceOptions) =>
+	defaultWorkspaceSandbox.traverse({
 		includeDirectories,
 		includeFiles,
 		maxDepth,
+		maxEntries,
 		path: inputPath,
 	});
-
-	return result.entries;
-};

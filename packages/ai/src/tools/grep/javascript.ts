@@ -1,5 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { truncateUtf8 } from "../output-bounds";
+import { getToolResourceLimits } from "../resource-limits";
 import { traverseWorkspace } from "../traversal";
 import type { GrepSearch, GrepSearchInput, GrepSearchResult } from "./backend";
 
@@ -17,14 +18,24 @@ export const runJavascriptGrep: GrepSearch = async (
 	validateGrepPattern(input.pattern);
 	const regex = new RegExp(input.pattern);
 	const matches: GrepSearchResult["matches"] = [];
-	const entries = await traverseWorkspace({
+	const maxDurationMs =
+		input.maxDurationMs ?? getToolResourceLimits().grep.maxDurationMs;
+	const deadline = Date.now() + maxDurationMs;
+	const traversal = await traverseWorkspace({
 		includeDirectories: false,
 		includeFiles: true,
 		maxDepth: input.maxDepth,
+		maxEntries: input.maxFiles,
 		path: input.path,
 	});
+	if (Date.now() >= deadline) {
+		return { matches, truncated: true };
+	}
 
-	for (const entry of entries.slice(0, input.maxFiles)) {
+	for (const entry of traversal.entries) {
+		if (Date.now() >= deadline) {
+			return { matches, truncated: true };
+		}
 		const fileStat = await stat(entry.absolutePath);
 
 		if (fileStat.size > input.maxFileBytes) {
@@ -35,6 +46,9 @@ export const runJavascriptGrep: GrepSearch = async (
 		const lines = content.split("\n");
 
 		for (const [index, line] of lines.entries()) {
+			if (Date.now() >= deadline) {
+				return { matches, truncated: true };
+			}
 			if (!regex.test(line)) {
 				continue;
 			}
@@ -51,5 +65,5 @@ export const runJavascriptGrep: GrepSearch = async (
 		}
 	}
 
-	return { matches };
+	return traversal.truncated ? { matches, truncated: true } : { matches };
 };

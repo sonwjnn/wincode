@@ -38,6 +38,39 @@ describe("buildAgentRegistry", () => {
 		expect(registry.configuredAgents).toEqual([]);
 		expect(registry.diagnostics).toEqual([]);
 	});
+	test("resolves global and Agent-specific resource profiles", () => {
+		const registry = buildAgentRegistry(
+			makeSnapshot({
+				agents: {
+					reviewer: {
+						description: "Reviews code",
+						resource_limits: "deep",
+						role: "primary",
+					},
+				},
+				resource_limits: "extended",
+			})
+		);
+
+		expect(registry.resourceProfile).toBe("extended");
+		expect(
+			registry.agents.find(({ id }) => id === "build")?.resourceProfile
+		).toBe("extended");
+		expect(
+			registry.agents.find(({ id }) => id === "reviewer")?.resourceProfile
+		).toBe("deep");
+	});
+
+	test("falls back to standard for an invalid global resource profile", () => {
+		const registry = buildAgentRegistry(
+			makeSnapshot({ resource_limits: "unbounded" })
+		);
+
+		expect(registry.resourceProfile).toBe("standard");
+		expect(registry.diagnostics).toMatchObject([
+			{ code: "invalid-resource-limits", configPath: ["resource_limits"] },
+		]);
+	});
 
 	test("loads valid primary and all agents as selectable", () => {
 		const registry = buildAgentRegistry(

@@ -1,6 +1,10 @@
 import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 import { defaultWorkspaceSandbox } from "../../workspace";
+import {
+	getToolResourceLimits,
+	type ToolResourceLimits,
+} from "../resource-limits";
 import type { ReadInput, ReadOutput } from "./schema";
 import {
 	type LineRange,
@@ -8,7 +12,6 @@ import {
 	splitLineRangeSelector,
 } from "./selector";
 
-const READ_CONTENT_MAX_BYTES = 50 * 1024;
 const RANGE_LEADING_CONTEXT_LINES = 1;
 const RANGE_TRAILING_CONTEXT_LINES = 3;
 type ResolvedReadTarget = {
@@ -117,7 +120,8 @@ const remainingRangesAfter = (
 
 const continuationNotice = (
 	filePath: string,
-	ranges: readonly LineRange[]
+	ranges: readonly LineRange[],
+	maxOutputBytes: number
 ): string => {
 	const selector = ranges
 		.map((range) =>
@@ -126,7 +130,7 @@ const continuationNotice = (
 				: `${range.startLine}-${range.endLine}`
 		)
 		.join(",");
-	return `[Output capped at ${READ_CONTENT_MAX_BYTES} bytes. Continue with path \`${filePath}:${selector}\`.]`;
+	return `[Output capped at ${maxOutputBytes} bytes. Continue with path \`${filePath}:${selector}\`.]`;
 };
 
 const buildDisplayRanges = (
@@ -166,14 +170,15 @@ function* numberedLinesInRanges(
 
 const fitsOutputBudget = (
 	lines: readonly string[],
-	displayRanges: readonly LineRange[]
+	displayRanges: readonly LineRange[],
+	maxOutputBytes: number
 ): boolean => {
 	let bytes = 0;
 	let lineCount = 0;
 	for (const numberedLine of numberedLinesInRanges(lines, displayRanges)) {
 		bytes +=
 			(lineCount === 0 ? 0 : 1) + Buffer.byteLength(numberedLine.text, "utf8");
-		if (bytes > READ_CONTENT_MAX_BYTES) {
+		if (bytes > maxOutputBytes) {
 			return false;
 		}
 		lineCount += 1;
@@ -212,9 +217,10 @@ const boundNumberedLines = (
 	lines: readonly string[],
 	selectedRanges: readonly LineRange[],
 	displayRanges: readonly LineRange[],
-	filePath: string
+	filePath: string,
+	maxOutputBytes: number
 ): NumberedContent => {
-	if (fitsOutputBudget(lines, displayRanges)) {
+	if (fitsOutputBudget(lines, displayRanges, maxOutputBytes)) {
 		return {
 			content: Array.from(
 				numberedLinesInRanges(lines, displayRanges),
@@ -255,12 +261,16 @@ const boundNumberedLines = (
 			remainingRanges.length === 0
 				? 0
 				: Buffer.byteLength(
-						`\n\n${continuationNotice(filePath, remainingRanges)}`,
+						`\n\n${continuationNotice(
+							filePath,
+							remainingRanges,
+							maxOutputBytes
+						)}`,
 						"utf8"
 					);
 		if (
 			acceptedBytes + separatorBytes + lineBytes + noticeBytes >
-			READ_CONTENT_MAX_BYTES
+			maxOutputBytes
 		) {
 			failedLine = numberedLine;
 			break;
@@ -274,14 +284,14 @@ const boundNumberedLines = (
 		const failedLineBytes = Buffer.byteLength(failedLine?.text ?? "", "utf8");
 		if (
 			failedLine?.lineNumber !== undefined &&
-			failedLineBytes > READ_CONTENT_MAX_BYTES
+			failedLineBytes > maxOutputBytes
 		) {
 			throw new Error(
-				`Line ${failedLine.lineNumber} exceeds the ${READ_CONTENT_MAX_BYTES}-byte read limit`
+				`Line ${failedLine.lineNumber} exceeds the ${maxOutputBytes}-byte read limit`
 			);
 		}
 		throw new Error(
-			`The first output line cannot fit with its continuation notice within the ${READ_CONTENT_MAX_BYTES}-byte read limit`
+			`The first output line cannot fit with its continuation notice within the ${maxOutputBytes}-byte read limit`
 		);
 	}
 	const remainingRanges = continuationRangesAfter(
@@ -294,7 +304,8 @@ const boundNumberedLines = (
 	return {
 		content: `${acceptedLines.join("\n")}\n\n${continuationNotice(
 			filePath,
-			remainingRanges
+			remainingRanges,
+			maxOutputBytes
 		)}`,
 		truncated: true,
 	};
@@ -303,7 +314,8 @@ const boundNumberedLines = (
 const formatNumberedContent = (
 	content: string,
 	filePath: string,
-	ranges?: readonly LineRange[]
+	ranges: readonly LineRange[] | undefined,
+	maxOutputBytes: number
 ): NumberedContent => {
 	const lines = splitAddressableLines(content);
 	const outOfBoundsRange = ranges?.find(
@@ -321,21 +333,32 @@ const formatNumberedContent = (
 		ranges ?? [{ endLine: lines.length, startLine: 1 }]
 	);
 	const displayRanges = buildDisplayRanges(lines, selectedRanges);
-	return boundNumberedLines(lines, selectedRanges, displayRanges, filePath);
+	return boundNumberedLines(
+		lines,
+		selectedRanges,
+		displayRanges,
+		filePath,
+		maxOutputBytes
+	);
 };
 
 export const runReadTool = async (
 	input: ReadInput,
-	options: { allowExternalPath?: boolean } = {}
+	options: {
+		allowExternalPath?: boolean;
+		resourceLimits?: ToolResourceLimits;
+	} = {}
 ): Promise<ReadOutput> => {
 	const target = await readTextTarget(
 		input.path,
 		options.allowExternalPath === true
 	);
+	const limits = options.resourceLimits ?? getToolResourceLimits();
 	const numberedContent = formatNumberedContent(
 		target.content,
 		target.path,
-		target.ranges
+		target.ranges,
+		limits.read.maxOutputBytes
 	);
 	return {
 		content: numberedContent.content,

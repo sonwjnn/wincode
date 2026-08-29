@@ -1,10 +1,15 @@
 import { z } from "zod";
+import { TOOL_RESOURCE_LIMITS } from "../resource-limits";
 
-export const SHELL_COMMAND_MAX_CHARS = 4096;
-export const SHELL_CWD_MAX_CHARS = 1024;
-export const SHELL_TIMEOUT_DEFAULT_SECONDS = 30;
-export const SHELL_TIMEOUT_MAX_SECONDS = 300;
-export const SHELL_OUTPUT_TAIL_BYTES = 30 * 1024;
+export const SHELL_COMMAND_MAX_CHARS =
+	TOOL_RESOURCE_LIMITS.deep.shell.maxCommandChars;
+export const SHELL_CWD_MAX_CHARS = TOOL_RESOURCE_LIMITS.deep.shell.maxCwdChars;
+export const SHELL_TIMEOUT_DEFAULT_SECONDS =
+	TOOL_RESOURCE_LIMITS.standard.shell.defaultTimeoutSeconds;
+export const SHELL_TIMEOUT_MAX_SECONDS =
+	TOOL_RESOURCE_LIMITS.deep.shell.maxTimeoutSeconds;
+export const SHELL_OUTPUT_TAIL_BYTES =
+	TOOL_RESOURCE_LIMITS.standard.shell.maxOutputBytes;
 
 export const shellInputSchema = z.object({
 	command: z.string().min(1).max(SHELL_COMMAND_MAX_CHARS),
@@ -36,7 +41,7 @@ export const shellPlatformFromNode = (platform: string): ShellPlatform =>
 // The permissive shell posture is recorded in ADR-0008; the model-facing copy
 // below deliberately stays free of internal document references.
 const SHELL_TOOL_BOUNDS_DESCRIPTION =
-	'Commands are non-interactive: no stdin is provided, output keeps the final 30 KiB, and the default timeout is 30 s (max 300 s). Harmless commands run without approval; `rm` and `sudo` are denied by default and can be re-enabled or turned into asks with a `permission.shell` config rule (for example `{ "rm *": "ask" }`).';
+	"Commands are non-interactive: no stdin is provided, output keeps the final 30 KiB by default (up to 128 KiB in the deep resource profile), and the default timeout is 30 s (up to 900 s in the deep resource profile). Resource profiles are selected in Wincode configuration; elevated profiles require approval.";
 
 /**
  * The generic catalog description used by the approval panel and the shared

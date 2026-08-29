@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
+import { getToolResourceLimits, type ToolResourceLimits } from "@wincode/ai";
 import { createWorkspaceSandbox } from "@wincode/ai/workspace";
 import { mcpDeniedByPolicyText } from "@/modules/mcp/registry";
 import {
@@ -22,12 +23,14 @@ const createGate = (
 	openApproval: Parameters<typeof createToolGate>[0]["openApproval"] = () =>
 		undefined,
 	onAbort?: Parameters<typeof createToolGate>[0]["onAbort"],
-	service: PermissionService = createPermissionService()
+	service: PermissionService = createPermissionService(),
+	resourceLimits: ToolResourceLimits = getToolResourceLimits()
 ) =>
 	createToolGate({
 		onAbort,
 		openApproval,
 		resolvePermission: async () => permission,
+		resolveResourceLimits: async () => resourceLimits,
 		sandbox: createWorkspaceSandbox(process.cwd()),
 		service,
 	});
@@ -67,6 +70,34 @@ describe("shell posture defaults", () => {
 			});
 		}
 		expect(requests).toHaveLength(0);
+	});
+	test("asks once for an elevated profile and remembers its grant", async () => {
+		const requests: ToolApprovalRequest[] = [];
+		const service = createPermissionService();
+		const gate = createGate(
+			createToolPermission(),
+			(request, actions) => {
+				requests.push(request);
+				actions.allow(true);
+			},
+			undefined,
+			service,
+			getToolResourceLimits("extended")
+		);
+
+		await expect(gate.gate(shellCall("pwd"))).resolves.toEqual({
+			kind: "allow",
+		});
+		await expect(gate.gate(shellCall("ls -la"))).resolves.toEqual({
+			kind: "allow",
+		});
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.identity).toContainEqual({
+			label: "limits",
+			value: "extended resource profile",
+		});
+		expect(service.isGranted("resource_limits", "extended")).toBe(true);
 	});
 
 	test("rm and sudo are denied without an approval dialog", async () => {

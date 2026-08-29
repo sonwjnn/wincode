@@ -22,3 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   multi-range selectors, preserve literal colon-containing paths, add bounded
   code context, and return a continuation selector when the output byte limit
   is reached.
+
+### Features
+
+- **Tool resource profiles are configurable.** Set `resource_limits` to
+  `standard`, `extended`, or `deep` globally or per Agent in `wincode.json(c)`.
+  Elevated profiles allow larger bounded reads, searches, listings, shell
+  commands, and edit previews; the first elevated call requests approval.

@@ -4,6 +4,10 @@ import {
 	codingToolDefinitions,
 	codingToolNames,
 	getReadResourcePath,
+	getToolResourceLimits,
+	isElevatedResourceProfile,
+	RESOURCE_LIMIT_PERMISSION_ACTION,
+	type ToolResourceLimits,
 } from "@wincode/ai";
 import type { WorkspacePolicy } from "@wincode/ai/workspace";
 import {
@@ -95,6 +99,7 @@ export type ToolGateDeps = {
 		actions: ToolApprovalActions
 	) => void;
 	resolvePermission: () => Promise<ToolPermission>;
+	resolveResourceLimits?: () => Promise<ToolResourceLimits>;
 	sandbox: WorkspacePolicy;
 	service: PermissionService;
 };
@@ -231,6 +236,34 @@ type InternalApprovalRequest = {
 	doomAsk?: boolean;
 	request: ToolApprovalRequest;
 	safety: boolean;
+};
+const resourceLimitChecks = (limits: ToolResourceLimits) =>
+	isElevatedResourceProfile(limits.profile)
+		? [
+				{
+					action: RESOURCE_LIMIT_PERMISSION_ACTION,
+					decision: "ask" as const,
+					resource: limits.profile,
+				},
+			]
+		: [];
+
+const resourceLimitIdentity = (
+	limits: ToolResourceLimits
+): ReadonlyArray<{ label: string; value: string }> =>
+	isElevatedResourceProfile(limits.profile)
+		? [{ label: "limits", value: `${limits.profile} resource profile` }]
+		: [];
+
+const grantResourceLimits = (
+	service: PermissionService,
+	limits: ToolResourceLimits,
+	grant: () => void
+): void => {
+	if (isElevatedResourceProfile(limits.profile)) {
+		service.grant(RESOURCE_LIMIT_PERMISSION_ACTION, limits.profile);
+	}
+	grant();
 };
 
 /**
@@ -371,9 +404,13 @@ export const createToolGate = ({
 	onAbort,
 	openApproval,
 	resolvePermission,
+	resolveResourceLimits: resolveResourceLimitsOption,
 	sandbox,
 	service,
 }: ToolGateDeps): ToolGate => {
+	const resolveResourceLimits =
+		resolveResourceLimitsOption ??
+		(() => Promise.resolve(getToolResourceLimits()));
 	const approvalQueue =
 		providedApprovalQueue ?? createApprovalQueue<ToolApprovalRequest>();
 	const approvalDeps = { approvalQueue, onAbort, openApproval, service };
@@ -403,6 +440,9 @@ export const createToolGate = ({
 		}
 		const label = STATIC_TOOL_LABELS[tool];
 		const action = STATIC_TOOL_PERMISSION_ACTIONS[tool];
+		const resourceLimits = await resolveResourceLimits();
+		const limitChecks =
+			tool === "write" ? [] : resourceLimitChecks(resourceLimits);
 		const requestFor = (
 			resource: string,
 			external: boolean,
@@ -412,6 +452,7 @@ export const createToolGate = ({
 			identity: [
 				{ label: "tool", value: tool },
 				{ label: "resource", value: resource },
+				...resourceLimitIdentity(resourceLimits),
 				...(boundaryResource === undefined
 					? []
 					: [{ label: "boundary", value: boundaryResource }]),
@@ -426,6 +467,7 @@ export const createToolGate = ({
 			const settled = await settleApproval(
 				{
 					checks: [
+						...limitChecks,
 						{
 							action,
 							decision: permission.decide(action, gateResource.value),
@@ -437,7 +479,10 @@ export const createToolGate = ({
 					safety: permission.safety,
 				},
 				approvalDeps,
-				() => service.grant(action, gateResource.value)
+				() =>
+					grantResourceLimits(service, resourceLimits, () =>
+						service.grant(action, gateResource.value)
+					)
 			);
 			return withErrorText(
 				settled,
@@ -463,6 +508,7 @@ export const createToolGate = ({
 			const settled = await settleApproval(
 				{
 					checks: [
+						...limitChecks,
 						{ action, decision: permission.decide(action, resource), resource },
 					],
 					doomAsk,
@@ -470,7 +516,10 @@ export const createToolGate = ({
 					safety: permission.safety,
 				},
 				approvalDeps,
-				() => service.grant(action, resource)
+				() =>
+					grantResourceLimits(service, resourceLimits, () =>
+						service.grant(action, resource)
+					)
 			);
 			return withErrorText(
 				settled,
@@ -500,6 +549,7 @@ export const createToolGate = ({
 			const settled = await settleApproval(
 				{
 					checks: [
+						...limitChecks,
 						{
 							action: "external_directory",
 							decision: permission.decide("external_directory", resource),
@@ -523,13 +573,14 @@ export const createToolGate = ({
 					safety: permission.safety,
 				},
 				approvalDeps,
-				() => {
-					service.grant(
-						"external_directory",
-						externalParentDirectoryGlob(resource)
-					);
-					service.grant(action, gateResource.pattern ?? resource);
-				}
+				() =>
+					grantResourceLimits(service, resourceLimits, () => {
+						service.grant(
+							"external_directory",
+							externalParentDirectoryGlob(resource)
+						);
+						service.grant(action, gateResource.pattern ?? resource);
+					})
 			);
 			const outcome = withErrorText(
 				settled,
@@ -577,12 +628,15 @@ export const createToolGate = ({
 		const normalized = normalizeShellCommand(command);
 		const nodes = await parseShellCommandNodes(command);
 		const operationDecision = decideShellCommand(command, nodes, permission);
+		const resourceLimits = await resolveResourceLimits();
+		const limitChecks = resourceLimitChecks(resourceLimits);
 		const cwd = getStringField(toolCall.input, "cwd");
 		const request = (external: boolean): ToolApprovalRequest => ({
 			description: codingToolDefinitions.shell.description,
 			identity: [
 				{ label: "tool", value: "shell" },
 				{ label: "resource", value: command },
+				...resourceLimitIdentity(resourceLimits),
 				...(external ? [{ label: "scope", value: "external" }] : []),
 			],
 			input: toolCall.input,
@@ -618,6 +672,7 @@ export const createToolGate = ({
 			const settled = await settleApproval(
 				{
 					checks: [
+						...limitChecks,
 						{
 							action: "shell",
 							decision: operationDecision,
@@ -629,7 +684,10 @@ export const createToolGate = ({
 					safety: permission.safety,
 				},
 				approvalDeps,
-				() => service.grant("shell", normalized)
+				() =>
+					grantResourceLimits(service, resourceLimits, () =>
+						service.grant("shell", normalized)
+					)
 			);
 			return withErrorText(
 				settled,
@@ -641,6 +699,7 @@ export const createToolGate = ({
 		const settled = await settleApproval(
 			{
 				checks: [
+					...limitChecks,
 					{
 						action: "external_directory",
 						decision: permission.decide("external_directory", externalResource),
@@ -657,13 +716,14 @@ export const createToolGate = ({
 				safety: permission.safety,
 			},
 			approvalDeps,
-			() => {
-				service.grant(
-					"external_directory",
-					externalParentDirectoryGlob(externalResource ?? "")
-				);
-				service.grant("shell", normalized);
-			}
+			() =>
+				grantResourceLimits(service, resourceLimits, () => {
+					service.grant(
+						"external_directory",
+						externalParentDirectoryGlob(externalResource ?? "")
+					);
+					service.grant("shell", normalized);
+				})
 		);
 		return withErrorText(
 			settled,
