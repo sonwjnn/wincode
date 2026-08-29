@@ -7,8 +7,6 @@ import type { EditDiff } from "./schema";
 
 const DEFAULT_EDIT_DIFF_LIMITS = getToolResourceLimits().edit;
 const HARD_EDIT_DIFF_LIMITS = getToolResourceLimits("deep").edit;
-export const EDIT_DIFF_MAX_BYTES = DEFAULT_EDIT_DIFF_LIMITS.maxDiffBytes;
-export const EDIT_DIFF_MAX_LINES = DEFAULT_EDIT_DIFF_LIMITS.maxDiffLines;
 
 const PATCH_CONTENT_PREFIX_RE = /^[+\- ]/u;
 const LEADING_WHITESPACE_RE = /^\s*/u;

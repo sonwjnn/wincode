@@ -483,6 +483,33 @@ describe("shell override and grants", () => {
 			kind: "deny",
 		});
 	});
+	test("a write approval does not grant the elevated resource profile", async () => {
+		const service = createPermissionService();
+		const requests: ToolApprovalRequest[] = [];
+		const gate = createGate(
+			createToolPermission({ edit: "ask" }),
+			(request, actions) => {
+				requests.push(request);
+				actions.allow(true);
+			},
+			undefined,
+			service,
+			getToolResourceLimits("extended")
+		);
+
+		await expect(
+			gate.gate({
+				family: "coding",
+				toolCall: {
+					input: { content: "updated", path: "notes.txt" },
+					toolCallId: "call-write",
+					toolName: "write",
+				},
+			})
+		).resolves.toEqual({ kind: "allow" });
+		expect(requests).toHaveLength(1);
+		expect(service.isGranted("resource_limits", "extended")).toBe(false);
+	});
 
 	test("an explicit deny is never bypassed by grants or auto approval", async () => {
 		const service = createPermissionService({ autoApproval: true });

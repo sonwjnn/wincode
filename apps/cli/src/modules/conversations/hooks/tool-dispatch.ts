@@ -35,6 +35,11 @@ import type { ToolGate } from "@/modules/tool-gate/tool-gate";
 type MutableRefObject<T> = { current: T };
 const isCodingToolName = (name: string): name is CodingToolName =>
 	codingToolNames.some((tool) => tool === name);
+type ResourceLimitResolver = () => Promise<ToolResourceLimits>;
+const resolveResourceOptions = async (
+	resolver: ResourceLimitResolver | undefined
+): Promise<{ resourceLimits?: ToolResourceLimits }> =>
+	resolver === undefined ? {} : { resourceLimits: await resolver() };
 const emitToolCallError = (
 	addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>,
 	tool: CodingToolName,
@@ -65,9 +70,9 @@ type ChatToolCallHandlerCommonDeps = {
 	dynamicToolOutputRef: MutableRefObject<McpAddToolOutput | null>;
 	handleCodingAgentToolCall?: typeof handleCodingAgentToolCall;
 	mcp: Pick<McpContextValue, "handleDynamicToolCall">;
+	resolveResourceLimits?: ResourceLimitResolver;
 	mcpSnapshotRef: MutableRefObject<McpCatalogSnapshot | null>;
 	resolvedAgentRef: MutableRefObject<ResolvedAgentRuntime | undefined>;
-	resolveResourceLimits?: () => Promise<ToolResourceLimits>;
 	skillExecutionRef?: MutableRefObject<SkillExecution | null>;
 	gate: ToolGate;
 };
@@ -181,10 +186,9 @@ export const createChatToolCallHandler = (
 						toolCall: options.toolCall,
 					});
 					if (outcome.kind === "allow") {
-						const resourceOptions =
-							resolveResourceLimits === undefined
-								? {}
-								: { resourceLimits: await resolveResourceLimits() };
+						const resourceOptions = await resolveResourceOptions(
+							resolveResourceLimits
+						);
 						await runStaticToolCall(
 							addToolOutput,
 							resolvedAgentRef.current?.visibleCodingTools ?? [],
@@ -237,10 +241,9 @@ export const createChatToolCallHandler = (
 								...options,
 								toolCall: { ...options.toolCall, input: outcome.input },
 							};
-				const resourceOptions =
-					resolveResourceLimits === undefined
-						? {}
-						: { resourceLimits: await resolveResourceLimits() };
+				const resourceOptions = await resolveResourceOptions(
+					resolveResourceLimits
+				);
 				await runStaticToolCall(
 					addToolOutput,
 					resolvedAgentRef.current?.visibleCodingTools ?? [],

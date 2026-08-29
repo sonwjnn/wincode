@@ -241,9 +241,9 @@ const killProcessTree = async (
 };
 
 /**
- * Builds the bounded model-visible result from the captured output: the final
- * 30 KiB with a truncation banner, plus the timeout note when the command was
- * killed.
+ * Builds the bounded model-visible result from the captured output: the active
+ * profile's output budget with a truncation banner, plus the timeout note when
+ * the command was killed.
  */
 const composeShellOutput = (
 	rawOutput: string,
@@ -264,12 +264,6 @@ const composeShellOutput = (
 	)}${timedOut ? composeShellTimeoutMessage(timeoutSeconds) : ""}`;
 	return { output, truncated: true };
 };
-
-/**
- * The runner keeps at most twice the active profile's model-visible output
- * budget in memory so a chatty command within a long timeout cannot balloon the
- * CLI's memory; older bytes are dropped as new ones arrive.
- */
 
 /** How long after the main process exits the runner waits for trailing output. */
 const OUTPUT_DRAIN_MS = 100;
@@ -306,6 +300,8 @@ export const createShellRunner = (
 			input.timeout ?? limits.shell.defaultTimeoutSeconds,
 			limits.shell.maxTimeoutSeconds
 		);
+		// Keep at most twice the active profile's model-visible output budget in
+		// memory; older bytes are dropped as new ones arrive.
 		const maxBufferedOutputBytes = limits.shell.maxOutputBytes * 2;
 
 		return await new Promise<ShellOutput>((resolve, reject) => {
