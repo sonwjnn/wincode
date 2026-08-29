@@ -3,7 +3,7 @@ import path from "node:path";
 import { defaultWorkspaceSandbox } from "../../workspace";
 import {
 	getToolResourceLimits,
-	type ToolResourceLimits,
+	type ResourceLimitOptions,
 } from "../resource-limits";
 import type { ReadInput, ReadOutput } from "./schema";
 import {
@@ -18,6 +18,9 @@ type ResolvedReadTarget = {
 	content: string;
 	path: string;
 	ranges?: LineRange[];
+};
+type ReadToolOptions = ResourceLimitOptions & {
+	allowExternalPath?: boolean;
 };
 const hasErrorCode = (
 	error: unknown,
@@ -344,10 +347,7 @@ const formatNumberedContent = (
 
 export const runReadTool = async (
 	input: ReadInput,
-	options: {
-		allowExternalPath?: boolean;
-		resourceLimits?: ToolResourceLimits;
-	} = {}
+	options: ReadToolOptions = {}
 ): Promise<ReadOutput> => {
 	const target = await readTextTarget(
 		input.path,

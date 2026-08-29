@@ -464,7 +464,7 @@ export const createToolGate = ({
 		});
 		// Write has no profile-dependent execution budget, so its operation grant
 		// must not implicitly authorize an elevated profile for later tool calls.
-		const recordGrant = (grant: () => void): void => {
+		const grantApprovedAccess = (grant: () => void): void => {
 			if (tool === "write") {
 				grant();
 				return;
@@ -488,7 +488,8 @@ export const createToolGate = ({
 					safety: permission.safety,
 				},
 				approvalDeps,
-				() => recordGrant(() => service.grant(action, gateResource.value))
+				() =>
+					grantApprovedAccess(() => service.grant(action, gateResource.value))
 			);
 			return withErrorText(
 				settled,
@@ -522,7 +523,7 @@ export const createToolGate = ({
 					safety: permission.safety,
 				},
 				approvalDeps,
-				() => recordGrant(() => service.grant(action, resource))
+				() => grantApprovedAccess(() => service.grant(action, resource))
 			);
 			return withErrorText(
 				settled,
@@ -577,7 +578,7 @@ export const createToolGate = ({
 				},
 				approvalDeps,
 				() =>
-					recordGrant(() => {
+					grantApprovedAccess(() => {
 						service.grant(
 							"external_directory",
 							externalParentDirectoryGlob(resource)

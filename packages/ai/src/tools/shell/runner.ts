@@ -7,6 +7,7 @@ import { defaultWorkspaceSandbox } from "../../workspace";
 import { keepTailUtf8 } from "../output-bounds";
 import {
 	getToolResourceLimits,
+	type ResourceLimitOptions,
 	type ToolResourceLimits,
 } from "../resource-limits";
 import {
@@ -268,9 +269,7 @@ const composeShellOutput = (
 /** How long after the main process exits the runner waits for trailing output. */
 const OUTPUT_DRAIN_MS = 100;
 
-export type ShellRunnerOptions = {
-	resourceLimits?: ToolResourceLimits;
-};
+export type ShellRunnerOptions = ResourceLimitOptions;
 
 /**
  * Executes a bounded shell command: no stdin, inherited environment, process

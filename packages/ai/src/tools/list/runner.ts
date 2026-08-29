@@ -1,14 +1,12 @@
 import { fitsSerializedBytes } from "../output-bounds";
 import {
 	getToolResourceLimits,
-	type ToolResourceLimits,
+	type ResourceLimitOptions,
 } from "../resource-limits";
 import { traverseWorkspace } from "../traversal";
 import type { ListInput, ListOutput } from "./schema";
 
-export type ListToolOptions = {
-	resourceLimits?: ToolResourceLimits;
-};
+export type ListToolOptions = ResourceLimitOptions;
 
 export const runListTool = async (
 	input: ListInput,
@@ -34,7 +32,10 @@ export const runListTool = async (
 		result.truncated = true;
 	}
 	for (const entry of outputEntries) {
-		const candidate = { ...result, entries: [...result.entries, entry] };
+		const candidate = {
+			entries: result.entries.concat(entry),
+			...(result.truncated === true ? { truncated: true } : {}),
+		};
 		if (!fitsSerializedBytes(candidate, limits.list.maxOutputBytes)) {
 			return { ...result, truncated: true };
 		}

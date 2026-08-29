@@ -43,6 +43,9 @@ export type ToolResourceLimits = {
 		readonly maxDiffLines: number;
 	};
 };
+export type ResourceLimitOptions = {
+	readonly resourceLimits?: ToolResourceLimits;
+};
 
 export const TOOL_RESOURCE_LIMITS = {
 	standard: {

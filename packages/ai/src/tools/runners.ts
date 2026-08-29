@@ -4,7 +4,7 @@ import { runEditTool } from "./edit/runner";
 import { runGrepTool } from "./grep/runner";
 import { runListTool } from "./list/runner";
 import { runReadTool } from "./read/runner";
-import type { ToolResourceLimits } from "./resource-limits";
+import type { ResourceLimitOptions } from "./resource-limits";
 import type {
 	CodingToolInput,
 	CodingToolName,
@@ -19,9 +19,8 @@ export { runListTool } from "./list/runner";
 export { runReadTool } from "./read/runner";
 export { runShellTool } from "./shell/runner";
 export { runWriteTool } from "./write/runner";
-export type CodingToolRunnerOptions = {
+export type CodingToolRunnerOptions = ResourceLimitOptions & {
 	allowExternalPath?: boolean;
-	resourceLimits?: ToolResourceLimits;
 };
 
 export type CodingToolRunnerMap = {

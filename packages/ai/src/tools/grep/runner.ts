@@ -6,6 +6,7 @@ import {
 import { fitsSerializedBytes } from "../output-bounds";
 import {
 	getToolResourceLimits,
+	type ResourceLimitOptions,
 	type ToolResourceLimits,
 } from "../resource-limits";
 import type { GrepSearch, GrepSearchInput, GrepSearchResult } from "./backend";
@@ -17,9 +18,7 @@ import {
 } from "./ripgrep";
 import type { GrepInput, GrepOutput } from "./schema";
 
-export type GrepRunnerOptions = {
-	resourceLimits?: ToolResourceLimits;
-};
+export type GrepRunnerOptions = ResourceLimitOptions;
 
 const resolveSearchInput = async (
 	input: GrepInput,
