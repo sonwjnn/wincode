@@ -6,6 +6,18 @@ export const getExtensionlessFileStem = (basename: string) => {
 	const extension = path.posix.extname(basename);
 	return extension ? basename.slice(0, -extension.length) : basename;
 };
+export const matchesExactFileMentionBasename = (
+	basename: string,
+	query: string
+) => {
+	const normalizedBasename = basename.toLowerCase();
+	const normalizedQuery = query.toLowerCase();
+
+	return (
+		normalizedBasename === normalizedQuery ||
+		getExtensionlessFileStem(normalizedBasename) === normalizedQuery
+	);
+};
 
 export const compareCanonicalRelativePaths = (left: string, right: string) => {
 	const leftPath = left.toLowerCase();

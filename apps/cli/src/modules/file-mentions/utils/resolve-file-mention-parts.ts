@@ -9,7 +9,7 @@ import type { FileMentionOption } from "../types";
 import { getFileMentionOptions } from "./file-mention-options";
 import {
 	compareCanonicalRelativePaths,
-	getExtensionlessFileStem,
+	matchesExactFileMentionBasename,
 } from "./file-mention-path";
 import {
 	findFileMentionRanges,
@@ -41,10 +41,6 @@ type ResolvedMention = {
 	realPath: string;
 };
 
-type FindFallbackMatches = (
-	mentionPath: string
-) => Promise<FileMentionOption[]>;
-
 const getMentionPaths = (text: string) => {
 	const paths: string[] = [];
 	const seen = new Set<string>();
@@ -65,25 +61,19 @@ const getMentionPaths = (text: string) => {
 const getFallbackFileMatches = (
 	options: FileMentionOption[],
 	mentionPath: string
-) => {
-	const normalizedMentionPath = mentionPath.toLowerCase();
-
-	return options
-		.filter((option) => {
-			if (option.type !== "file") {
-				return false;
-			}
-
-			const basename = path.posix.basename(option.path).toLowerCase();
-			return (
-				basename === normalizedMentionPath ||
-				getExtensionlessFileStem(basename) === normalizedMentionPath
-			);
-		})
+) =>
+	options
+		.filter(
+			(option) =>
+				option.type === "file" &&
+				matchesExactFileMentionBasename(
+					path.posix.basename(option.path),
+					mentionPath
+				)
+		)
 		.toSorted((left, right) =>
 			compareCanonicalRelativePaths(left.path, right.path)
 		);
-};
 
 const formatAmbiguousMentionError = (
 	mentionPath: string,
@@ -99,17 +89,9 @@ const formatAmbiguousMentionError = (
 	return `Ambiguous file mention "${mentionPath}". Use a relative path to choose one. Candidates: ${candidates.join(", ")}${omittedText}.`;
 };
 
-const createFallbackMatcher =
-	(policy: WorkspacePolicy): FindFallbackMatches =>
-	async (mentionPath) => {
-		const options = await getFileMentionOptions({ root: policy.root });
-		return getFallbackFileMatches(options, mentionPath);
-	};
-
 const resolveMentionPath = async (
 	policy: WorkspacePolicy,
-	mentionPath: string,
-	findFallbackMatches: FindFallbackMatches
+	mentionPath: string
 ): Promise<ResolvedMention> => {
 	try {
 		const realPath = await policy.resolveExistingPath(mentionPath);
@@ -124,7 +106,8 @@ const resolveMentionPath = async (
 
 		let matches: FileMentionOption[];
 		try {
-			matches = await findFallbackMatches(mentionPath);
+			const options = await getFileMentionOptions({ root: policy.root });
+			matches = getFallbackFileMatches(options, mentionPath);
 		} catch {
 			throw literalError;
 		}
@@ -289,7 +272,6 @@ export const resolveFileMentionParts = async (
 	options: ResolveFileMentionPartsOptions = {}
 ): Promise<FileMentionUIPart[]> => {
 	const policy = createWorkspaceSandbox(options.root ?? process.cwd());
-	const findFallbackMatches = createFallbackMatcher(policy);
 	const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
 	let remainingBytes = options.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES;
 	const mentionPaths = getMentionPaths(text);
@@ -306,11 +288,7 @@ export const resolveFileMentionParts = async (
 
 		let canonicalMentionPath = mentionPath;
 		try {
-			const resolvedMention = await resolveMentionPath(
-				policy,
-				mentionPath,
-				findFallbackMatches
-			);
+			const resolvedMention = await resolveMentionPath(policy, mentionPath);
 			canonicalMentionPath = resolvedMention.canonicalPath;
 			if (resolvedPaths.has(canonicalMentionPath)) {
 				continue;

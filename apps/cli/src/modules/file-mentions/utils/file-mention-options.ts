@@ -10,6 +10,7 @@ import type { FileMentionOption } from "../types";
 import {
 	compareCanonicalRelativePaths,
 	getExtensionlessFileStem,
+	matchesExactFileMentionBasename,
 	UNLIMITED_FILE_MENTION_DISCOVERY_DEPTH,
 } from "./file-mention-path";
 
@@ -177,7 +178,7 @@ const getBasenameMatch = (optionPath: string, query: string): Match | null => {
 	const basename = path.posix.basename(optionPath).toLowerCase();
 	const stem = getExtensionlessFileStem(basename);
 
-	if (basename === query || stem === query) {
+	if (matchesExactFileMentionBasename(basename, query)) {
 		return {
 			gaps: 0,
 			rank: EXACT_MATCH_RANK,
