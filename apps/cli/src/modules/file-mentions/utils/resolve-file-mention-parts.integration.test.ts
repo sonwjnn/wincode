@@ -213,4 +213,24 @@ describe("file mention resolver", () => {
 
 		expect(part?.data.error).toBe("Path escapes workspace: link");
 	});
+	test("allows exact ignored paths but excludes them from basename fallback", async () => {
+		const workspace = await createWorkspace();
+		await mkdir(path.join(workspace, "private"));
+		await writeFile(path.join(workspace, ".gitignore"), "private/\n");
+		await writeFile(path.join(workspace, "private/secret.ts"), "secret");
+
+		const [literalPart] = await resolveFileMentionParts(
+			"inspect @private/secret.ts",
+			{ root: workspace }
+		);
+		expect(literalPart?.data).toMatchObject({
+			content: "secret",
+			path: "private/secret.ts",
+		});
+
+		const [fallbackPart] = await resolveFileMentionParts("inspect @secret", {
+			root: workspace,
+		});
+		expect(fallbackPart?.data.error).toContain("ENOENT");
+	});
 });

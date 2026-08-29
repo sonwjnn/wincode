@@ -104,4 +104,51 @@ describe("workspace policy", () => {
 			truncated: true,
 		});
 	});
+	test("respects gitignore rules when requested", async () => {
+		const policy = createWorkspaceSandbox(workspace);
+
+		writeFileSync(
+			path.join(workspace, ".gitignore"),
+			"ignored.txt\nignored-dir/\n*.secret\n!keep.secret\n"
+		);
+		mkdirSync(path.join(workspace, "ignored-dir"));
+		writeFileSync(path.join(workspace, "ignored.txt"), "ignored");
+		writeFileSync(path.join(workspace, "ignored-dir/child.ts"), "ignored");
+		writeFileSync(path.join(workspace, "nested.secret"), "ignored");
+		writeFileSync(path.join(workspace, "keep.secret"), "visible");
+
+		const result = await policy.traverse({
+			includeDirectories: true,
+			includeFiles: true,
+			maxDepth: 2,
+			respectGitignore: true,
+		});
+		const paths = result.entries.map((entry) => entry.relativePath);
+
+		expect(paths).toContain("keep.secret");
+		expect(paths).not.toContain("ignored.txt");
+		expect(paths).not.toContain("ignored-dir");
+		expect(paths).not.toContain("ignored-dir/child.ts");
+		expect(paths).not.toContain("nested.secret");
+	});
+	test("applies inherited gitignore rules to scoped traversal", async () => {
+		const policy = createWorkspaceSandbox(workspace);
+
+		mkdirSync(path.join(workspace, "nested"));
+		writeFileSync(path.join(workspace, ".gitignore"), "nested/*.secret\n");
+		writeFileSync(path.join(workspace, "nested/hidden.secret"), "ignored");
+		writeFileSync(path.join(workspace, "nested/visible.ts"), "visible");
+
+		const result = await policy.traverse({
+			includeDirectories: true,
+			includeFiles: true,
+			maxDepth: 1,
+			path: "nested",
+			respectGitignore: true,
+		});
+		const paths = result.entries.map((entry) => entry.relativePath);
+
+		expect(paths).toContain("nested/visible.ts");
+		expect(paths).not.toContain("nested/hidden.secret");
+	});
 });

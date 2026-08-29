@@ -52,4 +52,32 @@ describe("file mention option discovery", () => {
 			type: "directory",
 		});
 	});
+	test("omits gitignored entries from autocomplete discovery", async () => {
+		const workspace = await createWorkspace();
+		await writeFile(
+			path.join(workspace, ".gitignore"),
+			"ignored.ts\nignored-dir/\n*.secret\n"
+		);
+		await mkdir(path.join(workspace, "ignored-dir"));
+		await writeFile(path.join(workspace, "ignored.ts"), "ignored");
+		await writeFile(path.join(workspace, "ignored-dir/nested.ts"), "ignored");
+		await mkdir(path.join(workspace, "nested"));
+		await writeFile(
+			path.join(workspace, "nested/.gitignore"),
+			"secret.ts\n!keep.secret\n"
+		);
+		await writeFile(path.join(workspace, "nested/secret.ts"), "ignored");
+		await writeFile(path.join(workspace, "nested/keep.secret"), "visible");
+		await writeFile(path.join(workspace, "visible.ts"), "visible");
+
+		const options = await getFileMentionOptions({ root: workspace });
+		const paths = options.map((option) => option.path);
+
+		expect(paths).toContain("visible.ts");
+		expect(paths).not.toContain("ignored.ts");
+		expect(paths).not.toContain("ignored-dir");
+		expect(paths).not.toContain("ignored-dir/nested.ts");
+		expect(paths).not.toContain("nested/secret.ts");
+		expect(paths).toContain("nested/keep.secret");
+	});
 });

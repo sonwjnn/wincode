@@ -1,6 +1,7 @@
 import { type Dirent, existsSync, realpathSync } from "node:fs";
-import { readdir, realpath } from "node:fs/promises";
+import { readdir, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
+import ignore, { type Ignore } from "ignore";
 
 export const WORKSPACE_IGNORED_DIRECTORY_NAMES = new Set([
 	".git",
@@ -65,6 +66,8 @@ export type WorkspaceTraversalOptions = {
 	maxDepth: number;
 	maxEntries?: number;
 	path?: string;
+	/** Applies the workspace-root and nested `.gitignore` rules. */
+	respectGitignore?: boolean;
 };
 
 export type WorkspaceTraversalResult = {
@@ -108,10 +111,17 @@ const findExistingParent = (targetPath: string) => {
 	return parentPath;
 };
 
+type IgnoreRuleSet = {
+	directoryPath: string;
+	matcher: Ignore;
+};
+
 type TraversalContext = Required<
 	Omit<WorkspaceTraversalOptions, "maxEntries" | "path">
 > & {
 	entries: WorkspaceTraversalEntry[];
+	ignoreRules: IgnoreRuleSet[];
+	loadIgnoreRules: (directoryPath: string) => Promise<IgnoreRuleSet | null>;
 	maxEntries?: number;
 	policy: WorkspacePolicy;
 	truncated: boolean;
@@ -123,6 +133,48 @@ export const isIgnoredWorkspaceDirectory = (name: string) =>
 const compareDirectoryEntries = (left: Dirent, right: Dirent) =>
 	left.name.localeCompare(right.name);
 
+const isMissingIgnoreFile = (error: unknown): error is NodeJS.ErrnoException =>
+	typeof error === "object" &&
+	error !== null &&
+	"code" in error &&
+	error.code === "ENOENT";
+
+const getIgnoreRelativePath = (
+	ruleSet: IgnoreRuleSet,
+	targetPath: string,
+	type: WorkspaceTraversalEntry["type"]
+) => {
+	const relativePath = path
+		.relative(ruleSet.directoryPath, targetPath)
+		.split(path.sep)
+		.join("/");
+
+	return type === "directory" ? `${relativePath}/` : relativePath;
+};
+
+const isGitignoredPath = (
+	targetPath: string,
+	type: WorkspaceTraversalEntry["type"],
+	context: TraversalContext
+) => {
+	if (!context.respectGitignore) {
+		return false;
+	}
+
+	let ignored = false;
+	for (const ruleSet of context.ignoreRules) {
+		const result = ruleSet.matcher.test(
+			getIgnoreRelativePath(ruleSet, targetPath, type)
+		);
+		if (result.ignored) {
+			ignored = true;
+		} else if (result.unignored) {
+			ignored = false;
+		}
+	}
+
+	return ignored;
+};
 const hasReachedEntryLimit = (context: TraversalContext) =>
 	context.maxEntries !== undefined &&
 	context.entries.length >= context.maxEntries;
@@ -167,7 +219,10 @@ const collectWorkspaceDirectory = async (
 	childDepth: number,
 	context: TraversalContext
 ) => {
-	if (context.policy.isIgnoredDirectory(directoryName)) {
+	if (
+		context.policy.isIgnoredDirectory(directoryName) ||
+		isGitignoredPath(childPath, "directory", context)
+	) {
 		return true;
 	}
 
@@ -194,7 +249,7 @@ const collectWorkspaceFile = async (
 	childDepth: number,
 	context: TraversalContext
 ) => {
-	if (!context.includeFiles) {
+	if (!context.includeFiles || isGitignoredPath(childPath, "file", context)) {
 		return true;
 	}
 
@@ -251,13 +306,26 @@ const collectWorkspaceEntries = async (
 		return;
 	}
 
-	const dirents = await readdir(directoryPath, { withFileTypes: true });
+	const localIgnoreRules = context.respectGitignore
+		? await context.loadIgnoreRules(directoryPath)
+		: null;
+	if (localIgnoreRules) {
+		context.ignoreRules.push(localIgnoreRules);
+	}
 
-	for (const dirent of dirents.toSorted(compareDirectoryEntries)) {
-		if (
-			!(await collectWorkspaceDirent(directoryPath, dirent, depth, context))
-		) {
-			return;
+	try {
+		const dirents = await readdir(directoryPath, { withFileTypes: true });
+
+		for (const dirent of dirents.toSorted(compareDirectoryEntries)) {
+			if (
+				!(await collectWorkspaceDirent(directoryPath, dirent, depth, context))
+			) {
+				return;
+			}
+		}
+	} finally {
+		if (localIgnoreRules) {
+			context.ignoreRules.pop();
 		}
 	}
 };
@@ -266,6 +334,55 @@ export const createWorkspaceSandbox = (
 	root = resolveWorkspaceRoot(process.cwd())
 ): WorkspacePolicy => {
 	const workspaceRoot = realpathSync(root);
+	const ignoreRuleCache = new Map<string, Promise<IgnoreRuleSet | null>>();
+	const loadIgnoreRules = (
+		directoryPath: string
+	): Promise<IgnoreRuleSet | null> => {
+		const cachedRules = ignoreRuleCache.get(directoryPath);
+		if (cachedRules) {
+			return cachedRules;
+		}
+
+		const rulesPromise = readFile(
+			path.join(directoryPath, ".gitignore"),
+			"utf8"
+		)
+			.then((contents) => ({
+				directoryPath,
+				matcher: ignore().add(contents),
+			}))
+			.catch((error: unknown) => {
+				if (isMissingIgnoreFile(error)) {
+					return null;
+				}
+
+				throw error;
+			});
+		const cachedPromise = rulesPromise.catch((error: unknown) => {
+			ignoreRuleCache.delete(directoryPath);
+			throw error;
+		});
+		ignoreRuleCache.set(directoryPath, cachedPromise);
+		return cachedPromise;
+	};
+	const loadAncestorIgnoreRules = async (
+		startPath: string
+	): Promise<IgnoreRuleSet[]> => {
+		const relativePath = path.relative(workspaceRoot, startPath);
+		const segments = relativePath ? relativePath.split(path.sep) : [];
+		const inheritedRules: IgnoreRuleSet[] = [];
+		let directoryPath = workspaceRoot;
+
+		for (const segment of segments) {
+			const ruleSet = await loadIgnoreRules(directoryPath);
+			if (ruleSet) {
+				inheritedRules.push(ruleSet);
+			}
+			directoryPath = path.join(directoryPath, segment);
+		}
+
+		return inheritedRules;
+	};
 	const policy: WorkspacePolicy = {
 		isIgnoredDirectory: isIgnoredWorkspaceDirectory,
 		root: workspaceRoot,
@@ -299,17 +416,28 @@ export const createWorkspaceSandbox = (
 			maxDepth,
 			maxEntries,
 			path: inputPath,
+			respectGitignore = false,
 		}: WorkspaceTraversalOptions) => {
 			const startPath = await policy.resolveExistingPath(inputPath ?? ".");
 			const context: TraversalContext = {
 				entries: [],
+				ignoreRules: respectGitignore
+					? await loadAncestorIgnoreRules(startPath)
+					: [],
 				includeDirectories,
 				includeFiles,
+				loadIgnoreRules,
 				maxDepth,
 				maxEntries,
 				policy,
+				respectGitignore,
 				truncated: false,
 			};
+
+			// A scoped traversal cannot enter a directory ignored by an ancestor.
+			if (isGitignoredPath(startPath, "directory", context)) {
+				return { entries: context.entries, truncated: context.truncated };
+			}
 
 			await collectWorkspaceEntries(startPath, 0, context);
 
