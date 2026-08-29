@@ -1,10 +1,25 @@
-import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { resolveFileMentionParts } from "./resolve-file-mention-parts";
 
-const createWorkspace = () => mkdtemp(path.join(tmpdir(), "wincode-mentions-"));
+const workspaces: string[] = [];
+
+const createWorkspace = async () => {
+	const workspace = await mkdtemp(path.join(tmpdir(), "wincode-mentions-"));
+	workspaces.push(workspace);
+	return workspace;
+};
+
+afterEach(async () => {
+	while (workspaces.length > 0) {
+		const workspace = workspaces.pop();
+		if (workspace) {
+			await rm(workspace, { force: true, recursive: true });
+		}
+	}
+});
 
 describe("file mention resolver", () => {
 	test("resolves file mentions to bounded data parts", async () => {

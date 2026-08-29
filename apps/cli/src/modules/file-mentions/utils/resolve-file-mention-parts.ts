@@ -4,12 +4,12 @@ import type { FileMentionUIPart } from "@wincode/ai";
 import {
 	createWorkspaceSandbox,
 	type WorkspacePolicy,
-	type WorkspaceTraversalEntry,
 } from "@wincode/ai/workspace";
+import type { FileMentionOption } from "../types";
+import { getFileMentionOptions } from "./file-mention-options";
 import {
 	compareCanonicalRelativePaths,
 	getExtensionlessFileStem,
-	UNLIMITED_FILE_MENTION_DISCOVERY_DEPTH,
 } from "./file-mention-path";
 import {
 	findFileMentionRanges,
@@ -43,7 +43,7 @@ type ResolvedMention = {
 
 type FindFallbackMatches = (
 	mentionPath: string
-) => Promise<WorkspaceTraversalEntry[]>;
+) => Promise<FileMentionOption[]>;
 
 const getMentionPaths = (text: string) => {
 	const paths: string[] = [];
@@ -62,35 +62,36 @@ const getMentionPaths = (text: string) => {
 	return paths;
 };
 
-const compareTraversalEntries = (
-	left: WorkspaceTraversalEntry,
-	right: WorkspaceTraversalEntry
-) => compareCanonicalRelativePaths(left.relativePath, right.relativePath);
-
 const getFallbackFileMatches = (
-	entries: WorkspaceTraversalEntry[],
+	options: FileMentionOption[],
 	mentionPath: string
 ) => {
 	const normalizedMentionPath = mentionPath.toLowerCase();
 
-	return entries
-		.filter((entry) => {
-			const basename = path.posix.basename(entry.relativePath).toLowerCase();
+	return options
+		.filter((option) => {
+			if (option.type !== "file") {
+				return false;
+			}
+
+			const basename = path.posix.basename(option.path).toLowerCase();
 			return (
 				basename === normalizedMentionPath ||
 				getExtensionlessFileStem(basename) === normalizedMentionPath
 			);
 		})
-		.toSorted(compareTraversalEntries);
+		.toSorted((left, right) =>
+			compareCanonicalRelativePaths(left.path, right.path)
+		);
 };
 
 const formatAmbiguousMentionError = (
 	mentionPath: string,
-	matches: WorkspaceTraversalEntry[]
+	matches: FileMentionOption[]
 ) => {
 	const candidates = matches
 		.slice(0, MAX_AMBIGUOUS_FALLBACK_CANDIDATES)
-		.map((entry) => entry.relativePath);
+		.map((option) => option.path);
 	const omittedCount = matches.length - candidates.length;
 	const omittedText =
 		omittedCount > 0 ? `; ${omittedCount} more candidate(s) omitted` : "";
@@ -98,24 +99,12 @@ const formatAmbiguousMentionError = (
 	return `Ambiguous file mention "${mentionPath}". Use a relative path to choose one. Candidates: ${candidates.join(", ")}${omittedText}.`;
 };
 
-const createFallbackMatcher = (
-	policy: WorkspacePolicy
-): FindFallbackMatches => {
-	let entriesPromise: Promise<WorkspaceTraversalEntry[]> | undefined;
-
-	return async (mentionPath) => {
-		entriesPromise ??= policy
-			.traverse({
-				includeDirectories: false,
-				includeFiles: true,
-				maxDepth: UNLIMITED_FILE_MENTION_DISCOVERY_DEPTH,
-			})
-			.then((result) => result.entries);
-
-		const entries = await entriesPromise;
-		return getFallbackFileMatches(entries, mentionPath);
+const createFallbackMatcher =
+	(policy: WorkspacePolicy): FindFallbackMatches =>
+	async (mentionPath) => {
+		const options = await getFileMentionOptions({ root: policy.root });
+		return getFallbackFileMatches(options, mentionPath);
 	};
-};
 
 const resolveMentionPath = async (
 	policy: WorkspacePolicy,
@@ -133,7 +122,7 @@ const resolveMentionPath = async (
 			throw literalError;
 		}
 
-		let matches: WorkspaceTraversalEntry[];
+		let matches: FileMentionOption[];
 		try {
 			matches = await findFallbackMatches(mentionPath);
 		} catch {
@@ -153,9 +142,10 @@ const resolveMentionPath = async (
 			throw literalError;
 		}
 
+		const realPath = await policy.resolveExistingPath(match.path);
 		return {
-			canonicalPath: match.relativePath,
-			realPath: match.absolutePath,
+			canonicalPath: match.path,
+			realPath,
 		};
 	}
 };

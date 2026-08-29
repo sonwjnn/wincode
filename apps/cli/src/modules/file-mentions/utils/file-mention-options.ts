@@ -2,7 +2,8 @@ import path from "node:path";
 
 import {
 	createWorkspaceSandbox,
-	traverseWorkspaceEntries,
+	defaultWorkspaceSandbox,
+	type WorkspacePolicy,
 } from "@wincode/ai/workspace";
 
 import type { FileMentionOption } from "../types";
@@ -52,6 +53,34 @@ const formatOption = (
 	path: relativePath,
 	type,
 });
+const fileMentionOptionsCache = new Map<string, Promise<FileMentionOption[]>>();
+
+const discoverFileMentionOptions = (
+	policy: WorkspacePolicy
+): Promise<FileMentionOption[]> => {
+	const cachedOptions = fileMentionOptionsCache.get(policy.root);
+	if (cachedOptions) {
+		return cachedOptions;
+	}
+
+	const discoveryPromise = policy
+		.traverse({
+			includeDirectories: true,
+			includeFiles: true,
+			maxDepth: UNLIMITED_FILE_MENTION_DISCOVERY_DEPTH,
+		})
+		.then((result) =>
+			result.entries.map((entry) =>
+				formatOption(entry.relativePath, entry.type)
+			)
+		);
+	const cachedPromise = discoveryPromise.catch((error: unknown) => {
+		fileMentionOptionsCache.delete(policy.root);
+		throw error;
+	});
+	fileMentionOptionsCache.set(policy.root, cachedPromise);
+	return cachedPromise;
+};
 const compareMentionOptions = (
 	left: FileMentionOption,
 	right: FileMentionOption
@@ -317,24 +346,15 @@ const compareRankedOptions = (left: RankedOption, right: RankedOption) => {
 	return pathComparison === 0 ? left.index - right.index : pathComparison;
 };
 
-export const getFileMentionOptions = async (
+export const getFileMentionOptions = (
 	options: GetFileMentionOptionsOptions = {}
 ): Promise<FileMentionOption[]> => {
-	const policy = options.root
-		? createWorkspaceSandbox(options.root)
-		: undefined;
-	const result = await traverseWorkspaceEntries(
-		{
-			includeDirectories: true,
-			includeFiles: true,
-			maxDepth: UNLIMITED_FILE_MENTION_DISCOVERY_DEPTH,
-		},
-		policy
-	);
+	const policy =
+		options.root === undefined
+			? defaultWorkspaceSandbox
+			: createWorkspaceSandbox(options.root);
 
-	return result.entries.map((entry) =>
-		formatOption(entry.relativePath, entry.type)
-	);
+	return discoverFileMentionOptions(policy);
 };
 
 export const filterFileMentionOptions = (
