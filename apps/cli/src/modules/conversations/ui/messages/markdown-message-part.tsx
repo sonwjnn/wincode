@@ -30,18 +30,16 @@ const stripMarkdownControlCharacters = (value: string): string =>
 /**
  * Renders one assistant text part as mapped markdown: headings, emphasis,
  * inline code, fenced code blocks, tables, links and lists are laid out by
- * OpenTUI's `MarkdownRenderable` instead of surfacing raw syntax. Content is
- * stripped of control characters before parsing so hostile or corrupted
- * output can never inject layout or escape sequences into the token stream,
- * and the parsed output streams incrementally while `isStreaming` is set so
- * a growing text part never re-parses from scratch.
+ * OpenTUI's `MarkdownRenderable` instead of surfacing raw syntax. Control
+ * characters are stripped so output cannot inject layout or escape sequences.
+ * Streaming uses top-level block mode: completed blocks are frozen while only
+ * the unfinished tail is reparsed. This prevents settled headings and lists
+ * from alternating between raw and concealed frames on later token updates.
  */
 export const MarkdownMessagePart = memo(function MarkdownMessagePart({
 	text,
-	isStreaming,
 }: {
 	text: string;
-	isStreaming: boolean;
 }) {
 	const { colors } = useTheme();
 	const syntaxStyle = useMemo(() => resolveSyntaxStyle(colors), [colors]);
@@ -52,7 +50,8 @@ export const MarkdownMessagePart = memo(function MarkdownMessagePart({
 			<markdown
 				conceal
 				content={sanitized}
-				streaming={isStreaming}
+				internalBlockMode="top-level"
+				streaming
 				syntaxStyle={syntaxStyle}
 				treeSitterClient={getTreeSitterClientForTests()}
 				width="100%"

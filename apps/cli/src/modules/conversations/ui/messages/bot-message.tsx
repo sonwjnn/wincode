@@ -618,17 +618,10 @@ function SkillActivityRow({ part }: { part: ToolPart }) {
 
 export function BotMessageContent({
 	agent = buildAgent.id,
-	isStreaming = false,
 	parts,
 }: {
 	/** The agent that produced the message; drives the running-tool spinner color. */
 	agent?: AgentId;
-	/**
-	 * True while the message's text parts can still grow. Keeps the markdown
-	 * mapping in streaming mode so trailing blocks parse incrementally
-	 * instead of re-parsing from scratch on every token delta.
-	 */
-	isStreaming?: boolean;
 	parts: CodingAgentUIMessage["parts"];
 }) {
 	const { colors } = useTheme();
@@ -677,7 +670,6 @@ export function BotMessageContent({
 						if (part.type === "text") {
 							return (
 								<MarkdownMessagePart
-									isStreaming={isStreaming}
 									key={getContentPartKey(part, index)}
 									text={part.text}
 								/>

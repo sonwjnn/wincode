@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
-import { useEffect, useState } from "react";
+import { act, useEffect, useState } from "react";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import {
@@ -17,8 +17,8 @@ import {
 await import("@wincode/env/cli");
 
 /**
- * Grows the rendered text once after mount so the streaming prop stays on
- * while the content changes — the shape of a live `useChat` text part.
+ * Grows the rendered text once after mount, matching a live `useChat` text
+ * part while the Markdown renderable remains in incremental mode.
  */
 function GrowingMarkdown() {
 	const [content, setContent] = useState("# One");
@@ -30,7 +30,33 @@ function GrowingMarkdown() {
 		return () => clearTimeout(timer);
 	}, []);
 
-	return <MarkdownMessagePart isStreaming text={content} />;
+	return <MarkdownMessagePart text={content} />;
+}
+let finishStreaming: (() => void) | undefined;
+
+function FinalizingMarkdown() {
+	const [isStreaming, setIsStreaming] = useState(true);
+	useEffect(() => {
+		finishStreaming = () => setIsStreaming(false);
+		return () => {
+			finishStreaming = undefined;
+		};
+	}, []);
+
+	return (
+		<box>
+			<MarkdownMessagePart text={"# First part\n\n## Second part"} />
+			{isStreaming ? null : <text>done</text>}
+		</box>
+	);
+}
+class CountingTreeSitterClient extends MockTreeSitterClient {
+	highlightCalls = 0;
+
+	override async highlightOnce(content: string, filetype: string) {
+		this.highlightCalls += 1;
+		return await super.highlightOnce(content, filetype);
+	}
 }
 
 /** Settles the async highlight/block pass before capturing output. */
@@ -45,14 +71,11 @@ const settleRenders = async (
 
 const renderFrame = async (
 	text: string,
-	{
-		height = 20,
-		isStreaming = false,
-	}: { height?: number; isStreaming?: boolean } = {}
+	{ height = 20 }: { height?: number } = {}
 ): Promise<string> => {
 	const setup = await testRender(
 		<ThemeProvider themeName="opencode">
-			<MarkdownMessagePart isStreaming={isStreaming} text={text} />
+			<MarkdownMessagePart text={text} />
 		</ThemeProvider>,
 		{ height, width: 160 }
 	);
@@ -81,7 +104,7 @@ describe("MarkdownMessagePart color mapping", () => {
 		try {
 			const setup = await testRender(
 				<ThemeProvider themeName="opencode">
-					<MarkdownMessagePart isStreaming={false} text={text} />
+					<MarkdownMessagePart text={text} />
 				</ThemeProvider>,
 				{ height: 20, width: 160 }
 			);
@@ -238,6 +261,54 @@ describe("MarkdownMessagePart", () => {
 			expect(grownFrame).toContain("Two");
 		} finally {
 			setup.renderer.destroy();
+		}
+	});
+
+	test("does not re-highlight unchanged blocks when streaming completes", async () => {
+		const client = new CountingTreeSitterClient({ autoResolveTimeout: 0 });
+		setMarkdownTreeSitterClientForTests(client);
+		const setup = await testRender(
+			<ThemeProvider themeName="opencode">
+				<FinalizingMarkdown />
+			</ThemeProvider>,
+			{ height: 10, width: 160 }
+		);
+
+		try {
+			await settleRenders(setup);
+			const callsWhileStreaming = client.highlightCalls;
+
+			await act(async () => finishStreaming?.());
+			await settleRenders(setup);
+
+			expect(client.highlightCalls).toBe(callsWhileStreaming);
+		} finally {
+			setup.renderer.destroy();
+			setMarkdownTreeSitterClientForTests(
+				new MockTreeSitterClient({ autoResolveTimeout: 0 })
+			);
+		}
+	});
+
+	test("formats stable streamed headings without exposing source markers", async () => {
+		const text = "# Nội dung chính của file";
+		const client = new MockTreeSitterClient({ autoResolveTimeout: 0 });
+		client.setMockResult({
+			highlights: [
+				[0, text.length, "markup.heading", {}],
+				[0, 1, "conceal", { conceal: "" }],
+			],
+		});
+		setMarkdownTreeSitterClientForTests(client);
+
+		try {
+			const frame = await renderFrame(text);
+			expect(frame).not.toContain(text);
+			expect(frame).toContain("Nội dung chính của file");
+		} finally {
+			setMarkdownTreeSitterClientForTests(
+				new MockTreeSitterClient({ autoResolveTimeout: 0 })
+			);
 		}
 	});
 
