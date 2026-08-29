@@ -6,11 +6,15 @@ import {
 } from "@wincode/ai/workspace";
 
 import type { FileMentionOption } from "../types";
+import {
+	compareCanonicalRelativePaths,
+	getExtensionlessFileStem,
+	UNLIMITED_FILE_MENTION_DISCOVERY_DEPTH,
+} from "./file-mention-path";
 
 const MAX_FILE_MENTION_RESULTS = 100;
-const UNLIMITED_DISCOVERY_DEPTH = Number.POSITIVE_INFINITY;
 
-type FileMentionOptionsOptions = {
+type GetFileMentionOptionsOptions = {
 	root?: string;
 };
 
@@ -30,9 +34,15 @@ type RankedOption = {
 };
 const LEADING_CURRENT_DIRECTORY_RE = /^\.\/+/u;
 const TRAILING_SLASH_RE = /\/+$/u;
+const EXACT_MATCH_RANK = 0;
+const PREFIX_MATCH_RANK = 1;
+const CONTAINS_MATCH_RANK = 2;
 const BASENAME_SUBSEQUENCE_RANK = 3;
 const PATH_SEGMENT_RANK = 4;
 const PATH_SUBSEQUENCE_RANK = 5;
+const EXACT_SEGMENT_SPECIFICITY = 0;
+const PARTIAL_SEGMENT_SPECIFICITY = 1;
+const DEFAULT_MATCH_SPECIFICITY = 0;
 
 const formatOption = (
 	relativePath: string,
@@ -42,19 +52,13 @@ const formatOption = (
 	path: relativePath,
 	type,
 });
-
-const compareCanonicalPaths = (
+const compareMentionOptions = (
 	left: FileMentionOption,
 	right: FileMentionOption
 ) => {
-	const leftPath = left.path.toLowerCase();
-	const rightPath = right.path.toLowerCase();
-	if (leftPath !== rightPath) {
-		return leftPath < rightPath ? -1 : 1;
-	}
-
-	if (left.path !== right.path) {
-		return left.path < right.path ? -1 : 1;
+	const pathComparison = compareCanonicalRelativePaths(left.path, right.path);
+	if (pathComparison !== 0) {
+		return pathComparison;
 	}
 
 	if (left.type !== right.type) {
@@ -71,6 +75,7 @@ const compareCanonicalPaths = (
 
 	return 0;
 };
+
 type NormalizedPathQuery = {
 	text: string;
 	trailingSlash: boolean;
@@ -131,34 +136,43 @@ const findSubsequenceMatch = (
 		previousMatchIndex = matchIndex;
 		candidateIndex = matchIndex + 1;
 	}
-
 	return {
 		gaps,
 		rank,
-		specificity: 0,
+		specificity: DEFAULT_MATCH_SPECIFICITY,
 		start: firstMatchIndex,
 	};
 };
 
-const getExtensionlessStem = (basename: string) => {
-	const extension = path.posix.extname(basename);
-	return extension ? basename.slice(0, -extension.length) : basename;
-};
-
 const getBasenameMatch = (optionPath: string, query: string): Match | null => {
 	const basename = path.posix.basename(optionPath).toLowerCase();
-	const stem = getExtensionlessStem(basename);
+	const stem = getExtensionlessFileStem(basename);
 
 	if (basename === query || stem === query) {
-		return { gaps: 0, rank: 0, specificity: 0, start: 0 };
+		return {
+			gaps: 0,
+			rank: EXACT_MATCH_RANK,
+			specificity: DEFAULT_MATCH_SPECIFICITY,
+			start: 0,
+		};
 	}
 
 	if (basename.startsWith(query) || stem.startsWith(query)) {
-		return { gaps: 0, rank: 1, specificity: 0, start: 0 };
+		return {
+			gaps: 0,
+			rank: PREFIX_MATCH_RANK,
+			specificity: DEFAULT_MATCH_SPECIFICITY,
+			start: 0,
+		};
 	}
 
 	if (basename.includes(query) || stem.includes(query)) {
-		return { gaps: 0, rank: 2, specificity: 0, start: 0 };
+		return {
+			gaps: 0,
+			rank: CONTAINS_MATCH_RANK,
+			specificity: DEFAULT_MATCH_SPECIFICITY,
+			start: 0,
+		};
 	}
 
 	return chooseBetterMatch(
@@ -179,7 +193,7 @@ const getPathSegmentMatch = (
 			bestMatch = chooseBetterMatch(bestMatch, {
 				gaps: 0,
 				rank: PATH_SEGMENT_RANK,
-				specificity: 0,
+				specificity: EXACT_SEGMENT_SPECIFICITY,
 				start: index,
 			});
 			continue;
@@ -189,7 +203,7 @@ const getPathSegmentMatch = (
 			bestMatch = chooseBetterMatch(bestMatch, {
 				gaps: 0,
 				rank: PATH_SEGMENT_RANK,
-				specificity: 1,
+				specificity: PARTIAL_SEGMENT_SPECIFICITY,
 				start: index,
 			});
 		}
@@ -204,12 +218,22 @@ const getPathMatch = (
 	trailingSlash: boolean
 ): Match | null => {
 	if (optionPath === query) {
-		return { gaps: 0, rank: 0, specificity: 0, start: 0 };
+		return {
+			gaps: 0,
+			rank: EXACT_MATCH_RANK,
+			specificity: DEFAULT_MATCH_SPECIFICITY,
+			start: 0,
+		};
 	}
 
 	if (trailingSlash) {
 		if (optionPath.startsWith(`${query}/`)) {
-			return { gaps: 0, rank: 1, specificity: 0, start: 0 };
+			return {
+				gaps: 0,
+				rank: PREFIX_MATCH_RANK,
+				specificity: DEFAULT_MATCH_SPECIFICITY,
+				start: 0,
+			};
 		}
 
 		const context = `/${query}/`;
@@ -217,8 +241,8 @@ const getPathMatch = (
 		if (contextStart !== -1) {
 			return {
 				gaps: 0,
-				rank: 2,
-				specificity: 0,
+				rank: CONTAINS_MATCH_RANK,
+				specificity: DEFAULT_MATCH_SPECIFICITY,
 				start: contextStart + 1,
 			};
 		}
@@ -230,14 +254,19 @@ const getPathMatch = (
 		optionPath.startsWith(`${query}/`) ||
 		optionPath.startsWith(`${query}.`)
 	) {
-		return { gaps: 0, rank: 1, specificity: 0, start: 0 };
+		return {
+			gaps: 0,
+			rank: PREFIX_MATCH_RANK,
+			specificity: DEFAULT_MATCH_SPECIFICITY,
+			start: 0,
+		};
 	}
 
 	if (optionPath.includes(query)) {
 		return {
 			gaps: 0,
-			rank: 2,
-			specificity: 0,
+			rank: CONTAINS_MATCH_RANK,
+			specificity: DEFAULT_MATCH_SPECIFICITY,
 			start: optionPath.indexOf(query),
 		};
 	}
@@ -284,12 +313,12 @@ const compareRankedOptions = (left: RankedOption, right: RankedOption) => {
 		return left.pathDepth - right.pathDepth;
 	}
 
-	const pathComparison = compareCanonicalPaths(left.option, right.option);
+	const pathComparison = compareMentionOptions(left.option, right.option);
 	return pathComparison === 0 ? left.index - right.index : pathComparison;
 };
 
 export const getFileMentionOptions = async (
-	options: FileMentionOptionsOptions = {}
+	options: GetFileMentionOptionsOptions = {}
 ): Promise<FileMentionOption[]> => {
 	const policy = options.root
 		? createWorkspaceSandbox(options.root)
@@ -298,7 +327,7 @@ export const getFileMentionOptions = async (
 		{
 			includeDirectories: true,
 			includeFiles: true,
-			maxDepth: UNLIMITED_DISCOVERY_DEPTH,
+			maxDepth: UNLIMITED_FILE_MENTION_DISCOVERY_DEPTH,
 		},
 		policy
 	);
@@ -315,7 +344,7 @@ export const filterFileMentionOptions = (
 	const normalizedQuery = query.toLowerCase();
 	if (normalizedQuery.length === 0) {
 		return options
-			.toSorted(compareCanonicalPaths)
+			.toSorted(compareMentionOptions)
 			.slice(0, MAX_FILE_MENTION_RESULTS);
 	}
 
@@ -325,7 +354,7 @@ export const filterFileMentionOptions = (
 		: { text: normalizedQuery, trailingSlash: false };
 	if (pathQuery.text.length === 0) {
 		return options
-			.toSorted(compareCanonicalPaths)
+			.toSorted(compareMentionOptions)
 			.slice(0, MAX_FILE_MENTION_RESULTS);
 	}
 

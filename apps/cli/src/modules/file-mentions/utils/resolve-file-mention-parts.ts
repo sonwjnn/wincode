@@ -7,6 +7,11 @@ import {
 	type WorkspaceTraversalEntry,
 } from "@wincode/ai/workspace";
 import {
+	compareCanonicalRelativePaths,
+	getExtensionlessFileStem,
+	UNLIMITED_FILE_MENTION_DISCOVERY_DEPTH,
+} from "./file-mention-path";
+import {
 	findFileMentionRanges,
 	normalizeFileMentionPath,
 } from "./mention-grammar";
@@ -17,7 +22,6 @@ const DEFAULT_MAX_DIRECTORY_DEPTH = 3;
 const DEFAULT_MAX_DIRECTORY_ENTRIES = 200;
 const BINARY_SAMPLE_BYTES = 8000;
 const MAX_AMBIGUOUS_FALLBACK_CANDIDATES = 8;
-const UNLIMITED_DISCOVERY_DEPTH = Number.POSITIVE_INFINITY;
 
 type ResolveFileMentionPartsOptions = {
 	maxDirectoryDepth?: number;
@@ -58,27 +62,10 @@ const getMentionPaths = (text: string) => {
 	return paths;
 };
 
-const getExtensionlessStem = (basename: string) => {
-	const extension = path.posix.extname(basename);
-	return extension ? basename.slice(0, -extension.length) : basename;
-};
-
 const compareTraversalEntries = (
 	left: WorkspaceTraversalEntry,
 	right: WorkspaceTraversalEntry
-) => {
-	const leftPath = left.relativePath.toLowerCase();
-	const rightPath = right.relativePath.toLowerCase();
-	if (leftPath !== rightPath) {
-		return leftPath < rightPath ? -1 : 1;
-	}
-
-	if (left.relativePath !== right.relativePath) {
-		return left.relativePath < right.relativePath ? -1 : 1;
-	}
-
-	return 0;
-};
+) => compareCanonicalRelativePaths(left.relativePath, right.relativePath);
 
 const getFallbackFileMatches = (
 	entries: WorkspaceTraversalEntry[],
@@ -91,7 +78,7 @@ const getFallbackFileMatches = (
 			const basename = path.posix.basename(entry.relativePath).toLowerCase();
 			return (
 				basename === normalizedMentionPath ||
-				getExtensionlessStem(basename) === normalizedMentionPath
+				getExtensionlessFileStem(basename) === normalizedMentionPath
 			);
 		})
 		.toSorted(compareTraversalEntries);
@@ -121,7 +108,7 @@ const createFallbackMatcher = (
 			.traverse({
 				includeDirectories: false,
 				includeFiles: true,
-				maxDepth: UNLIMITED_DISCOVERY_DEPTH,
+				maxDepth: UNLIMITED_FILE_MENTION_DISCOVERY_DEPTH,
 			})
 			.then((result) => result.entries);
 
