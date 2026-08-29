@@ -8,15 +8,9 @@ import {
 
 export function ChatMessage({
 	footerMessage,
-	isStreaming = false,
 	messages,
 }: {
 	footerMessage?: CodingAgentUIMessage;
-	/**
-	 * True while the last assistant message can still grow; only the final
-	 * message receives it so settled history keeps finalized parsing.
-	 */
-	isStreaming?: boolean;
 	messages: CodingAgentUIMessage[];
 }) {
 	return (
@@ -37,7 +31,6 @@ export function ChatMessage({
 					return (
 						<BotMessageContent
 							agent={message.metadata?.agent ?? buildAgent.id}
-							isStreaming={isStreaming && message === messages.at(-1)}
 							key={message.id}
 							parts={message.parts}
 						/>

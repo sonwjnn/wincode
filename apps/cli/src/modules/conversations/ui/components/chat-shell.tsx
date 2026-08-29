@@ -103,7 +103,6 @@ export function ChatShell({
 							<box key={turn.id} marginTop={index === 0 ? 1 : 0} width="100%">
 								<ChatMessage
 									footerMessage={footerMessages.get(turn.id)}
-									isStreaming={isBusy && turn === turns.at(-1)}
 									messages={turn.messages}
 								/>
 							</box>

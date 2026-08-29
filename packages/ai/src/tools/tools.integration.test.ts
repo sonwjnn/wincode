@@ -246,7 +246,7 @@ describe("tool runners", () => {
 	});
 	test("truncates on a line boundary with a remaining multi-range selector", async () => {
 		const filePath = `${sandboxRelPath}/bounded.txt`;
-		const line = "x".repeat(100);
+		const line = "x".repeat(1000);
 		writeFileSync(
 			path.join(workspace, filePath),
 			Array.from({ length: 160 }, () => line).join("\n")
@@ -257,15 +257,15 @@ describe("tool runners", () => {
 		});
 
 		expect(result).toMatchObject({ path: filePath, truncated: true });
-		expect(result.content).toContain(`56:${line}`);
-		expect(result.content).not.toContain(`57:${line}`);
+		expect(result.content).toContain(`50:${line}`);
+		expect(result.content).not.toContain(`51:${line}`);
 		expect(result.content).toEndWith(
-			`[Output capped at 6000 bytes. Continue with path \`${filePath}:57-100,150-160\`.]`
+			`[Output capped at 51200 bytes. Continue with path \`${filePath}:51-100,150-160\`.]`
 		);
 	});
 	test("continues when the byte cap cuts trailing range context", async () => {
 		const filePath = `${sandboxRelPath}/bounded-context.txt`;
-		const line = "x".repeat(112);
+		const line = "x".repeat(1200);
 		writeFileSync(
 			path.join(workspace, filePath),
 			Array.from({ length: 60 }, () => line).join("\n")
@@ -274,10 +274,10 @@ describe("tool runners", () => {
 		const result = await runReadTool({ path: `${filePath}:1-50` });
 
 		expect(result).toMatchObject({ path: filePath, truncated: true });
-		expect(result.content).toContain(`50:${line}`);
-		expect(result.content).not.toContain(`51:${line}`);
+		expect(result.content).toContain(`42:${line}`);
+		expect(result.content).not.toContain(`43:${line}`);
 		expect(result.content).toEndWith(
-			`[Output capped at 6000 bytes. Continue with path \`${filePath}:51-53\`.]`
+			`[Output capped at 51200 bytes. Continue with path \`${filePath}:43-50\`.]`
 		);
 	});
 	test("reads an approved absolute path outside the workspace", async () => {

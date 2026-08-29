@@ -8,7 +8,7 @@ import {
 	splitLineRangeSelector,
 } from "./selector";
 
-const READ_CONTENT_MAX_BYTES = 6000;
+const READ_CONTENT_MAX_BYTES = 50 * 1024;
 const RANGE_LEADING_CONTEXT_LINES = 1;
 const RANGE_TRAILING_CONTEXT_LINES = 3;
 type ResolvedReadTarget = {
