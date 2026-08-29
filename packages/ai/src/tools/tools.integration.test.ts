@@ -13,7 +13,8 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { createWorkspaceSandbox, resolveWithinWorkspace } from "../workspace";
 import { runEditTool } from "./edit/runner";
-import { runGrepTool } from "./grep/runner";
+import { RipgrepUnavailableError } from "./grep/ripgrep";
+import { createGrepRunner, runGrepTool } from "./grep/runner";
 import { runListTool } from "./list/runner";
 import { runReadTool } from "./read/runner";
 import { runWriteTool } from "./write/runner";
@@ -415,6 +416,80 @@ describe("tool runners", () => {
 					line: "beta",
 					lineNumber: 2,
 					path: `${sandboxRelPath}/alpha.txt`,
+				},
+			],
+		});
+	});
+	test("finds setUserLocale when a model sends the ripgrep line flag", async () => {
+		writeFileSync(path.join(sandboxPath, "locale.ts"), "setUserLocale\n");
+		const input = {
+			flags: "n",
+			path: sandboxRelPath,
+			pattern: "setUserLocale",
+		};
+
+		await expect(runGrepTool(input)).resolves.toEqual({
+			matches: [
+				{
+					line: "setUserLocale",
+					lineNumber: 1,
+					path: `${sandboxRelPath}/locale.ts`,
+				},
+			],
+		});
+	});
+	test("passes option-like patterns through native grep safely", async () => {
+		writeFileSync(path.join(sandboxPath, "option.txt"), "--hidden\n");
+
+		await expect(
+			runGrepTool({ path: sandboxRelPath, pattern: "--hidden" })
+		).resolves.toEqual({
+			matches: [
+				{
+					line: "--hidden",
+					lineNumber: 1,
+					path: `${sandboxRelPath}/option.txt`,
+				},
+			],
+		});
+	});
+	test("falls back to JavaScript search when ripgrep is unavailable", async () => {
+		writeFileSync(path.join(sandboxPath, "fallback.ts"), "needle\n");
+		const runGrepWithUnavailableRipgrep = createGrepRunner({
+			search: async () => {
+				throw new RipgrepUnavailableError("missing-rg");
+			},
+		});
+
+		await expect(
+			runGrepWithUnavailableRipgrep({
+				path: sandboxRelPath,
+				pattern: "needle",
+			})
+		).resolves.toEqual({
+			matches: [
+				{
+					line: "needle",
+					lineNumber: 1,
+					path: `${sandboxRelPath}/fallback.ts`,
+				},
+			],
+		});
+	});
+	test("falls back for JavaScript regex unsupported by ripgrep", async () => {
+		writeFileSync(path.join(sandboxPath, "lookbehind.ts"), "needlehit\n");
+
+		await expect(
+			runGrepTool({
+				path: sandboxRelPath,
+				pattern: "(?<=needle)hit",
+			})
+		).resolves.toEqual({
+			matches: [
+				{
+					line: "needlehit",
+					lineNumber: 1,
+					path: `${sandboxRelPath}/lookbehind.ts`,
 				},
 			],
 		});

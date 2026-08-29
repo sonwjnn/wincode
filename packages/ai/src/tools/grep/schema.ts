@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 export const grepInputSchema = z.object({
-	flags: z.string().optional(),
 	path: z.string().min(1).optional(),
 	pattern: z.string().min(1),
 });
@@ -19,7 +18,7 @@ export const grepOutputSchema = z.object({
 
 export const grepToolSchema = {
 	description:
-		"Search text files inside the workspace with a JavaScript regular expression.",
+		"Search text files inside the workspace with a regular expression. Use this tool when you need to locate symbols or text. Do not pass shell or ripgrep flags; line numbers are included in the results.",
 	name: "grep",
 	schema: grepInputSchema,
 } as const;
