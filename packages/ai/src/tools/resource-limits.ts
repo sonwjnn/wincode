@@ -16,6 +16,7 @@ export type ToolResourceLimits = {
 	readonly profile: ResourceLimitProfile;
 	readonly read: {
 		readonly maxOutputBytes: number;
+		readonly maxDirectoryOutputBytes: number;
 	};
 	readonly list: {
 		readonly maxDepth: number;
@@ -69,7 +70,8 @@ export const TOOL_RESOURCE_LIMITS = {
 		},
 		profile: "standard",
 		read: {
-			maxOutputBytes: 50 * 1024,
+			maxDirectoryOutputBytes: 50 * 1024,
+			maxOutputBytes: 6000,
 		},
 		shell: {
 			defaultTimeoutSeconds: 30,
@@ -100,6 +102,7 @@ export const TOOL_RESOURCE_LIMITS = {
 		},
 		profile: "extended",
 		read: {
+			maxDirectoryOutputBytes: 128 * 1024,
 			maxOutputBytes: 128 * 1024,
 		},
 		shell: {
@@ -131,6 +134,7 @@ export const TOOL_RESOURCE_LIMITS = {
 		},
 		profile: "deep",
 		read: {
+			maxDirectoryOutputBytes: 512 * 1024,
 			maxOutputBytes: 512 * 1024,
 		},
 		shell: {

@@ -18,13 +18,14 @@ describe("tool resource profiles", () => {
 		);
 	});
 
-	test("keeps profiles monotonic while preserving the standard defaults", () => {
+	test("keeps profiles monotonic while preserving read defaults", () => {
 		const standard = getToolResourceLimits("standard");
 		const extended = getToolResourceLimits("extended");
 		const deep = getToolResourceLimits("deep");
 
 		expect(standard).toEqual(TOOL_RESOURCE_LIMITS.standard);
-		expect(standard.read.maxOutputBytes).toBe(50 * 1024);
+		expect(standard.read.maxOutputBytes).toBe(6000);
+		expect(standard.read.maxDirectoryOutputBytes).toBe(50 * 1024);
 		expect(standard.grep.maxMatches).toBe(1000);
 		expect(standard.shell.maxTimeoutSeconds).toBe(300);
 		expect(extended.read.maxOutputBytes).toBeGreaterThan(
@@ -32,6 +33,12 @@ describe("tool resource profiles", () => {
 		);
 		expect(deep.read.maxOutputBytes).toBeGreaterThan(
 			extended.read.maxOutputBytes
+		);
+		expect(extended.read.maxDirectoryOutputBytes).toBeGreaterThan(
+			standard.read.maxDirectoryOutputBytes
+		);
+		expect(deep.read.maxDirectoryOutputBytes).toBeGreaterThan(
+			extended.read.maxDirectoryOutputBytes
 		);
 		expect(deep.grep.maxFiles).toBeGreaterThan(extended.grep.maxFiles);
 		expect(deep.shell.maxOutputBytes).toBeGreaterThan(

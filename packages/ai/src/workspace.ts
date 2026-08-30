@@ -1,5 +1,5 @@
 import { type Dirent, existsSync, realpathSync } from "node:fs";
-import { readdir, readFile, realpath } from "node:fs/promises";
+import { readdir, readFile, readlink, realpath } from "node:fs/promises";
 import path from "node:path";
 import ignore, { type Ignore } from "ignore";
 
@@ -57,17 +57,23 @@ export type WorkspaceTraversalEntry = {
 	absolutePath: string;
 	depth: number;
 	relativePath: string;
+	symlinkTarget?: string;
 	type: "directory" | "file";
 };
 
 export type WorkspaceTraversalOptions = {
 	includeDirectories: boolean;
 	includeFiles: boolean;
+	includeSymlinks?: boolean;
 	maxDepth: number;
 	maxEntries?: number;
 	path?: string;
+	/** Hides dotfiles and dot-directories from discovery. */
+	hideDotfiles?: boolean;
 	/** Applies the workspace-root and nested `.gitignore` rules. */
 	respectGitignore?: boolean;
+	/** Allows an explicitly selected ignored root to be inspected. */
+	allowIgnoredRoot?: boolean;
 };
 
 export type WorkspaceTraversalResult = {
@@ -196,7 +202,8 @@ const pushTraversalEntry = (
 	absolutePath: string,
 	depth: number,
 	type: WorkspaceTraversalEntry["type"],
-	context: TraversalContext
+	context: TraversalContext,
+	symlinkTarget?: string
 ) => {
 	if (hasReachedEntryLimit(context)) {
 		markTraversalTruncated(context);
@@ -207,6 +214,7 @@ const pushTraversalEntry = (
 		absolutePath,
 		depth,
 		relativePath: context.policy.relativePath(absolutePath),
+		...(symlinkTarget === undefined ? {} : { symlinkTarget }),
 		type,
 	});
 
@@ -258,13 +266,37 @@ const collectWorkspaceFile = async (
 	return pushTraversalEntry(absolutePath, childDepth, "file", context);
 };
 
+const collectWorkspaceSymlink = async (
+	childPath: string,
+	childName: string,
+	childDepth: number,
+	context: TraversalContext
+) => {
+	if (
+		!context.includeSymlinks ||
+		isIgnoredWorkspaceDirectory(childName) ||
+		isGitignoredPath(childPath, "file", context)
+	) {
+		return true;
+	}
+
+	const symlinkTarget = await readlink(childPath);
+	return pushTraversalEntry(
+		childPath,
+		childDepth,
+		"file",
+		context,
+		symlinkTarget
+	);
+};
+
 const collectWorkspaceDirent = async (
 	directoryPath: string,
 	dirent: Dirent,
 	depth: number,
 	context: TraversalContext
 ) => {
-	if (dirent.isSymbolicLink()) {
+	if (context.hideDotfiles && dirent.name.startsWith(".")) {
 		return true;
 	}
 
@@ -278,6 +310,15 @@ const collectWorkspaceDirent = async (
 
 	if (isBeyondMaxDepth(childDepth, context)) {
 		return true;
+	}
+
+	if (dirent.isSymbolicLink()) {
+		return await collectWorkspaceSymlink(
+			childPath,
+			dirent.name,
+			childDepth,
+			context
+		);
 	}
 
 	if (dirent.isDirectory()) {
@@ -335,6 +376,10 @@ export const createWorkspaceSandbox = (
 ): WorkspacePolicy => {
 	const workspaceRoot = realpathSync(root);
 	const ignoreRuleCache = new Map<string, Promise<IgnoreRuleSet | null>>();
+	const workspaceRootHasGitMetadata = path
+		.resolve(workspaceRoot)
+		.split(path.sep)
+		.includes(".git");
 	const loadIgnoreRules = (
 		directoryPath: string
 	): Promise<IgnoreRuleSet | null> => {
@@ -413,10 +458,13 @@ export const createWorkspaceSandbox = (
 		traverse: async ({
 			includeDirectories,
 			includeFiles,
+			includeSymlinks = false,
 			maxDepth,
 			maxEntries,
 			path: inputPath,
+			hideDotfiles = false,
 			respectGitignore = false,
+			allowIgnoredRoot = false,
 		}: WorkspaceTraversalOptions) => {
 			const startPath = await policy.resolveExistingPath(inputPath ?? ".");
 			const context: TraversalContext = {
@@ -426,16 +474,26 @@ export const createWorkspaceSandbox = (
 					: [],
 				includeDirectories,
 				includeFiles,
+				includeSymlinks,
 				loadIgnoreRules,
 				maxDepth,
 				maxEntries,
 				policy,
 				respectGitignore,
+				hideDotfiles,
+				allowIgnoredRoot,
 				truncated: false,
 			};
 
-			// A scoped traversal cannot enter a directory ignored by an ancestor.
-			if (isGitignoredPath(startPath, "directory", context)) {
+			// Any traversal rooted inside `.git` is hard-pruned, including
+			// explicit reads such as `.git/objects`.
+			const relativeStartPath = path.relative(workspaceRoot, startPath);
+			const isGitMetadataPath =
+				workspaceRootHasGitMetadata ||
+				path.basename(startPath) === ".git" ||
+				relativeStartPath.split(path.sep).includes(".git");
+			const ignoredRoot = isGitignoredPath(startPath, "directory", context);
+			if (isGitMetadataPath || (!allowIgnoredRoot && ignoredRoot)) {
 				return { entries: context.entries, truncated: context.truncated };
 			}
 

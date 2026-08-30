@@ -749,7 +749,7 @@ describe("createChatToolCallHandler", () => {
 		expect(approvalRequests).toHaveLength(1);
 		expect(approvalRequests[0]).toMatchObject({
 			description:
-				"Read a UTF-8 text file with numbered lines. A path may select inclusive line ranges with :N, :N-M, :N+K, :N-, or comma-separated ranges; existing literal paths take precedence. Preserve ~ paths; never guess an absolute home.",
+				"Read a UTF-8 text file with numbered lines, or an existing directory as a compact two-level tree (directories first, twelve children max, omissions reported). Selectors :N, :N-M, :N+K, :N-, or comma-separated ranges address file lines or directory entries; omission notices do not consume positions. Existing literal paths take precedence. Preserve ~ paths.",
 			identity: [
 				{ label: "tool", value: "read" },
 				{ label: "resource", value: ".env" },
