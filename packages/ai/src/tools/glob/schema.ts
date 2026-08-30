@@ -4,8 +4,8 @@ export const GLOB_DEFAULT_LIMIT = 200;
 export const GLOB_MAX_LIMIT = 200;
 
 export const globInputSchema = z.object({
-	gitignore: z.boolean().optional(),
-	hidden: z.boolean().optional(),
+	includeHidden: z.boolean().optional(),
+	includeIgnored: z.boolean().optional(),
 	limit: z.number().int().min(1).max(GLOB_MAX_LIMIT).optional(),
 	path: z.string().min(1).optional(),
 	pattern: z.string().min(1),
@@ -18,7 +18,7 @@ export const globOutputSchema = z.object({
 
 export const globToolSchema = {
 	description:
-		"Find workspace files by glob pattern. Results are workspace-relative paths, exclude directories, hidden files are omitted by default, and .git is always excluded. Use path, hidden, gitignore, and limit to narrow discovery; if results are truncated, narrow the path or pattern and try again.",
+		"Find workspace files by glob pattern. Results are workspace-relative file paths; directories, dotfiles, and gitignored files are excluded by default, and .git is always excluded. Use path, includeHidden, includeIgnored, and limit to narrow discovery; if results are truncated, narrow the path or pattern and try again.",
 	name: "glob",
 	schema: globInputSchema,
 } as const;

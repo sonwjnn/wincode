@@ -29,8 +29,8 @@ const createFakeChild = (): FakeChild => {
 
 const input: GlobSearchInput = {
 	cwd: "/workspace",
-	gitignore: true,
-	hidden: false,
+	includeHidden: false,
+	includeIgnored: false,
 	maxCandidates: 10_000,
 	maxDurationMs: 5000,
 	path: "src",
@@ -55,8 +55,8 @@ describe("ripgrep glob adapter", () => {
 
 		const optedIn = buildRipgrepGlobArguments({
 			...input,
-			gitignore: false,
-			hidden: true,
+			includeHidden: true,
+			includeIgnored: true,
 		});
 		expect(optedIn).toContain("--hidden");
 		expect(optedIn).toContain("--no-ignore");

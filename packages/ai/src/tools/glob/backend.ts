@@ -1,7 +1,7 @@
 export type GlobSearchInput = {
 	cwd: string;
-	gitignore: boolean;
-	hidden: boolean;
+	includeHidden: boolean;
+	includeIgnored: boolean;
 	maxCandidates: number;
 	maxDurationMs?: number;
 	path: string;

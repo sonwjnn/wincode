@@ -63,14 +63,14 @@ export const buildRipgrepGlobArguments = (input: GlobSearchInput): string[] => {
 		"--color=never",
 		"--no-messages",
 	];
-	if (input.hidden) {
+	if (input.includeHidden) {
 		args.push("--hidden");
 	}
-	if (!input.gitignore) {
+	if (input.includeIgnored) {
 		args.push("--no-ignore");
 	}
 	args.push("--glob", input.pattern);
-	if (input.gitignore) {
+	if (!input.includeIgnored) {
 		for (const directoryName of WORKSPACE_IGNORED_DIRECTORY_NAMES) {
 			if (directoryName === ".git") {
 				continue;

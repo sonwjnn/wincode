@@ -462,7 +462,7 @@ describe("tool runners", () => {
 			runGlobTool({ path: `${sandboxRelPath}/src`, pattern: "*.tsx" })
 		).resolves.toEqual({ paths: [] });
 	});
-	test("controls hidden and gitignored discovery without entering .git", async () => {
+	test("controls hidden and ignored discovery without entering .git", async () => {
 		for (const directory of [".git", ".hidden", "ignored", "node_modules"]) {
 			mkdirSync(path.join(sandboxPath, directory));
 		}
@@ -483,7 +483,7 @@ describe("tool runners", () => {
 		await expect(runGlobTool(input)).resolves.toEqual({
 			paths: [`${sandboxRelPath}/visible.txt`],
 		});
-		const hiddenResult = await runGlobTool({ ...input, hidden: true });
+		const hiddenResult = await runGlobTool({ ...input, includeHidden: true });
 		expect(hiddenResult.paths).toHaveLength(2);
 		expect(hiddenResult.paths).toEqual(
 			expect.arrayContaining([
@@ -493,8 +493,8 @@ describe("tool runners", () => {
 		);
 		const ignoredResult = await runGlobTool({
 			...input,
-			gitignore: false,
-			hidden: true,
+			includeIgnored: true,
+			includeHidden: true,
 		});
 		expect(ignoredResult.paths).toHaveLength(4);
 		expect(ignoredResult.paths).toEqual(
@@ -508,8 +508,8 @@ describe("tool runners", () => {
 		await expect(
 			runGlobTool({
 				...input,
-				gitignore: false,
-				hidden: true,
+				includeIgnored: true,
+				includeHidden: true,
 				path: `${sandboxRelPath}/.git`,
 			})
 		).resolves.toEqual({ paths: [] });
@@ -640,7 +640,7 @@ describe("tool runners", () => {
 		symlinkSync(outsideFile, path.join(sandboxPath, "outside-link.txt"));
 		await expect(
 			runGlobTool({
-				hidden: true,
+				includeHidden: true,
 				path: sandboxRelPath,
 				pattern: "*.txt",
 			})

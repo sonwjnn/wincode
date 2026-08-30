@@ -10,8 +10,8 @@ describe("glob schema", () => {
 	test("requires a pattern and accepts discovery controls", () => {
 		expect(
 			globInputSchema.safeParse({
-				gitignore: false,
-				hidden: true,
+				includeIgnored: true,
+				includeHidden: true,
 				limit: GLOB_DEFAULT_LIMIT,
 				path: "src",
 				pattern: "**/*.ts",

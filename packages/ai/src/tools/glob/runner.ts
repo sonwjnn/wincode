@@ -27,8 +27,8 @@ const resolveSearchInput = async (
 	);
 	return {
 		cwd: WORKSPACE,
-		gitignore: input.gitignore ?? true,
-		hidden: input.hidden ?? false,
+		includeHidden: input.includeHidden ?? false,
+		includeIgnored: input.includeIgnored ?? false,
 		maxCandidates: limits.glob.maxCandidates,
 		maxDurationMs: limits.glob.maxDurationMs,
 		path: defaultWorkspaceSandbox.relativePath(resolvedPath) || ".",
