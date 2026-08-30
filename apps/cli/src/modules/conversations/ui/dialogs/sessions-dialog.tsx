@@ -1,6 +1,7 @@
 import { RGBA, TextAttributes } from "@opentui/core";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLatest } from "@/shared/hooks/use-latest";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -109,8 +110,7 @@ export const SessionsDialogContent = () => {
 	const [sessions, setSessions] = useState<ConversationSession[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
-	const pendingDeleteIdRef = useRef<string | null>(null);
-	const selectedSessionRef = useRef<ConversationSession | null>(null);
+	const pendingDeleteIdRef = useLatest(pendingDeleteId);
 	const { close, open: openDialog } = useDialog();
 	const navigate = useNavigate();
 	const { show } = useToast();
@@ -124,6 +124,12 @@ export const SessionsDialogContent = () => {
 		}
 		return null;
 	}, [routerState.location.pathname]);
+	const selectedSessionRef = useLatest(
+		sessions.find((session) => session.id === currentSessionId) ??
+			sessions.find((session) => session.pinned) ??
+			sessions[0] ??
+			null
+	);
 
 	const filterFn = useCallback(
 		(session: ConversationSession, query: string) =>
@@ -162,18 +168,6 @@ export const SessionsDialogContent = () => {
 			ignoreRef.current = true;
 		};
 	}, [fetchSessions]);
-
-	useEffect(() => {
-		pendingDeleteIdRef.current = pendingDeleteId;
-	}, [pendingDeleteId]);
-
-	useEffect(() => {
-		selectedSessionRef.current =
-			sessions.find((session) => session.id === currentSessionId) ??
-			sessions.find((session) => session.pinned) ??
-			sessions[0] ??
-			null;
-	}, [currentSessionId, sessions]);
 
 	const navigateToSession = useCallback(
 		(session: ConversationSession) => {

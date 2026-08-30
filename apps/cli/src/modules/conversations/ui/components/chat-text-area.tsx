@@ -29,6 +29,7 @@ import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config
 import { StatusBar } from "@/modules/prompt-settings/ui/prompt-status-bar";
 import { discoverSkills } from "@/modules/skills";
 import { useConfig } from "@/shared/config/config-provider";
+import { useLatest } from "@/shared/hooks/use-latest";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -139,9 +140,7 @@ export function ChatTextArea({
 			providerId: supportedModel.connectionProviderId,
 		}).length === 0;
 	const textAreaRef = useRef<TextareaRenderable>(null);
-	const commandEscapeRef = useRef<() => void>(() => undefined);
 	const ctrlCRef = useRef<() => boolean>(() => false);
-	const currentTextRef = useRef("");
 	const lastRecalledFilesRevisionRef = useRef(0);
 	const lastTextSyncRevisionRef = useRef(0);
 	const programmaticTextRef = useRef<string | null>(null);
@@ -240,6 +239,8 @@ export function ChatTextArea({
 		onTab: () => cycleAgent(registry?.selectableAgents ?? builtInAgents),
 		sessionPromptHistory,
 	});
+	const commandEscapeRef = useLatest(actions.onEscape);
+	const currentTextRef = useLatest(state.text);
 
 	const handleTextareaContentChange = useCallback(() => {
 		const textarea = textAreaRef.current;
@@ -681,8 +682,6 @@ export function ChatTextArea({
 		textAreaRef.current?.setText("");
 		pastedTextRef.current = [];
 	};
-	commandEscapeRef.current = actions.onEscape;
-	currentTextRef.current = state.text;
 	ctrlCRef.current = () => {
 		const textarea = textAreaRef.current;
 		const attachments = syncAttachments();

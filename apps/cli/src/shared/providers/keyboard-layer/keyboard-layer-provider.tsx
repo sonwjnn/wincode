@@ -8,6 +8,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { useLatest } from "@/shared/hooks/use-latest";
 
 type Responder = () => boolean;
 export type ToggleShortcut = "ctrl+o";
@@ -39,8 +40,7 @@ export function KeyboardLayerProvider({
 	children: React.ReactNode;
 }) {
 	const [stack, setStack] = useState<string[]>(["base"]);
-	const stackRef = useRef(stack);
-	stackRef.current = stack;
+	const stackRef = useLatest(stack);
 
 	const responders = useRef<Map<string, Responder>>(new Map());
 	const toggleHandlers = useRef(new Map<ToggleShortcut, Set<ToggleHandler>>());
@@ -173,8 +173,7 @@ export function useToggleShortcut(
 	enabled = true
 ) {
 	const { registerToggle } = useKeyboardLayer();
-	const toggleRef = useRef(toggle);
-	toggleRef.current = toggle;
+	const toggleRef = useLatest(toggle);
 
 	useEffect(() => {
 		if (!enabled) {

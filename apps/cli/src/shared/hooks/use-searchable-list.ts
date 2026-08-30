@@ -6,6 +6,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { useLatest } from "./use-latest";
 
 export function useSearchableList<T>(
 	items: readonly T[],
@@ -18,7 +19,7 @@ export function useSearchableList<T>(
 	const [searchValue, setSearchValue] = useState("");
 	const inputRef = useRef<InputRenderable>(null);
 	const initialSelectedIndexRef = useRef(initialSelectedIndex);
-	const selectedIndexRef = useRef(initialSelectedIndex);
+	const selectedIndexRef = useLatest(selectedIndex);
 	const scrollRef = useRef<ScrollBoxRenderable>(null);
 
 	const handleContentChange = useCallback(() => {
@@ -70,10 +71,6 @@ export function useSearchableList<T>(
 		},
 		[filtered.length]
 	);
-
-	useEffect(() => {
-		selectedIndexRef.current = selectedIndex;
-	}, [selectedIndex]);
 
 	useEffect(() => {
 		if (initialSelectedIndexRef.current === initialSelectedIndex) {

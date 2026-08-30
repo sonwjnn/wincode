@@ -43,6 +43,7 @@ import {
 } from "@/modules/skills";
 import { createToolGate, type ToolGate } from "@/modules/tool-gate/tool-gate";
 import { useConfig } from "@/shared/config/config-provider";
+import { useLatest } from "@/shared/hooks/use-latest";
 import { createApprovalQueue } from "@/shared/providers/approval/approval-queue";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import { getConversationStore } from "../storage/get-conversation-store";
@@ -297,12 +298,9 @@ export function useChat(
 	// The transport is memoized on a coarser dependency set than the Agent-scoped
 	// policy resolver, so read the latest resolver through a ref to avoid building
 	// a snapshot against a stale Agent's MCP policy.
-	const resolveMcpPolicyRef = useRef(resolveMcpPolicy);
-	resolveMcpPolicyRef.current = resolveMcpPolicy;
-	const resolvePermissionRef = useRef(resolvePermission);
-	resolvePermissionRef.current = resolvePermission;
-	const resolveResourceLimitsRef = useRef(resolveResourceLimits);
-	resolveResourceLimitsRef.current = resolveResourceLimits;
+	const resolveMcpPolicyRef = useLatest(resolveMcpPolicy);
+	const resolvePermissionRef = useLatest(resolvePermission);
+	const resolveResourceLimitsRef = useLatest(resolveResourceLimits);
 	const approvalAbortHandledRef = useRef(false);
 	const abortApprovalTurnRef = useRef<(toolCallId: string) => void>(
 		() => undefined

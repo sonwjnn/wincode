@@ -7,6 +7,7 @@ import {
 	applyFileMentionReplacement,
 	filterFileMentionOptions,
 } from "@/modules/file-mentions";
+import { useLatest } from "@/shared/hooks/use-latest";
 import { getConversationStore } from "../../storage/get-conversation-store";
 import { removeTriggerText } from "./escape-trigger";
 import {
@@ -81,10 +82,8 @@ export function useChatInputController({
 			getConversationStore().getPromptHistory()
 		);
 	}, [sessionPromptHistory]);
-	const selectedIndexRef = useRef(0);
-	selectedIndexRef.current = selectedIndex;
-	const onSubmitRef = useRef(onSubmit);
-	onSubmitRef.current = onSubmit;
+	const selectedIndexRef = useLatest(selectedIndex);
+	const onSubmitRef = useLatest(onSubmit);
 	const setProgrammaticText = useCallback(
 		(text: string, nextCursorOffset: number | null) => {
 			setTextValue(text);

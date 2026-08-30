@@ -2,6 +2,7 @@ import { TextAttributes } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { useEffect, useRef, useState } from "react";
 import { sanitizeText } from "@/shared/display-sanitize";
+import { useLatest } from "@/shared/hooks/use-latest";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -191,7 +192,7 @@ function ApprovalPendingPanel({
 	const [selectedIndex, setSelectedIndex] = useState(0);
 	const [confirmAlways, setConfirmAlways] = useState(false);
 	const [inputExpanded, setInputExpanded] = useState(false);
-	const selectedIndexRef = useRef(0);
+	const selectedIndexRef = useLatest(selectedIndex);
 	// Imperative keys can land before a render commits, so the armed confirm is
 	// also tracked in a ref like the selection itself.
 	const confirmAlwaysRef = useRef(false);
@@ -221,13 +222,6 @@ function ApprovalPendingPanel({
 			pop(confirmLayerId);
 		};
 	}, [confirmAlways, confirmLayerId, pop, push]);
-
-	// OpenTUI keyboard callbacks are imperative and several keys can land before
-	// it synchronously so enter always resolves against the latest selection even
-	// under rapid input.
-	useEffect(() => {
-		selectedIndexRef.current = selectedIndex;
-	}, [selectedIndex]);
 
 	const armConfirm = () => {
 		confirmAlwaysRef.current = true;
@@ -493,11 +487,7 @@ function ConfirmAlwaysOverlay({
 }) {
 	const { isTopLayer } = useKeyboardLayer();
 	const [selectedIndex, setSelectedIndex] = useState(0);
-	const selectedIndexRef = useRef(0);
-
-	useEffect(() => {
-		selectedIndexRef.current = selectedIndex;
-	}, [selectedIndex]);
+	const selectedIndexRef = useLatest(selectedIndex);
 
 	const activate = (index: number) => {
 		if (index === 0) {
