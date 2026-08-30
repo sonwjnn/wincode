@@ -8,6 +8,7 @@ export type PermissionAction =
 	| "write"
 	| "edit"
 	| "list"
+	| "glob"
 	| "grep"
 	| "shell"
 	| "skill"
@@ -75,6 +76,7 @@ export const PERMISSION_TOOL_ACTIONS = [
 	"read",
 	"edit",
 	"list",
+	"glob",
 	"grep",
 	"shell",
 	"skill",
@@ -91,6 +93,7 @@ export const STATIC_TOOL_PERMISSION_ACTIONS = {
 	write: "edit",
 	edit: "edit",
 	list: "list",
+	glob: "glob",
 	grep: "grep",
 	shell: "shell",
 } as const satisfies Record<CodingToolName, PermissionAction>;
@@ -136,6 +139,7 @@ export const DEFAULT_PERMISSION_RULES: PermissionRules = {
 	read: DEFAULT_READ_PERMISSION_RULES,
 	edit: "allow",
 	list: "allow",
+	glob: "allow",
 	grep: "allow",
 	// Shell defaults to permissive allow with shipped `rm *`/`sudo *` denies
 	// that users can override through config (ADR-0008).
@@ -154,8 +158,8 @@ export const DEFAULT_PERMISSION_RULES: PermissionRules = {
  *
  * The `*` deny only reaches MCP tools: static coding-tool gating consults the
  * exact `STATIC_TOOL_PERMISSION_ACTIONS` keys and never honors an action glob, so
- * Plan keeps its read, list, and grep tools while every discovered MCP tool is
- * denied unless a higher layer re-allows a specific logical name.
+ * Plan keeps its read, list, glob, and grep tools while every discovered MCP tool
+ * is denied unless a higher layer re-allows a specific logical name.
  */
 export const SHIPPED_AGENT_PERMISSION_RULES: Readonly<
 	Record<string, PermissionRules>

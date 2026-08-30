@@ -42,6 +42,7 @@ afterAll(() => {
 type MessagePart = CodingAgentUIMessage["parts"][number];
 type DynamicToolPart = Extract<MessagePart, { type: "dynamic-tool" }>;
 type GrepToolPart = Extract<MessagePart, { type: "tool-grep" }>;
+type GlobToolPart = Extract<MessagePart, { type: "tool-glob" }>;
 type ReadToolPart = Extract<MessagePart, { type: "tool-read" }>;
 const SPINNER_FRAME_REGEX = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/u;
 
@@ -976,6 +977,18 @@ describe("BotMessageContent", () => {
 		const frame = await renderFrame([part]);
 
 		expect(frame).toContain('✱ Grep "dynamic-tool" in packages/ai/src');
+	});
+	test("renders glob tools with the search style", async () => {
+		const part = {
+			input: { path: "packages/ai/src", pattern: "**/*.ts" },
+			output: { paths: [] },
+			state: "output-available",
+			toolCallId: "call-glob",
+			type: "tool-glob",
+		} satisfies GlobToolPart;
+		const frame = await renderFrame([part]);
+
+		expect(frame).toContain('✱ Glob "**/*.ts" in packages/ai/src');
 	});
 
 	test("sanitizes control characters in tool rows", async () => {

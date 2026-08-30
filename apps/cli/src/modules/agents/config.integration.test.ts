@@ -167,6 +167,7 @@ describe("configured Agents", () => {
 				"write",
 				"edit",
 				"list",
+				"glob",
 				"grep",
 				"shell",
 			]);
@@ -184,6 +185,7 @@ describe("configured Agents", () => {
 				"write",
 				"edit",
 				"list",
+				"glob",
 				"grep",
 				"shell",
 			]);

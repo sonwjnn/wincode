@@ -682,6 +682,7 @@ describe("layered permission visibility", () => {
 		expect(build?.visibleCodingTools).toEqual([
 			"read",
 			"list",
+			"glob",
 			"grep",
 			"shell",
 		]);
@@ -705,6 +706,7 @@ describe("layered permission visibility", () => {
 			"write",
 			"edit",
 			"list",
+			"glob",
 			"grep",
 		]);
 	});

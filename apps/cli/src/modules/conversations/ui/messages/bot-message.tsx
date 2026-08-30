@@ -84,7 +84,7 @@ const getToolResource = (part: ToolPart): string | undefined => {
 	if (part.type === "tool-shell") {
 		return typeof input.command === "string" ? input.command : undefined;
 	}
-	if (part.type === "tool-grep") {
+	if (part.type === "tool-grep" || part.type === "tool-glob") {
 		return typeof input.pattern === "string" ? input.pattern : undefined;
 	}
 	const path = typeof input.path === "string" ? input.path : undefined;
@@ -179,12 +179,12 @@ const formatStaticToolSummary = (
 			: "";
 	const pathSuffix = path ? ` ${path}` : "";
 	const pathOrCurrentDirectory = path || ".";
-	if (name === "grep") {
+	if (name === "grep" || name === "glob") {
 		const pattern = stripControlCharacters(
 			JSON.stringify(formatToolArgumentValue(input.pattern)),
 			MAX_TOOL_ARGUMENTS_LENGTH
 		);
-		return `✱ Grep ${pattern} in ${pathOrCurrentDirectory}`;
+		return `✱ ${formatToolName(name)} ${pattern} in ${pathOrCurrentDirectory}`;
 	}
 	if (name === "shell") {
 		const command = stripControlCharacters(

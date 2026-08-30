@@ -65,6 +65,11 @@ export const codingServerTools = {
 		inputSchema: codingToolDefinitions.list.inputSchema,
 		outputSchema: codingToolDefinitions.list.outputSchema,
 	}),
+	glob: tool({
+		description: codingToolDefinitions.glob.description,
+		inputSchema: codingToolDefinitions.glob.inputSchema,
+		outputSchema: codingToolDefinitions.glob.outputSchema,
+	}),
 	grep: tool({
 		description: codingToolDefinitions.grep.description,
 		inputSchema: codingToolDefinitions.grep.inputSchema,
