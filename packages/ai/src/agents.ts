@@ -4,7 +4,7 @@ import { type CodingToolName, codingToolNameSchema } from "./tools/schemas";
 
 export const MAX_AGENT_ID_LENGTH = 64;
 export const MAX_AGENT_INSTRUCTIONS_LENGTH = 12_000;
-const MAX_VISIBLE_CODING_TOOLS = 5;
+const MAX_VISIBLE_CODING_TOOLS = 6;
 export const AGENT_ID_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export const agentIdSchema = z
@@ -33,9 +33,9 @@ export const buildAgent = {
 	instructions: `Mode: BUILD.
 Purpose: implement requested code changes in the workspace.
 Use tools to inspect and modify files before answering about code.
-Prefer list, grep, and read before editing. Use edit for targeted changes to existing files. Use write for new files or intentional complete rewrites.`,
+Prefer glob, list, grep, and read before editing. Use edit for targeted changes to existing files. Use write for new files or intentional complete rewrites.`,
 	role: "primary",
-	visibleCodingTools: ["read", "write", "edit", "list", "grep"],
+	visibleCodingTools: ["read", "write", "edit", "list", "glob", "grep"],
 } as const satisfies AgentDefinition;
 
 export const planAgent = {
@@ -48,7 +48,7 @@ Do not modify files. Do not write files. Do not call edit or write tools.
 Use only read-only inspection tools to understand the workspace.
 Return a concrete plan, risks, and verification steps instead of implementing changes.`,
 	role: "primary",
-	visibleCodingTools: ["read", "list", "grep"],
+	visibleCodingTools: ["read", "list", "glob", "grep"],
 } as const satisfies AgentDefinition;
 
 export const builtInAgents = [buildAgent, planAgent] as const;

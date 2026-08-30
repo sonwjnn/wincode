@@ -7,6 +7,12 @@ export {
 	editOutputSchema,
 	editToolSchema,
 } from "./edit/schema";
+export type { GlobInput, GlobOutput } from "./glob/schema";
+export {
+	globInputSchema,
+	globOutputSchema,
+	globToolSchema,
+} from "./glob/schema";
 export type { GrepInput, GrepOutput } from "./grep/schema";
 export {
 	grepInputSchema,
@@ -51,6 +57,11 @@ import {
 	editOutputSchema,
 	editToolSchema,
 } from "./edit/schema";
+import {
+	globInputSchema,
+	globOutputSchema,
+	globToolSchema,
+} from "./glob/schema";
 import {
 	grepInputSchema,
 	grepOutputSchema,
@@ -107,6 +118,11 @@ export const codingToolDefinitions = {
 		inputSchema: listInputSchema,
 		outputSchema: listOutputSchema,
 	},
+	glob: {
+		description: globToolSchema.description,
+		inputSchema: globInputSchema,
+		outputSchema: globOutputSchema,
+	},
 	grep: {
 		description: grepToolSchema.description,
 		inputSchema: grepInputSchema,
@@ -125,6 +141,7 @@ export const codingToolDefinitions = {
 	>;
 	edit: CodingToolDefinition<typeof editInputSchema, typeof editOutputSchema>;
 	list: CodingToolDefinition<typeof listInputSchema, typeof listOutputSchema>;
+	glob: CodingToolDefinition<typeof globInputSchema, typeof globOutputSchema>;
 	grep: CodingToolDefinition<typeof grepInputSchema, typeof grepOutputSchema>;
 	shell: CodingToolDefinition<
 		typeof shellInputSchema,
@@ -139,6 +156,7 @@ export const codingToolNames = [
 	"write",
 	"edit",
 	"list",
+	"glob",
 	"grep",
 	"shell",
 ] as const satisfies readonly CodingToolName[];
@@ -173,6 +191,11 @@ export const codingToolSchemas = {
 		name: "list",
 		schema: codingToolDefinitions.list.inputSchema,
 	},
+	glob: {
+		description: codingToolDefinitions.glob.description,
+		name: "glob",
+		schema: codingToolDefinitions.glob.inputSchema,
+	},
 	grep: {
 		description: codingToolDefinitions.grep.description,
 		name: "grep",
@@ -196,6 +219,7 @@ export const codingToolSchemaList = [
 	codingToolSchemas.write,
 	codingToolSchemas.edit,
 	codingToolSchemas.list,
+	codingToolSchemas.glob,
 	codingToolSchemas.grep,
 	codingToolSchemas.shell,
 ] as const;

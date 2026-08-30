@@ -42,6 +42,7 @@ export const configuredAgentVisibleCodingTools = [
 	"write",
 	"edit",
 	"list",
+	"glob",
 	"grep",
 	"shell",
 ] as const satisfies readonly CodingToolName[];

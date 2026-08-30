@@ -469,7 +469,7 @@ const traverseDirectory = async (
 		includeSymlinks: true,
 		maxDepth: DIRECTORY_MAX_DEPTH,
 		path: traversalPath,
-		respectGitignore: true,
+		applyGitignore: true,
 	});
 	return { entries: traversal.entries, rootPath };
 };

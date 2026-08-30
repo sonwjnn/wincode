@@ -106,13 +106,13 @@ const planPrepared: PreparedAgentCall = {
 	variant: undefined,
 	resolvedAgent: {
 		instructions: "Plan without editing.",
-		visibleCodingTools: ["read", "list", "grep"],
+		visibleCodingTools: ["read", "list", "glob", "grep"],
 	},
 	hostedDescriptor: {
 		billingKind: "plan",
 		instructions: "Plan without editing.",
 		mcpTools: [],
-		visibleCodingTools: ["read", "list", "grep"],
+		visibleCodingTools: ["read", "list", "glob", "grep"],
 	},
 };
 
@@ -154,7 +154,7 @@ describe("prepareSendChatRequestBody", () => {
 				billingKind: "plan",
 				instructions: "Plan without editing.",
 				mcpTools: [],
-				visibleCodingTools: ["read", "list", "grep"],
+				visibleCodingTools: ["read", "list", "glob", "grep"],
 			},
 			messages: [privateAgentStripped(userMessage)],
 			model: "gemini-2.5-flash",
@@ -175,7 +175,7 @@ describe("prepareSendChatRequestBody", () => {
 				billingKind: "plan",
 				instructions: "Plan without editing.",
 				mcpTools: [],
-				visibleCodingTools: ["read", "list", "grep"],
+				visibleCodingTools: ["read", "list", "glob", "grep"],
 			},
 			messages: [
 				privateAgentStripped(userMessage),
@@ -200,13 +200,13 @@ describe("prepareSendChatRequestBody", () => {
 				agent: "build",
 				resolvedAgent: {
 					instructions: "Build safely.",
-					visibleCodingTools: ["read", "write", "edit", "list", "grep"],
+					visibleCodingTools: ["read", "write", "edit", "list", "glob", "grep"],
 				},
 				hostedDescriptor: {
 					billingKind: "build",
 					instructions: "Build safely.",
 					mcpTools: [],
-					visibleCodingTools: ["read", "write", "edit", "list", "grep"],
+					visibleCodingTools: ["read", "write", "edit", "list", "glob", "grep"],
 				},
 			})
 		).toEqual({
@@ -214,7 +214,7 @@ describe("prepareSendChatRequestBody", () => {
 				billingKind: "build",
 				instructions: "Build safely.",
 				mcpTools: [],
-				visibleCodingTools: ["read", "write", "edit", "list", "grep"],
+				visibleCodingTools: ["read", "write", "edit", "list", "glob", "grep"],
 			},
 			messages: [nextMessage],
 			model: "gemini-2.5-flash",
@@ -749,7 +749,7 @@ describe("createChatToolCallHandler", () => {
 		expect(approvalRequests).toHaveLength(1);
 		expect(approvalRequests[0]).toMatchObject({
 			description:
-				"Read a UTF-8 text file with numbered lines, or an existing directory as a compact two-level tree (directories first, twelve children max, omissions reported). Selectors :N, :N-M, :N+K, :N-, or comma-separated ranges address file lines or directory entries; omission notices do not consume positions. Existing literal paths take precedence. Preserve ~ paths.",
+				"Read a UTF-8 text file with numbered lines, or an existing directory as a compact two-level tree (directories first, twelve children max, omissions reported). Selectors :N, :N-M, :N+K, :N-, or comma-separated ranges address file lines or directory entries; omission notices do not consume positions. Existing literal paths take precedence. Preserve ~ paths; never guess an absolute home. If you are unsure of a file path, use glob first.",
 			identity: [
 				{ label: "tool", value: "read" },
 				{ label: "resource", value: ".env" },
@@ -1113,6 +1113,58 @@ describe("createChatToolCallHandler", () => {
 			toolCallId: "call-grep-deny",
 		});
 	});
+	test("gates glob against its requested path pattern", async () => {
+		await settleCall(
+			callWith(
+				{
+					input: { pattern: "src/**/*.ts" },
+					toolCallId: "call-glob-deny",
+					toolName: "glob",
+				},
+				{
+					permissionRef: {
+						current: createToolPermission({
+							glob: { "src/**/*.ts": "deny" },
+						}),
+					},
+					sandbox: createWorkspaceSandbox(process.cwd()),
+				}
+			)
+		);
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+		expect(addToolOutput).toHaveBeenCalledWith({
+			errorText: "Glob denied by policy: src/**/*.ts",
+			state: "output-error",
+			tool: "glob",
+			toolCallId: "call-glob-deny",
+		});
+	});
+	test("denies external glob scopes before approval", async () => {
+		const open = mock(() => undefined);
+		await settleCall(
+			callWith(
+				{
+					input: { path: "../outside", pattern: "*.ts" },
+					toolCallId: "call-glob-external",
+					toolName: "glob",
+				},
+				{
+					openApproval: open,
+					permissionRef: { current: createToolPermission() },
+					sandbox: createWorkspaceSandbox(process.cwd()),
+				}
+			)
+		);
+
+		expect(open).not.toHaveBeenCalled();
+		expect(staticToolCallHandler).not.toHaveBeenCalled();
+		expect(addToolOutput).toHaveBeenCalledWith({
+			errorText: "Glob path is outside the workspace: ../outside",
+			state: "output-error",
+			tool: "glob",
+			toolCallId: "call-glob-external",
+		});
+	});
 
 	test("asks before a write and runs after allow once", async () => {
 		const approvalRequests: ToolApprovalRequest[] = [];
@@ -1299,7 +1351,7 @@ describe("createChatToolCallHandler", () => {
 		expect(call?.errorText.length).toBeLessThan(2200);
 	});
 
-	test("allows write, edit, list, and grep by default without approval", async () => {
+	test("allows write, edit, list, glob, and grep by default without approval", async () => {
 		const calls = [
 			{
 				input: { content: "x", path: "notes.txt" },
@@ -1312,6 +1364,11 @@ describe("createChatToolCallHandler", () => {
 				toolName: "edit",
 			},
 			{ input: {}, toolCallId: "call-list-allow", toolName: "list" },
+			{
+				input: { pattern: "*.ts" },
+				toolCallId: "call-glob-allow",
+				toolName: "glob",
+			},
 			{
 				input: { pattern: "TODO" },
 				toolCallId: "call-grep-allow",

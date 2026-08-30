@@ -69,7 +69,7 @@ const discoverFileMentionOptions = (
 			includeDirectories: true,
 			includeFiles: true,
 			maxDepth: UNLIMITED_FILE_MENTION_DISCOVERY_DEPTH,
-			respectGitignore: true,
+			applyGitignore: true,
 		})
 		.then((result) =>
 			result.entries.map((entry) =>

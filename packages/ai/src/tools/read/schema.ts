@@ -17,7 +17,7 @@ export const readOutputSchema = z.object({
 
 export const readToolSchema = {
 	description:
-		"Read a UTF-8 text file with numbered lines, or an existing directory as a compact two-level tree (directories first, twelve children max, omissions reported). Selectors :N, :N-M, :N+K, :N-, or comma-separated ranges address file lines or directory entries; omission notices do not consume positions. Existing literal paths take precedence. Preserve ~ paths.",
+		"Read a UTF-8 text file with numbered lines, or an existing directory as a compact two-level tree (directories first, twelve children max, omissions reported). Selectors :N, :N-M, :N+K, :N-, or comma-separated ranges address file lines or directory entries; omission notices do not consume positions. Existing literal paths take precedence. Preserve ~ paths; never guess an absolute home. If you are unsure of a file path, use glob first.",
 	name: "read",
 	schema: readInputSchema,
 } as const;

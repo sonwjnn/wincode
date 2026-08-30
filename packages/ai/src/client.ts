@@ -151,6 +151,16 @@ export const handleCodingAgentToolCall =
 					toolCallId: toolCall.toolCallId,
 				});
 				return;
+			case "glob":
+				await runToolCall({
+					addToolOutput,
+					input: toolCall.input,
+					run: codingToolRunners.glob,
+					runnerOptions,
+					tool: "glob",
+					toolCallId: toolCall.toolCallId,
+				});
+				return;
 
 			case "grep":
 				await runToolCall({

@@ -23,6 +23,11 @@ export type ToolResourceLimits = {
 		readonly maxEntries: number;
 		readonly maxOutputBytes: number;
 	};
+	readonly glob: {
+		readonly maxCandidates: number;
+		readonly maxDurationMs: number;
+		readonly maxOutputBytes: number;
+	};
 	readonly grep: {
 		readonly maxDepth: number;
 		readonly maxFileBytes: number;
@@ -68,6 +73,11 @@ export const TOOL_RESOURCE_LIMITS = {
 			maxEntries: 10_000,
 			maxOutputBytes: 4000,
 		},
+		glob: {
+			maxCandidates: 10_000,
+			maxDurationMs: 5000,
+			maxOutputBytes: 16 * 1024,
+		},
 		profile: "standard",
 		read: {
 			maxDirectoryOutputBytes: 50 * 1024,
@@ -100,6 +110,11 @@ export const TOOL_RESOURCE_LIMITS = {
 			maxEntries: 50_000,
 			maxOutputBytes: 16 * 1024,
 		},
+		glob: {
+			maxCandidates: 10_000,
+			maxDurationMs: 5000,
+			maxOutputBytes: 32 * 1024,
+		},
 		profile: "extended",
 		read: {
 			maxDirectoryOutputBytes: 128 * 1024,
@@ -131,6 +146,11 @@ export const TOOL_RESOURCE_LIMITS = {
 			maxDepth: 32,
 			maxEntries: 200_000,
 			maxOutputBytes: 64 * 1024,
+		},
+		glob: {
+			maxCandidates: 10_000,
+			maxDurationMs: 5000,
+			maxOutputBytes: 128 * 1024,
 		},
 		profile: "deep",
 		read: {

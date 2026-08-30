@@ -298,7 +298,7 @@ describe("chat transport", () => {
 				agent: {
 					billingKind: "build",
 					mcpTools: manifest,
-					visibleCodingTools: ["read", "write", "edit", "list", "grep"],
+					visibleCodingTools: ["read", "write", "edit", "list", "glob", "grep"],
 				},
 			});
 		} finally {

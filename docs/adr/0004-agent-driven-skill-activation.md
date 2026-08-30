@@ -71,10 +71,10 @@ Status: accepted
   loaded, rejected, or failed state. Rejecting an Agent load does not abort the turn but
   prevents retrying that Skill during the same execution.
 - The tool result includes the absolute Skill base directory and a sample of bundled
-  resource paths. Agents use existing read, list, grep, write, edit, and shell tools for
-  those resources. External paths require `external_directory` permission in addition
-  to the underlying operation permission; it defaults to `ask`, uses canonical absolute
-  paths, and evaluates resolved symlink targets.
+  resource paths. Agents use existing glob, read, list, grep, write, edit, and shell
+  tools for those resources. External paths require `external_directory` permission in
+  addition to the underlying operation permission; it defaults to `ask`, uses canonical
+  absolute paths, and evaluates resolved symlink targets.
 - Validation caps Skill names at 64 characters, descriptions at 1,024 characters
   (matching the frontmatter contract), bodies at 12,000 characters, sampled resource
   paths at 1,024 characters each, and resource samples at ten paths. The

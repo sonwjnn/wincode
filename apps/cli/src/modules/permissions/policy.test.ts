@@ -135,6 +135,7 @@ describe("manual approval safety ceiling", () => {
 
 		expect(permission.decide("write", "src/app.ts")).toBe("ask");
 		expect(permission.decide("list", ".")).toBe("ask");
+		expect(permission.decide("glob", "*.ts")).toBe("ask");
 		expect(permission.decide("read", ".env")).toBe("deny");
 	});
 
@@ -223,7 +224,7 @@ describe("createToolPermission defaults", () => {
 	});
 
 	test("allows every action by default", () => {
-		for (const action of ["write", "edit", "list", "grep"] as const) {
+		for (const action of ["write", "edit", "list", "glob", "grep"] as const) {
 			expect(permission.decide(action, "anything")).toBe("allow");
 		}
 	});
@@ -292,12 +293,13 @@ describe("createToolPermission configured rules", () => {
 });
 
 describe("STATIC_TOOL_PERMISSION_ACTIONS", () => {
-	test("routes the write tool through the edit action and shell through shell", () => {
+	test("routes read-only discovery through its own action", () => {
 		expect(STATIC_TOOL_PERMISSION_ACTIONS).toEqual({
 			read: "read",
 			write: "edit",
 			edit: "edit",
 			list: "list",
+			glob: "glob",
 			grep: "grep",
 			shell: "shell",
 		});
@@ -479,32 +481,32 @@ describe("resolveVisibleCodingTools", () => {
 		{
 			name: "shows every tool with no denies",
 			rules: { read: "allow", edit: "allow", list: "allow", grep: "allow" },
-			visible: ["read", "write", "edit", "list", "grep", "shell"],
+			visible: ["read", "write", "edit", "list", "glob", "grep", "shell"],
 		},
 		{
 			name: "hides write and edit when edit is unconditionally denied",
 			rules: { edit: "deny" },
-			visible: ["read", "list", "grep", "shell"],
+			visible: ["read", "list", "glob", "grep", "shell"],
 		},
 		{
 			name: "hides only read when read is unconditionally denied",
 			rules: { read: "deny" },
-			visible: ["write", "edit", "list", "grep", "shell"],
+			visible: ["write", "edit", "list", "glob", "grep", "shell"],
 		},
 		{
 			name: "keeps a granular edit map visible",
 			rules: { edit: { "src/**": "deny" } },
-			visible: ["read", "write", "edit", "list", "grep", "shell"],
+			visible: ["read", "write", "edit", "list", "glob", "grep", "shell"],
 		},
 		{
 			name: "keeps an ask-gated tool visible",
 			rules: { list: "ask" },
-			visible: ["read", "write", "edit", "list", "grep", "shell"],
+			visible: ["read", "write", "edit", "list", "glob", "grep", "shell"],
 		},
 		{
 			name: "hides shell when the shell action is unconditionally denied",
 			rules: { shell: "deny" },
-			visible: ["read", "write", "edit", "list", "grep"],
+			visible: ["read", "write", "edit", "list", "glob", "grep"],
 		},
 	];
 

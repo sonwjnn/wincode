@@ -109,12 +109,14 @@ const STATIC_TOOL_LABELS = {
 	write: "Write",
 	edit: "Edit",
 	list: "List",
+	glob: "Glob",
 	grep: "Grep",
 	shell: "Shell",
 } as const satisfies Record<CodingToolName, string>;
 
-// The workspace-relative POSIX resource that `list` gates against when no path
-// is supplied and the sandbox canonicalizes the workspace root to an empty path.
+// The workspace-relative POSIX resource that path-based discovery tools gate
+// against when no path is supplied and the sandbox canonicalizes the workspace
+// root to an empty path.
 const WORKSPACE_ROOT_RESOURCE = ".";
 
 const isCodingToolName = (name: string): name is CodingToolName =>
@@ -135,7 +137,7 @@ type GateResource =
 /**
  * Resolves the Permission resource for a static coding tool call. Read, write,
  * edit, and list gate against a filesystem path (list defaults to the workspace
- * root); grep gates against its requested regular expression verbatim, and its
+ * root); grep and glob gate against their search pattern verbatim, and their
  * optional path is carried for the external-directory boundary. A tool call
  * missing its required input is left ungated so the runner reports the
  * validation error.
@@ -144,7 +146,7 @@ const resolveGateResource = (
 	tool: CodingToolName,
 	input: unknown
 ): GateResource | undefined => {
-	if (tool === "grep") {
+	if (tool === "grep" || tool === "glob") {
 		const pattern = getStringField(input, "pattern");
 		if (!pattern) {
 			return;
@@ -507,8 +509,9 @@ export const createToolGate = ({
 				expandHomeInPath(pathInput),
 				sandbox
 			);
-			// Grep gates its operation against the regex; its path only decides the
-			// external boundary. Other path tools gate against the canonical path.
+			// Grep and glob gate their operation against the search pattern; the
+			// optional path only decides the external boundary. Other path tools
+			// gate against the canonical path.
 			const resource =
 				gateResource.pattern ??
 				(canonical === "" ? WORKSPACE_ROOT_RESOURCE : canonical);
@@ -532,9 +535,16 @@ export const createToolGate = ({
 					staticRejectionText(label, gateResource.pattern ?? resource, feedback)
 			);
 		} catch {
-			// The path is outside the workspace: the external_directory boundary
-			// applies in addition to the operation policy.
+			// Glob results are workspace-relative, so an external scope cannot
+			// produce a valid result. Deny it here instead of approving a call the
+			// runner cannot execute inside the workspace.
 			const externalPathInput = pathInput;
+			if (tool === "glob") {
+				return {
+					errorText: `${label} path is outside the workspace: ${externalPathInput}`,
+					kind: "deny",
+				};
+			}
 			let resource: string;
 			try {
 				resource = await canonicalizeExternalPath(

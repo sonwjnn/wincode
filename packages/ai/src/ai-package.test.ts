@@ -51,6 +51,7 @@ describe("@wincode/ai shared entry", () => {
 			"write",
 			"edit",
 			"list",
+			"glob",
 			"grep",
 			"shell",
 		]);
@@ -69,6 +70,7 @@ describe("@wincode/ai shared entry", () => {
 			"write",
 			"edit",
 			"list",
+			"glob",
 			"grep",
 			"shell",
 		]);
@@ -437,7 +439,15 @@ describe("@wincode/ai shared entry", () => {
 		expect(codingToolNameSchema.safeParse("shell").success).toBe(true);
 		const descriptor = {
 			...buildAgent,
-			visibleCodingTools: ["read", "write", "edit", "list", "grep", "shell"],
+			visibleCodingTools: [
+				"read",
+				"write",
+				"edit",
+				"list",
+				"glob",
+				"grep",
+				"shell",
+			],
 		};
 		expect(hostedAgentDescriptorSchema.safeParse(descriptor).success).toBe(
 			false
@@ -483,9 +493,15 @@ describe("@wincode/ai shared entry", () => {
 			"write",
 			"edit",
 			"list",
+			"glob",
 			"grep",
 		]);
-		expect(planAgent.visibleCodingTools).toEqual(["read", "list", "grep"]);
+		expect(planAgent.visibleCodingTools).toEqual([
+			"read",
+			"list",
+			"glob",
+			"grep",
+		]);
 	});
 
 	test("composes immutable base and Agent-specific instructions", () => {
@@ -520,6 +536,7 @@ describe("@wincode/ai server and client entries", () => {
 			"write",
 			"edit",
 			"list",
+			"glob",
 			"grep",
 		]);
 	});
@@ -557,6 +574,37 @@ describe("@wincode/ai server and client entries", () => {
 				state: "output-error",
 				tool: "write",
 				toolCallId: "call_1",
+			},
+		]);
+	});
+	test("Agent tool visibility executes glob discovery", async () => {
+		const emittedOutputs: Parameters<
+			ChatAddToolOutputFunction<CodingAgentUIMessage>
+		>[0][] = [];
+		const addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage> = (
+			output
+		) => {
+			emittedOutputs.push(output);
+		};
+		const toolCallOptions = {
+			toolCall: {
+				dynamic: false,
+				input: { pattern: "packages/ai/package.json" },
+				toolCallId: "call_glob",
+				toolName: "glob",
+			},
+		} satisfies Parameters<ChatOnToolCallCallback<CodingAgentUIMessage>>[0];
+
+		await handleCodingAgentToolCall(
+			addToolOutput,
+			planAgent.visibleCodingTools
+		)(toolCallOptions);
+
+		expect(emittedOutputs).toEqual([
+			{
+				output: { paths: ["packages/ai/package.json"] },
+				tool: "glob",
+				toolCallId: "call_glob",
 			},
 		]);
 	});

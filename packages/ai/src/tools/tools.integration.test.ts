@@ -6,13 +6,16 @@ import {
 	readFileSync,
 	readlinkSync,
 	rmSync,
+	statSync,
 	symlinkSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { createWorkspaceSandbox, resolveWithinWorkspace } from "../workspace";
 import { runEditTool } from "./edit/runner";
+import { createGlobRunner, runGlobTool } from "./glob/runner";
 import { RipgrepUnavailableError } from "./grep/ripgrep";
 import { createGrepRunner, runGrepTool } from "./grep/runner";
 import { runListTool } from "./list/runner";
@@ -679,6 +682,11 @@ describe("tool runners", () => {
 				{ path: `${sandboxRelPath}/gamma.txt`, type: "file" },
 			],
 		});
+		await expect(
+			runGlobTool({ pattern: "*.txt", path: sandboxRelPath })
+		).resolves.toEqual({
+			paths: [`${sandboxRelPath}/gamma.txt`, `${sandboxRelPath}/alpha.txt`],
+		});
 
 		await expect(
 			runGrepTool({ pattern: "beta", path: sandboxRelPath })
@@ -691,6 +699,205 @@ describe("tool runners", () => {
 				},
 			],
 		});
+	});
+	test("scopes glob matches and treats no matches as success", async () => {
+		const sourcePath = path.join(sandboxPath, "src");
+		mkdirSync(sourcePath);
+		writeFileSync(path.join(sourcePath, "keep.ts"), "keep");
+		writeFileSync(path.join(sandboxPath, "other.ts"), "other");
+
+		await expect(
+			runGlobTool({ path: `${sandboxRelPath}/src`, pattern: "*.ts" })
+		).resolves.toEqual({
+			paths: [`${sandboxRelPath}/src/keep.ts`],
+		});
+		await expect(
+			runGlobTool({ path: `${sandboxRelPath}/src`, pattern: "*.tsx" })
+		).resolves.toEqual({ paths: [] });
+	});
+	test("controls hidden and ignored discovery without entering .git", async () => {
+		for (const directory of [".git", ".hidden", "ignored", "node_modules"]) {
+			mkdirSync(path.join(sandboxPath, directory));
+		}
+		writeFileSync(path.join(sandboxPath, ".gitignore"), "ignored/\n");
+		writeFileSync(path.join(sandboxPath, "visible.txt"), "visible");
+		writeFileSync(path.join(sandboxPath, ".git", "metadata.txt"), "metadata");
+		writeFileSync(path.join(sandboxPath, ".hidden", "secret.txt"), "secret");
+		writeFileSync(
+			path.join(sandboxPath, "ignored", "generated.txt"),
+			"generated"
+		);
+		writeFileSync(
+			path.join(sandboxPath, "node_modules", "dependency.txt"),
+			"dependency"
+		);
+
+		const input = { path: sandboxRelPath, pattern: "**/*.txt" };
+		await expect(runGlobTool(input)).resolves.toEqual({
+			paths: [`${sandboxRelPath}/visible.txt`],
+		});
+		const hiddenResult = await runGlobTool({ ...input, includeHidden: true });
+		expect(hiddenResult.paths).toHaveLength(2);
+		expect(hiddenResult.paths).toEqual(
+			expect.arrayContaining([
+				`${sandboxRelPath}/.hidden/secret.txt`,
+				`${sandboxRelPath}/visible.txt`,
+			])
+		);
+		const ignoredResult = await runGlobTool({
+			...input,
+			includeIgnored: true,
+			includeHidden: true,
+		});
+		expect(ignoredResult.paths).toHaveLength(4);
+		expect(ignoredResult.paths).toEqual(
+			expect.arrayContaining([
+				`${sandboxRelPath}/.hidden/secret.txt`,
+				`${sandboxRelPath}/ignored/generated.txt`,
+				`${sandboxRelPath}/node_modules/dependency.txt`,
+				`${sandboxRelPath}/visible.txt`,
+			])
+		);
+		await expect(
+			runGlobTool({
+				...input,
+				includeIgnored: true,
+				includeHidden: true,
+				path: `${sandboxRelPath}/.git`,
+			})
+		).resolves.toEqual({ paths: [] });
+	});
+	test("orders glob files by mtime and then path", async () => {
+		const files = ["old.txt", "tie-b.txt", "tie-a.txt", "new.txt"];
+		for (const filename of files) {
+			writeFileSync(path.join(sandboxPath, filename), filename);
+		}
+		utimesSync(path.join(sandboxPath, "old.txt"), 1000, 1000);
+		utimesSync(path.join(sandboxPath, "tie-b.txt"), 2000, 2000);
+		utimesSync(path.join(sandboxPath, "tie-a.txt"), 2000, 2000);
+		utimesSync(path.join(sandboxPath, "new.txt"), 3000, 3000);
+
+		await expect(
+			runGlobTool({ path: sandboxRelPath, pattern: "*.txt" })
+		).resolves.toEqual({
+			paths: [
+				`${sandboxRelPath}/new.txt`,
+				`${sandboxRelPath}/tie-a.txt`,
+				`${sandboxRelPath}/tie-b.txt`,
+				`${sandboxRelPath}/old.txt`,
+			],
+		});
+	});
+	test("reports invalid glob patterns clearly", async () => {
+		await expect(
+			runGlobTool({ path: sandboxRelPath, pattern: "[" })
+		).rejects.toThrow("Invalid glob pattern");
+	});
+	test("surfaces glob backend failures without a fallback", async () => {
+		const runner = createGlobRunner({
+			search: async () => {
+				throw new Error("ripgrep backend failed");
+			},
+		});
+
+		await expect(
+			runner({ path: sandboxRelPath, pattern: "*.txt" })
+		).rejects.toThrow("ripgrep backend failed");
+	});
+	test("omits disappeared files and directories from glob results", async () => {
+		const keepPath = path.join(sandboxPath, "keep.txt");
+		writeFileSync(keepPath, "keep");
+		writeFileSync(path.join(sandboxPath, "gone.txt"), "gone");
+		mkdirSync(path.join(sandboxPath, "directory"));
+		const runner = createGlobRunner({
+			search: async () => ({
+				paths: [
+					`${sandboxRelPath}/gone.txt`,
+					`${sandboxRelPath}/directory`,
+					`${sandboxRelPath}/keep.txt`,
+				],
+			}),
+			statFile: async (candidatePath) => {
+				if (candidatePath.endsWith("gone.txt")) {
+					throw new Error("gone");
+				}
+				return statSync(candidatePath);
+			},
+		});
+
+		await expect(
+			runner({ path: sandboxRelPath, pattern: "*.txt" })
+		).resolves.toEqual({
+			paths: [`${sandboxRelPath}/keep.txt`],
+		});
+	});
+	test("reports result-limit truncation and keeps newest files", async () => {
+		for (const filename of ["old.txt", "middle.txt", "new.txt"]) {
+			writeFileSync(path.join(sandboxPath, filename), filename);
+		}
+		utimesSync(path.join(sandboxPath, "old.txt"), 1000, 1000);
+		utimesSync(path.join(sandboxPath, "middle.txt"), 2000, 2000);
+		utimesSync(path.join(sandboxPath, "new.txt"), 3000, 3000);
+
+		await expect(
+			runGlobTool({ limit: 2, path: sandboxRelPath, pattern: "*.txt" })
+		).resolves.toEqual({
+			paths: [`${sandboxRelPath}/new.txt`, `${sandboxRelPath}/middle.txt`],
+			truncated: true,
+		});
+	});
+
+	test("reports candidate and serialized-byte truncation", async () => {
+		const candidateRunner = createGlobRunner({
+			search: async () => ({
+				paths: [`${sandboxRelPath}/candidate.txt`],
+				truncated: true,
+			}),
+		});
+		writeFileSync(path.join(sandboxPath, "candidate.txt"), "candidate");
+		await expect(
+			candidateRunner({ path: sandboxRelPath, pattern: "*.txt" })
+		).resolves.toEqual({
+			paths: [`${sandboxRelPath}/candidate.txt`],
+			truncated: true,
+		});
+
+		const byteLimits = getToolResourceLimits("standard");
+		const byteRunner = createGlobRunner({
+			search: async () => ({
+				paths: [`${sandboxRelPath}/candidate.txt`],
+			}),
+		});
+		await expect(
+			byteRunner(
+				{ path: sandboxRelPath, pattern: "*.txt" },
+				{
+					resourceLimits: {
+						...byteLimits,
+						glob: { ...byteLimits.glob, maxOutputBytes: 16 },
+					},
+				}
+			)
+		).resolves.toEqual({ paths: [], truncated: true });
+	});
+	test("rejects glob scopes outside the workspace", async () => {
+		await expect(
+			runGlobTool({ path: outsidePath, pattern: "*" })
+		).rejects.toThrow(`Path escapes workspace: ${outsidePath}`);
+		await expect(
+			runGlobTool({ path: "../../etc", pattern: "*" })
+		).rejects.toThrow("Path escapes workspace: ../../etc");
+
+		const outsideFile = path.join(outsidePath, "outside.txt");
+		writeFileSync(outsideFile, "outside");
+		symlinkSync(outsideFile, path.join(sandboxPath, "outside-link.txt"));
+		await expect(
+			runGlobTool({
+				includeHidden: true,
+				path: sandboxRelPath,
+				pattern: "*.txt",
+			})
+		).resolves.toEqual({ paths: [] });
 	});
 	test("finds setUserLocale when a model sends the ripgrep line flag", async () => {
 		writeFileSync(path.join(sandboxPath, "locale.ts"), "setUserLocale\n");

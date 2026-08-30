@@ -83,13 +83,21 @@ describe("prepareAgentCall", () => {
 		const buildAgent = registry.agents.find(({ id }) => id === "build");
 		expect(prepared.resolvedAgent).toEqual({
 			instructions: buildAgent?.instructions ?? "",
-			visibleCodingTools: ["read", "write", "edit", "list", "grep", "shell"],
+			visibleCodingTools: [
+				"read",
+				"write",
+				"edit",
+				"list",
+				"glob",
+				"grep",
+				"shell",
+			],
 		});
 		expect(prepared.hostedDescriptor).toEqual({
 			billingKind: "build",
 			instructions: prepared.resolvedAgent.instructions,
 			mcpTools: [],
-			visibleCodingTools: ["read", "write", "edit", "list", "grep"],
+			visibleCodingTools: ["read", "write", "edit", "list", "glob", "grep"],
 		});
 	});
 
@@ -128,6 +136,7 @@ describe("prepareAgentCall", () => {
 			"write",
 			"edit",
 			"list",
+			"glob",
 			"grep",
 			"shell",
 		]);

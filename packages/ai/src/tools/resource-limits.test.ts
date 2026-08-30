@@ -27,9 +27,15 @@ describe("tool resource profiles", () => {
 		expect(standard.read.maxOutputBytes).toBe(6000);
 		expect(standard.read.maxDirectoryOutputBytes).toBe(50 * 1024);
 		expect(standard.grep.maxMatches).toBe(1000);
+		expect(standard.glob.maxCandidates).toBe(10_000);
+		expect(standard.glob.maxDurationMs).toBe(5000);
+		expect(standard.glob.maxOutputBytes).toBe(16 * 1024);
 		expect(standard.shell.maxTimeoutSeconds).toBe(300);
 		expect(extended.read.maxOutputBytes).toBeGreaterThan(
 			standard.read.maxOutputBytes
+		);
+		expect(extended.glob.maxOutputBytes).toBeGreaterThan(
+			standard.glob.maxOutputBytes
 		);
 		expect(deep.read.maxOutputBytes).toBeGreaterThan(
 			extended.read.maxOutputBytes

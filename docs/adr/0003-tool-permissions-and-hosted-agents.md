@@ -51,9 +51,9 @@ Status: accepted
   canonical absolute path. User-initiated file mentions, config loading, and Custom
   Commands remain outside Tool Permission. See ADR-0004 for the Skill-specific boundary.
 - Filesystem resources are canonical workspace-relative POSIX paths. Grep uses its
-  regex as the resource; MCP tools use `*`. MCP permission actions use OpenCode-style
-  logical `<sanitizedServer>_<sanitizedTool>` names while collision-safe hashed names
-  remain an internal dispatch detail.
+  regex and glob uses its path pattern as the resource; MCP tools use `*`. MCP
+  permission actions use OpenCode-style logical `<sanitizedServer>_<sanitizedTool>` names
+  while collision-safe hashed names remain an internal dispatch detail.
 - Unmatched action globs remain active and emit non-fatal diagnostics. They may match a
   future or temporarily unavailable tool. Invalid global policy applies a manual-only
   all-ask safety ceiling while preserving denies; invalid built-in Agent patches use
@@ -68,7 +68,7 @@ Status: accepted
   `auto` indicator while enabled.
 - Skill access defaults to `allow`; external-directory access defaults to `ask`.
   External access composes with, rather than replaces, the permission for the underlying
-  read, list, grep, write, edit, or shell operation. Targets are canonicalized and
+  read, list, glob, grep, write, edit, or shell operation. Targets are canonicalized and
   symlinks resolved before evaluation. Process-scoped `always` grants use exact Skill
   names or canonical parent-directory globs.
 - Hosted request validation bounds Agent instructions and tool manifests. Full composed

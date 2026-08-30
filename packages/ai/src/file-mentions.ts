@@ -123,6 +123,7 @@ const restoreModelParts = (parts: CodingAgentModelUIMessage["parts"]) => {
 			case "step-start":
 			case "text":
 			case "tool-edit":
+			case "tool-glob":
 			case "tool-grep":
 			case "tool-list":
 			case "tool-read":

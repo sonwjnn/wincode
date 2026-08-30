@@ -1,6 +1,7 @@
 // biome-ignore-all lint/performance/noBarrelFile: Node-only runner entry point.
 
 import { runEditTool } from "./edit/runner";
+import { runGlobTool } from "./glob/runner";
 import { runGrepTool } from "./grep/runner";
 import { runListTool } from "./list/runner";
 import { runReadTool } from "./read/runner";
@@ -14,6 +15,7 @@ import { runShellTool } from "./shell/runner";
 import { runWriteTool } from "./write/runner";
 
 export { runEditTool } from "./edit/runner";
+export { runGlobTool } from "./glob/runner";
 export { runGrepTool } from "./grep/runner";
 export { runListTool } from "./list/runner";
 export { runReadTool } from "./read/runner";
@@ -35,6 +37,7 @@ export const codingToolRunners = {
 	write: runWriteTool,
 	edit: runEditTool,
 	list: runListTool,
+	glob: runGlobTool,
 	grep: runGrepTool,
 	shell: runShellTool,
 } satisfies CodingToolRunnerMap;

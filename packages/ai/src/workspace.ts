@@ -71,7 +71,7 @@ export type WorkspaceTraversalOptions = {
 	/** Hides dotfiles and dot-directories from discovery. */
 	hideDotfiles?: boolean;
 	/** Applies the workspace-root and nested `.gitignore` rules. */
-	respectGitignore?: boolean;
+	applyGitignore?: boolean;
 	/** Allows an explicitly selected ignored root to be inspected. */
 	allowIgnoredRoot?: boolean;
 };
@@ -163,7 +163,7 @@ const isGitignoredPath = (
 	type: WorkspaceTraversalEntry["type"],
 	context: TraversalContext
 ) => {
-	if (!context.respectGitignore) {
+	if (!context.applyGitignore) {
 		return false;
 	}
 
@@ -347,7 +347,7 @@ const collectWorkspaceEntries = async (
 		return;
 	}
 
-	const localIgnoreRules = context.respectGitignore
+	const localIgnoreRules = context.applyGitignore
 		? await context.loadIgnoreRules(directoryPath)
 		: null;
 	if (localIgnoreRules) {
@@ -463,13 +463,13 @@ export const createWorkspaceSandbox = (
 			maxEntries,
 			path: inputPath,
 			hideDotfiles = false,
-			respectGitignore = false,
+			applyGitignore = false,
 			allowIgnoredRoot = false,
 		}: WorkspaceTraversalOptions) => {
 			const startPath = await policy.resolveExistingPath(inputPath ?? ".");
 			const context: TraversalContext = {
 				entries: [],
-				ignoreRules: respectGitignore
+				ignoreRules: applyGitignore
 					? await loadAncestorIgnoreRules(startPath)
 					: [],
 				includeDirectories,
@@ -479,7 +479,7 @@ export const createWorkspaceSandbox = (
 				maxDepth,
 				maxEntries,
 				policy,
-				respectGitignore,
+				applyGitignore,
 				hideDotfiles,
 				allowIgnoredRoot,
 				truncated: false,
