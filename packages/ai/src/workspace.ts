@@ -67,7 +67,7 @@ export type WorkspaceTraversalOptions = {
 	maxEntries?: number;
 	path?: string;
 	/** Applies the workspace-root and nested `.gitignore` rules. */
-	respectGitignore?: boolean;
+	applyGitignore?: boolean;
 };
 
 export type WorkspaceTraversalResult = {
@@ -157,7 +157,7 @@ const isGitignoredPath = (
 	type: WorkspaceTraversalEntry["type"],
 	context: TraversalContext
 ) => {
-	if (!context.respectGitignore) {
+	if (!context.applyGitignore) {
 		return false;
 	}
 
@@ -306,7 +306,7 @@ const collectWorkspaceEntries = async (
 		return;
 	}
 
-	const localIgnoreRules = context.respectGitignore
+	const localIgnoreRules = context.applyGitignore
 		? await context.loadIgnoreRules(directoryPath)
 		: null;
 	if (localIgnoreRules) {
@@ -416,12 +416,12 @@ export const createWorkspaceSandbox = (
 			maxDepth,
 			maxEntries,
 			path: inputPath,
-			respectGitignore = false,
+			applyGitignore = false,
 		}: WorkspaceTraversalOptions) => {
 			const startPath = await policy.resolveExistingPath(inputPath ?? ".");
 			const context: TraversalContext = {
 				entries: [],
-				ignoreRules: respectGitignore
+				ignoreRules: applyGitignore
 					? await loadAncestorIgnoreRules(startPath)
 					: [],
 				includeDirectories,
@@ -430,7 +430,7 @@ export const createWorkspaceSandbox = (
 				maxDepth,
 				maxEntries,
 				policy,
-				respectGitignore,
+				applyGitignore,
 				truncated: false,
 			};
 

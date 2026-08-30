@@ -121,7 +121,7 @@ describe("workspace policy", () => {
 			includeDirectories: true,
 			includeFiles: true,
 			maxDepth: 2,
-			respectGitignore: true,
+			applyGitignore: true,
 		});
 		const paths = result.entries.map((entry) => entry.relativePath);
 
@@ -144,7 +144,7 @@ describe("workspace policy", () => {
 			includeFiles: true,
 			maxDepth: 1,
 			path: "nested",
-			respectGitignore: true,
+			applyGitignore: true,
 		});
 		const paths = result.entries.map((entry) => entry.relativePath);
 
