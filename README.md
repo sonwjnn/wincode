@@ -46,7 +46,7 @@ apps/
 └── web/       # TanStack Start SPA (Cloudflare Workers) — dashboard & auth
 
 packages/
-├── ai/        # AI SDK provider adapters + shared agent tools (read/write/edit/grep/list)
+├── ai/        # AI SDK provider adapters + shared agent tools (read/write/edit/glob/grep)
 ├── auth/      # Better Auth configuration
 ├── billing/   # Provider-agnostic billing/usage domain logic
 ├── db/        # Drizzle schema + Neon Postgres client

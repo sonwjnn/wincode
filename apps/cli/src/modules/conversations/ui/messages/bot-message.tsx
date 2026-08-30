@@ -88,7 +88,7 @@ const getToolResource = (part: ToolPart): string | undefined => {
 		return typeof input.pattern === "string" ? input.pattern : undefined;
 	}
 	const path = typeof input.path === "string" ? input.path : undefined;
-	return path ?? (part.type === "tool-list" ? "." : undefined);
+	return path;
 };
 
 /**
@@ -201,9 +201,6 @@ const formatStaticToolSummary = (
 	}
 	if (name === "edit") {
 		return `${isRunning ? "" : "→ "}Edit${pathSuffix}`;
-	}
-	if (name === "list") {
-		return `${isRunning ? "" : "→ "}List ${pathOrCurrentDirectory}`;
 	}
 	return `✱ ${formatToolName(name)} ${formatToolArgumentValue(part.input)}`;
 };

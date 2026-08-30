@@ -108,7 +108,6 @@ const STATIC_TOOL_LABELS = {
 	read: "Read",
 	write: "Write",
 	edit: "Edit",
-	list: "List",
 	glob: "Glob",
 	grep: "Grep",
 	shell: "Shell",
@@ -136,11 +135,10 @@ type GateResource =
 
 /**
  * Resolves the Permission resource for a static coding tool call. Read, write,
- * edit, and list gate against a filesystem path (list defaults to the workspace
- * root); grep and glob gate against their search pattern verbatim, and their
- * optional path is carried for the external-directory boundary. A tool call
- * missing its required input is left ungated so the runner reports the
- * validation error.
+ * and edit gate against a filesystem path; grep and glob gate against their
+ * search pattern verbatim, and their optional path is carried for the
+ * external-directory boundary. A tool call missing its required input is left
+ * ungated so the runner reports the validation error.
  */
 const resolveGateResource = (
 	tool: CodingToolName,
@@ -155,12 +153,6 @@ const resolveGateResource = (
 		return path === undefined
 			? { kind: "literal", value: pattern }
 			: { input: path, kind: "path", pattern };
-	}
-	if (tool === "list") {
-		return {
-			input: getStringField(input, "path") ?? WORKSPACE_ROOT_RESOURCE,
-			kind: "path",
-		};
 	}
 	const path = getStringField(input, "path");
 	return path === undefined ? undefined : { input: path, kind: "path" };

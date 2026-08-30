@@ -298,7 +298,6 @@ describe("STATIC_TOOL_PERMISSION_ACTIONS", () => {
 			read: "read",
 			write: "edit",
 			edit: "edit",
-			list: "list",
 			glob: "glob",
 			grep: "grep",
 			shell: "shell",
@@ -481,32 +480,32 @@ describe("resolveVisibleCodingTools", () => {
 		{
 			name: "shows every tool with no denies",
 			rules: { read: "allow", edit: "allow", list: "allow", grep: "allow" },
-			visible: ["read", "write", "edit", "list", "glob", "grep", "shell"],
+			visible: ["read", "write", "edit", "glob", "grep", "shell"],
 		},
 		{
 			name: "hides write and edit when edit is unconditionally denied",
 			rules: { edit: "deny" },
-			visible: ["read", "list", "glob", "grep", "shell"],
+			visible: ["read", "glob", "grep", "shell"],
 		},
 		{
 			name: "hides only read when read is unconditionally denied",
 			rules: { read: "deny" },
-			visible: ["write", "edit", "list", "glob", "grep", "shell"],
+			visible: ["write", "edit", "glob", "grep", "shell"],
 		},
 		{
 			name: "keeps a granular edit map visible",
 			rules: { edit: { "src/**": "deny" } },
-			visible: ["read", "write", "edit", "list", "glob", "grep", "shell"],
+			visible: ["read", "write", "edit", "glob", "grep", "shell"],
 		},
 		{
 			name: "keeps an ask-gated tool visible",
 			rules: { list: "ask" },
-			visible: ["read", "write", "edit", "list", "glob", "grep", "shell"],
+			visible: ["read", "write", "edit", "glob", "grep", "shell"],
 		},
 		{
 			name: "hides shell when the shell action is unconditionally denied",
 			rules: { shell: "deny" },
-			visible: ["read", "write", "edit", "list", "glob", "grep"],
+			visible: ["read", "write", "edit", "glob", "grep"],
 		},
 	];
 

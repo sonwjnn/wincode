@@ -114,7 +114,7 @@ recording stays skipped when the decision came from that ceiling.
 - The approval panel drops the destructive-command `safetyReason` banner; the
   manual-ceiling safety banner still renders for malformed-config and
   `requiresManualApproval` asks.
-- Unchanged surfaces: `--auto` semantics; `read`/`edit`/`list`/`glob`/`grep` defaults
+- Unchanged surfaces: `--auto` semantics; `read`/edit`/`glob`/`grep` defaults
   and `.env` asks; `external_directory` default and composition; Skill
   approval; MCP policy composition; the Plan Agent's shipped `shell: deny`.
 - The `shell` tool description notes the permissive posture so agents know

@@ -19,12 +19,6 @@ export {
 	grepOutputSchema,
 	grepToolSchema,
 } from "./grep/schema";
-export type { ListInput, ListOutput } from "./list/schema";
-export {
-	listInputSchema,
-	listOutputSchema,
-	listToolSchema,
-} from "./list/schema";
 export type { ReadInput, ReadOutput } from "./read/schema";
 export {
 	readInputSchema,
@@ -68,11 +62,6 @@ import {
 	grepToolSchema,
 } from "./grep/schema";
 import {
-	listInputSchema,
-	listOutputSchema,
-	listToolSchema,
-} from "./list/schema";
-import {
 	readInputSchema,
 	readOutputSchema,
 	readToolSchema,
@@ -113,11 +102,6 @@ export const codingToolDefinitions = {
 		inputSchema: editInputSchema,
 		outputSchema: editOutputSchema,
 	},
-	list: {
-		description: listToolSchema.description,
-		inputSchema: listInputSchema,
-		outputSchema: listOutputSchema,
-	},
 	glob: {
 		description: globToolSchema.description,
 		inputSchema: globInputSchema,
@@ -140,7 +124,6 @@ export const codingToolDefinitions = {
 		typeof writeOutputSchema
 	>;
 	edit: CodingToolDefinition<typeof editInputSchema, typeof editOutputSchema>;
-	list: CodingToolDefinition<typeof listInputSchema, typeof listOutputSchema>;
 	glob: CodingToolDefinition<typeof globInputSchema, typeof globOutputSchema>;
 	grep: CodingToolDefinition<typeof grepInputSchema, typeof grepOutputSchema>;
 	shell: CodingToolDefinition<
@@ -155,7 +138,6 @@ export const codingToolNames = [
 	"read",
 	"write",
 	"edit",
-	"list",
 	"glob",
 	"grep",
 	"shell",
@@ -186,11 +168,6 @@ export const codingToolSchemas = {
 		name: "edit",
 		schema: codingToolDefinitions.edit.inputSchema,
 	},
-	list: {
-		description: codingToolDefinitions.list.description,
-		name: "list",
-		schema: codingToolDefinitions.list.inputSchema,
-	},
 	glob: {
 		description: codingToolDefinitions.glob.description,
 		name: "glob",
@@ -218,7 +195,6 @@ export const codingToolSchemaList = [
 	codingToolSchemas.read,
 	codingToolSchemas.write,
 	codingToolSchemas.edit,
-	codingToolSchemas.list,
 	codingToolSchemas.glob,
 	codingToolSchemas.grep,
 	codingToolSchemas.shell,

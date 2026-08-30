@@ -258,13 +258,13 @@ describe("drizzle conversation store", () => {
 
 	test("reloads failed built-in tool calls persisted without input", async () => {
 		const { id } = await store.createSession({
-			message: userMessage("m1", "test list"),
+			message: userMessage("m1", "test read"),
 			agent: "plan",
 			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
 		});
 		await store.persistMessages({
 			messages: [
-				userMessage("m1", "test list"),
+				userMessage("m1", "test read"),
 				{
 					id: "m2",
 					parts: [{ text: "before tool", type: "text" }],
@@ -283,7 +283,7 @@ describe("drizzle conversation store", () => {
 						rawInput: '{"path":"src"}',
 						state: "output-error",
 						toolCallId: "call-1",
-						type: "tool-list",
+						type: "tool-read",
 					},
 				] as unknown as CodingAgentUIMessage["parts"],
 			})
@@ -298,7 +298,7 @@ describe("drizzle conversation store", () => {
 				input: { path: "src" },
 				state: "output-error",
 				toolCallId: "call-1",
-				type: "tool-list",
+				type: "tool-read",
 			},
 		]);
 	});

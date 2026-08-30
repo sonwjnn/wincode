@@ -142,13 +142,13 @@ const buildAgent = {
 	billingKind: "build",
 	instructions: "Build safely.",
 	mcpTools: [],
-	visibleCodingTools: ["read", "write", "edit", "list", "grep"],
+	visibleCodingTools: ["read", "write", "edit", "glob", "grep"],
 } as const;
 const planAgent = {
 	billingKind: "plan",
 	instructions: "Plan without editing.",
 	mcpTools: [],
-	visibleCodingTools: ["read", "list", "grep"],
+	visibleCodingTools: ["read", "glob", "grep"],
 } as const;
 
 const billingRepository = {
@@ -166,7 +166,10 @@ const sessionsRoutes = createSessionsRoutes({
 	createCodingAgentStreamResponse,
 	getBillingConfig: () =>
 		({
-			fundedRequestInputTokenLimit: 1100,
+			// The glob tool's schema is larger than the removed list tool's, so
+			// the funded budget must cover the real plan/build descriptor
+			// estimates while staying below oversized-text rejections.
+			fundedRequestInputTokenLimit: 1500,
 			fundedRequestOutputTokenLimit: 8,
 			fundedRequestStepLimit: 3,
 			fundedRequestTimeWindowSeconds: 5,

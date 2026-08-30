@@ -18,11 +18,6 @@ export type ToolResourceLimits = {
 		readonly maxOutputBytes: number;
 		readonly maxDirectoryOutputBytes: number;
 	};
-	readonly list: {
-		readonly maxDepth: number;
-		readonly maxEntries: number;
-		readonly maxOutputBytes: number;
-	};
 	readonly glob: {
 		readonly maxCandidates: number;
 		readonly maxDurationMs: number;
@@ -68,11 +63,6 @@ export const TOOL_RESOURCE_LIMITS = {
 			maxMatches: 1000,
 			maxOutputBytes: 6000,
 		},
-		list: {
-			maxDepth: 5,
-			maxEntries: 10_000,
-			maxOutputBytes: 4000,
-		},
 		glob: {
 			maxCandidates: 10_000,
 			maxDurationMs: 5000,
@@ -105,11 +95,6 @@ export const TOOL_RESOURCE_LIMITS = {
 			maxMatches: 5000,
 			maxOutputBytes: 32 * 1024,
 		},
-		list: {
-			maxDepth: 10,
-			maxEntries: 50_000,
-			maxOutputBytes: 16 * 1024,
-		},
 		glob: {
 			maxCandidates: 10_000,
 			maxDurationMs: 5000,
@@ -141,11 +126,6 @@ export const TOOL_RESOURCE_LIMITS = {
 			maxLineBytes: 16_000,
 			maxMatches: 20_000,
 			maxOutputBytes: 128 * 1024,
-		},
-		list: {
-			maxDepth: 32,
-			maxEntries: 200_000,
-			maxOutputBytes: 64 * 1024,
 		},
 		glob: {
 			maxCandidates: 10_000,

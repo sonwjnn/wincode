@@ -44,7 +44,7 @@ describe("prepareCodingAgentCall", () => {
 	];
 	const buildAgent = {
 		instructions: "Implement changes with read and write access.",
-		visibleCodingTools: ["read", "write", "edit", "list", "glob", "grep"],
+		visibleCodingTools: ["read", "write", "edit", "glob", "grep"],
 	} as const;
 
 	it("merges MCP tools into Agent activeTools and tools", () => {
@@ -57,7 +57,6 @@ describe("prepareCodingAgentCall", () => {
 			"read",
 			"write",
 			"edit",
-			"list",
 			"glob",
 			"grep",
 			"mcp_search_docs",
@@ -70,12 +69,12 @@ describe("prepareCodingAgentCall", () => {
 			options: {
 				resolvedAgent: {
 					instructions: "Read-only analysis.",
-					visibleCodingTools: ["read", "list", "glob", "grep"],
+					visibleCodingTools: ["read", "glob", "grep"],
 				},
 			},
 		});
 
-		expect(prepared.activeTools).toEqual(["read", "list", "glob", "grep"]);
+		expect(prepared.activeTools).toEqual(["read", "glob", "grep"]);
 	});
 
 	it("does not let MCP names replace built-ins", () => {

@@ -71,7 +71,7 @@ Status: accepted
   loaded, rejected, or failed state. Rejecting an Agent load does not abort the turn but
   prevents retrying that Skill during the same execution.
 - The tool result includes the absolute Skill base directory and a sample of bundled
-  resource paths. Agents use existing glob, read, list, grep, write, edit, and shell
+  resource paths. Agents use existing glob, read, grep, write, edit, and shell
   tools for those resources. External paths require `external_directory` permission in
   addition to the underlying operation permission; it defaults to `ask`, uses canonical
   absolute paths, and evaluates resolved symlink targets.

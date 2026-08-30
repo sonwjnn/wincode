@@ -10,13 +10,13 @@ describe("prepareSendChatRequestBody", () => {
 		variant: undefined,
 		resolvedAgent: {
 			instructions: "Build safely.",
-			visibleCodingTools: ["read", "write", "edit", "list", "grep"],
+			visibleCodingTools: ["read", "write", "edit", "glob", "grep"],
 		},
 		hostedDescriptor: {
 			billingKind: "build",
 			instructions: "Build safely.",
 			mcpTools: [],
-			visibleCodingTools: ["read", "write", "edit", "list", "grep"],
+			visibleCodingTools: ["read", "write", "edit", "glob", "grep"],
 		},
 	} as const satisfies PreparedAgentCall;
 	const planPrepared = {
@@ -25,13 +25,13 @@ describe("prepareSendChatRequestBody", () => {
 		variant: undefined,
 		resolvedAgent: {
 			instructions: "Plan without editing.",
-			visibleCodingTools: ["read", "list", "grep"],
+			visibleCodingTools: ["read", "glob", "grep"],
 		},
 		hostedDescriptor: {
 			billingKind: "plan",
 			instructions: "Plan without editing.",
 			mcpTools: [],
-			visibleCodingTools: ["read", "list", "grep"],
+			visibleCodingTools: ["read", "glob", "grep"],
 		},
 	} as const satisfies PreparedAgentCall;
 

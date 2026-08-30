@@ -298,7 +298,7 @@ describe("chat transport", () => {
 				agent: {
 					billingKind: "build",
 					mcpTools: manifest,
-					visibleCodingTools: ["read", "write", "edit", "list", "glob", "grep"],
+					visibleCodingTools: ["read", "write", "edit", "glob", "grep"],
 				},
 			});
 		} finally {
@@ -597,7 +597,7 @@ describe("chat transport", () => {
 			{
 				current: {
 					instructions: "Agent-specific instructions.",
-					visibleCodingTools: ["read", "list", "grep"],
+					visibleCodingTools: ["read", "glob", "grep"],
 				},
 			},
 			{ current: { modelId: "gemini-2.5-flash", providerId: "google" } },
@@ -627,7 +627,7 @@ describe("chat transport", () => {
 			model: "gemini-2.5-flash",
 			resolvedAgent: {
 				instructions: "Agent-specific instructions.",
-				visibleCodingTools: ["read", "list", "grep"],
+				visibleCodingTools: ["read", "glob", "grep"],
 			},
 		});
 	});

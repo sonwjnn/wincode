@@ -41,7 +41,6 @@ export const configuredAgentVisibleCodingTools = [
 	"read",
 	"write",
 	"edit",
-	"list",
 	"glob",
 	"grep",
 	"shell",

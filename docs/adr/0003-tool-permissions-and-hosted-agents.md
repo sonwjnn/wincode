@@ -68,7 +68,7 @@ Status: accepted
   `auto` indicator while enabled.
 - Skill access defaults to `allow`; external-directory access defaults to `ask`.
   External access composes with, rather than replaces, the permission for the underlying
-  read, list, glob, grep, write, edit, or shell operation. Targets are canonicalized and
+  read, glob, grep, write, edit, or shell operation. Targets are canonicalized and
   symlinks resolved before evaluation. Process-scoped `always` grants use exact Skill
   names or canonical parent-directory globs.
 - Hosted request validation bounds Agent instructions and tool manifests. Full composed

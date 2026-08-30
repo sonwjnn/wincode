@@ -106,13 +106,13 @@ const planPrepared: PreparedAgentCall = {
 	variant: undefined,
 	resolvedAgent: {
 		instructions: "Plan without editing.",
-		visibleCodingTools: ["read", "list", "glob", "grep"],
+		visibleCodingTools: ["read", "glob", "grep"],
 	},
 	hostedDescriptor: {
 		billingKind: "plan",
 		instructions: "Plan without editing.",
 		mcpTools: [],
-		visibleCodingTools: ["read", "list", "glob", "grep"],
+		visibleCodingTools: ["read", "glob", "grep"],
 	},
 };
 
@@ -154,7 +154,7 @@ describe("prepareSendChatRequestBody", () => {
 				billingKind: "plan",
 				instructions: "Plan without editing.",
 				mcpTools: [],
-				visibleCodingTools: ["read", "list", "glob", "grep"],
+				visibleCodingTools: ["read", "glob", "grep"],
 			},
 			messages: [privateAgentStripped(userMessage)],
 			model: "gemini-2.5-flash",
@@ -175,7 +175,7 @@ describe("prepareSendChatRequestBody", () => {
 				billingKind: "plan",
 				instructions: "Plan without editing.",
 				mcpTools: [],
-				visibleCodingTools: ["read", "list", "glob", "grep"],
+				visibleCodingTools: ["read", "glob", "grep"],
 			},
 			messages: [
 				privateAgentStripped(userMessage),
@@ -200,13 +200,13 @@ describe("prepareSendChatRequestBody", () => {
 				agent: "build",
 				resolvedAgent: {
 					instructions: "Build safely.",
-					visibleCodingTools: ["read", "write", "edit", "list", "glob", "grep"],
+					visibleCodingTools: ["read", "write", "edit", "glob", "grep"],
 				},
 				hostedDescriptor: {
 					billingKind: "build",
 					instructions: "Build safely.",
 					mcpTools: [],
-					visibleCodingTools: ["read", "write", "edit", "list", "glob", "grep"],
+					visibleCodingTools: ["read", "write", "edit", "glob", "grep"],
 				},
 			})
 		).toEqual({
@@ -214,7 +214,7 @@ describe("prepareSendChatRequestBody", () => {
 				billingKind: "build",
 				instructions: "Build safely.",
 				mcpTools: [],
-				visibleCodingTools: ["read", "write", "edit", "list", "glob", "grep"],
+				visibleCodingTools: ["read", "write", "edit", "glob", "grep"],
 			},
 			messages: [nextMessage],
 			model: "gemini-2.5-flash",
@@ -1066,29 +1066,6 @@ describe("createChatToolCallHandler", () => {
 		});
 	});
 
-	test("gates list against its default workspace-root resource", async () => {
-		await settleCall(
-			callWith(
-				{
-					input: {},
-					toolCallId: "call-list-deny",
-					toolName: "list",
-				},
-				{
-					permissionRef: { current: createToolPermission({ list: "deny" }) },
-					sandbox: createWorkspaceSandbox(process.cwd()),
-				}
-			)
-		);
-		expect(staticToolCallHandler).not.toHaveBeenCalled();
-		expect(addToolOutput).toHaveBeenCalledWith({
-			errorText: "List denied by policy: .",
-			state: "output-error",
-			tool: "list",
-			toolCallId: "call-list-deny",
-		});
-	});
-
 	test("gates grep against its requested regular expression", async () => {
 		await settleCall(
 			callWith(
@@ -1351,7 +1328,7 @@ describe("createChatToolCallHandler", () => {
 		expect(call?.errorText.length).toBeLessThan(2200);
 	});
 
-	test("allows write, edit, list, glob, and grep by default without approval", async () => {
+	test("allows write, edit, glob, and grep by default without approval", async () => {
 		const calls = [
 			{
 				input: { content: "x", path: "notes.txt" },
@@ -1363,7 +1340,6 @@ describe("createChatToolCallHandler", () => {
 				toolCallId: "call-edit-allow",
 				toolName: "edit",
 			},
-			{ input: {}, toolCallId: "call-list-allow", toolName: "list" },
 			{
 				input: { pattern: "*.ts" },
 				toolCallId: "call-glob-allow",
@@ -1432,14 +1408,7 @@ describe("shell tool gating", () => {
 			resolvedAgentRef: {
 				current: {
 					instructions: "Run commands.",
-					visibleCodingTools: [
-						"read",
-						"write",
-						"edit",
-						"list",
-						"grep",
-						"shell",
-					],
+					visibleCodingTools: ["read", "write", "edit", "grep", "shell"],
 				},
 			},
 			sandbox,

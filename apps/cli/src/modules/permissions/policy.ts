@@ -92,7 +92,6 @@ export const STATIC_TOOL_PERMISSION_ACTIONS = {
 	read: "read",
 	write: "edit",
 	edit: "edit",
-	list: "list",
 	glob: "glob",
 	grep: "grep",
 	shell: "shell",
@@ -158,7 +157,7 @@ export const DEFAULT_PERMISSION_RULES: PermissionRules = {
  *
  * The `*` deny only reaches MCP tools: static coding-tool gating consults the
  * exact `STATIC_TOOL_PERMISSION_ACTIONS` keys and never honors an action glob, so
- * Plan keeps its read, list, glob, and grep tools while every discovered MCP tool
+ * Plan keeps its read, glob, and grep tools while every discovered MCP tool
  * is denied unless a higher layer re-allows a specific logical name.
  */
 export const SHIPPED_AGENT_PERMISSION_RULES: Readonly<

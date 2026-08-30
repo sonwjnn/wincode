@@ -50,7 +50,6 @@ describe("@wincode/ai shared entry", () => {
 			"read",
 			"write",
 			"edit",
-			"list",
 			"glob",
 			"grep",
 			"shell",
@@ -69,7 +68,6 @@ describe("@wincode/ai shared entry", () => {
 			"read",
 			"write",
 			"edit",
-			"list",
 			"glob",
 			"grep",
 			"shell",
@@ -439,21 +437,41 @@ describe("@wincode/ai shared entry", () => {
 		expect(codingToolNameSchema.safeParse("shell").success).toBe(true);
 		const descriptor = {
 			...buildAgent,
-			visibleCodingTools: [
-				"read",
-				"write",
-				"edit",
-				"list",
-				"glob",
-				"grep",
-				"shell",
-			],
+			visibleCodingTools: ["read", "write", "edit", "glob", "grep", "shell"],
 		};
 		expect(hostedAgentDescriptorSchema.safeParse(descriptor).success).toBe(
 			false
 		);
 	});
 
+	test("removed list tool is absent everywhere and stale names fail closed", () => {
+		// glob is advertised as the read-only discovery tool.
+		expect(codingToolNames).toContain("glob");
+		expect(Object.keys(codingToolDefinitions)).toContain("glob");
+		// list is gone from every model-visible surface.
+		expect(codingToolNameSchema.safeParse("list").success).toBe(false);
+		expect(codingToolNames).not.toContain("list");
+		expect(codingToolDefinitions).not.toHaveProperty("list");
+		expect(codingToolSchemas).not.toHaveProperty("list");
+		expect(codingToolRunners).not.toHaveProperty("list");
+		// A hosted descriptor that still names list receives the existing
+		// unknown-tool diagnostic rather than an alias or silent removal.
+		const descriptor = {
+			...buildAgent,
+			visibleCodingTools: ["read", "write", "edit", "glob", "grep", "list"],
+		} as const;
+		const parsed = hostedAgentDescriptorSchema.safeParse(descriptor);
+		expect(parsed.success).toBe(false);
+		// The existing unknown-tool diagnostic: the enum rejects the stale
+		// `list` name at its position in the allowlist.
+		expect(
+			(parsed.error?.issues ?? []).some(
+				(issue) =>
+					issue.path.join(".") === "visibleCodingTools.5" &&
+					issue.code === "invalid_value"
+			)
+		).toBe(true);
+	});
 	test("bounds shell input parameters", () => {
 		const parse = (input: unknown) =>
 			codingToolSchemas.shell.schema.safeParse(input);
@@ -492,16 +510,10 @@ describe("@wincode/ai shared entry", () => {
 			"read",
 			"write",
 			"edit",
-			"list",
 			"glob",
 			"grep",
 		]);
-		expect(planAgent.visibleCodingTools).toEqual([
-			"read",
-			"list",
-			"glob",
-			"grep",
-		]);
+		expect(planAgent.visibleCodingTools).toEqual(["read", "glob", "grep"]);
 	});
 
 	test("composes immutable base and Agent-specific instructions", () => {
@@ -535,7 +547,6 @@ describe("@wincode/ai server and client entries", () => {
 			"read",
 			"write",
 			"edit",
-			"list",
 			"glob",
 			"grep",
 		]);

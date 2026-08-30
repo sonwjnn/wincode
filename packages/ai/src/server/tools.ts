@@ -60,11 +60,6 @@ export const codingServerTools = {
 		inputSchema: editServerInputSchema,
 		outputSchema: codingToolDefinitions.edit.outputSchema,
 	}),
-	list: tool({
-		description: codingToolDefinitions.list.description,
-		inputSchema: codingToolDefinitions.list.inputSchema,
-		outputSchema: codingToolDefinitions.list.outputSchema,
-	}),
 	glob: tool({
 		description: codingToolDefinitions.glob.description,
 		inputSchema: codingToolDefinitions.glob.inputSchema,

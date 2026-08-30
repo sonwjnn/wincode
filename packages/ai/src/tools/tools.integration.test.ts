@@ -4,7 +4,6 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
-	readlinkSync,
 	rmSync,
 	statSync,
 	symlinkSync,
@@ -18,7 +17,6 @@ import { runEditTool } from "./edit/runner";
 import { createGlobRunner, runGlobTool } from "./glob/runner";
 import { RipgrepUnavailableError } from "./grep/ripgrep";
 import { createGrepRunner, runGrepTool } from "./grep/runner";
-import { runListTool } from "./list/runner";
 import { runReadTool } from "./read/runner";
 import { getToolResourceLimits } from "./resource-limits";
 import { runWriteTool } from "./write/runner";
@@ -670,18 +668,10 @@ describe("tool runners", () => {
 		);
 	});
 
-	test("lists files and greps text within the workspace", async () => {
+	test("globs files and greps text within the workspace", async () => {
 		writeFileSync(path.join(sandboxPath, "alpha.txt"), "alpha\nbeta\n");
 		writeFileSync(path.join(sandboxPath, "gamma.txt"), "gamma\n");
 
-		await expect(
-			runListTool({ depth: 1, path: sandboxRelPath })
-		).resolves.toEqual({
-			entries: [
-				{ path: `${sandboxRelPath}/alpha.txt`, type: "file" },
-				{ path: `${sandboxRelPath}/gamma.txt`, type: "file" },
-			],
-		});
 		await expect(
 			runGlobTool({ pattern: "*.txt", path: sandboxRelPath })
 		).resolves.toEqual({
@@ -971,63 +961,6 @@ describe("tool runners", () => {
 					path: `${sandboxRelPath}/lookbehind.ts`,
 				},
 			],
-		});
-	});
-
-	test("lists entries in deterministic order while skipping ignored directories and symlinks", async () => {
-		mkdirSync(path.join(sandboxPath, ".git"));
-		mkdirSync(path.join(sandboxPath, "node_modules"));
-		mkdirSync(path.join(sandboxPath, "zeta"));
-		writeFileSync(path.join(sandboxPath, ".git", "ignored.txt"), "ignored");
-		writeFileSync(
-			path.join(sandboxPath, "node_modules", "ignored.txt"),
-			"ignored"
-		);
-		writeFileSync(path.join(sandboxPath, "alpha.txt"), "alpha");
-		writeFileSync(path.join(sandboxPath, "zeta", "nested.txt"), "nested");
-		symlinkSync(
-			path.join(sandboxPath, "alpha.txt"),
-			path.join(sandboxPath, "alpha-link.txt")
-		);
-		symlinkSync(outsidePath, path.join(sandboxPath, "outside-dir-link"));
-		expect(readlinkSync(path.join(sandboxPath, "outside-dir-link"))).toBe(
-			outsidePath
-		);
-
-		await expect(
-			runListTool({ depth: 2, path: sandboxRelPath })
-		).resolves.toEqual({
-			entries: [
-				{ path: `${sandboxRelPath}/alpha.txt`, type: "file" },
-				{ path: `${sandboxRelPath}/zeta`, type: "directory" },
-				{ path: `${sandboxRelPath}/zeta/nested.txt`, type: "file" },
-			],
-		});
-	});
-	test("uses an elevated resource profile for deeper listings", async () => {
-		let currentPath = sandboxPath;
-		for (const directory of ["a", "b", "c", "d", "e", "f"]) {
-			currentPath = path.join(currentPath, directory);
-			mkdirSync(currentPath);
-		}
-		writeFileSync(path.join(currentPath, "deep.txt"), "deep\n");
-
-		const standard = await runListTool(
-			{ depth: 10, path: sandboxRelPath },
-			{ resourceLimits: getToolResourceLimits("standard") }
-		);
-		expect(standard.entries).not.toContainEqual({
-			path: `${sandboxRelPath}/a/b/c/d/e/f/deep.txt`,
-			type: "file",
-		});
-
-		const extended = await runListTool(
-			{ depth: 10, path: sandboxRelPath },
-			{ resourceLimits: getToolResourceLimits("extended") }
-		);
-		expect(extended.entries).toContainEqual({
-			path: `${sandboxRelPath}/a/b/c/d/e/f/deep.txt`,
-			type: "file",
 		});
 	});
 
