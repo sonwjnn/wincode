@@ -166,7 +166,7 @@ const sessionsRoutes = createSessionsRoutes({
 	createCodingAgentStreamResponse,
 	getBillingConfig: () =>
 		({
-			fundedRequestInputTokenLimit: 1000,
+			fundedRequestInputTokenLimit: 1100,
 			fundedRequestOutputTokenLimit: 8,
 			fundedRequestStepLimit: 3,
 			fundedRequestTimeWindowSeconds: 5,

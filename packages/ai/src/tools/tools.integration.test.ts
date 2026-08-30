@@ -156,6 +156,237 @@ describe("tool runners", () => {
 			"hello agent"
 		);
 	});
+	test("reads a directory as a compact text tree", async () => {
+		mkdirSync(path.join(sandboxPath, "zeta"));
+		writeFileSync(path.join(sandboxPath, "zeta", "nested.ts"), "nested");
+		writeFileSync(path.join(sandboxPath, "alpha.txt"), "alpha");
+
+		await expect(runReadTool({ path: sandboxRelPath })).resolves.toEqual({
+			content: ".\n  - zeta/\n    - nested.ts\n  - alpha.txt",
+			path: sandboxRelPath,
+		});
+	});
+	test("limits directory trees to two levels and orders directories first", async () => {
+		mkdirSync(path.join(sandboxPath, "zeta", "deep"), { recursive: true });
+		mkdirSync(path.join(sandboxPath, "alpha-dir"));
+		writeFileSync(path.join(sandboxPath, "zeta", "nested.ts"), "nested");
+		writeFileSync(path.join(sandboxPath, "zeta", "deep", "hidden.ts"), "deep");
+		writeFileSync(path.join(sandboxPath, "alpha-dir", "child.ts"), "child");
+		writeFileSync(path.join(sandboxPath, "alpha.txt"), "alpha");
+
+		await expect(runReadTool({ path: sandboxRelPath })).resolves.toEqual({
+			content:
+				".\n  - alpha-dir/\n    - child.ts\n  - zeta/\n    - deep/\n    - nested.ts\n  - alpha.txt",
+			path: sandboxRelPath,
+		});
+	});
+
+	test("limits each directory to twelve children and reports omissions", async () => {
+		for (let index = 1; index <= 14; index += 1) {
+			writeFileSync(
+				path.join(sandboxPath, `file-${String(index).padStart(2, "0")}.txt`),
+				"file"
+			);
+		}
+
+		const result = await runReadTool({ path: sandboxRelPath });
+
+		expect(result.content).toBe(
+			[
+				".",
+				...Array.from(
+					{ length: 12 },
+					(_, index) => `  - file-${String(index + 1).padStart(2, "0")}.txt`
+				),
+				"  - … 2 more",
+			].join("\n")
+		);
+		expect(result.truncated).toBe(true);
+	});
+	test("hides discovery-only entries while allowing explicit targets", async () => {
+		writeFileSync(
+			path.join(sandboxPath, ".gitignore"),
+			"ignored.txt\nignored-dir/\n"
+		);
+		mkdirSync(path.join(sandboxPath, "ignored-dir"));
+		mkdirSync(path.join(sandboxPath, ".hidden-dir"));
+		writeFileSync(path.join(sandboxPath, "ignored.txt"), "ignored");
+		writeFileSync(path.join(sandboxPath, "ignored-dir", "child.txt"), "child");
+		writeFileSync(
+			path.join(sandboxPath, ".hidden-dir", "child.txt"),
+			"hidden child"
+		);
+		writeFileSync(path.join(sandboxPath, ".hidden-file"), "hidden");
+		writeFileSync(path.join(sandboxPath, "visible.txt"), "visible");
+
+		await expect(runReadTool({ path: sandboxRelPath })).resolves.toEqual({
+			content: ".\n  - visible.txt",
+			path: sandboxRelPath,
+		});
+		await expect(
+			runReadTool({ path: `${sandboxRelPath}/ignored.txt` })
+		).resolves.toEqual({
+			content: "1:ignored",
+			path: `${sandboxRelPath}/ignored.txt`,
+		});
+		await expect(
+			runReadTool({ path: `${sandboxRelPath}/ignored-dir` })
+		).resolves.toEqual({
+			content: "(empty directory)",
+			path: `${sandboxRelPath}/ignored-dir`,
+		});
+		await expect(
+			runReadTool({ path: `${sandboxRelPath}/.hidden-file` })
+		).resolves.toEqual({
+			content: "1:hidden",
+			path: `${sandboxRelPath}/.hidden-file`,
+		});
+		await expect(
+			runReadTool({ path: `${sandboxRelPath}/.hidden-dir` })
+		).resolves.toEqual({
+			content: ".\n  - child.txt",
+			path: `${sandboxRelPath}/.hidden-dir`,
+		});
+	});
+
+	test("prunes .git while displaying symlinks without traversing them", async () => {
+		mkdirSync(path.join(sandboxPath, ".git"));
+		mkdirSync(path.join(sandboxPath, ".git", "objects"));
+		mkdirSync(path.join(sandboxPath, "real-dir"));
+		writeFileSync(
+			path.join(sandboxPath, ".git", "objects", "secret"),
+			"secret"
+		);
+		writeFileSync(path.join(sandboxPath, "real-dir", "child.txt"), "child");
+		symlinkSync("real-dir\nwith-control", path.join(sandboxPath, "dir-link"));
+
+		const result = await runReadTool({ path: sandboxRelPath });
+
+		expect(result.content).toBe(
+			".\n  - real-dir/\n    - child.txt\n  - dir-link -> real-dir with-control"
+		);
+		expect(result.content).not.toContain("secret");
+		expect(result.content).not.toContain("dir-link/child.txt");
+		await expect(
+			runReadTool({ path: `${sandboxRelPath}/.git/objects` })
+		).resolves.toEqual({
+			content: "(empty directory)",
+			path: `${sandboxRelPath}/.git/objects`,
+		});
+	});
+	test("does not traverse an explicitly read symlinked directory", async () => {
+		mkdirSync(path.join(sandboxPath, "real-dir"));
+		writeFileSync(path.join(sandboxPath, "real-dir", "child.txt"), "child");
+		symlinkSync("real-dir", path.join(sandboxPath, "dir-link"));
+
+		await expect(
+			runReadTool({ path: `${sandboxRelPath}/dir-link` })
+		).resolves.toEqual({
+			content: "real-dir",
+			path: `${sandboxRelPath}/dir-link`,
+		});
+	});
+	test("continues directory entries without counting omission notices", async () => {
+		for (let index = 1; index <= 14; index += 1) {
+			writeFileSync(
+				path.join(sandboxPath, `file-${String(index).padStart(2, "0")}.txt`),
+				"file"
+			);
+		}
+
+		await expect(
+			runReadTool({ path: `${sandboxRelPath}:13` })
+		).resolves.toEqual({
+			content: "  - file-12.txt\n  - … 2 more",
+			path: sandboxRelPath,
+			truncated: true,
+		});
+		await expect(runReadTool({ path: `${sandboxRelPath}:14` })).rejects.toThrow(
+			"Line range starts at 14, beyond end of directory listing (13 entries)"
+		);
+	});
+	test("prefers an existing literal directory over a line selector", async () => {
+		const directoryPath = `${sandboxRelPath}/literal:1-2`;
+		mkdirSync(path.join(workspace, directoryPath));
+		writeFileSync(path.join(workspace, directoryPath, "child.txt"), "child");
+
+		await expect(runReadTool({ path: directoryPath })).resolves.toEqual({
+			content: ".\n  - child.txt",
+			path: directoryPath,
+		});
+	});
+	test("renders an empty directory explicitly", async () => {
+		const emptyDirectory = `${sandboxRelPath}/empty`;
+		mkdirSync(path.join(workspace, emptyDirectory));
+
+		await expect(runReadTool({ path: emptyDirectory })).resolves.toEqual({
+			content: "(empty directory)",
+			path: emptyDirectory,
+		});
+	});
+	test("reads approved external directories through the same tree renderer", async () => {
+		mkdirSync(path.join(outsidePath, "nested"));
+		writeFileSync(path.join(outsidePath, "nested", "child.txt"), "child");
+
+		await expect(
+			runReadTool({ path: outsidePath }, { allowExternalPath: true })
+		).resolves.toEqual({
+			content: ".\n  - nested/\n    - child.txt",
+			path: outsidePath,
+		});
+	});
+	test("prunes an explicitly approved external .git root", async () => {
+		const externalGitPath = path.join(outsidePath, ".git");
+		mkdirSync(externalGitPath);
+		writeFileSync(path.join(externalGitPath, "secret"), "secret");
+
+		await expect(
+			runReadTool({ path: externalGitPath }, { allowExternalPath: true })
+		).resolves.toEqual({
+			content: "(empty directory)",
+			path: externalGitPath,
+		});
+		const nestedGitObjects = path.join(
+			outsidePath,
+			"repository",
+			".git",
+			"objects"
+		);
+		mkdirSync(nestedGitObjects, { recursive: true });
+		writeFileSync(path.join(nestedGitObjects, "secret"), "secret");
+		await expect(
+			runReadTool({ path: nestedGitObjects }, { allowExternalPath: true })
+		).resolves.toEqual({
+			content: "(empty directory)",
+			path: nestedGitObjects,
+		});
+	});
+	test("caps directory output with its dedicated resource limit", async () => {
+		for (const name of ["alpha", "bravo", "charlie", "delta", "echo"]) {
+			writeFileSync(
+				path.join(sandboxPath, `${name}-${"x".repeat(100)}.txt`),
+				"x"
+			);
+		}
+
+		const standard = getToolResourceLimits("standard");
+		const result = await runReadTool(
+			{ path: sandboxRelPath },
+			{
+				resourceLimits: {
+					...standard,
+					read: {
+						...standard.read,
+						maxDirectoryOutputBytes: 256,
+					},
+				},
+			}
+		);
+
+		expect(result.truncated).toBe(true);
+		expect(Buffer.byteLength(result.content, "utf8")).toBeLessThanOrEqual(256);
+		expect(result.content).toContain("[Output capped at 256 bytes.");
+	});
 	test("reads a line range with Oh My Pi context", async () => {
 		const filePath = `${sandboxRelPath}/range.txt`;
 		writeFileSync(
@@ -251,7 +482,7 @@ describe("tool runners", () => {
 	});
 	test("truncates on a line boundary with a remaining multi-range selector", async () => {
 		const filePath = `${sandboxRelPath}/bounded.txt`;
-		const line = "x".repeat(1000);
+		const line = "x".repeat(100);
 		writeFileSync(
 			path.join(workspace, filePath),
 			Array.from({ length: 160 }, () => line).join("\n")
@@ -262,15 +493,15 @@ describe("tool runners", () => {
 		});
 
 		expect(result).toMatchObject({ path: filePath, truncated: true });
-		expect(result.content).toContain(`50:${line}`);
-		expect(result.content).not.toContain(`51:${line}`);
+		expect(result.content).toContain(`56:${line}`);
+		expect(result.content).not.toContain(`57:${line}`);
 		expect(result.content).toEndWith(
-			`[Output capped at 51200 bytes. Continue with path \`${filePath}:51-100,150-160\`.]`
+			`[Output capped at 6000 bytes. Continue with path \`${filePath}:57-100,150-160\`.]`
 		);
 	});
 	test("continues when the byte cap cuts trailing range context", async () => {
 		const filePath = `${sandboxRelPath}/bounded-context.txt`;
-		const line = "x".repeat(1200);
+		const line = "x".repeat(112);
 		writeFileSync(
 			path.join(workspace, filePath),
 			Array.from({ length: 60 }, () => line).join("\n")
@@ -279,10 +510,10 @@ describe("tool runners", () => {
 		const result = await runReadTool({ path: `${filePath}:1-50` });
 
 		expect(result).toMatchObject({ path: filePath, truncated: true });
-		expect(result.content).toContain(`42:${line}`);
-		expect(result.content).not.toContain(`43:${line}`);
+		expect(result.content).toContain(`50:${line}`);
+		expect(result.content).not.toContain(`51:${line}`);
 		expect(result.content).toEndWith(
-			`[Output capped at 51200 bytes. Continue with path \`${filePath}:43-50\`.]`
+			`[Output capped at 6000 bytes. Continue with path \`${filePath}:51-53\`.]`
 		);
 	});
 	test("uses the selected resource profile for large reads", async () => {
@@ -291,7 +522,7 @@ describe("tool runners", () => {
 		writeFileSync(path.join(workspace, filePath), content);
 
 		await expect(runReadTool({ path: filePath })).rejects.toThrow(
-			"exceeds the 51200-byte read limit"
+			"exceeds the 6000-byte read limit"
 		);
 		await expect(
 			runReadTool(
@@ -302,6 +533,28 @@ describe("tool runners", () => {
 			content: `1:${content}`,
 			path: filePath,
 		});
+	});
+	test("keeps file reads at six kilobytes while directories use fifty", async () => {
+		const largeFilePath = `${sandboxRelPath}/large-file.txt`;
+		writeFileSync(path.join(workspace, largeFilePath), "x".repeat(7000));
+		await expect(runReadTool({ path: largeFilePath })).rejects.toThrow(
+			"exceeds the 6000-byte read limit"
+		);
+
+		for (let directoryIndex = 1; directoryIndex <= 11; directoryIndex += 1) {
+			const directoryName = `directory-${String(directoryIndex).padStart(2, "0")}`;
+			mkdirSync(path.join(sandboxPath, directoryName));
+			for (let fileIndex = 1; fileIndex <= 12; fileIndex += 1) {
+				const filename = `entry-${String(fileIndex).padStart(2, "0")}-${"x".repeat(200)}.txt`;
+				writeFileSync(path.join(sandboxPath, directoryName, filename), "x");
+			}
+		}
+
+		const directoryResult = await runReadTool({ path: sandboxRelPath });
+		const directoryBytes = Buffer.byteLength(directoryResult.content, "utf8");
+		expect(directoryBytes).toBeGreaterThan(6000);
+		expect(directoryBytes).toBeLessThanOrEqual(50 * 1024);
+		expect(directoryResult.truncated).toBeUndefined();
 	});
 	test("reads an approved absolute path outside the workspace", async () => {
 		const filename = `.wincode-read-test-${crypto.randomUUID()}`;
