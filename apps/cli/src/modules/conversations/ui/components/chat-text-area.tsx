@@ -81,6 +81,8 @@ const getTrackedPastedTexts = (
 
 type ChatTextAreaProps = {
 	disabled?: boolean;
+	onCompact?: (focus?: string) => Promise<boolean> | boolean;
+	onOpenCompaction?: () => Promise<void> | void;
 	sessionPromptHistory?: PromptHistoryEntry[];
 	onSubmit: (
 		submission: ChatPromptSubmission
@@ -124,9 +126,10 @@ const readPastedImageOrPath = async (pastedText: string) => {
 		pathImage,
 	};
 };
-
 export function ChatTextArea({
 	disabled = false,
+	onCompact,
+	onOpenCompaction,
 	onSubmit,
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
 }: ChatTextAreaProps) {
@@ -177,7 +180,10 @@ export function ChatTextArea({
 	const handleSelectedSkillCommand = useCallback((command: string) => {
 		insertSkillCommandRef.current(command);
 	}, []);
-	const { executeCommand } = useCommandExecutor(handleSelectedSkillCommand);
+	const { executeCommand } = useCommandExecutor(handleSelectedSkillCommand, {
+		onCompact,
+		onOpenCompaction,
+	});
 	const mentionSyntaxStyle = useMemo(
 		() =>
 			SyntaxStyle.fromStyles({

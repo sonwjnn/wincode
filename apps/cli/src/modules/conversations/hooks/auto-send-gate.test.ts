@@ -331,6 +331,15 @@ describe("createAutoSendGate", () => {
 		gate.enable();
 		expect(gate.shouldAutoSend({ messages })).toBe(true);
 	});
+
+	test("pauses continuation during asynchronous compaction", () => {
+		const gate = createAutoSendGate();
+		const messages = completeStepMessages;
+		gate.pause();
+		expect(gate.shouldAutoSend({ messages })).toBe(false);
+		gate.resume();
+		expect(gate.shouldAutoSend({ messages })).toBe(true);
+	});
 });
 
 const postInterruptToolOutputAndAssertStopped = async (

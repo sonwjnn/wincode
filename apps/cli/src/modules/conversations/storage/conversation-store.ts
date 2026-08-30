@@ -5,7 +5,10 @@ import type {
 	ModelVariant,
 } from "@wincode/ai";
 import type { FileUIPart } from "@wincode/ai/client";
-
+import type {
+	AppendConversationCompactionInput,
+	ConversationCompaction,
+} from "../compaction/types";
 export type PromptHistoryEntry = {
 	fileTokens?: Array<{ start: number; token: string }>;
 	files: FileUIPart[];
@@ -44,8 +47,15 @@ export type PersistMessagesInput = {
 };
 
 export type ConversationStore = {
+	appendCompaction: (
+		input: AppendConversationCompactionInput
+	) => Promise<ConversationCompaction>;
 	createSession: (input: CreateSessionInput) => Promise<{ id: string }>;
 	deleteSession: (sessionId: string) => Promise<void>;
+	getCompactions: (sessionId: string) => Promise<ConversationCompaction[]>;
+	getLatestCompaction: (
+		sessionId: string
+	) => Promise<ConversationCompaction | null>;
 	getMessages: (sessionId: string) => Promise<CodingAgentUIMessage[]>;
 	getSession: (sessionId: string) => Promise<ConversationSession>;
 	listSessions: () => Promise<ConversationSession[]>;

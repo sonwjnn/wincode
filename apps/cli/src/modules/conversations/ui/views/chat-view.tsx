@@ -13,9 +13,18 @@ import {
 	useAgentRegistry,
 } from "@/modules/agents";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import {
+	type CompactionSettingKey,
+	type CompactionSettings,
+	CompactionSettingsDialogContent,
+	type ConversationCompaction,
+	isCompactionSettingsCommand,
+	parseCompactCommand,
+} from "../../compaction";
 import { hasPendingToolExecutionStep } from "../../hooks/auto-send-gate";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
 import { useChat } from "../../hooks/use-chat";
@@ -29,6 +38,8 @@ const INTERRUPT_CONFIRMATION_TIMEOUT_MS = 3000;
 
 type ChatScreenProps = {
 	autoStart: boolean;
+	initialActiveMessages?: CodingAgentUIMessage[];
+	initialCompactions?: ConversationCompaction[];
 	initialMessages: CodingAgentUIMessage[];
 	initialModel?: ChatModelSelection;
 	initialVariant?: ModelVariant;
@@ -47,6 +58,8 @@ export const hasChatPromptContent = ({
 export function ChatView({
 	autoStart,
 	initialMessages,
+	initialActiveMessages = initialMessages,
+	initialCompactions = [],
 	initialModel,
 	initialVariant,
 	sessionId,
@@ -59,6 +72,9 @@ export function ChatView({
 	const { isTopLayer } = useKeyboardLayer();
 	const dialog = useDialog();
 	const { show } = useToast();
+	const hasPendingApproval = useApprovalPanels().entries.some(
+		(entry) => entry.resolution === undefined
+	);
 	// Messages restored from storage carry no in-flight tool executions (the
 	// owning process died with them). Their ids keep a persisted
 	// interrupted-turn part from holding isBusy true forever after reload.
@@ -75,17 +91,34 @@ export function ChatView({
 	const [restoredMessages, setRestoredMessages] = useState<
 		CodingAgentUIMessage[] | null
 	>(null);
+	const [compactionOverrides, setCompactionOverrides] = useState<
+		Partial<CompactionSettings>
+	>({});
+	const compactionOverridesRef = useRef<Partial<CompactionSettings>>({});
 	const {
 		abort,
+		cancelCompaction,
 		catalogDiagnostic,
+		compact,
+		compactions,
 		error,
+		getCompactionSettings,
 		interrupt,
+		isCompacting,
 		isPreparingMessage,
 		messages,
+		setCompactionOverrides: applyCompactionOverrides,
 		status,
 		submit,
-	} = useChat(sessionId, initialMessages, onHostedCompletion);
-	const isBusy =
+	} = useChat(
+		sessionId,
+		initialMessages,
+		onHostedCompletion,
+		initialActiveMessages,
+		initialCompactions
+	);
+	const isTurnBusy =
+		hasPendingApproval ||
 		isPreparingMessage ||
 		status === "submitted" ||
 		status === "streaming" ||
@@ -93,6 +126,7 @@ export function ChatView({
 		// executions are still in flight; without this the turn looks stopped
 		// (spinner gone) and Esc interrupt cannot be armed. See use-chat.ts.
 		hasPendingToolExecutionStep(messages, loadedMessageIds);
+	const isBusy = isTurnBusy || isCompacting;
 	const promptHistory = useMemo(
 		() => derivePromptHistory(initialMessages),
 		[initialMessages]
@@ -151,58 +185,65 @@ export function ChatView({
 		[abort]
 	);
 
+	const handleInterrupt = () => {
+		if (interruptArmedRef.current) {
+			if (interruptResetTimeoutRef.current) {
+				clearTimeout(interruptResetTimeoutRef.current);
+				interruptResetTimeoutRef.current = null;
+			}
+
+			interruptArmedRef.current = false;
+			setIsInterruptArmed(false);
+			interrupt();
+			return;
+		}
+
+		interruptArmedRef.current = true;
+		setIsInterruptArmed(true);
+
+		clearTimeout(interruptResetTimeoutRef.current ?? 0);
+
+		interruptResetTimeoutRef.current = setTimeout(() => {
+			interruptArmedRef.current = false;
+			setIsInterruptArmed(false);
+			interruptResetTimeoutRef.current = null;
+		}, INTERRUPT_CONFIRMATION_TIMEOUT_MS);
+	};
 	useKeyboard((key) => {
 		if (!isTopLayer("base")) {
 			return;
 		}
-
-		if (key.name === "escape" && isBusy) {
-			key.preventDefault();
-
-			if (interruptArmedRef.current) {
-				if (interruptResetTimeoutRef.current) {
-					clearTimeout(interruptResetTimeoutRef.current);
-					interruptResetTimeoutRef.current = null;
-				}
-
-				interruptArmedRef.current = false;
-				setIsInterruptArmed(false);
-				interrupt();
+		if (key.name === "escape") {
+			if (isCompacting) {
+				key.preventDefault();
+				cancelCompaction();
 				return;
 			}
-
-			interruptArmedRef.current = true;
-			setIsInterruptArmed(true);
-
-			if (interruptResetTimeoutRef.current) {
-				clearTimeout(interruptResetTimeoutRef.current);
+			if (!isBusy) {
+				return;
 			}
-
-			interruptResetTimeoutRef.current = setTimeout(() => {
-				interruptArmedRef.current = false;
-				setIsInterruptArmed(false);
-				interruptResetTimeoutRef.current = null;
-			}, INTERRUPT_CONFIRMATION_TIMEOUT_MS);
+			key.preventDefault();
+			handleInterrupt();
 			return;
 		}
-
-		if (key.ctrl && key.name === "r") {
-			key.preventDefault();
-			dialog.open({
-				children: (
-					<RenameSessionDialog
-						onSuccess={(_newTitle) => {
-							show({
-								message: "Session renamed",
-								variant: "success",
-							});
-						}}
-						session={{ id: sessionId, title: sessionTitle }}
-					/>
-				),
-				title: "Rename Session",
-			});
+		if (!(key.ctrl && key.name === "r")) {
+			return;
 		}
+		key.preventDefault();
+		dialog.open({
+			children: (
+				<RenameSessionDialog
+					onSuccess={(_newTitle) => {
+						show({
+							message: "Session renamed",
+							variant: "success",
+						});
+					}}
+					session={{ id: sessionId, title: sessionTitle }}
+				/>
+			),
+			title: "Rename Session",
+		});
 	});
 
 	useEffect(
@@ -228,21 +269,119 @@ export function ChatView({
 
 	useEffect(
 		() => () => {
-			if (interruptResetTimeoutRef.current) {
-				clearTimeout(interruptResetTimeoutRef.current);
-			}
+			clearTimeout(interruptResetTimeoutRef.current ?? 0);
 		},
 		[]
 	);
+	const updateCompactionOverride = (
+		key: CompactionSettingKey,
+		value: CompactionSettings[CompactionSettingKey]
+	) => {
+		const next = { ...compactionOverridesRef.current, [key]: value };
+		compactionOverridesRef.current = next;
+		setCompactionOverrides(next);
+		applyCompactionOverrides(next);
+	};
 
-	const submitMessage = async (submission: ChatPromptSubmission) => {
-		if (isBusy || registry === null || !isPromptConfigRestored) {
+	const resetCompactionOverrides = () => {
+		compactionOverridesRef.current = {};
+		setCompactionOverrides({});
+		applyCompactionOverrides({});
+	};
+
+	const runManualCompaction = async (focus?: string): Promise<boolean> => {
+		if (isTurnBusy || isCompacting) {
+			show({
+				message: "Compaction is unavailable while the conversation is active.",
+				variant: "error",
+			});
 			return false;
 		}
+		show({ message: "Compacting conversation…", variant: "info" });
+		try {
+			const effective = resolveEffectiveAgentSelection(
+				registry,
+				agent,
+				model,
+				variant
+			);
+			const result = await compact(focus, effective.model);
+			show({
+				message: `Compacted ${result.entry.tokensBefore} → ${result.entry.tokensAfter} tokens.`,
+				variant: "success",
+			});
+			return true;
+		} catch (error) {
+			show({
+				message: error instanceof Error ? error.message : "Compaction failed.",
+				variant: "error",
+			});
+			return false;
+		}
+	};
 
+	const openCompactionSettings = async () => {
+		if (isTurnBusy || isCompacting) {
+			show({
+				message:
+					"Compaction settings are unavailable while the conversation is active.",
+				variant: "error",
+			});
+			return;
+		}
+		try {
+			const effective = resolveEffectiveAgentSelection(
+				registry,
+				agent,
+				model,
+				variant
+			);
+			const settings = await getCompactionSettings(effective.model);
+			dialog.open({
+				children: (
+					<CompactionSettingsDialogContent
+						onChange={updateCompactionOverride}
+						onReset={resetCompactionOverrides}
+						overrides={compactionOverrides}
+						resolveSettings={(nextOverrides) =>
+							getCompactionSettings(effective.model, nextOverrides)
+						}
+						settings={settings}
+					/>
+				),
+				title: "Compaction Settings",
+			});
+		} catch (error) {
+			show({
+				message:
+					error instanceof Error
+						? error.message
+						: "Could not load compaction settings.",
+				variant: "error",
+			});
+		}
+	};
+
+	const executeCompactionCommand = (focus?: string) =>
+		runManualCompaction(focus);
+
+	const submitMessage = async (submission: ChatPromptSubmission) => {
 		const { files, text, skill } = submission;
 		const userText = text.trim();
 		if (!hasChatPromptContent(submission)) {
+			return false;
+		}
+		if (!skill && files.length === 0) {
+			const compactCommand = parseCompactCommand(userText);
+			if (compactCommand) {
+				return executeCompactionCommand(compactCommand.focus);
+			}
+			if (isCompactionSettingsCommand(userText)) {
+				await openCompactionSettings();
+				return true;
+			}
+		}
+		if (isTurnBusy || registry === null || !isPromptConfigRestored) {
 			return false;
 		}
 
@@ -263,6 +402,7 @@ export function ChatView({
 			userText,
 			skill,
 		}).catch(() => ({ rejected: true, reason: "Could not submit the prompt" }));
+
 		if (outcome.rejected) {
 			// The input and attachments stay in the textarea so a rejected
 			// explicit Skill submission never silently changes intent.
@@ -271,6 +411,25 @@ export function ChatView({
 		}
 		return true;
 	};
+	const observedCompactionCountRef = useRef(initialCompactions.length);
+	useEffect(() => {
+		const observed = observedCompactionCountRef.current;
+		if (compactions.length <= observed) {
+			observedCompactionCountRef.current = compactions.length;
+			return;
+		}
+		const added = compactions.slice(observed);
+		observedCompactionCountRef.current = compactions.length;
+		for (const entry of added) {
+			if (entry.trigger === "manual") {
+				continue;
+			}
+			show({
+				message: `Automatic compaction (${entry.trigger}): ${entry.tokensBefore} → ${entry.tokensAfter} tokens.`,
+				variant: "success",
+			});
+		}
+	}, [compactions, initialCompactions.length, show]);
 
 	useEffect(() => {
 		if (catalogDiagnostic !== null) {
@@ -351,10 +510,13 @@ export function ChatView({
 		<box flexDirection="row" height="100%" width="100%">
 			<box flexGrow={1} height="100%" paddingX={1}>
 				<ChatShell
+					compactions={compactions}
 					error={error}
 					isBusy={isBusy}
 					isInterruptArmed={isInterruptArmed}
 					messages={messages}
+					onCompact={executeCompactionCommand}
+					onOpenCompaction={openCompactionSettings}
 					onSubmit={submitMessage}
 					promptHistory={promptHistory}
 				/>

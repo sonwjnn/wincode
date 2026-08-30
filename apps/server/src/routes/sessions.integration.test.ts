@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 // that import names the partial mock omits.
 // biome-ignore lint/performance/noNamespaceImport: mock spread needs the full namespace
 import * as realAi from "@wincode/ai";
+import type { generateText as GenerateText } from "ai";
 import { z } from "zod";
 
 const MCP_TOOL_NAME_REGEX = /^mcp_[A-Za-z0-9_-]+$/;
@@ -161,9 +162,15 @@ const billingRepository = {
 	expireStaleActiveRequests: mock(async () => ({ ok: true, expiredCount: 0 })),
 };
 
+const generateSummaryText = mock(async () => ({
+	text: "durable summary",
+	usage: { inputTokens: 8, outputTokens: 3, totalTokens: 11 },
+}));
+const generateText = generateSummaryText as unknown as typeof GenerateText;
 const sessionsRoutes = createSessionsRoutes({
 	codingServerTools,
 	createCodingAgentStreamResponse,
+	generateText,
 	getBillingConfig: () =>
 		({
 			// The glob tool's schema is larger than the removed list tool's, so
@@ -200,6 +207,42 @@ beforeEach(() => {
 
 afterEach(() => {
 	mock.restore();
+});
+
+describe("POST /:id/compact-summary", () => {
+	test("uses the hosted model route and returns summarization usage", async () => {
+		const response = await sessionsRoutes.request(
+			"/session-1/compact-summary",
+			{
+				body: JSON.stringify({
+					focus: "preserve identifiers",
+					model: "gpt-5.4-mini",
+					previousSummary: {
+						coveredMessageIds: ["u0"],
+						formatVersion: 1,
+						text: "Earlier decisions.",
+					},
+					serializedMessages: "[message id=u1 role=user]\ncontinue",
+				}),
+				headers: { "content-type": "application/json" },
+				method: "POST",
+			}
+		);
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			text: "durable summary",
+			usage: { inputTokens: 8, outputTokens: 3, totalTokens: 11 },
+		});
+		expect(generateSummaryText).toHaveBeenCalledWith(
+			expect.objectContaining({
+				maxOutputTokens: 4096,
+				maxRetries: 0,
+				prompt: expect.stringContaining("preserve identifiers"),
+				system: expect.stringContaining("maintenance summarizer"),
+			})
+		);
+	});
 });
 
 describe("POST /:id/chat (transport-only)", () => {

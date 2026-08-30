@@ -6,6 +6,8 @@ import { createElement, useCallback, useMemo } from "react";
 import { useRefreshAgentRegistry } from "@/modules/agents";
 import {
 	AgentsAdapter,
+	CompactAdapter,
+	CompactionAdapter,
 	ConnectAdapter,
 	DialogAdapter,
 	ExitAdapter,
@@ -56,9 +58,14 @@ export async function copyBrowserAuthorizationUrl(
 	}
 	throw new Error("Failed to copy URL.");
 }
+type CompactionCommandOptions = {
+	onCompact?: (focus?: string) => Promise<boolean> | boolean;
+	onOpenCompaction?: () => Promise<void> | void;
+};
 
 export function useCommandExecutor(
-	onSelectSkill: (command: string) => void
+	onSelectSkill: (command: string) => void,
+	options: CompactionCommandOptions = {}
 ): UseCommandExecutorReturn {
 	const renderer = useRenderer();
 	const router = useRouter();
@@ -120,6 +127,22 @@ export function useCommandExecutor(
 					navigateHome: () => {
 						router.navigate({ to: "/" }).catch(() => undefined);
 					},
+				}),
+				compact: new CompactAdapter({
+					execute:
+						options.onCompact ??
+						(() => {
+							throw new Error("Compaction is unavailable in this view.");
+						}),
+				}),
+				compaction: new CompactionAdapter({
+					open:
+						options.onOpenCompaction ??
+						(() => {
+							throw new Error(
+								"Compaction settings are unavailable in this view."
+							);
+						}),
 				}),
 				dialog: new DialogAdapter({
 					open: (key, title) => {
@@ -245,8 +268,9 @@ export function useCommandExecutor(
 			dialog,
 			mcp,
 			model,
+			options.onCompact,
+			options.onOpenCompaction,
 			onSelectSkill,
-			renderer,
 			refreshAgentRegistry,
 			router,
 			setAgent,

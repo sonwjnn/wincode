@@ -7,6 +7,8 @@ export type CommandSpec = BaseSpec &
 		| { kind: "exit" }
 		| { kind: "connect" }
 		| { kind: "new" }
+		| { kind: "compact" }
+		| { kind: "compaction" }
 		| {
 				kind: "dialog";
 				dialogKey: "sessions" | "theme" | "mcps" | "permissions";
@@ -23,6 +25,18 @@ export const COMMANDS: CommandSpec[] = [
 		name: "new",
 		value: "/new",
 		kind: "new",
+	},
+	{
+		description: "Compact conversation history",
+		name: "compact",
+		value: "/compact",
+		kind: "compact",
+	},
+	{
+		description: "Open compaction settings",
+		name: "compaction",
+		value: "/compaction",
+		kind: "compaction",
 	},
 	{
 		description: "Switch agents",

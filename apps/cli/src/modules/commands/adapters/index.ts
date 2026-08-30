@@ -1,4 +1,6 @@
 export { AgentsAdapter } from "./agents-adapter";
+export { CompactAdapter } from "./compact-adapter";
+export { CompactionAdapter } from "./compaction-adapter";
 export { ConnectAdapter } from "./connect-adapter";
 export { DialogAdapter } from "./dialog-adapter";
 export { ExitAdapter } from "./exit-adapter";

@@ -10,17 +10,19 @@ import {
 	modelVariantSchema,
 	skillRequestContextSchema,
 	skillToolDefinitionSchema,
+	toCodingMessageUsage,
 } from "@wincode/ai";
 import {
 	codingServerTools,
 	convertMcpToolManifest,
 	createCodingAgentStreamResponse,
+	getProviderErrorMessage,
 	type ResolvedModel,
 	resolveSupportedChatModel,
 	resolveWincodeChatModelSelection,
 } from "@wincode/ai/server";
 import { createDrizzleClient } from "@wincode/db/client";
-import { safeValidateUIMessages } from "ai";
+import { generateText, safeValidateUIMessages } from "ai";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import {
@@ -73,6 +75,23 @@ const chatRequestSchema = z
 		sendReasoning: z.boolean().optional(),
 		skill: skillRequestContextSchema.optional(),
 		skillTool: skillToolDefinitionSchema.optional(),
+	})
+	.strict();
+
+const compactionSummarySchema = z
+	.object({
+		coveredMessageIds: z.array(z.string().min(1)),
+		formatVersion: z.literal(1),
+		text: z.string(),
+		focus: z.string().optional(),
+	})
+	.strict();
+const compactionSummaryRequestSchema = z
+	.object({
+		focus: z.string().max(4096).optional(),
+		model: z.string().min(1),
+		previousSummary: compactionSummarySchema.optional(),
+		serializedMessages: z.string().min(1).max(4_000_000),
 	})
 	.strict();
 
@@ -138,6 +157,27 @@ const readBoundedJsonBody = async (request: Request): Promise<unknown> => {
 	} finally {
 		reader.cancel().catch(() => undefined);
 	}
+};
+
+const COMPACTION_SUMMARY_SYSTEM_PROMPT = `You are Wincode's conversation maintenance summarizer. Summarize only the supplied transcript for a future coding-agent turn. Preserve user requests, decisions, current work, unresolved errors, exact identifiers, file paths, and tool call/result pairings. Do not invent facts, call tools, modify files, or address the user. Old attachments are metadata only. Return a concise plain-text summary.`;
+
+const buildCompactionSummaryPrompt = (
+	serializedMessages: string,
+	previousSummary: z.infer<typeof compactionSummarySchema> | undefined,
+	focus: string | undefined
+): string => {
+	const prior = previousSummary
+		? `Prior durable summary:\n${previousSummary.text}\n`
+		: "";
+	return [
+		"Summarize this transcript for the next coding-agent request.",
+		focus?.trim()
+			? `Public focus: ${focus.trim()}`
+			: "Use the default preservation priorities.",
+		prior,
+		"Transcript:",
+		serializedMessages,
+	].join("\n");
 };
 
 const isKillSwitched = (providerId: string, modelId: string) =>
@@ -210,6 +250,7 @@ const isAcceptableInput = (
 export type SessionsRouteDeps = {
 	readonly codingServerTools?: typeof codingServerTools;
 	readonly createCodingAgentStreamResponse?: typeof createCodingAgentStreamResponse;
+	readonly generateText?: typeof generateText;
 	readonly getBillingConfig?: typeof getBillingConfig;
 	readonly getBillingRepository?: () => BillingRepository | null;
 	readonly resolveSupportedChatModel?: typeof resolveSupportedChatModel;
@@ -262,6 +303,82 @@ const createResolvedBillingRepository = (): BillingRepository | null => {
 		providerKillSwitches: billingConfig.providerKillSwitches,
 	});
 	return resolvedBillingRepository;
+};
+
+const handleCompactionSummaryRequest = async (
+	c: Context,
+	generateTextResolved: typeof generateText,
+	resolveSupportedChatModelResolved: typeof resolveSupportedChatModel,
+	resolveWincodeChatModelSelectionResolved: typeof resolveWincodeChatModelSelection
+): Promise<Response> => {
+	const subject = await verifyBearerAuth(c.req.header("authorization") ?? null);
+	if (!subject) {
+		return c.json({ error: "Unauthorized" }, 401, unauthorizedHeaders);
+	}
+	if (!requireScope(subject, "chat:write")) {
+		return c.json({ error: "Forbidden" }, 403);
+	}
+	if (!hasValidContentLength(c.req.header("content-length") ?? null)) {
+		return badRequest();
+	}
+
+	let body: unknown;
+	try {
+		body = await readBoundedJsonBody(c.req.raw);
+	} catch {
+		return badRequest();
+	}
+	const parsed = compactionSummaryRequestSchema.safeParse(body);
+	if (!parsed.success) {
+		return badRequest();
+	}
+
+	let resolvedModel: ResolvedModel;
+	try {
+		const selected = resolveWincodeChatModelSelectionResolved(
+			parsed.data.model
+		);
+		resolvedModel = resolveSupportedChatModelResolved(selected, {
+			maxOutputTokens: 4096,
+		});
+	} catch {
+		return badRequest();
+	}
+
+	try {
+		const result = await generateTextResolved({
+			abortSignal: c.req.raw.signal,
+			maxOutputTokens: 4096,
+			maxRetries: 0,
+			model: resolvedModel.model,
+			prompt: buildCompactionSummaryPrompt(
+				parsed.data.serializedMessages,
+				parsed.data.previousSummary,
+				parsed.data.focus
+			),
+			providerOptions: resolvedModel.providerOptions,
+			system: COMPACTION_SUMMARY_SYSTEM_PROMPT,
+		});
+		const usage = toCodingMessageUsage(result.usage);
+		return new Response(
+			JSON.stringify({
+				text: result.text,
+				...(usage ? { usage } : {}),
+			}),
+			{
+				headers: { "content-type": "application/json; charset=utf-8" },
+				status: 200,
+			}
+		);
+	} catch (error) {
+		return new Response(
+			JSON.stringify({ error: getProviderErrorMessage(error) }),
+			{
+				headers: { "content-type": "application/json; charset=utf-8" },
+				status: 502,
+			}
+		);
+	}
 };
 
 const handleChatRequest = async (
@@ -431,6 +548,7 @@ export const createSessionsRoutes = (deps: SessionsRouteDeps = {}) => {
 	const codingServerToolsResolved = deps.codingServerTools ?? codingServerTools;
 	const createCodingAgentStreamResponseResolved =
 		deps.createCodingAgentStreamResponse ?? createCodingAgentStreamResponse;
+	const generateTextResolved = deps.generateText ?? generateText;
 	const resolveBillingConfig = deps.getBillingConfig ?? getBillingConfig;
 	const resolveBillingRepository =
 		deps.getBillingRepository ?? createResolvedBillingRepository;
@@ -438,15 +556,25 @@ export const createSessionsRoutes = (deps: SessionsRouteDeps = {}) => {
 		deps.resolveSupportedChatModel ?? resolveSupportedChatModel;
 	const resolveWincodeChatModelSelectionResolved =
 		deps.resolveWincodeChatModelSelection ?? resolveWincodeChatModelSelection;
-	return new Hono().post("/:id/chat", (c) =>
-		handleChatRequest(c, resolveBillingConfig, resolveBillingRepository, {
-			codingServerTools: codingServerToolsResolved,
-			createCodingAgentStreamResponse: createCodingAgentStreamResponseResolved,
-			resolveSupportedChatModel: resolveSupportedChatModelResolved,
-			resolveWincodeChatModelSelection:
-				resolveWincodeChatModelSelectionResolved,
-		})
-	);
+	return new Hono()
+		.post("/:id/chat", (c) =>
+			handleChatRequest(c, resolveBillingConfig, resolveBillingRepository, {
+				codingServerTools: codingServerToolsResolved,
+				createCodingAgentStreamResponse:
+					createCodingAgentStreamResponseResolved,
+				resolveSupportedChatModel: resolveSupportedChatModelResolved,
+				resolveWincodeChatModelSelection:
+					resolveWincodeChatModelSelectionResolved,
+			})
+		)
+		.post("/:id/compact-summary", (c) =>
+			handleCompactionSummaryRequest(
+				c,
+				generateTextResolved,
+				resolveSupportedChatModelResolved,
+				resolveWincodeChatModelSelectionResolved
+			)
+		);
 };
 
 export const sessionsRoutes = createSessionsRoutes();

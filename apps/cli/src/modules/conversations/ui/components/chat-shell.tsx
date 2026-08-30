@@ -9,34 +9,45 @@ import { useToggleShortcut } from "@/shared/providers/keyboard-layer/keyboard-la
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
 import { ProgressBar } from "@/shared/ui/progress-bar";
+import {
+	type ConversationCompaction,
+	isCompactionSummaryMessage,
+} from "../../compaction";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import { summarizeSessionUsage } from "../../usage/session-usage";
 import type { ChatPromptSubmission } from "../../utils";
 import { ErrorMessage } from "../messages";
 import { ChatMessage } from "./chat-message";
 import { ChatTextArea } from "./chat-text-area";
+import { buildConversationTimeline } from "./chat-timeline";
 import {
 	groupMessagesByConversationTurn,
 	resolveConversationTurnFooterMessages,
 } from "./chat-turns";
+import { CompactionDivider } from "./compaction-divider";
 import { SessionUsageBar } from "./session-usage-bar";
 
 type ChatShellProps = {
+	compactions?: readonly ConversationCompaction[];
 	error?: unknown;
 	isBusy: boolean;
 	isInterruptArmed: boolean;
 	messages: CodingAgentUIMessage[];
+	onCompact?: (focus?: string) => Promise<boolean> | boolean;
+	onOpenCompaction?: () => Promise<void> | void;
 	promptHistory: PromptHistoryEntry[];
 	onSubmit: (
 		submission: ChatPromptSubmission
 	) => boolean | Promise<boolean> | undefined;
 };
-
 export function ChatShell({
+	compactions = [],
 	error,
 	isBusy,
 	isInterruptArmed,
 	messages,
+	onCompact,
+	onOpenCompaction,
 	promptHistory,
 	onSubmit,
 }: ChatShellProps) {
@@ -49,11 +60,15 @@ export function ChatShell({
 	const hasPendingApproval = useApprovalPanels().entries.some(
 		(entry) => entry.resolution === undefined
 	);
-	const turns = groupMessagesByConversationTurn(messages);
+	const displayMessages = messages.filter(
+		(message) => !isCompactionSummaryMessage(message)
+	);
+	const turns = groupMessagesByConversationTurn(displayMessages);
+	const timeline = buildConversationTimeline(displayMessages, compactions);
 	const footerMessages = resolveConversationTurnFooterMessages(turns);
 	const usage = useMemo(
-		() => summarizeSessionUsage(messages, model, table),
-		[messages, model, table]
+		() => summarizeSessionUsage(displayMessages, model, table, compactions),
+		[compactions, displayMessages, model, table]
 	);
 	useEffect(() => {
 		if (scrollRequest === 0) {
@@ -94,19 +109,33 @@ export function ChatShell({
 				verticalScrollbarOptions={{ visible: false }}
 			>
 				<box flexDirection="column" gap={1}>
-					{messages.length === 0 && !error ? (
+					{displayMessages.length === 0 && !error ? (
 						<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 							No messages yet.
 						</text>
 					) : (
-						turns.map((turn, index) => (
-							<box key={turn.id} marginTop={index === 0 ? 1 : 0} width="100%">
-								<ChatMessage
-									footerMessage={footerMessages.get(turn.id)}
-									messages={turn.messages}
-								/>
-							</box>
-						))
+						timeline.map((item, index) => {
+							if (item.kind === "compaction") {
+								return (
+									<CompactionDivider
+										entry={item.compaction}
+										key={item.compaction.id}
+									/>
+								);
+							}
+							return (
+								<box
+									key={item.turn.id}
+									marginTop={index === 0 ? 1 : 0}
+									width="100%"
+								>
+									<ChatMessage
+										footerMessage={footerMessages.get(item.turn.id)}
+										messages={item.turn.messages}
+									/>
+								</box>
+							);
+						})
 					)}
 					{error ? <ErrorMessage error={error} /> : null}
 				</box>
@@ -129,6 +158,8 @@ export function ChatShell({
 					<>
 						<box flexShrink={0} width="100%">
 							<ChatTextArea
+								onCompact={onCompact}
+								onOpenCompaction={onOpenCompaction}
 								onSubmit={handleSubmit}
 								sessionPromptHistory={promptHistory}
 							/>

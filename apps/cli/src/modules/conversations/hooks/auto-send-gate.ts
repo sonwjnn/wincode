@@ -34,29 +34,39 @@ export type AutoSendGate = {
 	 *    executions that were already dispatched keep running and their
 	 *    late outputs would re-trigger `sendAutomaticallyWhen`.
 	 *
-	 * A single per-turn boolean is sufficient: within a live session,
-	 * `isBusy` (which includes in-flight tool executions) blocks a new
-	 * submit until the interrupted turn's outputs have landed, so no stale
-	 * execution can fire auto-send after `enable()`; after a reload no
-	 * execution is in flight at all.
+	 * The interrupt latch and maintenance pause are independent: a new turn
+	 * clears both, while a failed maintenance operation can disable only the
+	 * current turn. After a reload no execution is in flight at all.
 	 */
 	/** Disables auto-send: the current turn was interrupted. */
 	disable: () => void;
 	/** Re-enables auto-send: a new turn is starting. */
 	enable: () => void;
+	/** Pauses auto-send while asynchronous context maintenance runs. */
+	pause: () => void;
+	resume: () => void;
 	shouldAutoSend: (arg: { messages: CodingAgentUIMessage[] }) => boolean;
 };
 export const createAutoSendGate = (): AutoSendGate => {
 	let turnInterrupted = false;
+	let compactionPaused = false;
 	return {
 		disable: () => {
 			turnInterrupted = true;
+			compactionPaused = false;
 		},
 		enable: () => {
 			turnInterrupted = false;
+			compactionPaused = false;
+		},
+		pause: () => {
+			compactionPaused = true;
+		},
+		resume: () => {
+			compactionPaused = false;
 		},
 		shouldAutoSend: ({ messages }) =>
-			!turnInterrupted &&
+			!(turnInterrupted || compactionPaused) &&
 			lastAssistantMessageIsCompleteWithToolCalls({ messages }),
 	};
 };

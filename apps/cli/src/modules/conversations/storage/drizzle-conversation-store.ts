@@ -11,6 +11,10 @@ import { generateId, safeValidateUIMessages } from "ai";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { isSkillToolPart, sanitizeSkillToolPart } from "@/modules/skills";
+import type {
+	AppendConversationCompactionInput,
+	ConversationCompaction,
+} from "../compaction/types";
 import { createLocalDatabase, type LocalConversationDatabase } from "./client";
 import {
 	type ConversationSession,
@@ -23,6 +27,7 @@ import {
 } from "./conversation-store";
 import { runLocalMigrations } from "./migrations";
 import {
+	conversationCompaction,
 	conversationMessage,
 	conversationSession,
 	conversationWorkspace,
@@ -176,6 +181,27 @@ export const createPromptHistory = (db: LocalConversationDatabase) => ({
 });
 
 type SessionRow = typeof conversationSession.$inferSelect;
+type CompactionRow = typeof conversationCompaction.$inferSelect;
+
+const toConversationCompaction = (
+	row: CompactionRow
+): ConversationCompaction => ({
+	completedAt: row.completedAt,
+	createdAt: row.createdAt,
+	firstKeptUiMessageId: row.firstKeptUiMessageId,
+	focus: row.focus ?? undefined,
+	id: row.id,
+	priorCompactionId: row.priorCompactionId ?? undefined,
+	sequence: row.sequence,
+	sessionId: row.sessionId,
+	summarizationModel: row.summarizationModelJson,
+	summarizationUsage: row.summarizationUsageJson ?? undefined,
+	summary: row.summaryJson,
+	throughMessageUiId: row.throughMessageUiId,
+	tokensAfter: row.tokensAfter,
+	tokensBefore: row.tokensBefore,
+	trigger: row.trigger,
+});
 
 type DrizzleConversationStoreOptions = {
 	workspaceRoot?: string;
@@ -401,6 +427,58 @@ const writeMessages = (
 	});
 };
 
+const appendCompaction = (
+	db: LocalConversationDatabase,
+	workspaceId: string,
+	input: AppendConversationCompactionInput
+): ConversationCompaction =>
+	db.transaction((tx) => {
+		const session = tx
+			.select({ id: conversationSession.id })
+			.from(conversationSession)
+			.where(
+				and(
+					eq(conversationSession.id, input.sessionId),
+					eq(conversationSession.workspaceId, workspaceId)
+				)
+			)
+			.get();
+		if (!session) {
+			throw new Error("Session not found");
+		}
+
+		const latest = tx
+			.select({ sequence: conversationCompaction.sequence })
+			.from(conversationCompaction)
+			.where(eq(conversationCompaction.sessionId, input.sessionId))
+			.orderBy(desc(conversationCompaction.sequence))
+			.limit(1)
+			.get();
+		const sequence = (latest?.sequence ?? 0) + 1;
+		const id = input.id ?? generateId();
+		const createdAt = input.createdAt ?? new Date();
+		const completedAt = input.completedAt ?? createdAt;
+		const row = {
+			completedAt,
+			createdAt,
+			firstKeptUiMessageId: input.firstKeptUiMessageId,
+			focus: input.focus ?? null,
+			id,
+			priorCompactionId: input.priorCompactionId ?? null,
+			sequence,
+			sessionId: input.sessionId,
+			summarizationModelJson: input.summarizationModel,
+			summarizationUsageJson: input.summarizationUsage ?? null,
+			summaryJson: input.summary,
+			throughMessageUiId: input.throughMessageUiId,
+			tokensAfter: input.tokensAfter,
+			tokensBefore: input.tokensBefore,
+			trigger: input.trigger,
+		};
+		tx.insert(conversationCompaction).values(row).run();
+		return toConversationCompaction(row);
+	});
+
 export const createDrizzleConversationStore = (
 	database?: LocalConversationDatabase,
 	options: DrizzleConversationStoreOptions = {}
@@ -414,6 +492,8 @@ export const createDrizzleConversationStore = (
 	const workspace = ensureWorkspace(db, options.workspaceRoot ?? process.cwd());
 
 	return {
+		appendCompaction: (input) =>
+			Promise.resolve(appendCompaction(db, workspace.id, input)),
 		getPromptHistory: promptHistoryStore.get,
 		recordPrompt: promptHistoryStore.record,
 		createSession: ({ agent, message, model, variant }: CreateSessionInput) => {
@@ -455,6 +535,53 @@ export const createDrizzleConversationStore = (
 				)
 				.run();
 			return Promise.resolve();
+		},
+
+		getCompactions: (sessionId: string) => {
+			const rows = db
+				.select({
+					compaction: conversationCompaction,
+				})
+				.from(conversationCompaction)
+				.innerJoin(
+					conversationSession,
+					eq(conversationCompaction.sessionId, conversationSession.id)
+				)
+				.where(
+					and(
+						eq(conversationCompaction.sessionId, sessionId),
+						eq(conversationSession.workspaceId, workspace.id)
+					)
+				)
+				.orderBy(asc(conversationCompaction.sequence))
+				.all();
+			return Promise.resolve(
+				rows.map(({ compaction }) => toConversationCompaction(compaction))
+			);
+		},
+
+		getLatestCompaction: (sessionId: string) => {
+			const row = db
+				.select({
+					compaction: conversationCompaction,
+				})
+				.from(conversationCompaction)
+				.innerJoin(
+					conversationSession,
+					eq(conversationCompaction.sessionId, conversationSession.id)
+				)
+				.where(
+					and(
+						eq(conversationCompaction.sessionId, sessionId),
+						eq(conversationSession.workspaceId, workspace.id)
+					)
+				)
+				.orderBy(desc(conversationCompaction.sequence))
+				.limit(1)
+				.get();
+			return Promise.resolve(
+				row ? toConversationCompaction(row.compaction) : null
+			);
 		},
 
 		getMessages: async (sessionId: string) => {

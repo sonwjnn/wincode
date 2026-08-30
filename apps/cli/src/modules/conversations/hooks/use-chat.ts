@@ -23,6 +23,22 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAgentRegistry } from "@/modules/agents";
 import { useConnections } from "@/modules/connections";
+import {
+	type CompactConversationInput,
+	type CompactConversationResult,
+	type CompactionSettings,
+	type ConversationCompaction,
+	ConversationCompactionError,
+	createConversationCompaction,
+	createDirectSummaryGenerator,
+	createHostedSummaryGenerator,
+	isCompactionSummaryMessage,
+	isContextOverflowError,
+	type ResolvedCompactionSettings,
+	recoverContextOverflow,
+	resolveCompactionSettings,
+	type SummaryGeneratorInput,
+} from "@/modules/conversations/compaction";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import {
 	type McpAddToolOutput,
@@ -30,6 +46,7 @@ import {
 	type McpContextValue,
 	useMcp,
 } from "@/modules/mcp";
+import { useModelPricing } from "@/modules/model-pricing";
 import { useToolPermission } from "@/modules/permissions";
 import {
 	buildSkillToolDefinition,
@@ -86,6 +103,29 @@ export const createChatMessageParts = (
 	fileMentions: CodingAgentUIMessage["parts"],
 	files: FileUIPart[]
 ) => [{ text: userText, type: "text" as const }, ...fileMentions, ...files];
+
+const isBenignCompactionError = (error: unknown): boolean =>
+	error instanceof ConversationCompactionError &&
+	(error.code === "history-too-short" || error.code === "not-needed");
+
+const compactionErrorMessage = (error: unknown): string =>
+	error instanceof Error ? error.message : "Conversation compaction failed.";
+
+const waitForCompaction = async (
+	operation: Promise<CompactConversationResult> | null
+): Promise<string | null> => {
+	if (!operation) {
+		return null;
+	}
+	try {
+		await operation;
+		return null;
+	} catch (error) {
+		return isBenignCompactionError(error)
+			? null
+			: compactionErrorMessage(error);
+	}
+};
 
 /**
  * Strips Skill bodies, base directories, and bundled resource paths from
@@ -280,11 +320,14 @@ export const activateExplicitSkill = async (
 export function useChat(
 	sessionId: string,
 	initialMessages: CodingAgentUIMessage[],
-	onHostedCompletion?: () => void
+	onHostedCompletion?: () => void,
+	initialActiveMessages: CodingAgentUIMessage[] = initialMessages,
+	initialCompactions: ConversationCompaction[] = []
 ) {
 	const connections = useConnections();
 	const mcp = useMcp();
 	const config = useConfig();
+	const { table: modelPricing } = useModelPricing();
 	const registry = useAgentRegistry();
 	const {
 		closeApprovals,
@@ -343,6 +386,29 @@ export function useChat(
 	const setMessagesRef = useRef<
 		((messages: CodingAgentUIMessage[]) => void) | undefined
 	>(undefined);
+	const displayMessagesRef = useRef<CodingAgentUIMessage[]>([
+		...initialMessages,
+	]);
+	const activeMessagesRef = useRef<CodingAgentUIMessage[]>([
+		...initialActiveMessages,
+	]);
+	const [displayMessages, setDisplayMessages] = useState<
+		CodingAgentUIMessage[]
+	>(() => [...initialMessages]);
+	const [compactions, setCompactions] = useState<ConversationCompaction[]>(
+		() => [...initialCompactions]
+	);
+	const [isCompacting, setIsCompacting] = useState(false);
+	const [compactionError, setCompactionError] = useState<Error | null>(null);
+	const compactionOverridesRef = useRef<Partial<CompactionSettings>>({});
+	const compactionAbortRef = useRef<AbortController | null>(null);
+	const compactionOperationRef =
+		useRef<Promise<CompactConversationResult> | null>(null);
+	const overflowAttemptRef = useRef(0);
+	const autoSendRef = useRef<
+		(options: { messages: CodingAgentUIMessage[] }) => Promise<boolean>
+	>(async () => false);
+	const providerErrorRef = useRef<(error: Error) => void>(() => undefined);
 	const agentRef = useRef<AgentId>(buildAgent.id);
 	const resolvedAgentRef = useRef<ResolvedAgentRuntime | undefined>(undefined);
 	const modelRef = useRef<ChatModelSelection>(defaultChatModelSelection);
@@ -368,6 +434,194 @@ export function useChat(
 		autoSendGateRef.current = createAutoSendGate();
 	}
 	const autoSendGate = autoSendGateRef.current;
+
+	const persistDisplayMessages = (
+		messages: CodingAgentUIMessage[] = displayMessagesRef.current
+	): Promise<void> =>
+		getConversationStore().persistMessages({
+			agent: agentRef.current,
+			messages,
+			model: conversationModelRef.current,
+			sessionId,
+			variant: conversationVariantRef.current,
+		});
+
+	const mergeDisplayMessages = (
+		nextMessages: readonly CodingAgentUIMessage[]
+	): CodingAgentUIMessage[] => {
+		const merged = [...displayMessagesRef.current];
+		for (const message of nextMessages) {
+			if (isCompactionSummaryMessage(message)) {
+				continue;
+			}
+			const existingIndex = merged.findIndex(({ id }) => id === message.id);
+			if (existingIndex === -1) {
+				merged.push(message);
+			} else {
+				merged[existingIndex] = message;
+			}
+		}
+		displayMessagesRef.current = merged;
+		setDisplayMessages(merged);
+		return merged;
+	};
+
+	const removeDisplayMessage = (messageId: string) => {
+		const nextMessages = displayMessagesRef.current.filter(
+			({ id }) => id !== messageId
+		);
+		displayMessagesRef.current = nextMessages;
+		setDisplayMessages(nextMessages);
+		return nextMessages;
+	};
+
+	const summaryGenerator = useMemo(() => {
+		const direct = createDirectSummaryGenerator(connections);
+		const hosted = createHostedSummaryGenerator({
+			connections,
+			sessionId,
+		});
+		return (input: SummaryGeneratorInput) =>
+			getChatModelRoute(input.model) === "hosted"
+				? hosted(input)
+				: direct(input);
+	}, [connections, sessionId]);
+	const compactionModule = useMemo(
+		() =>
+			createConversationCompaction({
+				store: getConversationStore(),
+				summaryGenerator,
+			}),
+		[summaryGenerator]
+	);
+	const getCompactionSettings = async (
+		selection: ChatModelSelection = modelRef.current,
+		sessionOverrides: Partial<CompactionSettings> = compactionOverridesRef.current
+	): Promise<ResolvedCompactionSettings> => {
+		const snapshot = await config.configStore
+			.getSnapshot(config.workspace)
+			.catch(() => undefined);
+		return resolveCompactionSettings({
+			model: selection,
+			pricing: modelPricing,
+			sessionOverrides,
+			snapshot,
+		});
+	};
+
+	const runCompaction = (
+		trigger: CompactConversationInput["trigger"],
+		focus?: string,
+		nextMessages?: readonly CodingAgentUIMessage[],
+		selection?: ChatModelSelection
+	): Promise<CompactConversationResult> => {
+		const current = compactionOperationRef.current;
+		if (current) {
+			return current;
+		}
+		const compactionModel = selection ?? modelRef.current;
+		const controller = new AbortController();
+		compactionAbortRef.current = controller;
+		const operation = (async () => {
+			setIsCompacting(true);
+			const conversationMessages = nextMessages
+				? mergeDisplayMessages(nextMessages)
+				: displayMessagesRef.current;
+			try {
+				await persistDisplayMessages(conversationMessages);
+			} catch (error) {
+				throw new ConversationCompactionError(
+					"persistence-failed",
+					"Conversation transcript could not be persisted before compaction.",
+					{ cause: error }
+				);
+			}
+			const settings = await getCompactionSettings(compactionModel);
+			const result = await compactionModule.compact({
+				conversation: {
+					messages: conversationMessages,
+					sessionId,
+				},
+				focus,
+				model: compactionModel,
+				settings: {
+					enabled: settings.enabled,
+					keepRecentTokens: settings.keepRecentTokens,
+					thresholdTokens: settings.thresholdTokens,
+				},
+				signal: controller.signal,
+				trigger,
+			});
+			setCompactionError(null);
+			activeMessagesRef.current = result.activeMessages;
+			setMessagesRef.current?.(result.activeMessages);
+			setCompactions((currentCompactions) =>
+				currentCompactions.some(({ id }) => id === result.entry.id)
+					? currentCompactions
+					: [...currentCompactions, result.entry]
+			);
+			return result;
+		})().finally(() => {
+			if (compactionOperationRef.current === operation) {
+				compactionOperationRef.current = null;
+			}
+			compactionAbortRef.current = null;
+			setIsCompacting(false);
+		});
+		compactionOperationRef.current = operation;
+		return operation;
+	};
+
+	const cancelCompaction = () => {
+		compactionAbortRef.current?.abort();
+	};
+
+	const setCompactionOverrides = (overrides: Partial<CompactionSettings>) => {
+		compactionOverridesRef.current = { ...overrides };
+	};
+
+	const hasPendingTools = (
+		messages: readonly CodingAgentUIMessage[]
+	): boolean => {
+		const lastMessage = messages.at(-1);
+		if (!lastMessage || lastMessage.role !== "assistant") {
+			return false;
+		}
+		return lastMessage.parts.some(
+			(part) =>
+				isToolUIPart(part) &&
+				part.state !== "output-available" &&
+				part.state !== "output-error" &&
+				part.state !== "output-denied"
+		);
+	};
+
+	const maintainAfterTurn = (messages: CodingAgentUIMessage[]) => {
+		if (hasPendingTools(messages)) {
+			return;
+		}
+		void getCompactionSettings(modelRef.current).then((settings) => {
+			if (
+				!(
+					settings.autoAvailable &&
+					compactionModule.needsCompaction(messages, settings)
+				)
+			) {
+				return;
+			}
+			return runCompaction("threshold", undefined, messages).catch((error) => {
+				if (isBenignCompactionError(error)) {
+					return;
+				}
+				// Keep the completed turn and expose maintenance failure to the UI.
+				setCompactionError(
+					error instanceof Error
+						? error
+						: new Error("Automatic compaction failed.")
+				);
+			});
+		});
+	};
 
 	const transport = useMemo(() => {
 		// The transport snapshots the MCP catalog once per send; mirror the same
@@ -430,15 +684,9 @@ export function useChat(
 	};
 
 	const persistMessages = (messages: CodingAgentUIMessage[]) => {
-		getConversationStore()
-			.persistMessages({
-				agent: agentRef.current,
-				messages,
-				model: conversationModelRef.current,
-				sessionId,
-				variant: conversationVariantRef.current,
-			})
-			.catch(() => undefined);
+		void persistDisplayMessages(mergeDisplayMessages(messages)).catch(
+			() => undefined
+		);
 	};
 
 	const finalizeAndPersistMessages = (messages: CodingAgentUIMessage[]) => {
@@ -448,18 +696,24 @@ export function useChat(
 		const finalizedMessages = sanitizeInterruptedMessagesForConversation(
 			finalizeAssistantMessages(messages)
 		);
+		activeMessagesRef.current = finalizedMessages;
 		setMessagesRef.current?.(finalizedMessages);
 		persistMessages(finalizedMessages);
 	};
 
+	const shouldAutoSend = (options: {
+		messages: CodingAgentUIMessage[];
+	}): Promise<boolean> => autoSendRef.current(options);
 	const chat = useAiChat<CodingAgentUIMessage>({
 		id: sessionId,
-		messages: initialMessages,
+		messages: initialActiveMessages,
 		onFinish: ({ messages }) => {
 			finalizeAndPersistMessages(messages);
+			overflowAttemptRef.current = 0;
 			notifyHostedCompletion(modelRef.current, onHostedCompletion);
+			maintainAfterTurn(messages);
 		},
-		onError: () => {
+		onError: (providerError) => {
 			// A stream error leaves the partial assistant message in state.
 			// Mark it interrupted so the next request reduces it like any cut-off
 			// turn (its unfinished tool calls must never replay), and persist it
@@ -474,6 +728,7 @@ export function useChat(
 				}
 			}
 			finalizeAndPersistMessages(chat.messages);
+			providerErrorRef.current(providerError);
 		},
 		onToolCall: createChatToolCallHandler({
 			addToolOutputRef,
@@ -485,9 +740,10 @@ export function useChat(
 			resolveResourceLimits: () => resolveResourceLimitsRef.current(),
 			skillExecutionRef,
 		}),
-		sendAutomaticallyWhen: autoSendGate.shouldAutoSend,
+		sendAutomaticallyWhen: shouldAutoSend,
 		transport,
 	});
+	activeMessagesRef.current = chat.messages;
 	addToolOutputRef.current = chat.addToolOutput;
 	dynamicToolOutputRef.current = (config) => {
 		// AI SDK matches dynamic output by toolCallId. The reserved type-only tool
@@ -508,6 +764,102 @@ export function useChat(
 		});
 	};
 	setMessagesRef.current = chat.setMessages;
+
+	autoSendRef.current = async ({ messages }) => {
+		if (!autoSendGate.shouldAutoSend({ messages })) {
+			return false;
+		}
+		const settings = await getCompactionSettings(modelRef.current);
+		if (
+			!(
+				settings.midTurnAvailable &&
+				compactionModule.needsCompaction(messages, settings)
+			)
+		) {
+			return true;
+		}
+		autoSendGate.pause();
+		try {
+			await runCompaction("mid-turn", undefined, messages);
+			autoSendGate.resume();
+			return true;
+		} catch (error) {
+			if (isBenignCompactionError(error)) {
+				autoSendGate.disable();
+				return false;
+			}
+			setCompactionError(
+				error instanceof Error
+					? error
+					: new Error("Mid-turn compaction failed.")
+			);
+			autoSendGate.disable();
+			return false;
+		}
+	};
+
+	providerErrorRef.current = (providerError) => {
+		if (overflowAttemptRef.current > 0) {
+			return;
+		}
+		overflowAttemptRef.current = 1;
+		void (async () => {
+			const settings = await getCompactionSettings(modelRef.current);
+			if (!settings.overflowRecoveryAvailable) {
+				return;
+			}
+			const originalMessage = displayMessagesRef.current.findLast(
+				(message) => message.role === "user"
+			);
+			if (!originalMessage) {
+				return;
+			}
+			try {
+				await recoverContextOverflow({
+					attempt: 0,
+					compaction: compactionModule,
+					compactionInput: {
+						model: modelRef.current,
+						settings: {
+							enabled: settings.enabled,
+							keepRecentTokens: settings.keepRecentTokens,
+							thresholdTokens: settings.thresholdTokens,
+						},
+					},
+					conversation: {
+						messages: displayMessagesRef.current,
+						sessionId,
+					},
+					enabled: settings.overflowRecoveryAvailable,
+					error: providerError,
+					originalMessageId: originalMessage.id,
+					replay: async ({ activeMessages, originalMessageId }) => {
+						activeMessagesRef.current = activeMessages;
+						setMessagesRef.current?.(activeMessages);
+						const replayMessage = displayMessagesRef.current.find(
+							(message) => message.id === originalMessageId
+						);
+						if (!replayMessage) {
+							throw new Error("Original message disappeared during replay.");
+						}
+						await chat.sendMessage({
+							messageId: originalMessageId,
+							metadata: replayMessage.metadata,
+							parts: replayMessage.parts,
+						});
+					},
+				});
+			} catch (error) {
+				if (isContextOverflowError(providerError)) {
+					setCompactionError(
+						error instanceof Error
+							? error
+							: new Error("Context overflow recovery failed.")
+					);
+				}
+			}
+		})();
+	};
 
 	const interruptLatestAssistantMessage = (preserveToolCallId?: string) => {
 		autoSendGate.disable();
@@ -548,8 +900,8 @@ export function useChat(
 			preserveToolCallId
 		);
 
+		activeMessagesRef.current = sanitizedMessages;
 		setMessagesRef.current?.(sanitizedMessages);
-		persistMessages(sanitizedMessages);
 		chat.stop();
 	};
 	const abortApprovalTurn = (toolCallId: string) => {
@@ -654,11 +1006,38 @@ export function useChat(
 	 * message stays in place with freshly resolved metadata, skill tool parts
 	 * are sanitized, and the turn runs against the exact stored content.
 	 */
+	const prepareForSend = async (
+		candidateMessages: readonly CodingAgentUIMessage[] = activeMessagesRef.current
+	): Promise<string | null> => {
+		const waitingError = await waitForCompaction(
+			compactionOperationRef.current
+		);
+		if (waitingError) {
+			return waitingError;
+		}
+		const settings = await getCompactionSettings(modelRef.current);
+		const shouldCompact =
+			settings.autoAvailable &&
+			compactionModule.needsCompaction(candidateMessages, settings);
+		if (!shouldCompact) {
+			return null;
+		}
+		try {
+			await runCompaction("threshold", undefined, candidateMessages);
+			return null;
+		} catch (error) {
+			return isBenignCompactionError(error)
+				? null
+				: compactionErrorMessage(error);
+		}
+	};
+
 	const submitAnchoredMessage = async (
 		anchoredMessage: CodingAgentUIMessage,
 		metadata: CodingAgentUIMessage["metadata"]
 	): Promise<SubmitChatOutcome> => {
-		const nextMessages = sanitizeSkillToolParts(chat.messages);
+		const nextMessages = sanitizeSkillToolParts(activeMessagesRef.current);
+		activeMessagesRef.current = nextMessages;
 		chat.setMessages(nextMessages);
 		persistMessages(nextMessages);
 		setIsPreparingMessage(true);
@@ -687,6 +1066,8 @@ export function useChat(
 		messageId,
 	}: SubmitChatParams): Promise<SubmitChatOutcome> => {
 		approvalAbortHandledRef.current = false;
+		setCompactionError(null);
+		overflowAttemptRef.current = 0;
 		autoSendGate.enable();
 		agentRef.current = agent;
 		resolvedAgentRef.current = resolvedAgent;
@@ -696,13 +1077,20 @@ export function useChat(
 		variantRef.current = variant;
 		requestStartedAtRef.current = Date.now();
 
+		const preparationError = await prepareForSend();
+		if (preparationError) {
+			return { rejected: true, reason: preparationError };
+		}
+
 		await createTurnSkillExecution();
 
 		// An anchored turn (HomeView auto-start) re-executes the prompt message
 		// the session row already stores instead of appending a new one.
 		let anchoredMessage: CodingAgentUIMessage | undefined;
 		if (messageId !== undefined) {
-			anchoredMessage = chat.messages.find(({ id }) => id === messageId);
+			anchoredMessage = activeMessagesRef.current.find(
+				({ id }) => id === messageId
+			);
 			if (anchoredMessage?.role !== "user") {
 				return {
 					rejected: true,
@@ -734,13 +1122,26 @@ export function useChat(
 
 		const optimisticMessage = createUserMessage(userText, metadata, [], files);
 		const optimisticMessages = [
-			...sanitizeSkillToolParts(chat.messages),
+			...sanitizeSkillToolParts(activeMessagesRef.current),
 			optimisticMessage,
 		];
+		activeMessagesRef.current = optimisticMessages;
 		chat.setMessages(optimisticMessages);
 		// Persist the user message before the stream starts so a hard kill
 		// leaves the turn visible in storage instead of a dangling send.
 		persistMessages(optimisticMessages);
+		const promptPreparationError = await prepareForSend(optimisticMessages);
+		if (promptPreparationError) {
+			const nextMessages = activeMessagesRef.current.filter(
+				({ id }) => id !== optimisticMessage.id
+			);
+			activeMessagesRef.current = nextMessages;
+			chat.setMessages(nextMessages);
+			void persistDisplayMessages(
+				removeDisplayMessage(optimisticMessage.id)
+			).catch(() => undefined);
+			return { rejected: true, reason: promptPreparationError };
+		}
 		setIsPreparingMessage(true);
 
 		try {
@@ -752,11 +1153,14 @@ export function useChat(
 			});
 			return { rejected: false };
 		} catch (error) {
-			const nextMessages = chat.messages.filter(
+			const nextMessages = activeMessagesRef.current.filter(
 				({ id }) => id !== optimisticMessage.id
 			);
+			activeMessagesRef.current = nextMessages;
 			chat.setMessages(nextMessages);
-			persistMessages(nextMessages);
+			void persistDisplayMessages(
+				removeDisplayMessage(optimisticMessage.id)
+			).catch(() => undefined);
 			throw error;
 		} finally {
 			setIsPreparingMessage(false);
@@ -765,10 +1169,17 @@ export function useChat(
 
 	return {
 		abort: chat.stop,
+		cancelCompaction,
 		catalogDiagnostic,
-		error: chat.error,
+		compact: (focus?: string, selection?: ChatModelSelection) =>
+			runCompaction("manual", focus, undefined, selection),
+		compactions,
+		error: compactionError ?? chat.error,
+		getCompactionSettings,
 		interrupt: interruptLatestAssistantMessage,
-		messages: chat.messages,
+		isCompacting,
+		setCompactionOverrides,
+		messages: displayMessages,
 		status: chat.status,
 		isPreparingMessage,
 		submit,
