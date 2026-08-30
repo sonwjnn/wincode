@@ -155,7 +155,7 @@ export function CompactionSettingsDialogContent({
 			{draftSettings.diagnostics.map((diagnostic) => (
 				<text
 					fg={diagnostic.severity === "error" ? colors.error : colors.warning}
-					key={`${diagnostic.code}:${diagnostic.configPath.join(".")}`}
+					key={`${diagnostic.code}:${diagnostic.origin?.path ?? ""}:${diagnostic.configPath.join(".")}`}
 				>
 					{diagnostic.message}
 				</text>

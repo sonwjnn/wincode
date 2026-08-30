@@ -137,6 +137,32 @@ test("rebuilds the active context from the newest durable compaction", () => {
 	});
 });
 
+test("uses provider-reported usage for threshold decisions", () => {
+	const compaction = createConversationCompaction({
+		store: makeStore(),
+		summaryGenerator: async () => ({ text: "summary" }),
+		estimateTokens: () => 1,
+	});
+	const assistant = message("a1", "assistant", "answer");
+	const messages: CodingAgentUIMessage[] = [
+		message("u1", "user", "request"),
+		{
+			...assistant,
+			metadata: {
+				model,
+				usage: { inputTokens: 90, outputTokens: 20 },
+			},
+		},
+	];
+
+	expect(
+		compaction.needsCompaction(messages, {
+			enabled: true,
+			thresholdTokens: 100,
+		})
+	).toBe(true);
+});
+
 test("repeated compaction passes the prior summary and only the new compacted span", async () => {
 	const store = makeStore();
 	const summaryGenerator = mock(async () => ({ text: "new summary" }));
@@ -321,6 +347,87 @@ test("serializes old attachments as bounded metadata", () => {
 	expect(serialized.length).toBeLessThan(500);
 });
 
+test("sanitizes completed Skill bodies before summarization", async () => {
+	const store = makeStore();
+	let serialized = "";
+	const compaction = createConversationCompaction({
+		store,
+		summaryGenerator: async (input) => {
+			serialized = input.serializedMessages;
+			return { text: "summary" };
+		},
+		estimateTokens: (messages) => messages.length,
+	});
+	const skillMessage = {
+		id: "a1",
+		parts: [
+			{
+				input: { name: "review" },
+				output: {
+					baseDirectory: "/private/project",
+					body: "Never disclose this Skill body.",
+					contentHash: "hash",
+					name: "review",
+					resourcePaths: ["/private/project/resource"],
+					source: "explicit",
+					status: "loaded",
+				},
+				state: "output-available",
+				toolCallId: "skill-1",
+				toolName: "skill",
+				type: "dynamic-tool",
+			},
+		],
+		role: "assistant",
+	} as unknown as CodingAgentUIMessage;
+
+	await compaction.compact({
+		conversation: {
+			messages: [
+				message("u1", "user", "load review"),
+				skillMessage,
+				message("u2", "user", "continue"),
+				message("a2", "assistant", "done"),
+			],
+			sessionId: "session-skill",
+		},
+		model,
+		settings,
+		trigger: "manual",
+	});
+
+	expect(serialized).toContain("review");
+	expect(serialized).not.toContain("Never disclose this Skill body.");
+	expect(serialized).not.toContain("/private/project");
+});
+
+test("rejects a compaction that still exceeds the safe context limit", async () => {
+	const store = makeStore();
+	const compaction = createConversationCompaction({
+		store,
+		summaryGenerator: async () => ({ text: "summary" }),
+		estimateTokens: (messages) => messages.length,
+	});
+
+	await expect(
+		compaction.compact({
+			conversation: {
+				messages: [
+					message("u1", "user", "first"),
+					message("a1", "assistant", "answer"),
+					message("u2", "user", "second"),
+					message("a2", "assistant", "answer"),
+				],
+				sessionId: "session-too-large",
+			},
+			model,
+			settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: 2 },
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({ code: "context-still-too-large" });
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+});
+
 test("splits an oversized single turn only at complete part boundaries", async () => {
 	const store = makeStore();
 	let serialized = "";
@@ -360,6 +467,14 @@ test("splits an oversized single turn only at complete part boundaries", async (
 		"a1",
 	]);
 	expect(result.activeMessages.at(-1)?.parts).toEqual([
+		{ text: "recent suffix", type: "text" },
+	]);
+	expect(result.entry.firstKeptAssistantPartIndex).toBe(2);
+	const rebuilt = rebuildActiveMessages(
+		[message("u1", "user", "single request"), assistant],
+		result.entry
+	);
+	expect(rebuilt.at(-1)?.parts).toEqual([
 		{ text: "recent suffix", type: "text" },
 	]);
 	expect(serialized).toContain("prefix one");

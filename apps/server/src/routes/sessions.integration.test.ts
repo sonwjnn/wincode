@@ -223,6 +223,7 @@ describe("POST /:id/compact-summary", () => {
 						text: "Earlier decisions.",
 					},
 					serializedMessages: "[message id=u1 role=user]\ncontinue",
+					variant: "high",
 				}),
 				headers: { "content-type": "application/json" },
 				method: "POST",

@@ -57,6 +57,20 @@
       "when": 1788100732714,
       "tag": "0007_cynical_talkback",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1788108073565,
+      "tag": "0008_powerful_banshee",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1788108330381,
+      "tag": "0009_old_princess_powerful",
+      "breakpoints": true
     }
   ]
 }

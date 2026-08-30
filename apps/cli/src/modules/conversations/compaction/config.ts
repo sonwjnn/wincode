@@ -321,9 +321,16 @@ export const resolveCompactionSettings = (
 	};
 };
 
+export const COMPACTION_REQUEST_OVERHEAD_TOKENS = 4096;
 export const estimateCompactionTokens = (
-	messages: readonly CodingAgentUIMessage[]
-): number => Math.max(0, Math.ceil(JSON.stringify(messages).length / 4));
+	messages: readonly CodingAgentUIMessage[],
+	requestOverheadTokens = COMPACTION_REQUEST_OVERHEAD_TOKENS
+): number =>
+	Math.max(
+		0,
+		Math.ceil(JSON.stringify(messages).length / 4) +
+			Math.max(0, requestOverheadTokens)
+	);
 
 export const getCompactionSettingSource = (
 	settings: ResolvedCompactionSettings,

@@ -2,6 +2,7 @@ import type {
 	ChatModelSelection,
 	CodingAgentUIMessage,
 	CodingMessageUsage,
+	ModelVariant,
 } from "@wincode/ai";
 
 export const COMPACTION_TRIGGER_REASONS = [
@@ -28,12 +29,14 @@ export type ConversationCompaction = {
 	priorCompactionId?: string;
 	summary: CompactionSummary;
 	firstKeptUiMessageId: string;
+	firstKeptAssistantPartIndex?: number;
 	throughMessageUiId: string;
 	tokensBefore: number;
 	tokensAfter: number;
 	trigger: CompactionTriggerReason;
 	focus?: string;
 	summarizationModel: ChatModelSelection;
+	summarizationVariant?: ModelVariant;
 	summarizationUsage?: CodingMessageUsage;
 	createdAt: Date;
 	completedAt: Date;
@@ -50,6 +53,7 @@ export type AppendConversationCompactionInput = Omit<
 
 export type SummaryGeneratorInput = {
 	model: ChatModelSelection;
+	variant?: ModelVariant;
 	previousSummary?: CompactionSummary;
 	serializedMessages: string;
 	focus?: string;

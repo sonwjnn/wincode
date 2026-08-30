@@ -79,6 +79,7 @@ test("replays a context-overflow turn exactly once with its original message id"
 	);
 	expect(replay).toHaveBeenCalledWith({
 		activeMessages: result?.activeMessages,
+		entry: result?.entry,
 		originalMessageId: "u2",
 	});
 });
@@ -129,7 +130,10 @@ test("surfaces compaction failure without replaying the original turn", async ()
 			originalMessageId: "u2",
 			replay,
 		})
-	).rejects.toMatchObject({ code: "replay-failed" });
+	).rejects.toMatchObject({
+		code: "replay-failed",
+		message: expect.stringContaining("summary failed"),
+	});
 	expect(replay).not.toHaveBeenCalled();
 });
 

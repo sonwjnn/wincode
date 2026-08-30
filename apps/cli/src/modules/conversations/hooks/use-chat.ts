@@ -5,6 +5,7 @@ import {
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
 	codingMessageSkillSchema,
+	codingToolDefinitions,
 	defaultChatModelSelection,
 	getChatModelRoute,
 	type ModelVariant,
@@ -20,10 +21,11 @@ import {
 	type FileUIPart,
 	isToolUIPart,
 } from "ai";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgentRegistry } from "@/modules/agents";
 import { useConnections } from "@/modules/connections";
 import {
+	COMPACTION_REQUEST_OVERHEAD_TOKENS,
 	type CompactConversationInput,
 	type CompactConversationResult,
 	type CompactionSettings,
@@ -32,6 +34,7 @@ import {
 	createConversationCompaction,
 	createDirectSummaryGenerator,
 	createHostedSummaryGenerator,
+	estimateCompactionTokens,
 	isCompactionSummaryMessage,
 	isContextOverflowError,
 	type ResolvedCompactionSettings,
@@ -475,6 +478,31 @@ export function useChat(
 		return nextMessages;
 	};
 
+	const estimateRuntimeRequestOverheadTokens = useCallback((): number => {
+		const resolvedAgent = resolvedAgentRef.current;
+		const codingTools =
+			resolvedAgent?.visibleCodingTools.map((name) => {
+				const definition = codingToolDefinitions[name];
+				return { description: definition.description, name };
+			}) ?? [];
+		const skillTool = skillToolRef.current;
+		const serializedContext = JSON.stringify({
+			agentInstructions: resolvedAgent?.instructions ?? "",
+			codingTools,
+			mcpTools: mcpSnapshotRef.current?.manifest ?? [],
+			skillTool: skillTool
+				? {
+						description: skillTool.description,
+						inputSchema: skillTool.inputSchema,
+						name: skillTool.name,
+					}
+				: null,
+		});
+		return (
+			COMPACTION_REQUEST_OVERHEAD_TOKENS +
+			Math.ceil(serializedContext.length / 4)
+		);
+	}, []);
 	const summaryGenerator = useMemo(() => {
 		const direct = createDirectSummaryGenerator(connections);
 		const hosted = createHostedSummaryGenerator({
@@ -489,10 +517,15 @@ export function useChat(
 	const compactionModule = useMemo(
 		() =>
 			createConversationCompaction({
+				estimateTokens: (messages) =>
+					estimateCompactionTokens(
+						messages,
+						estimateRuntimeRequestOverheadTokens()
+					),
 				store: getConversationStore(),
 				summaryGenerator,
 			}),
-		[summaryGenerator]
+		[estimateRuntimeRequestOverheadTokens, summaryGenerator]
 	);
 	const getCompactionSettings = async (
 		selection: ChatModelSelection = modelRef.current,
@@ -513,22 +546,28 @@ export function useChat(
 		trigger: CompactConversationInput["trigger"],
 		focus?: string,
 		nextMessages?: readonly CodingAgentUIMessage[],
-		selection?: ChatModelSelection
+		selection?: ChatModelSelection,
+		compactionMessages?: readonly CodingAgentUIMessage[],
+		selectionVariant?: ModelVariant
 	): Promise<CompactConversationResult> => {
 		const current = compactionOperationRef.current;
 		if (current) {
 			return current;
 		}
 		const compactionModel = selection ?? modelRef.current;
+		const compactionVariant = selectionVariant ?? variantRef.current;
 		const controller = new AbortController();
 		compactionAbortRef.current = controller;
 		const operation = (async () => {
 			setIsCompacting(true);
-			const conversationMessages = nextMessages
+			const transcriptMessages = nextMessages
 				? mergeDisplayMessages(nextMessages)
 				: displayMessagesRef.current;
+			const conversationMessages = compactionMessages
+				? [...compactionMessages]
+				: transcriptMessages;
 			try {
-				await persistDisplayMessages(conversationMessages);
+				await persistDisplayMessages(transcriptMessages);
 			} catch (error) {
 				throw new ConversationCompactionError(
 					"persistence-failed",
@@ -544,6 +583,9 @@ export function useChat(
 				},
 				focus,
 				model: compactionModel,
+				...(compactionVariant === undefined
+					? {}
+					: { variant: compactionVariant }),
 				settings: {
 					enabled: settings.enabled,
 					keepRecentTokens: settings.keepRecentTokens,
@@ -595,12 +637,15 @@ export function useChat(
 				part.state !== "output-denied"
 		);
 	};
-
-	const maintainAfterTurn = (messages: CodingAgentUIMessage[]) => {
+	const maintainAfterTurn = (
+		messages: CodingAgentUIMessage[],
+		selection: ChatModelSelection,
+		selectionVariant?: ModelVariant
+	) => {
 		if (hasPendingTools(messages)) {
 			return;
 		}
-		void getCompactionSettings(modelRef.current).then((settings) => {
+		void getCompactionSettings(selection).then((settings) => {
 			if (
 				!(
 					settings.autoAvailable &&
@@ -609,7 +654,14 @@ export function useChat(
 			) {
 				return;
 			}
-			return runCompaction("threshold", undefined, messages).catch((error) => {
+			return runCompaction(
+				"threshold",
+				undefined,
+				messages,
+				selection,
+				undefined,
+				selectionVariant
+			).catch((error) => {
 				if (isBenignCompactionError(error)) {
 					return;
 				}
@@ -707,11 +759,13 @@ export function useChat(
 	const chat = useAiChat<CodingAgentUIMessage>({
 		id: sessionId,
 		messages: initialActiveMessages,
-		onFinish: ({ messages }) => {
+		onFinish: ({ messages, isAbort, isError }) => {
 			finalizeAndPersistMessages(messages);
-			overflowAttemptRef.current = 0;
+			if (isAbort || isError) {
+				return;
+			}
 			notifyHostedCompletion(modelRef.current, onHostedCompletion);
-			maintainAfterTurn(messages);
+			maintainAfterTurn(messages, modelRef.current, variantRef.current);
 		},
 		onError: (providerError) => {
 			// A stream error leaves the partial assistant message in state.
@@ -769,7 +823,8 @@ export function useChat(
 		if (!autoSendGate.shouldAutoSend({ messages })) {
 			return false;
 		}
-		const settings = await getCompactionSettings(modelRef.current);
+		const turnModel = modelRef.current;
+		const settings = await getCompactionSettings(turnModel);
 		if (
 			!(
 				settings.midTurnAvailable &&
@@ -780,7 +835,7 @@ export function useChat(
 		}
 		autoSendGate.pause();
 		try {
-			await runCompaction("mid-turn", undefined, messages);
+			await runCompaction("mid-turn", undefined, messages, turnModel);
 			autoSendGate.resume();
 			return true;
 		} catch (error) {
@@ -803,8 +858,10 @@ export function useChat(
 			return;
 		}
 		overflowAttemptRef.current = 1;
+		const failedModel = modelRef.current;
+		const failedVariant = variantRef.current;
 		void (async () => {
-			const settings = await getCompactionSettings(modelRef.current);
+			const settings = await getCompactionSettings(failedModel);
 			if (!settings.overflowRecoveryAvailable) {
 				return;
 			}
@@ -817,9 +874,18 @@ export function useChat(
 			try {
 				await recoverContextOverflow({
 					attempt: 0,
+					compact: (input) =>
+						runCompaction(
+							"overflow",
+							undefined,
+							undefined,
+							input.model,
+							input.conversation.messages,
+							failedVariant
+						),
 					compaction: compactionModule,
 					compactionInput: {
-						model: modelRef.current,
+						model: failedModel,
 						settings: {
 							enabled: settings.enabled,
 							keepRecentTokens: settings.keepRecentTokens,
@@ -833,20 +899,41 @@ export function useChat(
 					enabled: settings.overflowRecoveryAvailable,
 					error: providerError,
 					originalMessageId: originalMessage.id,
-					replay: async ({ activeMessages, originalMessageId }) => {
+					replay: async ({ activeMessages, entry, originalMessageId }) => {
 						activeMessagesRef.current = activeMessages;
 						setMessagesRef.current?.(activeMessages);
+						setCompactions((currentCompactions) =>
+							currentCompactions.some(({ id }) => id === entry.id)
+								? currentCompactions
+								: [...currentCompactions, entry]
+						);
+						setCompactionError(null);
 						const replayMessage = displayMessagesRef.current.find(
 							(message) => message.id === originalMessageId
 						);
 						if (!replayMessage) {
 							throw new Error("Original message disappeared during replay.");
 						}
-						await chat.sendMessage({
-							messageId: originalMessageId,
-							metadata: replayMessage.metadata,
-							parts: replayMessage.parts,
-						});
+						await createTurnSkillExecution();
+						const skillResolution = await resolveSkillForSubmit(
+							undefined,
+							replayMessage
+						);
+						if (!skillResolution.ok) {
+							throw new Error(skillResolution.reason);
+						}
+						const replayMetadata = {
+							...(replayMessage.metadata ?? {}),
+							...(skillResolution.skill
+								? {
+										skill: createSkillSnapshot(
+											skillResolution.skill,
+											"explicit"
+										),
+									}
+								: {}),
+						};
+						await submitAnchoredMessage(replayMessage, replayMetadata);
 					},
 				});
 			} catch (error) {
@@ -902,6 +989,7 @@ export function useChat(
 
 		activeMessagesRef.current = sanitizedMessages;
 		setMessagesRef.current?.(sanitizedMessages);
+		persistMessages(sanitizedMessages);
 		chat.stop();
 	};
 	const abortApprovalTurn = (toolCallId: string) => {
@@ -1009,13 +1097,14 @@ export function useChat(
 	const prepareForSend = async (
 		candidateMessages: readonly CodingAgentUIMessage[] = activeMessagesRef.current
 	): Promise<string | null> => {
+		const sendModel = modelRef.current;
 		const waitingError = await waitForCompaction(
 			compactionOperationRef.current
 		);
 		if (waitingError) {
 			return waitingError;
 		}
-		const settings = await getCompactionSettings(modelRef.current);
+		const settings = await getCompactionSettings(sendModel);
 		const shouldCompact =
 			settings.autoAvailable &&
 			compactionModule.needsCompaction(candidateMessages, settings);
@@ -1023,7 +1112,7 @@ export function useChat(
 			return null;
 		}
 		try {
-			await runCompaction("threshold", undefined, candidateMessages);
+			await runCompaction("threshold", undefined, undefined, sendModel);
 			return null;
 		} catch (error) {
 			return isBenignCompactionError(error)
@@ -1121,6 +1210,14 @@ export function useChat(
 		}
 
 		const optimisticMessage = createUserMessage(userText, metadata, [], files);
+		const candidateMessages = [
+			...sanitizeSkillToolParts(activeMessagesRef.current),
+			optimisticMessage,
+		];
+		const promptPreparationError = await prepareForSend(candidateMessages);
+		if (promptPreparationError) {
+			return { rejected: true, reason: promptPreparationError };
+		}
 		const optimisticMessages = [
 			...sanitizeSkillToolParts(activeMessagesRef.current),
 			optimisticMessage,
@@ -1130,18 +1227,6 @@ export function useChat(
 		// Persist the user message before the stream starts so a hard kill
 		// leaves the turn visible in storage instead of a dangling send.
 		persistMessages(optimisticMessages);
-		const promptPreparationError = await prepareForSend(optimisticMessages);
-		if (promptPreparationError) {
-			const nextMessages = activeMessagesRef.current.filter(
-				({ id }) => id !== optimisticMessage.id
-			);
-			activeMessagesRef.current = nextMessages;
-			chat.setMessages(nextMessages);
-			void persistDisplayMessages(
-				removeDisplayMessage(optimisticMessage.id)
-			).catch(() => undefined);
-			return { rejected: true, reason: promptPreparationError };
-		}
 		setIsPreparingMessage(true);
 
 		try {

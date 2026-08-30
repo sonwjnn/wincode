@@ -3,6 +3,7 @@ import {
 	type ChatModelSelection,
 	type CodingMessageUsage,
 	getChatModelRoute,
+	type ModelVariant,
 	toCodingMessageUsage,
 } from "@wincode/ai";
 import {
@@ -44,7 +45,8 @@ export type SummaryModel = {
 
 export type SummaryModelResolver = (
 	selection: ChatModelSelection,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	variant?: ModelVariant
 ) => Promise<SummaryModel>;
 
 const defaultTextGenerator: SummaryTextGenerator = async (options) => {
@@ -85,7 +87,10 @@ export const createLanguageModelSummaryGenerator =
 		generate?: SummaryTextGenerator;
 	}): SummaryGenerator =>
 	async (input) => {
-		const resolved = await resolveModel(input.model, input.signal);
+		const resolved =
+			input.variant === undefined
+				? await resolveModel(input.model, input.signal)
+				: await resolveModel(input.model, input.signal, input.variant);
 		const generated = await generate({
 			abortSignal: input.signal,
 			maxOutputTokens: MAX_SUMMARY_OUTPUT_TOKENS,
@@ -112,14 +117,19 @@ const getBearerToken = (
 export const resolveDirectSummaryModel = async (
 	selection: ChatModelSelection,
 	connections: Connections,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	variant?: ModelVariant
 ): Promise<SummaryModel> => {
 	const authorization = await connections.authorize(
 		selection.providerId,
 		signal
 	);
 	if (authorization.kind === "api-key") {
-		const resolved = resolveDirectChatModel(selection, authorization.apiKey);
+		const resolved = resolveDirectChatModel(
+			selection,
+			authorization.apiKey,
+			variant === undefined ? {} : { variant }
+		);
 		return {
 			model: resolved.model,
 			...(resolved.providerOptions
@@ -128,11 +138,15 @@ export const resolveDirectSummaryModel = async (
 		};
 	}
 	if (authorization.kind === "oauth" && selection.providerId === "openai") {
-		const resolved = resolveOpenAIChatModel(selection.modelId, {
-			accessToken: authorization.accessToken,
-			accountId: authorization.accountId,
-			originator: "wincode",
-		});
+		const resolved = resolveOpenAIChatModel(
+			selection.modelId,
+			{
+				accessToken: authorization.accessToken,
+				accountId: authorization.accountId,
+				originator: "wincode",
+			},
+			variant === undefined ? {} : { variant }
+		);
 		return {
 			model: resolved.model,
 			...(resolved.providerOptions
@@ -151,8 +165,8 @@ export const createDirectSummaryGenerator = (
 ): SummaryGenerator =>
 	createLanguageModelSummaryGenerator({
 		generate,
-		resolveModel: (selection, signal) =>
-			resolveDirectSummaryModel(selection, connections, signal),
+		resolveModel: (selection, signal, variant) =>
+			resolveDirectSummaryModel(selection, connections, signal, variant),
 	});
 
 const summaryResponseSchema = z
@@ -196,6 +210,7 @@ export const createHostedSummaryGenerator =
 			{
 				body: JSON.stringify({
 					focus: input.focus,
+					variant: input.variant,
 					model: input.model.modelId,
 					previousSummary: input.previousSummary,
 					serializedMessages: input.serializedMessages,

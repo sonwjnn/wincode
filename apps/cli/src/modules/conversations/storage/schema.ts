@@ -102,6 +102,7 @@ export const conversationCompaction = sqliteTable(
 			.$type<ConversationCompaction["summary"]>()
 			.notNull(),
 		firstKeptUiMessageId: text("first_kept_ui_message_id").notNull(),
+		firstKeptAssistantPartIndex: integer("first_kept_assistant_part_index"),
 		throughMessageUiId: text("through_message_ui_id").notNull(),
 		tokensBefore: integer("tokens_before").notNull(),
 		tokensAfter: integer("tokens_after").notNull(),
@@ -112,6 +113,7 @@ export const conversationCompaction = sqliteTable(
 		summarizationModelJson: text("summarization_model_json", { mode: "json" })
 			.$type<ConversationCompaction["summarizationModel"]>()
 			.notNull(),
+		summarizationVariant: text("summarization_variant").$type<ModelVariant>(),
 		summarizationUsageJson: text("summarization_usage_json", {
 			mode: "json",
 		}).$type<ConversationCompaction["summarizationUsage"]>(),

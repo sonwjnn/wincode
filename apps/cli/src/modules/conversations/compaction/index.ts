@@ -25,6 +25,7 @@ export type {
 	ResolvedCompactionSettings,
 } from "./config";
 export {
+	COMPACTION_REQUEST_OVERHEAD_TOKENS,
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateCompactionTokens,
 	getCompactionSettingSource,

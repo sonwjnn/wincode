@@ -1,0 +1,1 @@
+ALTER TABLE `conversation_compaction` ADD `first_kept_assistant_part_index` integer;

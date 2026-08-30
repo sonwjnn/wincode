@@ -92,6 +92,7 @@ const compactionSummaryRequestSchema = z
 		model: z.string().min(1),
 		previousSummary: compactionSummarySchema.optional(),
 		serializedMessages: z.string().min(1).max(4_000_000),
+		variant: modelVariantSchema.optional(),
 	})
 	.strict();
 
@@ -340,6 +341,7 @@ const handleCompactionSummaryRequest = async (
 		);
 		resolvedModel = resolveSupportedChatModelResolved(selected, {
 			maxOutputTokens: 4096,
+			variant: parsed.data.variant,
 		});
 	} catch {
 		return badRequest();

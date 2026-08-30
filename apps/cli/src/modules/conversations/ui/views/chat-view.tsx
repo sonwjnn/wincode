@@ -290,7 +290,12 @@ export function ChatView({
 	};
 
 	const runManualCompaction = async (focus?: string): Promise<boolean> => {
-		if (isTurnBusy || isCompacting) {
+		if (
+			isTurnBusy ||
+			isCompacting ||
+			registry === null ||
+			!isPromptConfigRestored
+		) {
 			show({
 				message: "Compaction is unavailable while the conversation is active.",
 				variant: "error",
@@ -321,7 +326,12 @@ export function ChatView({
 	};
 
 	const openCompactionSettings = async () => {
-		if (isTurnBusy || isCompacting) {
+		if (
+			isTurnBusy ||
+			isCompacting ||
+			registry === null ||
+			!isPromptConfigRestored
+		) {
 			show({
 				message:
 					"Compaction settings are unavailable while the conversation is active.",
@@ -429,7 +439,7 @@ export function ChatView({
 				variant: "success",
 			});
 		}
-	}, [compactions, initialCompactions.length, show]);
+	}, [compactions, show]);
 
 	useEffect(() => {
 		if (catalogDiagnostic !== null) {

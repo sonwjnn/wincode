@@ -25,9 +25,9 @@ export class OverflowRecoveryError extends Error {
 
 export type OverflowReplay = {
 	activeMessages: CodingAgentUIMessage[];
+	entry: CompactConversationResult["entry"];
 	originalMessageId: string;
 };
-
 export type OverflowRecoveryInput = {
 	compaction: ConversationCompactionModule;
 	compactionInput: Omit<CompactConversationInput, "conversation" | "trigger">;
@@ -40,6 +40,9 @@ export type OverflowRecoveryInput = {
 	attempt: number;
 	error: unknown;
 	replay: (replay: OverflowReplay) => Promise<void>;
+	compact?: (
+		input: CompactConversationInput
+	) => Promise<CompactConversationResult>;
 };
 
 export const prepareOverflowReplayMessages = (
@@ -69,6 +72,7 @@ export const recoverContextOverflow = async ({
 	attempt,
 	error,
 	replay,
+	compact: compactOverride,
 }: OverflowRecoveryInput): Promise<CompactConversationResult | null> => {
 	if (classifyProviderError(error) !== "context-overflow") {
 		throw error;
@@ -94,7 +98,8 @@ export const recoverContextOverflow = async ({
 	);
 	let result: CompactConversationResult;
 	try {
-		result = await compaction.compact({
+		const compactConversation = compactOverride ?? compaction.compact;
+		result = await compactConversation({
 			...compactionInput,
 			conversation: {
 				messages: replayMessages,
@@ -103,14 +108,17 @@ export const recoverContextOverflow = async ({
 			trigger: "overflow",
 		});
 	} catch (compactionError) {
+		const detail =
+			compactionError instanceof Error ? ` ${compactionError.message}` : "";
 		throw new OverflowRecoveryError(
 			"replay-failed",
-			"Context overflow recovery could not compact the conversation.",
+			`Context overflow recovery could not compact the conversation.${detail}`,
 			{ cause: compactionError }
 		);
 	}
 	await replay({
 		activeMessages: result.activeMessages,
+		entry: result.entry,
 		originalMessageId,
 	});
 	return result;

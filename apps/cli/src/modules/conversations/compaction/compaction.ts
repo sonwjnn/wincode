@@ -1,9 +1,15 @@
 import {
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
+	getContextTokens,
+	type ModelVariant,
 	sanitizeInterruptedMessagesForModel,
 } from "@wincode/ai";
 import { generateId, isToolUIPart } from "ai";
+import {
+	isSkillToolPart,
+	sanitizeSkillToolPart,
+} from "@/modules/skills/activation";
 import type { ConversationStore } from "../storage/conversation-store";
 import {
 	estimateCompactionTokens,
@@ -48,11 +54,57 @@ export const isCompactionSummaryMessage = (
 	message: Pick<CodingAgentUIMessage, "id">
 ): boolean => message.id.startsWith("compaction:");
 
+const sanitizeSkillToolMessages = (
+	messages: CodingAgentUIMessage[]
+): CodingAgentUIMessage[] =>
+	messages.map((message) =>
+		message.parts.some(isSkillToolPart)
+			? {
+					...message,
+					parts: message.parts.map((part) =>
+						isSkillToolPart(part) ? sanitizeSkillToolPart(part) : part
+					),
+				}
+			: message
+	);
+
+const applyDurableSplitBoundary = (
+	activeMessages: CodingAgentUIMessage[],
+	latest: ConversationCompaction
+): CodingAgentUIMessage[] => {
+	const partIndex = latest.firstKeptAssistantPartIndex;
+	if (partIndex === undefined) {
+		return activeMessages;
+	}
+	const assistantIndex = activeMessages.findIndex(
+		(message, index) =>
+			index > 0 &&
+			message.role === "assistant" &&
+			message.id === latest.throughMessageUiId
+	);
+	const assistant = activeMessages[assistantIndex];
+	if (
+		!(assistant && Number.isSafeInteger(partIndex)) ||
+		partIndex <= 0 ||
+		partIndex >= assistant.parts.length
+	) {
+		return activeMessages;
+	}
+	const nextMessages = [...activeMessages];
+	nextMessages[assistantIndex] = {
+		...assistant,
+		parts: assistant.parts.slice(partIndex),
+	};
+	return nextMessages;
+};
+
 export const rebuildActiveMessages = (
 	messages: readonly CodingAgentUIMessage[],
 	latest: ConversationCompaction | null
 ): CodingAgentUIMessage[] => {
-	const replaySafeMessages = sanitizeInterruptedMessagesForModel([...messages]);
+	const replaySafeMessages = sanitizeSkillToolMessages(
+		sanitizeInterruptedMessagesForModel([...messages])
+	);
 	if (latest === null) {
 		return replaySafeMessages;
 	}
@@ -62,15 +114,17 @@ export const rebuildActiveMessages = (
 	if (firstKeptIndex < 0) {
 		return replaySafeMessages;
 	}
-	return [
-		createCompactionSummaryMessage(latest),
-		...replaySafeMessages.slice(firstKeptIndex),
-	];
+	const activeMessages = applyDurableSplitBoundary(
+		replaySafeMessages.slice(firstKeptIndex),
+		latest
+	);
+	return [createCompactionSummaryMessage(latest), ...activeMessages];
 };
 
 export class ConversationCompactionError extends Error {
 	readonly code:
 		| "cancelled"
+		| "context-still-too-large"
 		| "history-too-short"
 		| "not-needed"
 		| "persistence-failed"
@@ -95,6 +149,7 @@ type CompactionStore = Pick<
 export type CompactConversationInput = {
 	conversation: CompactionConversation;
 	model: ChatModelSelection;
+	variant?: ModelVariant;
 	settings: Pick<
 		ResolvedCompactionSettings,
 		"enabled" | "keepRecentTokens" | "thresholdTokens"
@@ -131,6 +186,7 @@ type CompactionModuleDependencies = {
 type CutPoint = {
 	activeMessages: CodingAgentUIMessage[];
 	firstKeptIndex: number;
+	firstKeptAssistantPartIndex?: number;
 	summaryMessages?: CodingAgentUIMessage[];
 	throughIndex: number;
 };
@@ -277,6 +333,7 @@ const makeSplitTurnCutPoint = (
 			return {
 				activeMessages: [...messages.slice(0, lastUserIndex), ...suffix],
 				firstKeptIndex: lastUserIndex,
+				firstKeptAssistantPartIndex: partIndex,
 				summaryMessages: [
 					user,
 					{
@@ -374,10 +431,12 @@ const appendInputFor = ({
 	entryId,
 	now,
 	summarization,
+	variant,
 }: {
 	conversation: CompactionConversation;
 	cutPoint: CutPoint;
 	focus?: string;
+	variant?: ModelVariant;
 	model: ChatModelSelection;
 	previous: ConversationCompaction | null;
 	summarySpan: readonly CodingAgentUIMessage[];
@@ -410,6 +469,11 @@ const appendInputFor = ({
 		createdAt: nowValue,
 		firstKeptUiMessageId: firstKept.id,
 		throughMessageUiId: through.id,
+		...(cutPoint.firstKeptAssistantPartIndex === undefined
+			? {}
+			: {
+					firstKeptAssistantPartIndex: cutPoint.firstKeptAssistantPartIndex,
+				}),
 		tokensAfter: estimateTokens([
 			createCompactionSummaryMessage({ id: entryId, summary }),
 			...cutPoint.activeMessages,
@@ -418,6 +482,7 @@ const appendInputFor = ({
 		trigger,
 		...(focus?.trim() ? { focus: focus.trim() } : {}),
 		id: entryId,
+		...(variant === undefined ? {} : { summarizationVariant: variant }),
 		priorCompactionId: previous?.id,
 		sessionId: conversation.sessionId,
 		summarizationModel: model,
@@ -436,6 +501,16 @@ const assertNotAborted = (signal?: AbortSignal): void => {
 	}
 };
 
+const getLatestProviderContextTokens = (
+	messages: readonly CodingAgentUIMessage[]
+): number | null => {
+	const latestAssistant = messages.findLast(
+		(message) => message.role === "assistant" && message.metadata?.usage
+	);
+	const usage = latestAssistant?.metadata?.usage;
+	return usage ? getContextTokens(usage) : null;
+};
+
 export const createConversationCompaction = ({
 	store,
 	summaryGenerator,
@@ -444,6 +519,83 @@ export const createConversationCompaction = ({
 	now = () => new Date(),
 }: CompactionModuleDependencies): ConversationCompactionModule => {
 	const inFlight = new Map<string, Promise<CompactConversationResult>>();
+
+	const persistCompactionEntry = async ({
+		messages,
+		sessionId,
+		cutPoint,
+		entryId,
+		estimateTokens: estimate,
+		focus,
+		model,
+		now: nowFn,
+		previous,
+		settings,
+		summarySpan,
+		summarization,
+		trigger,
+		variant,
+	}: {
+		messages: readonly CodingAgentUIMessage[];
+		sessionId: string;
+		cutPoint: CutPoint;
+		entryId: string;
+		estimateTokens: (messages: readonly CodingAgentUIMessage[]) => number;
+		focus?: string;
+		model: ChatModelSelection;
+		now: () => Date;
+		previous: ConversationCompaction | null;
+		settings: CompactConversationInput["settings"];
+		summarySpan: readonly CodingAgentUIMessage[];
+		summarization: {
+			text: string;
+			usage?: ConversationCompaction["summarizationUsage"];
+		};
+		trigger: CompactionTriggerReason;
+		variant?: ModelVariant;
+	}): Promise<{
+		activeMessages: CodingAgentUIMessage[];
+		entry: ConversationCompaction;
+	}> => {
+		const entryInput = appendInputFor({
+			conversation: { messages, sessionId },
+			cutPoint,
+			entryId,
+			estimateTokens: estimate,
+			focus,
+			model,
+			now: nowFn,
+			previous,
+			summarySpan,
+			summarization,
+			trigger,
+			variant,
+		});
+		if (
+			settings.thresholdTokens !== null &&
+			entryInput.tokensAfter > settings.thresholdTokens
+		) {
+			throw new ConversationCompactionError(
+				"context-still-too-large",
+				`Compaction still leaves ${entryInput.tokensAfter} estimated tokens, above the ${settings.thresholdTokens} token safe limit; shorten the latest turn or remove attachments.`
+			);
+		}
+		let entry: ConversationCompaction;
+		try {
+			entry = await store.appendCompaction(entryInput);
+		} catch (error) {
+			throw new ConversationCompactionError(
+				"persistence-failed",
+				"Compaction could not be persisted; the active context is unchanged.",
+				{ cause: error }
+			);
+		}
+		const activeMessages = [
+			createCompactionSummaryMessage(entry),
+			...cutPoint.activeMessages,
+		];
+		return { activeMessages, entry };
+	};
 
 	const compactNow = async (
 		input: CompactConversationInput
@@ -455,9 +607,9 @@ export const createConversationCompaction = ({
 			);
 		}
 		assertNotAborted(input.signal);
-		const replaySafeMessages = sanitizeInterruptedMessagesForModel([
-			...input.conversation.messages,
-		]);
+		const replaySafeMessages = sanitizeSkillToolMessages(
+			sanitizeInterruptedMessagesForModel([...input.conversation.messages])
+		);
 		const previous = await store.getLatestCompaction(
 			input.conversation.sessionId
 		);
@@ -485,6 +637,7 @@ export const createConversationCompaction = ({
 		}
 		const serializedMessages = serializeMessagesForCompaction(summarySpan);
 		const generatorInput: SummaryGeneratorInput = {
+			...(input.variant === undefined ? {} : { variant: input.variant }),
 			model: input.model,
 			previousSummary: previous?.summary,
 			serializedMessages,
@@ -516,11 +669,9 @@ export const createConversationCompaction = ({
 			);
 		}
 
-		const entryInput = appendInputFor({
-			conversation: {
-				...input.conversation,
-				messages: replaySafeMessages,
-			},
+		const { activeMessages, entry } = await persistCompactionEntry({
+			messages: replaySafeMessages,
+			sessionId: input.conversation.sessionId,
 			cutPoint,
 			entryId: createId(),
 			estimateTokens,
@@ -528,24 +679,12 @@ export const createConversationCompaction = ({
 			model: input.model,
 			now,
 			previous,
+			settings: input.settings,
 			summarySpan,
 			summarization: generated,
 			trigger: input.trigger,
+			variant: input.variant,
 		});
-		let entry: ConversationCompaction;
-		try {
-			entry = await store.appendCompaction(entryInput);
-		} catch (error) {
-			throw new ConversationCompactionError(
-				"persistence-failed",
-				"Compaction could not be persisted; the active context is unchanged.",
-				{ cause: error }
-			);
-		}
-		const activeMessages = [
-			createCompactionSummaryMessage(entry),
-			...cutPoint.activeMessages,
-		];
 		return { activeMessages, entry };
 	};
 
@@ -569,9 +708,16 @@ export const createConversationCompaction = ({
 	return {
 		compact,
 		getInFlight: (sessionId) => inFlight.get(sessionId) ?? null,
-		needsCompaction: (messages, settings) =>
-			settings.enabled &&
-			settings.thresholdTokens !== null &&
-			estimateTokens(messages) >= settings.thresholdTokens,
+		needsCompaction: (messages, settings) => {
+			if (!settings.enabled || settings.thresholdTokens === null) {
+				return false;
+			}
+			const estimatedTokens = estimateTokens(messages);
+			const providerTokens = getLatestProviderContextTokens(messages);
+			return (
+				Math.max(estimatedTokens, providerTokens ?? 0) >=
+				settings.thresholdTokens
+			);
+		},
 	};
 };

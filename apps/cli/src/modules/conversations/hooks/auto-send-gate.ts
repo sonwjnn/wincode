@@ -71,7 +71,9 @@ export const createAutoSendGate = (): AutoSendGate => {
 	};
 };
 const isTerminalToolOutputState = (state: string): boolean =>
-	state === "output-available" || state === "output-error";
+	state === "output-available" ||
+	state === "output-error" ||
+	state === "output-denied";
 
 /**
  * True when the latest assistant step still has tool executions in flight.
