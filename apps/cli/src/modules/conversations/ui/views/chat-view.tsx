@@ -91,10 +91,6 @@ export function ChatView({
 	const [restoredMessages, setRestoredMessages] = useState<
 		CodingAgentUIMessage[] | null
 	>(null);
-	const [compactionOverrides, setCompactionOverrides] = useState<
-		Partial<CompactionSettings>
-	>({});
-	const compactionOverridesRef = useRef<Partial<CompactionSettings>>({});
 	const {
 		abort,
 		cancelCompaction,
@@ -107,7 +103,8 @@ export function ChatView({
 		isCompacting,
 		isPreparingMessage,
 		messages,
-		setCompactionOverrides: applyCompactionOverrides,
+		persistCompactionSetting,
+		resetCompactionSetting,
 		status,
 		submit,
 	} = useChat(
@@ -273,20 +270,38 @@ export function ChatView({
 		},
 		[]
 	);
-	const updateCompactionOverride = (
+	const updateCompactionSetting = async (
 		key: CompactionSettingKey,
 		value: CompactionSettings[CompactionSettingKey]
-	) => {
-		const next = { ...compactionOverridesRef.current, [key]: value };
-		compactionOverridesRef.current = next;
-		setCompactionOverrides(next);
-		applyCompactionOverrides(next);
+	): Promise<void> => {
+		try {
+			await persistCompactionSetting(key, value);
+		} catch (error) {
+			show({
+				message:
+					error instanceof Error
+						? error.message
+						: "Could not save compaction settings.",
+				variant: "error",
+			});
+			throw error;
+		}
 	};
 
-	const resetCompactionOverrides = () => {
-		compactionOverridesRef.current = {};
-		setCompactionOverrides({});
-		applyCompactionOverrides({});
+	const resetCompactionSettings = async (): Promise<boolean | undefined> => {
+		try {
+			const value = await resetCompactionSetting("auto");
+			return typeof value === "boolean" ? value : undefined;
+		} catch (error) {
+			show({
+				message:
+					error instanceof Error
+						? error.message
+						: "Could not reset compaction settings.",
+				variant: "error",
+			});
+			return;
+		}
 	};
 
 	const runManualCompaction = async (focus?: string): Promise<boolean> => {
@@ -350,15 +365,13 @@ export function ChatView({
 			dialog.open({
 				children: (
 					<CompactionSettingsDialogContent
-						onChange={updateCompactionOverride}
-						onReset={resetCompactionOverrides}
-						overrides={compactionOverrides}
-						resolveSettings={(nextOverrides) =>
-							getCompactionSettings(effective.model, nextOverrides)
-						}
+						onChange={updateCompactionSetting}
+						onReset={resetCompactionSettings}
 						settings={settings}
 					/>
 				),
+				padding: { bottom: 1, left: 0, right: 0, top: 1 },
+				titleMargin: { left: 4, right: 4 },
 				title: "Compaction Settings",
 			});
 		} catch (error) {

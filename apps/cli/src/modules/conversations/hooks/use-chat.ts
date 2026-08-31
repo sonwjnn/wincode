@@ -28,6 +28,7 @@ import {
 	COMPACTION_REQUEST_OVERHEAD_TOKENS,
 	type CompactConversationInput,
 	type CompactConversationResult,
+	type CompactionSettingKey,
 	type CompactionSettings,
 	type ConversationCompaction,
 	ConversationCompactionError,
@@ -35,6 +36,7 @@ import {
 	createDirectSummaryGenerator,
 	createHostedSummaryGenerator,
 	estimateCompactionTokens,
+	getCompactionSettingSource,
 	isCompactionSummaryMessage,
 	isContextOverflowError,
 	type ResolvedCompactionSettings,
@@ -167,6 +169,17 @@ export const findCurrentTurnAssistantIndex = (
 	);
 
 	return assistantIndex > userIndex ? assistantIndex : -1;
+};
+
+const resolveCompactionSettingPath = (
+	settings: ResolvedCompactionSettings,
+	key: CompactionSettingKey
+): string[] => {
+	const source = getCompactionSettingSource(settings, key);
+	if (settings.configPath.length === 0) {
+		return source.kind === "config" ? [key] : ["compaction", key];
+	}
+	return [...settings.configPath, key];
 };
 /**
  * `chat.stop()` can run before the asynchronous approval gate emits its
@@ -403,7 +416,6 @@ export function useChat(
 	);
 	const [isCompacting, setIsCompacting] = useState(false);
 	const [compactionError, setCompactionError] = useState<Error | null>(null);
-	const compactionOverridesRef = useRef<Partial<CompactionSettings>>({});
 	const compactionAbortRef = useRef<AbortController | null>(null);
 	const compactionOperationRef =
 		useRef<Promise<CompactConversationResult> | null>(null);
@@ -528,8 +540,7 @@ export function useChat(
 		[estimateRuntimeRequestOverheadTokens, summaryGenerator]
 	);
 	const getCompactionSettings = async (
-		selection: ChatModelSelection = modelRef.current,
-		sessionOverrides: Partial<CompactionSettings> = compactionOverridesRef.current
+		selection: ChatModelSelection = modelRef.current
 	): Promise<ResolvedCompactionSettings> => {
 		const snapshot = await config.configStore
 			.getSnapshot(config.workspace)
@@ -537,7 +548,6 @@ export function useChat(
 		return resolveCompactionSettings({
 			model: selection,
 			pricing: modelPricing,
-			sessionOverrides,
 			snapshot,
 		});
 	};
@@ -618,8 +628,35 @@ export function useChat(
 		compactionAbortRef.current?.abort();
 	};
 
-	const setCompactionOverrides = (overrides: Partial<CompactionSettings>) => {
-		compactionOverridesRef.current = { ...overrides };
+	const persistCompactionSetting = async (
+		key: CompactionSettingKey,
+		value: CompactionSettings[CompactionSettingKey]
+	): Promise<void> => {
+		const settings = await getCompactionSettings(modelRef.current);
+		const source = getCompactionSettingSource(settings, key);
+		const scope = source.kind === "config" ? source.scope : "project";
+		await config.configStore.setValue(
+			config.workspace,
+			scope,
+			resolveCompactionSettingPath(settings, key),
+			value
+		);
+	};
+
+	const resetCompactionSetting = async (
+		key: CompactionSettingKey
+	): Promise<CompactionSettings[CompactionSettingKey]> => {
+		const settings = await getCompactionSettings(modelRef.current);
+		const source = getCompactionSettingSource(settings, key);
+		const scope = source.kind === "config" ? source.scope : "project";
+		await config.configStore.setValue(
+			config.workspace,
+			scope,
+			resolveCompactionSettingPath(settings, key),
+			undefined
+		);
+		const refreshed = await getCompactionSettings(modelRef.current);
+		return refreshed.resolved[key];
 	};
 
 	const hasPendingTools = (
@@ -1263,7 +1300,8 @@ export function useChat(
 		getCompactionSettings,
 		interrupt: interruptLatestAssistantMessage,
 		isCompacting,
-		setCompactionOverrides,
+		persistCompactionSetting,
+		resetCompactionSetting,
 		messages: displayMessages,
 		status: chat.status,
 		isPreparingMessage,

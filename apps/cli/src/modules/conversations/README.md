@@ -27,9 +27,10 @@ generation.
 ### Compaction
 `/compact [focus]` summarizes completed history into a durable local compaction entry while
 keeping the full transcript visible. The model receives the runtime summary plus recent verbatim
-messages; `/compaction` opens current-session settings for threshold, mid-turn, overflow, and
-token-budget behavior. Automatic threshold maintenance and one-attempt provider-overflow replay
-reuse the same Conversation Compaction module.
+messages; `/compaction` opens the persistent Auto-compact setting. The setting updates the
+existing global or project config source that owns it; a new setting defaults to the project
+`.wincode` source. Automatic threshold maintenance and one-attempt provider-overflow replay reuse
+the same Conversation Compaction module.
 
 ### Input overlays
 `useChatInputController` detects `/` (command) and `@path` (file-mention) triggers as the

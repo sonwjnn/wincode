@@ -58,6 +58,15 @@ describe("resolveCompactionSettings", () => {
 		);
 	});
 
+	test("retains the root config path for legacy top-level settings", () => {
+		const settings = resolveCompactionSettings({
+			snapshot: snapshot({ auto: false }),
+		});
+
+		expect(settings.configPath).toEqual([]);
+		expect(settings.desired.auto).toBe(false);
+	});
+
 	test("reports invalid values and lets session overrides reset JSON behavior", () => {
 		const settings = resolveCompactionSettings({
 			contextLimit: 100_000,

@@ -46,6 +46,7 @@ export type CompactionSettingSource =
 
 export type ResolvedCompactionSettings = {
 	autoAvailable: boolean;
+	configPath: readonly string[];
 	desired: CompactionSettings;
 	diagnostics: readonly CompactionDiagnostic[];
 	keepRecentTokens: number;
@@ -160,10 +161,35 @@ const includeConfigDiagnostics = (
 	}
 };
 
+const applySessionOverrides = (
+	sessionOverrides: Partial<CompactionSettings> | undefined,
+	desired: CompactionSettings,
+	sources: Record<CompactionSettingKey, CompactionSettingSource>,
+	diagnostics: CompactionDiagnostic[]
+): void => {
+	for (const [key, value] of Object.entries(sessionOverrides ?? {})) {
+		if (!isSettingKey(key)) {
+			continue;
+		}
+		if (!settingValueIsValid(key, value)) {
+			diagnostics.push({
+				code: "invalid-value",
+				configPath: ["sessionOverrides", key],
+				message: `sessionOverrides.${key} is invalid.`,
+				severity: "error",
+			});
+			continue;
+		}
+		desired[key] = value as never;
+		sources[key] = { kind: "session" };
+	}
+};
+
 const resolveDesiredSettings = (
 	snapshot: ConfigSnapshot | undefined,
 	sessionOverrides: Partial<CompactionSettings> | undefined
 ): {
+	configPath: readonly string[];
 	desired: CompactionSettings;
 	diagnostics: CompactionDiagnostic[];
 	sources: Record<CompactionSettingKey, CompactionSettingSource>;
@@ -217,27 +243,14 @@ const resolveDesiredSettings = (
 		desired[settingKey] = value as never;
 		sources[settingKey] = sourceFor(snapshot, path);
 	}
+	applySessionOverrides(sessionOverrides, desired, sources, diagnostics);
 
-	if (sessionOverrides) {
-		for (const [key, value] of Object.entries(sessionOverrides)) {
-			if (!isSettingKey(key)) {
-				continue;
-			}
-			if (!settingValueIsValid(key, value)) {
-				diagnostics.push({
-					code: "invalid-value",
-					configPath: ["sessionOverrides", key],
-					message: `sessionOverrides.${key} is invalid.`,
-					severity: "error",
-				});
-				continue;
-			}
-			desired[key] = value as never;
-			sources[key] = { kind: "session" };
-		}
-	}
-
-	return { desired, diagnostics, sources };
+	return {
+		configPath: config?.path ?? ["compaction"],
+		desired,
+		diagnostics,
+		sources,
+	};
 };
 
 export const resolveCompactionSettings = (
@@ -258,7 +271,7 @@ export const resolveCompactionSettings = (
 			contextLimit = null;
 		}
 	}
-	const { desired, diagnostics, sources } = resolveDesiredSettings(
+	const { configPath, desired, diagnostics, sources } = resolveDesiredSettings(
 		snapshot,
 		sessionOverrides
 	);
@@ -298,6 +311,7 @@ export const resolveCompactionSettings = (
 	}
 
 	return {
+		configPath,
 		auto: resolved.auto,
 		autoAvailable:
 			resolved.enabled && resolved.auto && thresholdTokens !== null,

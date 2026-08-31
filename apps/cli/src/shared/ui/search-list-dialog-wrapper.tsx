@@ -37,6 +37,7 @@ type SearchListDialogWrapperProps<T> = {
 	isItemActive?: (item: T) => boolean;
 	isItemSelectable?: (item: T) => boolean;
 	placeholder?: string;
+	showSearch?: boolean;
 	emptyText?: string;
 	initialSelectedIndex?: number;
 	maxVisibleItems?: number;
@@ -60,6 +61,7 @@ export function SearchListDialogWrapper<T>({
 	isItemSelectable = () => true,
 	placeholder = "Search",
 	emptyText = "No results",
+	showSearch = true,
 	initialSelectedIndex = getInitialSelectedIndex(
 		items,
 		isItemActive,
@@ -129,16 +131,18 @@ export function SearchListDialogWrapper<T>({
 
 	return (
 		<box flexDirection="column" gap={1}>
-			<input
-				focused
-				focusedTextColor={colors.text}
-				marginX={4}
-				onContentChange={handleContentChange}
-				placeholder={placeholder}
-				placeholderColor={colors.textMuted}
-				ref={inputRef}
-				textColor={colors.text}
-			/>
+			{showSearch ? (
+				<input
+					focused
+					focusedTextColor={colors.text}
+					marginX={4}
+					onContentChange={handleContentChange}
+					placeholder={placeholder}
+					placeholderColor={colors.textMuted}
+					ref={inputRef}
+					textColor={colors.text}
+				/>
+			) : null}
 			{filtered.length === 0 ? (
 				<text
 					attributes={TextAttributes.DIM}

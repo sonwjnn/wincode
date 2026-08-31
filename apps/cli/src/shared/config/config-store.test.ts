@@ -348,4 +348,286 @@ describe("createConfigStore", () => {
 			await rm(root, { force: true, recursive: true });
 		}
 	});
+
+	test("writes a project value into the existing JSONC source and refreshes it", async () => {
+		const projectPath = `${WORKSPACE}/.wincode/wincode.jsonc`;
+		const files: Record<string, string> = {
+			[projectPath]: `{
+	// Keep this comment.
+	"compaction": { "auto": false },
+	"agents": { "build": { "description": "Keep this setting." } }
+}`,
+		};
+		const writes: Array<{ path: string; contents: string }> = [];
+		const store = createConfigStore({
+			configRoot: CONFIG_ROOT,
+			fs: {
+				readFile: async (file) => {
+					const value = files[file];
+					if (value === undefined) {
+						const error = new Error("missing") as Error & { code: string };
+						error.code = "ENOENT";
+						throw error;
+					}
+					return value;
+				},
+				writeFile: async (file, contents) => {
+					writes.push({ contents, path: file });
+					files[file] = contents;
+				},
+			},
+			homeRoot: HOME_ROOT,
+		});
+
+		const snapshot = await store.setValue(
+			WORKSPACE,
+			"project",
+			["compaction", "auto"],
+			true
+		);
+
+		expect(writes).toHaveLength(1);
+		expect(writes[0]?.path).toBe(projectPath);
+		expect(writes[0]?.contents).toContain("// Keep this comment.");
+		expect(writes[0]?.contents).toContain(
+			'"description": "Keep this setting."'
+		);
+		expect(snapshot.document).toMatchObject({
+			compaction: { auto: true },
+		});
+	});
+
+	test("writes a global value to the canonical global config source", async () => {
+		const files: Record<string, string> = {};
+		const writes: Array<{ path: string; contents: string }> = [];
+		const store = createConfigStore({
+			configRoot: CONFIG_ROOT,
+			fs: {
+				readFile: async (file) => {
+					const value = files[file];
+					if (value === undefined) {
+						const error = new Error("missing") as Error & { code: string };
+						error.code = "ENOENT";
+						throw error;
+					}
+					return value;
+				},
+				writeFile: async (file, contents) => {
+					writes.push({ contents, path: file });
+					files[file] = contents;
+				},
+			},
+			homeRoot: HOME_ROOT,
+		});
+
+		await store.setValue(WORKSPACE, "global", ["compaction", "auto"], false);
+
+		expect(writes).toEqual([
+			{
+				contents: '{\n  "compaction": {\n    "auto": false\n  }\n}\n',
+				path: `${CONFIG_ROOT}/wincode.json`,
+			},
+		]);
+	});
+
+	test("removes a persisted value when set to undefined", async () => {
+		const projectPath = `${WORKSPACE}/wincode.json`;
+		const files: Record<string, string> = {
+			[projectPath]: '{"compaction":{"auto":false,"reserveTokens":1000}}',
+		};
+		const store = createConfigStore({
+			configRoot: CONFIG_ROOT,
+			fs: {
+				readFile: async (file) => {
+					const value = files[file];
+					if (value === undefined) {
+						const error = new Error("missing") as Error & { code: string };
+						error.code = "ENOENT";
+						throw error;
+					}
+					return value;
+				},
+				writeFile: async (file, contents) => {
+					files[file] = contents;
+				},
+			},
+			homeRoot: HOME_ROOT,
+		});
+
+		const snapshot = await store.setValue(
+			WORKSPACE,
+			"project",
+			["compaction", "auto"],
+			undefined
+		);
+
+		expect(snapshot.document).toEqual({
+			compaction: { reserveTokens: 1000 },
+		});
+	});
+	test("serializes concurrent writes to preserve the latest value", async () => {
+		const projectPath = `${WORKSPACE}/wincode.json`;
+		const files: Record<string, string> = {
+			[projectPath]: '{"compaction":{"auto":false}}',
+		};
+		const writes: string[] = [];
+		let writeCount = 0;
+		let resolveFirstWriteStarted: (() => void) | undefined;
+		let releaseFirstWrite: (() => void) | undefined;
+		const firstWriteStarted = new Promise<void>((resolve) => {
+			resolveFirstWriteStarted = resolve;
+		});
+		const firstWriteReleased = new Promise<void>((resolve) => {
+			releaseFirstWrite = resolve;
+		});
+		const store = createConfigStore({
+			configRoot: CONFIG_ROOT,
+			fs: {
+				readFile: async (file) => {
+					const value = files[file];
+					if (value === undefined) {
+						const error = new Error("missing") as Error & { code: string };
+						error.code = "ENOENT";
+						throw error;
+					}
+					return value;
+				},
+				writeFile: async (file, contents) => {
+					writeCount += 1;
+					if (writeCount === 1) {
+						resolveFirstWriteStarted?.();
+						await firstWriteReleased;
+					}
+					writes.push(contents);
+					files[file] = contents;
+				},
+			},
+			homeRoot: HOME_ROOT,
+		});
+
+		const first = store.setValue(
+			WORKSPACE,
+			"project",
+			["compaction", "auto"],
+			true
+		);
+		await firstWriteStarted;
+		const second = store.setValue(
+			WORKSPACE,
+			"project",
+			["compaction", "auto"],
+			false
+		);
+		releaseFirstWrite?.();
+		await Promise.all([first, second]);
+
+		expect(writes).toHaveLength(2);
+		expect(JSON.parse(files[projectPath] ?? "{}")).toEqual({
+			compaction: { auto: false },
+		});
+	});
+	test("queues a reset behind a pending write for a new setting", async () => {
+		const projectPath = `${WORKSPACE}/.wincode/wincode.json`;
+		const files: Record<string, string> = {};
+		let resolveFirstWriteStarted: (() => void) | undefined;
+		let releaseFirstWrite: (() => void) | undefined;
+		const firstWriteStarted = new Promise<void>((resolve) => {
+			resolveFirstWriteStarted = resolve;
+		});
+		const firstWriteReleased = new Promise<void>((resolve) => {
+			releaseFirstWrite = resolve;
+		});
+		let writeCount = 0;
+		const store = createConfigStore({
+			configRoot: CONFIG_ROOT,
+			fs: {
+				readFile: async (file) => {
+					const value = files[file];
+					if (value === undefined) {
+						const error = new Error("missing") as Error & { code: string };
+						error.code = "ENOENT";
+						throw error;
+					}
+					return value;
+				},
+				writeFile: async (file, contents) => {
+					writeCount += 1;
+					if (writeCount === 1) {
+						resolveFirstWriteStarted?.();
+						await firstWriteReleased;
+					}
+					files[file] = contents;
+				},
+			},
+			homeRoot: HOME_ROOT,
+		});
+
+		const first = store.setValue(
+			WORKSPACE,
+			"project",
+			["compaction", "auto"],
+			false
+		);
+		await firstWriteStarted;
+		const reset = store.setValue(
+			WORKSPACE,
+			"project",
+			["compaction", "auto"],
+			undefined
+		);
+		releaseFirstWrite?.();
+		await Promise.all([first, reset]);
+
+		expect(JSON.parse(files[projectPath] ?? "{}")).toEqual({
+			compaction: {},
+		});
+	});
+	test("uses canonical targets when a scoped parent exists elsewhere", async () => {
+		const files: Record<string, string> = {
+			[`${HOME_ROOT}/.wincode/wincode.json`]:
+				'{"compaction":{"keepRecentTokens":1000}}',
+			[`${WORKSPACE}/wincode.json`]: '{"compaction":{"keepRecentTokens":2000}}',
+		};
+		const writes: string[] = [];
+		const store = createConfigStore({
+			configRoot: CONFIG_ROOT,
+			fs: {
+				readFile: async (file) => {
+					const value = files[file];
+					if (value === undefined) {
+						const error = new Error("missing") as Error & { code: string };
+						error.code = "ENOENT";
+						throw error;
+					}
+					return value;
+				},
+				writeFile: async (file, contents) => {
+					writes.push(file);
+					files[file] = contents;
+				},
+			},
+			homeRoot: HOME_ROOT,
+		});
+
+		await store.setValue(WORKSPACE, "global", ["compaction", "auto"], false);
+		await store.setValue(WORKSPACE, "project", ["compaction", "auto"], true);
+
+		expect(writes).toEqual([
+			`${CONFIG_ROOT}/wincode.json`,
+			`${WORKSPACE}/.wincode/wincode.json`,
+		]);
+	});
+	test("rejects writes for a read-only injected filesystem", async () => {
+		const store = createConfigStore({
+			configRoot: CONFIG_ROOT,
+			fs: fileSystem({
+				[`${WORKSPACE}/wincode.json`]: "{}",
+			}),
+			homeRoot: HOME_ROOT,
+		});
+
+		await expect(
+			store.setValue(WORKSPACE, "project", ["compaction", "auto"], true)
+		).rejects.toThrow("Config persistence is unavailable.");
+	});
 });
