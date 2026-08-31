@@ -7,6 +7,7 @@ import {
 	resolveEffectiveAgentSelection,
 	useAgentRegistry,
 } from "@/modules/agents";
+import { useCompactionSettingsDialog } from "@/modules/conversations/compaction";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import { McpActiveIndicator } from "@/modules/mcp";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
@@ -51,9 +52,11 @@ export function HomeView() {
 	>();
 	const { agent, model, setAgent, setModel, setVariant, variant } =
 		usePromptConfig();
+	const openCompactionSettingsDialog = useCompactionSettingsDialog();
 	const { colors } = useTheme();
 	const registry = useAgentRegistry();
 	const defaultAgentId = registry?.defaultAgentId;
+	const openCompactionSettings = () => openCompactionSettingsDialog(model);
 
 	useEffect(() => {
 		if (defaultAgentId !== undefined) {
@@ -193,7 +196,12 @@ export function HomeView() {
 					paddingX={2}
 					width="100%"
 				>
-					<ChatTextArea disabled={isCreatingSession} onSubmit={handleSubmit} />
+					<ChatTextArea
+						disabled={isCreatingSession}
+						onOpenCompaction={openCompactionSettings}
+						onSubmit={handleSubmit}
+						showCompactCommand={false}
+					/>
 					<box
 						flexDirection="row"
 						flexShrink={0}

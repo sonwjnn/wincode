@@ -36,13 +36,11 @@ import {
 	createDirectSummaryGenerator,
 	createHostedSummaryGenerator,
 	estimateCompactionTokens,
-	getCompactionSettingSource,
 	isCompactionSummaryMessage,
 	isContextOverflowError,
-	type ResolvedCompactionSettings,
 	recoverContextOverflow,
-	resolveCompactionSettings,
 	type SummaryGeneratorInput,
+	useCompactionSettings,
 } from "@/modules/conversations/compaction";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import {
@@ -51,7 +49,6 @@ import {
 	type McpContextValue,
 	useMcp,
 } from "@/modules/mcp";
-import { useModelPricing } from "@/modules/model-pricing";
 import { useToolPermission } from "@/modules/permissions";
 import {
 	buildSkillToolDefinition,
@@ -171,16 +168,6 @@ export const findCurrentTurnAssistantIndex = (
 	return assistantIndex > userIndex ? assistantIndex : -1;
 };
 
-const resolveCompactionSettingPath = (
-	settings: ResolvedCompactionSettings,
-	key: CompactionSettingKey
-): string[] => {
-	const source = getCompactionSettingSource(settings, key);
-	if (settings.configPath.length === 0) {
-		return source.kind === "config" ? [key] : ["compaction", key];
-	}
-	return [...settings.configPath, key];
-};
 /**
  * `chat.stop()` can run before the asynchronous approval gate emits its
  * output-error part. Keep the approved-input part terminal so that late output
@@ -343,7 +330,11 @@ export function useChat(
 	const connections = useConnections();
 	const mcp = useMcp();
 	const config = useConfig();
-	const { table: modelPricing } = useModelPricing();
+	const {
+		getCompactionSettings: getSettingsForModel,
+		persistCompactionSetting: persistSettingForModel,
+		resetCompactionSetting: resetSettingForModel,
+	} = useCompactionSettings();
 	const registry = useAgentRegistry();
 	const {
 		closeApprovals,
@@ -539,18 +530,9 @@ export function useChat(
 			}),
 		[estimateRuntimeRequestOverheadTokens, summaryGenerator]
 	);
-	const getCompactionSettings = async (
+	const getCompactionSettings = (
 		selection: ChatModelSelection = modelRef.current
-	): Promise<ResolvedCompactionSettings> => {
-		const snapshot = await config.configStore
-			.getSnapshot(config.workspace)
-			.catch(() => undefined);
-		return resolveCompactionSettings({
-			model: selection,
-			pricing: modelPricing,
-			snapshot,
-		});
-	};
+	) => getSettingsForModel(selection);
 
 	const runCompaction = (
 		trigger: CompactConversationInput["trigger"],
@@ -628,36 +610,15 @@ export function useChat(
 		compactionAbortRef.current?.abort();
 	};
 
-	const persistCompactionSetting = async (
+	const persistCompactionSetting = (
 		key: CompactionSettingKey,
 		value: CompactionSettings[CompactionSettingKey]
-	): Promise<void> => {
-		const settings = await getCompactionSettings(modelRef.current);
-		const source = getCompactionSettingSource(settings, key);
-		const scope = source.kind === "config" ? source.scope : "project";
-		await config.configStore.setValue(
-			config.workspace,
-			scope,
-			resolveCompactionSettingPath(settings, key),
-			value
-		);
-	};
+	): Promise<void> => persistSettingForModel(modelRef.current, key, value);
 
-	const resetCompactionSetting = async (
+	const resetCompactionSetting = (
 		key: CompactionSettingKey
-	): Promise<CompactionSettings[CompactionSettingKey]> => {
-		const settings = await getCompactionSettings(modelRef.current);
-		const source = getCompactionSettingSource(settings, key);
-		const scope = source.kind === "config" ? source.scope : "project";
-		await config.configStore.setValue(
-			config.workspace,
-			scope,
-			resolveCompactionSettingPath(settings, key),
-			undefined
-		);
-		const refreshed = await getCompactionSettings(modelRef.current);
-		return refreshed.resolved[key];
-	};
+	): Promise<CompactionSettings[CompactionSettingKey]> =>
+		resetSettingForModel(modelRef.current, key);
 
 	const hasPendingTools = (
 		messages: readonly CodingAgentUIMessage[]

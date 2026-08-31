@@ -18,12 +18,10 @@ import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import {
-	type CompactionSettingKey,
-	type CompactionSettings,
-	CompactionSettingsDialogContent,
 	type ConversationCompaction,
 	isCompactionSettingsCommand,
 	parseCompactCommand,
+	useCompactionSettingsDialog,
 } from "../../compaction";
 import { hasPendingToolExecutionStep } from "../../hooks/auto-send-gate";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
@@ -72,6 +70,7 @@ export function ChatView({
 	const { isTopLayer } = useKeyboardLayer();
 	const dialog = useDialog();
 	const { show } = useToast();
+	const openCompactionSettingsDialog = useCompactionSettingsDialog();
 	const hasPendingApproval = useApprovalPanels().entries.some(
 		(entry) => entry.resolution === undefined
 	);
@@ -98,13 +97,10 @@ export function ChatView({
 		compact,
 		compactions,
 		error,
-		getCompactionSettings,
 		interrupt,
 		isCompacting,
 		isPreparingMessage,
 		messages,
-		persistCompactionSetting,
-		resetCompactionSetting,
 		status,
 		submit,
 	} = useChat(
@@ -270,39 +266,6 @@ export function ChatView({
 		},
 		[]
 	);
-	const updateCompactionSetting = async (
-		key: CompactionSettingKey,
-		value: CompactionSettings[CompactionSettingKey]
-	): Promise<void> => {
-		try {
-			await persistCompactionSetting(key, value);
-		} catch (error) {
-			show({
-				message:
-					error instanceof Error
-						? error.message
-						: "Could not save compaction settings.",
-				variant: "error",
-			});
-			throw error;
-		}
-	};
-
-	const resetCompactionSettings = async (): Promise<boolean | undefined> => {
-		try {
-			const value = await resetCompactionSetting("auto");
-			return typeof value === "boolean" ? value : undefined;
-		} catch (error) {
-			show({
-				message:
-					error instanceof Error
-						? error.message
-						: "Could not reset compaction settings.",
-				variant: "error",
-			});
-			return;
-		}
-	};
 
 	const runManualCompaction = async (focus?: string): Promise<boolean> => {
 		if (
@@ -340,7 +303,7 @@ export function ChatView({
 		}
 	};
 
-	const openCompactionSettings = async () => {
+	const openCompactionSettings = async (): Promise<void> => {
 		if (
 			isTurnBusy ||
 			isCompacting ||
@@ -361,19 +324,7 @@ export function ChatView({
 				model,
 				variant
 			);
-			const settings = await getCompactionSettings(effective.model);
-			dialog.open({
-				children: (
-					<CompactionSettingsDialogContent
-						onChange={updateCompactionSetting}
-						onReset={resetCompactionSettings}
-						settings={settings}
-					/>
-				),
-				padding: { bottom: 1, left: 0, right: 0, top: 1 },
-				titleMargin: { left: 4, right: 4 },
-				title: "Compaction Settings",
-			});
+			await openCompactionSettingsDialog(effective.model);
 		} catch (error) {
 			show({
 				message:

@@ -84,6 +84,7 @@ type ChatTextAreaProps = {
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onOpenCompaction?: () => Promise<void> | void;
 	sessionPromptHistory?: PromptHistoryEntry[];
+	showCompactCommand?: boolean;
 	onSubmit: (
 		submission: ChatPromptSubmission
 	) => boolean | Promise<boolean> | void | Promise<void>;
@@ -132,6 +133,7 @@ export function ChatTextArea({
 	onOpenCompaction,
 	onSubmit,
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
+	showCompactCommand = true,
 }: ChatTextAreaProps) {
 	const { agent, cycleAgent, model } = usePromptConfig();
 	const supportedModel = findSupportedChatModelSelection(model);
@@ -239,6 +241,7 @@ export function ChatTextArea({
 		getCustomCommands: discoverCustomCommands,
 		getFileMentionOptions,
 		getSkills: discoverAvailableSkills,
+		hideCompact: !showCompactCommand,
 		hideVariants,
 		onError: handleSubmitError,
 		onSubmit,

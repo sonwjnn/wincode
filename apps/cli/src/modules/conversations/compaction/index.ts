@@ -29,6 +29,7 @@ export {
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateCompactionTokens,
 	getCompactionSettingSource,
+	resolveCompactionSettingPath,
 	resolveCompactionSettings,
 } from "./config";
 export type {
@@ -65,3 +66,9 @@ export type {
 	SummaryGeneratorInput,
 	SummaryGeneratorResult,
 } from "./types";
+export type { CompactionSettingsOperations } from "./use-compaction-settings";
+export {
+	createCompactionSettingsOperations,
+	useCompactionSettings,
+	useCompactionSettingsDialog,
+} from "./use-compaction-settings";

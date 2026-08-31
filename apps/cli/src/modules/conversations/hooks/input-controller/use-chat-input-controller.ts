@@ -44,6 +44,7 @@ export function useChatInputController({
 	getCustomCommands: getCustomCommandsFromOptions,
 	getFileMentionOptions: getFileMentionOptionsFromOptions,
 	getSkills: getSkillsFromOptions,
+	hideCompact,
 	hideVariants,
 	onError,
 	onSubmit,
@@ -146,10 +147,13 @@ export function useChatInputController({
 			commandQuery === undefined
 				? []
 				: [
-						...getFilteredCommands(commandQuery, { hideVariants }),
+						...getFilteredCommands(commandQuery, {
+							hideCompact,
+							hideVariants,
+						}),
 						...filterCustomCommands(customCommands, commandQuery),
 					],
-		[commandQuery, customCommands, hideVariants]
+		[commandQuery, customCommands, hideCompact, hideVariants]
 	);
 	const filteredFileMentions = useMemo(
 		() =>

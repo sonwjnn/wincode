@@ -26,4 +26,13 @@ describe("getFilteredCommands", () => {
 			"variants",
 		]);
 	});
+	test("hides manual compaction outside an active session", () => {
+		const commands = getFilteredCommands("", { hideCompact: true });
+		expect(commands.map((cmd) => cmd.name)).not.toContain("compact");
+		expect(
+			getFilteredCommands("compact", { hideCompact: true }).map(
+				(cmd) => cmd.name
+			)
+		).toEqual(["compaction"]);
+	});
 });

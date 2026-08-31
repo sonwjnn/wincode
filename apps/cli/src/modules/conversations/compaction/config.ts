@@ -350,3 +350,14 @@ export const getCompactionSettingSource = (
 	settings: ResolvedCompactionSettings,
 	key: CompactionSettingKey
 ): CompactionSettingSource => settings.sources[key];
+
+export const resolveCompactionSettingPath = (
+	settings: ResolvedCompactionSettings,
+	key: CompactionSettingKey
+): string[] => {
+	const source = getCompactionSettingSource(settings, key);
+	if (settings.configPath.length === 0) {
+		return source.kind === "config" ? [key] : ["compaction", key];
+	}
+	return [...settings.configPath, key];
+};
