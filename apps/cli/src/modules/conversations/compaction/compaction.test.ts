@@ -1,5 +1,14 @@
 import { expect, mock, test } from "bun:test";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ChatModelSelection, CodingAgentUIMessage } from "@wincode/ai";
+import {
+	type AttachmentMetadataRecord,
+	type AttachmentMetadataRepository,
+	attachmentReferenceToFilePart,
+	createConversationAttachmentStore,
+} from "../storage/attachment-store";
 import {
 	createConversationCompaction,
 	rebuildActiveMessages,
@@ -11,6 +20,7 @@ const model: ChatModelSelection = {
 	modelId: "gpt-5.4-mini",
 	providerId: "openai",
 };
+const DATA_IMAGE_URL_PATTERN = /^data:image\/png;base64,/u;
 
 const message = (
 	id: string,
@@ -39,6 +49,20 @@ const makeStore = (initial: ConversationCompaction | null = null) => {
 	return {
 		appendCompaction,
 		getLatestCompaction: mock(async () => latest),
+	};
+};
+
+const createAttachmentRepository = (): AttachmentMetadataRepository => {
+	const records = new Map<string, AttachmentMetadataRecord>();
+	return {
+		delete: (attachmentId) => {
+			records.delete(attachmentId);
+		},
+		get: (attachmentId) => records.get(attachmentId),
+		list: () => [...records.values()],
+		put: (record) => {
+			records.set(record.attachmentId, record);
+		},
 	};
 };
 
@@ -135,6 +159,31 @@ test("rebuilds the active context from the newest durable compaction", () => {
 		text: expect.stringContaining("preserve the migration decision"),
 		type: "text",
 	});
+});
+
+test("fails closed when a durable compaction boundary is missing", () => {
+	const latest: ConversationCompaction = {
+		completedAt: new Date("2026-08-30T00:00:00.000Z"),
+		createdAt: new Date("2026-08-30T00:00:00.000Z"),
+		firstKeptUiMessageId: "missing-message",
+		id: "entry-invalid",
+		sequence: 2,
+		sessionId: "session-invalid",
+		summarizationModel: model,
+		summary: {
+			coveredMessageIds: ["old-message"],
+			formatVersion: 1,
+			text: "summary",
+		},
+		throughMessageUiId: "old-message",
+		tokensAfter: 1,
+		tokensBefore: 2,
+		trigger: "manual",
+	};
+
+	expect(() =>
+		rebuildActiveMessages([message("u1", "user", "current")], latest)
+	).toThrow("entry-invalid");
 });
 
 test("uses provider-reported usage for threshold decisions", () => {
@@ -317,7 +366,6 @@ test("only one compaction operation runs per session", async () => {
 		settings,
 		trigger: "threshold",
 	});
-
 	expect(first).toBe(second);
 	await Promise.resolve();
 	release?.();
@@ -342,9 +390,77 @@ test("serializes old attachments as bounded metadata", () => {
 	]);
 
 	expect(serialized).toContain("design.png");
+	expect(serialized).toContain("payloadBytes");
 	expect(serialized).toContain("payloadOmitted");
 	expect(serialized).not.toContain("data:image/png;base64");
 	expect(serialized.length).toBeLessThan(500);
+});
+
+test("hydrates current-window attachments once and persists bounded metadata", async () => {
+	const root = await mkdtemp(join(tmpdir(), "wincode-compaction-attachments-"));
+	const attachmentStore = createConversationAttachmentStore({
+		repository: createAttachmentRepository(),
+		root,
+	});
+	const reference = await attachmentStore.ingest({
+		bytes: new Uint8Array([
+			0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
+		]),
+		filename: "design.png",
+		mediaType: "image/png",
+	});
+	const imageMessage = {
+		...message("u1", "user", "review [Image 1]"),
+		parts: [
+			{ text: "review [Image 1]", type: "text" },
+			attachmentReferenceToFilePart(reference),
+		],
+	} as unknown as CodingAgentUIMessage;
+	let summaryMessages: CodingAgentUIMessage[] | undefined;
+	const compaction = createConversationCompaction({
+		attachmentStore,
+		store: makeStore(),
+		summaryGenerator: async (input) => {
+			summaryMessages = input.summaryMessages;
+			return { text: "image summary data:image/png;base64,aG Vs\nbG8=." };
+		},
+		estimateTokens: (messages) =>
+			messages.reduce((total, current) => total + current.parts.length, 0),
+	});
+
+	const result = await compaction.compact({
+		conversation: {
+			messages: [
+				imageMessage,
+				message("a1", "assistant", "noted"),
+				message("u2", "user", "continue"),
+				message("a2", "assistant", "done"),
+			],
+			sessionId: "session-attachments",
+		},
+		model,
+		settings: {
+			enabled: true,
+			keepRecentTokens: 2,
+			maxMediaAttachments: 1,
+			maxMediaBytes: 10_000,
+			maxMediaTokens: 10_000,
+			thresholdTokens: null,
+		},
+		trigger: "manual",
+	});
+	expect(summaryMessages?.[0]?.parts[1]).toMatchObject({
+		url: expect.stringMatching(DATA_IMAGE_URL_PATTERN),
+	});
+	expect(result.entry.summary.attachments).toMatchObject([
+		{
+			attachmentId: reference.attachmentId,
+			available: true,
+			byteLength: reference.byteLength,
+			payloadOmitted: true,
+		},
+	]);
+	expect(JSON.stringify(result.entry)).not.toContain("data:image/png;base64");
 });
 
 test("sanitizes completed Skill bodies before summarization", async () => {

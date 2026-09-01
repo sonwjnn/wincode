@@ -7,11 +7,19 @@ import type {
 	ConfigOrigin,
 	ConfigSnapshot,
 } from "@/shared/config/config-store";
+import {
+	estimateAttachmentTokens,
+	estimateAttachmentTokensForDataUrl,
+	getAttachmentReference,
+} from "../storage/attachment-store";
 
 export const DEFAULT_COMPACTION_SETTINGS = {
 	auto: true,
 	enabled: true,
 	keepRecentTokens: 20_000,
+	maxMediaAttachments: 2,
+	maxMediaBytes: 4 * 1024 * 1024,
+	maxMediaTokens: 4096,
 	midTurnEnabled: true,
 	overflowRecovery: true,
 	reserveTokens: 16_384,
@@ -22,6 +30,9 @@ export type CompactionSettings = {
 	auto: boolean;
 	enabled: boolean;
 	keepRecentTokens: number;
+	maxMediaAttachments: number;
+	maxMediaBytes: number;
+	maxMediaTokens: number;
 	midTurnEnabled: boolean;
 	overflowRecovery: boolean;
 	reserveTokens: number;
@@ -38,18 +49,19 @@ export type CompactionDiagnostic = {
 	origin?: ConfigOrigin;
 	severity: "error" | "warning";
 };
-
 export type CompactionSettingSource =
 	| { kind: "default" }
 	| { kind: "session" }
 	| (ConfigOrigin & { kind: "config" });
-
 export type ResolvedCompactionSettings = {
 	autoAvailable: boolean;
 	configPath: readonly string[];
 	desired: CompactionSettings;
 	diagnostics: readonly CompactionDiagnostic[];
 	keepRecentTokens: number;
+	maxMediaAttachments: number;
+	maxMediaBytes: number;
+	maxMediaTokens: number;
 	midTurnAvailable: boolean;
 	modelContextLimit: number | null;
 	overflowRecoveryAvailable: boolean;
@@ -319,6 +331,9 @@ export const resolveCompactionSettings = (
 		diagnostics,
 		enabled: resolved.enabled,
 		keepRecentTokens: resolved.keepRecentTokens,
+		maxMediaAttachments: resolved.maxMediaAttachments,
+		maxMediaBytes: resolved.maxMediaBytes,
+		maxMediaTokens: resolved.maxMediaTokens,
 		midTurnAvailable:
 			resolved.enabled && resolved.midTurnEnabled && thresholdTokens !== null,
 		midTurnEnabled: resolved.midTurnEnabled,
@@ -336,15 +351,76 @@ export const resolveCompactionSettings = (
 };
 
 export const COMPACTION_REQUEST_OVERHEAD_TOKENS = 4096;
+
+const estimateInlineAttachmentTokens = (url: string): number =>
+	estimateAttachmentTokensForDataUrl(url);
+
+const normalizeAttachmentPartForEstimate = (
+	part: CodingAgentUIMessage["parts"][number]
+): { part: unknown; tokens: number } => {
+	if (
+		typeof part !== "object" ||
+		part === null ||
+		!("type" in part) ||
+		part.type !== "file" ||
+		!("mediaType" in part) ||
+		typeof part.mediaType !== "string" ||
+		!part.mediaType.startsWith("image/")
+	) {
+		return { part, tokens: 0 };
+	}
+	const reference = getAttachmentReference(part);
+	if (reference) {
+		return {
+			part: {
+				attachmentId: reference.attachmentId,
+				byteLength: reference.byteLength,
+				filename: reference.filename,
+				mediaType: reference.mediaType,
+				type: "file",
+			},
+			tokens: estimateAttachmentTokens(reference),
+		};
+	}
+	const url = "url" in part && typeof part.url === "string" ? part.url : "";
+	return {
+		part: {
+			byteLength: Math.ceil((url.length * 3) / 4),
+			filename: "attachment",
+			mediaType: part.mediaType,
+			type: "file",
+		},
+		tokens: estimateInlineAttachmentTokens(url),
+	};
+};
+
+const normalizeMessagesForEstimate = (
+	messages: readonly CodingAgentUIMessage[]
+): { messages: unknown[]; mediaTokens: number } => {
+	let mediaTokens = 0;
+	const normalized = messages.map((message) => ({
+		...message,
+		parts: message.parts.map((part) => {
+			const result = normalizeAttachmentPartForEstimate(part);
+			mediaTokens += result.tokens;
+			return result.part;
+		}),
+	}));
+	return { mediaTokens, messages: normalized };
+};
+
 export const estimateCompactionTokens = (
 	messages: readonly CodingAgentUIMessage[],
 	requestOverheadTokens = COMPACTION_REQUEST_OVERHEAD_TOKENS
-): number =>
-	Math.max(
+): number => {
+	const normalized = normalizeMessagesForEstimate(messages);
+	return Math.max(
 		0,
-		Math.ceil(JSON.stringify(messages).length / 4) +
+		Math.ceil(JSON.stringify(normalized.messages).length / 4) +
+			normalized.mediaTokens +
 			Math.max(0, requestOverheadTokens)
 	);
+};
 
 export const getCompactionSettingSource = (
 	settings: ResolvedCompactionSettings,

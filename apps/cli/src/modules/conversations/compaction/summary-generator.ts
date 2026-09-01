@@ -10,7 +10,13 @@ import {
 	resolveDirectChatModel,
 	resolveOpenAIChatModel,
 } from "@wincode/ai/server";
-import { generateText, type LanguageModel, type LanguageModelUsage } from "ai";
+import {
+	convertToModelMessages,
+	generateText,
+	type LanguageModel,
+	type LanguageModelUsage,
+	type ModelMessage,
+} from "ai";
 import { z } from "zod";
 import type { Connections } from "@/modules/connections";
 import { getServerUrl } from "@/shared/api/hono-client";
@@ -20,16 +26,17 @@ import type {
 	SummaryGeneratorResult,
 } from "./types";
 
-export const COMPACTION_SUMMARY_SYSTEM_PROMPT = `You are Wincode's conversation maintenance summarizer. Summarize only the supplied transcript for a future coding-agent turn. Preserve user requests, decisions, current work, unresolved errors, exact identifiers, file paths, and tool call/result pairings. Do not invent facts, call tools, modify files, or address the user. Old attachments are metadata only. Return a concise plain-text summary.`;
-
 const MAX_SUMMARY_OUTPUT_TOKENS = 4096;
+
+export const COMPACTION_SUMMARY_SYSTEM_PROMPT = `You are Wincode's conversation maintenance summarizer. Summarize only the supplied transcript for a future coding-agent turn. Preserve user requests, decisions, current work, unresolved errors, exact identifiers, file paths, and tool call/result pairings. Current-window attachments may be inspected when supplied; historical attachments are metadata only. Never reproduce attachment payloads. Return a concise plain-text summary.`;
 
 export type SummaryTextGenerationOptions = {
 	abortSignal?: AbortSignal;
 	maxOutputTokens: number;
 	maxRetries: number;
+	messages?: ModelMessage[];
 	model: LanguageModel;
-	prompt: string;
+	prompt?: string;
 	providerOptions?: ProviderOptions;
 	system: string;
 };
@@ -55,9 +62,11 @@ const defaultTextGenerator: SummaryTextGenerator = async (options) => {
 		maxOutputTokens: options.maxOutputTokens,
 		maxRetries: options.maxRetries,
 		model: options.model,
-		prompt: options.prompt,
 		providerOptions: options.providerOptions,
 		system: options.system,
+		...(options.messages
+			? { messages: options.messages }
+			: { prompt: options.prompt ?? "" }),
 	});
 	return { text: result.text, usage: result.usage };
 };
@@ -73,8 +82,7 @@ const buildSummaryPrompt = (input: SummaryGeneratorInput): string => {
 			? `Public focus: ${focus}`
 			: "Use the default preservation priorities.",
 		prior,
-		"Transcript:",
-		input.serializedMessages,
+		...(input.summaryMessages ? [] : ["Transcript:", input.serializedMessages]),
 	].join("\n");
 };
 
@@ -91,12 +99,25 @@ export const createLanguageModelSummaryGenerator =
 			input.variant === undefined
 				? await resolveModel(input.model, input.signal)
 				: await resolveModel(input.model, input.signal, input.variant);
+		const prompt = buildSummaryPrompt(input);
+		const modelMessages = input.summaryMessages
+			? await convertToModelMessages(
+					input.summaryMessages.map(({ id: _id, ...message }) => message)
+				)
+			: undefined;
 		const generated = await generate({
 			abortSignal: input.signal,
 			maxOutputTokens: MAX_SUMMARY_OUTPUT_TOKENS,
 			maxRetries: 0,
 			model: resolved.model,
-			prompt: buildSummaryPrompt(input),
+			...(modelMessages
+				? {
+						messages: [
+							{ content: prompt, role: "user" as const },
+							...modelMessages,
+						],
+					}
+				: { prompt }),
 			providerOptions: resolved.providerOptions,
 			system: COMPACTION_SUMMARY_SYSTEM_PROMPT,
 		});
@@ -214,6 +235,7 @@ export const createHostedSummaryGenerator =
 					model: input.model.modelId,
 					previousSummary: input.previousSummary,
 					serializedMessages: input.serializedMessages,
+					summaryMessages: input.summaryMessages,
 				}),
 				headers: {
 					Authorization: `Bearer ${getBearerToken(authorization)}`,

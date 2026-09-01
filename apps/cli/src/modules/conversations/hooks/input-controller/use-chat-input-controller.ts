@@ -1,3 +1,4 @@
+import type { CodingAgentUIMessage } from "@wincode/ai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getFilteredCommands } from "@/modules/commands/filter-commands";
 import { filterCustomCommands } from "@/modules/custom-commands/filter";
@@ -68,20 +69,62 @@ export function useChatInputController({
 	const historyRef = useRef<PromptHistoryEntry[]>([]);
 	const historyIndexRef = useRef(-1);
 	const draftRef = useRef<PromptHistoryEntry>({ text: "", files: [] });
+	const promptRecordQueueRef = useRef(Promise.resolve());
 	const resetHistoryBaseline = useCallback((draft: string) => {
 		const baseline = resetHistoryNavigation(draft);
 		historyIndexRef.current = baseline.index;
 		draftRef.current = baseline.draft;
 	}, []);
 	const rememberPrompt = useCallback((entry: PromptHistoryEntry) => {
-		getConversationStore().recordPrompt(entry);
-		historyRef.current = prependPrompt(historyRef.current, entry);
+		const previousRecord = promptRecordQueueRef.current;
+		const currentRecord = (async () => {
+			await previousRecord;
+			try {
+				const store = getConversationStore();
+				const [externalized] = await store.externalizeAttachments([
+					{
+						id: "prompt-history",
+						parts: entry.files,
+						role: "user",
+					} as unknown as CodingAgentUIMessage,
+				]);
+				const files = (externalized?.parts ?? []).filter(
+					(part): part is PromptHistoryEntry["files"][number] =>
+						part.type === "file"
+				);
+				const durableEntry = { ...entry, files };
+				await store.recordPrompt(durableEntry);
+				historyRef.current = prependPrompt(historyRef.current, durableEntry);
+			} catch {
+				// A prompt-history write must not retain an inline payload after failure.
+			}
+		})();
+		promptRecordQueueRef.current = currentRecord;
 	}, []);
 	useEffect(() => {
-		historyRef.current = mergePromptHistory(
-			sessionPromptHistory,
-			getConversationStore().getPromptHistory()
-		);
+		let active = true;
+		void getConversationStore()
+			.getPromptHistory()
+			.then((globalEntries) => {
+				if (!active) {
+					return;
+				}
+				const pendingEntries = historyRef.current;
+				const mergedEntries = mergePromptHistory(
+					sessionPromptHistory,
+					globalEntries
+				);
+				historyRef.current = pendingEntries
+					.toReversed()
+					.reduce(
+						(entries, entry) => prependPrompt(entries, entry),
+						mergedEntries
+					);
+			})
+			.catch(() => undefined);
+		return () => {
+			active = false;
+		};
 	}, [sessionPromptHistory]);
 	const selectedIndexRef = useLatest(selectedIndex);
 	const onSubmitRef = useLatest(onSubmit);
@@ -330,6 +373,7 @@ export function useChatInputController({
 		closeOverlay();
 	}, [activeTrigger, closeOverlay, setProgrammaticText, textValue]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: latest-value refs intentionally keep the submit callback current without rebuilding it.
 	const submit = useCallback(
 		async (snapshot: SubmitSnapshot): Promise<boolean> => {
 			const accepted = await submitPrompt(
@@ -406,6 +450,7 @@ export function useChatInputController({
 		]
 	);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: latest-value refs intentionally keep arrow navigation current without rebuilding it.
 	const onArrowUp = useCallback(
 		(cursor?: number, _textLength?: number): boolean => {
 			if (overlayKind === null) {
@@ -450,6 +495,7 @@ export function useChatInputController({
 		]
 	);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: latest-value refs intentionally keep arrow navigation current without rebuilding it.
 	const onArrowDown = useCallback(
 		(cursor?: number, length?: number): boolean => {
 			if (overlayKind === null) {

@@ -10,6 +10,14 @@ import {
 	isSkillToolPart,
 	sanitizeSkillToolPart,
 } from "@/modules/skills/activation";
+import {
+	type CompactionAttachmentMetadata,
+	type ConversationAttachmentStore,
+	DEFAULT_COMPACTION_ATTACHMENT_BUDGET,
+	estimateAttachmentTokens,
+	formatAttachmentUnavailableMarker,
+	getAttachmentReference,
+} from "../storage/attachment-store";
 import type { ConversationStore } from "../storage/conversation-store";
 import {
 	estimateCompactionTokens,
@@ -29,14 +37,38 @@ import type {
 const SUMMARY_MESSAGE_PREFIX = "<wincode-compaction-summary>";
 const SUMMARY_MESSAGE_SUFFIX = "</wincode-compaction-summary>";
 const MAX_SERIALIZED_PART_LENGTH = 12_000;
+const RAW_IMAGE_DATA_URL_PATTERN =
+	/data:image\/[^;,]+;base64,(?:(?:[A-Za-z0-9+/]\s*){4})*(?:(?:[A-Za-z0-9+/]\s*){2}==|(?:[A-Za-z0-9+/]\s*){3}=|(?:[A-Za-z0-9+/]\s*){1,4})(?![A-Za-z0-9+/=])/giu;
+const DATA_URL_PAYLOAD_PATTERN = /^data:[^,]+,(.*)$/su;
+const BASE64_WHITESPACE_PATTERN = /\s/gu;
+const sanitizeSummaryText = (text: string): string =>
+	text.replace(RAW_IMAGE_DATA_URL_PATTERN, "[attachment payload omitted]");
 
 export const compactionSummaryMessageId = (entryId: string): string =>
 	`compaction:${entryId}`;
 
 export const formatCompactionSummaryMessage = (
 	summary: CompactionSummary
-): string =>
-	[SUMMARY_MESSAGE_PREFIX, summary.text, SUMMARY_MESSAGE_SUFFIX].join("\n");
+): string => {
+	const attachmentMetadata = (summary.attachments ?? []).map((attachment) =>
+		JSON.stringify({
+			attachmentId: attachment.attachmentId,
+			available: attachment.available,
+			byteLength: attachment.byteLength,
+			filename: attachment.filename,
+			mediaType: attachment.mediaType,
+			payloadOmitted: true,
+		})
+	);
+	return [
+		SUMMARY_MESSAGE_PREFIX,
+		summary.text,
+		...(attachmentMetadata.length > 0
+			? ["Attachments:", ...attachmentMetadata]
+			: []),
+		SUMMARY_MESSAGE_SUFFIX,
+	].join("\n");
+};
 
 export const createCompactionSummaryMessage = (
 	entry: Pick<ConversationCompaction, "id" | "summary">
@@ -88,7 +120,10 @@ const applyDurableSplitBoundary = (
 		partIndex <= 0 ||
 		partIndex >= assistant.parts.length
 	) {
-		return activeMessages;
+		throw new ConversationCompactionError(
+			"invalid-boundary",
+			`Compaction boundary "${latest.id}" has an invalid assistant part cut point.`
+		);
 	}
 	const nextMessages = [...activeMessages];
 	nextMessages[assistantIndex] = {
@@ -112,7 +147,30 @@ export const rebuildActiveMessages = (
 		(message) => message.id === latest.firstKeptUiMessageId
 	);
 	if (firstKeptIndex < 0) {
-		return replaySafeMessages;
+		throw new ConversationCompactionError(
+			"invalid-boundary",
+			`Compaction boundary "${latest.id}" references missing message "${latest.firstKeptUiMessageId}".`
+		);
+	}
+	const throughIndex = replaySafeMessages.findIndex(
+		(message) => message.id === latest.throughMessageUiId
+	);
+	if (throughIndex < 0) {
+		throw new ConversationCompactionError(
+			"invalid-boundary",
+			`Compaction boundary "${latest.id}" references missing message "${latest.throughMessageUiId}".`
+		);
+	}
+	if (
+		(latest.firstKeptAssistantPartIndex === undefined &&
+			throughIndex >= firstKeptIndex) ||
+		(latest.firstKeptAssistantPartIndex !== undefined &&
+			throughIndex < firstKeptIndex)
+	) {
+		throw new ConversationCompactionError(
+			"invalid-boundary",
+			`Compaction boundary "${latest.id}" has inconsistent message ordering.`
+		);
 	}
 	const activeMessages = applyDurableSplitBoundary(
 		replaySafeMessages.slice(firstKeptIndex),
@@ -126,6 +184,7 @@ export class ConversationCompactionError extends Error {
 		| "cancelled"
 		| "context-still-too-large"
 		| "history-too-short"
+		| "invalid-boundary"
 		| "not-needed"
 		| "persistence-failed"
 		| "summary-failed";
@@ -153,7 +212,13 @@ export type CompactConversationInput = {
 	settings: Pick<
 		ResolvedCompactionSettings,
 		"enabled" | "keepRecentTokens" | "thresholdTokens"
-	>;
+	> &
+		Partial<
+			Pick<
+				ResolvedCompactionSettings,
+				"maxMediaAttachments" | "maxMediaBytes" | "maxMediaTokens"
+			>
+		>;
 	trigger: CompactionTriggerReason;
 	focus?: string;
 	signal?: AbortSignal;
@@ -176,6 +241,7 @@ export type ConversationCompactionModule = {
 };
 
 type CompactionModuleDependencies = {
+	attachmentStore?: ConversationAttachmentStore;
 	store: CompactionStore;
 	summaryGenerator: SummaryGenerator;
 	estimateTokens?: (messages: readonly CodingAgentUIMessage[]) => number;
@@ -219,15 +285,53 @@ const getStringField = (value: unknown, key: string): string | undefined => {
 	return typeof field === "string" ? field : undefined;
 };
 
+const getNumberField = (value: unknown, key: string): number | undefined => {
+	if (typeof value !== "object" || value === null || !(key in value)) {
+		return;
+	}
+	const field = Reflect.get(value, key);
+	return typeof field === "number" && Number.isFinite(field)
+		? field
+		: undefined;
+};
+
+const getDataUrlByteLength = (url: string): number => {
+	const payload = DATA_URL_PAYLOAD_PATTERN.exec(url)?.[1];
+	if (payload === undefined) {
+		return url.length;
+	}
+	const compactPayload = payload.replace(BASE64_WHITESPACE_PATTERN, "");
+	let padding = 0;
+	if (compactPayload.endsWith("==")) {
+		padding = 2;
+	} else if (compactPayload.endsWith("=")) {
+		padding = 1;
+	}
+	return Math.max(0, Math.floor((compactPayload.length * 3) / 4) - padding);
+};
+
 const replaceAttachmentPayload = (part: unknown) => {
+	const reference = getAttachmentReference(part);
+	if (reference) {
+		return {
+			attachmentId: reference.attachmentId,
+			available: reference.available !== false,
+			byteLength: reference.byteLength,
+			filename: reference.filename,
+			mediaType: reference.mediaType,
+			payloadOmitted: true,
+		};
+	}
 	const filename = getStringField(part, "filename") ?? "unknown";
 	const mediaType = getStringField(part, "mediaType") ?? "unknown";
 	const url = getStringField(part, "url");
 	return {
 		filename,
 		mediaType,
-		payloadBytes: url?.length ?? 0,
-		payloadOmitted: url !== undefined,
+		payloadBytes:
+			getNumberField(part, "byteLength") ??
+			(url === undefined ? 0 : getDataUrlByteLength(url)),
+		payloadOmitted: true,
 	};
 };
 
@@ -411,20 +515,96 @@ const getSummarySpan = (
 	if (cutPoint.summaryMessages) {
 		return cutPoint.summaryMessages;
 	}
-	const previousIndex =
-		previous === null
-			? -1
-			: findMessageIndex(messages, previous.firstKeptUiMessageId);
-	const start = previousIndex >= 0 ? previousIndex : 0;
-	return messages.slice(start, cutPoint.throughIndex + 1);
+	if (previous === null) {
+		return messages.slice(0, cutPoint.throughIndex + 1);
+	}
+	const previousIndex = findMessageIndex(
+		messages,
+		previous.firstKeptUiMessageId
+	);
+	if (previousIndex < 0) {
+		return messages.slice(0, cutPoint.throughIndex + 1);
+	}
+	if (previous.firstKeptAssistantPartIndex === undefined) {
+		return messages.slice(previousIndex, cutPoint.throughIndex + 1);
+	}
+	// A split-turn boundary keeps the user turn plus an assistant suffix; the
+	// assistant prefix was already summarized, so resume from that suffix
+	// instead of re-summarizing (and re-hydrating) the covered portion.
+	const throughIndex = findMessageIndex(messages, previous.throughMessageUiId);
+	if (throughIndex < previousIndex || throughIndex > cutPoint.throughIndex) {
+		return messages.slice(previousIndex, cutPoint.throughIndex + 1);
+	}
+	const splitMessages = applyDurableSplitBoundary(
+		messages.slice(throughIndex),
+		previous
+	);
+	const suffix = splitMessages[0];
+	if (!suffix) {
+		return messages.slice(previousIndex, cutPoint.throughIndex + 1);
+	}
+	return [
+		suffix,
+		...messages.slice(throughIndex + 1, cutPoint.throughIndex + 1),
+	];
+};
+
+const projectMessagesForEstimate = (
+	messages: readonly CodingAgentUIMessage[],
+	settings: CompactConversationInput["settings"]
+): CodingAgentUIMessage[] => {
+	let attachmentCount = 0;
+	let byteCount = 0;
+	let tokenCount = 0;
+	const budget = {
+		maxAttachments:
+			settings.maxMediaAttachments ??
+			DEFAULT_COMPACTION_ATTACHMENT_BUDGET.maxAttachments,
+		maxBytes:
+			settings.maxMediaBytes ?? DEFAULT_COMPACTION_ATTACHMENT_BUDGET.maxBytes,
+		maxTokens:
+			settings.maxMediaTokens ?? DEFAULT_COMPACTION_ATTACHMENT_BUDGET.maxTokens,
+	};
+	return messages.map((message) => {
+		const parts = message.parts.map((part) => {
+			const reference = getAttachmentReference(part);
+			if (!reference) {
+				return part;
+			}
+			if (reference.available === false) {
+				return {
+					text: formatAttachmentUnavailableMarker(reference, "missing"),
+					type: "text" as const,
+				};
+			}
+			const candidateTokens = estimateAttachmentTokens(reference);
+			const exceedsBudget =
+				attachmentCount >= budget.maxAttachments ||
+				byteCount + reference.byteLength > budget.maxBytes ||
+				tokenCount + candidateTokens > budget.maxTokens;
+			if (exceedsBudget) {
+				return {
+					text: formatAttachmentUnavailableMarker(reference, "omitted"),
+					type: "text" as const,
+				};
+			}
+			attachmentCount += 1;
+			byteCount += reference.byteLength;
+			tokenCount += candidateTokens;
+			return part;
+		});
+		return parts === message.parts ? message : { ...message, parts };
+	});
 };
 
 const appendInputFor = ({
+	attachmentMetadata,
 	conversation,
 	cutPoint,
 	focus,
 	model,
 	previous,
+	settings,
 	summarySpan,
 	trigger,
 	estimateTokens,
@@ -433,12 +613,14 @@ const appendInputFor = ({
 	summarization,
 	variant,
 }: {
+	attachmentMetadata?: readonly CompactionAttachmentMetadata[];
 	conversation: CompactionConversation;
 	cutPoint: CutPoint;
 	focus?: string;
 	variant?: ModelVariant;
 	model: ChatModelSelection;
 	previous: ConversationCompaction | null;
+	settings: CompactConversationInput["settings"];
 	summarySpan: readonly CodingAgentUIMessage[];
 	trigger: CompactionTriggerReason;
 	estimateTokens: (messages: readonly CodingAgentUIMessage[]) => number;
@@ -458,9 +640,12 @@ const appendInputFor = ({
 		);
 	}
 	const summary: CompactionSummary = {
+		...(attachmentMetadata && attachmentMetadata.length > 0
+			? { attachments: [...attachmentMetadata] }
+			: {}),
 		coveredMessageIds: summarySpan.map((message) => message.id),
 		formatVersion: 1,
-		text: summarization.text,
+		text: sanitizeSummaryText(summarization.text),
 		...(focus?.trim() ? { focus: focus.trim() } : {}),
 	};
 	const nowValue = now();
@@ -476,7 +661,7 @@ const appendInputFor = ({
 				}),
 		tokensAfter: estimateTokens([
 			createCompactionSummaryMessage({ id: entryId, summary }),
-			...cutPoint.activeMessages,
+			...projectMessagesForEstimate(cutPoint.activeMessages, settings),
 		]),
 		tokensBefore: estimateTokens(conversation.messages),
 		trigger,
@@ -511,7 +696,132 @@ const getLatestProviderContextTokens = (
 	return usage ? getContextTokens(usage) : null;
 };
 
+const externalizeForCompaction = async (
+	attachmentStore: ConversationAttachmentStore | undefined,
+	messages: CodingAgentUIMessage[],
+	signal?: AbortSignal
+): Promise<CodingAgentUIMessage[]> => {
+	if (!attachmentStore) {
+		return messages;
+	}
+	try {
+		return await attachmentStore.externalizeMessages(messages, signal);
+	} catch (error) {
+		if (signal?.aborted) {
+			throw new ConversationCompactionError(
+				"cancelled",
+				"Compaction was cancelled.",
+				{ cause: error }
+			);
+		}
+		throw new ConversationCompactionError(
+			"persistence-failed",
+			"Attachments could not be stored before compaction.",
+			{ cause: error }
+		);
+	}
+};
+
+const chooseCompactionSpan = (
+	messages: CodingAgentUIMessage[],
+	previous: ConversationCompaction | null,
+	keepRecentTokens: number,
+	estimateTokens: (messages: readonly CodingAgentUIMessage[]) => number
+): { cutPoint: CutPoint; summarySpan: CodingAgentUIMessage[] } => {
+	const cutPoint = chooseCutPoint(
+		messages,
+		Math.max(1, keepRecentTokens),
+		estimateTokens
+	);
+	const previousIndex =
+		previous === null
+			? -1
+			: findMessageIndex(messages, previous.firstKeptUiMessageId);
+	if (previous !== null && previousIndex < 0) {
+		throw new ConversationCompactionError(
+			"invalid-boundary",
+			`Compaction boundary "${previous.id}" references a missing message.`
+		);
+	}
+	if (previousIndex >= 0 && cutPoint.throughIndex < previousIndex) {
+		throw new ConversationCompactionError(
+			"history-too-short",
+			"There is no newer complete history to compact."
+		);
+	}
+	const summarySpan = getSummarySpan(messages, cutPoint, previous);
+	if (summarySpan.length === 0) {
+		throw new ConversationCompactionError(
+			"history-too-short",
+			"There is not enough complete history to compact."
+		);
+	}
+	return { cutPoint, summarySpan };
+};
+
+const prepareCompactionSummary = async (
+	attachmentStore: ConversationAttachmentStore | undefined,
+	summarySpan: CodingAgentUIMessage[],
+	settings: CompactConversationInput["settings"],
+	signal?: AbortSignal
+): Promise<{
+	attachmentMetadata?: CompactionAttachmentMetadata[];
+	summaryMessages: CodingAgentUIMessage[];
+}> => {
+	if (!attachmentStore) {
+		return { summaryMessages: summarySpan };
+	}
+	const summaryMessages = await attachmentStore.hydrateMessages(summarySpan, {
+		maxAttachments:
+			settings.maxMediaAttachments ??
+			DEFAULT_COMPACTION_ATTACHMENT_BUDGET.maxAttachments,
+		maxBytes:
+			settings.maxMediaBytes ?? DEFAULT_COMPACTION_ATTACHMENT_BUDGET.maxBytes,
+		maxTokens:
+			settings.maxMediaTokens ?? DEFAULT_COMPACTION_ATTACHMENT_BUDGET.maxTokens,
+		purpose: "compaction",
+		signal,
+	});
+	const attachmentMetadata = await attachmentStore.getCompactionMetadata(
+		summarySpan,
+		signal
+	);
+	return { attachmentMetadata, summaryMessages };
+};
+
+const generateCompactionSummary = async (
+	summaryGenerator: SummaryGenerator,
+	input: SummaryGeneratorInput
+): Promise<SummaryGeneratorResult> => {
+	let generated: SummaryGeneratorResult;
+	try {
+		generated = await summaryGenerator(input);
+	} catch (error) {
+		if (input.signal?.aborted) {
+			throw new ConversationCompactionError(
+				"cancelled",
+				"Compaction was cancelled.",
+				{ cause: error }
+			);
+		}
+		throw new ConversationCompactionError(
+			"summary-failed",
+			"Compaction summary generation failed.",
+			{ cause: error }
+		);
+	}
+	assertNotAborted(input.signal);
+	if (!generated.text.trim()) {
+		throw new ConversationCompactionError(
+			"summary-failed",
+			"Compaction summary generation returned no content."
+		);
+	}
+	return generated;
+};
+
 export const createConversationCompaction = ({
+	attachmentStore,
 	store,
 	summaryGenerator,
 	estimateTokens = estimateCompactionTokens,
@@ -519,8 +829,8 @@ export const createConversationCompaction = ({
 	now = () => new Date(),
 }: CompactionModuleDependencies): ConversationCompactionModule => {
 	const inFlight = new Map<string, Promise<CompactConversationResult>>();
-
 	const persistCompactionEntry = async ({
+		attachmentMetadata,
 		messages,
 		sessionId,
 		cutPoint,
@@ -536,6 +846,7 @@ export const createConversationCompaction = ({
 		trigger,
 		variant,
 	}: {
+		attachmentMetadata?: readonly CompactionAttachmentMetadata[];
 		messages: readonly CodingAgentUIMessage[];
 		sessionId: string;
 		cutPoint: CutPoint;
@@ -558,6 +869,7 @@ export const createConversationCompaction = ({
 		entry: ConversationCompaction;
 	}> => {
 		const entryInput = appendInputFor({
+			attachmentMetadata,
 			conversation: { messages, sessionId },
 			cutPoint,
 			entryId,
@@ -566,6 +878,7 @@ export const createConversationCompaction = ({
 			model,
 			now: nowFn,
 			previous,
+			settings,
 			summarySpan,
 			summarization,
 			trigger,
@@ -610,67 +923,50 @@ export const createConversationCompaction = ({
 		const replaySafeMessages = sanitizeSkillToolMessages(
 			sanitizeInterruptedMessagesForModel([...input.conversation.messages])
 		);
+		const externalizedMessages = attachmentStore
+			? await externalizeForCompaction(
+					attachmentStore,
+					replaySafeMessages,
+					input.signal
+				)
+			: replaySafeMessages;
 		const previous = await store.getLatestCompaction(
 			input.conversation.sessionId
 		);
-		const cutPoint = chooseCutPoint(
-			replaySafeMessages,
-			Math.max(1, input.settings.keepRecentTokens),
+		const { cutPoint, summarySpan } = chooseCompactionSpan(
+			externalizedMessages,
+			previous,
+			input.settings.keepRecentTokens,
 			estimateTokens
 		);
-		const previousIndex =
-			previous === null
-				? -1
-				: findMessageIndex(replaySafeMessages, previous.firstKeptUiMessageId);
-		if (previousIndex >= 0 && cutPoint.throughIndex < previousIndex) {
-			throw new ConversationCompactionError(
-				"history-too-short",
-				"There is no newer complete history to compact."
-			);
-		}
-		const summarySpan = getSummarySpan(replaySafeMessages, cutPoint, previous);
-		if (summarySpan.length === 0) {
-			throw new ConversationCompactionError(
-				"history-too-short",
-				"There is not enough complete history to compact."
-			);
-		}
-		const serializedMessages = serializeMessagesForCompaction(summarySpan);
+		const preparedSummary = attachmentStore
+			? await prepareCompactionSummary(
+					attachmentStore,
+					summarySpan,
+					input.settings,
+					input.signal
+				)
+			: { summaryMessages: summarySpan };
 		const generatorInput: SummaryGeneratorInput = {
 			...(input.variant === undefined ? {} : { variant: input.variant }),
 			model: input.model,
 			previousSummary: previous?.summary,
-			serializedMessages,
+			serializedMessages: serializeMessagesForCompaction(
+				preparedSummary.summaryMessages
+			),
+			...(attachmentStore
+				? { summaryMessages: preparedSummary.summaryMessages }
+				: {}),
 			...(input.focus?.trim() ? { focus: input.focus.trim() } : {}),
 			signal: input.signal,
 		};
-		let generated: SummaryGeneratorResult;
-		try {
-			generated = await summaryGenerator(generatorInput);
-		} catch (error) {
-			if (input.signal?.aborted) {
-				throw new ConversationCompactionError(
-					"cancelled",
-					"Compaction was cancelled.",
-					{ cause: error }
-				);
-			}
-			throw new ConversationCompactionError(
-				"summary-failed",
-				"Compaction summary generation failed.",
-				{ cause: error }
-			);
-		}
-		assertNotAborted(input.signal);
-		if (!generated.text.trim()) {
-			throw new ConversationCompactionError(
-				"summary-failed",
-				"Compaction summary generation returned no content."
-			);
-		}
-
+		const generated = await generateCompactionSummary(
+			summaryGenerator,
+			generatorInput
+		);
 		const { activeMessages, entry } = await persistCompactionEntry({
-			messages: replaySafeMessages,
+			attachmentMetadata: preparedSummary.attachmentMetadata,
+			messages: externalizedMessages,
 			sessionId: input.conversation.sessionId,
 			cutPoint,
 			entryId: createId(),
@@ -704,7 +1000,6 @@ export const createConversationCompaction = ({
 		inFlight.set(input.conversation.sessionId, operation);
 		return operation;
 	};
-
 	return {
 		compact,
 		getInFlight: (sessionId) => inFlight.get(sessionId) ?? null,
@@ -714,10 +1009,7 @@ export const createConversationCompaction = ({
 			}
 			const estimatedTokens = estimateTokens(messages);
 			const providerTokens = getLatestProviderContextTokens(messages);
-			return (
-				Math.max(estimatedTokens, providerTokens ?? 0) >=
-				settings.thresholdTokens
-			);
+			return (providerTokens ?? estimatedTokens) >= settings.thresholdTokens;
 		},
 	};
 };

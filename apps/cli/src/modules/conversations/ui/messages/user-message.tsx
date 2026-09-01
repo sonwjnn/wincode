@@ -3,6 +3,7 @@ import { findFileMentionRanges } from "@/modules/file-mentions";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
 import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
+import { ATTACHMENT_ID_DISPLAY_LENGTH } from "../../storage/attachment-store";
 
 type UserMessageProps = {
 	agent: AgentId;
@@ -27,6 +28,12 @@ type FilePart = Extract<
 	{ type: "file" }
 >;
 
+type AttachmentDisplayPart = FilePart & {
+	attachmentId?: string;
+	available?: boolean;
+	displayAvailability?: "missing";
+};
+
 const INLINE_IMAGE_TOKEN = /\[Image \d+\]/u;
 
 export const hasInlineImageToken = (message: string) =>
@@ -40,7 +47,11 @@ const isImagePart = (
 	part: CodingAgentUIMessage["parts"][number]
 ): part is FilePart =>
 	part.type === "file" && part.mediaType.startsWith("image/");
-
+const isUnavailableAttachment = (
+	part: FilePart
+): part is AttachmentDisplayPart =>
+	("available" in part && part.available === false) ||
+	("displayAvailability" in part && part.displayAvailability === "missing");
 const getMessageParts = (message: string) => {
 	const fileMentionRanges = findFileMentionRanges(message);
 
@@ -90,8 +101,26 @@ export const getAppliedSkill = (
 	};
 };
 
+const getImageLabel = (part: FilePart, hasFileMentions: boolean): string => {
+	if (isUnavailableAttachment(part)) {
+		return `Unavailable (${part.attachmentId?.slice(0, ATTACHMENT_ID_DISPLAY_LENGTH) ?? "attachment"})`;
+	}
+	return hasFileMentions ? "clipboard" : (part.filename ?? "attachment");
+};
+const getImageBadgeKeys = (
+	parts: FilePart[]
+): Array<{ key: string; part: FilePart }> => {
+	const counts = new Map<string, number>();
+	return parts.map((part) => {
+		const id = (part as AttachmentDisplayPart).attachmentId ?? part.url;
+		const occurrence = counts.get(id) ?? 0;
+		counts.set(id, occurrence + 1);
+		return { key: `${id}:${occurrence}`, part };
+	});
+};
 export function UserMessage({ agent, appliedSkill, parts }: UserMessageProps) {
 	const { colors } = useTheme();
+
 	const borderColor = getAgentColor(colors, agent);
 	const message = parts
 		.filter(isTextPart)
@@ -163,12 +192,12 @@ export function UserMessage({ agent, appliedSkill, parts }: UserMessageProps) {
 							</box>
 						))}
 
-						{imageParts.map((part) => (
+						{getImageBadgeKeys(imageParts).map(({ key, part }) => (
 							<box
 								alignItems="center"
 								flexDirection="row"
 								flexShrink={0}
-								key={part.url}
+								key={key}
 							>
 								<box backgroundColor={colors.fileBadgeBackground} paddingX={1}>
 									<text fg={colors.fileBadgeText}>
@@ -177,7 +206,7 @@ export function UserMessage({ agent, appliedSkill, parts }: UserMessageProps) {
 								</box>
 								<box backgroundColor={colors.filePathBackground} paddingX={1}>
 									<text fg={colors.filePath}>
-										{fileMentions.length > 0 ? "clipboard" : part.filename}
+										{getImageLabel(part, fileMentions.length > 0)}
 									</text>
 								</box>
 							</box>

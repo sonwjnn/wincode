@@ -22,6 +22,15 @@ export const conversationWorkspace = sqliteTable("conversation_workspace", {
 	updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });
 
+export const conversationAttachment = sqliteTable("conversation_attachment", {
+	attachmentId: text("attachment_id").primaryKey(),
+	blobKey: text("blob_key").notNull().unique(),
+	byteLength: integer("byte_length").notNull(),
+	createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+	integrityVersion: integer("integrity_version").notNull().default(1),
+	mediaType: text("media_type").notNull(),
+});
+
 export const conversationSession = sqliteTable(
 	"conversation_session",
 	{
@@ -140,8 +149,8 @@ export const promptHistory = sqliteTable("prompt_history", {
 	>(),
 	createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 });
-
 export const localConversationSchema = {
+	conversationAttachment,
 	conversationCompaction,
 	conversationMessage,
 	conversationSession,
@@ -149,7 +158,7 @@ export const localConversationSchema = {
 	promptHistory,
 };
 
-export const CURRENT_USER_VERSION = 2;
+export const CURRENT_USER_VERSION = 3;
 
 export const setUserVersion = sql`PRAGMA user_version = ${sql.raw(
 	String(CURRENT_USER_VERSION)

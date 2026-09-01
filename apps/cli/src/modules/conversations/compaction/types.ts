@@ -4,7 +4,7 @@ import type {
 	CodingMessageUsage,
 	ModelVariant,
 } from "@wincode/ai";
-
+import type { CompactionAttachmentMetadata } from "../storage/attachment-store";
 export const COMPACTION_TRIGGER_REASONS = [
 	"manual",
 	"threshold",
@@ -16,10 +16,11 @@ export type CompactionTriggerReason =
 	(typeof COMPACTION_TRIGGER_REASONS)[number];
 
 export type CompactionSummary = {
-	formatVersion: 1;
-	text: string;
-	focus?: string;
+	attachments?: CompactionAttachmentMetadata[];
 	coveredMessageIds: string[];
+	formatVersion: 1;
+	focus?: string;
+	text: string;
 };
 
 export type ConversationCompaction = {
@@ -50,12 +51,12 @@ export type AppendConversationCompactionInput = Omit<
 	createdAt?: Date;
 	completedAt?: Date;
 };
-
 export type SummaryGeneratorInput = {
 	model: ChatModelSelection;
 	variant?: ModelVariant;
 	previousSummary?: CompactionSummary;
 	serializedMessages: string;
+	summaryMessages?: CodingAgentUIMessage[];
 	focus?: string;
 	signal?: AbortSignal;
 };

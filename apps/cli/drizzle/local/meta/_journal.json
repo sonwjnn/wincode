@@ -71,6 +71,13 @@
       "when": 1788108330381,
       "tag": "0009_old_princess_powerful",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1788238606172,
+      "tag": "0010_clear_firelord",
+      "breakpoints": true
     }
   ]
 }

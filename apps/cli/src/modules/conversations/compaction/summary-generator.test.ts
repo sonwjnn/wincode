@@ -1,10 +1,11 @@
 import { expect, mock, test } from "bun:test";
-import type { ChatModelSelection } from "@wincode/ai";
+import type { ChatModelSelection, CodingAgentUIMessage } from "@wincode/ai";
 import type { LanguageModel } from "ai";
 import {
 	COMPACTION_SUMMARY_SYSTEM_PROMPT,
 	createHostedSummaryGenerator,
 	createLanguageModelSummaryGenerator,
+	type SummaryTextGenerationOptions,
 } from "./summary-generator";
 
 const directModel: ChatModelSelection = {
@@ -57,6 +58,44 @@ test("runs summary generation with the effective model, no tools, and cancellati
 		})
 	);
 	expect(generate.mock.calls[0]?.[0].prompt).toContain("keep identifiers");
+});
+
+test("passes budgeted summary attachments through the direct model seam", async () => {
+	const model = {} as LanguageModel;
+	const generate = mock(async (_options: SummaryTextGenerationOptions) => ({
+		text: "inspected",
+	}));
+	const generator = createLanguageModelSummaryGenerator({
+		generate,
+		resolveModel: async () => ({ model }),
+	});
+	const summaryMessages = [
+		{
+			id: "user-1",
+			parts: [
+				{ text: "inspect this", type: "text" },
+				{
+					filename: "diagram.png",
+					mediaType: "image/png",
+					type: "file",
+					url: "data:image/png;base64,aGVsbG8=",
+				},
+			],
+			role: "user",
+		},
+	] as unknown as CodingAgentUIMessage[];
+
+	await generator({
+		model: directModel,
+		serializedMessages: "message id=user-1",
+		summaryMessages,
+	});
+
+	const generationOptions = generate.mock.calls[0]?.[0];
+	expect(generationOptions?.messages).toBeDefined();
+	expect(JSON.stringify(generationOptions?.messages)).toContain(
+		"data:image/png;base64"
+	);
 });
 
 test("hosted adapter forwards authorization, model, and abort signal", async () => {

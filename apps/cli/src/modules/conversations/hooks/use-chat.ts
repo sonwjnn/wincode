@@ -65,6 +65,7 @@ import { useConfig } from "@/shared/config/config-provider";
 import { useLatest } from "@/shared/hooks/use-latest";
 import { createApprovalQueue } from "@/shared/providers/approval/approval-queue";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
+import type { AttachmentHydrationOptions } from "../storage/attachment-store";
 import { getConversationStore } from "../storage/get-conversation-store";
 import { type AutoSendGate, createAutoSendGate } from "./auto-send-gate";
 import { createRoutingChatTransport } from "./routing-chat-transport";
@@ -126,6 +127,18 @@ const waitForCompaction = async (
 		return isBenignCompactionError(error)
 			? null
 			: compactionErrorMessage(error);
+	}
+};
+
+const persistMessagesBeforeSend = async (
+	persist: (messages: CodingAgentUIMessage[]) => Promise<void>,
+	messages: CodingAgentUIMessage[]
+): Promise<boolean> => {
+	try {
+		await persist(messages);
+		return true;
+	} catch {
+		return false;
 	}
 };
 
@@ -357,6 +370,7 @@ export function useChat(
 	);
 	// Rebuild the conversation-scoped gate when its conversation or authorization
 	// dependencies change, rejecting pending requests from the previous scope.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: latest-value refs intentionally keep the gate current without rebuilding transport state.
 	const toolGateState = useMemo(() => {
 		const approvalQueue = createApprovalQueue<ToolApprovalRequest>();
 		return {
@@ -426,6 +440,13 @@ export function useChat(
 	);
 	const conversationVariantRef = useRef<ModelVariant | undefined>(undefined);
 	const variantRef = useRef<ModelVariant | undefined>(undefined);
+	const attachmentBudgetRef = useRef<
+		| Pick<
+				AttachmentHydrationOptions,
+				"maxAttachments" | "maxBytes" | "maxTokens"
+		  >
+		| undefined
+	>(undefined);
 	const mcpSnapshotRef = useRef<McpCatalogSnapshot | null>(null);
 	// The execution-scoped Skill Activation state: one catalog snapshot and
 	// activation context per user turn, replaced at every submit/continue.
@@ -520,6 +541,7 @@ export function useChat(
 	const compactionModule = useMemo(
 		() =>
 			createConversationCompaction({
+				attachmentStore: getConversationStore().attachmentStore,
 				estimateTokens: (messages) =>
 					estimateCompactionTokens(
 						messages,
@@ -581,6 +603,9 @@ export function useChat(
 				settings: {
 					enabled: settings.enabled,
 					keepRecentTokens: settings.keepRecentTokens,
+					maxMediaAttachments: settings.maxMediaAttachments,
+					maxMediaBytes: settings.maxMediaBytes,
+					maxMediaTokens: settings.maxMediaTokens,
 					thresholdTokens: settings.thresholdTokens,
 				},
 				signal: controller.signal,
@@ -672,7 +697,7 @@ export function useChat(
 			});
 		});
 	};
-
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the MCP policy ref intentionally stays live without rebuilding transport.
 	const transport = useMemo(() => {
 		// The transport snapshots the MCP catalog once per send; mirror the same
 		// immutable snapshot into a ref so dynamic tool dispatch resolves against
@@ -697,7 +722,8 @@ export function useChat(
 			registry,
 			connections,
 			mcpWithSnapshotRef,
-			skillToolRef
+			skillToolRef,
+			attachmentBudgetRef
 		);
 	}, [connections, mcp, registry, sessionId]);
 
@@ -887,6 +913,9 @@ export function useChat(
 						settings: {
 							enabled: settings.enabled,
 							keepRecentTokens: settings.keepRecentTokens,
+							maxMediaAttachments: settings.maxMediaAttachments,
+							maxMediaBytes: settings.maxMediaBytes,
+							maxMediaTokens: settings.maxMediaTokens,
 							thresholdTokens: settings.thresholdTokens,
 						},
 					},
@@ -1103,6 +1132,11 @@ export function useChat(
 			return waitingError;
 		}
 		const settings = await getCompactionSettings(sendModel);
+		attachmentBudgetRef.current = {
+			maxAttachments: settings.maxMediaAttachments,
+			maxBytes: settings.maxMediaBytes,
+			maxTokens: settings.maxMediaTokens,
+		};
 		const shouldCompact =
 			settings.autoAvailable &&
 			compactionModule.needsCompaction(candidateMessages, settings);
@@ -1123,10 +1157,20 @@ export function useChat(
 		anchoredMessage: CodingAgentUIMessage,
 		metadata: CodingAgentUIMessage["metadata"]
 	): Promise<SubmitChatOutcome> => {
-		const nextMessages = sanitizeSkillToolParts(activeMessagesRef.current);
+		const previousMessages = activeMessagesRef.current;
+		const nextMessages = sanitizeSkillToolParts(previousMessages);
 		activeMessagesRef.current = nextMessages;
 		chat.setMessages(nextMessages);
-		persistMessages(nextMessages);
+		if (
+			!(await persistMessagesBeforeSend(persistDisplayMessages, nextMessages))
+		) {
+			activeMessagesRef.current = previousMessages;
+			chat.setMessages(previousMessages);
+			return {
+				rejected: true,
+				reason: "Conversation transcript could not be persisted.",
+			};
+		}
 		setIsPreparingMessage(true);
 		try {
 			await chat.sendMessage({
@@ -1135,6 +1179,100 @@ export function useChat(
 				parts: anchoredMessage.parts,
 			});
 			return { rejected: false };
+		} finally {
+			setIsPreparingMessage(false);
+		}
+	};
+
+	const submitFreshMessage = async ({
+		files,
+		metadata,
+		userText,
+	}: {
+		files: FileUIPart[];
+		metadata: CodingAgentUIMessage["metadata"];
+		userText?: string;
+	}): Promise<SubmitChatOutcome> => {
+		if (userText === undefined) {
+			return { rejected: true, reason: "No prompt to submit" };
+		}
+		const fileMentions = await resolveFileMentionParts(userText);
+		const optimisticMessage = createUserMessage(
+			userText,
+			metadata,
+			fileMentions,
+			files
+		);
+		let durableOptimisticMessage: CodingAgentUIMessage | undefined;
+		try {
+			[durableOptimisticMessage] =
+				await getConversationStore().externalizeAttachments(
+					[optimisticMessage],
+					undefined,
+					{ rejectInvalid: true }
+				);
+		} catch {
+			return {
+				rejected: true,
+				reason: "Attachment data could not be stored.",
+			};
+		}
+		if (!durableOptimisticMessage) {
+			return {
+				rejected: true,
+				reason: "The prompt could not be prepared.",
+			};
+		}
+		const candidateMessages = [
+			...sanitizeSkillToolParts(activeMessagesRef.current),
+			durableOptimisticMessage,
+		];
+		const promptPreparationError = await prepareForSend(candidateMessages);
+		if (promptPreparationError) {
+			return { rejected: true, reason: promptPreparationError };
+		}
+		const priorActiveMessages = activeMessagesRef.current;
+		const optimisticMessages = [
+			...sanitizeSkillToolParts(priorActiveMessages),
+			durableOptimisticMessage,
+		];
+		const nextDisplayMessages = mergeDisplayMessages(optimisticMessages);
+		activeMessagesRef.current = optimisticMessages;
+		chat.setMessages(optimisticMessages);
+		setIsPreparingMessage(true);
+		if (
+			!(await persistMessagesBeforeSend(
+				persistDisplayMessages,
+				nextDisplayMessages
+			))
+		) {
+			activeMessagesRef.current = priorActiveMessages;
+			chat.setMessages(priorActiveMessages);
+			removeDisplayMessage(durableOptimisticMessage.id);
+			setIsPreparingMessage(false);
+			return {
+				rejected: true,
+				reason: "Conversation transcript could not be persisted.",
+			};
+		}
+
+		try {
+			await chat.sendMessage({
+				messageId: durableOptimisticMessage.id,
+				metadata,
+				parts: durableOptimisticMessage.parts,
+			});
+			return { rejected: false };
+		} catch (error) {
+			const nextMessages = activeMessagesRef.current.filter(
+				({ id }) => id !== durableOptimisticMessage.id
+			);
+			activeMessagesRef.current = nextMessages;
+			chat.setMessages(nextMessages);
+			void persistDisplayMessages(
+				removeDisplayMessage(durableOptimisticMessage.id)
+			).catch(() => undefined);
+			throw error;
 		} finally {
 			setIsPreparingMessage(false);
 		}
@@ -1203,51 +1341,7 @@ export function useChat(
 			return submitAnchoredMessage(anchoredMessage, metadata);
 		}
 
-		if (userText === undefined) {
-			return { rejected: true, reason: "No prompt to submit" };
-		}
-
-		const optimisticMessage = createUserMessage(userText, metadata, [], files);
-		const candidateMessages = [
-			...sanitizeSkillToolParts(activeMessagesRef.current),
-			optimisticMessage,
-		];
-		const promptPreparationError = await prepareForSend(candidateMessages);
-		if (promptPreparationError) {
-			return { rejected: true, reason: promptPreparationError };
-		}
-		const optimisticMessages = [
-			...sanitizeSkillToolParts(activeMessagesRef.current),
-			optimisticMessage,
-		];
-		activeMessagesRef.current = optimisticMessages;
-		chat.setMessages(optimisticMessages);
-		// Persist the user message before the stream starts so a hard kill
-		// leaves the turn visible in storage instead of a dangling send.
-		persistMessages(optimisticMessages);
-		setIsPreparingMessage(true);
-
-		try {
-			const fileMentions = await resolveFileMentionParts(userText);
-			await chat.sendMessage({
-				messageId: optimisticMessage.id,
-				metadata,
-				parts: createChatMessageParts(userText, fileMentions, files),
-			});
-			return { rejected: false };
-		} catch (error) {
-			const nextMessages = activeMessagesRef.current.filter(
-				({ id }) => id !== optimisticMessage.id
-			);
-			activeMessagesRef.current = nextMessages;
-			chat.setMessages(nextMessages);
-			void persistDisplayMessages(
-				removeDisplayMessage(optimisticMessage.id)
-			).catch(() => undefined);
-			throw error;
-		} finally {
-			setIsPreparingMessage(false);
-		}
+		return submitFreshMessage({ files, metadata, userText });
 	};
 
 	return {

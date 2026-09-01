@@ -244,8 +244,42 @@ describe("POST /:id/compact-summary", () => {
 			})
 		);
 	});
-});
+	test("passes current-window summary images to the hosted model", async () => {
+		const response = await sessionsRoutes.request(
+			"/session-1/compact-summary",
+			{
+				body: JSON.stringify({
+					model: "gpt-5.4-mini",
+					serializedMessages: "[attachment omitted]",
+					summaryMessages: [
+						{
+							id: "user-image",
+							parts: [
+								{ text: "inspect", type: "text" },
+								{
+									filename: "diagram.png",
+									mediaType: "image/png",
+									type: "file",
+									url: "data:image/png;base64,aGVsbG8=",
+								},
+							],
+							role: "user",
+						},
+					],
+				}),
+				headers: { "content-type": "application/json" },
+				method: "POST",
+			}
+		);
 
+		expect(response.status).toBe(200);
+		expect(generateSummaryText).toHaveBeenCalledWith(
+			expect.objectContaining({
+				messages: expect.any(Array),
+			})
+		);
+	});
+});
 describe("POST /:id/chat (transport-only)", () => {
 	test("streams from the full message context in the request body", async () => {
 		const response = await sessionsRoutes.request("/session-1/chat", {
@@ -623,7 +657,7 @@ describe("POST /:id/chat (transport-only)", () => {
 		});
 	});
 
-	test("rejects multimodal predispatch parts", async () => {
+	test("accepts hydrated image predispatch parts", async () => {
 		const response = await sessionsRoutes.request("/session-1/chat", {
 			body: JSON.stringify({
 				messages: [
@@ -646,7 +680,7 @@ describe("POST /:id/chat (transport-only)", () => {
 			method: "POST",
 		});
 
-		expect(response.status).toBe(400);
+		expect(response.status).toBe(200);
 	});
 
 	test("accepts assistant internal continuation parts", async () => {

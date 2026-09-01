@@ -1,11 +1,16 @@
 import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
+import {
+	getAttachmentReference,
+	isAttachmentReferencePart,
+} from "./attachment-store";
 import {
 	createDrizzleConversationStore,
 	createPromptHistory,
@@ -13,6 +18,7 @@ import {
 import { localMigrationsFolder } from "./migrations";
 import { resolveLocalDatabasePath } from "./path";
 import {
+	conversationAttachment,
 	conversationMessage,
 	conversationWorkspace,
 	localConversationSchema,
@@ -28,6 +34,9 @@ const userMessage = (id: string, text: string): CodingAgentUIMessage => ({
 	parts: [{ text, type: "text" }],
 	role: "user",
 });
+const VALID_PNG_BYTES = new Uint8Array([
+	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
+]);
 
 const historyEntry = (text: string) => ({ files: [], text });
 
@@ -77,12 +86,12 @@ describe("drizzle conversation store", () => {
 		expect(await other.getPromptHistory()).toEqual([historyEntry("global")]);
 	});
 
-	test("reloads image parts and token metadata from prompt history", async () => {
+	test("reloads image references and token metadata from prompt history", async () => {
 		const image = {
 			filename: "clipboard",
 			mediaType: "image/png",
 			type: "file",
-			url: "data:image/png;base64,aGVsbG8=",
+			url: `data:image/png;base64,${Buffer.from(VALID_PNG_BYTES).toString("base64")}`,
 		} as const;
 		const entry = {
 			fileTokens: [{ start: 8, token: "[Image 1]" }],
@@ -92,8 +101,48 @@ describe("drizzle conversation store", () => {
 
 		await store.recordPrompt(entry);
 		const reloadedStore = createDrizzleConversationStore(db);
+		const [reloaded] = await reloadedStore.getPromptHistory();
+		const [reloadedImage] = reloaded?.files ?? [];
+		expect(reloaded?.text).toBe(entry.text);
+		expect(reloaded?.fileTokens).toEqual(entry.fileTokens);
+		if (!isAttachmentReferencePart(reloadedImage)) {
+			throw new Error("prompt history reference missing");
+		}
+		expect(reloadedImage.filename).toBe("clipboard");
+		expect(reloadedImage.url.startsWith("attachment://")).toBe(true);
+	});
 
-		expect(await reloadedStore.getPromptHistory()).toEqual([entry]);
+	test("lazily migrates legacy prompt history images on read", async () => {
+		const image = {
+			filename: "legacy.png",
+			mediaType: "image/png",
+			type: "file",
+			url: `data:image/png;base64,${Buffer.from(VALID_PNG_BYTES).toString("base64")}`,
+		} as const;
+		db.insert(promptHistory)
+			.values({
+				createdAt: new Date(),
+				entryJson: {
+					fileTokens: [{ start: 0, token: "[Image 1]" }],
+					files: [image],
+				},
+				prompt: "[Image 1] inspect",
+			})
+			.run();
+
+		const [entry] = await store.getPromptHistory();
+		const migratedImage = entry?.files[0];
+		if (!isAttachmentReferencePart(migratedImage)) {
+			throw new Error("legacy prompt image was not migrated");
+		}
+		expect(migratedImage.filename).toBe("legacy.png");
+		const persistedJson = db
+			.select({ entry: promptHistory.entryJson })
+			.from(promptHistory)
+			.get()?.entry;
+		expect(JSON.stringify(persistedJson)).not.toContain(
+			"data:image/png;base64"
+		);
 	});
 
 	test("migration creates prompt_history", () => {
@@ -488,7 +537,7 @@ describe("drizzle conversation store", () => {
 		await expect(fileMentionStore.getMessages(id)).resolves.toEqual([message]);
 	});
 
-	test("persists and reloads standard image file UI parts", async () => {
+	test("persists image references and hydrates them for model requests", async () => {
 		const { id } = await store.createSession({
 			message: userMessage("m1", "image"),
 			agent: "plan",
@@ -499,9 +548,10 @@ describe("drizzle conversation store", () => {
 			metadata: userMessage("m2", "").metadata,
 			parts: [
 				{
+					filename: "image.png",
 					mediaType: "image/png",
 					type: "file",
-					url: "data:image/png;base64,aGVsbG8=",
+					url: `data:image/png;base64,${Buffer.from(VALID_PNG_BYTES).toString("base64")}`,
 				},
 			],
 			role: "user",
@@ -513,7 +563,146 @@ describe("drizzle conversation store", () => {
 			sessionId: id,
 		});
 
-		expect((await store.getMessages(id))[1]?.parts).toEqual(imageMessage.parts);
+		const loaded = await store.getMessages(id);
+		if (!isAttachmentReferencePart(loaded[1]?.parts[0])) {
+			throw new Error("message attachment reference missing");
+		}
+		const hydrated = await store.hydrateAttachments(loaded, {
+			purpose: "model",
+		});
+		expect(hydrated[1]?.parts).toEqual(imageMessage.parts);
+	});
+
+	test("lazily migrates legacy inline message images on read", async () => {
+		const { id } = await store.createSession({
+			message: userMessage("m1", "legacy"),
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+		const now = new Date();
+		const legacyImage = {
+			filename: "legacy.png",
+			mediaType: "image/png",
+			type: "file",
+			url: `data:image/png;base64,${Buffer.from(VALID_PNG_BYTES).toString("base64")}`,
+		} as const;
+		db.insert(conversationMessage)
+			.values({
+				agent: "plan",
+				createdAt: now,
+				id: "legacy-row",
+				metadataJson: userMessage("legacy-image", "").metadata,
+				partsJson: [legacyImage],
+				position: 1,
+				role: "user",
+				sessionId: id,
+				uiMessageId: "legacy-image",
+				updatedAt: now,
+			})
+			.run();
+
+		const loaded = await store.getMessages(id);
+		const migrated = loaded.find(
+			({ id: messageId }) => messageId === "legacy-image"
+		);
+		if (!isAttachmentReferencePart(migrated?.parts[0])) {
+			throw new Error("legacy message image was not migrated");
+		}
+		const persistedPart = db
+			.select({ parts: conversationMessage.partsJson })
+			.from(conversationMessage)
+			.where(eq(conversationMessage.uiMessageId, "legacy-image"))
+			.get()?.parts[0];
+		expect(JSON.stringify(persistedPart)).not.toContain(
+			"data:image/png;base64"
+		);
+	});
+
+	test("externalizes image bytes while keeping model hydration explicit", async () => {
+		const root = await mkdtemp(join(tmpdir(), "wincode-attachment-store-"));
+		const externalizedStore = createDrizzleConversationStore(db, {
+			attachmentRoot: root,
+			workspaceRoot: "/tmp/wincode-attachment-store",
+		});
+		if (!externalizedStore.attachmentStore) {
+			throw new Error("attachment store was not configured");
+		}
+		const { id } = await externalizedStore.createSession({
+			message: userMessage("m1", "image"),
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+		});
+		const imageUrl = `data:image/png;base64,${Buffer.from(VALID_PNG_BYTES).toString("base64")}`;
+		const imageMessage: CodingAgentUIMessage = {
+			id: "m2",
+			metadata: userMessage("m2", "").metadata,
+			parts: [
+				{
+					filename: "diagram.png",
+					mediaType: "image/png",
+					type: "file",
+					url: imageUrl,
+				},
+			],
+			role: "user",
+		};
+
+		await externalizedStore.persistMessages({
+			messages: [userMessage("m1", "image"), imageMessage],
+			agent: "plan",
+			model: { modelId: "gemini-2.5-flash", providerId: "wincode" },
+			sessionId: id,
+		});
+
+		const persisted = db
+			.select({ parts: conversationMessage.partsJson })
+			.from(conversationMessage)
+			.where(eq(conversationMessage.uiMessageId, "m2"))
+			.get()?.parts[0];
+		if (!isAttachmentReferencePart(persisted)) {
+			throw new Error("persisted attachment reference missing");
+		}
+		expect(persisted.byteLength).toBe(VALID_PNG_BYTES.byteLength);
+		expect(persisted.url.startsWith("attachment://")).toBe(true);
+		expect(JSON.stringify(persisted)).not.toContain("data:image/png;base64");
+		const loadedMessages = await externalizedStore.getMessages(id);
+		if (!isAttachmentReferencePart(loadedMessages[1]?.parts[0])) {
+			throw new Error("reloaded attachment reference missing");
+		}
+		const loadedReference = getAttachmentReference(loadedMessages[1]?.parts[0]);
+		if (!(loadedReference && externalizedStore.attachmentStore)) {
+			throw new Error("loaded attachment reference missing");
+		}
+		const loadedResolution =
+			await externalizedStore.attachmentStore.resolve(loadedReference);
+		if (loadedResolution.availability !== "available") {
+			throw new Error(`loaded resolution: ${loadedResolution.availability}`);
+		}
+		const hydrated = await externalizedStore.hydrateAttachments(
+			loadedMessages,
+			{
+				purpose: "model",
+			}
+		);
+		expect(hydrated[1]?.parts[0]).toEqual(imageMessage.parts[0]);
+		const promptImage = imageMessage.parts[0];
+		if (promptImage?.type !== "file") {
+			throw new Error("image prompt part missing");
+		}
+		await externalizedStore.recordPrompt({
+			files: [promptImage],
+			text: "explain [Image 1]",
+		});
+		const historyEntries = await externalizedStore.getPromptHistory();
+		const historyImage = historyEntries[0]?.files[0];
+		if (!(historyImage && isAttachmentReferencePart(historyImage))) {
+			throw new Error("prompt history attachment reference missing");
+		}
+		await externalizedStore.deleteSession(id);
+		expect(db.select().from(conversationAttachment).all()).toHaveLength(1);
+		await externalizedStore.clearPromptHistory();
+		await externalizedStore.collectAttachments(0);
+		expect(db.select().from(conversationAttachment).all()).toHaveLength(0);
 	});
 
 	test("preserves assistant response metadata", async () => {
@@ -756,6 +945,7 @@ describe("local migrations", () => {
 		expect(names).toContain("conversation_session");
 		expect(names).toContain("conversation_message");
 		expect(names).toContain("conversation_workspace");
+		expect(names).toContain("conversation_attachment");
 	});
 
 	test("re-running migrations on an existing database is a no-op", () => {
