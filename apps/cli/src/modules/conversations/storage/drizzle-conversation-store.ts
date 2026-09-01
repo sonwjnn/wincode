@@ -11,6 +11,24 @@ import { generateId, safeValidateUIMessages } from "ai";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { isSkillToolPart, sanitizeSkillToolPart } from "@/modules/skills";
+import type {
+	AppendConversationCompactionInput,
+	ConversationCompaction,
+} from "../compaction/types";
+import type {
+	AttachmentExternalizationOptions,
+	AttachmentHydrationOptions,
+	AttachmentMaintenanceReport,
+	ConversationAttachmentStore,
+} from "./attachment-store";
+import {
+	createConversationAttachmentStore,
+	createDrizzleAttachmentMetadataRepository,
+	getAttachmentReference,
+	isLegacyImagePart,
+	messageHasLegacyImageParts,
+	stripAttachmentDisplayMetadata,
+} from "./attachment-store";
 import { createLocalDatabase, type LocalConversationDatabase } from "./client";
 import {
 	type ConversationSession,
@@ -22,7 +40,9 @@ import {
 	type UpdateSessionInput,
 } from "./conversation-store";
 import { runLocalMigrations } from "./migrations";
+import { resolveLocalAttachmentRoot } from "./path";
 import {
+	conversationCompaction,
 	conversationMessage,
 	conversationSession,
 	conversationWorkspace,
@@ -112,8 +132,58 @@ const normalizeInterruptedAssistantMessage = (
 	};
 };
 
-export const createPromptHistory = (db: LocalConversationDatabase) => ({
-	get: () =>
+const writePromptHistory = (
+	db: LocalConversationDatabase,
+	entry: PromptHistoryEntry
+): void => {
+	if (!entry.text.trim()) {
+		return;
+	}
+	const latest = db
+		.select({
+			entry: promptHistory.entryJson,
+			text: promptHistory.prompt,
+		})
+		.from(promptHistory)
+		.orderBy(desc(promptHistory.id))
+		.limit(1)
+		.get();
+	if (
+		latest?.text === entry.text &&
+		JSON.stringify(latest.entry?.files ?? []) === JSON.stringify(entry.files) &&
+		JSON.stringify(latest.entry?.fileTokens ?? []) ===
+			JSON.stringify(entry.fileTokens ?? [])
+	) {
+		return;
+	}
+	db.transaction((tx) => {
+		tx.insert(promptHistory)
+			.values({
+				createdAt: new Date(),
+				entryJson: {
+					...(entry.fileTokens ? { fileTokens: entry.fileTokens } : {}),
+					...(entry.pastedText ? { pastedText: entry.pastedText } : {}),
+					files: entry.files,
+				},
+				prompt: entry.text,
+			})
+			.run();
+		const rows = tx
+			.select({ id: promptHistory.id })
+			.from(promptHistory)
+			.orderBy(desc(promptHistory.id))
+			.all();
+		for (const row of rows.slice(50)) {
+			tx.delete(promptHistory).where(eq(promptHistory.id, row.id)).run();
+		}
+	});
+};
+
+export const createPromptHistory = (
+	db: LocalConversationDatabase,
+	attachmentStore?: ConversationAttachmentStore
+) => {
+	const get = () =>
 		db
 			.select({
 				entry: promptHistory.entryJson,
@@ -128,56 +198,140 @@ export const createPromptHistory = (db: LocalConversationDatabase) => ({
 				...(row.entry?.pastedText ? { pastedText: row.entry.pastedText } : {}),
 				files: row.entry?.files ?? [],
 				text: row.text,
-			})),
-	record: (entry: PromptHistoryEntry) => {
-		if (!entry.text.trim()) {
-			return;
+			}));
+
+	const externalizeFiles = async (
+		files: PromptHistoryEntry["files"]
+	): Promise<PromptHistoryEntry["files"]> => {
+		if (!attachmentStore || files.length === 0) {
+			return files;
 		}
-		const latest = db
+		const [message] = await attachmentStore.externalizeMessages([
+			{
+				id: "prompt-history",
+				parts: files,
+				role: "user",
+			} as CodingAgentUIMessage,
+		]);
+		return (message?.parts ?? []).filter(
+			(part): part is PromptHistoryEntry["files"][number] =>
+				part.type === "file"
+		);
+	};
+	const migrateLegacyEntry = async (
+		entry: PromptHistoryEntry
+	): Promise<PromptHistoryEntry> => {
+		if (!entry.files.some(isLegacyImagePart)) {
+			return entry;
+		}
+		try {
+			return { ...entry, files: await externalizeFiles(entry.files) };
+		} catch {
+			return entry;
+		}
+	};
+
+	const migrate = async (): Promise<PromptHistoryEntry[]> => {
+		if (!attachmentStore) {
+			return get();
+		}
+		const rows = db
 			.select({
 				entry: promptHistory.entryJson,
+				id: promptHistory.id,
 				text: promptHistory.prompt,
 			})
 			.from(promptHistory)
 			.orderBy(desc(promptHistory.id))
-			.limit(1)
-			.get();
-		if (
-			latest?.text === entry.text &&
-			JSON.stringify(latest.entry?.files ?? []) ===
-				JSON.stringify(entry.files) &&
-			JSON.stringify(latest.entry?.fileTokens ?? []) ===
-				JSON.stringify(entry.fileTokens ?? [])
-		) {
-			return;
+			.limit(50)
+			.all();
+		const migrated: Array<{
+			entry: PromptHistoryEntry;
+			id: number;
+			changed: boolean;
+		}> = [];
+		for (const row of rows) {
+			const original: PromptHistoryEntry = {
+				...(row.entry?.fileTokens ? { fileTokens: row.entry.fileTokens } : {}),
+				...(row.entry?.pastedText ? { pastedText: row.entry.pastedText } : {}),
+				files: row.entry?.files ?? [],
+				text: row.text,
+			};
+			const migratedEntry = await migrateLegacyEntry(original);
+			migrated.push({
+				changed:
+					JSON.stringify(migratedEntry.files) !==
+					JSON.stringify(original.files),
+				entry: migratedEntry,
+				id: row.id,
+			});
 		}
-		db.transaction((tx) => {
-			tx.insert(promptHistory)
-				.values({
-					createdAt: new Date(),
-					entryJson: {
-						...(entry.fileTokens ? { fileTokens: entry.fileTokens } : {}),
-						...(entry.pastedText ? { pastedText: entry.pastedText } : {}),
-						files: entry.files,
-					},
-					prompt: entry.text,
-				})
-				.run();
-			const rows = tx
-				.select({ id: promptHistory.id })
-				.from(promptHistory)
-				.orderBy(desc(promptHistory.id))
-				.all();
-			for (const row of rows.slice(50)) {
-				tx.delete(promptHistory).where(eq(promptHistory.id, row.id)).run();
-			}
-		});
-	},
+		const changes = migrated.filter(({ changed }) => changed);
+		if (changes.length > 0) {
+			db.transaction((tx) => {
+				for (const { entry, id } of changes) {
+					tx.update(promptHistory)
+						.set({
+							entryJson: {
+								...(entry.fileTokens ? { fileTokens: entry.fileTokens } : {}),
+								...(entry.pastedText ? { pastedText: entry.pastedText } : {}),
+								files: entry.files,
+							},
+						})
+						.where(eq(promptHistory.id, id))
+						.run();
+				}
+			});
+		}
+		return migrated.map(({ entry }) => entry);
+	};
+
+	const record = (entry: PromptHistoryEntry): Promise<void> => {
+		if (!attachmentStore) {
+			writePromptHistory(db, entry);
+			return Promise.resolve();
+		}
+		return (async () => {
+			const files = await externalizeFiles(entry.files);
+			writePromptHistory(db, { ...entry, files });
+		})();
+	};
+
+	const clear = (): Promise<void> => {
+		db.delete(promptHistory).run();
+		return Promise.resolve();
+	};
+
+	return { clear, get, migrate, record };
+};
+type SessionRow = typeof conversationSession.$inferSelect;
+type CompactionRow = typeof conversationCompaction.$inferSelect;
+
+const toConversationCompaction = (
+	row: CompactionRow
+): ConversationCompaction => ({
+	completedAt: row.completedAt,
+	createdAt: row.createdAt,
+	firstKeptUiMessageId: row.firstKeptUiMessageId,
+	firstKeptAssistantPartIndex: row.firstKeptAssistantPartIndex ?? undefined,
+	focus: row.focus ?? undefined,
+	id: row.id,
+	priorCompactionId: row.priorCompactionId ?? undefined,
+	sequence: row.sequence,
+	summarizationVariant: row.summarizationVariant ?? undefined,
+	sessionId: row.sessionId,
+	summarizationModel: row.summarizationModelJson,
+	summarizationUsage: row.summarizationUsageJson ?? undefined,
+	summary: row.summaryJson,
+	throughMessageUiId: row.throughMessageUiId,
+	tokensAfter: row.tokensAfter,
+	tokensBefore: row.tokensBefore,
+	trigger: row.trigger,
 });
 
-type SessionRow = typeof conversationSession.$inferSelect;
-
-type DrizzleConversationStoreOptions = {
+export type DrizzleConversationStoreOptions = {
+	attachmentRoot?: string;
+	attachmentStore?: ConversationAttachmentStore;
 	workspaceRoot?: string;
 };
 
@@ -321,6 +475,85 @@ const resolveMetadata = (
 	model: message.metadata?.model ?? model,
 });
 
+const restoreAttachmentReferenceParts = (
+	messages: CodingAgentUIMessage[],
+	persistedParts: readonly CodingAgentUIMessage["parts"][]
+): CodingAgentUIMessage[] =>
+	messages.map((message, messageIndex) => {
+		const sourceParts = persistedParts[messageIndex] ?? [];
+		return {
+			...message,
+			parts: message.parts.map((part, partIndex) => {
+				const sourcePart = sourceParts[partIndex];
+				return sourcePart && getAttachmentReference(sourcePart)
+					? sourcePart
+					: part;
+			}),
+		};
+	});
+
+const persistExternalizedMessageParts = (
+	db: LocalConversationDatabase,
+	sessionId: string,
+	originalMessages: readonly CodingAgentUIMessage[],
+	externalizedMessages: readonly CodingAgentUIMessage[]
+): void => {
+	const changes = externalizedMessages.flatMap((message, index) => {
+		const original = originalMessages[index];
+		return original &&
+			JSON.stringify(original.parts) !== JSON.stringify(message.parts)
+			? [message]
+			: [];
+	});
+	if (changes.length === 0) {
+		return;
+	}
+	db.transaction((tx) => {
+		for (const message of changes) {
+			tx.update(conversationMessage)
+				.set({ partsJson: message.parts, updatedAt: new Date() })
+				.where(
+					and(
+						eq(conversationMessage.sessionId, sessionId),
+						eq(conversationMessage.uiMessageId, message.id)
+					)
+				)
+				.run();
+		}
+	});
+};
+
+const collectLiveAttachmentIds = (
+	db: LocalConversationDatabase
+): Set<string> => {
+	const live = new Set<string>();
+	const messageRows = db
+		.select({ parts: conversationMessage.partsJson })
+		.from(conversationMessage)
+		.all();
+	for (const row of messageRows) {
+		for (const part of row.parts) {
+			const reference = getAttachmentReference(part);
+			if (reference) {
+				live.add(reference.attachmentId);
+			}
+		}
+	}
+	const historyRows = db
+		.select({ entry: promptHistory.entryJson })
+		.from(promptHistory)
+		.all();
+	for (const row of historyRows) {
+		for (const file of row.entry?.files ?? []) {
+			const reference = getAttachmentReference(file);
+			if (reference) {
+				live.add(reference.attachmentId);
+			}
+		}
+	}
+	return live;
+};
+
 const writeMessages = (
 	db: LocalConversationDatabase,
 	workspaceId: string,
@@ -372,7 +605,9 @@ const writeMessages = (
 						resolveMetadata(normalizedMessage, model, agent)
 					)
 				),
-				partsJson: normalizeMcpToolParts(normalizedMessage.parts),
+				partsJson: normalizeMcpToolParts(
+					normalizedMessage.parts.map(stripAttachmentDisplayMetadata)
+				),
 				position,
 				role: normalizedMessage.role,
 				sessionId,
@@ -401,6 +636,72 @@ const writeMessages = (
 	});
 };
 
+const appendCompaction = (
+	db: LocalConversationDatabase,
+	workspaceId: string,
+	input: AppendConversationCompactionInput
+): ConversationCompaction =>
+	db.transaction((tx) => {
+		const session = tx
+			.select({ id: conversationSession.id })
+			.from(conversationSession)
+			.where(
+				and(
+					eq(conversationSession.id, input.sessionId),
+					eq(conversationSession.workspaceId, workspaceId)
+				)
+			)
+			.get();
+		if (!session) {
+			throw new Error("Session not found");
+		}
+
+		const latest = tx
+			.select({ sequence: conversationCompaction.sequence })
+			.from(conversationCompaction)
+			.where(eq(conversationCompaction.sessionId, input.sessionId))
+			.orderBy(desc(conversationCompaction.sequence))
+			.limit(1)
+			.get();
+		const sequence = (latest?.sequence ?? 0) + 1;
+		const id = input.id ?? generateId();
+		const createdAt = input.createdAt ?? new Date();
+		const completedAt = input.completedAt ?? createdAt;
+		const row = {
+			completedAt,
+			createdAt,
+			firstKeptAssistantPartIndex: input.firstKeptAssistantPartIndex ?? null,
+			firstKeptUiMessageId: input.firstKeptUiMessageId,
+			summarizationVariant: input.summarizationVariant ?? null,
+			focus: input.focus ?? null,
+			id,
+			priorCompactionId: input.priorCompactionId ?? null,
+			sequence,
+			sessionId: input.sessionId,
+			summarizationModelJson: input.summarizationModel,
+			summarizationUsageJson: input.summarizationUsage ?? null,
+			summaryJson: input.summary,
+			throughMessageUiId: input.throughMessageUiId,
+			tokensAfter: input.tokensAfter,
+			tokensBefore: input.tokensBefore,
+			trigger: input.trigger,
+		};
+		tx.insert(conversationCompaction).values(row).run();
+		return toConversationCompaction(row);
+	});
+
+const migrateLegacyMessages = async (
+	messages: readonly CodingAgentUIMessage[],
+	externalize: (
+		messages: readonly CodingAgentUIMessage[]
+	) => Promise<CodingAgentUIMessage[]>
+): Promise<CodingAgentUIMessage[]> => {
+	if (!messages.some(messageHasLegacyImageParts)) {
+		return [...messages];
+	}
+	return externalize([...messages]);
+};
+
 export const createDrizzleConversationStore = (
 	database?: LocalConversationDatabase,
 	options: DrizzleConversationStoreOptions = {}
@@ -410,13 +711,89 @@ export const createDrizzleConversationStore = (
 	if (!database) {
 		runLocalMigrations(db);
 	}
-	const promptHistoryStore = createPromptHistory(db);
+	const attachmentStore =
+		options.attachmentStore ??
+		createConversationAttachmentStore({
+			repository: createDrizzleAttachmentMetadataRepository(db),
+			root: options.attachmentRoot ?? resolveLocalAttachmentRoot(),
+		});
+	const externalizeAttachments = (
+		messages: readonly CodingAgentUIMessage[],
+		signal?: AbortSignal,
+		externalizationOptions?: AttachmentExternalizationOptions
+	): Promise<CodingAgentUIMessage[]> =>
+		attachmentStore
+			? attachmentStore.externalizeMessages(
+					messages,
+					signal,
+					externalizationOptions
+				)
+			: Promise.resolve([...messages]);
+	const hydrateAttachments = (
+		messages: readonly CodingAgentUIMessage[],
+		hydrationOptions: AttachmentHydrationOptions
+	): Promise<CodingAgentUIMessage[]> =>
+		attachmentStore
+			? attachmentStore.hydrateMessages(messages, hydrationOptions)
+			: Promise.resolve([...messages]);
+	// Persistence snapshots may be fired without awaiting; serialize writes per
+	// session so an older snapshot can never overwrite a newer one.
+	const persistQueues = new Map<string, Promise<void>>();
+	const enqueuePersist = (sessionId: string, write: () => Promise<void>) => {
+		const previous = persistQueues.get(sessionId) ?? Promise.resolve();
+		const operation = (async () => {
+			await previous;
+			await write();
+		})();
+		persistQueues.set(
+			sessionId,
+			operation.then(
+				() => undefined,
+				() => undefined
+			)
+		);
+		return operation;
+	};
+	const promptHistoryStore = createPromptHistory(db, attachmentStore);
 	const workspace = ensureWorkspace(db, options.workspaceRoot ?? process.cwd());
+	const collectAttachments = (
+		safetyWindowMs = 60_000
+	): Promise<AttachmentMaintenanceReport> =>
+		attachmentStore
+			? attachmentStore.collect({
+					liveAttachmentIds: collectLiveAttachmentIds(db),
+					safetyWindowMs,
+				})
+			: Promise.resolve({
+					orphanBytes: 0,
+					orphanCount: 0,
+					reclaimedBytes: 0,
+					reclaimedCount: 0,
+				});
 
 	return {
-		getPromptHistory: promptHistoryStore.get,
-		recordPrompt: promptHistoryStore.record,
-		createSession: ({ agent, message, model, variant }: CreateSessionInput) => {
+		appendCompaction: (input) =>
+			Promise.resolve(appendCompaction(db, workspace.id, input)),
+		getPromptHistory: () => promptHistoryStore.migrate(),
+		recordPrompt: async (entry) => {
+			await promptHistoryStore.record(entry);
+			await collectAttachments().catch(() => undefined);
+		},
+		clearPromptHistory: async () => {
+			await promptHistoryStore.clear();
+			await collectAttachments().catch(() => undefined);
+		},
+		createSession: async ({
+			agent,
+			message,
+			model,
+			variant,
+		}: CreateSessionInput) => {
+			const [persistedMessage] = await externalizeAttachments(
+				[message],
+				undefined,
+				{ rejectInvalid: true }
+			);
 			const id = generateId();
 			const now = new Date();
 
@@ -436,16 +813,16 @@ export const createDrizzleConversationStore = (
 
 			writeMessages(db, workspace.id, {
 				agent,
-				messages: [message],
+				messages: [persistedMessage ?? message],
 				model,
 				sessionId: id,
 				variant,
 			});
 
-			return Promise.resolve({ id });
+			return { id };
 		},
 
-		deleteSession: (sessionId: string) => {
+		deleteSession: async (sessionId: string) => {
 			db.delete(conversationSession)
 				.where(
 					and(
@@ -454,7 +831,54 @@ export const createDrizzleConversationStore = (
 					)
 				)
 				.run();
-			return Promise.resolve();
+			await collectAttachments().catch(() => undefined);
+		},
+
+		getCompactions: (sessionId: string) => {
+			const rows = db
+				.select({
+					compaction: conversationCompaction,
+				})
+				.from(conversationCompaction)
+				.innerJoin(
+					conversationSession,
+					eq(conversationCompaction.sessionId, conversationSession.id)
+				)
+				.where(
+					and(
+						eq(conversationCompaction.sessionId, sessionId),
+						eq(conversationSession.workspaceId, workspace.id)
+					)
+				)
+				.orderBy(asc(conversationCompaction.sequence))
+				.all();
+			return Promise.resolve(
+				rows.map(({ compaction }) => toConversationCompaction(compaction))
+			);
+		},
+
+		getLatestCompaction: (sessionId: string) => {
+			const row = db
+				.select({
+					compaction: conversationCompaction,
+				})
+				.from(conversationCompaction)
+				.innerJoin(
+					conversationSession,
+					eq(conversationCompaction.sessionId, conversationSession.id)
+				)
+				.where(
+					and(
+						eq(conversationCompaction.sessionId, sessionId),
+						eq(conversationSession.workspaceId, workspace.id)
+					)
+				)
+				.orderBy(desc(conversationCompaction.sequence))
+				.limit(1)
+				.get();
+			return Promise.resolve(
+				row ? toConversationCompaction(row.compaction) : null
+			);
 		},
 
 		getMessages: async (sessionId: string) => {
@@ -506,7 +930,28 @@ export const createDrizzleConversationStore = (
 				throw new Error("Invalid persisted chat messages.");
 			}
 
-			return validation.data;
+			const messages = restoreAttachmentReferenceParts(
+				validation.data,
+				rows.map((row) => normalizeMcpToolParts(row.partsJson))
+			);
+			let externalizedMessages: CodingAgentUIMessage[];
+			try {
+				externalizedMessages = await migrateLegacyMessages(
+					messages,
+					externalizeAttachments
+				);
+			} catch {
+				return messages;
+			}
+			persistExternalizedMessageParts(
+				db,
+				sessionId,
+				messages,
+				externalizedMessages
+			);
+			return attachmentStore
+				? await attachmentStore.annotateMessagesForDisplay(externalizedMessages)
+				: externalizedMessages;
 		},
 
 		getSession: (sessionId: string) => {
@@ -580,9 +1025,11 @@ export const createDrizzleConversationStore = (
 			return result;
 		},
 
-		persistMessages: (input: PersistMessagesInput) => {
-			writeMessages(db, workspace.id, input);
-			return Promise.resolve();
+		persistMessages: async (input: PersistMessagesInput) => {
+			await enqueuePersist(input.sessionId, async () => {
+				const messages = await externalizeAttachments(input.messages);
+				writeMessages(db, workspace.id, { ...input, messages });
+			});
 		},
 
 		updateSession: (sessionId: string, data: UpdateSessionInput) => {
@@ -602,5 +1049,9 @@ export const createDrizzleConversationStore = (
 
 			return Promise.resolve();
 		},
+		attachmentStore,
+		externalizeAttachments,
+		hydrateAttachments,
+		collectAttachments,
 	};
 };

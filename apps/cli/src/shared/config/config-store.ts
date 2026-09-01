@@ -1,6 +1,15 @@
+import {
+	mkdir,
+	rename,
+	rm,
+	stat,
+	writeFile as writeFileToDisk,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import {
+	applyEdits,
+	modify,
 	type Node,
 	type ParseError,
 	parse as parseJsonc,
@@ -34,6 +43,12 @@ export type ConfigSnapshot = {
 export type ConfigStore = {
 	getSnapshot(workspace: string): Promise<ConfigSnapshot>;
 	refreshSnapshot(workspace: string): Promise<ConfigSnapshot>;
+	setValue(
+		workspace: string,
+		scope: ConfigScope,
+		path: readonly string[],
+		value: unknown
+	): Promise<ConfigSnapshot>;
 };
 export type ConfigRuntime = {
 	configStore: ConfigStore;
@@ -43,6 +58,7 @@ export type ConfigRuntime = {
 
 type ConfigFileSystem = {
 	readFile(path: string): Promise<string>;
+	writeFile?: (path: string, contents: string) => Promise<void>;
 };
 
 export type ConfigStoreOptions = {
@@ -408,6 +424,103 @@ const loadSnapshot = async (
 	});
 };
 
+const configPathIsSafe = (configPath: readonly string[]): boolean =>
+	configPath.length > 0 &&
+	configPath.every((segment) => segment.length > 0 && !unsafeKeys.has(segment));
+
+const valueAtPath = (
+	document: ConfigDocument,
+	configPath: readonly string[]
+): unknown => {
+	let current: unknown = document;
+	for (const segment of configPath) {
+		if (!(isObject(current) && Object.hasOwn(current, segment))) {
+			return;
+		}
+		current = current[segment];
+	}
+	return current;
+};
+
+const resolveConfigWritePath = (
+	snapshot: ConfigSnapshot,
+	scope: ConfigScope,
+	configPath: readonly string[]
+): string => {
+	const existingSource = snapshot.sources.findLast(
+		(source) =>
+			source.scope === scope &&
+			valueAtPath(source.document, configPath) !== undefined
+	);
+	if (existingSource !== undefined) {
+		return existingSource.path;
+	}
+
+	const scopedSources = snapshot.sources.filter(
+		(source) => source.scope === scope
+	);
+	return (
+		(scope === "global" ? scopedSources[0] : scopedSources.at(-1))?.path ?? ""
+	);
+};
+
+const readConfigForWrite = async (
+	fs: ConfigFileSystem,
+	file: string
+): Promise<string> => {
+	const result = await readFile(fs, file);
+	if (result.kind === "missing") {
+		return "{}\n";
+	}
+	if (result.kind === "error") {
+		throw new Error(`Could not read config file ${file}.`);
+	}
+
+	const errors: ParseError[] = [];
+	const tree = parseTree(result.contents, errors, {
+		allowTrailingComma: true,
+	});
+	const parsed = parseJsonc(result.contents, errors, {
+		allowTrailingComma: true,
+	});
+	if (
+		errors.length > 0 ||
+		tree === undefined ||
+		findUnsafeKey(tree) !== undefined ||
+		!isObject(parsed)
+	) {
+		throw new Error(`Could not update invalid config file ${file}.`);
+	}
+	return result.contents;
+};
+
+const writeConfigFileAtomically = async (
+	file: string,
+	contents: string
+): Promise<void> => {
+	const temporaryFile = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+	const mode = await (async () => {
+		try {
+			return (await stat(file)).mode % 0o1000;
+		} catch (error) {
+			if (isNotFound(error)) {
+				return 0o600;
+			}
+			throw error;
+		}
+	})();
+	await mkdir(path.dirname(file), { recursive: true });
+	try {
+		await writeFileToDisk(temporaryFile, contents, {
+			encoding: "utf8",
+			mode,
+		});
+		await rename(temporaryFile, file);
+	} finally {
+		await rm(temporaryFile, { force: true });
+	}
+};
+
 export const createConfigStore = (
 	options: ConfigStoreOptions = {}
 ): ConfigStore => {
@@ -421,10 +534,24 @@ export const createConfigStore = (
 				: path.join(homeRoot, ".config"),
 			"wincode"
 		);
-	const fs = options.fs ?? {
-		readFile: (file: string) => globalThis.Bun.file(file).text(),
-	};
+	const fs: ConfigFileSystem =
+		options.fs ??
+		({
+			readFile: (file: string) => globalThis.Bun.file(file).text(),
+			writeFile: writeConfigFileAtomically,
+		} satisfies ConfigFileSystem);
 	const snapshots = new Map<string, Promise<ConfigSnapshot>>();
+	const writeQueues = new Map<string, Promise<void>>();
+	const getSnapshot = (workspace: string): Promise<ConfigSnapshot> => {
+		const key = path.resolve(workspace);
+		const existing = snapshots.get(key);
+		if (existing !== undefined) {
+			return existing;
+		}
+		const loaded = loadSnapshot(key, { configRoot, fs, homeRoot });
+		snapshots.set(key, loaded);
+		return loaded;
+	};
 	const refreshSnapshot = (workspace: string): Promise<ConfigSnapshot> => {
 		const key = path.resolve(workspace);
 		const snapshot = loadSnapshot(key, { configRoot, fs, homeRoot });
@@ -432,16 +559,52 @@ export const createConfigStore = (
 		return snapshot;
 	};
 	return {
-		getSnapshot: (workspace) => {
-			const key = path.resolve(workspace);
-			const existing = snapshots.get(key);
-			if (existing !== undefined) {
-				return existing;
-			}
-			const snapshot = loadSnapshot(key, { configRoot, fs, homeRoot });
-			snapshots.set(key, snapshot);
-			return snapshot;
-		},
+		getSnapshot,
 		refreshSnapshot,
+		setValue: async (workspace, scope, configPath, value) => {
+			if (!configPathIsSafe(configPath)) {
+				throw new Error("Config path contains an unsafe segment.");
+			}
+			const snapshot = await getSnapshot(workspace);
+			const target = resolveConfigWritePath(snapshot, scope, configPath);
+			if (target.length === 0) {
+				throw new Error(`Could not resolve ${scope} config file.`);
+			}
+			const previous = writeQueues.get(target) ?? Promise.resolve();
+			const current = previous
+				.catch(() => undefined)
+				.then(async () => {
+					const contents = await readConfigForWrite(fs, target);
+					const document = parseJsonc(contents, [], {
+						allowTrailingComma: true,
+					});
+					if (
+						value === undefined &&
+						(!isObject(document) ||
+							valueAtPath(document, configPath) === undefined)
+					) {
+						return;
+					}
+					const updated = applyEdits(
+						contents,
+						modify(contents, [...configPath], value, {
+							formattingOptions: { insertSpaces: true, tabSize: 2 },
+						})
+					);
+					if (fs.writeFile === undefined) {
+						throw new Error("Config persistence is unavailable.");
+					}
+					await fs.writeFile(target, updated);
+				});
+			writeQueues.set(target, current);
+			try {
+				await current;
+			} finally {
+				if (writeQueues.get(target) === current) {
+					writeQueues.delete(target);
+				}
+			}
+			return refreshSnapshot(workspace);
+		},
 	};
 };

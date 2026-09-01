@@ -14,9 +14,15 @@ import type { McpContextValue } from "@/modules/mcp";
 import { getHonoClient } from "@/shared/api/hono-client";
 import { prepareSendChatRequestBody } from "../api/chat-request";
 import { resolveConversationSelection } from "../selection";
+import type { AttachmentHydrationOptions } from "../storage/attachment-store";
+import { getConversationStore } from "../storage/get-conversation-store";
 import { createLocalChatTransport } from "./local-chat-transport";
 
 type MutableRefObject<T> = { current: T };
+type AttachmentModelBudget = Pick<
+	AttachmentHydrationOptions,
+	"maxAttachments" | "maxBytes" | "maxTokens"
+>;
 
 const getBearerToken = (
 	authorization:
@@ -33,7 +39,8 @@ export const createRoutingChatTransport = (
 	registry: AgentRegistry | null,
 	connections: Connections,
 	mcp: McpContextValue,
-	skillToolRef?: MutableRefObject<SkillToolDefinition | undefined>
+	skillToolRef?: MutableRefObject<SkillToolDefinition | undefined>,
+	attachmentBudgetRef?: MutableRefObject<AttachmentModelBudget | undefined>
 ): ChatTransport<CodingAgentUIMessage> => ({
 	sendMessages: async ({ abortSignal, messages }) => {
 		// One immutable snapshot per send so the request manifest and any dynamic
@@ -50,8 +57,6 @@ export const createRoutingChatTransport = (
 		if (!selection?.agent) {
 			throw new Error("No resolved Agent or model to send");
 		}
-		// Both transports cross the same preparation seam, so the direct and
-		// hosted runtimes are derived from the exact selection that runs.
 		const prepared = prepareAgentCall(
 			registry,
 			{
@@ -60,6 +65,15 @@ export const createRoutingChatTransport = (
 				variant: selection.variant,
 			},
 			snapshot.manifest
+		);
+		const hydratedMessages = await getConversationStore().hydrateAttachments(
+			messages,
+			{
+				purpose: "model",
+				priorityMessageId: messages.findLast(({ role }) => role === "user")?.id,
+				signal: abortSignal,
+				...(attachmentBudgetRef?.current ?? {}),
+			}
 		);
 		if (getChatModelRoute(selection.model) !== "hosted") {
 			return createLocalChatTransport(
@@ -77,7 +91,7 @@ export const createRoutingChatTransport = (
 				chatId: sessionId,
 				headers: undefined,
 				messageId: undefined,
-				messages,
+				messages: hydratedMessages,
 				metadata: undefined,
 				trigger: "submit-message",
 			});
@@ -108,7 +122,7 @@ export const createRoutingChatTransport = (
 			}),
 			messageId: undefined,
 			metadata: undefined,
-			messages,
+			messages: hydratedMessages,
 			trigger: "submit-message",
 		});
 	},

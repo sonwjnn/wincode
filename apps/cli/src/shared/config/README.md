@@ -21,3 +21,9 @@ attribute their own diagnostics correctly.
 Capability schemas and behavior do not belong here. MCP, commands, agents, skills, and future
 capabilities resolve their own sections from the raw snapshot. Runtime state such as credentials,
 conversations, and preferences is not merged configuration.
+
+`ConfigStore.setValue(workspace, scope, path, value)` persists a JSON/JSONC value through the same
+configuration boundary. Within the requested scope it updates the source that owns the path; when
+the path is new, global writes target the XDG config source and project writes target the highest
+precedence project `.wincode` source. Passing `undefined` removes a property. Existing JSONC
+comments are preserved, and the workspace snapshot is refreshed after a successful write.

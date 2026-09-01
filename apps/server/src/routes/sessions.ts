@@ -10,17 +10,24 @@ import {
 	modelVariantSchema,
 	skillRequestContextSchema,
 	skillToolDefinitionSchema,
+	toCodingMessageUsage,
 } from "@wincode/ai";
 import {
 	codingServerTools,
 	convertMcpToolManifest,
 	createCodingAgentStreamResponse,
+	getProviderErrorMessage,
 	type ResolvedModel,
 	resolveSupportedChatModel,
 	resolveWincodeChatModelSelection,
 } from "@wincode/ai/server";
 import { createDrizzleClient } from "@wincode/db/client";
-import { safeValidateUIMessages } from "ai";
+import {
+	convertToModelMessages,
+	generateText,
+	type ModelMessage,
+	safeValidateUIMessages,
+} from "ai";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import {
@@ -35,11 +42,24 @@ import { createBillingRepository } from "../billing/repository";
 
 const maxRequestBytes = 80 * 1024 * 1024;
 const maxMessages = 32;
+const maxCompactionMessages = 1024;
 const maxPartsPerMessage = 16;
+const maxCompactionAttachmentMetadata = 128;
 const maxIdLength = 256;
 const conservativeHardInputTokenLimit = 16_384;
 const conservativeInputHeadroomTokens = 512;
 const estimatedUtf8BytesPerToken = 4;
+const estimatedMediaBytesPerToken = 1024;
+const minimumEstimatedMediaTokens = 64;
+const SUPPORTED_IMAGE_MEDIA_TYPES = {
+	"image/gif": true,
+	"image/jpeg": true,
+	"image/png": true,
+	"image/webp": true,
+} as const;
+const DATA_IMAGE_URL_PATTERN =
+	/^data:(image\/(?:gif|jpeg|png|webp));base64,[A-Za-z0-9+/]+={0,2}$/u;
+const BASE64_WHITESPACE_PATTERN = /\s/gu;
 
 const billingReserveDeniedMessage = (reason: unknown): string =>
 	typeof reason === "string"
@@ -73,6 +93,42 @@ const chatRequestSchema = z
 		sendReasoning: z.boolean().optional(),
 		skill: skillRequestContextSchema.optional(),
 		skillTool: skillToolDefinitionSchema.optional(),
+	})
+	.strict();
+
+const compactionAttachmentMetadataSchema = z
+	.object({
+		attachmentId: z.string().regex(/^v1-[0-9a-f]{64}$/u),
+		available: z.boolean(),
+		byteLength: z.number().int().nonnegative(),
+		filename: z.string().min(1).max(128),
+		mediaType: z.string().min(1).max(64),
+		payloadOmitted: z.literal(true),
+	})
+	.strict();
+const compactionSummarySchema = z
+	.object({
+		attachments: z
+			.array(compactionAttachmentMetadataSchema)
+			.max(maxCompactionAttachmentMetadata)
+			.optional(),
+		coveredMessageIds: z.array(z.string().min(1)),
+		formatVersion: z.literal(1),
+		text: z.string(),
+		focus: z.string().optional(),
+	})
+	.strict();
+const compactionSummaryRequestSchema = z
+	.object({
+		focus: z.string().max(4096).optional(),
+		model: z.string().min(1),
+		previousSummary: compactionSummarySchema.optional(),
+		serializedMessages: z.string().min(1).max(4_000_000),
+		summaryMessages: z
+			.array(uiMessageInputSchema)
+			.max(maxCompactionMessages)
+			.optional(),
+		variant: modelVariantSchema.optional(),
 	})
 	.strict();
 
@@ -140,27 +196,120 @@ const readBoundedJsonBody = async (request: Request): Promise<unknown> => {
 	}
 };
 
+const COMPACTION_SUMMARY_SYSTEM_PROMPT = `You are Wincode's conversation maintenance summarizer. Summarize only the supplied transcript for a future coding-agent turn. Preserve user requests, decisions, current work, unresolved errors, exact identifiers, file paths, and tool call/result pairings. Do not invent facts, call tools, modify files, or address the user. Current-window attachments may be inspected when supplied; historical attachments are metadata only. Never reproduce attachment payloads. Return a concise plain-text summary.`;
+
+const buildCompactionSummaryPrompt = (
+	serializedMessages: string | undefined,
+	previousSummary: z.infer<typeof compactionSummarySchema> | undefined,
+	focus: string | undefined
+): string => {
+	const prior = previousSummary
+		? `Prior durable summary:\n${previousSummary.text}\n`
+		: "";
+	return [
+		"Summarize this transcript for the next coding-agent request.",
+		focus?.trim()
+			? `Public focus: ${focus.trim()}`
+			: "Use the default preservation priorities.",
+		prior,
+		...(serializedMessages === undefined
+			? []
+			: ["Transcript:", serializedMessages]),
+	].join("\n");
+};
+
+const buildSummaryModelMessages = async (
+	messages: z.infer<typeof uiMessageInputSchema>[],
+	prompt: string
+): Promise<ModelMessage[] | null> => {
+	const textAndFileMessages = messages
+		.map((message) => ({
+			...message,
+			parts: message.parts.filter(
+				(part) => part.type === "text" || part.type === "file"
+			),
+		}))
+		.filter((message) => message.parts.length > 0);
+	const validation = await safeValidateUIMessages<CodingAgentUIMessage>({
+		dataSchemas: codingAgentDataSchemas,
+		messages: textAndFileMessages,
+	});
+	if (!validation.success) {
+		return null;
+	}
+	const modelMessages = await convertToModelMessages(
+		validation.data.map(({ id: _id, ...message }) => message)
+	);
+	return [{ content: prompt, role: "user" }, ...modelMessages];
+};
 const isKillSwitched = (providerId: string, modelId: string) =>
 	billingConfig.providerKillSwitches.has(providerId) ||
 	billingConfig.modelKillSwitches.has(modelId);
-
 const getStringTokenEstimate = (value: string): number =>
 	Math.ceil(Buffer.byteLength(value, "utf8") / estimatedUtf8BytesPerToken);
+
+const getDataImageByteLength = (url: string): number => {
+	const separator = url.indexOf(",");
+	if (separator < 0) {
+		return 0;
+	}
+	const payload = url
+		.slice(separator + 1)
+		.replace(BASE64_WHITESPACE_PATTERN, "");
+	let padding = 0;
+	if (payload.endsWith("==")) {
+		padding = 2;
+	} else if (payload.endsWith("=")) {
+		padding = 1;
+	}
+	return Math.max(0, Math.floor((payload.length * 3) / 4) - padding);
+};
 
 const getMessageContextTokenEstimate = (
 	messages: z.infer<typeof uiMessageInputSchema>[]
 ) => {
-	const serialized =
-		JSON.stringify(
-			messages.map((message) => {
-				if (!message.metadata || typeof message.metadata !== "object") {
-					return message;
-				}
-				const { skill: _skill, ...metadata } = message.metadata;
-				return { ...message, metadata };
-			})
-		) ?? "";
-	return getStringTokenEstimate(serialized) + conservativeInputHeadroomTokens;
+	let mediaTokens = 0;
+	const normalizedMessages = messages.map((message) => {
+		const metadata =
+			message.metadata && typeof message.metadata === "object"
+				? (() => {
+						const { skill: _skill, ...rest } = message.metadata;
+						return rest;
+					})()
+				: message.metadata;
+		const parts = message.parts.map((part) => {
+			if (
+				part.type !== "file" ||
+				typeof part.mediaType !== "string" ||
+				!Object.hasOwn(SUPPORTED_IMAGE_MEDIA_TYPES, part.mediaType) ||
+				typeof part.url !== "string" ||
+				!part.url.startsWith("data:")
+			) {
+				return part;
+			}
+			const byteLength = getDataImageByteLength(part.url);
+			mediaTokens += Math.max(
+				minimumEstimatedMediaTokens,
+				Math.ceil(byteLength / estimatedMediaBytesPerToken)
+			);
+			return {
+				...part,
+				byteLength,
+				url: "[image payload omitted]",
+			};
+		});
+		return {
+			...message,
+			...(metadata === undefined ? {} : { metadata }),
+			parts,
+		};
+	});
+	const serialized = JSON.stringify(normalizedMessages) ?? "";
+	return (
+		getStringTokenEstimate(serialized) +
+		mediaTokens +
+		conservativeInputHeadroomTokens
+	);
 };
 
 const getFundedContextTokenEstimate = ({
@@ -192,11 +341,34 @@ const getFundedContextTokenEstimate = ({
 	(skill ? getStringTokenEstimate(formatSkillUserContext(skill)) : 0) +
 	(skillTool ? getStringTokenEstimate(skillTool.description) : 0);
 
-const hasOnlyTextParts = (messages: z.infer<typeof uiMessageInputSchema>[]) =>
+const isAcceptedUserPart = (
+	part: z.infer<typeof uiMessagePartSchema>
+): boolean => {
+	if (part.type === "text") {
+		return true;
+	}
+	if (part.type !== "file") {
+		return false;
+	}
+	if (
+		typeof part.mediaType !== "string" ||
+		!Object.hasOwn(SUPPORTED_IMAGE_MEDIA_TYPES, part.mediaType)
+	) {
+		return false;
+	}
+	return (
+		typeof part.url === "string" &&
+		part.url.length <= maxRequestBytes &&
+		DATA_IMAGE_URL_PATTERN.test(part.url)
+	);
+};
+
+const hasOnlyAcceptedParts = (
+	messages: z.infer<typeof uiMessageInputSchema>[]
+): boolean =>
 	messages
 		.filter((message) => message.role === "user")
-		.every((message) => message.parts.every((part) => part.type === "text"));
-
+		.every((message) => message.parts.every(isAcceptedUserPart));
 const isAcceptableInput = (
 	request: Pick<
 		z.infer<typeof chatRequestSchema>,
@@ -204,12 +376,13 @@ const isAcceptableInput = (
 	>,
 	inputTokenLimit: number
 ): boolean =>
-	hasOnlyTextParts(request.messages) &&
+	hasOnlyAcceptedParts(request.messages) &&
 	getFundedContextTokenEstimate(request) <= inputTokenLimit;
 
 export type SessionsRouteDeps = {
 	readonly codingServerTools?: typeof codingServerTools;
 	readonly createCodingAgentStreamResponse?: typeof createCodingAgentStreamResponse;
+	readonly generateText?: typeof generateText;
 	readonly getBillingConfig?: typeof getBillingConfig;
 	readonly getBillingRepository?: () => BillingRepository | null;
 	readonly resolveSupportedChatModel?: typeof resolveSupportedChatModel;
@@ -262,6 +435,108 @@ const createResolvedBillingRepository = (): BillingRepository | null => {
 		providerKillSwitches: billingConfig.providerKillSwitches,
 	});
 	return resolvedBillingRepository;
+};
+
+const handleCompactionSummaryRequest = async (
+	c: Context,
+	generateTextResolved: typeof generateText,
+	resolveSupportedChatModelResolved: typeof resolveSupportedChatModel,
+	resolveWincodeChatModelSelectionResolved: typeof resolveWincodeChatModelSelection
+): Promise<Response> => {
+	const subject = await verifyBearerAuth(c.req.header("authorization") ?? null);
+	if (!subject) {
+		return c.json({ error: "Unauthorized" }, 401, unauthorizedHeaders);
+	}
+	if (!requireScope(subject, "chat:write")) {
+		return c.json({ error: "Forbidden" }, 403);
+	}
+	if (!hasValidContentLength(c.req.header("content-length") ?? null)) {
+		return badRequest();
+	}
+
+	let body: unknown;
+	try {
+		body = await readBoundedJsonBody(c.req.raw);
+	} catch {
+		return badRequest();
+	}
+	const parsed = compactionSummaryRequestSchema.safeParse(body);
+	if (!parsed.success) {
+		return badRequest();
+	}
+	if (
+		parsed.data.summaryMessages?.some((message) =>
+			message.parts.some(
+				(part) => part.type === "file" && !isAcceptedUserPart(part)
+			)
+		)
+	) {
+		return badRequest();
+	}
+
+	let resolvedModel: ResolvedModel;
+	try {
+		const selected = resolveWincodeChatModelSelectionResolved(
+			parsed.data.model
+		);
+		resolvedModel = resolveSupportedChatModelResolved(selected, {
+			maxOutputTokens: 4096,
+			variant: parsed.data.variant,
+		});
+	} catch {
+		return badRequest();
+	}
+
+	const prompt = buildCompactionSummaryPrompt(
+		parsed.data.summaryMessages ? undefined : parsed.data.serializedMessages,
+		parsed.data.previousSummary,
+		parsed.data.focus
+	);
+	let modelMessages: ModelMessage[] | undefined;
+	if (parsed.data.summaryMessages) {
+		try {
+			const resolvedMessages = await buildSummaryModelMessages(
+				parsed.data.summaryMessages,
+				prompt
+			);
+			if (!resolvedMessages) {
+				return badRequest();
+			}
+			modelMessages = resolvedMessages;
+		} catch {
+			return badRequest();
+		}
+	}
+	try {
+		const result = await generateTextResolved({
+			abortSignal: c.req.raw.signal,
+			maxOutputTokens: 4096,
+			maxRetries: 0,
+			model: resolvedModel.model,
+			...(modelMessages ? { messages: modelMessages } : { prompt }),
+			providerOptions: resolvedModel.providerOptions,
+			system: COMPACTION_SUMMARY_SYSTEM_PROMPT,
+		});
+		const usage = toCodingMessageUsage(result.usage);
+		return new Response(
+			JSON.stringify({
+				text: result.text,
+				...(usage ? { usage } : {}),
+			}),
+			{
+				headers: { "content-type": "application/json; charset=utf-8" },
+				status: 200,
+			}
+		);
+	} catch (error) {
+		return new Response(
+			JSON.stringify({ error: getProviderErrorMessage(error) }),
+			{
+				headers: { "content-type": "application/json; charset=utf-8" },
+				status: 502,
+			}
+		);
+	}
 };
 
 const handleChatRequest = async (
@@ -431,6 +706,7 @@ export const createSessionsRoutes = (deps: SessionsRouteDeps = {}) => {
 	const codingServerToolsResolved = deps.codingServerTools ?? codingServerTools;
 	const createCodingAgentStreamResponseResolved =
 		deps.createCodingAgentStreamResponse ?? createCodingAgentStreamResponse;
+	const generateTextResolved = deps.generateText ?? generateText;
 	const resolveBillingConfig = deps.getBillingConfig ?? getBillingConfig;
 	const resolveBillingRepository =
 		deps.getBillingRepository ?? createResolvedBillingRepository;
@@ -438,15 +714,25 @@ export const createSessionsRoutes = (deps: SessionsRouteDeps = {}) => {
 		deps.resolveSupportedChatModel ?? resolveSupportedChatModel;
 	const resolveWincodeChatModelSelectionResolved =
 		deps.resolveWincodeChatModelSelection ?? resolveWincodeChatModelSelection;
-	return new Hono().post("/:id/chat", (c) =>
-		handleChatRequest(c, resolveBillingConfig, resolveBillingRepository, {
-			codingServerTools: codingServerToolsResolved,
-			createCodingAgentStreamResponse: createCodingAgentStreamResponseResolved,
-			resolveSupportedChatModel: resolveSupportedChatModelResolved,
-			resolveWincodeChatModelSelection:
-				resolveWincodeChatModelSelectionResolved,
-		})
-	);
+	return new Hono()
+		.post("/:id/chat", (c) =>
+			handleChatRequest(c, resolveBillingConfig, resolveBillingRepository, {
+				codingServerTools: codingServerToolsResolved,
+				createCodingAgentStreamResponse:
+					createCodingAgentStreamResponseResolved,
+				resolveSupportedChatModel: resolveSupportedChatModelResolved,
+				resolveWincodeChatModelSelection:
+					resolveWincodeChatModelSelectionResolved,
+			})
+		)
+		.post("/:id/compact-summary", (c) =>
+			handleCompactionSummaryRequest(
+				c,
+				generateTextResolved,
+				resolveSupportedChatModelResolved,
+				resolveWincodeChatModelSelectionResolved
+			)
+		);
 };
 
 export const sessionsRoutes = createSessionsRoutes();

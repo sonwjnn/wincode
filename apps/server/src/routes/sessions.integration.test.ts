@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 // that import names the partial mock omits.
 // biome-ignore lint/performance/noNamespaceImport: mock spread needs the full namespace
 import * as realAi from "@wincode/ai";
+import type { generateText as GenerateText } from "ai";
 import { z } from "zod";
 
 const MCP_TOOL_NAME_REGEX = /^mcp_[A-Za-z0-9_-]+$/;
@@ -161,9 +162,15 @@ const billingRepository = {
 	expireStaleActiveRequests: mock(async () => ({ ok: true, expiredCount: 0 })),
 };
 
+const generateSummaryText = mock(async () => ({
+	text: "durable summary",
+	usage: { inputTokens: 8, outputTokens: 3, totalTokens: 11 },
+}));
+const generateText = generateSummaryText as unknown as typeof GenerateText;
 const sessionsRoutes = createSessionsRoutes({
 	codingServerTools,
 	createCodingAgentStreamResponse,
+	generateText,
 	getBillingConfig: () =>
 		({
 			// The glob tool's schema is larger than the removed list tool's, so
@@ -202,6 +209,77 @@ afterEach(() => {
 	mock.restore();
 });
 
+describe("POST /:id/compact-summary", () => {
+	test("uses the hosted model route and returns summarization usage", async () => {
+		const response = await sessionsRoutes.request(
+			"/session-1/compact-summary",
+			{
+				body: JSON.stringify({
+					focus: "preserve identifiers",
+					model: "gpt-5.4-mini",
+					previousSummary: {
+						coveredMessageIds: ["u0"],
+						formatVersion: 1,
+						text: "Earlier decisions.",
+					},
+					serializedMessages: "[message id=u1 role=user]\ncontinue",
+					variant: "high",
+				}),
+				headers: { "content-type": "application/json" },
+				method: "POST",
+			}
+		);
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			text: "durable summary",
+			usage: { inputTokens: 8, outputTokens: 3, totalTokens: 11 },
+		});
+		expect(generateSummaryText).toHaveBeenCalledWith(
+			expect.objectContaining({
+				maxOutputTokens: 4096,
+				maxRetries: 0,
+				prompt: expect.stringContaining("preserve identifiers"),
+				system: expect.stringContaining("maintenance summarizer"),
+			})
+		);
+	});
+	test("passes current-window summary images to the hosted model", async () => {
+		const response = await sessionsRoutes.request(
+			"/session-1/compact-summary",
+			{
+				body: JSON.stringify({
+					model: "gpt-5.4-mini",
+					serializedMessages: "[attachment omitted]",
+					summaryMessages: [
+						{
+							id: "user-image",
+							parts: [
+								{ text: "inspect", type: "text" },
+								{
+									filename: "diagram.png",
+									mediaType: "image/png",
+									type: "file",
+									url: "data:image/png;base64,aGVsbG8=",
+								},
+							],
+							role: "user",
+						},
+					],
+				}),
+				headers: { "content-type": "application/json" },
+				method: "POST",
+			}
+		);
+
+		expect(response.status).toBe(200);
+		expect(generateSummaryText).toHaveBeenCalledWith(
+			expect.objectContaining({
+				messages: expect.any(Array),
+			})
+		);
+	});
+});
 describe("POST /:id/chat (transport-only)", () => {
 	test("streams from the full message context in the request body", async () => {
 		const response = await sessionsRoutes.request("/session-1/chat", {
@@ -579,7 +657,7 @@ describe("POST /:id/chat (transport-only)", () => {
 		});
 	});
 
-	test("rejects multimodal predispatch parts", async () => {
+	test("accepts hydrated image predispatch parts", async () => {
 		const response = await sessionsRoutes.request("/session-1/chat", {
 			body: JSON.stringify({
 				messages: [
@@ -602,7 +680,7 @@ describe("POST /:id/chat (transport-only)", () => {
 			method: "POST",
 		});
 
-		expect(response.status).toBe(400);
+		expect(response.status).toBe(200);
 	});
 
 	test("accepts assistant internal continuation parts", async () => {

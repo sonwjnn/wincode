@@ -222,6 +222,21 @@ describe("hasPendingToolExecutionStep", () => {
 		expect(hasPendingToolExecutionStep(messages)).toBe(false);
 	});
 
+	test("false when the tool was denied", () => {
+		const messages: CodingAgentUIMessage[] = [
+			userMessage,
+			assistantMessageWithTool({
+				input: { command: "ls" },
+				approval: { approved: false, id: "approval-1" },
+				state: "output-denied",
+				toolCallId: TOOL_CALL_ID,
+				toolName: "mcp_echo",
+				type: "dynamic-tool",
+			}),
+		];
+		expect(hasPendingToolExecutionStep(messages)).toBe(false);
+	});
+
 	test("false for a text-only last step", () => {
 		const messages: CodingAgentUIMessage[] = [
 			userMessage,
@@ -329,6 +344,15 @@ describe("createAutoSendGate", () => {
 		const messages = completeStepMessages;
 		gate.disable();
 		gate.enable();
+		expect(gate.shouldAutoSend({ messages })).toBe(true);
+	});
+
+	test("pauses continuation during asynchronous compaction", () => {
+		const gate = createAutoSendGate();
+		const messages = completeStepMessages;
+		gate.pause();
+		expect(gate.shouldAutoSend({ messages })).toBe(false);
+		gate.resume();
 		expect(gate.shouldAutoSend({ messages })).toBe(true);
 	});
 });

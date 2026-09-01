@@ -3,7 +3,7 @@ import { COMMANDS } from "./commands";
 
 export function getFilteredCommands(
 	query: string,
-	options: { hideVariants?: boolean } = {}
+	options: { hideCompact?: boolean; hideVariants?: boolean } = {}
 ): CommandSpec[] {
 	const commands =
 		query.length === 0
@@ -11,7 +11,11 @@ export function getFilteredCommands(
 			: COMMANDS.filter((cmd) =>
 					cmd.name.toLowerCase().startsWith(query.toLowerCase())
 				);
-	return options.hideVariants
-		? commands.filter((cmd) => cmd.kind !== "variants")
-		: commands;
+	return commands.filter(
+		(cmd) =>
+			!(
+				(options.hideCompact && cmd.kind === "compact") ||
+				(options.hideVariants && cmd.kind === "variants")
+			)
+	);
 }

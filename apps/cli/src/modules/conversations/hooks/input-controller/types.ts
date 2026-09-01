@@ -63,6 +63,7 @@ export type ChatInputControllerOptions = {
 	getFileMentionOptions: () => Promise<FileMentionOption[]>;
 	getSkills: () => Promise<Skill[]>;
 	hideVariants?: boolean;
+	hideCompact?: boolean;
 	onError: (message: string) => void;
 	onSubmit: (
 		submission: ChatPromptSubmission

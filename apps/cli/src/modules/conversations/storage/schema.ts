@@ -12,6 +12,7 @@ import {
 	text,
 	unique,
 } from "drizzle-orm/sqlite-core";
+import type { ConversationCompaction } from "../compaction/types";
 import type { PromptHistoryEntry } from "./conversation-store";
 
 export const conversationWorkspace = sqliteTable("conversation_workspace", {
@@ -19,6 +20,15 @@ export const conversationWorkspace = sqliteTable("conversation_workspace", {
 	rootPath: text("root_path").notNull().unique(),
 	createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 	updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+});
+
+export const conversationAttachment = sqliteTable("conversation_attachment", {
+	attachmentId: text("attachment_id").primaryKey(),
+	blobKey: text("blob_key").notNull().unique(),
+	byteLength: integer("byte_length").notNull(),
+	createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+	integrityVersion: integer("integrity_version").notNull().default(1),
+	mediaType: text("media_type").notNull(),
 });
 
 export const conversationSession = sqliteTable(
@@ -85,6 +95,52 @@ export const conversationMessage = sqliteTable(
 	]
 );
 
+export const conversationCompaction = sqliteTable(
+	"conversation_compaction",
+	{
+		id: text("id").primaryKey(),
+		sessionId: text("session_id")
+			.notNull()
+			.references(() => conversationSession.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		sequence: integer("sequence").notNull(),
+		priorCompactionId: text("prior_compaction_id"),
+		summaryJson: text("summary_json", { mode: "json" })
+			.$type<ConversationCompaction["summary"]>()
+			.notNull(),
+		firstKeptUiMessageId: text("first_kept_ui_message_id").notNull(),
+		firstKeptAssistantPartIndex: integer("first_kept_assistant_part_index"),
+		throughMessageUiId: text("through_message_ui_id").notNull(),
+		tokensBefore: integer("tokens_before").notNull(),
+		tokensAfter: integer("tokens_after").notNull(),
+		trigger: text("trigger")
+			.$type<ConversationCompaction["trigger"]>()
+			.notNull(),
+		focus: text("focus"),
+		summarizationModelJson: text("summarization_model_json", { mode: "json" })
+			.$type<ConversationCompaction["summarizationModel"]>()
+			.notNull(),
+		summarizationVariant: text("summarization_variant").$type<ModelVariant>(),
+		summarizationUsageJson: text("summarization_usage_json", {
+			mode: "json",
+		}).$type<ConversationCompaction["summarizationUsage"]>(),
+		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+		completedAt: integer("completed_at", { mode: "timestamp_ms" }).notNull(),
+	},
+	(table) => [
+		unique("uq_conversation_compaction_session_sequence").on(
+			table.sessionId,
+			table.sequence
+		),
+		index("idx_conversation_compaction_session_sequence").on(
+			table.sessionId,
+			table.sequence
+		),
+	]
+);
+
 export const promptHistory = sqliteTable("prompt_history", {
 	id: integer("id").primaryKey({ autoIncrement: true }),
 	prompt: text("prompt").notNull(),
@@ -93,15 +149,16 @@ export const promptHistory = sqliteTable("prompt_history", {
 	>(),
 	createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 });
-
 export const localConversationSchema = {
+	conversationAttachment,
+	conversationCompaction,
 	conversationMessage,
 	conversationSession,
 	conversationWorkspace,
 	promptHistory,
 };
 
-export const CURRENT_USER_VERSION = 1;
+export const CURRENT_USER_VERSION = 3;
 
 export const setUserVersion = sql`PRAGMA user_version = ${sql.raw(
 	String(CURRENT_USER_VERSION)

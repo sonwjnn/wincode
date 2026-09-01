@@ -10,9 +10,10 @@ Chat session lifecycle: creation, messaging, streaming display, and input handli
 with the initial prompt in router state.
 
 ### Join a session
-`ChatView` loads messages + metadata via `getConversationStore()` (`getMessages` +
-`getSession`), validates the messages array with `safeValidateUIMessages`, and feeds them
-into the AI SDK `useChat` hook.
+`ChatView` loads the full transcript and ordered compaction entries via
+`getConversationStore()`, validates the messages array with `safeValidateUIMessages`, rebuilds the
+latest active context as a runtime summary plus recent tail, and feeds that context into the AI
+SDK `useChat` hook.
 
 ### Send a message
 `ChatView` accepts user text → `useChat.submit()` → `prepareSendChatRequestBody` serialises
@@ -22,6 +23,15 @@ streams assistant response.
 ### Interrupt
 Esc during streaming arms a confirmation timeout; second Esc fires `interrupt()` to stop
 generation.
+
+### Compaction
+`/compact [focus]` summarizes completed history into a durable local compaction entry while
+keeping the full transcript visible. This manual command is available only inside an active
+session. The model receives the runtime summary plus recent verbatim messages;
+`/compaction` opens the persistent Auto-compact setting from either HomeView or ChatView. The
+setting updates the existing global or project config source that owns it; a new setting defaults
+to the project `.wincode` source. Automatic threshold maintenance and one-attempt provider-
+overflow replay reuse the same Conversation Compaction module.
 
 ### Input overlays
 `useChatInputController` detects `/` (command) and `@path` (file-mention) triggers as the
@@ -40,33 +50,36 @@ UI never talks to a transport directly. Conversation persistence is local-only; 
 `legacy-remote-conversation-store.ts` Hono RPC adapter has been removed, so the files are flat
 in `storage/` (no `local/` sub-folder).
 
-- `conversation-store.ts` — `ConversationStore` interface + DTOs.
-- `get-conversation-store.ts` — factory returning the local Drizzle store (cached singleton).
-- `drizzle-conversation-store.ts` — `ConversationStore` implementation (the only store).
-- `schema.ts` — SQLite Drizzle schema (`sqliteTable`, timestamp_ms, boolean, json modes).
-- `path.ts` — platform-appropriate user-data DB path resolver (`conversations.db`, override
-  with `WINCODE_LOCAL_DB_PATH`).
-- `client.ts` — `bun:sqlite` connection with WAL / foreign-keys / busy-timeout pragmas +
-  Drizzle instance.
+- `conversation-store.ts` — `ConversationStore` interface + session, message, and
+  compaction DTOs.
+- `get-conversation-store.ts` — factory returning the local Drizzle store
+  (cached singleton).
+- `drizzle-conversation-store.ts` — `ConversationStore` implementation (the only
+  store).
+- `attachment-store.ts` — content-addressed image blob storage, immutable
+  reference conversion, integrity-checked hydration, compaction projection, and
+  bounded garbage collection.
+- `schema.ts` — SQLite Drizzle schema (`sqliteTable`, timestamp_ms, boolean,
+  json modes), including durable `conversation_compaction` entries and
+  `conversation_attachment` metadata.
+- `path.ts` — platform-appropriate user-data DB path resolver
+  (`conversations.db`, override with `WINCODE_LOCAL_DB_PATH`) and its sibling
+  attachment root.
 - `migrations.ts` — runtime Drizzle migrator bootstrap (`drizzle/local` folder).
 
 Local migrations are generated with `bun run db:local:generate` (config
 `drizzle.local.config.ts`) and committed under `apps/cli/drizzle/local` with their `meta/`
 snapshots. The local store runs the migrator on first open.
 
-AI streaming flows through the server chat route as transport only: the CLI sends the full
-message context with `persist: false`, the server never reads or writes PostgreSQL chat
-tables for these streams, and finished messages are persisted locally via the `useChat`
-`onFinish` callback (`getConversationStore().persistMessages`). `SERVER_URL` is required only
-for streaming, not for local session CRUD.
-
-## Public API
-
-- `getConversationStore()` → `ConversationStore` (session CRUD, message load/persist)
-- `useChat(sessionId, initialMessages)` → `{ submit, abort, interrupt,
-  continueLastMessage, messages, status, error }`
+- `getConversationStore()` → `ConversationStore` (session, message, compaction,
+  attachment persistence, hydration, and maintenance)
+- `ConversationStore.clearPromptHistory()` → clears prompt-history references and
+  runs bounded attachment collection.
+- `useChat(sessionId, initialMessages)` → `{ submit, abort, interrupt, compact,
+  cancelCompaction, messages, compactions, status, error }`
 - `useChatInputController(options)` → `{ actions, state }`
 - `prepareSendChatRequestBody(sessionId, messages, metadata)` — constructs the send payload
+
 - `ChatView`, `HomeView`, `ChatShell`, `ChatTextArea`
 - `SessionsDialog`, `RenameSessionDialog`
 
