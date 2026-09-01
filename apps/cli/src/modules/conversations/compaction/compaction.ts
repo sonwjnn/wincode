@@ -535,18 +535,13 @@ const getSummarySpan = (
 	if (throughIndex < previousIndex || throughIndex > cutPoint.throughIndex) {
 		return messages.slice(previousIndex, cutPoint.throughIndex + 1);
 	}
+	// Slice from the kept user message so the boundary assistant sits at
+	// index > 0 for the split application, then drop the covered user turn.
 	const splitMessages = applyDurableSplitBoundary(
-		messages.slice(throughIndex),
+		messages.slice(previousIndex),
 		previous
 	);
-	const suffix = splitMessages[0];
-	if (!suffix) {
-		return messages.slice(previousIndex, cutPoint.throughIndex + 1);
-	}
-	return [
-		suffix,
-		...messages.slice(throughIndex + 1, cutPoint.throughIndex + 1),
-	];
+	return splitMessages.slice(1, cutPoint.throughIndex - previousIndex + 1);
 };
 
 const projectMessagesForEstimate = (

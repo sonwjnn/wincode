@@ -596,3 +596,56 @@ test("splits an oversized single turn only at complete part boundaries", async (
 	expect(serialized).toContain("prefix one");
 	expect(serialized).not.toContain("recent suffix");
 });
+
+test("resumes the next summary span after a split-turn boundary", async () => {
+	const store = makeStore();
+	const serialized: string[] = [];
+	const compaction = createConversationCompaction({
+		generateId: () => "entry-split",
+		store,
+		summaryGenerator: mock(async (input: SummaryGeneratorInput) => {
+			serialized.push(input.serializedMessages);
+			return { text: "split summary" };
+		}),
+		estimateTokens: (messages) =>
+			messages.reduce((total, current) => total + current.parts.length, 0),
+	});
+	const assistant = {
+		id: "a1",
+		parts: [
+			{ text: "prefix one", type: "text" },
+			{ text: "prefix two", type: "text" },
+			{ text: "recent suffix", type: "text" },
+		],
+		role: "assistant",
+	} as unknown as CodingAgentUIMessage;
+
+	const first = await compaction.compact({
+		conversation: {
+			messages: [message("u1", "user", "single request"), assistant],
+			sessionId: "session-split-resume",
+		},
+		model,
+		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
+		trigger: "manual",
+	});
+	expect(first.entry.firstKeptAssistantPartIndex).toBe(2);
+
+	const second = await compaction.compact({
+		conversation: {
+			messages: [
+				message("u1", "user", "single request"),
+				assistant,
+				message("u2", "user", "continue"),
+				message("a2", "assistant", "done"),
+			],
+			sessionId: "session-split-resume",
+		},
+		model,
+		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
+		trigger: "manual",
+	});
+	expect(second.entry.firstKeptUiMessageId).toBe("u2");
+	expect(serialized.at(-1)).toContain("recent suffix");
+	expect(serialized.at(-1)).not.toContain("single request");
+});
