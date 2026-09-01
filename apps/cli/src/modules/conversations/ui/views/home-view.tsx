@@ -7,13 +7,19 @@ import {
 	resolveEffectiveAgentSelection,
 	useAgentRegistry,
 } from "@/modules/agents";
-import { useCompactionSettingsDialog } from "@/modules/conversations/compaction";
+import {
+	isCompactionSettingsCommand,
+	isSettingsCommand,
+	parseCompactCommand,
+} from "@/modules/conversations/compaction";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import { McpActiveIndicator } from "@/modules/mcp";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import { useSettingsHubDialog } from "@/modules/settings";
 import { createSkillSnapshot } from "@/modules/skills";
 import { APP_VERSION } from "@/shared/app-info";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { useToast } from "@/shared/providers/toast/toast-provider";
 import { resolveLastUsedConversationSelection } from "../../selection";
 import { getConversationStore } from "../../storage/get-conversation-store";
 import type { ChatPromptSubmission } from "../../utils";
@@ -52,11 +58,12 @@ export function HomeView() {
 	>();
 	const { agent, model, setAgent, setModel, setVariant, variant } =
 		usePromptConfig();
-	const openCompactionSettingsDialog = useCompactionSettingsDialog();
+	const openSettings = useSettingsHubDialog();
 	const { colors } = useTheme();
+	const { show } = useToast();
 	const registry = useAgentRegistry();
 	const defaultAgentId = registry?.defaultAgentId;
-	const openCompactionSettings = () => openCompactionSettingsDialog(model);
+	const openCompactionSettings = () => openSettings("Compaction");
 
 	useEffect(() => {
 		if (defaultAgentId !== undefined) {
@@ -111,6 +118,24 @@ export function HomeView() {
 	}, [registry, setAgent, setModel, setVariant]);
 
 	const handleSubmit = async ({ files, skill, text }: ChatPromptSubmission) => {
+		const prompt = text.trim();
+		if (!skill && files.length === 0) {
+			if (isSettingsCommand(prompt)) {
+				openSettings();
+				return true;
+			}
+			if (isCompactionSettingsCommand(prompt)) {
+				openCompactionSettings();
+				return true;
+			}
+			if (parseCompactCommand(prompt)) {
+				show({
+					message: "Compaction is unavailable without an active session.",
+					variant: "error",
+				});
+				return false;
+			}
+		}
 		if (
 			!canSubmitHomePrompt({
 				defaultAgentId,
@@ -122,7 +147,6 @@ export function HomeView() {
 		) {
 			return false;
 		}
-		const prompt = text.trim();
 
 		if (!(prompt || files.length > 0)) {
 			return false;
@@ -199,6 +223,7 @@ export function HomeView() {
 					<ChatTextArea
 						disabled={isCreatingSession}
 						onOpenCompaction={openCompactionSettings}
+						onOpenSettings={openSettings}
 						onSubmit={handleSubmit}
 						showCompactCommand={false}
 					/>

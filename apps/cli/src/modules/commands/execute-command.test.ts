@@ -6,6 +6,7 @@ import {
 	ExitAdapter,
 	ModelsAdapter,
 	NewAdapter,
+	SettingsAdapter,
 	SkillsAdapter,
 	VariantsAdapter,
 } from "./adapters";
@@ -145,6 +146,39 @@ describe("createCommandExecutor", () => {
 			name: "variants",
 			description: "",
 			kind: "variants",
+		});
+		expect(opened).toBe(true);
+	});
+	test("dispatches settings command to the settings adapter", async () => {
+		let opened = false;
+		const executor = createCommandExecutor({
+			agents: new AgentsAdapter({
+				currentAgent: "build",
+				open: () => undefined,
+				setAgent: () => undefined,
+			}),
+			connect: new ConnectAdapter({ open: async () => undefined }),
+			dialog: new DialogAdapter({ open: () => undefined }),
+			exit: new ExitAdapter({ destroy: () => undefined }),
+			models: new ModelsAdapter({
+				currentModel: { modelId: "gpt-5.5", providerId: "openai" },
+				open: () => undefined,
+				setModel: () => undefined,
+			}),
+			new: new NewAdapter({ navigateHome: () => undefined }),
+			settings: new SettingsAdapter({
+				open: () => {
+					opened = true;
+				},
+			}),
+			skills: new SkillsAdapter({ open: () => undefined }),
+		});
+
+		await executor({
+			description: "",
+			kind: "settings",
+			name: "settings",
+			value: "/settings",
 		});
 		expect(opened).toBe(true);
 	});

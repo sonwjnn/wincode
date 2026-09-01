@@ -9,6 +9,7 @@ export type CommandSpec = BaseSpec &
 		| { kind: "new" }
 		| { kind: "compact" }
 		| { kind: "compaction" }
+		| { kind: "settings" }
 		| {
 				kind: "dialog";
 				dialogKey: "sessions" | "theme" | "mcps" | "permissions";
@@ -31,6 +32,12 @@ export const COMMANDS: CommandSpec[] = [
 		name: "compact",
 		value: "/compact",
 		kind: "compact",
+	},
+	{
+		description: "Open application settings",
+		name: "settings",
+		value: "/settings",
+		kind: "settings",
 	},
 	{
 		description: "Open compaction settings",

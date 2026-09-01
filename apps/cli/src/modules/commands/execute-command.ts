@@ -7,6 +7,7 @@ import type {
 	ExitAdapter,
 	ModelsAdapter,
 	NewAdapter,
+	SettingsAdapter,
 	SkillsAdapter,
 	VariantsAdapter,
 } from "./adapters";
@@ -21,8 +22,9 @@ export type AdapterMap = {
 	exit: ExitAdapter;
 	models: ModelsAdapter;
 	new: NewAdapter;
+	settings?: SettingsAdapter;
 	skills: SkillsAdapter;
-	variants: VariantsAdapter;
+	variants?: VariantsAdapter;
 };
 
 export function createCommandExecutor(adapters: AdapterMap) {
@@ -46,6 +48,11 @@ export function createCommandExecutor(adapters: AdapterMap) {
 					throw new Error("Compaction settings are unavailable in this view.");
 				}
 				return adapters.compaction.execute(spec);
+			case "settings":
+				if (!adapters.settings) {
+					throw new Error("Settings are unavailable in this view.");
+				}
+				return adapters.settings.execute(spec);
 			case "dialog":
 				adapters.dialog.execute(spec);
 				break;
@@ -55,6 +62,9 @@ export function createCommandExecutor(adapters: AdapterMap) {
 				adapters.skills.execute(spec);
 				break;
 			case "variants":
+				if (!adapters.variants) {
+					throw new Error("Model variants are unavailable in this view.");
+				}
 				adapters.variants.execute(spec);
 				break;
 			case "agents":

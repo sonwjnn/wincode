@@ -47,7 +47,8 @@ export type ConfigStore = {
 		workspace: string,
 		scope: ConfigScope,
 		path: readonly string[],
-		value: unknown
+		value: unknown,
+		targetPath?: string
 	): Promise<ConfigSnapshot>;
 };
 export type ConfigRuntime = {
@@ -445,8 +446,17 @@ const valueAtPath = (
 const resolveConfigWritePath = (
 	snapshot: ConfigSnapshot,
 	scope: ConfigScope,
-	configPath: readonly string[]
+	configPath: readonly string[],
+	targetPath?: string
 ): string => {
+	if (targetPath !== undefined) {
+		const targetSource = snapshot.sources.find(
+			(source) => source.scope === scope && source.path === targetPath
+		);
+		if (targetSource !== undefined) {
+			return targetSource.path;
+		}
+	}
 	const existingSource = snapshot.sources.findLast(
 		(source) =>
 			source.scope === scope &&
@@ -561,12 +571,17 @@ export const createConfigStore = (
 	return {
 		getSnapshot,
 		refreshSnapshot,
-		setValue: async (workspace, scope, configPath, value) => {
+		setValue: async (workspace, scope, configPath, value, targetPath) => {
 			if (!configPathIsSafe(configPath)) {
 				throw new Error("Config path contains an unsafe segment.");
 			}
 			const snapshot = await getSnapshot(workspace);
-			const target = resolveConfigWritePath(snapshot, scope, configPath);
+			const target = resolveConfigWritePath(
+				snapshot,
+				scope,
+				configPath,
+				targetPath
+			);
 			if (target.length === 0) {
 				throw new Error(`Could not resolve ${scope} config file.`);
 			}

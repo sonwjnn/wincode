@@ -83,6 +83,7 @@ type ChatTextAreaProps = {
 	disabled?: boolean;
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onOpenCompaction?: () => Promise<void> | void;
+	onOpenSettings?: (section?: string) => Promise<void> | void;
 	sessionPromptHistory?: PromptHistoryEntry[];
 	showCompactCommand?: boolean;
 	onSubmit: (
@@ -131,6 +132,7 @@ export function ChatTextArea({
 	disabled = false,
 	onCompact,
 	onOpenCompaction,
+	onOpenSettings,
 	onSubmit,
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
 	showCompactCommand = true,
@@ -185,6 +187,7 @@ export function ChatTextArea({
 	const { executeCommand } = useCommandExecutor(handleSelectedSkillCommand, {
 		onCompact,
 		onOpenCompaction,
+		onOpenSettings,
 	});
 	const mentionSyntaxStyle = useMemo(
 		() =>

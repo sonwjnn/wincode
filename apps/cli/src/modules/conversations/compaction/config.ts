@@ -67,6 +67,7 @@ export type ResolvedCompactionSettings = {
 	overflowRecoveryAvailable: boolean;
 	resolved: CompactionSettings;
 	reserveTokens: number;
+	settingPaths: Readonly<Record<CompactionSettingKey, readonly string[]>>;
 	sources: Readonly<Record<CompactionSettingKey, CompactionSettingSource>>;
 	thresholdTokens: number | null;
 	enabled: boolean;
@@ -204,18 +205,26 @@ const resolveDesiredSettings = (
 	configPath: readonly string[];
 	desired: CompactionSettings;
 	diagnostics: CompactionDiagnostic[];
+	settingPaths: Record<CompactionSettingKey, readonly string[]>;
 	sources: Record<CompactionSettingKey, CompactionSettingSource>;
 } => {
 	const desired: CompactionSettings = { ...DEFAULT_COMPACTION_SETTINGS };
 	const diagnostics: CompactionDiagnostic[] = [];
 	includeConfigDiagnostics(snapshot, diagnostics);
+	const config = snapshot ? getConfigRecord(snapshot) : null;
+	const configPath = config?.path ?? ["compaction"];
+	const settingPaths = Object.fromEntries(
+		Object.keys(DEFAULT_COMPACTION_SETTINGS).map((key) => [
+			key,
+			[...configPath, key],
+		])
+	) as unknown as Record<CompactionSettingKey, readonly string[]>;
 	const sources = Object.fromEntries(
 		Object.keys(DEFAULT_COMPACTION_SETTINGS).map((key) => [
 			key,
 			{ kind: "default" },
 		])
 	) as Record<CompactionSettingKey, CompactionSettingSource>;
-	const config = snapshot ? getConfigRecord(snapshot) : null;
 
 	if (config?.record === null) {
 		diagnostics.push(
@@ -234,7 +243,7 @@ const resolveDesiredSettings = (
 			continue;
 		}
 		const value = config.record[settingKey];
-		const path = [...config.path, settingKey];
+		const path = settingPaths[settingKey];
 		if (!settingValueIsValid(settingKey, value)) {
 			sources[settingKey] = sourceFor(snapshot, path);
 			const valueKind = BOOLEAN_SETTING_KEYS.includes(
@@ -255,12 +264,38 @@ const resolveDesiredSettings = (
 		desired[settingKey] = value as never;
 		sources[settingKey] = sourceFor(snapshot, path);
 	}
+	if (
+		config?.path.length &&
+		config.record &&
+		!Object.hasOwn(config.record, "auto") &&
+		snapshot &&
+		Object.hasOwn(snapshot.document, "auto")
+	) {
+		const legacyPath = ["auto"];
+		const legacyValue = snapshot.document.auto;
+		settingPaths.auto = legacyPath;
+		if (typeof legacyValue === "boolean") {
+			desired.auto = legacyValue;
+			sources.auto = sourceFor(snapshot, legacyPath);
+		} else {
+			sources.auto = sourceFor(snapshot, legacyPath);
+			diagnostics.push(
+				diagnosticFor(
+					snapshot,
+					"invalid-value",
+					legacyPath,
+					"auto must be a boolean."
+				)
+			);
+		}
+	}
 	applySessionOverrides(sessionOverrides, desired, sources, diagnostics);
 
 	return {
 		configPath: config?.path ?? ["compaction"],
 		desired,
 		diagnostics,
+		settingPaths,
 		sources,
 	};
 };
@@ -283,10 +318,8 @@ export const resolveCompactionSettings = (
 			contextLimit = null;
 		}
 	}
-	const { configPath, desired, diagnostics, sources } = resolveDesiredSettings(
-		snapshot,
-		sessionOverrides
-	);
+	const { configPath, desired, diagnostics, settingPaths, sources } =
+		resolveDesiredSettings(snapshot, sessionOverrides);
 	const resolved = { ...desired };
 	let thresholdTokens: number | null = null;
 
@@ -345,6 +378,7 @@ export const resolveCompactionSettings = (
 		overflowRecoveryAvailable: resolved.enabled && resolved.overflowRecovery,
 		resolved,
 		reserveTokens: resolved.reserveTokens,
+		settingPaths,
 		sources,
 		thresholdTokens,
 	};
@@ -430,10 +464,4 @@ export const getCompactionSettingSource = (
 export const resolveCompactionSettingPath = (
 	settings: ResolvedCompactionSettings,
 	key: CompactionSettingKey
-): string[] => {
-	const source = getCompactionSettingSource(settings, key);
-	if (settings.configPath.length === 0) {
-		return source.kind === "config" ? [key] : ["compaction", key];
-	}
-	return [...settings.configPath, key];
-};
+): string[] => [...settings.settingPaths[key]];

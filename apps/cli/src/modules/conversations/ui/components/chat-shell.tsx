@@ -35,6 +35,7 @@ type ChatShellProps = {
 	messages: CodingAgentUIMessage[];
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onOpenCompaction?: () => Promise<void> | void;
+	onOpenSettings?: (section?: string) => Promise<void> | void;
 	promptHistory: PromptHistoryEntry[];
 	onSubmit: (
 		submission: ChatPromptSubmission
@@ -48,6 +49,7 @@ export function ChatShell({
 	messages,
 	onCompact,
 	onOpenCompaction,
+	onOpenSettings,
 	promptHistory,
 	onSubmit,
 }: ChatShellProps) {
@@ -160,6 +162,7 @@ export function ChatShell({
 							<ChatTextArea
 								onCompact={onCompact}
 								onOpenCompaction={onOpenCompaction}
+								onOpenSettings={onOpenSettings}
 								onSubmit={handleSubmit}
 								sessionPromptHistory={promptHistory}
 							/>

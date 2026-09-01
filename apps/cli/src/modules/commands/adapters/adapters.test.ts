@@ -6,6 +6,7 @@ import {
 	ExitAdapter,
 	ModelsAdapter,
 	NewAdapter,
+	SettingsAdapter,
 	SkillsAdapter,
 	VariantsAdapter,
 } from ".";
@@ -94,6 +95,23 @@ describe("DialogAdapter", () => {
 			dialogKey: "mcps",
 		});
 		expect(opened).toEqual([{ key: "mcps", title: "MCPs" }]);
+	});
+});
+describe("SettingsAdapter", () => {
+	test("opens the global settings hub", () => {
+		let opened = false;
+		const adapter = new SettingsAdapter({
+			open: () => {
+				opened = true;
+			},
+		});
+		adapter.execute({
+			description: "",
+			kind: "settings",
+			name: "settings",
+			value: "/settings",
+		});
+		expect(opened).toBe(true);
 	});
 });
 

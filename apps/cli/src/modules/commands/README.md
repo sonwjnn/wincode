@@ -12,12 +12,13 @@ Slash-command registry and dispatch for the CLI chat input.
 3. **Dispatch** — `createCommandExecutor` receives an `AdapterMap` at app bootstrap and
    returns a function that switches on `spec.kind`, delegating to the matching adapter.
 4. **Adapters** — each adapter class captures a side‑effect contract:
-   - `ExitAdapter` → `renderer.destroy()`
-   - `NewAdapter` → TanStack Router navigation
-   - `DialogAdapter` → opens sessions / theme dialogs
-   - `ModelsAdapter` / `VariantsAdapter` / `AgentsAdapter` → open model‑picker /
-     variant‑picker / agent‑picker dialogs
-   - `SkillsAdapter` → opens skill picker and queues selected skill command
+  - `ExitAdapter` → `renderer.destroy()`
+  - `NewAdapter` → TanStack Router navigation
+  - `DialogAdapter` → opens sessions / theme dialogs
+  - `ModelsAdapter` / `VariantsAdapter` / `AgentsAdapter` → open model-picker /
+    variant-picker / agent-picker dialogs
+  - `SettingsAdapter` → opens the global Settings hub
+  - `SkillsAdapter` → opens skill picker and queues selected skill command
 5. **Overlay** — `CommandMenu` renders the matched suggestions below the input. Arrow keys
    highlight, Enter executes.
 
@@ -26,9 +27,8 @@ Slash-command registry and dispatch for the CLI chat input.
 - `COMMANDS`, `CommandSpec`
 - `getFilteredCommands(query)`
 - `createCommandExecutor(adapters)`, `AdapterMap`
-- `CommandMenu`
-- Adapter classes: `ExitAdapter`, `NewAdapter`, `DialogAdapter`, `ModelsAdapter`,
-  `VariantsAdapter`, `AgentsAdapter`, `SkillsAdapter`
+- Adapter classes: `ExitAdapter`, `ConnectAdapter`, `DialogAdapter`, `ModelsAdapter`,
+  `VariantsAdapter`, `AgentsAdapter`, `SettingsAdapter`, `SkillsAdapter`
 
 ## Dependencies
 

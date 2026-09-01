@@ -67,6 +67,35 @@ describe("resolveCompactionSettings", () => {
 		expect(settings.desired.auto).toBe(false);
 	});
 
+	test("surfaces a legacy auto value beside a nested compaction config", () => {
+		const settings = resolveCompactionSettings({
+			snapshot: {
+				diagnostics: [],
+				document: {
+					auto: false,
+					compaction: { reserveTokens: 1000 },
+				},
+				sourceFor: (path) => {
+					if (path[0] === "auto") {
+						return { path: "/workspace/wincode.json", scope: "project" };
+					}
+					if (path[0] === "compaction") {
+						return { path: "/home/user/wincode.json", scope: "global" };
+					}
+					return;
+				},
+				sources: [],
+			},
+		});
+
+		expect(settings.desired.auto).toBe(false);
+		expect(settings.sources.auto).toEqual({
+			kind: "config",
+			path: "/workspace/wincode.json",
+			scope: "project",
+		});
+		expect(settings.settingPaths.auto).toEqual(["auto"]);
+	});
 	test("reports invalid values and lets session overrides reset JSON behavior", () => {
 		const settings = resolveCompactionSettings({
 			contextLimit: 100_000,

@@ -27,10 +27,10 @@ generation.
 ### Compaction
 `/compact [focus]` summarizes completed history into a durable local compaction entry while
 keeping the full transcript visible. This manual command is available only inside an active
-session. The model receives the runtime summary plus recent verbatim messages;
-`/compaction` opens the persistent Auto-compact setting from either HomeView or ChatView. The
-setting updates the existing global or project config source that owns it; a new setting defaults
-to the project `.wincode` source. Automatic threshold maintenance and one-attempt provider-
+session. `/settings` opens the global Settings hub from either HomeView or ChatView, and
+`/compaction` opens the same hub focused on the Compaction section. Auto-compact is persisted
+through ConfigStore independently of conversation history; legacy project overrides are migrated
+when the global preference changes. Automatic threshold maintenance and one-attempt provider-
 overflow replay reuse the same Conversation Compaction module.
 
 ### Input overlays

@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { COMMANDS } from "./commands";
 
 describe("CommandSpec registry", () => {
-	test("has 13 commands with discriminated kinds", () => {
-		expect(COMMANDS).toHaveLength(13);
+	test("has 14 commands with discriminated kinds", () => {
+		expect(COMMANDS).toHaveLength(14);
 	});
 
 	test("does not expose billing commands", () => {
@@ -27,6 +27,11 @@ describe("CommandSpec registry", () => {
 		const cmd = COMMANDS.find((c) => c.value === "/agents");
 		expect(cmd).toBeDefined();
 		expect(cmd?.kind).toBe("agents");
+	});
+	test("/settings is kind: 'settings'", () => {
+		const cmd = COMMANDS.find((c) => c.value === "/settings");
+		expect(cmd).toBeDefined();
+		expect(cmd?.kind).toBe("settings");
 	});
 
 	test("/models is kind: 'models'", () => {

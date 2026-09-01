@@ -13,6 +13,7 @@ import {
 	useAgentRegistry,
 } from "@/modules/agents";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import { useSettingsHubDialog } from "@/modules/settings";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -20,8 +21,8 @@ import { useToast } from "@/shared/providers/toast/toast-provider";
 import {
 	type ConversationCompaction,
 	isCompactionSettingsCommand,
+	isSettingsCommand,
 	parseCompactCommand,
-	useCompactionSettingsDialog,
 } from "../../compaction";
 import { hasPendingToolExecutionStep } from "../../hooks/auto-send-gate";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
@@ -66,11 +67,15 @@ export function ChatView({
 }: ChatScreenProps) {
 	const { agent, model, setAgent, setModel, setVariant, variant } =
 		usePromptConfig();
+	const settingsRuntime = useMemo(
+		() => ({ model, sessionId }),
+		[model, sessionId]
+	);
 	const registry = useAgentRegistry();
 	const { isTopLayer } = useKeyboardLayer();
 	const dialog = useDialog();
 	const { show } = useToast();
-	const openCompactionSettingsDialog = useCompactionSettingsDialog();
+	const openSettings = useSettingsHubDialog(settingsRuntime);
 	const hasPendingApproval = useApprovalPanels().entries.some(
 		(entry) => entry.resolution === undefined
 	);
@@ -303,37 +308,8 @@ export function ChatView({
 		}
 	};
 
-	const openCompactionSettings = async (): Promise<void> => {
-		if (
-			isTurnBusy ||
-			isCompacting ||
-			registry === null ||
-			!isPromptConfigRestored
-		) {
-			show({
-				message:
-					"Compaction settings are unavailable while the conversation is active.",
-				variant: "error",
-			});
-			return;
-		}
-		try {
-			const effective = resolveEffectiveAgentSelection(
-				registry,
-				agent,
-				model,
-				variant
-			);
-			await openCompactionSettingsDialog(effective.model);
-		} catch (error) {
-			show({
-				message:
-					error instanceof Error
-						? error.message
-						: "Could not load compaction settings.",
-				variant: "error",
-			});
-		}
+	const openCompactionSettings = (): void => {
+		openSettings("Compaction");
 	};
 
 	const executeCompactionCommand = (focus?: string) =>
@@ -346,12 +322,16 @@ export function ChatView({
 			return false;
 		}
 		if (!skill && files.length === 0) {
+			if (isSettingsCommand(userText)) {
+				openSettings();
+				return true;
+			}
 			const compactCommand = parseCompactCommand(userText);
 			if (compactCommand) {
 				return executeCompactionCommand(compactCommand.focus);
 			}
 			if (isCompactionSettingsCommand(userText)) {
-				await openCompactionSettings();
+				openCompactionSettings();
 				return true;
 			}
 		}
@@ -491,6 +471,7 @@ export function ChatView({
 					messages={messages}
 					onCompact={executeCompactionCommand}
 					onOpenCompaction={openCompactionSettings}
+					onOpenSettings={openSettings}
 					onSubmit={submitMessage}
 					promptHistory={promptHistory}
 				/>

@@ -13,6 +13,7 @@ import {
 	ExitAdapter,
 	ModelsAdapter,
 	NewAdapter,
+	SettingsAdapter,
 	SkillsAdapter,
 	VariantsAdapter,
 } from "@/modules/commands/adapters";
@@ -58,14 +59,15 @@ export async function copyBrowserAuthorizationUrl(
 	}
 	throw new Error("Failed to copy URL.");
 }
-type CompactionCommandOptions = {
+type CommandExecutorOptions = {
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onOpenCompaction?: () => Promise<void> | void;
+	onOpenSettings?: (section?: string) => Promise<void> | void;
 };
 
 export function useCommandExecutor(
 	onSelectSkill: (command: string) => void,
-	options: CompactionCommandOptions = {}
+	options: CommandExecutorOptions = {}
 ): UseCommandExecutorReturn {
 	const renderer = useRenderer();
 	const router = useRouter();
@@ -77,9 +79,6 @@ export function useCommandExecutor(
 	const { agent, model, setAgent, setModel, setVariant, variant } =
 		usePromptConfig();
 	const supportedModel = findSupportedChatModelSelection(model);
-	if (!supportedModel) {
-		throw new Error("Unsupported model selection.");
-	}
 
 	const execute = useMemo(
 		() =>
@@ -142,6 +141,13 @@ export function useCommandExecutor(
 							throw new Error(
 								"Compaction settings are unavailable in this view."
 							);
+						}),
+				}),
+				settings: new SettingsAdapter({
+					open:
+						options.onOpenSettings ??
+						(() => {
+							throw new Error("Settings are unavailable in this view.");
 						}),
 				}),
 				dialog: new DialogAdapter({
@@ -216,25 +222,27 @@ export function useCommandExecutor(
 							width: SKILLS_DIALOG_WIDTH,
 						}),
 				}),
-				variants: new VariantsAdapter({
-					open: ({ currentModel, currentVariant, onSelectVariant }) =>
-						dialog.open({
-							children: (
-								<VariantsDialogContent
-									currentModel={currentModel}
-									currentVariant={currentVariant}
-									onSelectVariant={onSelectVariant}
-								/>
-							),
-							padding: { bottom: 1, left: 0, right: 0, top: 1 },
-							title: "Select Variant",
-							titleMargin: { left: 4, right: 4 },
-							width: CONNECTION_DIALOG_WIDTH,
-						}),
-					currentModel: supportedModel,
-					currentVariant: variant,
-					setVariant,
-				}),
+				variants: supportedModel
+					? new VariantsAdapter({
+							open: ({ currentModel, currentVariant, onSelectVariant }) =>
+								dialog.open({
+									children: (
+										<VariantsDialogContent
+											currentModel={currentModel}
+											currentVariant={currentVariant}
+											onSelectVariant={onSelectVariant}
+										/>
+									),
+									padding: { bottom: 1, left: 0, right: 0, top: 1 },
+									title: "Select Variant",
+									titleMargin: { left: 4, right: 4 },
+									width: CONNECTION_DIALOG_WIDTH,
+								}),
+							currentModel: supportedModel,
+							currentVariant: variant,
+							setVariant,
+						})
+					: undefined,
 				agents: new AgentsAdapter({
 					open: async ({ currentAgent, onSelectAgent }) => {
 						const providers = await connections.listProviders();
@@ -268,10 +276,12 @@ export function useCommandExecutor(
 			dialog,
 			mcp,
 			model,
+			onSelectSkill,
 			options.onCompact,
 			options.onOpenCompaction,
-			onSelectSkill,
+			options.onOpenSettings,
 			refreshAgentRegistry,
+			renderer,
 			router,
 			setAgent,
 			setModel,

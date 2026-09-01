@@ -1,4 +1,8 @@
-export { isCompactionSettingsCommand, parseCompactCommand } from "./commands";
+export {
+	isCompactionSettingsCommand,
+	isSettingsCommand,
+	parseCompactCommand,
+} from "./commands";
 export type {
 	CompactConversationInput,
 	CompactConversationResult,
@@ -14,8 +18,6 @@ export {
 	rebuildActiveMessages,
 	serializeMessagesForCompaction,
 } from "./compaction";
-export type { CompactionSettingsDialogProps } from "./compaction-settings-dialog";
-export { CompactionSettingsDialogContent } from "./compaction-settings-dialog";
 export type {
 	CompactionConfigurationInput,
 	CompactionDiagnostic,
@@ -70,5 +72,4 @@ export type { CompactionSettingsOperations } from "./use-compaction-settings";
 export {
 	createCompactionSettingsOperations,
 	useCompactionSettings,
-	useCompactionSettingsDialog,
 } from "./use-compaction-settings";

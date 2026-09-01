@@ -28,8 +28,6 @@ import {
 	COMPACTION_REQUEST_OVERHEAD_TOKENS,
 	type CompactConversationInput,
 	type CompactConversationResult,
-	type CompactionSettingKey,
-	type CompactionSettings,
 	type ConversationCompaction,
 	ConversationCompactionError,
 	createConversationCompaction,
@@ -343,11 +341,8 @@ export function useChat(
 	const connections = useConnections();
 	const mcp = useMcp();
 	const config = useConfig();
-	const {
-		getCompactionSettings: getSettingsForModel,
-		persistCompactionSetting: persistSettingForModel,
-		resetCompactionSetting: resetSettingForModel,
-	} = useCompactionSettings();
+	const { getCompactionSettings: getSettingsForModel } =
+		useCompactionSettings();
 	const registry = useAgentRegistry();
 	const {
 		closeApprovals,
@@ -634,16 +629,6 @@ export function useChat(
 	const cancelCompaction = () => {
 		compactionAbortRef.current?.abort();
 	};
-
-	const persistCompactionSetting = (
-		key: CompactionSettingKey,
-		value: CompactionSettings[CompactionSettingKey]
-	): Promise<void> => persistSettingForModel(modelRef.current, key, value);
-
-	const resetCompactionSetting = (
-		key: CompactionSettingKey
-	): Promise<CompactionSettings[CompactionSettingKey]> =>
-		resetSettingForModel(modelRef.current, key);
 
 	const hasPendingTools = (
 		messages: readonly CodingAgentUIMessage[]
@@ -1355,8 +1340,6 @@ export function useChat(
 		getCompactionSettings,
 		interrupt: interruptLatestAssistantMessage,
 		isCompacting,
-		persistCompactionSetting,
-		resetCompactionSetting,
 		messages: displayMessages,
 		status: chat.status,
 		isPreparingMessage,

@@ -15,3 +15,6 @@ export const parseCompactCommand = (text: string): CompactCommand | null => {
 
 export const isCompactionSettingsCommand = (text: string): boolean =>
 	text.trim() === "/compaction";
+
+export const isSettingsCommand = (text: string): boolean =>
+	text.trim() === "/settings";
