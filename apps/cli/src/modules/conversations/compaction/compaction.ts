@@ -560,36 +560,47 @@ const projectMessagesForEstimate = (
 		maxTokens:
 			settings.maxMediaTokens ?? DEFAULT_COMPACTION_ATTACHMENT_BUDGET.maxTokens,
 	};
-	return messages.map((message) => {
-		const parts = message.parts.map((part) => {
-			const reference = getAttachmentReference(part);
-			if (!reference) {
-				return part;
-			}
-			if (reference.available === false) {
-				return {
-					text: formatAttachmentUnavailableMarker(reference, "missing"),
-					type: "text" as const,
-				};
-			}
-			const candidateTokens = estimateAttachmentTokens(reference);
-			const exceedsBudget =
-				attachmentCount >= budget.maxAttachments ||
-				byteCount + reference.byteLength > budget.maxBytes ||
-				tokenCount + candidateTokens > budget.maxTokens;
-			if (exceedsBudget) {
-				return {
-					text: formatAttachmentUnavailableMarker(reference, "omitted"),
-					type: "text" as const,
-				};
-			}
-			attachmentCount += 1;
-			byteCount += reference.byteLength;
-			tokenCount += candidateTokens;
-			return part;
-		});
-		return parts === message.parts ? message : { ...message, parts };
-	});
+	// Mirrors model hydration: charge the newest attachments against the media
+	// budget first so the oldest are omitted when the budget is exhausted.
+	return messages
+		.toReversed()
+		.map((message) => {
+			let changed = false;
+			const parts = message.parts
+				.toReversed()
+				.map((part) => {
+					const reference = getAttachmentReference(part);
+					if (!reference) {
+						return part;
+					}
+					if (reference.available === false) {
+						changed = true;
+						return {
+							text: formatAttachmentUnavailableMarker(reference, "missing"),
+							type: "text" as const,
+						};
+					}
+					const candidateTokens = estimateAttachmentTokens(reference);
+					const exceedsBudget =
+						attachmentCount >= budget.maxAttachments ||
+						byteCount + reference.byteLength > budget.maxBytes ||
+						tokenCount + candidateTokens > budget.maxTokens;
+					if (exceedsBudget) {
+						changed = true;
+						return {
+							text: formatAttachmentUnavailableMarker(reference, "omitted"),
+							type: "text" as const,
+						};
+					}
+					attachmentCount += 1;
+					byteCount += reference.byteLength;
+					tokenCount += candidateTokens;
+					return part;
+				})
+				.toReversed();
+			return changed ? { ...message, parts } : message;
+		})
+		.toReversed();
 };
 
 const appendInputFor = ({

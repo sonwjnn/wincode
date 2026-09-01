@@ -8,6 +8,7 @@ import {
 	type AttachmentMetadataRepository,
 	attachmentReferenceToFilePart,
 	createConversationAttachmentStore,
+	getAttachmentReference,
 } from "../storage/attachment-store";
 import {
 	createConversationCompaction,
@@ -648,4 +649,81 @@ test("resumes the next summary span after a split-turn boundary", async () => {
 	expect(second.entry.firstKeptUiMessageId).toBe("u2");
 	expect(serialized.at(-1)).toContain("recent suffix");
 	expect(serialized.at(-1)).not.toContain("single request");
+});
+
+test("projects the newest attachment against the media budget for tokensAfter", async () => {
+	const root = await mkdtemp(join(tmpdir(), "wincode-compaction-projection-"));
+	const attachmentStore = createConversationAttachmentStore({
+		repository: createAttachmentRepository(),
+		root,
+	});
+	const oldReference = await attachmentStore.ingest({
+		bytes: new Uint8Array([
+			0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
+		]),
+		filename: "old.png",
+		mediaType: "image/png",
+	});
+	const largeBytes = new Uint8Array(5010);
+	largeBytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+	const newReference = await attachmentStore.ingest({
+		bytes: largeBytes,
+		filename: "new.png",
+		mediaType: "image/png",
+	});
+	const store = makeStore();
+	const compaction = createConversationCompaction({
+		attachmentStore,
+		generateId: () => "entry-projection",
+		store,
+		summaryGenerator: mock(async () => ({ text: "projected summary" })),
+		estimateTokens: (messages) =>
+			messages.reduce((total, current) => {
+				const partTokens = current.parts.reduce((sum, part) => {
+					const reference = getAttachmentReference(part);
+					return (
+						sum + (reference ? Math.ceil(reference.byteLength / 1000) + 1 : 1)
+					);
+				}, 0);
+				return total + partTokens;
+			}, 0),
+	});
+	const user = {
+		id: "u1",
+		parts: [
+			attachmentReferenceToFilePart(oldReference),
+			attachmentReferenceToFilePart(newReference),
+		],
+		role: "user",
+	} as unknown as CodingAgentUIMessage;
+	const assistant = {
+		id: "a1",
+		parts: [
+			{ text: "prefix one", type: "text" },
+			{ text: "prefix two", type: "text" },
+			{ text: "recent suffix", type: "text" },
+		],
+		role: "assistant",
+	} as unknown as CodingAgentUIMessage;
+
+	const result = await compaction.compact({
+		conversation: {
+			messages: [user, assistant],
+			sessionId: "session-projection",
+		},
+		model,
+		settings: {
+			enabled: true,
+			keepRecentTokens: 10,
+			maxMediaAttachments: 1,
+			maxMediaBytes: 10_000,
+			maxMediaTokens: 10_000,
+			thresholdTokens: null,
+		},
+		trigger: "manual",
+	});
+	// Newest (large) attachment is retained: summary(1) + marker(1) +
+	// ceil(5010/1000)+1(7) + suffix(1) = 10. Charging oldest-first would omit
+	// the large attachment and report 5 instead.
+	expect(result.entry.tokensAfter).toBe(10);
 });
