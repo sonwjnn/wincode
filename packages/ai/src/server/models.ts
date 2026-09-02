@@ -1,3 +1,4 @@
+import type { ModelTarget } from "../model-target";
 import type {
 	ChatModelSelection,
 	SupportedChatModel,
@@ -9,7 +10,12 @@ import {
 	getChatModelRoute,
 	normalizeChatModelSelection,
 } from "../models";
-import type { ResolvedModel, ResolverOptions } from "./providers/contract";
+import {
+	type ResolvedModel,
+	type ResolverOptions,
+	toAiSdkProviderOptions,
+} from "./providers/contract";
+import { resolveOpenAIChatModel } from "./providers/openai";
 import { modelResolverByProvider } from "./providers/registry";
 
 export type {
@@ -18,6 +24,42 @@ export type {
 } from "./providers/contract";
 export type { OpenAIResolverOptions } from "./providers/openai";
 export { resolveOpenAIChatModel } from "./providers/openai";
+export function resolveAiSdkModelTarget(target: ModelTarget): ResolvedModel {
+	const options: ResolverOptions = {
+		maxOutputTokens: target.maxOutputTokens,
+		variant: target.variant,
+	};
+	let resolved: ResolvedModel;
+	if (target.authorization.kind === "oauth") {
+		if (target.providerId !== "openai") {
+			throw new Error("OAuth authorization is only supported by OpenAI.");
+		}
+		resolved = resolveOpenAIChatModel(
+			target.modelId,
+			{
+				accessToken: target.authorization.accessToken,
+				accountId: target.authorization.accountId,
+			},
+			options
+		);
+	} else {
+		resolved = resolveDirectChatModel(
+			{
+				modelId: target.modelId,
+				providerId: target.providerId,
+			},
+			target.authorization.apiKey,
+			options
+		);
+	}
+	if (target.providerOptions === undefined) {
+		return resolved;
+	}
+	return {
+		...resolved,
+		providerOptions: toAiSdkProviderOptions(target.providerOptions),
+	};
+}
 
 export function resolveDirectChatModel(
 	selection: ChatModelSelection,

@@ -1,11 +1,6 @@
-import type {
-	AgentId,
-	ChatModelSelection,
-	ModelVariant,
-	ResolvedAgentRuntime,
-	SkillContext,
-} from "@wincode/ai";
+import type { AgentId, ResolvedAgentRuntime, SkillContext } from "@wincode/ai";
 import type { FileUIPart } from "@wincode/ai/client";
+import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 
 export type ConversationSendInput = {
 	agent: AgentId;

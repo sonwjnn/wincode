@@ -1,6 +1,6 @@
 import { useRenderer } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
-import { findSupportedChatModelSelection } from "@wincode/ai";
+import { findSupportedChatModelSelection } from "@wincode/ai/models";
 import open from "open";
 import { createElement, useCallback, useMemo } from "react";
 import { useRefreshAgentRegistry } from "@/modules/agents";

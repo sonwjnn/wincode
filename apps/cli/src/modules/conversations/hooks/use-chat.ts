@@ -2,12 +2,9 @@ import { useChat as useAiChat } from "@ai-sdk/react";
 import {
 	type AgentId,
 	buildAgent,
-	type ChatModelSelection,
 	type CodingAgentUIMessage,
 	codingMessageSkillSchema,
 	codingToolDefinitions,
-	defaultChatModelSelection,
-	type ModelVariant,
 	type ResolvedAgentRuntime,
 	type SkillContext,
 	type SkillRequestContext,
@@ -15,6 +12,11 @@ import {
 	sanitizeInterruptedMessagesForModel,
 } from "@wincode/ai";
 import { createUserMessage } from "@wincode/ai/client";
+import {
+	type ChatModelSelection,
+	defaultChatModelSelection,
+	type ModelVariant,
+} from "@wincode/ai/models";
 import {
 	type ChatAddToolOutputFunction,
 	type FileUIPart,

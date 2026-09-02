@@ -1,4 +1,5 @@
-import type { ChatModelSelection, CodingAgentUIMessage } from "@wincode/ai";
+import type { CodingAgentUIMessage } from "@wincode/ai";
+import type { ChatModelSelection } from "@wincode/ai/models";
 import { z } from "zod";
 import type { ModelPricingTable } from "@/modules/model-pricing";
 import { resolveModelPricing } from "@/modules/model-pricing";

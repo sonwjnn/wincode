@@ -1,9 +1,6 @@
-import {
-	type ChatModelSelection,
-	type CodingAgentUIMessage,
-	type CodingMessageUsage,
-	getContextTokens,
-} from "@wincode/ai";
+import type { CodingAgentUIMessage, CodingMessageUsage } from "@wincode/ai";
+import type { ChatModelSelection } from "@wincode/ai/models";
+import { getModelContextTokens } from "@wincode/ai/usage";
 import type { ModelPricingTable } from "@/modules/model-pricing";
 import { resolveModelPricing } from "@/modules/model-pricing";
 import type { ConversationCompaction } from "../compaction";
@@ -86,7 +83,7 @@ export const summarizeSessionUsage = (
 	if (useCompactionContext && latestCompaction !== null) {
 		contextTokens = latestCompaction.tokensAfter;
 	} else if (messageUsage.lastUsage) {
-		contextTokens = getContextTokens(messageUsage.lastUsage);
+		contextTokens = getModelContextTokens(messageUsage.lastUsage);
 	}
 	const contextPercent =
 		contextLimit !== null && contextLimit > 0

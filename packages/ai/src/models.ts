@@ -48,14 +48,14 @@ export type ModelCost = {
 	cacheWrite?: number;
 };
 
-type ModelCatalogEntryBase = {
+export type ModelCatalogEntryBase = {
 	connectionProviderId: ConnectionProviderId;
 	displayName: string;
 	id: string;
 	provider: ModelRuntimeProviderId;
 	variants: readonly ModelVariant[];
 };
-type ModelCatalogEntry =
+export type ModelCatalogEntry =
 	| {
 			[K in Exclude<
 				ModelRuntimeProviderId,
@@ -673,11 +673,17 @@ export const supportedChatModels = [
 
 export type SupportedChatModel = (typeof supportedChatModels)[number];
 export type SupportedChatModelId = SupportedChatModel["id"];
+export type ModelCatalog = readonly SupportedChatModel[];
+
+/** The static product catalog consumed by model-selection callers. */
+export const modelCatalog: ModelCatalog = supportedChatModels;
 
 export type ChatModelSelection = {
 	modelId: string;
 	providerId: ConnectionProviderId;
 };
+/** Focused contract name for a provider/model selection pair. */
+export type ModelSelection = ChatModelSelection;
 
 const chatModelSelectionBaseSchema = z.object({
 	modelId: z.string(),
@@ -693,6 +699,8 @@ export const chatModelSelectionSchema =
 			});
 		}
 	});
+/** Focused contract name for the validated selection schema. */
+export const modelSelectionSchema = chatModelSelectionSchema;
 
 export const supportedChatModelIds = supportedChatModels.map(
 	(model) => model.id

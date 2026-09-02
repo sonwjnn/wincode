@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ChatModelSelection } from "@wincode/ai";
+import type { ChatModelSelection } from "@wincode/ai/models";
 import { updatePromptConfigModel } from "./prompt-config-provider";
 
 const model = (

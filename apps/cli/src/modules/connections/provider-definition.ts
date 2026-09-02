@@ -1,4 +1,4 @@
-import type { ConnectionProviderId } from "@wincode/ai";
+import type { ConnectionProviderId } from "@wincode/ai/models";
 import type { ZodType, z } from "zod";
 import type { ValidationFetch } from "./api-key-validation";
 import {

@@ -1,71 +1,38 @@
 import { createOpenAI, openai } from "@ai-sdk/openai";
+import { resolveModelProviderOptions } from "../../model-provider-options";
 import {
-	type ChatModelSelection,
 	findSupportedChatModelSelection,
-	normalizeModelVariant,
 	type SupportedChatModel,
 } from "../../models";
 import {
 	defineModelResolver,
 	type ResolvedModel,
 	type ResolverOptions,
+	toAiSdkProviderOptions,
 } from "./contract";
 
 type Model = Extract<SupportedChatModel, { provider: "openai" }>;
-const reasoningSummaryModels = new Set<Model["id"]>([
-	"gpt-5.4-mini",
-	"gpt-5.5",
-	"gpt-5.6-sol",
-	"gpt-5.6-terra",
-	"gpt-5.6-luna",
-]);
-const selection = (model: Model): ChatModelSelection => ({
-	modelId: model.id,
-	providerId: model.connectionProviderId,
-});
-const resolveVariantOrThrow = (
-	model: Model,
-	variant: ResolverOptions["variant"]
-) => {
-	if (
-		variant !== undefined &&
-		!normalizeModelVariant(selection(model), variant)
-	) {
-		throw new Error(`Unsupported model variant: openai/${model.id}/${variant}`);
-	}
-	return variant;
-};
-const options = (model: Model, variant?: ResolverOptions["variant"]) => ({
-	openai: {
-		store: false,
-		...(reasoningSummaryModels.has(model.id)
-			? { reasoningSummary: "detailed" }
-			: {}),
-		...(variant === undefined ? {} : { reasoningEffort: variant }),
-	},
-});
 const resolve = (
 	model: Model,
 	provider: ReturnType<typeof createOpenAI>,
 	variant?: ResolverOptions["variant"]
-): ResolvedModel => ({
-	model: provider(model.id),
-	modelId: model.id,
-	provider: "openai",
-	providerOptions: options(model, variant),
-});
+): ResolvedModel => {
+	const resolvedOptions = resolveModelProviderOptions(model, { variant });
+	return {
+		model: provider(model.id),
+		modelId: model.id,
+		provider: "openai",
+		providerOptions: toAiSdkProviderOptions(resolvedOptions.providerOptions),
+	};
+};
 export const openAIResolver = defineModelResolver(
 	"openai",
 	(model): model is Model => model.provider === "openai",
 	{
 		resolveWithApiKey: (model, apiKey, opts) =>
-			resolve(
-				model,
-				createOpenAI({ apiKey }),
-				resolveVariantOrThrow(model, opts.variant)
-			),
+			resolve(model, createOpenAI({ apiKey }), opts.variant),
 		resolveWithEnvironment: (model, opts) =>
-			resolve(model, openai, resolveVariantOrThrow(model, opts.variant)),
+			resolve(model, openai, opts.variant),
 	}
 );
 export type OpenAIResolverOptions = {
@@ -98,11 +65,7 @@ export function resolveOpenAIChatModel(
 		},
 	});
 	return {
-		...resolve(
-			supported,
-			provider,
-			resolveVariantOrThrow(supported, options.variant)
-		),
+		...resolve(supported, provider, options.variant),
 		model: provider.responses(supported.id),
 	};
 }

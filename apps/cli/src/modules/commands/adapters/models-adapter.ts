@@ -1,5 +1,7 @@
-import type { ChatModelSelection } from "@wincode/ai";
-import { supportedChatModels } from "@wincode/ai";
+import {
+	type ChatModelSelection,
+	supportedChatModels,
+} from "@wincode/ai/models";
 import { getConversationStore } from "@/modules/conversations/storage/get-conversation-store";
 import type { CommandSpec } from "../commands";
 

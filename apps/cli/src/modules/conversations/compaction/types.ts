@@ -1,9 +1,5 @@
-import type {
-	ChatModelSelection,
-	CodingAgentUIMessage,
-	CodingMessageUsage,
-	ModelVariant,
-} from "@wincode/ai";
+import type { CodingAgentUIMessage, CodingMessageUsage } from "@wincode/ai";
+import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import type { CompactionAttachmentMetadata } from "../storage/attachment-store";
 export const COMPACTION_TRIGGER_REASONS = [
 	"manual",

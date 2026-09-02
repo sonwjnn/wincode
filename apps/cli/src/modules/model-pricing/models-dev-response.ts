@@ -1,7 +1,4 @@
-import {
-	type ModelRuntimeProviderId,
-	modelRuntimeProviderIds,
-} from "@wincode/ai";
+import type { ModelRuntimeProviderId } from "@wincode/ai/models";
 import { z } from "zod";
 import {
 	type ModelPricingEntry,
@@ -10,10 +7,16 @@ import {
 	modelPricingKey,
 } from "./model-pricing";
 
-const runtimeProviderIds = new Set<string>(modelRuntimeProviderIds);
+const runtimeProviderIds: Readonly<Record<ModelRuntimeProviderId, true>> = {
+	anthropic: true,
+	google: true,
+	openai: true,
+	"opencode-go": true,
+};
 const isModelRuntimeProviderId = (
 	value: string
-): value is ModelRuntimeProviderId => runtimeProviderIds.has(value);
+): value is ModelRuntimeProviderId =>
+	runtimeProviderIds[value as ModelRuntimeProviderId] === true;
 
 const modelsDevLimitSchema = z
 	.object({

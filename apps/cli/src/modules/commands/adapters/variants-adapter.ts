@@ -1,4 +1,4 @@
-import type { ModelVariant, SupportedChatModel } from "@wincode/ai";
+import type { ModelVariant, SupportedChatModel } from "@wincode/ai/models";
 import type { CommandSpec } from "../commands";
 
 export type VariantsAdapterContext = {

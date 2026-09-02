@@ -1,4 +1,4 @@
-import type { ChatModelSelection } from "@wincode/ai";
+import type { ChatModelSelection } from "@wincode/ai/models";
 import type { ReactNode } from "react";
 import type {
 	ConfigOrigin,

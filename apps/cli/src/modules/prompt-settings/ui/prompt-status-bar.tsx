@@ -3,7 +3,7 @@ import {
 	findSupportedChatModelSelection,
 	formatModelLabel,
 	normalizeModelVariant,
-} from "@wincode/ai";
+} from "@wincode/ai/models";
 import { agentLabelFromId, useAgentRegistry } from "@/modules/agents";
 import { connectionProviderDisplayNames } from "@/modules/connections";
 import { AutoApprovalIndicator } from "@/modules/permissions";

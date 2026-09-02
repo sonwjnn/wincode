@@ -3,7 +3,7 @@ import {
 	findSupportedChatModelSelection,
 	type ModelCost,
 	type ModelRuntimeProviderId,
-} from "@wincode/ai";
+} from "@wincode/ai/models";
 import { z } from "zod";
 
 export type ModelPricingEntry = {

@@ -5,6 +5,33 @@
     ".": {
       "default": "./src/shared.ts"
     },
+    "./failures": {
+      "default": "./src/model-failures.ts"
+    },
+    "./model": {
+      "default": "./src/model.ts"
+    },
+    "./model-failures": {
+      "default": "./src/model-failures.ts"
+    },
+    "./model-provider-options": {
+      "default": "./src/model-provider-options.ts"
+    },
+    "./model-target": {
+      "default": "./src/model-target.ts"
+    },
+    "./model-usage": {
+      "default": "./src/model-usage.ts"
+    },
+    "./models": {
+      "default": "./src/models.ts"
+    },
+    "./provider-options": {
+      "default": "./src/model-provider-options.ts"
+    },
+    "./usage": {
+      "default": "./src/model-usage.ts"
+    },
     "./server": {
       "default": "./src/server/index.ts"
     },

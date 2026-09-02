@@ -8,6 +8,7 @@ export { convertMcpToolManifest } from "./mcp-tools";
 export type { ResolvedModel } from "./models";
 export {
 	isSupportedChatModel,
+	resolveAiSdkModelTarget,
 	resolveChatModel,
 	resolveDirectChatModel,
 	resolveOpenAIChatModel,

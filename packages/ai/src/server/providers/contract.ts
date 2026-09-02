@@ -1,5 +1,6 @@
 import type { ProviderOptions } from "@ai-sdk/provider-utils";
 import type { LanguageModel } from "ai";
+import type { ModelProviderOptions } from "../../model-provider-options";
 import type {
 	ModelVariant,
 	SupportedChatModel,
@@ -18,6 +19,9 @@ export type ResolvedModel = {
 	maxOutputTokens?: number;
 	providerOptions?: ProviderOptions;
 };
+export const toAiSdkProviderOptions = (
+	options: ModelProviderOptions | undefined
+): ProviderOptions | undefined => options as ProviderOptions | undefined;
 export type ModelResolver<P extends SupportedProvider> = {
 	provider: P;
 	resolveWithApiKey(

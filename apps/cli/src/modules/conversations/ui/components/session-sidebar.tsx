@@ -1,11 +1,10 @@
 import { TextAttributes } from "@opentui/core";
+import { builtInAgents, type CodingAgentUIMessage } from "@wincode/ai";
 import {
-	builtInAgents,
-	type CodingAgentUIMessage,
 	findSupportedChatModelSelection,
 	formatModelLabel,
-	formatTokenCount,
-} from "@wincode/ai";
+} from "@wincode/ai/models";
+import { formatModelTokenCount } from "@wincode/ai/usage";
 import { useMemo } from "react";
 import {
 	type McpServerState,
@@ -121,7 +120,7 @@ export function SessionSidebar({
 						{usage ? (
 							<>
 								<text fg={colors.textMuted}>
-									{`${formatTokenCount(usage.contextTokens)} tokens`}
+									{`${formatModelTokenCount(usage.contextTokens)} tokens`}
 								</text>
 								{usage.contextPercent === null ? null : (
 									<text
