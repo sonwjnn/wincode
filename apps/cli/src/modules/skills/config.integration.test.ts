@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createConfigStore } from "@/shared/config/config-store";
 import { writeFixture } from "@/shared/config/filesystem-test-utils";
+import { buildSkillRootDescriptors } from "./discovery";
 import { discoverSkills } from "./index";
 
 const skillFile = (name: string, description: string): string =>
@@ -30,6 +31,24 @@ describe("configured Skills", () => {
 			]);
 
 			const configStore = createConfigStore({ homeRoot, xdgConfigHome });
+			const snapshot = await configStore.getSnapshot(workspace);
+			const descriptors = buildSkillRootDescriptors({
+				homeRoot,
+				snapshot,
+				workspace,
+			});
+			const configured = descriptors.filter(
+				({ path }) => path === globalSkills
+			);
+			expect(configured).toMatchObject([
+				{
+					scope: "global",
+					source: "configured",
+				},
+			]);
+			expect(descriptors.map(({ precedence }) => precedence)).toEqual(
+				descriptors.map((_, index) => index)
+			);
 			const skills = await discoverSkills({
 				configStore,
 				homeRoot,
@@ -133,6 +152,24 @@ describe("configured Skills", () => {
 			]);
 
 			const configStore = createConfigStore({ homeRoot, xdgConfigHome });
+			const snapshot = await configStore.getSnapshot(workspace);
+			const configured = buildSkillRootDescriptors({
+				homeRoot,
+				snapshot,
+				workspace,
+			}).filter(({ source }) => source === "configured");
+			expect(configured.slice(-2)).toMatchObject([
+				{
+					path: join(workspace, ".wincode", "first-skills"),
+					scope: "project",
+					source: "configured",
+				},
+				{
+					path: join(workspace, ".wincode", "second-skills"),
+					scope: "project",
+					source: "configured",
+				},
+			]);
 			const skills = await discoverSkills({
 				configStore,
 				homeRoot,

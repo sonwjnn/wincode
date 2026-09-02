@@ -2,20 +2,23 @@ import {
 	buildUsageMessageMetadata,
 	type CodingAgentUIMessage,
 	expandFileMentionPartsForModel,
-	formatSkillUserContext,
+	getChatModelRoute,
+	type ModelVariant,
 	type ResolvedAgentRuntime,
-	type SkillToolDefinition,
 	sanitizeInterruptedMessagesForModel,
 	shellPlatformFromNode,
 } from "@wincode/ai";
 import { getModelFailureMessage } from "@wincode/ai/failures";
-import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
-import { getChatModelRoute } from "@wincode/ai/models";
+import type { ChatModelSelection } from "@wincode/ai/models";
 import {
 	buildShellTool,
 	createCodingAgent,
 	resolveAiSdkModelTarget,
 } from "@wincode/ai/server";
+import {
+	formatSkillUserContext,
+	type SkillToolDefinition,
+} from "@wincode/skills";
 import { type ChatTransport, createAgentUIStream } from "ai";
 import type { Connections } from "@/modules/connections";
 import type { McpCatalogSnapshot } from "@/modules/mcp";

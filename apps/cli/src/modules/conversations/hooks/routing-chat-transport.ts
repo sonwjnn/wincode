@@ -1,9 +1,10 @@
 import type {
 	AgentId,
+	ChatModelSelection,
 	CodingAgentUIMessage,
-	SkillToolDefinition,
+	ModelVariant,
 } from "@wincode/ai";
-import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import type { SkillToolDefinition } from "@wincode/skills";
 import type { ChatTransport } from "ai";
 import type { AgentRegistry } from "@/modules/agents";
 import { prepareAgentCall } from "@/modules/agents";

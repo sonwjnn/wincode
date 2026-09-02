@@ -62,24 +62,6 @@ export {
 } from "./model-usage";
 export * from "./models";
 export { sanitizeInterruptedMessagesForModel } from "./sanitize-interrupted-messages";
-export type {
-	SkillActivation,
-	SkillActivationSource,
-	SkillContext,
-	SkillRequestContext,
-	SkillToolDefinition,
-} from "./skill-context";
-export {
-	formatSkillUserContext,
-	SKILL_ACTIVATION_SOURCES,
-	SKILL_TOOL_INPUT_JSON_SCHEMA,
-	skillActivationSchema,
-	skillActivationSourceSchema,
-	skillContextSchema,
-	skillRequestContextSchema,
-	skillToolDefinitionSchema,
-	skillToolInputSchema,
-} from "./skill-context";
 export { isRenderableEditDiff } from "./tools/edit/diff";
 export { editModelInputJsonSchema } from "./tools/edit/schema";
 export { getReadResourcePath } from "./tools/read/selector";

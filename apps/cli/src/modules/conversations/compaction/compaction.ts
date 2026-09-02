@@ -4,11 +4,8 @@ import {
 } from "@wincode/ai";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { getModelContextTokens } from "@wincode/ai/usage";
+import { isSkillToolPart, sanitizeSkillToolPart } from "@wincode/skills";
 import { generateId, isToolUIPart } from "ai";
-import {
-	isSkillToolPart,
-	sanitizeSkillToolPart,
-} from "@/modules/skills/activation";
 import {
 	type CompactionAttachmentMetadata,
 	type ConversationAttachmentStore,

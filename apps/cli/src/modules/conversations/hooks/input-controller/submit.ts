@@ -1,10 +1,9 @@
-import type { SkillContext } from "@wincode/ai";
 import type { FileUIPart } from "@wincode/ai/client";
+import type { Skill, SkillContext } from "@wincode/skills";
+import { parseSkillInvocation } from "@wincode/skills";
 import { expandCustomCommandTemplate } from "@/modules/custom-commands/expand";
 import { parseCustomCommandInvocation } from "@/modules/custom-commands/invocation";
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
-import type { Skill } from "@/modules/skills";
-import { parseSkillInvocation } from "@/modules/skills";
 import type { ChatPromptSubmission } from "../../utils";
 
 type SkillPrompt = {

@@ -1,19 +1,15 @@
-import type {
-	AgentId,
-	CodingAgentUIMessage,
-	SkillRequestContext,
-} from "@wincode/ai";
 import {
+	type AgentId,
+	type ChatModelSelection,
+	type CodingAgentUIMessage,
 	codingMessageMetadataSchema,
 	codingMessageSkillSchema,
-} from "@wincode/ai";
-import {
-	type ChatModelSelection,
 	type ModelVariant,
 	modelSelectionSchema,
 	normalizeChatModelSelection,
 	normalizeModelVariant,
-} from "@wincode/ai/models";
+} from "@wincode/ai";
+import type { SkillRequestContext } from "@wincode/skills";
 
 /**
  * The conversation-selection module owns every read of message metadata:

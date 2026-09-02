@@ -2,11 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseSkillFile, parseSkillInvocation } from "@wincode/skills";
+import { loadSkills } from "@wincode/skills/filesystem";
 import { createConfigStore } from "@/shared/config/config-store";
 import { discoverSkillCandidates } from "./discovery";
-import { parseSkillFile } from "./frontmatter";
-import { parseSkillInvocation } from "./invocation";
-import { loadSkills } from "./loader";
 
 describe("skills", () => {
 	test("parses and validates frontmatter", () => {
@@ -103,10 +102,34 @@ describe("skills", () => {
 			"---\nname: other\ndescription: Bad\n---\nbody"
 		);
 		const skills = await loadSkills([
-			{ filePath: join(root, "good", "SKILL.md"), root, scope: "project" },
-			{ filePath: join(root, "bad", "SKILL.md"), root, scope: "project" },
-			{ filePath: join(root, "missing", "SKILL.md"), root, scope: "project" },
-			{ filePath: join(root, "mismatch", "SKILL.md"), root, scope: "project" },
+			{
+				filePath: join(root, "good", "SKILL.md"),
+				precedence: 0,
+				root,
+				scope: "project",
+				source: "test",
+			},
+			{
+				filePath: join(root, "bad", "SKILL.md"),
+				precedence: 0,
+				root,
+				scope: "project",
+				source: "test",
+			},
+			{
+				filePath: join(root, "missing", "SKILL.md"),
+				precedence: 0,
+				root,
+				scope: "project",
+				source: "test",
+			},
+			{
+				filePath: join(root, "mismatch", "SKILL.md"),
+				precedence: 0,
+				root,
+				scope: "project",
+				source: "test",
+			},
 		]);
 		expect(skills.map((skill) => skill.name)).toEqual(["good"]);
 	});
