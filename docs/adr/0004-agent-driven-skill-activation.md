@@ -17,10 +17,10 @@ Status: accepted
   lists the name and description of each permitted Skill, and the model loads one by
   exact name. Search, embedding indexes, and router-model latency are deferred until
   measured catalog size or selection quality warrants them.
-	- **One native `skill` tool over separate search and load tools** - a single tool matches
-	  the OpenCode ecosystem contract and progressively discloses the full Skill body only
-	  after selection. The CLI owns the local filesystem, discovery precedence, permissions,
-	  and Skill contents.
+- **One native `skill` tool over separate search and load tools** - a single tool matches
+  the OpenCode ecosystem contract and progressively discloses the full Skill body only
+  after selection. `@wincode/skills` owns local filesystem discovery precedence and Skill
+  contents; the CLI supplies configured roots and owns permission enforcement.
 - **Turn-scoped snapshots over session persistence** - activation snapshots the current
   body and content hash for the rest of one Primary Agent or Subagent execution turn.
   Compaction preserves that snapshot until the turn ends. A later turn discovers and
@@ -61,8 +61,9 @@ Status: accepted
 - Successful activation persists only metadata: name, content hash, source
   (`explicit` or `agent`), and explicit arguments where applicable. Explicit activation
   belongs to the user message; Agent activation belongs to the assistant message that
-  contains the tool call. Raw bodies and raw tool results are not stored. Existing
-  records containing instructions remain readable but new writes use metadata only.
+  contains the tool call. Raw bodies and raw tool results are not stored. The architecture
+  cutover resets local Conversation data, so legacy instruction-bearing records are not
+  migrated.
 - The live model loop receives the full body, while durable tool state contains a
   sanitized result. Telemetry records only name, source, content hash, status, and
   duration; it excludes instructions, arguments, absolute paths, and bundled resource

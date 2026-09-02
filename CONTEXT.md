@@ -30,6 +30,12 @@ The Model Catalog is the static product definition of supported models and
 variants. It references a Connection Provider by ID but does not own credentials
 or authentication behavior.
 
+## Model Target
+
+A Model Target is the effective Connection Provider, model, variant, and minimal
+authorization selected for one Agent Turn. It is transient and must not become a
+Conversation Record. _Avoid_: AI SDK model, persisted model handle
+
 ## Conversation Selection
 
 The last-used Agent, Model, and variant recorded in a conversation's message
@@ -77,6 +83,43 @@ A named AI behavior that can lead a conversation, execute a delegated task, or
 both. Its role and tool permissions are separate concerns. _Avoid_: Coding Mode,
 persona
 
+**Agent Turn**:
+One Primary Agent or Subagent processing one input through any number of Model
+Steps and Tool Calls until completion, failure, or cancellation. _Avoid_: request,
+run, chat turn
+
+**Interrupted Agent Turn**:
+An Agent Turn whose execution stopped before completion, failure, or cancellation.
+Its committed Conversation Records remain, and retrying creates a new Agent Turn.
+_Avoid_: resumable turn, partial Conversation
+
+**Model Step**:
+One model invocation within an Agent Turn. _Avoid_: Agent Turn, iteration
+
+**Tool Call**:
+One request by an Agent to invoke a tool, together with its resulting completion,
+rejection, or failure. _Avoid_: command, action
+
+**Agent Turn Event**:
+A transient fact emitted while an Agent Turn is running for live observation and
+control. It is not a durable Conversation record. _Avoid_: persisted event,
+message
+
+**Conversation Record**:
+The durable representation of committed Conversation content and lifecycle
+outcomes. Token deltas and other incomplete Agent Turn Events are not Conversation
+Records. _Avoid_: stream chunk, event log
+
+**Attachment Reference**:
+A durable Conversation content part that identifies externally stored or
+workspace-backed content without embedding its transient model expansion.
+_Avoid_: expanded attachment, file-content message
+
+**Operational Failure**:
+An expected failure during an Agent Turn, represented with a stable code, source,
+and retry disposition. It is distinct from an invariant violation in Wincode
+code. _Avoid_: exception, provider error
+
 **Built-in Agent**:
 An Agent owned and shipped by Wincode. Built-in Agents have reserved names and
 cannot be replaced by user configuration. _Avoid_: Default Agent, system agent
@@ -118,6 +161,11 @@ safety ask. Coding tools, shell (per-node evaluation with a doom_loop repeat
 guard, ADR-0008), MCP tools, and Skill Activation all resolve through the one
 gate, and the gate owns the deny/reject wording each family emits. _Avoid_:
 approval service, permission middleware
+
+**Resolved Tool**:
+A tool definition whose executable path has been composed through the Tool Gate
+for an Agent Turn. Resolution makes a tool available; Tool Permission is still
+evaluated against each actual Tool Call. _Avoid_: approved tool, raw executor
 
 ## Tool Resource Profile
 
