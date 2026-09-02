@@ -19,9 +19,8 @@ import {
 } from "../tools/shell/schema";
 
 /**
- * The server-declared coding tools. `shell` is deliberately absent: the hosted
- * runtime never advertises it, and the CLI composes the platform-specific
- * shell declaration locally through {@link buildShellServerTool}.
+ * The coding tools shared by the local model loop. `shell` is composed by the
+ * CLI because its syntax depends on the host platform.
  */
 export type CodingServerToolName = Exclude<CodingToolName, "shell">;
 
@@ -44,7 +43,7 @@ const editServerInputSchema = jsonSchema<CodingToolInput<"edit">>(
 	}
 );
 
-export const codingServerTools = {
+export const codingTools = {
 	read: tool({
 		description: codingToolDefinitions.read.description,
 		inputSchema: codingToolDefinitions.read.inputSchema,
@@ -73,11 +72,10 @@ export const codingServerTools = {
 } satisfies CodingServerToolMap;
 
 /**
- * The CLI-only `shell` declaration for the local model loop, composed per
- * platform so the system prompt names the active shell syntax. The hosted
- * runtime never receives it.
+ * Compose the local `shell` tool for the host platform so the model sees the
+ * active shell syntax.
  */
-export const buildShellServerTool = (
+export const buildShellTool = (
 	platform: ShellPlatform
 ): Tool<ShellInput, ShellOutput> =>
 	tool({

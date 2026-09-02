@@ -12,11 +12,10 @@ export {
 	resolveDirectChatModel,
 	resolveOpenAIChatModel,
 	resolveSupportedChatModel,
-	resolveWincodeChatModelSelection,
 } from "./models";
 export {
 	classifyProviderError,
 	isContextOverflowError,
 } from "./provider-error";
 export { createCodingAgentStreamResponse } from "./stream";
-export { buildShellServerTool, codingServerTools } from "./tools";
+export { buildShellTool, codingTools } from "./tools";

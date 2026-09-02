@@ -2,69 +2,55 @@
 
 # wincode
 
-**An agentic AI coding assistant that lives in your terminal — backed by a full-stack, type-safe platform.**
+**A local, terminal-native agentic coding assistant.**
 
-Multi-provider models · MCP tools · usage-based billing · local session history
-
-[Overview](#overview) · [Architecture](#architecture) · [Getting Started](#getting-started) · [Development](#development) · [Deployment](#deployment)
+Multi-provider models · MCP tools · local sessions · configurable agents
 
 </div>
 
----
-
 ## Overview
 
-`wincode` is a Bun-powered monorepo that ships an AI coding agent as a rich terminal UI (TUI), together with the backend and web surface that support it. The CLI talks to model providers directly or routes through a hosted server for authentication, billing, and usage metering.
+`wincode` is a Bun-powered terminal coding agent. Agents, tools, skills, context, permissions, conversations, and model requests run from the local CLI. Model requests use provider APIs directly with credentials configured by the user; Wincode accounts and subscriptions are not required.
 
-- **Terminal-native chat** — a React-rendered TUI (via [OpenTUI](https://github.com/sst/opentui)) with slash commands, file mentions, clipboard image paste, and persisted session history.
-- **Bring your own model** — first-class connections to Anthropic, OpenAI, and Google, via API keys or browser OAuth. Provider onboarding is registry-driven.
-- **MCP support** — connect Model Context Protocol servers (stdio & HTTP) with per-tool approval policies and a live status view.
-- **Agent tools** — file read/write/edit, grep, and directory listing run locally in your working directory; the server only ever sees schema-only tool definitions.
-- **Skills** — local `SKILL.md` workflows invoked explicitly with `/skill-name` or activated on demand by the Agent through a native `skill` tool. Instructions are turn-scoped untrusted context, gated by Tool Permission, and only activation metadata is persisted.
-- **Usage & billing** — end-to-end token accounting with a session usage bar, model-pricing sync, and [Polar](https://polar.sh)-backed subscriptions.
-- **Type-safe end to end** — Hono RPC + tRPC contracts and Zod validation shared across every app.
+- **Terminal-native chat** — a React-rendered TUI via [OpenTUI](https://github.com/sst/opentui), with slash commands, file mentions, clipboard image paste, and persisted session history.
+- **Bring your own model** — connect supported providers such as Anthropic, OpenAI, and Google with provider-owned API keys or supported provider OAuth.
+- **MCP support** — connect Model Context Protocol servers with per-tool approval policies and a live status view.
+- **Local agent tools** — file read/write/edit, grep, directory listing, and shell execution run in the local workspace through permission checks.
+- **Skills** — local `SKILL.md` workflows can be invoked explicitly or activated by an agent through the native skill tool.
+- **Configured agents** — built-in Build and Plan agents plus user-defined agents in `wincode.json` or `wincode.jsonc`.
 
 ## Tech Stack
 
-| Layer   | Technologies                                                                                                                          |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Runtime | [Bun](https://bun.sh) workspaces (catalog), [Turborepo](https://turbo.build)                                                          |
-| CLI     | [OpenTUI](https://github.com/sst/opentui) + React 19, TanStack Router, [AI SDK](https://sdk.vercel.ai), Drizzle (local SQLite/libsql) |
-| Server  | [Hono](https://hono.dev), tRPC, [Better Auth](https://better-auth.com), Polar, Drizzle + [Neon](https://neon.tech) Postgres           |
-| Web     | TanStack Start SPA, shadcn/ui, TailwindCSS v4                                                                                         |
-| Infra   | Cloudflare Workers via [Alchemy](https://alchemy.run) + Wrangler                                                                      |
-| Tooling | [Ultracite](https://github.com/haydenbleasel/ultracite) / Biome, Lefthook                                                             |
+| Layer | Technologies |
+| --- | --- |
+| Runtime | [Bun](https://bun.sh) workspaces |
+| CLI | [OpenTUI](https://github.com/sst/opentui), React 19, TanStack Router, [AI SDK](https://sdk.vercel.ai), Drizzle local SQLite |
+| Shared packages | AI provider adapters, agent schemas, tools, UI primitives, environment validation |
+| Tooling | [Ultracite](https://github.com/haydenbleasel/ultracite) / Biome, Lefthook |
 
 ## Architecture
 
-The repo follows a **vertical-slice** architecture: features are self-contained modules, with a strict `app → modules → shared` dependency direction.
+The maintained application is the CLI. Features follow `app → modules → shared` dependency direction.
 
 ```text
 apps/
-├── cli/       # OpenTUI terminal agent — chat, connections, MCP, billing, sessions
-├── server/    # Hono + tRPC API — auth, billing webhooks, sessions, credentials
-└── web/       # TanStack Start SPA (Cloudflare Workers) — dashboard & auth
+└── cli/       # terminal agent, providers, MCP, tools, sessions
 
 packages/
-├── ai/        # AI SDK provider adapters + shared agent tools (read/write/edit/glob/grep)
-├── auth/      # Better Auth configuration
-├── billing/   # Provider-agnostic billing/usage domain logic
-├── db/        # Drizzle schema + Neon Postgres client
-├── env/       # Validated environment (cli / server / web / ports)
-├── infra/     # Alchemy infrastructure-as-code
-├── ui/        # Shared shadcn/ui primitives
-└── config/    # Shared TypeScript config
+├── ai/        # provider adapters, model catalog, agent schemas, tools
+├── config/    # shared TypeScript configuration
+├── env/       # CLI environment validation
+└── ui/        # shared UI primitives
 ```
 
-> [!NOTE]
-> **Agent tools execute only on the CLI.** Tool _schemas_ are shared through `packages/ai` so the server and CLI agree on their shape, but the file-system runtime runs in your local working directory — the server never touches your files.
+Conversation history and attachments use local storage. No external database or Wincode identity is needed to run the agent.
 
 ## Getting Started
 
 ### Prerequisites
 
 - [Bun](https://bun.sh) `1.2.20+`
-- A PostgreSQL database (a [Neon](https://neon.tech) serverless database is used by default) — required only for the server/web stack
+- An API key or supported provider credential for the model you want to use
 
 ### Install
 
@@ -72,60 +58,22 @@ packages/
 bun install
 ```
 
-### Configure environment
-
-Each app reads its own environment, validated by `@wincode/env`. Populate the relevant `.env` files (for example `apps/server/.env`) with your database URL, auth secrets, provider keys, and billing credentials.
-
-### Set up the database
-
-The server-side schema targets Postgres via Drizzle:
+### Run
 
 ```bash
-bun run db:push       # apply schema to your database
-bun run db:studio     # open Drizzle Studio
+bun run dev:cli
 ```
 
-> [!TIP]
-> The CLI stores conversation history in a **local** SQLite database, migrated automatically on first run — no external database is needed just to use the terminal agent.
+Inside the CLI, use slash commands such as `/connect` to add a provider, `/models` to choose a model, `/mcps` to manage MCP servers, and `/sessions` to browse local history.
 
-## Development
+## Development Commands
 
-Run each surface in its own terminal:
+| Command | Description |
+| --- | --- |
+| `bun run check` | Lint and format check |
+| `bun run fix` | Apply lint and formatting fixes |
+| `bun run check-types` | Type-check every workspace |
+| `bun run test` | Run the surviving test suite |
+| `bun run dev:cli` | Launch the terminal agent |
 
-```bash
-bun run dev:cli       # launch the terminal agent
-bun run dev:server    # API server on http://localhost:3000
-bun run dev:web       # web app on http://localhost:3001
-```
-
-Inside the CLI, use slash commands to manage your session — for example `/connect` to add a provider, `/models` to switch models, `/mcps` to manage MCP servers, and `/sessions` to browse history.
-
-### Common tasks
-
-| Command                      | Description                             |
-| ---------------------------- | --------------------------------------- |
-| `bun run check`              | Lint & format check (Ultracite / Biome) |
-| `bun run fix`                | Auto-fix lint & formatting issues       |
-| `bun run check-types`        | Type-check every workspace              |
-| `bun run test`               | Run unit tests across apps & packages   |
-| `bun run test:integration`   | Run integration tests                   |
-| `bun run build`              | Build all apps                          |
-| `bun run sync:model-pricing` | Refresh the model-pricing snapshot      |
-
-> [!IMPORTANT]
-> Always use **Hono RPC** for requests between apps rather than raw `fetch`, and validate all input with **Zod** (`@hono/zod-validator` on the server, schemas on the client). Run `bun run fix` before committing — a Lefthook pre-commit hook enforces the standards in [`CLAUDE.md`](CLAUDE.md).
-
-## Deployment
-
-Infrastructure is defined as code with [Alchemy](https://alchemy.run) and deployed to Cloudflare Workers:
-
-```bash
-bun run deploy        # provision & deploy infrastructure
-bun run destroy       # tear it down
-```
-
-## Documentation
-
-- [`docs/adding-a-provider.md`](docs/adding-a-provider.md) — provider onboarding guide
-- [`CONTEXT.md`](CONTEXT.md) — domain glossary (connections, providers, model catalog)
-- [`CLAUDE.md`](CLAUDE.md) — coding standards (also at `AGENTS.md`)
+Provider onboarding is documented in [`docs/adding-a-provider.md`](docs/adding-a-provider.md). Domain terminology is documented in [`CONTEXT.md`](CONTEXT.md). Coding standards are documented in [`AGENTS.md`](AGENTS.md).

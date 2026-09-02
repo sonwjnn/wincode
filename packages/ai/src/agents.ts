@@ -1,10 +1,8 @@
 import { z } from "zod";
-import { mcpToolManifestSchema } from "./mcp-tools";
 import { type CodingToolName, codingToolNameSchema } from "./tools/schemas";
 
 export const MAX_AGENT_ID_LENGTH = 64;
 export const MAX_AGENT_INSTRUCTIONS_LENGTH = 12_000;
-const MAX_VISIBLE_CODING_TOOLS = 6;
 export const AGENT_ID_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export const agentIdSchema = z
@@ -62,40 +60,3 @@ export const resolvedAgentRuntimeSchema = z.object({
 });
 
 export type ResolvedAgentRuntime = z.infer<typeof resolvedAgentRuntimeSchema>;
-
-export const agentBillingKindSchema = z.enum(["build", "plan", "custom"]);
-
-export const hostedAgentDescriptorSchema = z
-	.object({
-		billingKind: agentBillingKindSchema,
-		instructions: z.string().min(1).max(MAX_AGENT_INSTRUCTIONS_LENGTH),
-		mcpTools: mcpToolManifestSchema,
-		visibleCodingTools: z
-			.array(codingToolNameSchema)
-			.max(MAX_VISIBLE_CODING_TOOLS)
-			.readonly(),
-	})
-	.strict()
-	.superRefine((agent, context) => {
-		const names = new Set(agent.visibleCodingTools);
-		if (names.size !== agent.visibleCodingTools.length) {
-			context.addIssue({
-				code: "custom",
-				message: "duplicate coding tool name",
-				path: ["visibleCodingTools"],
-			});
-		}
-		// `shell` is a known coding tool name but CLI-only: the hosted runtime
-		// has no local approval path for its side effects, so a descriptor that
-		// tries to execute it on the hosted runtime is rejected.
-		if (agent.visibleCodingTools.includes("shell")) {
-			context.addIssue({
-				code: "custom",
-				message: "shell is CLI-only and cannot execute on the hosted runtime",
-				path: ["visibleCodingTools"],
-			});
-		}
-	});
-
-export type AgentBillingKind = z.infer<typeof agentBillingKindSchema>;
-export type HostedAgentDescriptor = z.infer<typeof hostedAgentDescriptorSchema>;

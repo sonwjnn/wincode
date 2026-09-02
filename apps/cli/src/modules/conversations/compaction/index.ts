@@ -41,8 +41,6 @@ export {
 	recoverContextOverflow,
 } from "./overflow-recovery";
 export type {
-	HostedSummaryGeneratorOptions,
-	SummaryModel,
 	SummaryModelResolver,
 	SummaryTextGenerationOptions,
 	SummaryTextGenerator,
@@ -50,7 +48,6 @@ export type {
 export {
 	COMPACTION_SUMMARY_SYSTEM_PROMPT,
 	createDirectSummaryGenerator,
-	createHostedSummaryGenerator,
 	createLanguageModelSummaryGenerator,
 	resolveDirectSummaryModel,
 } from "./summary-generator";

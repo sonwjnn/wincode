@@ -149,7 +149,7 @@ export const promptHistory = sqliteTable("prompt_history", {
 	>(),
 	createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 });
-export const localConversationSchema = {
+export const conversationSchema = {
 	conversationAttachment,
 	conversationCompaction,
 	conversationMessage,

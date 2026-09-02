@@ -2,7 +2,6 @@ import { z } from "zod";
 import { modelVariantsByProviderModel } from "./generated/model-variants.generated";
 
 export const connectionProviderIds = [
-	"wincode",
 	"openai",
 	"anthropic",
 	"google",
@@ -57,10 +56,6 @@ type ModelCatalogEntryBase = {
 	variants: readonly ModelVariant[];
 };
 type ModelCatalogEntry =
-	| (ModelCatalogEntryBase & {
-			route: "hosted";
-			connectionProviderId: ConnectionProviderId;
-	  })
 	| {
 			[K in Exclude<
 				ModelRuntimeProviderId,
@@ -76,31 +71,10 @@ type ModelCatalogEntry =
 			connectionProviderId: "opencode-go";
 			provider: "opencode-go";
 			sdk: OpenCodeGoSdk;
-			/**
-			 * OpenCode Go variants come from the generated models.dev snapshot
-			 * (model-variants.generated.ts), not the catalog. Entries keep an
-			 * empty list here.
-			 */
 			variants: readonly [];
 	  });
 
 export const supportedChatModels = [
-	{
-		connectionProviderId: "wincode",
-		route: "hosted",
-		displayName: "GPT-5.4 Mini",
-		id: "gpt-5.4-mini",
-		provider: "openai",
-		variants: ["none", "low", "medium", "high", "xhigh"],
-	},
-	{
-		connectionProviderId: "wincode",
-		route: "hosted",
-		displayName: "Gemini 2.5 Flash",
-		id: "gemini-2.5-flash",
-		provider: "google",
-		variants: ["high", "max"],
-	},
 	{
 		connectionProviderId: "openai",
 		route: "direct",
@@ -724,12 +698,12 @@ export const supportedChatModelIds = supportedChatModels.map(
 	(model) => model.id
 ) as [SupportedChatModelId, ...SupportedChatModelId[]];
 export const supportedChatModelIdSchema = z.enum(supportedChatModelIds);
-export const defaultChatModel = { value: "gpt-5.4-mini" } as const satisfies {
+export const defaultChatModel = { value: "o3" } as const satisfies {
 	value: SupportedChatModelId;
 };
 export const defaultChatModelSelection = {
 	modelId: defaultChatModel.value,
-	providerId: "wincode",
+	providerId: "openai",
 } as const satisfies ChatModelSelection;
 
 export const findSupportedChatModel = (
@@ -768,8 +742,7 @@ export const parseCatalogModelSelection = (
 
 export const getChatModelRoute = (
 	selection: ChatModelSelection
-): "hosted" | "direct" | null =>
-	findSupportedChatModelSelection(selection)?.route ?? null;
+): "direct" | null => findSupportedChatModelSelection(selection)?.route ?? null;
 
 /**
  * Catalog variants are a manual override; entries without curated variants
@@ -834,10 +807,6 @@ export const normalizeModelVariantForModel = (
 		: undefined;
 };
 
-const legacyChatModelSelectionAliases = {
-	"gemini-3.5-flash": { modelId: "gemini-2.5-flash", providerId: "wincode" },
-} as const satisfies Record<string, ChatModelSelection>;
-
 export const normalizeChatModelSelection = (
 	selection: string | ChatModelSelection
 ): ChatModelSelection | null => {
@@ -845,24 +814,13 @@ export const normalizeChatModelSelection = (
 		const parsed = chatModelSelectionSchema.safeParse(selection);
 		return parsed.success ? parsed.data : null;
 	}
-	const legacySelection = Object.entries(legacyChatModelSelectionAliases).find(
-		([key]) => key === selection
-	)?.[1];
-	if (legacySelection) {
-		return legacySelection;
-	}
 	const model = findSupportedChatModel(selection);
-	if (!model || model.connectionProviderId !== "wincode") {
-		return null;
-	}
-	return { modelId: model.id, providerId: model.connectionProviderId };
+	return model
+		? { modelId: model.id, providerId: model.connectionProviderId }
+		: null;
 };
 
 export const MODEL_VERSION_SUFFIX = /\s+\d{8}$/;
 
 export const formatModelLabel = (displayName: string): string =>
 	displayName.replace(MODEL_VERSION_SUFFIX, " (latest)");
-
-export const isHostChatModelSelection = (
-	selection: ChatModelSelection
-): boolean => getChatModelRoute(selection) === "hosted";

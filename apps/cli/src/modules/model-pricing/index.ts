@@ -4,7 +4,6 @@ export {
 } from "./context/model-pricing-provider";
 export { fetchModelPricingTable } from "./fetch-model-pricing";
 export {
-	getHostedModelCost,
 	type ModelPricingEntry,
 	type ModelPricingTable,
 	modelPricingKey,

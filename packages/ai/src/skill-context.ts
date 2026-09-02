@@ -15,10 +15,8 @@ export type SkillContext = z.infer<typeof skillContextSchema>;
 export const skillActivationSourceSchema = z.enum(SKILL_ACTIVATION_SOURCES);
 
 /**
- * The Skill payload the CLI sends with a chat request so the model loop can
- * wrap the body into the current user turn. Unlike the persisted activation
- * metadata it carries the full instructions; the hosted server forwards it
- * verbatim and never resolves or persists it.
+ * The Skill payload the local model loop uses to wrap the body into the
+ * current user turn. Persisted activation metadata never contains the body.
  */
 export const skillRequestContextSchema = skillContextSchema.extend({
 	contentHash: z.string().min(1),
@@ -67,9 +65,8 @@ export const SKILL_TOOL_INPUT_JSON_SCHEMA: {
 };
 
 /**
- * The dynamic tool definition the CLI sends to the model loop so the Agent can
- * activate Skills. The description carries the permission-filtered catalog and
- * is built locally; the hosted server only forwards it as an opaque tool.
+ * The dynamic tool definition the local model loop uses to activate Skills.
+ * Its description carries the permission-filtered catalog.
  */
 export const skillToolDefinitionSchema = z
 	.object({

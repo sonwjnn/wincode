@@ -29,7 +29,7 @@ import {
 	messageHasLegacyImageParts,
 	stripAttachmentDisplayMetadata,
 } from "./attachment-store";
-import { createLocalDatabase, type LocalConversationDatabase } from "./client";
+import { type ConversationDatabase, createDatabase } from "./client";
 import {
 	type ConversationSession,
 	type ConversationStore,
@@ -39,7 +39,7 @@ import {
 	UNTITLED_SESSION_TITLE,
 	type UpdateSessionInput,
 } from "./conversation-store";
-import { runLocalMigrations } from "./migrations";
+import { runMigrations } from "./migrations";
 import { resolveLocalAttachmentRoot } from "./path";
 import {
 	conversationCompaction,
@@ -133,7 +133,7 @@ const normalizeInterruptedAssistantMessage = (
 };
 
 const writePromptHistory = (
-	db: LocalConversationDatabase,
+	db: ConversationDatabase,
 	entry: PromptHistoryEntry
 ): void => {
 	if (!entry.text.trim()) {
@@ -180,7 +180,7 @@ const writePromptHistory = (
 };
 
 export const createPromptHistory = (
-	db: LocalConversationDatabase,
+	db: ConversationDatabase,
 	attachmentStore?: ConversationAttachmentStore
 ) => {
 	const get = () =>
@@ -345,7 +345,7 @@ const legacyPersistedMetadataSchema = z
 const hashWorkspace = (rootPath: string): string =>
 	createHash("sha256").update(rootPath).digest("hex").slice(0, 16);
 
-const ensureWorkspace = (db: LocalConversationDatabase, rootPath: string) => {
+const ensureWorkspace = (db: ConversationDatabase, rootPath: string) => {
 	const now = new Date();
 	const workspace = {
 		createdAt: now,
@@ -493,7 +493,7 @@ const restoreAttachmentReferenceParts = (
 	});
 
 const persistExternalizedMessageParts = (
-	db: LocalConversationDatabase,
+	db: ConversationDatabase,
 	sessionId: string,
 	originalMessages: readonly CodingAgentUIMessage[],
 	externalizedMessages: readonly CodingAgentUIMessage[]
@@ -523,9 +523,7 @@ const persistExternalizedMessageParts = (
 	});
 };
 
-const collectLiveAttachmentIds = (
-	db: LocalConversationDatabase
-): Set<string> => {
+const collectLiveAttachmentIds = (db: ConversationDatabase): Set<string> => {
 	const live = new Set<string>();
 	const messageRows = db
 		.select({ parts: conversationMessage.partsJson })
@@ -555,7 +553,7 @@ const collectLiveAttachmentIds = (
 };
 
 const writeMessages = (
-	db: LocalConversationDatabase,
+	db: ConversationDatabase,
 	workspaceId: string,
 	{ agent, messages, model, sessionId, variant }: PersistMessagesInput
 ): void => {
@@ -637,7 +635,7 @@ const writeMessages = (
 };
 
 const appendCompaction = (
-	db: LocalConversationDatabase,
+	db: ConversationDatabase,
 	workspaceId: string,
 	input: AppendConversationCompactionInput
 ): ConversationCompaction =>
@@ -703,13 +701,13 @@ const migrateLegacyMessages = async (
 };
 
 export const createDrizzleConversationStore = (
-	database?: LocalConversationDatabase,
+	database?: ConversationDatabase,
 	options: DrizzleConversationStoreOptions = {}
 ): ConversationStore => {
-	const db = database ?? createLocalDatabase().db;
+	const db = database ?? createDatabase().db;
 
 	if (!database) {
-		runLocalMigrations(db);
+		runMigrations(db);
 	}
 	const attachmentStore =
 		options.attachmentStore ??

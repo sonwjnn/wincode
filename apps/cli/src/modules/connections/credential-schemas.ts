@@ -24,30 +24,11 @@ export const openaiOauthCredentialSchema = z
 		updatedAt: z.string().datetime(),
 	})
 	.strict();
-export const wincodeOauthCredentialSchema = z
-	.object({
-		accessToken: z.string().min(1),
-		clientId: z.string().min(1),
-		kind: z.literal("oauth-session"),
-		expiresAt: z.string().datetime(),
-		resource: z.url(),
-		issuer: z.url(),
-		refreshToken: z.string().min(1),
-		scope: z.string(),
-		tokenType: z.literal("Bearer"),
-		updatedAt: z.string().datetime(),
-	})
-	.strict();
 
 export const openAICredentialSchema = z.discriminatedUnion("kind", [
 	apiKeyCredentialSchema,
 	openaiOauthCredentialSchema,
 ]);
-export const wincodeCredentialSchema = z.discriminatedUnion("kind", [
-	apiKeyCredentialSchema,
-	wincodeOauthCredentialSchema,
-]);
 
 export type ApiKeyCredential = z.infer<typeof apiKeyCredentialSchema>;
 export type OpenAICredential = z.infer<typeof openAICredentialSchema>;
-export type WincodeCredential = z.infer<typeof wincodeCredentialSchema>;

@@ -1,8 +1,6 @@
 import type { ProviderOptions } from "@ai-sdk/provider-utils";
 import {
 	type ChatModelSelection,
-	type CodingMessageUsage,
-	getChatModelRoute,
 	type ModelVariant,
 	toCodingMessageUsage,
 } from "@wincode/ai";
@@ -17,14 +15,8 @@ import {
 	type LanguageModelUsage,
 	type ModelMessage,
 } from "ai";
-import { z } from "zod";
 import type { Connections } from "@/modules/connections";
-import { getServerUrl } from "@/shared/api/hono-client";
-import type {
-	SummaryGenerator,
-	SummaryGeneratorInput,
-	SummaryGeneratorResult,
-} from "./types";
+import type { SummaryGenerator, SummaryGeneratorInput } from "./types";
 
 const MAX_SUMMARY_OUTPUT_TOKENS = 4096;
 
@@ -128,13 +120,6 @@ export const createLanguageModelSummaryGenerator =
 		};
 	};
 
-const getBearerToken = (
-	authorization:
-		| { kind: "api-key"; apiKey: string }
-		| { kind: "bearer"; token: string }
-): string =>
-	authorization.kind === "bearer" ? authorization.token : authorization.apiKey;
-
 export const resolveDirectSummaryModel = async (
 	selection: ChatModelSelection,
 	connections: Connections,
@@ -189,77 +174,3 @@ export const createDirectSummaryGenerator = (
 		resolveModel: (selection, signal, variant) =>
 			resolveDirectSummaryModel(selection, connections, signal, variant),
 	});
-
-const summaryResponseSchema = z
-	.object({
-		text: z.string(),
-		usage: z
-			.object({
-				cacheReadTokens: z.number().int().nonnegative().optional(),
-				cacheWriteTokens: z.number().int().nonnegative().optional(),
-				inputTokens: z.number().int().nonnegative(),
-				outputTokens: z.number().int().nonnegative(),
-				reasoningTokens: z.number().int().nonnegative().optional(),
-				totalTokens: z.number().int().nonnegative().optional(),
-			})
-			.strict()
-			.optional(),
-	})
-	.strict();
-
-export type HostedSummaryGeneratorOptions = {
-	fetch?: typeof globalThis.fetch;
-	getBaseUrl?: () => string;
-	sessionId: string;
-	connections: Connections;
-};
-
-export const createHostedSummaryGenerator =
-	({
-		connections,
-		fetch: fetchImpl = globalThis.fetch,
-		getBaseUrl = getServerUrl,
-		sessionId,
-	}: HostedSummaryGeneratorOptions): SummaryGenerator =>
-	async (input): Promise<SummaryGeneratorResult> => {
-		if (getChatModelRoute(input.model) !== "hosted") {
-			throw new Error("Hosted compaction requires a hosted model selection.");
-		}
-		const authorization = await connections.authorize("wincode", input.signal);
-		const response = await fetchImpl(
-			`${getBaseUrl()}/api/sessions/${encodeURIComponent(sessionId)}/compact-summary`,
-			{
-				body: JSON.stringify({
-					focus: input.focus,
-					variant: input.variant,
-					model: input.model.modelId,
-					previousSummary: input.previousSummary,
-					serializedMessages: input.serializedMessages,
-					summaryMessages: input.summaryMessages,
-				}),
-				headers: {
-					Authorization: `Bearer ${getBearerToken(authorization)}`,
-					"Content-Type": "application/json",
-				},
-				method: "POST",
-				signal: input.signal,
-			}
-		);
-		const body = await response.text();
-		if (!response.ok) {
-			throw new Error(
-				body || `Compaction request failed (${response.status}).`
-			);
-		}
-		const parsed = summaryResponseSchema.safeParse(JSON.parse(body));
-		if (!parsed.success) {
-			throw new Error("Compaction response was invalid.");
-		}
-		const usage: CodingMessageUsage | null = parsed.data.usage
-			? parsed.data.usage
-			: null;
-		return {
-			text: parsed.data.text,
-			...(usage ? { usage } : {}),
-		};
-	};

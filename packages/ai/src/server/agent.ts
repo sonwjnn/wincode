@@ -17,7 +17,7 @@ import type {
 	SkillToolDefinition,
 } from "../skill-context";
 import { convertMcpToolManifest } from "./mcp-tools";
-import { codingServerTools } from "./tools";
+import { codingTools } from "./tools";
 
 export type CodingAgentStepEndEvent = OnStepFinishEvent<ToolSet>;
 export type CodingAgentEndEvent = OnFinishEvent<ToolSet>;
@@ -71,7 +71,7 @@ export const prepareCodingAgentCall = <T extends Record<string, unknown>>(
 		throw new Error("Missing resolved Agent for coding agent call");
 	}
 	const mcpTools = convertMcpToolManifest(options?.mcpTools ?? []);
-	const tools: ToolSet = { ...codingServerTools, ...mcpTools };
+	const tools: ToolSet = { ...codingTools, ...mcpTools };
 	if (skillTool !== undefined) {
 		tools.skill = {
 			type: "dynamic",
@@ -79,8 +79,8 @@ export const prepareCodingAgentCall = <T extends Record<string, unknown>>(
 			inputSchema: jsonSchema(skillTool.inputSchema),
 		};
 	}
-	// The CLI-only shell declaration joins the model loop through this option:
-	// the hosted runtime never passes it, so its manifests keep excluding shell.
+	// Shell is composed by the local CLI so its platform syntax and permission
+	// behavior stay alongside the side-effecting tool.
 	if (shellTool !== undefined) {
 		tools.shell = shellTool;
 	}
@@ -106,8 +106,7 @@ type CreateCodingAgentOptions = {
 	skill?: SkillRequestContext;
 	skillTool?: SkillToolDefinition;
 	/**
-	 * The CLI-only `shell` declaration, composed per platform. The hosted
-	 * runtime never passes it, so its tool manifests keep excluding shell.
+	 * The shell declaration composed by the local CLI for this model loop.
 	 */
 	shellTool?: Tool;
 };
@@ -140,5 +139,5 @@ export const createCodingAgent = ({
 		},
 		providerOptions,
 		stopWhen: stepCountIs(getSafePositiveMaxSteps(maxSteps ?? 20)),
-		tools: codingServerTools,
+		tools: codingTools,
 	});
