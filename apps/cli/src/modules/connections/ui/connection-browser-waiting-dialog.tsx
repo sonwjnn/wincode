@@ -1,4 +1,3 @@
-import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type { ConnectionProviderId as ProviderId } from "@wincode/ai";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -9,6 +8,7 @@ import {
 } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 
 type BrowserConnectCallbacks = {
 	setAuthorizationUrl: (authorizationUrl: string) => void;
@@ -169,12 +169,7 @@ export function ConnectionBrowserWaitingDialogContent({
 			</text>
 			{error ? <text fg={colors.error}>{error}</text> : null}
 			<box flexDirection="row" gap={2} height={1}>
-				<box flexDirection="row" gap={1}>
-					<text fg={colors.text}>c</text>
-					<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-						copy
-					</text>
-				</box>
+				<DialogFooterHint label="copy" shortcut="c" />
 			</box>
 		</box>
 	);

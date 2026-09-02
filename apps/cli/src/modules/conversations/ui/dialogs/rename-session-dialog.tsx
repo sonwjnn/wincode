@@ -1,4 +1,4 @@
-import { type InputRenderable, TextAttributes } from "@opentui/core";
+import type { InputRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { useCallback, useEffect, useRef } from "react";
 import {
@@ -9,6 +9,7 @@ import {
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { getConversationStore } from "../../storage/get-conversation-store";
 
 type RenameSessionDialogProps = {
@@ -79,10 +80,7 @@ export function RenameSessionDialog({
 				textColor={colors.text}
 			/>
 			<box flexDirection="row" gap={2} height={1} marginTop={2}>
-				<text fg={colors.text}>enter</text>
-				<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-					submit
-				</text>
+				<DialogFooterHint label="submit" shortcut="enter" />
 			</box>
 		</box>
 	);

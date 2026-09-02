@@ -6,6 +6,7 @@ import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 import type { ConversationSession } from "../../storage/conversation-store";
@@ -310,29 +311,18 @@ export const SessionsDialogContent = () => {
 					<box flexDirection="row" gap={2} height={1} marginX={4}>
 						{isConfirmDelete ? (
 							<>
-								<text fg={colors.error}>delete</text>
-								<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-									ctrl+d again to confirm
-								</text>
-								<text fg={colors.text}>esc</text>
-								<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-									cancel
-								</text>
+								<DialogFooterHint
+									label="confirm delete"
+									shortcut="ctrl+d again"
+									shortcutColor={colors.error}
+								/>
+								<DialogFooterHint label="cancel" shortcut="esc" />
 							</>
 						) : (
 							<>
-								<text fg={colors.text}>pin/unpin</text>
-								<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-									ctrl+f
-								</text>
-								<text fg={colors.text}>delete</text>
-								<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-									ctrl+d
-								</text>
-								<text fg={colors.text}>rename</text>
-								<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-									ctrl+r
-								</text>
+								<DialogFooterHint label="pin/unpin" shortcut="ctrl+f" />
+								<DialogFooterHint label="delete" shortcut="ctrl+d" />
+								<DialogFooterHint label="rename" shortcut="ctrl+r" />
 							</>
 						)}
 					</box>
@@ -372,13 +362,9 @@ export const SessionsDialogContent = () => {
 			placeholder="Search sessions"
 			renderItem={(item, isSelected, isActive) =>
 				item.kind === "header" ? (
-					<text
-						attributes={TextAttributes.BOLD}
-						fg={colors.text}
-						marginLeft={3}
-					>
-						{item.label}
-					</text>
+					<SelectableDialogItem>
+						<text fg={colors.primary}>{item.label}</text>
+					</SelectableDialogItem>
 				) : (
 					<SessionListItem
 						isActiveRoute={isActive}

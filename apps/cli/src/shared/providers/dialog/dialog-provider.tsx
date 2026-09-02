@@ -231,6 +231,16 @@ function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 				gap={1}
 				height="auto"
 				onMouseDown={(e) => e.stopPropagation()}
+				onSizeChange={() => {
+					const dialogHeight = dialogRef.current?.height;
+					if (!(dialogHeight && dialogHeight > 0)) {
+						return;
+					}
+					initialHeightRef.current = dialogHeight;
+					setAnchoredTop(
+						Math.max(0, Math.floor((dimensions.height - dialogHeight) / 2))
+					);
+				}}
 				paddingBottom={padBottom}
 				paddingLeft={padLeft}
 				paddingRight={padRight}

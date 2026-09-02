@@ -148,6 +148,7 @@ export function useCommandExecutor(
 									padding: { bottom: 1, right: 0, top: 1, left: 0 },
 									titleMargin: { left: 4, right: 4 },
 									title,
+									width: CONNECTION_DIALOG_WIDTH,
 								});
 								break;
 							case "theme":

@@ -7,6 +7,7 @@ import {
 } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { useWatchedPermissionService } from "../permission-service-provider";
 
 // Row 0 is always the auto-approval toggle; grant rows follow it. Selection is a
@@ -121,10 +122,10 @@ export function PermissionsDialogContent() {
 				})
 			)}
 			<box flexDirection="row" gap={2} height={1} marginTop={1}>
-				<text fg={colors.text}>enter</text>
-				<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-					{autoSelected ? "toggle auto approval" : "revoke grant"}
-				</text>
+				<DialogFooterHint
+					label={autoSelected ? "toggle auto approval" : "revoke grant"}
+					shortcut="enter"
+				/>
 			</box>
 		</box>
 	);

@@ -4,6 +4,7 @@ import { redactSensitiveText } from "@/shared/display-sanitize";
 import { useDialogEscape } from "@/shared/providers/dialog/dialog-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 import { useMcp } from "../context/mcp-provider";
@@ -129,7 +130,6 @@ function McpStatusRow({ isLoading, isSelected, row }: McpStatusRowProps) {
  */
 export function McpStatusDialogContent() {
 	const { initialize, reconnect, statuses, toggle } = useMcp();
-	const { colors } = useTheme();
 	const loadingServersRef = useRef(new Set<string>());
 	const mountedRef = useRef(true);
 	const [loadingServers, setLoadingServers] = useState<ReadonlySet<string>>(
@@ -187,11 +187,8 @@ export function McpStatusDialogContent() {
 			emptyText="No MCPs"
 			filterFn={filterFn}
 			footer={
-				<box flexDirection="row" gap={1} height={1} marginX={4}>
-					<text fg={colors.text}>toggle/reconnect</text>
-					<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-						space
-					</text>
+				<box flexDirection="row" gap={2} height={1} marginX={4}>
+					<DialogFooterHint label="toggle/reconnect" shortcut="space" />
 				</box>
 			}
 			getKey={(row) => row.server}

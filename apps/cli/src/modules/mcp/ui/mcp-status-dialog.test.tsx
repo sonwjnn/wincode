@@ -205,7 +205,7 @@ test("dialog renders MCP state and connection status", async () => {
 	expect(frame).toContain("Failed ○");
 	expect(frame).toContain("Connected ✓");
 	expect(frame).not.toContain("✓ Connected");
-	expect(frame).toContain("toggle/reconnect space");
+	expect(frame).toContain("space toggle/reconnect");
 	const headerLine = frame.split("\n").find((line) => line.includes("esc"));
 	const connectionLine = frame
 		.split("\n")

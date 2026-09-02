@@ -76,7 +76,7 @@ const renderSettingsDialog = async (
 	return setup;
 };
 
-test("renders the global settings title, section, value, and description", async () => {
+test("renders aligned sections without redundant value metadata", async () => {
 	const operations: SettingsOperations = {
 		catalog: SETTINGS_CATALOG,
 		getSettings: async () => [createSetting(false)],
@@ -90,7 +90,7 @@ test("renders the global settings title, section, value, and description", async
 	expect(frame).toContain("Compaction");
 	expect(frame).toContain("Auto-compact: off");
 	expect(frame).toContain("Automatically summarize older messages");
-	expect(frame).toContain("Source: default");
+	expect(frame).not.toContain("Value: off · Source: default");
 	await act(() => setup.renderer.destroy());
 });
 

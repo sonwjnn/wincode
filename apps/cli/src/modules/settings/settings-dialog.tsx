@@ -4,6 +4,7 @@ import { useDialogEscape } from "@/shared/providers/dialog/dialog-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 import type {
@@ -391,9 +392,6 @@ export function SettingsDialogContent({
 							<text fg={colors.textMuted}>
 								{selectedSetting.descriptor.description}
 							</text>
-							<text fg={colors.textMuted}>
-								{`Value: ${getValueLabel(selectedSetting.descriptor, selectedSetting.value)} · Source: ${getSourceLabel(selectedSetting)}`}
-							</text>
 							{selectedSetting.unavailableReason ? (
 								<text fg={colors.error}>
 									{selectedSetting.unavailableReason}
@@ -408,15 +406,9 @@ export function SettingsDialogContent({
 						</>
 					) : null}
 					<box flexDirection="row" gap={2}>
-						<text fg={colors.text}>
-							↑↓ <span fg={colors.textMuted}>navigate</span>
-						</text>
-						<text fg={colors.text}>
-							space/enter <span fg={colors.textMuted}>change</span>
-						</text>
-						<text fg={colors.text}>
-							ctrl+r <span fg={colors.textMuted}>reset</span>
-						</text>
+						<DialogFooterHint label="navigate" shortcut="↑↓" />
+						<DialogFooterHint label="change" shortcut="space/enter" />
+						<DialogFooterHint label="reset" shortcut="ctrl+r" />
 					</box>
 				</box>
 			}
@@ -471,9 +463,9 @@ export function SettingsDialogContent({
 			renderItem={(item, isSelected) => {
 				if (item.kind === "section") {
 					return (
-						<text attributes={TextAttributes.BOLD} fg={colors.textMuted}>
-							{item.section}
-						</text>
+						<SelectableDialogItem>
+							<text fg={colors.primary}>{item.section}</text>
+						</SelectableDialogItem>
 					);
 				}
 				const setting = item.setting;

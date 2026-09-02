@@ -7,6 +7,7 @@ import {
 } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import type { ConnectionProviderSummary } from "../contract";
 
 type ConnectionApiKeyDialogContentProps = {
@@ -113,10 +114,10 @@ export function ConnectionApiKeyDialogContent({
 			/>
 			{error ? <text fg={colors.error}>{error}</text> : null}
 			<box flexDirection="row" gap={2} height={1}>
-				<text fg={colors.text}>{isSubmitting ? "..." : "enter"}</text>
-				<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-					{isSubmitting ? "saving" : "save key"}
-				</text>
+				<DialogFooterHint
+					label={isSubmitting ? "saving" : "save key"}
+					shortcut={isSubmitting ? "..." : "enter"}
+				/>
 			</box>
 		</box>
 	);

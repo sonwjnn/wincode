@@ -7,6 +7,8 @@ import type { SettingRuntimeContext, SettingsOperations } from "./types";
 
 const EMPTY_SETTING_RUNTIME_CONTEXT: SettingRuntimeContext = {};
 
+const SETTINGS_DIALOG_WIDTH = 60;
+
 export function useSettingsOperations(
 	runtime: SettingRuntimeContext = EMPTY_SETTING_RUNTIME_CONTEXT
 ): SettingsOperations {
@@ -39,6 +41,7 @@ export function useSettingsHubDialog(
 				padding: { bottom: 1, left: 0, right: 0, top: 1 },
 				title: "Settings",
 				titleMargin: { left: 4, right: 4 },
+				width: SETTINGS_DIALOG_WIDTH,
 			});
 		},
 		[dialog, operations]
