@@ -1,10 +1,8 @@
 import { homedir } from "node:os";
 import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
-import { getChatModelRoute } from "@wincode/ai";
 import { resolveWorkspaceRoot } from "@wincode/ai/workspace";
-import { type ReactNode, useEffect, useReducer } from "react";
+import { useEffect, useReducer } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
-import { BillingProvider } from "@/modules/billing";
 import { ConnectionsProvider, createConnections } from "@/modules/connections";
 import { createMcpRegistry, McpProvider } from "@/modules/mcp";
 import { ModelPricingProvider } from "@/modules/model-pricing";
@@ -12,10 +10,7 @@ import {
 	createPermissionService,
 	PermissionServiceProvider,
 } from "@/modules/permissions";
-import {
-	PromptConfigProvider,
-	usePromptConfig,
-} from "@/modules/prompt-settings/context/prompt-config-provider";
+import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { parseCliOptions } from "@/shared/cli-options";
 import { CopyOnSelect } from "@/shared/clipboard/copy-on-select";
 import { ConfigProvider } from "@/shared/config/config-provider";
@@ -26,9 +21,6 @@ import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboar
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 
 const connections = createConnections();
-// The workspace root walks up to the nearest `.git` so launching the CLI from
-// a repository subdirectory still places the whole repository in the sandbox
-// (ADR-0005), which shell-dependent Skills rely on for their working directory.
 const workspace = resolveWorkspaceRoot(process.cwd());
 const configStore = createConfigStore();
 const configContext = Object.freeze({
@@ -36,50 +28,24 @@ const configContext = Object.freeze({
 	homeRoot: homedir(),
 	workspace,
 });
-// Process-lifetime infrastructure is composed once and injected into modules.
 const mcpRegistry = createMcpRegistry({ configStore, workspace });
-// The Permission service is workspace- and process-scoped: one instance owns the
-// in-memory temporary grants and auto-approval flag shared across every Agent and
-// conversation. Auto approval starts enabled only when launched with `--auto`.
 const permissionService = createPermissionService(
 	parseCliOptions(process.argv)
 );
 
-function BillingComposition({ children }: { children: ReactNode }) {
-	const { model } = usePromptConfig();
-	return (
-		<BillingProvider enabled={getChatModelRoute(model) === "hosted"}>
-			{children}
-		</BillingProvider>
-	);
-}
-
 export function RootLayout() {
 	const router = useRouter();
 	const [, forceUpdate] = useReducer((x) => x + 1, 0);
-
-	const currentPath = useRouterState({
-		select: (s) => s.location.pathname,
-	});
-
+	const currentPath = useRouterState({ select: (s) => s.location.pathname });
 	useEffect(() => {
-		const updateAfterLoadStarts = () => {
-			setTimeout(forceUpdate, 0);
-		};
-
-		const unsubscribeBeforeLoad = router.subscribe("onBeforeLoad", () => {
-			updateAfterLoadStarts();
-		});
-		const unsubscribeResolved = router.subscribe("onResolved", () => {
-			updateAfterLoadStarts();
-		});
-
+		const update = () => setTimeout(forceUpdate, 0);
+		const before = router.subscribe("onBeforeLoad", update);
+		const resolved = router.subscribe("onResolved", update);
 		return () => {
-			unsubscribeBeforeLoad();
-			unsubscribeResolved();
+			before();
+			resolved();
 		};
 	}, [router]);
-
 	return (
 		<ConfigProvider value={configContext}>
 			<ToastProvider>
@@ -90,27 +56,19 @@ export function RootLayout() {
 								<ApprovalPanelsProvider>
 									<PromptConfigProvider>
 										<ModelPricingProvider>
-											<BillingComposition>
-												<DialogProvider>
-													<McpProvider
-														closeRegistryOnUnmount={false}
-														createRegistry={() => mcpRegistry}
-														refreshKey={currentPath}
-														workspace={workspace}
-													>
-														<CopyOnSelect />
-														{/*
-														 * Approval panels render inline through the shared registry,
-														 * while app dialogs mount through this inner DialogProvider so
-														 * dialog content can consume useMcp (status dialog, approvals
-														 * opened by the command executor).
-														 */}
-														<DialogProvider>
-															<Outlet key={currentPath} />
-														</DialogProvider>
-													</McpProvider>
-												</DialogProvider>
-											</BillingComposition>
+											<DialogProvider>
+												<McpProvider
+													closeRegistryOnUnmount={false}
+													createRegistry={() => mcpRegistry}
+													refreshKey={currentPath}
+													workspace={workspace}
+												>
+													<CopyOnSelect />
+													<DialogProvider>
+														<Outlet key={currentPath} />
+													</DialogProvider>
+												</McpProvider>
+											</DialogProvider>
 										</ModelPricingProvider>
 									</PromptConfigProvider>
 								</ApprovalPanelsProvider>

@@ -17,11 +17,10 @@ Status: accepted
   lists the name and description of each permitted Skill, and the model loads one by
   exact name. Search, embedding indexes, and router-model latency are deferred until
   measured catalog size or selection quality warrants them.
-- **One native `skill` tool over separate search and load tools** - a single tool matches
-  the OpenCode ecosystem contract and progressively discloses the full Skill body only
-  after selection. The CLI executes the tool because it owns the local filesystem,
-  discovery precedence, permissions, and Skill contents; hosted servers receive neither
-  raw permission rules nor a copy of the catalog.
+	- **One native `skill` tool over separate search and load tools** - a single tool matches
+	  the OpenCode ecosystem contract and progressively discloses the full Skill body only
+	  after selection. The CLI owns the local filesystem, discovery precedence, permissions,
+	  and Skill contents.
 - **Turn-scoped snapshots over session persistence** - activation snapshots the current
   body and content hash for the rest of one Primary Agent or Subagent execution turn.
   Compaction preserves that snapshot until the turn ends. A later turn discovers and

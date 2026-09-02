@@ -7,7 +7,6 @@ import type {
 import { agentIdSchema } from "@wincode/ai";
 import { useEffect, useState } from "react";
 import { z } from "zod";
-import { useBilling } from "@/modules/billing";
 import {
 	type ConversationCompaction,
 	rebuildActiveMessages,
@@ -40,7 +39,6 @@ export const Route = createFileRoute("/sessions/$id")({
 });
 
 function SessionRoute() {
-	const { refresh: refreshBilling } = useBilling();
 	const { colors } = useTheme();
 	const { id } = Route.useParams();
 	const [messages, setMessages] = useState<CodingAgentUIMessage[] | null>(null);
@@ -122,9 +120,6 @@ function SessionRoute() {
 			initialMessages={messages}
 			initialModel={sessionConfig.model}
 			initialVariant={sessionConfig.variant}
-			onHostedCompletion={() => {
-				refreshBilling().catch(() => undefined);
-			}}
 			sessionId={id}
 			sessionTitle={sessionTitle}
 		/>

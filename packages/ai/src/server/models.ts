@@ -62,30 +62,6 @@ export function isSupportedChatModelSelection(
 ): boolean {
 	return findSupportedChatModelSelection(selection) !== null;
 }
-export function isHostChatModelSelection(
-	selection: ChatModelSelection
-): boolean {
-	return getChatModelRoute(selection) === "hosted";
-}
-export function resolveHostChatModelSelection(
-	modelId: string
-): ChatModelSelection {
-	const selection = normalizeChatModelSelection(modelId);
-	if (!selection || getChatModelRoute(selection) !== "hosted") {
-		throw new Error(`Unsupported host model: ${modelId}`);
-	}
-	return selection;
-}
-export function resolveWincodeChatModelSelection(
-	modelId: string
-): SupportedChatModel {
-	const s = resolveHostChatModelSelection(modelId);
-	const m = findSupportedChatModelSelection(s);
-	if (!m || m.route !== "hosted") {
-		throw new Error(`Unsupported host model: ${modelId}`);
-	}
-	return m;
-}
 export function resolveChatModel(modelId: string): ResolvedModel {
 	const model = findSupportedChatModel(modelId);
 	if (!model) {

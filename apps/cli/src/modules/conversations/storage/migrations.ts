@@ -1,12 +1,12 @@
 import { join } from "node:path";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
-import type { LocalConversationDatabase } from "./client";
+import type { ConversationDatabase } from "./client";
 
-export const localMigrationsFolder = join(
+export const migrationsFolder = join(
 	import.meta.dir,
 	"../../../../drizzle/local"
 );
 
-export const runLocalMigrations = (db: LocalConversationDatabase): void => {
-	migrate(db, { migrationsFolder: localMigrationsFolder });
+export const runMigrations = (db: ConversationDatabase): void => {
+	migrate(db, { migrationsFolder });
 };

@@ -5,7 +5,6 @@ import {
 	findSupportedChatModelSelection,
 	formatModelLabel,
 	formatTokenCount,
-	formatUsdAmount,
 } from "@wincode/ai";
 import { useMemo } from "react";
 import {
@@ -128,11 +127,6 @@ export function SessionSidebar({
 									<text
 										fg={isContextWarning ? colors.error : colors.textMuted}
 									>{`${usage.contextPercent}% used`}</text>
-								)}
-								{usage.costUsd === null ? null : (
-									<text fg={colors.textMuted}>
-										{`${formatUsdAmount(usage.costUsd)} spent`}
-									</text>
 								)}
 							</>
 						) : (

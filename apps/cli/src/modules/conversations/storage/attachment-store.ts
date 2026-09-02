@@ -13,7 +13,7 @@ import type { CodingAgentUIMessage } from "@wincode/ai";
 import type { FileUIPart } from "@wincode/ai/client";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import type { LocalConversationDatabase } from "./client";
+import type { ConversationDatabase } from "./client";
 import { conversationAttachment } from "./schema";
 
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -115,7 +115,7 @@ const toAttachmentMetadataRecord = (
 });
 
 export const createDrizzleAttachmentMetadataRepository = (
-	db: LocalConversationDatabase
+	db: ConversationDatabase
 ): AttachmentMetadataRepository => ({
 	delete: (attachmentId) => {
 		db.delete(conversationAttachment)

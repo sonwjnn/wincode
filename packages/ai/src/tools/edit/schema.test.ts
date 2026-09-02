@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { codingServerTools } from "../../server/tools";
+import { codingTools } from "../../server/tools";
 import { editInputSchema, editOutputSchema } from "./schema";
 
 describe("editInputSchema", () => {
 	test("requires an edit body in the model-facing JSON schema", async () => {
-		const { inputSchema } = codingServerTools.edit;
+		const { inputSchema } = codingTools.edit;
 		if (!("jsonSchema" in inputSchema)) {
 			throw new Error("Edit server tool must expose its model JSON schema");
 		}

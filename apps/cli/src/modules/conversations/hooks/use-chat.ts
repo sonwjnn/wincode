@@ -7,7 +7,6 @@ import {
 	codingMessageSkillSchema,
 	codingToolDefinitions,
 	defaultChatModelSelection,
-	getChatModelRoute,
 	type ModelVariant,
 	type ResolvedAgentRuntime,
 	type SkillContext,
@@ -32,12 +31,10 @@ import {
 	ConversationCompactionError,
 	createConversationCompaction,
 	createDirectSummaryGenerator,
-	createHostedSummaryGenerator,
 	estimateCompactionTokens,
 	isCompactionSummaryMessage,
 	isContextOverflowError,
 	recoverContextOverflow,
-	type SummaryGeneratorInput,
 	useCompactionSettings,
 } from "@/modules/conversations/compaction";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
@@ -160,14 +157,6 @@ export const sanitizeSkillToolParts = (
 			),
 		};
 	});
-export const notifyHostedCompletion = (
-	model: ChatModelSelection,
-	onHostedCompletion?: () => void
-): void => {
-	if (getChatModelRoute(model) === "hosted") {
-		onHostedCompletion?.();
-	}
-};
 export const findCurrentTurnAssistantIndex = (
 	messages: CodingAgentUIMessage[]
 ): number => {
@@ -334,7 +323,6 @@ export const activateExplicitSkill = async (
 export function useChat(
 	sessionId: string,
 	initialMessages: CodingAgentUIMessage[],
-	onHostedCompletion?: () => void,
 	initialActiveMessages: CodingAgentUIMessage[] = initialMessages,
 	initialCompactions: ConversationCompaction[] = []
 ) {
@@ -522,17 +510,10 @@ export function useChat(
 			Math.ceil(serializedContext.length / 4)
 		);
 	}, []);
-	const summaryGenerator = useMemo(() => {
-		const direct = createDirectSummaryGenerator(connections);
-		const hosted = createHostedSummaryGenerator({
-			connections,
-			sessionId,
-		});
-		return (input: SummaryGeneratorInput) =>
-			getChatModelRoute(input.model) === "hosted"
-				? hosted(input)
-				: direct(input);
-	}, [connections, sessionId]);
+	const summaryGenerator = useMemo(
+		() => createDirectSummaryGenerator(connections),
+		[connections]
+	);
 	const compactionModule = useMemo(
 		() =>
 			createConversationCompaction({
@@ -773,7 +754,6 @@ export function useChat(
 			if (isAbort || isError) {
 				return;
 			}
-			notifyHostedCompletion(modelRef.current, onHostedCompletion);
 			maintainAfterTurn(messages, modelRef.current, variantRef.current);
 		},
 		onError: (providerError) => {

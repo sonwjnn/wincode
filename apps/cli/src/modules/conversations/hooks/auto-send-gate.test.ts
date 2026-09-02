@@ -151,7 +151,7 @@ type DynamicToolPart = Extract<
 
 const assistantMetadata: CodingAgentUIMessage["metadata"] = {
 	agent: "build",
-	model: { modelId: "gpt-5.4-mini", providerId: "wincode" },
+	model: { modelId: "o3", providerId: "openai" },
 };
 
 const assistantMessageWithTool = (

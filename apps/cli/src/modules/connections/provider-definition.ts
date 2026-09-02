@@ -8,20 +8,12 @@ import {
 	validateOpenCodeGoKey,
 } from "./api-key-validation";
 import {
-	acquireWincodeBrowserCredential,
-	getWincodeBrowserConfig,
-} from "./connect-wincode-browser";
-import {
 	type ApiKeyCredential,
 	apiKeyCredentialSchema,
 	type ConnectionProgress,
+	type OpenAICredential,
 	openAICredentialSchema,
-	wincodeCredentialSchema,
 } from "./credential-schemas";
-import {
-	refreshWincodeOAuthCredential,
-	validateWincodeApiKey,
-} from "./hosted-auth";
 import {
 	acquireOpenAIBrowserCredential,
 	refreshOpenAIOAuthCredential,
@@ -44,14 +36,8 @@ export type ProviderAdapterDependencies = {
 		apiKey: string,
 		signal?: AbortSignal
 	) => Promise<void>;
-	validateWincodeApiKey?: (
-		apiKey: string,
-		signal?: AbortSignal
-	) => Promise<void>;
 	acquireOpenAIBrowserCredential?: typeof acquireOpenAIBrowserCredential;
-	acquireWincodeBrowserCredential?: typeof acquireWincodeBrowserCredential;
 	refreshOpenAIOAuthCredential?: typeof refreshOpenAIOAuthCredential;
-	refreshWincodeOAuthCredential?: typeof refreshWincodeOAuthCredential;
 };
 export type ProviderMethod = "api-key" | "browser";
 export type Request<
@@ -76,12 +62,6 @@ type OpenAIAuthorization = Extract<
 	Authorization,
 	{ kind: "api-key" | "oauth" }
 >;
-type WincodeAuthorization = Extract<
-	Authorization,
-	{ kind: "api-key" | "bearer" }
->;
-type OpenAICredential = z.output<typeof openAICredentialSchema>;
-type WincodeCredential = z.output<typeof wincodeCredentialSchema>;
 export type ProviderDefinition<
 	P extends ConnectionProviderId,
 	Schema extends ZodType,
@@ -127,14 +107,12 @@ const names = {
 	google: "Google",
 	"opencode-go": "OpenCode Go",
 	openai: "OpenAI",
-	wincode: "Wincode",
 } as const;
 const methods = {
 	anthropic: ["api-key"],
 	google: ["api-key"],
 	"opencode-go": ["api-key"],
 	openai: ["api-key", "browser"],
-	wincode: ["api-key", "browser"],
 } as const;
 const summary = <P extends ConnectionProviderId, C extends { kind: string }>(
 	id: P,
@@ -262,55 +240,4 @@ export const createOpenAIProviderDefinition = (
 			};
 		},
 		status: (credential) => summary("openai", credential),
-	});
-export const createWincodeProviderDefinition = (
-	deps: ProviderAdapterDependencies
-) =>
-	defineProvider({
-		id: "wincode",
-		displayName: names.wincode,
-		methods: methods.wincode,
-		credentialSchema: wincodeCredentialSchema,
-		connect: async (request) => {
-			if (request.method === "browser") {
-				const config = getWincodeBrowserConfig();
-				return (
-					deps.acquireWincodeBrowserCredential ??
-					acquireWincodeBrowserCredential
-				)({
-					...request,
-					onStatus: request.onProgress,
-					openBrowser: false,
-					issuer: config.issuer,
-					clientId: config.clientId,
-					redirectUri: config.redirectUri,
-					resource: config.resource,
-				});
-			}
-			return apiKey(
-				request,
-				deps.validateWincodeApiKey ?? validateWincodeApiKey
-			);
-		},
-		authorize: async (
-			credential,
-			signal?: AbortSignal
-		): Promise<{
-			authorization: WincodeAuthorization;
-			replacementCredential?: WincodeCredential;
-		}> => {
-			if (credential.kind === "api-key") {
-				return {
-					authorization: { kind: "api-key", apiKey: credential.apiKey },
-				};
-			}
-			const next = await (
-				deps.refreshWincodeOAuthCredential ?? refreshWincodeOAuthCredential
-			)(credential, signal);
-			return {
-				authorization: { kind: "bearer", token: next.accessToken },
-				replacementCredential: next === credential ? undefined : next,
-			};
-		},
-		status: (credential) => summary("wincode", credential),
 	});

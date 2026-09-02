@@ -13,7 +13,6 @@ export type {
 	ApiKeyCredential,
 	ConnectionProgress,
 	OpenAICredential,
-	WincodeCredential,
 } from "./credential-schemas";
 export type {
 	AuthorizationByProvider,
@@ -36,7 +35,7 @@ export type ProviderAdapter<P extends ConnectionProviderId> =
 export type ProviderAdapterMap = RegistryAdapterMap;
 export type BrowserCapableConnectionProviderId = Extract<
 	ConnectionProviderId,
-	"openai" | "wincode"
+	"openai"
 >;
 export const isBrowserCapableProvider = (
 	provider: Pick<ConnectionProviderSummary, "id" | "methods">

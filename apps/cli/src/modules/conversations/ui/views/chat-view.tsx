@@ -43,7 +43,6 @@ type ChatScreenProps = {
 	initialVariant?: ModelVariant;
 	sessionId: string;
 	sessionTitle: string;
-	onHostedCompletion?: () => void;
 };
 
 export const hasChatPromptContent = ({
@@ -62,7 +61,6 @@ export function ChatView({
 	initialVariant,
 	sessionId,
 	sessionTitle,
-	onHostedCompletion,
 }: ChatScreenProps) {
 	const { agent, model, setAgent, setModel, setVariant, variant } =
 		usePromptConfig();
@@ -110,7 +108,6 @@ export function ChatView({
 	} = useChat(
 		sessionId,
 		initialMessages,
-		onHostedCompletion,
 		initialActiveMessages,
 		initialCompactions
 	);

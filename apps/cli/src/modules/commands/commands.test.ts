@@ -6,11 +6,6 @@ describe("CommandSpec registry", () => {
 		expect(COMMANDS).toHaveLength(13);
 	});
 
-	test("does not expose billing commands", () => {
-		expect(COMMANDS.some(({ value }) => value === "/upgrade")).toBe(false);
-		expect(COMMANDS.some(({ value }) => value === "/usage")).toBe(false);
-	});
-
 	test("/exit is kind: 'exit'", () => {
 		const cmd = COMMANDS.find((c) => c.value === "/exit");
 		expect(cmd).toBeDefined();

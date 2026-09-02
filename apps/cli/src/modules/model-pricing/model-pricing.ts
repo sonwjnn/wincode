@@ -4,7 +4,6 @@ import {
 	type ModelCost,
 	type ModelRuntimeProviderId,
 } from "@wincode/ai";
-import { billingPricebook } from "@wincode/billing";
 import { z } from "zod";
 
 export type ModelPricingEntry = {
@@ -41,27 +40,6 @@ export const modelPricingKey = (
 	modelId: string
 ): string => `${provider}/${modelId}`;
 
-const MICROS_PER_MILLION = 1_000_000n;
-const microsToUsdPerMillion = (micros: bigint): number =>
-	Number(micros) / Number(MICROS_PER_MILLION);
-
-/**
- * Hosted (`wincode`) prices come from the billing pricebook, because the price
- * we charge users is our margin, not the underlying provider's list price.
- */
-export const getHostedModelCost = (modelId: string): ModelCost | undefined => {
-	const entry =
-		billingPricebook.models[modelId as keyof typeof billingPricebook.models];
-	if (!entry) {
-		return;
-	}
-	return {
-		input: microsToUsdPerMillion(entry.inputMicrosPerMillionTokens),
-		output: microsToUsdPerMillion(entry.outputMicrosPerMillionTokens),
-		cacheRead: microsToUsdPerMillion(entry.cacheReadMicrosPerMillionTokens),
-	};
-};
-
 /**
  * Resolves the pricing entry for a model selection. `null` when the model is
  * unknown to the catalog (the footer should hide in that case).
@@ -79,9 +57,6 @@ export const resolveModelPricing = (
 	if (!fromTable) {
 		return null;
 	}
-	const cost =
-		model.connectionProviderId === "wincode"
-			? (getHostedModelCost(model.id) ?? fromTable.cost)
-			: fromTable.cost;
+	const cost = fromTable.cost;
 	return { contextLimit: fromTable.contextLimit, ...(cost ? { cost } : {}) };
 };

@@ -55,7 +55,7 @@ export function PromptConfigProvider({
 	children,
 	initialAgent = buildAgent.id,
 	initialModel = defaultChatModelSelection,
-	initialVariant,
+	initialVariant = "low",
 }: PromptConfigProviderProps) {
 	const registry = useAgentRegistry();
 	const hasExplicitAgent = useRef(initialAgent !== buildAgent.id);

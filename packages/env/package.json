@@ -4,8 +4,6 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./server": "./src/server.ts",
-    "./web": "./src/web.ts",
     "./cli": "./src/cli.ts",
     "./ports": "./src/ports.ts"
   },
@@ -17,7 +15,6 @@
   "devDependencies": {
     "@types/bun": "catalog:",
     "@wincode/config": "workspace:*",
-    "@wincode/infra": "workspace:*",
     "typescript": "catalog:"
   }
 }
