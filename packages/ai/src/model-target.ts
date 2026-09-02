@@ -210,6 +210,3 @@ export const createModelTarget = (
 	modelTargetSchema.parse(target);
 	return target as ModelTarget;
 };
-
-/** Resolve a validated selection and authorization into one turn target. */
-export const resolveModelTarget = createModelTarget;
