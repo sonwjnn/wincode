@@ -430,5 +430,3 @@ export const resolveModelProviderOptions = (
 			throw new Error("Unsupported model provider");
 	}
 };
-/** Compatibility-friendly name for callers that only need provider extensions. */
-export const resolveProviderOptions = resolveModelProviderOptions;
