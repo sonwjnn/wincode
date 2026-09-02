@@ -1,12 +1,12 @@
 import {
 	createModelTarget,
+	type ModelProviderResolutionOptions,
 	type ModelTarget,
-	type ModelTargetOptions,
 } from "@wincode/ai/model";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import type { Connections } from "./connections";
 
-export type ResolveChatModelTargetOptions = ModelTargetOptions & {
+export type ResolveChatModelTargetOptions = ModelProviderResolutionOptions & {
 	readonly signal?: AbortSignal;
 };
 

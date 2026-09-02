@@ -123,5 +123,3 @@ export const recoverContextOverflow = async ({
 	});
 	return result;
 };
-
-export { isModelContextOverflowError as isContextOverflowError } from "@wincode/ai/failures";

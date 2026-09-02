@@ -12,20 +12,20 @@ import {
 	formatModelTokenCount,
 	getModelContextTokens,
 	getSupportedModelVariants,
+	modelCatalog,
 	modelFailureSchema,
 	modelSelectionSchema,
 	modelTargetSchema,
 	normalizeModelFailure,
 	normalizeModelUsage,
 	resolveModelProviderOptions,
-	supportedChatModels,
 } from "./model";
 
 const findModel = (
 	providerId: ConnectionProviderId,
 	modelId: string
 ): SupportedChatModel => {
-	const model = supportedChatModels.find(
+	const model = modelCatalog.find(
 		(entry) => entry.connectionProviderId === providerId && entry.id === modelId
 	);
 	if (!model) {
@@ -37,13 +37,11 @@ const findModel = (
 describe("focused model contracts", () => {
 	test("catalogs every connection provider with unique selection pairs", () => {
 		const providers = [
-			...new Set(
-				supportedChatModels.map((model) => model.connectionProviderId)
-			),
+			...new Set(modelCatalog.map((model) => model.connectionProviderId)),
 		].sort();
 		expect(providers).toEqual([...connectionProviderIds].sort());
 
-		const pairs = supportedChatModels.map(
+		const pairs = modelCatalog.map(
 			(model) => `${model.connectionProviderId}/${model.id}`
 		);
 		expect(new Set(pairs).size).toBe(pairs.length);
@@ -203,7 +201,7 @@ describe("focused model contracts", () => {
 	});
 
 	test("resolves every catalog model variant into a target", () => {
-		for (const model of supportedChatModels) {
+		for (const model of modelCatalog) {
 			const selection = {
 				modelId: model.id,
 				providerId: model.connectionProviderId,

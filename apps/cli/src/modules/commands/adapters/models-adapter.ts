@@ -1,13 +1,10 @@
-import {
-	type ChatModelSelection,
-	supportedChatModels,
-} from "@wincode/ai/models";
+import { type ChatModelSelection, modelCatalog } from "@wincode/ai/models";
 import { getConversationStore } from "@/modules/conversations/storage/get-conversation-store";
 import type { CommandSpec } from "../commands";
 
 export type ModelsAdapterContext = {
 	open: (props: {
-		models: typeof supportedChatModels;
+		models: typeof modelCatalog;
 		currentModel: ChatModelSelection;
 		recentSelections: ChatModelSelection[];
 		onSelectModel: (model: ChatModelSelection) => void;
@@ -27,7 +24,7 @@ export class ModelsAdapter {
 		const recentSelections =
 			getConversationStore().listRecentModelSelections(10);
 		this.ctx.open({
-			models: supportedChatModels,
+			models: modelCatalog,
 			currentModel: this.ctx.currentModel,
 			recentSelections,
 			onSelectModel: this.ctx.setModel,

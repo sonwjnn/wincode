@@ -14,9 +14,6 @@ export {
 	resolveOpenAIChatModel,
 	resolveSupportedChatModel,
 } from "./models";
-export {
-	classifyProviderError,
-	isContextOverflowError,
-} from "./provider-error";
+export { classifyProviderError } from "./provider-error";
 export { createCodingAgentStreamResponse } from "./stream";
 export { buildShellTool, codingTools } from "./tools";

@@ -9,8 +9,8 @@ import {
 } from "@wincode/ai";
 import {
 	type ChatModelSelection,
-	chatModelSelectionSchema,
 	type ModelVariant,
+	modelSelectionSchema,
 	normalizeChatModelSelection,
 	normalizeModelVariant,
 } from "@wincode/ai/models";
@@ -107,7 +107,7 @@ const normalizeSelection = (model: unknown): ChatModelSelection | null => {
 	}
 
 	if (typeof model === "object" && model) {
-		const parsed = chatModelSelectionSchema.safeParse(model);
+		const parsed = modelSelectionSchema.safeParse(model);
 		return parsed.success ? parsed.data : null;
 	}
 

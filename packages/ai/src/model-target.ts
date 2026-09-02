@@ -61,8 +61,6 @@ export type ModelTarget = {
 	[P in ConnectionProviderId]: ModelTargetFor<P>;
 }[ConnectionProviderId];
 
-export type ModelTargetOptions = ModelProviderResolutionOptions;
-
 export const apiKeyModelAuthorizationSchema = z
 	.object({ kind: z.literal("api-key"), apiKey: z.string().min(1) })
 	.strict();
@@ -177,7 +175,7 @@ const toMinimalAuthorization = (
 export const createModelTarget = (
 	selection: ChatModelSelection,
 	authorization: ModelAuthorization,
-	options: ModelTargetOptions = {}
+	options: ModelProviderResolutionOptions = {}
 ): ModelTarget => {
 	const model = findSupportedChatModelSelection(selection);
 	if (!model) {

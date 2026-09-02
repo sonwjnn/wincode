@@ -51,12 +51,10 @@ export type GoogleProviderOptions = {
  * accidentally send Google options to OpenAI or erase provider capabilities
  * into a common bag of unknown values.
  */
-export type ProviderOptions =
+export type ModelProviderOptions =
 	| OpenAIProviderOptions
 	| AnthropicProviderOptions
 	| GoogleProviderOptions;
-/** Public descriptive alias for model-specific provider extensions. */
-export type ModelProviderOptions = ProviderOptions;
 
 export type ProviderOptionsFor<P extends ConnectionProviderId> =
 	P extends "openai"
@@ -71,8 +69,6 @@ export type ModelProviderResolutionOptions = {
 	readonly maxOutputTokens?: number;
 	readonly variant?: ModelVariant;
 };
-/** Compatibility-friendly name for the common model resolution options. */
-export type ModelOptions = ModelProviderResolutionOptions;
 
 export type ResolvedModelProviderOptions = {
 	readonly maxOutputTokens?: number;
@@ -158,6 +154,9 @@ const anthropicManualModels: Readonly<Record<string, true>> = {
 	"claude-opus-4-5": true,
 	"claude-opus-4-5-20251101": true,
 };
+// TODO: Reconcile these manual reasoning-budget tables with the deleted
+// `scripts/sync-model-pricing.ts` pipeline. Verify whether local model pricing
+// should consume generated models.dev metadata before changing these values.
 const anthropicBudgets: Readonly<Record<string, readonly [number, number]>> = {
 	"claude-haiku-4-5": [16_000, 31_999],
 	"claude-haiku-4-5-20251001": [16_000, 31_999],

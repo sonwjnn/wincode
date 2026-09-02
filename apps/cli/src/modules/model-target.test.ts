@@ -1,9 +1,6 @@
 import { expect, test } from "bun:test";
 import type { ConnectionProviderId } from "@wincode/ai/models";
-import {
-	getSupportedModelVariants,
-	supportedChatModels,
-} from "@wincode/ai/models";
+import { getSupportedModelVariants, modelCatalog } from "@wincode/ai/models";
 import { resolveAiSdkModelTarget } from "@wincode/ai/server";
 import type { AuthorizationByProvider, Connections } from "./connections";
 import { resolveChatModelTarget } from "./model-target";
@@ -44,7 +41,7 @@ test("resolves every catalog model and variant through the CLI seam", async () =
 	const controller = new AbortController();
 	let resolvedTargets = 0;
 
-	for (const model of supportedChatModels) {
+	for (const model of modelCatalog) {
 		const selection = {
 			modelId: model.id,
 			providerId: model.connectionProviderId,
@@ -64,7 +61,7 @@ test("resolves every catalog model and variant through the CLI seam", async () =
 		}
 	}
 
-	expect(resolvedTargets).toBeGreaterThan(supportedChatModels.length);
+	expect(resolvedTargets).toBeGreaterThan(modelCatalog.length);
 	expect(getLastSignal()).toBe(controller.signal);
 });
 
