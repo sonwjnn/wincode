@@ -7,10 +7,10 @@ import {
 	codingAgentDataSchemas,
 	codingMessageMetadataSchema,
 } from "@wincode/ai";
+import { isSkillToolPart, sanitizeSkillToolPart } from "@wincode/skills";
 import { generateId, safeValidateUIMessages } from "ai";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { isSkillToolPart, sanitizeSkillToolPart } from "@/modules/skills";
 import type {
 	AppendConversationCompactionInput,
 	ConversationCompaction,

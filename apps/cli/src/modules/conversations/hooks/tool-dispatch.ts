@@ -14,22 +14,22 @@ import {
 	type CodingToolName,
 	codingToolNames,
 	type ResolvedAgentRuntime,
-	skillToolInputSchema,
 	type ToolResourceLimits,
 } from "@wincode/ai";
 import { handleCodingAgentToolCall } from "@wincode/ai/client";
+import {
+	type SkillActivationResult,
+	type SkillExecution,
+	type SkillToolResult,
+	skillToolInputSchema,
+} from "@wincode/skills";
+import { sampleSkillResources } from "@wincode/skills/filesystem";
 import type { ChatAddToolOutputFunction, ChatOnToolCallCallback } from "ai";
 import type {
 	McpAddToolOutput,
 	McpCatalogSnapshot,
 	McpContextValue,
 } from "@/modules/mcp";
-import {
-	type SkillActivationResult,
-	type SkillExecution,
-	type SkillToolResult,
-	sampleSkillResources,
-} from "@/modules/skills";
 import type { ToolGate } from "@/modules/tool-gate/tool-gate";
 
 type MutableRefObject<T> = { current: T };

@@ -1,5 +1,6 @@
-import type { CodingAgentUIMessage, SkillContext } from "@wincode/ai";
+import type { CodingAgentUIMessage } from "@wincode/ai";
 import type { FileUIPart } from "@wincode/ai/client";
+import type { SkillContext } from "@wincode/skills";
 import type { ConversationSession } from "./storage/conversation-store";
 
 export const shouldAutoStartAssistantTurn = (

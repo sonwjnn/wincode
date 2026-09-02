@@ -16,6 +16,7 @@
     "db:local:studio": "drizzle-kit studio --config drizzle.local.config.ts"
   },
   "dependencies": {
+    "@ai-sdk/provider-utils": "^4.0.27",
     "@ai-sdk/react": "catalog:",
     "@modelcontextprotocol/client": "^2.0.0",
     "@opentui/core": "0.4.5",
@@ -23,6 +24,7 @@
     "@tanstack/react-router": "catalog:",
     "@wincode/env": "workspace:*",
     "@wincode/ai": "workspace:*",
+    "@wincode/skills": "workspace:*",
     "ai": "catalog:",
     "drizzle-orm": "^0.45.2",
     "jsonc-parser": "^3.3.1",
@@ -38,6 +40,8 @@
     "@modelcontextprotocol/server": "^2.0.0",
     "@tanstack/router-cli": "1.166.43",
     "@types/bun": "latest",
+    "@types/react": "^19.2.10",
+    "@types/react-dom": "catalog:",
     "drizzle-kit": "^0.31.10"
   },
   "peerDependencies": {

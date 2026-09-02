@@ -59,7 +59,7 @@ The hardest constraint is the hosted path: `apps/server/src/routes/sessions.ts` 
 - `mergeDocument` (161-180): objects merge recursively; **arrays and scalars replace** earlier values (arrays are *not* concatenated across layers — see `config-store.test.ts:187` "does not resurrect lower object fields after a scalar replacement").
 - `recordProvenance` (136-159) records which source contributed every key (including array indices, so `["skills","paths","0"]` resolves).
 - `snapshot.sourceFor(pathSegments)` (394-401) returns the originating `ConfigOrigin` for the longest matching prefix — this is what makes per-capability diagnostics and relative path resolution possible.
-- `sources` (31) keeps each raw source document, so capability modules can also scan per-source content (skills discovery does this for sibling `skills` dirs — `apps/cli/src/modules/skills/discovery.ts:98-107`).
+- `sources` (31) keeps each raw source document, so capability modules can also scan per-source content (Skills discovery does this for sibling `skills` dirs — `apps/cli/src/modules/skills/discovery.ts:84-92`).
 
 ### 1.4 Runtime wiring
 
@@ -112,7 +112,7 @@ There is **no `agents` module** in this fork (`ls apps/cli/src/modules` → auth
 
 ### 2.5 Markdown/filesystem agents
 
-**None.** The only filesystem "agent" artifacts are legacy *skill* dirs (`.agents/skills`, `.claude/skills`, `.opencode/skills` — `modules/skills/discovery.ts:8-12`) and the `use-chat.ts:58` comment about an "coding-agent handler". There is no `.opencode/agent/` loading, no `AGENTS.md`-style loading, no plugin-defined agent loading in this fork. `grep -ri agent apps/cli/src` surfaces only: the `/agents` command, `AgentsDialogContent`, `createCodingAgent`/`CodingAgent*` AI-SDK types, and the legacy `.agents/skills` dir. The repo root's `AGENTS.md -> CLAUDE.md` is a docs symlink, not runtime input.
+**None for agents.** The filesystem "agent" artifacts are Skills: legacy *skill* dirs (`.agents/skills`, `.claude/skills`, `.opencode/skills` — `apps/cli/src/modules/skills/discovery.ts:11-15`) plus Wincode and configured roots composed by the CLI. There is no `.opencode/agent/` loading, no `AGENTS.md`-style loading, no plugin-defined agent loading in this fork. `grep -ri agent apps/cli/src` surfaces only: the `/agents` command, `AgentsDialogContent`, `createCodingAgent`/`CodingAgent*` AI-SDK types, and the Skill activation path. The repo root's `AGENTS.md -> CLAUDE.md` is a docs symlink, not runtime input.
 
 ### 2.6 Consumers summary
 
@@ -136,11 +136,11 @@ There is **no `agents` module** in this fork (`ls apps/cli/src/modules` → auth
 
 ### 3.2 The flow, config file → runtime
 
-1. `createConfigStore()` built in `root-layout.tsx:22`; snapshot obtained on demand via `ConfigRuntime.configStore.getSnapshot(workspace)` (e.g. `modules/skills/index.ts:16-24` `discoverSkills`, `modules/custom-commands/loader.ts:45-56` `getCustomCommands`).
-2. `discovery.ts` per module: `configuredRoots(snapshot)` reads `snapshot.document.commands.paths` / `skills.paths` (`custom-commands/discovery.ts:31-53`, `skills/discovery.ts:63-85`), type-checks the section defensively, then for each string entry calls `resolveConfigRelativePath(snapshot, ["skills","paths",String(index)], configuredPath)`.
+1. `createConfigStore()` built in `root-layout.tsx:22`; snapshot obtained on demand via `ConfigRuntime.configStore.getSnapshot(workspace)` (e.g. `apps/cli/src/modules/skills/index.ts:13-23` `discoverSkills`, `modules/custom-commands/loader.ts:45-56` `getCustomCommands`).
+2. `discovery.ts` per module: `configuredRoots(snapshot)` reads `snapshot.document.commands.paths` / `skills.paths` (`custom-commands/discovery.ts:31-53`, `apps/cli/src/modules/skills/discovery.ts:30-52`), type-checks the section defensively, then for each string entry calls `resolveConfigRelativePath(snapshot, ["skills","paths",String(index)], configuredPath)`.
 3. `resolveConfigRelativePath` (`shared/config/resolve-config-relative-path.ts:9-22`) uses `snapshot.sourceFor(fieldPath)` to find the config file that supplied the entry and resolves relative paths from `dirname(origin.path)`; unknown provenance → entry skipped.
 4. Conventional folders always participate: `getProjectRoots(workspace)` (`shared/paths/project-roots.ts:4-19`) walks from the workspace up to the nearest `.git` root; skills also scan legacy dirs and sibling `skills` dirs of each global config source.
-5. `loader.ts` dedupes by name into a Map — later/higher-precedence candidates overwrite earlier ones — then sorts (custom-commands: built-in names checked first via `BUILTIN_NAMES` from `modules/commands/commands.ts`, collision → `console.warn` + skip, `custom-commands/loader.ts:9-42`; skills: same-name overwrite, `skills/loader.ts:19-32`). Invalid files are skipped best-effort.
+5. `loader.ts` dedupes by name into a Map — later/higher-precedence candidates overwrite earlier ones — then sorts (custom-commands: built-in names checked first via `BUILTIN_NAMES` from `modules/commands/commands.ts`, collision → `console.warn` + skip, `custom-commands/loader.ts:9-42`; Skills: same-name overwrite, `packages/skills/src/filesystem.ts:151-166`). Invalid files are skipped best-effort.
 6. Consumers: `conversations/ui/components/chat-text-area.tsx:234-242` builds `discoverCustomCommands`/`discoverAvailableSkills` closures from `useConfig()` and passes them to the input controller (299-309); `resolveCustomCommandPrompt`/`resolveSkillPrompt` (78-120) expand `/name args` into the prompt at submit; `skills/ui/skills-dialog.tsx:43-64` loads the list on open.
 
 ### 3.3 Established semantics worth preserving
@@ -174,7 +174,7 @@ This fork is not a code fork of OpenCode — it is an independent codebase (remo
 
 ### 4.3 What wincode deliberately deviates on
 
-- Config filenames/namespaces: `wincode.json/jsonc` at 4 locations (config-store.ts:365-370) vs upstream's `opencode.json/jsonc` + `.opencode` dirs. ADR-0001:29-31 explicitly: wincode does **not** read `~/.config/opencode/commands/` or `~/.opencode/...` (except legacy *skills* dirs, `skills/discovery.ts:8-12,93-97`).
+- Config filenames/namespaces: `wincode.json/jsonc` at 4 locations (config-store.ts:365-370) vs upstream's `opencode.json/jsonc` + `.opencode` dirs. ADR-0001:29-31 explicitly: wincode does **not** read `~/.config/opencode/commands/` or `~/.opencode/...` (except legacy *skills* dirs, `apps/cli/src/modules/skills/discovery.ts:11-15,76-92`).
 - Commands: upstream 1.x `command` is a record of inline definitions (`packages/opencode/src/config/command.ts`, `config.ts` `result.command = mergeDeep(...)`); wincode uses `commands.paths` directories of markdown files.
 - Skills: upstream `skills` is an array of path strings (`packages/core/src/config.ts` dev branch; v1 `skills` dirs via `{skill,skills}/**/SKILL.md` conventions); wincode uses `{ skills: { paths } }`.
 - Built-in-vs-custom precedence is inverted (ADR-0001:19-22 — deliberate, wincode built-ins win).
@@ -189,9 +189,9 @@ The store itself needs **no changes** — its README (`apps/cli/src/shared/confi
 
 1. **New module `apps/cli/src/modules/agents/`** mirroring `modules/skills/`:
    - `types.ts` — `AgentDefinition` (name, description, prompt/system, optional model/tools), `AgentCandidate` (`{ filePath?, scope }`), mirroring `skills/types.ts`.
-   - `discovery.ts` — `discoverAgentCandidates({ homeRoot, snapshot, workspace })` reading the chosen config section off `snapshot.document`, using `resolveConfigRelativePath` + `getProjectRoots` exactly like `custom-commands/discovery.ts:31-53` / `skills/discovery.ts:63-85`.
-   - `loader.ts` — dedupe-by-name Map with defined precedence (built-in modes first with warning, project over global), best-effort skip on invalid entries (`skills/loader.ts:19-32` pattern).
-   - `index.ts` — `discoverAgents(input: ConfigRuntime)` composing snapshot + discovery + loading (`skills/index.ts:16-24` pattern).
+   - `discovery.ts` — `discoverAgentCandidates({ homeRoot, snapshot, workspace })` reading the chosen config section off `snapshot.document`, using `resolveConfigRelativePath` + `getProjectRoots` exactly like `custom-commands/discovery.ts:31-53` / `apps/cli/src/modules/skills/discovery.ts:30-115`.
+   - `loader.ts` — dedupe-by-name Map with defined precedence (built-in modes first with warning, project over global), best-effort skip on invalid entries (`packages/skills/src/filesystem.ts:151-166` pattern).
+   - `index.ts` — `discoverAgents(input: ConfigRuntime)` composing snapshot + discovery + loading (`apps/cli/src/modules/skills/index.ts:13-23` pattern).
    - `config.integration.test.ts` + unit tests, modeled on `skills/config.integration.test.ts` (real tmpdirs, `writeFixture`, project-root walking with a fake `.git`).
 2. **Widen the mode/agent union in `packages/ai`** — the true coupling point:
    - `packages/ai/src/modes.ts:13-38`: either relax `codingModeNameSchema` from `z.enum` to a validated string + runtime resolution, or add a separate `agent` axis alongside `mode` in `codingAgentCallOptionsSchema` (40-44). Every consumer of `ModeType` (sections 2.3-2.6) follows: `instructions.ts` mode-keyed prompts, `server/agent.ts:43-62` `prepareCodingAgentCall` tool gating (unknown agent → fail closed to no tools or explicit allowlist), `metadata.ts:53`, `apps/server` validation.
@@ -204,7 +204,7 @@ The store itself needs **no changes** — its README (`apps/cli/src/shared/confi
 - Relative-path resolution: `resolveConfigRelativePath` (`shared/config/resolve-config-relative-path.ts:9-22`) — single source of truth for "relative to the config file that supplied the entry".
 - Project-root walking: `getProjectRoots` (`shared/paths/project-roots.ts:4-19`).
 - Provenance-attributed diagnostics: the `owner()`/`addDiagnostic` pattern from `modules/mcp/config/resolve.ts:40-71` is the model for agent validation diagnostics (the shared store only emits generic codes, 19-26).
-- Name validation: reuse the skill `NAME_PATTERN` (`modules/skills/frontmatter.ts:6-11`, lowercase-hyphen 1-64) or the command filename rule; **do not** copy the mini-YAML frontmatter parser (`frontmatter.ts:22-61`) unless markdown agent files are adopted — it is line-based and documented as such.
+- Name validation: reuse the Skill `NAME_PATTERN` (`packages/skills/src/frontmatter.ts:6-11`, lowercase-hyphen 1-64) or the command filename rule; **do not** copy the mini-YAML frontmatter parser (`packages/skills/src/frontmatter.ts:22-61`) unless markdown agent files are adopted — it is line-based and documented as such.
 
 ### 5.3 Known coupling/backward-compat constraints
 
@@ -279,7 +279,7 @@ The store itself needs **no changes** — its README (`apps/cli/src/shared/confi
 - `apps/cli/src/shared/config/config-store.ts` — store, locations (365-370), selection (270-295), parse/safety (297-336), merge+provenance (161-180, 136-159), `sourceFor` (394-401), memoization (422-434)
 - `apps/cli/src/shared/config/README.md:16-23` — merge contract; agents named as a future capability on the snapshot
 - `apps/cli/src/shared/config/config-provider.tsx`, `resolve-config-relative-path.ts:9-22`, `apps/cli/src/shared/paths/project-roots.ts:4-19`
-- `apps/cli/src/modules/custom-commands/discovery.ts:31-53`, `loader.ts:9-43`, `config.integration.test.ts`; `apps/cli/src/modules/skills/discovery.ts:8-12,63-125`, `loader.ts:6-32`, `index.ts:16-24`, `frontmatter.ts:6-61`, `config.integration.test.ts`, `skills-dialog.tsx:43-64`
+- `apps/cli/src/modules/custom-commands/discovery.ts:31-53`, `loader.ts:9-43`, `config.integration.test.ts`; `apps/cli/src/modules/skills/discovery.ts:11-15,30-121`, `packages/skills/src/filesystem.ts:73-166`, `packages/skills/src/index.ts`, `packages/skills/src/frontmatter.ts:4-73`, `apps/cli/src/modules/skills/config.integration.test.ts`, `skills-dialog.tsx:43-64`
 - `apps/cli/src/modules/mcp/config/schema.ts`, `config/resolve.ts:19-27,40-71,249-330`; `apps/cli/src/modules/mcp/config.ts:31-50`
 - `apps/cli/src/modules/prompt-settings/context/prompt-config-provider.tsx:59-85`, `prompt-settings/ui/agents-dialog.tsx:45`
 - `apps/cli/src/modules/commands/commands.ts:17-33`, `commands/adapters/mode-adapter.ts`, `app/commands/use-app-command-executor.tsx:202-218`

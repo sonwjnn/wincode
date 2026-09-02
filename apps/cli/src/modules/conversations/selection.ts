@@ -8,8 +8,8 @@ import {
 	type ModelVariant,
 	normalizeChatModelSelection,
 	normalizeModelVariant,
-	type SkillRequestContext,
 } from "@wincode/ai";
+import type { SkillRequestContext } from "@wincode/skills";
 
 /**
  * The conversation-selection module owns every read of message metadata:

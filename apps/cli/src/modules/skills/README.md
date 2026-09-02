@@ -1,19 +1,23 @@
 # Skills
 
-Skill discovery, validation, loading, slash-invocation parsing, and Agent-driven
-Skill Activation. No UI or conversation persistence; activation state lives per
-execution turn.
+The CLI composes configuration, conventional roots, Skill scope/source metadata, and Tool
+Permission. Platform-light Skill contracts, parsing, catalog construction, invocation, and
+activation live in `@wincode/skills`; Node/Bun discovery and content loading live in
+`@wincode/skills/filesystem`.
 
-## Public API
+## CLI composition API
 
-- `discoverSkills({ configStore, homeRoot, workspace })` — load the shared config snapshot, then
-  discover, validate, de-duplicate, and sort available skills (with a parsed-file cache keyed by
-  path and file metadata).
+- `discoverSkills({ configStore, homeRoot, workspace })` — load the shared config snapshot, build
+  explicit root descriptors, then discover, validate, de-duplicate, and sort available Skills.
 - `discoverSkillCatalog({ configStore, homeRoot, workspace }, decideSkill)` — build the
   permission-filtered catalog snapshot for one execution turn.
-- `discoverSkillCandidates({ homeRoot, snapshot, workspace })` — return deterministic `SKILL.md`
-  candidates.
-- `loadSkill(candidate)` / `loadSkills(candidates)` — load validated skill bodies.
+- `buildSkillRootDescriptors({ homeRoot, snapshot, workspace })` — map conventional and configured
+  roots to deterministic `{ path, scope, source, precedence }` descriptors.
+- `discoverSkillCandidates({ homeRoot, snapshot, workspace })` — return deterministic candidates
+  through the filesystem export.
+
+## Public `@wincode/skills` API
+
 - `parseSkillFile(source)` — parse frontmatter and body; throws `SkillValidationError` on invalid
   input.
 - `parseSkillInvocation(input)` — parse `/skill-name arguments` into `{ name, arguments }`, or
@@ -24,10 +28,18 @@ execution turn.
   or `undefined` when the catalog is empty or disabled.
 - `createSkillExecution(catalog)` — the turn-scoped activation engine: at most three distinct
   Skills, idempotent re-loads, a rejected set, and structured `SKILL_LIMIT_REACHED` results.
-- `sampleSkillResources(baseDirectory)` — bounded, deterministic sample of bundled resource paths.
-- `sanitizeSkillToolResult(result)` — collapse a live tool result to activation metadata.
-- Types: `Skill`, `SkillCandidate`, `SkillFrontmatter`, `SkillInvocation`, `SkillCatalog`,
+- `createSkillSnapshot(skill, source)` — create a body-bearing, hashed request snapshot.
+- `sanitizeSkillToolResult(result)` / `sanitizeSkillToolPart(part)` — collapse live activation
+  data to safe metadata.
+- Types: `Skill`, `SkillContext`, `SkillInvocation`, `SkillRequestContext`, `SkillCatalog`,
   `SkillExecution`, `SkillActivationSnapshot`, `SkillToolResult`, `SanitizedSkillToolResult`.
+
+## Public `@wincode/skills/filesystem` API
+
+- `discoverSkillCandidates(roots)` / `discoverSkills(roots)` — discover and load explicit root
+  descriptors.
+- `loadSkill(candidate)` / `loadSkills(candidates)` — load validated Skill bodies.
+- `sampleSkillResources(baseDirectory)` — bounded, deterministic sample of bundled resource paths.
 
 ## Discovery and precedence
 

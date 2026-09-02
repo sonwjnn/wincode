@@ -1,17 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { hashSkillBody } from "./filesystem";
 import {
 	buildSkillCatalog,
 	buildSkillToolDefinition,
 	createSkillExecution,
-	hashSkillBody,
+	createSkillSnapshot,
 	MAX_ACTIVE_SKILLS,
-	type SkillCatalogEntry,
-	sampleSkillResources,
 	sanitizeSkillToolResult,
-} from "./activation";
+} from "./index";
 import type { Skill } from "./types";
 
 const skill = (name: string, overrides: Partial<Skill> = {}): Skill => ({
@@ -90,6 +86,33 @@ describe("buildSkillCatalog", () => {
 		expect(
 			buildSkillToolDefinition(buildSkillCatalog([], allowAll()))
 		).toBeUndefined();
+	});
+	test("derives catalog hashes from the body", () => {
+		const catalog = buildSkillCatalog(
+			[skill("review", { contentHash: "stale-hash" })],
+			allowAll()
+		);
+		expect(catalog.entries[0]?.contentHash).toBe(hashSkillBody("body-review"));
+	});
+});
+describe("createSkillSnapshot", () => {
+	test("hashes body instructions and records activation source", () => {
+		expect(
+			createSkillSnapshot(
+				{
+					arguments: "focus",
+					instructions: "Review carefully.",
+					name: "review",
+				},
+				"explicit"
+			)
+		).toEqual({
+			arguments: "focus",
+			contentHash: hashSkillBody("Review carefully."),
+			instructions: "Review carefully.",
+			name: "review",
+			source: "explicit",
+		});
 	});
 });
 
@@ -176,27 +199,6 @@ describe("createSkillExecution", () => {
 	});
 });
 
-describe("sampleSkillResources", () => {
-	test("returns a bounded, deterministic sample excluding SKILL.md", async () => {
-		const dir = await mkdtemp(join(tmpdir(), "wincode-skill-resources-"));
-		await writeFile(join(dir, "SKILL.md"), "body");
-		for (const name of ["z.txt", "a.txt", "template.md"]) {
-			await writeFile(join(dir, name), name);
-		}
-		const sample = await sampleSkillResources(dir);
-		expect(sample.map((path) => path.split("/").at(-1))).toEqual([
-			"a.txt",
-			"template.md",
-			"z.txt",
-		]);
-		expect(sample.every((path) => path.startsWith(dir))).toBe(true);
-	});
-
-	test("returns an empty sample for a missing directory", async () => {
-		expect(await sampleSkillResources("/does/not/exist")).toEqual([]);
-	});
-});
-
 describe("sanitizeSkillToolResult", () => {
 	test("keeps only activation metadata for loaded results", () => {
 		const result = sanitizeSkillToolResult({
@@ -245,10 +247,11 @@ describe("sanitizeSkillToolResult", () => {
 describe("catalog entry shape", () => {
 	test("carries base directory and body for activation", () => {
 		const catalog = buildSkillCatalog([skill("review")], allowAll());
-		const entry: SkillCatalogEntry | undefined = catalog.entries[0];
+		const entry = catalog.entries[0];
 		expect(entry).toMatchObject({
 			baseDirectory: "/skills/review",
 			body: "body-review",
+			contentHash: hashSkillBody("body-review"),
 			filePath: "/skills/review/SKILL.md",
 		});
 	});

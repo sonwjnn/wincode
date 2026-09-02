@@ -9,12 +9,21 @@ import {
 	defaultChatModelSelection,
 	type ModelVariant,
 	type ResolvedAgentRuntime,
-	type SkillContext,
-	type SkillRequestContext,
-	type SkillToolDefinition,
 	sanitizeInterruptedMessagesForModel,
 } from "@wincode/ai";
 import { createUserMessage } from "@wincode/ai/client";
+import {
+	buildSkillToolDefinition,
+	createSkillExecution,
+	createSkillSnapshot,
+	isSkillToolPart,
+	type SkillCatalog,
+	type SkillContext,
+	type SkillExecution,
+	type SkillRequestContext,
+	type SkillToolDefinition,
+	sanitizeSkillToolPart,
+} from "@wincode/skills";
 import {
 	type ChatAddToolOutputFunction,
 	type FileUIPart,
@@ -45,16 +54,7 @@ import {
 	useMcp,
 } from "@/modules/mcp";
 import { useToolPermission } from "@/modules/permissions";
-import {
-	buildSkillToolDefinition,
-	createSkillExecution,
-	createSkillSnapshot,
-	discoverSkillCatalog,
-	isSkillToolPart,
-	type SkillCatalog,
-	type SkillExecution,
-	sanitizeSkillToolPart,
-} from "@/modules/skills";
+import { discoverSkillCatalog } from "@/modules/skills";
 import { createToolGate, type ToolGate } from "@/modules/tool-gate/tool-gate";
 import { useConfig } from "@/shared/config/config-provider";
 import { useLatest } from "@/shared/hooks/use-latest";

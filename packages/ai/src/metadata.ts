@@ -1,3 +1,8 @@
+import {
+	skillActivationSchema,
+	skillActivationSourceSchema,
+	skillContextSchema,
+} from "@wincode/skills";
 import { z } from "zod";
 import { agentIdSchema } from "./agents";
 import {
@@ -7,11 +12,6 @@ import {
 	modelVariantSchema,
 	normalizeChatModelSelection,
 } from "./models";
-import {
-	skillActivationSchema,
-	skillActivationSourceSchema,
-	skillContextSchema,
-} from "./skill-context";
 
 /**
  * The Skill shape attached to message metadata. It is a union of:

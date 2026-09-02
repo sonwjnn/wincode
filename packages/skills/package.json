@@ -1,0 +1,25 @@
+{
+  "name": "@wincode/skills",
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    },
+    "./filesystem": {
+      "default": "./src/filesystem.ts"
+    }
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "test": "bun test src"
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "@types/node": "^26.3.0",
+    "@wincode/config": "workspace:*",
+    "typescript": "catalog:"
+  }
+}

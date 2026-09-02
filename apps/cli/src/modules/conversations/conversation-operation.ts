@@ -3,9 +3,9 @@ import type {
 	ChatModelSelection,
 	ModelVariant,
 	ResolvedAgentRuntime,
-	SkillContext,
 } from "@wincode/ai";
 import type { FileUIPart } from "@wincode/ai/client";
+import type { SkillContext } from "@wincode/skills";
 
 export type ConversationSendInput = {
 	agent: AgentId;
@@ -71,15 +71,17 @@ export const createConversationOperation = ({
 		}
 
 		const controller = new AbortController();
-		let promise: Promise<ConversationSendOutcome>;
-		promise = (async () => {
+		const clearIfCurrent = (): void => {
+			if (active?.controller === controller) {
+				active = undefined;
+			}
+		};
+		const promise = (async () => {
 			await Promise.resolve();
 			try {
 				return await execute(input, controller.signal);
 			} finally {
-				if (active?.promise === promise) {
-					active = undefined;
-				}
+				clearIfCurrent();
 			}
 		})();
 		active = { controller, promise };
