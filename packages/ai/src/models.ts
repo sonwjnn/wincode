@@ -698,7 +698,7 @@ export const supportedChatModelIds = supportedChatModels.map(
 	(model) => model.id
 ) as [SupportedChatModelId, ...SupportedChatModelId[]];
 export const supportedChatModelIdSchema = z.enum(supportedChatModelIds);
-export const defaultChatModel = { value: "o3" } as const satisfies {
+export const defaultChatModel = { value: "gpt-5.4-mini" } as const satisfies {
 	value: SupportedChatModelId;
 };
 export const defaultChatModelSelection = {
