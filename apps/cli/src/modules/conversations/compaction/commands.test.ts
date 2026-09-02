@@ -1,9 +1,5 @@
 import { expect, test } from "bun:test";
-import {
-	isCompactionSettingsCommand,
-	isSettingsCommand,
-	parseCompactCommand,
-} from "./commands";
+import { isSettingsCommand, parseCompactCommand } from "./commands";
 
 test("parses exact compact commands and public focus text", () => {
 	expect(parseCompactCommand("/compact")).toEqual({});
@@ -13,11 +9,6 @@ test("parses exact compact commands and public focus text", () => {
 		}
 	);
 	expect(parseCompactCommand("/compactible")).toBeNull();
-});
-
-test("recognizes the settings command exactly", () => {
-	expect(isCompactionSettingsCommand(" /compaction ")).toBe(true);
-	expect(isCompactionSettingsCommand("/compaction now")).toBe(false);
 });
 
 test("recognizes the global settings command exactly", () => {

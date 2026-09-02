@@ -27,11 +27,10 @@ generation.
 ### Compaction
 `/compact [focus]` summarizes completed history into a durable local compaction entry while
 keeping the full transcript visible. This manual command is available only inside an active
-session. `/settings` opens the global Settings hub from either HomeView or ChatView, and
-`/compaction` opens the same hub focused on the Compaction section. Auto-compact is persisted
-through ConfigStore independently of conversation history; legacy project overrides are migrated
-when the global preference changes. Automatic threshold maintenance and one-attempt provider-
-overflow replay reuse the same Conversation Compaction module.
+session. `/settings` opens the global Settings hub from either HomeView or ChatView. Auto-compact
+is persisted through ConfigStore independently of conversation history; legacy project overrides
+are migrated when the global preference changes. Automatic threshold maintenance and one-attempt
+provider-overflow replay reuse the same Conversation Compaction module.
 
 ### Input overlays
 `useChatInputController` detects `/` (command) and `@path` (file-mention) triggers as the

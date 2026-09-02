@@ -8,7 +8,6 @@ export type CommandSpec = BaseSpec &
 		| { kind: "connect" }
 		| { kind: "new" }
 		| { kind: "compact" }
-		| { kind: "compaction" }
 		| { kind: "settings" }
 		| {
 				kind: "dialog";
@@ -38,12 +37,6 @@ export const COMMANDS: CommandSpec[] = [
 		name: "settings",
 		value: "/settings",
 		kind: "settings",
-	},
-	{
-		description: "Open compaction settings",
-		name: "compaction",
-		value: "/compaction",
-		kind: "compaction",
 	},
 	{
 		description: "Switch agents",

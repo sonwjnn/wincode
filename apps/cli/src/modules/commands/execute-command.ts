@@ -1,7 +1,6 @@
 import type {
 	AgentsAdapter,
 	CompactAdapter,
-	CompactionAdapter,
 	ConnectAdapter,
 	DialogAdapter,
 	ExitAdapter,
@@ -16,7 +15,6 @@ import type { CommandSpec } from "./commands";
 export type AdapterMap = {
 	agents: AgentsAdapter;
 	compact?: CompactAdapter;
-	compaction?: CompactionAdapter;
 	connect: ConnectAdapter;
 	dialog: DialogAdapter;
 	exit: ExitAdapter;
@@ -43,11 +41,6 @@ export function createCommandExecutor(adapters: AdapterMap) {
 					throw new Error("Compaction is unavailable in this view.");
 				}
 				return adapters.compact.execute(spec);
-			case "compaction":
-				if (!adapters.compaction) {
-					throw new Error("Compaction settings are unavailable in this view.");
-				}
-				return adapters.compaction.execute(spec);
 			case "settings":
 				if (!adapters.settings) {
 					throw new Error("Settings are unavailable in this view.");

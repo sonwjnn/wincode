@@ -3,7 +3,7 @@ import { getFilteredCommands } from "./filter-commands";
 
 describe("getFilteredCommands", () => {
 	test("returns all commands for an empty query", () => {
-		expect(getFilteredCommands("")).toHaveLength(14);
+		expect(getFilteredCommands("")).toHaveLength(13);
 	});
 
 	test("matches commands by name prefix", () => {
@@ -20,7 +20,7 @@ describe("getFilteredCommands", () => {
 	test("hides the variants command when the model has no variants", () => {
 		const commands = getFilteredCommands("", { hideVariants: true });
 		expect(commands.map((cmd) => cmd.name)).not.toContain("variants");
-		expect(commands).toHaveLength(13);
+		expect(commands).toHaveLength(12);
 		expect(getFilteredCommands("var", { hideVariants: true })).toEqual([]);
 		expect(getFilteredCommands("var").map((cmd) => cmd.name)).toEqual([
 			"variants",
@@ -29,10 +29,6 @@ describe("getFilteredCommands", () => {
 	test("hides manual compaction outside an active session", () => {
 		const commands = getFilteredCommands("", { hideCompact: true });
 		expect(commands.map((cmd) => cmd.name)).not.toContain("compact");
-		expect(
-			getFilteredCommands("compact", { hideCompact: true }).map(
-				(cmd) => cmd.name
-			)
-		).toEqual(["compaction"]);
+		expect(getFilteredCommands("compact", { hideCompact: true })).toEqual([]);
 	});
 });

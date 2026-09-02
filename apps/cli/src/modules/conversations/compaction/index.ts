@@ -1,8 +1,4 @@
-export {
-	isCompactionSettingsCommand,
-	isSettingsCommand,
-	parseCompactCommand,
-} from "./commands";
+export { isSettingsCommand, parseCompactCommand } from "./commands";
 export type {
 	CompactConversationInput,
 	CompactConversationResult,

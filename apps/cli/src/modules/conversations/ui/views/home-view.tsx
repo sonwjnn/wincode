@@ -8,7 +8,6 @@ import {
 	useAgentRegistry,
 } from "@/modules/agents";
 import {
-	isCompactionSettingsCommand,
 	isSettingsCommand,
 	parseCompactCommand,
 } from "@/modules/conversations/compaction";
@@ -63,7 +62,6 @@ export function HomeView() {
 	const { show } = useToast();
 	const registry = useAgentRegistry();
 	const defaultAgentId = registry?.defaultAgentId;
-	const openCompactionSettings = () => openSettings("Compaction");
 
 	useEffect(() => {
 		if (defaultAgentId !== undefined) {
@@ -122,10 +120,6 @@ export function HomeView() {
 		if (!skill && files.length === 0) {
 			if (isSettingsCommand(prompt)) {
 				openSettings();
-				return true;
-			}
-			if (isCompactionSettingsCommand(prompt)) {
-				openCompactionSettings();
 				return true;
 			}
 			if (parseCompactCommand(prompt)) {
@@ -222,7 +216,6 @@ export function HomeView() {
 				>
 					<ChatTextArea
 						disabled={isCreatingSession}
-						onOpenCompaction={openCompactionSettings}
 						onOpenSettings={openSettings}
 						onSubmit={handleSubmit}
 						showCompactCommand={false}

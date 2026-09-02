@@ -20,7 +20,6 @@ import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-lay
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import {
 	type ConversationCompaction,
-	isCompactionSettingsCommand,
 	isSettingsCommand,
 	parseCompactCommand,
 } from "../../compaction";
@@ -308,10 +307,6 @@ export function ChatView({
 		}
 	};
 
-	const openCompactionSettings = (): void => {
-		openSettings("Compaction");
-	};
-
 	const executeCompactionCommand = (focus?: string) =>
 		runManualCompaction(focus);
 
@@ -329,10 +324,6 @@ export function ChatView({
 			const compactCommand = parseCompactCommand(userText);
 			if (compactCommand) {
 				return executeCompactionCommand(compactCommand.focus);
-			}
-			if (isCompactionSettingsCommand(userText)) {
-				openCompactionSettings();
-				return true;
 			}
 		}
 		if (isTurnBusy || registry === null || !isPromptConfigRestored) {
@@ -470,7 +461,6 @@ export function ChatView({
 					isInterruptArmed={isInterruptArmed}
 					messages={messages}
 					onCompact={executeCompactionCommand}
-					onOpenCompaction={openCompactionSettings}
 					onOpenSettings={openSettings}
 					onSubmit={submitMessage}
 					promptHistory={promptHistory}

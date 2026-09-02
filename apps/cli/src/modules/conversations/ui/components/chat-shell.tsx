@@ -34,7 +34,6 @@ type ChatShellProps = {
 	isInterruptArmed: boolean;
 	messages: CodingAgentUIMessage[];
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
-	onOpenCompaction?: () => Promise<void> | void;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
 	promptHistory: PromptHistoryEntry[];
 	onSubmit: (
@@ -48,7 +47,6 @@ export function ChatShell({
 	isInterruptArmed,
 	messages,
 	onCompact,
-	onOpenCompaction,
 	onOpenSettings,
 	promptHistory,
 	onSubmit,
@@ -161,7 +159,6 @@ export function ChatShell({
 						<box flexShrink={0} width="100%">
 							<ChatTextArea
 								onCompact={onCompact}
-								onOpenCompaction={onOpenCompaction}
 								onOpenSettings={onOpenSettings}
 								onSubmit={handleSubmit}
 								sessionPromptHistory={promptHistory}

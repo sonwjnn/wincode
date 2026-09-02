@@ -7,7 +7,6 @@ import { useRefreshAgentRegistry } from "@/modules/agents";
 import {
 	AgentsAdapter,
 	CompactAdapter,
-	CompactionAdapter,
 	ConnectAdapter,
 	DialogAdapter,
 	ExitAdapter,
@@ -61,7 +60,6 @@ export async function copyBrowserAuthorizationUrl(
 }
 type CommandExecutorOptions = {
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
-	onOpenCompaction?: () => Promise<void> | void;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
 };
 
@@ -132,15 +130,6 @@ export function useCommandExecutor(
 						options.onCompact ??
 						(() => {
 							throw new Error("Compaction is unavailable in this view.");
-						}),
-				}),
-				compaction: new CompactionAdapter({
-					open:
-						options.onOpenCompaction ??
-						(() => {
-							throw new Error(
-								"Compaction settings are unavailable in this view."
-							);
 						}),
 				}),
 				settings: new SettingsAdapter({
@@ -278,7 +267,6 @@ export function useCommandExecutor(
 			model,
 			onSelectSkill,
 			options.onCompact,
-			options.onOpenCompaction,
 			options.onOpenSettings,
 			refreshAgentRegistry,
 			renderer,

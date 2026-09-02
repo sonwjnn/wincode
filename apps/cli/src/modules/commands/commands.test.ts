@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { COMMANDS } from "./commands";
 
 describe("CommandSpec registry", () => {
-	test("has 14 commands with discriminated kinds", () => {
-		expect(COMMANDS).toHaveLength(14);
+	test("has 13 commands with discriminated kinds", () => {
+		expect(COMMANDS).toHaveLength(13);
 	});
 
 	test("does not expose billing commands", () => {
