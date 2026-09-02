@@ -5,11 +5,8 @@ import {
 	type ModelVariant,
 	sanitizeInterruptedMessagesForModel,
 } from "@wincode/ai";
+import { isSkillToolPart, sanitizeSkillToolPart } from "@wincode/skills";
 import { generateId, isToolUIPart } from "ai";
-import {
-	isSkillToolPart,
-	sanitizeSkillToolPart,
-} from "@/modules/skills/activation";
 import {
 	type CompactionAttachmentMetadata,
 	type ConversationAttachmentStore,

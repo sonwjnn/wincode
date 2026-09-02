@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import type { Skill } from "@wincode/skills";
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
-import type { Skill } from "@/modules/skills";
 import {
 	resolveCustomCommandPrompt,
 	resolveSkillPrompt,

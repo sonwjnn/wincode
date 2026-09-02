@@ -26,12 +26,14 @@
     "@ai-sdk/openai": "^3.0.67",
     "@ai-sdk/openai-compatible": "^2.0.63",
     "@ai-sdk/provider-utils": "^4.0.27",
+    "@wincode/skills": "workspace:*",
     "ai": "catalog:",
     "diff": "catalog:",
     "ignore": "^5.3.2",
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@types/bun": "catalog:",
     "@wincode/config": "workspace:*",
     "typescript": "catalog:"
   }

@@ -3,11 +3,9 @@ import {
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
 	expandFileMentionPartsForModel,
-	formatSkillUserContext,
 	getChatModelRoute,
 	type ModelVariant,
 	type ResolvedAgentRuntime,
-	type SkillToolDefinition,
 	sanitizeInterruptedMessagesForModel,
 	shellPlatformFromNode,
 } from "@wincode/ai";
@@ -18,6 +16,10 @@ import {
 	resolveDirectChatModel,
 	resolveOpenAIChatModel,
 } from "@wincode/ai/server";
+import {
+	formatSkillUserContext,
+	type SkillToolDefinition,
+} from "@wincode/skills";
 import { type ChatTransport, createAgentUIStream } from "ai";
 import type { Connections } from "@/modules/connections";
 import type { McpCatalogSnapshot } from "@/modules/mcp";

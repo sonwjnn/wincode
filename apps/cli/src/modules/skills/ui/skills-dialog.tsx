@@ -1,6 +1,7 @@
 import { TextAttributes } from "@opentui/core";
+import type { Skill } from "@wincode/skills";
 import { useCallback, useEffect, useState } from "react";
-import { discoverSkills, type Skill } from "@/modules/skills";
+import { discoverSkills } from "@/modules/skills";
 import { useConfig } from "@/shared/config/config-provider";
 import {
 	useDialog,

@@ -1,6 +1,7 @@
 import { TextAttributes } from "@opentui/core";
 import { useRouter } from "@tanstack/react-router";
 import { createUserMessage } from "@wincode/ai/client";
+import { createSkillSnapshot } from "@wincode/skills";
 import { useEffect, useState } from "react";
 import {
 	resolveActiveAgentId,
@@ -15,7 +16,6 @@ import { resolveFileMentionParts } from "@/modules/file-mentions";
 import { McpActiveIndicator } from "@/modules/mcp";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useSettingsHubDialog } from "@/modules/settings";
-import { createSkillSnapshot } from "@/modules/skills";
 import { APP_VERSION } from "@/shared/app-info";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";

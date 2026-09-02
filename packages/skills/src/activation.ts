@@ -1,16 +1,13 @@
-import { createHash } from "node:crypto";
-import type { Dirent } from "node:fs";
-import { readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { SKILL_TOOL_INPUT_JSON_SCHEMA } from "./context";
+import { hashSkillBody } from "./hash";
 import type {
-	CodingAgentUIMessage,
+	Skill,
 	SkillActivationSource,
 	SkillContext,
+	SkillPermissionDecision,
 	SkillToolDefinition,
-} from "@wincode/ai";
-import { SKILL_TOOL_INPUT_JSON_SCHEMA } from "@wincode/ai";
-import type { PermissionDecision } from "@/modules/permissions";
-import type { Skill } from "./types";
+	SkillToolPart,
+} from "./types";
 
 export const MAX_ACTIVE_SKILLS = 3;
 export const MAX_SKILL_NAME_LENGTH = 64;
@@ -33,12 +30,12 @@ export type SkillCatalogDiagnostic = {
 /**
  * One permitted Skill in the permission-filtered catalog. The body is part of
  * the execution-turn snapshot: it is validated here and never re-read while
- * the execution is active, so edits to `SKILL.md` cannot change behavior
- * halfway through a turn.
+ * the execution is active.
  */
 export type SkillCatalogEntry = {
 	readonly baseDirectory: string;
 	readonly body: string;
+	readonly contentHash: string;
 	readonly description: string;
 	readonly filePath: string;
 	readonly name: string;
@@ -64,7 +61,7 @@ export type SkillActivationResult =
 	| {
 			readonly status: "already-loaded";
 			readonly name: string;
-			contentHash: string;
+			readonly contentHash: string;
 	  }
 	| { readonly status: "failed"; readonly error: string; readonly name: string }
 	| {
@@ -106,9 +103,9 @@ export type SkillToolResult =
 	  };
 
 /**
- * The sanitized tool state persisted to durable history and sent to the model
- * in later executions: activation metadata only, never the body, base
- * directory, or bundled resource contents.
+ * Sanitized tool state persisted to durable history and sent to the model in
+ * later executions: activation metadata only, never the body, base directory,
+ * or bundled resource contents.
  */
 export type SanitizedSkillToolResult = {
 	readonly activeSkillNames?: readonly string[];
@@ -153,14 +150,9 @@ export const sanitizeSkillToolResult = (
 };
 
 /**
- * One `skill` tool part as it exists on an assistant message: the live payload
- * during the turn, the sanitized metadata after collapse.
+ * Identifies a dynamic `skill` tool part without importing an AI SDK message
+ * type. Parts that are already sanitized (without output) pass through.
  */
-export type SkillToolPart = Extract<
-	CodingAgentUIMessage["parts"][number],
-	{ type: "dynamic-tool"; toolName: string }
-> & { output?: unknown; errorText?: string };
-
 export const isSkillToolPart = (part: unknown): part is SkillToolPart => {
 	if (typeof part !== "object" || part === null) {
 		return false;
@@ -179,10 +171,9 @@ export const isSkillToolPart = (part: unknown): part is SkillToolPart => {
 };
 
 /**
- * Collapses a live `skill` tool part to its sanitized activation metadata:
- * name, content hash, source, and status survive; the body, absolute base
- * directory, and bundled resource paths never reach durable storage. Parts
- * that are already sanitized (no output) pass through unchanged.
+ * Collapses a live `skill` tool part to sanitized activation metadata. The
+ * body, absolute base directory, and bundled resource paths never reach
+ * durable storage.
  */
 export const sanitizeSkillToolPart = (part: SkillToolPart): SkillToolPart => {
 	if (part.output === undefined) {
@@ -212,33 +203,32 @@ export const sanitizeSkillToolPart = (part: SkillToolPart): SkillToolPart => {
 };
 
 /**
- * The execution-scoped activation state for one user turn. It owns the
- * permission-filtered catalog snapshot, the active Skill set (at most three
- * distinct Skills, idempotent re-loads), and the rejected set that prevents
- * approval spam within the same execution. It never touches the filesystem
- * after construction.
+ * Execution-scoped activation state for one user turn. It owns the
+ * permission-filtered catalog snapshot, at most three distinct active Skills,
+ * and the rejected set that prevents approval spam within the same execution.
  */
 export type SkillExecution = {
 	readonly catalog: SkillCatalog;
-	/**
-	 * Activates a Skill without a permission gate — callers must gate first.
-	 * Rejected names short-circuit to `rejected`; loading an active Skill is
-	 * idempotent; a fourth distinct Skill returns `limit-reached` without
-	 * replacing anything.
-	 */
+	/** Activates a Skill without a permission gate; callers must gate first. */
 	activate(name: string, source: SkillActivationSource): SkillActivationResult;
 	activeSnapshots(): readonly SkillActivationSnapshot[];
 	markRejected(name: string): void;
-	/**
-	 * Caches the bundled resource sample on the active snapshot so the sample
-	 * stays stable for the whole execution turn.
-	 */
+	/** Caches the bundled resource sample on the active snapshot. */
 	setResourceSample(name: string, paths: readonly string[]): void;
 };
 
+const skillBaseDirectory = (filePath: string): string => {
+	const separator = Math.max(
+		filePath.lastIndexOf("/"),
+		filePath.lastIndexOf("\\")
+	);
+	return separator < 0 ? "." : filePath.slice(0, separator);
+};
+
 const entryFromSkill = (skill: Skill): SkillCatalogEntry => ({
-	baseDirectory: join(skill.filePath, ".."),
+	baseDirectory: skill.baseDirectory ?? skillBaseDirectory(skill.filePath),
 	body: skill.body,
+	contentHash: hashSkillBody(skill.body),
 	description: skill.description,
 	filePath: skill.filePath,
 	name: skill.name,
@@ -246,14 +236,12 @@ const entryFromSkill = (skill: Skill): SkillCatalogEntry => ({
 
 /**
  * Builds the permission-filtered catalog. Denied Skills are hidden without a
- * diagnostic; individually invalid Skills (name, description, or body beyond
- * the hard limits) are omitted with a diagnostic rather than truncated. When
- * the serialized tool description exceeds the total budget the tool is
- * disabled entirely so the model never receives malformed metadata.
+ * diagnostic; invalid Skills are omitted with a diagnostic. An oversized
+ * catalog disables the tool rather than truncating model-visible metadata.
  */
 export const buildSkillCatalog = (
 	skills: readonly Skill[],
-	decideSkill: (name: string) => PermissionDecision
+	decideSkill: (name: string) => SkillPermissionDecision
 ): SkillCatalog => {
 	const diagnostics: SkillCatalogDiagnostic[] = [];
 	const entries: SkillCatalogEntry[] = [];
@@ -280,7 +268,7 @@ export const buildSkillCatalog = (
 
 	const description = formatSkillToolDescription(entries);
 	const toolEnabled =
-		Buffer.byteLength(description, "utf8") <= MAX_SKILL_CATALOG_BYTES;
+		new TextEncoder().encode(description).byteLength <= MAX_SKILL_CATALOG_BYTES;
 	if (!toolEnabled) {
 		diagnostics.push({
 			code: "catalog-over-budget",
@@ -308,13 +296,9 @@ export const buildSkillToolDefinition = (
 			}
 		: undefined;
 
-export const hashSkillBody = (body: string): string =>
-	createHash("sha256").update(body).digest("hex");
-
 /**
- * Snapshots an activated Skill into the payload a user message carries: the
- * body hash and activation source freeze the activation so later turns can
- * tell a live snapshot from sanitized activation metadata.
+ * Creates a body-bearing explicit or Agent activation snapshot. The body hash
+ * is always derived from the instructions that will be sent to the model.
  */
 export const createSkillSnapshot = (
 	skill: SkillContext,
@@ -324,32 +308,6 @@ export const createSkillSnapshot = (
 	contentHash: hashSkillBody(skill.instructions),
 	source,
 });
-
-/**
- * Samples a bounded set of absolute resource paths from the Skill directory so
- * the Agent can inspect bundled references, templates, and scripts with the
- * ordinary file tools. `SKILL.md` itself is excluded and over-long paths are
- * skipped; ordering is deterministic.
- */
-export async function sampleSkillResources(
-	baseDirectory: string
-): Promise<string[]> {
-	let entries: Dirent[];
-	try {
-		entries = await readdir(baseDirectory, { withFileTypes: true });
-	} catch {
-		return [];
-	}
-	return entries
-		.map((entry) => join(baseDirectory, entry.name))
-		.filter(
-			(path, index) =>
-				entries[index]?.name !== "SKILL.md" &&
-				path.length <= MAX_SKILL_RESOURCE_PATH_LENGTH
-		)
-		.toSorted()
-		.slice(0, MAX_SKILL_RESOURCE_PATHS);
-}
 
 export function createSkillExecution(catalog: SkillCatalog): SkillExecution {
 	const active = new Map<string, SkillActivationSnapshot>();
@@ -386,7 +344,7 @@ export function createSkillExecution(catalog: SkillCatalog): SkillExecution {
 			const snapshot: SkillActivationSnapshot = {
 				baseDirectory: entry.baseDirectory,
 				body: entry.body,
-				contentHash: hashSkillBody(entry.body),
+				contentHash: entry.contentHash,
 				name,
 				resourcePaths: [],
 				source,

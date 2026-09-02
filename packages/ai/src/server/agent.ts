@@ -1,4 +1,5 @@
 import type { ProviderOptions } from "@ai-sdk/provider-utils";
+import type { SkillRequestContext, SkillToolDefinition } from "@wincode/skills";
 import type { OnFinishEvent, OnStepFinishEvent, Tool } from "ai";
 import {
 	jsonSchema,
@@ -12,10 +13,6 @@ import { buildAgent, resolvedAgentRuntimeSchema } from "../agents";
 import { getSystemInstructionsForAgent } from "../instructions";
 import { mcpToolManifestSchema } from "../mcp-tools";
 import { supportedChatModelIdSchema } from "../models";
-import type {
-	SkillRequestContext,
-	SkillToolDefinition,
-} from "../skill-context";
 import { convertMcpToolManifest } from "./mcp-tools";
 import { codingTools } from "./tools";
 

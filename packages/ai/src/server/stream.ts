@@ -1,5 +1,10 @@
 import type { ProviderOptions } from "@ai-sdk/provider-utils";
 import {
+	formatSkillUserContext,
+	type SkillRequestContext,
+	type SkillToolDefinition,
+} from "@wincode/skills";
+import {
 	createAgentUIStreamResponse,
 	createIdGenerator,
 	type LanguageModel,
@@ -15,11 +20,6 @@ import type { McpToolManifest } from "../mcp-tools";
 import type { CodingAgentUIMessage } from "../message";
 import type { SupportedChatModelId } from "../models";
 import { sanitizeInterruptedMessagesForModel } from "../sanitize-interrupted-messages";
-import {
-	formatSkillUserContext,
-	type SkillRequestContext,
-	type SkillToolDefinition,
-} from "../skill-context";
 import { buildUsageMessageMetadata } from "../usage";
 import { type CodingAgentLifecycleCallbacks, createCodingAgent } from "./agent";
 import { getProviderErrorMessage } from "./error-message";

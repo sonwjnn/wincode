@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatSkillUserContext, skillActivationSchema } from "./skill-context";
+import { formatSkillUserContext, skillActivationSchema } from "./index";
 
 describe("formatSkillUserContext", () => {
 	test("wraps the body with name, source, and content hash", () => {
