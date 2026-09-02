@@ -1,11 +1,11 @@
 import { useKeyboard } from "@opentui/react";
+import type { CodingAgentUIMessage } from "@wincode/ai";
 import {
 	type ChatModelSelection,
-	type CodingAgentUIMessage,
 	type ModelVariant,
 	normalizeChatModelSelection,
 	normalizeModelVariant,
-} from "@wincode/ai";
+} from "@wincode/ai/models";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
 	resolveActiveAgentId,

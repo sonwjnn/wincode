@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import {
 	type AgentId,
-	type ChatModelSelection,
 	type CodingAgentUIMessage,
 	type CodingMessageMetadata,
 	codingAgentDataSchemas,
 	codingMessageMetadataSchema,
 } from "@wincode/ai";
+import type { ChatModelSelection } from "@wincode/ai/models";
 import { isSkillToolPart, sanitizeSkillToolPart } from "@wincode/skills";
 import { generateId, safeValidateUIMessages } from "ai";
 import { and, asc, desc, eq } from "drizzle-orm";

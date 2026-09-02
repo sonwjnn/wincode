@@ -1,9 +1,5 @@
-import type {
-	AgentId,
-	ChatModelSelection,
-	CodingAgentUIMessage,
-	ModelVariant,
-} from "@wincode/ai";
+import type { AgentId, CodingAgentUIMessage } from "@wincode/ai";
+import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { sql } from "drizzle-orm";
 import {
 	index,

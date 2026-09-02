@@ -1,9 +1,5 @@
-import type {
-	AgentId,
-	ChatModelSelection,
-	ModelVariant,
-	ResolvedAgentRuntime,
-} from "@wincode/ai";
+import type { AgentId, ResolvedAgentRuntime } from "@wincode/ai";
+import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import type { AgentRegistry } from "./registry";
 
 export type AgentCallSelection = {

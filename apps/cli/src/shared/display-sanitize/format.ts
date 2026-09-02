@@ -3,7 +3,7 @@ import {
 	findSupportedChatModelSelection,
 	formatModelLabel,
 	normalizeChatModelSelection,
-} from "@wincode/ai";
+} from "@wincode/ai/models";
 
 const CAMEL_CASE_BOUNDARY_PATTERN = /([a-z0-9])([A-Z])/g;
 const FIRST_CHARACTER_PATTERN = /^./;

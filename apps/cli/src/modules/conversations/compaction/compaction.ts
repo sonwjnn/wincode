@@ -1,10 +1,9 @@
 import {
-	type ChatModelSelection,
 	type CodingAgentUIMessage,
-	getContextTokens,
-	type ModelVariant,
 	sanitizeInterruptedMessagesForModel,
 } from "@wincode/ai";
+import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import { getModelContextTokens } from "@wincode/ai/usage";
 import { isSkillToolPart, sanitizeSkillToolPart } from "@wincode/skills";
 import { generateId, isToolUIPart } from "ai";
 import {
@@ -696,7 +695,7 @@ const getLatestProviderContextTokens = (
 		(message) => message.role === "assistant" && message.metadata?.usage
 	);
 	const usage = latestAssistant?.metadata?.usage;
-	return usage ? getContextTokens(usage) : null;
+	return usage ? getModelContextTokens(usage) : null;
 };
 
 const externalizeForCompaction = async (

@@ -2,7 +2,7 @@ import {
 	type CodingAgentUIMessage,
 	sanitizeInterruptedMessagesForModel,
 } from "@wincode/ai";
-import { classifyProviderError } from "@wincode/ai/server";
+import { isModelContextOverflowError } from "@wincode/ai/failures";
 import type {
 	CompactConversationInput,
 	CompactConversationResult,
@@ -74,7 +74,7 @@ export const recoverContextOverflow = async ({
 	replay,
 	compact: compactOverride,
 }: OverflowRecoveryInput): Promise<CompactConversationResult | null> => {
-	if (classifyProviderError(error) !== "context-overflow") {
+	if (!isModelContextOverflowError(error)) {
 		throw error;
 	}
 	if (!enabled) {
@@ -123,5 +123,3 @@ export const recoverContextOverflow = async ({
 	});
 	return result;
 };
-
-export { isContextOverflowError } from "@wincode/ai/server";

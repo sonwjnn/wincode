@@ -1,10 +1,6 @@
-import type {
-	AgentId,
-	ChatModelSelection,
-	CodingAgentUIMessage,
-	ModelVariant,
-} from "@wincode/ai";
+import type { AgentId, CodingAgentUIMessage } from "@wincode/ai";
 import type { FileUIPart } from "@wincode/ai/client";
+import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import type {
 	AppendConversationCompactionInput,
 	ConversationCompaction,

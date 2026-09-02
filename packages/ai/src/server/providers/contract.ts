@@ -1,10 +1,11 @@
 import type { ProviderOptions } from "@ai-sdk/provider-utils";
 import type { LanguageModel } from "ai";
+import type { ModelProviderOptions } from "../../model-provider-options";
 import type {
+	ModelRuntimeProviderId,
 	ModelVariant,
 	SupportedChatModel,
 	SupportedChatModelId,
-	SupportedProvider,
 } from "../../models";
 
 export type ResolverOptions = {
@@ -14,11 +15,14 @@ export type ResolverOptions = {
 export type ResolvedModel = {
 	model: LanguageModel;
 	modelId: SupportedChatModelId;
-	provider: SupportedProvider;
+	provider: ModelRuntimeProviderId;
 	maxOutputTokens?: number;
 	providerOptions?: ProviderOptions;
 };
-export type ModelResolver<P extends SupportedProvider> = {
+export const toAiSdkProviderOptions = (
+	options: ModelProviderOptions | undefined
+): ProviderOptions | undefined => options as ProviderOptions | undefined;
+export type ModelResolver<P extends ModelRuntimeProviderId> = {
 	provider: P;
 	resolveWithApiKey(
 		model: Extract<SupportedChatModel, { provider: P }>,
@@ -30,7 +34,7 @@ export type ModelResolver<P extends SupportedProvider> = {
 		options: ResolverOptions
 	): ResolvedModel;
 };
-export type BroadResolver<P extends SupportedProvider> = {
+export type BroadResolver<P extends ModelRuntimeProviderId> = {
 	provider: P;
 	resolveWithApiKey(
 		model: SupportedChatModel,
@@ -43,7 +47,7 @@ export type BroadResolver<P extends SupportedProvider> = {
 	): ResolvedModel;
 };
 
-export function defineModelResolver<P extends SupportedProvider>(
+export function defineModelResolver<P extends ModelRuntimeProviderId>(
 	provider: P,
 	isModel: (
 		model: SupportedChatModel

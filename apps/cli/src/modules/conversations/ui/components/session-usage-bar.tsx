@@ -1,5 +1,5 @@
 import { TextAttributes } from "@opentui/core";
-import { formatTokenCount } from "@wincode/ai";
+import { formatModelTokenCount } from "@wincode/ai/usage";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { SessionUsageSummary } from "../../usage/session-usage";
 
@@ -7,7 +7,7 @@ const CONTEXT_WARNING_PERCENT = 80;
 
 export function SessionUsageBar({ summary }: { summary: SessionUsageSummary }) {
 	const { colors } = useTheme();
-	const tokensText = formatTokenCount(summary.contextTokens);
+	const tokensText = formatModelTokenCount(summary.contextTokens);
 	const percentColor =
 		summary.contextPercent !== null &&
 		summary.contextPercent >= CONTEXT_WARNING_PERCENT

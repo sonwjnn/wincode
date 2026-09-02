@@ -2,10 +2,10 @@ import {
 	type AgentId,
 	type ChatModelSelection,
 	type CodingAgentUIMessage,
-	chatModelSelectionSchema,
 	codingMessageMetadataSchema,
 	codingMessageSkillSchema,
 	type ModelVariant,
+	modelSelectionSchema,
 	normalizeChatModelSelection,
 	normalizeModelVariant,
 } from "@wincode/ai";
@@ -103,7 +103,7 @@ const normalizeSelection = (model: unknown): ChatModelSelection | null => {
 	}
 
 	if (typeof model === "object" && model) {
-		const parsed = chatModelSelectionSchema.safeParse(model);
+		const parsed = modelSelectionSchema.safeParse(model);
 		return parsed.success ? parsed.data : null;
 	}
 

@@ -19,11 +19,13 @@ Add a direct entry to `packages/ai/src/models.ts`:
 
 For direct entries, `connectionProviderId` and `provider` must match one of the supported provider IDs. Model identity is the pair `(provider, modelId)`, not the model ID alone.
 
-## Resolver
+## Model policy and runtime adapter
 
-Create `packages/ai/src/server/providers/example.ts` using the shared resolver contract. The resolver must construct the AI SDK model from a user-owned API key and expose any provider-specific options needed by the local agent loop.
+Add provider-specific model option policy to `packages/ai/src/model-provider-options.ts`. Keep its return value provider-neutral and typed, including capability-specific option shapes.
 
-Register the resolver in `packages/ai/src/server/providers/registry.ts`.
+The existing AI SDK adapter in `packages/ai/src/server/providers/example.ts` delegates to that policy, constructs the model from a user-owned API key, and translates only at the runtime boundary.
+
+Register the adapter in `packages/ai/src/server/providers/registry.ts`.
 
 ## CLI credentials
 

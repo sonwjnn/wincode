@@ -5,18 +5,20 @@ import {
 	agentRoleSchema,
 	buildAgent,
 	builtInAgents,
-	type ChatModelSelection,
 	type CodingToolName,
-	type ConnectionProviderId,
 	DEFAULT_RESOURCE_LIMIT_PROFILE,
-	isSupportedModelVariant,
 	MAX_AGENT_ID_LENGTH,
-	type ModelVariant,
-	modelVariantSchema,
-	parseCatalogModelSelection,
 	type ResourceLimitProfile,
 	resourceLimitProfileSchema,
 } from "@wincode/ai";
+import {
+	type ChatModelSelection,
+	type ConnectionProviderId,
+	isSupportedModelVariant,
+	type ModelVariant,
+	modelVariantSchema,
+	parseCatalogModelSelection,
+} from "@wincode/ai/models";
 import { z } from "zod";
 import {
 	type PermissionDiagnostic,

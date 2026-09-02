@@ -1,13 +1,9 @@
-import type { ProviderOptions } from "@ai-sdk/provider-utils";
+import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import {
-	type ChatModelSelection,
-	type ModelVariant,
-	toCodingMessageUsage,
-} from "@wincode/ai";
-import {
-	resolveDirectChatModel,
-	resolveOpenAIChatModel,
+	type ResolvedModel,
+	resolveAiSdkModelTarget,
 } from "@wincode/ai/server";
+import { normalizeModelUsage } from "@wincode/ai/usage";
 import {
 	convertToModelMessages,
 	generateText,
@@ -16,7 +12,10 @@ import {
 	type ModelMessage,
 } from "ai";
 import type { Connections } from "@/modules/connections";
+import { resolveChatModelTarget } from "../../model-target";
 import type { SummaryGenerator, SummaryGeneratorInput } from "./types";
+
+type ProviderOptions = NonNullable<ResolvedModel["providerOptions"]>;
 
 const MAX_SUMMARY_OUTPUT_TOKENS = 4096;
 
@@ -113,7 +112,7 @@ export const createLanguageModelSummaryGenerator =
 			providerOptions: resolved.providerOptions,
 			system: COMPACTION_SUMMARY_SYSTEM_PROMPT,
 		});
-		const usage = toCodingMessageUsage(generated.usage);
+		const usage = normalizeModelUsage(generated.usage);
 		return {
 			text: generated.text,
 			...(usage ? { usage } : {}),
@@ -126,43 +125,17 @@ export const resolveDirectSummaryModel = async (
 	signal?: AbortSignal,
 	variant?: ModelVariant
 ): Promise<SummaryModel> => {
-	const authorization = await connections.authorize(
-		selection.providerId,
-		signal
-	);
-	if (authorization.kind === "api-key") {
-		const resolved = resolveDirectChatModel(
-			selection,
-			authorization.apiKey,
-			variant === undefined ? {} : { variant }
-		);
-		return {
-			model: resolved.model,
-			...(resolved.providerOptions
-				? { providerOptions: resolved.providerOptions }
-				: {}),
-		};
-	}
-	if (authorization.kind === "oauth" && selection.providerId === "openai") {
-		const resolved = resolveOpenAIChatModel(
-			selection.modelId,
-			{
-				accessToken: authorization.accessToken,
-				accountId: authorization.accountId,
-				originator: "wincode",
-			},
-			variant === undefined ? {} : { variant }
-		);
-		return {
-			model: resolved.model,
-			...(resolved.providerOptions
-				? { providerOptions: resolved.providerOptions }
-				: {}),
-		};
-	}
-	throw new Error(
-		"Compaction requires supported direct-provider authorization."
-	);
+	const target = await resolveChatModelTarget(selection, connections, {
+		signal,
+		variant,
+	});
+	const resolved = resolveAiSdkModelTarget(target);
+	return {
+		model: resolved.model,
+		...(resolved.providerOptions
+			? { providerOptions: resolved.providerOptions }
+			: {}),
+	};
 };
 
 export const createDirectSummaryGenerator = (

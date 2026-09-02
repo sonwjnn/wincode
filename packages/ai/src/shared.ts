@@ -48,6 +48,18 @@ export {
 	codingMessageSkillSchema,
 	codingMessageUsageSchema,
 } from "./metadata";
+export * from "./model-failures";
+export * from "./model-provider-options";
+export * from "./model-target";
+export type { ModelUsage } from "./model-usage";
+export {
+	calculateModelUsageCostUsd,
+	formatModelTokenCount,
+	formatModelUsdAmount,
+	getModelContextTokens,
+	modelUsageSchema,
+	normalizeModelUsage,
+} from "./model-usage";
 export * from "./models";
 export { sanitizeInterruptedMessagesForModel } from "./sanitize-interrupted-messages";
 export { isRenderableEditDiff } from "./tools/edit/diff";

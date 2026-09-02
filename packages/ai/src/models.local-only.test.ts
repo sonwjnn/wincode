@@ -3,8 +3,8 @@ import {
 	defaultChatModelSelection,
 	findSupportedChatModelSelection,
 	getChatModelRoute,
+	modelCatalog,
 	normalizeChatModelSelection,
-	supportedChatModels,
 } from "./models";
 
 describe("direct model catalog", () => {
@@ -17,11 +17,9 @@ describe("direct model catalog", () => {
 	});
 
 	test("exposes only direct selectable models", () => {
-		expect(supportedChatModels.every((model) => model.route === "direct")).toBe(
-			true
-		);
+		expect(modelCatalog.every((model) => model.route === "direct")).toBe(true);
 		expect(
-			supportedChatModels.some(
+			modelCatalog.some(
 				(model) => String(model.connectionProviderId) === "wincode"
 			)
 		).toBe(false);

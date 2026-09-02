@@ -1,86 +1,38 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import type { ProviderOptions } from "@ai-sdk/provider-utils";
-import { modelVariantsByProviderModel } from "../../generated/model-variants.generated";
-import {
-	normalizeModelVariantForModel,
-	type SupportedChatModel,
-} from "../../models";
+import { resolveModelProviderOptions } from "../../model-provider-options";
+import type { SupportedChatModel } from "../../models";
 import {
 	defineModelResolver,
 	type ResolvedModel,
 	type ResolverOptions,
+	toAiSdkProviderOptions,
 } from "./contract";
 
 type Model = Extract<SupportedChatModel, { provider: "opencode-go" }>;
 const ZEN_GO_BASE_URL = "https://opencode.ai/zen/go/v1";
 const OPENCODE_GO_ENV_KEY = "OPENCODE_GO_API_KEY";
-const reasoningSummaryModels = new Set<Model["id"]>(["gpt-5.6-luna"]);
-const generatedEntry = (model: Model) =>
-	modelVariantsByProviderModel[`opencode-go/${model.id}`];
-const validateVariantOrThrow = (
-	model: Model,
-	variant: ResolverOptions["variant"]
-) => {
-	if (variant !== undefined && !normalizeModelVariantForModel(model, variant)) {
-		throw new Error(
-			`Unsupported model variant: opencode-go/${model.id}/${variant}`
-		);
-	}
-};
-const options = (
-	model: Model,
-	variant: ResolverOptions["variant"]
-): ProviderOptions | undefined => {
-	switch (model.sdk) {
-		case "openai":
-			return {
-				openai: {
-					store: false,
-					...(reasoningSummaryModels.has(model.id)
-						? { reasoningSummary: "detailed" }
-						: {}),
-					...(variant === undefined ? {} : { reasoningEffort: variant }),
-				},
-			};
-		case "anthropic": {
-			const entry = generatedEntry(model);
-			if (entry?.kind === "toggle") {
-				if (variant === "none") {
-					return { anthropic: { thinking: { type: "disabled" } } };
-				}
-				if (variant === "thinking") {
-					return { anthropic: { thinking: { type: "adaptive" } } };
-				}
-				return;
-			}
-			const budget = entry?.budget;
-			if (budget && (variant === "high" || variant === "max")) {
-				return {
-					anthropic: {
-						thinking: { type: "enabled", budgetTokens: budget[variant] },
-					},
-				};
-			}
-			return;
-		}
-		default:
-			return;
-	}
-};
 const resolve = (
 	model: Model,
 	apiKey: string | undefined,
 	opts: ResolverOptions
 ): ResolvedModel => {
-	validateVariantOrThrow(model, opts.variant);
+	const resolvedOptions = resolveModelProviderOptions(model, opts);
 	const base = {
 		modelId: model.id,
-		provider: "opencode-go",
-		providerOptions: options(model, opts.variant),
-		maxOutputTokens: opts.maxOutputTokens,
-	} as const;
+		provider: "opencode-go" as const,
+		...(resolvedOptions.providerOptions
+			? {
+					providerOptions: toAiSdkProviderOptions(
+						resolvedOptions.providerOptions
+					),
+				}
+			: {}),
+		...(resolvedOptions.maxOutputTokens === undefined
+			? {}
+			: { maxOutputTokens: resolvedOptions.maxOutputTokens }),
+	};
 	switch (model.sdk) {
 		case "openai":
 			return {

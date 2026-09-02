@@ -2,7 +2,8 @@ import { expect, mock, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ChatModelSelection, CodingAgentUIMessage } from "@wincode/ai";
+import type { CodingAgentUIMessage } from "@wincode/ai";
+import type { ChatModelSelection } from "@wincode/ai/models";
 import {
 	type AttachmentMetadataRecord,
 	type AttachmentMetadataRepository,

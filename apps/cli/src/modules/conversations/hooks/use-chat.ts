@@ -42,7 +42,7 @@ import {
 	createDirectSummaryGenerator,
 	estimateCompactionTokens,
 	isCompactionSummaryMessage,
-	isContextOverflowError,
+	isModelContextOverflowError,
 	recoverContextOverflow,
 	useCompactionSettings,
 } from "@/modules/conversations/compaction";
@@ -909,7 +909,7 @@ export function useChat(
 					},
 				});
 			} catch (error) {
-				if (isContextOverflowError(providerError)) {
+				if (isModelContextOverflowError(providerError)) {
 					setCompactionError(
 						error instanceof Error
 							? error

@@ -1,4 +1,4 @@
-import { supportedChatModelIds } from "@wincode/ai";
+import { supportedChatModelIds } from "@wincode/ai/models";
 import { env } from "@wincode/env/cli";
 import {
 	createContext,

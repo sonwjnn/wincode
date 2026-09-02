@@ -1,5 +1,5 @@
 import { useKeyboard } from "@opentui/react";
-import type { ConnectionProviderId as ProviderId } from "@wincode/ai";
+import type { ConnectionProviderId as ProviderId } from "@wincode/ai/models";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	useDialog,

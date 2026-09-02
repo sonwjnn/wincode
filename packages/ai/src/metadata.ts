@@ -6,9 +6,9 @@ import {
 import { z } from "zod";
 import { agentIdSchema } from "./agents";
 import {
-	chatModelSelectionSchema,
 	findSupportedChatModelSelection,
 	getSupportedModelVariants,
+	modelSelectionSchema,
 	modelVariantSchema,
 	normalizeChatModelSelection,
 } from "./models";
@@ -43,7 +43,7 @@ const legacyChatModelSelectionSchema = z
 	});
 
 const codingMessageModelSchema = z.union([
-	chatModelSelectionSchema,
+	modelSelectionSchema,
 	legacyChatModelSelectionSchema,
 ]);
 

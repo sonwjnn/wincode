@@ -1,6 +1,5 @@
 import {
 	buildUsageMessageMetadata,
-	type ChatModelSelection,
 	type CodingAgentUIMessage,
 	expandFileMentionPartsForModel,
 	getChatModelRoute,
@@ -9,12 +8,12 @@ import {
 	sanitizeInterruptedMessagesForModel,
 	shellPlatformFromNode,
 } from "@wincode/ai";
+import { getModelFailureMessage } from "@wincode/ai/failures";
+import type { ChatModelSelection } from "@wincode/ai/models";
 import {
 	buildShellTool,
 	createCodingAgent,
-	getProviderErrorMessage,
-	resolveDirectChatModel,
-	resolveOpenAIChatModel,
+	resolveAiSdkModelTarget,
 } from "@wincode/ai/server";
 import {
 	formatSkillUserContext,
@@ -23,6 +22,7 @@ import {
 import { type ChatTransport, createAgentUIStream } from "ai";
 import type { Connections } from "@/modules/connections";
 import type { McpCatalogSnapshot } from "@/modules/mcp";
+import { resolveChatModelTarget } from "../../model-target";
 import { getOriginatingUserSkill } from "../selection";
 
 type MutableRefObject<T> = { current: T };
@@ -46,12 +46,11 @@ export const createLocalChatTransport = (
 			throw new Error("Local transport requires a direct model");
 		}
 
-		const resolvedModel = await resolveResolvedModel(
-			selection,
-			connections,
-			variantRef.current,
-			abortSignal
-		);
+		const modelTarget = await resolveChatModelTarget(selection, connections, {
+			signal: abortSignal,
+			variant: variantRef.current,
+		});
+		const resolvedModel = resolveAiSdkModelTarget(modelTarget);
 		// The shell declaration is composed per platform so the model knows which
 		// shell syntax to write.
 		const shellTool = buildShellTool(shellPlatformFromNode(process.platform));
@@ -90,42 +89,14 @@ export const createLocalChatTransport = (
 					: {}),
 				...(snapshot?.manifest.length ? { mcpTools: snapshot.manifest } : {}),
 			},
-			onError: getProviderErrorMessage,
+			onError: (error) =>
+				getModelFailureMessage(error, {
+					modelId: modelTarget.modelId,
+					providerId: modelTarget.providerId,
+				}),
 			sendReasoning: true,
 			uiMessages: modelMessages,
 		});
 	},
 	reconnectToStream: async () => null,
 });
-
-async function resolveResolvedModel(
-	selection: ChatModelSelection,
-	connections: Connections,
-	variant?: ModelVariant,
-	signal?: AbortSignal
-) {
-	const authorization = await connections.authorize(
-		selection.providerId,
-		signal
-	);
-	if (authorization.kind === "api-key") {
-		return resolveDirectChatModel(selection, authorization.apiKey, { variant });
-	}
-
-	// OpenAI OAuth is the only supported OAuth direct route.
-	if (authorization.kind === "oauth" && selection.providerId === "openai") {
-		return resolveOpenAIChatModel(
-			selection.modelId,
-			{
-				accessToken: authorization.accessToken,
-				accountId: authorization.accountId,
-				originator: "wincode",
-			},
-			{ variant }
-		);
-	}
-
-	throw new Error(
-		"Local transport requires api-key or supported oauth authorization"
-	);
-}

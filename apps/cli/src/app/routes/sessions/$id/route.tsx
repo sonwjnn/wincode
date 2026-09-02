@@ -1,10 +1,7 @@
 import { createFileRoute, useRouterState } from "@tanstack/react-router";
-import type {
-	ChatModelSelection,
-	CodingAgentUIMessage,
-	ModelVariant,
-} from "@wincode/ai";
+import type { CodingAgentUIMessage } from "@wincode/ai";
 import { agentIdSchema } from "@wincode/ai";
+import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import {

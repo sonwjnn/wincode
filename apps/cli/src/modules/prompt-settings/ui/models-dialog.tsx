@@ -5,7 +5,7 @@ import {
 	connectionProviderIds,
 	formatModelLabel,
 	type SupportedChatModel,
-} from "@wincode/ai";
+} from "@wincode/ai/models";
 import { useCallback } from "react";
 import { connectionProviderDisplayNames } from "@/modules/connections";
 import {

@@ -18,8 +18,6 @@ export const modelRuntimeProviderIds = [
 	"opencode-go",
 ] as const;
 export type ModelRuntimeProviderId = (typeof modelRuntimeProviderIds)[number];
-/** Compatibility alias. */
-export type SupportedProvider = ModelRuntimeProviderId;
 
 export const modelVariantIds = [
 	"none",
@@ -48,14 +46,14 @@ export type ModelCost = {
 	cacheWrite?: number;
 };
 
-type ModelCatalogEntryBase = {
+export type ModelCatalogEntryBase = {
 	connectionProviderId: ConnectionProviderId;
 	displayName: string;
 	id: string;
 	provider: ModelRuntimeProviderId;
 	variants: readonly ModelVariant[];
 };
-type ModelCatalogEntry =
+export type ModelCatalogEntry =
 	| {
 			[K in Exclude<
 				ModelRuntimeProviderId,
@@ -74,7 +72,7 @@ type ModelCatalogEntry =
 			variants: readonly [];
 	  });
 
-export const supportedChatModels = [
+export const modelCatalog = [
 	{
 		connectionProviderId: "openai",
 		route: "direct",
@@ -671,32 +669,35 @@ export const supportedChatModels = [
 	},
 ] as const satisfies readonly ModelCatalogEntry[];
 
-export type SupportedChatModel = (typeof supportedChatModels)[number];
+export type SupportedChatModel = (typeof modelCatalog)[number];
 export type SupportedChatModelId = SupportedChatModel["id"];
+export type ModelCatalog = readonly SupportedChatModel[];
 
 export type ChatModelSelection = {
 	modelId: string;
 	providerId: ConnectionProviderId;
 };
 
-const chatModelSelectionBaseSchema = z.object({
+const modelSelectionBaseSchema = z.object({
 	modelId: z.string(),
 	providerId: connectionProviderIdSchema,
 });
 
-export const chatModelSelectionSchema =
-	chatModelSelectionBaseSchema.superRefine((selection, context) => {
+export const modelSelectionSchema = modelSelectionBaseSchema.superRefine(
+	(selection, context) => {
 		if (!findSupportedChatModelSelection(selection)) {
 			context.addIssue({
 				code: "custom",
 				message: `Unsupported model selection: ${selection.providerId}/${selection.modelId}`,
 			});
 		}
-	});
+	}
+);
 
-export const supportedChatModelIds = supportedChatModels.map(
-	(model) => model.id
-) as [SupportedChatModelId, ...SupportedChatModelId[]];
+export const supportedChatModelIds = modelCatalog.map((model) => model.id) as [
+	SupportedChatModelId,
+	...SupportedChatModelId[],
+];
 export const supportedChatModelIdSchema = z.enum(supportedChatModelIds);
 export const defaultChatModel = { value: "gpt-5.4-mini" } as const satisfies {
 	value: SupportedChatModelId;
@@ -709,11 +710,11 @@ export const defaultChatModelSelection = {
 export const findSupportedChatModel = (
 	modelId: string
 ): SupportedChatModel | null =>
-	supportedChatModels.find((model) => model.id === modelId) ?? null;
+	modelCatalog.find((model) => model.id === modelId) ?? null;
 export const findSupportedChatModelSelection = (
 	selection: ChatModelSelection
 ): SupportedChatModel | null =>
-	supportedChatModels.find(
+	modelCatalog.find(
 		(model) =>
 			model.id === selection.modelId &&
 			model.connectionProviderId === selection.providerId
@@ -734,7 +735,7 @@ export const parseCatalogModelSelection = (
 		modelId: value.slice(separatorIndex + 1),
 		providerId: value.slice(0, separatorIndex),
 	};
-	const parsed = chatModelSelectionBaseSchema.safeParse(selection);
+	const parsed = modelSelectionBaseSchema.safeParse(selection);
 	return parsed.success && findSupportedChatModelSelection(parsed.data)
 		? parsed.data
 		: null;
@@ -811,7 +812,7 @@ export const normalizeChatModelSelection = (
 	selection: string | ChatModelSelection
 ): ChatModelSelection | null => {
 	if (typeof selection !== "string") {
-		const parsed = chatModelSelectionSchema.safeParse(selection);
+		const parsed = modelSelectionSchema.safeParse(selection);
 		return parsed.success ? parsed.data : null;
 	}
 	const model = findSupportedChatModel(selection);

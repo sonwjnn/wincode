@@ -1,4 +1,4 @@
-import type { ConnectionProviderId } from "@wincode/ai";
+import type { ConnectionProviderId } from "@wincode/ai/models";
 import type {
 	AuthorizationByProvider,
 	CredentialByProvider,

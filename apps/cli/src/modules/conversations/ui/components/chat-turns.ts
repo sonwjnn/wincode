@@ -1,5 +1,5 @@
 import type { CodingAgentUIMessage } from "@wincode/ai";
-import { normalizeChatModelSelection } from "@wincode/ai";
+import { normalizeChatModelSelection } from "@wincode/ai/models";
 
 export type ConversationTurn = {
 	id: string;

@@ -1,10 +1,11 @@
-import type { AgentId, ModelVariant } from "@wincode/ai";
+import type { AgentId } from "@wincode/ai";
+import { buildAgent } from "@wincode/ai";
 import {
-	buildAgent,
 	type ChatModelSelection,
 	defaultChatModelSelection,
+	type ModelVariant,
 	normalizeModelVariant,
-} from "@wincode/ai";
+} from "@wincode/ai/models";
 import {
 	createContext,
 	type ReactNode,
