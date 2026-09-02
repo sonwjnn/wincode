@@ -93,24 +93,23 @@ export function ChatView({
 		CodingAgentUIMessage[] | null
 	>(null);
 	const {
-		abort,
 		cancelCompaction,
 		catalogDiagnostic,
 		compact,
 		compactions,
+		conversation,
 		error,
-		interrupt,
 		isCompacting,
 		isPreparingMessage,
 		messages,
 		status,
-		submit,
 	} = useChat(
 		sessionId,
 		initialMessages,
 		initialActiveMessages,
 		initialCompactions
 	);
+	const { cancel, interrupt, send } = conversation;
 	const isTurnBusy =
 		hasPendingApproval ||
 		isPreparingMessage ||
@@ -174,9 +173,9 @@ export function ChatView({
 
 	useEffect(
 		() => () => {
-			abort();
+			cancel();
 		},
-		[abort]
+		[cancel]
 	);
 
 	const handleInterrupt = () => {
@@ -242,9 +241,9 @@ export function ChatView({
 
 	useEffect(
 		() => () => {
-			abort();
+			cancel();
 		},
-		[abort]
+		[cancel]
 	);
 
 	useEffect(() => {
@@ -333,7 +332,7 @@ export function ChatView({
 			model,
 			variant
 		);
-		const outcome = await submit({
+		const outcome = await send({
 			agent: effective.agent,
 			conversationModel: model,
 			conversationVariant: variant,
@@ -420,7 +419,7 @@ export function ChatView({
 			persistedAgentIsAvailable ? resolvedModel : conversationModel,
 			persistedAgentIsAvailable ? persistedVariant : conversationVariant
 		);
-		submit({
+		send({
 			agent: effective.agent,
 			conversationModel,
 			conversationVariant,
@@ -443,9 +442,9 @@ export function ChatView({
 		model,
 		registry,
 		restoredConfig,
-		show,
-		submit,
+		send,
 		variant,
+		show,
 	]);
 
 	return (

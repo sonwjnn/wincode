@@ -14,7 +14,7 @@ Chat session lifecycle: creation, messaging, streaming display, compaction, and 
 
 ### Send a message
 
-`ChatView` accepts user text, `useChat.submit()` resolves the current configured agent and direct model, hydrates local attachments, snapshots MCP tools, and streams the response through the local AI SDK agent loop.
+`ChatView` sends through the application-owned `ConversationOperation`. The operation delegates to the existing local AI SDK path, which resolves the current configured agent and direct model, hydrates local attachments, snapshots MCP tools, and streams the response.
 
 ### Interrupt
 
@@ -49,7 +49,8 @@ Local migrations are generated with `bun run db:local:generate` and committed un
 ## Public seams
 
 - `getConversationStore()` — local sessions, messages, compactions, attachments, and maintenance.
-- `useChat(sessionId, initialMessages)` — submit, abort, interrupt, compact, messages, status, and errors.
+- `ConversationOperation` — one application-owned send, cancellation, and interruption seam for the current turn path.
+- `useChat(sessionId, initialMessages)` — conversation state, operation wiring, compaction, messages, status, and errors.
 - `useChatInputController(options)` — command and file-mention input state.
 - `ChatView`, `HomeView`, `ChatShell`, `ChatTextArea` — conversation UI.
 - `SessionsDialog`, `RenameSessionDialog` — session management UI.

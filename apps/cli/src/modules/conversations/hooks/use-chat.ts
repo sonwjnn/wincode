@@ -60,42 +60,17 @@ import { useConfig } from "@/shared/config/config-provider";
 import { useLatest } from "@/shared/hooks/use-latest";
 import { createApprovalQueue } from "@/shared/providers/approval/approval-queue";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
+import {
+	type ConversationOperation,
+	type ConversationSendInput,
+	type ConversationSendOutcome,
+	createConversationOperation,
+} from "../conversation-operation";
 import type { AttachmentHydrationOptions } from "../storage/attachment-store";
 import { getConversationStore } from "../storage/get-conversation-store";
 import { type AutoSendGate, createAutoSendGate } from "./auto-send-gate";
 import { createRoutingChatTransport } from "./routing-chat-transport";
 import { createChatToolCallHandler } from "./tool-dispatch";
-
-type SubmitChatParams = {
-	agent: AgentId;
-	conversationModel: ChatModelSelection;
-	conversationVariant?: ModelVariant;
-	model: ChatModelSelection;
-	variant?: ModelVariant;
-	resolvedAgent?: ResolvedAgentRuntime;
-	/**
-	 * The prompt to submit as a fresh user message. Omit it (and pass
-	 * `messageId`) to run the turn anchored at an already-stored user message.
-	 */
-	userText?: string;
-	files?: FileUIPart[];
-	skill?: SkillContext;
-	/**
-	 * Anchor the turn at an existing stored user message instead of appending a
-	 * new one. Used by the HomeView auto-start path: the session row already
-	 * carries the prompt message, so the turn re-sends that exact message with
-	 * freshly resolved Agent/model/Skill state.
-	 */
-	messageId?: string;
-};
-/**
- * The settled outcome of submitting a chat prompt. Explicit Skill rejection
- * resolves with `{ rejected: true }` so the caller can preserve the input and
- * attachments without sending a prompt.
- */
-export type SubmitChatOutcome =
-	| { readonly rejected: false }
-	| { readonly rejected: true; readonly reason: string };
 export const createChatMessageParts = (
 	userText: string,
 	fileMentions: CodingAgentUIMessage["parts"],
@@ -374,6 +349,8 @@ export function useChat(
 			scope: sessionId,
 		};
 	}, [openApproval, sandbox, service, sessionId]);
+	const approvalQueueRef = useLatest(toolGateState.approvalQueue);
+	const closeApprovalsRef = useLatest(closeApprovals);
 	useEffect(
 		() => () => {
 			toolGateState.approvalQueue.rejectAll();
@@ -412,6 +389,7 @@ export function useChat(
 		(options: { messages: CodingAgentUIMessage[] }) => Promise<boolean>
 	>(async () => false);
 	const providerErrorRef = useRef<(error: Error) => void>(() => undefined);
+	const conversationRef = useRef<ConversationOperation | null>(null);
 	const agentRef = useRef<AgentId>(buildAgent.id);
 	const resolvedAgentRef = useRef<ResolvedAgentRuntime | undefined>(undefined);
 	const modelRef = useRef<ChatModelSelection>(defaultChatModelSelection);
@@ -786,6 +764,7 @@ export function useChat(
 		sendAutomaticallyWhen: shouldAutoSend,
 		transport,
 	});
+	const chatRef = useLatest(chat);
 	activeMessagesRef.current = chat.messages;
 	addToolOutputRef.current = chat.addToolOutput;
 	dynamicToolOutputRef.current = (config) => {
@@ -906,26 +885,27 @@ export function useChat(
 						if (!replayMessage) {
 							throw new Error("Original message disappeared during replay.");
 						}
-						await createTurnSkillExecution();
-						const skillResolution = await resolveSkillForSubmit(
-							undefined,
-							replayMessage
-						);
-						if (!skillResolution.ok) {
-							throw new Error(skillResolution.reason);
+						const operation = conversationRef.current;
+						if (!operation) {
+							throw new Error(
+								"Conversation operation is unavailable during overflow recovery."
+							);
 						}
-						const replayMetadata = {
-							...(replayMessage.metadata ?? {}),
-							...(skillResolution.skill
-								? {
-										skill: createSkillSnapshot(
-											skillResolution.skill,
-											"explicit"
-										),
-									}
-								: {}),
-						};
-						await submitAnchoredMessage(replayMessage, replayMetadata);
+						if (!(await operation.waitForIdle())) {
+							return;
+						}
+						const outcome = await operation.send({
+							agent: agentRef.current,
+							conversationModel: conversationModelRef.current,
+							conversationVariant: conversationVariantRef.current,
+							messageId: originalMessageId,
+							model: failedModel,
+							resolvedAgent: resolvedAgentRef.current,
+							variant: failedVariant,
+						});
+						if (outcome.rejected) {
+							throw new Error(outcome.reason);
+						}
 					},
 				});
 			} catch (error) {
@@ -1117,18 +1097,25 @@ export function useChat(
 				: compactionErrorMessage(error);
 		}
 	};
+	const conversationSendCancelled = (): ConversationSendOutcome => ({
+		rejected: true,
+		reason: "Conversation send cancelled.",
+	});
 
 	const submitAnchoredMessage = async (
 		anchoredMessage: CodingAgentUIMessage,
-		metadata: CodingAgentUIMessage["metadata"]
-	): Promise<SubmitChatOutcome> => {
+		metadata: CodingAgentUIMessage["metadata"],
+		signal: AbortSignal
+	): Promise<ConversationSendOutcome> => {
 		const previousMessages = activeMessagesRef.current;
 		const nextMessages = sanitizeSkillToolParts(previousMessages);
 		activeMessagesRef.current = nextMessages;
 		chat.setMessages(nextMessages);
-		if (
-			!(await persistMessagesBeforeSend(persistDisplayMessages, nextMessages))
-		) {
+		const persisted = await persistMessagesBeforeSend(
+			persistDisplayMessages,
+			nextMessages
+		);
+		if (!persisted) {
 			activeMessagesRef.current = previousMessages;
 			chat.setMessages(previousMessages);
 			return {
@@ -1136,8 +1123,14 @@ export function useChat(
 				reason: "Conversation transcript could not be persisted.",
 			};
 		}
+		if (signal.aborted) {
+			return conversationSendCancelled();
+		}
 		setIsPreparingMessage(true);
 		try {
+			if (signal.aborted) {
+				return conversationSendCancelled();
+			}
 			await chat.sendMessage({
 				messageId: anchoredMessage.id,
 				metadata,
@@ -1153,11 +1146,13 @@ export function useChat(
 		files,
 		metadata,
 		userText,
+		signal,
 	}: {
 		files: FileUIPart[];
 		metadata: CodingAgentUIMessage["metadata"];
 		userText?: string;
-	}): Promise<SubmitChatOutcome> => {
+		signal: AbortSignal;
+	}): Promise<ConversationSendOutcome> => {
 		if (userText === undefined) {
 			return { rejected: true, reason: "No prompt to submit" };
 		}
@@ -1173,10 +1168,13 @@ export function useChat(
 			[durableOptimisticMessage] =
 				await getConversationStore().externalizeAttachments(
 					[optimisticMessage],
-					undefined,
+					signal,
 					{ rejectInvalid: true }
 				);
 		} catch {
+			if (signal.aborted) {
+				return conversationSendCancelled();
+			}
 			return {
 				rejected: true,
 				reason: "Attachment data could not be stored.",
@@ -1196,6 +1194,9 @@ export function useChat(
 		if (promptPreparationError) {
 			return { rejected: true, reason: promptPreparationError };
 		}
+		if (signal.aborted) {
+			return conversationSendCancelled();
+		}
 		const priorActiveMessages = activeMessagesRef.current;
 		const optimisticMessages = [
 			...sanitizeSkillToolParts(priorActiveMessages),
@@ -1205,12 +1206,11 @@ export function useChat(
 		activeMessagesRef.current = optimisticMessages;
 		chat.setMessages(optimisticMessages);
 		setIsPreparingMessage(true);
-		if (
-			!(await persistMessagesBeforeSend(
-				persistDisplayMessages,
-				nextDisplayMessages
-			))
-		) {
+		const persisted = await persistMessagesBeforeSend(
+			persistDisplayMessages,
+			nextDisplayMessages
+		);
+		if (!persisted) {
 			activeMessagesRef.current = priorActiveMessages;
 			chat.setMessages(priorActiveMessages);
 			removeDisplayMessage(durableOptimisticMessage.id);
@@ -1219,6 +1219,16 @@ export function useChat(
 				rejected: true,
 				reason: "Conversation transcript could not be persisted.",
 			};
+		}
+		if (signal.aborted) {
+			activeMessagesRef.current = priorActiveMessages;
+			chat.setMessages(priorActiveMessages);
+			const rollbackMessages = removeDisplayMessage(
+				durableOptimisticMessage.id
+			);
+			await persistMessagesBeforeSend(persistDisplayMessages, rollbackMessages);
+			setIsPreparingMessage(false);
+			return conversationSendCancelled();
 		}
 
 		try {
@@ -1243,18 +1253,21 @@ export function useChat(
 		}
 	};
 
-	const submit = async ({
-		agent,
-		conversationModel,
-		conversationVariant,
-		model,
-		variant,
-		resolvedAgent,
-		userText,
-		files = [],
-		skill,
-		messageId,
-	}: SubmitChatParams): Promise<SubmitChatOutcome> => {
+	const submit = async (
+		{
+			agent,
+			conversationModel,
+			conversationVariant,
+			model,
+			variant,
+			resolvedAgent,
+			userText,
+			files = [],
+			skill,
+			messageId,
+		}: ConversationSendInput,
+		signal: AbortSignal
+	): Promise<ConversationSendOutcome> => {
 		approvalAbortHandledRef.current = false;
 		setCompactionError(null);
 		overflowAttemptRef.current = 0;
@@ -1271,8 +1284,13 @@ export function useChat(
 		if (preparationError) {
 			return { rejected: true, reason: preparationError };
 		}
-
+		if (signal.aborted) {
+			return conversationSendCancelled();
+		}
 		await createTurnSkillExecution();
+		if (signal.aborted) {
+			return conversationSendCancelled();
+		}
 
 		// An anchored turn (HomeView auto-start) re-executes the prompt message
 		// the session row already stores instead of appending a new one.
@@ -1293,6 +1311,7 @@ export function useChat(
 		if (!resolution.ok) {
 			return { rejected: true, reason: resolution.reason };
 		}
+
 		const metadata = {
 			agent,
 			model,
@@ -1302,28 +1321,60 @@ export function useChat(
 				: {}),
 		};
 
+		if (signal.aborted) {
+			return conversationSendCancelled();
+		}
 		if (anchoredMessage) {
-			return submitAnchoredMessage(anchoredMessage, metadata);
+			return submitAnchoredMessage(anchoredMessage, metadata, signal);
 		}
 
-		return submitFreshMessage({ files, metadata, userText });
+		return submitFreshMessage({ files, metadata, signal, userText });
 	};
 
+	const submitRef = useLatest(submit);
+	const interruptRef = useLatest(interruptLatestAssistantMessage);
+	const conversation = useMemo(
+		() =>
+			createConversationOperation({
+				execute: async (input, signal) => {
+					if (signal.aborted) {
+						return {
+							rejected: true,
+							reason: "Conversation send cancelled.",
+						};
+					}
+					const stop = () => {
+						chatRef.current.stop();
+						compactionAbortRef.current?.abort();
+						approvalQueueRef.current.rejectAll();
+						closeApprovalsRef.current();
+					};
+					signal.addEventListener("abort", stop, { once: true });
+					try {
+						return await submitRef.current(input, signal);
+					} finally {
+						signal.removeEventListener("abort", stop);
+					}
+				},
+				onInterrupt: (preserveToolCallId) =>
+					interruptRef.current(preserveToolCallId),
+			}),
+		[approvalQueueRef, chatRef, closeApprovalsRef, interruptRef, submitRef]
+	);
+	conversationRef.current = conversation;
 	return {
-		abort: chat.stop,
 		cancelCompaction,
 		catalogDiagnostic,
 		compact: (focus?: string, selection?: ChatModelSelection) =>
 			runCompaction("manual", focus, undefined, selection),
 		compactions,
+		conversation,
 		error: compactionError ?? chat.error,
 		getCompactionSettings,
-		interrupt: interruptLatestAssistantMessage,
 		isCompacting,
 		messages: displayMessages,
 		status: chat.status,
 		isPreparingMessage,
-		submit,
 	};
 }
 const summarizeCatalogDiagnostics = (catalog: SkillCatalog): string | null => {
