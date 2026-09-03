@@ -138,6 +138,71 @@ describe("createLocalChatTransport text-only runtime routing", () => {
 		expect(createStream).not.toHaveBeenCalled();
 	});
 
+	test("commits one Conversation Record checkpoint for an eligible completed send", async () => {
+		const createStream = mock(async () => {
+			throw new Error("legacy stream must not be used");
+		});
+		const createRuntime: TextOnlyRuntimeFactory = () =>
+			fakeRuntime(
+				runtimeEvents("hi there", { inputTokens: 2, outputTokens: 1 })
+			);
+		const resolvedAgentRef: MutableRefObject<ResolvedAgentRuntime | undefined> =
+			{ current: { instructions: "Answer plainly.", visibleCodingTools: [] } };
+		const modelRef: MutableRefObject<ChatModelSelection> = {
+			current: selection,
+		};
+		const variantRef: MutableRefObject<undefined> = { current: undefined };
+		const committed: unknown[] = [];
+		const commitCheckpoint = async (record: unknown) => {
+			committed.push(record);
+		};
+
+		const transport = createLocalChatTransport(
+			"session-1",
+			resolvedAgentRef,
+			modelRef,
+			variantRef,
+			connections as Connections,
+			createStream,
+			emptyManifestSnapshot,
+			undefined,
+			"build",
+			createRuntime,
+			commitCheckpoint
+		);
+
+		const stream = await transport.sendMessages({
+			abortSignal: new AbortController().signal,
+			chatId: "session-1",
+			messageId: "msg-user",
+			messages: [userMessage("hello")],
+			trigger: "submit-message",
+		});
+		await consumeChunks(stream);
+
+		expect(committed).toHaveLength(1);
+		expect(committed[0]).toMatchObject({
+			agentId: "build",
+			model: { modelId: "gpt-5.4-mini", providerId: "openai" },
+			outcome: {
+				finishedAt: 4,
+				kind: "completed",
+				usage: { inputTokens: 2, outputTokens: 1 },
+			},
+			version: 1,
+		});
+		const record = committed[0] as {
+			messages?: Array<{
+				id?: string;
+				parts?: Array<{ text?: string }>;
+				role?: string;
+			}>;
+		};
+		expect(record.messages?.map((message) => message.parts?.[0]?.text)).toEqual(
+			["hello", "hi there"]
+		);
+	});
+
 	test("keeps the legacy agent stream for tool-armed sends", async () => {
 		const createStream = mock(async () => {
 			throw new Error("not reached");
