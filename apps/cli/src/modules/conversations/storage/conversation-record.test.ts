@@ -10,6 +10,7 @@ import type {
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import { createDatabase } from "./client";
+import { ConversationRecordInvariantError } from "./conversation-record";
 import type { ConversationStore } from "./conversation-store";
 import { createDrizzleConversationStore } from "./drizzle-conversation-store";
 import { runMigrations } from "./migrations";
@@ -37,7 +38,7 @@ const messageRecord = (
 
 const failure: OperationalFailure = {
 	code: "unknown",
-	message: "provider blew up",
+	message: "The model request failed.",
 	retry: "never",
 	source: "model",
 	version: 1,
@@ -69,6 +70,29 @@ const failedRecord = (
 	messages,
 	model: { modelId: "gpt-5.4-mini", providerId: "openai" },
 	outcome: { failure, finishedAt: 300, kind: "failed" },
+	turnId: `turn-${id}`,
+	version: 1,
+});
+const interruptedRecord = (
+	id: string,
+	messages: ConversationMessageRecord[]
+): ConversationRecord => ({
+	agentId: "build",
+	id,
+	messages,
+	model: { modelId: "gpt-5.4-mini", providerId: "openai" },
+	outcome: {
+		failure: {
+			code: "interrupted",
+			message: "The Agent Turn was interrupted.",
+			retry: "immediate",
+			source: "runtime",
+			version: 1,
+		},
+		finishedAt: 400,
+		kind: "interrupted",
+		reason: "lost-execution",
+	},
 	turnId: `turn-${id}`,
 	version: 1,
 });
@@ -112,6 +136,25 @@ test("round-trips a completed Conversation Record with usage and terminal outcom
 	await store.commitConversationRecord({ record, sessionId });
 
 	expect(await store.listConversationRecords(sessionId)).toEqual([record]);
+});
+test("preserves prior committed records before an interrupted turn", async () => {
+	const { store } = await createTestStore();
+	const sessionId = await createSession(store);
+	const prior = completedRecord("record-prior", [
+		messageRecord("msg-user", "user", "first"),
+		messageRecord("msg-assistant", "assistant", "done"),
+	]);
+	const interrupted = interruptedRecord("record-lost", [
+		messageRecord("msg-user-2", "user", "second"),
+	]);
+
+	await store.commitConversationRecord({ record: prior, sessionId });
+	await store.commitConversationRecord({ record: interrupted, sessionId });
+
+	expect(await store.listConversationRecords(sessionId)).toEqual([
+		prior,
+		interrupted,
+	]);
 });
 
 test("round-trips a failed Conversation Record with its safe failure", async () => {
@@ -258,9 +301,19 @@ test("commits atomically: rejected checkpoints leave no partial durable state", 
 		...valid,
 		outcome: { finishedAt: 1, kind: "interrupted" },
 	} as unknown as ConversationRecord;
-	await expect(
-		store.commitConversationRecord({ record: malformed, sessionId })
-	).rejects.toThrow("Invalid Conversation Record");
+	let thrown: unknown;
+	try {
+		await store.commitConversationRecord({ record: malformed, sessionId });
+	} catch (error) {
+		thrown = error;
+	}
+	expect(thrown).toBeInstanceOf(ConversationRecordInvariantError);
+	expect(thrown).toMatchObject({
+		message: expect.stringContaining("Invalid Conversation Record"),
+	});
+	if (thrown instanceof ConversationRecordInvariantError) {
+		expect(thrown.cause).toBeInstanceOf(Error);
+	}
 
 	expect(await store.listConversationRecords(sessionId)).toEqual([]);
 

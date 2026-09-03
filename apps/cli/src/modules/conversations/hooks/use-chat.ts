@@ -1,4 +1,5 @@
 import { useChat as useAiChat } from "@ai-sdk/react";
+import { getAgentTurnAbortDisposition } from "@wincode/agent-core";
 import {
 	type AgentId,
 	buildAgent,
@@ -77,6 +78,13 @@ export const createChatMessageParts = (
 	files: FileUIPart[]
 ) => [{ text: userText, type: "text" as const }, ...fileMentions, ...files];
 
+/**
+ * Application-owned safety ceiling for one Agent Turn. Mirrors the MCP
+ * execution ceiling (12 hours) so a runaway provider stream cannot hold the
+ * conversation forever; expiry aborts the send with a deadline outcome.
+ */
+const AGENT_TURN_DEADLINE_MS = 43_200_000;
+
 const isBenignCompactionError = (error: unknown): boolean =>
 	error instanceof ConversationCompactionError &&
 	(error.code === "history-too-short" || error.code === "not-needed");
@@ -97,6 +105,26 @@ const waitForCompaction = async (
 		return isBenignCompactionError(error)
 			? null
 			: compactionErrorMessage(error);
+	}
+};
+const conversationSendCancelled = (
+	signal?: AbortSignal
+): ConversationSendOutcome => {
+	if (signal === undefined) {
+		return { rejected: true, reason: "Conversation send cancelled." };
+	}
+	switch (getAgentTurnAbortDisposition(signal.reason)) {
+		case "cancelled":
+			return { rejected: true, reason: "Conversation send cancelled." };
+		case "deadline-exceeded":
+			return {
+				rejected: true,
+				reason: "Conversation send deadline exceeded.",
+			};
+		case "interrupted":
+			return { rejected: true, reason: "Conversation turn interrupted." };
+		default:
+			return { rejected: true, reason: "Conversation send cancelled." };
 	}
 };
 
@@ -390,6 +418,7 @@ export function useChat(
 	>(async () => false);
 	const providerErrorRef = useRef<(error: Error) => void>(() => undefined);
 	const conversationRef = useRef<ConversationOperation | null>(null);
+	const outcomeSignalRef = useRef<AbortSignal | undefined>(undefined);
 	const agentRef = useRef<AgentId>(buildAgent.id);
 	const resolvedAgentRef = useRef<ResolvedAgentRuntime | undefined>(undefined);
 	const modelRef = useRef<ChatModelSelection>(defaultChatModelSelection);
@@ -667,7 +696,8 @@ export function useChat(
 			connections,
 			mcpWithSnapshotRef,
 			skillToolRef,
-			attachmentBudgetRef
+			attachmentBudgetRef,
+			outcomeSignalRef
 		);
 	}, [connections, mcp, registry, sessionId]);
 
@@ -736,9 +766,8 @@ export function useChat(
 		},
 		onError: (providerError) => {
 			// A stream error leaves the partial assistant message in state.
-			// Mark it interrupted so the next request reduces it like any cut-off
-			// turn (its unfinished tool calls must never replay), and persist it
-			// so a reload shows the turn as it failed.
+			// Mark it interrupted so unfinished tool calls never replay on a
+			// later retry; provider error text is normalized separately.
 			const lastAssistantIndex = chat.messages.findLastIndex(
 				({ role }) => role === "assistant"
 			);
@@ -1097,10 +1126,10 @@ export function useChat(
 				: compactionErrorMessage(error);
 		}
 	};
-	const conversationSendCancelled = (): ConversationSendOutcome => ({
-		rejected: true,
-		reason: "Conversation send cancelled.",
-	});
+	const conversationSendCompleted = (
+		signal: AbortSignal
+	): ConversationSendOutcome =>
+		signal.aborted ? conversationSendCancelled(signal) : { rejected: false };
 
 	const submitAnchoredMessage = async (
 		anchoredMessage: CodingAgentUIMessage,
@@ -1124,19 +1153,19 @@ export function useChat(
 			};
 		}
 		if (signal.aborted) {
-			return conversationSendCancelled();
+			return conversationSendCancelled(signal);
 		}
 		setIsPreparingMessage(true);
 		try {
 			if (signal.aborted) {
-				return conversationSendCancelled();
+				return conversationSendCancelled(signal);
 			}
 			await chat.sendMessage({
 				messageId: anchoredMessage.id,
 				metadata,
 				parts: anchoredMessage.parts,
 			});
-			return { rejected: false };
+			return conversationSendCompleted(signal);
 		} finally {
 			setIsPreparingMessage(false);
 		}
@@ -1173,7 +1202,7 @@ export function useChat(
 				);
 		} catch {
 			if (signal.aborted) {
-				return conversationSendCancelled();
+				return conversationSendCancelled(signal);
 			}
 			return {
 				rejected: true,
@@ -1195,7 +1224,7 @@ export function useChat(
 			return { rejected: true, reason: promptPreparationError };
 		}
 		if (signal.aborted) {
-			return conversationSendCancelled();
+			return conversationSendCancelled(signal);
 		}
 		const priorActiveMessages = activeMessagesRef.current;
 		const optimisticMessages = [
@@ -1228,7 +1257,7 @@ export function useChat(
 			);
 			await persistMessagesBeforeSend(persistDisplayMessages, rollbackMessages);
 			setIsPreparingMessage(false);
-			return conversationSendCancelled();
+			return conversationSendCancelled(signal);
 		}
 
 		try {
@@ -1237,7 +1266,7 @@ export function useChat(
 				metadata,
 				parts: durableOptimisticMessage.parts,
 			});
-			return { rejected: false };
+			return conversationSendCompleted(signal);
 		} catch (error) {
 			const nextMessages = activeMessagesRef.current.filter(
 				({ id }) => id !== durableOptimisticMessage.id
@@ -1285,11 +1314,11 @@ export function useChat(
 			return { rejected: true, reason: preparationError };
 		}
 		if (signal.aborted) {
-			return conversationSendCancelled();
+			return conversationSendCancelled(signal);
 		}
 		await createTurnSkillExecution();
 		if (signal.aborted) {
-			return conversationSendCancelled();
+			return conversationSendCancelled(signal);
 		}
 
 		// An anchored turn (HomeView auto-start) re-executes the prompt message
@@ -1322,7 +1351,7 @@ export function useChat(
 		};
 
 		if (signal.aborted) {
-			return conversationSendCancelled();
+			return conversationSendCancelled(signal);
 		}
 		if (anchoredMessage) {
 			return submitAnchoredMessage(anchoredMessage, metadata, signal);
@@ -1336,12 +1365,10 @@ export function useChat(
 	const conversation = useMemo(
 		() =>
 			createConversationOperation({
+				deadlineMs: AGENT_TURN_DEADLINE_MS,
 				execute: async (input, signal) => {
 					if (signal.aborted) {
-						return {
-							rejected: true,
-							reason: "Conversation send cancelled.",
-						};
+						return conversationSendCancelled(signal);
 					}
 					const stop = () => {
 						chatRef.current.stop();
@@ -1349,11 +1376,15 @@ export function useChat(
 						approvalQueueRef.current.rejectAll();
 						closeApprovalsRef.current();
 					};
+					outcomeSignalRef.current = signal;
 					signal.addEventListener("abort", stop, { once: true });
 					try {
 						return await submitRef.current(input, signal);
 					} finally {
 						signal.removeEventListener("abort", stop);
+						if (outcomeSignalRef.current === signal) {
+							outcomeSignalRef.current = undefined;
+						}
 					}
 				},
 				onInterrupt: (preserveToolCallId) =>

@@ -70,10 +70,10 @@ const runtimeEvents = (
 ];
 
 const fakeRuntime = (events: AgentTurnEvent[]): AgentRuntime => ({
-	run: () => ({
+	run: (turn) => ({
 		async *[Symbol.asyncIterator]() {
 			for (const event of events) {
-				yield event;
+				yield { ...event, turnId: turn.id };
 			}
 		},
 	}),
@@ -136,6 +136,71 @@ describe("createLocalChatTransport text-only runtime routing", () => {
 
 		expect(text).toBe("hi there");
 		expect(createStream).not.toHaveBeenCalled();
+	});
+	test("uses a new Agent Turn identity when retrying after a lost stream", async () => {
+		const turnIds: string[] = [];
+		let attempt = 0;
+		const createRuntime: TextOnlyRuntimeFactory = () => ({
+			run: (turn) => {
+				turnIds.push(turn.id);
+				attempt += 1;
+				const events =
+					attempt === 1
+						? [
+								{
+									agentId: "build",
+									sequence: 0,
+									startedAt: 1,
+									turnId: turn.id,
+									type: "agent-turn-started" as const,
+								},
+							]
+						: runtimeEvents("retry");
+				return fakeRuntime(events).run(turn);
+			},
+		});
+		const resolvedAgentRef: MutableRefObject<ResolvedAgentRuntime | undefined> =
+			{ current: { instructions: "Answer plainly.", visibleCodingTools: [] } };
+		const modelRef: MutableRefObject<ChatModelSelection> = {
+			current: selection,
+		};
+		const variantRef: MutableRefObject<undefined> = { current: undefined };
+		const transport = createLocalChatTransport(
+			"session-1",
+			resolvedAgentRef,
+			modelRef,
+			variantRef,
+			connections as Connections,
+			undefined,
+			emptyManifestSnapshot,
+			undefined,
+			"build",
+			createRuntime
+		);
+		const interruptedAssistant = {
+			id: "msg-assistant",
+			metadata: { interrupted: true },
+			parts: [{ text: "partial", type: "text" }],
+			role: "assistant",
+		} as unknown as CodingAgentUIMessage;
+		const attempts: CodingAgentUIMessage[][] = [
+			[userMessage("retry")],
+			[userMessage("retry"), interruptedAssistant],
+		];
+
+		for (const messages of attempts) {
+			const stream = await transport.sendMessages({
+				abortSignal: new AbortController().signal,
+				chatId: "session-1",
+				messageId: "msg-user",
+				messages,
+				trigger: "submit-message",
+			});
+			await consumeChunks(stream);
+		}
+
+		expect(turnIds).toHaveLength(2);
+		expect(turnIds[0]).not.toBe(turnIds[1]);
 	});
 
 	test("commits one Conversation Record checkpoint for an eligible completed send", async () => {

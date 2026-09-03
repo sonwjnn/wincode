@@ -8,6 +8,7 @@ import type {
 	AgentTurnEvent,
 	ConversationRecord,
 } from "@wincode/agent-core";
+import { createAgentTurnAbortReason } from "@wincode/agent-core";
 import type { CodingAgentUIMessage, ResolvedAgentRuntime } from "@wincode/ai";
 import { createModelTarget } from "@wincode/ai/model-target";
 import type { UIMessageChunk } from "ai";
@@ -142,20 +143,22 @@ describe("isTextOnlyEligibleSend", () => {
 		).toBe(false);
 	});
 
-	test("rejects interrupted turns", () => {
+	test("accepts text-only interrupted history for a fresh retry turn", () => {
 		const interrupted = {
-			...userMessage("x"),
+			id: "msg-assistant",
 			metadata: { interrupted: true },
-		} as CodingAgentUIMessage;
+			parts: [{ text: "partial", type: "text" }],
+			role: "assistant",
+		} as unknown as CodingAgentUIMessage;
 		expect(
 			isTextOnlyEligibleSend({
 				mcpManifest: [],
-				messages: [interrupted],
+				messages: [userMessage("x"), interrupted],
 				resolvedAgent: agent,
 				skill: undefined,
 				skillTool: undefined,
 			})
-		).toBe(false);
+		).toBe(true);
 	});
 
 	test("rejects a reasoning-only assistant reply in history", () => {
@@ -339,7 +342,48 @@ describe("createTextOnlyRuntimeStream", () => {
 		});
 
 		const chunks = await consume(stream);
-		expect(chunks).toEqual([{ errorText: "provider blew up", type: "error" }]);
+		expect(chunks).toEqual([
+			{ errorText: "The model request failed.", type: "error" },
+		]);
+	});
+	test("sanitizes failure messages before presentation and persistence", async () => {
+		const checkpoints: ConversationRecord[] = [];
+		const stream = await createTextOnlyRuntimeStream({
+			onCheckpoint: async (record) => {
+				checkpoints.push(record);
+			},
+			runtime: runtimeWith([
+				{
+					agentId: "build",
+					sequence: 0,
+					startedAt: 1,
+					turnId: "turn-1",
+					type: "agent-turn-started",
+				},
+				{
+					failure: {
+						code: "unknown",
+						message: "provider response contains secret-token",
+						retry: "never",
+						source: "model",
+						version: 1,
+					},
+					finishedAt: 2,
+					sequence: 1,
+					turnId: "turn-1",
+					type: "agent-turn-failed",
+				},
+			]),
+			turn: buildTurn(),
+		});
+
+		const chunks = await consume(stream);
+
+		expect(JSON.stringify(chunks)).not.toContain("secret-token");
+		expect(JSON.stringify(checkpoints)).not.toContain("secret-token");
+		expect(chunks).toEqual([
+			{ errorText: "The model request failed.", type: "error" },
+		]);
 	});
 
 	test("streams reasoning deltas before text with open/close parts", async () => {
@@ -531,14 +575,14 @@ describe("createTextOnlyRuntimeStream", () => {
 			{ id: "text-1", type: "text-start" },
 			{ delta: "partial", id: "text-1", type: "text-delta" },
 			{ id: "text-1", type: "text-end" },
-			{ errorText: "provider blew up", type: "error" },
+			{ errorText: "The model request failed.", type: "error" },
 		]);
 		expect(checkpoints).toHaveLength(1);
 		expect(checkpoints[0]).toMatchObject({
 			outcome: {
 				failure: {
 					code: "unknown",
-					message: "provider blew up",
+					message: "The model request failed.",
 					retry: "never",
 					source: "model",
 					version: 1,
@@ -558,11 +602,11 @@ describe("createTextOnlyRuntimeStream", () => {
 		]);
 	});
 
-	test("never checkpoints a run without a terminal outcome", async () => {
-		let checkpointCalls = 0;
+	test("commits an interrupted outcome when execution ends without a terminal", async () => {
+		const checkpoints: ConversationRecord[] = [];
 		const stream = await createTextOnlyRuntimeStream({
-			onCheckpoint: async () => {
-				checkpointCalls += 1;
+			onCheckpoint: async (record) => {
+				checkpoints.push(record);
 			},
 			runtime: runtimeWith([
 				{
@@ -574,11 +618,129 @@ describe("createTextOnlyRuntimeStream", () => {
 				},
 				{ delta: "cut", sequence: 1, turnId: "turn-1", type: "text-delta" },
 			]),
+			signal: new AbortController().signal,
 			turn: buildTurn(),
 		});
 
-		await consume(stream);
-		expect(checkpointCalls).toBe(0);
+		const chunks = await consume(stream);
+
+		expect(chunks).toEqual([
+			{ id: "text-1", type: "text-start" },
+			{ delta: "cut", id: "text-1", type: "text-delta" },
+			{ id: "text-1", type: "text-end" },
+			{
+				errorText: "The Agent Turn was interrupted.",
+				type: "error",
+			},
+		]);
+		expect(checkpoints).toHaveLength(1);
+		expect(checkpoints[0]?.outcome).toMatchObject({
+			failure: {
+				code: "interrupted",
+				retry: "immediate",
+				source: "runtime",
+			},
+			kind: "interrupted",
+			reason: "lost-execution",
+		});
+	});
+	test("commits a distinct cancelled outcome and stops late runtime output", async () => {
+		const { promise: gate, resolve: release } = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
+		const controller = new AbortController();
+		const checkpoints: ConversationRecord[] = [];
+		const runtime: AgentRuntime = {
+			run: () => ({
+				async *[Symbol.asyncIterator]() {
+					started.resolve();
+					yield {
+						agentId: "build",
+						sequence: 0,
+						startedAt: 1,
+						turnId: "turn-1",
+						type: "agent-turn-started" as const,
+					};
+					await gate;
+					yield {
+						delta: "late",
+						sequence: 1,
+						turnId: "turn-1",
+						type: "text-delta" as const,
+					};
+				},
+			}),
+		};
+		const stream = await createTextOnlyRuntimeStream({
+			onCheckpoint: async (record) => {
+				checkpoints.push(record);
+			},
+			runtime,
+			signal: controller.signal,
+			turn: buildTurn(),
+		});
+		const consumption = consume(stream);
+		await started.promise;
+		controller.abort(createAgentTurnAbortReason("cancelled"));
+		release?.();
+
+		const chunks = await consumption;
+
+		expect(chunks).toEqual([
+			{
+				errorText: "The Agent Turn was cancelled.",
+				type: "error",
+			},
+		]);
+		expect(checkpoints[0]?.outcome).toMatchObject({
+			failure: {
+				code: "cancelled",
+				retry: "never",
+				source: "runtime",
+			},
+			kind: "cancelled",
+		});
+	});
+
+	test("commits an explicit user interruption as a new terminal outcome", async () => {
+		const controller = new AbortController();
+		const checkpoints: ConversationRecord[] = [];
+		const runtime = runtimeWith([
+			{
+				agentId: "build",
+				sequence: 0,
+				startedAt: 1,
+				turnId: "turn-1",
+				type: "agent-turn-started",
+			},
+		]);
+		const stream = await createTextOnlyRuntimeStream({
+			onCheckpoint: async (record) => {
+				checkpoints.push(record);
+			},
+			runtime,
+			signal: controller.signal,
+			turn: buildTurn(),
+		});
+		const consumption = consume(stream);
+		controller.abort(createAgentTurnAbortReason("interrupted"));
+
+		const chunks = await consumption;
+
+		expect(chunks).toEqual([
+			{
+				errorText: "The Agent Turn was interrupted.",
+				type: "error",
+			},
+		]);
+		expect(checkpoints[0]?.outcome).toMatchObject({
+			failure: {
+				code: "interrupted",
+				retry: "immediate",
+				source: "runtime",
+			},
+			kind: "interrupted",
+			reason: "user",
+		});
 	});
 
 	test("surfaces a checkpoint failure without emitting a finish chunk", async () => {
@@ -644,7 +806,12 @@ describe("createTextOnlyRuntimeStream", () => {
 		});
 
 		const chunks = await consume(stream);
-		expect(chunks).toEqual([{ errorText: "slow down", type: "error" }]);
+		expect(chunks).toEqual([
+			{
+				errorText: "The model provider rate-limited the request.",
+				type: "error",
+			},
+		]);
 	});
 });
 

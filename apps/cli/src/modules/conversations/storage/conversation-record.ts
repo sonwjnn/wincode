@@ -1,11 +1,11 @@
+import type { OperationalFailure } from "@wincode/agent-core";
 import {
+	AGENT_TURN_INTERRUPTION_REASONS,
+	AgentInvariantError,
 	CONVERSATION_RECORD_VERSION,
 	isAgentTurnMessageRecord,
 	isAgentTurnTextPart,
-	OPERATIONAL_FAILURE_VERSION,
-	operationalFailureCodes,
-	operationalFailureRetryDispositions,
-	operationalFailureSources,
+	isOperationalFailure,
 } from "@wincode/agent-core";
 
 const hasText = (value: unknown): boolean =>
@@ -29,48 +29,43 @@ const isNonNegativeInteger = (value: unknown): boolean => {
 	return Number.isInteger(value) && value >= 0;
 };
 
+const isFiniteTimestamp = (value: unknown): boolean =>
+	typeof value === "number" && Number.isFinite(value) && value >= 0;
+const isOptionalNonNegativeInteger = (value: unknown): boolean =>
+	value === undefined || isNonNegativeInteger(value);
+
 const isUsage = (value: unknown): boolean => {
 	if (typeof value !== "object" || value === null) {
 		return false;
 	}
-	const usage = value as { inputTokens?: unknown; outputTokens?: unknown };
+	const usage = value as Record<string, unknown>;
+	if (
+		Object.keys(usage).some(
+			(key) =>
+				![
+					"cacheReadTokens",
+					"cacheWriteTokens",
+					"inputTokens",
+					"outputTokens",
+					"reasoningTokens",
+					"totalTokens",
+				].includes(key)
+		)
+	) {
+		return false;
+	}
 	return (
 		isNonNegativeInteger(usage.inputTokens) &&
-		isNonNegativeInteger(usage.outputTokens)
+		isNonNegativeInteger(usage.outputTokens) &&
+		isOptionalNonNegativeInteger(usage.cacheReadTokens) &&
+		isOptionalNonNegativeInteger(usage.cacheWriteTokens) &&
+		isOptionalNonNegativeInteger(usage.reasoningTokens) &&
+		isOptionalNonNegativeInteger(usage.totalTokens)
 	);
 };
 
-const isFailure = (value: unknown): boolean => {
-	if (typeof value !== "object" || value === null) {
-		return false;
-	}
-	const failure = value as Record<string, unknown>;
-	if (
-		!(operationalFailureCodes as readonly string[]).includes(
-			String(failure.code)
-		)
-	) {
-		return false;
-	}
-	if (
-		!(operationalFailureSources as readonly string[]).includes(
-			String(failure.source)
-		)
-	) {
-		return false;
-	}
-	if (
-		!(operationalFailureRetryDispositions as readonly string[]).includes(
-			String(failure.retry)
-		)
-	) {
-		return false;
-	}
-	if (typeof failure.message !== "string") {
-		return false;
-	}
-	return failure.version === OPERATIONAL_FAILURE_VERSION;
-};
+const isFailure = (value: unknown): value is OperationalFailure =>
+	isOperationalFailure(value);
 
 const isOutcome = (value: unknown): boolean => {
 	if (typeof value !== "object" || value === null) {
@@ -80,9 +75,10 @@ const isOutcome = (value: unknown): boolean => {
 		finishedAt?: unknown;
 		failure?: unknown;
 		kind?: unknown;
+		reason?: unknown;
 		usage?: unknown;
 	};
-	if (typeof outcome.finishedAt !== "number") {
+	if (!isFiniteTimestamp(outcome.finishedAt)) {
 		return false;
 	}
 	if (outcome.kind === "completed") {
@@ -90,6 +86,18 @@ const isOutcome = (value: unknown): boolean => {
 	}
 	if (outcome.kind === "failed") {
 		return isFailure(outcome.failure);
+	}
+	if (outcome.kind === "cancelled") {
+		return isFailure(outcome.failure) && outcome.failure.code === "cancelled";
+	}
+	if (outcome.kind === "interrupted") {
+		return (
+			isFailure(outcome.failure) &&
+			outcome.failure.code === "interrupted" &&
+			(AGENT_TURN_INTERRUPTION_REASONS as readonly string[]).includes(
+				String(outcome.reason)
+			)
+		);
 	}
 	return false;
 };
@@ -100,6 +108,14 @@ const isMessageRecord = (value: unknown): boolean => {
 	}
 	return Array.isArray(value.parts) && value.parts.every(isAgentTurnTextPart);
 };
+export class ConversationRecordInvariantError extends AgentInvariantError {
+	override readonly code = "invalid-record" as const;
+
+	constructor(message: string, options?: ErrorOptions) {
+		super("invalid-record", message, options);
+		this.name = "ConversationRecordInvariantError";
+	}
+}
 
 /**
  * Validates one Wincode Conversation Record before it is committed. Returns a

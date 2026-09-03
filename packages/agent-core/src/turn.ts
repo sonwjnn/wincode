@@ -4,13 +4,18 @@ import type { ResolvedAgent } from "./agent";
 /** Opaque identity of one Agent Turn. */
 export type AgentTurnId = string;
 
-export const AGENT_TURN_STATUSES = ["running", "completed", "failed"] as const;
+export const AGENT_TURN_STATUSES = [
+	"running",
+	"completed",
+	"failed",
+	"cancelled",
+	"interrupted",
+] as const;
 export type AgentTurnStatus = (typeof AGENT_TURN_STATUSES)[number];
 
 /**
- * Terminal statuses an Agent Turn may reach. Interruption and cancellation
- * arrive with the operational failure ticket; the taxonomy is declared here so
- * records and projections can name them.
+ * Terminal statuses an Agent Turn may reach. A turn has exactly one terminal
+ * status; interruption is distinct from caller cancellation and failure.
  */
 export const AGENT_TURN_TERMINAL_STATUSES = [
 	"completed",
@@ -26,6 +31,17 @@ export const isAgentTurnTerminalStatus = (
 ): value is AgentTurnTerminalStatus =>
 	typeof value === "string" &&
 	(AGENT_TURN_TERMINAL_STATUSES as readonly string[]).includes(value);
+
+export const AGENT_TURN_INTERRUPTION_REASONS = [
+	"lost-execution",
+	"user",
+] as const;
+export type AgentTurnInterruptionReason =
+	(typeof AGENT_TURN_INTERRUPTION_REASONS)[number];
+
+/** Creates an opaque identity for one new Agent Turn. */
+export const createAgentTurnId = (): AgentTurnId =>
+	`turn-${crypto.randomUUID()}`;
 
 /** A Wincode-owned text content part; AI SDK part shapes never cross here. */
 export type AgentTurnTextPart = {
@@ -66,8 +82,16 @@ export const createAgentTurnMessage = (
 	role,
 });
 
-export const isAgentTurnTextPart = (part: unknown): part is AgentTurnTextPart =>
-	typeof part === "object" &&
-	part !== null &&
-	(part as AgentTurnTextPart).type === "text" &&
-	typeof (part as AgentTurnTextPart).text === "string";
+export const isAgentTurnTextPart = (
+	part: unknown
+): part is AgentTurnTextPart => {
+	if (typeof part !== "object" || part === null) {
+		return false;
+	}
+	const value = part as Record<string, unknown>;
+	return (
+		Object.keys(value).every((key) => key === "text" || key === "type") &&
+		value.type === "text" &&
+		typeof value.text === "string"
+	);
+};

@@ -30,7 +30,8 @@ export const createRoutingChatTransport = (
 	connections: Connections,
 	mcp: McpContextValue,
 	skillToolRef?: MutableRefObject<SkillToolDefinition | undefined>,
-	attachmentBudgetRef?: MutableRefObject<AttachmentModelBudget | undefined>
+	attachmentBudgetRef?: MutableRefObject<AttachmentModelBudget | undefined>,
+	outcomeSignalRef?: MutableRefObject<AbortSignal | undefined>
 ): ChatTransport<CodingAgentUIMessage> => ({
 	sendMessages: async (options) => {
 		const snapshot = await mcp.createSnapshot(agentRef.current);
@@ -65,7 +66,8 @@ export const createRoutingChatTransport = (
 				getConversationStore().commitConversationRecord({
 					record,
 					sessionId,
-				})
+				}),
+			outcomeSignalRef
 		).sendMessages({ ...options, messages });
 	},
 	reconnectToStream: async () => null,

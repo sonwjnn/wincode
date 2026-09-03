@@ -1,6 +1,10 @@
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import type { OperationalFailure } from "./failures";
-import type { AgentTurnId, AgentTurnTextPart } from "./turn";
+import type {
+	AgentTurnId,
+	AgentTurnInterruptionReason,
+	AgentTurnTextPart,
+} from "./turn";
 
 export const CONVERSATION_RECORD_VERSION = 1 as const;
 
@@ -16,8 +20,9 @@ export type ConversationMessageRecord = {
 };
 
 /**
- * Durable semantic outcome of one Agent Turn. Interruption and cancellation
- * outcomes arrive with the operational failure ticket.
+ * Durable semantic outcome of one Agent Turn. Every non-completed outcome
+ * carries a safe Operational Failure ticket; interruption records why the
+ * execution stopped without pretending a provider stream can be resumed.
  */
 export type AgentTurnOutcomeRecord =
 	| {
@@ -29,11 +34,22 @@ export type AgentTurnOutcomeRecord =
 			readonly failure: OperationalFailure;
 			readonly finishedAt: number;
 			readonly kind: "failed";
+	  }
+	| {
+			readonly failure: OperationalFailure;
+			readonly finishedAt: number;
+			readonly kind: "cancelled";
+	  }
+	| {
+			readonly failure: OperationalFailure;
+			readonly finishedAt: number;
+			readonly kind: "interrupted";
+			readonly reason: AgentTurnInterruptionReason;
 	  };
 
 /**
- * The durable Conversation Record for one completed or failed Agent Turn:
- * committed message records plus the model, usage, and terminal outcome.
+ * The durable Conversation Record for one completed, failed, cancelled, or
+ * interrupted Agent Turn: committed message records plus model and outcome.
  * Token deltas and other incomplete Agent Turn Events are not persisted.
  */
 export type ConversationRecord = {
@@ -51,10 +67,18 @@ export type ConversationRecord = {
 
 export const isAgentTurnMessageRecord = (
 	record: unknown
-): record is ConversationMessageRecord =>
-	typeof record === "object" &&
-	record !== null &&
-	typeof (record as ConversationMessageRecord).id === "string" &&
-	((record as ConversationMessageRecord).role === "user" ||
-		(record as ConversationMessageRecord).role === "assistant") &&
-	Array.isArray((record as ConversationMessageRecord).parts);
+): record is ConversationMessageRecord => {
+	if (typeof record !== "object" || record === null) {
+		return false;
+	}
+	const value = record as Record<string, unknown>;
+	return (
+		Object.keys(value).every(
+			(key) => key === "id" || key === "parts" || key === "role"
+		) &&
+		typeof value.id === "string" &&
+		value.id.length > 0 &&
+		(value.role === "assistant" || value.role === "user") &&
+		Array.isArray(value.parts)
+	);
+};

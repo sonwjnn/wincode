@@ -1,3 +1,4 @@
+import { createAgentTurnId } from "@wincode/agent-core";
 import type { AgentId, CodingAgentUIMessage } from "@wincode/ai";
 import {
 	buildUsageMessageMetadata,
@@ -47,7 +48,8 @@ export const createLocalChatTransport = (
 	skillToolRef?: MutableRefObject<SkillToolDefinition | undefined>,
 	agentId: AgentId = "build",
 	createRuntime?: TextOnlyRuntimeFactory,
-	commitCheckpoint?: TextOnlyCheckpointCommitter
+	commitCheckpoint?: TextOnlyCheckpointCommitter,
+	outcomeSignalRef?: MutableRefObject<AbortSignal | undefined>
 ): ChatTransport<CodingAgentUIMessage> => ({
 	sendMessages: async ({ abortSignal, messages }) => {
 		const selection = modelRef.current;
@@ -77,10 +79,11 @@ export const createLocalChatTransport = (
 				modelMessages: messages,
 				modelTarget,
 				resolvedAgent,
-				turnId: `turn-${crypto.randomUUID()}`,
+				turnId: createAgentTurnId(),
 			});
 			return createTextOnlyRuntimeStream({
 				onCheckpoint: commitCheckpoint,
+				outcomeSignal: outcomeSignalRef?.current,
 				runtime,
 				signal: abortSignal,
 				turn,

@@ -16,9 +16,12 @@ Chat session lifecycle: creation, messaging, streaming display, compaction, and 
 
 `ChatView` sends through the application-owned `ConversationOperation`. The operation delegates to the existing local AI SDK path, which resolves the current configured agent and direct model, hydrates local attachments, snapshots MCP tools, and streams the response.
 
-### Interrupt
+### Interrupt and terminal outcomes
 
-Esc during streaming arms a confirmation timeout; a second Esc calls `interrupt()` to stop generation.
+Esc during streaming arms a confirmation timeout; a second Esc calls
+`interrupt()` to stop generation and commits an interrupted Agent Turn
+checkpoint. Cancellation and deadline expiry use distinct terminal outcomes;
+provider/runtime failures display their safe Operational Failure message.
 
 ### Compaction
 
