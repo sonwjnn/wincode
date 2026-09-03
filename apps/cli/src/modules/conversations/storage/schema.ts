@@ -1,3 +1,7 @@
+import type {
+	AgentTurnOutcomeRecord,
+	ConversationMessageRecord,
+} from "@wincode/agent-core";
 import type { AgentId, CodingAgentUIMessage } from "@wincode/ai";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { sql } from "drizzle-orm";
@@ -145,10 +149,59 @@ export const promptHistory = sqliteTable("prompt_history", {
 	>(),
 	createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 });
+
+/**
+ * One durable Wincode Conversation Record checkpoint: the committed message
+ * records, model, usage/terminal outcome, and Agent Turn identity of one
+ * semantic checkpoint. Token and reasoning deltas never become rows here.
+ * Rows are scoped to a legacy session for presentation continuity; `position`
+ * keeps checkpoints in commit order per session.
+ */
+export const conversationRecord = sqliteTable(
+	"conversation_record",
+	{
+		recordId: text("record_id").primaryKey(),
+		sessionId: text("session_id")
+			.notNull()
+			.references(() => conversationSession.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		turnId: text("turn_id").notNull(),
+		agentId: text("agent_id").notNull(),
+		modelJson: text("model_json", { mode: "json" })
+			.$type<{ modelId: string; providerId: string }>()
+			.notNull(),
+		outcomeJson: text("outcome_json", { mode: "json" })
+			.$type<AgentTurnOutcomeRecord>()
+			.notNull(),
+		messagesJson: text("messages_json", { mode: "json" })
+			.$type<ConversationMessageRecord[]>()
+			.notNull(),
+		version: integer("version").notNull(),
+		position: integer("position").notNull(),
+		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+	},
+	(table) => [
+		unique("uq_conversation_record_session_position").on(
+			table.sessionId,
+			table.position
+		),
+		index("idx_conversation_record_session_position").on(
+			table.sessionId,
+			table.position
+		),
+		index("idx_conversation_record_session_turn").on(
+			table.sessionId,
+			table.turnId
+		),
+	]
+);
 export const conversationSchema = {
 	conversationAttachment,
 	conversationCompaction,
 	conversationMessage,
+	conversationRecord,
 	conversationSession,
 	conversationWorkspace,
 	promptHistory,

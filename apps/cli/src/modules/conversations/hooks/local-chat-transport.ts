@@ -30,6 +30,7 @@ import {
 	createTextOnlyRuntimeStream,
 	defaultTextOnlyRuntimeFactory,
 	isTextOnlyEligibleSend,
+	type TextOnlyCheckpointCommitter,
 	type TextOnlyRuntimeFactory,
 } from "./text-only-turn";
 
@@ -45,7 +46,8 @@ export const createLocalChatTransport = (
 	snapshot?: McpCatalogSnapshot,
 	skillToolRef?: MutableRefObject<SkillToolDefinition | undefined>,
 	agentId: AgentId = "build",
-	createRuntime?: TextOnlyRuntimeFactory
+	createRuntime?: TextOnlyRuntimeFactory,
+	commitCheckpoint?: TextOnlyCheckpointCommitter
 ): ChatTransport<CodingAgentUIMessage> => ({
 	sendMessages: async ({ abortSignal, messages }) => {
 		const selection = modelRef.current;
@@ -78,6 +80,7 @@ export const createLocalChatTransport = (
 				turnId: `turn-${crypto.randomUUID()}`,
 			});
 			return createTextOnlyRuntimeStream({
+				onCheckpoint: commitCheckpoint,
 				runtime,
 				signal: abortSignal,
 				turn,

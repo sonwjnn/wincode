@@ -1,3 +1,4 @@
+import type { ConversationRecord } from "@wincode/agent-core";
 import type { AgentId, CodingAgentUIMessage } from "@wincode/ai";
 import type { FileUIPart } from "@wincode/ai/client";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
@@ -41,6 +42,16 @@ export type UpdateSessionInput = {
 	title?: string;
 };
 
+/**
+ * One semantic checkpoint: the Wincode Conversation Record committed for one
+ * Agent Turn under a session. The commit is atomic at the ConversationStore
+ * boundary; a rejected commit leaves no partial durable state.
+ */
+export type CommitConversationRecordInput = {
+	record: ConversationRecord;
+	sessionId: string;
+};
+
 export type PersistMessagesInput = {
 	agent: AgentId;
 	messages: CodingAgentUIMessage[];
@@ -64,6 +75,10 @@ export type ConversationStore = {
 	listSessions: () => Promise<ConversationSession[]>;
 	listRecentModelSelections: (limit: number) => ChatModelSelection[];
 	persistMessages: (input: PersistMessagesInput) => Promise<void>;
+	commitConversationRecord: (
+		input: CommitConversationRecordInput
+	) => Promise<void>;
+	listConversationRecords: (sessionId: string) => Promise<ConversationRecord[]>;
 	updateSession: (sessionId: string, data: UpdateSessionInput) => Promise<void>;
 	getPromptHistory: () => Promise<PromptHistoryEntry[]>;
 	recordPrompt: (entry: PromptHistoryEntry) => Promise<void>;

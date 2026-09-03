@@ -1,3 +1,4 @@
+import type { ConversationRecord } from "@wincode/agent-core";
 import type {
 	AgentId,
 	ChatModelSelection,
@@ -58,7 +59,13 @@ export const createRoutingChatTransport = (
 			undefined,
 			snapshot,
 			skillToolRef,
-			agentRef.current
+			agentRef.current,
+			undefined,
+			(record: ConversationRecord) =>
+				getConversationStore().commitConversationRecord({
+					record,
+					sessionId,
+				})
 		).sendMessages({ ...options, messages });
 	},
 	reconnectToStream: async () => null,

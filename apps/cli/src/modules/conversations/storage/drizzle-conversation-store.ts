@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { ConversationRecord } from "@wincode/agent-core";
 import {
 	type AgentId,
 	type CodingAgentUIMessage,
@@ -30,7 +31,9 @@ import {
 	stripAttachmentDisplayMetadata,
 } from "./attachment-store";
 import { type ConversationDatabase, createDatabase } from "./client";
+import { getConversationRecordValidationError } from "./conversation-record";
 import {
+	type CommitConversationRecordInput,
 	type ConversationSession,
 	type ConversationStore,
 	type CreateSessionInput,
@@ -44,6 +47,7 @@ import { resolveLocalAttachmentRoot } from "./path";
 import {
 	conversationCompaction,
 	conversationMessage,
+	conversationRecord,
 	conversationSession,
 	conversationWorkspace,
 	promptHistory,
@@ -688,6 +692,87 @@ const appendCompaction = (
 		return toConversationCompaction(row);
 	});
 
+const writeConversationRecordCheckpoint = (
+	db: ConversationDatabase,
+	workspaceId: string,
+	{ record, sessionId }: CommitConversationRecordInput
+): void => {
+	const validationError = getConversationRecordValidationError(record);
+	if (validationError !== null) {
+		throw new Error(`Invalid Conversation Record: ${validationError}`);
+	}
+	db.transaction((tx) => {
+		const session = tx
+			.select({ id: conversationSession.id })
+			.from(conversationSession)
+			.where(
+				and(
+					eq(conversationSession.id, sessionId),
+					eq(conversationSession.workspaceId, workspaceId)
+				)
+			)
+			.get();
+		if (!session) {
+			throw new Error("Session not found");
+		}
+		const latest = tx
+			.select({ position: conversationRecord.position })
+			.from(conversationRecord)
+			.where(eq(conversationRecord.sessionId, sessionId))
+			.orderBy(desc(conversationRecord.position))
+			.limit(1)
+			.get();
+		tx.insert(conversationRecord)
+			.values({
+				agentId: record.agentId,
+				createdAt: new Date(),
+				messagesJson: [...record.messages],
+				modelJson: record.model,
+				outcomeJson: record.outcome,
+				position: (latest?.position ?? -1) + 1,
+				recordId: record.id,
+				sessionId,
+				turnId: record.turnId,
+				version: record.version,
+			})
+			.run();
+	});
+};
+
+const readConversationRecords = (
+	db: ConversationDatabase,
+	workspaceId: string,
+	sessionId: string
+): ConversationRecord[] => {
+	const rows = db
+		.select({ record: conversationRecord })
+		.from(conversationRecord)
+		.innerJoin(
+			conversationSession,
+			eq(conversationRecord.sessionId, conversationSession.id)
+		)
+		.where(
+			and(
+				eq(conversationRecord.sessionId, sessionId),
+				eq(conversationSession.workspaceId, workspaceId)
+			)
+		)
+		.orderBy(asc(conversationRecord.position))
+		.all();
+	return rows.map(({ record }) => {
+		const recordValue: ConversationRecord = {
+			agentId: record.agentId,
+			id: record.recordId,
+			messages: record.messagesJson,
+			model: record.modelJson,
+			outcome: record.outcomeJson,
+			turnId: record.turnId,
+			version: record.version as ConversationRecord["version"],
+		};
+		return recordValue;
+	});
+};
+
 const migrateLegacyMessages = async (
 	messages: readonly CodingAgentUIMessage[],
 	externalize: (
@@ -952,6 +1037,14 @@ export const createDrizzleConversationStore = (
 				: externalizedMessages;
 		},
 
+		commitConversationRecord: async ({ record, sessionId }) => {
+			writeConversationRecordCheckpoint(db, workspace.id, {
+				record,
+				sessionId,
+			});
+		},
+		listConversationRecords: async (sessionId: string) =>
+			readConversationRecords(db, workspace.id, sessionId),
 		getSession: (sessionId: string) => {
 			const row = db
 				.select()

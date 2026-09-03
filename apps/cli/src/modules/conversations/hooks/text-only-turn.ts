@@ -1,7 +1,12 @@
-import type {
-	AgentRuntime,
-	AgentTurn,
-	AgentTurnMessage,
+import {
+	type AgentRuntime,
+	type AgentTurn,
+	type AgentTurnCompletedEvent,
+	type AgentTurnFailedEvent,
+	type AgentTurnMessage,
+	CONVERSATION_RECORD_VERSION,
+	type ConversationMessageRecord,
+	type ConversationRecord,
 } from "@wincode/agent-core";
 import { createAiSdkTextOnlyAgentRuntime } from "@wincode/agent-runtime-ai-sdk";
 import type {
@@ -131,6 +136,82 @@ export const buildTextOnlyAgentTurn = ({
 	};
 };
 
+/**
+ * Application-owned durability hook: receives the Conversation Record for a
+ * terminal Agent Turn Event and persists it as one semantic checkpoint. The
+ * hook runs before the terminal display chunk is emitted, so the checkpoint
+ * is durable before the executor observes the terminal outcome.
+ */
+export type TextOnlyCheckpointCommitter = (
+	record: ConversationRecord
+) => Promise<void> | void;
+
+/**
+ * Builds the Conversation Record for a terminal Agent Turn Event. A text-only
+ * turn commits exactly the messages it produced: the resolved input plus the
+ * assembled assistant reply when the turn completed with text. Reasoning
+ * deltas are projected live but never become record parts.
+ */
+export const buildTerminalConversationRecord = ({
+	assistantText,
+	event,
+	turn,
+}: {
+	assistantText: string;
+	event: AgentTurnCompletedEvent | AgentTurnFailedEvent;
+	turn: AgentTurn;
+}): ConversationRecord => {
+	const completed = event.type === "agent-turn-completed";
+	const messages: ConversationMessageRecord[] = [...turn.input.messages];
+	if (completed && assistantText.length > 0) {
+		messages.push({
+			id: `assistant-${turn.id}`,
+			parts: [{ text: assistantText, type: "text" }],
+			role: "assistant",
+		});
+	}
+	return {
+		agentId: turn.agent.id,
+		id: `record-${crypto.randomUUID()}`,
+		messages,
+		model: { modelId: turn.model.modelId, providerId: turn.model.providerId },
+		outcome:
+			event.type === "agent-turn-completed"
+				? {
+						finishedAt: event.finishedAt,
+						kind: "completed",
+						...(event.usage === undefined ? {} : { usage: event.usage }),
+					}
+				: {
+						failure: event.failure,
+						finishedAt: event.finishedAt,
+						kind: "failed",
+					},
+		turnId: turn.id,
+		version: CONVERSATION_RECORD_VERSION,
+	};
+};
+
+/** Maps a terminal Agent Turn Event onto the executor display chunk. */
+const terminalChunkFor = (
+	event: AgentTurnCompletedEvent | AgentTurnFailedEvent
+): UIMessageChunk =>
+	event.type === "agent-turn-completed"
+		? {
+				finishReason: "stop",
+				...(event.usage === undefined
+					? {}
+					: { messageMetadata: { usage: event.usage } }),
+				type: "finish",
+			}
+		: {
+				errorText: event.failure.message,
+				type: "error",
+			};
+
+const CHECKPOINT_FAILURE_MESSAGE =
+	"The Agent Turn outcome could not be persisted.";
+
 const TEXT_CHUNK_ID = "text-1";
 const REASONING_CHUNK_ID = "reasoning-1";
 
@@ -194,10 +275,12 @@ const createPartWriter = (enqueue: (chunk: UIMessageChunk) => void) => {
  * Events remain the Wincode source of truth.
  */
 export const createTextOnlyRuntimeStream = async ({
+	onCheckpoint,
 	runtime,
 	signal,
 	turn,
 }: {
+	onCheckpoint?: TextOnlyCheckpointCommitter;
 	runtime: AgentRuntime;
 	signal?: AbortSignal;
 	turn: AgentTurn;
@@ -208,15 +291,50 @@ export const createTextOnlyRuntimeStream = async ({
 				controller.enqueue(chunk);
 			};
 			const writer = createPartWriter(enqueue);
+			let checkpointFailed = false;
+			let streamedText = "";
 			let terminalEmitted = false;
 			const emitTerminal = (chunk: UIMessageChunk): void => {
 				writer.closeParts();
 				terminalEmitted = true;
 				enqueue(chunk);
 			};
+			// Commits the terminal checkpoint before the terminal display
+			// chunk; a failed checkpoint surfaces as a visible error chunk
+			// instead of pretending the turn was durably completed.
+			const checkpointTerminal = async (
+				event: AgentTurnCompletedEvent | AgentTurnFailedEvent
+			): Promise<boolean> => {
+				if (onCheckpoint === undefined) {
+					return true;
+				}
+				try {
+					await onCheckpoint(
+						buildTerminalConversationRecord({
+							assistantText: streamedText,
+							event,
+							turn,
+						})
+					);
+					return true;
+				} catch {
+					// A failed turn failed regardless of record durability, so
+					// its safe failure text stays the visible outcome; only a
+					// completed turn degrades to the persistence error.
+					emitTerminal(
+						event.type === "agent-turn-failed"
+							? terminalChunkFor(event)
+							: {
+									errorText: CHECKPOINT_FAILURE_MESSAGE,
+									type: "error",
+								}
+					);
+					return false;
+				}
+			};
 			try {
 				for await (const event of runtime.run(turn, { signal })) {
-					if (signal?.aborted) {
+					if (signal?.aborted || checkpointFailed) {
 						break;
 					}
 					switch (event.type) {
@@ -232,6 +350,7 @@ export const createTextOnlyRuntimeStream = async ({
 							break;
 						}
 						case "text-delta": {
+							streamedText += event.delta;
 							writer.textDelta(event.delta);
 							break;
 						}
@@ -239,21 +358,13 @@ export const createTextOnlyRuntimeStream = async ({
 							writer.finishStep();
 							break;
 						}
-						case "agent-turn-completed": {
-							emitTerminal({
-								finishReason: "stop",
-								...(event.usage === undefined
-									? {}
-									: { messageMetadata: { usage: event.usage } }),
-								type: "finish",
-							});
-							break;
-						}
+						case "agent-turn-completed":
 						case "agent-turn-failed": {
-							emitTerminal({
-								errorText: event.failure.message,
-								type: "error",
-							});
+							if (await checkpointTerminal(event)) {
+								emitTerminal(terminalChunkFor(event));
+							} else {
+								checkpointFailed = true;
+							}
 							break;
 						}
 						default: {
