@@ -26,8 +26,8 @@
   "type": "module",
   "scripts": {
     "check-types": "bun run --filter '*' check-types",
-    "test": "bun test apps/cli/src packages/ai/src packages/skills/src",
-    "test:unit": "bun test apps/cli/src packages/ai/src packages/skills/src",
+    "test": "bun test apps/cli/src packages/ai/src packages/skills/src packages/agent-core/src packages/agent-runtime-ai-sdk/src",
+    "test:unit": "bun test apps/cli/src packages/ai/src packages/skills/src packages/agent-core/src packages/agent-runtime-ai-sdk/src",
     "dev:cli": "bun run --cwd apps/cli dev",
     "check": "ultracite check",
     "fix": "ultracite fix"

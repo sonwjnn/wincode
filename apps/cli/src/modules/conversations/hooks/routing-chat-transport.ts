@@ -6,6 +6,7 @@ import type {
 } from "@wincode/ai";
 import type { SkillToolDefinition } from "@wincode/skills";
 import type { ChatTransport } from "ai";
+import type { MutableRefObject } from "react";
 import type { AgentRegistry } from "@/modules/agents";
 import { prepareAgentCall } from "@/modules/agents";
 import type { Connections } from "@/modules/connections";
@@ -14,7 +15,6 @@ import type { AttachmentHydrationOptions } from "../storage/attachment-store";
 import { getConversationStore } from "../storage/get-conversation-store";
 import { createLocalChatTransport } from "./local-chat-transport";
 
-type MutableRefObject<T> = { current: T };
 type AttachmentModelBudget = Pick<
 	AttachmentHydrationOptions,
 	"maxAttachments" | "maxBytes" | "maxTokens"
@@ -57,7 +57,8 @@ export const createRoutingChatTransport = (
 			connections,
 			undefined,
 			snapshot,
-			skillToolRef
+			skillToolRef,
+			agentRef.current
 		).sendMessages({ ...options, messages });
 	},
 	reconnectToStream: async () => null,
