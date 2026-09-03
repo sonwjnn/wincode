@@ -1,0 +1,26 @@
+{
+  "name": "@wincode/agent-runtime-ai-sdk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "test": "bun test src"
+  },
+  "dependencies": {
+    "@ai-sdk/provider-utils": "^4.0.27",
+    "@wincode/agent-core": "workspace:*",
+    "@wincode/ai": "workspace:*",
+    "ai": "catalog:"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "@wincode/config": "workspace:*",
+    "typescript": "catalog:"
+  }
+}

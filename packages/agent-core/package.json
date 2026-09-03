@@ -1,0 +1,21 @@
+{
+  "name": "@wincode/agent-core",
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "test": "bun test src"
+  },
+  "dependencies": {
+    "@wincode/ai": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "@wincode/config": "workspace:*",
+    "typescript": "catalog:"
+  }
+}

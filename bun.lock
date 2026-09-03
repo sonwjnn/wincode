@@ -26,6 +26,8 @@
         "@opentui/core": "0.4.5",
         "@opentui/react": "0.4.5",
         "@tanstack/react-router": "catalog:",
+        "@wincode/agent-core": "workspace:*",
+        "@wincode/agent-runtime-ai-sdk": "workspace:*",
         "@wincode/ai": "workspace:*",
         "@wincode/env": "workspace:*",
         "@wincode/skills": "workspace:*",
@@ -49,6 +51,32 @@
         "drizzle-kit": "^0.31.10",
       },
       "peerDependencies": {
+        "typescript": "catalog:",
+      },
+    },
+    "packages/agent-core": {
+      "name": "@wincode/agent-core",
+      "dependencies": {
+        "@wincode/ai": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@wincode/config": "workspace:*",
+        "typescript": "catalog:",
+      },
+    },
+    "packages/agent-runtime-ai-sdk": {
+      "name": "@wincode/agent-runtime-ai-sdk",
+      "version": "0.0.0",
+      "dependencies": {
+        "@ai-sdk/provider-utils": "^4.0.27",
+        "@wincode/agent-core": "workspace:*",
+        "@wincode/ai": "workspace:*",
+        "ai": "catalog:",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@wincode/config": "workspace:*",
         "typescript": "catalog:",
       },
     },
@@ -474,6 +502,10 @@
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
 
     "@vercel/oidc": ["@vercel/oidc@3.2.0", "", {}, "sha512-UycprH3T6n3jH0k44NHMa7pnFHGu/N05MjojYr+Mc6I7obkoLIJujSWwin1pCvdy/eOxrI/l3uDLQsmcrOb4ug=="],
+
+    "@wincode/agent-core": ["@wincode/agent-core@workspace:packages/agent-core"],
+
+    "@wincode/agent-runtime-ai-sdk": ["@wincode/agent-runtime-ai-sdk@workspace:packages/agent-runtime-ai-sdk"],
 
     "@wincode/ai": ["@wincode/ai@workspace:packages/ai"],
 

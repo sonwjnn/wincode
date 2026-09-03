@@ -1,6 +1,6 @@
+import type { AgentId, CodingAgentUIMessage } from "@wincode/ai";
 import {
 	buildUsageMessageMetadata,
-	type CodingAgentUIMessage,
 	expandFileMentionPartsForModel,
 	getChatModelRoute,
 	type ModelVariant,
@@ -24,6 +24,13 @@ import type { Connections } from "@/modules/connections";
 import type { McpCatalogSnapshot } from "@/modules/mcp";
 import { resolveChatModelTarget } from "../../model-target";
 import { getOriginatingUserSkill } from "../selection";
+import {
+	buildTextOnlyAgentTurn,
+	createTextOnlyRuntimeStream,
+	defaultTextOnlyRuntimeFactory,
+	isTextOnlyEligibleSend,
+	type TextOnlyRuntimeFactory,
+} from "./text-only-turn";
 
 type MutableRefObject<T> = { current: T };
 
@@ -37,7 +44,9 @@ export const createLocalChatTransport = (
 	connections: Connections,
 	createStream: CreateAgentUIStream = createAgentUIStream,
 	snapshot?: McpCatalogSnapshot,
-	skillToolRef?: MutableRefObject<SkillToolDefinition | undefined>
+	skillToolRef?: MutableRefObject<SkillToolDefinition | undefined>,
+	agentId: AgentId = "build",
+	createRuntime?: TextOnlyRuntimeFactory
 ): ChatTransport<CodingAgentUIMessage> => ({
 	sendMessages: async ({ abortSignal, messages }) => {
 		const selection = modelRef.current;
@@ -50,6 +59,32 @@ export const createLocalChatTransport = (
 			signal: abortSignal,
 			variant: variantRef.current,
 		});
+		const resolvedAgent = resolvedAgentRef.current;
+		const runtimeEligible =
+			resolvedAgent !== undefined &&
+			isTextOnlyEligibleSend({
+				mcpManifest: snapshot?.manifest ?? [],
+				messages,
+				resolvedAgent,
+				skill,
+				skillTool: skillToolRef?.current,
+			});
+		if (runtimeEligible) {
+			const runtime = (createRuntime ?? defaultTextOnlyRuntimeFactory)();
+			const turn = buildTextOnlyAgentTurn({
+				agent: agentId,
+				modelMessages: messages,
+				modelTarget,
+				resolvedAgent,
+				turnId: `turn-${crypto.randomUUID()}`,
+			});
+			return createTextOnlyRuntimeStream({
+				runtime,
+				signal: abortSignal,
+				turn,
+			});
+		}
+
 		const resolvedModel = resolveAiSdkModelTarget(modelTarget);
 		// The shell declaration is composed per platform so the model knows which
 		// shell syntax to write.

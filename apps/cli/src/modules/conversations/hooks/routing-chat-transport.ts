@@ -57,7 +57,8 @@ export const createRoutingChatTransport = (
 			connections,
 			undefined,
 			snapshot,
-			skillToolRef
+			skillToolRef,
+			agentRef.current
 		).sendMessages({ ...options, messages });
 	},
 	reconnectToStream: async () => null,
