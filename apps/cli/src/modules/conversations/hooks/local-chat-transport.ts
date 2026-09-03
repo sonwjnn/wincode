@@ -27,13 +27,15 @@ import type { McpCatalogSnapshot } from "@/modules/mcp";
 import { resolveChatModelTarget } from "../../model-target";
 import { getOriginatingUserSkill } from "../selection";
 import {
-	buildTextOnlyAgentTurn,
-	createTextOnlyRuntimeStream,
-	defaultTextOnlyRuntimeFactory,
-	isTextOnlyEligibleSend,
-	type TextOnlyCheckpointCommitter,
-	type TextOnlyRuntimeFactory,
-} from "./text-only-turn";
+	buildAgentTurn,
+	type CheckpointCommitter,
+	createGatedCodingTools,
+	createRuntimeStream,
+	defaultRuntimeFactory,
+	isRuntimeEligibleSend,
+	type RuntimeFactory,
+	type RuntimeGatedTooling,
+} from "./runtime-turn";
 
 type CreateAgentUIStream = typeof createAgentUIStream;
 
@@ -47,9 +49,10 @@ export const createLocalChatTransport = (
 	snapshot?: McpCatalogSnapshot,
 	skillToolRef?: MutableRefObject<SkillToolDefinition | undefined>,
 	agentId: AgentId = "build",
-	createRuntime?: TextOnlyRuntimeFactory,
-	commitCheckpoint?: TextOnlyCheckpointCommitter,
-	outcomeSignalRef?: MutableRefObject<AbortSignal | undefined>
+	createRuntime?: RuntimeFactory,
+	commitCheckpoint?: CheckpointCommitter,
+	outcomeSignalRef?: MutableRefObject<AbortSignal | undefined>,
+	gatedTooling?: RuntimeGatedTooling
 ): ChatTransport<CodingAgentUIMessage> => ({
 	sendMessages: async ({ abortSignal, messages }) => {
 		const selection = modelRef.current;
@@ -63,9 +66,13 @@ export const createLocalChatTransport = (
 			variant: variantRef.current,
 		});
 		const resolvedAgent = resolvedAgentRef.current;
+		// Runtime eligibility covers migrated Tool families only; any other
+		// visible coding tool, MCP catalog, or Skill — or a tool-armed Agent
+		// without the application Tool Gate — keeps the legacy loop.
 		const runtimeEligible =
 			resolvedAgent !== undefined &&
-			isTextOnlyEligibleSend({
+			isRuntimeEligibleSend({
+				gate: gatedTooling?.gate,
 				mcpManifest: snapshot?.manifest ?? [],
 				messages,
 				resolvedAgent,
@@ -73,15 +80,23 @@ export const createLocalChatTransport = (
 				skillTool: skillToolRef?.current,
 			});
 		if (runtimeEligible) {
-			const runtime = (createRuntime ?? defaultTextOnlyRuntimeFactory)();
-			const turn = buildTextOnlyAgentTurn({
+			const runtime = (createRuntime ?? defaultRuntimeFactory)();
+			const turn = buildAgentTurn({
 				agent: agentId,
 				modelMessages: messages,
 				modelTarget,
 				resolvedAgent,
+				tools:
+					gatedTooling === undefined
+						? []
+						: createGatedCodingTools({
+								agentTools: resolvedAgent.visibleCodingTools,
+								gate: gatedTooling.gate,
+								resolveResourceLimits: gatedTooling.resolveResourceLimits,
+							}),
 				turnId: createAgentTurnId(),
 			});
-			return createTextOnlyRuntimeStream({
+			return createRuntimeStream({
 				onCheckpoint: commitCheckpoint,
 				outcomeSignal: outcomeSignalRef?.current,
 				runtime,

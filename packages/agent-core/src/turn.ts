@@ -1,5 +1,6 @@
 import type { ModelTarget } from "@wincode/ai/model-target";
 import type { ResolvedAgent } from "./agent";
+import type { ResolvedTool, ToolCallId } from "./tools";
 
 /** Opaque identity of one Agent Turn. */
 export type AgentTurnId = string;
@@ -49,11 +50,42 @@ export type AgentTurnTextPart = {
 	readonly type: "text";
 };
 
-/** A Wincode-owned message: roles and text content only, no SDK shapes. */
+/** One Assistant request to invoke a tool; its result arrives in a later `tool` message. */
+export type AgentTurnToolCallPart = {
+	readonly input: unknown;
+	readonly toolCallId: ToolCallId;
+	readonly toolName: string;
+	readonly type: "tool-call";
+};
+
+/** One `tool` role message carrying a successful Tool Call output. */
+export type AgentTurnToolResultPart = {
+	readonly output: unknown;
+	readonly toolCallId: ToolCallId;
+	readonly toolName: string;
+	readonly type: "tool-result";
+};
+
+/** One `tool` role message carrying a safe Tool Call failure text. */
+export type AgentTurnToolFailurePart = {
+	readonly errorText: string;
+	readonly toolCallId: ToolCallId;
+	readonly toolName: string;
+	readonly type: "tool-failure";
+};
+
+/** A Wincode-owned message content part; AI SDK part shapes never cross here. */
+export type AgentTurnPart =
+	| AgentTurnTextPart
+	| AgentTurnToolCallPart
+	| AgentTurnToolResultPart
+	| AgentTurnToolFailurePart;
+
+/** A Wincode-owned message. `tool` messages carry Tool Call results. */
 export type AgentTurnMessage = {
 	readonly id: string;
-	readonly parts: readonly AgentTurnTextPart[];
-	readonly role: "assistant" | "user";
+	readonly parts: readonly AgentTurnPart[];
+	readonly role: "assistant" | "tool" | "user";
 };
 
 /** One resolved input to an Agent Turn: the conversation so far. */
@@ -63,13 +95,16 @@ export type AgentTurnInput = {
 
 /**
  * A fully resolved Agent Turn ready for one runtime invocation: the Agent,
- * the transient Model Target, and the input conversation.
+ * the transient Model Target, the input conversation, and the gated Tools
+ * the Agent may invoke. An absent or empty `tools` list runs a tool-less
+ * turn.
  */
 export type AgentTurn = {
 	readonly agent: ResolvedAgent;
 	readonly id: AgentTurnId;
 	readonly input: AgentTurnInput;
 	readonly model: ModelTarget;
+	readonly tools?: readonly ResolvedTool[];
 };
 
 export const createAgentTurnMessage = (
@@ -95,3 +130,82 @@ export const isAgentTurnTextPart = (
 		typeof value.text === "string"
 	);
 };
+
+export const isAgentTurnToolCallPart = (
+	part: unknown
+): part is AgentTurnToolCallPart => {
+	if (typeof part !== "object" || part === null) {
+		return false;
+	}
+	const value = part as Record<string, unknown>;
+	return (
+		Object.keys(value).every(
+			(key) =>
+				key === "input" ||
+				key === "toolCallId" ||
+				key === "toolName" ||
+				key === "type"
+		) &&
+		value.type === "tool-call" &&
+		typeof value.toolCallId === "string" &&
+		value.toolCallId.length > 0 &&
+		typeof value.toolName === "string" &&
+		value.toolName.length > 0 &&
+		"input" in value
+	);
+};
+
+export const isAgentTurnToolResultPart = (
+	part: unknown
+): part is AgentTurnToolResultPart => {
+	if (typeof part !== "object" || part === null) {
+		return false;
+	}
+	const value = part as Record<string, unknown>;
+	return (
+		Object.keys(value).every(
+			(key) =>
+				key === "output" ||
+				key === "toolCallId" ||
+				key === "toolName" ||
+				key === "type"
+		) &&
+		value.type === "tool-result" &&
+		typeof value.toolCallId === "string" &&
+		value.toolCallId.length > 0 &&
+		typeof value.toolName === "string" &&
+		value.toolName.length > 0 &&
+		"output" in value
+	);
+};
+
+export const isAgentTurnToolFailurePart = (
+	part: unknown
+): part is AgentTurnToolFailurePart => {
+	if (typeof part !== "object" || part === null) {
+		return false;
+	}
+	const value = part as Record<string, unknown>;
+	return (
+		Object.keys(value).every(
+			(key) =>
+				key === "errorText" ||
+				key === "toolCallId" ||
+				key === "toolName" ||
+				key === "type"
+		) &&
+		value.type === "tool-failure" &&
+		typeof value.toolCallId === "string" &&
+		value.toolCallId.length > 0 &&
+		typeof value.toolName === "string" &&
+		value.toolName.length > 0 &&
+		typeof value.errorText === "string" &&
+		value.errorText.length > 0
+	);
+};
+
+export const isAgentTurnPart = (part: unknown): part is AgentTurnPart =>
+	isAgentTurnTextPart(part) ||
+	isAgentTurnToolCallPart(part) ||
+	isAgentTurnToolResultPart(part) ||
+	isAgentTurnToolFailurePart(part);

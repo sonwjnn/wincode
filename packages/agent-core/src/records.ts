@@ -8,14 +8,43 @@ import type {
 
 export const CONVERSATION_RECORD_VERSION = 1 as const;
 
+/** Durable outcome of one committed Tool Call. */
+export type ToolCallOutcomeRecord =
+	| {
+			readonly kind: "success";
+			readonly output: unknown;
+	  }
+	| {
+			readonly errorText: string;
+			readonly kind: "failure";
+	  };
+
 /**
- * Wincode-owned durable Conversation content. This is the text-only edition of
- * the record schema; tool parts, Skill metadata, and Attachment References
- * extend it with later tracer slices. AI SDK part shapes never appear here.
+ * One committed Tool Call part of an assistant message: the request input,
+ * the settled outcome, and the Agent Turn event sequence of the outcome so
+ * consumers can order durable content against the transient event stream.
+ */
+export type ConversationToolCallPart = {
+	readonly input: unknown;
+	readonly outcome: ToolCallOutcomeRecord;
+	readonly sequence: number;
+	readonly toolCallId: string;
+	readonly toolName: string;
+	readonly type: "tool-call";
+};
+
+export type ConversationMessagePart =
+	| AgentTurnTextPart
+	| ConversationToolCallPart;
+
+/**
+ * Wincode-owned durable Conversation content: committed text and Tool Call
+ * parts. Skill metadata and Attachment References extend it with later
+ * tracer slices. AI SDK part shapes never appear here.
  */
 export type ConversationMessageRecord = {
 	readonly id: string;
-	readonly parts: readonly AgentTurnTextPart[];
+	readonly parts: readonly ConversationMessagePart[];
 	readonly role: "assistant" | "user";
 };
 

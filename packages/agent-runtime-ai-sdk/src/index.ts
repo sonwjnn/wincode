@@ -1,7 +1,7 @@
 // biome-ignore-all lint/performance/noBarrelFile: Private adapter package entry point.
 
-export type { TextOnlyAgentRuntimeOptions } from "./text-only-runtime";
+export type { AgentRuntimeOptions } from "./agent-runtime";
 export {
-	createAiSdkTextOnlyAgentRuntime,
+	createAiSdkAgentRuntime,
 	defaultResolveAgentModel,
-} from "./text-only-runtime";
+} from "./agent-runtime";

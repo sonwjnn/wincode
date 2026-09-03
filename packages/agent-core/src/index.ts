@@ -27,6 +27,8 @@ export type {
 	ModelStepStartedEvent,
 	ReasoningDeltaEvent,
 	TextDeltaEvent,
+	ToolCallFinishedEvent,
+	ToolCallStartedEvent,
 } from "./events";
 export {
 	AGENT_TURN_EVENT_TERMINAL_TYPES,
@@ -59,8 +61,11 @@ export { createAgentTurnLifecycle } from "./lifecycle";
 export type { ModelStep, ModelStepId } from "./model-step";
 export type {
 	AgentTurnOutcomeRecord,
+	ConversationMessagePart,
 	ConversationMessageRecord,
 	ConversationRecord,
+	ConversationToolCallPart,
+	ToolCallOutcomeRecord,
 } from "./records";
 export {
 	CONVERSATION_RECORD_VERSION,
@@ -81,14 +86,36 @@ export {
 	getAgentTurnFailureDetails,
 } from "./runtime";
 export type {
+	ResolvedTool,
+	ToolCallFailure,
+	ToolCallId,
+	ToolCallOutput,
+	ToolCallRequest,
+	ToolCallSuccess,
+	ToolDefinition,
+	ToolExecutor,
+	ToolExecutorOptions,
+	ToolRegistry,
+} from "./tools";
+export {
+	createToolRegistry,
+	isResolvedTool,
+	isToolCallOutput,
+	isToolDefinition,
+} from "./tools";
+export type {
 	AgentTurn,
 	AgentTurnId,
 	AgentTurnInput,
 	AgentTurnInterruptionReason,
 	AgentTurnMessage,
+	AgentTurnPart,
 	AgentTurnStatus,
 	AgentTurnTerminalStatus,
 	AgentTurnTextPart,
+	AgentTurnToolCallPart,
+	AgentTurnToolFailurePart,
+	AgentTurnToolResultPart,
 } from "./turn";
 export {
 	AGENT_TURN_INTERRUPTION_REASONS,
@@ -96,6 +123,10 @@ export {
 	AGENT_TURN_TERMINAL_STATUSES,
 	createAgentTurnId,
 	createAgentTurnMessage,
+	isAgentTurnPart,
 	isAgentTurnTerminalStatus,
 	isAgentTurnTextPart,
+	isAgentTurnToolCallPart,
+	isAgentTurnToolFailurePart,
+	isAgentTurnToolResultPart,
 } from "./turn";

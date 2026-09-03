@@ -387,6 +387,13 @@ export function useChat(
 		[closeApprovals, toolGateState]
 	);
 	const toolGate = toolGateState.gate;
+	// Runtime-armed coding tools need the Gate plus the resource-profile
+	// resolver as one unit; the legacy handler path keeps its own resolver
+	// reference below.
+	const runtimeGatedToolingRef = useLatest({
+		gate: toolGate,
+		resolveResourceLimits: () => resolveResourceLimitsRef.current(),
+	});
 	const addToolOutputRef =
 		useRef<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>(null);
 	const dynamicToolOutputRef = useRef<McpAddToolOutput | null>(null);
@@ -697,7 +704,8 @@ export function useChat(
 			mcpWithSnapshotRef,
 			skillToolRef,
 			attachmentBudgetRef,
-			outcomeSignalRef
+			outcomeSignalRef,
+			runtimeGatedToolingRef
 		);
 	}, [connections, mcp, registry, sessionId]);
 
