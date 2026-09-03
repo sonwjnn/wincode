@@ -20,6 +20,7 @@ import {
 	type SkillToolDefinition,
 } from "@wincode/skills";
 import { type ChatTransport, createAgentUIStream } from "ai";
+import type { MutableRefObject } from "react";
 import type { Connections } from "@/modules/connections";
 import type { McpCatalogSnapshot } from "@/modules/mcp";
 import { resolveChatModelTarget } from "../../model-target";
@@ -31,8 +32,6 @@ import {
 	isTextOnlyEligibleSend,
 	type TextOnlyRuntimeFactory,
 } from "./text-only-turn";
-
-type MutableRefObject<T> = { current: T };
 
 type CreateAgentUIStream = typeof createAgentUIStream;
 

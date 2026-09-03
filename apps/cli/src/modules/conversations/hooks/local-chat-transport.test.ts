@@ -3,12 +3,11 @@ import type { AgentRuntime, AgentTurnEvent } from "@wincode/agent-core";
 import type { CodingAgentUIMessage, ResolvedAgentRuntime } from "@wincode/ai";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import type { UIMessageChunk } from "ai";
+import type { MutableRefObject } from "react";
 import type { Connections } from "@/modules/connections";
 import type { McpCatalogSnapshot } from "@/modules/mcp";
 import { createLocalChatTransport } from "./local-chat-transport";
 import type { TextOnlyRuntimeFactory } from "./text-only-turn";
-
-type MutableRefObject<T> = { current: T };
 
 const selection: ChatModelSelection = {
 	modelId: "gpt-5.4-mini",
