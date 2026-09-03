@@ -242,6 +242,63 @@ describe("createAiSdkTextOnlyAgentRuntime", () => {
 		expect(collected).toEqual(["agent-turn-started", "model-step-started"]);
 	});
 
+	test("emits a failed terminal for an internal SDK abort the caller did not cause", async () => {
+		// The caller never aborted, yet the SDK stopped with an AbortError
+		// (provider or step-controller initiated). Swallowing it would end the
+		// run with no terminal event, violating the exactly-one-terminal
+		// contract and silently truncating the UI reply.
+		const abortError = new Error("The stream was aborted.");
+		abortError.name = "AbortError";
+		const subject = await loadSubject([], { streamThrows: abortError });
+		const { createAiSdkTextOnlyAgentRuntime: loadRuntime } = subject;
+		const runtime = loadRuntime();
+		const events = await consume(runtime.run(buildTurn()));
+
+		expect(events.map(({ type }) => type)).toEqual([
+			"agent-turn-started",
+			"agent-turn-failed",
+		]);
+		const failed = events.at(-1);
+		expect(failed?.type).toBe("agent-turn-failed");
+		if (failed?.type === "agent-turn-failed") {
+			expect(failed.failure.code).toBe("cancelled");
+			// Cancellation is turn-machinery behavior, not a model verdict:
+			// the failure carries the runtime source, never the model's.
+			expect(failed.failure.source).toBe("runtime");
+			expect(failed.failure.version).toBe(1);
+			expect(failed.failure.message).not.toContain("aborted");
+		}
+	});
+
+	test("attributes an abort-shaped error part to the runtime, not the model", async () => {
+		const abortError = new Error("cancelled by provider");
+		abortError.name = "AbortError";
+		const subject = await loadSubject([
+			{ type: "start-step", request: {}, warnings: [] },
+			{ type: "error", error: abortError },
+		]);
+		const { createAiSdkTextOnlyAgentRuntime: loadRuntime } = subject;
+		const runtime = loadRuntime();
+		const events = await consume(runtime.run(buildTurn()));
+
+		expect(events.map(({ type }) => type)).toEqual([
+			"agent-turn-started",
+			"model-step-started",
+			"agent-turn-failed",
+		]);
+		const failed = events.at(-1);
+		expect(failed?.type).toBe("agent-turn-failed");
+		if (failed?.type === "agent-turn-failed") {
+			expect(failed.failure).toMatchObject({
+				code: "cancelled",
+				retry: "never",
+				source: "runtime",
+				version: 1,
+			});
+			expect(failed.failure.message).not.toContain("provider");
+		}
+	});
+
 	test("maps a thrown provider error to a failed terminal event", async () => {
 		const subject = await loadSubject([], {
 			streamThrows: new Error("connection reset"),

@@ -52,6 +52,10 @@ const resolveTerminalFailure = (
 	turn: AgentTurn
 ): OperationalFailure => {
 	if (isAbortLike(error)) {
+		// Cancellation the caller did not cause is turn-machinery behavior,
+		// not a model verdict: it carries the runtime source. Caller aborts
+		// never reach here — the run gates on the caller's signal instead and
+		// yields no terminal event.
 		return {
 			code: "cancelled",
 			details: {
@@ -60,7 +64,7 @@ const resolveTerminalFailure = (
 			},
 			message: "The Agent Turn was cancelled.",
 			retry: "never",
-			source: "model",
+			source: "runtime",
 			version: OPERATIONAL_FAILURE_VERSION,
 		};
 	}
@@ -240,7 +244,10 @@ const runTextOnlyTurn = async function* (
 			}
 		}
 	} catch (error) {
-		if (signal?.aborted || isAbortLike(error)) {
+		// Only the caller's own abort ends a run without a terminal event.
+		// An AbortError the SDK raised on its own (provider or step-controller
+		// initiated) is a genuine failure and must surface as one.
+		if (signal?.aborted) {
 			return;
 		}
 		yield {
