@@ -11,7 +11,7 @@ describe("getProviderErrorMessage", () => {
 		const wrappedError = new Error("Bad Request", { cause: providerError });
 
 		expect(getProviderErrorMessage(wrappedError)).toBe(
-			"Model is not supported."
+			"The model rejected the request."
 		);
 	});
 
@@ -20,6 +20,8 @@ describe("getProviderErrorMessage", () => {
 			cause: new Error("Bad Request"),
 		});
 
-		expect(getProviderErrorMessage(wrappedError)).toBe("Bad Request");
+		expect(getProviderErrorMessage(wrappedError)).toBe(
+			"The model rejected the request."
+		);
 	});
 });

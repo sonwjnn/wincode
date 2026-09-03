@@ -5,10 +5,19 @@ import type {
 	AgentTurn,
 	AgentTurnEvent,
 	AgentTurnEventStream,
+	AgentTurnTerminalEvent,
 	ModelStepId,
 	OperationalFailure,
 } from "@wincode/agent-core";
-import { OPERATIONAL_FAILURE_VERSION } from "@wincode/agent-core";
+import {
+	AgentInvariantError,
+	createAgentTurnAbortEvent,
+	createAgentTurnLifecycle,
+	createOperationalFailure,
+	getAgentTurnFailureDetails,
+	isAgentInvariantError,
+	isAgentTurnTerminalEvent,
+} from "@wincode/agent-core";
 import type { ModelFailure } from "@wincode/ai/failures";
 import { normalizeModelFailure } from "@wincode/ai/failures";
 import type { ModelUsage } from "@wincode/ai/model-usage";
@@ -41,57 +50,262 @@ const isAbortLike = (error: unknown): boolean =>
 	"name" in error &&
 	(error as { name?: unknown }).name === "AbortError";
 
-/**
- * Maps an expected model failure to the safe, versioned Agent Turn failure
- * contract. The normalized model failure taxonomy supplies stable codes,
- * presentation-safe messages, and retry dispositions; raw causes, credentials,
- * prompts, headers, and provider bodies never reach the public shape.
- */
 const resolveTerminalFailure = (
 	error: unknown,
 	turn: AgentTurn
 ): OperationalFailure => {
 	if (isAbortLike(error)) {
-		// Cancellation the caller did not cause is turn-machinery behavior,
-		// not a model verdict: it carries the runtime source. Caller aborts
-		// never reach here — the run gates on the caller's signal instead and
-		// yields no terminal event.
-		return {
+		return createOperationalFailure({
 			code: "cancelled",
-			details: {
-				modelId: turn.model.modelId,
-				providerId: turn.model.providerId,
-			},
-			message: "The Agent Turn was cancelled.",
+			details: getAgentTurnFailureDetails(turn),
 			retry: "never",
 			source: "runtime",
-			version: OPERATIONAL_FAILURE_VERSION,
-		};
+		});
 	}
 	const modelFailure: ModelFailure = normalizeModelFailure(error, {
 		modelId: turn.model.modelId,
 		providerId: turn.model.providerId,
 	});
-	return {
+	return createOperationalFailure({
 		code: modelFailure.code,
 		details: {
-			modelId: modelFailure.details?.modelId,
-			...(modelFailure.details?.providerId
-				? { providerId: modelFailure.details.providerId }
-				: {}),
-			...(modelFailure.details?.retryAfterMs
-				? { retryAfterMs: modelFailure.details.retryAfterMs }
-				: {}),
+			...getAgentTurnFailureDetails(turn),
+			...(modelFailure.details?.retryAfterMs === undefined
+				? {}
+				: { retryAfterMs: modelFailure.details.retryAfterMs }),
+			...(modelFailure.details?.statusCode === undefined
+				? {}
+				: { statusCode: modelFailure.details.statusCode }),
 		},
-		message: modelFailure.message,
 		retry: modelFailure.retry,
-		source: "model",
-		version: OPERATIONAL_FAILURE_VERSION,
-	};
+		source: modelFailure.source === "runtime" ? "runtime" : "model",
+	});
 };
 
 const toModelUsage = (usage: unknown): ModelUsage | undefined =>
 	normalizeModelUsage(usage) ?? undefined;
+
+const resolveRuntimeSignal = (
+	signal: AbortSignal | undefined,
+	deadlineMs: number | undefined
+): AbortSignal | undefined => {
+	if (deadlineMs === undefined) {
+		return signal;
+	}
+	if (!Number.isInteger(deadlineMs) || deadlineMs < 0) {
+		throw new AgentInvariantError(
+			"invalid-runtime",
+			"Agent Runtime deadline must be a non-negative integer.",
+			{ cause: deadlineMs }
+		);
+	}
+	const deadlineSignal = AbortSignal.timeout(deadlineMs);
+	return signal === undefined
+		? deadlineSignal
+		: AbortSignal.any([signal, deadlineSignal]);
+};
+
+const createAbortError = (reason: unknown): Error =>
+	reason instanceof Error
+		? reason
+		: new Error("Agent Runtime operation was aborted.", { cause: reason });
+const awaitWithAbort = async <Value>(
+	operation: Promise<Value>,
+	signal: AbortSignal | undefined
+): Promise<Value> => {
+	if (signal === undefined) {
+		return operation;
+	}
+	if (signal.aborted) {
+		void operation.catch(() => undefined);
+		throw createAbortError(signal.reason);
+	}
+	const aborted = Promise.withResolvers<never>();
+	const onAbort = (): void => {
+		aborted.reject(createAbortError(signal.reason));
+	};
+	signal.addEventListener("abort", onAbort, { once: true });
+	try {
+		return await Promise.race([operation, aborted.promise]);
+	} finally {
+		signal.removeEventListener("abort", onAbort);
+	}
+};
+
+const createStoppedEventIfAborted = (
+	turn: AgentTurn,
+	signal: AbortSignal | undefined,
+	sequence: number
+): AgentTurnTerminalEvent | undefined =>
+	signal?.aborted
+		? createAgentTurnAbortEvent(turn, signal, sequence)
+		: undefined;
+
+const createInternalAbortFailure = (
+	turn: AgentTurn,
+	sequence: number
+): AgentTurnTerminalEvent => ({
+	failure: createOperationalFailure({
+		code: "cancelled",
+		details: getAgentTurnFailureDetails(turn),
+		retry: "never",
+		source: "runtime",
+	}),
+	finishedAt: Date.now(),
+	sequence,
+	turnId: turn.id,
+	type: "agent-turn-failed",
+});
+
+type AiSdkTextStreamPart = {
+	readonly error?: unknown;
+	readonly text?: unknown;
+	readonly totalUsage?: unknown;
+	readonly type: string;
+	readonly usage?: unknown;
+};
+const isAiSdkTextStreamPart = (
+	value: unknown
+): value is AiSdkTextStreamPart => {
+	if (typeof value !== "object" || value === null || !("type" in value)) {
+		return false;
+	}
+	return typeof value.type === "string";
+};
+
+type StreamProjectionState = {
+	stepId?: ModelStepId;
+	stepIndex: number;
+};
+
+const requirePartText = (part: AiSdkTextStreamPart): string => {
+	if (typeof part.text !== "string") {
+		throw new AgentInvariantError(
+			"invalid-event",
+			"AI SDK emitted a text event without text.",
+			{ cause: part }
+		);
+	}
+	return part.text;
+};
+
+const projectAiSdkPart = (
+	part: AiSdkTextStreamPart,
+	turn: AgentTurn,
+	resolved: ResolvedModel,
+	state: StreamProjectionState,
+	runtimeSignal: AbortSignal | undefined,
+	sequence: number
+): AgentTurnEvent | undefined => {
+	switch (part.type) {
+		case "start-step": {
+			state.stepIndex += 1;
+			state.stepId = `${STEP_ID_PREFIX}-${state.stepIndex}`;
+			return {
+				modelId: resolved.modelId,
+				sequence,
+				stepId: state.stepId,
+				turnId: turn.id,
+				type: "model-step-started",
+			};
+		}
+		case "text-delta":
+			return {
+				delta: requirePartText(part),
+				sequence,
+				turnId: turn.id,
+				type: "text-delta",
+			};
+		case "reasoning-delta":
+			return {
+				delta: requirePartText(part),
+				sequence,
+				turnId: turn.id,
+				type: "reasoning-delta",
+			};
+		case "finish-step":
+			return {
+				modelId: resolved.modelId,
+				sequence,
+				stepId: state.stepId ?? `${STEP_ID_PREFIX}-1`,
+				turnId: turn.id,
+				type: "model-step-finished",
+				usage: toModelUsage(part.usage),
+			};
+		case "finish":
+			return {
+				finishedAt: Date.now(),
+				sequence,
+				turnId: turn.id,
+				type: "agent-turn-completed",
+				usage: toModelUsage(part.totalUsage),
+			};
+		case "error":
+			if (isAgentInvariantError(part.error)) {
+				throw part.error;
+			}
+			return {
+				failure: resolveTerminalFailure(part.error, turn),
+				finishedAt: Date.now(),
+				sequence,
+				turnId: turn.id,
+				type: "agent-turn-failed",
+			};
+		case "abort": {
+			const stopped = createStoppedEventIfAborted(
+				turn,
+				runtimeSignal,
+				sequence
+			);
+			return stopped ?? createInternalAbortFailure(turn, sequence);
+		}
+		default:
+			return;
+	}
+};
+const resolveRuntimeModel = (
+	resolveModel: ResolveAgentModel,
+	model: AgentTurn["model"]
+): ResolvedModel => {
+	try {
+		return resolveModel(model);
+	} catch (error) {
+		if (isAgentInvariantError(error)) {
+			throw error;
+		}
+		throw new AgentInvariantError(
+			"invalid-runtime",
+			"Agent Runtime model resolution violated its contract.",
+			{ cause: error }
+		);
+	}
+};
+
+const createAgentLoop = (
+	agent: AgentTurn["agent"],
+	resolved: ResolvedModel
+): ToolLoopAgent<never, ToolSet> => {
+	try {
+		return new ToolLoopAgent<never, ToolSet>({
+			activeTools: [],
+			instructions: agent.instructions,
+			maxOutputTokens: resolved.maxOutputTokens,
+			model: resolved.model,
+			providerOptions: resolved.providerOptions,
+			stopWhen: stepCountIs(1),
+			tools: noToolSet,
+		});
+	} catch (error) {
+		if (isAgentInvariantError(error)) {
+			throw error;
+		}
+		throw new AgentInvariantError(
+			"invalid-runtime",
+			"Agent Runtime could not construct its model loop.",
+			{ cause: error }
+		);
+	}
+};
 
 /**
  * The private AI SDK Agent Runtime adapter for text-only turns. It constructs
@@ -120,11 +334,13 @@ export const createAiSdkTextOnlyAgentRuntime = (
 
 const runTextOnlyTurn = async function* (
 	turn: AgentTurn,
-	{ signal }: AgentRuntimeRunOptions,
+	{ deadlineMs, signal }: AgentRuntimeRunOptions,
 	resolveModel: ResolveAgentModel
 ): AsyncGenerator<AgentTurnEvent, void, undefined> {
+	const lifecycle = createAgentTurnLifecycle(turn.id);
+	const runtimeSignal = resolveRuntimeSignal(signal, deadlineMs);
+	let sequence = 0;
 	const { agent, model, input } = turn;
-	const resolved = resolveModel(model);
 	const modelMessages: ModelMessage[] = input.messages.map((message) => ({
 		content: message.parts.map((part) => ({
 			text: part.text,
@@ -133,129 +349,115 @@ const runTextOnlyTurn = async function* (
 		role: message.role,
 	}));
 
-	const agentLoop = new ToolLoopAgent<never, ToolSet>({
-		activeTools: [],
-		instructions: agent.instructions,
-		maxOutputTokens: resolved.maxOutputTokens,
-		model: resolved.model,
-		providerOptions: resolved.providerOptions,
-		stopWhen: stepCountIs(1),
-		tools: noToolSet,
-	});
+	const emit = (event: AgentTurnEvent): AgentTurnEvent => {
+		lifecycle.apply(event);
+		sequence = event.sequence + 1;
+		return event;
+	};
 
-	let sequence = 0;
-	let stepIndex = 0;
-	let stepId: ModelStepId | undefined;
-
-	yield {
+	yield emit({
 		agentId: agent.id,
-		sequence: sequence++,
+		sequence,
 		startedAt: Date.now(),
 		turnId: turn.id,
 		type: "agent-turn-started",
-	};
+	});
+
+	if (runtimeSignal?.aborted) {
+		yield emit(
+			createAgentTurnAbortEvent(
+				turn,
+				runtimeSignal,
+				lifecycle.getState().lastSequence + 1
+			)
+		);
+		return;
+	}
+
+	const resolved = resolveRuntimeModel(resolveModel, model);
+	const agentLoop = createAgentLoop(agent, resolved);
 
 	try {
-		const result = await agentLoop.stream({
-			abortSignal: signal,
-			prompt: modelMessages,
-		});
+		const result = await awaitWithAbort(
+			agentLoop.stream({
+				abortSignal: runtimeSignal,
+				prompt: modelMessages,
+			}),
+			runtimeSignal
+		);
+		const projection: StreamProjectionState = { stepIndex: 0 };
+		const iterator = result.fullStream[Symbol.asyncIterator]();
 
-		for await (const part of result.fullStream) {
-			if (signal?.aborted) {
-				return;
-			}
-			switch (part.type) {
-				case "start-step": {
-					stepIndex += 1;
-					stepId = `${STEP_ID_PREFIX}-${stepIndex}`;
-					yield {
-						modelId: resolved.modelId,
-						sequence: sequence++,
-						stepId,
-						turnId: turn.id,
-						type: "model-step-started",
-					};
+		try {
+			while (true) {
+				const next = await awaitWithAbort(iterator.next(), runtimeSignal);
+				if (next.done) {
 					break;
 				}
-				case "text-start":
-				case "text-end":
-				case "reasoning-start":
-				case "reasoning-end": {
-					break;
+				if (!isAiSdkTextStreamPart(next.value)) {
+					throw new AgentInvariantError(
+						"invalid-event",
+						"AI SDK emitted an invalid stream part.",
+						{ cause: next.value }
+					);
 				}
-				case "text-delta": {
-					yield {
-						delta: part.text,
-						sequence: sequence++,
-						turnId: turn.id,
-						type: "text-delta",
-					};
-					break;
+				const event = projectAiSdkPart(
+					next.value,
+					turn,
+					resolved,
+					projection,
+					runtimeSignal,
+					sequence
+				);
+				if (event === undefined) {
+					continue;
 				}
-				case "reasoning-delta": {
-					yield {
-						delta: part.text,
-						sequence: sequence++,
-						turnId: turn.id,
-						type: "reasoning-delta",
-					};
-					break;
-				}
-				case "finish-step": {
-					yield {
-						modelId: resolved.modelId,
-						sequence: sequence++,
-						stepId: stepId ?? `${STEP_ID_PREFIX}-1`,
-						turnId: turn.id,
-						type: "model-step-finished",
-						usage: toModelUsage(part.usage),
-					};
-					break;
-				}
-				case "finish": {
-					yield {
-						finishedAt: Date.now(),
-						sequence: sequence++,
-						turnId: turn.id,
-						type: "agent-turn-completed",
-						usage: toModelUsage(part.totalUsage),
-					};
+				yield emit(event);
+				if (isAgentTurnTerminalEvent(event)) {
 					return;
-				}
-				case "error": {
-					yield {
-						failure: resolveTerminalFailure(part.error, turn),
-						finishedAt: Date.now(),
-						sequence: sequence++,
-						turnId: turn.id,
-						type: "agent-turn-failed",
-					};
-					return;
-				}
-				case "abort": {
-					return;
-				}
-				default: {
-					// Tool, file, source, and raw parts never appear in a text-only
-					// turn; ignore anything unexpected instead of leaking it.
-					break;
 				}
 			}
+		} finally {
+			const closing = iterator.return?.();
+			if (closing !== undefined) {
+				void closing.catch(() => undefined);
+			}
+		}
+
+		if (runtimeSignal?.aborted) {
+			yield emit(
+				createAgentTurnAbortEvent(
+					turn,
+					runtimeSignal,
+					lifecycle.getState().lastSequence + 1
+				)
+			);
+		} else {
+			yield lifecycle.interrupt(
+				lifecycle.getState().lastSequence + 1,
+				"lost-execution"
+			);
 		}
 	} catch (error) {
-		// Only the caller's own abort ends a run without a terminal event.
-		// An AbortError the SDK raised on its own (provider or step-controller
-		// initiated) is a genuine failure and must surface as one.
-		if (signal?.aborted) {
+		if (isAgentInvariantError(error)) {
+			throw error;
+		}
+		if (runtimeSignal?.aborted) {
+			yield emit(
+				createAgentTurnAbortEvent(
+					turn,
+					runtimeSignal,
+					lifecycle.getState().lastSequence + 1
+				)
+			);
 			return;
 		}
-		yield {
+		yield emit({
 			failure: resolveTerminalFailure(error, turn),
 			finishedAt: Date.now(),
-			sequence: sequence++,
+			sequence: lifecycle.getState().lastSequence + 1,
 			turnId: turn.id,
 			type: "agent-turn-failed",
-		};
+		});
 	}
 };

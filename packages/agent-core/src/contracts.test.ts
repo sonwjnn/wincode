@@ -31,12 +31,39 @@ const baseEvent = (type: AgentTurnEvent["type"]): AgentTurnEvent => {
 			return { ...common, stepId: "step-1", type };
 		case "agent-turn-completed":
 			return { ...common, finishedAt: 1, type };
+		case "agent-turn-cancelled":
+			return {
+				...common,
+				failure: {
+					code: "cancelled",
+					message: "The Agent Turn was cancelled.",
+					retry: "never",
+					source: "runtime",
+					version: OPERATIONAL_FAILURE_VERSION,
+				},
+				finishedAt: 1,
+				type,
+			};
+		case "agent-turn-interrupted":
+			return {
+				...common,
+				failure: {
+					code: "interrupted",
+					message: "The Agent Turn was interrupted.",
+					retry: "immediate",
+					source: "runtime",
+					version: OPERATIONAL_FAILURE_VERSION,
+				},
+				finishedAt: 1,
+				reason: "lost-execution",
+				type,
+			};
 		case "agent-turn-failed":
 			return {
 				...common,
 				failure: {
 					code: "unknown",
-					message: "boom",
+					message: "The model request failed.",
 					retry: "never",
 					source: "model",
 					version: OPERATIONAL_FAILURE_VERSION,

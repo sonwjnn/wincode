@@ -1,3 +1,4 @@
+import { createAgentTurnAbortReason } from "@wincode/agent-core";
 import type {
 	AgentId,
 	ChatModelSelection,
@@ -44,19 +45,33 @@ export type ConversationOperation = {
 
 export type CreateConversationOperationOptions = {
 	execute: ConversationSendExecutor;
+	/** Optional deadline applied to each active send. */
+	deadlineMs?: number;
 	onInterrupt?: (preserveToolCallId?: string) => void;
 };
 
 const ACTIVE_SEND_ERROR = "A conversation send is already active.";
+type ConversationDeadlineTimer = ReturnType<typeof setTimeout>;
 
 export const createConversationOperation = ({
+	deadlineMs,
 	execute,
 	onInterrupt,
 }: CreateConversationOperationOptions): ConversationOperation => {
+	if (
+		deadlineMs !== undefined &&
+		(!Number.isInteger(deadlineMs) || deadlineMs < 0)
+	) {
+		throw new Error(
+			"Conversation send deadline must be a non-negative integer."
+		);
+	}
+
 	let active:
 		| {
 				controller: AbortController;
 				promise: Promise<ConversationSendOutcome>;
+				deadlineTimer?: ConversationDeadlineTimer;
 		  }
 		| undefined;
 
@@ -71,10 +86,20 @@ export const createConversationOperation = ({
 		}
 
 		const controller = new AbortController();
+		const deadlineTimer =
+			deadlineMs === undefined
+				? undefined
+				: setTimeout(() => {
+						controller.abort(createAgentTurnAbortReason("deadline-exceeded"));
+					}, deadlineMs);
 		const clearIfCurrent = (): void => {
-			if (active?.controller === controller) {
-				active = undefined;
+			if (active?.controller !== controller) {
+				return;
 			}
+			if (active.deadlineTimer !== undefined) {
+				clearTimeout(active.deadlineTimer);
+			}
+			active = undefined;
 		};
 		const promise = (async () => {
 			await Promise.resolve();
@@ -84,7 +109,7 @@ export const createConversationOperation = ({
 				clearIfCurrent();
 			}
 		})();
-		active = { controller, promise };
+		active = { controller, deadlineTimer, promise };
 		return promise;
 	};
 	const waitForIdle = async (): Promise<boolean> => {
@@ -96,17 +121,17 @@ export const createConversationOperation = ({
 		return !current.controller.signal.aborted;
 	};
 
-	const cancel = () => {
+	const cancel = (): void => {
 		const current = active;
 		if (!current) {
 			return;
 		}
-		current.controller.abort();
+		current.controller.abort(createAgentTurnAbortReason("cancelled"));
 	};
 
-	const interrupt = (preserveToolCallId?: string) => {
+	const interrupt = (preserveToolCallId?: string): void => {
+		active?.controller.abort(createAgentTurnAbortReason("interrupted"));
 		onInterrupt?.(preserveToolCallId);
-		active?.controller.abort();
 	};
 	return { cancel, interrupt, send, waitForIdle };
 };

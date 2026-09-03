@@ -31,7 +31,10 @@ import {
 	stripAttachmentDisplayMetadata,
 } from "./attachment-store";
 import { type ConversationDatabase, createDatabase } from "./client";
-import { getConversationRecordValidationError } from "./conversation-record";
+import {
+	ConversationRecordInvariantError,
+	getConversationRecordValidationError,
+} from "./conversation-record";
 import {
 	type CommitConversationRecordInput,
 	type ConversationSession,
@@ -699,7 +702,10 @@ const writeConversationRecordCheckpoint = (
 ): void => {
 	const validationError = getConversationRecordValidationError(record);
 	if (validationError !== null) {
-		throw new Error(`Invalid Conversation Record: ${validationError}`);
+		throw new ConversationRecordInvariantError(
+			`Invalid Conversation Record: ${validationError}`,
+			{ cause: new Error(validationError) }
+		);
 	}
 	db.transaction((tx) => {
 		const session = tx

@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { getAgentTurnAbortDisposition } from "@wincode/agent-core";
 import { getToolResourceLimits } from "@wincode/ai";
 import { createWorkspaceSandbox } from "@wincode/ai/workspace";
 import {
@@ -53,6 +54,69 @@ describe("ConversationOperation", () => {
 
 		expect(await send).toEqual({ rejected: true, reason: "Cancelled" });
 		expect(execute).toHaveBeenCalledTimes(1);
+	});
+	test("maps a deadline timer to a deadline abort reason", async () => {
+		const execute = mock(
+			async (_input: ConversationSendInput, signal: AbortSignal) => {
+				const { promise, resolve } = Promise.withResolvers<{
+					rejected: true;
+					reason: string;
+				}>();
+				const resolveStopped = () => {
+					resolve({
+						rejected: true,
+						reason: getAgentTurnAbortDisposition(signal.reason),
+					});
+				};
+				if (signal.aborted) {
+					resolveStopped();
+				} else {
+					signal.addEventListener("abort", resolveStopped, { once: true });
+				}
+				return promise;
+			}
+		);
+		const operation = createConversationOperation({
+			deadlineMs: 0,
+			execute,
+		});
+
+		const outcome = await operation.send(request);
+
+		expect(outcome).toEqual({ rejected: true, reason: "deadline-exceeded" });
+		expect(execute).toHaveBeenCalledTimes(1);
+	});
+
+	test("marks an explicit interrupt distinctly from cancellation", async () => {
+		const started = Promise.withResolvers<void>();
+		const execute = mock(
+			(_input: ConversationSendInput, signal: AbortSignal) => {
+				started.resolve();
+				const { promise, resolve } = Promise.withResolvers<{
+					rejected: true;
+					reason: string;
+				}>();
+				signal.addEventListener(
+					"abort",
+					() =>
+						resolve({
+							rejected: true,
+							reason: getAgentTurnAbortDisposition(signal.reason),
+						}),
+					{ once: true }
+				);
+				return promise;
+			}
+		);
+		const onInterrupt = mock();
+		const operation = createConversationOperation({ execute, onInterrupt });
+		const send = operation.send(request);
+		await started.promise;
+
+		operation.interrupt("approval-1");
+
+		expect(await send).toEqual({ rejected: true, reason: "interrupted" });
+		expect(onInterrupt).toHaveBeenCalledWith("approval-1");
 	});
 
 	test("preserves a gated Tool Call completion through the application seam", async () => {

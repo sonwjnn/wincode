@@ -1,43 +1,65 @@
 import { TextAttributes } from "@opentui/core";
-import { z } from "zod";
+import {
+	isOperationalFailure,
+	normalizeOperationalFailure,
+} from "@wincode/agent-core";
+import { normalizeModelFailure } from "@wincode/ai/failures";
 import { EmptyBorder } from "@/shared/constants";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 
 const unauthorizedPattern = /\bunauthorized\b/i;
-const providerErrorSchema = z.object({
-	error: z.object({ message: z.string().min(1) }).optional(),
-});
 
 type ErrorMessageProps = {
 	error: unknown;
 };
 
-const getProviderErrorMessage = (error: unknown): string | undefined => {
-	if (
-		typeof error !== "object" ||
-		error === null ||
-		!("responseBody" in error) ||
-		typeof error.responseBody !== "string"
-	) {
-		return;
+const hasProviderDiagnostics = (error: unknown): boolean => {
+	if (typeof error !== "object" || error === null) {
+		return false;
 	}
+	return (
+		("responseBody" in error && typeof error.responseBody === "string") ||
+		"statusCode" in error ||
+		"status" in error
+	);
+};
 
-	try {
-		return providerErrorSchema.safeParse(JSON.parse(error.responseBody)).data
-			?.error?.message;
-	} catch {
+const getProviderErrorMessage = (error: unknown): string | undefined => {
+	if (!hasProviderDiagnostics(error)) {
 		return;
 	}
+	return normalizeModelFailure(error).message;
+};
+const isAuthenticationFailure = (error: unknown): boolean => {
+	if (isOperationalFailure(error)) {
+		return error.code === "authentication" || error.code === "authorization";
+	}
+	if (!hasProviderDiagnostics(error)) {
+		return false;
+	}
+	const { code } = normalizeModelFailure(error);
+	return code === "authentication" || code === "authorization";
 };
 
 export const getDisplayMessage = (error: unknown): string => {
-	const message =
-		getProviderErrorMessage(error) ??
-		(error instanceof Error ? error.message : "Chat request failed.");
+	let message: string;
+	if (isOperationalFailure(error)) {
+		message = normalizeOperationalFailure(error).message;
+	} else {
+		const providerMessage = getProviderErrorMessage(error);
+		if (providerMessage !== undefined) {
+			message = providerMessage;
+		} else if (error instanceof Error) {
+			message = error.message;
+		} else {
+			message = normalizeOperationalFailure(error).message;
+		}
+	}
 
-	return unauthorizedPattern.test(message)
-		? "Wincode session invalid or expired. Run /connect to sign in again."
-		: message;
+	if (unauthorizedPattern.test(message) || isAuthenticationFailure(error)) {
+		return "Wincode session invalid or expired. Run /connect to sign in again.";
+	}
+	return message;
 };
 
 export function ErrorMessage({ error }: ErrorMessageProps) {

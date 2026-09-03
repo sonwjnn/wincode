@@ -9,11 +9,20 @@ export {
 	MAX_AGENT_ID_LENGTH,
 	MAX_AGENT_INSTRUCTIONS_LENGTH,
 } from "./agent";
+export type { AgentInvariantCode } from "./errors";
+export {
+	AgentInvariantError,
+	agentInvariantCodes,
+	isAgentInvariantError,
+} from "./errors";
 export type {
+	AgentTurnCancelledEvent,
 	AgentTurnCompletedEvent,
 	AgentTurnEvent,
 	AgentTurnFailedEvent,
+	AgentTurnInterruptedEvent,
 	AgentTurnStartedEvent,
+	AgentTurnTerminalEvent,
 	ModelStepFinishedEvent,
 	ModelStepStartedEvent,
 	ReasoningDeltaEvent,
@@ -26,13 +35,27 @@ export {
 	isAgentTurnEvent,
 	isAgentTurnTerminalEvent,
 } from "./events";
-export type { OperationalFailure } from "./failures";
+export type {
+	OperationalFailure,
+	OperationalFailureCode,
+	OperationalFailureContext,
+	OperationalFailureDetails,
+	OperationalFailureRetryDisposition,
+	OperationalFailureSource,
+} from "./failures";
 export {
+	createOperationalFailure,
+	getOperationalFailureMessage,
+	isOperationalFailure,
+	isOperationalFailureSource,
+	normalizeOperationalFailure,
 	OPERATIONAL_FAILURE_VERSION,
 	operationalFailureCodes,
 	operationalFailureRetryDispositions,
 	operationalFailureSources,
 } from "./failures";
+export type { AgentTurnLifecycle, AgentTurnLifecycleState } from "./lifecycle";
+export { createAgentTurnLifecycle } from "./lifecycle";
 export type { ModelStep, ModelStepId } from "./model-step";
 export type {
 	AgentTurnOutcomeRecord,
@@ -46,20 +69,32 @@ export {
 export type {
 	AgentRuntime,
 	AgentRuntimeRunOptions,
+	AgentTurnAbortDisposition,
+	AgentTurnAbortReason,
 	AgentTurnEventStream,
+} from "./runtime";
+export {
+	AGENT_TURN_ABORT_REASON_TYPE,
+	createAgentTurnAbortEvent,
+	createAgentTurnAbortReason,
+	getAgentTurnAbortDisposition,
+	getAgentTurnFailureDetails,
 } from "./runtime";
 export type {
 	AgentTurn,
 	AgentTurnId,
 	AgentTurnInput,
+	AgentTurnInterruptionReason,
 	AgentTurnMessage,
 	AgentTurnStatus,
 	AgentTurnTerminalStatus,
 	AgentTurnTextPart,
 } from "./turn";
 export {
+	AGENT_TURN_INTERRUPTION_REASONS,
 	AGENT_TURN_STATUSES,
 	AGENT_TURN_TERMINAL_STATUSES,
+	createAgentTurnId,
 	createAgentTurnMessage,
 	isAgentTurnTerminalStatus,
 	isAgentTurnTextPart,

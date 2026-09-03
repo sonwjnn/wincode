@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import type { AgentTurn, AgentTurnEvent } from "@wincode/agent-core";
+import {
+	AgentInvariantError,
+	type AgentTurn,
+	type AgentTurnEvent,
+} from "@wincode/agent-core";
 import { createModelTarget } from "@wincode/ai/model-target";
 // Keep the process-global Bun module mock complete: test files execute in one
 // process and may import unrelated AI SDK exports while this mock is active.
@@ -237,9 +241,84 @@ describe("createAiSdkTextOnlyAgentRuntime", () => {
 		released?.();
 		await consumption;
 
-		// Started, then stopped before the delayed text delta; no terminal event
-		// fabricates a completion for a caller-cancelled run.
-		expect(collected).toEqual(["agent-turn-started", "model-step-started"]);
+		// A caller cancellation is a terminal cancelled outcome, not a
+		// fabricated completion and not a silently truncated stream.
+		expect(collected).toEqual([
+			"agent-turn-started",
+			"model-step-started",
+			"agent-turn-cancelled",
+		]);
+	});
+	test("maps deadline expiry to a distinct failed outcome", async () => {
+		const subject = await loadSubject([]);
+		const { createAiSdkTextOnlyAgentRuntime: loadRuntime } = subject;
+		const runtime = loadRuntime();
+		const signal = AbortSignal.abort(
+			new DOMException("deadline expired", "TimeoutError")
+		);
+
+		const events = await consume(runtime.run(buildTurn(), { signal }));
+
+		expect(events.map(({ type }) => type)).toEqual([
+			"agent-turn-started",
+			"agent-turn-failed",
+		]);
+		const failed = events.at(-1);
+		expect(failed?.type).toBe("agent-turn-failed");
+		if (failed?.type === "agent-turn-failed") {
+			expect(failed.failure).toMatchObject({
+				code: "deadline-exceeded",
+				source: "runtime",
+				version: 1,
+			});
+			expect(failed.failure.message).not.toContain("deadline expired");
+		}
+	});
+
+	test("marks a provider stream that ends without a terminal as interrupted", async () => {
+		const subject = await loadSubject([]);
+		const { createAiSdkTextOnlyAgentRuntime: loadRuntime } = subject;
+		const runtime = loadRuntime();
+
+		const events = await consume(runtime.run(buildTurn()));
+
+		expect(events.map(({ type }) => type)).toEqual([
+			"agent-turn-started",
+			"agent-turn-interrupted",
+		]);
+		const interrupted = events.at(-1);
+		expect(interrupted?.type).toBe("agent-turn-interrupted");
+		if (interrupted?.type === "agent-turn-interrupted") {
+			expect(interrupted).toMatchObject({
+				failure: {
+					code: "interrupted",
+					retry: "immediate",
+					source: "runtime",
+				},
+				reason: "lost-execution",
+			});
+		}
+	});
+	test("throws a typed invariant with a cause when model resolution breaks", async () => {
+		const subject = await loadSubject([]);
+		const { createAiSdkTextOnlyAgentRuntime: loadRuntime } = subject;
+		const runtime = loadRuntime({
+			resolveModel: () => {
+				throw new Error("private model construction detail");
+			},
+		});
+		let thrown: unknown;
+		try {
+			await consume(runtime.run(buildTurn()));
+		} catch (error) {
+			thrown = error;
+		}
+
+		expect(thrown).toBeInstanceOf(AgentInvariantError);
+		if (thrown instanceof AgentInvariantError) {
+			expect(thrown.code).toBe("invalid-runtime");
+			expect(thrown.cause).toBeInstanceOf(Error);
+		}
 	});
 
 	test("emits a failed terminal for an internal SDK abort the caller did not cause", async () => {

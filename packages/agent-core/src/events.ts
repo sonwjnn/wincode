@@ -1,7 +1,13 @@
 import type { ModelUsage } from "@wincode/ai/model-usage";
+import { modelUsageSchema } from "@wincode/ai/model-usage";
 import type { OperationalFailure } from "./failures";
+import { isOperationalFailure } from "./failures";
 import type { ModelStepId } from "./model-step";
-import type { AgentTurnId } from "./turn";
+import {
+	AGENT_TURN_INTERRUPTION_REASONS,
+	type AgentTurnId,
+	type AgentTurnInterruptionReason,
+} from "./turn";
 
 /**
  * Common shape of every Agent Turn Event: the Agent Turn identity and a
@@ -54,12 +60,33 @@ export type AgentTurnCompletedEvent = AgentTurnEventBase & {
 	readonly usage?: ModelUsage;
 };
 
-/** The turn reached its terminal `failed` outcome. */
+/** The caller cancelled the turn. */
+export type AgentTurnCancelledEvent = AgentTurnEventBase & {
+	readonly failure: OperationalFailure;
+	readonly finishedAt: number;
+	readonly type: "agent-turn-cancelled";
+};
+
+/** The turn stopped without completion, failure, or caller cancellation. */
+export type AgentTurnInterruptedEvent = AgentTurnEventBase & {
+	readonly failure: OperationalFailure;
+	readonly finishedAt: number;
+	readonly reason: AgentTurnInterruptionReason;
+	readonly type: "agent-turn-interrupted";
+};
+
+/** The turn reached an expected operational failure. */
 export type AgentTurnFailedEvent = AgentTurnEventBase & {
 	readonly failure: OperationalFailure;
 	readonly finishedAt: number;
 	readonly type: "agent-turn-failed";
 };
+
+export type AgentTurnTerminalEvent =
+	| AgentTurnCancelledEvent
+	| AgentTurnCompletedEvent
+	| AgentTurnFailedEvent
+	| AgentTurnInterruptedEvent;
 
 export type AgentTurnEvent =
 	| AgentTurnStartedEvent
@@ -67,8 +94,7 @@ export type AgentTurnEvent =
 	| TextDeltaEvent
 	| ReasoningDeltaEvent
 	| ModelStepFinishedEvent
-	| AgentTurnCompletedEvent
-	| AgentTurnFailedEvent;
+	| AgentTurnTerminalEvent;
 
 export const AGENT_TURN_EVENT_TYPES = [
 	"agent-turn-started",
@@ -78,26 +104,107 @@ export const AGENT_TURN_EVENT_TYPES = [
 	"model-step-finished",
 	"agent-turn-completed",
 	"agent-turn-failed",
+	"agent-turn-cancelled",
+	"agent-turn-interrupted",
 ] as const satisfies readonly AgentTurnEvent["type"][];
 
 export const AGENT_TURN_EVENT_TERMINAL_TYPES = [
 	"agent-turn-completed",
 	"agent-turn-failed",
-] as const satisfies readonly AgentTurnEvent["type"][];
+	"agent-turn-cancelled",
+	"agent-turn-interrupted",
+] as const satisfies readonly AgentTurnTerminalEvent["type"][];
 
-export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent =>
-	typeof value === "object" &&
-	value !== null &&
-	typeof (value as AgentTurnEvent).type === "string" &&
-	typeof (value as AgentTurnEvent).sequence === "number" &&
-	typeof (value as AgentTurnEvent).turnId === "string" &&
-	(AGENT_TURN_EVENT_TYPES as readonly string[]).includes(
-		(value as AgentTurnEvent).type
+const isFiniteTimestamp = (value: unknown): value is number =>
+	typeof value === "number" && Number.isFinite(value) && value >= 0;
+
+const isNonNegativeInteger = (value: unknown): value is number =>
+	typeof value === "number" && Number.isInteger(value) && value >= 0;
+const isUsage = (value: unknown): value is ModelUsage =>
+	modelUsageSchema.safeParse(value).success;
+
+const hasBaseEvent = (value: unknown): value is AgentTurnEventBase => {
+	if (typeof value !== "object" || value === null) {
+		return false;
+	}
+	const event = value as Record<string, unknown>;
+	return (
+		typeof event.turnId === "string" &&
+		event.turnId.length > 0 &&
+		isNonNegativeInteger(event.sequence)
 	);
+};
+
+export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
+	if (!hasBaseEvent(value)) {
+		return false;
+	}
+	const event = value as Record<string, unknown>;
+	if (
+		typeof event.type !== "string" ||
+		!(AGENT_TURN_EVENT_TYPES as readonly string[]).includes(event.type)
+	) {
+		return false;
+	}
+	switch (event.type) {
+		case "agent-turn-started":
+			return (
+				typeof event.agentId === "string" &&
+				event.agentId.length > 0 &&
+				isFiniteTimestamp(event.startedAt)
+			);
+		case "model-step-started":
+			return (
+				typeof event.stepId === "string" &&
+				event.stepId.length > 0 &&
+				(event.modelId === undefined ||
+					(typeof event.modelId === "string" && event.modelId.length > 0))
+			);
+		case "text-delta":
+		case "reasoning-delta":
+			return typeof event.delta === "string";
+		case "model-step-finished":
+			return (
+				typeof event.stepId === "string" &&
+				event.stepId.length > 0 &&
+				(event.modelId === undefined ||
+					(typeof event.modelId === "string" && event.modelId.length > 0)) &&
+				(event.usage === undefined || isUsage(event.usage))
+			);
+		case "agent-turn-completed":
+			return (
+				isFiniteTimestamp(event.finishedAt) &&
+				(event.usage === undefined || isUsage(event.usage))
+			);
+		case "agent-turn-cancelled":
+			return (
+				isFiniteTimestamp(event.finishedAt) &&
+				isOperationalFailure(event.failure) &&
+				event.failure.code === "cancelled"
+			);
+		case "agent-turn-interrupted":
+			return (
+				isFiniteTimestamp(event.finishedAt) &&
+				isOperationalFailure(event.failure) &&
+				event.failure.code === "interrupted" &&
+				(AGENT_TURN_INTERRUPTION_REASONS as readonly string[]).includes(
+					String(event.reason)
+				)
+			);
+		case "agent-turn-failed":
+			return (
+				isFiniteTimestamp(event.finishedAt) &&
+				isOperationalFailure(event.failure)
+			);
+		default:
+			return false;
+	}
+};
 
 export const isAgentTurnTerminalEvent = (
-	value: AgentTurnEvent
-): value is AgentTurnCompletedEvent | AgentTurnFailedEvent =>
+	value: unknown
+): value is AgentTurnTerminalEvent =>
+	isAgentTurnEvent(value) &&
 	(AGENT_TURN_EVENT_TERMINAL_TYPES as readonly string[]).includes(value.type);
 
 /** Reads the monotonic event sequence of an Agent Turn Event. */
