@@ -1,4 +1,5 @@
 import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { defaultWorkspaceSandbox } from "../../workspace";
 import {
 	getToolResourceLimits,
@@ -104,13 +105,21 @@ const countReplacements = (
 	}
 	return 0;
 };
+const resolveEditPath = async (
+	inputPath: string,
+	allowExternalPath: boolean
+): Promise<string> =>
+	allowExternalPath
+		? path.resolve(inputPath)
+		: defaultWorkspaceSandbox.resolveExistingPath(inputPath);
 
 export const runEditTool = async (
 	input: EditInput,
 	options: ResourceLimitOptions = {}
 ): Promise<EditOutput> => {
-	const resolvedPath = await defaultWorkspaceSandbox.resolveExistingPath(
-		input.path
+	const resolvedPath = await resolveEditPath(
+		input.path,
+		options.allowExternalPath === true
 	);
 	const content = await readFile(resolvedPath, "utf8");
 	const isHashlineEdit = "lineHashes" in input;

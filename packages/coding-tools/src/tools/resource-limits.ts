@@ -45,6 +45,7 @@ export type ToolResourceLimits = {
 	};
 };
 export type ResourceLimitOptions = {
+	readonly allowExternalPath?: boolean;
 	readonly resourceLimits?: ToolResourceLimits;
 };
 

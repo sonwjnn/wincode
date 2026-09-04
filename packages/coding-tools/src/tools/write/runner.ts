@@ -6,11 +6,12 @@ import type { WriteInput, WriteOutput } from "./schema";
 
 export const runWriteTool = async (
 	input: WriteInput,
-	_options: ResourceLimitOptions = {}
+	options: ResourceLimitOptions = {}
 ): Promise<WriteOutput> => {
-	const candidatePath = await defaultWorkspaceSandbox.resolveNewPath(
-		input.path
-	);
+	const isExternal = options.allowExternalPath === true;
+	const candidatePath = isExternal
+		? path.resolve(input.path)
+		: await defaultWorkspaceSandbox.resolveNewPath(input.path);
 	let targetExists = true;
 	try {
 		await lstat(candidatePath);
@@ -27,9 +28,12 @@ export const runWriteTool = async (
 		}
 	}
 
-	const resolvedPath = targetExists
-		? await defaultWorkspaceSandbox.resolveExistingPath(input.path)
-		: candidatePath;
+	let resolvedPath = candidatePath;
+	if (!isExternal && targetExists) {
+		resolvedPath = await defaultWorkspaceSandbox.resolveExistingPath(
+			input.path
+		);
+	}
 	const parentPath = path.dirname(resolvedPath);
 
 	await mkdir(parentPath, { recursive: true });
