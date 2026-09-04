@@ -59,13 +59,14 @@ import { discoverSkillCatalog } from "@/modules/skills";
 import { createToolGate, type ToolGate } from "@/modules/tool-gate/tool-gate";
 import { useConfig } from "@/shared/config/config-provider";
 import { useLatest } from "@/shared/hooks/use-latest";
+import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
 import { createApprovalQueue } from "@/shared/providers/approval/approval-queue";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
-import {
-	type ConversationOperation,
-	type ConversationSendInput,
-	type ConversationSendOutcome,
-	createConversationOperation,
+import { createConversationController } from "../conversation-controller";
+import type {
+	ConversationOperation,
+	ConversationSendInput,
+	ConversationSendOutcome,
 } from "../conversation-operation";
 import type { AttachmentHydrationOptions } from "../storage/attachment-store";
 import { getConversationStore } from "../storage/get-conversation-store";
@@ -377,6 +378,8 @@ export function useChat(
 			scope: sessionId,
 		};
 	}, [openApproval, sandbox, service, sessionId]);
+	const approvalPanels = useApprovalPanels();
+	const approvalPanelsRef = useLatest(approvalPanels);
 	const approvalQueueRef = useLatest(toolGateState.approvalQueue);
 	const closeApprovalsRef = useLatest(closeApprovals);
 	useEffect(
@@ -1373,7 +1376,7 @@ export function useChat(
 	const interruptRef = useLatest(interruptLatestAssistantMessage);
 	const conversation = useMemo(
 		() =>
-			createConversationOperation({
+			createConversationController({
 				deadlineMs: AGENT_TURN_DEADLINE_MS,
 				execute: async (input, signal) => {
 					if (signal.aborted) {
@@ -1398,8 +1401,32 @@ export function useChat(
 				},
 				onInterrupt: (preserveToolCallId) =>
 					interruptRef.current(preserveToolCallId),
+				resolveApproval: async (approvalId, outcome) => {
+					const entry = approvalPanelsRef.current.entries.find(
+						(candidate) => candidate.id === approvalId
+					);
+					if (!entry) {
+						throw new Error(
+							`Conversation approval "${approvalId}" is unavailable.`
+						);
+					}
+					if (outcome.decision === "allow") {
+						entry.actions.allow(outcome.remember);
+					} else if (outcome.decision === "reject") {
+						entry.actions.reject(outcome.feedback);
+					} else {
+						entry.actions.abort();
+					}
+				},
 			}),
-		[approvalQueueRef, chatRef, closeApprovalsRef, interruptRef, submitRef]
+		[
+			approvalPanelsRef,
+			approvalQueueRef,
+			chatRef,
+			closeApprovalsRef,
+			interruptRef,
+			submitRef,
+		]
 	);
 	conversationRef.current = conversation;
 	return {
