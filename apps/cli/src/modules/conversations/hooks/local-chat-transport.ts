@@ -97,20 +97,23 @@ export const createLocalChatTransport = (
 				skillTool: skillToolRef?.current,
 			});
 		if (runtimeEligible) {
+			if (resolvedAgent === undefined) {
+				throw new Error("No resolved Agent or model to send");
+			}
+			const runtimeAgent = resolvedAgent;
 			const runtime = (createRuntime ?? defaultRuntimeFactory)();
 			const turn = buildAgentTurn({
 				agent: agentId,
 				delegation,
 				modelMessages: messages,
 				modelTarget,
-				resolvedAgent,
-				role: delegation === undefined ? "primary" : "subagent",
+				resolvedAgent: runtimeAgent,
 				skill,
 				tools:
 					gatedTooling === undefined
 						? []
 						: createGatedCodingTools({
-								agentTools: resolvedAgent.visibleCodingTools,
+								agentTools: runtimeAgent.visibleCodingTools,
 								gate: gatedTooling.gate,
 								resolveResourceLimits: gatedTooling.resolveResourceLimits,
 								skillExecution: skillExecutionRef?.current ?? undefined,

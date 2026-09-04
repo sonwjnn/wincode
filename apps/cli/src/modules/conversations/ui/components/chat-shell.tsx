@@ -1,5 +1,4 @@
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
-import type { ConversationViewState } from "@wincode/agent-core";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useModelPricing } from "@/modules/model-pricing";
@@ -15,6 +14,7 @@ import {
 	type ConversationCompaction,
 	isCompactionSummaryMessage,
 } from "../../compaction";
+import type { ConversationViewState } from "../../conversation-controller";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import { summarizeSessionUsage } from "../../usage/session-usage";
 import type { ChatPromptSubmission } from "../../utils";

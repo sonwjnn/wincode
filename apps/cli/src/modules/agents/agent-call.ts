@@ -32,10 +32,7 @@ export const resolveEffectiveAgentSelection = (
 	const selected = candidates.find(
 		(agent) => agent.id === agentId && agent.isAvailable
 	);
-	const fallbackCandidates = allowSubagent
-		? candidates
-		: (registry?.selectableAgents ?? []);
-	const fallbackAgent = fallbackCandidates.find(
+	const fallbackAgent = candidates.find(
 		(agent) => agent.id === "build" && agent.isAvailable
 	);
 	const effectiveAgent = selected ?? fallbackAgent;
