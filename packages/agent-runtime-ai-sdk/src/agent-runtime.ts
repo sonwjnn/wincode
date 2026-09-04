@@ -553,6 +553,7 @@ const runAgentTurn = async function* (
 
 	yield emit({
 		agentId: agent.id,
+		...(turn.delegation === undefined ? {} : { delegation: turn.delegation }),
 		sequence,
 		startedAt: Date.now(),
 		turnId: turn.id,

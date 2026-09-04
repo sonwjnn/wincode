@@ -1,7 +1,9 @@
 import {
 	AgentInvariantError,
+	type AgentRole,
 	type AgentRuntime,
 	type AgentTurn,
+	type AgentTurnDelegation,
 	type AgentTurnInterruptedEvent,
 	type AgentTurnLifecycle,
 	type AgentTurnMessage,
@@ -48,9 +50,10 @@ import {
 	skillToolInputSchema,
 } from "@wincode/skills";
 import { sampleSkillResources } from "@wincode/skills/filesystem";
-import type { UIMessageChunk } from "ai";
-import type { GateOutcome, ToolGate } from "@/modules/tool-gate/tool-gate";
-import { consumeAgentTurnEvents } from "../conversation-controller";
+import {
+	type ConversationViewState,
+	consumeAgentTurnEvents,
+} from "../conversation-controller";
 
 export type RuntimeFactory = () => AgentRuntime;
 
@@ -547,14 +550,18 @@ export const buildAgentTurn = ({
 	modelMessages,
 	modelTarget,
 	resolvedAgent,
+	role = "primary",
 	skill,
 	tools = [],
 	turnId,
+	delegation,
 }: {
 	agent: AgentId;
+	delegation?: AgentTurnDelegation;
 	modelMessages: readonly CodingAgentUIMessage[];
 	modelTarget: ModelTarget;
 	resolvedAgent: ResolvedAgentRuntime;
+	role?: AgentRole;
 	skill?: SkillRequestContext;
 	tools?: readonly ResolvedTool[];
 	turnId: string;
@@ -571,8 +578,9 @@ export const buildAgentTurn = ({
 		agent: {
 			id: agent,
 			instructions: getSystemInstructionsForAgent(resolvedAgent.instructions),
-			role: "primary",
+			role,
 		},
+		...(delegation === undefined ? {} : { delegation }),
 		id: turnId,
 		input: { messages },
 		model: modelTarget,
@@ -737,6 +745,7 @@ export const buildTerminalConversationRecord = ({
 
 	return {
 		agentId: turn.agent.id,
+		...(turn.delegation === undefined ? {} : { delegation: turn.delegation }),
 		id: `record-${crypto.randomUUID()}`,
 		messages,
 		model: { modelId: turn.model.modelId, providerId: turn.model.providerId },
@@ -976,15 +985,17 @@ const consumeRuntimeEvents = async ({
 	enqueue,
 	lifecycle,
 	processTerminal,
+	onViewState,
 	runtime,
 	signal,
 	startedToolInputs,
 	state,
-	turn,
 	writer,
+	turn,
 }: {
 	enqueue: (chunk: UIMessageChunk) => void;
 	lifecycle: AgentTurnLifecycle;
+	onViewState?: (state: ConversationViewState) => void;
 	processTerminal: TerminalProcessor;
 	runtime: AgentRuntime;
 	signal?: AbortSignal;
@@ -1045,6 +1056,7 @@ const consumeRuntimeEvents = async ({
 		onTerminal: processTerminal,
 		runtime,
 		signal,
+		onViewState,
 		turn,
 	});
 
@@ -1129,6 +1141,7 @@ const handleRuntimeError = async ({
 const runRuntimeStream = async ({
 	controller,
 	onCheckpoint,
+	onViewState,
 	outcomeSignal,
 	runtime,
 	signal,
@@ -1136,6 +1149,7 @@ const runRuntimeStream = async ({
 }: {
 	controller: ReadableStreamDefaultController<UIMessageChunk>;
 	onCheckpoint?: CheckpointCommitter;
+	onViewState?: (state: ConversationViewState) => void;
 	outcomeSignal?: AbortSignal;
 	runtime: AgentRuntime;
 	signal?: AbortSignal;
@@ -1165,6 +1179,7 @@ const runRuntimeStream = async ({
 	try {
 		await consumeRuntimeEvents({
 			enqueue,
+			onViewState,
 			lifecycle,
 			processTerminal,
 			runtime,
@@ -1224,12 +1239,14 @@ const runRuntimeStream = async ({
  */
 export const createRuntimeStream = async ({
 	onCheckpoint,
+	onViewState,
 	outcomeSignal,
 	runtime,
 	signal,
 	turn,
 }: {
 	onCheckpoint?: CheckpointCommitter;
+	onViewState?: (state: ConversationViewState) => void;
 	outcomeSignal?: AbortSignal;
 	runtime: AgentRuntime;
 	signal?: AbortSignal;
@@ -1240,6 +1257,7 @@ export const createRuntimeStream = async ({
 			runRuntimeStream({
 				controller,
 				onCheckpoint,
+				onViewState,
 				runtime,
 				outcomeSignal,
 				signal,

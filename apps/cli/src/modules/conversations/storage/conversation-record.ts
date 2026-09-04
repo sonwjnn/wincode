@@ -3,6 +3,7 @@ import {
 	AGENT_TURN_INTERRUPTION_REASONS,
 	AgentInvariantError,
 	CONVERSATION_RECORD_VERSION,
+	isAgentTurnDelegation,
 	isAgentTurnMessageRecord,
 	isAgentTurnTextPart,
 	isOperationalFailure,
@@ -199,6 +200,12 @@ export const getConversationRecordValidationError = (
 	}
 	if (!hasText(record.agentId)) {
 		return "record agent id must be a non-empty string";
+	}
+	if (
+		record.delegation !== undefined &&
+		!isAgentTurnDelegation(record.delegation)
+	) {
+		return "record delegation correlation is invalid";
 	}
 	if (!isRecordModel(record.model)) {
 		return "record model must name a provider and model id";

@@ -334,6 +334,27 @@ describe("buildAgentTurn", () => {
 		expect(turn.tools).toEqual([]);
 	});
 
+	test("preserves Subagent role and delegation correlation", () => {
+		const turn = buildAgentTurn({
+			agent: "research",
+			delegation: {
+				parentToolCallId: "call-1",
+				parentTurnId: "turn-primary",
+			},
+			modelMessages: [userMessage("inspect the change")],
+			modelTarget,
+			resolvedAgent: agent,
+			role: "subagent",
+			turnId: "turn-subagent",
+		});
+
+		expect(turn.agent.role).toBe("subagent");
+		expect(turn.delegation).toEqual({
+			parentToolCallId: "call-1",
+			parentTurnId: "turn-primary",
+		});
+	});
+
 	test("maps terminal migrated tool history into tool-call and tool result messages", () => {
 		const turn = buildAgentTurn({
 			agent: "build",

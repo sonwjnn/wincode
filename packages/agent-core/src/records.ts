@@ -1,6 +1,7 @@
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import type { OperationalFailure } from "./failures";
 import type {
+	AgentTurnDelegation,
 	AgentTurnId,
 	AgentTurnInterruptionReason,
 	AgentTurnTextPart,
@@ -83,6 +84,7 @@ export type AgentTurnOutcomeRecord =
  */
 export type ConversationRecord = {
 	readonly agentId: string;
+	readonly delegation?: AgentTurnDelegation;
 	readonly id: string;
 	readonly messages: readonly ConversationMessageRecord[];
 	readonly model: {

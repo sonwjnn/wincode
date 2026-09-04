@@ -3,15 +3,14 @@ import { modelUsageSchema } from "@wincode/ai/model-usage";
 import type { OperationalFailure } from "./failures";
 import { isOperationalFailure } from "./failures";
 import type { ModelStepId } from "./model-step";
-import {
-	isToolCallOutput,
-	type ToolCallId,
-	type ToolCallOutput,
-} from "./tools";
+import type { ToolCallId, ToolCallOutput } from "./tools";
+import { isToolCallOutput } from "./tools";
 import {
 	AGENT_TURN_INTERRUPTION_REASONS,
+	type AgentTurnDelegation,
 	type AgentTurnId,
 	type AgentTurnInterruptionReason,
+	isAgentTurnDelegation,
 } from "./turn";
 
 /**
@@ -27,6 +26,7 @@ export type AgentTurnEventBase = {
 /** The turn began. The first event of a run. */
 export type AgentTurnStartedEvent = AgentTurnEventBase & {
 	readonly agentId: string;
+	readonly delegation?: AgentTurnDelegation;
 	readonly startedAt: number;
 	readonly type: "agent-turn-started";
 };
@@ -183,6 +183,8 @@ export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
 			return (
 				typeof event.agentId === "string" &&
 				event.agentId.length > 0 &&
+				(event.delegation === undefined ||
+					isAgentTurnDelegation(event.delegation)) &&
 				isFiniteTimestamp(event.startedAt)
 			);
 		case "model-step-started":
