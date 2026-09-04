@@ -106,6 +106,7 @@ export function ChatView({
 		isPreparingMessage,
 		messages,
 		status,
+		viewState,
 	} = useChat(
 		sessionId,
 		initialMessages,
@@ -485,6 +486,7 @@ export function ChatView({
 					onOpenSettings={openSettings}
 					onSubmit={submitMessage}
 					promptHistory={promptHistory}
+					viewState={viewState}
 				/>
 			</box>
 		</box>

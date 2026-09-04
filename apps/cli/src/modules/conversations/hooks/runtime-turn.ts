@@ -50,6 +50,8 @@ import {
 	skillToolInputSchema,
 } from "@wincode/skills";
 import { sampleSkillResources } from "@wincode/skills/filesystem";
+import type { UIMessageChunk } from "ai";
+import type { GateOutcome, ToolGate } from "../../tool-gate/tool-gate";
 import {
 	type ConversationViewState,
 	consumeAgentTurnEvents,
@@ -550,7 +552,7 @@ export const buildAgentTurn = ({
 	modelMessages,
 	modelTarget,
 	resolvedAgent,
-	role = "primary",
+	role,
 	skill,
 	tools = [],
 	turnId,
@@ -567,6 +569,8 @@ export const buildAgentTurn = ({
 	turnId: string;
 }): AgentTurn => {
 	const messages = modelMessages.flatMap(toAgentTurnMessages);
+	const effectiveRole =
+		delegation === undefined ? (role ?? "primary") : "subagent";
 	if (skill !== undefined) {
 		messages.push({
 			id: "skill-context",
@@ -578,7 +582,7 @@ export const buildAgentTurn = ({
 		agent: {
 			id: agent,
 			instructions: getSystemInstructionsForAgent(resolvedAgent.instructions),
-			role,
+			role: effectiveRole,
 		},
 		...(delegation === undefined ? {} : { delegation }),
 		id: turnId,

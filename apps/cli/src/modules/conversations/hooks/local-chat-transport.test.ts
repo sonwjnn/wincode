@@ -1,5 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { AgentRuntime, AgentTurnEvent } from "@wincode/agent-core";
+import type {
+	AgentRuntime,
+	AgentTurn,
+	AgentTurnEvent,
+} from "@wincode/agent-core";
 import type { CodingAgentUIMessage, ResolvedAgentRuntime } from "@wincode/ai";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import type { UIMessageChunk } from "ai";
@@ -137,6 +141,53 @@ describe("createLocalChatTransport runtime routing", () => {
 
 		expect(text).toBe("hi there");
 		expect(createStream).not.toHaveBeenCalled();
+	});
+	test("routes correlated delegation as a Subagent Agent Turn", async () => {
+		let delegatedTurn: AgentTurn | undefined;
+		const createRuntime: RuntimeFactory = () => ({
+			run: (turn) => {
+				delegatedTurn = turn;
+				return fakeRuntime(runtimeEvents("delegated")).run(turn);
+			},
+		});
+		const transport = createLocalChatTransport(
+			"session-1",
+			{
+				current: {
+					instructions: "Research plainly.",
+					visibleCodingTools: [],
+				},
+			},
+			{ current: selection },
+			{ current: undefined },
+			connections as Connections,
+			undefined,
+			emptyManifestSnapshot,
+			undefined,
+			"research",
+			createRuntime
+		);
+
+		const stream = await transport.sendMessages({
+			abortSignal: new AbortController().signal,
+			body: {
+				delegation: {
+					parentToolCallId: "call-parent",
+					parentTurnId: "turn-parent",
+				},
+			},
+			chatId: "session-1",
+			messageId: "msg-user",
+			messages: [userMessage("research this")],
+			trigger: "submit-message",
+		});
+		await consumeChunks(stream);
+
+		expect(delegatedTurn?.agent.role).toBe("subagent");
+		expect(delegatedTurn?.delegation).toEqual({
+			parentToolCallId: "call-parent",
+			parentTurnId: "turn-parent",
+		});
 	});
 	test("uses a new Agent Turn identity when retrying after a lost stream", async () => {
 		const turnIds: string[] = [];

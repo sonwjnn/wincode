@@ -1,5 +1,8 @@
 import { useChat as useAiChat } from "@ai-sdk/react";
-import { getAgentTurnAbortDisposition } from "@wincode/agent-core";
+import {
+	type AgentTurnDelegation,
+	getAgentTurnAbortDisposition,
+} from "@wincode/agent-core";
 import {
 	type AgentId,
 	buildAgent,
@@ -62,6 +65,7 @@ import { useLatest } from "@/shared/hooks/use-latest";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
 import { createApprovalQueue } from "@/shared/providers/approval/approval-queue";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
+import type { ConversationViewState } from "../conversation-controller";
 import { createConversationController } from "../conversation-controller";
 import type {
 	ConversationOperation,
@@ -73,6 +77,11 @@ import { getConversationStore } from "../storage/get-conversation-store";
 import { type AutoSendGate, createAutoSendGate } from "./auto-send-gate";
 import { createRoutingChatTransport } from "./routing-chat-transport";
 import { createChatToolCallHandler } from "./tool-dispatch";
+
+const requestBodyForDelegation = (
+	delegation: AgentTurnDelegation | undefined
+): { readonly delegation: AgentTurnDelegation } | undefined =>
+	delegation === undefined ? undefined : { delegation };
 export const createChatMessageParts = (
 	userText: string,
 	fileMentions: CodingAgentUIMessage["parts"],
@@ -414,6 +423,9 @@ export function useChat(
 	const [displayMessages, setDisplayMessages] = useState<
 		CodingAgentUIMessage[]
 	>(() => [...initialMessages]);
+	const [viewState, setViewState] = useState<ConversationViewState | undefined>(
+		undefined
+	);
 	const [compactions, setCompactions] = useState<ConversationCompaction[]>(
 		() => [...initialCompactions]
 	);
@@ -709,7 +721,8 @@ export function useChat(
 			attachmentBudgetRef,
 			outcomeSignalRef,
 			runtimeGatedToolingRef,
-			skillExecutionRef
+			skillExecutionRef,
+			(nextViewState) => setViewState(nextViewState)
 		);
 	}, [connections, mcp, registry, sessionId]);
 
@@ -1146,6 +1159,7 @@ export function useChat(
 	const submitAnchoredMessage = async (
 		anchoredMessage: CodingAgentUIMessage,
 		metadata: CodingAgentUIMessage["metadata"],
+		body: { readonly delegation: AgentTurnDelegation } | undefined,
 		signal: AbortSignal
 	): Promise<ConversationSendOutcome> => {
 		const previousMessages = activeMessagesRef.current;
@@ -1172,11 +1186,14 @@ export function useChat(
 			if (signal.aborted) {
 				return conversationSendCancelled(signal);
 			}
-			await chat.sendMessage({
-				messageId: anchoredMessage.id,
-				metadata,
-				parts: anchoredMessage.parts,
-			});
+			await chat.sendMessage(
+				{
+					messageId: anchoredMessage.id,
+					metadata,
+					parts: anchoredMessage.parts,
+				},
+				{ body }
+			);
 			return conversationSendCompleted(signal);
 		} finally {
 			setIsPreparingMessage(false);
@@ -1184,11 +1201,13 @@ export function useChat(
 	};
 
 	const submitFreshMessage = async ({
+		body,
 		files,
 		metadata,
 		userText,
 		signal,
 	}: {
+		body: { readonly delegation: AgentTurnDelegation } | undefined;
 		files: FileUIPart[];
 		metadata: CodingAgentUIMessage["metadata"];
 		userText?: string;
@@ -1273,11 +1292,14 @@ export function useChat(
 		}
 
 		try {
-			await chat.sendMessage({
-				messageId: durableOptimisticMessage.id,
-				metadata,
-				parts: durableOptimisticMessage.parts,
-			});
+			await chat.sendMessage(
+				{
+					messageId: durableOptimisticMessage.id,
+					metadata,
+					parts: durableOptimisticMessage.parts,
+				},
+				{ body }
+			);
 			return conversationSendCompleted(signal);
 		} catch (error) {
 			const nextMessages = activeMessagesRef.current.filter(
@@ -1302,6 +1324,7 @@ export function useChat(
 			model,
 			variant,
 			resolvedAgent,
+			delegation,
 			userText,
 			files = [],
 			skill,
@@ -1361,15 +1384,16 @@ export function useChat(
 				? { skill: createSkillSnapshot(resolution.skill, "explicit") }
 				: {}),
 		};
+		const body = requestBodyForDelegation(delegation);
 
 		if (signal.aborted) {
 			return conversationSendCancelled(signal);
 		}
 		if (anchoredMessage) {
-			return submitAnchoredMessage(anchoredMessage, metadata, signal);
+			return submitAnchoredMessage(anchoredMessage, metadata, body, signal);
 		}
 
-		return submitFreshMessage({ files, metadata, signal, userText });
+		return submitFreshMessage({ body, files, metadata, signal, userText });
 	};
 
 	const submitRef = useLatest(submit);
@@ -1439,6 +1463,7 @@ export function useChat(
 		error: compactionError ?? chat.error,
 		getCompactionSettings,
 		isCompacting,
+		viewState,
 		messages: displayMessages,
 		status: chat.status,
 		isPreparingMessage,

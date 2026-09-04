@@ -12,9 +12,13 @@ import type { AgentRegistry } from "@/modules/agents";
 import { prepareAgentCall } from "@/modules/agents";
 import type { Connections } from "@/modules/connections";
 import type { McpContextValue } from "@/modules/mcp";
+import type { ConversationViewState } from "../conversation-controller";
 import type { AttachmentHydrationOptions } from "../storage/attachment-store";
 import { getConversationStore } from "../storage/get-conversation-store";
-import { createLocalChatTransport } from "./local-chat-transport";
+import {
+	createLocalChatTransport,
+	delegationFromBody,
+} from "./local-chat-transport";
 import type { RuntimeGatedTooling } from "./runtime-turn";
 
 type AttachmentModelBudget = Pick<
@@ -34,15 +38,21 @@ export const createRoutingChatTransport = (
 	attachmentBudgetRef?: MutableRefObject<AttachmentModelBudget | undefined>,
 	outcomeSignalRef?: MutableRefObject<AbortSignal | undefined>,
 	gatedToolingRef?: MutableRefObject<RuntimeGatedTooling | undefined>,
-	skillExecutionRef?: MutableRefObject<SkillExecution | null>
+	skillExecutionRef?: MutableRefObject<SkillExecution | null>,
+	onViewState?: (state: ConversationViewState) => void
 ): ChatTransport<CodingAgentUIMessage> => ({
 	sendMessages: async (options) => {
+		const delegation = delegationFromBody(options.body);
 		const snapshot = await mcp.createSnapshot(agentRef.current);
-		const prepared = prepareAgentCall(registry, {
-			agent: agentRef.current,
-			model: modelRef.current,
-			variant: variantRef.current,
-		});
+		const prepared = prepareAgentCall(
+			registry,
+			{
+				agent: agentRef.current,
+				model: modelRef.current,
+				variant: variantRef.current,
+			},
+			{ allowSubagent: delegation !== undefined }
+		);
 		const messages = await getConversationStore().hydrateAttachments(
 			options.messages,
 			{
@@ -72,7 +82,8 @@ export const createRoutingChatTransport = (
 				}),
 			outcomeSignalRef,
 			gatedToolingRef?.current,
-			skillExecutionRef
+			skillExecutionRef,
+			onViewState
 		).sendMessages({ ...options, messages });
 	},
 	reconnectToStream: async () => null,

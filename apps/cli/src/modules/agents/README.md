@@ -34,4 +34,5 @@ CLI process. Workspace boundaries and explicit permission denies remain unchange
 Agent instructions are trusted system input and can influence tool use. Permission
 rules and the MCP safety ceiling remain authoritative and are enforced by the CLI.
 Configuration changes require a restart. JSON Schema, live reload, sampling,
-provider options, hidden agents, Markdown agents, and subagent execution are deferred.
+provider options, hidden agents, and Markdown agents are deferred. Delegated
+Subagent turns use the correlated Agent Turn path.

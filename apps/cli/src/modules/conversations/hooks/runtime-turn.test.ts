@@ -334,7 +334,7 @@ describe("buildAgentTurn", () => {
 		expect(turn.tools).toEqual([]);
 	});
 
-	test("preserves Subagent role and delegation correlation", () => {
+	test("assigns Subagent role from delegation correlation", () => {
 		const turn = buildAgentTurn({
 			agent: "research",
 			delegation: {
@@ -344,7 +344,6 @@ describe("buildAgentTurn", () => {
 			modelMessages: [userMessage("inspect the change")],
 			modelTarget,
 			resolvedAgent: agent,
-			role: "subagent",
 			turnId: "turn-subagent",
 		});
 
