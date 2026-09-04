@@ -648,6 +648,35 @@ describe("tool runners", () => {
 			replacement
 		);
 	});
+	test("rejects stale hashline edits without writing", async () => {
+		const filePath = `${sandboxRelPath}/stale.txt`;
+		writeFileSync(path.join(workspace, filePath), "alpha\nbeta\n");
+		await expect(
+			runEditTool({
+				content: "changed",
+				lineHashes: "1:zz",
+				path: filePath,
+			})
+		).rejects.toThrow("Hashline mismatch at line 1");
+		expect(readFileSync(path.join(workspace, filePath), "utf8")).toBe(
+			"alpha\nbeta\n"
+		);
+	});
+
+	test("applies verified hashline edits", async () => {
+		const filePath = `${sandboxRelPath}/hashline.txt`;
+		writeFileSync(path.join(workspace, filePath), "alpha\nbeta\n");
+		await expect(
+			runEditTool({
+				content: "ALPHA",
+				lineHashes: "1:lb",
+				path: filePath,
+			})
+		).resolves.toMatchObject({ path: filePath, replacements: 1 });
+		expect(readFileSync(path.join(workspace, filePath), "utf8")).toBe(
+			"ALPHA\nbeta\n"
+		);
+	});
 	test("replaces a long existing file without resending its original content", async () => {
 		const filePath = `${sandboxRelPath}/long-existing.txt`;
 		const replacement = Array.from(

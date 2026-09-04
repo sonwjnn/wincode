@@ -35,15 +35,17 @@ import type {
 import {
 	type CodingToolName,
 	codingToolDefinitions,
+	type EditInput,
 	type GlobInput,
 	type GrepInput,
 	getSystemInstructionsForAgent,
 	type ReadInput,
 	type ToolResourceLimits,
+	type WriteInput,
 } from "@wincode/ai";
 import type { ModelTarget } from "@wincode/ai/model-target";
 import { normalizeModelUsage } from "@wincode/ai/model-usage";
-import { codingToolRunners } from "@wincode/ai/tools";
+import { codingToolRunners } from "@wincode/coding-tools";
 import type { SkillRequestContext, SkillToolDefinition } from "@wincode/skills";
 import type { UIMessageChunk } from "ai";
 import type { GateOutcome, ToolGate } from "@/modules/tool-gate/tool-gate";
@@ -58,7 +60,13 @@ export const defaultRuntimeFactory: RuntimeFactory = () =>
  * The coding Tool families the Agent Runtime path can execute today. Every
  * other family keeps the legacy agent loop until its own tracer slice lands.
  */
-const RUNTIME_CODING_TOOL_NAMES = ["read", "glob", "grep"] as const;
+const RUNTIME_CODING_TOOL_NAMES = [
+	"read",
+	"write",
+	"edit",
+	"glob",
+	"grep",
+] as const;
 export type RuntimeCodingToolName = (typeof RUNTIME_CODING_TOOL_NAMES)[number];
 
 const isRuntimeCodingToolName = (name: string): name is RuntimeCodingToolName =>
@@ -95,6 +103,16 @@ const runMigratedTool = async ({
 			case "read":
 				return {
 					output: await codingToolRunners.read(input as ReadInput, options),
+					type: "success",
+				};
+			case "write":
+				return {
+					output: await codingToolRunners.write(input as WriteInput, options),
+					type: "success",
+				};
+			case "edit":
+				return {
+					output: await codingToolRunners.edit(input as EditInput, options),
 					type: "success",
 				};
 			case "glob":
@@ -231,6 +249,12 @@ const migratedPartToolName = (
 ): RuntimeCodingToolName | undefined => {
 	if (type === "tool-read") {
 		return "read";
+	}
+	if (type === "tool-write") {
+		return "write";
+	}
+	if (type === "tool-edit") {
+		return "edit";
 	}
 	if (type === "tool-glob") {
 		return "glob";
