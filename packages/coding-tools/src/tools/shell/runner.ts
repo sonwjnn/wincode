@@ -269,7 +269,9 @@ const composeShellOutput = (
 /** How long after the main process exits the runner waits for trailing output. */
 const OUTPUT_DRAIN_MS = 100;
 
-export type ShellRunnerOptions = ResourceLimitOptions;
+export type ShellRunnerOptions = ResourceLimitOptions & {
+	signal?: AbortSignal;
+};
 
 /**
  * Executes a bounded shell command: no stdin, inherited environment, process
@@ -308,6 +310,7 @@ export const createShellRunner = (
 			let timedOut = false;
 			let settled = false;
 			let exitCode: number | null = null;
+			let aborted = false;
 
 			const child = spawn(invocation.executable, [...invocation.args], {
 				cwd,
@@ -338,9 +341,6 @@ export const createShellRunner = (
 				void killProcessTree(child, platform, true);
 			}, timeoutSeconds * 1000);
 
-			// The drain timer bounds the wait between the main process exiting
-			// and the pipes closing: a background child that keeps a pipe open
-			// must not stall the tool call until the timeout.
 			let drainTimer: ReturnType<typeof setTimeout> | undefined;
 
 			const settle = async (): Promise<void> => {
@@ -349,10 +349,9 @@ export const createShellRunner = (
 				}
 				settled = true;
 				clearTimeout(timer);
-				if (drainTimer !== undefined) {
-					clearTimeout(drainTimer);
-				}
-				await killProcessTree(child, platform, timedOut);
+				clearTimeout(drainTimer);
+				options.signal?.removeEventListener("abort", onAbort);
+				await killProcessTree(child, platform, timedOut || aborted);
 				const rawOutput = decodeShellOutput(
 					retainedOutput,
 					invocation.decodeUtf16Le
@@ -364,7 +363,7 @@ export const createShellRunner = (
 					limits.shell.maxOutputBytes
 				);
 				resolve({
-					exitCode: timedOut ? null : exitCode,
+					exitCode: aborted || timedOut ? null : exitCode,
 					output,
 					...(timedOut ? { timedOut: true } : {}),
 					...(truncated === true ? { truncated: true } : {}),
@@ -380,21 +379,29 @@ export const createShellRunner = (
 				}, OUTPUT_DRAIN_MS);
 			};
 
+			const onAbort = (): void => {
+				if (settled) {
+					return;
+				}
+				aborted = true;
+				void killProcessTree(child, platform, true);
+			};
+			options.signal?.addEventListener("abort", onAbort, { once: true });
+			if (options.signal?.aborted) {
+				onAbort();
+			}
+
 			child.stdout.on("data", collect);
 			child.stderr.on("data", collect);
 			child.on("error", (error) => {
 				if (!settled) {
 					settled = true;
 					clearTimeout(timer);
-					if (drainTimer !== undefined) {
-						clearTimeout(drainTimer);
-					}
+					clearTimeout(drainTimer);
+					options.signal?.removeEventListener("abort", onAbort);
 					reject(error);
 				}
 			});
-			// `exit` fires when the main process exits; `close` follows once the
-			// captured pipes drain. If a background child holds a pipe open, the
-			// drain timer settles the call anyway and kills the tree.
 			child.on("exit", (code) => {
 				exitCode = code;
 				scheduleDrain();

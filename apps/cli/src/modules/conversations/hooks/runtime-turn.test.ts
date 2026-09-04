@@ -158,7 +158,7 @@ describe("isRuntimeEligibleSend", () => {
 					allowGate
 				)
 			)
-		).toBe(false);
+		).toBe(true);
 	});
 
 	test("rejects MCP tools and Skill activation", () => {
@@ -1101,7 +1101,38 @@ describe("createGatedCodingTools", () => {
 			"read",
 			"glob",
 			"write",
+			"shell",
 		]);
+	});
+
+	test("routes shell execution through the shell gate and public runner", async () => {
+		const calls: unknown[] = [];
+		const tools = createGatedCodingTools({
+			agentTools: ["shell"],
+			gate: {
+				gate: async (call) => {
+					calls.push(call);
+					return { kind: "allow" };
+				},
+			},
+		});
+		const outcome = await tools[0]?.execute({
+			input: { command: "printf migrated-shell" },
+			toolCallId: "shell-call",
+		});
+		expect(calls).toEqual([
+			{
+				family: "shell",
+				toolCall: {
+					input: { command: "printf migrated-shell" },
+					toolCallId: "shell-call",
+				},
+			},
+		]);
+		expect(outcome).toEqual({
+			output: { exitCode: 0, output: "migrated-shell" },
+			type: "success",
+		});
 	});
 
 	test("runs an allowed Tool Call through the public runner", async () => {

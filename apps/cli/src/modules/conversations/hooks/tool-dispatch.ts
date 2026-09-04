@@ -173,47 +173,6 @@ export const createChatToolCallHandler = (
 			return;
 		}
 
-		if (options.toolCall.toolName === "shell") {
-			// Shell is a static coding tool with its own gate: command nodes are
-			// the evaluated resources, `cwd` composes the external-directory
-			// boundary, and always approvals record the exact normalized command
-			// (ADR-0008). It is intercepted before the shared static gate because
-			// its inputs carry no path to resolve.
-			Promise.resolve(
-				(async () => {
-					const outcome = await gate.gate({
-						family: "shell",
-						toolCall: options.toolCall,
-					});
-					if (outcome.kind === "allow") {
-						const resourceOptions = await resolveResourceOptions(
-							resolveResourceLimits
-						);
-						await runStaticToolCall(
-							addToolOutput,
-							resolvedAgentRef.current?.visibleCodingTools ?? [],
-							resourceOptions
-						)(options);
-						return;
-					}
-					emitToolCallError(
-						addToolOutput,
-						"shell",
-						options.toolCall.toolCallId,
-						outcome.errorText ?? "Shell tool call was blocked"
-					);
-				})()
-			).catch(() => {
-				emitToolCallError(
-					addToolOutput,
-					"shell",
-					options.toolCall.toolCallId,
-					"Shell tool call failed"
-				);
-			});
-			return;
-		}
-
 		if (!isCodingToolName(options.toolCall.toolName)) {
 			return;
 		}
@@ -221,10 +180,11 @@ export const createChatToolCallHandler = (
 
 		Promise.resolve(
 			(async () => {
-				const outcome = await gate.gate({
-					family: "coding",
-					toolCall: options.toolCall,
-				});
+				const outcome = await gate.gate(
+					toolName === "shell"
+						? { family: "shell", toolCall: options.toolCall }
+						: { family: "coding", toolCall: options.toolCall }
+				);
 				if (outcome.kind !== "allow") {
 					emitToolCallError(
 						addToolOutput,

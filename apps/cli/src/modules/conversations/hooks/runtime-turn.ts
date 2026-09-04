@@ -40,6 +40,7 @@ import {
 	type GrepInput,
 	getSystemInstructionsForAgent,
 	type ReadInput,
+	type ShellInput,
 	type ToolResourceLimits,
 	type WriteInput,
 } from "@wincode/ai";
@@ -66,6 +67,7 @@ const RUNTIME_CODING_TOOL_NAMES = [
 	"edit",
 	"glob",
 	"grep",
+	"shell",
 ] as const;
 export type RuntimeCodingToolName = (typeof RUNTIME_CODING_TOOL_NAMES)[number];
 
@@ -88,7 +90,6 @@ export const runtimeToolRegistry: ToolRegistry = createToolRegistry(
 
 const getErrorMessage = (error: unknown): string =>
 	error instanceof Error ? error.message : "Tool execution failed.";
-
 const runMigratedTool = async ({
 	input,
 	name,
@@ -96,7 +97,11 @@ const runMigratedTool = async ({
 }: {
 	input: unknown;
 	name: RuntimeCodingToolName;
-	options: { allowExternalPath: boolean; resourceLimits?: ToolResourceLimits };
+	options: {
+		allowExternalPath: boolean;
+		resourceLimits?: ToolResourceLimits;
+		signal?: AbortSignal;
+	};
 }): Promise<ToolCallOutput> => {
 	try {
 		switch (name) {
@@ -123,6 +128,11 @@ const runMigratedTool = async ({
 			case "grep":
 				return {
 					output: await codingToolRunners.grep(input as GrepInput, options),
+					type: "success",
+				};
+			case "shell":
+				return {
+					output: await codingToolRunners.shell(input as ShellInput, options),
 					type: "success",
 				};
 			default:
@@ -219,10 +229,15 @@ export const createGatedCodingTools = ({
 		): Promise<ToolCallOutput> => {
 			const outcome = await evaluateGateWithAbort(
 				() =>
-					gate.gate({
-						family: "coding",
-						toolCall: { input, toolCallId, toolName: name },
-					}),
+					name === "shell"
+						? gate.gate({
+								family: "shell",
+								toolCall: { input, toolCallId },
+							})
+						: gate.gate({
+								family: "coding",
+								toolCall: { input, toolCallId, toolName: name },
+							}),
 				signal
 			);
 			if (outcome.kind !== "allow") {
@@ -236,6 +251,7 @@ export const createGatedCodingTools = ({
 				name,
 				options: {
 					allowExternalPath: outcome.input !== undefined,
+					signal,
 					...(resolveResourceLimits === undefined
 						? {}
 						: { resourceLimits: await resolveResourceLimits() }),
@@ -261,6 +277,9 @@ const migratedPartToolName = (
 	}
 	if (type === "tool-grep") {
 		return "grep";
+	}
+	if (type === "tool-shell") {
+		return "shell";
 	}
 	return;
 };
