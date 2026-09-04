@@ -846,6 +846,9 @@ export const createToolGate = ({
 		if (call.family === "shell") {
 			return `shell:${JSON.stringify(call.toolCall.input)}`;
 		}
+		if (call.family === "coding" && call.toolCall.toolName === "shell") {
+			return `shell:${JSON.stringify(call.toolCall.input)}`;
+		}
 		return `coding:${call.toolCall.toolName}:${JSON.stringify(call.toolCall.input)}`;
 	};
 	const trackDoomLoop = (call: GateCall): boolean => {

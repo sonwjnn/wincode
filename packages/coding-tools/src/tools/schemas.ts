@@ -205,7 +205,7 @@ export const codingToolSchemaList = [
 export const codingToolDefinitionFor = (
 	name: CodingToolName,
 	platform = shellPlatformFromNode(process.platform)
-): CodingToolDefinition<z.ZodType, z.ZodType> => ({
+): CodingToolDefinition<z.ZodType, z.ZodType> & { name: CodingToolName } => ({
 	...codingToolDefinitions[name],
 	description:
 		name === "shell"

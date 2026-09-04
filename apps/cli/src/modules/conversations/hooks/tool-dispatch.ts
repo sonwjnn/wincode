@@ -66,9 +66,51 @@ const emitDynamicToolCallError = (
 		addToolOutput({ errorText, state: "output-error", tool, toolCallId })
 	).catch(() => undefined);
 };
+
+export const runShellToolCall = async ({
+	addToolOutput,
+	input,
+	toolCallId,
+	visibleTools,
+	resourceOptions,
+}: {
+	addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>;
+	input: unknown;
+	toolCallId: string;
+	visibleTools: readonly CodingToolName[];
+	resourceOptions: { resourceLimits?: ToolResourceLimits };
+}): Promise<void> => {
+	if (!visibleTools.includes("shell")) {
+		emitToolCallError(
+			addToolOutput,
+			"shell",
+			toolCallId,
+			"This Agent cannot use shell."
+		);
+		return;
+	}
+	try {
+		const shellOutput = await runShellTool(
+			input as ShellInput,
+			resourceOptions
+		);
+		await addToolOutput({
+			output: shellOutput,
+			state: "output-available",
+			tool: "shell",
+			toolCallId,
+		});
+	} catch (error) {
+		emitToolCallError(
+			addToolOutput,
+			"shell",
+			toolCallId,
+			error instanceof Error ? error.message : "Tool call failed"
+		);
+	}
+};
 type ChatToolCallHandlerCommonDeps = {
 	addToolOutputRef: MutableRefObject<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>;
-	dynamicToolOutputRef: MutableRefObject<McpAddToolOutput | null>;
 	handleCodingAgentToolCall?: typeof handleCodingAgentToolCall;
 	mcp: Pick<McpContextValue, "handleDynamicToolCall">;
 	resolveResourceLimits?: ResourceLimitResolver;
@@ -205,15 +247,12 @@ export const createChatToolCallHandler = (
 					resolveResourceLimits
 				);
 				if (toolName === "shell") {
-					const shellOutput = await runShellTool(
-						executionOptions.toolCall.input as ShellInput,
-						resourceOptions
-					);
-					await addToolOutput({
-						output: shellOutput,
-						state: "output-available",
-						tool: "shell",
+					await runShellToolCall({
+						addToolOutput,
+						input: executionOptions.toolCall.input,
+						resourceOptions,
 						toolCallId: options.toolCall.toolCallId,
+						visibleTools: resolvedAgentRef.current?.visibleCodingTools ?? [],
 					});
 					return;
 				}

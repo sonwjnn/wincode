@@ -158,6 +158,14 @@ export const handleCodingAgentToolCall =
 					toolCallId: toolCall.toolCallId,
 				});
 				return;
+			case "shell":
+				await addToolOutput({
+					errorText: "Shell tool calls must use the CLI Tool Gate.",
+					state: "output-error",
+					tool: "shell",
+					toolCallId: toolCall.toolCallId,
+				});
+				return;
 
 			default:
 				return;
