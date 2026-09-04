@@ -1,17 +1,8 @@
-/**
- * Public coding-tool implementations. The implementation is currently shared
- * with the legacy AI package while callers migrate to this focused boundary.
- */
-
 export {
-	codingToolDefinitions,
-	codingToolNames,
-	codingToolSchemas,
-	editInputSchema,
-	editOutputSchema,
-	writeInputSchema,
-	writeOutputSchema,
-} from "@wincode/ai";
+	codingToolRunners,
+	runEditTool,
+	runWriteTool,
+} from "./tools/runners";
 export type {
 	CodingToolInput,
 	CodingToolName,
@@ -29,9 +20,14 @@ export type {
 	ShellOutput,
 	WriteInput,
 	WriteOutput,
-} from "@wincode/ai/tools";
+} from "./tools/schemas";
 export {
-	codingToolRunners,
-	runEditTool,
-	runWriteTool,
-} from "@wincode/ai/tools";
+	codingToolDefinitions,
+	codingToolNames,
+	codingToolSchemas,
+	editInputSchema,
+	editOutputSchema,
+	writeInputSchema,
+	writeOutputSchema,
+} from "./tools/schemas";
+export * from "./workspace";

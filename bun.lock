@@ -107,7 +107,9 @@
     "packages/coding-tools": {
       "name": "@wincode/coding-tools",
       "dependencies": {
-        "@wincode/ai": "workspace:*",
+        "diff": "catalog:",
+        "ignore": "^5.3.2",
+        "zod": "catalog:",
       },
       "devDependencies": {
         "@types/bun": "catalog:",
