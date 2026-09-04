@@ -78,9 +78,9 @@ export const editOutputSchema = z.object({
 	path: z.string(),
 	replacements: z.number().int().min(0),
 });
-
 export const editToolSchema = {
-	description: "Edit an existing file.",
+	description:
+		"Edit an existing file, optionally verifying hashline anchors before writing.",
 	name: "edit",
 	schema: editInputSchema,
 } as const;

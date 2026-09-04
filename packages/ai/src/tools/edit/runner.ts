@@ -9,6 +9,7 @@ import type { EditInput, EditOutput } from "./schema";
 
 const HASHLINE_PATTERN = /^([1-9]\d*):([a-z]{2})$/u;
 const HASHLINE_SEPARATOR_PATTERN = /[\s,;]+/u;
+const HASHLINE_LINE_ENDING_PATTERN = /\r?\n/u;
 const FNV_OFFSET_BASIS = 2_166_136_261;
 const FNV_PRIME = 16_777_619;
 const HASHLINE_ALPHABET_OFFSET = 97;
@@ -63,7 +64,8 @@ const applyHashlineEdit = (
 	content: string,
 	input: Extract<EditInput, { lineHashes: string }>
 ): { nextContent: string; replacements: number } => {
-	const lines = content.split("\n");
+	const newline = content.includes("\r\n") ? "\r\n" : "\n";
+	const lines = content.split(HASHLINE_LINE_ENDING_PATTERN);
 	const anchors = parseHashlineAnchors(input.lineHashes, input.path);
 	for (const anchor of anchors) {
 		const line = lines[anchor.line - 1];
@@ -82,11 +84,11 @@ const applyHashlineEdit = (
 	}
 	const first = anchors[0]?.line ?? 0;
 	const last = anchors.at(-1)?.line ?? 0;
-	const replacementLines = input.content.split("\n");
+	const replacementLines = input.content.split(HASHLINE_LINE_ENDING_PATTERN);
 	const start = input.insertAfter ? last : first - 1;
 	const deleteCount = input.insertAfter ? 0 : last - first + 1;
 	lines.splice(start, deleteCount, ...replacementLines);
-	return { nextContent: lines.join("\n"), replacements: deleteCount || 1 };
+	return { nextContent: lines.join(newline), replacements: deleteCount || 1 };
 };
 
 const countReplacements = (
