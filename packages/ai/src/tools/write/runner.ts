@@ -1,9 +1,13 @@
 import { lstat, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { defaultWorkspaceSandbox } from "../../workspace";
+import type { ResourceLimitOptions } from "../resource-limits";
 import type { WriteInput, WriteOutput } from "./schema";
 
-export const runWriteTool = async (input: WriteInput): Promise<WriteOutput> => {
+export const runWriteTool = async (
+	input: WriteInput,
+	_options: ResourceLimitOptions = {}
+): Promise<WriteOutput> => {
 	const candidatePath = await defaultWorkspaceSandbox.resolveNewPath(
 		input.path
 	);

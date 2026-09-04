@@ -112,7 +112,7 @@ describe("isRuntimeEligibleSend", () => {
 		);
 	});
 
-	test("requires the Tool Gate for tool-armed Agents and rejects other coding tools", () => {
+	test("requires the Tool Gate and accepts migrated coding tools", () => {
 		expect(
 			isRuntimeEligibleSend(
 				eligibilityArgs(
@@ -149,7 +149,7 @@ describe("isRuntimeEligibleSend", () => {
 					allowGate
 				)
 			)
-		).toBe(false);
+		).toBe(true);
 		expect(
 			isRuntimeEligibleSend(
 				eligibilityArgs(
@@ -1097,7 +1097,11 @@ describe("createGatedCodingTools", () => {
 			agentTools: ["read", "glob", "write", "shell"],
 			gate: stubGate({ kind: "allow" }),
 		});
-		expect(tools.map((tool) => tool.definition.name)).toEqual(["read", "glob"]);
+		expect(tools.map((tool) => tool.definition.name)).toEqual([
+			"read",
+			"glob",
+			"write",
+		]);
 	});
 
 	test("runs an allowed Tool Call through the public runner", async () => {
