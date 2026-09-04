@@ -1333,6 +1333,42 @@ describe("createGatedCodingTools", () => {
 			await rm(dir, { force: true, recursive: true });
 		}
 	});
+	test("creates a correlated delegation Tool Call for production execution", async () => {
+		let request:
+			| {
+					agent: string;
+					parentToolCallId: string;
+					parentTurnId: string;
+					prompt: string;
+			  }
+			| undefined;
+		const tools = createGatedCodingTools({
+			agentTools: [],
+			delegate: async (delegationRequest) => {
+				request = delegationRequest;
+				return "delegated result";
+			},
+			gate: allowGate,
+			parentTurnId: "turn-parent",
+		});
+		const delegate = tools.find(
+			({ definition }) => definition.name === "delegate"
+		);
+		const outcome = await delegate?.execute({
+			input: { agent: "research", prompt: "Find the relevant files." },
+			toolCallId: "call-delegate",
+		});
+		expect(outcome).toEqual({
+			output: "delegated result",
+			type: "success",
+		});
+		expect(request).toEqual({
+			agent: "research",
+			parentToolCallId: "call-delegate",
+			parentTurnId: "turn-parent",
+			prompt: "Find the relevant files.",
+		});
+	});
 });
 
 describe("runtime checkpoint durability", () => {

@@ -37,8 +37,13 @@ export type ToolPermissionRuntime = {
 	) => void;
 	permissionRef: MutableRefObject<ToolPermission>;
 	resolveMcpPolicy: () => Promise<EffectiveAgentPolicy>;
+	resolveMcpPolicyForAgent: (agent: AgentId) => Promise<EffectiveAgentPolicy>;
 	resolvePermission: () => Promise<ToolPermission>;
+	resolvePermissionForAgent: (agent: AgentId) => Promise<ToolPermission>;
 	resolveResourceLimits: () => Promise<ToolResourceLimits>;
+	resolveResourceLimitsForAgent: (
+		agent: AgentId
+	) => Promise<ToolResourceLimits>;
 	sandbox: WorkspacePolicy;
 	service: PermissionService;
 };
@@ -140,6 +145,30 @@ export function useToolPermission(): ToolPermissionRuntime {
 		() => resolvedPromise.then((resolved) => resolved.mcpPolicy),
 		[resolvedPromise]
 	);
+	const resolvePoliciesForAgent = useCallback(
+		(targetAgent: AgentId) =>
+			resolveToolPermissionPolicies(
+				registry,
+				targetAgent,
+				() => permissionRef.current
+			),
+		[registry]
+	);
+	const resolveMcpPolicyForAgent = useCallback(
+		(targetAgent: AgentId) =>
+			Promise.resolve(resolvePoliciesForAgent(targetAgent).mcpPolicy),
+		[resolvePoliciesForAgent]
+	);
+	const resolvePermissionForAgent = useCallback(
+		(targetAgent: AgentId) =>
+			Promise.resolve(resolvePoliciesForAgent(targetAgent).permission),
+		[resolvePoliciesForAgent]
+	);
+	const resolveResourceLimitsForAgent = useCallback(
+		(targetAgent: AgentId) =>
+			Promise.resolve(resolvePoliciesForAgent(targetAgent).resourceLimits),
+		[resolvePoliciesForAgent]
+	);
 	const resolveResourceLimits = useCallback(
 		() => resolvedPromise.then((resolved) => resolved.resourceLimits),
 		[resolvedPromise]
@@ -160,8 +189,11 @@ export function useToolPermission(): ToolPermissionRuntime {
 		openApproval,
 		permissionRef,
 		resolveMcpPolicy,
+		resolveMcpPolicyForAgent,
 		resolvePermission,
+		resolvePermissionForAgent,
 		resolveResourceLimits,
+		resolveResourceLimitsForAgent,
 		sandbox,
 		service,
 	};

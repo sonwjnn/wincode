@@ -14,7 +14,6 @@ import type {
 	ResolvedTool,
 	ToolCallId,
 } from "@wincode/agent-core";
-
 import {
 	AgentInvariantError,
 	createAgentTurnAbortEvent,
@@ -33,6 +32,7 @@ import {
 	resolveAiSdkModelTarget,
 } from "@wincode/ai/server";
 import {
+	jsonSchema,
 	stepCountIs,
 	type ToolExecutionOptions,
 	ToolLoopAgent,
@@ -440,6 +440,15 @@ const resolveRuntimeModel = (
 	}
 };
 
+const runtimeInputSchema = (
+	inputSchema: ResolvedTool["definition"]["inputSchema"]
+) =>
+	"jsonSchema" in inputSchema
+		? jsonSchema(inputSchema.jsonSchema, {
+				validate: inputSchema.validate,
+			})
+		: inputSchema;
+
 const toAiSdkToolSet = (tools: readonly ResolvedTool[]): ToolSet => {
 	const set: Record<string, unknown> = {};
 	for (const { definition, execute } of tools) {
@@ -452,7 +461,7 @@ const toAiSdkToolSet = (tools: readonly ResolvedTool[]): ToolSet => {
 		}
 		set[definition.name] = tool({
 			description: definition.description,
-			inputSchema: definition.inputSchema,
+			inputSchema: runtimeInputSchema(definition.inputSchema),
 			...(definition.outputSchema === undefined
 				? {}
 				: { outputSchema: definition.outputSchema }),

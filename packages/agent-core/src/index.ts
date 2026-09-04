@@ -95,6 +95,7 @@ export type {
 	ToolDefinition,
 	ToolExecutor,
 	ToolExecutorOptions,
+	ToolJsonSchema,
 	ToolRegistry,
 } from "./tools";
 export {

@@ -1,5 +1,6 @@
 import { lstat } from "node:fs/promises";
 import {
+	type AgentId,
 	type CodingToolName,
 	codingToolDefinitions,
 	codingToolNames,
@@ -61,10 +62,12 @@ export type GateOutcome =
  */
 export type GateCall =
 	| {
+			agentId?: AgentId;
 			family: "coding";
 			toolCall: { input: unknown; toolCallId: string; toolName: string };
 	  }
 	| {
+			agentId?: AgentId;
 			family: "mcp";
 			action: string;
 			agentDecision: PermissionDecision;
@@ -76,17 +79,18 @@ export type GateCall =
 			toolName: string;
 	  }
 	| {
+			agentId?: AgentId;
 			family: "shell";
 			toolCall: { input: unknown; toolCallId: string };
 	  }
 	| {
+			agentId?: AgentId;
 			family: "skill";
 			available: boolean;
 			description: string;
 			name: string;
 			toolCallId?: string;
 	  };
-
 export type ToolGate = {
 	gate(call: GateCall): Promise<GateOutcome>;
 };
@@ -98,8 +102,8 @@ export type ToolGateDeps = {
 		request: ToolApprovalRequest,
 		actions: ToolApprovalActions
 	) => void;
-	resolvePermission: () => Promise<ToolPermission>;
-	resolveResourceLimits?: () => Promise<ToolResourceLimits>;
+	resolvePermission: (agentId?: AgentId) => Promise<ToolPermission>;
+	resolveResourceLimits?: (agentId?: AgentId) => Promise<ToolResourceLimits>;
 	sandbox: WorkspacePolicy;
 	service: PermissionService;
 };
@@ -412,11 +416,12 @@ export const createToolGate = ({
 	const gateCodingToolCall = async (
 		toolCall: { input: unknown; toolCallId: string; toolName: string },
 		permission: ToolPermission,
-		doomAsk: boolean
+		doomAsk: boolean,
+		agentId?: AgentId
 		// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: authorization branches are intentionally kept in one gate
 	): Promise<GateOutcome> => {
 		if (toolCall.toolName === "shell") {
-			return gateShellToolCall(toolCall, permission, doomAsk);
+			return gateShellToolCall(toolCall, permission, doomAsk, agentId);
 		}
 		if (!isCodingToolName(toolCall.toolName)) {
 			return {
@@ -431,7 +436,7 @@ export const createToolGate = ({
 		}
 		const label = STATIC_TOOL_LABELS[tool];
 		const action = STATIC_TOOL_PERMISSION_ACTIONS[tool];
-		const resourceLimits = await resolveResourceLimits();
+		const resourceLimits = await resolveResourceLimits(agentId);
 		const limitChecks =
 			tool === "write" ? [] : resourceLimitChecks(resourceLimits);
 		const requestFor = (
@@ -620,7 +625,8 @@ export const createToolGate = ({
 	const gateShellToolCall = async (
 		toolCall: { input: unknown; toolCallId: string },
 		permission: ToolPermission,
-		doomAsk: boolean
+		doomAsk: boolean,
+		agentId?: AgentId
 	): Promise<GateOutcome> => {
 		const command = getStringField(toolCall.input, "command");
 		if (!command) {
@@ -631,7 +637,7 @@ export const createToolGate = ({
 		const normalized = normalizeShellCommand(command);
 		const nodes = await parseShellCommandNodes(command);
 		const operationDecision = decideShellCommand(command, nodes, permission);
-		const resourceLimits = await resolveResourceLimits();
+		const resourceLimits = await resolveResourceLimits(agentId);
 		const limitChecks = resourceLimitChecks(resourceLimits);
 		const cwd = getStringField(toolCall.input, "cwd");
 		const request = (external: boolean): ToolApprovalRequest => ({
@@ -794,7 +800,7 @@ export const createToolGate = ({
 		call: Extract<GateCall, { family: "skill" }>,
 		doomAsk: boolean
 	): Promise<GateOutcome> => {
-		const permission = await resolvePermission();
+		const permission = await resolvePermission(call.agentId);
 		const decision = permission.decide("skill", call.name);
 		if (!call.available && decision !== "deny") {
 			return { kind: "allow" };
@@ -870,12 +876,22 @@ export const createToolGate = ({
 			return gateSkillCall(call, trackDoomLoop(call));
 		}
 		if (call.family === "shell") {
-			const permission = await resolvePermission();
-			return gateShellToolCall(call.toolCall, permission, trackDoomLoop(call));
+			const permission = await resolvePermission(call.agentId);
+			return gateShellToolCall(
+				call.toolCall,
+				permission,
+				trackDoomLoop(call),
+				call.agentId
+			);
 		}
 		if (call.family === "coding") {
-			const permission = await resolvePermission();
-			return gateCodingToolCall(call.toolCall, permission, trackDoomLoop(call));
+			const permission = await resolvePermission(call.agentId);
+			return gateCodingToolCall(
+				call.toolCall,
+				permission,
+				trackDoomLoop(call),
+				call.agentId
+			);
 		}
 		return { errorText: "Unknown tool authorization family", kind: "deny" };
 	};

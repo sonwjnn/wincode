@@ -76,8 +76,8 @@ export const prepareCodingAgentCall = <T extends Record<string, unknown>>(
 			inputSchema: jsonSchema(skillTool.inputSchema),
 		};
 	}
-	// Shell is composed by the local CLI so its platform syntax and permission
-	// behavior stay alongside the side-effecting tool.
+	// Shell and delegation are composed by the local CLI so their side-effecting
+	// behavior stays alongside the application conversation boundary.
 	if (shellTool !== undefined) {
 		tools.shell = shellTool;
 	}
@@ -93,7 +93,6 @@ export const prepareCodingAgentCall = <T extends Record<string, unknown>>(
 		tools,
 	};
 };
-
 type CreateCodingAgentOptions = {
 	model: LanguageModel;
 	maxOutputTokens?: number;

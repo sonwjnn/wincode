@@ -1,8 +1,9 @@
 import type { AgentTurnDelegation } from "@wincode/agent-core";
 import { createAgentTurnId, isAgentTurnDelegation } from "@wincode/agent-core";
-import type { AgentId, CodingAgentUIMessage } from "@wincode/ai";
 import {
+	type AgentId,
 	buildUsageMessageMetadata,
+	type CodingAgentUIMessage,
 	expandFileMentionPartsForModel,
 	getChatModelRoute,
 	type ModelVariant,
@@ -101,6 +102,7 @@ export const createLocalChatTransport = (
 				throw new Error("No resolved Agent or model to send");
 			}
 			const runtimeAgent = resolvedAgent;
+			const turnId = createAgentTurnId();
 			const runtime = (createRuntime ?? defaultRuntimeFactory)();
 			const turn = buildAgentTurn({
 				agent: agentId,
@@ -113,13 +115,16 @@ export const createLocalChatTransport = (
 					gatedTooling === undefined
 						? []
 						: createGatedCodingTools({
+								agentId,
 								agentTools: runtimeAgent.visibleCodingTools,
+								delegate: gatedTooling.delegate,
 								gate: gatedTooling.gate,
+								parentTurnId: turnId,
 								resolveResourceLimits: gatedTooling.resolveResourceLimits,
 								skillExecution: skillExecutionRef?.current ?? undefined,
 								skillTool: skillToolRef?.current,
 							}),
-				turnId: createAgentTurnId(),
+				turnId,
 			});
 			return createRuntimeStream({
 				onCheckpoint: commitCheckpoint,
