@@ -9,19 +9,28 @@ import type { EditInput, EditOutput } from "./schema";
 
 const HASHLINE_PATTERN = /^([1-9]\d*):([a-z]{2})$/u;
 const HASHLINE_SEPARATOR_PATTERN = /[\s,;]+/u;
+const FNV_OFFSET_BASIS = 2_166_136_261;
+const FNV_PRIME = 16_777_619;
+const HASHLINE_ALPHABET_OFFSET = 97;
+const HASHLINE_ALPHABET_SIZE = 26;
 
 const hashLine = (line: string): string => {
-	let hash = 2_166_136_261;
+	let hash = FNV_OFFSET_BASIS;
 	for (const byte of Buffer.from(line, "utf8")) {
 		// biome-ignore lint/suspicious/noBitwiseOperators: FNV-1a requires 32-bit arithmetic.
 		hash ^= byte;
 		// biome-ignore lint/suspicious/noBitwiseOperators: FNV-1a requires unsigned 32-bit arithmetic.
-		hash = Math.imul(hash, 16_777_619) >>> 0;
+		hash = Math.imul(hash, FNV_PRIME) >>> 0;
 	}
 	return (
-		String.fromCharCode(97 + (hash % 26)) +
-		// biome-ignore lint/suspicious/noBitwiseOperators: FNV-1a extracts the second byte.
-		String.fromCharCode(97 + ((hash >>> 8) % 26))
+		String.fromCharCode(
+			HASHLINE_ALPHABET_OFFSET + (hash % HASHLINE_ALPHABET_SIZE)
+		) +
+		String.fromCharCode(
+			HASHLINE_ALPHABET_OFFSET +
+				// biome-ignore lint/suspicious/noBitwiseOperators: FNV-1a extracts the second byte.
+				((hash >>> 8) % HASHLINE_ALPHABET_SIZE)
+		)
 	);
 };
 
