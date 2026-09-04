@@ -221,6 +221,21 @@ describe("isRuntimeEligibleSend", () => {
 		expect(
 			isRuntimeEligibleSend(eligibilityArgs([userMessage("x"), inFlight]))
 		).toBe(false);
+		expect(
+			isRuntimeEligibleSend(
+				eligibilityArgs([
+					userMessage("x"),
+					assistantMessage([
+						{
+							output: "terminal output",
+							state: "output-available",
+							toolCallId: "call-terminal",
+							type: "tool-terminal",
+						},
+					]),
+				])
+			)
+		).toBe(false);
 	});
 
 	test("rejects empty-error migrated parts, non-assistant tool history, and file parts", () => {

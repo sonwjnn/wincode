@@ -373,6 +373,12 @@ export const isMigratedToolCallPart = (
 		return false;
 	}
 	const candidate = part as Record<string, unknown>;
+	if (
+		typeof candidate.type !== "string" ||
+		migratedPartToolName(candidate.type) === undefined
+	) {
+		return false;
+	}
 	if (candidate.type === "dynamic-tool" && candidate.toolName !== "skill") {
 		return false;
 	}
