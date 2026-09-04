@@ -126,7 +126,8 @@ export type McpRegistry = {
 	initialize(): Promise<void>;
 	createSnapshot(
 		agent: AgentId,
-		agentPolicy?: McpAgentPolicy
+		agentPolicy?: McpAgentPolicy,
+		trackLatest?: boolean
 	): Promise<McpCatalogSnapshot>;
 	execute(
 		snapshot: McpCatalogSnapshot,
@@ -134,6 +135,7 @@ export type McpRegistry = {
 		input: unknown,
 		signal?: AbortSignal
 	): Promise<McpNormalizedResult>;
+	releaseSnapshot?(snapshot: McpCatalogSnapshot): void;
 	getStatuses(): readonly McpServerStatus[];
 	reconnect(serverName: string): Promise<void>;
 	subscribe(listener: () => void): () => void;
@@ -237,6 +239,8 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	const reconnects = new Map<string, Promise<void>>();
 	const toggles = new Map<string, Promise<void>>();
 	let latestSnapshotId: string | undefined;
+	const activeSnapshotIds = new Set<string>();
+	const untrackedSnapshotIds = new Set<string>();
 	let catalogGeneration = 0;
 
 	const emit = (): void => {
@@ -332,7 +336,8 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			(item) => item.serverName === serverName
 		);
 		catalogGeneration += 1;
-		latestSnapshotId = undefined;
+		activeSnapshotIds.clear();
+		untrackedSnapshotIds.clear();
 		entry.executionController.abort();
 		entry.executionController = new AbortController();
 		await closeClient(entry);
@@ -501,9 +506,33 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		};
 	};
 
+	const retainSnapshot = (
+		snapshot: McpCatalogSnapshot,
+		trackLatest: boolean
+	): void => {
+		activeSnapshotIds.add(snapshot.id);
+		if (!trackLatest) {
+			untrackedSnapshotIds.add(snapshot.id);
+			return;
+		}
+		if (latestSnapshotId !== undefined) {
+			activeSnapshotIds.delete(latestSnapshotId);
+		}
+		latestSnapshotId = snapshot.id;
+	};
+
+	const releaseSnapshot = (snapshot: McpCatalogSnapshot): void => {
+		if (snapshot.id === latestSnapshotId) {
+			return;
+		}
+		activeSnapshotIds.delete(snapshot.id);
+		untrackedSnapshotIds.delete(snapshot.id);
+	};
+
 	const createSnapshot = async (
 		agent: AgentId,
-		agentPolicy: McpAgentPolicy = DEFAULT_EFFECTIVE_AGENT_POLICY
+		agentPolicy: McpAgentPolicy = DEFAULT_EFFECTIVE_AGENT_POLICY,
+		trackLatest = true
 	): Promise<McpCatalogSnapshot> => {
 		if (closed) {
 			const snapshot: McpCatalogSnapshot = {
@@ -512,7 +541,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				manifest: [],
 				tools: new Map(),
 			};
-			latestSnapshotId = snapshot.id;
+			retainSnapshot(snapshot, trackLatest);
 			return snapshot;
 		}
 		await init();
@@ -520,7 +549,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			const generation = catalogGeneration;
 			const snapshot = await buildSnapshot(agent, agentPolicy);
 			if (generation === catalogGeneration) {
-				latestSnapshotId = snapshot.id;
+				retainSnapshot(snapshot, trackLatest);
 				return snapshot;
 			}
 		}
@@ -560,9 +589,11 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		// TOCTOU guard, not duplicate validation: between the provider's pre-gate
 		// staleness check and this execute, an approval may have been pending while
 		// the catalog refreshed (reconnect, toggle, policy change). The gate may
-		// pass a snapshot that was current when asked, but execution must still
-		// refuse it now.
-		if (snapshot.id !== latestSnapshotId) {
+		if (
+			!activeSnapshotIds.has(snapshot.id) ||
+			(snapshot.id !== latestSnapshotId &&
+				!untrackedSnapshotIds.has(snapshot.id))
+		) {
 			return outputError("MCP tool snapshot is stale or not executable");
 		}
 		const tool = snapshot.tools.get(toolName);
@@ -623,7 +654,8 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 
 	const doReconnect = async (entry: ServerEntry): Promise<void> => {
 		catalogGeneration += 1;
-		latestSnapshotId = undefined;
+		activeSnapshotIds.clear();
+		untrackedSnapshotIds.clear();
 		entry.executionController.abort();
 		entry.executionController = new AbortController();
 		await closeClient(entry);
@@ -652,7 +684,8 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			await closeClient(entry);
 		}
 		catalogGeneration += 1;
-		latestSnapshotId = undefined;
+		activeSnapshotIds.clear();
+		untrackedSnapshotIds.clear();
 		emit();
 	};
 
@@ -662,7 +695,8 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		error?: string
 	): Promise<void> => {
 		catalogGeneration += 1;
-		latestSnapshotId = undefined;
+		activeSnapshotIds.clear();
+		untrackedSnapshotIds.clear();
 		entry.executionController.abort();
 		entry.executionController = new AbortController();
 		await closeClient(entry);
@@ -855,7 +889,8 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				return;
 			}
 			catalogGeneration += 1;
-			latestSnapshotId = undefined;
+			activeSnapshotIds.clear();
+			untrackedSnapshotIds.clear();
 			entry.executionController.abort();
 			await closeClient(entry);
 			entry.error = undefined;
@@ -910,6 +945,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		close,
 		createSnapshot,
 		execute,
+		releaseSnapshot,
 		getStatuses,
 		initialize,
 		reconnect,

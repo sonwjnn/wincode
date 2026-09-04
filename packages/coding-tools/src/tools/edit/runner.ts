@@ -132,10 +132,10 @@ export const runEditTool = async (
 		nextContent = input.content;
 		replacements = 1;
 	} else {
-		const { find, replace } = input;
-		if (find === undefined || replace === undefined) {
+		if (!("find" in input)) {
 			throw new Error("Invalid edit input: find and replace are required");
 		}
+		const { find, replace } = input;
 		replacements = countReplacements(content, find, input.replaceAll);
 		if (replacements === 0) {
 			throw new Error(`Could not find text in ${input.path}`);

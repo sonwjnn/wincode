@@ -56,6 +56,7 @@ export type ConversationController = {
 	readonly waitForIdle: ConversationOperation["waitForIdle"];
 };
 export type ConversationViewState = {
+	readonly delegation?: AgentTurn["delegation"];
 	readonly lastEventType?: AgentTurnEvent["type"];
 	readonly lastSequence: number;
 	readonly reasoningText: string;
@@ -96,6 +97,7 @@ export const consumeAgentTurnEvents = async ({
 }: AgentTurnEventConsumerOptions): Promise<void> => {
 	const lifecycle = providedLifecycle ?? createAgentTurnLifecycle(turn.id);
 	let viewState: ConversationViewState = {
+		delegation: turn.delegation,
 		lastSequence: -1,
 		reasoningText: "",
 		status: "idle",

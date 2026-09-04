@@ -1,5 +1,8 @@
 import { useChat as useAiChat } from "@ai-sdk/react";
-import { getAgentTurnAbortDisposition } from "@wincode/agent-core";
+import {
+	type AgentTurnDelegation,
+	getAgentTurnAbortDisposition,
+} from "@wincode/agent-core";
 import {
 	type AgentId,
 	buildAgent,
@@ -62,6 +65,7 @@ import { useLatest } from "@/shared/hooks/use-latest";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
 import { createApprovalQueue } from "@/shared/providers/approval/approval-queue";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
+import type { ConversationViewState } from "../conversation-controller";
 import { createConversationController } from "../conversation-controller";
 import type {
 	ConversationOperation,
@@ -71,8 +75,17 @@ import type {
 import type { AttachmentHydrationOptions } from "../storage/attachment-store";
 import { getConversationStore } from "../storage/get-conversation-store";
 import { type AutoSendGate, createAutoSendGate } from "./auto-send-gate";
-import { createRoutingChatTransport } from "./routing-chat-transport";
+import {
+	createDelegationExecutor,
+	createRoutingChatTransport,
+} from "./routing-chat-transport";
+import type { DelegationExecutor, RuntimeGatedTooling } from "./runtime-turn";
 import { createChatToolCallHandler } from "./tool-dispatch";
+
+const requestBodyForDelegation = (
+	delegation: AgentTurnDelegation | undefined
+): { readonly delegation: AgentTurnDelegation } | undefined =>
+	delegation === undefined ? undefined : { delegation };
 export const createChatMessageParts = (
 	userText: string,
 	fileMentions: CodingAgentUIMessage["parts"],
@@ -339,18 +352,25 @@ export function useChat(
 	const {
 		closeApprovals,
 		openApproval,
-		resolveMcpPolicy,
+		resolveMcpPolicyForAgent,
 		resolvePermission,
+		resolvePermissionForAgent,
 		resolveResourceLimits,
+		resolveResourceLimitsForAgent,
 		sandbox,
 		service,
 	} = useToolPermission();
 	// The transport is memoized on a coarser dependency set than the Agent-scoped
 	// policy resolver, so read the latest resolver through a ref to avoid building
 	// a snapshot against a stale Agent's MCP policy.
-	const resolveMcpPolicyRef = useLatest(resolveMcpPolicy);
+	const resolveMcpPolicyForAgentRef = useLatest(resolveMcpPolicyForAgent);
+	const resolvePermissionForAgentRef = useLatest(resolvePermissionForAgent);
+	const resolveResourceLimitsForAgentRef = useLatest(
+		resolveResourceLimitsForAgent
+	);
 	const resolvePermissionRef = useLatest(resolvePermission);
 	const resolveResourceLimitsRef = useLatest(resolveResourceLimits);
+	const childAbortControllersRef = useRef(new Map<string, () => void>());
 	const approvalAbortHandledRef = useRef(false);
 	const abortApprovalTurnRef = useRef<(toolCallId: string) => void>(
 		() => undefined
@@ -365,13 +385,27 @@ export function useChat(
 			gate: createToolGate({
 				approvalQueue,
 				onAbort: (request) => {
-					if (request.toolCallId !== undefined) {
-						abortApprovalTurnRef.current(request.toolCallId);
+					if (request.toolCallId === undefined) {
+						return;
 					}
+					const abortChild = childAbortControllersRef.current.get(
+						request.toolCallId
+					);
+					if (abortChild !== undefined) {
+						abortChild();
+						return;
+					}
+					abortApprovalTurnRef.current(request.toolCallId);
 				},
 				openApproval,
-				resolvePermission: () => resolvePermissionRef.current(),
-				resolveResourceLimits: () => resolveResourceLimitsRef.current(),
+				resolvePermission: (agentId) =>
+					agentId === undefined
+						? resolvePermissionRef.current()
+						: resolvePermissionForAgentRef.current(agentId),
+				resolveResourceLimits: (agentId) =>
+					agentId === undefined
+						? resolveResourceLimitsRef.current()
+						: resolveResourceLimitsForAgentRef.current(agentId),
 				sandbox,
 				service,
 			}),
@@ -393,9 +427,27 @@ export function useChat(
 	// Runtime-armed coding tools need the Gate plus the resource-profile
 	// resolver as one unit; the legacy handler path keeps its own resolver
 	// reference below.
-	const runtimeGatedToolingRef = useLatest({
+	const delegationExecutorRef = useRef<DelegationExecutor | undefined>(
+		undefined
+	);
+	const runtimeGatedToolingRef = useLatest<RuntimeGatedTooling>({
+		delegate: (request, signal) => {
+			const execute = delegationExecutorRef.current;
+			return execute === undefined
+				? Promise.reject(new Error("Delegation is unavailable."))
+				: execute(request, signal);
+		},
 		gate: toolGate,
-		resolveResourceLimits: () => resolveResourceLimitsRef.current(),
+		registerChildAbort: (toolCallId, abort) => {
+			childAbortControllersRef.current.set(toolCallId, abort);
+			return () => {
+				childAbortControllersRef.current.delete(toolCallId);
+			};
+		},
+		resolveResourceLimits: (agentId) =>
+			agentId === undefined
+				? resolveResourceLimitsRef.current()
+				: resolveResourceLimitsForAgentRef.current(agentId),
 	});
 	const addToolOutputRef =
 		useRef<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>(null);
@@ -414,6 +466,9 @@ export function useChat(
 	const [displayMessages, setDisplayMessages] = useState<
 		CodingAgentUIMessage[]
 	>(() => [...initialMessages]);
+	const [viewState, setViewState] = useState<ConversationViewState | undefined>(
+		undefined
+	);
 	const [compactions, setCompactions] = useState<ConversationCompaction[]>(
 		() => [...initialCompactions]
 	);
@@ -680,7 +735,34 @@ export function useChat(
 			});
 		});
 	};
-	// biome-ignore lint/correctness/useExhaustiveDependencies: the MCP policy ref intentionally stays live without rebuilding transport.
+	delegationExecutorRef.current = createDelegationExecutor(
+		sessionId,
+		registry,
+		connections,
+		{
+			...mcp,
+			createSnapshot: async (agent: AgentId, agentPolicy, trackLatest) =>
+				mcp.createSnapshot(
+					agent,
+					agentPolicy ?? (await resolveMcpPolicyForAgentRef.current(agent)),
+					trackLatest
+				),
+		},
+		modelRef,
+		variantRef,
+		runtimeGatedToolingRef.current,
+		async (agent: AgentId) => {
+			const permission = await resolvePermissionForAgentRef.current(agent);
+			const catalog = await discoverSkillCatalog(config, (name) =>
+				permission.decide("skill", name)
+			);
+			const execution = createSkillExecution(catalog);
+			const tool = buildSkillToolDefinition(catalog);
+			return tool === undefined ? undefined : { execution, tool };
+		},
+		(nextViewState) => setViewState(nextViewState)
+	);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: latest refs intentionally keep transport state stable
 	const transport = useMemo(() => {
 		// The transport snapshots the MCP catalog once per send; mirror the same
 		// immutable snapshot into a ref so dynamic tool dispatch resolves against
@@ -690,7 +772,7 @@ export function useChat(
 			createSnapshot: async (agent: AgentId) => {
 				// Resolve the snapshot for the executing Agent's effective MCP policy
 				// so deny composes out unavailable tools and ask/allow are visible.
-				const agentPolicy = await resolveMcpPolicyRef.current();
+				const agentPolicy = await resolveMcpPolicyForAgentRef.current(agent);
 				const snapshot = await mcp.createSnapshot(agent, agentPolicy);
 				mcpSnapshotRef.current = snapshot;
 				return snapshot;
@@ -709,7 +791,9 @@ export function useChat(
 			attachmentBudgetRef,
 			outcomeSignalRef,
 			runtimeGatedToolingRef,
-			skillExecutionRef
+			skillExecutionRef,
+			(nextViewState) => setViewState(nextViewState),
+			delegationExecutorRef.current
 		);
 	}, [connections, mcp, registry, sessionId]);
 
@@ -1146,6 +1230,7 @@ export function useChat(
 	const submitAnchoredMessage = async (
 		anchoredMessage: CodingAgentUIMessage,
 		metadata: CodingAgentUIMessage["metadata"],
+		body: { readonly delegation: AgentTurnDelegation } | undefined,
 		signal: AbortSignal
 	): Promise<ConversationSendOutcome> => {
 		const previousMessages = activeMessagesRef.current;
@@ -1172,11 +1257,14 @@ export function useChat(
 			if (signal.aborted) {
 				return conversationSendCancelled(signal);
 			}
-			await chat.sendMessage({
-				messageId: anchoredMessage.id,
-				metadata,
-				parts: anchoredMessage.parts,
-			});
+			await chat.sendMessage(
+				{
+					messageId: anchoredMessage.id,
+					metadata,
+					parts: anchoredMessage.parts,
+				},
+				{ body }
+			);
 			return conversationSendCompleted(signal);
 		} finally {
 			setIsPreparingMessage(false);
@@ -1184,11 +1272,13 @@ export function useChat(
 	};
 
 	const submitFreshMessage = async ({
+		body,
 		files,
 		metadata,
 		userText,
 		signal,
 	}: {
+		body: { readonly delegation: AgentTurnDelegation } | undefined;
 		files: FileUIPart[];
 		metadata: CodingAgentUIMessage["metadata"];
 		userText?: string;
@@ -1273,11 +1363,14 @@ export function useChat(
 		}
 
 		try {
-			await chat.sendMessage({
-				messageId: durableOptimisticMessage.id,
-				metadata,
-				parts: durableOptimisticMessage.parts,
-			});
+			await chat.sendMessage(
+				{
+					messageId: durableOptimisticMessage.id,
+					metadata,
+					parts: durableOptimisticMessage.parts,
+				},
+				{ body }
+			);
 			return conversationSendCompleted(signal);
 		} catch (error) {
 			const nextMessages = activeMessagesRef.current.filter(
@@ -1302,6 +1395,7 @@ export function useChat(
 			model,
 			variant,
 			resolvedAgent,
+			delegation,
 			userText,
 			files = [],
 			skill,
@@ -1361,15 +1455,16 @@ export function useChat(
 				? { skill: createSkillSnapshot(resolution.skill, "explicit") }
 				: {}),
 		};
+		const body = requestBodyForDelegation(delegation);
 
 		if (signal.aborted) {
 			return conversationSendCancelled(signal);
 		}
 		if (anchoredMessage) {
-			return submitAnchoredMessage(anchoredMessage, metadata, signal);
+			return submitAnchoredMessage(anchoredMessage, metadata, body, signal);
 		}
 
-		return submitFreshMessage({ files, metadata, signal, userText });
+		return submitFreshMessage({ body, files, metadata, signal, userText });
 	};
 
 	const submitRef = useLatest(submit);
@@ -1439,6 +1534,7 @@ export function useChat(
 		error: compactionError ?? chat.error,
 		getCompactionSettings,
 		isCompacting,
+		viewState,
 		messages: displayMessages,
 		status: chat.status,
 		isPreparingMessage,

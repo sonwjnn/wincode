@@ -16,10 +16,13 @@ const started: AgentTurnEvent = {
 	type: "agent-turn-started",
 };
 
-const completed = (sequence: number): AgentTurnTerminalEvent => ({
+const completed = (
+	sequence: number,
+	turnId = "turn-1"
+): AgentTurnTerminalEvent => ({
 	finishedAt: 2,
 	sequence,
-	turnId: "turn-1",
+	turnId,
 	type: "agent-turn-completed",
 });
 
@@ -107,6 +110,23 @@ describe("Agent Turn lifecycle", () => {
 			expect((error as AgentInvariantError).cause).toBeDefined();
 		}
 	});
+});
+
+test("parent and delegated lifecycles settle independently", () => {
+	const parent = createAgentTurnLifecycle("turn-parent");
+	const delegated = createAgentTurnLifecycle("turn-subagent");
+	parent.apply({ ...started, turnId: "turn-parent" });
+	delegated.apply({
+		...started,
+		agentId: "research",
+		turnId: "turn-subagent",
+	});
+	parent.apply(completed(1, "turn-parent"));
+	const delegatedTerminal = delegated.interrupt(1);
+
+	expect(parent.getState().status).toBe("completed");
+	expect(delegated.getState().status).toBe("interrupted");
+	expect(delegatedTerminal.turnId).toBe("turn-subagent");
 });
 
 describe("Operational Failure boundary", () => {

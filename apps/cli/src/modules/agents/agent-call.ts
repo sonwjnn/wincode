@@ -23,12 +23,16 @@ export const resolveEffectiveAgentSelection = (
 	registry: AgentRegistry | null,
 	agentId: AgentId,
 	fallbackModel: ChatModelSelection,
-	fallbackVariant: ModelVariant | undefined
+	fallbackVariant: ModelVariant | undefined,
+	allowSubagent = false
 ): EffectiveAgentSelection => {
-	const selected = registry?.selectableAgents.find(
+	const candidates = allowSubagent
+		? (registry?.agents ?? [])
+		: (registry?.selectableAgents ?? []);
+	const selected = candidates.find(
 		(agent) => agent.id === agentId && agent.isAvailable
 	);
-	const fallbackAgent = registry?.selectableAgents.find(
+	const fallbackAgent = candidates.find(
 		(agent) => agent.id === "build" && agent.isAvailable
 	);
 	const effectiveAgent = selected ?? fallbackAgent;
@@ -50,13 +54,15 @@ export const resolveEffectiveAgentSelection = (
 
 export const prepareAgentCall = (
 	registry: AgentRegistry | null,
-	selection: AgentCallSelection
+	selection: AgentCallSelection,
+	options?: { readonly allowSubagent?: boolean }
 ): PreparedAgentCall => {
 	const effective = resolveEffectiveAgentSelection(
 		registry,
 		selection.agent,
 		selection.model,
-		selection.variant
+		selection.variant,
+		options?.allowSubagent ?? false
 	);
 	if (!effective.resolvedAgent) {
 		throw new Error("No resolved Agent or model to send");

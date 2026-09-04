@@ -14,6 +14,7 @@ import {
 	type ConversationCompaction,
 	isCompactionSummaryMessage,
 } from "../../compaction";
+import type { ConversationViewState } from "../../conversation-controller";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import { summarizeSessionUsage } from "../../usage/session-usage";
 import type { ChatPromptSubmission } from "../../utils";
@@ -41,6 +42,7 @@ type ChatShellProps = {
 	onSubmit: (
 		submission: ChatPromptSubmission
 	) => boolean | Promise<boolean> | undefined;
+	viewState?: ConversationViewState;
 };
 export function ChatShell({
 	compactions = [],
@@ -53,6 +55,7 @@ export function ChatShell({
 	onOpenSettings,
 	promptHistory,
 	onSubmit,
+	viewState,
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
 	const [scrollRequest, setScrollRequest] = useState(0);
@@ -186,6 +189,14 @@ export function ChatShell({
 								{isBusy ? (
 									<>
 										<ProgressBar agent={agent} />
+										{viewState?.delegation ? (
+											<text
+												attributes={TextAttributes.DIM}
+												fg={colors.textMuted}
+											>
+												Subagent {viewState.turnId}
+											</text>
+										) : null}
 										<text>
 											<span fg={agentColor}>Esc</span>
 											<span fg={colors.textMuted}>

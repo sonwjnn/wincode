@@ -207,8 +207,16 @@ export type McpContextValue = {
 	isLoading: boolean;
 	createSnapshot(
 		agent: AgentId,
-		agentPolicy?: McpAgentPolicy
+		agentPolicy?: McpAgentPolicy,
+		trackLatest?: boolean
 	): Promise<McpCatalogSnapshot>;
+	execute?(
+		snapshot: McpCatalogSnapshot,
+		toolName: string,
+		input: unknown,
+		signal?: AbortSignal
+	): Promise<McpNormalizedResult>;
+	releaseSnapshot?(snapshot: McpCatalogSnapshot): void;
 	handleDynamicToolCall(
 		snapshot: McpCatalogSnapshot | null,
 		toolCall: McpDynamicToolCall,
@@ -318,14 +326,20 @@ export function McpProvider({
 		},
 		[closeRegistryOnUnmount, registry]
 	);
-
 	const createSnapshot = useCallback(
 		async (
 			agent: AgentId,
-			agentPolicy?: McpAgentPolicy
+			agentPolicy?: McpAgentPolicy,
+			trackLatest = true
 		): Promise<McpCatalogSnapshot> => {
-			const snapshot = await registry.createSnapshot(agent, agentPolicy);
-			latestSnapshotRef.current = snapshot;
+			const snapshot = await registry.createSnapshot(
+				agent,
+				agentPolicy,
+				trackLatest
+			);
+			if (trackLatest) {
+				latestSnapshotRef.current = snapshot;
+			}
 			if (agent === "build" && !summaryToastShownRef.current) {
 				const summary = buildMcpSummary(registry.getStatuses());
 				if (summary !== null) {
@@ -418,6 +432,9 @@ export function McpProvider({
 		() => ({
 			close: () => registry.close(),
 			createSnapshot,
+			execute: (snapshot, toolName, input, signal) =>
+				registry.execute(snapshot, toolName, input, signal),
+			releaseSnapshot: (snapshot) => registry.releaseSnapshot?.(snapshot),
 			handleDynamicToolCall,
 			initialize,
 			isLoading,

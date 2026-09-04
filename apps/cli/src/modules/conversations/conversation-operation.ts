@@ -1,3 +1,4 @@
+import type { AgentTurnDelegation } from "@wincode/agent-core";
 import { createAgentTurnAbortReason } from "@wincode/agent-core";
 import type {
 	AgentId,
@@ -15,6 +16,8 @@ export type ConversationSendInput = {
 	model: ChatModelSelection;
 	variant?: ModelVariant;
 	resolvedAgent?: ResolvedAgentRuntime;
+	/** Correlation for an internally delegated Subagent execution. */
+	delegation?: AgentTurnDelegation;
 	/** Prompt to append as a fresh user message. */
 	userText?: string;
 	files?: FileUIPart[];

@@ -334,6 +334,26 @@ describe("buildAgentTurn", () => {
 		expect(turn.tools).toEqual([]);
 	});
 
+	test("assigns Subagent role from delegation correlation", () => {
+		const turn = buildAgentTurn({
+			agent: "research",
+			delegation: {
+				parentToolCallId: "call-1",
+				parentTurnId: "turn-primary",
+			},
+			modelMessages: [userMessage("inspect the change")],
+			modelTarget,
+			resolvedAgent: agent,
+			turnId: "turn-subagent",
+		});
+
+		expect(turn.agent.role).toBe("subagent");
+		expect(turn.delegation).toEqual({
+			parentToolCallId: "call-1",
+			parentTurnId: "turn-primary",
+		});
+	});
+
 	test("maps terminal migrated tool history into tool-call and tool result messages", () => {
 		const turn = buildAgentTurn({
 			agent: "build",
@@ -1312,6 +1332,42 @@ describe("createGatedCodingTools", () => {
 		} finally {
 			await rm(dir, { force: true, recursive: true });
 		}
+	});
+	test("creates a correlated delegation Tool Call for production execution", async () => {
+		let request:
+			| {
+					agent: string;
+					parentToolCallId: string;
+					parentTurnId: string;
+					prompt: string;
+			  }
+			| undefined;
+		const tools = createGatedCodingTools({
+			agentTools: [],
+			delegate: async (delegationRequest) => {
+				request = delegationRequest;
+				return "delegated result";
+			},
+			gate: allowGate,
+			parentTurnId: "turn-parent",
+		});
+		const delegate = tools.find(
+			({ definition }) => definition.name === "delegate"
+		);
+		const outcome = await delegate?.execute({
+			input: { agent: "research", prompt: "Find the relevant files." },
+			toolCallId: "call-delegate",
+		});
+		expect(outcome).toEqual({
+			output: "delegated result",
+			type: "success",
+		});
+		expect(request).toEqual({
+			agent: "research",
+			parentToolCallId: "call-delegate",
+			parentTurnId: "turn-parent",
+			prompt: "Find the relevant files.",
+		});
 	});
 });
 

@@ -732,6 +732,7 @@ const writeConversationRecordCheckpoint = (
 			.values({
 				agentId: record.agentId,
 				createdAt: new Date(),
+				delegationJson: record.delegation ?? null,
 				messagesJson: [...record.messages],
 				modelJson: record.model,
 				outcomeJson: record.outcome,
@@ -768,6 +769,9 @@ const readConversationRecords = (
 	return rows.map(({ record }) => {
 		const recordValue: ConversationRecord = {
 			agentId: record.agentId,
+			...(record.delegationJson === null
+				? {}
+				: { delegation: record.delegationJson }),
 			id: record.recordId,
 			messages: record.messagesJson,
 			model: record.modelJson,

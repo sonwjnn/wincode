@@ -169,6 +169,10 @@ export const conversationRecord = sqliteTable(
 			}),
 		turnId: text("turn_id").notNull(),
 		agentId: text("agent_id").notNull(),
+		delegationJson: text("delegation_json", { mode: "json" }).$type<{
+			parentTurnId: string;
+			parentToolCallId: string;
+		} | null>(),
 		modelJson: text("model_json", { mode: "json" })
 			.$type<{ modelId: string; providerId: string }>()
 			.notNull(),

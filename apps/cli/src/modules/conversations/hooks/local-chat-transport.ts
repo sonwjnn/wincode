@@ -1,7 +1,9 @@
-import { createAgentTurnId } from "@wincode/agent-core";
-import type { AgentId, CodingAgentUIMessage } from "@wincode/ai";
+import type { AgentTurnDelegation } from "@wincode/agent-core";
+import { createAgentTurnId, isAgentTurnDelegation } from "@wincode/agent-core";
 import {
+	type AgentId,
 	buildUsageMessageMetadata,
+	type CodingAgentUIMessage,
 	expandFileMentionPartsForModel,
 	getChatModelRoute,
 	type ModelVariant,
@@ -26,6 +28,7 @@ import type { MutableRefObject } from "react";
 import type { Connections } from "@/modules/connections";
 import type { McpCatalogSnapshot } from "@/modules/mcp";
 import { resolveChatModelTarget } from "../../model-target";
+import type { ConversationViewState } from "../conversation-controller";
 import { getOriginatingUserSkill } from "../selection";
 import {
 	buildAgentTurn,
@@ -39,7 +42,19 @@ import {
 } from "./runtime-turn";
 
 type CreateAgentUIStream = typeof createAgentUIStream;
-
+export const delegationFromBody = (
+	body: object | undefined
+): AgentTurnDelegation | undefined => {
+	if (
+		typeof body !== "object" ||
+		body === null ||
+		!("delegation" in body) ||
+		!isAgentTurnDelegation(body.delegation)
+	) {
+		return;
+	}
+	return body.delegation;
+};
 export const createLocalChatTransport = (
 	_sessionId: string,
 	resolvedAgentRef: MutableRefObject<ResolvedAgentRuntime | undefined>,
@@ -54,9 +69,11 @@ export const createLocalChatTransport = (
 	commitCheckpoint?: CheckpointCommitter,
 	outcomeSignalRef?: MutableRefObject<AbortSignal | undefined>,
 	gatedTooling?: RuntimeGatedTooling,
-	skillExecutionRef?: MutableRefObject<SkillExecution | null>
+	skillExecutionRef?: MutableRefObject<SkillExecution | null>,
+	onViewState?: (state: ConversationViewState) => void
 ): ChatTransport<CodingAgentUIMessage> => ({
-	sendMessages: async ({ abortSignal, messages }) => {
+	sendMessages: async ({ abortSignal, body, messages }) => {
+		const delegation = delegationFromBody(body);
 		const selection = modelRef.current;
 		const skill = getOriginatingUserSkill(messages);
 		if (getChatModelRoute(selection) !== "direct") {
@@ -71,7 +88,7 @@ export const createLocalChatTransport = (
 		// Runtime eligibility covers migrated Tool families and native Skill
 		// activation. MCP and other visible families keep the legacy loop.
 		const runtimeEligible =
-			resolvedAgent !== undefined &&
+			delegation !== undefined ||
 			isRuntimeEligibleSend({
 				gate: gatedTooling?.gate,
 				mcpManifest: snapshot?.manifest ?? [],
@@ -81,27 +98,37 @@ export const createLocalChatTransport = (
 				skillTool: skillToolRef?.current,
 			});
 		if (runtimeEligible) {
+			if (resolvedAgent === undefined) {
+				throw new Error("No resolved Agent or model to send");
+			}
+			const runtimeAgent = resolvedAgent;
+			const turnId = createAgentTurnId();
 			const runtime = (createRuntime ?? defaultRuntimeFactory)();
 			const turn = buildAgentTurn({
 				agent: agentId,
+				delegation,
 				modelMessages: messages,
 				modelTarget,
-				resolvedAgent,
+				resolvedAgent: runtimeAgent,
 				skill,
 				tools:
 					gatedTooling === undefined
 						? []
 						: createGatedCodingTools({
-								agentTools: resolvedAgent.visibleCodingTools,
+								agentId,
+								agentTools: runtimeAgent.visibleCodingTools,
+								delegate: gatedTooling.delegate,
 								gate: gatedTooling.gate,
+								parentTurnId: turnId,
 								resolveResourceLimits: gatedTooling.resolveResourceLimits,
 								skillExecution: skillExecutionRef?.current ?? undefined,
 								skillTool: skillToolRef?.current,
 							}),
-				turnId: createAgentTurnId(),
+				turnId,
 			});
 			return createRuntimeStream({
 				onCheckpoint: commitCheckpoint,
+				onViewState,
 				outcomeSignal: outcomeSignalRef?.current,
 				runtime,
 				signal: abortSignal,

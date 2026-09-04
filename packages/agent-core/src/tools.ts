@@ -5,24 +5,45 @@ import { AgentInvariantError } from "./errors";
 export type ToolCallId = string;
 
 /**
- * The SDK-neutral declaration of one tool an Agent may invoke. Schemas are
- * zod objects so concrete coding-tool packages and the private AI SDK runtime
- * adapter can share one input contract without importing each other's
- * framework types. No AI SDK, filesystem, shell, or transport shape appears
- * here.
+ * Framework-neutral JSON Schema carrier. Runtime adapters may consume this
+ * directly without forcing the core contract to depend on their schema type.
+ */
+export type ToolJsonSchema = {
+	readonly jsonSchema: Record<string, unknown>;
+	readonly validate?: (
+		value: unknown
+	) =>
+		| PromiseLike<
+				| { readonly success: true; readonly value: unknown }
+				| { readonly error: Error; readonly success: false }
+		  >
+		| { readonly success: true; readonly value: unknown }
+		| { readonly error: Error; readonly success: false };
+};
+
+/**
+ * The SDK-neutral declaration of one tool an Agent may invoke. Concrete tools
+ * normally use Zod; dynamic catalogs may preserve their source JSON Schema.
  */
 export type ToolDefinition = {
 	readonly description: string;
-	readonly inputSchema: z.ZodType;
+	readonly inputSchema: z.ZodType | ToolJsonSchema;
 	readonly name: string;
 	readonly outputSchema?: z.ZodType;
 };
 
-const isSchema = (value: unknown): value is z.ZodType => {
-	if (typeof value !== "object" || value === null || !("safeParse" in value)) {
+const isSchema = (value: unknown): value is z.ZodType | ToolJsonSchema => {
+	if (typeof value !== "object" || value === null) {
 		return false;
 	}
-	return typeof value.safeParse === "function";
+	if ("safeParse" in value && typeof value.safeParse === "function") {
+		return true;
+	}
+	return (
+		"jsonSchema" in value &&
+		typeof value.jsonSchema === "object" &&
+		value.jsonSchema !== null
+	);
 };
 
 export const isToolDefinition = (value: unknown): value is ToolDefinition => {

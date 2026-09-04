@@ -47,9 +47,11 @@ const failure: OperationalFailure = {
 
 const completedRecord = (
 	id: string,
-	messages: ConversationMessageRecord[]
+	messages: ConversationMessageRecord[],
+	delegation?: ConversationRecord["delegation"]
 ): ConversationRecord => ({
-	agentId: "build",
+	agentId: delegation === undefined ? "build" : "research",
+	...(delegation === undefined ? {} : { delegation }),
 	id,
 	messages,
 	model: { modelId: "gpt-5.4-mini", providerId: "openai" },
@@ -133,6 +135,20 @@ test("round-trips a completed Conversation Record with usage and terminal outcom
 		messageRecord("msg-user", "user", "hello"),
 		messageRecord("msg-assistant", "assistant", "hi there"),
 	]);
+
+	await store.commitConversationRecord({ record, sessionId });
+
+	expect(await store.listConversationRecords(sessionId)).toEqual([record]);
+});
+
+test("round-trips delegated correlation independently from the parent turn", async () => {
+	const { store } = await createTestStore();
+	const sessionId = await createSession(store);
+	const record = completedRecord(
+		"record-subagent",
+		[messageRecord("msg-assistant", "assistant", "delegated result")],
+		{ parentToolCallId: "call-1", parentTurnId: "turn-parent" }
+	);
 
 	await store.commitConversationRecord({ record, sessionId });
 
