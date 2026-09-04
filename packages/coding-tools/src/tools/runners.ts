@@ -38,3 +38,15 @@ export const codingToolRunners = {
 	grep: runGrepTool,
 	shell: runShellTool,
 } satisfies CodingToolRunnerMap;
+
+export const runCodingTool = async (
+	name: CodingToolName,
+	input: unknown,
+	options?: CodingToolRunnerOptions
+): Promise<unknown> => {
+	const runner = codingToolRunners[name] as (
+		value: unknown,
+		runnerOptions?: CodingToolRunnerOptions
+	) => Promise<unknown>;
+	return runner(input, options);
+};

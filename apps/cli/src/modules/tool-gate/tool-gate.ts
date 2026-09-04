@@ -415,15 +415,12 @@ export const createToolGate = ({
 		doomAsk: boolean
 		// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: authorization branches are intentionally kept in one gate
 	): Promise<GateOutcome> => {
+		if (toolCall.toolName === "shell") {
+			return gateShellToolCall(toolCall, permission, doomAsk);
+		}
 		if (!isCodingToolName(toolCall.toolName)) {
 			return {
 				errorText: `Unknown coding tool '${toolCall.toolName}'`,
-				kind: "deny",
-			};
-		}
-		if (toolCall.toolName === "shell") {
-			return {
-				errorText: "Shell tool call used the coding authorization family",
 				kind: "deny",
 			};
 		}
@@ -847,6 +844,9 @@ export const createToolGate = ({
 			return `skill:${call.name}:${JSON.stringify({ name: call.name })}`;
 		}
 		if (call.family === "shell") {
+			return `shell:${JSON.stringify(call.toolCall.input)}`;
+		}
+		if (call.family === "coding" && call.toolCall.toolName === "shell") {
 			return `shell:${JSON.stringify(call.toolCall.input)}`;
 		}
 		return `coding:${call.toolCall.toolName}:${JSON.stringify(call.toolCall.input)}`;

@@ -17,6 +17,7 @@ import {
 	type ToolResourceLimits,
 } from "@wincode/ai";
 import { handleCodingAgentToolCall } from "@wincode/ai/client";
+import { runShellTool, type ShellInput } from "@wincode/coding-tools";
 import {
 	type SkillActivationResult,
 	type SkillExecution,
@@ -64,6 +65,49 @@ const emitDynamicToolCallError = (
 	Promise.resolve(
 		addToolOutput({ errorText, state: "output-error", tool, toolCallId })
 	).catch(() => undefined);
+};
+
+export const runShellToolCall = async ({
+	addToolOutput,
+	input,
+	toolCallId,
+	visibleTools,
+	resourceOptions,
+}: {
+	addToolOutput: ChatAddToolOutputFunction<CodingAgentUIMessage>;
+	input: unknown;
+	toolCallId: string;
+	visibleTools: readonly CodingToolName[];
+	resourceOptions: { resourceLimits?: ToolResourceLimits };
+}): Promise<void> => {
+	if (!visibleTools.includes("shell")) {
+		emitToolCallError(
+			addToolOutput,
+			"shell",
+			toolCallId,
+			"This Agent cannot use shell."
+		);
+		return;
+	}
+	try {
+		const shellOutput = await runShellTool(
+			input as ShellInput,
+			resourceOptions
+		);
+		await addToolOutput({
+			output: shellOutput,
+			state: "output-available",
+			tool: "shell",
+			toolCallId,
+		});
+	} catch (error) {
+		emitToolCallError(
+			addToolOutput,
+			"shell",
+			toolCallId,
+			error instanceof Error ? error.message : "Tool call failed"
+		);
+	}
 };
 type ChatToolCallHandlerCommonDeps = {
 	addToolOutputRef: MutableRefObject<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>;
@@ -173,47 +217,6 @@ export const createChatToolCallHandler = (
 			return;
 		}
 
-		if (options.toolCall.toolName === "shell") {
-			// Shell is a static coding tool with its own gate: command nodes are
-			// the evaluated resources, `cwd` composes the external-directory
-			// boundary, and always approvals record the exact normalized command
-			// (ADR-0008). It is intercepted before the shared static gate because
-			// its inputs carry no path to resolve.
-			Promise.resolve(
-				(async () => {
-					const outcome = await gate.gate({
-						family: "shell",
-						toolCall: options.toolCall,
-					});
-					if (outcome.kind === "allow") {
-						const resourceOptions = await resolveResourceOptions(
-							resolveResourceLimits
-						);
-						await runStaticToolCall(
-							addToolOutput,
-							resolvedAgentRef.current?.visibleCodingTools ?? [],
-							resourceOptions
-						)(options);
-						return;
-					}
-					emitToolCallError(
-						addToolOutput,
-						"shell",
-						options.toolCall.toolCallId,
-						outcome.errorText ?? "Shell tool call was blocked"
-					);
-				})()
-			).catch(() => {
-				emitToolCallError(
-					addToolOutput,
-					"shell",
-					options.toolCall.toolCallId,
-					"Shell tool call failed"
-				);
-			});
-			return;
-		}
-
 		if (!isCodingToolName(options.toolCall.toolName)) {
 			return;
 		}
@@ -244,6 +247,16 @@ export const createChatToolCallHandler = (
 				const resourceOptions = await resolveResourceOptions(
 					resolveResourceLimits
 				);
+				if (toolName === "shell") {
+					await runShellToolCall({
+						addToolOutput,
+						input: executionOptions.toolCall.input,
+						resourceOptions,
+						toolCallId: options.toolCall.toolCallId,
+						visibleTools: resolvedAgentRef.current?.visibleCodingTools ?? [],
+					});
+					return;
+				}
 				await runStaticToolCall(
 					addToolOutput,
 					resolvedAgentRef.current?.visibleCodingTools ?? [],

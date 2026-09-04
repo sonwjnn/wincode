@@ -34,10 +34,6 @@ type RunToolCallOptions<ToolName extends CodingAgentToolName> = {
 	toolCallId: string;
 };
 
-const assertNever = (value: never): never => {
-	throw new Error(`Unhandled coding tool: ${value}`);
-};
-
 const runToolCall = async <ToolName extends CodingAgentToolName>({
 	addToolOutput,
 	input,
@@ -162,19 +158,16 @@ export const handleCodingAgentToolCall =
 					toolCallId: toolCall.toolCallId,
 				});
 				return;
-
 			case "shell":
-				await runToolCall({
-					addToolOutput,
-					input: toolCall.input,
-					run: codingToolRunners.shell,
-					runnerOptions,
+				await addToolOutput({
+					errorText: "Shell tool calls must use the CLI Tool Gate.",
+					state: "output-error",
 					tool: "shell",
 					toolCallId: toolCall.toolCallId,
 				});
 				return;
 
 			default:
-				assertNever(toolCall);
+				return;
 		}
 	};

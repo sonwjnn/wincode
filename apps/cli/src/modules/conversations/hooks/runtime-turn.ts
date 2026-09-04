@@ -26,26 +26,21 @@ import {
 	type ToolRegistry,
 } from "@wincode/agent-core";
 import { createAiSdkAgentRuntime } from "@wincode/agent-runtime-ai-sdk";
-import type {
-	AgentId,
-	CodingAgentUIMessage,
-	McpToolManifest,
-	ResolvedAgentRuntime,
-} from "@wincode/ai";
 import {
-	type CodingToolName,
-	codingToolDefinitions,
-	type EditInput,
-	type GlobInput,
-	type GrepInput,
+	type AgentId,
+	type CodingAgentUIMessage,
 	getSystemInstructionsForAgent,
-	type ReadInput,
-	type ToolResourceLimits,
-	type WriteInput,
+	type McpToolManifest,
+	type ResolvedAgentRuntime,
 } from "@wincode/ai";
 import type { ModelTarget } from "@wincode/ai/model-target";
 import { normalizeModelUsage } from "@wincode/ai/model-usage";
-import { codingToolRunners } from "@wincode/coding-tools";
+import {
+	type CodingToolName,
+	codingToolDefinitionFor,
+	runCodingTool,
+	type ToolResourceLimits,
+} from "@wincode/coding-tools";
 import {
 	formatSkillUserContext,
 	type SkillExecution,
@@ -73,6 +68,7 @@ const RUNTIME_CODING_TOOL_NAMES = [
 	"edit",
 	"glob",
 	"grep",
+	"shell",
 ] as const;
 export type RuntimeCodingToolName = (typeof RUNTIME_CODING_TOOL_NAMES)[number];
 export type RuntimeToolName = RuntimeCodingToolName | "skill";
@@ -80,14 +76,8 @@ export type RuntimeToolName = RuntimeCodingToolName | "skill";
 const isRuntimeCodingToolName = (name: string): name is RuntimeCodingToolName =>
 	(RUNTIME_CODING_TOOL_NAMES as readonly string[]).includes(name);
 
-const runtimeToolDefinition = (
-	name: RuntimeCodingToolName
-): ToolDefinition => ({
-	description: codingToolDefinitions[name].description,
-	inputSchema: codingToolDefinitions[name].inputSchema,
-	name,
-	outputSchema: codingToolDefinitions[name].outputSchema,
-});
+const runtimeToolDefinition = (name: RuntimeCodingToolName): ToolDefinition =>
+	codingToolDefinitionFor(name);
 
 const runtimeSkillToolDefinition: ToolDefinition = {
 	description:
@@ -104,7 +94,6 @@ export const runtimeToolRegistry: ToolRegistry = createToolRegistry([
 
 const getErrorMessage = (error: unknown): string =>
 	error instanceof Error ? error.message : "Tool execution failed.";
-
 const runMigratedTool = async ({
 	input,
 	name,
@@ -112,42 +101,17 @@ const runMigratedTool = async ({
 }: {
 	input: unknown;
 	name: RuntimeCodingToolName;
-	options: { allowExternalPath: boolean; resourceLimits?: ToolResourceLimits };
+	options: {
+		allowExternalPath: boolean;
+		resourceLimits?: ToolResourceLimits;
+		signal?: AbortSignal;
+	};
 }): Promise<ToolCallOutput> => {
 	try {
-		switch (name) {
-			case "read":
-				return {
-					output: await codingToolRunners.read(input as ReadInput, options),
-					type: "success",
-				};
-			case "write":
-				return {
-					output: await codingToolRunners.write(input as WriteInput, options),
-					type: "success",
-				};
-			case "edit":
-				return {
-					output: await codingToolRunners.edit(input as EditInput, options),
-					type: "success",
-				};
-			case "glob":
-				return {
-					output: await codingToolRunners.glob(input as GlobInput, options),
-					type: "success",
-				};
-			case "grep":
-				return {
-					output: await codingToolRunners.grep(input as GrepInput, options),
-					type: "success",
-				};
-			default:
-				throw new AgentInvariantError(
-					"invalid-runtime",
-					`Runtime coding tool ${name} has no runner.`,
-					{ cause: name }
-				);
-		}
+		return {
+			output: await runCodingTool(name, input, options),
+			type: "success",
+		};
 	} catch (error) {
 		if (isAgentInvariantError(error)) {
 			throw error;
@@ -346,6 +310,9 @@ const migratedPartToolName = (type: string): RuntimeToolName | undefined => {
 	}
 	if (type === "tool-grep") {
 		return "grep";
+	}
+	if (type === "tool-shell") {
+		return "shell";
 	}
 	return;
 };
