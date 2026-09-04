@@ -18,6 +18,7 @@ import {
 } from "@wincode/ai/server";
 import {
 	formatSkillUserContext,
+	type SkillExecution,
 	type SkillToolDefinition,
 } from "@wincode/skills";
 import { type ChatTransport, createAgentUIStream } from "ai";
@@ -52,7 +53,8 @@ export const createLocalChatTransport = (
 	createRuntime?: RuntimeFactory,
 	commitCheckpoint?: CheckpointCommitter,
 	outcomeSignalRef?: MutableRefObject<AbortSignal | undefined>,
-	gatedTooling?: RuntimeGatedTooling
+	gatedTooling?: RuntimeGatedTooling,
+	skillExecutionRef?: MutableRefObject<SkillExecution | null>
 ): ChatTransport<CodingAgentUIMessage> => ({
 	sendMessages: async ({ abortSignal, messages }) => {
 		const selection = modelRef.current;
@@ -66,9 +68,8 @@ export const createLocalChatTransport = (
 			variant: variantRef.current,
 		});
 		const resolvedAgent = resolvedAgentRef.current;
-		// Runtime eligibility covers migrated Tool families only; any other
-		// visible coding tool, MCP catalog, or Skill — or a tool-armed Agent
-		// without the application Tool Gate — keeps the legacy loop.
+		// Runtime eligibility covers migrated Tool families and native Skill
+		// activation. MCP and other visible families keep the legacy loop.
 		const runtimeEligible =
 			resolvedAgent !== undefined &&
 			isRuntimeEligibleSend({
@@ -86,6 +87,7 @@ export const createLocalChatTransport = (
 				modelMessages: messages,
 				modelTarget,
 				resolvedAgent,
+				skill,
 				tools:
 					gatedTooling === undefined
 						? []
@@ -93,6 +95,8 @@ export const createLocalChatTransport = (
 								agentTools: resolvedAgent.visibleCodingTools,
 								gate: gatedTooling.gate,
 								resolveResourceLimits: gatedTooling.resolveResourceLimits,
+								skillExecution: skillExecutionRef?.current ?? undefined,
+								skillTool: skillToolRef?.current,
 							}),
 				turnId: createAgentTurnId(),
 			});
@@ -106,8 +110,6 @@ export const createLocalChatTransport = (
 		}
 
 		const resolvedModel = resolveAiSdkModelTarget(modelTarget);
-		// The shell declaration is composed per platform so the model knows which
-		// shell syntax to write.
 		const shellTool = buildShellTool(shellPlatformFromNode(process.platform));
 		const agent = createCodingAgent({
 			model: resolvedModel.model,
@@ -117,7 +119,6 @@ export const createLocalChatTransport = (
 			skill,
 			skillTool: skillToolRef?.current,
 		});
-
 		const modelMessages = expandFileMentionPartsForModel(
 			sanitizeInterruptedMessagesForModel(messages)
 		);

@@ -705,7 +705,8 @@ export function useChat(
 			skillToolRef,
 			attachmentBudgetRef,
 			outcomeSignalRef,
-			runtimeGatedToolingRef
+			runtimeGatedToolingRef,
+			skillExecutionRef
 		);
 	}, [connections, mcp, registry, sessionId]);
 

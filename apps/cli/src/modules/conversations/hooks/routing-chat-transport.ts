@@ -5,7 +5,7 @@ import type {
 	CodingAgentUIMessage,
 	ModelVariant,
 } from "@wincode/ai";
-import type { SkillToolDefinition } from "@wincode/skills";
+import type { SkillExecution, SkillToolDefinition } from "@wincode/skills";
 import type { ChatTransport } from "ai";
 import type { MutableRefObject } from "react";
 import type { AgentRegistry } from "@/modules/agents";
@@ -33,7 +33,8 @@ export const createRoutingChatTransport = (
 	skillToolRef?: MutableRefObject<SkillToolDefinition | undefined>,
 	attachmentBudgetRef?: MutableRefObject<AttachmentModelBudget | undefined>,
 	outcomeSignalRef?: MutableRefObject<AbortSignal | undefined>,
-	gatedToolingRef?: MutableRefObject<RuntimeGatedTooling | undefined>
+	gatedToolingRef?: MutableRefObject<RuntimeGatedTooling | undefined>,
+	skillExecutionRef?: MutableRefObject<SkillExecution | null>
 ): ChatTransport<CodingAgentUIMessage> => ({
 	sendMessages: async (options) => {
 		const snapshot = await mcp.createSnapshot(agentRef.current);
@@ -70,7 +71,8 @@ export const createRoutingChatTransport = (
 					sessionId,
 				}),
 			outcomeSignalRef,
-			gatedToolingRef?.current
+			gatedToolingRef?.current,
+			skillExecutionRef
 		).sendMessages({ ...options, messages });
 	},
 	reconnectToStream: async () => null,

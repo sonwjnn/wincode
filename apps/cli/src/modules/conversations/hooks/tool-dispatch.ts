@@ -111,6 +111,7 @@ export const runShellToolCall = async ({
 };
 type ChatToolCallHandlerCommonDeps = {
 	addToolOutputRef: MutableRefObject<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>;
+	dynamicToolOutputRef: MutableRefObject<McpAddToolOutput | null>;
 	handleCodingAgentToolCall?: typeof handleCodingAgentToolCall;
 	mcp: Pick<McpContextValue, "handleDynamicToolCall">;
 	resolveResourceLimits?: ResourceLimitResolver;

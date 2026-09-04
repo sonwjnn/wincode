@@ -41,7 +41,14 @@ import {
 	runCodingTool,
 	type ToolResourceLimits,
 } from "@wincode/coding-tools";
-import type { SkillRequestContext, SkillToolDefinition } from "@wincode/skills";
+import {
+	formatSkillUserContext,
+	type SkillExecution,
+	type SkillRequestContext,
+	type SkillToolDefinition,
+	skillToolInputSchema,
+} from "@wincode/skills";
+import { sampleSkillResources } from "@wincode/skills/filesystem";
 import type { UIMessageChunk } from "ai";
 import type { GateOutcome, ToolGate } from "@/modules/tool-gate/tool-gate";
 
@@ -64,6 +71,7 @@ const RUNTIME_CODING_TOOL_NAMES = [
 	"shell",
 ] as const;
 export type RuntimeCodingToolName = (typeof RUNTIME_CODING_TOOL_NAMES)[number];
+export type RuntimeToolName = RuntimeCodingToolName | "skill";
 
 const isRuntimeCodingToolName = (name: string): name is RuntimeCodingToolName =>
 	(RUNTIME_CODING_TOOL_NAMES as readonly string[]).includes(name);
@@ -71,10 +79,18 @@ const isRuntimeCodingToolName = (name: string): name is RuntimeCodingToolName =>
 const runtimeToolDefinition = (name: RuntimeCodingToolName): ToolDefinition =>
 	codingToolDefinitionFor(name);
 
-/** The application Tool Registry of runtime-eligible coding families. */
-export const runtimeToolRegistry: ToolRegistry = createToolRegistry(
-	RUNTIME_CODING_TOOL_NAMES.map(runtimeToolDefinition)
-);
+const runtimeSkillToolDefinition: ToolDefinition = {
+	description:
+		"Load a permitted Skill for the current user turn by exact name.",
+	inputSchema: skillToolInputSchema,
+	name: "skill",
+};
+
+/** The application Tool Registry of runtime-eligible tools. */
+export const runtimeToolRegistry: ToolRegistry = createToolRegistry([
+	...RUNTIME_CODING_TOOL_NAMES.map(runtimeToolDefinition),
+	runtimeSkillToolDefinition,
+]);
 
 const getErrorMessage = (error: unknown): string =>
 	error instanceof Error ? error.message : "Tool execution failed.";
@@ -109,6 +125,8 @@ export type GatedCodingToolsDeps = {
 	agentTools: readonly CodingToolName[];
 	gate: ToolGate;
 	resolveResourceLimits?: () => Promise<ToolResourceLimits>;
+	skillExecution?: SkillExecution;
+	skillTool?: SkillToolDefinition;
 };
 
 /**
@@ -174,44 +192,110 @@ export const createGatedCodingTools = ({
 	agentTools,
 	gate,
 	resolveResourceLimits,
-}: GatedCodingToolsDeps): readonly ResolvedTool[] =>
-	agentTools.filter(isRuntimeCodingToolName).map((name) => ({
-		definition: runtimeToolRegistry.require(name),
+	skillExecution,
+	skillTool,
+}: GatedCodingToolsDeps): readonly ResolvedTool[] => {
+	const codingTools = agentTools
+		.filter(isRuntimeCodingToolName)
+		.map((name) => ({
+			definition: runtimeToolRegistry.require(name),
+			execute: async (
+				{ input, toolCallId }: { input: unknown; toolCallId: string },
+				{ signal }: ToolExecutorOptions = {}
+			): Promise<ToolCallOutput> => {
+				const outcome = await evaluateGateWithAbort(
+					() =>
+						gate.gate({
+							family: "coding",
+							toolCall: { input, toolCallId, toolName: name },
+						}),
+					signal
+				);
+				if (outcome.kind !== "allow") {
+					return {
+						errorText: outcome.errorText ?? "Tool call was blocked",
+						type: "failure",
+					};
+				}
+				return runMigratedTool({
+					input: outcome.input ?? input,
+					name,
+					options: {
+						allowExternalPath: outcome.input !== undefined,
+						...(resolveResourceLimits === undefined
+							? {}
+							: { resourceLimits: await resolveResourceLimits() }),
+					},
+				});
+			},
+		}));
+	if (!(skillTool && skillExecution)) {
+		return codingTools;
+	}
+	const skill = {
+		definition: {
+			...runtimeToolRegistry.require("skill"),
+			description: skillTool.description,
+		},
 		execute: async (
 			{ input, toolCallId }: { input: unknown; toolCallId: string },
 			{ signal }: ToolExecutorOptions = {}
 		): Promise<ToolCallOutput> => {
+			const parsed = skillToolInputSchema.safeParse(input);
+			if (!parsed.success) {
+				return {
+					errorText: "Invalid skill input; expected { name }",
+					type: "failure",
+				};
+			}
+			const name = parsed.data.name;
+			const entry = skillExecution.catalog.entries.find(
+				({ name: entryName }) => entryName === name
+			);
 			const outcome = await evaluateGateWithAbort(
 				() =>
 					gate.gate({
-						family: "coding",
-						toolCall: { input, toolCallId, toolName: name },
+						available: entry !== undefined,
+						description: entry?.description ?? `Activate Skill ${name}`,
+						family: "skill",
+						name,
+						toolCallId,
 					}),
 				signal
 			);
 			if (outcome.kind !== "allow") {
+				skillExecution.markRejected(name);
+				return { output: { name, status: "rejected" }, type: "success" };
+			}
+			const result = skillExecution.activate(name, "agent");
+			if (result.status === "loaded") {
+				const resourcePaths = await sampleSkillResources(
+					result.snapshot.baseDirectory
+				);
+				skillExecution.setResourceSample(name, resourcePaths);
 				return {
-					errorText: outcome.errorText ?? "Tool call was blocked",
-					type: "failure",
+					output: {
+						baseDirectory: result.snapshot.baseDirectory,
+						body: result.snapshot.body,
+						contentHash: result.snapshot.contentHash,
+						name,
+						resourcePaths,
+						source: "agent",
+						status: "loaded",
+					},
+					type: "success",
 				};
 			}
-			return runMigratedTool({
-				input: outcome.input ?? input,
-				name,
-				options: {
-					allowExternalPath: outcome.input !== undefined,
-					signal,
-					...(resolveResourceLimits === undefined
-						? {}
-						: { resourceLimits: await resolveResourceLimits() }),
-				},
-			});
+			return { output: result, type: "success" };
 		},
-	}));
+	} satisfies ResolvedTool;
+	return [...codingTools, skill];
+};
 
-const migratedPartToolName = (
-	type: string
-): RuntimeCodingToolName | undefined => {
+const migratedPartToolName = (type: string): RuntimeToolName | undefined => {
+	if (type === "tool-skill" || type === "dynamic-tool") {
+		return "skill";
+	}
 	if (type === "tool-read") {
 		return "read";
 	}
@@ -237,7 +321,7 @@ const migratedPartToolName = (
 export type MigratedToolCallPart = {
 	input?: unknown;
 	toolCallId: string;
-	type: `tool-${RuntimeCodingToolName}`;
+	type: string;
 } & (
 	| { output: unknown; state: "output-available" }
 	| { errorText: string; state: "output-error" }
@@ -255,13 +339,16 @@ export const isMigratedToolCallPart = (
 	if (typeof part !== "object" || part === null || !("type" in part)) {
 		return false;
 	}
+	const candidate = part as Record<string, unknown>;
 	if (
-		typeof part.type !== "string" ||
-		migratedPartToolName(part.type) === undefined
+		typeof candidate.type !== "string" ||
+		migratedPartToolName(candidate.type) === undefined
 	) {
 		return false;
 	}
-	const candidate = part as Record<string, unknown>;
+	if (candidate.type === "dynamic-tool" && candidate.toolName !== "skill") {
+		return false;
+	}
 	if (
 		typeof candidate.toolCallId !== "string" ||
 		candidate.toolCallId.length === 0
@@ -280,22 +367,15 @@ export const isMigratedToolCallPart = (
 };
 
 /**
- * Eligibility for the Agent Runtime path at the conversation seam.
- *
- * A send runs through the runtime when the resolved Agent exposes only
- * migrated coding tools (permission filtering already hides unconditionally
- * denied tools) or no tools at all, no MCP tools are available, no Skill is
- * active, and the conversation carries only text, reasoning, step
- * boundaries, and terminal migrated Tool Call parts. Tool-armed sends need
- * the application Tool Gate for their executables; sends without one and
- * sends with non-migrated families keep the legacy agent loop byte-identical.
+ * Eligibility for the Agent Runtime path at the conversation seam. MCP and
+ * non-migrated coding families remain on the legacy path; Skills are native
+ * runtime tools and use the same application Tool Gate as coding tools.
  */
 export const isRuntimeEligibleSend = ({
 	gate,
 	mcpManifest,
 	messages,
 	resolvedAgent,
-	skill,
 	skillTool,
 }: {
 	gate?: ToolGate;
@@ -313,20 +393,13 @@ export const isRuntimeEligibleSend = ({
 			return false;
 		}
 	}
-	// A tool-armed Agent has no runtime route without the application Tool
-	// Gate: its Resolved Tools would carry no gated executables. Such sends
-	// must keep the legacy loop rather than run a stripped tool-less turn.
-	if (resolvedAgent.visibleCodingTools.length > 0 && gate === undefined) {
+	if (
+		(resolvedAgent.visibleCodingTools.length > 0 || skillTool !== undefined) &&
+		gate === undefined
+	) {
 		return false;
 	}
-	// A body-bearing Skill on the newest user message is injected into the
-	// model input by the legacy path even without an armed Skill tool; the
-	// runtime path must not silently drop it.
-	if (
-		mcpManifest.length > 0 ||
-		skill !== undefined ||
-		skillTool !== undefined
-	) {
+	if (mcpManifest.length > 0) {
 		return false;
 	}
 	for (const message of messages) {
@@ -370,7 +443,7 @@ const isRuntimeEligibleMessage = (message: CodingAgentUIMessage): boolean => {
 type TurnToolCallPart = {
 	input: unknown;
 	toolCallId: string;
-	toolName: RuntimeCodingToolName;
+	toolName: RuntimeToolName;
 	type: "tool-call";
 };
 
@@ -380,7 +453,7 @@ type TurnToolCallPart = {
  */
 const toToolCallParts = (
 	part: MigratedToolCallPart,
-	name: RuntimeCodingToolName
+	name: RuntimeToolName
 ): {
 	request: TurnToolCallPart;
 	result: AgentTurnMessage["parts"][number];
@@ -474,6 +547,7 @@ export const buildAgentTurn = ({
 	modelMessages,
 	modelTarget,
 	resolvedAgent,
+	skill,
 	tools = [],
 	turnId,
 }: {
@@ -481,10 +555,18 @@ export const buildAgentTurn = ({
 	modelMessages: readonly CodingAgentUIMessage[];
 	modelTarget: ModelTarget;
 	resolvedAgent: ResolvedAgentRuntime;
+	skill?: SkillRequestContext;
 	tools?: readonly ResolvedTool[];
 	turnId: string;
 }): AgentTurn => {
 	const messages = modelMessages.flatMap(toAgentTurnMessages);
+	if (skill !== undefined) {
+		messages.push({
+			id: "skill-context",
+			parts: [{ text: formatSkillUserContext(skill), type: "text" }],
+			role: "user",
+		});
+	}
 	return {
 		agent: {
 			id: agent,
