@@ -30,6 +30,7 @@ import {
 	createRuntimeStream,
 	isRuntimeEligibleSend,
 	type MigratedToolCallPart,
+	runtimeToolRegistry,
 } from "./runtime-turn";
 
 const agent: ResolvedAgentRuntime = {
@@ -161,7 +162,7 @@ describe("isRuntimeEligibleSend", () => {
 		).toBe(false);
 	});
 
-	test("rejects MCP tools and Skill activation", () => {
+	test("rejects MCP tools and accepts native Skill activation", () => {
 		const base = {
 			messages: [userMessage("hello")],
 			resolvedAgent: agent,
@@ -179,6 +180,7 @@ describe("isRuntimeEligibleSend", () => {
 		expect(
 			isRuntimeEligibleSend({
 				...base,
+				gate: allowGate,
 				mcpManifest: [],
 				skill: undefined,
 				skillTool: {
@@ -192,7 +194,8 @@ describe("isRuntimeEligibleSend", () => {
 					name: "skill",
 				},
 			})
-		).toBe(false);
+		).toBe(true);
+		expect(runtimeToolRegistry.has("skill")).toBe(true);
 	});
 
 	test("accepts terminal migrated tool parts in history and rejects in-flight ones", () => {
