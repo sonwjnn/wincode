@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useModelPricing } from "@/modules/model-pricing";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
+import type { ApprovalOutcome } from "@/shared/providers/approval/types";
 import { PendingApprovalDock } from "@/shared/providers/approval/ui/tool-approval-panel";
 import { useToggleShortcut } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -33,6 +34,7 @@ type ChatShellProps = {
 	isBusy: boolean;
 	isInterruptArmed: boolean;
 	messages: CodingAgentUIMessage[];
+	onApproval?: (id: string, outcome: ApprovalOutcome) => void;
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
 	promptHistory: PromptHistoryEntry[];
@@ -46,6 +48,7 @@ export function ChatShell({
 	isBusy,
 	isInterruptArmed,
 	messages,
+	onApproval,
 	onCompact,
 	onOpenSettings,
 	promptHistory,
@@ -152,7 +155,7 @@ export function ChatShell({
 					// The pending dock replaces the composer AND the session
 					// footer row while a decision is owed.
 					<box flexShrink={0} width="100%">
-						<PendingApprovalDock />
+						<PendingApprovalDock onResolve={onApproval} />
 					</box>
 				) : (
 					<>

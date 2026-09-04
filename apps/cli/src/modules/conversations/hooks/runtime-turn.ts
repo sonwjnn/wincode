@@ -2,7 +2,6 @@ import {
 	AgentInvariantError,
 	type AgentRuntime,
 	type AgentTurn,
-	type AgentTurnEvent,
 	type AgentTurnInterruptedEvent,
 	type AgentTurnLifecycle,
 	type AgentTurnMessage,
@@ -51,6 +50,7 @@ import {
 import { sampleSkillResources } from "@wincode/skills/filesystem";
 import type { UIMessageChunk } from "ai";
 import type { GateOutcome, ToolGate } from "@/modules/tool-gate/tool-gate";
+import { consumeAgentTurnEvents } from "../conversation-controller";
 
 export type RuntimeFactory = () => AgentRuntime;
 
@@ -890,14 +890,6 @@ type PartWriter = {
 };
 type TerminalProcessor = (event: AgentTurnTerminalEvent) => Promise<void>;
 
-const isTerminalEventType = (
-	event: AgentTurnEvent
-): event is AgentTurnTerminalEvent =>
-	event.type === "agent-turn-completed" ||
-	event.type === "agent-turn-failed" ||
-	event.type === "agent-turn-cancelled" ||
-	event.type === "agent-turn-interrupted";
-
 const toolInputChunks = ({
 	input,
 	toolCallId,
@@ -980,7 +972,6 @@ const createTerminalProcessor = ({
 		}
 	};
 };
-
 const consumeRuntimeEvents = async ({
 	enqueue,
 	lifecycle,
@@ -1001,74 +992,61 @@ const consumeRuntimeEvents = async ({
 	state: StreamState;
 	turn: AgentTurn;
 	writer: PartWriter;
-}): Promise<void> => {
-	for await (const event of runtime.run(turn, { signal })) {
-		const terminal = isTerminalEventType(event);
-		if (signal?.aborted && !terminal && event.type !== "agent-turn-started") {
-			break;
-		}
-		if (terminal) {
-			await processTerminal(event);
-			if (state.terminalEmitted) {
-				break;
-			}
-			continue;
-		}
-		lifecycle.apply(event);
-		switch (event.type) {
-			case "agent-turn-started":
-				break;
-			case "model-step-started":
-				writer.openStep();
-				break;
-			case "reasoning-delta":
-				writer.reasoningDelta(event.delta);
-				break;
-			case "text-delta":
-				state.streamedText += event.delta;
-				writer.textDelta(event.delta);
-				break;
-			case "model-step-finished":
-				writer.finishStep();
-				break;
-			case "tool-call-started": {
-				startedToolInputs.set(event.toolCallId, event.input);
-				for (const chunk of toolInputChunks({
-					input: event.input,
-					toolCallId: event.toolCallId,
-					toolName: event.toolName,
-				})) {
-					enqueue(chunk);
-				}
-				break;
-			}
-			case "tool-call-finished":
-				if (event.outcome.type === "success") {
-					enqueue({
-						output: event.outcome.output,
+}): Promise<void> =>
+	consumeAgentTurnEvents({
+		lifecycle,
+		onEvent: async (event) => {
+			switch (event.type) {
+				case "model-step-started":
+					writer.openStep();
+					break;
+				case "reasoning-delta":
+					writer.reasoningDelta(event.delta);
+					break;
+				case "text-delta":
+					state.streamedText += event.delta;
+					writer.textDelta(event.delta);
+					break;
+				case "model-step-finished":
+					writer.finishStep();
+					break;
+				case "tool-call-started":
+					startedToolInputs.set(event.toolCallId, event.input);
+					for (const chunk of toolInputChunks(event)) {
+						enqueue(chunk);
+					}
+					break;
+				case "tool-call-finished":
+					if (event.outcome.type === "success") {
+						enqueue({
+							output: event.outcome.output,
+							toolCallId: event.toolCallId,
+							type: "tool-output-available",
+						});
+					} else {
+						enqueue({
+							errorText: event.outcome.errorText,
+							toolCallId: event.toolCallId,
+							type: "tool-output-error",
+						});
+					}
+					state.toolCalls.push({
+						input: startedToolInputs.get(event.toolCallId),
+						outcome: event.outcome,
+						sequence: event.sequence,
 						toolCallId: event.toolCallId,
-						type: "tool-output-available",
+						toolName: event.toolName,
 					});
-				} else {
-					enqueue({
-						errorText: event.outcome.errorText,
-						toolCallId: event.toolCallId,
-						type: "tool-output-error",
-					});
-				}
-				state.toolCalls.push({
-					input: startedToolInputs.get(event.toolCallId),
-					outcome: event.outcome,
-					sequence: event.sequence,
-					toolCallId: event.toolCallId,
-					toolName: event.toolName,
-				});
-				break;
-			default:
-				break;
-		}
-	}
-};
+					break;
+				default:
+					break;
+			}
+		},
+		onTerminal: processTerminal,
+		runtime,
+		signal,
+		turn,
+	});
 
 const completeMissingTerminal = async ({
 	lifecycle,
