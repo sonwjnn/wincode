@@ -749,19 +749,29 @@ const formatNumberedContent = (
 		maxOutputBytes
 	);
 };
-const formatHashlineContent = (content: string): string =>
-	content
-		.split("\n")
-		.map((line) => {
-			const match = HASHLINE_PREFIX_PATTERN.exec(line);
-			if (!match) {
-				return line;
-			}
-			const lineNumber = match[1] as string;
-			const text = (match[2] as string).replace(HASHLINE_CR_PATTERN, "");
-			return `${lineNumber}:${hashlineFor(text)}|${text}`;
-		})
-		.join("\n");
+const formatHashlineContent = (
+	content: string,
+	maxOutputBytes: number
+): NumberedContent => {
+	const lines = content.split("\n").map((line) => {
+		const match = HASHLINE_PREFIX_PATTERN.exec(line);
+		if (!match) {
+			return line;
+		}
+		const lineNumber = match[1] as string;
+		const text = (match[2] as string).replace(HASHLINE_CR_PATTERN, "");
+		return `${lineNumber}:${hashlineFor(text)}|${text}`;
+	});
+	let contentBytes = Buffer.byteLength(lines.join("\n"), "utf8");
+	while (contentBytes > maxOutputBytes && lines.length > 0) {
+		lines.pop();
+		contentBytes = Buffer.byteLength(lines.join("\n"), "utf8");
+	}
+	return {
+		content: lines.join("\n"),
+		truncated: contentBytes < Buffer.byteLength(content, "utf8"),
+	};
+};
 
 export const runReadTool = async (
 	input: ReadInput,
@@ -795,9 +805,13 @@ export const runReadTool = async (
 		);
 	}
 	if (input.hashline && target.kind === "file") {
+		const hashlineContent = formatHashlineContent(
+			formattedContent.content,
+			limits.read.maxOutputBytes
+		);
 		formattedContent = {
-			...formattedContent,
-			content: formatHashlineContent(formattedContent.content),
+			content: hashlineContent.content,
+			truncated: formattedContent.truncated || hashlineContent.truncated,
 		};
 	}
 	return {
