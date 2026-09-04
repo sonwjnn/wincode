@@ -17,6 +17,7 @@ import {
 	type ToolResourceLimits,
 } from "@wincode/ai";
 import { handleCodingAgentToolCall } from "@wincode/ai/client";
+import { runShellTool, type ShellInput } from "@wincode/coding-tools";
 import {
 	type SkillActivationResult,
 	type SkillExecution,
@@ -180,11 +181,10 @@ export const createChatToolCallHandler = (
 
 		Promise.resolve(
 			(async () => {
-				const outcome = await gate.gate(
-					toolName === "shell"
-						? { family: "shell", toolCall: options.toolCall }
-						: { family: "coding", toolCall: options.toolCall }
-				);
+				const outcome = await gate.gate({
+					family: "coding",
+					toolCall: options.toolCall,
+				});
 				if (outcome.kind !== "allow") {
 					emitToolCallError(
 						addToolOutput,
@@ -204,6 +204,19 @@ export const createChatToolCallHandler = (
 				const resourceOptions = await resolveResourceOptions(
 					resolveResourceLimits
 				);
+				if (toolName === "shell") {
+					const shellOutput = await runShellTool(
+						executionOptions.toolCall.input as ShellInput,
+						resourceOptions
+					);
+					await addToolOutput({
+						output: shellOutput,
+						state: "output-available",
+						tool: "shell",
+						toolCallId: options.toolCall.toolCallId,
+					});
+					return;
+				}
 				await runStaticToolCall(
 					addToolOutput,
 					resolvedAgentRef.current?.visibleCodingTools ?? [],

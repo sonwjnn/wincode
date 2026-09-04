@@ -67,8 +67,10 @@ import {
 	readToolSchema,
 } from "./read/schema";
 import {
+	composeShellToolDescription,
 	shellInputSchema,
 	shellOutputSchema,
+	shellPlatformFromNode,
 	shellToolDescription,
 } from "./shell/schema";
 import {
@@ -199,3 +201,15 @@ export const codingToolSchemaList = [
 	codingToolSchemas.grep,
 	codingToolSchemas.shell,
 ] as const;
+
+export const codingToolDefinitionFor = (
+	name: CodingToolName,
+	platform = shellPlatformFromNode(process.platform)
+): CodingToolDefinition<z.ZodType, z.ZodType> => ({
+	...codingToolDefinitions[name],
+	description:
+		name === "shell"
+			? composeShellToolDescription(platform)
+			: codingToolDefinitions[name].description,
+	name,
+});

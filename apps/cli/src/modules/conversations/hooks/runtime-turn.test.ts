@@ -1123,10 +1123,11 @@ describe("createGatedCodingTools", () => {
 		});
 		expect(calls).toEqual([
 			{
-				family: "shell",
+				family: "coding",
 				toolCall: {
 					input: { command: "printf migrated-shell" },
 					toolCallId: "shell-call",
+					toolName: "shell",
 				},
 			},
 		]);

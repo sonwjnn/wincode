@@ -36,16 +36,10 @@ import {
 import type { ModelTarget } from "@wincode/ai/model-target";
 import { normalizeModelUsage } from "@wincode/ai/model-usage";
 import {
-	codingToolDefinitions,
-	codingToolRunners,
-	composeShellToolDescription,
-	type EditInput,
-	type GlobInput,
-	type GrepInput,
-	type ReadInput,
-	type ShellInput,
-	shellPlatformFromNode,
-	type WriteInput,
+	type CodingToolName,
+	codingToolDefinitionFor,
+	runCodingTool,
+	type ToolResourceLimits,
 } from "@wincode/coding-tools";
 import type { SkillRequestContext, SkillToolDefinition } from "@wincode/skills";
 import type { UIMessageChunk } from "ai";
@@ -74,17 +68,8 @@ export type RuntimeCodingToolName = (typeof RUNTIME_CODING_TOOL_NAMES)[number];
 const isRuntimeCodingToolName = (name: string): name is RuntimeCodingToolName =>
 	(RUNTIME_CODING_TOOL_NAMES as readonly string[]).includes(name);
 
-const runtimeToolDefinition = (
-	name: RuntimeCodingToolName
-): ToolDefinition => ({
-	description:
-		name === "shell"
-			? composeShellToolDescription(shellPlatformFromNode(process.platform))
-			: codingToolDefinitions[name].description,
-	inputSchema: codingToolDefinitions[name].inputSchema,
-	name,
-	outputSchema: codingToolDefinitions[name].outputSchema,
-});
+const runtimeToolDefinition = (name: RuntimeCodingToolName): ToolDefinition =>
+	codingToolDefinitionFor(name);
 
 /** The application Tool Registry of runtime-eligible coding families. */
 export const runtimeToolRegistry: ToolRegistry = createToolRegistry(
@@ -107,44 +92,10 @@ const runMigratedTool = async ({
 	};
 }): Promise<ToolCallOutput> => {
 	try {
-		switch (name) {
-			case "read":
-				return {
-					output: await codingToolRunners.read(input as ReadInput, options),
-					type: "success",
-				};
-			case "write":
-				return {
-					output: await codingToolRunners.write(input as WriteInput, options),
-					type: "success",
-				};
-			case "edit":
-				return {
-					output: await codingToolRunners.edit(input as EditInput, options),
-					type: "success",
-				};
-			case "glob":
-				return {
-					output: await codingToolRunners.glob(input as GlobInput, options),
-					type: "success",
-				};
-			case "grep":
-				return {
-					output: await codingToolRunners.grep(input as GrepInput, options),
-					type: "success",
-				};
-			case "shell":
-				return {
-					output: await codingToolRunners.shell(input as ShellInput, options),
-					type: "success",
-				};
-			default:
-				throw new AgentInvariantError(
-					"invalid-runtime",
-					`Runtime coding tool ${name} has no runner.`,
-					{ cause: name }
-				);
-		}
+		return {
+			output: await runCodingTool(name, input, options),
+			type: "success",
+		};
 	} catch (error) {
 		if (isAgentInvariantError(error)) {
 			throw error;
@@ -232,15 +183,10 @@ export const createGatedCodingTools = ({
 		): Promise<ToolCallOutput> => {
 			const outcome = await evaluateGateWithAbort(
 				() =>
-					name === "shell"
-						? gate.gate({
-								family: "shell",
-								toolCall: { input, toolCallId },
-							})
-						: gate.gate({
-								family: "coding",
-								toolCall: { input, toolCallId, toolName: name },
-							}),
+					gate.gate({
+						family: "coding",
+						toolCall: { input, toolCallId, toolName: name },
+					}),
 				signal
 			);
 			if (outcome.kind !== "allow") {

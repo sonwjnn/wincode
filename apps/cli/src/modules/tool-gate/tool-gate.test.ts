@@ -784,7 +784,7 @@ describe("shell manual safety ceiling", () => {
 	});
 });
 
-test("coding-family calls fail closed for shell and unknown tools", async () => {
+test("coding-family calls route shell and reject unknown tools", async () => {
 	const gate = createGate();
 
 	await expect(
@@ -793,8 +793,7 @@ test("coding-family calls fail closed for shell and unknown tools", async () => 
 			toolCall: { input: {}, toolCallId: "call-shell", toolName: "shell" },
 		})
 	).resolves.toEqual({
-		errorText: "Shell tool call used the coding authorization family",
-		kind: "deny",
+		kind: "allow",
 	});
 	await expect(
 		gate.gate({

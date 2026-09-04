@@ -1,6 +1,13 @@
+export type { ToolResourceLimits } from "./tools/resource-limits";
+export {
+	getToolResourceLimits,
+	isElevatedResourceProfile,
+} from "./tools/resource-limits";
 export {
 	codingToolRunners,
+	runCodingTool,
 	runEditTool,
+	runShellTool,
 	runWriteTool,
 } from "./tools/runners";
 export type {
@@ -22,6 +29,7 @@ export type {
 	WriteOutput,
 } from "./tools/schemas";
 export {
+	codingToolDefinitionFor,
 	codingToolDefinitions,
 	codingToolNames,
 	codingToolSchemas,
@@ -32,4 +40,3 @@ export {
 	writeInputSchema,
 	writeOutputSchema,
 } from "./tools/schemas";
-export * from "./workspace";

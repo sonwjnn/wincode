@@ -34,10 +34,6 @@ type RunToolCallOptions<ToolName extends CodingAgentToolName> = {
 	toolCallId: string;
 };
 
-const assertNever = (value: never): never => {
-	throw new Error(`Unhandled coding tool: ${value}`);
-};
-
 const runToolCall = async <ToolName extends CodingAgentToolName>({
 	addToolOutput,
 	input,
@@ -163,18 +159,7 @@ export const handleCodingAgentToolCall =
 				});
 				return;
 
-			case "shell":
-				await runToolCall({
-					addToolOutput,
-					input: toolCall.input,
-					run: codingToolRunners.shell,
-					runnerOptions,
-					tool: "shell",
-					toolCallId: toolCall.toolCallId,
-				});
-				return;
-
 			default:
-				assertNever(toolCall);
+				return;
 		}
 	};
