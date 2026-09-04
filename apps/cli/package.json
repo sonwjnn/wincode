@@ -25,6 +25,7 @@
     "@wincode/agent-core": "workspace:*",
     "@wincode/agent-runtime-ai-sdk": "workspace:*",
     "@wincode/ai": "workspace:*",
+    "@wincode/coding-tools": "workspace:*",
     "@wincode/env": "workspace:*",
     "@wincode/skills": "workspace:*",
     "ai": "catalog:",

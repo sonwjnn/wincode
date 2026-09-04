@@ -45,7 +45,7 @@ import {
 } from "@wincode/ai";
 import type { ModelTarget } from "@wincode/ai/model-target";
 import { normalizeModelUsage } from "@wincode/ai/model-usage";
-import { codingToolRunners } from "@wincode/ai/tools";
+import { codingToolRunners } from "@wincode/coding-tools";
 import type { SkillRequestContext, SkillToolDefinition } from "@wincode/skills";
 import type { UIMessageChunk } from "ai";
 import type { GateOutcome, ToolGate } from "@/modules/tool-gate/tool-gate";

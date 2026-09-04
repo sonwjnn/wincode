@@ -14,6 +14,7 @@ describe("editInputSchema", () => {
 			oneOf: [
 				{ required: ["content", "path"] },
 				{ required: ["find", "path", "replace"] },
+				{ required: ["content", "lineHashes", "path"] },
 			],
 		});
 	});

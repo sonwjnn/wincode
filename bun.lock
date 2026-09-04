@@ -29,6 +29,7 @@
         "@wincode/agent-core": "workspace:*",
         "@wincode/agent-runtime-ai-sdk": "workspace:*",
         "@wincode/ai": "workspace:*",
+        "@wincode/coding-tools": "workspace:*",
         "@wincode/env": "workspace:*",
         "@wincode/skills": "workspace:*",
         "ai": "catalog:",
@@ -58,6 +59,7 @@
       "name": "@wincode/agent-core",
       "dependencies": {
         "@wincode/ai": "workspace:*",
+        "zod": "catalog:",
       },
       "devDependencies": {
         "@types/bun": "catalog:",
@@ -78,6 +80,7 @@
         "@types/bun": "catalog:",
         "@wincode/config": "workspace:*",
         "typescript": "catalog:",
+        "zod": "catalog:",
       },
     },
     "packages/ai": {
@@ -98,6 +101,16 @@
       "devDependencies": {
         "@types/bun": "catalog:",
         "@wincode/config": "workspace:*",
+        "typescript": "catalog:",
+      },
+    },
+    "packages/coding-tools": {
+      "name": "@wincode/coding-tools",
+      "dependencies": {
+        "@wincode/ai": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
         "typescript": "catalog:",
       },
     },
@@ -508,6 +521,8 @@
     "@wincode/agent-runtime-ai-sdk": ["@wincode/agent-runtime-ai-sdk@workspace:packages/agent-runtime-ai-sdk"],
 
     "@wincode/ai": ["@wincode/ai@workspace:packages/ai"],
+
+    "@wincode/coding-tools": ["@wincode/coding-tools@workspace:packages/coding-tools"],
 
     "@wincode/config": ["@wincode/config@workspace:packages/config"],
 

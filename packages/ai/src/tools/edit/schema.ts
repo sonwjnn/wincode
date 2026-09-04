@@ -27,6 +27,14 @@ export const editInputSchema = z.union([
 			message: "find and replace must differ",
 			path: ["replace"],
 		}),
+	z
+		.object({
+			content: z.string(),
+			insertAfter: z.boolean().optional(),
+			lineHashes: z.string().min(1),
+			path: z.string().min(1),
+		})
+		.strict(),
 ]);
 
 export const editModelInputJsonSchema = {
@@ -49,6 +57,17 @@ export const editModelInputJsonSchema = {
 				replaceAll: { type: "boolean" },
 			},
 			required: ["find", "path", "replace"],
+			type: "object",
+		},
+		{
+			additionalProperties: false,
+			properties: {
+				content: { type: "string" },
+				insertAfter: { type: "boolean" },
+				lineHashes: { minLength: 1, type: "string" },
+				path: { minLength: 1, type: "string" },
+			},
+			required: ["content", "lineHashes", "path"],
 			type: "object",
 		},
 	],
