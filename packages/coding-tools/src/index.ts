@@ -25,8 +25,10 @@ export {
 	codingToolDefinitions,
 	codingToolNames,
 	codingToolSchemas,
+	composeShellToolDescription,
 	editInputSchema,
 	editOutputSchema,
+	shellPlatformFromNode,
 	writeInputSchema,
 	writeOutputSchema,
 } from "./tools/schemas";

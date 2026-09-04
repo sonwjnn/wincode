@@ -26,27 +26,27 @@ import {
 	type ToolRegistry,
 } from "@wincode/agent-core";
 import { createAiSdkAgentRuntime } from "@wincode/agent-runtime-ai-sdk";
-import type {
-	AgentId,
-	CodingAgentUIMessage,
-	McpToolManifest,
-	ResolvedAgentRuntime,
-} from "@wincode/ai";
 import {
-	type CodingToolName,
-	codingToolDefinitions,
-	type EditInput,
-	type GlobInput,
-	type GrepInput,
+	type AgentId,
+	type CodingAgentUIMessage,
 	getSystemInstructionsForAgent,
-	type ReadInput,
-	type ShellInput,
-	type ToolResourceLimits,
-	type WriteInput,
+	type McpToolManifest,
+	type ResolvedAgentRuntime,
 } from "@wincode/ai";
 import type { ModelTarget } from "@wincode/ai/model-target";
 import { normalizeModelUsage } from "@wincode/ai/model-usage";
-import { codingToolRunners } from "@wincode/coding-tools";
+import {
+	codingToolDefinitions,
+	codingToolRunners,
+	composeShellToolDescription,
+	type EditInput,
+	type GlobInput,
+	type GrepInput,
+	type ReadInput,
+	type ShellInput,
+	shellPlatformFromNode,
+	type WriteInput,
+} from "@wincode/coding-tools";
 import type { SkillRequestContext, SkillToolDefinition } from "@wincode/skills";
 import type { UIMessageChunk } from "ai";
 import type { GateOutcome, ToolGate } from "@/modules/tool-gate/tool-gate";
@@ -77,7 +77,10 @@ const isRuntimeCodingToolName = (name: string): name is RuntimeCodingToolName =>
 const runtimeToolDefinition = (
 	name: RuntimeCodingToolName
 ): ToolDefinition => ({
-	description: codingToolDefinitions[name].description,
+	description:
+		name === "shell"
+			? composeShellToolDescription(shellPlatformFromNode(process.platform))
+			: codingToolDefinitions[name].description,
 	inputSchema: codingToolDefinitions[name].inputSchema,
 	name,
 	outputSchema: codingToolDefinitions[name].outputSchema,

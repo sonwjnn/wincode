@@ -1116,6 +1116,7 @@ describe("createGatedCodingTools", () => {
 				},
 			},
 		});
+		expect(tools[0]?.definition.description).toContain("/bin/bash -c");
 		const outcome = await tools[0]?.execute({
 			input: { command: "printf migrated-shell" },
 			toolCallId: "shell-call",
