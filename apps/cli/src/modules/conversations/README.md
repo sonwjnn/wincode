@@ -10,11 +10,15 @@ Chat session lifecycle: creation, messaging, streaming display, compaction, and 
 
 ### Join a session
 
-`ChatView` loads the transcript and ordered local compaction entries, validates the messages, rebuilds active context, and feeds that context into the AI SDK `useChat` hook.
+`ChatView` loads the transcript and ordered local compaction entries, validates the messages, rebuilds active context, and gives that context to the Wincode `ConversationController`.
 
 ### Send a message
 
-`ChatView` sends through the application-owned `ConversationOperation`. The operation delegates to the existing local AI SDK path, which resolves the current configured agent and direct model, hydrates local attachments, snapshots MCP tools, and streams the response.
+`ChatView` sends through the application-owned `ConversationController`. The
+controller owns the submit, cancellation, interruption, state subscription, and
+approval-response contracts. Its temporary AI SDK React adapter still projects
+the controller's runtime stream into the existing message presentation until
+the TUI view-state migration is complete.
 
 ### Interrupt and terminal outcomes
 

@@ -15,6 +15,7 @@ import {
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useSettingsHubDialog } from "@/modules/settings";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
+import type { ApprovalOutcome } from "@/shared/providers/approval/types";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
@@ -69,11 +70,13 @@ export function ChatView({
 		[model, sessionId]
 	);
 	const registry = useAgentRegistry();
-	const { isTopLayer } = useKeyboardLayer();
 	const dialog = useDialog();
 	const { show } = useToast();
 	const openSettings = useSettingsHubDialog(settingsRuntime);
-	const hasPendingApproval = useApprovalPanels().entries.some(
+	const { isTopLayer } = useKeyboardLayer();
+	const { entries: approvalEntries, resolve: resolveApprovalPanel } =
+		useApprovalPanels();
+	const hasPendingApproval = approvalEntries.some(
 		(entry) => entry.resolution === undefined
 	);
 	// Messages restored from storage carry no in-flight tool executions (the
@@ -352,6 +355,27 @@ export function ChatView({
 		}
 		return true;
 	};
+	const routeApproval = (id: string, outcome: ApprovalOutcome): void => {
+		let controllerOutcome:
+			| { decision: "allow"; remember: boolean }
+			| { decision: "reject"; feedback?: string }
+			| { decision: "abort" };
+		switch (outcome) {
+			case "allow-once":
+				controllerOutcome = { decision: "allow", remember: false };
+				break;
+			case "always":
+				controllerOutcome = { decision: "allow", remember: true };
+				break;
+			case "rejected":
+				controllerOutcome = { decision: "reject" };
+				break;
+			default:
+				controllerOutcome = { decision: "abort" };
+		}
+		resolveApprovalPanel(id, outcome);
+		void conversation.respondToApproval(id, controllerOutcome);
+	};
 	const observedCompactionCountRef = useRef(initialCompactions.length);
 	useEffect(() => {
 		const observed = observedCompactionCountRef.current;
@@ -456,6 +480,7 @@ export function ChatView({
 					isBusy={isBusy}
 					isInterruptArmed={isInterruptArmed}
 					messages={messages}
+					onApproval={routeApproval}
 					onCompact={executeCompactionCommand}
 					onOpenSettings={openSettings}
 					onSubmit={submitMessage}
