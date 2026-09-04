@@ -8,6 +8,7 @@ import {
 } from "../../workspace";
 
 const HASHLINE_PREFIX_PATTERN = /^(\d+):(.*)$/u;
+const HASHLINE_CR_PATTERN = /\r$/u;
 const HASHLINE_OFFSET_BASIS = 2_166_136_261;
 const HASHLINE_PRIME = 16_777_619;
 const HASHLINE_ALPHABET_OFFSET = 97;
@@ -757,7 +758,7 @@ const formatHashlineContent = (content: string): string =>
 				return line;
 			}
 			const lineNumber = match[1] as string;
-			const text = match[2] as string;
+			const text = (match[2] as string).replace(HASHLINE_CR_PATTERN, "");
 			return `${lineNumber}:${hashlineFor(text)}|${text}`;
 		})
 		.join("\n");
