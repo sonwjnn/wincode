@@ -15,6 +15,7 @@ import type { McpContextValue } from "@/modules/mcp";
 import type { AttachmentHydrationOptions } from "../storage/attachment-store";
 import { getConversationStore } from "../storage/get-conversation-store";
 import { createLocalChatTransport } from "./local-chat-transport";
+import type { RuntimeGatedTooling } from "./runtime-turn";
 
 type AttachmentModelBudget = Pick<
 	AttachmentHydrationOptions,
@@ -31,7 +32,8 @@ export const createRoutingChatTransport = (
 	mcp: McpContextValue,
 	skillToolRef?: MutableRefObject<SkillToolDefinition | undefined>,
 	attachmentBudgetRef?: MutableRefObject<AttachmentModelBudget | undefined>,
-	outcomeSignalRef?: MutableRefObject<AbortSignal | undefined>
+	outcomeSignalRef?: MutableRefObject<AbortSignal | undefined>,
+	gatedToolingRef?: MutableRefObject<RuntimeGatedTooling | undefined>
 ): ChatTransport<CodingAgentUIMessage> => ({
 	sendMessages: async (options) => {
 		const snapshot = await mcp.createSnapshot(agentRef.current);
@@ -67,7 +69,8 @@ export const createRoutingChatTransport = (
 					record,
 					sessionId,
 				}),
-			outcomeSignalRef
+			outcomeSignalRef,
+			gatedToolingRef?.current
 		).sendMessages({ ...options, messages });
 	},
 	reconnectToStream: async () => null,

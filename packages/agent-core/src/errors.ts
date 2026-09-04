@@ -2,10 +2,12 @@ export const agentInvariantCodes = [
 	"duplicate-terminal-outcome",
 	"invalid-event",
 	"invalid-record",
+	"invalid-registry",
 	"invalid-runtime",
 	"invalid-transition",
 	"missing-terminal-outcome",
 	"sequence-out-of-order",
+	"tool-not-found",
 	"turn-mismatch",
 ] as const;
 export type AgentInvariantCode = (typeof agentInvariantCodes)[number];

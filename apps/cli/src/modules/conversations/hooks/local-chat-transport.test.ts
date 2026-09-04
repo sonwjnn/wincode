@@ -6,8 +6,9 @@ import type { UIMessageChunk } from "ai";
 import type { MutableRefObject } from "react";
 import type { Connections } from "@/modules/connections";
 import type { McpCatalogSnapshot } from "@/modules/mcp";
+import type { ToolGate } from "@/modules/tool-gate/tool-gate";
 import { createLocalChatTransport } from "./local-chat-transport";
-import type { TextOnlyRuntimeFactory } from "./text-only-turn";
+import type { RuntimeFactory } from "./runtime-turn";
 
 const selection: ChatModelSelection = {
 	modelId: "gpt-5.4-mini",
@@ -96,12 +97,12 @@ const consumeChunks = async (
 	return text;
 };
 
-describe("createLocalChatTransport text-only runtime routing", () => {
+describe("createLocalChatTransport runtime routing", () => {
 	test("routes an eligible text-only send through the Agent Runtime", async () => {
 		const createStream = mock(async () => {
 			throw new Error("legacy stream must not be used");
 		});
-		const createRuntime: TextOnlyRuntimeFactory = () =>
+		const createRuntime: RuntimeFactory = () =>
 			fakeRuntime(
 				runtimeEvents("hi there", { inputTokens: 2, outputTokens: 1 })
 			);
@@ -140,7 +141,7 @@ describe("createLocalChatTransport text-only runtime routing", () => {
 	test("uses a new Agent Turn identity when retrying after a lost stream", async () => {
 		const turnIds: string[] = [];
 		let attempt = 0;
-		const createRuntime: TextOnlyRuntimeFactory = () => ({
+		const createRuntime: RuntimeFactory = () => ({
 			run: (turn) => {
 				turnIds.push(turn.id);
 				attempt += 1;
@@ -207,7 +208,7 @@ describe("createLocalChatTransport text-only runtime routing", () => {
 		const createStream = mock(async () => {
 			throw new Error("legacy stream must not be used");
 		});
-		const createRuntime: TextOnlyRuntimeFactory = () =>
+		const createRuntime: RuntimeFactory = () =>
 			fakeRuntime(
 				runtimeEvents("hi there", { inputTokens: 2, outputTokens: 1 })
 			);
@@ -268,11 +269,11 @@ describe("createLocalChatTransport text-only runtime routing", () => {
 		);
 	});
 
-	test("keeps the legacy agent stream for tool-armed sends", async () => {
+	test("keeps the legacy agent stream for tool-armed sends without a gate", async () => {
 		const createStream = mock(async () => {
 			throw new Error("not reached");
 		});
-		const createRuntime: TextOnlyRuntimeFactory = () =>
+		const createRuntime: RuntimeFactory = () =>
 			fakeRuntime(runtimeEvents("unexpected"));
 		const resolvedAgentRef: MutableRefObject<ResolvedAgentRuntime | undefined> =
 			{ current: { instructions: "Build it.", visibleCodingTools: ["read"] } };
@@ -306,5 +307,52 @@ describe("createLocalChatTransport text-only runtime routing", () => {
 				trigger: "submit-message",
 			})
 		).rejects.toThrow("not reached");
+	});
+
+	test("routes a read-armed gated send through the Agent Runtime", async () => {
+		const gate: ToolGate = {
+			gate: async () => ({ kind: "allow" }),
+		};
+		const createStream = mock(async () => {
+			throw new Error("legacy stream must not be used");
+		});
+		const createRuntime: RuntimeFactory = () =>
+			fakeRuntime(
+				runtimeEvents("found it", { inputTokens: 2, outputTokens: 1 })
+			);
+		const resolvedAgentRef: MutableRefObject<ResolvedAgentRuntime | undefined> =
+			{ current: { instructions: "Read it.", visibleCodingTools: ["read"] } };
+		const modelRef: MutableRefObject<ChatModelSelection> = {
+			current: selection,
+		};
+		const variantRef: MutableRefObject<undefined> = { current: undefined };
+
+		const transport = createLocalChatTransport(
+			"session-1",
+			resolvedAgentRef,
+			modelRef,
+			variantRef,
+			connections as Connections,
+			createStream,
+			emptyManifestSnapshot,
+			undefined,
+			"build",
+			createRuntime,
+			undefined,
+			undefined,
+			{ gate }
+		);
+
+		const stream = await transport.sendMessages({
+			abortSignal: new AbortController().signal,
+			chatId: "session-1",
+			messageId: "msg-user",
+			messages: [userMessage("read the file")],
+			trigger: "submit-message",
+		});
+		const text = await consumeChunks(stream);
+
+		expect(text).toBe("found it");
+		expect(createStream).not.toHaveBeenCalled();
 	});
 });

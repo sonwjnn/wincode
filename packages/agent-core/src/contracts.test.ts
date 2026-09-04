@@ -9,6 +9,9 @@ import {
 	isAgentTurnEvent,
 	isAgentTurnTerminalEvent,
 	isAgentTurnTerminalStatus,
+	isAgentTurnToolCallPart,
+	isAgentTurnToolFailurePart,
+	isAgentTurnToolResultPart,
 	OPERATIONAL_FAILURE_VERSION,
 } from "./index";
 
@@ -29,6 +32,25 @@ const baseEvent = (type: AgentTurnEvent["type"]): AgentTurnEvent => {
 			return { ...common, delta: "x", type };
 		case "model-step-finished":
 			return { ...common, stepId: "step-1", type };
+		case "tool-call-started":
+			return {
+				...common,
+				input: { path: "src/index.ts" },
+				toolCallId: "call-1",
+				toolName: "read",
+				type,
+			};
+		case "tool-call-finished":
+			return {
+				...common,
+				outcome: {
+					output: { content: "x", path: "src/index.ts" },
+					type: "success",
+				},
+				toolCallId: "call-1",
+				toolName: "read",
+				type,
+			};
 		case "agent-turn-completed":
 			return { ...common, finishedAt: 1, type };
 		case "agent-turn-cancelled":
@@ -106,6 +128,107 @@ describe("Agent Turn Event contract", () => {
 		expect(isAgentTurnEvent({ sequence: 1, type: "text-delta" })).toBe(false);
 		expect(
 			isAgentTurnEvent({ sequence: 1, turnId: 1, type: "text-delta" })
+		).toBe(false);
+	});
+
+	test("rejects malformed Tool Call events", () => {
+		expect(
+			isAgentTurnEvent({
+				sequence: 1,
+				toolCallId: "",
+				toolName: "read",
+				turnId: "turn-1",
+				type: "tool-call-started",
+			})
+		).toBe(false);
+		expect(
+			isAgentTurnEvent({
+				sequence: 1,
+				toolName: "read",
+				turnId: "turn-1",
+				type: "tool-call-started",
+			})
+		).toBe(false);
+		expect(
+			isAgentTurnEvent({
+				outcome: { errorText: "nope", type: "failure" },
+				sequence: 1,
+				toolCallId: "call-1",
+				toolName: "",
+				turnId: "turn-1",
+				type: "tool-call-finished",
+			})
+		).toBe(false);
+		expect(
+			isAgentTurnEvent({
+				sequence: 1,
+				toolCallId: "call-1",
+				toolName: "read",
+				turnId: "turn-1",
+				type: "tool-call-finished",
+			})
+		).toBe(false);
+	});
+});
+
+describe("Agent Turn message part contract", () => {
+	test("validates text, tool-call, tool-result, and tool-failure parts", () => {
+		expect(
+			isAgentTurnToolCallPart({
+				input: { path: "x" },
+				toolCallId: "c1",
+				toolName: "read",
+				type: "tool-call",
+			})
+		).toBe(true);
+		expect(
+			isAgentTurnToolResultPart({
+				output: { content: "x", path: "x" },
+				toolCallId: "c1",
+				toolName: "read",
+				type: "tool-result",
+			})
+		).toBe(true);
+		expect(
+			isAgentTurnToolFailurePart({
+				errorText: "denied",
+				toolCallId: "c1",
+				toolName: "read",
+				type: "tool-failure",
+			})
+		).toBe(true);
+	});
+
+	test("rejects malformed tool parts", () => {
+		expect(
+			isAgentTurnToolCallPart({
+				input: { path: "x" },
+				toolCallId: "c1",
+				toolName: "read",
+			})
+		).toBe(false);
+		expect(
+			isAgentTurnToolCallPart({
+				input: { path: "x" },
+				toolCallId: "c1",
+				toolName: "read",
+				type: "tool-result",
+			})
+		).toBe(false);
+		expect(
+			isAgentTurnToolResultPart({
+				toolCallId: "c1",
+				toolName: "read",
+				type: "tool-result",
+			})
+		).toBe(false);
+		expect(
+			isAgentTurnToolFailurePart({
+				errorText: "",
+				toolCallId: "c1",
+				toolName: "read",
+				type: "tool-failure",
+			})
 		).toBe(false);
 	});
 });

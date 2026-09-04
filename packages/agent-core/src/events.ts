@@ -4,6 +4,11 @@ import type { OperationalFailure } from "./failures";
 import { isOperationalFailure } from "./failures";
 import type { ModelStepId } from "./model-step";
 import {
+	isToolCallOutput,
+	type ToolCallId,
+	type ToolCallOutput,
+} from "./tools";
+import {
 	AGENT_TURN_INTERRUPTION_REASONS,
 	type AgentTurnId,
 	type AgentTurnInterruptionReason,
@@ -53,6 +58,22 @@ export type ModelStepFinishedEvent = AgentTurnEventBase & {
 	readonly usage?: ModelUsage;
 };
 
+/** The Agent requested one Tool Call with a complete input. */
+export type ToolCallStartedEvent = AgentTurnEventBase & {
+	readonly input: unknown;
+	readonly toolCallId: ToolCallId;
+	readonly toolName: string;
+	readonly type: "tool-call-started";
+};
+
+/** One Tool Call reached its output, failure, deny, or rejection outcome. */
+export type ToolCallFinishedEvent = AgentTurnEventBase & {
+	readonly outcome: ToolCallOutput;
+	readonly toolCallId: ToolCallId;
+	readonly toolName: string;
+	readonly type: "tool-call-finished";
+};
+
 /** The turn reached its terminal `completed` outcome. */
 export type AgentTurnCompletedEvent = AgentTurnEventBase & {
 	readonly finishedAt: number;
@@ -94,6 +115,8 @@ export type AgentTurnEvent =
 	| TextDeltaEvent
 	| ReasoningDeltaEvent
 	| ModelStepFinishedEvent
+	| ToolCallStartedEvent
+	| ToolCallFinishedEvent
 	| AgentTurnTerminalEvent;
 
 export const AGENT_TURN_EVENT_TYPES = [
@@ -102,6 +125,8 @@ export const AGENT_TURN_EVENT_TYPES = [
 	"text-delta",
 	"reasoning-delta",
 	"model-step-finished",
+	"tool-call-started",
+	"tool-call-finished",
 	"agent-turn-completed",
 	"agent-turn-failed",
 	"agent-turn-cancelled",
@@ -122,6 +147,13 @@ const isNonNegativeInteger = (value: unknown): value is number =>
 	typeof value === "number" && Number.isInteger(value) && value >= 0;
 const isUsage = (value: unknown): value is ModelUsage =>
 	modelUsageSchema.safeParse(value).success;
+
+const isToolIdentity = (value: unknown): value is ToolCallId => {
+	if (typeof value !== "string") {
+		return false;
+	}
+	return value.length > 0;
+};
 
 const hasBaseEvent = (value: unknown): value is AgentTurnEventBase => {
 	if (typeof value !== "object" || value === null) {
@@ -170,6 +202,20 @@ export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
 				(event.modelId === undefined ||
 					(typeof event.modelId === "string" && event.modelId.length > 0)) &&
 				(event.usage === undefined || isUsage(event.usage))
+			);
+		case "tool-call-started":
+			return (
+				"input" in event &&
+				isToolIdentity(event.toolCallId) &&
+				typeof event.toolName === "string" &&
+				event.toolName.length > 0
+			);
+		case "tool-call-finished":
+			return (
+				isToolIdentity(event.toolCallId) &&
+				typeof event.toolName === "string" &&
+				event.toolName.length > 0 &&
+				isToolCallOutput(event.outcome)
 			);
 		case "agent-turn-completed":
 			return (

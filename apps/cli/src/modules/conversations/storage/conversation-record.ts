@@ -102,11 +102,69 @@ const isOutcome = (value: unknown): boolean => {
 	return false;
 };
 
+const isToolCallOutcomeRecord = (value: unknown): boolean => {
+	if (typeof value !== "object" || value === null) {
+		return false;
+	}
+	const outcome = value as Record<string, unknown>;
+	if (outcome.kind === "success") {
+		return (
+			Object.keys(outcome).every((key) => key === "kind" || key === "output") &&
+			"output" in outcome
+		);
+	}
+	if (outcome.kind === "failure") {
+		return (
+			Object.keys(outcome).every(
+				(key) => key === "errorText" || key === "kind"
+			) &&
+			typeof outcome.errorText === "string" &&
+			outcome.errorText.length > 0
+		);
+	}
+	return false;
+};
+
+const isConversationToolCallPart = (value: unknown): boolean => {
+	if (typeof value !== "object" || value === null) {
+		return false;
+	}
+	const part = value as Record<string, unknown>;
+	if (
+		Object.keys(part).some(
+			(key) =>
+				![
+					"input",
+					"outcome",
+					"sequence",
+					"toolCallId",
+					"toolName",
+					"type",
+				].includes(key)
+		)
+	) {
+		return false;
+	}
+	return (
+		part.type === "tool-call" &&
+		typeof part.toolCallId === "string" &&
+		part.toolCallId.length > 0 &&
+		typeof part.toolName === "string" &&
+		part.toolName.length > 0 &&
+		"input" in part &&
+		isNonNegativeInteger(part.sequence) &&
+		isToolCallOutcomeRecord(part.outcome)
+	);
+};
+
+const isMessagePart = (value: unknown): boolean =>
+	isAgentTurnTextPart(value) || isConversationToolCallPart(value);
+
 const isMessageRecord = (value: unknown): boolean => {
 	if (!isAgentTurnMessageRecord(value)) {
 		return false;
 	}
-	return Array.isArray(value.parts) && value.parts.every(isAgentTurnTextPart);
+	return Array.isArray(value.parts) && value.parts.every(isMessagePart);
 };
 export class ConversationRecordInvariantError extends AgentInvariantError {
 	override readonly code = "invalid-record" as const;
@@ -153,7 +211,7 @@ export const getConversationRecordValidationError = (
 		record.messages.length === 0 ||
 		!record.messages.every(isMessageRecord)
 	) {
-		return "record messages must contain committed text message records";
+		return "record messages must contain committed text or Tool Call parts";
 	}
 	return null;
 };

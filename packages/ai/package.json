@@ -40,6 +40,9 @@
     },
     "./workspace": {
       "default": "./src/workspace.ts"
+    },
+    "./tools": {
+      "default": "./src/tools/runners.ts"
     }
   },
   "scripts": {

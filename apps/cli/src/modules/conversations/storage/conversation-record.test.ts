@@ -2,10 +2,11 @@ import { expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type {
-	ConversationMessageRecord,
-	ConversationRecord,
-	OperationalFailure,
+import {
+	type ConversationMessageRecord,
+	type ConversationRecord,
+	isAgentTurnTextPart,
+	type OperationalFailure,
 } from "@wincode/agent-core";
 import type { CodingAgentUIMessage } from "@wincode/ai";
 import type { ChatModelSelection } from "@wincode/ai/models";
@@ -272,12 +273,9 @@ test("reopens a completed Conversation after closing and reopening the database"
 		const messages = [
 			...new Map(merged.map((message) => [message.id, message])).values(),
 		];
-		expect(messages.map((message) => message.parts[0]?.text)).toEqual([
-			"first",
-			"one",
-			"second",
-			"two",
-		]);
+		const text = (record: (typeof messages)[number]) =>
+			isAgentTurnTextPart(record.parts[0]) ? record.parts[0].text : undefined;
+		expect(messages.map(text)).toEqual(["first", "one", "second", "two"]);
 	}
 });
 
