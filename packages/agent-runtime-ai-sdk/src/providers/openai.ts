@@ -1,40 +1,23 @@
-import { createOpenAI, type OpenAIProvider, openai } from "@ai-sdk/openai";
-import { resolveModelProviderOptions } from "@wincode/ai/model-provider-options";
-import {
-	findSupportedChatModelSelection,
-	type SupportedChatModel,
-} from "@wincode/ai/models";
+import { createOpenAI, openai } from "@ai-sdk/openai";
+import type { SupportedChatModel } from "@wincode/ai/models";
+import { findSupportedChatModelSelection } from "@wincode/ai/models";
 import {
 	defineModelResolver,
 	type ResolvedModel,
 	type ResolverOptions,
-	toAiSdkProviderOptions,
+	resolveModelWithProvider,
 } from "./contract";
 
 type Model = Extract<SupportedChatModel, { provider: "openai" }>;
-
-const resolve = (
-	model: Model,
-	provider: OpenAIProvider,
-	variant?: ResolverOptions["variant"]
-): ResolvedModel => {
-	const resolvedOptions = resolveModelProviderOptions(model, { variant });
-	return {
-		model: provider(model.id),
-		modelId: model.id,
-		provider: "openai",
-		providerOptions: toAiSdkProviderOptions(resolvedOptions.providerOptions),
-	};
-};
 
 export const openAIResolver = defineModelResolver(
 	"openai",
 	(model): model is Model => model.provider === "openai",
 	{
 		resolveWithApiKey: (model, apiKey, options) =>
-			resolve(model, createOpenAI({ apiKey }), options.variant),
+			resolveModelWithProvider(model, createOpenAI({ apiKey }), options),
 		resolveWithEnvironment: (model, options) =>
-			resolve(model, openai, options.variant),
+			resolveModelWithProvider(model, openai, options),
 	}
 );
 
@@ -69,7 +52,7 @@ export function resolveOpenAIChatModel(
 		},
 	});
 	return {
-		...resolve(supported, provider, options.variant),
+		...resolveModelWithProvider(supported, provider, options),
 		model: provider.responses(supported.id),
 	};
 }

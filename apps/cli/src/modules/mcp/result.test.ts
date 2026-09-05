@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { MAX_MCP_RESULT_BYTES, normalizeMcpResult } from "./result";
+import type { McpCatalogSnapshot } from "./registry";
+import {
+	createMcpToolExecutor,
+	MAX_MCP_RESULT_BYTES,
+	normalizeMcpResult,
+} from "./result";
 
 describe("MCP result normalization", () => {
 	test("keeps safe text/structured values and metadata only", () => {
@@ -15,6 +20,35 @@ describe("MCP result normalization", () => {
 		expect(result.isError).toBe(true);
 		expect(JSON.stringify(result)).not.toContain("base64-secret");
 		expect(result.structuredContent).toEqual({ n: 1 });
+	});
+	test("adapts normalized failures while forwarding cancellation", async () => {
+		const signal = new AbortController().signal;
+		let receivedSignal: AbortSignal | undefined;
+		const snapshot: McpCatalogSnapshot = {
+			agent: "build",
+			id: "snapshot-1",
+			manifest: [],
+			tools: new Map(),
+		};
+		const executor = createMcpToolExecutor(
+			async (_snapshot, _toolName, _input, nextSignal) => {
+				receivedSignal = nextSignal;
+				return {
+					content: [{ text: "denied", type: "text" }],
+					isError: true,
+					truncated: false,
+				};
+			}
+		);
+		if (executor === undefined) {
+			throw new Error("Expected an MCP tool executor.");
+		}
+
+		await expect(executor(snapshot, "mcp_demo", {}, signal)).resolves.toEqual({
+			errorText: "MCP tool call failed.",
+			type: "failure",
+		});
+		expect(receivedSignal).toBe(signal);
 	});
 	test("bounds a huge resource link URI without scanning into the tail", () => {
 		const tail = "resource-link-tail";

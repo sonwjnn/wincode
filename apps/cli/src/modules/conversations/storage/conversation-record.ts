@@ -131,14 +131,6 @@ const isOutcome = (value: unknown): boolean => {
 	return false;
 };
 
-const isMessagePart = (value: unknown): boolean =>
-	isAgentTurnTextPart(value) ||
-	isConversationAttachmentReferencePart(value) ||
-	isConversationFileMentionPart(value) ||
-	isConversationToolCallPart(value);
-const isMessageRecord = (value: unknown): value is ConversationMessageRecord =>
-	isAgentTurnMessageRecord(value) && value.parts.every(isMessagePart);
-
 export class ConversationRecordInvariantError extends AgentInvariantError {
 	override readonly code = "invalid-record" as const;
 
@@ -186,9 +178,10 @@ export const getConversationRecordValidationError = (
 		return "record outcome is not a valid terminal outcome";
 	}
 	if (
-		!Array.isArray(record.messages) ||
-		record.messages.length === 0 ||
-		!record.messages.every(isMessageRecord)
+		!(
+			Array.isArray(record.messages) &&
+			record.messages.every(isAgentTurnMessageRecord)
+		)
 	) {
 		return "record messages must contain committed text or Tool Call parts";
 	}

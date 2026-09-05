@@ -1,4 +1,6 @@
+import type { ToolCallOutput } from "@wincode/agent-core";
 import { type JsonValue, MAX_MCP_RESULT_BYTES } from "./manifest";
+import type { McpCatalogSnapshot } from "./registry";
 
 export type { JsonValue } from "./manifest";
 export { MAX_MCP_RESULT_BYTES } from "./manifest";
@@ -16,6 +18,33 @@ export type McpNormalizedResult = {
 	owner?: "registry";
 	structuredContent?: JsonValue;
 	truncated: boolean;
+};
+export type McpToolExecutor = (
+	snapshot: McpCatalogSnapshot,
+	toolName: string,
+	input: unknown,
+	signal?: AbortSignal
+) => Promise<McpNormalizedResult>;
+
+export type McpToolCallExecutor = (
+	snapshot: McpCatalogSnapshot,
+	toolName: string,
+	input: unknown,
+	signal?: AbortSignal
+) => Promise<ToolCallOutput>;
+
+export const createMcpToolExecutor = (
+	execute: McpToolExecutor | undefined
+): McpToolCallExecutor | undefined => {
+	if (execute === undefined) {
+		return;
+	}
+	return async (snapshot, toolName, input, signal) => {
+		const result = await execute(snapshot, toolName, input, signal);
+		return result.isError
+			? { errorText: "MCP tool call failed.", type: "failure" }
+			: { output: result, type: "success" };
+	};
 };
 const encoder = new TextEncoder();
 const size = (value: unknown): number =>

@@ -18,15 +18,22 @@ export {
 	mcpToolManifestEntrySchema,
 	mcpToolManifestSchema,
 } from "./manifest";
-export type { McpExecutionPolicy } from "./policy";
-export {
-	createMcpRegistry,
-	MCP_PERMISSION_RESOURCE,
-	type McpAgentPolicy,
-	type McpCatalogSnapshot,
-	type McpServerState,
-	type McpServerStatus,
-	type McpSnapshotTool,
+export type {
+	McpAgentPolicy,
+	McpCatalogSnapshot,
+	McpServerState,
+	McpServerStatus,
+	McpSnapshotTool,
 } from "./registry";
+export { createMcpRegistry, MCP_PERMISSION_RESOURCE } from "./registry";
+export type {
+	McpNormalizedResult,
+	McpToolCallExecutor,
+	McpToolExecutor,
+} from "./result";
+export {
+	createMcpToolExecutor,
+	normalizeMcpResult,
+} from "./result";
 export { McpActiveIndicator } from "./ui/mcp-active-indicator";
 export { McpStatusDialogContent } from "./ui/mcp-status-dialog";

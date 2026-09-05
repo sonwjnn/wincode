@@ -5,7 +5,11 @@ import type { SkillExecution, SkillToolDefinition } from "@wincode/skills";
 import type { AgentRegistry } from "@/modules/agents";
 import { prepareAgentCall } from "@/modules/agents";
 import type { Connections } from "@/modules/connections";
-import type { McpCatalogSnapshot, McpContextValue } from "@/modules/mcp";
+import {
+	createMcpToolExecutor,
+	type McpCatalogSnapshot,
+	type McpContextValue,
+} from "@/modules/mcp";
 import { resolveChatModelTarget } from "../../model-target";
 import type { ConversationViewState } from "../conversation-controller";
 import { createConversationUserMessage } from "../message";
@@ -41,17 +45,29 @@ const toolCallIdOf = (
 	return call.toolCallId;
 };
 
-export const createDelegationExecutor = (
-	sessionId: string,
-	registry: AgentRegistry | null,
-	connections: Connections,
-	mcp: McpContextValue,
-	fallbackModelRef: MutableRefObject<ChatModelSelection>,
-	fallbackVariantRef: MutableRefObject<ModelVariant | undefined>,
-	gatedTooling: RuntimeGatedTooling,
-	createSkillContext?: ChildSkillContextFactory,
-	onViewState?: (state: ConversationViewState | undefined) => void
-): DelegationExecutor => {
+export type CreateDelegationExecutorOptions = {
+	readonly connections: Connections;
+	readonly createSkillContext?: ChildSkillContextFactory;
+	readonly fallbackModelRef: MutableRefObject<ChatModelSelection>;
+	readonly fallbackVariantRef: MutableRefObject<ModelVariant | undefined>;
+	readonly gatedTooling: RuntimeGatedTooling;
+	readonly mcp: McpContextValue;
+	readonly onViewState?: (state: ConversationViewState | undefined) => void;
+	readonly registry: AgentRegistry | null;
+	readonly sessionId: string;
+};
+
+export const createDelegationExecutor = ({
+	connections,
+	createSkillContext,
+	fallbackModelRef,
+	fallbackVariantRef,
+	gatedTooling,
+	mcp,
+	onViewState,
+	registry,
+	sessionId,
+}: CreateDelegationExecutorOptions): DelegationExecutor => {
 	let activeChildCount = 0;
 	const clearChildView = (): void => {
 		activeChildCount = Math.max(0, activeChildCount - 1);
@@ -98,28 +114,7 @@ export const createDelegationExecutor = (
 				}
 			);
 			snapshot = await mcp.createSnapshot(prepared.agent, undefined, false);
-			const executeMcpTool =
-				mcp.execute === undefined
-					? undefined
-					: async (
-							currentSnapshot: NonNullable<typeof snapshot>,
-							toolName: string,
-							input: unknown,
-							toolSignal?: AbortSignal
-						) => {
-							const result = await mcp.execute?.(
-								currentSnapshot,
-								toolName,
-								input,
-								toolSignal
-							);
-							return result?.isError
-								? {
-										errorText: "MCP tool call failed.",
-										type: "failure" as const,
-									}
-								: { output: result, type: "success" as const };
-						};
+			const executeMcpTool = createMcpToolExecutor(mcp.execute);
 			const childGate: RuntimeGatedTooling = {
 				...gatedTooling,
 				gate: {

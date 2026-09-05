@@ -1,5 +1,8 @@
 import type { ProviderOptions } from "@ai-sdk/provider-utils";
-import type { ModelProviderOptions } from "@wincode/ai/model-provider-options";
+import {
+	type ModelProviderOptions,
+	resolveModelProviderOptions,
+} from "@wincode/ai/model-provider-options";
 import type {
 	ModelRuntimeProviderId,
 	ModelVariant,
@@ -23,7 +26,44 @@ export type ResolvedModel = {
 
 export const toAiSdkProviderOptions = (
 	options: ModelProviderOptions | undefined
-): ProviderOptions | undefined => options as ProviderOptions | undefined;
+): ProviderOptions | undefined => {
+	if (options === undefined) {
+		return;
+	}
+	if ("openai" in options) {
+		return { openai: { ...options.openai } };
+	}
+	if ("anthropic" in options) {
+		return { anthropic: { ...options.anthropic } };
+	}
+	return {
+		google: {
+			thinkingConfig: { ...options.google.thinkingConfig },
+		},
+	};
+};
+export const resolveModelWithProvider = <P extends ModelRuntimeProviderId>(
+	model: Extract<SupportedChatModel, { provider: P }>,
+	provider: (modelId: string) => LanguageModel,
+	options: ResolverOptions
+): ResolvedModel => {
+	const resolvedOptions = resolveModelProviderOptions(model, options);
+	return {
+		model: provider(model.id),
+		modelId: model.id,
+		provider: model.provider,
+		...(resolvedOptions.maxOutputTokens === undefined
+			? {}
+			: { maxOutputTokens: resolvedOptions.maxOutputTokens }),
+		...(resolvedOptions.providerOptions === undefined
+			? {}
+			: {
+					providerOptions: toAiSdkProviderOptions(
+						resolvedOptions.providerOptions
+					),
+				}),
+	};
+};
 
 export type ModelResolver<P extends ModelRuntimeProviderId> = {
 	provider: P;

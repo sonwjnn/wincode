@@ -10,6 +10,7 @@ import type {
 import type { Connections } from "@/modules/connections";
 import { resolveChatModelTarget } from "../../model-target";
 import type { ConversationMessage } from "../message";
+import { serializeMessagesForCompaction } from "./compaction";
 import type {
 	SummaryGenerator,
 	SummaryGeneratorInput,
@@ -67,9 +68,7 @@ const summaryPromptMessages = (
 		if (message.role !== "user" && message.role !== "assistant") {
 			return [];
 		}
-		const content = message.parts
-			.flatMap((part) => (part.type === "text" ? [part.text] : []))
-			.join("");
+		const content = serializeMessagesForCompaction([message]);
 		return content.length === 0 ? [] : [{ content, role: message.role }];
 	});
 

@@ -56,7 +56,11 @@ import {
 	sanitizeInterruptedConversationMessages,
 } from "@/modules/conversations/message";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
-import { type McpCatalogSnapshot, useMcp } from "@/modules/mcp";
+import {
+	createMcpToolExecutor,
+	type McpCatalogSnapshot,
+	useMcp,
+} from "@/modules/mcp";
 import { useToolPermission } from "@/modules/permissions";
 import { discoverSkillCatalog } from "@/modules/skills";
 import { createToolGate, type ToolGate } from "@/modules/tool-gate/tool-gate";
@@ -1064,80 +1068,61 @@ export function useChat(
 			setError(null);
 			setViewState(undefined);
 			setStatus("submitted");
-			const modelTarget = await resolveChatModelTarget(model, connections, {
-				signal,
-				...(variant === undefined ? {} : { variant }),
-			});
-			const mcpPolicy = await resolveMcpPolicyForAgentRef.current(agent);
-			const snapshot = await mcp.createSnapshot(agent, mcpPolicy);
-			mcpSnapshotRef.current = snapshot;
-			const store = getConversationStore();
-			const hydratedMessages = await store.hydrateAttachments(modelMessages, {
-				purpose: "model",
-				priorityMessageId: modelMessages.findLast(({ role }) => role === "user")
-					?.id,
-				signal,
-				...(attachmentBudgetRef.current ?? {}),
-			});
-			const executeMcpTool =
-				mcp.execute === undefined
-					? undefined
-					: async (
-							currentSnapshot: McpCatalogSnapshot,
-							toolName: string,
-							input: unknown,
-							toolSignal?: AbortSignal
-						) => {
-							const result = await mcp.execute?.(
-								currentSnapshot,
-								toolName,
-								input,
-								toolSignal
-							);
-							return result?.isError
-								? {
-										errorText: "MCP tool call failed.",
-										type: "failure" as const,
-									}
-								: { output: result, type: "success" as const };
-						};
-			const turnId = createAgentTurnId();
-			currentAssistantIdRef.current = `assistant-${turnId}`;
-			const gatedTooling: RuntimeGatedTooling = {
-				gate: toolGateState.gate,
-				mcpSnapshot: snapshot,
-				executeMcpTool,
-				registerChildAbort: (toolCallId, abort) => {
-					childAbortControllersRef.current.set(toolCallId, abort);
-					return () => childAbortControllersRef.current.delete(toolCallId);
-				},
-				resolveResourceLimits: (agentId) =>
-					agentId === undefined
-						? resolveResourceLimitsRef.current()
-						: resolveResourceLimitsForAgentRef.current(agentId),
-			};
-			const turn = buildAgentTurn({
-				agent,
-				delegation,
-				modelMessages: hydratedMessages,
-				modelTarget,
-				resolvedAgent,
-				skill,
-				tools: createGatedCodingTools({
-					agentId: agent,
-					agentTools: resolvedAgent.visibleCodingTools,
-					delegate: runtimeGatedToolingRef.current.delegate,
-					executeMcpTool,
-					gate: gatedTooling.gate,
-					mcpSnapshot: snapshot,
-					parentTurnId: turnId,
-					resolveResourceLimits: gatedTooling.resolveResourceLimits,
-					skillExecution: skillExecutionRef.current ?? undefined,
-					skillTool: skillToolRef.current,
-				}),
-				turnId,
-			});
+			let snapshot: McpCatalogSnapshot | undefined;
 			try {
+				const modelTarget = await resolveChatModelTarget(model, connections, {
+					signal,
+					...(variant === undefined ? {} : { variant }),
+				});
+				const mcpPolicy = await resolveMcpPolicyForAgentRef.current(agent);
+				snapshot = await mcp.createSnapshot(agent, mcpPolicy);
+				mcpSnapshotRef.current = snapshot;
+				const store = getConversationStore();
+				const hydratedMessages = await store.hydrateAttachments(modelMessages, {
+					purpose: "model",
+					priorityMessageId: modelMessages.findLast(
+						({ role }) => role === "user"
+					)?.id,
+					signal,
+					...(attachmentBudgetRef.current ?? {}),
+				});
+				const executeMcpTool = createMcpToolExecutor(mcp.execute);
+				const turnId = createAgentTurnId();
+				currentAssistantIdRef.current = `assistant-${turnId}`;
+				const gatedTooling: RuntimeGatedTooling = {
+					gate: toolGateState.gate,
+					mcpSnapshot: snapshot,
+					executeMcpTool,
+					registerChildAbort: (toolCallId, abort) => {
+						childAbortControllersRef.current.set(toolCallId, abort);
+						return () => childAbortControllersRef.current.delete(toolCallId);
+					},
+					resolveResourceLimits: (agentId) =>
+						agentId === undefined
+							? resolveResourceLimitsRef.current()
+							: resolveResourceLimitsForAgentRef.current(agentId),
+				};
+				const turn = buildAgentTurn({
+					agent,
+					delegation,
+					modelMessages: hydratedMessages,
+					modelTarget,
+					resolvedAgent,
+					skill,
+					tools: createGatedCodingTools({
+						agentId: agent,
+						agentTools: resolvedAgent.visibleCodingTools,
+						delegate: runtimeGatedToolingRef.current.delegate,
+						executeMcpTool,
+						gate: gatedTooling.gate,
+						mcpSnapshot: snapshot,
+						parentTurnId: turnId,
+						resolveResourceLimits: gatedTooling.resolveResourceLimits,
+						skillExecution: skillExecutionRef.current ?? undefined,
+						skillTool: skillToolRef.current,
+					}),
+					turnId,
+				});
 				await runAgentTurnToText({
 					onCheckpoint: (record) =>
 						store.commitConversationRecord({ record, sessionId }),
@@ -1176,9 +1161,11 @@ export function useChat(
 				providerErrorRef.current(turnError);
 				return { rejected: false };
 			} finally {
-				mcp.releaseSnapshot?.(snapshot);
-				if (mcpSnapshotRef.current?.id === snapshot.id) {
-					mcpSnapshotRef.current = null;
+				if (snapshot !== undefined) {
+					mcp.releaseSnapshot?.(snapshot);
+					if (mcpSnapshotRef.current?.id === snapshot.id) {
+						mcpSnapshotRef.current = null;
+					}
 				}
 				currentAssistantIdRef.current = null;
 			}
@@ -1213,15 +1200,9 @@ export function useChat(
 	const delegationExecutorRef = useRef<DelegationExecutor | undefined>(
 		undefined
 	);
-	delegationExecutorRef.current = createDelegationExecutor(
-		sessionId,
-		registry,
+	delegationExecutorRef.current = createDelegationExecutor({
 		connections,
-		mcp,
-		modelRef,
-		variantRef,
-		runtimeGatedToolingRef.current,
-		async (agent) => {
+		createSkillContext: async (agent) => {
 			const permission = await resolvePermissionForAgentRef.current(agent);
 			const catalog = await discoverSkillCatalog(config, (name) =>
 				permission.decide("skill", name)
@@ -1230,8 +1211,14 @@ export function useChat(
 			const tool = buildSkillToolDefinition(catalog);
 			return tool === undefined ? undefined : { execution, tool };
 		},
-		setViewState
-	);
+		fallbackModelRef: modelRef,
+		fallbackVariantRef: variantRef,
+		gatedTooling: runtimeGatedToolingRef.current,
+		mcp,
+		onViewState: setViewState,
+		registry,
+		sessionId,
+	});
 
 	const submit = useCallback(
 		async (
