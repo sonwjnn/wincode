@@ -114,12 +114,14 @@ export const promptHistory = sqliteTable("prompt_history", {
 });
 
 /**
- * One durable Wincode Conversation Record checkpoint: the committed message
- * records, model, terminal outcome, and Agent Turn identity of one semantic
- * checkpoint. Initial handoff rows reuse these columns with a storage-only
- * pending/claimed outcome until the terminal checkpoint updates the row.
- * Token and reasoning deltas never become rows here. Rows are scoped to a
- * session; `position` keeps checkpoints in commit order per session.
+ * One durable Wincode Conversation Record checkpoint: one committed user,
+ * assistant, or completed Tool Call message plus its semantic outcome. Token
+ * and reasoning deltas never become rows here. Rows are scoped to a session;
+ * `position` keeps checkpoints in commit order per session.
+ *
+ * TODO(issue-86): add richer durable interrupted metadata only when the
+ * product has a defined resume/retry contract. Queued and retrying states are
+ * intentionally not persisted.
  */
 export const conversationRecord = sqliteTable(
 	"conversation_record",

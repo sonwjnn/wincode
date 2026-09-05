@@ -5,9 +5,9 @@ import type {
 	AgentTurnEvent,
 	ConversationRecord,
 } from "@wincode/agent-core";
+import { createOperationalFailure } from "@wincode/agent-core";
 import { createModelTarget } from "@wincode/ai/model-target";
 import { buildAgent } from "../../agents/built-ins";
-import type { ConversationMessage } from "../message";
 import {
 	buildAgentTurn,
 	createGatedCodingTools,
@@ -38,35 +38,6 @@ const createTurn = (): AgentTurn => ({
 		kind: "api-key",
 	}),
 });
-
-const sourceMessages: ConversationMessage[] = [
-	{
-		id: "message-user",
-		metadata: { model },
-		parts: [
-			{ text: "Read the attached note", type: "text" },
-			{
-				data: {
-					byteLength: 12,
-					content: "note contents",
-					kind: "file",
-					path: "notes/today.md",
-					truncated: false,
-				},
-				type: "data-fileMention",
-			},
-			{
-				attachmentId: `v1-${"a".repeat(64)}`,
-				byteLength: 12,
-				filename: "today.md",
-				mediaType: "text/markdown",
-				type: "file",
-				url: `attachment://v1-${"a".repeat(64)}`,
-			},
-		],
-		role: "user",
-	},
-];
 
 test("keeps inline file parts in the Agent Turn model input", () => {
 	const imageData = "data:image/png;base64,AA==";
@@ -141,10 +112,295 @@ test("forwards cancellation to a running coding tool", async () => {
 	expect(Reflect.get(result.output, "exitCode")).toBeNull();
 });
 
-test("commits the resolved source transcript before exposing terminal output", async () => {
+test("commits only the durable assistant outcome before exposing terminal output", async () => {
 	const turn = createTurn();
 	const callbackOrder: string[] = [];
 	const checkpoints: ConversationRecord[] = [];
+	const runtime: AgentRuntime = {
+		async *run(currentTurn): AsyncGenerator<AgentTurnEvent> {
+			yield {
+				agentId: currentTurn.agent.id,
+				sequence: 0,
+				startedAt: 100,
+				turnId: currentTurn.id,
+				type: "agent-turn-started",
+			};
+			yield {
+				delta: "internal",
+				sequence: 1,
+				turnId: currentTurn.id,
+				type: "reasoning-delta",
+			};
+			yield {
+				delta: "Done",
+				sequence: 2,
+				turnId: currentTurn.id,
+				type: "text-delta",
+			};
+			yield {
+				finishedAt: 200,
+				sequence: 3,
+				turnId: currentTurn.id,
+				type: "agent-turn-completed",
+				usage: { inputTokens: 12, outputTokens: 4 },
+			};
+		},
+	};
+
+	const result = await runAgentTurnToText({
+		onCheckpoint: (record) => {
+			callbackOrder.push("checkpoint");
+			checkpoints.push(record);
+		},
+		onTerminal: (event) => {
+			callbackOrder.push(`terminal:${event.type}`);
+		},
+		runtime,
+		turn,
+	});
+
+	expect(result).toBe("Done");
+	expect(callbackOrder).toEqual([
+		"checkpoint",
+		"terminal:agent-turn-completed",
+	]);
+	expect(checkpoints).toHaveLength(1);
+	const record = checkpoints[0];
+	if (record === undefined) {
+		throw new Error("The runtime did not produce a Conversation Record.");
+	}
+	expect(record.outcome).toMatchObject({
+		kind: "assistant",
+		terminal: { finishedAt: 200, kind: "completed" },
+	});
+	expect(record.messages).toEqual([
+		{
+			id: "assistant-turn-runtime-test",
+			metadata: {
+				model,
+				usage: { inputTokens: 12, outputTokens: 4 },
+			},
+			parts: [{ text: "Done", type: "text" }],
+			role: "assistant",
+		},
+	]);
+});
+
+test("checkpoints completed Tool Calls separately from terminal assistant text", async () => {
+	const turn = createTurn();
+	const checkpoints: ConversationRecord[] = [];
+	const runtime: AgentRuntime = {
+		async *run(currentTurn): AsyncGenerator<AgentTurnEvent> {
+			yield {
+				agentId: currentTurn.agent.id,
+				sequence: 0,
+				startedAt: 100,
+				turnId: currentTurn.id,
+				type: "agent-turn-started",
+			};
+			yield {
+				input: { command: "git status" },
+				sequence: 1,
+				toolCallId: "call-1",
+				toolName: "shell",
+				turnId: currentTurn.id,
+				type: "tool-call-started",
+			};
+			yield {
+				outcome: { output: { exitCode: 0 }, type: "success" },
+				sequence: 2,
+				toolCallId: "call-1",
+				toolName: "shell",
+				turnId: currentTurn.id,
+				type: "tool-call-finished",
+			};
+			yield {
+				delta: "Done",
+				sequence: 3,
+				turnId: currentTurn.id,
+				type: "text-delta",
+			};
+			yield {
+				finishedAt: 200,
+				sequence: 4,
+				turnId: currentTurn.id,
+				type: "agent-turn-completed",
+			};
+		},
+	};
+
+	await runAgentTurnToText({
+		onCheckpoint: (record) => {
+			checkpoints.push(record);
+		},
+		onToolCheckpoint: (record) => {
+			checkpoints.push(record);
+		},
+		runtime,
+		turn,
+	});
+
+	expect(checkpoints.map(({ outcome }) => outcome.kind)).toEqual([
+		"tool",
+		"assistant",
+	]);
+	expect(checkpoints[0]?.messages[0]?.parts).toEqual([
+		{
+			input: { command: "git status" },
+			outcome: { kind: "success", output: { exitCode: 0 } },
+			sequence: 2,
+			toolCallId: "call-1",
+			toolName: "shell",
+			type: "tool-call",
+		},
+	]);
+	expect(checkpoints[1]?.messages[0]?.parts).toEqual([
+		{ text: "Done", type: "text" },
+	]);
+});
+
+test("does not synthesize an assistant record for a tool-only turn", async () => {
+	const turn = createTurn();
+	const checkpoints: ConversationRecord[] = [];
+	const runtime: AgentRuntime = {
+		async *run(currentTurn): AsyncGenerator<AgentTurnEvent> {
+			yield {
+				agentId: currentTurn.agent.id,
+				sequence: 0,
+				startedAt: 100,
+				turnId: currentTurn.id,
+				type: "agent-turn-started",
+			};
+			yield {
+				input: { command: "git status" },
+				sequence: 1,
+				toolCallId: "call-tool-only",
+				toolName: "shell",
+				turnId: currentTurn.id,
+				type: "tool-call-started",
+			};
+			yield {
+				outcome: { output: { exitCode: 0 }, type: "success" },
+				sequence: 2,
+				toolCallId: "call-tool-only",
+				toolName: "shell",
+				turnId: currentTurn.id,
+				type: "tool-call-finished",
+			};
+			yield {
+				finishedAt: 200,
+				sequence: 3,
+				turnId: currentTurn.id,
+				type: "agent-turn-completed",
+			};
+		},
+	};
+
+	expect(
+		await runAgentTurnToText({
+			onCheckpoint: (record) => {
+				checkpoints.push(record);
+			},
+			onToolCheckpoint: (record) => {
+				checkpoints.push(record);
+			},
+			runtime,
+			turn,
+		})
+	).toBe("");
+	expect(checkpoints.map(({ outcome }) => outcome.kind)).toEqual(["tool"]);
+});
+
+test("persists an empty assistant outcome when no Tool Call ran", async () => {
+	const turn = createTurn();
+	const checkpoints: ConversationRecord[] = [];
+	const runtime: AgentRuntime = {
+		async *run(currentTurn): AsyncGenerator<AgentTurnEvent> {
+			yield {
+				agentId: currentTurn.agent.id,
+				sequence: 0,
+				startedAt: 100,
+				turnId: currentTurn.id,
+				type: "agent-turn-started",
+			};
+			yield {
+				finishedAt: 200,
+				sequence: 1,
+				turnId: currentTurn.id,
+				type: "agent-turn-completed",
+			};
+		},
+	};
+
+	await runAgentTurnToText({
+		onCheckpoint: (record) => {
+			checkpoints.push(record);
+		},
+		runtime,
+		turn,
+	});
+
+	expect(checkpoints.map(({ outcome }) => outcome.kind)).toEqual(["assistant"]);
+	expect(checkpoints[0]?.messages[0]?.parts).toEqual([
+		{ text: "", type: "text" },
+	]);
+});
+
+test("persists safe failure text instead of streamed partial assistant output", async () => {
+	const turn = createTurn();
+	const checkpoints: ConversationRecord[] = [];
+	const runtime: AgentRuntime = {
+		async *run(currentTurn): AsyncGenerator<AgentTurnEvent> {
+			yield {
+				agentId: currentTurn.agent.id,
+				sequence: 0,
+				startedAt: 100,
+				turnId: currentTurn.id,
+				type: "agent-turn-started",
+			};
+			yield {
+				delta: "partial output",
+				sequence: 1,
+				turnId: currentTurn.id,
+				type: "text-delta",
+			};
+			yield {
+				failure: createOperationalFailure({
+					code: "unknown",
+					retry: "never",
+					source: "model",
+				}),
+				finishedAt: 200,
+				sequence: 2,
+				turnId: currentTurn.id,
+				type: "agent-turn-failed",
+			};
+		},
+	};
+
+	await expect(
+		runAgentTurnToText({
+			onCheckpoint: (record) => {
+				checkpoints.push(record);
+			},
+			runtime,
+			turn,
+		})
+	).rejects.toThrow("The model request failed.");
+
+	expect(checkpoints).toHaveLength(1);
+	expect(checkpoints[0]?.messages[0]?.parts).toEqual([
+		{ text: "The model request failed.", type: "text" },
+	]);
+	expect(checkpoints[0]?.outcome).toMatchObject({
+		kind: "assistant",
+		terminal: { kind: "failed" },
+	});
+});
+
+test("surfaces terminal checkpoint failures without exposing terminal output", async () => {
+	const turn = createTurn();
+	let terminalObserved = false;
 	const runtime: AgentRuntime = {
 		async *run(currentTurn): AsyncGenerator<AgentTurnEvent> {
 			yield {
@@ -165,51 +421,21 @@ test("commits the resolved source transcript before exposing terminal output", a
 				sequence: 2,
 				turnId: currentTurn.id,
 				type: "agent-turn-completed",
-				usage: { inputTokens: 12, outputTokens: 4 },
 			};
 		},
 	};
 
-	const result = await runAgentTurnToText({
-		onCheckpoint: (record) => {
-			callbackOrder.push("checkpoint");
-			checkpoints.push(record);
-		},
-		onTerminal: (event) => {
-			callbackOrder.push(`terminal:${event.type}`);
-		},
-		runtime,
-		sourceMessages,
-		turn,
-	});
-
-	expect(result).toBe("Done");
-	expect(callbackOrder).toEqual([
-		"checkpoint",
-		"terminal:agent-turn-completed",
-	]);
-	expect(checkpoints).toHaveLength(1);
-	const record = checkpoints[0];
-	if (record === undefined) {
-		throw new Error("The runtime did not produce a Conversation Record.");
-	}
-	expect(record.outcome).toMatchObject({ finishedAt: 200, kind: "completed" });
-	expect(record.messages).toHaveLength(2);
-	expect(record.messages[0]).toMatchObject({
-		id: "message-user",
-		role: "user",
-	});
-	expect(record.messages[0]?.parts[1]).toMatchObject({
-		data: { path: "notes/today.md" },
-		type: "file-mention",
-	});
-	expect(record.messages[0]?.parts[2]).toMatchObject({
-		attachmentId: `v1-${"a".repeat(64)}`,
-		filename: "today.md",
-		type: "attachment-reference",
-	});
-	expect(record.messages[1]).toMatchObject({
-		parts: [{ text: "Done", type: "text" }],
-		role: "assistant",
-	});
+	await expect(
+		runAgentTurnToText({
+			onCheckpoint: () => {
+				throw new Error("disk unavailable");
+			},
+			onTerminal: () => {
+				terminalObserved = true;
+			},
+			runtime,
+			turn,
+		})
+	).rejects.toThrow("The Agent Turn outcome could not be persisted.");
+	expect(terminalObserved).toBe(false);
 });

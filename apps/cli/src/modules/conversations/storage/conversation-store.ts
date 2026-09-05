@@ -1,7 +1,7 @@
 import type {
 	AgentId,
-	AgentTurnOutcomeRecord,
 	ConversationRecord,
+	ConversationRecordOutcome,
 } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import type {
@@ -25,22 +25,7 @@ export type PromptHistoryEntry = {
 	text: string;
 	pastedText?: Array<{ token: string; text: string }>;
 };
-export type PendingInitialTurnState = "claimed" | "pending";
-
-export type PendingInitialTurn = {
-	message: ConversationMessage;
-	state: PendingInitialTurnState;
-	turnId: string;
-};
-
-/** Storage-only state persisted in `conversation_record.outcome_json`. */
-export type PendingInitialTurnRecordOutcome = {
-	readonly kind: PendingInitialTurnState;
-};
-
-export type ConversationRecordStorageOutcome =
-	| AgentTurnOutcomeRecord
-	| PendingInitialTurnRecordOutcome;
+export type ConversationRecordStorageOutcome = ConversationRecordOutcome;
 
 export type ConversationSession = {
 	createdAt: Date;
@@ -54,9 +39,9 @@ export type ConversationSession = {
 
 export type CreateSessionInput = {
 	agent: AgentId;
-	initialTurnId: string;
 	message: ConversationMessage;
 	model: ChatModelSelection;
+	turnId: string;
 	variant?: ModelVariant;
 };
 
@@ -66,11 +51,14 @@ export type UpdateSessionInput = {
 };
 
 /**
- * One semantic checkpoint: the Wincode Conversation Record committed for one
- * Agent Turn under a session. The commit is atomic at the ConversationStore
- * boundary; a rejected commit leaves no partial durable state.
+ * One semantic checkpoint: a Wincode Conversation Record for one accepted user
+ * message, completed Tool Call, or terminal assistant outcome. The commit is
+ * atomic at the ConversationStore boundary; a rejected commit leaves no
+ * partial durable state.
  */
 export type CommitConversationRecordInput = {
+	conversationModel?: ChatModelSelection;
+	conversationVariant?: ModelVariant;
 	record: ConversationRecord;
 	sessionId: string;
 };
@@ -79,17 +67,6 @@ export type ConversationStore = {
 	appendCompaction: (
 		input: AppendConversationCompactionInput
 	) => Promise<ConversationCompaction>;
-	getPendingInitialTurn: (
-		sessionId: string
-	) => Promise<PendingInitialTurn | undefined>;
-	claimPendingInitialTurn: (
-		sessionId: string,
-		turnId: string
-	) => Promise<boolean>;
-	releasePendingInitialTurn: (
-		sessionId: string,
-		turnId: string
-	) => Promise<boolean>;
 	createSession: (input: CreateSessionInput) => Promise<{ id: string }>;
 	deleteSession: (sessionId: string) => Promise<void>;
 	getCompactions: (sessionId: string) => Promise<ConversationCompaction[]>;

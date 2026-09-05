@@ -1,33 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { ConversationMessage } from "@/modules/conversations/message";
 
-import { getMostRecentSession, mergePendingInitialMessage } from "./utils";
-
-const userMessage = {
-	id: "user-1",
-	parts: [{ text: "hello", type: "text" }],
-	role: "user",
-} satisfies ConversationMessage;
-
-const assistantMessage = {
-	id: "assistant-1",
-	parts: [{ text: "hi", type: "text" }],
-	role: "assistant",
-} satisfies ConversationMessage;
-
-describe("mergePendingInitialMessage", () => {
-	test("prepends a pending message even when committed records exist", () => {
-		expect(mergePendingInitialMessage([assistantMessage], userMessage)).toEqual(
-			[userMessage, assistantMessage]
-		);
-	});
-
-	test("does not duplicate a pending message already projected by records", () => {
-		expect(
-			mergePendingInitialMessage([userMessage, assistantMessage], userMessage)
-		).toEqual([userMessage, assistantMessage]);
-	});
-});
+import { getMostRecentSession } from "./utils";
 
 describe("getMostRecentSession", () => {
 	test("uses last message time instead of pinned session order", () => {

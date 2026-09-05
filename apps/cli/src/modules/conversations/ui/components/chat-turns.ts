@@ -1,5 +1,9 @@
 import { normalizeChatModelSelection } from "@wincode/ai/models";
 import type { ConversationMessage } from "@/modules/conversations/message";
+import {
+	isConversationToolPart,
+	isTerminalConversationToolPart,
+} from "@/modules/conversations/message";
 
 export type ConversationTurn = {
 	id: string;
@@ -93,6 +97,49 @@ export const groupMessagesByConversationTurn = (
 	}
 
 	return turns;
+};
+/**
+ * Returns the logical primary user message that can be explicitly retried in
+ * a rendered turn. Completed Tool Calls make the turn non-retryable because
+ * replaying it would duplicate side effects.
+ */
+export const resolveRetryMessageId = (
+	messages: readonly ConversationMessage[]
+): string | undefined => {
+	const primaryMessages = messages.filter(
+		({ id }) => !id.startsWith("delegated-turn:")
+	);
+	const userIndex = primaryMessages.findLastIndex(
+		({ role }) => role === "user"
+	);
+	const user = userIndex === -1 ? undefined : primaryMessages[userIndex];
+	if (user === undefined) {
+		return;
+	}
+	const afterUser = primaryMessages.slice(userIndex + 1);
+	if (
+		afterUser.some(
+			(message) =>
+				message.role === "assistant" &&
+				message.parts.some(
+					(part) =>
+						isConversationToolPart(part) && isTerminalConversationToolPart(part)
+				)
+		)
+	) {
+		return;
+	}
+	const assistantMessages = afterUser.filter(
+		(message) => message.role === "assistant"
+	);
+	const latestAssistant = assistantMessages.at(-1);
+	if (
+		latestAssistant === undefined ||
+		latestAssistant.metadata?.interrupted === true
+	) {
+		return user.id;
+	}
+	return;
 };
 
 export const resolveConversationTurnFooterMessages = (

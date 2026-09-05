@@ -1,4 +1,5 @@
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
+import { useKeyboard } from "@opentui/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ConversationMessage } from "@/modules/conversations/message";
 import { useModelPricing } from "@/modules/model-pricing";
@@ -6,7 +7,10 @@ import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
 import type { ApprovalOutcome } from "@/shared/providers/approval/types";
 import { PendingApprovalDock } from "@/shared/providers/approval/ui/tool-approval-panel";
-import { useToggleShortcut } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
+import {
+	useKeyboardLayer,
+	useToggleShortcut,
+} from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
 import { ProgressBar } from "@/shared/ui/progress-bar";
@@ -25,11 +29,13 @@ import { buildConversationTimeline } from "./chat-timeline";
 import {
 	groupMessagesByConversationTurn,
 	resolveConversationTurnFooterMessages,
+	resolveRetryMessageId,
 } from "./chat-turns";
 import { CompactionDivider } from "./compaction-divider";
 import { SessionUsageBar } from "./session-usage-bar";
 
 type ChatShellProps = {
+	activeMessages?: readonly ConversationMessage[];
 	compactions?: readonly ConversationCompaction[];
 	error?: unknown;
 	isBusy: boolean;
@@ -38,6 +44,7 @@ type ChatShellProps = {
 	onApproval?: (id: string, outcome: ApprovalOutcome) => void;
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
+	onRetry?: (messageId: string) => void | Promise<void>;
 	promptHistory: PromptHistoryEntry[];
 	onSubmit: (
 		submission: ChatPromptSubmission
@@ -45,6 +52,7 @@ type ChatShellProps = {
 	viewState?: ConversationViewState;
 };
 export function ChatShell({
+	activeMessages,
 	compactions = [],
 	error,
 	isBusy,
@@ -53,11 +61,13 @@ export function ChatShell({
 	onApproval,
 	onCompact,
 	onOpenSettings,
+	onRetry,
 	promptHistory,
 	onSubmit,
 	viewState,
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
+	const { isTopLayer } = useKeyboardLayer();
 	const [scrollRequest, setScrollRequest] = useState(0);
 	const { agent, model } = usePromptConfig();
 	const { colors } = useTheme();
@@ -72,6 +82,13 @@ export function ChatShell({
 	const turns = groupMessagesByConversationTurn(displayMessages);
 	const timeline = buildConversationTimeline(displayMessages, compactions);
 	const footerMessages = resolveConversationTurnFooterMessages(turns);
+	const retryableMessages = activeMessages ?? displayMessages;
+	const latestRetryMessageId = resolveRetryMessageId(displayMessages);
+	const canRetry =
+		!isBusy &&
+		latestRetryMessageId !== undefined &&
+		retryableMessages.some(({ id }) => id === latestRetryMessageId) &&
+		onRetry !== undefined;
 	const usage = useMemo(
 		() => summarizeSessionUsage(displayMessages, model, table, compactions),
 		[compactions, displayMessages, model, table]
@@ -85,6 +102,20 @@ export function ChatShell({
 	}, [scrollRequest]);
 	useToggleShortcut("ctrl+o", () => {
 		setScrollRequest((request) => request + 1);
+	});
+	useKeyboard((key) => {
+		if (
+			!canRetry ||
+			latestRetryMessageId === undefined ||
+			onRetry === undefined ||
+			!isTopLayer("base") ||
+			!key.option ||
+			key.name !== "r"
+		) {
+			return;
+		}
+		key.preventDefault();
+		void onRetry(latestRetryMessageId);
 	});
 
 	const handleSubmit = (submission: ChatPromptSubmission) => {
@@ -129,6 +160,14 @@ export function ChatShell({
 									/>
 								);
 							}
+							const turnRetryMessageId = resolveRetryMessageId(
+								item.turn.messages
+							);
+							const canRetryTurn =
+								!isBusy &&
+								turnRetryMessageId === latestRetryMessageId &&
+								turnRetryMessageId !== undefined &&
+								retryableMessages.some(({ id }) => id === turnRetryMessageId);
 							return (
 								<box
 									key={item.turn.id}
@@ -138,6 +177,7 @@ export function ChatShell({
 									<ChatMessage
 										footerMessage={footerMessages.get(item.turn.id)}
 										messages={item.turn.messages}
+										onRetry={canRetryTurn ? onRetry : undefined}
 									/>
 								</box>
 							);

@@ -8,6 +8,7 @@ import {
 	type ConversationMessagePart,
 	type ConversationMessageRecord,
 	type ConversationRecord,
+	type ConversationRecordOutcome,
 	type ConversationToolCallPart,
 	isAgentTurnDelegation,
 	isAgentTurnMessageRecord,
@@ -40,19 +41,6 @@ import {
 	attachmentReferenceToFilePart,
 	getAttachmentReference,
 } from "./attachment-store";
-import type { PendingInitialTurnRecordOutcome } from "./conversation-store";
-export const isPendingInitialTurnRecordOutcome = (
-	value: unknown
-): value is PendingInitialTurnRecordOutcome => {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		return false;
-	}
-	const candidate = value as Record<string, unknown>;
-	return (
-		Object.keys(candidate).every((key) => key === "kind") &&
-		(candidate.kind === "claimed" || candidate.kind === "pending")
-	);
-};
 
 const hasText = (value: unknown): boolean =>
 	typeof value === "string" && value.length > 0;
@@ -120,7 +108,7 @@ const isUsage = (value: unknown): boolean => {
 const isFailure = (value: unknown): value is OperationalFailure =>
 	isOperationalFailure(value);
 
-const isOutcome = (value: unknown): boolean => {
+const isAgentTurnOutcome = (value: unknown): boolean => {
 	if (typeof value !== "object" || value === null) {
 		return false;
 	}
@@ -153,6 +141,23 @@ const isOutcome = (value: unknown): boolean => {
 		);
 	}
 	return false;
+};
+
+const isConversationRecordOutcome = (
+	value: unknown
+): value is ConversationRecordOutcome => {
+	if (typeof value !== "object" || value === null) {
+		return false;
+	}
+	const outcome = value as Record<string, unknown>;
+	if (outcome.kind === "user" || outcome.kind === "tool") {
+		return Object.keys(outcome).length === 1;
+	}
+	return (
+		outcome.kind === "assistant" &&
+		Object.keys(outcome).every((key) => key === "kind" || key === "terminal") &&
+		isAgentTurnOutcome(outcome.terminal)
+	);
 };
 
 export class ConversationRecordInvariantError extends AgentInvariantError {
@@ -198,16 +203,30 @@ export const getConversationRecordValidationError = (
 	if (!isRecordModel(record.model)) {
 		return "record model must name a provider and model id";
 	}
-	if (!isOutcome(record.outcome)) {
-		return "record outcome is not a valid terminal outcome";
+	if (!isConversationRecordOutcome(record.outcome)) {
+		return "record outcome is not a valid Conversation Record outcome";
 	}
 	if (
 		!(
 			Array.isArray(record.messages) &&
+			record.messages.length === 1 &&
 			record.messages.every(isAgentTurnMessageRecord)
 		)
 	) {
-		return "record messages must contain committed text or Tool Call parts";
+		return "record must contain one durable message";
+	}
+	const message = record.messages[0];
+	if (message === undefined) {
+		return "record must contain one durable message";
+	}
+	if (
+		(record.outcome.kind === "user" && message.role !== "user") ||
+		(record.outcome.kind === "assistant" && message.role !== "assistant") ||
+		(record.outcome.kind === "tool" &&
+			(message.role !== "assistant" ||
+				!message.parts.some(isConversationToolCallPart)))
+	) {
+		return "record outcome does not match its durable message";
 	}
 	return null;
 };
@@ -241,9 +260,6 @@ const metadataForRecord = (
 		...((metadata?.agent ?? record.agentId)
 			? { agent: metadata?.agent ?? record.agentId }
 			: {}),
-		...(metadata?.interrupted === undefined
-			? {}
-			: { interrupted: metadata.interrupted }),
 		...(model === undefined ? {} : { model }),
 		...(metadata?.responseTimeMs === undefined
 			? {}
@@ -361,9 +377,6 @@ const toDurableMetadata = (
 	const skill = metadata.skill;
 	return {
 		...(metadata.agent === undefined ? {} : { agent: metadata.agent }),
-		...(metadata.interrupted === undefined
-			? {}
-			: { interrupted: metadata.interrupted }),
 		...(metadata.model === undefined ? {} : { model: metadata.model }),
 		...(metadata.responseTimeMs === undefined
 			? {}
@@ -443,6 +456,42 @@ const toDurableConversationPart = (
 	}
 	return [];
 };
+export const buildUserConversationRecord = ({
+	agentId,
+	delegation,
+	message,
+	model,
+	turnId,
+	variant,
+}: {
+	agentId: string;
+	delegation?: ConversationRecord["delegation"];
+	message: ConversationMessage;
+	model: Pick<ConversationRecord["model"], "modelId" | "providerId">;
+	turnId: string;
+	variant?: ConversationRecord["model"]["variant"];
+}): ConversationRecord => {
+	const durableMessage = toDurableConversationMessageRecord(message);
+	if (durableMessage === undefined || durableMessage.role !== "user") {
+		throw new ConversationRecordInvariantError(
+			"User Conversation Record has no durable message."
+		);
+	}
+	return {
+		agentId,
+		...(delegation === undefined ? {} : { delegation }),
+		id: `record-${crypto.randomUUID()}`,
+		messages: [durableMessage],
+		model: {
+			modelId: model.modelId,
+			providerId: model.providerId,
+			...(variant === undefined ? {} : { variant }),
+		},
+		outcome: { kind: "user" },
+		turnId,
+		version: CONVERSATION_RECORD_VERSION,
+	};
+};
 
 export const toDurableConversationMessageRecord = (
 	message: ConversationMessage
@@ -468,73 +517,50 @@ const delegatedMessageId = (
 	message: ConversationMessageRecord,
 	index: number
 ): string => `delegated-turn:${record.turnId}:${index}:${message.id}`;
-const projectTerminalOutcome = (
-	record: ConversationRecord,
-	messages: ConversationMessage[],
-	outcomeId: string
-): ConversationMessage[] => {
-	if (record.outcome.kind === "completed") {
-		return messages;
-	}
-	return [
-		...messages,
-		{
-			id: outcomeId,
-			metadata: { agent: record.agentId, interrupted: true },
-			parts: [
-				{
-					text: `${record.outcome.kind}: ${record.outcome.failure.message}`,
-					type: "text",
-				},
-			],
-			role: "assistant",
-		},
-	];
-};
 
-const projectDelegatedRecord = (
-	record: ConversationRecord
-): ConversationMessage[] => {
-	const messages = record.messages.flatMap((message, index) => {
+const projectRecord = (record: ConversationRecord): ConversationMessage[] =>
+	record.messages.flatMap((message, index) => {
 		if (message.id === "skill-context") {
 			return [];
 		}
 		const projected = toConversationMessage(message, record);
+		const terminalOutcome =
+			record.outcome.kind === "assistant" &&
+			record.outcome.terminal.kind !== "completed"
+				? record.outcome.terminal.kind
+				: undefined;
+		const projectedWithOutcome =
+			terminalOutcome === undefined
+				? projected
+				: {
+						...projected,
+						metadata: {
+							...(projected.metadata ?? {}),
+							terminalOutcome,
+						},
+					};
 		return [
-			{
-				...projected,
-				id: delegatedMessageId(record, message, index),
-			},
+			record.delegation === undefined
+				? projectedWithOutcome
+				: {
+						...projectedWithOutcome,
+						id: delegatedMessageId(record, message, index),
+					},
 		];
 	});
-	return projectTerminalOutcome(
-		record,
-		messages,
-		`delegated-turn:${record.turnId}:outcome`
-	);
-};
 
 /**
- * Projects committed records into the CLI's presentation-owned message
- * contract. The newest primary record contains the complete primary
- * transcript; delegated records remain separate display rows.
+ * Projects committed rows into the presentation-owned message contract.
+ * Primary rows retain storage order; delegated rows remain grouped after the
+ * primary transcript so child records cannot absorb the parent's later rows.
  */
 export const projectConversationRecords = (
 	records: readonly ConversationRecord[]
-): ConversationMessage[] => {
-	const primary = records.findLast((record) => record.delegation === undefined);
-	const primaryMessages =
-		primary === undefined
-			? []
-			: projectTerminalOutcome(
-					primary,
-					primary.messages.map((message) =>
-						toConversationMessage(message, primary)
-					),
-					`assistant-${primary.turnId}:outcome`
-				);
-	const delegatedMessages = records
+): ConversationMessage[] => [
+	...records
+		.filter((record) => record.delegation === undefined)
+		.flatMap(projectRecord),
+	...records
 		.filter((record) => record.delegation !== undefined)
-		.flatMap(projectDelegatedRecord);
-	return [...primaryMessages, ...delegatedMessages];
-};
+		.flatMap(projectRecord),
+];

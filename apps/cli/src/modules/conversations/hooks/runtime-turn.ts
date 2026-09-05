@@ -9,12 +9,12 @@ import {
 	type AgentTurnFilePart,
 	type AgentTurnInterruptedEvent,
 	type AgentTurnMessage,
+	type AgentTurnOutcomeRecord,
 	type AgentTurnPart,
 	type AgentTurnTerminalEvent,
 	agentIdSchema,
 	CONVERSATION_RECORD_VERSION,
 	type ConversationMessageMetadataRecord,
-	type ConversationMessageRecord,
 	type ConversationRecord,
 	type ConversationToolCallPart,
 	createAgentTurnAbortEvent,
@@ -60,7 +60,6 @@ import {
 	formatAttachmentUnavailableMarker,
 	getAttachmentReference,
 } from "../storage/attachment-store";
-import { toDurableConversationMessageRecord } from "../storage/conversation-record";
 
 export type RuntimeFactory = () => AgentRuntime;
 
@@ -736,29 +735,6 @@ export type CheckpointCommitter = (
 	record: ConversationRecord
 ) => Promise<void> | void;
 
-const durableInputMessages = (
-	turn: AgentTurn,
-	sourceMessages?: readonly ConversationMessage[]
-): ConversationMessageRecord[] => {
-	if (sourceMessages !== undefined) {
-		return sourceMessages.flatMap((message) => {
-			const durable = toDurableConversationMessageRecord(message);
-			return durable === undefined ? [] : [durable];
-		});
-	}
-	return turn.input.messages.flatMap((message) => {
-		if (message.role === "tool") {
-			return [];
-		}
-		const parts = message.parts.flatMap((part) =>
-			part.type === "text" ? [{ text: part.text, type: "text" as const }] : []
-		);
-		return parts.length === 0
-			? []
-			: [{ id: message.id, parts, role: message.role }];
-	});
-};
-
 const toDurableToolPart = (part: {
 	input: unknown;
 	outcome:
@@ -785,98 +761,80 @@ const toDurableToolPart = (part: {
 	type: "tool-call",
 });
 
+const recordModelForTurn = (turn: AgentTurn): ConversationRecord["model"] => ({
+	modelId: turn.model.modelId,
+	providerId: turn.model.providerId,
+	...(turn.model.variant === undefined ? {} : { variant: turn.model.variant }),
+});
+const assistantRecordMetadata = (
+	turn: AgentTurn,
+	usage?: NonNullable<ReturnType<typeof normalizeModelUsage>>
+): ConversationMessageMetadataRecord => ({
+	model: {
+		modelId: turn.model.modelId,
+		providerId: turn.model.providerId,
+	},
+	...(turn.model.variant === undefined ? {} : { variant: turn.model.variant }),
+	...(usage === undefined ? {} : { usage }),
+});
+
 /**
- * Builds the Conversation Record for a terminal Agent Turn Event. A turn
- * commits the resolved text input plus the assembled assistant reply: the
- * streamed text when the turn completed with text and every Tool Call that
- * reached a settled outcome, in event-sequence order. Reasoning deltas and
- * in-flight Tool Calls are never persisted.
+ * Builds one durable assistant row for a terminal Agent Turn. Tool Call rows
+ * are committed separately at their completion boundaries, so a successful
+ * tool-only turn intentionally returns no assistant row.
  */
 export const buildTerminalConversationRecord = ({
 	assistantText,
 	event,
-	sourceMessages,
-	toolCalls,
+	hasCompletedToolCalls = false,
 	turn,
 }: {
 	assistantText: string;
 	event: AgentTurnTerminalEvent;
-	sourceMessages?: readonly ConversationMessage[];
-	toolCalls: readonly {
-		input: unknown;
-		outcome:
-			| { errorText: string; type: "failure" }
-			| {
-					output: unknown;
-					type: "success";
-			  };
-		sequence: number;
-		toolCallId: string;
-		toolName: string;
-	}[];
+	hasCompletedToolCalls?: boolean;
 	turn: AgentTurn;
-}): ConversationRecord => {
+}): ConversationRecord | undefined => {
 	const safeEvent = normalizeTerminalEvent(event, turn);
 	const safeUsage =
 		safeEvent.type === "agent-turn-completed"
 			? (normalizeModelUsage(safeEvent.usage) ?? undefined)
 			: undefined;
-	const messages = durableInputMessages(turn, sourceMessages);
-	const assistantParts: ConversationToolCallPart[] =
-		toolCalls.map(toDurableToolPart);
-	const assistantMetadata: ConversationMessageMetadataRecord = {
-		agent: turn.agent.id,
-		interrupted: safeEvent.type !== "agent-turn-completed",
-		model: {
-			modelId: turn.model.modelId,
-			providerId: turn.model.providerId,
-		},
-		...(safeUsage === undefined ? {} : { usage: safeUsage }),
-		...(turn.model.variant === undefined
-			? {}
-			: { variant: turn.model.variant }),
-	};
-	if (safeEvent.type === "agent-turn-completed" && assistantText.length > 0) {
-		messages.push({
-			id: `assistant-${turn.id}`,
-			metadata: assistantMetadata,
-			parts: [{ text: assistantText, type: "text" }, ...assistantParts],
-			role: "assistant",
-		});
-	} else if (assistantParts.length > 0) {
-		messages.push({
-			id: `assistant-${turn.id}`,
-			metadata: assistantMetadata,
-			parts: [...assistantParts],
-			role: "assistant",
-		});
+	const text =
+		safeEvent.type === "agent-turn-completed"
+			? assistantText
+			: safeEvent.failure.message;
+	if (
+		text.length === 0 &&
+		(safeEvent.type !== "agent-turn-completed" || hasCompletedToolCalls)
+	) {
+		return;
 	}
 
-	let outcome: ConversationRecord["outcome"];
+	let terminal: AgentTurnOutcomeRecord;
 	switch (safeEvent.type) {
 		case "agent-turn-cancelled":
-			outcome = {
+			terminal = {
 				failure: safeEvent.failure,
 				finishedAt: safeEvent.finishedAt,
 				kind: "cancelled",
 			};
 			break;
 		case "agent-turn-completed":
-			outcome = {
+			terminal = {
 				finishedAt: safeEvent.finishedAt,
 				kind: "completed",
 				...(safeUsage === undefined ? {} : { usage: safeUsage }),
 			};
 			break;
 		case "agent-turn-failed":
-			outcome = {
+			terminal = {
 				failure: safeEvent.failure,
 				finishedAt: safeEvent.finishedAt,
 				kind: "failed",
 			};
 			break;
 		case "agent-turn-interrupted":
-			outcome = {
+			terminal = {
 				failure: safeEvent.failure,
 				finishedAt: safeEvent.finishedAt,
 				kind: "interrupted",
@@ -895,19 +853,169 @@ export const buildTerminalConversationRecord = ({
 		agentId: turn.agent.id,
 		...(turn.delegation === undefined ? {} : { delegation: turn.delegation }),
 		id: `record-${crypto.randomUUID()}`,
-		messages,
-		model: {
-			modelId: turn.model.modelId,
-			providerId: turn.model.providerId,
-			...(turn.model.variant === undefined
-				? {}
-				: { variant: turn.model.variant }),
-		},
-		outcome,
+		messages: [
+			{
+				id: `assistant-${turn.id}`,
+				metadata: assistantRecordMetadata(turn, safeUsage),
+				parts: [{ text, type: "text" }],
+				role: "assistant",
+			},
+		],
+		model: recordModelForTurn(turn),
+		outcome: { kind: "assistant", terminal },
 		turnId: turn.id,
 		version: CONVERSATION_RECORD_VERSION,
 	};
 };
+const buildAssistantOutcomeConversationRecord = ({
+	agentId,
+	delegation,
+	model,
+	text,
+	terminal,
+	turnId,
+	variant,
+}: {
+	agentId: AgentId;
+	delegation?: AgentTurnDelegation;
+	model: Pick<ConversationRecord["model"], "modelId" | "providerId">;
+	text: string;
+	terminal: AgentTurnOutcomeRecord;
+	turnId: string;
+	variant?: ConversationRecord["model"]["variant"];
+}): ConversationRecord => ({
+	agentId,
+	...(delegation === undefined ? {} : { delegation }),
+	id: `record-${crypto.randomUUID()}`,
+	messages: [
+		{
+			id: `assistant-${turnId}`,
+			metadata: {
+				agent: agentId,
+				model: {
+					modelId: model.modelId,
+					providerId: model.providerId,
+				},
+				...(variant === undefined ? {} : { variant }),
+			},
+			parts: [{ text, type: "text" }],
+			role: "assistant",
+		},
+	],
+	model: {
+		modelId: model.modelId,
+		providerId: model.providerId,
+		...(variant === undefined ? {} : { variant }),
+	},
+	outcome: { kind: "assistant", terminal },
+	turnId,
+	version: CONVERSATION_RECORD_VERSION,
+});
+
+export const buildAssistantFailureConversationRecord = ({
+	agentId,
+	delegation,
+	error,
+	model,
+	turnId,
+	variant,
+}: {
+	agentId: AgentId;
+	delegation?: AgentTurnDelegation;
+	error: unknown;
+	model: Pick<ConversationRecord["model"], "modelId" | "providerId">;
+	turnId: string;
+	variant?: ConversationRecord["model"]["variant"];
+}): ConversationRecord => {
+	const failure = normalizeOperationalFailure(error, {
+		modelId: model.modelId,
+		providerId: model.providerId,
+	});
+	return buildAssistantOutcomeConversationRecord({
+		agentId,
+		delegation,
+		model,
+		terminal: {
+			failure,
+			finishedAt: Date.now(),
+			kind: "failed",
+		},
+		text: failure.message,
+		turnId,
+		variant,
+	});
+};
+
+export const buildAssistantCancelledConversationRecord = ({
+	agentId,
+	delegation,
+	model,
+	turnId,
+	variant,
+}: {
+	agentId: AgentId;
+	delegation?: AgentTurnDelegation;
+	model: Pick<ConversationRecord["model"], "modelId" | "providerId">;
+	turnId: string;
+	variant?: ConversationRecord["model"]["variant"];
+}): ConversationRecord => {
+	const failure = createOperationalFailure({
+		code: "cancelled",
+		details: {
+			modelId: model.modelId,
+			providerId: model.providerId,
+		},
+		retry: "never",
+		source: "runtime",
+	});
+	return buildAssistantOutcomeConversationRecord({
+		agentId,
+		delegation,
+		model,
+		terminal: {
+			failure,
+			finishedAt: Date.now(),
+			kind: "cancelled",
+		},
+		text: failure.message,
+		turnId,
+		variant,
+	});
+};
+
+export const buildToolConversationRecord = ({
+	input,
+	event,
+	turn,
+}: {
+	event: Extract<AgentTurnEvent, { type: "tool-call-finished" }>;
+	input: unknown;
+	turn: AgentTurn;
+}): ConversationRecord => ({
+	agentId: turn.agent.id,
+	...(turn.delegation === undefined ? {} : { delegation: turn.delegation }),
+	id: `record-${crypto.randomUUID()}`,
+	messages: [
+		{
+			id: `tool-${turn.id}-${event.toolCallId}`,
+			metadata: assistantRecordMetadata(turn),
+			parts: [
+				toDurableToolPart({
+					input,
+					outcome: event.outcome,
+					sequence: event.sequence,
+					toolCallId: event.toolCallId,
+					toolName: event.toolName,
+				}),
+			],
+			role: "assistant",
+		},
+	],
+	model: recordModelForTurn(turn),
+	outcome: { kind: "tool" },
+	turnId: turn.id,
+	version: CONVERSATION_RECORD_VERSION,
+});
 const CHECKPOINT_FAILURE_MESSAGE =
 	"The Agent Turn outcome could not be persisted.";
 
@@ -950,29 +1058,45 @@ export const runAgentTurnToText = async ({
 	onCheckpoint,
 	onEvent,
 	onTerminal,
+	onToolCheckpoint,
 	onViewState,
 	runtime,
 	signal,
-	sourceMessages,
 	turn,
 }: {
 	onCheckpoint?: CheckpointCommitter;
 	onEvent?: (event: AgentTurnEvent) => void | Promise<void>;
 	onTerminal?: (event: AgentTurnTerminalEvent) => void | Promise<void>;
+	onToolCheckpoint?: CheckpointCommitter;
 	onViewState?: (state: ConversationViewState) => void;
 	runtime: AgentRuntime;
 	signal?: AbortSignal;
-	sourceMessages?: readonly ConversationMessage[];
 	turn: AgentTurn;
 }): Promise<string> => {
 	let assistantText = "";
 	let terminal: AgentTurnTerminalEvent | undefined;
 	let lastSequence = -1;
+	let completedToolCalls = 0;
 	const startedTools = new Map<
 		string,
 		{ readonly input: unknown; readonly toolName: string }
 	>();
-	const toolCalls = new Map<string, ConversationToolCallPart>();
+	const commit = async (
+		committer: CheckpointCommitter | undefined,
+		record: ConversationRecord | undefined
+	): Promise<void> => {
+		if (committer === undefined || record === undefined) {
+			return;
+		}
+		try {
+			await committer(record);
+		} catch (error) {
+			if (isAgentInvariantError(error)) {
+				throw error;
+			}
+			throw new Error(CHECKPOINT_FAILURE_MESSAGE, { cause: error });
+		}
+	};
 	await consumeAgentTurnEvents({
 		onEvent: async (event) => {
 			lastSequence = Math.max(lastSequence, event.sequence);
@@ -988,17 +1112,15 @@ export const runAgentTurnToText = async ({
 			if (event.type === "tool-call-finished") {
 				const started = startedTools.get(event.toolCallId);
 				if (started !== undefined) {
-					toolCalls.set(event.toolCallId, {
-						input: started.input,
-						outcome:
-							event.outcome.type === "success"
-								? { kind: "success", output: event.outcome.output }
-								: { errorText: event.outcome.errorText, kind: "failure" },
-						sequence: event.sequence,
-						toolCallId: event.toolCallId,
-						toolName: started.toolName,
-						type: "tool-call",
-					});
+					completedToolCalls += 1;
+					await commit(
+						onToolCheckpoint,
+						buildToolConversationRecord({
+							event,
+							input: started.input,
+							turn,
+						})
+					);
 					startedTools.delete(event.toolCallId);
 				}
 			}
@@ -1020,30 +1142,11 @@ export const runAgentTurnToText = async ({
 	);
 	const record = buildTerminalConversationRecord({
 		assistantText,
+		hasCompletedToolCalls: completedToolCalls > 0,
 		event: terminalEvent,
-		toolCalls: [...toolCalls.values()]
-			.toSorted((left, right) => left.sequence - right.sequence)
-			.map(({ input, outcome, sequence, toolCallId, toolName }) => ({
-				input,
-				outcome:
-					outcome.kind === "success"
-						? { output: outcome.output, type: "success" as const }
-						: { errorText: outcome.errorText, type: "failure" as const },
-				sequence,
-				toolCallId,
-				toolName,
-			})),
-		sourceMessages,
 		turn,
 	});
-	try {
-		await onCheckpoint?.(record);
-	} catch (error) {
-		if (isAgentInvariantError(error)) {
-			throw error;
-		}
-		throw new Error(CHECKPOINT_FAILURE_MESSAGE, { cause: error });
-	}
+	await commit(onCheckpoint, record);
 	await onTerminal?.(terminalEvent);
 	if (terminalEvent.type === "agent-turn-completed") {
 		return assistantText;

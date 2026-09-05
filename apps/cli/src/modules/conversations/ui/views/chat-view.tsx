@@ -45,7 +45,6 @@ import {
 	resolveLastUsedConversationSelection,
 } from "../../selection";
 import { projectConversationRecords } from "../../storage/conversation-record";
-import type { PendingInitialTurn } from "../../storage/conversation-store";
 import { getConversationStore } from "../../storage/get-conversation-store";
 import { type ChatPromptSubmission, getMostRecentSession } from "../../utils";
 import { AsciiArt } from "../components/ascii-art";
@@ -56,13 +55,17 @@ import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
 
 const INTERRUPT_CONFIRMATION_TIMEOUT_MS = 3000;
 
+export type SessionInitialSubmission = {
+	messageId: string;
+};
+
 type ChatSessionViewProps = {
 	mode: "session";
 	initialActiveMessages?: ConversationMessage[];
 	initialCompactions?: ConversationCompaction[];
 	initialMessages: ConversationMessage[];
 	initialModel?: ChatModelSelection;
-	initialPendingTurn?: PendingInitialTurn;
+	initialSubmission?: SessionInitialSubmission;
 	initialVariant?: ModelVariant;
 	sessionId: string;
 	sessionTitle: string;
@@ -73,7 +76,7 @@ type ChatHomeViewProps = {
 };
 
 type ChatViewProps = ChatHomeViewProps | ChatSessionViewProps;
-type PendingTurnSendInput = Pick<
+type SessionSendInput = Pick<
 	ConversationSendInput,
 	| "agent"
 	| "conversationModel"
@@ -83,7 +86,7 @@ type PendingTurnSendInput = Pick<
 	| "variant"
 >;
 
-type PendingTurnSelectionInput = {
+type SessionSelectionInput = {
 	agent: AgentId;
 	initialMessage: ConversationMessage;
 	model: ChatModelSelection;
@@ -92,14 +95,14 @@ type PendingTurnSelectionInput = {
 	variant?: ModelVariant;
 };
 
-const resolvePendingTurnSelection = ({
+const resolveSessionSelection = ({
 	agent,
 	initialMessage,
 	model,
 	registry,
 	restoredConfig,
 	variant,
-}: PendingTurnSelectionInput): PendingTurnSendInput => {
+}: SessionSelectionInput): SessionSendInput => {
 	const resolvedModel =
 		normalizeChatModelSelection(initialMessage.metadata?.model ?? model) ??
 		model;
@@ -169,11 +172,12 @@ function SessionChatView({
 	initialActiveMessages = initialMessages,
 	initialCompactions = [],
 	initialModel,
-	initialPendingTurn,
+	initialSubmission,
 	initialVariant,
 	sessionId,
 	sessionTitle,
 }: ChatSessionViewProps) {
+	const router = useRouter();
 	const { agent, model, setAgent, setModel, setVariant, variant } =
 		usePromptConfig();
 	const settingsRuntime = useMemo(
@@ -200,6 +204,7 @@ function SessionChatView({
 		ConversationMessage[] | null
 	>(null);
 	const {
+		activeMessages,
 		cancelCompaction,
 		catalogDiagnostic,
 		compact,
@@ -446,6 +451,34 @@ function SessionChatView({
 		}
 		return true;
 	};
+	const retryMessage = async (messageId: string): Promise<void> => {
+		if (
+			isTurnBusy ||
+			isCompacting ||
+			registry === null ||
+			!isPromptConfigRestored
+		) {
+			return;
+		}
+		const initialMessage = messages.find(({ id }) => id === messageId);
+		if (initialMessage?.role !== "user") {
+			return;
+		}
+		const outcome = await send({
+			...resolveSessionSelection({
+				agent,
+				initialMessage,
+				model,
+				registry,
+				restoredConfig,
+				variant,
+			}),
+			messageId,
+		});
+		if (outcome.rejected) {
+			show({ message: outcome.reason, variant: "error" });
+		}
+	};
 	const routeApproval = (id: string, outcome: ApprovalOutcome): void => {
 		let controllerOutcome:
 			| { decision: "allow"; remember: boolean }
@@ -494,16 +527,16 @@ function SessionChatView({
 	}, [catalogDiagnostic, show]);
 
 	useEffect(() => {
-		const pending = initialPendingTurn;
-		const initialMessage = pending?.message;
+		const submission = initialSubmission;
+		const initialMessage = submission
+			? initialMessages.find(({ id }) => id === submission.messageId)
+			: undefined;
 
 		if (
 			registry === null ||
 			!isPromptConfigRestored ||
-			pending?.state !== "pending" ||
 			initialMessage === undefined ||
-			initialMessage.role !== "user" ||
-			!initialMessages.some(({ id }) => id === initialMessage.id)
+			initialMessage.role !== "user"
 		) {
 			return;
 		}
@@ -512,19 +545,16 @@ function SessionChatView({
 			return;
 		}
 
-		const startPendingTurn = async () => {
-			const store = getConversationStore();
-			const claimed = await store.claimPendingInitialTurn(
-				sessionId,
-				pending.turnId
-			);
-			if (!claimed) {
-				return;
-			}
-
-			submittedInitialMessageRef.current = initialMessage.id;
+		submittedInitialMessageRef.current = initialMessage.id;
+		const startInitialTurn = async (): Promise<void> => {
+			await router.navigate({
+				params: { id: sessionId },
+				replace: true,
+				state: {},
+				to: "/sessions/$id",
+			});
 			const outcome = await send({
-				...resolvePendingTurnSelection({
+				...resolveSessionSelection({
 					agent,
 					initialMessage,
 					model,
@@ -533,40 +563,30 @@ function SessionChatView({
 					variant,
 				}),
 				messageId: initialMessage.id,
-				turnId: pending.turnId,
 			});
-			if (!outcome.rejected) {
-				return;
+			if (outcome.rejected) {
+				show({ message: outcome.reason, variant: "error" });
 			}
-
-			try {
-				await store.releasePendingInitialTurn(sessionId, pending.turnId);
-			} catch {
-				show({
-					message: "Could not reset the initial turn; it remains claimed.",
-					variant: "error",
-				});
-			}
-			show({ message: outcome.reason, variant: "error" });
 		};
 
-		startPendingTurn().catch((error: unknown) => {
+		startInitialTurn().catch((error: unknown) => {
 			show({
 				message:
 					error instanceof Error
 						? error.message
-						: "Could not resume the initial turn.",
+						: "Could not start the Agent Turn.",
 				variant: "error",
 			});
 		});
 	}, [
 		agent,
 		initialMessages,
-		initialPendingTurn,
+		initialSubmission,
 		isPromptConfigRestored,
 		model,
 		registry,
 		restoredConfig,
+		router,
 		send,
 		sessionId,
 		show,
@@ -577,6 +597,7 @@ function SessionChatView({
 		<box flexDirection="row" height="100%" width="100%">
 			<box flexGrow={1} height="100%" paddingX={1}>
 				<ChatShell
+					activeMessages={activeMessages}
 					compactions={compactions}
 					error={error}
 					isBusy={isBusy}
@@ -585,6 +606,7 @@ function SessionChatView({
 					onApproval={routeApproval}
 					onCompact={executeCompactionCommand}
 					onOpenSettings={openSettings}
+					onRetry={retryMessage}
 					onSubmit={submitMessage}
 					promptHistory={promptHistory}
 					viewState={viewState}
@@ -740,13 +762,17 @@ function HomeChatView() {
 		const durableMessage = externalized ?? initialMessage;
 		const { id } = await store.createSession({
 			agent: effective.agent,
-			initialTurnId: createAgentTurnId(),
 			message: durableMessage,
 			model,
+			turnId: createAgentTurnId(),
 			variant,
 		});
 		await router.navigate({
 			params: { id },
+			state: (previous) => ({
+				...previous,
+				initialSubmission: { messageId: initialMessage.id },
+			}),
 			to: "/sessions/$id",
 		});
 	};

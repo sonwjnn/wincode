@@ -2,16 +2,17 @@ import { expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-	type ConversationMessageRecord,
-	type ConversationRecord,
-	isAgentTurnTextPart,
-	type OperationalFailure,
+import type {
+	AgentTurnOutcomeRecord,
+	ConversationMessageRecord,
+	ConversationRecord,
+	OperationalFailure,
 } from "@wincode/agent-core";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import type { ConversationMessage } from "@/modules/conversations/message";
 import { createDatabase } from "./client";
 import {
+	buildUserConversationRecord,
 	ConversationRecordInvariantError,
 	projectConversationRecords,
 } from "./conversation-record";
@@ -24,8 +25,8 @@ const model: ChatModelSelection = {
 	providerId: "openai",
 };
 
-const userMessage = (text: string): ConversationMessage => ({
-	id: "msg-user",
+const userMessage = (text: string, id = "msg-user"): ConversationMessage => ({
+	id,
 	parts: [{ text, type: "text" }],
 	role: "user",
 });
@@ -33,9 +34,11 @@ const userMessage = (text: string): ConversationMessage => ({
 const messageRecord = (
 	id: string,
 	role: "assistant" | "user",
-	text: string
+	text: string,
+	metadata?: ConversationMessageRecord["metadata"]
 ): ConversationMessageRecord => ({
 	id,
+	...(metadata === undefined ? {} : { metadata }),
 	parts: [{ text, type: "text" }],
 	role,
 });
@@ -48,57 +51,70 @@ const failure: OperationalFailure = {
 	version: 1,
 };
 
-const completedRecord = (
+const assistantRecord = (
 	id: string,
-	messages: ConversationMessageRecord[],
-	delegation?: ConversationRecord["delegation"]
-): ConversationRecord => ({
-	agentId: delegation === undefined ? "build" : "research",
-	...(delegation === undefined ? {} : { delegation }),
-	id,
-	messages,
-	model: { modelId: "gpt-5.4-mini", providerId: "openai" },
-	outcome: {
+	text: string,
+	terminal: AgentTurnOutcomeRecord = {
 		finishedAt: 200,
 		kind: "completed",
 		usage: { inputTokens: 10, outputTokens: 5 },
-	},
+	}
+): ConversationRecord => ({
+	agentId: "build",
+	id,
+	messages: [
+		messageRecord(id.replace("record", "assistant"), "assistant", text, {
+			agent: "build",
+			model,
+		}),
+	],
+	model,
+	outcome: { kind: "assistant", terminal },
 	turnId: `turn-${id}`,
 	version: 1,
 });
 
-const failedRecord = (
-	id: string,
-	messages: ConversationMessageRecord[]
-): ConversationRecord => ({
-	agentId: "build",
-	id,
-	messages,
-	model: { modelId: "gpt-5.4-mini", providerId: "openai" },
-	outcome: { failure, finishedAt: 300, kind: "failed" },
-	turnId: `turn-${id}`,
-	version: 1,
-});
-const interruptedRecord = (
-	id: string,
-	messages: ConversationMessageRecord[]
-): ConversationRecord => ({
-	agentId: "build",
-	id,
-	messages,
-	model: { modelId: "gpt-5.4-mini", providerId: "openai" },
-	outcome: {
+const failedRecord = (id: string): ConversationRecord =>
+	assistantRecord(id, failure.message, {
+		failure,
+		finishedAt: 300,
+		kind: "failed",
+	});
+
+const cancelledRecord = (id: string): ConversationRecord =>
+	assistantRecord(id, "The Agent Turn was cancelled.", {
 		failure: {
-			code: "interrupted",
-			message: "The Agent Turn was interrupted.",
-			retry: "immediate",
+			code: "cancelled",
+			message: "The Agent Turn was cancelled.",
+			retry: "never",
 			source: "runtime",
 			version: 1,
 		},
 		finishedAt: 400,
-		kind: "interrupted",
-		reason: "lost-execution",
-	},
+		kind: "cancelled",
+	});
+
+const toolRecord = (id: string): ConversationRecord => ({
+	agentId: "build",
+	id,
+	messages: [
+		{
+			id: `tool-${id}`,
+			parts: [
+				{
+					input: { command: "git status" },
+					outcome: { kind: "success", output: { exitCode: 0 } },
+					sequence: 1,
+					toolCallId: `call-${id}`,
+					toolName: "shell",
+					type: "tool-call",
+				},
+			],
+			role: "assistant",
+		},
+	],
+	model,
+	outcome: { kind: "tool" },
 	turnId: `turn-${id}`,
 	version: 1,
 });
@@ -106,6 +122,11 @@ const interruptedRecord = (
 type TestStore = {
 	databasePath: string;
 	store: ConversationStore;
+};
+
+type CreatedSession = {
+	id: string;
+	initialRecord: ConversationRecord;
 };
 
 const createTestStore = async (): Promise<TestStore> => {
@@ -122,61 +143,40 @@ const createTestStore = async (): Promise<TestStore> => {
 const createSession = async (
 	store: ConversationStore,
 	text = "hello"
-): Promise<string> => {
+): Promise<CreatedSession> => {
 	const { id } = await store.createSession({
 		agent: "build",
-		initialTurnId: "turn-initial",
 		message: userMessage(text),
 		model,
+		turnId: `turn-initial-${text}`,
 	});
-	return id;
+	const [initialRecord] = await store.listConversationRecords(id);
+	if (initialRecord === undefined) {
+		throw new Error("The initial user record was not persisted.");
+	}
+	return { id, initialRecord };
 };
 
-test("persists and claims a pending initial turn until its checkpoint commits", async () => {
+test("persists the accepted user message as an ordinary record", async () => {
 	const { store } = await createTestStore();
-	const message = userMessage("first");
-	const { id: sessionId } = await store.createSession({
-		agent: "build",
-		initialTurnId: "turn-initial",
-		message,
-		model,
-	});
+	const { id, initialRecord } = await createSession(store, "first");
 
-	expect(await store.listConversationRecords(sessionId)).toEqual([]);
-	expect(await store.getPendingInitialTurn(sessionId)).toMatchObject({
-		message,
-		state: "pending",
-		turnId: "turn-initial",
-	});
-
-	const claims = await Promise.all([
-		store.claimPendingInitialTurn(sessionId, "turn-initial"),
-		store.claimPendingInitialTurn(sessionId, "turn-initial"),
+	expect(initialRecord.outcome).toEqual({ kind: "user" });
+	expect(initialRecord.messages).toEqual([
+		{
+			id: "msg-user",
+			parts: [{ text: "first", type: "text" }],
+			role: "user",
+		},
 	]);
-	expect(claims.filter(Boolean)).toHaveLength(1);
-	expect((await store.getPendingInitialTurn(sessionId))?.state).toBe("claimed");
-
-	await store.releasePendingInitialTurn(sessionId, "turn-initial");
-	expect((await store.getPendingInitialTurn(sessionId))?.state).toBe("pending");
-
-	const record = {
-		...completedRecord("record-initial", [
-			messageRecord("msg-initial", "user", "first"),
-		]),
-		turnId: "turn-initial",
-	};
-	await store.commitConversationRecord({ record, sessionId });
-
-	expect(await store.getPendingInitialTurn(sessionId)).toBeUndefined();
-	expect(await store.listConversationRecords(sessionId)).toEqual([record]);
+	expect(await store.listConversationRecords(id)).toEqual([initialRecord]);
 });
-test("keeps a claimed initial turn claimed after reopening the database", async () => {
-	const { databasePath, store } = await createTestStore();
-	const sessionId = await createSession(store);
 
-	expect(await store.claimPendingInitialTurn(sessionId, "turn-initial")).toBe(
-		true
-	);
+test("reopens durable records without reconstructing or running execution", async () => {
+	const { databasePath, store } = await createTestStore();
+	const { id, initialRecord } = await createSession(store);
+	const assistant = assistantRecord("record-assistant", "done");
+	await store.commitConversationRecord({ record: assistant, sessionId: id });
 
 	const { db } = createDatabase(databasePath);
 	runMigrations(db);
@@ -184,71 +184,74 @@ test("keeps a claimed initial turn claimed after reopening the database", async 
 		attachmentRoot: join(tmpdir(), "wincode-reopened-attachments"),
 	});
 
-	expect(await reopened.getPendingInitialTurn(sessionId)).toMatchObject({
-		state: "claimed",
-		turnId: "turn-initial",
-	});
-	expect(
-		await reopened.claimPendingInitialTurn(sessionId, "turn-initial")
-	).toBe(false);
+	expect(await reopened.listConversationRecords(id)).toEqual([
+		initialRecord,
+		assistant,
+	]);
 });
 
-test("round-trips a completed Conversation Record with usage and terminal outcome", async () => {
+test("round-trips assistant and tool records independently", async () => {
 	const { store } = await createTestStore();
-	const sessionId = await createSession(store);
-	const record = completedRecord("record-1", [
-		messageRecord("msg-user", "user", "hello"),
-		messageRecord("msg-assistant", "assistant", "hi there"),
+	const { id, initialRecord } = await createSession(store);
+	const tool = toolRecord("record-tool");
+	const assistant = assistantRecord("record-assistant", "tool result");
+
+	await store.commitConversationRecord({ record: tool, sessionId: id });
+	await store.commitConversationRecord({ record: assistant, sessionId: id });
+
+	expect(await store.listConversationRecords(id)).toEqual([
+		initialRecord,
+		tool,
+		assistant,
 	]);
-
-	await store.commitConversationRecord({ record, sessionId });
-
-	expect(await store.listConversationRecords(sessionId)).toEqual([record]);
 });
 
 test("round-trips delegated correlation independently from the parent turn", async () => {
 	const { store } = await createTestStore();
-	const sessionId = await createSession(store);
-	const record = completedRecord(
-		"record-subagent",
-		[messageRecord("msg-assistant", "assistant", "delegated result")],
-		{ parentToolCallId: "call-1", parentTurnId: "turn-parent" }
-	);
+	const { id, initialRecord } = await createSession(store);
+	const record: ConversationRecord = {
+		...assistantRecord("record-subagent", "delegated result"),
+		agentId: "research",
+		delegation: { parentToolCallId: "call-1", parentTurnId: "turn-parent" },
+	};
 
-	await store.commitConversationRecord({ record, sessionId });
+	await store.commitConversationRecord({ record, sessionId: id });
 
-	expect(await store.listConversationRecords(sessionId)).toEqual([record]);
-});
-test("preserves prior committed records before an interrupted turn", async () => {
-	const { store } = await createTestStore();
-	const sessionId = await createSession(store);
-	const prior = completedRecord("record-prior", [
-		messageRecord("msg-user", "user", "first"),
-		messageRecord("msg-assistant", "assistant", "done"),
-	]);
-	const interrupted = interruptedRecord("record-lost", [
-		messageRecord("msg-user-2", "user", "second"),
-	]);
-
-	await store.commitConversationRecord({ record: prior, sessionId });
-	await store.commitConversationRecord({ record: interrupted, sessionId });
-
-	expect(await store.listConversationRecords(sessionId)).toEqual([
-		prior,
-		interrupted,
+	expect(await store.listConversationRecords(id)).toEqual([
+		initialRecord,
+		record,
 	]);
 });
 
-test("round-trips a failed Conversation Record with its safe failure", async () => {
+test("round-trips a failed assistant record with its safe failure", async () => {
 	const { store } = await createTestStore();
-	const sessionId = await createSession(store);
-	const record = failedRecord("record-1", [
-		messageRecord("msg-user", "user", "hello"),
+	const { id, initialRecord } = await createSession(store);
+	const record = failedRecord("record-failed");
+
+	await store.commitConversationRecord({ record, sessionId: id });
+
+	expect(await store.listConversationRecords(id)).toEqual([
+		initialRecord,
+		record,
 	]);
+});
 
-	await store.commitConversationRecord({ record, sessionId });
+test("round-trips a cancelled assistant record without an interrupted badge", async () => {
+	const { store } = await createTestStore();
+	const { id, initialRecord } = await createSession(store);
+	const record = cancelledRecord("record-cancelled");
 
-	expect(await store.listConversationRecords(sessionId)).toEqual([record]);
+	await store.commitConversationRecord({ record, sessionId: id });
+
+	expect(await store.listConversationRecords(id)).toEqual([
+		initialRecord,
+		record,
+	]);
+	expect(projectConversationRecords([record])[0]?.metadata).toEqual({
+		agent: "build",
+		model,
+		terminalOutcome: "cancelled",
+	});
 });
 
 test("keeps records isolated per session and per workspace", async () => {
@@ -268,159 +271,86 @@ test("keeps records isolated per session and per workspace", async () => {
 	const sessionB = await createSession(firstWorkspace, "other");
 
 	await firstWorkspace.commitConversationRecord({
-		record: completedRecord("record-a", [
-			messageRecord("msg-user", "user", "hello"),
-		]),
-		sessionId: sessionA,
+		record: assistantRecord("record-a", "hello"),
+		sessionId: sessionA.id,
 	});
 
-	expect(await firstWorkspace.listConversationRecords(sessionA)).toHaveLength(
-		1
+	expect(
+		await firstWorkspace.listConversationRecords(sessionA.id)
+	).toHaveLength(2);
+	expect(
+		await firstWorkspace.listConversationRecords(sessionB.id)
+	).toHaveLength(1);
+	expect(await secondWorkspace.listConversationRecords(sessionA.id)).toEqual(
+		[]
 	);
-	expect(await firstWorkspace.listConversationRecords(sessionB)).toEqual([]);
-	// The same session row belongs to the first workspace; the second
-	// workspace store must not see or write its records.
-	expect(await secondWorkspace.listConversationRecords(sessionA)).toEqual([]);
 	await expect(
 		secondWorkspace.commitConversationRecord({
-			record: completedRecord("record-b", [
-				messageRecord("msg-user", "user", "hello"),
-			]),
-			sessionId: sessionA,
+			record: assistantRecord("record-b", "hello"),
+			sessionId: sessionA.id,
 		})
 	).rejects.toThrow("Session not found");
 });
 
-test("orders committed records by checkpoint commit order", async () => {
+test("orders concurrently committed records by their allocated position", async () => {
 	const { store } = await createTestStore();
-	const sessionId = await createSession(store);
-	const first = completedRecord("record-1", [
-		messageRecord("msg-user", "user", "first"),
-	]);
-	const second = completedRecord("record-2", [
-		messageRecord("msg-user", "user", "first"),
-		messageRecord("msg-assistant-1", "assistant", "one"),
-		messageRecord("msg-user-2", "user", "second"),
-	]);
-	const third = failedRecord("record-3", [
-		messageRecord("msg-user", "user", "first"),
-		messageRecord("msg-assistant-1", "assistant", "one"),
-		messageRecord("msg-user-2", "user", "second"),
-	]);
+	const { id, initialRecord } = await createSession(store);
+	const first = assistantRecord("record-1", "one");
+	const second = assistantRecord("record-2", "two");
+	const third = failedRecord("record-3");
 
 	await Promise.all([
-		store.commitConversationRecord({ record: first, sessionId }),
-		store.commitConversationRecord({ record: second, sessionId }),
-		store.commitConversationRecord({ record: third, sessionId }),
+		store.commitConversationRecord({ record: first, sessionId: id }),
+		store.commitConversationRecord({ record: second, sessionId: id }),
+		store.commitConversationRecord({ record: third, sessionId: id }),
 	]);
 
-	// Each checkpoint lands in one atomic position slot even when the
-	// callers fire concurrently.
-	expect(await store.listConversationRecords(sessionId)).toEqual([
+	expect(await store.listConversationRecords(id)).toEqual([
+		initialRecord,
 		first,
 		second,
 		third,
 	]);
 });
 
-test("reopens a completed Conversation after closing and reopening the database", async () => {
-	const { databasePath, store } = await createTestStore();
-	const sessionId = await createSession(store);
-	// A completed Conversation is the sequence of committed turn records;
-	// later records carry the full committed history of earlier ones.
-	const turnOne = completedRecord("record-1", [
-		messageRecord("msg-user", "user", "first"),
-		messageRecord("msg-assistant-1", "assistant", "one"),
-	]);
-	const turnTwo = completedRecord("record-2", [
-		messageRecord("msg-user", "user", "first"),
-		messageRecord("msg-assistant-1", "assistant", "one"),
-		messageRecord("msg-user-2", "user", "second"),
-		messageRecord("msg-assistant-2", "assistant", "two"),
-	]);
-	await store.commitConversationRecord({ record: turnOne, sessionId });
-	await store.commitConversationRecord({ record: turnTwo, sessionId });
-
-	// Close and reopen the SQLite file with a fresh store.
-	{
-		const { db } = createDatabase(databasePath);
-		runMigrations(db);
-		const reopened = createDrizzleConversationStore(db, {
-			attachmentRoot: join(tmpdir(), "wincode-reopened-attachments"),
-		});
-		const records = await reopened.listConversationRecords(sessionId);
-		expect(records).toEqual([turnOne, turnTwo]);
-		const merged = records.flatMap((record) => record.messages);
-		const messages = [
-			...new Map(merged.map((message) => [message.id, message])).values(),
-		];
-		const text = (record: (typeof messages)[number]) =>
-			isAgentTurnTextPart(record.parts[0]) ? record.parts[0].text : undefined;
-		expect(messages.map(text)).toEqual(["first", "one", "second", "two"]);
-	}
-});
-
-test("commits atomically: rejected checkpoints leave no partial durable state", async () => {
+test("rejects malformed records without partial durable state", async () => {
 	const { store } = await createTestStore();
-	const sessionId = await createSession(store);
-	const valid = completedRecord("record-ok", [
-		messageRecord("msg-user", "user", "hello"),
-	]);
-
-	// A commit for an unknown session is rejected without side effects.
-	await expect(
-		store.commitConversationRecord({
-			record: valid,
-			sessionId: "no-such-session",
-		})
-	).rejects.toThrow("Session not found");
-
-	// A malformed record is rejected at the interface boundary.
+	const { id, initialRecord } = await createSession(store);
 	const malformed = {
-		...valid,
-		outcome: { finishedAt: 1, kind: "interrupted" },
+		...assistantRecord("record-invalid", "bad"),
+		outcome: { kind: "assistant", terminal: { finishedAt: 1, kind: "failed" } },
 	} as unknown as ConversationRecord;
-	let thrown: unknown;
-	try {
-		await store.commitConversationRecord({ record: malformed, sessionId });
-	} catch (error) {
-		thrown = error;
-	}
-	expect(thrown).toBeInstanceOf(ConversationRecordInvariantError);
-	expect(thrown).toMatchObject({
-		message: expect.stringContaining("Invalid Conversation Record"),
+
+	await expect(
+		store.commitConversationRecord({ record: malformed, sessionId: id })
+	).rejects.toBeInstanceOf(ConversationRecordInvariantError);
+	expect(await store.listConversationRecords(id)).toEqual([initialRecord]);
+
+	await store.commitConversationRecord({
+		record: assistantRecord("record-valid", "good"),
+		sessionId: id,
 	});
-	if (thrown instanceof ConversationRecordInvariantError) {
-		expect(thrown.cause).toBeInstanceOf(Error);
-	}
-
-	expect(await store.listConversationRecords(sessionId)).toEqual([]);
-
-	// The same store still commits clean records afterwards.
-	await store.commitConversationRecord({ record: valid, sessionId });
-	expect(await store.listConversationRecords(sessionId)).toEqual([valid]);
+	expect(await store.listConversationRecords(id)).toHaveLength(2);
 });
 
 test("deletes Conversation Records with their session", async () => {
 	const { store } = await createTestStore();
-	const sessionId = await createSession(store);
+	const { id } = await createSession(store);
 	await store.commitConversationRecord({
-		record: completedRecord("record-1", [
-			messageRecord("msg-user", "user", "hello"),
-		]),
-		sessionId,
+		record: assistantRecord("record-1", "hello"),
+		sessionId: id,
 	});
 
-	await store.deleteSession(sessionId);
+	await store.deleteSession(id);
 
-	expect(await store.listConversationRecords(sessionId)).toEqual([]);
+	expect(await store.listConversationRecords(id)).toEqual([]);
 });
 
-test("projects durable records into CLI messages with references and metadata", () => {
+test("projects each ordinary row with references, metadata, and stable delegation ids", () => {
 	const attachmentId = `v1-${"a".repeat(64)}`;
-	const record: ConversationRecord = {
+	const userRecord: ConversationRecord = {
 		agentId: "build",
-		id: "record-projection",
+		id: "record-user",
 		messages: [
 			{
 				id: "user-1",
@@ -456,29 +386,32 @@ test("projects durable records into CLI messages with references and metadata", 
 				],
 				role: "user",
 			},
-			{
-				id: "assistant-1",
-				parts: [
-					{
-						input: { command: "git status" },
-						outcome: { kind: "success", output: { exitCode: 0 } },
-						sequence: 1,
-						toolCallId: "call-1",
-						toolName: "shell",
-						type: "tool-call",
-					},
-				],
-				role: "assistant",
-			},
 		],
-		model: { modelId: model.modelId, providerId: model.providerId },
-		outcome: { finishedAt: 1, kind: "completed" },
-		turnId: "turn-projection",
+		model,
+		outcome: { kind: "user" },
+		turnId: "turn-user",
 		version: 1,
 	};
+	const delegated = {
+		...assistantRecord("record-delegated", "delegated result"),
+		agentId: "research",
+		delegation: { parentToolCallId: "call-1", parentTurnId: "turn-parent" },
+	};
+	const primaryAssistant = assistantRecord("record-primary", "parent result");
 
-	const [user, assistant] = projectConversationRecords([record]);
+	const projected = projectConversationRecords([
+		userRecord,
+		delegated,
+		primaryAssistant,
+	]);
+	const [user, , delegatedAssistant] = projected;
+	expect(projected.map(({ id }) => id)).toEqual([
+		"user-1",
+		"assistant-primary",
+		"delegated-turn:turn-record-delegated:0:assistant-delegated",
+	]);
 	expect(user).toMatchObject({
+		id: "user-1",
 		metadata: {
 			agent: "build",
 			model,
@@ -508,60 +441,52 @@ test("projects durable records into CLI messages with references and metadata", 
 		},
 		type: "data-fileMention",
 	});
-	expect(assistant?.parts).toContainEqual({
-		input: { command: "git status" },
-		output: { exitCode: 0 },
-		state: "output-available",
-		toolCallId: "call-1",
-		type: "tool-shell",
-	});
+	expect(delegatedAssistant?.id).toBe(
+		"delegated-turn:turn-record-delegated:0:assistant-delegated"
+	);
 });
-test("projects a primary terminal failure after reopening a session", () => {
-	const record = failedRecord("record-failed", [
-		messageRecord("msg-user", "user", "hello"),
-	]);
 
+test("persists delegated child prompts as correlated user rows", async () => {
+	const { store } = await createTestStore();
+	const { id } = await createSession(store);
+	const delegation = {
+		parentToolCallId: "call-parent",
+		parentTurnId: "turn-parent",
+	};
+	const record = buildUserConversationRecord({
+		agentId: "subagent",
+		delegation,
+		message: userMessage("child prompt", "child-user"),
+		model,
+		turnId: "child-turn",
+	});
+
+	await store.commitConversationRecord({ record, sessionId: id });
+
+	expect(await store.listConversationRecords(id)).toContainEqual(record);
 	expect(projectConversationRecords([record])).toEqual([
 		{
-			id: "msg-user",
-			metadata: { agent: "build", model },
-			parts: [{ text: "hello", type: "text" }],
+			id: "delegated-turn:child-turn:0:child-user",
+			metadata: { agent: "subagent", model },
+			parts: [{ text: "child prompt", type: "text" }],
 			role: "user",
-		},
-		{
-			id: "assistant-turn-record-failed:outcome",
-			metadata: { agent: "build", interrupted: true },
-			parts: [{ text: "failed: The model request failed.", type: "text" }],
-			role: "assistant",
 		},
 	]);
 });
-test("projects primary terminal failures after partial tool output", () => {
-	const record = failedRecord("record-partial-failure", [
-		messageRecord("msg-user", "user", "run the check"),
+
+test("projects a failed assistant row as its safe transcript message", () => {
+	const projected = projectConversationRecords([failedRecord("record-failed")]);
+
+	expect(projected).toEqual([
 		{
-			id: "assistant-partial",
-			parts: [
-				{
-					input: { command: "bun check" },
-					outcome: {
-						kind: "success",
-						output: { exitCode: 0 },
-					},
-					sequence: 1,
-					toolCallId: "call-check",
-					toolName: "shell",
-					type: "tool-call",
-				},
-			],
+			id: "assistant-failed",
+			metadata: {
+				agent: "build",
+				model,
+				terminalOutcome: "failed",
+			},
+			parts: [{ text: failure.message, type: "text" }],
 			role: "assistant",
 		},
 	]);
-
-	const projected = projectConversationRecords([record]);
-	expect(projected.at(-1)).toMatchObject({
-		id: "assistant-turn-record-partial-failure:outcome",
-		parts: [{ text: "failed: The model request failed.", type: "text" }],
-		role: "assistant",
-	});
 });

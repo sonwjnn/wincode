@@ -121,6 +121,10 @@ export type ConversationMessageSkill =
 	  });
 
 export type ConversationMessageUsage = ModelUsage;
+export type ConversationMessageTerminalOutcome =
+	| "cancelled"
+	| "failed"
+	| "interrupted";
 
 export type ConversationMessageMetadata = {
 	readonly agent?: AgentId;
@@ -128,6 +132,7 @@ export type ConversationMessageMetadata = {
 	readonly model?: ChatModelSelection;
 	readonly responseTimeMs?: number;
 	readonly skill?: ConversationMessageSkill;
+	readonly terminalOutcome?: ConversationMessageTerminalOutcome;
 	readonly usage?: ConversationMessageUsage;
 	readonly variant?: ModelVariant;
 };
@@ -167,6 +172,7 @@ export const conversationMessageMetadataSchema = z
 		agent: agentIdSchema.optional(),
 		model: conversationMessageModelSchema.optional(),
 		responseTimeMs: z.number().int().nonnegative().optional(),
+		terminalOutcome: z.enum(["cancelled", "failed", "interrupted"]).optional(),
 		usage: conversationMessageUsageSchema.optional(),
 		variant: modelVariantSchema.optional(),
 	})

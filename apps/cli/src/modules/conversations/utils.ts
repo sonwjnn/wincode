@@ -1,22 +1,6 @@
 import type { SkillContext } from "@wincode/skills";
-import type {
-	ConversationFilePart,
-	ConversationMessage,
-} from "@/modules/conversations/message";
+import type { ConversationFilePart } from "@/modules/conversations/message";
 import type { ConversationSession } from "./storage/conversation-store";
-
-export const mergePendingInitialMessage = (
-	messages: readonly ConversationMessage[],
-	pendingMessage: ConversationMessage | undefined
-): ConversationMessage[] => {
-	if (
-		pendingMessage === undefined ||
-		messages.some(({ id }) => id === pendingMessage.id)
-	) {
-		return [...messages];
-	}
-	return [pendingMessage, ...messages];
-};
 
 export const getMostRecentSession = (
 	sessions: ConversationSession[]

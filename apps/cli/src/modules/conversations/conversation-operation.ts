@@ -20,8 +20,6 @@ export type ConversationSendInput = {
 	skill?: SkillContext;
 	/** Existing stored user message to run without appending another message. */
 	messageId?: string;
-	/** Stable identity for a durable pending turn, when one exists. */
-	turnId?: string;
 };
 
 export type ConversationSendOutcome =
