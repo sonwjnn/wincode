@@ -1,13 +1,9 @@
-import type { AgentTurnDelegation } from "@wincode/agent-core";
+import type { AgentId, AgentTurnDelegation } from "@wincode/agent-core";
 import { createAgentTurnAbortReason } from "@wincode/agent-core";
-import type {
-	AgentId,
-	ChatModelSelection,
-	ModelVariant,
-	ResolvedAgentRuntime,
-} from "@wincode/ai";
-import type { FileUIPart } from "@wincode/ai/client";
+import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import type { SkillContext } from "@wincode/skills";
+import type { ConversationFilePart } from "@/modules/conversations/message";
+import type { ResolvedCodingAgent } from "../agents/built-ins";
 
 export type ConversationSendInput = {
 	agent: AgentId;
@@ -15,12 +11,12 @@ export type ConversationSendInput = {
 	conversationVariant?: ModelVariant;
 	model: ChatModelSelection;
 	variant?: ModelVariant;
-	resolvedAgent?: ResolvedAgentRuntime;
+	resolvedAgent?: ResolvedCodingAgent;
 	/** Correlation for an internally delegated Subagent execution. */
 	delegation?: AgentTurnDelegation;
 	/** Prompt to append as a fresh user message. */
 	userText?: string;
-	files?: FileUIPart[];
+	files?: ConversationFilePart[];
 	skill?: SkillContext;
 	/** Existing stored user message to run without appending another message. */
 	messageId?: string;

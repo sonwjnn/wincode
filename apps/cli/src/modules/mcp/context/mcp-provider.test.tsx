@@ -1,57 +1,20 @@
 import { expect, test } from "bun:test";
-import type { CallToolResult } from "@modelcontextprotocol/client";
 import { testRender } from "@opentui/react/test-utils";
-import type { AgentId } from "@wincode/ai";
+import type { AgentId } from "@wincode/agent-core";
 import { act, useState } from "react";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
-import type { McpClient, McpClientTool } from "../client";
 import type {
 	McpCatalogSnapshot,
 	McpRegistry,
 	McpServerStatus,
-	McpSnapshotTool,
 } from "../registry";
 import type { McpNormalizedResult } from "../result";
 import { McpActiveIndicator } from "../ui/mcp-active-indicator";
-import {
-	buildMcpSummary,
-	type McpAddToolOutput,
-	type McpApprovalDecision,
-	type McpApprovalGate,
-	type McpContextValue,
-	type McpDynamicToolCall,
-	McpProvider,
-	type McpToolOutputConfig,
-	runDynamicToolCall,
-	useMcp,
-} from "./mcp-provider";
-
-class FakeMcpClient implements McpClient {
-	async callTool(): Promise<CallToolResult> {
-		return { content: [] };
-	}
-
-	async close(): Promise<void> {
-		// no-op stub
-	}
-
-	async connect(): Promise<void> {
-		// no-op stub
-	}
-
-	async listTools(): Promise<readonly McpClientTool[]> {
-		return [];
-	}
-
-	setToolsChangedListener(
-		_listener: (tools: readonly McpClientTool[]) => void
-	): void {
-		// no-op stub
-	}
-}
+import type { McpContextValue } from "./mcp-provider";
+import { buildMcpSummary, McpProvider, useMcp } from "./mcp-provider";
 
 const successResult = (): McpNormalizedResult => ({
 	content: [{ type: "text", text: "ok" }],
@@ -59,50 +22,16 @@ const successResult = (): McpNormalizedResult => ({
 	truncated: false,
 });
 
-const makeTool = (
-	overrides: Partial<McpSnapshotTool> = {}
-): McpSnapshotTool => ({
-	agentDecision: "allow",
-	client: new FakeMcpClient(),
-	description: "A demo tool",
-	logicalName: "demo_echo",
-	originalToolName: "echo",
-	policy: "allow",
-	safety: false,
-	serverDecision: "allow",
-	serverName: "demo",
-	...overrides,
-});
-
-const makeSnapshot = (
-	overrides: Partial<McpCatalogSnapshot> = {}
-): McpCatalogSnapshot => ({
-	id: "snap-1",
-	manifest: [],
-	agent: "build",
-	tools: new Map([["mcp_demo_echo", makeTool()]]),
-	...overrides,
-});
-
-const makeToolCall = (): McpDynamicToolCall => ({
-	dynamic: true,
-	input: { text: "hello" },
-	toolCallId: "call_1",
-	toolName: "mcp_demo_echo",
-});
-
-// A fixed-decision gate stands in for the shared approval machinery the chat
-// handler injects; provider/runner tests only need the settled outcome.
-const fixedGate =
-	(decision: McpApprovalDecision): McpApprovalGate =>
-	() =>
-		Promise.resolve(decision);
-
 const EMPTY_STATUSES: readonly McpServerStatus[] = [];
 
 const makeRegistry = (execute?: McpRegistry["execute"]): McpRegistry => ({
 	close: async () => undefined,
-	createSnapshot: async (agent: AgentId) => makeSnapshot({ agent }),
+	createSnapshot: async (agent: AgentId): Promise<McpCatalogSnapshot> => ({
+		agent,
+		id: "snap-1",
+		manifest: [],
+		tools: new Map(),
+	}),
 	execute: execute ?? (async () => successResult()),
 	getStatuses: () => EMPTY_STATUSES,
 	initialize: async () => undefined,
@@ -111,21 +40,7 @@ const makeRegistry = (execute?: McpRegistry["execute"]): McpRegistry => ({
 	toggle: async () => undefined,
 });
 
-const makeAddToolOutput = (): {
-	addToolOutput: McpAddToolOutput;
-	outputs: McpToolOutputConfig[];
-} => {
-	const outputs: McpToolOutputConfig[] = [];
-	const addToolOutput: McpAddToolOutput = (config) => {
-		outputs.push(config);
-	};
-	return { addToolOutput, outputs };
-};
-
 const renderProvider = async (registry: McpRegistry) => {
-	// Mutable holder so context updates from later renders are visible to the
-	// test through the same reference (returning the value directly would freeze
-	// the first-render context object).
 	const captured: { value: McpContextValue | undefined } = { value: undefined };
 	function Consumer() {
 		captured.value = useMcp();
@@ -149,260 +64,12 @@ const renderProvider = async (registry: McpRegistry) => {
 	return { captured, setup };
 };
 
-// React schedules passive effects and external-store updates on the scheduler,
-// and OpenTUI's stdin parser resolves keys asynchronously. A single renderOnce
-// is not enough; yield a macrotask first so scheduled work commits, then draw.
 const flushUi = async (
 	setup: Awaited<ReturnType<typeof testRender>>
 ): Promise<void> => {
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	await setup.renderOnce();
 };
-
-test("runDynamicToolCall emits no-active-catalog error for null snapshot", async () => {
-	const { addToolOutput, outputs } = makeAddToolOutput();
-	await runDynamicToolCall({
-		addToolOutput,
-		gate: fixedGate({ kind: "allow" }),
-		latestSnapshot: makeSnapshot(),
-		registry: makeRegistry(),
-		snapshot: null,
-		toolCall: makeToolCall(),
-	});
-	expect(outputs).toEqual([
-		{
-			errorText: "MCP tool call has no active catalog",
-			state: "output-error",
-			tool: "mcp_demo_echo",
-			toolCallId: "call_1",
-		},
-	]);
-});
-
-test("runDynamicToolCall emits no-active-catalog error for stale snapshot", async () => {
-	const { addToolOutput, outputs } = makeAddToolOutput();
-	await runDynamicToolCall({
-		addToolOutput,
-		gate: fixedGate({ kind: "allow" }),
-		latestSnapshot: makeSnapshot({ id: "snap-newest" }),
-		registry: makeRegistry(),
-		snapshot: makeSnapshot({ id: "snap-old" }),
-		toolCall: makeToolCall(),
-	});
-	expect(outputs[0]?.errorText).toBe("MCP tool call has no active catalog");
-});
-
-test("runDynamicToolCall emits unknown-tool error when the tool is absent", async () => {
-	const { addToolOutput, outputs } = makeAddToolOutput();
-	await runDynamicToolCall({
-		addToolOutput,
-		gate: fixedGate({ kind: "allow" }),
-		latestSnapshot: makeSnapshot({ tools: new Map() }),
-		registry: makeRegistry(),
-		snapshot: makeSnapshot({ tools: new Map() }),
-		toolCall: makeToolCall(),
-	});
-	expect(outputs[0]?.errorText).toBe("Unknown MCP tool 'mcp_demo_echo'");
-});
-
-test("runDynamicToolCall denies without executing when the gate denies", async () => {
-	let executed = false;
-	const { addToolOutput, outputs } = makeAddToolOutput();
-	await runDynamicToolCall({
-		addToolOutput,
-		gate: fixedGate({
-			errorText: "MCP tool 'mcp_demo_echo' is denied by policy",
-			kind: "deny",
-		}),
-		latestSnapshot: makeSnapshot(),
-		registry: makeRegistry(async () => {
-			executed = true;
-			return successResult();
-		}),
-		snapshot: makeSnapshot(),
-		toolCall: makeToolCall(),
-	});
-	expect(executed).toBe(false);
-	expect(outputs).toEqual([
-		{
-			errorText: "MCP tool 'mcp_demo_echo' is denied by policy",
-			state: "output-error",
-			tool: "mcp_demo_echo",
-			toolCallId: "call_1",
-		},
-	]);
-});
-
-test("runDynamicToolCall rejects without executing and carries feedback", async () => {
-	let executed = false;
-	const { addToolOutput, outputs } = makeAddToolOutput();
-	await runDynamicToolCall({
-		addToolOutput,
-		gate: fixedGate({
-			errorText: "MCP tool 'mcp_demo_echo' was not approved — use read instead",
-			feedback: "use read instead",
-			kind: "reject",
-		}),
-		latestSnapshot: makeSnapshot(),
-		registry: makeRegistry(async () => {
-			executed = true;
-			return successResult();
-		}),
-		snapshot: makeSnapshot(),
-		toolCall: makeToolCall(),
-	});
-	expect(executed).toBe(false);
-	expect(outputs[0]?.errorText).toBe(
-		"MCP tool 'mcp_demo_echo' was not approved — use read instead"
-	);
-});
-
-test("runDynamicToolCall rejects without feedback", async () => {
-	const { addToolOutput, outputs } = makeAddToolOutput();
-	await runDynamicToolCall({
-		addToolOutput,
-		gate: fixedGate({
-			errorText: "MCP tool 'mcp_demo_echo' was not approved",
-			kind: "reject",
-		}),
-		latestSnapshot: makeSnapshot(),
-		registry: makeRegistry(),
-		snapshot: makeSnapshot(),
-		toolCall: makeToolCall(),
-	});
-	expect(outputs[0]?.errorText).toBe(
-		"MCP tool 'mcp_demo_echo' was not approved"
-	);
-});
-
-test("runDynamicToolCall executes and passes the gated tool to the registry", async () => {
-	const { addToolOutput, outputs } = makeAddToolOutput();
-	let capturedTool: McpSnapshotTool | undefined;
-	await runDynamicToolCall({
-		addToolOutput,
-		gate: (tool) => {
-			capturedTool = tool;
-			return Promise.resolve({ kind: "allow" });
-		},
-		latestSnapshot: makeSnapshot(),
-		registry: makeRegistry(async (snapshot, toolName, input) => {
-			expect(snapshot).toBeDefined();
-			expect(toolName).toBe("mcp_demo_echo");
-			expect(input).toEqual({ text: "hello" });
-			return successResult();
-		}),
-		snapshot: makeSnapshot(),
-		toolCall: makeToolCall(),
-	});
-	expect(capturedTool?.logicalName).toBe("demo_echo");
-	expect(outputs).toEqual([
-		{
-			output: successResult(),
-			state: "output-available",
-			tool: "mcp_demo_echo",
-			toolCallId: "call_1",
-		},
-	]);
-});
-
-test("runDynamicToolCall sanitizes thrown errors to a stable message", async () => {
-	const { addToolOutput, outputs } = makeAddToolOutput();
-	await runDynamicToolCall({
-		addToolOutput,
-		gate: fixedGate({ kind: "allow" }),
-		latestSnapshot: makeSnapshot(),
-		registry: makeRegistry(async () => {
-			throw new Error("connection failed secret-token-abc");
-		}),
-		snapshot: makeSnapshot(),
-		toolCall: makeToolCall(),
-	});
-	expect(outputs[0]?.state).toBe("output-error");
-	expect(outputs[0]?.errorText).toBe("MCP tool call failed");
-	expect(outputs[0]?.errorText).not.toContain("secret-token-abc");
-});
-
-test("runDynamicToolCall sanitizes MCP-declared errors to a stable message", async () => {
-	const { addToolOutput, outputs } = makeAddToolOutput();
-	await runDynamicToolCall({
-		addToolOutput,
-		gate: fixedGate({ kind: "allow" }),
-		latestSnapshot: makeSnapshot(),
-		registry: makeRegistry(async () => ({
-			content: [
-				{
-					text: `Authorization: Bearer hidden-token ${"x".repeat(4096)}`,
-					type: "text",
-				},
-			],
-			isError: true,
-			truncated: false,
-		})),
-		snapshot: makeSnapshot(),
-		toolCall: makeToolCall(),
-	});
-
-	expect(outputs[0]?.errorText).toBe("MCP tool call failed");
-	expect(outputs[0]?.errorText).not.toContain("hidden-token");
-});
-
-test("runDynamicToolCall surfaces registry-owned guard errors verbatim", async () => {
-	const { addToolOutput, outputs } = makeAddToolOutput();
-	await runDynamicToolCall({
-		addToolOutput,
-		gate: fixedGate({ kind: "allow" }),
-		latestSnapshot: makeSnapshot(),
-		registry: makeRegistry(async () => ({
-			content: [{ text: "MCP server 'demo' is not enabled", type: "text" }],
-			isError: true,
-			owner: "registry",
-			truncated: false,
-		})),
-		snapshot: makeSnapshot(),
-		toolCall: makeToolCall(),
-	});
-
-	expect(outputs[0]?.state).toBe("output-error");
-	expect(outputs[0]?.errorText).toBe("MCP server 'demo' is not enabled");
-});
-
-test("runDynamicToolCall surfaces sanitized execution failures verbatim", async () => {
-	const { addToolOutput, outputs } = makeAddToolOutput();
-	await runDynamicToolCall({
-		addToolOutput,
-		gate: fixedGate({ kind: "allow" }),
-		latestSnapshot: makeSnapshot(),
-		registry: makeRegistry(async () => ({
-			content: [{ text: "MCP tool 'mcp_demo_echo' timed out", type: "text" }],
-			isError: true,
-			owner: "registry",
-			truncated: false,
-		})),
-		snapshot: makeSnapshot(),
-		toolCall: makeToolCall(),
-	});
-
-	expect(outputs[0]?.state).toBe("output-error");
-	expect(outputs[0]?.errorText).toBe("MCP tool 'mcp_demo_echo' timed out");
-});
-
-test("runDynamicToolCall converts a rejected approval gate to a stable error", async () => {
-	const { addToolOutput, outputs } = makeAddToolOutput();
-	await runDynamicToolCall({
-		addToolOutput,
-		gate: async () => {
-			throw new Error("approval failed secret-token-abc");
-		},
-		latestSnapshot: makeSnapshot(),
-		registry: makeRegistry(),
-		snapshot: makeSnapshot(),
-		toolCall: makeToolCall(),
-	});
-
-	expect(outputs[0]?.state).toBe("output-error");
-	expect(outputs[0]?.errorText).toBe("MCP tool call failed");
-	expect(outputs[0]?.errorText).not.toContain("secret-token-abc");
-});
 
 test("provider exposes statuses, snapshots, runtime controls, and close", async () => {
 	const listeners = new Set<() => void>();
@@ -514,68 +181,6 @@ test("provider does not close an externally owned registry on unmount", async ()
 	await flushUi(setup);
 
 	expect(closeCalls).toBe(0);
-});
-
-test("provider handleDynamicToolCall runs the gate and executes an allow", async () => {
-	const { captured } = await renderProvider(makeRegistry());
-	const outputs: McpToolOutputConfig[] = [];
-	const snapshot = await captured.value?.createSnapshot("build");
-	if (snapshot === undefined) {
-		throw new Error("expected a snapshot from the mock registry");
-	}
-
-	captured.value?.handleDynamicToolCall(
-		snapshot,
-		makeToolCall(),
-		(config) => {
-			outputs.push(config);
-		},
-		fixedGate({ kind: "allow" })
-	);
-	await new Promise((resolve) => setTimeout(resolve, 20));
-
-	expect(outputs).toEqual([
-		{
-			output: successResult(),
-			state: "output-available",
-			tool: "mcp_demo_echo",
-			toolCallId: "call_1",
-		},
-	]);
-});
-
-test("provider handleDynamicToolCall emits an error when the gate denies", async () => {
-	const { captured } = await renderProvider(makeRegistry());
-	const outputs: McpToolOutputConfig[] = [];
-	const snapshot = await captured.value?.createSnapshot("build");
-	if (snapshot === undefined) {
-		throw new Error("expected a snapshot from the mock registry");
-	}
-
-	captured.value?.handleDynamicToolCall(
-		{
-			...snapshot,
-			tools: new Map([["mcp_demo_echo", makeTool({ policy: "deny" })]]),
-		},
-		makeToolCall(),
-		(config) => {
-			outputs.push(config);
-		},
-		fixedGate({
-			errorText: "MCP tool 'mcp_demo_echo' is denied by policy",
-			kind: "deny",
-		})
-	);
-	await new Promise((resolve) => setTimeout(resolve, 20));
-
-	expect(outputs).toEqual([
-		{
-			errorText: "MCP tool 'mcp_demo_echo' is denied by policy",
-			state: "output-error",
-			tool: "mcp_demo_echo",
-			toolCallId: "call_1",
-		},
-	]);
 });
 
 test("MCP failure summary identifies every failed server and reason", () => {

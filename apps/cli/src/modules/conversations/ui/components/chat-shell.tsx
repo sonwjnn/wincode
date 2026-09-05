@@ -1,6 +1,6 @@
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
-import type { CodingAgentUIMessage } from "@wincode/ai";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import { useModelPricing } from "@/modules/model-pricing";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
@@ -34,7 +34,7 @@ type ChatShellProps = {
 	error?: unknown;
 	isBusy: boolean;
 	isInterruptArmed: boolean;
-	messages: CodingAgentUIMessage[];
+	messages: ConversationMessage[];
 	onApproval?: (id: string, outcome: ApprovalOutcome) => void;
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onOpenSettings?: (section?: string) => Promise<void> | void;

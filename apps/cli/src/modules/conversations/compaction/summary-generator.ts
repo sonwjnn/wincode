@@ -1,45 +1,40 @@
-import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import {
-	type ResolvedModel,
-	resolveAiSdkModelTarget,
-} from "@wincode/ai/server";
-import { normalizeModelUsage } from "@wincode/ai/usage";
-import {
-	convertToModelMessages,
-	generateText,
-	type LanguageModel,
-	type LanguageModelUsage,
-	type ModelMessage,
-} from "ai";
+	generateAiSdkText,
+	type RuntimePromptMessage,
+} from "@wincode/agent-runtime-ai-sdk";
+import type {
+	ChatModelSelection,
+	ModelTarget,
+	ModelVariant,
+} from "@wincode/ai/model";
 import type { Connections } from "@/modules/connections";
 import { resolveChatModelTarget } from "../../model-target";
-import type { SummaryGenerator, SummaryGeneratorInput } from "./types";
-
-type ProviderOptions = NonNullable<ResolvedModel["providerOptions"]>;
+import type { ConversationMessage } from "../message";
+import type {
+	SummaryGenerator,
+	SummaryGeneratorInput,
+	SummaryGeneratorResult,
+} from "./types";
 
 const MAX_SUMMARY_OUTPUT_TOKENS = 4096;
 
 export const COMPACTION_SUMMARY_SYSTEM_PROMPT = `You are Wincode's conversation maintenance summarizer. Summarize only the supplied transcript for a future coding-agent turn. Preserve user requests, decisions, current work, unresolved errors, exact identifiers, file paths, and tool call/result pairings. Current-window attachments may be inspected when supplied; historical attachments are metadata only. Never reproduce attachment payloads. Return a concise plain-text summary.`;
 
 export type SummaryTextGenerationOptions = {
-	abortSignal?: AbortSignal;
-	maxOutputTokens: number;
-	maxRetries: number;
-	messages?: ModelMessage[];
-	model: LanguageModel;
-	prompt?: string;
-	providerOptions?: ProviderOptions;
-	system: string;
+	readonly abortSignal?: AbortSignal;
+	readonly maxOutputTokens: number;
+	readonly maxRetries: number;
+	readonly messages?: readonly RuntimePromptMessage[];
+	readonly model: ModelTarget;
+	readonly prompt?: string;
+	readonly system: string;
 };
 
 export type SummaryTextGenerator = (
 	options: SummaryTextGenerationOptions
-) => Promise<{ text: string; usage?: LanguageModelUsage }>;
+) => Promise<SummaryGeneratorResult>;
 
-export type SummaryModel = {
-	model: LanguageModel;
-	providerOptions?: ProviderOptions;
-};
+export type SummaryModel = ModelTarget;
 
 export type SummaryModelResolver = (
 	selection: ChatModelSelection,
@@ -47,20 +42,8 @@ export type SummaryModelResolver = (
 	variant?: ModelVariant
 ) => Promise<SummaryModel>;
 
-const defaultTextGenerator: SummaryTextGenerator = async (options) => {
-	const result = await generateText({
-		abortSignal: options.abortSignal,
-		maxOutputTokens: options.maxOutputTokens,
-		maxRetries: options.maxRetries,
-		model: options.model,
-		providerOptions: options.providerOptions,
-		system: options.system,
-		...(options.messages
-			? { messages: options.messages }
-			: { prompt: options.prompt ?? "" }),
-	});
-	return { text: result.text, usage: result.usage };
-};
+const defaultTextGenerator: SummaryTextGenerator = async (options) =>
+	generateAiSdkText(options);
 
 const buildSummaryPrompt = (input: SummaryGeneratorInput): string => {
 	const focus = input.focus?.trim();
@@ -77,46 +60,44 @@ const buildSummaryPrompt = (input: SummaryGeneratorInput): string => {
 	].join("\n");
 };
 
+const summaryPromptMessages = (
+	messages: readonly ConversationMessage[]
+): RuntimePromptMessage[] =>
+	messages.flatMap((message) => {
+		if (message.role !== "user" && message.role !== "assistant") {
+			return [];
+		}
+		const content = message.parts
+			.flatMap((part) => (part.type === "text" ? [part.text] : []))
+			.join("");
+		return content.length === 0 ? [] : [{ content, role: message.role }];
+	});
+
 export const createLanguageModelSummaryGenerator =
 	({
-		resolveModel,
 		generate = defaultTextGenerator,
+		resolveModel,
 	}: {
-		resolveModel: SummaryModelResolver;
 		generate?: SummaryTextGenerator;
+		resolveModel: SummaryModelResolver;
 	}): SummaryGenerator =>
 	async (input) => {
-		const resolved =
-			input.variant === undefined
-				? await resolveModel(input.model, input.signal)
-				: await resolveModel(input.model, input.signal, input.variant);
+		const model = await resolveModel(input.model, input.signal, input.variant);
 		const prompt = buildSummaryPrompt(input);
-		const modelMessages = input.summaryMessages
-			? await convertToModelMessages(
-					input.summaryMessages.map(({ id: _id, ...message }) => message)
-				)
+		const messages = input.summaryMessages
+			? [
+					{ content: prompt, role: "user" as const },
+					...summaryPromptMessages(input.summaryMessages),
+				]
 			: undefined;
-		const generated = await generate({
+		return generate({
 			abortSignal: input.signal,
 			maxOutputTokens: MAX_SUMMARY_OUTPUT_TOKENS,
 			maxRetries: 0,
-			model: resolved.model,
-			...(modelMessages
-				? {
-						messages: [
-							{ content: prompt, role: "user" as const },
-							...modelMessages,
-						],
-					}
-				: { prompt }),
-			providerOptions: resolved.providerOptions,
+			model,
+			...(messages === undefined ? { prompt } : { messages }),
 			system: COMPACTION_SUMMARY_SYSTEM_PROMPT,
 		});
-		const usage = normalizeModelUsage(generated.usage);
-		return {
-			text: generated.text,
-			...(usage ? { usage } : {}),
-		};
 	};
 
 export const resolveDirectSummaryModel = async (
@@ -124,19 +105,11 @@ export const resolveDirectSummaryModel = async (
 	connections: Connections,
 	signal?: AbortSignal,
 	variant?: ModelVariant
-): Promise<SummaryModel> => {
-	const target = await resolveChatModelTarget(selection, connections, {
-		signal,
-		variant,
+): Promise<SummaryModel> =>
+	resolveChatModelTarget(selection, connections, {
+		...(signal === undefined ? {} : { signal }),
+		...(variant === undefined ? {} : { variant }),
 	});
-	const resolved = resolveAiSdkModelTarget(target);
-	return {
-		model: resolved.model,
-		...(resolved.providerOptions
-			? { providerOptions: resolved.providerOptions }
-			: {}),
-	};
-};
 
 export const createDirectSummaryGenerator = (
 	connections: Connections,

@@ -1,20 +1,26 @@
 import {
+	type AgentId,
 	AgentInvariantError,
 	type AgentRole,
 	type AgentRuntime,
 	type AgentTurn,
 	type AgentTurnDelegation,
+	type AgentTurnEvent,
+	type AgentTurnFilePart,
 	type AgentTurnInterruptedEvent,
-	type AgentTurnLifecycle,
 	type AgentTurnMessage,
 	type AgentTurnPart,
 	type AgentTurnTerminalEvent,
+	agentIdSchema,
 	CONVERSATION_RECORD_VERSION,
+	type ConversationAttachmentReferencePart,
+	type ConversationFileMentionPart,
+	type ConversationMessageMetadataRecord,
+	type ConversationMessagePart,
 	type ConversationMessageRecord,
 	type ConversationRecord,
 	type ConversationToolCallPart,
 	createAgentTurnAbortEvent,
-	createAgentTurnLifecycle,
 	createOperationalFailure,
 	createToolRegistry,
 	getAgentTurnFailureDetails,
@@ -27,14 +33,6 @@ import {
 	type ToolRegistry,
 } from "@wincode/agent-core";
 import { createAiSdkAgentRuntime } from "@wincode/agent-runtime-ai-sdk";
-import {
-	type AgentId,
-	agentIdSchema,
-	type CodingAgentUIMessage,
-	getSystemInstructionsForAgent,
-	type McpToolManifest,
-	type ResolvedAgentRuntime,
-} from "@wincode/ai";
 import type { ModelTarget } from "@wincode/ai/model-target";
 import { normalizeModelUsage } from "@wincode/ai/model-usage";
 import {
@@ -51,25 +49,35 @@ import {
 	skillToolInputSchema,
 } from "@wincode/skills";
 import { sampleSkillResources } from "@wincode/skills/filesystem";
-import type { UIMessageChunk } from "ai";
 import { z } from "zod";
 import type { McpCatalogSnapshot, McpSnapshotTool } from "@/modules/mcp";
+import type { ResolvedCodingAgent } from "../../agents/built-ins";
 import type { GateOutcome, ToolGate } from "../../tool-gate/tool-gate";
 import {
 	type ConversationViewState,
 	consumeAgentTurnEvents,
 } from "../conversation-controller";
+import type { ConversationMessage, ConversationToolPart } from "../message";
+import {
+	expandConversationMessagesForModel,
+	isConversationToolPart,
+	isFileMentionPart,
+	isTerminalConversationToolPart,
+} from "../message";
+import {
+	formatAttachmentUnavailableMarker,
+	getAttachmentReference,
+} from "../storage/attachment-store";
 
 export type RuntimeFactory = () => AgentRuntime;
 
 /** Composition-root default: the private AI SDK Agent Runtime adapter. */
 export const defaultRuntimeFactory: RuntimeFactory = () =>
 	createAiSdkAgentRuntime();
+const BASE_AGENT_INSTRUCTIONS =
+	"You are a basic coding agent running in a user's CLI.\nAll file tools are limited to the CLI workspace.";
 
-/**
- * The coding Tool families the Agent Runtime path can execute today. Every
- * other family keeps the legacy agent loop until its own tracer slice lands.
- */
+/** Coding, Skill, MCP, and delegation Tools are composed by the CLI. */
 const RUNTIME_CODING_TOOL_NAMES = [
 	"read",
 	"write",
@@ -102,7 +110,7 @@ export const runtimeToolRegistry: ToolRegistry = createToolRegistry([
 
 const getErrorMessage = (error: unknown): string =>
 	error instanceof Error ? error.message : "Tool execution failed.";
-const runMigratedTool = async ({
+const runCodingToolThroughGate = async ({
 	input,
 	name,
 	options,
@@ -358,7 +366,7 @@ export const createGatedCodingTools = ({
 						type: "failure",
 					};
 				}
-				return runMigratedTool({
+				return runCodingToolThroughGate({
 					input: outcome.input ?? input,
 					name,
 					options: {
@@ -368,6 +376,7 @@ export const createGatedCodingTools = ({
 							: {
 									resourceLimits: await resolveResourceLimits(agentId),
 								}),
+						signal,
 					},
 				});
 			},
@@ -447,12 +456,12 @@ export const createGatedCodingTools = ({
 	return tools;
 };
 
-const migratedPartToolName = (
+const settledToolName = (
 	type: string,
 	toolName?: unknown
-): RuntimeToolName | undefined => {
+): string | undefined => {
 	if (type === "dynamic-tool") {
-		return toolName === "delegate" || toolName === "skill"
+		return typeof toolName === "string" && toolName.length > 0
 			? toolName
 			: undefined;
 	}
@@ -480,32 +489,28 @@ const migratedPartToolName = (
 	return;
 };
 
-/** A terminal migrated tool part from prior conversation turns. */
-export type MigratedToolCallPart = {
+/** A terminal tool part from prior conversation turns. */
+export type SettledConversationToolCallPart = {
 	input?: unknown;
 	toolCallId: string;
+	toolName?: string;
 	type: string;
 } & (
 	| { output: unknown; state: "output-available" }
 	| { errorText: string; state: "output-error" }
 );
 
-/**
- * A migrated static tool part is runtime-eligible only in a terminal state:
- * output-available (input plus output) or output-error with safe text.
- * In-flight, approval, and denied parts keep the legacy path so no pending
- * execution is ever replayed as history.
- */
-export const isMigratedToolCallPart = (
+/** Only settled tool calls are replayed into a new Agent Turn. */
+export const isSettledConversationToolCallPart = (
 	part: unknown
-): part is MigratedToolCallPart => {
+): part is SettledConversationToolCallPart => {
 	if (typeof part !== "object" || part === null || !("type" in part)) {
 		return false;
 	}
 	const candidate = part as Record<string, unknown>;
 	if (
 		typeof candidate.type !== "string" ||
-		migratedPartToolName(candidate.type, candidate.toolName) === undefined
+		settledToolName(candidate.type, candidate.toolName) === undefined
 	) {
 		return false;
 	}
@@ -526,94 +531,20 @@ export const isMigratedToolCallPart = (
 	return false;
 };
 
-/**
- * Eligibility for the Agent Runtime path at the conversation seam. MCP and
- * non-migrated coding families remain on the legacy path; Skills are native
- * runtime tools and use the same application Tool Gate as coding tools.
- */
-export const isRuntimeEligibleSend = ({
-	gate,
-	mcpManifest,
-	messages,
-	resolvedAgent,
-	skillTool,
-}: {
-	gate?: ToolGate;
-	mcpManifest: McpToolManifest;
-	messages: readonly CodingAgentUIMessage[];
-	resolvedAgent: ResolvedAgentRuntime | undefined;
-	skill: SkillRequestContext | undefined;
-	skillTool: SkillToolDefinition | undefined;
-}): boolean => {
-	if (!resolvedAgent) {
-		return false;
-	}
-	for (const tool of resolvedAgent.visibleCodingTools) {
-		if (!isRuntimeCodingToolName(tool)) {
-			return false;
-		}
-	}
-	if (
-		(resolvedAgent.visibleCodingTools.length > 0 || skillTool !== undefined) &&
-		gate === undefined
-	) {
-		return false;
-	}
-	if (mcpManifest.length > 0) {
-		return false;
-	}
-	for (const message of messages) {
-		if (!isRuntimeEligibleMessage(message)) {
-			return false;
-		}
-	}
-	return true;
-};
-
-const isRuntimeEligibleMessage = (message: CodingAgentUIMessage): boolean => {
-	if (message.role !== "assistant" && message.role !== "user") {
-		return false;
-	}
-	let hasContent = false;
-	for (const part of message.parts) {
-		if (part.type === "text") {
-			hasContent = hasContent || part.text.length > 0;
-			continue;
-		}
-		if (part.type === "step-start" || part.type === "reasoning") {
-			continue;
-		}
-		if (isMigratedToolCallPart(part)) {
-			if (message.role !== "assistant") {
-				return false;
-			}
-			hasContent = true;
-			continue;
-		}
-		// Tool parts of other coding families, MCP dynamic tools, file,
-		// source, and data parts keep the send on the legacy path.
-		return false;
-	}
-	// An assistant reply that streamed only reasoning would otherwise be
-	// dropped from the runtime prompt, breaking role alternation with the
-	// legacy path. Keep such conversations on the legacy path.
-	return message.role !== "assistant" || hasContent;
-};
-
 type TurnToolCallPart = {
 	input: unknown;
 	toolCallId: string;
-	toolName: RuntimeToolName;
+	toolName: string;
 	type: "tool-call";
 };
 
 /**
- * Converts one terminal migrated UI tool part into its Assistant tool-call
+ * Converts one terminal conversation Tool part into its Assistant tool-call
  * request plus the `tool` role message that carries the settled result.
  */
 const toToolCallParts = (
-	part: MigratedToolCallPart,
-	name: RuntimeToolName
+	part: SettledConversationToolCallPart,
+	name: string
 ): {
 	request: TurnToolCallPart;
 	result: AgentTurnMessage["parts"][number];
@@ -648,7 +579,7 @@ const toToolCallParts = (
 };
 
 const toAssistantTurnMessages = (
-	message: CodingAgentUIMessage
+	message: ConversationMessage
 ): AgentTurnMessage[] => {
 	const parts: AgentTurnPart[] = [];
 	const results: AgentTurnMessage[] = [];
@@ -662,10 +593,10 @@ const toAssistantTurnMessages = (
 		if (part.type === "step-start" || part.type === "reasoning") {
 			continue;
 		}
-		if (!isMigratedToolCallPart(part)) {
+		if (!isSettledConversationToolCallPart(part)) {
 			continue;
 		}
-		const name = migratedPartToolName(
+		const name = settledToolName(
 			part.type,
 			"toolName" in part ? part.toolName : undefined
 		);
@@ -686,21 +617,42 @@ const toAssistantTurnMessages = (
 	return [{ id: message.id, parts, role: "assistant" }, ...results];
 };
 
+const toUserTurnPart = (
+	part: ConversationMessage["parts"][number]
+): AgentTurnPart | undefined => {
+	if (part.type === "text") {
+		return part.text.length > 0 ? { text: part.text, type: "text" } : undefined;
+	}
+	if (part.type !== "file") {
+		return;
+	}
+	const reference = getAttachmentReference(part);
+	if (reference !== null) {
+		return {
+			text: formatAttachmentUnavailableMarker(reference, "omitted"),
+			type: "text",
+		};
+	}
+	const filePart: AgentTurnFilePart = {
+		data: part.url,
+		mediaType: part.mediaType,
+		type: "file",
+	};
+	return filePart;
+};
+
 const toUserTurnMessages = (
-	message: CodingAgentUIMessage
+	message: ConversationMessage
 ): AgentTurnMessage[] => {
-	const textParts = message.parts.flatMap((part) =>
-		part.type === "text" && part.text.length > 0
-			? [{ text: part.text, type: "text" as const }]
-			: []
-	);
-	return textParts.length === 0
-		? []
-		: [{ id: message.id, parts: textParts, role: "user" }];
+	const parts = message.parts.flatMap((part) => {
+		const modelPart = toUserTurnPart(part);
+		return modelPart === undefined ? [] : [modelPart];
+	});
+	return parts.length === 0 ? [] : [{ id: message.id, parts, role: "user" }];
 };
 
 const toAgentTurnMessages = (
-	message: CodingAgentUIMessage
+	message: ConversationMessage
 ): AgentTurnMessage[] => {
 	if (message.role === "user") {
 		return toUserTurnMessages(message);
@@ -714,8 +666,8 @@ const toAgentTurnMessages = (
 /**
  * Builds one Agent Turn from the resolved conversation send. The Model Target
  * is resolved by the caller (it needs authorization); the Agent instructions
- * are composed the same way the legacy loop composes them; `tools` carries
- * the gated Resolved Tools the runtime may invoke for this Agent.
+ * are composed for the resolved Agent; `tools` carries the gated Resolved
+ * Tools the runtime may invoke for this Agent.
  */
 export const buildAgentTurn = ({
 	agent,
@@ -730,15 +682,18 @@ export const buildAgentTurn = ({
 }: {
 	agent: AgentId;
 	delegation?: AgentTurnDelegation;
-	modelMessages: readonly CodingAgentUIMessage[];
+	modelMessages: readonly ConversationMessage[];
 	modelTarget: ModelTarget;
-	resolvedAgent: ResolvedAgentRuntime;
+	resolvedAgent: ResolvedCodingAgent;
 	role?: AgentRole;
 	skill?: SkillRequestContext;
 	tools?: readonly ResolvedTool[];
 	turnId: string;
 }): AgentTurn => {
-	const messages = modelMessages.flatMap(toAgentTurnMessages);
+	const messages =
+		expandConversationMessagesForModel(modelMessages).flatMap(
+			toAgentTurnMessages
+		);
 	const effectiveRole =
 		delegation === undefined ? (role ?? "primary") : "subagent";
 	if (skill !== undefined) {
@@ -751,7 +706,7 @@ export const buildAgentTurn = ({
 	return {
 		agent: {
 			id: agent,
-			instructions: getSystemInstructionsForAgent(resolvedAgent.instructions),
+			instructions: `${BASE_AGENT_INSTRUCTIONS}\n\n${resolvedAgent.instructions}`,
 			role: effectiveRole,
 		},
 		...(delegation === undefined ? {} : { delegation }),
@@ -788,8 +743,130 @@ export type CheckpointCommitter = (
 	record: ConversationRecord
 ) => Promise<void> | void;
 
-const durableInputMessages = (turn: AgentTurn): ConversationMessageRecord[] =>
-	turn.input.messages.flatMap((message) => {
+const conversationToolName = (part: ConversationToolPart): string =>
+	part.type === "dynamic-tool"
+		? part.toolName
+		: part.type.slice("tool-".length);
+
+const toDurableMetadata = (
+	metadata: ConversationMessage["metadata"]
+): ConversationMessageMetadataRecord | undefined => {
+	if (metadata === undefined) {
+		return;
+	}
+	const skill = metadata.skill;
+	return {
+		...(metadata.agent === undefined ? {} : { agent: metadata.agent }),
+		...(metadata.interrupted === undefined
+			? {}
+			: { interrupted: metadata.interrupted }),
+		...(metadata.model === undefined ? {} : { model: metadata.model }),
+		...(metadata.responseTimeMs === undefined
+			? {}
+			: { responseTimeMs: metadata.responseTimeMs }),
+		...(skill === undefined
+			? {}
+			: {
+					skill: {
+						arguments: skill.arguments,
+						contentHash: skill.contentHash,
+						name: skill.name,
+						source: skill.source ?? "explicit",
+					},
+				}),
+		...(metadata.usage === undefined ? {} : { usage: metadata.usage }),
+		...(metadata.variant === undefined ? {} : { variant: metadata.variant }),
+	};
+};
+
+const toDurableConversationToolPart = (
+	part: ConversationToolPart
+): ConversationToolCallPart | undefined => {
+	if (!isTerminalConversationToolPart(part)) {
+		return;
+	}
+	const outcome =
+		part.state === "output-available"
+			? { kind: "success" as const, output: part.output }
+			: {
+					errorText: part.errorText ?? "Tool call denied.",
+					kind: "failure" as const,
+				};
+	return {
+		input: part.input,
+		outcome,
+		sequence: 0,
+		toolCallId: part.toolCallId,
+		toolName: conversationToolName(part),
+		type: "tool-call",
+	};
+};
+
+const toDurableConversationPart = (
+	part: ConversationMessage["parts"][number]
+): ConversationMessagePart[] => {
+	if (part.type === "text") {
+		return [{ text: part.text, type: "text" }];
+	}
+	if (isFileMentionPart(part)) {
+		const mention: ConversationFileMentionPart = {
+			data: part.data,
+			...(part.id === undefined ? {} : { id: part.id }),
+			type: "file-mention",
+		};
+		return [mention];
+	}
+	const reference = getAttachmentReference(part);
+	if (reference !== null) {
+		const attachment: ConversationAttachmentReferencePart = {
+			attachmentId: reference.attachmentId,
+			available: reference.available,
+			byteLength: reference.byteLength,
+			filename: reference.filename,
+			...(reference.height === undefined ? {} : { height: reference.height }),
+			mediaType: reference.mediaType,
+			type: "attachment-reference",
+			...(reference.width === undefined ? {} : { width: reference.width }),
+		};
+		return [attachment];
+	}
+	if (isConversationToolPart(part)) {
+		const toolPart = toDurableConversationToolPart(part);
+		return toolPart === undefined ? [] : [toolPart];
+	}
+	return [];
+};
+
+const toDurableConversationMessage = (
+	message: ConversationMessage
+): ConversationMessageRecord | undefined => {
+	if (message.role !== "assistant" && message.role !== "user") {
+		return;
+	}
+	const parts = message.parts.flatMap(toDurableConversationPart);
+	return parts.length === 0
+		? undefined
+		: {
+				id: message.id,
+				...(toDurableMetadata(message.metadata) === undefined
+					? {}
+					: { metadata: toDurableMetadata(message.metadata) }),
+				parts,
+				role: message.role,
+			};
+};
+
+const durableInputMessages = (
+	turn: AgentTurn,
+	sourceMessages?: readonly ConversationMessage[]
+): ConversationMessageRecord[] => {
+	if (sourceMessages !== undefined) {
+		return sourceMessages.flatMap((message) => {
+			const durable = toDurableConversationMessage(message);
+			return durable === undefined ? [] : [durable];
+		});
+	}
+	return turn.input.messages.flatMap((message) => {
 		if (message.role === "tool") {
 			return [];
 		}
@@ -800,6 +877,7 @@ const durableInputMessages = (turn: AgentTurn): ConversationMessageRecord[] =>
 			? []
 			: [{ id: message.id, parts, role: message.role }];
 	});
+};
 
 const toDurableToolPart = (part: {
 	input: unknown;
@@ -837,11 +915,13 @@ const toDurableToolPart = (part: {
 export const buildTerminalConversationRecord = ({
 	assistantText,
 	event,
+	sourceMessages,
 	toolCalls,
 	turn,
 }: {
 	assistantText: string;
 	event: AgentTurnTerminalEvent;
+	sourceMessages?: readonly ConversationMessage[];
 	toolCalls: readonly {
 		input: unknown;
 		outcome:
@@ -861,18 +941,32 @@ export const buildTerminalConversationRecord = ({
 		safeEvent.type === "agent-turn-completed"
 			? (normalizeModelUsage(safeEvent.usage) ?? undefined)
 			: undefined;
-	const messages = durableInputMessages(turn);
+	const messages = durableInputMessages(turn, sourceMessages);
 	const assistantParts: ConversationToolCallPart[] =
 		toolCalls.map(toDurableToolPart);
+	const assistantMetadata: ConversationMessageMetadataRecord = {
+		agent: turn.agent.id,
+		interrupted: safeEvent.type !== "agent-turn-completed",
+		model: {
+			modelId: turn.model.modelId,
+			providerId: turn.model.providerId,
+		},
+		...(safeUsage === undefined ? {} : { usage: safeUsage }),
+		...(turn.model.variant === undefined
+			? {}
+			: { variant: turn.model.variant }),
+	};
 	if (safeEvent.type === "agent-turn-completed" && assistantText.length > 0) {
 		messages.push({
 			id: `assistant-${turn.id}`,
+			metadata: assistantMetadata,
 			parts: [{ text: assistantText, type: "text" }, ...assistantParts],
 			role: "assistant",
 		});
 	} else if (assistantParts.length > 0) {
 		messages.push({
 			id: `assistant-${turn.id}`,
+			metadata: assistantMetadata,
 			parts: [...assistantParts],
 			role: "assistant",
 		});
@@ -922,23 +1016,73 @@ export const buildTerminalConversationRecord = ({
 		...(turn.delegation === undefined ? {} : { delegation: turn.delegation }),
 		id: `record-${crypto.randomUUID()}`,
 		messages,
-		model: { modelId: turn.model.modelId, providerId: turn.model.providerId },
+		model: {
+			modelId: turn.model.modelId,
+			providerId: turn.model.providerId,
+			...(turn.model.variant === undefined
+				? {}
+				: { variant: turn.model.variant }),
+		},
 		outcome,
 		turnId: turn.id,
 		version: CONVERSATION_RECORD_VERSION,
 	};
 };
+const CHECKPOINT_FAILURE_MESSAGE =
+	"The Agent Turn outcome could not be persisted.";
+
+const createLostExecutionEvent = (
+	turn: AgentTurn,
+	sequence: number
+): AgentTurnInterruptedEvent => ({
+	failure: createOperationalFailure({
+		code: "interrupted",
+		details: getAgentTurnFailureDetails(turn),
+		retry: "immediate",
+		source: "runtime",
+	}),
+	finishedAt: Date.now(),
+	reason: "lost-execution",
+	sequence,
+	turnId: turn.id,
+	type: "agent-turn-interrupted",
+});
+
+const resolveMissingTerminalEvent = (
+	signal: AbortSignal | undefined,
+	turn: AgentTurn,
+	lastSequence: number
+): AgentTurnTerminalEvent =>
+	signal === undefined
+		? createLostExecutionEvent(turn, lastSequence + 1)
+		: createAgentTurnAbortEvent(turn, signal, lastSequence + 1);
+
+const terminalEventForOutcome = (
+	event: AgentTurnTerminalEvent,
+	turn: AgentTurn,
+	signal: AbortSignal | undefined
+): AgentTurnTerminalEvent =>
+	signal?.aborted
+		? createAgentTurnAbortEvent(turn, signal, event.sequence)
+		: event;
+
 export const runAgentTurnToText = async ({
 	onCheckpoint,
+	onEvent,
+	onTerminal,
 	onViewState,
 	runtime,
 	signal,
+	sourceMessages,
 	turn,
 }: {
 	onCheckpoint?: CheckpointCommitter;
+	onEvent?: (event: AgentTurnEvent) => void | Promise<void>;
+	onTerminal?: (event: AgentTurnTerminalEvent) => void | Promise<void>;
 	onViewState?: (state: ConversationViewState) => void;
 	runtime: AgentRuntime;
 	signal?: AbortSignal;
+	sourceMessages?: readonly ConversationMessage[];
 	turn: AgentTurn;
 }): Promise<string> => {
 	let assistantText = "";
@@ -950,7 +1094,7 @@ export const runAgentTurnToText = async ({
 	>();
 	const toolCalls = new Map<string, ConversationToolCallPart>();
 	await consumeAgentTurnEvents({
-		onEvent: (event) => {
+		onEvent: async (event) => {
 			lastSequence = Math.max(lastSequence, event.sequence);
 			if (event.type === "text-delta") {
 				assistantText += event.delta;
@@ -978,6 +1122,7 @@ export const runAgentTurnToText = async ({
 					startedTools.delete(event.toolCallId);
 				}
 			}
+			await onEvent?.(event);
 		},
 		onTerminal: (event) => {
 			lastSequence = Math.max(lastSequence, event.sequence);
@@ -988,10 +1133,11 @@ export const runAgentTurnToText = async ({
 		signal,
 		turn,
 	});
-	const terminalEvent =
-		terminal === undefined
-			? resolveMissingTerminalEvent(signal, turn, lastSequence)
-			: terminalEventForOutcome(terminal, turn, signal);
+	const terminalEvent = terminalEventForOutcome(
+		terminal ?? resolveMissingTerminalEvent(signal, turn, lastSequence),
+		turn,
+		signal
+	);
 	const record = buildTerminalConversationRecord({
 		assistantText,
 		event: terminalEvent,
@@ -1007,6 +1153,7 @@ export const runAgentTurnToText = async ({
 				toolCallId,
 				toolName,
 			})),
+		sourceMessages,
 		turn,
 	});
 	try {
@@ -1017,527 +1164,9 @@ export const runAgentTurnToText = async ({
 		}
 		throw new Error(CHECKPOINT_FAILURE_MESSAGE, { cause: error });
 	}
+	await onTerminal?.(terminalEvent);
 	if (terminalEvent.type === "agent-turn-completed") {
 		return assistantText;
 	}
 	throw new Error(terminalEvent.failure.message);
 };
-
-/** Maps a terminal Agent Turn Event onto the executor display chunk. */
-const terminalChunkFor = (event: AgentTurnTerminalEvent): UIMessageChunk => {
-	if (event.type === "agent-turn-completed") {
-		const safeUsage = normalizeModelUsage(event.usage) ?? undefined;
-		return {
-			finishReason: "stop",
-			...(safeUsage === undefined
-				? {}
-				: { messageMetadata: { usage: safeUsage } }),
-			type: "finish",
-		};
-	}
-	return { errorText: event.failure.message, type: "error" };
-};
-
-const CHECKPOINT_FAILURE_MESSAGE =
-	"The Agent Turn outcome could not be persisted.";
-
-/**
- * Owns the open text/reasoning part state of one display chunk stream so a
- * terminal Agent Turn Event closes every part before the terminal chunk.
- * Part ids are unique per open session because the executor resets its
- * active part maps between Model Steps.
- */
-const createPartWriter = (enqueue: (chunk: UIMessageChunk) => void) => {
-	let nextTextId = 1;
-	let nextReasoningId = 1;
-	let reasoningOpen = false;
-	let textOpen = false;
-
-	const closeText = (): void => {
-		if (!textOpen) {
-			return;
-		}
-		textOpen = false;
-		enqueue({ id: `text-${nextTextId - 1}`, type: "text-end" });
-	};
-	const closeReasoning = (): void => {
-		if (!reasoningOpen) {
-			return;
-		}
-		reasoningOpen = false;
-		enqueue({ id: `reasoning-${nextReasoningId - 1}`, type: "reasoning-end" });
-	};
-	const closeParts = (): void => {
-		closeText();
-		closeReasoning();
-	};
-
-	const openStep = (): void => {
-		enqueue({ type: "start-step" });
-	};
-	const textDelta = (delta: string): void => {
-		if (!textOpen) {
-			textOpen = true;
-			enqueue({ id: `text-${nextTextId}`, type: "text-start" });
-			nextTextId += 1;
-		}
-		enqueue({ delta, id: `text-${nextTextId - 1}`, type: "text-delta" });
-	};
-	const reasoningDelta = (delta: string): void => {
-		if (!reasoningOpen) {
-			reasoningOpen = true;
-			enqueue({ id: `reasoning-${nextReasoningId}`, type: "reasoning-start" });
-			nextReasoningId += 1;
-		}
-		enqueue({
-			delta,
-			id: `reasoning-${nextReasoningId - 1}`,
-			type: "reasoning-delta",
-		});
-	};
-	const finishStep = (): void => {
-		closeParts();
-		enqueue({ type: "finish-step" });
-	};
-
-	return { closeParts, finishStep, openStep, reasoningDelta, textDelta };
-};
-
-const resolveMissingTerminalEvent = (
-	signal: AbortSignal | undefined,
-	turn: AgentTurn,
-	lastSequence: number
-): AgentTurnTerminalEvent =>
-	signal?.aborted
-		? createAgentTurnAbortEvent(turn, signal, lastSequence + 1)
-		: createLostExecutionEvent(turn, lastSequence + 1);
-
-const createLostExecutionEvent = (
-	turn: AgentTurn,
-	sequence: number
-): AgentTurnInterruptedEvent => ({
-	failure: createOperationalFailure({
-		code: "interrupted",
-		details: getAgentTurnFailureDetails(turn),
-		retry: "immediate",
-		source: "runtime",
-	}),
-	finishedAt: Date.now(),
-	reason: "lost-execution",
-	sequence,
-	turnId: turn.id,
-	type: "agent-turn-interrupted",
-});
-
-const terminalEventForOutcome = (
-	event: AgentTurnTerminalEvent,
-	turn: AgentTurn,
-	outcomeSignal: AbortSignal | undefined
-): AgentTurnTerminalEvent =>
-	outcomeSignal?.aborted
-		? createAgentTurnAbortEvent(turn, outcomeSignal, event.sequence)
-		: event;
-const resolveOutcomeSignal = (
-	runtimeSignal: AbortSignal | undefined,
-	outcomeSignal: AbortSignal | undefined
-): AbortSignal | undefined => {
-	if (outcomeSignal?.aborted) {
-		return outcomeSignal;
-	}
-	if (runtimeSignal?.aborted) {
-		return runtimeSignal;
-	}
-};
-
-type StreamState = {
-	streamedText: string;
-	terminalEmitted: boolean;
-	/** Committed Tool Calls in finished-event order for the terminal record. */
-	toolCalls: Array<{
-		input: unknown;
-		outcome:
-			| { errorText: string; type: "failure" }
-			| {
-					output: unknown;
-					type: "success";
-			  };
-		sequence: number;
-		toolCallId: string;
-		toolName: string;
-	}>;
-};
-
-type PartWriter = {
-	closeParts: () => void;
-	finishStep: () => void;
-	openStep: () => void;
-	reasoningDelta: (delta: string) => void;
-	textDelta: (delta: string) => void;
-};
-type TerminalProcessor = (event: AgentTurnTerminalEvent) => Promise<void>;
-
-const toolInputChunks = ({
-	input,
-	toolCallId,
-	toolName,
-}: {
-	input: unknown;
-	toolCallId: string;
-	toolName: string;
-}): UIMessageChunk[] => [
-	{
-		providerExecuted: true,
-		toolCallId,
-		toolName,
-		type: "tool-input-start",
-	},
-	{
-		input,
-		providerExecuted: true,
-		toolCallId,
-		toolName,
-		type: "tool-input-available",
-	},
-];
-
-const createTerminalProcessor = ({
-	lifecycle,
-	onCheckpoint,
-	outcomeSignal,
-	state,
-	turn,
-	writer,
-	enqueue,
-}: {
-	enqueue: (chunk: UIMessageChunk) => void;
-	lifecycle: AgentTurnLifecycle;
-	onCheckpoint?: CheckpointCommitter;
-	outcomeSignal?: AbortSignal;
-	state: StreamState;
-	turn: AgentTurn;
-	writer: PartWriter;
-}): TerminalProcessor => {
-	const emitTerminal = (chunk: UIMessageChunk): void => {
-		writer.closeParts();
-		state.terminalEmitted = true;
-		enqueue(chunk);
-	};
-
-	return async (event: AgentTurnTerminalEvent): Promise<void> => {
-		const safeEvent = normalizeTerminalEvent(
-			terminalEventForOutcome(event, turn, outcomeSignal),
-			turn
-		);
-		lifecycle.apply(safeEvent);
-		if (onCheckpoint === undefined) {
-			emitTerminal(terminalChunkFor(safeEvent));
-			return;
-		}
-		try {
-			await onCheckpoint(
-				buildTerminalConversationRecord({
-					assistantText: state.streamedText,
-					event: safeEvent,
-					toolCalls: state.toolCalls,
-					turn,
-				})
-			);
-			emitTerminal(terminalChunkFor(safeEvent));
-		} catch (error) {
-			if (isAgentInvariantError(error)) {
-				throw error;
-			}
-			// A failed turn failed regardless of record durability, so its safe
-			// failure text stays visible; only a completed turn degrades to the
-			// persistence error.
-			emitTerminal(
-				safeEvent.type === "agent-turn-completed"
-					? { errorText: CHECKPOINT_FAILURE_MESSAGE, type: "error" }
-					: terminalChunkFor(safeEvent)
-			);
-		}
-	};
-};
-const consumeRuntimeEvents = async ({
-	enqueue,
-	lifecycle,
-	processTerminal,
-	onViewState,
-	runtime,
-	signal,
-	startedToolInputs,
-	state,
-	writer,
-	turn,
-}: {
-	enqueue: (chunk: UIMessageChunk) => void;
-	lifecycle: AgentTurnLifecycle;
-	onViewState?: (state: ConversationViewState) => void;
-	processTerminal: TerminalProcessor;
-	runtime: AgentRuntime;
-	signal?: AbortSignal;
-	startedToolInputs: Map<string, unknown>;
-	state: StreamState;
-	turn: AgentTurn;
-	writer: PartWriter;
-}): Promise<void> =>
-	consumeAgentTurnEvents({
-		lifecycle,
-		onEvent: async (event) => {
-			switch (event.type) {
-				case "model-step-started":
-					writer.openStep();
-					break;
-				case "reasoning-delta":
-					writer.reasoningDelta(event.delta);
-					break;
-				case "text-delta":
-					state.streamedText += event.delta;
-					writer.textDelta(event.delta);
-					break;
-				case "model-step-finished":
-					writer.finishStep();
-					break;
-				case "tool-call-started":
-					startedToolInputs.set(event.toolCallId, event.input);
-					for (const chunk of toolInputChunks(event)) {
-						enqueue(chunk);
-					}
-					break;
-				case "tool-call-finished":
-					if (event.outcome.type === "success") {
-						enqueue({
-							output: event.outcome.output,
-							toolCallId: event.toolCallId,
-							type: "tool-output-available",
-						});
-					} else {
-						enqueue({
-							errorText: event.outcome.errorText,
-							toolCallId: event.toolCallId,
-							type: "tool-output-error",
-						});
-					}
-					state.toolCalls.push({
-						input: startedToolInputs.get(event.toolCallId),
-						outcome: event.outcome,
-						sequence: event.sequence,
-						toolCallId: event.toolCallId,
-						toolName: event.toolName,
-					});
-					break;
-				default:
-					break;
-			}
-		},
-		onTerminal: processTerminal,
-		runtime,
-		signal,
-		onViewState,
-		turn,
-	});
-
-const completeMissingTerminal = async ({
-	lifecycle,
-	processTerminal,
-	signal,
-	outcomeSignal,
-	state,
-	turn,
-}: {
-	lifecycle: AgentTurnLifecycle;
-	processTerminal: TerminalProcessor;
-	signal?: AbortSignal;
-	outcomeSignal?: AbortSignal;
-	state: StreamState;
-	turn: AgentTurn;
-}): Promise<void> => {
-	if (state.terminalEmitted) {
-		return;
-	}
-	const lifecycleState = lifecycle.getState();
-	if (!lifecycleState.started) {
-		throw new AgentInvariantError(
-			"missing-terminal-outcome",
-			"Agent Runtime ended before emitting an Agent Turn start.",
-			{ cause: lifecycleState }
-		);
-	}
-	const terminalSignal = resolveOutcomeSignal(signal, outcomeSignal);
-	const event =
-		terminalSignal === undefined
-			? createLostExecutionEvent(turn, lifecycleState.lastSequence + 1)
-			: createAgentTurnAbortEvent(
-					turn,
-					terminalSignal,
-					lifecycleState.lastSequence + 1
-				);
-	await processTerminal(event);
-};
-
-const handleRuntimeError = async ({
-	error,
-	lifecycle,
-	processTerminal,
-	outcomeSignal,
-	signal,
-	state,
-	turn,
-}: {
-	error: unknown;
-	lifecycle: AgentTurnLifecycle;
-	processTerminal: TerminalProcessor;
-	outcomeSignal?: AbortSignal;
-	signal?: AbortSignal;
-	state: StreamState;
-	turn: AgentTurn;
-}): Promise<void> => {
-	if (isAgentInvariantError(error)) {
-		throw error;
-	}
-	if (state.terminalEmitted) {
-		return;
-	}
-	const sequence = lifecycle.getState().lastSequence + 1;
-	const terminalSignal = resolveOutcomeSignal(signal, outcomeSignal);
-	const event: AgentTurnTerminalEvent = terminalSignal?.aborted
-		? createAgentTurnAbortEvent(turn, terminalSignal, sequence)
-		: {
-				failure: normalizeOperationalFailure(error, {
-					modelId: turn.model.modelId,
-					providerId: turn.model.providerId,
-				}),
-				finishedAt: Date.now(),
-				sequence,
-				turnId: turn.id,
-				type: "agent-turn-failed",
-			};
-	await processTerminal(event);
-};
-
-const runRuntimeStream = async ({
-	controller,
-	onCheckpoint,
-	onViewState,
-	outcomeSignal,
-	runtime,
-	signal,
-	turn,
-}: {
-	controller: ReadableStreamDefaultController<UIMessageChunk>;
-	onCheckpoint?: CheckpointCommitter;
-	onViewState?: (state: ConversationViewState) => void;
-	outcomeSignal?: AbortSignal;
-	runtime: AgentRuntime;
-	signal?: AbortSignal;
-	turn: AgentTurn;
-}): Promise<void> => {
-	const enqueue = (chunk: UIMessageChunk): void => {
-		controller.enqueue(chunk);
-	};
-	const writer = createPartWriter(enqueue);
-	const lifecycle = createAgentTurnLifecycle(turn.id);
-	const state: StreamState = {
-		streamedText: "",
-		terminalEmitted: false,
-		toolCalls: [],
-	};
-	const startedToolInputs = new Map<string, unknown>();
-	const processTerminal = createTerminalProcessor({
-		enqueue,
-		outcomeSignal,
-		lifecycle,
-		onCheckpoint,
-		state,
-		turn,
-		writer,
-	});
-
-	try {
-		await consumeRuntimeEvents({
-			enqueue,
-			onViewState,
-			lifecycle,
-			processTerminal,
-			runtime,
-			signal,
-			startedToolInputs,
-			state,
-			turn,
-			writer,
-		});
-		await completeMissingTerminal({
-			lifecycle,
-			processTerminal,
-			outcomeSignal,
-			signal,
-			state,
-			turn,
-		});
-	} catch (error) {
-		try {
-			await handleRuntimeError({
-				error,
-				lifecycle,
-				processTerminal,
-				outcomeSignal,
-				signal,
-				state,
-				turn,
-			});
-		} catch (terminalError) {
-			if (isAgentInvariantError(terminalError)) {
-				controller.error(terminalError);
-				return;
-			}
-			if (!state.terminalEmitted) {
-				writer.closeParts();
-				state.terminalEmitted = true;
-				enqueue({
-					errorText: "The Agent Turn failed unexpectedly.",
-					type: "error",
-				});
-			}
-		}
-	}
-
-	if (!state.terminalEmitted) {
-		writer.closeParts();
-	}
-	controller.close();
-};
-
-/**
- * CLI-owned adapter: runs one Agent Turn through the public Agent Runtime and
- * maps its Wincode Agent Turn Events onto the display chunk stream the
- * existing conversation executor consumes. The chunk protocol is only the
- * presentation boundary the application already owns; Agent Turn Events
- * remain the Wincode source of truth.
- */
-export const createRuntimeStream = async ({
-	onCheckpoint,
-	onViewState,
-	outcomeSignal,
-	runtime,
-	signal,
-	turn,
-}: {
-	onCheckpoint?: CheckpointCommitter;
-	onViewState?: (state: ConversationViewState) => void;
-	outcomeSignal?: AbortSignal;
-	runtime: AgentRuntime;
-	signal?: AbortSignal;
-	turn: AgentTurn;
-}): Promise<ReadableStream<UIMessageChunk>> =>
-	new ReadableStream<UIMessageChunk>({
-		start: (controller) =>
-			runRuntimeStream({
-				controller,
-				onCheckpoint,
-				onViewState,
-				runtime,
-				outcomeSignal,
-				signal,
-				turn,
-			}),
-	});

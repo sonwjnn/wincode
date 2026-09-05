@@ -1,6 +1,9 @@
-import type { CodingAgentUIMessage, CodingMessageUsage } from "@wincode/ai";
+import { getModelContextTokens } from "@wincode/ai/model-usage";
 import type { ChatModelSelection } from "@wincode/ai/models";
-import { getModelContextTokens } from "@wincode/ai/usage";
+import type {
+	ConversationMessage,
+	ConversationMessageUsage,
+} from "@/modules/conversations/message";
 import type { ModelPricingTable } from "@/modules/model-pricing";
 import { resolveModelPricing } from "@/modules/model-pricing";
 import type { ConversationCompaction } from "../compaction";
@@ -18,14 +21,14 @@ const clampPercent = (percent: number): number =>
 
 type MessageUsageState = {
 	lastSelection: ChatModelSelection | null;
-	lastUsage: CodingMessageUsage | null;
+	lastUsage: ConversationMessageUsage | null;
 	lastUsageIndex: number;
 };
 
 const collectMessageUsage = (
-	messages: readonly CodingAgentUIMessage[]
+	messages: readonly ConversationMessage[]
 ): MessageUsageState => {
-	let lastUsage: CodingMessageUsage | null = null;
+	let lastUsage: ConversationMessageUsage | null = null;
 	let lastSelection: ChatModelSelection | null = null;
 	let lastUsageIndex = -1;
 	for (const [index, message] of messages.entries()) {
@@ -53,7 +56,7 @@ const findLatestCompaction = (
 
 /** Aggregate context occupancy for the current local conversation. */
 export const summarizeSessionUsage = (
-	messages: readonly CodingAgentUIMessage[],
+	messages: readonly ConversationMessage[],
 	fallbackModel: ChatModelSelection,
 	table: ModelPricingTable,
 	compactions: readonly ConversationCompaction[] = []

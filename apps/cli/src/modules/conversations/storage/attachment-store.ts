@@ -9,10 +9,12 @@ import {
 	unlink,
 } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import type { CodingAgentUIMessage } from "@wincode/ai";
-import type { FileUIPart } from "@wincode/ai/client";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
+import type {
+	ConversationFilePart,
+	ConversationMessage,
+} from "@/modules/conversations/message";
 import type { ConversationDatabase } from "./client";
 import { conversationAttachment } from "./schema";
 
@@ -80,7 +82,7 @@ export type AttachmentReference = Readonly<
 	z.infer<typeof attachmentReferenceSchema>
 >;
 
-export type AttachmentReferenceFilePart = FileUIPart &
+export type AttachmentReferenceFilePart = ConversationFilePart &
 	AttachmentReference & {
 		displayAvailability?: "missing";
 		url: `${typeof ATTACHMENT_URL_PREFIX}${string}`;
@@ -218,9 +220,9 @@ export type CompactionAttachmentMetadata = AttachmentReference & {
 
 export type ConversationAttachmentStore = {
 	annotateMessagesForDisplay: (
-		messages: readonly CodingAgentUIMessage[],
+		messages: readonly ConversationMessage[],
 		signal?: AbortSignal
-	) => Promise<CodingAgentUIMessage[]>;
+	) => Promise<ConversationMessage[]>;
 	collect: (input: {
 		liveAttachmentIds: Iterable<string>;
 		maxBytes?: number;
@@ -228,23 +230,23 @@ export type ConversationAttachmentStore = {
 		safetyWindowMs?: number;
 	}) => Promise<AttachmentMaintenanceReport>;
 	externalizeMessages: (
-		messages: readonly CodingAgentUIMessage[],
+		messages: readonly ConversationMessage[],
 		signal?: AbortSignal,
 		options?: AttachmentExternalizationOptions
-	) => Promise<CodingAgentUIMessage[]>;
+	) => Promise<ConversationMessage[]>;
 	getCompactionMetadata: (
-		messages: readonly CodingAgentUIMessage[],
+		messages: readonly ConversationMessage[],
 		signal?: AbortSignal
 	) => Promise<CompactionAttachmentMetadata[]>;
 	hydrateMessages: (
-		messages: readonly CodingAgentUIMessage[],
+		messages: readonly ConversationMessage[],
 		options: AttachmentHydrationOptions
-	) => Promise<CodingAgentUIMessage[]>;
+	) => Promise<ConversationMessage[]>;
 	hydrateMessagesWithStats: (
-		messages: readonly CodingAgentUIMessage[],
+		messages: readonly ConversationMessage[],
 		options: AttachmentHydrationOptions
 	) => Promise<{
-		messages: CodingAgentUIMessage[];
+		messages: ConversationMessage[];
 		stats: AttachmentHydrationStats;
 	}>;
 	ingest: (
@@ -265,7 +267,7 @@ export type ConversationAttachmentStoreOptions = {
 };
 
 type ImageFilePart = Extract<
-	CodingAgentUIMessage["parts"][number],
+	ConversationMessage["parts"][number],
 	{ type: "file" }
 >;
 
@@ -559,8 +561,8 @@ export const getAttachmentReference = (
 };
 
 export const stripAttachmentDisplayMetadata = (
-	part: CodingAgentUIMessage["parts"][number]
-): CodingAgentUIMessage["parts"][number] => {
+	part: ConversationMessage["parts"][number]
+): ConversationMessage["parts"][number] => {
 	if (
 		!getAttachmentReference(part) ||
 		typeof part !== "object" ||
@@ -570,7 +572,7 @@ export const stripAttachmentDisplayMetadata = (
 		return part;
 	}
 	const { displayAvailability: _displayAvailability, ...durablePart } = part;
-	return durablePart as CodingAgentUIMessage["parts"][number];
+	return durablePart as ConversationMessage["parts"][number];
 };
 export const isAttachmentReferencePart = (
 	part: unknown
@@ -718,7 +720,7 @@ const writeBlobAtomically = async (
 const inlineFilePart = (
 	part: Pick<ImageFilePart, "filename" | "mediaType">,
 	bytes: Uint8Array
-): FileUIPart => ({
+): ConversationFilePart => ({
 	filename: part.filename,
 	mediaType: part.mediaType,
 	type: "file",
@@ -739,20 +741,20 @@ export const isLegacyImagePart = (part: unknown): part is ImageFilePart =>
 	isImageFilePart(part) && !isAttachmentReferencePart(part);
 
 export const messageHasLegacyImageParts = (
-	message: CodingAgentUIMessage
+	message: ConversationMessage
 ): boolean => message.parts.some(isLegacyImagePart);
 
 const copyMessagesWithParts = (
-	messages: readonly CodingAgentUIMessage[],
-	partsByMessage: Map<number, CodingAgentUIMessage["parts"]>
-): CodingAgentUIMessage[] =>
+	messages: readonly ConversationMessage[],
+	partsByMessage: Map<number, ConversationMessage["parts"]>
+): ConversationMessage[] =>
 	messages.map((message, index) => {
 		const parts = partsByMessage.get(index);
 		return parts === undefined ? message : { ...message, parts };
 	});
 
 const collectReferences = (
-	messages: readonly CodingAgentUIMessage[]
+	messages: readonly ConversationMessage[]
 ): AttachmentReference[] =>
 	messages.flatMap((message) =>
 		message.parts.flatMap((part) => {
@@ -891,7 +893,7 @@ const resolveHydrationBudget = (
 };
 
 const findAttachmentCandidates = (
-	messages: readonly CodingAgentUIMessage[]
+	messages: readonly ConversationMessage[]
 ): AttachmentCandidate[] => {
 	const candidates: AttachmentCandidate[] = [];
 	for (const [messageIndex, message] of messages.entries()) {
@@ -1017,11 +1019,11 @@ const selectAttachmentPayloads = async (
 };
 
 const hydrateMessageParts = (
-	message: CodingAgentUIMessage,
+	message: ConversationMessage,
 	messageIndex: number,
 	selection: HydrationSelection,
 	purpose: AttachmentHydrationPurpose
-): CodingAgentUIMessage["parts"] | undefined => {
+): ConversationMessage["parts"] | undefined => {
 	let changed = false;
 	const parts = message.parts.map((part, partIndex) => {
 		const reference = getAttachmentReference(part);
@@ -1196,7 +1198,7 @@ export const createConversationAttachmentStore = ({
 		part: ImageFilePart,
 		signal?: AbortSignal,
 		options?: AttachmentExternalizationOptions
-	): Promise<CodingAgentUIMessage["parts"][number]> => {
+	): Promise<ConversationMessage["parts"][number]> => {
 		const parsed = parseDataUrl(part.url, maxBytes);
 		const valid =
 			parsed !== null &&
@@ -1222,14 +1224,14 @@ export const createConversationAttachmentStore = ({
 		);
 	};
 	const externalizeMessages = async (
-		messages: readonly CodingAgentUIMessage[],
+		messages: readonly ConversationMessage[],
 		signal?: AbortSignal,
 		options?: AttachmentExternalizationOptions
-	): Promise<CodingAgentUIMessage[]> => {
-		const partsByMessage = new Map<number, CodingAgentUIMessage["parts"]>();
+	): Promise<ConversationMessage[]> => {
+		const partsByMessage = new Map<number, ConversationMessage["parts"]>();
 		for (const [messageIndex, message] of messages.entries()) {
 			let changed = false;
-			const parts: CodingAgentUIMessage["parts"] = [];
+			const parts: ConversationMessage["parts"] = [];
 			for (const part of message.parts) {
 				assertNotAborted(signal);
 				if (!(isImageFilePart(part) && !isAttachmentReferencePart(part))) {
@@ -1246,10 +1248,10 @@ export const createConversationAttachmentStore = ({
 		return copyMessagesWithParts(messages, partsByMessage);
 	};
 	const hydrateMessagesWithStats = async (
-		messages: readonly CodingAgentUIMessage[],
+		messages: readonly ConversationMessage[],
 		options: AttachmentHydrationOptions
 	): Promise<{
-		messages: CodingAgentUIMessage[];
+		messages: ConversationMessage[];
 		stats: AttachmentHydrationStats;
 	}> => {
 		const candidates = findAttachmentCandidates(messages);
@@ -1262,7 +1264,7 @@ export const createConversationAttachmentStore = ({
 			options.priorityMessageId,
 			options.signal
 		);
-		const partsByMessage = new Map<number, CodingAgentUIMessage["parts"]>();
+		const partsByMessage = new Map<number, ConversationMessage["parts"]>();
 		for (const [messageIndex, message] of messages.entries()) {
 			const parts = hydrateMessageParts(
 				message,
@@ -1280,13 +1282,13 @@ export const createConversationAttachmentStore = ({
 		};
 	};
 	const hydrateMessages = async (
-		messages: readonly CodingAgentUIMessage[],
+		messages: readonly ConversationMessage[],
 		options: AttachmentHydrationOptions
-	): Promise<CodingAgentUIMessage[]> =>
+	): Promise<ConversationMessage[]> =>
 		(await hydrateMessagesWithStats(messages, options)).messages;
 
 	const getCompactionMetadata = async (
-		messages: readonly CodingAgentUIMessage[],
+		messages: readonly ConversationMessage[],
 		signal?: AbortSignal
 	): Promise<CompactionAttachmentMetadata[]> => {
 		const references = collectReferences(messages);
@@ -1311,10 +1313,10 @@ export const createConversationAttachmentStore = ({
 		return metadata;
 	};
 	const annotateMessageForDisplay = async (
-		message: CodingAgentUIMessage,
+		message: ConversationMessage,
 		signal?: AbortSignal
-	): Promise<CodingAgentUIMessage["parts"] | undefined> => {
-		let parts: CodingAgentUIMessage["parts"] | undefined;
+	): Promise<ConversationMessage["parts"] | undefined> => {
+		let parts: ConversationMessage["parts"] | undefined;
 		for (const [partIndex, part] of message.parts.entries()) {
 			const reference = getAttachmentReference(part);
 			if (!(reference && isImageFilePart(part))) {
@@ -1337,10 +1339,10 @@ export const createConversationAttachmentStore = ({
 	};
 
 	const annotateMessagesForDisplay = async (
-		messages: readonly CodingAgentUIMessage[],
+		messages: readonly ConversationMessage[],
 		signal?: AbortSignal
-	): Promise<CodingAgentUIMessage[]> => {
-		const partsByMessage = new Map<number, CodingAgentUIMessage["parts"]>();
+	): Promise<ConversationMessage[]> => {
+		const partsByMessage = new Map<number, ConversationMessage["parts"]>();
 		for (const [messageIndex, message] of messages.entries()) {
 			const parts = await annotateMessageForDisplay(message, signal);
 			if (parts) {

@@ -1,13 +1,13 @@
-import type { CodingAgentUIMessage } from "@wincode/ai";
 import { normalizeChatModelSelection } from "@wincode/ai/models";
+import type { ConversationMessage } from "@/modules/conversations/message";
 
 export type ConversationTurn = {
 	id: string;
-	messages: CodingAgentUIMessage[];
+	messages: ConversationMessage[];
 };
 
 export const resolveTurnMetadataSignature = (
-	message: CodingAgentUIMessage
+	message: ConversationMessage
 ): string | null => {
 	const metadata = message.metadata;
 	if (!metadata) {
@@ -34,7 +34,7 @@ export const resolveTurnMetadataSignature = (
 const resolveTurnFooterMessage = (
 	turn: ConversationTurn,
 	nextTurn: ConversationTurn | undefined
-): CodingAgentUIMessage | undefined => {
+): ConversationMessage | undefined => {
 	const current = [...turn.messages]
 		.reverse()
 		.find(
@@ -77,7 +77,7 @@ const resolveTurnFooterMessage = (
 };
 
 export const groupMessagesByConversationTurn = (
-	messages: CodingAgentUIMessage[]
+	messages: ConversationMessage[]
 ): ConversationTurn[] => {
 	const turns: ConversationTurn[] = [];
 	let currentTurn: ConversationTurn | null = null;
@@ -97,8 +97,8 @@ export const groupMessagesByConversationTurn = (
 
 export const resolveConversationTurnFooterMessages = (
 	turns: ConversationTurn[]
-): Map<string, CodingAgentUIMessage> => {
-	const footers = new Map<string, CodingAgentUIMessage>();
+): Map<string, ConversationMessage> => {
+	const footers = new Map<string, ConversationMessage>();
 
 	for (const [index, turn] of turns.entries()) {
 		const footerMessage = resolveTurnFooterMessage(turn, turns[index + 1]);

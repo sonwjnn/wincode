@@ -1,7 +1,8 @@
 import { isAbsolute } from "node:path";
 import { pathToFiletype } from "@opentui/core";
-import type { AgentId, CodingAgentUIMessage } from "@wincode/ai";
+import type { AgentId } from "@wincode/agent-core";
 import { useMemo, useState } from "react";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import { stripControlCharacters } from "@/shared/display-sanitize";
 import { useToggleShortcut } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -13,7 +14,7 @@ import {
 } from "./syntax-style";
 
 type WriteToolPart = Extract<
-	CodingAgentUIMessage["parts"][number],
+	ConversationMessage["parts"][number],
 	{ type: "tool-write" }
 >;
 
@@ -44,15 +45,19 @@ const getWriteInput = (part: WriteToolPart): WriteInput | null => {
 	if (
 		typeof part.input !== "object" ||
 		part.input === null ||
-		Array.isArray(part.input) ||
-		typeof part.input.content !== "string" ||
-		typeof part.input.path !== "string" ||
-		part.input.path.length === 0
+		Array.isArray(part.input)
 	) {
 		return null;
 	}
-
-	return { content: part.input.content, path: part.input.path };
+	const input = part.input as Record<string, unknown>;
+	if (
+		typeof input.content !== "string" ||
+		typeof input.path !== "string" ||
+		input.path.length === 0
+	) {
+		return null;
+	}
+	return { content: input.content, path: input.path };
 };
 
 const formatWritePath = (filePath: string): string => {

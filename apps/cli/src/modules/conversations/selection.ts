@@ -1,15 +1,17 @@
+import type { AgentId } from "@wincode/agent-core";
 import {
-	type AgentId,
 	type ChatModelSelection,
-	type CodingAgentUIMessage,
-	codingMessageMetadataSchema,
-	codingMessageSkillSchema,
 	type ModelVariant,
 	modelSelectionSchema,
 	normalizeChatModelSelection,
 	normalizeModelVariant,
-} from "@wincode/ai";
+} from "@wincode/ai/models";
 import type { SkillRequestContext } from "@wincode/skills";
+import type { ConversationMessage } from "./message";
+import {
+	conversationMessageMetadataSchema,
+	conversationMessageSkillSchema,
+} from "./message";
 
 /**
  * The conversation-selection module owns every read of message metadata:
@@ -34,7 +36,7 @@ export type LastUsedSelection = {
  * submitted without re-picking a variant drops it at the JSON round trip.
  */
 export const getLastUsedSelection = (
-	messages: CodingAgentUIMessage[]
+	messages: ConversationMessage[]
 ): LastUsedSelection | undefined => {
 	let selection: { agent: AgentId; model: ChatModelSelection } | undefined;
 	for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -73,7 +75,7 @@ export const getLastUsedSelection = (
  * restores.
  */
 const findLastUsedVariant = (
-	messages: CodingAgentUIMessage[],
+	messages: ConversationMessage[],
 	model: ChatModelSelection
 ): ModelVariant | undefined => {
 	for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -116,23 +118,25 @@ const normalizeSelection = (model: unknown): ChatModelSelection | null => {
  * reaches the send.
  */
 const findLastValidMetadata = (
-	messages: CodingAgentUIMessage[]
-): CodingAgentUIMessage["metadata"] | undefined =>
+	messages: ConversationMessage[]
+): ConversationMessage["metadata"] | undefined =>
 	messages.findLast(
-		(message) => codingMessageMetadataSchema.safeParse(message.metadata).success
+		(message) =>
+			conversationMessageMetadataSchema.safeParse(message.metadata).success
 	)?.metadata;
 
 /**
  * Resolves the Skill payload the current user turn carries for the model loop.
- * Only snapshots that still hold the body (in-memory or legacy persisted
- * records) resolve; sanitized activation metadata without instructions means
- * the Skill no longer applies and returns `undefined`.
+ * Sanitized activation metadata without instructions means the Skill no longer
+ * applies and returns `undefined`.
  */
 export const getOriginatingUserSkill = (
-	messages: CodingAgentUIMessage[]
+	messages: ConversationMessage[]
 ): SkillRequestContext | undefined => {
 	const message = [...messages].reverse().find(({ role }) => role === "user");
-	const parsed = codingMessageSkillSchema.safeParse(message?.metadata?.skill);
+	const parsed = conversationMessageSkillSchema.safeParse(
+		message?.metadata?.skill
+	);
 	if (!parsed.success) {
 		return;
 	}
@@ -163,7 +167,7 @@ export type ConversationSelectionRefs = {
 };
 
 type ResolveConversationSelectionInput = {
-	messages: CodingAgentUIMessage[];
+	messages: ConversationMessage[];
 	resolveAgent?: (agentId: AgentId | undefined) => AgentId;
 	sessionModel?: ChatModelSelection;
 	sessionVariant?: ModelVariant;
@@ -211,7 +215,7 @@ export const resolveConversationSelection = ({
 
 /**
  * Restores the prompt config used by the newest message. Session-row values
- * remain a fallback for legacy conversations without usable message metadata.
+ * remain a fallback when no usable message metadata is available.
  * This policy is intentionally narrower than resolveConversationSelection:
  * Home uses it for the next-chat default, while active conversations retain
  * the session-row choice/effective-message two-tier policy.
@@ -262,7 +266,7 @@ export type OutgoingChatSelection = {
  * The Skill falls back to the transport-provided snapshot the same way.
  */
 export const resolveOutgoingSelection = (
-	messages: CodingAgentUIMessage[],
+	messages: ConversationMessage[],
 	fallback?: SelectionFallback
 ): OutgoingChatSelection => {
 	const message = messages.at(-1);

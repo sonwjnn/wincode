@@ -21,6 +21,7 @@ export { runShellTool } from "./shell/runner";
 export { runWriteTool } from "./write/runner";
 export type CodingToolRunnerOptions = ResourceLimitOptions & {
 	allowExternalPath?: boolean;
+	signal?: AbortSignal;
 };
 
 export type CodingToolRunnerMap = {

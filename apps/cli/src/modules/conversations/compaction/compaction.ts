@@ -1,11 +1,11 @@
-import {
-	type CodingAgentUIMessage,
-	sanitizeInterruptedMessagesForModel,
-} from "@wincode/ai";
+import { getModelContextTokens } from "@wincode/ai/model-usage";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
-import { getModelContextTokens } from "@wincode/ai/usage";
 import { isSkillToolPart, sanitizeSkillToolPart } from "@wincode/skills";
-import { generateId, isToolUIPart } from "ai";
+import {
+	type ConversationMessage,
+	isConversationToolPart,
+	sanitizeInterruptedConversationMessages,
+} from "../message";
 import {
 	type CompactionAttachmentMetadata,
 	type ConversationAttachmentStore,
@@ -68,7 +68,7 @@ export const formatCompactionSummaryMessage = (
 
 export const createCompactionSummaryMessage = (
 	entry: Pick<ConversationCompaction, "id" | "summary">
-): CodingAgentUIMessage => ({
+): ConversationMessage => ({
 	id: compactionSummaryMessageId(entry.id),
 	parts: [
 		{
@@ -79,12 +79,12 @@ export const createCompactionSummaryMessage = (
 	role: "user",
 });
 export const isCompactionSummaryMessage = (
-	message: Pick<CodingAgentUIMessage, "id">
+	message: Pick<ConversationMessage, "id">
 ): boolean => message.id.startsWith("compaction:");
 
 const sanitizeSkillToolMessages = (
-	messages: CodingAgentUIMessage[]
-): CodingAgentUIMessage[] =>
+	messages: ConversationMessage[]
+): ConversationMessage[] =>
 	messages.map((message) =>
 		message.parts.some(isSkillToolPart)
 			? {
@@ -97,9 +97,9 @@ const sanitizeSkillToolMessages = (
 	);
 
 const applyDurableSplitBoundary = (
-	activeMessages: CodingAgentUIMessage[],
+	activeMessages: ConversationMessage[],
 	latest: ConversationCompaction
-): CodingAgentUIMessage[] => {
+): ConversationMessage[] => {
 	const partIndex = latest.firstKeptAssistantPartIndex;
 	if (partIndex === undefined) {
 		return activeMessages;
@@ -130,11 +130,11 @@ const applyDurableSplitBoundary = (
 };
 
 export const rebuildActiveMessages = (
-	messages: readonly CodingAgentUIMessage[],
+	messages: readonly ConversationMessage[],
 	latest: ConversationCompaction | null
-): CodingAgentUIMessage[] => {
+): ConversationMessage[] => {
 	const replaySafeMessages = sanitizeSkillToolMessages(
-		sanitizeInterruptedMessagesForModel([...messages])
+		sanitizeInterruptedConversationMessages([...messages])
 	);
 	if (latest === null) {
 		return replaySafeMessages;
@@ -221,7 +221,7 @@ export type CompactConversationInput = {
 };
 
 export type CompactConversationResult = {
-	activeMessages: CodingAgentUIMessage[];
+	activeMessages: ConversationMessage[];
 	entry: ConversationCompaction;
 };
 
@@ -231,7 +231,7 @@ export type ConversationCompactionModule = {
 	) => Promise<CompactConversationResult>;
 	getInFlight: (sessionId: string) => Promise<CompactConversationResult> | null;
 	needsCompaction: (
-		messages: readonly CodingAgentUIMessage[],
+		messages: readonly ConversationMessage[],
 		settings: Pick<ResolvedCompactionSettings, "enabled" | "thresholdTokens">
 	) => boolean;
 };
@@ -240,16 +240,16 @@ type CompactionModuleDependencies = {
 	attachmentStore?: ConversationAttachmentStore;
 	store: CompactionStore;
 	summaryGenerator: SummaryGenerator;
-	estimateTokens?: (messages: readonly CodingAgentUIMessage[]) => number;
+	estimateTokens?: (messages: readonly ConversationMessage[]) => number;
 	generateId?: () => string;
 	now?: () => Date;
 };
 
 type CutPoint = {
-	activeMessages: CodingAgentUIMessage[];
+	activeMessages: ConversationMessage[];
 	firstKeptIndex: number;
 	firstKeptAssistantPartIndex?: number;
-	summaryMessages?: CodingAgentUIMessage[];
+	summaryMessages?: ConversationMessage[];
 	throughIndex: number;
 };
 const getTextFromPart = (part: unknown): string | null => {
@@ -331,7 +331,7 @@ const replaceAttachmentPayload = (part: unknown) => {
 	};
 };
 
-const serializePart = (part: CodingAgentUIMessage["parts"][number]): string => {
+const serializePart = (part: ConversationMessage["parts"][number]): string => {
 	const type = getPartType(part);
 	const text = getTextFromPart(part);
 	if (text !== null) {
@@ -354,7 +354,7 @@ const serializePart = (part: CodingAgentUIMessage["parts"][number]): string => {
 };
 
 export const serializeMessagesForCompaction = (
-	messages: readonly CodingAgentUIMessage[]
+	messages: readonly ConversationMessage[]
 ): string =>
 	messages
 		.map((message) => {
@@ -371,9 +371,9 @@ export const serializeMessagesForCompaction = (
 		.join("\n\n");
 
 const isTerminalToolPart = (
-	part: CodingAgentUIMessage["parts"][number]
+	part: ConversationMessage["parts"][number]
 ): boolean => {
-	if (!isToolUIPart(part)) {
+	if (!isConversationToolPart(part)) {
 		return true;
 	}
 	return (
@@ -383,25 +383,25 @@ const isTerminalToolPart = (
 	);
 };
 
-const isCompleteMessage = (message: CodingAgentUIMessage): boolean =>
+const isCompleteMessage = (message: ConversationMessage): boolean =>
 	message.parts.every(isTerminalToolPart);
 
 const tokenCountForMessages = (
-	messages: readonly CodingAgentUIMessage[],
-	estimateTokens: (messages: readonly CodingAgentUIMessage[]) => number
+	messages: readonly ConversationMessage[],
+	estimateTokens: (messages: readonly ConversationMessage[]) => number
 ): number => estimateTokens(messages);
 
 const getUserTurnStarts = (
-	messages: readonly CodingAgentUIMessage[]
+	messages: readonly ConversationMessage[]
 ): number[] =>
 	messages.flatMap((message, index) =>
 		message.role === "user" ? [index] : []
 	);
 
 const makeSplitTurnCutPoint = (
-	messages: CodingAgentUIMessage[],
+	messages: ConversationMessage[],
 	keepRecentTokens: number,
-	estimateTokens: (messages: readonly CodingAgentUIMessage[]) => number
+	estimateTokens: (messages: readonly ConversationMessage[]) => number
 ): CutPoint | null => {
 	const lastUserIndex = messages.findLastIndex(({ role }) => role === "user");
 	if (lastUserIndex === -1 || lastUserIndex >= messages.length - 1) {
@@ -424,7 +424,7 @@ const makeSplitTurnCutPoint = (
 		partIndex > 0;
 		partIndex -= 1
 	) {
-		const suffixAssistant: CodingAgentUIMessage = {
+		const suffixAssistant: ConversationMessage = {
 			...assistant,
 			parts: assistant.parts.slice(partIndex),
 		};
@@ -449,9 +449,9 @@ const makeSplitTurnCutPoint = (
 };
 
 const chooseCutPoint = (
-	messages: CodingAgentUIMessage[],
+	messages: ConversationMessage[],
 	keepRecentTokens: number,
-	estimateTokens: (messages: readonly CodingAgentUIMessage[]) => number
+	estimateTokens: (messages: readonly ConversationMessage[]) => number
 ): CutPoint => {
 	const starts = getUserTurnStarts(messages);
 	if (starts.length < 2) {
@@ -499,15 +499,15 @@ const chooseCutPoint = (
 };
 
 const findMessageIndex = (
-	messages: readonly CodingAgentUIMessage[],
+	messages: readonly ConversationMessage[],
 	id: string
 ): number => messages.findIndex((message) => message.id === id);
 
 const getSummarySpan = (
-	messages: CodingAgentUIMessage[],
+	messages: ConversationMessage[],
 	cutPoint: CutPoint,
 	previous: ConversationCompaction | null
-): CodingAgentUIMessage[] => {
+): ConversationMessage[] => {
 	if (cutPoint.summaryMessages) {
 		return cutPoint.summaryMessages;
 	}
@@ -541,9 +541,9 @@ const getSummarySpan = (
 };
 
 const projectMessagesForEstimate = (
-	messages: readonly CodingAgentUIMessage[],
+	messages: readonly ConversationMessage[],
 	settings: CompactConversationInput["settings"]
-): CodingAgentUIMessage[] => {
+): ConversationMessage[] => {
 	let attachmentCount = 0;
 	let byteCount = 0;
 	let tokenCount = 0;
@@ -623,9 +623,9 @@ const appendInputFor = ({
 	model: ChatModelSelection;
 	previous: ConversationCompaction | null;
 	settings: CompactConversationInput["settings"];
-	summarySpan: readonly CodingAgentUIMessage[];
+	summarySpan: readonly ConversationMessage[];
 	trigger: CompactionTriggerReason;
-	estimateTokens: (messages: readonly CodingAgentUIMessage[]) => number;
+	estimateTokens: (messages: readonly ConversationMessage[]) => number;
 	entryId: string;
 	now: () => Date;
 	summarization: {
@@ -689,7 +689,7 @@ const assertNotAborted = (signal?: AbortSignal): void => {
 };
 
 const getLatestProviderContextTokens = (
-	messages: readonly CodingAgentUIMessage[]
+	messages: readonly ConversationMessage[]
 ): number | null => {
 	const latestAssistant = messages.findLast(
 		(message) => message.role === "assistant" && message.metadata?.usage
@@ -700,9 +700,9 @@ const getLatestProviderContextTokens = (
 
 const externalizeForCompaction = async (
 	attachmentStore: ConversationAttachmentStore | undefined,
-	messages: CodingAgentUIMessage[],
+	messages: ConversationMessage[],
 	signal?: AbortSignal
-): Promise<CodingAgentUIMessage[]> => {
+): Promise<ConversationMessage[]> => {
 	if (!attachmentStore) {
 		return messages;
 	}
@@ -725,11 +725,11 @@ const externalizeForCompaction = async (
 };
 
 const chooseCompactionSpan = (
-	messages: CodingAgentUIMessage[],
+	messages: ConversationMessage[],
 	previous: ConversationCompaction | null,
 	keepRecentTokens: number,
-	estimateTokens: (messages: readonly CodingAgentUIMessage[]) => number
-): { cutPoint: CutPoint; summarySpan: CodingAgentUIMessage[] } => {
+	estimateTokens: (messages: readonly ConversationMessage[]) => number
+): { cutPoint: CutPoint; summarySpan: ConversationMessage[] } => {
 	const cutPoint = chooseCutPoint(
 		messages,
 		Math.max(1, keepRecentTokens),
@@ -763,12 +763,12 @@ const chooseCompactionSpan = (
 
 const prepareCompactionSummary = async (
 	attachmentStore: ConversationAttachmentStore | undefined,
-	summarySpan: CodingAgentUIMessage[],
+	summarySpan: ConversationMessage[],
 	settings: CompactConversationInput["settings"],
 	signal?: AbortSignal
 ): Promise<{
 	attachmentMetadata?: CompactionAttachmentMetadata[];
-	summaryMessages: CodingAgentUIMessage[];
+	summaryMessages: ConversationMessage[];
 }> => {
 	if (!attachmentStore) {
 		return { summaryMessages: summarySpan };
@@ -827,7 +827,7 @@ export const createConversationCompaction = ({
 	store,
 	summaryGenerator,
 	estimateTokens = estimateCompactionTokens,
-	generateId: createId = generateId,
+	generateId: createId = () => crypto.randomUUID(),
 	now = () => new Date(),
 }: CompactionModuleDependencies): ConversationCompactionModule => {
 	const inFlight = new Map<string, Promise<CompactConversationResult>>();
@@ -849,17 +849,17 @@ export const createConversationCompaction = ({
 		variant,
 	}: {
 		attachmentMetadata?: readonly CompactionAttachmentMetadata[];
-		messages: readonly CodingAgentUIMessage[];
+		messages: readonly ConversationMessage[];
 		sessionId: string;
 		cutPoint: CutPoint;
 		entryId: string;
-		estimateTokens: (messages: readonly CodingAgentUIMessage[]) => number;
+		estimateTokens: (messages: readonly ConversationMessage[]) => number;
 		focus?: string;
 		model: ChatModelSelection;
 		now: () => Date;
 		previous: ConversationCompaction | null;
 		settings: CompactConversationInput["settings"];
-		summarySpan: readonly CodingAgentUIMessage[];
+		summarySpan: readonly ConversationMessage[];
 		summarization: {
 			text: string;
 			usage?: ConversationCompaction["summarizationUsage"];
@@ -867,7 +867,7 @@ export const createConversationCompaction = ({
 		trigger: CompactionTriggerReason;
 		variant?: ModelVariant;
 	}): Promise<{
-		activeMessages: CodingAgentUIMessage[];
+		activeMessages: ConversationMessage[];
 		entry: ConversationCompaction;
 	}> => {
 		const entryInput = appendInputFor({
@@ -923,7 +923,7 @@ export const createConversationCompaction = ({
 		}
 		assertNotAborted(input.signal);
 		const replaySafeMessages = sanitizeSkillToolMessages(
-			sanitizeInterruptedMessagesForModel([...input.conversation.messages])
+			sanitizeInterruptedConversationMessages([...input.conversation.messages])
 		);
 		const externalizedMessages = attachmentStore
 			? await externalizeForCompaction(

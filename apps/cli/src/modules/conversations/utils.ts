@@ -1,11 +1,13 @@
-import type { CodingAgentUIMessage } from "@wincode/ai";
-import type { FileUIPart } from "@wincode/ai/client";
 import type { SkillContext } from "@wincode/skills";
+import type {
+	ConversationFilePart,
+	ConversationMessage,
+} from "@/modules/conversations/message";
 import type { ConversationSession } from "./storage/conversation-store";
 
 export const shouldAutoStartAssistantTurn = (
 	autoStart: boolean,
-	lastMessage: CodingAgentUIMessage | undefined
+	lastMessage: ConversationMessage | undefined
 ): boolean => autoStart && lastMessage?.role === "user";
 
 export const getMostRecentSession = (
@@ -22,7 +24,7 @@ export const getMostRecentSession = (
 	}, undefined);
 
 export type ChatPromptSubmission = {
-	files: FileUIPart[];
+	files: ConversationFilePart[];
 	text: string;
 	skill?: SkillContext;
 };

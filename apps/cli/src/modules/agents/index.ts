@@ -13,6 +13,18 @@ export {
 	useRefreshAgentRegistry,
 } from "./agent-registry-provider";
 export type {
+	BuiltInAgentDefinition,
+	BuiltInAgentId,
+	CliAgentDefinition,
+	ResolvedCodingAgent,
+} from "./built-ins";
+export {
+	buildAgent,
+	builtInAgents,
+	DEFAULT_AGENT_ID,
+	planAgent,
+} from "./built-ins";
+export type {
 	AgentDiagnostic,
 	AgentDiagnosticCode,
 	AgentRegistry,

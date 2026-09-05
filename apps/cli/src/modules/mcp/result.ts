@@ -1,10 +1,8 @@
-export type JsonValue =
-	| null
-	| boolean
-	| number
-	| string
-	| JsonValue[]
-	| { [key: string]: JsonValue };
+import { type JsonValue, MAX_MCP_RESULT_BYTES } from "./manifest";
+
+export type { JsonValue } from "./manifest";
+export { MAX_MCP_RESULT_BYTES } from "./manifest";
+
 export type McpNormalizedResult = {
 	content: JsonValue[];
 	isError: boolean;
@@ -19,7 +17,6 @@ export type McpNormalizedResult = {
 	structuredContent?: JsonValue;
 	truncated: boolean;
 };
-export const MAX_MCP_RESULT_BYTES = 256 * 1024;
 const encoder = new TextEncoder();
 const size = (value: unknown): number =>
 	encoder.encode(JSON.stringify(value)).byteLength;

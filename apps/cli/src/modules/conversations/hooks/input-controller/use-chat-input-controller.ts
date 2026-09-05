@@ -1,6 +1,6 @@
-import type { CodingAgentUIMessage } from "@wincode/ai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getFilteredCommands } from "@/modules/commands/filter-commands";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import { filterCustomCommands } from "@/modules/custom-commands/filter";
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import type { FileMentionOption } from "@/modules/file-mentions";
@@ -86,7 +86,7 @@ export function useChatInputController({
 						id: "prompt-history",
 						parts: entry.files,
 						role: "user",
-					} as unknown as CodingAgentUIMessage,
+					} as unknown as ConversationMessage,
 				]);
 				const files = (externalized?.parts ?? []).filter(
 					(part): part is PromptHistoryEntry["files"][number] =>

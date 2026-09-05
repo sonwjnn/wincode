@@ -23,6 +23,7 @@ const memoryHistory = createMemoryHistory({
 const router = createRouter({
 	routeTree,
 	history: memoryHistory,
+	isServer: false,
 	defaultPendingComponent: PendingFallback,
 	defaultNotFoundComponent: NotFoundFallback,
 	defaultErrorComponent: ErrorFallback,
@@ -56,6 +57,7 @@ declare module "@tanstack/react-router" {
 	interface HistoryState {
 		agent?: string;
 		autoStart?: boolean;
+		initialMessage?: unknown;
 		mode?: string;
 	}
 }
@@ -71,6 +73,9 @@ function App() {
 }
 
 await router.load();
+// OpenTUI is interactive but has no DOM, so TanStack Router's browser-only
+// Transitioner is not mounted to initialize this render acknowledgement.
+router._rendered ??= [];
 
 const renderer = await createCliRenderer({
 	targetFps: 60,

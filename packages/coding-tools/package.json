@@ -4,6 +4,9 @@
   "exports": {
     ".": {
       "default": "./src/index.ts"
+    },
+    "./workspace": {
+      "default": "./src/workspace.ts"
     }
   },
   "scripts": {

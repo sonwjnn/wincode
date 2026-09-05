@@ -10,12 +10,10 @@
 > **Status: superseded.** The migration this note researched has been completed.
 > The closed `ModeType` / `codingModes` Coding Mode contract was removed from
 > `packages/ai`, the CLI, and the hosted API; the canonical selection is the
-> `AgentId` / resolved `Agent` runtime. The only retained Coding Mode surface is
-> the private persistence-boundary normalizer in
-> `apps/cli/src/modules/conversations/storage/drizzle-conversation-store.ts`,
-> which converts historical `mode: build|plan` message metadata into `agent`, and
-> the historical database migrations in `apps/cli/drizzle/local/`. Line references below
-> describe the pre-migration state and are intentionally historical.
+> `AgentId` / resolved `Agent` runtime. Conversation persistence now uses
+> Wincode Conversation Records, and no compatibility normalizer remains.
+> References below describe the pre-migration state and are intentionally
+> historical.
 
 ---
 

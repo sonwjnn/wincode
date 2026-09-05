@@ -11,11 +11,11 @@ user's working directory — the server never runs file-system tools.
 	servers, exposes `createSnapshot(mode, agentPolicy?)`, `execute(...)`, `reconnect(serverName)`,
 	`toggle(serverName)`, `getStatuses()`, `subscribe(listener)`, and `close()`.
 - `McpProvider` / `useMcp()` — React context provider that owns a single registry per provider
-	tree and exposes `statuses`, `createSnapshot(mode, agentPolicy?)`,
-	`handleDynamicToolCall(snapshot, toolCall, addToolOutput, gate)`, `reconnect(serverName)`, and
-	`toggle(serverName)`, and `close()`. The registry is created once and closed on unmount.
-- Types: `McpServerStatus`, `McpCatalogSnapshot`, `McpSnapshotTool`,
-  `McpAgentPolicy`, `McpApprovalGate`, `McpApprovalDecision`, `McpExecutionPolicy`.
+	tree and exposes `statuses`, `createSnapshot(agent, agentPolicy?)`, `execute(snapshot, toolName,
+	input, signal?)`, `releaseSnapshot(snapshot)`, `reconnect(serverName)`, `toggle(serverName)`,
+	and `close()`. The registry is created once and closed on unmount.
+- Types: `McpServerStatus`, `McpCatalogSnapshot`, `McpSnapshotTool`, `McpAgentPolicy`,
+  `McpExecutionPolicy`.
 - `McpStatusDialogContent` — the `/mcps` runtime status surface. Arrow keys navigate servers and
 	Space enables or disables the highlighted server without editing configuration. Rendered from
 	`McpServerStatus` only, so no config, env, headers, or URLs can appear.
@@ -95,19 +95,20 @@ Catalog contents are purely policy-driven — neither mode is special-cased:
 
 ## Tool-call handling
 
-`handleDynamicToolCall(snapshot, toolCall, addToolOutput, gate)` resolves one dynamic MCP tool
-call:
+The conversation application adapts each catalog entry to the core `ResolvedTool`
+contract through `createGatedCodingTools`. A call then follows the shared Tool
+Gate:
 
-1. Missing or stale snapshot -> `output-error`: "MCP tool call has no active catalog".
-2. The `gate` resolves the composed decision through the shared approval machinery (temporary
+1. Missing or stale snapshot -> a safe failure: "MCP tool call has no active catalog".
+2. The Tool Gate resolves the composed decision through the shared approval machinery (temporary
    grants, auto approval, and — for an `ask` — the shared approval dialog):
-   - `deny` -> `output-error` without execution.
-   - `reject` -> `output-error` carrying the optional bounded correction feedback.
-   - `allow` -> executes through the registry and emits a normalized result or a stable, sanitized
-     error. No config, credentials, headers, URL, or command ever reach tool output.
+   - `deny` -> failure without execution.
+   - `reject` -> failure carrying the optional bounded correction feedback.
+   - `allow` -> `McpProvider.execute` runs through the registry and returns a normalized result or a
+     stable, sanitized error. No config, credentials, headers, URL, or command reaches tool output.
 
-The provider never awaits an AI SDK `onToolCall` synchronously — calls are scheduled so tool
-execution cannot deadlock the chat executor.
+MCP execution is consumed by the Wincode Agent Runtime through the CLI Tool
+Registry; no AI SDK callback or transport type crosses this module.
 
 ## Local-command trust warning
 

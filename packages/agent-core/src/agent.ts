@@ -1,12 +1,29 @@
+import { z } from "zod";
+
 export const MAX_AGENT_ID_LENGTH = 64;
 export const MAX_AGENT_INSTRUCTIONS_LENGTH = 12_000;
 export const AGENT_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 
 export const AGENT_ROLES = ["primary", "subagent", "all"] as const;
 export type AgentRole = (typeof AGENT_ROLES)[number];
+export const agentRoleSchema = z.enum(AGENT_ROLES);
 
 /** Canonical lowercase kebab-case Agent identity (1-64 characters). */
 export type AgentId = string;
+export const agentIdSchema = z
+	.string()
+	.min(1)
+	.max(MAX_AGENT_ID_LENGTH)
+	.regex(AGENT_ID_PATTERN);
+
+/** A named Agent definition supplied by Wincode or the application. */
+export type AgentDefinition = {
+	readonly description: string;
+	readonly displayName: string;
+	readonly id: AgentId;
+	readonly instructions: string;
+	readonly role: AgentRole;
+};
 
 /**
  * The resolved Agent an Agent Turn runs as: the identity, role eligibility,

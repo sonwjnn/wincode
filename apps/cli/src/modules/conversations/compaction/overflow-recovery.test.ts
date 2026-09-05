@@ -1,5 +1,5 @@
 import { expect, mock, test } from "bun:test";
-import type { CodingAgentUIMessage } from "@wincode/ai";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import {
 	prepareOverflowReplayMessages,
 	recoverContextOverflow,
@@ -7,16 +7,16 @@ import {
 
 const message = (
 	id: string,
-	role: CodingAgentUIMessage["role"],
+	role: ConversationMessage["role"],
 	text: string,
-	metadata?: CodingAgentUIMessage["metadata"]
-): CodingAgentUIMessage =>
+	metadata?: ConversationMessage["metadata"]
+): ConversationMessage =>
 	({
 		id,
 		metadata,
 		parts: [{ text, type: "text" }],
 		role,
-	}) as CodingAgentUIMessage;
+	}) as ConversationMessage;
 
 const compaction = {
 	compact: mock(async () => ({

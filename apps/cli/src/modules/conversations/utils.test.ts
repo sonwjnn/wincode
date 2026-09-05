@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { CodingAgentUIMessage } from "@wincode/ai";
+import type { ConversationMessage } from "@/modules/conversations/message";
 
 const { getMostRecentSession, shouldAutoStartAssistantTurn } = await import(
 	"./utils"
@@ -9,13 +9,13 @@ const userMessage = {
 	id: "user-1",
 	parts: [{ text: "hello", type: "text" }],
 	role: "user",
-} satisfies CodingAgentUIMessage;
+} satisfies ConversationMessage;
 
 const assistantMessage = {
 	id: "assistant-1",
 	parts: [{ text: "hi", type: "text" }],
 	role: "assistant",
-} satisfies CodingAgentUIMessage;
+} satisfies ConversationMessage;
 
 describe("shouldAutoStartAssistantTurn", () => {
 	test("starts the first assistant turn for a freshly created session", () => {

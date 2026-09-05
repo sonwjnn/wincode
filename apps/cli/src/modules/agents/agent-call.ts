@@ -1,5 +1,6 @@
-import type { AgentId, ResolvedAgentRuntime } from "@wincode/ai";
+import type { AgentId } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import type { ResolvedCodingAgent } from "./built-ins";
 import type { AgentRegistry } from "./registry";
 
 export type AgentCallSelection = {
@@ -9,13 +10,13 @@ export type AgentCallSelection = {
 };
 
 export type PreparedAgentCall = AgentCallSelection & {
-	readonly resolvedAgent: ResolvedAgentRuntime;
+	readonly resolvedAgent: ResolvedCodingAgent;
 };
 
 export type EffectiveAgentSelection = {
 	readonly agent: AgentId;
 	readonly model: ChatModelSelection;
-	readonly resolvedAgent?: ResolvedAgentRuntime;
+	readonly resolvedAgent?: ResolvedCodingAgent;
 	readonly variant?: ModelVariant;
 };
 
@@ -43,7 +44,9 @@ export const resolveEffectiveAgentSelection = (
 		...(effectiveAgent
 			? {
 					resolvedAgent: {
+						id: effectiveAgent.id,
 						instructions: effectiveAgent.instructions,
+						role: effectiveAgent.role,
 						visibleCodingTools: [...effectiveAgent.visibleCodingTools],
 					},
 				}

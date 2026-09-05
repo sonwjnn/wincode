@@ -1,6 +1,6 @@
 import { lstat } from "node:fs/promises";
+import type { AgentId } from "@wincode/agent-core";
 import {
-	type AgentId,
 	type CodingToolName,
 	codingToolDefinitions,
 	codingToolNames,
@@ -9,8 +9,8 @@ import {
 	isElevatedResourceProfile,
 	RESOURCE_LIMIT_PERMISSION_ACTION,
 	type ToolResourceLimits,
-} from "@wincode/ai";
-import type { WorkspacePolicy } from "@wincode/ai/workspace";
+} from "@wincode/coding-tools";
+import type { WorkspacePolicy } from "@wincode/coding-tools/workspace";
 import {
 	MCP_PERMISSION_RESOURCE,
 	mcpDeniedByPolicyText,

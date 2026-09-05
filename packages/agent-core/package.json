@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@wincode/ai": "workspace:*",
+    "@wincode/skills": "workspace:*",
     "zod": "catalog:"
   },
   "devDependencies": {

@@ -1,4 +1,4 @@
-import { type CodingToolName, codingToolNames } from "@wincode/ai";
+import { type CodingToolName, codingToolNames } from "@wincode/coding-tools";
 import { expandHomeInPath } from "./external-directory";
 
 export type PermissionDecision = "allow" | "ask" | "deny";

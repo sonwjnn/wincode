@@ -1,7 +1,9 @@
-import type { ConversationRecord } from "@wincode/agent-core";
-import type { AgentId, CodingAgentUIMessage } from "@wincode/ai";
-import type { FileUIPart } from "@wincode/ai/client";
+import type { AgentId, ConversationRecord } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import type {
+	ConversationFilePart,
+	ConversationMessage,
+} from "@/modules/conversations/message";
 import type {
 	AppendConversationCompactionInput,
 	ConversationCompaction,
@@ -15,7 +17,7 @@ import type {
 
 export type PromptHistoryEntry = {
 	fileTokens?: Array<{ start: number; token: string }>;
-	files: FileUIPart[];
+	files: ConversationFilePart[];
 	text: string;
 	pastedText?: Array<{ token: string; text: string }>;
 };
@@ -32,7 +34,7 @@ export type ConversationSession = {
 
 export type CreateSessionInput = {
 	agent: AgentId;
-	message: CodingAgentUIMessage;
+	message: ConversationMessage;
 	model: ChatModelSelection;
 	variant?: ModelVariant;
 };
@@ -52,14 +54,6 @@ export type CommitConversationRecordInput = {
 	sessionId: string;
 };
 
-export type PersistMessagesInput = {
-	agent: AgentId;
-	messages: CodingAgentUIMessage[];
-	model: ChatModelSelection;
-	sessionId: string;
-	variant?: ModelVariant;
-};
-
 export type ConversationStore = {
 	appendCompaction: (
 		input: AppendConversationCompactionInput
@@ -70,11 +64,9 @@ export type ConversationStore = {
 	getLatestCompaction: (
 		sessionId: string
 	) => Promise<ConversationCompaction | null>;
-	getMessages: (sessionId: string) => Promise<CodingAgentUIMessage[]>;
 	getSession: (sessionId: string) => Promise<ConversationSession>;
 	listSessions: () => Promise<ConversationSession[]>;
 	listRecentModelSelections: (limit: number) => ChatModelSelection[];
-	persistMessages: (input: PersistMessagesInput) => Promise<void>;
 	commitConversationRecord: (
 		input: CommitConversationRecordInput
 	) => Promise<void>;
@@ -85,14 +77,14 @@ export type ConversationStore = {
 	clearPromptHistory: () => Promise<void>;
 	attachmentStore?: ConversationAttachmentStore;
 	hydrateAttachments: (
-		messages: readonly CodingAgentUIMessage[],
+		messages: readonly ConversationMessage[],
 		options: AttachmentHydrationOptions
-	) => Promise<CodingAgentUIMessage[]>;
+	) => Promise<ConversationMessage[]>;
 	externalizeAttachments: (
-		messages: readonly CodingAgentUIMessage[],
+		messages: readonly ConversationMessage[],
 		signal?: AbortSignal,
 		options?: AttachmentExternalizationOptions
-	) => Promise<CodingAgentUIMessage[]>;
+	) => Promise<ConversationMessage[]>;
 	collectAttachments: (
 		safetyWindowMs?: number
 	) => Promise<AttachmentMaintenanceReport>;

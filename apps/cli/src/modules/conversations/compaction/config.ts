@@ -1,6 +1,6 @@
-import type { CodingAgentUIMessage } from "@wincode/ai";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import { z } from "zod";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import type { ModelPricingTable } from "@/modules/model-pricing";
 import { resolveModelPricing } from "@/modules/model-pricing";
 import type {
@@ -391,7 +391,7 @@ const estimateInlineAttachmentTokens = (url: string): number =>
 	estimateAttachmentTokensForDataUrl(url);
 
 const normalizeAttachmentPartForEstimate = (
-	part: CodingAgentUIMessage["parts"][number]
+	part: ConversationMessage["parts"][number]
 ): { part: unknown; tokens: number } => {
 	if (
 		typeof part !== "object" ||
@@ -430,7 +430,7 @@ const normalizeAttachmentPartForEstimate = (
 };
 
 const normalizeMessagesForEstimate = (
-	messages: readonly CodingAgentUIMessage[]
+	messages: readonly ConversationMessage[]
 ): { messages: unknown[]; mediaTokens: number } => {
 	let mediaTokens = 0;
 	const normalized = messages.map((message) => ({
@@ -445,7 +445,7 @@ const normalizeMessagesForEstimate = (
 };
 
 export const estimateCompactionTokens = (
-	messages: readonly CodingAgentUIMessage[],
+	messages: readonly ConversationMessage[],
 	requestOverheadTokens = COMPACTION_REQUEST_OVERHEAD_TOKENS
 ): number => {
 	const normalized = normalizeMessagesForEstimate(messages);

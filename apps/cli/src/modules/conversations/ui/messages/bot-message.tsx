@@ -1,10 +1,8 @@
 import type { BoxRenderable } from "@opentui/core";
-import {
-	type AgentId,
-	buildAgent,
-	type CodingAgentUIMessage,
-} from "@wincode/ai";
+import type { AgentId } from "@wincode/agent-core";
 import { memo, type ReactNode, useMemo, useRef, useState } from "react";
+import { buildAgent } from "@/modules/agents";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import {
 	boundCommandHeader,
 	boundPreview,
@@ -38,7 +36,7 @@ import { EditDiffBlock } from "./edit-diff-block";
 import { MarkdownMessagePart } from "./markdown-message-part";
 import { isRenderableWritePart, WriteBlock } from "./write-block";
 
-type MessagePart = CodingAgentUIMessage["parts"][number];
+type MessagePart = ConversationMessage["parts"][number];
 type ToolPart = Extract<
 	MessagePart,
 	{ type: `tool-${string}` | "dynamic-tool" }
@@ -276,7 +274,7 @@ const renderFooterSeparator = (
 };
 
 const resolveFooterItems = (
-	message: CodingAgentUIMessage,
+	message: ConversationMessage,
 	colors: ThemeColors
 ): FooterItem[] => {
 	const metadata = message.metadata;
@@ -619,7 +617,7 @@ export function BotMessageContent({
 }: {
 	/** The agent that produced the message; drives the running-tool spinner color. */
 	agent?: AgentId;
-	parts: CodingAgentUIMessage["parts"];
+	parts: ConversationMessage["parts"];
 }) {
 	const { colors } = useTheme();
 	const groups = groupConsecutiveParts(parts);
@@ -684,7 +682,7 @@ export function BotMessageContent({
 export function BotMessageFooter({
 	message,
 }: {
-	message: CodingAgentUIMessage;
+	message: ConversationMessage;
 }) {
 	const { colors } = useTheme();
 	const footerItems = resolveFooterItems(message, colors);

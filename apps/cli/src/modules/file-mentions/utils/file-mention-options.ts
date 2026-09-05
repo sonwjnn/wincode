@@ -4,8 +4,7 @@ import {
 	createWorkspaceSandbox,
 	defaultWorkspaceSandbox,
 	type WorkspacePolicy,
-} from "@wincode/ai/workspace";
-
+} from "@wincode/coding-tools/workspace";
 import type { FileMentionOption } from "../types";
 import {
 	compareCanonicalRelativePaths,

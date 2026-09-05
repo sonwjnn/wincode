@@ -1,9 +1,16 @@
 // biome-ignore-all lint/performance/noBarrelFile: Public Agent Core package entry point.
 
-export type { AgentId, AgentRole, ResolvedAgent } from "./agent";
+export type {
+	AgentDefinition,
+	AgentId,
+	AgentRole,
+	ResolvedAgent,
+} from "./agent";
 export {
 	AGENT_ID_PATTERN,
 	AGENT_ROLES,
+	agentIdSchema,
+	agentRoleSchema,
 	isAgentId,
 	isAgentRole,
 	MAX_AGENT_ID_LENGTH,
@@ -61,15 +68,22 @@ export { createAgentTurnLifecycle } from "./lifecycle";
 export type { ModelStep, ModelStepId } from "./model-step";
 export type {
 	AgentTurnOutcomeRecord,
+	ConversationAttachmentReferencePart,
+	ConversationFileMentionPart,
+	ConversationMessageMetadataRecord,
 	ConversationMessagePart,
 	ConversationMessageRecord,
 	ConversationRecord,
+	ConversationSkillActivationRecord,
 	ConversationToolCallPart,
 	ToolCallOutcomeRecord,
 } from "./records";
 export {
 	CONVERSATION_RECORD_VERSION,
 	isAgentTurnMessageRecord,
+	isConversationAttachmentReferencePart,
+	isConversationFileMentionPart,
+	isConversationToolCallPart,
 } from "./records";
 export type {
 	AgentRuntime,
@@ -107,6 +121,7 @@ export {
 export type {
 	AgentTurn,
 	AgentTurnDelegation,
+	AgentTurnFilePart,
 	AgentTurnId,
 	AgentTurnInput,
 	AgentTurnInterruptionReason,
@@ -126,6 +141,7 @@ export {
 	createAgentTurnId,
 	createAgentTurnMessage,
 	isAgentTurnDelegation,
+	isAgentTurnFilePart,
 	isAgentTurnPart,
 	isAgentTurnTerminalStatus,
 	isAgentTurnTextPart,

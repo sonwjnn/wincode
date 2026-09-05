@@ -1,4 +1,4 @@
-import type { AgentId } from "@wincode/ai";
+import type { AgentId } from "@wincode/agent-core";
 import type { CommandSpec } from "../commands";
 
 export type AgentsAdapterContext = {

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
+import { resolveAiSdkModelTarget } from "@wincode/agent-runtime-ai-sdk";
 import type { ConnectionProviderId } from "@wincode/ai/models";
 import { getSupportedModelVariants, modelCatalog } from "@wincode/ai/models";
-import { resolveAiSdkModelTarget } from "@wincode/ai/server";
 import type { AuthorizationByProvider, Connections } from "./connections";
 import { resolveChatModelTarget } from "./model-target";
 

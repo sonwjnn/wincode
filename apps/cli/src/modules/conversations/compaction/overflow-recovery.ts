@@ -1,8 +1,6 @@
-import {
-	type CodingAgentUIMessage,
-	sanitizeInterruptedMessagesForModel,
-} from "@wincode/ai";
-import { isModelContextOverflowError } from "@wincode/ai/failures";
+import { isModelContextOverflowError } from "@wincode/ai/model-failures";
+import type { ConversationMessage } from "../message";
+import { sanitizeInterruptedConversationMessages } from "../message";
 import type {
 	CompactConversationInput,
 	CompactConversationResult,
@@ -24,7 +22,7 @@ export class OverflowRecoveryError extends Error {
 }
 
 export type OverflowReplay = {
-	activeMessages: CodingAgentUIMessage[];
+	activeMessages: ConversationMessage[];
 	entry: CompactConversationResult["entry"];
 	originalMessageId: string;
 };
@@ -32,7 +30,7 @@ export type OverflowRecoveryInput = {
 	compaction: ConversationCompactionModule;
 	compactionInput: Omit<CompactConversationInput, "conversation" | "trigger">;
 	conversation: {
-		messages: readonly CodingAgentUIMessage[];
+		messages: readonly ConversationMessage[];
 		sessionId: string;
 	};
 	enabled: boolean;
@@ -46,9 +44,9 @@ export type OverflowRecoveryInput = {
 };
 
 export const prepareOverflowReplayMessages = (
-	messages: readonly CodingAgentUIMessage[],
+	messages: readonly ConversationMessage[],
 	originalMessageId: string
-): CodingAgentUIMessage[] => {
+): ConversationMessage[] => {
 	const originalIndex = messages.findIndex(
 		(message) => message.id === originalMessageId && message.role === "user"
 	);
@@ -58,7 +56,7 @@ export const prepareOverflowReplayMessages = (
 			"Context overflow recovery could not find the original user message."
 		);
 	}
-	return sanitizeInterruptedMessagesForModel([
+	return sanitizeInterruptedConversationMessages([
 		...messages.slice(0, originalIndex + 1),
 	]);
 };

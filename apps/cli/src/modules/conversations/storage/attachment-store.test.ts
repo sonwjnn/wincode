@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CodingAgentUIMessage } from "@wincode/ai";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import {
 	type AttachmentMetadataRecord,
 	type AttachmentMetadataRepository,
@@ -81,7 +81,7 @@ test("externalizes inline image parts and hydrates them only on request", async 
 			},
 		],
 		role: "user",
-	} as unknown as CodingAgentUIMessage;
+	} as unknown as ConversationMessage;
 
 	const persisted = await attachments.externalizeMessages([message]);
 	const persistedPart = persisted[0]?.parts[1];
@@ -178,7 +178,7 @@ test("keeps only newest attachments within an explicit media budget", async () =
 			parts: [attachmentReferenceToFilePart(newReference)],
 			role: "user",
 		},
-	] as unknown as CodingAgentUIMessage[];
+	] as unknown as ConversationMessage[];
 
 	const hydration = await attachments.hydrateMessagesWithStats(messages, {
 		maxAttachments: 1,
@@ -232,7 +232,7 @@ test("prioritizes the latest user turn over retained media limits", async () => 
 				parts: [attachmentReferenceToFilePart(currentReference)],
 				role: "user",
 			},
-		] as unknown as CodingAgentUIMessage[],
+		] as unknown as ConversationMessage[],
 		{
 			maxAttachments: 0,
 			maxBytes: 0,
@@ -360,7 +360,7 @@ test("annotates missing blobs without reading payload bytes", async () => {
 			id: "user-1",
 			parts: [attachmentReferenceToFilePart(reference)],
 			role: "user",
-		} as unknown as CodingAgentUIMessage,
+		} as unknown as ConversationMessage,
 	]);
 	expect(annotated[0]?.parts[0]).toMatchObject({
 		attachmentId: reference.attachmentId,

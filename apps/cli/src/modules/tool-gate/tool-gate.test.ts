@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
-import { getToolResourceLimits, type ToolResourceLimits } from "@wincode/ai";
-import { createWorkspaceSandbox } from "@wincode/ai/workspace";
+import {
+	getToolResourceLimits,
+	type ToolResourceLimits,
+} from "@wincode/coding-tools";
+import { createWorkspaceSandbox } from "@wincode/coding-tools/workspace";
 import { mcpDeniedByPolicyText } from "@/modules/mcp/registry";
 import {
 	applyManualApprovalSafetyCeiling,

@@ -3,14 +3,8 @@ import {
 	type AgentId,
 	agentIdSchema,
 	agentRoleSchema,
-	buildAgent,
-	builtInAgents,
-	type CodingToolName,
-	DEFAULT_RESOURCE_LIMIT_PROFILE,
 	MAX_AGENT_ID_LENGTH,
-	type ResourceLimitProfile,
-	resourceLimitProfileSchema,
-} from "@wincode/ai";
+} from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
 	type ConnectionProviderId,
@@ -19,6 +13,12 @@ import {
 	modelVariantSchema,
 	parseCatalogModelSelection,
 } from "@wincode/ai/models";
+import {
+	type CodingToolName,
+	DEFAULT_RESOURCE_LIMIT_PROFILE,
+	type ResourceLimitProfile,
+	resourceLimitProfileSchema,
+} from "@wincode/coding-tools";
 import { z } from "zod";
 import {
 	type PermissionDiagnostic,
@@ -34,6 +34,7 @@ import type {
 	ConfigSnapshot,
 	ConfigSource,
 } from "@/shared/config/config-store";
+import { buildAgent, builtInAgents } from "./built-ins";
 
 export const MAX_CONFIGURED_AGENTS = 64;
 export const MAX_CONFIGURED_AGENT_DESCRIPTION_LENGTH = 512;
@@ -107,6 +108,7 @@ export type AgentDiagnostic = {
 };
 
 export type RegistryAgent = AgentDefinition & {
+	readonly visibleCodingTools: readonly CodingToolName[];
 	readonly isConfigured: boolean;
 	readonly isAvailable: boolean;
 	readonly isSelectable: boolean;

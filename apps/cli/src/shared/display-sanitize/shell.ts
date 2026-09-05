@@ -1,4 +1,4 @@
-import { SHELL_OUTPUT_TAIL_BYTES } from "@wincode/ai";
+import { SHELL_OUTPUT_TAIL_BYTES } from "@wincode/coding-tools";
 import { redactSensitiveText } from "./redact";
 
 const SHELL_OUTPUT_ESC = String.fromCharCode(0x1b);

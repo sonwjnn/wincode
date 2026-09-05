@@ -1,6 +1,6 @@
-import type { FileUIPart } from "@wincode/ai/client";
 import type { Skill, SkillContext } from "@wincode/skills";
 import { parseSkillInvocation } from "@wincode/skills";
+import type { ConversationFilePart } from "@/modules/conversations/message";
 import { expandCustomCommandTemplate } from "@/modules/custom-commands/expand";
 import { parseCustomCommandInvocation } from "@/modules/custom-commands/invocation";
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
@@ -38,7 +38,7 @@ const expandTrackedPastedText = (
 
 /** Everything the textarea knows about the composition at submit time. */
 export type SubmitSnapshot = {
-	files: FileUIPart[];
+	files: ConversationFilePart[];
 	fileTokens: Array<{ start: number; token: string }>;
 	pastedTexts: readonly TrackedPastedText[];
 	rawText: string;

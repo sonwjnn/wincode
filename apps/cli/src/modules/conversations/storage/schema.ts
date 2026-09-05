@@ -1,8 +1,8 @@
 import type {
 	AgentTurnOutcomeRecord,
 	ConversationMessageRecord,
+	ConversationRecord,
 } from "@wincode/agent-core";
-import type { AgentId, CodingAgentUIMessage } from "@wincode/ai";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { sql } from "drizzle-orm";
 import {
@@ -53,45 +53,6 @@ export const conversationSession = sqliteTable(
 			table.lastMessageAt
 		),
 		index("idx_conversation_session_updated").on(table.updatedAt),
-	]
-);
-
-export const conversationMessage = sqliteTable(
-	"conversation_message",
-	{
-		id: text("id").primaryKey(),
-		sessionId: text("session_id")
-			.notNull()
-			.references(() => conversationSession.id, {
-				onDelete: "cascade",
-				onUpdate: "cascade",
-			}),
-		uiMessageId: text("ui_message_id").notNull(),
-		role: text("role").$type<CodingAgentUIMessage["role"]>().notNull(),
-		agent: text("agent").$type<AgentId>().notNull(),
-		partsJson: text("parts_json", { mode: "json" })
-			.$type<CodingAgentUIMessage["parts"]>()
-			.notNull(),
-		metadataJson: text("metadata_json", { mode: "json" }).$type<
-			CodingAgentUIMessage["metadata"]
-		>(),
-		position: integer("position").notNull(),
-		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
-		updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
-	},
-	(table) => [
-		unique("uq_conversation_message_session_ui").on(
-			table.sessionId,
-			table.uiMessageId
-		),
-		index("idx_conversation_message_session_position").on(
-			table.sessionId,
-			table.position
-		),
-		index("idx_conversation_message_session_created").on(
-			table.sessionId,
-			table.createdAt
-		),
 	]
 );
 
@@ -154,8 +115,8 @@ export const promptHistory = sqliteTable("prompt_history", {
  * One durable Wincode Conversation Record checkpoint: the committed message
  * records, model, usage/terminal outcome, and Agent Turn identity of one
  * semantic checkpoint. Token and reasoning deltas never become rows here.
- * Rows are scoped to a legacy session for presentation continuity; `position`
- * keeps checkpoints in commit order per session.
+ * Rows are scoped to a session; `position` keeps checkpoints in commit order
+ * per session.
  */
 export const conversationRecord = sqliteTable(
 	"conversation_record",
@@ -174,7 +135,7 @@ export const conversationRecord = sqliteTable(
 			parentToolCallId: string;
 		} | null>(),
 		modelJson: text("model_json", { mode: "json" })
-			.$type<{ modelId: string; providerId: string }>()
+			.$type<ConversationRecord["model"]>()
 			.notNull(),
 		outcomeJson: text("outcome_json", { mode: "json" })
 			.$type<AgentTurnOutcomeRecord>()
@@ -204,7 +165,6 @@ export const conversationRecord = sqliteTable(
 export const conversationSchema = {
 	conversationAttachment,
 	conversationCompaction,
-	conversationMessage,
 	conversationRecord,
 	conversationSession,
 	conversationWorkspace,

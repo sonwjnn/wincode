@@ -1,12 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import {
-	type AgentId,
-	isJsonValue,
-	type JsonObject,
-	MAX_MCP_TOOL_COUNT,
-	type McpToolManifest,
-	type McpToolManifestEntry,
-} from "@wincode/ai";
+import type { AgentId } from "@wincode/agent-core";
 import {
 	composePermissionDecisions,
 	DEFAULT_EFFECTIVE_AGENT_POLICY,
@@ -27,6 +20,13 @@ import {
 	type McpConfigResult,
 	type ResolvedMcpServerConfig,
 } from "./config";
+import {
+	isJsonValue,
+	type JsonObject,
+	MAX_MCP_TOOL_COUNT,
+	type McpToolManifest,
+	type McpToolManifestEntry,
+} from "./manifest";
 import type { McpExecutionPolicy } from "./policy";
 import { type McpNormalizedResult, normalizeMcpResult } from "./result";
 import { sanitizeMessage } from "./sanitize";
