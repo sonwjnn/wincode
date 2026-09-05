@@ -333,10 +333,7 @@ const projectTerminalOutcome = (
 	messages: ConversationMessage[],
 	outcomeId: string
 ): ConversationMessage[] => {
-	if (
-		record.outcome.kind === "completed" ||
-		messages.some((message) => message.role === "assistant")
-	) {
+	if (record.outcome.kind === "completed") {
 		return messages;
 	}
 	return [

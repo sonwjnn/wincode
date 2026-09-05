@@ -474,3 +474,32 @@ test("projects a primary terminal failure after reopening a session", () => {
 		},
 	]);
 });
+test("projects primary terminal failures after partial tool output", () => {
+	const record = failedRecord("record-partial-failure", [
+		messageRecord("msg-user", "user", "run the check"),
+		{
+			id: "assistant-partial",
+			parts: [
+				{
+					input: { command: "bun check" },
+					outcome: {
+						kind: "success",
+						output: { exitCode: 0 },
+					},
+					sequence: 1,
+					toolCallId: "call-check",
+					toolName: "shell",
+					type: "tool-call",
+				},
+			],
+			role: "assistant",
+		},
+	]);
+
+	const projected = projectConversationRecords([record]);
+	expect(projected.at(-1)).toMatchObject({
+		id: "assistant-turn-record-partial-failure:outcome",
+		parts: [{ text: "failed: The model request failed.", type: "text" }],
+		role: "assistant",
+	});
+});
