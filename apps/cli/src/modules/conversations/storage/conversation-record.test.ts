@@ -454,3 +454,23 @@ test("projects durable records into CLI messages with references and metadata", 
 		type: "tool-shell",
 	});
 });
+test("projects a primary terminal failure after reopening a session", () => {
+	const record = failedRecord("record-failed", [
+		messageRecord("msg-user", "user", "hello"),
+	]);
+
+	expect(projectConversationRecords([record])).toEqual([
+		{
+			id: "msg-user",
+			metadata: { agent: "build", model },
+			parts: [{ text: "hello", type: "text" }],
+			role: "user",
+		},
+		{
+			id: "assistant-turn-record-failed:outcome",
+			metadata: { agent: "build", interrupted: true },
+			parts: [{ text: "failed: The model request failed.", type: "text" }],
+			role: "assistant",
+		},
+	]);
+});

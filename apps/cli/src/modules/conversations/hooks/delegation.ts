@@ -7,6 +7,7 @@ import { prepareAgentCall } from "@/modules/agents";
 import type { Connections } from "@/modules/connections";
 import {
 	createMcpToolExecutor,
+	type McpAgentPolicy,
 	type McpCatalogSnapshot,
 	type McpContextValue,
 } from "@/modules/mcp";
@@ -54,6 +55,9 @@ export type CreateDelegationExecutorOptions = {
 	readonly mcp: McpContextValue;
 	readonly onViewState?: (state: ConversationViewState | undefined) => void;
 	readonly registry: AgentRegistry | null;
+	readonly resolveMcpPolicyForAgent: (
+		agent: AgentId
+	) => Promise<McpAgentPolicy>;
 	readonly sessionId: string;
 };
 
@@ -66,6 +70,7 @@ export const createDelegationExecutor = ({
 	mcp,
 	onViewState,
 	registry,
+	resolveMcpPolicyForAgent,
 	sessionId,
 }: CreateDelegationExecutorOptions): DelegationExecutor => {
 	let activeChildCount = 0;
@@ -113,7 +118,8 @@ export const createDelegationExecutor = ({
 						: { variant: prepared.variant }),
 				}
 			);
-			snapshot = await mcp.createSnapshot(prepared.agent, undefined, false);
+			const mcpPolicy = await resolveMcpPolicyForAgent(prepared.agent);
+			snapshot = await mcp.createSnapshot(prepared.agent, mcpPolicy, false);
 			const executeMcpTool = createMcpToolExecutor(mcp.execute);
 			const childGate: RuntimeGatedTooling = {
 				...gatedTooling,

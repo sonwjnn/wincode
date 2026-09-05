@@ -328,6 +328,32 @@ const delegatedMessageId = (
 	message: ConversationMessageRecord,
 	index: number
 ): string => `delegated-turn:${record.turnId}:${index}:${message.id}`;
+const projectTerminalOutcome = (
+	record: ConversationRecord,
+	messages: ConversationMessage[],
+	outcomeId: string
+): ConversationMessage[] => {
+	if (
+		record.outcome.kind === "completed" ||
+		messages.some((message) => message.role === "assistant")
+	) {
+		return messages;
+	}
+	return [
+		...messages,
+		{
+			id: outcomeId,
+			metadata: { agent: record.agentId, interrupted: true },
+			parts: [
+				{
+					text: `${record.outcome.kind}: ${record.outcome.failure.message}`,
+					type: "text",
+				},
+			],
+			role: "assistant",
+		},
+	];
+};
 
 const projectDelegatedRecord = (
 	record: ConversationRecord
@@ -344,26 +370,11 @@ const projectDelegatedRecord = (
 			},
 		];
 	});
-	if (record.outcome.kind === "completed") {
-		return messages;
-	}
-	if (messages.some((message) => message.role === "assistant")) {
-		return messages;
-	}
-	return [
-		...messages,
-		{
-			id: `delegated-turn:${record.turnId}:outcome`,
-			metadata: { agent: record.agentId, interrupted: true },
-			parts: [
-				{
-					text: `${record.outcome.kind}: ${record.outcome.failure.message}`,
-					type: "text",
-				},
-			],
-			role: "assistant",
-		},
-	];
+	return projectTerminalOutcome(
+		record,
+		messages,
+		`delegated-turn:${record.turnId}:outcome`
+	);
 };
 
 /**
@@ -376,9 +387,15 @@ export const projectConversationRecords = (
 ): ConversationMessage[] => {
 	const primary = records.findLast((record) => record.delegation === undefined);
 	const primaryMessages =
-		primary?.messages.map((message) =>
-			toConversationMessage(message, primary)
-		) ?? [];
+		primary === undefined
+			? []
+			: projectTerminalOutcome(
+					primary,
+					primary.messages.map((message) =>
+						toConversationMessage(message, primary)
+					),
+					`assistant-${primary.turnId}:outcome`
+				);
 	const delegatedMessages = records
 		.filter((record) => record.delegation !== undefined)
 		.flatMap(projectDelegatedRecord);

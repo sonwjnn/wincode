@@ -1215,6 +1215,8 @@ export function useChat(
 		fallbackVariantRef: variantRef,
 		gatedTooling: runtimeGatedToolingRef.current,
 		mcp,
+		resolveMcpPolicyForAgent: (agent) =>
+			resolveMcpPolicyForAgentRef.current(agent),
 		onViewState: setViewState,
 		registry,
 		sessionId,
@@ -1225,6 +1227,7 @@ export function useChat(
 			input: ConversationSendInput,
 			signal: AbortSignal
 		): Promise<ConversationSendOutcome> => {
+			setCompactionError(null);
 			approvalAbortHandledRef.current = false;
 			overflowAttemptRef.current = 0;
 			agentRef.current = input.agent;

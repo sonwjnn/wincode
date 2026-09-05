@@ -80,16 +80,25 @@ function SessionRoute() {
 			store.getCompactions(id),
 			store.listConversationRecords(id),
 		])
-			.then(([session, loadedCompactions, records]) => {
+			.then(async ([session, loadedCompactions, records]) => {
 				if (ignore) {
 					return;
 				}
 				const projected = projectConversationRecords(records);
-				const restored = sanitizeInterruptedConversationMessages(
+				const sourceMessages =
 					projected.length === 0 && initialMessage !== undefined
 						? [initialMessage]
-						: projected
-				);
+						: projected;
+				const displayMessages = store.attachmentStore
+					? await store.attachmentStore.annotateMessagesForDisplay(
+							sourceMessages
+						)
+					: sourceMessages;
+				if (ignore) {
+					return;
+				}
+				const restored =
+					sanitizeInterruptedConversationMessages(displayMessages);
 				const active = restored.filter(
 					(message) => !message.id.startsWith("delegated-turn:")
 				);
