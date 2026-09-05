@@ -1,4 +1,5 @@
-import { buildAgent, type CodingAgentUIMessage } from "@wincode/ai";
+import { buildAgent } from "@/modules/agents";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import {
 	BotMessageContent,
 	BotMessageFooter,
@@ -10,8 +11,8 @@ export function ChatMessage({
 	footerMessage,
 	messages,
 }: {
-	footerMessage?: CodingAgentUIMessage;
-	messages: CodingAgentUIMessage[];
+	footerMessage?: ConversationMessage;
+	messages: ConversationMessage[];
 }) {
 	return (
 		<box alignItems="flex-start" flexDirection="column" width="100%">

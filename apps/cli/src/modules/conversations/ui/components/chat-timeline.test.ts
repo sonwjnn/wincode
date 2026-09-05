@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test";
-import type { CodingAgentUIMessage } from "@wincode/ai";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import type { ConversationCompaction } from "../../compaction";
 import { buildConversationTimeline } from "./chat-timeline";
 
 const message = (
 	id: string,
-	role: CodingAgentUIMessage["role"]
-): CodingAgentUIMessage =>
-	({ id, parts: [{ text: id, type: "text" }], role }) as CodingAgentUIMessage;
+	role: ConversationMessage["role"]
+): ConversationMessage =>
+	({ id, parts: [{ text: id, type: "text" }], role }) as ConversationMessage;
 
 const compaction = (
 	id: string,

@@ -201,6 +201,43 @@ describe("createAiSdkAgentRuntime", () => {
 		});
 	});
 
+	test("passes provider-neutral file parts to the AI SDK prompt", async () => {
+		const imageData = "data:image/png;base64,AA==";
+		const subject = await loadSubject();
+		const turn: AgentTurn = {
+			...buildTurn(),
+			input: {
+				messages: [
+					{
+						id: "message-image",
+						parts: [
+							{ text: "Inspect this image", type: "text" },
+							{
+								data: imageData,
+								mediaType: "image/png",
+								type: "file",
+							},
+						],
+						role: "user",
+					},
+				],
+			},
+		};
+		const { createAiSdkAgentRuntime: loadRuntime, streamCalls } = subject;
+
+		await consume(loadRuntime().run(turn));
+
+		expect(streamCalls[0]?.prompt).toEqual([
+			{
+				content: [
+					{ text: "Inspect this image", type: "text" },
+					{ data: imageData, mediaType: "image/png", type: "file" },
+				],
+				role: "user",
+			},
+		]);
+	});
+
 	test("maps a stream error to a failed terminal event", async () => {
 		const subject = await loadSubject([
 			{ type: "start-step", request: {}, warnings: [] },

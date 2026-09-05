@@ -1,9 +1,9 @@
 import type { Extmark } from "@opentui/core";
-import type { FileUIPart } from "@wincode/ai/client";
+import type { ConversationFilePart } from "@/modules/conversations/message";
 
 export type ChatAttachment = {
 	extmarkId: number;
-	file: FileUIPart;
+	file: ConversationFilePart;
 	id: string;
 	token: string;
 };

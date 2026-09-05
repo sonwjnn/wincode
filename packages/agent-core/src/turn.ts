@@ -50,6 +50,13 @@ export type AgentTurnTextPart = {
 	readonly type: "text";
 };
 
+/** One provider-neutral file or image part supplied to the Model. */
+export type AgentTurnFilePart = {
+	readonly data: string | Uint8Array;
+	readonly mediaType: string;
+	readonly type: "file";
+};
+
 /** One Assistant request to invoke a tool; its result arrives in a later `tool` message. */
 export type AgentTurnToolCallPart = {
 	readonly input: unknown;
@@ -77,6 +84,7 @@ export type AgentTurnToolFailurePart = {
 /** A Wincode-owned message content part; AI SDK part shapes never cross here. */
 export type AgentTurnPart =
 	| AgentTurnTextPart
+	| AgentTurnFilePart
 	| AgentTurnToolCallPart
 	| AgentTurnToolResultPart
 	| AgentTurnToolFailurePart;
@@ -159,6 +167,24 @@ export const isAgentTurnTextPart = (
 	);
 };
 
+export const isAgentTurnFilePart = (
+	part: unknown
+): part is AgentTurnFilePart => {
+	if (typeof part !== "object" || part === null) {
+		return false;
+	}
+	const value = part as Record<string, unknown>;
+	return (
+		Object.keys(value).every(
+			(key) => key === "data" || key === "mediaType" || key === "type"
+		) &&
+		value.type === "file" &&
+		(typeof value.data === "string" || value.data instanceof Uint8Array) &&
+		typeof value.mediaType === "string" &&
+		value.mediaType.length > 0
+	);
+};
+
 export const isAgentTurnToolCallPart = (
 	part: unknown
 ): part is AgentTurnToolCallPart => {
@@ -234,6 +260,7 @@ export const isAgentTurnToolFailurePart = (
 
 export const isAgentTurnPart = (part: unknown): part is AgentTurnPart =>
 	isAgentTurnTextPart(part) ||
+	isAgentTurnFilePart(part) ||
 	isAgentTurnToolCallPart(part) ||
 	isAgentTurnToolResultPart(part) ||
 	isAgentTurnToolFailurePart(part);

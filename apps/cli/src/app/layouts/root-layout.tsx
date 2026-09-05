@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
-import { resolveWorkspaceRoot } from "@wincode/ai/workspace";
+import { resolveWorkspaceRoot } from "@wincode/coding-tools/workspace";
 import { useEffect, useReducer } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { ConnectionsProvider, createConnections } from "@/modules/connections";

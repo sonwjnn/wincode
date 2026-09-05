@@ -1,10 +1,5 @@
 import { createFileRoute, useRouterState } from "@tanstack/react-router";
-import {
-	type ConversationRecord,
-	isAgentTurnTextPart,
-} from "@wincode/agent-core";
-import type { CodingAgentUIMessage } from "@wincode/ai";
-import { agentIdSchema } from "@wincode/ai";
+import { agentIdSchema } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { useEffect, useState } from "react";
 import { z } from "zod";
@@ -12,7 +7,12 @@ import {
 	type ConversationCompaction,
 	rebuildActiveMessages,
 } from "@/modules/conversations/compaction";
-import { sanitizeInterruptedMessagesForConversation } from "@/modules/conversations/hooks/use-chat";
+import {
+	type ConversationMessage,
+	isConversationMessage,
+	sanitizeInterruptedConversationMessages,
+} from "@/modules/conversations/message";
+import { projectConversationRecords } from "@/modules/conversations/storage/conversation-record";
 import { getConversationStore } from "@/modules/conversations/storage/get-conversation-store";
 import { ChatView } from "@/modules/conversations/ui/views/chat-view";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -21,91 +21,24 @@ const sessionRouteStateSchema = z
 	.object({
 		agent: agentIdSchema.optional(),
 		autoStart: z.boolean().optional(),
-		mode: z.string().optional(),
+		initialMessage: z.unknown().optional(),
 	})
 	.passthrough();
 
-const getAutoStart = (state: unknown): boolean => {
+const getRouteState = (
+	state: unknown
+): z.infer<typeof sessionRouteStateSchema> | null => {
 	const result = sessionRouteStateSchema.safeParse(state);
-
-	if (!result.success) {
-		return false;
-	}
-
-	return result.data.autoStart ?? false;
+	return result.success ? result.data : null;
 };
 
-const DELEGATED_MESSAGE_PREFIX = "delegated-turn:";
+const getAutoStart = (state: unknown): boolean =>
+	getRouteState(state)?.autoStart ?? false;
 
-/**
- * Synthetic child messages appended for display carry this id prefix. They
- * are excluded whenever persisted rows are loaded so a projection that was
- * written back by a later persist can never duplicate the record-derived
- * transcript; the durable source of truth stays the Conversation Record.
- */
-export const isDelegatedDisplayMessage = (
-	message: CodingAgentUIMessage
-): boolean => message.id.startsWith(DELEGATED_MESSAGE_PREFIX);
-
-/** The internal Skill-context row is model-only input, never user-visible. */
-const isInternalContextMessage = (
-	message: ConversationRecord["messages"][number]
-) => message.id === "skill-context";
-
-const projectedParts = (
-	message: ConversationRecord["messages"][number]
-): CodingAgentUIMessage["parts"] =>
-	message.parts
-		.filter(isAgentTurnTextPart)
-		.map(({ text }) => ({ text, type: "text" as const }));
-
-const delegatedDisplayMessages = (
-	records: readonly ConversationRecord[]
-): CodingAgentUIMessage[] =>
-	records.flatMap((record) => {
-		if (record.delegation === undefined) {
-			return [];
-		}
-		const messages: CodingAgentUIMessage[] = [];
-		record.messages.forEach((message, messageIndex) => {
-			if (isInternalContextMessage(message)) {
-				return;
-			}
-			const parts = projectedParts(message);
-			if (parts.length === 0) {
-				return;
-			}
-			messages.push({
-				id: `${DELEGATED_MESSAGE_PREFIX}${record.turnId}:${messageIndex}:${message.id}`,
-				metadata: { agent: record.agentId },
-				parts,
-				role: message.role,
-			});
-		});
-		if (record.outcome.kind === "completed") {
-			return messages;
-		}
-		// A failed, cancelled, or interrupted child may never reach assistant
-		// text; its terminal state is the durable answer and must be visible.
-		const hasAssistantText = messages.some(
-			(message) => message.role === "assistant"
-		);
-		if (hasAssistantText) {
-			return messages;
-		}
-		messages.push({
-			id: `${DELEGATED_MESSAGE_PREFIX}${record.turnId}:outcome`,
-			metadata: { agent: record.agentId, interrupted: true },
-			parts: [
-				{
-					text: `${record.outcome.kind}: ${record.outcome.failure.message}`,
-					type: "text",
-				},
-			],
-			role: "assistant",
-		} satisfies CodingAgentUIMessage);
-		return messages;
-	});
+const getInitialMessage = (state: unknown): ConversationMessage | undefined => {
+	const candidate = getRouteState(state)?.initialMessage;
+	return isConversationMessage(candidate) ? candidate : undefined;
+};
 
 export const Route = createFileRoute("/sessions/$id")({
 	component: SessionRoute,
@@ -114,9 +47,9 @@ export const Route = createFileRoute("/sessions/$id")({
 function SessionRoute() {
 	const { colors } = useTheme();
 	const { id } = Route.useParams();
-	const [messages, setMessages] = useState<CodingAgentUIMessage[] | null>(null);
+	const [messages, setMessages] = useState<ConversationMessage[] | null>(null);
 	const [activeMessages, setActiveMessages] = useState<
-		CodingAgentUIMessage[] | null
+		ConversationMessage[] | null
 	>(null);
 	const [compactions, setCompactions] = useState<ConversationCompaction[]>([]);
 	const [sessionTitle, setSessionTitle] = useState<string | null>(null);
@@ -125,9 +58,11 @@ function SessionRoute() {
 		variant?: ModelVariant;
 	} | null>(null);
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
-	const autoStart = useRouterState({
-		select: (state) => getAutoStart(state.location.state),
+	const routeState = useRouterState({
+		select: (state) => state.location.state,
 	});
+	const autoStart = getAutoStart(routeState);
+	const initialMessage = getInitialMessage(routeState);
 
 	useEffect(() => {
 		let ignore = false;
@@ -141,37 +76,41 @@ function SessionRoute() {
 		const store = getConversationStore();
 
 		Promise.all([
-			store.getMessages(id),
 			store.getSession(id),
 			store.getCompactions(id),
 			store.listConversationRecords(id),
 		])
-			.then(([loadedMessages, session, loadedCompactions, records]) => {
-				if (!ignore) {
-					// A turn interrupted before its tool calls finished must not
-					// restore as stuck running blocks: strip their unfinished parts.
-					// Synthetic delegated rows that a prior persist wrote back are
-					// re-derived from Conversation Records, never double-rendered.
-					const displayMessages = sanitizeInterruptedMessagesForConversation(
-						loadedMessages.filter(
-							(message) => !isDelegatedDisplayMessage(message)
-						)
-					);
-					const latestCompaction = loadedCompactions.at(-1) ?? null;
-					setMessages([
-						...displayMessages,
-						...delegatedDisplayMessages(records),
-					]);
-					setActiveMessages(
-						rebuildActiveMessages(displayMessages, latestCompaction)
-					);
-					setCompactions(loadedCompactions);
-					setSessionConfig({
-						...(session.model ? { model: session.model } : {}),
-						...(session.variant ? { variant: session.variant } : {}),
-					});
-					setSessionTitle(session.title);
+			.then(async ([session, loadedCompactions, records]) => {
+				if (ignore) {
+					return;
 				}
+				const projected = projectConversationRecords(records);
+				const sourceMessages =
+					projected.length === 0 && initialMessage !== undefined
+						? [initialMessage]
+						: projected;
+				const displayMessages = store.attachmentStore
+					? await store.attachmentStore.annotateMessagesForDisplay(
+							sourceMessages
+						)
+					: sourceMessages;
+				if (ignore) {
+					return;
+				}
+				const restored =
+					sanitizeInterruptedConversationMessages(displayMessages);
+				const active = restored.filter(
+					(message) => !message.id.startsWith("delegated-turn:")
+				);
+				const latestCompaction = loadedCompactions.at(-1) ?? null;
+				setMessages(restored);
+				setActiveMessages(rebuildActiveMessages(active, latestCompaction));
+				setCompactions(loadedCompactions);
+				setSessionConfig({
+					...(session.model ? { model: session.model } : {}),
+					...(session.variant ? { variant: session.variant } : {}),
+				});
+				setSessionTitle(session.title);
 			})
 			.catch((error: unknown) => {
 				if (!ignore) {
@@ -184,7 +123,7 @@ function SessionRoute() {
 		return () => {
 			ignore = true;
 		};
-	}, [id]);
+	}, [id, initialMessage]);
 
 	if (errorMessage) {
 		return <text fg={colors.error}>{errorMessage}</text>;

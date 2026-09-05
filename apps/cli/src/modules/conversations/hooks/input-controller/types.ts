@@ -1,6 +1,6 @@
-import type { FileUIPart } from "@wincode/ai/client";
 import type { Skill } from "@wincode/skills";
 import type { CommandSpec } from "@/modules/commands/commands";
+import type { ConversationFilePart } from "@/modules/conversations/message";
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import type { FileMentionOption } from "@/modules/file-mentions";
 import type { ChatPromptSubmission } from "../../utils";
@@ -19,7 +19,7 @@ export type ChatInputControllerState = {
 	overlay: InputOverlayState;
 	text: string;
 	textSyncRevision: number;
-	recalledFiles: FileUIPart[];
+	recalledFiles: ConversationFilePart[];
 	recalledFileTokens: Array<{ start: number; token: string }>;
 	recalledFilesRevision: number;
 	recalledPastedTexts: NonNullable<PromptHistoryEntry["pastedText"]>;
@@ -31,7 +31,7 @@ export type ChatInputControllerActions = {
 	onArrowDown: (cursorOffset?: number, textLength?: number) => boolean;
 	onArrowUp: (cursorOffset?: number, textLength?: number) => boolean;
 	onCtrlC: (
-		files: FileUIPart[],
+		files: ConversationFilePart[],
 		fileTokens: Array<{ start: number; token: string }>,
 		pastedText: Array<{ text: string; token: string }>
 	) => boolean;
@@ -44,7 +44,7 @@ export type ChatInputControllerActions = {
 	onTextChange: (
 		text: string,
 		cursorOffset: number,
-		files: FileUIPart[],
+		files: ConversationFilePart[],
 		fileTokens: Array<{ start: number; token: string }>
 	) => void;
 	onProgrammaticTextChange: (text: string, cursorOffset: number) => void;

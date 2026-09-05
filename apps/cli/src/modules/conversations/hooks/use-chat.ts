@@ -1,21 +1,19 @@
-import { useChat as useAiChat } from "@ai-sdk/react";
-import {
-	type AgentTurnDelegation,
-	getAgentTurnAbortDisposition,
-} from "@wincode/agent-core";
 import {
 	type AgentId,
-	buildAgent,
-	type ChatModelSelection,
-	type CodingAgentUIMessage,
-	codingMessageSkillSchema,
+	type AgentTurnDelegation,
+	type AgentTurnEvent,
+	type AgentTurnTerminalEvent,
+	createAgentTurnId,
+	getAgentTurnAbortDisposition,
+} from "@wincode/agent-core";
+import { normalizeModelUsage } from "@wincode/ai/model-usage";
+import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import { defaultChatModelSelection } from "@wincode/ai/models";
+import {
+	type CodingToolName,
 	codingToolDefinitions,
-	defaultChatModelSelection,
-	type ModelVariant,
-	type ResolvedAgentRuntime,
-	sanitizeInterruptedMessagesForModel,
-} from "@wincode/ai";
-import { createUserMessage } from "@wincode/ai/client";
+	codingToolNames,
+} from "@wincode/coding-tools";
 import {
 	buildSkillToolDefinition,
 	createSkillExecution,
@@ -28,11 +26,6 @@ import {
 	type SkillToolDefinition,
 	sanitizeSkillToolPart,
 } from "@wincode/skills";
-import {
-	type ChatAddToolOutputFunction,
-	type FileUIPart,
-	isToolUIPart,
-} from "ai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgentRegistry } from "@/modules/agents";
 import { useConnections } from "@/modules/connections";
@@ -42,19 +35,30 @@ import {
 	type CompactConversationResult,
 	type ConversationCompaction,
 	ConversationCompactionError,
+	type ConversationCompactionModule,
 	createConversationCompaction,
 	createDirectSummaryGenerator,
 	estimateCompactionTokens,
 	isCompactionSummaryMessage,
 	isModelContextOverflowError,
+	type ResolvedCompactionSettings,
 	recoverContextOverflow,
 	useCompactionSettings,
 } from "@/modules/conversations/compaction";
+import {
+	type ConversationMessage,
+	type ConversationMessageMetadata,
+	type ConversationPart,
+	type ConversationToolPart,
+	conversationMessageSkillSchema,
+	createConversationUserMessage,
+	isConversationToolPart,
+	sanitizeInterruptedConversationMessages,
+} from "@/modules/conversations/message";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import {
-	type McpAddToolOutput,
+	createMcpToolExecutor,
 	type McpCatalogSnapshot,
-	type McpContextValue,
 	useMcp,
 } from "@/modules/mcp";
 import { useToolPermission } from "@/modules/permissions";
@@ -65,6 +69,8 @@ import { useLatest } from "@/shared/hooks/use-latest";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
 import { createApprovalQueue } from "@/shared/providers/approval/approval-queue";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
+import type { ResolvedCodingAgent } from "../../agents/built-ins";
+import { resolveChatModelTarget } from "../../model-target";
 import type { ConversationViewState } from "../conversation-controller";
 import { createConversationController } from "../conversation-controller";
 import type {
@@ -72,32 +78,33 @@ import type {
 	ConversationSendInput,
 	ConversationSendOutcome,
 } from "../conversation-operation";
+import type { ConversationFilePart } from "../message";
 import type { AttachmentHydrationOptions } from "../storage/attachment-store";
 import { getConversationStore } from "../storage/get-conversation-store";
-import { type AutoSendGate, createAutoSendGate } from "./auto-send-gate";
+import { createDelegationExecutor } from "./delegation";
 import {
-	createDelegationExecutor,
-	createRoutingChatTransport,
-} from "./routing-chat-transport";
-import type { DelegationExecutor, RuntimeGatedTooling } from "./runtime-turn";
-import { createChatToolCallHandler } from "./tool-dispatch";
+	buildAgentTurn,
+	createGatedCodingTools,
+	type DelegationExecutor,
+	defaultRuntimeFactory,
+	type RuntimeGatedTooling,
+	runAgentTurnToText,
+} from "./runtime-turn";
 
-const requestBodyForDelegation = (
-	delegation: AgentTurnDelegation | undefined
-): { readonly delegation: AgentTurnDelegation } | undefined =>
-	delegation === undefined ? undefined : { delegation };
+export type ConversationChatStatus = "ready" | "streaming" | "submitted";
+
 export const createChatMessageParts = (
 	userText: string,
-	fileMentions: CodingAgentUIMessage["parts"],
-	files: FileUIPart[]
-) => [{ text: userText, type: "text" as const }, ...fileMentions, ...files];
+	fileMentions: ConversationPart[],
+	files: ConversationFilePart[]
+): ConversationPart[] => [
+	{ text: userText, type: "text" },
+	...fileMentions,
+	...files,
+];
 
-/**
- * Application-owned safety ceiling for one Agent Turn. Mirrors the MCP
- * execution ceiling (12 hours) so a runaway provider stream cannot hold the
- * conversation forever; expiry aborts the send with a deadline outcome.
- */
 const AGENT_TURN_DEADLINE_MS = 43_200_000;
+const INTERRUPTED_TOOL_ERROR = "Tool call interrupted";
 
 const isBenignCompactionError = (error: unknown): boolean =>
 	error instanceof ConversationCompactionError &&
@@ -121,6 +128,175 @@ const waitForCompaction = async (
 			: compactionErrorMessage(error);
 	}
 };
+type RunCompaction = (
+	trigger: CompactConversationInput["trigger"],
+	focus?: string,
+	nextMessages?: readonly ConversationMessage[],
+	selection?: ChatModelSelection,
+	compactionMessages?: readonly ConversationMessage[],
+	selectionVariant?: ModelVariant
+) => Promise<CompactConversationResult>;
+
+type SubmitCompactionResult =
+	| { readonly ok: true }
+	| { readonly ok: false; readonly reason: string };
+
+const prepareCompactionBeforeSubmit = async ({
+	activeMessages,
+	compactionModule,
+	model,
+	runCompaction,
+	settings,
+}: {
+	activeMessages: readonly ConversationMessage[];
+	compactionModule: ConversationCompactionModule;
+	model: ChatModelSelection;
+	runCompaction: RunCompaction;
+	settings: ResolvedCompactionSettings;
+}): Promise<SubmitCompactionResult> => {
+	if (
+		!(
+			settings.autoAvailable &&
+			compactionModule.needsCompaction(activeMessages, settings)
+		)
+	) {
+		return { ok: true };
+	}
+	try {
+		await runCompaction("threshold", undefined, undefined, model);
+	} catch (cause) {
+		if (!isBenignCompactionError(cause)) {
+			return { ok: false, reason: compactionErrorMessage(cause) };
+		}
+	}
+	return { ok: true };
+};
+type SubmitSkillResolution =
+	| { readonly ok: true; readonly skill: SkillRequestContext | undefined }
+	| { readonly ok: false; readonly reason: string };
+
+type SubmitContextResult =
+	| {
+			readonly kind: "ready";
+			readonly anchoredMessage?: ConversationMessage;
+			readonly metadata: ConversationMessageMetadata;
+			readonly resolvedAgent: ResolvedCodingAgent;
+			readonly skill?: SkillRequestContext;
+	  }
+	| { readonly kind: "cancelled" }
+	| { readonly kind: "rejected"; readonly reason: string };
+
+type SubmitSkillExecutionFactory = () => Promise<SkillExecution>;
+type SubmitSkillResolver = (
+	explicitSkillInput: SkillContext | undefined,
+	anchoredMessage: ConversationMessage | undefined
+) => Promise<SubmitSkillResolution>;
+
+const createSubmitMetadata = (
+	input: ConversationSendInput,
+	skill: SkillRequestContext | undefined
+): ConversationMessageMetadata => ({
+	agent: input.agent,
+	model: input.model,
+	...(input.variant === undefined ? {} : { variant: input.variant }),
+	...(skill === undefined
+		? {}
+		: { skill: createSkillSnapshot(skill, "explicit") }),
+});
+
+const prepareSubmitContext = async ({
+	activeMessages,
+	createTurnSkillExecution,
+	input,
+	resolveSkillForSubmit,
+	signal,
+}: {
+	activeMessages: readonly ConversationMessage[];
+	createTurnSkillExecution: SubmitSkillExecutionFactory;
+	input: ConversationSendInput;
+	resolveSkillForSubmit: SubmitSkillResolver;
+	signal: AbortSignal;
+}): Promise<SubmitContextResult> => {
+	await createTurnSkillExecution();
+	if (signal.aborted) {
+		return { kind: "cancelled" };
+	}
+	const resolvedAgent = input.resolvedAgent;
+	if (resolvedAgent === undefined) {
+		return {
+			kind: "rejected",
+			reason: "The resolved Agent is unavailable.",
+		};
+	}
+	const anchoredMessage =
+		input.messageId === undefined
+			? undefined
+			: activeMessages.find(({ id }) => id === input.messageId);
+	if (input.messageId !== undefined && anchoredMessage?.role !== "user") {
+		return {
+			kind: "rejected",
+			reason: "The stored message to continue is unavailable",
+		};
+	}
+	const skillResolution = await resolveSkillForSubmit(
+		input.skill,
+		anchoredMessage
+	);
+	if (!skillResolution.ok) {
+		return { kind: "rejected", reason: skillResolution.reason };
+	}
+	return {
+		anchoredMessage,
+		kind: "ready",
+		metadata: createSubmitMetadata(input, skillResolution.skill),
+		resolvedAgent,
+		skill: skillResolution.skill,
+	};
+};
+
+type NewConversationMessageResult =
+	| { readonly kind: "ready"; readonly message: ConversationMessage }
+	| { readonly kind: "cancelled" }
+	| { readonly kind: "rejected"; readonly reason: string };
+
+const prepareNewConversationMessage = async ({
+	input,
+	metadata,
+	signal,
+}: {
+	input: ConversationSendInput;
+	metadata: ConversationMessageMetadata;
+	signal: AbortSignal;
+}): Promise<NewConversationMessageResult> => {
+	const userText = input.userText;
+	if (userText === undefined) {
+		return { kind: "rejected", reason: "No prompt to submit" };
+	}
+	const fileMentions = await resolveFileMentionParts(userText);
+	const optimistic = createConversationUserMessage(
+		userText,
+		metadata,
+		fileMentions,
+		input.files ?? []
+	);
+	try {
+		const [externalized] = await getConversationStore().externalizeAttachments(
+			[optimistic],
+			signal,
+			{ rejectInvalid: true }
+		);
+		return { kind: "ready", message: externalized ?? optimistic };
+	} catch {
+		if (signal.aborted) {
+			return { kind: "cancelled" };
+		}
+		return {
+			kind: "rejected",
+			reason: "Attachment data could not be stored.",
+		};
+	}
+};
+
 const conversationSendCancelled = (
 	signal?: AbortSignal
 ): ConversationSendOutcome => {
@@ -142,116 +318,77 @@ const conversationSendCancelled = (
 	}
 };
 
-const persistMessagesBeforeSend = async (
-	persist: (messages: CodingAgentUIMessage[]) => Promise<void>,
-	messages: CodingAgentUIMessage[]
-): Promise<boolean> => {
-	try {
-		await persist(messages);
-		return true;
-	} catch {
-		return false;
-	}
-};
-
-/**
- * Strips Skill bodies, base directories, and bundled resource paths from
- * `skill` tool parts so a finished turn's context never leaks into a later
- * execution. Loaded parts from the active turn keep their live payload; every
- * other part collapses to its sanitized activation metadata.
- */
 export const sanitizeSkillToolParts = (
-	messages: CodingAgentUIMessage[]
-): CodingAgentUIMessage[] =>
-	messages.map((message) => {
-		if (!message.parts.some(isSkillToolPart)) {
-			return message;
-		}
-		return {
-			...message,
-			parts: message.parts.map((part) =>
-				isSkillToolPart(part) ? sanitizeSkillToolPart(part) : part
-			),
-		};
-	});
+	messages: ConversationMessage[]
+): ConversationMessage[] =>
+	messages.map((message) =>
+		message.parts.some(isSkillToolPart)
+			? {
+					...message,
+					parts: message.parts.map((part) =>
+						isSkillToolPart(part) ? sanitizeSkillToolPart(part) : part
+					),
+				}
+			: message
+	);
+
 export const findCurrentTurnAssistantIndex = (
-	messages: CodingAgentUIMessage[]
+	messages: ConversationMessage[]
 ): number => {
 	const userIndex = messages.findLastIndex(({ role }) => role === "user");
 	const assistantIndex = messages.findLastIndex(
 		({ role }) => role === "assistant"
 	);
-
 	return assistantIndex > userIndex ? assistantIndex : -1;
 };
 
-/**
- * `chat.stop()` can run before the asynchronous approval gate emits its
- * output-error part. Keep the approved-input part terminal so that late output
- * can update it instead of finding that interruption already removed it.
- */
-const INTERRUPTED_TOOL_ERROR = "Tool call interrupted";
-
 const preserveInterruptedToolCall = (
-	message: CodingAgentUIMessage,
+	message: ConversationMessage,
 	toolCallId: string
-): CodingAgentUIMessage => {
+): ConversationMessage => {
 	if (message.role !== "assistant" || message.metadata?.interrupted !== true) {
 		return message;
 	}
-	const parts = message.parts.map(
-		(part): CodingAgentUIMessage["parts"][number] => {
-			if (
-				!isToolUIPart(part) ||
-				part.toolCallId !== toolCallId ||
-				part.state !== "input-available"
-			) {
-				return part;
-			}
-			return {
-				...part,
-				errorText: INTERRUPTED_TOOL_ERROR,
-				state: "output-error",
-			};
-		}
-	);
-	return { ...message, parts };
+	return {
+		...message,
+		parts: message.parts.map((part) =>
+			isConversationToolPart(part) &&
+			part.toolCallId === toolCallId &&
+			part.state === "input-available"
+				? {
+						...part,
+						errorText: INTERRUPTED_TOOL_ERROR,
+						state: "output-error" as const,
+					}
+				: part
+		),
+	};
 };
 
 export const sanitizeInterruptedMessagesForConversation = (
-	messages: CodingAgentUIMessage[],
+	messages: ConversationMessage[],
 	preserveToolCallId?: string
-): CodingAgentUIMessage[] =>
-	messages.flatMap((message) => {
-		const preparedMessage =
+): ConversationMessage[] =>
+	sanitizeInterruptedConversationMessages(
+		messages.map((message) =>
 			preserveToolCallId === undefined
 				? message
-				: preserveInterruptedToolCall(message, preserveToolCallId);
-		const sanitized = sanitizeInterruptedMessagesForModel([preparedMessage]);
-		if (sanitized.length > 0) {
-			return sanitized;
-		}
-		if (
-			preparedMessage.role === "assistant" &&
-			preparedMessage.metadata?.interrupted === true
-		) {
-			return [{ ...preparedMessage, parts: [] }];
-		}
-		return [];
-	});
+				: preserveInterruptedToolCall(message, preserveToolCallId)
+		),
+		preserveToolCallId
+	);
 
 export const findCurrentTurnInterruptTargetIndex = (
-	messages: CodingAgentUIMessage[]
+	messages: ConversationMessage[]
 ): number => {
 	const assistantIndex = findCurrentTurnAssistantIndex(messages);
-	if (assistantIndex !== -1) {
-		return assistantIndex;
-	}
-
-	return messages.findLastIndex(({ role }) => role === "user");
+	return assistantIndex === -1
+		? messages.findLastIndex(({ role }) => role === "user")
+		: assistantIndex;
 };
+
 export const finalizeAssistantMessageMetadata = (
-	message: CodingAgentUIMessage,
+	message: ConversationMessage,
 	context: {
 		agent: AgentId;
 		model: ChatModelSelection;
@@ -259,41 +396,26 @@ export const finalizeAssistantMessageMetadata = (
 		interrupted: boolean;
 		responseTimeMs?: number;
 	}
-): CodingAgentUIMessage => ({
-	...message,
-	metadata: (() => {
-		const metadata = message.metadata ?? {};
-		const nextMetadata: CodingAgentUIMessage["metadata"] = {
-			...metadata,
-			agent: message.metadata?.agent ?? context.agent,
-			interrupted: context.interrupted,
-			model: message.metadata?.model ?? context.model,
-		};
+): ConversationMessage => {
+	const variant = message.metadata?.variant ?? context.variant;
+	const metadata: ConversationMessageMetadata = {
+		...(message.metadata ?? {}),
+		agent: message.metadata?.agent ?? context.agent,
+		interrupted: context.interrupted,
+		model: message.metadata?.model ?? context.model,
+		...(variant === undefined ? {} : { variant }),
+		...(context.responseTimeMs === undefined
+			? {}
+			: { responseTimeMs: context.responseTimeMs }),
+	};
+	return { ...message, metadata };
+};
 
-		if (message.metadata?.variant !== undefined) {
-			nextMetadata.variant = message.metadata.variant;
-		} else if (context.variant !== undefined) {
-			nextMetadata.variant = context.variant;
-		}
-
-		if (context.responseTimeMs !== undefined) {
-			nextMetadata.responseTimeMs = context.responseTimeMs;
-		}
-
-		return nextMetadata;
-	})(),
-});
 export type ActivateExplicitSkillDeps = {
 	execution: SkillExecution;
 	gate: ToolGate;
 };
 
-/**
- * Resolves and authorizes an explicit `/skill-name arguments` submission
- * before the first model call. Rejection (policy, approval, or an unknown
- * Skill) preserves the input and sends nothing; acceptance consumes one
- * activation slot and returns the request-scoped Skill payload.
- */
 export const activateExplicitSkill = async (
 	skill: SkillContext,
 	{ execution, gate }: ActivateExplicitSkillDeps
@@ -313,7 +435,7 @@ export const activateExplicitSkill = async (
 		execution.markRejected(skill.name);
 		return { ok: false, reason: policyOutcome.errorText };
 	}
-	if (!entry) {
+	if (entry === undefined) {
 		return {
 			ok: false,
 			reason: `Unknown or unavailable Skill "${skill.name}"`,
@@ -337,10 +459,75 @@ export const activateExplicitSkill = async (
 		},
 	};
 };
+
+const isCodingToolName = (name: string): name is CodingToolName =>
+	codingToolNames.some((candidate) => candidate === name);
+
+const runtimeToolPart = (
+	event: Extract<AgentTurnEvent, { type: "tool-call-started" }>
+) => {
+	if (isCodingToolName(event.toolName)) {
+		return {
+			input: event.input,
+			state: "input-available" as const,
+			toolCallId: event.toolCallId,
+			type: `tool-${event.toolName}` as `tool-${CodingToolName}`,
+		};
+	}
+	return {
+		input: event.input,
+		state: "input-available" as const,
+		toolCallId: event.toolCallId,
+		toolName: event.toolName,
+		type: "dynamic-tool" as const,
+	};
+};
+
+type RuntimeToolFinishedEvent = Extract<
+	AgentTurnEvent,
+	{ type: "tool-call-finished" }
+>;
+
+const settleRuntimeToolPart = (
+	part: ConversationToolPart,
+	event: RuntimeToolFinishedEvent
+): ConversationToolPart =>
+	event.outcome.type === "success"
+		? {
+				...part,
+				output: event.outcome.output,
+				state: "output-available",
+			}
+		: {
+				...part,
+				errorText: event.outcome.errorText,
+				state: "output-error",
+			};
+
+const runtimeToolResultPart = (
+	event: RuntimeToolFinishedEvent
+): ConversationToolPart =>
+	event.outcome.type === "success"
+		? {
+				input: undefined,
+				output: event.outcome.output,
+				state: "output-available",
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				type: "dynamic-tool",
+			}
+		: {
+				errorText: event.outcome.errorText,
+				state: "output-error",
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				type: "dynamic-tool",
+			};
+
 export function useChat(
 	sessionId: string,
-	initialMessages: CodingAgentUIMessage[],
-	initialActiveMessages: CodingAgentUIMessage[] = initialMessages,
+	initialMessages: ConversationMessage[],
+	initialActiveMessages: ConversationMessage[] = initialMessages,
 	initialCompactions: ConversationCompaction[] = []
 ) {
 	const connections = useConnections();
@@ -360,9 +547,6 @@ export function useChat(
 		sandbox,
 		service,
 	} = useToolPermission();
-	// The transport is memoized on a coarser dependency set than the Agent-scoped
-	// policy resolver, so read the latest resolver through a ref to avoid building
-	// a snapshot against a stale Agent's MCP policy.
 	const resolveMcpPolicyForAgentRef = useLatest(resolveMcpPolicyForAgent);
 	const resolvePermissionForAgentRef = useLatest(resolvePermissionForAgent);
 	const resolveResourceLimitsForAgentRef = useLatest(
@@ -375,9 +559,6 @@ export function useChat(
 	const abortApprovalTurnRef = useRef<(toolCallId: string) => void>(
 		() => undefined
 	);
-	// Rebuild the conversation-scoped gate when its conversation or authorization
-	// dependencies change, rejecting pending requests from the previous scope.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: latest-value refs intentionally keep the gate current without rebuilding transport state.
 	const toolGateState = useMemo(() => {
 		const approvalQueue = createApprovalQueue<ToolApprovalRequest>();
 		return {
@@ -423,73 +604,40 @@ export function useChat(
 		},
 		[closeApprovals, toolGateState]
 	);
-	const toolGate = toolGateState.gate;
-	// Runtime-armed coding tools need the Gate plus the resource-profile
-	// resolver as one unit; the legacy handler path keeps its own resolver
-	// reference below.
-	const delegationExecutorRef = useRef<DelegationExecutor | undefined>(
-		undefined
-	);
-	const runtimeGatedToolingRef = useLatest<RuntimeGatedTooling>({
-		delegate: (request, signal) => {
-			const execute = delegationExecutorRef.current;
-			return execute === undefined
-				? Promise.reject(new Error("Delegation is unavailable."))
-				: execute(request, signal);
-		},
-		gate: toolGate,
-		registerChildAbort: (toolCallId, abort) => {
-			childAbortControllersRef.current.set(toolCallId, abort);
-			return () => {
-				childAbortControllersRef.current.delete(toolCallId);
-			};
-		},
-		resolveResourceLimits: (agentId) =>
-			agentId === undefined
-				? resolveResourceLimitsRef.current()
-				: resolveResourceLimitsForAgentRef.current(agentId),
-	});
-	const addToolOutputRef =
-		useRef<ChatAddToolOutputFunction<CodingAgentUIMessage> | null>(null);
-	const dynamicToolOutputRef = useRef<McpAddToolOutput | null>(null);
-	const interruptedMessageIdsRef = useRef(new Set<string>());
-	const requestStartedAtRef = useRef<number | null>(null);
-	const setMessagesRef = useRef<
-		((messages: CodingAgentUIMessage[]) => void) | undefined
-	>(undefined);
-	const displayMessagesRef = useRef<CodingAgentUIMessage[]>([
+
+	const displayMessagesRef = useRef<ConversationMessage[]>([
 		...initialMessages,
 	]);
-	const activeMessagesRef = useRef<CodingAgentUIMessage[]>([
+	const activeMessagesRef = useRef<ConversationMessage[]>([
 		...initialActiveMessages,
 	]);
-	const [displayMessages, setDisplayMessages] = useState<
-		CodingAgentUIMessage[]
-	>(() => [...initialMessages]);
-	const [viewState, setViewState] = useState<ConversationViewState | undefined>(
-		undefined
+	const [displayMessages, setDisplayMessages] = useState<ConversationMessage[]>(
+		() => [...initialMessages]
 	);
+	const [activeMessages, setActiveMessages] = useState<ConversationMessage[]>(
+		() => [...initialActiveMessages]
+	);
+	const [status, setStatus] = useState<ConversationChatStatus>("ready");
+	const [error, setError] = useState<Error | null>(null);
+	const [viewState, setViewState] = useState<ConversationViewState>();
 	const [compactions, setCompactions] = useState<ConversationCompaction[]>(
 		() => [...initialCompactions]
 	);
 	const [isCompacting, setIsCompacting] = useState(false);
 	const [compactionError, setCompactionError] = useState<Error | null>(null);
+	const [isPreparingMessage, setIsPreparingMessage] = useState(false);
+	const [catalogDiagnostic, setCatalogDiagnostic] = useState<string | null>(
+		null
+	);
 	const compactionAbortRef = useRef<AbortController | null>(null);
 	const compactionOperationRef =
 		useRef<Promise<CompactConversationResult> | null>(null);
 	const overflowAttemptRef = useRef(0);
-	const autoSendRef = useRef<
-		(options: { messages: CodingAgentUIMessage[] }) => Promise<boolean>
-	>(async () => false);
-	const providerErrorRef = useRef<(error: Error) => void>(() => undefined);
-	const conversationRef = useRef<ConversationOperation | null>(null);
-	const outcomeSignalRef = useRef<AbortSignal | undefined>(undefined);
-	const agentRef = useRef<AgentId>(buildAgent.id);
-	const resolvedAgentRef = useRef<ResolvedAgentRuntime | undefined>(undefined);
+	const requestStartedAtRef = useRef<number | null>(null);
+	const currentAssistantIdRef = useRef<string | null>(null);
+	const agentRef = useRef<AgentId>("build");
+	const resolvedAgentRef = useRef<ResolvedCodingAgent | undefined>(undefined);
 	const modelRef = useRef<ChatModelSelection>(defaultChatModelSelection);
-	// The conversation-level choice (prompt-config selection) and the
-	// effective selection are separate values on purpose (ADR-0006): the
-	// session row records the choice, message metadata records what ran.
 	const conversationModelRef = useRef<ChatModelSelection>(
 		defaultChatModelSelection
 	);
@@ -503,59 +651,44 @@ export function useChat(
 		| undefined
 	>(undefined);
 	const mcpSnapshotRef = useRef<McpCatalogSnapshot | null>(null);
-	// The execution-scoped Skill Activation state: one catalog snapshot and
-	// activation context per user turn, replaced at every submit/continue.
 	const skillExecutionRef = useRef<SkillExecution | null>(null);
 	const skillToolRef = useRef<SkillToolDefinition | undefined>(undefined);
-	const [isPreparingMessage, setIsPreparingMessage] = useState(false);
-	const [catalogDiagnostic, setCatalogDiagnostic] = useState<string | null>(
-		null
+	const conversationRef = useRef<ConversationOperation | null>(null);
+	const providerErrorRef = useRef<(error: unknown) => void>(() => undefined);
+
+	const publishActiveMessages = useCallback(
+		(messages: ConversationMessage[]) => {
+			activeMessagesRef.current = messages;
+			setActiveMessages(messages);
+		},
+		[]
 	);
-	const autoSendGateRef = useRef<AutoSendGate | null>(null);
-	if (autoSendGateRef.current === null) {
-		autoSendGateRef.current = createAutoSendGate();
-	}
-	const autoSendGate = autoSendGateRef.current;
-
-	const persistDisplayMessages = (
-		messages: CodingAgentUIMessage[] = displayMessagesRef.current
-	): Promise<void> =>
-		getConversationStore().persistMessages({
-			agent: agentRef.current,
-			messages,
-			model: conversationModelRef.current,
-			sessionId,
-			variant: conversationVariantRef.current,
-		});
-
-	const mergeDisplayMessages = (
-		nextMessages: readonly CodingAgentUIMessage[]
-	): CodingAgentUIMessage[] => {
-		const merged = [...displayMessagesRef.current];
-		for (const message of nextMessages) {
-			if (isCompactionSummaryMessage(message)) {
-				continue;
+	const publishDisplayMessages = useCallback(
+		(messages: ConversationMessage[]) => {
+			displayMessagesRef.current = messages;
+			setDisplayMessages(messages);
+		},
+		[]
+	);
+	const mergeDisplayMessages = useCallback(
+		(nextMessages: readonly ConversationMessage[]): ConversationMessage[] => {
+			const merged = [...displayMessagesRef.current];
+			for (const message of nextMessages) {
+				if (isCompactionSummaryMessage(message)) {
+					continue;
+				}
+				const index = merged.findIndex(({ id }) => id === message.id);
+				if (index === -1) {
+					merged.push(message);
+				} else {
+					merged[index] = message;
+				}
 			}
-			const existingIndex = merged.findIndex(({ id }) => id === message.id);
-			if (existingIndex === -1) {
-				merged.push(message);
-			} else {
-				merged[existingIndex] = message;
-			}
-		}
-		displayMessagesRef.current = merged;
-		setDisplayMessages(merged);
-		return merged;
-	};
-
-	const removeDisplayMessage = (messageId: string) => {
-		const nextMessages = displayMessagesRef.current.filter(
-			({ id }) => id !== messageId
-		);
-		displayMessagesRef.current = nextMessages;
-		setDisplayMessages(nextMessages);
-		return nextMessages;
-	};
+			publishDisplayMessages(merged);
+			return merged;
+		},
+		[publishDisplayMessages]
+	);
 
 	const estimateRuntimeRequestOverheadTokens = useCallback((): number => {
 		const resolvedAgent = resolvedAgentRef.current;
@@ -600,158 +733,476 @@ export function useChat(
 			}),
 		[estimateRuntimeRequestOverheadTokens, summaryGenerator]
 	);
-	const getCompactionSettings = (
-		selection: ChatModelSelection = modelRef.current
-	) => getSettingsForModel(selection);
-
-	const runCompaction = (
-		trigger: CompactConversationInput["trigger"],
-		focus?: string,
-		nextMessages?: readonly CodingAgentUIMessage[],
-		selection?: ChatModelSelection,
-		compactionMessages?: readonly CodingAgentUIMessage[],
-		selectionVariant?: ModelVariant
-	): Promise<CompactConversationResult> => {
-		const current = compactionOperationRef.current;
-		if (current) {
-			return current;
-		}
-		const compactionModel = selection ?? modelRef.current;
-		const compactionVariant = selectionVariant ?? variantRef.current;
-		const controller = new AbortController();
-		compactionAbortRef.current = controller;
-		const operation = (async () => {
-			setIsCompacting(true);
-			const transcriptMessages = nextMessages
-				? mergeDisplayMessages(nextMessages)
-				: displayMessagesRef.current;
-			const conversationMessages = compactionMessages
-				? [...compactionMessages]
-				: transcriptMessages;
-			try {
-				await persistDisplayMessages(transcriptMessages);
-			} catch (error) {
-				throw new ConversationCompactionError(
-					"persistence-failed",
-					"Conversation transcript could not be persisted before compaction.",
-					{ cause: error }
+	const getCompactionSettings = useCallback(
+		(selection: ChatModelSelection = modelRef.current) =>
+			getSettingsForModel(selection),
+		[getSettingsForModel]
+	);
+	const runCompaction = useCallback(
+		(
+			trigger: CompactConversationInput["trigger"],
+			focus?: string,
+			nextMessages?: readonly ConversationMessage[],
+			selection?: ChatModelSelection,
+			compactionMessages?: readonly ConversationMessage[],
+			selectionVariant?: ModelVariant
+		): Promise<CompactConversationResult> => {
+			const current = compactionOperationRef.current;
+			if (current) {
+				return current;
+			}
+			const compactionModel = selection ?? modelRef.current;
+			const compactionVariant = selectionVariant ?? variantRef.current;
+			const controller = new AbortController();
+			compactionAbortRef.current = controller;
+			const operation = (async () => {
+				setIsCompacting(true);
+				const transcriptMessages = nextMessages
+					? mergeDisplayMessages(nextMessages)
+					: displayMessagesRef.current;
+				const conversationMessages = compactionMessages
+					? [...compactionMessages]
+					: transcriptMessages;
+				const settings = await getCompactionSettings(compactionModel);
+				const result = await compactionModule.compact({
+					conversation: { messages: conversationMessages, sessionId },
+					focus,
+					model: compactionModel,
+					...(compactionVariant === undefined
+						? {}
+						: { variant: compactionVariant }),
+					settings: {
+						enabled: settings.enabled,
+						keepRecentTokens: settings.keepRecentTokens,
+						maxMediaAttachments: settings.maxMediaAttachments,
+						maxMediaBytes: settings.maxMediaBytes,
+						maxMediaTokens: settings.maxMediaTokens,
+						thresholdTokens: settings.thresholdTokens,
+					},
+					signal: controller.signal,
+					trigger,
+				});
+				setCompactionError(null);
+				publishActiveMessages(result.activeMessages);
+				setCompactions((currentCompactions) =>
+					currentCompactions.some(({ id }) => id === result.entry.id)
+						? currentCompactions
+						: [...currentCompactions, result.entry]
 				);
-			}
-			const settings = await getCompactionSettings(compactionModel);
-			const result = await compactionModule.compact({
-				conversation: {
-					messages: conversationMessages,
-					sessionId,
-				},
-				focus,
-				model: compactionModel,
-				...(compactionVariant === undefined
-					? {}
-					: { variant: compactionVariant }),
-				settings: {
-					enabled: settings.enabled,
-					keepRecentTokens: settings.keepRecentTokens,
-					maxMediaAttachments: settings.maxMediaAttachments,
-					maxMediaBytes: settings.maxMediaBytes,
-					maxMediaTokens: settings.maxMediaTokens,
-					thresholdTokens: settings.thresholdTokens,
-				},
-				signal: controller.signal,
-				trigger,
+				return result;
+			})().finally(() => {
+				if (compactionOperationRef.current === operation) {
+					compactionOperationRef.current = null;
+				}
+				compactionAbortRef.current = null;
+				setIsCompacting(false);
 			});
-			setCompactionError(null);
-			activeMessagesRef.current = result.activeMessages;
-			setMessagesRef.current?.(result.activeMessages);
-			setCompactions((currentCompactions) =>
-				currentCompactions.some(({ id }) => id === result.entry.id)
-					? currentCompactions
-					: [...currentCompactions, result.entry]
-			);
-			return result;
-		})().finally(() => {
-			if (compactionOperationRef.current === operation) {
-				compactionOperationRef.current = null;
-			}
-			compactionAbortRef.current = null;
-			setIsCompacting(false);
-		});
-		compactionOperationRef.current = operation;
-		return operation;
-	};
-
-	const cancelCompaction = () => {
+			compactionOperationRef.current = operation;
+			return operation;
+		},
+		[
+			compactionModule,
+			getCompactionSettings,
+			mergeDisplayMessages,
+			publishActiveMessages,
+			sessionId,
+		]
+	);
+	const cancelCompaction = useCallback(() => {
 		compactionAbortRef.current?.abort();
-	};
-
-	const hasPendingTools = (
-		messages: readonly CodingAgentUIMessage[]
-	): boolean => {
-		const lastMessage = messages.at(-1);
-		if (!lastMessage || lastMessage.role !== "assistant") {
-			return false;
-		}
-		return lastMessage.parts.some(
-			(part) =>
-				isToolUIPart(part) &&
-				part.state !== "output-available" &&
-				part.state !== "output-error" &&
-				part.state !== "output-denied"
-		);
-	};
-	const maintainAfterTurn = (
-		messages: CodingAgentUIMessage[],
-		selection: ChatModelSelection,
-		selectionVariant?: ModelVariant
-	) => {
-		if (hasPendingTools(messages)) {
-			return;
-		}
-		void getCompactionSettings(selection).then((settings) => {
-			if (
-				!(
-					settings.autoAvailable &&
-					compactionModule.needsCompaction(messages, settings)
-				)
-			) {
-				return;
-			}
-			return runCompaction(
-				"threshold",
-				undefined,
-				messages,
-				selection,
-				undefined,
-				selectionVariant
-			).catch((error) => {
-				if (isBenignCompactionError(error)) {
+	}, []);
+	const maintainAfterTurn = useCallback(
+		(
+			messages: ConversationMessage[],
+			selection: ChatModelSelection,
+			variant?: ModelVariant
+		) => {
+			const compactIfNeeded = async (): Promise<void> => {
+				const settings = await getCompactionSettings(selection);
+				if (
+					!(
+						settings.autoAvailable &&
+						compactionModule.needsCompaction(messages, settings)
+					)
+				) {
 					return;
 				}
-				// Keep the completed turn and expose maintenance failure to the UI.
-				setCompactionError(
-					error instanceof Error
-						? error
-						: new Error("Automatic compaction failed.")
-				);
-			});
-		});
-	};
-	delegationExecutorRef.current = createDelegationExecutor(
-		sessionId,
-		registry,
-		connections,
-		{
-			...mcp,
-			createSnapshot: async (agent: AgentId, agentPolicy, trackLatest) =>
-				mcp.createSnapshot(
-					agent,
-					agentPolicy ?? (await resolveMcpPolicyForAgentRef.current(agent)),
-					trackLatest
-				),
+				try {
+					await runCompaction(
+						"threshold",
+						undefined,
+						messages,
+						selection,
+						undefined,
+						variant
+					);
+				} catch (error) {
+					if (!isBenignCompactionError(error)) {
+						setCompactionError(
+							error instanceof Error
+								? error
+								: new Error("Automatic compaction failed.")
+						);
+					}
+				}
+			};
+			void compactIfNeeded();
 		},
-		modelRef,
-		variantRef,
-		runtimeGatedToolingRef.current,
-		async (agent: AgentId) => {
+		[compactionModule, getCompactionSettings, runCompaction]
+	);
+
+	const createTurnSkillExecution =
+		useCallback(async (): Promise<SkillExecution> => {
+			const permission = await resolvePermission();
+			const catalog = await discoverSkillCatalog(config, (name) =>
+				permission.decide("skill", name)
+			);
+			const execution = createSkillExecution(catalog);
+			skillExecutionRef.current = execution;
+			skillToolRef.current = buildSkillToolDefinition(catalog);
+			setCatalogDiagnostic(summarizeCatalogDiagnostics(catalog));
+			return execution;
+		}, [config, resolvePermission]);
+
+	const resolveSkillForSubmit = useCallback(
+		async (
+			explicitSkillInput: SkillContext | undefined,
+			anchoredMessage: ConversationMessage | undefined
+		): Promise<
+			| { ok: true; skill: SkillRequestContext | undefined }
+			| { ok: false; reason: string }
+		> => {
+			const execution = skillExecutionRef.current;
+			if (explicitSkillInput !== undefined) {
+				if (execution === null) {
+					return { ok: false, reason: "Skill catalog is unavailable" };
+				}
+				return activateExplicitSkill(explicitSkillInput, {
+					execution,
+					gate: toolGateState.gate,
+				});
+			}
+			if (anchoredMessage === undefined || execution === null) {
+				return { ok: true, skill: undefined };
+			}
+			const parsedSkill = conversationMessageSkillSchema.safeParse(
+				anchoredMessage.metadata?.skill
+			);
+			if (!parsedSkill.success) {
+				return { ok: true, skill: undefined };
+			}
+			if (!("instructions" in parsedSkill.data)) {
+				const live = execution.catalog.entries.find(
+					({ name }) => name === parsedSkill.data.name
+				);
+				if (live === undefined) {
+					return {
+						ok: false,
+						reason: `Skill "${parsedSkill.data.name}" is unavailable`,
+					};
+				}
+				return activateExplicitSkill(
+					{
+						arguments: parsedSkill.data.arguments ?? "",
+						instructions: "",
+						name: parsedSkill.data.name,
+					},
+					{ execution, gate: toolGateState.gate }
+				);
+			}
+			return activateExplicitSkill(parsedSkill.data, {
+				execution,
+				gate: toolGateState.gate,
+			});
+		},
+		[toolGateState.gate]
+	);
+
+	const updateRuntimeMessage = useCallback(
+		(assistantId: string, event: AgentTurnEvent): void => {
+			const current = activeMessagesRef.current;
+			const index = current.findIndex(({ id }) => id === assistantId);
+			const existing: ConversationMessage =
+				index === -1
+					? { id: assistantId, parts: [], role: "assistant" }
+					: (current[index] ?? {
+							id: assistantId,
+							parts: [],
+							role: "assistant",
+						});
+			const parts = [...existing.parts];
+			switch (event.type) {
+				case "model-step-started":
+					parts.push({ type: "step-start" });
+					break;
+				case "reasoning-delta": {
+					const last = parts.at(-1);
+					if (last?.type === "reasoning") {
+						parts[parts.length - 1] = {
+							...last,
+							text: last.text + event.delta,
+						};
+					} else {
+						parts.push({ text: event.delta, type: "reasoning" });
+					}
+					break;
+				}
+				case "text-delta": {
+					const last = parts.at(-1);
+					if (last?.type === "text") {
+						parts[parts.length - 1] = {
+							...last,
+							text: last.text + event.delta,
+						};
+					} else {
+						parts.push({ text: event.delta, type: "text" });
+					}
+					break;
+				}
+				case "tool-call-started":
+					parts.push(runtimeToolPart(event));
+					break;
+				case "tool-call-finished": {
+					const partIndex = parts.findLastIndex(
+						(part) =>
+							isConversationToolPart(part) &&
+							part.toolCallId === event.toolCallId
+					);
+					const existingPart = parts[partIndex];
+					if (
+						partIndex === -1 ||
+						existingPart === undefined ||
+						!isConversationToolPart(existingPart)
+					) {
+						parts.push(runtimeToolResultPart(event));
+					} else {
+						parts[partIndex] = settleRuntimeToolPart(existingPart, event);
+					}
+					break;
+				}
+				default:
+					return;
+			}
+			const nextMessage: ConversationMessage = { ...existing, parts };
+			const nextMessages =
+				index === -1
+					? [...current, nextMessage]
+					: current.map((message, messageIndex) =>
+							messageIndex === index ? nextMessage : message
+						);
+			publishActiveMessages(nextMessages);
+			mergeDisplayMessages([nextMessage]);
+		},
+		[mergeDisplayMessages, publishActiveMessages]
+	);
+
+	const finalizeRuntimeMessage = useCallback(
+		(assistantId: string, event: AgentTurnTerminalEvent): void => {
+			const current = activeMessagesRef.current;
+			const index = current.findIndex(({ id }) => id === assistantId);
+			const base =
+				index === -1
+					? { id: assistantId, parts: [], role: "assistant" as const }
+					: current[index];
+			if (base === undefined) {
+				return;
+			}
+			const startedAt = requestStartedAtRef.current;
+			const usage =
+				event.type === "agent-turn-completed"
+					? normalizeModelUsage(event.usage)
+					: null;
+			const metadata: ConversationMessageMetadata = {
+				...(base.metadata ?? {}),
+				agent: base.metadata?.agent ?? agentRef.current,
+				interrupted: event.type !== "agent-turn-completed",
+				model: base.metadata?.model ?? modelRef.current,
+				...(variantRef.current === undefined
+					? {}
+					: { variant: base.metadata?.variant ?? variantRef.current }),
+				...(startedAt === null
+					? {}
+					: { responseTimeMs: Math.max(0, Date.now() - startedAt) }),
+				...(usage === null ? {} : { usage }),
+			};
+			const nextMessage = { ...base, metadata };
+			const nextMessages =
+				index === -1
+					? [...current, nextMessage]
+					: current.map((message, messageIndex) =>
+							messageIndex === index ? nextMessage : message
+						);
+			const safeMessages =
+				event.type === "agent-turn-completed"
+					? nextMessages
+					: sanitizeInterruptedConversationMessages(nextMessages);
+			publishActiveMessages(safeMessages);
+			mergeDisplayMessages(safeMessages);
+		},
+		[mergeDisplayMessages, publishActiveMessages]
+	);
+
+	const runTurn = useCallback(
+		async ({
+			agent,
+			delegation,
+			model,
+			resolvedAgent,
+			skill,
+			variant,
+			modelMessages,
+			signal,
+		}: {
+			agent: AgentId;
+			delegation?: AgentTurnDelegation;
+			model: ChatModelSelection;
+			resolvedAgent: ResolvedCodingAgent;
+			skill?: SkillRequestContext;
+			variant?: ModelVariant;
+			modelMessages: readonly ConversationMessage[];
+			signal: AbortSignal;
+		}): Promise<ConversationSendOutcome> => {
+			if (signal.aborted) {
+				return conversationSendCancelled(signal);
+			}
+			setError(null);
+			setViewState(undefined);
+			setStatus("submitted");
+			let snapshot: McpCatalogSnapshot | undefined;
+			try {
+				const modelTarget = await resolveChatModelTarget(model, connections, {
+					signal,
+					...(variant === undefined ? {} : { variant }),
+				});
+				const mcpPolicy = await resolveMcpPolicyForAgentRef.current(agent);
+				snapshot = await mcp.createSnapshot(agent, mcpPolicy);
+				mcpSnapshotRef.current = snapshot;
+				const store = getConversationStore();
+				const hydratedMessages = await store.hydrateAttachments(modelMessages, {
+					purpose: "model",
+					priorityMessageId: modelMessages.findLast(
+						({ role }) => role === "user"
+					)?.id,
+					signal,
+					...(attachmentBudgetRef.current ?? {}),
+				});
+				const executeMcpTool = createMcpToolExecutor(mcp.execute);
+				const turnId = createAgentTurnId();
+				currentAssistantIdRef.current = `assistant-${turnId}`;
+				const gatedTooling: RuntimeGatedTooling = {
+					gate: toolGateState.gate,
+					mcpSnapshot: snapshot,
+					executeMcpTool,
+					registerChildAbort: (toolCallId, abort) => {
+						childAbortControllersRef.current.set(toolCallId, abort);
+						return () => childAbortControllersRef.current.delete(toolCallId);
+					},
+					resolveResourceLimits: (agentId) =>
+						agentId === undefined
+							? resolveResourceLimitsRef.current()
+							: resolveResourceLimitsForAgentRef.current(agentId),
+				};
+				const turn = buildAgentTurn({
+					agent,
+					delegation,
+					modelMessages: hydratedMessages,
+					modelTarget,
+					resolvedAgent,
+					skill,
+					tools: createGatedCodingTools({
+						agentId: agent,
+						agentTools: resolvedAgent.visibleCodingTools,
+						delegate: runtimeGatedToolingRef.current.delegate,
+						executeMcpTool,
+						gate: gatedTooling.gate,
+						mcpSnapshot: snapshot,
+						parentTurnId: turnId,
+						resolveResourceLimits: gatedTooling.resolveResourceLimits,
+						skillExecution: skillExecutionRef.current ?? undefined,
+						skillTool: skillToolRef.current,
+					}),
+					turnId,
+				});
+				await runAgentTurnToText({
+					onCheckpoint: (record) =>
+						store.commitConversationRecord({ record, sessionId }),
+					onEvent: (event) => {
+						if (currentAssistantIdRef.current !== null) {
+							updateRuntimeMessage(currentAssistantIdRef.current, event);
+						}
+						if (event.type !== "agent-turn-started") {
+							setStatus("streaming");
+						}
+					},
+					onTerminal: (event) => {
+						if (currentAssistantIdRef.current !== null) {
+							finalizeRuntimeMessage(currentAssistantIdRef.current, event);
+						}
+					},
+					onViewState: setViewState,
+					runtime: defaultRuntimeFactory(),
+					signal,
+					sourceMessages: modelMessages,
+					turn,
+				});
+				setStatus("ready");
+				maintainAfterTurn(displayMessagesRef.current, model, variant);
+				return { rejected: false };
+			} catch (turnError) {
+				setStatus("ready");
+				if (signal.aborted) {
+					return conversationSendCancelled(signal);
+				}
+				setError(
+					turnError instanceof Error
+						? turnError
+						: new Error("The Agent Turn failed.")
+				);
+				providerErrorRef.current(turnError);
+				return { rejected: false };
+			} finally {
+				if (snapshot !== undefined) {
+					mcp.releaseSnapshot?.(snapshot);
+					if (mcpSnapshotRef.current?.id === snapshot.id) {
+						mcpSnapshotRef.current = null;
+					}
+				}
+				currentAssistantIdRef.current = null;
+			}
+		},
+		[
+			connections,
+			finalizeRuntimeMessage,
+			maintainAfterTurn,
+			mcp,
+			resolveMcpPolicyForAgentRef,
+			resolveResourceLimitsForAgentRef,
+			resolveResourceLimitsRef,
+			sessionId,
+			toolGateState.gate,
+			updateRuntimeMessage,
+		]
+	);
+
+	const runtimeGatedToolingRef = useLatest<RuntimeGatedTooling>({
+		delegate: (request, signal) => {
+			const execute = delegationExecutorRef.current;
+			return execute === undefined
+				? Promise.reject(new Error("Delegation is unavailable."))
+				: execute(request, signal);
+		},
+		gate: toolGateState.gate,
+		resolveResourceLimits: (agentId) =>
+			agentId === undefined
+				? resolveResourceLimitsRef.current()
+				: resolveResourceLimitsForAgentRef.current(agentId),
+	});
+	const delegationExecutorRef = useRef<DelegationExecutor | undefined>(
+		undefined
+	);
+	delegationExecutorRef.current = createDelegationExecutor({
+		connections,
+		createSkillContext: async (agent) => {
 			const permission = await resolvePermissionForAgentRef.current(agent);
 			const catalog = await discoverSkillCatalog(config, (name) =>
 				permission.decide("skill", name)
@@ -760,208 +1211,191 @@ export function useChat(
 			const tool = buildSkillToolDefinition(catalog);
 			return tool === undefined ? undefined : { execution, tool };
 		},
-		(nextViewState) => setViewState(nextViewState)
+		fallbackModelRef: modelRef,
+		fallbackVariantRef: variantRef,
+		gatedTooling: runtimeGatedToolingRef.current,
+		mcp,
+		resolveMcpPolicyForAgent: (agent) =>
+			resolveMcpPolicyForAgentRef.current(agent),
+		onViewState: setViewState,
+		registry,
+		sessionId,
+	});
+
+	const submit = useCallback(
+		async (
+			input: ConversationSendInput,
+			signal: AbortSignal
+		): Promise<ConversationSendOutcome> => {
+			setCompactionError(null);
+			approvalAbortHandledRef.current = false;
+			overflowAttemptRef.current = 0;
+			agentRef.current = input.agent;
+			resolvedAgentRef.current = input.resolvedAgent;
+			conversationModelRef.current = input.conversationModel;
+			conversationVariantRef.current = input.conversationVariant;
+			modelRef.current = input.model;
+			variantRef.current = input.variant;
+			requestStartedAtRef.current = Date.now();
+
+			const preparationError = await waitForCompaction(
+				compactionOperationRef.current
+			);
+			if (preparationError !== null) {
+				return { rejected: true, reason: preparationError };
+			}
+			const settings = await getCompactionSettings(input.model);
+			attachmentBudgetRef.current = {
+				maxAttachments: settings.maxMediaAttachments,
+				maxBytes: settings.maxMediaBytes,
+				maxTokens: settings.maxMediaTokens,
+			};
+			const compactionResult = await prepareCompactionBeforeSubmit({
+				activeMessages: activeMessagesRef.current,
+				compactionModule,
+				model: input.model,
+				runCompaction,
+				settings,
+			});
+			if (!compactionResult.ok) {
+				return { rejected: true, reason: compactionResult.reason };
+			}
+			if (signal.aborted) {
+				return conversationSendCancelled(signal);
+			}
+
+			const context = await prepareSubmitContext({
+				activeMessages: activeMessagesRef.current,
+				createTurnSkillExecution,
+				input,
+				resolveSkillForSubmit,
+				signal,
+			});
+			if (context.kind === "cancelled") {
+				return conversationSendCancelled(signal);
+			}
+			if (context.kind === "rejected") {
+				return { rejected: true, reason: context.reason };
+			}
+
+			let modelMessages: ConversationMessage[];
+			if (context.anchoredMessage === undefined) {
+				setIsPreparingMessage(true);
+				const preparedMessage = await prepareNewConversationMessage({
+					input,
+					metadata: context.metadata,
+					signal,
+				});
+				if (preparedMessage.kind === "cancelled") {
+					setIsPreparingMessage(false);
+					return conversationSendCancelled(signal);
+				}
+				if (preparedMessage.kind === "rejected") {
+					setIsPreparingMessage(false);
+					return {
+						rejected: true,
+						reason: preparedMessage.reason,
+					};
+				}
+				modelMessages = [
+					...sanitizeSkillToolParts(activeMessagesRef.current),
+					preparedMessage.message,
+				];
+				setIsPreparingMessage(false);
+			} else {
+				modelMessages = sanitizeSkillToolParts(activeMessagesRef.current);
+			}
+			publishActiveMessages(modelMessages);
+			mergeDisplayMessages(modelMessages);
+			return runTurn({
+				agent: input.agent,
+				delegation: input.delegation,
+				model: input.model,
+				modelMessages,
+				resolvedAgent: context.resolvedAgent,
+				signal,
+				skill: context.skill,
+				variant: input.variant,
+			});
+		},
+		[
+			compactionModule,
+			createTurnSkillExecution,
+			getCompactionSettings,
+			mergeDisplayMessages,
+			publishActiveMessages,
+			resolveSkillForSubmit,
+			runCompaction,
+			runTurn,
+		]
 	);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: latest refs intentionally keep transport state stable
-	const transport = useMemo(() => {
-		// The transport snapshots the MCP catalog once per send; mirror the same
-		// immutable snapshot into a ref so dynamic tool dispatch resolves against
-		// the exact catalog the request was built from.
-		const mcpWithSnapshotRef: McpContextValue = {
-			...mcp,
-			createSnapshot: async (agent: AgentId) => {
-				// Resolve the snapshot for the executing Agent's effective MCP policy
-				// so deny composes out unavailable tools and ask/allow are visible.
-				const agentPolicy = await resolveMcpPolicyForAgentRef.current(agent);
-				const snapshot = await mcp.createSnapshot(agent, agentPolicy);
-				mcpSnapshotRef.current = snapshot;
-				return snapshot;
-			},
-		};
+	const submitRef = useLatest(submit);
 
-		return createRoutingChatTransport(
-			sessionId,
-			agentRef,
-			modelRef,
-			variantRef,
-			registry,
-			connections,
-			mcpWithSnapshotRef,
-			skillToolRef,
-			attachmentBudgetRef,
-			outcomeSignalRef,
-			runtimeGatedToolingRef,
-			skillExecutionRef,
-			(nextViewState) => setViewState(nextViewState),
-			delegationExecutorRef.current
-		);
-	}, [connections, mcp, registry, sessionId]);
-
-	const finalizeAssistantMessages = (messages: CodingAgentUIMessage[]) => {
-		const startedAt = requestStartedAtRef.current;
-
-		const responseTimeMs =
-			startedAt === null ? undefined : Math.max(0, Date.now() - startedAt);
-		const assistantIndex = messages.findLastIndex(
-			(message) => message.role === "assistant"
-		);
-
-		if (assistantIndex === -1) {
-			return messages;
-		}
-
-		const assistantMessage = messages[assistantIndex];
-		if (!assistantMessage) {
-			return messages;
-		}
-
-		const nextMessages = [...messages];
-		nextMessages[assistantIndex] = {
-			...finalizeAssistantMessageMetadata(assistantMessage, {
-				agent: agentRef.current,
-				interrupted: interruptedMessageIdsRef.current.has(assistantMessage.id),
-				model: modelRef.current,
-				responseTimeMs,
-				variant: variantRef.current,
-			}),
-		};
-
-		return nextMessages;
-	};
-
-	const persistMessages = (messages: CodingAgentUIMessage[]) => {
-		void persistDisplayMessages(mergeDisplayMessages(messages)).catch(
-			() => undefined
-		);
-	};
-
-	const finalizeAndPersistMessages = (messages: CodingAgentUIMessage[]) => {
-		// An interrupted/cut-off turn drops tool calls without a terminal output.
-		// An aborted approval is converted to output-error before this step, so
-		// its late result remains replay-safe.
-		const finalizedMessages = sanitizeInterruptedMessagesForConversation(
-			finalizeAssistantMessages(messages)
-		);
-		activeMessagesRef.current = finalizedMessages;
-		setMessagesRef.current?.(finalizedMessages);
-		persistMessages(finalizedMessages);
-	};
-
-	const shouldAutoSend = (options: {
-		messages: CodingAgentUIMessage[];
-	}): Promise<boolean> => autoSendRef.current(options);
-	const chat = useAiChat<CodingAgentUIMessage>({
-		id: sessionId,
-		messages: initialActiveMessages,
-		onFinish: ({ messages, isAbort, isError }) => {
-			finalizeAndPersistMessages(messages);
-			if (isAbort || isError) {
+	const interruptLatestAssistantMessage = useCallback(
+		(preserveToolCallId?: string): void => {
+			const targetIndex = findCurrentTurnInterruptTargetIndex(
+				activeMessagesRef.current
+			);
+			if (targetIndex === -1) {
 				return;
 			}
-			maintainAfterTurn(messages, modelRef.current, variantRef.current);
-		},
-		onError: (providerError) => {
-			// A stream error leaves the partial assistant message in state.
-			// Mark it interrupted so unfinished tool calls never replay on a
-			// later retry; provider error text is normalized separately.
-			const lastAssistantIndex = chat.messages.findLastIndex(
-				({ role }) => role === "assistant"
-			);
-			if (lastAssistantIndex !== -1) {
-				const lastAssistant = chat.messages[lastAssistantIndex];
-				if (lastAssistant) {
-					interruptedMessageIdsRef.current.add(lastAssistant.id);
-				}
+			const target = activeMessagesRef.current[targetIndex];
+			if (target === undefined) {
+				return;
 			}
-			finalizeAndPersistMessages(chat.messages);
-			providerErrorRef.current(providerError);
-		},
-		onToolCall: createChatToolCallHandler({
-			addToolOutputRef,
-			dynamicToolOutputRef,
-			gate: toolGate,
-			mcp,
-			mcpSnapshotRef,
-			resolvedAgentRef,
-			resolveResourceLimits: () => resolveResourceLimitsRef.current(),
-			skillExecutionRef,
-		}),
-		sendAutomaticallyWhen: shouldAutoSend,
-		transport,
-	});
-	const chatRef = useLatest(chat);
-	activeMessagesRef.current = chat.messages;
-	addToolOutputRef.current = chat.addToolOutput;
-	dynamicToolOutputRef.current = (config) => {
-		// AI SDK matches dynamic output by toolCallId. The reserved type-only tool
-		// supplies its unknown output channel without pretending an MCP tool is one
-		// of the concrete coding tools.
-		if (config.state === "output-error") {
-			return chat.addToolOutput({
-				errorText: config.errorText ?? "Tool call failed",
-				state: "output-error",
-				tool: "__dynamic",
-				toolCallId: config.toolCallId,
+			const startedAt = requestStartedAtRef.current;
+			const finalized = finalizeAssistantMessageMetadata(target, {
+				agent: agentRef.current,
+				interrupted: true,
+				model: modelRef.current,
+				variant: variantRef.current,
+				...(startedAt === null
+					? {}
+					: { responseTimeMs: Math.max(0, Date.now() - startedAt) }),
 			});
-		}
-		return chat.addToolOutput({
-			output: config.output,
-			tool: "__dynamic",
-			toolCallId: config.toolCallId,
-		});
-	};
-	setMessagesRef.current = chat.setMessages;
-
-	autoSendRef.current = async ({ messages }) => {
-		if (!autoSendGate.shouldAutoSend({ messages })) {
-			return false;
-		}
-		const turnModel = modelRef.current;
-		const settings = await getCompactionSettings(turnModel);
-		if (
-			!(
-				settings.midTurnAvailable &&
-				compactionModule.needsCompaction(messages, settings)
-			)
-		) {
-			return true;
-		}
-		autoSendGate.pause();
-		try {
-			await runCompaction("mid-turn", undefined, messages, turnModel);
-			autoSendGate.resume();
-			return true;
-		} catch (error) {
-			if (isBenignCompactionError(error)) {
-				autoSendGate.disable();
-				return false;
-			}
-			setCompactionError(
-				error instanceof Error
-					? error
-					: new Error("Mid-turn compaction failed.")
+			const next = [...activeMessagesRef.current];
+			next[targetIndex] = finalized;
+			const sanitized = sanitizeInterruptedMessagesForConversation(
+				next,
+				preserveToolCallId
 			);
-			autoSendGate.disable();
-			return false;
-		}
-	};
+			publishActiveMessages(sanitized);
+			mergeDisplayMessages(sanitized);
+		},
+		[mergeDisplayMessages, publishActiveMessages]
+	);
+	const abortApprovalTurn = useCallback(
+		(toolCallId: string): void => {
+			if (approvalAbortHandledRef.current) {
+				return;
+			}
+			approvalAbortHandledRef.current = true;
+			toolGateState.approvalQueue.rejectAll();
+			closeApprovals();
+			interruptLatestAssistantMessage(toolCallId);
+		},
+		[closeApprovals, interruptLatestAssistantMessage, toolGateState]
+	);
+	abortApprovalTurnRef.current = abortApprovalTurn;
 
 	providerErrorRef.current = (providerError) => {
-		if (overflowAttemptRef.current > 0) {
+		if (
+			overflowAttemptRef.current > 0 ||
+			!isModelContextOverflowError(providerError)
+		) {
 			return;
 		}
 		overflowAttemptRef.current = 1;
 		const failedModel = modelRef.current;
-		const failedVariant = variantRef.current;
+		const originalMessage = displayMessagesRef.current.findLast(
+			(message) => message.role === "user"
+		);
+		if (originalMessage === undefined) {
+			return;
+		}
 		void (async () => {
 			const settings = await getCompactionSettings(failedModel);
 			if (!settings.overflowRecoveryAvailable) {
-				return;
-			}
-			const originalMessage = displayMessagesRef.current.findLast(
-				(message) => message.role === "user"
-			);
-			if (!originalMessage) {
 				return;
 			}
 			try {
@@ -974,7 +1408,7 @@ export function useChat(
 							undefined,
 							input.model,
 							input.conversation.messages,
-							failedVariant
+							variantRef.current
 						),
 					compaction: compactionModule,
 					compactionInput: {
@@ -996,27 +1430,14 @@ export function useChat(
 					error: providerError,
 					originalMessageId: originalMessage.id,
 					replay: async ({ activeMessages, entry, originalMessageId }) => {
-						activeMessagesRef.current = activeMessages;
-						setMessagesRef.current?.(activeMessages);
-						setCompactions((currentCompactions) =>
-							currentCompactions.some(({ id }) => id === entry.id)
-								? currentCompactions
-								: [...currentCompactions, entry]
+						publishActiveMessages(activeMessages);
+						setCompactions((current) =>
+							current.some(({ id }) => id === entry.id)
+								? current
+								: [...current, entry]
 						);
-						setCompactionError(null);
-						const replayMessage = displayMessagesRef.current.find(
-							(message) => message.id === originalMessageId
-						);
-						if (!replayMessage) {
-							throw new Error("Original message disappeared during replay.");
-						}
 						const operation = conversationRef.current;
-						if (!operation) {
-							throw new Error(
-								"Conversation operation is unavailable during overflow recovery."
-							);
-						}
-						if (!(await operation.waitForIdle())) {
+						if (operation === null || !(await operation.waitForIdle())) {
 							return;
 						}
 						const outcome = await operation.send({
@@ -1026,449 +1447,23 @@ export function useChat(
 							messageId: originalMessageId,
 							model: failedModel,
 							resolvedAgent: resolvedAgentRef.current,
-							variant: failedVariant,
+							variant: variantRef.current,
 						});
 						if (outcome.rejected) {
 							throw new Error(outcome.reason);
 						}
 					},
 				});
-			} catch (error) {
-				if (isModelContextOverflowError(providerError)) {
-					setCompactionError(
-						error instanceof Error
-							? error
-							: new Error("Context overflow recovery failed.")
-					);
-				}
+			} catch (recoveryError) {
+				setCompactionError(
+					recoveryError instanceof Error
+						? recoveryError
+						: new Error("Context overflow recovery failed.")
+				);
 			}
 		})();
 	};
 
-	const interruptLatestAssistantMessage = (preserveToolCallId?: string) => {
-		autoSendGate.disable();
-		const startedAt = requestStartedAtRef.current;
-		const responseTimeMs =
-			startedAt === null ? undefined : Math.max(0, Date.now() - startedAt);
-		const targetIndex = findCurrentTurnInterruptTargetIndex(chat.messages);
-
-		if (targetIndex === -1) {
-			chat.stop();
-			return;
-		}
-
-		const targetMessage = chat.messages[targetIndex];
-		if (!targetMessage) {
-			chat.stop();
-			return;
-		}
-
-		if (targetMessage.role === "assistant") {
-			interruptedMessageIdsRef.current.add(targetMessage.id);
-		}
-		const nextMessages = [...chat.messages];
-		nextMessages[targetIndex] = {
-			...finalizeAssistantMessageMetadata(targetMessage, {
-				agent: agentRef.current,
-				interrupted: true,
-				model: modelRef.current,
-				responseTimeMs,
-				variant: variantRef.current,
-			}),
-		};
-		// Drop unfinished tool calls from the interrupted turn. The approval call
-		// identified above is converted to a terminal fallback so its late
-		// output-error can replace it after chat.stop() settles.
-		const sanitizedMessages = sanitizeInterruptedMessagesForConversation(
-			nextMessages,
-			preserveToolCallId
-		);
-
-		activeMessagesRef.current = sanitizedMessages;
-		setMessagesRef.current?.(sanitizedMessages);
-		persistMessages(sanitizedMessages);
-		chat.stop();
-	};
-	const abortApprovalTurn = (toolCallId: string) => {
-		if (approvalAbortHandledRef.current) {
-			return;
-		}
-		approvalAbortHandledRef.current = true;
-		toolGateState.approvalQueue.rejectAll();
-		closeApprovals();
-		interruptLatestAssistantMessage(toolCallId);
-	};
-	abortApprovalTurnRef.current = abortApprovalTurn;
-
-	const createTurnSkillExecution = async (): Promise<SkillExecution> => {
-		const permission = await resolvePermission();
-		const catalog = await discoverSkillCatalog(config, (name) =>
-			permission.decide("skill", name)
-		);
-		const execution = createSkillExecution(catalog);
-		skillExecutionRef.current = execution;
-		skillToolRef.current = buildSkillToolDefinition(catalog);
-		setCatalogDiagnostic(summarizeCatalogDiagnostics(catalog));
-		return execution;
-	};
-
-	/**
-	 * Re-authorizes a Skill carried by an anchored message (explicit Skill at
-	 * session creation, or a retried turn): sanitized activation metadata after
-	 * a reload, the full snapshot in memory. Either way the Skill is
-	 * re-snapshotted from current content so the transport injects the live body.
-	 */
-	const reauthorizeAnchoredSkill = async (
-		anchoredMessage: CodingAgentUIMessage
-	): Promise<
-		| { ok: true; skill: SkillRequestContext | undefined }
-		| { ok: false; reason: string }
-	> => {
-		const parsedSkill = codingMessageSkillSchema.safeParse(
-			anchoredMessage.metadata?.skill
-		);
-		if (!parsedSkill.success) {
-			return { ok: true, skill: undefined };
-		}
-
-		const execution = skillExecutionRef.current;
-		if (execution === null) {
-			return { ok: true, skill: undefined };
-		}
-
-		const activation = await activateExplicitSkill(
-			{
-				arguments: parsedSkill.data.arguments ?? "",
-				instructions: "",
-				name: parsedSkill.data.name,
-			},
-			{
-				execution,
-				gate: toolGate,
-			}
-		);
-		if (!activation.ok) {
-			return { ok: false, reason: activation.reason };
-		}
-		return { ok: true, skill: activation.skill };
-	};
-
-	/**
-	 * Resolves the Skill for a submit: an explicit `/skill` submission wins;
-	 * otherwise an anchored message's Skill metadata is re-authorized.
-	 */
-	const resolveSkillForSubmit = async (
-		explicitSkillInput: SkillContext | undefined,
-		anchoredMessage: CodingAgentUIMessage | undefined
-	): Promise<
-		| { ok: true; skill: SkillRequestContext | undefined }
-		| { ok: false; reason: string }
-	> => {
-		if (explicitSkillInput) {
-			const execution = skillExecutionRef.current;
-			if (execution === null) {
-				return { ok: false, reason: "Skill catalog is unavailable" };
-			}
-			const activation = await activateExplicitSkill(explicitSkillInput, {
-				execution,
-				gate: toolGate,
-			});
-			if (!activation.ok) {
-				return { ok: false, reason: activation.reason };
-			}
-			return { ok: true, skill: activation.skill };
-		}
-
-		if (anchoredMessage) {
-			return reauthorizeAnchoredSkill(anchoredMessage);
-		}
-
-		return { ok: true, skill: undefined };
-	};
-
-	/**
-	 * Re-sends an already-stored user message (HomeView auto-start): the
-	 * message stays in place with freshly resolved metadata, skill tool parts
-	 * are sanitized, and the turn runs against the exact stored content.
-	 */
-	const prepareForSend = async (
-		candidateMessages: readonly CodingAgentUIMessage[] = activeMessagesRef.current
-	): Promise<string | null> => {
-		const sendModel = modelRef.current;
-		const waitingError = await waitForCompaction(
-			compactionOperationRef.current
-		);
-		if (waitingError) {
-			return waitingError;
-		}
-		const settings = await getCompactionSettings(sendModel);
-		attachmentBudgetRef.current = {
-			maxAttachments: settings.maxMediaAttachments,
-			maxBytes: settings.maxMediaBytes,
-			maxTokens: settings.maxMediaTokens,
-		};
-		const shouldCompact =
-			settings.autoAvailable &&
-			compactionModule.needsCompaction(candidateMessages, settings);
-		if (!shouldCompact) {
-			return null;
-		}
-		try {
-			await runCompaction("threshold", undefined, undefined, sendModel);
-			return null;
-		} catch (error) {
-			return isBenignCompactionError(error)
-				? null
-				: compactionErrorMessage(error);
-		}
-	};
-	const conversationSendCompleted = (
-		signal: AbortSignal
-	): ConversationSendOutcome =>
-		signal.aborted ? conversationSendCancelled(signal) : { rejected: false };
-
-	const submitAnchoredMessage = async (
-		anchoredMessage: CodingAgentUIMessage,
-		metadata: CodingAgentUIMessage["metadata"],
-		body: { readonly delegation: AgentTurnDelegation } | undefined,
-		signal: AbortSignal
-	): Promise<ConversationSendOutcome> => {
-		const previousMessages = activeMessagesRef.current;
-		const nextMessages = sanitizeSkillToolParts(previousMessages);
-		activeMessagesRef.current = nextMessages;
-		chat.setMessages(nextMessages);
-		const persisted = await persistMessagesBeforeSend(
-			persistDisplayMessages,
-			nextMessages
-		);
-		if (!persisted) {
-			activeMessagesRef.current = previousMessages;
-			chat.setMessages(previousMessages);
-			return {
-				rejected: true,
-				reason: "Conversation transcript could not be persisted.",
-			};
-		}
-		if (signal.aborted) {
-			return conversationSendCancelled(signal);
-		}
-		setIsPreparingMessage(true);
-		try {
-			if (signal.aborted) {
-				return conversationSendCancelled(signal);
-			}
-			await chat.sendMessage(
-				{
-					messageId: anchoredMessage.id,
-					metadata,
-					parts: anchoredMessage.parts,
-				},
-				{ body }
-			);
-			return conversationSendCompleted(signal);
-		} finally {
-			setIsPreparingMessage(false);
-		}
-	};
-
-	const submitFreshMessage = async ({
-		body,
-		files,
-		metadata,
-		userText,
-		signal,
-	}: {
-		body: { readonly delegation: AgentTurnDelegation } | undefined;
-		files: FileUIPart[];
-		metadata: CodingAgentUIMessage["metadata"];
-		userText?: string;
-		signal: AbortSignal;
-	}): Promise<ConversationSendOutcome> => {
-		if (userText === undefined) {
-			return { rejected: true, reason: "No prompt to submit" };
-		}
-		const fileMentions = await resolveFileMentionParts(userText);
-		const optimisticMessage = createUserMessage(
-			userText,
-			metadata,
-			fileMentions,
-			files
-		);
-		let durableOptimisticMessage: CodingAgentUIMessage | undefined;
-		try {
-			[durableOptimisticMessage] =
-				await getConversationStore().externalizeAttachments(
-					[optimisticMessage],
-					signal,
-					{ rejectInvalid: true }
-				);
-		} catch {
-			if (signal.aborted) {
-				return conversationSendCancelled(signal);
-			}
-			return {
-				rejected: true,
-				reason: "Attachment data could not be stored.",
-			};
-		}
-		if (!durableOptimisticMessage) {
-			return {
-				rejected: true,
-				reason: "The prompt could not be prepared.",
-			};
-		}
-		const candidateMessages = [
-			...sanitizeSkillToolParts(activeMessagesRef.current),
-			durableOptimisticMessage,
-		];
-		const promptPreparationError = await prepareForSend(candidateMessages);
-		if (promptPreparationError) {
-			return { rejected: true, reason: promptPreparationError };
-		}
-		if (signal.aborted) {
-			return conversationSendCancelled(signal);
-		}
-		const priorActiveMessages = activeMessagesRef.current;
-		const optimisticMessages = [
-			...sanitizeSkillToolParts(priorActiveMessages),
-			durableOptimisticMessage,
-		];
-		const nextDisplayMessages = mergeDisplayMessages(optimisticMessages);
-		activeMessagesRef.current = optimisticMessages;
-		chat.setMessages(optimisticMessages);
-		setIsPreparingMessage(true);
-		const persisted = await persistMessagesBeforeSend(
-			persistDisplayMessages,
-			nextDisplayMessages
-		);
-		if (!persisted) {
-			activeMessagesRef.current = priorActiveMessages;
-			chat.setMessages(priorActiveMessages);
-			removeDisplayMessage(durableOptimisticMessage.id);
-			setIsPreparingMessage(false);
-			return {
-				rejected: true,
-				reason: "Conversation transcript could not be persisted.",
-			};
-		}
-		if (signal.aborted) {
-			activeMessagesRef.current = priorActiveMessages;
-			chat.setMessages(priorActiveMessages);
-			const rollbackMessages = removeDisplayMessage(
-				durableOptimisticMessage.id
-			);
-			await persistMessagesBeforeSend(persistDisplayMessages, rollbackMessages);
-			setIsPreparingMessage(false);
-			return conversationSendCancelled(signal);
-		}
-
-		try {
-			await chat.sendMessage(
-				{
-					messageId: durableOptimisticMessage.id,
-					metadata,
-					parts: durableOptimisticMessage.parts,
-				},
-				{ body }
-			);
-			return conversationSendCompleted(signal);
-		} catch (error) {
-			const nextMessages = activeMessagesRef.current.filter(
-				({ id }) => id !== durableOptimisticMessage.id
-			);
-			activeMessagesRef.current = nextMessages;
-			chat.setMessages(nextMessages);
-			void persistDisplayMessages(
-				removeDisplayMessage(durableOptimisticMessage.id)
-			).catch(() => undefined);
-			throw error;
-		} finally {
-			setIsPreparingMessage(false);
-		}
-	};
-
-	const submit = async (
-		{
-			agent,
-			conversationModel,
-			conversationVariant,
-			model,
-			variant,
-			resolvedAgent,
-			delegation,
-			userText,
-			files = [],
-			skill,
-			messageId,
-		}: ConversationSendInput,
-		signal: AbortSignal
-	): Promise<ConversationSendOutcome> => {
-		approvalAbortHandledRef.current = false;
-		setCompactionError(null);
-		overflowAttemptRef.current = 0;
-		autoSendGate.enable();
-		agentRef.current = agent;
-		resolvedAgentRef.current = resolvedAgent;
-		conversationModelRef.current = conversationModel;
-		conversationVariantRef.current = conversationVariant;
-		modelRef.current = model;
-		variantRef.current = variant;
-		requestStartedAtRef.current = Date.now();
-
-		const preparationError = await prepareForSend();
-		if (preparationError) {
-			return { rejected: true, reason: preparationError };
-		}
-		if (signal.aborted) {
-			return conversationSendCancelled(signal);
-		}
-		await createTurnSkillExecution();
-		if (signal.aborted) {
-			return conversationSendCancelled(signal);
-		}
-
-		// An anchored turn (HomeView auto-start) re-executes the prompt message
-		// the session row already stores instead of appending a new one.
-		let anchoredMessage: CodingAgentUIMessage | undefined;
-		if (messageId !== undefined) {
-			anchoredMessage = activeMessagesRef.current.find(
-				({ id }) => id === messageId
-			);
-			if (anchoredMessage?.role !== "user") {
-				return {
-					rejected: true,
-					reason: "The stored message to continue is unavailable",
-				};
-			}
-		}
-
-		const resolution = await resolveSkillForSubmit(skill, anchoredMessage);
-		if (!resolution.ok) {
-			return { rejected: true, reason: resolution.reason };
-		}
-
-		const metadata = {
-			agent,
-			model,
-			variant,
-			...(resolution.skill
-				? { skill: createSkillSnapshot(resolution.skill, "explicit") }
-				: {}),
-		};
-		const body = requestBodyForDelegation(delegation);
-
-		if (signal.aborted) {
-			return conversationSendCancelled(signal);
-		}
-		if (anchoredMessage) {
-			return submitAnchoredMessage(anchoredMessage, metadata, body, signal);
-		}
-
-		return submitFreshMessage({ body, files, metadata, signal, userText });
-	};
-
-	const submitRef = useLatest(submit);
-	const interruptRef = useLatest(interruptLatestAssistantMessage);
 	const conversation = useMemo(
 		() =>
 			createConversationController({
@@ -1477,30 +1472,28 @@ export function useChat(
 					if (signal.aborted) {
 						return conversationSendCancelled(signal);
 					}
-					const stop = () => {
-						chatRef.current.stop();
+					const stop = (): void => {
 						compactionAbortRef.current?.abort();
 						approvalQueueRef.current.rejectAll();
 						closeApprovalsRef.current();
 					};
-					outcomeSignalRef.current = signal;
 					signal.addEventListener("abort", stop, { once: true });
 					try {
 						return await submitRef.current(input, signal);
 					} finally {
 						signal.removeEventListener("abort", stop);
-						if (outcomeSignalRef.current === signal) {
-							outcomeSignalRef.current = undefined;
-						}
 					}
 				},
-				onInterrupt: (preserveToolCallId) =>
-					interruptRef.current(preserveToolCallId),
+				onInterrupt: interruptLatestAssistantMessage,
+				onError: (error) =>
+					setError(
+						error instanceof Error ? error : new Error("Conversation failed.")
+					),
 				resolveApproval: async (approvalId, outcome) => {
 					const entry = approvalPanelsRef.current.entries.find(
 						(candidate) => candidate.id === approvalId
 					);
-					if (!entry) {
+					if (entry === undefined) {
 						throw new Error(
 							`Conversation approval "${approvalId}" is unavailable.`
 						);
@@ -1517,13 +1510,13 @@ export function useChat(
 		[
 			approvalPanelsRef,
 			approvalQueueRef,
-			chatRef,
 			closeApprovalsRef,
-			interruptRef,
+			interruptLatestAssistantMessage,
 			submitRef,
 		]
 	);
 	conversationRef.current = conversation;
+
 	return {
 		cancelCompaction,
 		catalogDiagnostic,
@@ -1531,15 +1524,17 @@ export function useChat(
 			runCompaction("manual", focus, undefined, selection),
 		compactions,
 		conversation,
-		error: compactionError ?? chat.error,
+		error: compactionError ?? error,
 		getCompactionSettings,
 		isCompacting,
-		viewState,
-		messages: displayMessages,
-		status: chat.status,
 		isPreparingMessage,
+		messages: displayMessages,
+		status,
+		viewState,
+		activeMessages,
 	};
 }
+
 const summarizeCatalogDiagnostics = (catalog: SkillCatalog): string | null => {
 	if (catalog.diagnostics.length === 0) {
 		return null;

@@ -1,13 +1,34 @@
-import type { OperationalFailure } from "@wincode/agent-core";
 import {
 	AGENT_TURN_INTERRUPTION_REASONS,
 	AgentInvariantError,
 	CONVERSATION_RECORD_VERSION,
+	type ConversationMessageMetadataRecord,
+	type ConversationMessageRecord,
+	type ConversationRecord,
+	type ConversationToolCallPart,
 	isAgentTurnDelegation,
 	isAgentTurnMessageRecord,
 	isAgentTurnTextPart,
+	isConversationAttachmentReferencePart,
+	isConversationFileMentionPart,
+	isConversationToolCallPart,
 	isOperationalFailure,
+	type OperationalFailure,
 } from "@wincode/agent-core";
+import {
+	type ChatModelSelection,
+	modelSelectionSchema,
+	modelVariantSchema,
+} from "@wincode/ai/models";
+import { codingToolNames } from "@wincode/coding-tools";
+import type {
+	ConversationMessage,
+	ConversationMessageMetadata,
+	ConversationPart,
+	ConversationToolPart,
+} from "../message";
+import { conversationMessageMetadataSchema } from "../message";
+import { attachmentReferenceToFilePart } from "./attachment-store";
 
 const hasText = (value: unknown): boolean =>
 	typeof value === "string" && value.length > 0;
@@ -16,11 +37,18 @@ const isRecordModel = (value: unknown): boolean => {
 	if (typeof value !== "object" || value === null) {
 		return false;
 	}
-	const model = value as { modelId?: unknown; providerId?: unknown };
-	if (!hasText(model.modelId)) {
+	const model = value as {
+		modelId?: unknown;
+		providerId?: unknown;
+		variant?: unknown;
+	};
+	if (!(hasText(model.modelId) && hasText(model.providerId))) {
 		return false;
 	}
-	return hasText(model.providerId);
+	return (
+		model.variant === undefined ||
+		modelVariantSchema.safeParse(model.variant).success
+	);
 };
 
 const isNonNegativeInteger = (value: unknown): boolean => {
@@ -103,70 +131,6 @@ const isOutcome = (value: unknown): boolean => {
 	return false;
 };
 
-const isToolCallOutcomeRecord = (value: unknown): boolean => {
-	if (typeof value !== "object" || value === null) {
-		return false;
-	}
-	const outcome = value as Record<string, unknown>;
-	if (outcome.kind === "success") {
-		return (
-			Object.keys(outcome).every((key) => key === "kind" || key === "output") &&
-			"output" in outcome
-		);
-	}
-	if (outcome.kind === "failure") {
-		return (
-			Object.keys(outcome).every(
-				(key) => key === "errorText" || key === "kind"
-			) &&
-			typeof outcome.errorText === "string" &&
-			outcome.errorText.length > 0
-		);
-	}
-	return false;
-};
-
-const isConversationToolCallPart = (value: unknown): boolean => {
-	if (typeof value !== "object" || value === null) {
-		return false;
-	}
-	const part = value as Record<string, unknown>;
-	if (
-		Object.keys(part).some(
-			(key) =>
-				![
-					"input",
-					"outcome",
-					"sequence",
-					"toolCallId",
-					"toolName",
-					"type",
-				].includes(key)
-		)
-	) {
-		return false;
-	}
-	return (
-		part.type === "tool-call" &&
-		typeof part.toolCallId === "string" &&
-		part.toolCallId.length > 0 &&
-		typeof part.toolName === "string" &&
-		part.toolName.length > 0 &&
-		"input" in part &&
-		isNonNegativeInteger(part.sequence) &&
-		isToolCallOutcomeRecord(part.outcome)
-	);
-};
-
-const isMessagePart = (value: unknown): boolean =>
-	isAgentTurnTextPart(value) || isConversationToolCallPart(value);
-
-const isMessageRecord = (value: unknown): boolean => {
-	if (!isAgentTurnMessageRecord(value)) {
-		return false;
-	}
-	return Array.isArray(value.parts) && value.parts.every(isMessagePart);
-};
 export class ConversationRecordInvariantError extends AgentInvariantError {
 	override readonly code = "invalid-record" as const;
 
@@ -214,11 +178,223 @@ export const getConversationRecordValidationError = (
 		return "record outcome is not a valid terminal outcome";
 	}
 	if (
-		!Array.isArray(record.messages) ||
-		record.messages.length === 0 ||
-		!record.messages.every(isMessageRecord)
+		!(
+			Array.isArray(record.messages) &&
+			record.messages.every(isAgentTurnMessageRecord)
+		)
 	) {
 		return "record messages must contain committed text or Tool Call parts";
 	}
 	return null;
+};
+const STATIC_TOOL_NAMES = [...codingToolNames, "delegate", "skill"] as const;
+type StaticToolName = (typeof STATIC_TOOL_NAMES)[number];
+
+const isStaticToolName = (name: string): name is StaticToolName =>
+	(STATIC_TOOL_NAMES as readonly string[]).includes(name);
+
+const modelSelectionForRecord = (
+	model: ConversationRecord["model"]
+): ChatModelSelection | undefined => {
+	const parsed = modelSelectionSchema.safeParse({
+		modelId: model.modelId,
+		providerId: model.providerId,
+	});
+	return parsed.success ? parsed.data : undefined;
+};
+
+const metadataForRecord = (
+	record: ConversationRecord,
+	metadata: ConversationMessageMetadataRecord | undefined
+): ConversationMessageMetadata | undefined => {
+	let model = modelSelectionForRecord(record.model);
+	if (metadata?.model !== undefined) {
+		const parsedModel = modelSelectionSchema.safeParse(metadata.model);
+		model = parsedModel.success ? parsedModel.data : undefined;
+	}
+	const variant = metadata?.variant ?? record.model.variant;
+	const parsed = conversationMessageMetadataSchema.safeParse({
+		...((metadata?.agent ?? record.agentId)
+			? { agent: metadata?.agent ?? record.agentId }
+			: {}),
+		...(metadata?.interrupted === undefined
+			? {}
+			: { interrupted: metadata.interrupted }),
+		...(model === undefined ? {} : { model }),
+		...(metadata?.responseTimeMs === undefined
+			? {}
+			: { responseTimeMs: metadata.responseTimeMs }),
+		...(metadata?.skill === undefined ? {} : { skill: metadata.skill }),
+		...(metadata?.usage === undefined ? {} : { usage: metadata.usage }),
+		...(variant === undefined ? {} : { variant }),
+	});
+	return parsed.success ? parsed.data : undefined;
+};
+
+const toConversationToolPart = (
+	part: ConversationToolCallPart
+): ConversationToolPart => {
+	if (part.outcome.kind === "success") {
+		return isStaticToolName(part.toolName)
+			? {
+					input: part.input,
+					output: part.outcome.output,
+					state: "output-available",
+					toolCallId: part.toolCallId,
+					type: `tool-${part.toolName}`,
+				}
+			: {
+					input: part.input,
+					output: part.outcome.output,
+					state: "output-available",
+					toolCallId: part.toolCallId,
+					toolName: part.toolName,
+					type: "dynamic-tool",
+				};
+	}
+	return isStaticToolName(part.toolName)
+		? {
+				errorText: part.outcome.errorText,
+				input: part.input,
+				state: "output-error",
+				toolCallId: part.toolCallId,
+				type: `tool-${part.toolName}`,
+			}
+		: {
+				errorText: part.outcome.errorText,
+				input: part.input,
+				state: "output-error",
+				toolCallId: part.toolCallId,
+				toolName: part.toolName,
+				type: "dynamic-tool",
+			};
+};
+
+const toConversationPart = (
+	part: ConversationMessageRecord["parts"][number]
+): ConversationPart[] => {
+	if (isAgentTurnTextPart(part)) {
+		return [{ text: part.text, type: "text" }];
+	}
+	if (isConversationAttachmentReferencePart(part)) {
+		try {
+			return [
+				attachmentReferenceToFilePart({
+					attachmentId: part.attachmentId,
+					...(part.available === undefined
+						? {}
+						: { available: part.available }),
+					byteLength: part.byteLength,
+					filename: part.filename,
+					...(part.height === undefined ? {} : { height: part.height }),
+					mediaType: part.mediaType,
+					...(part.width === undefined ? {} : { width: part.width }),
+				}),
+			];
+		} catch {
+			return [];
+		}
+	}
+	if (isConversationFileMentionPart(part)) {
+		return [
+			{
+				data: part.data,
+				...(part.id === undefined ? {} : { id: part.id }),
+				type: "data-fileMention",
+			},
+		];
+	}
+	if (isConversationToolCallPart(part)) {
+		return [toConversationToolPart(part)];
+	}
+	return [];
+};
+
+const toConversationMessage = (
+	message: ConversationMessageRecord,
+	record: ConversationRecord
+): ConversationMessage => {
+	const metadata = metadataForRecord(record, message.metadata);
+	return {
+		id: message.id,
+		...(metadata === undefined ? {} : { metadata }),
+		parts: message.parts.flatMap(toConversationPart),
+		role: message.role,
+	};
+};
+
+const delegatedMessageId = (
+	record: ConversationRecord,
+	message: ConversationMessageRecord,
+	index: number
+): string => `delegated-turn:${record.turnId}:${index}:${message.id}`;
+const projectTerminalOutcome = (
+	record: ConversationRecord,
+	messages: ConversationMessage[],
+	outcomeId: string
+): ConversationMessage[] => {
+	if (record.outcome.kind === "completed") {
+		return messages;
+	}
+	return [
+		...messages,
+		{
+			id: outcomeId,
+			metadata: { agent: record.agentId, interrupted: true },
+			parts: [
+				{
+					text: `${record.outcome.kind}: ${record.outcome.failure.message}`,
+					type: "text",
+				},
+			],
+			role: "assistant",
+		},
+	];
+};
+
+const projectDelegatedRecord = (
+	record: ConversationRecord
+): ConversationMessage[] => {
+	const messages = record.messages.flatMap((message, index) => {
+		if (message.id === "skill-context") {
+			return [];
+		}
+		const projected = toConversationMessage(message, record);
+		return [
+			{
+				...projected,
+				id: delegatedMessageId(record, message, index),
+			},
+		];
+	});
+	return projectTerminalOutcome(
+		record,
+		messages,
+		`delegated-turn:${record.turnId}:outcome`
+	);
+};
+
+/**
+ * Projects committed records into the CLI's presentation-owned message
+ * contract. The newest primary record contains the complete primary
+ * transcript; delegated records remain separate display rows.
+ */
+export const projectConversationRecords = (
+	records: readonly ConversationRecord[]
+): ConversationMessage[] => {
+	const primary = records.findLast((record) => record.delegation === undefined);
+	const primaryMessages =
+		primary === undefined
+			? []
+			: projectTerminalOutcome(
+					primary,
+					primary.messages.map((message) =>
+						toConversationMessage(message, primary)
+					),
+					`assistant-${primary.turnId}:outcome`
+				);
+	const delegatedMessages = records
+		.filter((record) => record.delegation !== undefined)
+		.flatMap(projectDelegatedRecord);
+	return [...primaryMessages, ...delegatedMessages];
 };

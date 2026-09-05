@@ -1,4 +1,5 @@
-import type { AgentId, CodingAgentUIMessage } from "@wincode/ai";
+import type { AgentId } from "@wincode/agent-core";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import { findFileMentionRanges } from "@/modules/file-mentions";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
@@ -8,7 +9,7 @@ import { ATTACHMENT_ID_DISPLAY_LENGTH } from "../../storage/attachment-store";
 type UserMessageProps = {
 	agent: AgentId;
 	appliedSkill?: AppliedSkill;
-	parts: CodingAgentUIMessage["parts"];
+	parts: ConversationMessage["parts"];
 };
 
 export type AppliedSkill = {
@@ -18,15 +19,9 @@ export type AppliedSkill = {
 	source?: "agent" | "explicit";
 };
 
-type TextPart = Extract<
-	CodingAgentUIMessage["parts"][number],
-	{ type: "text" }
->;
+type TextPart = Extract<ConversationMessage["parts"][number], { type: "text" }>;
 
-type FilePart = Extract<
-	CodingAgentUIMessage["parts"][number],
-	{ type: "file" }
->;
+type FilePart = Extract<ConversationMessage["parts"][number], { type: "file" }>;
 
 type AttachmentDisplayPart = FilePart & {
 	attachmentId?: string;
@@ -40,11 +35,11 @@ export const hasInlineImageToken = (message: string) =>
 	INLINE_IMAGE_TOKEN.test(message);
 
 const isTextPart = (
-	part: CodingAgentUIMessage["parts"][number]
+	part: ConversationMessage["parts"][number]
 ): part is TextPart => part.type === "text";
 
 const isImagePart = (
-	part: CodingAgentUIMessage["parts"][number]
+	part: ConversationMessage["parts"][number]
 ): part is FilePart =>
 	part.type === "file" && part.mediaType.startsWith("image/");
 const isUnavailableAttachment = (

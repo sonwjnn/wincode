@@ -1,5 +1,4 @@
 import { useKeyboard } from "@opentui/react";
-import type { CodingAgentUIMessage } from "@wincode/ai";
 import {
 	type ChatModelSelection,
 	type ModelVariant,
@@ -12,6 +11,7 @@ import {
 	resolveEffectiveAgentSelection,
 	useAgentRegistry,
 } from "@/modules/agents";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useSettingsHubDialog } from "@/modules/settings";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
@@ -24,7 +24,6 @@ import {
 	isSettingsCommand,
 	parseCompactCommand,
 } from "../../compaction";
-import { hasPendingToolExecutionStep } from "../../hooks/auto-send-gate";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
 import { useChat } from "../../hooks/use-chat";
 import { resolveConversationSelection } from "../../selection";
@@ -37,9 +36,9 @@ const INTERRUPT_CONFIRMATION_TIMEOUT_MS = 3000;
 
 type ChatScreenProps = {
 	autoStart: boolean;
-	initialActiveMessages?: CodingAgentUIMessage[];
+	initialActiveMessages?: ConversationMessage[];
 	initialCompactions?: ConversationCompaction[];
-	initialMessages: CodingAgentUIMessage[];
+	initialMessages: ConversationMessage[];
 	initialModel?: ChatModelSelection;
 	initialVariant?: ModelVariant;
 	sessionId: string;
@@ -79,13 +78,6 @@ export function ChatView({
 	const hasPendingApproval = approvalEntries.some(
 		(entry) => entry.resolution === undefined
 	);
-	// Messages restored from storage carry no in-flight tool executions (the
-	// owning process died with them). Their ids keep a persisted
-	// interrupted-turn part from holding isBusy true forever after reload.
-	const loadedMessageIds = useMemo(
-		() => new Set(initialMessages.map((message) => message.id)),
-		[initialMessages]
-	);
 	const submittedInitialMessageRef = useRef<string | null>(null);
 	const interruptResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
 		null
@@ -93,7 +85,7 @@ export function ChatView({
 	const interruptArmedRef = useRef(false);
 	const [isInterruptArmed, setIsInterruptArmed] = useState(false);
 	const [restoredMessages, setRestoredMessages] = useState<
-		CodingAgentUIMessage[] | null
+		ConversationMessage[] | null
 	>(null);
 	const {
 		cancelCompaction,
@@ -115,14 +107,7 @@ export function ChatView({
 	);
 	const { cancel, interrupt, send } = conversation;
 	const isTurnBusy =
-		hasPendingApproval ||
-		isPreparingMessage ||
-		status === "submitted" ||
-		status === "streaming" ||
-		// Between agentic steps the SDK drops to status "ready" while tool
-		// executions are still in flight; without this the turn looks stopped
-		// (spinner gone) and Esc interrupt cannot be armed. See use-chat.ts.
-		hasPendingToolExecutionStep(messages, loadedMessageIds);
+		hasPendingApproval || isPreparingMessage || status !== "ready";
 	const isBusy = isTurnBusy || isCompacting;
 	const promptHistory = useMemo(
 		() => derivePromptHistory(initialMessages),

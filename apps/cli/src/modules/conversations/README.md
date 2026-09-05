@@ -15,10 +15,9 @@ Chat session lifecycle: creation, messaging, streaming display, compaction, and 
 ### Send a message
 
 `ChatView` sends through the application-owned `ConversationController`. The
-controller owns the submit, cancellation, interruption, state subscription, and
-approval-response contracts. Its temporary AI SDK React adapter still projects
-the controller's runtime stream into the existing message presentation until
-the TUI view-state migration is complete.
+controller owns the submit, cancellation, interruption, state subscription,
+approval-response contracts, and the single Agent Runtime event consumer. The
+CLI projects those events into its OpenTUI message state.
 
 ### Interrupt and terminal outcomes
 
@@ -41,23 +40,24 @@ provider/runtime failures display their safe Operational Failure message.
 
 ## Storage seam
 
-`storage/` isolates local persistence behind the `ConversationStore` interface. The local Drizzle store persists sessions, messages, compactions, and content-addressed attachment blobs.
+`storage/` isolates local persistence behind the `ConversationStore` interface.
+The local Drizzle store persists sessions, Wincode Conversation Records,
+compactions, and content-addressed attachment blobs.
 
 - `conversation-store.ts` — store interface and DTOs.
 - `get-conversation-store.ts` — cached local store factory.
 - `drizzle-conversation-store.ts` — Drizzle SQLite implementation.
+- `conversation-record.ts` — record validation and CLI presentation projection.
 - `attachment-store.ts` — image blob storage, integrity-checked hydration, compaction projection, and garbage collection.
-- `schema.ts` — SQLite schema and durable compaction/attachment records.
+- `schema.ts` — SQLite schema and durable Conversation Record/compaction/attachment tables.
 - `path.ts` — platform-specific local database and attachment paths.
 - `migrations.ts` — local Drizzle migrator bootstrap.
 
 Local migrations are generated with `bun run db:local:generate` and committed under `apps/cli/drizzle/local`. The store runs the migrator on first open.
 
-## Public seams
-
-- `getConversationStore()` — local sessions, messages, compactions, attachments, and maintenance.
+- `getConversationStore()` — local sessions, Conversation Records, compactions, attachments, and maintenance.
 - `ConversationOperation` — one application-owned send, cancellation, and interruption seam for the current turn path.
-- `useChat(sessionId, initialMessages)` — conversation state, operation wiring, compaction, messages, status, and errors.
+- `useChat(sessionId, initialMessages)` — CLI-owned conversation state, runtime event projection, compaction, and errors.
 - `useChatInputController(options)` — command and file-mention input state.
 - `ChatView`, `HomeView`, `ChatShell`, `ChatTextArea` — conversation UI.
 - `SessionsDialog`, `RenameSessionDialog` — session management UI.

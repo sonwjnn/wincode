@@ -1,5 +1,7 @@
-import type { CodingAgentUIMessage } from "@wincode/ai";
-import type { FileUIPart } from "@wincode/ai/client";
+import type {
+	ConversationFilePart,
+	ConversationMessage,
+} from "@/modules/conversations/message";
 import type { PromptHistoryEntry } from "../../storage/conversation-store";
 
 export type { PromptHistoryEntry } from "../../storage/conversation-store";
@@ -25,7 +27,7 @@ const expandedText = (entry: PromptHistoryEntry): string =>
 	);
 
 export const derivePromptHistory = (
-	messages: CodingAgentUIMessage[]
+	messages: ConversationMessage[]
 ): PromptHistoryEntry[] => {
 	const entries: PromptHistoryEntry[] = [];
 
@@ -43,7 +45,7 @@ export const derivePromptHistory = (
 		}
 
 		const persistedFiles = message.parts.filter(
-			(part): part is FileUIPart =>
+			(part): part is ConversationFilePart =>
 				part.type === "file" && part.mediaType.startsWith("image/")
 		);
 		entries.unshift({ files: persistedFiles, text });

@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
-import type { CodingAgentUIMessage } from "@wincode/ai";
 import { useEffect, useState } from "react";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import { formatResponseTime } from "@/shared/display-sanitize";
 import {
 	type ApprovalPanelsContextValue,
@@ -39,7 +39,7 @@ beforeAll(() => {
 afterAll(() => {
 	setMarkdownTreeSitterClientForTests(null);
 });
-type MessagePart = CodingAgentUIMessage["parts"][number];
+type MessagePart = ConversationMessage["parts"][number];
 type DynamicToolPart = Extract<MessagePart, { type: "dynamic-tool" }>;
 type GrepToolPart = Extract<MessagePart, { type: "tool-grep" }>;
 type GlobToolPart = Extract<MessagePart, { type: "tool-glob" }>;
@@ -73,7 +73,7 @@ const rgb = (hex: string): [number, number, number] => [
 ];
 
 const renderFrame = async (
-	parts: CodingAgentUIMessage["parts"],
+	parts: ConversationMessage["parts"],
 	height = 4,
 	width = 160
 ): Promise<string> => {
@@ -109,7 +109,7 @@ type ApprovalFrame = {
 };
 
 const renderFrameWithApproval = async (
-	parts: CodingAgentUIMessage["parts"],
+	parts: ConversationMessage["parts"],
 	request: ToolApprovalRequest,
 	height = 8
 ): Promise<ApprovalFrame> => {

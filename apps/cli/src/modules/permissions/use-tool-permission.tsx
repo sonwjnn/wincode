@@ -1,11 +1,11 @@
+import type { AgentId } from "@wincode/agent-core";
 import {
-	type AgentId,
 	DEFAULT_RESOURCE_LIMIT_PROFILE,
 	getToolResourceLimits,
 	type ToolResourceLimits,
-} from "@wincode/ai";
-import type { WorkspacePolicy } from "@wincode/ai/workspace";
-import { createWorkspaceSandbox } from "@wincode/ai/workspace";
+} from "@wincode/coding-tools";
+import type { WorkspacePolicy } from "@wincode/coding-tools/workspace";
+import { createWorkspaceSandbox } from "@wincode/coding-tools/workspace";
 import { useCallback, useMemo, useRef } from "react";
 import { type AgentRegistry, useAgentRegistry } from "@/modules/agents";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";

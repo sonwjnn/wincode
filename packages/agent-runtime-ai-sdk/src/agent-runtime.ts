@@ -23,14 +23,10 @@ import {
 	isAgentInvariantError,
 	isAgentTurnTerminalEvent,
 } from "@wincode/agent-core";
-import type { ModelFailure } from "@wincode/ai/failures";
-import { normalizeModelFailure } from "@wincode/ai/failures";
+import type { ModelFailure } from "@wincode/ai/model-failures";
+import { normalizeModelFailure } from "@wincode/ai/model-failures";
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import { normalizeModelUsage } from "@wincode/ai/model-usage";
-import {
-	type ResolvedModel,
-	resolveAiSdkModelTarget,
-} from "@wincode/ai/server";
 import {
 	jsonSchema,
 	stepCountIs,
@@ -39,6 +35,7 @@ import {
 	type ToolSet,
 	tool,
 } from "ai";
+import { type ResolvedModel, resolveAiSdkModelTarget } from "./model-resolver";
 
 /** Resolves the concrete AI SDK model for one Wincode Model Target. */
 export type ResolveAgentModel = (model: AgentTurn["model"]) => ResolvedModel;
@@ -395,6 +392,21 @@ const textContent = (part: AgentTurnPart): unknown => {
 	return { text: part.text, type: "text" };
 };
 
+const fileContent = (part: AgentTurnPart): unknown => {
+	if (part.type !== "file") {
+		throw new AgentInvariantError(
+			"invalid-runtime",
+			"A non-file part appeared in a file message position.",
+			{ cause: part }
+		);
+	}
+	return {
+		data: part.data,
+		mediaType: part.mediaType,
+		type: "file",
+	};
+};
+
 const modelContentFor = (
 	part: AgentTurnPart,
 	role: AgentTurnMessage["role"]
@@ -402,13 +414,16 @@ const modelContentFor = (
 	if (role === "tool") {
 		return toolResultContent(part);
 	}
-	return part.type === "tool-call" ? toolCallContent(part) : textContent(part);
+	if (part.type === "tool-call") {
+		return toolCallContent(part);
+	}
+	return part.type === "file" ? fileContent(part) : textContent(part);
 };
 
 /**
  * Converts Wincode input messages to AI SDK model messages. Assistant
- * messages keep their text and tool-call parts; `tool` role messages carry
- * the Tool Call results the next Model Step must observe.
+ * messages keep their text, file, and tool-call parts; `tool` role messages
+ * carry the Tool Call results the next Model Step must observe.
  */
 const toAiSdkModelMessages = (turn: AgentTurn): ModelMessage[] => {
 	const modelMessages: ModelMessage[] = [];

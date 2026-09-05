@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { CodingAgentUIMessage } from "@wincode/ai";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import type { HistoryState, PromptHistoryEntry } from "./history";
 import {
 	derivePromptHistory,
@@ -116,7 +116,7 @@ describe("prompt history rules", () => {
 				parts: [{ text: "[Image 1] second", type: "text" }, secondImage],
 				role: "user",
 			},
-		] as unknown as CodingAgentUIMessage[];
+		] as unknown as ConversationMessage[];
 
 		expect(derivePromptHistory(messages)).toEqual([
 			{ files: [secondImage], text: "[Image 1] second" },

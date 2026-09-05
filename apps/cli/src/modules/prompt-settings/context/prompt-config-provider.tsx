@@ -1,5 +1,4 @@
-import type { AgentId } from "@wincode/ai";
-import { buildAgent } from "@wincode/ai";
+import type { AgentId } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
 	defaultChatModelSelection,
@@ -15,7 +14,11 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { resolveActiveAgentId, useAgentRegistry } from "@/modules/agents";
+import {
+	buildAgent,
+	resolveActiveAgentId,
+	useAgentRegistry,
+} from "@/modules/agents";
 
 type PromptConfigState = {
 	agent: AgentId;

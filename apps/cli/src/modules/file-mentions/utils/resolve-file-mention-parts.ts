@@ -1,10 +1,10 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import type { FileMentionUIPart } from "@wincode/ai";
 import {
 	createWorkspaceSandbox,
 	type WorkspacePolicy,
-} from "@wincode/ai/workspace";
+} from "@wincode/coding-tools/workspace";
+import type { FileMentionPart } from "@/modules/conversations/message";
 import type { FileMentionOption } from "../types";
 import { getFileMentionOptions } from "./file-mention-options";
 import {
@@ -157,7 +157,7 @@ const clampContentToBytes = (
 const createErrorPart = (
 	mentionPath: string,
 	error: string
-): FileMentionUIPart => ({
+): FileMentionPart => ({
 	data: {
 		byteLength: 0,
 		content: "",
@@ -173,7 +173,7 @@ const readFileMention = async (
 	realPath: string,
 	mentionPath: string,
 	maxBytes: number
-): Promise<FileMentionUIPart> => {
+): Promise<FileMentionPart> => {
 	const buffer = await readFile(realPath);
 	const isBinary = buffer.subarray(0, BINARY_SAMPLE_BYTES).includes(0);
 	if (isBinary) {
@@ -213,7 +213,7 @@ const readDirectoryMention = async (
 	maxBytes: number,
 	maxDepth: number,
 	maxEntries: number
-): Promise<FileMentionUIPart> => {
+): Promise<FileMentionPart> => {
 	const result = await policy.traverse({
 		includeDirectories: true,
 		includeFiles: true,
@@ -249,9 +249,9 @@ const readDirectoryMention = async (
 };
 
 const applyRemainingBudget = (
-	part: FileMentionUIPart,
+	part: FileMentionPart,
 	remainingBytes: number
-): FileMentionUIPart => {
+): FileMentionPart => {
 	const { content, truncated } = clampContentToBytes(
 		part.data.content,
 		remainingBytes
@@ -270,13 +270,13 @@ const applyRemainingBudget = (
 export const resolveFileMentionParts = async (
 	text: string,
 	options: ResolveFileMentionPartsOptions = {}
-): Promise<FileMentionUIPart[]> => {
+): Promise<FileMentionPart[]> => {
 	const policy = createWorkspaceSandbox(options.root ?? process.cwd());
 	const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
 	let remainingBytes = options.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES;
 	const mentionPaths = getMentionPaths(text);
 	const resolvedPaths = new Set<string>();
-	const parts: FileMentionUIPart[] = [];
+	const parts: FileMentionPart[] = [];
 
 	for (const mentionPath of mentionPaths) {
 		if (remainingBytes <= 0) {

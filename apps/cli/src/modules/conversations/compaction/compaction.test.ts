@@ -2,8 +2,8 @@ import { expect, mock, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CodingAgentUIMessage } from "@wincode/ai";
 import type { ChatModelSelection } from "@wincode/ai/models";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import {
 	type AttachmentMetadataRecord,
 	type AttachmentMetadataRepository,
@@ -26,14 +26,14 @@ const DATA_IMAGE_URL_PATTERN = /^data:image\/png;base64,/u;
 
 const message = (
 	id: string,
-	role: CodingAgentUIMessage["role"],
+	role: ConversationMessage["role"],
 	text: string
-): CodingAgentUIMessage =>
+): ConversationMessage =>
 	({
 		id,
 		parts: [{ text, type: "text" }],
 		role,
-	}) as CodingAgentUIMessage;
+	}) as ConversationMessage;
 
 const makeStore = (initial: ConversationCompaction | null = null) => {
 	let latest = initial;
@@ -195,7 +195,7 @@ test("uses provider-reported usage for threshold decisions", () => {
 		estimateTokens: () => 1,
 	});
 	const assistant = message("a1", "assistant", "answer");
-	const messages: CodingAgentUIMessage[] = [
+	const messages: ConversationMessage[] = [
 		message("u1", "user", "request"),
 		{
 			...assistant,
@@ -388,7 +388,7 @@ test("serializes old attachments as bounded metadata", () => {
 				},
 			],
 			role: "user",
-		} as unknown as CodingAgentUIMessage,
+		} as unknown as ConversationMessage,
 	]);
 
 	expect(serialized).toContain("design.png");
@@ -417,8 +417,8 @@ test("hydrates current-window attachments once and persists bounded metadata", a
 			{ text: "review [Image 1]", type: "text" },
 			attachmentReferenceToFilePart(reference),
 		],
-	} as unknown as CodingAgentUIMessage;
-	let summaryMessages: CodingAgentUIMessage[] | undefined;
+	} as unknown as ConversationMessage;
+	let summaryMessages: ConversationMessage[] | undefined;
 	const compaction = createConversationCompaction({
 		attachmentStore,
 		store: makeStore(),
@@ -497,7 +497,7 @@ test("sanitizes completed Skill bodies before summarization", async () => {
 			},
 		],
 		role: "assistant",
-	} as unknown as CodingAgentUIMessage;
+	} as unknown as ConversationMessage;
 
 	await compaction.compact({
 		conversation: {
@@ -567,7 +567,7 @@ test("splits an oversized single turn only at complete part boundaries", async (
 			{ text: "recent suffix", type: "text" },
 		],
 		role: "assistant",
-	} as unknown as CodingAgentUIMessage;
+	} as unknown as ConversationMessage;
 
 	const result = await compaction.compact({
 		conversation: {
@@ -620,7 +620,7 @@ test("resumes the next summary span after a split-turn boundary", async () => {
 			{ text: "recent suffix", type: "text" },
 		],
 		role: "assistant",
-	} as unknown as CodingAgentUIMessage;
+	} as unknown as ConversationMessage;
 
 	const first = await compaction.compact({
 		conversation: {
@@ -696,7 +696,7 @@ test("projects the newest attachment against the media budget for tokensAfter", 
 			attachmentReferenceToFilePart(newReference),
 		],
 		role: "user",
-	} as unknown as CodingAgentUIMessage;
+	} as unknown as ConversationMessage;
 	const assistant = {
 		id: "a1",
 		parts: [
@@ -705,7 +705,7 @@ test("projects the newest attachment against the media budget for tokensAfter", 
 			{ text: "recent suffix", type: "text" },
 		],
 		role: "assistant",
-	} as unknown as CodingAgentUIMessage;
+	} as unknown as ConversationMessage;
 
 	const result = await compaction.compact({
 		conversation: {

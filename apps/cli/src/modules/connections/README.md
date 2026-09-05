@@ -24,11 +24,9 @@ Credentials are stored in the platform secret store when available, with a secur
 
 Canonical contributor instructions are in [`docs/adding-a-provider.md`](../../../../../docs/adding-a-provider.md).
 
-A provider normally requires:
-
 1. A direct model entry in `packages/ai/src/models.ts`.
-2. A resolver under `packages/ai/src/server/providers/`.
-3. A resolver entry in `packages/ai/src/server/providers/registry.ts`.
+2. A resolver under `packages/agent-runtime-ai-sdk/src/providers/`.
+3. A resolver entry in `packages/agent-runtime-ai-sdk/src/providers/registry.ts`.
 4. A credential definition in `provider-definition.ts`.
 5. A registry entry in `provider-registry.ts`.
 6. Manifest and lockfile updates when a new SDK dependency is needed.

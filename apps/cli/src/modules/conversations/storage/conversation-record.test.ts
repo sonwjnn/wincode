@@ -8,10 +8,13 @@ import {
 	isAgentTurnTextPart,
 	type OperationalFailure,
 } from "@wincode/agent-core";
-import type { CodingAgentUIMessage } from "@wincode/ai";
 import type { ChatModelSelection } from "@wincode/ai/models";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import { createDatabase } from "./client";
-import { ConversationRecordInvariantError } from "./conversation-record";
+import {
+	ConversationRecordInvariantError,
+	projectConversationRecords,
+} from "./conversation-record";
 import type { ConversationStore } from "./conversation-store";
 import { createDrizzleConversationStore } from "./drizzle-conversation-store";
 import { runMigrations } from "./migrations";
@@ -21,7 +24,7 @@ const model: ChatModelSelection = {
 	providerId: "openai",
 };
 
-const userMessage = (text: string): CodingAgentUIMessage => ({
+const userMessage = (text: string): ConversationMessage => ({
 	id: "msg-user",
 	parts: [{ text, type: "text" }],
 	role: "user",
@@ -349,4 +352,154 @@ test("deletes Conversation Records with their session", async () => {
 	await store.deleteSession(sessionId);
 
 	expect(await store.listConversationRecords(sessionId)).toEqual([]);
+});
+
+test("projects durable records into CLI messages with references and metadata", () => {
+	const attachmentId = `v1-${"a".repeat(64)}`;
+	const record: ConversationRecord = {
+		agentId: "build",
+		id: "record-projection",
+		messages: [
+			{
+				id: "user-1",
+				metadata: {
+					agent: "build",
+					model,
+					skill: {
+						arguments: "focus",
+						contentHash: "hash-1",
+						name: "review",
+						source: "explicit",
+					},
+				},
+				parts: [
+					{ text: "Review this file", type: "text" },
+					{
+						attachmentId,
+						byteLength: 3,
+						filename: "notes.txt",
+						mediaType: "text/plain",
+						type: "attachment-reference",
+					},
+					{
+						data: {
+							byteLength: 5,
+							content: "const x = 1;",
+							kind: "file",
+							path: "src/index.ts",
+							truncated: false,
+						},
+						type: "file-mention",
+					},
+				],
+				role: "user",
+			},
+			{
+				id: "assistant-1",
+				parts: [
+					{
+						input: { command: "git status" },
+						outcome: { kind: "success", output: { exitCode: 0 } },
+						sequence: 1,
+						toolCallId: "call-1",
+						toolName: "shell",
+						type: "tool-call",
+					},
+				],
+				role: "assistant",
+			},
+		],
+		model: { modelId: model.modelId, providerId: model.providerId },
+		outcome: { finishedAt: 1, kind: "completed" },
+		turnId: "turn-projection",
+		version: 1,
+	};
+
+	const [user, assistant] = projectConversationRecords([record]);
+	expect(user).toMatchObject({
+		metadata: {
+			agent: "build",
+			model,
+			skill: {
+				arguments: "focus",
+				contentHash: "hash-1",
+				name: "review",
+				source: "explicit",
+			},
+		},
+	});
+	expect(user?.parts).toContainEqual({
+		attachmentId,
+		byteLength: 3,
+		filename: "notes.txt",
+		mediaType: "text/plain",
+		type: "file",
+		url: `attachment://${attachmentId}`,
+	});
+	expect(user?.parts).toContainEqual({
+		data: {
+			byteLength: 5,
+			content: "const x = 1;",
+			kind: "file",
+			path: "src/index.ts",
+			truncated: false,
+		},
+		type: "data-fileMention",
+	});
+	expect(assistant?.parts).toContainEqual({
+		input: { command: "git status" },
+		output: { exitCode: 0 },
+		state: "output-available",
+		toolCallId: "call-1",
+		type: "tool-shell",
+	});
+});
+test("projects a primary terminal failure after reopening a session", () => {
+	const record = failedRecord("record-failed", [
+		messageRecord("msg-user", "user", "hello"),
+	]);
+
+	expect(projectConversationRecords([record])).toEqual([
+		{
+			id: "msg-user",
+			metadata: { agent: "build", model },
+			parts: [{ text: "hello", type: "text" }],
+			role: "user",
+		},
+		{
+			id: "assistant-turn-record-failed:outcome",
+			metadata: { agent: "build", interrupted: true },
+			parts: [{ text: "failed: The model request failed.", type: "text" }],
+			role: "assistant",
+		},
+	]);
+});
+test("projects primary terminal failures after partial tool output", () => {
+	const record = failedRecord("record-partial-failure", [
+		messageRecord("msg-user", "user", "run the check"),
+		{
+			id: "assistant-partial",
+			parts: [
+				{
+					input: { command: "bun check" },
+					outcome: {
+						kind: "success",
+						output: { exitCode: 0 },
+					},
+					sequence: 1,
+					toolCallId: "call-check",
+					toolName: "shell",
+					type: "tool-call",
+				},
+			],
+			role: "assistant",
+		},
+	]);
+
+	const projected = projectConversationRecords([record]);
+	expect(projected.at(-1)).toMatchObject({
+		id: "assistant-turn-record-partial-failure:outcome",
+		parts: [{ text: "failed: The model request failed.", type: "text" }],
+		role: "assistant",
+	});
 });

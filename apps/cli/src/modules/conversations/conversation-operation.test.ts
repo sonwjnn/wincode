@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { getAgentTurnAbortDisposition } from "@wincode/agent-core";
-import { getToolResourceLimits } from "@wincode/ai";
-import { createWorkspaceSandbox } from "@wincode/ai/workspace";
+import { getToolResourceLimits } from "@wincode/coding-tools";
+import { createWorkspaceSandbox } from "@wincode/coding-tools/workspace";
 import {
 	createPermissionService,
 	createToolPermission,

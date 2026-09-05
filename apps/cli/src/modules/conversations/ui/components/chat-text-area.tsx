@@ -8,7 +8,6 @@ import {
 	type TextareaRenderable,
 } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
-import { builtInAgents } from "@wincode/ai";
 import {
 	findSupportedChatModelSelection,
 	getSupportedModelVariants,
@@ -16,7 +15,7 @@ import {
 import { spawn } from "bun";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useCommandExecutor } from "@/app/commands/use-app-command-executor";
-import { useAgentRegistry } from "@/modules/agents";
+import { builtInAgents, useAgentRegistry } from "@/modules/agents";
 import { CommandMenu } from "@/modules/commands/ui/command-menu";
 import { getCustomCommands } from "@/modules/custom-commands/loader";
 import {

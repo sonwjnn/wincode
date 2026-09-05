@@ -1,5 +1,5 @@
 import { TextAttributes } from "@opentui/core";
-import { formatModelTokenCount } from "@wincode/ai/usage";
+import { formatModelTokenCount } from "@wincode/ai/model-usage";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { SessionUsageSummary } from "../../usage/session-usage";
 

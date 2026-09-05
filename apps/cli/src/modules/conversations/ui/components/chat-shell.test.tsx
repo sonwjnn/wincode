@@ -7,8 +7,8 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { RGBA, type ScrollBoxRenderable } from "@opentui/core";
 import { MockTreeSitterClient } from "@opentui/core/testing";
-import type { CodingAgentUIMessage } from "@wincode/ai";
 import { useEffect, useState } from "react";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import type {
 	ToolApprovalActions,
 	ToolApprovalRequest,
@@ -69,11 +69,11 @@ afterAll(() => {
 });
 
 type ShellToolPart = Extract<
-	CodingAgentUIMessage["parts"][number],
+	ConversationMessage["parts"][number],
 	{ type: "tool-shell" }
 >;
 type EditToolPart = Extract<
-	CodingAgentUIMessage["parts"][number],
+	ConversationMessage["parts"][number],
 	{ type: "tool-edit" }
 >;
 
@@ -92,9 +92,9 @@ const shellPart = (overrides: Partial<ShellToolPart> = {}): ShellToolPart =>
 	}) as ShellToolPart;
 
 const assistantMessage = (
-	parts: CodingAgentUIMessage["parts"],
+	parts: ConversationMessage["parts"],
 	id = "assistant-1"
-): CodingAgentUIMessage => ({ id, parts, role: "assistant" });
+): ConversationMessage => ({ id, parts, role: "assistant" });
 
 const lines = (prefix: string, count: number): string =>
 	Array.from({ length: count }, (_, index) => `${prefix} ${index + 1}`).join(
@@ -106,7 +106,7 @@ type ChatShellProbeHandle = {
 		request: ToolApprovalRequest,
 		actions: ToolApprovalActions
 	) => string;
-	setMessages: (messages: CodingAgentUIMessage[]) => void;
+	setMessages: (messages: ConversationMessage[]) => void;
 };
 
 const buildTestRouter = () =>
@@ -117,7 +117,7 @@ const buildTestRouter = () =>
 
 type ChatShellProbeProps = {
 	holder: { current: ChatShellProbeHandle | null };
-	initialMessages: CodingAgentUIMessage[];
+	initialMessages: ConversationMessage[];
 	isBusy?: boolean;
 	isInterruptArmed?: boolean;
 };
@@ -161,7 +161,7 @@ type ChatShellRenderOptions = {
 };
 
 const renderChatShell = async (
-	initialMessages: CodingAgentUIMessage[],
+	initialMessages: ConversationMessage[],
 	{
 		height,
 		width,
@@ -283,7 +283,7 @@ const assertSummaryDiffClipping = async ({
 	const summary = {
 		text: summaryText,
 		type: "text",
-	} satisfies CodingAgentUIMessage["parts"][number];
+	} satisfies ConversationMessage["parts"][number];
 	const { setup } = await renderChatShell([assistantMessage([part, summary])], {
 		height: 18,
 		width,
@@ -896,7 +896,7 @@ describe("ChatShell shell output blocks", () => {
 		});
 		const streamedText = (
 			text: string
-		): CodingAgentUIMessage["parts"][number] => ({
+		): ConversationMessage["parts"][number] => ({
 			text,
 			type: "text",
 		});
@@ -1020,7 +1020,7 @@ describe("ChatShell edit diff blocks", () => {
 				(_, index) => `Following summary ${index + 1}`
 			).join("\n"),
 			type: "text",
-		} satisfies CodingAgentUIMessage["parts"][number];
+		} satisfies ConversationMessage["parts"][number];
 		const { setup } = await renderChatShell(
 			[assistantMessage([part, summary])],
 			{ height: 18, width: 140 }
@@ -1090,7 +1090,7 @@ describe("ChatShell edit diff blocks", () => {
 				(_, index) => `Following summary ${index + 1}`
 			).join("\n"),
 			type: "text",
-		} satisfies CodingAgentUIMessage["parts"][number];
+		} satisfies ConversationMessage["parts"][number];
 		const { setup } = await renderChatShell(
 			[assistantMessage([part, summary])],
 			{ height: 18, width: 140 }

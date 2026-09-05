@@ -1,5 +1,8 @@
-import type { CodingAgentUIMessage, CodingMessageUsage } from "@wincode/ai";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import type {
+	ConversationMessage,
+	ConversationMessageUsage,
+} from "@/modules/conversations/message";
 import type { CompactionAttachmentMetadata } from "../storage/attachment-store";
 export const COMPACTION_TRIGGER_REASONS = [
 	"manual",
@@ -34,7 +37,7 @@ export type ConversationCompaction = {
 	focus?: string;
 	summarizationModel: ChatModelSelection;
 	summarizationVariant?: ModelVariant;
-	summarizationUsage?: CodingMessageUsage;
+	summarizationUsage?: ConversationMessageUsage;
 	createdAt: Date;
 	completedAt: Date;
 };
@@ -52,14 +55,14 @@ export type SummaryGeneratorInput = {
 	variant?: ModelVariant;
 	previousSummary?: CompactionSummary;
 	serializedMessages: string;
-	summaryMessages?: CodingAgentUIMessage[];
+	summaryMessages?: ConversationMessage[];
 	focus?: string;
 	signal?: AbortSignal;
 };
 
 export type SummaryGeneratorResult = {
 	text: string;
-	usage?: CodingMessageUsage;
+	usage?: ConversationMessageUsage;
 };
 
 export type SummaryGenerator = (
@@ -68,5 +71,5 @@ export type SummaryGenerator = (
 
 export type CompactionConversation = {
 	sessionId: string;
-	messages: readonly CodingAgentUIMessage[];
+	messages: readonly ConversationMessage[];
 };

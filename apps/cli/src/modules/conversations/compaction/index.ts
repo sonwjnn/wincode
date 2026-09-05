@@ -1,4 +1,4 @@
-export { isModelContextOverflowError } from "@wincode/ai/failures";
+export { isModelContextOverflowError } from "@wincode/ai/model-failures";
 export { isSettingsCommand, parseCompactCommand } from "./commands";
 export type {
 	CompactConversationInput,

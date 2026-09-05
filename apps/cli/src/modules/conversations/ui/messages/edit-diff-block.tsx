@@ -1,12 +1,9 @@
 import { isAbsolute } from "node:path";
 import { type BoxRenderable, pathToFiletype } from "@opentui/core";
-import {
-	type AgentId,
-	type CodingAgentUIMessage,
-	type EditDiff,
-	isRenderableEditDiff,
-} from "@wincode/ai";
+import type { AgentId } from "@wincode/agent-core";
+import { type EditDiff, isRenderableEditDiff } from "@wincode/coding-tools";
 import { type ReactNode, useMemo, useRef, useState } from "react";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import { stripControlCharacters } from "@/shared/display-sanitize";
 import { useToggleShortcut } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -19,7 +16,7 @@ import {
 } from "./syntax-style";
 
 type EditToolPart = Extract<
-	CodingAgentUIMessage["parts"][number],
+	ConversationMessage["parts"][number],
 	{ type: "tool-edit" }
 >;
 
@@ -47,26 +44,38 @@ const formatEditPath = (filePath: string): string => {
 	return isAbsolute(sanitized) ? sanitized : sanitized.replaceAll("\\", "/");
 };
 
-const getOutput = (part: EditToolPart): Record<string, unknown> =>
-	typeof part.output === "object" &&
-	part.output !== null &&
-	!Array.isArray(part.output)
-		? (part.output as Record<string, unknown>)
-		: {};
+type EditPartFields = {
+	readonly editDiff?: unknown;
+	readonly path?: unknown;
+};
 
-const getEditPath = (
-	part: EditToolPart,
-	output: Record<string, unknown>
-): string => {
+const readEditPartFields = (value: unknown): EditPartFields => {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return {};
+	}
+	const path = Reflect.get(value, "path");
+	const editDiff = Reflect.get(value, "editDiff");
+	return {
+		...(path === undefined ? {} : { path }),
+		...(editDiff === undefined ? {} : { editDiff }),
+	};
+};
+
+const getOutput = (part: EditToolPart): EditPartFields =>
+	readEditPartFields(part.output);
+const getInput = (part: EditToolPart): EditPartFields =>
+	readEditPartFields(part.input);
+
+const getEditPath = (part: EditToolPart, output: EditPartFields): string => {
 	if (typeof output.path === "string") {
 		return output.path;
 	}
-	if (typeof part.input?.path === "string") {
-		return part.input.path;
+	const input = getInput(part);
+	if (typeof input.path === "string") {
+		return input.path;
 	}
 	return ".";
 };
-
 const patchLineCount = (patch: string): number =>
 	patch.length === 0
 		? 0
@@ -201,14 +210,11 @@ const isEditOutputWithDiff = (
 	}
 
 	const output = getOutput(part);
-	if (!("editDiff" in output)) {
+	if (output.editDiff === undefined) {
 		return null;
 	}
 
 	const path = getEditPath(part, output);
-	if (output.editDiff === undefined) {
-		return { invalid: true, path };
-	}
 	if (!isRenderableEditDiff(output.editDiff)) {
 		return { invalid: true, path };
 	}
@@ -330,10 +336,9 @@ export function EditDiffBlock({ agent, part }: EditDiffBlockProps) {
 		if (!isEditRunningState(part.state)) {
 			return null;
 		}
+		const input = getInput(part);
 		const runningPath =
-			typeof part.input?.path === "string"
-				? formatEditPath(part.input.path)
-				: "";
+			typeof input.path === "string" ? formatEditPath(input.path) : "";
 		return <EditRunningStatus agent={agent} path={runningPath} />;
 	}
 

@@ -3,10 +3,7 @@
   "type": "module",
   "exports": {
     ".": {
-      "default": "./src/shared.ts"
-    },
-    "./failures": {
-      "default": "./src/model-failures.ts"
+      "default": "./src/model.ts"
     },
     "./model": {
       "default": "./src/model.ts"
@@ -25,24 +22,6 @@
     },
     "./models": {
       "default": "./src/models.ts"
-    },
-    "./provider-options": {
-      "default": "./src/model-provider-options.ts"
-    },
-    "./usage": {
-      "default": "./src/model-usage.ts"
-    },
-    "./server": {
-      "default": "./src/server/index.ts"
-    },
-    "./client": {
-      "default": "./src/client.ts"
-    },
-    "./workspace": {
-      "default": "./src/workspace.ts"
-    },
-    "./tools": {
-      "default": "./src/tools/runners.ts"
     }
   },
   "scripts": {
@@ -50,16 +29,6 @@
     "test": "bun test src"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.81",
-    "@ai-sdk/devtools": "^0.0.2",
-    "@ai-sdk/google": "^3.0.80",
-    "@ai-sdk/openai": "^3.0.67",
-    "@ai-sdk/openai-compatible": "^2.0.63",
-    "@ai-sdk/provider-utils": "^4.0.27",
-    "@wincode/skills": "workspace:*",
-    "ai": "catalog:",
-    "diff": "catalog:",
-    "ignore": "^5.3.2",
     "zod": "catalog:"
   },
   "devDependencies": {

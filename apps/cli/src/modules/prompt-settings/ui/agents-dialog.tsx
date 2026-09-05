@@ -1,9 +1,10 @@
 import { TextAttributes } from "@opentui/core";
-import { type AgentDefinition, type AgentId, builtInAgents } from "@wincode/ai";
+import type { AgentDefinition, AgentId } from "@wincode/agent-core";
 import type { ConnectionProviderId } from "@wincode/ai/models";
 import { useCallback } from "react";
 import {
 	type AgentDiagnostic,
+	builtInAgents,
 	formatAgentDiagnostic,
 	useAgentRegistry,
 } from "@/modules/agents";

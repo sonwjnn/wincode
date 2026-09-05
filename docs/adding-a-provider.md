@@ -23,9 +23,9 @@ For direct entries, `connectionProviderId` and `provider` must match one of the 
 
 Add provider-specific model option policy to `packages/ai/src/model-provider-options.ts`. Keep its return value provider-neutral and typed, including capability-specific option shapes.
 
-The existing AI SDK adapter in `packages/ai/src/server/providers/example.ts` delegates to that policy, constructs the model from a user-owned API key, and translates only at the runtime boundary.
+Add the private runtime implementation under `packages/agent-runtime-ai-sdk/src/providers/`, construct the model from the user-owned authorization, and translate only at the runtime boundary.
 
-Register the adapter in `packages/ai/src/server/providers/registry.ts`.
+Register the resolver in `packages/agent-runtime-ai-sdk/src/providers/registry.ts`. AI SDK imports must remain inside `@wincode/agent-runtime-ai-sdk`.
 
 ## CLI credentials
 

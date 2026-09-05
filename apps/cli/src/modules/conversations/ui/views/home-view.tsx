@@ -1,6 +1,5 @@
 import { TextAttributes } from "@opentui/core";
 import { useRouter } from "@tanstack/react-router";
-import { createUserMessage } from "@wincode/ai/client";
 import { createSkillSnapshot } from "@wincode/skills";
 import { useEffect, useState } from "react";
 import {
@@ -12,6 +11,7 @@ import {
 	isSettingsCommand,
 	parseCompactCommand,
 } from "@/modules/conversations/compaction";
+import { createConversationUserMessage } from "@/modules/conversations/message";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import { McpActiveIndicator } from "@/modules/mcp";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
@@ -20,6 +20,7 @@ import { APP_VERSION } from "@/shared/app-info";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { resolveLastUsedConversationSelection } from "../../selection";
+import { projectConversationRecords } from "../../storage/conversation-record";
 import { getConversationStore } from "../../storage/get-conversation-store";
 import type { ChatPromptSubmission } from "../../utils";
 import { getMostRecentSession } from "../../utils";
@@ -87,7 +88,9 @@ export function HomeView() {
 				}
 
 				const selection = resolveLastUsedConversationSelection({
-					messages: await store.getMessages(session.id),
+					messages: projectConversationRecords(
+						await store.listConversationRecords(session.id)
+					),
 					resolveAgent: (agentId) => resolveActiveAgentId(registry, agentId),
 					sessionModel: session.model,
 					sessionVariant: session.variant,
@@ -172,26 +175,37 @@ export function HomeView() {
 			model,
 			variant
 		);
-		const { id } = await getConversationStore().createSession({
+		const initialMessage = createConversationUserMessage(
+			input,
+			{
+				agent: effective.agent,
+				model: effective.model,
+				variant: effective.variant,
+				...(skill ? { skill: createSkillSnapshot(skill, "explicit") } : {}),
+			},
+			fileMentions,
+			files
+		);
+		const store = getConversationStore();
+		const [externalized] = await store.externalizeAttachments(
+			[initialMessage],
+			undefined,
+			{ rejectInvalid: true }
+		);
+		const durableMessage = externalized ?? initialMessage;
+		const { id } = await store.createSession({
 			agent: effective.agent,
-			message: createUserMessage(
-				input,
-				{
-					agent: effective.agent,
-					model: effective.model,
-					variant: effective.variant,
-					...(skill ? { skill: createSkillSnapshot(skill, "explicit") } : {}),
-				},
-				fileMentions,
-				files
-			),
+			message: durableMessage,
 			model,
 			variant,
 		});
-
 		await router.navigate({
 			params: { id },
-			state: { agent: effective.agent, autoStart: true },
+			state: {
+				agent: effective.agent,
+				autoStart: true,
+				initialMessage: durableMessage,
+			},
 			to: "/sessions/$id",
 		});
 	};

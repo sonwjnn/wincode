@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { testRender } from "@opentui/react/test-utils";
-import type { AgentId } from "@wincode/ai";
+import type { AgentId } from "@wincode/agent-core";
 import { useEffect } from "react";
 import {
 	DialogProvider,

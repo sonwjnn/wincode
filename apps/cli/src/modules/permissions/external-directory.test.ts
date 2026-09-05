@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { createWorkspaceSandbox } from "@wincode/ai/workspace";
+import { createWorkspaceSandbox } from "@wincode/coding-tools/workspace";
 import {
 	canonicalizeExternalPath,
 	createPermissionService,

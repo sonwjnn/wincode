@@ -1,4 +1,4 @@
-import type { CodingAgentUIMessage } from "@wincode/ai";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import {
 	type ConversationCompaction,
 	isCompactionSummaryMessage,
@@ -13,7 +13,7 @@ export type ConversationTimelineItem =
 	| { kind: "compaction"; compaction: ConversationCompaction };
 
 export const buildConversationTimeline = (
-	messages: readonly CodingAgentUIMessage[],
+	messages: readonly ConversationMessage[],
 	compactions: readonly ConversationCompaction[] = []
 ): ConversationTimelineItem[] => {
 	const displayMessages = messages.filter(

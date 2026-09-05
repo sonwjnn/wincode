@@ -1,11 +1,12 @@
 import { TextAttributes } from "@opentui/core";
-import { builtInAgents, type CodingAgentUIMessage } from "@wincode/ai";
+import { formatModelTokenCount } from "@wincode/ai/model-usage";
 import {
 	findSupportedChatModelSelection,
 	formatModelLabel,
 } from "@wincode/ai/models";
-import { formatModelTokenCount } from "@wincode/ai/usage";
 import { useMemo } from "react";
+import { builtInAgents } from "@/modules/agents";
+import type { ConversationMessage } from "@/modules/conversations/message";
 import {
 	type McpServerState,
 	type McpServerStatus,
@@ -24,7 +25,7 @@ const formatMcpSidebarState = (state: McpServerState): string =>
 	`${state.charAt(0).toUpperCase()}${state.slice(1)}`;
 
 type SessionSidebarProps = {
-	messages: CodingAgentUIMessage[];
+	messages: ConversationMessage[];
 	sessionTitle: string;
 	width: `${number}%`;
 };

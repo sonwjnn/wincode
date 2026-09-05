@@ -1,10 +1,10 @@
-export type JsonValue =
-	| null
-	| boolean
-	| number
-	| string
-	| JsonValue[]
-	| { [key: string]: JsonValue };
+import type { ToolCallOutput } from "@wincode/agent-core";
+import { type JsonValue, MAX_MCP_RESULT_BYTES } from "./manifest";
+import type { McpCatalogSnapshot } from "./registry";
+
+export type { JsonValue } from "./manifest";
+export { MAX_MCP_RESULT_BYTES } from "./manifest";
+
 export type McpNormalizedResult = {
 	content: JsonValue[];
 	isError: boolean;
@@ -19,7 +19,33 @@ export type McpNormalizedResult = {
 	structuredContent?: JsonValue;
 	truncated: boolean;
 };
-export const MAX_MCP_RESULT_BYTES = 256 * 1024;
+export type McpToolExecutor = (
+	snapshot: McpCatalogSnapshot,
+	toolName: string,
+	input: unknown,
+	signal?: AbortSignal
+) => Promise<McpNormalizedResult>;
+
+export type McpToolCallExecutor = (
+	snapshot: McpCatalogSnapshot,
+	toolName: string,
+	input: unknown,
+	signal?: AbortSignal
+) => Promise<ToolCallOutput>;
+
+export const createMcpToolExecutor = (
+	execute: McpToolExecutor | undefined
+): McpToolCallExecutor | undefined => {
+	if (execute === undefined) {
+		return;
+	}
+	return async (snapshot, toolName, input, signal) => {
+		const result = await execute(snapshot, toolName, input, signal);
+		return result.isError
+			? { errorText: "MCP tool call failed.", type: "failure" }
+			: { output: result, type: "success" };
+	};
+};
 const encoder = new TextEncoder();
 const size = (value: unknown): number =>
 	encoder.encode(JSON.stringify(value)).byteLength;

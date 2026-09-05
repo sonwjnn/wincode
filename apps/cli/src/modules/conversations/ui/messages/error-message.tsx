@@ -3,7 +3,7 @@ import {
 	isOperationalFailure,
 	normalizeOperationalFailure,
 } from "@wincode/agent-core";
-import { normalizeModelFailure } from "@wincode/ai/failures";
+import { normalizeModelFailure } from "@wincode/ai/model-failures";
 import { EmptyBorder } from "@/shared/constants";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 
