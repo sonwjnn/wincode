@@ -13,10 +13,7 @@ import {
 	type AgentTurnTerminalEvent,
 	agentIdSchema,
 	CONVERSATION_RECORD_VERSION,
-	type ConversationAttachmentReferencePart,
-	type ConversationFileMentionPart,
 	type ConversationMessageMetadataRecord,
-	type ConversationMessagePart,
 	type ConversationMessageRecord,
 	type ConversationRecord,
 	type ConversationToolCallPart,
@@ -57,17 +54,13 @@ import {
 	type ConversationViewState,
 	consumeAgentTurnEvents,
 } from "../conversation-controller";
-import type { ConversationMessage, ConversationToolPart } from "../message";
-import {
-	expandConversationMessagesForModel,
-	isConversationToolPart,
-	isFileMentionPart,
-	isTerminalConversationToolPart,
-} from "../message";
+import type { ConversationMessage } from "../message";
+import { expandConversationMessagesForModel } from "../message";
 import {
 	formatAttachmentUnavailableMarker,
 	getAttachmentReference,
 } from "../storage/attachment-store";
+import { toDurableConversationMessageRecord } from "../storage/conversation-record";
 
 export type RuntimeFactory = () => AgentRuntime;
 
@@ -743,126 +736,13 @@ export type CheckpointCommitter = (
 	record: ConversationRecord
 ) => Promise<void> | void;
 
-const conversationToolName = (part: ConversationToolPart): string =>
-	part.type === "dynamic-tool"
-		? part.toolName
-		: part.type.slice("tool-".length);
-
-const toDurableMetadata = (
-	metadata: ConversationMessage["metadata"]
-): ConversationMessageMetadataRecord | undefined => {
-	if (metadata === undefined) {
-		return;
-	}
-	const skill = metadata.skill;
-	return {
-		...(metadata.agent === undefined ? {} : { agent: metadata.agent }),
-		...(metadata.interrupted === undefined
-			? {}
-			: { interrupted: metadata.interrupted }),
-		...(metadata.model === undefined ? {} : { model: metadata.model }),
-		...(metadata.responseTimeMs === undefined
-			? {}
-			: { responseTimeMs: metadata.responseTimeMs }),
-		...(skill === undefined
-			? {}
-			: {
-					skill: {
-						arguments: skill.arguments,
-						contentHash: skill.contentHash,
-						name: skill.name,
-						source: skill.source ?? "explicit",
-					},
-				}),
-		...(metadata.usage === undefined ? {} : { usage: metadata.usage }),
-		...(metadata.variant === undefined ? {} : { variant: metadata.variant }),
-	};
-};
-
-const toDurableConversationToolPart = (
-	part: ConversationToolPart
-): ConversationToolCallPart | undefined => {
-	if (!isTerminalConversationToolPart(part)) {
-		return;
-	}
-	const outcome =
-		part.state === "output-available"
-			? { kind: "success" as const, output: part.output }
-			: {
-					errorText: part.errorText ?? "Tool call denied.",
-					kind: "failure" as const,
-				};
-	return {
-		input: part.input,
-		outcome,
-		sequence: 0,
-		toolCallId: part.toolCallId,
-		toolName: conversationToolName(part),
-		type: "tool-call",
-	};
-};
-
-const toDurableConversationPart = (
-	part: ConversationMessage["parts"][number]
-): ConversationMessagePart[] => {
-	if (part.type === "text") {
-		return [{ text: part.text, type: "text" }];
-	}
-	if (isFileMentionPart(part)) {
-		const mention: ConversationFileMentionPart = {
-			data: part.data,
-			...(part.id === undefined ? {} : { id: part.id }),
-			type: "file-mention",
-		};
-		return [mention];
-	}
-	const reference = getAttachmentReference(part);
-	if (reference !== null) {
-		const attachment: ConversationAttachmentReferencePart = {
-			attachmentId: reference.attachmentId,
-			available: reference.available,
-			byteLength: reference.byteLength,
-			filename: reference.filename,
-			...(reference.height === undefined ? {} : { height: reference.height }),
-			mediaType: reference.mediaType,
-			type: "attachment-reference",
-			...(reference.width === undefined ? {} : { width: reference.width }),
-		};
-		return [attachment];
-	}
-	if (isConversationToolPart(part)) {
-		const toolPart = toDurableConversationToolPart(part);
-		return toolPart === undefined ? [] : [toolPart];
-	}
-	return [];
-};
-
-const toDurableConversationMessage = (
-	message: ConversationMessage
-): ConversationMessageRecord | undefined => {
-	if (message.role !== "assistant" && message.role !== "user") {
-		return;
-	}
-	const parts = message.parts.flatMap(toDurableConversationPart);
-	return parts.length === 0
-		? undefined
-		: {
-				id: message.id,
-				...(toDurableMetadata(message.metadata) === undefined
-					? {}
-					: { metadata: toDurableMetadata(message.metadata) }),
-				parts,
-				role: message.role,
-			};
-};
-
 const durableInputMessages = (
 	turn: AgentTurn,
 	sourceMessages?: readonly ConversationMessage[]
 ): ConversationMessageRecord[] => {
 	if (sourceMessages !== undefined) {
 		return sourceMessages.flatMap((message) => {
-			const durable = toDurableConversationMessage(message);
+			const durable = toDurableConversationMessageRecord(message);
 			return durable === undefined ? [] : [durable];
 		});
 	}

@@ -1,44 +1,20 @@
-import { createFileRoute, useRouterState } from "@tanstack/react-router";
-import { agentIdSchema } from "@wincode/agent-core";
+import { createFileRoute } from "@tanstack/react-router";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { useEffect, useState } from "react";
-import { z } from "zod";
 import {
 	type ConversationCompaction,
 	rebuildActiveMessages,
 } from "@/modules/conversations/compaction";
 import {
 	type ConversationMessage,
-	isConversationMessage,
 	sanitizeInterruptedConversationMessages,
 } from "@/modules/conversations/message";
 import { projectConversationRecords } from "@/modules/conversations/storage/conversation-record";
+import type { PendingInitialTurn } from "@/modules/conversations/storage/conversation-store";
 import { getConversationStore } from "@/modules/conversations/storage/get-conversation-store";
 import { ChatView } from "@/modules/conversations/ui/views/chat-view";
+import { mergePendingInitialMessage } from "@/modules/conversations/utils";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-
-const sessionRouteStateSchema = z
-	.object({
-		agent: agentIdSchema.optional(),
-		autoStart: z.boolean().optional(),
-		initialMessage: z.unknown().optional(),
-	})
-	.passthrough();
-
-const getRouteState = (
-	state: unknown
-): z.infer<typeof sessionRouteStateSchema> | null => {
-	const result = sessionRouteStateSchema.safeParse(state);
-	return result.success ? result.data : null;
-};
-
-const getAutoStart = (state: unknown): boolean =>
-	getRouteState(state)?.autoStart ?? false;
-
-const getInitialMessage = (state: unknown): ConversationMessage | undefined => {
-	const candidate = getRouteState(state)?.initialMessage;
-	return isConversationMessage(candidate) ? candidate : undefined;
-};
 
 export const Route = createFileRoute("/sessions/$id")({
 	component: SessionRoute,
@@ -55,14 +31,10 @@ function SessionRoute() {
 	const [sessionTitle, setSessionTitle] = useState<string | null>(null);
 	const [sessionConfig, setSessionConfig] = useState<{
 		model?: ChatModelSelection;
+		pendingInitialTurn?: PendingInitialTurn;
 		variant?: ModelVariant;
 	} | null>(null);
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
-	const routeState = useRouterState({
-		select: (state) => state.location.state,
-	});
-	const autoStart = getAutoStart(routeState);
-	const initialMessage = getInitialMessage(routeState);
 
 	useEffect(() => {
 		let ignore = false;
@@ -79,39 +51,43 @@ function SessionRoute() {
 			store.getSession(id),
 			store.getCompactions(id),
 			store.listConversationRecords(id),
+			store.getPendingInitialTurn(id),
 		])
-			.then(async ([session, loadedCompactions, records]) => {
-				if (ignore) {
-					return;
+			.then(
+				async ([session, loadedCompactions, records, pendingInitialTurn]) => {
+					if (ignore) {
+						return;
+					}
+					const projected = projectConversationRecords(records);
+					const sourceMessages = mergePendingInitialMessage(
+						projected,
+						pendingInitialTurn?.message
+					);
+					const displayMessages = store.attachmentStore
+						? await store.attachmentStore.annotateMessagesForDisplay(
+								sourceMessages
+							)
+						: sourceMessages;
+					if (ignore) {
+						return;
+					}
+					const restored =
+						sanitizeInterruptedConversationMessages(displayMessages);
+					const active = restored.filter(
+						(message) => !message.id.startsWith("delegated-turn:")
+					);
+					const latestCompaction = loadedCompactions.at(-1) ?? null;
+					setMessages(restored);
+					setActiveMessages(rebuildActiveMessages(active, latestCompaction));
+					setCompactions(loadedCompactions);
+					setSessionConfig({
+						...(session.model ? { model: session.model } : {}),
+						...(pendingInitialTurn ? { pendingInitialTurn } : {}),
+						...(session.variant ? { variant: session.variant } : {}),
+					});
+					setSessionTitle(session.title);
 				}
-				const projected = projectConversationRecords(records);
-				const sourceMessages =
-					projected.length === 0 && initialMessage !== undefined
-						? [initialMessage]
-						: projected;
-				const displayMessages = store.attachmentStore
-					? await store.attachmentStore.annotateMessagesForDisplay(
-							sourceMessages
-						)
-					: sourceMessages;
-				if (ignore) {
-					return;
-				}
-				const restored =
-					sanitizeInterruptedConversationMessages(displayMessages);
-				const active = restored.filter(
-					(message) => !message.id.startsWith("delegated-turn:")
-				);
-				const latestCompaction = loadedCompactions.at(-1) ?? null;
-				setMessages(restored);
-				setActiveMessages(rebuildActiveMessages(active, latestCompaction));
-				setCompactions(loadedCompactions);
-				setSessionConfig({
-					...(session.model ? { model: session.model } : {}),
-					...(session.variant ? { variant: session.variant } : {}),
-				});
-				setSessionTitle(session.title);
-			})
+			)
 			.catch((error: unknown) => {
 				if (!ignore) {
 					setErrorMessage(
@@ -123,7 +99,7 @@ function SessionRoute() {
 		return () => {
 			ignore = true;
 		};
-	}, [id, initialMessage]);
+	}, [id]);
 
 	if (errorMessage) {
 		return <text fg={colors.error}>{errorMessage}</text>;
@@ -135,12 +111,13 @@ function SessionRoute() {
 
 	return (
 		<ChatView
-			autoStart={autoStart}
 			initialActiveMessages={activeMessages}
 			initialCompactions={compactions}
 			initialMessages={messages}
 			initialModel={sessionConfig.model}
+			initialPendingTurn={sessionConfig.pendingInitialTurn}
 			initialVariant={sessionConfig.variant}
+			mode="session"
 			sessionId={id}
 			sessionTitle={sessionTitle}
 		/>

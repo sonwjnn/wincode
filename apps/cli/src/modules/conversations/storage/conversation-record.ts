@@ -2,7 +2,10 @@ import {
 	AGENT_TURN_INTERRUPTION_REASONS,
 	AgentInvariantError,
 	CONVERSATION_RECORD_VERSION,
+	type ConversationAttachmentReferencePart,
+	type ConversationFileMentionPart,
 	type ConversationMessageMetadataRecord,
+	type ConversationMessagePart,
 	type ConversationMessageRecord,
 	type ConversationRecord,
 	type ConversationToolCallPart,
@@ -27,8 +30,29 @@ import type {
 	ConversationPart,
 	ConversationToolPart,
 } from "../message";
-import { conversationMessageMetadataSchema } from "../message";
-import { attachmentReferenceToFilePart } from "./attachment-store";
+import {
+	conversationMessageMetadataSchema,
+	isConversationToolPart,
+	isFileMentionPart,
+	isTerminalConversationToolPart,
+} from "../message";
+import {
+	attachmentReferenceToFilePart,
+	getAttachmentReference,
+} from "./attachment-store";
+import type { PendingInitialTurnRecordOutcome } from "./conversation-store";
+export const isPendingInitialTurnRecordOutcome = (
+	value: unknown
+): value is PendingInitialTurnRecordOutcome => {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return false;
+	}
+	const candidate = value as Record<string, unknown>;
+	return (
+		Object.keys(candidate).every((key) => key === "kind") &&
+		(candidate.kind === "claimed" || candidate.kind === "pending")
+	);
+};
 
 const hasText = (value: unknown): boolean =>
 	typeof value === "string" && value.length > 0;
@@ -204,7 +228,7 @@ const modelSelectionForRecord = (
 };
 
 const metadataForRecord = (
-	record: ConversationRecord,
+	record: Pick<ConversationRecord, "agentId" | "model">,
 	metadata: ConversationMessageMetadataRecord | undefined
 ): ConversationMessageMetadata | undefined => {
 	let model = modelSelectionForRecord(record.model);
@@ -312,13 +336,129 @@ const toConversationPart = (
 
 const toConversationMessage = (
 	message: ConversationMessageRecord,
-	record: ConversationRecord
+	record: Pick<ConversationRecord, "agentId" | "model">
 ): ConversationMessage => {
 	const metadata = metadataForRecord(record, message.metadata);
 	return {
 		id: message.id,
 		...(metadata === undefined ? {} : { metadata }),
 		parts: message.parts.flatMap(toConversationPart),
+		role: message.role,
+	};
+};
+export const projectConversationMessageRecords = (
+	messages: readonly ConversationMessageRecord[],
+	record: Pick<ConversationRecord, "agentId" | "model">
+): ConversationMessage[] =>
+	messages.map((message) => toConversationMessage(message, record));
+
+const toDurableMetadata = (
+	metadata: ConversationMessage["metadata"]
+): ConversationMessageMetadataRecord | undefined => {
+	if (metadata === undefined) {
+		return;
+	}
+	const skill = metadata.skill;
+	return {
+		...(metadata.agent === undefined ? {} : { agent: metadata.agent }),
+		...(metadata.interrupted === undefined
+			? {}
+			: { interrupted: metadata.interrupted }),
+		...(metadata.model === undefined ? {} : { model: metadata.model }),
+		...(metadata.responseTimeMs === undefined
+			? {}
+			: { responseTimeMs: metadata.responseTimeMs }),
+		...(skill === undefined
+			? {}
+			: {
+					skill: {
+						arguments: skill.arguments,
+						contentHash: skill.contentHash,
+						name: skill.name,
+						source: skill.source ?? "explicit",
+					},
+				}),
+		...(metadata.usage === undefined ? {} : { usage: metadata.usage }),
+		...(metadata.variant === undefined ? {} : { variant: metadata.variant }),
+	};
+};
+
+const toDurableConversationToolPart = (
+	part: ConversationToolPart
+): ConversationToolCallPart | undefined => {
+	if (!isTerminalConversationToolPart(part)) {
+		return;
+	}
+	const outcome =
+		part.state === "output-available"
+			? { kind: "success" as const, output: part.output }
+			: {
+					errorText: part.errorText ?? "Tool call denied.",
+					kind: "failure" as const,
+				};
+	return {
+		input: part.input,
+		outcome,
+		sequence: 0,
+		toolCallId: part.toolCallId,
+		toolName:
+			part.type === "dynamic-tool"
+				? part.toolName
+				: part.type.slice("tool-".length),
+		type: "tool-call",
+	};
+};
+
+const toDurableConversationPart = (
+	part: ConversationMessage["parts"][number]
+): ConversationMessagePart[] => {
+	if (part.type === "text") {
+		return [{ text: part.text, type: "text" }];
+	}
+	if (isFileMentionPart(part)) {
+		const mention: ConversationFileMentionPart = {
+			data: part.data,
+			...(part.id === undefined ? {} : { id: part.id }),
+			type: "file-mention",
+		};
+		return [mention];
+	}
+	const reference = getAttachmentReference(part);
+	if (reference !== null) {
+		const attachment: ConversationAttachmentReferencePart = {
+			attachmentId: reference.attachmentId,
+			available: reference.available,
+			byteLength: reference.byteLength,
+			filename: reference.filename,
+			...(reference.height === undefined ? {} : { height: reference.height }),
+			mediaType: reference.mediaType,
+			type: "attachment-reference",
+			...(reference.width === undefined ? {} : { width: reference.width }),
+		};
+		return [attachment];
+	}
+	if (isConversationToolPart(part)) {
+		const toolPart = toDurableConversationToolPart(part);
+		return toolPart === undefined ? [] : [toolPart];
+	}
+	return [];
+};
+
+export const toDurableConversationMessageRecord = (
+	message: ConversationMessage
+): ConversationMessageRecord | undefined => {
+	if (message.role !== "assistant" && message.role !== "user") {
+		return;
+	}
+	const parts = message.parts.flatMap(toDurableConversationPart);
+	if (parts.length === 0) {
+		return;
+	}
+	const metadata = toDurableMetadata(message.metadata);
+	return {
+		id: message.id,
+		...(metadata === undefined ? {} : { metadata }),
+		parts,
 		role: message.role,
 	};
 };

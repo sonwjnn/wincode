@@ -1,22 +1,22 @@
 import { describe, expect, test } from "bun:test";
-import { hasChatPromptContent } from "./chat-view";
+import { canSubmitHomePrompt } from "./chat-view";
 
-describe("hasChatPromptContent", () => {
-	test("accepts a zero-argument skill invocation", () => {
+describe("canSubmitHomePrompt", () => {
+	const readyState = {
+		defaultAgentId: "build",
+		initializedDefaultAgentId: "build",
+		isCreatingSession: false,
+		isPromptConfigRestored: true,
+		registryReady: true,
+	};
+
+	test("blocks submit while last-message prompt config is loading", () => {
 		expect(
-			hasChatPromptContent({
-				files: [],
-				skill: {
-					arguments: "",
-					instructions: "Review the implementation carefully.",
-					name: "review",
-				},
-				text: "",
-			})
-		).toBe(true);
+			canSubmitHomePrompt({ ...readyState, isPromptConfigRestored: false })
+		).toBe(false);
 	});
 
-	test("rejects an empty prompt without files or skill context", () => {
-		expect(hasChatPromptContent({ files: [], text: "  " })).toBe(false);
+	test("allows submit after prompt config and agent initialization", () => {
+		expect(canSubmitHomePrompt(readyState)).toBe(true);
 	});
 });

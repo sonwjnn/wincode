@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
-import type { ConversationRecord } from "@wincode/agent-core";
-import { isConversationAttachmentReferencePart } from "@wincode/agent-core";
+import {
+	CONVERSATION_RECORD_VERSION,
+	type ConversationRecord,
+	isConversationAttachmentReferencePart,
+} from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
 	modelSelectionSchema,
 } from "@wincode/ai/models";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import type {
 	AppendConversationCompactionInput,
 	ConversationCompaction,
@@ -27,12 +30,18 @@ import { type ConversationDatabase, createDatabase } from "./client";
 import {
 	ConversationRecordInvariantError,
 	getConversationRecordValidationError,
+	isPendingInitialTurnRecordOutcome,
+	projectConversationMessageRecords,
+	toDurableConversationMessageRecord,
 } from "./conversation-record";
 import {
 	type CommitConversationRecordInput,
 	type ConversationSession,
 	type ConversationStore,
 	type CreateSessionInput,
+	type PendingInitialTurn,
+	type PendingInitialTurnRecordOutcome,
+	type PendingInitialTurnState,
 	type PromptHistoryEntry,
 	UNTITLED_SESSION_TITLE,
 	type UpdateSessionInput,
@@ -223,6 +232,7 @@ export const createPromptHistory = (
 };
 type SessionRow = typeof conversationSession.$inferSelect;
 type CompactionRow = typeof conversationCompaction.$inferSelect;
+type ConversationRecordRow = typeof conversationRecord.$inferSelect;
 
 const toConversationCompaction = (
 	row: CompactionRow
@@ -300,6 +310,49 @@ const toConversationSession = (row: SessionRow): ConversationSession => ({
 	title: row.title ?? UNTITLED_SESSION_TITLE,
 	...(row.variant ? { variant: row.variant } : {}),
 });
+const toConversationRecordModel = (
+	model: Pick<ConversationRecord["model"], "modelId" | "providerId">,
+	variant: ConversationRecord["model"]["variant"]
+): ConversationRecord["model"] => ({
+	modelId: model.modelId,
+	providerId: model.providerId,
+	...(variant === undefined ? {} : { variant }),
+});
+const toConversationRecord = (
+	row: ConversationRecordRow
+): ConversationRecord => ({
+	agentId: row.agentId,
+	...(row.delegationJson === null ? {} : { delegation: row.delegationJson }),
+	id: row.recordId,
+	messages: row.messagesJson,
+	model: row.modelJson,
+	outcome: row.outcomeJson as ConversationRecord["outcome"],
+	turnId: row.turnId,
+	version: row.version as ConversationRecord["version"],
+});
+
+const pendingInitialTurnFromRow = (
+	row: ConversationRecordRow
+): PendingInitialTurn | undefined => {
+	if (
+		row.delegationJson !== null ||
+		!isPendingInitialTurnRecordOutcome(row.outcomeJson)
+	) {
+		return;
+	}
+	const message = projectConversationMessageRecords(row.messagesJson, {
+		agentId: row.agentId,
+		model: row.modelJson,
+	}).find(({ role }) => role === "user");
+	if (message === undefined) {
+		return;
+	}
+	return {
+		message,
+		state: row.outcomeJson.kind,
+		turnId: row.turnId,
+	};
+};
 
 const collectLiveAttachmentIds = (db: ConversationDatabase): Set<string> => {
 	const live = new Set<string>();
@@ -401,6 +454,10 @@ const writeConversationRecordCheckpoint = (
 		modelId: record.model.modelId,
 		providerId: record.model.providerId,
 	});
+	const modelJson = toConversationRecordModel(
+		record.model,
+		record.model.variant
+	);
 	db.transaction((tx) => {
 		const session = tx
 			.select({ id: conversationSession.id })
@@ -415,35 +472,77 @@ const writeConversationRecordCheckpoint = (
 		if (!session) {
 			throw new Error("Session not found");
 		}
-		const latest = tx
-			.select({ position: conversationRecord.position })
+
+		const pending = tx
+			.select({
+				position: conversationRecord.position,
+				recordId: conversationRecord.recordId,
+			})
 			.from(conversationRecord)
-			.where(eq(conversationRecord.sessionId, sessionId))
+			.where(
+				and(
+					eq(conversationRecord.sessionId, sessionId),
+					eq(conversationRecord.turnId, record.turnId),
+					isNull(conversationRecord.delegationJson),
+					sql`json_extract(${conversationRecord.outcomeJson}, '$.kind') IN ('pending', 'claimed')`
+				)
+			)
 			.orderBy(desc(conversationRecord.position))
 			.limit(1)
 			.get();
 		const now = new Date();
-		tx.insert(conversationRecord)
-			.values({
-				agentId: record.agentId,
-				createdAt: now,
-				delegationJson: record.delegation ?? null,
-				messagesJson: [...record.messages],
-				modelJson: {
-					modelId: record.model.modelId,
-					providerId: record.model.providerId,
-					...(record.model.variant === undefined
-						? {}
-						: { variant: record.model.variant }),
-				},
-				outcomeJson: record.outcome,
-				position: (latest?.position ?? -1) + 1,
-				recordId: record.id,
-				sessionId,
-				turnId: record.turnId,
-				version: record.version,
-			})
-			.run();
+		const durableValues = {
+			agentId: record.agentId,
+			delegationJson: record.delegation ?? null,
+			messagesJson: [...record.messages],
+			modelJson,
+			outcomeJson: record.outcome,
+			turnId: record.turnId,
+			version: record.version,
+		} satisfies Pick<
+			typeof conversationRecord.$inferInsert,
+			| "agentId"
+			| "delegationJson"
+			| "messagesJson"
+			| "modelJson"
+			| "outcomeJson"
+			| "turnId"
+			| "version"
+		>;
+
+		if (pending) {
+			tx.update(conversationRecord)
+				.set({
+					...durableValues,
+					createdAt: now,
+					recordId: record.id,
+				})
+				.where(
+					and(
+						eq(conversationRecord.recordId, pending.recordId),
+						eq(conversationRecord.sessionId, sessionId)
+					)
+				)
+				.run();
+		} else {
+			const latest = tx
+				.select({ position: conversationRecord.position })
+				.from(conversationRecord)
+				.where(eq(conversationRecord.sessionId, sessionId))
+				.orderBy(desc(conversationRecord.position))
+				.limit(1)
+				.get();
+			tx.insert(conversationRecord)
+				.values({
+					...durableValues,
+					createdAt: now,
+					position: (latest?.position ?? -1) + 1,
+					recordId: record.id,
+					sessionId,
+				})
+				.run();
+		}
+
 		tx.update(conversationSession)
 			.set({
 				lastMessageAt: now,
@@ -461,12 +560,12 @@ const writeConversationRecordCheckpoint = (
 	});
 };
 
-const readConversationRecords = (
+const readConversationRecordRows = (
 	db: ConversationDatabase,
 	workspaceId: string,
 	sessionId: string
-): ConversationRecord[] => {
-	const rows = db
+): ConversationRecordRow[] =>
+	db
 		.select({ record: conversationRecord })
 		.from(conversationRecord)
 		.innerJoin(
@@ -480,22 +579,69 @@ const readConversationRecords = (
 			)
 		)
 		.orderBy(asc(conversationRecord.position))
+		.all()
+		.map(({ record }) => record);
+
+const readConversationRecords = (
+	db: ConversationDatabase,
+	workspaceId: string,
+	sessionId: string
+): ConversationRecord[] =>
+	readConversationRecordRows(db, workspaceId, sessionId).flatMap((record) =>
+		isPendingInitialTurnRecordOutcome(record.outcomeJson)
+			? []
+			: [toConversationRecord(record)]
+	);
+
+const readPendingInitialTurn = (
+	db: ConversationDatabase,
+	workspaceId: string,
+	sessionId: string
+): PendingInitialTurn | undefined => {
+	const rows = readConversationRecordRows(db, workspaceId, sessionId);
+	for (const row of rows.toReversed()) {
+		const pending = pendingInitialTurnFromRow(row);
+		if (pending !== undefined) {
+			return pending;
+		}
+	}
+	return;
+};
+const updatePendingInitialTurnState = (
+	db: ConversationDatabase,
+	workspaceId: string,
+	sessionId: string,
+	turnId: string,
+	from: PendingInitialTurnState,
+	to: PendingInitialTurnState
+): boolean => {
+	const session = db
+		.select({ id: conversationSession.id })
+		.from(conversationSession)
+		.where(
+			and(
+				eq(conversationSession.id, sessionId),
+				eq(conversationSession.workspaceId, workspaceId)
+			)
+		)
+		.get();
+	if (!session) {
+		return false;
+	}
+	const changed = db
+		.update(conversationRecord)
+		.set({ outcomeJson: { kind: to } })
+		.where(
+			and(
+				eq(conversationRecord.sessionId, sessionId),
+				eq(conversationRecord.turnId, turnId),
+				isNull(conversationRecord.delegationJson),
+				sql`json_extract(${conversationRecord.outcomeJson}, '$.kind') = ${from}`
+			)
+		)
+		.returning({ recordId: conversationRecord.recordId })
 		.all();
-	return rows.map(({ record }) => {
-		const recordValue: ConversationRecord = {
-			agentId: record.agentId,
-			...(record.delegationJson === null
-				? {}
-				: { delegation: record.delegationJson }),
-			id: record.recordId,
-			messages: record.messagesJson,
-			model: record.modelJson,
-			outcome: record.outcomeJson,
-			turnId: record.turnId,
-			version: record.version as ConversationRecord["version"],
-		};
-		return recordValue;
-	});
+	return changed.length > 0;
 };
 
 export const createDrizzleConversationStore = (
@@ -561,26 +707,81 @@ export const createDrizzleConversationStore = (
 			await promptHistoryStore.clear();
 			await collectAttachments().catch(() => undefined);
 		},
-		createSession: async ({ message, model, variant }: CreateSessionInput) => {
+		createSession: async ({
+			agent,
+			initialTurnId,
+			message,
+			model,
+			variant,
+		}: CreateSessionInput) => {
+			const durableMessage = toDurableConversationMessageRecord(message);
+			if (durableMessage === undefined) {
+				throw new Error("Initial conversation message has no durable parts.");
+			}
 			const id = createId();
 			const now = new Date();
+			const pendingOutcome: PendingInitialTurnRecordOutcome = {
+				kind: "pending",
+			};
+			const recordModel = toConversationRecordModel(model, variant);
 
-			db.insert(conversationSession)
-				.values({
-					createdAt: now,
-					id,
-					lastMessageAt: now,
-					modelJson: model,
-					pinned: false,
-					title: deriveSessionTitle([message]),
-					updatedAt: now,
-					variant,
-					workspaceId: workspace.id,
-				})
-				.run();
+			db.transaction((tx) => {
+				tx.insert(conversationSession)
+					.values({
+						createdAt: now,
+						id,
+						lastMessageAt: now,
+						modelJson: model,
+						pinned: false,
+						title: deriveSessionTitle([message]),
+						updatedAt: now,
+						variant,
+						workspaceId: workspace.id,
+					})
+					.run();
+				tx.insert(conversationRecord)
+					.values({
+						agentId: agent,
+						createdAt: now,
+						delegationJson: null,
+						messagesJson: [durableMessage],
+						modelJson: recordModel,
+						outcomeJson: pendingOutcome,
+						position: 0,
+						recordId: createId(),
+						sessionId: id,
+						turnId: initialTurnId,
+						version: CONVERSATION_RECORD_VERSION,
+					})
+					.run();
+			});
 
 			return { id };
 		},
+		getPendingInitialTurn: (sessionId) =>
+			Promise.resolve(readPendingInitialTurn(db, workspace.id, sessionId)),
+		claimPendingInitialTurn: (sessionId, turnId) =>
+			Promise.resolve(
+				updatePendingInitialTurnState(
+					db,
+					workspace.id,
+					sessionId,
+					turnId,
+					"pending",
+					"claimed"
+				)
+			),
+		releasePendingInitialTurn: (sessionId, turnId) =>
+			Promise.resolve(
+				updatePendingInitialTurnState(
+					db,
+					workspace.id,
+					sessionId,
+					turnId,
+					"claimed",
+					"pending"
+				)
+			),
 
 		deleteSession: async (sessionId: string) => {
 			db.delete(conversationSession)

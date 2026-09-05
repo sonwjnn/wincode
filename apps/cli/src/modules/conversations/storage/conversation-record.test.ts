@@ -125,11 +125,73 @@ const createSession = async (
 ): Promise<string> => {
 	const { id } = await store.createSession({
 		agent: "build",
+		initialTurnId: "turn-initial",
 		message: userMessage(text),
 		model,
 	});
 	return id;
 };
+
+test("persists and claims a pending initial turn until its checkpoint commits", async () => {
+	const { store } = await createTestStore();
+	const message = userMessage("first");
+	const { id: sessionId } = await store.createSession({
+		agent: "build",
+		initialTurnId: "turn-initial",
+		message,
+		model,
+	});
+
+	expect(await store.listConversationRecords(sessionId)).toEqual([]);
+	expect(await store.getPendingInitialTurn(sessionId)).toMatchObject({
+		message,
+		state: "pending",
+		turnId: "turn-initial",
+	});
+
+	const claims = await Promise.all([
+		store.claimPendingInitialTurn(sessionId, "turn-initial"),
+		store.claimPendingInitialTurn(sessionId, "turn-initial"),
+	]);
+	expect(claims.filter(Boolean)).toHaveLength(1);
+	expect((await store.getPendingInitialTurn(sessionId))?.state).toBe("claimed");
+
+	await store.releasePendingInitialTurn(sessionId, "turn-initial");
+	expect((await store.getPendingInitialTurn(sessionId))?.state).toBe("pending");
+
+	const record = {
+		...completedRecord("record-initial", [
+			messageRecord("msg-initial", "user", "first"),
+		]),
+		turnId: "turn-initial",
+	};
+	await store.commitConversationRecord({ record, sessionId });
+
+	expect(await store.getPendingInitialTurn(sessionId)).toBeUndefined();
+	expect(await store.listConversationRecords(sessionId)).toEqual([record]);
+});
+test("keeps a claimed initial turn claimed after reopening the database", async () => {
+	const { databasePath, store } = await createTestStore();
+	const sessionId = await createSession(store);
+
+	expect(await store.claimPendingInitialTurn(sessionId, "turn-initial")).toBe(
+		true
+	);
+
+	const { db } = createDatabase(databasePath);
+	runMigrations(db);
+	const reopened = createDrizzleConversationStore(db, {
+		attachmentRoot: join(tmpdir(), "wincode-reopened-attachments"),
+	});
+
+	expect(await reopened.getPendingInitialTurn(sessionId)).toMatchObject({
+		state: "claimed",
+		turnId: "turn-initial",
+	});
+	expect(
+		await reopened.claimPendingInitialTurn(sessionId, "turn-initial")
+	).toBe(false);
+});
 
 test("round-trips a completed Conversation Record with usage and terminal outcome", async () => {
 	const { store } = await createTestStore();

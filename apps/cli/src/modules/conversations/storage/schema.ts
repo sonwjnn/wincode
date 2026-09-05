@@ -1,5 +1,4 @@
 import type {
-	AgentTurnOutcomeRecord,
 	ConversationMessageRecord,
 	ConversationRecord,
 } from "@wincode/agent-core";
@@ -13,7 +12,10 @@ import {
 	unique,
 } from "drizzle-orm/sqlite-core";
 import type { ConversationCompaction } from "../compaction/types";
-import type { PromptHistoryEntry } from "./conversation-store";
+import type {
+	ConversationRecordStorageOutcome,
+	PromptHistoryEntry,
+} from "./conversation-store";
 
 export const conversationWorkspace = sqliteTable("conversation_workspace", {
 	id: text("id").primaryKey(),
@@ -113,10 +115,11 @@ export const promptHistory = sqliteTable("prompt_history", {
 
 /**
  * One durable Wincode Conversation Record checkpoint: the committed message
- * records, model, usage/terminal outcome, and Agent Turn identity of one
- * semantic checkpoint. Token and reasoning deltas never become rows here.
- * Rows are scoped to a session; `position` keeps checkpoints in commit order
- * per session.
+ * records, model, terminal outcome, and Agent Turn identity of one semantic
+ * checkpoint. Initial handoff rows reuse these columns with a storage-only
+ * pending/claimed outcome until the terminal checkpoint updates the row.
+ * Token and reasoning deltas never become rows here. Rows are scoped to a
+ * session; `position` keeps checkpoints in commit order per session.
  */
 export const conversationRecord = sqliteTable(
 	"conversation_record",
@@ -138,7 +141,7 @@ export const conversationRecord = sqliteTable(
 			.$type<ConversationRecord["model"]>()
 			.notNull(),
 		outcomeJson: text("outcome_json", { mode: "json" })
-			.$type<AgentTurnOutcomeRecord>()
+			.$type<ConversationRecordStorageOutcome>()
 			.notNull(),
 		messagesJson: text("messages_json", { mode: "json" })
 			.$type<ConversationMessageRecord[]>()

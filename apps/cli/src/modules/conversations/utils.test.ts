@@ -1,9 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ConversationMessage } from "@/modules/conversations/message";
 
-const { getMostRecentSession, shouldAutoStartAssistantTurn } = await import(
-	"./utils"
-);
+import { getMostRecentSession, mergePendingInitialMessage } from "./utils";
 
 const userMessage = {
 	id: "user-1",
@@ -17,21 +15,17 @@ const assistantMessage = {
 	role: "assistant",
 } satisfies ConversationMessage;
 
-describe("shouldAutoStartAssistantTurn", () => {
-	test("starts the first assistant turn for a freshly created session", () => {
-		expect(shouldAutoStartAssistantTurn(true, userMessage)).toBe(true);
+describe("mergePendingInitialMessage", () => {
+	test("prepends a pending message even when committed records exist", () => {
+		expect(mergePendingInitialMessage([assistantMessage], userMessage)).toEqual(
+			[userMessage, assistantMessage]
+		);
 	});
 
-	test("does not auto-start when opening an existing session from the dialog", () => {
-		expect(shouldAutoStartAssistantTurn(false, userMessage)).toBe(false);
-	});
-
-	test("does not auto-start when the last message is from the assistant", () => {
-		expect(shouldAutoStartAssistantTurn(true, assistantMessage)).toBe(false);
-	});
-
-	test("does not auto-start when there are no messages", () => {
-		expect(shouldAutoStartAssistantTurn(true, undefined)).toBe(false);
+	test("does not duplicate a pending message already projected by records", () => {
+		expect(
+			mergePendingInitialMessage([userMessage, assistantMessage], userMessage)
+		).toEqual([userMessage, assistantMessage]);
 	});
 });
 

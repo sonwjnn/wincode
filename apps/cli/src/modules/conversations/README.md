@@ -6,7 +6,9 @@ Chat session lifecycle: creation, messaging, streaming display, compaction, and 
 
 ### Start a session
 
-`HomeView` collects user input, creates a session through the local SQLite conversation store, then navigates to `/sessions/$id` with the initial prompt in router state.
+`ChatView` in home mode collects user input, creates the session and its
+durable initial handoff atomically through the local SQLite conversation store,
+then navigates to `/sessions/$id`.
 
 ### Join a session
 
@@ -43,6 +45,12 @@ provider/runtime failures display their safe Operational Failure message.
 `storage/` isolates local persistence behind the `ConversationStore` interface.
 The local Drizzle store persists sessions, Wincode Conversation Records,
 compactions, and content-addressed attachment blobs.
+The initial handoff reuses the existing `conversation_record` columns:
+`messages_json` stores the durable user message, `turn_id` identifies the
+execution, and `outcome_json` carries the storage-only `pending`/`claimed`
+state. Pending rows are excluded from committed-record projection and updated
+in place by the terminal checkpoint.
+
 
 - `conversation-store.ts` — store interface and DTOs.
 - `get-conversation-store.ts` — cached local store factory.
@@ -59,7 +67,7 @@ Local migrations are generated with `bun run db:local:generate` and committed un
 - `ConversationOperation` — one application-owned send, cancellation, and interruption seam for the current turn path.
 - `useChat(sessionId, initialMessages)` — CLI-owned conversation state, runtime event projection, compaction, and errors.
 - `useChatInputController(options)` — command and file-mention input state.
-- `ChatView`, `HomeView`, `ChatShell`, `ChatTextArea` — conversation UI.
+- `ChatView`, `ChatShell`, `ChatTextArea` — conversation UI.
 - `SessionsDialog`, `RenameSessionDialog` — session management UI.
 
 ## Dependencies
