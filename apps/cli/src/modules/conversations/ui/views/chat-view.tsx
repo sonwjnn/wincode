@@ -209,6 +209,7 @@ function SessionChatView({
 		catalogDiagnostic,
 		compact,
 		compactions,
+		contextTokensOverride,
 		conversation,
 		error,
 		isCompacting,
@@ -379,7 +380,6 @@ function SessionChatView({
 			});
 			return false;
 		}
-		show({ message: "Compacting conversation…", variant: "info" });
 		try {
 			const effective = resolveEffectiveAgentSelection(
 				registry,
@@ -387,11 +387,7 @@ function SessionChatView({
 				model,
 				variant
 			);
-			const result = await compact(focus, effective.model);
-			show({
-				message: `Compacted ${result.entry.tokensBefore} → ${result.entry.tokensAfter} tokens.`,
-				variant: "success",
-			});
+			await compact(focus, effective.model, effective.variant);
 			return true;
 		} catch (error) {
 			show({
@@ -599,8 +595,10 @@ function SessionChatView({
 				<ChatShell
 					activeMessages={activeMessages}
 					compactions={compactions}
+					contextTokensOverride={contextTokensOverride}
 					error={error}
 					isBusy={isBusy}
+					isCompacting={isCompacting}
 					isInterruptArmed={isInterruptArmed}
 					messages={messages}
 					onApproval={routeApproval}

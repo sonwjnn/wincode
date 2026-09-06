@@ -2,6 +2,7 @@ import type { AgentId } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
 	defaultChatModelSelection,
+	getSupportedModelVariants,
 	type ModelVariant,
 	normalizeModelVariant,
 } from "@wincode/ai/models";
@@ -25,9 +26,9 @@ type PromptConfigState = {
 	model: ChatModelSelection;
 	variant: ModelVariant | undefined;
 };
-
 export type PromptConfig = PromptConfigState & {
 	cycleAgent: (selectableAgents: readonly { id: AgentId }[]) => void;
+	cycleVariant: () => void;
 	setAgent: (agent: AgentId) => void;
 	setModel: (model: ChatModelSelection) => void;
 	setVariant: (variant: ModelVariant | undefined) => void;
@@ -98,6 +99,18 @@ export function PromptConfigProvider({
 		[]
 	);
 
+	const cycleVariant = useCallback(() => {
+		setConfig((current) => {
+			const options: Array<ModelVariant | undefined> = [
+				undefined,
+				...getSupportedModelVariants(current.model),
+			];
+			const currentIndex = options.indexOf(current.variant);
+			const next = options[(currentIndex + 1) % options.length];
+			return { ...current, variant: next };
+		});
+	}, []);
+
 	const setAgent = useCallback((agent: AgentId) => {
 		hasExplicitAgent.current = true;
 		setConfig((current) => ({ ...current, agent }));
@@ -119,6 +132,7 @@ export function PromptConfigProvider({
 			value={{
 				agent: config.agent,
 				cycleAgent,
+				cycleVariant,
 				model: config.model,
 				setAgent,
 				setModel,

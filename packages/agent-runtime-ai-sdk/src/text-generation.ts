@@ -1,6 +1,6 @@
 import type { ModelTarget } from "@wincode/ai/model-target";
 import { type ModelUsage, normalizeModelUsage } from "@wincode/ai/model-usage";
-import { generateText } from "ai";
+import { streamText } from "ai";
 import { resolveAiSdkModelTarget } from "./model-resolver";
 
 export type RuntimePromptMessage = {
@@ -27,17 +27,35 @@ export const generateAiSdkText = async (
 	options: AiSdkTextGenerationOptions
 ): Promise<AiSdkTextGenerationResult> => {
 	const resolved = resolveAiSdkModelTarget(options.model);
-	const result = await generateText({
+	// ChatGPT's Codex OAuth endpoint rejects the Responses API max_output_tokens field.
+	const supportsOutputLimit = options.model.authorization.kind !== "oauth";
+	// Override AI SDK's default handler so raw provider errors and headers are never logged.
+	const result = streamText({
 		abortSignal: options.abortSignal,
-		maxOutputTokens: options.maxOutputTokens,
 		maxRetries: options.maxRetries,
 		model: resolved.model,
+		onError: () => undefined,
 		providerOptions: resolved.providerOptions,
 		system: options.system,
+		...(supportsOutputLimit
+			? { maxOutputTokens: options.maxOutputTokens }
+			: {}),
 		...(options.messages === undefined
 			? { prompt: options.prompt ?? "" }
 			: { messages: [...options.messages] }),
 	});
-	const usage = normalizeModelUsage(result.usage);
-	return usage === null ? { text: result.text } : { text: result.text, usage };
+	let streamError: unknown;
+	let receivedStreamError = false;
+	await result.consumeStream({
+		onError: (error) => {
+			streamError = error;
+			receivedStreamError = true;
+		},
+	});
+	if (receivedStreamError) {
+		throw streamError;
+	}
+	const text = await result.text;
+	const usage = normalizeModelUsage(await result.usage);
+	return usage === null ? { text } : { text, usage };
 };

@@ -59,7 +59,8 @@ export const summarizeSessionUsage = (
 	messages: readonly ConversationMessage[],
 	fallbackModel: ChatModelSelection,
 	table: ModelPricingTable,
-	compactions: readonly ConversationCompaction[] = []
+	compactions: readonly ConversationCompaction[] = [],
+	contextTokensOverride?: number
 ): SessionUsageSummary | null => {
 	const messageUsage = collectMessageUsage(messages);
 	const latestCompaction = findLatestCompaction(compactions);
@@ -71,7 +72,8 @@ export const summarizeSessionUsage = (
 				);
 	const useCompactionContext =
 		latestCompaction !== null &&
-		(messageUsage.lastUsage === null ||
+		(contextTokensOverride !== undefined ||
+			messageUsage.lastUsage === null ||
 			messageUsage.lastUsageIndex <= compactionThroughIndex);
 	if (messageUsage.lastUsage === null && !useCompactionContext) {
 		return null;
@@ -84,7 +86,7 @@ export const summarizeSessionUsage = (
 		resolveModelPricing(table, selection)?.contextLimit ?? null;
 	let contextTokens = 0;
 	if (useCompactionContext && latestCompaction !== null) {
-		contextTokens = latestCompaction.tokensAfter;
+		contextTokens = contextTokensOverride ?? latestCompaction.tokensAfter;
 	} else if (messageUsage.lastUsage) {
 		contextTokens = getModelContextTokens(messageUsage.lastUsage);
 	}

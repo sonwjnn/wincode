@@ -256,13 +256,49 @@ test("repeated compaction passes the prior summary and only the new compacted sp
 	);
 });
 
+test("rejects compaction when its projected context is larger", async () => {
+	const store = makeStore();
+	const compaction = createConversationCompaction({
+		store,
+		summaryGenerator: async () => ({ text: "summary" }),
+		estimateTokens: (messages) => {
+			if (messages.some(({ id }) => id.startsWith("compaction:"))) {
+				return 9000;
+			}
+			return messages.at(-1)?.parts.length === 1 ? 1 : 6200;
+		},
+	});
+
+	await expect(
+		compaction.compact({
+			conversation: {
+				messages: [
+					message("u1", "user", "question"),
+					{
+						...message("a1", "assistant", "answer"),
+						parts: [
+							{ text: "first", type: "text" },
+							{ text: "second", type: "text" },
+						],
+					},
+				],
+				sessionId: "session-expanding",
+			},
+			model,
+			settings,
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({ code: "not-needed" });
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+});
+
 test("summary failure and cancellation do not append durable state", async () => {
 	const store = makeStore();
 	const summaryGenerator = mock(async ({ signal }: SummaryGeneratorInput) => {
 		if (signal?.aborted) {
 			throw new Error("aborted");
 		}
-		throw new Error("provider failed");
+		throw Object.assign(new Error("Unauthorized"), { statusCode: 401 });
 	});
 	const compaction = createConversationCompaction({
 		store,
@@ -286,7 +322,11 @@ test("summary failure and cancellation do not append durable state", async () =>
 			settings,
 			trigger: "manual",
 		})
-	).rejects.toMatchObject({ code: "summary-failed" });
+	).rejects.toMatchObject({
+		code: "summary-failed",
+		message:
+			"Compaction summary generation failed: Model authentication failed.",
+	});
 	expect(store.appendCompaction).not.toHaveBeenCalled();
 
 	const controller = new AbortController();

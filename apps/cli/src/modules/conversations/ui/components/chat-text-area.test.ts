@@ -76,7 +76,7 @@ describe("ChatTextArea", () => {
 		expect(menuSource).toContain('event.scroll?.direction === "down"');
 	});
 
-	test("does not bind shift tab to model cycling", async () => {
+	test("binds shift tab to variant cycling", async () => {
 		const [textAreaSource, promptConfigSource] = await Promise.all([
 			readFile(new URL("./chat-text-area.tsx", import.meta.url), "utf8"),
 			readFile(
@@ -88,8 +88,9 @@ describe("ChatTextArea", () => {
 			),
 		]);
 
-		expect(textAreaSource).not.toContain("cycleModel");
-		expect(promptConfigSource).not.toContain("cycleModel");
+		expect(textAreaSource).toContain("cycleVariant");
+		expect(textAreaSource).toContain("actions.onTab(key.shift)");
+		expect(promptConfigSource).toContain("cycleVariant");
 	});
 
 	test("syncs textarea text only for programmatic edits", async () => {

@@ -1,5 +1,6 @@
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
+import type { AgentId } from "@wincode/agent-core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ConversationMessage } from "@/modules/conversations/message";
 import { useModelPricing } from "@/modules/model-pricing";
@@ -32,13 +33,16 @@ import {
 	resolveRetryMessageId,
 } from "./chat-turns";
 import { CompactionDivider } from "./compaction-divider";
+import { CompactionStatus } from "./compaction-status";
 import { SessionUsageBar } from "./session-usage-bar";
 
 type ChatShellProps = {
 	activeMessages?: readonly ConversationMessage[];
 	compactions?: readonly ConversationCompaction[];
+	contextTokensOverride?: number;
 	error?: unknown;
 	isBusy: boolean;
+	isCompacting: boolean;
 	isInterruptArmed: boolean;
 	messages: ConversationMessage[];
 	onApproval?: (id: string, outcome: ApprovalOutcome) => void;
@@ -51,11 +55,65 @@ type ChatShellProps = {
 	) => boolean | Promise<boolean> | undefined;
 	viewState?: ConversationViewState;
 };
+function ActivityFooter({
+	agent,
+	isCompacting,
+	isInterruptArmed,
+	viewState,
+}: {
+	agent: AgentId;
+	isCompacting: boolean;
+	isInterruptArmed: boolean;
+	viewState?: ConversationViewState;
+}) {
+	const { colors } = useTheme();
+	const agentColor = getAgentColor(colors, agent);
+	return (
+		<>
+			<ProgressBar agent={agent} />
+			{isCompacting ? (
+				<text>
+					<span fg={colors.textMuted}>Compacting context · </span>
+					<span fg={agentColor}>Esc</span>
+					<span fg={colors.textMuted}> cancel</span>
+				</text>
+			) : (
+				<>
+					{viewState?.delegation ? (
+						<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+							Subagent {viewState.turnId}
+						</text>
+					) : null}
+					<text>
+						<span fg={agentColor}>Esc</span>
+						<span fg={colors.textMuted}>
+							{isInterruptArmed ? " again to interrupt" : " interrupt"}
+						</span>
+					</text>
+				</>
+			)}
+		</>
+	);
+}
+const findNewestCompaction = (
+	compactions: readonly ConversationCompaction[]
+): ConversationCompaction | undefined => {
+	let newest: ConversationCompaction | undefined;
+	for (const compaction of compactions) {
+		if (newest === undefined || compaction.sequence > newest.sequence) {
+			newest = compaction;
+		}
+	}
+	return newest;
+};
+
 export function ChatShell({
 	activeMessages,
 	compactions = [],
+	contextTokensOverride,
 	error,
 	isBusy,
+	isCompacting,
 	isInterruptArmed,
 	messages,
 	onApproval,
@@ -71,7 +129,6 @@ export function ChatShell({
 	const [scrollRequest, setScrollRequest] = useState(0);
 	const { agent, model } = usePromptConfig();
 	const { colors } = useTheme();
-	const agentColor = getAgentColor(colors, agent);
 	const { table } = useModelPricing();
 	const hasPendingApproval = useApprovalPanels().entries.some(
 		(entry) => entry.resolution === undefined
@@ -79,8 +136,19 @@ export function ChatShell({
 	const displayMessages = messages.filter(
 		(message) => !isCompactionSummaryMessage(message)
 	);
+	const liveCompaction =
+		contextTokensOverride === undefined
+			? undefined
+			: findNewestCompaction(compactions);
+	const historicalCompactions =
+		liveCompaction === undefined
+			? compactions
+			: compactions.filter(({ id }) => id !== liveCompaction.id);
 	const turns = groupMessagesByConversationTurn(displayMessages);
-	const timeline = buildConversationTimeline(displayMessages, compactions);
+	const timeline = buildConversationTimeline(
+		displayMessages,
+		historicalCompactions
+	);
 	const footerMessages = resolveConversationTurnFooterMessages(turns);
 	const retryableMessages = activeMessages ?? displayMessages;
 	const latestRetryMessageId = resolveRetryMessageId(displayMessages);
@@ -90,8 +158,15 @@ export function ChatShell({
 		retryableMessages.some(({ id }) => id === latestRetryMessageId) &&
 		onRetry !== undefined;
 	const usage = useMemo(
-		() => summarizeSessionUsage(displayMessages, model, table, compactions),
-		[compactions, displayMessages, model, table]
+		() =>
+			summarizeSessionUsage(
+				displayMessages,
+				model,
+				table,
+				compactions,
+				contextTokensOverride
+			),
+		[compactions, contextTokensOverride, displayMessages, model, table]
 	);
 	useEffect(() => {
 		if (scrollRequest === 0) {
@@ -182,6 +257,8 @@ export function ChatShell({
 							);
 						})
 					)}
+					{liveCompaction ? <CompactionDivider entry={liveCompaction} /> : null}
+					{isCompacting ? <CompactionStatus agent={agent} /> : null}
 					{error ? <ErrorMessage error={error} /> : null}
 				</box>
 			</scrollbox>
@@ -226,25 +303,12 @@ export function ChatShell({
 								gap={2}
 							>
 								{isBusy ? (
-									<>
-										<ProgressBar agent={agent} />
-										{viewState?.delegation ? (
-											<text
-												attributes={TextAttributes.DIM}
-												fg={colors.textMuted}
-											>
-												Subagent {viewState.turnId}
-											</text>
-										) : null}
-										<text>
-											<span fg={agentColor}>Esc</span>
-											<span fg={colors.textMuted}>
-												{isInterruptArmed
-													? " again to interrupt"
-													: " interrupt"}
-											</span>
-										</text>
-									</>
+									<ActivityFooter
+										agent={agent}
+										isCompacting={isCompacting}
+										isInterruptArmed={isInterruptArmed}
+										viewState={viewState}
+									/>
 								) : (
 									<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 										{process.cwd()}
@@ -253,7 +317,12 @@ export function ChatShell({
 							</box>
 
 							<box flexDirection="row" flexShrink={0} gap={2} marginLeft="auto">
-								{usage ? <SessionUsageBar summary={usage} /> : null}
+								{usage ? (
+									<SessionUsageBar
+										isRefreshing={isCompacting}
+										summary={usage}
+									/>
+								) : null}
 								<box flexDirection="row" flexShrink={0} gap={1}>
 									<text fg={colors.text}>tab</text>
 									<text attributes={TextAttributes.DIM} fg={colors.textMuted}>

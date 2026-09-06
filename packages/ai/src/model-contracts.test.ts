@@ -302,4 +302,12 @@ describe("focused model contracts", () => {
 			normalizeModelFailure({ message: "unauthorized", statusCode: 401 }).code
 		).toBe("authentication");
 	});
+
+	test("unwraps stream error envelopes before classifying failures", () => {
+		expect(
+			normalizeModelFailure({
+				error: { message: "bad request", statusCode: 400 },
+			}).code
+		).toBe("invalid-request");
+	});
 });

@@ -13,6 +13,7 @@ import type {
 	ToolApprovalActions,
 	ToolApprovalRequest,
 } from "@/shared/providers/approval/types";
+import type { ConversationCompaction } from "../../compaction";
 
 const { testRender } = await import("@opentui/react/test-utils");
 const {
@@ -79,6 +80,7 @@ type EditToolPart = Extract<
 
 /** Trims the border, padding, and trailing whitespace from a captured cell row. */
 const TRIM_CELL_SUFFIX_REGEX = /[│ ].*$/;
+const ACTIVE_PROGRESS_REGEX = /■+/u;
 const PROGRESS_BAR_REGEX = /[■⬝]{12}/u;
 
 const shellPart = (overrides: Partial<ShellToolPart> = {}): ShellToolPart =>
@@ -101,6 +103,25 @@ const userMessage = (id: string): ConversationMessage => ({
 	parts: [{ text: id, type: "text" }],
 	role: "user",
 });
+const completedCompaction = (): ConversationCompaction => ({
+	completedAt: new Date("2026-09-06T09:06:25.000Z"),
+	createdAt: new Date("2026-09-06T09:06:25.000Z"),
+	firstKeptUiMessageId: "user-2",
+	id: "compaction-1",
+	sequence: 1,
+	sessionId: "session-1",
+	summarizationModel: { modelId: "gpt-5.4-mini", providerId: "openai" },
+	summarizationVariant: "high",
+	summary: {
+		coveredMessageIds: ["user-1", "assistant-1"],
+		formatVersion: 1,
+		text: "Durable summary",
+	},
+	throughMessageUiId: "assistant-1",
+	tokensAfter: 4883,
+	tokensBefore: 7336,
+	trigger: "manual",
+});
 
 const lines = (prefix: string, count: number): string =>
 	Array.from({ length: count }, (_, index) => `${prefix} ${index + 1}`).join(
@@ -112,6 +133,9 @@ type ChatShellProbeHandle = {
 		request: ToolApprovalRequest,
 		actions: ToolApprovalActions
 	) => string;
+	setCompactions: (compactions: ConversationCompaction[]) => void;
+	setCompacting: (isCompacting: boolean) => void;
+	setContextTokensOverride: (tokens: number | undefined) => void;
 	setMessages: (messages: ConversationMessage[]) => void;
 };
 
@@ -123,31 +147,51 @@ const buildTestRouter = () =>
 
 type ChatShellProbeProps = {
 	holder: { current: ChatShellProbeHandle | null };
+	initialCompactions?: ConversationCompaction[];
+	initialContextTokensOverride?: number;
 	initialMessages: ConversationMessage[];
 	isBusy?: boolean;
+	isCompacting?: boolean;
 	isInterruptArmed?: boolean;
 	onRetry?: (messageId: string) => void;
 };
 
 function ChatShellProbe({
 	holder,
+	initialCompactions = [],
+	initialContextTokensOverride,
 	initialMessages,
 	isBusy = false,
+	isCompacting: initialIsCompacting = false,
 	isInterruptArmed = false,
 	onRetry,
 }: ChatShellProbeProps) {
 	const { add: addApproval } = useApprovalPanels();
+	const [compactions, setCompactions] = useState(initialCompactions);
+	const [contextTokensOverride, setContextTokensOverride] = useState(
+		initialContextTokensOverride
+	);
+	const [isCompacting, setCompacting] = useState(initialIsCompacting);
 	const [messages, setMessages] = useState(initialMessages);
 	useEffect(() => {
-		holder.current = { addApproval, setMessages };
+		holder.current = {
+			addApproval,
+			setCompactions,
+			setCompacting,
+			setContextTokensOverride,
+			setMessages,
+		};
 		return () => {
 			holder.current = null;
 		};
 	}, [addApproval, holder]);
 	return (
 		<ChatShell
+			compactions={compactions}
+			contextTokensOverride={contextTokensOverride}
 			error={undefined}
-			isBusy={isBusy}
+			isBusy={isBusy || isCompacting}
+			isCompacting={isCompacting}
 			isInterruptArmed={isInterruptArmed}
 			messages={messages}
 			onRetry={onRetry}
@@ -164,7 +208,10 @@ type ChatShellSetup = {
 type ChatShellRenderOptions = {
 	height: number;
 	width: number;
+	initialCompactions?: ConversationCompaction[];
+	initialContextTokensOverride?: number;
 	isBusy?: boolean;
+	isCompacting?: boolean;
 	isInterruptArmed?: boolean;
 	onRetry?: (messageId: string) => void;
 };
@@ -174,7 +221,10 @@ const renderChatShell = async (
 	{
 		height,
 		width,
+		initialCompactions = [],
+		initialContextTokensOverride,
 		isBusy = false,
+		isCompacting = false,
 		isInterruptArmed = false,
 		onRetry,
 	}: ChatShellRenderOptions
@@ -211,8 +261,13 @@ const renderChatShell = async (
 														<RouterContextProvider router={router}>
 															<ChatShellProbe
 																holder={holder}
+																initialCompactions={initialCompactions}
+																initialContextTokensOverride={
+																	initialContextTokensOverride
+																}
 																initialMessages={initialMessages}
 																isBusy={isBusy}
+																isCompacting={isCompacting}
 																isInterruptArmed={isInterruptArmed}
 																onRetry={onRetry}
 															/>
@@ -496,6 +551,85 @@ describe("ChatShell activity footer", () => {
 
 			expect(trailSpans.length).toBeGreaterThan(2);
 			expect(trailColors.size).toBeGreaterThan(2);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+	test("shows compacting activity then refreshes the token split", async () => {
+		const messages: ConversationMessage[] = [
+			userMessage("user-1"),
+			{
+				...assistantMessage(
+					[{ text: "assistant-1", type: "text" }],
+					"assistant-1"
+				),
+				metadata: {
+					model: { modelId: "gpt-5.4-mini", providerId: "openai" },
+					usage: { inputTokens: 7336, outputTokens: 0 },
+				},
+			},
+			userMessage("user-2"),
+		];
+		const { holder, setup } = await renderChatShell(messages, {
+			height: 16,
+			isCompacting: true,
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const loadingFrame = setup.captureCharFrame();
+			expect(loadingFrame).toContain("Compacting context... (esc to cancel)");
+			expect(loadingFrame).toContain("Compacting context · Esc cancel");
+			expect(loadingFrame).toContain("Updating context…");
+			expect(loadingFrame).toMatch(PROGRESS_BAR_REGEX);
+
+			const { promise: progressDelay, resolve: resolveProgressDelay } =
+				Promise.withResolvers<void>();
+			setTimeout(resolveProgressDelay, 2000);
+			await progressDelay;
+			await setup.renderOnce();
+			expect(setup.captureCharFrame()).toMatch(ACTIVE_PROGRESS_REGEX);
+
+			holder.current?.setCompactions([completedCompaction()]);
+			holder.current?.setContextTokensOverride(4883);
+			holder.current?.setCompacting(false);
+			await flushUi(setup);
+			const completedFrame = setup.captureCharFrame();
+			expect(completedFrame).toContain("Compacted (manual) · 7.3K→4.9K tokens");
+			expect(completedFrame).toContain("4.9K");
+			expect(completedFrame).not.toContain("Updating context…");
+			expect(completedFrame).not.toContain("Compacting context");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+	test("keeps a newly completed divider at the bottom of a long transcript", async () => {
+		const messages: ConversationMessage[] = [
+			userMessage("user-1"),
+			assistantMessage([{ text: "assistant-1", type: "text" }], "assistant-1"),
+		];
+		for (let index = 2; index <= 20; index += 1) {
+			messages.push(
+				userMessage(`user-${index}`),
+				assistantMessage(
+					[{ text: `assistant-${index}`, type: "text" }],
+					`assistant-${index}`
+				)
+			);
+		}
+		const { setup } = await renderChatShell(messages, {
+			height: 12,
+			initialCompactions: [completedCompaction()],
+			initialContextTokensOverride: 4883,
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			expect(setup.captureCharFrame()).toContain(
+				"Compacted (manual) · 7.3K→4.9K tokens"
+			);
 		} finally {
 			setup.renderer.destroy();
 		}

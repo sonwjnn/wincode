@@ -1,3 +1,4 @@
+import { getModelFailureMessage } from "@wincode/ai/model-failures";
 import { getModelContextTokens } from "@wincode/ai/model-usage";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { isSkillToolPart, sanitizeSkillToolPart } from "@wincode/skills";
@@ -806,9 +807,13 @@ const generateCompactionSummary = async (
 				{ cause: error }
 			);
 		}
+		const failureMessage = getModelFailureMessage(error, {
+			modelId: input.model.modelId,
+			providerId: input.model.providerId,
+		});
 		throw new ConversationCompactionError(
 			"summary-failed",
-			"Compaction summary generation failed.",
+			`Compaction summary generation failed: ${failureMessage}`,
 			{ cause: error }
 		);
 	}
@@ -886,6 +891,12 @@ export const createConversationCompaction = ({
 			trigger,
 			variant,
 		});
+		if (entryInput.tokensAfter >= entryInput.tokensBefore) {
+			throw new ConversationCompactionError(
+				"not-needed",
+				`Compaction would not reduce context (${entryInput.tokensBefore} estimated tokens before, ${entryInput.tokensAfter} after).`
+			);
+		}
 		if (
 			settings.thresholdTokens !== null &&
 			entryInput.tokensAfter > settings.thresholdTokens

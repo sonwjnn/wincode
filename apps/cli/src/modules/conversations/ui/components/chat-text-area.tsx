@@ -134,7 +134,7 @@ export function ChatTextArea({
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
 	showCompactCommand = true,
 }: ChatTextAreaProps) {
-	const { agent, cycleAgent, model } = usePromptConfig();
+	const { agent, cycleAgent, cycleVariant, model } = usePromptConfig();
 	const supportedModel = findSupportedChatModelSelection(model);
 	const registry = useAgentRegistry();
 	const hideVariants =
@@ -244,7 +244,10 @@ export function ChatTextArea({
 		hideVariants,
 		onError: handleSubmitError,
 		onSubmit,
-		onTab: () => cycleAgent(registry?.selectableAgents ?? builtInAgents),
+		onTab: (shift) =>
+			shift
+				? cycleVariant()
+				: cycleAgent(registry?.selectableAgents ?? builtInAgents),
 		sessionPromptHistory,
 	});
 	const commandEscapeRef = useLatest(actions.onEscape);
@@ -905,7 +908,7 @@ export function ChatTextArea({
 
 		if (key.name === "tab") {
 			key.preventDefault();
-			actions.onTab();
+			actions.onTab(key.shift);
 		}
 	});
 

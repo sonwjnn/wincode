@@ -293,18 +293,8 @@ const resolveFooterItems = (
 
 	const model = metadata.model;
 	if (model) {
-		const {
-			label,
-			// providerId
-		} = formatModel(model);
+		const { label } = formatModel(model);
 		items.push({ color: colors.textMuted, label });
-		// if (providerId) {
-		// 	items.push({
-		// 		color: colors.textMuted,
-		// 		label: connectionProviderDisplayNames[providerId],
-		// 		separator: "space",
-		// 	});
-		// }
 	}
 
 	if (metadata.responseTimeMs !== undefined) {
@@ -620,7 +610,9 @@ export function BotMessageContent({
 	parts: ConversationMessage["parts"];
 }) {
 	const { colors } = useTheme();
-	const groups = groupConsecutiveParts(parts);
+	const groups = groupConsecutiveParts(parts).filter(
+		(group) => group.type !== "step-start"
+	);
 
 	return (
 		<box alignItems="center" width="100%">

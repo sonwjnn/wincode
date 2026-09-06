@@ -1107,6 +1107,7 @@ describe("BotMessageContent", () => {
 
 		expect(frame).toContain("✗ failed [redacted]");
 		expect(frame).not.toContain("hidden-error");
+
 		expect(frame).not.toContain("failed\n");
 	});
 
@@ -1123,6 +1124,19 @@ describe("BotMessageContent", () => {
 
 		expect(frame.match(/same thought/g)).toHaveLength(2);
 		expect(frame.match(/same answer/g)).toHaveLength(2);
+	});
+
+	test("renders thinking after a step starts before answer text arrives", async () => {
+		const frame = await renderFrame(
+			[
+				{ type: "step-start" },
+				{ text: "The model is still thinking.", type: "reasoning" },
+			],
+			4
+		);
+
+		expect(frame).toContain("Thinking:");
+		expect(frame).toContain("The model is still thinking.");
 	});
 
 	test("renders repeated tool call ids", async () => {
