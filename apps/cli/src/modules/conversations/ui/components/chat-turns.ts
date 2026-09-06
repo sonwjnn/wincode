@@ -1,4 +1,8 @@
 import { normalizeChatModelSelection } from "@wincode/ai/models";
+import {
+	getConversationAttemptMessages,
+	hasCompletedToolArtifact,
+} from "@/modules/conversations/conversation-retry";
 import type { ConversationMessage } from "@/modules/conversations/message";
 
 export type ConversationTurn = {
@@ -80,19 +84,63 @@ export const groupMessagesByConversationTurn = (
 	messages: ConversationMessage[]
 ): ConversationTurn[] => {
 	const turns: ConversationTurn[] = [];
+	const turnsByUserMessageId = new Map<string, ConversationTurn>();
 	let currentTurn: ConversationTurn | null = null;
 
 	for (const message of messages) {
 		if (message.role === "user" || currentTurn === null) {
 			currentTurn = { id: message.id, messages: [message] };
 			turns.push(currentTurn);
+			if (message.role === "user") {
+				turnsByUserMessageId.set(message.id, currentTurn);
+			}
 			continue;
 		}
 
-		currentTurn.messages.push(message);
+		const sourceTurn =
+			message.metadata?.sourceUserMessageId === undefined
+				? undefined
+				: turnsByUserMessageId.get(message.metadata.sourceUserMessageId);
+		(sourceTurn ?? currentTurn).messages.push(message);
 	}
 
 	return turns;
+};
+const canRetryPrimaryUser = (
+	messages: readonly ConversationMessage[],
+	userIndex: number
+): boolean => {
+	const attemptMessages = getConversationAttemptMessages(messages, userIndex);
+	if (hasCompletedToolArtifact(attemptMessages)) {
+		return false;
+	}
+	const latestAssistant = attemptMessages.findLast(
+		(message) => message.role === "assistant"
+	);
+	return (
+		latestAssistant === undefined ||
+		latestAssistant.metadata?.interrupted === true ||
+		latestAssistant.metadata?.terminalOutcome !== undefined
+	);
+};
+
+/**
+ * Returns the latest logical primary user message whose attempt can be retried.
+ * An attempt ends at the next primary user; completed Tool Calls suppress replay
+ * because repeating them can duplicate side effects. Persisted failure outcomes
+ * remain explicitly retryable.
+ */
+export const resolveRetryMessageId = (
+	messages: readonly ConversationMessage[]
+): string | undefined => {
+	const primaryMessages = messages.filter(
+		({ id }) => !id.startsWith("delegated-turn:")
+	);
+	const userIndex = primaryMessages.findLastIndex(
+		(message, index) =>
+			message.role === "user" && canRetryPrimaryUser(primaryMessages, index)
+	);
+	return userIndex === -1 ? undefined : primaryMessages[userIndex]?.id;
 };
 
 export const resolveConversationTurnFooterMessages = (

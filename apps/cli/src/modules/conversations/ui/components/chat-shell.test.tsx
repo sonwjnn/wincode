@@ -96,6 +96,12 @@ const assistantMessage = (
 	id = "assistant-1"
 ): ConversationMessage => ({ id, parts, role: "assistant" });
 
+const userMessage = (id: string): ConversationMessage => ({
+	id,
+	parts: [{ text: id, type: "text" }],
+	role: "user",
+});
+
 const lines = (prefix: string, count: number): string =>
 	Array.from({ length: count }, (_, index) => `${prefix} ${index + 1}`).join(
 		"\n"
@@ -120,6 +126,7 @@ type ChatShellProbeProps = {
 	initialMessages: ConversationMessage[];
 	isBusy?: boolean;
 	isInterruptArmed?: boolean;
+	onRetry?: (messageId: string) => void;
 };
 
 function ChatShellProbe({
@@ -127,6 +134,7 @@ function ChatShellProbe({
 	initialMessages,
 	isBusy = false,
 	isInterruptArmed = false,
+	onRetry,
 }: ChatShellProbeProps) {
 	const { add: addApproval } = useApprovalPanels();
 	const [messages, setMessages] = useState(initialMessages);
@@ -142,6 +150,7 @@ function ChatShellProbe({
 			isBusy={isBusy}
 			isInterruptArmed={isInterruptArmed}
 			messages={messages}
+			onRetry={onRetry}
 			onSubmit={() => true}
 			promptHistory={[]}
 		/>
@@ -152,12 +161,12 @@ type ChatShellSetup = {
 	holder: { current: ChatShellProbeHandle | null };
 	setup: Awaited<ReturnType<typeof testRender>>;
 };
-
 type ChatShellRenderOptions = {
 	height: number;
 	width: number;
 	isBusy?: boolean;
 	isInterruptArmed?: boolean;
+	onRetry?: (messageId: string) => void;
 };
 
 const renderChatShell = async (
@@ -167,6 +176,7 @@ const renderChatShell = async (
 		width,
 		isBusy = false,
 		isInterruptArmed = false,
+		onRetry,
 	}: ChatShellRenderOptions
 ): Promise<ChatShellSetup> => {
 	const configStore = createConfigStore();
@@ -204,6 +214,7 @@ const renderChatShell = async (
 																initialMessages={initialMessages}
 																isBusy={isBusy}
 																isInterruptArmed={isInterruptArmed}
+																onRetry={onRetry}
 															/>
 														</RouterContextProvider>
 													</McpProvider>
@@ -329,6 +340,39 @@ const assertSummaryDiffClipping = async ({
 		setup.renderer.destroy();
 	}
 };
+describe("ChatShell retry controls", () => {
+	test("keeps older unanswered turns retryable and keyboard activatable", async () => {
+		const retries: string[] = [];
+		const { setup } = await renderChatShell(
+			[
+				userMessage("user-1"),
+				userMessage("user-2"),
+				assistantMessage([{ text: "done", type: "text" }], "assistant-2"),
+			],
+			{
+				height: 30,
+				onRetry: (messageId) => {
+					retries.push(messageId);
+				},
+				width: 100,
+			}
+		);
+
+		try {
+			await flushUi(setup);
+			expect(setup.captureCharFrame().match(/Retry/gu)).toHaveLength(1);
+			const retryControl =
+				setup.renderer.root.findDescendantById("retry-user-1");
+			expect(retryControl?.focusable).toBe(true);
+			retryControl?.focus();
+			setup.mockInput.pressEnter();
+			await flushUi(setup);
+			expect(retries).toEqual(["user-1"]);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+});
 
 describe("ChatShell approval dock", () => {
 	test("replaces the composer with pending controls and leaves one audit line", async () => {

@@ -74,6 +74,7 @@ export type {
 	ConversationMessagePart,
 	ConversationMessageRecord,
 	ConversationRecord,
+	ConversationRecordOutcome,
 	ConversationSkillActivationRecord,
 	ConversationToolCallPart,
 	ToolCallOutcomeRecord,

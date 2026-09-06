@@ -1,49 +1,157 @@
+import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
+import { useRouter } from "@tanstack/react-router";
+import { type AgentId, createAgentTurnId } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
 	type ModelVariant,
 	normalizeChatModelSelection,
 	normalizeModelVariant,
 } from "@wincode/ai/models";
+import { createSkillSnapshot } from "@wincode/skills";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+	type AgentRegistry,
 	resolveActiveAgentId,
 	resolveEffectiveAgentSelection,
 	useAgentRegistry,
 } from "@/modules/agents";
-import type { ConversationMessage } from "@/modules/conversations/message";
+import {
+	type ConversationMessage,
+	createConversationUserMessage,
+} from "@/modules/conversations/message";
+import { resolveFileMentionParts } from "@/modules/file-mentions";
+import { McpActiveIndicator } from "@/modules/mcp";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useSettingsHubDialog } from "@/modules/settings";
+import { APP_VERSION } from "@/shared/app-info";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
 import type { ApprovalOutcome } from "@/shared/providers/approval/types";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
+import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import {
 	type ConversationCompaction,
 	isSettingsCommand,
 	parseCompactCommand,
 } from "../../compaction";
+import type { ConversationSendInput } from "../../conversation-operation";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
 import { useChat } from "../../hooks/use-chat";
-import { resolveConversationSelection } from "../../selection";
-import type { ChatPromptSubmission } from "../../utils";
-import { shouldAutoStartAssistantTurn } from "../../utils";
+import {
+	type ResolvedConversationSelection,
+	resolveConversationSelection,
+	resolveLastUsedConversationSelection,
+} from "../../selection";
+import { projectConversationRecords } from "../../storage/conversation-record";
+import { getConversationStore } from "../../storage/get-conversation-store";
+import { type ChatPromptSubmission, getMostRecentSession } from "../../utils";
+import { AsciiArt } from "../components/ascii-art";
 import { ChatShell } from "../components/chat-shell";
+import { ChatTextArea } from "../components/chat-text-area";
+import { WorkspacePath } from "../components/workspace-path";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
 
 const INTERRUPT_CONFIRMATION_TIMEOUT_MS = 3000;
 
-type ChatScreenProps = {
-	autoStart: boolean;
+export type SessionInitialSubmission = {
+	messageId: string;
+};
+
+type ChatSessionViewProps = {
+	mode: "session";
 	initialActiveMessages?: ConversationMessage[];
 	initialCompactions?: ConversationCompaction[];
 	initialMessages: ConversationMessage[];
 	initialModel?: ChatModelSelection;
+	initialSubmission?: SessionInitialSubmission;
 	initialVariant?: ModelVariant;
 	sessionId: string;
 	sessionTitle: string;
 };
+
+type ChatHomeViewProps = {
+	mode: "home";
+};
+
+type ChatViewProps = ChatHomeViewProps | ChatSessionViewProps;
+type SessionSendInput = Pick<
+	ConversationSendInput,
+	| "agent"
+	| "conversationModel"
+	| "conversationVariant"
+	| "model"
+	| "resolvedAgent"
+	| "variant"
+>;
+
+type SessionSelectionInput = {
+	agent: AgentId;
+	initialMessage: ConversationMessage;
+	model: ChatModelSelection;
+	registry: AgentRegistry;
+	restoredConfig: ResolvedConversationSelection | null;
+	variant?: ModelVariant;
+};
+
+const resolveSessionSelection = ({
+	agent,
+	initialMessage,
+	model,
+	registry,
+	restoredConfig,
+	variant,
+}: SessionSelectionInput): SessionSendInput => {
+	const resolvedModel =
+		normalizeChatModelSelection(initialMessage.metadata?.model ?? model) ??
+		model;
+	const persistedVariant = normalizeModelVariant(
+		resolvedModel,
+		restoredConfig?.variant ?? initialMessage.metadata?.variant
+	);
+	const conversationModel = restoredConfig?.model ?? model;
+	const conversationVariant = restoredConfig?.variant ?? variant;
+	const persistedAgentId =
+		initialMessage.metadata?.agent ?? restoredConfig?.agent ?? agent;
+	const persistedAgentIsAvailable = registry.selectableAgents.some(
+		({ id, isAvailable }) => id === persistedAgentId && isAvailable
+	);
+	const effective = resolveEffectiveAgentSelection(
+		registry,
+		persistedAgentId,
+		persistedAgentIsAvailable ? resolvedModel : conversationModel,
+		persistedAgentIsAvailable ? persistedVariant : conversationVariant
+	);
+	return {
+		agent: effective.agent,
+		conversationModel,
+		conversationVariant,
+		model: effective.model,
+		resolvedAgent: effective.resolvedAgent,
+		variant: effective.variant,
+	};
+};
+
+type HomePromptReadiness = {
+	defaultAgentId: string | undefined;
+	initializedDefaultAgentId: string | undefined;
+	isCreatingSession: boolean;
+	isPromptConfigRestored: boolean;
+	registryReady: boolean;
+};
+
+export const canSubmitHomePrompt = ({
+	defaultAgentId,
+	initializedDefaultAgentId,
+	isCreatingSession,
+	isPromptConfigRestored,
+	registryReady,
+}: HomePromptReadiness): boolean =>
+	!isCreatingSession &&
+	isPromptConfigRestored &&
+	registryReady &&
+	initializedDefaultAgentId === defaultAgentId;
 
 export const hasChatPromptContent = ({
 	files,
@@ -52,16 +160,24 @@ export const hasChatPromptContent = ({
 }: ChatPromptSubmission): boolean =>
 	text.trim().length > 0 || files.length > 0 || skill !== undefined;
 
-export function ChatView({
-	autoStart,
+export function ChatView(props: ChatViewProps) {
+	if (props.mode === "home") {
+		return <HomeChatView />;
+	}
+	return <SessionChatView {...props} />;
+}
+
+function SessionChatView({
 	initialMessages,
 	initialActiveMessages = initialMessages,
 	initialCompactions = [],
 	initialModel,
+	initialSubmission,
 	initialVariant,
 	sessionId,
 	sessionTitle,
-}: ChatScreenProps) {
+}: ChatSessionViewProps) {
+	const router = useRouter();
 	const { agent, model, setAgent, setModel, setVariant, variant } =
 		usePromptConfig();
 	const settingsRuntime = useMemo(
@@ -88,6 +204,7 @@ export function ChatView({
 		ConversationMessage[] | null
 	>(null);
 	const {
+		activeMessages,
 		cancelCompaction,
 		catalogDiagnostic,
 		compact,
@@ -228,13 +345,6 @@ export function ChatView({
 		});
 	});
 
-	useEffect(
-		() => () => {
-			cancel();
-		},
-		[cancel]
-	);
-
 	useEffect(() => {
 		if (isBusy) {
 			return;
@@ -341,6 +451,34 @@ export function ChatView({
 		}
 		return true;
 	};
+	const retryMessage = async (messageId: string): Promise<void> => {
+		if (
+			isTurnBusy ||
+			isCompacting ||
+			registry === null ||
+			!isPromptConfigRestored
+		) {
+			return;
+		}
+		const initialMessage = messages.find(({ id }) => id === messageId);
+		if (initialMessage?.role !== "user") {
+			return;
+		}
+		const outcome = await send({
+			...resolveSessionSelection({
+				agent,
+				initialMessage,
+				model,
+				registry,
+				restoredConfig,
+				variant,
+			}),
+			messageId,
+		});
+		if (outcome.rejected) {
+			show({ message: outcome.reason, variant: "error" });
+		}
+	};
 	const routeApproval = (id: string, outcome: ApprovalOutcome): void => {
 		let controllerOutcome:
 			| { decision: "allow"; remember: boolean }
@@ -389,78 +527,77 @@ export function ChatView({
 	}, [catalogDiagnostic, show]);
 
 	useEffect(() => {
-		const lastInitialMessage = initialMessages.at(-1);
+		const submission = initialSubmission;
+		const initialMessage = submission
+			? initialMessages.find(({ id }) => id === submission.messageId)
+			: undefined;
 
 		if (
 			registry === null ||
 			!isPromptConfigRestored ||
-			!(
-				lastInitialMessage &&
-				shouldAutoStartAssistantTurn(autoStart, lastInitialMessage)
-			)
+			initialMessage === undefined ||
+			initialMessage.role !== "user"
 		) {
 			return;
 		}
 
-		if (submittedInitialMessageRef.current === lastInitialMessage.id) {
+		if (submittedInitialMessageRef.current === initialMessage.id) {
 			return;
 		}
 
-		submittedInitialMessageRef.current = lastInitialMessage.id;
-		const resolvedModel =
-			normalizeChatModelSelection(
-				lastInitialMessage.metadata?.model ?? model
-			) ?? model;
-		const persistedVariant = normalizeModelVariant(
-			resolvedModel,
-			restoredConfig?.variant ?? lastInitialMessage.metadata?.variant
-		);
+		submittedInitialMessageRef.current = initialMessage.id;
+		const startInitialTurn = async (): Promise<void> => {
+			await router.navigate({
+				params: { id: sessionId },
+				replace: true,
+				state: {},
+				to: "/sessions/$id",
+			});
+			const outcome = await send({
+				...resolveSessionSelection({
+					agent,
+					initialMessage,
+					model,
+					registry,
+					restoredConfig,
+					variant,
+				}),
+				messageId: initialMessage.id,
+			});
+			if (outcome.rejected) {
+				show({ message: outcome.reason, variant: "error" });
+			}
+		};
 
-		const conversationModel = restoredConfig?.model ?? model;
-		const conversationVariant = restoredConfig?.variant ?? variant;
-		const persistedAgentId =
-			lastInitialMessage.metadata?.agent ?? restoredConfig?.agent ?? agent;
-		const persistedAgentIsAvailable = registry.selectableAgents.some(
-			({ id, isAvailable }) => id === persistedAgentId && isAvailable
-		);
-		const effective = resolveEffectiveAgentSelection(
-			registry,
-			persistedAgentId,
-			persistedAgentIsAvailable ? resolvedModel : conversationModel,
-			persistedAgentIsAvailable ? persistedVariant : conversationVariant
-		);
-		send({
-			agent: effective.agent,
-			conversationModel,
-			conversationVariant,
-			messageId: lastInitialMessage.id,
-			model: effective.model,
-			resolvedAgent: effective.resolvedAgent,
-			variant: effective.variant,
-		})
-			.then((outcome) => {
-				if (outcome?.rejected) {
-					show({ message: outcome.reason, variant: "error" });
-				}
-			})
-			.catch(() => undefined);
+		startInitialTurn().catch((error: unknown) => {
+			show({
+				message:
+					error instanceof Error
+						? error.message
+						: "Could not start the Agent Turn.",
+				variant: "error",
+			});
+		});
 	}, [
 		agent,
-		autoStart,
 		initialMessages,
+		initialSubmission,
 		isPromptConfigRestored,
 		model,
 		registry,
 		restoredConfig,
+		router,
 		send,
-		variant,
+		sessionId,
 		show,
+		variant,
 	]);
 
 	return (
 		<box flexDirection="row" height="100%" width="100%">
 			<box flexGrow={1} height="100%" paddingX={1}>
 				<ChatShell
+					activeMessages={activeMessages}
 					compactions={compactions}
 					error={error}
 					isBusy={isBusy}
@@ -469,10 +606,233 @@ export function ChatView({
 					onApproval={routeApproval}
 					onCompact={executeCompactionCommand}
 					onOpenSettings={openSettings}
+					onRetry={retryMessage}
 					onSubmit={submitMessage}
 					promptHistory={promptHistory}
 					viewState={viewState}
 				/>
+			</box>
+		</box>
+	);
+}
+function HomeChatView() {
+	const router = useRouter();
+	const [_error, setError] = useState<string | null>(null);
+	const [isCreatingSession, setIsCreatingSession] = useState(false);
+	const [isPromptConfigRestored, setIsPromptConfigRestored] = useState(false);
+	const [initializedDefaultAgentId, setInitializedDefaultAgentId] = useState<
+		string | undefined
+	>();
+	const { agent, model, setAgent, setModel, setVariant, variant } =
+		usePromptConfig();
+	const openSettings = useSettingsHubDialog();
+	const { colors } = useTheme();
+	const { show } = useToast();
+	const registry = useAgentRegistry();
+	const defaultAgentId = registry?.defaultAgentId;
+
+	useEffect(() => {
+		if (defaultAgentId !== undefined) {
+			setAgent(defaultAgentId);
+			setInitializedDefaultAgentId(defaultAgentId);
+		}
+	}, [defaultAgentId, setAgent]);
+
+	useEffect(() => {
+		if (registry === null) {
+			setIsPromptConfigRestored(false);
+			return;
+		}
+		let ignore = false;
+		setIsPromptConfigRestored(false);
+
+		const restoreLatestSessionConfig = async () => {
+			try {
+				const store = getConversationStore();
+				const session = getMostRecentSession(await store.listSessions());
+				if (!session) {
+					return;
+				}
+
+				const selection = resolveLastUsedConversationSelection({
+					messages: projectConversationRecords(
+						await store.listConversationRecords(session.id)
+					),
+					resolveAgent: (agentId) => resolveActiveAgentId(registry, agentId),
+					sessionModel: session.model,
+					sessionVariant: session.variant,
+				});
+				if (ignore || !selection) {
+					return;
+				}
+				if (selection.agent !== undefined) {
+					setAgent(selection.agent);
+				}
+
+				setModel(selection.model);
+				setVariant(selection.variant);
+			} finally {
+				if (!ignore) {
+					setIsPromptConfigRestored(true);
+				}
+			}
+		};
+
+		restoreLatestSessionConfig().catch(() => undefined);
+
+		return () => {
+			ignore = true;
+		};
+	}, [registry, setAgent, setModel, setVariant]);
+
+	const handleSubmit = async ({ files, skill, text }: ChatPromptSubmission) => {
+		const prompt = text.trim();
+		if (!skill && files.length === 0) {
+			if (isSettingsCommand(prompt)) {
+				openSettings();
+				return true;
+			}
+			if (parseCompactCommand(prompt)) {
+				show({
+					message: "Compaction is unavailable without an active session.",
+					variant: "error",
+				});
+				return false;
+			}
+		}
+		if (
+			!canSubmitHomePrompt({
+				defaultAgentId,
+				initializedDefaultAgentId,
+				isCreatingSession,
+				isPromptConfigRestored,
+				registryReady: registry !== null,
+			})
+		) {
+			return false;
+		}
+
+		if (!(prompt || files.length > 0)) {
+			return false;
+		}
+
+		setError(null);
+		setIsCreatingSession(true);
+
+		try {
+			await createSession(prompt, files, skill);
+			return true;
+		} catch {
+			setError("Could not create chat session.");
+			return false;
+		} finally {
+			setIsCreatingSession(false);
+		}
+	};
+
+	const createSession = async (
+		input: string,
+		files: ChatPromptSubmission["files"],
+		skill: ChatPromptSubmission["skill"]
+	) => {
+		const fileMentions = await resolveFileMentionParts(input);
+		const effective = resolveEffectiveAgentSelection(
+			registry,
+			agent,
+			model,
+			variant
+		);
+		const initialMessage = createConversationUserMessage(
+			input,
+			{
+				agent: effective.agent,
+				model: effective.model,
+				variant: effective.variant,
+				...(skill ? { skill: createSkillSnapshot(skill, "explicit") } : {}),
+			},
+			fileMentions,
+			files
+		);
+		const store = getConversationStore();
+		const [externalized] = await store.externalizeAttachments(
+			[initialMessage],
+			undefined,
+			{ rejectInvalid: true }
+		);
+		const durableMessage = externalized ?? initialMessage;
+		const { id } = await store.createSession({
+			agent: effective.agent,
+			message: durableMessage,
+			model,
+			turnId: createAgentTurnId(),
+			variant,
+		});
+		await router.navigate({
+			params: { id },
+			state: (previous) => ({
+				...previous,
+				initialSubmission: { messageId: initialMessage.id },
+			}),
+			to: "/sessions/$id",
+		});
+	};
+
+	return (
+		<box flexDirection="column" height="100%" width="100%">
+			<box
+				alignItems="center"
+				flexGrow={1}
+				gap={2}
+				justifyContent="center"
+				position="relative"
+				width="100%"
+			>
+				<AsciiArt />
+				<box
+					flexDirection="column"
+					gap={1}
+					maxWidth={78}
+					paddingX={2}
+					width="100%"
+				>
+					<ChatTextArea
+						disabled={isCreatingSession}
+						onOpenSettings={openSettings}
+						onSubmit={handleSubmit}
+						showCompactCommand={false}
+					/>
+					<box
+						flexDirection="row"
+						flexShrink={0}
+						gap={2}
+						justifyContent="space-between"
+						width="100%"
+					>
+						<WorkspacePath />
+						<box flexDirection="row" flexShrink={0} gap={1}>
+							<text fg={colors.text}>tab</text>
+							<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+								agents
+							</text>
+						</box>
+					</box>
+				</box>
+			</box>
+
+			<box
+				alignItems="center"
+				flexDirection="row"
+				flexShrink={0}
+				gap={2}
+				justifyContent="space-between"
+				paddingBottom={1}
+				paddingX={2}
+				width="100%"
+			>
+				<McpActiveIndicator />
+				<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+					{`v${APP_VERSION}`}
+				</text>
 			</box>
 		</box>
 	);

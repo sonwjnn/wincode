@@ -2,9 +2,13 @@ import {
 	AGENT_TURN_INTERRUPTION_REASONS,
 	AgentInvariantError,
 	CONVERSATION_RECORD_VERSION,
+	type ConversationAttachmentReferencePart,
+	type ConversationFileMentionPart,
 	type ConversationMessageMetadataRecord,
+	type ConversationMessagePart,
 	type ConversationMessageRecord,
 	type ConversationRecord,
+	type ConversationRecordOutcome,
 	type ConversationToolCallPart,
 	isAgentTurnDelegation,
 	isAgentTurnMessageRecord,
@@ -27,8 +31,16 @@ import type {
 	ConversationPart,
 	ConversationToolPart,
 } from "../message";
-import { conversationMessageMetadataSchema } from "../message";
-import { attachmentReferenceToFilePart } from "./attachment-store";
+import {
+	conversationMessageMetadataSchema,
+	isConversationToolPart,
+	isFileMentionPart,
+	isTerminalConversationToolPart,
+} from "../message";
+import {
+	attachmentReferenceToFilePart,
+	getAttachmentReference,
+} from "./attachment-store";
 
 const hasText = (value: unknown): boolean =>
 	typeof value === "string" && value.length > 0;
@@ -96,7 +108,7 @@ const isUsage = (value: unknown): boolean => {
 const isFailure = (value: unknown): value is OperationalFailure =>
 	isOperationalFailure(value);
 
-const isOutcome = (value: unknown): boolean => {
+const isAgentTurnOutcome = (value: unknown): boolean => {
 	if (typeof value !== "object" || value === null) {
 		return false;
 	}
@@ -129,6 +141,23 @@ const isOutcome = (value: unknown): boolean => {
 		);
 	}
 	return false;
+};
+
+const isConversationRecordOutcome = (
+	value: unknown
+): value is ConversationRecordOutcome => {
+	if (typeof value !== "object" || value === null) {
+		return false;
+	}
+	const outcome = value as Record<string, unknown>;
+	if (outcome.kind === "user" || outcome.kind === "tool") {
+		return Object.keys(outcome).length === 1;
+	}
+	return (
+		outcome.kind === "assistant" &&
+		Object.keys(outcome).every((key) => key === "kind" || key === "terminal") &&
+		isAgentTurnOutcome(outcome.terminal)
+	);
 };
 
 export class ConversationRecordInvariantError extends AgentInvariantError {
@@ -174,16 +203,30 @@ export const getConversationRecordValidationError = (
 	if (!isRecordModel(record.model)) {
 		return "record model must name a provider and model id";
 	}
-	if (!isOutcome(record.outcome)) {
-		return "record outcome is not a valid terminal outcome";
+	if (!isConversationRecordOutcome(record.outcome)) {
+		return "record outcome is not a valid Conversation Record outcome";
 	}
 	if (
 		!(
 			Array.isArray(record.messages) &&
+			record.messages.length === 1 &&
 			record.messages.every(isAgentTurnMessageRecord)
 		)
 	) {
-		return "record messages must contain committed text or Tool Call parts";
+		return "record must contain one durable message";
+	}
+	const message = record.messages[0];
+	if (message === undefined) {
+		return "record must contain one durable message";
+	}
+	if (
+		(record.outcome.kind === "user" && message.role !== "user") ||
+		(record.outcome.kind === "assistant" && message.role !== "assistant") ||
+		(record.outcome.kind === "tool" &&
+			(message.role !== "assistant" ||
+				!message.parts.some(isConversationToolCallPart)))
+	) {
+		return "record outcome does not match its durable message";
 	}
 	return null;
 };
@@ -204,7 +247,7 @@ const modelSelectionForRecord = (
 };
 
 const metadataForRecord = (
-	record: ConversationRecord,
+	record: Pick<ConversationRecord, "agentId" | "model">,
 	metadata: ConversationMessageMetadataRecord | undefined
 ): ConversationMessageMetadata | undefined => {
 	let model = modelSelectionForRecord(record.model);
@@ -217,14 +260,14 @@ const metadataForRecord = (
 		...((metadata?.agent ?? record.agentId)
 			? { agent: metadata?.agent ?? record.agentId }
 			: {}),
-		...(metadata?.interrupted === undefined
-			? {}
-			: { interrupted: metadata.interrupted }),
 		...(model === undefined ? {} : { model }),
 		...(metadata?.responseTimeMs === undefined
 			? {}
 			: { responseTimeMs: metadata.responseTimeMs }),
 		...(metadata?.skill === undefined ? {} : { skill: metadata.skill }),
+		...(metadata?.sourceUserMessageId === undefined
+			? {}
+			: { sourceUserMessageId: metadata.sourceUserMessageId }),
 		...(metadata?.usage === undefined ? {} : { usage: metadata.usage }),
 		...(variant === undefined ? {} : { variant }),
 	});
@@ -312,7 +355,7 @@ const toConversationPart = (
 
 const toConversationMessage = (
 	message: ConversationMessageRecord,
-	record: ConversationRecord
+	record: Pick<ConversationRecord, "agentId" | "model">
 ): ConversationMessage => {
 	const metadata = metadataForRecord(record, message.metadata);
 	return {
@@ -322,79 +365,207 @@ const toConversationMessage = (
 		role: message.role,
 	};
 };
+export const projectConversationMessageRecords = (
+	messages: readonly ConversationMessageRecord[],
+	record: Pick<ConversationRecord, "agentId" | "model">
+): ConversationMessage[] =>
+	messages.map((message) => toConversationMessage(message, record));
+
+const toDurableMetadata = (
+	metadata: ConversationMessage["metadata"]
+): ConversationMessageMetadataRecord | undefined => {
+	if (metadata === undefined) {
+		return;
+	}
+	const skill = metadata.skill;
+	const sourceUserMessageId = metadata.sourceUserMessageId;
+	return {
+		...(metadata.agent === undefined ? {} : { agent: metadata.agent }),
+		...(metadata.model === undefined ? {} : { model: metadata.model }),
+		...(metadata.responseTimeMs === undefined
+			? {}
+			: { responseTimeMs: metadata.responseTimeMs }),
+		...(skill === undefined
+			? {}
+			: {
+					skill: {
+						arguments: skill.arguments,
+						contentHash: skill.contentHash,
+						name: skill.name,
+						source: skill.source ?? "explicit",
+					},
+				}),
+		...(sourceUserMessageId === undefined ? {} : { sourceUserMessageId }),
+		...(metadata.usage === undefined ? {} : { usage: metadata.usage }),
+		...(metadata.variant === undefined ? {} : { variant: metadata.variant }),
+	};
+};
+
+const toDurableConversationToolPart = (
+	part: ConversationToolPart
+): ConversationToolCallPart | undefined => {
+	if (!isTerminalConversationToolPart(part)) {
+		return;
+	}
+	const outcome =
+		part.state === "output-available"
+			? { kind: "success" as const, output: part.output }
+			: {
+					errorText: part.errorText ?? "Tool call denied.",
+					kind: "failure" as const,
+				};
+	return {
+		input: part.input,
+		outcome,
+		sequence: 0,
+		toolCallId: part.toolCallId,
+		toolName:
+			part.type === "dynamic-tool"
+				? part.toolName
+				: part.type.slice("tool-".length),
+		type: "tool-call",
+	};
+};
+
+const toDurableConversationPart = (
+	part: ConversationMessage["parts"][number]
+): ConversationMessagePart[] => {
+	if (part.type === "text") {
+		return [{ text: part.text, type: "text" }];
+	}
+	if (isFileMentionPart(part)) {
+		const mention: ConversationFileMentionPart = {
+			data: part.data,
+			...(part.id === undefined ? {} : { id: part.id }),
+			type: "file-mention",
+		};
+		return [mention];
+	}
+	const reference = getAttachmentReference(part);
+	if (reference !== null) {
+		const attachment: ConversationAttachmentReferencePart = {
+			attachmentId: reference.attachmentId,
+			available: reference.available,
+			byteLength: reference.byteLength,
+			filename: reference.filename,
+			...(reference.height === undefined ? {} : { height: reference.height }),
+			mediaType: reference.mediaType,
+			type: "attachment-reference",
+			...(reference.width === undefined ? {} : { width: reference.width }),
+		};
+		return [attachment];
+	}
+	if (isConversationToolPart(part)) {
+		const toolPart = toDurableConversationToolPart(part);
+		return toolPart === undefined ? [] : [toolPart];
+	}
+	return [];
+};
+export const buildUserConversationRecord = ({
+	agentId,
+	delegation,
+	message,
+	model,
+	turnId,
+	variant,
+}: {
+	agentId: string;
+	delegation?: ConversationRecord["delegation"];
+	message: ConversationMessage;
+	model: Pick<ConversationRecord["model"], "modelId" | "providerId">;
+	turnId: string;
+	variant?: ConversationRecord["model"]["variant"];
+}): ConversationRecord => {
+	const durableMessage = toDurableConversationMessageRecord(message);
+	if (durableMessage === undefined || durableMessage.role !== "user") {
+		throw new ConversationRecordInvariantError(
+			"User Conversation Record has no durable message."
+		);
+	}
+	return {
+		agentId,
+		...(delegation === undefined ? {} : { delegation }),
+		id: `record-${crypto.randomUUID()}`,
+		messages: [durableMessage],
+		model: {
+			modelId: model.modelId,
+			providerId: model.providerId,
+			...(variant === undefined ? {} : { variant }),
+		},
+		outcome: { kind: "user" },
+		turnId,
+		version: CONVERSATION_RECORD_VERSION,
+	};
+};
+
+export const toDurableConversationMessageRecord = (
+	message: ConversationMessage
+): ConversationMessageRecord | undefined => {
+	if (message.role !== "assistant" && message.role !== "user") {
+		return;
+	}
+	const parts = message.parts.flatMap(toDurableConversationPart);
+	if (parts.length === 0) {
+		return;
+	}
+	const metadata = toDurableMetadata(message.metadata);
+	return {
+		id: message.id,
+		...(metadata === undefined ? {} : { metadata }),
+		parts,
+		role: message.role,
+	};
+};
 
 const delegatedMessageId = (
 	record: ConversationRecord,
 	message: ConversationMessageRecord,
 	index: number
 ): string => `delegated-turn:${record.turnId}:${index}:${message.id}`;
-const projectTerminalOutcome = (
-	record: ConversationRecord,
-	messages: ConversationMessage[],
-	outcomeId: string
-): ConversationMessage[] => {
-	if (record.outcome.kind === "completed") {
-		return messages;
-	}
-	return [
-		...messages,
-		{
-			id: outcomeId,
-			metadata: { agent: record.agentId, interrupted: true },
-			parts: [
-				{
-					text: `${record.outcome.kind}: ${record.outcome.failure.message}`,
-					type: "text",
-				},
-			],
-			role: "assistant",
-		},
-	];
-};
 
-const projectDelegatedRecord = (
-	record: ConversationRecord
-): ConversationMessage[] => {
-	const messages = record.messages.flatMap((message, index) => {
+const projectRecord = (record: ConversationRecord): ConversationMessage[] =>
+	record.messages.flatMap((message, index) => {
 		if (message.id === "skill-context") {
 			return [];
 		}
 		const projected = toConversationMessage(message, record);
+		const terminalOutcome =
+			record.outcome.kind === "assistant" &&
+			record.outcome.terminal.kind !== "completed"
+				? record.outcome.terminal.kind
+				: undefined;
+		const projectedWithOutcome =
+			terminalOutcome === undefined
+				? projected
+				: {
+						...projected,
+						metadata: {
+							...(projected.metadata ?? {}),
+							terminalOutcome,
+						},
+					};
 		return [
-			{
-				...projected,
-				id: delegatedMessageId(record, message, index),
-			},
+			record.delegation === undefined
+				? projectedWithOutcome
+				: {
+						...projectedWithOutcome,
+						id: delegatedMessageId(record, message, index),
+					},
 		];
 	});
-	return projectTerminalOutcome(
-		record,
-		messages,
-		`delegated-turn:${record.turnId}:outcome`
-	);
-};
 
 /**
- * Projects committed records into the CLI's presentation-owned message
- * contract. The newest primary record contains the complete primary
- * transcript; delegated records remain separate display rows.
+ * Projects committed rows into the presentation-owned message contract.
+ * Primary rows retain storage order; delegated rows remain grouped after the
+ * primary transcript so child records cannot absorb the parent's later rows.
  */
 export const projectConversationRecords = (
 	records: readonly ConversationRecord[]
-): ConversationMessage[] => {
-	const primary = records.findLast((record) => record.delegation === undefined);
-	const primaryMessages =
-		primary === undefined
-			? []
-			: projectTerminalOutcome(
-					primary,
-					primary.messages.map((message) =>
-						toConversationMessage(message, primary)
-					),
-					`assistant-${primary.turnId}:outcome`
-				);
-	const delegatedMessages = records
+): ConversationMessage[] => [
+	...records
+		.filter((record) => record.delegation === undefined)
+		.flatMap(projectRecord),
+	...records
 		.filter((record) => record.delegation !== undefined)
-		.flatMap(projectDelegatedRecord);
-	return [...primaryMessages, ...delegatedMessages];
-};
+		.flatMap(projectRecord),
+];

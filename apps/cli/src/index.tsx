@@ -52,16 +52,7 @@ declare module "@tanstack/react-router" {
 	interface Register {
 		router: typeof router;
 	}
-
-	// biome-ignore lint/style/useConsistentTypeDefinitions: <>
-	interface HistoryState {
-		agent?: string;
-		autoStart?: boolean;
-		initialMessage?: unknown;
-		mode?: string;
-	}
 }
-
 function App() {
 	return (
 		<ThemeProvider>

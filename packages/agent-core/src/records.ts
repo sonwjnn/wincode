@@ -74,13 +74,13 @@ export type ConversationSkillActivationRecord = {
 /** Per-message metadata safe to retain outside a transient Model Target. */
 export type ConversationMessageMetadataRecord = {
 	readonly agent?: string;
-	readonly interrupted?: boolean;
 	readonly model?: {
 		readonly modelId: string;
 		readonly providerId: string;
 	};
 	readonly responseTimeMs?: number;
 	readonly skill?: ConversationSkillActivationRecord;
+	readonly sourceUserMessageId?: string;
 	readonly usage?: ModelUsage;
 	readonly variant?: ModelVariant;
 };
@@ -132,9 +132,26 @@ export type AgentTurnOutcomeRecord =
 	  };
 
 /**
- * The durable Conversation Record for one completed, failed, cancelled, or
- * interrupted Agent Turn: committed messages plus model and outcome.
- * Token deltas and other incomplete Agent Turn Events are not persisted.
+ * Durable meaning of one Conversation Record row. User and Tool rows are
+ * ordinary content checkpoints; assistant rows also carry the terminal Agent
+ * Turn outcome that produced the assistant content.
+ */
+export type ConversationRecordOutcome =
+	| {
+			readonly kind: "user";
+	  }
+	| {
+			readonly kind: "tool";
+	  }
+	| {
+			readonly kind: "assistant";
+			readonly terminal: AgentTurnOutcomeRecord;
+	  };
+
+/**
+ * One durable Conversation Record row. Each row contains one logical user,
+ * assistant, or completed Tool Call message. The runtime Agent Turn identity
+ * is only meaningful while execution is live; retries do not mutate this row.
  */
 export type ConversationRecord = {
 	readonly agentId: string;
@@ -146,7 +163,7 @@ export type ConversationRecord = {
 		readonly providerId: string;
 		readonly variant?: ModelVariant;
 	};
-	readonly outcome: AgentTurnOutcomeRecord;
+	readonly outcome: ConversationRecordOutcome;
 	readonly turnId: AgentTurnId;
 	readonly version: typeof CONVERSATION_RECORD_VERSION;
 };
@@ -204,22 +221,23 @@ const isConversationMessageMetadataRecord = (
 		Object.keys(value).every(
 			(key) =>
 				key === "agent" ||
-				key === "interrupted" ||
 				key === "model" ||
 				key === "responseTimeMs" ||
 				key === "skill" ||
+				key === "sourceUserMessageId" ||
 				key === "usage" ||
 				key === "variant"
 		) &&
 		(value.agent === undefined ||
 			(typeof value.agent === "string" && value.agent.length > 0)) &&
-		(value.interrupted === undefined ||
-			typeof value.interrupted === "boolean") &&
 		validModelMetadata &&
 		(value.responseTimeMs === undefined ||
 			isNonNegativeInteger(value.responseTimeMs)) &&
 		(value.skill === undefined ||
 			isConversationSkillActivationRecord(value.skill)) &&
+		(value.sourceUserMessageId === undefined ||
+			(typeof value.sourceUserMessageId === "string" &&
+				value.sourceUserMessageId.length > 0)) &&
 		(value.usage === undefined ||
 			modelUsageSchema.safeParse(value.usage).success) &&
 		(value.variant === undefined || typeof value.variant === "string")

@@ -1,43 +1,43 @@
-import { createFileRoute, useRouterState } from "@tanstack/react-router";
-import { agentIdSchema } from "@wincode/agent-core";
+import { createFileRoute, useLocation } from "@tanstack/react-router";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
-import { useEffect, useState } from "react";
-import { z } from "zod";
+import { useEffect, useMemo, useState } from "react";
 import {
 	type ConversationCompaction,
 	rebuildActiveMessages,
 } from "@/modules/conversations/compaction";
 import {
 	type ConversationMessage,
-	isConversationMessage,
 	sanitizeInterruptedConversationMessages,
 } from "@/modules/conversations/message";
 import { projectConversationRecords } from "@/modules/conversations/storage/conversation-record";
 import { getConversationStore } from "@/modules/conversations/storage/get-conversation-store";
-import { ChatView } from "@/modules/conversations/ui/views/chat-view";
+import {
+	ChatView,
+	type SessionInitialSubmission,
+} from "@/modules/conversations/ui/views/chat-view";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 
-const sessionRouteStateSchema = z
-	.object({
-		agent: agentIdSchema.optional(),
-		autoStart: z.boolean().optional(),
-		initialMessage: z.unknown().optional(),
-	})
-	.passthrough();
-
-const getRouteState = (
+const readInitialSubmission = (
 	state: unknown
-): z.infer<typeof sessionRouteStateSchema> | null => {
-	const result = sessionRouteStateSchema.safeParse(state);
-	return result.success ? result.data : null;
-};
-
-const getAutoStart = (state: unknown): boolean =>
-	getRouteState(state)?.autoStart ?? false;
-
-const getInitialMessage = (state: unknown): ConversationMessage | undefined => {
-	const candidate = getRouteState(state)?.initialMessage;
-	return isConversationMessage(candidate) ? candidate : undefined;
+): SessionInitialSubmission | undefined => {
+	if (
+		typeof state !== "object" ||
+		state === null ||
+		!("initialSubmission" in state)
+	) {
+		return;
+	}
+	const submission = state.initialSubmission;
+	if (
+		typeof submission !== "object" ||
+		submission === null ||
+		!("messageId" in submission) ||
+		typeof submission.messageId !== "string" ||
+		submission.messageId.length === 0
+	) {
+		return;
+	}
+	return { messageId: submission.messageId };
 };
 
 export const Route = createFileRoute("/sessions/$id")({
@@ -47,6 +47,11 @@ export const Route = createFileRoute("/sessions/$id")({
 function SessionRoute() {
 	const { colors } = useTheme();
 	const { id } = Route.useParams();
+	const location = useLocation();
+	const initialSubmission = useMemo(
+		() => readInitialSubmission(location.state),
+		[location.state]
+	);
 	const [messages, setMessages] = useState<ConversationMessage[] | null>(null);
 	const [activeMessages, setActiveMessages] = useState<
 		ConversationMessage[] | null
@@ -58,11 +63,6 @@ function SessionRoute() {
 		variant?: ModelVariant;
 	} | null>(null);
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
-	const routeState = useRouterState({
-		select: (state) => state.location.state,
-	});
-	const autoStart = getAutoStart(routeState);
-	const initialMessage = getInitialMessage(routeState);
 
 	useEffect(() => {
 		let ignore = false;
@@ -85,15 +85,9 @@ function SessionRoute() {
 					return;
 				}
 				const projected = projectConversationRecords(records);
-				const sourceMessages =
-					projected.length === 0 && initialMessage !== undefined
-						? [initialMessage]
-						: projected;
 				const displayMessages = store.attachmentStore
-					? await store.attachmentStore.annotateMessagesForDisplay(
-							sourceMessages
-						)
-					: sourceMessages;
+					? await store.attachmentStore.annotateMessagesForDisplay(projected)
+					: projected;
 				if (ignore) {
 					return;
 				}
@@ -123,7 +117,7 @@ function SessionRoute() {
 		return () => {
 			ignore = true;
 		};
-	}, [id, initialMessage]);
+	}, [id]);
 
 	if (errorMessage) {
 		return <text fg={colors.error}>{errorMessage}</text>;
@@ -135,12 +129,13 @@ function SessionRoute() {
 
 	return (
 		<ChatView
-			autoStart={autoStart}
 			initialActiveMessages={activeMessages}
 			initialCompactions={compactions}
 			initialMessages={messages}
 			initialModel={sessionConfig.model}
+			initialSubmission={initialSubmission}
 			initialVariant={sessionConfig.variant}
+			mode="session"
 			sessionId={id}
 			sessionTitle={sessionTitle}
 		/>

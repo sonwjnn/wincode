@@ -14,6 +14,7 @@ import {
 import { resolveChatModelTarget } from "../../model-target";
 import type { ConversationViewState } from "../conversation-controller";
 import { createConversationUserMessage } from "../message";
+import { buildUserConversationRecord } from "../storage/conversation-record";
 import { getConversationStore } from "../storage/get-conversation-store";
 import type {
 	DelegationExecutor,
@@ -22,6 +23,7 @@ import type {
 } from "./runtime-turn";
 import {
 	buildAgentTurn,
+	buildAssistantFailureConversationRecord,
 	createGatedCodingTools,
 	defaultRuntimeFactory,
 	runAgentTurnToText,
@@ -88,6 +90,34 @@ export const createDelegationExecutor = ({
 			signal === undefined
 				? childController.signal
 				: AbortSignal.any([signal, childController.signal]);
+		const turnId = createAgentTurnId();
+		const delegation = {
+			parentToolCallId: request.parentToolCallId,
+			parentTurnId: request.parentTurnId,
+		};
+		const userMessage = createConversationUserMessage(request.prompt);
+		const store = getConversationStore();
+		let selectedAgent = request.agent;
+		let selectedModel = fallbackModelRef.current;
+		let selectedVariant = fallbackVariantRef.current;
+		let userCommitted = false;
+		let userCommitAttempted = false;
+		const commitUserMessage = async (): Promise<void> => {
+			userCommitAttempted = true;
+			await store.commitConversationRecord({
+				record: buildUserConversationRecord({
+					agentId: selectedAgent,
+					delegation,
+					message: userMessage,
+					model: selectedModel,
+					turnId,
+					variant: selectedVariant,
+				}),
+				sessionId,
+			});
+			userCommitted = true;
+		};
+		let terminalObserved = false;
 		let snapshot: McpCatalogSnapshot | undefined;
 		try {
 			const target = registry?.agents.find(
@@ -108,6 +138,10 @@ export const createDelegationExecutor = ({
 				},
 				{ allowSubagent: true }
 			);
+			selectedAgent = prepared.agent;
+			selectedModel = prepared.model;
+			selectedVariant = prepared.variant;
+			await commitUserMessage();
 			const modelTarget = await resolveChatModelTarget(
 				prepared.model,
 				connections,
@@ -141,14 +175,10 @@ export const createDelegationExecutor = ({
 				},
 			};
 			const skillContext = await createSkillContext?.(prepared.agent);
-			const turnId = createAgentTurnId();
 			const turn: AgentTurn = buildAgentTurn({
 				agent: prepared.agent,
-				delegation: {
-					parentToolCallId: request.parentToolCallId,
-					parentTurnId: request.parentTurnId,
-				},
-				modelMessages: [createConversationUserMessage(request.prompt)],
+				delegation,
+				modelMessages: [userMessage],
 				modelTarget,
 				resolvedAgent: prepared.resolvedAgent,
 				tools: createGatedCodingTools({
@@ -167,15 +197,45 @@ export const createDelegationExecutor = ({
 			});
 			return await runAgentTurnToText({
 				onCheckpoint: (record) =>
-					getConversationStore().commitConversationRecord({
+					store.commitConversationRecord({
+						record,
+						sessionId,
+					}),
+				onTerminal: () => {
+					terminalObserved = true;
+				},
+				onToolCheckpoint: (record) =>
+					store.commitConversationRecord({
 						record,
 						sessionId,
 					}),
 				onViewState,
 				runtime: defaultRuntimeFactory(),
 				signal: childSignal,
+				sourceUserMessageId: userMessage.id,
 				turn,
 			});
+		} catch (error) {
+			if (!(userCommitted || userCommitAttempted)) {
+				await commitUserMessage();
+			}
+			if (userCommitted && !terminalObserved) {
+				await store
+					.commitConversationRecord({
+						record: buildAssistantFailureConversationRecord({
+							agentId: selectedAgent,
+							delegation,
+							error,
+							model: selectedModel,
+							sourceUserMessageId: userMessage.id,
+							turnId,
+							variant: selectedVariant,
+						}),
+						sessionId,
+					})
+					.catch(() => undefined);
+			}
+			throw error;
 		} finally {
 			if (snapshot !== undefined) {
 				mcp.releaseSnapshot?.(snapshot);

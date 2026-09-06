@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
-import type { ConversationRecord } from "@wincode/agent-core";
-import { isConversationAttachmentReferencePart } from "@wincode/agent-core";
+import {
+	CONVERSATION_RECORD_VERSION,
+	type ConversationRecord,
+	isConversationAttachmentReferencePart,
+} from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
 	modelSelectionSchema,
@@ -27,6 +30,7 @@ import { type ConversationDatabase, createDatabase } from "./client";
 import {
 	ConversationRecordInvariantError,
 	getConversationRecordValidationError,
+	toDurableConversationMessageRecord,
 } from "./conversation-record";
 import {
 	type CommitConversationRecordInput,
@@ -223,6 +227,7 @@ export const createPromptHistory = (
 };
 type SessionRow = typeof conversationSession.$inferSelect;
 type CompactionRow = typeof conversationCompaction.$inferSelect;
+type ConversationRecordRow = typeof conversationRecord.$inferSelect;
 
 const toConversationCompaction = (
 	row: CompactionRow
@@ -299,6 +304,26 @@ const toConversationSession = (row: SessionRow): ConversationSession => ({
 	pinned: row.pinned,
 	title: row.title ?? UNTITLED_SESSION_TITLE,
 	...(row.variant ? { variant: row.variant } : {}),
+});
+const toConversationRecordModel = (
+	model: Pick<ConversationRecord["model"], "modelId" | "providerId">,
+	variant: ConversationRecord["model"]["variant"]
+): ConversationRecord["model"] => ({
+	modelId: model.modelId,
+	providerId: model.providerId,
+	...(variant === undefined ? {} : { variant }),
+});
+const toConversationRecord = (
+	row: ConversationRecordRow
+): ConversationRecord => ({
+	agentId: row.agentId,
+	...(row.delegationJson === null ? {} : { delegation: row.delegationJson }),
+	id: row.recordId,
+	messages: row.messagesJson,
+	model: row.modelJson,
+	outcome: row.outcomeJson as ConversationRecord["outcome"],
+	turnId: row.turnId,
+	version: row.version as ConversationRecord["version"],
 });
 
 const collectLiveAttachmentIds = (db: ConversationDatabase): Set<string> => {
@@ -388,7 +413,12 @@ const appendCompaction = (
 const writeConversationRecordCheckpoint = (
 	db: ConversationDatabase,
 	workspaceId: string,
-	{ record, sessionId }: CommitConversationRecordInput
+	{
+		conversationModel,
+		conversationVariant,
+		record,
+		sessionId,
+	}: CommitConversationRecordInput
 ): void => {
 	const validationError = getConversationRecordValidationError(record);
 	if (validationError !== null) {
@@ -397,10 +427,10 @@ const writeConversationRecordCheckpoint = (
 			{ cause: new Error(validationError) }
 		);
 	}
-	const modelSelection = modelSelectionSchema.safeParse({
-		modelId: record.model.modelId,
-		providerId: record.model.providerId,
-	});
+	const modelJson = toConversationRecordModel(
+		record.model,
+		record.model.variant
+	);
 	db.transaction((tx) => {
 		const session = tx
 			.select({ id: conversationSession.id })
@@ -415,6 +445,7 @@ const writeConversationRecordCheckpoint = (
 		if (!session) {
 			throw new Error("Session not found");
 		}
+
 		const latest = tx
 			.select({ position: conversationRecord.position })
 			.from(conversationRecord)
@@ -429,13 +460,7 @@ const writeConversationRecordCheckpoint = (
 				createdAt: now,
 				delegationJson: record.delegation ?? null,
 				messagesJson: [...record.messages],
-				modelJson: {
-					modelId: record.model.modelId,
-					providerId: record.model.providerId,
-					...(record.model.variant === undefined
-						? {}
-						: { variant: record.model.variant }),
-				},
+				modelJson,
 				outcomeJson: record.outcome,
 				position: (latest?.position ?? -1) + 1,
 				recordId: record.id,
@@ -444,12 +469,17 @@ const writeConversationRecordCheckpoint = (
 				version: record.version,
 			})
 			.run();
+
 		tx.update(conversationSession)
 			.set({
 				lastMessageAt: now,
-				...(modelSelection.success ? { modelJson: modelSelection.data } : {}),
+				...(conversationModel === undefined
+					? {}
+					: {
+							modelJson: conversationModel,
+							variant: conversationVariant ?? null,
+						}),
 				updatedAt: now,
-				variant: modelSelection.success ? (record.model.variant ?? null) : null,
 			})
 			.where(
 				and(
@@ -461,12 +491,12 @@ const writeConversationRecordCheckpoint = (
 	});
 };
 
-const readConversationRecords = (
+const readConversationRecordRows = (
 	db: ConversationDatabase,
 	workspaceId: string,
 	sessionId: string
-): ConversationRecord[] => {
-	const rows = db
+): ConversationRecordRow[] =>
+	db
 		.select({ record: conversationRecord })
 		.from(conversationRecord)
 		.innerJoin(
@@ -480,23 +510,17 @@ const readConversationRecords = (
 			)
 		)
 		.orderBy(asc(conversationRecord.position))
-		.all();
-	return rows.map(({ record }) => {
-		const recordValue: ConversationRecord = {
-			agentId: record.agentId,
-			...(record.delegationJson === null
-				? {}
-				: { delegation: record.delegationJson }),
-			id: record.recordId,
-			messages: record.messagesJson,
-			model: record.modelJson,
-			outcome: record.outcomeJson,
-			turnId: record.turnId,
-			version: record.version as ConversationRecord["version"],
-		};
-		return recordValue;
-	});
-};
+		.all()
+		.map(({ record }) => record);
+
+const readConversationRecords = (
+	db: ConversationDatabase,
+	workspaceId: string,
+	sessionId: string
+): ConversationRecord[] =>
+	readConversationRecordRows(db, workspaceId, sessionId).map(
+		toConversationRecord
+	);
 
 export const createDrizzleConversationStore = (
 	database?: ConversationDatabase,
@@ -561,23 +585,54 @@ export const createDrizzleConversationStore = (
 			await promptHistoryStore.clear();
 			await collectAttachments().catch(() => undefined);
 		},
-		createSession: async ({ message, model, variant }: CreateSessionInput) => {
+		createSession: async ({
+			agent,
+			message,
+			model,
+			turnId,
+			variant,
+		}: CreateSessionInput) => {
+			const durableMessage = toDurableConversationMessageRecord(message);
+			if (durableMessage === undefined || durableMessage.role !== "user") {
+				throw new Error("Initial conversation message has no durable parts.");
+			}
 			const id = createId();
 			const now = new Date();
+			const recordModel = toConversationRecordModel(
+				message.metadata?.model ?? model,
+				message.metadata?.variant ?? variant
+			);
 
-			db.insert(conversationSession)
-				.values({
-					createdAt: now,
-					id,
-					lastMessageAt: now,
-					modelJson: model,
-					pinned: false,
-					title: deriveSessionTitle([message]),
-					updatedAt: now,
-					variant,
-					workspaceId: workspace.id,
-				})
-				.run();
+			db.transaction((tx) => {
+				tx.insert(conversationSession)
+					.values({
+						createdAt: now,
+						id,
+						lastMessageAt: now,
+						modelJson: model,
+						pinned: false,
+						title: deriveSessionTitle([message]),
+						updatedAt: now,
+						variant,
+						workspaceId: workspace.id,
+					})
+					.run();
+				tx.insert(conversationRecord)
+					.values({
+						agentId: agent,
+						createdAt: now,
+						delegationJson: null,
+						messagesJson: [durableMessage],
+						modelJson: recordModel,
+						outcomeJson: { kind: "user" },
+						position: 0,
+						recordId: createId(),
+						sessionId: id,
+						turnId,
+						version: CONVERSATION_RECORD_VERSION,
+					})
+					.run();
+			});
 
 			return { id };
 		},
@@ -641,8 +696,15 @@ export const createDrizzleConversationStore = (
 			);
 		},
 
-		commitConversationRecord: async ({ record, sessionId }) => {
+		commitConversationRecord: async ({
+			conversationModel,
+			conversationVariant,
+			record,
+			sessionId,
+		}) => {
 			writeConversationRecordCheckpoint(db, workspace.id, {
+				conversationModel,
+				conversationVariant,
 				record,
 				sessionId,
 			});
@@ -667,7 +729,6 @@ export const createDrizzleConversationStore = (
 
 			return Promise.resolve(toConversationSession(row));
 		},
-
 		listSessions: () => {
 			const rows = db
 				.select()
@@ -682,7 +743,6 @@ export const createDrizzleConversationStore = (
 
 			return Promise.resolve(rows.map(toConversationSession));
 		},
-
 		listRecentModelSelections: (limit: number) => {
 			if (limit <= 0) {
 				return [];

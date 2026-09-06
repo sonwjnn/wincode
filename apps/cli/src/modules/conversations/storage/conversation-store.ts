@@ -1,4 +1,8 @@
-import type { AgentId, ConversationRecord } from "@wincode/agent-core";
+import type {
+	AgentId,
+	ConversationRecord,
+	ConversationRecordOutcome,
+} from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import type {
 	ConversationFilePart,
@@ -21,6 +25,7 @@ export type PromptHistoryEntry = {
 	text: string;
 	pastedText?: Array<{ token: string; text: string }>;
 };
+export type ConversationRecordStorageOutcome = ConversationRecordOutcome;
 
 export type ConversationSession = {
 	createdAt: Date;
@@ -36,6 +41,7 @@ export type CreateSessionInput = {
 	agent: AgentId;
 	message: ConversationMessage;
 	model: ChatModelSelection;
+	turnId: string;
 	variant?: ModelVariant;
 };
 
@@ -45,11 +51,14 @@ export type UpdateSessionInput = {
 };
 
 /**
- * One semantic checkpoint: the Wincode Conversation Record committed for one
- * Agent Turn under a session. The commit is atomic at the ConversationStore
- * boundary; a rejected commit leaves no partial durable state.
+ * One semantic checkpoint: a Wincode Conversation Record for one accepted user
+ * message, completed Tool Call, or terminal assistant outcome. The commit is
+ * atomic at the ConversationStore boundary; a rejected commit leaves no
+ * partial durable state.
  */
 export type CommitConversationRecordInput = {
+	conversationModel?: ChatModelSelection;
+	conversationVariant?: ModelVariant;
 	record: ConversationRecord;
 	sessionId: string;
 };

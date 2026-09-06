@@ -1,8 +1,11 @@
 import {
 	type AgentId,
+	type AgentTurn,
 	type AgentTurnDelegation,
 	type AgentTurnEvent,
 	type AgentTurnTerminalEvent,
+	type ConversationRecord,
+	createAgentTurnAbortEvent,
 	createAgentTurnId,
 	getAgentTurnAbortDisposition,
 } from "@wincode/agent-core";
@@ -46,13 +49,19 @@ import {
 	useCompactionSettings,
 } from "@/modules/conversations/compaction";
 import {
+	getConversationAttemptMessages,
+	hasCompletedToolArtifact,
+} from "@/modules/conversations/conversation-retry";
+import {
 	type ConversationMessage,
 	type ConversationMessageMetadata,
+	type ConversationMessageTerminalOutcome,
 	type ConversationPart,
 	type ConversationToolPart,
 	conversationMessageSkillSchema,
 	createConversationUserMessage,
 	isConversationToolPart,
+	isTerminalConversationToolPart,
 	sanitizeInterruptedConversationMessages,
 } from "@/modules/conversations/message";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
@@ -80,10 +89,14 @@ import type {
 } from "../conversation-operation";
 import type { ConversationFilePart } from "../message";
 import type { AttachmentHydrationOptions } from "../storage/attachment-store";
+import { buildUserConversationRecord } from "../storage/conversation-record";
 import { getConversationStore } from "../storage/get-conversation-store";
 import { createDelegationExecutor } from "./delegation";
 import {
 	buildAgentTurn,
+	buildAssistantCancelledConversationRecord,
+	buildAssistantFailureConversationRecord,
+	buildTerminalConversationRecord,
 	createGatedCodingTools,
 	type DelegationExecutor,
 	defaultRuntimeFactory,
@@ -105,6 +118,17 @@ export const createChatMessageParts = (
 
 const AGENT_TURN_DEADLINE_MS = 43_200_000;
 const INTERRUPTED_TOOL_ERROR = "Tool call interrupted";
+const createEmptyRuntimeAssistantMessage = (
+	assistantId: string,
+	sourceUserMessageId: string | null
+): ConversationMessage => ({
+	id: assistantId,
+	...(sourceUserMessageId === null
+		? {}
+		: { metadata: { sourceUserMessageId } }),
+	parts: [],
+	role: "assistant",
+});
 
 const isBenignCompactionError = (error: unknown): boolean =>
 	error instanceof ConversationCompactionError &&
@@ -317,6 +341,33 @@ const conversationSendCancelled = (
 			return { rejected: true, reason: "Conversation send cancelled." };
 	}
 };
+const handleRunTurnError = ({
+	error,
+	executionStarted,
+	onProviderError,
+	setError,
+	signal,
+}: {
+	error: unknown;
+	executionStarted: boolean;
+	onProviderError: (error: unknown) => void;
+	setError: (error: Error) => void;
+	signal: AbortSignal;
+}): ConversationSendOutcome => {
+	if (signal.aborted) {
+		return executionStarted
+			? { rejected: false }
+			: conversationSendCancelled(signal);
+	}
+	const normalizedError =
+		error instanceof Error ? error : new Error("The Agent Turn failed.");
+	setError(normalizedError);
+	if (!executionStarted) {
+		return { rejected: true, reason: normalizedError.message };
+	}
+	onProviderError(error);
+	return { rejected: false };
+};
 
 export const sanitizeSkillToolParts = (
 	messages: ConversationMessage[]
@@ -331,6 +382,491 @@ export const sanitizeSkillToolParts = (
 				}
 			: message
 	);
+
+type PreparedModelMessages =
+	| { readonly kind: "cancelled" }
+	| {
+			readonly kind: "ready";
+			readonly messages: ConversationMessage[];
+			readonly newMessage?: ConversationMessage;
+	  }
+	| { readonly kind: "rejected"; readonly reason: string };
+export const prepareRetryMessages = (
+	messages: readonly ConversationMessage[],
+	messageId: string
+): PreparedModelMessages => {
+	const messageIndex = messages.findIndex(
+		(message) => message.id === messageId && message.role === "user"
+	);
+	if (messageIndex === -1) {
+		return {
+			kind: "rejected",
+			reason: "The stored message to continue is unavailable",
+		};
+	}
+	if (
+		hasCompletedToolArtifact(
+			getConversationAttemptMessages(messages, messageIndex)
+		)
+	) {
+		return {
+			kind: "rejected",
+			reason: "This message cannot be retried after completed Tool Calls.",
+		};
+	}
+	return {
+		kind: "ready",
+		messages: sanitizeSkillToolParts(
+			messages.filter(
+				(message) =>
+					message.role !== "assistant" ||
+					(message.metadata?.interrupted !== true &&
+						message.metadata?.terminalOutcome === undefined)
+			)
+		),
+	};
+};
+
+const prepareModelMessages = async ({
+	activeMessages,
+	context,
+	input,
+	setIsPreparingMessage,
+	signal,
+}: {
+	activeMessages: readonly ConversationMessage[];
+	context: Extract<SubmitContextResult, { kind: "ready" }>;
+	input: ConversationSendInput;
+	setIsPreparingMessage: (value: boolean) => void;
+	signal: AbortSignal;
+}): Promise<PreparedModelMessages> => {
+	if (context.anchoredMessage !== undefined && input.messageId !== undefined) {
+		return prepareRetryMessages(activeMessages, input.messageId);
+	}
+
+	setIsPreparingMessage(true);
+	try {
+		const preparedMessage = await prepareNewConversationMessage({
+			input,
+			metadata: context.metadata,
+			signal,
+		});
+		if (preparedMessage.kind === "cancelled") {
+			return preparedMessage;
+		}
+		if (preparedMessage.kind === "rejected") {
+			return preparedMessage;
+		}
+		return {
+			kind: "ready",
+			messages: [
+				...sanitizeSkillToolParts([...activeMessages]),
+				preparedMessage.message,
+			],
+			newMessage: preparedMessage.message,
+		};
+	} finally {
+		setIsPreparingMessage(false);
+	}
+};
+type ConversationPreparationResult =
+	| {
+			readonly kind: "cancelled";
+	  }
+	| {
+			readonly error?: Error;
+			readonly kind: "rejected";
+			readonly reason: string;
+	  }
+	| {
+			readonly context: Extract<SubmitContextResult, { kind: "ready" }>;
+			readonly kind: "ready";
+			readonly messages: ConversationMessage[];
+			readonly newMessage?: ConversationMessage;
+	  };
+
+const prepareConversationSubmission = async ({
+	getActiveMessages,
+	compactionModule,
+	compactionOperation,
+	createTurnSkillExecution,
+	getCompactionSettings,
+	input,
+	runCompaction,
+	resolveSkillForSubmit,
+	setAttachmentBudget,
+	setIsPreparingMessage,
+	signal,
+}: {
+	getActiveMessages: () => readonly ConversationMessage[];
+	compactionModule: ConversationCompactionModule;
+	compactionOperation: Promise<CompactConversationResult> | null;
+	createTurnSkillExecution: SubmitSkillExecutionFactory;
+	getCompactionSettings: (
+		selection: ChatModelSelection
+	) => Promise<ResolvedCompactionSettings>;
+	input: ConversationSendInput;
+	runCompaction: RunCompaction;
+	resolveSkillForSubmit: SubmitSkillResolver;
+	setAttachmentBudget: (
+		budget: Pick<
+			ResolvedCompactionSettings,
+			"maxMediaAttachments" | "maxMediaBytes" | "maxMediaTokens"
+		>
+	) => void;
+	setIsPreparingMessage: (value: boolean) => void;
+	signal: AbortSignal;
+}): Promise<ConversationPreparationResult> => {
+	try {
+		const preparationError = await waitForCompaction(compactionOperation);
+		if (preparationError !== null) {
+			return { kind: "rejected", reason: preparationError };
+		}
+		const settings = await getCompactionSettings(input.model);
+		setAttachmentBudget({
+			maxMediaAttachments: settings.maxMediaAttachments,
+			maxMediaBytes: settings.maxMediaBytes,
+			maxMediaTokens: settings.maxMediaTokens,
+		});
+		const compactionResult = await prepareCompactionBeforeSubmit({
+			activeMessages: getActiveMessages(),
+			compactionModule,
+			model: input.model,
+			runCompaction,
+			settings,
+		});
+		if (!compactionResult.ok) {
+			return { kind: "rejected", reason: compactionResult.reason };
+		}
+		if (signal.aborted) {
+			return { kind: "cancelled" };
+		}
+		const context = await prepareSubmitContext({
+			activeMessages: getActiveMessages(),
+			createTurnSkillExecution,
+			input,
+			resolveSkillForSubmit,
+			signal,
+		});
+		if (context.kind !== "ready") {
+			return context;
+		}
+		const prepared = await prepareModelMessages({
+			activeMessages: getActiveMessages(),
+			context,
+			input,
+			setIsPreparingMessage,
+			signal,
+		});
+		if (prepared.kind !== "ready") {
+			return prepared;
+		}
+		return {
+			context,
+			kind: "ready",
+			messages: prepared.messages,
+			...(prepared.newMessage === undefined
+				? {}
+				: { newMessage: prepared.newMessage }),
+		};
+	} catch (error) {
+		if (signal.aborted) {
+			return { kind: "cancelled" };
+		}
+		const normalizedError =
+			error instanceof Error
+				? error
+				: new Error("Conversation preparation failed.");
+		return {
+			error: normalizedError,
+			kind: "rejected",
+			reason: normalizedError.message,
+		};
+	}
+};
+const conversationOutcomeForPreparation = (
+	result: Extract<
+		SubmitContextResult | PreparedModelMessages,
+		{ kind: "cancelled" | "rejected" }
+	>,
+	signal: AbortSignal
+): ConversationSendOutcome =>
+	result.kind === "cancelled"
+		? conversationSendCancelled(signal)
+		: { rejected: true, reason: result.reason };
+
+const handleSafeAssistantOutcome = async ({
+	agent,
+	currentMessages,
+	mergeDisplayMessages,
+	model,
+	publishActiveMessages,
+	record,
+	setError,
+	turnId,
+	variant,
+	commitRecord,
+}: {
+	agent: AgentId;
+	currentMessages: readonly ConversationMessage[];
+	mergeDisplayMessages: (messages: readonly ConversationMessage[]) => void;
+	model: ChatModelSelection;
+	publishActiveMessages: (messages: ConversationMessage[]) => void;
+	record: ConversationRecord;
+	setError: (error: Error) => void;
+	turnId: string;
+	variant?: ModelVariant;
+	commitRecord: (record: ConversationRecord) => Promise<void>;
+}): Promise<ConversationSendOutcome> => {
+	try {
+		await commitRecord(record);
+	} catch (commitError) {
+		const safeError = new Error(
+			"The Agent Turn outcome could not be persisted.",
+			{ cause: commitError }
+		);
+		setError(safeError);
+		return { rejected: true, reason: safeError.message };
+	}
+	const durableMessage = record.messages[0];
+	const textPart = durableMessage?.parts.find((part) => part.type === "text");
+	const terminal =
+		record.outcome.kind === "assistant"
+			? record.outcome.terminal.kind
+			: "failed";
+	const failureMessage: ConversationMessage = {
+		id: durableMessage?.id ?? `assistant-${turnId}`,
+		metadata: {
+			agent,
+			model,
+			...(durableMessage?.metadata?.sourceUserMessageId === undefined
+				? {}
+				: {
+						sourceUserMessageId: durableMessage.metadata.sourceUserMessageId,
+					}),
+			...(terminal === "interrupted" ? { interrupted: true } : {}),
+			...(terminal === "completed" ? {} : { terminalOutcome: terminal }),
+			...(variant === undefined ? {} : { variant }),
+		},
+		parts: [
+			{
+				text:
+					textPart?.type === "text" ? textPart.text : "The Agent Turn failed.",
+				type: "text",
+			},
+		],
+		role: "assistant",
+	};
+	const nextMessages = [
+		...currentMessages.filter(({ id }) => id !== failureMessage.id),
+		failureMessage,
+	];
+	publishActiveMessages(nextMessages);
+	mergeDisplayMessages([failureMessage]);
+	return { rejected: false };
+};
+
+const handlePreExecutionTurnFailure = async ({
+	agent,
+	delegation,
+	error,
+	model,
+	sourceUserMessageId,
+	turnId,
+	variant,
+	commitRecord,
+	currentMessages,
+	mergeDisplayMessages,
+	publishActiveMessages,
+	setError,
+}: {
+	agent: AgentId;
+	delegation?: AgentTurnDelegation;
+	error: unknown;
+	model: ChatModelSelection;
+	sourceUserMessageId?: string;
+	turnId: string;
+	variant?: ModelVariant;
+	commitRecord: (record: ConversationRecord) => Promise<void>;
+	currentMessages: readonly ConversationMessage[];
+	mergeDisplayMessages: (messages: readonly ConversationMessage[]) => void;
+	publishActiveMessages: (messages: ConversationMessage[]) => void;
+	setError: (error: Error) => void;
+}): Promise<ConversationSendOutcome> =>
+	handleSafeAssistantOutcome({
+		agent,
+		commitRecord,
+		currentMessages,
+		mergeDisplayMessages,
+		model,
+		publishActiveMessages,
+		record: buildAssistantFailureConversationRecord({
+			agentId: agent,
+			delegation,
+			error,
+			model,
+			sourceUserMessageId,
+			turnId,
+			variant,
+		}),
+		setError,
+		turnId,
+		variant,
+	});
+
+const handleTurnFailure = async ({
+	agent,
+	currentMessages,
+	currentTurn,
+	delegation,
+	error,
+	executionStarted,
+	mergeDisplayMessages,
+	model,
+	publishActiveMessages,
+	setError,
+	signal,
+	sourceUserMessageId,
+	terminalObserved,
+	turnId,
+	variant,
+	onProviderError,
+	commitRecord,
+}: {
+	agent: AgentId;
+	currentMessages: readonly ConversationMessage[];
+	currentTurn?: AgentTurn;
+	delegation?: AgentTurnDelegation;
+	error: unknown;
+	executionStarted: boolean;
+	mergeDisplayMessages: (messages: readonly ConversationMessage[]) => void;
+	model: ChatModelSelection;
+	onProviderError: (error: unknown) => void;
+	publishActiveMessages: (messages: ConversationMessage[]) => void;
+	setError: (error: Error) => void;
+	signal: AbortSignal;
+	sourceUserMessageId?: string;
+	terminalObserved: boolean;
+	turnId: string;
+	variant?: ModelVariant;
+	commitRecord: (record: ConversationRecord) => Promise<void>;
+}): Promise<ConversationSendOutcome> => {
+	if (!executionStarted) {
+		if (signal.aborted) {
+			return handleSafeAssistantOutcome({
+				agent,
+				commitRecord,
+				currentMessages,
+				mergeDisplayMessages,
+				model,
+				publishActiveMessages,
+				record: buildAssistantCancelledConversationRecord({
+					agentId: agent,
+					delegation,
+					model,
+					sourceUserMessageId,
+					turnId,
+					variant,
+				}),
+				setError,
+				turnId,
+				variant,
+			});
+		}
+		return handlePreExecutionTurnFailure({
+			agent,
+			commitRecord,
+			currentMessages,
+			delegation,
+			error,
+			mergeDisplayMessages,
+			model,
+			publishActiveMessages,
+			setError,
+			sourceUserMessageId,
+			turnId,
+			variant,
+		});
+	}
+	if (!terminalObserved && currentTurn !== undefined) {
+		const fallbackRecord = signal.aborted
+			? buildTerminalConversationRecord({
+					assistantText: "",
+					event: createAgentTurnAbortEvent(currentTurn, signal, 0),
+					sourceUserMessageId,
+					turn: currentTurn,
+				})
+			: buildAssistantFailureConversationRecord({
+					agentId: agent,
+					delegation,
+					error,
+					model,
+					sourceUserMessageId,
+					turnId,
+					variant,
+				});
+		if (fallbackRecord !== undefined) {
+			return handleSafeAssistantOutcome({
+				agent,
+				commitRecord,
+				currentMessages,
+				mergeDisplayMessages,
+				model,
+				publishActiveMessages,
+				record: fallbackRecord,
+				setError,
+				turnId,
+				variant,
+			});
+		}
+	}
+	if (signal.aborted) {
+		return { rejected: false };
+	}
+	return handleRunTurnError({
+		error,
+		executionStarted,
+		onProviderError,
+		setError,
+		signal,
+	});
+};
+const updateRuntimeMessageFromEvent = ({
+	event,
+	assistantId,
+	setStatus,
+	updateRuntimeMessage,
+}: {
+	event: AgentTurnEvent;
+	assistantId: string | null;
+	setStatus: (status: ConversationChatStatus) => void;
+	updateRuntimeMessage: (assistantId: string, event: AgentTurnEvent) => void;
+}): void => {
+	if (assistantId !== null) {
+		updateRuntimeMessage(assistantId, event);
+	}
+	if (event.type !== "agent-turn-started") {
+		setStatus("streaming");
+	}
+};
+
+const releaseTurnSnapshot = ({
+	mcp,
+	mcpSnapshotRef,
+	snapshot,
+}: {
+	mcp: ReturnType<typeof useMcp>;
+	mcpSnapshotRef: { current: McpCatalogSnapshot | null };
+	snapshot: McpCatalogSnapshot | undefined;
+}): void => {
+	if (snapshot === undefined) {
+		return;
+	}
+	mcp.releaseSnapshot?.(snapshot);
+	if (mcpSnapshotRef.current?.id === snapshot.id) {
+		mcpSnapshotRef.current = null;
+	}
+};
 
 export const findCurrentTurnAssistantIndex = (
 	messages: ConversationMessage[]
@@ -524,6 +1060,57 @@ const runtimeToolResultPart = (
 				type: "dynamic-tool",
 			};
 
+const terminalOutcomeForEvent = (
+	event: AgentTurnTerminalEvent
+): ConversationMessageTerminalOutcome | undefined => {
+	if (event.type === "agent-turn-completed") {
+		return;
+	}
+	if (event.type === "agent-turn-cancelled") {
+		return "cancelled";
+	}
+	if (event.type === "agent-turn-failed") {
+		return "failed";
+	}
+	return "interrupted";
+};
+
+const sanitizeFailedRuntimeMessages = (
+	messages: readonly ConversationMessage[],
+	assistantId: string,
+	failureText: string
+): ConversationMessage[] =>
+	messages.map((message) => {
+		if (message.id !== assistantId || message.role !== "assistant") {
+			return message;
+		}
+		const terminalToolParts = message.parts.filter(
+			(part): part is ConversationToolPart =>
+				isConversationToolPart(part) && isTerminalConversationToolPart(part)
+		);
+		return {
+			...message,
+			parts: [{ text: failureText, type: "text" }, ...terminalToolParts],
+		};
+	});
+
+const sanitizeRuntimeMessagesForTerminal = (
+	messages: readonly ConversationMessage[],
+	assistantId: string,
+	event: AgentTurnTerminalEvent
+): ConversationMessage[] => {
+	if (event.type === "agent-turn-completed") {
+		return [...messages];
+	}
+	if (event.type === "agent-turn-interrupted") {
+		return sanitizeInterruptedConversationMessages(messages);
+	}
+	return sanitizeFailedRuntimeMessages(
+		messages,
+		assistantId,
+		event.failure.message
+	);
+};
 export function useChat(
 	sessionId: string,
 	initialMessages: ConversationMessage[],
@@ -559,6 +1146,7 @@ export function useChat(
 	const abortApprovalTurnRef = useRef<(toolCallId: string) => void>(
 		() => undefined
 	);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: latest-value refs intentionally keep tool gate callbacks current without rebuilding the gate.
 	const toolGateState = useMemo(() => {
 		const approvalQueue = createApprovalQueue<ToolApprovalRequest>();
 		return {
@@ -635,6 +1223,7 @@ export function useChat(
 	const overflowAttemptRef = useRef(0);
 	const requestStartedAtRef = useRef<number | null>(null);
 	const currentAssistantIdRef = useRef<string | null>(null);
+	const currentSourceUserMessageIdRef = useRef<string | null>(null);
 	const agentRef = useRef<AgentId>("build");
 	const resolvedAgentRef = useRef<ResolvedCodingAgent | undefined>(undefined);
 	const modelRef = useRef<ChatModelSelection>(defaultChatModelSelection);
@@ -924,12 +1513,15 @@ export function useChat(
 			const index = current.findIndex(({ id }) => id === assistantId);
 			const existing: ConversationMessage =
 				index === -1
-					? { id: assistantId, parts: [], role: "assistant" }
-					: (current[index] ?? {
-							id: assistantId,
-							parts: [],
-							role: "assistant",
-						});
+					? createEmptyRuntimeAssistantMessage(
+							assistantId,
+							currentSourceUserMessageIdRef.current
+						)
+					: (current[index] ??
+						createEmptyRuntimeAssistantMessage(
+							assistantId,
+							currentSourceUserMessageIdRef.current
+						));
 			const parts = [...existing.parts];
 			switch (event.type) {
 				case "model-step-started":
@@ -1002,7 +1594,10 @@ export function useChat(
 			const index = current.findIndex(({ id }) => id === assistantId);
 			const base =
 				index === -1
-					? { id: assistantId, parts: [], role: "assistant" as const }
+					? createEmptyRuntimeAssistantMessage(
+							assistantId,
+							currentSourceUserMessageIdRef.current
+						)
 					: current[index];
 			if (base === undefined) {
 				return;
@@ -1012,11 +1607,12 @@ export function useChat(
 				event.type === "agent-turn-completed"
 					? normalizeModelUsage(event.usage)
 					: null;
+			const terminalOutcome = terminalOutcomeForEvent(event);
 			const metadata: ConversationMessageMetadata = {
 				...(base.metadata ?? {}),
 				agent: base.metadata?.agent ?? agentRef.current,
-				interrupted: event.type !== "agent-turn-completed",
-				model: base.metadata?.model ?? modelRef.current,
+				interrupted: event.type === "agent-turn-interrupted",
+				...(terminalOutcome === undefined ? {} : { terminalOutcome }),
 				...(variantRef.current === undefined
 					? {}
 					: { variant: base.metadata?.variant ?? variantRef.current }),
@@ -1032,16 +1628,18 @@ export function useChat(
 					: current.map((message, messageIndex) =>
 							messageIndex === index ? nextMessage : message
 						);
-			const safeMessages =
-				event.type === "agent-turn-completed"
-					? nextMessages
-					: sanitizeInterruptedConversationMessages(nextMessages);
+			const safeMessages = sanitizeRuntimeMessagesForTerminal(
+				nextMessages,
+				assistantId,
+				event
+			);
 			publishActiveMessages(safeMessages);
 			mergeDisplayMessages(safeMessages);
 		},
 		[mergeDisplayMessages, publishActiveMessages]
 	);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: latest-value refs intentionally keep turn callbacks current without rebuilding the turn.
 	const runTurn = useCallback(
 		async ({
 			agent,
@@ -1049,6 +1647,7 @@ export function useChat(
 			model,
 			resolvedAgent,
 			skill,
+			sourceUserMessageId,
 			variant,
 			modelMessages,
 			signal,
@@ -1058,17 +1657,33 @@ export function useChat(
 			model: ChatModelSelection;
 			resolvedAgent: ResolvedCodingAgent;
 			skill?: SkillRequestContext;
+			sourceUserMessageId?: string;
 			variant?: ModelVariant;
 			modelMessages: readonly ConversationMessage[];
 			signal: AbortSignal;
 		}): Promise<ConversationSendOutcome> => {
-			if (signal.aborted) {
-				return conversationSendCancelled(signal);
-			}
 			setError(null);
 			setViewState(undefined);
 			setStatus("submitted");
+			const store = getConversationStore();
+			const turnId = createAgentTurnId();
+			currentAssistantIdRef.current = `assistant-${turnId}`;
+			currentSourceUserMessageIdRef.current = sourceUserMessageId ?? null;
 			let snapshot: McpCatalogSnapshot | undefined;
+			let executionStarted = false;
+			let currentTurn: AgentTurn | undefined;
+			let terminalObserved = false;
+			const commitRecord = (record: ConversationRecord) =>
+				store.commitConversationRecord({
+					...(delegation === undefined
+						? {
+								conversationModel: conversationModelRef.current,
+								conversationVariant: conversationVariantRef.current,
+							}
+						: {}),
+					record,
+					sessionId,
+				});
 			try {
 				const modelTarget = await resolveChatModelTarget(model, connections, {
 					signal,
@@ -1077,7 +1692,6 @@ export function useChat(
 				const mcpPolicy = await resolveMcpPolicyForAgentRef.current(agent);
 				snapshot = await mcp.createSnapshot(agent, mcpPolicy);
 				mcpSnapshotRef.current = snapshot;
-				const store = getConversationStore();
 				const hydratedMessages = await store.hydrateAttachments(modelMessages, {
 					purpose: "model",
 					priorityMessageId: modelMessages.findLast(
@@ -1087,8 +1701,6 @@ export function useChat(
 					...(attachmentBudgetRef.current ?? {}),
 				});
 				const executeMcpTool = createMcpToolExecutor(mcp.execute);
-				const turnId = createAgentTurnId();
-				currentAssistantIdRef.current = `assistant-${turnId}`;
 				const gatedTooling: RuntimeGatedTooling = {
 					gate: toolGateState.gate,
 					mcpSnapshot: snapshot,
@@ -1123,26 +1735,30 @@ export function useChat(
 					}),
 					turnId,
 				});
+				currentTurn = turn;
 				await runAgentTurnToText({
-					onCheckpoint: (record) =>
-						store.commitConversationRecord({ record, sessionId }),
+					onCheckpoint: commitRecord,
 					onEvent: (event) => {
-						if (currentAssistantIdRef.current !== null) {
-							updateRuntimeMessage(currentAssistantIdRef.current, event);
-						}
-						if (event.type !== "agent-turn-started") {
-							setStatus("streaming");
-						}
+						executionStarted = true;
+						updateRuntimeMessageFromEvent({
+							assistantId: currentAssistantIdRef.current,
+							event,
+							setStatus,
+							updateRuntimeMessage,
+						});
 					},
+					sourceUserMessageId,
 					onTerminal: (event) => {
+						executionStarted = true;
+						terminalObserved = true;
 						if (currentAssistantIdRef.current !== null) {
 							finalizeRuntimeMessage(currentAssistantIdRef.current, event);
 						}
 					},
+					onToolCheckpoint: commitRecord,
 					onViewState: setViewState,
 					runtime: defaultRuntimeFactory(),
 					signal,
-					sourceMessages: modelMessages,
 					turn,
 				});
 				setStatus("ready");
@@ -1150,24 +1766,33 @@ export function useChat(
 				return { rejected: false };
 			} catch (turnError) {
 				setStatus("ready");
-				if (signal.aborted) {
-					return conversationSendCancelled(signal);
-				}
-				setError(
-					turnError instanceof Error
-						? turnError
-						: new Error("The Agent Turn failed.")
-				);
-				providerErrorRef.current(turnError);
-				return { rejected: false };
+				return handleTurnFailure({
+					agent,
+					commitRecord,
+					currentMessages: activeMessagesRef.current,
+					currentTurn,
+					delegation,
+					error: turnError,
+					executionStarted,
+					mergeDisplayMessages,
+					model,
+					onProviderError: providerErrorRef.current,
+					publishActiveMessages,
+					setError,
+					signal,
+					terminalObserved,
+					turnId,
+					variant,
+					sourceUserMessageId,
+				});
 			} finally {
-				if (snapshot !== undefined) {
-					mcp.releaseSnapshot?.(snapshot);
-					if (mcpSnapshotRef.current?.id === snapshot.id) {
-						mcpSnapshotRef.current = null;
-					}
-				}
+				releaseTurnSnapshot({
+					mcp,
+					mcpSnapshotRef,
+					snapshot,
+				});
 				currentAssistantIdRef.current = null;
+				currentSourceUserMessageIdRef.current = null;
 			}
 		},
 		[
@@ -1175,6 +1800,8 @@ export function useChat(
 			finalizeRuntimeMessage,
 			maintainAfterTurn,
 			mcp,
+			mergeDisplayMessages,
+			publishActiveMessages,
 			resolveMcpPolicyForAgentRef,
 			resolveResourceLimitsForAgentRef,
 			resolveResourceLimitsRef,
@@ -1238,72 +1865,62 @@ export function useChat(
 			variantRef.current = input.variant;
 			requestStartedAtRef.current = Date.now();
 
-			const preparationError = await waitForCompaction(
-				compactionOperationRef.current
-			);
-			if (preparationError !== null) {
-				return { rejected: true, reason: preparationError };
-			}
-			const settings = await getCompactionSettings(input.model);
-			attachmentBudgetRef.current = {
-				maxAttachments: settings.maxMediaAttachments,
-				maxBytes: settings.maxMediaBytes,
-				maxTokens: settings.maxMediaTokens,
-			};
-			const compactionResult = await prepareCompactionBeforeSubmit({
-				activeMessages: activeMessagesRef.current,
+			const prepared = await prepareConversationSubmission({
+				getActiveMessages: () => activeMessagesRef.current,
 				compactionModule,
-				model: input.model,
-				runCompaction,
-				settings,
-			});
-			if (!compactionResult.ok) {
-				return { rejected: true, reason: compactionResult.reason };
-			}
-			if (signal.aborted) {
-				return conversationSendCancelled(signal);
-			}
-
-			const context = await prepareSubmitContext({
-				activeMessages: activeMessagesRef.current,
+				compactionOperation: compactionOperationRef.current,
 				createTurnSkillExecution,
+				getCompactionSettings,
 				input,
+				runCompaction,
 				resolveSkillForSubmit,
+				setAttachmentBudget: ({
+					maxMediaAttachments,
+					maxMediaBytes,
+					maxMediaTokens,
+				}) => {
+					attachmentBudgetRef.current = {
+						maxAttachments: maxMediaAttachments,
+						maxBytes: maxMediaBytes,
+						maxTokens: maxMediaTokens,
+					};
+				},
+				setIsPreparingMessage,
 				signal,
 			});
-			if (context.kind === "cancelled") {
-				return conversationSendCancelled(signal);
-			}
-			if (context.kind === "rejected") {
-				return { rejected: true, reason: context.reason };
-			}
-
-			let modelMessages: ConversationMessage[];
-			if (context.anchoredMessage === undefined) {
-				setIsPreparingMessage(true);
-				const preparedMessage = await prepareNewConversationMessage({
-					input,
-					metadata: context.metadata,
-					signal,
-				});
-				if (preparedMessage.kind === "cancelled") {
-					setIsPreparingMessage(false);
-					return conversationSendCancelled(signal);
+			if (prepared.kind !== "ready") {
+				if (prepared.kind === "rejected" && prepared.error !== undefined) {
+					setError(prepared.error);
 				}
-				if (preparedMessage.kind === "rejected") {
-					setIsPreparingMessage(false);
+				return conversationOutcomeForPreparation(prepared, signal);
+			}
+			const { context: readyContext, messages: modelMessages } = prepared;
+			if (prepared.newMessage !== undefined) {
+				const userRecord = buildUserConversationRecord({
+					agentId: input.agent,
+					message: prepared.newMessage,
+					model: input.model,
+					turnId: createAgentTurnId(),
+					variant: input.variant,
+				});
+				try {
+					await getConversationStore().commitConversationRecord({
+						conversationModel: input.conversationModel,
+						conversationVariant: input.conversationVariant,
+						record: userRecord,
+						sessionId,
+					});
+				} catch (error) {
+					const safeError =
+						error instanceof Error
+							? error
+							: new Error("Could not save the prompt.");
+					setError(safeError);
 					return {
 						rejected: true,
-						reason: preparedMessage.reason,
+						reason: "Could not save the prompt.",
 					};
 				}
-				modelMessages = [
-					...sanitizeSkillToolParts(activeMessagesRef.current),
-					preparedMessage.message,
-				];
-				setIsPreparingMessage(false);
-			} else {
-				modelMessages = sanitizeSkillToolParts(activeMessagesRef.current);
 			}
 			publishActiveMessages(modelMessages);
 			mergeDisplayMessages(modelMessages);
@@ -1312,9 +1929,11 @@ export function useChat(
 				delegation: input.delegation,
 				model: input.model,
 				modelMessages,
-				resolvedAgent: context.resolvedAgent,
+				resolvedAgent: readyContext.resolvedAgent,
 				signal,
-				skill: context.skill,
+				sourceUserMessageId:
+					readyContext.anchoredMessage?.id ?? prepared.newMessage?.id,
+				skill: readyContext.skill,
 				variant: input.variant,
 			});
 		},
@@ -1327,6 +1946,7 @@ export function useChat(
 			resolveSkillForSubmit,
 			runCompaction,
 			runTurn,
+			sessionId,
 		]
 	);
 	const submitRef = useLatest(submit);

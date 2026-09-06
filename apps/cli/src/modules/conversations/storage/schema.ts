@@ -1,5 +1,4 @@
 import type {
-	AgentTurnOutcomeRecord,
 	ConversationMessageRecord,
 	ConversationRecord,
 } from "@wincode/agent-core";
@@ -13,7 +12,10 @@ import {
 	unique,
 } from "drizzle-orm/sqlite-core";
 import type { ConversationCompaction } from "../compaction/types";
-import type { PromptHistoryEntry } from "./conversation-store";
+import type {
+	ConversationRecordStorageOutcome,
+	PromptHistoryEntry,
+} from "./conversation-store";
 
 export const conversationWorkspace = sqliteTable("conversation_workspace", {
 	id: text("id").primaryKey(),
@@ -112,11 +114,14 @@ export const promptHistory = sqliteTable("prompt_history", {
 });
 
 /**
- * One durable Wincode Conversation Record checkpoint: the committed message
- * records, model, usage/terminal outcome, and Agent Turn identity of one
- * semantic checkpoint. Token and reasoning deltas never become rows here.
- * Rows are scoped to a session; `position` keeps checkpoints in commit order
- * per session.
+ * One durable Wincode Conversation Record checkpoint: one committed user,
+ * assistant, or completed Tool Call message plus its semantic outcome. Token
+ * and reasoning deltas never become rows here. Rows are scoped to a session;
+ * `position` keeps checkpoints in commit order per session.
+ *
+ * TODO(issue-86): add richer durable interrupted metadata only when the
+ * product has a defined resume/retry contract. Queued and retrying states are
+ * intentionally not persisted.
  */
 export const conversationRecord = sqliteTable(
 	"conversation_record",
@@ -138,7 +143,7 @@ export const conversationRecord = sqliteTable(
 			.$type<ConversationRecord["model"]>()
 			.notNull(),
 		outcomeJson: text("outcome_json", { mode: "json" })
-			.$type<AgentTurnOutcomeRecord>()
+			.$type<ConversationRecordStorageOutcome>()
 			.notNull(),
 		messagesJson: text("messages_json", { mode: "json" })
 			.$type<ConversationMessageRecord[]>()
