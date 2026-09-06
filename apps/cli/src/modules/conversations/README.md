@@ -6,18 +6,18 @@ Chat session lifecycle: creation, messaging, streaming display, compaction, and 
 
 ### Start a session
 
-`ChatView` in home mode collects user input and writes the accepted user
-message as an ordinary durable Conversation Record in the local SQLite store.
+`NewSessionView` collects user input and writes the accepted user message as
+an ordinary durable Conversation Record in the local SQLite store.
 It then navigates to `/sessions/$id` with transient startup state. That state
 starts the first Agent Turn once; opening the same session later only restores
 durable records and never runs the Agent.
 ### Join a session
 
-`ChatView` loads the transcript and ordered local compaction entries, validates the messages, rebuilds active context, and gives that context to the Wincode `ConversationController`.
+`SessionView` loads the transcript and ordered local compaction entries, validates the messages, rebuilds active context, and gives that context to the Wincode `ConversationController`.
 
 ### Send a message
 
-`ChatView` sends through the application-owned `ConversationController`. The
+`SessionView` sends through the application-owned `ConversationController`. The
 controller owns the submit, cancellation, interruption, state subscription,
 approval-response contracts, and the single Agent Runtime event consumer. The
 CLI projects those events into its OpenTUI message state.
@@ -75,17 +75,23 @@ distinct live status from the current Agent Turn.
 - `path.ts` — platform-specific local database and attachment paths.
 - `migrations.ts` — local Drizzle migrator bootstrap.
 
-Local migrations are generated with `bun run db:local:generate` and committed under `apps/cli/drizzle/local`. The store runs the migrator on first open.
+Local migrations are generated with `bun run --cwd apps/cli db:local:generate` and committed under `apps/cli/drizzle/local`. The store runs the migrator on first open.
 
-This is a breaking local persistence cutover. Existing development databases
-must be cleared manually; no migration or automatic cleanup converts prior
-execution-state rows.
+This is a breaking local persistence cutover. Existing session, Conversation
+Record, compaction, and attachment metadata rows are disposable; no
+compatibility migration translates old conversation data or compaction metrics.
+Before exercising the new contract, run the explicit reset command:
+
+`bun run --cwd apps/cli db:local:reset-conversations`
+
+The reset command is manual and is not run during startup. It removes the
+attachment blobs and preserves prompt history and workspace/configuration data.
 
 - `getConversationStore()` — local sessions, Conversation Records, compactions, attachments, and maintenance.
 - `ConversationOperation` — one application-owned send, cancellation, and interruption seam for the current turn path.
 - `useChat(sessionId, initialMessages)` — CLI-owned conversation state, runtime event projection, compaction, and errors.
 - `useChatInputController(options)` — command and file-mention input state.
-- `ChatView`, `ChatShell`, `ChatTextArea` — conversation UI.
+- `NewSessionView`, `SessionView`, `ChatShell`, `ChatTextArea` — conversation UI.
 - `SessionsDialog`, `RenameSessionDialog` — session management UI.
 
 ## Dependencies

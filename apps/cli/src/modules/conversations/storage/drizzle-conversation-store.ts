@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { mkdir, readdir, rm } from "node:fs/promises";
+import { join } from "node:path";
 import {
 	CONVERSATION_RECORD_VERSION,
 	type ConversationRecord,
@@ -44,6 +46,7 @@ import {
 import { runMigrations } from "./migrations";
 import { resolveLocalAttachmentRoot } from "./path";
 import {
+	conversationAttachment,
 	conversationCompaction,
 	conversationRecord,
 	conversationSession,
@@ -52,6 +55,13 @@ import {
 } from "./schema";
 
 const createId = (): string => crypto.randomUUID();
+const clearAttachmentRoot = async (root: string): Promise<void> => {
+	await mkdir(root, { recursive: true });
+	const entries = await readdir(root, { withFileTypes: true });
+	for (const entry of entries) {
+		await rm(join(root, entry.name), { force: true, recursive: true });
+	}
+};
 
 const writePromptHistory = (
 	db: ConversationDatabase,
@@ -246,7 +256,7 @@ const toConversationCompaction = (
 	summarizationUsage: row.summarizationUsageJson ?? undefined,
 	summary: row.summaryJson,
 	throughMessageUiId: row.throughMessageUiId,
-	tokensAfter: row.tokensAfter,
+	estimatedTokensAfter: row.estimatedTokensAfter,
 	tokensBefore: row.tokensBefore,
 	trigger: row.trigger,
 });
@@ -402,7 +412,7 @@ const appendCompaction = (
 			summarizationUsageJson: input.summarizationUsage ?? null,
 			summaryJson: input.summary,
 			throughMessageUiId: input.throughMessageUiId,
-			tokensAfter: input.tokensAfter,
+			estimatedTokensAfter: input.estimatedTokensAfter,
 			tokensBefore: input.tokensBefore,
 			trigger: input.trigger,
 		};
@@ -531,11 +541,12 @@ export const createDrizzleConversationStore = (
 	if (!database) {
 		runMigrations(db);
 	}
+	const attachmentRoot = options.attachmentRoot ?? resolveLocalAttachmentRoot();
 	const attachmentStore =
 		options.attachmentStore ??
 		createConversationAttachmentStore({
 			repository: createDrizzleAttachmentMetadataRepository(db),
-			root: options.attachmentRoot ?? resolveLocalAttachmentRoot(),
+			root: attachmentRoot,
 		});
 	const externalizeAttachments = (
 		messages: readonly ConversationMessage[],
@@ -647,6 +658,15 @@ export const createDrizzleConversationStore = (
 				)
 				.run();
 			await collectAttachments().catch(() => undefined);
+		},
+		resetConversationData: async () => {
+			db.transaction((tx) => {
+				tx.delete(conversationCompaction).run();
+				tx.delete(conversationRecord).run();
+				tx.delete(conversationSession).run();
+				tx.delete(conversationAttachment).run();
+			});
+			await clearAttachmentRoot(attachmentRoot);
 		},
 
 		getCompactions: (sessionId: string) => {

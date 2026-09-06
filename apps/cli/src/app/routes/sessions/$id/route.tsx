@@ -12,9 +12,9 @@ import {
 import { projectConversationRecords } from "@/modules/conversations/storage/conversation-record";
 import { getConversationStore } from "@/modules/conversations/storage/get-conversation-store";
 import {
-	ChatView,
 	type SessionInitialSubmission,
-} from "@/modules/conversations/ui/views/chat-view";
+	SessionView,
+} from "@/modules/conversations/ui/views/session-view";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 
 const readInitialSubmission = (
@@ -128,14 +128,13 @@ function SessionRoute() {
 	}
 
 	return (
-		<ChatView
+		<SessionView
 			initialActiveMessages={activeMessages}
 			initialCompactions={compactions}
 			initialMessages={messages}
 			initialModel={sessionConfig.model}
 			initialSubmission={initialSubmission}
 			initialVariant={sessionConfig.variant}
-			mode="session"
 			sessionId={id}
 			sessionTitle={sessionTitle}
 		/>

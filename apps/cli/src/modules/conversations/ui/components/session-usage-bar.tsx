@@ -5,21 +5,8 @@ import type { SessionUsageSummary } from "../../usage/session-usage";
 
 const CONTEXT_WARNING_PERCENT = 80;
 
-export function SessionUsageBar({
-	isRefreshing = false,
-	summary,
-}: {
-	isRefreshing?: boolean;
-	summary: SessionUsageSummary;
-}) {
+export function SessionUsageBar({ summary }: { summary: SessionUsageSummary }) {
 	const { colors } = useTheme();
-	if (isRefreshing) {
-		return (
-			<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-				Updating context…
-			</text>
-		);
-	}
 	const tokensText = formatModelTokenCount(summary.contextTokens);
 	const percentColor =
 		summary.contextPercent !== null &&

@@ -39,7 +39,6 @@ import { SessionUsageBar } from "./session-usage-bar";
 type ChatShellProps = {
 	activeMessages?: readonly ConversationMessage[];
 	compactions?: readonly ConversationCompaction[];
-	contextTokensOverride?: number;
 	error?: unknown;
 	isBusy: boolean;
 	isCompacting: boolean;
@@ -110,7 +109,6 @@ const findNewestCompaction = (
 export function ChatShell({
 	activeMessages,
 	compactions = [],
-	contextTokensOverride,
 	error,
 	isBusy,
 	isCompacting,
@@ -136,14 +134,10 @@ export function ChatShell({
 	const displayMessages = messages.filter(
 		(message) => !isCompactionSummaryMessage(message)
 	);
-	const liveCompaction =
-		contextTokensOverride === undefined
-			? undefined
-			: findNewestCompaction(compactions);
-	const historicalCompactions =
-		liveCompaction === undefined
-			? compactions
-			: compactions.filter(({ id }) => id !== liveCompaction.id);
+	const liveCompaction = findNewestCompaction(compactions);
+	const historicalCompactions = compactions.filter(
+		({ id }) => id !== liveCompaction?.id
+	);
 	const turns = groupMessagesByConversationTurn(displayMessages);
 	const timeline = buildConversationTimeline(
 		displayMessages,
@@ -158,15 +152,8 @@ export function ChatShell({
 		retryableMessages.some(({ id }) => id === latestRetryMessageId) &&
 		onRetry !== undefined;
 	const usage = useMemo(
-		() =>
-			summarizeSessionUsage(
-				displayMessages,
-				model,
-				table,
-				compactions,
-				contextTokensOverride
-			),
-		[compactions, contextTokensOverride, displayMessages, model, table]
+		() => summarizeSessionUsage(displayMessages, model, table),
+		[displayMessages, model, table]
 	);
 	useEffect(() => {
 		if (scrollRequest === 0) {
@@ -317,12 +304,7 @@ export function ChatShell({
 							</box>
 
 							<box flexDirection="row" flexShrink={0} gap={2} marginLeft="auto">
-								{usage ? (
-									<SessionUsageBar
-										isRefreshing={isCompacting}
-										summary={usage}
-									/>
-								) : null}
+								{usage ? <SessionUsageBar summary={usage} /> : null}
 								<box flexDirection="row" flexShrink={0} gap={1}>
 									<text fg={colors.text}>tab</text>
 									<text attributes={TextAttributes.DIM} fg={colors.textMuted}>

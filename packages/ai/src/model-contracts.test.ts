@@ -199,6 +199,57 @@ describe("focused model contracts", () => {
 			},
 		});
 	});
+	test("bounds thinking budgets when callers request a smaller output limit", () => {
+		expect(
+			resolveModelProviderOptions(findModel("anthropic", "claude-opus-4-5"), {
+				maxOutputTokens: 4096,
+				variant: "high",
+			})
+		).toEqual({
+			maxOutputTokens: 4096,
+			providerOptions: {
+				anthropic: {
+					effort: "high",
+					thinking: { budgetTokens: 4095, type: "enabled" },
+				},
+			},
+		});
+		expect(
+			resolveModelProviderOptions(findModel("google", "gemini-2.5-flash"), {
+				maxOutputTokens: 4096,
+				variant: "high",
+			})
+		).toEqual({
+			maxOutputTokens: 4096,
+			providerOptions: {
+				google: { thinkingConfig: { thinkingBudget: 4095 } },
+			},
+		});
+		expect(
+			resolveModelProviderOptions(findModel("opencode-go", "qwen3.7-max"), {
+				maxOutputTokens: 4096,
+				variant: "max",
+			})
+		).toEqual({
+			maxOutputTokens: 4096,
+			providerOptions: {
+				anthropic: {
+					thinking: { budgetTokens: 4095, type: "enabled" },
+				},
+			},
+		});
+		expect(
+			resolveModelProviderOptions(findModel("anthropic", "claude-opus-4-5"), {
+				maxOutputTokens: 256,
+				variant: "high",
+			})
+		).toEqual({
+			maxOutputTokens: 256,
+			providerOptions: {
+				anthropic: { thinking: { type: "disabled" } },
+			},
+		});
+	});
 
 	test("resolves every catalog model variant into a target", () => {
 		for (const model of modelCatalog) {

@@ -118,7 +118,7 @@ const completedCompaction = (): ConversationCompaction => ({
 		text: "Durable summary",
 	},
 	throughMessageUiId: "assistant-1",
-	tokensAfter: 4883,
+	estimatedTokensAfter: 4883,
 	tokensBefore: 7336,
 	trigger: "manual",
 });
@@ -135,7 +135,6 @@ type ChatShellProbeHandle = {
 	) => string;
 	setCompactions: (compactions: ConversationCompaction[]) => void;
 	setCompacting: (isCompacting: boolean) => void;
-	setContextTokensOverride: (tokens: number | undefined) => void;
 	setMessages: (messages: ConversationMessage[]) => void;
 };
 
@@ -148,7 +147,6 @@ const buildTestRouter = () =>
 type ChatShellProbeProps = {
 	holder: { current: ChatShellProbeHandle | null };
 	initialCompactions?: ConversationCompaction[];
-	initialContextTokensOverride?: number;
 	initialMessages: ConversationMessage[];
 	isBusy?: boolean;
 	isCompacting?: boolean;
@@ -159,7 +157,6 @@ type ChatShellProbeProps = {
 function ChatShellProbe({
 	holder,
 	initialCompactions = [],
-	initialContextTokensOverride,
 	initialMessages,
 	isBusy = false,
 	isCompacting: initialIsCompacting = false,
@@ -168,9 +165,6 @@ function ChatShellProbe({
 }: ChatShellProbeProps) {
 	const { add: addApproval } = useApprovalPanels();
 	const [compactions, setCompactions] = useState(initialCompactions);
-	const [contextTokensOverride, setContextTokensOverride] = useState(
-		initialContextTokensOverride
-	);
 	const [isCompacting, setCompacting] = useState(initialIsCompacting);
 	const [messages, setMessages] = useState(initialMessages);
 	useEffect(() => {
@@ -178,7 +172,6 @@ function ChatShellProbe({
 			addApproval,
 			setCompactions,
 			setCompacting,
-			setContextTokensOverride,
 			setMessages,
 		};
 		return () => {
@@ -188,7 +181,6 @@ function ChatShellProbe({
 	return (
 		<ChatShell
 			compactions={compactions}
-			contextTokensOverride={contextTokensOverride}
 			error={undefined}
 			isBusy={isBusy || isCompacting}
 			isCompacting={isCompacting}
@@ -209,7 +201,6 @@ type ChatShellRenderOptions = {
 	height: number;
 	width: number;
 	initialCompactions?: ConversationCompaction[];
-	initialContextTokensOverride?: number;
 	isBusy?: boolean;
 	isCompacting?: boolean;
 	isInterruptArmed?: boolean;
@@ -222,7 +213,6 @@ const renderChatShell = async (
 		height,
 		width,
 		initialCompactions = [],
-		initialContextTokensOverride,
 		isBusy = false,
 		isCompacting = false,
 		isInterruptArmed = false,
@@ -262,9 +252,6 @@ const renderChatShell = async (
 															<ChatShellProbe
 																holder={holder}
 																initialCompactions={initialCompactions}
-																initialContextTokensOverride={
-																	initialContextTokensOverride
-																}
 																initialMessages={initialMessages}
 																isBusy={isBusy}
 																isCompacting={isCompacting}
@@ -555,7 +542,7 @@ describe("ChatShell activity footer", () => {
 			setup.renderer.destroy();
 		}
 	});
-	test("shows compacting activity then refreshes the token split", async () => {
+	test("shows compacting activity while retaining provider usage", async () => {
 		const messages: ConversationMessage[] = [
 			userMessage("user-1"),
 			{
@@ -581,7 +568,7 @@ describe("ChatShell activity footer", () => {
 			const loadingFrame = setup.captureCharFrame();
 			expect(loadingFrame).toContain("Compacting context... (esc to cancel)");
 			expect(loadingFrame).toContain("Compacting context · Esc cancel");
-			expect(loadingFrame).toContain("Updating context…");
+			expect(loadingFrame).toContain("7.3K");
 			expect(loadingFrame).toMatch(PROGRESS_BAR_REGEX);
 
 			const { promise: progressDelay, resolve: resolveProgressDelay } =
@@ -592,7 +579,6 @@ describe("ChatShell activity footer", () => {
 			expect(setup.captureCharFrame()).toMatch(ACTIVE_PROGRESS_REGEX);
 
 			holder.current?.setCompactions([completedCompaction()]);
-			holder.current?.setContextTokensOverride(4883);
 			holder.current?.setCompacting(false);
 			await flushUi(setup);
 			const completedFrame = setup.captureCharFrame();
@@ -621,7 +607,6 @@ describe("ChatShell activity footer", () => {
 		const { setup } = await renderChatShell(messages, {
 			height: 12,
 			initialCompactions: [completedCompaction()],
-			initialContextTokensOverride: 4883,
 			width: 100,
 		});
 

@@ -69,6 +69,7 @@ export type ConversationStore = {
 	) => Promise<ConversationCompaction>;
 	createSession: (input: CreateSessionInput) => Promise<{ id: string }>;
 	deleteSession: (sessionId: string) => Promise<void>;
+	resetConversationData: () => Promise<void>;
 	getCompactions: (sessionId: string) => Promise<ConversationCompaction[]>;
 	getLatestCompaction: (
 		sessionId: string

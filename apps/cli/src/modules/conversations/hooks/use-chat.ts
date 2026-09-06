@@ -137,14 +137,6 @@ const createEmptyRuntimeAssistantMessage = (
 const isBenignCompactionError = (error: unknown): boolean =>
 	error instanceof ConversationCompactionError &&
 	(error.code === "history-too-short" || error.code === "not-needed");
-const clearContextOverrideAfterUsage = (
-	usage: ModelUsage | null,
-	clear: () => void
-): void => {
-	if (usage !== null) {
-		clear();
-	}
-};
 
 const compactionErrorMessage = (error: unknown): string =>
 	error instanceof Error ? error.message : "Conversation compaction failed.";
@@ -1256,12 +1248,6 @@ export function useChat(
 	const [compactions, setCompactions] = useState<ConversationCompaction[]>(
 		() => [...initialCompactions]
 	);
-	const [contextTokensOverride, setContextTokensOverride] = useState<
-		number | undefined
-	>(undefined);
-	const clearContextTokensOverride = useCallback(() => {
-		setContextTokensOverride(undefined);
-	}, []);
 	const [isCompacting, setIsCompacting] = useState(false);
 	const [compactionError, setCompactionError] = useState<Error | null>(null);
 	const [isPreparingMessage, setIsPreparingMessage] = useState(false);
@@ -1363,15 +1349,11 @@ export function useChat(
 		() =>
 			createConversationCompaction({
 				attachmentStore: getConversationStore().attachmentStore,
-				estimateTokens: (messages) =>
-					estimateCompactionTokens(
-						messages,
-						estimateRuntimeRequestOverheadTokens()
-					),
+				estimateTokens: (messages) => estimateCompactionTokens(messages),
 				store: getConversationStore(),
 				summaryGenerator,
 			}),
-		[estimateRuntimeRequestOverheadTokens, summaryGenerator]
+		[summaryGenerator]
 	);
 	const getCompactionSettings = useCallback(
 		(selection: ChatModelSelection = modelRef.current) =>
@@ -1412,11 +1394,14 @@ export function useChat(
 						? {}
 						: { variant: compactionVariant }),
 					settings: {
+						compactionOverheadTokens: estimateRuntimeRequestOverheadTokens(),
 						enabled: settings.enabled,
 						keepRecentTokens: settings.keepRecentTokens,
 						maxMediaAttachments: settings.maxMediaAttachments,
 						maxMediaBytes: settings.maxMediaBytes,
 						maxMediaTokens: settings.maxMediaTokens,
+						modelContextLimit: settings.modelContextLimit,
+						reserveTokens: settings.reserveTokens,
 						thresholdTokens: settings.thresholdTokens,
 					},
 					signal: controller.signal,
@@ -1424,7 +1409,6 @@ export function useChat(
 				});
 				setCompactionError(null);
 				publishActiveMessages(result.activeMessages);
-				setContextTokensOverride(result.entry.tokensAfter);
 				setCompactions((currentCompactions) =>
 					currentCompactions.some(({ id }) => id === result.entry.id)
 						? currentCompactions
@@ -1443,6 +1427,7 @@ export function useChat(
 		},
 		[
 			compactionModule,
+			estimateRuntimeRequestOverheadTokens,
 			getCompactionSettings,
 			mergeDisplayMessages,
 			publishActiveMessages,
@@ -1665,7 +1650,6 @@ export function useChat(
 				event.type === "agent-turn-completed"
 					? normalizeModelUsage(event.usage)
 					: null;
-			clearContextOverrideAfterUsage(usage, clearContextTokensOverride);
 			const metadata = buildTerminalMessageMetadata({
 				agent: agentRef.current,
 				base,
@@ -1690,7 +1674,7 @@ export function useChat(
 			publishActiveMessages(safeMessages);
 			mergeDisplayMessages(safeMessages);
 		},
-		[clearContextTokensOverride, mergeDisplayMessages, publishActiveMessages]
+		[mergeDisplayMessages, publishActiveMessages]
 	);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: latest-value refs intentionally keep turn callbacks current without rebuilding the turn.
@@ -2088,11 +2072,14 @@ export function useChat(
 					compactionInput: {
 						model: failedModel,
 						settings: {
+							compactionOverheadTokens: estimateRuntimeRequestOverheadTokens(),
 							enabled: settings.enabled,
 							keepRecentTokens: settings.keepRecentTokens,
 							maxMediaAttachments: settings.maxMediaAttachments,
 							maxMediaBytes: settings.maxMediaBytes,
 							maxMediaTokens: settings.maxMediaTokens,
+							modelContextLimit: settings.modelContextLimit,
+							reserveTokens: settings.reserveTokens,
 							thresholdTokens: settings.thresholdTokens,
 						},
 					},
@@ -2208,7 +2195,6 @@ export function useChat(
 				selectionVariant
 			),
 		compactions,
-		contextTokensOverride,
 		conversation,
 		error: compactionError ?? error,
 		getCompactionSettings,

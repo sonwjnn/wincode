@@ -14,10 +14,10 @@ const TRIGGER_LABELS: Record<ConversationCompaction["trigger"], string> = {
 export const formatCompactionDivider = (
 	entry: Pick<
 		ConversationCompaction,
-		"tokensAfter" | "tokensBefore" | "trigger"
+		"estimatedTokensAfter" | "tokensBefore" | "trigger"
 	>
 ): string =>
-	`Compacted (${TRIGGER_LABELS[entry.trigger]}) · ${formatModelTokenCount(entry.tokensBefore)}→${formatModelTokenCount(entry.tokensAfter)} tokens`;
+	`Compacted (${TRIGGER_LABELS[entry.trigger]}) · ${formatModelTokenCount(entry.tokensBefore)}→${formatModelTokenCount(entry.estimatedTokensAfter)} tokens`;
 
 export function CompactionDivider({
 	entry,

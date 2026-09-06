@@ -134,7 +134,7 @@ export const modelProviderOptionsSchema = z.union([
 	googleProviderOptionsSchema,
 ]);
 
-const MAX_OUTPUT_TOKENS = 32_000;
+export const MODEL_OUTPUT_TOKEN_LIMIT = 32_000;
 const reasoningSummaryModels: Readonly<Record<string, true>> = {
 	"gpt-5.4-mini": true,
 	"gpt-5.5": true,
@@ -243,7 +243,30 @@ const toGoogleThinkingLevel = (
 };
 
 const cappedOutputTokens = (maxOutputTokens: number | undefined): number =>
-	Math.min(maxOutputTokens ?? MAX_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS);
+	Math.min(
+		maxOutputTokens ?? MODEL_OUTPUT_TOKEN_LIMIT,
+		MODEL_OUTPUT_TOKEN_LIMIT
+	);
+
+const boundedThinkingBudget = (
+	provider: "Anthropic" | "Google",
+	modelId: string,
+	selectedBudget: number,
+	outputTokens: number
+): number | null => {
+	if (provider === "Anthropic" && outputTokens <= 1024) {
+		return null;
+	}
+	if (outputTokens <= 1) {
+		throw new Error(
+			`Invalid ${provider} budget for ${modelId}: output limit must leave room for thinking`
+		);
+	}
+	if (selectedBudget < outputTokens) {
+		return selectedBudget;
+	}
+	return outputTokens - 1;
+};
 
 const resolveOpenAIOptions = (
 	model: Extract<SupportedChatModel, { provider: "openai" }>,
@@ -284,18 +307,25 @@ const resolveAnthropicOptions = (
 		throw unsupportedVariant(model, variant);
 	}
 	const outputTokens = cappedOutputTokens(maxOutputTokens);
-	if (selectedBudget >= outputTokens) {
-		throw new Error(
-			`Invalid Anthropic budget for ${model.id}: ${selectedBudget} must be less than ${outputTokens}`
-		);
-	}
+	const thinkingBudget = boundedThinkingBudget(
+		"Anthropic",
+		model.id,
+		selectedBudget,
+		outputTokens
+	);
 	return {
 		maxOutputTokens: outputTokens,
 		providerOptions: {
-			anthropic: {
-				...(isManual ? { effort } : {}),
-				thinking: { budgetTokens: selectedBudget, type: "enabled" },
-			},
+			anthropic:
+				thinkingBudget === null
+					? { thinking: { type: "disabled" } }
+					: {
+							...(isManual ? { effort } : {}),
+							thinking: {
+								budgetTokens: thinkingBudget,
+								type: "enabled",
+							},
+						},
 		},
 	};
 };
@@ -326,15 +356,21 @@ const resolveGoogleOptions = (
 	}
 	const outputTokens = cappedOutputTokens(maxOutputTokens);
 	const selectedBudget = budget[variant === "high" ? 0 : 1];
-	if (selectedBudget >= outputTokens) {
+	const thinkingBudget = boundedThinkingBudget(
+		"Google",
+		model.id,
+		selectedBudget,
+		outputTokens
+	);
+	if (thinkingBudget === null) {
 		throw new Error(
-			`Invalid Google budget for ${model.id}: ${selectedBudget} must be less than ${outputTokens}`
+			`Invalid Google budget for ${model.id}: output limit is too small for thinking`
 		);
 	}
 	return {
 		maxOutputTokens: outputTokens,
 		providerOptions: {
-			google: { thinkingConfig: { thinkingBudget: selectedBudget } },
+			google: { thinkingConfig: { thinkingBudget } },
 		},
 	};
 };
@@ -360,9 +396,11 @@ const resolveOpenCodeGoOpenAIOptions = (
 });
 
 const resolveOpenCodeGoAnthropicOptions = (
-	entry: ReturnType<typeof generatedEntry>,
-	variant: ModelVariant | undefined
+	model: Extract<SupportedChatModel, { provider: "opencode-go" }>,
+	variant: ModelVariant | undefined,
+	maxOutputTokens: number | undefined
 ): AnthropicProviderOptions | undefined => {
+	const entry = generatedEntry(model);
 	if (entry?.kind === "toggle") {
 		if (variant === "none") {
 			return { anthropic: { thinking: { type: "disabled" } } };
@@ -375,13 +413,25 @@ const resolveOpenCodeGoAnthropicOptions = (
 	if (!entry?.budget || (variant !== "high" && variant !== "max")) {
 		return;
 	}
+	const outputTokens = cappedOutputTokens(maxOutputTokens);
+	const selectedBudget =
+		variant === "high" ? entry.budget.high : entry.budget.max;
+	const thinkingBudget = boundedThinkingBudget(
+		"Anthropic",
+		model.id,
+		selectedBudget,
+		outputTokens
+	);
 	return {
-		anthropic: {
-			thinking: {
-				budgetTokens: variant === "high" ? entry.budget.high : entry.budget.max,
-				type: "enabled",
-			},
-		},
+		anthropic:
+			thinkingBudget === null
+				? { thinking: { type: "disabled" } }
+				: {
+						thinking: {
+							budgetTokens: thinkingBudget,
+							type: "enabled",
+						},
+					},
 	};
 };
 
@@ -399,8 +449,9 @@ const resolveOpenCodeGoOptions = (
 			};
 		case "anthropic": {
 			const providerOptions = resolveOpenCodeGoAnthropicOptions(
-				generatedEntry(model),
-				variant
+				model,
+				variant,
+				maxOutputTokens
 			);
 			return providerOptions ? { ...max, providerOptions } : max;
 		}
