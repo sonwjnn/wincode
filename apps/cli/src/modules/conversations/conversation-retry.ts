@@ -16,12 +16,21 @@ export const getConversationAttemptMessages = (
 	const nextUserIndex = messages.findIndex(
 		(message, index) => index > userIndex && message.role === "user"
 	);
-	const attemptMessages = messages.slice(
-		userIndex + 1,
-		nextUserIndex === -1 ? undefined : nextUserIndex
-	);
 	const userMessage = messages[userIndex];
-	if (userMessage === undefined || nextUserIndex === -1) {
+	if (userMessage === undefined) {
+		return messages.slice(
+			userIndex + 1,
+			nextUserIndex === -1 ? undefined : nextUserIndex
+		);
+	}
+	const attemptMessages = messages
+		.slice(userIndex + 1, nextUserIndex === -1 ? undefined : nextUserIndex)
+		.filter(
+			(message) =>
+				message.metadata?.sourceUserMessageId === undefined ||
+				message.metadata.sourceUserMessageId === userMessage.id
+		);
+	if (nextUserIndex === -1) {
 		return attemptMessages;
 	}
 	const linkedMessages = messages

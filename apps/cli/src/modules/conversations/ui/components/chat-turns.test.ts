@@ -180,3 +180,18 @@ test("suppresses retry after a successful older retry result", () => {
 		])
 	).toBeUndefined();
 });
+test("keeps a later user's retry state independent from an older retry result", () => {
+	const retryResult: ConversationMessage = {
+		...assistant("assistant-retry"),
+		metadata: { sourceUserMessageId: "user-1" },
+	};
+
+	expect(
+		resolveRetryMessageId([
+			user("user-1"),
+			user("user-2"),
+			terminalAssistant("failed-2", "failed"),
+			retryResult,
+		])
+	).toBe("user-2");
+});

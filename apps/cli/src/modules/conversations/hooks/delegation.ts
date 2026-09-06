@@ -48,6 +48,17 @@ const toolCallIdOf = (
 	return call.toolCallId;
 };
 
+const commitDelegatedPromptFallback = async (
+	commitUserMessage: () => Promise<void>
+): Promise<void> => {
+	try {
+		await commitUserMessage();
+	} catch (error) {
+		throw new Error("Could not persist the delegated prompt.", {
+			cause: error,
+		});
+	}
+};
 export type CreateDelegationExecutorOptions = {
 	readonly connections: Connections;
 	readonly createSkillContext?: ChildSkillContextFactory;
@@ -217,7 +228,7 @@ export const createDelegationExecutor = ({
 			});
 		} catch (error) {
 			if (!(userCommitted || userCommitAttempted)) {
-				await commitUserMessage().catch(() => undefined);
+				await commitDelegatedPromptFallback(commitUserMessage);
 			}
 			if (userCommitted && !terminalObserved) {
 				await store
