@@ -265,6 +265,9 @@ const metadataForRecord = (
 			? {}
 			: { responseTimeMs: metadata.responseTimeMs }),
 		...(metadata?.skill === undefined ? {} : { skill: metadata.skill }),
+		...(metadata?.sourceUserMessageId === undefined
+			? {}
+			: { sourceUserMessageId: metadata.sourceUserMessageId }),
 		...(metadata?.usage === undefined ? {} : { usage: metadata.usage }),
 		...(variant === undefined ? {} : { variant }),
 	});
@@ -375,6 +378,7 @@ const toDurableMetadata = (
 		return;
 	}
 	const skill = metadata.skill;
+	const sourceUserMessageId = metadata.sourceUserMessageId;
 	return {
 		...(metadata.agent === undefined ? {} : { agent: metadata.agent }),
 		...(metadata.model === undefined ? {} : { model: metadata.model }),
@@ -391,6 +395,7 @@ const toDurableMetadata = (
 						source: skill.source ?? "explicit",
 					},
 				}),
+		...(sourceUserMessageId === undefined ? {} : { sourceUserMessageId }),
 		...(metadata.usage === undefined ? {} : { usage: metadata.usage }),
 		...(metadata.variant === undefined ? {} : { variant: metadata.variant }),
 	};

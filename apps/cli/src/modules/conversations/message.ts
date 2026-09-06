@@ -132,6 +132,7 @@ export type ConversationMessageMetadata = {
 	readonly model?: ChatModelSelection;
 	readonly responseTimeMs?: number;
 	readonly skill?: ConversationMessageSkill;
+	readonly sourceUserMessageId?: string;
 	readonly terminalOutcome?: ConversationMessageTerminalOutcome;
 	readonly usage?: ConversationMessageUsage;
 	readonly variant?: ModelVariant;
@@ -167,11 +168,12 @@ export const conversationMessageUsageSchema = z
 
 export const conversationMessageMetadataSchema = z
 	.object({
-		interrupted: z.boolean().optional(),
-		skill: conversationMessageSkillSchema.optional(),
 		agent: agentIdSchema.optional(),
+		interrupted: z.boolean().optional(),
 		model: conversationMessageModelSchema.optional(),
 		responseTimeMs: z.number().int().nonnegative().optional(),
+		skill: conversationMessageSkillSchema.optional(),
+		sourceUserMessageId: z.string().min(1).optional(),
 		terminalOutcome: z.enum(["cancelled", "failed", "interrupted"]).optional(),
 		usage: conversationMessageUsageSchema.optional(),
 		variant: modelVariantSchema.optional(),

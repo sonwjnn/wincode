@@ -80,6 +80,7 @@ export type ConversationMessageMetadataRecord = {
 	};
 	readonly responseTimeMs?: number;
 	readonly skill?: ConversationSkillActivationRecord;
+	readonly sourceUserMessageId?: string;
 	readonly usage?: ModelUsage;
 	readonly variant?: ModelVariant;
 };
@@ -223,6 +224,7 @@ const isConversationMessageMetadataRecord = (
 				key === "model" ||
 				key === "responseTimeMs" ||
 				key === "skill" ||
+				key === "sourceUserMessageId" ||
 				key === "usage" ||
 				key === "variant"
 		) &&
@@ -233,6 +235,9 @@ const isConversationMessageMetadataRecord = (
 			isNonNegativeInteger(value.responseTimeMs)) &&
 		(value.skill === undefined ||
 			isConversationSkillActivationRecord(value.skill)) &&
+		(value.sourceUserMessageId === undefined ||
+			(typeof value.sourceUserMessageId === "string" &&
+				value.sourceUserMessageId.length > 0)) &&
 		(value.usage === undefined ||
 			modelUsageSchema.safeParse(value.usage).success) &&
 		(value.variant === undefined || typeof value.variant === "string")

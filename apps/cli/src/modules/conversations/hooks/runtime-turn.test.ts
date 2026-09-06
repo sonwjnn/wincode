@@ -156,6 +156,7 @@ test("commits only the durable assistant outcome before exposing terminal output
 			callbackOrder.push(`terminal:${event.type}`);
 		},
 		runtime,
+		sourceUserMessageId: "message-user",
 		turn,
 	});
 
@@ -178,6 +179,7 @@ test("commits only the durable assistant outcome before exposing terminal output
 			id: "assistant-turn-runtime-test",
 			metadata: {
 				model,
+				sourceUserMessageId: "message-user",
 				usage: { inputTokens: 12, outputTokens: 4 },
 			},
 			parts: [{ text: "Done", type: "text" }],

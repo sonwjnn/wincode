@@ -768,8 +768,10 @@ const recordModelForTurn = (turn: AgentTurn): ConversationRecord["model"] => ({
 });
 const assistantRecordMetadata = (
 	turn: AgentTurn,
-	usage?: NonNullable<ReturnType<typeof normalizeModelUsage>>
+	usage?: NonNullable<ReturnType<typeof normalizeModelUsage>>,
+	sourceUserMessageId?: string
 ): ConversationMessageMetadataRecord => ({
+	...(sourceUserMessageId === undefined ? {} : { sourceUserMessageId }),
 	model: {
 		modelId: turn.model.modelId,
 		providerId: turn.model.providerId,
@@ -787,11 +789,13 @@ export const buildTerminalConversationRecord = ({
 	assistantText,
 	event,
 	hasCompletedToolCalls = false,
+	sourceUserMessageId,
 	turn,
 }: {
 	assistantText: string;
 	event: AgentTurnTerminalEvent;
 	hasCompletedToolCalls?: boolean;
+	sourceUserMessageId?: string;
 	turn: AgentTurn;
 }): ConversationRecord | undefined => {
 	const safeEvent = normalizeTerminalEvent(event, turn);
@@ -856,7 +860,7 @@ export const buildTerminalConversationRecord = ({
 		messages: [
 			{
 				id: `assistant-${turn.id}`,
-				metadata: assistantRecordMetadata(turn, safeUsage),
+				metadata: assistantRecordMetadata(turn, safeUsage, sourceUserMessageId),
 				parts: [{ text, type: "text" }],
 				role: "assistant",
 			},
@@ -871,6 +875,7 @@ const buildAssistantOutcomeConversationRecord = ({
 	agentId,
 	delegation,
 	model,
+	sourceUserMessageId,
 	text,
 	terminal,
 	turnId,
@@ -879,6 +884,7 @@ const buildAssistantOutcomeConversationRecord = ({
 	agentId: AgentId;
 	delegation?: AgentTurnDelegation;
 	model: Pick<ConversationRecord["model"], "modelId" | "providerId">;
+	sourceUserMessageId?: string;
 	text: string;
 	terminal: AgentTurnOutcomeRecord;
 	turnId: string;
@@ -896,6 +902,7 @@ const buildAssistantOutcomeConversationRecord = ({
 					modelId: model.modelId,
 					providerId: model.providerId,
 				},
+				...(sourceUserMessageId === undefined ? {} : { sourceUserMessageId }),
 				...(variant === undefined ? {} : { variant }),
 			},
 			parts: [{ text, type: "text" }],
@@ -917,6 +924,7 @@ export const buildAssistantFailureConversationRecord = ({
 	delegation,
 	error,
 	model,
+	sourceUserMessageId,
 	turnId,
 	variant,
 }: {
@@ -924,6 +932,7 @@ export const buildAssistantFailureConversationRecord = ({
 	delegation?: AgentTurnDelegation;
 	error: unknown;
 	model: Pick<ConversationRecord["model"], "modelId" | "providerId">;
+	sourceUserMessageId?: string;
 	turnId: string;
 	variant?: ConversationRecord["model"]["variant"];
 }): ConversationRecord => {
@@ -935,6 +944,7 @@ export const buildAssistantFailureConversationRecord = ({
 		agentId,
 		delegation,
 		model,
+		sourceUserMessageId,
 		terminal: {
 			failure,
 			finishedAt: Date.now(),
@@ -950,12 +960,14 @@ export const buildAssistantCancelledConversationRecord = ({
 	agentId,
 	delegation,
 	model,
+	sourceUserMessageId,
 	turnId,
 	variant,
 }: {
 	agentId: AgentId;
 	delegation?: AgentTurnDelegation;
 	model: Pick<ConversationRecord["model"], "modelId" | "providerId">;
+	sourceUserMessageId?: string;
 	turnId: string;
 	variant?: ConversationRecord["model"]["variant"];
 }): ConversationRecord => {
@@ -972,6 +984,7 @@ export const buildAssistantCancelledConversationRecord = ({
 		agentId,
 		delegation,
 		model,
+		sourceUserMessageId,
 		terminal: {
 			failure,
 			finishedAt: Date.now(),
@@ -986,10 +999,12 @@ export const buildAssistantCancelledConversationRecord = ({
 export const buildToolConversationRecord = ({
 	input,
 	event,
+	sourceUserMessageId,
 	turn,
 }: {
 	event: Extract<AgentTurnEvent, { type: "tool-call-finished" }>;
 	input: unknown;
+	sourceUserMessageId?: string;
 	turn: AgentTurn;
 }): ConversationRecord => ({
 	agentId: turn.agent.id,
@@ -998,7 +1013,7 @@ export const buildToolConversationRecord = ({
 	messages: [
 		{
 			id: `tool-${turn.id}-${event.toolCallId}`,
-			metadata: assistantRecordMetadata(turn),
+			metadata: assistantRecordMetadata(turn, undefined, sourceUserMessageId),
 			parts: [
 				toDurableToolPart({
 					input,
@@ -1062,6 +1077,7 @@ export const runAgentTurnToText = async ({
 	onViewState,
 	runtime,
 	signal,
+	sourceUserMessageId,
 	turn,
 }: {
 	onCheckpoint?: CheckpointCommitter;
@@ -1071,6 +1087,7 @@ export const runAgentTurnToText = async ({
 	onViewState?: (state: ConversationViewState) => void;
 	runtime: AgentRuntime;
 	signal?: AbortSignal;
+	sourceUserMessageId?: string;
 	turn: AgentTurn;
 }): Promise<string> => {
 	let assistantText = "";
@@ -1118,6 +1135,7 @@ export const runAgentTurnToText = async ({
 						buildToolConversationRecord({
 							event,
 							input: started.input,
+							sourceUserMessageId,
 							turn,
 						})
 					);
@@ -1144,6 +1162,7 @@ export const runAgentTurnToText = async ({
 		assistantText,
 		hasCompletedToolCalls: completedToolCalls > 0,
 		event: terminalEvent,
+		sourceUserMessageId,
 		turn,
 	});
 	await commit(onCheckpoint, record);

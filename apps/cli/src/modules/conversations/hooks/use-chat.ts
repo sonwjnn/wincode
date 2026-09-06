@@ -49,6 +49,10 @@ import {
 	useCompactionSettings,
 } from "@/modules/conversations/compaction";
 import {
+	getConversationAttemptMessages,
+	hasCompletedToolArtifact,
+} from "@/modules/conversations/conversation-retry";
+import {
 	type ConversationMessage,
 	type ConversationMessageMetadata,
 	type ConversationMessageTerminalOutcome,
@@ -114,6 +118,17 @@ export const createChatMessageParts = (
 
 const AGENT_TURN_DEADLINE_MS = 43_200_000;
 const INTERRUPTED_TOOL_ERROR = "Tool call interrupted";
+const createEmptyRuntimeAssistantMessage = (
+	assistantId: string,
+	sourceUserMessageId: string | null
+): ConversationMessage => ({
+	id: assistantId,
+	...(sourceUserMessageId === null
+		? {}
+		: { metadata: { sourceUserMessageId } }),
+	parts: [],
+	role: "assistant",
+});
 
 const isBenignCompactionError = (error: unknown): boolean =>
 	error instanceof ConversationCompactionError &&
@@ -376,27 +391,6 @@ type PreparedModelMessages =
 			readonly newMessage?: ConversationMessage;
 	  }
 	| { readonly kind: "rejected"; readonly reason: string };
-
-const hasCompletedToolArtifact = (
-	messages: readonly ConversationMessage[],
-	startIndex: number
-): boolean => {
-	const nextUserIndex = messages.findIndex(
-		(message, index) => index > startIndex && message.role === "user"
-	);
-	const attemptMessages = messages.slice(
-		startIndex + 1,
-		nextUserIndex === -1 ? undefined : nextUserIndex
-	);
-	return attemptMessages.some(
-		(message) =>
-			message.role === "assistant" &&
-			message.parts.some(
-				(part) =>
-					isConversationToolPart(part) && isTerminalConversationToolPart(part)
-			)
-	);
-};
 export const prepareRetryMessages = (
 	messages: readonly ConversationMessage[],
 	messageId: string
@@ -410,7 +404,11 @@ export const prepareRetryMessages = (
 			reason: "The stored message to continue is unavailable",
 		};
 	}
-	if (hasCompletedToolArtifact(messages, messageIndex)) {
+	if (
+		hasCompletedToolArtifact(
+			getConversationAttemptMessages(messages, messageIndex)
+		)
+	) {
 		return {
 			kind: "rejected",
 			reason: "This message cannot be retried after completed Tool Calls.",
@@ -641,6 +639,11 @@ const handleSafeAssistantOutcome = async ({
 		metadata: {
 			agent,
 			model,
+			...(durableMessage?.metadata?.sourceUserMessageId === undefined
+				? {}
+				: {
+						sourceUserMessageId: durableMessage.metadata.sourceUserMessageId,
+					}),
 			...(terminal === "interrupted" ? { interrupted: true } : {}),
 			...(terminal === "completed" ? {} : { terminalOutcome: terminal }),
 			...(variant === undefined ? {} : { variant }),
@@ -668,6 +671,7 @@ const handlePreExecutionTurnFailure = async ({
 	delegation,
 	error,
 	model,
+	sourceUserMessageId,
 	turnId,
 	variant,
 	commitRecord,
@@ -680,6 +684,7 @@ const handlePreExecutionTurnFailure = async ({
 	delegation?: AgentTurnDelegation;
 	error: unknown;
 	model: ChatModelSelection;
+	sourceUserMessageId?: string;
 	turnId: string;
 	variant?: ModelVariant;
 	commitRecord: (record: ConversationRecord) => Promise<void>;
@@ -700,6 +705,7 @@ const handlePreExecutionTurnFailure = async ({
 			delegation,
 			error,
 			model,
+			sourceUserMessageId,
 			turnId,
 			variant,
 		}),
@@ -720,6 +726,7 @@ const handleTurnFailure = async ({
 	publishActiveMessages,
 	setError,
 	signal,
+	sourceUserMessageId,
 	terminalObserved,
 	turnId,
 	variant,
@@ -738,6 +745,7 @@ const handleTurnFailure = async ({
 	publishActiveMessages: (messages: ConversationMessage[]) => void;
 	setError: (error: Error) => void;
 	signal: AbortSignal;
+	sourceUserMessageId?: string;
 	terminalObserved: boolean;
 	turnId: string;
 	variant?: ModelVariant;
@@ -756,6 +764,7 @@ const handleTurnFailure = async ({
 					agentId: agent,
 					delegation,
 					model,
+					sourceUserMessageId,
 					turnId,
 					variant,
 				}),
@@ -774,6 +783,7 @@ const handleTurnFailure = async ({
 			model,
 			publishActiveMessages,
 			setError,
+			sourceUserMessageId,
 			turnId,
 			variant,
 		});
@@ -783,6 +793,7 @@ const handleTurnFailure = async ({
 			? buildTerminalConversationRecord({
 					assistantText: "",
 					event: createAgentTurnAbortEvent(currentTurn, signal, 0),
+					sourceUserMessageId,
 					turn: currentTurn,
 				})
 			: buildAssistantFailureConversationRecord({
@@ -790,6 +801,7 @@ const handleTurnFailure = async ({
 					delegation,
 					error,
 					model,
+					sourceUserMessageId,
 					turnId,
 					variant,
 				});
@@ -1211,6 +1223,7 @@ export function useChat(
 	const overflowAttemptRef = useRef(0);
 	const requestStartedAtRef = useRef<number | null>(null);
 	const currentAssistantIdRef = useRef<string | null>(null);
+	const currentSourceUserMessageIdRef = useRef<string | null>(null);
 	const agentRef = useRef<AgentId>("build");
 	const resolvedAgentRef = useRef<ResolvedCodingAgent | undefined>(undefined);
 	const modelRef = useRef<ChatModelSelection>(defaultChatModelSelection);
@@ -1500,12 +1513,15 @@ export function useChat(
 			const index = current.findIndex(({ id }) => id === assistantId);
 			const existing: ConversationMessage =
 				index === -1
-					? { id: assistantId, parts: [], role: "assistant" }
-					: (current[index] ?? {
-							id: assistantId,
-							parts: [],
-							role: "assistant",
-						});
+					? createEmptyRuntimeAssistantMessage(
+							assistantId,
+							currentSourceUserMessageIdRef.current
+						)
+					: (current[index] ??
+						createEmptyRuntimeAssistantMessage(
+							assistantId,
+							currentSourceUserMessageIdRef.current
+						));
 			const parts = [...existing.parts];
 			switch (event.type) {
 				case "model-step-started":
@@ -1578,7 +1594,10 @@ export function useChat(
 			const index = current.findIndex(({ id }) => id === assistantId);
 			const base =
 				index === -1
-					? { id: assistantId, parts: [], role: "assistant" as const }
+					? createEmptyRuntimeAssistantMessage(
+							assistantId,
+							currentSourceUserMessageIdRef.current
+						)
 					: current[index];
 			if (base === undefined) {
 				return;
@@ -1628,6 +1647,7 @@ export function useChat(
 			model,
 			resolvedAgent,
 			skill,
+			sourceUserMessageId,
 			variant,
 			modelMessages,
 			signal,
@@ -1637,6 +1657,7 @@ export function useChat(
 			model: ChatModelSelection;
 			resolvedAgent: ResolvedCodingAgent;
 			skill?: SkillRequestContext;
+			sourceUserMessageId?: string;
 			variant?: ModelVariant;
 			modelMessages: readonly ConversationMessage[];
 			signal: AbortSignal;
@@ -1647,6 +1668,7 @@ export function useChat(
 			const store = getConversationStore();
 			const turnId = createAgentTurnId();
 			currentAssistantIdRef.current = `assistant-${turnId}`;
+			currentSourceUserMessageIdRef.current = sourceUserMessageId ?? null;
 			let snapshot: McpCatalogSnapshot | undefined;
 			let executionStarted = false;
 			let currentTurn: AgentTurn | undefined;
@@ -1725,6 +1747,7 @@ export function useChat(
 							updateRuntimeMessage,
 						});
 					},
+					sourceUserMessageId,
 					onTerminal: (event) => {
 						executionStarted = true;
 						terminalObserved = true;
@@ -1760,6 +1783,7 @@ export function useChat(
 					terminalObserved,
 					turnId,
 					variant,
+					sourceUserMessageId,
 				});
 			} finally {
 				releaseTurnSnapshot({
@@ -1768,6 +1792,7 @@ export function useChat(
 					snapshot,
 				});
 				currentAssistantIdRef.current = null;
+				currentSourceUserMessageIdRef.current = null;
 			}
 		},
 		[
@@ -1906,6 +1931,8 @@ export function useChat(
 				modelMessages,
 				resolvedAgent: readyContext.resolvedAgent,
 				signal,
+				sourceUserMessageId:
+					readyContext.anchoredMessage?.id ?? prepared.newMessage?.id,
 				skill: readyContext.skill,
 				variant: input.variant,
 			});

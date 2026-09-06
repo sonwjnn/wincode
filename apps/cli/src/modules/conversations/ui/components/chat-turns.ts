@@ -1,9 +1,9 @@
 import { normalizeChatModelSelection } from "@wincode/ai/models";
-import type { ConversationMessage } from "@/modules/conversations/message";
 import {
-	isConversationToolPart,
-	isTerminalConversationToolPart,
-} from "@/modules/conversations/message";
+	getConversationAttemptMessages,
+	hasCompletedToolArtifact,
+} from "@/modules/conversations/conversation-retry";
+import type { ConversationMessage } from "@/modules/conversations/message";
 
 export type ConversationTurn = {
 	id: string;
@@ -84,16 +84,24 @@ export const groupMessagesByConversationTurn = (
 	messages: ConversationMessage[]
 ): ConversationTurn[] => {
 	const turns: ConversationTurn[] = [];
+	const turnsByUserMessageId = new Map<string, ConversationTurn>();
 	let currentTurn: ConversationTurn | null = null;
 
 	for (const message of messages) {
 		if (message.role === "user" || currentTurn === null) {
 			currentTurn = { id: message.id, messages: [message] };
 			turns.push(currentTurn);
+			if (message.role === "user") {
+				turnsByUserMessageId.set(message.id, currentTurn);
+			}
 			continue;
 		}
 
-		currentTurn.messages.push(message);
+		const sourceTurn =
+			message.metadata?.sourceUserMessageId === undefined
+				? undefined
+				: turnsByUserMessageId.get(message.metadata.sourceUserMessageId);
+		(sourceTurn ?? currentTurn).messages.push(message);
 	}
 
 	return turns;
@@ -102,23 +110,8 @@ const canRetryPrimaryUser = (
 	messages: readonly ConversationMessage[],
 	userIndex: number
 ): boolean => {
-	const nextUserIndex = messages.findIndex(
-		(message, index) => index > userIndex && message.role === "user"
-	);
-	const attemptMessages = messages.slice(
-		userIndex + 1,
-		nextUserIndex === -1 ? undefined : nextUserIndex
-	);
-	if (
-		attemptMessages.some(
-			(message) =>
-				message.role === "assistant" &&
-				message.parts.some(
-					(part) =>
-						isConversationToolPart(part) && isTerminalConversationToolPart(part)
-				)
-		)
-	) {
+	const attemptMessages = getConversationAttemptMessages(messages, userIndex);
+	if (hasCompletedToolArtifact(attemptMessages)) {
 		return false;
 	}
 	const latestAssistant = attemptMessages.findLast(
@@ -131,6 +124,12 @@ const canRetryPrimaryUser = (
 	);
 };
 
+/**
+ * Returns the latest logical primary user message whose attempt can be retried.
+ * An attempt ends at the next primary user; completed Tool Calls suppress replay
+ * because repeating them can duplicate side effects. Persisted failure outcomes
+ * remain explicitly retryable.
+ */
 export const resolveRetryMessageId = (
 	messages: readonly ConversationMessage[]
 ): string | undefined => {

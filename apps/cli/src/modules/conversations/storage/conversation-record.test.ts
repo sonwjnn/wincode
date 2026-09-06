@@ -171,6 +171,45 @@ test("persists the accepted user message as an ordinary record", async () => {
 	]);
 	expect(await store.listConversationRecords(id)).toEqual([initialRecord]);
 });
+test("round-trips the logical user link for retried assistant rows", async () => {
+	const { store } = await createTestStore();
+	const { id } = await createSession(store);
+	const assistant = assistantRecord("record-retry", "retried");
+	const message = assistant.messages[0];
+	if (message === undefined) {
+		throw new Error("The assistant record did not contain a message.");
+	}
+	const retriedRecord: ConversationRecord = {
+		...assistant,
+		messages: [
+			{
+				...message,
+				metadata: {
+					...message.metadata,
+					sourceUserMessageId: "msg-user",
+				},
+			},
+		],
+	};
+
+	await store.commitConversationRecord({
+		record: retriedRecord,
+		sessionId: id,
+	});
+
+	const records = await store.listConversationRecords(id);
+	const persisted = records.find(
+		({ id: recordId }) => recordId === retriedRecord.id
+	);
+	expect(persisted?.messages[0]?.metadata?.sourceUserMessageId).toBe(
+		"msg-user"
+	);
+	expect(
+		projectConversationRecords([retriedRecord])[0]?.metadata
+	).toMatchObject({
+		sourceUserMessageId: "msg-user",
+	});
+});
 
 test("reopens durable records without reconstructing or running execution", async () => {
 	const { databasePath, store } = await createTestStore();

@@ -101,6 +101,22 @@ export const createDelegationExecutor = ({
 		let selectedModel = fallbackModelRef.current;
 		let selectedVariant = fallbackVariantRef.current;
 		let userCommitted = false;
+		let userCommitAttempted = false;
+		const commitUserMessage = async (): Promise<void> => {
+			userCommitAttempted = true;
+			await store.commitConversationRecord({
+				record: buildUserConversationRecord({
+					agentId: selectedAgent,
+					delegation,
+					message: userMessage,
+					model: selectedModel,
+					turnId,
+					variant: selectedVariant,
+				}),
+				sessionId,
+			});
+			userCommitted = true;
+		};
 		let terminalObserved = false;
 		let snapshot: McpCatalogSnapshot | undefined;
 		try {
@@ -125,18 +141,7 @@ export const createDelegationExecutor = ({
 			selectedAgent = prepared.agent;
 			selectedModel = prepared.model;
 			selectedVariant = prepared.variant;
-			await store.commitConversationRecord({
-				record: buildUserConversationRecord({
-					agentId: selectedAgent,
-					delegation,
-					message: userMessage,
-					model: selectedModel,
-					turnId,
-					variant: selectedVariant,
-				}),
-				sessionId,
-			});
-			userCommitted = true;
+			await commitUserMessage();
 			const modelTarget = await resolveChatModelTarget(
 				prepared.model,
 				connections,
@@ -207,9 +212,13 @@ export const createDelegationExecutor = ({
 				onViewState,
 				runtime: defaultRuntimeFactory(),
 				signal: childSignal,
+				sourceUserMessageId: userMessage.id,
 				turn,
 			});
 		} catch (error) {
+			if (!(userCommitted || userCommitAttempted)) {
+				await commitUserMessage().catch(() => undefined);
+			}
 			if (userCommitted && !terminalObserved) {
 				await store
 					.commitConversationRecord({
@@ -218,6 +227,7 @@ export const createDelegationExecutor = ({
 							delegation,
 							error,
 							model: selectedModel,
+							sourceUserMessageId: userMessage.id,
 							turnId,
 							variant: selectedVariant,
 						}),

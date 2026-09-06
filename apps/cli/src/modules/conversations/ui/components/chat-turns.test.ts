@@ -146,3 +146,37 @@ test("keeps ordinary user, tool, and assistant rows in one rendered turn", () =>
 		turns.map((turn) => turn.messages.map((message) => message.id))
 	).toEqual([["user-1", "tool", "assistant-1"], ["user-2"]]);
 });
+test("attaches a retried result to its logical user turn", () => {
+	const retryResult: ConversationMessage = {
+		...assistant("assistant-retry"),
+		metadata: { sourceUserMessageId: "user-1" },
+	};
+	const turns = groupMessagesByConversationTurn([
+		user("user-1"),
+		user("user-2"),
+		assistant("assistant-2"),
+		retryResult,
+	]);
+
+	expect(
+		turns.map((turn) => turn.messages.map((message) => message.id))
+	).toEqual([
+		["user-1", "assistant-retry"],
+		["user-2", "assistant-2"],
+	]);
+});
+test("suppresses retry after a successful older retry result", () => {
+	const retryResult: ConversationMessage = {
+		...assistant("assistant-retry"),
+		metadata: { sourceUserMessageId: "user-1" },
+	};
+
+	expect(
+		resolveRetryMessageId([
+			user("user-1"),
+			user("user-2"),
+			assistant("assistant-2"),
+			retryResult,
+		])
+	).toBeUndefined();
+});
