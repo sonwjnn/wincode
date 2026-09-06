@@ -21,6 +21,12 @@ export function ChatMessage({
 }) {
 	const { colors } = useTheme();
 	const retryMessageId = resolveRetryMessageId(messages);
+	const handleRetry = () => {
+		if (retryMessageId === undefined || onRetry === undefined) {
+			return;
+		}
+		void onRetry(retryMessageId);
+	};
 
 	return (
 		<box alignItems="flex-start" flexDirection="column" width="100%">
@@ -48,16 +54,31 @@ export function ChatMessage({
 			</box>
 			{retryMessageId && onRetry ? (
 				<box paddingX={3} width="100%">
-					{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI text handles terminal mouse events. */}
-					<text
-						attributes={TextAttributes.BOLD}
-						fg={colors.primary}
-						onMouseDown={() => {
-							void onRetry(retryMessageId);
+					{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse and keyboard events. */}
+					<box
+						focusable
+						id={`retry-${retryMessageId}`}
+						onKeyDown={(key) => {
+							if (
+								key.name !== "enter" &&
+								key.name !== "return" &&
+								key.name !== "space"
+							) {
+								return;
+							}
+							key.preventDefault();
+							handleRetry();
 						}}
+						onMouseDown={handleRetry}
 					>
-						Retry
-					</text>
+						<text
+							attributes={TextAttributes.BOLD}
+							fg={colors.primary}
+							selectable={false}
+						>
+							Retry
+						</text>
+					</box>
 				</box>
 			) : null}
 			{footerMessage && messages.includes(footerMessage) ? (

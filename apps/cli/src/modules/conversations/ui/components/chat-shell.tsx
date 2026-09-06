@@ -165,7 +165,6 @@ export function ChatShell({
 							);
 							const canRetryTurn =
 								!isBusy &&
-								turnRetryMessageId === latestRetryMessageId &&
 								turnRetryMessageId !== undefined &&
 								retryableMessages.some(({ id }) => id === turnRetryMessageId);
 							return (

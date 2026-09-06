@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import type { ConversationMessage } from "@/modules/conversations/message";
+import type {
+	ConversationMessage,
+	ConversationMessageTerminalOutcome,
+} from "@/modules/conversations/message";
 import { prepareRetryMessages } from "../../hooks/use-chat";
 import {
 	groupMessagesByConversationTurn,
@@ -19,6 +22,16 @@ const assistant = (id: string, interrupted = false): ConversationMessage => ({
 	role: "assistant",
 });
 
+const terminalAssistant = (
+	id: string,
+	terminalOutcome: ConversationMessageTerminalOutcome
+): ConversationMessage => ({
+	id,
+	metadata: { terminalOutcome },
+	parts: [{ text: id, type: "text" }],
+	role: "assistant",
+});
+
 const completedTool = (): ConversationMessage => ({
 	id: "tool",
 	parts: [
@@ -31,6 +44,25 @@ const completedTool = (): ConversationMessage => ({
 		},
 	],
 	role: "assistant",
+});
+
+test("offers retry for a persisted failed assistant outcome", () => {
+	expect(
+		resolveRetryMessageId([
+			user("user-1"),
+			terminalAssistant("assistant-1", "failed"),
+		])
+	).toBe("user-1");
+});
+
+test("offers retry for an older unanswered user after a later completed turn", () => {
+	expect(
+		resolveRetryMessageId([
+			user("user-1"),
+			user("user-2"),
+			assistant("assistant-2"),
+		])
+	).toBe("user-1");
 });
 test("offers retry for an accepted user row with no assistant outcome", () => {
 	expect(resolveRetryMessageId([user("user-1")])).toBe("user-1");

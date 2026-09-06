@@ -104,18 +104,6 @@ export const createDelegationExecutor = ({
 		let terminalObserved = false;
 		let snapshot: McpCatalogSnapshot | undefined;
 		try {
-			await store.commitConversationRecord({
-				record: buildUserConversationRecord({
-					agentId: selectedAgent,
-					delegation,
-					message: userMessage,
-					model: selectedModel,
-					turnId,
-					variant: selectedVariant,
-				}),
-				sessionId,
-			});
-			userCommitted = true;
 			const target = registry?.agents.find(
 				({ id, isAvailable, role }) =>
 					id === request.agent &&
@@ -137,6 +125,18 @@ export const createDelegationExecutor = ({
 			selectedAgent = prepared.agent;
 			selectedModel = prepared.model;
 			selectedVariant = prepared.variant;
+			await store.commitConversationRecord({
+				record: buildUserConversationRecord({
+					agentId: selectedAgent,
+					delegation,
+					message: userMessage,
+					model: selectedModel,
+					turnId,
+					variant: selectedVariant,
+				}),
+				sessionId,
+			});
+			userCommitted = true;
 			const modelTarget = await resolveChatModelTarget(
 				prepared.model,
 				connections,
