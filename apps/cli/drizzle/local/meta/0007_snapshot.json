@@ -63,8 +63,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "tokens_after": {
-          "name": "tokens_after",
+        "estimated_tokens_after": {
+          "name": "estimated_tokens_after",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,

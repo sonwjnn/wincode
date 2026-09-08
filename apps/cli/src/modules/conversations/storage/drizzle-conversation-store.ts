@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, rm } from "node:fs/promises";
-import { join } from "node:path";
 import {
 	CONVERSATION_RECORD_VERSION,
 	type ConversationRecord,
@@ -46,7 +44,6 @@ import {
 import { runMigrations } from "./migrations";
 import { resolveLocalAttachmentRoot } from "./path";
 import {
-	conversationAttachment,
 	conversationCompaction,
 	conversationRecord,
 	conversationSession,
@@ -55,32 +52,6 @@ import {
 } from "./schema";
 
 const createId = (): string => crypto.randomUUID();
-const clearAttachmentRoot = async (root: string): Promise<void> => {
-	await mkdir(root, { recursive: true });
-	const entries = await readdir(root, { withFileTypes: true });
-	for (const entry of entries) {
-		await rm(join(root, entry.name), { force: true, recursive: true });
-	}
-};
-
-/**
- * Repairs the physical compaction column left by an interrupted breaking
- * cutover. This is deliberately called only by the explicit reset operation.
- */
-const repairCompactionColumnForReset = (db: ConversationDatabase): void => {
-	const columns = db.$client
-		.query("PRAGMA table_info(conversation_compaction)")
-		.all() as Array<{ name: string }>;
-	const hasCurrentColumn = columns.some(({ name }) => name === "tokens_after");
-	const hasInterruptedColumn = columns.some(
-		({ name }) => name === "estimated_tokens_after"
-	);
-	if (!hasCurrentColumn && hasInterruptedColumn) {
-		db.$client.exec(
-			'ALTER TABLE "conversation_compaction" RENAME COLUMN "estimated_tokens_after" TO "tokens_after"'
-		);
-	}
-};
 
 const writePromptHistory = (
 	db: ConversationDatabase,
@@ -677,16 +648,6 @@ export const createDrizzleConversationStore = (
 				)
 				.run();
 			await collectAttachments().catch(() => undefined);
-		},
-		resetConversationData: async () => {
-			db.transaction((tx) => {
-				tx.delete(conversationCompaction).run();
-				tx.delete(conversationRecord).run();
-				tx.delete(conversationSession).run();
-				tx.delete(conversationAttachment).run();
-			});
-			repairCompactionColumnForReset(db);
-			await clearAttachmentRoot(attachmentRoot);
 		},
 
 		getCompactions: (sessionId: string) => {

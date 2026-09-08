@@ -80,12 +80,6 @@ Local migrations are generated with `bun run --cwd apps/cli db:local:generate` a
 This is a breaking local persistence cutover. Existing session, Conversation
 Record, compaction, and attachment metadata rows are disposable; no
 compatibility migration translates old conversation data or compaction metrics.
-Before exercising the new contract, run the explicit reset command:
-
-`bun run --cwd apps/cli db:local:reset-conversations`
-
-The reset command is manual and is not run during startup. It removes the
-attachment blobs and preserves prompt history and workspace/configuration data.
 
 - `getConversationStore()` — local sessions, Conversation Records, compactions, attachments, and maintenance.
 - `ConversationOperation` — one application-owned send, cancellation, and interruption seam for the current turn path.

@@ -7,7 +7,7 @@ CREATE TABLE `conversation_compaction` (
 	`first_kept_ui_message_id` text NOT NULL,
 	`through_message_ui_id` text NOT NULL,
 	`tokens_before` integer NOT NULL,
-	`tokens_after` integer NOT NULL,
+	`estimated_tokens_after` integer NOT NULL,
 	`trigger` text NOT NULL,
 	`focus` text,
 	`summarization_model_json` text NOT NULL,
