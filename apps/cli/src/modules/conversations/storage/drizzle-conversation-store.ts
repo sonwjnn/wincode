@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { mkdir, readdir, rm } from "node:fs/promises";
+import { join } from "node:path";
 import {
 	CONVERSATION_RECORD_VERSION,
 	type ConversationRecord,
@@ -44,6 +46,7 @@ import {
 import { runMigrations } from "./migrations";
 import { resolveLocalAttachmentRoot } from "./path";
 import {
+	conversationAttachment,
 	conversationCompaction,
 	conversationRecord,
 	conversationSession,
@@ -52,6 +55,14 @@ import {
 } from "./schema";
 
 const createId = (): string => crypto.randomUUID();
+
+const clearAttachmentRoot = async (root: string): Promise<void> => {
+	await mkdir(root, { recursive: true });
+	const entries = await readdir(root, { withFileTypes: true });
+	for (const entry of entries) {
+		await rm(join(root, entry.name), { force: true, recursive: true });
+	}
+};
 
 const writePromptHistory = (
 	db: ConversationDatabase,
@@ -648,6 +659,16 @@ export const createDrizzleConversationStore = (
 				)
 				.run();
 			await collectAttachments().catch(() => undefined);
+		},
+
+		resetConversationData: async () => {
+			db.transaction((tx) => {
+				tx.delete(conversationCompaction).run();
+				tx.delete(conversationRecord).run();
+				tx.delete(conversationSession).run();
+				tx.delete(conversationAttachment).run();
+			});
+			await clearAttachmentRoot(attachmentRoot);
 		},
 
 		getCompactions: (sessionId: string) => {
