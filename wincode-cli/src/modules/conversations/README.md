@@ -77,15 +77,15 @@ distinct live status from the current Agent Turn.
 
 The database initializes the current `schema.ts` definition on open with
 idempotent `CREATE TABLE IF NOT EXISTS` statements. There is no migration
-directory or runtime migration step.
+directory or migration history.
 
 ## Solo-dev persistence rule
 
-Wincode is maintained by one developer, so local persistence is reset-only.
-Schema changes intentionally do not provide compatibility migrations. After
-changing `schema.ts`, remove the local database and attachment directory before
-restarting Wincode. Keep the initialization SQL in `client.ts` synchronized with
-the Drizzle schema.
+Wincode is maintained by one developer, so schema changes are direct and
+reset-oriented. Run `bun run --cwd wincode-cli db:push` after changing
+`schema.ts`; if Drizzle cannot reconcile the change safely, remove the local
+database and attachment directory before restarting Wincode. Keep the
+initialization SQL in `client.ts` synchronized with the Drizzle schema.
 
 The reset command only clears conversation data and is not a schema reset:
 

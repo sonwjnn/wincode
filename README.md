@@ -72,5 +72,7 @@ Inside the CLI, use slash commands such as `/connect` to add a provider, `/model
 | `bun run check-types` | Type-check every workspace |
 | `bun run test` | Run the surviving test suite |
 | `bun run dev:cli` | Launch the terminal agent |
+| `bun run --cwd wincode-cli db:push` | Synchronize the current SQLite schema |
+| `bun run --cwd wincode-cli db:studio` | Open Drizzle Studio |
 
 Provider onboarding is documented in [`docs/adding-a-provider.md`](docs/adding-a-provider.md). Domain terminology is documented in [`CONTEXT.md`](CONTEXT.md). Coding standards are documented in [`AGENTS.md`](AGENTS.md).

@@ -88,12 +88,6 @@ Write code that is **accessible, performant, type-safe, and maintainable**. Focu
 
 ### Framework-Specific Guidance
 
-**Next.js:**
-
-- Use Next.js `<Image>` component for images
-- Use `next/head` or App Router metadata API for head elements
-- Use Server Components for async data fetching instead of async Client Components
-
 **React 19+:**
 
 - Use ref as a prop instead of `React.forwardRef`
@@ -129,6 +123,14 @@ Most formatting and common issues are automatically fixed by Biome. Run `bun fix
 ---
 
 ## Agent skills
+
+### Persistence rule
+
+This is a solo-dev project. The local SQLite schema is synchronized directly
+from the current Drizzle schema; Wincode does not maintain migration history.
+Use `bun run --cwd wincode-cli db:push` after schema changes. If a schema change
+cannot be reconciled safely, delete the local database and attachment data
+before restarting; no compatibility migration is provided.
 
 ### Issue tracker
 
