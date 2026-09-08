@@ -3,13 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "module": "src/index.tsx",
+  "module": "./index.tsx",
   "bin": {
-    "wincode": "./src/index.tsx"
+    "wincode": "./index.tsx"
   },
   "scripts": {
-    "dev": "bun run --watch src/index.tsx",
-    "test": "bun test src",
+    "dev": "bun run --watch index.tsx",
+    "test": "bun test .",
     "check-types": "tsc --noEmit",
     "db:reset-conversations": "bun run scripts/reset-conversation-data.ts",
     "db:push": "drizzle-kit push --config drizzle.config.ts",
