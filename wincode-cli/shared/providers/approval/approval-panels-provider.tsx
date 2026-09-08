@@ -16,7 +16,7 @@ import type {
 /**
  * One live or recently settled approval. Pending entries replace the composer
  * with the approval controls. Tool-call entries remain after resolution so
- * their message part can render a compact audit line; conversation entries
+ * their message part can render a compact audit line; session entries
  * have no timeline anchor and are removed when settled.
  */
 export type ApprovalPanelEntry = {
@@ -24,24 +24,24 @@ export type ApprovalPanelEntry = {
 	id: string;
 	request: ToolApprovalRequest;
 	resolution?: { feedback?: string; outcome: ApprovalOutcome };
-	target: "conversation" | "tool-call";
+	target: "session" | "tool-call";
 };
 
 export type ApprovalPanelsContextValue = {
 	/**
 	 * Registers a pending approval and returns its registry id: the request's
-	 * `toolCallId` when present, otherwise a synthetic conversation id.
+	 * `toolCallId` when present, otherwise a synthetic session id.
 	 */
 	add: (request: ToolApprovalRequest, actions: ToolApprovalActions) => string;
 	entries: readonly ApprovalPanelEntry[];
-	/** Settles a pending approval; conversation entries are then removed. */
+	/** Settles a pending approval; session entries are then removed. */
 	resolve: (id: string, outcome: ApprovalOutcome, feedback?: string) => void;
 	/**
-	 * Settles every unresolved entry. Mirrors the conversation approval queue's
+	 * Settles every unresolved entry. Mirrors the session approval queue's
 	 * reject-all semantics: rejecting one panel rejects the pending siblings
 	 * the queue settled, so they collapse to their audit lines instead of
-	 * remaining interactive. The app renders one conversation at a time, so a
-	 * registry-wide settle matches the queue's conversation scope.
+	 * remaining interactive. The app renders one session at a time, so a
+	 * registry-wide settle matches the queue's session scope.
 	 */
 	resolveAll: (outcome: ApprovalOutcome, feedback?: string) => void;
 };
@@ -51,7 +51,7 @@ const ApprovalPanelsContext = createContext<ApprovalPanelsContextValue | null>(
 );
 
 /**
- * Settles matching pending entries: conversation entries are removed on
+ * Settles matching pending entries: session entries are removed on
  * resolution because they have no message part to anchor to, while tool-call
  * entries collapse to an audit line. Pure, so it lives outside the component.
  */
@@ -68,7 +68,7 @@ const withResolution = (
 			(entry) =>
 				!(
 					matches(entry) &&
-					entry.target === "conversation" &&
+					entry.target === "session" &&
 					entry.resolution === undefined
 				)
 		)
@@ -87,17 +87,16 @@ const withResolution = (
  */
 export function ApprovalPanelsProvider({ children }: { children: ReactNode }) {
 	const [entries, setEntries] = useState<ApprovalPanelEntry[]>([]);
-	const conversationCounter = useRef(0);
+	const sessionCounter = useRef(0);
 
 	const add = useCallback(
 		(request: ToolApprovalRequest, actions: ToolApprovalActions): string => {
-			const id =
-				request.toolCallId ?? `conversation-${conversationCounter.current++}`;
+			const id = request.toolCallId ?? `session-${sessionCounter.current++}`;
 			const entry: ApprovalPanelEntry = {
 				actions,
 				id,
 				request,
-				target: request.toolCallId === undefined ? "conversation" : "tool-call",
+				target: request.toolCallId === undefined ? "session" : "tool-call",
 			};
 			setEntries((prev) =>
 				prev.some((candidate) => candidate.id === id)

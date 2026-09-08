@@ -62,7 +62,7 @@ Status: accepted
   (`explicit` or `agent`), and explicit arguments where applicable. Explicit activation
   belongs to the user message; Agent activation belongs to the assistant message that
   contains the tool call. Raw bodies and raw tool results are not stored. The architecture
-  cutover resets local Conversation data, so legacy instruction-bearing records are not
+  cutover resets local Session data, so legacy instruction-bearing records are not
   migrated.
 - The live model loop receives the full body, while durable tool state contains a
   sanitized result. Telemetry records only name, source, content hash, status, and

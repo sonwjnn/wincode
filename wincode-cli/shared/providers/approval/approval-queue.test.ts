@@ -86,22 +86,22 @@ describe("createApprovalQueue", () => {
 		await expect(first.outcome).resolves.toEqual({ decision: "reject" });
 	});
 
-	test("rejectAll on one conversation queue leaves another queue untouched", async () => {
-		const conversationA = createApprovalQueue<string>();
-		const conversationB = createApprovalQueue<string>();
-		const aFirst = conversationA.request("a1");
-		const aSecond = conversationA.request("a2");
-		const bOnly = conversationB.request("b1");
+	test("rejectAll on one session queue leaves another queue untouched", async () => {
+		const sessionA = createApprovalQueue<string>();
+		const sessionB = createApprovalQueue<string>();
+		const aFirst = sessionA.request("a1");
+		const aSecond = sessionA.request("a2");
+		const bOnly = sessionB.request("b1");
 
-		conversationA.rejectAll("wrong file");
+		sessionA.rejectAll("wrong file");
 
 		await expect(aFirst.outcome).resolves.toEqual({ decision: "reject" });
 		await expect(aSecond.outcome).resolves.toEqual({
 			decision: "reject",
 			feedback: "wrong file",
 		});
-		// The other conversation's pending approval is undisturbed.
-		expect(conversationB.pendingCount()).toBe(1);
+		// The other session's pending approval is undisturbed.
+		expect(sessionB.pendingCount()).toBe(1);
 		bOnly.allow(false);
 		await expect(bOnly.outcome).resolves.toEqual({
 			decision: "allow",

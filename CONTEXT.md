@@ -34,14 +34,14 @@ or authentication behavior.
 
 A Model Target is the effective Connection Provider, model, variant, and minimal
 authorization selected for one Agent Turn. It is transient and must not become a
-Conversation Record. _Avoid_: AI SDK model, persisted model handle
+Session Record. _Avoid_: AI SDK model, persisted model handle
 
-## Conversation Selection
+## Session Selection
 
-The last-used Agent, Model, and variant recorded in a conversation's message
+The last-used Agent, Model, and variant recorded in a session's message
 metadata, resolved when a session opens or a turn is sent. Two tiers are
 recorded on write and merged on read: the session row holds the
-conversation-level choice (the user's prompt-config selection), and message
+session-level choice (the user's prompt-config selection), and message
 metadata holds the effective selection (what a turn actually ran with,
 including Agent pins). Restore reads leniently (a selection survives partially
 broken metadata); the request body reads it strictly (only schema-valid pairs
@@ -67,7 +67,7 @@ A fixed UI action the CLI ships with, dispatched by kind to an adapter
 
 **Custom Command**:
 A user-defined prompt template loaded from a command folder, inserted into the
-conversation as a user message when executed. _Avoid_: Command, slash command
+session as a user message when executed. _Avoid_: Command, slash command
 
 **Skill**:
 A named set of instructions that augments an Agent for one user turn. A Skill may
@@ -79,7 +79,7 @@ The selection of a Skill for the current user turn. Activation does not persist
 to later turns. _Avoid_: Skill installation, session Skill
 
 **Agent**:
-A named AI behavior that can lead a conversation, execute a delegated task, or
+A named AI behavior that can lead a session, execute a delegated task, or
 both. Its role and tool permissions are separate concerns. _Avoid_: Coding Mode,
 persona
 
@@ -90,8 +90,8 @@ run, chat turn
 
 **Interrupted Agent Turn**:
 An Agent Turn whose execution stopped before completion, failure, or cancellation.
-Its committed Conversation Records remain, and retrying creates a new Agent Turn.
-_Avoid_: resumable turn, partial Conversation
+Its committed Session Records remain, and retrying creates a new Agent Turn.
+_Avoid_: resumable turn, partial Session
 
 **Model Step**:
 One model invocation within an Agent Turn. _Avoid_: Agent Turn, iteration
@@ -102,16 +102,16 @@ rejection, or failure. _Avoid_: command, action
 
 **Agent Turn Event**:
 A transient fact emitted while an Agent Turn is running for live observation and
-control. It is not a durable Conversation record. _Avoid_: persisted event,
+control. It is not a durable Session record. _Avoid_: persisted event,
 message
 
-**Conversation Record**:
-The durable representation of committed Conversation content and lifecycle
-outcomes. Token deltas and other incomplete Agent Turn Events are not Conversation
+**Session Record**:
+The durable representation of committed Session content and lifecycle
+outcomes. Token deltas and other incomplete Agent Turn Events are not Session
 Records. _Avoid_: stream chunk, event log
 
 **Attachment Reference**:
-A durable Conversation content part that identifies externally stored or
+A durable Session content part that identifies externally stored or
 workspace-backed content without embedding its transient model expansion.
 _Avoid_: expanded attachment, file-content message
 
@@ -134,7 +134,7 @@ Agent is eligible for both primary and delegated work; it does not grant full
 tool permissions. _Avoid_: Agent mode, access level, full permission
 
 **Primary Agent**:
-An Agent eligible to lead the active conversation and be selected by the user.
+An Agent eligible to lead the active session and be selected by the user.
 Agents with the `primary` or `all` role are Primary Agents. _Avoid_: Main Agent
 
 **Subagent**:
@@ -155,7 +155,7 @@ wins. _Avoid_: ACL entry, tool toggle
 The runtime enforcement of Tool Permission for one tool call. The gate
 evaluates the effective decision against the call's actual resource, applies
 temporary grants and auto approval, and routes a surviving `ask` through the
-conversation approval queue and inline panel. It owns the manual-approval
+session approval queue and inline panel. It owns the manual-approval
 safety ceiling at execution time: a remembered grant is never recorded for a
 safety ask. Coding tools, shell (per-node evaluation with a doom_loop repeat
 guard, ADR-0008), MCP tools, and Skill Activation all resolve through the one

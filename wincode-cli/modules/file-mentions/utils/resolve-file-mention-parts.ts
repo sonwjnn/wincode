@@ -4,7 +4,7 @@ import {
 	createWorkspaceSandbox,
 	type WorkspacePolicy,
 } from "@wincode/coding-tools/workspace";
-import type { FileMentionPart } from "@/modules/conversations/message";
+import type { FileMentionPart } from "@/modules/sessions/message";
 import type { FileMentionOption } from "../types";
 import { getFileMentionOptions } from "./file-mention-options";
 import {

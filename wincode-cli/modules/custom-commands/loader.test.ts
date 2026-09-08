@@ -76,7 +76,7 @@ describe("loadCustomCommands", () => {
 			{
 				dir: "project/.wincode/commands",
 				files: {
-					"new.md": "---\n---\nStart a new conversation.",
+					"new.md": "---\n---\nStart a new session.",
 					"exit.md": "---\n---\nQuit.",
 					"review.md": "---\n---\nReview code.",
 				},

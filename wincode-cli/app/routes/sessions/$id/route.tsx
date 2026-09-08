@@ -2,19 +2,19 @@ import { createFileRoute, useLocation } from "@tanstack/react-router";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { useEffect, useMemo, useState } from "react";
 import {
-	type ConversationCompaction,
 	rebuildActiveMessages,
-} from "@/modules/conversations/compaction";
+	type SessionCompaction,
+} from "@/modules/sessions/compaction";
 import {
-	type ConversationMessage,
-	sanitizeInterruptedConversationMessages,
-} from "@/modules/conversations/message";
-import { projectConversationRecords } from "@/modules/conversations/storage/conversation-record";
-import { getConversationStore } from "@/modules/conversations/storage/get-conversation-store";
+	type SessionMessage,
+	sanitizeInterruptedSessionMessages,
+} from "@/modules/sessions/message";
+import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
+import { projectSessionRecords } from "@/modules/sessions/storage/session-record";
 import {
 	type SessionInitialSubmission,
 	SessionView,
-} from "@/modules/conversations/ui/views/session-view";
+} from "@/modules/sessions/ui/views/session-view";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 
 const readInitialSubmission = (
@@ -52,11 +52,11 @@ function SessionRoute() {
 		() => readInitialSubmission(location.state),
 		[location.state]
 	);
-	const [messages, setMessages] = useState<ConversationMessage[] | null>(null);
-	const [activeMessages, setActiveMessages] = useState<
-		ConversationMessage[] | null
-	>(null);
-	const [compactions, setCompactions] = useState<ConversationCompaction[]>([]);
+	const [messages, setMessages] = useState<SessionMessage[] | null>(null);
+	const [activeMessages, setActiveMessages] = useState<SessionMessage[] | null>(
+		null
+	);
+	const [compactions, setCompactions] = useState<SessionCompaction[]>([]);
 	const [sessionTitle, setSessionTitle] = useState<string | null>(null);
 	const [sessionConfig, setSessionConfig] = useState<{
 		model?: ChatModelSelection;
@@ -73,26 +73,25 @@ function SessionRoute() {
 		setSessionConfig(null);
 		setErrorMessage(null);
 
-		const store = getConversationStore();
+		const store = getSessionStore();
 
 		Promise.all([
 			store.getSession(id),
 			store.getCompactions(id),
-			store.listConversationRecords(id),
+			store.listSessionRecords(id),
 		])
 			.then(async ([session, loadedCompactions, records]) => {
 				if (ignore) {
 					return;
 				}
-				const projected = projectConversationRecords(records);
+				const projected = projectSessionRecords(records);
 				const displayMessages = store.attachmentStore
 					? await store.attachmentStore.annotateMessagesForDisplay(projected)
 					: projected;
 				if (ignore) {
 					return;
 				}
-				const restored =
-					sanitizeInterruptedConversationMessages(displayMessages);
+				const restored = sanitizeInterruptedSessionMessages(displayMessages);
 				const active = restored.filter(
 					(message) => !message.id.startsWith("delegated-turn:")
 				);

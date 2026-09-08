@@ -18,7 +18,7 @@ The connections module owns direct model-provider credentials for the CLI.
 
 ## Storage
 
-Credentials are stored in the platform secret store when available, with a secure local file fallback under the user's Wincode configuration directory. Conversation history and attachments use a separate local database.
+Credentials are stored in the platform secret store when available, with a secure local file fallback under the user's Wincode configuration directory. Session history and attachments use a separate local database.
 
 ## Provider onboarding
 

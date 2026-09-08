@@ -68,23 +68,23 @@ export { createAgentTurnLifecycle } from "./lifecycle";
 export type { ModelStep, ModelStepId } from "./model-step";
 export type {
 	AgentTurnOutcomeRecord,
-	ConversationAttachmentReferencePart,
-	ConversationFileMentionPart,
-	ConversationMessageMetadataRecord,
-	ConversationMessagePart,
-	ConversationMessageRecord,
-	ConversationRecord,
-	ConversationRecordOutcome,
-	ConversationSkillActivationRecord,
-	ConversationToolCallPart,
+	SessionAttachmentReferencePart,
+	SessionFileMentionPart,
+	SessionMessageMetadataRecord,
+	SessionMessagePart,
+	SessionMessageRecord,
+	SessionRecord,
+	SessionRecordOutcome,
+	SessionSkillActivationRecord,
+	SessionToolCallPart,
 	ToolCallOutcomeRecord,
 } from "./records";
 export {
-	CONVERSATION_RECORD_VERSION,
 	isAgentTurnMessageRecord,
-	isConversationAttachmentReferencePart,
-	isConversationFileMentionPart,
-	isConversationToolCallPart,
+	isSessionAttachmentReferencePart,
+	isSessionFileMentionPart,
+	isSessionToolCallPart,
+	SESSION_RECORD_VERSION,
 } from "./records";
 export type {
 	AgentRuntime,

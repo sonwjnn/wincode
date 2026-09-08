@@ -15,9 +15,9 @@ Status: accepted
 - `@wincode/coding-tools` implements filesystem, search, edit, shell, workspace-policy, hashline, diff, and resource-limit tools against core tool contracts.
 - `@wincode/skills` owns Skill contracts, parsing, catalog, snapshots, and activation semantics; its `./filesystem` export owns Node/Bun discovery and content loading. CLI supplies explicit root descriptors, permission enforcement, persistence, and presentation.
 - `wincode-cli` owns MCP transport, client lifecycle, discovery, invocation, configuration, approval, status presentation, and adaptation to core Tool contracts.
-- `wincode-cli` owns OpenTUI rendering, Conversation View State, approval presentation, input callbacks, and projections of Conversation Records and Agent Turn Events.
+- `wincode-cli` owns OpenTUI rendering, Session View State, approval presentation, input callbacks, and projections of Session Records and Agent Turn Events.
 - `@wincode/agent-runtime-ai-sdk` privately implements the core runtime interface with AI SDK.
-- `wincode-cli` owns Connections, conversation orchestration and persistence, Tool Gate, approval, configuration, routing, and composition.
+- `wincode-cli` owns Connections, session orchestration and persistence, Tool Gate, approval, configuration, routing, and composition.
 
 `@wincode/ai` and `@wincode/skills` are base packages; `@wincode/agent-core`
 depends on both for model and typed Skill Activation contracts. Core does not

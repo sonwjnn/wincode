@@ -1,5 +1,5 @@
 import { type ChatModelSelection, modelCatalog } from "@wincode/ai/models";
-import { getConversationStore } from "@/modules/conversations/storage/get-conversation-store";
+import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import type { CommandSpec } from "../commands";
 
 export type ModelsAdapterContext = {
@@ -21,8 +21,7 @@ export class ModelsAdapter {
 	}
 
 	execute(_spec: Extract<CommandSpec, { kind: "models" }>) {
-		const recentSelections =
-			getConversationStore().listRecentModelSelections(10);
+		const recentSelections = getSessionStore().listRecentModelSelections(10);
 		this.ctx.open({
 			models: modelCatalog,
 			currentModel: this.ctx.currentModel,

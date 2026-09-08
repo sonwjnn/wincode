@@ -26,7 +26,7 @@ Wincode exposes Pi's explicit split rather than overloading one action:
 
 - **Reject** blocks only the selected tool call while sibling approvals remain, allowing the Agent to continue with the next queued decision.
 - With exactly one pending approval, **Reject** is semantically identical to Abort and the redundant Abort action is hidden.
-- **Abort** rejects all sibling approvals from the conversation turn, interrupts the active chat stream immediately, and sanitizes unfinished tool calls through the existing interrupt path. It does not wait for an `input-streaming` part to become `input-available`.
+- **Abort** rejects all sibling approvals from the session turn, interrupts the active chat stream immediately, and sanitizes unfinished tool calls through the existing interrupt path. It does not wait for an `input-streaming` part to become `input-available`.
 - Leaving approval mode, including Escape, is also an explicit Abort.
 - Policy denial and pre-send explicit-Skill rejection/abort do not interrupt a previous turn because no model stream is active for that approval.
 

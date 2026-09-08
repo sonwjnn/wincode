@@ -10,7 +10,7 @@ import type {
 } from "./turn";
 import { isAgentTurnTextPart } from "./turn";
 
-export const CONVERSATION_RECORD_VERSION = 1 as const;
+export const SESSION_RECORD_VERSION = 1 as const;
 
 /** Durable outcome of one committed Tool Call. */
 export type ToolCallOutcomeRecord =
@@ -28,7 +28,7 @@ export type ToolCallOutcomeRecord =
  * the settled outcome, and the Agent Turn event sequence of the outcome so
  * consumers can order durable content against the transient event stream.
  */
-export type ConversationToolCallPart = {
+export type SessionToolCallPart = {
 	readonly input: unknown;
 	readonly outcome: ToolCallOutcomeRecord;
 	readonly sequence: number;
@@ -37,8 +37,8 @@ export type ConversationToolCallPart = {
 	readonly type: "tool-call";
 };
 
-/** A durable reference to an externalized conversation attachment. */
-export type ConversationAttachmentReferencePart = {
+/** A durable reference to an externalized session attachment. */
+export type SessionAttachmentReferencePart = {
 	readonly attachmentId: string;
 	readonly available?: boolean;
 	readonly byteLength: number;
@@ -50,7 +50,7 @@ export type ConversationAttachmentReferencePart = {
 };
 
 /** A structured file mention retained without its transient UI payload type. */
-export type ConversationFileMentionPart = {
+export type SessionFileMentionPart = {
 	readonly data: {
 		readonly byteLength: number;
 		readonly content: string;
@@ -63,8 +63,8 @@ export type ConversationFileMentionPart = {
 	readonly type: "file-mention";
 };
 
-/** Sanitized Skill activation metadata retained in a Conversation Record. */
-export type ConversationSkillActivationRecord = {
+/** Sanitized Skill activation metadata retained in a Session Record. */
+export type SessionSkillActivationRecord = {
 	readonly arguments?: string;
 	readonly contentHash: string;
 	readonly name: string;
@@ -72,34 +72,34 @@ export type ConversationSkillActivationRecord = {
 };
 
 /** Per-message metadata safe to retain outside a transient Model Target. */
-export type ConversationMessageMetadataRecord = {
+export type SessionMessageMetadataRecord = {
 	readonly agent?: string;
 	readonly model?: {
 		readonly modelId: string;
 		readonly providerId: string;
 	};
 	readonly responseTimeMs?: number;
-	readonly skill?: ConversationSkillActivationRecord;
+	readonly skill?: SessionSkillActivationRecord;
 	readonly sourceUserMessageId?: string;
 	readonly usage?: ModelUsage;
 	readonly variant?: ModelVariant;
 };
 
-export type ConversationMessagePart =
+export type SessionMessagePart =
 	| AgentTurnTextPart
-	| ConversationAttachmentReferencePart
-	| ConversationFileMentionPart
-	| ConversationToolCallPart;
+	| SessionAttachmentReferencePart
+	| SessionFileMentionPart
+	| SessionToolCallPart;
 
 /**
- * Wincode-owned durable Conversation content. AI SDK part shapes never
+ * Wincode-owned durable Session content. AI SDK part shapes never
  * appear here; attachments and file mentions retain bounded references/data
  * owned by the application.
  */
-export type ConversationMessageRecord = {
+export type SessionMessageRecord = {
 	readonly id: string;
-	readonly metadata?: ConversationMessageMetadataRecord;
-	readonly parts: readonly ConversationMessagePart[];
+	readonly metadata?: SessionMessageMetadataRecord;
+	readonly parts: readonly SessionMessagePart[];
 	readonly role: "assistant" | "user";
 };
 
@@ -132,11 +132,11 @@ export type AgentTurnOutcomeRecord =
 	  };
 
 /**
- * Durable meaning of one Conversation Record row. User and Tool rows are
+ * Durable meaning of one Session Record row. User and Tool rows are
  * ordinary content checkpoints; assistant rows also carry the terminal Agent
  * Turn outcome that produced the assistant content.
  */
-export type ConversationRecordOutcome =
+export type SessionRecordOutcome =
 	| {
 			readonly kind: "user";
 	  }
@@ -149,23 +149,23 @@ export type ConversationRecordOutcome =
 	  };
 
 /**
- * One durable Conversation Record row. Each row contains one logical user,
+ * One durable Session Record row. Each row contains one logical user,
  * assistant, or completed Tool Call message. The runtime Agent Turn identity
  * is only meaningful while execution is live; retries do not mutate this row.
  */
-export type ConversationRecord = {
+export type SessionRecord = {
 	readonly agentId: string;
 	readonly delegation?: AgentTurnDelegation;
 	readonly id: string;
-	readonly messages: readonly ConversationMessageRecord[];
+	readonly messages: readonly SessionMessageRecord[];
 	readonly model: {
 		readonly modelId: string;
 		readonly providerId: string;
 		readonly variant?: ModelVariant;
 	};
-	readonly outcome: ConversationRecordOutcome;
+	readonly outcome: SessionRecordOutcome;
 	readonly turnId: AgentTurnId;
-	readonly version: typeof CONVERSATION_RECORD_VERSION;
+	readonly version: typeof SESSION_RECORD_VERSION;
 };
 
 const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
@@ -177,9 +177,9 @@ const isNonNegativeInteger = (value: unknown): value is number =>
 const isPositiveInteger = (value: unknown): value is number =>
 	isNonNegativeInteger(value) && value > 0;
 
-const isConversationSkillActivationRecord = (
+const isSessionSkillActivationRecord = (
 	value: unknown
-): value is ConversationSkillActivationRecord => {
+): value is SessionSkillActivationRecord => {
 	if (!isObjectRecord(value)) {
 		return false;
 	}
@@ -200,9 +200,9 @@ const isConversationSkillActivationRecord = (
 	);
 };
 
-const isConversationMessageMetadataRecord = (
+const isSessionMessageMetadataRecord = (
 	value: unknown
-): value is ConversationMessageMetadataRecord => {
+): value is SessionMessageMetadataRecord => {
 	if (!isObjectRecord(value)) {
 		return false;
 	}
@@ -234,7 +234,7 @@ const isConversationMessageMetadataRecord = (
 		(value.responseTimeMs === undefined ||
 			isNonNegativeInteger(value.responseTimeMs)) &&
 		(value.skill === undefined ||
-			isConversationSkillActivationRecord(value.skill)) &&
+			isSessionSkillActivationRecord(value.skill)) &&
 		(value.sourceUserMessageId === undefined ||
 			(typeof value.sourceUserMessageId === "string" &&
 				value.sourceUserMessageId.length > 0)) &&
@@ -243,9 +243,9 @@ const isConversationMessageMetadataRecord = (
 		(value.variant === undefined || typeof value.variant === "string")
 	);
 };
-export const isConversationAttachmentReferencePart = (
+export const isSessionAttachmentReferencePart = (
 	value: unknown
-): value is ConversationAttachmentReferencePart => {
+): value is SessionAttachmentReferencePart => {
 	if (!isObjectRecord(value)) {
 		return false;
 	}
@@ -274,9 +274,9 @@ export const isConversationAttachmentReferencePart = (
 		(value.width === undefined || isPositiveInteger(value.width))
 	);
 };
-export const isConversationFileMentionPart = (
+export const isSessionFileMentionPart = (
 	value: unknown
-): value is ConversationFileMentionPart => {
+): value is SessionFileMentionPart => {
 	if (!(isObjectRecord(value) && isObjectRecord(value.data))) {
 		return false;
 	}
@@ -306,9 +306,9 @@ export const isConversationFileMentionPart = (
 	);
 };
 
-export const isConversationToolCallPart = (
+export const isSessionToolCallPart = (
 	value: unknown
-): value is ConversationToolCallPart => {
+): value is SessionToolCallPart => {
 	if (!(isObjectRecord(value) && isObjectRecord(value.outcome))) {
 		return false;
 	}
@@ -345,17 +345,15 @@ export const isConversationToolCallPart = (
 	);
 };
 
-const isConversationMessagePart = (
-	value: unknown
-): value is ConversationMessagePart =>
+const isSessionMessagePart = (value: unknown): value is SessionMessagePart =>
 	isAgentTurnTextPart(value) ||
-	isConversationAttachmentReferencePart(value) ||
-	isConversationFileMentionPart(value) ||
-	isConversationToolCallPart(value);
+	isSessionAttachmentReferencePart(value) ||
+	isSessionFileMentionPart(value) ||
+	isSessionToolCallPart(value);
 
 export const isAgentTurnMessageRecord = (
 	record: unknown
-): record is ConversationMessageRecord => {
+): record is SessionMessageRecord => {
 	if (!isObjectRecord(record)) {
 		return false;
 	}
@@ -368,8 +366,8 @@ export const isAgentTurnMessageRecord = (
 		record.id.length > 0 &&
 		(record.role === "assistant" || record.role === "user") &&
 		Array.isArray(record.parts) &&
-		record.parts.every(isConversationMessagePart) &&
+		record.parts.every(isSessionMessagePart) &&
 		(record.metadata === undefined ||
-			isConversationMessageMetadataRecord(record.metadata))
+			isSessionMessageMetadataRecord(record.metadata))
 	);
 };

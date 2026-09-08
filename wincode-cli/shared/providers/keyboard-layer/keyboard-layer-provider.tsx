@@ -126,7 +126,6 @@ export function KeyboardLayerProvider({
 		if (handleToggleShortcut(key)) {
 			return;
 		}
-
 		// Single ctrl+c handler that walks the responder chain.
 		if (!key.ctrl || key.name !== "c") {
 			return;

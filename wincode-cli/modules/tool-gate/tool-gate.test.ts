@@ -860,7 +860,7 @@ test("MCP policy and safety are composed inside the gate", async () => {
 	expect(approvalCount).toBe(1);
 });
 
-test("rejects one approval without notifying the conversation abort path", async () => {
+test("rejects one approval without notifying the session abort path", async () => {
 	let abortCount = 0;
 	const gate = createGate(
 		createToolPermission(),
@@ -889,7 +889,7 @@ test("rejects one approval without notifying the conversation abort path", async
 	expect(abortCount).toBe(0);
 });
 
-test("abort notifies the conversation with the active tool call", async () => {
+test("abort notifies the session with the active tool call", async () => {
 	let abortedToolCallId: string | undefined;
 	const gate = createGate(
 		createToolPermission(),

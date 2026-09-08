@@ -21,13 +21,13 @@ export type CommandSpec = BaseSpec &
 
 export const COMMANDS: CommandSpec[] = [
 	{
-		description: "Start a new conversation",
+		description: "Start a new session",
 		name: "new",
 		value: "/new",
 		kind: "new",
 	},
 	{
-		description: "Compact conversation history",
+		description: "Compact session history",
 		name: "compact",
 		value: "/compact",
 		kind: "compact",

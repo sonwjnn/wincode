@@ -11,7 +11,7 @@
     "dev": "bun run --watch index.tsx",
     "test": "bun test .",
     "check-types": "tsc --noEmit",
-    "db:reset-conversations": "bun run scripts/reset-conversation-data.ts",
+    "db:reset-sessions": "bun run scripts/reset-session-data.ts",
     "db:push": "drizzle-kit push --config drizzle.config.ts",
     "db:studio": "drizzle-kit studio --config drizzle.config.ts"
   },

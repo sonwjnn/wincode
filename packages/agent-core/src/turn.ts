@@ -96,7 +96,7 @@ export type AgentTurnMessage = {
 	readonly role: "assistant" | "tool" | "user";
 };
 
-/** One resolved input to an Agent Turn: the conversation so far. */
+/** One resolved input to an Agent Turn: the session so far. */
 export type AgentTurnInput = {
 	readonly messages: readonly AgentTurnMessage[];
 };
@@ -112,7 +112,7 @@ export type AgentTurnDelegation = {
 
 /**
  * A fully resolved Agent Turn ready for one runtime invocation: the Agent,
- * the transient Model Target, the input conversation, and the gated Tools
+ * the transient Model Target, the input session, and the gated Tools
  * the Agent may invoke. Delegated turns retain the parent turn and Tool Call
  * that created them while keeping their own identity and lifecycle.
  */

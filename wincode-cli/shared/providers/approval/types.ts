@@ -13,7 +13,7 @@ export type ApprovalIdentityRow = {
  * (malformed config / `requiresManualApproval` agents, ADR-0008). `toolCallId`
  * anchors the inline panel to the assistant message part whose tool call is
  * pending; approvals without one (explicit Skill activation before the first
- * model call) render as a conversation-level panel instead.
+ * model call) render as a session-level panel instead.
  */
 export type ToolApprovalRequest = {
 	description: string;
@@ -25,7 +25,7 @@ export type ToolApprovalRequest = {
 
 /**
  * The imperative surface the panel drives. `reject` blocks only the selected
- * tool call so the Agent may continue, while `abort` rejects the conversation's
+ * tool call so the Agent may continue, while `abort` rejects the session's
  * pending approvals and interrupts the active turn. `cancel` rejects only the
  * selected request when the panel is dismissed.
  */

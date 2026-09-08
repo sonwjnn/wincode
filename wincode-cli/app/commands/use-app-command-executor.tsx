@@ -23,7 +23,6 @@ import {
 	ConnectDialogContent,
 	useConnections,
 } from "@/modules/connections";
-import { SessionsDialogContent } from "@/modules/conversations/ui/dialogs/sessions-dialog";
 import { McpStatusDialogContent, useMcp } from "@/modules/mcp";
 import { PermissionsDialogContent } from "@/modules/permissions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
@@ -31,6 +30,7 @@ import { AgentsDialogContent } from "@/modules/prompt-settings/ui/agents-dialog"
 import { ModelsDialogContent } from "@/modules/prompt-settings/ui/models-dialog";
 import { ThemeDialogContent } from "@/modules/prompt-settings/ui/theme-dialog";
 import { VariantsDialogContent } from "@/modules/prompt-settings/ui/variants-dialog";
+import { SessionsDialogContent } from "@/modules/sessions/ui/dialogs/sessions-dialog";
 import {
 	SKILLS_DIALOG_WIDTH,
 	SkillsDialogContent,

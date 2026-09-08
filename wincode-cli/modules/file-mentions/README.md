@@ -38,6 +38,6 @@ for AI context.
 ## Dependencies
 
 - `@wincode/agent-core` — shared Agent identity contracts
-- `wincode-cli/src/modules/conversations/message` — CLI-owned `FileMentionPart`
+- `wincode-cli/src/modules/sessions/message` — CLI-owned `FileMentionPart`
 - `@wincode/coding-tools/workspace` — `createWorkspaceSandbox`, `traverseWorkspaceEntries`
 - `shared/terminal/theme` — terminal colour context
