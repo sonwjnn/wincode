@@ -1,6 +1,6 @@
 # Isolate AI SDK behind Wincode Agent Runtime contracts
 
-Wincode owns the Agent Turn, Agent Turn Event, Conversation Record, Operational Failure, Model Target, and Agent Runtime contracts. AI SDK types and lifecycle semantics must not cross those interfaces; `@wincode/agent-runtime-ai-sdk` adapts AI SDK models, tools, streams, usage, and errors to Wincode contracts.
+Wincode owns the Agent Turn, Agent Turn Event, Session Record, Operational Failure, Model Target, and Agent Runtime contracts. AI SDK types and lifecycle semantics must not cross those interfaces; `@wincode/agent-runtime-ai-sdk` adapts AI SDK models, tools, streams, usage, and errors to Wincode contracts.
 
 Status: accepted
 

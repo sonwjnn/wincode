@@ -268,7 +268,7 @@ const grantResourceLimits = (
  * The single approval path shared by every gated tool family. It applies
  * temporary grants and auto approval to the raw policy `decision`
  * (`resolveApproval`), and for an `ask` enqueues the request on the
- * conversation approval queue, opens the shared inline approval panel, and
+ * session approval queue, opens the shared inline approval panel, and
  * awaits the outcome. A remembered "always" outcome records the grant only
  * when the request is not under the safety ceiling, and reject feedback is
  * bounded before it reaches the Agent.
@@ -392,7 +392,7 @@ const withErrorText = (
  * The deep Tool Gate module: one interface enforcing Tool Permission at
  * execution time for every tool family. It owns resource resolution and
  * canonicalization, the external-directory composition, per-node shell
- * evaluation, the doom_loop repeat guard, the conversation approval queue,
+ * evaluation, the doom_loop repeat guard, the session approval queue,
  * exact temporary-grant recording, and the deny/reject wording each family
  * emits. Callers map the settled outcome onto their own output channel; the
  * gate emits nothing.
@@ -835,7 +835,7 @@ export const createToolGate = ({
 		);
 	};
 
-	// doom_loop (ADR-0008): per-conversation repeat tracking keyed by the
+	// doom_loop (ADR-0008): per-session repeat tracking keyed by the
 	// (family, tool, input) triple. The third identical call turns the decision
 	// into an ordinary ask that `--auto` may bypass but an explicit deny never
 	// does; any differing call resets the run.

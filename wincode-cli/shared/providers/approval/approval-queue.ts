@@ -16,11 +16,11 @@ export type ApprovalHandle = {
 };
 
 /**
- * A conversation-scoped queue of pending tool approvals. `request()` enqueues an
+ * A session-scoped queue of pending tool approvals. `request()` enqueues an
  * approval and returns a handle whose `outcome` settles when resolved.
- * `rejectAll()` settles every pending request in the conversation at once — the
+ * `rejectAll()` settles every pending request in the session at once — the
  * most recently enqueued (the dialog on top, i.e. the selected request) carries
- * the typed feedback — which is why the queue is shared across a conversation's
+ * the typed feedback — which is why the queue is shared across a session's
  * tool calls rather than created per call.
  */
 export type ApprovalQueue<Request> = {
@@ -77,7 +77,7 @@ export function createApprovalQueue<Request>(): ApprovalQueue<Request> {
 		rejectAll(feedback) {
 			// Settle newest-first so the selected request (the interactive dialog on
 			// top of the stack) is the one that carries the correction; every other
-			// pending request in the conversation is rejected without feedback.
+			// pending request in the session is rejected without feedback.
 			const entries = [...pending].sort(
 				(first, second) => second.order - first.order
 			);

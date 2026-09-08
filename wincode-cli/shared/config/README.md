@@ -20,7 +20,7 @@ attribute their own diagnostics correctly.
 
 Capability schemas and behavior do not belong here. MCP, commands, agents, skills, and future
 capabilities resolve their own sections from the raw snapshot. Runtime state such as credentials,
-conversations, and preferences is not merged configuration.
+sessions, and preferences is not merged configuration.
 
 `ConfigStore.setValue(workspace, scope, path, value)` persists a JSON/JSONC value through the same
 configuration boundary. Within the requested scope it updates the source that owns the path; when

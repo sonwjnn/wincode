@@ -6,7 +6,7 @@
 | Pi | Repository [`earendil-works/pi`](https://github.com/earendil-works/pi), revision [`853a80d`](https://github.com/earendil-works/pi/tree/853a80d26c90a14c1886f0ebb8ffaae133ca2185) (main head khi clone). Lưu ý định danh: `badlogic/pi-mono` hiện **301 redirect sang `earendil-works/pi`** (xác minh 2026-08-31), đúng với quy ước của loạt note trước trong `docs/research/`. |
 | Oh My Pi (OMP) | Repository [`can1357/oh-my-pi`](https://github.com/can1357/oh-my-pi), revision [`65f79e7`](https://github.com/can1357/oh-my-pi/tree/65f79e76fcc89b96632fe86a598f314bd7cfc725) (main head khi clone) |
 | OpenCode | Repository [`anomalyco/opencode`](https://github.com/anomalyco/opencode), revision [`9f69463`](https://github.com/anomalyco/opencode/tree/9f69463f1d556af2b5b51d2efa1c04f5f544f911) (main head khi clone) |
-| Wincode | Repository [`sonwjnn/wincode`](https://github.com/sonwjnn/wincode), HEAD cục bộ `54635ed` (feat(conversations): persist compaction config). Mọi dẫn chiếu Wincode là đường dẫn + dòng **trong repo cục bộ** (repository evidence), không phải permalink GitHub vì HEAD chưa chắc đã được push. |
+| Wincode | Repository [`sonwjnn/wincode`](https://github.com/sonwjnn/wincode), HEAD cục bộ `54635ed` (feat(sessions): persist compaction config). Mọi dẫn chiếu Wincode là đường dẫn + dòng **trong repo cục bộ** (repository evidence), không phải permalink GitHub vì HEAD chưa chắc đã được push. |
 | Phạm vi | Chỉ quản trị test: taxonomy, runner/tools, fixture/harness, CI enforcement, chính sách chống test rác, khi nào **không** thêm test. Không xét formatter/linter/build, không đánh giá chất lượng từng test cụ thể. |
 
 ## Kết luận điều hành (đã xác minh từ source)
@@ -42,7 +42,7 @@
 
 1. **In-process composition** — `apps/server/src/routes/api.integration.test.ts` (31 dòng): dựng `createApiRoutes` với các subrouter **stub** (`billingRoutes`, `credentialsRoutes: new Hono()`, `sessionsRoutes: new Hono()`), gọi `apiRoutes.request(...)` **trong tiến trình**, không network, không DB. (L1–31)
 2. **Real-IO (subprocess/filesystem)** — `packages/ai/src/tools/shell/runner.integration.test.ts` (237 dòng): chạy `/bin/bash`/`powershell.exe` thật, temp dir qua `mkdtempSync` + `realpathSync` (chú thích symlink `/var → /private/var` trên macOS, L17–24), kill process tree lúc timeout, kiểm tra truncation banner 30 KiB, resource profile, background child giữ pipe (L83–237).
-3. **External service, env-gated** — `apps/server/tests/integration/billing/repository.postgres.test.ts` (838 dòng): Postgres thật qua `Pool` của `@neondatabase/serverless`, `DATABASE_URL` từ env với fallback `postgres://localhost/wincode-test`, cách ly dữ liệu bằng tiền tố `billing_pg_${crypto.randomUUID()}` (L1–63), và **`describe.skipIf(!hasDatabaseUrl)`** (L93) — mẫu env-gate đúng chuẩn. Cùng nhóm: các test `drizzle-*.integration.test.ts` trong `wincode-cli/src/modules/conversations/storage/` (SQLite thật qua Drizzle).
+3. **External service, env-gated** — `apps/server/tests/integration/billing/repository.postgres.test.ts` (838 dòng): Postgres thật qua `Pool` của `@neondatabase/serverless`, `DATABASE_URL` từ env với fallback `postgres://localhost/wincode-test`, cách ly dữ liệu bằng tiền tố `billing_pg_${crypto.randomUUID()}` (L1–63), và **`describe.skipIf(!hasDatabaseUrl)`** (L93) — mẫu env-gate đúng chuẩn. Cùng nhóm: các test `drizzle-*.integration.test.ts` trong `wincode-cli/src/modules/sessions/storage/` (SQLite thật qua Drizzle).
 
 ## Pi (`earendil-works/pi`, `853a80d`)
 

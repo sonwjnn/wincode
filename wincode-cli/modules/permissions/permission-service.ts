@@ -31,7 +31,7 @@ const EXTERNAL_DIRECTORY_GRANT_ACTION = "external_directory";
 /**
  * The generic Permission approval service. It owns the process-lifetime,
  * workspace-scoped temporary-grant store and the auto-approval flag shared
- * across every Agent and conversation in the workspace. It is deliberately
+ * across every Agent and session in the workspace. It is deliberately
  * independent of any one tool family so static coding tools, MCP tools, and
  * future tools all resolve approvals through the same state.
  */

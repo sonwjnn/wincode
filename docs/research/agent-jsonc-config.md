@@ -10,8 +10,8 @@
 > **Status: superseded.** The migration this note researched has been completed.
 > The closed `ModeType` / `codingModes` Coding Mode contract was removed from
 > `packages/ai`, the CLI, and the hosted API; the canonical selection is the
-> `AgentId` / resolved `Agent` runtime. Conversation persistence now uses
-> Wincode Conversation Records, and no compatibility normalizer remains.
+> `AgentId` / resolved `Agent` runtime. Session persistence now uses
+> Wincode Session Records, and no compatibility normalizer remains.
 > References below describe the pre-migration state and are intentionally
 > historical.
 
@@ -80,7 +80,7 @@ There is **no central JSON schema**; the store is deliberately schema-less (`REA
 
 ## 2. Current agent pipeline
 
-There is **no `agents` module** in this fork (`ls wincode-cli/src/modules` → auth, billing, commands, connections, conversations, custom-commands, file-mentions, mcp, model-pricing, prompt-settings, skills). The concept "agent" is today exactly the **mode** concept:
+There is **no `agents` module** in this fork (`ls wincode-cli/src/modules` → auth, billing, commands, connections, sessions, custom-commands, file-mentions, mcp, model-pricing, prompt-settings, skills). The concept "agent" is today exactly the **mode** concept:
 
 ### 2.1 Definition (static, built-in only)
 
@@ -100,9 +100,9 @@ There is **no `agents` module** in this fork (`ls wincode-cli/src/modules` → a
 
 1. `prompt-settings/context/prompt-config-provider.tsx:59-85` — `PromptConfig` state holds `{ mode, model, variant }`; `setMode`/`cycleMode` are plain useState setters (`getNextCodingModeName` from `modes.ts:60-64`).
 2. `/agents` command: `modules/commands/commands.ts:24-29` (kind `"mode"`), `commands/adapters/mode-adapter.ts` (opens dialog with `currentMode` + `setMode`), wired in `app/commands/use-app-command-executor.tsx:202-218` to `prompt-settings/ui/agents-dialog.tsx`, which renders `codingModes` directly (line 45).
-3. `conversations/hooks/use-chat.ts` — `modeRef` (line 196), submit stores mode (337-339), mode stamped into message metadata (247, 317), tool-call handler gates by mode (`createChatToolCallHandler({ modeRef, ... })`, 281-286).
-4. `conversations/hooks/local-chat-transport.ts:48-53` — builds `createCodingAgent({ model, ... })`; `mode: modeRef.current` passed in options (64-68).
-5. `conversations/hooks/routing-chat-transport.ts:36` — `mcp.createSnapshot(modeRef.current)` (plan mode excludes MCP tools); hosted requests carry `{ mode, model, variant }` (66-78) via `conversations/api/chat-request.ts` (`mode: ModeType`, line 19).
+3. `sessions/hooks/use-chat.ts` — `modeRef` (line 196), submit stores mode (337-339), mode stamped into message metadata (247, 317), tool-call handler gates by mode (`createChatToolCallHandler({ modeRef, ... })`, 281-286).
+4. `sessions/hooks/local-chat-transport.ts:48-53` — builds `createCodingAgent({ model, ... })`; `mode: modeRef.current` passed in options (64-68).
+5. `sessions/hooks/routing-chat-transport.ts:36` — `mcp.createSnapshot(modeRef.current)` (plan mode excludes MCP tools); hosted requests carry `{ mode, model, variant }` (66-78) via `sessions/api/chat-request.ts` (`mode: ModeType`, line 19).
 
 ### 2.4 Hosted route
 
@@ -121,7 +121,7 @@ There is **no `agents` module** in this fork (`ls wincode-cli/src/modules` → a
 | Tool gating | `packages/ai/src/server/agent.ts:43-62`, `use-chat.ts:281-286` | mode → allowed `CodingToolName[]` |
 | Instructions | `packages/ai/src/instructions.ts`, `server/agent.ts:82` | mode → system prompt |
 | Metadata | `packages/ai/src/metadata.ts:53` | mode enum validation |
-| Chat request body | `conversations/api/chat-request.ts:19`, `routing-chat-transport.ts:66-78` | mode string |
+| Chat request body | `sessions/api/chat-request.ts:19`, `routing-chat-transport.ts:66-78` | mode string |
 | Hosted server | `apps/server/src/routes/sessions.ts:83,315-317,365` | closed enum + built-in prompts |
 
 ---
@@ -139,7 +139,7 @@ There is **no `agents` module** in this fork (`ls wincode-cli/src/modules` → a
 3. `resolveConfigRelativePath` (`shared/config/resolve-config-relative-path.ts:9-22`) uses `snapshot.sourceFor(fieldPath)` to find the config file that supplied the entry and resolves relative paths from `dirname(origin.path)`; unknown provenance → entry skipped.
 4. Conventional folders always participate: `getProjectRoots(workspace)` (`shared/paths/project-roots.ts:4-19`) walks from the workspace up to the nearest `.git` root; skills also scan legacy dirs and sibling `skills` dirs of each global config source.
 5. `loader.ts` dedupes by name into a Map — later/higher-precedence candidates overwrite earlier ones — then sorts (custom-commands: built-in names checked first via `BUILTIN_NAMES` from `modules/commands/commands.ts`, collision → `console.warn` + skip, `custom-commands/loader.ts:9-42`; Skills: same-name overwrite, `packages/skills/src/filesystem.ts:151-166`). Invalid files are skipped best-effort.
-6. Consumers: `conversations/ui/components/chat-text-area.tsx:234-242` builds `discoverCustomCommands`/`discoverAvailableSkills` closures from `useConfig()` and passes them to the input controller (299-309); `resolveCustomCommandPrompt`/`resolveSkillPrompt` (78-120) expand `/name args` into the prompt at submit; `skills/ui/skills-dialog.tsx:43-64` loads the list on open.
+6. Consumers: `sessions/ui/components/chat-text-area.tsx:234-242` builds `discoverCustomCommands`/`discoverAvailableSkills` closures from `useConfig()` and passes them to the input controller (299-309); `resolveCustomCommandPrompt`/`resolveSkillPrompt` (78-120) expand `/name args` into the prompt at submit; `skills/ui/skills-dialog.tsx:43-64` loads the list on open.
 
 ### 3.3 Established semantics worth preserving
 
@@ -230,7 +230,7 @@ The store itself needs **no changes** — its README (`wincode-cli/src/shared/co
 - `packages/ai/src/server/agent.ts:43-62` — agent→tools/instructions resolution; `packages/ai/src/server/stream.ts`
 - `wincode-cli/src/modules/prompt-settings/context/prompt-config-provider.tsx`; `prompt-settings/ui/agents-dialog.tsx`
 - `wincode-cli/src/app/commands/use-app-command-executor.tsx:202-218`; `commands/adapters/mode-adapter.ts`
-- `wincode-cli/src/modules/conversations/hooks/use-chat.ts` (modeRef type), `local-chat-transport.ts:64-68`, `routing-chat-transport.ts:66-78`, `conversations/api/chat-request.ts:19`
+- `wincode-cli/src/modules/sessions/hooks/use-chat.ts` (modeRef type), `local-chat-transport.ts:64-68`, `routing-chat-transport.ts:66-78`, `sessions/api/chat-request.ts:19`
 - `apps/server/src/routes/sessions.ts:83,315-317,365` (only if the hosted contract changes)
 - Docs: new ADR (extend `docs/adr/`), `CONTEXT.md` domain terms (precedent: `8ccd853`), `shared/config/README.md:21` wording if shape differs from other capabilities
 
@@ -281,7 +281,7 @@ The store itself needs **no changes** — its README (`wincode-cli/src/shared/co
 - `wincode-cli/src/modules/mcp/config/schema.ts`, `config/resolve.ts:19-27,40-71,249-330`; `wincode-cli/src/modules/mcp/config.ts:31-50`
 - `wincode-cli/src/modules/prompt-settings/context/prompt-config-provider.tsx:59-85`, `prompt-settings/ui/agents-dialog.tsx:45`
 - `wincode-cli/src/modules/commands/commands.ts:17-33`, `commands/adapters/mode-adapter.ts`, `app/commands/use-app-command-executor.tsx:202-218`
-- `wincode-cli/src/modules/conversations/hooks/use-chat.ts:196,247,257-266,281-286,337-339`, `local-chat-transport.ts:48-53,64-68`, `routing-chat-transport.ts:36,66-78`, `conversations/api/chat-request.ts:19`, `conversations/ui/components/chat-text-area.tsx:234-309`
+- `wincode-cli/src/modules/sessions/hooks/use-chat.ts:196,247,257-266,281-286,337-339`, `local-chat-transport.ts:48-53,64-68`, `routing-chat-transport.ts:36,66-78`, `sessions/api/chat-request.ts:19`, `sessions/ui/components/chat-text-area.tsx:234-309`
 - `packages/ai/src/modes.ts:13-69`, `instructions.ts:3-21`, `metadata.ts:53`, `server/agent.ts:43-62,73-100`, `server/stream.ts`
 - `apps/server/src/routes/sessions.ts:42-49,83,313-317,365-378,414-447`
 - Commits: `e3afe8e` (shared store, MCP migration, `opencode.json` dropped), `03b9bb5` (commands/skills from config), `8ccd853` (custom commands, CONTEXT.md terms), `f77efd3` (config store real-file tests), `6b55364` (eager command fetch)

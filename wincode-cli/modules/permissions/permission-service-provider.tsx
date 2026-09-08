@@ -16,7 +16,7 @@ type PermissionServiceProviderProps = {
 
 /**
  * Provides the process-lifetime, workspace-scoped Permission service to the tree
- * so every conversation and Agent resolves approvals, temporary grants, and auto
+ * so every session and Agent resolves approvals, temporary grants, and auto
  * approval through the same shared state.
  */
 export function PermissionServiceProvider({

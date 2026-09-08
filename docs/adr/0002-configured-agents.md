@@ -29,7 +29,7 @@ Status: accepted
 - **Catalog-backed model overrides** - optional `model` uses
   `<connectionProviderId>/<modelId>` and is authoritative for that Agent. Optional
   `variant` is valid only with a configured model and must belong to that model's
-  catalog entry. Without a model, the Agent inherits the conversation model and
+  catalog entry. Without a model, the Agent inherits the session model and
   variant.
 
 ## Consequences
@@ -48,13 +48,13 @@ Status: accepted
   effective Configured Agents are omitted rather than falling back to a lower,
   potentially more permissive definition. Invalid built-in patches revert to the
   shipped definition under a manual-approval safety ceiling.
-- `default_agent` selects the initial Agent for new conversations. It must resolve to
+- `default_agent` selects the initial Agent for new sessions. It must resolve to
   an available `primary` or `all` Agent; otherwise Wincode visibly falls back to Build.
-  Persisted conversation selection takes precedence when reopening a conversation.
+  Persisted session selection takes precedence when reopening a session.
 - `/agents` orders the effective default first and all other selectable Agents by
   canonical ID. Model-pinned Agents with a missing Connection remain visible but are
   disabled; an unavailable configured default falls back to Build with a notice.
-- Persisted conversation state and message metadata migrate from `mode` to `agent`.
+- Persisted session state and message metadata migrate from `mode` to `agent`.
   Legacy `mode: build | plan` metadata is normalized when read; new writes use only
   `agent`. If a saved Agent no longer resolves, history retains its name while the
   active selection visibly falls back to Build.

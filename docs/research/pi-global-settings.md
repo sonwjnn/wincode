@@ -72,7 +72,7 @@ These are recommendations derived from the Pi source and the stated Wincode goal
 
 ### Recommended product contract
 
-1. **One global Settings hub.** Expose `/settings` from Home and an active session. The hub should remain available without a conversation. Keep `/compact` as an active-session command because it performs a session operation, not a preference edit.
+1. **One global Settings hub.** Expose `/settings` from Home and an active session. The hub should remain available without a session. Keep `/compact` as an active-session command because it performs a session operation, not a preference edit.
 2. **Auto-compact as a normal row.** Put `Auto-compact` under a `Compaction` section in the global hub. Toggle immediately, close with Escape, and show the persisted/effective value after the write completes.
 3. **Keep manual compaction separate.** A settings toggle controls future automatic threshold checks; it should not rewrite compaction history or alter existing summaries.
 4. **Use a nested namespace.** Persist the preference as a stable nested key such as `compaction.auto` (or preserve the repository's already-established key if it differs). Keep generated compaction summaries/boundaries in session storage.

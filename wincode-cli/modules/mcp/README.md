@@ -21,7 +21,7 @@ user's working directory — the server never runs file-system tools.
 	`McpServerStatus` only, so no config, env, headers, or URLs can appear.
 
 MCP tools resolve approvals through the Tool Gate, sharing the generic Permission engine,
-conversation approval queue, and approval panel with static coding tools. The registry owns only
+session approval queue, and approval panel with static coding tools. The registry owns only
 snapshot validity, dispatch, normalization, and the deny defense-in-depth check; the provider
 adapts an MCP snapshot tool to the Tool Gate's primitive call shape.
 
@@ -95,7 +95,7 @@ Catalog contents are purely policy-driven — neither mode is special-cased:
 
 ## Tool-call handling
 
-The conversation application adapts each catalog entry to the core `ResolvedTool`
+The session application adapts each catalog entry to the core `ResolvedTool`
 contract through `createGatedCodingTools`. A call then follows the shared Tool
 Gate:
 

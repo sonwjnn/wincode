@@ -1,10 +1,10 @@
-import type { ResolvedCompactionSettings } from "@/modules/conversations/compaction/config";
+import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
 import {
 	DEFAULT_COMPACTION_SETTINGS,
 	getCompactionSettingSource,
 	resolveCompactionSettingPath,
 	resolveCompactionSettings,
-} from "@/modules/conversations/compaction/config";
+} from "@/modules/sessions/compaction/config";
 import type {
 	ConfigDocument,
 	ConfigScope,
@@ -26,7 +26,7 @@ const AUTO_COMPACT_PATHS = [
 	LEGACY_AUTO_COMPACT_PATH,
 ] as const;
 const AUTO_COMPACT_DESCRIPTION =
-	"Automatically summarize older messages when the conversation approaches the model context limit.";
+	"Automatically summarize older messages when the session approaches the model context limit.";
 const MAX_PATH_CLEAR_ATTEMPTS = 16;
 
 type PersistedValue = {

@@ -8,7 +8,7 @@ import {
 } from "./approval-panels-provider";
 import type { ToolApprovalActions, ToolApprovalRequest } from "./types";
 
-const CONVERSATION_ID_PREFIX_REGEX = /^conversation-/;
+const SESSION_ID_PREFIX_REGEX = /^session-/;
 
 const makeRequest = (
 	overrides: Partial<ToolApprovalRequest> = {}
@@ -74,16 +74,16 @@ test("registers a tool-call request under its toolCallId and keeps it after reso
 	setup.renderer.destroy();
 });
 
-test("conversation-target approvals are removed once resolved", async () => {
+test("session-target approvals are removed once resolved", async () => {
 	const { holder, setup } = await renderWithApi();
 	let id: string | undefined;
 	await act(async () => {
 		id = holder.api?.add(makeRequest(), makeActions());
 	});
-	expect(id).toMatch(CONVERSATION_ID_PREFIX_REGEX);
+	expect(id).toMatch(SESSION_ID_PREFIX_REGEX);
 	expect(holder.api?.entries[0]).toMatchObject({
 		id,
-		target: "conversation",
+		target: "session",
 	});
 
 	await act(async () => {
@@ -124,7 +124,7 @@ test("re-adding the same id replaces the earlier entry", async () => {
 	setup.renderer.destroy();
 });
 
-test("resolveAll settles every unresolved entry and removes conversation entries", async () => {
+test("resolveAll settles every unresolved entry and removes session entries", async () => {
 	const { holder, setup } = await renderWithApi();
 	await act(async () => {
 		holder.api?.add(makeRequest({ toolCallId: "call-1" }), makeActions());

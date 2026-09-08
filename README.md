@@ -10,7 +10,7 @@ Multi-provider models · MCP tools · local sessions · configurable agents
 
 ## Overview
 
-`wincode` is a Bun-powered terminal coding agent. Agents, tools, skills, context, permissions, conversations, and model requests run from the local CLI. Model requests use provider APIs directly with credentials configured by the user; Wincode accounts and subscriptions are not required.
+`wincode` is a Bun-powered terminal coding agent. Agents, tools, skills, context, permissions, sessions, and model requests run from the local CLI. Model requests use provider APIs directly with credentials configured by the user; Wincode accounts and subscriptions are not required.
 
 - **Terminal-native chat** — a React-rendered TUI via [OpenTUI](https://github.com/sst/opentui), with slash commands, file mentions, clipboard image paste, and persisted session history.
 - **Bring your own model** — connect supported providers such as Anthropic, OpenAI, and Google with provider-owned API keys or supported provider OAuth.
@@ -40,7 +40,7 @@ packages/
 └── config/    # shared TypeScript configuration
 ```
 
-Conversation history and attachments use local storage. No external database or Wincode identity is needed to run the agent.
+Session history and attachments use local storage. No external database or Wincode identity is needed to run the agent.
 
 ## Getting Started
 

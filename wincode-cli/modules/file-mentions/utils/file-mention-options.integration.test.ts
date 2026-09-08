@@ -26,7 +26,7 @@ afterEach(async () => {
 describe("file mention option discovery", () => {
 	test("discovers deeply nested entries and skips ignored directories", async () => {
 		const workspace = await createWorkspace();
-		const deepDirectory = "wincode-cli/src/modules/conversations/ui/messages";
+		const deepDirectory = "wincode-cli/src/modules/sessions/ui/messages";
 		await mkdir(path.join(workspace, deepDirectory), { recursive: true });
 		await mkdir(path.join(workspace, "node_modules/deep"), { recursive: true });
 		await mkdir(path.join(workspace, "dist"), { recursive: true });
@@ -47,8 +47,8 @@ describe("file mention option discovery", () => {
 		expect(paths).not.toContain("node_modules/deep/bot-message.tsx");
 		expect(paths).not.toContain("dist/generated.ts");
 		expect(options).toContainEqual({
-			label: "wincode-cli/src/modules/conversations/ui/messages/",
-			path: "wincode-cli/src/modules/conversations/ui/messages",
+			label: "wincode-cli/src/modules/sessions/ui/messages/",
+			path: "wincode-cli/src/modules/sessions/ui/messages",
 			type: "directory",
 		});
 	});

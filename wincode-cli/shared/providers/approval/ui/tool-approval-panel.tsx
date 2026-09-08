@@ -47,7 +47,7 @@ const buildOptions = (
 
 /**
  * One compact identity line for the inline panel, bounded so a hostile or
- * enormous tool schema cannot flood the conversation.
+ * enormous tool schema cannot flood the session.
  */
 const formatApprovalHeader = (request: ToolApprovalRequest): string => {
 	const identity = request.identity

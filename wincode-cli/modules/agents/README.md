@@ -20,8 +20,8 @@ Agents are named, trusted behavior descriptors. Configure them in `wincode.json`
 ```
 
 Defaults are followed by configuration sources from low to high precedence. Object
-fields merge recursively and higher sources win. Persisted conversation selection
-takes precedence when reopening a conversation; an unavailable selection falls back
+fields merge recursively and higher sources win. Persisted session selection
+takes precedence when reopening a session; an unavailable selection falls back
 to Build while retaining its historical name.
 
 `resource_limits` accepts `standard`, `extended`, or `deep`. The global value applies
