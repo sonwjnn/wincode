@@ -1,1 +1,0 @@
-ALTER TABLE `conversation_compaction` ADD `summarization_variant` text;

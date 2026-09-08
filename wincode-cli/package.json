@@ -11,10 +11,7 @@
     "dev": "bun run --watch src/index.tsx",
     "test": "bun test src",
     "check-types": "tsc --noEmit",
-    "db:local:generate": "drizzle-kit generate --config drizzle.local.config.ts",
-    "db:local:reset-conversations": "bun run scripts/reset-conversation-data.ts",
-    "db:local:migrate": "drizzle-kit migrate --config drizzle.local.config.ts",
-    "db:local:studio": "drizzle-kit studio --config drizzle.local.config.ts"
+    "db:reset-conversations": "bun run scripts/reset-conversation-data.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
@@ -41,8 +38,7 @@
     "@tanstack/router-cli": "1.166.43",
     "@types/bun": "latest",
     "@types/react": "^19.2.10",
-    "@types/react-dom": "catalog:",
-    "drizzle-kit": "^0.31.10"
+    "@types/react-dom": "catalog:"
   },
   "peerDependencies": {
     "typescript": "catalog:"

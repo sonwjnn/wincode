@@ -73,20 +73,26 @@ distinct live status from the current Agent Turn.
 - `attachment-store.ts` — image blob storage, integrity-checked hydration, compaction projection, and garbage collection.
 - `schema.ts` — SQLite schema and durable Conversation Record/compaction/attachment tables.
 - `path.ts` — platform-specific local database and attachment paths.
-- `migrations.ts` — local Drizzle migrator bootstrap.
+- `client.ts` — SQLite connection, pragmas, and current-schema initialization.
 
-Local migrations are generated with `bun run --cwd wincode-cli db:local:generate` and committed under `wincode-cli/drizzle/local`. The store runs the migrator on first open.
+The database initializes the current `schema.ts` definition on open with
+idempotent `CREATE TABLE IF NOT EXISTS` statements. There is no migration
+directory or runtime migration step.
 
-This is a breaking local persistence cutover. Existing session, Conversation
-Record, compaction, and attachment metadata rows are disposable; no
-compatibility migration translates old conversation data or compaction metrics.
+## Solo-dev persistence rule
 
-Before exercising the new contract, run the explicit reset command:
+Wincode is maintained by one developer, so local persistence is reset-only.
+Schema changes intentionally do not provide compatibility migrations. After
+changing `schema.ts`, remove the local database and attachment directory before
+restarting Wincode. Keep the initialization SQL in `client.ts` synchronized with
+the Drizzle schema.
 
-`bun run --cwd wincode-cli db:local:reset-conversations`
+The reset command only clears conversation data and is not a schema reset:
 
-The reset command is manual and is not run during startup. It removes the
-attachment blobs and preserves prompt history and workspace/configuration data.
+`bun run --cwd wincode-cli db:reset-conversations`
+
+It removes conversation records and attachment blobs while preserving prompt
+history and workspace/configuration data.
 
 - `getConversationStore()` — local sessions, Conversation Records, compactions, attachments, and maintenance.
 - `ConversationOperation` — one application-owned send, cancellation, and interruption seam for the current turn path.

@@ -4,7 +4,6 @@ import { join } from "node:path";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import { createDatabase } from "./client";
 import { createDrizzleConversationStore } from "./drizzle-conversation-store";
-import { runMigrations } from "./migrations";
 
 const model: ChatModelSelection = {
 	modelId: "gpt-5.4-mini",
@@ -20,7 +19,6 @@ test("resets conversation data while preserving prompt history", async () => {
 	const databasePath = join(directory, "conversation.sqlite");
 	const attachmentRoot = join(directory, "attachments");
 	const { db } = createDatabase(databasePath);
-	runMigrations(db);
 	const store = createDrizzleConversationStore(db, { attachmentRoot });
 
 	const { id: sessionId } = await store.createSession({

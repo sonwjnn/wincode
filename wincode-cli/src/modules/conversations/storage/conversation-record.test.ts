@@ -18,7 +18,6 @@ import {
 } from "./conversation-record";
 import type { ConversationStore } from "./conversation-store";
 import { createDrizzleConversationStore } from "./drizzle-conversation-store";
-import { runMigrations } from "./migrations";
 
 const model: ChatModelSelection = {
 	modelId: "gpt-5.4-mini",
@@ -133,7 +132,6 @@ const createTestStore = async (): Promise<TestStore> => {
 	const dir = await mkdtemp(join(tmpdir(), "wincode-conversation-record-"));
 	const databasePath = join(dir, "conversation.sqlite");
 	const { db } = createDatabase(databasePath);
-	runMigrations(db);
 	const store = createDrizzleConversationStore(db, {
 		attachmentRoot: join(dir, "attachments"),
 	});
@@ -218,7 +216,6 @@ test("reopens durable records without reconstructing or running execution", asyn
 	await store.commitConversationRecord({ record: assistant, sessionId: id });
 
 	const { db } = createDatabase(databasePath);
-	runMigrations(db);
 	const reopened = createDrizzleConversationStore(db, {
 		attachmentRoot: join(tmpdir(), "wincode-reopened-attachments"),
 	});
@@ -297,7 +294,6 @@ test("keeps records isolated per session and per workspace", async () => {
 	const dir = await mkdtemp(join(tmpdir(), "wincode-conversation-record-"));
 	const databasePath = join(dir, "conversation.sqlite");
 	const { db } = createDatabase(databasePath);
-	runMigrations(db);
 	const firstWorkspace = createDrizzleConversationStore(db, {
 		attachmentRoot: join(dir, "attachments-a"),
 		workspaceRoot: join(dir, "workspace-a"),

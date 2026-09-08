@@ -43,7 +43,6 @@ import {
 	UNTITLED_SESSION_TITLE,
 	type UpdateSessionInput,
 } from "./conversation-store";
-import { runMigrations } from "./migrations";
 import { resolveLocalAttachmentRoot } from "./path";
 import {
 	conversationAttachment,
@@ -539,9 +538,6 @@ export const createDrizzleConversationStore = (
 ): ConversationStore => {
 	const db = database ?? createDatabase().db;
 
-	if (!database) {
-		runMigrations(db);
-	}
 	const attachmentRoot = options.attachmentRoot ?? resolveLocalAttachmentRoot();
 	const attachmentStore =
 		options.attachmentStore ??

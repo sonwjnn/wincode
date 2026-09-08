@@ -3,7 +3,6 @@ import type {
 	ConversationRecord,
 } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
-import { sql } from "drizzle-orm";
 import {
 	index,
 	integer,
@@ -175,9 +174,3 @@ export const conversationSchema = {
 	conversationWorkspace,
 	promptHistory,
 };
-
-export const CURRENT_USER_VERSION = 3;
-
-export const setUserVersion = sql`PRAGMA user_version = ${sql.raw(
-	String(CURRENT_USER_VERSION)
-)}`;

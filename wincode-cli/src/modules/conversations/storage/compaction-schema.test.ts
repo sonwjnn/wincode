@@ -3,13 +3,11 @@ import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { createDatabase } from "./client";
 import { createDrizzleConversationStore } from "./drizzle-conversation-store";
-import { runMigrations } from "./migrations";
 
-test("uses the estimated compaction column in a fresh local database", async () => {
+test("initializes the current compaction schema in a fresh local database", async () => {
 	const directory = await mkdtemp(join("/tmp", "wincode-compaction-schema-"));
 	const databasePath = join(directory, "conversation.sqlite");
 	const { db } = createDatabase(databasePath);
-	runMigrations(db);
 
 	const columns = db.$client
 		.query("PRAGMA table_info(conversation_compaction)")
