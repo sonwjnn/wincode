@@ -63,6 +63,25 @@ const clearAttachmentRoot = async (root: string): Promise<void> => {
 	}
 };
 
+/**
+ * Repairs the physical compaction column left by an interrupted breaking
+ * cutover. This is deliberately called only by the explicit reset operation.
+ */
+const repairCompactionColumnForReset = (db: ConversationDatabase): void => {
+	const columns = db.$client
+		.query("PRAGMA table_info(conversation_compaction)")
+		.all() as Array<{ name: string }>;
+	const hasCurrentColumn = columns.some(({ name }) => name === "tokens_after");
+	const hasInterruptedColumn = columns.some(
+		({ name }) => name === "estimated_tokens_after"
+	);
+	if (!hasCurrentColumn && hasInterruptedColumn) {
+		db.$client.exec(
+			'ALTER TABLE "conversation_compaction" RENAME COLUMN "estimated_tokens_after" TO "tokens_after"'
+		);
+	}
+};
+
 const writePromptHistory = (
 	db: ConversationDatabase,
 	entry: PromptHistoryEntry
@@ -666,6 +685,7 @@ export const createDrizzleConversationStore = (
 				tx.delete(conversationSession).run();
 				tx.delete(conversationAttachment).run();
 			});
+			repairCompactionColumnForReset(db);
 			await clearAttachmentRoot(attachmentRoot);
 		},
 

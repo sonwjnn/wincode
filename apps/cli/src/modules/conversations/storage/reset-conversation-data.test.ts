@@ -69,3 +69,30 @@ test("resets conversation data while preserving prompt history", async () => {
 	});
 	expect(await readdir(attachmentRoot)).toEqual([]);
 });
+
+test("repairs an old estimate column during the explicit reset", async () => {
+	const directory = await mkdtemp(join("/tmp", "wincode-conversation-schema-"));
+	const databasePath = join(directory, "conversation.sqlite");
+	const attachmentRoot = join(directory, "attachments");
+	const { db } = createDatabase(databasePath);
+	runMigrations(db);
+	db.$client.exec(
+		'ALTER TABLE "conversation_compaction" RENAME COLUMN "tokens_after" TO "estimated_tokens_after"'
+	);
+	const store = createDrizzleConversationStore(db, { attachmentRoot });
+
+	expect(() => store.getCompactions("missing-session")).toThrow(
+		"no such column: conversation_compaction.tokens_after"
+	);
+
+	await store.resetConversationData();
+
+	const columns = db.$client
+		.query("PRAGMA table_info(conversation_compaction)")
+		.all() as Array<{ name: string }>;
+	expect(columns.map(({ name }) => name)).toContain("tokens_after");
+	expect(columns.map(({ name }) => name)).not.toContain(
+		"estimated_tokens_after"
+	);
+	expect(await store.getCompactions("missing-session")).toEqual([]);
+});
