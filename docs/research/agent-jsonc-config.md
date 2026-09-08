@@ -19,11 +19,11 @@
 
 ## Executive summary
 
-Wincode already has a domain-neutral, provenance-aware config store (`apps/cli/src/shared/config/config-store.ts`, added in `e3afe8e`) that loads `wincode.json` / `wincode.jsonc` from four locations, merges them, and exposes per-path provenance. Commit `03b9bb5` established the exact pattern for wiring a new capability onto that store: a per-module `discovery.ts` that reads a capability section (`commands.paths`, `skills.paths`) off `snapshot.document`, resolves relative entries through `resolveConfigRelativePath` + `getProjectRoots`, and a loader that dedupes by name with defined precedence. The shared-config README explicitly reserves a slot for this: *"MCP, commands, agents, skills, and future capabilities resolve their own sections from the raw snapshot"* (`apps/cli/src/shared/config/README.md:21-22`).
+Wincode already has a domain-neutral, provenance-aware config store (`wincode-cli/src/shared/config/config-store.ts`, added in `e3afe8e`) that loads `wincode.json` / `wincode.jsonc` from four locations, merges them, and exposes per-path provenance. Commit `03b9bb5` established the exact pattern for wiring a new capability onto that store: a per-module `discovery.ts` that reads a capability section (`commands.paths`, `skills.paths`) off `snapshot.document`, resolves relative entries through `resolveConfigRelativePath` + `getProjectRoots`, and a loader that dedupes by name with defined precedence. The shared-config README explicitly reserves a slot for this: *"MCP, commands, agents, skills, and future capabilities resolve their own sections from the raw snapshot"* (`wincode-cli/src/shared/config/README.md:21-22`).
 
 The smallest clean seam for `agents` support is therefore:
 
-1. A new `apps/cli/src/modules/agents/` module (discovery → loader → types → index), mirroring `modules/skills/` and `modules/custom-commands/`, consuming `ConfigRuntime` (`config-store.ts:36-40`).
+1. A new `wincode-cli/src/modules/agents/` module (discovery → loader → types → index), mirroring `modules/skills/` and `modules/custom-commands/`, consuming `ConfigRuntime` (`config-store.ts:36-40`).
 2. A widening of the closed `ModeType` / `codingModeNameSchema` union in `packages/ai/src/modes.ts:13-38` plus the mode-keyed instruction/tool lookups (`packages/ai/src/instructions.ts`, `packages/ai/src/server/agent.ts:43-62`) — this is the real coupling point, because "agents" today are exactly the two hard-coded `codingModes` surfaced in the `/agents` dialog.
 3. A decision about the config shape — the repo's own precedent (`{ commands: { paths } }`) is a path array, while upstream OpenCode uses a named record (`agents: { <name>: {...} }`). These are not compatible, and choosing is the primary unresolved product decision.
 
@@ -35,7 +35,7 @@ The hardest constraint is the hosted path: `apps/server/src/routes/sessions.ts` 
 
 ### 1.1 Entrypoints and filenames
 
-- `apps/cli/src/shared/config/config-store.ts:406-434` — `createConfigStore()` is the single entrypoint. Defaults: `homeRoot = homedir()`, `configRoot = ${XDG_CONFIG_HOME:-~/.config}/wincode` (lines 409-418); default fs is `Bun.file().text()` (419-421).
+- `wincode-cli/src/shared/config/config-store.ts:406-434` — `createConfigStore()` is the single entrypoint. Defaults: `homeRoot = homedir()`, `configRoot = ${XDG_CONFIG_HOME:-~/.config}/wincode` (lines 409-418); default fs is `Bun.file().text()` (419-421).
 - `loadSnapshot` (lines 361-404) reads four locations, lowest to highest precedence:
   1. `configRoot` (`${XDG_CONFIG_HOME:-~/.config}/wincode`) — scope `global`
   2. `~/.wincode` — scope `global`
@@ -57,30 +57,30 @@ The hardest constraint is the hosted path: `apps/server/src/routes/sessions.ts` 
 - `mergeDocument` (161-180): objects merge recursively; **arrays and scalars replace** earlier values (arrays are *not* concatenated across layers — see `config-store.test.ts:187` "does not resurrect lower object fields after a scalar replacement").
 - `recordProvenance` (136-159) records which source contributed every key (including array indices, so `["skills","paths","0"]` resolves).
 - `snapshot.sourceFor(pathSegments)` (394-401) returns the originating `ConfigOrigin` for the longest matching prefix — this is what makes per-capability diagnostics and relative path resolution possible.
-- `sources` (31) keeps each raw source document, so capability modules can also scan per-source content (Skills discovery does this for sibling `skills` dirs — `apps/cli/src/modules/skills/discovery.ts:84-92`).
+- `sources` (31) keeps each raw source document, so capability modules can also scan per-source content (Skills discovery does this for sibling `skills` dirs — `wincode-cli/src/modules/skills/discovery.ts:84-92`).
 
 ### 1.4 Runtime wiring
 
-- `apps/cli/src/shared/config/config-provider.tsx` — `ConfigProvider` / `useConfig()` React context exposing `ConfigRuntime` (`config-store.ts:36-40`: `{ configStore, homeRoot, workspace }`).
-- `apps/cli/src/app/layouts/root-layout.tsx:20-29` — one process-lifetime `createConfigStore()` + frozen `configContext` composed at module scope; injected via `ConfigProvider` (line 67) and into `createMcpRegistry({ configStore, workspace })` (line 29).
+- `wincode-cli/src/shared/config/config-provider.tsx` — `ConfigProvider` / `useConfig()` React context exposing `ConfigRuntime` (`config-store.ts:36-40`: `{ configStore, homeRoot, workspace }`).
+- `wincode-cli/src/app/layouts/root-layout.tsx:20-29` — one process-lifetime `createConfigStore()` + frozen `configContext` composed at module scope; injected via `ConfigProvider` (line 67) and into `createMcpRegistry({ configStore, workspace })` (line 29).
 
 ### 1.5 Schema, validation, diagnostics
 
 There is **no central JSON schema**; the store is deliberately schema-less (`README.md:21-23`). Each capability validates its own section with zod and reports diagnostics attributed to provenance:
 
-- MCP is the reference implementation: `apps/cli/src/modules/mcp/config/schema.ts` (zod schemas, `.strict()`), `apps/cli/src/modules/mcp/config/resolve.ts` — `resolveServers` (289-330), per-source malformed-entry scanning (`diagnoseMalformedEntries`, 249-281), `addDiagnostic` + `owner()` provenance attribution (40-71), capability-specific diagnostic codes (19-27), `{env:VAR}` substitution with `missing-env` diagnostics (107-132), cwd resolution relative to workspace (149-161).
+- MCP is the reference implementation: `wincode-cli/src/modules/mcp/config/schema.ts` (zod schemas, `.strict()`), `wincode-cli/src/modules/mcp/config/resolve.ts` — `resolveServers` (289-330), per-source malformed-entry scanning (`diagnoseMalformedEntries`, 249-281), `addDiagnostic` + `owner()` provenance attribution (40-71), capability-specific diagnostic codes (19-27), `{env:VAR}` substitution with `missing-env` diagnostics (107-132), cwd resolution relative to workspace (149-161).
 - Capability section shape is decided per capability, not centrally: `mcp` is a named record; `commands`/`skills` are `{ paths: string[] }`.
 
 ### 1.6 Tests
 
-- `apps/cli/src/shared/config/config-store.test.ts` (330 lines): ordered merge, JSONC-over-JSON + duplicate diagnostic (line 96), malformed/unsafe-key isolation (121), unreadable sources (155), scalar-replacement semantics (187), memoization (219), immutability (243), real-filesystem loading (263).
-- `apps/cli/src/shared/config/filesystem-test-utils.ts` — `writeFixture` helper used by integration tests.
+- `wincode-cli/src/shared/config/config-store.test.ts` (330 lines): ordered merge, JSONC-over-JSON + duplicate diagnostic (line 96), malformed/unsafe-key isolation (121), unreadable sources (155), scalar-replacement semantics (187), memoization (219), immutability (243), real-filesystem loading (263).
+- `wincode-cli/src/shared/config/filesystem-test-utils.ts` — `writeFixture` helper used by integration tests.
 
 ---
 
 ## 2. Current agent pipeline
 
-There is **no `agents` module** in this fork (`ls apps/cli/src/modules` → auth, billing, commands, connections, conversations, custom-commands, file-mentions, mcp, model-pricing, prompt-settings, skills). The concept "agent" is today exactly the **mode** concept:
+There is **no `agents` module** in this fork (`ls wincode-cli/src/modules` → auth, billing, commands, connections, conversations, custom-commands, file-mentions, mcp, model-pricing, prompt-settings, skills). The concept "agent" is today exactly the **mode** concept:
 
 ### 2.1 Definition (static, built-in only)
 
@@ -110,7 +110,7 @@ There is **no `agents` module** in this fork (`ls apps/cli/src/modules` → auth
 
 ### 2.5 Markdown/filesystem agents
 
-**None for agents.** The filesystem "agent" artifacts are Skills: legacy *skill* dirs (`.agents/skills`, `.claude/skills`, `.opencode/skills` — `apps/cli/src/modules/skills/discovery.ts:11-15`) plus Wincode and configured roots composed by the CLI. There is no `.opencode/agent/` loading, no `AGENTS.md`-style loading, no plugin-defined agent loading in this fork. `grep -ri agent apps/cli/src` surfaces only: the `/agents` command, `AgentsDialogContent`, `createCodingAgent`/`CodingAgent*` AI-SDK types, and the Skill activation path. The repo root's `AGENTS.md -> CLAUDE.md` is a docs symlink, not runtime input.
+**None for agents.** The filesystem "agent" artifacts are Skills: legacy *skill* dirs (`.agents/skills`, `.claude/skills`, `.opencode/skills` — `wincode-cli/src/modules/skills/discovery.ts:11-15`) plus Wincode and configured roots composed by the CLI. There is no `.opencode/agent/` loading, no `AGENTS.md`-style loading, no plugin-defined agent loading in this fork. `grep -ri agent wincode-cli/src` surfaces only: the `/agents` command, `AgentsDialogContent`, `createCodingAgent`/`CodingAgent*` AI-SDK types, and the Skill activation path. The repo root's `AGENTS.md -> CLAUDE.md` is a docs symlink, not runtime input.
 
 ### 2.6 Consumers summary
 
@@ -134,8 +134,8 @@ There is **no `agents` module** in this fork (`ls apps/cli/src/modules` → auth
 
 ### 3.2 The flow, config file → runtime
 
-1. `createConfigStore()` built in `root-layout.tsx:22`; snapshot obtained on demand via `ConfigRuntime.configStore.getSnapshot(workspace)` (e.g. `apps/cli/src/modules/skills/index.ts:13-23` `discoverSkills`, `modules/custom-commands/loader.ts:45-56` `getCustomCommands`).
-2. `discovery.ts` per module: `configuredRoots(snapshot)` reads `snapshot.document.commands.paths` / `skills.paths` (`custom-commands/discovery.ts:31-53`, `apps/cli/src/modules/skills/discovery.ts:30-52`), type-checks the section defensively, then for each string entry calls `resolveConfigRelativePath(snapshot, ["skills","paths",String(index)], configuredPath)`.
+1. `createConfigStore()` built in `root-layout.tsx:22`; snapshot obtained on demand via `ConfigRuntime.configStore.getSnapshot(workspace)` (e.g. `wincode-cli/src/modules/skills/index.ts:13-23` `discoverSkills`, `modules/custom-commands/loader.ts:45-56` `getCustomCommands`).
+2. `discovery.ts` per module: `configuredRoots(snapshot)` reads `snapshot.document.commands.paths` / `skills.paths` (`custom-commands/discovery.ts:31-53`, `wincode-cli/src/modules/skills/discovery.ts:30-52`), type-checks the section defensively, then for each string entry calls `resolveConfigRelativePath(snapshot, ["skills","paths",String(index)], configuredPath)`.
 3. `resolveConfigRelativePath` (`shared/config/resolve-config-relative-path.ts:9-22`) uses `snapshot.sourceFor(fieldPath)` to find the config file that supplied the entry and resolves relative paths from `dirname(origin.path)`; unknown provenance → entry skipped.
 4. Conventional folders always participate: `getProjectRoots(workspace)` (`shared/paths/project-roots.ts:4-19`) walks from the workspace up to the nearest `.git` root; skills also scan legacy dirs and sibling `skills` dirs of each global config source.
 5. `loader.ts` dedupes by name into a Map — later/higher-precedence candidates overwrite earlier ones — then sorts (custom-commands: built-in names checked first via `BUILTIN_NAMES` from `modules/commands/commands.ts`, collision → `console.warn` + skip, `custom-commands/loader.ts:9-42`; Skills: same-name overwrite, `packages/skills/src/filesystem.ts:151-166`). Invalid files are skipped best-effort.
@@ -172,7 +172,7 @@ This fork is not a code fork of OpenCode — it is an independent codebase (remo
 
 ### 4.3 What wincode deliberately deviates on
 
-- Config filenames/namespaces: `wincode.json/jsonc` at 4 locations (config-store.ts:365-370) vs upstream's `opencode.json/jsonc` + `.opencode` dirs. ADR-0001:29-31 explicitly: wincode does **not** read `~/.config/opencode/commands/` or `~/.opencode/...` (except legacy *skills* dirs, `apps/cli/src/modules/skills/discovery.ts:11-15,76-92`).
+- Config filenames/namespaces: `wincode.json/jsonc` at 4 locations (config-store.ts:365-370) vs upstream's `opencode.json/jsonc` + `.opencode` dirs. ADR-0001:29-31 explicitly: wincode does **not** read `~/.config/opencode/commands/` or `~/.opencode/...` (except legacy *skills* dirs, `wincode-cli/src/modules/skills/discovery.ts:11-15,76-92`).
 - Commands: upstream 1.x `command` is a record of inline definitions (`packages/opencode/src/config/command.ts`, `config.ts` `result.command = mergeDeep(...)`); wincode uses `commands.paths` directories of markdown files.
 - Skills: upstream `skills` is an array of path strings (`packages/core/src/config.ts` dev branch; v1 `skills` dirs via `{skill,skills}/**/SKILL.md` conventions); wincode uses `{ skills: { paths } }`.
 - Built-in-vs-custom precedence is inverted (ADR-0001:19-22 — deliberate, wincode built-ins win).
@@ -183,13 +183,13 @@ This fork is not a code fork of OpenCode — it is an independent codebase (remo
 
 ### 5.1 The clean slice
 
-The store itself needs **no changes** — its README (`apps/cli/src/shared/config/README.md:21-23`) already states capability sections resolve themselves from the raw snapshot. The precedent-shaped minimal implementation:
+The store itself needs **no changes** — its README (`wincode-cli/src/shared/config/README.md:21-23`) already states capability sections resolve themselves from the raw snapshot. The precedent-shaped minimal implementation:
 
-1. **New module `apps/cli/src/modules/agents/`** mirroring `modules/skills/`:
+1. **New module `wincode-cli/src/modules/agents/`** mirroring `modules/skills/`:
    - `types.ts` — `AgentDefinition` (name, description, prompt/system, optional model/tools), `AgentCandidate` (`{ filePath?, scope }`), mirroring `skills/types.ts`.
-   - `discovery.ts` — `discoverAgentCandidates({ homeRoot, snapshot, workspace })` reading the chosen config section off `snapshot.document`, using `resolveConfigRelativePath` + `getProjectRoots` exactly like `custom-commands/discovery.ts:31-53` / `apps/cli/src/modules/skills/discovery.ts:30-115`.
+   - `discovery.ts` — `discoverAgentCandidates({ homeRoot, snapshot, workspace })` reading the chosen config section off `snapshot.document`, using `resolveConfigRelativePath` + `getProjectRoots` exactly like `custom-commands/discovery.ts:31-53` / `wincode-cli/src/modules/skills/discovery.ts:30-115`.
    - `loader.ts` — dedupe-by-name Map with defined precedence (built-in modes first with warning, project over global), best-effort skip on invalid entries (`packages/skills/src/filesystem.ts:151-166` pattern).
-   - `index.ts` — `discoverAgents(input: ConfigRuntime)` composing snapshot + discovery + loading (`apps/cli/src/modules/skills/index.ts:13-23` pattern).
+   - `index.ts` — `discoverAgents(input: ConfigRuntime)` composing snapshot + discovery + loading (`wincode-cli/src/modules/skills/index.ts:13-23` pattern).
    - `config.integration.test.ts` + unit tests, modeled on `skills/config.integration.test.ts` (real tmpdirs, `writeFixture`, project-root walking with a fake `.git`).
 2. **Widen the mode/agent union in `packages/ai`** — the true coupling point:
    - `packages/ai/src/modes.ts:13-38`: either relax `codingModeNameSchema` from `z.enum` to a validated string + runtime resolution, or add a separate `agent` axis alongside `mode` in `codingAgentCallOptionsSchema` (40-44). Every consumer of `ModeType` (sections 2.3-2.6) follows: `instructions.ts` mode-keyed prompts, `server/agent.ts:43-62` `prepareCodingAgentCall` tool gating (unknown agent → fail closed to no tools or explicit allowlist), `metadata.ts:53`, `apps/server` validation.
@@ -217,27 +217,27 @@ The store itself needs **no changes** — its README (`apps/cli/src/shared/confi
 
 **New**
 
-- `apps/cli/src/modules/agents/types.ts` — agent/definition/candidate types
-- `apps/cli/src/modules/agents/discovery.ts` — config-section reading + candidate discovery
-- `apps/cli/src/modules/agents/loader.ts` — validation, dedupe, precedence
-- `apps/cli/src/modules/agents/index.ts` — `discoverAgents(input: ConfigRuntime)`
-- `apps/cli/src/modules/agents/README.md` — module contract (convention from `skills/README.md`)
+- `wincode-cli/src/modules/agents/types.ts` — agent/definition/candidate types
+- `wincode-cli/src/modules/agents/discovery.ts` — config-section reading + candidate discovery
+- `wincode-cli/src/modules/agents/loader.ts` — validation, dedupe, precedence
+- `wincode-cli/src/modules/agents/index.ts` — `discoverAgents(input: ConfigRuntime)`
+- `wincode-cli/src/modules/agents/README.md` — module contract (convention from `skills/README.md`)
 - Tests: `agents/discovery.test.ts`, `agents/loader.test.ts`, `agents/config.integration.test.ts` (tmpdir + `writeFixture` + fake `.git` root walking, JSON and JSONC variants, project-over-global, built-in collision, invalid-entry isolation, relative-path resolution)
 
 **Changed**
 
 - `packages/ai/src/modes.ts` — schema/union widening (lines 13-55); `packages/ai/src/instructions.ts`; `packages/ai/src/metadata.ts:53`
 - `packages/ai/src/server/agent.ts:43-62` — agent→tools/instructions resolution; `packages/ai/src/server/stream.ts`
-- `apps/cli/src/modules/prompt-settings/context/prompt-config-provider.tsx`; `prompt-settings/ui/agents-dialog.tsx`
-- `apps/cli/src/app/commands/use-app-command-executor.tsx:202-218`; `commands/adapters/mode-adapter.ts`
-- `apps/cli/src/modules/conversations/hooks/use-chat.ts` (modeRef type), `local-chat-transport.ts:64-68`, `routing-chat-transport.ts:66-78`, `conversations/api/chat-request.ts:19`
+- `wincode-cli/src/modules/prompt-settings/context/prompt-config-provider.tsx`; `prompt-settings/ui/agents-dialog.tsx`
+- `wincode-cli/src/app/commands/use-app-command-executor.tsx:202-218`; `commands/adapters/mode-adapter.ts`
+- `wincode-cli/src/modules/conversations/hooks/use-chat.ts` (modeRef type), `local-chat-transport.ts:64-68`, `routing-chat-transport.ts:66-78`, `conversations/api/chat-request.ts:19`
 - `apps/server/src/routes/sessions.ts:83,315-317,365` (only if the hosted contract changes)
 - Docs: new ADR (extend `docs/adr/`), `CONTEXT.md` domain terms (precedent: `8ccd853`), `shared/config/README.md:21` wording if shape differs from other capabilities
 
 **Test suites touched**
 
 - `packages/ai/src/modes.test.ts`-adjacent call-options tests, `packages/ai/src/server/agent.test.ts`, `stream.test.ts`
-- `apps/cli/src/modules/commands/commands.test.ts` / `adapters/adapters.test.ts` (`/agents` remains `kind: "mode"` unless agents get their own command kind)
+- `wincode-cli/src/modules/commands/commands.test.ts` / `adapters/adapters.test.ts` (`/agents` remains `kind: "mode"` unless agents get their own command kind)
 - `config-store.test.ts` unchanged (store is domain-neutral)
 
 ---
@@ -274,18 +274,18 @@ The store itself needs **no changes** — its README (`apps/cli/src/shared/confi
 
 ### Repository (first-party, this fork)
 
-- `apps/cli/src/shared/config/config-store.ts` — store, locations (365-370), selection (270-295), parse/safety (297-336), merge+provenance (161-180, 136-159), `sourceFor` (394-401), memoization (422-434)
-- `apps/cli/src/shared/config/README.md:16-23` — merge contract; agents named as a future capability on the snapshot
-- `apps/cli/src/shared/config/config-provider.tsx`, `resolve-config-relative-path.ts:9-22`, `apps/cli/src/shared/paths/project-roots.ts:4-19`
-- `apps/cli/src/modules/custom-commands/discovery.ts:31-53`, `loader.ts:9-43`, `config.integration.test.ts`; `apps/cli/src/modules/skills/discovery.ts:11-15,30-121`, `packages/skills/src/filesystem.ts:73-166`, `packages/skills/src/index.ts`, `packages/skills/src/frontmatter.ts:4-73`, `apps/cli/src/modules/skills/config.integration.test.ts`, `skills-dialog.tsx:43-64`
-- `apps/cli/src/modules/mcp/config/schema.ts`, `config/resolve.ts:19-27,40-71,249-330`; `apps/cli/src/modules/mcp/config.ts:31-50`
-- `apps/cli/src/modules/prompt-settings/context/prompt-config-provider.tsx:59-85`, `prompt-settings/ui/agents-dialog.tsx:45`
-- `apps/cli/src/modules/commands/commands.ts:17-33`, `commands/adapters/mode-adapter.ts`, `app/commands/use-app-command-executor.tsx:202-218`
-- `apps/cli/src/modules/conversations/hooks/use-chat.ts:196,247,257-266,281-286,337-339`, `local-chat-transport.ts:48-53,64-68`, `routing-chat-transport.ts:36,66-78`, `conversations/api/chat-request.ts:19`, `conversations/ui/components/chat-text-area.tsx:234-309`
+- `wincode-cli/src/shared/config/config-store.ts` — store, locations (365-370), selection (270-295), parse/safety (297-336), merge+provenance (161-180, 136-159), `sourceFor` (394-401), memoization (422-434)
+- `wincode-cli/src/shared/config/README.md:16-23` — merge contract; agents named as a future capability on the snapshot
+- `wincode-cli/src/shared/config/config-provider.tsx`, `resolve-config-relative-path.ts:9-22`, `wincode-cli/src/shared/paths/project-roots.ts:4-19`
+- `wincode-cli/src/modules/custom-commands/discovery.ts:31-53`, `loader.ts:9-43`, `config.integration.test.ts`; `wincode-cli/src/modules/skills/discovery.ts:11-15,30-121`, `packages/skills/src/filesystem.ts:73-166`, `packages/skills/src/index.ts`, `packages/skills/src/frontmatter.ts:4-73`, `wincode-cli/src/modules/skills/config.integration.test.ts`, `skills-dialog.tsx:43-64`
+- `wincode-cli/src/modules/mcp/config/schema.ts`, `config/resolve.ts:19-27,40-71,249-330`; `wincode-cli/src/modules/mcp/config.ts:31-50`
+- `wincode-cli/src/modules/prompt-settings/context/prompt-config-provider.tsx:59-85`, `prompt-settings/ui/agents-dialog.tsx:45`
+- `wincode-cli/src/modules/commands/commands.ts:17-33`, `commands/adapters/mode-adapter.ts`, `app/commands/use-app-command-executor.tsx:202-218`
+- `wincode-cli/src/modules/conversations/hooks/use-chat.ts:196,247,257-266,281-286,337-339`, `local-chat-transport.ts:48-53,64-68`, `routing-chat-transport.ts:36,66-78`, `conversations/api/chat-request.ts:19`, `conversations/ui/components/chat-text-area.tsx:234-309`
 - `packages/ai/src/modes.ts:13-69`, `instructions.ts:3-21`, `metadata.ts:53`, `server/agent.ts:43-62,73-100`, `server/stream.ts`
 - `apps/server/src/routes/sessions.ts:42-49,83,313-317,365-378,414-447`
 - Commits: `e3afe8e` (shared store, MCP migration, `opencode.json` dropped), `03b9bb5` (commands/skills from config), `8ccd853` (custom commands, CONTEXT.md terms), `f77efd3` (config store real-file tests), `6b55364` (eager command fetch)
-- `docs/adr/0001-custom-commands.md`; `CONTEXT.md` (Built-in Command / Custom Command terms); `apps/cli/src/modules/skills/README.md`, `custom-commands/README.md`
+- `docs/adr/0001-custom-commands.md`; `CONTEXT.md` (Built-in Command / Custom Command terms); `wincode-cli/src/modules/skills/README.md`, `custom-commands/README.md`
 
 ### Upstream OpenCode (first-party, clearly distinct from this fork)
 

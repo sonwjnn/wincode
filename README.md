@@ -25,7 +25,7 @@ Multi-provider models · MCP tools · local sessions · configurable agents
 | --- | --- |
 | Runtime | [Bun](https://bun.sh) workspaces |
 | CLI | [OpenTUI](https://github.com/sst/opentui), React 19, TanStack Router, [AI SDK](https://sdk.vercel.ai), Drizzle local SQLite |
-| Shared packages | AI provider adapters, agent schemas, tools, UI primitives, environment validation |
+| Shared packages | AI provider adapters, agent schemas, tools, TypeScript configuration |
 | Tooling | [Ultracite](https://github.com/haydenbleasel/ultracite) / Biome, Lefthook |
 
 ## Architecture
@@ -33,14 +33,11 @@ Multi-provider models · MCP tools · local sessions · configurable agents
 The maintained application is the CLI. Features follow `app → modules → shared` dependency direction.
 
 ```text
-apps/
-└── cli/       # terminal agent, providers, MCP, tools, sessions
+wincode-cli/   # terminal agent, providers, MCP, tools, sessions
 
 packages/
 ├── ai/        # provider adapters, model catalog, agent schemas, tools
-├── config/    # shared TypeScript configuration
-├── env/       # CLI environment validation
-└── ui/        # shared UI primitives
+└── config/    # shared TypeScript configuration
 ```
 
 Conversation history and attachments use local storage. No external database or Wincode identity is needed to run the agent.

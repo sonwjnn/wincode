@@ -22,18 +22,18 @@
 **Số liệu (đếm bằng `git ls-files`):**
 - 145 file `*.test.ts(x)` được track: **125 unit** + **20 file có "integration"** (19 file đặt tên `*.integration.test.ts` + 1 file `repository.postgres.test.ts` nằm trong `apps/server/tests/integration/`).
 - Không có file `*.e2e.*`, không có `*.spec.*`; **không có** config Playwright/Vitest nào trong repo; **không có** `.github/workflows/*` (glob `.github/**` trả "Path not found") — tức **chưa có CI**.
-- Test **colocated** ngay cạnh source (`apps/cli/src/modules/...`, `apps/server/src/routes/...`, `packages/ai/src/tools/...`).
+- Test **colocated** ngay cạnh source (`wincode-cli/src/modules/...`, `apps/server/src/routes/...`, `packages/ai/src/tools/...`).
 
 **Scripts root (`package.json` L37–40):**
 ```jsonc
-"test":            "bun test apps/cli/src apps/server/src apps/web/src packages/ai/src packages/billing/src",
-"test:unit":       "bun test apps/cli/src apps/server/src apps/web/src packages/ai/src packages/billing/src",
+"test":            "bun test wincode-cli/src apps/server/src apps/web/src packages/ai/src packages/billing/src",
+"test:unit":       "bun test wincode-cli/src apps/server/src apps/web/src packages/ai/src packages/billing/src",
 "test:integration": "bun test integration.test.ts",
 "test:postgres":   "bun test apps/server/tests/integration/billing/repository.postgres.test.ts"
 ```
 - `test` và `test:unit` **giống hệt nhau** — không có lane riêng nào được đặt tên.
 - `test:integration` trỏ tới `integration.test.ts` ở root — file **không tồn tại** (xác minh: `Path 'integration.test.ts' not found`). Script chạy sẽ lỗi.
-- Mỗi workspace có script `test` riêng: `apps/cli` `bun test src`, `apps/server` `bun test src` + `test:postgres` riêng, `apps/web` `bun test src`, `packages/ai` và `packages/billing` `bun test src` (đọc từ từng `package.json`).
+- Mỗi workspace có script `test` riêng: `wincode-cli` `bun test src`, `apps/server` `bun test src` + `test:postgres` riêng, `apps/web` `bun test src`, `packages/ai` và `packages/billing` `bun test src` (đọc từ từng `package.json`).
 - `bunfig.toml`: `[test] pathIgnorePatterns = ["**/dist/**"]`.
 - `lefthook.yml`: pre-commit chỉ có `biome check --write` + `biome check` — **không chạy test**.
 - `AGENTS.md` (mục Testing): ngắn gọn — assertion trong `it()`/`test()`, không `done` callback, **không commit `.only`/`.skip`**, giữ suite phẳng.
@@ -42,7 +42,7 @@
 
 1. **In-process composition** — `apps/server/src/routes/api.integration.test.ts` (31 dòng): dựng `createApiRoutes` với các subrouter **stub** (`billingRoutes`, `credentialsRoutes: new Hono()`, `sessionsRoutes: new Hono()`), gọi `apiRoutes.request(...)` **trong tiến trình**, không network, không DB. (L1–31)
 2. **Real-IO (subprocess/filesystem)** — `packages/ai/src/tools/shell/runner.integration.test.ts` (237 dòng): chạy `/bin/bash`/`powershell.exe` thật, temp dir qua `mkdtempSync` + `realpathSync` (chú thích symlink `/var → /private/var` trên macOS, L17–24), kill process tree lúc timeout, kiểm tra truncation banner 30 KiB, resource profile, background child giữ pipe (L83–237).
-3. **External service, env-gated** — `apps/server/tests/integration/billing/repository.postgres.test.ts` (838 dòng): Postgres thật qua `Pool` của `@neondatabase/serverless`, `DATABASE_URL` từ env với fallback `postgres://localhost/wincode-test`, cách ly dữ liệu bằng tiền tố `billing_pg_${crypto.randomUUID()}` (L1–63), và **`describe.skipIf(!hasDatabaseUrl)`** (L93) — mẫu env-gate đúng chuẩn. Cùng nhóm: các test `drizzle-*.integration.test.ts` trong `apps/cli/src/modules/conversations/storage/` (SQLite thật qua Drizzle).
+3. **External service, env-gated** — `apps/server/tests/integration/billing/repository.postgres.test.ts` (838 dòng): Postgres thật qua `Pool` của `@neondatabase/serverless`, `DATABASE_URL` từ env với fallback `postgres://localhost/wincode-test`, cách ly dữ liệu bằng tiền tố `billing_pg_${crypto.randomUUID()}` (L1–63), và **`describe.skipIf(!hasDatabaseUrl)`** (L93) — mẫu env-gate đúng chuẩn. Cùng nhóm: các test `drizzle-*.integration.test.ts` trong `wincode-cli/src/modules/conversations/storage/` (SQLite thật qua Drizzle).
 
 ## Pi (`earendil-works/pi`, `853a80d`)
 
@@ -153,7 +153,7 @@
 
 Các khuyến nghị dưới đây là đề xuất của note này, dựa trên bằng chứng so sánh ở trên; phần "quan sát" đã ghi rõ ở các mục trước.
 
-1. **Sửa ngay script `test:integration`** (package.json L39): file `integration.test.ts` ở root không tồn tại. Hai phương án: (a) tạo `integration.test.ts` root import toàn bộ 20 file integration, hoặc (b) đổi script thành `bun test apps/cli/src apps/server/src apps/web/src packages/ai/src packages/billing/src --filter "*.integration.test.ts"` (lọc theo tên, theo mô hình `test:postgres`). Phương án (b) ít ma thuật hơn.
+1. **Sửa ngay script `test:integration`** (package.json L39): file `integration.test.ts` ở root không tồn tại. Hai phương án: (a) tạo `integration.test.ts` root import toàn bộ 20 file integration, hoặc (b) đổi script thành `bun test wincode-cli/src apps/server/src apps/web/src packages/ai/src packages/billing/src --filter "*.integration.test.ts"` (lọc theo tên, theo mô hình `test:postgres`). Phương án (b) ít ma thuật hơn.
 2. **Định nghĩa ba nấc integration thành văn bản** (README/`AGENTS.md` ngắn): (1) `*.integration.test.ts` in-process (composition seam — mẫu `api.integration.test.ts`), (2) real-IO (subprocess/fs/SQLite — mẫu `runner.integration.test.ts`), (3) external-service env-gated (mẫu `repository.postgres.test.ts` + `describe.skipIf`). Quy ước: nấc 3 luôn có cờ skip và không nằm trong lane mặc định.
 3. **Thêm CI lane tối thiểu** (Wincode là repo duy nhất trong bốn repo không có `.github/workflows`): job `test` chạy `bun install --frozen-lockfile && bun run check-types && bun test` (tương đương Pi ci.yml); job `test:postgres` riêng với service container Postgres + `DATABASE_URL` (tương đương OpenCode tách e2e khỏi unit); yêu cầu branch protection. Đây là khoảng trống lớn nhất so với cả ba upstream.
 4. **Chép khuôn khổ chống test rác từ OMP `AGENTS.md` L275–304** vào `AGENTS.md` của Wincode, mục Testing (thay phần hướng dẫn tối thiểu hiện tại): contract-first + "name the failure mode" + cấm static echo/source-grep/tautology + full-suite safe + **không thêm test cho thay đổi nhỏ rủi ro thấp** + không duplicate coverage giữa các nấc. Bộ quy tắc này đã được OMP vận hành thực tế trên chính `bun test`, nên áp dụng nguyên văn cho Wincode mà không cần dịch chuyển runner.
@@ -162,7 +162,7 @@ Các khuyến nghị dưới đây là đề xuất của note này, dựa trên
 7. **Vệ sinh hermetic**: giữ `skipIf(!DATABASE_URL)`; khi có CI, scrub `*_API_KEY`/`*_OAUTH_TOKEN` khỏi env test (mẫu OMP `SCRUBBED_ENV_*`); mặc định offline cho test gọi network (mẫu Pi `PI_OFFLINE=1` + `allowNetwork()` opt-in).
 8. **Flake policy**: unit/integration **không retry** (mẫu OMP `retries = 0`); nếu sau này có Playwright e2e thì theo OpenCode (`retries: 2` ở CI + `trace: on-first-retry` + cấm `waitForTimeout`). Chống flake bằng readiness signal (OpenCode test/AGENTS.md L163–173) — đặc biệt đúng cho test agent loop tương lai.
 9. **Khi nào không thêm test** (ghi vào CLAUDE.md): thay đổi nhỏ rủi ro thấp (OMP L304); plumbing thuần/passthrough; "package boots" smoke (OMP L300); test đọc text source (OMP L303); test trùng contract đã có ở nấc khác (OMP L295).
-10. **E2E tương lai theo nhu cầu, không theo phong trào**: TUI của `apps/cli` (opentui) nên test theo mẫu OMP `VirtualTerminal` (không cần tmux/PTTY thật); web `apps/web` chỉ thêm Playwright khi có user-flow thật cần bảo vệ (mẫu OpenCode `packages/app/e2e` + `webServer` tự khởi động + `e2e/AGENTS.md`). CLI smoke (`--version`/`--help` + một probe runtime) theo mẫu OMP `ci:test:smoke`.
+10. **E2E tương lai theo nhu cầu, không theo phong trào**: TUI của `wincode-cli` (opentui) nên test theo mẫu OMP `VirtualTerminal` (không cần tmux/PTTY thật); web `apps/web` chỉ thêm Playwright khi có user-flow thật cần bảo vệ (mẫu OpenCode `packages/app/e2e` + `webServer` tự khởi động + `e2e/AGENTS.md`). CLI smoke (`--version`/`--help` + một probe runtime) theo mẫu OMP `ci:test:smoke`.
 
 ## Skill OMP hiện có trong môi trường, áp dụng được ngay (đã xác minh cài đặt qua `skill://`)
 
@@ -179,7 +179,7 @@ Các skill sau **có trong registry của môi trường này** (đọc được
 ## Kế hoạch áp dụng theo giai đoạn (khuyến nghị)
 
 - **Giai đoạn 1 (tuần 1) — nền móng, chi phí thấp**: sửa script `test:integration` (L39); thêm `.github/workflows/test.yml` với 2 job (`bun test` toàn repo; `test:postgres` có service Postgres); ghi 3 nấc integration + quy tắc contract-first/anti-pattern tóm tắt vào `AGENTS.md` mục Testing; thống nhất `--only-failures --timeout 30000` trong scripts.
-- **Giai đoạn 2 (tuần 2–3) — kỷ luật**: quy ước regression gắn số issue (Pi); `bun test --filter "*.integration.test.ts"` làm lane integration tường minh; thêm CLI smoke probe cho `apps/cli` (mẫu OMP `--smoke-test`); scrub credential env trong workflow.
+- **Giai đoạn 2 (tuần 2–3) — kỷ luật**: quy ước regression gắn số issue (Pi); `bun test --filter "*.integration.test.ts"` làm lane integration tường minh; thêm CLI smoke probe cho `wincode-cli` (mẫu OMP `--smoke-test`); scrub credential env trong workflow.
 - **Giai đoạn 3 (1–2 tháng) — mở rộng theo nhu cầu**: nếu có agent-loop/session logic mới, dựng mock model provider (mẫu Pi faux provider / OpenCode TestLLMServer) làm seam integration; TUI test qua virtual terminal (mẫu OMP); chỉ thêm Playwright e2e cho `apps/web` khi có user-flow cần bảo vệ, kèm `e2e/AGENTS.md` riêng.
 - **Thường trực**: PR checklist "What did you test?" (mẫu OpenCode template); flake = bug (không retry ở lane unit/integration); dùng `verification-before-completion` trước mọi claim hoàn thành.
 

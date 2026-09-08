@@ -6,7 +6,7 @@
 | Prime Agent revision | [`e319a66d7351c75abe7f040d02d9a8d6e25028e9`](https://github.com/PrimeIntellect-ai/prime-agent/tree/e319a66d7351c75abe7f040d02d9a8d6e25028e9) |
 | Grok Build revision | [`19d42e35c07a9c9244f03f6df0c4c353f970d4f9`](https://github.com/xai-org/grok-build/tree/19d42e35c07a9c9244f03f6df0c4c353f970d4f9) |
 | OpenCode revision | [`3a31c4ea801915c0b050df4b3842997ea62b6e93`](https://github.com/anomalyco/opencode/tree/3a31c4ea801915c0b050df4b3842997ea62b6e93) |
-| Wincode target | [`apps/cli/src/shared/ui/progress-bar.tsx`](../../apps/cli/src/shared/ui/progress-bar.tsx) |
+| Wincode target | [`wincode-cli/src/shared/ui/progress-bar.tsx`](../../wincode-cli/src/shared/ui/progress-bar.tsx) |
 | Scope | Busy/progress glyphs, cadence, motion, labels, colors, width, readability, and terminal constraints |
 
 ## Executive conclusion
@@ -67,9 +67,9 @@ OpenCode also has a compact reusable spinner using the same ten Braille frames a
 
 ## 4. Wincode implementation — directly observed
 
-Wincode's revised component uses a fixed width of twelve and an `80 ms` interval, moving a six-cell square trail across the bar and back with endpoint fade holds ([source](../../apps/cli/src/shared/ui/progress-bar.tsx)). Agent-colored `■` cells use an opaque same-hue brightness trail—head at `1.0`, bloom at `1.15`, then `0.85`, `0.65`, `0.48`, and `0.32`—over a muted `⬝` track. Using opaque shades instead of increasingly transparent alpha avoids compositing the tail toward gray terminal backgrounds while preserving the agent hue.
+Wincode's revised component uses a fixed width of twelve and an `80 ms` interval, moving a six-cell square trail across the bar and back with endpoint fade holds ([source](../../wincode-cli/src/shared/ui/progress-bar.tsx)). Agent-colored `■` cells use an opaque same-hue brightness trail—head at `1.0`, bloom at `1.15`, then `0.85`, `0.65`, `0.48`, and `0.32`—over a muted `⬝` track. Using opaque shades instead of increasingly transparent alpha avoids compositing the tail toward gray terminal backgrounds while preserving the agent hue.
 
-The chat footer renders the progress component only while busy and follows it with an agent-colored `Esc` plus a muted interrupt hint ([source](../../apps/cli/src/modules/conversations/ui/components/chat-shell.tsx#L156-L166)). This textual hint preserves meaning independently of color or motion.
+The chat footer renders the progress component only while busy and follows it with an agent-colored `Esc` plus a muted interrupt hint ([source](../../wincode-cli/src/modules/conversations/ui/components/chat-shell.tsx#L156-L166)). This textual hint preserves meaning independently of color or motion.
 
 ## 5. Design recommendations for `progress-bar.tsx`
 
