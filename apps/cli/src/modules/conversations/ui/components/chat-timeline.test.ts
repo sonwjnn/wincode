@@ -23,7 +23,7 @@ const compaction = (
 	summarizationModel: { modelId: "gpt-5.4-mini", providerId: "openai" },
 	summary: { coveredMessageIds: ["u1"], formatVersion: 1, text: id },
 	throughMessageUiId,
-	tokensAfter: 20,
+	estimatedTokensAfter: 20,
 	tokensBefore: 40,
 	trigger: "manual",
 });

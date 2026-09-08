@@ -40,7 +40,7 @@ export type ChatInputControllerActions = {
 	onItemExecute: (index: number) => void;
 	onItemScroll: (direction: "up" | "down") => void;
 	onItemSelect: (index: number) => void;
-	onTab: () => void;
+	onTab: (shift: boolean) => void;
 	onTextChange: (
 		text: string,
 		cursorOffset: number,
@@ -68,6 +68,6 @@ export type ChatInputControllerOptions = {
 	onSubmit: (
 		submission: ChatPromptSubmission
 	) => boolean | Promise<boolean> | void | Promise<void>;
-	onTab: () => void;
+	onTab: (shift: boolean) => void;
 	sessionPromptHistory: PromptHistoryEntry[];
 };

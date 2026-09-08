@@ -102,6 +102,19 @@ const safeMessageByCode: Record<ModelFailureCode, string> = {
 	unknown: "The model request failed.",
 };
 
+const getProperty = (value: unknown, key: string): unknown =>
+	typeof value === "object" && value !== null && key in value
+		? value[key as keyof typeof value]
+		: undefined;
+
+const getNestedError = (value: unknown): unknown => {
+	const cause = getProperty(value, "cause");
+	if (cause !== undefined && cause !== null) {
+		return cause;
+	}
+	return getProperty(value, "error");
+};
+
 const getErrorChain = (error: unknown): unknown[] => {
 	const chain: unknown[] = [];
 	const visited = new Set<unknown>();
@@ -109,18 +122,10 @@ const getErrorChain = (error: unknown): unknown[] => {
 	while (current !== null && current !== undefined && !visited.has(current)) {
 		visited.add(current);
 		chain.push(current);
-		if (typeof current !== "object" || !("cause" in current)) {
-			break;
-		}
-		current = current.cause;
+		current = getNestedError(current);
 	}
 	return chain;
 };
-
-const getProperty = (value: unknown, key: string): unknown =>
-	typeof value === "object" && value !== null && key in value
-		? value[key as keyof typeof value]
-		: undefined;
 
 const getStatusCode = (chain: readonly unknown[]): number | undefined => {
 	for (const value of chain) {

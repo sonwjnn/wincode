@@ -1,4 +1,4 @@
-import { getModelContextTokens } from "@wincode/ai/model-usage";
+import { getModelFailureMessage } from "@wincode/ai/model-failures";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { isSkillToolPart, sanitizeSkillToolPart } from "@wincode/skills";
 import {
@@ -16,18 +16,23 @@ import {
 } from "../storage/attachment-store";
 import type { ConversationStore } from "../storage/conversation-store";
 import {
+	COMPACTION_REQUEST_OVERHEAD_TOKENS,
+	DEFAULT_COMPACTION_SETTINGS,
 	estimateCompactionTokens,
+	estimateConversationContextTokens,
 	type ResolvedCompactionSettings,
 } from "./config";
-import type {
-	AppendConversationCompactionInput,
-	CompactionConversation,
-	CompactionSummary,
-	CompactionTriggerReason,
-	ConversationCompaction,
-	SummaryGenerator,
-	SummaryGeneratorInput,
-	SummaryGeneratorResult,
+import {
+	type AppendConversationCompactionInput,
+	type CompactionConversation,
+	type CompactionSummary,
+	type CompactionTriggerReason,
+	type ConversationCompaction,
+	DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS,
+	MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS,
+	type SummaryGenerator,
+	type SummaryGeneratorInput,
+	type SummaryGeneratorResult,
 } from "./types";
 
 const SUMMARY_MESSAGE_PREFIX = "<wincode-compaction-summary>";
@@ -212,9 +217,16 @@ export type CompactConversationInput = {
 		Partial<
 			Pick<
 				ResolvedCompactionSettings,
-				"maxMediaAttachments" | "maxMediaBytes" | "maxMediaTokens"
+				| "maxMediaAttachments"
+				| "maxMediaBytes"
+				| "maxMediaTokens"
+				| "modelContextLimit"
+				| "reserveTokens"
 			>
-		>;
+		> & {
+			compactionOverheadTokens?: number;
+			summaryMaxOutputTokens?: number;
+		};
 	trigger: CompactionTriggerReason;
 	focus?: string;
 	signal?: AbortSignal;
@@ -249,6 +261,7 @@ type CutPoint = {
 	activeMessages: ConversationMessage[];
 	firstKeptIndex: number;
 	firstKeptAssistantPartIndex?: number;
+	previousSplitApplied?: boolean;
 	summaryMessages?: ConversationMessage[];
 	throughIndex: number;
 };
@@ -385,6 +398,125 @@ const isTerminalToolPart = (
 
 const isCompleteMessage = (message: ConversationMessage): boolean =>
 	message.parts.every(isTerminalToolPart);
+type ToolMessageKind = "call" | "result";
+
+const toolCallIdsForMessage = (
+	message: ConversationMessage,
+	kind: ToolMessageKind
+): string[] =>
+	message.parts.flatMap((part) => {
+		if (kind === "call" && !isConversationToolPart(part)) {
+			return [];
+		}
+		const toolCallId = getStringField(part, "toolCallId");
+		return toolCallId === undefined ? [] : [toolCallId];
+	});
+
+const collectToolMessageIndexes = (
+	messages: readonly ConversationMessage[],
+	start: number,
+	end: number,
+	role: ConversationMessage["role"],
+	kind: ToolMessageKind
+): Map<string, number> => {
+	const indexes = new Map<string, number>();
+	for (let index = start; index < end; index += 1) {
+		const message = messages[index];
+		if (message?.role !== role) {
+			continue;
+		}
+		for (const toolCallId of toolCallIdsForMessage(message, kind)) {
+			if (!indexes.has(toolCallId)) {
+				indexes.set(toolCallId, index);
+			}
+		}
+	}
+	return indexes;
+};
+
+const resolveToolSafeCutStart = (
+	messages: readonly ConversationMessage[],
+	requestedIndex: number
+): number | null => {
+	let boundary = requestedIndex;
+	for (let attempt = 0; attempt <= messages.length; attempt += 1) {
+		const leftCalls = collectToolMessageIndexes(
+			messages,
+			0,
+			boundary,
+			"assistant",
+			"call"
+		);
+		const rightResults = collectToolMessageIndexes(
+			messages,
+			boundary,
+			messages.length,
+			"tool",
+			"result"
+		);
+		const callBoundary = [...leftCalls].find(([toolCallId]) =>
+			rightResults.has(toolCallId)
+		)?.[1];
+		if (callBoundary !== undefined) {
+			boundary = callBoundary;
+			continue;
+		}
+
+		const leftResults = collectToolMessageIndexes(
+			messages,
+			0,
+			boundary,
+			"tool",
+			"result"
+		);
+		const rightCalls = collectToolMessageIndexes(
+			messages,
+			boundary,
+			messages.length,
+			"assistant",
+			"call"
+		);
+		const resultBoundary = [...leftResults].find(([toolCallId]) =>
+			rightCalls.has(toolCallId)
+		)?.[1];
+		if (resultBoundary !== undefined) {
+			boundary = resultBoundary + 1;
+			continue;
+		}
+		return boundary < messages.length ? boundary : null;
+	}
+	return null;
+};
+
+const splitsToolPairWithinAssistant = (
+	messages: readonly ConversationMessage[],
+	assistantIndex: number,
+	partIndex: number
+): boolean => {
+	const assistant = messages[assistantIndex];
+	if (assistant === undefined) {
+		return false;
+	}
+	const prefixCallIds = new Set(
+		toolCallIdsForMessage(
+			{
+				...assistant,
+				parts: assistant.parts.slice(0, partIndex),
+			},
+			"call"
+		)
+	);
+	const trailingResultIds = collectToolMessageIndexes(
+		messages,
+		assistantIndex + 1,
+		messages.length,
+		"tool",
+		"result"
+	);
+	return [...prefixCallIds].some((toolCallId) =>
+		trailingResultIds.has(toolCallId)
+	);
+};
 
 const tokenCountForMessages = (
 	messages: readonly ConversationMessage[],
@@ -395,8 +527,71 @@ const getUserTurnStarts = (
 	messages: readonly ConversationMessage[]
 ): number[] =>
 	messages.flatMap((message, index) =>
-		message.role === "user" ? [index] : []
+		index > 0 && message.role === "user" && isCompleteMessage(message)
+			? [index]
+			: []
 	);
+const makeMessageCutPoint = (
+	messages: ConversationMessage[],
+	requestedIndex: number,
+	keepRecentTokens: number,
+	estimateTokens: (messages: readonly ConversationMessage[]) => number
+): CutPoint | null => {
+	const firstKeptIndex = resolveToolSafeCutStart(messages, requestedIndex);
+	if (firstKeptIndex === null) {
+		return null;
+	}
+	const suffix = messages.slice(firstKeptIndex);
+	if (tokenCountForMessages(suffix, estimateTokens) > keepRecentTokens) {
+		return null;
+	}
+	return {
+		activeMessages: suffix,
+		firstKeptIndex,
+		throughIndex: firstKeptIndex - 1,
+	};
+};
+
+const makeAssistantCutPoint = (
+	messages: ConversationMessage[],
+	assistantIndex: number,
+	keepRecentTokens: number,
+	estimateTokens: (messages: readonly ConversationMessage[]) => number
+): CutPoint | null => {
+	const assistant = messages[assistantIndex];
+	if (
+		!(
+			assistant &&
+			assistant.role === "assistant" &&
+			isCompleteMessage(assistant)
+		)
+	) {
+		return null;
+	}
+	const firstKeptIndex = resolveToolSafeCutStart(messages, assistantIndex);
+	if (firstKeptIndex === null) {
+		return null;
+	}
+	const userIndex = messages.findLastIndex(
+		(message, index) => index < firstKeptIndex && message.role === "user"
+	);
+	const user = messages[userIndex];
+	if (
+		user === undefined ||
+		tokenCountForMessages([user], estimateTokens) <= keepRecentTokens
+	) {
+		return null;
+	}
+	const suffix = messages.slice(firstKeptIndex);
+	if (tokenCountForMessages(suffix, estimateTokens) > keepRecentTokens) {
+		return null;
+	}
+	return {
+		activeMessages: suffix,
+		firstKeptIndex,
+		throughIndex: firstKeptIndex - 1,
+	};
+};
 
 const makeSplitTurnCutPoint = (
 	messages: ConversationMessage[],
@@ -408,7 +603,7 @@ const makeSplitTurnCutPoint = (
 		return null;
 	}
 	const user = messages[lastUserIndex];
-	if (!user) {
+	if (!(user && isCompleteMessage(user))) {
 		return null;
 	}
 	const assistantIndex = messages.findIndex(
@@ -418,23 +613,34 @@ const makeSplitTurnCutPoint = (
 	if (!(assistant && isCompleteMessage(assistant))) {
 		return null;
 	}
+	if (resolveToolSafeCutStart(messages, lastUserIndex) !== lastUserIndex) {
+		return null;
+	}
 
 	for (
 		let partIndex = assistant.parts.length - 1;
 		partIndex > 0;
 		partIndex -= 1
 	) {
+		if (splitsToolPairWithinAssistant(messages, assistantIndex, partIndex)) {
+			continue;
+		}
 		const suffixAssistant: ConversationMessage = {
 			...assistant,
 			parts: assistant.parts.slice(partIndex),
 		};
-		const suffix = [user, suffixAssistant];
-		if (tokenCountForMessages(suffix, estimateTokens) <= keepRecentTokens) {
+		const activeMessages = messages.slice(lastUserIndex);
+		const assistantOffset = assistantIndex - lastUserIndex;
+		activeMessages[assistantOffset] = suffixAssistant;
+		if (
+			tokenCountForMessages(activeMessages, estimateTokens) <= keepRecentTokens
+		) {
 			return {
-				activeMessages: [...messages.slice(0, lastUserIndex), ...suffix],
+				activeMessages,
 				firstKeptIndex: lastUserIndex,
 				firstKeptAssistantPartIndex: partIndex,
 				summaryMessages: [
+					...messages.slice(0, lastUserIndex),
 					user,
 					{
 						...assistant,
@@ -453,48 +659,72 @@ const chooseCutPoint = (
 	keepRecentTokens: number,
 	estimateTokens: (messages: readonly ConversationMessage[]) => number
 ): CutPoint => {
-	const starts = getUserTurnStarts(messages);
-	if (starts.length < 2) {
-		const split = makeSplitTurnCutPoint(
-			messages,
-			keepRecentTokens,
-			estimateTokens
-		);
-		if (split) {
-			return split;
-		}
+	if (tokenCountForMessages(messages, estimateTokens) <= keepRecentTokens) {
 		throw new ConversationCompactionError(
 			"history-too-short",
 			"There is not enough complete history to compact."
 		);
 	}
-
+	const starts = getUserTurnStarts(messages);
 	for (let startIndex = starts.length - 1; startIndex > 0; startIndex -= 1) {
 		const firstKeptIndex = starts[startIndex];
 		if (firstKeptIndex === undefined) {
 			continue;
 		}
-		const suffix = messages.slice(firstKeptIndex);
-		if (tokenCountForMessages(suffix, estimateTokens) <= keepRecentTokens) {
-			return {
-				activeMessages: suffix,
-				firstKeptIndex,
-				throughIndex: firstKeptIndex - 1,
-			};
+		const cutPoint = makeMessageCutPoint(
+			messages,
+			firstKeptIndex,
+			keepRecentTokens,
+			estimateTokens
+		);
+		if (cutPoint) {
+			return cutPoint;
+		}
+	}
+
+	const split = makeSplitTurnCutPoint(
+		messages,
+		keepRecentTokens,
+		estimateTokens
+	);
+	if (split) {
+		return split;
+	}
+
+	for (
+		let assistantIndex = messages.length - 1;
+		assistantIndex > 0;
+		assistantIndex -= 1
+	) {
+		const assistantCutPoint = makeAssistantCutPoint(
+			messages,
+			assistantIndex,
+			keepRecentTokens,
+			estimateTokens
+		);
+		if (assistantCutPoint) {
+			return assistantCutPoint;
 		}
 	}
 
 	const firstKeptIndex = starts.at(-1);
-	if (firstKeptIndex === undefined || firstKeptIndex === 0) {
+	if (firstKeptIndex === undefined) {
+		throw new ConversationCompactionError(
+			"history-too-short",
+			"There is not enough complete history to compact."
+		);
+	}
+	const safeFirstKeptIndex = resolveToolSafeCutStart(messages, firstKeptIndex);
+	if (safeFirstKeptIndex === null) {
 		throw new ConversationCompactionError(
 			"history-too-short",
 			"There is not enough complete history to compact."
 		);
 	}
 	return {
-		activeMessages: messages.slice(firstKeptIndex),
-		firstKeptIndex,
-		throughIndex: firstKeptIndex - 1,
+		activeMessages: messages.slice(safeFirstKeptIndex),
+		firstKeptIndex: safeFirstKeptIndex,
+		throughIndex: safeFirstKeptIndex - 1,
 	};
 };
 
@@ -509,7 +739,32 @@ const getSummarySpan = (
 	previous: ConversationCompaction | null
 ): ConversationMessage[] => {
 	if (cutPoint.summaryMessages) {
-		return cutPoint.summaryMessages;
+		if (previous?.firstKeptAssistantPartIndex === undefined) {
+			return cutPoint.summaryMessages;
+		}
+		if (cutPoint.previousSplitApplied) {
+			return cutPoint.summaryMessages.slice(1);
+		}
+		const previousIndex = findMessageIndex(
+			cutPoint.summaryMessages,
+			previous.firstKeptUiMessageId
+		);
+		const previousThroughIndex = findMessageIndex(
+			cutPoint.summaryMessages,
+			previous.throughMessageUiId
+		);
+		if (
+			previousIndex < 0 ||
+			previousThroughIndex < previousIndex ||
+			previousThroughIndex >= cutPoint.summaryMessages.length
+		) {
+			return cutPoint.summaryMessages;
+		}
+		const splitMessages = applyDurableSplitBoundary(
+			cutPoint.summaryMessages.slice(previousIndex),
+			previous
+		);
+		return splitMessages.slice(1);
 	}
 	if (previous === null) {
 		return messages.slice(0, cutPoint.throughIndex + 1);
@@ -598,6 +853,45 @@ const projectMessagesForEstimate = (
 		})
 		.toReversed();
 };
+const resolveSummaryOutputBudget = (
+	cutPoint: CutPoint,
+	settings: CompactConversationInput["settings"],
+	estimateTokens: (messages: readonly ConversationMessage[]) => number
+): number => {
+	const retainedTokens = Math.max(
+		0,
+		estimateTokens(
+			projectMessagesForEstimate(cutPoint.activeMessages, settings)
+		)
+	);
+	const reserveTokens = Math.max(
+		0,
+		Math.floor(
+			settings.reserveTokens ?? DEFAULT_COMPACTION_SETTINGS.reserveTokens
+		)
+	);
+	const configuredMaximum = Math.max(
+		0,
+		Math.floor(
+			settings.summaryMaxOutputTokens ??
+				DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS
+		)
+	);
+	const overheadTokens = Math.max(
+		0,
+		Math.floor(
+			settings.compactionOverheadTokens ?? COMPACTION_REQUEST_OVERHEAD_TOKENS
+		)
+	);
+	const contextAvailable =
+		settings.modelContextLimit === undefined ||
+		settings.modelContextLimit === null
+			? Number.POSITIVE_INFINITY
+			: settings.modelContextLimit - retainedTokens - overheadTokens;
+	return Math.floor(
+		Math.min(reserveTokens, configuredMaximum, contextAvailable)
+	);
+};
 
 const appendInputFor = ({
 	attachmentMetadata,
@@ -661,11 +955,14 @@ const appendInputFor = ({
 			: {
 					firstKeptAssistantPartIndex: cutPoint.firstKeptAssistantPartIndex,
 				}),
-		tokensAfter: estimateTokens([
+		estimatedTokensAfter: estimateTokens([
 			createCompactionSummaryMessage({ id: entryId, summary }),
 			...projectMessagesForEstimate(cutPoint.activeMessages, settings),
 		]),
-		tokensBefore: estimateTokens(conversation.messages),
+		tokensBefore: estimateConversationContextTokens(
+			conversation.messages,
+			estimateTokens
+		).tokens,
 		trigger,
 		...(focus?.trim() ? { focus: focus.trim() } : {}),
 		id: entryId,
@@ -686,16 +983,6 @@ const assertNotAborted = (signal?: AbortSignal): void => {
 			{ cause: signal.reason }
 		);
 	}
-};
-
-const getLatestProviderContextTokens = (
-	messages: readonly ConversationMessage[]
-): number | null => {
-	const latestAssistant = messages.findLast(
-		(message) => message.role === "assistant" && message.metadata?.usage
-	);
-	const usage = latestAssistant?.metadata?.usage;
-	return usage ? getModelContextTokens(usage) : null;
 };
 
 const externalizeForCompaction = async (
@@ -730,21 +1017,49 @@ const chooseCompactionSpan = (
 	keepRecentTokens: number,
 	estimateTokens: (messages: readonly ConversationMessage[]) => number
 ): { cutPoint: CutPoint; summarySpan: ConversationMessage[] } => {
-	const cutPoint = chooseCutPoint(
-		messages,
-		Math.max(1, keepRecentTokens),
-		estimateTokens
-	);
 	const previousIndex =
 		previous === null
 			? -1
 			: findMessageIndex(messages, previous.firstKeptUiMessageId);
+	const previousThroughIndex =
+		previous === null
+			? -1
+			: findMessageIndex(messages, previous.throughMessageUiId);
 	if (previous !== null && previousIndex < 0) {
 		throw new ConversationCompactionError(
 			"invalid-boundary",
 			`Compaction boundary "${previous.id}" references a missing message.`
 		);
 	}
+	const previousSplitApplied =
+		previous?.firstKeptAssistantPartIndex !== undefined;
+	if (
+		previous !== null &&
+		(previousThroughIndex < 0 ||
+			(previousSplitApplied
+				? previousThroughIndex < previousIndex
+				: previousThroughIndex >= previousIndex))
+	) {
+		throw new ConversationCompactionError(
+			"invalid-boundary",
+			`Compaction boundary "${previous.id}" has an invalid message span.`
+		);
+	}
+	const selectionStart = Math.max(0, previousIndex);
+	const selectedMessages = previousSplitApplied
+		? applyDurableSplitBoundary(messages.slice(selectionStart), previous)
+		: messages.slice(selectionStart);
+	const selectedCutPoint = chooseCutPoint(
+		selectedMessages,
+		Math.max(1, keepRecentTokens),
+		estimateTokens
+	);
+	const cutPoint: CutPoint = {
+		...selectedCutPoint,
+		...(previousSplitApplied ? { previousSplitApplied: true } : {}),
+		firstKeptIndex: selectedCutPoint.firstKeptIndex + selectionStart,
+		throughIndex: selectedCutPoint.throughIndex + selectionStart,
+	};
 	if (previousIndex >= 0 && cutPoint.throughIndex < previousIndex) {
 		throw new ConversationCompactionError(
 			"history-too-short",
@@ -806,9 +1121,13 @@ const generateCompactionSummary = async (
 				{ cause: error }
 			);
 		}
+		const failureMessage = getModelFailureMessage(error, {
+			modelId: input.model.modelId,
+			providerId: input.model.providerId,
+		});
 		throw new ConversationCompactionError(
 			"summary-failed",
-			"Compaction summary generation failed.",
+			`Compaction summary generation failed: ${failureMessage}`,
 			{ cause: error }
 		);
 	}
@@ -886,13 +1205,22 @@ export const createConversationCompaction = ({
 			trigger,
 			variant,
 		});
+		const estimatedTokensBefore = estimate(
+			projectMessagesForEstimate(messages, settings)
+		);
+		if (entryInput.estimatedTokensAfter >= estimatedTokensBefore) {
+			throw new ConversationCompactionError(
+				"not-needed",
+				`Compaction would not reduce context (${estimatedTokensBefore} estimated tokens before, ${entryInput.estimatedTokensAfter} after).`
+			);
+		}
 		if (
 			settings.thresholdTokens !== null &&
-			entryInput.tokensAfter > settings.thresholdTokens
+			entryInput.estimatedTokensAfter > settings.thresholdTokens
 		) {
 			throw new ConversationCompactionError(
 				"context-still-too-large",
-				`Compaction still leaves ${entryInput.tokensAfter} estimated tokens, above the ${settings.thresholdTokens} token safe limit; shorten the latest turn or remove attachments.`
+				`Compaction still leaves ${entryInput.estimatedTokensAfter} estimated tokens, above the ${settings.thresholdTokens} token safe limit; shorten the latest turn or remove attachments.`
 			);
 		}
 		let entry: ConversationCompaction;
@@ -941,6 +1269,17 @@ export const createConversationCompaction = ({
 			input.settings.keepRecentTokens,
 			estimateTokens
 		);
+		const maxOutputTokens = resolveSummaryOutputBudget(
+			cutPoint,
+			input.settings,
+			estimateTokens
+		);
+		if (maxOutputTokens < MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS) {
+			throw new ConversationCompactionError(
+				"not-needed",
+				`Compaction summary budget is ${maxOutputTokens} tokens; at least ${MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS} are required.`
+			);
+		}
 		const preparedSummary = attachmentStore
 			? await prepareCompactionSummary(
 					attachmentStore,
@@ -959,6 +1298,7 @@ export const createConversationCompaction = ({
 			...(attachmentStore
 				? { summaryMessages: preparedSummary.summaryMessages }
 				: {}),
+			maxOutputTokens,
 			...(input.focus?.trim() ? { focus: input.focus.trim() } : {}),
 			signal: input.signal,
 		};
@@ -1009,9 +1349,10 @@ export const createConversationCompaction = ({
 			if (!settings.enabled || settings.thresholdTokens === null) {
 				return false;
 			}
-			const estimatedTokens = estimateTokens(messages);
-			const providerTokens = getLatestProviderContextTokens(messages);
-			return (providerTokens ?? estimatedTokens) >= settings.thresholdTokens;
+			return (
+				estimateConversationContextTokens(messages, estimateTokens).tokens >=
+				settings.thresholdTokens
+			);
 		},
 	};
 };

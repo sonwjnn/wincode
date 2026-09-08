@@ -1,9 +1,13 @@
+import { MODEL_OUTPUT_TOKEN_LIMIT } from "@wincode/ai/model";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import type {
 	ConversationMessage,
 	ConversationMessageUsage,
 } from "@/modules/conversations/message";
 import type { CompactionAttachmentMetadata } from "../storage/attachment-store";
+export const DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS =
+	MODEL_OUTPUT_TOKEN_LIMIT;
+export const MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS = 256;
 export const COMPACTION_TRIGGER_REASONS = [
 	"manual",
 	"threshold",
@@ -32,7 +36,7 @@ export type ConversationCompaction = {
 	firstKeptAssistantPartIndex?: number;
 	throughMessageUiId: string;
 	tokensBefore: number;
-	tokensAfter: number;
+	estimatedTokensAfter: number;
 	trigger: CompactionTriggerReason;
 	focus?: string;
 	summarizationModel: ChatModelSelection;
@@ -57,6 +61,7 @@ export type SummaryGeneratorInput = {
 	serializedMessages: string;
 	summaryMessages?: ConversationMessage[];
 	focus?: string;
+	maxOutputTokens?: number;
 	signal?: AbortSignal;
 };
 

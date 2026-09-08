@@ -1,6 +1,6 @@
+import { getModelContextTokens } from "@wincode/ai/model-usage";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import { z } from "zod";
-import type { ConversationMessage } from "@/modules/conversations/message";
 import type { ModelPricingTable } from "@/modules/model-pricing";
 import { resolveModelPricing } from "@/modules/model-pricing";
 import type {
@@ -8,6 +8,12 @@ import type {
 	ConfigOrigin,
 	ConfigSnapshot,
 } from "@/shared/config/config-store";
+import {
+	type ConversationMessage,
+	type ConversationToolPart,
+	isConversationToolPart,
+	isFileMentionPart,
+} from "../message";
 import {
 	estimateAttachmentTokens,
 	estimateAttachmentTokensForDataUrl,
@@ -384,74 +390,220 @@ export const resolveCompactionSettings = (
 		thresholdTokens,
 	};
 };
-
 export const COMPACTION_REQUEST_OVERHEAD_TOKENS = 4096;
 
-const estimateInlineAttachmentTokens = (url: string): number =>
-	estimateAttachmentTokensForDataUrl(url);
+type CanonicalPartEstimate = {
+	characters: number;
+	mediaTokens: number;
+};
 
-const normalizeAttachmentPartForEstimate = (
-	part: ConversationMessage["parts"][number]
-): { part: unknown; tokens: number } => {
-	if (
-		typeof part !== "object" ||
-		part === null ||
-		!("type" in part) ||
-		part.type !== "file" ||
-		!("mediaType" in part) ||
-		typeof part.mediaType !== "string" ||
-		!part.mediaType.startsWith("image/")
-	) {
-		return { part, tokens: 0 };
+const stringifyForEstimate = (value: unknown): string => {
+	try {
+		return JSON.stringify(value) ?? "[unserializable]";
+	} catch {
+		return "[unserializable]";
 	}
+};
+const getObjectField = (value: unknown, key: string): unknown => {
+	if (typeof value !== "object" || value === null || !(key in value)) {
+		return;
+	}
+	return (value as Record<string, unknown>)[key];
+};
+
+const estimateFilePart = (
+	part: Extract<ConversationMessage["parts"][number], { type: "file" }>
+): CanonicalPartEstimate => {
 	const reference = getAttachmentReference(part);
 	if (reference) {
 		return {
-			part: {
+			characters: stringifyForEstimate({
 				attachmentId: reference.attachmentId,
 				byteLength: reference.byteLength,
 				filename: reference.filename,
 				mediaType: reference.mediaType,
 				type: "file",
-			},
-			tokens: estimateAttachmentTokens(reference),
+			}).length,
+			mediaTokens: estimateAttachmentTokens(reference),
 		};
 	}
-	const url = "url" in part && typeof part.url === "string" ? part.url : "";
 	return {
-		part: {
-			byteLength: Math.ceil((url.length * 3) / 4),
-			filename: "attachment",
+		characters: stringifyForEstimate({
+			data: part.url,
 			mediaType: part.mediaType,
 			type: "file",
-		},
-		tokens: estimateInlineAttachmentTokens(url),
+		}).length,
+		mediaTokens: part.mediaType.startsWith("image/")
+			? estimateAttachmentTokensForDataUrl(part.url)
+			: 0,
 	};
 };
 
-const normalizeMessagesForEstimate = (
-	messages: readonly ConversationMessage[]
-): { messages: unknown[]; mediaTokens: number } => {
-	let mediaTokens = 0;
-	const normalized = messages.map((message) => ({
-		...message,
-		parts: message.parts.map((part) => {
-			const result = normalizeAttachmentPartForEstimate(part);
-			mediaTokens += result.tokens;
-			return result.part;
-		}),
-	}));
-	return { mediaTokens, messages: normalized };
+const estimateToolPart = (
+	part: ConversationToolPart
+): CanonicalPartEstimate => {
+	const toolName =
+		part.type === "dynamic-tool"
+			? part.toolName
+			: part.type.slice("tool-".length);
+	const request = {
+		input: part.input ?? part.rawInput,
+		toolCallId: part.toolCallId,
+		toolName,
+		type: "tool-call",
+	};
+	let result: Record<string, unknown> | null = null;
+	if (part.state === "output-available") {
+		result = {
+			output: part.output,
+			toolCallId: part.toolCallId,
+			toolName,
+			type: "tool-result",
+		};
+	}
+	if (part.state === "output-error" || part.state === "output-denied") {
+		let errorText = part.errorText ?? "";
+		if (part.state === "output-denied" && part.errorText === undefined) {
+			errorText = "Tool call denied.";
+		}
+		result = {
+			errorText,
+			toolCallId: part.toolCallId,
+			toolName,
+			type: "tool-failure",
+		};
+	}
+	return {
+		characters: stringifyForEstimate([request, result]).length,
+		mediaTokens: 0,
+	};
 };
 
+const isExplicitToolPart = (part: unknown): boolean => {
+	const type = getObjectField(part, "type");
+	return (
+		type === "tool-call" || type === "tool-result" || type === "tool-failure"
+	);
+};
+
+const estimateExplicitToolPart = (part: unknown): CanonicalPartEstimate => ({
+	characters: stringifyForEstimate({
+		errorText: getObjectField(part, "errorText"),
+		input: getObjectField(part, "input"),
+		output: getObjectField(part, "output"),
+		state: getObjectField(part, "state"),
+		toolCallId: getObjectField(part, "toolCallId"),
+		toolName: getObjectField(part, "toolName"),
+		type: getObjectField(part, "type"),
+	}).length,
+	mediaTokens: 0,
+});
+
+const estimateUnknownPart = (
+	part: ConversationMessage["parts"][number]
+): CanonicalPartEstimate => ({
+	characters: stringifyForEstimate({ type: part.type }).length,
+	mediaTokens: 0,
+});
+
+const estimateCanonicalPart = (
+	part: ConversationMessage["parts"][number]
+): CanonicalPartEstimate => {
+	if (isExplicitToolPart(part)) {
+		return estimateExplicitToolPart(part);
+	}
+	if (part.type === "text" || part.type === "reasoning") {
+		return { characters: part.text.length, mediaTokens: 0 };
+	}
+	if (isFileMentionPart(part)) {
+		const mention = [
+			"Referenced file mention:",
+			`Path: ${part.data.path}`,
+			`Kind: ${part.data.kind}`,
+			`Truncated: ${part.data.truncated ? "yes" : "no"}`,
+			...(part.data.error ? [`Error: ${part.data.error}`] : []),
+			...(part.data.error ? [] : ["Content:", part.data.content]),
+		].join("\n");
+		return { characters: mention.length, mediaTokens: 0 };
+	}
+	if (part.type === "file") {
+		return estimateFilePart(part);
+	}
+	if (isConversationToolPart(part)) {
+		return estimateToolPart(part);
+	}
+	if (part.type === "step-start") {
+		return { characters: 0, mediaTokens: 0 };
+	}
+	return estimateUnknownPart(part);
+};
+
+const estimateCanonicalMessages = (
+	messages: readonly ConversationMessage[]
+): { characters: number; mediaTokens: number } => {
+	let characters = 0;
+	let mediaTokens = 0;
+	for (const message of messages) {
+		characters += `role:${message.role}\n`.length;
+		for (const part of message.parts) {
+			const estimate = estimateCanonicalPart(part);
+			characters += estimate.characters;
+			mediaTokens += estimate.mediaTokens;
+		}
+		characters += 1;
+	}
+	return { characters, mediaTokens };
+};
+
+/**
+ * Estimates the provider-visible conversation context without serializing the
+ * application message objects. Provider usage is authoritative through the
+ * latest measured assistant; only the unmeasured suffix is estimated.
+ */
+export const estimateConversationContextTokens = (
+	messages: readonly ConversationMessage[],
+	estimateTokens: (
+		messages: readonly ConversationMessage[]
+	) => number = estimateCompactionTokens
+): {
+	lastUsageIndex: number;
+	providerTokens: number | null;
+	tokens: number;
+	trailingTokens: number;
+} => {
+	let lastUsageIndex = -1;
+	let providerTokens: number | null = null;
+	for (const [index, message] of messages.entries()) {
+		if (message.role !== "assistant" || message.metadata?.usage === undefined) {
+			continue;
+		}
+		lastUsageIndex = index;
+		providerTokens = getModelContextTokens(message.metadata.usage);
+	}
+	const trailingTokens = estimateTokens(
+		lastUsageIndex === -1 ? messages : messages.slice(lastUsageIndex + 1)
+	);
+	return {
+		lastUsageIndex,
+		providerTokens,
+		tokens: Math.max(0, (providerTokens ?? 0) + trailingTokens),
+		trailingTokens,
+	};
+};
+
+/**
+ * Conservative fallback for provider requests that have no usage metadata.
+ * The optional overhead is intentionally explicit; callers should keep request
+ * scaffolding out of the conversation metric.
+ */
 export const estimateCompactionTokens = (
 	messages: readonly ConversationMessage[],
-	requestOverheadTokens = COMPACTION_REQUEST_OVERHEAD_TOKENS
+	requestOverheadTokens = 0
 ): number => {
-	const normalized = normalizeMessagesForEstimate(messages);
+	const normalized = estimateCanonicalMessages(messages);
 	return Math.max(
 		0,
-		Math.ceil(JSON.stringify(normalized.messages).length / 4) +
+		Math.ceil(normalized.characters / 4) +
 			normalized.mediaTokens +
 			Math.max(0, requestOverheadTokens)
 	);

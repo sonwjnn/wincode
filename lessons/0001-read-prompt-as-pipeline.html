@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="vi">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<meta
+			name="description"
+			content="Bài học đầu tiên về cách đọc system-prompt assembly của Pi, Oh My Pi và OpenCode."
+		>
+		<title>0001 · Đọc system prompt như một pipeline</title>
+		<link rel="stylesheet" href="../assets/lesson.css">
+	</head>
+	<body>
+		<a class="skip-link" href="#main">Bỏ qua điều hướng</a>
+		<div class="shell">
+			<header class="masthead">
+				<p class="eyebrow">Lesson 0001 · khoảng 10 phút</p>
+				<h1>Đọc một system prompt như một pipeline</h1>
+				<p class="lede">
+					Tangible win: sau bài này, bạn có thể nhìn vào source và chỉ ra đâu là
+					base tĩnh, đâu là context động, đâu là tool contract — thay vì gọi tất
+					cả là “prompt”.
+				</p>
+				<div class="meta">
+					<span class="tag">Source-first</span
+					><span class="tag">Retrieval practice</span
+					><span class="tag">Pi · OMP · OpenCode</span>
+				</div>
+			</header>
+
+			<nav class="toc" aria-label="Điều hướng bài học">
+				<a href="#model">Mô hình</a>
+				<a href="#compare">So sánh</a>
+				<a href="#quiz">Tự kiểm tra</a>
+				<a href="../reference/prompt-architecture.html">Reference sheet</a>
+				<a href="../MISSION.md">Mission</a>
+			</nav>
+
+			<main id="main">
+				<section id="model">
+					<h2>1. Đổi câu hỏi</h2>
+					<p>
+						Đừng hỏi: <em>“File system prompt nằm ở đâu?”</em> Hãy hỏi:
+						<strong
+							>“Request cuối cùng được lắp từ những block nào, theo thứ tự nào?”</strong
+						>
+					</p>
+					<div class="callout">
+						<p>
+							<strong>Mô hình làm việc:</strong>
+							<code
+								>request = instruction base + runtime context + tool contract +
+								user turn</code
+							>
+						</p>
+						<p>
+							Đây là mô hình khái niệm, không phải mọi hệ thống đều nối bốn phần
+							thành một string. Tool contract thường đi qua API riêng;
+							compaction cũng có assembly path riêng.
+						</p>
+					</div>
+					<div class="card">
+						<h3>Ba ranh giới cần giữ</h3>
+						<ol>
+							<li><strong>Base:</strong> policy và role tương đối ổn định.</li>
+							<li>
+								<strong>Context:</strong>
+								cwd, rules, skills, git state hoặc instructions thay đổi theo
+								workspace/request.
+							</li>
+							<li>
+								<strong>Tools:</strong>
+								tên, mô tả và input schema để model gọi đúng; không nhất thiết
+								phải lặp lại trong prose.
+							</li>
+						</ol>
+					</div>
+				</section>
+
+				<section id="compare">
+					<h2>2. Ba implementation, ba composition seam</h2>
+					<div class="card">
+						<h3>Pi: một string, nhiều đoạn ghép</h3>
+						<p>
+							<code>buildSystemPrompt()</code>
+							bắt đầu bằng default hoặc custom prose, rồi thêm tool
+							snippets/guidelines, append text, project context, skills và cwd.
+							Custom prompt thay thế phần prose mặc định nhưng vẫn nhận phần
+							tail động đó.
+							<a
+								href="https://github.com/earendil-works/pi/blob/853a80d26c90a14c1886f0ebb8ffaae133ca2185/packages/coding-agent/src/core/system-prompt.ts#L1-L160"
+								target="_blank"
+								rel="noopener"
+								>Đọc source Pi</a
+							>.
+						</p>
+						<p>
+							<strong>Câu hỏi khi đọc source:</strong>
+							“Đoạn nào là default branch? Đoạn nào có gate theo tool/resource?”
+						</p>
+					</div>
+					<div class="card">
+						<h3>Oh My Pi: template + ordered blocks</h3>
+						<p>
+							OMP giữ phần instruction tĩnh trong Markdown/Handlebars templates.
+							Builder chuẩn bị dữ liệu động rồi trả về các block theo thứ tự:
+							instruction, computer-safety tùy chọn, project/environment footer
+							và active-repository block.
+							<a
+								href="https://github.com/can1357/oh-my-pi/blob/969062200754ea02cfac922e5ebb8c608c079e15/packages/coding-agent/src/system-prompt.ts#L680-L1040"
+								target="_blank"
+								rel="noopener"
+								>Đọc builder OMP</a
+							>.
+						</p>
+						<p>
+							<strong>Câu hỏi khi đọc source:</strong>
+							“Block nào có thể cache ổn định? Block nào thay đổi theo
+							workspace?”
+						</p>
+					</div>
+					<div class="card">
+						<h3>OpenCode: provider base + request preparation</h3>
+						<p>
+							OpenCode chọn static <code>.txt</code> theo provider/model, hoặc
+							dùng agent prompt. Sau đó request layer thêm environment,
+							discovered instructions, MCP instructions, skills và
+							structured-output directive. Tool descriptions/schema đi qua AI
+							SDK <code>tools</code> riêng.
+							<a
+								href="https://github.com/anomalyco/opencode/blob/10765ff2a9da8c3b88e4de873aa383a49c318912/packages/opencode/src/session/llm/request.ts#L50-L111"
+								target="_blank"
+								rel="noopener"
+								>Đọc request preparation</a
+							>
+							và
+							<a
+								href="https://github.com/anomalyco/opencode/blob/10765ff2a9da8c3b88e4de873aa383a49c318912/packages/opencode/src/session/tools.ts#L50-L116"
+								target="_blank"
+								rel="noopener"
+								>đọc tool resolver</a
+							>.
+						</p>
+						<p>
+							<strong>Câu hỏi khi đọc source:</strong>
+							“Phần nào provider-specific? Phần nào là runtime service chung?”
+						</p>
+					</div>
+					<div class="callout blue">
+						<p>
+							<strong>Wincode hiện tại:</strong>
+							composition root đang nhỏ hơn: base instructions + resolved agent
+							instructions; tools truyền riêng và skill activation là user
+							<code>skill-context</code>
+							message. Đây là điểm xuất phát để so sánh, không phải kết luận
+							rằng Wincode phải copy OMP.
+							<a
+								href="../docs/research/system-prompt-pi-omp-opencode-wincode.md"
+								>Xem evidence matrix đầy đủ</a
+							>.
+						</p>
+					</div>
+				</section>
+
+				<section>
+					<h2>3. Một quy tắc nhớ lâu</h2>
+					<p>
+						<strong
+							>Static policy trước; volatile context sau; tool schema ngoài
+							prose; compaction tách riêng.</strong
+						>
+					</p>
+					<p>
+						Quy tắc này không phải specification. Nó là heuristic rút ra từ ba
+						source: Pi cho thấy cách ghép string có gate; OMP cho thấy block
+						order và cache-aware context; OpenCode cho thấy provider selection
+						và tool contract tách khỏi text.
+					</p>
+					<p>
+						Để xem bản nén có thể in được, mở
+						<a href="../reference/prompt-architecture.html"
+							>Prompt assembly quick reference</a
+						>. Bản đầy đủ có trong
+						<a href="../docs/research/system-prompt-pi-omp-opencode-wincode.md"
+							>research note</a
+						>.
+					</p>
+				</section>
+
+				<section id="quiz">
+					<h2>4. Tự kiểm tra — trả lời trước khi xem feedback</h2>
+					<p>
+						Chọn một đáp án cho mỗi câu. Mỗi lựa chọn cố ý có cùng bốn từ; hãy
+						tập trung vào ý nghĩa, không vào độ dài.
+					</p>
+					<div class="quiz" data-quiz>
+						<div
+							class="quiz-question"
+							data-question
+							data-correct="1"
+							data-correct-feedback="Đúng. OMP render template rồi trả về các system blocks có thứ tự rõ ràng."
+							data-incorrect-feedback="Đáp án xanh là đúng. OMP là ví dụ nổi bật của ordered system blocks."
+						>
+							<p>1. OMP gần với mô hình nào?</p>
+							<div class="choices">
+								<button class="choice" type="button">
+									Ghép một chuỗi system
+								</button>
+								<button class="choice" type="button">
+									Ghép nhiều block system
+								</button>
+								<button class="choice" type="button">
+									Gửi riêng schema tool
+								</button>
+							</div>
+							<p class="feedback" data-feedback aria-live="polite"></p>
+						</div>
+						<div
+							class="quiz-question"
+							data-question
+							data-correct="1"
+							data-correct-feedback="Đúng. OpenCode resolve description/schema thành AI SDK tools riêng với system text."
+							data-incorrect-feedback="Đáp án xanh là đúng. Tool contract của OpenCode đi qua tools riêng, không chỉ prose."
+						>
+							<p>2. OpenCode gửi tool schema ở đâu?</p>
+							<div class="choices">
+								<button class="choice" type="button">
+									Trong system prompt tĩnh
+								</button>
+								<button class="choice" type="button">Qua bộ tools riêng</button>
+								<button class="choice" type="button">
+									Trong user message cuối
+								</button>
+							</div>
+							<p class="feedback" data-feedback aria-live="polite"></p>
+						</div>
+						<div
+							class="quiz-question"
+							data-question
+							data-correct="1"
+							data-correct-feedback="Đúng. customPrompt thay phần prose/default base; append, context, skills và cwd vẫn có thể được ghép tiếp."
+							data-incorrect-feedback="Đáp án xanh là đúng. Pi customizes base prose, không xóa toàn bộ dynamic tail."
+						>
+							<p>3. Pi customPrompt thay thế gì?</p>
+							<div class="choices">
+								<button class="choice" type="button">
+									Toàn bộ mọi context
+								</button>
+								<button class="choice" type="button">
+									Phần prose mặc định
+								</button>
+								<button class="choice" type="button">
+									Chỉ phần tool snippets
+								</button>
+							</div>
+							<p class="feedback" data-feedback aria-live="polite"></p>
+						</div>
+					</div>
+				</section>
+
+				<section>
+					<h2>Next step</h2>
+					<div class="callout green">
+						<p>
+							Hãy trả lời bằng trí nhớ:
+							<strong
+								>nếu thêm <code>AGENTS.md</code> vào Wincode, bạn sẽ đặt nó ở
+								base, context hay tool contract — và vì sao?</strong
+							>
+							Gửi câu trả lời hoặc câu hỏi follow-up cho tôi; tôi sẽ dùng nó để
+							thiết kế bài tiếp theo và xác định phần nào đã thành kiến thức
+							bền.
+						</p>
+					</div>
+					<p>
+						<strong>Primary source nên đọc:</strong>
+						<a
+							href="https://github.com/can1357/oh-my-pi/blob/969062200754ea02cfac922e5ebb8c608c079e15/docs/system-prompt-customization.md#L1-L80"
+							target="_blank"
+							rel="noopener"
+							>OMP system-prompt customization guide</a
+						>. Đọc phần file/template trước, sau đó đối chiếu builder để thấy
+						template tĩnh được biến thành request runtime như thế nào.
+					</p>
+				</section>
+			</main>
+
+			<footer>
+				<p>
+					<a href="../MISSION.md">Mission</a>
+					· <a href="../RESOURCES.md">Resources</a> ·
+					<a href="../reference/prompt-architecture.html">Reference</a>
+					·
+					<a href="../docs/research/system-prompt-pi-omp-opencode-wincode.md"
+						>Research evidence</a
+					>
+				</p>
+				<p>
+					Lesson 0001. Hãy hỏi follow-up bất cứ khi nào một thuật ngữ hoặc
+					source path chưa rõ.
+				</p>
+			</footer>
+		</div>
+		<script src="../assets/quiz.js"></script>
+	</body>
+</html>

@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="vi">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>Prompt assembly — quick reference</title>
+		<link rel="stylesheet" href="../assets/lesson.css">
+	</head>
+	<body>
+		<a class="skip-link" href="#main">Bỏ qua điều hướng</a>
+		<div class="shell">
+			<header class="masthead">
+				<p class="eyebrow">Quick reference · lesson 0001</p>
+				<h1>Prompt assembly, nhìn từ bốn hệ thống</h1>
+				<p class="lede">
+					Bản đồ nén của cách Pi, Oh My Pi, OpenCode và Wincode tách instruction
+					tĩnh, context động, tools và compaction.
+				</p>
+				<div class="meta">
+					<span class="tag">Source-first</span
+					><span class="tag">Pinned revisions</span
+					><span class="tag">Invariants over prose</span>
+				</div>
+			</header>
+
+			<nav class="toc" aria-label="Mục lục">
+				<a href="#mental-model">Mô hình</a>
+				<a href="#matrix">Ma trận</a>
+				<a href="#flows">Pipeline</a>
+				<a href="../docs/research/system-prompt-pi-omp-opencode-wincode.md"
+					>Nghiên cứu đầy đủ</a
+				>
+			</nav>
+
+			<main id="main">
+				<section id="mental-model">
+					<h2>Mô hình tối thiểu</h2>
+					<div class="callout blue">
+						<p>
+							<strong>System prompt không nhất thiết là một file.</strong>
+							Nó là kết quả của một assembly pipeline: base policy + runtime
+							context + tool contract + project instructions, được ghép theo thứ
+							tự cố định trước khi gửi model.
+						</p>
+					</div>
+					<div class="card">
+						<p><strong>Đừng trộn ba lớp:</strong></p>
+						<ul>
+							<li>
+								<strong>Instruction text:</strong>
+								model nên hành xử thế nào.
+							</li>
+							<li>
+								<strong>Tool contract:</strong>
+								tool nào tồn tại, schema nào hợp lệ, thường truyền ngoài prose.
+							</li>
+							<li>
+								<strong>Data/context:</strong>
+								cwd, rules, transcript, skill body, git state — thay đổi theo
+								request hoặc workspace.
+							</li>
+						</ul>
+					</div>
+				</section>
+
+				<section id="matrix">
+					<h2>Ma trận so sánh</h2>
+					<div class="table-wrap">
+						<table>
+							<thead>
+								<tr>
+									<th>Concern</th>
+									<th>Pi</th>
+									<th>OMP</th>
+									<th>OpenCode</th>
+									<th>Wincode</th>
+								</tr>
+							</thead>
+							<tbody>
+								<tr>
+									<th>Static base</th>
+									<td>Inline TypeScript default/custom branch</td>
+									<td>Markdown/Handlebars templates</td>
+									<td>Provider/model-specific <code>.txt</code></td>
+									<td>Base + resolved agent instructions</td>
+								</tr>
+								<tr>
+									<th>Output shape</th>
+									<td>Một system string</td>
+									<td>Các system blocks có thứ tự</td>
+									<td>Base + dynamic blocks, provider adapter</td>
+									<td>Một <code>instructions</code> string</td>
+								</tr>
+								<tr>
+									<th>Context/rules</th>
+									<td>Agent-dir và ancestor context files</td>
+									<td>Context files, sticky rules, project footer</td>
+									<td>
+										Global/project/configured instructions, lazy nearby files
+									</td>
+									<td>
+										Chưa có aggregation trong composition root được khảo sát
+									</td>
+								</tr>
+								<tr>
+									<th>Skills</th>
+									<td>Catalog/body trong prompt khi có <code>read</code></td>
+									<td>Catalog và <code>skill://</code> references</td>
+									<td>Catalog; body tải bằng skill tool</td>
+									<td>
+										Skill body qua user <code>skill-context</code> message
+									</td>
+								</tr>
+								<tr>
+									<th>Tools</th>
+									<td>Có snippets tùy chọn</td>
+									<td>Có inventory/policy tùy mode</td>
+									<td>Description/schema qua AI SDK <code>tools</code></td>
+									<td>Description/schema qua resolved tools</td>
+								</tr>
+								<tr>
+									<th>Compaction</th>
+									<td>Prompt riêng, structured summary</td>
+									<td>Template riêng, handoff sections</td>
+									<td>Builder/template riêng, không coding tools</td>
+									<td>System policy + dynamic focus/history riêng</td>
+								</tr>
+							</tbody>
+						</table>
+					</div>
+				</section>
+
+				<section id="flows">
+					<h2>Pipeline một dòng</h2>
+					<h3>Pi — single-string assembly</h3>
+					<ol class="flow">
+						<li>Default hoặc custom base</li>
+						<li>Tool snippets và guidelines</li>
+						<li>Append prompt</li>
+						<li>Project context</li>
+						<li>Skills</li>
+						<li>Cwd</li>
+					</ol>
+					<h3>OMP — template blocks</h3>
+					<ol class="flow">
+						<li>Render default/custom instruction template</li>
+						<li>Optional computer-safety block</li>
+						<li>Project/environment footer</li>
+						<li>Active-repository block</li>
+					</ol>
+					<h3>OpenCode — provider selection + request preparation</h3>
+					<ol class="flow">
+						<li>Chọn base theo provider/model hoặc agent prompt</li>
+						<li>Environment</li>
+						<li>Discovered instructions</li>
+						<li>MCP instructions và skills</li>
+						<li>Structured-output directive</li>
+						<li>Transform và gửi theo provider adapter</li>
+					</ol>
+					<h3>Wincode — current composition root</h3>
+					<ol class="flow">
+						<li>Base agent instructions</li>
+						<li>Resolved agent instructions</li>
+						<li>Tools truyền riêng</li>
+						<li>Activated skill context là user message</li>
+					</ol>
+				</section>
+
+				<section>
+					<h2>Heuristics khi thiết kế</h2>
+					<div class="callout green">
+						<ol>
+							<li>
+								Giữ tool schema ngoài prose; chỉ thêm tool policy cấp cao nếu
+								cần.
+							</li>
+							<li>
+								Đặt context vào named block có provenance và thứ tự
+								deterministic.
+							</li>
+							<li>
+								Giữ volatile environment data ngoài cacheable prefix khi có thể.
+							</li>
+							<li>
+								Lazy-load skill body; đừng nhồi toàn bộ catalog vào system
+								prefix.
+							</li>
+							<li>Tách compaction prompt khỏi coding-agent prompt.</li>
+						</ol>
+					</div>
+					<p>
+						<strong>Primary sources:</strong>
+						<a
+							href="https://github.com/earendil-works/pi/blob/853a80d26c90a14c1886f0ebb8ffaae133ca2185/packages/coding-agent/src/core/system-prompt.ts#L1-L160"
+							target="_blank"
+							rel="noopener"
+							>Pi builder</a
+						>
+						·
+						<a
+							href="https://github.com/can1357/oh-my-pi/blob/969062200754ea02cfac922e5ebb8c608c079e15/packages/coding-agent/src/system-prompt.ts#L680-L1040"
+							target="_blank"
+							rel="noopener"
+							>OMP builder</a
+						>
+						·
+						<a
+							href="https://github.com/anomalyco/opencode/blob/10765ff2a9da8c3b88e4de873aa383a49c318912/packages/opencode/src/session/llm/request.ts#L50-L111"
+							target="_blank"
+							rel="noopener"
+							>OpenCode request preparation</a
+						>.
+					</p>
+				</section>
+			</main>
+
+			<footer>
+				<p>
+					Đây là reference sheet, không phải specification. Xem
+					<a href="../MISSION.md">MISSION.md</a>
+					và
+					<a href="../docs/research/system-prompt-pi-omp-opencode-wincode.md"
+						>research note</a
+					>
+					để biết phạm vi và bằng chứng.
+				</p>
+			</footer>
+		</div>
+	</body>
+</html>

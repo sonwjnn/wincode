@@ -27,6 +27,7 @@ export {
 	COMPACTION_REQUEST_OVERHEAD_TOKENS,
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateCompactionTokens,
+	estimateConversationContextTokens,
 	getCompactionSettingSource,
 	resolveCompactionSettingPath,
 	resolveCompactionSettings,
@@ -60,6 +61,10 @@ export type {
 	SummaryGenerator,
 	SummaryGeneratorInput,
 	SummaryGeneratorResult,
+} from "./types";
+export {
+	DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS,
+	MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS,
 } from "./types";
 export type { CompactionSettingsOperations } from "./use-compaction-settings";
 export {

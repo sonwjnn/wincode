@@ -595,13 +595,16 @@ export function useChatInputController({
 		[filteredCommands.length, overlayKind, visibleStartIndex]
 	);
 
-	const handleTab = useCallback(() => {
-		if (disabled) {
-			return;
-		}
+	const handleTab = useCallback(
+		(shift: boolean) => {
+			if (disabled) {
+				return;
+			}
 
-		onTab();
-	}, [disabled, onTab]);
+			onTab(shift);
+		},
+		[disabled, onTab]
+	);
 
 	let overlay: InputOverlayState = EMPTY_OVERLAY;
 	if (overlayKind === "command") {

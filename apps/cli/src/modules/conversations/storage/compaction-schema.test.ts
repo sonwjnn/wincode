@@ -1,0 +1,24 @@
+import { expect, test } from "bun:test";
+import { mkdtemp } from "node:fs/promises";
+import { join } from "node:path";
+import { createDatabase } from "./client";
+import { createDrizzleConversationStore } from "./drizzle-conversation-store";
+import { runMigrations } from "./migrations";
+
+test("uses the estimated compaction column in a fresh local database", async () => {
+	const directory = await mkdtemp(join("/tmp", "wincode-compaction-schema-"));
+	const databasePath = join(directory, "conversation.sqlite");
+	const { db } = createDatabase(databasePath);
+	runMigrations(db);
+
+	const columns = db.$client
+		.query("PRAGMA table_info(conversation_compaction)")
+		.all() as Array<{ name: string }>;
+	const columnNames = columns.map(({ name }) => name);
+
+	expect(columnNames).toContain("estimated_tokens_after");
+	expect(columnNames).not.toContain("tokens_after");
+
+	const store = createDrizzleConversationStore(db);
+	expect(await store.getCompactions("missing-session")).toEqual([]);
+});

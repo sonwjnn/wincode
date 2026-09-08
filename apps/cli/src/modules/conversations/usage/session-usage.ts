@@ -6,7 +6,6 @@ import type {
 } from "@/modules/conversations/message";
 import type { ModelPricingTable } from "@/modules/model-pricing";
 import { resolveModelPricing } from "@/modules/model-pricing";
-import type { ConversationCompaction } from "../compaction";
 
 export type SessionUsageSummary = {
 	/** `null` when the pricing table has no entry for the current model. */
@@ -22,7 +21,6 @@ const clampPercent = (percent: number): number =>
 type MessageUsageState = {
 	lastSelection: ChatModelSelection | null;
 	lastUsage: ConversationMessageUsage | null;
-	lastUsageIndex: number;
 };
 
 const collectMessageUsage = (
@@ -30,64 +28,33 @@ const collectMessageUsage = (
 ): MessageUsageState => {
 	let lastUsage: ConversationMessageUsage | null = null;
 	let lastSelection: ChatModelSelection | null = null;
-	let lastUsageIndex = -1;
-	for (const [index, message] of messages.entries()) {
+	for (const message of messages) {
 		if (message.role !== "assistant" || !message.metadata?.usage) {
 			continue;
 		}
 		lastUsage = message.metadata.usage;
-		lastUsageIndex = index;
 		lastSelection = message.metadata.model ?? null;
 	}
-	return { lastSelection, lastUsage, lastUsageIndex };
+	return { lastSelection, lastUsage };
 };
 
-const findLatestCompaction = (
-	compactions: readonly ConversationCompaction[]
-): ConversationCompaction | null => {
-	let latest: ConversationCompaction | null = null;
-	for (const compaction of compactions) {
-		if (latest === null || compaction.sequence > latest.sequence) {
-			latest = compaction;
-		}
-	}
-	return latest;
-};
-
-/** Aggregate context occupancy for the current local conversation. */
+/**
+ * Displays only the last completed provider usage. Compaction estimates are
+ * diagnostic metadata and never replace the usage bar's provider measurement.
+ */
 export const summarizeSessionUsage = (
 	messages: readonly ConversationMessage[],
 	fallbackModel: ChatModelSelection,
-	table: ModelPricingTable,
-	compactions: readonly ConversationCompaction[] = []
+	table: ModelPricingTable
 ): SessionUsageSummary | null => {
-	const messageUsage = collectMessageUsage(messages);
-	const latestCompaction = findLatestCompaction(compactions);
-	const compactionThroughIndex =
-		latestCompaction === null
-			? -1
-			: messages.findIndex(
-					(message) => message.id === latestCompaction.throughMessageUiId
-				);
-	const useCompactionContext =
-		latestCompaction !== null &&
-		(messageUsage.lastUsage === null ||
-			messageUsage.lastUsageIndex <= compactionThroughIndex);
-	if (messageUsage.lastUsage === null && !useCompactionContext) {
+	const { lastSelection, lastUsage } = collectMessageUsage(messages);
+	if (lastUsage === null) {
 		return null;
 	}
-	let selection = messageUsage.lastSelection ?? fallbackModel;
-	if (useCompactionContext) {
-		selection = latestCompaction?.summarizationModel ?? fallbackModel;
-	}
+	const selection = lastSelection ?? fallbackModel;
 	const contextLimit =
 		resolveModelPricing(table, selection)?.contextLimit ?? null;
-	let contextTokens = 0;
-	if (useCompactionContext && latestCompaction !== null) {
-		contextTokens = latestCompaction.tokensAfter;
-	} else if (messageUsage.lastUsage) {
-		contextTokens = getModelContextTokens(messageUsage.lastUsage);
-	}
+	const contextTokens = getModelContextTokens(lastUsage);
 	const contextPercent =
 		contextLimit !== null && contextLimit > 0
 			? clampPercent((contextTokens / contextLimit) * 100)

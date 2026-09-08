@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { canSubmitHomePrompt } from "./chat-view";
+import { canSubmitHomePrompt } from "./new-session-view";
 
 describe("canSubmitHomePrompt", () => {
 	const readyState = {

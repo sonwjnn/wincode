@@ -42,7 +42,7 @@ export const VariantsDialogContent = ({
 		supportedVariants.length === 0
 			? []
 			: [
-					{ label: "Default", value: undefined },
+					{ label: "default", value: undefined },
 					...supportedVariants.map((variant) => ({
 						label: variant,
 						value: variant,

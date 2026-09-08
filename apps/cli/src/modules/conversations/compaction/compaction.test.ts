@@ -16,6 +16,7 @@ import {
 	rebuildActiveMessages,
 	serializeMessagesForCompaction,
 } from "./compaction";
+import { estimateCompactionTokens } from "./config";
 import type { ConversationCompaction, SummaryGeneratorInput } from "./types";
 
 const model: ChatModelSelection = {
@@ -124,6 +125,101 @@ test("compacts complete turns into a durable summary and recent tail", async () 
 	);
 });
 
+test("does not summarize history already covered by the recent budget", async () => {
+	const store = makeStore();
+	const summaryGenerator = mock(async () => ({ text: "unused summary" }));
+	const compaction = createConversationCompaction({
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) => messages.length,
+	});
+
+	await expect(
+		compaction.compact({
+			conversation: {
+				messages: [
+					message("u1", "user", "only request"),
+					message("a1", "assistant", "only answer"),
+				],
+				sessionId: "session-short",
+			},
+			model,
+			settings: { enabled: true, keepRecentTokens: 10, thresholdTokens: null },
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({ code: "history-too-short" });
+	expect(summaryGenerator).not.toHaveBeenCalled();
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+});
+test("does not summarize when all complete history fits recent budget", async () => {
+	const store = makeStore();
+	const summaryGenerator = mock(async () => ({ text: "unused summary" }));
+	const compaction = createConversationCompaction({
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) => messages.length,
+	});
+
+	await expect(
+		compaction.compact({
+			conversation: {
+				messages: [
+					message("u1", "user", "first"),
+					message("a1", "assistant", "answer"),
+					message("u2", "user", "second"),
+					message("a2", "assistant", "answer"),
+				],
+				sessionId: "session-all-recent",
+			},
+			model,
+			settings: { enabled: true, keepRecentTokens: 10, thresholdTokens: null },
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({ code: "history-too-short" });
+	expect(summaryGenerator).not.toHaveBeenCalled();
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+});
+
+test("keeps retention identical across manual and threshold triggers", async () => {
+	const run = async (trigger: "manual" | "threshold") => {
+		const store = makeStore();
+		const compaction = createConversationCompaction({
+			store,
+			summaryGenerator: async () => ({ text: "same summary" }),
+			estimateTokens: (messages) => messages.length,
+		});
+		return compaction.compact({
+			conversation: {
+				messages: [
+					message("u1", "user", "first"),
+					message("a1", "assistant", "answer"),
+					message("u2", "user", "current"),
+					message("a2", "assistant", "answer"),
+				],
+				sessionId: `session-${trigger}`,
+			},
+			model,
+			settings,
+			trigger,
+		});
+	};
+
+	const manual = await run("manual");
+	const threshold = await run("threshold");
+
+	expect(manual.activeMessages.slice(1)).toEqual(
+		threshold.activeMessages.slice(1)
+	);
+	expect(manual.entry.firstKeptUiMessageId).toBe(
+		threshold.entry.firstKeptUiMessageId
+	);
+	expect(manual.entry.throughMessageUiId).toBe(
+		threshold.entry.throughMessageUiId
+	);
+	expect(manual.entry.trigger).toBe("manual");
+	expect(threshold.entry.trigger).toBe("threshold");
+});
+
 test("rebuilds the active context from the newest durable compaction", () => {
 	const latest: ConversationCompaction = {
 		completedAt: new Date("2026-08-30T00:00:00.000Z"),
@@ -139,7 +235,7 @@ test("rebuilds the active context from the newest durable compaction", () => {
 			text: "preserve the migration decision",
 		},
 		throughMessageUiId: "a1",
-		tokensAfter: 20,
+		estimatedTokensAfter: 20,
 		tokensBefore: 100,
 		trigger: "manual",
 	};
@@ -178,7 +274,7 @@ test("fails closed when a durable compaction boundary is missing", () => {
 			text: "summary",
 		},
 		throughMessageUiId: "old-message",
-		tokensAfter: 1,
+		estimatedTokensAfter: 1,
 		tokensBefore: 2,
 		trigger: "manual",
 	};
@@ -212,6 +308,166 @@ test("uses provider-reported usage for threshold decisions", () => {
 			thresholdTokens: 100,
 		})
 	).toBe(true);
+});
+test("adds estimated trailing context after the latest provider usage", () => {
+	const compaction = createConversationCompaction({
+		store: makeStore(),
+		summaryGenerator: async () => ({ text: "summary" }),
+		estimateTokens: (messages) => messages.length * 15,
+	});
+	const messages: ConversationMessage[] = [
+		message("u1", "user", "request"),
+		{
+			...message("a1", "assistant", "answer"),
+			metadata: {
+				model,
+				usage: { inputTokens: 90, outputTokens: 10 },
+			},
+		},
+		message("u2", "user", "new request"),
+		message("a2", "assistant", "new answer"),
+	];
+
+	expect(
+		compaction.needsCompaction(messages, {
+			enabled: true,
+			thresholdTokens: 120,
+		})
+	).toBe(true);
+	expect(
+		compaction.needsCompaction(messages, {
+			enabled: true,
+			thresholdTokens: 131,
+		})
+	).toBe(false);
+});
+test("fallback estimation follows canonical visible content", () => {
+	const textOnly = message("text", "user", "request");
+	const shortTool = {
+		input: { command: "pwd" },
+		output: { output: "ok" },
+		state: "output-available",
+		toolCallId: "call-1",
+		type: "tool-shell",
+	};
+	const longTool = {
+		...shortTool,
+		output: { output: "x".repeat(1000) },
+	};
+	const shortEstimate = estimateCompactionTokens([
+		textOnly,
+		{
+			id: "assistant-short",
+			parts: [{ text: "thinking", type: "reasoning" }, shortTool],
+			role: "assistant",
+		} as unknown as ConversationMessage,
+	]);
+	const longEstimate = estimateCompactionTokens([
+		textOnly,
+		{
+			id: "assistant-long",
+			parts: [{ text: "thinking", type: "reasoning" }, longTool],
+			role: "assistant",
+		} as unknown as ConversationMessage,
+	]);
+
+	expect(shortEstimate).toBeGreaterThan(estimateCompactionTokens([textOnly]));
+	expect(longEstimate).toBeGreaterThan(shortEstimate);
+	const roleToolEstimate = estimateCompactionTokens([
+		textOnly,
+		{
+			id: "tool-result",
+			parts: [
+				{
+					output: { output: "x".repeat(1000) },
+					toolCallId: "call-1",
+					type: "tool-result",
+				},
+			],
+			role: "tool",
+		} as unknown as ConversationMessage,
+	]);
+	expect(roleToolEstimate).toBeGreaterThan(shortEstimate);
+});
+test("derives one summary attempt from retained context and reserve", async () => {
+	const store = makeStore();
+	const summaryGenerator = mock(async (_input: SummaryGeneratorInput) => ({
+		text: "budgeted summary",
+		usage: { inputTokens: 1, outputTokens: 1 },
+	}));
+	const compaction = createConversationCompaction({
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) =>
+			messages.some(({ id }) => id.startsWith("compaction:"))
+				? 30
+				: messages.length * 10,
+	});
+
+	await compaction.compact({
+		conversation: {
+			messages: [
+				message("u1", "user", "first"),
+				message("a1", "assistant", "answer"),
+				message("u2", "user", "current"),
+				message("a2", "assistant", "answer"),
+			],
+			sessionId: "session-budget",
+		},
+		model,
+		settings: {
+			compactionOverheadTokens: 10,
+			enabled: true,
+			keepRecentTokens: 20,
+			modelContextLimit: 330,
+			reserveTokens: 800,
+			summaryMaxOutputTokens: 4096,
+			thresholdTokens: null,
+		},
+		trigger: "manual",
+	});
+
+	expect(summaryGenerator).toHaveBeenCalledTimes(1);
+	expect(summaryGenerator.mock.calls[0]?.[0].maxOutputTokens).toBe(300);
+});
+
+test("does not generate or persist when the summary budget is not viable", async () => {
+	const store = makeStore();
+	const summaryGenerator = mock(async () => ({ text: "summary" }));
+	const compaction = createConversationCompaction({
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) =>
+			messages.some(({ id }) => id.startsWith("compaction:"))
+				? 20
+				: messages.length * 10,
+	});
+
+	await expect(
+		compaction.compact({
+			conversation: {
+				messages: [
+					message("u1", "user", "first"),
+					message("a1", "assistant", "answer"),
+					message("u2", "user", "current"),
+					message("a2", "assistant", "answer"),
+				],
+				sessionId: "session-budget-too-small",
+			},
+			model,
+			settings: {
+				compactionOverheadTokens: 10,
+				enabled: true,
+				keepRecentTokens: 20,
+				modelContextLimit: 50,
+				reserveTokens: 40,
+				thresholdTokens: null,
+			},
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({ code: "not-needed" });
+	expect(summaryGenerator).not.toHaveBeenCalled();
+	expect(store.appendCompaction).not.toHaveBeenCalled();
 });
 
 test("repeated compaction passes the prior summary and only the new compacted span", async () => {
@@ -256,13 +512,80 @@ test("repeated compaction passes the prior summary and only the new compacted sp
 	);
 });
 
+test("rejects compaction when its projected context is larger", async () => {
+	const store = makeStore();
+	const compaction = createConversationCompaction({
+		store,
+		summaryGenerator: async () => ({ text: "summary" }),
+		estimateTokens: (messages) => {
+			if (messages.some(({ id }) => id.startsWith("compaction:"))) {
+				return 9000;
+			}
+			return messages.at(-1)?.parts.length === 1 ? 1 : 6200;
+		},
+	});
+
+	await expect(
+		compaction.compact({
+			conversation: {
+				messages: [
+					message("u1", "user", "question"),
+					{
+						...message("a1", "assistant", "answer"),
+						parts: [
+							{ text: "first", type: "text" },
+							{ text: "second", type: "text" },
+						],
+					},
+				],
+				sessionId: "session-expanding",
+			},
+			model,
+			settings,
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({ code: "not-needed" });
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+});
+test("uses the fallback estimate for strict reduction acceptance", async () => {
+	const store = makeStore();
+	const compaction = createConversationCompaction({
+		store,
+		summaryGenerator: async () => ({ text: "summary" }),
+		estimateTokens: (messages) =>
+			messages.some(({ id }) => id.startsWith("compaction:")) ? 6 : 5,
+	});
+	const messages: ConversationMessage[] = [
+		message("u1", "user", "old request"),
+		{
+			...message("a1", "assistant", "old answer"),
+			metadata: {
+				model,
+				usage: { inputTokens: 100, outputTokens: 0 },
+			},
+		},
+		message("u2", "user", "current request"),
+		message("a2", "assistant", "current answer"),
+	];
+
+	await expect(
+		compaction.compact({
+			conversation: { messages, sessionId: "session-local-acceptance" },
+			model,
+			settings: { enabled: true, keepRecentTokens: 1, thresholdTokens: null },
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({ code: "not-needed" });
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+});
+
 test("summary failure and cancellation do not append durable state", async () => {
 	const store = makeStore();
 	const summaryGenerator = mock(async ({ signal }: SummaryGeneratorInput) => {
 		if (signal?.aborted) {
 			throw new Error("aborted");
 		}
-		throw new Error("provider failed");
+		throw Object.assign(new Error("Unauthorized"), { statusCode: 401 });
 	});
 	const compaction = createConversationCompaction({
 		store,
@@ -286,7 +609,11 @@ test("summary failure and cancellation do not append durable state", async () =>
 			settings,
 			trigger: "manual",
 		})
-	).rejects.toMatchObject({ code: "summary-failed" });
+	).rejects.toMatchObject({
+		code: "summary-failed",
+		message:
+			"Compaction summary generation failed: Model authentication failed.",
+	});
 	expect(store.appendCompaction).not.toHaveBeenCalled();
 
 	const controller = new AbortController();
@@ -598,6 +925,99 @@ test("splits an oversized single turn only at complete part boundaries", async (
 	expect(serialized).toContain("prefix one");
 	expect(serialized).not.toContain("recent suffix");
 });
+test("does not recompact an unchanged split transcript", async () => {
+	const store = makeStore();
+	const summaryGenerator = mock(async () => ({ text: "split summary" }));
+	const compaction = createConversationCompaction({
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) =>
+			messages.reduce((total, current) => total + current.parts.length, 0),
+	});
+	const assistant = {
+		id: "a1",
+		parts: [
+			{ text: "prefix", type: "text" },
+			{ text: "middle", type: "text" },
+			{ text: "suffix", type: "text" },
+		],
+		role: "assistant",
+	} as unknown as ConversationMessage;
+	const conversation = {
+		messages: [message("u1", "user", "request"), assistant],
+		sessionId: "session-split-unchanged",
+	};
+	const compactionInput = {
+		conversation,
+		model,
+		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
+		trigger: "manual" as const,
+	};
+
+	await compaction.compact(compactionInput);
+	await expect(compaction.compact(compactionInput)).rejects.toMatchObject({
+		code: "history-too-short",
+	});
+
+	expect(summaryGenerator).toHaveBeenCalledTimes(1);
+	expect(store.appendCompaction).toHaveBeenCalledTimes(1);
+});
+
+test("splits the latest oversized turn without retaining older context", async () => {
+	const store = makeStore();
+	let serialized = "";
+	const compaction = createConversationCompaction({
+		generateId: () => "entry-latest-split",
+		store,
+		summaryGenerator: mock(async (input: SummaryGeneratorInput) => {
+			serialized = input.serializedMessages;
+			return { text: "latest split summary" };
+		}),
+		estimateTokens: (messages) =>
+			messages.some(({ id }) => id.startsWith("compaction:"))
+				? 2
+				: messages.length,
+	});
+	const assistant = {
+		id: "a2",
+		parts: [
+			{ text: "prefix", type: "text" },
+			{ text: "suffix", type: "text" },
+		],
+		role: "assistant",
+	} as unknown as ConversationMessage;
+
+	const result = await compaction.compact({
+		conversation: {
+			messages: [
+				message("u1", "user", "old request"),
+				message("a1", "assistant", "old answer"),
+				message("u2", "user", "current request"),
+				assistant,
+			],
+			sessionId: "session-latest-split",
+		},
+		model,
+		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
+		trigger: "manual",
+	});
+
+	expect(result.activeMessages.map(({ id }) => id)).toEqual([
+		"compaction:entry-latest-split",
+		"u2",
+		"a2",
+	]);
+	expect(result.activeMessages.at(-1)?.parts).toEqual([
+		{ text: "suffix", type: "text" },
+	]);
+	expect(result.entry.summary.coveredMessageIds).toEqual([
+		"u1",
+		"a1",
+		"u2",
+		"a2",
+	]);
+	expect(serialized).toContain("old request");
+});
 
 test("resumes the next summary span after a split-turn boundary", async () => {
 	const store = makeStore();
@@ -652,7 +1072,183 @@ test("resumes the next summary span after a split-turn boundary", async () => {
 	expect(serialized.at(-1)).not.toContain("single request");
 });
 
-test("projects the newest attachment against the media budget for tokensAfter", async () => {
+test("does not re-summarize a previously split assistant prefix", async () => {
+	const store = makeStore();
+	const serialized: string[] = [];
+	const compaction = createConversationCompaction({
+		generateId: () => `entry-${serialized.length + 1}`,
+		store,
+		summaryGenerator: mock(async (input: SummaryGeneratorInput) => {
+			serialized.push(input.serializedMessages);
+			return { text: "split summary" };
+		}),
+		estimateTokens: (messages) =>
+			messages.reduce((total, current) => total + current.parts.length, 0),
+	});
+	const firstAssistant = {
+		id: "a1",
+		parts: [
+			{ text: "first prefix", type: "text" },
+			{ text: "first middle", type: "text" },
+			{ text: "first suffix", type: "text" },
+		],
+		role: "assistant",
+	} as unknown as ConversationMessage;
+	const secondAssistant = {
+		id: "a2",
+		parts: [
+			{ text: "second prefix", type: "text" },
+			{ text: "second middle", type: "text" },
+			{ text: "second suffix", type: "text" },
+		],
+		role: "assistant",
+	} as unknown as ConversationMessage;
+
+	await compaction.compact({
+		conversation: {
+			messages: [message("u1", "user", "first request"), firstAssistant],
+			sessionId: "session-split-twice",
+		},
+		model,
+		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
+		trigger: "manual",
+	});
+	const second = await compaction.compact({
+		conversation: {
+			messages: [
+				message("u1", "user", "first request"),
+				firstAssistant,
+				message("u2", "user", "second request"),
+				secondAssistant,
+			],
+			sessionId: "session-split-twice",
+		},
+		model,
+		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
+		trigger: "manual",
+	});
+
+	expect(second.entry.summary.coveredMessageIds).toEqual(["a1", "u2", "a2"]);
+	expect(serialized[1]).toContain("first suffix");
+	expect(serialized[1]).not.toContain("first prefix");
+	expect(serialized[1]).toContain("second prefix");
+});
+
+test("keeps a split tool call paired with its result", async () => {
+	const store = makeStore();
+	const toolCall = {
+		input: { command: "pwd" },
+		state: "output-available",
+		toolCallId: "call-split",
+		type: "tool-shell",
+	} as unknown as ConversationMessage["parts"][number];
+	const assistant = {
+		id: "a1",
+		parts: [
+			{ text: "prefix", type: "text" },
+			toolCall,
+			{ text: "suffix", type: "text" },
+		],
+		role: "assistant",
+	} as unknown as ConversationMessage;
+	const toolResult = {
+		id: "tool-call-split",
+		parts: [
+			{
+				output: { output: "ok" },
+				toolCallId: "call-split",
+				type: "tool-result",
+			},
+		],
+		role: "tool",
+	} as unknown as ConversationMessage;
+	const compaction = createConversationCompaction({
+		store,
+		summaryGenerator: async () => ({ text: "split tool summary" }),
+		estimateTokens: (messages) =>
+			messages.reduce(
+				(total, current) =>
+					total +
+					(current.id.startsWith("compaction:") ? 0 : current.parts.length),
+				0
+			),
+	});
+
+	const result = await compaction.compact({
+		conversation: {
+			messages: [
+				message("u1", "user", "run the command"),
+				assistant,
+				toolResult,
+			],
+			sessionId: "session-tool-pair",
+		},
+		model,
+		settings: { enabled: true, keepRecentTokens: 4, thresholdTokens: null },
+
+		trigger: "manual",
+	});
+
+	expect(result.activeMessages.at(-2)?.parts).toEqual([
+		toolCall,
+		{ text: "suffix", type: "text" },
+	]);
+	expect(result.activeMessages.at(-1)).toEqual(toolResult);
+	expect(result.entry.firstKeptAssistantPartIndex).toBe(1);
+});
+
+test("does not split a paired tool result beyond the recent budget", async () => {
+	const store = makeStore();
+	const toolCall = {
+		input: { command: "pwd" },
+		state: "output-available",
+		toolCallId: "call-budget",
+		type: "tool-shell",
+	} as unknown as ConversationMessage["parts"][number];
+	const assistant = {
+		id: "a1",
+		parts: [{ text: "prefix", type: "text" }, toolCall],
+		role: "assistant",
+	} as unknown as ConversationMessage;
+	const toolResult = {
+		id: "tool-call-budget",
+		parts: [
+			{
+				output: { output: "ok" },
+				toolCallId: "call-budget",
+				type: "tool-result",
+			},
+		],
+		role: "tool",
+	} as unknown as ConversationMessage;
+	const summaryGenerator = mock(async () => ({ text: "unused summary" }));
+	const compaction = createConversationCompaction({
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) =>
+			messages.reduce((total, current) => total + current.parts.length, 0),
+	});
+
+	await expect(
+		compaction.compact({
+			conversation: {
+				messages: [
+					message("u1", "user", "run the command"),
+					assistant,
+					toolResult,
+				],
+				sessionId: "session-tool-budget",
+			},
+			model,
+			settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({ code: "history-too-short" });
+	expect(summaryGenerator).not.toHaveBeenCalled();
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+});
+
+test("projects the newest attachment against the media budget for estimatedTokensAfter", async () => {
 	const root = await mkdtemp(join(tmpdir(), "wincode-compaction-projection-"));
 	const attachmentStore = createConversationAttachmentStore({
 		repository: createAttachmentRepository(),
@@ -726,5 +1322,5 @@ test("projects the newest attachment against the media budget for tokensAfter", 
 	// Newest (large) attachment is retained: summary(1) + marker(1) +
 	// ceil(5010/1000)+1(7) + suffix(1) = 10. Charging oldest-first would omit
 	// the large attachment and report 5 instead.
-	expect(result.entry.tokensAfter).toBe(10);
+	expect(result.entry.estimatedTokensAfter).toBe(10);
 });

@@ -9,7 +9,7 @@ import {
 	createAgentTurnId,
 	getAgentTurnAbortDisposition,
 } from "@wincode/agent-core";
-import { normalizeModelUsage } from "@wincode/ai/model-usage";
+import { type ModelUsage, normalizeModelUsage } from "@wincode/ai/model-usage";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { defaultChatModelSelection } from "@wincode/ai/models";
 import {
@@ -120,12 +120,16 @@ const AGENT_TURN_DEADLINE_MS = 43_200_000;
 const INTERRUPTED_TOOL_ERROR = "Tool call interrupted";
 const createEmptyRuntimeAssistantMessage = (
 	assistantId: string,
-	sourceUserMessageId: string | null
+	sourceUserMessageId: string | null,
+	agent: AgentId,
+	model: ChatModelSelection
 ): ConversationMessage => ({
 	id: assistantId,
-	...(sourceUserMessageId === null
-		? {}
-		: { metadata: { sourceUserMessageId } }),
+	metadata: {
+		agent,
+		model,
+		...(sourceUserMessageId === null ? {} : { sourceUserMessageId }),
+	},
 	parts: [],
 	role: "assistant",
 });
@@ -1074,6 +1078,39 @@ const terminalOutcomeForEvent = (
 	}
 	return "interrupted";
 };
+const buildTerminalMessageMetadata = ({
+	agent,
+	base,
+	event,
+	model,
+	startedAt,
+	usage,
+	variant,
+}: {
+	agent: AgentId;
+	base: ConversationMessage;
+	event: AgentTurnTerminalEvent;
+	model?: ChatModelSelection;
+	startedAt: number | null;
+	usage: ModelUsage | null;
+	variant?: ModelVariant;
+}): ConversationMessageMetadata => {
+	const terminalOutcome = terminalOutcomeForEvent(event);
+	return {
+		...(base.metadata ?? {}),
+		agent: base.metadata?.agent ?? agent,
+		interrupted: event.type === "agent-turn-interrupted",
+		...(terminalOutcome === undefined ? {} : { terminalOutcome }),
+		...(model === undefined ? {} : { model: base.metadata?.model ?? model }),
+		...(variant === undefined
+			? {}
+			: { variant: base.metadata?.variant ?? variant }),
+		...(startedAt === null
+			? {}
+			: { responseTimeMs: Math.max(0, Date.now() - startedAt) }),
+		...(usage === null ? {} : { usage }),
+	};
+};
 
 const sanitizeFailedRuntimeMessages = (
 	messages: readonly ConversationMessage[],
@@ -1312,15 +1349,11 @@ export function useChat(
 		() =>
 			createConversationCompaction({
 				attachmentStore: getConversationStore().attachmentStore,
-				estimateTokens: (messages) =>
-					estimateCompactionTokens(
-						messages,
-						estimateRuntimeRequestOverheadTokens()
-					),
+				estimateTokens: (messages) => estimateCompactionTokens(messages),
 				store: getConversationStore(),
 				summaryGenerator,
 			}),
-		[estimateRuntimeRequestOverheadTokens, summaryGenerator]
+		[summaryGenerator]
 	);
 	const getCompactionSettings = useCallback(
 		(selection: ChatModelSelection = modelRef.current) =>
@@ -1361,11 +1394,14 @@ export function useChat(
 						? {}
 						: { variant: compactionVariant }),
 					settings: {
+						compactionOverheadTokens: estimateRuntimeRequestOverheadTokens(),
 						enabled: settings.enabled,
 						keepRecentTokens: settings.keepRecentTokens,
 						maxMediaAttachments: settings.maxMediaAttachments,
 						maxMediaBytes: settings.maxMediaBytes,
 						maxMediaTokens: settings.maxMediaTokens,
+						modelContextLimit: settings.modelContextLimit,
+						reserveTokens: settings.reserveTokens,
 						thresholdTokens: settings.thresholdTokens,
 					},
 					signal: controller.signal,
@@ -1391,6 +1427,7 @@ export function useChat(
 		},
 		[
 			compactionModule,
+			estimateRuntimeRequestOverheadTokens,
 			getCompactionSettings,
 			mergeDisplayMessages,
 			publishActiveMessages,
@@ -1515,12 +1552,16 @@ export function useChat(
 				index === -1
 					? createEmptyRuntimeAssistantMessage(
 							assistantId,
-							currentSourceUserMessageIdRef.current
+							currentSourceUserMessageIdRef.current,
+							agentRef.current,
+							modelRef.current
 						)
 					: (current[index] ??
 						createEmptyRuntimeAssistantMessage(
 							assistantId,
-							currentSourceUserMessageIdRef.current
+							currentSourceUserMessageIdRef.current,
+							agentRef.current,
+							modelRef.current
 						));
 			const parts = [...existing.parts];
 			switch (event.type) {
@@ -1596,7 +1637,9 @@ export function useChat(
 				index === -1
 					? createEmptyRuntimeAssistantMessage(
 							assistantId,
-							currentSourceUserMessageIdRef.current
+							currentSourceUserMessageIdRef.current,
+							agentRef.current,
+							modelRef.current
 						)
 					: current[index];
 			if (base === undefined) {
@@ -1607,20 +1650,15 @@ export function useChat(
 				event.type === "agent-turn-completed"
 					? normalizeModelUsage(event.usage)
 					: null;
-			const terminalOutcome = terminalOutcomeForEvent(event);
-			const metadata: ConversationMessageMetadata = {
-				...(base.metadata ?? {}),
-				agent: base.metadata?.agent ?? agentRef.current,
-				interrupted: event.type === "agent-turn-interrupted",
-				...(terminalOutcome === undefined ? {} : { terminalOutcome }),
-				...(variantRef.current === undefined
-					? {}
-					: { variant: base.metadata?.variant ?? variantRef.current }),
-				...(startedAt === null
-					? {}
-					: { responseTimeMs: Math.max(0, Date.now() - startedAt) }),
-				...(usage === null ? {} : { usage }),
-			};
+			const metadata = buildTerminalMessageMetadata({
+				agent: agentRef.current,
+				base,
+				event,
+				model: modelRef.current,
+				startedAt,
+				usage,
+				variant: variantRef.current,
+			});
 			const nextMessage = { ...base, metadata };
 			const nextMessages =
 				index === -1
@@ -2034,11 +2072,14 @@ export function useChat(
 					compactionInput: {
 						model: failedModel,
 						settings: {
+							compactionOverheadTokens: estimateRuntimeRequestOverheadTokens(),
 							enabled: settings.enabled,
 							keepRecentTokens: settings.keepRecentTokens,
 							maxMediaAttachments: settings.maxMediaAttachments,
 							maxMediaBytes: settings.maxMediaBytes,
 							maxMediaTokens: settings.maxMediaTokens,
+							modelContextLimit: settings.modelContextLimit,
+							reserveTokens: settings.reserveTokens,
 							thresholdTokens: settings.thresholdTokens,
 						},
 					},
@@ -2140,8 +2181,19 @@ export function useChat(
 	return {
 		cancelCompaction,
 		catalogDiagnostic,
-		compact: (focus?: string, selection?: ChatModelSelection) =>
-			runCompaction("manual", focus, undefined, selection),
+		compact: (
+			focus?: string,
+			selection?: ChatModelSelection,
+			selectionVariant?: ModelVariant
+		) =>
+			runCompaction(
+				"manual",
+				focus,
+				undefined,
+				selection,
+				undefined,
+				selectionVariant
+			),
 		compactions,
 		conversation,
 		error: compactionError ?? error,

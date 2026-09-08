@@ -77,7 +77,7 @@ export const conversationCompaction = sqliteTable(
 		firstKeptAssistantPartIndex: integer("first_kept_assistant_part_index"),
 		throughMessageUiId: text("through_message_ui_id").notNull(),
 		tokensBefore: integer("tokens_before").notNull(),
-		tokensAfter: integer("tokens_after").notNull(),
+		estimatedTokensAfter: integer("estimated_tokens_after").notNull(),
 		trigger: text("trigger")
 			.$type<ConversationCompaction["trigger"]>()
 			.notNull(),
