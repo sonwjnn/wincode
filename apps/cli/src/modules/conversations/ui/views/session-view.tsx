@@ -145,6 +145,9 @@ export function SessionView({
 	);
 	const interruptArmedRef = useRef(false);
 	const [isInterruptArmed, setIsInterruptArmed] = useState(false);
+	const [isStartingInitialTurn, setIsStartingInitialTurn] = useState(
+		initialSubmission !== undefined
+	);
 	const [restoredMessages, setRestoredMessages] = useState<
 		ConversationMessage[] | null
 	>(null);
@@ -169,7 +172,10 @@ export function SessionView({
 	);
 	const { cancel, interrupt, send } = conversation;
 	const isTurnBusy =
-		hasPendingApproval || isPreparingMessage || status !== "ready";
+		hasPendingApproval ||
+		isPreparingMessage ||
+		isStartingInitialTurn ||
+		status !== "ready";
 	const isBusy = isTurnBusy || isCompacting;
 	const promptHistory = useMemo(
 		() => derivePromptHistory(initialMessages),
@@ -476,12 +482,19 @@ export function SessionView({
 			? initialMessages.find(({ id }) => id === submission.messageId)
 			: undefined;
 
-		if (
-			registry === null ||
-			!isPromptConfigRestored ||
-			initialMessage === undefined ||
-			initialMessage.role !== "user"
-		) {
+		if (submission === undefined) {
+			if (submittedInitialMessageRef.current === null) {
+				setIsStartingInitialTurn(false);
+			}
+			return;
+		}
+
+		if (initialMessage === undefined || initialMessage.role !== "user") {
+			setIsStartingInitialTurn(false);
+			return;
+		}
+
+		if (registry === null || !isPromptConfigRestored) {
 			return;
 		}
 
@@ -490,26 +503,31 @@ export function SessionView({
 		}
 
 		submittedInitialMessageRef.current = initialMessage.id;
+		setIsStartingInitialTurn(true);
 		const startInitialTurn = async (): Promise<void> => {
-			await router.navigate({
-				params: { id: sessionId },
-				replace: true,
-				state: {},
-				to: "/sessions/$id",
-			});
-			const outcome = await send({
-				...resolveSessionSelection({
-					agent,
-					initialMessage,
-					model,
-					registry,
-					restoredConfig,
-					variant,
-				}),
-				messageId: initialMessage.id,
-			});
-			if (outcome.rejected) {
-				show({ message: outcome.reason, variant: "error" });
+			try {
+				await router.navigate({
+					params: { id: sessionId },
+					replace: true,
+					state: {},
+					to: "/sessions/$id",
+				});
+				const outcome = await send({
+					...resolveSessionSelection({
+						agent,
+						initialMessage,
+						model,
+						registry,
+						restoredConfig,
+						variant,
+					}),
+					messageId: initialMessage.id,
+				});
+				if (outcome.rejected) {
+					show({ message: outcome.reason, variant: "error" });
+				}
+			} finally {
+				setIsStartingInitialTurn(false);
 			}
 		};
 

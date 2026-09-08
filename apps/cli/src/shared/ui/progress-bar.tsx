@@ -5,7 +5,7 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
 
 const PROGRESS_BAR_WIDTH = 12;
-const PROGRESS_INTERVAL_MS = 40;
+const PROGRESS_INTERVAL_MS = 60;
 const PROGRESS_FORWARD_POSITIONS = [
 	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
 ] as const;
