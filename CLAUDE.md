@@ -100,10 +100,44 @@ Write code that is **accessible, performant, type-safe, and maintainable**. Focu
 
 ## Testing
 
-- Write assertions inside `it()` or `test()` blocks
-- Avoid done callbacks in async tests - use async/await instead
-- Don't use `.only` or `.skip` in committed code
-- Keep test suites reasonably flat - avoid excessive `describe` nesting
+Tests are contract-first. Every test must defend one externally observable behavior,
+state transition, error mapping, precedence rule, or regression-prone boundary, and
+its name or nearby rationale must state the consumer-visible failure mode.
+
+Classify tests by crossed dependencies:
+
+- **Default**: deterministic, offline, credential-free, isolated in-process behavior.
+- **Unit**: a genuinely narrower transformation or boundary; never a second name for
+  the default portfolio.
+- **Integration**: the highest stable public seam crossing route composition,
+  filesystem, subprocess, or local database boundaries. Use `*.integration.test.*`.
+- **External-service integration**: real services such as PostgreSQL, explicitly
+  gated by its environment contract and run only with `bun run test:postgres`.
+- **Smoke**: only a narrow install, packaging, worker, native-addon, or runtime
+  failure that lower seams cannot expose.
+- **E2E**: only a user journey that cannot be protected at a cheaper seam. Future
+  TUI coverage uses a virtual terminal; future browser coverage uses Playwright.
+
+Prefer the highest stable behavioral seam. Do not duplicate an integration contract
+with a narrower mocked test. Real failures must be triggered at the responsible
+boundary; mocking the final error is not error coverage. Own cleanup of temporary
+files, processes, database records, environment changes, and spies.
+
+Reject static echo, passthrough, source-text, tautological, placeholder, wording-only,
+and package-startup-only tests. Do not add tests for tiny low-risk changes without a
+real contract or regression risk. Regression tests include the issue number and the
+behavior that previously failed. Unit and integration tests do not retry or use sleeps
+for readiness; wait for process exit, protocol calls, events, or state transitions.
+
+- `bun test` is the canonical deterministic default lane and excludes integration
+  and PostgreSQL files.
+- `bun run test:integration` discovers all `*.integration.test.*` files.
+- `bun run test:postgres` is opt-in and requires `DATABASE_URL`; skipped tests must
+  remain outside the default lane.
+- Network access and provider credentials are opt-in; CI scrubs credential variables.
+
+Before completion, run the narrowest affected command and the canonical lane. Do not
+claim an external lane passed unless its explicit prerequisites were present.
 
 ## When Biome Can't Help
 

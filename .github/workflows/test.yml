@@ -1,0 +1,98 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  AWS_ACCESS_KEY_ID: ""
+  AWS_SECRET_ACCESS_KEY: ""
+  AWS_SESSION_TOKEN: ""
+  AZURE_OPENAI_API_KEY: ""
+  GITHUB_TOKEN: ""
+  GOOGLE_APPLICATION_CREDENTIALS: ""
+  GOOGLE_API_KEY: ""
+  OPENAI_API_KEY: ""
+  ANTHROPIC_API_KEY: ""
+  OPENCODE_API_KEY: ""
+  OPENCODE_GO_API_KEY: ""
+  OPENROUTER_API_KEY: ""
+  GROQ_API_KEY: ""
+  MISTRAL_API_KEY: ""
+  COHERE_API_KEY: ""
+  XAI_API_KEY: ""
+  WINCODE_API_KEY: ""
+
+jobs:
+  deterministic:
+    name: Deterministic tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run check-types
+      - run: bun test
+
+  integration:
+    name: Local integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run test:integration
+
+  postgres:
+    name: PostgreSQL integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: wincode
+          POSTGRES_PASSWORD: wincode
+          POSTGRES_DB: wincode_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wincode -d wincode_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://wincode:wincode@localhost:5432/wincode_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run test:postgres
+
+  gate:
+    name: Required test gate
+    if: always()
+    needs: [deterministic, integration, postgres]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every test lane
+        run: |
+          test "${{ needs.deterministic.result }}" = success
+          test "${{ needs.integration.result }}" = success
+          test "${{ needs.postgres.result }}" = success
