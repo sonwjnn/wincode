@@ -23,9 +23,8 @@
   "type": "module",
   "scripts": {
     "check-types": "bun run --filter '*' check-types",
-    "test": "bun test --timeout 30000 --no-orphans --path-ignore-patterns '**/*.{integration,postgres}.test.*' wincode-cli packages/ai/src packages/skills/src packages/agent-core/src packages/agent-runtime-ai-sdk/src",
-    "test:integration": "bun scripts/test-lane.ts integration",
-    "test:postgres": "bun scripts/test-lane.ts postgres",
+    "test": "bun test --timeout 30000 --no-orphans --path-ignore-patterns '**/*.integration.test.*' wincode-cli packages/ai/src packages/skills/src packages/agent-core/src packages/agent-runtime-ai-sdk/src",
+    "test:integration": "bun scripts/test-lane.ts",
     "dev:cli": "bun run --cwd wincode-cli dev",
     "check": "ultracite check",
     "fix": "ultracite fix"

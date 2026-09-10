@@ -57,42 +57,13 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run test:integration
 
-  postgres:
-    name: PostgreSQL integration
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: wincode
-          POSTGRES_PASSWORD: wincode
-          POSTGRES_DB: wincode_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U wincode -d wincode_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-    env:
-      DATABASE_URL: postgres://wincode:wincode@localhost:5432/wincode_test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-      - run: bun install --frozen-lockfile
-      - run: bun run test:postgres
-
   gate:
     name: Required test gate
     if: always()
-    needs: [deterministic, integration, postgres]
+    needs: [deterministic, integration]
     runs-on: ubuntu-latest
     steps:
       - name: Require every test lane
         run: |
           test "${{ needs.deterministic.result }}" = success
           test "${{ needs.integration.result }}" = success
-          test "${{ needs.postgres.result }}" = success

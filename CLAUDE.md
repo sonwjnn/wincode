@@ -111,8 +111,9 @@ Classify tests by crossed dependencies:
   the default portfolio.
 - **Integration**: the highest stable public seam crossing route composition,
   filesystem, subprocess, or local database boundaries. Use `*.integration.test.*`.
-- **External-service integration**: real services such as PostgreSQL, explicitly
-  gated by its environment contract and run only with `bun run test:postgres`.
+- **External-service integration**: real services, explicitly gated by their
+  environment contract and run in a dedicated CI lane when such a dependency
+  exists.
 - **Smoke**: only a narrow install, packaging, worker, native-addon, or runtime
   failure that lower seams cannot expose.
 - **E2E**: only a user journey that cannot be protected at a cheaper seam. Future
@@ -130,10 +131,8 @@ behavior that previously failed. Unit and integration tests do not retry or use 
 for readiness; wait for process exit, protocol calls, events, or state transitions.
 
 - `bun test` is the canonical deterministic default lane and excludes integration
-  and PostgreSQL files.
+  files.
 - `bun run test:integration` discovers all `*.integration.test.*` files.
-- `bun run test:postgres` is opt-in and requires `DATABASE_URL`; skipped tests must
-  remain outside the default lane.
 - Network access and provider credentials are opt-in; CI scrubs credential variables.
 
 Before completion, run the narrowest affected command and the canonical lane. Do not
