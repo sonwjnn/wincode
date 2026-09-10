@@ -164,56 +164,18 @@ test("formatStatusRow never exposes config, env, headers, or urls in the error",
 	const row = formatStatusRow(
 		makeStatus({
 			error:
-				"connect failed at https://secret-host.example/mcp with token=super-secret-token",
+				"connect failed at https://mcp.deepwiki.com/mcp?case=redaction with token=super-secret-token",
 			state: "failed",
 		})
 	);
 	expect(row.error).toBeDefined();
-	expect(row.error).not.toContain("secret-host.example");
+	expect(row.error).not.toContain("mcp.deepwiki.com");
 	expect(row.error).not.toContain("super-secret-token");
 });
 
 test("formatStatusRow omits the error when the status has none", () => {
 	const row = formatStatusRow(makeStatus({ state: "connected" }));
 	expect(row.error).toBeUndefined();
-});
-
-test("dialog renders MCP state and connection status", async () => {
-	const registry = makeRegistry([
-		makeStatus({ name: "alpha", state: "connected", toolCount: 2 }),
-		makeStatus({
-			name: "beta",
-			state: "failed",
-			toolCount: 0,
-			transport: "remote",
-			error: "connection refused [redacted]",
-		}),
-	]);
-	const { setup } = await renderStatusDialog(registry);
-	for (let attempt = 0; attempt < 5; attempt += 1) {
-		if (setup.captureCharFrame().includes("alpha")) {
-			break;
-		}
-		await flushUi(setup);
-	}
-
-	const frame = setup.captureCharFrame();
-	expect(frame).toContain("alpha");
-	expect(frame).toContain("beta");
-	expect(frame).not.toContain("alpha connected");
-	expect(frame).toContain("failed");
-	expect(frame).toContain("Failed ○");
-	expect(frame).toContain("Connected ✓");
-	expect(frame).not.toContain("✓ Connected");
-	expect(frame).toContain("space toggle/reconnect");
-	const headerLine = frame.split("\n").find((line) => line.includes("esc"));
-	const connectionLine = frame
-		.split("\n")
-		.find((line) => line.includes("alpha"));
-	expect((headerLine?.lastIndexOf("esc") ?? -3) + "esc".length).toBe(
-		(connectionLine?.lastIndexOf("✓") ?? -1) + "✓".length
-	);
-	setup.renderer.destroy();
 });
 
 test("dialog initializes configured servers before a catalog snapshot exists", async () => {

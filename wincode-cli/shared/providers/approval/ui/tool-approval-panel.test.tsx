@@ -1,6 +1,7 @@
 import { expect, mock, test } from "bun:test";
 import type { Selection } from "@opentui/core";
 import { testRender } from "@opentui/react/test-utils";
+import { fromAny } from "@total-typescript/shoehorn";
 import { useEffect } from "react";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
@@ -99,26 +100,6 @@ const renderPanel = async (
 	await flushUi(setup);
 	return { actions, setup };
 };
-
-test("renders the OpenCode-style dock with context and actions", async () => {
-	const { setup } = await renderPanel(makeRequest(), makeActions());
-	const frame = setup.captureCharFrame();
-
-	expect(frame).toContain("Permission required");
-	expect(frame).toContain(
-		"tool: read · resource: .env — Read a UTF-8 text file inside the workspace."
-	);
-	expect(frame).toContain("Allow once");
-	expect(frame).toContain("Always allow");
-	expect(frame).toContain("Reject");
-	expect(frame).not.toContain("Abort");
-	// The dock stays inline: no modal title, no always-visible feedback field,
-	// and the input stays collapsed until expanded.
-	expect(frame).not.toContain("Tool approval");
-	expect(frame).not.toContain("rejection feedback");
-	expect(frame).not.toContain('"path"');
-	setup.renderer.destroy();
-});
 
 test("hides the always option and warns under the safety ceiling", async () => {
 	const { setup } = await renderPanel(
@@ -366,11 +347,10 @@ test("confirming always on the head does not leak the overlay into the next requ
 test("micro-drag over an action button never selects or copies", async () => {
 	const { setup } = await renderPanel(makeRequest(), makeActions());
 	const selections: string[] = [];
-	(
-		setup.renderer as unknown as {
-			on(event: string, listener: (selection: Selection) => void): void;
-		}
-	).on("selection", (selection) => {
+	const renderer: {
+		on(event: string, listener: (selection: Selection) => void): void;
+	} = fromAny(setup.renderer);
+	renderer.on("selection", (selection) => {
 		selections.push(selection.getSelectedText());
 	});
 

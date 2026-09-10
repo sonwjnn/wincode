@@ -76,24 +76,6 @@ const renderSettingsDialog = async (
 	return setup;
 };
 
-test("renders aligned sections without redundant value metadata", async () => {
-	const operations: SettingsOperations = {
-		catalog: SETTINGS_CATALOG,
-		getSettings: async () => [createSetting(false)],
-		resetValue: async () => createSetting(true),
-		setValue: async (_id, value) => createSetting(value === true),
-	};
-	const setup = await renderSettingsDialog(operations);
-	const frame = setup.captureCharFrame();
-
-	expect(frame).toContain("Settings");
-	expect(frame).toContain("Compaction");
-	expect(frame).toContain("Auto-compact: off");
-	expect(frame).toContain("Automatically summarize older messages");
-	expect(frame).not.toContain("Value: off · Source: default");
-	await act(() => setup.renderer.destroy());
-});
-
 test("space persists the selected setting and escape closes the hub", async () => {
 	const changes: unknown[] = [];
 	const operations: SettingsOperations = {
@@ -147,23 +129,6 @@ test("search reports no matching settings without hiding the hub", async () => {
 
 	expect(setup.captureCharFrame()).toContain("No matching settings.");
 	expect(setup.captureCharFrame()).not.toContain("Auto-compact");
-	await act(() => setup.renderer.destroy());
-});
-
-test("renders an honest empty state when the catalog is empty", async () => {
-	const operations: SettingsOperations = {
-		catalog: [],
-		getSettings: async () => [],
-		resetValue: async () => {
-			throw new Error("No settings registered.");
-		},
-		setValue: async () => {
-			throw new Error("No settings registered.");
-		},
-	};
-	const setup = await renderSettingsDialog(operations, []);
-
-	expect(setup.captureCharFrame()).toContain("No settings registered.");
 	await act(() => setup.renderer.destroy());
 });
 

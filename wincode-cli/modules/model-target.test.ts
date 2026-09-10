@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { fromAny } from "@total-typescript/shoehorn";
 import { resolveAiSdkModelTarget } from "@wincode/agent-runtime-ai-sdk";
 import type { ConnectionProviderId } from "@wincode/ai/models";
 import { getSupportedModelVariants, modelCatalog } from "@wincode/ai/models";
@@ -21,16 +22,16 @@ const createConnections = (
 		): Promise<AuthorizationByProvider[P]> => {
 			lastSignal = signal;
 			if (useOAuth && providerId === "openai") {
-				return {
+				return fromAny({
 					accessToken: "oauth-access-token",
 					accountId: "oauth-account",
 					kind: "oauth",
-				} as AuthorizationByProvider[P];
+				});
 			}
-			return {
+			return fromAny({
 				apiKey: `${providerId}-api-key`,
 				kind: "api-key",
-			} as AuthorizationByProvider[P];
+			});
 		},
 	};
 	return { connections, getLastSignal: () => lastSignal };

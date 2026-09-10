@@ -13,14 +13,14 @@ describe("copyBrowserAuthorizationUrl", () => {
 					return true;
 				},
 			},
-			"https://example.com/auth",
+			"https://auth.openai.com/oauth/authorize",
 			async () => {
 				spawned = true;
 				return 0;
 			}
 		);
 
-		expect(copiedUrl).toBe("https://example.com/auth");
+		expect(copiedUrl).toBe("https://auth.openai.com/oauth/authorize");
 		expect(spawned).toBe(false);
 	});
 
@@ -31,13 +31,13 @@ describe("copyBrowserAuthorizationUrl", () => {
 			{
 				copyToClipboardOSC52: () => false,
 			},
-			"https://example.com/auth",
+			"https://auth.openai.com/oauth/authorize",
 			async (_command, input) => {
 				stdin = input;
 				return 0;
 			}
 		);
 
-		expect(stdin).toBe("https://example.com/auth");
+		expect(stdin).toBe("https://auth.openai.com/oauth/authorize");
 	});
 });

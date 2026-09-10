@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { fromPartial } from "@total-typescript/shoehorn";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { HistoryState, PromptHistoryEntry } from "./history";
 import {
@@ -100,7 +101,7 @@ describe("prompt history rules", () => {
 			type: "file",
 			url: "data:image/png;base64,second",
 		} as const;
-		const messages = [
+		const messages = fromPartial<SessionMessage[]>([
 			{
 				id: "user-1",
 				parts: [{ text: "[Image 1] first", type: "text" }, firstImage],
@@ -116,7 +117,7 @@ describe("prompt history rules", () => {
 				parts: [{ text: "[Image 1] second", type: "text" }, secondImage],
 				role: "user",
 			},
-		] as unknown as SessionMessage[];
+		]);
 
 		expect(derivePromptHistory(messages)).toEqual([
 			{ files: [secondImage], text: "[Image 1] second" },

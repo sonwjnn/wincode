@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fromPartial } from "@total-typescript/shoehorn";
 import type { SessionMessage } from "@/modules/sessions/message";
 import {
 	type AttachmentMetadataRecord,
@@ -69,7 +70,7 @@ test("externalizes inline image parts and hydrates them only on request", async 
 		root,
 	});
 	const inlineUrl = `data:image/png;base64,${Buffer.from(PNG_BYTES).toString("base64")}`;
-	const message = {
+	const message = fromPartial<SessionMessage>({
 		id: "user-1",
 		parts: [
 			{ text: "inspect [Image 1]", type: "text" },
@@ -81,7 +82,7 @@ test("externalizes inline image parts and hydrates them only on request", async 
 			},
 		],
 		role: "user",
-	} as unknown as SessionMessage;
+	});
 
 	const persisted = await attachments.externalizeMessages([message]);
 	const persistedPart = persisted[0]?.parts[1];
@@ -167,7 +168,7 @@ test("keeps only newest attachments within an explicit media budget", async () =
 	if (!(oldReference && newReference)) {
 		throw new Error("attachments were not ingested");
 	}
-	const messages = [
+	const messages = fromPartial<SessionMessage[]>([
 		{
 			id: "old",
 			parts: [attachmentReferenceToFilePart(oldReference)],
@@ -178,7 +179,7 @@ test("keeps only newest attachments within an explicit media budget", async () =
 			parts: [attachmentReferenceToFilePart(newReference)],
 			role: "user",
 		},
-	] as unknown as SessionMessage[];
+	]);
 
 	const hydration = await attachments.hydrateMessagesWithStats(messages, {
 		maxAttachments: 1,
@@ -221,7 +222,7 @@ test("prioritizes the latest user turn over retained media limits", async () => 
 		mediaType: "image/png",
 	});
 	const hydrated = await attachments.hydrateMessages(
-		[
+		fromPartial<SessionMessage[]>([
 			{
 				id: "old",
 				parts: [attachmentReferenceToFilePart(oldReference)],
@@ -232,7 +233,7 @@ test("prioritizes the latest user turn over retained media limits", async () => 
 				parts: [attachmentReferenceToFilePart(currentReference)],
 				role: "user",
 			},
-		] as unknown as SessionMessage[],
+		]),
 		{
 			maxAttachments: 0,
 			maxBytes: 0,
@@ -356,11 +357,11 @@ test("annotates missing blobs without reading payload bytes", async () => {
 	await unlink(join(root, record.blobKey));
 
 	const annotated = await attachments.annotateMessagesForDisplay([
-		{
+		fromPartial<SessionMessage>({
 			id: "user-1",
 			parts: [attachmentReferenceToFilePart(reference)],
 			role: "user",
-		} as unknown as SessionMessage,
+		}),
 	]);
 	expect(annotated[0]?.parts[0]).toMatchObject({
 		attachmentId: reference.attachmentId,

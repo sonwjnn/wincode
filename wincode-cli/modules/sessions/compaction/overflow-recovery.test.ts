@@ -1,4 +1,5 @@
 import { expect, mock, test } from "bun:test";
+import { fromPartial } from "@total-typescript/shoehorn";
 import type { SessionMessage } from "@/modules/sessions/message";
 import {
 	prepareOverflowReplayMessages,
@@ -11,12 +12,12 @@ const message = (
 	text: string,
 	metadata?: SessionMessage["metadata"]
 ): SessionMessage =>
-	({
+	fromPartial<SessionMessage>({
 		id,
 		metadata,
 		parts: [{ text, type: "text" }],
 		role,
-	}) as SessionMessage;
+	});
 
 const compaction = {
 	compact: mock(async () => ({

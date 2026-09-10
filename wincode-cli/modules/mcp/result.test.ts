@@ -13,7 +13,7 @@ describe("MCP result normalization", () => {
 			content: [
 				{ type: "text", text: "ok" },
 				{ type: "image", data: "base64-secret", mimeType: "image/png" },
-				{ type: "resource_link", uri: "https://x" },
+				{ type: "resource_link", uri: "https://mcp.deepwiki.com/mcp?case=x" },
 			],
 			structuredContent: { n: 1 },
 		});

@@ -14,6 +14,7 @@ import { describe, expect, test } from "bun:test";
 import net from "node:net";
 import path from "node:path";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
+import { fromAny } from "@total-typescript/shoehorn";
 import { z } from "zod";
 import type { PermissionRules } from "@/modules/permissions";
 import type { McpConfigResult, ResolvedMcpServerConfig } from "./config";
@@ -272,7 +273,7 @@ const STDIO_ECHO_DISPATCH_PATTERN = /^mcp_stdio-echo_echo_/;
 // the registry matches them as globs, so cast the literals as the policy module
 // does.
 const openRules = (rules: Record<string, "allow" | "ask" | "deny">) =>
-	rules as PermissionRules;
+	fromAny<PermissionRules, typeof rules>(rules);
 
 const firstTool = (snapshot: McpCatalogSnapshot): McpSnapshotTool => {
 	const entry = snapshot.tools.values().next().value;

@@ -78,7 +78,7 @@ describe("loadMcpConfig", () => {
 				mcp: {
 					shared: {
 						type: "remote",
-						url: "https://global.example/mcp",
+						url: "https://mcp.deepwiki.com/mcp?scope=global",
 						headers: { xdg: "yes" },
 					},
 				},
@@ -92,7 +92,7 @@ describe("loadMcpConfig", () => {
 			[`${WORKSPACE}/.wincode/wincode.json`]: JSON.stringify({
 				mcp: {
 					shared: {
-						url: "https://project.example/mcp",
+						url: "https://mcp.deepwiki.com/mcp?scope=project",
 						headers: { project: "yes" },
 					},
 				},
@@ -103,7 +103,7 @@ describe("loadMcpConfig", () => {
 			disabled: false,
 			headers: { xdg: "yes", home: "yes", project: "yes" },
 			permission: "allow",
-			url: "https://project.example/mcp",
+			url: "https://mcp.deepwiki.com/mcp?scope=project",
 		});
 	});
 
@@ -138,11 +138,13 @@ describe("loadMcpConfig", () => {
 	test("prefers JSONC and warns about duplicate JSON at one location", async () => {
 		const result = await load({
 			[`${WORKSPACE}/wincode.jsonc`]:
-				'{"mcp":{"x":{"type":"remote","url":"https://x"}}}',
+				'{"mcp":{"x":{"type":"remote","url":"https://mcp.deepwiki.com"}}}',
 			[`${WORKSPACE}/wincode.json`]: "{}",
 		});
 
-		expect(result.servers.x).toMatchObject({ url: "https://x/" });
+		expect(result.servers.x).toMatchObject({
+			url: "https://mcp.deepwiki.com/",
+		});
 		expect(
 			result.diagnostics.some(
 				(diagnostic) => diagnostic.code === "duplicate-config"
@@ -153,7 +155,7 @@ describe("loadMcpConfig", () => {
 	test("accepts comments and trailing commas in JSON files", async () => {
 		const result = await load({
 			[`${WORKSPACE}/wincode.json`]:
-				'{// comment\n"mcp":{"x":{"type":"remote","url":"https://x",},},}',
+				'{// comment\n"mcp":{"x":{"type":"remote","url":"https://mcp.deepwiki.com",},},}',
 		});
 
 		expect(result.servers.x).toBeDefined();
@@ -170,10 +172,13 @@ describe("loadMcpConfig", () => {
 				mcp: {
 					x: {
 						type: "remote",
-						url: "https://x",
+						url: "https://mcp.deepwiki.com/mcp?case=timeout-x",
 						timeout: { startup: 1, execution: 3 },
 					},
-					y: { type: "remote", url: "https://y" },
+					y: {
+						type: "remote",
+						url: "https://mcp.deepwiki.com/mcp?case=timeout-y",
+					},
 				},
 			}),
 			[`${WORKSPACE}/wincode.json`]: JSON.stringify({
@@ -197,7 +202,10 @@ describe("loadMcpConfig", () => {
 		const cases = [
 			{
 				field: "headers",
-				global: { headers: { global: "value" }, url: "https://x" },
+				global: {
+					headers: { global: "value" },
+					url: "https://mcp.deepwiki.com/mcp?case=array-replacement",
+				},
 			},
 			{
 				field: "environment",
@@ -207,7 +215,7 @@ describe("loadMcpConfig", () => {
 				field: "timeout",
 				global: {
 					timeout: { startup: 1, catalog: 2, execution: 3 },
-					url: "https://x",
+					url: "https://mcp.deepwiki.com/mcp?case=array-replacement",
 				},
 			},
 		] as const;
@@ -243,7 +251,7 @@ describe("loadMcpConfig", () => {
 					mcp: {
 						x: {
 							type: "remote",
-							url: "https://x",
+							url: "https://mcp.deepwiki.com/mcp?case=invalid-timeout",
 							timeout: { [phase]: value },
 						},
 					},
@@ -297,7 +305,7 @@ describe("loadMcpConfig", () => {
 	test("reports missing env variables without leaking placeholders", async () => {
 		const result = await load({
 			[`${WORKSPACE}/wincode.json`]:
-				'{"mcp":{"named":{"type":"remote","url":"https://x","headers":{"authorization":"{env:SECRET}"}}}}',
+				'{"mcp":{"named":{"type":"remote","url":"https://mcp.deepwiki.com/mcp?case=missing-env","headers":{"authorization":"{env:SECRET}"}}}}',
 		});
 		const diagnostic = result.diagnostics.find(
 			(entry) => entry.code === "missing-env"
@@ -312,7 +320,7 @@ describe("loadMcpConfig", () => {
 	test("attributes missing env diagnostics to the layer that supplied the value", async () => {
 		const result = await load({
 			[`${CONFIG_ROOT}/wincode.json`]:
-				'{"mcp":{"x":{"type":"remote","url":"https://x","headers":{"authorization":"{env:GLOBAL_SECRET}"}}}}',
+				'{"mcp":{"x":{"type":"remote","url":"https://mcp.deepwiki.com/mcp?case=global-missing-env","headers":{"authorization":"{env:GLOBAL_SECRET}"}}}}',
 			[`${WORKSPACE}/.wincode/wincode.json`]:
 				'{"mcp":{"x":{"headers":{"project":"yes"}}}}',
 		});
@@ -332,7 +340,7 @@ describe("loadMcpConfig", () => {
 	test("isolates invalid URLs and unsupported OAuth", async () => {
 		const result = await load({
 			[`${WORKSPACE}/wincode.json`]:
-				'{"mcp":{"good":{"type":"remote","url":"https://x"},"bad":{"type":"remote","url":"ftp://x"},"oauth":{"type":"remote","url":"https://y","oauth":{}}}}',
+				'{"mcp":{"good":{"type":"remote","url":"https://mcp.deepwiki.com/mcp?case=valid"},"bad":{"type":"remote","url":"ftp://mcp.deepwiki.com/mcp"},"oauth":{"type":"remote","url":"https://mcp.deepwiki.com/mcp?case=oauth-unsupported","oauth":{}}}}',
 		});
 
 		expect(result.servers.good).toBeDefined();
@@ -342,7 +350,9 @@ describe("loadMcpConfig", () => {
 			bad: { name: "bad", transport: "remote" },
 			oauth: { name: "oauth", transport: "remote" },
 		});
-		expect(JSON.stringify(result.diagnostics)).not.toContain("ftp://x");
+		expect(JSON.stringify(result.diagnostics)).not.toContain(
+			"ftp://mcp.deepwiki.com/mcp"
+		);
 	});
 
 	test("supports POSIX and Windows absolute cwd", async () => {
@@ -366,7 +376,7 @@ describe("loadMcpConfig", () => {
 	test("merges sources, resolves values, and applies status defaults", async () => {
 		const result = await load(
 			{
-				[`${CONFIG_ROOT}/wincode.jsonc`]: `// global\n{"mcp":{"one":{"type":"local","command":["x"],"environment":{"TOKEN":"{env:TOKEN}"},"timeout":{"startup":5000,"catalog":5000,"execution":5000}},"remote":{"type":"remote","url":"https://example.com","headers":{"x":"g"}}}}`,
+				[`${CONFIG_ROOT}/wincode.jsonc`]: `// global\n{"mcp":{"one":{"type":"local","command":["x"],"environment":{"TOKEN":"{env:TOKEN}"},"timeout":{"startup":5000,"catalog":5000,"execution":5000}},"remote":{"type":"remote","url":"https://mcp.deepwiki.com/mcp?scope=global","headers":{"x":"g"}}}}`,
 				[`${WORKSPACE}/wincode.json`]:
 					'{"mcp":{"one":{"cwd":"tools","enabled":false,"permission":"deny"},"remote":{"headers":{"y":"p"}}}}',
 			},
@@ -387,7 +397,7 @@ describe("loadMcpConfig", () => {
 			remote: {
 				name: "remote",
 				type: "remote",
-				url: "https://example.com/",
+				url: "https://mcp.deepwiki.com/mcp?scope=global",
 				headers: { x: "g", y: "p" },
 				disabled: false,
 				permission: "ask",
@@ -403,7 +413,7 @@ describe("loadMcpConfig", () => {
 	test("isolates servers with missing or unsupported types", async () => {
 		const result = await load({
 			[`${WORKSPACE}/wincode.json`]:
-				'{"mcp":{"missing":{"url":"https://missing"},"unsupported":{"type":"custom","url":"https://unsupported"},"valid":{"type":"remote","url":"https://valid"}}}',
+				'{"mcp":{"missing":{"url":"https://mcp.deepwiki.com/mcp?case=missing-type"},"unsupported":{"type":"custom","url":"https://mcp.deepwiki.com/mcp?case=unsupported-type"},"valid":{"type":"remote","url":"https://mcp.deepwiki.com/mcp?case=valid-type"}}}',
 		});
 
 		expect(Object.keys(result.servers)).toEqual(["valid"]);
@@ -423,7 +433,7 @@ describe("loadMcpConfig", () => {
 	test("a malformed highest-precedence entry omits an inherited server", async () => {
 		const result = await load({
 			[`${CONFIG_ROOT}/wincode.json`]:
-				'{"mcp":{"shared":{"type":"remote","url":"https://global"}}}',
+				'{"mcp":{"shared":{"type":"remote","url":"https://mcp.deepwiki.com/mcp?scope=global"}}}',
 			[`${WORKSPACE}/.wincode/wincode.json`]: '{"mcp":{"shared":null}}',
 		});
 
@@ -440,7 +450,7 @@ describe("loadMcpConfig", () => {
 	test("does not resurrect fields below a malformed intermediate entry", async () => {
 		const result = await load({
 			[`${CONFIG_ROOT}/wincode.json`]:
-				'{"mcp":{"shared":{"type":"remote","url":"https://global"}}}',
+				'{"mcp":{"shared":{"type":"remote","url":"https://mcp.deepwiki.com/mcp?scope=global"}}}',
 			[`${HOME_ROOT}/.wincode/wincode.json`]: '{"mcp":{"shared":null}}',
 			[`${WORKSPACE}/wincode.json`]:
 				'{"mcp":{"shared":{"permission":"allow"}}}',
@@ -475,12 +485,12 @@ describe("loadMcpConfig", () => {
 		const result = await load({
 			[`${CONFIG_ROOT}/wincode.json`]: '{"mcp":{"shared":null}}',
 			[`${WORKSPACE}/wincode.json`]:
-				'{"mcp":{"shared":{"type":"remote","url":"https://project"}}}',
+				'{"mcp":{"shared":{"type":"remote","url":"https://mcp.deepwiki.com/mcp?scope=project"}}}',
 		});
 
 		expect(result.servers.shared).toMatchObject({
 			type: "remote",
-			url: "https://project/",
+			url: "https://mcp.deepwiki.com/mcp?scope=project",
 		});
 		expect(result.diagnostics).toContainEqual({
 			scope: "global",
@@ -527,7 +537,7 @@ describe("loadMcpConfig", () => {
 	test("rejects non-string headers and invalid permissions", async () => {
 		const result = await load({
 			[`${WORKSPACE}/wincode.json`]:
-				'{"mcp":{"headers":{"type":"remote","url":"https://x","headers":{"a":1}},"permission":{"type":"remote","url":"https://x","permission":"always"}}}',
+				'{"mcp":{"headers":{"type":"remote","url":"https://mcp.deepwiki.com/mcp?case=invalid-headers","headers":{"a":1}},"permission":{"type":"remote","url":"https://mcp.deepwiki.com/mcp?case=invalid-permission","permission":"always"}}}',
 		});
 
 		expect(result.servers.headers).toBeUndefined();
@@ -543,12 +553,12 @@ describe("loadMcpConfig", () => {
 	test("accepts oauth false and normalizes remote URLs", async () => {
 		const result = await load({
 			[`${WORKSPACE}/wincode.json`]:
-				'{"mcp":{"x":{"type":"remote","url":"https://x/path","oauth":false}}}',
+				'{"mcp":{"x":{"type":"remote","url":"https://mcp.deepwiki.com/mcp?case=oauth-false","oauth":false}}}',
 		});
 
 		expect(result.servers.x).toMatchObject({
 			oauth: false,
-			url: "https://x/path",
+			url: "https://mcp.deepwiki.com/mcp?case=oauth-false",
 		});
 	});
 
@@ -557,7 +567,7 @@ describe("loadMcpConfig", () => {
 			env: { XDG_CONFIG_HOME: "/xdg" },
 			fs: fileSystem({
 				"/xdg/wincode/wincode.json":
-					'{"mcp":{"x":{"type":"remote","url":"https://x"}}}',
+					'{"mcp":{"x":{"type":"remote","url":"https://mcp.deepwiki.com/mcp"}}}',
 			}),
 			homeRoot: HOME_ROOT,
 			workspace: WORKSPACE,

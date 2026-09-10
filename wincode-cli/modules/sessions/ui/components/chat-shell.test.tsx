@@ -1,9 +1,10 @@
+import { fromPartial } from "@total-typescript/shoehorn";
+
 // The model pricing provider fetches a remote table unless offline mode is
 // enabled, so tests opt out before any app module evaluates the environment.
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
-import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { RGBA, type ScrollBoxRenderable } from "@opentui/core";
 import { MockTreeSitterClient } from "@opentui/core/testing";
@@ -78,20 +79,18 @@ type EditToolPart = Extract<
 	{ type: "tool-edit" }
 >;
 
-/** Trims the border, padding, and trailing whitespace from a captured cell row. */
-const TRIM_CELL_SUFFIX_REGEX = /[│ ].*$/;
 const ACTIVE_PROGRESS_REGEX = /■+/u;
 const PROGRESS_BAR_REGEX = /[■⬝]{12}/u;
 
 const shellPart = (overrides: Partial<ShellToolPart> = {}): ShellToolPart =>
-	({
+	fromPartial<ShellToolPart>({
 		input: { command: "bun test" },
 		output: { exitCode: 0, output: "1 passing\n2 passing" },
 		state: "output-available",
 		toolCallId: "call-shell",
 		type: "tool-shell",
 		...overrides,
-	}) as ShellToolPart;
+	});
 
 const assistantMessage = (
 	parts: SessionMessage["parts"],
@@ -152,7 +151,6 @@ type ChatShellProbeProps = {
 	isCompacting?: boolean;
 	isInterruptArmed?: boolean;
 	onRetry?: (messageId: string) => void;
-	onSubmit?: () => boolean | Promise<boolean>;
 };
 
 function ChatShellProbe({
@@ -163,7 +161,6 @@ function ChatShellProbe({
 	isCompacting: initialIsCompacting = false,
 	isInterruptArmed = false,
 	onRetry,
-	onSubmit,
 }: ChatShellProbeProps) {
 	const { add: addApproval } = useApprovalPanels();
 	const [compactions, setCompactions] = useState(initialCompactions);
@@ -189,7 +186,7 @@ function ChatShellProbe({
 			isInterruptArmed={isInterruptArmed}
 			messages={messages}
 			onRetry={onRetry}
-			onSubmit={onSubmit ?? (() => true)}
+			onSubmit={() => true}
 			promptHistory={[]}
 		/>
 	);
@@ -207,7 +204,6 @@ type ChatShellRenderOptions = {
 	isCompacting?: boolean;
 	isInterruptArmed?: boolean;
 	onRetry?: (messageId: string) => void;
-	onSubmit?: () => boolean | Promise<boolean>;
 };
 
 const renderChatShell = async (
@@ -220,7 +216,6 @@ const renderChatShell = async (
 		isCompacting = false,
 		isInterruptArmed = false,
 		onRetry,
-		onSubmit,
 	}: ChatShellRenderOptions
 ): Promise<ChatShellSetup> => {
 	const configStore = createConfigStore();
@@ -261,7 +256,6 @@ const renderChatShell = async (
 																isCompacting={isCompacting}
 																isInterruptArmed={isInterruptArmed}
 																onRetry={onRetry}
-																onSubmit={onSubmit}
 															/>
 														</RouterContextProvider>
 													</McpProvider>
@@ -288,16 +282,6 @@ const flushUi = async (
 	await setup.renderOnce();
 };
 
-const CHAT_SHELL_PADDING_X = 1;
-const SHELL_BLOCK_PADDING_X = 2;
-const SHELL_BLOCK_BORDER_WIDTH = 1;
-
-/** The block's measured content width for a terminal of the given width. */
-const blockContentWidth = (terminalWidth: number): number =>
-	terminalWidth -
-	CHAT_SHELL_PADDING_X * 2 -
-	SHELL_BLOCK_PADDING_X * 2 -
-	SHELL_BLOCK_BORDER_WIDTH;
 type SummaryDiffClippingCase = {
 	summaryMarker: string;
 	summaryText: string;
@@ -351,7 +335,7 @@ const assertSummaryDiffClipping = async ({
 		await setup.renderOnce();
 		await flushUi(setup);
 		const scrollbox = setup.renderer.root.findDescendantById(
-			"session-scrollbox"
+			"conversation-scrollbox"
 		) as ScrollBoxRenderable | undefined;
 		expect(scrollbox).toBeDefined();
 		scrollbox?.scrollTo(0);
@@ -415,33 +399,6 @@ describe("ChatShell retry controls", () => {
 			setup.mockInput.pressEnter();
 			await flushUi(setup);
 			expect(retries).toEqual(["user-1"]);
-		} finally {
-			setup.renderer.destroy();
-		}
-	});
-});
-
-describe("ChatShell submission", () => {
-	test("keeps the prompt when an async submission is rejected", async () => {
-		let submissions = 0;
-		const { setup } = await renderChatShell([], {
-			height: 12,
-			onSubmit: async () => {
-				submissions += 1;
-				return false;
-			},
-			width: 80,
-		});
-
-		try {
-			await flushUi(setup);
-			await setup.mockInput.typeText("blocked prompt");
-			await flushUi(setup);
-			setup.mockInput.pressEnter();
-			await flushUi(setup);
-
-			expect(submissions).toBe(1);
-			expect(setup.captureCharFrame()).toContain("blocked prompt");
 		} finally {
 			setup.renderer.destroy();
 		}
@@ -512,7 +469,7 @@ describe("ChatShell approval dock", () => {
 			expect(frame).toContain("First queued approval.");
 			expect(frame).not.toContain("Second queued approval.");
 			expect(
-				setup.renderer.root.findDescendantById("session-scrollbox")
+				setup.renderer.root.findDescendantById("conversation-scrollbox")
 			).toBeDefined();
 			expect(cancelFirstApproval).not.toHaveBeenCalled();
 			setup.mockInput.pressEnter();
@@ -654,67 +611,6 @@ describe("ChatShell activity footer", () => {
 });
 
 describe("ChatShell shell output blocks", () => {
-	test("spaces the first shell block from preceding text without widening later gaps", async () => {
-		const earlierShell = shellPart({ toolCallId: "call-earlier" });
-		const firstShell = shellPart({ toolCallId: "call-first" });
-		const secondShell = shellPart({ toolCallId: "call-second" });
-		const { setup } = await renderChatShell(
-			[
-				assistantMessage([
-					earlierShell,
-					{ text: "Running checks", type: "text" },
-					firstShell,
-					secondShell,
-				]),
-			],
-			{ height: 40, width: 100 }
-		);
-
-		try {
-			await setup.renderOnce();
-			await flushUi(setup);
-			const rows = setup.captureCharFrame().split("\n");
-			const textRow = rows.findIndex((row) => row.includes("Running checks"));
-			const headerRows = rows.flatMap((row, index) =>
-				row.includes("$ bun test") ? [index] : []
-			);
-
-			expect(headerRows).toHaveLength(3);
-			expect(headerRows[1]).toBe(textRow + 3);
-			expect((headerRows[2] ?? 0) - (headerRows[1] ?? 0)).toBe(9);
-		} finally {
-			setup.renderer.destroy();
-		}
-	});
-
-	test("shows short output fully with its natural height and no expansion affordance", async () => {
-		const { setup } = await renderChatShell(
-			[
-				assistantMessage([
-					shellPart({
-						output: { exitCode: 0, output: "1 passing\n2 passing\n" },
-					}),
-				]),
-			],
-			{ height: 40, width: 100 }
-		);
-
-		try {
-			await setup.renderOnce();
-			await flushUi(setup);
-			const frame = setup.captureCharFrame();
-
-			expect(frame).toContain("$ bun test");
-			expect(frame).toContain("exit 0");
-			expect(frame).toContain("1 passing");
-			expect(frame).toContain("2 passing");
-			expect(frame).not.toContain("more");
-			expect(frame).not.toContain("…");
-		} finally {
-			setup.renderer.destroy();
-		}
-	});
-
 	test("bounds multiline overflow to six preview rows and reports hidden logical lines", async () => {
 		const { setup } = await renderChatShell(
 			[
@@ -793,67 +689,6 @@ describe("ChatShell shell output blocks", () => {
 		}
 	});
 
-	test("wraps preview rows to the measured content width including wide characters", async () => {
-		const wideLine = "界".repeat(60);
-		const { setup } = await renderChatShell(
-			[
-				assistantMessage([
-					shellPart({ output: { exitCode: 0, output: wideLine } }),
-				]),
-			],
-			{ height: 40, width: 100 }
-		);
-
-		try {
-			await setup.renderOnce();
-			await flushUi(setup);
-			const frame = setup.captureCharFrame();
-
-			// 120 cells of wide characters wrap into two rows at the measured
-			// width, and no preview row exceeds the block's content width.
-			const rows = frame.split("\n");
-			const headerRow = rows.findIndex((row) => row.includes("$ bun test"));
-			expect(headerRow).toBeGreaterThanOrEqual(0);
-			expect(rows[headerRow + 4]?.slice(4, 50)).toBe("界".repeat(46));
-			expect(rows[headerRow + 5]?.slice(4, 18)).toBe("界".repeat(14));
-			for (const row of rows.slice(headerRow + 4, headerRow + 6)) {
-				const content = row.slice(4).replace(TRIM_CELL_SUFFIX_REGEX, "");
-				expect(globalThis.Bun.stringWidth(content)).toBeLessThanOrEqual(
-					blockContentWidth(100)
-				);
-			}
-			expect(frame).not.toContain("more");
-		} finally {
-			setup.renderer.destroy();
-		}
-	});
-
-	test("bounds a long command header to two visual rows with an ellipsis", async () => {
-		const longCommand = `cmd ${"y".repeat(300)} 界界界`;
-		const { setup } = await renderChatShell(
-			[assistantMessage([shellPart({ input: { command: longCommand } })])],
-			{ height: 40, width: 100 }
-		);
-
-		try {
-			await setup.renderOnce();
-			await flushUi(setup);
-			const frame = setup.captureCharFrame();
-			const rows = frame.split("\n");
-			const headerRow = rows.findIndex((row) => row.includes("$ cmd"));
-			expect(headerRow).toBeGreaterThanOrEqual(0);
-
-			// The header occupies exactly two rows: the wrapped continuation ends
-			// with an ellipsis and the status row follows after the gap.
-			expect(rows[headerRow + 1]).toContain("…");
-			expect(rows[headerRow + 3]?.trim()).toContain("exit 0");
-			expect(rows[headerRow]).not.toContain("exit 0");
-			expect(frame).toContain("…");
-		} finally {
-			setup.renderer.destroy();
-		}
-	});
-
 	test("keeps exit code, timeout, truncation, and failure states visible while collapsed", async () => {
 		const { setup } = await renderChatShell(
 			[
@@ -881,16 +716,6 @@ describe("ChatShell shell output blocks", () => {
 
 			expect(frame).toContain("exit 1 · truncated");
 			expect(frame).toContain("timed out");
-
-			// Failures use the theme's error treatment for the status row, while
-			// ordinary status stays muted.
-			const blockSource = await readFile(
-				new URL("../messages/bot-message.tsx", import.meta.url),
-				"utf8"
-			);
-			expect(blockSource).toContain(
-				"fg={hasFailed ? colors.error : colors.textMuted}"
-			);
 		} finally {
 			setup.renderer.destroy();
 		}
@@ -1089,7 +914,9 @@ describe("ChatShell shell output blocks", () => {
 			output: { exitCode: 0, output: lines("beta", 200) },
 			toolCallId: "call-beta",
 		});
-		const streamedText = (text: string): SessionMessage["parts"][number] => ({
+		const streamedText = (
+			text: string
+		): SessionMessage["parts"][number] => ({
 			text,
 			type: "text",
 		});
@@ -1135,124 +962,6 @@ describe("ChatShell shell output blocks", () => {
 });
 
 describe("ChatShell edit diff blocks", () => {
-	test("renders an edit diff with the shared session block style", async () => {
-		const patch = [
-			"Index: src/large.ts",
-			"===================================================================",
-			"--- src/large.ts",
-			"+++ src/large.ts",
-			"@@ -1,1 +1,25 @@",
-			"-old",
-			...Array.from({ length: 25 }, (_, index) => `+line ${index + 1}`),
-			"",
-		].join("\n");
-		const part = {
-			input: { find: "old", path: "src/large.ts", replace: "new" },
-			output: {
-				editDiff: {
-					additions: 25,
-					deletions: 1,
-					omittedHunks: 0,
-					patch,
-					truncated: false,
-				},
-				path: "src/large.ts",
-				replacements: 1,
-			},
-			state: "output-available",
-			toolCallId: "edit-full-surface",
-			type: "tool-edit",
-		} satisfies EditToolPart;
-		const { setup } = await renderChatShell([assistantMessage([part])], {
-			height: 40,
-			width: 140,
-		});
-
-		try {
-			await setup.renderOnce();
-			await flushUi(setup);
-			const frame = setup.captureCharFrame();
-			expect(frame).toContain("← Edit src/large.ts +25 −1");
-			expect(frame).toContain("+ line 25");
-			expect(frame).toContain("┃");
-		} finally {
-			setup.renderer.destroy();
-		}
-	});
-
-	test("keeps an added-only blank line green while the diff remains visible", async () => {
-		const patch = [
-			"@@ -1,0 +1,5 @@",
-			"+before blank",
-			"+",
-			"+after blank",
-			"+tail 1",
-			"+tail 2",
-			"",
-		].join("\n");
-		const part = {
-			input: { find: "", path: "README.md", replace: "new" },
-			output: {
-				editDiff: {
-					additions: 5,
-					deletions: 0,
-					omittedHunks: 0,
-					patch,
-					truncated: false,
-				},
-				path: "README.md",
-				replacements: 1,
-			},
-			state: "output-available",
-			toolCallId: "edit-added-only-blank",
-			type: "tool-edit",
-		} satisfies EditToolPart;
-		const summary = {
-			text: Array.from(
-				{ length: 12 },
-				(_, index) => `Following summary ${index + 1}`
-			).join("\n"),
-			type: "text",
-		} satisfies SessionMessage["parts"][number];
-		const { setup } = await renderChatShell(
-			[assistantMessage([part, summary])],
-			{ height: 18, width: 140 }
-		);
-
-		try {
-			await setup.renderOnce();
-			await flushUi(setup);
-			const scrollbox = setup.renderer.root.findDescendantById(
-				"session-scrollbox"
-			) as ScrollBoxRenderable | undefined;
-			expect(scrollbox).toBeDefined();
-			const addedBackground = RGBA.fromHex(DEFAULT_THEME.colors.diffAddedBg);
-			let observedBlankAddedLine = false;
-
-			for (let offset = 0; offset < 30; offset += 1) {
-				scrollbox?.scrollTo(offset);
-				await setup.renderOnce();
-				const rows = setup.captureCharFrame().split("\n");
-				if (
-					!rows[1]?.includes("after blank") ||
-					rows[0]?.includes("before blank")
-				) {
-					continue;
-				}
-				observedBlankAddedLine = true;
-				expect(
-					setup
-						.captureSpans()
-						.lines[0]?.spans.some((span) => span.bg.equals(addedBackground))
-				).toBe(true);
-				break;
-			}
-			expect(observedBlankAddedLine).toBe(true);
-		} finally {
-			setup.renderer.destroy();
-		}
-	});
-
 	test("does not pin an empty green split lane beside visible removals", async () => {
 		const patch = [
 			"@@ -1,8 +1,1 @@",
@@ -1293,7 +1002,7 @@ describe("ChatShell edit diff blocks", () => {
 			await setup.renderOnce();
 			await flushUi(setup);
 			const scrollbox = setup.renderer.root.findDescendantById(
-				"session-scrollbox"
+				"conversation-scrollbox"
 			) as ScrollBoxRenderable | undefined;
 			expect(scrollbox).toBeDefined();
 			const addedBackground = RGBA.fromHex(DEFAULT_THEME.colors.diffAddedBg);

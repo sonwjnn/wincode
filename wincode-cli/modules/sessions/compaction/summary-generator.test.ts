@@ -1,4 +1,5 @@
 import { expect, mock, test } from "bun:test";
+import { fromAny } from "@total-typescript/shoehorn";
 import { createModelTarget } from "@wincode/ai/model-target";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import type { SessionMessage } from "../message";
@@ -47,7 +48,7 @@ test("preserves settled tool call details in summary messages", async () => {
 		role: "assistant",
 	};
 
-	const toolResultMessage = {
+	const toolResultMessage: SessionMessage = fromAny({
 		id: "tool-1",
 		parts: [
 			{
@@ -57,7 +58,7 @@ test("preserves settled tool call details in summary messages", async () => {
 			},
 		],
 		role: "tool",
-	} as unknown as SessionMessage;
+	});
 	await generator({
 		model: selection,
 		serializedMessages: "fallback transcript",

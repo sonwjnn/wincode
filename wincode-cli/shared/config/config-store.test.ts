@@ -192,7 +192,10 @@ describe("createConfigStore", () => {
 			fs: fileSystem({
 				[`${CONFIG_ROOT}/wincode.json`]: JSON.stringify({
 					mcp: {
-						shared: { type: "remote", url: "https://global.example" },
+						shared: {
+							type: "remote",
+							url: "https://mcp.deepwiki.com/mcp?scope=global",
+						},
 					},
 				}),
 				[replacingPath]: '{"mcp":{"shared":null}}',

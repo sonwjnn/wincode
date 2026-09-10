@@ -15,7 +15,7 @@ const localConfig = (): ResolvedMcpServerConfig => ({
 const remoteConfig = (): ResolvedMcpServerConfig => ({
 	name: "remote-demo",
 	type: "remote",
-	url: "https://secret-host.example/mcp",
+	url: "https://mcp.deepwiki.com/mcp?case=redaction",
 	disabled: false,
 	permission: "ask",
 	timeout: { startup: 30_000, catalog: 30_000, execution: 43_200_000 },
@@ -34,7 +34,7 @@ describe("mcp sanitize", () => {
 	test("collectSecrets returns headers and url for remote servers", () => {
 		expect(collectSecrets(remoteConfig())).toEqual([
 			"Bearer super-secret-token",
-			"https://secret-host.example/mcp",
+			"https://mcp.deepwiki.com/mcp?case=redaction",
 		]);
 	});
 
@@ -51,12 +51,12 @@ describe("mcp sanitize", () => {
 		const message = sanitizeMessage(
 			remoteConfig(),
 			new Error(
-				"auth failed at https://secret-host.example/mcp with Bearer super-secret-token"
+				"auth failed at https://mcp.deepwiki.com/mcp?case=redaction with Bearer super-secret-token"
 			),
 			"fallback"
 		);
 		expect(message).not.toContain("super-secret-token");
-		expect(message).not.toContain("secret-host.example");
+		expect(message).not.toContain("mcp.deepwiki.com");
 		expect(message).not.toContain("Bearer");
 	});
 

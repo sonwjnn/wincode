@@ -1,18 +1,6 @@
 import { expect, mock, test } from "bun:test";
 import { CompactAdapter } from "./adapters";
-import { COMMANDS } from "./commands";
 import { createCommandExecutor } from "./execute-command";
-
-test("registers the manual compaction built-in command", () => {
-	expect(COMMANDS).toEqual(
-		expect.arrayContaining([
-			expect.objectContaining({ kind: "compact", value: "/compact" }),
-		])
-	);
-	expect(COMMANDS).not.toContainEqual(
-		expect.objectContaining({ value: "/compaction" })
-	);
-});
 
 test("dispatches manual compaction through its adapter", async () => {
 	const compact = mock(async () => undefined);

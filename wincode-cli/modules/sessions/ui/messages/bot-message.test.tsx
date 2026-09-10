@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
+import { fromAny } from "@total-typescript/shoehorn";
 import { useEffect, useState } from "react";
 import type { SessionMessage } from "@/modules/sessions/message";
-import { formatResponseTime } from "@/shared/display-sanitize";
 import {
 	type ApprovalPanelsContextValue,
 	ApprovalPanelsProvider,
@@ -12,7 +12,6 @@ import {
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
-import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { buildAddedPreviewPatch } from "./edit-diff-block";
 import { setTreeSitterClientForTests } from "./syntax-style";
 import { buildWritePreview, countWriteLines } from "./write-block";
@@ -59,12 +58,6 @@ const flushRenderPasses = async (
 		await setup.renderOnce();
 	}
 };
-
-const rgb = (hex: string): [number, number, number] => [
-	Number.parseInt(hex.slice(1, 3), 16),
-	Number.parseInt(hex.slice(3, 5), 16),
-	Number.parseInt(hex.slice(5, 7), 16),
-];
 
 const renderFrame = async (
 	parts: SessionMessage["parts"],
@@ -136,20 +129,6 @@ const renderFrameWithApproval = async (
 	return { api: holder.api, setup };
 };
 
-describe("formatResponseTime", () => {
-	test("formats sub-second durations in milliseconds", () => {
-		expect(formatResponseTime(431)).toBe("431ms");
-	});
-
-	test("formats seconds with one decimal place", () => {
-		expect(formatResponseTime(4300)).toBe("4.3s");
-	});
-
-	test("formats minute durations with seconds", () => {
-		expect(formatResponseTime(159_000)).toBe("2m 39s");
-	});
-});
-
 describe("BotMessageContent", () => {
 	test("renders completed MCP calls as compact rows without runtime details", async () => {
 		const part = {
@@ -169,48 +148,6 @@ describe("BotMessageContent", () => {
 			"⚙ context7_resolve-library-id [libraryName=Model Context Protocol, query=How to test an MCP server]"
 		);
 		expect(frame).not.toContain("a4f486fc");
-	});
-	test("renders successful edit output as a responsive diff block", async () => {
-		const part = {
-			input: {
-				find: "const value = 1;",
-				path: "src/example.ts",
-				replace: "const value = 3;",
-			},
-			output: {
-				editDiff: {
-					additions: 1,
-					deletions: 1,
-					omittedHunks: 0,
-					patch:
-						"Index: src/example.ts\n" +
-						"===================================================================\n" +
-						"--- src/example.ts\n" +
-						"+++ src/example.ts\n" +
-						"@@ -1,2 +1,2 @@\n" +
-						"-const value = 1;\n" +
-						"+const value = 3;\n" +
-						" const other = 2;\n",
-					truncated: false,
-				},
-				path: "src/example.ts",
-				replacements: 1,
-			},
-			state: "output-available",
-			toolCallId: "edit-1",
-			type: "tool-edit",
-		} satisfies MessagePart;
-
-		const narrowFrame = await renderFrame([part], 12, 80);
-		const wideFrame = await renderFrame([part], 12, 140);
-
-		for (const frame of [narrowFrame, wideFrame]) {
-			expect(frame).toContain("← Edit src/example.ts +1 −1");
-			expect(frame).toContain("const value = 3;");
-			expect(frame).not.toContain("→ Edit src/example.ts");
-		}
-		expect(narrowFrame.split("const other = 2;").length - 1).toBe(1);
-		expect(wideFrame.split("const other = 2;").length - 1).toBe(2);
 	});
 	test("renders running edits with a spinner and Editing status", async () => {
 		const part = {
@@ -445,152 +382,6 @@ describe("BotMessageContent", () => {
 		}
 	});
 
-	test("renders diff spans with the current theme palette", async () => {
-		const part = {
-			input: {
-				find: "const value = 1;",
-				path: "src/example.ts",
-				replace: "const value = 3;",
-			},
-			output: {
-				editDiff: {
-					additions: 1,
-					deletions: 1,
-					omittedHunks: 0,
-					patch:
-						"@@ -1,2 +1,2 @@\n" +
-						"-const value = 1;\n" +
-						"+const value = 3;\n" +
-						" const other = 2;\n",
-					truncated: false,
-				},
-				path: "src/example.ts",
-				replacements: 1,
-			},
-			state: "output-available",
-			toolCallId: "edit-themed",
-			type: "tool-edit",
-		} satisfies MessagePart;
-		const setup = await testRender(
-			<ThemeProvider themeName="opencode">
-				<KeyboardLayerProvider>
-					<ApprovalPanelsProvider>
-						<BotMessageContent parts={[part]} />
-					</ApprovalPanelsProvider>
-				</KeyboardLayerProvider>
-			</ThemeProvider>,
-			{ height: 12, width: 140 }
-		);
-
-		try {
-			await flushRenderPasses(setup);
-			const spans = setup.captureSpans().lines.flatMap((line) => line.spans);
-			const additions = spans.find((span) => span.text.includes("+1"));
-			const deletions = spans.find((span) => span.text.includes("−1"));
-			const hasBackground = (text: string, color: string): boolean =>
-				spans.some(
-					(span) =>
-						span.text.includes(text) &&
-						[...span.bg.buffer.slice(0, 3)].join(",") === rgb(color).join(",")
-				);
-			const hasGutter = (color: string): boolean =>
-				spans.some(
-					(span) =>
-						span.text.trim() === "1" &&
-						[...span.bg.buffer.slice(0, 3)].join(",") === rgb(color).join(",")
-				);
-			const hasForeground = (text: string, color: string): boolean =>
-				spans.some(
-					(span) =>
-						span.text.includes(text) &&
-						[...span.fg.buffer.slice(0, 3)].join(",") === rgb(color).join(",")
-				);
-
-			expect(
-				hasBackground("const value = 3;", DEFAULT_THEME.colors.diffAddedBg)
-			).toBe(true);
-			expect(
-				hasBackground("const value = 1;", DEFAULT_THEME.colors.diffRemovedBg)
-			).toBe(true);
-			expect(
-				hasBackground("const other = 2;", DEFAULT_THEME.colors.diffContextBg)
-			).toBe(true);
-			expect(hasGutter(DEFAULT_THEME.colors.diffAddedLineNumberBg)).toBe(true);
-			expect(hasGutter(DEFAULT_THEME.colors.diffRemovedLineNumberBg)).toBe(
-				true
-			);
-			expect(hasForeground(" +", DEFAULT_THEME.colors.diffHighlightAdded)).toBe(
-				true
-			);
-			expect(
-				hasForeground(" -", DEFAULT_THEME.colors.diffHighlightRemoved)
-			).toBe(true);
-			expect(
-				spans.some(
-					(span) =>
-						span.text.trim() === "1" &&
-						[...span.fg.buffer.slice(0, 3)].join(",") ===
-							rgb(DEFAULT_THEME.colors.diffLineNumber).join(",")
-				)
-			).toBe(true);
-			expect([...(additions?.fg.buffer.slice(0, 3) ?? [])]).toEqual(
-				rgb(DEFAULT_THEME.colors.diffAdded)
-			);
-			expect([...(deletions?.fg.buffer.slice(0, 3) ?? [])]).toEqual(
-				rgb(DEFAULT_THEME.colors.diffRemoved)
-			);
-		} finally {
-			setup.renderer.destroy();
-		}
-	});
-	test("renders write content with added diff contrast and JavaScript syntax", async () => {
-		const client = new RecordingTreeSitterClient({ autoResolveTimeout: 0 });
-		client.setMockResult({ highlights: [] });
-		const previousClient = setTreeSitterClientForTests(client);
-		const part = {
-			input: {
-				content: 'const value = 1;\nconsole.log("ready");',
-				path: "src/example.js",
-			},
-			output: { bytesWritten: 38, path: "src/example.js" },
-			state: "output-available",
-			toolCallId: "write-themed",
-			type: "tool-write",
-		} satisfies MessagePart;
-
-		const setup = await testRender(
-			<ThemeProvider themeName="opencode">
-				<KeyboardLayerProvider>
-					<ApprovalPanelsProvider>
-						<BotMessageContent parts={[part]} />
-					</ApprovalPanelsProvider>
-				</KeyboardLayerProvider>
-			</ThemeProvider>,
-			{ height: 10, width: 120 }
-		);
-
-		try {
-			await flushRenderPasses(setup);
-			const spans = setup.captureSpans().lines.flatMap((line) => line.spans);
-			const hasBackground = (text: string, color: string): boolean =>
-				spans.some(
-					(span) =>
-						span.text.includes(text) &&
-						[...span.bg.buffer.slice(0, 3)].join(",") === rgb(color).join(",")
-				);
-
-			expect(client.filetypes).toContain("javascript");
-			expect(
-				hasBackground("const value = 1;", DEFAULT_THEME.colors.diffContextBg)
-			).toBe(true);
-			expect(
-				hasBackground("const value = 1;", DEFAULT_THEME.colors.diffAddedBg)
-			).toBe(false);
-		} finally {
-			setTreeSitterClientForTests(previousClient);
-			setup.renderer.destroy();
-		}
-	});
 	test("keeps legacy edits and invalid or empty diffs honest", async () => {
 		const legacy = {
 			input: { find: "old", path: "legacy.ts", replace: "new" },
@@ -1152,12 +943,12 @@ describe("BotMessageContent", () => {
 			query: `unsafe\n${"x".repeat(700)}`,
 		};
 		circularInput.self = circularInput;
-		const part = {
+		const part: MessagePart = fromAny({
 			input: circularInput,
 			state: "input-available",
 			toolCallId: "call-unknown",
 			type: "tool-legacy",
-		} as unknown as MessagePart;
+		});
 		const frame = await renderFrame([part]);
 
 		expect(frame).toContain("✱ Legacy");

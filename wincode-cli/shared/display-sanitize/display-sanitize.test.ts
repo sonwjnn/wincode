@@ -45,9 +45,12 @@ describe("redactSensitiveText", () => {
 
 	test("redacts URLs when requested", () => {
 		expect(
-			redactSensitiveText("connect failed at https://secret-host.example/mcp", {
-				redactUrls: true,
-			})
+			redactSensitiveText(
+				"connect failed at https://mcp.deepwiki.com/mcp?case=redaction",
+				{
+					redactUrls: true,
+				}
+			)
 		).toBe("connect failed at [redacted]");
 	});
 

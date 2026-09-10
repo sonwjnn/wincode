@@ -81,7 +81,7 @@ const baseLocal: LocalMcpServerConfig = {
 const baseRemote: RemoteMcpServerConfig = {
 	name: "remote-demo",
 	type: "remote",
-	url: "https://mcp.example.com/mcp",
+	url: "https://mcp.deepwiki.com/mcp",
 	disabled: false,
 	permission: "ask",
 	timeout: { startup: 30_000, catalog: 30_000, execution: 43_200_000 },
@@ -192,7 +192,7 @@ describe("createSdkMcpClient", () => {
 		}[] = [];
 		const adapter = createSdkMcpClient(
 			remoteConfig({
-				url: "https://mcp.example.com/mcp",
+				url: "https://mcp.deepwiki.com/mcp",
 				headers: { Authorization: "Bearer abc", "X-Key": "v" },
 			}),
 			baseDeps({
@@ -206,7 +206,7 @@ describe("createSdkMcpClient", () => {
 		await adapter.connect();
 		expect(httpCalls).toHaveLength(1);
 		expect(httpCalls[0]?.url).toBeInstanceOf(URL);
-		expect(httpCalls[0]?.url.toString()).toBe("https://mcp.example.com/mcp");
+		expect(httpCalls[0]?.url.toString()).toBe("https://mcp.deepwiki.com/mcp");
 		expect(httpCalls[0]?.options).toEqual({
 			requestInit: {
 				headers: { Authorization: "Bearer abc", "X-Key": "v" },
@@ -375,7 +375,7 @@ describe("createSdkMcpClient", () => {
 	test("sanitizes remote connect errors so headers, url, and secrets never leak", async () => {
 		const adapter = createSdkMcpClient(
 			remoteConfig({
-				url: "https://secret-host.example/mcp",
+				url: "https://mcp.deepwiki.com/mcp?case=redaction",
 				headers: { Authorization: "Bearer super-secret-token" },
 			}),
 			baseDeps({
@@ -387,7 +387,7 @@ describe("createSdkMcpClient", () => {
 					connect: () =>
 						Promise.reject(
 							new Error(
-								"auth failed at https://secret-host.example/mcp with Bearer super-secret-token"
+								"auth failed at https://mcp.deepwiki.com/mcp?case=redaction with Bearer super-secret-token"
 							)
 						),
 					listTools: async () => ({ tools: [] }),
@@ -399,7 +399,7 @@ describe("createSdkMcpClient", () => {
 		expect(error).toMatchObject({ serverName: "remote-demo" });
 		expect(error.message).toContain("remote-demo");
 		expect(error.message).not.toContain("super-secret-token");
-		expect(error.message).not.toContain("secret-host.example");
+		expect(error.message).not.toContain("mcp.deepwiki.com");
 		expect(error.message).not.toContain("Bearer");
 	});
 
@@ -496,7 +496,7 @@ describe("createSdkMcpClient", () => {
 	test("listTools sanitizes thrown errors so tokens and urls never leak", async () => {
 		const adapter = createSdkMcpClient(
 			remoteConfig({
-				url: "https://x",
+				url: "https://mcp.deepwiki.com/mcp?case=x",
 				headers: { Authorization: "Bearer leaked-token" },
 			}),
 			baseDeps({
@@ -509,7 +509,11 @@ describe("createSdkMcpClient", () => {
 						return;
 					},
 					listTools: () =>
-						Promise.reject(new Error("Bearer leaked-token https://x")),
+						Promise.reject(
+							new Error(
+								"Bearer leaked-token https://mcp.deepwiki.com/mcp?case=upstream-list-tools"
+							)
+						),
 					callTool: async () => ({ content: [] }),
 				}),
 			})
@@ -518,14 +522,14 @@ describe("createSdkMcpClient", () => {
 		expect(error).toMatchObject({ serverName: "remote-demo" });
 		expect(error.message).toContain("remote-demo");
 		expect(error.message).not.toContain("leaked-token");
-		expect(error.message).not.toContain("https://x");
+		expect(error.message).not.toContain("https://mcp.deepwiki.com/mcp?case=x");
 		expect(error.message).not.toContain("Bearer");
 	});
 
 	test("callTool sanitizes thrown errors so tokens and urls never leak", async () => {
 		const adapter = createSdkMcpClient(
 			remoteConfig({
-				url: "https://x",
+				url: "https://mcp.deepwiki.com/mcp?case=x",
 				headers: { Authorization: "Bearer leaked-token" },
 			}),
 			baseDeps({
@@ -539,7 +543,11 @@ describe("createSdkMcpClient", () => {
 					},
 					listTools: async () => ({ tools: [] }),
 					callTool: () =>
-						Promise.reject(new Error("Bearer leaked-token https://x")),
+						Promise.reject(
+							new Error(
+								"Bearer leaked-token https://mcp.deepwiki.com/mcp?case=upstream-call-tool"
+							)
+						),
 				}),
 			})
 		);
@@ -549,7 +557,7 @@ describe("createSdkMcpClient", () => {
 		expect(error).toMatchObject({ serverName: "remote-demo" });
 		expect(error.message).toContain("remote-demo");
 		expect(error.message).not.toContain("leaked-token");
-		expect(error.message).not.toContain("https://x");
+		expect(error.message).not.toContain("https://mcp.deepwiki.com/mcp?case=x");
 		expect(error.message).not.toContain("Bearer");
 	});
 

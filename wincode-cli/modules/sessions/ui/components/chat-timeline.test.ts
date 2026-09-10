@@ -1,10 +1,15 @@
 import { expect, test } from "bun:test";
+import { fromPartial } from "@total-typescript/shoehorn";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionCompaction } from "../../compaction";
 import { buildSessionTimeline } from "./chat-timeline";
 
 const message = (id: string, role: SessionMessage["role"]): SessionMessage =>
-	({ id, parts: [{ text: id, type: "text" }], role }) as SessionMessage;
+	fromPartial<SessionMessage>({
+		id,
+		parts: [{ text: id, type: "text" }],
+		role,
+	});
 
 const compaction = (
 	id: string,

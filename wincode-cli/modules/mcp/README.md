@@ -41,19 +41,6 @@ arrays and scalar values replace earlier values; later sources win and retain fi
 provenance. A malformed higher-precedence value is not skipped, so it cannot silently resurrect
 lower server configuration. Config changes require restarting the CLI.
 
-```json
-{
-  "mcp": {
-    "github": {
-      "type": "remote",
-      "url": "https://example.com/mcp",
-      "enabled": true,
-      "permission": "ask"
-    }
-  }
-}
-```
-
 Values of the form `{env:VAR_NAME}` are resolved from the process environment. Each server is
 either `local` (spawn a `command` in a `cwd` with an optional `environment`) or `remote`
 (`url` with optional `headers`). Per-phase timeouts (`startup`, `catalog`, `execution`) and a

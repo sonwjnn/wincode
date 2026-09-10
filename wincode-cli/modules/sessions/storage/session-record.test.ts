@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fromAny } from "@total-typescript/shoehorn";
 import type {
 	AgentTurnOutcomeRecord,
 	OperationalFailure,
@@ -129,8 +130,8 @@ type CreatedSession = {
 };
 
 const createTestStore = async (): Promise<TestStore> => {
-	const dir = await mkdtemp(join(tmpdir(), "wincode-session-record-"));
-	const databasePath = join(dir, "session.sqlite");
+	const dir = await mkdtemp(join(tmpdir(), "wincode-conversation-record-"));
+	const databasePath = join(dir, "conversation.sqlite");
 	const { db } = createDatabase(databasePath);
 	const store = createDrizzleSessionStore(db, {
 		attachmentRoot: join(dir, "attachments"),
@@ -280,8 +281,8 @@ test("round-trips a cancelled assistant record without an interrupted badge", as
 });
 
 test("keeps records isolated per session and per workspace", async () => {
-	const dir = await mkdtemp(join(tmpdir(), "wincode-session-record-"));
-	const databasePath = join(dir, "session.sqlite");
+	const dir = await mkdtemp(join(tmpdir(), "wincode-conversation-record-"));
+	const databasePath = join(dir, "conversation.sqlite");
 	const { db } = createDatabase(databasePath);
 	const firstWorkspace = createDrizzleSessionStore(db, {
 		attachmentRoot: join(dir, "attachments-a"),
@@ -334,10 +335,10 @@ test("orders concurrently committed records by their allocated position", async 
 test("rejects malformed records without partial durable state", async () => {
 	const { store } = await createTestStore();
 	const { id, initialRecord } = await createSession(store);
-	const malformed = {
+	const malformed: SessionRecord = fromAny({
 		...assistantRecord("record-invalid", "bad"),
 		outcome: { kind: "assistant", terminal: { finishedAt: 1, kind: "failed" } },
-	} as unknown as SessionRecord;
+	});
 
 	await expect(
 		store.commitSessionRecord({ record: malformed, sessionId: id })
@@ -351,7 +352,7 @@ test("rejects malformed records without partial durable state", async () => {
 	expect(await store.listSessionRecords(id)).toHaveLength(2);
 });
 
-test("deletes Session Records with their session", async () => {
+test("deletes Conversation Records with their session", async () => {
 	const { store } = await createTestStore();
 	const { id } = await createSession(store);
 	await store.commitSessionRecord({

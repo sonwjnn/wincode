@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { fromAny } from "@total-typescript/shoehorn";
 import {
 	applyManualApprovalSafetyCeiling,
 	composePermissionDecisions,
@@ -177,28 +178,35 @@ describe("countFlattenedPermissionRules", () => {
 describe("findUnmatchedActionKeys", () => {
 	test("flags action globs matching no known tool action", () => {
 		expect(
-			findUnmatchedActionKeys({
-				edit: "allow",
-				read: "allow",
-				webfetch: "deny",
-			} as unknown as PermissionRules)
+			findUnmatchedActionKeys(
+				fromAny({
+					edit: "allow",
+					read: "allow",
+					webfetch: "deny",
+				})
+			)
 		).toEqual(["webfetch"]);
 	});
 
 	test("treats a wildcard action key as matching every known action", () => {
 		expect(
-			findUnmatchedActionKeys({
-				"*": "deny",
-			} as unknown as PermissionRules)
+			findUnmatchedActionKeys(
+				fromAny({
+					"*": "deny",
+				})
+			)
 		).toEqual([]);
 	});
 
 	test("matches against discovered tool actions when supplied", () => {
 		expect(
-			findUnmatchedActionKeys(
-				{ github_search: "ask" } as unknown as PermissionRules,
-				["read", "edit", "list", "grep", "github_search"]
-			)
+			findUnmatchedActionKeys(fromAny({ github_search: "ask" }), [
+				"read",
+				"edit",
+				"list",
+				"grep",
+				"github_search",
+			])
 		).toEqual([]);
 	});
 });
@@ -284,10 +292,12 @@ describe("createToolPermission configured rules", () => {
 	});
 
 	test("unknown action keys stay inert", () => {
-		const permission = createToolPermission({
-			read: "allow",
-			future: "deny",
-		} as unknown as Parameters<typeof createToolPermission>[0]);
+		const permission = createToolPermission(
+			fromAny({
+				read: "allow",
+				future: "deny",
+			})
+		);
 		expect(permission.decide("read", "x")).toBe("allow");
 	});
 });
@@ -354,11 +364,12 @@ describe("shippedAgentPermissionRules", () => {
 		// The `*` deny is honored only by the MCP open-glob evaluator, so it makes
 		// Plan's baseline expose no MCP tools while leaving static tool visibility
 		// (which matches exact action keys) unchanged.
-		expect(shippedAgentPermissionRules("plan")).toEqual({
+		const expectedPlanRules: PermissionRules = fromAny({
 			"*": "deny",
 			edit: "deny",
 			shell: "deny",
-		} as PermissionRules);
+		});
+		expect(shippedAgentPermissionRules("plan")).toEqual(expectedPlanRules);
 		expect(shippedAgentPermissionRules("build")).toEqual({});
 		expect(shippedAgentPermissionRules("code-reviewer")).toEqual({});
 	});
@@ -387,7 +398,7 @@ describe("decideOpenActionPermission", () => {
 			string,
 			PermissionDecision | Record<string, PermissionDecision>
 		>
-	): PermissionRules => rules as PermissionRules;
+	): PermissionRules => fromAny<PermissionRules, typeof rules>(rules);
 
 	test("falls back to allow when no key matches the action", () => {
 		expect(decideOpenActionPermission({}, "demo_echo", "*")).toBe("allow");

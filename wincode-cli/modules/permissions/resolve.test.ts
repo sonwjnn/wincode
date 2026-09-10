@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { fromPartial } from "@total-typescript/shoehorn";
 import type {
 	ConfigDocument,
 	ConfigSnapshot,
@@ -16,14 +17,14 @@ const source = (
 	path: string,
 	document: Record<string, unknown>
 ): ConfigSource => ({
-	document: document as ConfigDocument,
+	document: fromPartial<ConfigDocument>(document),
 	path,
 	scope: path.includes(".config") ? "global" : "project",
 });
 
 const snapshot = (sources: ConfigSource[]): ConfigSnapshot => ({
 	diagnostics: [],
-	document: {} as ConfigDocument,
+	document: fromPartial<ConfigDocument>({}),
 	sourceFor: () => undefined,
 	sources,
 });

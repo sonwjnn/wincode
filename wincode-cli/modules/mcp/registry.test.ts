@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CallToolResult } from "@modelcontextprotocol/client";
+import { fromAny } from "@total-typescript/shoehorn";
 import {
 	createToolPermission,
 	type PermissionRules,
@@ -94,7 +95,7 @@ class FakeMcpClient implements McpClient {
 // outside the nominal PermissionAction union; the registry evaluates them as
 // globs, so tests cast the literals just as the policy module does.
 const openRules = (rules: Record<string, "allow" | "ask" | "deny">) =>
-	rules as PermissionRules;
+	fromAny<PermissionRules, typeof rules>(rules);
 
 const hangingCall =
 	(): NonNullable<FakeMcpClient["callImpl"]> => (_name, _input, signal) =>
@@ -136,7 +137,7 @@ const serverConfig = (
 		return {
 			name,
 			type: "remote",
-			url: patch.url ?? "https://mcp.example.com/mcp",
+			url: patch.url ?? "https://mcp.deepwiki.com/mcp",
 			disabled: patch.disabled ?? false,
 			permission: patch.permission ?? "ask",
 			timeout: patch.timeout ?? DEFAULT_TIMEOUTS,
@@ -293,7 +294,7 @@ describe("createMcpRegistry", () => {
 			configs: [
 				serverConfig("websearch", {
 					type: "remote",
-					url: "https://mcp.example.com/mcp?tools=web_search_ex",
+					url: "https://mcp.deepwiki.com/mcp?tools=web_search_ex",
 				}),
 			],
 		});
@@ -316,7 +317,7 @@ describe("createMcpRegistry", () => {
 			configs: [
 				serverConfig("websearch", {
 					type: "remote",
-					url: "https://mcp.example.com/mcp?tools=web_search_exa",
+					url: "https://mcp.deepwiki.com/mcp?tools=web_search_exa",
 				}),
 			],
 		});
@@ -417,7 +418,7 @@ describe("createMcpRegistry", () => {
 			configs: [
 				serverConfig("demo", {
 					type: "remote",
-					url: "https://secret.example.com/mcp",
+					url: "https://mcp.deepwiki.com/mcp?case=registry-redaction",
 					headers: { Authorization: "Bearer super-secret-token" },
 				}),
 			],
@@ -427,7 +428,7 @@ describe("createMcpRegistry", () => {
 		const result = await registry.execute(snapshot, name, {});
 		expect(result.isError).toBe(true);
 		expect(JSON.stringify(result.content)).not.toContain("super-secret-token");
-		expect(JSON.stringify(result.content)).not.toContain("secret.example.com");
+		expect(JSON.stringify(result.content)).not.toContain("mcp.deepwiki.com");
 	});
 
 	test("returns an output error for unknown tools", async () => {
@@ -795,13 +796,13 @@ describe("createMcpRegistry", () => {
 		await registry.initialize();
 		config = serverConfig("websearch", {
 			type: "remote",
-			url: "https://repaired.example.com/mcp",
+			url: "https://mcp.deepwiki.com/mcp?case=repaired",
 		});
 
 		await registry.reconnect("websearch");
 
 		expect(configsUsed.at(-1)).toMatchObject({
-			url: "https://repaired.example.com/mcp",
+			url: "https://mcp.deepwiki.com/mcp?case=repaired",
 		});
 		expect(registry.getStatuses()).toContainEqual(
 			expect.objectContaining({ name: "websearch", state: "connected" })

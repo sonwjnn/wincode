@@ -2,6 +2,7 @@ import { expect, mock, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fromAny, fromPartial } from "@total-typescript/shoehorn";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import type { SessionMessage } from "@/modules/sessions/message";
 import {
@@ -30,11 +31,11 @@ const message = (
 	role: SessionMessage["role"],
 	text: string
 ): SessionMessage =>
-	({
+	fromPartial<SessionMessage>({
 		id,
 		parts: [{ text, type: "text" }],
 		role,
-	}) as SessionMessage;
+	});
 
 const makeStore = (initial: SessionCompaction | null = null) => {
 	let latest = initial;
@@ -349,33 +350,33 @@ test("fallback estimation follows canonical visible content", () => {
 		state: "output-available",
 		toolCallId: "call-1",
 		type: "tool-shell",
-	};
+	} as const;
 	const longTool = {
 		...shortTool,
 		output: { output: "x".repeat(1000) },
 	};
 	const shortEstimate = estimateCompactionTokens([
 		textOnly,
-		{
+		fromPartial<SessionMessage>({
 			id: "assistant-short",
 			parts: [{ text: "thinking", type: "reasoning" }, shortTool],
 			role: "assistant",
-		} as unknown as SessionMessage,
+		}),
 	]);
 	const longEstimate = estimateCompactionTokens([
 		textOnly,
-		{
+		fromPartial<SessionMessage>({
 			id: "assistant-long",
 			parts: [{ text: "thinking", type: "reasoning" }, longTool],
 			role: "assistant",
-		} as unknown as SessionMessage,
+		}),
 	]);
 
 	expect(shortEstimate).toBeGreaterThan(estimateCompactionTokens([textOnly]));
 	expect(longEstimate).toBeGreaterThan(shortEstimate);
 	const roleToolEstimate = estimateCompactionTokens([
 		textOnly,
-		{
+		fromAny({
 			id: "tool-result",
 			parts: [
 				{
@@ -385,7 +386,7 @@ test("fallback estimation follows canonical visible content", () => {
 				},
 			],
 			role: "tool",
-		} as unknown as SessionMessage,
+		}),
 	]);
 	expect(roleToolEstimate).toBeGreaterThan(shortEstimate);
 });
@@ -704,7 +705,7 @@ test("only one compaction operation runs per session", async () => {
 
 test("serializes old attachments as bounded metadata", () => {
 	const serialized = serializeMessagesForCompaction([
-		{
+		fromPartial<SessionMessage>({
 			id: "u1",
 			parts: [
 				{
@@ -715,7 +716,7 @@ test("serializes old attachments as bounded metadata", () => {
 				},
 			],
 			role: "user",
-		} as unknown as SessionMessage,
+		}),
 	]);
 
 	expect(serialized).toContain("design.png");
@@ -738,13 +739,13 @@ test("hydrates current-window attachments once and persists bounded metadata", a
 		filename: "design.png",
 		mediaType: "image/png",
 	});
-	const imageMessage = {
+	const imageMessage = fromPartial<SessionMessage>({
 		...message("u1", "user", "review [Image 1]"),
 		parts: [
 			{ text: "review [Image 1]", type: "text" },
 			attachmentReferenceToFilePart(reference),
 		],
-	} as unknown as SessionMessage;
+	});
 	let summaryMessages: SessionMessage[] | undefined;
 	const compaction = createSessionCompaction({
 		attachmentStore,
@@ -803,8 +804,8 @@ test("sanitizes completed Skill bodies before summarization", async () => {
 		},
 		estimateTokens: (messages) => messages.length,
 	});
-	const skillMessage = {
-		id: "a1",
+	const skillMessage = fromPartial<SessionMessage>({
+		id: "assistant-1",
 		parts: [
 			{
 				input: { name: "review" },
@@ -824,7 +825,7 @@ test("sanitizes completed Skill bodies before summarization", async () => {
 			},
 		],
 		role: "assistant",
-	} as unknown as SessionMessage;
+	});
 
 	await compaction.compact({
 		session: {
@@ -886,7 +887,7 @@ test("splits an oversized single turn only at complete part boundaries", async (
 		estimateTokens: (messages) =>
 			messages.reduce((total, current) => total + current.parts.length, 0),
 	});
-	const assistant = {
+	const assistant = fromPartial<SessionMessage>({
 		id: "a1",
 		parts: [
 			{ text: "prefix one", type: "text" },
@@ -894,7 +895,7 @@ test("splits an oversized single turn only at complete part boundaries", async (
 			{ text: "recent suffix", type: "text" },
 		],
 		role: "assistant",
-	} as unknown as SessionMessage;
+	});
 
 	const result = await compaction.compact({
 		session: {
@@ -934,7 +935,7 @@ test("does not recompact an unchanged split transcript", async () => {
 		estimateTokens: (messages) =>
 			messages.reduce((total, current) => total + current.parts.length, 0),
 	});
-	const assistant = {
+	const assistant = fromPartial<SessionMessage>({
 		id: "a1",
 		parts: [
 			{ text: "prefix", type: "text" },
@@ -942,7 +943,7 @@ test("does not recompact an unchanged split transcript", async () => {
 			{ text: "suffix", type: "text" },
 		],
 		role: "assistant",
-	} as unknown as SessionMessage;
+	});
 	const session = {
 		messages: [message("u1", "user", "request"), assistant],
 		sessionId: "session-split-unchanged",
@@ -978,14 +979,14 @@ test("splits the latest oversized turn without retaining older context", async (
 				? 2
 				: messages.length,
 	});
-	const assistant = {
+	const assistant = fromPartial<SessionMessage>({
 		id: "a2",
 		parts: [
 			{ text: "prefix", type: "text" },
 			{ text: "suffix", type: "text" },
 		],
 		role: "assistant",
-	} as unknown as SessionMessage;
+	});
 
 	const result = await compaction.compact({
 		session: {
@@ -1032,7 +1033,7 @@ test("resumes the next summary span after a split-turn boundary", async () => {
 		estimateTokens: (messages) =>
 			messages.reduce((total, current) => total + current.parts.length, 0),
 	});
-	const assistant = {
+	const assistant = fromPartial<SessionMessage>({
 		id: "a1",
 		parts: [
 			{ text: "prefix one", type: "text" },
@@ -1040,7 +1041,7 @@ test("resumes the next summary span after a split-turn boundary", async () => {
 			{ text: "recent suffix", type: "text" },
 		],
 		role: "assistant",
-	} as unknown as SessionMessage;
+	});
 
 	const first = await compaction.compact({
 		session: {
@@ -1085,7 +1086,7 @@ test("does not re-summarize a previously split assistant prefix", async () => {
 		estimateTokens: (messages) =>
 			messages.reduce((total, current) => total + current.parts.length, 0),
 	});
-	const firstAssistant = {
+	const firstAssistant = fromPartial<SessionMessage>({
 		id: "a1",
 		parts: [
 			{ text: "first prefix", type: "text" },
@@ -1093,8 +1094,8 @@ test("does not re-summarize a previously split assistant prefix", async () => {
 			{ text: "first suffix", type: "text" },
 		],
 		role: "assistant",
-	} as unknown as SessionMessage;
-	const secondAssistant = {
+	});
+	const secondAssistant = fromPartial<SessionMessage>({
 		id: "a2",
 		parts: [
 			{ text: "second prefix", type: "text" },
@@ -1102,7 +1103,7 @@ test("does not re-summarize a previously split assistant prefix", async () => {
 			{ text: "second suffix", type: "text" },
 		],
 		role: "assistant",
-	} as unknown as SessionMessage;
+	});
 
 	await compaction.compact({
 		session: {
@@ -1136,13 +1137,13 @@ test("does not re-summarize a previously split assistant prefix", async () => {
 
 test("keeps a split tool call paired with its result", async () => {
 	const store = makeStore();
-	const toolCall = {
+	const toolCall = fromPartial<SessionMessage["parts"][number]>({
 		input: { command: "pwd" },
 		state: "output-available",
 		toolCallId: "call-split",
 		type: "tool-shell",
-	} as unknown as SessionMessage["parts"][number];
-	const assistant = {
+	});
+	const assistant = fromPartial<SessionMessage>({
 		id: "a1",
 		parts: [
 			{ text: "prefix", type: "text" },
@@ -1150,8 +1151,8 @@ test("keeps a split tool call paired with its result", async () => {
 			{ text: "suffix", type: "text" },
 		],
 		role: "assistant",
-	} as unknown as SessionMessage;
-	const toolResult = {
+	});
+	const toolResult: SessionMessage = fromAny({
 		id: "tool-call-split",
 		parts: [
 			{
@@ -1161,7 +1162,7 @@ test("keeps a split tool call paired with its result", async () => {
 			},
 		],
 		role: "tool",
-	} as unknown as SessionMessage;
+	});
 	const compaction = createSessionCompaction({
 		store,
 		summaryGenerator: async () => ({ text: "split tool summary" }),
@@ -1199,18 +1200,18 @@ test("keeps a split tool call paired with its result", async () => {
 
 test("does not split a paired tool result beyond the recent budget", async () => {
 	const store = makeStore();
-	const toolCall = {
+	const toolCall = fromPartial<SessionMessage["parts"][number]>({
 		input: { command: "pwd" },
 		state: "output-available",
 		toolCallId: "call-budget",
 		type: "tool-shell",
-	} as unknown as SessionMessage["parts"][number];
-	const assistant = {
+	});
+	const assistant = fromPartial<SessionMessage>({
 		id: "a1",
 		parts: [{ text: "prefix", type: "text" }, toolCall],
 		role: "assistant",
-	} as unknown as SessionMessage;
-	const toolResult = {
+	});
+	const toolResult: SessionMessage = fromAny({
 		id: "tool-call-budget",
 		parts: [
 			{
@@ -1220,7 +1221,7 @@ test("does not split a paired tool result beyond the recent budget", async () =>
 			},
 		],
 		role: "tool",
-	} as unknown as SessionMessage;
+	});
 	const summaryGenerator = mock(async () => ({ text: "unused summary" }));
 	const compaction = createSessionCompaction({
 		store,
@@ -1285,15 +1286,15 @@ test("projects the newest attachment against the media budget for estimatedToken
 				return total + partTokens;
 			}, 0),
 	});
-	const user = {
+	const user = fromPartial<SessionMessage>({
 		id: "u1",
 		parts: [
 			attachmentReferenceToFilePart(oldReference),
 			attachmentReferenceToFilePart(newReference),
 		],
 		role: "user",
-	} as unknown as SessionMessage;
-	const assistant = {
+	});
+	const assistant = fromPartial<SessionMessage>({
 		id: "a1",
 		parts: [
 			{ text: "prefix one", type: "text" },
@@ -1301,7 +1302,7 @@ test("projects the newest attachment against the media budget for estimatedToken
 			{ text: "recent suffix", type: "text" },
 		],
 		role: "assistant",
-	} as unknown as SessionMessage;
+	});
 
 	const result = await compaction.compact({
 		session: {

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { fromPartial } from "@total-typescript/shoehorn";
 import { buildAgentRegistry } from "@/modules/agents";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { createToolPermission } from "./policy";
@@ -6,7 +7,7 @@ import { resolveToolPermissionPolicies } from "./use-tool-permission";
 
 const makeSnapshot = (document: Record<string, unknown>): ConfigSnapshot => ({
 	diagnostics: [],
-	document: document as ConfigSnapshot["document"],
+	document: fromPartial<ConfigSnapshot["document"]>(document),
 	sourceFor: () => undefined,
 	sources: [],
 });

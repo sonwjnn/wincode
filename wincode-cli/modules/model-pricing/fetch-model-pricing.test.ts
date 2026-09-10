@@ -30,7 +30,7 @@ describe("fetchModelPricingTable", () => {
 				)
 		);
 		const table = await fetchModelPricingTable(
-			"https://example",
+			"https://models.dev/api.json",
 			IDS,
 			fetchImpl
 		);
@@ -47,7 +47,11 @@ describe("fetchModelPricingTable", () => {
 			async () => new Response("nope", { status: 503 })
 		);
 		expect(
-			await fetchModelPricingTable("https://example", IDS, fetchImpl)
+			await fetchModelPricingTable(
+				"https://models.dev/api.json",
+				IDS,
+				fetchImpl
+			)
 		).toBeNull();
 	});
 
@@ -60,7 +64,11 @@ describe("fetchModelPricingTable", () => {
 				})
 		);
 		expect(
-			await fetchModelPricingTable("https://example", IDS, fetchImpl)
+			await fetchModelPricingTable(
+				"https://models.dev/api.json",
+				IDS,
+				fetchImpl
+			)
 		).toBeNull();
 	});
 
@@ -73,7 +81,11 @@ describe("fetchModelPricingTable", () => {
 				})
 		);
 		expect(
-			await fetchModelPricingTable("https://example", IDS, fetchImpl)
+			await fetchModelPricingTable(
+				"https://models.dev/api.json",
+				IDS,
+				fetchImpl
+			)
 		).toBeNull();
 	});
 
@@ -82,7 +94,11 @@ describe("fetchModelPricingTable", () => {
 			throw new Error("network down");
 		});
 		expect(
-			await fetchModelPricingTable("https://example", IDS, fetchImpl)
+			await fetchModelPricingTable(
+				"https://models.dev/api.json",
+				IDS,
+				fetchImpl
+			)
 		).toBeNull();
 	});
 
@@ -96,7 +112,12 @@ describe("fetchModelPricingTable", () => {
 				})
 		);
 		expect(
-			await fetchModelPricingTable("https://example", IDS, fetchImpl, 1)
+			await fetchModelPricingTable(
+				"https://models.dev/api.json",
+				IDS,
+				fetchImpl,
+				1
+			)
 		).toBeNull();
 	});
 
@@ -124,7 +145,11 @@ describe("fetchModelPricingTable", () => {
 				)
 		);
 		expect(
-			await fetchModelPricingTable("https://example", manyIds, fetchImpl)
+			await fetchModelPricingTable(
+				"https://models.dev/api.json",
+				manyIds,
+				fetchImpl
+			)
 		).toBeNull();
 	});
 
@@ -137,7 +162,11 @@ describe("fetchModelPricingTable", () => {
 				})
 		);
 		expect(
-			await fetchModelPricingTable("https://example", new Set(), fetchImpl)
+			await fetchModelPricingTable(
+				"https://models.dev/api.json",
+				new Set(),
+				fetchImpl
+			)
 		).toEqual({});
 	});
 });

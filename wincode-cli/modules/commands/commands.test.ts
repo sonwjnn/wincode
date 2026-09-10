@@ -1,85 +1,32 @@
-import { describe, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { COMMANDS } from "./commands";
 
-describe("CommandSpec registry", () => {
-	test("has 13 commands with discriminated kinds", () => {
-		expect(COMMANDS).toHaveLength(13);
-	});
+test("keeps built-in command kinds and dialog routing stable", () => {
+	const expected = [
+		{ kind: "new", value: "/new" },
+		{ kind: "compact", value: "/compact" },
+		{ kind: "settings", value: "/settings" },
+		{ kind: "agents", value: "/agents" },
+		{ kind: "models", value: "/models" },
+		{ kind: "variants", value: "/variants" },
+		{ kind: "skills", value: "/skills" },
+		{ dialogKey: "sessions", kind: "dialog", value: "/sessions" },
+		{ dialogKey: "theme", kind: "dialog", value: "/themes" },
+		{ kind: "connect", value: "/connect" },
+		{ dialogKey: "mcps", kind: "dialog", value: "/mcps" },
+		{ dialogKey: "permissions", kind: "dialog", value: "/permissions" },
+		{ kind: "exit", value: "/exit" },
+	];
+	const actual = COMMANDS.map((command) =>
+		command.kind === "dialog"
+			? {
+					dialogKey: command.dialogKey,
+					kind: command.kind,
+					value: command.value,
+				}
+			: { kind: command.kind, value: command.value }
+	);
 
-	test("/exit is kind: 'exit'", () => {
-		const cmd = COMMANDS.find((c) => c.value === "/exit");
-		expect(cmd).toBeDefined();
-		expect(cmd?.kind).toBe("exit");
-	});
-
-	test("/new is kind: 'new'", () => {
-		const cmd = COMMANDS.find((c) => c.value === "/new");
-		expect(cmd).toBeDefined();
-		expect(cmd?.kind).toBe("new");
-	});
-
-	test("/agents is kind: 'agents'", () => {
-		const cmd = COMMANDS.find((c) => c.value === "/agents");
-		expect(cmd).toBeDefined();
-		expect(cmd?.kind).toBe("agents");
-	});
-	test("/settings is kind: 'settings'", () => {
-		const cmd = COMMANDS.find((c) => c.value === "/settings");
-		expect(cmd).toBeDefined();
-		expect(cmd?.kind).toBe("settings");
-	});
-
-	test("/models is kind: 'models'", () => {
-		const cmd = COMMANDS.find((c) => c.value === "/models");
-		expect(cmd).toBeDefined();
-		expect(cmd?.kind).toBe("models");
-	});
-
-	test("/variants is kind: 'variants'", () => {
-		const cmd = COMMANDS.find((c) => c.value === "/variants");
-		expect(cmd).toBeDefined();
-		expect(cmd?.kind).toBe("variants");
-	});
-
-	test("/skills is kind: 'skills'", () => {
-		const cmd = COMMANDS.find((command) => command.value === "/skills");
-		expect(cmd).toBeDefined();
-		expect(cmd?.kind).toBe("skills");
-	});
-
-	test("/themes is kind: 'dialog'", () => {
-		const cmd = COMMANDS.find((c) => c.value === "/themes");
-		expect(cmd).toBeDefined();
-		expect(cmd?.kind).toBe("dialog");
-		if (cmd?.kind === "dialog") {
-			expect(cmd.dialogKey).toBe("theme");
-		}
-	});
-
-	test("/mcps is kind: 'dialog'", () => {
-		const cmd = COMMANDS.find((c) => c.value === "/mcps");
-		expect(cmd).toBeDefined();
-		expect(cmd?.name).toBe("mcps");
-		expect(cmd?.description).toBe("Enable, disable, and inspect MCP servers");
-		expect(cmd?.kind).toBe("dialog");
-		if (cmd?.kind === "dialog") {
-			expect(cmd.dialogKey).toBe("mcps");
-		}
-	});
-
-	test("/permissions is kind: 'dialog'", () => {
-		const cmd = COMMANDS.find((c) => c.value === "/permissions");
-		expect(cmd).toBeDefined();
-		expect(cmd?.name).toBe("permissions");
-		expect(cmd?.kind).toBe("dialog");
-		if (cmd?.kind === "dialog") {
-			expect(cmd.dialogKey).toBe("permissions");
-		}
-	});
-
-	test("/connect is kind: 'connect'", () => {
-		const cmd = COMMANDS.find((c) => c.value === "/connect");
-		expect(cmd).toBeDefined();
-		expect(cmd?.kind).toBe("connect");
-	});
+	expect(actual).toHaveLength(expected.length);
+	expect(actual).toEqual(expect.arrayContaining(expected));
 });
