@@ -1,6 +1,7 @@
 import { getModelFailureMessage } from "@wincode/ai/model-failures";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { isSkillToolPart, sanitizeSkillToolPart } from "@wincode/skills";
+import { randomUUIDv7 } from "bun";
 import {
 	isSessionToolPart,
 	type SessionMessage,
@@ -1136,7 +1137,7 @@ export const createSessionCompaction = ({
 	store,
 	summaryGenerator,
 	estimateTokens = estimateCompactionTokens,
-	generateId: createId = () => crypto.randomUUID(),
+	generateId: createId = () => randomUUIDv7(),
 	now = () => new Date(),
 }: CompactionModuleDependencies): SessionCompactionModule => {
 	const inFlight = new Map<string, Promise<CompactSessionResult>>();

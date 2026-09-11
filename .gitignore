@@ -55,3 +55,6 @@ temp
 .opencode
 .claude
 .agents
+wincode.json
+wincode.jsonc
+.wincode

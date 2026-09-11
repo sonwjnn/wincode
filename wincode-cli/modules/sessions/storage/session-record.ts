@@ -25,6 +25,7 @@ import {
 	modelVariantSchema,
 } from "@wincode/ai/models";
 import { codingToolNames } from "@wincode/coding-tools";
+import { randomUUIDv7 } from "bun";
 import type {
 	SessionMessage,
 	SessionMessageMetadata,
@@ -483,7 +484,7 @@ export const buildUserSessionRecord = ({
 	return {
 		agentId,
 		...(delegation === undefined ? {} : { delegation }),
-		id: `record-${crypto.randomUUID()}`,
+		id: `record-${randomUUIDv7()}`,
 		messages: [durableMessage],
 		model: {
 			modelId: model.modelId,

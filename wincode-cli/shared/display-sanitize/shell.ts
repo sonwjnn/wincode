@@ -1,16 +1,6 @@
 import { SHELL_OUTPUT_TAIL_BYTES } from "@wincode/coding-tools";
 import { redactSensitiveText } from "./redact";
 
-const SHELL_OUTPUT_ESC = String.fromCharCode(0x1b);
-const SHELL_OUTPUT_BELL = String.fromCharCode(0x07);
-const ANSI_CSI_PATTERN = new RegExp(
-	`${SHELL_OUTPUT_ESC}\\[[0-9;]*[A-Za-z]`,
-	"g"
-);
-const ANSI_OSC_PATTERN = new RegExp(
-	`${SHELL_OUTPUT_ESC}][^${SHELL_OUTPUT_BELL}]*${SHELL_OUTPUT_BELL}`,
-	"g"
-);
 const CRLF_PATTERN = /\r\n/g;
 const CARRIAGE_RETURN_PATTERN = /\r/g;
 const TRAILING_NEWLINE_PATTERN = /\n$/;
@@ -26,13 +16,9 @@ const stripShellOutputControlCharacters = (value: string): string =>
 		isPrintableShellOutputCharacter(character.charCodeAt(0)) ? character : ""
 	).join("");
 
-/**
- * Strips ANSI escape sequences from command output: CSI (colors, cursor
- * moves) and OSC (terminal titles) sequences are removed.
- */
-export function stripAnsi(value: string): string {
-	return value.replace(ANSI_CSI_PATTERN, "").replace(ANSI_OSC_PATTERN, "");
-}
+/** Strips ANSI escape sequences from command output using Bun's native utility. */
+export const stripAnsi = (value: string): string =>
+	globalThis.Bun.stripANSI(value);
 
 /**
  * Normalizes command-output newlines: CRLF collapses to LF, bare carriage

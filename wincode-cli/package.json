@@ -17,8 +17,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
-    "@opentui/core": "0.4.5",
-    "@opentui/react": "0.4.5",
+    "@opentui/core": "0.5.11",
+    "@opentui/react": "0.5.11",
     "@tanstack/react-router": "catalog:",
     "@wincode/agent-core": "workspace:*",
     "@wincode/agent-runtime-ai-sdk": "workspace:*",

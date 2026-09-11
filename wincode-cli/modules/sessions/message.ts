@@ -20,6 +20,7 @@ import {
 	skillActivationSourceSchema,
 	skillContextSchema,
 } from "@wincode/skills";
+import { randomUUIDv7 } from "bun";
 import { z } from "zod";
 
 export type SessionFilePart = {
@@ -354,7 +355,7 @@ export const createSessionUserMessage = (
 	fileMentions: FileMentionPart[] = [],
 	files: SessionFilePart[] = []
 ): SessionMessage => ({
-	id: `msg-${crypto.randomUUID()}`,
+	id: `msg-${randomUUIDv7()}`,
 	...(metadata === undefined ? {} : { metadata }),
 	parts: [{ text, type: "text" }, ...fileMentions, ...files],
 	role: "user",

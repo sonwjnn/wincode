@@ -4,10 +4,12 @@ This project uses **Ultracite**, a zero-config preset that enforces strict code 
 
 ## Quick Reference
 
-- **Format code**: `bun fix`
-- **Check for issues**: `bun check`
-- **Type check**: `bun check-types`
-- **Run tests**: `bun test`
+- **Format code**: `bun run fix`
+- **Check for issues**: `bun run check`
+- **Type check all workspaces**: `bun run check-types`
+- **Run deterministic tests**: `bun test`
+- **Run integration tests**: `bun run test:integration`
+- **Start the CLI in watch mode**: `bun run dev:cli`
 
 Biome (the underlying engine) provides robust linting and formatting. Most issues are automatically fixable.
 
@@ -17,7 +19,7 @@ Biome (the underlying engine) provides robust linting and formatting. Most issue
 
 Write code that is **accessible, performant, type-safe, and maintainable**. Focus on clarity and explicit intent over brevity.
 
-### Type Safety & Explicitness
+### Type Safety &amp; Explicitness
 
 - Use explicit types for function parameters and return values when they enhance clarity
 - Prefer `unknown` over `any` when the type is genuinely unknown
@@ -34,14 +36,14 @@ Write code that is **accessible, performant, type-safe, and maintainable**. Focu
 - Use destructuring for object and array assignments
 - Use `const` by default, `let` only when reassignment is needed, never `var`
 
-### Async & Promises
+### Async &amp; Promises
 
 - Always `await` promises in async functions - don't forget to use the return value
 - Use `async/await` syntax instead of promise chains for better readability
 - Handle errors appropriately in async code with try-catch blocks
 - Don't use async functions as Promise executors
 
-### React & JSX
+### React &amp; JSX
 
 - Use function components over class components
 - Call hooks at the top level only, never conditionally
@@ -56,7 +58,7 @@ Write code that is **accessible, performant, type-safe, and maintainable**. Focu
   - Include keyboard event handlers alongside mouse events
   - Use semantic elements (`<button>`, `<nav>`, etc.) instead of divs with roles
 
-### Error Handling & Debugging
+### Error Handling &amp; Debugging
 
 - Remove `console.log`, `debugger`, and `alert` statements from production code
 - Throw `Error` objects with descriptive messages, not strings or other values
@@ -71,11 +73,8 @@ Write code that is **accessible, performant, type-safe, and maintainable**. Focu
 - Prefer simple conditionals over nested ternary operators
 - Group related code together and separate concerns
 
-### Security
+### Security 
 
-- Add `rel="noopener"` when using `target="_blank"` on links
-- Avoid `dangerouslySetInnerHTML` unless absolutely necessary
-- Don't use `eval()` or assign directly to `document.cookie`
 - Validate and sanitize user input
 
 ### Performance
@@ -84,17 +83,12 @@ Write code that is **accessible, performant, type-safe, and maintainable**. Focu
 - Use top-level regex literals instead of creating them in loops
 - Prefer specific imports over namespace imports
 - Avoid barrel files (index files that re-export everything)
-- Use proper image components (e.g., Next.js `<Image>`) over `<img>` tags
 
 ### Framework-Specific Guidance
 
 **React 19+:**
 
 - Use ref as a prop instead of `React.forwardRef`
-
-**Solid/Svelte/Vue/Qwik:**
-
-- Use `class` and `for` attributes (not `className` or `htmlFor`)
 
 ---
 
@@ -108,16 +102,16 @@ Classify tests by crossed dependencies:
 
 - **Default**: deterministic, offline, credential-free, isolated in-process behavior.
 - **Unit**: a genuinely narrower transformation or boundary; never a second name for
-  the default portfolio.
+the default portfolio.
 - **Integration**: the highest stable public seam crossing route composition,
-  filesystem, subprocess, or local database boundaries. Use `*.integration.test.*`.
+filesystem, subprocess, or local database boundaries. Use `*.integration.test.*`.
 - **External-service integration**: real services, explicitly gated by their
-  environment contract and run in a dedicated CI lane when such a dependency
-  exists.
+environment contract and run in a dedicated CI lane when such a dependency
+exists.
 - **Smoke**: only a narrow install, packaging, worker, native-addon, or runtime
-  failure that lower seams cannot expose.
+failure that lower seams cannot expose.
 - **E2E**: only a user journey that cannot be protected at a cheaper seam. Future
-  TUI coverage uses a virtual terminal; future browser coverage uses Playwright.
+TUI coverage uses a virtual terminal; future browser coverage uses Playwright.
 
 Prefer the highest stable behavioral seam. Do not duplicate an integration contract
 with a narrower mocked test. Real failures must be triggered at the responsible
@@ -131,7 +125,7 @@ behavior that previously failed. Unit and integration tests do not retry or use 
 for readiness; wait for process exit, protocol calls, events, or state transitions.
 
 - `bun test` is the canonical deterministic default lane and excludes integration
-  files.
+files.
 - `bun run test:integration` discovers all `*.integration.test.*` files.
 - Network access and provider credentials are opt-in; CI scrubs credential variables.
 

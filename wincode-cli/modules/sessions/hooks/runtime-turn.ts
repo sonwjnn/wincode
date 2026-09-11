@@ -46,6 +46,7 @@ import {
 	skillToolInputSchema,
 } from "@wincode/skills";
 import { sampleSkillResources } from "@wincode/skills/filesystem";
+import { randomUUIDv7 } from "bun";
 import { z } from "zod";
 import type { McpCatalogSnapshot, McpSnapshotTool } from "@/modules/mcp";
 import type { ResolvedCodingAgent } from "../../agents/built-ins";
@@ -850,7 +851,7 @@ export const buildTerminalSessionRecord = ({
 	return {
 		agentId: turn.agent.id,
 		...(turn.delegation === undefined ? {} : { delegation: turn.delegation }),
-		id: `record-${crypto.randomUUID()}`,
+		id: `record-${randomUUIDv7()}`,
 		messages: [
 			{
 				id: `assistant-${turn.id}`,
@@ -886,7 +887,7 @@ const buildAssistantOutcomeSessionRecord = ({
 }): SessionRecord => ({
 	agentId,
 	...(delegation === undefined ? {} : { delegation }),
-	id: `record-${crypto.randomUUID()}`,
+	id: `record-${randomUUIDv7()}`,
 	messages: [
 		{
 			id: `assistant-${turnId}`,
@@ -1003,7 +1004,7 @@ export const buildToolSessionRecord = ({
 }): SessionRecord => ({
 	agentId: turn.agent.id,
 	...(turn.delegation === undefined ? {} : { delegation: turn.delegation }),
-	id: `record-${crypto.randomUUID()}`,
+	id: `record-${randomUUIDv7()}`,
 	messages: [
 		{
 			id: `tool-${turn.id}-${event.toolCallId}`,

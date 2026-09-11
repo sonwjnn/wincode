@@ -10,6 +10,7 @@ import {
 	type ChatModelSelection,
 	modelSelectionSchema,
 } from "@wincode/ai/models";
+import { randomUUIDv7 } from "bun";
 import { and, asc, desc, eq } from "drizzle-orm";
 import type {
 	AppendSessionCompactionInput,
@@ -53,7 +54,7 @@ import {
 	type UpdateSessionInput,
 } from "./session-store";
 
-const createId = (): string => crypto.randomUUID();
+const createId = (): string => randomUUIDv7();
 
 const clearAttachmentRoot = async (root: string): Promise<void> => {
 	await mkdir(root, { recursive: true });
