@@ -335,7 +335,7 @@ const assertSummaryDiffClipping = async ({
 		await setup.renderOnce();
 		await flushUi(setup);
 		const scrollbox = setup.renderer.root.findDescendantById(
-			"conversation-scrollbox"
+			"session-scrollbox"
 		) as ScrollBoxRenderable | undefined;
 		expect(scrollbox).toBeDefined();
 		scrollbox?.scrollTo(0);
@@ -469,7 +469,7 @@ describe("ChatShell approval dock", () => {
 			expect(frame).toContain("First queued approval.");
 			expect(frame).not.toContain("Second queued approval.");
 			expect(
-				setup.renderer.root.findDescendantById("conversation-scrollbox")
+				setup.renderer.root.findDescendantById("session-scrollbox")
 			).toBeDefined();
 			expect(cancelFirstApproval).not.toHaveBeenCalled();
 			setup.mockInput.pressEnter();
@@ -914,9 +914,7 @@ describe("ChatShell shell output blocks", () => {
 			output: { exitCode: 0, output: lines("beta", 200) },
 			toolCallId: "call-beta",
 		});
-		const streamedText = (
-			text: string
-		): SessionMessage["parts"][number] => ({
+		const streamedText = (text: string): SessionMessage["parts"][number] => ({
 			text,
 			type: "text",
 		});
@@ -1002,7 +1000,7 @@ describe("ChatShell edit diff blocks", () => {
 			await setup.renderOnce();
 			await flushUi(setup);
 			const scrollbox = setup.renderer.root.findDescendantById(
-				"conversation-scrollbox"
+				"session-scrollbox"
 			) as ScrollBoxRenderable | undefined;
 			expect(scrollbox).toBeDefined();
 			const addedBackground = RGBA.fromHex(DEFAULT_THEME.colors.diffAddedBg);

@@ -47,7 +47,17 @@
     "rules": {
       "recommended": true,
       "correctness": {
-        "useExhaustiveDependencies": "info"
+        "useExhaustiveDependencies": {
+          "level": "info",
+          "options": {
+            "hooks": [
+              {
+                "name": "useLatest",
+                "stableResult": true
+              }
+            ]
+          }
+        }
       },
       "style": {
         "noExportedImports": "error",

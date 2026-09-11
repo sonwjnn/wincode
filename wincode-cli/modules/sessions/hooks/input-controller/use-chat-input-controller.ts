@@ -373,7 +373,6 @@ export function useChatInputController({
 		closeOverlay();
 	}, [activeTrigger, closeOverlay, setProgrammaticText, textValue]);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: latest-value refs intentionally keep the submit callback current without rebuilding it.
 	const submit = useCallback(
 		async (snapshot: SubmitSnapshot): Promise<boolean> => {
 			const accepted = await submitPrompt(
@@ -450,7 +449,6 @@ export function useChatInputController({
 		]
 	);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: latest-value refs intentionally keep arrow navigation current without rebuilding it.
 	const onArrowUp = useCallback(
 		(cursor?: number, _textLength?: number): boolean => {
 			if (overlayKind === null) {
@@ -495,7 +493,6 @@ export function useChatInputController({
 		]
 	);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: latest-value refs intentionally keep arrow navigation current without rebuilding it.
 	const onArrowDown = useCallback(
 		(cursor?: number, length?: number): boolean => {
 			if (overlayKind === null) {

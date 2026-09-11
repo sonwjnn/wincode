@@ -1177,7 +1177,6 @@ export function useChat(
 	const abortApprovalTurnRef = useRef<(toolCallId: string) => void>(
 		() => undefined
 	);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: latest-value refs intentionally keep tool gate callbacks current without rebuilding the gate.
 	const toolGateState = useMemo(() => {
 		const approvalQueue = createApprovalQueue<ToolApprovalRequest>();
 		return {
@@ -2150,13 +2149,7 @@ export function useChat(
 					}
 				},
 			}),
-		[
-			approvalPanelsRef,
-			approvalQueueRef,
-			closeApprovalsRef,
-			interruptLatestAssistantMessage,
-			submitRef,
-		]
+		[interruptLatestAssistantMessage]
 	);
 	sessionRef.current = session;
 
