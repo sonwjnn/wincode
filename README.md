@@ -1,78 +1,217 @@
 <div align="center">
 
-# wincode
+# Wincode
 
-**A local, terminal-native agentic coding assistant.**
+**A local-first coding agent for your terminal.**
 
-Multi-provider models · MCP tools · local sessions · configurable agents
+[![Test](https://github.com/sonwjnn/wincode/actions/workflows/test.yml/badge.svg)](https://github.com/sonwjnn/wincode/actions/workflows/test.yml)
+[![Bun](https://img.shields.io/badge/Bun-1.2.20-fbf0df?style=flat-square&logo=bun&logoColor=black)](https://bun.sh)
+[![TypeScript](https://img.shields.io/badge/TypeScript-7-3178c6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+
+[Features](#features) • [Getting started](#getting-started) • [Configuration](#configuration) • [Commands](#commands) • [Architecture](ARCHITECTURE.md) • [Development](#development)
 
 </div>
 
-## Overview
+Wincode is an interactive terminal UI for working with AI coding agents. It combines direct model-provider connections, workspace-aware coding tools, durable local sessions, configurable agents, Skills, custom commands, and MCP servers in one interface.
 
-`wincode` is a Bun-powered terminal coding agent. Agents, tools, skills, context, permissions, sessions, and model requests run from the local CLI. Model requests use provider APIs directly with credentials configured by the user; Wincode accounts and subscriptions are not required.
+> [!NOTE]
+> Wincode is under active development and currently runs from a source checkout; it is not published as a standalone package yet.
 
-- **Terminal-native chat** — a React-rendered TUI via [OpenTUI](https://github.com/sst/opentui), with slash commands, file mentions, clipboard image paste, and persisted session history.
-- **Bring your own model** — connect supported providers such as Anthropic, OpenAI, and Google with provider-owned API keys or supported provider OAuth.
-- **MCP support** — connect Model Context Protocol servers with per-tool approval policies and a live status view.
-- **Local agent tools** — file read/write/edit, grep, directory listing, and shell execution run in the local workspace through permission checks.
-- **Skills** — local `SKILL.md` workflows can be invoked explicitly or activated by an agent through the native skill tool.
-- **Configured agents** — built-in Build and Plan agents plus user-defined agents in `wincode.json` or `wincode.jsonc`.
+## Features
 
-## Tech Stack
+- **Terminal-native workflow** — a responsive [OpenTUI](https://github.com/anomalyco/opentui) interface with streaming responses, Markdown rendering, syntax highlighting, diffs, themes, and keyboard-driven dialogs.
+- **Multiple model providers** — connect OpenAI, Anthropic, Google, or OpenCode Go with an API key; OpenAI also supports browser OAuth.
+- **Workspace-aware tools** — bounded read, glob, grep, edit, write, and shell tools operate inside the active workspace.
+- **Explicit safety controls** — per-agent and per-resource `allow`, `ask`, and `deny` policies, inline approvals, temporary grants, and optional auto approval.
+- **Local session history** — sessions, completed tool calls, compactions, and attachments are stored locally in SQLite. Credentials use the platform secret store when available, with a secure local fallback.
+- **Extensible agent context** — use `@path` file mentions, reusable Skills, prompt-based custom commands, and local or remote MCP tool servers.
+- **Configurable agents** — choose built-in or project-defined agents with independent roles, instructions, model pins, permissions, and resource limits.
 
-| Layer | Technologies |
-| --- | --- |
-| Runtime | [Bun](https://bun.sh) workspaces |
-| CLI | [OpenTUI](https://github.com/sst/opentui), React 19, TanStack Router, [AI SDK](https://sdk.vercel.ai), Drizzle local SQLite |
-| Shared packages | AI provider adapters, agent schemas, tools, TypeScript configuration |
-| Tooling | [Ultracite](https://github.com/haydenbleasel/ultracite) / Biome, Lefthook |
-
-## Architecture
-
-The maintained application is the CLI. Features follow `app → modules → shared` dependency direction.
-
-```text
-wincode-cli/   # terminal agent, providers, MCP, tools, sessions
-
-packages/
-├── ai/        # provider adapters, model catalog, agent schemas, tools
-└── config/    # shared TypeScript configuration
-```
-
-Session history and attachments use local storage. No external database or Wincode identity is needed to run the agent.
-
-## Getting Started
+## Getting started
 
 ### Prerequisites
 
-- [Bun](https://bun.sh) `1.2.20+`
-- An API key or supported provider credential for the model you want to use
+- [Git](https://git-scm.com/)
+- [Bun 1.2.20](https://bun.sh/docs/installation) or a compatible newer release
+- An account or API key for at least one [supported provider](#supported-providers)
 
-### Install
-
-```bash
-bun install
-```
-
-### Run
+### Run Wincode
 
 ```bash
+git clone https://github.com/sonwjnn/wincode.git
+cd wincode
+bun install --frozen-lockfile
 bun run dev:cli
 ```
 
-Inside the CLI, use slash commands such as `/connect` to add a provider, `/models` to choose a model, `/mcps` to manage MCP servers, and `/sessions` to browse local history.
+Inside Wincode:
 
-## Development Commands
+1. Run `/connect` and authenticate with a provider.
+2. Run `/models` to choose a model.
+3. Enter a task, or type `@` to attach workspace files.
 
-| Command | Description |
+To use the checkout against another project, start the entrypoint from that project's directory:
+
+```bash
+cd /path/to/your/project
+bun run /path/to/wincode/wincode-cli/index.tsx
+```
+
+> [!TIP]
+> Pass `--auto` to start with automatic approval enabled. Explicit `deny` rules still take precedence.
+>
+> ```bash
+> bun run /path/to/wincode/wincode-cli/index.tsx --auto
+> ```
+
+### Supported providers
+
+| Provider | Connection methods |
 | --- | --- |
-| `bun run check` | Lint and format check |
-| `bun run fix` | Apply lint and formatting fixes |
-| `bun run check-types` | Type-check every workspace |
-| `bun run test` | Run the surviving test suite |
-| `bun run dev:cli` | Launch the terminal agent |
-| `bun run --cwd wincode-cli db:push` | Synchronize the current SQLite schema |
-| `bun run --cwd wincode-cli db:studio` | Open Drizzle Studio |
+| OpenAI | API key, browser OAuth |
+| Anthropic | API key |
+| Google | API key |
+| OpenCode Go | API key |
 
-Provider onboarding is documented in [`docs/adding-a-provider.md`](docs/adding-a-provider.md). Domain terminology is documented in [`CONTEXT.md`](CONTEXT.md). Coding standards are documented in [`AGENTS.md`](AGENTS.md).
+Provider credentials are configured interactively with `/connect`, not stored in project configuration.
+
+## Configuration
+
+Wincode reads `wincode.jsonc` or `wincode.json`, with JSONC taking precedence at the same location. Configuration is merged from lower to higher precedence:
+
+1. `${XDG_CONFIG_HOME:-~/.config}/wincode/`
+2. `~/.wincode/`
+3. The workspace root
+4. `<workspace>/.wincode/`
+
+Objects merge recursively; arrays and scalar values replace lower-precedence values. Restart Wincode after changing configuration.
+
+```jsonc
+{
+  "default_agent": "build",
+  "permission": {
+    "read": "allow",
+    "edit": {
+      "*.env*": "deny",
+      "src/**": "ask"
+    }
+  },
+  "agents": {
+    "review": {
+      "role": "primary",
+      "description": "Review changes without editing files.",
+      "instructions": "Inspect the implementation and report concrete risks.",
+      "permission": {
+        "edit": "deny",
+        "write": "deny"
+      }
+    }
+  },
+  "mcp": {
+    "context7": {
+      "type": "local",
+      "command": ["npx", "-y", "@upstash/context7-mcp"],
+      "enabled": true,
+      "permission": "ask"
+    }
+  },
+  "skills": {
+    "paths": ["./skills"]
+  },
+  "commands": {
+    "paths": ["./commands"]
+  }
+}
+```
+
+> [!WARNING]
+> A local MCP server runs the configured command in your workspace. Only configure servers you trust; set `enabled` to `false` to prevent startup.
+
+Detailed configuration references:
+
+- [Agents](wincode-cli/modules/agents/README.md)
+- [Tool permissions](wincode-cli/modules/permissions/README.md)
+- [Skills](wincode-cli/modules/skills/README.md)
+- [Custom commands](wincode-cli/modules/custom-commands/README.md)
+- [MCP servers](wincode-cli/modules/mcp/README.md)
+- [Configuration precedence](wincode-cli/shared/config/README.md)
+
+### Skills
+
+A Skill is a directory containing a `SKILL.md` file with `name` and `description` frontmatter. Put project Skills in `.wincode/skills/<skill-name>/SKILL.md`, select one with `/skills`, or invoke it directly with `/skill-name arguments`. Agents can also activate available Skills when a task requires them.
+
+### Custom commands
+
+Place prompt templates in `.wincode/commands/*.md`. The filename becomes the command name; optional YAML frontmatter supplies its description. Templates support `$ARGUMENTS`, positional `$1`…`$n` values, and `$$` for a literal dollar sign.
+
+### MCP servers
+
+The `mcp` map supports local subprocess servers and remote Streamable HTTP servers. Each server can define environment variables or headers, startup/catalog/execution timeouts, and its own permission policy. Use `/mcps` to inspect, enable, disable, or reconnect configured servers.
+
+## Commands
+
+Type `/` in the chat input to browse Built-in Commands, Custom Commands, and Skills.
+
+| Command | Action |
+| --- | --- |
+| `/new` | Start a new session |
+| `/compact [focus]` | Summarize completed history while keeping the transcript visible |
+| `/settings` | Open application settings |
+| `/agents` | Switch agents and inspect agent configuration |
+| `/models` | Select a model |
+| `/variants` | Select a model variant |
+| `/skills` | Browse and insert available Skills |
+| `/sessions` | Browse, rename, pin, or delete local sessions |
+| `/themes` | Change the terminal color theme |
+| `/connect` | Connect a provider account or API key |
+| `/mcps` | Inspect and control MCP servers |
+| `/permissions` | Manage approvals, temporary grants, and auto approval |
+| `/exit` | Quit Wincode |
+
+## Architecture
+
+Wincode is a Bun workspace with concern-focused packages and a CLI composition root:
+
+```text
+.
+├── wincode-cli/                  # OpenTUI app, routing, sessions, config, connections, MCP, approvals
+├── packages/
+│   ├── ai/                       # Provider-neutral model catalog, targets, options, usage, failures
+│   ├── agent-core/               # Agent Turns, records, events, runtime and tool contracts
+│   ├── agent-runtime-ai-sdk/     # Private AI SDK runtime and provider adapters
+│   ├── coding-tools/             # Workspace sandbox, filesystem, search, edit, and shell tools
+│   └── skills/                   # Skill parsing, discovery, catalog, snapshots, and activation
+└── docs/
+    └── adr/                      # Accepted architecture decisions
+```
+
+The dependency direction keeps model and Agent contracts independent from the CLI, OpenTUI, persistence, MCP transports, and concrete coding tools. See the concise [architecture guide](ARCHITECTURE.md) for the runtime flow and boundaries, or [ADR 0010](docs/adr/0010-agent-architecture-package-graph.md) for the underlying decision.
+
+## Development
+
+Install dependencies once from the repository root:
+
+```bash
+bun install --frozen-lockfile
+```
+
+| Command | Purpose |
+| --- | --- |
+| `bun run dev:cli` | Run the CLI in watch mode |
+| `bun test` | Run the deterministic, offline test lane |
+| `bun run test:integration` | Run local integration tests |
+| `bun run check-types` | Type-check every workspace package |
+| `bun run check` | Run Ultracite checks |
+| `bun run fix` | Apply Ultracite formatting and safe fixes |
+
+Session storage uses the current Drizzle schema without migration history. After changing `wincode-cli/modules/sessions/storage/schema.ts`, run:
+
+```bash
+bun run --cwd wincode-cli db:push
+```
+
+If Drizzle cannot reconcile a local schema change safely, reset the local database and attachment data before restarting Wincode. The session-only reset command is:
+
+```bash
+bun run --cwd wincode-cli db:reset-sessions
+```
