@@ -10,15 +10,16 @@ import {
 	createRouter,
 	RouterContextProvider,
 } from "@tanstack/react-router";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionSendInput } from "../../session-operation";
 
 const { testRender } = await import("@opentui/react/test-utils");
-const { AgentRegistryProvider } = await import("@/modules/agents");
-const { createConnections, ConnectionsProvider } = await import(
-	"@/modules/connections"
+const { AgentRegistryProvider, useAgentRegistry } = await import(
+	"@/modules/agents"
 );
+const { createConnections: createDefaultConnections, ConnectionsProvider } =
+	await import("@/modules/connections");
 const { createMcpRegistry, McpProvider } = await import("@/modules/mcp");
 const { ModelPricingProvider } = await import("@/modules/model-pricing");
 const { createPermissionService, PermissionServiceProvider } = await import(
@@ -118,6 +119,34 @@ mock.module("@/modules/sessions/hooks/use-chat", () => ({
 	},
 }));
 
+const createConnections = () =>
+	createDefaultConnections({
+		vault: {
+			load: async () => null,
+			replaceValidated: async () => undefined,
+		},
+	});
+const createTestConfigStore = () =>
+	createConfigStore({
+		fs: {
+			readFile: async () => {
+				throw Object.assign(new Error("Test config is unavailable."), {
+					code: "ENOENT",
+				});
+			},
+		},
+	});
+
+function AgentRegistryReadyProbe({ onReady }: { onReady: () => void }) {
+	const registry = useAgentRegistry();
+	useEffect(() => {
+		if (registry !== null) {
+			onReady();
+		}
+	}, [onReady, registry]);
+	return null;
+}
+
 const userMessage = (id: string, text: string): SessionMessage => ({
 	id,
 	metadata: { agent: "build" },
@@ -161,6 +190,8 @@ describe("SessionView initial submission", () => {
 		const navigationStarted = deferred<void>();
 		const sendStarted = deferred<void>();
 		const release = deferred<void>();
+		let registryIsReady = false;
+		let navigationHasStarted = false;
 		activeFakeChatRun = {
 			navigationRelease,
 			navigationStarted,
@@ -171,13 +202,14 @@ describe("SessionView initial submission", () => {
 		await router.load();
 		const navigate = router.navigate.bind(router);
 		router.navigate = (...args) => {
+			navigationHasStarted = true;
 			navigationStarted.resolve();
 			return navigationRelease.promise.then(() => navigate(...args));
 		};
 		const initialMessages = [
 			userMessage("initial-user", "create the session prompt"),
 		];
-		const configStore = createConfigStore();
+		const configStore = createTestConfigStore();
 		const workspace = process.cwd();
 		const setup = await testRender(
 			<ThemeProvider themeName={DEFAULT_THEME.name}>
@@ -213,6 +245,11 @@ describe("SessionView initial submission", () => {
 																	sessionId="session-1"
 																	sessionTitle="Create the session prompt"
 																/>
+																<AgentRegistryReadyProbe
+																	onReady={() => {
+																		registryIsReady = true;
+																	}}
+																/>
 															</RouterContextProvider>
 														</McpProvider>
 													</DialogProvider>
@@ -230,7 +267,10 @@ describe("SessionView initial submission", () => {
 		);
 
 		try {
-			await navigationStarted.promise;
+			await flushUi(setup);
+			expect(registryIsReady).toBe(true);
+			await flushUi(setup);
+			await setup.waitFor(() => navigationHasStarted);
 			const frameBeforeSend = setup.captureCharFrame();
 			expect(frameBeforeSend).toContain("create the session prompt");
 			expect(frameBeforeSend).not.toContain("Retry");
@@ -251,6 +291,7 @@ describe("SessionView initial submission", () => {
 		const navigationStarted = deferred<void>();
 		const sendStarted = deferred<void>();
 		const release = deferred<void>();
+		let registryIsReady = false;
 		activeFakeChatRun = {
 			navigationRelease,
 			navigationStarted,
@@ -259,7 +300,7 @@ describe("SessionView initial submission", () => {
 		};
 		const router = buildRouter();
 		await router.load();
-		const configStore = createConfigStore();
+		const configStore = createTestConfigStore();
 		const workspace = process.cwd();
 		const setup = await testRender(
 			<ThemeProvider themeName={DEFAULT_THEME.name}>
@@ -292,6 +333,11 @@ describe("SessionView initial submission", () => {
 																	sessionId="session-1"
 																	sessionTitle="Send an entered prompt"
 																/>
+																<AgentRegistryReadyProbe
+																	onReady={() => {
+																		registryIsReady = true;
+																	}}
+																/>
 															</RouterContextProvider>
 														</McpProvider>
 													</DialogProvider>
@@ -309,9 +355,9 @@ describe("SessionView initial submission", () => {
 		);
 
 		try {
-			for (let attempt = 0; attempt < 5; attempt += 1) {
-				await flushUi(setup);
-			}
+			await flushUi(setup);
+			expect(registryIsReady).toBe(true);
+			await flushUi(setup);
 			await setup.mockInput.typeText("entered prompt");
 			await flushUi(setup);
 			setup.mockInput.pressEnter();
