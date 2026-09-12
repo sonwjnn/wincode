@@ -29,7 +29,7 @@ Register the resolver in `packages/agent-runtime-ai-sdk/src/providers/registry.t
 
 ## CLI credentials
 
-Add the provider definition in `wincode-cli/src/modules/connections/provider-definition.ts`:
+Add the provider definition in `packages/tui/modules/connections/provider-definition.ts`:
 
 - display name;
 - supported connection methods;
@@ -45,9 +45,9 @@ Add the factory and deterministic order entry in `provider-registry.ts`. The pro
 Run:
 
 ```sh
-bun run --cwd wincode-cli check-types
+bun run --cwd packages/tui check-types
 bun check-types
-bun test wincode-cli/src packages/ai/src
+bun test packages/tui packages/ai/src
 bun run check
 ```
 

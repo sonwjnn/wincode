@@ -19,14 +19,15 @@ flowchart LR
     TUI --> Secrets[Credential store]
 ```
 
-The CLI is the composition root. It resolves configuration, credentials, Agent selection, model selection, tools, permissions, persistence, and presentation for each Agent Turn.
+The CLI selects a CLI Command and lazy-loads the TUI for the default invocation. The TUI is the interactive composition root for configuration, credentials, Agent selection, tools, permissions, persistence, and presentation.
 
 ## Package boundaries
 
 ```text
 .
-├── wincode-cli/                  # OpenTUI UI, routing, sessions, config, credentials, MCP, approvals
 ├── packages/
+│   ├── cli/                      # Executable dispatch, help, version, diagnostics
+│   ├── tui/                      # OpenTUI UI, routing, sessions, config, credentials, MCP, approvals
 │   ├── ai/                       # Provider-neutral model catalog, targets, options, usage, failures
 │   ├── agent-core/               # Agents, Agent Turns, events, records, runtime and tool contracts
 │   ├── agent-runtime-ai-sdk/     # Private AI SDK implementation and provider adapters
@@ -37,17 +38,17 @@ The CLI is the composition root. It resolves configuration, credentials, Agent s
 ```
 Dependency direction is inward toward contracts:
 
-- `agent-core` does not import the CLI, persistence, OpenTUI, MCP, concrete tools, or AI SDK.
+- `agent-core` does not import the CLI, TUI, persistence, OpenTUI, MCP, concrete tools, or AI SDK.
 - AI SDK types stay inside `agent-runtime-ai-sdk` and are translated to Wincode contracts.
-- The CLI adapts coding tools, MCP tools, and Skills to the generic tool interface.
+- Dependency direction is `cli` to the narrow `tui` entry point; the TUI adapts coding tools, MCP tools, and Skills to the generic tool interface.
 
 ## Agent Turn flow
 
-1. The CLI merges configuration and resolves the active Agent, model, variant, and provider credential.
+1. The TUI merges configuration and resolves the active Agent, model, variant, and provider credential.
 2. It builds a turn-scoped tool catalog and applies Agent and resource permission rules.
 3. The Agent Runtime invokes the provider and emits Wincode events for text, reasoning, tool calls, usage, failures, and completion.
 4. Every tool call passes through the Tool Gate before coding tools, MCP servers, or Skills execute.
-5. The CLI renders live events and commits durable Session Records for accepted user input, completed tool calls, and the terminal assistant outcome.
+5. The TUI renders live events and commits durable Session Records for accepted user input, completed tool calls, and the terminal assistant outcome.
 
 Streaming deltas and incomplete output remain transient. A failed, cancelled, or interrupted turn is never replayed automatically; retry starts a new Agent Turn from committed history.
 

@@ -155,7 +155,7 @@ Most formatting and common issues are automatically fixed by Biome. Run `bun fix
 
 This is a solo-dev project. The local SQLite schema is synchronized directly
 from the current Drizzle schema; Wincode does not maintain migration history.
-Use `bun run --cwd wincode-cli db:push` after schema changes. If a schema change
+Use `bun run --cwd packages/tui db:push` after schema changes. If a schema change
 cannot be reconciled safely, delete the local database and attachment data
 before restarting; no compatibility migration is provided.
 

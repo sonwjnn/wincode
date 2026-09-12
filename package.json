@@ -3,8 +3,7 @@
   "private": true,
   "workspaces": {
     "packages": [
-      "packages/*",
-      "wincode-cli"
+      "packages/*"
     ],
     "catalog": {
       "zod": "^4.1.13",
@@ -23,9 +22,9 @@
   "type": "module",
   "scripts": {
     "check-types": "bun run --parallel --filter '*' check-types",
-    "test": "bun test --timeout 30000 --no-orphans --path-ignore-patterns '**/*.integration.test.*' wincode-cli packages/ai/src packages/skills/src packages/agent-core/src packages/agent-runtime-ai-sdk/src",
+    "test": "bun test --timeout 30000 --no-orphans --path-ignore-patterns '**/*.integration.test.*' packages/cli/src packages/tui packages/ai/src packages/skills/src packages/agent-core/src packages/agent-runtime-ai-sdk/src",
     "test:integration": "bun scripts/test-lane.ts",
-    "dev:cli": "bun run --cwd wincode-cli dev",
+    "dev:cli": "bun run --cwd packages/cli dev",
     "check": "ultracite check",
     "fix": "ultracite fix"
   },

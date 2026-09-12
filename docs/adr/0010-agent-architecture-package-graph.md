@@ -2,8 +2,8 @@
 
 Wincode's agent architecture is split into public `@wincode/ai`,
 `@wincode/agent-core`, `@wincode/coding-tools`, and `@wincode/skills` packages,
-plus the private `@wincode/agent-runtime-ai-sdk` adapter and the `wincode-cli`
-composition root. MCP transport and OpenTUI presentation remain CLI-owned for
+plus the private `@wincode/agent-runtime-ai-sdk` adapter and the `@wincode/tui`
+composition root. MCP transport and OpenTUI presentation remain TUI-owned for
 this cutover; no public MCP or TUI package is introduced.
 
 Status: accepted
@@ -13,11 +13,11 @@ Status: accepted
 - `@wincode/ai` owns provider-neutral model contracts, catalog, targets, options, capabilities, usage, and failures.
 - `@wincode/agent-core` owns Agents, Agent Turns, lifecycle, events, records, failures, the Agent Runtime interface, and generic tool definitions, registry, calls, and results.
 - `@wincode/coding-tools` implements filesystem, search, edit, shell, workspace-policy, hashline, diff, and resource-limit tools against core tool contracts.
-- `@wincode/skills` owns Skill contracts, parsing, catalog, snapshots, and activation semantics; its `./filesystem` export owns Node/Bun discovery and content loading. CLI supplies explicit root descriptors, permission enforcement, persistence, and presentation.
-- `wincode-cli` owns MCP transport, client lifecycle, discovery, invocation, configuration, approval, status presentation, and adaptation to core Tool contracts.
-- `wincode-cli` owns OpenTUI rendering, Session View State, approval presentation, input callbacks, and projections of Session Records and Agent Turn Events.
+- `@wincode/skills` owns Skill contracts, parsing, catalog, snapshots, and activation semantics; its `./filesystem` export owns Node/Bun discovery and content loading. TUI supplies explicit root descriptors, permission enforcement, persistence, and presentation.
+- `@wincode/tui` owns MCP transport, client lifecycle, discovery, invocation, configuration, approval, status presentation, and adaptation to core Tool contracts.
+- `@wincode/tui` owns OpenTUI rendering, Session View State, approval presentation, input callbacks, and projections of Session Records and Agent Turn Events.
 - `@wincode/agent-runtime-ai-sdk` privately implements the core runtime interface with AI SDK.
-- `wincode-cli` owns Connections, session orchestration and persistence, Tool Gate, approval, configuration, routing, and composition.
+- `@wincode/tui` owns Connections, session orchestration and persistence, Tool Gate, approval, configuration, routing, and composition.
 
 `@wincode/ai` and `@wincode/skills` are base packages; `@wincode/agent-core`
 depends on both for model and typed Skill Activation contracts. Core does not

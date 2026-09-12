@@ -18,7 +18,7 @@ Status: accepted
 
 - **One module, parameterized site budgets (accepted)** - A single regex
   family, replacement, and operation order (strip, then redact) live in
-  `wincode-cli/src/shared/display-sanitize`. Contexts that genuinely show
+  `packages/tui/shared/display-sanitize`. Contexts that genuinely show
   different amounts keep their budgets as named options: chat tool arguments
   stay at 512 chars / depth 2 / 12 entries with a `[…]` depth marker, the
   approval dialog keeps 2048 chars / depth 4 / 24 entries with a plain `…`,

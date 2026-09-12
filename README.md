@@ -54,14 +54,14 @@ To use the checkout against another project, start the entrypoint from that proj
 
 ```bash
 cd /path/to/your/project
-bun run /path/to/wincode/wincode-cli/index.tsx
+bun run /path/to/wincode/packages/cli/src/index.ts
 ```
 
 > [!TIP]
 > Pass `--auto` to start with automatic approval enabled. Explicit `deny` rules still take precedence.
 >
 > ```bash
-> bun run /path/to/wincode/wincode-cli/index.tsx --auto
+> bun run /path/to/wincode/packages/cli/src/index.ts --auto
 > ```
 
 ### Supported providers
@@ -129,12 +129,12 @@ Objects merge recursively; arrays and scalar values replace lower-precedence val
 
 Detailed configuration references:
 
-- [Agents](wincode-cli/modules/agents/README.md)
-- [Tool permissions](wincode-cli/modules/permissions/README.md)
-- [Skills](wincode-cli/modules/skills/README.md)
-- [Custom commands](wincode-cli/modules/custom-commands/README.md)
-- [MCP servers](wincode-cli/modules/mcp/README.md)
-- [Configuration precedence](wincode-cli/shared/config/README.md)
+- [Agents](packages/tui/modules/agents/README.md)
+- [Tool permissions](packages/tui/modules/permissions/README.md)
+- [Skills](packages/tui/modules/skills/README.md)
+- [Custom commands](packages/tui/modules/custom-commands/README.md)
+- [MCP servers](packages/tui/modules/mcp/README.md)
+- [Configuration precedence](packages/tui/shared/config/README.md)
 
 ### Skills
 
@@ -170,12 +170,13 @@ Type `/` in the chat input to browse Built-in Commands, Custom Commands, and Ski
 
 ## Architecture
 
-Wincode is a Bun workspace with concern-focused packages and a CLI composition root:
+Wincode is a Bun workspace with separate executable and interactive composition roots:
 
 ```text
 .
-├── wincode-cli/                  # OpenTUI app, routing, sessions, config, connections, MCP, approvals
 ├── packages/
+│   ├── cli/                      # Executable dispatch, help, version, diagnostics
+│   ├── tui/                      # OpenTUI app, routing, sessions, config, MCP, approvals
 │   ├── ai/                       # Provider-neutral model catalog, targets, options, usage, failures
 │   ├── agent-core/               # Agent Turns, records, events, runtime and tool contracts
 │   ├── agent-runtime-ai-sdk/     # Private AI SDK runtime and provider adapters
@@ -204,14 +205,14 @@ bun install --frozen-lockfile
 | `bun run check` | Run Ultracite checks |
 | `bun run fix` | Apply Ultracite formatting and safe fixes |
 
-Session storage uses the current Drizzle schema without migration history. After changing `wincode-cli/modules/sessions/storage/schema.ts`, run:
+Session storage uses the current Drizzle schema without migration history. After changing `packages/tui/modules/sessions/storage/schema.ts`, run:
 
 ```bash
-bun run --cwd wincode-cli db:push
+bun run --cwd packages/tui db:push
 ```
 
 If Drizzle cannot reconcile a local schema change safely, reset the local database and attachment data before restarting Wincode. The session-only reset command is:
 
 ```bash
-bun run --cwd wincode-cli db:reset-sessions
+bun run --cwd packages/tui db:reset-sessions
 ```

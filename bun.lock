@@ -58,6 +58,23 @@
         "typescript": "catalog:",
       },
     },
+    "packages/cli": {
+      "name": "@wincode/cli",
+      "version": "0.1.0",
+      "bin": {
+        "wincode": "./src/index.ts",
+      },
+      "dependencies": {
+        "@wincode/tui": "workspace:*",
+        "commander": "^14.0.3",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+      },
+      "peerDependencies": {
+        "typescript": "catalog:",
+      },
+    },
     "packages/coding-tools": {
       "name": "@wincode/coding-tools",
       "dependencies": {
@@ -86,12 +103,9 @@
         "typescript": "catalog:",
       },
     },
-    "wincode-cli": {
-      "name": "wincode-cli",
+    "packages/tui": {
+      "name": "@wincode/tui",
       "version": "0.1.0",
-      "bin": {
-        "wincode": "./index.tsx",
-      },
       "dependencies": {
         "@modelcontextprotocol/client": "^2.0.0",
         "@opentui/core": "0.4.5",
@@ -116,7 +130,7 @@
         "@libsql/client": "^0.17.4",
         "@modelcontextprotocol/server": "^2.0.0",
         "@tanstack/router-cli": "1.166.43",
-        "@types/bun": "latest",
+        "@types/bun": "catalog:",
         "@types/react": "^19.2.10",
         "@types/react-dom": "catalog:",
         "drizzle-kit": "^0.31.10",
@@ -125,6 +139,9 @@
         "typescript": "catalog:",
       },
     },
+  },
+  "patchedDependencies": {
+    "@opentui/core@0.4.5": "patches/@opentui%2Fcore@0.4.5.patch",
   },
   "overrides": {
     "unrun": "0.2.37",
@@ -414,11 +431,15 @@
 
     "@wincode/ai": ["@wincode/ai@workspace:packages/ai"],
 
+    "@wincode/cli": ["@wincode/cli@workspace:packages/cli"],
+
     "@wincode/coding-tools": ["@wincode/coding-tools@workspace:packages/coding-tools"],
 
     "@wincode/config": ["@wincode/config@workspace:packages/config"],
 
     "@wincode/skills": ["@wincode/skills@workspace:packages/skills"],
+
+    "@wincode/tui": ["@wincode/tui@workspace:packages/tui"],
 
     "ai": ["ai@6.0.266", "", { "dependencies": { "@ai-sdk/gateway": "3.0.181", "@ai-sdk/provider": "3.0.15", "@ai-sdk/provider-utils": "4.0.48", "@opentelemetry/api": "^1.9.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-N3HM2k/15ewTk15AWnt7kNy0+DEjE6A+R2lqgM2uQ3yvSp+Dm+J/eJVzSaZegINQQoM2aQAZ6MFxo4MsuiXcyg=="],
 
@@ -699,8 +720,6 @@
     "web-tree-sitter": ["web-tree-sitter@0.25.10", "", { "peerDependencies": { "@types/emscripten": "^1.40.0" }, "optionalPeers": ["@types/emscripten"] }, "sha512-Y09sF44/13XvgVKgO2cNDw5rGk6s26MgoZPXLESvMXeefBf7i6/73eFurre0IsTW6E14Y0ArIzhUMmjoc7xyzA=="],
 
     "which": ["which@2.0.2", "", { "dependencies": { "isexe": "^2.0.0" }, "bin": { "node-which": "./bin/node-which" } }, "sha512-BLI3Tl1TW3Pvl70l3yq3Y64i+awpwXqsGBYWkkqMtnbXgrMD+yj7rhW0kuEDxzJaYXGjEW5ogapKNMEKNMjibA=="],
-
-    "wincode-cli": ["wincode-cli@workspace:wincode-cli"],
 
     "wrap-ansi": ["wrap-ansi@7.0.0", "", { "dependencies": { "ansi-styles": "^4.0.0", "string-width": "^4.1.0", "strip-ansi": "^6.0.0" } }, "sha512-YVGIj2kamLSTxw6NsZjoBxfSwsn0ycdesmc4p+Q21c5zPuZ1pl+NfxVdxPtdHvmNVOQ6XSYG4AUtyt/Fi7D16Q=="],
 
