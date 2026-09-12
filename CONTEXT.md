@@ -50,6 +50,21 @@ metadata, then prompt-config refs. _Avoid_: chat config, latest config
 
 ## Language
 
+**Wincode CLI**:
+The user-facing command-line entry point that selects and dispatches a CLI
+Command. It does not refer to the interactive terminal application.
+_Avoid_: TUI, interactive application
+
+**Wincode TUI**:
+The interactive terminal application through which users conduct Wincode
+sessions. It is launched by a CLI Command.
+_Avoid_: CLI, command dispatcher
+
+**CLI Command**:
+A user-invoked operation dispatched by the Wincode CLI. A CLI Command may launch
+the Wincode TUI or complete without an interactive interface.
+_Avoid_: Command, Built-in Command, slash command
+
 **Line Range**:
 A 1-indexed, inclusive selection of consecutive lines in a text file. Multiple
 Line Ranges in one read form a single ordered selection; overlapping or
