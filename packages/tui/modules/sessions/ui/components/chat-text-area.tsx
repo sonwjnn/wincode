@@ -108,7 +108,7 @@ const readPastedImage = () =>
 			};
 		},
 		temporaryPath: () =>
-			join(tmpdir(), `packages/tuipboard-${crypto.randomUUID()}.png`),
+			join(tmpdir(), `wincode-clipboard-${crypto.randomUUID()}.png`),
 	});
 
 const readPastedImageOrPath = async (pastedText: string) => {

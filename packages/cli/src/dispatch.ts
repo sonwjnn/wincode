@@ -1,3 +1,4 @@
+import type { StartTuiInput } from "@wincode/tui";
 import { Command, CommanderError } from "commander";
 import packageJson from "../package.json" with { type: "json" };
 
@@ -12,10 +13,23 @@ export type DispatchInput = {
 	stdout: OutputWriter;
 };
 
-type StartTui = (input: {
-	args: readonly string[];
-	cwd: string;
-}) => Promise<number>;
+/**
+ * Explicit runtime context handed to a statically registered CLI Command.
+ * `args` holds that command's own user arguments, without the command name.
+ */
+export type CliCommandContext = DispatchInput;
+
+/**
+ * A CLI Command is statically registered, parses through Commander, and returns
+ * its exit code instead of terminating the process.
+ */
+export type CliCommand = {
+	name: string;
+	configure: (program: Command) => void;
+	run: (context: CliCommandContext) => Promise<number>;
+};
+
+type StartTui = (input: StartTuiInput) => Promise<number>;
 
 const ROOT_HELP_FLAGS: Record<string, true> = { "--help": true, "-h": true };
 const ROOT_VERSION_FLAGS: Record<string, true> = {
@@ -23,6 +37,8 @@ const ROOT_VERSION_FLAGS: Record<string, true> = {
 	"-v": true,
 };
 const USAGE_EXIT_CODE = 2;
+
+const CLI_COMMANDS: readonly CliCommand[] = [];
 
 const writeOperationalError = (
 	stderr: OutputWriter,
@@ -38,6 +54,55 @@ const loadTui: StartTui = async (input) => {
 	// root controls and future non-interactive CLI Commands.
 	const { startTui } = await import("@wincode/tui");
 	return await startTui(input);
+};
+
+const createProgram = (input: DispatchInput): Command => {
+	const program = new Command();
+	program
+		.name("wincode")
+		.description("Wincode command-line interface")
+		.allowExcessArguments()
+		.version(packageJson.version, "-v, --version")
+		.helpOption("-h, --help")
+		.exitOverride()
+		.configureOutput({
+			writeErr: (text) => input.stderr.write(text),
+			writeOut: (text) => input.stdout.write(text),
+		});
+	return program;
+};
+
+const dispatchNamedCommand = async (
+	input: DispatchInput,
+	firstArg: string,
+	program: Command
+): Promise<number> => {
+	const command = CLI_COMMANDS.find(({ name }) => name === firstArg);
+	if (command === undefined) {
+		input.stderr.write(`error: unknown command '${firstArg}'\n`);
+		return USAGE_EXIT_CODE;
+	}
+	for (const registeredCommand of CLI_COMMANDS) {
+		registeredCommand.configure(program);
+	}
+	try {
+		await program.parseAsync(input.args, { from: "user" });
+	} catch (error) {
+		if (error instanceof CommanderError) {
+			return error.exitCode === 0 ? 0 : USAGE_EXIT_CODE;
+		}
+		return writeOperationalError(input.stderr, error);
+	}
+	try {
+		return await command.run({
+			args: input.args.slice(1),
+			cwd: input.cwd,
+			stderr: input.stderr,
+			stdout: input.stdout,
+		});
+	} catch (error) {
+		return writeOperationalError(input.stderr, error);
+	}
 };
 
 export const dispatch = async (
@@ -61,30 +126,9 @@ export const dispatch = async (
 		}
 	}
 
-	const program = new Command();
-	program
-		.name("wincode")
-		.description("Wincode command-line interface")
-		.allowExcessArguments()
-		.version(packageJson.version, "-v, --version")
-		.helpOption("-h, --help")
-		.exitOverride()
-		.configureOutput({
-			writeErr: (text) => input.stderr.write(text),
-			writeOut: (text) => input.stdout.write(text),
-		});
-
+	const program = createProgram(input);
 	if (!(isRootHelp || isRootVersion)) {
-		try {
-			await program.parseAsync(input.args, { from: "user" });
-			input.stderr.write(`error: unknown command '${firstArg}'\n`);
-			return USAGE_EXIT_CODE;
-		} catch (error) {
-			if (error instanceof CommanderError) {
-				return USAGE_EXIT_CODE;
-			}
-			return writeOperationalError(input.stderr, error);
-		}
+		return await dispatchNamedCommand(input, firstArg, program);
 	}
 	if (input.args.length !== 1) {
 		input.stderr.write("error: unexpected arguments after root control flag\n");

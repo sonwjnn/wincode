@@ -1,9 +1,9 @@
-import { setTuiRuntimeContext } from "./shared/runtime-context";
+import {
+	type StartTuiInput,
+	setTuiRuntimeContext,
+} from "./shared/runtime-context";
 
-export type StartTuiInput = {
-	args: readonly string[];
-	cwd: string;
-};
+export type { StartTuiInput } from "./shared/runtime-context";
 
 export const getTuiHelpText = (): string =>
 	["TUI options:", "  --auto    Enable automatic tool approval"].join("\n");

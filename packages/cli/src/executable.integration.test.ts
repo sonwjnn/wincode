@@ -39,6 +39,16 @@ describe("wincode executable", () => {
 	});
 
 	test.each([
+		"--help",
+		"--version",
+	])("treats %s after an unknown command as part of the usage failure", (flag) => {
+		const result = run(["unknown", flag]);
+		expect(result.exitCode).toBe(2);
+		expect(output(result.stdout)).toBe("");
+		expect(output(result.stderr)).toBe("error: unknown command 'unknown'\n");
+	});
+
+	test.each([
 		{ args: ["--help", "extra"] },
 		{ args: ["--version", "extra"] },
 	])("rejects trailing root-control arguments", ({ args }) => {

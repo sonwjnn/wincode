@@ -1,5 +1,5 @@
 // Runnable MCP stdio server fixture used by mcp.integration.test.ts.
-// Run directly: `bun run packages/tui/src/modules/mcp/fixtures/stdio-server.ts`.
+// Run directly: `bun run packages/tui/modules/mcp/fixtures/stdio-server.ts`.
 // stdout carries MCP protocol frames only; all diagnostics go to stderr.
 // This file is an entrypoint and intentionally imports nothing from the rest
 // of the mcp module so the transport wiring stays self-contained.

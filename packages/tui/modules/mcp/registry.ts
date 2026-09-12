@@ -211,7 +211,7 @@ const defaultSdkClientFactory = (
 				)
 			);
 			deps = createSdkMcpClientDeps({
-				clientInfo: { name: "packages/tui", version: "0.1.0" },
+				clientInfo: { name: "wincode-cli", version: "0.1.0" },
 				environment,
 				workspace,
 			});

@@ -1,15 +1,15 @@
-export type TuiRuntimeContext = {
+export type StartTuiInput = {
 	args: readonly string[];
 	cwd: string;
 };
 
-let runtimeContext: TuiRuntimeContext | undefined;
+let runtimeContext: StartTuiInput | undefined;
 
-export const setTuiRuntimeContext = (context: TuiRuntimeContext): void => {
+export const setTuiRuntimeContext = (context: StartTuiInput): void => {
 	runtimeContext = Object.freeze({ ...context, args: [...context.args] });
 };
 
-export const getTuiRuntimeContext = (): TuiRuntimeContext => {
+export const getTuiRuntimeContext = (): StartTuiInput => {
 	if (runtimeContext === undefined) {
 		throw new Error("TUI runtime context was not initialized");
 	}

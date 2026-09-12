@@ -49,6 +49,19 @@ const App = () => (
 		</ThemedRoot>
 	</ThemeProvider>
 );
+const finishRenderer = async (
+	destroy: () => void,
+	exited: PromiseWithResolvers<number>
+): Promise<void> => {
+	try {
+		await runTuiCleanup();
+		destroy();
+		exited.resolve(0);
+	} catch (error) {
+		destroy();
+		exited.reject(error);
+	}
+};
 
 export const runTui = async (): Promise<number> => {
 	await router.load();
@@ -67,16 +80,7 @@ export const runTui = async (): Promise<number> => {
 			return;
 		}
 		destroyed = true;
-		void runTuiCleanup().then(
-			() => {
-				destroy();
-				exited.resolve(0);
-			},
-			(error: unknown) => {
-				destroy();
-				exited.reject(error);
-			}
-		);
+		void finishRenderer(destroy, exited);
 	};
 	createRoot(renderer).render(<App />);
 	return await exited.promise;
