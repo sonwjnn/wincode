@@ -220,6 +220,10 @@ The central runner audits the whole repository before applying a package filter:
 `bun run test -- --package tui` runs only TUI Default files while still rejecting
 misplaced or unsupported test files elsewhere. A package-local `test` script is
 the same runner with that package filter.
+The root `scripts/test-portfolio.ts` command is a thin repository adapter.
+`@wincode/test-runner` owns runner discovery, execution, and contract tests under
+`packages/test-runner/src` and `packages/test-runner/test`; CLI tests cover CLI
+behavior only.
 
 Session storage uses the current Drizzle schema without migration history. After changing `packages/tui/modules/sessions/storage/schema.ts`, run:
 

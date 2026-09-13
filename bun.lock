@@ -9,6 +9,7 @@
         "@total-typescript/shoehorn": "^0.1.2",
         "@types/bun": "catalog:",
         "@wincode/config": "workspace:*",
+        "@wincode/test-runner": "workspace:*",
         "lefthook": "latest",
         "typescript": "catalog:",
         "ultracite": "7.6.5",
@@ -100,6 +101,13 @@
         "@types/bun": "catalog:",
         "@types/node": "^26.3.0",
         "@wincode/config": "workspace:*",
+        "typescript": "catalog:",
+      },
+    },
+    "packages/test-runner": {
+      "name": "@wincode/test-runner",
+      "devDependencies": {
+        "@types/bun": "catalog:",
         "typescript": "catalog:",
       },
     },
@@ -438,6 +446,8 @@
     "@wincode/config": ["@wincode/config@workspace:packages/config"],
 
     "@wincode/skills": ["@wincode/skills@workspace:packages/skills"],
+
+    "@wincode/test-runner": ["@wincode/test-runner@workspace:packages/test-runner"],
 
     "@wincode/tui": ["@wincode/tui@workspace:packages/tui"],
 

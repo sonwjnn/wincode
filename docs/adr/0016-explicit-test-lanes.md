@@ -14,9 +14,10 @@ portfolio uses `*.external.test.{ts,tsx}`. Files may remain flat inside
 `test/`; product-area directories are added only when they improve navigation,
 group cohesive test infrastructure, or avoid a collision.
 
-`bun run test` is the canonical Default runner. Root runners own common Bun
-execution and discovery, while package scripts may delegate to the root runner
-for focused execution. Default tests run in one subprocess per package,
+`bun run test` is the canonical Default runner. The root
+`scripts/test-portfolio.ts` is a thin repository adapter;
+`@wincode/test-runner` owns common Bun execution and discovery plus its contract
+tests. Package scripts may delegate to the root runner for focused execution.
 sequentially, and report every package failure before exiting. E2E tests run
 process-per-file and fail fast. Both use a 30-second test timeout, no retries,
 and a 15-minute CI job timeout.

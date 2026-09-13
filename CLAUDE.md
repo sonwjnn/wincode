@@ -137,6 +137,10 @@ test timeout and no retries.
 Package-local `test` scripts delegate to the central Default runner with a package
 filter, while direct development remains available with `bun test path/to/file`.
 The audit still covers the whole repository when execution is filtered.
+The root `scripts/test-portfolio.ts` file is a thin repository adapter;
+`@wincode/test-runner` owns runner discovery, execution, and contract tests under
+`packages/test-runner/src` and `packages/test-runner/test`. CLI tests cover CLI
+behavior only.
 
 Prefer observable readiness transitions over sleeps. Real failures must be
 triggered at the responsible boundary; mocking the final error is not error
