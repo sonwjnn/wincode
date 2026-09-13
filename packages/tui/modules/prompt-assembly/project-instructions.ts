@@ -122,7 +122,13 @@ const isMissingError = (error: unknown): boolean => {
 const isByteArray = (value: Uint8Array | string): value is Uint8Array =>
 	typeof value !== "string";
 
-const countCharacters = (content: string): number => Array.from(content).length;
+const countCharacters = (content: string): number => {
+	let count = 0;
+	for (const _character of content) {
+		count += 1;
+	}
+	return count;
+};
 
 const toBytes = (value: Uint8Array | string): Uint8Array =>
 	isByteArray(value) ? value : new TextEncoder().encode(value);
@@ -256,27 +262,28 @@ const invalidDiagnostic = (
 	reason: code,
 	sourcePath,
 });
-type SourceLimit = {
+type SourceInspection = {
 	readonly byteLength?: number;
 	readonly characterLength?: number;
+	readonly exceedsLimit: boolean;
 };
 
-const sourceLimitExceeded = (
-	value: Uint8Array | string
-): SourceLimit | undefined => {
+const inspectSourceSize = (value: Uint8Array | string): SourceInspection => {
 	if (isByteArray(value)) {
-		return value.byteLength > MAX_PROJECT_INSTRUCTION_SOURCE_BYTES
-			? { byteLength: value.byteLength }
-			: undefined;
+		const byteLength = value.byteLength;
+		return {
+			byteLength,
+			exceedsLimit: byteLength > MAX_PROJECT_INSTRUCTION_SOURCE_BYTES,
+		};
 	}
 	let characterLength = 0;
 	for (const _character of value) {
 		characterLength += 1;
 		if (characterLength > MAX_PROJECT_INSTRUCTION_SOURCE_CHARS) {
-			return { characterLength };
+			return { characterLength, exceedsLimit: true };
 		}
 	}
-	return;
+	return { characterLength, exceedsLimit: false };
 };
 
 const readSource = async (
@@ -305,14 +312,14 @@ const readSource = async (
 			diagnostic: invalidDiagnostic(candidate.sourcePath, "read-error"),
 		};
 	}
-	const limit = sourceLimitExceeded(value);
-	if (limit !== undefined) {
+	const sourceInspection = inspectSourceSize(value);
+	if (sourceInspection.exceedsLimit) {
 		return {
 			diagnostic: invalidDiagnostic(
 				candidate.sourcePath,
 				"source-too-large",
-				limit.byteLength,
-				limit.characterLength
+				sourceInspection.byteLength,
+				sourceInspection.characterLength
 			),
 		};
 	}
@@ -329,8 +336,12 @@ const readSource = async (
 			),
 		};
 	}
-	const characterLength = countCharacters(content);
-	if (characterLength > MAX_PROJECT_INSTRUCTION_SOURCE_CHARS) {
+	const characterLength =
+		sourceInspection.characterLength ?? countCharacters(content);
+	if (
+		sourceInspection.characterLength === undefined &&
+		characterLength > MAX_PROJECT_INSTRUCTION_SOURCE_CHARS
+	) {
 		return {
 			diagnostic: invalidDiagnostic(
 				candidate.sourcePath,
