@@ -29,7 +29,7 @@
   },
   "scripts": {
     "check-types": "tsc --noEmit",
-    "test": "bun test src scripts"
+    "test": "bun ../../scripts/test-portfolio.ts default --package ai"
   },
   "dependencies": {
     "zod": "catalog:"

@@ -8,7 +8,7 @@
   },
   "scripts": {
     "check-types": "tsc --noEmit",
-    "test": "bun test src"
+    "test": "bun ../../scripts/test-portfolio.ts default --package agent-core"
   },
   "dependencies": {
     "@wincode/ai": "workspace:*",

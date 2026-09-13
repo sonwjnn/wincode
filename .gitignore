@@ -44,6 +44,9 @@ lerna-debug.log*
 coverage
 .nyc_output
 
+
+# Central test portfolio artifacts
+test-artifacts/
 # Misc
 *.tgz
 .cache

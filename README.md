@@ -199,11 +199,27 @@ bun install --frozen-lockfile
 | Command | Purpose |
 | --- | --- |
 | `bun run dev:cli` | Run the CLI in watch mode |
-| `bun test` | Run the deterministic, offline test lane |
-| `bun run test:integration` | Run local integration tests |
+| `bun run test` | Run the repository Default test portfolio |
+| `bun run test:e2e` | Run each E2E journey in its own process |
+| `bun test path/to/file.test.ts` | Run one test file directly during development |
 | `bun run check-types` | Type-check every workspace package |
 | `bun run check` | Run Ultracite checks |
 | `bun run fix` | Apply Ultracite formatting and safe fixes |
+
+Tests belong to the owning package's `test/` tree. Keep small package test trees
+flat; add only shallow product-area directories when test volume or cohesive
+navigation makes them useful. The TUI groups sessions, MCP, commands, and
+permissions under `test/sessions`, `test/mcp`, `test/commands`, and
+`test/permissions`; do not mirror technical source roots such as `src`,
+`modules`, `shared`, or `app`. Default tests use ordinary `*.test.ts` or
+`*.test.tsx` names. E2E tests use `*.e2e.test.ts` or `*.e2e.test.tsx`; External
+tests are reserved for a real provider contract and use `*.external.test.ts` or
+`*.external.test.tsx`.
+
+The central runner audits the whole repository before applying a package filter:
+`bun run test -- --package tui` runs only TUI Default files while still rejecting
+misplaced or unsupported test files elsewhere. A package-local `test` script is
+the same runner with that package filter.
 
 Session storage uses the current Drizzle schema without migration history. After changing `packages/tui/modules/sessions/storage/schema.ts`, run:
 

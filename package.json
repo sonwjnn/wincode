@@ -22,9 +22,8 @@
   "type": "module",
   "scripts": {
     "check-types": "bun run --parallel --filter '*' check-types",
-    "test": "bun test --timeout 30000 --no-orphans --path-ignore-patterns '**/dist/**' --path-ignore-patterns '**/*.integration.test.*' --path-ignore-patterns '**/*.e2e.test.*' packages/cli/src packages/tui packages/ai packages/skills/src packages/agent-core/src packages/agent-runtime-ai-sdk/src",
-    "test:integration": "bun scripts/test-lane.ts",
-    "test:e2e": "bun scripts/test-e2e-lane.ts",
+    "test": "bun scripts/test-portfolio.ts default",
+    "test:e2e": "bun scripts/test-portfolio.ts e2e",
     "sync-model-metadata": "bun run packages/ai/scripts/sync-model-metadata.ts",
     "dev:cli": "bun run --cwd packages/cli dev",
     "check": "ultracite check",

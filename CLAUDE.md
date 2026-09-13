@@ -7,8 +7,7 @@ This project uses **Ultracite**, a zero-config preset that enforces strict code 
 - **Format code**: `bun run fix`
 - **Check for issues**: `bun run check`
 - **Type check all workspaces**: `bun run check-types`
-- **Run deterministic tests**: `bun test`
-- **Run integration tests**: `bun run test:integration`
+- **Run the Default test portfolio**: `bun run test`
 - **Run TUI E2E tests**: `bun run test:e2e`
 - **Start the CLI in watch mode**: `bun run dev:cli`
 Biome (the underlying engine) provides robust linting and formatting. Most issues are automatically fixable.
@@ -98,42 +97,54 @@ Tests are contract-first. Every test must defend one externally observable behav
 state transition, error mapping, precedence rule, or regression-prone boundary, and
 its name or nearby rationale must state the consumer-visible failure mode.
 
-Classify tests by crossed dependencies:
+### Ownership and layout
 
-- **Default**: deterministic, offline, credential-free, isolated in-process behavior.
-- **Unit**: a genuinely narrower transformation or boundary; never a second name for
-the default portfolio.
-- **Integration**: the highest stable public seam crossing route composition,
-filesystem, subprocess, or local database boundaries. Use `*.integration.test.*`.
-- **External-service integration**: real services, explicitly gated by their
-environment contract and run in a dedicated CI lane when such a dependency
-exists.
+Every package owns its tests under `packages/<package>/test/`. Small package test
+trees stay flat. A larger package may add one shallow product-area directory when
+test volume makes navigation meaningfully better; do not mirror technical source
+roots such as `src`, `modules`, `shared`, or `app`. Test support code belongs under
+`test/support`; inert inputs and expected outputs belong under `test/fixtures`.
+
+The TUI keeps high-volume journeys in `test/sessions` and `test/mcp`, and groups
+command and permission coverage in `test/commands` and `test/permissions`.
+Other small product areas stay flat at the test root. Do not split a small test
+into additional folders only to mirror production structure, and merge closely
+related small tests when a shared file improves navigation without hiding a
+contract.
+
+### Portfolios and naming
+
+- **Default**: deterministic, offline, credential-free tests, including Unit
+  behavior and local Integration seams such as filesystem, SQLite, subprocess, or
+  composed-application boundaries. Default files use ordinary `*.test.ts` or
+  `*.test.tsx` names.
+- **Unit** and **Integration** remain descriptive test kinds, not execution lanes.
+- **E2E**: a complete user journey through a real interface. E2E files use
+  `*.e2e.test.ts` or `*.e2e.test.tsx` and run separately.
+- **External**: a real provider or service contract. External files use
+  `*.external.test.ts` or `*.external.test.tsx` and remain outside required
+  workflows until their credential and cost contract exists.
 - **Smoke**: only a narrow install, packaging, worker, native-addon, or runtime
-failure that lower seams cannot expose.
-- **E2E**: only a user journey that cannot be protected at a cheaper seam. Future
-TUI coverage uses a virtual terminal; future browser coverage uses Playwright.
+  failure that lower seams cannot expose.
 
-Prefer the highest stable behavioral seam. Do not duplicate an integration contract
-with a narrower mocked test. Real failures must be triggered at the responsible
-boundary; mocking the final error is not error coverage. Own cleanup of temporary
-files, processes, database records, environment changes, and spies.
+The central runner discovers every package test tree, rejects colocated tests,
+unsupported suffixes and extensions, excludes generated output, and prints
+discovered and executed counts. `bun run test` runs one sequential subprocess per
+Default package and reports all package failures. `bun run test:e2e` runs one
+subprocess per E2E file and stops after the first failure. Both use a 30-second
+test timeout and no retries.
 
-Reject static echo, passthrough, source-text, tautological, placeholder, wording-only,
-and package-startup-only tests. Do not add tests for tiny low-risk changes without a
-real contract or regression risk. Regression tests include the issue number and the
-behavior that previously failed. Unit and integration tests do not retry or use sleeps
-for readiness; wait for process exit, protocol calls, events, or state transitions.
+Package-local `test` scripts delegate to the central Default runner with a package
+filter, while direct development remains available with `bun test path/to/file`.
+The audit still covers the whole repository when execution is filtered.
 
-- `bun test` is the canonical deterministic default lane and excludes integration
-  and E2E files.
-- `bun run test:e2e` discovers `**/*.e2e.test.{ts,tsx}` files and runs each in an
-  isolated subprocess so module mocks and temporary local databases cannot leak
-  between scenarios.
-- `bun run test:integration` discovers all `*.integration.test.*` files.
-- Network access and provider credentials are opt-in; CI scrubs credential variables.
+Prefer observable readiness transitions over sleeps. Real failures must be
+triggered at the responsible boundary; mocking the final error is not error
+coverage. Own cleanup of temporary files, processes, databases, environment
+changes, and spies. CI scrubs provider credentials from deterministic jobs.
 
-Before completion, run the narrowest affected command and the canonical lane. Do not
-claim an external lane passed unless its explicit prerequisites were present.
+The required Ubuntu checks are type checking, Default, and E2E, followed by one
+stable aggregate gate. macOS Default and E2E checks run weekly and on demand.
 
 ## When Biome Can't Help
 

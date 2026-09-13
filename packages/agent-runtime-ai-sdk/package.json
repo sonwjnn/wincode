@@ -10,7 +10,7 @@
   },
   "scripts": {
     "check-types": "tsc --noEmit",
-    "test": "bun test src"
+    "test": "bun ../../scripts/test-portfolio.ts default --package agent-runtime-ai-sdk"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.81",

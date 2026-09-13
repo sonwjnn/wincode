@@ -5,6 +5,9 @@ on:
     branches: [master]
   push:
     branches: [master]
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
 
 concurrency:
   group: test-${{ github.workflow }}-${{ github.ref }}
@@ -18,22 +21,23 @@ env:
   AWS_SECRET_ACCESS_KEY: ""
   AWS_SESSION_TOKEN: ""
   AZURE_OPENAI_API_KEY: ""
+  ANTHROPIC_API_KEY: ""
+  COHERE_API_KEY: ""
+  DATABASE_URL: ""
   GITHUB_TOKEN: ""
   GOOGLE_APPLICATION_CREDENTIALS: ""
   GOOGLE_API_KEY: ""
+  GROQ_API_KEY: ""
+  MISTRAL_API_KEY: ""
   OPENAI_API_KEY: ""
-  ANTHROPIC_API_KEY: ""
   OPENCODE_API_KEY: ""
   OPENCODE_GO_API_KEY: ""
   OPENROUTER_API_KEY: ""
-  GROQ_API_KEY: ""
-  MISTRAL_API_KEY: ""
-  COHERE_API_KEY: ""
   XAI_API_KEY: ""
 
 jobs:
-  deterministic:
-    name: Deterministic tests
+  check-types:
+    name: Type checking
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -43,10 +47,9 @@ jobs:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
       - run: bun run check-types
-      - run: bun test
 
-  integration:
-    name: Local integration tests
+  default:
+    name: Default tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -55,15 +58,71 @@ jobs:
         with:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
-      - run: bun run test:integration
+      - run: bun run test
+
+  e2e:
+    name: E2E tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run test:e2e
+      - name: Upload E2E failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-artifacts
+          path: test-artifacts/e2e
+          if-no-files-found: ignore
+          retention-days: 7
+
+  macos-default:
+    name: macOS Default tests
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run test
+
+  macos-e2e:
+    name: macOS E2E tests
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run test:e2e
+      - name: Upload macOS E2E failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-e2e-failure-artifacts
+          path: test-artifacts/e2e
+          if-no-files-found: ignore
+          retention-days: 7
 
   gate:
     name: Required test gate
     if: always()
-    needs: [deterministic, integration]
+    needs: [check-types, default, e2e]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: Require every test lane
+      - name: Require type checking, Default, and E2E
         run: |
-          test "${{ needs.deterministic.result }}" = success
-          test "${{ needs.integration.result }}" = success
+          test "${{ needs.check-types.result }}" = success
+          test "${{ needs.default.result }}" = success
+          test "${{ needs.e2e.result }}" = success

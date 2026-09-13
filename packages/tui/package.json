@@ -11,7 +11,8 @@
     }
   },
   "scripts": {
-    "test": "bun test .",
+    "test": "bun ../../scripts/test-portfolio.ts default --package tui",
+    "test:e2e": "bun ../../scripts/test-portfolio.ts e2e --package tui",
     "check-types": "tsc --noEmit",
     "db:reset-sessions": "bun run scripts/reset-session-data.ts",
     "db:push": "drizzle-kit push --config drizzle.config.ts",

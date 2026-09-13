@@ -58,8 +58,8 @@ Run:
 
 ```sh
 bun run --cwd packages/tui check-types
-bun check-types
-bun test packages/tui packages/ai/src
+bun run --cwd packages/tui test
+bun run test
 bun run check
 ```
 
