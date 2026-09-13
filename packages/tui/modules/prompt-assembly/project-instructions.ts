@@ -204,6 +204,29 @@ const metadataKey = (
 			return `${candidate.absolutePath}:${encodeMetadata(candidateMetadata)}`;
 		}),
 	].join("\n");
+const snapshotCacheScope = (
+	workspace: string,
+	provenanceWorkspace: string
+): string => `${workspace}\n${provenanceWorkspace}\n`;
+
+const cacheSnapshot = (
+	cache: Map<string, ProjectInstructionSnapshot> | undefined,
+	key: string,
+	workspace: string,
+	provenanceWorkspace: string,
+	snapshot: ProjectInstructionSnapshot
+): void => {
+	if (cache === undefined) {
+		return;
+	}
+	const scope = snapshotCacheScope(workspace, provenanceWorkspace);
+	for (const cachedKey of cache.keys()) {
+		if (cachedKey !== key && cachedKey.startsWith(scope)) {
+			cache.delete(cachedKey);
+		}
+	}
+	cache.set(key, snapshot);
+};
 
 const diagnosticMessage = (code: ProjectInstructionDiagnosticCode): string => {
 	switch (code) {
@@ -260,7 +283,11 @@ const readSource = async (
 	fileSystem: ProjectInstructionFileSystem,
 	candidate: Candidate
 ): Promise<
-	| { readonly bytes: Uint8Array; readonly content: string }
+	| {
+			readonly bytes: Uint8Array;
+			readonly characterLength: number;
+			readonly content: string;
+	  }
 	| { readonly diagnostic: ProjectInstructionDiagnostic }
 	| { readonly missing: true }
 > => {
@@ -313,7 +340,7 @@ const readSource = async (
 			),
 		};
 	}
-	return { bytes, content };
+	return { bytes, characterLength, content };
 };
 const loadSourceCandidate = async (
 	fileSystem: ProjectInstructionFileSystem,
@@ -406,7 +433,7 @@ export const createProjectInstructionSnapshot = async (
 			continue;
 		}
 		const byteLength = loaded.bytes.byteLength;
-		const characterLength = countCharacters(loaded.content);
+		const characterLength = loaded.characterLength;
 		if (totalByteLength + byteLength > MAX_PROJECT_INSTRUCTION_TOTAL_BYTES) {
 			diagnostics.push(
 				invalidDiagnostic(
@@ -437,7 +464,7 @@ export const createProjectInstructionSnapshot = async (
 	const canCacheSnapshot =
 		cacheable && diagnostics.every(({ code }) => code !== "read-error");
 	if (canCacheSnapshot) {
-		cache?.set(key, snapshot);
+		cacheSnapshot(cache, key, workspace, provenanceWorkspace, snapshot);
 	}
 	return snapshot;
 };

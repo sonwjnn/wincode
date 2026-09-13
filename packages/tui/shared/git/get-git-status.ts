@@ -149,15 +149,17 @@ const readGitPorcelain = async (
 	if (spawn === undefined) {
 		return null;
 	}
+	let child: BunSpawnProcess | undefined;
 	try {
-		const process = spawn(command, { cwd, stderr: "ignore", stdout: "pipe" });
-		const result = await readBounded(process.stdout, GIT_STATUS_MAX_BYTES);
+		child = spawn(command, { cwd, stderr: "ignore", stdout: "pipe" });
+		const result = await readBounded(child.stdout, GIT_STATUS_MAX_BYTES);
 		if (result.truncated) {
-			process.kill?.();
+			child.kill?.();
 		}
-		const exitCode = await process.exited;
+		const exitCode = await child.exited;
 		return { ...result, exitCode };
 	} catch {
+		child?.kill?.();
 		return null;
 	}
 };
