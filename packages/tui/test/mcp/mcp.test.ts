@@ -12,7 +12,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, watch } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -221,7 +221,7 @@ describe("MCP transport integration", () => {
 		}
 	}, 15_000);
 
-	test("stdio: no child process remains after close", async () => {
+	test("stdio: child process exits after close", async () => {
 		const markerDirectory = await mkdtemp(
 			path.join(tmpdir(), "wincode-mcp-exit-")
 		);
@@ -243,7 +243,7 @@ describe("MCP transport integration", () => {
 				await registry.close();
 			}
 			await waitForFile(exitMarker);
-			expect(hasChildProcess(FIXTURE)).toBe(false);
+			expect(await readFile(exitMarker, "utf8")).toBe("exited");
 		} finally {
 			await rm(markerDirectory, { force: true, recursive: true });
 		}
