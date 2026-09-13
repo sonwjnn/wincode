@@ -60,11 +60,17 @@ const exists = async (path: string): Promise<boolean> => {
 describe("test portfolio runner", () => {
 	test("audits placement and classification before executing Default tests", async () => {
 		const root = await mkdtemp(join(tmpdir(), "wincode-test-discovery-"));
+		const marker = join(root, "execution.log");
 		try {
 			await writeFixture(
 				root,
 				"packages/alpha/test/default.test.ts",
-				'import { test } from "bun:test"; test("valid package test", () => {});\n'
+				`import { appendFileSync } from "node:fs";
+import { test } from "bun:test";
+test("valid package test", () => {
+	appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "default\\n");
+});
+`
 			);
 			await writeFixture(root, "packages/alpha/test/journey.e2e.test.ts", "");
 			await writeFixture(
@@ -75,10 +81,13 @@ describe("test portfolio runner", () => {
 			await writeFixture(root, "packages/alpha/dist/generated.test.js", "");
 			await mkdir(join(root, "packages/empty"), { recursive: true });
 
-			const valid = runPortfolio(root, "default");
+			const valid = runPortfolio(root, "default", [], {
+				WINCODE_PORTFOLIO_MARKER: marker,
+			});
 			expect(valid.exitCode).toBe(0);
 			expect(valid.output).toContain("Discovered Default test files: 1");
 			expect(valid.output).toContain("Executed Default test files: 1");
+			expect(await readFile(marker, "utf8")).toBe("default\n");
 
 			await writeFixture(root, "packages/alpha/src/colocated.test.ts", "");
 			await writeFixture(
@@ -109,8 +118,10 @@ describe("test portfolio runner", () => {
 				"packages/a-fails/test/failure.test.ts",
 				`import { appendFileSync } from "node:fs";
 import { test, expect } from "bun:test";
-appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "a-fails\\n");
-test("records a package failure", () => expect(true).toBe(false));
+test("records a package failure", () => {
+	appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "a-fails\\n");
+	expect(true).toBe(false);
+});
 `
 			);
 			await writeFixture(
@@ -118,8 +129,9 @@ test("records a package failure", () => expect(true).toBe(false));
 				"packages/b-runs/test/after.test.ts",
 				`import { appendFileSync } from "node:fs";
 import { test } from "bun:test";
-appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "b-runs\\n");
-test("records the later package", () => {});
+test("records the later package", () => {
+	appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "b-runs\\n");
+});
 `
 			);
 
@@ -148,13 +160,13 @@ import { join } from "node:path";
 import { test } from "bun:test";
 const artifactDirectory = process.env.WINCODE_E2E_ARTIFACT_DIR!;
 const framePath = process.env.WINCODE_E2E_FRAME_PATH!;
-appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "a-fails\\n");
-mkdirSync(join(artifactDirectory, "attachments"), { recursive: true });
-writeFileSync(join(artifactDirectory, "database.sqlite"), "database");
-writeFileSync(join(artifactDirectory, "environment.json"), "environment");
-writeFileSync(join(artifactDirectory, "authorization.txt"), "secret");
-writeFileSync(framePath, "final character frame");
 test("fails with an actionable frame", () => {
+	appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "a-fails\\n");
+	mkdirSync(join(artifactDirectory, "attachments"), { recursive: true });
+	writeFileSync(join(artifactDirectory, "database.sqlite"), "database");
+	writeFileSync(join(artifactDirectory, "environment.json"), "environment");
+	writeFileSync(join(artifactDirectory, "authorization.txt"), "secret");
+	writeFileSync(framePath, "final character frame");
 	throw new Error("intentional E2E failure");
 });
 `
@@ -164,8 +176,9 @@ test("fails with an actionable frame", () => {
 				"packages/tui/test/b-runs.e2e.test.ts",
 				`import { appendFileSync } from "node:fs";
 import { test } from "bun:test";
-appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "b-runs\\n");
-test("must not run after a failure", () => {});
+test("must not run after a failure", () => {
+	appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "b-runs\\n");
+});
 `
 			);
 
@@ -207,8 +220,9 @@ test("must not run after a failure", () => {});
 				"packages/selected/test/success.e2e.test.ts",
 				`import { appendFileSync } from "node:fs";
 import { test } from "bun:test";
-appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "success\\n");
-test("completes successfully", () => {});
+test("completes successfully", () => {
+	appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "success\\n");
+});
 `
 			);
 			const success = runPortfolio(root, "e2e", ["--package", "selected"], {

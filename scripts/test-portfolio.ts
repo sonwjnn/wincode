@@ -180,15 +180,19 @@ const removeIfEmpty = async (path: string): Promise<void> => {
 		if ((await readdir(path)).length === 0) {
 			await rm(path, { force: true, recursive: true });
 		}
-	} catch {
-		// The artifact directory may not exist after a failed spawn.
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+			throw error;
+		}
 	}
 };
-
 const ensureTerminalFrame = async (framePath: string): Promise<void> => {
 	try {
 		await access(framePath);
-	} catch {
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+			throw error;
+		}
 		await writeFile(framePath, "", "utf8");
 	}
 };
