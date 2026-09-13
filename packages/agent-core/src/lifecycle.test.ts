@@ -133,12 +133,12 @@ describe("Operational Failure boundary", () => {
 	test("normalizes arbitrary causes to a safe allowlisted failure", () => {
 		const failure = normalizeOperationalFailure(
 			new Error("provider body contains secret-token"),
-			{ modelId: "gpt-5.4-mini", providerId: "openai" }
+			{ modelId: "gpt-5.6-luna", providerId: "openai" }
 		);
 
 		expect(failure).toEqual({
 			code: "unknown",
-			details: { modelId: "gpt-5.4-mini", providerId: "openai" },
+			details: { modelId: "gpt-5.6-luna", providerId: "openai" },
 			message: "The model request failed.",
 			retry: "never",
 			source: "runtime",

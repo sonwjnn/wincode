@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { testRender } from "@opentui/react/test-utils";
 import type { AgentId } from "@wincode/agent-core";
-import { useEffect } from "react";
+import { act, useEffect } from "react";
 import {
 	DialogProvider,
 	useDialog,
@@ -55,11 +55,20 @@ const makeRegistry = (
 	toggle: toggle ?? (async () => undefined),
 });
 
+const waitForUiTick = (milliseconds: number): Promise<void> => {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	setTimeout(resolve, milliseconds);
+	return promise;
+};
 const flushUi = async (
 	setup: Awaited<ReturnType<typeof testRender>>
 ): Promise<void> => {
-	await new Promise((resolve) => setTimeout(resolve, 20));
-	await setup.renderOnce();
+	for (let attempt = 0; attempt < 5; attempt += 1) {
+		await act(async () => {
+			await setup.renderOnce();
+			await setup.waitForVisualIdle();
+		});
+	}
 };
 
 const renderStatusDialog = async (registry: McpRegistry) => {
@@ -102,7 +111,6 @@ const renderStatusDialog = async (registry: McpRegistry) => {
 		</ThemeProvider>,
 		{ height: 40, width: 120 }
 	);
-	await setup.renderOnce();
 	await flushUi(setup);
 	return { setup };
 };
@@ -336,8 +344,10 @@ test("escape closes the status dialog", async () => {
 
 	expect(setup.captureCharFrame()).toContain("MCPs");
 
-	setup.mockInput.pressEscape();
-	await flushUi(setup);
+	await act(async () => {
+		setup.mockInput.pressEscape();
+	});
+	await waitForUiTick(20);
 	await flushUi(setup);
 
 	const frame = setup.captureCharFrame();

@@ -1,14 +1,24 @@
-import { getModelContextTokens } from "@wincode/ai/model-usage";
+import {
+	calculateModelUsageCostUsd,
+	getModelContextTokens,
+} from "@wincode/ai/model-usage";
 import type { ChatModelSelection } from "@wincode/ai/models";
-import type { ModelPricingTable } from "@/modules/model-pricing";
-import { resolveModelPricing } from "@/modules/model-pricing";
+import type {
+	ModelPricingEntry,
+	ModelPricingTable,
+} from "@/modules/model-pricing";
+import { resolveModelMetadata } from "@/modules/model-pricing";
 import type {
 	SessionMessage,
 	SessionMessageUsage,
 } from "@/modules/sessions/message";
 
 export type SessionUsageSummary = {
-	/** `null` when the pricing table has no entry for the current model. */
+	/** Estimated USD for every measured turn in the session, or `null` when no turn has a usable rate. */
+	costUsd: number | null;
+	/** How many turns contributed a cost estimate. */
+	costedTurns: number;
+	/** `null` when the catalog has no limit for the current model. */
 	contextLimit: number | null;
 	/** `null` when `contextLimit` is unknown. */
 	contextPercent: number | null;
@@ -39,8 +49,43 @@ const collectMessageUsage = (
 };
 
 /**
- * Displays only the last completed provider usage. Compaction estimates are
- * diagnostic metadata and never replace the usage bar's provider measurement.
+ * Cost for one measured turn. The shared AI helper owns cache and tier
+ * semantics so every cost surface prices usage identically.
+ */
+export const turnCostUsd = (
+	entry: ModelPricingEntry | undefined,
+	usage: SessionMessageUsage
+): number | null => calculateModelUsageCostUsd(entry, usage);
+
+const collectCost = (
+	messages: readonly SessionMessage[],
+	fallbackModel: ChatModelSelection,
+	table: ModelPricingTable
+): { costUsd: number | null; costedTurns: number } => {
+	let total = 0;
+	let costedTurns = 0;
+	for (const message of messages) {
+		const usage = message.metadata?.usage;
+		if (message.role !== "assistant" || !usage) {
+			continue;
+		}
+		const selection = message.metadata?.model ?? fallbackModel;
+		const entry = resolveModelMetadata(table, selection);
+		const cost = turnCostUsd(entry ?? undefined, usage);
+		if (cost !== null) {
+			total += cost;
+			costedTurns += 1;
+		}
+	}
+	return { costUsd: costedTurns === 0 ? null : total, costedTurns };
+};
+
+/**
+ * Displays only the last completed provider usage for the context measure.
+ * Compaction estimates are diagnostic metadata and never replace the usage
+ * bar's provider measurement. Cost accumulates across the session instead,
+ * because a per-turn figure answers a question nobody asked while a session
+ * total answers the one everybody does.
  */
 export const summarizeSessionUsage = (
 	messages: readonly SessionMessage[],
@@ -53,11 +98,16 @@ export const summarizeSessionUsage = (
 	}
 	const selection = lastSelection ?? fallbackModel;
 	const contextLimit =
-		resolveModelPricing(table, selection)?.contextLimit ?? null;
+		resolveModelMetadata(table, selection)?.limits?.context ?? null;
 	const contextTokens = getModelContextTokens(lastUsage);
 	const contextPercent =
 		contextLimit !== null && contextLimit > 0
 			? clampPercent((contextTokens / contextLimit) * 100)
 			: null;
-	return { contextLimit, contextPercent, contextTokens };
+	return {
+		...collectCost(messages, fallbackModel, table),
+		contextLimit,
+		contextPercent,
+		contextTokens,
+	};
 };

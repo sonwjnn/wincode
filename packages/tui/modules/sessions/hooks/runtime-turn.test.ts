@@ -8,13 +8,32 @@ import type {
 import { createOperationalFailure } from "@wincode/agent-core";
 import { createModelTarget } from "@wincode/ai/model-target";
 import { buildAgent } from "../../agents/built-ins";
+import { RetiredModelError } from "../../model-target";
 import {
 	buildAgentTurn,
+	buildAssistantFailureSessionRecord,
 	createGatedCodingTools,
 	runAgentTurnToText,
 } from "./runtime-turn";
 
-const model = { modelId: "gpt-5.4-mini", providerId: "openai" } as const;
+const model = { modelId: "gpt-5.6-luna", providerId: "openai" } as const;
+
+test("preserves the actionable retired-model refusal in the failure message", () => {
+	// Regression #57: retired sessions must tell the user how to recover.
+	const record = buildAssistantFailureSessionRecord({
+		agentId: "build",
+		error: new RetiredModelError("openai", "gpt-5.6-luna"),
+		model,
+		turnId: "turn-retired-model",
+	});
+
+	expect(record.messages[0]?.parts).toEqual([
+		{
+			text: "Model openai/gpt-5.6-luna is no longer available. Choose another model to continue this session.",
+			type: "text",
+		},
+	]);
+});
 
 const createTurn = (): AgentTurn => ({
 	agent: {

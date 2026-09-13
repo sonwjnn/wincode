@@ -21,7 +21,7 @@ import { estimateCompactionTokens } from "./config";
 import type { SessionCompaction, SummaryGeneratorInput } from "./types";
 
 const model: ChatModelSelection = {
-	modelId: "gpt-5.4-mini",
+	modelId: "gpt-5.6-luna",
 	providerId: "openai",
 };
 const DATA_IMAGE_URL_PATTERN = /^data:image\/png;base64,/u;

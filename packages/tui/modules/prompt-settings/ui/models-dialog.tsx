@@ -4,7 +4,8 @@ import {
 	type ChatModelSelection,
 	connectionProviderIds,
 	formatModelLabel,
-	type SupportedChatModel,
+	isActiveChatModel,
+	type ModelCatalogEntry,
 } from "@wincode/ai/models";
 import { useCallback } from "react";
 import { connectionProviderDisplayNames } from "@/modules/connections";
@@ -19,11 +20,11 @@ import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 
 type Row =
 	| { kind: "header"; label: string }
-	| { kind: "model"; model: SupportedChatModel; recent: boolean }
+	| { kind: "model"; model: ModelCatalogEntry; recent: boolean }
 	| { kind: "spacer"; id: string };
 type Props = {
 	currentModel?: ChatModelSelection;
-	models: readonly SupportedChatModel[];
+	models: readonly ModelCatalogEntry[];
 	recentSelections: readonly ChatModelSelection[];
 	onSelectModel: (model: ChatModelSelection) => void;
 };
@@ -42,7 +43,7 @@ export const ModelsDialogContent = ({
 	);
 	const recent = recentSelections
 		.map((s) => byKey.get(`${s.providerId}:${s.modelId}`))
-		.filter((m): m is SupportedChatModel => Boolean(m));
+		.filter((m): m is ModelCatalogEntry => Boolean(m));
 	const recentKeys = new Set(
 		recent.map((model) => `${model.connectionProviderId}:${model.id}`)
 	);
@@ -82,7 +83,10 @@ export const ModelsDialogContent = ({
 		]),
 	];
 	const handleSelect = useCallback(
-		(model: SupportedChatModel) => {
+		(model: ModelCatalogEntry) => {
+			if (!isActiveChatModel(model)) {
+				return;
+			}
 			onSelectModel({
 				modelId: model.id,
 				providerId: model.connectionProviderId,
@@ -117,7 +121,9 @@ export const ModelsDialogContent = ({
 				row.model.id === currentModel?.modelId &&
 				row.model.connectionProviderId === currentModel?.providerId
 			}
-			isItemSelectable={(row) => row.kind === "model"}
+			isItemSelectable={(row) =>
+				row.kind === "model" && isActiveChatModel(row.model)
+			}
 			items={rows}
 			maxVisibleItems={Math.max(1, Math.floor(height * 0.5))}
 			onSelect={(row) => row.kind === "model" && handleSelect(row.model)}

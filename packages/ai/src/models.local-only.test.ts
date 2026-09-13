@@ -27,7 +27,7 @@ describe("direct model catalog", () => {
 
 	test("does not normalize retired provider selections", () => {
 		const selection = {
-			modelId: "gpt-5.4-mini",
+			modelId: "gpt-5.6-luna",
 			providerId: "wincode",
 		} as never;
 		expect(findSupportedChatModelSelection(selection)).toBeNull();

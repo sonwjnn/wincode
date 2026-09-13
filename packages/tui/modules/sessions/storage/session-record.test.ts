@@ -21,7 +21,7 @@ import {
 import type { SessionStore } from "./session-store";
 
 const model: ChatModelSelection = {
-	modelId: "gpt-5.4-mini",
+	modelId: "gpt-5.6-luna",
 	providerId: "openai",
 };
 

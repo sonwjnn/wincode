@@ -12,9 +12,9 @@ import { createSessionOperation } from "./session-operation";
 
 const request: SessionSendInput = {
 	agent: "build",
-	sessionModel: { modelId: "gpt-5.4-mini", providerId: "openai" },
+	sessionModel: { modelId: "gpt-5.6-luna", providerId: "openai" },
 	files: [],
-	model: { modelId: "gpt-5.4-mini", providerId: "openai" },
+	model: { modelId: "gpt-5.6-luna", providerId: "openai" },
 	userText: "Inspect the project",
 };
 

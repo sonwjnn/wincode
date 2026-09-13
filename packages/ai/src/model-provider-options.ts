@@ -1,10 +1,13 @@
 import { z } from "zod";
-import { modelVariantsByProviderModel } from "./generated/model-variants.generated";
+import type { ModelMetadataEntry } from "./model-metadata";
+import { getModelMetadata } from "./model-metadata-runtime";
 import {
 	type ConnectionProviderId,
+	type ModelThinkingPolicy,
 	type ModelVariant,
 	normalizeModelVariantForModel,
 	type SupportedChatModel,
+	supportsReasoningVariants,
 } from "./models";
 
 export type OpenAIReasoningEffort = Exclude<ModelVariant, "thinking">;
@@ -117,7 +120,8 @@ export const googleProviderOptionsSchema = z
 			.object({
 				thinkingConfig: z
 					.object({
-						thinkingBudget: z.number().int().positive().optional(),
+						// 0 is Google's explicit "thinking off", so zero is legal.
+						thinkingBudget: z.number().int().nonnegative().optional(),
 						thinkingLevel: z
 							.enum(["minimal", "low", "medium", "high"])
 							.optional(),
@@ -135,58 +139,19 @@ export const modelProviderOptionsSchema = z.union([
 ]);
 
 export const MODEL_OUTPUT_TOKEN_LIMIT = 32_000;
-const reasoningSummaryModels: Readonly<Record<string, true>> = {
-	"gpt-5.4-mini": true,
-	"gpt-5.5": true,
-	"gpt-5.6-sol": true,
-	"gpt-5.6-terra": true,
-	"gpt-5.6-luna": true,
-};
-const anthropicAdaptiveModels: Readonly<Record<string, true>> = {
-	"claude-opus-4-7": true,
-	"claude-sonnet-5": true,
-	"claude-opus-4-8": true,
-	"claude-fable-5": true,
-	"claude-opus-4-6": true,
-	"claude-sonnet-4-6": true,
-};
-const anthropicManualModels: Readonly<Record<string, true>> = {
-	"claude-opus-4-5": true,
-	"claude-opus-4-5-20251101": true,
-};
-// TODO: Reconcile these manual reasoning-budget tables with the deleted
-// `scripts/sync-model-pricing.ts` pipeline. Verify whether local model pricing
-// should consume generated models.dev metadata before changing these values.
-const anthropicBudgets: Readonly<Record<string, readonly [number, number]>> = {
-	"claude-haiku-4-5": [16_000, 31_999],
-	"claude-haiku-4-5-20251001": [16_000, 31_999],
-	"claude-sonnet-4-5": [16_000, 31_999],
-	"claude-sonnet-4-5-20250929": [16_000, 31_999],
-};
-const googleLevelModels: Readonly<Record<string, true>> = {
-	"gemini-3.1-flash-lite": true,
-	"gemini-3.5-flash": true,
-	"gemini-3-flash-preview": true,
-	"gemini-3.1-pro-preview": true,
-	"gemini-3-pro-preview": true,
-	"gemini-flash-latest": true,
-	"gemini-flash-lite-latest": true,
-	"gemma-4-31b-it": true,
-};
-const googleBudgets: Readonly<Record<string, readonly [number, number]>> = {
-	"gemini-2.5-pro": [16_000, 31_999],
-	"gemini-2.5-flash": [12_288, 24_576],
-	"gemini-2.5-flash-lite": [12_288, 24_576],
-};
+
+/**
+ * Reasoning budget for a model whose source publishes budget bounds but no
+ * level ladder (Anthropic 4.5, `gemini-2.5-pro`). A quarter of the model's own
+ * output limit reproduces the previous fixed 16000 for a 64000-output model
+ * instead of hard-coding it, and stays inside the published bounds.
+ */
+const REASONING_BUDGET_SHARE = 0.25;
 
 const isListedModel = (
 	models: Readonly<Record<string, true>>,
 	modelId: string
 ): boolean => models[modelId] === true;
-
-const generatedEntry = (
-	model: Extract<SupportedChatModel, { provider: "opencode-go" }>
-) => modelVariantsByProviderModel[`opencode-go/${model.id}`];
 
 const unsupportedVariant = (
 	model: SupportedChatModel,
@@ -207,171 +172,334 @@ const normalizeVariantOrThrow = (
 	return normalized;
 };
 
-const toOpenAIReasoningEffort = (
-	model: SupportedChatModel,
-	variant: ModelVariant
-): OpenAIReasoningEffort => {
-	if (variant === "thinking") {
-		throw unsupportedVariant(model, variant);
-	}
-	return variant;
+/**
+ * Providers whose thinking budget the provider chooses itself, so no budget
+ * crosses the wire. Every other model with a level ladder and a budget bound
+ * sends a named effort plus a derived budget.
+ */
+const providerChosenBudgetModels: Readonly<Record<string, true>> = {
+	"claude-fable-5": true,
+	"claude-fable-5-1": true,
+	"claude-opus-4-6": true,
+	"claude-opus-4-7": true,
+	"claude-opus-4-8": true,
+	"claude-opus-5": true,
+	"claude-sonnet-4-6": true,
+	"claude-sonnet-5": true,
 };
 
-const toAnthropicEffort = (
-	model: SupportedChatModel,
-	variant: ModelVariant
-): AnthropicEffort => {
-	if (variant === "none" || variant === "thinking" || variant === "minimal") {
-		throw unsupportedVariant(model, variant);
-	}
-	return variant;
+/**
+ * Bounded reasoning budget for a model that publishes budget bounds but no
+ * usable ladder. The result never reaches the output limit — a budget equal to
+ * the cap would leave no room for the answer — and never drops below a
+ * published minimum. `null` means the output limit is too small to reason
+ * inside at all, which the caller turns into "thinking disabled".
+ */
+const reasoningBudget = (
+	policy: ModelThinkingPolicy,
+	outputTokens: number
+): number | null => {
+	const floor = policy.budgetMin ?? 1;
+	const ceiling = Math.min(
+		outputTokens - 1,
+		policy.budgetMax ?? MODEL_OUTPUT_TOKEN_LIMIT
+	);
+	return ceiling < floor
+		? null
+		: Math.max(
+				floor,
+				Math.min(Math.round(outputTokens * REASONING_BUDGET_SHARE), ceiling)
+			);
 };
 
-const toGoogleThinkingLevel = (
-	model: SupportedChatModel,
-	variant: ModelVariant
-): GoogleThinkingLevel => {
-	if (
-		variant === "none" ||
-		variant === "thinking" ||
-		variant === "xhigh" ||
-		variant === "max"
-	) {
-		throw unsupportedVariant(model, variant);
-	}
-	return variant;
-};
-
-const cappedOutputTokens = (maxOutputTokens: number | undefined): number =>
+/**
+ * The output budget a request may use. The model's own limit is the frame a
+ * reasoning budget is derived inside; the operational cap only lowers it, and
+ * only when the caller asked for one.
+ */
+const effectiveOutputTokens = (
+	metadata: ModelMetadataEntry | undefined,
+	maxOutputTokens: number | undefined
+): number =>
 	Math.min(
-		maxOutputTokens ?? MODEL_OUTPUT_TOKEN_LIMIT,
+		maxOutputTokens ?? metadata?.limits?.output ?? MODEL_OUTPUT_TOKEN_LIMIT,
 		MODEL_OUTPUT_TOKEN_LIMIT
 	);
 
-const boundedThinkingBudget = (
-	provider: "Anthropic" | "Google",
-	modelId: string,
-	selectedBudget: number,
+const withDerivedReasoningOutputTokens = (
+	max: Pick<ResolvedModelProviderOptions, "maxOutputTokens">,
+	requestedOutputTokens: number | undefined,
+	shouldDerive: boolean,
 	outputTokens: number
-): number | null => {
-	if (provider === "Anthropic" && outputTokens <= 1024) {
-		return null;
+): Pick<ResolvedModelProviderOptions, "maxOutputTokens"> => {
+	if (requestedOutputTokens === undefined && shouldDerive) {
+		return { maxOutputTokens: outputTokens };
 	}
-	if (outputTokens <= 1) {
-		throw new Error(
-			`Invalid ${provider} budget for ${modelId}: output limit must leave room for thinking`
-		);
-	}
-	if (selectedBudget < outputTokens) {
-		return selectedBudget;
-	}
-	return outputTokens - 1;
+	return max;
 };
 
-const resolveOpenAIOptions = (
-	model: Extract<SupportedChatModel, { provider: "openai" }>,
-	variant: ModelVariant | undefined
-): OpenAIProviderOptions => ({
-	openai: {
-		store: false,
-		...(isListedModel(reasoningSummaryModels, model.id)
-			? { reasoningSummary: "detailed" as const }
-			: {}),
-		...(variant === undefined
-			? {}
-			: { reasoningEffort: toOpenAIReasoningEffort(model, variant) }),
-	},
-});
-
-const resolveAnthropicOptions = (
-	model: Extract<SupportedChatModel, { provider: "anthropic" }>,
-	variant: ModelVariant | undefined,
-	maxOutputTokens: number | undefined
-): ResolvedModelProviderOptions => {
-	if (variant === undefined) {
-		return {};
+/**
+ * Anthropic thinking for one resolved level. Toggle-only models use adaptive
+ * thinking; models that publish bounds get a bounded enabled budget. Named
+ * levels still use the provider's own budget for the listed adaptive models.
+ */
+const anthropicThinking = (
+	model: SupportedChatModel,
+	policy: ModelThinkingPolicy,
+	outputTokens: number,
+	level: ModelVariant | undefined,
+	disabled: boolean
+): AnthropicThinking | undefined => {
+	if (disabled) {
+		return { type: "disabled" };
 	}
-	const effort = toAnthropicEffort(model, variant);
-	if (isListedModel(anthropicAdaptiveModels, model.id)) {
+	if (isListedModel(providerChosenBudgetModels, model.id)) {
+		return { type: "adaptive" };
+	}
+	if (
+		level === undefined &&
+		policy.budgetMin === undefined &&
+		policy.budgetMax === undefined
+	) {
+		return { type: "adaptive" };
+	}
+	const budget = reasoningBudget(policy, outputTokens);
+	return budget === null
+		? { type: "disabled" }
+		: { budgetTokens: budget, type: "enabled" };
+};
+
+type ReasoningWiring = "anthropic" | "google" | "openai";
+const unlevelledReasoning = (
+	wiring: Exclude<ReasoningWiring, "openai">,
+	policy: ModelThinkingPolicy,
+	outputTokens: number
+): ModelProviderOptions => {
+	const budget = reasoningBudget(policy, outputTokens);
+	if (wiring === "google") {
 		return {
-			providerOptions: {
-				anthropic: { effort, thinking: { type: "adaptive" } },
+			google: {
+				thinkingConfig:
+					budget === null ? { thinkingBudget: 0 } : { thinkingBudget: budget },
 			},
 		};
 	}
-	const isManual = isListedModel(anthropicManualModels, model.id);
-	const selectedBudget = isManual
-		? 16_000
-		: anthropicBudgets[model.id]?.[effort === "high" ? 0 : 1];
-	if (selectedBudget === undefined) {
-		throw unsupportedVariant(model, variant);
-	}
-	const outputTokens = cappedOutputTokens(maxOutputTokens);
-	const thinkingBudget = boundedThinkingBudget(
-		"Anthropic",
-		model.id,
-		selectedBudget,
-		outputTokens
-	);
 	return {
-		maxOutputTokens: outputTokens,
-		providerOptions: {
-			anthropic:
-				thinkingBudget === null
-					? { thinking: { type: "disabled" } }
-					: {
-							...(isManual ? { effort } : {}),
-							thinking: {
-								budgetTokens: thinkingBudget,
-								type: "enabled",
-							},
-						},
+		anthropic: {
+			thinking:
+				budget === null
+					? { type: "disabled" }
+					: { budgetTokens: budget, type: "enabled" },
 		},
 	};
 };
 
-const resolveGoogleOptions = (
-	model: Extract<SupportedChatModel, { provider: "google" }>,
+/**
+ * Which provider's option shape reaches the wire for one catalog entry.
+ * OpenCode Go serves different model families behind one connection, so its
+ * entries route by SDK rather than by connection identity.
+ */
+const reasoningWiring = (model: SupportedChatModel): ReasoningWiring | null => {
+	if (model.provider === "opencode-go") {
+		return supportsReasoningVariants(model) ? model.sdk : null;
+	}
+	return model.provider;
+};
+
+const openAIReasoningEffort = (
+	variant: ModelVariant
+): OpenAIReasoningEffort | undefined => {
+	if (variant === "none") {
+		return "none";
+	}
+	if (variant === "thinking") {
+		return;
+	}
+	return variant;
+};
+const googleThinkingLevel = (
+	level: ModelVariant | undefined
+): GoogleThinkingLevel | undefined => {
+	switch (level) {
+		case "minimal":
+		case "low":
+		case "medium":
+		case "high":
+			return level;
+		default:
+			return;
+	}
+};
+
+const anthropicEffort = (
+	level: ModelVariant | undefined
+): AnthropicEffort | undefined => {
+	switch (level) {
+		case "low":
+		case "medium":
+		case "high":
+		case "xhigh":
+		case "max":
+			return level;
+		default:
+			return;
+	}
+};
+
+const openAIProviderOptions = (
+	metadata: ModelMetadataEntry | undefined,
+	variant: ModelVariant | undefined
+): OpenAIProviderOptions => {
+	const reasoningEffort =
+		variant === undefined ? undefined : openAIReasoningEffort(variant);
+	return {
+		openai: {
+			store: false,
+			...(metadata?.reasoningSummary
+				? { reasoningSummary: "detailed" as const }
+				: {}),
+			...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+		},
+	};
+};
+const googleThinkingConfig = (
+	model: SupportedChatModel,
+	variant: ModelVariant,
+	level: ModelVariant | undefined,
+	disabled: boolean,
+	policy: ModelThinkingPolicy,
+	outputTokens: number
+): GoogleProviderOptions["google"]["thinkingConfig"] => {
+	const thinkingLevel = googleThinkingLevel(level);
+	if (level !== undefined && thinkingLevel === undefined) {
+		throw unsupportedVariant(model, variant);
+	}
+	if (thinkingLevel !== undefined) {
+		return { thinkingLevel };
+	}
+	if (disabled) {
+		return { thinkingBudget: 0 };
+	}
+	if (policy.budgetMin !== undefined || policy.budgetMax !== undefined) {
+		const budget = reasoningBudget(policy, outputTokens);
+		return budget === null ? { thinkingBudget: 0 } : { thinkingBudget: budget };
+	}
+	return {};
+};
+
+/**
+ * Translation of a Thinking Level into provider options, driven entirely by
+ * the entry's published policy. The five shapes models.dev publishes —
+ * levels-only, toggle-only, toggle+levels, budget-only, and no policy at all —
+ * all reduce to three questions: is reasoning off, which named effort, and
+ * which budget.
+ */
+export const resolveReasoning = (
+	model: SupportedChatModel,
+	metadata: ModelMetadataEntry | undefined,
 	variant: ModelVariant | undefined,
 	maxOutputTokens: number | undefined
 ): ResolvedModelProviderOptions => {
-	if (variant === undefined) {
-		return {};
+	const wiring = reasoningWiring(model);
+	const max = withMaxOutputTokens(maxOutputTokens);
+	if (wiring === null) {
+		return max;
 	}
-	if (isListedModel(googleLevelModels, model.id)) {
+	const policy = metadata?.thinking;
+	if (variant === undefined) {
+		if (wiring === "openai") {
+			return {
+				...max,
+				providerOptions: openAIProviderOptions(metadata, variant),
+			};
+		}
+		if (!policy?.unlevelled) {
+			return max;
+		}
+		const outputTokens = effectiveOutputTokens(metadata, maxOutputTokens);
 		return {
-			maxOutputTokens: cappedOutputTokens(maxOutputTokens),
-			providerOptions: {
-				google: {
-					thinkingConfig: {
-						thinkingLevel: toGoogleThinkingLevel(model, variant),
-					},
-				},
-			},
+			...withDerivedReasoningOutputTokens(
+				max,
+				maxOutputTokens,
+				true,
+				outputTokens
+			),
+			providerOptions: unlevelledReasoning(wiring, policy, outputTokens),
 		};
 	}
-	const budget = googleBudgets[model.id];
-	if (!budget || (variant !== "high" && variant !== "max")) {
+	if (!policy) {
 		throw unsupportedVariant(model, variant);
 	}
-	const outputTokens = cappedOutputTokens(maxOutputTokens);
-	const selectedBudget = budget[variant === "high" ? 0 : 1];
-	const thinkingBudget = boundedThinkingBudget(
-		"Google",
-		model.id,
-		selectedBudget,
-		outputTokens
-	);
-	if (thinkingBudget === null) {
-		throw new Error(
-			`Invalid Google budget for ${model.id}: output limit is too small for thinking`
-		);
+	const outputTokens = effectiveOutputTokens(metadata, maxOutputTokens);
+	const level =
+		variant === "none" || variant === "thinking" ? undefined : variant;
+	const disabled = variant === "none";
+
+	if (wiring === "openai") {
+		return {
+			...max,
+			providerOptions: openAIProviderOptions(metadata, variant),
+		};
 	}
-	return {
-		maxOutputTokens: outputTokens,
-		providerOptions: {
-			google: { thinkingConfig: { thinkingBudget } },
+
+	if (wiring === "google") {
+		// Exactly one of the three shapes applies: a named level, an explicit
+		// off, or "on, provider's own budget".
+		const thinkingConfig = googleThinkingConfig(
+			model,
+			variant,
+			level,
+			disabled,
+			policy,
+			outputTokens
+		);
+		const providerOptions: GoogleProviderOptions = {
+			google: { thinkingConfig },
+		};
+		const hasBudget =
+			"thinkingBudget" in thinkingConfig &&
+			typeof thinkingConfig.thinkingBudget === "number" &&
+			thinkingConfig.thinkingBudget > 0;
+		return {
+			...(disabled
+				? max
+				: withDerivedReasoningOutputTokens(
+						max,
+						maxOutputTokens,
+						hasBudget,
+						outputTokens
+					)),
+			providerOptions,
+		};
+	}
+
+	const effort = anthropicEffort(level);
+	if (level !== undefined && effort === undefined) {
+		throw unsupportedVariant(model, variant);
+	}
+	const thinking = anthropicThinking(
+		model,
+		policy,
+		outputTokens,
+		level,
+		disabled
+	);
+	const providerOptions: AnthropicProviderOptions = {
+		anthropic: {
+			...(effort === undefined ? {} : { effort }),
+			...(thinking === undefined ? {} : { thinking }),
 		},
+	};
+	return {
+		...(disabled
+			? max
+			: withDerivedReasoningOutputTokens(
+					max,
+					maxOutputTokens,
+					thinking?.type === "enabled",
+					outputTokens
+				)),
+		providerOptions,
 	};
 };
 
@@ -380,86 +508,22 @@ const withMaxOutputTokens = (
 ): Pick<ResolvedModelProviderOptions, "maxOutputTokens"> =>
 	maxOutputTokens === undefined ? {} : { maxOutputTokens };
 
-const resolveOpenCodeGoOpenAIOptions = (
-	model: Extract<SupportedChatModel, { provider: "opencode-go" }>,
-	variant: ModelVariant | undefined
-): OpenAIProviderOptions => ({
-	openai: {
-		store: false,
-		...(isListedModel(reasoningSummaryModels, model.id)
-			? { reasoningSummary: "detailed" as const }
-			: {}),
-		...(variant === undefined
-			? {}
-			: { reasoningEffort: toOpenAIReasoningEffort(model, variant) }),
-	},
-});
-
-const resolveOpenCodeGoAnthropicOptions = (
-	model: Extract<SupportedChatModel, { provider: "opencode-go" }>,
-	variant: ModelVariant | undefined,
-	maxOutputTokens: number | undefined
-): AnthropicProviderOptions | undefined => {
-	const entry = generatedEntry(model);
-	if (entry?.kind === "toggle") {
-		if (variant === "none") {
-			return { anthropic: { thinking: { type: "disabled" } } };
-		}
-		if (variant === "thinking") {
-			return { anthropic: { thinking: { type: "adaptive" } } };
-		}
-		return;
+/**
+ * Whether a provider option bag actually says anything. A Google on/off switch
+ * with no published budget has no explicit value to send; an empty bag would
+ * only add noise to the request.
+ */
+const hasProviderOptions = (value: unknown): boolean => {
+	if (value === undefined || value === null) {
+		return false;
 	}
-	if (!entry?.budget || (variant !== "high" && variant !== "max")) {
-		return;
+	if (typeof value !== "object") {
+		return true;
 	}
-	const outputTokens = cappedOutputTokens(maxOutputTokens);
-	const selectedBudget =
-		variant === "high" ? entry.budget.high : entry.budget.max;
-	const thinkingBudget = boundedThinkingBudget(
-		"Anthropic",
-		model.id,
-		selectedBudget,
-		outputTokens
-	);
-	return {
-		anthropic:
-			thinkingBudget === null
-				? { thinking: { type: "disabled" } }
-				: {
-						thinking: {
-							budgetTokens: thinkingBudget,
-							type: "enabled",
-						},
-					},
-	};
-};
-
-const resolveOpenCodeGoOptions = (
-	model: Extract<SupportedChatModel, { provider: "opencode-go" }>,
-	variant: ModelVariant | undefined,
-	maxOutputTokens: number | undefined
-): ResolvedModelProviderOptions => {
-	const max = withMaxOutputTokens(maxOutputTokens);
-	switch (model.sdk) {
-		case "openai":
-			return {
-				...max,
-				providerOptions: resolveOpenCodeGoOpenAIOptions(model, variant),
-			};
-		case "anthropic": {
-			const providerOptions = resolveOpenCodeGoAnthropicOptions(
-				model,
-				variant,
-				maxOutputTokens
-			);
-			return providerOptions ? { ...max, providerOptions } : max;
-		}
-		case "openai-compatible":
-			return max;
-		default:
-			throw new Error("Unsupported OpenCode Go SDK");
+	if (Array.isArray(value)) {
+		return value.length > 0;
 	}
+	return Object.values(value).some(hasProviderOptions);
 };
 
 export const resolveModelProviderOptions = (
@@ -467,16 +531,22 @@ export const resolveModelProviderOptions = (
 	options: ModelProviderResolutionOptions = {}
 ): ResolvedModelProviderOptions => {
 	const variant = normalizeVariantOrThrow(model, options.variant);
-	switch (model.provider) {
-		case "openai":
-			return { providerOptions: resolveOpenAIOptions(model, variant) };
-		case "anthropic":
-			return resolveAnthropicOptions(model, variant, options.maxOutputTokens);
-		case "google":
-			return resolveGoogleOptions(model, variant, options.maxOutputTokens);
-		case "opencode-go":
-			return resolveOpenCodeGoOptions(model, variant, options.maxOutputTokens);
-		default:
-			throw new Error("Unsupported model provider");
+	const wiring = reasoningWiring(model);
+	if (wiring === null) {
+		return withMaxOutputTokens(options.maxOutputTokens);
 	}
+	const metadata = getModelMetadata(model);
+	const resolved = resolveReasoning(
+		model,
+		metadata,
+		variant,
+		options.maxOutputTokens
+	);
+	const providerOptions =
+		resolved.providerOptions === undefined
+			? undefined
+			: Object.values(resolved.providerOptions)[0];
+	return hasProviderOptions(providerOptions)
+		? resolved
+		: withMaxOutputTokens(options.maxOutputTokens);
 };

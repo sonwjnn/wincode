@@ -32,7 +32,7 @@ const compaction = {
 };
 
 const compactionInput = {
-	model: { modelId: "gpt-5.4-mini", providerId: "openai" } as const,
+	model: { modelId: "gpt-5.6-luna", providerId: "openai" } as const,
 	settings: {
 		enabled: true,
 		keepRecentTokens: 100,

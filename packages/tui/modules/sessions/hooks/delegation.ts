@@ -146,6 +146,7 @@ export const createDelegationExecutor = ({
 				prepared.model,
 				connections,
 				{
+					allowRetired: true,
 					signal: childSignal,
 					...(prepared.variant === undefined
 						? {}

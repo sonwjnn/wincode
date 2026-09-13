@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { buildModelPricingTable } from "./models-dev-response";
 
 const IDS = new Set([
-	"gpt-5.4-mini",
+	"gpt-5.6-luna",
 	"claude-sonnet-4-6",
 	"gemini-2.5-flash",
 	"gemma-4-31b-it",
@@ -15,7 +15,7 @@ describe("buildModelPricingTable", () => {
 			{
 				openai: {
 					models: {
-						"gpt-5.4-mini": {
+						"gpt-5.6-luna": {
 							cost: {
 								cache_read: 0.075,
 								input: 0.25,
@@ -28,13 +28,13 @@ describe("buildModelPricingTable", () => {
 			},
 			IDS
 		);
-		expect(table["openai/gpt-5.4-mini"]).toEqual({
-			contextLimit: 400_000,
+		expect(table["openai/gpt-5.6-luna"]).toEqual({
+			limits: { context: 400_000 },
 			cost: { cacheRead: 0.075, input: 0.25, output: 2 },
 		});
 	});
 
-	test("skips entries without a context limit", () => {
+	test("keeps pricing rows without a context limit", () => {
 		const table = buildModelPricingTable(
 			{
 				google: {
@@ -47,7 +47,9 @@ describe("buildModelPricingTable", () => {
 			},
 			IDS
 		);
-		expect(table["google/gemini-2.5-flash"]).toBeUndefined();
+		expect(table["google/gemini-2.5-flash"]).toEqual({
+			cost: { input: 0.3, output: 2.5 },
+		});
 	});
 
 	test("skips entries whose id is not in the requested set", () => {
@@ -83,21 +85,26 @@ describe("buildModelPricingTable", () => {
 				},
 				openai: {
 					models: {
-						"gpt-5.4-mini": {
+						"gpt-5.6-luna": {
 							limit: { context: 400_000 },
 						},
 					},
 				},
 			},
-			new Set(["claude-sonnet-4-6", "claude-broken", "gpt-5.4-mini"])
+			new Set(["claude-sonnet-4-6", "claude-broken", "gpt-5.6-luna"])
 		);
 		expect(table["anthropic/claude-sonnet-4-6"]).toEqual({
-			contextLimit: 1_000_000,
+			limits: { context: 1_000_000 },
 			cost: { input: 3, output: 15 },
 		});
-		expect(table["anthropic/claude-broken"]).toBeUndefined();
-		expect(table["openai/gpt-5.4-mini"]).toEqual({
-			contextLimit: 400_000,
+		// An unreadable `cost` drops the rates, not the entry: `limit.context`
+		// is still a usable fact. Field-level interpretation is owned by
+		// `@wincode/ai/models-dev`, which has its own coverage.
+		expect(table["anthropic/claude-broken"]).toEqual({
+			limits: { context: 1000 },
+		});
+		expect(table["openai/gpt-5.6-luna"]).toEqual({
+			limits: { context: 400_000 },
 		});
 	});
 
@@ -111,7 +118,7 @@ describe("buildModelPricingTable", () => {
 			{
 				"302ai": {
 					models: {
-						"gpt-5.4-mini": {
+						"gpt-5.6-luna": {
 							cost: { input: 0.1, output: 0.1 },
 							limit: { context: 400_000 },
 						},
@@ -119,7 +126,7 @@ describe("buildModelPricingTable", () => {
 				},
 				openai: {
 					models: {
-						"gpt-5.4-mini": {
+						"gpt-5.6-luna": {
 							cost: { input: 0.25, output: 2 },
 							limit: { context: 400_000 },
 						},
@@ -128,6 +135,6 @@ describe("buildModelPricingTable", () => {
 			},
 			IDS
 		);
-		expect(Object.keys(table)).toEqual(["openai/gpt-5.4-mini"]);
+		expect(Object.keys(table)).toEqual(["openai/gpt-5.6-luna"]);
 	});
 });

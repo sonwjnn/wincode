@@ -16,7 +16,7 @@ import {
 } from "./index";
 
 const testModelTarget = createModelTarget(
-	{ modelId: "gpt-5.4-mini", providerId: "openai" },
+	{ modelId: "gpt-5.6-luna", providerId: "openai" },
 	{ kind: "api-key", apiKey: "test-key" }
 );
 

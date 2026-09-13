@@ -5,11 +5,11 @@ import { createModelTarget } from "@wincode/ai/model-target";
 import * as realAi from "ai";
 
 const model = createModelTarget(
-	{ modelId: "gpt-5.4-mini", providerId: "openai" },
+	{ modelId: "gpt-5.6-luna", providerId: "openai" },
 	{ apiKey: "test-key", kind: "api-key" }
 );
 const oauthModel = createModelTarget(
-	{ modelId: "gpt-5.4-mini", providerId: "openai" },
+	{ modelId: "gpt-5.6-luna", providerId: "openai" },
 	{ accessToken: "oauth-token", accountId: "oauth-account", kind: "oauth" }
 );
 
