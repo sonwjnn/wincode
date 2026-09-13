@@ -134,7 +134,7 @@ const runDefaultPackage = async (
 			stderr: "inherit",
 		}
 	);
-	return result.exited;
+	return await result.exited;
 };
 
 const scenarioName = (root: string, file: DiscoveredTestFile): string => {
