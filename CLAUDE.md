@@ -9,8 +9,8 @@ This project uses **Ultracite**, a zero-config preset that enforces strict code 
 - **Type check all workspaces**: `bun run check-types`
 - **Run deterministic tests**: `bun test`
 - **Run integration tests**: `bun run test:integration`
+- **Run TUI E2E tests**: `bun run test:e2e`
 - **Start the CLI in watch mode**: `bun run dev:cli`
-
 Biome (the underlying engine) provides robust linting and formatting. Most issues are automatically fixable.
 
 ---
@@ -125,7 +125,10 @@ behavior that previously failed. Unit and integration tests do not retry or use 
 for readiness; wait for process exit, protocol calls, events, or state transitions.
 
 - `bun test` is the canonical deterministic default lane and excludes integration
-files.
+  and E2E files.
+- `bun run test:e2e` discovers `**/*.e2e.test.{ts,tsx}` files and runs each in an
+  isolated subprocess so module mocks and temporary local databases cannot leak
+  between scenarios.
 - `bun run test:integration` discovers all `*.integration.test.*` files.
 - Network access and provider credentials are opt-in; CI scrubs credential variables.
 

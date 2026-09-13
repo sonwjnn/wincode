@@ -2,8 +2,8 @@ import { expect, mock, test } from "bun:test";
 import { CompactAdapter } from "./adapters";
 import { createCommandExecutor } from "./execute-command";
 
-test("dispatches manual compaction through its adapter", async () => {
-	const compact = mock(async () => undefined);
+test("dispatches manual compaction focus through its adapter", async () => {
+	const compact = mock(async (_focus?: string) => undefined);
 	const execute = createCommandExecutor({
 		agents: { execute: () => undefined } as never,
 		compact: new CompactAdapter({ execute: compact }),
@@ -18,10 +18,12 @@ test("dispatches manual compaction through its adapter", async () => {
 
 	await execute({
 		description: "",
+		focus: "preserve database decisions",
 		kind: "compact",
 		name: "compact",
 		value: "/compact",
 	});
 
+	expect(compact).toHaveBeenCalledWith("preserve database decisions");
 	expect(compact).toHaveBeenCalledTimes(1);
 });

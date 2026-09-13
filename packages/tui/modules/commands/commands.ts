@@ -7,7 +7,7 @@ export type CommandSpec = BaseSpec &
 		| { kind: "exit" }
 		| { kind: "connect" }
 		| { kind: "new" }
-		| { kind: "compact" }
+		| { kind: "compact"; focus?: string }
 		| { kind: "settings" }
 		| {
 				kind: "dialog";

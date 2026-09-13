@@ -4,6 +4,7 @@ import { expandCustomCommandTemplate } from "@/modules/custom-commands/expand";
 import { parseCustomCommandInvocation } from "@/modules/custom-commands/invocation";
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import type { SessionFilePart } from "@/modules/sessions/message";
+import { isSettingsCommand, parseCompactCommand } from "../../compaction";
 import type { ChatPromptSubmission } from "../../utils";
 
 type SkillPrompt = {
@@ -102,6 +103,9 @@ export const resolveCustomCommandPrompt = async (
 	};
 };
 
+const isBuiltinCommand = (text: string): boolean =>
+	isSettingsCommand(text) || parseCompactCommand(text) !== null;
+
 /**
  * Resolve skill/custom-command intent, or report the failure through onError
  * and return null — never throws.
@@ -112,6 +116,9 @@ const resolvePromptOrReportError = async (
 	dependencies: SubmitDependencies
 ): Promise<SkillPrompt | null> => {
 	try {
+		if (isBuiltinCommand(text)) {
+			return { text };
+		}
 		const skillPrompt = await resolveSkillPrompt(
 			text,
 			dependencies.discoverSkills,

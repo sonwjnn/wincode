@@ -59,18 +59,29 @@ export type ModelPricingState = {
 
 const ModelPricingContext = createContext<ModelPricingState | null>(null);
 
-export function ModelPricingProvider({ children }: { children: ReactNode }) {
+type ModelPricingProviderProps = {
+	children: ReactNode;
+	/** Override the live table for deterministic composition tests. */
+	pricing?: ModelPricingTable;
+};
+
+export function ModelPricingProvider({
+	children,
+	pricing,
+}: ModelPricingProviderProps) {
 	const offline = modelPricingEnv.WINCODE_MODEL_PRICING_OFFLINE === true;
 	const ttlHours =
 		modelPricingEnv.WINCODE_MODEL_PRICING_TTL_HOURS ?? DEFAULT_TTL_HOURS;
 	const url = modelPricingEnv.WINCODE_MODEL_PRICING_URL ?? DEFAULT_URL;
 
-	const [table, setTable] = useState<ModelPricingTable>(NO_OVERRIDES);
+	const [loadedTable, setLoadedTable] =
+		useState<ModelPricingTable>(NO_OVERRIDES);
 	const [source, setSource] = useState<ModelPricingSource>("bundled");
 	const bootstrappedRef = useRef(false);
+	const table = pricing ?? loadedTable;
 
 	useEffect(() => {
-		if (bootstrappedRef.current) {
+		if (pricing !== undefined || bootstrappedRef.current) {
 			return;
 		}
 		bootstrappedRef.current = true;
@@ -82,7 +93,7 @@ export function ModelPricingProvider({ children }: { children: ReactNode }) {
 			// few hours past its TTL is still far more accurate than the
 			// bundled snapshot. Only a *missing* cache leaves the snapshot in
 			// place, and the source is what tells the user which one they got.
-			setTable(cached.table);
+			setLoadedTable(cached.table);
 			setSource(cached.stale ? "stale" : "cache");
 			if (!cached.stale) {
 				return;
@@ -98,12 +109,12 @@ export function ModelPricingProvider({ children }: { children: ReactNode }) {
 		runFetch(url, now)
 			.then((next) => {
 				if (next) {
-					setTable(next);
+					setLoadedTable(next);
 					setSource("cache");
 				}
 			})
 			.catch(() => undefined);
-	}, [offline, ttlHours, url]);
+	}, [offline, pricing, ttlHours, url]);
 
 	return (
 		<ModelPricingContext.Provider

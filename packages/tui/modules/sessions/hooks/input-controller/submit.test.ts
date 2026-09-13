@@ -169,6 +169,37 @@ describe("submitPrompt", () => {
 		expect(accepted).toBe(true);
 	});
 
+	test("submits compact focus text without discovering skills or custom commands", async () => {
+		let skillDiscoveryCalls = 0;
+		let customCommandDiscoveryCalls = 0;
+		const seen: string[] = [];
+		const accepted = await submitPrompt(
+			createDependencies({
+				discoverCustomCommands: async () => {
+					customCommandDiscoveryCalls += 1;
+					return [];
+				},
+				discoverSkills: async () => {
+					skillDiscoveryCalls += 1;
+					return [];
+				},
+				onSubmit: (submission) => {
+					seen.push(submission.text);
+					return true;
+				},
+			}),
+			{
+				...emptySnapshot(),
+				rawText: "/compact preserve database decisions",
+			}
+		);
+
+		expect(accepted).toBe(true);
+		expect(seen).toEqual(["/compact preserve database decisions"]);
+		expect(skillDiscoveryCalls).toBe(0);
+		expect(customCommandDiscoveryCalls).toBe(0);
+	});
+
 	test("expands tracked pasted-text tokens before transport", async () => {
 		const seen: string[] = [];
 		const accepted = await submitPrompt(

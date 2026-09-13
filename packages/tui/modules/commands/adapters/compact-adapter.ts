@@ -12,7 +12,7 @@ export class CompactAdapter {
 		this.ctx = ctx;
 	}
 
-	execute(_spec: Extract<CommandSpec, { kind: "compact" }>) {
-		return this.ctx.execute();
+	execute(spec: Extract<CommandSpec, { kind: "compact" }>) {
+		return this.ctx.execute(spec.focus);
 	}
 }
