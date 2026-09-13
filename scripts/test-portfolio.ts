@@ -372,9 +372,12 @@ export const runTestPortfolio = async (
 	try {
 		const arguments_ = parseArguments(argv);
 		if (arguments_.portfolio === "default") {
-			return runDefaultPortfolio(arguments_.root, arguments_.packageFilter);
+			return await runDefaultPortfolio(
+				arguments_.root,
+				arguments_.packageFilter
+			);
 		}
-		return runE2EPortfolio(arguments_.root, arguments_.packageFilter);
+		return await runE2EPortfolio(arguments_.root, arguments_.packageFilter);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		console.error(message);
