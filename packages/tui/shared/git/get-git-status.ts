@@ -159,7 +159,10 @@ const readGitPorcelain = async (
 		const exitCode = await child.exited;
 		return { ...result, exitCode };
 	} catch {
-		child?.kill?.();
+		if (child !== undefined) {
+			child.kill?.();
+			await child.exited.catch(() => -1);
+		}
 		return null;
 	}
 };
