@@ -1,4 +1,4 @@
-import { access, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { spawn } from "bun";
 import {
@@ -17,10 +17,7 @@ const TERMINAL_FRAME_NAME = "terminal-frame.txt";
 const E2E_SCENARIO_SUFFIX_PATTERN = /\.e2e\.test\.(?:ts|tsx)$/;
 const SCENARIO_PATH_SEPARATOR_PATTERN = /[\\/]/g;
 const SCENARIO_UNSAFE_CHARACTER_PATTERN = /[^a-zA-Z0-9._-]/g;
-const RETAINED_ARTIFACT_ENTRIES: Record<string, true> = {
-	[RUNNER_LOG_NAME]: true,
-	[TERMINAL_FRAME_NAME]: true,
-};
+const SCENARIO_LEADING_DOTS_PATTERN = /^\.+/;
 const SCRUBBED_ENVIRONMENT_NAMES = [
 	"AWS_ACCESS_KEY_ID",
 	"AWS_SECRET_ACCESS_KEY",
@@ -143,12 +140,14 @@ const runDefaultPackage = async (
 const scenarioName = (root: string, file: DiscoveredTestFile): string => {
 	const packageRoot = join(root, "packages", file.packageName, "test");
 	const fileName = relative(packageRoot, join(root, file.path));
-	return fileName
+	const sanitizedName = fileName
 		.replace(E2E_SCENARIO_SUFFIX_PATTERN, "")
 		.replace(SCENARIO_PATH_SEPARATOR_PATTERN, "-")
 		.replace(SCENARIO_UNSAFE_CHARACTER_PATTERN, "-");
+	return (
+		sanitizedName.replace(SCENARIO_LEADING_DOTS_PATTERN, "-") || "scenario"
+	);
 };
-
 const writeCombinedOutput = async (
 	stream: ReadableStream<Uint8Array>,
 	writer: OutputWriter,
@@ -189,33 +188,27 @@ const removeIfEmpty = async (path: string): Promise<void> => {
 		}
 	}
 };
-const ensureTerminalFrame = async (framePath: string): Promise<void> => {
-	try {
-		await access(framePath);
-	} catch (error) {
-		if (!isMissingPathError(error)) {
-			throw error;
-		}
-		await writeFile(framePath, "", "utf8");
-	}
-};
 
 const retainE2EFailure = async (
 	artifactDirectory: string,
 	log: readonly string[]
 ): Promise<void> => {
 	await mkdir(artifactDirectory, { recursive: true });
+	let terminalFrame: string | undefined;
 	for (const entry of await readdir(artifactDirectory, {
 		withFileTypes: true,
 	})) {
-		if (!Object.hasOwn(RETAINED_ARTIFACT_ENTRIES, entry.name)) {
-			await rm(join(artifactDirectory, entry.name), {
-				force: true,
-				recursive: true,
-			});
+		const entryPath = join(artifactDirectory, entry.name);
+		if (entry.name === TERMINAL_FRAME_NAME && entry.isFile()) {
+			terminalFrame = await readFile(entryPath, "utf8");
 		}
+		await rm(entryPath, { force: true, recursive: true });
 	}
-	await ensureTerminalFrame(join(artifactDirectory, TERMINAL_FRAME_NAME));
+	await writeFile(
+		join(artifactDirectory, TERMINAL_FRAME_NAME),
+		terminalFrame ?? "",
+		"utf8"
+	);
 	await writeFile(
 		join(artifactDirectory, RUNNER_LOG_NAME),
 		log.join(""),
