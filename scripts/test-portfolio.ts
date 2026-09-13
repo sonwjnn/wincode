@@ -208,7 +208,7 @@ const retainE2EFailure = async (
 	for (const entry of await readdir(artifactDirectory, {
 		withFileTypes: true,
 	})) {
-		if (!RETAINED_ARTIFACT_ENTRIES[entry.name]) {
+		if (!Object.hasOwn(RETAINED_ARTIFACT_ENTRIES, entry.name)) {
 			await rm(join(artifactDirectory, entry.name), {
 				force: true,
 				recursive: true,

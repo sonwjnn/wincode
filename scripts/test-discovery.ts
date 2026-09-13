@@ -68,7 +68,7 @@ const classifyTestFile = (
 	issues: TestDiscoveryIssue[],
 	path: string
 ): TestClassification | null => {
-	if (!SUPPORTED_EXTENSIONS[extension]) {
+	if (!Object.hasOwn(SUPPORTED_EXTENSIONS, extension)) {
 		issue(
 			issues,
 			path,
@@ -94,7 +94,10 @@ const classifyTestFile = (
 
 	const classificationMatch = CLASSIFICATION_PATTERN.exec(fileName);
 	const classification = classificationMatch?.[1]?.toLowerCase();
-	if (classification && UNSUPPORTED_CLASSIFICATIONS[classification]) {
+	if (
+		classification &&
+		Object.hasOwn(UNSUPPORTED_CLASSIFICATIONS, classification)
+	) {
 		issue(
 			issues,
 			path,
@@ -125,7 +128,7 @@ const walk = (
 	)) {
 		const entryPath = currentPath ? join(currentPath, entry.name) : entry.name;
 		if (entry.isDirectory()) {
-			if (IGNORED_DIRECTORY_NAMES[entry.name]) {
+			if (Object.hasOwn(IGNORED_DIRECTORY_NAMES, entry.name)) {
 				continue;
 			}
 			walk(root, entryPath, visitFile);
