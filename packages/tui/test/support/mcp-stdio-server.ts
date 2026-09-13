@@ -3,10 +3,27 @@
 // stdout carries MCP protocol frames only; all diagnostics go to stderr.
 // This file is an entrypoint and intentionally imports nothing from the rest
 // of the MCP module so the transport wiring stays self-contained.
+import { writeFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
 
+const exitMarker = process.env.WINCODE_MCP_EXIT_MARKER;
+if (exitMarker !== undefined) {
+	let markerWritten = false;
+	const markExited = (): void => {
+		if (markerWritten) {
+			return;
+		}
+		markerWritten = true;
+		writeFileSync(exitMarker, "exited");
+	};
+	process.once("exit", markExited);
+	process.once("SIGTERM", () => {
+		markExited();
+		process.exit(0);
+	});
+}
 const writeStderr = (message: string): void => {
 	process.stderr.write(`[stdio-server-support] ${message}\n`);
 };

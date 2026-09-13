@@ -47,6 +47,15 @@ const SPEC_TEST_FILE_PATTERN = /\.spec\.(?:ts|tsx)$/;
 const CLASSIFICATION_PATTERN = /\.([a-z0-9_-]+)\.test\.(?:ts|tsx)$/i;
 const DEFAULT_TEST_FILE_PATTERN = /\.test\.(?:ts|tsx)$/;
 const PACKAGE_TEST_PATH_PATTERN = /^packages\/([^/]+)\/test(?:\/|$)/;
+export const compareStableStrings = (left: string, right: string): number => {
+	if (left < right) {
+		return -1;
+	}
+	if (left > right) {
+		return 1;
+	}
+	return 0;
+};
 
 const normalizePath = (pathName: string): string =>
 	pathName.split(sep).join("/");
@@ -124,11 +133,14 @@ const walk = (
 ): void => {
 	const directory = join(root, currentPath);
 	for (const entry of readdirSync(directory, { withFileTypes: true }).sort(
-		(a, b) => a.name.localeCompare(b.name)
+		(left, right) => compareStableStrings(left.name, right.name)
 	)) {
 		const entryPath = currentPath ? join(currentPath, entry.name) : entry.name;
 		if (entry.isDirectory()) {
-			if (Object.hasOwn(IGNORED_DIRECTORY_NAMES, entry.name)) {
+			if (
+				currentPath !== "packages" &&
+				Object.hasOwn(IGNORED_DIRECTORY_NAMES, entry.name)
+			) {
 				continue;
 			}
 			walk(root, entryPath, visitFile);
@@ -179,8 +191,8 @@ export const discoverTests = (root: string): TestDiscovery => {
 		files.push({ classification, packageName, path: normalizedPath });
 	});
 
-	files.sort((left, right) => left.path.localeCompare(right.path));
-	issues.sort((left, right) => left.path.localeCompare(right.path));
+	files.sort((left, right) => compareStableStrings(left.path, right.path));
+	issues.sort((left, right) => compareStableStrings(left.path, right.path));
 	return { files, issues };
 };
 

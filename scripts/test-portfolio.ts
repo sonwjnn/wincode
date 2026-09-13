@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { spawn } from "bun";
 import {
+	compareStableStrings,
 	type DiscoveredTestFile,
 	discoverTests,
 	groupTestsByPackage,
@@ -28,6 +29,7 @@ const SCRUBBED_ENVIRONMENT_NAMES = [
 	"DATABASE_URL",
 	"GITHUB_TOKEN",
 	"GOOGLE_API_KEY",
+	"GOOGLE_GENERATIVE_AI_API_KEY",
 	"GOOGLE_APPLICATION_CREDENTIALS",
 	"GROQ_API_KEY",
 	"MISTRAL_API_KEY",
@@ -117,26 +119,32 @@ const runDefaultPackage = async (
 	console.log(
 		`\nRunning Default package: ${packageName} (${files.length} files)`
 	);
-	const result = spawn(
-		[
-			"bun",
-			"test",
-			"--timeout",
-			String(TEST_TIMEOUT_MS),
-			"--no-orphans",
-			...files.map((file) => file.path),
-		],
-		{
-			cwd: root,
-			env: createTestEnvironment(),
-			stdin: "inherit",
-			stdout: "inherit",
-			stderr: "inherit",
-		}
-	);
-	return await result.exited;
+	try {
+		const result = spawn(
+			[
+				"bun",
+				"test",
+				"--timeout",
+				String(TEST_TIMEOUT_MS),
+				"--no-orphans",
+				...files.map((file) => file.path),
+			],
+			{
+				cwd: root,
+				env: createTestEnvironment(),
+				stdin: "inherit",
+				stdout: "inherit",
+				stderr: "inherit",
+			}
+		);
+		return await result.exited;
+	} catch (error) {
+		const message =
+			error instanceof Error ? (error.stack ?? error.message) : String(error);
+		console.error(`Default package process failed: ${message}`);
+		return 1;
+	}
 };
-
 const scenarioName = (root: string, file: DiscoveredTestFile): string => {
 	const packageRoot = join(root, "packages", file.packageName, "test");
 	const fileName = relative(packageRoot, join(root, file.path));
@@ -309,7 +317,7 @@ const runDefaultPortfolio = async (
 		readonly packageName: string;
 	}[] = [];
 	let executed = 0;
-	for (const packageName of [...grouped.keys()].sort()) {
+	for (const packageName of [...grouped.keys()].sort(compareStableStrings)) {
 		if (!packageMatches(packageName, packageFilter)) {
 			continue;
 		}

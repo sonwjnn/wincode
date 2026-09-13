@@ -11,7 +11,10 @@
 //   try/finally.
 
 import { describe, expect, test } from "bun:test";
+import { existsSync, watch } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
 import net from "node:net";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { fromAny } from "@total-typescript/shoehorn";
@@ -41,13 +44,15 @@ const timeouts = {
 const stdioServerConfig = (
 	name: string,
 	command: string[],
-	permission: McpExecutionPolicy = "allow"
+	permission: McpExecutionPolicy = "allow",
+	environment: Record<string, string> = {}
 ): ResolvedMcpServerConfig => ({
 	name,
 	type: "local",
 	command,
 	cwd: import.meta.dir,
 	disabled: false,
+	environment,
 	permission,
 	timeout: timeouts,
 });
@@ -109,18 +114,37 @@ const hasChildProcess = (fixture: string): boolean => {
 		.split("\n")
 		.some((line) => line.includes(fixture));
 };
-
-const waitForNoChildProcess = async (fixture: string): Promise<void> => {
-	const deadline = Date.now() + 5000;
-	while (Date.now() < deadline) {
-		if (!hasChildProcess(fixture)) {
+const waitForFile = (filePath: string): Promise<void> => {
+	const { promise, reject, resolve } = Promise.withResolvers<void>();
+	if (existsSync(filePath)) {
+		resolve();
+		return promise;
+	}
+	let settled = false;
+	let watcher: ReturnType<typeof watch>;
+	const finish = (error?: unknown): void => {
+		if (settled) {
 			return;
 		}
-		await globalThis.Bun.sleep(100);
+		settled = true;
+		watcher.close();
+		if (error === undefined) {
+			resolve();
+		} else {
+			reject(error);
+		}
+	};
+	watcher = watch(path.dirname(filePath), (_eventType, fileName) => {
+		if (fileName?.toString() === path.basename(filePath)) {
+			finish();
+		}
+	});
+	watcher.once("error", finish);
+	if (existsSync(filePath)) {
+		finish();
 	}
-	throw new Error(`child process for ${fixture} is still running after close`);
+	return promise;
 };
-
 // Bun's fetch pools keep-alive sockets, so a stopped server can still answer
 // through a stale pooled connection. A raw TCP connect is the reliable check
 // that the port was actually released.
@@ -198,17 +222,31 @@ describe("MCP transport integration", () => {
 	}, 15_000);
 
 	test("stdio: no child process remains after close", async () => {
-		const registry = createRegistry(
-			stdioServerConfig("stdio-echo", [process.execPath, "run", FIXTURE])
+		const markerDirectory = await mkdtemp(
+			path.join(tmpdir(), "wincode-mcp-exit-")
 		);
+		const exitMarker = path.join(markerDirectory, "exited");
 		try {
-			const snapshot = await registry.createSnapshot("build");
-			expect(snapshot.manifest).toHaveLength(1);
-			expect(hasChildProcess(FIXTURE)).toBe(true);
+			const registry = createRegistry(
+				stdioServerConfig(
+					"stdio-echo",
+					[process.execPath, "run", FIXTURE],
+					"allow",
+					{ WINCODE_MCP_EXIT_MARKER: exitMarker }
+				)
+			);
+			try {
+				const snapshot = await registry.createSnapshot("build");
+				expect(snapshot.manifest).toHaveLength(1);
+				expect(hasChildProcess(FIXTURE)).toBe(true);
+			} finally {
+				await registry.close();
+			}
+			await waitForFile(exitMarker);
+			expect(hasChildProcess(FIXTURE)).toBe(false);
 		} finally {
-			await registry.close();
+			await rm(markerDirectory, { force: true, recursive: true });
 		}
-		await waitForNoChildProcess(FIXTURE);
 	}, 15_000);
 
 	test("http: discovers and executes echo over streamable HTTP", async () => {

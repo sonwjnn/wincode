@@ -72,9 +72,21 @@ describe("test portfolio runner", () => {
 				root,
 				"packages/alpha/test/default.test.ts",
 				`import { appendFileSync } from "node:fs";
-import { test } from "bun:test";
+import { expect, test } from "bun:test";
 test("valid package test", () => {
+	expect(process.env.GOOGLE_GENERATIVE_AI_API_KEY).toBe("");
+	expect(process.env.OPENAI_API_KEY).toBe("");
 	appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "default\\n");
+});
+`
+			);
+			await writeFixture(
+				root,
+				"packages/dist/test/named-package.test.ts",
+				`import { appendFileSync } from "node:fs";
+import { test } from "bun:test";
+test("valid package named after an ignored directory", () => {
+	appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "named\\n");
 });
 `
 			);
@@ -84,16 +96,16 @@ test("valid package test", () => {
 				"packages/alpha/test/provider.external.test.ts",
 				""
 			);
-			await writeFixture(root, "packages/alpha/dist/generated.test.js", "");
-			await mkdir(join(root, "packages/empty"), { recursive: true });
 
 			const valid = runPortfolio(root, "default", [], {
 				WINCODE_PORTFOLIO_MARKER: marker,
+				GOOGLE_GENERATIVE_AI_API_KEY: "ambient-google",
+				OPENAI_API_KEY: "ambient-openai",
 			});
 			expect(valid.exitCode).toBe(0);
-			expect(valid.output).toContain("Discovered Default test files: 1");
-			expect(valid.output).toContain("Executed Default test files: 1");
-			expect(await readFile(marker, "utf8")).toBe("default\n");
+			expect(valid.output).toContain("Discovered Default test files: 2");
+			expect(valid.output).toContain("Executed Default test files: 2");
+			expect(await readFile(marker, "utf8")).toBe("default\nnamed\n");
 
 			await writeFixture(root, "packages/alpha/src/colocated.test.ts", "");
 			await writeFixture(
