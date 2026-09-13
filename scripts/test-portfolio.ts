@@ -298,16 +298,27 @@ const packageMatches = (
 	packageFilter === packageName ||
 	packageFilter === `@wincode/${packageName}`;
 
+const discoverPortfolioFiles = (
+	root: string,
+	classification: "default" | "e2e"
+): readonly DiscoveredTestFile[] | null => {
+	const discovery = discoverTests(root);
+	const files = testsForClassification(discovery, classification);
+	const label = classification === "default" ? "Default" : "E2E";
+	console.log(`Discovered ${label} test files: ${files.length}`);
+	if (discovery.issues.length > 0) {
+		printDiscoveryIssues(discovery);
+		console.log(`Executed ${label} test files: 0`);
+		return null;
+	}
+	return files;
+};
 const runDefaultPortfolio = async (
 	root: string,
 	packageFilter: string | undefined
 ): Promise<number> => {
-	const discovery = discoverTests(root);
-	const files = testsForClassification(discovery, "default");
-	console.log(`Discovered Default test files: ${files.length}`);
-	if (discovery.issues.length > 0) {
-		printDiscoveryIssues(discovery);
-		console.log("Executed Default test files: 0");
+	const files = discoverPortfolioFiles(root, "default");
+	if (files === null) {
 		return 1;
 	}
 
@@ -347,12 +358,8 @@ const runE2EPortfolio = async (
 	root: string,
 	packageFilter: string | undefined
 ): Promise<number> => {
-	const discovery = discoverTests(root);
-	const files = testsForClassification(discovery, "e2e");
-	console.log(`Discovered E2E test files: ${files.length}`);
-	if (discovery.issues.length > 0) {
-		printDiscoveryIssues(discovery);
-		console.log("Executed E2E test files: 0");
+	const files = discoverPortfolioFiles(root, "e2e");
+	if (files === null) {
 		return 1;
 	}
 
