@@ -1,4 +1,4 @@
-import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { spawn } from "bun";
 import {
@@ -185,10 +185,19 @@ const removeIfEmpty = async (path: string): Promise<void> => {
 	}
 };
 
+const ensureTerminalFrame = async (framePath: string): Promise<void> => {
+	try {
+		await access(framePath);
+	} catch {
+		await writeFile(framePath, "", "utf8");
+	}
+};
+
 const retainE2EFailure = async (
 	artifactDirectory: string,
 	log: readonly string[]
 ): Promise<void> => {
+	await mkdir(artifactDirectory, { recursive: true });
 	for (const entry of await readdir(artifactDirectory, {
 		withFileTypes: true,
 	})) {
@@ -199,7 +208,7 @@ const retainE2EFailure = async (
 			});
 		}
 	}
-	await mkdir(artifactDirectory, { recursive: true });
+	await ensureTerminalFrame(join(artifactDirectory, TERMINAL_FRAME_NAME));
 	await writeFile(
 		join(artifactDirectory, RUNNER_LOG_NAME),
 		log.join(""),
