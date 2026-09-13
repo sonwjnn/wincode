@@ -1,10 +1,13 @@
+type BunSpawnProcess = {
+	exited: Promise<number>;
+	kill?: () => void;
+	stdout: ReadableStream<Uint8Array>;
+};
+
 type BunSpawn = (
 	command: readonly string[],
 	options: { cwd: string; stderr: "ignore"; stdout: "pipe" }
-) => {
-	exited: Promise<number>;
-	stdout: ReadableStream<Uint8Array>;
-};
+) => BunSpawnProcess;
 
 type GitStatusCounts = {
 	changedFiles: number;
@@ -40,7 +43,7 @@ const readBounded = async (
 			}
 			const remaining = maxBytes - byteLength;
 			const chunk = result.value;
-			if (chunk.byteLength >= remaining) {
+			if (chunk.byteLength > remaining) {
 				chunks.push(chunk.slice(0, remaining));
 				byteLength += remaining;
 				truncated = true;
@@ -49,6 +52,13 @@ const readBounded = async (
 			}
 			chunks.push(chunk);
 			byteLength += chunk.byteLength;
+		}
+		if (!truncated && byteLength === maxBytes) {
+			const result = await reader.read();
+			if (!result.done) {
+				truncated = true;
+				await reader.cancel().catch(() => undefined);
+			}
 		}
 	} finally {
 		reader.releaseLock();
@@ -142,6 +152,9 @@ const readGitPorcelain = async (
 	try {
 		const process = spawn(command, { cwd, stderr: "ignore", stdout: "pipe" });
 		const result = await readBounded(process.stdout, GIT_STATUS_MAX_BYTES);
+		if (result.truncated) {
+			process.kill?.();
+		}
 		const exitCode = await process.exited;
 		return { ...result, exitCode };
 	} catch {
@@ -158,7 +171,7 @@ export const getGitStatusSummary = async (
 		"--porcelain=v1",
 		"--untracked-files=all",
 	]);
-	if (result === null || result.exitCode !== 0) {
+	if (result === null || (result.exitCode !== 0 && !result.truncated)) {
 		return unavailableSummary();
 	}
 	return parseStatus(

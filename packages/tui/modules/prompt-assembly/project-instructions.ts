@@ -1,20 +1,28 @@
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { getProjectRoots } from "@/shared/paths/project-roots";
 
 export const PROJECT_INSTRUCTION_FILE_NAME = "AGENTS.md";
 export const MAX_PROJECT_INSTRUCTION_SOURCE_CHARS = 12_000;
 export const MAX_PROJECT_INSTRUCTION_TOTAL_BYTES = 24 * 1024;
+const MAX_PROJECT_INSTRUCTION_SOURCE_BYTES =
+	MAX_PROJECT_INSTRUCTION_SOURCE_CHARS * 4 + 3;
+const MAX_PROJECT_INSTRUCTION_READ_BYTES =
+	MAX_PROJECT_INSTRUCTION_SOURCE_BYTES + 1;
 
 export type ProjectInstructionFileStats = {
 	readonly isFile: () => boolean;
+	readonly isSymbolicLink?: () => boolean;
 	readonly mtimeMs?: number;
 	readonly size?: number;
 };
 
 export type ProjectInstructionFileSystem = {
-	readonly readFile: (path: string) => Promise<Uint8Array | string>;
+	readonly readFile: (
+		path: string,
+		maxBytes?: number
+	) => Promise<Uint8Array | string>;
 	readonly stat?: (path: string) => Promise<ProjectInstructionFileStats>;
 };
 
@@ -61,9 +69,10 @@ type FileMetadata =
 	| { readonly kind: "missing" }
 	| {
 			readonly kind: "present";
+			readonly isFile: boolean;
+			readonly isSymbolicLink: boolean;
 			readonly mtimeMs: number | null;
 			readonly size: number | null;
-			readonly isFile: boolean;
 	  }
 	| { readonly kind: "error" };
 
@@ -73,8 +82,17 @@ type Candidate = {
 };
 
 const defaultFileSystem: ProjectInstructionFileSystem = {
-	readFile: async (path) => new Uint8Array(await readFile(path)),
-	stat: async (path) => stat(path),
+	readFile: async (path, maxBytes = MAX_PROJECT_INSTRUCTION_READ_BYTES) => {
+		const file = await open(path, "r");
+		try {
+			const buffer = new Uint8Array(maxBytes);
+			const { bytesRead } = await file.read(buffer, 0, maxBytes, 0);
+			return buffer.slice(0, bytesRead);
+		} finally {
+			await file.close();
+		}
+	},
+	stat: async (path) => lstat(path),
 };
 
 const isMissingError = (error: unknown): boolean => {
@@ -99,9 +117,15 @@ const encodeMetadata = (metadata: FileMetadata): string => {
 	if (metadata.kind === "error") {
 		return "error";
 	}
+	let fileKind = "other";
+	if (metadata.isSymbolicLink) {
+		fileKind = "symlink";
+	} else if (metadata.isFile) {
+		fileKind = "file";
+	}
 	return [
 		"present",
-		metadata.isFile ? "file" : "other",
+		fileKind,
 		metadata.size ?? "unknown",
 		metadata.mtimeMs ?? "unknown",
 	].join(":");
@@ -139,6 +163,7 @@ const readMetadata = async (
 		const fileStats = await fileSystem.stat(path);
 		return {
 			isFile: fileStats.isFile(),
+			isSymbolicLink: fileStats.isSymbolicLink?.() ?? false,
 			kind: "present",
 			mtimeMs: fileStats.mtimeMs ?? null,
 			size: fileStats.size ?? null,
@@ -200,7 +225,10 @@ const readSource = async (
 > => {
 	let value: Uint8Array | string;
 	try {
-		value = await fileSystem.readFile(candidate.absolutePath);
+		value = await fileSystem.readFile(
+			candidate.absolutePath,
+			MAX_PROJECT_INSTRUCTION_READ_BYTES
+		);
 	} catch (error) {
 		if (isMissingError(error)) {
 			return { missing: true };
@@ -210,6 +238,15 @@ const readSource = async (
 		};
 	}
 	const bytes = toBytes(value);
+	if (bytes.byteLength > MAX_PROJECT_INSTRUCTION_SOURCE_BYTES) {
+		return {
+			diagnostic: invalidDiagnostic(
+				candidate.sourcePath,
+				"source-too-large",
+				bytes.byteLength
+			),
+		};
+	}
 	let content: string;
 	try {
 		content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -234,6 +271,41 @@ const readSource = async (
 		};
 	}
 	return { bytes, content };
+};
+const loadSourceCandidate = async (
+	fileSystem: ProjectInstructionFileSystem,
+	candidate: Candidate,
+	fileMetadata: FileMetadata
+): Promise<Awaited<ReturnType<typeof readSource>>> => {
+	if (fileMetadata.kind === "missing") {
+		return { missing: true };
+	}
+	if (
+		fileMetadata.kind === "present" &&
+		(fileMetadata.isSymbolicLink || !fileMetadata.isFile)
+	) {
+		return {
+			diagnostic: invalidDiagnostic(
+				candidate.sourcePath,
+				"not-a-file",
+				fileMetadata.size ?? undefined
+			),
+		};
+	}
+	if (
+		fileMetadata.kind === "present" &&
+		fileMetadata.size !== null &&
+		fileMetadata.size > MAX_PROJECT_INSTRUCTION_SOURCE_BYTES
+	) {
+		return {
+			diagnostic: invalidDiagnostic(
+				candidate.sourcePath,
+				"source-too-large",
+				fileMetadata.size
+			),
+		};
+	}
+	return readSource(fileSystem, candidate);
 };
 
 const freezeSnapshot = (
@@ -277,15 +349,11 @@ export const createProjectInstructionSnapshot = async (
 	const sources: ProjectInstructionSource[] = [];
 	let totalByteLength = 0;
 	for (const [index, candidate] of candidates.entries()) {
-		const fileMetadata = metadata[index];
-		if (fileMetadata?.kind === "missing") {
-			continue;
-		}
-		if (fileMetadata?.kind === "present" && !fileMetadata.isFile) {
-			diagnostics.push(invalidDiagnostic(candidate.sourcePath, "not-a-file"));
-			continue;
-		}
-		const loaded = await readSource(fileSystem, candidate);
+		const loaded = await loadSourceCandidate(
+			fileSystem,
+			candidate,
+			metadata[index] ?? { kind: "error" }
+		);
 		if ("missing" in loaded) {
 			continue;
 		}

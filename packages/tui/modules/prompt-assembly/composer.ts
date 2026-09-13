@@ -139,6 +139,15 @@ const TOOL_FAMILY_LABEL: Record<PromptToolFamily, string> = {
 	other: "Other",
 	skill: "Skill",
 };
+const compareToolNames = (first: string, second: string): number => {
+	if (first < second) {
+		return -1;
+	}
+	if (first > second) {
+		return 1;
+	}
+	return 0;
+};
 
 const escapeXml = (value: string): string =>
 	value
@@ -229,21 +238,26 @@ const isEffectiveVisibleTool = (
 const toolName = (tool: EffectiveVisibleTool | ResolvedTool): string =>
 	isEffectiveVisibleTool(tool) ? tool.name : tool.definition.name;
 
-const toolFamily = (
-	tool: EffectiveVisibleTool | ResolvedTool,
-	name: string
+const toolFamilyForName = (
+	name: string,
+	fallback: PromptToolFamily
 ): PromptToolFamily => {
-	if (isEffectiveVisibleTool(tool) && tool.family !== undefined) {
-		return tool.family;
-	}
 	if (name === "delegate") {
 		return "delegation";
 	}
 	if (name === "skill") {
 		return "skill";
 	}
-	return CODING_TOOL_FAMILY[name] === true ? "coding" : "other";
+	return CODING_TOOL_FAMILY[name] === true ? "coding" : fallback;
 };
+
+const toolFamily = (
+	tool: EffectiveVisibleTool | ResolvedTool,
+	name: string
+): PromptToolFamily =>
+	isEffectiveVisibleTool(tool) && tool.family !== undefined
+		? tool.family
+		: toolFamilyForName(name, "other");
 
 const toolPermission = (
 	tool: EffectiveVisibleTool | ResolvedTool
@@ -276,13 +290,11 @@ const toolGroupLine = (
 	family: PromptToolFamily,
 	tools: readonly EffectiveVisibleTool[]
 ): string => {
-	const names = tools
-		.map((tool) => tool.name)
-		.sort((first, second) => first.localeCompare(second));
+	const names = tools.map((tool) => tool.name).sort(compareToolNames);
 	const approvalNames = tools
 		.filter((tool) => tool.permission === "ask")
 		.map((tool) => tool.name)
-		.sort((first, second) => first.localeCompare(second));
+		.sort(compareToolNames);
 	const approval =
 		approvalNames.length === 0
 			? ""
@@ -299,6 +311,7 @@ const toolPolicyBlock = (
 		"Effective tool policy (high-level capabilities only; schemas, outputs, and executors are intentionally omitted):",
 		"Coding tools operate inside the workspace; inspect with read, glob, or grep before modifying files.",
 		"The Tool Gate remains authoritative for approvals, denied capabilities, and workspace or resource boundaries.",
+		"Resource-specific Tool Permission rules can make an otherwise allowed coding call approval-gated.",
 	];
 	for (const family of [
 		"coding",
@@ -360,16 +373,19 @@ export const assemblePrompt = (
 		],
 		["volatile-environment", volatileEnvironmentBlock(input.environment)],
 	];
-	const renderedBlocks = contents.map(([name, content]) =>
-		block(name, content)
-	);
-	const instructions = renderedBlocks.join("\n\n");
+	const renderedBlocks = contents.map(([name, content]) => ({
+		name,
+		rendered: block(name, content),
+	}));
+	const instructions = renderedBlocks
+		.map(({ rendered }) => rendered)
+		.join("\n\n");
 	return {
 		instructions,
 		metadata: {
 			blockOrder: PROMPT_ASSEMBLY_BLOCK_ORDER,
-			blocks: contents.map(([name, content]) =>
-				blockMetadata(name, block(name, content))
+			blocks: renderedBlocks.map(({ name, rendered }) =>
+				blockMetadata(name, rendered)
 			),
 			projectInstructionDiagnostics: input.projectInstructions.diagnostics,
 			projectInstructionSources: sourceMetadata(input.projectInstructions),
@@ -388,9 +404,11 @@ const policyForDescribedTool = (
 	name: string,
 	input: {
 		readonly codingPermission?: PromptToolPermission;
+		readonly codingPermissions?: ReadonlyMap<string, PromptToolPermission>;
 		readonly mcpPolicies?: ReadonlyMap<string, PromptToolPermission>;
 		readonly requiresManualApproval?: boolean;
 		readonly skillPermission?: PromptToolPermission;
+		readonly skillPermissions?: ReadonlyMap<string, PromptToolPermission>;
 	}
 ): PromptToolPermission => {
 	if (family === "mcp") {
@@ -398,12 +416,14 @@ const policyForDescribedTool = (
 	}
 	if (family === "coding") {
 		return (
+			input.codingPermissions?.get(name) ??
 			input.codingPermission ??
 			(input.requiresManualApproval === true ? "ask" : "allow")
 		);
 	}
 	if (family === "skill") {
 		return (
+			input.skillPermissions?.get(name) ??
 			input.skillPermission ??
 			(input.requiresManualApproval === true ? "ask" : "allow")
 		);
@@ -417,24 +437,17 @@ const policyForDescribedTool = (
  */
 export const describeEffectiveVisibleTools = (input: {
 	readonly codingPermission?: PromptToolPermission;
+	readonly codingPermissions?: ReadonlyMap<string, PromptToolPermission>;
 	readonly mcpPolicies?: ReadonlyMap<string, PromptToolPermission>;
 	readonly requiresManualApproval?: boolean;
 	readonly skillPermission?: PromptToolPermission;
+	readonly skillPermissions?: ReadonlyMap<string, PromptToolPermission>;
 	readonly tools: readonly ResolvedTool[];
 }): readonly EffectiveVisibleTool[] => {
 	const described: EffectiveVisibleTool[] = [];
 	for (const tool of input.tools) {
 		const name = tool.definition.name;
-		let family: PromptToolFamily;
-		if (name === "delegate") {
-			family = "delegation";
-		} else if (name === "skill") {
-			family = "skill";
-		} else if (CODING_TOOL_FAMILY[name] === true) {
-			family = "coding";
-		} else {
-			family = "mcp";
-		}
+		const family = toolFamilyForName(name, "mcp");
 		const policy = policyForDescribedTool(family, name, input);
 		if (policy !== "deny") {
 			described.push({ family, name, permission: policy });
@@ -452,7 +465,7 @@ export const createPromptAssemblyService = (
 			{
 				fs: input.fs,
 				projectRoots: input.projectRoots,
-				workspace: input.workspace,
+				workspace: input.cwd ?? input.workspace,
 			},
 			cache
 		);

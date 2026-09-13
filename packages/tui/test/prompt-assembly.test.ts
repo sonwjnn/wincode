@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import type { AgentTurnDelegation } from "@wincode/agent-core";
+import type { AgentTurnDelegation, ResolvedTool } from "@wincode/agent-core";
 import {
 	assemblePrompt,
-	createEnvironmentSnapshot,
-	createProjectInstructionSnapshot,
 	createPromptAssemblyService,
 	describeEffectiveVisibleTools,
-} from "@/modules/prompt-assembly";
+} from "@/modules/prompt-assembly/composer";
+import { createEnvironmentSnapshot } from "@/modules/prompt-assembly/environment";
+import { createProjectInstructionSnapshot } from "@/modules/prompt-assembly/project-instructions";
 
 const projectRoots = ["/repo", "/repo/packages", "/repo/packages/tui"];
 
@@ -17,6 +17,7 @@ const metadataFor = (files: Record<string, Uint8Array | string>) =>
 			path,
 			{
 				isFile: () => true,
+				isSymbolicLink: () => false,
 				mtimeMs: index + 1,
 				size:
 					typeof contents === "string"
@@ -80,6 +81,14 @@ const delegation: AgentTurnDelegation = {
 	parentToolCallId: "call-1",
 	parentTurnId: "turn-1",
 };
+const resolvedTool = (name: string): ResolvedTool => ({
+	definition: {
+		description: `${name} tool`,
+		inputSchema: { jsonSchema: {} },
+		name,
+	},
+	execute: async () => ({ output: null, type: "success" }),
+});
 
 describe("Prompt Assembly", () => {
 	test("renders ordered trusted, repository, environment, and tool blocks", () => {
@@ -129,6 +138,35 @@ describe("Prompt Assembly", () => {
 		expect(result.instructions).not.toContain("inputSchema");
 		expect(result.metadata.renderedLength).toBe(result.instructions.length);
 	});
+	test("describes effective allow, ask, and denied capabilities", () => {
+		const described = describeEffectiveVisibleTools({
+			codingPermissions: new Map([
+				["read", "allow"],
+				["edit", "ask"],
+				["write", "deny"],
+			]),
+			mcpPolicies: new Map([
+				["mcp_search", "ask"],
+				["mcp_secret", "deny"],
+			]),
+			skillPermission: "ask",
+			tools: [
+				resolvedTool("read"),
+				resolvedTool("edit"),
+				resolvedTool("write"),
+				resolvedTool("mcp_search"),
+				resolvedTool("mcp_secret"),
+				resolvedTool("skill"),
+			],
+		});
+
+		expect(described).toEqual([
+			{ family: "coding", name: "read", permission: "allow" },
+			{ family: "coding", name: "edit", permission: "ask" },
+			{ family: "mcp", name: "mcp_search", permission: "ask" },
+			{ family: "skill", name: "skill", permission: "ask" },
+		]);
+	});
 
 	test("loads ancestor AGENTS.md files root-first and isolates invalid sources", async () => {
 		const files = {
@@ -170,6 +208,37 @@ describe("Prompt Assembly", () => {
 			createHash("sha256").update("Repository defaults").digest("hex")
 		);
 	});
+	test("rejects symlinked project instructions before reading content", async () => {
+		const reads: string[] = [];
+		const snapshot = await createProjectInstructionSnapshot({
+			fs: {
+				readFile: async (path) => {
+					reads.push(path);
+					return "credential";
+				},
+				stat: async () => ({
+					isFile: () => false,
+					isSymbolicLink: () => true,
+					mtimeMs: 1,
+					size: 10,
+				}),
+			},
+			projectRoots: ["/repo"],
+			workspace: "/repo",
+		});
+
+		expect(snapshot.sources).toEqual([]);
+		expect(snapshot.diagnostics).toEqual([
+			{
+				byteLength: 10,
+				code: "not-a-file",
+				message: "Project instruction source is not a regular file.",
+				reason: "not-a-file",
+				sourcePath: "AGENTS.md",
+			},
+		]);
+		expect(reads).toEqual([]);
+	});
 
 	test("reuses a metadata-keyed project snapshot and observes changed metadata", async () => {
 		const files: Record<string, string> = {
@@ -187,12 +256,13 @@ describe("Prompt Assembly", () => {
 
 		const first = await service.snapshotProjectInstructions(input);
 		const second = await service.snapshotProjectInstructions(input);
-		expect(second).toBe(first);
+		expect(second).toEqual(first);
 		expect(reads).toEqual(["/repo/AGENTS.md"]);
 
 		files["/repo/AGENTS.md"] = "second";
 		metadata.set("/repo/AGENTS.md", {
 			isFile: () => true,
+			isSymbolicLink: () => false,
 			mtimeMs: 2,
 			size: 6,
 		});
@@ -220,7 +290,7 @@ describe("Prompt Assembly", () => {
 		const primary = await service.snapshot({ ...common, role: "primary" });
 		const subagent = await service.snapshot({ ...common, role: "subagent" });
 
-		expect(subagent.projectInstructions).toBe(primary.projectInstructions);
+		expect(subagent.projectInstructions).toEqual(primary.projectInstructions);
 		expect(subagent.environment.stable).toMatchObject({
 			cwd: primary.environment.stable.cwd,
 			modelId: primary.environment.stable.modelId,
@@ -231,6 +301,32 @@ describe("Prompt Assembly", () => {
 		expect(primary.environment.stable.agentRole).toBe("primary");
 		expect(subagent.environment.stable.agentRole).toBe("subagent");
 		expect(reads).toEqual(["/repo/AGENTS.md"]);
+	});
+	test("discovers nested instructions through the active working directory", async () => {
+		const files = {
+			"/repo/AGENTS.md": "Repository defaults",
+			"/repo/packages/AGENTS.md": "Package defaults",
+			"/repo/packages/tui/AGENTS.md": "Workspace defaults",
+		};
+		const service = createPromptAssemblyService();
+		const snapshot = await service.snapshot({
+			cwd: "/repo/packages/tui",
+			fs: fileSystem(files),
+			git: {
+				getBranch: async () => "main",
+				getRepositoryRoot: async () => "/repo",
+				getStatus: async () => "clean",
+			},
+			model: { modelId: "model", providerId: "provider" },
+			platform: "darwin",
+			projectRoots,
+			role: "primary",
+			workspace: "/repo",
+		});
+
+		expect(
+			snapshot.projectInstructions.sources.map(({ sourcePath }) => sourcePath)
+		).toEqual(["../../AGENTS.md", "../AGENTS.md", "AGENTS.md"]);
 	});
 
 	test("keeps the stable prompt prefix unchanged when git status changes", () => {

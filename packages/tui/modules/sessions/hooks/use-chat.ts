@@ -38,11 +38,14 @@ import {
 	type McpCatalogSnapshot,
 	useMcp,
 } from "@/modules/mcp";
-import { useToolPermission } from "@/modules/permissions";
+import {
+	STATIC_TOOL_PERMISSION_ACTIONS,
+	useToolPermission,
+} from "@/modules/permissions";
 import {
 	assembleNormalTurnPrompt,
 	describeEffectiveVisibleTools,
-} from "@/modules/prompt-assembly";
+} from "@/modules/prompt-assembly/composer";
 import {
 	COMPACTION_REQUEST_OVERHEAD_TOKENS,
 	type CompactSessionInput,
@@ -1155,9 +1158,11 @@ export function useChat(
 	const connections = useConnections();
 	const mcp = useMcp();
 	const config = useConfig();
+	const configRef = useLatest(config);
 	const { getCompactionSettings: getSettingsForModel } =
 		useCompactionSettings();
 	const registry = useAgentRegistry();
+	const registryRef = useLatest(registry);
 	const {
 		closeApprovals,
 		openApproval,
@@ -1742,7 +1747,13 @@ export function useChat(
 				const tools = createGatedCodingTools({
 					agentId: agent,
 					agentTools: resolvedAgent.visibleCodingTools,
-					delegate: runtimeGatedToolingRef.current.delegate,
+					delegate:
+						registryRef.current?.agents.some(
+							({ isAvailable, role }) =>
+								isAvailable && (role === "subagent" || role === "all")
+						) === true
+							? runtimeGatedToolingRef.current.delegate
+							: undefined,
 					executeMcpTool,
 					gate: gatedTooling.gate,
 					mcpSnapshot: snapshot,
@@ -1755,15 +1766,23 @@ export function useChat(
 					await resolvePermissionForAgentRef.current(agent);
 				const prompt = await assembleNormalTurnPrompt({
 					agent: resolvedAgent,
-					cwd: config.cwd,
+					cwd: configRef.current.cwd,
 					delegation,
 					effectiveVisibleTools: describeEffectiveVisibleTools({
-						codingPermission: agentPermission.safety ? "ask" : undefined,
+						codingPermissions: new Map(
+							resolvedAgent.visibleCodingTools.map((name) => [
+								name,
+								agentPermission.decide(
+									STATIC_TOOL_PERMISSION_ACTIONS[name],
+									""
+								),
+							])
+						),
 						mcpPolicies: new Map(
 							[...snapshot.tools].map(([name, tool]) => [name, tool.policy])
 						),
 						requiresManualApproval: resolvedAgent.requiresManualApproval,
-						skillPermission: agentPermission.safety ? "ask" : undefined,
+						skillPermission: agentPermission.decide("skill", ""),
 						tools,
 					}),
 					model: {
@@ -1771,7 +1790,7 @@ export function useChat(
 						providerId: modelTarget.providerId,
 					},
 					role: delegation === undefined ? "primary" : "subagent",
-					workspace: config.workspace,
+					workspace: configRef.current.workspace,
 				});
 				const turn = buildAgentTurn({
 					agent,

@@ -7,8 +7,11 @@ import { createAgentTurnId } from "@wincode/agent-core";
 import type { ModelTarget } from "@wincode/ai/model";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import type { SkillExecution, SkillToolDefinition } from "@wincode/skills";
-import type { AgentRegistry, PreparedAgentCall } from "@/modules/agents";
-import { prepareAgentCall } from "@/modules/agents";
+import {
+	type AgentRegistry,
+	type PreparedAgentCall,
+	prepareAgentCall,
+} from "@/modules/agents";
 import type { Connections } from "@/modules/connections";
 import {
 	createMcpToolExecutor,
@@ -18,9 +21,13 @@ import {
 	type McpToolCallExecutor,
 } from "@/modules/mcp";
 import {
+	STATIC_TOOL_PERMISSION_ACTIONS,
+	type ToolPermission,
+} from "@/modules/permissions";
+import {
 	assembleNormalTurnPrompt,
 	describeEffectiveVisibleTools,
-} from "@/modules/prompt-assembly";
+} from "@/modules/prompt-assembly/composer";
 import { resolveChatModelTarget } from "../../model-target";
 import { createSessionUserMessage, type SessionMessage } from "../message";
 import type { SessionViewState } from "../session-controller";
@@ -87,15 +94,15 @@ type BuildChildTurnOptions = {
 	readonly cwd?: string;
 	readonly delegation: AgentTurnDelegation;
 	readonly executeMcpTool: McpToolCallExecutor | undefined;
-	readonly modelTarget: ModelTarget;
-	readonly prepared: PreparedAgentCall;
 	readonly resolvePermissionForAgent?: (
 		agent: AgentId
-	) => Promise<{ readonly safety: boolean }>;
+	) => Promise<ToolPermission>;
 	readonly snapshot: McpCatalogSnapshot;
 	readonly turnId: string;
 	readonly userMessage: SessionMessage;
 	readonly workspace: string;
+	readonly modelTarget: ModelTarget;
+	readonly prepared: PreparedAgentCall;
 };
 
 const buildChildTurn = async ({
@@ -131,12 +138,25 @@ const buildChildTurn = async ({
 		cwd,
 		delegation,
 		effectiveVisibleTools: describeEffectiveVisibleTools({
-			codingPermission: childPermission?.safety ? "ask" : undefined,
+			codingPermissions:
+				childPermission === undefined
+					? undefined
+					: new Map(
+							prepared.resolvedAgent.visibleCodingTools.map((name) => [
+								name,
+								childPermission.decide(
+									STATIC_TOOL_PERMISSION_ACTIONS[name],
+									""
+								),
+							])
+						),
 			mcpPolicies: new Map(
 				[...snapshot.tools].map(([name, tool]) => [name, tool.policy])
 			),
 			requiresManualApproval: prepared.resolvedAgent.requiresManualApproval,
-			skillPermission: childPermission?.safety ? "ask" : undefined,
+			skillPermission:
+				childPermission?.decide("skill", "") ??
+				(prepared.resolvedAgent.requiresManualApproval ? "ask" : "allow"),
 			tools,
 		}),
 		model: {
@@ -173,7 +193,7 @@ export type CreateDelegationExecutorOptions = {
 	) => Promise<McpAgentPolicy>;
 	readonly resolvePermissionForAgent?: (
 		agent: AgentId
-	) => Promise<{ readonly safety: boolean }>;
+	) => Promise<ToolPermission>;
 	readonly sessionId: string;
 	readonly workspace: string;
 };
