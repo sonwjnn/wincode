@@ -172,6 +172,7 @@ test("fails with an actionable frame", () => {
 	writeFileSync(join(artifactDirectory, "database.sqlite"), "database");
 	writeFileSync(join(artifactDirectory, "environment.json"), "environment");
 	writeFileSync(join(artifactDirectory, "authorization.txt"), "secret");
+	writeFileSync(join(artifactDirectory, "constructor"), "sensitive");
 	writeFileSync(framePath, "final character frame");
 	throw new Error("intentional E2E failure");
 });
