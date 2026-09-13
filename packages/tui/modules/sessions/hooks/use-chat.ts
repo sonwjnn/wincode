@@ -40,6 +40,10 @@ import {
 } from "@/modules/mcp";
 import { useToolPermission } from "@/modules/permissions";
 import {
+	assembleNormalTurnPrompt,
+	describeEffectiveVisibleTools,
+} from "@/modules/prompt-assembly";
+import {
 	COMPACTION_REQUEST_OVERHEAD_TOKENS,
 	type CompactSessionInput,
 	type CompactSessionResult,
@@ -1735,6 +1739,40 @@ export function useChat(
 							? resolveResourceLimitsRef.current()
 							: resolveResourceLimitsForAgentRef.current(agentId),
 				};
+				const tools = createGatedCodingTools({
+					agentId: agent,
+					agentTools: resolvedAgent.visibleCodingTools,
+					delegate: runtimeGatedToolingRef.current.delegate,
+					executeMcpTool,
+					gate: gatedTooling.gate,
+					mcpSnapshot: snapshot,
+					parentTurnId: turnId,
+					resolveResourceLimits: gatedTooling.resolveResourceLimits,
+					skillExecution: skillExecutionRef.current ?? undefined,
+					skillTool: skillToolRef.current,
+				});
+				const agentPermission =
+					await resolvePermissionForAgentRef.current(agent);
+				const prompt = await assembleNormalTurnPrompt({
+					agent: resolvedAgent,
+					cwd: config.cwd,
+					delegation,
+					effectiveVisibleTools: describeEffectiveVisibleTools({
+						codingPermission: agentPermission.safety ? "ask" : undefined,
+						mcpPolicies: new Map(
+							[...snapshot.tools].map(([name, tool]) => [name, tool.policy])
+						),
+						requiresManualApproval: resolvedAgent.requiresManualApproval,
+						skillPermission: agentPermission.safety ? "ask" : undefined,
+						tools,
+					}),
+					model: {
+						modelId: modelTarget.modelId,
+						providerId: modelTarget.providerId,
+					},
+					role: delegation === undefined ? "primary" : "subagent",
+					workspace: config.workspace,
+				});
 				const turn = buildAgentTurn({
 					agent,
 					delegation,
@@ -1742,18 +1780,8 @@ export function useChat(
 					modelTarget,
 					resolvedAgent,
 					skill,
-					tools: createGatedCodingTools({
-						agentId: agent,
-						agentTools: resolvedAgent.visibleCodingTools,
-						delegate: runtimeGatedToolingRef.current.delegate,
-						executeMcpTool,
-						gate: gatedTooling.gate,
-						mcpSnapshot: snapshot,
-						parentTurnId: turnId,
-						resolveResourceLimits: gatedTooling.resolveResourceLimits,
-						skillExecution: skillExecutionRef.current ?? undefined,
-						skillTool: skillToolRef.current,
-					}),
+					systemInstructions: prompt.instructions,
+					tools,
 					turnId,
 				});
 				currentTurn = turn;
@@ -1859,15 +1887,19 @@ export function useChat(
 			const tool = buildSkillToolDefinition(catalog);
 			return tool === undefined ? undefined : { execution, tool };
 		},
+		cwd: config.cwd,
 		fallbackModelRef: modelRef,
 		fallbackVariantRef: variantRef,
 		gatedTooling: runtimeGatedToolingRef.current,
 		mcp,
 		resolveMcpPolicyForAgent: (agent) =>
 			resolveMcpPolicyForAgentRef.current(agent),
+		resolvePermissionForAgent: (agent) =>
+			resolvePermissionForAgentRef.current(agent),
 		onViewState: setViewState,
 		registry,
 		sessionId,
+		workspace: config.workspace,
 	});
 
 	const submit = useCallback(

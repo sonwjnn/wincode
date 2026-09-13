@@ -28,6 +28,7 @@ const workspace = resolveWorkspaceRoot(cwd);
 const configStore = createConfigStore();
 const configContext = Object.freeze({
 	configStore,
+	cwd,
 	homeRoot: homedir(),
 	workspace,
 });

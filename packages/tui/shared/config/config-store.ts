@@ -54,6 +54,8 @@ export type ConfigStore = {
 export type ConfigRuntime = {
 	configStore: ConfigStore;
 	homeRoot: string;
+	/** Process launch directory used for per-turn environment context. */
+	readonly cwd?: string;
 	workspace: string;
 };
 

@@ -47,6 +47,9 @@ export const resolveEffectiveAgentSelection = (
 						id: effectiveAgent.id,
 						instructions: effectiveAgent.instructions,
 						role: effectiveAgent.role,
+						...(effectiveAgent.requiresManualApproval
+							? { requiresManualApproval: true }
+							: {}),
 						visibleCodingTools: [...effectiveAgent.visibleCodingTools],
 					},
 				}
