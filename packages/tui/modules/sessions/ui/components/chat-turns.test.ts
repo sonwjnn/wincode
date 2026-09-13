@@ -7,6 +7,7 @@ import { prepareRetryMessages } from "../../hooks/use-chat";
 import {
 	groupMessagesBySessionTurn,
 	resolveRetryMessageId,
+	resolveSessionTurnFooterMessages,
 } from "./chat-turns";
 
 const user = (id: string): SessionMessage => ({
@@ -20,6 +21,21 @@ const assistant = (id: string, interrupted = false): SessionMessage => ({
 	metadata: interrupted ? { interrupted: true } : undefined,
 	parts: [{ text: id, type: "text" }],
 	role: "assistant",
+});
+const sharedTurnMetadata: NonNullable<SessionMessage["metadata"]> = {
+	agent: "build",
+	model: { modelId: "gpt-5.6-luna", providerId: "openai" },
+	variant: "low",
+};
+
+const userWithSharedMetadata = (id: string): SessionMessage => ({
+	...user(id),
+	metadata: sharedTurnMetadata,
+});
+
+const assistantWithSharedMetadata = (id: string): SessionMessage => ({
+	...assistant(id),
+	metadata: sharedTurnMetadata,
 });
 
 const terminalAssistant = (
@@ -194,4 +210,31 @@ test("keeps a later user's retry state independent from an older retry result", 
 			retryResult,
 		])
 	).toBe("user-2");
+});
+
+test("groups matching metadata while the next turn runs and after completion", () => {
+	const messages = [
+		userWithSharedMetadata("user-1"),
+		assistantWithSharedMetadata("assistant-1"),
+		userWithSharedMetadata("user-2"),
+	];
+	const turns = groupMessagesBySessionTurn(messages);
+	const footers = resolveSessionTurnFooterMessages(turns);
+
+	expect(
+		[...footers.entries()].map(([turnId, message]) => [turnId, message.id])
+	).toEqual([["user-2", "user-2"]]);
+
+	const completedTurns = groupMessagesBySessionTurn([
+		...messages,
+		assistantWithSharedMetadata("assistant-2"),
+	]);
+	const completedFooters = resolveSessionTurnFooterMessages(completedTurns);
+
+	expect(
+		[...completedFooters.entries()].map(([turnId, message]) => [
+			turnId,
+			message.id,
+		])
+	).toEqual([["user-2", "assistant-2"]]);
 });

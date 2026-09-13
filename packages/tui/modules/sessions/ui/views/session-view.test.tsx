@@ -108,6 +108,9 @@ mock.module("@/modules/sessions/hooks/use-chat", () => ({
 				respondToApproval: () => undefined,
 				send,
 				waitForIdle: async () => true,
+				getState: () => ({
+					status: status === "ready" ? "ready" : "running",
+				}),
 			},
 			error: null,
 			isCompacting: false,
@@ -286,7 +289,7 @@ describe("SessionView initial submission", () => {
 			setup.renderer.destroy();
 		}
 	});
-	test("submits an entered prompt through the active session", async () => {
+	test("clears the composer before the active turn completes", async () => {
 		const navigationRelease = deferred<void>();
 		const navigationStarted = deferred<void>();
 		const sendStarted = deferred<void>();
@@ -368,6 +371,9 @@ describe("SessionView initial submission", () => {
 				),
 			]);
 			expect(sendOutcome).toBe("sent");
+			await flushUi(setup);
+			const frameWhileSendIsPending = setup.captureCharFrame();
+			expect(frameWhileSendIsPending).not.toContain("entered prompt");
 		} finally {
 			release.resolve();
 			await flushUi(setup);

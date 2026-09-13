@@ -367,7 +367,12 @@ export function SessionView({
 				return executeCompactionCommand(compactCommand.focus);
 			}
 		}
-		if (isTurnBusy || registry === null || !isPromptConfigRestored) {
+		if (
+			isTurnBusy ||
+			session.getState().status !== "ready" ||
+			registry === null ||
+			!isPromptConfigRestored
+		) {
 			return false;
 		}
 
@@ -377,7 +382,9 @@ export function SessionView({
 			model,
 			variant
 		);
-		const outcome = await send({
+		// `send` resolves when the full turn completes; the composer should reset
+		// as soon as this session accepts the new send.
+		void send({
 			agent: effective.agent,
 			sessionModel: model,
 			sessionVariant: variant,
@@ -387,18 +394,21 @@ export function SessionView({
 			variant: effective.variant,
 			userText,
 			skill,
-		}).catch(() => ({
-			rejected: true,
-			reason: "Could not submit the prompt",
-		}));
-
-		if (outcome.rejected) {
-			show({
-				message: outcome.reason,
-				variant: "error",
+		})
+			.then((outcome) => {
+				if (outcome.rejected) {
+					show({
+						message: outcome.reason,
+						variant: "error",
+					});
+				}
+			})
+			.catch(() => {
+				show({
+					message: "Could not submit the prompt",
+					variant: "error",
+				});
 			});
-			return false;
-		}
 		return true;
 	};
 

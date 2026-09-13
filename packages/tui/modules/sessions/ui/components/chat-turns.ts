@@ -35,49 +35,43 @@ export const resolveTurnMetadataSignature = (
 	return `${agent}|${modelKey}|${variant}|${interrupted}`;
 };
 
+const resolveTurnMetadataMessage = (
+	turn: SessionTurn
+): SessionMessage | undefined => {
+	const assistant = turn.messages.findLast(
+		(message) => message.role === "assistant" && message.metadata !== undefined
+	);
+	if (assistant) {
+		return assistant;
+	}
+
+	return turn.messages.findLast(
+		(message) => message.role === "user" && message.metadata !== undefined
+	);
+};
+
 const resolveTurnFooterMessage = (
 	turn: SessionTurn,
 	nextTurn: SessionTurn | undefined
 ): SessionMessage | undefined => {
-	const current = [...turn.messages]
-		.reverse()
-		.find(
-			(message) =>
-				message.role === "assistant" && message.metadata !== undefined
-		);
+	const current = resolveTurnMetadataMessage(turn);
 	if (!current) {
-		if (nextTurn) {
-			return;
-		}
-
-		return [...turn.messages]
-			.reverse()
-			.find(
-				(message) => message.role === "user" && message.metadata !== undefined
-			);
+		return;
 	}
 
 	if (!nextTurn) {
 		return current;
 	}
 
-	const next = [...nextTurn.messages]
-		.reverse()
-		.find(
-			(message) =>
-				message.role === "assistant" && message.metadata !== undefined
-		);
-	if (!next) {
+	const next = resolveTurnMetadataMessage(nextTurn);
+	if (
+		!next ||
+		resolveTurnMetadataSignature(current) !== resolveTurnMetadataSignature(next)
+	) {
 		return current;
 	}
 
-	if (
-		resolveTurnMetadataSignature(current) === resolveTurnMetadataSignature(next)
-	) {
-		return;
-	}
-
-	return current;
+	return;
 };
 
 export const groupMessagesBySessionTurn = (
