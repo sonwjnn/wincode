@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { getProjectRoots } from "@/shared/paths/project-roots";
@@ -10,6 +11,8 @@ const MAX_PROJECT_INSTRUCTION_SOURCE_BYTES =
 	MAX_PROJECT_INSTRUCTION_SOURCE_CHARS * 4 + 3;
 const MAX_PROJECT_INSTRUCTION_READ_BYTES =
 	MAX_PROJECT_INSTRUCTION_SOURCE_BYTES + 1;
+const PROJECT_INSTRUCTION_OPEN_FLAGS =
+	constants.O_NOFOLLOW ?? constants.O_RDONLY;
 
 export type ProjectInstructionFileStats = {
 	readonly isFile: () => boolean;
@@ -85,7 +88,7 @@ type Candidate = {
 
 const defaultFileSystem: ProjectInstructionFileSystem = {
 	readFile: async (path, maxBytes = MAX_PROJECT_INSTRUCTION_READ_BYTES) => {
-		const file = await open(path, "r");
+		const file = await open(path, PROJECT_INSTRUCTION_OPEN_FLAGS);
 		try {
 			const buffer = new Uint8Array(maxBytes);
 			let byteLength = 0;
@@ -230,6 +233,28 @@ const invalidDiagnostic = (
 	reason: code,
 	sourcePath,
 });
+type SourceLimit = {
+	readonly byteLength?: number;
+	readonly characterLength?: number;
+};
+
+const sourceLimitExceeded = (
+	value: Uint8Array | string
+): SourceLimit | undefined => {
+	if (isByteArray(value)) {
+		return value.byteLength > MAX_PROJECT_INSTRUCTION_SOURCE_BYTES
+			? { byteLength: value.byteLength }
+			: undefined;
+	}
+	let characterLength = 0;
+	for (const _character of value) {
+		characterLength += 1;
+		if (characterLength > MAX_PROJECT_INSTRUCTION_SOURCE_CHARS) {
+			return { characterLength };
+		}
+	}
+	return;
+};
 
 const readSource = async (
 	fileSystem: ProjectInstructionFileSystem,
@@ -253,16 +278,18 @@ const readSource = async (
 			diagnostic: invalidDiagnostic(candidate.sourcePath, "read-error"),
 		};
 	}
-	const bytes = toBytes(value);
-	if (bytes.byteLength > MAX_PROJECT_INSTRUCTION_SOURCE_BYTES) {
+	const limit = sourceLimitExceeded(value);
+	if (limit !== undefined) {
 		return {
 			diagnostic: invalidDiagnostic(
 				candidate.sourcePath,
 				"source-too-large",
-				bytes.byteLength
+				limit.byteLength,
+				limit.characterLength
 			),
 		};
 	}
+	const bytes = toBytes(value);
 	let content: string;
 	try {
 		content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
