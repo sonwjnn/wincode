@@ -4,24 +4,36 @@ Wincode runs model requests locally. A provider connection supplies credentials 
 
 ## Model catalog
 
-Add a direct entry to `packages/ai/src/models.ts`:
+Add a direct entry to `packages/ai/src/catalog.ts`:
 
 ```ts
 {
-  connectionProviderId: "example",
-  route: "direct",
-  displayName: "Example Model",
-  id: "example-model",
-  provider: "example",
-  variants: [],
+	connectionProviderId: "example",
+	route: "direct",
+	displayName: "Example Model",
+	id: "example-model",
+	provider: "example",
+	lifecycle: "active",
 }
 ```
 
 For direct entries, `connectionProviderId` and `provider` must match one of the supported provider IDs. Model identity is the pair `(provider, modelId)`, not the model ID alone.
 
+A new entry carries no reasoning levels, cost, or limits. Those come from the generated snapshot, so a model the upstream does not list needs a manual overlay in `packages/ai/scripts/metadata-model.ts` before it can offer any reasoning level at all. Run the generator and read its coverage report:
+
+```sh
+bun run packages/ai/scripts/sync-model-metadata.ts
+```
+
+It prints which entries came from the source, which from an overlay, and which are absent upstream. An `active` entry in the last group cannot offer levels, limits, or prices, and the report is the only place that gap is visible.
+
+To retire a model instead of deleting it, set `lifecycle: "retired"`. Retired entries stay resolvable so existing Session Records keep their model identity, and they stop being selectable in the model picker. See [ADR-0012](adr/0012-model-catalog-lifecycle.md).
+
 ## Model policy and runtime adapter
 
-Add provider-specific model option policy to `packages/ai/src/model-provider-options.ts`. Keep its return value provider-neutral and typed, including capability-specific option shapes.
+Reasoning options are translated once, in `packages/ai/src/model-provider-options.ts` (`resolveReasoning`), from the entry's published `ThinkingPolicy` into whichever provider shape reaches the wire. Do not add a per-model table for a provider: if a model needs a different level set or budget bound, that is a metadata problem, so fix the overlay or the upstream reading in `packages/ai/src/models-dev.ts`.
+
+The `providerChosenBudgetModels` set in that file is the one hand-maintained exception, for providers that pick their own reasoning budget. Adding a model there is a deliberate statement, not a default.
 
 Add the private runtime implementation under `packages/agent-runtime-ai-sdk/src/providers/`, construct the model from the user-owned authorization, and translate only at the runtime boundary.
 

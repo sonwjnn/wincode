@@ -1,5 +1,8 @@
 import { TextAttributes } from "@opentui/core";
-import { formatModelTokenCount } from "@wincode/ai/model-usage";
+import {
+	formatModelTokenCount,
+	formatModelUsdAmount,
+} from "@wincode/ai/model-usage";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { SessionUsageSummary } from "../../usage/session-usage";
 
@@ -24,6 +27,11 @@ export function SessionUsageBar({ summary }: { summary: SessionUsageSummary }) {
 						<span fg={percentColor}>{summary.contextPercent}%</span>
 						<span>)</span>
 					</>
+				)}
+				{summary.costUsd === null ? null : (
+					// "~" marks a figure derived from published rates instead of an
+					// invoice. See ADR-0015.
+					<span>{`  ~${formatModelUsdAmount(summary.costUsd)}`}</span>
 				)}
 			</text>
 		</box>

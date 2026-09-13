@@ -122,6 +122,7 @@ export const resolveDirectSummaryModel = async (
 	maxOutputTokens?: number
 ): Promise<SummaryModel> =>
 	resolveChatModelTarget(selection, connections, {
+		allowRetired: true,
 		...(signal === undefined ? {} : { signal }),
 		...(variant === undefined ? {} : { variant }),
 		...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),

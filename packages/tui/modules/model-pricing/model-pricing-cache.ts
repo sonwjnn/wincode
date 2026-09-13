@@ -6,17 +6,19 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { modelMetadataEntrySchema } from "@wincode/ai/models-dev";
 import { z } from "zod";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 import type { ModelPricingTable } from "./model-pricing";
-import { modelPricingTableSchema } from "./model-pricing";
 
 const CACHE_FILE_NAME = "model-pricing.json";
-const CACHE_VERSION = 1;
+// Bumped when the cached entry shape changes; the schema below is the real
+// guard, this only documents the intent.
+const CACHE_VERSION = 2;
 
 const cacheFileSchema = z.object({
 	fetchedAt: z.number().int().nonnegative(),
-	table: modelPricingTableSchema,
+	table: z.record(z.string(), modelMetadataEntrySchema),
 	version: z.literal(CACHE_VERSION),
 });
 

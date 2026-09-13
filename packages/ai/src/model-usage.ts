@@ -1,6 +1,5 @@
 import { z } from "zod";
-import type { ModelCost } from "./models";
-
+import type { ModelCost, ModelCostTier, ModelMetadataEntry } from "./models";
 export const modelUsageSchema = z
 	.object({
 		cacheReadTokens: z.number().int().nonnegative().optional(),
@@ -11,6 +10,39 @@ export const modelUsageSchema = z
 		totalTokens: z.number().int().nonnegative().optional(),
 	})
 	.strict();
+
+const TOKENS_PER_MILLION = 1_000_000;
+
+type UsagePricing = ModelCost | ModelMetadataEntry;
+type ResolvedUsagePricing = {
+	readonly cost: ModelCost | undefined;
+	readonly tiers: readonly ModelCostTier[] | undefined;
+};
+
+const isModelCost = (value: unknown): value is ModelCost => {
+	if (typeof value !== "object" || value === null) {
+		return false;
+	}
+	return (
+		"input" in value &&
+		typeof value.input === "number" &&
+		"output" in value &&
+		typeof value.output === "number"
+	);
+};
+
+const resolveUsagePricing = (pricing: UsagePricing): ResolvedUsagePricing => {
+	if ("cost" in pricing) {
+		return {
+			cost: isModelCost(pricing.cost) ? pricing.cost : undefined,
+			tiers: pricing.tiers,
+		};
+	}
+	return {
+		cost: isModelCost(pricing) ? pricing : undefined,
+		tiers: undefined,
+	};
+};
 
 export type ModelUsage = z.infer<typeof modelUsageSchema>;
 
@@ -61,21 +93,37 @@ export const normalizeModelUsage = (value: unknown): ModelUsage | null => {
 export const getModelContextTokens = (usage: ModelUsage): number =>
 	usage.inputTokens + usage.outputTokens;
 
-/** USD cost for a single model usage. `null` when pricing is unknown. */
+/**
+ * USD cost for a single model usage. `null` when pricing is unknown.
+ * `pricing` may be a raw cost record or catalog metadata with cost tiers.
+ */
 export const calculateModelUsageCostUsd = (
-	cost: ModelCost | null | undefined,
+	pricing: UsagePricing | null | undefined,
 	usage: ModelUsage
 ): number | null => {
+	if (!pricing) {
+		return null;
+	}
+	const { cost, tiers } = resolveUsagePricing(pricing);
 	if (!cost) {
 		return null;
 	}
 	const cacheRead = usage.cacheReadTokens ?? 0;
-	const uncachedInput = Math.max(0, usage.inputTokens - cacheRead);
-	const cacheReadRate = cost.cacheRead ?? cost.input;
-	const inputCost = (uncachedInput / 1_000_000) * cost.input;
-	const cacheReadCost = (cacheRead / 1_000_000) * cacheReadRate;
-	const outputCost = (usage.outputTokens / 1_000_000) * cost.output;
-	return inputCost + cacheReadCost + outputCost;
+	const cacheWrite = usage.cacheWriteTokens ?? 0;
+	const uncachedInput = Math.max(0, usage.inputTokens - cacheRead - cacheWrite);
+	const totalInput = uncachedInput + cacheRead + cacheWrite;
+	const rates =
+		tiers
+			?.filter((candidate) => totalInput > candidate.inputTokensAbove)
+			.at(-1) ?? cost;
+	const inputCost = (uncachedInput / TOKENS_PER_MILLION) * rates.input;
+	const outputCost = (usage.outputTokens / TOKENS_PER_MILLION) * rates.output;
+	const cacheReadCost =
+		(cacheRead / TOKENS_PER_MILLION) * (rates.cacheRead ?? cost.cacheRead ?? 0);
+	const cacheWriteCost =
+		(cacheWrite / TOKENS_PER_MILLION) *
+		(rates.cacheWrite ?? cost.cacheWrite ?? 0);
+	return inputCost + outputCost + cacheReadCost + cacheWriteCost;
 };
 
 const TRAILING_ZERO = /\.0$/;

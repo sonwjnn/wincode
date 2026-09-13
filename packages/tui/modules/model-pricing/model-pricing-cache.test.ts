@@ -23,8 +23,8 @@ afterEach(() => {
 });
 
 const TABLE = {
-	"openai/gpt-5.4-mini": {
-		contextLimit: 400_000,
+	"openai/gpt-5.6-luna": {
+		limits: { context: 400_000 },
 		cost: { input: 0.25, output: 2 },
 	},
 };
@@ -58,8 +58,8 @@ describe("model pricing cache", () => {
 			JSON.stringify({
 				fetchedAt: now,
 				table: {
-					"openai/gpt-5.4-mini": {
-						contextLimit: 400_000,
+					"openai/gpt-5.6-luna": {
+						limits: { context: 400_000 },
 						cost: { input: "not-a-number", output: 2 },
 					},
 				},

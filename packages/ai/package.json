@@ -20,13 +20,16 @@
     "./model-usage": {
       "default": "./src/model-usage.ts"
     },
+    "./models-dev": {
+      "default": "./src/models-dev.ts"
+    },
     "./models": {
       "default": "./src/models.ts"
     }
   },
   "scripts": {
     "check-types": "tsc --noEmit",
-    "test": "bun test src"
+    "test": "bun test src scripts"
   },
   "dependencies": {
     "zod": "catalog:"

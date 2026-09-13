@@ -28,13 +28,40 @@ while users reconnect providers into the new format.
 
 The Model Catalog is the static product definition of supported models and
 variants. It references a Connection Provider by ID but does not own credentials
-or authentication behavior.
+or authentication behavior. An entry that remains in the catalog but is no
+longer selectable is retired rather than deleted, so existing Session Records
+keep their model identity. A deliberate clean-cutover prune MAY delete legacy
+IDs after the corresponding persisted data is reset; the 2026-09 prune used
+that exception.
+_Avoid_: pricing table, provider model list, discovery
+
+**Model Lifecycle**:
+Whether a Model Catalog entry may be selected for a new turn: `active` or
+`retired`. Retirement is a product decision, independent of whether the
+provider still serves the model. _Avoid_: deprecation, availability
+
+**Thinking Level**:
+A named reasoning effort a model supports, or the absence of one. It is a
+property of a Model Catalog entry's thinking policy, and the level identifier
+is what a session persists. _Avoid_: effort, thinking mode, variant
+
+**Variant ID**:
+The stored and wire name of a Thinking Level — `modelVariantIds` in
+`@wincode/ai`, the `variant` column on `session`, and the `variant` key in
+message metadata. The identifier is stable; only the identifier is persisted,
+never the expanded provider request. _Avoid_: treating the ID as the model's
+capability
+
+**Model Descriptor**:
+A Model Catalog entry together with where its metadata came from and whether
+that metadata is current. This is the shape a reader resolves; the entry itself
+stays immutable. _Avoid_: model record, merged model
 
 ## Model Target
 
-A Model Target is the effective Connection Provider, model, variant, and minimal
-authorization selected for one Agent Turn. It is transient and must not become a
-Session Record. _Avoid_: AI SDK model, persisted model handle
+A Model Target is the effective Connection Provider, model, Thinking Level, and
+minimal authorization selected for one Agent Turn. It is transient and must not
+become a Session Record. _Avoid_: AI SDK model, persisted model handle
 
 ## Session Selection
 

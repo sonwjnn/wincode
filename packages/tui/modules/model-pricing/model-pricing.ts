@@ -1,62 +1,110 @@
 import {
 	type ChatModelSelection,
 	findSupportedChatModelSelection,
-	type ModelCost,
+	getModelMetadata,
 	type ModelRuntimeProviderId,
 } from "@wincode/ai/models";
-import { z } from "zod";
+import type { ModelMetadataEntry } from "@wincode/ai/models-dev";
 
-export type ModelPricingEntry = {
-	contextLimit: number;
-	cost?: ModelCost;
-};
+/**
+ * A runtime override table over the generated catalog metadata. Both sides are
+ * models.dev-derived, so the entry shape they share is `ModelMetadataEntry`;
+ * a live table only ever carries more current values.
+ */
+export type ModelPricingEntry = ModelMetadataEntry;
 
 export type ModelPricingTable = Readonly<Record<string, ModelPricingEntry>>;
 
-const modelCostSchema = z
-	.object({
-		cacheRead: z.number().nonnegative().optional(),
-		cacheWrite: z.number().nonnegative().optional(),
-		input: z.number().nonnegative(),
-		output: z.number().nonnegative(),
-	})
-	.strict() satisfies z.ZodType<ModelCost>;
-
-/** Shared shape for both the on-disk cache and the live models.dev fetch result. */
-export const modelPricingEntrySchema = z
-	.object({
-		contextLimit: z.number().int().positive(),
-		cost: modelCostSchema.optional(),
-	})
-	.strict() satisfies z.ZodType<ModelPricingEntry>;
-
-export const modelPricingTableSchema = z.record(
-	z.string(),
-	modelPricingEntrySchema
-);
+/**
+ * How current the rates behind a resolved price are. `"bundled"` is the
+ * snapshot compiled into the build; `"cache"` is a previously fetched table
+ * still inside its TTL; `"stale"` is one past it. The distinction is worth
+ * showing because published rates move — measured over one 35-day window,
+ * 8 of 66 catalog models changed price, the largest by 507%.
+ */
+export type ModelPricingSource = "bundled" | "cache" | "stale";
 
 export const modelPricingKey = (
 	provider: ModelRuntimeProviderId,
 	modelId: string
 ): string => `${provider}/${modelId}`;
 
+const mergeModelCost = (
+	catalog: ModelMetadataEntry["cost"],
+	live: ModelMetadataEntry["cost"]
+): ModelMetadataEntry["cost"] => {
+	if (!catalog) {
+		return live;
+	}
+	if (!live) {
+		return catalog;
+	}
+	const cacheRead = live.cacheRead ?? catalog.cacheRead;
+	const cacheWrite = live.cacheWrite ?? catalog.cacheWrite;
+	return {
+		input: live.input ?? catalog.input,
+		output: live.output ?? catalog.output,
+		...(cacheRead === undefined ? {} : { cacheRead }),
+		...(cacheWrite === undefined ? {} : { cacheWrite }),
+	};
+};
+
+const mergeModelLimits = (
+	catalog: ModelMetadataEntry["limits"],
+	live: ModelMetadataEntry["limits"]
+): ModelMetadataEntry["limits"] => {
+	if (!catalog) {
+		return live;
+	}
+	if (!live) {
+		return catalog;
+	}
+	return {
+		context: live.context ?? catalog.context,
+		...((live.output ?? catalog.output)
+			? { output: live.output ?? catalog.output }
+			: {}),
+	};
+};
+
 /**
- * Resolves the pricing entry for a model selection. `null` when the model is
- * unknown to the catalog (the footer should hide in that case).
+ * Resolves the metadata for a model selection. The Model Catalog is the base:
+ * its generated snapshot covers every active entry, so a context limit no
+ * longer depends on a successful fetch. A live models.dev table overrides the
+ * fields it actually carries, which is the whole point of refreshing it.
  */
-export const resolveModelPricing = (
+export const resolveModelMetadata = (
 	table: ModelPricingTable,
 	selection: ChatModelSelection
-): ModelPricingEntry | null => {
+): ModelMetadataEntry | null => {
 	const model = findSupportedChatModelSelection(selection);
 	if (!model) {
 		return null;
 	}
-	const key = modelPricingKey(model.provider, model.id);
-	const fromTable = table[key];
-	if (!fromTable) {
-		return null;
-	}
-	const cost = fromTable.cost;
-	return { contextLimit: fromTable.contextLimit, ...(cost ? { cost } : {}) };
+	const catalog = getModelMetadata(model);
+	const live = table[modelPricingKey(model.provider, model.id)];
+	const cost = mergeModelCost(catalog?.cost, live?.cost);
+	const limits = mergeModelLimits(catalog?.limits, live?.limits);
+	const thinking =
+		catalog?.thinking || live?.thinking
+			? { ...catalog?.thinking, ...live?.thinking }
+			: undefined;
+	const merged: ModelMetadataEntry = {
+		...catalog,
+		...live,
+		...(cost ? { cost } : {}),
+		...(limits ? { limits } : {}),
+		...(thinking ? { thinking } : {}),
+	};
+	return Object.keys(merged).length === 0 ? null : merged;
 };
+
+/**
+ * Context limit for a selection, or `null` when the model is unknown to the
+ * catalog or the snapshot carried no limit for it.
+ */
+export const resolveModelContextLimit = (
+	table: ModelPricingTable,
+	selection: ChatModelSelection
+): number | null =>
+	resolveModelMetadata(table, selection)?.limits?.context ?? null;

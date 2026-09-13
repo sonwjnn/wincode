@@ -6,7 +6,7 @@ import { createDatabase } from "./client";
 import { createDrizzleSessionStore } from "./drizzle-session-store";
 
 const model: ChatModelSelection = {
-	modelId: "gpt-5.4-mini",
+	modelId: "gpt-5.6-luna",
 	providerId: "openai",
 };
 

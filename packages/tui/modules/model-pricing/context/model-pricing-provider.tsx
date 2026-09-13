@@ -1,4 +1,7 @@
-import { supportedChatModelIds } from "@wincode/ai/models";
+import {
+	modelMetadataSnapshotDate,
+	supportedChatModelIds,
+} from "@wincode/ai/models";
 import {
 	createContext,
 	type ReactNode,
@@ -8,17 +11,21 @@ import {
 	useState,
 } from "react";
 import { fetchModelPricingTable } from "../fetch-model-pricing";
-import type { ModelPricingTable } from "../model-pricing";
+import type { ModelPricingSource, ModelPricingTable } from "../model-pricing";
 import {
 	readModelPricingCache,
 	writeModelPricingCache,
 } from "../model-pricing-cache";
 import { modelPricingEnv } from "../model-pricing-env";
-import { modelPricingSnapshot } from "../model-pricing-snapshot.generated";
 
 const DEFAULT_TTL_HOURS = 24;
 const DEFAULT_URL = "https://models.dev/api.json";
 const modelIds = new Set<string>(supportedChatModelIds);
+/**
+ * The generated Model Catalog metadata is the base, so an empty table is a
+ * complete fallback: the fetch only refreshes values, never supplies them.
+ */
+const NO_OVERRIDES: ModelPricingTable = {};
 
 let fetchPromise: Promise<ModelPricingTable | null> | null = null;
 
@@ -43,6 +50,10 @@ const runFetch = (
 
 export type ModelPricingState = {
 	offline: boolean;
+	/** The date the build-time snapshot was generated, `YYYY-MM-DD`. */
+	snapshotDate: string;
+	/** Where `table` came from, so a reader can tell how current it is. */
+	source: ModelPricingSource;
 	table: ModelPricingTable;
 };
 
@@ -54,7 +65,8 @@ export function ModelPricingProvider({ children }: { children: ReactNode }) {
 		modelPricingEnv.WINCODE_MODEL_PRICING_TTL_HOURS ?? DEFAULT_TTL_HOURS;
 	const url = modelPricingEnv.WINCODE_MODEL_PRICING_URL ?? DEFAULT_URL;
 
-	const [table, setTable] = useState<ModelPricingTable>(modelPricingSnapshot);
+	const [table, setTable] = useState<ModelPricingTable>(NO_OVERRIDES);
+	const [source, setSource] = useState<ModelPricingSource>("bundled");
 	const bootstrappedRef = useRef(false);
 
 	useEffect(() => {
@@ -68,8 +80,10 @@ export function ModelPricingProvider({ children }: { children: ReactNode }) {
 		if (cached) {
 			// Show cached data immediately, fresh or stale — a cache that is a
 			// few hours past its TTL is still far more accurate than the
-			// bundled snapshot. Only a *missing* cache falls back to it.
+			// bundled snapshot. Only a *missing* cache leaves the snapshot in
+			// place, and the source is what tells the user which one they got.
 			setTable(cached.table);
+			setSource(cached.stale ? "stale" : "cache");
 			if (!cached.stale) {
 				return;
 			}
@@ -85,13 +99,21 @@ export function ModelPricingProvider({ children }: { children: ReactNode }) {
 			.then((next) => {
 				if (next) {
 					setTable(next);
+					setSource("cache");
 				}
 			})
 			.catch(() => undefined);
 	}, [offline, ttlHours, url]);
 
 	return (
-		<ModelPricingContext.Provider value={{ offline, table }}>
+		<ModelPricingContext.Provider
+			value={{
+				offline,
+				snapshotDate: modelMetadataSnapshotDate,
+				source,
+				table,
+			}}
+		>
 			{children}
 		</ModelPricingContext.Provider>
 	);

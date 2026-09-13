@@ -1,115 +1,43 @@
-import type { ModelRuntimeProviderId } from "@wincode/ai/models";
-import { z } from "zod";
+import { modelRuntimeProviderIds } from "@wincode/ai/models";
 import {
-	type ModelPricingEntry,
-	type ModelPricingTable,
-	modelPricingEntrySchema,
-	modelPricingKey,
-} from "./model-pricing";
+	convertModelsDevPayload,
+	type ModelMetadataEntry,
+} from "@wincode/ai/models-dev";
+import { type ModelPricingTable, modelPricingKey } from "./model-pricing";
 
-const runtimeProviderIds: Readonly<Record<ModelRuntimeProviderId, true>> = {
-	anthropic: true,
-	google: true,
-	openai: true,
-	"opencode-go": true,
-};
+const runtimeProviderIds: Readonly<Record<string, true>> = Object.fromEntries(
+	modelRuntimeProviderIds.map((providerId) => [providerId, true as const])
+);
 const isModelRuntimeProviderId = (
 	value: string
-): value is ModelRuntimeProviderId =>
-	runtimeProviderIds[value as ModelRuntimeProviderId] === true;
-
-const modelsDevLimitSchema = z
-	.object({
-		context: z.number().int().positive(),
-	})
-	.partial()
-	.optional();
-
-const modelsDevCostSchema = z
-	.object({
-		cache_read: z.number().nonnegative().optional(),
-		cache_write: z.number().nonnegative().optional(),
-		input: z.number().nonnegative(),
-		output: z.number().nonnegative(),
-	})
-	.optional();
-
-const modelsDevEntrySchema = z
-	.object({
-		cost: modelsDevCostSchema,
-		limit: modelsDevLimitSchema,
-	})
-	.partial();
-
-const modelsDevProviderSchema = z.object({
-	models: z.record(z.string(), z.unknown()),
-});
-
-const modelsDevResponseSchema = z.record(z.string(), modelsDevProviderSchema);
-
-const toModelCost = (
-	cost: NonNullable<z.infer<typeof modelsDevCostSchema>>
-): NonNullable<ModelPricingEntry["cost"]> => {
-	const next: NonNullable<ModelPricingEntry["cost"]> = {
-		input: cost.input,
-		output: cost.output,
-	};
-	if (cost.cache_read !== undefined) {
-		next.cacheRead = cost.cache_read;
-	}
-	if (cost.cache_write !== undefined) {
-		next.cacheWrite = cost.cache_write;
-	}
-	return next;
-};
-
-/** Parses and validates a single models.dev model entry, or `null` if unusable. */
-const parseModelsDevEntry = (rawEntry: unknown): ModelPricingEntry | null => {
-	const entry = modelsDevEntrySchema.safeParse(rawEntry);
-	if (!entry.success) {
-		return null;
-	}
-	const context = entry.data.limit?.context;
-	if (context === undefined) {
-		return null;
-	}
-	const next: ModelPricingEntry = {
-		contextLimit: context,
-		...(entry.data.cost ? { cost: toModelCost(entry.data.cost) } : {}),
-	};
-	const validated = modelPricingEntrySchema.safeParse(next);
-	return validated.success ? validated.data : null;
-};
+): value is (typeof modelRuntimeProviderIds)[number] =>
+	runtimeProviderIds[value] === true;
 
 /**
- * Parses the raw `https://models.dev/api.json` payload into a pricing table
- * keyed by `${provider}/${modelId}`. Only the three runtime providers we
- * actually route to are kept — models.dev also lists ~170 resellers whose
- * prices don't apply here and would otherwise bloat the table with keys we
- * never look up. Entries that fail to parse or lack `limit.context` are
- * silently dropped — one bad model must not break the rest of the table.
+ * Runtime refresh over `https://models.dev/api.json`. Shares its converter
+ * with the offline generator (`@wincode/ai/models-dev`), so a fetched table
+ * and the committed snapshot can only ever differ in *how current* they are,
+ * never in how a field is interpreted. See ADR-0014.
+ *
+ * Only the runtime providers Wincode routes to are kept — models.dev also
+ * lists ~170 resellers whose prices do not apply here — and a row with no
+ * recognized metadata is dropped rather than given a default.
  */
 export const buildModelPricingTable = (
 	raw: unknown,
 	ids: ReadonlySet<string>
 ): ModelPricingTable => {
-	const parsed = modelsDevResponseSchema.safeParse(raw);
-	if (!parsed.success) {
-		return {};
-	}
-	const table: Record<string, ModelPricingEntry> = {};
-	for (const [provider, providerBlock] of Object.entries(parsed.data)) {
-		if (!isModelRuntimeProviderId(provider)) {
-			continue;
-		}
-		for (const [modelId, rawEntry] of Object.entries(providerBlock.models)) {
-			if (!ids.has(modelId)) {
-				continue;
-			}
-			const entry = parseModelsDevEntry(rawEntry);
-			if (entry) {
-				table[modelPricingKey(provider, modelId)] = entry;
-			}
+	const table: Record<string, ModelMetadataEntry> = {};
+	for (const [key, metadata] of convertModelsDevPayload(raw)) {
+		const separator = key.indexOf("/");
+		const provider = key.slice(0, separator);
+		const modelId = key.slice(separator + 1);
+		if (
+			isModelRuntimeProviderId(provider) &&
+			ids.has(modelId) &&
+			Object.keys(metadata).length > 0
+		) {
+			table[modelPricingKey(provider, modelId)] = metadata;
 		}
 	}
 	return table;

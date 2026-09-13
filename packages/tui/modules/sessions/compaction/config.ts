@@ -2,7 +2,7 @@ import { getModelContextTokens } from "@wincode/ai/model-usage";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import { z } from "zod";
 import type { ModelPricingTable } from "@/modules/model-pricing";
-import { resolveModelPricing } from "@/modules/model-pricing";
+import { resolveModelContextLimit } from "@/modules/model-pricing";
 import type {
 	ConfigDiagnostic,
 	ConfigOrigin,
@@ -320,7 +320,7 @@ export const resolveCompactionSettings = (
 	let contextLimit = configuredContextLimit;
 	if (contextLimit === undefined) {
 		if (model && pricing) {
-			contextLimit = resolveModelPricing(pricing, model)?.contextLimit ?? null;
+			contextLimit = resolveModelContextLimit(pricing, model);
 		} else {
 			contextLimit = null;
 		}

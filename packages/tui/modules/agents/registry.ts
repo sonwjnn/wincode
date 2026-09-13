@@ -8,11 +8,14 @@ import {
 import {
 	type ChatModelSelection,
 	type ConnectionProviderId,
+	findSupportedChatModelSelection,
+	isActiveChatModel,
 	isSupportedModelVariant,
 	type ModelVariant,
 	modelVariantSchema,
 	parseCatalogModelSelection,
 } from "@wincode/ai/models";
+
 import {
 	type CodingToolName,
 	DEFAULT_RESOURCE_LIMIT_PROFILE,
@@ -127,6 +130,39 @@ export type AgentRegistry = {
 	readonly diagnostics: readonly AgentDiagnostic[];
 	readonly resourceProfile: ResourceLimitProfile;
 	readonly selectableAgents: readonly RegistryAgent[];
+};
+type ModelAvailability = {
+	readonly isAvailable: boolean;
+	readonly modelRetired: boolean;
+	readonly unavailableReason?: string;
+};
+
+const modelAvailability = (
+	model: ChatModelSelection | undefined,
+	connectedProviderIds: ReadonlySet<ConnectionProviderId> | undefined
+): ModelAvailability => {
+	if (model === undefined) {
+		return { isAvailable: true, modelRetired: false };
+	}
+	const catalogModel = findSupportedChatModelSelection(model);
+	if (catalogModel && !isActiveChatModel(catalogModel)) {
+		return {
+			isAvailable: false,
+			modelRetired: true,
+			unavailableReason: `Model ${model.providerId}/${model.modelId} is retired`,
+		};
+	}
+	if (
+		connectedProviderIds === undefined ||
+		connectedProviderIds.has(model.providerId)
+	) {
+		return { isAvailable: true, modelRetired: false };
+	}
+	return {
+		isAvailable: false,
+		modelRetired: false,
+		unavailableReason: `Connect ${model.providerId} to use this Agent`,
+	};
 };
 
 type AgentRegistryOptions = {
@@ -429,29 +465,24 @@ const resolveConfiguredAgentEntry = (
 			),
 		};
 	}
-	const isAvailable =
-		model === undefined ||
-		options.connectedProviderIds === undefined ||
-		options.connectedProviderIds.has(model.providerId);
+	const { modelRetired, ...availability } = modelAvailability(
+		model,
+		options.connectedProviderIds
+	);
 	return {
 		agent: {
 			description: definition.data.description,
 			displayName: agentLabelFromId(agentId),
 			id: idResult.data,
 			instructions: definition.data.instructions ?? "",
-			isAvailable,
+			...availability,
 			isConfigured: true,
-			isSelectable: definition.data.role !== "subagent",
+			isSelectable: definition.data.role !== "subagent" && !modelRetired,
 			...(model ? { model } : {}),
 			resourceProfile:
 				definition.data.resource_limits ?? defaultResourceProfile,
 			requiresManualApproval: false,
 			role: definition.data.role,
-			...(isAvailable
-				? {}
-				: {
-						unavailableReason: `Connect ${model?.providerId} to use this Agent`,
-					}),
 			...(variant?.success ? { variant: variant.data } : {}),
 			visibleCodingTools: configuredAgentVisibleCodingTools,
 		},
@@ -592,10 +623,10 @@ const resolveBuiltInAgent = (
 		};
 	}
 	const model = parsedModel ?? undefined;
-	const isAvailable =
-		model === undefined ||
-		options.connectedProviderIds === undefined ||
-		options.connectedProviderIds.has(model.providerId);
+	const { modelRetired, ...availability } = modelAvailability(
+		model,
+		options.connectedProviderIds
+	);
 	const {
 		model: _configuredModel,
 		variant: _configuredVariant,
@@ -604,18 +635,13 @@ const resolveBuiltInAgent = (
 	return {
 		...shippedAgent,
 		...validatedPatch,
+		...availability,
 		...(model ? { model } : {}),
 		...(variant?.success ? { variant: variant.data } : {}),
-		isAvailable,
 		isConfigured: false,
-		isSelectable: true,
+		isSelectable: !modelRetired,
 		resourceProfile: patch.data.resource_limits ?? defaultResourceProfile,
 		requiresManualApproval: false,
-		...(isAvailable
-			? {}
-			: {
-					unavailableReason: `Connect ${model?.providerId} to use this Agent`,
-				}),
 	};
 };
 

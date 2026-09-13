@@ -9,7 +9,7 @@ import {
 } from "./summary-generator";
 
 const selection: ChatModelSelection = {
-	modelId: "gpt-5.4-mini",
+	modelId: "gpt-5.6-luna",
 	providerId: "openai",
 };
 

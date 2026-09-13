@@ -72,10 +72,25 @@ Session schema changes update the current Drizzle schema directly; this project 
 - Local MCP commands are trusted configuration and execute in the user's workspace.
 - Skill instructions are untrusted, turn-scoped context. Activating a Skill does not grant additional tool permissions.
 
+## Model metadata
+
+The Model Catalog in `packages/ai/src/catalog.ts` is the curated product allowlist. Reasoning levels, cost rates, cost tiers, and token limits are generated into `packages/ai/src/generated/model-metadata.generated.ts` from `https://models.dev/api.json`, read through `packages/ai/src/models-dev.ts` — the one converter, shared with the offline generator so a fetched value and a committed one cannot be interpreted differently.
+
+```sh
+bun run sync-model-metadata                   # regenerate the snapshot
+bun run sync-model-metadata -- --check        # fail when it is stale
+```
+
+The snapshot is a build input, not a fetch dependency: a context limit resolves with no network at all, which is what keeps automatic compaction available offline. Facts the upstream does not publish are manual overlays in `packages/ai/scripts/metadata-model.ts` and are reported by name in the generated file's header.
+
 ## Architecture decisions
 
 Detailed rationale lives in [`docs/adr/`](docs/adr/):
 
+- [Model Catalog lifecycle](docs/adr/0012-model-catalog-lifecycle.md)
+- [Reasoning as a request](docs/adr/0013-reasoning-as-request.md)
+- [Model metadata pipeline](docs/adr/0014-model-metadata-pipeline.md)
+- [Cost and limits in the catalog](docs/adr/0015-cost-and-limits-in-catalog.md)
 - [Package graph and ownership](docs/adr/0010-agent-architecture-package-graph.md)
 - [AI SDK isolation](docs/adr/0009-isolate-ai-sdk-behind-agent-runtime.md)
 - [Agent-driven Skill activation](docs/adr/0004-agent-driven-skill-activation.md)

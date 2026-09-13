@@ -50,6 +50,7 @@ import { randomUUIDv7 } from "bun";
 import { z } from "zod";
 import type { McpCatalogSnapshot, McpSnapshotTool } from "@/modules/mcp";
 import type { ResolvedCodingAgent } from "../../agents/built-ins";
+import { RetiredModelError } from "../../model-target";
 import type { GateOutcome, ToolGate } from "../../tool-gate/tool-gate";
 import type { SessionMessage } from "../message";
 import { expandSessionMessagesForModel } from "../message";
@@ -935,6 +936,8 @@ export const buildAssistantFailureSessionRecord = ({
 		modelId: model.modelId,
 		providerId: model.providerId,
 	});
+	const failureText =
+		error instanceof RetiredModelError ? error.message : failure.message;
 	return buildAssistantOutcomeSessionRecord({
 		agentId,
 		delegation,
@@ -945,7 +948,7 @@ export const buildAssistantFailureSessionRecord = ({
 			finishedAt: Date.now(),
 			kind: "failed",
 		},
-		text: failure.message,
+		text: failureText,
 		turnId,
 		variant,
 	});

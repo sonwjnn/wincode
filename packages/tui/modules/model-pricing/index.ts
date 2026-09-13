@@ -5,9 +5,11 @@ export {
 export { fetchModelPricingTable } from "./fetch-model-pricing";
 export {
 	type ModelPricingEntry,
+	type ModelPricingSource,
 	type ModelPricingTable,
 	modelPricingKey,
-	resolveModelPricing,
+	resolveModelContextLimit,
+	resolveModelMetadata,
 } from "./model-pricing";
 export {
 	clearModelPricingCache,

@@ -109,7 +109,7 @@ const completedCompaction = (): SessionCompaction => ({
 	id: "compaction-1",
 	sequence: 1,
 	sessionId: "session-1",
-	summarizationModel: { modelId: "gpt-5.4-mini", providerId: "openai" },
+	summarizationModel: { modelId: "gpt-5.6-luna", providerId: "openai" },
 	summarizationVariant: "high",
 	summary: {
 		coveredMessageIds: ["user-1", "assistant-1"],
@@ -540,7 +540,7 @@ describe("ChatShell activity footer", () => {
 					"assistant-1"
 				),
 				metadata: {
-					model: { modelId: "gpt-5.4-mini", providerId: "openai" },
+					model: { modelId: "gpt-5.6-luna", providerId: "openai" },
 					usage: { inputTokens: 7336, outputTokens: 0 },
 				},
 			},

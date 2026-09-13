@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { fetchModelPricingTable } from "./fetch-model-pricing";
 
-const IDS = new Set(["gpt-5.4-mini"]);
+const IDS = new Set(["gpt-5.6-luna"]);
 
 const makeFetch = (
 	impl: (input: string, init?: RequestInit) => Promise<Response>
@@ -19,7 +19,7 @@ describe("fetchModelPricingTable", () => {
 					JSON.stringify({
 						openai: {
 							models: {
-								"gpt-5.4-mini": {
+								"gpt-5.6-luna": {
 									cost: { input: 0.25, output: 2 },
 									limit: { context: 400_000 },
 								},
@@ -35,8 +35,8 @@ describe("fetchModelPricingTable", () => {
 			fetchImpl
 		);
 		expect(table).toEqual({
-			"openai/gpt-5.4-mini": {
-				contextLimit: 400_000,
+			"openai/gpt-5.6-luna": {
+				limits: { context: 400_000 },
 				cost: { input: 0.25, output: 2 },
 			},
 		});
@@ -123,7 +123,7 @@ describe("fetchModelPricingTable", () => {
 
 	test("returns null when the parsed table covers too few of the requested ids", async () => {
 		const manyIds = new Set([
-			"gpt-5.4-mini",
+			"gpt-5.6-luna",
 			"o3",
 			"o4-mini",
 			"claude-fable-5",
@@ -134,7 +134,7 @@ describe("fetchModelPricingTable", () => {
 					JSON.stringify({
 						openai: {
 							models: {
-								"gpt-5.4-mini": {
+								"gpt-5.6-luna": {
 									cost: { input: 0.25, output: 2 },
 									limit: { context: 400_000 },
 								},

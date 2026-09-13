@@ -22,7 +22,7 @@ const compaction = (
 	id,
 	sequence,
 	sessionId: "session-1",
-	summarizationModel: { modelId: "gpt-5.4-mini", providerId: "openai" },
+	summarizationModel: { modelId: "gpt-5.6-luna", providerId: "openai" },
 	summary: { coveredMessageIds: ["u1"], formatVersion: 1, text: id },
 	throughMessageUiId,
 	estimatedTokensAfter: 20,
