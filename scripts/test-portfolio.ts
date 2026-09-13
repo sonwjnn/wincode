@@ -41,6 +41,9 @@ const SCRUBBED_ENVIRONMENT_NAMES = [
 	"XAI_API_KEY",
 ];
 
+const isMissingPathError = (error: unknown): boolean =>
+	error instanceof Error && "code" in error && error.code === "ENOENT";
+
 type RunnerArguments = {
 	readonly packageFilter?: string;
 	readonly portfolio: TestClassification;
@@ -181,7 +184,7 @@ const removeIfEmpty = async (path: string): Promise<void> => {
 			await rm(path, { force: true, recursive: true });
 		}
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+		if (!isMissingPathError(error)) {
 			throw error;
 		}
 	}
@@ -190,7 +193,7 @@ const ensureTerminalFrame = async (framePath: string): Promise<void> => {
 	try {
 		await access(framePath);
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+		if (!isMissingPathError(error)) {
 			throw error;
 		}
 		await writeFile(framePath, "", "utf8");

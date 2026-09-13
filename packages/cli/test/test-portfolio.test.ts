@@ -17,6 +17,9 @@ const runnerPath = join(repositoryRoot, "scripts/test-portfolio.ts");
 
 const output = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
 
+const isMissingPathError = (error: unknown): boolean =>
+	error instanceof Error && "code" in error && error.code === "ENOENT";
+
 const runPortfolio = (
 	root: string,
 	portfolio: "default" | "e2e",
@@ -52,7 +55,10 @@ const exists = async (path: string): Promise<boolean> => {
 	try {
 		await access(path);
 		return true;
-	} catch {
+	} catch (error) {
+		if (!isMissingPathError(error)) {
+			throw error;
+		}
 		return false;
 	}
 };
