@@ -62,6 +62,8 @@ export type ProjectInstructionSnapshotInput = {
 	readonly fs?: ProjectInstructionFileSystem;
 	/** Root-to-workspace order; useful for deterministic application seams. */
 	readonly projectRoots?: readonly string[];
+	/** Canonical sandbox workspace used for provenance-relative source paths. */
+	readonly provenanceWorkspace?: string;
 	readonly workspace: string;
 };
 
@@ -86,8 +88,20 @@ const defaultFileSystem: ProjectInstructionFileSystem = {
 		const file = await open(path, "r");
 		try {
 			const buffer = new Uint8Array(maxBytes);
-			const { bytesRead } = await file.read(buffer, 0, maxBytes, 0);
-			return buffer.slice(0, bytesRead);
+			let byteLength = 0;
+			while (byteLength < maxBytes) {
+				const { bytesRead } = await file.read(
+					buffer,
+					byteLength,
+					maxBytes - byteLength,
+					byteLength
+				);
+				if (bytesRead === 0) {
+					break;
+				}
+				byteLength += bytesRead;
+			}
+			return buffer.slice(0, byteLength);
 		} finally {
 			await file.close();
 		}
@@ -175,11 +189,13 @@ const readMetadata = async (
 
 const metadataKey = (
 	workspace: string,
+	provenanceWorkspace: string,
 	candidates: readonly Candidate[],
 	metadata: readonly FileMetadata[]
 ): string =>
 	[
 		workspace,
+		provenanceWorkspace,
 		...candidates.map((candidate, index) => {
 			const candidateMetadata = metadata[index] ?? { kind: "error" as const };
 			return `${candidate.absolutePath}:${encodeMetadata(candidateMetadata)}`;
@@ -328,15 +344,16 @@ export const createProjectInstructionSnapshot = async (
 	cache?: Map<string, ProjectInstructionSnapshot>
 ): Promise<ProjectInstructionSnapshot> => {
 	const workspace = resolve(input.workspace);
+	const provenanceWorkspace = resolve(input.provenanceWorkspace ?? workspace);
 	const fileSystem = input.fs ?? defaultFileSystem;
 	const roots = input.projectRoots ?? getProjectRoots(workspace);
-	const candidates = sourceCandidates(workspace, roots);
+	const candidates = sourceCandidates(provenanceWorkspace, roots);
 	const metadata = await Promise.all(
 		candidates.map((candidate) =>
 			readMetadata(fileSystem, candidate.absolutePath)
 		)
 	);
-	const key = metadataKey(workspace, candidates, metadata);
+	const key = metadataKey(workspace, provenanceWorkspace, candidates, metadata);
 	const cacheable = metadata.every(({ kind }) => kind !== "error");
 	if (cacheable) {
 		const cached = cache?.get(key);
@@ -388,7 +405,7 @@ export const createProjectInstructionSnapshot = async (
 		diagnostics,
 		sources,
 		totalByteLength,
-		workspace,
+		workspace: provenanceWorkspace,
 	});
 	const canCacheSnapshot =
 		cacheable && diagnostics.every(({ code }) => code !== "read-error");

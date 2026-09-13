@@ -326,7 +326,7 @@ describe("Prompt Assembly", () => {
 
 		expect(
 			snapshot.projectInstructions.sources.map(({ sourcePath }) => sourcePath)
-		).toEqual(["../../AGENTS.md", "../AGENTS.md", "AGENTS.md"]);
+		).toEqual(["AGENTS.md", "packages/AGENTS.md", "packages/tui/AGENTS.md"]);
 	});
 
 	test("keeps the stable prompt prefix unchanged when git status changes", () => {

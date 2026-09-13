@@ -465,6 +465,7 @@ export const createPromptAssemblyService = (
 			{
 				fs: input.fs,
 				projectRoots: input.projectRoots,
+				provenanceWorkspace: input.workspace,
 				workspace: input.cwd ?? input.workspace,
 			},
 			cache
