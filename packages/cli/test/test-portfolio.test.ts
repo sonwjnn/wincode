@@ -218,6 +218,37 @@ test("must not run after a failure", () => {
 		}
 	});
 
+	test("keeps dotted E2E filenames in isolated artifact directories", async () => {
+		const root = await mkdtemp(join(tmpdir(), "wincode-e2e-scenario-"));
+		try {
+			await writeFixture(
+				root,
+				"packages/tui/test/...e2e.test.ts",
+				`import { writeFileSync } from "node:fs";
+import { test } from "bun:test";
+const framePath = process.env.WINCODE_E2E_FRAME_PATH!;
+test("fails after writing the final frame", () => {
+	writeFileSync(framePath, "safe frame");
+	throw new Error("dotted scenario failure");
+});
+`
+			);
+
+			const result = runPortfolio(root, "e2e");
+			const artifactDirectory = join(root, "test-artifacts", "e2e", "tui", "-");
+			expect(result.exitCode).not.toBe(0);
+			expect(result.output).toContain("Executed E2E test files: 1");
+			expect(await exists(join(artifactDirectory, "runner.log"))).toBe(true);
+			expect(
+				await readFile(join(artifactDirectory, "terminal-frame.txt"), "utf8")
+			).toBe("safe frame");
+			expect(
+				await exists(join(root, "test-artifacts", "e2e", "terminal-frame.txt"))
+			).toBe(false);
+		} finally {
+			await rm(root, { force: true, recursive: true });
+		}
+	});
 	test("removes successful artifacts and audits beyond a package filter", async () => {
 		const root = await mkdtemp(join(tmpdir(), "wincode-filtered-runner-"));
 		const marker = join(root, "execution.log");
