@@ -218,6 +218,19 @@ describe("Prompt Assembly", () => {
 
 		expect(describeVisibleToolPermission(permission, "read")).toBe("allow");
 	});
+	test("retains a wildcard ask beyond later literal denies", () => {
+		const permission = createResolvedToolPermission({
+			read: {
+				"src/*": "ask",
+				"src/file": "deny",
+				"src/entry": "deny",
+				"src/x": "deny",
+				"src/nested": "deny",
+			},
+		});
+
+		expect(describeVisibleToolPermission(permission, "read")).toBe("ask");
+	});
 	test("does not overstate asks overridden by later resource rules", () => {
 		const permission = createResolvedToolPermission({
 			read: { ".env": "ask", "*": "deny", "src/**": "allow" },

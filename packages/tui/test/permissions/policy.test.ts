@@ -549,9 +549,27 @@ describe("resolveVisibleCodingTools", () => {
 			visible: ["read", "write", "edit", "glob", "grep"],
 		},
 		{
-			name: "keeps a path map visible when witnesses miss an allowed resource",
+			name: "keeps a path map visible when a later deny misses an allowed resource",
 			rules: {
 				read: { "*": "deny", "src/**": "allow", "src/**/file": "deny" },
+			},
+			visible: ["read", "write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "hides a path allow fully covered by a broader later deny",
+			rules: { read: { "*": "deny", "src/*": "allow", "src/**": "deny" } },
+			visible: ["write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "keeps a wildcard ask visible beyond sampled literals",
+			rules: {
+				read: {
+					"src/*": "ask",
+					"src/file": "deny",
+					"src/entry": "deny",
+					"src/x": "deny",
+					"src/nested": "deny",
+				},
 			},
 			visible: ["read", "write", "edit", "glob", "grep", "shell"],
 		},
