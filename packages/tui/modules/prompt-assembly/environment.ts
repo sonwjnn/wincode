@@ -1,5 +1,6 @@
+import { existsSync } from "node:fs";
 import { realpath } from "node:fs/promises";
-import { relative, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import type { AgentRole } from "@wincode/agent-core";
 import { getGitBranch } from "@/shared/git/get-git-branch";
 import {
@@ -8,6 +9,7 @@ import {
 	getGitRepositoryRoot,
 	getGitStatusSummary,
 } from "@/shared/git/get-git-status";
+import { getProjectRoots } from "@/shared/paths/project-roots";
 
 export type PromptEnvironmentGit = {
 	readonly getBranch: (cwd: string) => Promise<string | null>;
@@ -48,9 +50,18 @@ export type PromptEnvironmentSnapshotInput = {
 	readonly role?: AgentRole;
 	readonly workspace: string;
 };
+const hasGitRootMarker = (workspace: string): boolean => {
+	const roots = getProjectRoots(workspace);
+	const root = roots[0];
+	return (
+		root !== undefined && (roots.length > 1 || existsSync(join(root, ".git")))
+	);
+};
+
 const defaultGit: PromptEnvironmentGit = {
 	getBranch: getGitBranch,
-	getRepositoryRoot: getGitRepositoryRoot,
+	getRepositoryRoot: async (cwd) =>
+		hasGitRootMarker(cwd) ? getGitRepositoryRoot(cwd) : null,
 	getStatus: async (cwd) =>
 		formatGitStatusSummary(await getGitStatusSummary(cwd)),
 };
