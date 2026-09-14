@@ -439,21 +439,6 @@ const isUniversalResourcePattern = (
 		? isUniversalNonEmptyGlob(pattern)
 		: isUniversalPathPattern(pattern);
 
-const isUniversalResourceDeny = (
-	rule: PermissionResourceRules,
-	action: PermissionAction
-): boolean => {
-	const entries = Object.entries(rule);
-	const universalDenyIndex = entries.findLastIndex(
-		([pattern, decision]) =>
-			decision === "deny" && isUniversalResourcePattern(pattern, action)
-	);
-	const hasUsableNonDenyException = entries
-		.slice(universalDenyIndex + 1)
-		.some(([pattern, decision]) => decision !== "deny" && pattern.length > 0);
-	return universalDenyIndex >= 0 && !hasUsableNonDenyException;
-};
-
 const buildShellPatternWitness = (pattern: string): string =>
 	pattern.replaceAll("*", "arg").replaceAll("?", "x");
 
@@ -476,6 +461,45 @@ const buildResourcePatternWitness = (
 			? buildShellPatternWitness(expandedPattern)
 			: buildPathPatternWitness(expandedPattern, deep);
 	return witness.length > 0 ? witness : null;
+};
+const isUniversalResourceDeny = (
+	rule: PermissionResourceRules,
+	action: PermissionAction
+): boolean => {
+	const entries = Object.entries(rule);
+	const universalDenyIndex = entries.findLastIndex(
+		([pattern, decision]) =>
+			decision === "deny" && isUniversalResourcePattern(pattern, action)
+	);
+	if (universalDenyIndex < 0) {
+		return false;
+	}
+	const normalizedEntries = entries.map(([pattern, decision]) => ({
+		decision,
+		pattern: action === "shell" ? pattern : expandHomeInPath(pattern),
+	}));
+	const matcher = matcherForAction(action);
+	for (const [pattern, decision] of entries.slice(universalDenyIndex + 1)) {
+		if (decision === "deny" || pattern.length === 0) {
+			continue;
+		}
+		for (const deep of [false, true]) {
+			const witness = buildResourcePatternWitness(pattern, action, deep);
+			if (witness === null) {
+				continue;
+			}
+			const effectiveDecision = decideByResourceMap(
+				normalizedEntries,
+				witness,
+				"deny",
+				matcher
+			);
+			if (effectiveDecision !== "deny") {
+				return false;
+			}
+		}
+	}
+	return true;
 };
 
 const hasEffectiveResourceAsk = (

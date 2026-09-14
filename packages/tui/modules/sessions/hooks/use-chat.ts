@@ -38,15 +38,12 @@ import {
 	type McpCatalogSnapshot,
 	useMcp,
 } from "@/modules/mcp";
-import {
-	describeVisibleToolPermission,
-	STATIC_TOOL_PERMISSION_ACTIONS,
-	useToolPermission,
-} from "@/modules/permissions";
+import { useToolPermission } from "@/modules/permissions";
 import {
 	assembleNormalTurnPrompt,
-	describeEffectiveVisibleTools,
+	describeAgentTurnTools,
 } from "@/modules/prompt-assembly/composer";
+
 import {
 	COMPACTION_REQUEST_OVERHEAD_TOKENS,
 	type CompactSessionInput,
@@ -1769,24 +1766,10 @@ export function useChat(
 					agent: resolvedAgent,
 					cwd: configRef.current.cwd,
 					delegation,
-					effectiveVisibleTools: describeEffectiveVisibleTools({
-						codingPermissions: new Map(
-							resolvedAgent.visibleCodingTools.map((name) => [
-								name,
-								describeVisibleToolPermission(
-									agentPermission,
-									STATIC_TOOL_PERMISSION_ACTIONS[name]
-								),
-							])
-						),
-						mcpPolicies: new Map(
-							[...snapshot.tools].map(([name, tool]) => [name, tool.policy])
-						),
-						requiresManualApproval: resolvedAgent.requiresManualApproval,
-						skillPermission: describeVisibleToolPermission(
-							agentPermission,
-							"skill"
-						),
+					effectiveVisibleTools: describeAgentTurnTools({
+						agent: resolvedAgent,
+						mcpTools: snapshot.tools,
+						permission: agentPermission,
 						tools,
 					}),
 					model: {

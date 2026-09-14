@@ -5,6 +5,12 @@ import type {
 	ResolvedTool,
 } from "@wincode/agent-core";
 import {
+	describeVisibleToolPermission,
+	STATIC_TOOL_PERMISSION_ACTIONS,
+	type ToolPermission,
+} from "@/modules/permissions/policy";
+
+import {
 	createEnvironmentSnapshot,
 	type PromptEnvironmentGit,
 	type PromptEnvironmentSnapshot,
@@ -41,6 +47,9 @@ export type EffectiveVisibleTool = {
 	readonly family?: PromptToolFamily;
 	readonly name: string;
 	readonly permission?: PromptToolPermission;
+};
+type PromptMcpToolSnapshot = {
+	readonly policy: PromptToolPermission;
 };
 
 export type PromptAssemblyBlockMetadata = {
@@ -476,6 +485,46 @@ export const describeEffectiveVisibleTools = (input: {
 		}
 	}
 	return described;
+};
+type PromptAgentCapabilities = {
+	readonly requiresManualApproval?: boolean;
+	readonly visibleCodingTools: readonly (keyof typeof STATIC_TOOL_PERMISSION_ACTIONS)[];
+};
+export const describeAgentTurnTools = (input: {
+	readonly agent: PromptAgentCapabilities;
+	readonly mcpTools: ReadonlyMap<string, PromptMcpToolSnapshot>;
+	readonly permission?: ToolPermission;
+	readonly tools: readonly ResolvedTool[];
+}): readonly EffectiveVisibleTool[] => {
+	const permission = input.permission;
+	const codingPermissions =
+		permission === undefined
+			? undefined
+			: new Map(
+					input.agent.visibleCodingTools.map((name) => [
+						name,
+						describeVisibleToolPermission(
+							permission,
+							STATIC_TOOL_PERMISSION_ACTIONS[name]
+						),
+					])
+				);
+	const mcpPolicies = new Map<string, PromptToolPermission>(
+		[...input.mcpTools].map(([name, tool]) => [name, tool.policy])
+	);
+	let skillPermission: PromptToolPermission;
+	if (permission === undefined) {
+		skillPermission = input.agent.requiresManualApproval ? "ask" : "allow";
+	} else {
+		skillPermission = describeVisibleToolPermission(permission, "skill");
+	}
+	return describeEffectiveVisibleTools({
+		codingPermissions,
+		mcpPolicies,
+		requiresManualApproval: input.agent.requiresManualApproval,
+		skillPermission,
+		tools: input.tools,
+	});
 };
 
 export const createPromptAssemblyService = (

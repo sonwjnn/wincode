@@ -544,6 +544,11 @@ describe("resolveVisibleCodingTools", () => {
 			visible: ["write", "edit", "glob", "grep", "shell"],
 		},
 		{
+			name: "hides a shell map whose later deny covers an allow",
+			rules: { shell: { "*": "deny", "rm *": "allow", "rm **": "deny" } },
+			visible: ["read", "write", "edit", "glob", "grep"],
+		},
+		{
 			name: "keeps an ask-gated tool visible",
 			rules: { list: "ask" },
 			visible: ["read", "write", "edit", "glob", "grep", "shell"],

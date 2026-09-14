@@ -20,14 +20,10 @@ import {
 	type McpContextValue,
 	type McpToolCallExecutor,
 } from "@/modules/mcp";
-import {
-	describeVisibleToolPermission,
-	STATIC_TOOL_PERMISSION_ACTIONS,
-	type ToolPermission,
-} from "@/modules/permissions";
+import type { ToolPermission } from "@/modules/permissions";
 import {
 	assembleNormalTurnPrompt,
-	describeEffectiveVisibleTools,
+	describeAgentTurnTools,
 } from "@/modules/prompt-assembly/composer";
 import { resolveChatModelTarget } from "../../model-target";
 import { createSessionUserMessage, type SessionMessage } from "../message";
@@ -134,34 +130,14 @@ const buildChildTurn = async ({
 		resolveResourceLimits: childGate.resolveResourceLimits,
 	});
 	const childPermission = await resolvePermissionForAgent?.(prepared.agent);
-	const defaultSkillPermission = prepared.resolvedAgent.requiresManualApproval
-		? "ask"
-		: "allow";
 	const prompt = await assembleNormalTurnPrompt({
 		agent: prepared.resolvedAgent,
 		cwd,
 		delegation,
-		effectiveVisibleTools: describeEffectiveVisibleTools({
-			codingPermissions:
-				childPermission === undefined
-					? undefined
-					: new Map(
-							prepared.resolvedAgent.visibleCodingTools.map((name) => [
-								name,
-								describeVisibleToolPermission(
-									childPermission,
-									STATIC_TOOL_PERMISSION_ACTIONS[name]
-								),
-							])
-						),
-			mcpPolicies: new Map(
-				[...snapshot.tools].map(([name, tool]) => [name, tool.policy])
-			),
-			requiresManualApproval: prepared.resolvedAgent.requiresManualApproval,
-			skillPermission:
-				childPermission === undefined
-					? defaultSkillPermission
-					: describeVisibleToolPermission(childPermission, "skill"),
+		effectiveVisibleTools: describeAgentTurnTools({
+			agent: prepared.resolvedAgent,
+			mcpTools: snapshot.tools,
+			permission: childPermission,
 			tools,
 		}),
 		model: {
