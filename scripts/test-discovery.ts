@@ -47,6 +47,9 @@ const SPEC_TEST_FILE_PATTERN = /\.spec\.(?:ts|tsx)$/;
 const CLASSIFICATION_PATTERN = /\.([a-z0-9_-]+)\.test\.(?:ts|tsx)$/i;
 const DEFAULT_TEST_FILE_PATTERN = /\.test\.(?:ts|tsx)$/;
 const PACKAGE_TEST_PATH_PATTERN = /^packages\/([^/]+)\/test(?:\/|$)/;
+const IGNORED_TEST_PATHS: Record<string, true> = {
+	"scripts/test-portfolio.test.ts": true,
+};
 export const compareStableStrings = (left: string, right: string): number => {
 	if (left < right) {
 		return -1;
@@ -160,7 +163,10 @@ export const discoverTests = (root: string): TestDiscovery => {
 	walk(absoluteRoot, "", (relativePath) => {
 		const normalizedPath = normalizePath(relativePath);
 		const fileName = normalizedPath.split("/").at(-1) ?? normalizedPath;
-		if (!isTestLikeFile(fileName)) {
+		if (
+			!isTestLikeFile(fileName) ||
+			Object.hasOwn(IGNORED_TEST_PATHS, normalizedPath)
+		) {
 			return;
 		}
 

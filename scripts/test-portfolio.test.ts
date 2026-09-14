@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "bun";
 
-const repositoryRoot = resolve(import.meta.dir, "../../..");
+const repositoryRoot = resolve(import.meta.dir, "..");
 const runnerPath = join(repositoryRoot, "scripts/test-portfolio.ts");
 
 const output = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
