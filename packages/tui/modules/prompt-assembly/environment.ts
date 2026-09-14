@@ -1,5 +1,4 @@
 import { existsSync } from "node:fs";
-import { realpath } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { getGitBranch } from "@/shared/git/get-git-branch";
 import {
@@ -8,6 +7,7 @@ import {
 	getGitRepositoryRoot,
 	getGitStatusSummary,
 } from "@/shared/git/get-git-status";
+import { canonicalPath } from "@/shared/paths/project-roots";
 
 export type PromptEnvironmentGit = {
 	readonly getBranch: (cwd: string) => Promise<string | null>;
@@ -55,14 +55,6 @@ const defaultGit: PromptEnvironmentGit = {
 		hasGitRootMarker(cwd) ? getGitRepositoryRoot(cwd) : null,
 	getStatus: async (cwd) =>
 		formatGitStatusSummary(await getGitStatusSummary(cwd)),
-};
-const canonicalPath = async (path: string): Promise<string> => {
-	const resolvedPath = resolve(path);
-	try {
-		return await realpath(resolvedPath);
-	} catch {
-		return resolvedPath;
-	}
 };
 
 const relativePath = (workspace: string, path: string): string => {

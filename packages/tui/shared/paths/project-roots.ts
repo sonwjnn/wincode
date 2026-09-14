@@ -1,5 +1,15 @@
 import { existsSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
+
+export const canonicalPath = async (path: string): Promise<string> => {
+	const resolvedPath = resolve(path);
+	try {
+		return await realpath(resolvedPath);
+	} catch {
+		return resolvedPath;
+	}
+};
 
 export const getProjectRoots = (workspace: string): string[] => {
 	const start = resolve(workspace);

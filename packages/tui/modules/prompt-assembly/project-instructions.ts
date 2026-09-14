@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { relative, resolve } from "node:path";
-import { getProjectRootsWithinWorkspace } from "@/shared/paths/project-roots";
+import {
+	canonicalPath,
+	getProjectRootsWithinWorkspace,
+} from "@/shared/paths/project-roots";
 
 export const PROJECT_INSTRUCTION_FILE_NAME = "AGENTS.md";
 export const MAX_PROJECT_INSTRUCTION_SOURCE_CHARS = 12_000;
@@ -221,14 +224,6 @@ const isMissingError = (error: unknown): boolean => {
 		return false;
 	}
 	return error.code === "ENOENT";
-};
-const canonicalPath = async (path: string): Promise<string> => {
-	const resolvedPath = resolve(path);
-	try {
-		return await realpath(resolvedPath);
-	} catch {
-		return resolvedPath;
-	}
 };
 
 const isByteArray = (value: Uint8Array | string): value is Uint8Array =>
