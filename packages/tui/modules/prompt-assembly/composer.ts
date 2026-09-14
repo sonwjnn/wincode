@@ -14,10 +14,8 @@ import {
 } from "@/shared/paths/project-roots";
 import {
 	createEnvironmentSnapshot,
-	type PromptEnvironmentGit,
 	type PromptEnvironmentSnapshot,
 	type PromptEnvironmentSnapshotInput,
-	type PromptModelIdentity,
 } from "./environment";
 import {
 	createProjectInstructionSnapshot,
@@ -95,15 +93,9 @@ export type PromptAssemblyResult = {
 	readonly metadata: PromptAssemblyMetadata;
 };
 
-export type PromptAssemblySnapshotInput = {
-	readonly cwd?: string;
+export type PromptAssemblySnapshotInput = PromptEnvironmentSnapshotInput & {
 	readonly fs?: ProjectInstructionFileSystem;
-	readonly git?: PromptEnvironmentGit;
-	readonly model: PromptModelIdentity;
-	readonly platform?: string;
-	readonly projectRoot?: string | null;
 	readonly projectRoots?: readonly string[];
-	readonly workspace: string;
 };
 
 export type AssembleNormalTurnPromptInput = PromptAssemblySnapshotInput & {
@@ -519,11 +511,8 @@ export const createPromptAssemblyService = (
 			cache
 		);
 		const environment = await createEnvironmentSnapshot({
+			...input,
 			cwd,
-			git: input.git,
-			model: input.model,
-			platform: input.platform,
-			projectRoot: input.projectRoot,
 			workspace,
 		});
 		return { environment, projectInstructions };
