@@ -56,6 +56,10 @@ describe("matchesResourcePattern", () => {
 		expect(matchesResourcePattern("file?.txt", "file1.txt")).toBe(true);
 		expect(matchesResourcePattern("file?.txt", "file12.txt")).toBe(false);
 	});
+	test("wildcard paths include line terminators without widening literals", () => {
+		expect(matchesResourcePattern("**", "a\nb")).toBe(true);
+		expect(matchesResourcePattern("a", "a\n")).toBe(false);
+	});
 });
 
 describe("matchesStringPattern", () => {
@@ -83,6 +87,11 @@ describe("matchesStringPattern", () => {
 		expect(matchesStringPattern("rm", "rm")).toBe(true);
 		expect(matchesStringPattern("rm", "git rm")).toBe(false);
 		expect(matchesResourcePattern("rm", "x/rm")).toBe(true);
+	});
+	test("string wildcards include line terminators without widening literals", () => {
+		expect(matchesStringPattern("*", "a\nb")).toBe(true);
+		expect(matchesStringPattern("a?b", "a\nb")).toBe(true);
+		expect(matchesStringPattern("a", "a\n")).toBe(false);
 	});
 });
 
@@ -506,6 +515,86 @@ describe("resolveVisibleCodingTools", () => {
 		{
 			name: "keeps a granular edit map visible",
 			rules: { edit: { "src/**": "deny" } },
+			visible: ["read", "write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "hides a resource map with a final catch-all deny",
+			rules: { read: { "src/**": "allow", "*": "deny" } },
+			visible: ["write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "hides slash catch-all denies followed only by denies",
+			rules: { read: { "**/*": "deny", "src/**": "deny" } },
+			visible: ["write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "keeps slash-bearing shell globs visible when not universal",
+			rules: { shell: { "**/*": "deny" } },
+			visible: ["read", "write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "hides repeated recursive path catch-all denies",
+			rules: { read: { "**/**/**": "deny" } },
+			visible: ["write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "keeps trailing-slash path patterns visible",
+			rules: { read: { "**/": "deny" } },
+			visible: ["read", "write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "keeps a universal deny with a narrower allow visible",
+			rules: { read: { "**": "deny", "src/**": "allow" } },
+			visible: ["read", "write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "hides universal denies with only an empty-resource exception",
+			rules: { read: { "*": "deny", "": "allow" } },
+			visible: ["write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "hides a shell map whose later deny covers an allow",
+			rules: { shell: { "*": "deny", "rm *": "allow", "rm **": "deny" } },
+			visible: ["read", "write", "edit", "glob", "grep"],
+		},
+		{
+			name: "keeps a path map visible when a later deny misses an allowed resource",
+			rules: {
+				read: { "*": "deny", "src/**": "allow", "src/**/file": "deny" },
+			},
+			visible: ["read", "write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "hides a path allow fully covered by a broader later deny",
+			rules: { read: { "*": "deny", "src/*?*": "allow", "src/*": "deny" } },
+			visible: ["write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "hides a path map when a universal deny covers a wildcard allow",
+			rules: { read: { "?": "allow", "**": "deny" } },
+			visible: ["write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "keeps a path map visible for an explicit duplicate-slash exception",
+			rules: { read: { "*": "deny", "src//file": "allow" } },
+			visible: ["read", "write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "keeps an astral literal exception visible with UTF-16 wildcards",
+			rules: { read: { "*": "deny", "😀": "allow", "?": "deny" } },
+			visible: ["read", "write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "keeps a wildcard ask visible beyond sampled literals",
+			rules: {
+				read: {
+					"src/*": "ask",
+					"src/file": "deny",
+					"src/entry": "deny",
+					"src/x": "deny",
+					"src/nested": "deny",
+				},
+			},
 			visible: ["read", "write", "edit", "glob", "grep", "shell"],
 		},
 		{

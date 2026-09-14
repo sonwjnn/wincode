@@ -39,6 +39,9 @@ import {
 	useMcp,
 } from "@/modules/mcp";
 import { useToolPermission } from "@/modules/permissions";
+import { assembleAgentTurnPrompt } from "@/modules/prompt-assembly/composer";
+import { MAX_PROJECT_INSTRUCTION_TOTAL_BYTES } from "@/modules/prompt-assembly/project-instructions";
+
 import {
 	COMPACTION_REQUEST_OVERHEAD_TOKENS,
 	type CompactSessionInput,
@@ -1151,9 +1154,11 @@ export function useChat(
 	const connections = useConnections();
 	const mcp = useMcp();
 	const config = useConfig();
+	const configRef = useLatest(config);
 	const { getCompactionSettings: getSettingsForModel } =
 		useCompactionSettings();
 	const registry = useAgentRegistry();
+	const registryRef = useLatest(registry);
 	const {
 		closeApprovals,
 		openApproval,
@@ -1320,8 +1325,10 @@ export function useChat(
 					}
 				: null,
 		});
+		// Compaction must reserve the bounded project block for the next normal turn.
 		return (
 			COMPACTION_REQUEST_OVERHEAD_TOKENS +
+			Math.ceil(MAX_PROJECT_INSTRUCTION_TOTAL_BYTES / 4) +
 			Math.ceil(serializedContext.length / 4)
 		);
 	}, []);
@@ -1735,6 +1742,39 @@ export function useChat(
 							? resolveResourceLimitsRef.current()
 							: resolveResourceLimitsForAgentRef.current(agentId),
 				};
+				const tools = createGatedCodingTools({
+					agentId: agent,
+					agentTools: resolvedAgent.visibleCodingTools,
+					delegate:
+						registryRef.current?.agents.some(
+							({ isAvailable, role }) =>
+								isAvailable && (role === "subagent" || role === "all")
+						) === true
+							? runtimeGatedToolingRef.current.delegate
+							: undefined,
+					executeMcpTool,
+					gate: gatedTooling.gate,
+					mcpSnapshot: snapshot,
+					parentTurnId: turnId,
+					resolveResourceLimits: gatedTooling.resolveResourceLimits,
+					skillExecution: skillExecutionRef.current ?? undefined,
+					skillTool: skillToolRef.current,
+				});
+				const agentPermission =
+					await resolvePermissionForAgentRef.current(agent);
+				const prompt = await assembleAgentTurnPrompt({
+					agent: resolvedAgent,
+					cwd: configRef.current.cwd,
+					delegation,
+					mcpTools: snapshot.tools,
+					model: {
+						modelId: modelTarget.modelId,
+						providerId: modelTarget.providerId,
+					},
+					permission: agentPermission,
+					tools,
+					workspace: configRef.current.workspace,
+				});
 				const turn = buildAgentTurn({
 					agent,
 					delegation,
@@ -1742,18 +1782,8 @@ export function useChat(
 					modelTarget,
 					resolvedAgent,
 					skill,
-					tools: createGatedCodingTools({
-						agentId: agent,
-						agentTools: resolvedAgent.visibleCodingTools,
-						delegate: runtimeGatedToolingRef.current.delegate,
-						executeMcpTool,
-						gate: gatedTooling.gate,
-						mcpSnapshot: snapshot,
-						parentTurnId: turnId,
-						resolveResourceLimits: gatedTooling.resolveResourceLimits,
-						skillExecution: skillExecutionRef.current ?? undefined,
-						skillTool: skillToolRef.current,
-					}),
+					systemInstructions: prompt.instructions,
+					tools,
 					turnId,
 				});
 				currentTurn = turn;
@@ -1859,15 +1889,19 @@ export function useChat(
 			const tool = buildSkillToolDefinition(catalog);
 			return tool === undefined ? undefined : { execution, tool };
 		},
+		cwd: config.cwd,
 		fallbackModelRef: modelRef,
 		fallbackVariantRef: variantRef,
 		gatedTooling: runtimeGatedToolingRef.current,
 		mcp,
 		resolveMcpPolicyForAgent: (agent) =>
 			resolveMcpPolicyForAgentRef.current(agent),
+		resolvePermissionForAgent: (agent) =>
+			resolvePermissionForAgentRef.current(agent),
 		onViewState: setViewState,
 		registry,
 		sessionId,
+		workspace: config.workspace,
 	});
 
 	const submit = useCallback(

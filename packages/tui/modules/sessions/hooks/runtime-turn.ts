@@ -666,6 +666,7 @@ export const buildAgentTurn = ({
 	resolvedAgent,
 	role,
 	skill,
+	systemInstructions,
 	tools = [],
 	turnId,
 	delegation,
@@ -677,6 +678,7 @@ export const buildAgentTurn = ({
 	resolvedAgent: ResolvedCodingAgent;
 	role?: AgentRole;
 	skill?: SkillRequestContext;
+	systemInstructions?: string;
 	tools?: readonly ResolvedTool[];
 	turnId: string;
 }): AgentTurn => {
@@ -694,7 +696,9 @@ export const buildAgentTurn = ({
 	return {
 		agent: {
 			id: agent,
-			instructions: `${BASE_AGENT_INSTRUCTIONS}\n\n${resolvedAgent.instructions}`,
+			instructions:
+				systemInstructions ??
+				`${BASE_AGENT_INSTRUCTIONS}\n\n${resolvedAgent.instructions}`,
 			role: effectiveRole,
 		},
 		...(delegation === undefined ? {} : { delegation }),

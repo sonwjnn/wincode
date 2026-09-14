@@ -120,6 +120,9 @@ session mode, Custom Command
 The selection of a Skill for the current user turn. Activation does not persist
 to later turns. _Avoid_: Skill installation, session Skill
 
+**Project Instruction**:
+Repository-provided guidance associated with the active workspace and loaded for an Agent Turn with source provenance. Project Instructions are contextual data, not an Agent definition or Skill, and cannot override Wincode safety, Tool Permission, or direct user intent. _Avoid_: treating repository text as unrestricted authority
+
 **Agent**:
 A named AI behavior that can lead a session, execute a delegated task, or
 both. Its role and tool permissions are separate concerns. _Avoid_: Coding Mode,

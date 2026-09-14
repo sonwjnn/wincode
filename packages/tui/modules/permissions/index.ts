@@ -32,6 +32,7 @@ export {
 	DEFAULT_READ_PERMISSION_RULES,
 	DEFAULT_SHELL_PERMISSION_RULES,
 	decideOpenActionPermission,
+	describeVisibleToolPermission,
 	type EffectiveAgentPolicy,
 	findUnmatchedActionKeys,
 	foldPermissionRules,

@@ -50,6 +50,12 @@ export const DEFAULT_EFFECTIVE_AGENT_POLICY: EffectiveAgentPolicy = {
 export type ToolPermission = {
 	decide(action: PermissionAction, resource: string): PermissionDecision;
 	/**
+	 * Effective rules when the evaluator can expose them to composition code.
+	 * Resource-aware prompt descriptions use this to distinguish a deny at an
+	 * empty probe from a deny that applies to every resource.
+	 */
+	readonly rules?: PermissionRules;
+	/**
 	 * True when a manual-only safety ceiling is in force. Every `ask` this
 	 * evaluator returns is then a safety ask that later auto-approval and
 	 * remembered-grant behavior must not bypass, distinguishing it from an
@@ -105,6 +111,7 @@ export function applyManualApprovalSafetyCeiling(
 		decide(action, resource) {
 			return permission.decide(action, resource) === "deny" ? "deny" : "ask";
 		},
+		rules: permission.rules,
 		safety: true,
 	};
 }
@@ -226,7 +233,7 @@ const globToRegExpSource = (pattern: string): string => {
 				source += "(?:[^/]+/)*";
 				index += 3;
 			} else {
-				source += ".*";
+				source += "[\\s\\S]*";
 				index += 2;
 			}
 			continue;
@@ -256,9 +263,9 @@ export function matchesResourcePattern(
 ): boolean {
 	const source = globToRegExpSource(pattern);
 	if (pattern.includes("/")) {
-		return new RegExp(`^${source}$`).test(resource);
+		return new RegExp(`^(?:${source})$(?![\\s\\S])`).test(resource);
 	}
-	return new RegExp(`^(?:[^/]+/)*${source}$`).test(resource);
+	return new RegExp(`^(?:[^/]+/)*${source}$(?![\\s\\S])`).test(resource);
 }
 
 const stringGlobToRegExpSource = (pattern: string): string => {
@@ -267,12 +274,12 @@ const stringGlobToRegExpSource = (pattern: string): string => {
 	while (index < pattern.length) {
 		const char = pattern[index] as string;
 		if (char === "*") {
-			source += ".*";
+			source += "[\\s\\S]*";
 			index += 1;
 			continue;
 		}
 		if (char === "?") {
-			source += ".";
+			source += "[\\s\\S]";
 			index += 1;
 			continue;
 		}
@@ -294,10 +301,24 @@ export function matchesStringPattern(
 	pattern: string,
 	resource: string
 ): boolean {
-	return new RegExp(`^${stringGlobToRegExpSource(pattern)}$`).test(resource);
+	return new RegExp(
+		`^(?:${stringGlobToRegExpSource(pattern)})$(?![\\s\\S])`
+	).test(resource);
 }
 
 type ResourcePatternRule = { decision: PermissionDecision; pattern: string };
+const normalizeResourceRules = (
+	action: PermissionAction,
+	rule: PermissionResourceRules
+): ResourcePatternRule[] =>
+	Object.entries(rule).map(([pattern, decision]) => ({
+		decision,
+		// Expand `~` and `$HOME` once while compiling so external-directory
+		// patterns are portable across user environments. Shell command
+		// patterns are matched against raw command text, so they are never
+		// home-expanded.
+		pattern: action === "shell" ? pattern : expandHomeInPath(pattern),
+	}));
 
 /** Selects the pattern matcher for an action: string globs for `shell`, path globs otherwise (ADR-0008). */
 const matcherForAction = (
@@ -346,14 +367,7 @@ const normalizeRules = (
 		if (rule === undefined) {
 			continue;
 		}
-		normalized[action] = Object.entries(rule).map(([pattern, decision]) => ({
-			decision,
-			// Expand `~` and `$HOME` once while compiling so external-directory
-			// patterns are portable across user environments. Shell command
-			// patterns are matched against raw command text, so they are never
-			// home-expanded.
-			pattern: action === "shell" ? pattern : expandHomeInPath(pattern),
-		}));
+		normalized[action] = normalizeResourceRules(action, rule);
 	}
 	return normalized;
 };
@@ -387,6 +401,7 @@ export function createResolvedToolPermission(
 				matcherForAction(action)
 			);
 		},
+		rules,
 		safety: false,
 	};
 }
@@ -405,16 +420,538 @@ export function createToolPermission(
 	);
 }
 
+const PATH_GLOB_CHARS = /^[*?/]+$/u;
+const WILDCARD_GLOB_CHARS = /^[*?]+$/u;
+
+const isUniversalNonEmptyGlob = (pattern: string): boolean =>
+	WILDCARD_GLOB_CHARS.test(pattern) &&
+	pattern.includes("*") &&
+	pattern.replaceAll("*", "").length <= 1;
+
+const isUniversalPathPattern = (pattern: string): boolean => {
+	if (!PATH_GLOB_CHARS.test(pattern) || pattern.endsWith("/")) {
+		return false;
+	}
+	if (!pattern.includes("/")) {
+		return isUniversalNonEmptyGlob(pattern);
+	}
+	return pattern.startsWith("**/") && isUniversalPathPattern(pattern.slice(3));
+};
+
+const isUniversalResourcePattern = (
+	pattern: string,
+	action: PermissionAction
+): boolean =>
+	action === "shell"
+		? isUniversalNonEmptyGlob(pattern)
+		: isUniversalPathPattern(pattern);
+
+type GlobTransitionKind = "any" | "literal" | "nonSlash";
+type GlobTransition = {
+	readonly kind: GlobTransitionKind;
+	readonly to: number;
+	readonly value?: string;
+};
+type GlobAutomaton = {
+	readonly accepts: ReadonlySet<number>;
+	readonly epsilon: readonly (readonly number[])[];
+	readonly start: number;
+	readonly transitions: readonly (readonly GlobTransition[])[];
+};
+type MutableGlobAutomaton = {
+	accepts: Set<number>;
+	epsilon: number[][];
+	start: number;
+	transitions: GlobTransition[][];
+};
+
+const MAX_GLOB_AUTOMATON_STATES = 8192;
+const MAX_GLOB_ANALYSIS_STATES = 4096;
+const MAX_GLOB_ANALYSIS_TRANSITIONS = 1_000_000;
+const MAX_GLOB_ALPHABET = 1024;
+const NON_DENY_DECISIONS = ["allow", "ask"] as const;
+
+const addGlobState = (automaton: MutableGlobAutomaton): number | undefined => {
+	if (automaton.epsilon.length >= MAX_GLOB_AUTOMATON_STATES) {
+		return;
+	}
+	automaton.epsilon.push([]);
+	automaton.transitions.push([]);
+	return automaton.epsilon.length - 1;
+};
+
+const addGlobEpsilon = (
+	automaton: MutableGlobAutomaton,
+	from: number,
+	to: number
+): void => {
+	automaton.epsilon[from]?.push(to);
+};
+
+const addGlobTransition = (
+	automaton: MutableGlobAutomaton,
+	from: number,
+	transition: GlobTransition
+): void => {
+	automaton.transitions[from]?.push(transition);
+};
+const globWildcardLength = (
+	isSegmentDoubleStar: boolean,
+	isDoubleStar: boolean
+): number => {
+	if (isSegmentDoubleStar) {
+		return 3;
+	}
+	return isDoubleStar ? 2 : 1;
+};
+
+const compileGlobStar = (
+	automaton: MutableGlobAutomaton,
+	current: number,
+	action: PermissionAction,
+	isDoubleStar: boolean
+): number | undefined => {
+	const after = addGlobState(automaton);
+	if (after === undefined) {
+		return;
+	}
+	addGlobEpsilon(automaton, current, after);
+	addGlobTransition(automaton, current, {
+		kind: action === "shell" || isDoubleStar ? "any" : "nonSlash",
+		to: current,
+	});
+	return after;
+};
+
+const compileGlobSegmentDoubleStar = (
+	automaton: MutableGlobAutomaton,
+	current: number
+): number | undefined => {
+	const after = addGlobState(automaton);
+	const inside = addGlobState(automaton);
+	if (after === undefined || inside === undefined) {
+		return;
+	}
+	addGlobEpsilon(automaton, current, after);
+	addGlobTransition(automaton, current, {
+		kind: "nonSlash",
+		to: inside,
+	});
+	addGlobTransition(automaton, inside, {
+		kind: "nonSlash",
+		to: inside,
+	});
+	addGlobTransition(automaton, inside, {
+		kind: "literal",
+		to: current,
+		value: "/",
+	});
+	return after;
+};
+
+const compileGlobCharacter = (
+	automaton: MutableGlobAutomaton,
+	current: number,
+	character: string,
+	action: PermissionAction
+): number | undefined => {
+	const after = addGlobState(automaton);
+	if (after === undefined) {
+		return;
+	}
+	if (character === "?") {
+		addGlobTransition(automaton, current, {
+			kind: action === "shell" ? "any" : "nonSlash",
+			to: after,
+		});
+	} else {
+		addGlobTransition(automaton, current, {
+			kind: "literal",
+			to: after,
+			value: character,
+		});
+	}
+	return after;
+};
+
+const compileGlobPattern = (
+	pattern: string,
+	action: PermissionAction
+): GlobAutomaton | undefined => {
+	const effectivePattern =
+		action === "shell" || pattern.includes("/") ? pattern : `**/${pattern}`;
+	// Match the runtime regexes' UTF-16 code-unit semantics.
+	const patternCharacters = effectivePattern;
+	const automaton: MutableGlobAutomaton = {
+		accepts: new Set(),
+		epsilon: [[]],
+		start: 0,
+		transitions: [[]],
+	};
+	let current = automaton.start;
+	let index = 0;
+	while (index < patternCharacters.length) {
+		const character = patternCharacters[index];
+		if (character === undefined) {
+			return;
+		}
+		if (character === "*") {
+			const isDoubleStar = patternCharacters[index + 1] === "*";
+			const isSegmentDoubleStar =
+				action !== "shell" &&
+				isDoubleStar &&
+				patternCharacters[index + 2] === "/";
+			const next = isSegmentDoubleStar
+				? compileGlobSegmentDoubleStar(automaton, current)
+				: compileGlobStar(automaton, current, action, isDoubleStar);
+			if (next === undefined) {
+				return;
+			}
+			current = next;
+			index += globWildcardLength(isSegmentDoubleStar, isDoubleStar);
+			continue;
+		}
+		const next = compileGlobCharacter(automaton, current, character, action);
+		if (next === undefined) {
+			return;
+		}
+		current = next;
+		index += 1;
+	}
+	automaton.accepts.add(current);
+	return automaton;
+};
+
+const createGlobUnionAutomaton = (
+	patterns: readonly string[],
+	action: PermissionAction
+): GlobAutomaton | undefined => {
+	const automaton: MutableGlobAutomaton = {
+		accepts: new Set(),
+		epsilon: [[]],
+		start: 0,
+		transitions: [[]],
+	};
+	for (const pattern of patterns) {
+		const compiled = compileGlobPattern(pattern, action);
+		if (
+			compiled === undefined ||
+			automaton.epsilon.length + compiled.epsilon.length >
+				MAX_GLOB_AUTOMATON_STATES
+		) {
+			return;
+		}
+		const offset = automaton.epsilon.length;
+		for (const _ of compiled.epsilon) {
+			automaton.epsilon.push([]);
+			automaton.transitions.push([]);
+		}
+		addGlobEpsilon(automaton, automaton.start, offset + compiled.start);
+		for (const [index, epsilonEdges] of compiled.epsilon.entries()) {
+			for (const target of epsilonEdges) {
+				addGlobEpsilon(automaton, offset + index, offset + target);
+			}
+			for (const transition of compiled.transitions[index] ?? []) {
+				addGlobTransition(automaton, offset + index, {
+					...transition,
+					to: offset + transition.to,
+				});
+			}
+		}
+		for (const accept of compiled.accepts) {
+			automaton.accepts.add(offset + accept);
+		}
+	}
+	return automaton;
+};
+
+const epsilonClosure = (
+	automaton: GlobAutomaton,
+	initial: Iterable<number>
+): number[] => {
+	const closure = new Set(initial);
+	const pending = [...closure];
+	while (pending.length > 0) {
+		const state = pending.pop();
+		if (state === undefined) {
+			continue;
+		}
+		for (const next of automaton.epsilon[state] ?? []) {
+			if (!closure.has(next)) {
+				closure.add(next);
+				pending.push(next);
+			}
+		}
+	}
+	return [...closure].sort((first, second) => first - second);
+};
+
+const matchesGlobTransition = (
+	transition: GlobTransition,
+	character: string
+): boolean => {
+	switch (transition.kind) {
+		case "literal":
+			return transition.value === character;
+		case "nonSlash":
+			return character !== "/";
+		case "any":
+			return true;
+		default:
+			return false;
+	}
+};
+
+const stepGlob = (
+	automaton: GlobAutomaton,
+	states: readonly number[],
+	character: string
+): number[] => {
+	const next = new Set<number>();
+	for (const state of states) {
+		for (const transition of automaton.transitions[state] ?? []) {
+			if (matchesGlobTransition(transition, character)) {
+				next.add(transition.to);
+			}
+		}
+	}
+	return epsilonClosure(automaton, next);
+};
+
+const globAccepts = (
+	automaton: GlobAutomaton,
+	states: readonly number[]
+): boolean => states.some((state) => automaton.accepts.has(state));
+
+const freshGlobCharacter = (
+	characters: ReadonlySet<string>,
+	predicate: (character: string) => boolean
+): string => {
+	for (let code = 0; code <= 0xff_ff; code += 1) {
+		const character = String.fromCharCode(code);
+		if (!characters.has(character) && predicate(character)) {
+			return character;
+		}
+	}
+	return "\u0000";
+};
+
+const globAlphabet = (
+	patterns: readonly string[]
+): readonly string[] | undefined => {
+	const characters = new Set(["/", "\n", "\r", "\u2028", "\u2029"]);
+	for (const pattern of patterns) {
+		// The runtime regexes are non-Unicode, so wildcards consume UTF-16 code units.
+		for (const character of pattern.split("")) {
+			characters.add(character);
+			if (characters.size > MAX_GLOB_ALPHABET) {
+				return;
+			}
+		}
+	}
+	characters.add(
+		freshGlobCharacter(characters, (character) => character !== "/")
+	);
+	if (characters.size > MAX_GLOB_ALPHABET) {
+		return;
+	}
+	return [...characters];
+};
+type GlobProductState = {
+	readonly blockerStates: readonly number[];
+	readonly consumed: boolean;
+	readonly targetStates: readonly number[];
+};
+
+const globProductKey = (state: GlobProductState): string =>
+	`${state.consumed ? "1" : "0"}|${state.targetStates.join(",")}|${state.blockerStates.join(",")}`;
+const nextGlobProductStates = (
+	state: GlobProductState,
+	alphabet: readonly string[],
+	target: GlobAutomaton,
+	blockers: GlobAutomaton
+): GlobProductState[] => {
+	const nextStates: GlobProductState[] = [];
+	for (const character of alphabet) {
+		const targetStates = stepGlob(target, state.targetStates, character);
+		if (targetStates.length === 0) {
+			continue;
+		}
+		nextStates.push({
+			blockerStates: stepGlob(blockers, state.blockerStates, character),
+			consumed: true,
+			targetStates,
+		});
+	}
+	return nextStates;
+};
+
+const hasGlobLanguageDifference = (
+	targetPattern: string,
+	blockedPatterns: readonly string[],
+	action: PermissionAction
+): boolean | undefined => {
+	const target = compileGlobPattern(targetPattern, action);
+	const blockers = createGlobUnionAutomaton(blockedPatterns, action);
+	if (target === undefined || blockers === undefined) {
+		return;
+	}
+	const alphabet = globAlphabet([targetPattern, ...blockedPatterns]);
+	if (alphabet === undefined) {
+		return;
+	}
+	const queue: GlobProductState[] = [
+		{
+			blockerStates: epsilonClosure(blockers, [blockers.start]),
+			consumed: false,
+			targetStates: epsilonClosure(target, [target.start]),
+		},
+	];
+	const visited = new Set<string>();
+	let queueIndex = 0;
+	let transitionCount = 0;
+	while (queueIndex < queue.length) {
+		const state = queue[queueIndex];
+		queueIndex += 1;
+		if (state === undefined) {
+			continue;
+		}
+		const key = globProductKey(state);
+		if (visited.has(key)) {
+			continue;
+		}
+		visited.add(key);
+		if (visited.size > MAX_GLOB_ANALYSIS_STATES) {
+			return;
+		}
+		if (
+			state.consumed &&
+			globAccepts(target, state.targetStates) &&
+			!globAccepts(blockers, state.blockerStates)
+		) {
+			return true;
+		}
+		if (transitionCount + alphabet.length > MAX_GLOB_ANALYSIS_TRANSITIONS) {
+			return;
+		}
+		transitionCount += alphabet.length;
+		for (const nextState of nextGlobProductStates(
+			state,
+			alphabet,
+			target,
+			blockers
+		)) {
+			queue.push(nextState);
+		}
+	}
+	return false;
+};
+
+const hasEffectiveResourceDecision = (
+	entries: readonly ResourcePatternRule[],
+	action: PermissionAction,
+	decisions: readonly PermissionDecision[],
+	minimumIndex: number
+): boolean | undefined => {
+	for (const [index, entry] of entries.entries()) {
+		if (
+			index <= minimumIndex ||
+			entry.pattern.length === 0 ||
+			!decisions.includes(entry.decision)
+		) {
+			continue;
+		}
+		const difference = hasGlobLanguageDifference(
+			entry.pattern,
+			entries.slice(index + 1).map(({ pattern }) => pattern),
+			action
+		);
+		if (difference === true) {
+			return true;
+		}
+		if (difference === undefined) {
+			return;
+		}
+	}
+	return false;
+};
+
 /**
- * A static tool is hidden from the model only when its governing action is an
- * unconditional scalar `deny`. Granular resource maps and `ask` scalars keep the
- * tool visible so it can be evaluated per resource at call time.
+ * Hides a resource map only when its final non-deny language is empty. An
+ * analysis limit fails open for visibility so a usable resource is not hidden.
+ */
+const isUniversalResourceDeny = (
+	rule: PermissionResourceRules,
+	action: PermissionAction
+): boolean => {
+	const entries = normalizeResourceRules(action, rule);
+	const universalDenyIndex = entries.findLastIndex(
+		({ pattern, decision }) =>
+			decision === "deny" && isUniversalResourcePattern(pattern, action)
+	);
+	if (universalDenyIndex < 0) {
+		return false;
+	}
+	return (
+		hasEffectiveResourceDecision(
+			entries,
+			action,
+			NON_DENY_DECISIONS,
+			universalDenyIndex
+		) === false
+	);
+};
+
+const hasEffectiveResourceAsk = (
+	action: PermissionAction,
+	rule: PermissionResourceRules
+): boolean => {
+	const entries = normalizeResourceRules(action, rule);
+	const result = hasEffectiveResourceDecision(entries, action, ["ask"], -1);
+	// If bounded analysis cannot decide, retain the approval signal rather than
+	// silently describing a possibly approval-gated resource as allowed.
+	return result === true || result === undefined;
+};
+
+/**
+ * Describes a visible tool from its policy without treating an empty resource
+ * probe as an unconditional deny. Resource maps with any allowed or approval-
+ * gated resource stay visible; an all-denied map remains omitted.
+ */
+export const describeVisibleToolPermission = (
+	permission: ToolPermission,
+	action: PermissionAction
+): PermissionDecision => {
+	const rule = permission.rules?.[action];
+	if (typeof rule !== "object" || rule === null) {
+		return permission.decide(action, "");
+	}
+	if (isUniversalResourceDeny(rule, action)) {
+		return "deny";
+	}
+	const decision = permission.decide(action, "");
+	if (permission.safety || hasEffectiveResourceAsk(action, rule)) {
+		return "ask";
+	}
+	return decision === "deny" ? "allow" : decision;
+};
+
+/**
+ * A static tool is hidden from the model when its governing action is an
+ * unconditional scalar deny or a catch-all resource deny. Other granular
+ * resource maps and ask scalars keep the tool visible for per-resource gating.
  */
 export const isStaticToolUnconditionallyDenied = (
 	rules: PermissionRules,
 	tool: CodingToolName
-): boolean => rules[STATIC_TOOL_PERMISSION_ACTIONS[tool]] === "deny";
-
+): boolean => {
+	const rule = rules[STATIC_TOOL_PERMISSION_ACTIONS[tool]];
+	const action = STATIC_TOOL_PERMISSION_ACTIONS[tool];
+	return (
+		rule === "deny" ||
+		(typeof rule === "object" && isUniversalResourceDeny(rule, action))
+	);
+};
 /** Resolves the static coding tools a model may see, in canonical order. */
 export const resolveVisibleCodingTools = (
 	rules: PermissionRules

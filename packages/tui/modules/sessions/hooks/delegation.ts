@@ -1,18 +1,29 @@
-import type { AgentId, AgentTurn } from "@wincode/agent-core";
+import type {
+	AgentId,
+	AgentTurn,
+	AgentTurnDelegation,
+} from "@wincode/agent-core";
 import { createAgentTurnId } from "@wincode/agent-core";
+import type { ModelTarget } from "@wincode/ai/model";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import type { SkillExecution, SkillToolDefinition } from "@wincode/skills";
-import type { AgentRegistry } from "@/modules/agents";
-import { prepareAgentCall } from "@/modules/agents";
+import {
+	type AgentRegistry,
+	type PreparedAgentCall,
+	prepareAgentCall,
+} from "@/modules/agents";
 import type { Connections } from "@/modules/connections";
 import {
 	createMcpToolExecutor,
 	type McpAgentPolicy,
 	type McpCatalogSnapshot,
 	type McpContextValue,
+	type McpToolCallExecutor,
 } from "@/modules/mcp";
+import type { ToolPermission } from "@/modules/permissions";
+import { assembleAgentTurnPrompt } from "@/modules/prompt-assembly/composer";
 import { resolveChatModelTarget } from "../../model-target";
-import { createSessionUserMessage } from "../message";
+import { createSessionUserMessage, type SessionMessage } from "../message";
 import type { SessionViewState } from "../session-controller";
 import { getSessionStore } from "../storage/get-session-store";
 import { buildUserSessionRecord } from "../storage/session-record";
@@ -48,9 +59,103 @@ const toolCallIdOf = (
 	return call.toolCallId;
 };
 
+const createChildGate = (
+	gatedTooling: RuntimeGatedTooling,
+	childController: AbortController
+): RuntimeGatedTooling => ({
+	...gatedTooling,
+	gate: {
+		gate: async (call) => {
+			const toolCallId = toolCallIdOf(call);
+			const unregister =
+				toolCallId === undefined
+					? undefined
+					: gatedTooling.registerChildAbort?.(toolCallId, () =>
+							childController.abort("approval-abort")
+						);
+			try {
+				return await gatedTooling.gate.gate(call);
+			} finally {
+				unregister?.();
+			}
+		},
+	},
+});
+
+type BuildChildTurnOptions = {
+	readonly childGate: RuntimeGatedTooling;
+	readonly createSkillContext?: ChildSkillContextFactory;
+	readonly cwd?: string;
+	readonly delegation: AgentTurnDelegation;
+	readonly executeMcpTool: McpToolCallExecutor | undefined;
+	readonly resolvePermissionForAgent?: (
+		agent: AgentId
+	) => Promise<ToolPermission>;
+	readonly snapshot: McpCatalogSnapshot;
+	readonly turnId: string;
+	readonly userMessage: SessionMessage;
+	readonly workspace: string;
+	readonly modelTarget: ModelTarget;
+	readonly prepared: PreparedAgentCall;
+};
+
+const buildChildTurn = async ({
+	childGate,
+	createSkillContext,
+	cwd,
+	delegation,
+	executeMcpTool,
+	modelTarget,
+	prepared,
+	resolvePermissionForAgent,
+	snapshot,
+	turnId,
+	userMessage,
+	workspace,
+}: BuildChildTurnOptions): Promise<AgentTurn> => {
+	const skillContext = await createSkillContext?.(prepared.agent);
+	const tools = createGatedCodingTools({
+		agentId: prepared.agent,
+		agentTools: prepared.resolvedAgent.visibleCodingTools,
+		delegate: childGate.delegate,
+		executeMcpTool,
+		gate: childGate.gate,
+		mcpSnapshot: snapshot,
+		skillExecution: skillContext?.execution,
+		skillTool: skillContext?.tool,
+		parentTurnId: turnId,
+		resolveResourceLimits: childGate.resolveResourceLimits,
+	});
+	const childPermission = await resolvePermissionForAgent?.(prepared.agent);
+	const prompt = await assembleAgentTurnPrompt({
+		agent: prepared.resolvedAgent,
+		cwd,
+		delegation,
+		mcpTools: snapshot.tools,
+		model: {
+			modelId: modelTarget.modelId,
+			providerId: modelTarget.providerId,
+		},
+		permission: childPermission,
+		tools,
+		workspace,
+	});
+	return buildAgentTurn({
+		agent: prepared.agent,
+		delegation,
+		modelMessages: [userMessage],
+		modelTarget,
+		resolvedAgent: prepared.resolvedAgent,
+		systemInstructions: prompt.instructions,
+		tools,
+		turnId,
+	});
+};
+
 export type CreateDelegationExecutorOptions = {
 	readonly connections: Connections;
 	readonly createSkillContext?: ChildSkillContextFactory;
+	readonly cwd?: string;
 	readonly fallbackModelRef: MutableRefObject<ChatModelSelection>;
 	readonly fallbackVariantRef: MutableRefObject<ModelVariant | undefined>;
 	readonly gatedTooling: RuntimeGatedTooling;
@@ -60,12 +165,17 @@ export type CreateDelegationExecutorOptions = {
 	readonly resolveMcpPolicyForAgent: (
 		agent: AgentId
 	) => Promise<McpAgentPolicy>;
+	readonly resolvePermissionForAgent?: (
+		agent: AgentId
+	) => Promise<ToolPermission>;
 	readonly sessionId: string;
+	readonly workspace: string;
 };
 
 export const createDelegationExecutor = ({
 	connections,
 	createSkillContext,
+	cwd,
 	fallbackModelRef,
 	fallbackVariantRef,
 	gatedTooling,
@@ -73,7 +183,9 @@ export const createDelegationExecutor = ({
 	onViewState,
 	registry,
 	resolveMcpPolicyForAgent,
+	resolvePermissionForAgent,
 	sessionId,
+	workspace,
 }: CreateDelegationExecutorOptions): DelegationExecutor => {
 	let activeChildCount = 0;
 	const clearChildView = (): void => {
@@ -156,45 +268,20 @@ export const createDelegationExecutor = ({
 			const mcpPolicy = await resolveMcpPolicyForAgent(prepared.agent);
 			snapshot = await mcp.createSnapshot(prepared.agent, mcpPolicy, false);
 			const executeMcpTool = createMcpToolExecutor(mcp.execute);
-			const childGate: RuntimeGatedTooling = {
-				...gatedTooling,
-				gate: {
-					gate: async (call) => {
-						const toolCallId = toolCallIdOf(call);
-						const unregister =
-							toolCallId === undefined
-								? undefined
-								: gatedTooling.registerChildAbort?.(toolCallId, () =>
-										childController.abort("approval-abort")
-									);
-						try {
-							return await gatedTooling.gate.gate(call);
-						} finally {
-							unregister?.();
-						}
-					},
-				},
-			};
-			const skillContext = await createSkillContext?.(prepared.agent);
-			const turn: AgentTurn = buildAgentTurn({
-				agent: prepared.agent,
+			const childGate = createChildGate(gatedTooling, childController);
+			const turn = await buildChildTurn({
+				childGate,
+				createSkillContext,
+				cwd,
 				delegation,
-				modelMessages: [userMessage],
+				executeMcpTool,
 				modelTarget,
-				resolvedAgent: prepared.resolvedAgent,
-				tools: createGatedCodingTools({
-					agentId: prepared.agent,
-					agentTools: prepared.resolvedAgent.visibleCodingTools,
-					delegate: gatedTooling.delegate,
-					executeMcpTool,
-					gate: childGate.gate,
-					mcpSnapshot: snapshot,
-					skillExecution: skillContext?.execution,
-					skillTool: skillContext?.tool,
-					parentTurnId: turnId,
-					resolveResourceLimits: gatedTooling.resolveResourceLimits,
-				}),
+				prepared,
+				resolvePermissionForAgent,
+				snapshot,
 				turnId,
+				userMessage,
+				workspace,
 			});
 			return await runAgentTurnToText({
 				onCheckpoint: (record) =>
