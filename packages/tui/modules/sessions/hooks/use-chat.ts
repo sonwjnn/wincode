@@ -40,6 +40,7 @@ import {
 } from "@/modules/mcp";
 import { useToolPermission } from "@/modules/permissions";
 import { assembleAgentTurnPrompt } from "@/modules/prompt-assembly/composer";
+import { MAX_PROJECT_INSTRUCTION_TOTAL_BYTES } from "@/modules/prompt-assembly/project-instructions";
 
 import {
 	COMPACTION_REQUEST_OVERHEAD_TOKENS,
@@ -1324,8 +1325,10 @@ export function useChat(
 					}
 				: null,
 		});
+		// Compaction must reserve the bounded project block for the next normal turn.
 		return (
 			COMPACTION_REQUEST_OVERHEAD_TOKENS +
+			Math.ceil(MAX_PROJECT_INSTRUCTION_TOTAL_BYTES / 4) +
 			Math.ceil(serializedContext.length / 4)
 		);
 	}, []);
