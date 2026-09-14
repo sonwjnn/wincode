@@ -14,6 +14,10 @@ export type PromptEnvironmentGit = {
 	readonly getRepositoryRoot: (cwd: string) => Promise<string | null>;
 	readonly getStatus: (cwd: string) => Promise<string | GitStatusSummary>;
 };
+export type PromptModelIdentity = {
+	readonly modelId: string;
+	readonly providerId: string;
+};
 
 export type PromptStableEnvironment = {
 	readonly cwd: string;
@@ -38,10 +42,7 @@ export type PromptEnvironmentSnapshot = {
 export type PromptEnvironmentSnapshotInput = {
 	readonly cwd?: string;
 	readonly git?: PromptEnvironmentGit;
-	readonly model: {
-		readonly modelId: string;
-		readonly providerId: string;
-	};
+	readonly model: PromptModelIdentity;
 	readonly platform?: string;
 	readonly projectRoot?: string | null;
 	readonly workspace: string;

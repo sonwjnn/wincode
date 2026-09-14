@@ -39,10 +39,7 @@ import {
 	useMcp,
 } from "@/modules/mcp";
 import { useToolPermission } from "@/modules/permissions";
-import {
-	assembleNormalTurnPrompt,
-	describeAgentTurnTools,
-} from "@/modules/prompt-assembly/composer";
+import { assembleAgentTurnPrompt } from "@/modules/prompt-assembly/composer";
 
 import {
 	COMPACTION_REQUEST_OVERHEAD_TOKENS,
@@ -1762,20 +1759,17 @@ export function useChat(
 				});
 				const agentPermission =
 					await resolvePermissionForAgentRef.current(agent);
-				const prompt = await assembleNormalTurnPrompt({
+				const prompt = await assembleAgentTurnPrompt({
 					agent: resolvedAgent,
 					cwd: configRef.current.cwd,
 					delegation,
-					effectiveVisibleTools: describeAgentTurnTools({
-						agent: resolvedAgent,
-						mcpTools: snapshot.tools,
-						permission: agentPermission,
-						tools,
-					}),
+					mcpTools: snapshot.tools,
 					model: {
 						modelId: modelTarget.modelId,
 						providerId: modelTarget.providerId,
 					},
+					permission: agentPermission,
+					tools,
 					workspace: configRef.current.workspace,
 				});
 				const turn = buildAgentTurn({

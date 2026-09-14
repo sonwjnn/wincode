@@ -14,6 +14,7 @@ import {
 	type PromptEnvironmentGit,
 	type PromptEnvironmentSnapshot,
 	type PromptEnvironmentSnapshotInput,
+	type PromptModelIdentity,
 } from "./environment";
 import {
 	createProjectInstructionSnapshot,
@@ -95,10 +96,7 @@ export type PromptAssemblySnapshotInput = {
 	readonly cwd?: string;
 	readonly fs?: ProjectInstructionFileSystem;
 	readonly git?: PromptEnvironmentGit;
-	readonly model: {
-		readonly modelId: string;
-		readonly providerId: string;
-	};
+	readonly model: PromptModelIdentity;
 	readonly platform?: string;
 	readonly projectRoot?: string | null;
 	readonly projectRoots?: readonly string[];
@@ -548,5 +546,28 @@ export const assembleNormalTurnPrompt = async (
 		effectiveVisibleTools: input.effectiveVisibleTools,
 		environment: snapshot.environment,
 		projectInstructions: snapshot.projectInstructions,
+	});
+};
+export const assembleAgentTurnPrompt = async (
+	input: PromptAssemblySnapshotInput & {
+		readonly agent: ResolvedAgent & PromptAgentCapabilities;
+		readonly delegation?: AgentTurnDelegation;
+		readonly mcpTools: ReadonlyMap<string, PromptMcpToolSnapshot>;
+		readonly permission?: ToolPermission;
+		readonly tools: readonly ResolvedTool[];
+	}
+): Promise<PromptAssemblyResult> => {
+	const { agent, delegation, mcpTools, permission, tools, ...snapshotInput } =
+		input;
+	return assembleNormalTurnPrompt({
+		...snapshotInput,
+		agent,
+		delegation,
+		effectiveVisibleTools: describeAgentTurnTools({
+			agent,
+			mcpTools,
+			permission,
+			tools,
+		}),
 	});
 };
