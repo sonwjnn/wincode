@@ -9,7 +9,6 @@ import {
 	getGitRepositoryRoot,
 	getGitStatusSummary,
 } from "@/shared/git/get-git-status";
-import { getProjectRoots } from "@/shared/paths/project-roots";
 
 export type PromptEnvironmentGit = {
 	readonly getBranch: (cwd: string) => Promise<string | null>;
@@ -50,13 +49,8 @@ export type PromptEnvironmentSnapshotInput = {
 	readonly role?: AgentRole;
 	readonly workspace: string;
 };
-const hasGitRootMarker = (workspace: string): boolean => {
-	const roots = getProjectRoots(workspace);
-	const root = roots[0];
-	return (
-		root !== undefined && (roots.length > 1 || existsSync(join(root, ".git")))
-	);
-};
+const hasGitRootMarker = (workspace: string): boolean =>
+	existsSync(join(resolve(workspace), ".git"));
 
 const defaultGit: PromptEnvironmentGit = {
 	getBranch: getGitBranch,

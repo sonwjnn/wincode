@@ -152,6 +152,35 @@ describe("Prompt Assembly", () => {
 		expect(result.instructions).not.toContain("inputSchema");
 		expect(result.metadata.renderedLength).toBe(result.instructions.length);
 	});
+
+	test("escapes control characters in prompt metadata", () => {
+		const result = assemblePrompt({
+			agent: {
+				...agent,
+				displayName: "Build\u2028Name",
+				id: "build\nINJECT",
+			},
+			effectiveVisibleTools: [],
+			environment: {
+				...environment,
+				stable: {
+					...environment.stable,
+					workspace: "/repo\nINJECT",
+				},
+			},
+			projectInstructions: {
+				diagnostics: [],
+				sources: [],
+				totalByteLength: 0,
+				workspace: "/repo",
+			},
+		});
+
+		expect(result.instructions).toContain("Active Agent: build\\u000aINJECT");
+		expect(result.instructions).toContain("Build\\u2028Name");
+		expect(result.instructions).toContain("- workspace: /repo\\u000aINJECT");
+		expect(result.instructions).not.toContain("Active Agent: build\nINJECT");
+	});
 	test("describes effective allow, ask, and denied capabilities", () => {
 		const described = describeEffectiveVisibleTools({
 			codingPermissions: new Map([
@@ -213,7 +242,7 @@ describe("Prompt Assembly", () => {
 	});
 	test("does not advertise an ask fully overridden by later deny", () => {
 		const permission = createResolvedToolPermission({
-			read: { "src/**": "ask", "src/**/**": "deny" },
+			read: { "src/*?*": "ask", "src/*": "deny" },
 		});
 
 		expect(describeVisibleToolPermission(permission, "read")).toBe("allow");
@@ -503,7 +532,6 @@ describe("Prompt Assembly", () => {
 			},
 			model: { modelId: "model", providerId: "provider" },
 			platform: "darwin",
-			projectRoots,
 			role: "primary",
 			workspace: "/repo",
 		});
@@ -513,6 +541,32 @@ describe("Prompt Assembly", () => {
 		).toEqual(["AGENTS.md", "packages/AGENTS.md", "packages/tui/AGENTS.md"]);
 	});
 
+	test("bounds automatic instruction roots to the active workspace", async () => {
+		const service = createPromptAssemblyService();
+		const snapshot = await service.snapshot({
+			cwd: "/outside/deep",
+			fs: fileSystem({
+				"/repo/AGENTS.md": "Workspace instructions",
+				"/outside/AGENTS.md": "Outside instructions",
+			}),
+			git: {
+				getBranch: async () => "main",
+				getRepositoryRoot: async () => "/repo",
+				getStatus: async () => "clean",
+			},
+			model: { modelId: "model", providerId: "provider" },
+			platform: "darwin",
+			role: "primary",
+			workspace: "/repo",
+		});
+
+		expect(snapshot.projectInstructions.sources).toEqual([
+			expect.objectContaining({
+				content: "Workspace instructions",
+				sourcePath: "AGENTS.md",
+			}),
+		]);
+	});
 	test("keeps the stable prompt prefix unchanged when git status changes", () => {
 		const project = {
 			diagnostics: [],
@@ -629,6 +683,55 @@ describe("Prompt Assembly", () => {
 		]);
 	});
 
+	test("rejects a source whose escaped XML exceeds the byte limit", async () => {
+		const content = "&".repeat(12_000);
+		const snapshot = await createProjectInstructionSnapshot({
+			fs: fileSystem({ "/repo/AGENTS.md": content }),
+			projectRoots: ["/repo"],
+			workspace: "/repo",
+		});
+
+		expect(snapshot.sources).toEqual([]);
+		expect(snapshot.diagnostics).toEqual([
+			{
+				byteLength: 12_000,
+				characterLength: 12_000,
+				code: "source-too-large",
+				message:
+					"Project instruction source exceeds the 12000-character limit.",
+				reason: "source-too-large",
+				sourcePath: "AGENTS.md",
+			},
+		]);
+	});
+
+	test("bounds the complete escaped project-instructions block", async () => {
+		const content = "&".repeat(4000);
+		const snapshot = await createProjectInstructionSnapshot({
+			fs: fileSystem({
+				"/repo/AGENTS.md": content,
+				"/repo/packages/AGENTS.md": content,
+			}),
+			projectRoots: ["/repo", "/repo/packages"],
+			workspace: "/repo/packages",
+		});
+
+		expect(snapshot.sources.map(({ sourcePath }) => sourcePath)).toEqual([
+			"AGENTS.md",
+		]);
+		expect(snapshot.sources[0]?.content).toBe(content);
+		expect(snapshot.diagnostics).toEqual([
+			{
+				byteLength: 4000,
+				characterLength: 4000,
+				code: "project-total-too-large",
+				message: "Project instructions exceed the 24576-byte limit.",
+				reason: "project-total-too-large",
+				sourcePath: "../AGENTS.md",
+			},
+		]);
+	});
+
 	test("omits unreadable instruction sources while retaining readable neighbors", async () => {
 		const files = {
 			"/repo/AGENTS.md": "root",
@@ -682,8 +785,8 @@ describe("Prompt Assembly", () => {
 		).toEqual([{ code: "read-error", sourcePath: "../AGENTS.md" }]);
 	});
 
-	test("applies the per-source limit to characters, not encoded bytes", async () => {
-		const content = "é".repeat(12_000);
+	test("applies the per-source limit to characters before encoded bytes", async () => {
+		const content = "é".repeat(11_000);
 		const snapshot = await createProjectInstructionSnapshot({
 			fs: fileSystem({ "/repo/AGENTS.md": content }),
 			projectRoots: ["/repo"],
@@ -691,8 +794,8 @@ describe("Prompt Assembly", () => {
 		});
 
 		expect(snapshot.sources[0]).toMatchObject({
-			byteLength: 24_000,
-			characterLength: 12_000,
+			byteLength: 22_000,
+			characterLength: 11_000,
 			content,
 		});
 		expect(snapshot.diagnostics).toEqual([]);

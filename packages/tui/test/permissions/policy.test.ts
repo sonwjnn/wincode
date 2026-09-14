@@ -56,6 +56,10 @@ describe("matchesResourcePattern", () => {
 		expect(matchesResourcePattern("file?.txt", "file1.txt")).toBe(true);
 		expect(matchesResourcePattern("file?.txt", "file12.txt")).toBe(false);
 	});
+	test("wildcard paths include line terminators without widening literals", () => {
+		expect(matchesResourcePattern("**", "a\nb")).toBe(true);
+		expect(matchesResourcePattern("a", "a\n")).toBe(false);
+	});
 });
 
 describe("matchesStringPattern", () => {
@@ -83,6 +87,11 @@ describe("matchesStringPattern", () => {
 		expect(matchesStringPattern("rm", "rm")).toBe(true);
 		expect(matchesStringPattern("rm", "git rm")).toBe(false);
 		expect(matchesResourcePattern("rm", "x/rm")).toBe(true);
+	});
+	test("string wildcards include line terminators without widening literals", () => {
+		expect(matchesStringPattern("*", "a\nb")).toBe(true);
+		expect(matchesStringPattern("a?b", "a\nb")).toBe(true);
+		expect(matchesStringPattern("a", "a\n")).toBe(false);
 	});
 });
 
@@ -557,7 +566,12 @@ describe("resolveVisibleCodingTools", () => {
 		},
 		{
 			name: "hides a path allow fully covered by a broader later deny",
-			rules: { read: { "*": "deny", "src/*": "allow", "src/**": "deny" } },
+			rules: { read: { "*": "deny", "src/*?*": "allow", "src/*": "deny" } },
+			visible: ["write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "hides a path map when a universal deny covers a wildcard allow",
+			rules: { read: { "?": "allow", "**": "deny" } },
 			visible: ["write", "edit", "glob", "grep", "shell"],
 		},
 		{

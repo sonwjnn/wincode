@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 
 export const getProjectRoots = (workspace: string): string[] => {
 	const start = resolve(workspace);
@@ -16,4 +16,35 @@ export const getProjectRoots = (workspace: string): string[] => {
 		}
 		current = parent;
 	}
+};
+
+/**
+ * Returns every directory from the active workspace through the current
+ * working directory, without ever walking above the workspace boundary.
+ */
+export const getProjectRootsWithinWorkspace = (
+	workspace: string,
+	cwd = workspace
+): string[] => {
+	const resolvedWorkspace = resolve(workspace);
+	const resolvedCwd = resolve(cwd);
+	const workspacePrefix = `${resolvedWorkspace}${sep}`;
+	const cwdIsWithinWorkspace =
+		resolvedWorkspace === sep ||
+		resolvedCwd === resolvedWorkspace ||
+		resolvedCwd.startsWith(workspacePrefix);
+	let current = cwdIsWithinWorkspace ? resolvedCwd : resolvedWorkspace;
+	const roots: string[] = [];
+	while (true) {
+		roots.push(current);
+		if (current === resolvedWorkspace) {
+			break;
+		}
+		const parent = dirname(current);
+		if (parent === current) {
+			return [resolvedWorkspace];
+		}
+		current = parent;
+	}
+	return roots.reverse();
 };

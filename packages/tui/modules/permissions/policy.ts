@@ -233,7 +233,7 @@ const globToRegExpSource = (pattern: string): string => {
 				source += "(?:[^/]+/)*";
 				index += 3;
 			} else {
-				source += ".*";
+				source += "[\\s\\S]*";
 				index += 2;
 			}
 			continue;
@@ -263,9 +263,9 @@ export function matchesResourcePattern(
 ): boolean {
 	const source = globToRegExpSource(pattern);
 	if (pattern.includes("/")) {
-		return new RegExp(`^${source}$`).test(resource);
+		return new RegExp(`^(?:${source})$(?![\\s\\S])`).test(resource);
 	}
-	return new RegExp(`^(?:[^/]+/)*${source}$`).test(resource);
+	return new RegExp(`^(?:[^/]+/)*${source}$(?![\\s\\S])`).test(resource);
 }
 
 const stringGlobToRegExpSource = (pattern: string): string => {
@@ -274,12 +274,12 @@ const stringGlobToRegExpSource = (pattern: string): string => {
 	while (index < pattern.length) {
 		const char = pattern[index] as string;
 		if (char === "*") {
-			source += ".*";
+			source += "[\\s\\S]*";
 			index += 1;
 			continue;
 		}
 		if (char === "?") {
-			source += ".";
+			source += "[\\s\\S]";
 			index += 1;
 			continue;
 		}
@@ -301,7 +301,9 @@ export function matchesStringPattern(
 	pattern: string,
 	resource: string
 ): boolean {
-	return new RegExp(`^${stringGlobToRegExpSource(pattern)}$`).test(resource);
+	return new RegExp(
+		`^(?:${stringGlobToRegExpSource(pattern)})$(?![\\s\\S])`
+	).test(resource);
 }
 
 type ResourcePatternRule = { decision: PermissionDecision; pattern: string };
@@ -463,9 +465,10 @@ type MutableGlobAutomaton = {
 	transitions: GlobTransition[][];
 };
 
-const GLOB_LINE_TERMINATOR = /[\n\r\u2028\u2029]/u;
 const MAX_GLOB_AUTOMATON_STATES = 8192;
 const MAX_GLOB_ANALYSIS_STATES = 4096;
+const MAX_GLOB_ANALYSIS_TRANSITIONS = 1_000_000;
+const MAX_GLOB_ALPHABET = 1024;
 const NON_DENY_DECISIONS = ["allow", "ask"] as const;
 
 const addGlobState = (automaton: MutableGlobAutomaton): number | undefined => {
@@ -691,8 +694,10 @@ const matchesGlobTransition = (
 			return transition.value === character;
 		case "nonSlash":
 			return character !== "/";
+		case "any":
+			return true;
 		default:
-			return !GLOB_LINE_TERMINATOR.test(character);
+			return false;
 	}
 };
 
@@ -730,30 +735,64 @@ const freshGlobCharacter = (
 	return "\u0000";
 };
 
-const globAlphabet = (patterns: readonly string[]): readonly string[] => {
-	const characters = new Set(["/"]);
+const globAlphabet = (
+	patterns: readonly string[]
+): readonly string[] | undefined => {
+	const characters = new Set(["/", "\n", "\r", "\u2028", "\u2029"]);
 	for (const pattern of patterns) {
 		for (const character of pattern) {
 			characters.add(character);
+			if (characters.size > MAX_GLOB_ALPHABET) {
+				return;
+			}
 		}
 	}
 	characters.add(
 		freshGlobCharacter(characters, (character) => character !== "/")
 	);
-	characters.add(
-		freshGlobCharacter(characters, (character) => character !== "/")
-	);
+	if (characters.size > MAX_GLOB_ALPHABET) {
+		return;
+	}
 	return [...characters];
 };
-
 type GlobProductState = {
 	readonly blockerStates: readonly number[];
 	readonly consumed: boolean;
+	/**
+	 * Resource paths are normalized, so repeated slash transitions are not part
+	 * of the language compared by visibility analysis.
+	 */
+	readonly previousSlash: boolean;
 	readonly targetStates: readonly number[];
 };
 
 const globProductKey = (state: GlobProductState): string =>
-	`${state.consumed ? "1" : "0"}|${state.targetStates.join(",")}|${state.blockerStates.join(",")}`;
+	`${state.consumed ? "1" : "0"}|${state.previousSlash ? "1" : "0"}|${state.targetStates.join(",")}|${state.blockerStates.join(",")}`;
+const nextGlobProductStates = (
+	state: GlobProductState,
+	alphabet: readonly string[],
+	target: GlobAutomaton,
+	blockers: GlobAutomaton,
+	action: PermissionAction
+): GlobProductState[] => {
+	const nextStates: GlobProductState[] = [];
+	for (const character of alphabet) {
+		if (action !== "shell" && state.previousSlash && character === "/") {
+			continue;
+		}
+		const targetStates = stepGlob(target, state.targetStates, character);
+		if (targetStates.length === 0) {
+			continue;
+		}
+		nextStates.push({
+			blockerStates: stepGlob(blockers, state.blockerStates, character),
+			consumed: true,
+			previousSlash: action !== "shell" && character === "/",
+			targetStates,
+		});
+	}
+	return nextStates;
+};
 
 const hasGlobLanguageDifference = (
 	targetPattern: string,
@@ -766,15 +805,20 @@ const hasGlobLanguageDifference = (
 		return;
 	}
 	const alphabet = globAlphabet([targetPattern, ...blockedPatterns]);
+	if (alphabet === undefined) {
+		return;
+	}
 	const queue: GlobProductState[] = [
 		{
 			blockerStates: epsilonClosure(blockers, [blockers.start]),
 			consumed: false,
+			previousSlash: false,
 			targetStates: epsilonClosure(target, [target.start]),
 		},
 	];
 	const visited = new Set<string>();
 	let queueIndex = 0;
+	let transitionCount = 0;
 	while (queueIndex < queue.length) {
 		const state = queue[queueIndex];
 		queueIndex += 1;
@@ -796,17 +840,13 @@ const hasGlobLanguageDifference = (
 		) {
 			return true;
 		}
-		for (const character of alphabet) {
-			const targetStates = stepGlob(target, state.targetStates, character);
-			if (targetStates.length === 0) {
-				continue;
-			}
-			queue.push({
-				blockerStates: stepGlob(blockers, state.blockerStates, character),
-				consumed: true,
-				targetStates,
-			});
+		if (transitionCount + alphabet.length > MAX_GLOB_ANALYSIS_TRANSITIONS) {
+			return;
 		}
+		transitionCount += alphabet.length;
+		queue.push(
+			...nextGlobProductStates(state, alphabet, target, blockers, action)
+		);
 	}
 	return false;
 };
