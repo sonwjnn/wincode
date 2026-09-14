@@ -8,7 +8,10 @@ import {
 	STATIC_TOOL_PERMISSION_ACTIONS,
 	type ToolPermission,
 } from "@/modules/permissions/policy";
-import { getProjectRootsWithinWorkspace } from "@/shared/paths/project-roots";
+import {
+	canonicalPath,
+	getProjectRootsWithinWorkspace,
+} from "@/shared/paths/project-roots";
 import {
 	createEnvironmentSnapshot,
 	type PromptEnvironmentGit,
@@ -503,24 +506,25 @@ export const createPromptAssemblyService = (
 ): PromptAssemblyService => ({
 	assemble: assemblePrompt,
 	snapshot: async (input) => {
+		const workspace = await canonicalPath(input.workspace);
+		const cwd = await canonicalPath(input.cwd ?? input.workspace);
 		const projectInstructions = await createProjectInstructionSnapshot(
 			{
 				fs: input.fs,
 				projectRoots:
-					input.projectRoots ??
-					getProjectRootsWithinWorkspace(input.workspace, input.cwd),
-				provenanceWorkspace: input.workspace,
-				workspace: input.cwd ?? input.workspace,
+					input.projectRoots ?? getProjectRootsWithinWorkspace(workspace, cwd),
+				provenanceWorkspace: workspace,
+				workspace: cwd,
 			},
 			cache
 		);
 		const environment = await createEnvironmentSnapshot({
-			cwd: input.cwd,
+			cwd,
 			git: input.git,
 			model: input.model,
 			platform: input.platform,
 			projectRoot: input.projectRoot,
-			workspace: input.workspace,
+			workspace,
 		});
 		return { environment, projectInstructions };
 	},
