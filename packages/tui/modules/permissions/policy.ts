@@ -758,28 +758,19 @@ const globAlphabet = (
 type GlobProductState = {
 	readonly blockerStates: readonly number[];
 	readonly consumed: boolean;
-	/**
-	 * Resource paths are normalized, so repeated slash transitions are not part
-	 * of the language compared by visibility analysis.
-	 */
-	readonly previousSlash: boolean;
 	readonly targetStates: readonly number[];
 };
 
 const globProductKey = (state: GlobProductState): string =>
-	`${state.consumed ? "1" : "0"}|${state.previousSlash ? "1" : "0"}|${state.targetStates.join(",")}|${state.blockerStates.join(",")}`;
+	`${state.consumed ? "1" : "0"}|${state.targetStates.join(",")}|${state.blockerStates.join(",")}`;
 const nextGlobProductStates = (
 	state: GlobProductState,
 	alphabet: readonly string[],
 	target: GlobAutomaton,
-	blockers: GlobAutomaton,
-	action: PermissionAction
+	blockers: GlobAutomaton
 ): GlobProductState[] => {
 	const nextStates: GlobProductState[] = [];
 	for (const character of alphabet) {
-		if (action !== "shell" && state.previousSlash && character === "/") {
-			continue;
-		}
 		const targetStates = stepGlob(target, state.targetStates, character);
 		if (targetStates.length === 0) {
 			continue;
@@ -787,7 +778,6 @@ const nextGlobProductStates = (
 		nextStates.push({
 			blockerStates: stepGlob(blockers, state.blockerStates, character),
 			consumed: true,
-			previousSlash: action !== "shell" && character === "/",
 			targetStates,
 		});
 	}
@@ -812,7 +802,6 @@ const hasGlobLanguageDifference = (
 		{
 			blockerStates: epsilonClosure(blockers, [blockers.start]),
 			consumed: false,
-			previousSlash: false,
 			targetStates: epsilonClosure(target, [target.start]),
 		},
 	];
@@ -844,9 +833,7 @@ const hasGlobLanguageDifference = (
 			return;
 		}
 		transitionCount += alphabet.length;
-		queue.push(
-			...nextGlobProductStates(state, alphabet, target, blockers, action)
-		);
+		queue.push(...nextGlobProductStates(state, alphabet, target, blockers));
 	}
 	return false;
 };

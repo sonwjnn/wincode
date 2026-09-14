@@ -575,6 +575,11 @@ describe("resolveVisibleCodingTools", () => {
 			visible: ["write", "edit", "glob", "grep", "shell"],
 		},
 		{
+			name: "keeps a path map visible for an explicit duplicate-slash exception",
+			rules: { read: { "*": "deny", "src//file": "allow" } },
+			visible: ["read", "write", "edit", "glob", "grep", "shell"],
+		},
+		{
 			name: "keeps a wildcard ask visible beyond sampled literals",
 			rules: {
 				read: {
