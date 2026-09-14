@@ -1,22 +1,30 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, open } from "node:fs/promises";
+import { lstat, open, realpath } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { getProjectRoots } from "@/shared/paths/project-roots";
 
 export const PROJECT_INSTRUCTION_FILE_NAME = "AGENTS.md";
 export const MAX_PROJECT_INSTRUCTION_SOURCE_CHARS = 12_000;
 export const MAX_PROJECT_INSTRUCTION_TOTAL_BYTES = 24 * 1024;
+const MAX_PROJECT_INSTRUCTION_CACHE_ENTRIES = 32;
 const MAX_PROJECT_INSTRUCTION_SOURCE_BYTES =
 	MAX_PROJECT_INSTRUCTION_SOURCE_CHARS * 4 + 3;
 const MAX_PROJECT_INSTRUCTION_READ_BYTES =
 	MAX_PROJECT_INSTRUCTION_SOURCE_BYTES + 1;
 const PROJECT_INSTRUCTION_OPEN_FLAGS =
-	constants.O_NOFOLLOW ?? constants.O_RDONLY;
+	// biome-ignore lint/suspicious/noBitwiseOperators: POSIX open flags are bit masks.
+	constants.O_RDONLY |
+	(constants.O_NOFOLLOW ?? 0) |
+	(constants.O_NONBLOCK ?? 0);
 
 export type ProjectInstructionFileStats = {
+	readonly ctimeMs?: number;
+	readonly dev?: number;
+	readonly ino?: number;
 	readonly isFile: () => boolean;
 	readonly isSymbolicLink?: () => boolean;
+	readonly mode?: number;
 	readonly mtimeMs?: number;
 	readonly size?: number;
 };
@@ -24,7 +32,7 @@ export type ProjectInstructionFileStats = {
 export type ProjectInstructionFileSystem = {
 	readonly readFile: (
 		path: string,
-		maxBytes?: number
+		maxBytes: number
 	) => Promise<Uint8Array | string>;
 	readonly stat?: (path: string) => Promise<ProjectInstructionFileStats>;
 };
@@ -74,8 +82,12 @@ type FileMetadata =
 	| { readonly kind: "missing" }
 	| {
 			readonly kind: "present";
+			readonly ctimeMs: number | null;
+			readonly dev: number | null;
+			readonly ino: number | null;
 			readonly isFile: boolean;
-			readonly isSymbolicLink: boolean;
+			readonly isSymbolicLink: boolean | null;
+			readonly mode: number | null;
 			readonly mtimeMs: number | null;
 			readonly size: number | null;
 	  }
@@ -85,11 +97,28 @@ type Candidate = {
 	readonly absolutePath: string;
 	readonly sourcePath: string;
 };
+const pathResolvesToItself = async (path: string): Promise<boolean> => {
+	const resolvedPath = await realpath(path);
+	const expectedPath = resolve(path);
+	return process.platform === "win32"
+		? resolvedPath.toLowerCase() === expectedPath.toLowerCase()
+		: resolvedPath === expectedPath;
+};
 
 const defaultFileSystem: ProjectInstructionFileSystem = {
 	readFile: async (path, maxBytes = MAX_PROJECT_INSTRUCTION_READ_BYTES) => {
+		if (!(await pathResolvesToItself(path))) {
+			throw new Error("Instruction path must not resolve through a link.");
+		}
 		const file = await open(path, PROJECT_INSTRUCTION_OPEN_FLAGS);
 		try {
+			const openedStats = await file.stat();
+			if (!openedStats.isFile()) {
+				throw new Error("Instruction path is not a regular file.");
+			}
+			if (!(await pathResolvesToItself(path))) {
+				throw new Error("Instruction path changed to a symbolic link.");
+			}
 			const buffer = new Uint8Array(maxBytes);
 			let byteLength = 0;
 			while (byteLength < maxBytes) {
@@ -111,12 +140,36 @@ const defaultFileSystem: ProjectInstructionFileSystem = {
 	},
 	stat: async (path) => lstat(path),
 };
+const fileSystemCacheIds = new WeakMap<object, number>();
+let nextFileSystemCacheId = 0;
+const fileSystemCacheIdentity = (
+	fileSystem: ProjectInstructionFileSystem
+): string => {
+	if (fileSystem === defaultFileSystem) {
+		return "default";
+	}
+	const existingId = fileSystemCacheIds.get(fileSystem);
+	if (existingId !== undefined) {
+		return `custom-${existingId}`;
+	}
+	nextFileSystemCacheId += 1;
+	fileSystemCacheIds.set(fileSystem, nextFileSystemCacheId);
+	return `custom-${nextFileSystemCacheId}`;
+};
 
 const isMissingError = (error: unknown): boolean => {
 	if (typeof error !== "object" || error === null || !("code" in error)) {
 		return false;
 	}
 	return error.code === "ENOENT";
+};
+const canonicalPath = async (path: string): Promise<string> => {
+	const resolvedPath = resolve(path);
+	try {
+		return await realpath(resolvedPath);
+	} catch {
+		return resolvedPath;
+	}
 };
 
 const isByteArray = (value: Uint8Array | string): value is Uint8Array =>
@@ -141,7 +194,9 @@ const encodeMetadata = (metadata: FileMetadata): string => {
 		return "error";
 	}
 	let fileKind = "other";
-	if (metadata.isSymbolicLink) {
+	if (metadata.isSymbolicLink === null) {
+		fileKind = "unknown";
+	} else if (metadata.isSymbolicLink) {
 		fileKind = "symlink";
 	} else if (metadata.isFile) {
 		fileKind = "file";
@@ -149,8 +204,12 @@ const encodeMetadata = (metadata: FileMetadata): string => {
 	return [
 		"present",
 		fileKind,
+		metadata.dev ?? "unknown",
+		metadata.ino ?? "unknown",
+		metadata.mode ?? "unknown",
 		metadata.size ?? "unknown",
 		metadata.mtimeMs ?? "unknown",
+		metadata.ctimeMs ?? "unknown",
 	].join(":");
 };
 const LEADING_DOT_SLASH = /^\.\//u;
@@ -185,9 +244,13 @@ const readMetadata = async (
 	try {
 		const fileStats = await fileSystem.stat(path);
 		return {
+			ctimeMs: fileStats.ctimeMs ?? null,
+			dev: fileStats.dev ?? null,
+			ino: fileStats.ino ?? null,
 			isFile: fileStats.isFile(),
-			isSymbolicLink: fileStats.isSymbolicLink?.() ?? false,
+			isSymbolicLink: fileStats.isSymbolicLink?.() ?? null,
 			kind: "present",
+			mode: fileStats.mode ?? null,
 			mtimeMs: fileStats.mtimeMs ?? null,
 			size: fileStats.size ?? null,
 		};
@@ -199,39 +262,70 @@ const readMetadata = async (
 const metadataKey = (
 	workspace: string,
 	provenanceWorkspace: string,
+	fileSystemIdentity: string,
 	candidates: readonly Candidate[],
 	metadata: readonly FileMetadata[]
 ): string =>
 	[
 		workspace,
 		provenanceWorkspace,
+		fileSystemIdentity,
 		...candidates.map((candidate, index) => {
 			const candidateMetadata = metadata[index] ?? { kind: "error" as const };
 			return `${candidate.absolutePath}:${encodeMetadata(candidateMetadata)}`;
 		}),
 	].join("\n");
+const hasCompleteMetadata = (metadata: FileMetadata): boolean =>
+	metadata.kind === "missing" ||
+	(metadata.kind === "present" &&
+		metadata.isSymbolicLink !== null &&
+		metadata.size !== null &&
+		Number.isFinite(metadata.size) &&
+		metadata.mtimeMs !== null &&
+		Number.isFinite(metadata.mtimeMs) &&
+		metadata.ctimeMs !== null &&
+		Number.isFinite(metadata.ctimeMs) &&
+		metadata.mode !== null &&
+		Number.isFinite(metadata.mode) &&
+		metadata.ino !== null &&
+		Number.isFinite(metadata.ino) &&
+		metadata.dev !== null &&
+		Number.isFinite(metadata.dev));
 const snapshotCacheScope = (
 	workspace: string,
-	provenanceWorkspace: string
-): string => `${workspace}\n${provenanceWorkspace}\n`;
+	provenanceWorkspace: string,
+	fileSystemIdentity: string
+): string => `${workspace}\n${provenanceWorkspace}\n${fileSystemIdentity}\n`;
 
 const cacheSnapshot = (
 	cache: Map<string, ProjectInstructionSnapshot> | undefined,
 	key: string,
 	workspace: string,
 	provenanceWorkspace: string,
+	fileSystemIdentity: string,
 	snapshot: ProjectInstructionSnapshot
 ): void => {
 	if (cache === undefined) {
 		return;
 	}
-	const scope = snapshotCacheScope(workspace, provenanceWorkspace);
+	const scope = snapshotCacheScope(
+		workspace,
+		provenanceWorkspace,
+		fileSystemIdentity
+	);
 	for (const cachedKey of cache.keys()) {
 		if (cachedKey !== key && cachedKey.startsWith(scope)) {
 			cache.delete(cachedKey);
 		}
 	}
 	cache.set(key, snapshot);
+	while (cache.size > MAX_PROJECT_INSTRUCTION_CACHE_ENTRIES) {
+		const oldestKey = cache.keys().next().value;
+		if (oldestKey === undefined) {
+			break;
+		}
+		cache.delete(oldestKey);
+	}
 };
 
 const diagnosticMessage = (code: ProjectInstructionDiagnosticCode): string => {
@@ -286,15 +380,17 @@ const inspectSourceSize = (value: Uint8Array | string): SourceInspection => {
 	return { characterLength, exceedsLimit: false };
 };
 
+type LoadedProjectInstructionSource = {
+	readonly bytes: Uint8Array;
+	readonly characterLength: number;
+	readonly content: string;
+};
+
 const readSource = async (
 	fileSystem: ProjectInstructionFileSystem,
 	candidate: Candidate
 ): Promise<
-	| {
-			readonly bytes: Uint8Array;
-			readonly characterLength: number;
-			readonly content: string;
-	  }
+	| LoadedProjectInstructionSource
 	| { readonly diagnostic: ProjectInstructionDiagnostic }
 	| { readonly missing: true }
 > => {
@@ -351,6 +447,7 @@ const readSource = async (
 			),
 		};
 	}
+
 	return { bytes, characterLength, content };
 };
 const loadSourceCandidate = async (
@@ -360,6 +457,11 @@ const loadSourceCandidate = async (
 ): Promise<Awaited<ReturnType<typeof readSource>>> => {
 	if (fileMetadata.kind === "missing") {
 		return { missing: true };
+	}
+	if (fileMetadata.kind === "error") {
+		return {
+			diagnostic: invalidDiagnostic(candidate.sourcePath, "read-error"),
+		};
 	}
 	if (
 		fileMetadata.kind === "present" &&
@@ -388,6 +490,114 @@ const loadSourceCandidate = async (
 	}
 	return readSource(fileSystem, candidate);
 };
+type LoadedProjectInstructionCandidates = {
+	readonly diagnosticsByCandidate: ProjectInstructionDiagnostic[][];
+	readonly loadedSources: Array<LoadedProjectInstructionSource | undefined>;
+};
+
+const loadSourceCandidates = async (
+	fileSystem: ProjectInstructionFileSystem,
+	candidates: readonly Candidate[],
+	metadata: readonly FileMetadata[]
+): Promise<LoadedProjectInstructionCandidates> => {
+	const diagnosticsByCandidate = candidates.map(
+		() => [] as ProjectInstructionDiagnostic[]
+	);
+	const loadedSources: Array<LoadedProjectInstructionSource | undefined> =
+		candidates.map(() => undefined);
+	for (const [index, candidate] of candidates.entries()) {
+		const loaded = await loadSourceCandidate(
+			fileSystem,
+			candidate,
+			metadata[index] ?? { kind: "error" }
+		);
+		if ("missing" in loaded) {
+			continue;
+		}
+		if ("diagnostic" in loaded) {
+			diagnosticsByCandidate[index]?.push(loaded.diagnostic);
+			continue;
+		}
+		loadedSources[index] = loaded;
+	}
+	return { diagnosticsByCandidate, loadedSources };
+};
+
+type SelectedProjectInstructionSources = {
+	readonly selectedIndexes: readonly number[];
+	readonly totalByteLength: number;
+};
+
+const selectProjectInstructionSources = (
+	candidates: readonly Candidate[],
+	diagnosticsByCandidate: ProjectInstructionDiagnostic[][],
+	loadedSources: Array<LoadedProjectInstructionSource | undefined>
+): SelectedProjectInstructionSources => {
+	const selectedIndexes: number[] = [];
+	let selectedStart = 0;
+	let totalByteLength = 0;
+	for (const [index, loaded] of loadedSources.entries()) {
+		if (loaded === undefined) {
+			continue;
+		}
+		selectedIndexes.push(index);
+		totalByteLength += loaded.bytes.byteLength;
+		while (
+			totalByteLength > MAX_PROJECT_INSTRUCTION_TOTAL_BYTES &&
+			selectedStart < selectedIndexes.length
+		) {
+			const omittedIndex = selectedIndexes[selectedStart];
+			selectedStart += 1;
+			if (omittedIndex === undefined) {
+				continue;
+			}
+			const omitted = loadedSources[omittedIndex];
+			if (omitted === undefined) {
+				continue;
+			}
+			loadedSources[omittedIndex] = undefined;
+			totalByteLength -= omitted.bytes.byteLength;
+			const candidate = candidates[omittedIndex];
+			if (candidate !== undefined) {
+				diagnosticsByCandidate[omittedIndex]?.push(
+					invalidDiagnostic(
+						candidate.sourcePath,
+						"project-total-too-large",
+						omitted.bytes.byteLength,
+						omitted.characterLength
+					)
+				);
+			}
+		}
+	}
+	return {
+		selectedIndexes: selectedIndexes.slice(selectedStart),
+		totalByteLength,
+	};
+};
+
+const buildProjectInstructionSources = (
+	selectedIndexes: readonly number[],
+	candidates: readonly Candidate[],
+	loadedSources: readonly (LoadedProjectInstructionSource | undefined)[]
+): ProjectInstructionSource[] => {
+	const sources: ProjectInstructionSource[] = [];
+	for (const index of selectedIndexes) {
+		const candidate = candidates[index];
+		const loaded = loadedSources[index];
+		if (candidate === undefined || loaded === undefined) {
+			continue;
+		}
+		sources.push({
+			byteLength: loaded.bytes.byteLength,
+			characterLength: loaded.characterLength,
+			content: loaded.content,
+			contentHash: createHash("sha256").update(loaded.bytes).digest("hex"),
+			sourcePath: candidate.sourcePath,
+		});
+	}
+	return sources;
+};
 
 const freezeSnapshot = (
 	snapshot: ProjectInstructionSnapshot
@@ -408,18 +618,34 @@ export const createProjectInstructionSnapshot = async (
 	input: ProjectInstructionSnapshotInput,
 	cache?: Map<string, ProjectInstructionSnapshot>
 ): Promise<ProjectInstructionSnapshot> => {
-	const workspace = resolve(input.workspace);
-	const provenanceWorkspace = resolve(input.provenanceWorkspace ?? workspace);
 	const fileSystem = input.fs ?? defaultFileSystem;
-	const roots = input.projectRoots ?? getProjectRoots(workspace);
+	const normalizeWorkspacePath =
+		fileSystem === defaultFileSystem
+			? canonicalPath
+			: async (path: string): Promise<string> => resolve(path);
+	const workspace = await normalizeWorkspacePath(input.workspace);
+	const provenanceWorkspace = await normalizeWorkspacePath(
+		input.provenanceWorkspace ?? workspace
+	);
+	const fileSystemIdentity = fileSystemCacheIdentity(fileSystem);
+	const roots =
+		input.projectRoots === undefined
+			? getProjectRoots(workspace)
+			: await Promise.all(input.projectRoots.map(normalizeWorkspacePath));
 	const candidates = sourceCandidates(provenanceWorkspace, roots);
 	const metadata = await Promise.all(
 		candidates.map((candidate) =>
 			readMetadata(fileSystem, candidate.absolutePath)
 		)
 	);
-	const key = metadataKey(workspace, provenanceWorkspace, candidates, metadata);
-	const cacheable = metadata.every(({ kind }) => kind !== "error");
+	const key = metadataKey(
+		workspace,
+		provenanceWorkspace,
+		fileSystemIdentity,
+		candidates,
+		metadata
+	);
+	const cacheable = metadata.every(hasCompleteMetadata);
 	if (cacheable) {
 		const cached = cache?.get(key);
 		if (cached !== undefined) {
@@ -427,44 +653,22 @@ export const createProjectInstructionSnapshot = async (
 		}
 	}
 
-	const diagnostics: ProjectInstructionDiagnostic[] = [];
-	const sources: ProjectInstructionSource[] = [];
-	let totalByteLength = 0;
-	for (const [index, candidate] of candidates.entries()) {
-		const loaded = await loadSourceCandidate(
-			fileSystem,
-			candidate,
-			metadata[index] ?? { kind: "error" }
-		);
-		if ("missing" in loaded) {
-			continue;
-		}
-		if ("diagnostic" in loaded) {
-			diagnostics.push(loaded.diagnostic);
-			continue;
-		}
-		const byteLength = loaded.bytes.byteLength;
-		const characterLength = loaded.characterLength;
-		if (totalByteLength + byteLength > MAX_PROJECT_INSTRUCTION_TOTAL_BYTES) {
-			diagnostics.push(
-				invalidDiagnostic(
-					candidate.sourcePath,
-					"project-total-too-large",
-					byteLength,
-					characterLength
-				)
-			);
-			continue;
-		}
-		sources.push({
-			byteLength,
-			characterLength,
-			content: loaded.content,
-			contentHash: createHash("sha256").update(loaded.bytes).digest("hex"),
-			sourcePath: candidate.sourcePath,
-		});
-		totalByteLength += byteLength;
-	}
+	const { diagnosticsByCandidate, loadedSources } = await loadSourceCandidates(
+		fileSystem,
+		candidates,
+		metadata
+	);
+	const { selectedIndexes, totalByteLength } = selectProjectInstructionSources(
+		candidates,
+		diagnosticsByCandidate,
+		loadedSources
+	);
+	const sources = buildProjectInstructionSources(
+		selectedIndexes,
+		candidates,
+		loadedSources
+	);
+	const diagnostics = diagnosticsByCandidate.flat();
 
 	const snapshot = freezeSnapshot({
 		diagnostics,
@@ -475,9 +679,14 @@ export const createProjectInstructionSnapshot = async (
 	const canCacheSnapshot =
 		cacheable && diagnostics.every(({ code }) => code !== "read-error");
 	if (canCacheSnapshot) {
-		cacheSnapshot(cache, key, workspace, provenanceWorkspace, snapshot);
+		cacheSnapshot(
+			cache,
+			key,
+			workspace,
+			provenanceWorkspace,
+			fileSystemIdentity,
+			snapshot
+		);
 	}
 	return snapshot;
 };
-
-export const loadProjectInstructions = createProjectInstructionSnapshot;

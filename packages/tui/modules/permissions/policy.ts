@@ -50,6 +50,12 @@ export const DEFAULT_EFFECTIVE_AGENT_POLICY: EffectiveAgentPolicy = {
 export type ToolPermission = {
 	decide(action: PermissionAction, resource: string): PermissionDecision;
 	/**
+	 * Effective rules when the evaluator can expose them to composition code.
+	 * Resource-aware prompt descriptions use this to distinguish a deny at an
+	 * empty probe from a deny that applies to every resource.
+	 */
+	readonly rules?: PermissionRules;
+	/**
 	 * True when a manual-only safety ceiling is in force. Every `ask` this
 	 * evaluator returns is then a safety ask that later auto-approval and
 	 * remembered-grant behavior must not bypass, distinguishing it from an
@@ -105,6 +111,7 @@ export function applyManualApprovalSafetyCeiling(
 		decide(action, resource) {
 			return permission.decide(action, resource) === "deny" ? "deny" : "ask";
 		},
+		rules: permission.rules,
 		safety: true,
 	};
 }
@@ -387,6 +394,7 @@ export function createResolvedToolPermission(
 				matcherForAction(action)
 			);
 		},
+		rules,
 		safety: false,
 	};
 }
@@ -405,16 +413,132 @@ export function createToolPermission(
 	);
 }
 
+const PATH_GLOB_CHARS = /^[*?/]+$/u;
+const WILDCARD_GLOB_CHARS = /^[*?]+$/u;
+
+const isUniversalNonEmptyGlob = (pattern: string): boolean =>
+	WILDCARD_GLOB_CHARS.test(pattern) &&
+	pattern.includes("*") &&
+	pattern.replaceAll("*", "").length <= 1;
+
+const isUniversalPathPattern = (pattern: string): boolean => {
+	if (!PATH_GLOB_CHARS.test(pattern) || pattern.endsWith("/")) {
+		return false;
+	}
+	if (!pattern.includes("/")) {
+		return isUniversalNonEmptyGlob(pattern);
+	}
+	return pattern.startsWith("**/") && isUniversalPathPattern(pattern.slice(3));
+};
+
+const isUniversalResourcePattern = (
+	pattern: string,
+	action: PermissionAction
+): boolean =>
+	action === "shell"
+		? isUniversalNonEmptyGlob(pattern)
+		: isUniversalPathPattern(pattern);
+
+const isUniversalResourceDeny = (
+	rule: PermissionResourceRules,
+	action: PermissionAction
+): boolean => {
+	const entries = Object.entries(rule);
+	const universalDenyIndex = entries.findLastIndex(
+		([pattern, decision]) =>
+			decision === "deny" && isUniversalResourcePattern(pattern, action)
+	);
+	const hasUsableNonDenyException = entries
+		.slice(universalDenyIndex + 1)
+		.some(([pattern, decision]) => decision !== "deny" && pattern.length > 0);
+	return universalDenyIndex >= 0 && !hasUsableNonDenyException;
+};
+
+const buildShellPatternWitness = (pattern: string): string =>
+	pattern.replaceAll("*", "arg").replaceAll("?", "x");
+
+const buildPathPatternWitness = (pattern: string, deep: boolean): string =>
+	pattern
+		.replaceAll("**/", deep ? "nested/" : "")
+		.replaceAll("**", deep ? "nested/file" : "file")
+		.replaceAll("*", deep ? "nested" : "file")
+		.replaceAll("?", "x");
+
+const buildResourcePatternWitness = (
+	pattern: string,
+	action: PermissionAction,
+	deep: boolean
+): string | null => {
+	const expandedPattern =
+		action === "shell" ? pattern : expandHomeInPath(pattern);
+	const witness =
+		action === "shell"
+			? buildShellPatternWitness(expandedPattern)
+			: buildPathPatternWitness(expandedPattern, deep);
+	return witness.length > 0 ? witness : null;
+};
+
+const hasEffectiveResourceAsk = (
+	permission: ToolPermission,
+	action: PermissionAction,
+	rule: PermissionResourceRules
+): boolean => {
+	for (const [pattern, decision] of Object.entries(rule)) {
+		if (decision !== "ask") {
+			continue;
+		}
+		for (const deep of [false, true]) {
+			const witness = buildResourcePatternWitness(pattern, action, deep);
+			if (witness !== null && permission.decide(action, witness) === "ask") {
+				return true;
+			}
+		}
+		if (pattern.includes("*") || pattern.includes("?")) {
+			return true;
+		}
+	}
+	return false;
+};
+
 /**
- * A static tool is hidden from the model only when its governing action is an
- * unconditional scalar `deny`. Granular resource maps and `ask` scalars keep the
- * tool visible so it can be evaluated per resource at call time.
+ * Describes a visible tool from its policy without treating an empty resource
+ * probe as an unconditional deny. Resource maps with any allowed or approval-
+ * gated resource stay visible; an all-denied map remains omitted.
+ */
+export const describeVisibleToolPermission = (
+	permission: ToolPermission,
+	action: PermissionAction
+): PermissionDecision => {
+	const rule = permission.rules?.[action];
+	if (typeof rule !== "object" || rule === null) {
+		return permission.decide(action, "");
+	}
+	if (isUniversalResourceDeny(rule, action)) {
+		return "deny";
+	}
+	const decision = permission.decide(action, "");
+	if (permission.safety || hasEffectiveResourceAsk(permission, action, rule)) {
+		return "ask";
+	}
+	return decision === "deny" ? "allow" : decision;
+};
+
+/**
+ * A static tool is hidden from the model when its governing action is an
+ * unconditional scalar deny or a catch-all resource deny. Other granular
+ * resource maps and ask scalars keep the tool visible for per-resource gating.
  */
 export const isStaticToolUnconditionallyDenied = (
 	rules: PermissionRules,
 	tool: CodingToolName
-): boolean => rules[STATIC_TOOL_PERMISSION_ACTIONS[tool]] === "deny";
-
+): boolean => {
+	const rule = rules[STATIC_TOOL_PERMISSION_ACTIONS[tool]];
+	const action = STATIC_TOOL_PERMISSION_ACTIONS[tool];
+	return (
+		rule === "deny" ||
+		(typeof rule === "object" && isUniversalResourceDeny(rule, action))
+	);
+};
 /** Resolves the static coding tools a model may see, in canonical order. */
 export const resolveVisibleCodingTools = (
 	rules: PermissionRules

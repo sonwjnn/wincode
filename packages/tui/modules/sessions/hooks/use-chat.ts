@@ -39,6 +39,7 @@ import {
 	useMcp,
 } from "@/modules/mcp";
 import {
+	describeVisibleToolPermission,
 	STATIC_TOOL_PERMISSION_ACTIONS,
 	useToolPermission,
 } from "@/modules/permissions";
@@ -1772,9 +1773,9 @@ export function useChat(
 						codingPermissions: new Map(
 							resolvedAgent.visibleCodingTools.map((name) => [
 								name,
-								agentPermission.decide(
-									STATIC_TOOL_PERMISSION_ACTIONS[name],
-									""
+								describeVisibleToolPermission(
+									agentPermission,
+									STATIC_TOOL_PERMISSION_ACTIONS[name]
 								),
 							])
 						),
@@ -1782,7 +1783,10 @@ export function useChat(
 							[...snapshot.tools].map(([name, tool]) => [name, tool.policy])
 						),
 						requiresManualApproval: resolvedAgent.requiresManualApproval,
-						skillPermission: agentPermission.decide("skill", ""),
+						skillPermission: describeVisibleToolPermission(
+							agentPermission,
+							"skill"
+						),
 						tools,
 					}),
 					model: {

@@ -301,6 +301,21 @@ const toolGroupLine = (
 			: `; approval-gated: ${approvalNames.join(", ")}`;
 	return `- ${TOOL_FAMILY_LABEL[family]} tools: ${names.join(", ")}${approval}`;
 };
+const codingWorkflowLine = (
+	codingTools: readonly EffectiveVisibleTool[]
+): string | undefined => {
+	if (codingTools.length === 0) {
+		return;
+	}
+	const inspectionTools = codingTools
+		.filter((tool) => ["glob", "grep", "read"].includes(tool.name))
+		.map((tool) => tool.name)
+		.sort(compareToolNames);
+	if (inspectionTools.length === 0) {
+		return "- Coding tools operate inside the workspace; use only the visible capabilities before modifying files.";
+	}
+	return `- Coding tools operate inside the workspace; inspect with ${inspectionTools.join(", ")} before modifying files.`;
+};
 
 const toolPolicyBlock = (
 	tools: readonly (EffectiveVisibleTool | ResolvedTool)[],
@@ -309,10 +324,17 @@ const toolPolicyBlock = (
 	const normalized = normalizeTools(tools);
 	const lines = [
 		"Effective tool policy (high-level capabilities only; schemas, outputs, and executors are intentionally omitted):",
-		"Coding tools operate inside the workspace; inspect with read, glob, or grep before modifying files.",
-		"The Tool Gate remains authoritative for approvals, denied capabilities, and workspace or resource boundaries.",
-		"Resource-specific Tool Permission rules can make an otherwise allowed coding call approval-gated.",
 	];
+	const codingLine = codingWorkflowLine(
+		normalized.filter((tool) => tool.family === "coding")
+	);
+	if (codingLine !== undefined) {
+		lines.push(codingLine);
+	}
+	lines.push(
+		"The Tool Gate remains authoritative for approvals, denied capabilities, and workspace or resource boundaries.",
+		"Resource-specific Tool Permission rules can make an otherwise allowed coding call approval-gated."
+	);
 	for (const family of [
 		"coding",
 		"mcp",

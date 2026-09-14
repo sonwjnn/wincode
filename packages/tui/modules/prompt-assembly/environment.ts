@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import type { AgentRole } from "@wincode/agent-core";
 import { getGitBranch } from "@/shared/git/get-git-branch";
@@ -53,6 +54,14 @@ const defaultGit: PromptEnvironmentGit = {
 	getStatus: async (cwd) =>
 		formatGitStatusSummary(await getGitStatusSummary(cwd)),
 };
+const canonicalPath = async (path: string): Promise<string> => {
+	const resolvedPath = resolve(path);
+	try {
+		return await realpath(resolvedPath);
+	} catch {
+		return resolvedPath;
+	}
+};
 
 const relativePath = (workspace: string, path: string): string => {
 	const value = relative(workspace, path).replaceAll("\\", "/");
@@ -82,17 +91,25 @@ const statusText = (status: string | GitStatusSummary): string =>
 export const createEnvironmentSnapshot = async (
 	input: PromptEnvironmentSnapshotInput
 ): Promise<PromptEnvironmentSnapshot> => {
-	const workspace = resolve(input.workspace);
-	const cwd = resolve(input.cwd ?? workspace);
+	const workspace = await canonicalPath(input.workspace);
+	const cwd = await canonicalPath(input.cwd ?? workspace);
 	const git = input.git ?? defaultGit;
-	const projectRoot =
-		input.projectRoot === undefined
-			? await git.getRepositoryRoot(workspace)
-			: input.projectRoot;
-	const [branch, status] = await Promise.all([
-		git.getBranch(workspace),
-		git.getStatus(workspace),
-	]);
+	let projectRoot: string | null;
+	if (input.projectRoot === undefined) {
+		const discoveredProjectRoot = await git.getRepositoryRoot(workspace);
+		projectRoot =
+			discoveredProjectRoot === null
+				? null
+				: await canonicalPath(discoveredProjectRoot);
+	} else if (input.projectRoot === null) {
+		projectRoot = null;
+	} else {
+		projectRoot = await canonicalPath(input.projectRoot);
+	}
+	const [branch, status] =
+		projectRoot === null
+			? [null, "unavailable" as const]
+			: await Promise.all([git.getBranch(workspace), git.getStatus(workspace)]);
 	return {
 		stable: {
 			...stableRepository(workspace, projectRoot),

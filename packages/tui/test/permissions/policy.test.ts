@@ -509,6 +509,41 @@ describe("resolveVisibleCodingTools", () => {
 			visible: ["read", "write", "edit", "glob", "grep", "shell"],
 		},
 		{
+			name: "hides a resource map with a final catch-all deny",
+			rules: { read: { "src/**": "allow", "*": "deny" } },
+			visible: ["write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "hides slash catch-all denies followed only by denies",
+			rules: { read: { "**/*": "deny", "src/**": "deny" } },
+			visible: ["write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "keeps slash-bearing shell globs visible when not universal",
+			rules: { shell: { "**/*": "deny" } },
+			visible: ["read", "write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "hides repeated recursive path catch-all denies",
+			rules: { read: { "**/**/**": "deny" } },
+			visible: ["write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "keeps trailing-slash path patterns visible",
+			rules: { read: { "**/": "deny" } },
+			visible: ["read", "write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "keeps a universal deny with a narrower allow visible",
+			rules: { read: { "**": "deny", "src/**": "allow" } },
+			visible: ["read", "write", "edit", "glob", "grep", "shell"],
+		},
+		{
+			name: "hides universal denies with only an empty-resource exception",
+			rules: { read: { "*": "deny", "": "allow" } },
+			visible: ["write", "edit", "glob", "grep", "shell"],
+		},
+		{
 			name: "keeps an ask-gated tool visible",
 			rules: { list: "ask" },
 			visible: ["read", "write", "edit", "glob", "grep", "shell"],

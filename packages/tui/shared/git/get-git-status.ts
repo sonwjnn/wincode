@@ -1,6 +1,6 @@
 type BunSpawnProcess = {
 	exited: Promise<number>;
-	kill?: () => void;
+	kill?: (signal?: number) => void;
 	stdout: ReadableStream<Uint8Array>;
 };
 
@@ -23,15 +23,24 @@ export type GitStatusSummary = GitStatusCounts & {
 };
 const GIT_STATUS_MAX_BYTES = 16 * 1024;
 const GIT_STATUS_MAX_LINES = 256;
+const GIT_COMMAND_TIMEOUT_MS = 5000;
+const GIT_HARD_KILL_SIGNAL = 9;
 
 const bunGlobal = globalThis as typeof globalThis & {
 	Bun?: { spawn: BunSpawn };
 };
+type CancelReader = () => Promise<void>;
+
 const readBounded = async (
 	stream: ReadableStream<Uint8Array>,
-	maxBytes: number
+	maxBytes: number,
+	registerCancel?: (cancel: CancelReader) => void
 ): Promise<{ bytes: Uint8Array; truncated: boolean }> => {
 	const reader = stream.getReader();
+	const cancelReader = async (): Promise<void> => {
+		await reader.cancel().catch(() => undefined);
+	};
+	registerCancel?.(cancelReader);
 	const chunks: Uint8Array[] = [];
 	let byteLength = 0;
 	let truncated = false;
@@ -47,7 +56,7 @@ const readBounded = async (
 				chunks.push(chunk.slice(0, remaining));
 				byteLength += remaining;
 				truncated = true;
-				await reader.cancel().catch(() => undefined);
+				await cancelReader();
 				break;
 			}
 			chunks.push(chunk);
@@ -57,7 +66,7 @@ const readBounded = async (
 			const result = await reader.read();
 			if (!result.done) {
 				truncated = true;
-				await reader.cancel().catch(() => undefined);
+				await cancelReader();
 			}
 		}
 	} finally {
@@ -137,41 +146,74 @@ const parseStatus = (output: string, truncated: boolean): GitStatusSummary => {
 	};
 };
 
-const readGitPorcelain = async (
+export type BoundedGitCommandResult = {
+	readonly bytes: Uint8Array;
+	readonly exitCode: number;
+	readonly truncated: boolean;
+};
+
+export const runBoundedGitCommand = async (
 	cwd: string,
 	command: readonly string[]
-): Promise<{
-	bytes: Uint8Array;
-	exitCode: number;
-	truncated: boolean;
-} | null> => {
+): Promise<BoundedGitCommandResult | null> => {
 	const spawn = bunGlobal.Bun?.spawn;
 	if (spawn === undefined) {
 		return null;
 	}
 	let child: BunSpawnProcess | undefined;
+	let cancelOutput: CancelReader | undefined;
+	let timeout: ReturnType<typeof setTimeout> | undefined;
 	try {
-		child = spawn(command, { cwd, stderr: "ignore", stdout: "pipe" });
-		const result = await readBounded(child.stdout, GIT_STATUS_MAX_BYTES);
-		if (result.truncated) {
-			child.kill?.();
+		const spawned = spawn(command, { cwd, stderr: "ignore", stdout: "pipe" });
+		child = spawned;
+		const operation = (async (): Promise<BoundedGitCommandResult> => {
+			const result = await readBounded(
+				spawned.stdout,
+				GIT_STATUS_MAX_BYTES,
+				(cancel) => {
+					cancelOutput = cancel;
+				}
+			);
+			if (result.truncated) {
+				spawned.kill?.(GIT_HARD_KILL_SIGNAL);
+			}
+			const exitCode = await spawned.exited;
+			return { ...result, exitCode };
+		})().catch(() => null);
+		const timeoutResult = new Promise<null>((resolve) => {
+			timeout = setTimeout(() => {
+				void cancelOutput?.();
+				spawned.kill?.(GIT_HARD_KILL_SIGNAL);
+				resolve(null);
+			}, GIT_COMMAND_TIMEOUT_MS);
+		});
+		const result = await Promise.race([operation, timeoutResult]);
+		if (result === null) {
+			await cancelOutput?.();
+			spawned.kill?.(GIT_HARD_KILL_SIGNAL);
+			await spawned.exited.catch(() => -1);
+			await operation;
 		}
-		const exitCode = await child.exited;
-		return { ...result, exitCode };
+		return result;
 	} catch {
+		await cancelOutput?.();
 		if (child !== undefined) {
-			child.kill?.();
+			child.kill?.(GIT_HARD_KILL_SIGNAL);
 			await child.exited.catch(() => -1);
 		}
 		return null;
+	} finally {
+		clearTimeout(timeout);
 	}
 };
-
 export const getGitStatusSummary = async (
 	cwd: string
 ): Promise<GitStatusSummary> => {
-	const result = await readGitPorcelain(cwd, [
+	const result = await runBoundedGitCommand(cwd, [
 		"git",
+		"--no-optional-locks",
+		"-c",
+		"core.fsmonitor=false",
 		"status",
 		"--porcelain=v1",
 		"--untracked-files=all",
@@ -188,7 +230,7 @@ export const getGitStatusSummary = async (
 export const getGitRepositoryRoot = async (
 	cwd: string
 ): Promise<string | null> => {
-	const result = await readGitPorcelain(cwd, [
+	const result = await runBoundedGitCommand(cwd, [
 		"git",
 		"rev-parse",
 		"--show-toplevel",

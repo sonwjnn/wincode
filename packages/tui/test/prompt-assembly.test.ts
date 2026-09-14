@@ -2,12 +2,20 @@ import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import type { AgentTurnDelegation, ResolvedTool } from "@wincode/agent-core";
 import {
+	applyManualApprovalSafetyCeiling,
+	createResolvedToolPermission,
+	describeVisibleToolPermission,
+} from "@/modules/permissions";
+import {
 	assemblePrompt,
 	createPromptAssemblyService,
 	describeEffectiveVisibleTools,
 } from "@/modules/prompt-assembly/composer";
 import { createEnvironmentSnapshot } from "@/modules/prompt-assembly/environment";
-import { createProjectInstructionSnapshot } from "@/modules/prompt-assembly/project-instructions";
+import {
+	createProjectInstructionSnapshot,
+	type ProjectInstructionFileStats,
+} from "@/modules/prompt-assembly/project-instructions";
 
 const projectRoots = ["/repo", "/repo/packages", "/repo/packages/tui"];
 
@@ -16,8 +24,12 @@ const metadataFor = (files: Record<string, Uint8Array | string>) =>
 		Object.entries(files).map(([path, contents], index) => [
 			path,
 			{
+				ctimeMs: index + 1,
+				dev: 1,
+				ino: index + 1,
 				isFile: () => true,
 				isSymbolicLink: () => false,
+				mode: 0o10_0644,
 				mtimeMs: index + 1,
 				size:
 					typeof contents === "string"
@@ -29,7 +41,9 @@ const metadataFor = (files: Record<string, Uint8Array | string>) =>
 
 const fileSystem = (
 	files: Record<string, Uint8Array | string>,
-	metadata = metadataFor(files),
+	metadata: ReadonlyMap<string, ProjectInstructionFileStats> = metadataFor(
+		files
+	),
 	reads: string[] = []
 ) => ({
 	readFile: async (path: string): Promise<Uint8Array | string> => {
@@ -167,6 +181,101 @@ describe("Prompt Assembly", () => {
 			{ family: "skill", name: "skill", permission: "ask" },
 		]);
 	});
+	test("retains resource-scoped visible tools with narrower allows", () => {
+		const permission = createResolvedToolPermission({
+			read: { "*": "deny", "src/**": "allow" },
+		});
+		const described = describeEffectiveVisibleTools({
+			codingPermissions: new Map([
+				["read", describeVisibleToolPermission(permission, "read")],
+			]),
+			tools: [resolvedTool("read")],
+		});
+
+		expect(described).toEqual([
+			{ family: "coding", name: "read", permission: "allow" },
+		]);
+	});
+	test("advertises approval for resource-scoped asks", () => {
+		const permission = createResolvedToolPermission({
+			read: { ".env": "ask" },
+		});
+		const described = describeEffectiveVisibleTools({
+			codingPermissions: new Map([
+				["read", describeVisibleToolPermission(permission, "read")],
+			]),
+			tools: [resolvedTool("read")],
+		});
+
+		expect(described).toEqual([
+			{ family: "coding", name: "read", permission: "ask" },
+		]);
+	});
+	test("does not overstate asks overridden by later resource rules", () => {
+		const permission = createResolvedToolPermission({
+			read: { ".env": "ask", "*": "deny", "src/**": "allow" },
+		});
+		const described = describeEffectiveVisibleTools({
+			codingPermissions: new Map([
+				["read", describeVisibleToolPermission(permission, "read")],
+			]),
+			tools: [resolvedTool("read")],
+		});
+
+		expect(described).toEqual([
+			{ family: "coding", name: "read", permission: "allow" },
+		]);
+	});
+	test("omits resource maps whose final catch-all denies", () => {
+		const permission = applyManualApprovalSafetyCeiling(
+			createResolvedToolPermission({
+				read: { "src/**": "allow", "*": "deny" },
+			})
+		);
+		const described = describeEffectiveVisibleTools({
+			codingPermissions: new Map([
+				["read", describeVisibleToolPermission(permission, "read")],
+			]),
+			tools: [resolvedTool("read")],
+		});
+
+		expect(described).toEqual([]);
+	});
+	test("omits wildcard maps that deny every usable resource", () => {
+		const permission = createResolvedToolPermission({
+			read: { "?*": "deny" },
+		});
+		const described = describeEffectiveVisibleTools({
+			codingPermissions: new Map([
+				["read", describeVisibleToolPermission(permission, "read")],
+			]),
+			tools: [resolvedTool("read")],
+		});
+
+		expect(described).toEqual([]);
+	});
+	test("does not advertise unavailable coding inspection tools", () => {
+		const result = assemblePrompt({
+			agent,
+			effectiveVisibleTools: [
+				{ family: "coding", name: "shell", permission: "allow" },
+			],
+			environment,
+			projectInstructions: {
+				diagnostics: [],
+				sources: [],
+				totalByteLength: 0,
+				workspace: "/repo",
+			},
+		});
+
+		expect(result.instructions).not.toContain(
+			"inspect with read, glob, or grep"
+		);
+		expect(result.instructions).toContain(
+			"Coding tools operate inside the workspace; use only the visible capabilities"
+		);
+	});
 
 	test("loads ancestor AGENTS.md files root-first and isolates invalid sources", async () => {
 		const files = {
@@ -239,6 +348,30 @@ describe("Prompt Assembly", () => {
 		]);
 		expect(reads).toEqual([]);
 	});
+	test("omits sources when filesystem metadata is unavailable", async () => {
+		const reads: string[] = [];
+		const snapshot = await createProjectInstructionSnapshot({
+			fs: {
+				readFile: async (path) => {
+					reads.push(path);
+					return "credential";
+				},
+			},
+			projectRoots: ["/repo"],
+			workspace: "/repo",
+		});
+
+		expect(snapshot.sources).toEqual([]);
+		expect(snapshot.diagnostics).toEqual([
+			{
+				code: "read-error",
+				message: "Project instruction source could not be read.",
+				reason: "read-error",
+				sourcePath: "AGENTS.md",
+			},
+		]);
+		expect(reads).toEqual([]);
+	});
 
 	test("reuses a metadata-keyed project snapshot and observes changed metadata", async () => {
 		const files: Record<string, string> = {
@@ -261,13 +394,44 @@ describe("Prompt Assembly", () => {
 
 		files["/repo/AGENTS.md"] = "second";
 		metadata.set("/repo/AGENTS.md", {
+			ctimeMs: 2,
+			dev: 1,
+			ino: 1,
 			isFile: () => true,
 			isSymbolicLink: () => false,
+			mode: 0o10_0644,
 			mtimeMs: 2,
 			size: 6,
 		});
 		const third = await service.snapshotProjectInstructions(input);
 		expect(third.sources[0]?.content).toBe("second");
+		expect(reads).toEqual(["/repo/AGENTS.md", "/repo/AGENTS.md"]);
+	});
+	test("does not cache snapshots when file metadata is incomplete", async () => {
+		const files: Record<string, string> = {
+			"/repo/AGENTS.md": "first",
+		};
+		const reads: string[] = [];
+		const metadata = new Map([
+			[
+				"/repo/AGENTS.md",
+				{
+					isFile: () => true,
+				},
+			],
+		]);
+		const service = createPromptAssemblyService();
+		const input = {
+			fs: fileSystem(files, metadata, reads),
+			projectRoots: ["/repo"],
+			workspace: "/repo",
+		};
+
+		await service.snapshotProjectInstructions(input);
+		files["/repo/AGENTS.md"] = "second";
+		const second = await service.snapshotProjectInstructions(input);
+
+		expect(second.sources[0]?.content).toBe("second");
 		expect(reads).toEqual(["/repo/AGENTS.md", "/repo/AGENTS.md"]);
 	});
 	test("shares repository policy across primary and subagent snapshots", async () => {
@@ -425,10 +589,14 @@ describe("Prompt Assembly", () => {
 
 		expect(snapshot.sources).toHaveLength(2);
 		expect(snapshot.sources[0]?.content).toHaveLength(12_000);
-		expect(snapshot.sources[1]?.content).toHaveLength(12_000);
+		expect(snapshot.sources[1]?.content).toHaveLength(1000);
 		expect(snapshot.sources.map(({ sourcePath }) => sourcePath)).toEqual([
-			"../../AGENTS.md",
 			"../AGENTS.md",
+			"AGENTS.md",
+		]);
+		expect(snapshot.sources.map(({ content }) => content[0])).toEqual([
+			"p",
+			"t",
 		]);
 		expect(
 			snapshot.diagnostics.map(({ code, sourcePath }) => ({
@@ -436,7 +604,7 @@ describe("Prompt Assembly", () => {
 				sourcePath,
 			}))
 		).toEqual([
-			{ code: "project-total-too-large", sourcePath: "AGENTS.md" },
+			{ code: "project-total-too-large", sourcePath: "../../AGENTS.md" },
 			{ code: "source-too-large", sourcePath: "src/AGENTS.md" },
 		]);
 	});

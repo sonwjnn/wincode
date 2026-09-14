@@ -21,6 +21,7 @@ import {
 	type McpToolCallExecutor,
 } from "@/modules/mcp";
 import {
+	describeVisibleToolPermission,
 	STATIC_TOOL_PERMISSION_ACTIONS,
 	type ToolPermission,
 } from "@/modules/permissions";
@@ -133,6 +134,9 @@ const buildChildTurn = async ({
 		resolveResourceLimits: childGate.resolveResourceLimits,
 	});
 	const childPermission = await resolvePermissionForAgent?.(prepared.agent);
+	const defaultSkillPermission = prepared.resolvedAgent.requiresManualApproval
+		? "ask"
+		: "allow";
 	const prompt = await assembleNormalTurnPrompt({
 		agent: prepared.resolvedAgent,
 		cwd,
@@ -144,9 +148,9 @@ const buildChildTurn = async ({
 					: new Map(
 							prepared.resolvedAgent.visibleCodingTools.map((name) => [
 								name,
-								childPermission.decide(
-									STATIC_TOOL_PERMISSION_ACTIONS[name],
-									""
+								describeVisibleToolPermission(
+									childPermission,
+									STATIC_TOOL_PERMISSION_ACTIONS[name]
 								),
 							])
 						),
@@ -155,8 +159,9 @@ const buildChildTurn = async ({
 			),
 			requiresManualApproval: prepared.resolvedAgent.requiresManualApproval,
 			skillPermission:
-				childPermission?.decide("skill", "") ??
-				(prepared.resolvedAgent.requiresManualApproval ? "ask" : "allow"),
+				childPermission === undefined
+					? defaultSkillPermission
+					: describeVisibleToolPermission(childPermission, "skill"),
 			tools,
 		}),
 		model: {
