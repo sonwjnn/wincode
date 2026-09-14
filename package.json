@@ -34,7 +34,6 @@
     "@total-typescript/shoehorn": "^0.1.2",
     "@types/bun": "catalog:",
     "@wincode/config": "workspace:*",
-    "@wincode/test-runner": "workspace:*",
     "lefthook": "latest",
     "typescript": "catalog:",
     "ultracite": "7.6.5"
