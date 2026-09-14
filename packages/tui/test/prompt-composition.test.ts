@@ -7,15 +7,15 @@ import {
 	describeVisibleToolPermission,
 } from "@/modules/permissions";
 import {
-	assemblePrompt,
-	createPromptAssemblyService,
+	composeSystemPrompt,
+	createPromptCompositionPipeline,
 	describeEffectiveVisibleTools,
-} from "@/modules/prompt-assembly/composer";
-import { createEnvironmentSnapshot } from "@/modules/prompt-assembly/environment";
+} from "@/modules/prompt-composition/composer";
+import { createEnvironmentSnapshot } from "@/modules/prompt-composition/environment";
 import {
 	createProjectInstructionSnapshot,
 	type ProjectInstructionFileStats,
-} from "@/modules/prompt-assembly/project-instructions";
+} from "@/modules/prompt-composition/project-instructions";
 
 const projectRoots = ["/repo", "/repo/packages", "/repo/packages/tui"];
 
@@ -103,7 +103,7 @@ const resolvedTool = (name: string): ResolvedTool => ({
 	execute: async () => ({ output: null, type: "success" }),
 });
 
-describe("Prompt Assembly", () => {
+describe("Prompt Composition", () => {
 	test("renders ordered trusted, repository, environment, and tool blocks", () => {
 		const project = {
 			diagnostics: [],
@@ -119,7 +119,7 @@ describe("Prompt Assembly", () => {
 			totalByteLength: 47,
 			workspace: "/repo",
 		};
-		const result = assemblePrompt({
+		const result = composeSystemPrompt({
 			agent,
 			delegation,
 			effectiveVisibleTools: [
@@ -153,7 +153,7 @@ describe("Prompt Assembly", () => {
 	});
 
 	test("escapes control characters in prompt metadata", () => {
-		const result = assemblePrompt({
+		const result = composeSystemPrompt({
 			agent: {
 				...agent,
 				displayName: "Build\u2028Name",
@@ -303,7 +303,7 @@ describe("Prompt Assembly", () => {
 		expect(described).toEqual([]);
 	});
 	test("does not advertise unavailable coding inspection tools", () => {
-		const result = assemblePrompt({
+		const result = composeSystemPrompt({
 			agent,
 			effectiveVisibleTools: [
 				{ family: "coding", name: "shell", permission: "allow" },
@@ -427,7 +427,7 @@ describe("Prompt Assembly", () => {
 		};
 		const metadata = metadataFor(files);
 		const reads: string[] = [];
-		const service = createPromptAssemblyService();
+		const service = createPromptCompositionPipeline();
 		const fs = fileSystem(files, metadata, reads);
 		const input = {
 			fs,
@@ -468,7 +468,7 @@ describe("Prompt Assembly", () => {
 				},
 			],
 		]);
-		const service = createPromptAssemblyService();
+		const service = createPromptCompositionPipeline();
 		const input = {
 			fs: fileSystem(files, metadata, reads),
 			projectRoots: ["/repo"],
@@ -485,7 +485,7 @@ describe("Prompt Assembly", () => {
 	test("shares repository policy across primary and subagent snapshots", async () => {
 		const files = { "/repo/AGENTS.md": "Repository defaults" };
 		const reads: string[] = [];
-		const service = createPromptAssemblyService();
+		const service = createPromptCompositionPipeline();
 		const common = {
 			fs: fileSystem(files, metadataFor(files), reads),
 			git: {
@@ -512,7 +512,7 @@ describe("Prompt Assembly", () => {
 			"/repo/packages/AGENTS.md": "Package defaults",
 			"/repo/packages/tui/AGENTS.md": "Workspace defaults",
 		};
-		const service = createPromptAssemblyService();
+		const service = createPromptCompositionPipeline();
 		const snapshot = await service.snapshot({
 			cwd: "/repo/packages/tui",
 			fs: fileSystem(files),
@@ -532,7 +532,7 @@ describe("Prompt Assembly", () => {
 	});
 
 	test("bounds automatic instruction roots to the active workspace", async () => {
-		const service = createPromptAssemblyService();
+		const service = createPromptCompositionPipeline();
 		const snapshot = await service.snapshot({
 			cwd: "/outside/deep",
 			fs: fileSystem({
@@ -563,7 +563,7 @@ describe("Prompt Assembly", () => {
 			totalByteLength: 0,
 			workspace: "/repo",
 		};
-		const main = assemblePrompt({
+		const main = composeSystemPrompt({
 			agent,
 			effectiveVisibleTools: describeEffectiveVisibleTools({
 				tools: [],
@@ -571,7 +571,7 @@ describe("Prompt Assembly", () => {
 			environment,
 			projectInstructions: project,
 		});
-		const dirty = assemblePrompt({
+		const dirty = composeSystemPrompt({
 			agent,
 			effectiveVisibleTools: [],
 			environment: {
@@ -601,7 +601,7 @@ describe("Prompt Assembly", () => {
 			platform: "darwin",
 			workspace: "/repo",
 		});
-		const result = assemblePrompt({
+		const result = composeSystemPrompt({
 			agent,
 			effectiveVisibleTools: [],
 			environment: snapshot,

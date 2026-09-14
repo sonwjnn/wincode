@@ -21,7 +21,7 @@ import {
 	type McpToolCallExecutor,
 } from "@/modules/mcp";
 import type { ToolPermission } from "@/modules/permissions";
-import { assembleAgentTurnPrompt } from "@/modules/prompt-assembly/composer";
+import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import { resolveChatModelTarget } from "../../model-target";
 import { createSessionUserMessage, type SessionMessage } from "../message";
 import type { SessionViewState } from "../session-controller";
@@ -127,7 +127,7 @@ const buildChildTurn = async ({
 		resolveResourceLimits: childGate.resolveResourceLimits,
 	});
 	const childPermission = await resolvePermissionForAgent?.(prepared.agent);
-	const prompt = await assembleAgentTurnPrompt({
+	const prompt = await prepareAgentTurnPrompt({
 		agent: prepared.resolvedAgent,
 		cwd,
 		delegation,

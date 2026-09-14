@@ -1,8 +1,8 @@
-# Typed normal-turn Prompt Assembly and Project Instructions
+# Typed normal-turn Prompt Composition Pipeline and System Prompt
 
 Status: accepted
 
-Wincode keeps normal Agent Turn Prompt Assembly in the TUI composition root. A typed, ordered seam renders one provider-neutral instruction string from immutable safety/base guidance, active Agent instructions, repository Project Instructions, stable environment, compact tool policy, and volatile environment. This preserves the Agent Core and AI SDK adapter contracts while making ordering, provenance, cache behavior, and diagnostics explicit.
+Wincode keeps normal Agent Turn Prompt Composition in the TUI composition root. The public Prompt Composition Pipeline prepares resolved turn context, while pure `composeSystemPrompt()` renders the ordered provider-neutral System Prompt and returns its sidecar metadata. This preserves the Agent Core and AI SDK adapter contracts while making ordering, provenance, cache behavior, and diagnostics explicit.
 
 ## Considered Options
 
@@ -19,4 +19,5 @@ Wincode keeps normal Agent Turn Prompt Assembly in the TUI composition root. A t
 - Project Instructions carry workspace-relative provenance and SHA-256 content hashes. Raw repository instructions are not persisted in Session Records, telemetry, or compaction input.
 - Snapshots are resolved before the first Model Step and remain stable for the Agent Turn. Cache reuse is keyed by canonical workspace and instruction-file metadata; later turns observe workspace changes.
 - Stable environment is placed before dynamic tool policy and volatile status so the cacheable prompt prefix remains stable when only per-turn data changes. Environment variables, credentials, unnecessary absolute paths, full diffs, workspace trees, and machine metadata remain excluded.
+- Prompt Composition is the process, System Prompt is only the provider-neutral system-role instruction content, and metadata or diagnostics remain sidecar in-process results.
 - The TUI gains filesystem and workspace-context composition work, but no database schema, Agent Core contract, provider-specific prompt protocol, permission semantics, or Skill activation semantics changes.

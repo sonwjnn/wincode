@@ -84,7 +84,7 @@ export type ProjectInstructionFileSystem = {
 export type ProjectInstructionSource = {
 	readonly byteLength: number;
 	readonly characterLength: number;
-	/** Body text is retained only in memory for prompt assembly, never persisted. */
+	/** Body text is retained only in memory for prompt composition, never persisted. */
 	readonly content: string;
 	readonly contentHash: string;
 	readonly sourcePath: string;

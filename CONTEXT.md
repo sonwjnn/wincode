@@ -112,16 +112,19 @@ A user-defined prompt template loaded from a command folder, inserted into the
 session as a user message when executed. _Avoid_: Command, slash command
 
 **Skill**:
-A named set of instructions that augments an Agent for one user turn. A Skill may
-be selected explicitly by the user or activated by the Agent. _Avoid_: Agent,
-session mode, Custom Command
+A named set of instructions that augments an Agent for one Agent Turn. Skill context is untrusted and turn-scoped; explicit Skill instructions have higher authority than Agent-loaded Skill instructions, but neither can override Wincode safety, Tool Permission, direct user intent, or Project Instructions. _Avoid_: Agent, session mode, Custom Command
 
 **Skill Activation**:
-The selection of a Skill for the current user turn. Activation does not persist
-to later turns. _Avoid_: Skill installation, session Skill
+The selection of a Skill for the current user turn. Activation does not persist to later turns. _Avoid_: Skill installation, session Skill
 
 **Project Instruction**:
-Repository-provided guidance associated with the active workspace and loaded for an Agent Turn with source provenance. Project Instructions are contextual data, not an Agent definition or Skill, and cannot override Wincode safety, Tool Permission, or direct user intent. _Avoid_: treating repository text as unrestricted authority
+Repository-provided guidance associated with the active workspace and loaded for an Agent Turn with source provenance. Farther-ancestor sources precede nearer sources, and the nearer source takes precedence. Project Instructions rank below active Agent instructions and above Skill instructions; they cannot override Wincode safety, Tool Permission, or direct user intent. _Avoid_: treating repository text as unrestricted authority
+
+**Instruction Source Precedence**:
+The ordering used to combine multiple Project Instruction sources: a farther ancestor precedes a nearer source, and the nearer source takes precedence. It does not determine authority between Project Instructions and other instruction categories.
+
+**Instruction Authority**:
+The fixed precedence between instruction categories: Wincode safety and Tool Permission, direct user intent, active Agent instructions, Project Instructions, explicit Skill instructions, then Agent-loaded Skill instructions. Lower-authority context cannot override higher-authority context.
 
 **Agent**:
 A named AI behavior that can lead a session, execute a delegated task, or
@@ -217,3 +220,21 @@ evaluated against each actual Tool Call. _Avoid_: approved tool, raw executor
 A named execution budget for local coding tools. The standard profile is the
 normal bounded posture; elevated profiles permit larger bounded inspection,
 search, execution, and preview results and require a Tool Gate approval.
+
+## Prompt Composition
+
+**Prompt Composition**:
+The domain process that composes provider-neutral System Prompt content for one Agent Turn from resolved Agent guidance, Project Instructions, environment, and effective Tool Permission. It is not the System Prompt artifact or the metadata describing its composition.
+_Avoid_: Prompt Assembly, prompt text, system message
+
+**System Prompt**:
+The provider-neutral instruction content supplied to the model in the system role for one Agent Turn. It excludes turn-scoped Skill context, tool schemas or executors, and Prompt Composition metadata or diagnostics.
+_Avoid_: Prompt Composition, Skill context, system message
+
+**Prompt Composition Pipeline**:
+The orchestration boundary that prepares resolved context and coordinates Prompt Composition for an Agent Turn. It is not the System Prompt artifact or an individual block renderer.
+_Avoid_: System Prompt, prompt renderer, Agent Turn
+
+**Compaction Prompt**:
+The instruction content used to summarize completed Session Records for a later Agent Turn. It is separate from the System Prompt and does not become part of the coding Agent's turn-scoped instructions.
+_Avoid_: System Prompt, session instructions

@@ -27,7 +27,7 @@ import {
 	renderProjectInstructionBlock,
 } from "./project-instructions";
 
-export const PROMPT_ASSEMBLY_BLOCK_ORDER = [
+export const PROMPT_COMPOSITION_BLOCK_ORDER = [
 	"base-safety",
 	"agent-instructions",
 	"project-instructions",
@@ -36,8 +36,8 @@ export const PROMPT_ASSEMBLY_BLOCK_ORDER = [
 	"volatile-environment",
 ] as const;
 
-export type PromptAssemblyBlockName =
-	(typeof PROMPT_ASSEMBLY_BLOCK_ORDER)[number];
+export type PromptCompositionBlockName =
+	(typeof PROMPT_COMPOSITION_BLOCK_ORDER)[number];
 export type PromptToolFamily =
 	| "coding"
 	| "delegation"
@@ -55,29 +55,29 @@ type PromptMcpToolSnapshot = {
 	readonly policy: PromptToolPermission;
 };
 
-export type PromptAssemblyBlockMetadata = {
+export type PromptCompositionBlockMetadata = {
 	readonly byteLength: number;
 	readonly characterLength: number;
-	readonly name: PromptAssemblyBlockName;
+	readonly name: PromptCompositionBlockName;
 };
 
-export type PromptAssemblySourceMetadata = {
+export type PromptCompositionSourceMetadata = {
 	readonly byteLength: number;
 	readonly characterLength: number;
 	readonly contentHash: string;
 	readonly sourcePath: string;
 };
 
-export type PromptAssemblyMetadata = {
-	readonly blockOrder: readonly PromptAssemblyBlockName[];
-	readonly blocks: readonly PromptAssemblyBlockMetadata[];
+export type PromptCompositionMetadata = {
+	readonly blockOrder: readonly PromptCompositionBlockName[];
+	readonly blocks: readonly PromptCompositionBlockMetadata[];
 	readonly projectInstructionDiagnostics: readonly ProjectInstructionDiagnostic[];
-	readonly projectInstructionSources: readonly PromptAssemblySourceMetadata[];
+	readonly projectInstructionSources: readonly PromptCompositionSourceMetadata[];
 	readonly renderedByteLength: number;
 	readonly renderedLength: number;
 };
 
-export type PromptAssemblyInput = {
+export type PromptCompositionInput = {
 	readonly agent: ResolvedAgent;
 	readonly delegation?: AgentTurnDelegation;
 	readonly effectiveVisibleTools: readonly (
@@ -88,17 +88,17 @@ export type PromptAssemblyInput = {
 	readonly projectInstructions: ProjectInstructionSnapshot;
 };
 
-export type PromptAssemblyResult = {
+export type PromptCompositionResult = {
 	readonly instructions: string;
-	readonly metadata: PromptAssemblyMetadata;
+	readonly metadata: PromptCompositionMetadata;
 };
 
-export type PromptAssemblySnapshotInput = PromptEnvironmentSnapshotInput & {
+export type PromptCompositionSnapshotInput = PromptEnvironmentSnapshotInput & {
 	readonly fs?: ProjectInstructionFileSystem;
 	readonly projectRoots?: readonly string[];
 };
 
-export type AssembleNormalTurnPromptInput = PromptAssemblySnapshotInput & {
+export type PrepareNormalTurnPromptInput = PromptCompositionSnapshotInput & {
 	readonly agent: ResolvedAgent;
 	readonly delegation?: AgentTurnDelegation;
 	readonly effectiveVisibleTools: readonly (
@@ -107,11 +107,13 @@ export type AssembleNormalTurnPromptInput = PromptAssemblySnapshotInput & {
 	)[];
 };
 
-export type PromptAssemblyService = {
-	readonly assemble: (input: PromptAssemblyInput) => PromptAssemblyResult;
+export type PromptCompositionPipeline = {
+	readonly composeSystemPrompt: (
+		input: PromptCompositionInput
+	) => PromptCompositionResult;
 	readonly snapshot: (
-		input: PromptAssemblySnapshotInput
-	) => Promise<PromptAssemblySnapshot>;
+		input: PromptCompositionSnapshotInput
+	) => Promise<PromptCompositionSnapshot>;
 	readonly snapshotEnvironment: (
 		input: PromptEnvironmentSnapshotInput
 	) => Promise<PromptEnvironmentSnapshot>;
@@ -120,7 +122,7 @@ export type PromptAssemblyService = {
 	) => Promise<ProjectInstructionSnapshot>;
 };
 
-export type PromptAssemblySnapshot = {
+export type PromptCompositionSnapshot = {
 	readonly environment: PromptEnvironmentSnapshot;
 	readonly projectInstructions: ProjectInstructionSnapshot;
 };
@@ -151,7 +153,7 @@ const compareToolNames = (first: string, second: string): number => {
 	return 0;
 };
 
-const block = (name: PromptAssemblyBlockName, content: string): string =>
+const block = (name: PromptCompositionBlockName, content: string): string =>
 	`<wincode-prompt-block name="${name}">\n${content}\n</wincode-prompt-block>`;
 
 const baseSafetyBlock = (): string =>
@@ -334,9 +336,9 @@ const toolPolicyBlock = (
 };
 
 const blockMetadata = (
-	name: PromptAssemblyBlockName,
+	name: PromptCompositionBlockName,
 	content: string
-): PromptAssemblyBlockMetadata => ({
+): PromptCompositionBlockMetadata => ({
 	byteLength: encoder.encode(content).byteLength,
 	characterLength: content.length,
 	name,
@@ -344,7 +346,7 @@ const blockMetadata = (
 
 const sourceMetadata = (
 	snapshot: ProjectInstructionSnapshot
-): readonly PromptAssemblySourceMetadata[] =>
+): readonly PromptCompositionSourceMetadata[] =>
 	snapshot.sources.map((source) => ({
 		byteLength: source.byteLength,
 		characterLength: source.characterLength,
@@ -353,10 +355,10 @@ const sourceMetadata = (
 	}));
 
 /** Composes the ordered provider-neutral system instruction for one turn. */
-export const assemblePrompt = (
-	input: PromptAssemblyInput
-): PromptAssemblyResult => {
-	const contents: readonly [PromptAssemblyBlockName, string][] = [
+export const composeSystemPrompt = (
+	input: PromptCompositionInput
+): PromptCompositionResult => {
+	const contents: readonly [PromptCompositionBlockName, string][] = [
 		["base-safety", baseSafetyBlock()],
 		["agent-instructions", agentInstructionsBlock(input.agent)],
 		[
@@ -380,7 +382,7 @@ export const assemblePrompt = (
 	return {
 		instructions,
 		metadata: {
-			blockOrder: PROMPT_ASSEMBLY_BLOCK_ORDER,
+			blockOrder: PROMPT_COMPOSITION_BLOCK_ORDER,
 			blocks: renderedBlocks.map(({ name, rendered }) =>
 				blockMetadata(name, rendered)
 			),
@@ -493,10 +495,10 @@ export const describeAgentTurnTools = (input: {
 	});
 };
 
-export const createPromptAssemblyService = (
+export const createPromptCompositionPipeline = (
 	cache = new Map<string, ProjectInstructionSnapshot>()
-): PromptAssemblyService => ({
-	assemble: assemblePrompt,
+): PromptCompositionPipeline => ({
+	composeSystemPrompt,
 	snapshot: async (input) => {
 		const workspace = await canonicalPath(input.workspace);
 		const cwd = await canonicalPath(input.cwd ?? input.workspace);
@@ -522,18 +524,18 @@ export const createPromptAssemblyService = (
 		createProjectInstructionSnapshot(input, cache),
 });
 
-const defaultPromptAssemblyService = createPromptAssemblyService();
+const defaultPromptCompositionPipeline = createPromptCompositionPipeline();
 
-export const createPromptAssemblySnapshot = (
-	input: PromptAssemblySnapshotInput
-): Promise<PromptAssemblySnapshot> =>
-	defaultPromptAssemblyService.snapshot(input);
+export const createPromptCompositionSnapshot = (
+	input: PromptCompositionSnapshotInput
+): Promise<PromptCompositionSnapshot> =>
+	defaultPromptCompositionPipeline.snapshot(input);
 
-export const assembleNormalTurnPrompt = async (
-	input: AssembleNormalTurnPromptInput
-): Promise<PromptAssemblyResult> => {
-	const snapshot = await createPromptAssemblySnapshot(input);
-	return assemblePrompt({
+export const prepareNormalTurnPrompt = async (
+	input: PrepareNormalTurnPromptInput
+): Promise<PromptCompositionResult> => {
+	const snapshot = await createPromptCompositionSnapshot(input);
+	return composeSystemPrompt({
 		agent: input.agent,
 		delegation: input.delegation,
 		effectiveVisibleTools: input.effectiveVisibleTools,
@@ -541,18 +543,18 @@ export const assembleNormalTurnPrompt = async (
 		projectInstructions: snapshot.projectInstructions,
 	});
 };
-export const assembleAgentTurnPrompt = async (
-	input: PromptAssemblySnapshotInput & {
+export const prepareAgentTurnPrompt = async (
+	input: PromptCompositionSnapshotInput & {
 		readonly agent: ResolvedAgent & PromptAgentCapabilities;
 		readonly delegation?: AgentTurnDelegation;
 		readonly mcpTools: ReadonlyMap<string, PromptMcpToolSnapshot>;
 		readonly permission?: ToolPermission;
 		readonly tools: readonly ResolvedTool[];
 	}
-): Promise<PromptAssemblyResult> => {
+): Promise<PromptCompositionResult> => {
 	const { agent, delegation, mcpTools, permission, tools, ...snapshotInput } =
 		input;
-	return assembleNormalTurnPrompt({
+	return prepareNormalTurnPrompt({
 		...snapshotInput,
 		agent,
 		delegation,

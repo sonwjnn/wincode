@@ -39,8 +39,8 @@ import {
 	useMcp,
 } from "@/modules/mcp";
 import { useToolPermission } from "@/modules/permissions";
-import { assembleAgentTurnPrompt } from "@/modules/prompt-assembly/composer";
-import { MAX_PROJECT_INSTRUCTION_TOTAL_BYTES } from "@/modules/prompt-assembly/project-instructions";
+import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
+import { MAX_PROJECT_INSTRUCTION_TOTAL_BYTES } from "@/modules/prompt-composition/project-instructions";
 
 import {
 	COMPACTION_REQUEST_OVERHEAD_TOKENS,
@@ -1762,7 +1762,7 @@ export function useChat(
 				});
 				const agentPermission =
 					await resolvePermissionForAgentRef.current(agent);
-				const prompt = await assembleAgentTurnPrompt({
+				const prompt = await prepareAgentTurnPrompt({
 					agent: resolvedAgent,
 					cwd: configRef.current.cwd,
 					delegation,

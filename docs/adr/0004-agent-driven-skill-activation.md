@@ -1,9 +1,6 @@
 # Agent-Driven Skill Activation
 
-Wincode lets an Agent activate local Skills on demand through a native `skill` tool while
-retaining explicit `/skill-name` invocation. Skill instructions augment one user turn as
-untrusted context; they never become system instructions, persist into later turns, or
-expand the Agent's Tool Permission.
+Wincode lets an Agent activate local Skills on demand through a native `skill` tool while retaining explicit `/skill-name` invocation. Skill instructions augment one user turn as untrusted context; they never become System Prompt instructions, persist into later turns, or expand the Agent's Tool Permission. Project Instructions rank above Skill context but below active Agent instructions; this authority precedence is separate from farther-ancestor-to-nearer Project Instruction source precedence.
 
 Status: accepted
 
@@ -35,8 +32,8 @@ Status: accepted
 ## Consequences
 
 - At the start of each execution turn, Wincode discovers Skills and snapshots the
-  effective catalog after Agent-specific Permission Rules are applied. Parsed files may
-  be cached by path and file metadata. Changes become visible at the next turn, never in
+  effective catalog after Agent-specific Permission Rules are applied. Parsed files may be
+  cached by path and file metadata. Changes become visible at the next turn, never in
   the middle of the current turn.
 - The `skill` tool is available to Primary Agents and Subagents when at least one Skill is
   not denied. Its description contains the permitted `<available_skills>` entries. A
@@ -54,10 +51,11 @@ Status: accepted
   and attachments and sends no prompt. Retry is a new execution and evaluates permission
   again.
 - Instruction precedence is immutable Wincode safety and Tool Permission, direct user
-  intent, active Agent instructions, explicit Skill instructions, then Agent-loaded
-  Skill instructions. Load order does not resolve conflicts between Agent-loaded Skills;
-  the Agent follows user intent or asks for clarification. Skill context is wrapped with
-  its name, source, and content hash and is never appended to the system prompt.
+  intent, active Agent instructions, Project Instructions, explicit Skill instructions,
+  then Agent-loaded Skill instructions. Load order does not resolve conflicts between
+  Agent-loaded Skills; the Agent follows user intent or asks for clarification. Skill
+  context is wrapped with its name, source, and content hash and is never appended to the
+  System Prompt.
 - Successful activation persists only metadata: name, content hash, source
   (`explicit` or `agent`), and explicit arguments where applicable. Explicit activation
   belongs to the user message; Agent activation belongs to the assistant message that

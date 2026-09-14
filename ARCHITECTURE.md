@@ -97,4 +97,4 @@ Detailed rationale lives in [`docs/adr/`](docs/adr/):
 - [Two-tier session selection](docs/adr/0006-session-selection-two-tier.md)
 - [Configured agents](docs/adr/0002-configured-agents.md)
 - [Shell execution and permissions](docs/adr/0005-shell-tool-with-permission-gated-execution.md)
-- [Typed normal-turn Prompt Assembly and Project Instructions](docs/adr/0017-typed-normal-turn-prompt-assembly.md)
+- [Typed normal-turn Prompt Composition Pipeline and Project Instructions](docs/adr/0017-typed-normal-turn-prompt-assembly.md)
