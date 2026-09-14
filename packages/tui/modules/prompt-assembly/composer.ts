@@ -1,5 +1,4 @@
 import type {
-	AgentRole,
 	AgentTurnDelegation,
 	ResolvedAgent,
 	ResolvedTool,
@@ -103,7 +102,6 @@ export type PromptAssemblySnapshotInput = {
 	readonly platform?: string;
 	readonly projectRoot?: string | null;
 	readonly projectRoots?: readonly string[];
-	readonly role?: AgentRole;
 	readonly workspace: string;
 };
 
@@ -203,7 +201,6 @@ const stableEnvironmentBlock = (
 		environmentLine("worktree", stable.worktree),
 		environmentLine("provider", stable.providerId),
 		environmentLine("model", stable.modelId),
-		environmentLine("Agent role", stable.agentRole),
 	].join("\n");
 };
 
@@ -525,7 +522,6 @@ export const createPromptAssemblyService = (
 			model: input.model,
 			platform: input.platform,
 			projectRoot: input.projectRoot,
-			role: input.role,
 			workspace: input.workspace,
 		});
 		return { environment, projectInstructions };

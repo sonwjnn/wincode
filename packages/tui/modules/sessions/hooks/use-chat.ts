@@ -1776,7 +1776,6 @@ export function useChat(
 						modelId: modelTarget.modelId,
 						providerId: modelTarget.providerId,
 					},
-					role: delegation === undefined ? "primary" : "subagent",
 					workspace: configRef.current.workspace,
 				});
 				const turn = buildAgentTurn({

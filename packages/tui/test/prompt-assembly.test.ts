@@ -69,7 +69,6 @@ const fileSystem = (
 
 const environment = {
 	stable: {
-		agentRole: "primary" as const,
 		cwd: "packages/tui",
 		modelId: "gpt-5.6-luna",
 		platform: "darwin",
@@ -500,19 +499,11 @@ describe("Prompt Assembly", () => {
 			workspace: "/repo/packages/tui",
 		};
 
-		const primary = await service.snapshot({ ...common, role: "primary" });
-		const subagent = await service.snapshot({ ...common, role: "subagent" });
+		const primary = await service.snapshot(common);
+		const subagent = await service.snapshot(common);
 
 		expect(subagent.projectInstructions).toEqual(primary.projectInstructions);
-		expect(subagent.environment.stable).toMatchObject({
-			cwd: primary.environment.stable.cwd,
-			modelId: primary.environment.stable.modelId,
-			providerId: primary.environment.stable.providerId,
-			repository: primary.environment.stable.repository,
-			workspace: primary.environment.stable.workspace,
-		});
-		expect(primary.environment.stable.agentRole).toBe("primary");
-		expect(subagent.environment.stable.agentRole).toBe("subagent");
+		expect(subagent.environment).toEqual(primary.environment);
 		expect(reads).toEqual(["/repo/AGENTS.md"]);
 	});
 	test("discovers nested instructions through the active working directory", async () => {
@@ -532,7 +523,6 @@ describe("Prompt Assembly", () => {
 			},
 			model: { modelId: "model", providerId: "provider" },
 			platform: "darwin",
-			role: "primary",
 			workspace: "/repo",
 		});
 
@@ -556,7 +546,6 @@ describe("Prompt Assembly", () => {
 			},
 			model: { modelId: "model", providerId: "provider" },
 			platform: "darwin",
-			role: "primary",
 			workspace: "/repo",
 		});
 

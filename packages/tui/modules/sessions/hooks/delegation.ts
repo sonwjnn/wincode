@@ -144,7 +144,6 @@ const buildChildTurn = async ({
 			modelId: modelTarget.modelId,
 			providerId: modelTarget.providerId,
 		},
-		role: "subagent",
 		workspace,
 	});
 	return buildAgentTurn({

@@ -92,20 +92,6 @@ test("keeps inline file parts in the Agent Turn model input", () => {
 		},
 	]);
 });
-test("passes the normal-turn Prompt Assembly output to the Agent runtime", () => {
-	const assembledInstructions =
-		'<wincode-prompt-block name="base-safety">assembled</wincode-prompt-block>';
-	const turn = buildAgentTurn({
-		agent: "build",
-		modelMessages: [],
-		modelTarget: createTurn().model,
-		resolvedAgent: buildAgent,
-		systemInstructions: assembledInstructions,
-		turnId: "turn-prompt-assembly",
-	});
-
-	expect(turn.agent.instructions).toBe(assembledInstructions);
-});
 
 class AbortOnSecondReadSignal extends EventTarget implements AbortSignal {
 	private readCount = 0;

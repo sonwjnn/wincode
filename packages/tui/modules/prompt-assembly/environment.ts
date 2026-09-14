@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
-import type { AgentRole } from "@wincode/agent-core";
 import { getGitBranch } from "@/shared/git/get-git-branch";
 import {
 	formatGitStatusSummary,
@@ -17,7 +16,6 @@ export type PromptEnvironmentGit = {
 };
 
 export type PromptStableEnvironment = {
-	readonly agentRole: AgentRole;
 	readonly cwd: string;
 	readonly modelId: string;
 	readonly platform: string;
@@ -46,7 +44,6 @@ export type PromptEnvironmentSnapshotInput = {
 	};
 	readonly platform?: string;
 	readonly projectRoot?: string | null;
-	readonly role?: AgentRole;
 	readonly workspace: string;
 };
 const hasGitRootMarker = (workspace: string): boolean =>
@@ -118,7 +115,6 @@ export const createEnvironmentSnapshot = async (
 	return {
 		stable: {
 			...stableRepository(workspace, projectRoot),
-			agentRole: input.role ?? "primary",
 			cwd: relativePath(workspace, cwd),
 			modelId: input.model.modelId,
 			platform: input.platform ?? process.platform,
