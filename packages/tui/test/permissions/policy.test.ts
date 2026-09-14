@@ -549,6 +549,13 @@ describe("resolveVisibleCodingTools", () => {
 			visible: ["read", "write", "edit", "glob", "grep"],
 		},
 		{
+			name: "keeps a path map visible when witnesses miss an allowed resource",
+			rules: {
+				read: { "*": "deny", "src/**": "allow", "src/**/file": "deny" },
+			},
+			visible: ["read", "write", "edit", "glob", "grep", "shell"],
+		},
+		{
 			name: "keeps an ask-gated tool visible",
 			rules: { list: "ask" },
 			visible: ["read", "write", "edit", "glob", "grep", "shell"],

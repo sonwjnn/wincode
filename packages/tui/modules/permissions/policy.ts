@@ -439,64 +439,120 @@ const isUniversalResourcePattern = (
 		? isUniversalNonEmptyGlob(pattern)
 		: isUniversalPathPattern(pattern);
 
-const buildShellPatternWitness = (pattern: string): string =>
-	pattern.replaceAll("*", "arg").replaceAll("?", "x");
+const SHELL_WILDCARD_RUN = /\*+/gu;
+const RESOURCE_WITNESS_VALUES = ["file", "entry", "x"] as const;
+const RESOURCE_WITNESS_DEPTHS = [false, true] as const;
+const UNIVERSAL_RESOURCE_PATTERN_KEY = "__universal__";
 
-const buildPathPatternWitness = (pattern: string, deep: boolean): string =>
+const buildShellPatternWitness = (pattern: string, value: string): string =>
+	pattern.replaceAll("*", value).replaceAll("?", "x");
+
+const buildPathPatternWitness = (
+	pattern: string,
+	deep: boolean,
+	value: string
+): string =>
 	pattern
 		.replaceAll("**/", deep ? "nested/" : "")
-		.replaceAll("**", deep ? "nested/file" : "file")
-		.replaceAll("*", deep ? "nested" : "file")
+		.replaceAll("**", deep ? `nested/${value}` : value)
+		.replaceAll("*", deep ? "nested" : value)
 		.replaceAll("?", "x");
 
 const buildResourcePatternWitness = (
 	pattern: string,
 	action: PermissionAction,
-	deep: boolean
+	deep: boolean,
+	value: string
 ): string | null => {
 	const expandedPattern =
 		action === "shell" ? pattern : expandHomeInPath(pattern);
 	const witness =
 		action === "shell"
-			? buildShellPatternWitness(expandedPattern)
-			: buildPathPatternWitness(expandedPattern, deep);
+			? buildShellPatternWitness(expandedPattern, value)
+			: buildPathPatternWitness(expandedPattern, deep, value);
 	return witness.length > 0 ? witness : null;
 };
+
+const canonicalResourcePattern = (
+	pattern: string,
+	action: PermissionAction
+): string => {
+	const expandedPattern =
+		action === "shell" ? pattern : expandHomeInPath(pattern);
+	if (isUniversalResourcePattern(expandedPattern, action)) {
+		return UNIVERSAL_RESOURCE_PATTERN_KEY;
+	}
+	if (action === "shell") {
+		return expandedPattern.replace(SHELL_WILDCARD_RUN, "*");
+	}
+	let normalizedPattern = expandedPattern;
+	while (normalizedPattern.includes("/**/**")) {
+		normalizedPattern = normalizedPattern.replaceAll("/**/**", "/**");
+	}
+	return normalizedPattern;
+};
+
+const normalizedResourceEntries = (
+	rule: PermissionResourceRules,
+	action: PermissionAction
+): ResourcePatternRule[] =>
+	Object.entries(rule).map(([pattern, decision]) => ({
+		decision,
+		pattern: action === "shell" ? pattern : expandHomeInPath(pattern),
+	}));
+
+const isPatternFullyDeniedByLaterRules = (
+	entries: readonly ResourcePatternRule[],
+	action: PermissionAction,
+	index: number
+): boolean => {
+	const entry = entries[index];
+	if (entry === undefined) {
+		return false;
+	}
+	const patternKey = canonicalResourcePattern(entry.pattern, action);
+	let hasEquivalentDeny = false;
+	for (const laterEntry of entries.slice(index + 1)) {
+		if (laterEntry.pattern.length === 0) {
+			continue;
+		}
+		if (laterEntry.decision !== "deny") {
+			return false;
+		}
+		if (canonicalResourcePattern(laterEntry.pattern, action) === patternKey) {
+			hasEquivalentDeny = true;
+		}
+	}
+	return hasEquivalentDeny;
+};
+
+/**
+ * Hides a resource map only when every later non-deny pattern is proven to be
+ * covered by a later equivalent deny. Unknown overlaps remain visible so a
+ * usable resource is never hidden by a finite witness guess.
+ */
 const isUniversalResourceDeny = (
 	rule: PermissionResourceRules,
 	action: PermissionAction
 ): boolean => {
-	const entries = Object.entries(rule);
+	const entries = normalizedResourceEntries(rule, action);
 	const universalDenyIndex = entries.findLastIndex(
-		([pattern, decision]) =>
+		({ pattern, decision }) =>
 			decision === "deny" && isUniversalResourcePattern(pattern, action)
 	);
 	if (universalDenyIndex < 0) {
 		return false;
 	}
-	const normalizedEntries = entries.map(([pattern, decision]) => ({
-		decision,
-		pattern: action === "shell" ? pattern : expandHomeInPath(pattern),
-	}));
-	const matcher = matcherForAction(action);
-	for (const [pattern, decision] of entries.slice(universalDenyIndex + 1)) {
-		if (decision === "deny" || pattern.length === 0) {
+	for (const [index, entry] of entries.entries()) {
+		if (
+			index <= universalDenyIndex ||
+			entry.decision === "deny" ||
+			entry.pattern.length === 0
+		) {
 			continue;
 		}
-		for (const deep of [false, true]) {
-			const witness = buildResourcePatternWitness(pattern, action, deep);
-			if (witness === null) {
-				continue;
-			}
-			const effectiveDecision = decideByResourceMap(
-				normalizedEntries,
-				witness,
-				"deny",
-				matcher
-			);
-			if (effectiveDecision !== "deny") {
-				return false;
-			}
+		if (!isPatternFullyDeniedByLaterRules(entries, action, index)) {
+			return false;
 		}
 	}
 	return true;
@@ -511,14 +567,18 @@ const hasEffectiveResourceAsk = (
 		if (decision !== "ask") {
 			continue;
 		}
-		for (const deep of [false, true]) {
-			const witness = buildResourcePatternWitness(pattern, action, deep);
-			if (witness !== null && permission.decide(action, witness) === "ask") {
-				return true;
+		for (const value of RESOURCE_WITNESS_VALUES) {
+			for (const deep of RESOURCE_WITNESS_DEPTHS) {
+				const witness = buildResourcePatternWitness(
+					pattern,
+					action,
+					deep,
+					value
+				);
+				if (witness !== null && permission.decide(action, witness) === "ask") {
+					return true;
+				}
 			}
-		}
-		if (pattern.includes("*") || pattern.includes("?")) {
-			return true;
 		}
 	}
 	return false;

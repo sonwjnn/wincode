@@ -211,6 +211,13 @@ describe("Prompt Assembly", () => {
 			{ family: "coding", name: "read", permission: "ask" },
 		]);
 	});
+	test("does not advertise an ask fully overridden by later deny", () => {
+		const permission = createResolvedToolPermission({
+			read: { "src/**": "ask", "src/**/**": "deny" },
+		});
+
+		expect(describeVisibleToolPermission(permission, "read")).toBe("allow");
+	});
 	test("does not overstate asks overridden by later resource rules", () => {
 		const permission = createResolvedToolPermission({
 			read: { ".env": "ask", "*": "deny", "src/**": "allow" },
