@@ -580,7 +580,8 @@ const compileGlobPattern = (
 ): GlobAutomaton | undefined => {
 	const effectivePattern =
 		action === "shell" || pattern.includes("/") ? pattern : `**/${pattern}`;
-	const patternCharacters = [...effectivePattern];
+	// Match the runtime regexes' UTF-16 code-unit semantics.
+	const patternCharacters = effectivePattern;
 	const automaton: MutableGlobAutomaton = {
 		accepts: new Set(),
 		epsilon: [[]],
@@ -740,7 +741,8 @@ const globAlphabet = (
 ): readonly string[] | undefined => {
 	const characters = new Set(["/", "\n", "\r", "\u2028", "\u2029"]);
 	for (const pattern of patterns) {
-		for (const character of pattern) {
+		// The runtime regexes are non-Unicode, so wildcards consume UTF-16 code units.
+		for (const character of pattern.split("")) {
 			characters.add(character);
 			if (characters.size > MAX_GLOB_ALPHABET) {
 				return;
@@ -833,7 +835,14 @@ const hasGlobLanguageDifference = (
 			return;
 		}
 		transitionCount += alphabet.length;
-		queue.push(...nextGlobProductStates(state, alphabet, target, blockers));
+		for (const nextState of nextGlobProductStates(
+			state,
+			alphabet,
+			target,
+			blockers
+		)) {
+			queue.push(nextState);
+		}
 	}
 	return false;
 };

@@ -580,6 +580,11 @@ describe("resolveVisibleCodingTools", () => {
 			visible: ["read", "write", "edit", "glob", "grep", "shell"],
 		},
 		{
+			name: "keeps an astral literal exception visible with UTF-16 wildcards",
+			rules: { read: { "*": "deny", "😀": "allow", "?": "deny" } },
+			visible: ["read", "write", "edit", "glob", "grep", "shell"],
+		},
+		{
 			name: "keeps a wildcard ask visible beyond sampled literals",
 			rules: {
 				read: {
