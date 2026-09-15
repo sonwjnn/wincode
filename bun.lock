@@ -40,7 +40,7 @@
         "@ai-sdk/provider-utils": "^4.0.27",
         "@wincode/agent-core": "workspace:*",
         "@wincode/ai": "workspace:*",
-        "ai": "catalog:",
+        "@wincode/runtime-utils": "workspace:*",
         "type-fest": "catalog:",
       },
       "devDependencies": {
@@ -112,6 +112,7 @@
     "packages/skills": {
       "name": "@wincode/skills",
       "dependencies": {
+        "@wincode/runtime-utils": "workspace:*",
         "type-fest": "catalog:",
         "zod": "catalog:",
       },
@@ -180,8 +181,6 @@
   },
   "packages": {
     "@ai-sdk/anthropic": ["@ai-sdk/anthropic@3.0.113", "", { "dependencies": { "@ai-sdk/provider": "3.0.15", "@ai-sdk/provider-utils": "4.0.48" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-DNRrJc284/k7z/RhzttDgRqrBt/b7sR9tuC+IMlF3NeUxydruAikyFwbjX7S+wuss2dmVmkjDUEbmjPDS4TOKQ=="],
-
-    "@ai-sdk/gateway": ["@ai-sdk/gateway@3.0.181", "", { "dependencies": { "@ai-sdk/provider": "3.0.15", "@ai-sdk/provider-utils": "4.0.48", "@vercel/oidc": "3.2.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-y1J1drufpsr/etMJvS75wkms02Qsl0zOdkQWRTokBn2pDjOMU6Agt2zcBNfavdpfS/6ZOl5/0SpudPhOERLCFA=="],
 
     "@ai-sdk/google": ["@ai-sdk/google@3.0.113", "", { "dependencies": { "@ai-sdk/provider": "3.0.15", "@ai-sdk/provider-utils": "4.0.48" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-KGlPxV0B96fSXBheLBZZ2c9qJC2nQv1bEfJQ0hBYgze1cVbCxKYobXGcmWbIkVv6rsM7jmWUzWH8h95upsktqQ=="],
 
@@ -445,8 +444,6 @@
 
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
 
-    "@vercel/oidc": ["@vercel/oidc@3.2.0", "", {}, "sha512-UycprH3T6n3jH0k44NHMa7pnFHGu/N05MjojYr+Mc6I7obkoLIJujSWwin1pCvdy/eOxrI/l3uDLQsmcrOb4ug=="],
-
     "@wincode/agent-core": ["@wincode/agent-core@workspace:packages/agent-core"],
 
     "@wincode/agent-runtime-ai-sdk": ["@wincode/agent-runtime-ai-sdk@workspace:packages/agent-runtime-ai-sdk"],
@@ -464,8 +461,6 @@
     "@wincode/skills": ["@wincode/skills@workspace:packages/skills"],
 
     "@wincode/tui": ["@wincode/tui@workspace:packages/tui"],
-
-    "ai": ["ai@6.0.266", "", { "dependencies": { "@ai-sdk/gateway": "3.0.181", "@ai-sdk/provider": "3.0.15", "@ai-sdk/provider-utils": "4.0.48", "@opentelemetry/api": "^1.9.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-N3HM2k/15ewTk15AWnt7kNy0+DEjE6A+R2lqgM2uQ3yvSp+Dm+J/eJVzSaZegINQQoM2aQAZ6MFxo4MsuiXcyg=="],
 
     "ansi-regex": ["ansi-regex@6.3.0", "", {}, "sha512-WpDfL7NO6j7tH88IDBNVdUJxDh9nmCteAVW9dsep846XdwF4naCBK+/tGLX3KJgcpgMRXCFlTM2hKGoK9FsdrQ=="],
 

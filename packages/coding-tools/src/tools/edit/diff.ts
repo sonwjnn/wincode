@@ -1,3 +1,4 @@
+import { isObjectLike } from "@wincode/runtime-utils";
 import { createTwoFilesPatch, parsePatch } from "diff";
 import type { UnknownRecord } from "type-fest";
 import {
@@ -301,7 +302,7 @@ export const isRenderableEditDiff = (
 	value: unknown,
 	limits: ToolResourceLimits["edit"] = HARD_EDIT_DIFF_LIMITS
 ): value is EditDiff => {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+	if (!isObjectLike(value) || Array.isArray(value)) {
 		return false;
 	}
 

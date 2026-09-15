@@ -4,6 +4,7 @@ import {
 	normalizeOperationalFailure,
 } from "@wincode/agent-core";
 import { normalizeModelFailure } from "@wincode/ai/model-failures";
+import { isObjectLike } from "@wincode/runtime-utils";
 import { EmptyBorder } from "@/shared/constants";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 
@@ -14,7 +15,7 @@ type ErrorMessageProps = {
 };
 
 const hasProviderDiagnostics = (error: unknown): boolean => {
-	if (typeof error !== "object" || error === null) {
+	if (!isObjectLike(error)) {
 		return false;
 	}
 	return (

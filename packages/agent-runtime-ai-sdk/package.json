@@ -20,7 +20,7 @@
     "@ai-sdk/provider-utils": "^4.0.27",
     "@wincode/agent-core": "workspace:*",
     "@wincode/ai": "workspace:*",
-    "ai": "catalog:",
+    "@wincode/runtime-utils": "workspace:*",
     "type-fest": "catalog:"
   },
   "devDependencies": {

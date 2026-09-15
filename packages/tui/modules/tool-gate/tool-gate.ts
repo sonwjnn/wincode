@@ -11,6 +11,7 @@ import {
 	type ToolResourceLimits,
 } from "@wincode/coding-tools";
 import type { WorkspacePolicy } from "@wincode/coding-tools/workspace";
+import { isObjectLike } from "@wincode/runtime-utils";
 import {
 	MCP_PERMISSION_RESOURCE,
 	mcpDeniedByPolicyText,
@@ -126,7 +127,7 @@ const isCodingToolName = (name: string): name is CodingToolName =>
 	codingToolNames.some((tool) => tool === name);
 
 const getStringField = (input: unknown, field: string): string | undefined => {
-	if (typeof input !== "object" || input === null || Array.isArray(input)) {
+	if (!isObjectLike(input) || Array.isArray(input)) {
 		return;
 	}
 	const candidate = Reflect.get(input, field);

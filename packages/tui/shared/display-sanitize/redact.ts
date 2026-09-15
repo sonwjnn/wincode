@@ -1,3 +1,5 @@
+import { isObjectLike } from "@wincode/runtime-utils";
+
 const URL_LIKE_PATTERN = /https?:\/\/[^\s,;]+/gi;
 const SECRET_KEY_NAME_PATTERN =
 	/(?:apikey|auth|authorization|bearer|cookie|credential|password|privatekey|secret|session|token)/i;
@@ -125,7 +127,7 @@ export function sanitizeArgumentTree(
 		if (typeof node === "string") {
 			return sanitizeString(node);
 		}
-		if (typeof node !== "object" || node === null) {
+		if (!isObjectLike(node)) {
 			return node;
 		}
 		if (seen.has(node)) {

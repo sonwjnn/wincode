@@ -1,3 +1,4 @@
+import { isObjectLike } from "@wincode/runtime-utils";
 import type { Promisable, UnknownRecord } from "type-fest";
 import type { z } from "zod";
 import { AgentInvariantError } from "./errors";
@@ -33,7 +34,7 @@ export type ToolDefinition = {
 };
 
 const isSchema = (value: unknown): value is z.ZodType | ToolJsonSchema => {
-	if (typeof value !== "object" || value === null) {
+	if (!isObjectLike(value)) {
 		return false;
 	}
 	if ("safeParse" in value && typeof value.safeParse === "function") {
@@ -47,7 +48,7 @@ const isSchema = (value: unknown): value is z.ZodType | ToolJsonSchema => {
 };
 
 export const isToolDefinition = (value: unknown): value is ToolDefinition => {
-	if (typeof value !== "object" || value === null) {
+	if (!isObjectLike(value)) {
 		return false;
 	}
 	const definition = value as UnknownRecord;
@@ -95,7 +96,7 @@ export type ToolCallFailure = {
 export type ToolCallOutput = ToolCallSuccess | ToolCallFailure;
 
 export const isToolCallOutput = (value: unknown): value is ToolCallOutput => {
-	if (typeof value !== "object" || value === null) {
+	if (!isObjectLike(value)) {
 		return false;
 	}
 	const output = value as UnknownRecord;
@@ -144,7 +145,7 @@ export type ResolvedTool = {
 };
 
 export const isResolvedTool = (value: unknown): value is ResolvedTool => {
-	if (typeof value !== "object" || value === null) {
+	if (!isObjectLike(value)) {
 		return false;
 	}
 	const tool = value as UnknownRecord;

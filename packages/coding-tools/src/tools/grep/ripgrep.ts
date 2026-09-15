@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { isPlainObject } from "@wincode/runtime-utils";
+import { isObjectLike, isPlainObject } from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 import { truncateUtf8 } from "../output-bounds";
 import { getToolResourceLimits } from "../resource-limits";
@@ -29,7 +29,7 @@ export class RipgrepInvalidPatternError extends Error {
 }
 
 const getErrorCode = (error: unknown): string | undefined => {
-	if (typeof error !== "object" || error === null || !("code" in error)) {
+	if (!(isObjectLike(error) && "code" in error)) {
 		return;
 	}
 	const code = error.code;

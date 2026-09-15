@@ -1,4 +1,5 @@
 import type { ModelTarget } from "@wincode/ai/model-target";
+import { isObjectLike } from "@wincode/runtime-utils";
 import type { ReadonlyDeep, UnknownRecord } from "type-fest";
 import type { ResolvedAgent } from "./agent";
 import {
@@ -136,7 +137,7 @@ export type AgentTurn = Readonly<{
 export const isAgentTurnDelegation = (
 	value: unknown
 ): value is AgentTurnDelegation => {
-	if (typeof value !== "object" || value === null) {
+	if (!isObjectLike(value)) {
 		return false;
 	}
 	const delegation = value as UnknownRecord;
@@ -163,7 +164,7 @@ export const createAgentTurnMessage = (
 export const isAgentTurnTextPart = (
 	part: unknown
 ): part is AgentTurnTextPart => {
-	if (typeof part !== "object" || part === null) {
+	if (!isObjectLike(part)) {
 		return false;
 	}
 	const value = part as UnknownRecord;
@@ -177,7 +178,7 @@ export const isAgentTurnTextPart = (
 export const isAgentTurnFilePart = (
 	part: unknown
 ): part is AgentTurnFilePart => {
-	if (typeof part !== "object" || part === null) {
+	if (!isObjectLike(part)) {
 		return false;
 	}
 	const value = part as UnknownRecord;
@@ -195,7 +196,7 @@ export const isAgentTurnFilePart = (
 export const isAgentTurnToolCallPart = (
 	part: unknown
 ): part is AgentTurnToolCallPart => {
-	if (typeof part !== "object" || part === null) {
+	if (!isObjectLike(part)) {
 		return false;
 	}
 	const value = part as UnknownRecord;
@@ -218,7 +219,7 @@ export const isAgentTurnToolCallPart = (
 export const isAgentTurnToolResultPart = (
 	part: unknown
 ): part is AgentTurnToolResultPart => {
-	if (typeof part !== "object" || part === null) {
+	if (!isObjectLike(part)) {
 		return false;
 	}
 	const value = part as UnknownRecord;
@@ -241,7 +242,7 @@ export const isAgentTurnToolResultPart = (
 export const isAgentTurnToolFailurePart = (
 	part: unknown
 ): part is AgentTurnToolFailurePart => {
-	if (typeof part !== "object" || part === null) {
+	if (!isObjectLike(part)) {
 		return false;
 	}
 	const value = part as UnknownRecord;

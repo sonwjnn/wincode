@@ -1,3 +1,4 @@
+import { isObjectLike } from "@wincode/runtime-utils";
 import { SKILL_TOOL_INPUT_JSON_SCHEMA } from "./context";
 import { hashSkillBody } from "./hash";
 import type {
@@ -154,7 +155,7 @@ export const sanitizeSkillToolResult = (
  * type. Parts that are already sanitized (without output) pass through.
  */
 export const isSkillToolPart = (part: unknown): part is SkillToolPart => {
-	if (typeof part !== "object" || part === null) {
+	if (!isObjectLike(part)) {
 		return false;
 	}
 	const candidate = part as {

@@ -44,6 +44,7 @@ import {
 	runCodingTool,
 	type ToolResourceLimits,
 } from "@wincode/coding-tools";
+import { isObjectLike } from "@wincode/runtime-utils";
 import {
 	formatSkillUserContext,
 	type SkillExecution,
@@ -508,7 +509,7 @@ export type SettledSessionToolCallPart = {
 export const isSettledSessionToolCallPart = (
 	part: unknown
 ): part is SettledSessionToolCallPart => {
-	if (typeof part !== "object" || part === null || !("type" in part)) {
+	if (!(isObjectLike(part) && "type" in part)) {
 		return false;
 	}
 	const candidate = part as UnknownRecord;

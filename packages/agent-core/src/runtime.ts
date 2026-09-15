@@ -1,3 +1,4 @@
+import { isObjectLike } from "@wincode/runtime-utils";
 import { AgentInvariantError } from "./errors";
 import type { AgentTurnEvent, AgentTurnTerminalEvent } from "./events";
 import {
@@ -28,7 +29,7 @@ export const createAgentTurnAbortReason = (
 });
 
 const isTimeoutLike = (value: unknown): boolean => {
-	if (typeof value !== "object" || value === null) {
+	if (!isObjectLike(value)) {
 		return false;
 	}
 	const candidate = value as {

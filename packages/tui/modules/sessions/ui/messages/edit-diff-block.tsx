@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path";
 import { type BoxRenderable, pathToFiletype } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
 import { type EditDiff, isRenderableEditDiff } from "@wincode/coding-tools";
+import { isObjectLike } from "@wincode/runtime-utils";
 import { type ReactNode, useMemo, useRef, useState } from "react";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { stripControlCharacters } from "@/shared/display-sanitize";
@@ -50,7 +51,7 @@ type EditPartFields = {
 };
 
 const readEditPartFields = (value: unknown): EditPartFields => {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+	if (!isObjectLike(value) || Array.isArray(value)) {
 		return {};
 	}
 	const path = Reflect.get(value, "path");

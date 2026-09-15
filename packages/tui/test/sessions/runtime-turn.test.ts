@@ -7,6 +7,7 @@ import type {
 } from "@wincode/agent-core";
 import { createOperationalFailure } from "@wincode/agent-core";
 import { createModelTarget } from "@wincode/ai/model-target";
+import { isObjectLike } from "@wincode/runtime-utils";
 import { buildAgent } from "@/modules/agents/built-ins";
 import { RetiredModelError } from "@/modules/model-target";
 import {
@@ -138,7 +139,7 @@ test("forwards cancellation to a running coding tool", async () => {
 	if (result.type !== "success") {
 		throw new Error(result.errorText);
 	}
-	if (typeof result.output !== "object" || result.output === null) {
+	if (!isObjectLike(result.output)) {
 		throw new Error("The shell tool returned an invalid output.");
 	}
 	expect(Reflect.get(result.output, "exitCode")).toBeNull();

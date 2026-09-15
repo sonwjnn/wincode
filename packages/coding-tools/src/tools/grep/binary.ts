@@ -14,6 +14,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isObjectLike } from "@wincode/runtime-utils";
 import { truncateUtf8 } from "../output-bounds";
 
 export const RIPGREP_VERSION = "15.1.0";
@@ -193,7 +194,7 @@ const getBinaryPaths = (options: RipgrepBinaryOptions = {}) => {
 };
 
 const getErrorCode = (error: unknown): string | undefined => {
-	if (typeof error !== "object" || error === null || !("code" in error)) {
+	if (!(isObjectLike(error) && "code" in error)) {
 		return;
 	}
 	const code = error.code;

@@ -1,3 +1,4 @@
+import { isObjectLike } from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 export const OPERATIONAL_FAILURE_VERSION = 1 as const;
 
@@ -85,7 +86,7 @@ const isAllowedDetails = (
 	if (value === undefined) {
 		return true;
 	}
-	if (typeof value !== "object" || value === null) {
+	if (!isObjectLike(value)) {
 		return false;
 	}
 	const details = value as UnknownRecord;
@@ -146,7 +147,7 @@ export const isOperationalFailureSource = (
 export const isOperationalFailure = (
 	value: unknown
 ): value is OperationalFailure => {
-	if (typeof value !== "object" || value === null) {
+	if (!isObjectLike(value)) {
 		return false;
 	}
 	const failure = value as UnknownRecord;
@@ -216,7 +217,7 @@ export const createOperationalFailure = ({
 const normalizeFailureShape = (
 	value: unknown
 ): OperationalFailure | undefined => {
-	if (typeof value !== "object" || value === null) {
+	if (!isObjectLike(value)) {
 		return;
 	}
 	const failure = value as UnknownRecord;

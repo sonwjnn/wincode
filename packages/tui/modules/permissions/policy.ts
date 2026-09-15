@@ -1,4 +1,5 @@
 import { type CodingToolName, codingToolNames } from "@wincode/coding-tools";
+import { isObjectLike } from "@wincode/runtime-utils";
 import { expandHomeInPath } from "./external-directory";
 
 export type PermissionDecision = "allow" | "ask" | "deny";
@@ -923,7 +924,7 @@ export const describeVisibleToolPermission = (
 	action: PermissionAction
 ): PermissionDecision => {
 	const rule = permission.rules?.[action];
-	if (typeof rule !== "object" || rule === null) {
+	if (!isObjectLike(rule)) {
 		return permission.decide(action, "");
 	}
 	if (isUniversalResourceDeny(rule, action)) {

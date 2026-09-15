@@ -1,3 +1,4 @@
+import { isObjectLike } from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
 
@@ -89,7 +90,7 @@ export type McpToolManifestEntry = {
 export const mcpToolManifestEntrySchema: z.ZodType<McpToolManifestEntry> =
 	z.custom<McpToolManifestEntry>(
 		(value) => {
-			if (typeof value !== "object" || value === null) {
+			if (!isObjectLike(value)) {
 				return false;
 			}
 			const entry = value as UnknownRecord;
@@ -116,8 +117,7 @@ export const mcpToolManifestEntrySchema: z.ZodType<McpToolManifestEntry> =
 				return false;
 			}
 			if (
-				typeof entry.inputSchema !== "object" ||
-				entry.inputSchema === null ||
+				!isObjectLike(entry.inputSchema) ||
 				Array.isArray(entry.inputSchema)
 			) {
 				return false;

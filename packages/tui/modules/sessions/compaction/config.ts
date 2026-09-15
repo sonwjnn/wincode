@@ -1,5 +1,6 @@
 import { getModelContextTokens } from "@wincode/ai/model-usage";
 import type { ChatModelSelection } from "@wincode/ai/models";
+import { isObjectLike } from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
 import type { ModelPricingTable } from "@/modules/model-pricing";
@@ -406,7 +407,7 @@ const stringifyForEstimate = (value: unknown): string => {
 	}
 };
 const getObjectField = (value: unknown, key: string): unknown => {
-	if (typeof value !== "object" || value === null || !(key in value)) {
+	if (!(isObjectLike(value) && key in value)) {
 		return;
 	}
 	return (value as UnknownRecord)[key];

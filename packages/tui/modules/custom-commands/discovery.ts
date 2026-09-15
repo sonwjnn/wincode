@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { isObjectLike } from "@wincode/runtime-utils";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { resolveConfigRelativePath } from "@/shared/config/resolve-config-relative-path";
 import { getProjectRoots } from "@/shared/paths/project-roots";
@@ -31,8 +32,7 @@ function collect(
 const configuredRoots = (snapshot: ConfigSnapshot) => {
 	const commands = snapshot.document.commands;
 	if (
-		typeof commands !== "object" ||
-		commands === null ||
+		!isObjectLike(commands) ||
 		Array.isArray(commands) ||
 		!("paths" in commands) ||
 		!Array.isArray(commands.paths)

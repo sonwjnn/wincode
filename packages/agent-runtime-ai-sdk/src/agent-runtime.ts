@@ -29,6 +29,7 @@ import type { ModelFailure } from "@wincode/ai/model-failures";
 import { normalizeModelFailure } from "@wincode/ai/model-failures";
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import { normalizeModelUsage } from "@wincode/ai/model-usage";
+import { isObjectLike } from "@wincode/runtime-utils";
 import {
 	jsonSchema,
 	stepCountIs,
@@ -187,7 +188,7 @@ type AiSdkTextStreamPart = {
 const isAiSdkTextStreamPart = (
 	value: unknown
 ): value is AiSdkTextStreamPart => {
-	if (typeof value !== "object" || value === null || !("type" in value)) {
+	if (!(isObjectLike(value) && "type" in value)) {
 		return false;
 	}
 	return typeof value.type === "string";

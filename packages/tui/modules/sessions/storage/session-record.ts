@@ -34,6 +34,7 @@ import {
 	isFiniteNonNegativeNumber,
 	isNonEmptyString,
 	isNonNegativeInteger,
+	isObjectLike,
 } from "@wincode/runtime-utils";
 import { randomUUIDv7 } from "bun";
 import type { UnknownRecord } from "type-fest";
@@ -55,7 +56,7 @@ import {
 } from "./attachment-store";
 
 const isRecordModel = (value: unknown): boolean => {
-	if (typeof value !== "object" || value === null) {
+	if (!isObjectLike(value)) {
 		return false;
 	}
 	const model = value as {
@@ -78,7 +79,7 @@ const isOptionalNonNegativeInteger = (value: unknown): boolean =>
 	value === undefined || isNonNegativeInteger(value);
 
 const isUsage = (value: unknown): boolean => {
-	if (typeof value !== "object" || value === null) {
+	if (!isObjectLike(value)) {
 		return false;
 	}
 	const usage = value as UnknownRecord;
@@ -111,7 +112,7 @@ const isFailure = (value: unknown): value is OperationalFailure =>
 	isOperationalFailure(value);
 
 const isAgentTurnOutcome = (value: unknown): boolean => {
-	if (typeof value !== "object" || value === null) {
+	if (!isObjectLike(value)) {
 		return false;
 	}
 	const outcome = value as {
@@ -148,7 +149,7 @@ const isAgentTurnOutcome = (value: unknown): boolean => {
 const isSessionRecordOutcome = (
 	value: unknown
 ): value is SessionRecordOutcome => {
-	if (typeof value !== "object" || value === null) {
+	if (!isObjectLike(value)) {
 		return false;
 	}
 	const outcome = value as UnknownRecord;
@@ -180,7 +181,7 @@ export class SessionRecordInvariantError extends AgentInvariantError {
 export const getSessionRecordValidationError = (
 	value: unknown
 ): string | null => {
-	if (typeof value !== "object" || value === null) {
+	if (!isObjectLike(value)) {
 		return "record must be an object";
 	}
 	const record = value as UnknownRecord;

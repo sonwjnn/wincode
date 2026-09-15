@@ -1,4 +1,5 @@
 import { dirname, join } from "node:path";
+import { isObjectLike } from "@wincode/runtime-utils";
 import type {
 	SkillCandidate,
 	SkillRootDescriptor,
@@ -30,8 +31,7 @@ export type SkillDiscoveryInput = {
 const configuredRoots = (snapshot: ConfigSnapshot) => {
 	const skills = snapshot.document.skills;
 	if (
-		typeof skills !== "object" ||
-		skills === null ||
+		!isObjectLike(skills) ||
 		Array.isArray(skills) ||
 		!("paths" in skills) ||
 		!Array.isArray(skills.paths)

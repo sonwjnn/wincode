@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { isObjectLike } from "@wincode/runtime-utils";
 import { WORKSPACE_IGNORED_DIRECTORY_NAMES } from "../../workspace";
 import {
 	RipgrepUnavailableError,
@@ -25,7 +26,7 @@ export class RipgrepInvalidGlobPatternError extends Error {
 }
 
 const getErrorCode = (error: unknown): string | undefined => {
-	if (typeof error !== "object" || error === null || !("code" in error)) {
+	if (!(isObjectLike(error) && "code" in error)) {
 		return;
 	}
 	const code = error.code;

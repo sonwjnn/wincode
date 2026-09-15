@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { relative, resolve } from "node:path";
+import { isObjectLike } from "@wincode/runtime-utils";
 import {
 	canonicalPath,
 	getProjectRootsWithinWorkspace,
@@ -220,7 +221,7 @@ const fileSystemCacheIdentity = (
 };
 
 const isMissingError = (error: unknown): boolean => {
-	if (typeof error !== "object" || error === null || !("code" in error)) {
+	if (!(isObjectLike(error) && "code" in error)) {
 		return false;
 	}
 	return error.code === "ENOENT";

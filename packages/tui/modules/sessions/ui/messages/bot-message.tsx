@@ -1,6 +1,6 @@
 import type { BoxRenderable } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
-import { isPlainObject } from "@wincode/runtime-utils";
+import { isObjectLike, isPlainObject } from "@wincode/runtime-utils";
 import { memo, type ReactNode, useMemo, useRef, useState } from "react";
 import type { UnknownRecord } from "type-fest";
 import { buildAgent } from "@/modules/agents";
@@ -136,11 +136,7 @@ const getFallbackError = (part: ToolPart, auditOwnsError: boolean): string => {
 };
 
 const formatMcpToolArgs = (part: ToolPart): string => {
-	if (
-		typeof part.input !== "object" ||
-		part.input === null ||
-		Array.isArray(part.input)
-	) {
+	if (!isObjectLike(part.input) || Array.isArray(part.input)) {
 		return formatToolArgumentValue(part.input);
 	}
 

@@ -1,3 +1,4 @@
+import { isObjectLike } from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
 import {
@@ -44,8 +45,7 @@ const getValueAtPath = (
 	let current: unknown = document;
 	for (const segment of configPath) {
 		if (
-			typeof current !== "object" ||
-			current === null ||
+			!isObjectLike(current) ||
 			Array.isArray(current) ||
 			!Object.hasOwn(current, segment)
 		) {

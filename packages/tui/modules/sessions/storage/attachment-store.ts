@@ -10,6 +10,7 @@ import {
 } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import type { AttachmentId, SessionMessageId } from "@wincode/agent-core";
+import { isObjectLike } from "@wincode/runtime-utils";
 import { eq } from "drizzle-orm";
 import type { Except, Merge, UnknownRecord } from "type-fest";
 import { z } from "zod";
@@ -545,7 +546,7 @@ export const isAttachmentReference = (
 export const getAttachmentReference = (
 	part: unknown
 ): AttachmentReference | null => {
-	if (typeof part !== "object" || part === null || !("url" in part)) {
+	if (!(isObjectLike(part) && "url" in part)) {
 		return null;
 	}
 	const candidate = part as UnknownRecord;

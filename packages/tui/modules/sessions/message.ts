@@ -19,6 +19,7 @@ import {
 	modelVariantSchema,
 } from "@wincode/ai/models";
 import type { CodingToolName } from "@wincode/coding-tools";
+import { isObjectLike } from "@wincode/runtime-utils";
 import type {
 	SkillActivation,
 	SkillActivationSource,
@@ -246,7 +247,7 @@ export const isFileMentionPart = (part: SessionPart): part is FileMentionPart =>
 	part.type === "data-fileMention";
 
 export const isSessionToolPart = (part: unknown): part is SessionToolPart => {
-	if (typeof part !== "object" || part === null || !("type" in part)) {
+	if (!(isObjectLike(part) && "type" in part)) {
 		return false;
 	}
 	const candidate = part as UnknownRecord;
@@ -388,7 +389,7 @@ export const createSessionUserMessage = (
 });
 
 export const isSessionMessage = (value: unknown): value is SessionMessage => {
-	if (typeof value !== "object" || value === null) {
+	if (!isObjectLike(value)) {
 		return false;
 	}
 	const candidate = value as UnknownRecord;

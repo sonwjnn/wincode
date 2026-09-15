@@ -1,6 +1,7 @@
 import { type SessionMessageId, toSessionMessageId } from "@wincode/agent-core";
 import { getModelFailureMessage } from "@wincode/ai/model-failures";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import { isObjectLike } from "@wincode/runtime-utils";
 import { isSkillToolPart } from "@wincode/skills";
 import { randomUUIDv7 } from "bun";
 import {
@@ -274,9 +275,7 @@ type CutPoint = {
 };
 const getTextFromPart = (part: unknown): string | null => {
 	if (
-		typeof part !== "object" ||
-		part === null ||
-		!("type" in part) ||
+		!(isObjectLike(part) && "type" in part) ||
 		part.type !== "text" ||
 		!("text" in part) ||
 		typeof part.text !== "string"
@@ -287,14 +286,14 @@ const getTextFromPart = (part: unknown): string | null => {
 };
 
 const getPartType = (part: unknown): string => {
-	if (typeof part !== "object" || part === null || !("type" in part)) {
+	if (!(isObjectLike(part) && "type" in part)) {
 		return "unknown";
 	}
 	return typeof part.type === "string" ? part.type : "unknown";
 };
 
 const getStringField = (value: unknown, key: string): string | undefined => {
-	if (typeof value !== "object" || value === null || !(key in value)) {
+	if (!(isObjectLike(value) && key in value)) {
 		return;
 	}
 	const field = Reflect.get(value, key);
@@ -302,7 +301,7 @@ const getStringField = (value: unknown, key: string): string | undefined => {
 };
 
 const getNumberField = (value: unknown, key: string): number | undefined => {
-	if (typeof value !== "object" || value === null || !(key in value)) {
+	if (!(isObjectLike(value) && key in value)) {
 		return;
 	}
 	const field = Reflect.get(value, key);

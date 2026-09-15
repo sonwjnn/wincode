@@ -4,6 +4,7 @@ import type { ModelId } from "@wincode/ai/models";
 import {
 	isFiniteNonNegativeNumber,
 	isNonNegativeInteger,
+	isObjectLike,
 } from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 import { type AgentId, isAgentId } from "./agent";
@@ -155,7 +156,7 @@ const isUsage = (value: unknown): value is ModelUsage =>
 	modelUsageSchema.safeParse(value).success;
 
 const hasBaseEvent = (value: unknown): value is AgentTurnEventBase => {
-	if (typeof value !== "object" || value === null) {
+	if (!isObjectLike(value)) {
 		return false;
 	}
 	const event = value as UnknownRecord;

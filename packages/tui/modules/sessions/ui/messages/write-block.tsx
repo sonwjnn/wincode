@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path";
 import { pathToFiletype } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
+import { isObjectLike } from "@wincode/runtime-utils";
 import { useMemo, useState } from "react";
 import type { UnknownRecord } from "type-fest";
 import type { SessionMessage } from "@/modules/sessions/message";
@@ -43,11 +44,7 @@ const sanitizeWriteContent = (content: string): string => {
 };
 
 const getWriteInput = (part: WriteToolPart): WriteInput | null => {
-	if (
-		typeof part.input !== "object" ||
-		part.input === null ||
-		Array.isArray(part.input)
-	) {
+	if (!isObjectLike(part.input) || Array.isArray(part.input)) {
 		return null;
 	}
 	const input = part.input as UnknownRecord;
