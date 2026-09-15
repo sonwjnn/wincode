@@ -110,9 +110,13 @@ export const isJsonObject = (
 	}
 };
 
+/** Narrows an unknown value to a string, including empty strings. */
+export const isString = (value: unknown): value is string =>
+	typeof value === "string";
+
 /** Narrows an unknown value to a non-empty string without trimming it. */
 export const isNonEmptyString = (value: unknown): value is string =>
-	typeof value === "string" && value.length > 0;
+	isString(value) && value.length > 0;
 
 /** Narrows an unknown value to a finite number greater than or equal to zero. */
 export const isFiniteNonNegativeNumber = (value: unknown): value is number =>

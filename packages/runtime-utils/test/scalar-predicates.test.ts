@@ -4,6 +4,7 @@ import {
 	isNonEmptyString,
 	isNonNegativeInteger,
 	isPositiveInteger,
+	isString,
 } from "../src/index";
 
 describe("runtime scalar predicates", () => {
@@ -12,6 +13,14 @@ describe("runtime scalar predicates", () => {
 		expect(isNonEmptyString(" ")).toBe(true);
 		expect(isNonEmptyString("")).toBe(false);
 		expect(isNonEmptyString(null)).toBe(false);
+	});
+
+	test("accepts strings including empty strings", () => {
+		expect(isString("text")).toBe(true);
+		expect(isString("")).toBe(true);
+		expect(isString(" ")).toBe(true);
+		expect(isString(null)).toBe(false);
+		expect(isString(1)).toBe(false);
 	});
 
 	test("accepts finite non-negative numbers", () => {
