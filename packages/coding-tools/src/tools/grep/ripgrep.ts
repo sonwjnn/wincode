@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import type { UnknownRecord } from "type-fest";
 import { truncateUtf8 } from "../output-bounds";
 import { getToolResourceLimits } from "../resource-limits";
 import type {
@@ -37,9 +38,9 @@ const getErrorCode = (error: unknown): string | undefined => {
 const getErrorMessage = (error: unknown): string =>
 	error instanceof Error ? error.message : "ripgrep search failed";
 
-const asRecord = (value: unknown): Record<string, unknown> | undefined =>
+const asRecord = (value: unknown): UnknownRecord | undefined =>
 	typeof value === "object" && value !== null && !Array.isArray(value)
-		? (value as Record<string, unknown>)
+		? (value as UnknownRecord)
 		: undefined;
 
 const normalizeMatchPath = (cwd: string, matchPath: string): string =>

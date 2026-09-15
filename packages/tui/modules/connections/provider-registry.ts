@@ -1,4 +1,5 @@
 import type { ConnectionProviderId } from "@wincode/ai/models";
+import type { AsyncReturnType } from "type-fest";
 import {
 	createAnthropicProviderDefinition,
 	createGoogleProviderDefinition,
@@ -51,8 +52,8 @@ export type CredentialByProvider = {
 	>[0];
 };
 export type AuthorizationByProvider = {
-	[P in keyof ProviderRegistry]: Awaited<
-		ReturnType<ProviderRegistry[P]["authorize"]>
+	[P in keyof ProviderRegistry]: AsyncReturnType<
+		ProviderRegistry[P]["authorize"]
 	>["authorization"];
 };
 export const createProviderRegistry = (

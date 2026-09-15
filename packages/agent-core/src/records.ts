@@ -1,6 +1,7 @@
 import { type ModelUsage, modelUsageSchema } from "@wincode/ai/model-usage";
 import type { ModelId, ModelVariant } from "@wincode/ai/models";
 import type { SkillActivationSource } from "@wincode/skills";
+import type { ReadonlyDeep, UnknownRecord } from "type-fest";
 import { isAgentId } from "./agent";
 import type { OperationalFailure } from "./failures";
 import type {
@@ -21,77 +22,78 @@ import { isAgentTurnTextPart } from "./turn";
 export const SESSION_RECORD_VERSION = 1 as const;
 
 /** Durable outcome of one committed Tool Call. */
-export type ToolCallOutcomeRecord =
+export type ToolCallOutcomeRecord = ReadonlyDeep<
 	| {
-			readonly kind: "success";
-			readonly output: unknown;
+			kind: "success";
+			output: unknown;
 	  }
 	| {
-			readonly errorText: string;
-			readonly kind: "failure";
-	  };
+			errorText: string;
+			kind: "failure";
+	  }
+>;
 
 /**
  * One committed Tool Call part of an assistant message: the request input,
  * the settled outcome, and the Agent Turn event sequence of the outcome so
  * consumers can order durable content against the transient event stream.
  */
-export type SessionToolCallPart = {
-	readonly input: unknown;
-	readonly outcome: ToolCallOutcomeRecord;
-	readonly sequence: number;
-	readonly toolCallId: ToolCallId;
-	readonly toolName: string;
-	readonly type: "tool-call";
-};
+export type SessionToolCallPart = ReadonlyDeep<{
+	input: unknown;
+	outcome: ToolCallOutcomeRecord;
+	sequence: number;
+	toolCallId: ToolCallId;
+	toolName: string;
+	type: "tool-call";
+}>;
 
 /** A durable reference to an externalized session attachment. */
-export type SessionAttachmentReferencePart = {
-	readonly attachmentId: AttachmentId;
-	readonly available?: boolean;
-	readonly byteLength: number;
-	readonly filename: string;
-	readonly height?: number;
-	readonly mediaType: string;
-	readonly type: "attachment-reference";
-	readonly width?: number;
-};
+export type SessionAttachmentReferencePart = ReadonlyDeep<{
+	attachmentId: AttachmentId;
+	available?: boolean;
+	byteLength: number;
+	filename: string;
+	height?: number;
+	mediaType: string;
+	type: "attachment-reference";
+	width?: number;
+}>;
 
 /** A structured file mention retained without its transient UI payload type. */
-export type SessionFileMentionPart = {
-	readonly data: {
-		readonly byteLength: number;
-		readonly content: string;
-		readonly error?: string;
-		readonly kind: "directory" | "file";
-		readonly path: string;
-		readonly truncated: boolean;
+export type SessionFileMentionPart = ReadonlyDeep<{
+	data: {
+		byteLength: number;
+		content: string;
+		error?: string;
+		kind: "directory" | "file";
+		path: string;
+		truncated: boolean;
 	};
-	readonly id?: string;
-	readonly type: "file-mention";
-};
+	id?: string;
+	type: "file-mention";
+}>;
 
 /** Sanitized Skill activation metadata retained in a Session Record. */
-export type SessionSkillActivationRecord = {
-	readonly arguments?: string;
-	readonly contentHash: string;
-	readonly name: string;
-	readonly source: SkillActivationSource;
-};
+export type SessionSkillActivationRecord = ReadonlyDeep<{
+	arguments?: string;
+	contentHash: string;
+	name: string;
+	source: SkillActivationSource;
+}>;
 
 /** Per-message metadata safe to retain outside a transient Model Target. */
-export type SessionMessageMetadataRecord = {
-	readonly agent?: AgentId;
-	readonly model?: {
-		readonly modelId: ModelId;
-		readonly providerId: string;
+export type SessionMessageMetadataRecord = ReadonlyDeep<{
+	agent?: AgentId;
+	model?: {
+		modelId: ModelId;
+		providerId: string;
 	};
-	readonly responseTimeMs?: number;
-	readonly skill?: SessionSkillActivationRecord;
-	readonly sourceUserMessageId?: SessionMessageId;
-	readonly usage?: ModelUsage;
-	readonly variant?: ModelVariant;
-};
+	responseTimeMs?: number;
+	skill?: SessionSkillActivationRecord;
+	sourceUserMessageId?: SessionMessageId;
+	usage?: ModelUsage;
+	variant?: ModelVariant;
+}>;
 
 export type SessionMessagePart =
 	| AgentTurnTextPart
@@ -104,79 +106,81 @@ export type SessionMessagePart =
  * appear here; attachments and file mentions retain bounded references/data
  * owned by the application.
  */
-export type SessionMessageRecord = {
-	readonly id: SessionMessageId;
-	readonly metadata?: SessionMessageMetadataRecord;
-	readonly parts: readonly SessionMessagePart[];
-	readonly role: "assistant" | "user";
-};
+export type SessionMessageRecord = ReadonlyDeep<{
+	id: SessionMessageId;
+	metadata?: SessionMessageMetadataRecord;
+	parts: SessionMessagePart[];
+	role: "assistant" | "user";
+}>;
 
 /**
  * Durable semantic outcome of one Agent Turn. Every non-completed outcome
  * carries a safe Operational Failure ticket; interruption records why the
  * execution stopped without pretending a provider stream can be resumed.
  */
-export type AgentTurnOutcomeRecord =
+export type AgentTurnOutcomeRecord = ReadonlyDeep<
 	| {
-			readonly finishedAt: number;
-			readonly kind: "completed";
-			readonly usage?: ModelUsage;
+			finishedAt: number;
+			kind: "completed";
+			usage?: ModelUsage;
 	  }
 	| {
-			readonly failure: OperationalFailure;
-			readonly finishedAt: number;
-			readonly kind: "failed";
+			failure: OperationalFailure;
+			finishedAt: number;
+			kind: "failed";
 	  }
 	| {
-			readonly failure: OperationalFailure;
-			readonly finishedAt: number;
-			readonly kind: "cancelled";
+			failure: OperationalFailure;
+			finishedAt: number;
+			kind: "cancelled";
 	  }
 	| {
-			readonly failure: OperationalFailure;
-			readonly finishedAt: number;
-			readonly kind: "interrupted";
-			readonly reason: AgentTurnInterruptionReason;
-	  };
+			failure: OperationalFailure;
+			finishedAt: number;
+			kind: "interrupted";
+			reason: AgentTurnInterruptionReason;
+	  }
+>;
 
 /**
  * Durable meaning of one Session Record row. User and Tool rows are
  * ordinary content checkpoints; assistant rows also carry the terminal Agent
  * Turn outcome that produced the assistant content.
  */
-export type SessionRecordOutcome =
+export type SessionRecordOutcome = ReadonlyDeep<
 	| {
-			readonly kind: "user";
+			kind: "user";
 	  }
 	| {
-			readonly kind: "tool";
+			kind: "tool";
 	  }
 	| {
-			readonly kind: "assistant";
-			readonly terminal: AgentTurnOutcomeRecord;
-	  };
+			kind: "assistant";
+			terminal: AgentTurnOutcomeRecord;
+	  }
+>;
 
 /**
  * One durable Session Record row. Each row contains one logical user,
  * assistant, or completed Tool Call message. The runtime Agent Turn identity
  * is only meaningful while execution is live; retries do not mutate this row.
  */
-export type SessionRecord = {
-	readonly agentId: AgentId;
-	readonly delegation?: AgentTurnDelegation;
-	readonly id: SessionRecordId;
-	readonly messages: readonly SessionMessageRecord[];
-	readonly model: {
-		readonly modelId: ModelId;
-		readonly providerId: string;
-		readonly variant?: ModelVariant;
+export type SessionRecord = ReadonlyDeep<{
+	agentId: AgentId;
+	delegation?: AgentTurnDelegation;
+	id: SessionRecordId;
+	messages: SessionMessageRecord[];
+	model: {
+		modelId: ModelId;
+		providerId: string;
+		variant?: ModelVariant;
 	};
-	readonly outcome: SessionRecordOutcome;
-	readonly turnId: AgentTurnId;
-	readonly version: typeof SESSION_RECORD_VERSION;
-};
+	outcome: SessionRecordOutcome;
+	turnId: AgentTurnId;
+	version: typeof SESSION_RECORD_VERSION;
+}>;
 
-const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
+const isObjectRecord = (value: unknown): value is UnknownRecord =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 
 const isNonNegativeInteger = (value: unknown): value is number =>

@@ -53,6 +53,7 @@ import {
 } from "@wincode/skills";
 import { sampleSkillResources } from "@wincode/skills/filesystem";
 import { randomUUIDv7 } from "bun";
+import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
 import type { McpCatalogSnapshot, McpSnapshotTool } from "@/modules/mcp";
 import type { ResolvedCodingAgent } from "../../agents/built-ins";
@@ -510,7 +511,7 @@ export const isSettledSessionToolCallPart = (
 	if (typeof part !== "object" || part === null || !("type" in part)) {
 		return false;
 	}
-	const candidate = part as Record<string, unknown>;
+	const candidate = part as UnknownRecord;
 	if (
 		typeof candidate.type !== "string" ||
 		settledToolName(candidate.type, candidate.toolName) === undefined

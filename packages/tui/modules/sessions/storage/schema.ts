@@ -7,18 +7,13 @@ import {
 	text,
 	unique,
 } from "drizzle-orm/sqlite-core";
+import type { Jsonify } from "type-fest";
 import type { SessionCompaction } from "../compaction/types";
 import type {
 	PromptHistoryEntry,
 	SessionRecordStorageOutcome,
 } from "./session-store";
-export type SerializedJson<T> = T extends string
-	? string
-	: T extends readonly (infer Item)[]
-		? SerializedJson<Item>[]
-		: T extends object
-			? { [Key in keyof T]: SerializedJson<T[Key]> }
-			: T;
+export type SerializedJson<T> = Jsonify<T>;
 
 export const sessionWorkspace = sqliteTable("session_workspace", {
 	id: text("id").primaryKey(),

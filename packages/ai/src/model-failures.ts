@@ -35,25 +35,25 @@ export const modelFailureRetryDispositions = [
 export type ModelFailureRetryDisposition =
 	(typeof modelFailureRetryDispositions)[number];
 
-export type ModelFailureDetails = {
-	readonly modelId?: string;
-	readonly providerId?: ConnectionProviderId;
-	readonly retryAfterMs?: number;
-	readonly statusCode?: number;
-};
+export type ModelFailureDetails = Readonly<{
+	modelId?: string;
+	providerId?: ConnectionProviderId;
+	retryAfterMs?: number;
+	statusCode?: number;
+}>;
 export type ModelFailureContext = Pick<
 	ModelFailureDetails,
 	"modelId" | "providerId"
 >;
 
-export type ModelFailure = {
-	readonly code: ModelFailureCode;
-	readonly details?: ModelFailureDetails;
-	readonly message: string;
-	readonly retry: ModelFailureRetryDisposition;
-	readonly source: ModelFailureSource;
-	readonly version: typeof MODEL_FAILURE_VERSION;
-};
+export type ModelFailure = Readonly<{
+	code: ModelFailureCode;
+	details?: ModelFailureDetails;
+	message: string;
+	retry: ModelFailureRetryDisposition;
+	source: ModelFailureSource;
+	version: typeof MODEL_FAILURE_VERSION;
+}>;
 const modelFailureDetailsSchema = z
 	.object({
 		modelId: z.string().min(1).optional(),

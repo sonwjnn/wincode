@@ -31,6 +31,7 @@ import {
 } from "@wincode/ai/models";
 import { codingToolNames } from "@wincode/coding-tools";
 import { randomUUIDv7 } from "bun";
+import type { UnknownRecord } from "type-fest";
 import type {
 	SessionMessage,
 	SessionMessageMetadata,
@@ -85,7 +86,7 @@ const isUsage = (value: unknown): boolean => {
 	if (typeof value !== "object" || value === null) {
 		return false;
 	}
-	const usage = value as Record<string, unknown>;
+	const usage = value as UnknownRecord;
 	if (
 		Object.keys(usage).some(
 			(key) =>
@@ -155,7 +156,7 @@ const isSessionRecordOutcome = (
 	if (typeof value !== "object" || value === null) {
 		return false;
 	}
-	const outcome = value as Record<string, unknown>;
+	const outcome = value as UnknownRecord;
 	if (outcome.kind === "user" || outcome.kind === "tool") {
 		return Object.keys(outcome).length === 1;
 	}
@@ -187,7 +188,7 @@ export const getSessionRecordValidationError = (
 	if (typeof value !== "object" || value === null) {
 		return "record must be an object";
 	}
-	const record = value as Record<string, unknown>;
+	const record = value as UnknownRecord;
 	if (record.version !== SESSION_RECORD_VERSION) {
 		return `unsupported record version ${String(record.version)}`;
 	}

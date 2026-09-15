@@ -2,6 +2,7 @@ import type { Dirent } from "node:fs";
 import { readdirSync, statSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import type { SetReadonly, SetRequired } from "type-fest";
 import { parseSkillFile } from "./frontmatter";
 import { hashSkillBody } from "./hash";
 import type { Skill, SkillScope } from "./types";
@@ -25,9 +26,10 @@ export type SkillCandidate = {
 	readonly precedence: number;
 };
 
-export type LoadedSkill = Skill & {
-	readonly baseDirectory: string;
-	readonly contentHash: string;
+export type LoadedSkill = SetReadonly<
+	SetRequired<Skill, "baseDirectory" | "contentHash">,
+	"baseDirectory" | "contentHash"
+> & {
 	readonly precedence: number;
 	readonly root: string;
 	readonly source: string;

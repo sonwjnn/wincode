@@ -1,4 +1,5 @@
 import { createTwoFilesPatch, parsePatch } from "diff";
+import type { UnknownRecord } from "type-fest";
 import {
 	getToolResourceLimits,
 	type ToolResourceLimits,
@@ -304,7 +305,7 @@ export const isRenderableEditDiff = (
 		return false;
 	}
 
-	const candidate = value as Record<string, unknown>;
+	const candidate = value as UnknownRecord;
 	if (
 		typeof candidate.patch !== "string" ||
 		typeof candidate.additions !== "number" ||

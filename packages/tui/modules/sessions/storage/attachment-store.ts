@@ -11,6 +11,7 @@ import {
 import { dirname, join, relative, resolve, sep } from "node:path";
 import type { AttachmentId, SessionMessageId } from "@wincode/agent-core";
 import { eq } from "drizzle-orm";
+import type { Except, Merge, UnknownRecord } from "type-fest";
 import { z } from "zod";
 import type {
 	SessionFilePart,
@@ -88,11 +89,14 @@ export type AttachmentReference = Readonly<
 	z.infer<typeof attachmentReferenceSchema>
 >;
 
-export type AttachmentReferenceFilePart = SessionFilePart &
-	AttachmentReference & {
-		displayAvailability?: "missing";
-		url: `${typeof ATTACHMENT_URL_PREFIX}${string}`;
-	};
+export type AttachmentReferenceFilePart = Merge<
+	SessionFilePart,
+	AttachmentReference &
+		Readonly<{
+			displayAvailability?: "missing";
+			url: `${typeof ATTACHMENT_URL_PREFIX}${string}`;
+		}>
+>;
 
 export type AttachmentMetadataRecord = {
 	attachmentId: AttachmentId;
@@ -215,10 +219,13 @@ export type AttachmentMaintenanceReport = {
 	orphanCount: number;
 };
 
-export type CompactionAttachmentMetadata = AttachmentReference & {
-	available: boolean;
-	payloadOmitted: true;
-};
+export type CompactionAttachmentMetadata = Merge<
+	AttachmentReference,
+	Readonly<{
+		available: boolean;
+		payloadOmitted: true;
+	}>
+>;
 
 export type SessionAttachmentStore = {
 	annotateMessagesForDisplay: (
@@ -541,7 +548,7 @@ export const getAttachmentReference = (
 	if (typeof part !== "object" || part === null || !("url" in part)) {
 		return null;
 	}
-	const candidate = part as Record<string, unknown>;
+	const candidate = part as UnknownRecord;
 	const parsed = attachmentReferenceSchema.safeParse({
 		attachmentId: candidate.attachmentId,
 		...(candidate.available === undefined
@@ -1487,7 +1494,7 @@ export const createSessionAttachmentStore = ({
 		safetyWindowMs: number,
 		remainingEntries: number,
 		remainingBytes: number
-	): Promise<Omit<OrphanScan, "directories">> => {
+	): Promise<Except<OrphanScan, "directories">> => {
 		if (
 			!ATTACHMENT_ID_PATTERN.test(attachmentId) ||
 			blobKey !== attachmentBlobKey(attachmentId) ||

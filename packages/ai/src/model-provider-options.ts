@@ -1,3 +1,4 @@
+import type { ReadonlyDeep } from "type-fest";
 import { z } from "zod";
 import type { ModelMetadataEntry } from "./model-metadata";
 import { getModelMetadata } from "./model-metadata-runtime";
@@ -20,34 +21,35 @@ export type GoogleThinkingLevel = Exclude<
 	"none" | "thinking" | "xhigh" | "max"
 >;
 
-export type OpenAIProviderOptions = {
-	readonly openai: {
-		readonly reasoningEffort?: OpenAIReasoningEffort;
-		readonly reasoningSummary?: "detailed";
-		readonly store?: boolean;
+export type OpenAIProviderOptions = ReadonlyDeep<{
+	openai: {
+		reasoningEffort?: OpenAIReasoningEffort;
+		reasoningSummary?: "detailed";
+		store?: boolean;
 	};
-};
+}>;
 
-export type AnthropicThinking =
-	| { readonly type: "adaptive" }
-	| { readonly type: "disabled" }
-	| { readonly budgetTokens: number; readonly type: "enabled" };
+export type AnthropicThinking = ReadonlyDeep<
+	| { type: "adaptive" }
+	| { type: "disabled" }
+	| { budgetTokens: number; type: "enabled" }
+>;
 
-export type AnthropicProviderOptions = {
-	readonly anthropic: {
-		readonly effort?: AnthropicEffort;
-		readonly thinking?: AnthropicThinking;
+export type AnthropicProviderOptions = ReadonlyDeep<{
+	anthropic: {
+		effort?: AnthropicEffort;
+		thinking?: AnthropicThinking;
 	};
-};
+}>;
 
-export type GoogleProviderOptions = {
-	readonly google: {
-		readonly thinkingConfig: {
-			readonly thinkingBudget?: number;
-			readonly thinkingLevel?: GoogleThinkingLevel;
+export type GoogleProviderOptions = ReadonlyDeep<{
+	google: {
+		thinkingConfig: {
+			thinkingBudget?: number;
+			thinkingLevel?: GoogleThinkingLevel;
 		};
 	};
-};
+}>;
 
 /**
  * Provider extensions are deliberately a discriminated union. A caller cannot
@@ -68,15 +70,15 @@ export type ProviderOptionsFor<P extends ConnectionProviderId> =
 				? GoogleProviderOptions
 				: OpenAIProviderOptions | AnthropicProviderOptions;
 
-export type ModelProviderResolutionOptions = {
-	readonly maxOutputTokens?: number;
-	readonly variant?: ModelVariant;
-};
+export type ModelProviderResolutionOptions = Readonly<{
+	maxOutputTokens?: number;
+	variant?: ModelVariant;
+}>;
 
-export type ResolvedModelProviderOptions = {
-	readonly maxOutputTokens?: number;
-	readonly providerOptions?: ModelProviderOptions;
-};
+export type ResolvedModelProviderOptions = Readonly<{
+	maxOutputTokens?: number;
+	providerOptions?: ModelProviderOptions;
+}>;
 
 export const openAIProviderOptionsSchema = z
 	.object({

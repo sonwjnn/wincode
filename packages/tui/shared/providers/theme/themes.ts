@@ -1,3 +1,4 @@
+import type { Except, SetRequired } from "type-fest";
 import { getContrastingTextColor } from "./color-contrast";
 import {
 	DIFF_TOKEN_OVERRIDES,
@@ -73,8 +74,8 @@ export type Theme = {
 
 export type ThemeDefinition = {
 	name: string;
-	colors: Pick<
-		ThemeColors,
+	colors: SetRequired<
+		Partial<Except<ThemeColors, "agent">>,
 		| "primary"
 		| "secondary"
 		| "planMode"
@@ -89,8 +90,7 @@ export type ThemeDefinition = {
 		| "backgroundMenu"
 		| "border"
 		| "borderSubtle"
-	> &
-		Partial<Omit<ThemeColors, "agent">>;
+	>;
 };
 
 const TEXT_BRIGHTNESS = 0.88;

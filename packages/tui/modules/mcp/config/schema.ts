@@ -1,3 +1,4 @@
+import type { SetRequired } from "type-fest";
 import { z } from "zod";
 import { mcpExecutionPolicySchema } from "../policy";
 
@@ -69,11 +70,10 @@ export const mergedServerSchema = z.discriminatedUnion("type", [
 	mergedLocalServerSchema,
 	mergedRemoteServerSchema,
 ]);
-export type McpTimeouts = z.infer<typeof timeoutPatchSchema> & {
-	startup: number;
-	catalog: number;
-	execution: number;
-};
+export type McpTimeouts = SetRequired<
+	z.infer<typeof timeoutPatchSchema>,
+	"startup" | "catalog" | "execution"
+>;
 export type LocalMcpServerConfig = z.infer<typeof localServerSchema>;
 export type RemoteMcpServerConfig = z.infer<typeof remoteServerSchema>;
 export type ResolvedMcpServerConfig = z.infer<typeof resolvedServerSchema>;

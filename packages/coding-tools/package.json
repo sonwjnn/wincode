@@ -16,6 +16,7 @@
   "dependencies": {
     "diff": "catalog:",
     "ignore": "^5.3.2",
+    "type-fest": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

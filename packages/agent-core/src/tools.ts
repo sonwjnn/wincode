@@ -1,3 +1,4 @@
+import type { Promisable, UnknownRecord } from "type-fest";
 import type { z } from "zod";
 import { AgentInvariantError } from "./errors";
 import type { ToolCallId } from "./identifiers";
@@ -13,16 +14,12 @@ export const isToolCallId = (value: unknown): value is ToolCallId =>
  */
 export type ToolJsonSchema = {
 	readonly jsonSchema: Record<string, unknown>;
-	readonly validate?: (
-		value: unknown
-	) =>
-		| PromiseLike<
-				| { readonly success: true; readonly value: unknown }
-				| { readonly error: Error; readonly success: false }
-		  >
-		| { readonly success: true; readonly value: unknown }
-		| { readonly error: Error; readonly success: false };
+	readonly validate?: (value: unknown) => Promisable<ToolValidationResult>;
 };
+
+type ToolValidationResult =
+	| { readonly success: true; readonly value: unknown }
+	| { readonly error: Error; readonly success: false };
 
 /**
  * The SDK-neutral declaration of one tool an Agent may invoke. Concrete tools
@@ -53,7 +50,7 @@ export const isToolDefinition = (value: unknown): value is ToolDefinition => {
 	if (typeof value !== "object" || value === null) {
 		return false;
 	}
-	const definition = value as Record<string, unknown>;
+	const definition = value as UnknownRecord;
 	if (
 		Object.keys(definition).some(
 			(key) =>
@@ -101,7 +98,7 @@ export const isToolCallOutput = (value: unknown): value is ToolCallOutput => {
 	if (typeof value !== "object" || value === null) {
 		return false;
 	}
-	const output = value as Record<string, unknown>;
+	const output = value as UnknownRecord;
 	if (output.type === "success") {
 		return (
 			Object.keys(output).every((key) => key === "output" || key === "type") &&
@@ -150,7 +147,7 @@ export const isResolvedTool = (value: unknown): value is ResolvedTool => {
 	if (typeof value !== "object" || value === null) {
 		return false;
 	}
-	const tool = value as Record<string, unknown>;
+	const tool = value as UnknownRecord;
 	return (
 		isToolDefinition(tool.definition) && typeof tool.execute === "function"
 	);

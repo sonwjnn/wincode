@@ -22,5 +22,6 @@ export type {
 	AiSdkTextGenerationOptions,
 	AiSdkTextGenerationResult,
 	RuntimePromptMessage,
+	RuntimePromptSource,
 } from "./text-generation";
 export { generateAiSdkText } from "./text-generation";

@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Merge, OverrideProperties, UnknownRecord } from "type-fest";
 import type { ZodError } from "zod";
 import type {
 	ConfigDiagnostic,
@@ -26,10 +27,12 @@ type McpDiagnosticCode =
 	| "missing-env"
 	| "unsupported-auth";
 
-export type McpConfigDiagnostic = Omit<ConfigDiagnostic, "code"> & {
-	code: McpDiagnosticCode;
-	serverName?: string;
-};
+export type McpConfigDiagnostic = Merge<
+	OverrideProperties<ConfigDiagnostic, { readonly code: McpDiagnosticCode }>,
+	Readonly<{
+		serverName?: string;
+	}>
+>;
 
 export type InvalidMcpServerConfig = {
 	error: string;
@@ -37,7 +40,7 @@ export type InvalidMcpServerConfig = {
 	transport: "local" | "remote";
 };
 
-const object = (value: unknown): value is Record<string, unknown> =>
+const object = (value: unknown): value is UnknownRecord =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 
 const serverPath = (name: string, field: readonly string[] = []): string =>

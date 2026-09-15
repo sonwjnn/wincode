@@ -1,3 +1,4 @@
+import type { UnknownRecord } from "type-fest";
 import type {
 	ConfigDocument,
 	ConfigOrigin,
@@ -20,13 +21,13 @@ export type PermissionDiagnosticCode =
 	| "permission-rule-limit"
 	| "unmatched-permission-action";
 
-export type PermissionDiagnostic = {
-	readonly code: PermissionDiagnosticCode;
-	readonly configPath: readonly string[];
-	readonly message: string;
-	readonly origin?: ConfigOrigin;
-	readonly severity: "error" | "warning";
-};
+export type PermissionDiagnostic = Readonly<{
+	code: PermissionDiagnosticCode;
+	configPath: readonly string[];
+	message: string;
+	origin?: ConfigOrigin;
+	severity: "error" | "warning";
+}>;
 
 /**
  * The fully resolved Permission policy for one selected Agent: the effective
@@ -35,17 +36,17 @@ export type PermissionDiagnostic = {
  * top-level policy is malformed or the effective policy exceeds its bounds; it
  * is never cleared by lower-precedence rules.
  */
-export type ResolvedAgentPermission = {
-	readonly diagnostics: readonly PermissionDiagnostic[];
-	readonly rules: PermissionRules;
-	readonly safetyCeiling: boolean;
-};
+export type ResolvedAgentPermission = Readonly<{
+	diagnostics: readonly PermissionDiagnostic[];
+	rules: PermissionRules;
+	safetyCeiling: boolean;
+}>;
 
-export type ResolveAgentPermissionOptions = {
-	readonly discoveredToolActions?: readonly string[];
-};
+export type ResolveAgentPermissionOptions = Readonly<{
+	discoveredToolActions?: readonly string[];
+}>;
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
+const isRecord = (value: unknown): value is UnknownRecord =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 
 const parsePermissionRules = (raw: unknown): PermissionRules | undefined => {

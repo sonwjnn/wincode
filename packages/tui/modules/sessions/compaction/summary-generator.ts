@@ -1,6 +1,7 @@
 import {
 	generateAiSdkText,
 	type RuntimePromptMessage,
+	type RuntimePromptSource,
 } from "@wincode/agent-runtime-ai-sdk";
 import type {
 	ChatModelSelection,
@@ -24,11 +25,9 @@ export type SummaryTextGenerationOptions = {
 	readonly abortSignal?: AbortSignal;
 	readonly maxOutputTokens: number;
 	readonly maxRetries: number;
-	readonly messages?: readonly RuntimePromptMessage[];
 	readonly model: ModelTarget;
-	readonly prompt?: string;
 	readonly system: string;
-};
+} & RuntimePromptSource;
 
 export type SummaryTextGenerator = (
 	options: SummaryTextGenerationOptions

@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path";
 import { pathToFiletype } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
 import { useMemo, useState } from "react";
+import type { UnknownRecord } from "type-fest";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { stripControlCharacters } from "@/shared/display-sanitize";
 import { useToggleShortcut } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -49,7 +50,7 @@ const getWriteInput = (part: WriteToolPart): WriteInput | null => {
 	) {
 		return null;
 	}
-	const input = part.input as Record<string, unknown>;
+	const input = part.input as UnknownRecord;
 	if (
 		typeof input.content !== "string" ||
 		typeof input.path !== "string" ||
@@ -229,7 +230,7 @@ export function WriteBlock({
 		typeof part.input === "object" &&
 		part.input !== null &&
 		!Array.isArray(part.input)
-			? (part.input as Record<string, unknown>)
+			? (part.input as UnknownRecord)
 			: {};
 	const content = typeof rawInput.content === "string" ? rawInput.content : "";
 	const path = formatWritePath(

@@ -1,3 +1,4 @@
+import type { UnknownRecord } from "type-fest";
 export const OPERATIONAL_FAILURE_VERSION = 1 as const;
 
 /**
@@ -33,26 +34,26 @@ export const operationalFailureRetryDispositions = [
 export type OperationalFailureRetryDisposition =
 	(typeof operationalFailureRetryDispositions)[number];
 
-export type OperationalFailureDetails = {
-	readonly modelId?: string;
-	readonly providerId?: string;
-	readonly retryAfterMs?: number;
-	readonly statusCode?: number;
-};
+export type OperationalFailureDetails = Readonly<{
+	modelId?: string;
+	providerId?: string;
+	retryAfterMs?: number;
+	statusCode?: number;
+}>;
 
 /**
  * Expected failure of one Agent Turn, represented as a safe, versioned value.
  * Messages are presentation-safe; details are allowlisted; raw causes,
  * credentials, prompts, headers, and provider bodies never enter this shape.
  */
-export type OperationalFailure = {
-	readonly code: OperationalFailureCode;
-	readonly details?: OperationalFailureDetails;
-	readonly message: string;
-	readonly retry: OperationalFailureRetryDisposition;
-	readonly source: OperationalFailureSource;
-	readonly version: typeof OPERATIONAL_FAILURE_VERSION;
-};
+export type OperationalFailure = Readonly<{
+	code: OperationalFailureCode;
+	details?: OperationalFailureDetails;
+	message: string;
+	retry: OperationalFailureRetryDisposition;
+	source: OperationalFailureSource;
+	version: typeof OPERATIONAL_FAILURE_VERSION;
+}>;
 
 const safeMessageByCode: Record<OperationalFailureCode, string> = {
 	authentication: "Model authentication failed.",
@@ -87,7 +88,7 @@ const isAllowedDetails = (
 	if (typeof value !== "object" || value === null) {
 		return false;
 	}
-	const details = value as Record<string, unknown>;
+	const details = value as UnknownRecord;
 	const allowedKeys = new Set([
 		"modelId",
 		"providerId",
@@ -148,7 +149,7 @@ export const isOperationalFailure = (
 	if (typeof value !== "object" || value === null) {
 		return false;
 	}
-	const failure = value as Record<string, unknown>;
+	const failure = value as UnknownRecord;
 	if (
 		Object.keys(failure).some(
 			(key) =>
@@ -171,10 +172,10 @@ export const isOperationalFailure = (
 	);
 };
 
-export type OperationalFailureContext = {
-	readonly modelId?: string;
-	readonly providerId?: string;
-};
+export type OperationalFailureContext = Readonly<{
+	modelId?: string;
+	providerId?: string;
+}>;
 
 const contextDetails = (
 	context: OperationalFailureContext | undefined
@@ -218,7 +219,7 @@ const normalizeFailureShape = (
 	if (typeof value !== "object" || value === null) {
 		return;
 	}
-	const failure = value as Record<string, unknown>;
+	const failure = value as UnknownRecord;
 	if (
 		!(
 			isOperationalFailureCode(failure.code) &&

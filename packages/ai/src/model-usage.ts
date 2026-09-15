@@ -1,3 +1,4 @@
+import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
 import type { ModelCost, ModelCostTier, ModelMetadataEntry } from "./models";
 export const modelUsageSchema = z
@@ -51,13 +52,13 @@ const nonNegativeInteger = (value: unknown): number | undefined =>
 		? value
 		: undefined;
 
-const objectValue = (value: unknown): Record<string, unknown> | undefined =>
+const objectValue = (value: unknown): UnknownRecord | undefined =>
 	typeof value === "object" && value !== null
-		? (value as Record<string, unknown>)
+		? (value as UnknownRecord)
 		: undefined;
 
 const nestedToken = (
-	value: Record<string, unknown> | undefined,
+	value: UnknownRecord | undefined,
 	key: string
 ): number | undefined => nonNegativeInteger(value?.[key]);
 

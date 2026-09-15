@@ -15,13 +15,13 @@ import {
 	modelVariantSchema,
 	parseCatalogModelSelection,
 } from "@wincode/ai/models";
-
 import {
 	type CodingToolName,
 	DEFAULT_RESOURCE_LIMIT_PROFILE,
 	type ResourceLimitProfile,
 	resourceLimitProfileSchema,
 } from "@wincode/coding-tools";
+import type { Except, UnknownRecord } from "type-fest";
 import { z } from "zod";
 import {
 	type PermissionDiagnostic,
@@ -189,13 +189,13 @@ export const summarizeAgentDiagnostics = (
 	return `Agent config: ${errorCount} error${errorCount === 1 ? "" : "s"}, ${warningCount} warning${warningCount === 1 ? "" : "s"}. Open /agents for details.`;
 };
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
+const isRecord = (value: unknown): value is UnknownRecord =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 
 const builtInAgentIds = new Set<string>(builtInAgents.map(({ id }) => id));
 
 const agentDiagnostic = (
-	entry: Omit<AgentDiagnostic, "origin">,
+	entry: Except<AgentDiagnostic, "origin">,
 	origin: ConfigOrigin | undefined
 ): AgentDiagnostic => (origin === undefined ? entry : { ...entry, origin });
 const resolveResourceProfile = (

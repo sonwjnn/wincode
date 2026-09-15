@@ -1,3 +1,4 @@
+import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
 
 export const MAX_MCP_TOOL_COUNT = 128;
@@ -91,7 +92,7 @@ export const mcpToolManifestEntrySchema: z.ZodType<McpToolManifestEntry> =
 			if (typeof value !== "object" || value === null) {
 				return false;
 			}
-			const entry = value as Record<string, unknown>;
+			const entry = value as UnknownRecord;
 			if (
 				Object.keys(entry).some(
 					(key) => !["name", "description", "inputSchema"].includes(key)

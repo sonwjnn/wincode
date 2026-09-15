@@ -14,10 +14,10 @@ export type AgentTurnAbortDisposition =
 	| "deadline-exceeded"
 	| "interrupted";
 
-export type AgentTurnAbortReason = {
-	readonly outcome: AgentTurnAbortDisposition;
-	readonly type: typeof AGENT_TURN_ABORT_REASON_TYPE;
-};
+export type AgentTurnAbortReason = Readonly<{
+	outcome: AgentTurnAbortDisposition;
+	type: typeof AGENT_TURN_ABORT_REASON_TYPE;
+}>;
 
 /** Creates an abort reason that survives through an AbortSignal boundary. */
 export const createAgentTurnAbortReason = (
@@ -150,12 +150,12 @@ export const createAgentTurnAbortEvent = (
 };
 
 /** Options for one Agent Runtime invocation. */
-export type AgentRuntimeRunOptions = {
+export type AgentRuntimeRunOptions = Readonly<{
 	/** Aborts the running turn. Consumers own the signal. */
-	readonly signal?: AbortSignal;
+	signal?: AbortSignal;
 	/** Optional runtime-owned deadline in milliseconds from invocation. */
-	readonly deadlineMs?: number;
-};
+	deadlineMs?: number;
+}>;
 
 /**
  * The asynchronous sequence of Agent Turn Events one runtime invocation

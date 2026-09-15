@@ -1,5 +1,6 @@
 import type { SessionMessageId } from "@wincode/agent-core";
 import { isModelContextOverflowError } from "@wincode/ai/model-failures";
+import type { Except } from "type-fest";
 import type { SessionId } from "@/shared/identifiers";
 import type { SessionMessage } from "../message";
 import { sanitizeInterruptedSessionMessages } from "../message";
@@ -30,7 +31,7 @@ export type OverflowReplay = {
 };
 export type OverflowRecoveryInput = {
 	compaction: SessionCompactionModule;
-	compactionInput: Omit<CompactSessionInput, "session" | "trigger">;
+	compactionInput: Except<CompactSessionInput, "session" | "trigger">;
 	session: {
 		messages: readonly SessionMessage[];
 		sessionId: SessionId;

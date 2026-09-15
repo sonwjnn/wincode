@@ -14,14 +14,14 @@ import type {
 	AgentTurnStatus,
 } from "./turn";
 
-export type AgentTurnLifecycleState = {
-	readonly activeStepId?: ModelStepId;
-	readonly lastSequence: number;
-	readonly started: boolean;
-	readonly status: AgentTurnStatus;
-	readonly terminalEvent?: AgentTurnTerminalEvent;
-	readonly turnId: AgentTurnId;
-};
+export type AgentTurnLifecycleState = Readonly<{
+	activeStepId?: ModelStepId;
+	lastSequence: number;
+	started: boolean;
+	status: AgentTurnStatus;
+	terminalEvent?: AgentTurnTerminalEvent;
+	turnId: AgentTurnId;
+}>;
 
 export type AgentTurnLifecycle = {
 	apply: (event: AgentTurnEvent) => AgentTurnLifecycleState;

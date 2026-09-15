@@ -32,6 +32,7 @@ import {
 	skillContextSchema,
 } from "@wincode/skills";
 import { randomUUIDv7 } from "bun";
+import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
 
 export type SessionFilePart = {
@@ -248,7 +249,7 @@ export const isSessionToolPart = (part: unknown): part is SessionToolPart => {
 	if (typeof part !== "object" || part === null || !("type" in part)) {
 		return false;
 	}
-	const candidate = part as Record<string, unknown>;
+	const candidate = part as UnknownRecord;
 	return (
 		(candidate.type === "dynamic-tool" ||
 			(typeof candidate.type === "string" &&
@@ -286,7 +287,7 @@ const stripEditDiffFromModelPart = (part: SessionPart): SessionPart => {
 	) {
 		return part;
 	}
-	const output = part.output as Record<string, unknown>;
+	const output = part.output as UnknownRecord;
 	if (
 		typeof output.path !== "string" ||
 		typeof output.replacements !== "number" ||
@@ -390,7 +391,7 @@ export const isSessionMessage = (value: unknown): value is SessionMessage => {
 	if (typeof value !== "object" || value === null) {
 		return false;
 	}
-	const candidate = value as Record<string, unknown>;
+	const candidate = value as UnknownRecord;
 	return (
 		typeof candidate.id === "string" &&
 		Array.isArray(candidate.parts) &&

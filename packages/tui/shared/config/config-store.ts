@@ -15,6 +15,7 @@ import {
 	parse as parseJsonc,
 	parseTree,
 } from "jsonc-parser";
+import type { UnknownRecord } from "type-fest";
 import { getProjectRoots } from "@/shared/paths/project-roots";
 
 export type ConfigScope = "global" | "project";
@@ -78,7 +79,7 @@ type ProvenanceEntry = {
 
 type MutableConfigDocument = Record<string, unknown>;
 
-const isObject = (value: unknown): value is Record<string, unknown> =>
+const isObject = (value: unknown): value is UnknownRecord =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 
 const isNotFound = (error: unknown): boolean =>

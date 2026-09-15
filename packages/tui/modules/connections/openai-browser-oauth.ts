@@ -5,6 +5,7 @@ import {
 	generateRandomState,
 } from "oauth4webapi";
 import open from "open";
+import type { OverrideProperties } from "type-fest";
 import { z } from "zod";
 import type {
 	AcquisitionProgress,
@@ -73,12 +74,12 @@ export type OpenAIBrowserConnectOptions = {
 	}>;
 };
 
-export type OpenAIBrowserAcquireOptions = Omit<
+export type OpenAIBrowserAcquireOptions = OverrideProperties<
 	OpenAIBrowserConnectOptions,
-	"backend" | "onStatus"
-> & {
-	onStatus?: (status: AcquisitionProgress) => void;
-};
+	{
+		onStatus?: (status: AcquisitionProgress) => void;
+	}
+>;
 
 export const acquireOpenAIBrowserCredential = async (
 	options: OpenAIBrowserAcquireOptions

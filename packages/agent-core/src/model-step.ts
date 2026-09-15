@@ -9,12 +9,12 @@ export type { ModelStepId } from "./identifiers";
  * Model Step; tool-armed turns run one per tool round trip. Deltas streamed
  * inside a step are transient Agent Turn Events, never durable records.
  */
-export type ModelStep = {
-	readonly finishedAt?: number;
-	readonly id: ModelStepId;
+export type ModelStep = Readonly<{
+	finishedAt?: number;
+	id: ModelStepId;
 	/** Zero-based position of this step within its Agent Turn. */
-	readonly index: number;
-	readonly modelId?: ModelId;
-	readonly startedAt: number;
-	readonly usage?: ModelUsage;
-};
+	index: number;
+	modelId?: ModelId;
+	startedAt: number;
+	usage?: ModelUsage;
+}>;

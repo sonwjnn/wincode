@@ -1,5 +1,6 @@
 import { getModelContextTokens } from "@wincode/ai/model-usage";
 import type { ChatModelSelection } from "@wincode/ai/models";
+import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
 import type { ModelPricingTable } from "@/modules/model-pricing";
 import { resolveModelContextLimit } from "@/modules/model-pricing";
@@ -408,7 +409,7 @@ const getObjectField = (value: unknown, key: string): unknown => {
 	if (typeof value !== "object" || value === null || !(key in value)) {
 		return;
 	}
-	return (value as Record<string, unknown>)[key];
+	return (value as UnknownRecord)[key];
 };
 
 const estimateFilePart = (

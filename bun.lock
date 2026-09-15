@@ -40,6 +40,7 @@
         "@wincode/agent-core": "workspace:*",
         "@wincode/ai": "workspace:*",
         "ai": "catalog:",
+        "type-fest": "catalog:",
       },
       "devDependencies": {
         "@types/bun": "catalog:",
@@ -82,6 +83,7 @@
       "dependencies": {
         "diff": "catalog:",
         "ignore": "^5.3.2",
+        "type-fest": "catalog:",
         "zod": "catalog:",
       },
       "devDependencies": {
@@ -96,6 +98,7 @@
     "packages/skills": {
       "name": "@wincode/skills",
       "dependencies": {
+        "type-fest": "catalog:",
         "zod": "catalog:",
       },
       "devDependencies": {

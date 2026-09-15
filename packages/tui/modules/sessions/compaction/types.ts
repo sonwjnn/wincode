@@ -1,6 +1,7 @@
 import type { SessionMessageId } from "@wincode/agent-core";
 import { MODEL_OUTPUT_TOKEN_LIMIT } from "@wincode/ai/model";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import type { Except } from "type-fest";
 import type {
 	SessionMessage,
 	SessionMessageUsage,
@@ -48,7 +49,7 @@ export type SessionCompaction = {
 	completedAt: Date;
 };
 
-export type AppendSessionCompactionInput = Omit<
+export type AppendSessionCompactionInput = Except<
 	SessionCompaction,
 	"completedAt" | "createdAt" | "id" | "sequence"
 > & {

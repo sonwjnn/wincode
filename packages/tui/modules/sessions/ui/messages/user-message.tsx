@@ -1,4 +1,5 @@
 import type { AgentId } from "@wincode/agent-core";
+import type { UnknownRecord } from "type-fest";
 import { findFileMentionRanges } from "@/modules/file-mentions";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -59,7 +60,7 @@ const getMessageParts = (message: string) => {
 const getMentionTypeLabel = (path: string) =>
 	path.endsWith("/") ? "Directory" : "File";
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
+const isRecord = (value: unknown): value is UnknownRecord =>
 	typeof value === "object" && value !== null;
 
 export const getAppliedSkill = (

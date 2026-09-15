@@ -1,6 +1,7 @@
 import type { ModelTarget } from "@wincode/ai/model-target";
 import { type ModelUsage, normalizeModelUsage } from "@wincode/ai/model-usage";
 import { streamText } from "ai";
+import type { RequireOneOrNone } from "type-fest";
 import { resolveAiSdkModelTarget } from "./model-resolver";
 
 export type RuntimePromptMessage = {
@@ -8,15 +9,21 @@ export type RuntimePromptMessage = {
 	readonly role: "assistant" | "user";
 };
 
+export type RuntimePromptSource = RequireOneOrNone<
+	{
+		readonly messages: readonly RuntimePromptMessage[];
+		readonly prompt: string;
+	},
+	"messages" | "prompt"
+>;
+
 export type AiSdkTextGenerationOptions = {
 	readonly abortSignal?: AbortSignal;
 	readonly maxOutputTokens: number;
 	readonly maxRetries: number;
-	readonly messages?: readonly RuntimePromptMessage[];
 	readonly model: ModelTarget;
-	readonly prompt?: string;
 	readonly system: string;
-};
+} & RuntimePromptSource;
 
 export type AiSdkTextGenerationResult = {
 	readonly text: string;

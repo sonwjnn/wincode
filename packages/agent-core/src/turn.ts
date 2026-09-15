@@ -1,4 +1,5 @@
 import type { ModelTarget } from "@wincode/ai/model-target";
+import type { ReadonlyDeep, UnknownRecord } from "type-fest";
 import type { ResolvedAgent } from "./agent";
 import {
 	type AgentTurnId,
@@ -52,41 +53,41 @@ export const createAgentTurnId = (): AgentTurnId =>
 	toAgentTurnId(`turn-${crypto.randomUUID()}`);
 
 /** A Wincode-owned text content part; AI SDK part shapes never cross here. */
-export type AgentTurnTextPart = {
-	readonly text: string;
-	readonly type: "text";
-};
+export type AgentTurnTextPart = Readonly<{
+	text: string;
+	type: "text";
+}>;
 
 /** One provider-neutral file or image part supplied to the Model. */
-export type AgentTurnFilePart = {
-	readonly data: string | Uint8Array;
-	readonly mediaType: string;
-	readonly type: "file";
-};
+export type AgentTurnFilePart = Readonly<{
+	data: string | Uint8Array;
+	mediaType: string;
+	type: "file";
+}>;
 
 /** One Assistant request to invoke a tool; its result arrives in a later `tool` message. */
-export type AgentTurnToolCallPart = {
-	readonly input: unknown;
-	readonly toolCallId: ToolCallId;
-	readonly toolName: string;
-	readonly type: "tool-call";
-};
+export type AgentTurnToolCallPart = Readonly<{
+	input: unknown;
+	toolCallId: ToolCallId;
+	toolName: string;
+	type: "tool-call";
+}>;
 
 /** One `tool` role message carrying a successful Tool Call output. */
-export type AgentTurnToolResultPart = {
-	readonly output: unknown;
-	readonly toolCallId: ToolCallId;
-	readonly toolName: string;
-	readonly type: "tool-result";
-};
+export type AgentTurnToolResultPart = Readonly<{
+	output: unknown;
+	toolCallId: ToolCallId;
+	toolName: string;
+	type: "tool-result";
+}>;
 
 /** One `tool` role message carrying a safe Tool Call failure text. */
-export type AgentTurnToolFailurePart = {
-	readonly errorText: string;
-	readonly toolCallId: ToolCallId;
-	readonly toolName: string;
-	readonly type: "tool-failure";
-};
+export type AgentTurnToolFailurePart = Readonly<{
+	errorText: string;
+	toolCallId: ToolCallId;
+	toolName: string;
+	type: "tool-failure";
+}>;
 
 /** A Wincode-owned message content part; AI SDK part shapes never cross here. */
 export type AgentTurnPart =
@@ -97,25 +98,25 @@ export type AgentTurnPart =
 	| AgentTurnToolFailurePart;
 
 /** A Wincode-owned message. `tool` messages carry Tool Call results. */
-export type AgentTurnMessage = {
-	readonly id: SessionMessageId;
-	readonly parts: readonly AgentTurnPart[];
-	readonly role: "assistant" | "tool" | "user";
-};
+export type AgentTurnMessage = ReadonlyDeep<{
+	id: SessionMessageId;
+	parts: AgentTurnPart[];
+	role: "assistant" | "tool" | "user";
+}>;
 
 /** One resolved input to an Agent Turn: the session so far. */
-export type AgentTurnInput = {
-	readonly messages: readonly AgentTurnMessage[];
-};
+export type AgentTurnInput = ReadonlyDeep<{
+	messages: AgentTurnMessage[];
+}>;
 
 /**
  * Correlation for a delegated Subagent execution. Both identifiers are
  * present together so a delegated turn can be located from either side.
  */
-export type AgentTurnDelegation = {
-	readonly parentToolCallId: ToolCallId;
-	readonly parentTurnId: AgentTurnId;
-};
+export type AgentTurnDelegation = Readonly<{
+	parentToolCallId: ToolCallId;
+	parentTurnId: AgentTurnId;
+}>;
 
 /**
  * A fully resolved Agent Turn ready for one runtime invocation: the Agent,
@@ -123,14 +124,14 @@ export type AgentTurnDelegation = {
  * the Agent may invoke. Delegated turns retain the parent turn and Tool Call
  * that created them while keeping their own identity and lifecycle.
  */
-export type AgentTurn = {
-	readonly agent: ResolvedAgent;
-	readonly delegation?: AgentTurnDelegation;
-	readonly id: AgentTurnId;
-	readonly input: AgentTurnInput;
-	readonly model: ModelTarget;
-	readonly tools?: readonly ResolvedTool[];
-};
+export type AgentTurn = Readonly<{
+	agent: ResolvedAgent;
+	delegation?: AgentTurnDelegation;
+	id: AgentTurnId;
+	input: AgentTurnInput;
+	model: ModelTarget;
+	tools?: readonly ResolvedTool[];
+}>;
 
 export const isAgentTurnDelegation = (
 	value: unknown
@@ -138,7 +139,7 @@ export const isAgentTurnDelegation = (
 	if (typeof value !== "object" || value === null) {
 		return false;
 	}
-	const delegation = value as Record<string, unknown>;
+	const delegation = value as UnknownRecord;
 	const keys = Object.keys(delegation);
 	return (
 		keys.length === 2 &&
@@ -165,7 +166,7 @@ export const isAgentTurnTextPart = (
 	if (typeof part !== "object" || part === null) {
 		return false;
 	}
-	const value = part as Record<string, unknown>;
+	const value = part as UnknownRecord;
 	return (
 		Object.keys(value).every((key) => key === "text" || key === "type") &&
 		value.type === "text" &&
@@ -179,7 +180,7 @@ export const isAgentTurnFilePart = (
 	if (typeof part !== "object" || part === null) {
 		return false;
 	}
-	const value = part as Record<string, unknown>;
+	const value = part as UnknownRecord;
 	return (
 		Object.keys(value).every(
 			(key) => key === "data" || key === "mediaType" || key === "type"
@@ -197,7 +198,7 @@ export const isAgentTurnToolCallPart = (
 	if (typeof part !== "object" || part === null) {
 		return false;
 	}
-	const value = part as Record<string, unknown>;
+	const value = part as UnknownRecord;
 	return (
 		Object.keys(value).every(
 			(key) =>
@@ -220,7 +221,7 @@ export const isAgentTurnToolResultPart = (
 	if (typeof part !== "object" || part === null) {
 		return false;
 	}
-	const value = part as Record<string, unknown>;
+	const value = part as UnknownRecord;
 	return (
 		Object.keys(value).every(
 			(key) =>
@@ -243,7 +244,7 @@ export const isAgentTurnToolFailurePart = (
 	if (typeof part !== "object" || part === null) {
 		return false;
 	}
-	const value = part as Record<string, unknown>;
+	const value = part as UnknownRecord;
 	return (
 		Object.keys(value).every(
 			(key) =>

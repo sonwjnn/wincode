@@ -19,16 +19,16 @@ import {
 	type SupportedChatModelId,
 } from "./models";
 
-export type ApiKeyModelAuthorization = {
-	readonly apiKey: string;
-	readonly kind: "api-key";
-};
+export type ApiKeyModelAuthorization = Readonly<{
+	apiKey: string;
+	kind: "api-key";
+}>;
 
-export type OAuthModelAuthorization = {
-	readonly accessToken: string;
-	readonly accountId: string;
-	readonly kind: "oauth";
-};
+export type OAuthModelAuthorization = Readonly<{
+	accessToken: string;
+	accountId: string;
+	kind: "oauth";
+}>;
 
 export type ModelAuthorizationByProvider = {
 	[P in ConnectionProviderId]: P extends "openai"

@@ -1,6 +1,7 @@
 import type { BoxRenderable } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
 import { memo, type ReactNode, useMemo, useRef, useState } from "react";
+import type { UnknownRecord } from "type-fest";
 import { buildAgent } from "@/modules/agents";
 import type { SessionMessage } from "@/modules/sessions/message";
 import {
@@ -58,18 +59,18 @@ type FooterItem = {
 const MAX_TOOL_ARGUMENTS_LENGTH = 512;
 const MAX_TOOL_ARGUMENT_ENTRIES = 12;
 
-const getToolInputRecord = (part: ToolPart): Record<string, unknown> =>
+const getToolInputRecord = (part: ToolPart): UnknownRecord =>
 	typeof part.input === "object" &&
 	part.input !== null &&
 	!Array.isArray(part.input)
-		? (part.input as Record<string, unknown>)
+		? (part.input as UnknownRecord)
 		: {};
 
-const getToolOutputRecord = (part: ToolPart): Record<string, unknown> =>
+const getToolOutputRecord = (part: ToolPart): UnknownRecord =>
 	typeof part.output === "object" &&
 	part.output !== null &&
 	!Array.isArray(part.output)
-		? (part.output as Record<string, unknown>)
+		? (part.output as UnknownRecord)
 		: {};
 
 const formatToolArgumentValue = (value: unknown): string => {
@@ -150,7 +151,7 @@ const formatMcpToolArgs = (part: ToolPart): string => {
 		return formatToolArgumentValue(part.input);
 	}
 
-	const input = part.input as Record<string, unknown>;
+	const input = part.input as UnknownRecord;
 	const formatted = Object.keys(input)
 		.slice(0, MAX_TOOL_ARGUMENT_ENTRIES)
 		.map(
@@ -571,7 +572,7 @@ function SkillActivityRow({ part }: { part: ToolPart }) {
 		typeof part.output === "object" &&
 		part.output !== null &&
 		!Array.isArray(part.output)
-			? (part.output as Record<string, unknown>)
+			? (part.output as UnknownRecord)
 			: undefined;
 	const status = formatUnknown(output?.status) as SkillActivityState;
 	const stateLabel = SKILL_ACTIVITY_LABELS[status] ?? formatToolName(status);

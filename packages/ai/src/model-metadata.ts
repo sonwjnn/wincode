@@ -32,56 +32,56 @@ export type ModelVariant = (typeof modelVariantIds)[number];
  * the toggle's off state. Four Anthropic models carry budget bounds with no
  * level ladder at all.
  */
-export type ModelThinkingPolicy = {
+export type ModelThinkingPolicy = Readonly<{
 	/** The model exposes an on/off switch, i.e. `"none"` is a legal level. */
-	readonly toggle?: true;
+	toggle?: true;
 	/** The level ladder, when the source publishes one (`effort.values`). */
-	readonly levels?: readonly ModelVariant[];
+	levels?: readonly ModelVariant[];
 	/** Reasoning budget bounds (`budget_tokens.min` / `.max`). */
-	readonly budgetMin?: number;
-	readonly budgetMax?: number;
+	budgetMin?: number;
+	budgetMax?: number;
 	/**
 	 * The model is budget-bounded with no ladder and no switch, so there is
 	 * nothing for a user to pick: it reasons within a derived budget. Such a
 	 * model offers no selectable level at all.
 	 */
-	readonly unlevelled?: true;
-};
+	unlevelled?: true;
+}>;
 
 /** A context-length threshold at which every rate changes together. */
-export type ModelCostTier = {
-	readonly inputTokensAbove: number;
-	readonly input: number;
-	readonly output: number;
-	readonly cacheRead?: number;
-	readonly cacheWrite?: number;
-};
+export type ModelCostTier = Readonly<{
+	inputTokensAbove: number;
+	input: number;
+	output: number;
+	cacheRead?: number;
+	cacheWrite?: number;
+}>;
 
 /** USD per 1M tokens. `input` is uncached input; an unpublished rate stays absent. */
-export type ModelCost = {
-	readonly input: number;
-	readonly output: number;
-	readonly cacheRead?: number;
-	readonly cacheWrite?: number;
-};
+export type ModelCost = Readonly<{
+	input: number;
+	output: number;
+	cacheRead?: number;
+	cacheWrite?: number;
+}>;
 
-export type ModelLimits = {
-	readonly context: number;
-	readonly output?: number;
-};
+export type ModelLimits = Readonly<{
+	context: number;
+	output?: number;
+}>;
 
 /**
  * Metadata a Model Catalog entry does not carry inline. Every field is
  * optional because the sources are: a fact the upstream does not publish is
  * absent rather than defaulted.
  */
-export type ModelMetadataEntry = {
-	readonly cost?: ModelCost;
-	readonly limits?: ModelLimits;
-	readonly reasoningSummary?: true;
-	readonly thinking?: ModelThinkingPolicy;
-	readonly tiers?: readonly ModelCostTier[];
-};
+export type ModelMetadataEntry = Readonly<{
+	cost?: ModelCost;
+	limits?: ModelLimits;
+	reasoningSummary?: true;
+	thinking?: ModelThinkingPolicy;
+	tiers?: readonly ModelCostTier[];
+}>;
 
 const modelCostSchema = z
 	.object({

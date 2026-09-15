@@ -2,10 +2,11 @@
 // by the runtime converter and the offline generator and must not import any
 // generated snapshot.
 
+import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
 
 /** One models.dev model record, untyped because the payload is remote. */
-export type ModelsDevModel = Record<string, unknown>;
+export type ModelsDevModel = UnknownRecord;
 
 const payloadSchema = z.record(z.string(), z.unknown());
 const providerBlockSchema = z

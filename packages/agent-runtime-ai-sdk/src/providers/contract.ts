@@ -10,6 +10,7 @@ import type {
 	SupportedChatModelId,
 } from "@wincode/ai/models";
 import type { LanguageModel } from "ai";
+import type { Except } from "type-fest";
 
 export type ResolverOptions = {
 	variant?: ModelVariant;
@@ -96,7 +97,7 @@ export function defineModelResolver<P extends ModelRuntimeProviderId>(
 	isModel: (
 		model: SupportedChatModel
 	) => model is Extract<SupportedChatModel, { provider: P }>,
-	resolver: Omit<ModelResolver<P>, "provider">
+	resolver: Except<ModelResolver<P>, "provider">
 ): BroadResolver<P> {
 	const narrow = (
 		model: SupportedChatModel

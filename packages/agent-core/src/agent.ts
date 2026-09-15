@@ -19,13 +19,13 @@ export const agentIdSchema = z
 	.transform((value): AgentId => value as AgentId);
 
 /** A named Agent definition supplied by Wincode or the application. */
-export type AgentDefinition = {
-	readonly description: string;
-	readonly displayName: string;
-	readonly id: AgentId;
-	readonly instructions: string;
-	readonly role: AgentRole;
-};
+export type AgentDefinition = Readonly<{
+	description: string;
+	displayName: string;
+	id: AgentId;
+	instructions: string;
+	role: AgentRole;
+}>;
 
 /**
  * The resolved Agent an Agent Turn runs as: the identity, role eligibility,
@@ -33,13 +33,13 @@ export type AgentDefinition = {
  * pins, and permission policy stay with the composition root that resolves
  * the Agent.
  */
-export type ResolvedAgent = {
-	readonly description?: string;
-	readonly displayName?: string;
-	readonly id: AgentId;
-	readonly instructions: string;
-	readonly role: AgentRole;
-};
+export type ResolvedAgent = Readonly<{
+	description?: string;
+	displayName?: string;
+	id: AgentId;
+	instructions: string;
+	role: AgentRole;
+}>;
 
 export const isAgentId = (value: unknown): value is AgentId =>
 	typeof value === "string" &&

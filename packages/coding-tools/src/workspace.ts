@@ -2,6 +2,7 @@ import { type Dirent, existsSync, realpathSync } from "node:fs";
 import { readdir, readFile, readlink, realpath } from "node:fs/promises";
 import path from "node:path";
 import ignore, { type Ignore } from "ignore";
+import type { Except } from "type-fest";
 
 export const WORKSPACE_IGNORED_DIRECTORY_NAMES = new Set([
 	".git",
@@ -123,7 +124,7 @@ type IgnoreRuleSet = {
 };
 
 type TraversalContext = Required<
-	Omit<WorkspaceTraversalOptions, "maxEntries" | "path">
+	Except<WorkspaceTraversalOptions, "maxEntries" | "path">
 > & {
 	entries: WorkspaceTraversalEntry[];
 	ignoreRules: IgnoreRuleSet[];

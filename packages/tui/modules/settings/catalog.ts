@@ -1,3 +1,4 @@
+import type { UnknownRecord } from "type-fest";
 import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
 import {
 	DEFAULT_COMPACTION_SETTINGS,
@@ -50,7 +51,7 @@ const getValueAtPath = (
 		) {
 			return { found: false, value: undefined };
 		}
-		current = (current as Record<string, unknown>)[segment];
+		current = (current as UnknownRecord)[segment];
 	}
 	return { found: true, value: current };
 };

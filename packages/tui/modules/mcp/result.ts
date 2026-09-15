@@ -1,4 +1,5 @@
 import type { ToolCallOutput } from "@wincode/agent-core";
+import type { UnknownRecord } from "type-fest";
 import { type JsonValue, MAX_MCP_RESULT_BYTES } from "./manifest";
 import type { McpCatalogSnapshot } from "./registry";
 
@@ -49,7 +50,7 @@ export const createMcpToolExecutor = (
 const encoder = new TextEncoder();
 const size = (value: unknown): number =>
 	encoder.encode(JSON.stringify(value)).byteLength;
-const record = (value: unknown): value is Record<string, unknown> =>
+const record = (value: unknown): value is UnknownRecord =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 const stringValue = (value: unknown): string =>
 	typeof value === "string" ? value : "unknown";

@@ -7,6 +7,7 @@
 // tree. The read path over the generated snapshot lives in
 // `./model-metadata-snapshot`.
 
+import type { UnknownRecord } from "type-fest";
 import {
 	type ModelCost,
 	type ModelCostTier,
@@ -36,11 +37,9 @@ export type { ModelsDevModel } from "./models-dev-payload";
 
 const parseReasoningOptions = (
 	value: unknown
-): readonly Record<string, unknown>[] | undefined =>
+): readonly UnknownRecord[] | undefined =>
 	Array.isArray(value)
-		? value.filter((option): option is Record<string, unknown> =>
-				isRecord(option)
-			)
+		? value.filter((option): option is UnknownRecord => isRecord(option))
 		: undefined;
 
 const nonNegativeNumber = (value: unknown): number | undefined =>

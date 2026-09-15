@@ -1,6 +1,7 @@
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import { modelUsageSchema } from "@wincode/ai/model-usage";
 import type { ModelId } from "@wincode/ai/models";
+import type { UnknownRecord } from "type-fest";
 import { type AgentId, isAgentId } from "./agent";
 import type { OperationalFailure } from "./failures";
 import { isOperationalFailure } from "./failures";
@@ -24,10 +25,10 @@ import {
  * monotonic sequence within that turn. Sequence increases by one per emitted
  * event so consumers can order and correlate a single turn.
  */
-export type AgentTurnEventBase = {
-	readonly sequence: number;
-	readonly turnId: AgentTurnId;
-};
+export type AgentTurnEventBase = Readonly<{
+	sequence: number;
+	turnId: AgentTurnId;
+}>;
 
 /** The turn began. The first event of a run. */
 export type AgentTurnStartedEvent = AgentTurnEventBase & {
@@ -158,7 +159,7 @@ const hasBaseEvent = (value: unknown): value is AgentTurnEventBase => {
 	if (typeof value !== "object" || value === null) {
 		return false;
 	}
-	const event = value as Record<string, unknown>;
+	const event = value as UnknownRecord;
 	return (
 		typeof event.turnId === "string" &&
 		event.turnId.length > 0 &&
@@ -170,7 +171,7 @@ export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
 	if (!hasBaseEvent(value)) {
 		return false;
 	}
-	const event = value as Record<string, unknown>;
+	const event = value as UnknownRecord;
 	if (
 		typeof event.type !== "string" ||
 		!(AGENT_TURN_EVENT_TYPES as readonly string[]).includes(event.type)
