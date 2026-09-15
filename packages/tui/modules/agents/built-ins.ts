@@ -1,7 +1,8 @@
-import type {
-	AgentDefinition,
-	AgentId,
-	ResolvedAgent,
+import {
+	type AgentDefinition,
+	type AgentId,
+	agentIdSchema,
+	type ResolvedAgent,
 } from "@wincode/agent-core";
 import type { CodingToolName } from "@wincode/coding-tools";
 
@@ -14,10 +15,12 @@ export type ResolvedCodingAgent = ResolvedAgent & {
 	readonly visibleCodingTools: readonly CodingToolName[];
 };
 
+const BUILD_AGENT_ID = agentIdSchema.parse("build");
+const PLAN_AGENT_ID = agentIdSchema.parse("plan");
 export const buildAgent = {
 	description: "Implement changes with read and write access.",
 	displayName: "Build",
-	id: "build",
+	id: BUILD_AGENT_ID,
 	instructions: `Mode: BUILD.
 Purpose: implement requested code changes in the workspace.
 Use tools to inspect and modify files before answering about code.
@@ -29,7 +32,7 @@ Prefer glob, grep, and read before editing. Use edit for targeted changes to exi
 export const planAgent = {
 	description: "Read-only analysis and planning.",
 	displayName: "Plan",
-	id: "plan",
+	id: PLAN_AGENT_ID,
 	instructions: `Mode: PLAN.
 Purpose: read-only analysis and implementation planning.
 Do not modify files. Do not write files. Do not call edit or write tools.

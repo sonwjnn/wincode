@@ -13,6 +13,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionSendInput } from "@/modules/sessions/session-operation";
+import { agentId, sessionId, sessionMessageId } from "../support/identifiers";
 
 const { testRender } = await import("@opentui/react/test-utils");
 const { AgentRegistryProvider, useAgentRegistry } = await import(
@@ -153,8 +154,8 @@ function AgentRegistryReadyProbe({ onReady }: { onReady: () => void }) {
 }
 
 const userMessage = (id: string, text: string): SessionMessage => ({
-	id,
-	metadata: { agent: "build" },
+	id: sessionMessageId(id),
+	metadata: { agent: agentId("build") },
 	parts: [{ text, type: "text" }],
 	role: "user",
 });
@@ -245,9 +246,9 @@ describe("SessionView initial submission", () => {
 																<SessionView
 																	initialMessages={initialMessages}
 																	initialSubmission={{
-																		messageId: "initial-user",
+																		messageId: sessionMessageId("initial-user"),
 																	}}
-																	sessionId="session-1"
+																	sessionId={sessionId("session-1")}
 																	sessionTitle="Create the session prompt"
 																/>
 																<AgentRegistryReadyProbe
@@ -335,7 +336,7 @@ describe("SessionView initial submission", () => {
 															<RouterContextProvider router={router}>
 																<SessionView
 																	initialMessages={[]}
-																	sessionId="session-1"
+																	sessionId={sessionId("session-1")}
 																	sessionTitle="Send an entered prompt"
 																/>
 																<AgentRegistryReadyProbe

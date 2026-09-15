@@ -1,6 +1,7 @@
 import type { InputRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { useCallback, useEffect, useRef } from "react";
+import type { SessionId } from "@/shared/identifiers";
 import {
 	useDialog,
 	useDialogEscape,
@@ -13,7 +14,7 @@ import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { getSessionStore } from "../../storage/get-session-store";
 
 type RenameSessionDialogProps = {
-	session: { id: string; title: string };
+	session: { id: SessionId; title: string };
 	onSuccess: (newTitle: string) => void;
 };
 

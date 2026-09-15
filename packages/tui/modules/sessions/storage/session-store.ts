@@ -1,5 +1,6 @@
 import type {
 	AgentId,
+	AgentTurnId,
 	SessionRecord,
 	SessionRecordOutcome,
 } from "@wincode/agent-core";
@@ -8,6 +9,7 @@ import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
+import type { SessionId } from "@/shared/identifiers";
 import type {
 	AppendSessionCompactionInput,
 	SessionCompaction,
@@ -29,7 +31,7 @@ export type SessionRecordStorageOutcome = SessionRecordOutcome;
 
 export type Session = {
 	createdAt: Date;
-	id: string;
+	id: SessionId;
 	lastMessageAt: Date | null;
 	model?: ChatModelSelection;
 	pinned: boolean;
@@ -41,7 +43,7 @@ export type CreateSessionInput = {
 	agent: AgentId;
 	message: SessionMessage;
 	model: ChatModelSelection;
-	turnId: string;
+	turnId: AgentTurnId;
 	variant?: ModelVariant;
 };
 
@@ -60,24 +62,29 @@ export type CommitSessionRecordInput = {
 	sessionModel?: ChatModelSelection;
 	sessionVariant?: ModelVariant;
 	record: SessionRecord;
-	sessionId: string;
+	sessionId: SessionId;
 };
 
 export type SessionStore = {
 	appendCompaction: (
 		input: AppendSessionCompactionInput
 	) => Promise<SessionCompaction>;
-	createSession: (input: CreateSessionInput) => Promise<{ id: string }>;
-	deleteSession: (sessionId: string) => Promise<void>;
+	createSession: (input: CreateSessionInput) => Promise<{ id: SessionId }>;
+	deleteSession: (sessionId: SessionId) => Promise<void>;
 	resetSessionData: () => Promise<void>;
-	getCompactions: (sessionId: string) => Promise<SessionCompaction[]>;
-	getLatestCompaction: (sessionId: string) => Promise<SessionCompaction | null>;
-	getSession: (sessionId: string) => Promise<Session>;
+	getCompactions: (sessionId: SessionId) => Promise<SessionCompaction[]>;
+	getLatestCompaction: (
+		sessionId: SessionId
+	) => Promise<SessionCompaction | null>;
+	getSession: (sessionId: SessionId) => Promise<Session>;
 	listSessions: () => Promise<Session[]>;
 	listRecentModelSelections: (limit: number) => ChatModelSelection[];
 	commitSessionRecord: (input: CommitSessionRecordInput) => Promise<void>;
-	listSessionRecords: (sessionId: string) => Promise<SessionRecord[]>;
-	updateSession: (sessionId: string, data: UpdateSessionInput) => Promise<void>;
+	listSessionRecords: (sessionId: SessionId) => Promise<SessionRecord[]>;
+	updateSession: (
+		sessionId: SessionId,
+		data: UpdateSessionInput
+	) => Promise<void>;
 	getPromptHistory: () => Promise<PromptHistoryEntry[]>;
 	recordPrompt: (entry: PromptHistoryEntry) => Promise<void>;
 	clearPromptHistory: () => Promise<void>;

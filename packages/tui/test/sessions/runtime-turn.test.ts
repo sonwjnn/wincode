@@ -15,16 +15,26 @@ import {
 	createGatedCodingTools,
 	runAgentTurnToText,
 } from "@/modules/sessions/hooks/runtime-turn";
+import {
+	agentId,
+	agentTurnId,
+	modelId,
+	sessionMessageId,
+	toolCallId,
+} from "../support/identifiers";
 
-const model = { modelId: "gpt-5.6-luna", providerId: "openai" } as const;
+const model = {
+	modelId: modelId("gpt-5.6-luna"),
+	providerId: "openai",
+} as const;
 
 test("preserves the actionable retired-model refusal in the failure message", () => {
 	// Regression #57: retired sessions must tell the user how to recover.
 	const record = buildAssistantFailureSessionRecord({
-		agentId: "build",
+		agentId: agentId("build"),
 		error: new RetiredModelError("openai", "gpt-5.6-luna"),
 		model,
-		turnId: "turn-retired-model",
+		turnId: agentTurnId("turn-retired-model"),
 	});
 
 	expect(record.messages[0]?.parts).toEqual([
@@ -38,15 +48,15 @@ test("preserves the actionable retired-model refusal in the failure message", ()
 const createTurn = (): AgentTurn => ({
 	agent: {
 		displayName: "Build",
-		id: "build",
+		id: agentId("build"),
 		instructions: "Implement the request.",
 		role: "primary",
 	},
-	id: "turn-runtime-test",
+	id: agentTurnId("turn-runtime-test"),
 	input: {
 		messages: [
 			{
-				id: "message-user",
+				id: sessionMessageId("message-user"),
 				parts: [{ text: "Read the attached note", type: "text" }],
 				role: "user",
 			},
@@ -61,10 +71,10 @@ const createTurn = (): AgentTurn => ({
 test("keeps inline file parts in the Agent Turn model input", () => {
 	const imageData = "data:image/png;base64,AA==";
 	const turn = buildAgentTurn({
-		agent: "build",
+		agent: agentId("build"),
 		modelMessages: [
 			{
-				id: "image-message",
+				id: sessionMessageId("image-message"),
 				parts: [
 					{ text: "Inspect this image", type: "text" },
 					{ mediaType: "image/png", type: "file", url: imageData },
@@ -74,12 +84,12 @@ test("keeps inline file parts in the Agent Turn model input", () => {
 		],
 		modelTarget: createTurn().model,
 		resolvedAgent: buildAgent,
-		turnId: "turn-file-input",
+		turnId: agentTurnId("turn-file-input"),
 	});
 
 	expect(turn.input.messages).toEqual([
 		{
-			id: "image-message",
+			id: sessionMessageId("image-message"),
 			parts: [
 				{ text: "Inspect this image", type: "text" },
 				{
@@ -118,7 +128,10 @@ test("forwards cancellation to a running coding tool", async () => {
 		throw new Error("The shell tool was not registered.");
 	}
 	const result = await shellTool.execute(
-		{ input: { command: "sleep 2" }, toolCallId: "shell-abort-test" },
+		{
+			input: { command: "sleep 2" },
+			toolCallId: toolCallId("shell-abort-test"),
+		},
 		{ signal: new AbortOnSecondReadSignal() }
 	);
 	expect(result.type).toBe("success");
@@ -175,7 +188,7 @@ test("commits only the durable assistant outcome before exposing terminal output
 			callbackOrder.push(`terminal:${event.type}`);
 		},
 		runtime,
-		sourceUserMessageId: "message-user",
+		sourceUserMessageId: sessionMessageId("message-user"),
 		turn,
 	});
 
@@ -195,10 +208,10 @@ test("commits only the durable assistant outcome before exposing terminal output
 	});
 	expect(record.messages).toEqual([
 		{
-			id: "assistant-turn-runtime-test",
+			id: sessionMessageId("assistant-turn-runtime-test"),
 			metadata: {
 				model,
-				sourceUserMessageId: "message-user",
+				sourceUserMessageId: sessionMessageId("message-user"),
 				usage: { inputTokens: 12, outputTokens: 4 },
 			},
 			parts: [{ text: "Done", type: "text" }],
@@ -222,7 +235,7 @@ test("checkpoints completed Tool Calls separately from terminal assistant text",
 			yield {
 				input: { command: "git status" },
 				sequence: 1,
-				toolCallId: "call-1",
+				toolCallId: toolCallId("call-1"),
 				toolName: "shell",
 				turnId: currentTurn.id,
 				type: "tool-call-started",
@@ -230,7 +243,7 @@ test("checkpoints completed Tool Calls separately from terminal assistant text",
 			yield {
 				outcome: { output: { exitCode: 0 }, type: "success" },
 				sequence: 2,
-				toolCallId: "call-1",
+				toolCallId: toolCallId("call-1"),
 				toolName: "shell",
 				turnId: currentTurn.id,
 				type: "tool-call-finished",
@@ -270,7 +283,7 @@ test("checkpoints completed Tool Calls separately from terminal assistant text",
 			input: { command: "git status" },
 			outcome: { kind: "success", output: { exitCode: 0 } },
 			sequence: 2,
-			toolCallId: "call-1",
+			toolCallId: toolCallId("call-1"),
 			toolName: "shell",
 			type: "tool-call",
 		},
@@ -295,7 +308,7 @@ test("does not synthesize an assistant record for a tool-only turn", async () =>
 			yield {
 				input: { command: "git status" },
 				sequence: 1,
-				toolCallId: "call-tool-only",
+				toolCallId: toolCallId("call-tool-only"),
 				toolName: "shell",
 				turnId: currentTurn.id,
 				type: "tool-call-started",
@@ -303,7 +316,7 @@ test("does not synthesize an assistant record for a tool-only turn", async () =>
 			yield {
 				outcome: { output: { exitCode: 0 }, type: "success" },
 				sequence: 2,
-				toolCallId: "call-tool-only",
+				toolCallId: toolCallId("call-tool-only"),
 				toolName: "shell",
 				turnId: currentTurn.id,
 				type: "tool-call-finished",

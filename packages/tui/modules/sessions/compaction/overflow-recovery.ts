@@ -1,4 +1,6 @@
+import type { SessionMessageId } from "@wincode/agent-core";
 import { isModelContextOverflowError } from "@wincode/ai/model-failures";
+import type { SessionId } from "@/shared/identifiers";
 import type { SessionMessage } from "../message";
 import { sanitizeInterruptedSessionMessages } from "../message";
 import type {
@@ -24,17 +26,17 @@ export class OverflowRecoveryError extends Error {
 export type OverflowReplay = {
 	activeMessages: SessionMessage[];
 	entry: CompactSessionResult["entry"];
-	originalMessageId: string;
+	originalMessageId: SessionMessageId;
 };
 export type OverflowRecoveryInput = {
 	compaction: SessionCompactionModule;
 	compactionInput: Omit<CompactSessionInput, "session" | "trigger">;
 	session: {
 		messages: readonly SessionMessage[];
-		sessionId: string;
+		sessionId: SessionId;
 	};
 	enabled: boolean;
-	originalMessageId: string;
+	originalMessageId: SessionMessageId;
 	attempt: number;
 	error: unknown;
 	replay: (replay: OverflowReplay) => Promise<void>;
@@ -43,7 +45,7 @@ export type OverflowRecoveryInput = {
 
 export const prepareOverflowReplayMessages = (
 	messages: readonly SessionMessage[],
-	originalMessageId: string
+	originalMessageId: SessionMessageId
 ): SessionMessage[] => {
 	const originalIndex = messages.findIndex(
 		(message) => message.id === originalMessageId && message.role === "user"

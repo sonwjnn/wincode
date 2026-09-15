@@ -19,6 +19,7 @@ import {
 	normalizeModelFailure,
 	normalizeModelUsage,
 	resolveModelProviderOptions,
+	supportedChatModelIdSchema,
 } from "../src/model";
 
 const findModel = (
@@ -33,6 +34,7 @@ const findModel = (
 	}
 	return model;
 };
+const modelId = (value: string) => supportedChatModelIdSchema.parse(value);
 const expectedGoogleModelIds = [
 	"gemini-3.6-flash",
 	"gemini-3.7-flash",
@@ -97,7 +99,7 @@ describe("focused model contracts", () => {
 
 	test("validates model selections through the focused schema", () => {
 		const selection: ChatModelSelection = {
-			modelId: "gpt-5.6-luna",
+			modelId: modelId("gpt-5.6-luna"),
 			providerId: "openai",
 		};
 		expect(modelSelectionSchema.parse(selection)).toEqual(selection);
@@ -112,7 +114,7 @@ describe("focused model contracts", () => {
 
 	test("creates a transient target with minimal authorization", () => {
 		const target = createModelTarget(
-			{ modelId: "gpt-5.6-luna", providerId: "openai" },
+			{ modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
 			{ apiKey: "secret", kind: "api-key" }
 		);
 		// The default OpenAI request still carries invariant storage and summary
@@ -127,7 +129,7 @@ describe("focused model contracts", () => {
 		expect(modelTargetSchema.safeParse(target).success).toBe(true);
 
 		const oauthTarget = createModelTarget(
-			{ modelId: "gpt-5.6-luna", providerId: "openai" },
+			{ modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
 			{ accessToken: "token", accountId: "account", kind: "oauth" }
 		);
 		expect(oauthTarget.authorization).toEqual({
@@ -137,7 +139,7 @@ describe("focused model contracts", () => {
 		});
 		expect(() =>
 			createModelTarget(
-				{ modelId: "claude-opus-4-6", providerId: "anthropic" },
+				{ modelId: modelId("claude-opus-4-6"), providerId: "anthropic" },
 				{ accessToken: "token", accountId: "account", kind: "oauth" }
 			)
 		).toThrow("OAuth authorization is only supported by OpenAI");
@@ -219,7 +221,7 @@ describe("focused model contracts", () => {
 		}
 		expect(
 			getSupportedModelVariants({
-				modelId: "gemini-3.6-flash",
+				modelId: modelId("gemini-3.6-flash"),
 				providerId: "google",
 			})
 		).toEqual(["minimal", "low", "medium", "high"]);
@@ -234,7 +236,7 @@ describe("focused model contracts", () => {
 		});
 		expect(
 			getSupportedModelVariants({
-				modelId: "gemini-3.7-flash",
+				modelId: modelId("gemini-3.7-flash"),
 				providerId: "google",
 			})
 		).toEqual(["low", "medium", "high"]);
@@ -274,7 +276,7 @@ describe("focused model contracts", () => {
 		});
 		expect(
 			getSupportedModelVariants({
-				modelId: "minimax-m3",
+				modelId: modelId("minimax-m3"),
 				providerId: "opencode-go",
 			})
 		).toEqual(["none", "thinking"]);
@@ -291,7 +293,7 @@ describe("focused model contracts", () => {
 	test("derives budgets for unlevelled models without selectable variants", () => {
 		expect(
 			getSupportedModelVariants({
-				modelId: "claude-haiku-4-5",
+				modelId: modelId("claude-haiku-4-5"),
 				providerId: "anthropic",
 			})
 		).toEqual([]);
@@ -343,7 +345,7 @@ describe("focused model contracts", () => {
 
 	test("does not offer reasoning variants unsupported by compatible adapters", () => {
 		const selection = {
-			modelId: "grok-4.6",
+			modelId: modelId("grok-4.6"),
 			providerId: "opencode-go",
 		} as const;
 		expect(getSupportedModelVariants(selection)).toEqual([]);

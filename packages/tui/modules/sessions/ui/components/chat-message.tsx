@@ -1,4 +1,5 @@
 import { TextAttributes } from "@opentui/core";
+import type { SessionMessageId } from "@wincode/agent-core";
 import { buildAgent } from "@/modules/agents";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -17,7 +18,7 @@ export function ChatMessage({
 }: {
 	footerMessage?: SessionMessage;
 	messages: SessionMessage[];
-	onRetry?: (messageId: string) => void | Promise<void>;
+	onRetry?: (messageId: SessionMessageId) => void | Promise<void>;
 }) {
 	const { colors } = useTheme();
 	const retryMessageId = resolveRetryMessageId(messages);

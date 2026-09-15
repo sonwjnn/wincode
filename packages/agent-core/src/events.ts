@@ -1,10 +1,16 @@
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import { modelUsageSchema } from "@wincode/ai/model-usage";
+import type { ModelId } from "@wincode/ai/models";
+import { type AgentId, isAgentId } from "./agent";
 import type { OperationalFailure } from "./failures";
 import { isOperationalFailure } from "./failures";
 import type { ModelStepId } from "./model-step";
-import type { ToolCallId, ToolCallOutput } from "./tools";
-import { isToolCallOutput } from "./tools";
+import {
+	isToolCallId,
+	isToolCallOutput,
+	type ToolCallId,
+	type ToolCallOutput,
+} from "./tools";
 import {
 	AGENT_TURN_INTERRUPTION_REASONS,
 	type AgentTurnDelegation,
@@ -25,7 +31,7 @@ export type AgentTurnEventBase = {
 
 /** The turn began. The first event of a run. */
 export type AgentTurnStartedEvent = AgentTurnEventBase & {
-	readonly agentId: string;
+	readonly agentId: AgentId;
 	readonly delegation?: AgentTurnDelegation;
 	readonly startedAt: number;
 	readonly type: "agent-turn-started";
@@ -33,7 +39,7 @@ export type AgentTurnStartedEvent = AgentTurnEventBase & {
 
 /** One model invocation within the turn started. */
 export type ModelStepStartedEvent = AgentTurnEventBase & {
-	readonly modelId?: string;
+	readonly modelId?: ModelId;
 	readonly stepId: ModelStepId;
 	readonly type: "model-step-started";
 };
@@ -52,7 +58,7 @@ export type ReasoningDeltaEvent = AgentTurnEventBase & {
 
 /** One model invocation finished with its usage. */
 export type ModelStepFinishedEvent = AgentTurnEventBase & {
-	readonly modelId?: string;
+	readonly modelId?: ModelId;
 	readonly stepId: ModelStepId;
 	readonly type: "model-step-finished";
 	readonly usage?: ModelUsage;
@@ -148,13 +154,6 @@ const isNonNegativeInteger = (value: unknown): value is number =>
 const isUsage = (value: unknown): value is ModelUsage =>
 	modelUsageSchema.safeParse(value).success;
 
-const isToolIdentity = (value: unknown): value is ToolCallId => {
-	if (typeof value !== "string") {
-		return false;
-	}
-	return value.length > 0;
-};
-
 const hasBaseEvent = (value: unknown): value is AgentTurnEventBase => {
 	if (typeof value !== "object" || value === null) {
 		return false;
@@ -181,8 +180,7 @@ export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
 	switch (event.type) {
 		case "agent-turn-started":
 			return (
-				typeof event.agentId === "string" &&
-				event.agentId.length > 0 &&
+				isAgentId(event.agentId) &&
 				(event.delegation === undefined ||
 					isAgentTurnDelegation(event.delegation)) &&
 				isFiniteTimestamp(event.startedAt)
@@ -208,13 +206,13 @@ export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
 		case "tool-call-started":
 			return (
 				"input" in event &&
-				isToolIdentity(event.toolCallId) &&
+				isToolCallId(event.toolCallId) &&
 				typeof event.toolName === "string" &&
 				event.toolName.length > 0
 			);
 		case "tool-call-finished":
 			return (
-				isToolIdentity(event.toolCallId) &&
+				isToolCallId(event.toolCallId) &&
 				typeof event.toolName === "string" &&
 				event.toolName.length > 0 &&
 				isToolCallOutput(event.outcome)

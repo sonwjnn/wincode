@@ -5,9 +5,10 @@ import {
 	summarizeSessionUsage,
 	turnCostUsd,
 } from "@/modules/sessions/usage/session-usage";
+import { modelId, sessionMessageId } from "../support/identifiers";
 
 const model: ChatModelSelection = {
-	modelId: "claude-haiku-4-5",
+	modelId: modelId("claude-haiku-4-5"),
 	providerId: "anthropic",
 };
 
@@ -20,7 +21,7 @@ const assistant = (
 		cacheWriteTokens?: number;
 	}
 ): SessionMessage => ({
-	id,
+	id: sessionMessageId(id),
 	metadata: usage ? { model, usage } : { model },
 	parts: [{ text: id, type: "text" }],
 	role: "assistant",
@@ -141,7 +142,7 @@ describe("summarizeSessionUsage", () => {
 			outputTokens: 10,
 		});
 		const beforeNextUsage = summarizeSessionUsage(
-			[measured, { id: "user-2", parts: [], role: "user" }],
+			[measured, { id: sessionMessageId("user-2"), parts: [], role: "user" }],
 			model,
 			{}
 		);
@@ -154,7 +155,7 @@ describe("summarizeSessionUsage", () => {
 		const afterNextUsage = summarizeSessionUsage(
 			[
 				measured,
-				{ id: "user-2", parts: [], role: "user" },
+				{ id: sessionMessageId("user-2"), parts: [], role: "user" },
 				assistant("assistant-2", { inputTokens: 40, outputTokens: 5 }),
 			],
 			model,
@@ -167,7 +168,7 @@ describe("summarizeSessionUsage", () => {
 	test("hides the usage bar before any provider usage exists", () => {
 		expect(
 			summarizeSessionUsage(
-				[{ id: "user-1", parts: [], role: "user" }],
+				[{ id: sessionMessageId("user-1"), parts: [], role: "user" }],
 				model,
 				{}
 			)
@@ -201,16 +202,19 @@ describe("summarizeSessionUsage", () => {
 		const noSnapshot = summarizeSessionUsage(
 			[
 				{
-					id: "a1",
+					id: sessionMessageId("a1"),
 					metadata: {
-						model: { modelId: "gemini-3-pro-preview", providerId: "google" },
+						model: {
+							modelId: modelId("gemini-3-pro-preview"),
+							providerId: "google",
+						},
 						usage: { inputTokens: 1, outputTokens: 1 },
 					},
 					parts: [],
 					role: "assistant",
 				},
 			],
-			{ modelId: "gemini-3-pro-preview", providerId: "google" },
+			{ modelId: modelId("gemini-3-pro-preview"), providerId: "google" },
 			{}
 		);
 		// No snapshot data for that entry at all, so the denominator is unknown

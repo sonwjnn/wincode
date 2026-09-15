@@ -19,14 +19,24 @@ import {
 	SessionRecordInvariantError,
 } from "@/modules/sessions/storage/session-record";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
+import type { SessionId } from "@/shared/identifiers";
+import {
+	agentId,
+	agentTurnId,
+	attachmentId,
+	modelId,
+	sessionMessageId,
+	sessionRecordId,
+	toolCallId,
+} from "../support/identifiers";
 
 const model: ChatModelSelection = {
-	modelId: "gpt-5.6-luna",
+	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 };
 
 const userMessage = (text: string, id = "msg-user"): SessionMessage => ({
-	id,
+	id: sessionMessageId(id),
 	parts: [{ text, type: "text" }],
 	role: "user",
 });
@@ -37,7 +47,7 @@ const messageRecord = (
 	text: string,
 	metadata?: SessionMessageRecord["metadata"]
 ): SessionMessageRecord => ({
-	id,
+	id: sessionMessageId(id),
 	...(metadata === undefined ? {} : { metadata }),
 	parts: [{ text, type: "text" }],
 	role,
@@ -60,17 +70,17 @@ const assistantRecord = (
 		usage: { inputTokens: 10, outputTokens: 5 },
 	}
 ): SessionRecord => ({
-	agentId: "build",
-	id,
+	agentId: agentId("build"),
+	id: sessionRecordId(id),
 	messages: [
 		messageRecord(id.replace("record", "assistant"), "assistant", text, {
-			agent: "build",
+			agent: agentId("build"),
 			model,
 		}),
 	],
 	model,
 	outcome: { kind: "assistant", terminal },
-	turnId: `turn-${id}`,
+	turnId: agentTurnId(`turn-${id}`),
 	version: 1,
 });
 
@@ -95,17 +105,17 @@ const cancelledRecord = (id: string): SessionRecord =>
 	});
 
 const toolRecord = (id: string): SessionRecord => ({
-	agentId: "build",
-	id,
+	agentId: agentId("build"),
+	id: sessionRecordId(id),
 	messages: [
 		{
-			id: `tool-${id}`,
+			id: sessionMessageId(`tool-${id}`),
 			parts: [
 				{
 					input: { command: "git status" },
 					outcome: { kind: "success", output: { exitCode: 0 } },
 					sequence: 1,
-					toolCallId: `call-${id}`,
+					toolCallId: toolCallId(`call-${id}`),
 					toolName: "shell",
 					type: "tool-call",
 				},
@@ -115,7 +125,7 @@ const toolRecord = (id: string): SessionRecord => ({
 	],
 	model,
 	outcome: { kind: "tool" },
-	turnId: `turn-${id}`,
+	turnId: agentTurnId(`turn-${id}`),
 	version: 1,
 });
 
@@ -125,7 +135,7 @@ type TestStore = {
 };
 
 type CreatedSession = {
-	id: string;
+	id: SessionId;
 	initialRecord: SessionRecord;
 };
 
@@ -144,10 +154,10 @@ const createSession = async (
 	text = "hello"
 ): Promise<CreatedSession> => {
 	const { id } = await store.createSession({
-		agent: "build",
+		agent: agentId("build"),
 		message: userMessage(text),
 		model,
-		turnId: `turn-initial-${text}`,
+		turnId: agentTurnId(`turn-initial-${text}`),
 	});
 	const [initialRecord] = await store.listSessionRecords(id);
 	if (initialRecord === undefined) {
@@ -163,7 +173,7 @@ test("persists the accepted user message as an ordinary record", async () => {
 	expect(initialRecord.outcome).toEqual({ kind: "user" });
 	expect(initialRecord.messages).toEqual([
 		{
-			id: "msg-user",
+			id: sessionMessageId("msg-user"),
 			parts: [{ text: "first", type: "text" }],
 			role: "user",
 		},
@@ -185,7 +195,7 @@ test("round-trips the logical user link for retried assistant rows", async () =>
 				...message,
 				metadata: {
 					...message.metadata,
-					sourceUserMessageId: "msg-user",
+					sourceUserMessageId: sessionMessageId("msg-user"),
 				},
 			},
 		],
@@ -201,7 +211,7 @@ test("round-trips the logical user link for retried assistant rows", async () =>
 		({ id: recordId }) => recordId === retriedRecord.id
 	);
 	expect(persisted?.messages[0]?.metadata?.sourceUserMessageId).toBe(
-		"msg-user"
+		sessionMessageId("msg-user")
 	);
 	expect(projectSessionRecords([retriedRecord])[0]?.metadata).toMatchObject({
 		sourceUserMessageId: "msg-user",
@@ -246,8 +256,11 @@ test("round-trips delegated correlation independently from the parent turn", asy
 	const { id, initialRecord } = await createSession(store);
 	const record: SessionRecord = {
 		...assistantRecord("record-subagent", "delegated result"),
-		agentId: "research",
-		delegation: { parentToolCallId: "call-1", parentTurnId: "turn-parent" },
+		agentId: agentId("research"),
+		delegation: {
+			parentToolCallId: toolCallId("call-1"),
+			parentTurnId: agentTurnId("turn-parent"),
+		},
 	};
 
 	await store.commitSessionRecord({ record, sessionId: id });
@@ -274,7 +287,7 @@ test("round-trips a cancelled assistant record without an interrupted badge", as
 
 	expect(await store.listSessionRecords(id)).toEqual([initialRecord, record]);
 	expect(projectSessionRecords([record])[0]?.metadata).toEqual({
-		agent: "build",
+		agent: agentId("build"),
 		model,
 		terminalOutcome: "cancelled",
 	});
@@ -366,15 +379,15 @@ test("deletes Conversation Records with their session", async () => {
 });
 
 test("projects each ordinary row with references, metadata, and stable delegation ids", () => {
-	const attachmentId = `v1-${"a".repeat(64)}`;
+	const attachmentReferenceId = `v1-${"a".repeat(64)}`;
 	const userRecord: SessionRecord = {
-		agentId: "build",
-		id: "record-user",
+		agentId: agentId("build"),
+		id: sessionRecordId("record-user"),
 		messages: [
 			{
-				id: "user-1",
+				id: sessionMessageId("user-1"),
 				metadata: {
-					agent: "build",
+					agent: agentId("build"),
 					model,
 					skill: {
 						arguments: "focus",
@@ -386,7 +399,7 @@ test("projects each ordinary row with references, metadata, and stable delegatio
 				parts: [
 					{ text: "Review this file", type: "text" },
 					{
-						attachmentId,
+						attachmentId: attachmentId(attachmentReferenceId),
 						byteLength: 3,
 						filename: "notes.txt",
 						mediaType: "text/plain",
@@ -408,13 +421,16 @@ test("projects each ordinary row with references, metadata, and stable delegatio
 		],
 		model,
 		outcome: { kind: "user" },
-		turnId: "turn-user",
+		turnId: agentTurnId("turn-user"),
 		version: 1,
 	};
 	const delegated = {
 		...assistantRecord("record-delegated", "delegated result"),
-		agentId: "research",
-		delegation: { parentToolCallId: "call-1", parentTurnId: "turn-parent" },
+		agentId: agentId("research"),
+		delegation: {
+			parentToolCallId: toolCallId("call-1"),
+			parentTurnId: agentTurnId("turn-parent"),
+		},
 	};
 	const primaryAssistant = assistantRecord("record-primary", "parent result");
 
@@ -425,14 +441,16 @@ test("projects each ordinary row with references, metadata, and stable delegatio
 	]);
 	const [user, , delegatedAssistant] = projected;
 	expect(projected.map(({ id }) => id)).toEqual([
-		"user-1",
-		"assistant-primary",
-		"delegated-turn:turn-record-delegated:0:assistant-delegated",
+		sessionMessageId("user-1"),
+		sessionMessageId("assistant-primary"),
+		sessionMessageId(
+			"delegated-turn:turn-record-delegated:0:assistant-delegated"
+		),
 	]);
 	expect(user).toMatchObject({
-		id: "user-1",
+		id: sessionMessageId("user-1"),
 		metadata: {
-			agent: "build",
+			agent: agentId("build"),
 			model,
 			skill: {
 				arguments: "focus",
@@ -443,12 +461,12 @@ test("projects each ordinary row with references, metadata, and stable delegatio
 		},
 	});
 	expect(user?.parts).toContainEqual({
-		attachmentId,
+		attachmentId: attachmentId(attachmentReferenceId),
 		byteLength: 3,
 		filename: "notes.txt",
 		mediaType: "text/plain",
 		type: "file",
-		url: `attachment://${attachmentId}`,
+		url: `attachment://${attachmentReferenceId}`,
 	});
 	expect(user?.parts).toContainEqual({
 		data: {
@@ -461,7 +479,9 @@ test("projects each ordinary row with references, metadata, and stable delegatio
 		type: "data-fileMention",
 	});
 	expect(delegatedAssistant?.id).toBe(
-		"delegated-turn:turn-record-delegated:0:assistant-delegated"
+		sessionMessageId(
+			"delegated-turn:turn-record-delegated:0:assistant-delegated"
+		)
 	);
 });
 
@@ -469,15 +489,15 @@ test("persists delegated child prompts as correlated user rows", async () => {
 	const { store } = await createTestStore();
 	const { id } = await createSession(store);
 	const delegation = {
-		parentToolCallId: "call-parent",
-		parentTurnId: "turn-parent",
+		parentToolCallId: toolCallId("call-parent"),
+		parentTurnId: agentTurnId("turn-parent"),
 	};
 	const record = buildUserSessionRecord({
-		agentId: "subagent",
+		agentId: agentId("subagent"),
 		delegation,
 		message: userMessage("child prompt", "child-user"),
 		model,
-		turnId: "child-turn",
+		turnId: agentTurnId("child-turn"),
 	});
 
 	await store.commitSessionRecord({ record, sessionId: id });
@@ -485,8 +505,8 @@ test("persists delegated child prompts as correlated user rows", async () => {
 	expect(await store.listSessionRecords(id)).toContainEqual(record);
 	expect(projectSessionRecords([record])).toEqual([
 		{
-			id: "delegated-turn:child-turn:0:child-user",
-			metadata: { agent: "subagent", model },
+			id: sessionMessageId("delegated-turn:child-turn:0:child-user"),
+			metadata: { agent: agentId("subagent"), model },
 			parts: [{ text: "child prompt", type: "text" }],
 			role: "user",
 		},
@@ -498,9 +518,9 @@ test("projects a failed assistant row as its safe transcript message", () => {
 
 	expect(projected).toEqual([
 		{
-			id: "assistant-failed",
+			id: sessionMessageId("assistant-failed"),
 			metadata: {
-				agent: "build",
+				agent: agentId("build"),
 				model,
 				terminalOutcome: "failed",
 			},

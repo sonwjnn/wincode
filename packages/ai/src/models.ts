@@ -24,24 +24,25 @@ export {
 } from "./model-metadata-runtime";
 
 const modelSelectionBaseSchema = z.object({
-	modelId: z.string(),
+	modelId: z
+		.string()
+		.transform((value): SupportedChatModelId => value as SupportedChatModelId),
 	providerId: connectionProviderIdSchema,
 });
 
-export const modelSelectionSchema = modelSelectionBaseSchema.superRefine(
-	(selection, context) => {
+export const modelSelectionSchema: z.ZodType<ChatModelSelection> =
+	modelSelectionBaseSchema.superRefine((selection, context) => {
 		if (!findSupportedChatModelSelection(selection)) {
 			context.addIssue({
 				code: "custom",
 				message: `Unsupported model selection: ${selection.providerId}/${selection.modelId}`,
 			});
 		}
-	}
-);
+	});
 
-export const defaultChatModel = { value: "gpt-5.6-luna" } as const satisfies {
-	value: SupportedChatModelId;
-};
+export const defaultChatModel = {
+	value: "gpt-5.6-luna" as SupportedChatModelId,
+} as const;
 export const defaultChatModelSelection = {
 	modelId: defaultChatModel.value,
 	providerId: "openai",
@@ -78,7 +79,10 @@ export const normalizeChatModelSelection = (
 	}
 	const model = findSupportedChatModel(selection);
 	return model
-		? { modelId: model.id, providerId: model.connectionProviderId }
+		? {
+				modelId: model.id as SupportedChatModelId,
+				providerId: model.connectionProviderId,
+			}
 		: null;
 };
 

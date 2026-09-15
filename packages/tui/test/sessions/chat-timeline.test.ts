@@ -3,10 +3,16 @@ import { fromPartial } from "@total-typescript/shoehorn";
 import type { SessionCompaction } from "@/modules/sessions/compaction";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { buildSessionTimeline } from "@/modules/sessions/ui/components/chat-timeline";
+import {
+	compactionId,
+	modelId,
+	sessionId,
+	sessionMessageId,
+} from "../support/identifiers";
 
 const message = (id: string, role: SessionMessage["role"]): SessionMessage =>
 	fromPartial<SessionMessage>({
-		id,
+		id: sessionMessageId(id),
 		parts: [{ text: id, type: "text" }],
 		role,
 	});
@@ -18,13 +24,20 @@ const compaction = (
 ): SessionCompaction => ({
 	completedAt: new Date("2026-08-30T00:00:00.000Z"),
 	createdAt: new Date("2026-08-30T00:00:00.000Z"),
-	firstKeptUiMessageId: "u2",
-	id,
+	firstKeptUiMessageId: sessionMessageId("u2"),
+	id: compactionId(id),
 	sequence,
-	sessionId: "session-1",
-	summarizationModel: { modelId: "gpt-5.6-luna", providerId: "openai" },
-	summary: { coveredMessageIds: ["u1"], formatVersion: 1, text: id },
-	throughMessageUiId,
+	sessionId: sessionId("session-1"),
+	summarizationModel: {
+		modelId: modelId("gpt-5.6-luna"),
+		providerId: "openai",
+	},
+	summary: {
+		coveredMessageIds: [sessionMessageId("u1")],
+		formatVersion: 1,
+		text: id,
+	},
+	throughMessageUiId: sessionMessageId(throughMessageUiId),
 	estimatedTokensAfter: 20,
 	tokensBefore: 40,
 	trigger: "manual",
@@ -51,7 +64,7 @@ test("places compaction dividers after their transcript anchor without creating 
 		firstTurn?.kind === "turn"
 			? firstTurn.turn.messages.map(({ id }) => id)
 			: []
-	).toEqual(["u1", "a1"]);
+	).toEqual([sessionMessageId("u1"), sessionMessageId("a1")]);
 });
 
 test("orders repeated dividers by durable sequence and keeps unknown anchors visible", () => {
@@ -64,5 +77,5 @@ test("orders repeated dividers by durable sequence and keeps unknown anchors vis
 		timeline
 			.filter((item) => item.kind === "compaction")
 			.map((item) => item.compaction.id)
-	).toEqual(["c1", "c2"]);
+	).toEqual([compactionId("c1"), compactionId("c2")]);
 });

@@ -10,17 +10,26 @@ import type {
 	ToolApprovalActions,
 	ToolApprovalRequest,
 } from "@/shared/providers/approval/types";
+import { toolCallId } from "../support/identifiers";
 
 const SESSION_ID_PREFIX_REGEX = /^session-/;
 
 const makeRequest = (
-	overrides: Partial<ToolApprovalRequest> = {}
-): ToolApprovalRequest => ({
-	description: "Read a UTF-8 text file inside the workspace.",
-	identity: [{ label: "tool", value: "read" }],
-	input: { path: ".env" },
-	...overrides,
-});
+	overrides: Partial<Omit<ToolApprovalRequest, "toolCallId">> & {
+		toolCallId?: string;
+	} = {}
+): ToolApprovalRequest => {
+	const { toolCallId: rawToolCallId, ...rest } = overrides;
+	return {
+		description: "Read a UTF-8 text file inside the workspace.",
+		identity: [{ label: "tool", value: "read" }],
+		input: { path: ".env" },
+		...rest,
+		...(rawToolCallId === undefined
+			? {}
+			: { toolCallId: toolCallId(rawToolCallId) }),
+	};
+};
 
 const makeActions = (): ToolApprovalActions => ({
 	abort: mock(() => undefined),

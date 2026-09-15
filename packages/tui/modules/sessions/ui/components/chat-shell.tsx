@@ -1,6 +1,6 @@
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
-import type { AgentId } from "@wincode/agent-core";
+import type { AgentId, SessionMessageId } from "@wincode/agent-core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useModelPricing } from "@/modules/model-pricing";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
@@ -47,7 +47,7 @@ type ChatShellProps = {
 	onApproval?: (id: string, outcome: ApprovalOutcome) => void;
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
-	onRetry?: (messageId: string) => void | Promise<void>;
+	onRetry?: (messageId: SessionMessageId) => void | Promise<void>;
 	promptHistory: PromptHistoryEntry[];
 	onSubmit: (
 		submission: ChatPromptSubmission

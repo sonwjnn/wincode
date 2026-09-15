@@ -2,7 +2,10 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { resolveModelProviderOptions } from "@wincode/ai/model-provider-options";
-import type { SupportedChatModel } from "@wincode/ai/models";
+import type {
+	SupportedChatModel,
+	SupportedChatModelId,
+} from "@wincode/ai/models";
 import {
 	defineModelResolver,
 	type ResolvedModel,
@@ -21,7 +24,7 @@ const resolve = (
 ): ResolvedModel => {
 	const resolvedOptions = resolveModelProviderOptions(model, options);
 	const base = {
-		modelId: model.id,
+		modelId: model.id as SupportedChatModelId,
 		provider: "opencode-go" as const,
 		...(resolvedOptions.providerOptions
 			? {

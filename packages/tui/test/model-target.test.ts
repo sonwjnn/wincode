@@ -8,6 +8,7 @@ import type {
 	Connections,
 } from "@/modules/connections";
 import { resolveChatModelTarget } from "@/modules/model-target";
+import { modelId } from "./support/identifiers";
 
 /**
  * The refusal names the model and tells the user what to do, so a reader of the
@@ -56,7 +57,7 @@ test("resolves every catalog model and variant through the CLI seam", async () =
 			Math.max(
 				1,
 				getSupportedModelVariants({
-					modelId: model.id,
+					modelId: modelId(model.id),
 					providerId: model.connectionProviderId,
 				}).length
 			),
@@ -66,7 +67,7 @@ test("resolves every catalog model and variant through the CLI seam", async () =
 
 	for (const model of modelCatalog) {
 		const selection = {
-			modelId: model.id,
+			modelId: modelId(model.id),
 			providerId: model.connectionProviderId,
 		};
 		const variants = getSupportedModelVariants(selection);
@@ -87,7 +88,7 @@ test("resolves every catalog model and variant through the CLI seam", async () =
 test("carries one-turn OpenAI OAuth authorization into the target", async () => {
 	const { connections } = createConnections(true);
 	const target = await resolveChatModelTarget(
-		{ modelId: "gpt-5.6-luna", providerId: "openai" },
+		{ modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
 		connections
 	);
 
@@ -96,7 +97,7 @@ test("carries one-turn OpenAI OAuth authorization into the target", async () => 
 		accountId: "oauth-account",
 		kind: "oauth",
 	});
-	expect(resolveAiSdkModelTarget(target).modelId).toBe("gpt-5.6-luna");
+	expect(resolveAiSdkModelTarget(target).modelId).toBe(modelId("gpt-5.6-luna"));
 });
 
 test("refuses to send with a retired entry unless the caller opts in", async () => {
@@ -112,7 +113,7 @@ test("refuses to send with a retired entry unless the caller opts in", async () 
 		entry.id === model.id ? { ...entry, lifecycle: "retired" as const } : entry
 	);
 	const selection = {
-		modelId: model.id,
+		modelId: modelId(model.id),
 		providerId: model.connectionProviderId,
 	};
 	const { connections } = createConnections();
@@ -129,5 +130,5 @@ test("refuses to send with a retired entry unless the caller opts in", async () 
 		{ allowRetired: true },
 		retiredCatalog
 	);
-	expect(target.modelId).toBe(model.id);
+	expect(target.modelId).toBe(modelId("gpt-5.6-luna"));
 });

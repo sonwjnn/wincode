@@ -5,12 +5,13 @@ import {
 	getChatModelRoute,
 	modelCatalog,
 	normalizeChatModelSelection,
+	supportedChatModelIdSchema,
 } from "../src/models";
 
 describe("direct model catalog", () => {
 	test("uses GPT-5.6 Luna with low reasoning as the default", () => {
 		expect(defaultChatModelSelection).toEqual({
-			modelId: "gpt-5.6-luna",
+			modelId: supportedChatModelIdSchema.parse("gpt-5.6-luna"),
 			providerId: "openai",
 		});
 		expect(getChatModelRoute(defaultChatModelSelection)).toBe("direct");

@@ -27,6 +27,7 @@ import {
 	createFakeAiSdkModule,
 	createFakeAiSdkRecorder,
 } from "@/test/support/e2e-fake-runtime";
+import { sessionMessageId } from "../support/identifiers";
 
 const testDirectory = await mkdtemp(
 	join(tmpdir(), "wincode-manual-compaction-e2e-")
@@ -102,7 +103,9 @@ test("compacts manually through the UI and uses the summary on the next turn", a
 		expect(entry.trigger).toBe("manual");
 		expect(entry.focus).toBe("preserve database decisions");
 		expect(entry.summary.text).toBe(recorder.summaryText);
-		expect(entry.summary.coveredMessageIds).toContain("user-1");
+		expect(entry.summary.coveredMessageIds).toContain(
+			sessionMessageId("user-1")
+		);
 
 		const summaryRequests = recorder.requests.filter(
 			(request) => request.kind === "summary"

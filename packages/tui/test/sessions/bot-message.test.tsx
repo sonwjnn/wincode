@@ -18,6 +18,7 @@ import {
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+import { toolCallId } from "../support/identifiers";
 
 const { BotMessageContent } = await import(
 	"@/modules/sessions/ui/messages/bot-message"
@@ -143,7 +144,7 @@ describe("BotMessageContent", () => {
 			},
 			output: {},
 			state: "output-available",
-			toolCallId: "call-1",
+			toolCallId: toolCallId("call-1"),
 			toolName: "mcp_context7_resolve-library-id_a4f486fc",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
@@ -162,7 +163,7 @@ describe("BotMessageContent", () => {
 				replace: "const value = 2;",
 			},
 			state: "input-available",
-			toolCallId: "edit-running",
+			toolCallId: toolCallId("edit-running"),
 			type: "tool-edit",
 		} satisfies MessagePart;
 
@@ -182,7 +183,7 @@ describe("BotMessageContent", () => {
 		const running = {
 			input: { find: "old", path: "src/lifecycle.ts", replace: "new" },
 			state: "input-available",
-			toolCallId: "edit-lifecycle",
+			toolCallId: toolCallId("edit-lifecycle"),
 			type: "tool-edit",
 		} satisfies MessagePart;
 		const completed = {
@@ -240,7 +241,7 @@ describe("BotMessageContent", () => {
 		const part = {
 			input: { content, path: "src/generated.ts" },
 			state: "input-available",
-			toolCallId: "write-running",
+			toolCallId: toolCallId("write-running"),
 			type: "tool-write",
 		} satisfies MessagePart;
 
@@ -288,13 +289,13 @@ describe("BotMessageContent", () => {
 		const write = {
 			input: {},
 			state: "input-streaming",
-			toolCallId: "write-streaming",
+			toolCallId: toolCallId("write-streaming"),
 			type: "tool-write",
 		} satisfies MessagePart;
 		const edit = {
 			input: {},
 			state: "input-streaming",
-			toolCallId: "edit-streaming",
+			toolCallId: toolCallId("edit-streaming"),
 			type: "tool-edit",
 		} satisfies MessagePart;
 
@@ -313,27 +314,27 @@ describe("BotMessageContent", () => {
 			input: { content: "const value = 1;\n", path: "src/value.ts" },
 			output: { bytesWritten: 16, path: "src/value.ts" },
 			state: "output-available",
-			toolCallId: "write-success",
+			toolCallId: toolCallId("write-success"),
 			type: "tool-write",
 		} satisfies MessagePart;
 		const failed = {
 			errorText: "File already exists",
 			input: { content: "const value = 2;", path: "src/existing.ts" },
 			state: "output-error",
-			toolCallId: "write-failed",
+			toolCallId: toolCallId("write-failed"),
 			type: "tool-write",
 		} satisfies MessagePart;
 		const empty = {
 			input: { content: "", path: "src/empty.ts" },
 			output: { bytesWritten: 0, path: "src/empty.ts" },
 			state: "output-available",
-			toolCallId: "write-empty",
+			toolCallId: toolCallId("write-empty"),
 			type: "tool-write",
 		} satisfies MessagePart;
 		const partial = {
 			input: { path: "src/partial.ts" },
 			state: "input-streaming",
-			toolCallId: "write-partial",
+			toolCallId: toolCallId("write-partial"),
 			type: "tool-write",
 		} satisfies MessagePart;
 
@@ -375,7 +376,7 @@ describe("BotMessageContent", () => {
 						replacements: 1,
 					},
 					state: "output-available",
-					toolCallId: `edit-filetype-${index}`,
+					toolCallId: toolCallId(`edit-filetype-${index}`),
 					type: "tool-edit",
 				} satisfies MessagePart;
 
@@ -392,7 +393,7 @@ describe("BotMessageContent", () => {
 			input: { find: "old", path: "legacy.ts", replace: "new" },
 			output: { path: "legacy.ts", replacements: 1 },
 			state: "output-available",
-			toolCallId: "edit-legacy",
+			toolCallId: toolCallId("edit-legacy"),
 			type: "tool-edit",
 		} satisfies MessagePart;
 		const empty = {
@@ -409,7 +410,7 @@ describe("BotMessageContent", () => {
 				replacements: 1,
 			},
 			state: "output-available",
-			toolCallId: "edit-empty",
+			toolCallId: toolCallId("edit-empty"),
 			type: "tool-edit",
 		} satisfies MessagePart;
 		const statsOnly = {
@@ -426,7 +427,7 @@ describe("BotMessageContent", () => {
 				replacements: 1,
 			},
 			state: "output-available",
-			toolCallId: "edit-stats-only",
+			toolCallId: toolCallId("edit-stats-only"),
 			type: "tool-edit",
 		} satisfies MessagePart;
 		const invalid = {
@@ -443,7 +444,7 @@ describe("BotMessageContent", () => {
 				replacements: 1,
 			},
 			state: "output-available",
-			toolCallId: "edit-invalid",
+			toolCallId: toolCallId("edit-invalid"),
 			type: "tool-edit",
 		} satisfies MessagePart;
 
@@ -485,7 +486,7 @@ describe("BotMessageContent", () => {
 				replacements: 1,
 			},
 			state: "output-available",
-			toolCallId: "edit-compact",
+			toolCallId: toolCallId("edit-compact"),
 			type: "tool-edit",
 		} satisfies MessagePart;
 
@@ -535,7 +536,7 @@ describe("BotMessageContent", () => {
 				replacements: 1,
 			},
 			state: "output-available",
-			toolCallId: "edit-large",
+			toolCallId: toolCallId("edit-large"),
 			type: "tool-edit",
 		} satisfies MessagePart;
 		const setup = await testRender(
@@ -583,7 +584,7 @@ describe("BotMessageContent", () => {
 		const part = {
 			input: { query: "sensitive or verbose query" },
 			state: "input-available",
-			toolCallId: "call-2",
+			toolCallId: toolCallId("call-2"),
 			toolName: "mcp_context7_query-docs_3f6b8a11",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
@@ -599,7 +600,7 @@ describe("BotMessageContent", () => {
 		const part = {
 			input: { path: "README.md" },
 			state: "input-available",
-			toolCallId: "call-running-read",
+			toolCallId: toolCallId("call-running-read"),
 			type: "tool-read",
 		} satisfies ReadToolPart;
 		const frame = await renderFrame([part]);
@@ -614,7 +615,7 @@ describe("BotMessageContent", () => {
 			errorText: "Chat request failed.",
 			input: { query: "verbose failed query" },
 			state: "output-error",
-			toolCallId: "call-3",
+			toolCallId: toolCallId("call-3"),
 			toolName: "mcp_context_7_query_docs_3f6b8a11",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
@@ -633,7 +634,7 @@ describe("BotMessageContent", () => {
 			input: { path: "README.md" },
 			output: { content: "", path: "README.md" },
 			state: "output-available",
-			toolCallId: "call-4",
+			toolCallId: toolCallId("call-4"),
 			type: "tool-read",
 		} satisfies ReadToolPart;
 		const frame = await renderFrame([part]);
@@ -645,7 +646,7 @@ describe("BotMessageContent", () => {
 			errorText: "Tool call interrupted",
 			input: { path: "README.md" },
 			state: "output-error",
-			toolCallId: "call-interrupted",
+			toolCallId: toolCallId("call-interrupted"),
 			type: "tool-read",
 		} satisfies ReadToolPart;
 		const frame = await renderFrame([part]);
@@ -659,7 +660,7 @@ describe("BotMessageContent", () => {
 			errorText: "Read was not approved: ~/.claude/settings.json",
 			input: { path: "~/.claude/settings.json" },
 			state: "output-error",
-			toolCallId: "call-aborted-read",
+			toolCallId: toolCallId("call-aborted-read"),
 			type: "tool-read",
 		} satisfies ReadToolPart;
 		const frame = await renderFrame([part]);
@@ -676,7 +677,7 @@ describe("BotMessageContent", () => {
 			errorText: "Read was not approved: ~/.claude/settings.json",
 			input: { path: "~/.claude/settings.json" },
 			state: "output-error",
-			toolCallId: "call-owned-error",
+			toolCallId: toolCallId("call-owned-error"),
 			type: "tool-read",
 		} satisfies ReadToolPart;
 		const { api, setup } = await renderFrameWithApproval(
@@ -688,7 +689,7 @@ describe("BotMessageContent", () => {
 					{ label: "resource", value: "~/.claude/settings.json" },
 				],
 				input: { path: "~/.claude/settings.json" },
-				toolCallId: "call-owned-error",
+				toolCallId: toolCallId("call-owned-error"),
 			},
 			8
 		);
@@ -712,7 +713,7 @@ describe("BotMessageContent", () => {
 			errorText: "Chat request failed.",
 			input: { query: "verbose failed query" },
 			state: "output-error",
-			toolCallId: "call-approved-failed",
+			toolCallId: toolCallId("call-approved-failed"),
 			toolName: "mcp_context_7_query_docs_3f6b8a11",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
@@ -725,7 +726,7 @@ describe("BotMessageContent", () => {
 					{ label: "resource", value: "*" },
 				],
 				input: { query: "verbose failed query" },
-				toolCallId: "call-approved-failed",
+				toolCallId: toolCallId("call-approved-failed"),
 			},
 			8
 		);
@@ -745,7 +746,7 @@ describe("BotMessageContent", () => {
 			errorText: "MCP tool 'mcp_demo_echo' was not approved",
 			input: { query: "echo" },
 			state: "output-error",
-			toolCallId: "call-mcp-rejected",
+			toolCallId: toolCallId("call-mcp-rejected"),
 			toolName: "mcp_demo_echo",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
@@ -761,7 +762,7 @@ describe("BotMessageContent", () => {
 			input: { path: "packages/ai/src", pattern: "dynamic-tool" },
 			output: { matches: [] },
 			state: "output-available",
-			toolCallId: "call-grep",
+			toolCallId: toolCallId("call-grep"),
 			type: "tool-grep",
 		} satisfies GrepToolPart;
 		const frame = await renderFrame([part]);
@@ -773,7 +774,7 @@ describe("BotMessageContent", () => {
 			input: { path: "packages/ai/src", pattern: "**/*.ts" },
 			output: { paths: [] },
 			state: "output-available",
-			toolCallId: "call-glob",
+			toolCallId: toolCallId("call-glob"),
 			type: "tool-glob",
 		} satisfies GlobToolPart;
 		const frame = await renderFrame([part]);
@@ -786,7 +787,7 @@ describe("BotMessageContent", () => {
 			input: { path: "packages\nai", pattern: 'dynamic"\ttool' },
 			output: { matches: [] },
 			state: "output-available",
-			toolCallId: "call-grep-controls",
+			toolCallId: toolCallId("call-grep-controls"),
 			type: "tool-grep",
 		} satisfies GrepToolPart;
 		const frame = await renderFrame([part]);
@@ -800,7 +801,7 @@ describe("BotMessageContent", () => {
 			approval: { approved: false, id: "approval-1" },
 			input: {},
 			state: "output-denied",
-			toolCallId: "call-5",
+			toolCallId: toolCallId("call-5"),
 			toolName: "mcp_context7_query-docs_3f6b8a11",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
@@ -816,7 +817,7 @@ describe("BotMessageContent", () => {
 			input: {},
 			output: {},
 			state: "output-available",
-			toolCallId: "call-6",
+			toolCallId: toolCallId("call-6"),
 			toolName: "mcp_search_docs",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
@@ -831,7 +832,7 @@ describe("BotMessageContent", () => {
 			input: {},
 			output: {},
 			state: "output-available",
-			toolCallId: "call-7",
+			toolCallId: toolCallId("call-7"),
 			toolName: "mcp_server_abc12345",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
@@ -844,7 +845,7 @@ describe("BotMessageContent", () => {
 		const part = {
 			input: { apiKey: "secret-value", query: "safe query" },
 			state: "input-available",
-			toolCallId: "call-8",
+			toolCallId: toolCallId("call-8"),
 			toolName: "mcp_websearch_web_search_exa_f487e108",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
@@ -866,7 +867,7 @@ describe("BotMessageContent", () => {
 				session: "hidden-session",
 			},
 			state: "input-available",
-			toolCallId: "call-secrets",
+			toolCallId: toolCallId("call-secrets"),
 			toolName: "mcp_server_tool_12345678",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
@@ -889,7 +890,7 @@ describe("BotMessageContent", () => {
 			errorText: "failed\nAuthorization: Bearer hidden-error",
 			input: {},
 			state: "output-error",
-			toolCallId: "call-error",
+			toolCallId: toolCallId("call-error"),
 			toolName: "mcp_server_tool_12345678",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
@@ -934,7 +935,7 @@ describe("BotMessageContent", () => {
 			input: { path: "README.md" },
 			output: { content: "", path: "README.md" },
 			state: "output-available",
-			toolCallId: "duplicate-call",
+			toolCallId: toolCallId("duplicate-call"),
 			type: "tool-read",
 		} satisfies ReadToolPart;
 		const frame = await renderFrame([part, part], 6);
@@ -951,7 +952,7 @@ describe("BotMessageContent", () => {
 		const part: MessagePart = fromAny({
 			input: circularInput,
 			state: "input-available",
-			toolCallId: "call-unknown",
+			toolCallId: toolCallId("call-unknown"),
 			type: "tool-legacy",
 		});
 		const frame = await renderFrame([part]);
@@ -967,7 +968,7 @@ describe("BotMessageContent", () => {
 		const part = {
 			input: { nested: { child: { grandchild: { value: "hidden" } } } },
 			state: "input-available",
-			toolCallId: "call-nested",
+			toolCallId: toolCallId("call-nested"),
 			toolName: "mcp_server_tool_12345678",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
@@ -981,7 +982,7 @@ describe("BotMessageContent", () => {
 		const part = {
 			input: { path: "README.md" },
 			state: "input-available",
-			toolCallId: "call-approval",
+			toolCallId: toolCallId("call-approval"),
 			type: "tool-read",
 		} satisfies ReadToolPart;
 		const { setup } = await renderFrameWithApproval(
@@ -993,7 +994,7 @@ describe("BotMessageContent", () => {
 					{ label: "resource", value: "README.md" },
 				],
 				input: { path: "README.md" },
-				toolCallId: "call-approval",
+				toolCallId: toolCallId("call-approval"),
 			},
 			8
 		);
@@ -1012,7 +1013,7 @@ describe("BotMessageContent", () => {
 		const part = {
 			input: { path: "README.md" },
 			state: "input-available",
-			toolCallId: "call-approval-settled",
+			toolCallId: toolCallId("call-approval-settled"),
 			type: "tool-read",
 		} satisfies ReadToolPart;
 		const { api, setup } = await renderFrameWithApproval(
@@ -1024,7 +1025,7 @@ describe("BotMessageContent", () => {
 					{ label: "resource", value: "README.md" },
 				],
 				input: { path: "README.md" },
-				toolCallId: "call-approval-settled",
+				toolCallId: toolCallId("call-approval-settled"),
 			},
 			8
 		);
@@ -1049,7 +1050,7 @@ describe("BotMessageContent skill activity row", () => {
 				status: "loaded",
 			},
 			state: "output-available",
-			toolCallId: "skill-call-1",
+			toolCallId: toolCallId("skill-call-1"),
 			toolName: "skill",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
@@ -1067,7 +1068,7 @@ describe("BotMessageContent skill activity row", () => {
 			input: { name: "lint" },
 			output: { name: "lint", status: "rejected" },
 			state: "output-available",
-			toolCallId: "skill-call-2",
+			toolCallId: toolCallId("skill-call-2"),
 			toolName: "skill",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
@@ -1075,7 +1076,7 @@ describe("BotMessageContent skill activity row", () => {
 			input: { name: "missing" },
 			output: { error: "Unknown Skill", name: "missing", status: "failed" },
 			state: "output-available",
-			toolCallId: "skill-call-3",
+			toolCallId: toolCallId("skill-call-3"),
 			toolName: "skill",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
@@ -1088,7 +1089,7 @@ describe("BotMessageContent skill activity row", () => {
 				status: "limit-reached",
 			},
 			state: "output-available",
-			toolCallId: "skill-call-4",
+			toolCallId: toolCallId("skill-call-4"),
 			toolName: "skill",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
@@ -1110,7 +1111,7 @@ describe("BotMessageContent skill activity row", () => {
 				status: "already-loaded",
 			},
 			state: "output-available",
-			toolCallId: "skill-call-5",
+			toolCallId: toolCallId("skill-call-5"),
 			toolName: "skill",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;

@@ -3,6 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
+import { sessionId } from "../support/identifiers";
 
 test("initializes the current compaction schema in a fresh local database", async () => {
 	const directory = await mkdtemp(join("/tmp", "wincode-compaction-schema-"));
@@ -18,5 +19,5 @@ test("initializes the current compaction schema in a fresh local database", asyn
 	expect(columnNames).not.toContain("tokens_after");
 
 	const store = createDrizzleSessionStore(db);
-	expect(await store.getCompactions("missing-session")).toEqual([]);
+	expect(await store.getCompactions(sessionId("missing-session"))).toEqual([]);
 });

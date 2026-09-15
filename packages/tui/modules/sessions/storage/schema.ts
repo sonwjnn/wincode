@@ -12,6 +12,13 @@ import type {
 	PromptHistoryEntry,
 	SessionRecordStorageOutcome,
 } from "./session-store";
+export type SerializedJson<T> = T extends string
+	? string
+	: T extends readonly (infer Item)[]
+		? SerializedJson<Item>[]
+		: T extends object
+			? { [Key in keyof T]: SerializedJson<T[Key]> }
+			: T;
 
 export const sessionWorkspace = sqliteTable("session_workspace", {
 	id: text("id").primaryKey(),
@@ -42,7 +49,9 @@ export const session = sqliteTable(
 		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 		updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 		lastMessageAt: integer("last_message_at", { mode: "timestamp_ms" }),
-		modelJson: text("model_json", { mode: "json" }).$type<ChatModelSelection>(),
+		modelJson: text("model_json", { mode: "json" }).$type<
+			SerializedJson<ChatModelSelection>
+		>(),
 		variant: text("variant").$type<ModelVariant>(),
 	},
 	(table) => [
@@ -67,7 +76,7 @@ export const sessionCompaction = sqliteTable(
 		sequence: integer("sequence").notNull(),
 		priorCompactionId: text("prior_compaction_id"),
 		summaryJson: text("summary_json", { mode: "json" })
-			.$type<SessionCompaction["summary"]>()
+			.$type<SerializedJson<SessionCompaction["summary"]>>()
 			.notNull(),
 		firstKeptUiMessageId: text("first_kept_ui_message_id").notNull(),
 		firstKeptAssistantPartIndex: integer("first_kept_assistant_part_index"),
@@ -77,12 +86,12 @@ export const sessionCompaction = sqliteTable(
 		trigger: text("trigger").$type<SessionCompaction["trigger"]>().notNull(),
 		focus: text("focus"),
 		summarizationModelJson: text("summarization_model_json", { mode: "json" })
-			.$type<SessionCompaction["summarizationModel"]>()
+			.$type<SerializedJson<SessionCompaction["summarizationModel"]>>()
 			.notNull(),
 		summarizationVariant: text("summarization_variant").$type<ModelVariant>(),
 		summarizationUsageJson: text("summarization_usage_json", {
 			mode: "json",
-		}).$type<SessionCompaction["summarizationUsage"]>(),
+		}).$type<SerializedJson<SessionCompaction["summarizationUsage"]>>(),
 		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 		completedAt: integer("completed_at", { mode: "timestamp_ms" }).notNull(),
 	},
@@ -102,7 +111,9 @@ export const promptHistory = sqliteTable("prompt_history", {
 	id: integer("id").primaryKey({ autoIncrement: true }),
 	prompt: text("prompt").notNull(),
 	entryJson: text("entry_json", { mode: "json" }).$type<
-		Pick<PromptHistoryEntry, "files" | "fileTokens" | "pastedText">
+		SerializedJson<
+			Pick<PromptHistoryEntry, "files" | "fileTokens" | "pastedText">
+		>
 	>(),
 	createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 });
@@ -129,18 +140,20 @@ export const sessionRecord = sqliteTable(
 			}),
 		turnId: text("turn_id").notNull(),
 		agentId: text("agent_id").notNull(),
-		delegationJson: text("delegation_json", { mode: "json" }).$type<{
-			parentTurnId: string;
-			parentToolCallId: string;
-		} | null>(),
+		delegationJson: text("delegation_json", { mode: "json" }).$type<
+			SerializedJson<{
+				parentTurnId: string;
+				parentToolCallId: string;
+			} | null>
+		>(),
 		modelJson: text("model_json", { mode: "json" })
-			.$type<SessionRecord["model"]>()
+			.$type<SerializedJson<SessionRecord["model"]>>()
 			.notNull(),
 		outcomeJson: text("outcome_json", { mode: "json" })
-			.$type<SessionRecordStorageOutcome>()
+			.$type<SerializedJson<SessionRecordStorageOutcome>>()
 			.notNull(),
 		messagesJson: text("messages_json", { mode: "json" })
-			.$type<SessionMessageRecord[]>()
+			.$type<SerializedJson<SessionMessageRecord[]>>()
 			.notNull(),
 		version: integer("version").notNull(),
 		position: integer("position").notNull(),

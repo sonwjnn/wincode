@@ -1,6 +1,6 @@
 import type { AgentId } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
-import type { ResolvedCodingAgent } from "./built-ins";
+import { buildAgent, type ResolvedCodingAgent } from "./built-ins";
 import type { AgentRegistry } from "./registry";
 
 export type AgentCallSelection = {
@@ -37,7 +37,8 @@ export const resolveEffectiveAgentSelection = (
 		(agent) => agent.id === "build" && agent.isAvailable
 	);
 	const effectiveAgent = selected ?? fallbackAgent;
-	const effectiveAgentId = effectiveAgent?.id ?? (registry ? "build" : agentId);
+	const effectiveAgentId =
+		effectiveAgent?.id ?? (registry ? buildAgent.id : agentId);
 	return {
 		agent: effectiveAgentId,
 		model: effectiveAgent?.model ?? fallbackModel,

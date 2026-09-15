@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { fromAny } from "@total-typescript/shoehorn";
 import type { AgentTurnDelegation, ResolvedTool } from "@wincode/agent-core";
 import {
 	applyManualApprovalSafetyCeiling,
@@ -16,6 +17,12 @@ import {
 	createProjectInstructionSnapshot,
 	type ProjectInstructionFileStats,
 } from "@/modules/prompt-composition/project-instructions";
+import {
+	agentId,
+	agentTurnId,
+	modelIdentity,
+	toolCallId,
+} from "./support/identifiers";
 
 const projectRoots = ["/repo", "/repo/packages", "/repo/packages/tui"];
 
@@ -70,7 +77,7 @@ const fileSystem = (
 const environment = {
 	stable: {
 		cwd: "packages/tui",
-		modelId: "gpt-5.6-luna",
+		modelId: modelIdentity("gpt-5.6-luna"),
 		platform: "darwin",
 		providerId: "openai",
 		repository: "git" as const,
@@ -85,14 +92,14 @@ const environment = {
 
 const agent = {
 	displayName: "Build",
-	id: "build",
+	id: agentId("build"),
 	instructions: "Implement the requested change.",
 	role: "primary" as const,
 };
 
 const delegation: AgentTurnDelegation = {
-	parentToolCallId: "call-1",
-	parentTurnId: "turn-1",
+	parentToolCallId: toolCallId("call-1"),
+	parentTurnId: agentTurnId("turn-1"),
 };
 const resolvedTool = (name: string): ResolvedTool => ({
 	definition: {
@@ -154,11 +161,11 @@ describe("Prompt Composition", () => {
 
 	test("escapes control characters in prompt metadata", () => {
 		const result = composeSystemPrompt({
-			agent: {
+			agent: fromAny({
 				...agent,
 				displayName: "Build\u2028Name",
 				id: "build\nINJECT",
-			},
+			}),
 			effectiveVisibleTools: [],
 			environment: {
 				...environment,
@@ -493,7 +500,7 @@ describe("Prompt Composition", () => {
 				getRepositoryRoot: async () => "/repo",
 				getStatus: async () => "clean",
 			},
-			model: { modelId: "model", providerId: "provider" },
+			model: { modelId: modelIdentity("model"), providerId: "provider" },
 			platform: "darwin",
 			projectRoots: ["/repo"],
 			workspace: "/repo/packages/tui",
@@ -521,7 +528,7 @@ describe("Prompt Composition", () => {
 				getRepositoryRoot: async () => "/repo",
 				getStatus: async () => "clean",
 			},
-			model: { modelId: "model", providerId: "provider" },
+			model: { modelId: modelIdentity("model"), providerId: "provider" },
 			platform: "darwin",
 			workspace: "/repo",
 		});
@@ -544,7 +551,7 @@ describe("Prompt Composition", () => {
 				getRepositoryRoot: async () => "/repo",
 				getStatus: async () => "clean",
 			},
-			model: { modelId: "model", providerId: "provider" },
+			model: { modelId: modelIdentity("model"), providerId: "provider" },
 			platform: "darwin",
 			workspace: "/repo",
 		});
@@ -597,7 +604,10 @@ describe("Prompt Composition", () => {
 				getRepositoryRoot: async () => "/repo",
 				getStatus: async () => "dirty (1 file)",
 			},
-			model: { modelId: "gpt-5.6-luna", providerId: "openai" },
+			model: {
+				modelId: modelIdentity("gpt-5.6-luna"),
+				providerId: "openai",
+			},
 			platform: "darwin",
 			workspace: "/repo",
 		});
@@ -615,7 +625,7 @@ describe("Prompt Composition", () => {
 
 		expect(snapshot.stable).toMatchObject({
 			cwd: "packages/tui",
-			modelId: "gpt-5.6-luna",
+			modelId: modelIdentity("gpt-5.6-luna"),
 			platform: "darwin",
 			providerId: "openai",
 			repository: "git",
@@ -797,7 +807,7 @@ describe("Prompt Composition", () => {
 				getRepositoryRoot: async () => null,
 				getStatus: async () => "unavailable",
 			},
-			model: { modelId: "model", providerId: "provider" },
+			model: { modelId: modelIdentity("model"), providerId: "provider" },
 			projectRoot: null,
 			workspace: "/standalone",
 		});

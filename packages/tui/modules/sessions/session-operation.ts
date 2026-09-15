@@ -1,4 +1,9 @@
-import type { AgentId, AgentTurnDelegation } from "@wincode/agent-core";
+import type {
+	AgentId,
+	AgentTurnDelegation,
+	SessionMessageId,
+	ToolCallId,
+} from "@wincode/agent-core";
 import { createAgentTurnAbortReason } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import type { SkillContext } from "@wincode/skills";
@@ -19,7 +24,7 @@ export type SessionSendInput = {
 	files?: SessionFilePart[];
 	skill?: SkillContext;
 	/** Existing stored user message to run without appending another message. */
-	messageId?: string;
+	messageId?: SessionMessageId;
 };
 
 export type SessionSendOutcome =
@@ -39,14 +44,14 @@ export type SessionOperation = {
 	/** Cancels the active send and its owned execution signal. */
 	cancel: () => void;
 	/** Interrupts the active turn while preserving the existing terminal handling. */
-	interrupt: (preserveToolCallId?: string) => void;
+	interrupt: (preserveToolCallId?: ToolCallId) => void;
 };
 
 export type CreateSessionOperationOptions = {
 	execute: SessionSendExecutor;
 	/** Optional deadline applied to each active send. */
 	deadlineMs?: number;
-	onInterrupt?: (preserveToolCallId?: string) => void;
+	onInterrupt?: (preserveToolCallId?: ToolCallId) => void;
 };
 
 const ACTIVE_SEND_ERROR = "A session send is already active.";
@@ -124,7 +129,7 @@ export const createSessionOperation = ({
 		current.controller.abort(createAgentTurnAbortReason("cancelled"));
 	};
 
-	const interrupt = (preserveToolCallId?: string): void => {
+	const interrupt = (preserveToolCallId?: ToolCallId): void => {
 		active?.controller.abort(createAgentTurnAbortReason("interrupted"));
 		onInterrupt?.(preserveToolCallId);
 	};

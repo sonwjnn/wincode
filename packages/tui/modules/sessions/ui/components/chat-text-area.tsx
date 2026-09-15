@@ -11,6 +11,7 @@ import { useKeyboard, usePaste } from "@opentui/react";
 import {
 	findSupportedChatModelSelection,
 	getSupportedModelVariants,
+	supportedChatModelIdSchema,
 } from "@wincode/ai/models";
 import { spawn } from "bun";
 import { useCallback, useEffect, useMemo, useRef } from "react";
@@ -140,7 +141,7 @@ export function ChatTextArea({
 	const hideVariants =
 		supportedModel === null ||
 		getSupportedModelVariants({
-			modelId: supportedModel.id,
+			modelId: supportedChatModelIdSchema.parse(supportedModel.id),
 			providerId: supportedModel.connectionProviderId,
 		}).length === 0;
 	const textAreaRef = useRef<TextareaRenderable>(null);

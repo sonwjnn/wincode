@@ -19,6 +19,7 @@ import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
+import { agentId, mcpSnapshotId } from "../support/identifiers";
 
 const successResult = (): McpNormalizedResult => ({
 	content: [{ type: "text", text: "ok" }],
@@ -32,7 +33,7 @@ const makeRegistry = (execute?: McpRegistry["execute"]): McpRegistry => ({
 	close: async () => undefined,
 	createSnapshot: async (agent: AgentId): Promise<McpCatalogSnapshot> => ({
 		agent,
-		id: "snap-1",
+		id: mcpSnapshotId("snap-1"),
 		manifest: [],
 		tools: new Map(),
 	}),
@@ -86,7 +87,7 @@ test("provider exposes statuses, snapshots, runtime controls, and close", async 
 			calls.push("close");
 		},
 		createSnapshot: async (agent: AgentId) => ({
-			id: "snap-1",
+			id: mcpSnapshotId("snap-1"),
 			manifest: [],
 			agent,
 			tools: new Map(),
@@ -118,9 +119,11 @@ test("provider exposes statuses, snapshots, runtime controls, and close", async 
 	await captured.value?.initialize();
 	expect(calls.filter((call) => call === "initialize")).toHaveLength(2);
 
-	await expect(captured.value?.createSnapshot("build")).resolves.toEqual({
-		agent: "build",
-		id: "snap-1",
+	await expect(
+		captured.value?.createSnapshot(agentId("build"))
+	).resolves.toEqual({
+		agent: agentId("build"),
+		id: mcpSnapshotId("snap-1"),
 		manifest: [],
 		tools: new Map(),
 	});
@@ -226,7 +229,7 @@ test("provider shows a single summary toast after the first build snapshot", asy
 	};
 	const { captured, setup } = await renderProvider(registry);
 
-	await captured.value?.createSnapshot("build");
+	await captured.value?.createSnapshot(agentId("build"));
 	await flushUi(setup);
 	expect(setup.captureCharFrame()).toContain("broken: Connection refused");
 
@@ -243,7 +246,7 @@ test("provider shows a single summary toast after the first build snapshot", asy
 		},
 		{ name: "broken2", state: "failed", toolCount: 0, transport: "remote" },
 	];
-	await captured.value?.createSnapshot("build");
+	await captured.value?.createSnapshot(agentId("build"));
 	await flushUi(setup);
 
 	const frame = setup.captureCharFrame();
@@ -397,12 +400,12 @@ test("provider shows no summary toast when all MCP servers connect", async () =>
 	};
 	const { captured, setup } = await renderProvider(registry);
 
-	await captured.value?.createSnapshot("build");
+	await captured.value?.createSnapshot(agentId("build"));
 	await flushUi(setup);
 	expect(setup.captureCharFrame()).not.toContain("MCP:");
 
 	// A plan snapshot never summarizes either.
-	await captured.value?.createSnapshot("plan");
+	await captured.value?.createSnapshot(agentId("plan"));
 	await flushUi(setup);
 	expect(setup.captureCharFrame()).not.toContain("MCP:");
 	setup.renderer.destroy();

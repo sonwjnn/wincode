@@ -1,3 +1,4 @@
+import type { ToolCallId } from "@wincode/agent-core";
 export type ApprovalIdentityRow = {
 	label: string;
 	value: string;
@@ -20,7 +21,7 @@ export type ToolApprovalRequest = {
 	identity: readonly ApprovalIdentityRow[];
 	input: unknown;
 	safety?: boolean;
-	toolCallId?: string;
+	toolCallId?: ToolCallId;
 };
 
 /**

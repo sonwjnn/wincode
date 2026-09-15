@@ -9,22 +9,28 @@ import {
 	resolveRetryMessageId,
 	resolveSessionTurnFooterMessages,
 } from "@/modules/sessions/ui/components/chat-turns";
+import {
+	agentId,
+	modelId,
+	sessionMessageId,
+	toolCallId,
+} from "../support/identifiers";
 
 const user = (id: string): SessionMessage => ({
-	id,
+	id: sessionMessageId(id),
 	parts: [{ text: id, type: "text" }],
 	role: "user",
 });
 
 const assistant = (id: string, interrupted = false): SessionMessage => ({
-	id,
+	id: sessionMessageId(id),
 	metadata: interrupted ? { interrupted: true } : undefined,
 	parts: [{ text: id, type: "text" }],
 	role: "assistant",
 });
 const sharedTurnMetadata: NonNullable<SessionMessage["metadata"]> = {
-	agent: "build",
-	model: { modelId: "gpt-5.6-luna", providerId: "openai" },
+	agent: agentId("build"),
+	model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
 	variant: "low",
 };
 
@@ -42,20 +48,20 @@ const terminalAssistant = (
 	id: string,
 	terminalOutcome: SessionMessageTerminalOutcome
 ): SessionMessage => ({
-	id,
+	id: sessionMessageId(id),
 	metadata: { terminalOutcome },
 	parts: [{ text: id, type: "text" }],
 	role: "assistant",
 });
 
 const completedTool = (): SessionMessage => ({
-	id: "tool",
+	id: sessionMessageId("tool"),
 	parts: [
 		{
 			input: { command: "rm -rf build" },
 			output: { exitCode: 0 },
 			state: "output-available",
-			toolCallId: "call-1",
+			toolCallId: toolCallId("call-1"),
 			type: "tool-shell",
 		},
 	],
@@ -68,7 +74,7 @@ test("offers retry for a persisted failed assistant outcome", () => {
 			user("user-1"),
 			terminalAssistant("assistant-1", "failed"),
 		])
-	).toBe("user-1");
+	).toBe(sessionMessageId("user-1"));
 });
 
 test("offers retry for an older unanswered user after a later completed turn", () => {
@@ -78,16 +84,18 @@ test("offers retry for an older unanswered user after a later completed turn", (
 			user("user-2"),
 			assistant("assistant-2"),
 		])
-	).toBe("user-1");
+	).toBe(sessionMessageId("user-1"));
 });
 test("offers retry for an accepted user row with no assistant outcome", () => {
-	expect(resolveRetryMessageId([user("user-1")])).toBe("user-1");
+	expect(resolveRetryMessageId([user("user-1")])).toBe(
+		sessionMessageId("user-1")
+	);
 });
 
 test("offers retry for an interrupted assistant without duplicating the user", () => {
 	const messages = [user("user-1"), assistant("assistant-1", true)];
 
-	expect(resolveRetryMessageId(messages)).toBe("user-1");
+	expect(resolveRetryMessageId(messages)).toBe(sessionMessageId("user-1"));
 });
 
 test("suppresses retry after a later successful assistant outcome", () => {
@@ -124,7 +132,7 @@ test("prepares retry context without failed output or duplicate user content", (
 			user("user-2"),
 			assistant("failed-2", true),
 		],
-		"user-2"
+		sessionMessageId("user-2")
 	);
 
 	expect(result).toEqual({
@@ -135,14 +143,14 @@ test("prepares retry context without failed output or duplicate user content", (
 
 test("excludes persisted failed outcomes from later retry context", () => {
 	const failedAssistant: SessionMessage = {
-		id: "failed-1",
+		id: sessionMessageId("failed-1"),
 		metadata: { terminalOutcome: "failed" },
 		parts: [{ text: "safe failure", type: "text" }],
 		role: "assistant",
 	};
 	const result = prepareRetryMessages(
 		[user("user-1"), failedAssistant, user("user-2")],
-		"user-2"
+		sessionMessageId("user-2")
 	);
 
 	expect(result).toEqual({
@@ -160,12 +168,19 @@ test("keeps ordinary user, tool, and assistant rows in one rendered turn", () =>
 	]);
 	expect(
 		turns.map((turn) => turn.messages.map((message) => message.id))
-	).toEqual([["user-1", "tool", "assistant-1"], ["user-2"]]);
+	).toEqual([
+		[
+			sessionMessageId("user-1"),
+			sessionMessageId("tool"),
+			sessionMessageId("assistant-1"),
+		],
+		[sessionMessageId("user-2")],
+	]);
 });
 test("attaches a retried result to its logical user turn", () => {
 	const retryResult: SessionMessage = {
 		...assistant("assistant-retry"),
-		metadata: { sourceUserMessageId: "user-1" },
+		metadata: { sourceUserMessageId: sessionMessageId("user-1") },
 	};
 	const turns = groupMessagesBySessionTurn([
 		user("user-1"),
@@ -177,14 +192,14 @@ test("attaches a retried result to its logical user turn", () => {
 	expect(
 		turns.map((turn) => turn.messages.map((message) => message.id))
 	).toEqual([
-		["user-1", "assistant-retry"],
-		["user-2", "assistant-2"],
+		[sessionMessageId("user-1"), sessionMessageId("assistant-retry")],
+		[sessionMessageId("user-2"), sessionMessageId("assistant-2")],
 	]);
 });
 test("suppresses retry after a successful older retry result", () => {
 	const retryResult: SessionMessage = {
 		...assistant("assistant-retry"),
-		metadata: { sourceUserMessageId: "user-1" },
+		metadata: { sourceUserMessageId: sessionMessageId("user-1") },
 	};
 
 	expect(
@@ -199,7 +214,7 @@ test("suppresses retry after a successful older retry result", () => {
 test("keeps a later user's retry state independent from an older retry result", () => {
 	const retryResult: SessionMessage = {
 		...assistant("assistant-retry"),
-		metadata: { sourceUserMessageId: "user-1" },
+		metadata: { sourceUserMessageId: sessionMessageId("user-1") },
 	};
 
 	expect(
@@ -209,7 +224,7 @@ test("keeps a later user's retry state independent from an older retry result", 
 			terminalAssistant("failed-2", "failed"),
 			retryResult,
 		])
-	).toBe("user-2");
+	).toBe(sessionMessageId("user-2"));
 });
 
 test("groups matching metadata while the next turn runs and after completion", () => {

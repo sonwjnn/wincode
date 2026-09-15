@@ -148,6 +148,55 @@ One model invocation within an Agent Turn. _Avoid_: Agent Turn, iteration
 One request by an Agent to invoke a tool, together with its resulting completion,
 rejection, or failure. _Avoid_: command, action
 
+**Agent Identifier**:
+The stable identity of one Agent, used to select and correlate that Agent across configuration, permissions, and Agent Turns. It is distinct from an Agent Turn and from a display label.
+_Avoid_: display name
+
+**Agent Turn Identifier**:
+The identity of one Agent Turn, used to correlate its live execution and emitted events. Retrying creates a new Agent Turn Identifier.
+_Avoid_: Session Identifier
+
+**Tool Call Identifier**:
+The identity of one Tool Call within an Agent Turn, used to connect its request, outcome, approval, event, and durable result. It is distinct from the tool name.
+_Avoid_: tool name
+
+**Model Step Identifier**:
+The identity of one Model Step within an Agent Turn. It distinguishes separate model invocations in the same turn.
+_Avoid_: Agent Turn Identifier
+
+**Model Identifier**:
+The identity of a Model Catalog entry. A model selection pairs it with a Connection Provider identity.
+_Avoid_: model capability
+
+**Session Identifier**:
+The identity of one durable interactive session that contains Session Records and their messages.
+_Avoid_: Agent Turn Identifier
+
+**Session Message Identifier**:
+The identity of one user or assistant message tracked by a session and referenced by session operations such as compaction.
+_Avoid_: Tool Call Identifier
+
+**Session Record Identifier**:
+The identity of one committed durable Session Record. It is distinct from the Session, its messages, and the Agent Turn that produced it.
+_Avoid_: Session Identifier
+
+**Attachment Identifier**:
+The identity of externally stored content referenced by a Session. It identifies the attachment content, not its filename or workspace path.
+_Avoid_: filename, blob key
+
+**Compaction Identifier**:
+The identity of one compaction summary associated with a Session. It links the summary to its predecessor and covered messages.
+_Avoid_: summary text
+
+**Workspace Identifier**:
+The identity of a workspace scope that owns Sessions and their attachments.
+_Avoid_: workspace path
+
+**MCP Snapshot Identifier**:
+The identity of one transient MCP tool catalog snapshot. It determines whether a tool execution still uses a current catalog.
+_Avoid_: MCP server name
+
+
 **Agent Turn Event**:
 A transient fact emitted while an Agent Turn is running for live observation and
 control. It is not a durable Session record. _Avoid_: persisted event,

@@ -4,6 +4,7 @@ import { buildAgentRegistry } from "@/modules/agents";
 import { createToolPermission } from "@/modules/permissions/policy";
 import { resolveToolPermissionPolicies } from "@/modules/permissions/use-tool-permission";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
+import { agentId } from "../support/identifiers";
 
 const makeSnapshot = (document: Record<string, unknown>): ConfigSnapshot => ({
 	diagnostics: [],
@@ -16,7 +17,7 @@ describe("resolveToolPermissionPolicies resource profile", () => {
 	test("keeps the standard profile while the Agent registry is unavailable", () => {
 		const resolved = resolveToolPermissionPolicies(
 			null,
-			"build",
+			agentId("build"),
 			createToolPermission
 		);
 
@@ -38,7 +39,7 @@ describe("resolveToolPermissionPolicies resource profile", () => {
 
 		const resolved = resolveToolPermissionPolicies(
 			registry,
-			"deep-review",
+			agentId("deep-review"),
 			createToolPermission
 		);
 

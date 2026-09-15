@@ -7,9 +7,10 @@ import {
 	type SummaryTextGenerationOptions,
 } from "@/modules/sessions/compaction/summary-generator";
 import type { SessionMessage } from "@/modules/sessions/message";
+import { modelId, sessionMessageId, toolCallId } from "../support/identifiers";
 
 const selection: ChatModelSelection = {
-	modelId: "gpt-5.6-luna",
+	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 };
 
@@ -27,21 +28,21 @@ test("preserves settled tool call details in summary messages", async () => {
 		resolveModel: async () => model,
 	});
 	const assistantMessage: SessionMessage = {
-		id: "assistant-1",
+		id: sessionMessageId("assistant-1"),
 		parts: [
 			{ text: "I inspected the workspace.", type: "text" },
 			{
 				input: { command: "pwd" },
 				output: { exitCode: 0, output: "/workspace" },
 				state: "output-available",
-				toolCallId: "call-1",
+				toolCallId: toolCallId("call-1"),
 				type: "tool-shell",
 			},
 			{
 				errorText: "permission denied",
 				input: { path: ".env" },
 				state: "output-error",
-				toolCallId: "call-2",
+				toolCallId: toolCallId("call-2"),
 				type: "tool-read",
 			},
 		],
@@ -49,11 +50,11 @@ test("preserves settled tool call details in summary messages", async () => {
 	};
 
 	const toolResultMessage: SessionMessage = fromAny({
-		id: "tool-1",
+		id: sessionMessageId("tool-1"),
 		parts: [
 			{
 				output: { exitCode: 0, output: "/workspace" },
-				toolCallId: "call-1",
+				toolCallId: toolCallId("call-1"),
 				type: "tool-result",
 			},
 		],

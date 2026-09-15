@@ -22,6 +22,7 @@ import {
 	type PermissionRules,
 } from "@/modules/permissions";
 import { resolveToolPermissionPolicies } from "@/modules/permissions/use-tool-permission";
+import { agentId } from "../support/identifiers";
 
 class FakeMcpClient implements McpClient {
 	readonly name: string;
@@ -199,7 +200,7 @@ describe("createMcpRegistry", () => {
 		const fallbackPermission = createToolPermission({ edit: "deny" });
 		const resolution = resolveToolPermissionPolicies(
 			null,
-			"plan",
+			agentId("plan"),
 			() => fallbackPermission
 		);
 		const demo = new FakeMcpClient("demo", [tool("echo")]);
@@ -209,7 +210,7 @@ describe("createMcpRegistry", () => {
 		});
 
 		const snapshot = await registry.createSnapshot(
-			"plan",
+			agentId("plan"),
 			resolution.mcpPolicy
 		);
 
@@ -231,8 +232,8 @@ describe("createMcpRegistry", () => {
 			clients: { demo },
 			configs: [serverConfig("demo", { permission: "allow" })],
 		});
-		const snapshot = await registry.createSnapshot("plan");
-		expect(snapshot.agent).toBe("plan");
+		const snapshot = await registry.createSnapshot(agentId("plan"));
+		expect(snapshot.agent).toBe(agentId("plan"));
 		expect(snapshot.manifest).toHaveLength(1);
 		expect(snapshot.tools.size).toBe(1);
 		expect(demo.connectCount).toBe(1);
@@ -244,7 +245,7 @@ describe("createMcpRegistry", () => {
 			clients: { demo },
 			configs: [serverConfig("demo", { permission: "allow" })],
 		});
-		const snapshot = await registry.createSnapshot("plan", {
+		const snapshot = await registry.createSnapshot(agentId("plan"), {
 			rules: openRules({ "*": "deny" }),
 			safety: false,
 		});
@@ -267,7 +268,7 @@ describe("createMcpRegistry", () => {
 			clients: { healthy, broken },
 			configs: [serverConfig("healthy"), serverConfig("broken")],
 		});
-		const snapshot = await registry.createSnapshot("build");
+		const snapshot = await registry.createSnapshot(agentId("build"));
 		expect(snapshot.manifest).toHaveLength(1);
 		expect(registry.getStatuses()).toEqual(
 			expect.arrayContaining([
@@ -340,7 +341,7 @@ describe("createMcpRegistry", () => {
 				serverConfig("on", { disabled: false }),
 			],
 		});
-		await registry.createSnapshot("build");
+		await registry.createSnapshot(agentId("build"));
 		expect(registry.getStatuses()).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({ name: "off", state: "disabled" }),
@@ -356,7 +357,7 @@ describe("createMcpRegistry", () => {
 			clients: { github },
 			configs: [serverConfig("github", { permission: "deny" })],
 		});
-		const snapshot = await registry.createSnapshot("build");
+		const snapshot = await registry.createSnapshot(agentId("build"));
 		expect(snapshot.manifest).toEqual([]);
 		expect(snapshot.tools.size).toBe(2);
 		const readName = [...snapshot.tools.keys()].find(
@@ -373,7 +374,7 @@ describe("createMcpRegistry", () => {
 			clients: { demo },
 			configs: [serverConfig("demo", { permission: "allow" })],
 		});
-		const snapshot = await registry.createSnapshot("build");
+		const snapshot = await registry.createSnapshot(agentId("build"));
 		const name = snapshot.manifest[0]?.name ?? "";
 		const result = await registry.execute(snapshot, name, {});
 		expect(result.isError).toBe(false);
@@ -394,7 +395,7 @@ describe("createMcpRegistry", () => {
 				}),
 			],
 		});
-		const snapshot = await registry.createSnapshot("build");
+		const snapshot = await registry.createSnapshot(agentId("build"));
 		const name = snapshot.manifest[0]?.name ?? "";
 		const result = await registry.execute(snapshot, name, {});
 		expect(result.isError).toBe(true);
@@ -423,7 +424,7 @@ describe("createMcpRegistry", () => {
 				}),
 			],
 		});
-		const snapshot = await registry.createSnapshot("build");
+		const snapshot = await registry.createSnapshot(agentId("build"));
 		const name = snapshot.manifest[0]?.name ?? "";
 		const result = await registry.execute(snapshot, name, {});
 		expect(result.isError).toBe(true);
@@ -437,7 +438,7 @@ describe("createMcpRegistry", () => {
 			clients: { demo },
 			configs: [serverConfig("demo")],
 		});
-		const snapshot = await registry.createSnapshot("build");
+		const snapshot = await registry.createSnapshot(agentId("build"));
 		const result = await registry.execute(
 			snapshot,
 			"mcp_unknown_tool_00000000",
@@ -453,7 +454,7 @@ describe("createMcpRegistry", () => {
 			clients: { demo },
 			configs: [serverConfig("demo", { permission: "allow" })],
 		});
-		const snapshot = await registry.createSnapshot("plan", {
+		const snapshot = await registry.createSnapshot(agentId("plan"), {
 			rules: openRules({ "*": "deny" }),
 			safety: false,
 		});
@@ -472,8 +473,8 @@ describe("createMcpRegistry", () => {
 			clients: { demo },
 			configs: [serverConfig("demo")],
 		});
-		const first = await registry.createSnapshot("build");
-		await registry.createSnapshot("build");
+		const first = await registry.createSnapshot(agentId("build"));
+		await registry.createSnapshot(agentId("build"));
 		const name = first.manifest[0]?.name ?? "";
 		const result = await registry.execute(first, name, {});
 		expect(result.isError).toBe(true);
@@ -486,12 +487,12 @@ describe("createMcpRegistry", () => {
 			clients: { demo },
 			configs: [serverConfig("demo")],
 		});
-		const first = await registry.createSnapshot("build");
+		const first = await registry.createSnapshot(agentId("build"));
 		const firstName = first.manifest[0]?.name ?? "";
 		demo.publishTools([tool("two")]);
 		const result = await registry.execute(first, firstName, {});
 		expect(result.isError).toBe(false);
-		const second = await registry.createSnapshot("build");
+		const second = await registry.createSnapshot(agentId("build"));
 		expect(second.manifest).toHaveLength(1);
 		expect(
 			second.tools.get(second.manifest[0]?.name ?? "")?.originalToolName
@@ -510,11 +511,11 @@ describe("createMcpRegistry", () => {
 			clients: { demo },
 			configs: [serverConfig("demo")],
 		});
-		const snapshot = await registry.createSnapshot("build");
+		const snapshot = await registry.createSnapshot(agentId("build"));
 		const name = snapshot.manifest[0]?.name ?? "";
 		const pending = registry.execute(snapshot, name, {});
 		demo.publishTools([tool("two")]);
-		await registry.createSnapshot("build");
+		await registry.createSnapshot(agentId("build"));
 		expect(snapshot.tools.get(name)?.originalToolName).toBe("one");
 		expect(snapshot.tools.size).toBe(1);
 		release?.();
@@ -539,7 +540,7 @@ describe("createMcpRegistry", () => {
 				},
 			},
 		});
-		await registry.createSnapshot("build");
+		await registry.createSnapshot(agentId("build"));
 		expect(registry.getStatuses()).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({ name: "broken", state: "failed" }),
@@ -569,7 +570,7 @@ describe("createMcpRegistry", () => {
 				toolCount: 1,
 			})
 		);
-		const snapshot = await registry.createSnapshot("build");
+		const snapshot = await registry.createSnapshot(agentId("build"));
 		expect(snapshot.manifest).toHaveLength(1);
 	});
 
@@ -628,7 +629,7 @@ describe("createMcpRegistry", () => {
 				},
 			},
 		});
-		await registry.createSnapshot("build");
+		await registry.createSnapshot(agentId("build"));
 		expect(created).toHaveLength(1);
 		const first = registry.reconnect("demo");
 		const second = registry.reconnect("demo");
@@ -680,7 +681,7 @@ describe("createMcpRegistry", () => {
 		const { clients, registry } = harness({
 			configs: [serverConfig("off", { disabled: true })],
 		});
-		await registry.createSnapshot("build");
+		await registry.createSnapshot(agentId("build"));
 		await registry.reconnect("off");
 		expect(registry.getStatuses()).toEqual(
 			expect.arrayContaining([
@@ -696,7 +697,7 @@ describe("createMcpRegistry", () => {
 			clients: { demo },
 			configs: [serverConfig("demo")],
 		});
-		const snapshot = await registry.createSnapshot("build");
+		const snapshot = await registry.createSnapshot(agentId("build"));
 
 		await registry.toggle("demo");
 
@@ -993,7 +994,7 @@ describe("createMcpRegistry", () => {
 		});
 		await registry.initialize();
 
-		const snapshotPromise = registry.createSnapshot("build");
+		const snapshotPromise = registry.createSnapshot(agentId("build"));
 		const togglePromise = registry.toggle("demo");
 		const [snapshot] = await Promise.all([snapshotPromise, togglePromise]);
 
@@ -1011,7 +1012,7 @@ describe("createMcpRegistry", () => {
 			clients: { demo },
 			configs: [serverConfig("demo")],
 		});
-		const snapshot = await registry.createSnapshot("build");
+		const snapshot = await registry.createSnapshot(agentId("build"));
 		const execution = registry.execute(
 			snapshot,
 			snapshot.manifest[0]?.name ?? "",
@@ -1050,7 +1051,7 @@ describe("createMcpRegistry", () => {
 				},
 			},
 		});
-		const pending = registry.createSnapshot("build");
+		const pending = registry.createSnapshot(agentId("build"));
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(created).toHaveLength(1);
 		await registry.close();
@@ -1071,7 +1072,7 @@ describe("createMcpRegistry", () => {
 			clients: { demo },
 			configs: [serverConfig("demo")],
 		});
-		const snapshot = await registry.createSnapshot("build");
+		const snapshot = await registry.createSnapshot(agentId("build"));
 		const name = snapshot.manifest[0]?.name ?? "";
 		const controller = new AbortController();
 		const pending = registry.execute(snapshot, name, {}, controller.signal);
@@ -1108,7 +1109,7 @@ describe("createMcpRegistry", () => {
 			clients: { a: serverA, b: serverB },
 			configs: [serverConfig("b"), serverConfig("a")],
 		});
-		const snapshot = await registry.createSnapshot("build");
+		const snapshot = await registry.createSnapshot(agentId("build"));
 		expect(snapshot.manifest).toHaveLength(128);
 		const byServer = snapshot.manifest.map(
 			(entry) => snapshot.tools.get(entry.name)?.serverName
@@ -1137,7 +1138,7 @@ describe("createMcpRegistry", () => {
 		const unsubscribe = registry.subscribe(() => {
 			notifications += 1;
 		});
-		await registry.createSnapshot("build");
+		await registry.createSnapshot(agentId("build"));
 		expect(notifications).toBe(2);
 		unsubscribe();
 		broken.connectFailure = null;
@@ -1152,7 +1153,7 @@ describe("createMcpRegistry", () => {
 			clients: { demo },
 			configs: [serverConfig("demo")],
 		});
-		const snapshot = await registry.createSnapshot("build");
+		const snapshot = await registry.createSnapshot(agentId("build"));
 		const name = snapshot.manifest[0]?.name ?? "";
 		const pending = registry.execute(snapshot, name, {});
 		await registry.close();
@@ -1187,7 +1188,10 @@ describe("agent + server policy composition", () => {
 			clients: { demo },
 			configs: [serverConfig("demo", { permission: serverPolicy })],
 		});
-		const snapshot = await registry.createSnapshot("build", agentPolicy);
+		const snapshot = await registry.createSnapshot(
+			agentId("build"),
+			agentPolicy
+		);
 		const entry = findByLogicalName(snapshot, "demo_echo");
 		return { entry, snapshot };
 	};

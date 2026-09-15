@@ -2,6 +2,7 @@ import { RGBA, TextAttributes } from "@opentui/core";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLatest } from "@/shared/hooks/use-latest";
+import type { SessionId } from "@/shared/identifiers";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -232,7 +233,7 @@ export const SessionsDialogContent = () => {
 	);
 
 	const handleRenameSuccess = useCallback(
-		(sessionId: string, newTitle: string) => {
+		(sessionId: SessionId, newTitle: string) => {
 			setSessions((prev) =>
 				prev.map((s) => (s.id === sessionId ? { ...s, title: newTitle } : s))
 			);

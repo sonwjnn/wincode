@@ -32,6 +32,7 @@ import {
 	type McpSnapshotTool,
 } from "@/modules/mcp/registry";
 import type { PermissionRules } from "@/modules/permissions";
+import { agentId } from "../support/identifiers";
 
 const FIXTURE = path.join(import.meta.dir, "../support/mcp-stdio-server.ts");
 
@@ -165,8 +166,8 @@ describe("MCP transport integration", () => {
 			stdioServerConfig("stdio-echo", [process.execPath, "run", FIXTURE])
 		);
 		try {
-			const snapshot = await registry.createSnapshot("build");
-			expect(snapshot.agent).toBe("build");
+			const snapshot = await registry.createSnapshot(agentId("build"));
+			expect(snapshot.agent).toBe(agentId("build"));
 			expect(snapshot.manifest).toHaveLength(1);
 			expect(snapshot.manifest[0]?.inputSchema).toMatchObject({
 				type: "object",
@@ -204,7 +205,7 @@ describe("MCP transport integration", () => {
 			])
 		);
 		try {
-			const snapshot = await registry.createSnapshot("build");
+			const snapshot = await registry.createSnapshot(agentId("build"));
 			expect(snapshot.manifest).toHaveLength(0);
 			expect(snapshot.tools.size).toBe(0);
 			expect(registry.getStatuses()).toEqual(
@@ -236,7 +237,7 @@ describe("MCP transport integration", () => {
 				)
 			);
 			try {
-				const snapshot = await registry.createSnapshot("build");
+				const snapshot = await registry.createSnapshot(agentId("build"));
 				expect(snapshot.manifest).toHaveLength(1);
 				expect(hasChildProcess(FIXTURE)).toBe(true);
 			} finally {
@@ -260,7 +261,7 @@ describe("MCP transport integration", () => {
 			remoteServerConfig("http-echo", server.url.toString())
 		);
 		try {
-			const snapshot = await registry.createSnapshot("build");
+			const snapshot = await registry.createSnapshot(agentId("build"));
 			expect(snapshot.manifest).toHaveLength(1);
 			expect(registry.getStatuses()).toEqual(
 				expect.arrayContaining([
@@ -298,7 +299,7 @@ describe("MCP transport integration", () => {
 			remoteServerConfig("http-echo", url.toString())
 		);
 		try {
-			const snapshot = await registry.createSnapshot("build");
+			const snapshot = await registry.createSnapshot(agentId("build"));
 			expect(snapshot.manifest).toHaveLength(1);
 		} finally {
 			await registry.close();
@@ -342,7 +343,10 @@ describe("MCP policy composition over the real catalog", () => {
 	test("exposes and names an allowed tool logically", async () => {
 		const registry = buildStdioRegistry();
 		try {
-			const snapshot = await registry.createSnapshot("build", permissive);
+			const snapshot = await registry.createSnapshot(
+				agentId("build"),
+				permissive
+			);
 			expect(snapshot.manifest).toHaveLength(1);
 			const tool = firstTool(snapshot);
 			expect(tool.policy).toBe("allow");
@@ -359,7 +363,7 @@ describe("MCP policy composition over the real catalog", () => {
 	test("an ask policy keeps the tool visible but gated", async () => {
 		const registry = buildStdioRegistry();
 		try {
-			const snapshot = await registry.createSnapshot("build", {
+			const snapshot = await registry.createSnapshot(agentId("build"), {
 				rules: openRules({ "stdio-echo_*": "ask" }),
 				safety: false,
 			});
@@ -373,7 +377,7 @@ describe("MCP policy composition over the real catalog", () => {
 	test("a deny policy hides the tool but keeps its dispatch entry", async () => {
 		const registry = buildStdioRegistry();
 		try {
-			const snapshot = await registry.createSnapshot("build", {
+			const snapshot = await registry.createSnapshot(agentId("build"), {
 				rules: openRules({ "*": "deny" }),
 				safety: false,
 			});
@@ -390,7 +394,10 @@ describe("MCP policy composition over the real catalog", () => {
 			stdioServerConfig("stdio-echo", [process.execPath, "run", FIXTURE], "ask")
 		);
 		try {
-			const snapshot = await registry.createSnapshot("build", permissive);
+			const snapshot = await registry.createSnapshot(
+				agentId("build"),
+				permissive
+			);
 			expect(snapshot.manifest).toHaveLength(1);
 			expect(firstTool(snapshot).policy).toBe("ask");
 		} finally {
@@ -407,7 +414,10 @@ describe("MCP policy composition over the real catalog", () => {
 			)
 		);
 		try {
-			const snapshot = await registry.createSnapshot("build", permissive);
+			const snapshot = await registry.createSnapshot(
+				agentId("build"),
+				permissive
+			);
 			expect(snapshot.manifest).toEqual([]);
 			expect(snapshot.tools.size).toBe(1);
 			expect(firstTool(snapshot).policy).toBe("deny");
@@ -422,7 +432,7 @@ describe("MCP policy composition over the real catalog", () => {
 		);
 		try {
 			// server ask + agent allow -> ask (neither side loosens the other).
-			const snapshot = await askServer.createSnapshot("build", {
+			const snapshot = await askServer.createSnapshot(agentId("build"), {
 				rules: openRules({ "stdio-echo_*": "allow" }),
 				safety: false,
 			});

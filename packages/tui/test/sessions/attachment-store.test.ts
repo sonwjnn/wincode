@@ -12,6 +12,7 @@ import {
 	formatAttachmentUnavailableMarker,
 	getAttachmentReference,
 } from "@/modules/sessions/storage/attachment-store";
+import { sessionMessageId } from "../support/identifiers";
 
 const PNG_BYTES = new Uint8Array([
 	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
@@ -71,7 +72,7 @@ test("externalizes inline image parts and hydrates them only on request", async 
 	});
 	const inlineUrl = `data:image/png;base64,${Buffer.from(PNG_BYTES).toString("base64")}`;
 	const message = fromPartial<SessionMessage>({
-		id: "user-1",
+		id: sessionMessageId("user-1"),
 		parts: [
 			{ text: "inspect [Image 1]", type: "text" },
 			{
@@ -138,7 +139,7 @@ test("returns bounded unavailable markers for missing or corrupted blobs", async
 	const hydrated = await attachments.hydrateMessages(
 		[
 			{
-				id: "user-1",
+				id: sessionMessageId("user-1"),
 				parts: [attachmentReferenceToFilePart(reference)],
 				role: "user",
 			},
@@ -170,12 +171,12 @@ test("keeps only newest attachments within an explicit media budget", async () =
 	}
 	const messages = fromPartial<SessionMessage[]>([
 		{
-			id: "old",
+			id: sessionMessageId("old"),
 			parts: [attachmentReferenceToFilePart(oldReference)],
 			role: "user",
 		},
 		{
-			id: "new",
+			id: sessionMessageId("new"),
 			parts: [attachmentReferenceToFilePart(newReference)],
 			role: "user",
 		},
@@ -224,12 +225,12 @@ test("prioritizes the latest user turn over retained media limits", async () => 
 	const hydrated = await attachments.hydrateMessages(
 		fromPartial<SessionMessage[]>([
 			{
-				id: "old",
+				id: sessionMessageId("old"),
 				parts: [attachmentReferenceToFilePart(oldReference)],
 				role: "user",
 			},
 			{
-				id: "current",
+				id: sessionMessageId("current"),
 				parts: [attachmentReferenceToFilePart(currentReference)],
 				role: "user",
 			},
@@ -237,8 +238,7 @@ test("prioritizes the latest user turn over retained media limits", async () => 
 		{
 			maxAttachments: 0,
 			maxBytes: 0,
-			maxTokens: 0,
-			priorityMessageId: "current",
+			priorityMessageId: sessionMessageId("current"),
 			purpose: "model",
 		}
 	);

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { resolveModelMetadata } from "@/modules/model-pricing/model-pricing";
+import { modelId } from "./support/identifiers";
 
 test("merges live pricing fields without discarding catalog rates (#57)", () => {
 	const metadata = resolveModelMetadata(
@@ -8,7 +9,7 @@ test("merges live pricing fields without discarding catalog rates (#57)", () => 
 				cost: { input: 0.3, output: 2 },
 			},
 		},
-		{ modelId: "gpt-5.6-luna", providerId: "openai" }
+		{ modelId: modelId("gpt-5.6-luna"), providerId: "openai" }
 	);
 
 	expect(metadata?.cost).toEqual({

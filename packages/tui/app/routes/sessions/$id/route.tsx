@@ -1,4 +1,5 @@
 import { createFileRoute, useLocation } from "@tanstack/react-router";
+import { toSessionMessageId } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -15,6 +16,7 @@ import {
 	type SessionInitialSubmission,
 	SessionView,
 } from "@/modules/sessions/ui/views/session-view";
+import { toSessionId } from "@/shared/identifiers";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 
 const readInitialSubmission = (
@@ -37,7 +39,7 @@ const readInitialSubmission = (
 	) {
 		return;
 	}
-	return { messageId: submission.messageId };
+	return { messageId: toSessionMessageId(submission.messageId) };
 };
 
 export const Route = createFileRoute("/sessions/$id")({
@@ -48,6 +50,7 @@ function SessionRoute() {
 	const { colors } = useTheme();
 	const { id } = Route.useParams();
 	const location = useLocation();
+	const sessionId = toSessionId(id);
 	const initialSubmission = useMemo(
 		() => readInitialSubmission(location.state),
 		[location.state]
@@ -76,9 +79,9 @@ function SessionRoute() {
 		const store = getSessionStore();
 
 		Promise.all([
-			store.getSession(id),
-			store.getCompactions(id),
-			store.listSessionRecords(id),
+			store.getSession(sessionId),
+			store.getCompactions(sessionId),
+			store.listSessionRecords(sessionId),
 		])
 			.then(async ([session, loadedCompactions, records]) => {
 				if (ignore) {
@@ -116,7 +119,7 @@ function SessionRoute() {
 		return () => {
 			ignore = true;
 		};
-	}, [id]);
+	}, [sessionId]);
 
 	if (errorMessage) {
 		return <text fg={colors.error}>{errorMessage}</text>;
@@ -134,7 +137,7 @@ function SessionRoute() {
 			initialModel={sessionConfig.model}
 			initialSubmission={initialSubmission}
 			initialVariant={sessionConfig.variant}
-			sessionId={id}
+			sessionId={sessionId}
 			sessionTitle={sessionTitle}
 		/>
 	);

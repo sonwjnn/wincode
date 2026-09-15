@@ -36,6 +36,7 @@
     "react": "catalog:",
     "tree-sitter-powershell": "^0.26.4",
     "tree-sitter-wasms": "^0.1.13",
+    "type-fest": "catalog:",
     "web-tree-sitter": "^0.25.10",
     "zod": "catalog:"
   },

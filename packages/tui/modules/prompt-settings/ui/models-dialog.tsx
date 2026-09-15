@@ -6,6 +6,7 @@ import {
 	formatModelLabel,
 	isActiveChatModel,
 	type ModelCatalogEntry,
+	supportedChatModelIdSchema,
 } from "@wincode/ai/models";
 import { useCallback } from "react";
 import { connectionProviderDisplayNames } from "@/modules/connections";
@@ -88,7 +89,7 @@ export const ModelsDialogContent = ({
 				return;
 			}
 			onSelectModel({
-				modelId: model.id,
+				modelId: supportedChatModelIdSchema.parse(model.id),
 				providerId: model.connectionProviderId,
 			});
 			dialog.close();

@@ -1,7 +1,15 @@
 import { type ModelUsage, modelUsageSchema } from "@wincode/ai/model-usage";
-import type { ModelVariant } from "@wincode/ai/models";
+import type { ModelId, ModelVariant } from "@wincode/ai/models";
 import type { SkillActivationSource } from "@wincode/skills";
+import { isAgentId } from "./agent";
 import type { OperationalFailure } from "./failures";
+import type {
+	AgentId,
+	AttachmentId,
+	SessionMessageId,
+	SessionRecordId,
+	ToolCallId,
+} from "./identifiers";
 import type {
 	AgentTurnDelegation,
 	AgentTurnId,
@@ -32,14 +40,14 @@ export type SessionToolCallPart = {
 	readonly input: unknown;
 	readonly outcome: ToolCallOutcomeRecord;
 	readonly sequence: number;
-	readonly toolCallId: string;
+	readonly toolCallId: ToolCallId;
 	readonly toolName: string;
 	readonly type: "tool-call";
 };
 
 /** A durable reference to an externalized session attachment. */
 export type SessionAttachmentReferencePart = {
-	readonly attachmentId: string;
+	readonly attachmentId: AttachmentId;
 	readonly available?: boolean;
 	readonly byteLength: number;
 	readonly filename: string;
@@ -73,14 +81,14 @@ export type SessionSkillActivationRecord = {
 
 /** Per-message metadata safe to retain outside a transient Model Target. */
 export type SessionMessageMetadataRecord = {
-	readonly agent?: string;
+	readonly agent?: AgentId;
 	readonly model?: {
-		readonly modelId: string;
+		readonly modelId: ModelId;
 		readonly providerId: string;
 	};
 	readonly responseTimeMs?: number;
 	readonly skill?: SessionSkillActivationRecord;
-	readonly sourceUserMessageId?: string;
+	readonly sourceUserMessageId?: SessionMessageId;
 	readonly usage?: ModelUsage;
 	readonly variant?: ModelVariant;
 };
@@ -97,7 +105,7 @@ export type SessionMessagePart =
  * owned by the application.
  */
 export type SessionMessageRecord = {
-	readonly id: string;
+	readonly id: SessionMessageId;
 	readonly metadata?: SessionMessageMetadataRecord;
 	readonly parts: readonly SessionMessagePart[];
 	readonly role: "assistant" | "user";
@@ -154,12 +162,12 @@ export type SessionRecordOutcome =
  * is only meaningful while execution is live; retries do not mutate this row.
  */
 export type SessionRecord = {
-	readonly agentId: string;
+	readonly agentId: AgentId;
 	readonly delegation?: AgentTurnDelegation;
-	readonly id: string;
+	readonly id: SessionRecordId;
 	readonly messages: readonly SessionMessageRecord[];
 	readonly model: {
-		readonly modelId: string;
+		readonly modelId: ModelId;
 		readonly providerId: string;
 		readonly variant?: ModelVariant;
 	};
@@ -228,8 +236,7 @@ const isSessionMessageMetadataRecord = (
 				key === "usage" ||
 				key === "variant"
 		) &&
-		(value.agent === undefined ||
-			(typeof value.agent === "string" && value.agent.length > 0)) &&
+		(value.agent === undefined || isAgentId(value.agent)) &&
 		validModelMetadata &&
 		(value.responseTimeMs === undefined ||
 			isNonNegativeInteger(value.responseTimeMs)) &&

@@ -27,6 +27,7 @@ import {
 	createFakeAiSdkModule,
 	createFakeAiSdkRecorder,
 } from "@/test/support/e2e-fake-runtime";
+import { sessionMessageId } from "../support/identifiers";
 
 const testDirectory = await mkdtemp(
 	join(tmpdir(), "wincode-automatic-compaction-e2e-")
@@ -115,7 +116,9 @@ test("compacts automatically before sending and uses the rebuilt context", async
 		}
 		expect(entry.trigger).toBe("threshold");
 		expect(entry.summary.text).toBe(recorder.summaryText);
-		expect(entry.summary.coveredMessageIds).toContain("user-1");
+		expect(entry.summary.coveredMessageIds).toContain(
+			sessionMessageId("user-1")
+		);
 
 		const summaryRequests = recorder.requests.filter(
 			(request) => request.kind === "summary"

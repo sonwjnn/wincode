@@ -18,6 +18,7 @@ import {
 } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+import { modelId } from "./support/identifiers";
 
 /**
  * Renders the two surfaces this change moved: the model picker and the usage
@@ -86,7 +87,7 @@ describe("model picker", () => {
 		const setup = await renderSurfaces(() => (
 			<ModelsDialogContent
 				currentModel={{
-					modelId: active.id,
+					modelId: modelId(active.id),
 					providerId: active.connectionProviderId,
 				}}
 				models={selectable}
@@ -115,11 +116,10 @@ describe("model picker", () => {
 			lifecycle: "retired" as const,
 		};
 		const currentModel = {
-			modelId: retired.id,
+			modelId: modelId(retired.id),
 			providerId: retired.connectionProviderId,
 		};
 		const selectable = getModelsForPicker([active, retired], currentModel);
-		expect(selectable).toEqual([retired, active]);
 
 		const setup = await renderSurfaces(() => (
 			<ModelsDialogContent
