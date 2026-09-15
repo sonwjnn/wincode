@@ -22,10 +22,37 @@ const globDefinition = {
 	inputSchema: z.object({ pattern: z.string() }),
 	name: "glob",
 } satisfies ToolDefinition;
+const jsonSchemaDefinition = {
+	description: "Read a UTF-8 text file through a JSON Schema carrier.",
+	inputSchema: {
+		jsonSchema: {
+			properties: { path: { type: "string" } },
+			required: ["path"],
+			type: "object",
+		},
+	},
+	name: "json-read",
+} satisfies ToolDefinition;
 
 describe("Tool Definition contract", () => {
 	test("accepts a definition with input and output schemas", () => {
 		expect(isToolDefinition(readDefinition)).toBe(true);
+	});
+
+	test("validates JSON Schema carrier values at runtime", () => {
+		expect(isToolDefinition(jsonSchemaDefinition)).toBe(true);
+		expect(
+			isToolDefinition({
+				...jsonSchemaDefinition,
+				inputSchema: { jsonSchema: new Date() },
+			})
+		).toBe(false);
+		expect(
+			isToolDefinition({
+				...jsonSchemaDefinition,
+				inputSchema: { jsonSchema: { type: () => "object" } },
+			})
+		).toBe(false);
 	});
 
 	test("rejects definitions with malformed shapes", () => {

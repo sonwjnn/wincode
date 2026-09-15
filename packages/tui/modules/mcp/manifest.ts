@@ -1,4 +1,8 @@
-import { isObjectLike, isPlainObject } from "@wincode/runtime-utils";
+import {
+	isObjectLike,
+	isJsonObject as isRuntimeJsonObject,
+	isJsonValue as isRuntimeJsonValue,
+} from "@wincode/runtime-utils";
 import type { JsonObject, JsonValue, UnknownRecord } from "type-fest";
 import { z } from "zod";
 
@@ -12,63 +16,11 @@ export const MCP_TOOL_NAME_REGEX = /^[A-Za-z0-9_-]+$/u;
 
 const MAX_JSON_NESTING_DEPTH = 64;
 
-const isJsonPrimitive = (
-	value: unknown
-): value is null | boolean | number | string =>
-	value === null ||
-	typeof value === "string" ||
-	typeof value === "boolean" ||
-	(typeof value === "number" && Number.isFinite(value));
+export const isJsonValue = (value: unknown): value is JsonValue =>
+	isRuntimeJsonValue(value, { maxDepth: MAX_JSON_NESTING_DEPTH });
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: iterative traversal deliberately handles every JSON container type
-export const isJsonValue = (value: unknown): value is JsonValue => {
-	try {
-		const pending: Array<{ value: unknown; depth: number }> = [
-			{ value, depth: 0 },
-		];
-		const visited = new WeakSet<object>();
-
-		while (pending.length > 0) {
-			const item = pending.pop();
-			if (!item) {
-				continue;
-			}
-			const { value: current, depth } = item;
-			if (depth > MAX_JSON_NESTING_DEPTH) {
-				return false;
-			}
-			if (isJsonPrimitive(current)) {
-				continue;
-			}
-			if (typeof current !== "object") {
-				return false;
-			}
-			if (visited.has(current)) {
-				return false;
-			}
-			visited.add(current);
-
-			if (Array.isArray(current)) {
-				for (const child of current) {
-					pending.push({ value: child, depth: depth + 1 });
-				}
-				continue;
-			}
-			const prototype = Object.getPrototypeOf(current);
-			if (prototype !== Object.prototype && prototype !== null) {
-				return false;
-			}
-			for (const child of Object.values(current)) {
-				pending.push({ value: child, depth: depth + 1 });
-			}
-		}
-		return true;
-	} catch {
-		return false;
-	}
-};
 export const isJsonObject = (value: unknown): value is JsonObject =>
-	isPlainObject(value) && isJsonValue(value);
+	isRuntimeJsonObject(value, { maxDepth: MAX_JSON_NESTING_DEPTH });
 
 const byteLength = (value: string): number =>
 	new TextEncoder().encode(value).byteLength;

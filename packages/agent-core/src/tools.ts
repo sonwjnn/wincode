@@ -1,5 +1,5 @@
-import { isObjectLike } from "@wincode/runtime-utils";
-import type { Promisable, UnknownRecord } from "type-fest";
+import { isJsonObject, isObjectLike } from "@wincode/runtime-utils";
+import type { JsonObject, Promisable, UnknownRecord } from "type-fest";
 import type { z } from "zod";
 import { AgentInvariantError } from "./errors";
 import type { ToolCallId } from "./identifiers";
@@ -14,7 +14,7 @@ export const isToolCallId = (value: unknown): value is ToolCallId =>
  * directly without forcing the core contract to depend on their schema type.
  */
 export type ToolJsonSchema = {
-	readonly jsonSchema: Record<string, unknown>;
+	readonly jsonSchema: JsonObject;
 	readonly validate?: (value: unknown) => Promisable<ToolValidationResult>;
 };
 
@@ -40,11 +40,7 @@ const isSchema = (value: unknown): value is z.ZodType | ToolJsonSchema => {
 	if ("safeParse" in value && typeof value.safeParse === "function") {
 		return true;
 	}
-	return (
-		"jsonSchema" in value &&
-		typeof value.jsonSchema === "object" &&
-		value.jsonSchema !== null
-	);
+	return "jsonSchema" in value && isJsonObject(value.jsonSchema);
 };
 
 export const isToolDefinition = (value: unknown): value is ToolDefinition => {
