@@ -110,6 +110,10 @@ export const isJsonObject = (
 	}
 };
 
+/** Narrows an unknown value to undefined. */
+export const isUndefined = (value: unknown): value is undefined =>
+	value === undefined;
+
 /** Narrows an unknown value to a string, including empty strings. */
 export const isString = (value: unknown): value is string =>
 	typeof value === "string";

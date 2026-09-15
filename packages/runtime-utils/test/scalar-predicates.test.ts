@@ -5,6 +5,7 @@ import {
 	isNonNegativeInteger,
 	isPositiveInteger,
 	isString,
+	isUndefined,
 } from "../src/index";
 
 describe("runtime scalar predicates", () => {
@@ -21,6 +22,13 @@ describe("runtime scalar predicates", () => {
 		expect(isString(" ")).toBe(true);
 		expect(isString(null)).toBe(false);
 		expect(isString(1)).toBe(false);
+	});
+
+	test("accepts only undefined values", () => {
+		expect(isUndefined(undefined)).toBe(true);
+		expect(isUndefined(null)).toBe(false);
+		expect(isUndefined("")).toBe(false);
+		expect(isUndefined(0)).toBe(false);
 	});
 
 	test("accepts finite non-negative numbers", () => {
