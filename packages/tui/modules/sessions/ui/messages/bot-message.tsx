@@ -1,5 +1,6 @@
 import type { BoxRenderable } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
+import { isPlainObject } from "@wincode/runtime-utils";
 import { memo, type ReactNode, useMemo, useRef, useState } from "react";
 import type { UnknownRecord } from "type-fest";
 import { buildAgent } from "@/modules/agents";
@@ -60,18 +61,10 @@ const MAX_TOOL_ARGUMENTS_LENGTH = 512;
 const MAX_TOOL_ARGUMENT_ENTRIES = 12;
 
 const getToolInputRecord = (part: ToolPart): UnknownRecord =>
-	typeof part.input === "object" &&
-	part.input !== null &&
-	!Array.isArray(part.input)
-		? (part.input as UnknownRecord)
-		: {};
+	isPlainObject(part.input) ? part.input : {};
 
 const getToolOutputRecord = (part: ToolPart): UnknownRecord =>
-	typeof part.output === "object" &&
-	part.output !== null &&
-	!Array.isArray(part.output)
-		? (part.output as UnknownRecord)
-		: {};
+	isPlainObject(part.output) ? part.output : {};
 
 const formatToolArgumentValue = (value: unknown): string => {
 	const sanitized = sanitizeArgumentTree(value);
@@ -568,11 +561,8 @@ const SKILL_ACTIVITY_LABELS: Record<SkillActivityState, string> = {
 function SkillActivityRow({ part }: { part: ToolPart }) {
 	const { colors } = useTheme();
 	const output =
-		part.state === "output-available" &&
-		typeof part.output === "object" &&
-		part.output !== null &&
-		!Array.isArray(part.output)
-			? (part.output as UnknownRecord)
+		part.state === "output-available" && isPlainObject(part.output)
+			? part.output
 			: undefined;
 	const status = formatUnknown(output?.status) as SkillActivityState;
 	const stateLabel = SKILL_ACTIVITY_LABELS[status] ?? formatToolName(status);

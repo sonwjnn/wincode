@@ -1,3 +1,4 @@
+import { isNonNegativeInteger, isObjectLike } from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
 import type { ModelCost, ModelCostTier, ModelMetadataEntry } from "./models";
@@ -21,7 +22,7 @@ type ResolvedUsagePricing = {
 };
 
 const isModelCost = (value: unknown): value is ModelCost => {
-	if (typeof value !== "object" || value === null) {
+	if (!isObjectLike(value)) {
 		return false;
 	}
 	return (
@@ -48,14 +49,10 @@ const resolveUsagePricing = (pricing: UsagePricing): ResolvedUsagePricing => {
 export type ModelUsage = z.infer<typeof modelUsageSchema>;
 
 const nonNegativeInteger = (value: unknown): number | undefined =>
-	typeof value === "number" && Number.isInteger(value) && value >= 0
-		? value
-		: undefined;
+	isNonNegativeInteger(value) ? value : undefined;
 
 const objectValue = (value: unknown): UnknownRecord | undefined =>
-	typeof value === "object" && value !== null
-		? (value as UnknownRecord)
-		: undefined;
+	isObjectLike(value) ? value : undefined;
 
 const nestedToken = (
 	value: UnknownRecord | undefined,

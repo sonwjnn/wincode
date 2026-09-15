@@ -1,0 +1,44 @@
+import { describe, expect, test } from "bun:test";
+import {
+	isFiniteNonNegativeNumber,
+	isNonEmptyString,
+	isNonNegativeInteger,
+	isPositiveInteger,
+} from "../src/index";
+
+describe("runtime scalar predicates", () => {
+	test("accepts non-empty strings without trimming", () => {
+		expect(isNonEmptyString("text")).toBe(true);
+		expect(isNonEmptyString(" ")).toBe(true);
+		expect(isNonEmptyString("")).toBe(false);
+		expect(isNonEmptyString(null)).toBe(false);
+	});
+
+	test("accepts finite non-negative numbers", () => {
+		expect(isFiniteNonNegativeNumber(0)).toBe(true);
+		expect(isFiniteNonNegativeNumber(1.5)).toBe(true);
+		expect(isFiniteNonNegativeNumber(-0)).toBe(true);
+		expect(isFiniteNonNegativeNumber(-1)).toBe(false);
+		expect(isFiniteNonNegativeNumber(Number.NaN)).toBe(false);
+		expect(isFiniteNonNegativeNumber(Number.POSITIVE_INFINITY)).toBe(false);
+		expect(isFiniteNonNegativeNumber("1")).toBe(false);
+	});
+
+	test("accepts non-negative integers including unsafe integers", () => {
+		expect(isNonNegativeInteger(0)).toBe(true);
+		expect(isNonNegativeInteger(42)).toBe(true);
+		expect(isNonNegativeInteger(Number.MAX_SAFE_INTEGER + 1)).toBe(true);
+		expect(isNonNegativeInteger(1.5)).toBe(false);
+		expect(isNonNegativeInteger(-1)).toBe(false);
+		expect(isNonNegativeInteger(Number.NaN)).toBe(false);
+	});
+
+	test("accepts only positive integers", () => {
+		expect(isPositiveInteger(1)).toBe(true);
+		expect(isPositiveInteger(Number.MAX_SAFE_INTEGER + 1)).toBe(true);
+		expect(isPositiveInteger(0)).toBe(false);
+		expect(isPositiveInteger(-1)).toBe(false);
+		expect(isPositiveInteger(1.5)).toBe(false);
+		expect(isPositiveInteger(Number.POSITIVE_INFINITY)).toBe(false);
+	});
+});

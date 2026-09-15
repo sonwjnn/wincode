@@ -18,6 +18,7 @@
       "name": "@wincode/agent-core",
       "dependencies": {
         "@wincode/ai": "workspace:*",
+        "@wincode/runtime-utils": "workspace:*",
         "@wincode/skills": "workspace:*",
         "type-fest": "catalog:",
         "zod": "catalog:",
@@ -52,6 +53,7 @@
     "packages/ai": {
       "name": "@wincode/ai",
       "dependencies": {
+        "@wincode/runtime-utils": "workspace:*",
         "type-fest": "catalog:",
         "zod": "catalog:",
       },
@@ -81,6 +83,7 @@
     "packages/coding-tools": {
       "name": "@wincode/coding-tools",
       "dependencies": {
+        "@wincode/runtime-utils": "workspace:*",
         "diff": "catalog:",
         "ignore": "^5.3.2",
         "type-fest": "catalog:",
@@ -94,6 +97,17 @@
     "packages/config": {
       "name": "@wincode/config",
       "version": "0.0.0",
+    },
+    "packages/runtime-utils": {
+      "name": "@wincode/runtime-utils",
+      "dependencies": {
+        "type-fest": "catalog:",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@wincode/config": "workspace:*",
+        "typescript": "catalog:",
+      },
     },
     "packages/skills": {
       "name": "@wincode/skills",
@@ -120,6 +134,7 @@
         "@wincode/agent-runtime-ai-sdk": "workspace:*",
         "@wincode/ai": "workspace:*",
         "@wincode/coding-tools": "workspace:*",
+        "@wincode/runtime-utils": "workspace:*",
         "@wincode/skills": "workspace:*",
         "drizzle-orm": "^0.45.2",
         "jsonc-parser": "^3.3.1",
@@ -443,6 +458,8 @@
     "@wincode/coding-tools": ["@wincode/coding-tools@workspace:packages/coding-tools"],
 
     "@wincode/config": ["@wincode/config@workspace:packages/config"],
+
+    "@wincode/runtime-utils": ["@wincode/runtime-utils@workspace:packages/runtime-utils"],
 
     "@wincode/skills": ["@wincode/skills@workspace:packages/skills"],
 

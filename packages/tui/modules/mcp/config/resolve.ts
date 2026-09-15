@@ -1,5 +1,6 @@
 import path from "node:path";
-import type { Merge, OverrideProperties, UnknownRecord } from "type-fest";
+import { isPlainObject } from "@wincode/runtime-utils";
+import type { Merge, OverrideProperties } from "type-fest";
 import type { ZodError } from "zod";
 import type {
 	ConfigDiagnostic,
@@ -39,9 +40,6 @@ export type InvalidMcpServerConfig = {
 	name: string;
 	transport: "local" | "remote";
 };
-
-const object = (value: unknown): value is UnknownRecord =>
-	typeof value === "object" && value !== null && !Array.isArray(value);
 
 const serverPath = (name: string, field: readonly string[] = []): string =>
 	["mcp", name, ...field].join(".");
@@ -147,7 +145,7 @@ const resolveLocalServer = (
 ): ResolvedMcpServerConfig | undefined => {
 	const environment: Record<string, string> = {};
 	for (const [key, value] of Object.entries(
-		object(raw.environment) ? raw.environment : {}
+		isPlainObject(raw.environment) ? raw.environment : {}
 	)) {
 		const resolved = resolveString(value, context, ["environment", key]);
 		if (resolved === undefined) {
@@ -212,7 +210,7 @@ const resolveRemoteServer = (
 	}
 	const headers: Record<string, string> = {};
 	for (const [key, value] of Object.entries(
-		object(raw.headers) ? raw.headers : {}
+		isPlainObject(raw.headers) ? raw.headers : {}
 	)) {
 		const resolved = resolveString(value, context, ["headers", key]);
 		if (resolved === undefined) {
@@ -264,7 +262,7 @@ const diagnoseMalformedEntries = (
 		if (mcp === undefined) {
 			continue;
 		}
-		if (!object(mcp)) {
+		if (!isPlainObject(mcp)) {
 			addDiagnostic(
 				diagnostics,
 				source,
@@ -275,7 +273,7 @@ const diagnoseMalformedEntries = (
 			continue;
 		}
 		for (const [name, value] of Object.entries(mcp)) {
-			if (!object(value)) {
+			if (!isPlainObject(value)) {
 				addDiagnostic(
 					diagnostics,
 					source,
@@ -308,10 +306,12 @@ export const resolveServers = ({
 		(diagnostic) => ({ ...diagnostic })
 	);
 	diagnoseMalformedEntries(snapshot.sources, diagnostics);
-	const section = object(snapshot.document.mcp) ? snapshot.document.mcp : {};
+	const section = isPlainObject(snapshot.document.mcp)
+		? snapshot.document.mcp
+		: {};
 	const servers: Record<string, ResolvedMcpServerConfig> = {};
 	for (const [name, raw] of Object.entries(section)) {
-		if (!object(raw)) {
+		if (!isPlainObject(raw)) {
 			continue;
 		}
 		const fallbackSource = snapshot.sourceFor(["mcp", name]);
@@ -340,7 +340,7 @@ export const resolveServers = ({
 	for (const [name, raw] of Object.entries(section)) {
 		if (
 			servers[name] !== undefined ||
-			!object(raw) ||
+			!isPlainObject(raw) ||
 			(raw.type !== "local" && raw.type !== "remote")
 		) {
 			continue;

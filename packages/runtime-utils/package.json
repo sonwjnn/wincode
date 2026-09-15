@@ -1,5 +1,5 @@
 {
-  "name": "@wincode/agent-core",
+  "name": "@wincode/runtime-utils",
   "type": "module",
   "exports": {
     ".": {
@@ -8,16 +8,11 @@
   },
   "scripts": {
     "check-types": "tsc --noEmit",
-    "test": "bun ../../scripts/test-portfolio.ts default --package agent-core"
+    "test": "bun ../../scripts/test-portfolio.ts default --package runtime-utils"
   },
   "dependencies": {
-    "@wincode/ai": "workspace:*",
-    "@wincode/runtime-utils": "workspace:*",
-    "@wincode/skills": "workspace:*",
-    "type-fest": "catalog:",
-    "zod": "catalog:"
+    "type-fest": "catalog:"
   },
-
   "devDependencies": {
     "@types/bun": "catalog:",
     "@wincode/config": "workspace:*",

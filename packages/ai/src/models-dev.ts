@@ -7,6 +7,12 @@
 // tree. The read path over the generated snapshot lives in
 // `./model-metadata-snapshot`.
 
+import {
+	isFiniteNonNegativeNumber,
+	isNonNegativeInteger,
+	isPlainObject,
+	isPositiveInteger,
+} from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 import {
 	type ModelCost,
@@ -17,12 +23,10 @@ import {
 	type ModelVariant,
 	modelVariantIds,
 } from "./model-metadata";
-
 import {
 	type ModelsDevModel,
 	modelsDevBlocksFromPayload,
 } from "./models-dev-payload";
-import { isRecord } from "./type-guards";
 
 export type {
 	ModelCost,
@@ -39,23 +43,17 @@ const parseReasoningOptions = (
 	value: unknown
 ): readonly UnknownRecord[] | undefined =>
 	Array.isArray(value)
-		? value.filter((option): option is UnknownRecord => isRecord(option))
+		? value.filter((option): option is UnknownRecord => isPlainObject(option))
 		: undefined;
 
 const nonNegativeNumber = (value: unknown): number | undefined =>
-	typeof value === "number" && Number.isFinite(value) && value >= 0
-		? value
-		: undefined;
+	isFiniteNonNegativeNumber(value) ? value : undefined;
 
-const nonNegativeInteger = (value: unknown): number | undefined => {
-	const number = nonNegativeNumber(value);
-	return number !== undefined && Number.isInteger(number) ? number : undefined;
-};
+const nonNegativeInteger = (value: unknown): number | undefined =>
+	isNonNegativeInteger(value) ? value : undefined;
 
-const positiveInteger = (value: unknown): number | undefined => {
-	const number = nonNegativeInteger(value);
-	return number !== undefined && number > 0 ? number : undefined;
-};
+const positiveInteger = (value: unknown): number | undefined =>
+	isPositiveInteger(value) ? value : undefined;
 
 const LEVEL_IDS: ReadonlySet<string> = new Set(modelVariantIds);
 
@@ -105,7 +103,7 @@ const toThinkingPolicy = (raw: unknown): ModelThinkingPolicy | undefined => {
 };
 
 const toCost = (raw: unknown): ModelCost | undefined => {
-	if (!isRecord(raw)) {
+	if (!isPlainObject(raw)) {
 		return;
 	}
 	const input = nonNegativeNumber(raw.input);
@@ -130,16 +128,16 @@ const CONTEXT_OVER_200K_THRESHOLD = 200_000;
  * Folding it in here keeps the cost model single-shaped.
  */
 const toTiers = (raw: unknown): readonly ModelCostTier[] => {
-	if (!isRecord(raw)) {
+	if (!isPlainObject(raw)) {
 		return [];
 	}
 	const tiers = Array.isArray(raw.tiers) ? raw.tiers : [];
 	const parsed: ModelCostTier[] = [];
 	for (const tier of tiers) {
-		if (!isRecord(tier)) {
+		if (!isPlainObject(tier)) {
 			continue;
 		}
-		const threshold = isRecord(tier.tier) ? tier.tier : undefined;
+		const threshold = isPlainObject(tier.tier) ? tier.tier : undefined;
 		const size = positiveInteger(threshold?.size);
 		const rates = toCost(tier);
 		if (size === undefined || !rates) {
@@ -158,7 +156,7 @@ const toTiers = (raw: unknown): readonly ModelCostTier[] => {
 };
 
 const toLimits = (raw: unknown): ModelLimits | undefined => {
-	if (!isRecord(raw)) {
+	if (!isPlainObject(raw)) {
 		return;
 	}
 	const context = positiveInteger(raw.context);

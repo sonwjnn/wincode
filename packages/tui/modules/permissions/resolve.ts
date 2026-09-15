@@ -1,4 +1,4 @@
-import type { UnknownRecord } from "type-fest";
+import { isPlainObject } from "@wincode/runtime-utils";
 import type {
 	ConfigDocument,
 	ConfigOrigin,
@@ -46,9 +46,6 @@ export type ResolveAgentPermissionOptions = Readonly<{
 	discoveredToolActions?: readonly string[];
 }>;
 
-const isRecord = (value: unknown): value is UnknownRecord =>
-	typeof value === "object" && value !== null && !Array.isArray(value);
-
 const parsePermissionRules = (raw: unknown): PermissionRules | undefined => {
 	if (raw === undefined) {
 		return;
@@ -62,11 +59,11 @@ const agentPermissionRaw = (
 	agentId: string
 ): unknown => {
 	const agents = document.agents;
-	if (!isRecord(agents)) {
+	if (!isPlainObject(agents)) {
 		return;
 	}
 	const agent = agents[agentId];
-	return isRecord(agent) ? agent.permission : undefined;
+	return isPlainObject(agent) ? agent.permission : undefined;
 };
 
 /**

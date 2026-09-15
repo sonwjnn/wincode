@@ -21,7 +21,8 @@ import {
 	type ResourceLimitProfile,
 	resourceLimitProfileSchema,
 } from "@wincode/coding-tools";
-import type { Except, UnknownRecord } from "type-fest";
+import { isPlainObject } from "@wincode/runtime-utils";
+import type { Except } from "type-fest";
 import { z } from "zod";
 import {
 	type PermissionDiagnostic,
@@ -189,9 +190,6 @@ export const summarizeAgentDiagnostics = (
 	return `Agent config: ${errorCount} error${errorCount === 1 ? "" : "s"}, ${warningCount} warning${warningCount === 1 ? "" : "s"}. Open /agents for details.`;
 };
 
-const isRecord = (value: unknown): value is UnknownRecord =>
-	typeof value === "object" && value !== null && !Array.isArray(value);
-
 const builtInAgentIds = new Set<string>(builtInAgents.map(({ id }) => id));
 
 const agentDiagnostic = (
@@ -322,7 +320,7 @@ const diagnoseSourcePatches = (
 			continue;
 		}
 		const origin = { path: source.path, scope: source.scope };
-		if (!isRecord(agents)) {
+		if (!isPlainObject(agents)) {
 			diagnostics.push(
 				agentDiagnostic(
 					{
@@ -690,7 +688,7 @@ export const buildAgentRegistry = (
 	);
 
 	if (configured !== undefined) {
-		if (isRecord(configured)) {
+		if (isPlainObject(configured)) {
 			configuredAgents.push(
 				...collectConfiguredAgents(
 					configured,
@@ -715,7 +713,7 @@ export const buildAgentRegistry = (
 		}
 	}
 
-	const configuredRecord = isRecord(configured) ? configured : {};
+	const configuredRecord = isPlainObject(configured) ? configured : {};
 	const builtInAgentsView = builtInAgents.map((agent) =>
 		resolveBuiltInAgent(
 			agent,

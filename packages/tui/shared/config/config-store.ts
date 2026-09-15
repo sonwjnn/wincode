@@ -7,6 +7,7 @@ import {
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { isObjectLike, isPlainObject } from "@wincode/runtime-utils";
 import {
 	applyEdits,
 	modify,
@@ -15,7 +16,6 @@ import {
 	parse as parseJsonc,
 	parseTree,
 } from "jsonc-parser";
-import type { UnknownRecord } from "type-fest";
 import { getProjectRoots } from "@/shared/paths/project-roots";
 
 export type ConfigScope = "global" | "project";
@@ -79,11 +79,8 @@ type ProvenanceEntry = {
 
 type MutableConfigDocument = Record<string, unknown>;
 
-const isObject = (value: unknown): value is UnknownRecord =>
-	typeof value === "object" && value !== null && !Array.isArray(value);
-
 const isNotFound = (error: unknown): boolean =>
-	isObject(error) && error.code === "ENOENT";
+	isObjectLike(error) && !Array.isArray(error) && error.code === "ENOENT";
 
 const unsafeKeys = new Set(["__proto__", "constructor", "prototype"]);
 
@@ -108,7 +105,7 @@ const cloneValue = (value: unknown): unknown => {
 	if (Array.isArray(value)) {
 		return value.map(cloneValue);
 	}
-	if (!isObject(value)) {
+	if (!isPlainObject(value)) {
 		return value;
 	}
 	const clone: MutableConfigDocument = Object.create(null);
@@ -125,7 +122,7 @@ const freezeValue = <Value>(value: Value): Value => {
 		}
 		return Object.freeze(value);
 	}
-	if (isObject(value)) {
+	if (isPlainObject(value)) {
 		for (const child of Object.values(value)) {
 			freezeValue(child);
 		}
@@ -173,7 +170,7 @@ const recordProvenance = (
 		}
 		return;
 	}
-	if (isObject(value)) {
+	if (isPlainObject(value)) {
 		for (const [key, child] of Object.entries(value)) {
 			recordProvenance(provenance, [...pathSegments, key], child, origin);
 		}
@@ -190,7 +187,7 @@ const mergeDocument = (
 	for (const [key, incoming] of Object.entries(patch)) {
 		const valuePath = [...parentPath, key];
 		const current = target[key];
-		if (isObject(current) && isObject(incoming)) {
+		if (isPlainObject(current) && isPlainObject(incoming)) {
 			provenance.set(pathKey(valuePath), { origin, path: valuePath });
 			mergeDocument(current, incoming, origin, provenance, valuePath);
 			continue;
@@ -331,7 +328,7 @@ const parseDocument = (
 		tree === undefined
 			? undefined
 			: parseJsonc(selected.contents, [], { allowTrailingComma: true });
-	if (errors.length > 0 || !isObject(parsed)) {
+	if (errors.length > 0) {
 		return {
 			diagnostic: diagnostic(
 				"parse-error",
@@ -348,6 +345,17 @@ const parseDocument = (
 			diagnostic: diagnostic(
 				"unsafe-key",
 				`Unsafe config key ${unsafeKey}`,
+				selected.path,
+				scope
+			),
+			document: Object.create(null),
+		};
+	}
+	if (!isPlainObject(parsed)) {
+		return {
+			diagnostic: diagnostic(
+				"parse-error",
+				`Could not parse ${selected.path}`,
 				selected.path,
 				scope
 			),
@@ -438,7 +446,7 @@ const valueAtPath = (
 ): unknown => {
 	let current: unknown = document;
 	for (const segment of configPath) {
-		if (!(isObject(current) && Object.hasOwn(current, segment))) {
+		if (!(isPlainObject(current) && Object.hasOwn(current, segment))) {
 			return;
 		}
 		current = current[segment];
@@ -500,7 +508,7 @@ const readConfigForWrite = async (
 		errors.length > 0 ||
 		tree === undefined ||
 		findUnsafeKey(tree) !== undefined ||
-		!isObject(parsed)
+		!isPlainObject(parsed)
 	) {
 		throw new Error(`Could not update invalid config file ${file}.`);
 	}
@@ -598,7 +606,7 @@ export const createConfigStore = (
 					});
 					if (
 						value === undefined &&
-						(!isObject(document) ||
+						(!isPlainObject(document) ||
 							valueAtPath(document, configPath) === undefined)
 					) {
 						return;

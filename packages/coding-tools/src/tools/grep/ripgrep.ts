@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { isPlainObject } from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 import { truncateUtf8 } from "../output-bounds";
 import { getToolResourceLimits } from "../resource-limits";
@@ -39,9 +40,7 @@ const getErrorMessage = (error: unknown): string =>
 	error instanceof Error ? error.message : "ripgrep search failed";
 
 const asRecord = (value: unknown): UnknownRecord | undefined =>
-	typeof value === "object" && value !== null && !Array.isArray(value)
-		? (value as UnknownRecord)
-		: undefined;
+	isPlainObject(value) ? value : undefined;
 
 const normalizeMatchPath = (cwd: string, matchPath: string): string =>
 	path

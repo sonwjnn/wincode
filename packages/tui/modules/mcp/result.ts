@@ -1,5 +1,5 @@
 import type { ToolCallOutput } from "@wincode/agent-core";
-import type { UnknownRecord } from "type-fest";
+import { isPlainObject } from "@wincode/runtime-utils";
 import { type JsonValue, MAX_MCP_RESULT_BYTES } from "./manifest";
 import type { McpCatalogSnapshot } from "./registry";
 
@@ -50,8 +50,6 @@ export const createMcpToolExecutor = (
 const encoder = new TextEncoder();
 const size = (value: unknown): number =>
 	encoder.encode(JSON.stringify(value)).byteLength;
-const record = (value: unknown): value is UnknownRecord =>
-	typeof value === "object" && value !== null && !Array.isArray(value);
 const stringValue = (value: unknown): string =>
 	typeof value === "string" ? value : "unknown";
 const HIGH_SURROGATE_START = 0xd8_00;
@@ -158,7 +156,7 @@ function normalizeContent(value: unknown): JsonValue[] {
 		return [];
 	}
 	return value.flatMap((item): JsonValue[] => {
-		if (!record(item)) {
+		if (!isPlainObject(item)) {
 			return [];
 		}
 		if (item.type === "text" && typeof item.text === "string") {
@@ -173,7 +171,7 @@ function normalizeContent(value: unknown): JsonValue[] {
 				},
 			];
 		}
-		if (item.type === "resource" && record(item.resource)) {
+		if (item.type === "resource" && isPlainObject(item.resource)) {
 			const resource = item.resource;
 			if (typeof resource.text === "string") {
 				return [
@@ -209,7 +207,7 @@ function normalizeContent(value: unknown): JsonValue[] {
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: bounded normalization handles protocol variants and cap fallback in one pass
 export function normalizeMcpResult(input: unknown): McpNormalizedResult {
 	const cap = MAX_MCP_RESULT_BYTES;
-	const source = record(input) ? input : {};
+	const source = isPlainObject(input) ? input : {};
 	const result: McpNormalizedResult = {
 		content: normalizeContent(source.content),
 		isError: source.isError === true,
@@ -226,7 +224,7 @@ export function normalizeMcpResult(input: unknown): McpNormalizedResult {
 	const marker = { type: "text", text: "[MCP output truncated]" } as JsonValue;
 	const texts = result.content.filter(
 		(item): item is { text: string } =>
-			record(item) && typeof item.text === "string"
+			isPlainObject(item) && typeof item.text === "string"
 	);
 	const originals = texts.map((text) => text.text);
 	const lengths = texts.map((text) => text.text.length);

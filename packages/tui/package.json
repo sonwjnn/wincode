@@ -28,6 +28,7 @@
     "@wincode/agent-runtime-ai-sdk": "workspace:*",
     "@wincode/ai": "workspace:*",
     "@wincode/coding-tools": "workspace:*",
+    "@wincode/runtime-utils": "workspace:*",
     "@wincode/skills": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "jsonc-parser": "^3.3.1",

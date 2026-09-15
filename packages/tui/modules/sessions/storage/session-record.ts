@@ -30,6 +30,11 @@ import {
 	modelVariantSchema,
 } from "@wincode/ai/models";
 import { codingToolNames } from "@wincode/coding-tools";
+import {
+	isFiniteNonNegativeNumber,
+	isNonEmptyString,
+	isNonNegativeInteger,
+} from "@wincode/runtime-utils";
 import { randomUUIDv7 } from "bun";
 import type { UnknownRecord } from "type-fest";
 import type {
@@ -49,9 +54,6 @@ import {
 	getAttachmentReference,
 } from "./attachment-store";
 
-const hasText = (value: unknown): boolean =>
-	typeof value === "string" && value.length > 0;
-
 const isRecordModel = (value: unknown): boolean => {
 	if (typeof value !== "object" || value === null) {
 		return false;
@@ -61,7 +63,9 @@ const isRecordModel = (value: unknown): boolean => {
 		providerId?: unknown;
 		variant?: unknown;
 	};
-	if (!(hasText(model.modelId) && hasText(model.providerId))) {
+	if (
+		!(isNonEmptyString(model.modelId) && isNonEmptyString(model.providerId))
+	) {
 		return false;
 	}
 	return (
@@ -70,15 +74,6 @@ const isRecordModel = (value: unknown): boolean => {
 	);
 };
 
-const isNonNegativeInteger = (value: unknown): boolean => {
-	if (typeof value !== "number") {
-		return false;
-	}
-	return Number.isInteger(value) && value >= 0;
-};
-
-const isFiniteTimestamp = (value: unknown): boolean =>
-	typeof value === "number" && Number.isFinite(value) && value >= 0;
 const isOptionalNonNegativeInteger = (value: unknown): boolean =>
 	value === undefined || isNonNegativeInteger(value);
 
@@ -126,7 +121,7 @@ const isAgentTurnOutcome = (value: unknown): boolean => {
 		reason?: unknown;
 		usage?: unknown;
 	};
-	if (!isFiniteTimestamp(outcome.finishedAt)) {
+	if (!isFiniteNonNegativeNumber(outcome.finishedAt)) {
 		return false;
 	}
 	if (outcome.kind === "completed") {
@@ -192,13 +187,13 @@ export const getSessionRecordValidationError = (
 	if (record.version !== SESSION_RECORD_VERSION) {
 		return `unsupported record version ${String(record.version)}`;
 	}
-	if (!hasText(record.id)) {
+	if (!isNonEmptyString(record.id)) {
 		return "record id must be a non-empty string";
 	}
-	if (!hasText(record.turnId)) {
+	if (!isNonEmptyString(record.turnId)) {
 		return "record turn id must be a non-empty string";
 	}
-	if (!hasText(record.agentId)) {
+	if (!isNonEmptyString(record.agentId)) {
 		return "record agent id must be a non-empty string";
 	}
 	if (

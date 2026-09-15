@@ -1,6 +1,10 @@
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import { modelUsageSchema } from "@wincode/ai/model-usage";
 import type { ModelId } from "@wincode/ai/models";
+import {
+	isFiniteNonNegativeNumber,
+	isNonNegativeInteger,
+} from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 import { type AgentId, isAgentId } from "./agent";
 import type { OperationalFailure } from "./failures";
@@ -147,11 +151,6 @@ export const AGENT_TURN_EVENT_TERMINAL_TYPES = [
 	"agent-turn-interrupted",
 ] as const satisfies readonly AgentTurnTerminalEvent["type"][];
 
-const isFiniteTimestamp = (value: unknown): value is number =>
-	typeof value === "number" && Number.isFinite(value) && value >= 0;
-
-const isNonNegativeInteger = (value: unknown): value is number =>
-	typeof value === "number" && Number.isInteger(value) && value >= 0;
 const isUsage = (value: unknown): value is ModelUsage =>
 	modelUsageSchema.safeParse(value).success;
 
@@ -184,7 +183,7 @@ export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
 				isAgentId(event.agentId) &&
 				(event.delegation === undefined ||
 					isAgentTurnDelegation(event.delegation)) &&
-				isFiniteTimestamp(event.startedAt)
+				isFiniteNonNegativeNumber(event.startedAt)
 			);
 		case "model-step-started":
 			return (
@@ -220,18 +219,18 @@ export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
 			);
 		case "agent-turn-completed":
 			return (
-				isFiniteTimestamp(event.finishedAt) &&
+				isFiniteNonNegativeNumber(event.finishedAt) &&
 				(event.usage === undefined || isUsage(event.usage))
 			);
 		case "agent-turn-cancelled":
 			return (
-				isFiniteTimestamp(event.finishedAt) &&
+				isFiniteNonNegativeNumber(event.finishedAt) &&
 				isOperationalFailure(event.failure) &&
 				event.failure.code === "cancelled"
 			);
 		case "agent-turn-interrupted":
 			return (
-				isFiniteTimestamp(event.finishedAt) &&
+				isFiniteNonNegativeNumber(event.finishedAt) &&
 				isOperationalFailure(event.failure) &&
 				event.failure.code === "interrupted" &&
 				(AGENT_TURN_INTERRUPTION_REASONS as readonly string[]).includes(
@@ -240,7 +239,7 @@ export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
 			);
 		case "agent-turn-failed":
 			return (
-				isFiniteTimestamp(event.finishedAt) &&
+				isFiniteNonNegativeNumber(event.finishedAt) &&
 				isOperationalFailure(event.failure)
 			);
 		default:

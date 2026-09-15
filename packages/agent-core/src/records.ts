@@ -1,7 +1,12 @@
 import { type ModelUsage, modelUsageSchema } from "@wincode/ai/model-usage";
 import type { ModelId, ModelVariant } from "@wincode/ai/models";
+import {
+	isNonNegativeInteger,
+	isPlainObject,
+	isPositiveInteger,
+} from "@wincode/runtime-utils";
 import type { SkillActivationSource } from "@wincode/skills";
-import type { ReadonlyDeep, UnknownRecord } from "type-fest";
+import type { ReadonlyDeep } from "type-fest";
 import { isAgentId } from "./agent";
 import type { OperationalFailure } from "./failures";
 import type {
@@ -180,19 +185,10 @@ export type SessionRecord = ReadonlyDeep<{
 	version: typeof SESSION_RECORD_VERSION;
 }>;
 
-const isObjectRecord = (value: unknown): value is UnknownRecord =>
-	typeof value === "object" && value !== null && !Array.isArray(value);
-
-const isNonNegativeInteger = (value: unknown): value is number =>
-	typeof value === "number" && Number.isInteger(value) && value >= 0;
-
-const isPositiveInteger = (value: unknown): value is number =>
-	isNonNegativeInteger(value) && value > 0;
-
 const isSessionSkillActivationRecord = (
 	value: unknown
 ): value is SessionSkillActivationRecord => {
-	if (!isObjectRecord(value)) {
+	if (!isPlainObject(value)) {
 		return false;
 	}
 	return (
@@ -215,13 +211,13 @@ const isSessionSkillActivationRecord = (
 const isSessionMessageMetadataRecord = (
 	value: unknown
 ): value is SessionMessageMetadataRecord => {
-	if (!isObjectRecord(value)) {
+	if (!isPlainObject(value)) {
 		return false;
 	}
 	const modelMetadata = value.model;
 	const validModelMetadata =
 		modelMetadata === undefined ||
-		(isObjectRecord(modelMetadata) &&
+		(isPlainObject(modelMetadata) &&
 			Object.keys(modelMetadata).every(
 				(key) => key === "modelId" || key === "providerId"
 			) &&
@@ -257,7 +253,7 @@ const isSessionMessageMetadataRecord = (
 export const isSessionAttachmentReferencePart = (
 	value: unknown
 ): value is SessionAttachmentReferencePart => {
-	if (!isObjectRecord(value)) {
+	if (!isPlainObject(value)) {
 		return false;
 	}
 	return (
@@ -288,7 +284,7 @@ export const isSessionAttachmentReferencePart = (
 export const isSessionFileMentionPart = (
 	value: unknown
 ): value is SessionFileMentionPart => {
-	if (!(isObjectRecord(value) && isObjectRecord(value.data))) {
+	if (!(isPlainObject(value) && isPlainObject(value.data))) {
 		return false;
 	}
 	const mention = value.data;
@@ -320,7 +316,7 @@ export const isSessionFileMentionPart = (
 export const isSessionToolCallPart = (
 	value: unknown
 ): value is SessionToolCallPart => {
-	if (!(isObjectRecord(value) && isObjectRecord(value.outcome))) {
+	if (!(isPlainObject(value) && isPlainObject(value.outcome))) {
 		return false;
 	}
 	const outcome = value.outcome;
@@ -365,7 +361,7 @@ const isSessionMessagePart = (value: unknown): value is SessionMessagePart =>
 export const isAgentTurnMessageRecord = (
 	record: unknown
 ): record is SessionMessageRecord => {
-	if (!isObjectRecord(record)) {
+	if (!isPlainObject(record)) {
 		return false;
 	}
 	return (
