@@ -1,9 +1,16 @@
 import type { ModelTarget } from "@wincode/ai/model-target";
 import type { ResolvedAgent } from "./agent";
-import type { ResolvedTool, ToolCallId } from "./tools";
+import {
+	type AgentTurnId,
+	type SessionMessageId,
+	toAgentTurnId,
+	toSessionMessageId,
+} from "./identifiers";
+import { isToolCallId, type ResolvedTool, type ToolCallId } from "./tools";
+
+export type { AgentTurnId } from "./identifiers";
 
 /** Opaque identity of one Agent Turn. */
-export type AgentTurnId = string;
 
 export const AGENT_TURN_STATUSES = [
 	"running",
@@ -42,7 +49,7 @@ export type AgentTurnInterruptionReason =
 
 /** Creates an opaque identity for one new Agent Turn. */
 export const createAgentTurnId = (): AgentTurnId =>
-	`turn-${crypto.randomUUID()}`;
+	toAgentTurnId(`turn-${crypto.randomUUID()}`);
 
 /** A Wincode-owned text content part; AI SDK part shapes never cross here. */
 export type AgentTurnTextPart = {
@@ -91,7 +98,7 @@ export type AgentTurnPart =
 
 /** A Wincode-owned message. `tool` messages carry Tool Call results. */
 export type AgentTurnMessage = {
-	readonly id: string;
+	readonly id: SessionMessageId;
 	readonly parts: readonly AgentTurnPart[];
 	readonly role: "assistant" | "tool" | "user";
 };
@@ -139,14 +146,13 @@ export const isAgentTurnDelegation = (
 		keys.includes("parentToolCallId") &&
 		typeof delegation.parentTurnId === "string" &&
 		delegation.parentTurnId.length > 0 &&
-		typeof delegation.parentToolCallId === "string" &&
-		delegation.parentToolCallId.length > 0
+		isToolCallId(delegation.parentToolCallId)
 	);
 };
 export const createAgentTurnMessage = (
 	role: AgentTurnMessage["role"],
 	text: string,
-	id = `${role}-${Date.now()}`
+	id = toSessionMessageId(`${role}-${Date.now()}`)
 ): AgentTurnMessage => ({
 	id,
 	parts: [{ text, type: "text" }],
@@ -201,8 +207,7 @@ export const isAgentTurnToolCallPart = (
 				key === "type"
 		) &&
 		value.type === "tool-call" &&
-		typeof value.toolCallId === "string" &&
-		value.toolCallId.length > 0 &&
+		isToolCallId(value.toolCallId) &&
 		typeof value.toolName === "string" &&
 		value.toolName.length > 0 &&
 		"input" in value
@@ -225,8 +230,7 @@ export const isAgentTurnToolResultPart = (
 				key === "type"
 		) &&
 		value.type === "tool-result" &&
-		typeof value.toolCallId === "string" &&
-		value.toolCallId.length > 0 &&
+		isToolCallId(value.toolCallId) &&
 		typeof value.toolName === "string" &&
 		value.toolName.length > 0 &&
 		"output" in value
@@ -249,8 +253,7 @@ export const isAgentTurnToolFailurePart = (
 				key === "type"
 		) &&
 		value.type === "tool-failure" &&
-		typeof value.toolCallId === "string" &&
-		value.toolCallId.length > 0 &&
+		isToolCallId(value.toolCallId) &&
 		typeof value.toolName === "string" &&
 		value.toolName.length > 0 &&
 		typeof value.errorText === "string" &&

@@ -63,6 +63,17 @@ export {
 	operationalFailureRetryDispositions,
 	operationalFailureSources,
 } from "./failures";
+export type {
+	AttachmentId,
+	SessionMessageId,
+	SessionRecordId,
+} from "./identifiers";
+export {
+	toAgentTurnId,
+	toModelStepId,
+	toSessionMessageId,
+	toSessionRecordId,
+} from "./identifiers";
 export type { AgentTurnLifecycle, AgentTurnLifecycleState } from "./lifecycle";
 export { createAgentTurnLifecycle } from "./lifecycle";
 export type { ModelStep, ModelStepId } from "./model-step";
@@ -116,6 +127,7 @@ export type {
 export {
 	createToolRegistry,
 	isResolvedTool,
+	isToolCallId,
 	isToolCallOutput,
 	isToolDefinition,
 } from "./tools";

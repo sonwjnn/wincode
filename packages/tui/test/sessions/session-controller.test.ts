@@ -4,11 +4,12 @@ import {
 	type SessionController,
 } from "@/modules/sessions/session-controller";
 import type { SessionSendInput } from "@/modules/sessions/session-operation";
+import { agentId, modelId } from "../support/identifiers";
 
 const input: SessionSendInput = {
-	agent: "build",
-	sessionModel: { modelId: "gpt-5.6-luna", providerId: "openai" },
-	model: { modelId: "gpt-5.6-luna", providerId: "openai" },
+	agent: agentId("build"),
+	sessionModel: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
+	model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
 };
 
 const createController = (

@@ -13,8 +13,10 @@
   "dependencies": {
     "@wincode/ai": "workspace:*",
     "@wincode/skills": "workspace:*",
+    "type-fest": "catalog:",
     "zod": "catalog:"
   },
+
   "devDependencies": {
     "@types/bun": "catalog:",
     "@wincode/config": "workspace:*",

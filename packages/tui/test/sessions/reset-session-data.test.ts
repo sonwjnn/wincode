@@ -4,9 +4,15 @@ import { join } from "node:path";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
+import {
+	agentId,
+	agentTurnId,
+	modelId,
+	sessionMessageId,
+} from "../support/identifiers";
 
 const model: ChatModelSelection = {
-	modelId: "gpt-5.6-luna",
+	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 };
 
@@ -22,14 +28,14 @@ test("resets session data while preserving prompt history", async () => {
 	const store = createDrizzleSessionStore(db, { attachmentRoot });
 
 	const { id: sessionId } = await store.createSession({
-		agent: "build",
+		agent: agentId("build"),
 		message: {
-			id: "initial-user",
+			id: sessionMessageId("initial-user"),
 			parts: [{ text: "hello", type: "text" }],
 			role: "user",
 		},
 		model,
-		turnId: "turn-1",
+		turnId: agentTurnId("turn-1"),
 	});
 	await store.recordPrompt({ files: [], text: "preserve this prompt" });
 	const reference = await store.attachmentStore?.ingest({
@@ -41,15 +47,15 @@ test("resets session data while preserving prompt history", async () => {
 		throw new Error("The attachment fixture was not stored.");
 	}
 	await store.appendCompaction({
-		firstKeptUiMessageId: "initial-user",
+		firstKeptUiMessageId: sessionMessageId("initial-user"),
 		sessionId,
 		summarizationModel: model,
 		summary: {
-			coveredMessageIds: ["initial-user"],
+			coveredMessageIds: [sessionMessageId("initial-user")],
 			formatVersion: 1,
 			text: "summary",
 		},
-		throughMessageUiId: "initial-user",
+		throughMessageUiId: sessionMessageId("initial-user"),
 		tokensBefore: 10,
 		estimatedTokensAfter: 5,
 		trigger: "manual",

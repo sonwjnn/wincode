@@ -1,3 +1,4 @@
+import type { SessionMessageId } from "@wincode/agent-core";
 import { normalizeChatModelSelection } from "@wincode/ai/models";
 import type { SessionMessage } from "@/modules/sessions/message";
 import {
@@ -126,7 +127,7 @@ const canRetryPrimaryUser = (
  */
 export const resolveRetryMessageId = (
 	messages: readonly SessionMessage[]
-): string | undefined => {
+): SessionMessageId | undefined => {
 	const primaryMessages = messages.filter(
 		({ id }) => !id.startsWith("delegated-turn:")
 	);

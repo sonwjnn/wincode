@@ -20,6 +20,7 @@ import type {
 	ToolApprovalActions,
 	ToolApprovalRequest,
 } from "@/shared/providers/approval/types";
+import { toolCallId as makeToolCallId } from "../support/identifiers";
 
 const createGate = (
 	permission = createToolPermission(),
@@ -46,7 +47,7 @@ const shellCall = (
 	family: "shell" as const,
 	toolCall: {
 		input: cwd === undefined ? { command } : { command, cwd },
-		toolCallId,
+		toolCallId: makeToolCallId(toolCallId),
 	},
 });
 
@@ -460,7 +461,7 @@ describe("shell override and grants", () => {
 				family: "coding",
 				toolCall: {
 					input: { path: "package.json" },
-					toolCallId: "call-read",
+					toolCallId: makeToolCallId("call-read"),
 					toolName: "read",
 				},
 			})
@@ -477,7 +478,7 @@ describe("shell override and grants", () => {
 				family: "coding",
 				toolCall: {
 					input: { path: "package.json:1-2" },
-					toolCallId: "call-ranged-read",
+					toolCallId: makeToolCallId("call-ranged-read"),
 					toolName: "read",
 				},
 			})
@@ -505,7 +506,7 @@ describe("shell override and grants", () => {
 				family: "coding",
 				toolCall: {
 					input: { content: "updated", path: "notes.txt" },
-					toolCallId: "call-write",
+					toolCallId: makeToolCallId("call-write"),
 					toolName: "write",
 				},
 			})
@@ -676,7 +677,7 @@ describe("doom_loop", () => {
 			family: "coding" as const,
 			toolCall: {
 				input: { path: "package.json" },
-				toolCallId,
+				toolCallId: makeToolCallId(toolCallId),
 				toolName: "read",
 			},
 		});
@@ -691,7 +692,6 @@ describe("doom_loop", () => {
 	test("doom_loop applies to MCP tools and a differing input resets the run", async () => {
 		const { openApproval, requests } = settlingApproval();
 		const gate = createGate(createToolPermission(), openApproval);
-
 		const mcpCall = (text: string, toolCallId: string) => ({
 			action: "demo_echo",
 			agentDecision: "allow" as const,
@@ -700,7 +700,7 @@ describe("doom_loop", () => {
 			input: { text },
 			safety: false,
 			serverDecision: "allow" as const,
-			toolCallId,
+			toolCallId: makeToolCallId(toolCallId),
 			toolName: "mcp_demo_echo",
 		});
 		await gate.gate(mcpCall("hello", "call-1"));
@@ -728,14 +728,14 @@ describe("doom_loop", () => {
 			input: { text: "hello" },
 			safety: false,
 			serverDecision: "allow" as const,
-			toolCallId,
+			toolCallId: makeToolCallId(toolCallId),
 			toolName: "mcp_demo_echo",
 		});
 		const readCall = (toolCallId: string) => ({
 			family: "coding" as const,
 			toolCall: {
 				input: { path: "package.json" },
-				toolCallId,
+				toolCallId: makeToolCallId(toolCallId),
 				toolName: "read",
 			},
 		});
@@ -793,7 +793,11 @@ test("coding-family calls route shell and reject unknown tools", async () => {
 	await expect(
 		gate.gate({
 			family: "coding",
-			toolCall: { input: {}, toolCallId: "call-shell", toolName: "shell" },
+			toolCall: {
+				input: {},
+				toolCallId: makeToolCallId("call-shell"),
+				toolName: "shell",
+			},
 		})
 	).resolves.toEqual({
 		kind: "allow",
@@ -801,7 +805,11 @@ test("coding-family calls route shell and reject unknown tools", async () => {
 	await expect(
 		gate.gate({
 			family: "coding",
-			toolCall: { input: {}, toolCallId: "call-unknown", toolName: "unknown" },
+			toolCall: {
+				input: {},
+				toolCallId: makeToolCallId("call-unknown"),
+				toolName: "unknown",
+			},
 		})
 	).resolves.toEqual({
 		errorText: "Unknown coding tool 'unknown'",
@@ -853,7 +861,7 @@ test("MCP policy and safety are composed inside the gate", async () => {
 			input: {},
 			safety: true,
 			serverDecision: "allow",
-			toolCallId: "call-mcp",
+			toolCallId: makeToolCallId("call-mcp"),
 			toolName: "mcp_demo_echo",
 		})
 	).resolves.toEqual({ kind: "allow" });
@@ -879,7 +887,7 @@ test("rejects one approval without notifying the session abort path", async () =
 			input: {},
 			safety: false,
 			serverDecision: "allow",
-			toolCallId: "call-rejected",
+			toolCallId: makeToolCallId("call-rejected"),
 			toolName: "mcp_demo_echo",
 		})
 	).resolves.toEqual({
@@ -908,7 +916,7 @@ test("abort notifies the session with the active tool call", async () => {
 			input: {},
 			safety: false,
 			serverDecision: "allow",
-			toolCallId: "call-aborted",
+			toolCallId: makeToolCallId("call-aborted"),
 			toolName: "mcp_demo_echo",
 		})
 	).resolves.toEqual({
@@ -954,7 +962,7 @@ test("MCP denial wording is the shared registry constant", async () => {
 			input: {},
 			safety: false,
 			serverDecision: "deny",
-			toolCallId: "call-mcp",
+			toolCallId: makeToolCallId("call-mcp"),
 			toolName: "mcp_demo_echo",
 		})
 	).resolves.toEqual({
@@ -997,7 +1005,7 @@ test("an external-directory grant does not satisfy an operation ask", async () =
 			family: "coding",
 			toolCall: {
 				input: { path: "../outside/file.txt" },
-				toolCallId: "call-external-operation",
+				toolCallId: makeToolCallId("call-external-operation"),
 				toolName: "read",
 			},
 		})

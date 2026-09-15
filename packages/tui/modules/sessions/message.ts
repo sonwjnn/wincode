@@ -1,5 +1,14 @@
-import type { AgentId } from "@wincode/agent-core";
-import { agentIdSchema } from "@wincode/agent-core";
+import type {
+	AgentId,
+	AttachmentId,
+	SessionMessageId,
+	ToolCallId,
+} from "@wincode/agent-core";
+import {
+	agentIdSchema,
+	isToolCallId,
+	toSessionMessageId,
+} from "@wincode/agent-core";
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import {
 	type ChatModelSelection,
@@ -14,8 +23,10 @@ import type {
 	SkillActivation,
 	SkillActivationSource,
 	SkillContext,
+	SkillToolPart,
 } from "@wincode/skills";
 import {
+	sanitizeSkillToolPart,
 	skillActivationSchema,
 	skillActivationSourceSchema,
 	skillContextSchema,
@@ -25,7 +36,7 @@ import { z } from "zod";
 
 export type SessionFilePart = {
 	readonly available?: boolean;
-	readonly attachmentId?: string;
+	readonly attachmentId?: AttachmentId;
 	readonly blobKey?: string;
 	readonly byteLength?: number;
 	readonly displayAvailability?: "missing";
@@ -65,7 +76,7 @@ type ToolPartFields = {
 	readonly providerExecuted?: boolean;
 	readonly rawInput?: unknown;
 	readonly state: SessionToolState;
-	readonly toolCallId: string;
+	readonly toolCallId: ToolCallId;
 };
 
 type NamedToolPart<Name extends string> = ToolPartFields & {
@@ -131,14 +142,14 @@ export type SessionMessageMetadata = {
 	readonly model?: ChatModelSelection;
 	readonly responseTimeMs?: number;
 	readonly skill?: SessionMessageSkill;
-	readonly sourceUserMessageId?: string;
+	readonly sourceUserMessageId?: SessionMessageId;
 	readonly terminalOutcome?: SessionMessageTerminalOutcome;
 	readonly usage?: SessionMessageUsage;
 	readonly variant?: ModelVariant;
 };
 
 export type SessionMessage = {
-	readonly id: string;
+	readonly id: SessionMessageId;
 	readonly metadata?: SessionMessageMetadata;
 	readonly parts: SessionPart[];
 	readonly role: SessionMessageRole;
@@ -172,7 +183,11 @@ export const sessionMessageMetadataSchema = z
 		model: sessionMessageModelSchema.optional(),
 		responseTimeMs: z.number().int().nonnegative().optional(),
 		skill: sessionMessageSkillSchema.optional(),
-		sourceUserMessageId: z.string().min(1).optional(),
+		sourceUserMessageId: z
+			.string()
+			.min(1)
+			.transform((value): SessionMessageId => value as SessionMessageId)
+			.optional(),
 		terminalOutcome: z.enum(["cancelled", "failed", "interrupted"]).optional(),
 		usage: sessionMessageUsageSchema.optional(),
 		variant: modelVariantSchema.optional(),
@@ -201,6 +216,17 @@ export const sessionMessageMetadataSchema = z
 		}
 	});
 
+export const sanitizeSessionSkillToolPart = (
+	part: SkillToolPart
+): SessionDynamicToolPart => {
+	if (!isToolCallId(part.toolCallId)) {
+		throw new Error("Skill Tool Call has an invalid Tool Call Identifier.");
+	}
+	return {
+		...sanitizeSkillToolPart(part),
+		toolCallId: part.toolCallId,
+	};
+};
 export const sessionDataSchemas = {
 	fileMention: z.object({
 		byteLength: z.number().int().nonnegative(),
@@ -227,8 +253,7 @@ export const isSessionToolPart = (part: unknown): part is SessionToolPart => {
 		(candidate.type === "dynamic-tool" ||
 			(typeof candidate.type === "string" &&
 				candidate.type.startsWith("tool-"))) &&
-		typeof candidate.toolCallId === "string" &&
-		candidate.toolCallId.length > 0 &&
+		isToolCallId(candidate.toolCallId) &&
 		typeof candidate.state === "string"
 	);
 };
@@ -317,7 +342,7 @@ const sanitizeInterruptedPart = (part: SessionPart): SessionPart[] => {
 /** Drops unfinished model work from an interrupted assistant message. */
 export const sanitizeInterruptedSessionMessages = (
 	messages: readonly SessionMessage[],
-	preserveToolCallId?: string
+	preserveToolCallId?: ToolCallId
 ): SessionMessage[] =>
 	messages.flatMap((message) => {
 		if (
@@ -355,7 +380,7 @@ export const createSessionUserMessage = (
 	fileMentions: FileMentionPart[] = [],
 	files: SessionFilePart[] = []
 ): SessionMessage => ({
-	id: `msg-${randomUUIDv7()}`,
+	id: toSessionMessageId(`msg-${randomUUIDv7()}`),
 	...(metadata === undefined ? {} : { metadata }),
 	parts: [{ text, type: "text" }, ...fileMentions, ...files],
 	role: "user",

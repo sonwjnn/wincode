@@ -2,6 +2,8 @@ import type {
 	AgentId,
 	AgentTurn,
 	AgentTurnDelegation,
+	AgentTurnId,
+	ToolCallId,
 } from "@wincode/agent-core";
 import { createAgentTurnId } from "@wincode/agent-core";
 import type { ModelTarget } from "@wincode/ai/model";
@@ -22,6 +24,7 @@ import {
 } from "@/modules/mcp";
 import type { ToolPermission } from "@/modules/permissions";
 import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
+import type { SessionId } from "@/shared/identifiers";
 import { resolveChatModelTarget } from "../../model-target";
 import { createSessionUserMessage, type SessionMessage } from "../message";
 import type { SessionViewState } from "../session-controller";
@@ -52,7 +55,7 @@ type ChildSkillContextFactory = (agent: AgentId) => Promise<
 
 const toolCallIdOf = (
 	call: Parameters<RuntimeGatedTooling["gate"]["gate"]>[0]
-): string | undefined => {
+): ToolCallId | undefined => {
 	if (call.family === "coding" || call.family === "shell") {
 		return call.toolCall.toolCallId;
 	}
@@ -92,7 +95,7 @@ type BuildChildTurnOptions = {
 		agent: AgentId
 	) => Promise<ToolPermission>;
 	readonly snapshot: McpCatalogSnapshot;
-	readonly turnId: string;
+	readonly turnId: AgentTurnId;
 	readonly userMessage: SessionMessage;
 	readonly workspace: string;
 	readonly modelTarget: ModelTarget;
@@ -168,7 +171,7 @@ export type CreateDelegationExecutorOptions = {
 	readonly resolvePermissionForAgent?: (
 		agent: AgentId
 	) => Promise<ToolPermission>;
-	readonly sessionId: string;
+	readonly sessionId: SessionId;
 	readonly workspace: string;
 };
 

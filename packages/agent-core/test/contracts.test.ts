@@ -1,42 +1,57 @@
 import { describe, expect, test } from "bun:test";
 import { createModelTarget } from "@wincode/ai/model-target";
+import { supportedChatModelIdSchema } from "@wincode/ai/models";
 import {
 	AGENT_TURN_EVENT_TERMINAL_TYPES,
 	AGENT_TURN_EVENT_TYPES,
 	AGENT_TURN_TERMINAL_STATUSES,
+	type AgentId,
 	type AgentTurn,
 	type AgentTurnEvent,
+	type AgentTurnId,
+	agentIdSchema,
 	isAgentTurnEvent,
 	isAgentTurnTerminalEvent,
 	isAgentTurnTerminalStatus,
 	isAgentTurnToolCallPart,
 	isAgentTurnToolFailurePart,
 	isAgentTurnToolResultPart,
+	isToolCallId,
+	type ModelStepId,
 	OPERATIONAL_FAILURE_VERSION,
+	type ToolCallId,
+	toSessionMessageId,
 } from "../src/index";
 
+const agentId = (value: string): AgentId => agentIdSchema.parse(value);
+const modelId = (value: string) => supportedChatModelIdSchema.parse(value);
+const turnId = (value: string): AgentTurnId => value as AgentTurnId;
+const messageId = (value: string) => toSessionMessageId(value);
+const stepId = (value: string): ModelStepId => value as ModelStepId;
+const toolCallId = (value: string): ToolCallId => value as ToolCallId;
+
 const testModelTarget = createModelTarget(
-	{ modelId: "gpt-5.6-luna", providerId: "openai" },
+	{ modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
 	{ kind: "api-key", apiKey: "test-key" }
 );
 
 const baseEvent = (type: AgentTurnEvent["type"]): AgentTurnEvent => {
-	const common = { sequence: 1, turnId: "turn-1" };
+	const common = { sequence: 1, turnId: turnId("turn-1") };
 	switch (type) {
 		case "agent-turn-started":
-			return { ...common, agentId: "build", startedAt: 0, type };
+			return { ...common, agentId: agentId("build"), startedAt: 0, type };
 		case "model-step-started":
-			return { ...common, stepId: "step-1", type };
+			return { ...common, stepId: stepId("step-1"), type };
 		case "text-delta":
 		case "reasoning-delta":
 			return { ...common, delta: "x", type };
 		case "model-step-finished":
-			return { ...common, stepId: "step-1", type };
+			return { ...common, stepId: stepId("step-1"), type };
 		case "tool-call-started":
 			return {
 				...common,
 				input: { path: "src/index.ts" },
-				toolCallId: "call-1",
+				toolCallId: toolCallId("call-1"),
 				toolName: "read",
 				type,
 			};
@@ -47,7 +62,7 @@ const baseEvent = (type: AgentTurnEvent["type"]): AgentTurnEvent => {
 					output: { content: "x", path: "src/index.ts" },
 					type: "success",
 				},
-				toolCallId: "call-1",
+				toolCallId: toolCallId("call-1"),
 				toolName: "read",
 				type,
 			};
@@ -176,8 +191,8 @@ describe("delegated Agent Turn correlation", () => {
 		const event = {
 			...baseEvent("agent-turn-started"),
 			delegation: {
-				parentToolCallId: "call-1",
-				parentTurnId: "turn-primary",
+				parentToolCallId: toolCallId("call-1"),
+				parentTurnId: turnId("turn-primary"),
 			},
 		};
 		expect(isAgentTurnEvent(event)).toBe(true);
@@ -192,26 +207,26 @@ describe("delegated Agent Turn correlation", () => {
 	test("keeps delegated turns distinct from their parent identity", () => {
 		const parent: AgentTurn = {
 			agent: {
-				id: "build",
+				id: agentId("build"),
 				instructions: "x",
 				role: "primary",
 			},
-			id: "turn-primary",
+			id: turnId("turn-primary"),
 			input: { messages: [] },
 			model: testModelTarget,
 		};
 		const delegated: AgentTurn = {
 			...parent,
-			agent: { ...parent.agent, id: "research", role: "subagent" },
+			agent: { ...parent.agent, id: agentId("research"), role: "subagent" },
 			delegation: {
-				parentToolCallId: "call-1",
+				parentToolCallId: toolCallId("call-1"),
 				parentTurnId: parent.id,
 			},
-			id: "turn-subagent",
+			id: turnId("turn-subagent"),
 		};
 		expect(delegated.id).not.toBe(parent.id);
 		expect(delegated.delegation?.parentTurnId).toBe(parent.id);
-		expect(delegated.delegation?.parentToolCallId).toBe("call-1");
+		expect(delegated.delegation?.parentToolCallId).toBe(toolCallId("call-1"));
 	});
 });
 
@@ -298,15 +313,15 @@ describe("Agent Turn contract", () => {
 		const turn = {
 			agent: {
 				displayName: "Build",
-				id: "build",
+				id: agentId("build"),
 				instructions: "Implement changes.",
 				role: "primary",
 			},
-			id: "turn-1",
+			id: turnId("turn-1"),
 			input: {
 				messages: [
 					{
-						id: "msg-1",
+						id: messageId("msg-1"),
 						parts: [{ text: "hello", type: "text" }],
 						role: "user",
 					},
@@ -319,5 +334,13 @@ describe("Agent Turn contract", () => {
 			type: "text",
 		});
 		expect(turn.agent.role).toBe("primary");
+	});
+});
+
+describe("Branded identifier boundaries", () => {
+	test("accepts non-empty tool call ids and rejects missing ids", () => {
+		expect(isToolCallId(toolCallId("call-1"))).toBe(true);
+		expect(isToolCallId("")).toBe(false);
+		expect(isToolCallId(undefined)).toBe(false);
 	});
 });

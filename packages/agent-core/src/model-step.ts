@@ -1,7 +1,8 @@
 import type { ModelUsage } from "@wincode/ai/model-usage";
+import type { ModelId } from "@wincode/ai/models";
+import type { ModelStepId } from "./identifiers";
 
-/** Opaque identity of one Model Step (one model invocation). */
-export type ModelStepId = string;
+export type { ModelStepId } from "./identifiers";
 
 /**
  * One model invocation inside an Agent Turn. A text-only turn runs a single
@@ -13,7 +14,7 @@ export type ModelStep = {
 	readonly id: ModelStepId;
 	/** Zero-based position of this step within its Agent Turn. */
 	readonly index: number;
-	readonly modelId?: string;
+	readonly modelId?: ModelId;
 	readonly startedAt: number;
 	readonly usage?: ModelUsage;
 };

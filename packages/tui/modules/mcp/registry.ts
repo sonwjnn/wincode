@@ -7,6 +7,7 @@ import {
 	type EffectiveAgentPolicy,
 } from "@/modules/permissions";
 import type { ConfigStore } from "@/shared/config/config-store";
+import { type McpSnapshotId, toMcpSnapshotId } from "@/shared/identifiers";
 import {
 	createSdkMcpClient,
 	createSdkMcpClientDeps,
@@ -116,7 +117,7 @@ export type McpSnapshotTool = {
 
 export type McpCatalogSnapshot = {
 	agent: AgentId;
-	id: string;
+	id: McpSnapshotId;
 	manifest: McpToolManifest;
 	tools: ReadonlyMap<string, McpSnapshotTool>;
 };
@@ -238,9 +239,9 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	const entryOperations = new Map<string, Promise<void>>();
 	const reconnects = new Map<string, Promise<void>>();
 	const toggles = new Map<string, Promise<void>>();
-	let latestSnapshotId: string | undefined;
-	const activeSnapshotIds = new Set<string>();
-	const untrackedSnapshotIds = new Set<string>();
+	let latestSnapshotId: McpSnapshotId | undefined;
+	const activeSnapshotIds = new Set<McpSnapshotId>();
+	const untrackedSnapshotIds = new Set<McpSnapshotId>();
 	let catalogGeneration = 0;
 
 	const emit = (): void => {
@@ -500,7 +501,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		}
 		return {
 			agent,
-			id: crypto.randomUUID(),
+			id: toMcpSnapshotId(crypto.randomUUID()),
 			manifest,
 			tools,
 		};
@@ -537,7 +538,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		if (closed) {
 			const snapshot: McpCatalogSnapshot = {
 				agent,
-				id: crypto.randomUUID(),
+				id: toMcpSnapshotId(crypto.randomUUID()),
 				manifest: [],
 				tools: new Map(),
 			};
@@ -555,7 +556,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		}
 		return {
 			agent,
-			id: crypto.randomUUID(),
+			id: toMcpSnapshotId(crypto.randomUUID()),
 			manifest: [],
 			tools: new Map(),
 		};

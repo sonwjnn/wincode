@@ -9,12 +9,13 @@ import {
 import type { SessionSendInput } from "@/modules/sessions/session-operation";
 import { createSessionOperation } from "@/modules/sessions/session-operation";
 import { createToolGate } from "@/modules/tool-gate/tool-gate";
+import { agentId, modelId, toolCallId } from "../support/identifiers";
 
 const request: SessionSendInput = {
-	agent: "build",
-	sessionModel: { modelId: "gpt-5.6-luna", providerId: "openai" },
+	agent: agentId("build"),
+	sessionModel: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
 	files: [],
-	model: { modelId: "gpt-5.6-luna", providerId: "openai" },
+	model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
 	userText: "Inspect the project",
 };
 
@@ -111,10 +112,10 @@ describe("SessionOperation", () => {
 		const send = operation.send(request);
 		await started.promise;
 
-		operation.interrupt("approval-1");
+		operation.interrupt(toolCallId("approval-1"));
 
 		expect(await send).toEqual({ rejected: true, reason: "interrupted" });
-		expect(onInterrupt).toHaveBeenCalledWith("approval-1");
+		expect(onInterrupt).toHaveBeenCalledWith(toolCallId("approval-1"));
 	});
 
 	test("preserves a gated Tool Call completion through the application seam", async () => {
@@ -146,7 +147,7 @@ describe("SessionOperation", () => {
 					family: "shell" as const,
 					toolCall: {
 						input: { command: "git status" },
-						toolCallId: "session-operation-shell",
+						toolCallId: toolCallId("session-operation-shell"),
 					},
 				};
 				const outcome = await gate.gate(toolCall);
@@ -176,7 +177,7 @@ describe("SessionOperation", () => {
 		expect(approvalRequests).toHaveLength(1);
 		expect(committedRecords).toEqual([
 			{
-				agent: "build",
+				agent: agentId("build"),
 				attachments: [attachment],
 				model: request.model,
 				toolResult: "git status completed",

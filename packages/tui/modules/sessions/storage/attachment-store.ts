@@ -9,6 +9,7 @@ import {
 	unlink,
 } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import type { AttachmentId, SessionMessageId } from "@wincode/agent-core";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import type {
@@ -66,9 +67,14 @@ const IMAGE_MAGIC_PREFIXES = {
 	webp: [0x57, 0x45, 0x42, 0x50],
 } as const;
 
+export const attachmentIdSchema = z
+	.string()
+	.regex(ATTACHMENT_ID_PATTERN)
+	.transform((value): AttachmentId => value as AttachmentId);
+
 export const attachmentReferenceSchema = z
 	.object({
-		attachmentId: z.string().regex(ATTACHMENT_ID_PATTERN),
+		attachmentId: attachmentIdSchema,
 		available: z.boolean().optional(),
 		byteLength: z.number().int().nonnegative(),
 		filename: z.string().min(1).max(MAX_FILENAME_LENGTH),
@@ -89,7 +95,7 @@ export type AttachmentReferenceFilePart = SessionFilePart &
 	};
 
 export type AttachmentMetadataRecord = {
-	attachmentId: string;
+	attachmentId: AttachmentId;
 	blobKey: string;
 	byteLength: number;
 	createdAt: Date;
@@ -98,8 +104,8 @@ export type AttachmentMetadataRecord = {
 };
 
 export type AttachmentMetadataRepository = {
-	delete: (attachmentId: string) => void;
-	get: (attachmentId: string) => AttachmentMetadataRecord | undefined;
+	delete: (attachmentId: AttachmentId) => void;
+	get: (attachmentId: AttachmentId) => AttachmentMetadataRecord | undefined;
 	list: () => AttachmentMetadataRecord[];
 	put: (record: AttachmentMetadataRecord) => void;
 };
@@ -108,7 +114,7 @@ type AttachmentMetadataRow = typeof sessionAttachment.$inferSelect;
 const toAttachmentMetadataRecord = (
 	row: AttachmentMetadataRow
 ): AttachmentMetadataRecord => ({
-	attachmentId: row.attachmentId,
+	attachmentId: attachmentIdSchema.parse(row.attachmentId),
 	blobKey: row.blobKey,
 	byteLength: row.byteLength,
 	createdAt: row.createdAt,
@@ -187,7 +193,7 @@ export type AttachmentHydrationOptions = {
 	maxBytes?: number;
 	maxTokens?: number;
 	purpose: AttachmentHydrationPurpose;
-	priorityMessageId?: string;
+	priorityMessageId?: SessionMessageId;
 	signal?: AbortSignal;
 };
 export type AttachmentHydrationStats = {
@@ -265,7 +271,7 @@ export type SessionAttachmentStoreOptions = {
 type ImageFilePart = Extract<SessionMessage["parts"][number], { type: "file" }>;
 
 type AttachmentCandidate = {
-	messageId: string;
+	messageId: SessionMessageId;
 	messageIndex: number;
 	part: ImageFilePart;
 	partIndex: number;
@@ -760,7 +766,7 @@ const toUnavailableReference = (
 	url: string
 ): AttachmentReference =>
 	freezeReference({
-		attachmentId: digestUnavailableInput(url),
+		attachmentId: attachmentIdSchema.parse(digestUnavailableInput(url)),
 		available: false,
 		byteLength: 0,
 		filename: sanitizeFilename(part.filename),
@@ -1095,7 +1101,7 @@ export const createSessionAttachmentStore = ({
 		}
 		const dimensions = detectImageDimensions(input.bytes, mediaType);
 		const digest = digestBytes(input.bytes);
-		const attachmentId = `v1-${digest}`;
+		const attachmentId = attachmentIdSchema.parse(`v1-${digest}`);
 		const blobKey = attachmentBlobKey(attachmentId);
 		const reference = freezeReference({
 			attachmentId,

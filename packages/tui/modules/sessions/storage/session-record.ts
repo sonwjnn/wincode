@@ -1,6 +1,8 @@
 import {
 	AGENT_TURN_INTERRUPTION_REASONS,
+	type AgentId,
 	AgentInvariantError,
+	type AgentTurnId,
 	isAgentTurnDelegation,
 	isAgentTurnMessageRecord,
 	isAgentTurnTextPart,
@@ -12,12 +14,15 @@ import {
 	SESSION_RECORD_VERSION,
 	type SessionAttachmentReferencePart,
 	type SessionFileMentionPart,
+	type SessionMessageId,
 	type SessionMessageMetadataRecord,
 	type SessionMessagePart,
 	type SessionMessageRecord,
 	type SessionRecord,
 	type SessionRecordOutcome,
 	type SessionToolCallPart,
+	toSessionMessageId,
+	toSessionRecordId,
 } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
@@ -468,11 +473,11 @@ export const buildUserSessionRecord = ({
 	turnId,
 	variant,
 }: {
-	agentId: string;
+	agentId: AgentId;
 	delegation?: SessionRecord["delegation"];
 	message: SessionMessage;
 	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
-	turnId: string;
+	turnId: AgentTurnId;
 	variant?: SessionRecord["model"]["variant"];
 }): SessionRecord => {
 	const durableMessage = toDurableSessionMessageRecord(message);
@@ -484,7 +489,7 @@ export const buildUserSessionRecord = ({
 	return {
 		agentId,
 		...(delegation === undefined ? {} : { delegation }),
-		id: `record-${randomUUIDv7()}`,
+		id: toSessionRecordId(`record-${randomUUIDv7()}`),
 		messages: [durableMessage],
 		model: {
 			modelId: model.modelId,
@@ -520,7 +525,8 @@ const delegatedMessageId = (
 	record: SessionRecord,
 	message: SessionMessageRecord,
 	index: number
-): string => `delegated-turn:${record.turnId}:${index}:${message.id}`;
+): SessionMessageId =>
+	toSessionMessageId(`delegated-turn:${record.turnId}:${index}:${message.id}`);
 
 const projectRecord = (record: SessionRecord): SessionMessage[] =>
 	record.messages.flatMap((message, index) => {

@@ -1,5 +1,7 @@
 import { z } from "zod";
+import type { AgentId } from "./identifiers";
 
+export type { AgentId } from "./identifiers";
 export const MAX_AGENT_ID_LENGTH = 64;
 export const MAX_AGENT_INSTRUCTIONS_LENGTH = 12_000;
 export const AGENT_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
@@ -9,12 +11,12 @@ export type AgentRole = (typeof AGENT_ROLES)[number];
 export const agentRoleSchema = z.enum(AGENT_ROLES);
 
 /** Canonical lowercase kebab-case Agent identity (1-64 characters). */
-export type AgentId = string;
 export const agentIdSchema = z
 	.string()
 	.min(1)
 	.max(MAX_AGENT_ID_LENGTH)
-	.regex(AGENT_ID_PATTERN);
+	.regex(AGENT_ID_PATTERN)
+	.transform((value): AgentId => value as AgentId);
 
 /** A named Agent definition supplied by Wincode or the application. */
 export type AgentDefinition = {

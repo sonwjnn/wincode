@@ -7,6 +7,7 @@ import {
 	type AgentTurnDelegation,
 	type AgentTurnEvent,
 	type AgentTurnFilePart,
+	type AgentTurnId,
 	type AgentTurnInterruptedEvent,
 	type AgentTurnMessage,
 	type AgentTurnOutcomeRecord,
@@ -18,16 +19,21 @@ import {
 	createToolRegistry,
 	getAgentTurnFailureDetails,
 	isAgentInvariantError,
+	isToolCallId,
 	normalizeOperationalFailure,
 	type ResolvedTool,
 	SESSION_RECORD_VERSION,
+	type SessionMessageId,
 	type SessionMessageMetadataRecord,
 	type SessionRecord,
 	type SessionToolCallPart,
+	type ToolCallId,
 	type ToolCallOutput,
 	type ToolDefinition,
 	type ToolExecutorOptions,
 	type ToolRegistry,
+	toSessionMessageId,
+	toSessionRecordId,
 } from "@wincode/agent-core";
 import { createAiSdkAgentRuntime } from "@wincode/agent-runtime-ai-sdk";
 import type { ModelTarget } from "@wincode/ai/model-target";
@@ -146,7 +152,7 @@ export type GatedCodingToolsDeps = {
 	skillExecution?: SkillExecution;
 	skillTool?: SkillToolDefinition;
 	delegate?: DelegationExecutor;
-	parentTurnId?: string;
+	parentTurnId?: AgentTurnId;
 };
 
 /**
@@ -157,14 +163,17 @@ export type RuntimeGatedTooling = {
 	gate: ToolGate;
 	resolveResourceLimits?: (agentId?: AgentId) => Promise<ToolResourceLimits>;
 	delegate?: DelegationExecutor;
-	registerChildAbort?: (toolCallId: string, abort: () => void) => () => void;
+	registerChildAbort?: (
+		toolCallId: ToolCallId,
+		abort: () => void
+	) => () => void;
 	mcpSnapshot?: McpCatalogSnapshot;
 	executeMcpTool?: GatedCodingToolsDeps["executeMcpTool"];
 };
 export type DelegationRequest = {
 	readonly agent: AgentId;
-	readonly parentToolCallId: string;
-	readonly parentTurnId: string;
+	readonly parentToolCallId: ToolCallId;
+	readonly parentTurnId: AgentTurnId;
 	readonly prompt: string;
 };
 
@@ -220,7 +229,7 @@ const delegationInputSchema = z.object({
 
 const createDelegationTool = (
 	delegate: DelegationExecutor,
-	parentTurnId: string
+	parentTurnId: AgentTurnId
 ): ResolvedTool => ({
 	definition: {
 		description:
@@ -243,7 +252,7 @@ const createDelegationTool = (
 			return {
 				output: await delegate(
 					{
-						agent: parsed.data.agent as AgentId,
+						agent: parsed.data.agent,
 						parentToolCallId: toolCallId,
 						parentTurnId,
 						prompt: parsed.data.prompt,
@@ -283,7 +292,7 @@ const createMcpTools = (
 					name: entry.name,
 				},
 				execute: async (
-					{ input, toolCallId }: { input: unknown; toolCallId: string },
+					{ input, toolCallId }: { input: unknown; toolCallId: ToolCallId },
 					{ signal }: ToolExecutorOptions = {}
 				): Promise<ToolCallOutput> => {
 					const outcome = await evaluateGateWithAbort(
@@ -342,7 +351,7 @@ export const createGatedCodingTools = ({
 		.map((name) => ({
 			definition: runtimeToolRegistry.require(name),
 			execute: async (
-				{ input, toolCallId }: { input: unknown; toolCallId: string },
+				{ input, toolCallId }: { input: unknown; toolCallId: ToolCallId },
 				{ signal }: ToolExecutorOptions = {}
 			): Promise<ToolCallOutput> => {
 				const outcome = await evaluateGateWithAbort(
@@ -391,7 +400,7 @@ export const createGatedCodingTools = ({
 			description: skillTool.description,
 		},
 		execute: async (
-			{ input, toolCallId }: { input: unknown; toolCallId: string },
+			{ input, toolCallId }: { input: unknown; toolCallId: ToolCallId },
 			{ signal }: ToolExecutorOptions = {}
 		): Promise<ToolCallOutput> => {
 			const parsed = skillToolInputSchema.safeParse(input);
@@ -486,7 +495,7 @@ const settledToolName = (
 /** A terminal tool part from prior session turns. */
 export type SettledSessionToolCallPart = {
 	input?: unknown;
-	toolCallId: string;
+	toolCallId: ToolCallId;
 	toolName?: string;
 	type: string;
 } & (
@@ -508,10 +517,7 @@ export const isSettledSessionToolCallPart = (
 	) {
 		return false;
 	}
-	if (
-		typeof candidate.toolCallId !== "string" ||
-		candidate.toolCallId.length === 0
-	) {
+	if (!isToolCallId(candidate.toolCallId)) {
 		return false;
 	}
 	if (candidate.state === "output-available") {
@@ -527,7 +533,7 @@ export const isSettledSessionToolCallPart = (
 
 type TurnToolCallPart = {
 	input: unknown;
-	toolCallId: string;
+	toolCallId: ToolCallId;
 	toolName: string;
 	type: "tool-call";
 };
@@ -600,7 +606,7 @@ const toAssistantTurnMessages = (
 		const { request, result } = toToolCallParts(part, name);
 		parts.push(request);
 		results.push({
-			id: `tool-${request.toolCallId}`,
+			id: toSessionMessageId(`tool-${request.toolCallId}`),
 			parts: [result],
 			role: "tool",
 		});
@@ -680,7 +686,7 @@ export const buildAgentTurn = ({
 	skill?: SkillRequestContext;
 	systemInstructions?: string;
 	tools?: readonly ResolvedTool[];
-	turnId: string;
+	turnId: AgentTurnId;
 }): AgentTurn => {
 	const messages =
 		expandSessionMessagesForModel(modelMessages).flatMap(toAgentTurnMessages);
@@ -688,7 +694,7 @@ export const buildAgentTurn = ({
 		delegation === undefined ? (role ?? "primary") : "subagent";
 	if (skill !== undefined) {
 		messages.push({
-			id: "skill-context",
+			id: toSessionMessageId("skill-context"),
 			parts: [{ text: formatSkillUserContext(skill), type: "text" }],
 			role: "user",
 		});
@@ -747,7 +753,7 @@ const toDurableToolPart = (part: {
 				type: "success";
 		  };
 	sequence: number;
-	toolCallId: string;
+	toolCallId: ToolCallId;
 	toolName: string;
 }): SessionToolCallPart => ({
 	input: part.input,
@@ -769,7 +775,7 @@ const recordModelForTurn = (turn: AgentTurn): SessionRecord["model"] => ({
 const assistantRecordMetadata = (
 	turn: AgentTurn,
 	usage?: NonNullable<ReturnType<typeof normalizeModelUsage>>,
-	sourceUserMessageId?: string
+	sourceUserMessageId?: SessionMessageId
 ): SessionMessageMetadataRecord => ({
 	...(sourceUserMessageId === undefined ? {} : { sourceUserMessageId }),
 	model: {
@@ -795,7 +801,7 @@ export const buildTerminalSessionRecord = ({
 	assistantText: string;
 	event: AgentTurnTerminalEvent;
 	hasCompletedToolCalls?: boolean;
-	sourceUserMessageId?: string;
+	sourceUserMessageId?: SessionMessageId;
 	turn: AgentTurn;
 }): SessionRecord | undefined => {
 	const safeEvent = normalizeTerminalEvent(event, turn);
@@ -856,10 +862,10 @@ export const buildTerminalSessionRecord = ({
 	return {
 		agentId: turn.agent.id,
 		...(turn.delegation === undefined ? {} : { delegation: turn.delegation }),
-		id: `record-${randomUUIDv7()}`,
+		id: toSessionRecordId(`record-${randomUUIDv7()}`),
 		messages: [
 			{
-				id: `assistant-${turn.id}`,
+				id: toSessionMessageId(`assistant-${turn.id}`),
 				metadata: assistantRecordMetadata(turn, safeUsage, sourceUserMessageId),
 				parts: [{ text, type: "text" }],
 				role: "assistant",
@@ -884,18 +890,18 @@ const buildAssistantOutcomeSessionRecord = ({
 	agentId: AgentId;
 	delegation?: AgentTurnDelegation;
 	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
-	sourceUserMessageId?: string;
+	sourceUserMessageId?: SessionMessageId;
 	text: string;
 	terminal: AgentTurnOutcomeRecord;
-	turnId: string;
+	turnId: AgentTurnId;
 	variant?: SessionRecord["model"]["variant"];
 }): SessionRecord => ({
 	agentId,
 	...(delegation === undefined ? {} : { delegation }),
-	id: `record-${randomUUIDv7()}`,
+	id: toSessionRecordId(`record-${randomUUIDv7()}`),
 	messages: [
 		{
-			id: `assistant-${turnId}`,
+			id: toSessionMessageId(`assistant-${turnId}`),
 			metadata: {
 				agent: agentId,
 				model: {
@@ -932,8 +938,8 @@ export const buildAssistantFailureSessionRecord = ({
 	delegation?: AgentTurnDelegation;
 	error: unknown;
 	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
-	sourceUserMessageId?: string;
-	turnId: string;
+	sourceUserMessageId?: SessionMessageId;
+	turnId: AgentTurnId;
 	variant?: SessionRecord["model"]["variant"];
 }): SessionRecord => {
 	const failure = normalizeOperationalFailure(error, {
@@ -969,8 +975,8 @@ export const buildAssistantCancelledSessionRecord = ({
 	agentId: AgentId;
 	delegation?: AgentTurnDelegation;
 	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
-	sourceUserMessageId?: string;
-	turnId: string;
+	sourceUserMessageId?: SessionMessageId;
+	turnId: AgentTurnId;
 	variant?: SessionRecord["model"]["variant"];
 }): SessionRecord => {
 	const failure = createOperationalFailure({
@@ -1006,15 +1012,15 @@ export const buildToolSessionRecord = ({
 }: {
 	event: Extract<AgentTurnEvent, { type: "tool-call-finished" }>;
 	input: unknown;
-	sourceUserMessageId?: string;
+	sourceUserMessageId?: SessionMessageId;
 	turn: AgentTurn;
 }): SessionRecord => ({
 	agentId: turn.agent.id,
 	...(turn.delegation === undefined ? {} : { delegation: turn.delegation }),
-	id: `record-${randomUUIDv7()}`,
+	id: toSessionRecordId(`record-${randomUUIDv7()}`),
 	messages: [
 		{
-			id: `tool-${turn.id}-${event.toolCallId}`,
+			id: toSessionMessageId(`tool-${turn.id}-${event.toolCallId}`),
 			metadata: assistantRecordMetadata(turn, undefined, sourceUserMessageId),
 			parts: [
 				toDurableToolPart({
@@ -1089,7 +1095,7 @@ export const runAgentTurnToText = async ({
 	onViewState?: (state: SessionViewState) => void;
 	runtime: AgentRuntime;
 	signal?: AbortSignal;
-	sourceUserMessageId?: string;
+	sourceUserMessageId?: SessionMessageId;
 	turn: AgentTurn;
 }): Promise<string> => {
 	let assistantText = "";

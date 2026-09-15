@@ -3,6 +3,7 @@ import type {
 	AgentTurn,
 	AgentTurnEvent,
 } from "@wincode/agent-core";
+import { modelStepId } from "./identifiers";
 
 export type FakeMessageRequest = {
 	readonly id: string;
@@ -49,7 +50,7 @@ const createFakeRuntime = (recorder: FakeAiSdkRecorder): AgentRuntime => ({
 		yield {
 			modelId: turn.model.modelId,
 			sequence: 1,
-			stepId: "e2e-step",
+			stepId: modelStepId("e2e-step"),
 			turnId: turn.id,
 			type: "model-step-started",
 		};
@@ -62,7 +63,7 @@ const createFakeRuntime = (recorder: FakeAiSdkRecorder): AgentRuntime => ({
 		yield {
 			modelId: turn.model.modelId,
 			sequence: 3,
-			stepId: "e2e-step",
+			stepId: modelStepId("e2e-step"),
 			turnId: turn.id,
 			type: "model-step-finished",
 			usage: { inputTokens: 1, outputTokens: 1 },

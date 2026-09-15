@@ -1,4 +1,12 @@
 import { fromPartial } from "@total-typescript/shoehorn";
+import type { SessionMessageId } from "@wincode/agent-core";
+import {
+	compactionId,
+	toolCallId as makeToolCallId,
+	modelId,
+	sessionId,
+	sessionMessageId,
+} from "../support/identifiers";
 
 // The model pricing provider fetches a remote table unless offline mode is
 // enabled, so tests opt out before any app module evaluates the environment.
@@ -89,7 +97,7 @@ const shellPart = (overrides: Partial<ShellToolPart> = {}): ShellToolPart =>
 		input: { command: "bun test" },
 		output: { exitCode: 0, output: "1 passing\n2 passing" },
 		state: "output-available",
-		toolCallId: "call-shell",
+		toolCallId: makeToolCallId("call-shell"),
 		type: "tool-shell",
 		...overrides,
 	});
@@ -97,28 +105,38 @@ const shellPart = (overrides: Partial<ShellToolPart> = {}): ShellToolPart =>
 const assistantMessage = (
 	parts: SessionMessage["parts"],
 	id = "assistant-1"
-): SessionMessage => ({ id, parts, role: "assistant" });
+): SessionMessage => ({
+	id: sessionMessageId(id),
+	parts,
+	role: "assistant",
+});
 
 const userMessage = (id: string): SessionMessage => ({
-	id,
+	id: sessionMessageId(id),
 	parts: [{ text: id, type: "text" }],
 	role: "user",
 });
 const completedCompaction = (): SessionCompaction => ({
 	completedAt: new Date("2026-09-06T09:06:25.000Z"),
 	createdAt: new Date("2026-09-06T09:06:25.000Z"),
-	firstKeptUiMessageId: "user-2",
-	id: "compaction-1",
+	firstKeptUiMessageId: sessionMessageId("user-2"),
+	id: compactionId("compaction-1"),
 	sequence: 1,
-	sessionId: "session-1",
-	summarizationModel: { modelId: "gpt-5.6-luna", providerId: "openai" },
+	sessionId: sessionId("session-1"),
+	summarizationModel: {
+		modelId: modelId("gpt-5.6-luna"),
+		providerId: "openai",
+	},
 	summarizationVariant: "high",
 	summary: {
-		coveredMessageIds: ["user-1", "assistant-1"],
+		coveredMessageIds: [
+			sessionMessageId("user-1"),
+			sessionMessageId("assistant-1"),
+		],
 		formatVersion: 1,
 		text: "Durable summary",
 	},
-	throughMessageUiId: "assistant-1",
+	throughMessageUiId: sessionMessageId("assistant-1"),
 	estimatedTokensAfter: 4883,
 	tokensBefore: 7336,
 	trigger: "manual",
@@ -152,7 +170,7 @@ type ChatShellProbeProps = {
 	isBusy?: boolean;
 	isCompacting?: boolean;
 	isInterruptArmed?: boolean;
-	onRetry?: (messageId: string) => void;
+	onRetry?: (messageId: SessionMessageId) => void;
 };
 
 function ChatShellProbe({
@@ -205,7 +223,7 @@ type ChatShellRenderOptions = {
 	isBusy?: boolean;
 	isCompacting?: boolean;
 	isInterruptArmed?: boolean;
-	onRetry?: (messageId: string) => void;
+	onRetry?: (messageId: SessionMessageId) => void;
 };
 
 const renderChatShell = async (
@@ -321,7 +339,7 @@ const assertSummaryDiffClipping = async ({
 			replacements: 1,
 		},
 		state: "output-available",
-		toolCallId,
+		toolCallId: makeToolCallId(toolCallId),
 		type: "tool-edit",
 	} satisfies EditToolPart;
 	const summary = {
@@ -413,7 +431,7 @@ describe("ChatShell approval dock", () => {
 			input: { command: "pwd" },
 			output: undefined,
 			state: "input-available",
-			toolCallId: "call-approval-sticky",
+			toolCallId: makeToolCallId("call-approval-sticky"),
 		});
 		const { holder, setup } = await renderChatShell(
 			[assistantMessage([part])],
@@ -437,7 +455,7 @@ describe("ChatShell approval dock", () => {
 						{ label: "resource", value: "pwd" },
 					],
 					input: { command: "pwd" },
-					toolCallId: "call-approval-sticky",
+					toolCallId: makeToolCallId("call-approval-sticky"),
 				},
 				firstActions
 			);
@@ -449,7 +467,7 @@ describe("ChatShell approval dock", () => {
 						{ label: "resource", value: "whoami" },
 					],
 					input: { command: "whoami" },
-					toolCallId: "call-approval-second",
+					toolCallId: makeToolCallId("call-approval-second"),
 				},
 				{
 					abort: () => undefined,
@@ -542,7 +560,10 @@ describe("ChatShell activity footer", () => {
 					"assistant-1"
 				),
 				metadata: {
-					model: { modelId: "gpt-5.6-luna", providerId: "openai" },
+					model: {
+						modelId: modelId("gpt-5.6-luna"),
+						providerId: "openai",
+					},
 					usage: { inputTokens: 7336, outputTokens: 0 },
 				},
 			},
@@ -698,11 +719,11 @@ describe("ChatShell shell output blocks", () => {
 					[
 						shellPart({
 							output: { exitCode: 1, output: "oops", truncated: true },
-							toolCallId: "call-failed",
+							toolCallId: makeToolCallId("call-failed"),
 						}),
 						shellPart({
 							output: { exitCode: null, output: "hung", timedOut: true },
-							toolCallId: "call-timeout",
+							toolCallId: makeToolCallId("call-timeout"),
 						}),
 					],
 					"assistant-1"
@@ -910,11 +931,11 @@ describe("ChatShell shell output blocks", () => {
 	test("keeps settled large outputs represented only by bounded previews during streamed updates", async () => {
 		const alpha = shellPart({
 			output: { exitCode: 0, output: lines("alpha", 200) },
-			toolCallId: "call-alpha",
+			toolCallId: makeToolCallId("call-alpha"),
 		});
 		const beta = shellPart({
 			output: { exitCode: 0, output: lines("beta", 200) },
-			toolCallId: "call-beta",
+			toolCallId: makeToolCallId("call-beta"),
 		});
 		const streamedText = (text: string): SessionMessage["parts"][number] => ({
 			text,
@@ -983,7 +1004,7 @@ describe("ChatShell edit diff blocks", () => {
 				replacements: 1,
 			},
 			state: "output-available",
-			toolCallId: "edit-split-empty-added-lane",
+			toolCallId: makeToolCallId("edit-split-empty-added-lane"),
 			type: "tool-edit",
 		} satisfies EditToolPart;
 		const summary = {
@@ -1052,7 +1073,7 @@ describe("ChatShell edit diff blocks", () => {
 				"Verification:",
 				"- `bunx lefthook run pre-commit` succeeds",
 			].join("\n"),
-			toolCallId: "edit-scroll-background",
+			toolCallId: makeToolCallId("edit-scroll-background"),
 			width: 140,
 		});
 	});
@@ -1063,7 +1084,7 @@ describe("ChatShell edit diff blocks", () => {
 				{ length: 12 },
 				(_, index) => `Unified summary ${index + 1}`
 			).join("\n"),
-			toolCallId: "edit-unified-scroll-background",
+			toolCallId: makeToolCallId("edit-unified-scroll-background"),
 			width: 100,
 		});
 	});

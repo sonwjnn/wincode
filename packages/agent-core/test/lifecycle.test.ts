@@ -1,28 +1,37 @@
 import { describe, expect, test } from "bun:test";
-import type { AgentTurnEvent, AgentTurnTerminalEvent } from "../src/index";
+import type {
+	AgentId,
+	AgentTurnEvent,
+	AgentTurnId,
+	AgentTurnTerminalEvent,
+} from "../src/index";
 import {
 	AgentInvariantError,
+	agentIdSchema,
 	createAgentTurnLifecycle,
 	getAgentTurnAbortDisposition,
 	isOperationalFailure,
 	normalizeOperationalFailure,
 } from "../src/index";
 
+const agentId = (value: string): AgentId => agentIdSchema.parse(value);
+const turnId = (value: string): AgentTurnId => value as AgentTurnId;
+
 const started: AgentTurnEvent = {
-	agentId: "build",
+	agentId: agentId("build"),
 	sequence: 0,
 	startedAt: 1,
-	turnId: "turn-1",
+	turnId: turnId("turn-1"),
 	type: "agent-turn-started",
 };
 
 const completed = (
 	sequence: number,
-	turnId = "turn-1"
+	id = "turn-1"
 ): AgentTurnTerminalEvent => ({
 	finishedAt: 2,
 	sequence,
-	turnId,
+	turnId: turnId(id),
 	type: "agent-turn-completed",
 });
 
@@ -40,7 +49,7 @@ describe("Agent Turn lifecycle", () => {
 				},
 				finishedAt: 2,
 				sequence: 1,
-				turnId: "turn-1",
+				turnId: turnId("turn-1"),
 				type: "agent-turn-cancelled",
 			},
 			{
@@ -54,11 +63,11 @@ describe("Agent Turn lifecycle", () => {
 				finishedAt: 2,
 				reason: "user",
 				sequence: 1,
-				turnId: "turn-1",
+				turnId: turnId("turn-1"),
 				type: "agent-turn-interrupted",
 			},
 		] satisfies AgentTurnTerminalEvent[]) {
-			const lifecycle = createAgentTurnLifecycle("turn-1");
+			const lifecycle = createAgentTurnLifecycle(turnId("turn-1"));
 			lifecycle.apply(started);
 			const state = lifecycle.apply(terminal);
 			let expectedStatus: "cancelled" | "completed" | "interrupted";
@@ -81,7 +90,7 @@ describe("Agent Turn lifecycle", () => {
 	});
 
 	test("turns a stream ending without a terminal into lost-execution interruption", () => {
-		const lifecycle = createAgentTurnLifecycle("turn-1");
+		const lifecycle = createAgentTurnLifecycle(turnId("turn-1"));
 		lifecycle.apply(started);
 		const event = lifecycle.interrupt(1);
 
@@ -98,7 +107,7 @@ describe("Agent Turn lifecycle", () => {
 	});
 
 	test("rejects a second terminal event as a typed invariant with a cause", () => {
-		const lifecycle = createAgentTurnLifecycle("turn-1");
+		const lifecycle = createAgentTurnLifecycle(turnId("turn-1"));
 		lifecycle.apply(started);
 		lifecycle.apply(completed(1));
 
@@ -113,20 +122,20 @@ describe("Agent Turn lifecycle", () => {
 });
 
 test("parent and delegated lifecycles settle independently", () => {
-	const parent = createAgentTurnLifecycle("turn-parent");
-	const delegated = createAgentTurnLifecycle("turn-subagent");
-	parent.apply({ ...started, turnId: "turn-parent" });
+	const parent = createAgentTurnLifecycle(turnId("turn-parent"));
+	const delegated = createAgentTurnLifecycle(turnId("turn-subagent"));
+	parent.apply({ ...started, turnId: turnId("turn-parent") });
 	delegated.apply({
 		...started,
-		agentId: "research",
-		turnId: "turn-subagent",
+		agentId: agentId("research"),
+		turnId: turnId("turn-subagent"),
 	});
 	parent.apply(completed(1, "turn-parent"));
 	const delegatedTerminal = delegated.interrupt(1);
 
 	expect(parent.getState().status).toBe("completed");
 	expect(delegated.getState().status).toBe("interrupted");
-	expect(delegatedTerminal.turnId).toBe("turn-subagent");
+	expect(delegatedTerminal.turnId).toBe(turnId("turn-subagent"));
 });
 
 describe("Operational Failure boundary", () => {

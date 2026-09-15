@@ -2,9 +2,11 @@ import {
 	type AgentRuntime,
 	type AgentTurn,
 	type AgentTurnEvent,
+	type AgentTurnId,
 	type AgentTurnLifecycle,
 	type AgentTurnTerminalEvent,
 	createAgentTurnLifecycle,
+	type ToolCallId,
 } from "@wincode/agent-core";
 import {
 	createSessionOperation,
@@ -29,7 +31,7 @@ export type SessionApprovalOutcome =
 export type SessionControllerOptions = {
 	execute: SessionSendExecutor;
 	deadlineMs?: number;
-	onInterrupt?: (preserveToolCallId?: string) => void;
+	onInterrupt?: (preserveToolCallId?: ToolCallId) => void;
 	resolveApproval?: (
 		approvalId: string,
 		outcome: SessionApprovalOutcome
@@ -58,7 +60,7 @@ export type SessionViewState = {
 	readonly reasoningText: string;
 	readonly status: "idle" | "streaming" | "terminal";
 	readonly text: string;
-	readonly turnId: string;
+	readonly turnId: AgentTurnId;
 };
 export type AgentTurnEventConsumerOptions = {
 	lifecycle?: AgentTurnLifecycle;

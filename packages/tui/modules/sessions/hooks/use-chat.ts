@@ -3,11 +3,15 @@ import {
 	type AgentTurn,
 	type AgentTurnDelegation,
 	type AgentTurnEvent,
+	type AgentTurnId,
 	type AgentTurnTerminalEvent,
 	createAgentTurnAbortEvent,
 	createAgentTurnId,
 	getAgentTurnAbortDisposition,
+	type SessionMessageId,
 	type SessionRecord,
+	type ToolCallId,
+	toSessionMessageId,
 } from "@wincode/agent-core";
 import { type ModelUsage, normalizeModelUsage } from "@wincode/ai/model-usage";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
@@ -27,7 +31,6 @@ import {
 	type SkillExecution,
 	type SkillRequestContext,
 	type SkillToolDefinition,
-	sanitizeSkillToolPart,
 } from "@wincode/skills";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgentRegistry } from "@/modules/agents";
@@ -68,6 +71,7 @@ import {
 	type SessionPart,
 	type SessionToolPart,
 	sanitizeInterruptedSessionMessages,
+	sanitizeSessionSkillToolPart,
 	sessionMessageSkillSchema,
 } from "@/modules/sessions/message";
 import {
@@ -78,14 +82,17 @@ import { discoverSkillCatalog } from "@/modules/skills";
 import { createToolGate, type ToolGate } from "@/modules/tool-gate/tool-gate";
 import { useConfig } from "@/shared/config/config-provider";
 import { useLatest } from "@/shared/hooks/use-latest";
+import type { SessionId } from "@/shared/identifiers";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
 import { createApprovalQueue } from "@/shared/providers/approval/approval-queue";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
-import type { ResolvedCodingAgent } from "../../agents/built-ins";
+import { buildAgent, type ResolvedCodingAgent } from "../../agents/built-ins";
 import { resolveChatModelTarget } from "../../model-target";
 import type { SessionFilePart } from "../message";
-import type { SessionViewState } from "../session-controller";
-import { createSessionController } from "../session-controller";
+import {
+	createSessionController,
+	type SessionViewState,
+} from "../session-controller";
 import type {
 	SessionOperation,
 	SessionSendInput,
@@ -122,8 +129,8 @@ export const createChatMessageParts = (
 const AGENT_TURN_DEADLINE_MS = 43_200_000;
 const INTERRUPTED_TOOL_ERROR = "Tool call interrupted";
 const createEmptyRuntimeAssistantMessage = (
-	assistantId: string,
-	sourceUserMessageId: string | null,
+	assistantId: SessionMessageId,
+	sourceUserMessageId: SessionMessageId | null,
 	agent: AgentId,
 	model: ChatModelSelection
 ): SessionMessage => ({
@@ -382,7 +389,7 @@ export const sanitizeSkillToolParts = (
 			? {
 					...message,
 					parts: message.parts.map((part) =>
-						isSkillToolPart(part) ? sanitizeSkillToolPart(part) : part
+						isSkillToolPart(part) ? sanitizeSessionSkillToolPart(part) : part
 					),
 				}
 			: message
@@ -398,7 +405,7 @@ type PreparedModelMessages =
 	| { readonly kind: "rejected"; readonly reason: string };
 export const prepareRetryMessages = (
 	messages: readonly SessionMessage[],
-	messageId: string
+	messageId: SessionMessageId
 ): PreparedModelMessages => {
 	const messageIndex = messages.findIndex(
 		(message) => message.id === messageId && message.role === "user"
@@ -611,11 +618,11 @@ const handleSafeAssistantOutcome = async ({
 	agent: AgentId;
 	currentMessages: readonly SessionMessage[];
 	mergeDisplayMessages: (messages: readonly SessionMessage[]) => void;
+	record: SessionRecord;
 	model: ChatModelSelection;
 	publishActiveMessages: (messages: SessionMessage[]) => void;
-	record: SessionRecord;
 	setError: (error: Error) => void;
-	turnId: string;
+	turnId: AgentTurnId;
 	variant?: ModelVariant;
 	commitRecord: (record: SessionRecord) => Promise<void>;
 }): Promise<SessionSendOutcome> => {
@@ -636,7 +643,7 @@ const handleSafeAssistantOutcome = async ({
 			? record.outcome.terminal.kind
 			: "failed";
 	const failureMessage: SessionMessage = {
-		id: durableMessage?.id ?? `assistant-${turnId}`,
+		id: durableMessage?.id ?? toSessionMessageId(`assistant-${turnId}`),
 		metadata: {
 			agent,
 			model,
@@ -685,8 +692,8 @@ const handlePreExecutionTurnFailure = async ({
 	delegation?: AgentTurnDelegation;
 	error: unknown;
 	model: ChatModelSelection;
-	sourceUserMessageId?: string;
-	turnId: string;
+	sourceUserMessageId?: SessionMessageId;
+	turnId: AgentTurnId;
 	variant?: ModelVariant;
 	commitRecord: (record: SessionRecord) => Promise<void>;
 	currentMessages: readonly SessionMessage[];
@@ -746,9 +753,9 @@ const handleTurnFailure = async ({
 	publishActiveMessages: (messages: SessionMessage[]) => void;
 	setError: (error: Error) => void;
 	signal: AbortSignal;
-	sourceUserMessageId?: string;
+	sourceUserMessageId?: SessionMessageId;
 	terminalObserved: boolean;
-	turnId: string;
+	turnId: AgentTurnId;
 	variant?: ModelVariant;
 	commitRecord: (record: SessionRecord) => Promise<void>;
 }): Promise<SessionSendOutcome> => {
@@ -839,9 +846,12 @@ const updateRuntimeMessageFromEvent = ({
 	updateRuntimeMessage,
 }: {
 	event: AgentTurnEvent;
-	assistantId: string | null;
+	assistantId: SessionMessageId | null;
 	setStatus: (status: SessionChatStatus) => void;
-	updateRuntimeMessage: (assistantId: string, event: AgentTurnEvent) => void;
+	updateRuntimeMessage: (
+		assistantId: SessionMessageId,
+		event: AgentTurnEvent
+	) => void;
 }): void => {
 	if (assistantId !== null) {
 		updateRuntimeMessage(assistantId, event);
@@ -881,7 +891,7 @@ export const findCurrentTurnAssistantIndex = (
 
 const preserveInterruptedToolCall = (
 	message: SessionMessage,
-	toolCallId: string
+	toolCallId: ToolCallId
 ): SessionMessage => {
 	if (message.role !== "assistant" || message.metadata?.interrupted !== true) {
 		return message;
@@ -904,7 +914,7 @@ const preserveInterruptedToolCall = (
 
 export const sanitizeInterruptedMessagesForSession = (
 	messages: SessionMessage[],
-	preserveToolCallId?: string
+	preserveToolCallId?: ToolCallId
 ): SessionMessage[] =>
 	sanitizeInterruptedSessionMessages(
 		messages.map((message) =>
@@ -1130,7 +1140,7 @@ const sanitizeFailedRuntimeMessages = (
 
 const sanitizeRuntimeMessagesForTerminal = (
 	messages: readonly SessionMessage[],
-	assistantId: string,
+	assistantId: SessionMessageId,
 	event: AgentTurnTerminalEvent
 ): SessionMessage[] => {
 	if (event.type === "agent-turn-completed") {
@@ -1146,7 +1156,7 @@ const sanitizeRuntimeMessagesForTerminal = (
 	);
 };
 export function useChat(
-	sessionId: string,
+	sessionId: SessionId,
 	initialMessages: SessionMessage[],
 	initialActiveMessages: SessionMessage[] = initialMessages,
 	initialCompactions: SessionCompaction[] = []
@@ -1177,9 +1187,9 @@ export function useChat(
 	);
 	const resolvePermissionRef = useLatest(resolvePermission);
 	const resolveResourceLimitsRef = useLatest(resolveResourceLimits);
-	const childAbortControllersRef = useRef(new Map<string, () => void>());
+	const childAbortControllersRef = useRef(new Map<ToolCallId, () => void>());
 	const approvalAbortHandledRef = useRef(false);
-	const abortApprovalTurnRef = useRef<(toolCallId: string) => void>(
+	const abortApprovalTurnRef = useRef<(toolCallId: ToolCallId) => void>(
 		() => undefined
 	);
 	const toolGateState = useMemo(() => {
@@ -1256,9 +1266,9 @@ export function useChat(
 	);
 	const overflowAttemptRef = useRef(0);
 	const requestStartedAtRef = useRef<number | null>(null);
-	const currentAssistantIdRef = useRef<string | null>(null);
-	const currentSourceUserMessageIdRef = useRef<string | null>(null);
-	const agentRef = useRef<AgentId>("build");
+	const currentAssistantIdRef = useRef<SessionMessageId | null>(null);
+	const currentSourceUserMessageIdRef = useRef<SessionMessageId | null>(null);
+	const agentRef = useRef<AgentId>(buildAgent.id);
 	const resolvedAgentRef = useRef<ResolvedCodingAgent | undefined>(undefined);
 	const modelRef = useRef<ChatModelSelection>(defaultChatModelSelection);
 	const sessionModelRef = useRef<ChatModelSelection>(defaultChatModelSelection);
@@ -1536,7 +1546,7 @@ export function useChat(
 	);
 
 	const updateRuntimeMessage = useCallback(
-		(assistantId: string, event: AgentTurnEvent): void => {
+		(assistantId: SessionMessageId, event: AgentTurnEvent): void => {
 			const current = activeMessagesRef.current;
 			const index = current.findIndex(({ id }) => id === assistantId);
 			const existing: SessionMessage =
@@ -1620,7 +1630,7 @@ export function useChat(
 	);
 
 	const finalizeRuntimeMessage = useCallback(
-		(assistantId: string, event: AgentTurnTerminalEvent): void => {
+		(assistantId: SessionMessageId, event: AgentTurnTerminalEvent): void => {
 			const current = activeMessagesRef.current;
 			const index = current.findIndex(({ id }) => id === assistantId);
 			const base =
@@ -1685,7 +1695,7 @@ export function useChat(
 			model: ChatModelSelection;
 			resolvedAgent: ResolvedCodingAgent;
 			skill?: SkillRequestContext;
-			sourceUserMessageId?: string;
+			sourceUserMessageId?: SessionMessageId;
 			variant?: ModelVariant;
 			modelMessages: readonly SessionMessage[];
 			signal: AbortSignal;
@@ -1695,7 +1705,7 @@ export function useChat(
 			setStatus("submitted");
 			const store = getSessionStore();
 			const turnId = createAgentTurnId();
-			currentAssistantIdRef.current = `assistant-${turnId}`;
+			currentAssistantIdRef.current = toSessionMessageId(`assistant-${turnId}`);
 			currentSourceUserMessageIdRef.current = sourceUserMessageId ?? null;
 			let snapshot: McpCatalogSnapshot | undefined;
 			let executionStarted = false;
@@ -2007,7 +2017,7 @@ export function useChat(
 	const submitRef = useLatest(submit);
 
 	const interruptLatestAssistantMessage = useCallback(
-		(preserveToolCallId?: string): void => {
+		(preserveToolCallId?: ToolCallId): void => {
 			const targetIndex = findCurrentTurnInterruptTargetIndex(
 				activeMessagesRef.current
 			);
@@ -2040,7 +2050,7 @@ export function useChat(
 		[mergeDisplayMessages, publishActiveMessages]
 	);
 	const abortApprovalTurn = useCallback(
-		(toolCallId: string): void => {
+		(toolCallId: ToolCallId): void => {
 			if (approvalAbortHandledRef.current) {
 				return;
 			}

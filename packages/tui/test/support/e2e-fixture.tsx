@@ -44,15 +44,23 @@ import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messa
 import { SessionView } from "@/modules/sessions/ui/views/session-view";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
+import type { SessionId } from "@/shared/identifiers";
 import { ApprovalPanelsProvider } from "@/shared/providers/approval/approval-panels-provider";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
+import {
+	agentId,
+	agentTurnId,
+	modelId,
+	sessionMessageId,
+	sessionRecordId,
+} from "./identifiers";
 
 export const E2E_MODEL: ChatModelSelection = {
-	modelId: "gpt-5.6-luna",
+	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 };
 
@@ -66,8 +74,8 @@ const createMessage = (
 	role: "assistant" | "user",
 	index: number
 ): SessionMessage => ({
-	id: `${role}-${index}`,
-	metadata: { agent: "build", model: E2E_MODEL },
+	id: sessionMessageId(`${role}-${index}`),
+	metadata: { agent: agentId("build"), model: E2E_MODEL },
 	parts: [
 		{
 			text: `${role === "user" ? "compacted" : "retained"}-turn-${index} ${contextBody}`,
@@ -84,13 +92,13 @@ const createAssistantRecord = (
 	const textPart = message.parts.find((part) => part.type === "text");
 	const durableMessage: SessionMessageRecord = {
 		id: message.id,
-		metadata: { agent: "build", model: E2E_MODEL },
+		metadata: { agent: agentId("build"), model: E2E_MODEL },
 		parts: [{ text: textPart?.text ?? "", type: "text" }],
 		role: "assistant",
 	};
 	return {
-		agentId: "build",
-		id: `record-assistant-${turnIndex}`,
+		agentId: agentId("build"),
+		id: sessionRecordId(`record-assistant-${turnIndex}`),
 		messages: [durableMessage],
 		model: E2E_MODEL,
 		outcome: {
@@ -101,7 +109,7 @@ const createAssistantRecord = (
 				usage: { inputTokens: 1, outputTokens: 1 },
 			},
 		},
-		turnId: `turn-${turnIndex}`,
+		turnId: agentTurnId(`turn-${turnIndex}`),
 		version: 1,
 	};
 };
@@ -161,7 +169,7 @@ const ReadySessionView = ({
 	sessionId,
 }: {
 	readonly initialMessages: SessionMessage[];
-	readonly sessionId: string;
+	readonly sessionId: SessionId;
 }) => {
 	const registry = useAgentRegistry();
 	if (!registry) {
@@ -193,14 +201,14 @@ export const createE2eStore = (): SessionStore => {
 export const seedCompactionHistory = async (
 	store: SessionStore,
 	turnCount = 10
-): Promise<{ messages: SessionMessage[]; sessionId: string }> => {
+): Promise<{ messages: SessionMessage[]; sessionId: SessionId }> => {
 	const firstUser = createMessage("user", 1);
 	const messages: SessionMessage[] = [firstUser];
 	const { id: sessionId } = await store.createSession({
-		agent: "build",
+		agent: agentId("build"),
 		message: firstUser,
 		model: E2E_MODEL,
-		turnId: "turn-1",
+		turnId: agentTurnId("turn-1"),
 	});
 
 	for (let turnIndex = 1; turnIndex <= turnCount; turnIndex += 1) {
@@ -216,10 +224,10 @@ export const seedCompactionHistory = async (
 		const user = createMessage("user", turnIndex + 1);
 		await store.commitSessionRecord({
 			record: buildUserSessionRecord({
-				agentId: "build",
+				agentId: agentId("build"),
 				message: user,
 				model: E2E_MODEL,
-				turnId: `turn-${turnIndex + 1}`,
+				turnId: agentTurnId(`turn-${turnIndex + 1}`),
 			}),
 			sessionId,
 		});
@@ -236,7 +244,7 @@ export const renderSession = async ({
 }: {
 	readonly initialMessages: SessionMessage[];
 	readonly pricing: ModelPricingTable;
-	readonly sessionId: string;
+	readonly sessionId: SessionId;
 }): Promise<{
 	registryReady: Promise<void>;
 	setup: TestRendererSetup;

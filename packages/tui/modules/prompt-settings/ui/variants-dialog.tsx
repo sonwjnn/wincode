@@ -3,6 +3,7 @@ import {
 	getSupportedModelVariants,
 	type ModelVariant,
 	type SupportedChatModel,
+	supportedChatModelIdSchema,
 } from "@wincode/ai/models";
 import { useCallback } from "react";
 import {
@@ -34,7 +35,7 @@ export const VariantsDialogContent = ({
 	const { colors } = useTheme();
 	const selectedTextColor = getContrastingTextColor(colors.selection);
 	const modelSelection: ChatModelSelection = {
-		modelId: currentModel.id,
+		modelId: supportedChatModelIdSchema.parse(currentModel.id),
 		providerId: currentModel.connectionProviderId,
 	};
 	const supportedVariants = getSupportedModelVariants(modelSelection);

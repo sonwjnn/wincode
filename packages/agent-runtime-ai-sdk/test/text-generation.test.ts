@@ -1,15 +1,22 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { createModelTarget } from "@wincode/ai/model-target";
+import { supportedChatModelIdSchema } from "@wincode/ai/models";
 // Keep the process-global Bun module mock complete for the dynamically imported subject.
 // biome-ignore lint/performance/noNamespaceImport: mock spread needs the full namespace
 import * as realAi from "ai";
 
 const model = createModelTarget(
-	{ modelId: "gpt-5.6-luna", providerId: "openai" },
+	{
+		modelId: supportedChatModelIdSchema.parse("gpt-5.6-luna"),
+		providerId: "openai",
+	},
 	{ apiKey: "test-key", kind: "api-key" }
 );
 const oauthModel = createModelTarget(
-	{ modelId: "gpt-5.6-luna", providerId: "openai" },
+	{
+		modelId: supportedChatModelIdSchema.parse("gpt-5.6-luna"),
+		providerId: "openai",
+	},
 	{ accessToken: "oauth-token", accountId: "oauth-account", kind: "oauth" }
 );
 

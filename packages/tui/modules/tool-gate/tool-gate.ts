@@ -1,5 +1,5 @@
 import { lstat } from "node:fs/promises";
-import type { AgentId } from "@wincode/agent-core";
+import type { AgentId, ToolCallId } from "@wincode/agent-core";
 import {
 	type CodingToolName,
 	codingToolDefinitions,
@@ -64,7 +64,7 @@ export type GateCall =
 	| {
 			agentId?: AgentId;
 			family: "coding";
-			toolCall: { input: unknown; toolCallId: string; toolName: string };
+			toolCall: { input: unknown; toolCallId: ToolCallId; toolName: string };
 	  }
 	| {
 			agentId?: AgentId;
@@ -75,13 +75,13 @@ export type GateCall =
 			input: unknown;
 			safety: boolean;
 			serverDecision: PermissionDecision;
-			toolCallId: string;
+			toolCallId: ToolCallId;
 			toolName: string;
 	  }
 	| {
 			agentId?: AgentId;
 			family: "shell";
-			toolCall: { input: unknown; toolCallId: string };
+			toolCall: { input: unknown; toolCallId: ToolCallId };
 	  }
 	| {
 			agentId?: AgentId;
@@ -89,7 +89,7 @@ export type GateCall =
 			available: boolean;
 			description: string;
 			name: string;
-			toolCallId?: string;
+			toolCallId?: ToolCallId;
 	  };
 export type ToolGate = {
 	gate(call: GateCall): Promise<GateOutcome>;
@@ -414,7 +414,7 @@ export const createToolGate = ({
 	const approvalDeps = { approvalQueue, onAbort, openApproval, service };
 
 	const gateCodingToolCall = async (
-		toolCall: { input: unknown; toolCallId: string; toolName: string },
+		toolCall: { input: unknown; toolCallId: ToolCallId; toolName: string },
 		permission: ToolPermission,
 		doomAsk: boolean,
 		agentId?: AgentId
@@ -623,7 +623,7 @@ export const createToolGate = ({
 	 * file tools).
 	 */
 	const gateShellToolCall = async (
-		toolCall: { input: unknown; toolCallId: string },
+		toolCall: { input: unknown; toolCallId: ToolCallId },
 		permission: ToolPermission,
 		doomAsk: boolean,
 		agentId?: AgentId

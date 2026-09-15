@@ -24,6 +24,7 @@ import {
 } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
+import { mcpSnapshotId } from "../support/identifiers";
 
 const makeStatus = (
 	overrides: Partial<McpServerStatus> = {}
@@ -43,7 +44,7 @@ const makeRegistry = (
 	close: async () => undefined,
 	createSnapshot: async (agent: AgentId): Promise<McpCatalogSnapshot> => ({
 		agent,
-		id: "snap-1",
+		id: mcpSnapshotId("snap-1"),
 		manifest: [],
 		tools: new Map(),
 	}),

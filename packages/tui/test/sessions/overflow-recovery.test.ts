@@ -5,6 +5,7 @@ import {
 	recoverContextOverflow,
 } from "@/modules/sessions/compaction/overflow-recovery";
 import type { SessionMessage } from "@/modules/sessions/message";
+import { modelId, sessionId, sessionMessageId } from "../support/identifiers";
 
 const message = (
 	id: string,
@@ -13,7 +14,7 @@ const message = (
 	metadata?: SessionMessage["metadata"]
 ): SessionMessage =>
 	fromPartial<SessionMessage>({
-		id,
+		id: sessionMessageId(id),
 		metadata,
 		parts: [{ text, type: "text" }],
 		role,
@@ -32,7 +33,7 @@ const compaction = {
 };
 
 const compactionInput = {
-	model: { modelId: "gpt-5.6-luna", providerId: "openai" } as const,
+	model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" } as const,
 	settings: {
 		enabled: true,
 		keepRecentTokens: 100,
@@ -49,8 +50,14 @@ test("prepares overflow replay without the failed assistant turn", () => {
 	];
 
 	expect(
-		prepareOverflowReplayMessages(messages, "u2").map(({ id }) => id)
-	).toEqual(["u1", "a1", "u2"]);
+		prepareOverflowReplayMessages(messages, sessionMessageId("u2")).map(
+			({ id }) => id
+		)
+	).toEqual([
+		sessionMessageId("u1"),
+		sessionMessageId("a1"),
+		sessionMessageId("u2"),
+	]);
 });
 
 test("replays a context-overflow turn exactly once with its original message id", async () => {
@@ -66,22 +73,25 @@ test("replays a context-overflow turn exactly once with its original message id"
 				message("u2", "user", "retry me"),
 				message("a2", "assistant", "partial output", { interrupted: true }),
 			],
-			sessionId: "session-1",
+			sessionId: sessionId("session-1"),
 		},
 		enabled: true,
 		error: new Error("context_length_exceeded"),
-		originalMessageId: "u2",
+		originalMessageId: sessionMessageId("u2"),
 		replay,
 	});
 
-	expect(result?.activeMessages.map(({ id }) => id)).toEqual(["summary", "u2"]);
+	expect(result?.activeMessages.map(({ id }) => id)).toEqual([
+		sessionMessageId("summary"),
+		sessionMessageId("u2"),
+	]);
 	expect(compaction.compact).toHaveBeenCalledWith(
 		expect.objectContaining({ trigger: "overflow" })
 	);
 	expect(replay).toHaveBeenCalledWith({
 		activeMessages: result?.activeMessages,
 		entry: result?.entry,
-		originalMessageId: "u2",
+		originalMessageId: sessionMessageId("u2"),
 	});
 });
 
@@ -94,11 +104,11 @@ test("preserves non-context provider errors without compacting", async () => {
 			compactionInput,
 			session: {
 				messages: [message("u1", "user", "retry")],
-				sessionId: "session-non-context",
+				sessionId: sessionId("session-non-context"),
 			},
 			enabled: true,
 			error,
-			originalMessageId: "u1",
+			originalMessageId: sessionMessageId("u1"),
 			replay: async () => undefined,
 		})
 	).rejects.toBe(error);
@@ -124,11 +134,11 @@ test("surfaces compaction failure without replaying the original turn", async ()
 					message("a1", "assistant", "answer"),
 					message("u2", "user", "retry"),
 				],
-				sessionId: "session-failure",
+				sessionId: sessionId("session-failure"),
 			},
 			enabled: true,
 			error: new Error("context_length_exceeded"),
-			originalMessageId: "u2",
+			originalMessageId: sessionMessageId("u2"),
 			replay,
 		})
 	).rejects.toMatchObject({
@@ -150,11 +160,11 @@ test("does not replay disabled or already-replayed overflow requests", async () 
 				compactionInput,
 				session: {
 					messages: [message("u1", "user", "retry")],
-					sessionId: "session-2",
+					sessionId: sessionId("session-2"),
 				},
 				enabled,
 				error: new Error("context_length_exceeded"),
-				originalMessageId: "u1",
+				originalMessageId: sessionMessageId("u1"),
 				replay: async () => undefined,
 			})
 		).rejects.toMatchObject({ code });

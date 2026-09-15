@@ -1,8 +1,11 @@
 import type { z } from "zod";
 import { AgentInvariantError } from "./errors";
+import type { ToolCallId } from "./identifiers";
 
 /** Opaque identity of one Tool Call within an Agent Turn. */
-export type ToolCallId = string;
+export type { ToolCallId } from "./identifiers";
+export const isToolCallId = (value: unknown): value is ToolCallId =>
+	typeof value === "string" && value.length > 0;
 
 /**
  * Framework-neutral JSON Schema carrier. Runtime adapters may consume this

@@ -1,6 +1,9 @@
 import { createOpenAI, openai } from "@ai-sdk/openai";
 import type { SupportedChatModel } from "@wincode/ai/models";
-import { findSupportedChatModelSelection } from "@wincode/ai/models";
+import {
+	findSupportedChatModelSelection,
+	parseCatalogModelSelection,
+} from "@wincode/ai/models";
 import {
 	defineModelResolver,
 	type ResolvedModel,
@@ -32,10 +35,10 @@ export function resolveOpenAIChatModel(
 	auth: OpenAIResolverOptions,
 	options: ResolverOptions = {}
 ): ResolvedModel {
-	const supported = findSupportedChatModelSelection({
-		modelId: model,
-		providerId: "openai",
-	});
+	const selection = parseCatalogModelSelection(`openai/${model}`);
+	const supported = selection
+		? findSupportedChatModelSelection(selection)
+		: null;
 	if (
 		supported?.provider !== "openai" ||
 		supported.connectionProviderId !== "openai"

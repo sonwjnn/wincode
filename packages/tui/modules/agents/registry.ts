@@ -814,5 +814,5 @@ export const resolveActiveAgentId = (
 		({ id, isAvailable }) => id === restoredAgentId && isAvailable
 	)
 		? restoredAgentId
-		: "build";
+		: buildAgent.id;
 };

@@ -2,9 +2,15 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
+	agentIdSchema,
+	isAgentTurnDelegation,
 	isSessionAttachmentReferencePart,
 	SESSION_RECORD_VERSION,
 	type SessionRecord,
+	type SessionRecordId,
+	toAgentTurnId,
+	toSessionMessageId,
+	toSessionRecordId,
 } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
@@ -12,6 +18,15 @@ import {
 } from "@wincode/ai/models";
 import { randomUUIDv7 } from "bun";
 import { and, asc, desc, eq } from "drizzle-orm";
+import { z } from "zod";
+import {
+	type CompactionId,
+	type SessionId,
+	toCompactionId,
+	toSessionId,
+	toWorkspaceId,
+	type WorkspaceId,
+} from "@/shared/identifiers";
 import type {
 	AppendSessionCompactionInput,
 	SessionCompaction,
@@ -24,6 +39,8 @@ import type {
 	SessionAttachmentStore,
 } from "./attachment-store";
 import {
+	attachmentIdSchema,
+	attachmentReferenceSchema,
 	createDrizzleAttachmentMetadataRepository,
 	createSessionAttachmentStore,
 	getAttachmentReference,
@@ -33,6 +50,7 @@ import { createDatabase, type SessionDatabase } from "./client";
 import { resolveLocalAttachmentRoot } from "./path";
 import {
 	promptHistory,
+	type SerializedJson,
 	session,
 	sessionAttachment,
 	sessionCompaction,
@@ -54,7 +72,64 @@ import {
 	type UpdateSessionInput,
 } from "./session-store";
 
-const createId = (): string => randomUUIDv7();
+const createSessionId = (): SessionId => toSessionId(randomUUIDv7());
+const createCompactionId = (): CompactionId => toCompactionId(randomUUIDv7());
+const createSessionRecordId = (): SessionRecordId =>
+	toSessionRecordId(randomUUIDv7());
+
+const serializeJson = <T>(value: T): SerializedJson<T> =>
+	value as SerializedJson<T>;
+const promptHistoryFileSchema = z
+	.object({
+		available: z.boolean().optional(),
+		attachmentId: attachmentIdSchema.optional(),
+		blobKey: z.string().optional(),
+		byteLength: z.number().int().nonnegative().optional(),
+		displayAvailability: z.literal("missing").optional(),
+		filename: z.string().optional(),
+		mediaType: z.string(),
+		type: z.literal("file"),
+		url: z.string(),
+	})
+	.passthrough();
+
+const promptHistoryEntrySchema = z.object({
+	fileTokens: z
+		.array(z.object({ start: z.number(), token: z.string() }))
+		.optional(),
+	files: z.array(promptHistoryFileSchema),
+	pastedText: z
+		.array(z.object({ text: z.string(), token: z.string() }))
+		.optional(),
+});
+
+const parsePromptHistoryEntry = (
+	entry: unknown,
+	text: string
+): PromptHistoryEntry => ({
+	...promptHistoryEntrySchema.parse(entry ?? { files: [] }),
+	text,
+});
+
+const compactionSummarySchema = z.object({
+	attachments: z
+		.array(
+			attachmentReferenceSchema.extend({
+				available: z.boolean(),
+				payloadOmitted: z.literal(true),
+			})
+		)
+		.optional(),
+	coveredMessageIds: z
+		.array(z.string().min(1))
+		.transform((messageIds) => messageIds.map(toSessionMessageId)),
+	formatVersion: z.literal(1),
+	focus: z.string().optional(),
+	text: z.string(),
+});
+
+const parseCompactionSummary = (value: unknown): SessionCompaction["summary"] =>
+	compactionSummarySchema.parse(value);
 
 const clearAttachmentRoot = async (root: string): Promise<void> => {
 	await mkdir(root, { recursive: true });
@@ -92,11 +167,11 @@ const writePromptHistory = (
 		tx.insert(promptHistory)
 			.values({
 				createdAt: new Date(),
-				entryJson: {
+				entryJson: serializeJson({
 					...(entry.fileTokens ? { fileTokens: entry.fileTokens } : {}),
 					...(entry.pastedText ? { pastedText: entry.pastedText } : {}),
 					files: entry.files,
-				},
+				}),
 				prompt: entry.text,
 			})
 			.run();
@@ -125,12 +200,7 @@ export const createPromptHistory = (
 			.orderBy(desc(promptHistory.id))
 			.limit(50)
 			.all()
-			.map((row) => ({
-				...(row.entry?.fileTokens ? { fileTokens: row.entry.fileTokens } : {}),
-				...(row.entry?.pastedText ? { pastedText: row.entry.pastedText } : {}),
-				files: row.entry?.files ?? [],
-				text: row.text,
-			}));
+			.map((row) => parsePromptHistoryEntry(row.entry, row.text));
 
 	const externalizeFiles = async (
 		files: PromptHistoryEntry["files"]
@@ -140,10 +210,10 @@ export const createPromptHistory = (
 		}
 		const [message] = await attachmentStore.externalizeMessages([
 			{
-				id: "prompt-history",
+				id: toSessionMessageId("prompt-history"),
 				parts: files,
 				role: "user",
-			} as SessionMessage,
+			} satisfies SessionMessage,
 		]);
 		return (message?.parts ?? []).filter(
 			(part): part is PromptHistoryEntry["files"][number] =>
@@ -183,12 +253,7 @@ export const createPromptHistory = (
 			changed: boolean;
 		}> = [];
 		for (const row of rows) {
-			const original: PromptHistoryEntry = {
-				...(row.entry?.fileTokens ? { fileTokens: row.entry.fileTokens } : {}),
-				...(row.entry?.pastedText ? { pastedText: row.entry.pastedText } : {}),
-				files: row.entry?.files ?? [],
-				text: row.text,
-			};
+			const original = parsePromptHistoryEntry(row.entry, row.text);
 			const migratedEntry = await migrateLegacyEntry(original);
 			migrated.push({
 				changed:
@@ -204,11 +269,11 @@ export const createPromptHistory = (
 				for (const { entry, id } of changes) {
 					tx.update(promptHistory)
 						.set({
-							entryJson: {
+							entryJson: serializeJson({
 								...(entry.fileTokens ? { fileTokens: entry.fileTokens } : {}),
 								...(entry.pastedText ? { pastedText: entry.pastedText } : {}),
 								files: entry.files,
-							},
+							}),
 						})
 						.where(eq(promptHistory.id, id))
 						.run();
@@ -240,25 +305,33 @@ type SessionRow = typeof session.$inferSelect;
 type CompactionRow = typeof sessionCompaction.$inferSelect;
 type SessionRecordRow = typeof sessionRecord.$inferSelect;
 
-const toSessionCompaction = (row: CompactionRow): SessionCompaction => ({
-	completedAt: row.completedAt,
-	createdAt: row.createdAt,
-	firstKeptUiMessageId: row.firstKeptUiMessageId,
-	firstKeptAssistantPartIndex: row.firstKeptAssistantPartIndex ?? undefined,
-	focus: row.focus ?? undefined,
-	id: row.id,
-	priorCompactionId: row.priorCompactionId ?? undefined,
-	sequence: row.sequence,
-	summarizationVariant: row.summarizationVariant ?? undefined,
-	sessionId: row.sessionId,
-	summarizationModel: row.summarizationModelJson,
-	summarizationUsage: row.summarizationUsageJson ?? undefined,
-	summary: row.summaryJson,
-	throughMessageUiId: row.throughMessageUiId,
-	estimatedTokensAfter: row.estimatedTokensAfter,
-	tokensBefore: row.tokensBefore,
-	trigger: row.trigger,
-});
+const toSessionCompaction = (row: CompactionRow): SessionCompaction => {
+	const summarizationModel = modelSelectionSchema.parse(
+		row.summarizationModelJson
+	);
+	const summary = parseCompactionSummary(row.summaryJson);
+	return {
+		completedAt: row.completedAt,
+		createdAt: row.createdAt,
+		firstKeptUiMessageId: toSessionMessageId(row.firstKeptUiMessageId),
+		firstKeptAssistantPartIndex: row.firstKeptAssistantPartIndex ?? undefined,
+		focus: row.focus ?? undefined,
+		id: toCompactionId(row.id),
+		priorCompactionId: row.priorCompactionId
+			? toCompactionId(row.priorCompactionId)
+			: undefined,
+		sequence: row.sequence,
+		sessionId: toSessionId(row.sessionId),
+		summarizationModel,
+		summarizationVariant: row.summarizationVariant ?? undefined,
+		summarizationUsage: row.summarizationUsageJson ?? undefined,
+		summary,
+		throughMessageUiId: toSessionMessageId(row.throughMessageUiId),
+		estimatedTokensAfter: row.estimatedTokensAfter,
+		tokensBefore: row.tokensBefore,
+		trigger: row.trigger,
+	};
+};
 
 export type DrizzleSessionStoreOptions = {
 	attachmentRoot?: string;
@@ -273,7 +346,7 @@ const ensureWorkspace = (db: SessionDatabase, rootPath: string) => {
 	const now = new Date();
 	const workspace = {
 		createdAt: now,
-		id: hashWorkspace(rootPath),
+		id: toWorkspaceId(hashWorkspace(rootPath)),
 		rootPath,
 		updatedAt: now,
 	};
@@ -305,15 +378,20 @@ const deriveSessionTitle = (messages: SessionMessage[]): string => {
 	return UNTITLED_SESSION_TITLE;
 };
 
-const toSession = (row: SessionRow): Session => ({
-	createdAt: row.createdAt,
-	id: row.id,
-	lastMessageAt: row.lastMessageAt ?? null,
-	...(row.modelJson ? { model: row.modelJson } : {}),
-	pinned: row.pinned,
-	title: row.title ?? UNTITLED_SESSION_TITLE,
-	...(row.variant ? { variant: row.variant } : {}),
-});
+const toSession = (row: SessionRow): Session => {
+	const parsedModel = row.modelJson
+		? modelSelectionSchema.safeParse(row.modelJson)
+		: undefined;
+	return {
+		createdAt: row.createdAt,
+		id: toSessionId(row.id),
+		lastMessageAt: row.lastMessageAt ?? null,
+		...(parsedModel?.success ? { model: parsedModel.data } : {}),
+		pinned: row.pinned,
+		title: row.title ?? UNTITLED_SESSION_TITLE,
+		...(row.variant ? { variant: row.variant } : {}),
+	};
+};
 const toSessionRecordModel = (
 	model: Pick<SessionRecord["model"], "modelId" | "providerId">,
 	variant: SessionRecord["model"]["variant"]
@@ -322,16 +400,34 @@ const toSessionRecordModel = (
 	providerId: model.providerId,
 	...(variant === undefined ? {} : { variant }),
 });
-const toSessionRecord = (row: SessionRecordRow): SessionRecord => ({
-	agentId: row.agentId,
-	...(row.delegationJson === null ? {} : { delegation: row.delegationJson }),
-	id: row.recordId,
-	messages: row.messagesJson,
-	model: row.modelJson,
-	outcome: row.outcomeJson as SessionRecord["outcome"],
-	turnId: row.turnId,
-	version: row.version as SessionRecord["version"],
-});
+const toSessionRecord = (row: SessionRecordRow): SessionRecord => {
+	let delegation: SessionRecord["delegation"];
+	if (row.delegationJson !== null) {
+		if (!isAgentTurnDelegation(row.delegationJson)) {
+			throw new SessionRecordInvariantError(
+				"Invalid persisted Session Record delegation."
+			);
+		}
+		delegation = row.delegationJson;
+	}
+	const record = {
+		agentId: agentIdSchema.parse(row.agentId),
+		...(delegation === undefined ? {} : { delegation }),
+		id: toSessionRecordId(row.recordId),
+		messages: row.messagesJson,
+		model: row.modelJson,
+		outcome: row.outcomeJson,
+		turnId: toAgentTurnId(row.turnId),
+		version: row.version,
+	};
+	const validationError = getSessionRecordValidationError(record);
+	if (validationError !== null) {
+		throw new SessionRecordInvariantError(
+			`Invalid persisted Session Record: ${validationError}`
+		);
+	}
+	return record as unknown as SessionRecord;
+};
 
 const collectLiveAttachmentIds = (db: SessionDatabase): Set<string> => {
 	const live = new Set<string>();
@@ -365,7 +461,7 @@ const collectLiveAttachmentIds = (db: SessionDatabase): Set<string> => {
 
 const appendCompaction = (
 	db: SessionDatabase,
-	workspaceId: string,
+	workspaceId: WorkspaceId,
 	input: AppendSessionCompactionInput
 ): SessionCompaction =>
 	db.transaction((tx) => {
@@ -391,7 +487,7 @@ const appendCompaction = (
 			.limit(1)
 			.get();
 		const sequence = (latest?.sequence ?? 0) + 1;
-		const id = input.id ?? createId();
+		const id = input.id ?? createCompactionId();
 		const createdAt = input.createdAt ?? new Date();
 		const completedAt = input.completedAt ?? createdAt;
 		const row = {
@@ -405,9 +501,9 @@ const appendCompaction = (
 			priorCompactionId: input.priorCompactionId ?? null,
 			sequence,
 			sessionId: input.sessionId,
-			summarizationModelJson: input.summarizationModel,
-			summarizationUsageJson: input.summarizationUsage ?? null,
-			summaryJson: input.summary,
+			summarizationModelJson: serializeJson(input.summarizationModel),
+			summarizationUsageJson: serializeJson(input.summarizationUsage ?? null),
+			summaryJson: serializeJson(input.summary),
 			throughMessageUiId: input.throughMessageUiId,
 			estimatedTokensAfter: input.estimatedTokensAfter,
 			tokensBefore: input.tokensBefore,
@@ -419,7 +515,7 @@ const appendCompaction = (
 
 const writeSessionRecordCheckpoint = (
 	db: SessionDatabase,
-	workspaceId: string,
+	workspaceId: WorkspaceId,
 	{ sessionModel, sessionVariant, record, sessionId }: CommitSessionRecordInput
 ): void => {
 	const validationError = getSessionRecordValidationError(record);
@@ -429,7 +525,9 @@ const writeSessionRecordCheckpoint = (
 			{ cause: new Error(validationError) }
 		);
 	}
-	const modelJson = toSessionRecordModel(record.model, record.model.variant);
+	const modelJson = serializeJson(
+		toSessionRecordModel(record.model, record.model.variant)
+	);
 	db.transaction((tx) => {
 		const sessionRow = tx
 			.select({ id: session.id })
@@ -450,21 +548,20 @@ const writeSessionRecordCheckpoint = (
 			.limit(1)
 			.get();
 		const now = new Date();
-		tx.insert(sessionRecord)
-			.values({
-				agentId: record.agentId,
-				createdAt: now,
-				delegationJson: record.delegation ?? null,
-				messagesJson: [...record.messages],
-				modelJson,
-				outcomeJson: record.outcome,
-				position: (latest?.position ?? -1) + 1,
-				recordId: record.id,
-				sessionId,
-				turnId: record.turnId,
-				version: record.version,
-			})
-			.run();
+		const sessionRecordValues: typeof sessionRecord.$inferInsert = {
+			createdAt: now,
+			agentId: record.agentId,
+			delegationJson: serializeJson(record.delegation ?? null),
+			messagesJson: serializeJson([...record.messages]),
+			modelJson,
+			outcomeJson: serializeJson(record.outcome),
+			position: (latest?.position ?? -1) + 1,
+			recordId: record.id,
+			sessionId,
+			turnId: record.turnId,
+			version: record.version,
+		};
+		tx.insert(sessionRecord).values(sessionRecordValues).run();
 
 		tx.update(session)
 			.set({
@@ -472,7 +569,7 @@ const writeSessionRecordCheckpoint = (
 				...(sessionModel === undefined
 					? {}
 					: {
-							modelJson: sessionModel,
+							modelJson: serializeJson(sessionModel),
 							variant: sessionVariant ?? null,
 						}),
 				updatedAt: now,
@@ -486,8 +583,8 @@ const writeSessionRecordCheckpoint = (
 
 const readSessionRecordRows = (
 	db: SessionDatabase,
-	workspaceId: string,
-	sessionId: string
+	workspaceId: WorkspaceId,
+	sessionId: SessionId
 ): SessionRecordRow[] =>
 	db
 		.select({ record: sessionRecord })
@@ -505,8 +602,8 @@ const readSessionRecordRows = (
 
 const readSessionRecords = (
 	db: SessionDatabase,
-	workspaceId: string,
-	sessionId: string
+	workspaceId: WorkspaceId,
+	sessionId: SessionId
 ): SessionRecord[] =>
 	readSessionRecordRows(db, workspaceId, sessionId).map(toSessionRecord);
 
@@ -582,7 +679,7 @@ export const createDrizzleSessionStore = (
 			if (durableMessage === undefined || durableMessage.role !== "user") {
 				throw new Error("Initial session message has no durable parts.");
 			}
-			const id = createId();
+			const id = createSessionId();
 			const now = new Date();
 			const recordModel = toSessionRecordModel(
 				message.metadata?.model ?? model,
@@ -595,7 +692,7 @@ export const createDrizzleSessionStore = (
 						createdAt: now,
 						id,
 						lastMessageAt: now,
-						modelJson: model,
+						modelJson: serializeJson(model),
 						pinned: false,
 						title: deriveSessionTitle([message]),
 						updatedAt: now,
@@ -608,11 +705,11 @@ export const createDrizzleSessionStore = (
 						agentId: agent,
 						createdAt: now,
 						delegationJson: null,
-						messagesJson: [durableMessage],
-						modelJson: recordModel,
-						outcomeJson: { kind: "user" },
+						messagesJson: serializeJson([durableMessage]),
+						modelJson: serializeJson(recordModel),
+						outcomeJson: serializeJson({ kind: "user" }),
 						position: 0,
-						recordId: createId(),
+						recordId: createSessionRecordId(),
 						sessionId: id,
 						turnId,
 						version: SESSION_RECORD_VERSION,
@@ -623,7 +720,7 @@ export const createDrizzleSessionStore = (
 			return { id };
 		},
 
-		deleteSession: async (sessionId: string) => {
+		deleteSession: async (sessionId: SessionId) => {
 			db.delete(session)
 				.where(
 					and(eq(session.id, sessionId), eq(session.workspaceId, workspace.id))
@@ -642,7 +739,7 @@ export const createDrizzleSessionStore = (
 			await clearAttachmentRoot(attachmentRoot);
 		},
 
-		getCompactions: (sessionId: string) => {
+		getCompactions: (sessionId: SessionId) => {
 			const rows = db
 				.select({
 					compaction: sessionCompaction,
@@ -662,7 +759,7 @@ export const createDrizzleSessionStore = (
 			);
 		},
 
-		getLatestCompaction: (sessionId: string) => {
+		getLatestCompaction: (sessionId: SessionId) => {
 			const row = db
 				.select({
 					compaction: sessionCompaction,
@@ -694,9 +791,9 @@ export const createDrizzleSessionStore = (
 				sessionId,
 			});
 		},
-		listSessionRecords: async (sessionId: string) =>
+		listSessionRecords: async (sessionId: SessionId) =>
 			readSessionRecords(db, workspace.id, sessionId),
-		getSession: (sessionId: string) => {
+		getSession: (sessionId: SessionId) => {
 			const row = db
 				.select()
 				.from(session)
@@ -763,7 +860,7 @@ export const createDrizzleSessionStore = (
 			return result;
 		},
 
-		updateSession: (sessionId: string, data: UpdateSessionInput) => {
+		updateSession: (sessionId: SessionId, data: UpdateSessionInput) => {
 			db.update(session)
 				.set({
 					updatedAt: new Date(),

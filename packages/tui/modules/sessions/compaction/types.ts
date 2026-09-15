@@ -1,9 +1,11 @@
+import type { SessionMessageId } from "@wincode/agent-core";
 import { MODEL_OUTPUT_TOKEN_LIMIT } from "@wincode/ai/model";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import type {
 	SessionMessage,
 	SessionMessageUsage,
 } from "@/modules/sessions/message";
+import type { CompactionId, SessionId } from "@/shared/identifiers";
 import type { CompactionAttachmentMetadata } from "../storage/attachment-store";
 export const DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS =
 	MODEL_OUTPUT_TOKEN_LIMIT;
@@ -20,21 +22,21 @@ export type CompactionTriggerReason =
 
 export type CompactionSummary = {
 	attachments?: CompactionAttachmentMetadata[];
-	coveredMessageIds: string[];
+	coveredMessageIds: SessionMessageId[];
 	formatVersion: 1;
 	focus?: string;
 	text: string;
 };
 
 export type SessionCompaction = {
-	id: string;
-	sessionId: string;
+	id: CompactionId;
+	sessionId: SessionId;
 	sequence: number;
-	priorCompactionId?: string;
+	priorCompactionId?: CompactionId;
 	summary: CompactionSummary;
-	firstKeptUiMessageId: string;
+	firstKeptUiMessageId: SessionMessageId;
 	firstKeptAssistantPartIndex?: number;
-	throughMessageUiId: string;
+	throughMessageUiId: SessionMessageId;
 	tokensBefore: number;
 	estimatedTokensAfter: number;
 	trigger: CompactionTriggerReason;
@@ -50,7 +52,7 @@ export type AppendSessionCompactionInput = Omit<
 	SessionCompaction,
 	"completedAt" | "createdAt" | "id" | "sequence"
 > & {
-	id?: string;
+	id?: CompactionId;
 	createdAt?: Date;
 	completedAt?: Date;
 };
@@ -75,6 +77,6 @@ export type SummaryGenerator = (
 ) => Promise<SummaryGeneratorResult>;
 
 export type CompactionSession = {
-	sessionId: string;
+	sessionId: SessionId;
 	messages: readonly SessionMessage[];
 };

@@ -16,6 +16,7 @@ import {
 	modelVariantSchema,
 	normalizeModelVariantForModel,
 	type SupportedChatModel,
+	type SupportedChatModelId,
 } from "./models";
 
 export type ApiKeyModelAuthorization = {
@@ -42,7 +43,7 @@ export type CatalogModelForProvider<P extends ConnectionProviderId> = Extract<
 	{ connectionProviderId: P }
 >;
 export type ModelIdForProvider<P extends ConnectionProviderId> =
-	CatalogModelForProvider<P>["id"];
+	CatalogModelForProvider<P>["id"] & SupportedChatModelId;
 
 export type ModelTargetFor<P extends ConnectionProviderId> = {
 	readonly authorization: ModelAuthorizationByProvider[P];
@@ -60,6 +61,14 @@ export type ModelTargetFor<P extends ConnectionProviderId> = {
 export type ModelTarget = {
 	[P in ConnectionProviderId]: ModelTargetFor<P>;
 }[ConnectionProviderId];
+type ModelTargetSchemaOutput = {
+	readonly authorization: ModelAuthorization;
+	readonly maxOutputTokens?: number;
+	readonly modelId: SupportedChatModelId;
+	readonly providerId: ConnectionProviderId;
+	readonly providerOptions?: ModelProviderOptions;
+	readonly variant?: ModelVariant;
+};
 
 export const apiKeyModelAuthorizationSchema = z
 	.object({ kind: z.literal("api-key"), apiKey: z.string().min(1) })
@@ -80,7 +89,12 @@ const modelTargetShapeSchema = z
 	.object({
 		authorization: modelAuthorizationSchema,
 		maxOutputTokens: z.number().int().positive().optional(),
-		modelId: z.string().min(1),
+		modelId: z
+			.string()
+			.min(1)
+			.transform(
+				(value): SupportedChatModelId => value as SupportedChatModelId
+			),
 		providerId: connectionProviderIdSchema,
 		providerOptions: modelProviderOptionsSchema.optional(),
 		variant: modelVariantSchema.optional(),
@@ -113,9 +127,8 @@ const hasCompatibleProviderOptions = (
 			return false;
 	}
 };
-
-export const modelTargetSchema = modelTargetShapeSchema.superRefine(
-	(target, context) => {
+export const modelTargetSchema: z.ZodType<ModelTargetSchemaOutput> =
+	modelTargetShapeSchema.superRefine((target, context) => {
 		const model = findSupportedChatModelSelection(target);
 		if (!model) {
 			context.addIssue({
@@ -152,8 +165,7 @@ export const modelTargetSchema = modelTargetShapeSchema.superRefine(
 				path: ["providerOptions"],
 			});
 		}
-	}
-);
+	});
 
 const toMinimalAuthorization = (
 	providerId: ConnectionProviderId,
@@ -195,7 +207,7 @@ export const createModelTarget = (
 	});
 	const target = {
 		authorization: toMinimalAuthorization(selection.providerId, authorization),
-		modelId: model.id,
+		modelId: model.id as SupportedChatModelId,
 		providerId: model.connectionProviderId,
 		...(resolvedOptions.maxOutputTokens === undefined
 			? {}

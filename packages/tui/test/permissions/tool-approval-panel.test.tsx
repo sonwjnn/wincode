@@ -22,19 +22,25 @@ import {
 } from "@/shared/providers/approval/ui/tool-approval-panel";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+import { toolCallId } from "../support/identifiers";
 
 const makeRequest = (
-	overrides: Partial<ToolApprovalRequest> = {}
-): ToolApprovalRequest => ({
-	description: "Read a UTF-8 text file inside the workspace.",
-	identity: [
-		{ label: "tool", value: "read" },
-		{ label: "resource", value: ".env" },
-	],
-	input: { path: ".env" },
-	toolCallId: "call-1",
-	...overrides,
-});
+	overrides: Partial<Omit<ToolApprovalRequest, "toolCallId">> & {
+		toolCallId?: string;
+	} = {}
+): ToolApprovalRequest => {
+	const { toolCallId: rawToolCallId, ...rest } = overrides;
+	return {
+		description: "Read a UTF-8 text file inside the workspace.",
+		identity: [
+			{ label: "tool", value: "read" },
+			{ label: "resource", value: ".env" },
+		],
+		input: { path: ".env" },
+		toolCallId: toolCallId(rawToolCallId ?? "call-1"),
+		...rest,
+	};
+};
 
 const makeActions = (): ToolApprovalActions => ({
 	abort: mock(() => undefined),

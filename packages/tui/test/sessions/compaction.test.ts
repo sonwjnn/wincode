@@ -14,7 +14,10 @@ import type {
 	SessionCompaction,
 	SummaryGeneratorInput,
 } from "@/modules/sessions/compaction/types";
-import type { SessionMessage } from "@/modules/sessions/message";
+import {
+	type SessionMessage,
+	sanitizeSessionSkillToolPart,
+} from "@/modules/sessions/message";
 import {
 	type AttachmentMetadataRecord,
 	type AttachmentMetadataRepository,
@@ -22,12 +25,31 @@ import {
 	createSessionAttachmentStore,
 	getAttachmentReference,
 } from "@/modules/sessions/storage/attachment-store";
+import {
+	compactionId,
+	modelId,
+	sessionId,
+	sessionMessageId,
+	toolCallId,
+} from "../support/identifiers";
 
 const model: ChatModelSelection = {
-	modelId: "gpt-5.6-luna",
+	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 };
 const DATA_IMAGE_URL_PATTERN = /^data:image\/png;base64,/u;
+test("rejects a skill tool part without a Tool Call Identifier", () => {
+	expect(() =>
+		sanitizeSessionSkillToolPart({
+			input: {},
+			output: {},
+			state: "output-available",
+			toolCallId: "",
+			toolName: "skill",
+			type: "dynamic-tool",
+		})
+	).toThrow("invalid Tool Call Identifier");
+});
 
 const message = (
 	id: string,
@@ -35,7 +57,7 @@ const message = (
 	text: string
 ): SessionMessage =>
 	fromPartial<SessionMessage>({
-		id,
+		id: sessionMessageId(id),
 		parts: [{ text, type: "text" }],
 		role,
 	});
@@ -47,7 +69,7 @@ const makeStore = (initial: SessionCompaction | null = null) => {
 			...input,
 			completedAt: input.completedAt ?? new Date("2026-08-30T00:00:00.000Z"),
 			createdAt: input.createdAt ?? new Date("2026-08-30T00:00:00.000Z"),
-			id: input.id ?? "entry-generated",
+			id: input.id ?? compactionId("entry-generated"),
 			sequence: (latest?.sequence ?? 0) + 1,
 		};
 		latest = entry;
@@ -86,7 +108,7 @@ test("compacts complete turns into a durable summary and recent tail", async () 
 		usage: { inputTokens: 30, outputTokens: 5 },
 	}));
 	const compaction = createSessionCompaction({
-		generateId: () => "entry-1",
+		generateId: () => compactionId("entry-1"),
 		now: () => new Date("2026-08-30T00:00:00.000Z"),
 		store,
 		summaryGenerator,
@@ -100,7 +122,7 @@ test("compacts complete turns into a durable summary and recent tail", async () 
 	];
 
 	const result = await compaction.compact({
-		session: { messages, sessionId: "session-1" },
+		session: { messages, sessionId: sessionId("session-1") },
 		focus: "preserve the migration decision",
 		model,
 		settings,
@@ -108,19 +130,22 @@ test("compacts complete turns into a durable summary and recent tail", async () 
 	});
 
 	expect(result.activeMessages.map(({ id }) => id)).toEqual([
-		"compaction:entry-1",
-		"u2",
-		"a2",
+		sessionMessageId("compaction:entry-1"),
+		sessionMessageId("u2"),
+		sessionMessageId("a2"),
 	]);
 	expect(result.entry).toMatchObject({
-		firstKeptUiMessageId: "u2",
+		firstKeptUiMessageId: sessionMessageId("u2"),
 		focus: "preserve the migration decision",
 		sequence: 1,
-		throughMessageUiId: "a1",
+		throughMessageUiId: sessionMessageId("a1"),
 		trigger: "manual",
 		tokensBefore: 4,
 	});
-	expect(result.entry.summary.coveredMessageIds).toEqual(["u1", "a1"]);
+	expect(result.entry.summary.coveredMessageIds).toEqual([
+		sessionMessageId("u1"),
+		sessionMessageId("a1"),
+	]);
 	expect(summaryGenerator).toHaveBeenCalledWith(
 		expect.objectContaining({
 			focus: "preserve the migration decision",
@@ -145,7 +170,7 @@ test("does not summarize history already covered by the recent budget", async ()
 					message("u1", "user", "only request"),
 					message("a1", "assistant", "only answer"),
 				],
-				sessionId: "session-short",
+				sessionId: sessionId("session-short"),
 			},
 			model,
 			settings: { enabled: true, keepRecentTokens: 10, thresholdTokens: null },
@@ -173,7 +198,7 @@ test("does not summarize when all complete history fits recent budget", async ()
 					message("u2", "user", "second"),
 					message("a2", "assistant", "answer"),
 				],
-				sessionId: "session-all-recent",
+				sessionId: sessionId("session-all-recent"),
 			},
 			model,
 			settings: { enabled: true, keepRecentTokens: 10, thresholdTokens: null },
@@ -200,7 +225,7 @@ test("keeps retention identical across manual and threshold triggers", async () 
 					message("u2", "user", "current"),
 					message("a2", "assistant", "answer"),
 				],
-				sessionId: `session-${trigger}`,
+				sessionId: sessionId(`session-${trigger}`),
 			},
 			model,
 			settings,
@@ -228,17 +253,17 @@ test("rebuilds the active context from the newest durable compaction", () => {
 	const latest: SessionCompaction = {
 		completedAt: new Date("2026-08-30T00:00:00.000Z"),
 		createdAt: new Date("2026-08-30T00:00:00.000Z"),
-		firstKeptUiMessageId: "u2",
-		id: "entry-1",
+		firstKeptUiMessageId: sessionMessageId("u2"),
+		id: compactionId("entry-1"),
 		sequence: 1,
-		sessionId: "session-rebuild",
+		sessionId: sessionId("session-rebuild"),
 		summarizationModel: model,
 		summary: {
-			coveredMessageIds: ["u1", "a1"],
+			coveredMessageIds: [sessionMessageId("u1"), sessionMessageId("a1")],
 			formatVersion: 1,
 			text: "preserve the migration decision",
 		},
-		throughMessageUiId: "a1",
+		throughMessageUiId: sessionMessageId("a1"),
 		estimatedTokensAfter: 20,
 		tokensBefore: 100,
 		trigger: "manual",
@@ -253,9 +278,9 @@ test("rebuilds the active context from the newest durable compaction", () => {
 	const active = rebuildActiveMessages(messages, latest);
 
 	expect(active.map(({ id }) => id)).toEqual([
-		"compaction:entry-1",
-		"u2",
-		"a2",
+		sessionMessageId("compaction:entry-1"),
+		sessionMessageId("u2"),
+		sessionMessageId("a2"),
 	]);
 	expect(active[0]?.parts[0]).toMatchObject({
 		text: expect.stringContaining("preserve the migration decision"),
@@ -267,17 +292,17 @@ test("fails closed when a durable compaction boundary is missing", () => {
 	const latest: SessionCompaction = {
 		completedAt: new Date("2026-08-30T00:00:00.000Z"),
 		createdAt: new Date("2026-08-30T00:00:00.000Z"),
-		firstKeptUiMessageId: "missing-message",
-		id: "entry-invalid",
+		firstKeptUiMessageId: sessionMessageId("missing-message"),
+		id: compactionId("entry-invalid"),
 		sequence: 2,
-		sessionId: "session-invalid",
+		sessionId: sessionId("session-invalid"),
 		summarizationModel: model,
 		summary: {
-			coveredMessageIds: ["old-message"],
+			coveredMessageIds: [sessionMessageId("old-message")],
 			formatVersion: 1,
 			text: "summary",
 		},
-		throughMessageUiId: "old-message",
+		throughMessageUiId: sessionMessageId("old-message"),
 		estimatedTokensAfter: 1,
 		tokensBefore: 2,
 		trigger: "manual",
@@ -351,7 +376,7 @@ test("fallback estimation follows canonical visible content", () => {
 		input: { command: "pwd" },
 		output: { output: "ok" },
 		state: "output-available",
-		toolCallId: "call-1",
+		toolCallId: toolCallId("call-1"),
 		type: "tool-shell",
 	} as const;
 	const longTool = {
@@ -361,7 +386,7 @@ test("fallback estimation follows canonical visible content", () => {
 	const shortEstimate = estimateCompactionTokens([
 		textOnly,
 		fromPartial<SessionMessage>({
-			id: "assistant-short",
+			id: sessionMessageId("assistant-short"),
 			parts: [{ text: "thinking", type: "reasoning" }, shortTool],
 			role: "assistant",
 		}),
@@ -369,7 +394,7 @@ test("fallback estimation follows canonical visible content", () => {
 	const longEstimate = estimateCompactionTokens([
 		textOnly,
 		fromPartial<SessionMessage>({
-			id: "assistant-long",
+			id: sessionMessageId("assistant-long"),
 			parts: [{ text: "thinking", type: "reasoning" }, longTool],
 			role: "assistant",
 		}),
@@ -380,11 +405,11 @@ test("fallback estimation follows canonical visible content", () => {
 	const roleToolEstimate = estimateCompactionTokens([
 		textOnly,
 		fromAny({
-			id: "tool-result",
+			id: sessionMessageId("tool-result"),
 			parts: [
 				{
 					output: { output: "x".repeat(1000) },
-					toolCallId: "call-1",
+					toolCallId: toolCallId("call-1"),
 					type: "tool-result",
 				},
 			],
@@ -416,7 +441,7 @@ test("derives one summary attempt from retained context and reserve", async () =
 				message("u2", "user", "current"),
 				message("a2", "assistant", "answer"),
 			],
-			sessionId: "session-budget",
+			sessionId: sessionId("session-budget"),
 		},
 		model,
 		settings: {
@@ -456,7 +481,7 @@ test("does not generate or persist when the summary budget is not viable", async
 					message("u2", "user", "current"),
 					message("a2", "assistant", "answer"),
 				],
-				sessionId: "session-budget-too-small",
+				sessionId: sessionId("session-budget-too-small"),
 			},
 			model,
 			settings: {
@@ -478,7 +503,7 @@ test("repeated compaction passes the prior summary and only the new compacted sp
 	const store = makeStore();
 	const summaryGenerator = mock(async () => ({ text: "new summary" }));
 	const compaction = createSessionCompaction({
-		generateId: () => "entry-2",
+		generateId: () => compactionId("entry-2"),
 		store,
 		summaryGenerator,
 		estimateTokens: (messages) => messages.length,
@@ -490,7 +515,7 @@ test("repeated compaction passes the prior summary and only the new compacted sp
 		message("a2", "assistant", "two answer"),
 	];
 	await compaction.compact({
-		session: { messages: initialMessages, sessionId: "session-2" },
+		session: { messages: initialMessages, sessionId: sessionId("session-2") },
 		model,
 		settings,
 		trigger: "manual",
@@ -501,7 +526,7 @@ test("repeated compaction passes the prior summary and only the new compacted sp
 		message("a3", "assistant", "three answer"),
 	];
 	await compaction.compact({
-		session: { messages: nextMessages, sessionId: "session-2" },
+		session: { messages: nextMessages, sessionId: sessionId("session-2") },
 		model,
 		settings,
 		trigger: "threshold",
@@ -542,7 +567,7 @@ test("rejects compaction when its projected context is larger", async () => {
 						],
 					},
 				],
-				sessionId: "session-expanding",
+				sessionId: sessionId("session-expanding"),
 			},
 			model,
 			settings,
@@ -574,7 +599,7 @@ test("uses the fallback estimate for strict reduction acceptance", async () => {
 
 	await expect(
 		compaction.compact({
-			session: { messages, sessionId: "session-local-acceptance" },
+			session: { messages, sessionId: sessionId("session-local-acceptance") },
 			model,
 			settings: { enabled: true, keepRecentTokens: 1, thresholdTokens: null },
 			trigger: "manual",
@@ -603,7 +628,7 @@ test("summary failure and cancellation do not append durable state", async () =>
 			message("u2", "user", "second"),
 			message("a2", "assistant", "answer"),
 		],
-		sessionId: "session-3",
+		sessionId: sessionId("session-3"),
 	};
 
 	await expect(
@@ -653,7 +678,7 @@ test("persistence failure does not commit a compaction entry", async () => {
 					message("u2", "user", "second"),
 					message("a2", "assistant", "answer"),
 				],
-				sessionId: "session-persistence",
+				sessionId: sessionId("session-persistence"),
 			},
 			model,
 			settings,
@@ -673,7 +698,7 @@ test("only one compaction operation runs per session", async () => {
 			})
 	);
 	const compaction = createSessionCompaction({
-		generateId: () => "entry-4",
+		generateId: () => compactionId("entry-4"),
 		store,
 		summaryGenerator,
 		estimateTokens: (messages) => messages.length,
@@ -685,7 +710,7 @@ test("only one compaction operation runs per session", async () => {
 			message("u2", "user", "second"),
 			message("a2", "assistant", "answer"),
 		],
-		sessionId: "session-4",
+		sessionId: sessionId("session-4"),
 	};
 	const first = compaction.compact({
 		session,
@@ -709,7 +734,7 @@ test("only one compaction operation runs per session", async () => {
 test("serializes old attachments as bounded metadata", () => {
 	const serialized = serializeMessagesForCompaction([
 		fromPartial<SessionMessage>({
-			id: "u1",
+			id: sessionMessageId("u1"),
 			parts: [
 				{
 					filename: "design.png",
@@ -769,7 +794,7 @@ test("hydrates current-window attachments once and persists bounded metadata", a
 				message("u2", "user", "continue"),
 				message("a2", "assistant", "done"),
 			],
-			sessionId: "session-attachments",
+			sessionId: sessionId("session-attachments"),
 		},
 		model,
 		settings: {
@@ -808,7 +833,7 @@ test("sanitizes completed Skill bodies before summarization", async () => {
 		estimateTokens: (messages) => messages.length,
 	});
 	const skillMessage = fromPartial<SessionMessage>({
-		id: "assistant-1",
+		id: sessionMessageId("assistant-1"),
 		parts: [
 			{
 				input: { name: "review" },
@@ -822,7 +847,7 @@ test("sanitizes completed Skill bodies before summarization", async () => {
 					status: "loaded",
 				},
 				state: "output-available",
-				toolCallId: "skill-1",
+				toolCallId: toolCallId("skill-1"),
 				toolName: "skill",
 				type: "dynamic-tool",
 			},
@@ -838,7 +863,7 @@ test("sanitizes completed Skill bodies before summarization", async () => {
 				message("u2", "user", "continue"),
 				message("a2", "assistant", "done"),
 			],
-			sessionId: "session-skill",
+			sessionId: sessionId("session-skill"),
 		},
 		model,
 		settings,
@@ -867,7 +892,7 @@ test("rejects a compaction that still exceeds the safe context limit", async () 
 					message("u2", "user", "second"),
 					message("a2", "assistant", "answer"),
 				],
-				sessionId: "session-too-large",
+				sessionId: sessionId("session-too-large"),
 			},
 			model,
 			settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: 2 },
@@ -881,7 +906,7 @@ test("splits an oversized single turn only at complete part boundaries", async (
 	const store = makeStore();
 	let serialized = "";
 	const compaction = createSessionCompaction({
-		generateId: () => "entry-split",
+		generateId: () => compactionId("entry-split"),
 		store,
 		summaryGenerator: mock(async (input: SummaryGeneratorInput) => {
 			serialized = input.serializedMessages;
@@ -891,7 +916,7 @@ test("splits an oversized single turn only at complete part boundaries", async (
 			messages.reduce((total, current) => total + current.parts.length, 0),
 	});
 	const assistant = fromPartial<SessionMessage>({
-		id: "a1",
+		id: sessionMessageId("a1"),
 		parts: [
 			{ text: "prefix one", type: "text" },
 			{ text: "prefix two", type: "text" },
@@ -903,7 +928,7 @@ test("splits an oversized single turn only at complete part boundaries", async (
 	const result = await compaction.compact({
 		session: {
 			messages: [message("u1", "user", "single request"), assistant],
-			sessionId: "session-split",
+			sessionId: sessionId("session-split"),
 		},
 		model,
 		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
@@ -911,9 +936,9 @@ test("splits an oversized single turn only at complete part boundaries", async (
 	});
 
 	expect(result.activeMessages.map(({ id }) => id)).toEqual([
-		"compaction:entry-split",
-		"u1",
-		"a1",
+		sessionMessageId("compaction:entry-split"),
+		sessionMessageId("u1"),
+		sessionMessageId("a1"),
 	]);
 	expect(result.activeMessages.at(-1)?.parts).toEqual([
 		{ text: "recent suffix", type: "text" },
@@ -939,7 +964,7 @@ test("does not recompact an unchanged split transcript", async () => {
 			messages.reduce((total, current) => total + current.parts.length, 0),
 	});
 	const assistant = fromPartial<SessionMessage>({
-		id: "a1",
+		id: sessionMessageId("a1"),
 		parts: [
 			{ text: "prefix", type: "text" },
 			{ text: "middle", type: "text" },
@@ -949,7 +974,7 @@ test("does not recompact an unchanged split transcript", async () => {
 	});
 	const session = {
 		messages: [message("u1", "user", "request"), assistant],
-		sessionId: "session-split-unchanged",
+		sessionId: sessionId("session-split-unchanged"),
 	};
 	const compactionInput = {
 		session,
@@ -971,7 +996,7 @@ test("splits the latest oversized turn without retaining older context", async (
 	const store = makeStore();
 	let serialized = "";
 	const compaction = createSessionCompaction({
-		generateId: () => "entry-latest-split",
+		generateId: () => compactionId("entry-latest-split"),
 		store,
 		summaryGenerator: mock(async (input: SummaryGeneratorInput) => {
 			serialized = input.serializedMessages;
@@ -983,7 +1008,7 @@ test("splits the latest oversized turn without retaining older context", async (
 				: messages.length,
 	});
 	const assistant = fromPartial<SessionMessage>({
-		id: "a2",
+		id: sessionMessageId("a2"),
 		parts: [
 			{ text: "prefix", type: "text" },
 			{ text: "suffix", type: "text" },
@@ -999,7 +1024,7 @@ test("splits the latest oversized turn without retaining older context", async (
 				message("u2", "user", "current request"),
 				assistant,
 			],
-			sessionId: "session-latest-split",
+			sessionId: sessionId("session-latest-split"),
 		},
 		model,
 		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
@@ -1007,18 +1032,18 @@ test("splits the latest oversized turn without retaining older context", async (
 	});
 
 	expect(result.activeMessages.map(({ id }) => id)).toEqual([
-		"compaction:entry-latest-split",
-		"u2",
-		"a2",
+		sessionMessageId("compaction:entry-latest-split"),
+		sessionMessageId("u2"),
+		sessionMessageId("a2"),
 	]);
 	expect(result.activeMessages.at(-1)?.parts).toEqual([
 		{ text: "suffix", type: "text" },
 	]);
 	expect(result.entry.summary.coveredMessageIds).toEqual([
-		"u1",
-		"a1",
-		"u2",
-		"a2",
+		sessionMessageId("u1"),
+		sessionMessageId("a1"),
+		sessionMessageId("u2"),
+		sessionMessageId("a2"),
 	]);
 	expect(serialized).toContain("old request");
 });
@@ -1027,7 +1052,7 @@ test("resumes the next summary span after a split-turn boundary", async () => {
 	const store = makeStore();
 	const serialized: string[] = [];
 	const compaction = createSessionCompaction({
-		generateId: () => "entry-split",
+		generateId: () => compactionId("entry-split"),
 		store,
 		summaryGenerator: mock(async (input: SummaryGeneratorInput) => {
 			serialized.push(input.serializedMessages);
@@ -1037,7 +1062,7 @@ test("resumes the next summary span after a split-turn boundary", async () => {
 			messages.reduce((total, current) => total + current.parts.length, 0),
 	});
 	const assistant = fromPartial<SessionMessage>({
-		id: "a1",
+		id: sessionMessageId("a1"),
 		parts: [
 			{ text: "prefix one", type: "text" },
 			{ text: "prefix two", type: "text" },
@@ -1049,7 +1074,7 @@ test("resumes the next summary span after a split-turn boundary", async () => {
 	const first = await compaction.compact({
 		session: {
 			messages: [message("u1", "user", "single request"), assistant],
-			sessionId: "session-split-resume",
+			sessionId: sessionId("session-split-resume"),
 		},
 		model,
 		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
@@ -1065,13 +1090,13 @@ test("resumes the next summary span after a split-turn boundary", async () => {
 				message("u2", "user", "continue"),
 				message("a2", "assistant", "done"),
 			],
-			sessionId: "session-split-resume",
+			sessionId: sessionId("session-split-resume"),
 		},
 		model,
 		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
 		trigger: "manual",
 	});
-	expect(second.entry.firstKeptUiMessageId).toBe("u2");
+	expect(second.entry.firstKeptUiMessageId).toBe(sessionMessageId("u2"));
 	expect(serialized.at(-1)).toContain("recent suffix");
 	expect(serialized.at(-1)).not.toContain("single request");
 });
@@ -1080,7 +1105,7 @@ test("does not re-summarize a previously split assistant prefix", async () => {
 	const store = makeStore();
 	const serialized: string[] = [];
 	const compaction = createSessionCompaction({
-		generateId: () => `entry-${serialized.length + 1}`,
+		generateId: () => compactionId(`entry-${serialized.length + 1}`),
 		store,
 		summaryGenerator: mock(async (input: SummaryGeneratorInput) => {
 			serialized.push(input.serializedMessages);
@@ -1090,7 +1115,7 @@ test("does not re-summarize a previously split assistant prefix", async () => {
 			messages.reduce((total, current) => total + current.parts.length, 0),
 	});
 	const firstAssistant = fromPartial<SessionMessage>({
-		id: "a1",
+		id: sessionMessageId("a1"),
 		parts: [
 			{ text: "first prefix", type: "text" },
 			{ text: "first middle", type: "text" },
@@ -1099,7 +1124,7 @@ test("does not re-summarize a previously split assistant prefix", async () => {
 		role: "assistant",
 	});
 	const secondAssistant = fromPartial<SessionMessage>({
-		id: "a2",
+		id: sessionMessageId("a2"),
 		parts: [
 			{ text: "second prefix", type: "text" },
 			{ text: "second middle", type: "text" },
@@ -1111,7 +1136,7 @@ test("does not re-summarize a previously split assistant prefix", async () => {
 	await compaction.compact({
 		session: {
 			messages: [message("u1", "user", "first request"), firstAssistant],
-			sessionId: "session-split-twice",
+			sessionId: sessionId("session-split-twice"),
 		},
 		model,
 		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
@@ -1125,14 +1150,18 @@ test("does not re-summarize a previously split assistant prefix", async () => {
 				message("u2", "user", "second request"),
 				secondAssistant,
 			],
-			sessionId: "session-split-twice",
+			sessionId: sessionId("session-split-twice"),
 		},
 		model,
 		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
 		trigger: "manual",
 	});
 
-	expect(second.entry.summary.coveredMessageIds).toEqual(["a1", "u2", "a2"]);
+	expect(second.entry.summary.coveredMessageIds).toEqual([
+		sessionMessageId("a1"),
+		sessionMessageId("u2"),
+		sessionMessageId("a2"),
+	]);
 	expect(serialized[1]).toContain("first suffix");
 	expect(serialized[1]).not.toContain("first prefix");
 	expect(serialized[1]).toContain("second prefix");
@@ -1143,11 +1172,11 @@ test("keeps a split tool call paired with its result", async () => {
 	const toolCall = fromPartial<SessionMessage["parts"][number]>({
 		input: { command: "pwd" },
 		state: "output-available",
-		toolCallId: "call-split",
+		toolCallId: toolCallId("call-split"),
 		type: "tool-shell",
 	});
 	const assistant = fromPartial<SessionMessage>({
-		id: "a1",
+		id: sessionMessageId("a1"),
 		parts: [
 			{ text: "prefix", type: "text" },
 			toolCall,
@@ -1156,11 +1185,11 @@ test("keeps a split tool call paired with its result", async () => {
 		role: "assistant",
 	});
 	const toolResult: SessionMessage = fromAny({
-		id: "tool-call-split",
+		id: sessionMessageId("tool-call-split"),
 		parts: [
 			{
 				output: { output: "ok" },
-				toolCallId: "call-split",
+				toolCallId: toolCallId("call-split"),
 				type: "tool-result",
 			},
 		],
@@ -1185,7 +1214,7 @@ test("keeps a split tool call paired with its result", async () => {
 				assistant,
 				toolResult,
 			],
-			sessionId: "session-tool-pair",
+			sessionId: sessionId("session-tool-pair"),
 		},
 		model,
 		settings: { enabled: true, keepRecentTokens: 4, thresholdTokens: null },
@@ -1206,11 +1235,11 @@ test("does not split a paired tool result beyond the recent budget", async () =>
 	const toolCall = fromPartial<SessionMessage["parts"][number]>({
 		input: { command: "pwd" },
 		state: "output-available",
-		toolCallId: "call-budget",
+		toolCallId: toolCallId("call-budget"),
 		type: "tool-shell",
 	});
 	const assistant = fromPartial<SessionMessage>({
-		id: "a1",
+		id: sessionMessageId("a1"),
 		parts: [{ text: "prefix", type: "text" }, toolCall],
 		role: "assistant",
 	});
@@ -1219,7 +1248,7 @@ test("does not split a paired tool result beyond the recent budget", async () =>
 		parts: [
 			{
 				output: { output: "ok" },
-				toolCallId: "call-budget",
+				toolCallId: toolCallId("call-budget"),
 				type: "tool-result",
 			},
 		],
@@ -1241,7 +1270,7 @@ test("does not split a paired tool result beyond the recent budget", async () =>
 					assistant,
 					toolResult,
 				],
-				sessionId: "session-tool-budget",
+				sessionId: sessionId("session-tool-budget"),
 			},
 			model,
 			settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
@@ -1275,7 +1304,7 @@ test("projects the newest attachment against the media budget for estimatedToken
 	const store = makeStore();
 	const compaction = createSessionCompaction({
 		attachmentStore,
-		generateId: () => "entry-projection",
+		generateId: () => compactionId("entry-projection"),
 		store,
 		summaryGenerator: mock(async () => ({ text: "projected summary" })),
 		estimateTokens: (messages) =>
@@ -1290,7 +1319,7 @@ test("projects the newest attachment against the media budget for estimatedToken
 			}, 0),
 	});
 	const user = fromPartial<SessionMessage>({
-		id: "u1",
+		id: sessionMessageId("u1"),
 		parts: [
 			attachmentReferenceToFilePart(oldReference),
 			attachmentReferenceToFilePart(newReference),
@@ -1298,7 +1327,7 @@ test("projects the newest attachment against the media budget for estimatedToken
 		role: "user",
 	});
 	const assistant = fromPartial<SessionMessage>({
-		id: "a1",
+		id: sessionMessageId("a1"),
 		parts: [
 			{ text: "prefix one", type: "text" },
 			{ text: "prefix two", type: "text" },
@@ -1310,7 +1339,7 @@ test("projects the newest attachment against the media budget for estimatedToken
 	const result = await compaction.compact({
 		session: {
 			messages: [user, assistant],
-			sessionId: "session-projection",
+			sessionId: sessionId("session-projection"),
 		},
 		model,
 		settings: {

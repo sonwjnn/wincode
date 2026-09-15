@@ -3,35 +3,46 @@ import {
 	AgentInvariantError,
 	type AgentTurn,
 	type AgentTurnEvent,
+	type AgentTurnId,
+	agentIdSchema,
 	type ResolvedTool,
+	type ToolCallId,
 	type ToolDefinition,
+	toSessionMessageId,
 } from "@wincode/agent-core";
 import { createModelTarget } from "@wincode/ai/model-target";
+import { supportedChatModelIdSchema } from "@wincode/ai/models";
 // Keep the process-global Bun module mock complete: test files execute in one
 // process and may import unrelated AI SDK exports while this mock is active.
 // biome-ignore lint/performance/noNamespaceImport: mock spread needs the full namespace
 import * as realAi from "ai";
 import { z } from "zod";
 
+const makeAgentId = (value: string) => agentIdSchema.parse(value);
+const makeModelId = (value: string) => supportedChatModelIdSchema.parse(value);
+const makeTurnId = (value: string) => value as AgentTurnId;
+const makeMessageId = (value: string) => toSessionMessageId(value);
+const makeToolCallId = (value: string) => value as ToolCallId;
+
 const buildTurn = (): AgentTurn => ({
 	agent: {
 		displayName: "Build",
-		id: "build",
+		id: makeAgentId("build"),
 		instructions: "Implement the request.",
 		role: "primary",
 	},
-	id: "turn-1",
+	id: makeTurnId("turn-1"),
 	input: {
 		messages: [
 			{
-				id: "msg-user",
+				id: makeMessageId("msg-user"),
 				parts: [{ text: "Say hello", type: "text" }],
 				role: "user",
 			},
 		],
 	},
 	model: createModelTarget(
-		{ modelId: "gpt-5.6-luna", providerId: "openai" },
+		{ modelId: makeModelId("gpt-5.6-luna"), providerId: "openai" },
 		{ kind: "api-key", apiKey: "test-key" }
 	),
 });
@@ -59,7 +70,7 @@ const toolArmedTurn = (
 	],
 	messages: AgentTurn["input"]["messages"] = [
 		{
-			id: "msg-user",
+			id: makeMessageId("msg-user"),
 			parts: [{ text: "Say hello", type: "text" }],
 			role: "user",
 		},
@@ -211,7 +222,7 @@ describe("createAiSdkAgentRuntime", () => {
 			input: {
 				messages: [
 					{
-						id: "message-image",
+						id: makeMessageId("message-image"),
 						parts: [
 							{ text: "Inspect this image", type: "text" },
 							{
@@ -856,17 +867,17 @@ describe("createAiSdkAgentRuntime tool-armed turns", () => {
 			[resolvedReadTool(async () => ({ output: {}, type: "success" }))],
 			[
 				{
-					id: "msg-user",
+					id: makeMessageId("msg-user"),
 					parts: [{ text: "Read it", type: "text" }],
 					role: "user",
 				},
 				{
-					id: "msg-assistant",
+					id: makeMessageId("msg-assistant"),
 					parts: [
 						{ text: "Reading", type: "text" },
 						{
 							input: { path: "a.ts" },
-							toolCallId: "call-1",
+							toolCallId: makeToolCallId("call-1"),
 							toolName: "read",
 							type: "tool-call",
 						},
@@ -874,11 +885,11 @@ describe("createAiSdkAgentRuntime tool-armed turns", () => {
 					role: "assistant",
 				},
 				{
-					id: "msg-tool-1",
+					id: makeMessageId("msg-tool-1"),
 					parts: [
 						{
 							output: { content: "c", path: "a.ts" },
-							toolCallId: "call-1",
+							toolCallId: makeToolCallId("call-1"),
 							toolName: "read",
 							type: "tool-result",
 						},
@@ -886,11 +897,11 @@ describe("createAiSdkAgentRuntime tool-armed turns", () => {
 					role: "tool",
 				},
 				{
-					id: "msg-tool-2",
+					id: makeMessageId("msg-tool-2"),
 					parts: [
 						{
 							errorText: "Grep denied by policy: x",
-							toolCallId: "call-2",
+							toolCallId: makeToolCallId("call-2"),
 							toolName: "grep",
 							type: "tool-failure",
 						},

@@ -22,6 +22,8 @@ import {
 	getAgentTurnFailureDetails,
 	isAgentInvariantError,
 	isAgentTurnTerminalEvent,
+	isToolCallId,
+	toModelStepId,
 } from "@wincode/agent-core";
 import type { ModelFailure } from "@wincode/ai/model-failures";
 import { normalizeModelFailure } from "@wincode/ai/model-failures";
@@ -211,12 +213,13 @@ const requirePartText = (part: AiSdkTextStreamPart): string => {
 
 const requirePartToolIdentity = (
 	part: AiSdkTextStreamPart
-): { toolCallId: string; toolName: string } => {
+): { toolCallId: ToolCallId; toolName: string } => {
+	const toolCallId = part.toolCallId;
+	const toolName = part.toolName;
 	if (
-		typeof part.toolCallId !== "string" ||
-		part.toolCallId.length === 0 ||
-		typeof part.toolName !== "string" ||
-		part.toolName.length === 0
+		!isToolCallId(toolCallId) ||
+		typeof toolName !== "string" ||
+		toolName.length === 0
 	) {
 		throw new AgentInvariantError(
 			"invalid-event",
@@ -224,7 +227,7 @@ const requirePartToolIdentity = (
 			{ cause: part }
 		);
 	}
-	return { toolCallId: part.toolCallId, toolName: part.toolName };
+	return { toolCallId, toolName };
 };
 
 const toolErrorMessage = (error: unknown): string =>
@@ -243,7 +246,7 @@ const projectAiSdkPart = (
 	switch (part.type) {
 		case "start-step": {
 			state.stepIndex += 1;
-			state.stepId = `${STEP_ID_PREFIX}-${state.stepIndex}`;
+			state.stepId = toModelStepId(`${STEP_ID_PREFIX}-${state.stepIndex}`);
 			return {
 				modelId: resolved.modelId,
 				sequence,
@@ -305,7 +308,7 @@ const projectAiSdkPart = (
 			return {
 				modelId: resolved.modelId,
 				sequence,
-				stepId: state.stepId ?? `${STEP_ID_PREFIX}-1`,
+				stepId: state.stepId ?? toModelStepId(`${STEP_ID_PREFIX}-1`),
 				turnId: turn.id,
 				type: "model-step-finished",
 				usage: toModelUsage(part.usage),
@@ -484,8 +487,16 @@ const toAiSdkToolSet = (tools: readonly ResolvedTool[]): ToolSet => {
 				input: unknown,
 				options: ToolExecutionOptions
 			): Promise<unknown> => {
+				const toolCallId = options.toolCallId;
+				if (!isToolCallId(toolCallId)) {
+					throw new AgentInvariantError(
+						"invalid-event",
+						"AI SDK invoked a tool without a tool identity.",
+						{ cause: options }
+					);
+				}
 				const outcome = await execute(
-					{ input, toolCallId: options.toolCallId },
+					{ input, toolCallId },
 					{ signal: options.abortSignal }
 				);
 				if (outcome.type === "failure") {

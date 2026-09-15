@@ -5,6 +5,7 @@ import {
 	MAX_MCP_RESULT_BYTES,
 	normalizeMcpResult,
 } from "@/modules/mcp/result";
+import { agentId, mcpSnapshotId } from "../support/identifiers";
 
 describe("MCP result normalization", () => {
 	test("keeps safe text/structured values and metadata only", () => {
@@ -25,8 +26,8 @@ describe("MCP result normalization", () => {
 		const signal = new AbortController().signal;
 		let receivedSignal: AbortSignal | undefined;
 		const snapshot: McpCatalogSnapshot = {
-			agent: "build",
-			id: "snapshot-1",
+			agent: agentId("build"),
+			id: mcpSnapshotId("snapshot-1"),
 			manifest: [],
 			tools: new Map(),
 		};

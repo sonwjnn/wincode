@@ -1,6 +1,6 @@
 import { useKeyboard } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
-import type { AgentId } from "@wincode/agent-core";
+import type { AgentId, SessionMessageId } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
 	type ModelVariant,
@@ -17,6 +17,7 @@ import {
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useSettingsHubDialog } from "@/modules/settings";
+import type { SessionId } from "@/shared/identifiers";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
 import type { ApprovalOutcome } from "@/shared/providers/approval/types";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
@@ -41,7 +42,7 @@ import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
 const INTERRUPT_CONFIRMATION_TIMEOUT_MS = 3000;
 
 export type SessionInitialSubmission = {
-	messageId: string;
+	messageId: SessionMessageId;
 };
 
 type SessionViewProps = {
@@ -51,7 +52,7 @@ type SessionViewProps = {
 	initialModel?: ChatModelSelection;
 	initialSubmission?: SessionInitialSubmission;
 	initialVariant?: ModelVariant;
-	sessionId: string;
+	sessionId: SessionId;
 	sessionTitle: string;
 };
 
@@ -139,7 +140,7 @@ export function SessionView({
 	const hasPendingApproval = approvalEntries.some(
 		(entry) => entry.resolution === undefined
 	);
-	const submittedInitialMessageRef = useRef<string | null>(null);
+	const submittedInitialMessageRef = useRef<SessionMessageId | null>(null);
 	const interruptResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
 		null
 	);
@@ -412,7 +413,7 @@ export function SessionView({
 		return true;
 	};
 
-	const retryMessage = async (messageId: string): Promise<void> => {
+	const retryMessage = async (messageId: SessionMessageId): Promise<void> => {
 		if (
 			isTurnBusy ||
 			isCompacting ||

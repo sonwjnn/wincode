@@ -1,11 +1,18 @@
+import { type SessionMessageId, toSessionMessageId } from "@wincode/agent-core";
 import { getModelFailureMessage } from "@wincode/ai/model-failures";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
-import { isSkillToolPart, sanitizeSkillToolPart } from "@wincode/skills";
+import { isSkillToolPart } from "@wincode/skills";
 import { randomUUIDv7 } from "bun";
+import {
+	type CompactionId,
+	type SessionId,
+	toCompactionId,
+} from "@/shared/identifiers";
 import {
 	isSessionToolPart,
 	type SessionMessage,
 	sanitizeInterruptedSessionMessages,
+	sanitizeSessionSkillToolPart,
 } from "../message";
 import {
 	type CompactionAttachmentMetadata,
@@ -46,8 +53,9 @@ const BASE64_WHITESPACE_PATTERN = /\s/gu;
 const sanitizeSummaryText = (text: string): string =>
 	text.replace(RAW_IMAGE_DATA_URL_PATTERN, "[attachment payload omitted]");
 
-export const compactionSummaryMessageId = (entryId: string): string =>
-	`compaction:${entryId}`;
+export const compactionSummaryMessageId = (
+	entryId: CompactionId
+): SessionMessageId => toSessionMessageId(`compaction:${entryId}`);
 
 export const formatCompactionSummaryMessage = (
 	summary: CompactionSummary
@@ -96,7 +104,7 @@ const sanitizeSkillToolMessages = (
 			? {
 					...message,
 					parts: message.parts.map((part) =>
-						isSkillToolPart(part) ? sanitizeSkillToolPart(part) : part
+						isSkillToolPart(part) ? sanitizeSessionSkillToolPart(part) : part
 					),
 				}
 			: message
@@ -240,7 +248,7 @@ export type CompactSessionResult = {
 
 export type SessionCompactionModule = {
 	compact: (input: CompactSessionInput) => Promise<CompactSessionResult>;
-	getInFlight: (sessionId: string) => Promise<CompactSessionResult> | null;
+	getInFlight: (sessionId: SessionId) => Promise<CompactSessionResult> | null;
 	needsCompaction: (
 		messages: readonly SessionMessage[],
 		settings: Pick<ResolvedCompactionSettings, "enabled" | "thresholdTokens">
@@ -252,7 +260,7 @@ type CompactionModuleDependencies = {
 	store: CompactionStore;
 	summaryGenerator: SummaryGenerator;
 	estimateTokens?: (messages: readonly SessionMessage[]) => number;
-	generateId?: () => string;
+	generateId?: () => CompactionId;
 	now?: () => Date;
 };
 
@@ -915,7 +923,7 @@ const appendInputFor = ({
 	summarySpan: readonly SessionMessage[];
 	trigger: CompactionTriggerReason;
 	estimateTokens: (messages: readonly SessionMessage[]) => number;
-	entryId: string;
+	entryId: CompactionId;
 	now: () => Date;
 	summarization: {
 		text: string;
@@ -1137,10 +1145,10 @@ export const createSessionCompaction = ({
 	store,
 	summaryGenerator,
 	estimateTokens = estimateCompactionTokens,
-	generateId: createId = () => randomUUIDv7(),
+	generateId: createId = () => toCompactionId(randomUUIDv7()),
 	now = () => new Date(),
 }: CompactionModuleDependencies): SessionCompactionModule => {
-	const inFlight = new Map<string, Promise<CompactSessionResult>>();
+	const inFlight = new Map<SessionId, Promise<CompactSessionResult>>();
 	const persistCompactionEntry = async ({
 		attachmentMetadata,
 		messages,
@@ -1160,9 +1168,9 @@ export const createSessionCompaction = ({
 	}: {
 		attachmentMetadata?: readonly CompactionAttachmentMetadata[];
 		messages: readonly SessionMessage[];
-		sessionId: string;
+		sessionId: SessionId;
 		cutPoint: CutPoint;
-		entryId: string;
+		entryId: CompactionId;
 		estimateTokens: (messages: readonly SessionMessage[]) => number;
 		focus?: string;
 		model: ChatModelSelection;

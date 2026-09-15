@@ -32,8 +32,10 @@
     "test": "bun ../../scripts/test-portfolio.ts default --package ai"
   },
   "dependencies": {
+    "type-fest": "catalog:",
     "zod": "catalog:"
   },
+
   "devDependencies": {
     "@types/bun": "catalog:",
     "@wincode/config": "workspace:*",

@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import type { ModelId } from "@wincode/ai/models";
 import { getGitBranch } from "@/shared/git/get-git-branch";
 import {
 	formatGitStatusSummary,
@@ -15,13 +16,13 @@ export type PromptEnvironmentGit = {
 	readonly getStatus: (cwd: string) => Promise<string | GitStatusSummary>;
 };
 export type PromptModelIdentity = {
-	readonly modelId: string;
+	readonly modelId: ModelId;
 	readonly providerId: string;
 };
 
 export type PromptStableEnvironment = {
 	readonly cwd: string;
-	readonly modelId: string;
+	readonly modelId: ModelId;
 	readonly platform: string;
 	readonly providerId: string;
 	readonly repository: "git" | "none";

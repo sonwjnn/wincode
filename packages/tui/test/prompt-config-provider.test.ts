@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import { updatePromptConfigModel } from "@/modules/prompt-settings/context/prompt-config-provider";
+import { agentId, modelId } from "./support/identifiers";
 
 const model = (
-	modelId: string,
+	id: string,
 	providerId: ChatModelSelection["providerId"]
 ): ChatModelSelection => ({
-	modelId,
+	modelId: modelId(id),
 	providerId,
 });
 
@@ -15,14 +16,14 @@ describe("updatePromptConfigModel", () => {
 		expect(
 			updatePromptConfigModel(
 				{
-					agent: "code-reviewer",
+					agent: agentId("code-reviewer"),
 					model: model("gpt-5.5", "openai"),
 					variant: "high",
 				},
 				model("gpt-5.5", "openai")
 			)
 		).toEqual({
-			agent: "code-reviewer",
+			agent: agentId("code-reviewer"),
 			model: model("gpt-5.5", "openai"),
 			variant: "high",
 		});
@@ -32,14 +33,14 @@ describe("updatePromptConfigModel", () => {
 		expect(
 			updatePromptConfigModel(
 				{
-					agent: "code-reviewer",
+					agent: agentId("code-reviewer"),
 					model: model("gpt-5.5", "openai"),
 					variant: "high",
 				},
 				model("claude-sonnet-5", "anthropic")
 			)
 		).toEqual({
-			agent: "code-reviewer",
+			agent: agentId("code-reviewer"),
 			model: model("claude-sonnet-5", "anthropic"),
 			variant: undefined,
 		});
@@ -49,14 +50,14 @@ describe("updatePromptConfigModel", () => {
 		expect(
 			updatePromptConfigModel(
 				{
-					agent: "code-reviewer",
+					agent: agentId("code-reviewer"),
 					model: model("gpt-5.5", "openai"),
 					variant: "high",
 				},
 				model("gpt-5.6", "openai")
 			)
 		).toEqual({
-			agent: "code-reviewer",
+			agent: agentId("code-reviewer"),
 			model: model("gpt-5.6", "openai"),
 			variant: undefined,
 		});

@@ -50,7 +50,7 @@ export const resolveModelWithProvider = <P extends ModelRuntimeProviderId>(
 	const resolvedOptions = resolveModelProviderOptions(model, options);
 	return {
 		model: provider(model.id),
-		modelId: model.id,
+		modelId: model.id as SupportedChatModelId,
 		provider: model.provider,
 		...(resolvedOptions.maxOutputTokens === undefined
 			? {}

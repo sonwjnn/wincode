@@ -4,6 +4,7 @@
 // (cost, limits, reasoning policy) lives in ./model-metadata and the generated
 // snapshot it reads.
 
+import type { Tagged } from "type-fest";
 import { z } from "zod";
 import { modelVariantIds } from "./model-metadata";
 
@@ -501,11 +502,12 @@ export type ReasoningCapableChatModel = Exclude<
 	}
 >;
 
-export type SupportedChatModelId = SupportedChatModel["id"];
+export type ModelId = Tagged<string, "ModelId">;
+export type SupportedChatModelId = ModelId & SupportedChatModel["id"];
 export type ModelCatalog = readonly SupportedChatModel[];
 
 export type ChatModelSelection = {
-	modelId: string;
+	modelId: SupportedChatModelId;
 	providerId: ConnectionProviderId;
 };
 
@@ -513,7 +515,9 @@ export const supportedChatModelIds = modelCatalog.map((model) => model.id) as [
 	SupportedChatModelId,
 	...SupportedChatModelId[],
 ];
-export const supportedChatModelIdSchema = z.enum(supportedChatModelIds);
+export const supportedChatModelIdSchema: z.ZodType<SupportedChatModelId> = z
+	.enum(supportedChatModelIds)
+	.transform((value): SupportedChatModelId => value as SupportedChatModelId);
 
 export const findSupportedChatModel = (
 	modelId: string
