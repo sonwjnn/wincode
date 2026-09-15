@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isNonEmptyString, isObjectLike } from "@wincode/runtime-utils";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { resolveConfigRelativePath } from "@/shared/config/resolve-config-relative-path";
 import { getProjectRoots } from "@/shared/paths/project-roots";
@@ -40,7 +40,7 @@ const configuredRoots = (snapshot: ConfigSnapshot) => {
 		return [];
 	}
 	return commands.paths.flatMap((configuredPath, index) => {
-		if (typeof configuredPath !== "string" || configuredPath.length === 0) {
+		if (!isNonEmptyString(configuredPath)) {
 			return [];
 		}
 		const resolved = resolveConfigRelativePath(

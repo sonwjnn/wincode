@@ -1,4 +1,4 @@
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isNonEmptyString, isObjectLike } from "@wincode/runtime-utils";
 
 const URL_LIKE_PATTERN = /https?:\/\/[^\s,;]+/gi;
 const SECRET_KEY_NAME_PATTERN =
@@ -77,9 +77,7 @@ export function redactSensitiveText(
 		result = result.replace(URL_LIKE_PATTERN, REDACTED);
 	}
 	return result.replace(SECRET_VALUE_PATTERN, (_match, key) =>
-		options.keepKey && typeof key === "string" && key.length > 0
-			? `${key}=${REDACTED}`
-			: REDACTED
+		options.keepKey && isNonEmptyString(key) ? `${key}=${REDACTED}` : REDACTED
 	);
 }
 

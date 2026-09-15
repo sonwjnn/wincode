@@ -29,7 +29,7 @@ import type { ModelFailure } from "@wincode/ai/model-failures";
 import { normalizeModelFailure } from "@wincode/ai/model-failures";
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import { normalizeModelUsage } from "@wincode/ai/model-usage";
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isNonEmptyString, isObjectLike } from "@wincode/runtime-utils";
 import {
 	jsonSchema,
 	stepCountIs,
@@ -217,11 +217,7 @@ const requirePartToolIdentity = (
 ): { toolCallId: ToolCallId; toolName: string } => {
 	const toolCallId = part.toolCallId;
 	const toolName = part.toolName;
-	if (
-		!isToolCallId(toolCallId) ||
-		typeof toolName !== "string" ||
-		toolName.length === 0
-	) {
+	if (!(isToolCallId(toolCallId) && isNonEmptyString(toolName))) {
 		throw new AgentInvariantError(
 			"invalid-event",
 			"AI SDK emitted a tool event without a tool identity.",

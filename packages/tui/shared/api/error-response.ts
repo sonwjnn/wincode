@@ -1,3 +1,5 @@
+import { isNonEmptyString } from "@wincode/runtime-utils";
+
 export type ErrorResponse = {
 	json: () => Promise<unknown>;
 	status: number;
@@ -7,7 +9,7 @@ export type ErrorResponse = {
 export async function getErrorMessage(response: ErrorResponse) {
 	try {
 		const data = (await response.json()) as { error?: string };
-		if (typeof data.error === "string" && data.error.length > 0) {
+		if (isNonEmptyString(data.error)) {
 			return data.error;
 		}
 	} catch {

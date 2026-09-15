@@ -7,7 +7,11 @@ import {
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { isObjectLike, isPlainObject } from "@wincode/runtime-utils";
+import {
+	isNonEmptyString,
+	isObjectLike,
+	isPlainObject,
+} from "@wincode/runtime-utils";
 import {
 	applyEdits,
 	modify,
@@ -550,7 +554,7 @@ export const createConfigStore = (
 	const configRoot =
 		options.configRoot ??
 		path.join(
-			typeof xdgConfigHome === "string" && xdgConfigHome.length > 0
+			isNonEmptyString(xdgConfigHome)
 				? xdgConfigHome
 				: path.join(homeRoot, ".config"),
 			"wincode"

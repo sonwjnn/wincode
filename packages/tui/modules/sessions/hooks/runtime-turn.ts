@@ -44,7 +44,7 @@ import {
 	runCodingTool,
 	type ToolResourceLimits,
 } from "@wincode/coding-tools";
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isNonEmptyString, isObjectLike } from "@wincode/runtime-utils";
 import {
 	formatSkillUserContext,
 	type SkillExecution,
@@ -466,9 +466,7 @@ const settledToolName = (
 	toolName?: unknown
 ): string | undefined => {
 	if (type === "dynamic-tool") {
-		return typeof toolName === "string" && toolName.length > 0
-			? toolName
-			: undefined;
+		return isNonEmptyString(toolName) ? toolName : undefined;
 	}
 	if (type === "tool-skill" || type === "tool-delegate") {
 		return type === "tool-skill" ? "skill" : "delegate";
@@ -526,9 +524,7 @@ export const isSettledSessionToolCallPart = (
 		return "output" in candidate;
 	}
 	if (candidate.state === "output-error") {
-		return (
-			typeof candidate.errorText === "string" && candidate.errorText.length > 0
-		);
+		return isNonEmptyString(candidate.errorText);
 	}
 	return false;
 };

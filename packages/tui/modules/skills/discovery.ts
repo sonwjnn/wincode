@@ -1,5 +1,5 @@
 import { dirname, join } from "node:path";
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isNonEmptyString, isObjectLike } from "@wincode/runtime-utils";
 import type {
 	SkillCandidate,
 	SkillRootDescriptor,
@@ -39,7 +39,7 @@ const configuredRoots = (snapshot: ConfigSnapshot) => {
 		return [];
 	}
 	return skills.paths.flatMap((configuredPath, index) => {
-		if (typeof configuredPath !== "string" || configuredPath.length === 0) {
+		if (!isNonEmptyString(configuredPath)) {
 			return [];
 		}
 		const resolved = resolveConfigRelativePath(

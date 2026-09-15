@@ -1,7 +1,7 @@
 import { createFileRoute, useLocation } from "@tanstack/react-router";
 import { toSessionMessageId } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isNonEmptyString, isObjectLike } from "@wincode/runtime-utils";
 import { useEffect, useMemo, useState } from "react";
 import {
 	rebuildActiveMessages,
@@ -28,9 +28,11 @@ const readInitialSubmission = (
 	}
 	const submission = state.initialSubmission;
 	if (
-		!(isObjectLike(submission) && "messageId" in submission) ||
-		typeof submission.messageId !== "string" ||
-		submission.messageId.length === 0
+		!(
+			isObjectLike(submission) &&
+			"messageId" in submission &&
+			isNonEmptyString(submission.messageId)
+		)
 	) {
 		return;
 	}

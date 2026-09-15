@@ -1,3 +1,4 @@
+import { isNonEmptyString } from "@wincode/runtime-utils";
 import { z } from "zod";
 import type { AgentId } from "./identifiers";
 
@@ -42,8 +43,7 @@ export type ResolvedAgent = Readonly<{
 }>;
 
 export const isAgentId = (value: unknown): value is AgentId =>
-	typeof value === "string" &&
-	value.length > 0 &&
+	isNonEmptyString(value) &&
 	value.length <= MAX_AGENT_ID_LENGTH &&
 	AGENT_ID_PATTERN.test(value);
 

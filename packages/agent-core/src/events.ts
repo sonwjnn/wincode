@@ -3,6 +3,7 @@ import { modelUsageSchema } from "@wincode/ai/model-usage";
 import type { ModelId } from "@wincode/ai/models";
 import {
 	isFiniteNonNegativeNumber,
+	isNonEmptyString,
 	isNonNegativeInteger,
 	isObjectLike,
 } from "@wincode/runtime-utils";
@@ -160,11 +161,7 @@ const hasBaseEvent = (value: unknown): value is AgentTurnEventBase => {
 		return false;
 	}
 	const event = value as UnknownRecord;
-	return (
-		typeof event.turnId === "string" &&
-		event.turnId.length > 0 &&
-		isNonNegativeInteger(event.sequence)
-	);
+	return isNonEmptyString(event.turnId) && isNonNegativeInteger(event.sequence);
 };
 
 export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
@@ -188,34 +185,28 @@ export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
 			);
 		case "model-step-started":
 			return (
-				typeof event.stepId === "string" &&
-				event.stepId.length > 0 &&
-				(event.modelId === undefined ||
-					(typeof event.modelId === "string" && event.modelId.length > 0))
+				isNonEmptyString(event.stepId) &&
+				(event.modelId === undefined || isNonEmptyString(event.modelId))
 			);
 		case "text-delta":
 		case "reasoning-delta":
 			return typeof event.delta === "string";
 		case "model-step-finished":
 			return (
-				typeof event.stepId === "string" &&
-				event.stepId.length > 0 &&
-				(event.modelId === undefined ||
-					(typeof event.modelId === "string" && event.modelId.length > 0)) &&
+				isNonEmptyString(event.stepId) &&
+				(event.modelId === undefined || isNonEmptyString(event.modelId)) &&
 				(event.usage === undefined || isUsage(event.usage))
 			);
 		case "tool-call-started":
 			return (
 				"input" in event &&
 				isToolCallId(event.toolCallId) &&
-				typeof event.toolName === "string" &&
-				event.toolName.length > 0
+				isNonEmptyString(event.toolName)
 			);
 		case "tool-call-finished":
 			return (
 				isToolCallId(event.toolCallId) &&
-				typeof event.toolName === "string" &&
-				event.toolName.length > 0 &&
+				isNonEmptyString(event.toolName) &&
 				isToolCallOutput(event.outcome)
 			);
 		case "agent-turn-completed":

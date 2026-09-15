@@ -1,6 +1,7 @@
 import { type ModelUsage, modelUsageSchema } from "@wincode/ai/model-usage";
 import type { ModelId, ModelVariant } from "@wincode/ai/models";
 import {
+	isNonEmptyString,
 	isNonNegativeInteger,
 	isPlainObject,
 	isPositiveInteger,
@@ -199,10 +200,8 @@ const isSessionSkillActivationRecord = (
 				key === "name" ||
 				key === "source"
 		) &&
-		typeof value.name === "string" &&
-		value.name.length > 0 &&
-		typeof value.contentHash === "string" &&
-		value.contentHash.length > 0 &&
+		isNonEmptyString(value.name) &&
+		isNonEmptyString(value.contentHash) &&
 		(value.source === "agent" || value.source === "explicit") &&
 		(value.arguments === undefined || typeof value.arguments === "string")
 	);
@@ -221,10 +220,8 @@ const isSessionMessageMetadataRecord = (
 			Object.keys(modelMetadata).every(
 				(key) => key === "modelId" || key === "providerId"
 			) &&
-			typeof modelMetadata.modelId === "string" &&
-			modelMetadata.modelId.length > 0 &&
-			typeof modelMetadata.providerId === "string" &&
-			modelMetadata.providerId.length > 0);
+			isNonEmptyString(modelMetadata.modelId) &&
+			isNonEmptyString(modelMetadata.providerId));
 	return (
 		Object.keys(value).every(
 			(key) =>
@@ -243,8 +240,7 @@ const isSessionMessageMetadataRecord = (
 		(value.skill === undefined ||
 			isSessionSkillActivationRecord(value.skill)) &&
 		(value.sourceUserMessageId === undefined ||
-			(typeof value.sourceUserMessageId === "string" &&
-				value.sourceUserMessageId.length > 0)) &&
+			isNonEmptyString(value.sourceUserMessageId)) &&
 		(value.usage === undefined ||
 			modelUsageSchema.safeParse(value.usage).success) &&
 		(value.variant === undefined || typeof value.variant === "string")
@@ -269,14 +265,11 @@ export const isSessionAttachmentReferencePart = (
 				key === "width"
 		) &&
 		value.type === "attachment-reference" &&
-		typeof value.attachmentId === "string" &&
-		value.attachmentId.length > 0 &&
+		isNonEmptyString(value.attachmentId) &&
 		(value.available === undefined || typeof value.available === "boolean") &&
 		isNonNegativeInteger(value.byteLength) &&
-		typeof value.filename === "string" &&
-		value.filename.length > 0 &&
-		typeof value.mediaType === "string" &&
-		value.mediaType.length > 0 &&
+		isNonEmptyString(value.filename) &&
+		isNonEmptyString(value.mediaType) &&
 		(value.height === undefined || isPositiveInteger(value.height)) &&
 		(value.width === undefined || isPositiveInteger(value.width))
 	);
@@ -307,8 +300,7 @@ export const isSessionFileMentionPart = (
 		typeof mention.content === "string" &&
 		(mention.error === undefined || typeof mention.error === "string") &&
 		(mention.kind === "file" || mention.kind === "directory") &&
-		typeof mention.path === "string" &&
-		mention.path.length > 0 &&
+		isNonEmptyString(mention.path) &&
 		typeof mention.truncated === "boolean"
 	);
 };
@@ -329,8 +321,7 @@ export const isSessionToolCallPart = (
 				Object.keys(outcome).every(
 					(key) => key === "errorText" || key === "kind"
 				) &&
-				typeof outcome.errorText === "string" &&
-				outcome.errorText.length > 0;
+				isNonEmptyString(outcome.errorText);
 	return (
 		Object.keys(value).every(
 			(key) =>
@@ -342,10 +333,8 @@ export const isSessionToolCallPart = (
 				key === "type"
 		) &&
 		value.type === "tool-call" &&
-		typeof value.toolCallId === "string" &&
-		value.toolCallId.length > 0 &&
-		typeof value.toolName === "string" &&
-		value.toolName.length > 0 &&
+		isNonEmptyString(value.toolCallId) &&
+		isNonEmptyString(value.toolName) &&
 		isNonNegativeInteger(value.sequence) &&
 		validOutcome &&
 		"input" in value
@@ -369,8 +358,7 @@ export const isAgentTurnMessageRecord = (
 			(key) =>
 				key === "id" || key === "metadata" || key === "parts" || key === "role"
 		) &&
-		typeof record.id === "string" &&
-		record.id.length > 0 &&
+		isNonEmptyString(record.id) &&
 		(record.role === "assistant" || record.role === "user") &&
 		Array.isArray(record.parts) &&
 		record.parts.every(isSessionMessagePart) &&

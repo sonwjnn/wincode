@@ -1,4 +1,8 @@
-import { isJsonObject, isObjectLike } from "@wincode/runtime-utils";
+import {
+	isJsonObject,
+	isNonEmptyString,
+	isObjectLike,
+} from "@wincode/runtime-utils";
 import type { JsonObject, Promisable, UnknownRecord } from "type-fest";
 import type { z } from "zod";
 import { AgentInvariantError } from "./errors";
@@ -7,7 +11,7 @@ import type { ToolCallId } from "./identifiers";
 /** Opaque identity of one Tool Call within an Agent Turn. */
 export type { ToolCallId } from "./identifiers";
 export const isToolCallId = (value: unknown): value is ToolCallId =>
-	typeof value === "string" && value.length > 0;
+	isNonEmptyString(value);
 
 /**
  * Framework-neutral JSON Schema carrier. Runtime adapters may consume this
@@ -59,8 +63,7 @@ export const isToolDefinition = (value: unknown): value is ToolDefinition => {
 	return (
 		typeof definition.description === "string" &&
 		isSchema(definition.inputSchema) &&
-		typeof definition.name === "string" &&
-		definition.name.length > 0 &&
+		isNonEmptyString(definition.name) &&
 		(definition.outputSchema === undefined || isSchema(definition.outputSchema))
 	);
 };
@@ -106,9 +109,7 @@ export const isToolCallOutput = (value: unknown): value is ToolCallOutput => {
 		return (
 			Object.keys(output).every(
 				(key) => key === "errorText" || key === "type"
-			) &&
-			typeof output.errorText === "string" &&
-			output.errorText.length > 0
+			) && isNonEmptyString(output.errorText)
 		);
 	}
 	return false;

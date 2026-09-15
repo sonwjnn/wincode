@@ -1,5 +1,5 @@
 import type { ModelTarget } from "@wincode/ai/model-target";
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isNonEmptyString, isObjectLike } from "@wincode/runtime-utils";
 import type { ReadonlyDeep, UnknownRecord } from "type-fest";
 import type { ResolvedAgent } from "./agent";
 import {
@@ -146,8 +146,7 @@ export const isAgentTurnDelegation = (
 		keys.length === 2 &&
 		keys.includes("parentTurnId") &&
 		keys.includes("parentToolCallId") &&
-		typeof delegation.parentTurnId === "string" &&
-		delegation.parentTurnId.length > 0 &&
+		isNonEmptyString(delegation.parentTurnId) &&
 		isToolCallId(delegation.parentToolCallId)
 	);
 };
@@ -188,8 +187,7 @@ export const isAgentTurnFilePart = (
 		) &&
 		value.type === "file" &&
 		(typeof value.data === "string" || value.data instanceof Uint8Array) &&
-		typeof value.mediaType === "string" &&
-		value.mediaType.length > 0
+		isNonEmptyString(value.mediaType)
 	);
 };
 
@@ -210,8 +208,7 @@ export const isAgentTurnToolCallPart = (
 		) &&
 		value.type === "tool-call" &&
 		isToolCallId(value.toolCallId) &&
-		typeof value.toolName === "string" &&
-		value.toolName.length > 0 &&
+		isNonEmptyString(value.toolName) &&
 		"input" in value
 	);
 };
@@ -233,8 +230,7 @@ export const isAgentTurnToolResultPart = (
 		) &&
 		value.type === "tool-result" &&
 		isToolCallId(value.toolCallId) &&
-		typeof value.toolName === "string" &&
-		value.toolName.length > 0 &&
+		isNonEmptyString(value.toolName) &&
 		"output" in value
 	);
 };
@@ -256,10 +252,8 @@ export const isAgentTurnToolFailurePart = (
 		) &&
 		value.type === "tool-failure" &&
 		isToolCallId(value.toolCallId) &&
-		typeof value.toolName === "string" &&
-		value.toolName.length > 0 &&
-		typeof value.errorText === "string" &&
-		value.errorText.length > 0
+		isNonEmptyString(value.toolName) &&
+		isNonEmptyString(value.errorText)
 	);
 };
 

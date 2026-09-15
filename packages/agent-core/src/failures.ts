@@ -1,4 +1,4 @@
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isNonEmptyString, isObjectLike } from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 export const OPERATIONAL_FAILURE_VERSION = 1 as const;
 
@@ -100,11 +100,9 @@ const isAllowedDetails = (
 		return false;
 	}
 	if (
-		(details.modelId !== undefined &&
-			(typeof details.modelId !== "string" || details.modelId.length === 0)) ||
+		(details.modelId !== undefined && !isNonEmptyString(details.modelId)) ||
 		(details.providerId !== undefined &&
-			(typeof details.providerId !== "string" ||
-				details.providerId.length === 0)) ||
+			!isNonEmptyString(details.providerId)) ||
 		(details.retryAfterMs !== undefined &&
 			(typeof details.retryAfterMs !== "number" ||
 				!Number.isInteger(details.retryAfterMs) ||
