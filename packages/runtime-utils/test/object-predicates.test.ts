@@ -7,7 +7,7 @@ describe("runtime object predicates", () => {
 		expect(isPlainObject({})).toBe(true);
 		expect(isPlainObject(nullPrototype)).toBe(true);
 		expect(isPlainObject(Object.create(nullPrototype))).toBe(false);
-		expect(isPlainObject(Object.create({ inherited: true }))).toBe(false);
+		expect(isPlainObject(Object.create({ constructor: Object }))).toBe(false);
 		expect(isPlainObject([])).toBe(false);
 		expect(isPlainObject(new Date())).toBe(false);
 		expect(isPlainObject(new Map())).toBe(false);

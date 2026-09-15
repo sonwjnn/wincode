@@ -511,6 +511,19 @@ describe("loadMcpConfig", () => {
 		).toBe(true);
 	});
 
+	test("preserves parse-error precedence for non-object roots", async () => {
+		const result = await load({
+			[`${WORKSPACE}/wincode.json`]: '[{"__proto__":{}}]',
+		});
+
+		expect(
+			result.diagnostics.some((entry) => entry.code === "parse-error")
+		).toBe(true);
+		expect(
+			result.diagnostics.some((entry) => entry.code === "unsafe-key")
+		).toBe(false);
+	});
+
 	test("rejects invalid local commands", async () => {
 		const result = await load({
 			[`${WORKSPACE}/wincode.json`]:

@@ -328,7 +328,7 @@ const parseDocument = (
 		tree === undefined
 			? undefined
 			: parseJsonc(selected.contents, [], { allowTrailingComma: true });
-	if (errors.length > 0) {
+	if (errors.length > 0 || !isObjectLike(parsed) || Array.isArray(parsed)) {
 		return {
 			diagnostic: diagnostic(
 				"parse-error",

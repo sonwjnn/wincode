@@ -1,33 +1,16 @@
 import type { UnknownRecord } from "type-fest";
 
-const OBJECT_TAG = "[object Object]";
-const OBJECT_CONSTRUCTOR_SOURCE = Function.prototype.toString.call(Object);
-
 /** Narrows an unknown value to a non-null object, including arrays. */
 export const isObjectLike = (value: unknown): value is UnknownRecord =>
 	typeof value === "object" && value !== null;
 
 /** Narrows an unknown value to a plain object with no custom class prototype. */
 export const isPlainObject = (value: unknown): value is UnknownRecord => {
-	if (
-		!isObjectLike(value) ||
-		Object.prototype.toString.call(value) !== OBJECT_TAG
-	) {
+	if (!isObjectLike(value)) {
 		return false;
 	}
 	const prototype = Object.getPrototypeOf(value);
-	if (prototype === null) {
-		return true;
-	}
-	const prototypeConstructor = Object.hasOwn(prototype, "constructor")
-		? prototype.constructor
-		: undefined;
-	return (
-		typeof prototypeConstructor === "function" &&
-		prototypeConstructor instanceof prototypeConstructor &&
-		Function.prototype.toString.call(prototypeConstructor) ===
-			OBJECT_CONSTRUCTOR_SOURCE
-	);
+	return prototype === null || prototype === Object.prototype;
 };
 /** Narrows an unknown value to a non-empty string without trimming it. */
 export const isNonEmptyString = (value: unknown): value is string =>
