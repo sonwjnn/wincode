@@ -1,9 +1,10 @@
 import type { ToolCallOutput } from "@wincode/agent-core";
 import { isPlainObject } from "@wincode/runtime-utils";
-import { type JsonValue, MAX_MCP_RESULT_BYTES } from "./manifest";
+import type { JsonValue } from "type-fest";
+import { MAX_MCP_RESULT_BYTES } from "./manifest";
 import type { McpCatalogSnapshot } from "./registry";
 
-export type { JsonValue } from "./manifest";
+export type { JsonValue } from "type-fest";
 export { MAX_MCP_RESULT_BYTES } from "./manifest";
 
 export type McpNormalizedResult = {

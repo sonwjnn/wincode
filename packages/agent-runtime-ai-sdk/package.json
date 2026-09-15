@@ -21,6 +21,7 @@
     "@wincode/agent-core": "workspace:*",
     "@wincode/ai": "workspace:*",
     "@wincode/runtime-utils": "workspace:*",
+    "ai": "catalog:",
     "type-fest": "catalog:"
   },
   "devDependencies": {

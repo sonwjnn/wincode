@@ -1,11 +1,7 @@
+export type { JsonObject, JsonValue } from "type-fest";
 export type { McpContextValue } from "./context/mcp-provider";
 export { McpProvider, useMcp } from "./context/mcp-provider";
-export type {
-	JsonObject,
-	JsonValue,
-	McpToolManifest,
-	McpToolManifestEntry,
-} from "./manifest";
+export type { McpToolManifest, McpToolManifestEntry } from "./manifest";
 export {
 	isJsonValue,
 	MAX_MCP_MANIFEST_BYTES,

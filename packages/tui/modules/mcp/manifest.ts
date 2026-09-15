@@ -1,5 +1,5 @@
-import { isObjectLike } from "@wincode/runtime-utils";
-import type { UnknownRecord } from "type-fest";
+import { isObjectLike, isPlainObject } from "@wincode/runtime-utils";
+import type { JsonObject, JsonValue, UnknownRecord } from "type-fest";
 import { z } from "zod";
 
 export const MAX_MCP_TOOL_COUNT = 128;
@@ -9,16 +9,6 @@ export const MAX_MCP_TOOL_SCHEMA_BYTES = 64 * 1024;
 export const MAX_MCP_MANIFEST_BYTES = 256 * 1024;
 export const MAX_MCP_RESULT_BYTES = 256 * 1024;
 export const MCP_TOOL_NAME_REGEX = /^[A-Za-z0-9_-]+$/u;
-
-export type JsonValue =
-	| boolean
-	| null
-	| number
-	| string
-	| JsonValue[]
-	| { [key: string]: JsonValue };
-
-export type JsonObject = { [key: string]: JsonValue };
 
 const MAX_JSON_NESTING_DEPTH = 64;
 
@@ -77,6 +67,8 @@ export const isJsonValue = (value: unknown): value is JsonValue => {
 		return false;
 	}
 };
+export const isJsonObject = (value: unknown): value is JsonObject =>
+	isPlainObject(value) && isJsonValue(value);
 
 const byteLength = (value: string): number =>
 	new TextEncoder().encode(value).byteLength;
@@ -116,20 +108,7 @@ export const mcpToolManifestEntrySchema: z.ZodType<McpToolManifestEntry> =
 			if (byteLength(entry.description) > MAX_MCP_TOOL_DESCRIPTION_BYTES) {
 				return false;
 			}
-			if (
-				!isObjectLike(entry.inputSchema) ||
-				Array.isArray(entry.inputSchema)
-			) {
-				return false;
-			}
-			const inputSchemaPrototype = Object.getPrototypeOf(entry.inputSchema);
-			if (
-				inputSchemaPrototype !== Object.prototype &&
-				inputSchemaPrototype !== null
-			) {
-				return false;
-			}
-			if (!isJsonValue(entry.inputSchema)) {
+			if (!isJsonObject(entry.inputSchema)) {
 				return false;
 			}
 			try {

@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { AgentId } from "@wincode/agent-core";
+import type { JsonObject } from "type-fest";
 import {
 	composePermissionDecisions,
 	DEFAULT_EFFECTIVE_AGENT_POLICY,
@@ -22,8 +23,7 @@ import {
 	type ResolvedMcpServerConfig,
 } from "./config";
 import {
-	isJsonValue,
-	type JsonObject,
+	isJsonObject,
 	MAX_MCP_TOOL_COUNT,
 	type McpToolManifest,
 	type McpToolManifestEntry,
@@ -169,17 +169,8 @@ const outputError = (message: string): McpNormalizedResult => ({
 	truncated: false,
 });
 
-const toJsonObject = (value: Record<string, unknown>): JsonObject => {
-	if (
-		isJsonValue(value) &&
-		typeof value === "object" &&
-		value !== null &&
-		!Array.isArray(value)
-	) {
-		return value;
-	}
-	return { type: "object" };
-};
+const toJsonObject = (value: Record<string, unknown>): JsonObject =>
+	isJsonObject(value) ? value : { type: "object" };
 
 const requestedRemoteTools = (
 	config: ResolvedMcpServerConfig
