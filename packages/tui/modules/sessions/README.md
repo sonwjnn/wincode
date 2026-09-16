@@ -28,6 +28,20 @@ compaction facts — is owned by the React-free Session Engine in
 rendering, mirrors its Session Snapshot in React state so the view re-renders,
 and never writes session state itself.
 
+Each Agent Turn execution owns its own scope (`modules/sessions/turn-execution.ts`):
+the Agent Turn Identifier, the assistant message identity, the source user
+message, the start time, the Agent and resolved Agent, the Model Target
+selection and variant, the session-level selection its records carry, the MCP
+snapshot, the child abort registry, and its own Session View State. The Engine
+tracks those executions, so the Snapshot exposes the live view of the most
+recently active one: a delegated Subagent execution — the same contract plus
+`parentTurnId`/`parentToolCallId` — streams in its own view while the parent
+keeps its own, and the parent's view returns when the Subagent ends. Delegation
+bookkeeping (its executor and child abort registrations) is created with the
+execution, so re-rendering cannot reset an in-flight Subagent. The Tool Gate is
+session-scoped and consults the execution tree's shared abort index, so an
+approval abort cancels the Subagent that owes the call.
+
 The accepted user message is committed before runtime execution begins. Each
 completed Tool Call is committed as its own ordinary tool record, and terminal
 assistant text is committed as an assistant record. Token and reasoning deltas

@@ -16,14 +16,21 @@ live state. The hook binds that Engine and never writes session state.
 
 Status: accepted
 
-The state-ownership half of this decision has shipped. The rest — Session
-Commands executed one at a time in submission order, turn-scoped values held
-inside the execution that produced them, orthogonal status facts, a single
-approval settlement path, and the submission pipeline living in the Engine — is
-the design the migration is closing on, tracked by the Session Engine spec
-(issue #97) and its five step tickets (#98–#102), and is not yet the shipped
-execution model: the Engine currently exposes granular state setters, the hook
-still holds turn-scoped values, chat status is still one union, and approvals
+The state-ownership half of this decision has shipped, and so has execution
+scoping: the Engine tracks the live Agent Turn executions of a session with
+their parent linkage, exposes the Session View State of the most recently
+active execution, and a finishing execution drops only its own view, while the
+turn-scoped values themselves (Agent Turn Identifier, assistant message
+identity, source user message, start time, Agent and resolved Agent, Model
+Target selection and variant, session-level selection, MCP snapshot, child
+abort registry, and Skill catalog) are created with the execution and
+discarded with it. The rest — Session Commands executed one at a time in
+submission order, orthogonal status facts, a single approval settlement path,
+and the submission pipeline living in the Engine — is the design the migration
+is closing on, tracked by the Session Engine spec (issue #97) and its five step
+tickets (#98–#102), and is not yet the shipped execution model: the Engine
+still exposes granular state setters, executions are started by the binding
+rather than by a Session Command, chat status is still one union, and approvals
 still settle through two paths. Read the consequences below as the target, not
 as a description of every line of running code.
 

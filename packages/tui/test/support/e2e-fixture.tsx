@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
@@ -17,6 +17,7 @@ import type {
 	ChatModelSelection,
 	ConnectionProviderId,
 } from "@wincode/ai/models";
+import { isUndefined } from "@wincode/runtime-utils";
 import { act, useEffect } from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
 import {
@@ -126,16 +127,25 @@ const createTestConnections = (): Connections => {
 	return connections;
 };
 
-const createTestConfigStore = () =>
-	createConfigStore({
+const createTestConfigStore = (configDocument?: string) => {
+	const configPath = join(
+		process.env.WINCODE_E2E_WORKSPACE ?? process.cwd(),
+		".wincode",
+		"wincode.jsonc"
+	);
+	return createConfigStore({
 		fs: {
-			readFile: async () => {
+			readFile: async (path) => {
+				if (!isUndefined(configDocument) && path === configPath) {
+					return configDocument;
+				}
 				throw Object.assign(new Error("Test config is unavailable."), {
 					code: "ENOENT",
 				});
 			},
 		},
 	});
+};
 
 const buildRouter = (sessionId: string) => {
 	const rootRoute = createRootRoute();
@@ -238,10 +248,13 @@ export const seedCompactionHistory = async (
 };
 
 export const renderSession = async ({
+	configDocument,
 	initialMessages,
 	pricing,
 	sessionId,
 }: {
+	/** JSONC served as the workspace config; the registry reads it on mount. */
+	readonly configDocument?: string;
 	readonly initialMessages: SessionMessage[];
 	readonly pricing: ModelPricingTable;
 	readonly sessionId: SessionId;
@@ -264,7 +277,7 @@ export const renderSession = async ({
 		<ThemeProvider themeName={DEFAULT_THEME.name}>
 			<ConfigProvider
 				value={{
-					configStore: createTestConfigStore(),
+					configStore: createTestConfigStore(configDocument),
 					homeRoot,
 					workspace,
 				}}

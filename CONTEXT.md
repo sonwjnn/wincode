@@ -93,6 +93,12 @@ The ordered messages a session presents to the user. Compaction summaries stay o
 **Session Context**:
 The messages a session sends to the model for its next Agent Turn. It is derived from the Session Transcript through compaction and interruption sanitation, so the two can differ. _Avoid_: active messages, prompt history, context window
 
+**Agent Turn Execution**:
+One run of an Agent Turn and everything scoped to it: the Agent Turn Identifier, the assistant message identity, the source user message, the start time, the Agent and resolved Agent, the Model Target selection and variant, the session-level selection its records carry, the MCP snapshot, the child abort registry, and its own Session View State. A delegated Subagent execution uses the same contract plus its parent linkage (`parentTurnId`, `parentToolCallId`), and is created and discarded with the turn rather than rebuilt on render. _Avoid_: turn context, session refs, current turn
+
+**Session View State**:
+The live, transient projection of one Agent Turn Execution for the session UI. It never becomes a Session Record, and executions never share one: the Session Snapshot exposes the Session View State of the most recently active execution, so a delegated Subagent's stream replaces the view while it runs and the parent's view returns when it ends. _Avoid_: streaming state, live buffer
+
 ## Language
 
 **Wincode CLI**:

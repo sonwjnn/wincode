@@ -1,15 +1,13 @@
-import type {
-	AgentId,
-	AgentTurn,
-	AgentTurnDelegation,
-	AgentTurnId,
-	ToolCallId,
+import {
+	type AgentId,
+	type AgentTurn,
+	type AgentTurnDelegation,
+	type AgentTurnId,
+	createAgentTurnId,
+	type ToolCallId,
 } from "@wincode/agent-core";
-import { createAgentTurnId } from "@wincode/agent-core";
 import type { ModelTarget } from "@wincode/ai/model";
-import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { isUndefined } from "@wincode/runtime-utils";
-import type { SkillExecution, SkillToolDefinition } from "@wincode/skills";
 import {
 	type AgentRegistry,
 	type PreparedAgentCall,
@@ -27,10 +25,15 @@ import type { ToolPermission } from "@/modules/permissions";
 import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import type { SessionId } from "@/shared/identifiers";
 import { resolveChatModelTarget } from "../../model-target";
-import type { SessionViewState } from "../engine/session-engine";
 import { createSessionUserMessage, type SessionMessage } from "../message";
 import { getSessionStore } from "../storage/get-session-store";
 import { buildUserSessionRecord } from "../storage/session-record";
+import type {
+	BeginTurnExecutionInput,
+	TurnExecution,
+	TurnExecutionHost,
+	TurnExecutionSkill,
+} from "../turn-execution";
 import type {
 	DelegationExecutor,
 	DelegationRequest,
@@ -44,15 +47,9 @@ import {
 	runAgentTurnToText,
 } from "./runtime-turn";
 
-type MutableRefObject<T> = { current: T };
-
-type ChildSkillContextFactory = (agent: AgentId) => Promise<
-	| {
-			execution: SkillExecution;
-			tool: SkillToolDefinition;
-	  }
-	| undefined
->;
+type ChildSkillContextFactory = (
+	agent: AgentId
+) => Promise<TurnExecutionSkill | undefined>;
 
 const toolCallIdOf = (
 	call: Parameters<RuntimeGatedTooling["gate"]["gate"]>[0]
@@ -63,37 +60,50 @@ const toolCallIdOf = (
 	return call.toolCallId;
 };
 
+/**
+ * Registers a delegated execution's in-flight Tool Calls in the spawning
+ * execution's abort index while their Gate evaluation is pending, so an
+ * approval abort cancels the Subagent that owes the call instead of the
+ * execution that spawned it.
+ */
 const createChildGate = (
 	gatedTooling: RuntimeGatedTooling,
 	childController: AbortController
-): RuntimeGatedTooling => ({
-	...gatedTooling,
-	gate: {
-		gate: async (call) => {
-			const toolCallId = toolCallIdOf(call);
-			const unregister = isUndefined(toolCallId)
-				? undefined
-				: gatedTooling.registerChildAbort?.(toolCallId, () =>
-						childController.abort("approval-abort")
-					);
-			try {
-				return await gatedTooling.gate.gate(call);
-			} finally {
-				unregister?.();
-			}
-		},
+): RuntimeGatedTooling["gate"] => ({
+	gate: async (call) => {
+		const toolCallId = toolCallIdOf(call);
+		const unregister = isUndefined(toolCallId)
+			? undefined
+			: gatedTooling.registerChildAbort?.(toolCallId, () =>
+					childController.abort("approval-abort")
+				);
+		try {
+			return await gatedTooling.gate.gate(call);
+		} finally {
+			unregister?.();
+		}
 	},
 });
 
+/** Routes a delegation request through the execution that owns the bookkeeping. */
+export const delegationThrough =
+	(execution: TurnExecution): DelegationExecutor =>
+	(request, signal) => {
+		const delegate = execution.delegate;
+		return isUndefined(delegate)
+			? Promise.reject(new Error("Delegation is unavailable."))
+			: delegate(request, signal);
+	};
+
 type BuildChildTurnOptions = {
-	readonly childGate: RuntimeGatedTooling;
-	readonly createSkillContext?: ChildSkillContextFactory;
+	readonly childTooling: RuntimeGatedTooling;
 	readonly cwd?: string;
 	readonly delegation: AgentTurnDelegation;
 	readonly executeMcpTool: McpToolCallExecutor | undefined;
 	readonly resolvePermissionForAgent?: (
 		agent: AgentId
 	) => Promise<ToolPermission>;
+	readonly skill?: TurnExecutionSkill;
 	readonly snapshot: McpCatalogSnapshot;
 	readonly turnId: AgentTurnId;
 	readonly userMessage: SessionMessage;
@@ -103,31 +113,30 @@ type BuildChildTurnOptions = {
 };
 
 const buildChildTurn = async ({
-	childGate,
-	createSkillContext,
+	childTooling,
 	cwd,
 	delegation,
 	executeMcpTool,
 	modelTarget,
 	prepared,
 	resolvePermissionForAgent,
+	skill,
 	snapshot,
 	turnId,
 	userMessage,
 	workspace,
 }: BuildChildTurnOptions): Promise<AgentTurn> => {
-	const skillContext = await createSkillContext?.(prepared.agent);
 	const tools = createGatedCodingTools({
 		agentId: prepared.agent,
 		agentTools: prepared.resolvedAgent.visibleCodingTools,
-		delegate: childGate.delegate,
+		delegate: childTooling.delegate,
 		executeMcpTool,
-		gate: childGate.gate,
+		gate: childTooling.gate,
 		mcpSnapshot: snapshot,
-		skillExecution: skillContext?.execution,
-		skillTool: skillContext?.tool,
+		skillExecution: skill?.execution,
+		skillTool: skill?.tool,
 		parentTurnId: turnId,
-		resolveResourceLimits: childGate.resolveResourceLimits,
+		resolveResourceLimits: childTooling.resolveResourceLimits,
 	});
 	const childPermission = await resolvePermissionForAgent?.(prepared.agent);
 	const prompt = await prepareAgentTurnPrompt({
@@ -159,11 +168,10 @@ export type CreateDelegationExecutorOptions = {
 	readonly connections: Connections;
 	readonly createSkillContext?: ChildSkillContextFactory;
 	readonly cwd?: string;
-	readonly fallbackModelRef: MutableRefObject<ChatModelSelection>;
-	readonly fallbackVariantRef: MutableRefObject<ModelVariant | undefined>;
-	readonly gatedTooling: RuntimeGatedTooling;
+	/** The execution whose delegation bookkeeping this executor is. */
+	readonly execution: TurnExecution;
+	readonly host: TurnExecutionHost;
 	readonly mcp: McpContextValue;
-	readonly onViewState?: (state: SessionViewState | undefined) => void;
 	readonly registry: AgentRegistry | null;
 	readonly resolveMcpPolicyForAgent: (
 		agent: AgentId
@@ -172,34 +180,35 @@ export type CreateDelegationExecutorOptions = {
 		agent: AgentId
 	) => Promise<ToolPermission>;
 	readonly sessionId: SessionId;
+	/** The Tooling this execution's own Tool Calls execute through. */
+	readonly tooling: RuntimeGatedTooling;
 	readonly workspace: string;
 };
 
-export const createDelegationExecutor = ({
-	connections,
-	createSkillContext,
-	cwd,
-	fallbackModelRef,
-	fallbackVariantRef,
-	gatedTooling,
-	mcp,
-	onViewState,
-	registry,
-	resolveMcpPolicyForAgent,
-	resolvePermissionForAgent,
-	sessionId,
-	workspace,
-}: CreateDelegationExecutorOptions): DelegationExecutor => {
-	let activeChildCount = 0;
-	const clearChildView = (): void => {
-		activeChildCount = Math.max(0, activeChildCount - 1);
-		if (activeChildCount === 0) {
-			onViewState?.(undefined);
-		}
-	};
+/**
+ * Runs one delegated Subagent execution. The execution scope, its own
+ * delegation bookkeeping, and its Session View State are created when the
+ * Subagent starts and dropped when it ends, so the parent keeps its view.
+ */
+export const createDelegationExecutor = (
+	options: CreateDelegationExecutorOptions
+): DelegationExecutor => {
+	const {
+		connections,
+		createSkillContext,
+		cwd,
+		execution,
+		host,
+		mcp,
+		registry,
+		resolveMcpPolicyForAgent,
+		resolvePermissionForAgent,
+		sessionId,
+		tooling,
+		workspace,
+	} = options;
 
 	return async (request: DelegationRequest, signal) => {
-		activeChildCount += 1;
 		const childController = new AbortController();
 		const childSignal = isUndefined(signal)
 			? childController.signal
@@ -211,11 +220,14 @@ export const createDelegationExecutor = ({
 		};
 		const userMessage = createSessionUserMessage(request.prompt);
 		const store = getSessionStore();
+		let started: TurnExecution | undefined;
 		let selectedAgent = request.agent;
-		let selectedModel = fallbackModelRef.current;
-		let selectedVariant = fallbackVariantRef.current;
+		let selectedModel = execution.model;
+		let selectedVariant = execution.variant;
 		let userCommitted = false;
 		let userCommitAttempted = false;
+		let terminalObserved = false;
+		let snapshot: McpCatalogSnapshot | undefined;
 		const commitUserMessage = async (): Promise<void> => {
 			userCommitAttempted = true;
 			await store.commitSessionRecord({
@@ -231,9 +243,17 @@ export const createDelegationExecutor = ({
 			});
 			userCommitted = true;
 		};
-		let terminalObserved = false;
-		let snapshot: McpCatalogSnapshot | undefined;
-		try {
+
+		/**
+		 * Resolves the delegated Agent, starts the execution scope with its
+		 * parent linkage, and arms its own delegation bookkeeping before the
+		 * delegated prompt becomes durable.
+		 */
+		const startChild = async (): Promise<{
+			child: TurnExecution;
+			childTooling: RuntimeGatedTooling;
+			prepared: PreparedAgentCall;
+		}> => {
 			const target = registry?.agents.find(
 				({ id, isAvailable, role }) =>
 					id === request.agent &&
@@ -247,15 +267,48 @@ export const createDelegationExecutor = ({
 				registry,
 				{
 					agent: target.id,
-					model: fallbackModelRef.current,
-					variant: fallbackVariantRef.current,
+					model: execution.model,
+					variant: execution.variant,
 				},
 				{ allowSubagent: true }
 			);
 			selectedAgent = prepared.agent;
 			selectedModel = prepared.model;
 			selectedVariant = prepared.variant;
+			const beginInput: BeginTurnExecutionInput = {
+				agent: prepared.agent,
+				childAborts: execution.childAborts,
+				model: selectedModel,
+				parent: delegation,
+				resolvedAgent: prepared.resolvedAgent,
+				sessionModel: execution.sessionModel,
+				sourceUserMessageId: userMessage.id,
+				startedAt: Date.now(),
+				turnId,
+				...(isUndefined(execution.sessionVariant)
+					? {}
+					: { sessionVariant: execution.sessionVariant }),
+				...(isUndefined(selectedVariant) ? {} : { variant: selectedVariant }),
+			};
+			const child = host.begin(beginInput);
+			// Recorded the moment it begins, so a failing prompt commit still ends it.
+			started = child;
+			const childTooling: RuntimeGatedTooling = {
+				...tooling,
+				delegate: delegationThrough(child),
+				gate: createChildGate(tooling, childController),
+			};
+			child.delegate = createDelegationExecutor({
+				...options,
+				execution: child,
+				tooling: childTooling,
+			});
 			await commitUserMessage();
+			return { child, childTooling, prepared };
+		};
+
+		try {
+			const { child, childTooling, prepared } = await startChild();
 			const modelTarget = await resolveChatModelTarget(
 				prepared.model,
 				connections,
@@ -269,17 +322,21 @@ export const createDelegationExecutor = ({
 			);
 			const mcpPolicy = await resolveMcpPolicyForAgent(prepared.agent);
 			snapshot = await mcp.createSnapshot(prepared.agent, mcpPolicy, false);
+			child.mcpSnapshot = snapshot;
 			const executeMcpTool = createMcpToolExecutor(mcp.execute);
-			const childGate = createChildGate(gatedTooling, childController);
+			const skill = await createSkillContext?.(prepared.agent);
+			if (!isUndefined(skill)) {
+				child.armedSkill = skill;
+			}
 			const turn = await buildChildTurn({
-				childGate,
-				createSkillContext,
+				childTooling,
 				cwd,
 				delegation,
 				executeMcpTool,
 				modelTarget,
 				prepared,
 				resolvePermissionForAgent,
+				skill,
 				snapshot,
 				turnId,
 				userMessage,
@@ -299,7 +356,7 @@ export const createDelegationExecutor = ({
 						record,
 						sessionId,
 					}),
-				onViewState,
+				onViewState: (viewState) => host.publishViewState(child, viewState),
 				runtime: defaultRuntimeFactory(),
 				signal: childSignal,
 				sourceUserMessageId: userMessage.id,
@@ -327,10 +384,9 @@ export const createDelegationExecutor = ({
 			}
 			throw error;
 		} finally {
-			if (!isUndefined(snapshot)) {
-				mcp.releaseSnapshot?.(snapshot);
+			if (!isUndefined(started)) {
+				host.end(started);
 			}
-			clearChildView();
 		}
 	};
 };

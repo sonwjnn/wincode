@@ -1,14 +1,21 @@
 import { expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
+import type { AgentTurnId } from "@wincode/agent-core";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import type { SessionCompaction } from "@/modules/sessions/compaction/types";
-import { createSessionEngine } from "@/modules/sessions/engine/session-engine";
+import {
+	createSessionEngine,
+	type SessionEngine,
+	type SessionViewState,
+} from "@/modules/sessions/engine/session-engine";
 import type { SessionMessage } from "@/modules/sessions/message";
 import {
+	agentTurnId,
 	compactionId,
 	modelId,
 	sessionId,
 	sessionMessageId,
+	toolCallId,
 } from "../support/identifiers";
 
 const model: ChatModelSelection = {
@@ -136,4 +143,110 @@ test("records a compaction entry once per Compaction Identifier", () => {
 	expect(engine.getSnapshot().compactions.map(({ id }) => id)).toEqual([
 		compactionId("entry-1"),
 	]);
+});
+
+const viewState = (
+	turnId: string,
+	text: string
+): SessionViewState & { turnId: AgentTurnId } => ({
+	lastSequence: 0,
+	reasoningText: "",
+	status: "streaming",
+	text,
+	turnId: agentTurnId(turnId),
+});
+
+const beginExecutions = (): {
+	child: AgentTurnId;
+	engine: SessionEngine;
+	parent: AgentTurnId;
+} => {
+	const engine = createSessionEngine({ initialTranscript: [] });
+	const parent = agentTurnId("turn-parent");
+	const child = agentTurnId("turn-child");
+	engine.beginExecution({ startedAt: 1, turnId: parent });
+	engine.setExecutionViewState(parent, viewState("turn-parent", "parent text"));
+	engine.beginExecution({
+		parent: {
+			parentToolCallId: toolCallId("call-delegate"),
+			parentTurnId: parent,
+		},
+		startedAt: 2,
+		turnId: child,
+	});
+	return { child, engine, parent };
+};
+
+test("keeps each active execution's Session View State separate", () => {
+	const { child, engine, parent } = beginExecutions();
+
+	engine.setExecutionViewState(child, viewState("turn-child", "child text"));
+
+	const snapshot = engine.getSnapshot();
+	expect(snapshot.viewState?.text).toBe("child text");
+	expect(snapshot.executions.map(({ turnId }) => turnId)).toEqual([
+		parent,
+		child,
+	]);
+	expect(snapshot.executions[0]?.viewState?.text).toBe("parent text");
+	expect(snapshot.executions[1]?.parent).toEqual({
+		parentToolCallId: toolCallId("call-delegate"),
+		parentTurnId: parent,
+	});
+});
+
+test("returns the parent's live view when a delegated execution ends", () => {
+	const { child, engine } = beginExecutions();
+	engine.setExecutionViewState(child, viewState("turn-child", "child text"));
+
+	engine.endExecution(child);
+
+	const snapshot = engine.getSnapshot();
+	expect(snapshot.executions.map(({ turnId }) => turnId)).toEqual([
+		agentTurnId("turn-parent"),
+	]);
+	expect(snapshot.viewState?.text).toBe("parent text");
+});
+
+test("exposes the newest live execution's view and drops it when it ends", () => {
+	const engine = createSessionEngine({ initialTranscript: [] });
+	const root = agentTurnId("turn-root");
+	const first = agentTurnId("turn-first");
+	const second = agentTurnId("turn-second");
+	engine.beginExecution({ startedAt: 1, turnId: root });
+	engine.setExecutionViewState(root, viewState("turn-root", "root text"));
+	engine.beginExecution({
+		parent: { parentToolCallId: toolCallId("call-1"), parentTurnId: root },
+		startedAt: 2,
+		turnId: first,
+	});
+	engine.beginExecution({
+		parent: { parentToolCallId: toolCallId("call-2"), parentTurnId: root },
+		startedAt: 3,
+		turnId: second,
+	});
+	engine.setExecutionViewState(first, viewState("turn-first", "first text"));
+	engine.setExecutionViewState(second, viewState("turn-second", "second text"));
+
+	expect(engine.getSnapshot().viewState?.text).toBe("second text");
+
+	engine.endExecution(first);
+	expect(engine.getSnapshot().viewState?.text).toBe("second text");
+
+	engine.endExecution(second);
+	expect(engine.getSnapshot().viewState?.text).toBe("root text");
+
+	engine.endExecution(root);
+	expect(engine.getSnapshot().viewState).toBeUndefined();
+});
+
+test("ignores a view state published for an execution that already ended", () => {
+	const { child, engine } = beginExecutions();
+	engine.endExecution(child);
+	const ended = engine.getSnapshot();
+
+	engine.setExecutionViewState(child, viewState("turn-child", "late text"));
+
+	expect(engine.getSnapshot()).toBe(ended);
+	expect(engine.getSnapshot().viewState?.text).toBe("parent text");
 });

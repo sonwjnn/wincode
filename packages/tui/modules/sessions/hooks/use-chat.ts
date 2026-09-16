@@ -36,21 +36,15 @@ import {
 	type SkillContext,
 	type SkillExecution,
 	type SkillRequestContext,
-	type SkillToolDefinition,
 } from "@wincode/skills";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgentRegistry } from "@/modules/agents";
 import { useConnections } from "@/modules/connections";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
-import {
-	createMcpToolExecutor,
-	type McpCatalogSnapshot,
-	useMcp,
-} from "@/modules/mcp";
+import { createMcpToolExecutor, useMcp } from "@/modules/mcp";
 import { useToolPermission } from "@/modules/permissions";
 import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import { MAX_PROJECT_INSTRUCTION_TOTAL_BYTES } from "@/modules/prompt-composition/project-instructions";
-
 import {
 	COMPACTION_REQUEST_OVERHEAD_TOKENS,
 	type CompactSessionInput,
@@ -107,14 +101,20 @@ import type {
 import type { AttachmentHydrationOptions } from "../storage/attachment-store";
 import { getSessionStore } from "../storage/get-session-store";
 import { buildUserSessionRecord } from "../storage/session-record";
-import { createDelegationExecutor } from "./delegation";
+import {
+	type BeginTurnExecutionInput,
+	createTurnExecution,
+	type TurnExecution,
+	type TurnExecutionHost,
+	type TurnExecutionSkill,
+} from "../turn-execution";
+import { createDelegationExecutor, delegationThrough } from "./delegation";
 import {
 	buildAgentTurn,
 	buildAssistantCancelledSessionRecord,
 	buildAssistantFailureSessionRecord,
 	buildTerminalSessionRecord,
 	createGatedCodingTools,
-	type DelegationExecutor,
 	defaultRuntimeFactory,
 	type RuntimeGatedTooling,
 	runAgentTurnToText,
@@ -167,14 +167,24 @@ const waitForCompaction = async (
 			: getErrorMessage(error, "Session compaction failed.");
 	}
 };
-type RunCompaction = (
-	trigger: CompactSessionInput["trigger"],
-	focus?: string,
-	nextMessages?: readonly SessionMessage[],
-	selection?: ChatModelSelection,
-	compactionMessages?: readonly SessionMessage[],
-	selectionVariant?: ModelVariant
-) => Promise<CompactSessionResult>;
+/** Attachment hydration ceilings resolved for one submission. */
+type AttachmentBudget = Pick<
+	AttachmentHydrationOptions,
+	"maxAttachments" | "maxBytes" | "maxTokens"
+>;
+
+/** One compaction request: the selection, intent, and inputs it runs with. */
+type CompactOptions = {
+	/** Replaces the Session Transcript before compaction when supplied. */
+	compactionMessages?: readonly SessionMessage[];
+	focus?: string;
+	model: ChatModelSelection;
+	nextMessages?: readonly SessionMessage[];
+	trigger: CompactSessionInput["trigger"];
+	variant?: ModelVariant;
+};
+
+type RunCompaction = (options: CompactOptions) => Promise<CompactSessionResult>;
 
 type SubmitCompactionResult =
 	| { readonly ok: true }
@@ -186,12 +196,14 @@ const prepareCompactionBeforeSubmit = async ({
 	model,
 	runCompaction,
 	settings,
+	variant,
 }: {
 	activeMessages: readonly SessionMessage[];
 	compactionModule: SessionCompactionModule;
 	model: ChatModelSelection;
 	runCompaction: RunCompaction;
 	settings: ResolvedCompactionSettings;
+	variant?: ModelVariant;
 }): Promise<SubmitCompactionResult> => {
 	if (
 		!(
@@ -202,7 +214,11 @@ const prepareCompactionBeforeSubmit = async ({
 		return { ok: true };
 	}
 	try {
-		await runCompaction("threshold", undefined, undefined, model);
+		await runCompaction({
+			model,
+			trigger: "threshold",
+			...(isUndefined(variant) ? {} : { variant }),
+		});
 	} catch (cause) {
 		if (!isBenignCompactionError(cause)) {
 			return {
@@ -221,6 +237,8 @@ type SubmitContextResult =
 	| {
 			readonly kind: "ready";
 			readonly anchoredMessage?: SessionMessage;
+			/** The Skill catalog armed for the Agent Turn this submission starts. */
+			readonly armedSkill: TurnExecutionSkill;
 			readonly metadata: SessionMessageMetadata;
 			readonly resolvedAgent: ResolvedCodingAgent;
 			readonly skill?: SkillRequestContext;
@@ -228,10 +246,11 @@ type SubmitContextResult =
 	| { readonly kind: "cancelled" }
 	| { readonly kind: "rejected"; readonly reason: string };
 
-type SubmitSkillExecutionFactory = () => Promise<SkillExecution>;
+type SubmitSkillExecutionFactory = () => Promise<TurnExecutionSkill>;
 type SubmitSkillResolver = (
 	explicitSkillInput: SkillContext | undefined,
-	anchoredMessage: SessionMessage | undefined
+	anchoredMessage: SessionMessage | undefined,
+	armedSkill: TurnExecutionSkill
 ) => Promise<SubmitSkillResolution>;
 
 const createSubmitMetadata = (
@@ -259,7 +278,7 @@ const prepareSubmitContext = async ({
 	resolveSkillForSubmit: SubmitSkillResolver;
 	signal: AbortSignal;
 }): Promise<SubmitContextResult> => {
-	await createTurnSkillExecution();
+	const armedSkill = await createTurnSkillExecution();
 	if (signal.aborted) {
 		return { kind: "cancelled" };
 	}
@@ -281,13 +300,15 @@ const prepareSubmitContext = async ({
 	}
 	const skillResolution = await resolveSkillForSubmit(
 		input.skill,
-		anchoredMessage
+		anchoredMessage,
+		armedSkill
 	);
 	if (!skillResolution.ok) {
 		return { kind: "rejected", reason: skillResolution.reason };
 	}
 	return {
 		anchoredMessage,
+		armedSkill,
 		kind: "ready",
 		metadata: createSubmitMetadata(input, skillResolution.skill),
 		resolvedAgent,
@@ -493,6 +514,7 @@ type SessionPreparationResult =
 			readonly reason: string;
 	  }
 	| {
+			readonly attachmentBudget: AttachmentBudget;
 			readonly context: Extract<SubmitContextResult, { kind: "ready" }>;
 			readonly kind: "ready";
 			readonly messages: SessionMessage[];
@@ -508,7 +530,6 @@ const prepareSessionSubmission = async ({
 	input,
 	runCompaction,
 	resolveSkillForSubmit,
-	setAttachmentBudget,
 	setPreparingMessage,
 	signal,
 }: {
@@ -522,12 +543,6 @@ const prepareSessionSubmission = async ({
 	input: SessionSendInput;
 	runCompaction: RunCompaction;
 	resolveSkillForSubmit: SubmitSkillResolver;
-	setAttachmentBudget: (
-		budget: Pick<
-			ResolvedCompactionSettings,
-			"maxMediaAttachments" | "maxMediaBytes" | "maxMediaTokens"
-		>
-	) => void;
 	setPreparingMessage: (value: boolean) => void;
 	signal: AbortSignal;
 }): Promise<SessionPreparationResult> => {
@@ -537,17 +552,18 @@ const prepareSessionSubmission = async ({
 			return { kind: "rejected", reason: preparationError };
 		}
 		const settings = await getCompactionSettings(input.model);
-		setAttachmentBudget({
-			maxMediaAttachments: settings.maxMediaAttachments,
-			maxMediaBytes: settings.maxMediaBytes,
-			maxMediaTokens: settings.maxMediaTokens,
-		});
+		const attachmentBudget: AttachmentBudget = {
+			maxAttachments: settings.maxMediaAttachments,
+			maxBytes: settings.maxMediaBytes,
+			maxTokens: settings.maxMediaTokens,
+		};
 		const compactionResult = await prepareCompactionBeforeSubmit({
 			activeMessages: getActiveMessages(),
 			compactionModule,
 			model: input.model,
 			runCompaction,
 			settings,
+			variant: input.variant,
 		});
 		if (!compactionResult.ok) {
 			return { kind: "rejected", reason: compactionResult.reason };
@@ -576,6 +592,7 @@ const prepareSessionSubmission = async ({
 			return prepared;
 		}
 		return {
+			attachmentBudget,
 			context,
 			kind: "ready",
 			messages: prepared.messages,
@@ -846,41 +863,21 @@ const handleTurnFailure = async ({
 };
 const updateRuntimeMessageFromEvent = ({
 	event,
-	assistantId,
+	execution,
 	setStatus,
 	updateRuntimeMessage,
 }: {
 	event: AgentTurnEvent;
-	assistantId: SessionMessageId | null;
+	execution: TurnExecution;
 	setStatus: (status: SessionChatStatus) => void;
 	updateRuntimeMessage: (
-		assistantId: SessionMessageId,
+		execution: TurnExecution,
 		event: AgentTurnEvent
 	) => void;
 }): void => {
-	if (!isNull(assistantId)) {
-		updateRuntimeMessage(assistantId, event);
-	}
+	updateRuntimeMessage(execution, event);
 	if (event.type !== "agent-turn-started") {
 		setStatus("streaming");
-	}
-};
-
-const releaseTurnSnapshot = ({
-	mcp,
-	mcpSnapshotRef,
-	snapshot,
-}: {
-	mcp: ReturnType<typeof useMcp>;
-	mcpSnapshotRef: { current: McpCatalogSnapshot | null };
-	snapshot: McpCatalogSnapshot | undefined;
-}): void => {
-	if (isUndefined(snapshot)) {
-		return;
-	}
-	mcp.releaseSnapshot?.(snapshot);
-	if (mcpSnapshotRef.current?.id === snapshot.id) {
-		mcpSnapshotRef.current = null;
 	}
 };
 
@@ -1160,6 +1157,79 @@ const sanitizeRuntimeMessagesForTerminal = (
 		event.failure.message
 	);
 };
+/**
+ * The Agent Turn execution a submission starts: its Agent and Model Target
+ * selection, the session-level selection its records carry, its Skill, and its
+ * source user message identity.
+ */
+const executionInputForSubmit = ({
+	input,
+	readyContext,
+	sourceUserMessageId,
+	startedAt,
+}: {
+	input: SessionSendInput;
+	readyContext: Extract<SubmitContextResult, { kind: "ready" }>;
+	sourceUserMessageId?: SessionMessageId;
+	startedAt: number;
+}): BeginTurnExecutionInput => ({
+	agent: input.agent,
+	armedSkill: readyContext.armedSkill,
+	model: input.model,
+	resolvedAgent: readyContext.resolvedAgent,
+	sessionModel: input.sessionModel,
+	startedAt,
+	...(isUndefined(input.delegation) ? {} : { parent: input.delegation }),
+	...(isUndefined(input.sessionVariant)
+		? {}
+		: { sessionVariant: input.sessionVariant }),
+	...(isUndefined(readyContext.skill)
+		? {}
+		: { skillRequest: readyContext.skill }),
+	...(isUndefined(sourceUserMessageId) ? {} : { sourceUserMessageId }),
+	...(isUndefined(input.variant) ? {} : { variant: input.variant }),
+});
+
+/**
+ * Persists the accepted prompt as its own durable Session Record before the
+ * Agent Turn runs, so a stored prompt always precedes its answer.
+ */
+const commitPromptRecord = async ({
+	agent,
+	message,
+	model,
+	sessionId,
+	sessionModel,
+	sessionVariant,
+	variant,
+}: {
+	agent: AgentId;
+	message: SessionMessage;
+	model: ChatModelSelection;
+	sessionId: SessionId;
+	sessionModel: ChatModelSelection;
+	sessionVariant?: ModelVariant;
+	variant?: ModelVariant;
+}): Promise<Error | null> => {
+	try {
+		await getSessionStore().commitSessionRecord({
+			sessionModel,
+			sessionVariant,
+			record: buildUserSessionRecord({
+				agentId: agent,
+				message,
+				model,
+				turnId: createAgentTurnId(),
+				variant,
+			}),
+			sessionId,
+		});
+		return null;
+	} catch (error) {
+		return isError(error) ? error : new Error("Could not save the prompt.");
+	}
+};
+
 export function useChat(
 	sessionId: SessionId,
 	initialMessages: SessionMessage[],
@@ -1192,7 +1262,13 @@ export function useChat(
 	);
 	const resolvePermissionRef = useLatest(resolvePermission);
 	const resolveResourceLimitsRef = useLatest(resolveResourceLimits);
-	const childAbortControllersRef = useRef(new Map<ToolCallId, () => void>());
+	/**
+	 * The Agent Turn execution the session is currently running, kept so
+	 * session-level operations (interrupt, the compaction reserve, and Tool Gate
+	 * aborts) can reach the execution that owns the work. Turn-scoped values
+	 * themselves live in the execution scope, never here.
+	 */
+	const primaryExecutionRef = useRef<TurnExecution | null>(null);
 	const approvalAbortHandledRef = useRef(false);
 	const abortApprovalTurnRef = useRef<(toolCallId: ToolCallId) => void>(
 		() => undefined
@@ -1207,7 +1283,7 @@ export function useChat(
 					if (isUndefined(request.toolCallId)) {
 						return;
 					}
-					const abortChild = childAbortControllersRef.current.get(
+					const abortChild = primaryExecutionRef.current?.childAborts.get(
 						request.toolCallId
 					);
 					if (!isUndefined(abortChild)) {
@@ -1252,6 +1328,8 @@ export function useChat(
 	);
 	const {
 		applyContext,
+		beginExecution,
+		endExecution,
 		getSnapshot,
 		mergeTranscript,
 		recordCompaction,
@@ -1259,9 +1337,9 @@ export function useChat(
 		setCompacting,
 		setCompactionError,
 		setError,
+		setExecutionViewState,
 		setPreparingMessage,
 		setStatus,
-		setViewState,
 	} = engine;
 	// Bound through a subscription rather than `useSyncExternalStore`: the
 	// synchronous re-render that hook performs inside the submit path stalls the
@@ -1281,40 +1359,61 @@ export function useChat(
 		null
 	);
 	const overflowAttemptRef = useRef(0);
-	const requestStartedAtRef = useRef<number | null>(null);
-	const currentAssistantIdRef = useRef<SessionMessageId | null>(null);
-	const currentSourceUserMessageIdRef = useRef<SessionMessageId | null>(null);
-	const agentRef = useRef<AgentId>(buildAgent.id);
-	const resolvedAgentRef = useRef<ResolvedCodingAgent | undefined>(undefined);
-	const modelRef = useRef<ChatModelSelection>(defaultChatModelSelection);
-	const sessionModelRef = useRef<ChatModelSelection>(defaultChatModelSelection);
-	const sessionVariantRef = useRef<ModelVariant | undefined>(undefined);
-	const variantRef = useRef<ModelVariant | undefined>(undefined);
-	const attachmentBudgetRef = useRef<
-		| Pick<
-				AttachmentHydrationOptions,
-				"maxAttachments" | "maxBytes" | "maxTokens"
-		  >
-		| undefined
-	>(undefined);
-	const mcpSnapshotRef = useRef<McpCatalogSnapshot | null>(null);
-	const skillExecutionRef = useRef<SkillExecution | null>(null);
-	const skillToolRef = useRef<SkillToolDefinition | undefined>(undefined);
 	const sessionRef = useRef<SessionOperation | null>(null);
-	const providerErrorRef = useRef<(error: unknown) => void>(() => undefined);
+	const providerErrorRef = useRef<
+		(error: unknown, execution: TurnExecution) => void
+	>(() => undefined);
+
+	/**
+	 * Starts an Agent Turn execution: its scope and its engine registration are
+	 * created together, and its delegation bookkeeping is created with it before
+	 * the turn runs, so a re-render can neither rebuild nor reset either.
+	 */
+	const startExecution = useCallback(
+		(input: BeginTurnExecutionInput): TurnExecution => {
+			const execution = createTurnExecution(input);
+			if (isUndefined(execution.parent)) {
+				primaryExecutionRef.current = execution;
+			}
+			beginExecution(execution);
+			return execution;
+		},
+		[beginExecution]
+	);
+	const endExecutionScope = useCallback(
+		(execution: TurnExecution): void => {
+			const snapshot = execution.mcpSnapshot;
+			if (!isNull(snapshot)) {
+				mcp.releaseSnapshot?.(snapshot);
+				execution.mcpSnapshot = null;
+			}
+			endExecution(execution.turnId);
+		},
+		[endExecution, mcp]
+	);
+	const executionHost = useMemo<TurnExecutionHost>(
+		() => ({
+			begin: startExecution,
+			end: endExecutionScope,
+			publishViewState: (execution, viewState) =>
+				setExecutionViewState(execution.turnId, viewState),
+		}),
+		[endExecutionScope, setExecutionViewState, startExecution]
+	);
 
 	const estimateRuntimeRequestOverheadTokens = useCallback((): number => {
-		const resolvedAgent = resolvedAgentRef.current;
+		const execution = primaryExecutionRef.current;
+		const resolvedAgent = execution?.resolvedAgent;
 		const codingTools =
 			resolvedAgent?.visibleCodingTools.map((name) => {
 				const definition = codingToolDefinitions[name];
 				return { description: definition.description, name };
 			}) ?? [];
-		const skillTool = skillToolRef.current;
+		const skillTool = execution?.armedSkill?.tool;
 		const serializedContext = JSON.stringify({
 			agentInstructions: resolvedAgent?.instructions ?? "",
 			codingTools,
-			mcpTools: mcpSnapshotRef.current?.manifest ?? [],
+			mcpTools: execution?.mcpSnapshot?.manifest ?? [],
 			skillTool: skillTool
 				? {
 						description: skillTool.description,
@@ -1345,25 +1444,22 @@ export function useChat(
 		[summaryGenerator]
 	);
 	const getCompactionSettings = useCallback(
-		(selection: ChatModelSelection = modelRef.current) =>
-			getSettingsForModel(selection),
+		(selection: ChatModelSelection) => getSettingsForModel(selection),
 		[getSettingsForModel]
 	);
 	const runCompaction = useCallback(
-		(
-			trigger: CompactSessionInput["trigger"],
-			focus?: string,
-			nextMessages?: readonly SessionMessage[],
-			selection?: ChatModelSelection,
-			compactionMessages?: readonly SessionMessage[],
-			selectionVariant?: ModelVariant
-		): Promise<CompactSessionResult> => {
+		({
+			compactionMessages,
+			focus,
+			model,
+			nextMessages,
+			trigger,
+			variant,
+		}: CompactOptions): Promise<CompactSessionResult> => {
 			const current = compactionOperationRef.current;
 			if (current) {
 				return current;
 			}
-			const compactionModel = selection ?? modelRef.current;
-			const compactionVariant = selectionVariant ?? variantRef.current;
 			const controller = new AbortController();
 			compactionAbortRef.current = controller;
 			const operation = (async () => {
@@ -1374,14 +1470,12 @@ export function useChat(
 				const sessionMessages = compactionMessages
 					? [...compactionMessages]
 					: transcriptMessages;
-				const settings = await getCompactionSettings(compactionModel);
+				const settings = await getCompactionSettings(model);
 				const result = await compactionModule.compact({
 					session: { messages: sessionMessages, sessionId },
 					focus,
-					model: compactionModel,
-					...(isUndefined(compactionVariant)
-						? {}
-						: { variant: compactionVariant }),
+					model,
+					...(isUndefined(variant) ? {} : { variant }),
 					settings: {
 						compactionOverheadTokens: estimateRuntimeRequestOverheadTokens(),
 						enabled: settings.enabled,
@@ -1443,14 +1537,12 @@ export function useChat(
 					return;
 				}
 				try {
-					await runCompaction(
-						"threshold",
-						undefined,
-						messages,
-						selection,
-						undefined,
-						variant
-					);
+					await runCompaction({
+						model: selection,
+						nextMessages: messages,
+						trigger: "threshold",
+						...(isUndefined(variant) ? {} : { variant }),
+					});
 				} catch (error) {
 					if (!isBenignCompactionError(error)) {
 						setCompactionError(
@@ -1465,37 +1557,37 @@ export function useChat(
 	);
 
 	const createTurnSkillExecution =
-		useCallback(async (): Promise<SkillExecution> => {
+		useCallback(async (): Promise<TurnExecutionSkill> => {
 			const permission = await resolvePermission();
 			const catalog = await discoverSkillCatalog(config, (name) =>
 				permission.decide("skill", name)
 			);
 			const execution = createSkillExecution(catalog);
-			skillExecutionRef.current = execution;
-			skillToolRef.current = buildSkillToolDefinition(catalog);
+			const tool = buildSkillToolDefinition(catalog);
 			setCatalogDiagnostic(summarizeCatalogDiagnostics(catalog));
-			return execution;
+			return {
+				execution,
+				...(isUndefined(tool) ? {} : { tool }),
+			};
 		}, [config, resolvePermission, setCatalogDiagnostic]);
 
 	const resolveSkillForSubmit = useCallback(
 		async (
 			explicitSkillInput: SkillContext | undefined,
-			anchoredMessage: SessionMessage | undefined
+			anchoredMessage: SessionMessage | undefined,
+			armedSkill: TurnExecutionSkill
 		): Promise<
 			| { ok: true; skill: SkillRequestContext | undefined }
 			| { ok: false; reason: string }
 		> => {
-			const execution = skillExecutionRef.current;
+			const execution = armedSkill.execution;
 			if (!isUndefined(explicitSkillInput)) {
-				if (isNull(execution)) {
-					return { ok: false, reason: "Skill catalog is unavailable" };
-				}
 				return activateExplicitSkill(explicitSkillInput, {
 					execution,
 					gate: toolGateState.gate,
 				});
 			}
-			if (isUndefined(anchoredMessage) || isNull(execution)) {
+			if (isUndefined(anchoredMessage)) {
 				return { ok: true, skill: undefined };
 			}
 			const parsedSkill = sessionMessageSkillSchema.safeParse(
@@ -1532,24 +1624,17 @@ export function useChat(
 	);
 
 	const updateRuntimeMessage = useCallback(
-		(assistantId: SessionMessageId, event: AgentTurnEvent): void => {
+		(execution: TurnExecution, event: AgentTurnEvent): void => {
 			const current = getSnapshot().context;
-			const index = current.findIndex(({ id }) => id === assistantId);
+			const index = current.findIndex(({ id }) => id === execution.assistantId);
+			const emptyMessage = createEmptyRuntimeAssistantMessage(
+				execution.assistantId,
+				execution.sourceUserMessageId,
+				execution.agent,
+				execution.model
+			);
 			const existing: SessionMessage =
-				index === -1
-					? createEmptyRuntimeAssistantMessage(
-							assistantId,
-							currentSourceUserMessageIdRef.current,
-							agentRef.current,
-							modelRef.current
-						)
-					: (current[index] ??
-						createEmptyRuntimeAssistantMessage(
-							assistantId,
-							currentSourceUserMessageIdRef.current,
-							agentRef.current,
-							modelRef.current
-						));
+				index === -1 ? emptyMessage : (current[index] ?? emptyMessage);
 			const parts = [...existing.parts];
 			switch (event.type) {
 				case "model-step-started":
@@ -1616,34 +1701,33 @@ export function useChat(
 	);
 
 	const finalizeRuntimeMessage = useCallback(
-		(assistantId: SessionMessageId, event: AgentTurnTerminalEvent): void => {
+		(execution: TurnExecution, event: AgentTurnTerminalEvent): void => {
 			const current = getSnapshot().context;
-			const index = current.findIndex(({ id }) => id === assistantId);
+			const index = current.findIndex(({ id }) => id === execution.assistantId);
 			const base =
 				index === -1
 					? createEmptyRuntimeAssistantMessage(
-							assistantId,
-							currentSourceUserMessageIdRef.current,
-							agentRef.current,
-							modelRef.current
+							execution.assistantId,
+							execution.sourceUserMessageId,
+							execution.agent,
+							execution.model
 						)
 					: current[index];
 			if (isUndefined(base)) {
 				return;
 			}
-			const startedAt = requestStartedAtRef.current;
 			const usage =
 				event.type === "agent-turn-completed"
 					? normalizeModelUsage(event.usage)
 					: null;
 			const metadata = buildTerminalMessageMetadata({
-				agent: agentRef.current,
+				agent: execution.agent,
 				base,
 				event,
-				model: modelRef.current,
-				startedAt,
+				model: execution.model,
+				startedAt: execution.startedAt,
 				usage,
-				variant: variantRef.current,
+				variant: execution.variant,
 			});
 			const nextMessage = { ...base, metadata };
 			const nextMessages =
@@ -1654,7 +1738,7 @@ export function useChat(
 						);
 			const safeMessages = sanitizeRuntimeMessagesForTerminal(
 				nextMessages,
-				assistantId,
+				execution.assistantId,
 				event
 			);
 			applyContext(safeMessages);
@@ -1666,34 +1750,32 @@ export function useChat(
 	// biome-ignore lint/correctness/useExhaustiveDependencies: latest-value refs intentionally keep turn callbacks current without rebuilding the turn.
 	const runTurn = useCallback(
 		async ({
-			agent,
-			delegation,
-			model,
-			resolvedAgent,
-			skill,
-			sourceUserMessageId,
-			variant,
+			attachmentBudget,
+			execution,
 			modelMessages,
 			signal,
 		}: {
-			agent: AgentId;
-			delegation?: AgentTurnDelegation;
-			model: ChatModelSelection;
-			resolvedAgent: ResolvedCodingAgent;
-			skill?: SkillRequestContext;
-			sourceUserMessageId?: SessionMessageId;
-			variant?: ModelVariant;
+			attachmentBudget: AttachmentBudget;
+			execution: TurnExecution;
 			modelMessages: readonly SessionMessage[];
 			signal: AbortSignal;
 		}): Promise<SessionSendOutcome> => {
 			setError(null);
-			setViewState(undefined);
 			setStatus("submitted");
 			const store = getSessionStore();
-			const turnId = createAgentTurnId();
-			currentAssistantIdRef.current = toSessionMessageId(`assistant-${turnId}`);
-			currentSourceUserMessageIdRef.current = sourceUserMessageId ?? null;
-			let snapshot: McpCatalogSnapshot | undefined;
+			const {
+				agent,
+				model,
+				resolvedAgent,
+				skillRequest,
+				sourceUserMessageId,
+				turnId,
+				variant,
+			} = execution;
+			const delegation = execution.parent;
+			const sourceUserMessage = isNull(sourceUserMessageId)
+				? {}
+				: { sourceUserMessageId };
 			let executionStarted = false;
 			let currentTurn: AgentTurn | undefined;
 			let terminalObserved = false;
@@ -1701,43 +1783,74 @@ export function useChat(
 				store.commitSessionRecord({
 					...(isUndefined(delegation)
 						? {
-								sessionModel: sessionModelRef.current,
-								sessionVariant: sessionVariantRef.current,
+								sessionModel: execution.sessionModel,
+								sessionVariant: execution.sessionVariant,
 							}
 						: {}),
 					record,
 					sessionId,
 				});
 			try {
+				if (isUndefined(resolvedAgent)) {
+					throw new Error("The resolved Agent is unavailable.");
+				}
 				const modelTarget = await resolveChatModelTarget(model, connections, {
 					signal,
 					...(isUndefined(variant) ? {} : { variant }),
 				});
 				const mcpPolicy = await resolveMcpPolicyForAgentRef.current(agent);
-				snapshot = await mcp.createSnapshot(agent, mcpPolicy);
-				mcpSnapshotRef.current = snapshot;
+				const snapshot = await mcp.createSnapshot(agent, mcpPolicy);
+				execution.mcpSnapshot = snapshot;
 				const hydratedMessages = await store.hydrateAttachments(modelMessages, {
+					...attachmentBudget,
 					purpose: "model",
 					priorityMessageId: modelMessages.findLast(
 						({ role }) => role === "user"
 					)?.id,
 					signal,
-					...(attachmentBudgetRef.current ?? {}),
 				});
 				const executeMcpTool = createMcpToolExecutor(mcp.execute);
-				const gatedTooling: RuntimeGatedTooling = {
+				const tooling: RuntimeGatedTooling = {
 					gate: toolGateState.gate,
 					mcpSnapshot: snapshot,
 					executeMcpTool,
 					registerChildAbort: (toolCallId, abort) => {
-						childAbortControllersRef.current.set(toolCallId, abort);
-						return () => childAbortControllersRef.current.delete(toolCallId);
+						execution.childAborts.set(toolCallId, abort);
+						return () => execution.childAborts.delete(toolCallId);
 					},
 					resolveResourceLimits: (agentId) =>
 						isUndefined(agentId)
 							? resolveResourceLimitsRef.current()
 							: resolveResourceLimitsForAgentRef.current(agentId),
 				};
+				execution.delegate = createDelegationExecutor({
+					connections,
+					createSkillContext: async (agentId) => {
+						const permission =
+							await resolvePermissionForAgentRef.current(agentId);
+						const catalog = await discoverSkillCatalog(
+							configRef.current,
+							(name) => permission.decide("skill", name)
+						);
+						const skillExecution = createSkillExecution(catalog);
+						const skillTool = buildSkillToolDefinition(catalog);
+						return isUndefined(skillTool)
+							? undefined
+							: { execution: skillExecution, tool: skillTool };
+					},
+					cwd: configRef.current.cwd,
+					execution,
+					host: executionHost,
+					mcp,
+					registry: registryRef.current,
+					resolveMcpPolicyForAgent: (agentId) =>
+						resolveMcpPolicyForAgentRef.current(agentId),
+					resolvePermissionForAgent: (agentId) =>
+						resolvePermissionForAgentRef.current(agentId),
+					sessionId,
+					tooling,
+					workspace: configRef.current.workspace,
+				});
 				const tools = createGatedCodingTools({
 					agentId: agent,
 					agentTools: resolvedAgent.visibleCodingTools,
@@ -1746,15 +1859,15 @@ export function useChat(
 							({ isAvailable, role }) =>
 								isAvailable && (role === "subagent" || role === "all")
 						) === true
-							? runtimeGatedToolingRef.current.delegate
+							? delegationThrough(execution)
 							: undefined,
 					executeMcpTool,
-					gate: gatedTooling.gate,
+					gate: tooling.gate,
 					mcpSnapshot: snapshot,
 					parentTurnId: turnId,
-					resolveResourceLimits: gatedTooling.resolveResourceLimits,
-					skillExecution: skillExecutionRef.current ?? undefined,
-					skillTool: skillToolRef.current,
+					resolveResourceLimits: tooling.resolveResourceLimits,
+					skillExecution: execution.armedSkill?.execution,
+					skillTool: execution.armedSkill?.tool,
 				});
 				const agentPermission =
 					await resolvePermissionForAgentRef.current(agent);
@@ -1777,7 +1890,7 @@ export function useChat(
 					modelMessages: hydratedMessages,
 					modelTarget,
 					resolvedAgent,
-					skill,
+					skill: skillRequest,
 					systemInstructions: prompt.instructions,
 					tools,
 					turnId,
@@ -1788,22 +1901,21 @@ export function useChat(
 					onEvent: (event) => {
 						executionStarted = true;
 						updateRuntimeMessageFromEvent({
-							assistantId: currentAssistantIdRef.current,
 							event,
+							execution,
 							setStatus,
 							updateRuntimeMessage,
 						});
 					},
-					sourceUserMessageId,
+					...sourceUserMessage,
 					onTerminal: (event) => {
 						executionStarted = true;
 						terminalObserved = true;
-						if (!isNull(currentAssistantIdRef.current)) {
-							finalizeRuntimeMessage(currentAssistantIdRef.current, event);
-						}
+						finalizeRuntimeMessage(execution, event);
 					},
 					onToolCheckpoint: commitRecord,
-					onViewState: setViewState,
+					onViewState: (viewState) =>
+						executionHost.publishViewState(execution, viewState),
 					runtime: defaultRuntimeFactory(),
 					signal,
 					turn,
@@ -1823,27 +1935,24 @@ export function useChat(
 					executionStarted,
 					mergeTranscript,
 					model,
-					onProviderError: providerErrorRef.current,
+					onProviderError: (error) =>
+						providerErrorRef.current(error, execution),
 					applyContext,
 					setError,
 					signal,
 					terminalObserved,
 					turnId,
 					variant,
-					sourceUserMessageId,
+					...sourceUserMessage,
 				});
 			} finally {
-				releaseTurnSnapshot({
-					mcp,
-					mcpSnapshotRef,
-					snapshot,
-				});
-				currentAssistantIdRef.current = null;
-				currentSourceUserMessageIdRef.current = null;
+				endExecutionScope(execution);
 			}
 		},
 		[
 			connections,
+			endExecutionScope,
+			executionHost,
 			finalizeRuntimeMessage,
 			maintainAfterTurn,
 			mcp,
@@ -1858,48 +1967,6 @@ export function useChat(
 		]
 	);
 
-	const runtimeGatedToolingRef = useLatest<RuntimeGatedTooling>({
-		delegate: (request, signal) => {
-			const execute = delegationExecutorRef.current;
-			return isUndefined(execute)
-				? Promise.reject(new Error("Delegation is unavailable."))
-				: execute(request, signal);
-		},
-		gate: toolGateState.gate,
-		resolveResourceLimits: (agentId) =>
-			isUndefined(agentId)
-				? resolveResourceLimitsRef.current()
-				: resolveResourceLimitsForAgentRef.current(agentId),
-	});
-	const delegationExecutorRef = useRef<DelegationExecutor | undefined>(
-		undefined
-	);
-	delegationExecutorRef.current = createDelegationExecutor({
-		connections,
-		createSkillContext: async (agent) => {
-			const permission = await resolvePermissionForAgentRef.current(agent);
-			const catalog = await discoverSkillCatalog(config, (name) =>
-				permission.decide("skill", name)
-			);
-			const execution = createSkillExecution(catalog);
-			const tool = buildSkillToolDefinition(catalog);
-			return isUndefined(tool) ? undefined : { execution, tool };
-		},
-		cwd: config.cwd,
-		fallbackModelRef: modelRef,
-		fallbackVariantRef: variantRef,
-		gatedTooling: runtimeGatedToolingRef.current,
-		mcp,
-		resolveMcpPolicyForAgent: (agent) =>
-			resolveMcpPolicyForAgentRef.current(agent),
-		resolvePermissionForAgent: (agent) =>
-			resolvePermissionForAgentRef.current(agent),
-		onViewState: setViewState,
-		registry,
-		sessionId,
-		workspace: config.workspace,
-	});
-
 	const submit = useCallback(
 		async (
 			input: SessionSendInput,
@@ -1908,13 +1975,7 @@ export function useChat(
 			setCompactionError(null);
 			approvalAbortHandledRef.current = false;
 			overflowAttemptRef.current = 0;
-			agentRef.current = input.agent;
-			resolvedAgentRef.current = input.resolvedAgent;
-			sessionModelRef.current = input.sessionModel;
-			sessionVariantRef.current = input.sessionVariant;
-			modelRef.current = input.model;
-			variantRef.current = input.variant;
-			requestStartedAtRef.current = Date.now();
+			const startedAt = Date.now();
 
 			const prepared = await prepareSessionSubmission({
 				getActiveMessages: () => getSnapshot().context,
@@ -1925,17 +1986,6 @@ export function useChat(
 				input,
 				runCompaction,
 				resolveSkillForSubmit,
-				setAttachmentBudget: ({
-					maxMediaAttachments,
-					maxMediaBytes,
-					maxMediaTokens,
-				}) => {
-					attachmentBudgetRef.current = {
-						maxAttachments: maxMediaAttachments,
-						maxBytes: maxMediaBytes,
-						maxTokens: maxMediaTokens,
-					};
-				},
 				setPreparingMessage,
 				signal,
 			});
@@ -1947,44 +1997,38 @@ export function useChat(
 			}
 			const { context: readyContext, messages: modelMessages } = prepared;
 			if (!isUndefined(prepared.newMessage)) {
-				const userRecord = buildUserSessionRecord({
-					agentId: input.agent,
+				const promptError = await commitPromptRecord({
+					agent: input.agent,
 					message: prepared.newMessage,
 					model: input.model,
-					turnId: createAgentTurnId(),
-					variant: input.variant,
+					sessionId,
+					sessionModel: input.sessionModel,
+					...(isUndefined(input.sessionVariant)
+						? {}
+						: { sessionVariant: input.sessionVariant }),
+					...(isUndefined(input.variant) ? {} : { variant: input.variant }),
 				});
-				try {
-					await getSessionStore().commitSessionRecord({
-						sessionModel: input.sessionModel,
-						sessionVariant: input.sessionVariant,
-						record: userRecord,
-						sessionId,
-					});
-				} catch (error) {
-					const safeError = isError(error)
-						? error
-						: new Error("Could not save the prompt.");
-					setError(safeError);
-					return {
-						rejected: true,
-						reason: "Could not save the prompt.",
-					};
+				if (!isNull(promptError)) {
+					setError(promptError);
+					return { rejected: true, reason: "Could not save the prompt." };
 				}
 			}
 			applyContext(modelMessages);
 			mergeTranscript(modelMessages);
+			const execution = startExecution(
+				executionInputForSubmit({
+					input,
+					readyContext,
+					sourceUserMessageId:
+						readyContext.anchoredMessage?.id ?? prepared.newMessage?.id,
+					startedAt,
+				})
+			);
 			return runTurn({
-				agent: input.agent,
-				delegation: input.delegation,
-				model: input.model,
+				attachmentBudget: prepared.attachmentBudget,
+				execution,
 				modelMessages,
-				resolvedAgent: readyContext.resolvedAgent,
 				signal,
-				sourceUserMessageId:
-					readyContext.anchoredMessage?.id ?? prepared.newMessage?.id,
-				skill: readyContext.skill,
-				variant: input.variant,
 			});
 		},
 		[
@@ -2001,6 +2045,7 @@ export function useChat(
 			setError,
 			setPreparingMessage,
 			getSnapshot,
+			startExecution,
 		]
 	);
 	const submitRef = useLatest(submit);
@@ -2017,15 +2062,15 @@ export function useChat(
 			if (isUndefined(target)) {
 				return;
 			}
-			const startedAt = requestStartedAtRef.current;
+			const execution = primaryExecutionRef.current;
 			const finalized = finalizeAssistantMessageMetadata(target, {
-				agent: agentRef.current,
+				agent: execution?.agent ?? buildAgent.id,
 				interrupted: true,
-				model: modelRef.current,
-				variant: variantRef.current,
-				...(isNull(startedAt)
+				model: execution?.model ?? defaultChatModelSelection,
+				variant: execution?.variant,
+				...(isNull(execution)
 					? {}
-					: { responseTimeMs: Math.max(0, Date.now() - startedAt) }),
+					: { responseTimeMs: Math.max(0, Date.now() - execution.startedAt) }),
 			});
 			const next = [...getSnapshot().context];
 			next[targetIndex] = finalized;
@@ -2052,7 +2097,7 @@ export function useChat(
 	);
 	abortApprovalTurnRef.current = abortApprovalTurn;
 
-	providerErrorRef.current = (providerError) => {
+	providerErrorRef.current = (providerError, execution) => {
 		if (
 			overflowAttemptRef.current > 0 ||
 			!isModelContextOverflowError(providerError)
@@ -2060,7 +2105,7 @@ export function useChat(
 			return;
 		}
 		overflowAttemptRef.current = 1;
-		const failedModel = modelRef.current;
+		const failedModel = execution.model;
 		const originalMessage = getSnapshot().transcript.findLast(
 			(message) => message.role === "user"
 		);
@@ -2076,14 +2121,14 @@ export function useChat(
 				await recoverContextOverflow({
 					attempt: 0,
 					compact: (input) =>
-						runCompaction(
-							"overflow",
-							undefined,
-							undefined,
-							input.model,
-							input.session.messages,
-							variantRef.current
-						),
+						runCompaction({
+							compactionMessages: input.session.messages,
+							model: input.model,
+							trigger: "overflow",
+							...(isUndefined(execution.variant)
+								? {}
+								: { variant: execution.variant }),
+						}),
 					compaction: compactionModule,
 					compactionInput: {
 						model: failedModel,
@@ -2114,13 +2159,13 @@ export function useChat(
 							return;
 						}
 						const outcome = await operation.send({
-							agent: agentRef.current,
-							sessionModel: sessionModelRef.current,
-							sessionVariant: sessionVariantRef.current,
+							agent: execution.agent,
+							sessionModel: execution.sessionModel,
+							sessionVariant: execution.sessionVariant,
 							messageId: originalMessageId,
 							model: failedModel,
-							resolvedAgent: resolvedAgentRef.current,
-							variant: variantRef.current,
+							resolvedAgent: execution.resolvedAgent,
+							variant: execution.variant,
 						});
 						if (outcome.rejected) {
 							throw new Error(outcome.reason);
@@ -2184,18 +2229,16 @@ export function useChat(
 		cancelCompaction,
 		catalogDiagnostic: state.catalogDiagnostic,
 		compact: (
-			focus?: string,
-			selection?: ChatModelSelection,
+			focus: string | undefined,
+			selection: ChatModelSelection,
 			selectionVariant?: ModelVariant
 		) =>
-			runCompaction(
-				"manual",
+			runCompaction({
 				focus,
-				undefined,
-				selection,
-				undefined,
-				selectionVariant
-			),
+				model: selection,
+				trigger: "manual",
+				...(isUndefined(selectionVariant) ? {} : { variant: selectionVariant }),
+			}),
 		compactions: state.compactions,
 		session,
 		error: state.compactionError ?? state.error,
