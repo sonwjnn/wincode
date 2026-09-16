@@ -4,10 +4,8 @@ import type {
 	AgentTurnId,
 } from "@wincode/agent-core";
 import type { ReadonlyDeep } from "type-fest";
-import {
-	isCompactionSummaryMessage,
-	type SessionCompaction,
-} from "../compaction";
+import { isCompactionSummaryMessage } from "../compaction/summary-message";
+import type { SessionCompaction } from "../compaction/types";
 import type { SessionMessage } from "../message";
 
 export type SessionChatStatus = "ready" | "streaming" | "submitted";
@@ -27,7 +25,7 @@ export type SessionViewState = ReadonlyDeep<{
 }>;
 
 /** The session facts an observer reads at one moment. */
-export type SessionEngineState = ReadonlyDeep<{
+export type SessionSnapshot = ReadonlyDeep<{
 	catalogDiagnostic: string | null;
 	compactions: SessionCompaction[];
 	compactionError: Error | null;
@@ -51,9 +49,7 @@ export type SessionEngineOptions = ReadonlyDeep<{
 export type SessionEngine = Readonly<{
 	/** Replaces the Session Context. */
 	applyContext: (messages: readonly SessionMessage[]) => void;
-	/** Replaces the Session Transcript. */
-	applyTranscript: (messages: readonly SessionMessage[]) => void;
-	getSnapshot: () => SessionEngineState;
+	getSnapshot: () => SessionSnapshot;
 	/**
 	 * Merges messages into the Session Transcript: an existing message is
 	 * replaced by id, an unknown one is appended, and a compaction summary
@@ -74,10 +70,10 @@ export type SessionEngine = Readonly<{
 }>;
 
 const hasChanged = (
-	state: SessionEngineState,
-	changes: Partial<SessionEngineState>
+	state: SessionSnapshot,
+	changes: Partial<SessionSnapshot>
 ): boolean =>
-	(Object.keys(changes) as (keyof SessionEngineState)[]).some(
+	(Object.keys(changes) as (keyof SessionSnapshot)[]).some(
 		(key) => !Object.is(state[key], changes[key])
 	);
 
@@ -91,7 +87,7 @@ export const createSessionEngine = ({
 	initialContext,
 	initialTranscript,
 }: SessionEngineOptions): SessionEngine => {
-	let state: SessionEngineState = {
+	let state: SessionSnapshot = {
 		catalogDiagnostic: null,
 		compactions: [...initialCompactions],
 		compactionError: null,
@@ -104,7 +100,7 @@ export const createSessionEngine = ({
 		viewState: undefined,
 	};
 	const listeners = new Set<() => void>();
-	const publish = (changes: Partial<SessionEngineState>): void => {
+	const publish = (changes: Partial<SessionSnapshot>): void => {
 		if (!hasChanged(state, changes)) {
 			return;
 		}
@@ -138,7 +134,6 @@ export const createSessionEngine = ({
 
 	return {
 		applyContext: (messages) => publish({ context: [...messages] }),
-		applyTranscript: (messages) => publish({ transcript: [...messages] }),
 		getSnapshot: () => state,
 		mergeTranscript,
 		recordCompaction: (entry) => {

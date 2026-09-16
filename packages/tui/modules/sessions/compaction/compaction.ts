@@ -1,4 +1,3 @@
-import { type SessionMessageId, toSessionMessageId } from "@wincode/agent-core";
 import { getModelFailureMessage } from "@wincode/ai/model-failures";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import {
@@ -37,6 +36,7 @@ import {
 	estimateSessionContextTokens,
 	type ResolvedCompactionSettings,
 } from "./config";
+import { createCompactionSummaryMessage } from "./summary-message";
 import {
 	type AppendSessionCompactionInput,
 	type CompactionSession,
@@ -50,8 +50,6 @@ import {
 	type SummaryGeneratorResult,
 } from "./types";
 
-const SUMMARY_MESSAGE_PREFIX = "<wincode-compaction-summary>";
-const SUMMARY_MESSAGE_SUFFIX = "</wincode-compaction-summary>";
 const MAX_SERIALIZED_PART_LENGTH = 12_000;
 const RAW_IMAGE_DATA_URL_PATTERN =
 	/data:image\/[^;,]+;base64,(?:(?:[A-Za-z0-9+/]\s*){4})*(?:(?:[A-Za-z0-9+/]\s*){2}==|(?:[A-Za-z0-9+/]\s*){3}=|(?:[A-Za-z0-9+/]\s*){1,4})(?![A-Za-z0-9+/=])/giu;
@@ -59,49 +57,6 @@ const DATA_URL_PAYLOAD_PATTERN = /^data:[^,]+,(.*)$/su;
 const BASE64_WHITESPACE_PATTERN = /\s/gu;
 const sanitizeSummaryText = (text: string): string =>
 	text.replace(RAW_IMAGE_DATA_URL_PATTERN, "[attachment payload omitted]");
-
-export const compactionSummaryMessageId = (
-	entryId: CompactionId
-): SessionMessageId => toSessionMessageId(`compaction:${entryId}`);
-
-export const formatCompactionSummaryMessage = (
-	summary: CompactionSummary
-): string => {
-	const attachmentMetadata = (summary.attachments ?? []).map((attachment) =>
-		JSON.stringify({
-			attachmentId: attachment.attachmentId,
-			available: attachment.available,
-			byteLength: attachment.byteLength,
-			filename: attachment.filename,
-			mediaType: attachment.mediaType,
-			payloadOmitted: true,
-		})
-	);
-	return [
-		SUMMARY_MESSAGE_PREFIX,
-		summary.text,
-		...(attachmentMetadata.length > 0
-			? ["Attachments:", ...attachmentMetadata]
-			: []),
-		SUMMARY_MESSAGE_SUFFIX,
-	].join("\n");
-};
-
-export const createCompactionSummaryMessage = (
-	entry: Pick<SessionCompaction, "id" | "summary">
-): SessionMessage => ({
-	id: compactionSummaryMessageId(entry.id),
-	parts: [
-		{
-			text: formatCompactionSummaryMessage(entry.summary),
-			type: "text",
-		},
-	],
-	role: "user",
-});
-export const isCompactionSummaryMessage = (
-	message: Pick<SessionMessage, "id">
-): boolean => message.id.startsWith("compaction:");
 
 const sanitizeSkillToolMessages = (
 	messages: SessionMessage[]

@@ -24,8 +24,9 @@ CLI projects those events into its OpenTUI message state.
 
 Session state — Session Transcript, Session Context, chat status, errors, and
 compaction facts — is owned by the React-free Session Engine in
-`modules/sessions/engine`. `useChat` binds that engine for rendering and never
-writes session state itself; no ref/state mirror exists for it.
+`modules/sessions/engine`. The Engine is the only writer. `useChat` binds it for
+rendering, mirrors its Session Snapshot in React state so the view re-renders,
+and never writes session state itself.
 
 The accepted user message is committed before runtime execution begins. Each
 completed Tool Call is committed as its own ordinary tool record, and terminal

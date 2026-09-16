@@ -82,6 +82,7 @@ The single owner of one session's live state and the only writer to it. Session 
 
 **Session Command**:
 A request to change session state, such as sending a prompt, interrupting a turn, compacting, or answering an approval. The Engine executes Commands one at a time in submission order, and no asynchronous continuation changes session state outside a Command. _Avoid_: operation, action, event, task
+_Planned_: the Engine still exposes granular state setters and orchestration lives in the binding; the command lane arrives with the Session Execution migration (issue #97).
 
 **Session Snapshot**:
 The session facts an observer reads at one moment. Observers read Snapshots only, so none of them sees a partially applied Session Command. _Avoid_: full state, state dump

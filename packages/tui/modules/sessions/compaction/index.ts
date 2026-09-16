@@ -6,11 +6,7 @@ export type {
 	SessionCompactionModule,
 } from "./compaction";
 export {
-	compactionSummaryMessageId,
-	createCompactionSummaryMessage,
 	createSessionCompaction,
-	formatCompactionSummaryMessage,
-	isCompactionSummaryMessage,
 	rebuildActiveMessages,
 	SessionCompactionError,
 	serializeMessagesForCompaction,
@@ -52,6 +48,12 @@ export {
 	createLanguageModelSummaryGenerator,
 	resolveDirectSummaryModel,
 } from "./summary-generator";
+export {
+	compactionSummaryMessageId,
+	createCompactionSummaryMessage,
+	formatCompactionSummaryMessage,
+	isCompactionSummaryMessage,
+} from "./summary-message";
 export type {
 	AppendSessionCompactionInput,
 	CompactionSession,

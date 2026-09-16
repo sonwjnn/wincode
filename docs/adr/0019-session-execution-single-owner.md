@@ -11,12 +11,21 @@ selection, MCP snapshot, child abort registry) lived at session scope, so any
 asynchronous continuation read them through a ref written during render.
 
 Session state now has exactly one owner: a React-free Session Engine that
-applies Session Commands one at a time in submission order, keeps turn-scoped
-values inside the execution that produced them, and publishes immutable Session
-Snapshots. The hook becomes a binding that constructs the Engine from injected
-ports and reads Snapshots; it never writes session state.
+publishes immutable Session Snapshots and is the only writer of a session's
+live state. The hook binds that Engine and never writes session state.
 
 Status: accepted
+
+The state-ownership half of this decision has shipped. The rest — Session
+Commands executed one at a time in submission order, turn-scoped values held
+inside the execution that produced them, orthogonal status facts, a single
+approval settlement path, and the submission pipeline living in the Engine — is
+the design the migration is closing on, tracked by the Session Engine spec
+(issue #97) and its five step tickets (#98–#102), and is not yet the shipped
+execution model: the Engine currently exposes granular state setters, the hook
+still holds turn-scoped values, chat status is still one union, and approvals
+still settle through two paths. Read the consequences below as the target, not
+as a description of every line of running code.
 
 ## Considered options
 
@@ -60,3 +69,12 @@ Status: accepted
 - Approval requests have exactly one settlement path. The panel registry is a
   read-only projection, and closing approvals is a Session Command rather than
   a second, independent settlement path.
+- The Engine owns its own emitter, including the policy that a failing observer
+  cannot change session state. While `SessionController` still exists its
+  listener plumbing duplicates that shape; the copy is deleted with the
+  controller by the ticket that moves the submission pipeline into the Engine
+  (#102) rather than factored into a shared abstraction whose second user is one
+  ticket away from removal.
+- The Engine's React-free claim is checked, not asserted: a boundary test walks
+  the Engine's module graph transitively and fails if React or a terminal
+  renderer becomes reachable, so a barrel cannot smuggle one back in.
