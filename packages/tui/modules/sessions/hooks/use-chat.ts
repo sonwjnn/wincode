@@ -156,6 +156,12 @@ const isBenignCompactionError = (error: unknown): boolean =>
 /** Another compaction already carries the work this request asked for. */
 const isInFlightCompaction = (error: unknown): boolean =>
 	error instanceof SessionCompactionError && error.code === "in-flight";
+
+/** The reason a compaction failure blocks a submission, or null when it does not. */
+const compactionFailureReason = (error: unknown): string | null =>
+	isBenignCompactionError(error)
+		? null
+		: getErrorMessage(error, "Session compaction failed.");
 /** Attachment hydration ceilings resolved for one submission. */
 type AttachmentBudget = Pick<
 	AttachmentHydrationOptions,
@@ -179,44 +185,70 @@ type SubmitCompactionResult =
 	| { readonly ok: true }
 	| { readonly ok: false; readonly reason: string };
 
-const prepareCompactionBeforeSubmit = async ({
-	activeMessages,
+/**
+ * The outcome for a threshold compaction that failed or was refused: null when
+ * another compaction owns the Session Context swap, so the caller joins it and
+ * re-checks the threshold instead of dropping the turn.
+ */
+const thresholdCompactionFailure = async (
+	cause: unknown,
+	settleCompaction: () => Promise<Error | null>
+): Promise<SubmitCompactionResult | null> => {
+	if (!isInFlightCompaction(cause)) {
+		const reason = compactionFailureReason(cause);
+		return isNull(reason) ? { ok: true } : { ok: false, reason };
+	}
+	const joinedError = await settleCompaction();
+	const joinedReason = isNull(joinedError)
+		? null
+		: compactionFailureReason(joinedError);
+	return isNull(joinedReason) ? null : { ok: false, reason: joinedReason };
+};
+
+export const prepareCompactionBeforeSubmit = async ({
+	getActiveMessages,
 	compactionModule,
 	model,
 	runCompaction,
 	settings,
+	settleCompaction,
 	variant,
 }: {
-	activeMessages: readonly SessionMessage[];
+	getActiveMessages: () => readonly SessionMessage[];
 	compactionModule: SessionCompactionModule;
 	model: ChatModelSelection;
 	runCompaction: RunCompaction;
 	settings: ResolvedCompactionSettings;
+	settleCompaction: () => Promise<Error | null>;
 	variant?: ModelVariant;
 }): Promise<SubmitCompactionResult> => {
-	if (
-		!(
-			settings.autoAvailable &&
-			compactionModule.needsCompaction(activeMessages, settings)
-		)
-	) {
-		return { ok: true };
-	}
-	try {
-		await runCompaction({
-			model,
-			trigger: "threshold",
-			...(isUndefined(variant) ? {} : { variant }),
-		});
-	} catch (cause) {
-		if (!isBenignCompactionError(cause)) {
-			return {
-				ok: false,
-				reason: getErrorMessage(cause, "Session compaction failed."),
-			};
+	// The threshold this Agent Turn needs has to hold on the Session Context it
+	// sends, so a compaction another caller owns is joined and the need
+	// re-checked against the settled context rather than raced.
+	for (;;) {
+		if (
+			!(
+				settings.autoAvailable &&
+				compactionModule.needsCompaction(getActiveMessages(), settings)
+			)
+		) {
+			return { ok: true };
+		}
+		try {
+			await runCompaction({
+				model,
+				trigger: "threshold",
+				...(isUndefined(variant) ? {} : { variant }),
+			});
+			return { ok: true };
+		} catch (cause) {
+			const outcome = await thresholdCompactionFailure(cause, settleCompaction);
+			if (isNull(outcome)) {
+				continue;
+			}
+			return outcome;
 		}
 	}
-	return { ok: true };
 };
 type SubmitSkillResolution =
 	| { readonly ok: true; readonly skill: SkillRequestContext | undefined }
@@ -546,20 +578,19 @@ const prepareSessionSubmission = async ({
 			maxTokens: settings.maxMediaTokens,
 		};
 		const compactionError = await settleCompaction();
-		if (
-			!(isNull(compactionError) || isBenignCompactionError(compactionError))
-		) {
-			return {
-				kind: "rejected",
-				reason: getErrorMessage(compactionError, "Session compaction failed."),
-			};
+		const compactionReason = isNull(compactionError)
+			? null
+			: compactionFailureReason(compactionError);
+		if (!isNull(compactionReason)) {
+			return { kind: "rejected", reason: compactionReason };
 		}
 		const compactionResult = await prepareCompactionBeforeSubmit({
-			activeMessages: getActiveMessages(),
 			compactionModule,
+			getActiveMessages,
 			model: input.model,
 			runCompaction,
 			settings,
+			settleCompaction,
 			variant: input.variant,
 		});
 		if (!compactionResult.ok) {

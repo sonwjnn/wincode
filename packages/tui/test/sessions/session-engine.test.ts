@@ -14,6 +14,7 @@ import {
 	type SessionViewState,
 } from "@/modules/sessions/engine/session-engine";
 import type { SessionMessage } from "@/modules/sessions/message";
+import { createHangingSummary } from "../support/hanging-summary";
 import {
 	agentTurnId,
 	compactionId,
@@ -64,29 +65,6 @@ const createCompactionModule = (summaryGenerator: SummaryGenerator) =>
 		},
 		summaryGenerator,
 	});
-
-/** A summary that stays in flight until the test releases it. */
-const hangingSummary = () => {
-	let released = false;
-	let finish: (() => void) | undefined;
-	const summaryGenerator: SummaryGenerator = () => {
-		const { promise, resolve } = Promise.withResolvers<{ text: string }>();
-		const settle = () => resolve({ text: "summary" });
-		if (released) {
-			settle();
-		} else {
-			finish = settle;
-		}
-		return promise;
-	};
-	return {
-		release: () => {
-			released = true;
-			finish?.();
-		},
-		summaryGenerator,
-	};
-};
 
 const createEngine = (
 	initialTranscript: readonly SessionMessage[],
@@ -178,7 +156,7 @@ test("isolates a failing observer from session state and other observers", () =>
 });
 
 test("runs a compaction command and publishes what it produced", async () => {
-	const { release, summaryGenerator } = hangingSummary();
+	const { release, summaryGenerator } = createHangingSummary();
 	const engine = createEngine(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator)
@@ -203,7 +181,7 @@ test("runs a compaction command and publishes what it produced", async () => {
 });
 
 test("joins a compaction command in flight before a caller reads the context", async () => {
-	const { release, summaryGenerator } = hangingSummary();
+	const { release, summaryGenerator } = createHangingSummary();
 	const engine = createEngine(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator)
@@ -228,7 +206,7 @@ test("joins a compaction command in flight before a caller reads the context", a
 });
 
 test("settles a joined command only after the swap it joins has landed", async () => {
-	const { release, summaryGenerator } = hangingSummary();
+	const { release, summaryGenerator } = createHangingSummary();
 	const engine = createEngine(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator)
@@ -254,7 +232,7 @@ test("settles a joined command only after the swap it joins has landed", async (
 });
 
 test("refuses another intent's compaction without disturbing the running command", async () => {
-	const { release, summaryGenerator } = hangingSummary();
+	const { release, summaryGenerator } = createHangingSummary();
 	const engine = createEngine(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator)

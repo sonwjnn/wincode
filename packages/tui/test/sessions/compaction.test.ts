@@ -26,6 +26,7 @@ import {
 	createSessionAttachmentStore,
 	getAttachmentReference,
 } from "@/modules/sessions/storage/attachment-store";
+import { createHangingSummary } from "../support/hanging-summary";
 import {
 	compactionId,
 	modelId,
@@ -689,25 +690,12 @@ test("persistence failure does not commit a compaction entry", async () => {
 	expect(store.appendCompaction).toHaveBeenCalledTimes(1);
 });
 
+/** The shared hanging generator, mocked so a test can assert its call count. */
 const hangingCompaction = () => {
-	let released = false;
-	let finish: (() => void) | undefined;
-	const summaryGenerator = mock(() => {
-		const { promise, resolve } = Promise.withResolvers<{ text: string }>();
-		const settle = () => resolve({ text: "summary" });
-		if (released) {
-			settle();
-		} else {
-			finish = settle;
-		}
-		return promise;
-	});
+	const hanging = createHangingSummary();
 	return {
-		release: () => {
-			released = true;
-			finish?.();
-		},
-		summaryGenerator,
+		release: hanging.release,
+		summaryGenerator: mock(hanging.summaryGenerator),
 	};
 };
 

@@ -216,7 +216,11 @@ export type SessionCompactionModule = {
 	 * caller is answered with another caller's result.
 	 */
 	compact: (input: CompactSessionInput) => Promise<CompactSessionResult>;
-	/** The compaction operation in flight for a session, if any. */
+	/**
+	 * The compaction operation in flight for a session, if any. It admits a
+	 * request; it is not a join handle for the Session Context, because it
+	 * settles before the swap it produces is published.
+	 */
 	getInFlight: (sessionId: SessionId) => Promise<CompactSessionResult> | null;
 	needsCompaction: (
 		messages: readonly SessionMessage[],
