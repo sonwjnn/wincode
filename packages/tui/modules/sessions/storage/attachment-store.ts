@@ -24,6 +24,7 @@ import { z } from "zod";
 import type {
 	SessionFilePart,
 	SessionMessage,
+	SessionPart,
 } from "@/modules/sessions/message";
 import type { SessionDatabase } from "./client";
 import { sessionAttachment } from "./schema";
@@ -756,7 +757,7 @@ export const messageHasLegacyImageParts = (message: SessionMessage): boolean =>
 
 const copyMessagesWithParts = (
 	messages: readonly SessionMessage[],
-	partsByMessage: Map<number, SessionMessage["parts"]>
+	partsByMessage: Map<number, readonly SessionPart[]>
 ): SessionMessage[] =>
 	messages.map((message, index) => {
 		const parts = partsByMessage.get(index);
@@ -1238,10 +1239,10 @@ export const createSessionAttachmentStore = ({
 		signal?: AbortSignal,
 		options?: AttachmentExternalizationOptions
 	): Promise<SessionMessage[]> => {
-		const partsByMessage = new Map<number, SessionMessage["parts"]>();
+		const partsByMessage = new Map<number, readonly SessionPart[]>();
 		for (const [messageIndex, message] of messages.entries()) {
 			let changed = false;
-			const parts: SessionMessage["parts"] = [];
+			const parts: SessionPart[] = [];
 			for (const part of message.parts) {
 				assertNotAborted(signal);
 				if (!(isImageFilePart(part) && !isAttachmentReferencePart(part))) {
@@ -1274,7 +1275,7 @@ export const createSessionAttachmentStore = ({
 			options.priorityMessageId,
 			options.signal
 		);
-		const partsByMessage = new Map<number, SessionMessage["parts"]>();
+		const partsByMessage = new Map<number, readonly SessionPart[]>();
 		for (const [messageIndex, message] of messages.entries()) {
 			const parts = hydrateMessageParts(
 				message,
@@ -1325,8 +1326,8 @@ export const createSessionAttachmentStore = ({
 	const annotateMessageForDisplay = async (
 		message: SessionMessage,
 		signal?: AbortSignal
-	): Promise<SessionMessage["parts"] | undefined> => {
-		let parts: SessionMessage["parts"] | undefined;
+	): Promise<SessionPart[] | undefined> => {
+		let parts: SessionPart[] | undefined;
 		for (const [partIndex, part] of message.parts.entries()) {
 			const reference = getAttachmentReference(part);
 			if (!(reference && isImageFilePart(part))) {
@@ -1352,7 +1353,7 @@ export const createSessionAttachmentStore = ({
 		messages: readonly SessionMessage[],
 		signal?: AbortSignal
 	): Promise<SessionMessage[]> => {
-		const partsByMessage = new Map<number, SessionMessage["parts"]>();
+		const partsByMessage = new Map<number, readonly SessionPart[]>();
 		for (const [messageIndex, message] of messages.entries()) {
 			const parts = await annotateMessageForDisplay(message, signal);
 			if (parts) {

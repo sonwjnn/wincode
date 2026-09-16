@@ -22,6 +22,11 @@ controller owns the submit, cancellation, interruption, state subscription,
 approval-response contracts, and the single Agent Runtime event consumer. The
 CLI projects those events into its OpenTUI message state.
 
+Session state — Session Transcript, Session Context, chat status, errors, and
+compaction facts — is owned by the React-free Session Engine in
+`modules/sessions/engine`. `useChat` binds that engine for rendering and never
+writes session state itself; no ref/state mirror exists for it.
+
 The accepted user message is committed before runtime execution begins. Each
 completed Tool Call is committed as its own ordinary tool record, and terminal
 assistant text is committed as an assistant record. Token and reasoning deltas
@@ -96,7 +101,8 @@ history and workspace/configuration data.
 
 - `getSessionStore()` — local sessions, Session Records, compactions, attachments, and maintenance.
 - `SessionOperation` — one application-owned send, cancellation, and interruption seam for the current turn path.
-- `useChat(sessionId, initialMessages)` — CLI-owned session state, runtime event projection, compaction, and errors.
+- `session-engine.ts` (Session Engine) — the single owner of one session's live state; observers read Session Snapshots and never write.
+- `useChat(sessionId, initialMessages)` — binds the Session Engine for rendering and runs turn submission, compaction, and error projection.
 - `useChatInputController(options)` — command and file-mention input state.
 - `NewSessionView`, `SessionView`, `ChatShell`, `ChatTextArea` — session UI.
 - `SessionsDialog`, `RenameSessionDialog` — session management UI.

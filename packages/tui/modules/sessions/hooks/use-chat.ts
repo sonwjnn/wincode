@@ -58,7 +58,6 @@ import {
 	createDirectSummaryGenerator,
 	createSessionCompaction,
 	estimateCompactionTokens,
-	isCompactionSummaryMessage,
 	isModelContextOverflowError,
 	type ResolvedCompactionSettings,
 	recoverContextOverflow,
@@ -94,11 +93,12 @@ import { createApprovalQueue } from "@/shared/providers/approval/approval-queue"
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import { buildAgent, type ResolvedCodingAgent } from "../../agents/built-ins";
 import { resolveChatModelTarget } from "../../model-target";
-import type { SessionFilePart } from "../message";
 import {
-	createSessionController,
-	type SessionViewState,
-} from "../session-controller";
+	createSessionEngine,
+	type SessionChatStatus,
+} from "../engine/session-engine";
+import type { SessionFilePart } from "../message";
+import { createSessionController } from "../session-controller";
 import type {
 	SessionOperation,
 	SessionSendInput,
@@ -119,8 +119,6 @@ import {
 	type RuntimeGatedTooling,
 	runAgentTurnToText,
 } from "./runtime-turn";
-
-export type SessionChatStatus = "ready" | "streaming" | "submitted";
 
 export const createChatMessageParts = (
 	userText: string,
@@ -447,20 +445,20 @@ const prepareModelMessages = async ({
 	activeMessages,
 	context,
 	input,
-	setIsPreparingMessage,
+	setPreparingMessage,
 	signal,
 }: {
 	activeMessages: readonly SessionMessage[];
 	context: Extract<SubmitContextResult, { kind: "ready" }>;
 	input: SessionSendInput;
-	setIsPreparingMessage: (value: boolean) => void;
+	setPreparingMessage: (value: boolean) => void;
 	signal: AbortSignal;
 }): Promise<PreparedModelMessages> => {
 	if (!(isUndefined(context.anchoredMessage) || isUndefined(input.messageId))) {
 		return prepareRetryMessages(activeMessages, input.messageId);
 	}
 
-	setIsPreparingMessage(true);
+	setPreparingMessage(true);
 	try {
 		const preparedMessage = await prepareNewSessionMessage({
 			input,
@@ -482,7 +480,7 @@ const prepareModelMessages = async ({
 			newMessage: preparedMessage.message,
 		};
 	} finally {
-		setIsPreparingMessage(false);
+		setPreparingMessage(false);
 	}
 };
 type SessionPreparationResult =
@@ -511,7 +509,7 @@ const prepareSessionSubmission = async ({
 	runCompaction,
 	resolveSkillForSubmit,
 	setAttachmentBudget,
-	setIsPreparingMessage,
+	setPreparingMessage,
 	signal,
 }: {
 	getActiveMessages: () => readonly SessionMessage[];
@@ -530,7 +528,7 @@ const prepareSessionSubmission = async ({
 			"maxMediaAttachments" | "maxMediaBytes" | "maxMediaTokens"
 		>
 	) => void;
-	setIsPreparingMessage: (value: boolean) => void;
+	setPreparingMessage: (value: boolean) => void;
 	signal: AbortSignal;
 }): Promise<SessionPreparationResult> => {
 	try {
@@ -571,7 +569,7 @@ const prepareSessionSubmission = async ({
 			activeMessages: getActiveMessages(),
 			context,
 			input,
-			setIsPreparingMessage,
+			setPreparingMessage,
 			signal,
 		});
 		if (prepared.kind !== "ready") {
@@ -613,9 +611,9 @@ const sessionOutcomeForPreparation = (
 const handleSafeAssistantOutcome = async ({
 	agent,
 	currentMessages,
-	mergeDisplayMessages,
+	mergeTranscript,
 	model,
-	publishActiveMessages,
+	applyContext,
 	record,
 	setError,
 	turnId,
@@ -624,10 +622,10 @@ const handleSafeAssistantOutcome = async ({
 }: {
 	agent: AgentId;
 	currentMessages: readonly SessionMessage[];
-	mergeDisplayMessages: (messages: readonly SessionMessage[]) => void;
+	mergeTranscript: (messages: readonly SessionMessage[]) => void;
 	record: SessionRecord;
 	model: ChatModelSelection;
-	publishActiveMessages: (messages: SessionMessage[]) => void;
+	applyContext: (messages: SessionMessage[]) => void;
 	setError: (error: Error) => void;
 	turnId: AgentTurnId;
 	variant?: ModelVariant;
@@ -676,8 +674,8 @@ const handleSafeAssistantOutcome = async ({
 		...currentMessages.filter(({ id }) => id !== failureMessage.id),
 		failureMessage,
 	];
-	publishActiveMessages(nextMessages);
-	mergeDisplayMessages([failureMessage]);
+	applyContext(nextMessages);
+	mergeTranscript([failureMessage]);
 	return { rejected: false };
 };
 
@@ -691,8 +689,8 @@ const handlePreExecutionTurnFailure = async ({
 	variant,
 	commitRecord,
 	currentMessages,
-	mergeDisplayMessages,
-	publishActiveMessages,
+	mergeTranscript,
+	applyContext,
 	setError,
 }: {
 	agent: AgentId;
@@ -704,17 +702,17 @@ const handlePreExecutionTurnFailure = async ({
 	variant?: ModelVariant;
 	commitRecord: (record: SessionRecord) => Promise<void>;
 	currentMessages: readonly SessionMessage[];
-	mergeDisplayMessages: (messages: readonly SessionMessage[]) => void;
-	publishActiveMessages: (messages: SessionMessage[]) => void;
+	mergeTranscript: (messages: readonly SessionMessage[]) => void;
+	applyContext: (messages: SessionMessage[]) => void;
 	setError: (error: Error) => void;
 }): Promise<SessionSendOutcome> =>
 	handleSafeAssistantOutcome({
 		agent,
 		commitRecord,
 		currentMessages,
-		mergeDisplayMessages,
+		mergeTranscript,
 		model,
-		publishActiveMessages,
+		applyContext,
 		record: buildAssistantFailureSessionRecord({
 			agentId: agent,
 			delegation,
@@ -736,9 +734,9 @@ const handleTurnFailure = async ({
 	delegation,
 	error,
 	executionStarted,
-	mergeDisplayMessages,
+	mergeTranscript,
 	model,
-	publishActiveMessages,
+	applyContext,
 	setError,
 	signal,
 	sourceUserMessageId,
@@ -754,10 +752,10 @@ const handleTurnFailure = async ({
 	delegation?: AgentTurnDelegation;
 	error: unknown;
 	executionStarted: boolean;
-	mergeDisplayMessages: (messages: readonly SessionMessage[]) => void;
+	mergeTranscript: (messages: readonly SessionMessage[]) => void;
 	model: ChatModelSelection;
 	onProviderError: (error: unknown) => void;
-	publishActiveMessages: (messages: SessionMessage[]) => void;
+	applyContext: (messages: SessionMessage[]) => void;
 	setError: (error: Error) => void;
 	signal: AbortSignal;
 	sourceUserMessageId?: SessionMessageId;
@@ -772,9 +770,9 @@ const handleTurnFailure = async ({
 				agent,
 				commitRecord,
 				currentMessages,
-				mergeDisplayMessages,
+				mergeTranscript,
 				model,
-				publishActiveMessages,
+				applyContext,
 				record: buildAssistantCancelledSessionRecord({
 					agentId: agent,
 					delegation,
@@ -794,9 +792,9 @@ const handleTurnFailure = async ({
 			currentMessages,
 			delegation,
 			error,
-			mergeDisplayMessages,
+			mergeTranscript,
 			model,
-			publishActiveMessages,
+			applyContext,
 			setError,
 			sourceUserMessageId,
 			turnId,
@@ -825,9 +823,9 @@ const handleTurnFailure = async ({
 				agent,
 				commitRecord,
 				currentMessages,
-				mergeDisplayMessages,
+				mergeTranscript,
 				model,
-				publishActiveMessages,
+				applyContext,
 				record: fallbackRecord,
 				setError,
 				turnId,
@@ -887,7 +885,7 @@ const releaseTurnSnapshot = ({
 };
 
 export const findCurrentTurnAssistantIndex = (
-	messages: SessionMessage[]
+	messages: readonly SessionMessage[]
 ): number => {
 	const userIndex = messages.findLastIndex(({ role }) => role === "user");
 	const assistantIndex = messages.findLastIndex(
@@ -933,7 +931,7 @@ export const sanitizeInterruptedMessagesForSession = (
 	);
 
 export const findCurrentTurnInterruptTargetIndex = (
-	messages: SessionMessage[]
+	messages: readonly SessionMessage[]
 ): number => {
 	const assistantIndex = findCurrentTurnAssistantIndex(messages);
 	return assistantIndex === -1
@@ -1245,28 +1243,39 @@ export function useChat(
 		[closeApprovals, toolGateState]
 	);
 
-	const displayMessagesRef = useRef<SessionMessage[]>([...initialMessages]);
-	const activeMessagesRef = useRef<SessionMessage[]>([
-		...initialActiveMessages,
-	]);
-	const [displayMessages, setDisplayMessages] = useState<SessionMessage[]>(
-		() => [...initialMessages]
+	const [engine] = useState(() =>
+		createSessionEngine({
+			initialCompactions,
+			initialContext: initialActiveMessages,
+			initialTranscript: initialMessages,
+		})
 	);
-	const [activeMessages, setActiveMessages] = useState<SessionMessage[]>(() => [
-		...initialActiveMessages,
-	]);
-	const [status, setStatus] = useState<SessionChatStatus>("ready");
-	const [error, setError] = useState<Error | null>(null);
-	const [viewState, setViewState] = useState<SessionViewState>();
-	const [compactions, setCompactions] = useState<SessionCompaction[]>(() => [
-		...initialCompactions,
-	]);
-	const [isCompacting, setIsCompacting] = useState(false);
-	const [compactionError, setCompactionError] = useState<Error | null>(null);
-	const [isPreparingMessage, setIsPreparingMessage] = useState(false);
-	const [catalogDiagnostic, setCatalogDiagnostic] = useState<string | null>(
-		null
-	);
+	const {
+		applyContext,
+		getSnapshot,
+		mergeTranscript,
+		recordCompaction,
+		setCatalogDiagnostic,
+		setCompacting,
+		setCompactionError,
+		setError,
+		setPreparingMessage,
+		setStatus,
+		setViewState,
+	} = engine;
+	// Bound through a subscription rather than `useSyncExternalStore`: the
+	// synchronous re-render that hook performs inside the submit path stalls the
+	// automatic-compaction journey in the OpenTUI test renderer (`useSyncExternalStore`
+	// does receive updates in this renderer in isolation, so this is about that
+	// interaction, not about the renderer dropping notifications). The engine
+	// stays the only writer; this hook mirrors its Session Snapshot for
+	// rendering and re-reads it once after subscribing so a change between render
+	// and effect is not lost.
+	const [state, setState] = useState(getSnapshot);
+	useEffect(() => {
+		setState(getSnapshot());
+		return engine.subscribe(() => setState(getSnapshot()));
+	}, [engine, getSnapshot]);
 	const compactionAbortRef = useRef<AbortController | null>(null);
 	const compactionOperationRef = useRef<Promise<CompactSessionResult> | null>(
 		null
@@ -1293,34 +1302,6 @@ export function useChat(
 	const skillToolRef = useRef<SkillToolDefinition | undefined>(undefined);
 	const sessionRef = useRef<SessionOperation | null>(null);
 	const providerErrorRef = useRef<(error: unknown) => void>(() => undefined);
-
-	const publishActiveMessages = useCallback((messages: SessionMessage[]) => {
-		activeMessagesRef.current = messages;
-		setActiveMessages(messages);
-	}, []);
-	const publishDisplayMessages = useCallback((messages: SessionMessage[]) => {
-		displayMessagesRef.current = messages;
-		setDisplayMessages(messages);
-	}, []);
-	const mergeDisplayMessages = useCallback(
-		(nextMessages: readonly SessionMessage[]): SessionMessage[] => {
-			const merged = [...displayMessagesRef.current];
-			for (const message of nextMessages) {
-				if (isCompactionSummaryMessage(message)) {
-					continue;
-				}
-				const index = merged.findIndex(({ id }) => id === message.id);
-				if (index === -1) {
-					merged.push(message);
-				} else {
-					merged[index] = message;
-				}
-			}
-			publishDisplayMessages(merged);
-			return merged;
-		},
-		[publishDisplayMessages]
-	);
 
 	const estimateRuntimeRequestOverheadTokens = useCallback((): number => {
 		const resolvedAgent = resolvedAgentRef.current;
@@ -1386,10 +1367,10 @@ export function useChat(
 			const controller = new AbortController();
 			compactionAbortRef.current = controller;
 			const operation = (async () => {
-				setIsCompacting(true);
+				setCompacting(true);
 				const transcriptMessages = nextMessages
-					? mergeDisplayMessages(nextMessages)
-					: displayMessagesRef.current;
+					? mergeTranscript(nextMessages)
+					: getSnapshot().transcript;
 				const sessionMessages = compactionMessages
 					? [...compactionMessages]
 					: transcriptMessages;
@@ -1416,19 +1397,15 @@ export function useChat(
 					trigger,
 				});
 				setCompactionError(null);
-				publishActiveMessages(result.activeMessages);
-				setCompactions((currentCompactions) =>
-					currentCompactions.some(({ id }) => id === result.entry.id)
-						? currentCompactions
-						: [...currentCompactions, result.entry]
-				);
+				applyContext(result.activeMessages);
+				recordCompaction(result.entry);
 				return result;
 			})().finally(() => {
 				if (compactionOperationRef.current === operation) {
 					compactionOperationRef.current = null;
 				}
 				compactionAbortRef.current = null;
-				setIsCompacting(false);
+				setCompacting(false);
 			});
 			compactionOperationRef.current = operation;
 			return operation;
@@ -1437,9 +1414,13 @@ export function useChat(
 			compactionModule,
 			estimateRuntimeRequestOverheadTokens,
 			getCompactionSettings,
-			mergeDisplayMessages,
-			publishActiveMessages,
+			mergeTranscript,
+			applyContext,
 			sessionId,
+			setCompactionError,
+			recordCompaction,
+			getSnapshot,
+			setCompacting,
 		]
 	);
 	const cancelCompaction = useCallback(() => {
@@ -1447,7 +1428,7 @@ export function useChat(
 	}, []);
 	const maintainAfterTurn = useCallback(
 		(
-			messages: SessionMessage[],
+			messages: readonly SessionMessage[],
 			selection: ChatModelSelection,
 			variant?: ModelVariant
 		) => {
@@ -1480,7 +1461,7 @@ export function useChat(
 			};
 			void compactIfNeeded();
 		},
-		[compactionModule, getCompactionSettings, runCompaction]
+		[compactionModule, getCompactionSettings, runCompaction, setCompactionError]
 	);
 
 	const createTurnSkillExecution =
@@ -1494,7 +1475,7 @@ export function useChat(
 			skillToolRef.current = buildSkillToolDefinition(catalog);
 			setCatalogDiagnostic(summarizeCatalogDiagnostics(catalog));
 			return execution;
-		}, [config, resolvePermission]);
+		}, [config, resolvePermission, setCatalogDiagnostic]);
 
 	const resolveSkillForSubmit = useCallback(
 		async (
@@ -1552,7 +1533,7 @@ export function useChat(
 
 	const updateRuntimeMessage = useCallback(
 		(assistantId: SessionMessageId, event: AgentTurnEvent): void => {
-			const current = activeMessagesRef.current;
+			const current = getSnapshot().context;
 			const index = current.findIndex(({ id }) => id === assistantId);
 			const existing: SessionMessage =
 				index === -1
@@ -1628,15 +1609,15 @@ export function useChat(
 					: current.map((message, messageIndex) =>
 							messageIndex === index ? nextMessage : message
 						);
-			publishActiveMessages(nextMessages);
-			mergeDisplayMessages([nextMessage]);
+			applyContext(nextMessages);
+			mergeTranscript([nextMessage]);
 		},
-		[mergeDisplayMessages, publishActiveMessages]
+		[mergeTranscript, applyContext, getSnapshot]
 	);
 
 	const finalizeRuntimeMessage = useCallback(
 		(assistantId: SessionMessageId, event: AgentTurnTerminalEvent): void => {
-			const current = activeMessagesRef.current;
+			const current = getSnapshot().context;
 			const index = current.findIndex(({ id }) => id === assistantId);
 			const base =
 				index === -1
@@ -1676,10 +1657,10 @@ export function useChat(
 				assistantId,
 				event
 			);
-			publishActiveMessages(safeMessages);
-			mergeDisplayMessages(safeMessages);
+			applyContext(safeMessages);
+			mergeTranscript(safeMessages);
 		},
-		[mergeDisplayMessages, publishActiveMessages]
+		[mergeTranscript, applyContext, getSnapshot]
 	);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: latest-value refs intentionally keep turn callbacks current without rebuilding the turn.
@@ -1828,22 +1809,22 @@ export function useChat(
 					turn,
 				});
 				setStatus("ready");
-				maintainAfterTurn(displayMessagesRef.current, model, variant);
+				maintainAfterTurn(getSnapshot().transcript, model, variant);
 				return { rejected: false };
 			} catch (turnError) {
 				setStatus("ready");
 				return handleTurnFailure({
 					agent,
 					commitRecord,
-					currentMessages: activeMessagesRef.current,
+					currentMessages: getSnapshot().context,
 					currentTurn,
 					delegation,
 					error: turnError,
 					executionStarted,
-					mergeDisplayMessages,
+					mergeTranscript,
 					model,
 					onProviderError: providerErrorRef.current,
-					publishActiveMessages,
+					applyContext,
 					setError,
 					signal,
 					terminalObserved,
@@ -1866,8 +1847,8 @@ export function useChat(
 			finalizeRuntimeMessage,
 			maintainAfterTurn,
 			mcp,
-			mergeDisplayMessages,
-			publishActiveMessages,
+			mergeTranscript,
+			applyContext,
 			resolveMcpPolicyForAgentRef,
 			resolveResourceLimitsForAgentRef,
 			resolveResourceLimitsRef,
@@ -1936,7 +1917,7 @@ export function useChat(
 			requestStartedAtRef.current = Date.now();
 
 			const prepared = await prepareSessionSubmission({
-				getActiveMessages: () => activeMessagesRef.current,
+				getActiveMessages: () => getSnapshot().context,
 				compactionModule,
 				compactionOperation: compactionOperationRef.current,
 				createTurnSkillExecution,
@@ -1955,7 +1936,7 @@ export function useChat(
 						maxTokens: maxMediaTokens,
 					};
 				},
-				setIsPreparingMessage,
+				setPreparingMessage,
 				signal,
 			});
 			if (prepared.kind !== "ready") {
@@ -1991,8 +1972,8 @@ export function useChat(
 					};
 				}
 			}
-			publishActiveMessages(modelMessages);
-			mergeDisplayMessages(modelMessages);
+			applyContext(modelMessages);
+			mergeTranscript(modelMessages);
 			return runTurn({
 				agent: input.agent,
 				delegation: input.delegation,
@@ -2010,12 +1991,16 @@ export function useChat(
 			compactionModule,
 			createTurnSkillExecution,
 			getCompactionSettings,
-			mergeDisplayMessages,
-			publishActiveMessages,
+			mergeTranscript,
+			applyContext,
 			resolveSkillForSubmit,
 			runCompaction,
 			runTurn,
 			sessionId,
+			setCompactionError,
+			setError,
+			setPreparingMessage,
+			getSnapshot,
 		]
 	);
 	const submitRef = useLatest(submit);
@@ -2023,12 +2008,12 @@ export function useChat(
 	const interruptLatestAssistantMessage = useCallback(
 		(preserveToolCallId?: ToolCallId): void => {
 			const targetIndex = findCurrentTurnInterruptTargetIndex(
-				activeMessagesRef.current
+				getSnapshot().context
 			);
 			if (targetIndex === -1) {
 				return;
 			}
-			const target = activeMessagesRef.current[targetIndex];
+			const target = getSnapshot().context[targetIndex];
 			if (isUndefined(target)) {
 				return;
 			}
@@ -2042,16 +2027,16 @@ export function useChat(
 					? {}
 					: { responseTimeMs: Math.max(0, Date.now() - startedAt) }),
 			});
-			const next = [...activeMessagesRef.current];
+			const next = [...getSnapshot().context];
 			next[targetIndex] = finalized;
 			const sanitized = sanitizeInterruptedMessagesForSession(
 				next,
 				preserveToolCallId
 			);
-			publishActiveMessages(sanitized);
-			mergeDisplayMessages(sanitized);
+			applyContext(sanitized);
+			mergeTranscript(sanitized);
 		},
-		[mergeDisplayMessages, publishActiveMessages]
+		[mergeTranscript, applyContext, getSnapshot]
 	);
 	const abortApprovalTurn = useCallback(
 		(toolCallId: ToolCallId): void => {
@@ -2076,7 +2061,7 @@ export function useChat(
 		}
 		overflowAttemptRef.current = 1;
 		const failedModel = modelRef.current;
-		const originalMessage = displayMessagesRef.current.findLast(
+		const originalMessage = getSnapshot().transcript.findLast(
 			(message) => message.role === "user"
 		);
 		if (isUndefined(originalMessage)) {
@@ -2115,19 +2100,15 @@ export function useChat(
 						},
 					},
 					session: {
-						messages: displayMessagesRef.current,
+						messages: getSnapshot().transcript,
 						sessionId,
 					},
 					enabled: settings.overflowRecoveryAvailable,
 					error: providerError,
 					originalMessageId: originalMessage.id,
 					replay: async ({ activeMessages, entry, originalMessageId }) => {
-						publishActiveMessages(activeMessages);
-						setCompactions((current) =>
-							current.some(({ id }) => id === entry.id)
-								? current
-								: [...current, entry]
-						);
+						applyContext(activeMessages);
+						recordCompaction(entry);
 						const operation = sessionRef.current;
 						if (isNull(operation) || !(await operation.waitForIdle())) {
 							return;
@@ -2195,13 +2176,13 @@ export function useChat(
 					}
 				},
 			}),
-		[interruptLatestAssistantMessage]
+		[interruptLatestAssistantMessage, setError]
 	);
 	sessionRef.current = session;
 
 	return {
 		cancelCompaction,
-		catalogDiagnostic,
+		catalogDiagnostic: state.catalogDiagnostic,
 		compact: (
 			focus?: string,
 			selection?: ChatModelSelection,
@@ -2215,16 +2196,16 @@ export function useChat(
 				undefined,
 				selectionVariant
 			),
-		compactions,
+		compactions: state.compactions,
 		session,
-		error: compactionError ?? error,
+		error: state.compactionError ?? state.error,
 		getCompactionSettings,
-		isCompacting,
-		isPreparingMessage,
-		messages: displayMessages,
-		status,
-		viewState,
-		activeMessages,
+		isCompacting: state.isCompacting,
+		isPreparingMessage: state.isPreparingMessage,
+		messages: state.transcript,
+		status: state.status,
+		viewState: state.viewState,
+		activeMessages: state.context,
 	};
 }
 

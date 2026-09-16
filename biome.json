@@ -94,5 +94,27 @@
       "enabled": true
     }
   },
+  "overrides": [
+    {
+      "includes": ["packages/tui/modules/sessions/engine/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@opentui/core": "The Session Engine is React-free and host-agnostic (ADR-0019).",
+                  "@opentui/react": "The Session Engine is React-free and host-agnostic (ADR-0019).",
+                  "react": "The Session Engine is React-free and host-agnostic (ADR-0019).",
+                  "react-dom": "The Session Engine is React-free and host-agnostic (ADR-0019)."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "extends": ["ultracite/biome/core", "ultracite/biome/react"]
 }

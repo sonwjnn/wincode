@@ -20,8 +20,8 @@ import {
 	isCompactionSummaryMessage,
 	type SessionCompaction,
 } from "../../compaction";
+import type { SessionViewState } from "../../engine/session-engine";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
-import type { SessionViewState } from "../../session-controller";
 import { summarizeSessionUsage } from "../../usage/session-usage";
 import type { ChatPromptSubmission } from "../../utils";
 import { ErrorMessage } from "../messages";
@@ -44,7 +44,7 @@ type ChatShellProps = {
 	isBusy: boolean;
 	isCompacting: boolean;
 	isInterruptArmed: boolean;
-	messages: SessionMessage[];
+	messages: readonly SessionMessage[];
 	onApproval?: (id: string, outcome: ApprovalOutcome) => void;
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onOpenSettings?: (section?: string) => Promise<void> | void;

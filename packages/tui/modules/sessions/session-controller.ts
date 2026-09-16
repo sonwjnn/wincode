@@ -2,13 +2,13 @@ import {
 	type AgentRuntime,
 	type AgentTurn,
 	type AgentTurnEvent,
-	type AgentTurnId,
 	type AgentTurnLifecycle,
 	type AgentTurnTerminalEvent,
 	createAgentTurnLifecycle,
 	type ToolCallId,
 } from "@wincode/agent-core";
 import { isUndefined } from "@wincode/runtime-utils";
+import type { SessionViewState } from "./engine/session-engine";
 import {
 	createSessionOperation,
 	type SessionOperation,
@@ -53,15 +53,6 @@ export type SessionController = {
 		listener: (state: SessionControllerState) => void
 	) => () => void;
 	readonly waitForIdle: SessionOperation["waitForIdle"];
-};
-export type SessionViewState = {
-	readonly delegation?: AgentTurn["delegation"];
-	readonly lastEventType?: AgentTurnEvent["type"];
-	readonly lastSequence: number;
-	readonly reasoningText: string;
-	readonly status: "idle" | "streaming" | "terminal";
-	readonly text: string;
-	readonly turnId: AgentTurnId;
 };
 export type AgentTurnEventConsumerOptions = {
 	lifecycle?: AgentTurnLifecycle;

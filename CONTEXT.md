@@ -75,6 +75,23 @@ broken metadata); the request body reads it strictly (only schema-valid pairs
 reach the send). Sources merge in a fixed order — session row, then message
 metadata, then prompt-config refs. _Avoid_: chat config, latest config
 
+## Session Execution
+
+**Session Engine**:
+The single owner of one session's live state and the only writer to it. Session state changes only through the Engine, and observers read a Session Snapshot. _Avoid_: session manager, session store, session state holder
+
+**Session Command**:
+A request to change session state, such as sending a prompt, interrupting a turn, compacting, or answering an approval. The Engine executes Commands one at a time in submission order, and no asynchronous continuation changes session state outside a Command. _Avoid_: operation, action, event, task
+
+**Session Snapshot**:
+The session facts an observer reads at one moment. Observers read Snapshots only, so none of them sees a partially applied Session Command. _Avoid_: full state, state dump
+
+**Session Transcript**:
+The ordered messages a session presents to the user. Compaction summaries stay out of the Transcript even when they are part of the Session Context. _Avoid_: chat history, display messages, message log
+
+**Session Context**:
+The messages a session sends to the model for its next Agent Turn. It is derived from the Session Transcript through compaction and interruption sanitation, so the two can differ. _Avoid_: active messages, prompt history, context window
+
 ## Language
 
 **Wincode CLI**:

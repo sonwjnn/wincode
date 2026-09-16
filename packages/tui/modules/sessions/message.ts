@@ -39,7 +39,7 @@ import {
 	skillContextSchema,
 } from "@wincode/skills";
 import { randomUUIDv7 } from "bun";
-import type { UnknownRecord } from "type-fest";
+import type { ReadonlyDeep, UnknownRecord } from "type-fest";
 import { z } from "zod";
 
 export type SessionFilePart = {
@@ -156,12 +156,12 @@ export type SessionMessageMetadata = {
 	readonly variant?: ModelVariant;
 };
 
-export type SessionMessage = {
-	readonly id: SessionMessageId;
-	readonly metadata?: SessionMessageMetadata;
-	readonly parts: SessionPart[];
-	readonly role: SessionMessageRole;
-};
+export type SessionMessage = ReadonlyDeep<{
+	id: SessionMessageId;
+	metadata?: SessionMessageMetadata;
+	parts: SessionPart[];
+	role: SessionMessageRole;
+}>;
 
 export const sessionMessageSkillSchema = z.union([
 	skillActivationSchema,

@@ -27,8 +27,8 @@ import type { ToolPermission } from "@/modules/permissions";
 import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import type { SessionId } from "@/shared/identifiers";
 import { resolveChatModelTarget } from "../../model-target";
+import type { SessionViewState } from "../engine/session-engine";
 import { createSessionUserMessage, type SessionMessage } from "../message";
-import type { SessionViewState } from "../session-controller";
 import { getSessionStore } from "../storage/get-session-store";
 import { buildUserSessionRecord } from "../storage/session-record";
 import type {
