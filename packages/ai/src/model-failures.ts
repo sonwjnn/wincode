@@ -1,5 +1,6 @@
 import {
 	isError,
+	isInteger,
 	isNull,
 	isObjectLike,
 	isString,
@@ -139,12 +140,7 @@ const getStatusCode = (chain: readonly unknown[]): number | undefined => {
 	for (const value of chain) {
 		const status =
 			getProperty(value, "statusCode") ?? getProperty(value, "status");
-		if (
-			typeof status === "number" &&
-			Number.isInteger(status) &&
-			status >= 100 &&
-			status <= 599
-		) {
+		if (isInteger(status) && status >= 100 && status <= 599) {
 			return status;
 		}
 	}
@@ -153,11 +149,7 @@ const getStatusCode = (chain: readonly unknown[]): number | undefined => {
 const getRetryAfterMs = (chain: readonly unknown[]): number | undefined => {
 	for (const value of chain) {
 		const retryAfterMs = getProperty(value, "retryAfterMs");
-		if (
-			typeof retryAfterMs === "number" &&
-			Number.isInteger(retryAfterMs) &&
-			retryAfterMs > 0
-		) {
+		if (isInteger(retryAfterMs) && retryAfterMs > 0) {
 			return retryAfterMs;
 		}
 	}

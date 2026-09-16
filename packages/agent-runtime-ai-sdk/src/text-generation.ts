@@ -5,10 +5,10 @@ import { streamText } from "ai";
 import type { RequireOneOrNone } from "type-fest";
 import { resolveAiSdkModelTarget } from "./model-resolver";
 
-export type RuntimePromptMessage = {
-	readonly content: string;
-	readonly role: "assistant" | "user";
-};
+export type RuntimePromptMessage = Readonly<{
+	content: string;
+	role: "assistant" | "user";
+}>;
 
 export type RuntimePromptSource = RequireOneOrNone<
 	{
@@ -18,13 +18,14 @@ export type RuntimePromptSource = RequireOneOrNone<
 	"messages" | "prompt"
 >;
 
-export type AiSdkTextGenerationOptions = {
-	readonly abortSignal?: AbortSignal;
-	readonly maxOutputTokens: number;
-	readonly maxRetries: number;
-	readonly model: ModelTarget;
-	readonly system: string;
-} & RuntimePromptSource;
+export type AiSdkTextGenerationOptions = Readonly<{
+	abortSignal?: AbortSignal;
+	maxOutputTokens: number;
+	maxRetries: number;
+	model: ModelTarget;
+	system: string;
+}> &
+	RuntimePromptSource;
 
 export type AiSdkTextGenerationResult = {
 	readonly text: string;

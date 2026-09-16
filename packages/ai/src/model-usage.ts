@@ -1,5 +1,6 @@
 import {
 	isNonNegativeInteger,
+	isNumber,
 	isObjectLike,
 	isUndefined,
 } from "@wincode/runtime-utils";
@@ -20,10 +21,10 @@ export const modelUsageSchema = z
 const TOKENS_PER_MILLION = 1_000_000;
 
 type UsagePricing = ModelCost | ModelMetadataEntry;
-type ResolvedUsagePricing = {
-	readonly cost: ModelCost | undefined;
-	readonly tiers: readonly ModelCostTier[] | undefined;
-};
+type ResolvedUsagePricing = Readonly<{
+	cost: ModelCost | undefined;
+	tiers: readonly ModelCostTier[] | undefined;
+}>;
 
 const isModelCost = (value: unknown): value is ModelCost => {
 	if (!isObjectLike(value)) {
@@ -31,9 +32,9 @@ const isModelCost = (value: unknown): value is ModelCost => {
 	}
 	return (
 		"input" in value &&
-		typeof value.input === "number" &&
+		isNumber(value.input) &&
 		"output" in value &&
-		typeof value.output === "number"
+		isNumber(value.output)
 	);
 };
 

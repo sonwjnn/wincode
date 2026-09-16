@@ -7,33 +7,35 @@ import { parseSkillFile } from "./frontmatter";
 import { hashSkillBody } from "./hash";
 import type { Skill, SkillScope } from "./types";
 
-export type SkillRootDescriptor = {
+export type SkillRootDescriptor = Readonly<{
 	/** Directory whose direct child directories may contain SKILL.md. */
-	readonly path: string;
+	path: string;
 	/** Application scope used by the CLI when applying policy. */
-	readonly scope: SkillScope;
+	scope: SkillScope;
 	/** Human-readable origin label supplied by the composition root. */
-	readonly source: string;
+	source: string;
 	/** Higher values win when Skills share a name. */
-	readonly precedence: number;
-};
+	precedence: number;
+}>;
 
-export type SkillCandidate = {
-	readonly filePath: string;
-	readonly root: string;
-	readonly scope: SkillScope;
-	readonly source: string;
-	readonly precedence: number;
-};
+export type SkillCandidate = Readonly<{
+	filePath: string;
+	root: string;
+	scope: SkillScope;
+	source: string;
+	precedence: number;
+}>;
 
-export type LoadedSkill = SetReadonly<
-	SetRequired<Skill, "baseDirectory" | "contentHash">,
-	"baseDirectory" | "contentHash"
-> & {
-	readonly precedence: number;
-	readonly root: string;
-	readonly source: string;
-};
+export type LoadedSkill = Readonly<
+	SetReadonly<
+		SetRequired<Skill, "baseDirectory" | "contentHash">,
+		"baseDirectory" | "contentHash"
+	> & {
+		precedence: number;
+		root: string;
+		source: string;
+	}
+>;
 
 const compareText = (first: string, second: string): number => {
 	if (first < second) {

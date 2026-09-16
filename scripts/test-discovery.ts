@@ -1,23 +1,24 @@
 import { readdirSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
+import type { ReadonlyDeep } from "type-fest";
 
 export type TestClassification = "default" | "e2e" | "external";
 
-export type DiscoveredTestFile = {
-	readonly classification: TestClassification;
-	readonly packageName: string;
-	readonly path: string;
-};
+export type DiscoveredTestFile = Readonly<{
+	classification: TestClassification;
+	packageName: string;
+	path: string;
+}>;
 
-export type TestDiscoveryIssue = {
-	readonly message: string;
-	readonly path: string;
-};
+export type TestDiscoveryIssue = Readonly<{
+	message: string;
+	path: string;
+}>;
 
-export type TestDiscovery = {
-	readonly files: readonly DiscoveredTestFile[];
-	readonly issues: readonly TestDiscoveryIssue[];
-};
+export type TestDiscovery = ReadonlyDeep<{
+	files: readonly DiscoveredTestFile[];
+	issues: readonly TestDiscoveryIssue[];
+}>;
 
 const SUPPORTED_EXTENSIONS: Record<string, true> = { ts: true, tsx: true };
 const UNSUPPORTED_CLASSIFICATIONS: Record<string, true> = {

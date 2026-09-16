@@ -507,10 +507,10 @@ export type ModelId = Tagged<string, "ModelId">;
 export type SupportedChatModelId = ModelId & SupportedChatModel["id"];
 export type ModelCatalog = readonly SupportedChatModel[];
 
-export type ChatModelSelection = {
+export type ChatModelSelection = Readonly<{
 	modelId: SupportedChatModelId;
 	providerId: ConnectionProviderId;
-};
+}>;
 
 export const supportedChatModelIds = modelCatalog.map((model) => model.id) as [
 	SupportedChatModelId,

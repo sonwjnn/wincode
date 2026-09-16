@@ -1,4 +1,5 @@
 import { isObjectLike, isUndefined } from "@wincode/runtime-utils";
+import type { ReadonlyDeep } from "type-fest";
 import { SKILL_TOOL_INPUT_JSON_SCHEMA } from "./context";
 import { hashSkillBody } from "./hash";
 import type {
@@ -22,41 +23,41 @@ export type SkillCatalogDiagnosticCode =
 	| "invalid-skill"
 	| "catalog-over-budget";
 
-export type SkillCatalogDiagnostic = {
-	readonly code: SkillCatalogDiagnosticCode;
-	readonly message: string;
-	readonly skillName?: string;
-};
+export type SkillCatalogDiagnostic = Readonly<{
+	code: SkillCatalogDiagnosticCode;
+	message: string;
+	skillName?: string;
+}>;
 
 /**
  * One permitted Skill in the permission-filtered catalog. The body is part of
  * the execution-turn snapshot: it is validated here and never re-read while
  * the execution is active.
  */
-export type SkillCatalogEntry = {
-	readonly baseDirectory: string;
-	readonly body: string;
-	readonly contentHash: string;
-	readonly description: string;
-	readonly filePath: string;
-	readonly name: string;
-};
+export type SkillCatalogEntry = Readonly<{
+	baseDirectory: string;
+	body: string;
+	contentHash: string;
+	description: string;
+	filePath: string;
+	name: string;
+}>;
 
-export type SkillCatalog = {
-	readonly diagnostics: readonly SkillCatalogDiagnostic[];
-	readonly entries: readonly SkillCatalogEntry[];
+export type SkillCatalog = ReadonlyDeep<{
+	diagnostics: readonly SkillCatalogDiagnostic[];
+	entries: readonly SkillCatalogEntry[];
 	/** False when the effective catalog exceeds its total budget. */
-	readonly toolEnabled: boolean;
-};
+	toolEnabled: boolean;
+}>;
 
-export type SkillActivationSnapshot = {
-	readonly baseDirectory: string;
-	readonly body: string;
-	readonly contentHash: string;
-	readonly name: string;
-	readonly resourcePaths: readonly string[];
-	readonly source: SkillActivationSource;
-};
+export type SkillActivationSnapshot = ReadonlyDeep<{
+	baseDirectory: string;
+	body: string;
+	contentHash: string;
+	name: string;
+	resourcePaths: readonly string[];
+	source: SkillActivationSource;
+}>;
 
 export type SkillActivationResult =
 	| {

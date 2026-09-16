@@ -25,6 +25,12 @@ export const isBoolean = (value: unknown): value is boolean =>
 export const isString = (value: unknown): value is string =>
 	typeof value === "string";
 
+export const isNumber = (value: unknown): value is number =>
+	typeof value === "number";
+
+export const isInteger = (value: unknown): value is number =>
+	isNumber(value) && Number.isInteger(value);
+
 export function isLength(value: unknown): boolean {
 	return Number.isSafeInteger(value) && (value as number) >= 0;
 }

@@ -3,6 +3,7 @@ import type { AgentId } from "@wincode/agent-core";
 import {
 	isArray,
 	isNull,
+	isNumber,
 	isPlainObject,
 	isString,
 	isUndefined,
@@ -394,7 +395,7 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 	const [expanded, setExpanded] = useState(false);
 	const output = getToolOutputRecord(part);
 	const rawText = formatUnknown(output.output);
-	const exitCode = typeof output.exitCode === "number" ? output.exitCode : null;
+	const exitCode = isNumber(output.exitCode) ? output.exitCode : null;
 	const timedOut = output.timedOut === true;
 	const truncated = output.truncated === true;
 	const command = stripControlCharacters(

@@ -1,4 +1,4 @@
-import { isArray, isNull, isUndefined } from "@wincode/runtime-utils";
+import { isArray, isNull, isNumber, isUndefined } from "@wincode/runtime-utils";
 import type { ReadonlyDeep } from "type-fest";
 import { z } from "zod";
 import type { ModelMetadataEntry } from "./model-metadata";
@@ -462,7 +462,7 @@ export const resolveReasoning = (
 		};
 		const hasBudget =
 			"thinkingBudget" in thinkingConfig &&
-			typeof thinkingConfig.thinkingBudget === "number" &&
+			isNumber(thinkingConfig.thinkingBudget) &&
 			thinkingConfig.thinkingBudget > 0;
 		return {
 			...(disabled

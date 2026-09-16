@@ -1,4 +1,5 @@
 import { isUndefined } from "@wincode/runtime-utils";
+import type { ReadonlyDeep } from "type-fest";
 import { z } from "zod";
 import {
 	type ModelProviderOptions,
@@ -46,30 +47,32 @@ export type CatalogModelForProvider<P extends ConnectionProviderId> = Extract<
 export type ModelIdForProvider<P extends ConnectionProviderId> =
 	CatalogModelForProvider<P>["id"] & SupportedChatModelId;
 
-export type ModelTargetFor<P extends ConnectionProviderId> = {
-	readonly authorization: ModelAuthorizationByProvider[P];
-	readonly maxOutputTokens?: number;
-	readonly modelId: ModelIdForProvider<P>;
-	readonly providerId: P;
-	readonly providerOptions?: ProviderOptionsFor<P>;
-	readonly variant?: ModelVariant;
-};
+export type ModelTargetFor<P extends ConnectionProviderId> = Readonly<{
+	authorization: ModelAuthorizationByProvider[P];
+	maxOutputTokens?: number;
+	modelId: ModelIdForProvider<P>;
+	providerId: P;
+	providerOptions?: ProviderOptionsFor<P>;
+	variant?: ModelVariant;
+}>;
 
 /**
  * The effective model inputs for one Agent Turn. This object is transient:
  * callers must not persist, log, or expose its authorization material.
  */
-export type ModelTarget = {
-	[P in ConnectionProviderId]: ModelTargetFor<P>;
-}[ConnectionProviderId];
-type ModelTargetSchemaOutput = {
-	readonly authorization: ModelAuthorization;
-	readonly maxOutputTokens?: number;
-	readonly modelId: SupportedChatModelId;
-	readonly providerId: ConnectionProviderId;
-	readonly providerOptions?: ModelProviderOptions;
-	readonly variant?: ModelVariant;
-};
+export type ModelTarget = ReadonlyDeep<
+	{
+		[P in ConnectionProviderId]: ModelTargetFor<P>;
+	}[ConnectionProviderId]
+>;
+type ModelTargetSchemaOutput = Readonly<{
+	authorization: ModelAuthorization;
+	maxOutputTokens?: number;
+	modelId: SupportedChatModelId;
+	providerId: ConnectionProviderId;
+	providerOptions?: ModelProviderOptions;
+	variant?: ModelVariant;
+}>;
 
 export const apiKeyModelAuthorizationSchema = z
 	.object({ kind: z.literal("api-key"), apiKey: z.string().min(1) })

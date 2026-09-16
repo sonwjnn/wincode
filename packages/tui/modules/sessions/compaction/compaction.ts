@@ -3,6 +3,7 @@ import { getModelFailureMessage } from "@wincode/ai/model-failures";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import {
 	isNull,
+	isNumber,
 	isObjectLike,
 	isString,
 	isUndefined,
@@ -310,9 +311,7 @@ const getNumberField = (value: unknown, key: string): number | undefined => {
 		return;
 	}
 	const field = Reflect.get(value, key);
-	return typeof field === "number" && Number.isFinite(field)
-		? field
-		: undefined;
+	return isNumber(field) && Number.isFinite(field) ? field : undefined;
 };
 
 const getDataUrlByteLength = (url: string): number => {

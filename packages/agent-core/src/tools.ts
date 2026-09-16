@@ -19,10 +19,10 @@ export const isToolCallId = (value: unknown): value is ToolCallId =>
  * Framework-neutral JSON Schema carrier. Runtime adapters may consume this
  * directly without forcing the core contract to depend on their schema type.
  */
-export type ToolJsonSchema = {
-	readonly jsonSchema: JsonObject;
-	readonly validate?: (value: unknown) => Promisable<ToolValidationResult>;
-};
+export type ToolJsonSchema = Readonly<{
+	jsonSchema: JsonObject;
+	validate?: (value: unknown) => Promisable<ToolValidationResult>;
+}>;
 
 type ToolValidationResult =
 	| { readonly success: true; readonly value: unknown }
@@ -32,12 +32,12 @@ type ToolValidationResult =
  * The SDK-neutral declaration of one tool an Agent may invoke. Concrete tools
  * normally use Zod; dynamic catalogs may preserve their source JSON Schema.
  */
-export type ToolDefinition = {
-	readonly description: string;
-	readonly inputSchema: z.ZodType | ToolJsonSchema;
-	readonly name: string;
-	readonly outputSchema?: z.ZodType;
-};
+export type ToolDefinition = Readonly<{
+	description: string;
+	inputSchema: z.ZodType | ToolJsonSchema;
+	name: string;
+	outputSchema?: z.ZodType;
+}>;
 
 const isSchema = (value: unknown): value is z.ZodType | ToolJsonSchema => {
 	if (!isObjectLike(value)) {
@@ -71,16 +71,16 @@ export const isToolDefinition = (value: unknown): value is ToolDefinition => {
 };
 
 /** One request to execute a Tool Call's resolved executor. */
-export type ToolCallRequest = {
-	readonly input: unknown;
-	readonly toolCallId: ToolCallId;
-};
+export type ToolCallRequest = Readonly<{
+	input: unknown;
+	toolCallId: ToolCallId;
+}>;
 
 /** One Tool Call finished successfully with its output. */
-export type ToolCallSuccess = {
-	readonly output: unknown;
-	readonly type: "success";
-};
+export type ToolCallSuccess = Readonly<{
+	output: unknown;
+	type: "success";
+}>;
 
 /**
  * One Tool Call finished without executing its effect: a policy deny or
@@ -89,10 +89,10 @@ export type ToolCallSuccess = {
  * produced it (Tool Gate wording, runner failure text, or the runtime's
  * safe fallback).
  */
-export type ToolCallFailure = {
-	readonly errorText: string;
-	readonly type: "failure";
-};
+export type ToolCallFailure = Readonly<{
+	errorText: string;
+	type: "failure";
+}>;
 
 export type ToolCallOutput = ToolCallSuccess | ToolCallFailure;
 
@@ -138,10 +138,10 @@ export type ToolExecutor = (
  * to the Agent Runtime; Tool Permission is still evaluated against each
  * actual Tool Call inside the executor.
  */
-export type ResolvedTool = {
-	readonly definition: ToolDefinition;
-	readonly execute: ToolExecutor;
-};
+export type ResolvedTool = Readonly<{
+	definition: ToolDefinition;
+	execute: ToolExecutor;
+}>;
 
 export const isResolvedTool = (value: unknown): value is ResolvedTool => {
 	if (!isObjectLike(value)) {

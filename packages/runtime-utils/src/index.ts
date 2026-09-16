@@ -1,5 +1,12 @@
 import type { JsonObject, JsonValue, UnknownRecord } from "type-fest";
-import { isArray, isObjectLike, isPlainObject, isString } from "./guards";
+import {
+	isArray,
+	isBoolean,
+	isNull,
+	isObjectLike,
+	isPlainObject,
+	isString,
+} from "./guards";
 
 export { getErrorMessage } from "./errors";
 export * from "./guards";
@@ -11,8 +18,8 @@ export type JsonValueValidationOptions = Readonly<{
 const isJsonPrimitive = (
 	value: unknown
 ): value is null | boolean | number | string =>
-	value === null ||
-	typeof value === "boolean" ||
+	isNull(value) ||
+	isBoolean(value) ||
 	(typeof value === "number" && Number.isFinite(value)) ||
 	isString(value);
 

@@ -3,6 +3,7 @@ import {
 	isArray,
 	isBoolean,
 	isNull,
+	isNumber,
 	isPlainObject,
 	isString,
 	isUndefined,
@@ -131,7 +132,7 @@ function safeJson(
 	if (isNull(value) || isString(value) || isBoolean(value)) {
 		return value;
 	}
-	if (typeof value === "number") {
+	if (isNumber(value)) {
 		return Number.isFinite(value) ? value : null;
 	}
 	if (typeof value !== "object" || depth > 32 || ancestors.has(value)) {

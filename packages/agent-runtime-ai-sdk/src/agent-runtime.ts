@@ -177,20 +177,20 @@ const createInternalAbortFailure = (
 	type: "agent-turn-failed",
 });
 
-type AiSdkTextStreamPart = {
-	readonly dynamic?: unknown;
-	readonly error?: unknown;
-	readonly input?: unknown;
-	readonly invalid?: unknown;
-	readonly output?: unknown;
-	readonly text?: unknown;
-	readonly toolCallId?: unknown;
-	readonly toolMetadata?: unknown;
-	readonly toolName?: unknown;
-	readonly totalUsage?: unknown;
-	readonly type: string;
-	readonly usage?: unknown;
-};
+type AiSdkTextStreamPart = Readonly<{
+	dynamic?: unknown;
+	error?: unknown;
+	input?: unknown;
+	invalid?: unknown;
+	output?: unknown;
+	text?: unknown;
+	toolCallId?: unknown;
+	toolMetadata?: unknown;
+	toolName?: unknown;
+	totalUsage?: unknown;
+	type: string;
+	usage?: unknown;
+}>;
 const isAiSdkTextStreamPart = (
 	value: unknown
 ): value is AiSdkTextStreamPart => {

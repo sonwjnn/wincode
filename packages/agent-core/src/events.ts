@@ -39,84 +39,95 @@ export type AgentTurnEventBase = Readonly<{
 }>;
 
 /** The turn began. The first event of a run. */
-export type AgentTurnStartedEvent = AgentTurnEventBase & {
-	readonly agentId: AgentId;
-	readonly delegation?: AgentTurnDelegation;
-	readonly startedAt: number;
-	readonly type: "agent-turn-started";
-};
+export type AgentTurnStartedEvent = AgentTurnEventBase &
+	Readonly<{
+		agentId: AgentId;
+		delegation?: AgentTurnDelegation;
+		startedAt: number;
+		type: "agent-turn-started";
+	}>;
 
 /** One model invocation within the turn started. */
-export type ModelStepStartedEvent = AgentTurnEventBase & {
-	readonly modelId?: ModelId;
-	readonly stepId: ModelStepId;
-	readonly type: "model-step-started";
-};
+export type ModelStepStartedEvent = AgentTurnEventBase &
+	Readonly<{
+		modelId?: ModelId;
+		stepId: ModelStepId;
+		type: "model-step-started";
+	}>;
 
 /** A streamed text delta from the current Model Step. */
-export type TextDeltaEvent = AgentTurnEventBase & {
-	readonly delta: string;
-	readonly type: "text-delta";
-};
+export type TextDeltaEvent = AgentTurnEventBase &
+	Readonly<{
+		delta: string;
+		type: "text-delta";
+	}>;
 
 /** A streamed reasoning delta from the current Model Step. */
-export type ReasoningDeltaEvent = AgentTurnEventBase & {
-	readonly delta: string;
-	readonly type: "reasoning-delta";
-};
+export type ReasoningDeltaEvent = AgentTurnEventBase &
+	Readonly<{
+		delta: string;
+		type: "reasoning-delta";
+	}>;
 
 /** One model invocation finished with its usage. */
-export type ModelStepFinishedEvent = AgentTurnEventBase & {
-	readonly modelId?: ModelId;
-	readonly stepId: ModelStepId;
-	readonly type: "model-step-finished";
-	readonly usage?: ModelUsage;
-};
+export type ModelStepFinishedEvent = AgentTurnEventBase &
+	Readonly<{
+		modelId?: ModelId;
+		stepId: ModelStepId;
+		type: "model-step-finished";
+		usage?: ModelUsage;
+	}>;
 
 /** The Agent requested one Tool Call with a complete input. */
-export type ToolCallStartedEvent = AgentTurnEventBase & {
-	readonly input: unknown;
-	readonly toolCallId: ToolCallId;
-	readonly toolName: string;
-	readonly type: "tool-call-started";
-};
+export type ToolCallStartedEvent = AgentTurnEventBase &
+	Readonly<{
+		input: unknown;
+		toolCallId: ToolCallId;
+		toolName: string;
+		type: "tool-call-started";
+	}>;
 
 /** One Tool Call reached its output, failure, deny, or rejection outcome. */
-export type ToolCallFinishedEvent = AgentTurnEventBase & {
-	readonly outcome: ToolCallOutput;
-	readonly toolCallId: ToolCallId;
-	readonly toolName: string;
-	readonly type: "tool-call-finished";
-};
+export type ToolCallFinishedEvent = AgentTurnEventBase &
+	Readonly<{
+		outcome: ToolCallOutput;
+		toolCallId: ToolCallId;
+		toolName: string;
+		type: "tool-call-finished";
+	}>;
 
 /** The turn reached its terminal `completed` outcome. */
-export type AgentTurnCompletedEvent = AgentTurnEventBase & {
-	readonly finishedAt: number;
-	readonly type: "agent-turn-completed";
-	readonly usage?: ModelUsage;
-};
+export type AgentTurnCompletedEvent = AgentTurnEventBase &
+	Readonly<{
+		finishedAt: number;
+		type: "agent-turn-completed";
+		usage?: ModelUsage;
+	}>;
 
 /** The caller cancelled the turn. */
-export type AgentTurnCancelledEvent = AgentTurnEventBase & {
-	readonly failure: OperationalFailure;
-	readonly finishedAt: number;
-	readonly type: "agent-turn-cancelled";
-};
+export type AgentTurnCancelledEvent = AgentTurnEventBase &
+	Readonly<{
+		failure: OperationalFailure;
+		finishedAt: number;
+		type: "agent-turn-cancelled";
+	}>;
 
 /** The turn stopped without completion, failure, or caller cancellation. */
-export type AgentTurnInterruptedEvent = AgentTurnEventBase & {
-	readonly failure: OperationalFailure;
-	readonly finishedAt: number;
-	readonly reason: AgentTurnInterruptionReason;
-	readonly type: "agent-turn-interrupted";
-};
+export type AgentTurnInterruptedEvent = AgentTurnEventBase &
+	Readonly<{
+		failure: OperationalFailure;
+		finishedAt: number;
+		reason: AgentTurnInterruptionReason;
+		type: "agent-turn-interrupted";
+	}>;
 
 /** The turn reached an expected operational failure. */
-export type AgentTurnFailedEvent = AgentTurnEventBase & {
-	readonly failure: OperationalFailure;
-	readonly finishedAt: number;
-	readonly type: "agent-turn-failed";
-};
+export type AgentTurnFailedEvent = AgentTurnEventBase &
+	Readonly<{
+		failure: OperationalFailure;
+		finishedAt: number;
+		type: "agent-turn-failed";
+	}>;
 
 export type AgentTurnTerminalEvent =
 	| AgentTurnCancelledEvent

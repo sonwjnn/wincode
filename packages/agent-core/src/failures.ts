@@ -1,4 +1,5 @@
 import {
+	isInteger,
 	isNonEmptyString,
 	isObjectLike,
 	isString,
@@ -112,13 +113,10 @@ const isAllowedDetails = (
 	);
 	const hasInvalidRetryAfterMs =
 		!isUndefined(details.retryAfterMs) &&
-		(typeof details.retryAfterMs !== "number" ||
-			!Number.isInteger(details.retryAfterMs) ||
-			details.retryAfterMs <= 0);
+		(!isInteger(details.retryAfterMs) || details.retryAfterMs <= 0);
 	const hasInvalidStatusCode =
 		!isUndefined(details.statusCode) &&
-		(typeof details.statusCode !== "number" ||
-			!Number.isInteger(details.statusCode) ||
+		(!isInteger(details.statusCode) ||
 			details.statusCode < 100 ||
 			details.statusCode > 599);
 	if (

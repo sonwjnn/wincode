@@ -1,3 +1,4 @@
+import type { ReadonlyDeep } from "type-fest";
 import { z } from "zod";
 
 export const RESOURCE_LIMIT_PROFILES = [
@@ -12,42 +13,42 @@ export const resourceLimitProfileSchema = z.enum(RESOURCE_LIMIT_PROFILES);
 export const DEFAULT_RESOURCE_LIMIT_PROFILE = "standard" as const;
 export const RESOURCE_LIMIT_PERMISSION_ACTION = "resource_limits" as const;
 
-export type ToolResourceLimits = {
-	readonly profile: ResourceLimitProfile;
-	readonly read: {
-		readonly maxOutputBytes: number;
-		readonly maxDirectoryOutputBytes: number;
+export type ToolResourceLimits = ReadonlyDeep<{
+	profile: ResourceLimitProfile;
+	read: {
+		maxOutputBytes: number;
+		maxDirectoryOutputBytes: number;
 	};
-	readonly glob: {
-		readonly maxCandidates: number;
-		readonly maxDurationMs: number;
-		readonly maxOutputBytes: number;
+	glob: {
+		maxCandidates: number;
+		maxDurationMs: number;
+		maxOutputBytes: number;
 	};
-	readonly grep: {
-		readonly maxDepth: number;
-		readonly maxFileBytes: number;
-		readonly maxFiles: number;
-		readonly maxLineBytes: number;
-		readonly maxMatches: number;
-		readonly maxOutputBytes: number;
-		readonly maxDurationMs: number;
+	grep: {
+		maxDepth: number;
+		maxFileBytes: number;
+		maxFiles: number;
+		maxLineBytes: number;
+		maxMatches: number;
+		maxOutputBytes: number;
+		maxDurationMs: number;
 	};
-	readonly shell: {
-		readonly defaultTimeoutSeconds: number;
-		readonly maxTimeoutSeconds: number;
-		readonly maxCommandChars: number;
-		readonly maxCwdChars: number;
-		readonly maxOutputBytes: number;
+	shell: {
+		defaultTimeoutSeconds: number;
+		maxTimeoutSeconds: number;
+		maxCommandChars: number;
+		maxCwdChars: number;
+		maxOutputBytes: number;
 	};
-	readonly edit: {
-		readonly maxDiffBytes: number;
-		readonly maxDiffLines: number;
+	edit: {
+		maxDiffBytes: number;
+		maxDiffLines: number;
 	};
-};
-export type ResourceLimitOptions = {
-	readonly allowExternalPath?: boolean;
-	readonly resourceLimits?: ToolResourceLimits;
-};
+}>;
+export type ResourceLimitOptions = Readonly<{
+	allowExternalPath?: boolean;
+	resourceLimits?: ToolResourceLimits;
+}>;
 
 export const TOOL_RESOURCE_LIMITS = {
 	standard: {

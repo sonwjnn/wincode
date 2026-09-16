@@ -3,6 +3,7 @@ import type { ChatModelSelection } from "@wincode/ai/models";
 import {
 	isBoolean,
 	isNull,
+	isNumber,
 	isObjectLike,
 	isUndefined,
 } from "@wincode/runtime-utils";
@@ -110,7 +111,7 @@ const BOOLEAN_SETTING_KEYS = [
 ] as const;
 
 const isPositiveInteger = (value: unknown): value is number =>
-	typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+	isNumber(value) && Number.isSafeInteger(value) && value > 0;
 
 const isSettingKey = (value: string): value is CompactionSettingKey =>
 	Object.hasOwn(DEFAULT_COMPACTION_SETTINGS, value);
