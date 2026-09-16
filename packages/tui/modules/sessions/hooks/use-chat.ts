@@ -90,6 +90,7 @@ import { resolveChatModelTarget } from "../../model-target";
 import {
 	createSessionEngine,
 	type SessionChatStatus,
+	type SessionCompactionCommand,
 } from "../engine/session-engine";
 import type { SessionFilePart } from "../message";
 import { createSessionController } from "../session-controller";
@@ -152,21 +153,9 @@ const isBenignCompactionError = (error: unknown): boolean =>
 	error instanceof SessionCompactionError &&
 	(error.code === "history-too-short" || error.code === "not-needed");
 
-const waitForCompaction = async (
-	operation: Promise<CompactSessionResult> | null
-): Promise<string | null> => {
-	if (!operation) {
-		return null;
-	}
-	try {
-		await operation;
-		return null;
-	} catch (error) {
-		return isBenignCompactionError(error)
-			? null
-			: getErrorMessage(error, "Session compaction failed.");
-	}
-};
+/** Another compaction already carries the work this request asked for. */
+const isInFlightCompaction = (error: unknown): boolean =>
+	error instanceof SessionCompactionError && error.code === "in-flight";
 /** Attachment hydration ceilings resolved for one submission. */
 type AttachmentBudget = Pick<
 	AttachmentHydrationOptions,
@@ -524,18 +513,17 @@ type SessionPreparationResult =
 const prepareSessionSubmission = async ({
 	getActiveMessages,
 	compactionModule,
-	compactionOperation,
 	createTurnSkillExecution,
 	getCompactionSettings,
 	input,
 	runCompaction,
 	resolveSkillForSubmit,
 	setPreparingMessage,
+	settleCompaction,
 	signal,
 }: {
 	getActiveMessages: () => readonly SessionMessage[];
 	compactionModule: SessionCompactionModule;
-	compactionOperation: Promise<CompactSessionResult> | null;
 	createTurnSkillExecution: SubmitSkillExecutionFactory;
 	getCompactionSettings: (
 		selection: ChatModelSelection
@@ -544,19 +532,28 @@ const prepareSessionSubmission = async ({
 	runCompaction: RunCompaction;
 	resolveSkillForSubmit: SubmitSkillResolver;
 	setPreparingMessage: (value: boolean) => void;
+	settleCompaction: () => Promise<Error | null>;
 	signal: AbortSignal;
 }): Promise<SessionPreparationResult> => {
 	try {
-		const preparationError = await waitForCompaction(compactionOperation);
-		if (!isNull(preparationError)) {
-			return { kind: "rejected", reason: preparationError };
-		}
+		// Settings and the attachment budget are resolved before anything joins a
+		// compaction, so a compaction that starts while they resolve is joined by
+		// the settle that follows rather than raced by this turn.
 		const settings = await getCompactionSettings(input.model);
 		const attachmentBudget: AttachmentBudget = {
 			maxAttachments: settings.maxMediaAttachments,
 			maxBytes: settings.maxMediaBytes,
 			maxTokens: settings.maxMediaTokens,
 		};
+		const compactionError = await settleCompaction();
+		if (
+			!(isNull(compactionError) || isBenignCompactionError(compactionError))
+		) {
+			return {
+				kind: "rejected",
+				reason: getErrorMessage(compactionError, "Session compaction failed."),
+			};
+		}
 		const compactionResult = await prepareCompactionBeforeSubmit({
 			activeMessages: getActiveMessages(),
 			compactionModule,
@@ -1319,88 +1316,6 @@ export function useChat(
 		[closeApprovals, toolGateState]
 	);
 
-	const [engine] = useState(() =>
-		createSessionEngine({
-			initialCompactions,
-			initialContext: initialActiveMessages,
-			initialTranscript: initialMessages,
-		})
-	);
-	const {
-		applyContext,
-		beginExecution,
-		endExecution,
-		getSnapshot,
-		mergeTranscript,
-		recordCompaction,
-		setCatalogDiagnostic,
-		setCompacting,
-		setCompactionError,
-		setError,
-		setExecutionViewState,
-		setPreparingMessage,
-		setStatus,
-	} = engine;
-	// Bound through a subscription rather than `useSyncExternalStore`: the
-	// synchronous re-render that hook performs inside the submit path stalls the
-	// automatic-compaction journey in the OpenTUI test renderer (`useSyncExternalStore`
-	// does receive updates in this renderer in isolation, so this is about that
-	// interaction, not about the renderer dropping notifications). The engine
-	// stays the only writer; this hook mirrors its Session Snapshot for
-	// rendering and re-reads it once after subscribing so a change between render
-	// and effect is not lost.
-	const [state, setState] = useState(getSnapshot);
-	useEffect(() => {
-		setState(getSnapshot());
-		return engine.subscribe(() => setState(getSnapshot()));
-	}, [engine, getSnapshot]);
-	const compactionAbortRef = useRef<AbortController | null>(null);
-	const compactionOperationRef = useRef<Promise<CompactSessionResult> | null>(
-		null
-	);
-	const overflowAttemptRef = useRef(0);
-	const sessionRef = useRef<SessionOperation | null>(null);
-	const providerErrorRef = useRef<
-		(error: unknown, execution: TurnExecution) => void
-	>(() => undefined);
-
-	/**
-	 * Starts an Agent Turn execution: its scope and its engine registration are
-	 * created together, and its delegation bookkeeping is created with it before
-	 * the turn runs, so a re-render can neither rebuild nor reset either.
-	 */
-	const startExecution = useCallback(
-		(input: BeginTurnExecutionInput): TurnExecution => {
-			const execution = createTurnExecution(input);
-			if (isUndefined(execution.parent)) {
-				primaryExecutionRef.current = execution;
-			}
-			beginExecution(execution);
-			return execution;
-		},
-		[beginExecution]
-	);
-	const endExecutionScope = useCallback(
-		(execution: TurnExecution): void => {
-			const snapshot = execution.mcpSnapshot;
-			if (!isNull(snapshot)) {
-				mcp.releaseSnapshot?.(snapshot);
-				execution.mcpSnapshot = null;
-			}
-			endExecution(execution.turnId);
-		},
-		[endExecution, mcp]
-	);
-	const executionHost = useMemo<TurnExecutionHost>(
-		() => ({
-			begin: startExecution,
-			end: endExecutionScope,
-			publishViewState: (execution, viewState) =>
-				setExecutionViewState(execution.turnId, viewState),
-		}),
-		[endExecutionScope, setExecutionViewState, startExecution]
-	);
-
 	const estimateRuntimeRequestOverheadTokens = useCallback((): number => {
 		const execution = primaryExecutionRef.current;
 		const resolvedAgent = execution?.resolvedAgent;
@@ -1447,79 +1362,136 @@ export function useChat(
 		(selection: ChatModelSelection) => getSettingsForModel(selection),
 		[getSettingsForModel]
 	);
+	/**
+	 * The settings one compaction command runs with: the resolved compaction
+	 * settings plus the request overhead of the Agent Turn execution in flight.
+	 */
+	const compactionSettingsFor = useCallback(
+		async (
+			model: ChatModelSelection
+		): Promise<SessionCompactionCommand["settings"]> => {
+			const settings = await getCompactionSettings(model);
+			return {
+				compactionOverheadTokens: estimateRuntimeRequestOverheadTokens(),
+				enabled: settings.enabled,
+				keepRecentTokens: settings.keepRecentTokens,
+				maxMediaAttachments: settings.maxMediaAttachments,
+				maxMediaBytes: settings.maxMediaBytes,
+				maxMediaTokens: settings.maxMediaTokens,
+				modelContextLimit: settings.modelContextLimit,
+				reserveTokens: settings.reserveTokens,
+				thresholdTokens: settings.thresholdTokens,
+			};
+		},
+		[estimateRuntimeRequestOverheadTokens, getCompactionSettings]
+	);
+
+	const [engine] = useState(() =>
+		createSessionEngine({
+			compaction: compactionModule,
+			initialCompactions,
+			initialContext: initialActiveMessages,
+			initialTranscript: initialMessages,
+			sessionId,
+		})
+	);
+	const {
+		applyContext,
+		beginExecution,
+		endExecution,
+		getSnapshot,
+		mergeTranscript,
+		setCatalogDiagnostic,
+		setCompactionError,
+		setError,
+		setExecutionViewState,
+		setPreparingMessage,
+		setStatus,
+	} = engine;
+	// Bound through a subscription rather than `useSyncExternalStore`: the
+	// synchronous re-render that hook performs inside the submit path stalls the
+	// automatic-compaction journey in the OpenTUI test renderer (`useSyncExternalStore`
+	// does receive updates in this renderer in isolation, so this is about that
+	// interaction, not about the renderer dropping notifications). The engine
+	// stays the only writer; this hook mirrors its Session Snapshot for
+	// rendering and re-reads it once after subscribing so a change between render
+	// and effect is not lost.
+	const [state, setState] = useState(getSnapshot);
+	useEffect(() => {
+		setState(getSnapshot());
+		return engine.subscribe(() => setState(getSnapshot()));
+	}, [engine, getSnapshot]);
+	const overflowAttemptRef = useRef(0);
+	const sessionRef = useRef<SessionOperation | null>(null);
+	const providerErrorRef = useRef<
+		(error: unknown, execution: TurnExecution) => void
+	>(() => undefined);
+
+	/**
+	 * Starts an Agent Turn execution: its scope and its engine registration are
+	 * created together, and its delegation bookkeeping is created with it before
+	 * the turn runs, so a re-render can neither rebuild nor reset either.
+	 */
+	const startExecution = useCallback(
+		(input: BeginTurnExecutionInput): TurnExecution => {
+			const execution = createTurnExecution(input);
+			if (isUndefined(execution.parent)) {
+				primaryExecutionRef.current = execution;
+			}
+			beginExecution(execution);
+			return execution;
+		},
+		[beginExecution]
+	);
+	const endExecutionScope = useCallback(
+		(execution: TurnExecution): void => {
+			const snapshot = execution.mcpSnapshot;
+			if (!isNull(snapshot)) {
+				mcp.releaseSnapshot?.(snapshot);
+				execution.mcpSnapshot = null;
+			}
+			endExecution(execution.turnId);
+		},
+		[endExecution, mcp]
+	);
+	const executionHost = useMemo<TurnExecutionHost>(
+		() => ({
+			begin: startExecution,
+			end: endExecutionScope,
+			publishViewState: (execution, viewState) =>
+				setExecutionViewState(execution.turnId, viewState),
+		}),
+		[endExecutionScope, setExecutionViewState, startExecution]
+	);
 	const runCompaction = useCallback(
-		({
+		async ({
 			compactionMessages,
 			focus,
 			model,
 			nextMessages,
 			trigger,
 			variant,
-		}: CompactOptions): Promise<CompactSessionResult> => {
-			const current = compactionOperationRef.current;
-			if (current) {
-				return current;
-			}
-			const controller = new AbortController();
-			compactionAbortRef.current = controller;
-			const operation = (async () => {
-				setCompacting(true);
-				const transcriptMessages = nextMessages
-					? mergeTranscript(nextMessages)
-					: getSnapshot().transcript;
-				const sessionMessages = compactionMessages
-					? [...compactionMessages]
-					: transcriptMessages;
-				const settings = await getCompactionSettings(model);
-				const result = await compactionModule.compact({
-					session: { messages: sessionMessages, sessionId },
-					focus,
-					model,
-					...(isUndefined(variant) ? {} : { variant }),
-					settings: {
-						compactionOverheadTokens: estimateRuntimeRequestOverheadTokens(),
-						enabled: settings.enabled,
-						keepRecentTokens: settings.keepRecentTokens,
-						maxMediaAttachments: settings.maxMediaAttachments,
-						maxMediaBytes: settings.maxMediaBytes,
-						maxMediaTokens: settings.maxMediaTokens,
-						modelContextLimit: settings.modelContextLimit,
-						reserveTokens: settings.reserveTokens,
-						thresholdTokens: settings.thresholdTokens,
-					},
-					signal: controller.signal,
-					trigger,
-				});
-				setCompactionError(null);
-				applyContext(result.activeMessages);
-				recordCompaction(result.entry);
-				return result;
-			})().finally(() => {
-				if (compactionOperationRef.current === operation) {
-					compactionOperationRef.current = null;
-				}
-				compactionAbortRef.current = null;
-				setCompacting(false);
-			});
-			compactionOperationRef.current = operation;
-			return operation;
-		},
-		[
-			compactionModule,
-			estimateRuntimeRequestOverheadTokens,
-			getCompactionSettings,
-			mergeTranscript,
-			applyContext,
-			sessionId,
-			setCompactionError,
-			recordCompaction,
-			getSnapshot,
-			setCompacting,
-		]
+		}: CompactOptions): Promise<CompactSessionResult> =>
+			await engine.compact({
+				model,
+				settings: await compactionSettingsFor(model),
+				trigger,
+				...(isUndefined(compactionMessages)
+					? {}
+					: { sourceMessages: compactionMessages }),
+				...(isUndefined(focus) ? {} : { focus }),
+				...(isUndefined(nextMessages) ? {} : { nextMessages }),
+				...(isUndefined(variant) ? {} : { variant }),
+			}),
+		[compactionSettingsFor, engine]
 	);
 	const cancelCompaction = useCallback(() => {
-		compactionAbortRef.current?.abort();
-	}, []);
+		engine.cancelCompaction();
+	}, [engine]);
+	const settleCompaction = useCallback(
+		() => engine.settleCompaction(),
+		[engine]
+	);
 	const maintainAfterTurn = useCallback(
 		(
 			messages: readonly SessionMessage[],
@@ -1544,7 +1516,11 @@ export function useChat(
 						...(isUndefined(variant) ? {} : { variant }),
 					});
 				} catch (error) {
-					if (!isBenignCompactionError(error)) {
+					// A compaction already in flight owns the Session Context swap;
+					// the next submission re-checks the threshold and compacts then.
+					if (
+						!(isBenignCompactionError(error) || isInFlightCompaction(error))
+					) {
 						setCompactionError(
 							isError(error) ? error : new Error("Automatic compaction failed.")
 						);
@@ -1980,13 +1956,13 @@ export function useChat(
 			const prepared = await prepareSessionSubmission({
 				getActiveMessages: () => getSnapshot().context,
 				compactionModule,
-				compactionOperation: compactionOperationRef.current,
 				createTurnSkillExecution,
 				getCompactionSettings,
 				input,
 				runCompaction,
 				resolveSkillForSubmit,
 				setPreparingMessage,
+				settleCompaction,
 				signal,
 			});
 			if (prepared.kind !== "ready") {
@@ -2044,6 +2020,7 @@ export function useChat(
 			setCompactionError,
 			setError,
 			setPreparingMessage,
+			settleCompaction,
 			getSnapshot,
 			startExecution,
 		]
@@ -2151,9 +2128,9 @@ export function useChat(
 					enabled: settings.overflowRecoveryAvailable,
 					error: providerError,
 					originalMessageId: originalMessage.id,
-					replay: async ({ activeMessages, entry, originalMessageId }) => {
-						applyContext(activeMessages);
-						recordCompaction(entry);
+					replay: async ({ originalMessageId }) => {
+						// The compaction command published the Session Context swap
+						// and the entry it produced before this replay runs.
 						const operation = sessionRef.current;
 						if (isNull(operation) || !(await operation.waitForIdle())) {
 							return;
@@ -2191,7 +2168,7 @@ export function useChat(
 						return sessionSendCancelled(signal);
 					}
 					const stop = (): void => {
-						compactionAbortRef.current?.abort();
+						cancelCompaction();
 						approvalQueueRef.current.rejectAll();
 						closeApprovalsRef.current();
 					};
@@ -2221,7 +2198,7 @@ export function useChat(
 					}
 				},
 			}),
-		[interruptLatestAssistantMessage, setError]
+		[interruptLatestAssistantMessage, cancelCompaction, setError]
 	);
 	sessionRef.current = session;
 

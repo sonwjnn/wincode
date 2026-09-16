@@ -24,9 +24,11 @@ CLI projects those events into its OpenTUI message state.
 
 Session state — Session Transcript, Session Context, chat status, errors, and
 compaction facts — is owned by the React-free Session Engine in
-`modules/sessions/engine`. The Engine is the only writer. `useChat` binds it for
+`modules/sessions/engine`. The Engine is the only writer and runs the
+compaction Session Command, which publishes the Session Context swap and the
+Compaction entry it produces before it settles. `useChat` binds it for
 rendering, mirrors its Session Snapshot in React state so the view re-renders,
-and never writes session state itself.
+submits compaction commands to it, and never writes session state itself.
 
 Each Agent Turn execution owns its own scope (`modules/sessions/turn-execution.ts`):
 the Agent Turn Identifier, the assistant message identity, the source user
@@ -51,7 +53,7 @@ reuses the original logical user message without appending a duplicate.
 
 ### Compaction
 
-`/compact [focus]` summarizes completed history into a durable local compaction entry while keeping the full transcript visible. Automatic threshold maintenance and one-attempt provider-overflow replay reuse the same local Session Compaction module.
+`/compact [focus]` summarizes completed history into a durable local compaction entry while keeping the full transcript visible. Compaction is a Session Command the Engine runs: the local Session Compaction module's per-session in-flight map is the single-flight, so a request joins the compaction in flight when it carries the same intent — the same trigger and focus, since a Model Target selection only decides how the summary is generated — and is refused with a reason when it carries another, and a caller is never answered with another caller's entry. The Engine publishes the Session Context swap and the Compaction entry as part of the command, so an Agent Turn's preparation settles any compaction in flight before it reads the Session Context and never sends a context the session has already replaced. Automatic threshold maintenance and one-attempt provider-overflow replay submit the same command.
 
 ### Input overlays
 
@@ -116,8 +118,8 @@ history and workspace/configuration data.
 
 - `getSessionStore()` — local sessions, Session Records, compactions, attachments, and maintenance.
 - `SessionOperation` — one application-owned send, cancellation, and interruption seam for the current turn path.
-- `session-engine.ts` (Session Engine) — the single owner of one session's live state; observers read Session Snapshots and never write.
-- `useChat(sessionId, initialMessages)` — binds the Session Engine for rendering and runs turn submission, compaction, and error projection.
+- `session-engine.ts` (Session Engine) — the single owner of one session's live state; observers read Session Snapshots and never write, and it runs the compaction Session Command.
+- `useChat(sessionId, initialMessages)` — binds the Session Engine for rendering and runs turn submission and error projection.
 - `useChatInputController(options)` — command and file-mention input state.
 - `NewSessionView`, `SessionView`, `ChatShell`, `ChatTextArea` — session UI.
 - `SessionsDialog`, `RenameSessionDialog` — session management UI.

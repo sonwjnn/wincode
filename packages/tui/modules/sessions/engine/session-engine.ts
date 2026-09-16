@@ -3,10 +3,20 @@ import type {
 	AgentTurnEvent,
 	AgentTurnId,
 } from "@wincode/agent-core";
-import { isUndefined } from "@wincode/runtime-utils";
+import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import { isError, isNull, isUndefined } from "@wincode/runtime-utils";
 import type { ReadonlyDeep } from "type-fest";
+import type { SessionId } from "@/shared/identifiers";
+import type {
+	CompactSessionInput,
+	CompactSessionResult,
+	SessionCompactionModule,
+} from "../compaction/compaction";
 import { isCompactionSummaryMessage } from "../compaction/summary-message";
-import type { SessionCompaction } from "../compaction/types";
+import type {
+	CompactionTriggerReason,
+	SessionCompaction,
+} from "../compaction/types";
 import type { SessionMessage } from "../message";
 
 export type SessionChatStatus = "ready" | "streaming" | "submitted";
@@ -66,10 +76,35 @@ export type SessionExecutionInput = ReadonlyDeep<{
 	turnId: AgentTurnId;
 }>;
 
+/**
+ * The Session Compaction module the Engine submits compaction commands to. Its
+ * per-session in-flight map owns the admission decision: a request either runs,
+ * joins one that carries the same intent, or is refused.
+ */
+export type SessionCompactionPort = Pick<
+	SessionCompactionModule,
+	"compact" | "getInFlight"
+>;
+
+/** One compaction request as the Session Command the Engine runs. */
+export type SessionCompactionCommand = ReadonlyDeep<{
+	focus?: string;
+	model: ChatModelSelection;
+	/** Merged into the Session Transcript before compacting, when supplied. */
+	nextMessages?: readonly SessionMessage[];
+	settings: CompactSessionInput["settings"];
+	/** Compacted in place of the Session Transcript, when supplied. */
+	sourceMessages?: readonly SessionMessage[];
+	trigger: CompactionTriggerReason;
+	variant?: ModelVariant;
+}>;
+
 export type SessionEngineOptions = ReadonlyDeep<{
+	compaction: SessionCompactionPort;
 	initialCompactions?: readonly SessionCompaction[];
 	initialContext?: readonly SessionMessage[];
 	initialTranscript: readonly SessionMessage[];
+	sessionId: SessionId;
 }>;
 
 export type SessionEngine = Readonly<{
@@ -77,6 +112,14 @@ export type SessionEngine = Readonly<{
 	applyContext: (messages: readonly SessionMessage[]) => void;
 	/** Registers a starting Agent Turn execution and its parent linkage. */
 	beginExecution: (execution: SessionExecutionInput) => void;
+	/** Aborts the compaction command in flight. */
+	cancelCompaction: () => void;
+	/**
+	 * Runs a compaction command. A command whose intent is already in flight
+	 * joins it; one that carries another intent is refused, so no caller is
+	 * answered with another caller's entry.
+	 */
+	compact: (command: SessionCompactionCommand) => Promise<CompactSessionResult>;
 	/** Drops an execution and everything that belonged to it. */
 	endExecution: (turnId: AgentTurnId) => void;
 	getSnapshot: () => SessionSnapshot;
@@ -88,9 +131,7 @@ export type SessionEngine = Readonly<{
 	mergeTranscript: (
 		messages: readonly SessionMessage[]
 	) => readonly SessionMessage[];
-	recordCompaction: (entry: SessionCompaction) => void;
 	setCatalogDiagnostic: (diagnostic: string | null) => void;
-	setCompacting: (value: boolean) => void;
 	setCompactionError: (error: Error | null) => void;
 	setError: (error: Error | null) => void;
 	/** Replaces one execution's Session View State, never another's. */
@@ -100,6 +141,12 @@ export type SessionEngine = Readonly<{
 	) => void;
 	setPreparingMessage: (value: boolean) => void;
 	setStatus: (status: SessionChatStatus) => void;
+	/**
+	 * Waits until no compaction command is in flight, so the Session Context a
+	 * caller reads next is the settled one. Reports the failure that ended the
+	 * wait, when a command ends with one.
+	 */
+	settleCompaction: () => Promise<Error | null>;
 	subscribe: (listener: () => void) => () => void;
 }>;
 
@@ -130,9 +177,11 @@ const exposedViewState = (
  * snapshot instead of mutating it.
  */
 export const createSessionEngine = ({
+	compaction,
 	initialCompactions = [],
 	initialContext,
 	initialTranscript,
+	sessionId,
 }: SessionEngineOptions): SessionEngine => {
 	let state: SessionSnapshot = {
 		catalogDiagnostic: null,
@@ -147,6 +196,17 @@ export const createSessionEngine = ({
 		transcript: [...initialTranscript],
 		viewState: undefined,
 	};
+	/**
+	 * The compaction command the Engine is running, kept for its abort handle and
+	 * for callers that join it. Whether a request may run at all is the Session
+	 * Compaction module's decision, never this record's.
+	 */
+	let compactionCommand:
+		| {
+				abort: () => void;
+				promise: Promise<CompactSessionResult>;
+		  }
+		| undefined;
 	const listeners = new Set<() => void>();
 	const publish = (changes: Partial<SessionSnapshot>): void => {
 		if (!hasChanged(state, changes)) {
@@ -160,6 +220,9 @@ export const createSessionEngine = ({
 				// An observer cannot change session state.
 			}
 		}
+	};
+	const applyContext = (messages: readonly SessionMessage[]): void => {
+		publish({ context: [...messages] });
 	};
 	const mergeTranscript = (
 		messages: readonly SessionMessage[]
@@ -179,9 +242,122 @@ export const createSessionEngine = ({
 		publish({ transcript: merged });
 		return merged;
 	};
+	const recordCompaction = (entry: SessionCompaction): void => {
+		if (state.compactions.some(({ id }) => id === entry.id)) {
+			return;
+		}
+		publish({ compactions: [...state.compactions, entry] });
+	};
+	const setCompacting = (value: boolean): void => {
+		publish({ isCompacting: value });
+	};
+	const setCompactionError = (error: Error | null): void => {
+		publish({ compactionError: error });
+	};
+	/** A command that carries its own transcript update merges it before running. */
+	const compactionSource = (
+		command: SessionCompactionCommand
+	): readonly SessionMessage[] => {
+		if (!isUndefined(command.sourceMessages)) {
+			return [...command.sourceMessages];
+		}
+		if (!isUndefined(command.nextMessages)) {
+			return mergeTranscript(command.nextMessages);
+		}
+		return state.transcript;
+	};
+	const compactionRequest = (
+		command: SessionCompactionCommand,
+		messages: readonly SessionMessage[],
+		signal?: AbortSignal
+	): CompactSessionInput => ({
+		model: command.model,
+		session: { messages, sessionId },
+		settings: command.settings,
+		trigger: command.trigger,
+		...(isUndefined(command.focus) ? {} : { focus: command.focus }),
+		...(isUndefined(signal) ? {} : { signal }),
+		...(isUndefined(command.variant) ? {} : { variant: command.variant }),
+	});
+	/**
+	 * Runs a command the module admitted. The Session Context swap and the
+	 * compaction entry it produces are published by the command, before its
+	 * promise settles, so a caller that joins it reads a settled context.
+	 */
+	const startCompaction = (
+		command: SessionCompactionCommand
+	): Promise<CompactSessionResult> => {
+		const controller = new AbortController();
+		const request = compactionRequest(
+			command,
+			compactionSource(command),
+			controller.signal
+		);
+		const { promise, reject, resolve } =
+			Promise.withResolvers<CompactSessionResult>();
+		compactionCommand = { abort: () => controller.abort(), promise };
+		setCompacting(true);
+		void (async () => {
+			try {
+				const result = await compaction.compact(request);
+				applyContext(result.activeMessages);
+				recordCompaction(result.entry);
+				setCompactionError(null);
+				resolve(result);
+			} catch (error) {
+				reject(error);
+			} finally {
+				if (compactionCommand?.promise === promise) {
+					compactionCommand = undefined;
+					setCompacting(false);
+				}
+			}
+		})();
+		return promise;
+	};
+	/**
+	 * Joins the command in flight. A request that carries its intent is answered
+	 * by that command; one that carries another intent is refused, so a caller is
+	 * never answered with another caller's entry. A joined request's messages
+	 * never travel — the command it joins owns the swap — so the Session
+	 * Transcript is the source it names.
+	 */
+	const joinCompaction = async (
+		command: SessionCompactionCommand
+	): Promise<CompactSessionResult> => {
+		const owner = compactionCommand;
+		const result = await compaction.compact(
+			compactionRequest(command, state.transcript)
+		);
+		if (!isUndefined(owner)) {
+			await owner.promise;
+		}
+		return result;
+	};
+	const compact = (
+		command: SessionCompactionCommand
+	): Promise<CompactSessionResult> => {
+		const running = compaction.getInFlight(sessionId);
+		return isNull(running) ? startCompaction(command) : joinCompaction(command);
+	};
+	const settleCompaction = async (): Promise<Error | null> => {
+		// A command that starts while this waits is joined too, so a caller that
+		// continues afterwards reads a context no compaction is about to replace.
+		for (;;) {
+			const command = compactionCommand;
+			if (isUndefined(command)) {
+				return null;
+			}
+			try {
+				await command.promise;
+			} catch (error) {
+				return isError(error) ? error : new Error("Session compaction failed.");
+			}
+		}
+	};
 
 	return {
-		applyContext: (messages) => publish({ context: [...messages] }),
+		applyContext,
 		beginExecution: ({ parent, startedAt, turnId }) =>
 			publish({
 				executions: [
@@ -193,6 +369,8 @@ export const createSessionEngine = ({
 					},
 				],
 			}),
+		cancelCompaction: () => compactionCommand?.abort(),
+		compact,
 		endExecution: (turnId) => {
 			const executions = state.executions.filter(
 				(execution) => execution.turnId !== turnId
@@ -204,16 +382,9 @@ export const createSessionEngine = ({
 		},
 		getSnapshot: () => state,
 		mergeTranscript,
-		recordCompaction: (entry) => {
-			if (state.compactions.some(({ id }) => id === entry.id)) {
-				return;
-			}
-			publish({ compactions: [...state.compactions, entry] });
-		},
 		setCatalogDiagnostic: (diagnostic) =>
 			publish({ catalogDiagnostic: diagnostic }),
-		setCompacting: (value) => publish({ isCompacting: value }),
-		setCompactionError: (error) => publish({ compactionError: error }),
+		setCompactionError,
 		setError: (error) => publish({ error }),
 		setExecutionViewState: (turnId, viewState) => {
 			if (!state.executions.some((execution) => execution.turnId === turnId)) {
@@ -226,6 +397,7 @@ export const createSessionEngine = ({
 		},
 		setPreparingMessage: (value) => publish({ isPreparingMessage: value }),
 		setStatus: (status) => publish({ status }),
+		settleCompaction,
 		subscribe: (listener) => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);

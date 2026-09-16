@@ -156,6 +156,7 @@ export class SessionCompactionError extends Error {
 		| "cancelled"
 		| "context-still-too-large"
 		| "history-too-short"
+		| "in-flight"
 		| "invalid-boundary"
 		| "not-needed"
 		| "persistence-failed"
@@ -209,13 +210,47 @@ export type CompactSessionResult = {
 };
 
 export type SessionCompactionModule = {
+	/**
+	 * Runs a compaction intent. A request whose intent is already in flight
+	 * joins that operation; a request for another intent is refused, so no
+	 * caller is answered with another caller's result.
+	 */
 	compact: (input: CompactSessionInput) => Promise<CompactSessionResult>;
+	/** The compaction operation in flight for a session, if any. */
 	getInFlight: (sessionId: SessionId) => Promise<CompactSessionResult> | null;
 	needsCompaction: (
 		messages: readonly SessionMessage[],
 		settings: Pick<ResolvedCompactionSettings, "enabled" | "thresholdTokens">
 	) => boolean;
 };
+
+/**
+ * What a caller asks for, as distinct from the inputs it asks with. The Model
+ * Target selection and variant only decide how a summary is generated, so two
+ * requests that share a trigger and focus share an intent even across a
+ * selection change: both want the session's threshold maintained, or both want
+ * the same focus honored.
+ */
+type CompactionIntent = {
+	focus?: string;
+	trigger: CompactionTriggerReason;
+};
+
+const normalizeFocus = (focus: string | undefined): string | undefined => {
+	const trimmed = focus?.trim();
+	return trimmed ? trimmed : undefined;
+};
+
+const intentOf = (input: CompactSessionInput): CompactionIntent => {
+	const focus = normalizeFocus(input.focus);
+	return {
+		...(isUndefined(focus) ? {} : { focus }),
+		trigger: input.trigger,
+	};
+};
+
+const sameIntent = (left: CompactionIntent, right: CompactionIntent): boolean =>
+	left.focus === right.focus && left.trigger === right.trigger;
 
 type CompactionModuleDependencies = {
 	attachmentStore?: SessionAttachmentStore;
@@ -896,6 +931,7 @@ const appendInputFor = ({
 			"There is not enough complete history to compact."
 		);
 	}
+	const normalizedFocus = normalizeFocus(focus);
 	const summary: CompactionSummary = {
 		...(attachmentMetadata && attachmentMetadata.length > 0
 			? { attachments: [...attachmentMetadata] }
@@ -903,7 +939,7 @@ const appendInputFor = ({
 		coveredMessageIds: summarySpan.map((message) => message.id),
 		formatVersion: 1,
 		text: sanitizeSummaryText(summarization.text),
-		...(focus?.trim() ? { focus: focus.trim() } : {}),
+		...(isUndefined(normalizedFocus) ? {} : { focus: normalizedFocus }),
 	};
 	const nowValue = now();
 	return {
@@ -923,7 +959,7 @@ const appendInputFor = ({
 		tokensBefore: estimateSessionContextTokens(session.messages, estimateTokens)
 			.tokens,
 		trigger,
-		...(focus?.trim() ? { focus: focus.trim() } : {}),
+		...(isUndefined(normalizedFocus) ? {} : { focus: normalizedFocus }),
 		id: entryId,
 		...(isUndefined(variant) ? {} : { summarizationVariant: variant }),
 		priorCompactionId: previous?.id,
@@ -1105,7 +1141,10 @@ export const createSessionCompaction = ({
 	generateId: createId = () => toCompactionId(randomUUIDv7()),
 	now = () => new Date(),
 }: CompactionModuleDependencies): SessionCompactionModule => {
-	const inFlight = new Map<SessionId, Promise<CompactSessionResult>>();
+	const inFlight = new Map<
+		SessionId,
+		{ intent: CompactionIntent; operation: Promise<CompactSessionResult> }
+	>();
 	const persistCompactionEntry = async ({
 		attachmentMetadata,
 		messages,
@@ -1242,6 +1281,7 @@ export const createSessionCompaction = ({
 					input.signal
 				)
 			: { summaryMessages: summarySpan };
+		const focus = normalizeFocus(input.focus);
 		const generatorInput: SummaryGeneratorInput = {
 			...(isUndefined(input.variant) ? {} : { variant: input.variant }),
 			model: input.model,
@@ -1253,7 +1293,7 @@ export const createSessionCompaction = ({
 				? { summaryMessages: preparedSummary.summaryMessages }
 				: {}),
 			maxOutputTokens,
-			...(input.focus?.trim() ? { focus: input.focus.trim() } : {}),
+			...(isUndefined(focus) ? {} : { focus }),
 			signal: input.signal,
 		};
 		const generated = await generateCompactionSummary(
@@ -1267,7 +1307,7 @@ export const createSessionCompaction = ({
 			cutPoint,
 			entryId: createId(),
 			estimateTokens,
-			focus: input.focus,
+			focus,
 			model: input.model,
 			now,
 			previous,
@@ -1283,22 +1323,31 @@ export const createSessionCompaction = ({
 	const compact = (
 		input: CompactSessionInput
 	): Promise<CompactSessionResult> => {
-		const existing = inFlight.get(input.session.sessionId);
-		if (existing) {
-			return existing;
+		const session = input.session.sessionId;
+		const running = inFlight.get(session);
+		if (running) {
+			if (sameIntent(running.intent, intentOf(input))) {
+				return running.operation;
+			}
+			return Promise.reject(
+				new SessionCompactionError(
+					"in-flight",
+					`A ${running.intent.trigger} compaction is already in flight for this session; the ${input.trigger} request was not started.`
+				)
+			);
 		}
 		let operation: Promise<CompactSessionResult>;
 		operation = compactNow(input).finally(() => {
-			if (inFlight.get(input.session.sessionId) === operation) {
-				inFlight.delete(input.session.sessionId);
+			if (inFlight.get(session)?.operation === operation) {
+				inFlight.delete(session);
 			}
 		});
-		inFlight.set(input.session.sessionId, operation);
+		inFlight.set(session, { intent: intentOf(input), operation });
 		return operation;
 	};
 	return {
 		compact,
-		getInFlight: (sessionId) => inFlight.get(sessionId) ?? null,
+		getInFlight: (sessionId) => inFlight.get(sessionId)?.operation ?? null,
 		needsCompaction: (messages, settings) => {
 			if (!settings.enabled || isNull(settings.thresholdTokens)) {
 				return false;

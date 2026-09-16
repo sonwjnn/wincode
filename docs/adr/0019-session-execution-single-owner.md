@@ -24,15 +24,20 @@ turn-scoped values themselves (Agent Turn Identifier, assistant message
 identity, source user message, start time, Agent and resolved Agent, Model
 Target selection and variant, session-level selection, MCP snapshot, child
 abort registry, and Skill catalog) are created with the execution and
-discarded with it. The rest — Session Commands executed one at a time in
-submission order, orthogonal status facts, a single approval settlement path,
-and the submission pipeline living in the Engine — is the design the migration
-is closing on, tracked by the Session Engine spec (issue #97) and its five step
-tickets (#98–#102), and is not yet the shipped execution model: the Engine
-still exposes granular state setters, executions are started by the binding
-rather than by a Session Command, chat status is still one union, and approvals
-still settle through two paths. Read the consequences below as the target, not
-as a description of every line of running code.
+discarded with it. Compaction has shipped as the first Session Command: the
+Engine runs it against the Session Compaction module as its port, publishes the
+Session Context swap and the Compaction entry inside the command, and joins a
+caller to a compaction that carries the same intent, while the module's
+per-session in-flight map — the only admission decision — refuses another
+intent's. The rest — Commands executed one at a time in submission order,
+orthogonal status facts, a single approval settlement path, and the submission
+pipeline living in the Engine — is the design the migration is closing on,
+tracked by the Session Engine spec (issue #97) and its five step tickets
+(#98–#102), and is not yet the shipped execution model: the Engine still
+exposes granular state setters, sends are started by the binding rather than by
+a Session Command, chat status is still one union, and approvals still settle
+through two paths. Read the consequences below as the target, not as a
+description of every line of running code.
 
 ## Considered options
 
