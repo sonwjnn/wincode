@@ -1,6 +1,7 @@
 import { TextAttributes } from "@opentui/core";
 import type { AgentDefinition, AgentId } from "@wincode/agent-core";
 import type { ConnectionProviderId } from "@wincode/ai/models";
+import { isNull, isUndefined } from "@wincode/runtime-utils";
 import { useCallback } from "react";
 import {
 	type AgentDiagnostic,
@@ -33,7 +34,7 @@ export const getAgentUnavailableReason = (
 	agent: AgentDialogItem,
 	connectedProviderIds: ReadonlySet<ConnectionProviderId> | undefined
 ): string | undefined => {
-	if (agent.model && connectedProviderIds !== undefined) {
+	if (agent.model && !isUndefined(connectedProviderIds)) {
 		return connectedProviderIds.has(agent.model.providerId)
 			? undefined
 			: `Connect ${agent.model.providerId}`;
@@ -102,14 +103,14 @@ export const AgentsDialogContent = ({
 					.includes(query.toLowerCase())
 			}
 			footer={
-				registry !== null && registry.diagnostics.length > 0 ? (
+				!isNull(registry) && registry.diagnostics.length > 0 ? (
 					<AgentDiagnosticsFooter diagnostics={registry.diagnostics} />
 				) : undefined
 			}
 			getKey={(item) => item.id}
 			isItemActive={(item) => item.id === currentAgent}
 			isItemSelectable={(item) =>
-				getAgentUnavailableReason(item, connectedProviderIds) === undefined
+				isUndefined(getAgentUnavailableReason(item, connectedProviderIds))
 			}
 			items={agents}
 			onSelect={handleSelect}

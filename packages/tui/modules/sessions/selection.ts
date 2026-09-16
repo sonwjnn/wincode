@@ -6,6 +6,7 @@ import {
 	normalizeChatModelSelection,
 	normalizeModelVariant,
 } from "@wincode/ai/models";
+import { isPlainObject, isString, isUndefined } from "@wincode/runtime-utils";
 import type { SkillRequestContext } from "@wincode/skills";
 import type { SessionMessage } from "./message";
 import {
@@ -64,7 +65,7 @@ export const getLastUsedSelection = (
 	}
 
 	const variant = findLastUsedVariant(messages, selection.model);
-	return variant === undefined ? selection : { ...selection, variant };
+	return isUndefined(variant) ? selection : { ...selection, variant };
 };
 
 /**
@@ -92,7 +93,7 @@ const findLastUsedVariant = (
 			continue;
 		}
 		const variant = normalizeModelVariant(model, metadata.variant);
-		if (variant !== undefined) {
+		if (!isUndefined(variant)) {
 			return variant;
 		}
 	}
@@ -100,11 +101,11 @@ const findLastUsedVariant = (
 };
 
 const normalizeSelection = (model: unknown): ChatModelSelection | null => {
-	if (typeof model === "string") {
+	if (isString(model)) {
 		return normalizeChatModelSelection(model);
 	}
 
-	if (typeof model === "object" && model) {
+	if (isPlainObject(model)) {
 		const parsed = modelSelectionSchema.safeParse(model);
 		return parsed.success ? parsed.data : null;
 	}
@@ -197,7 +198,7 @@ export const resolveSessionSelection = ({
 	}
 	const persistedAgent = persisted?.agent ?? refs?.agent;
 	const agent =
-		resolveAgent && persistedAgent !== undefined
+		resolveAgent && !isUndefined(persistedAgent)
 			? resolveAgent(persistedAgent)
 			: persistedAgent;
 	return {

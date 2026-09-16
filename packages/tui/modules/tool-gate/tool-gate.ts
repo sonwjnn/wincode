@@ -11,7 +11,12 @@ import {
 	type ToolResourceLimits,
 } from "@wincode/coding-tools";
 import type { WorkspacePolicy } from "@wincode/coding-tools/workspace";
-import { isObjectLike } from "@wincode/runtime-utils";
+import {
+	isObjectLike,
+	isPlainObject,
+	isString,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import {
 	MCP_PERMISSION_RESOURCE,
 	mcpDeniedByPolicyText,
@@ -127,11 +132,11 @@ const isCodingToolName = (name: string): name is CodingToolName =>
 	codingToolNames.some((tool) => tool === name);
 
 const getStringField = (input: unknown, field: string): string | undefined => {
-	if (!isObjectLike(input) || Array.isArray(input)) {
+	if (!isPlainObject(input)) {
 		return;
 	}
 	const candidate = Reflect.get(input, field);
-	return typeof candidate === "string" ? candidate : undefined;
+	return isString(candidate) ? candidate : undefined;
 };
 
 type GateResource =
@@ -155,12 +160,12 @@ const resolveGateResource = (
 			return;
 		}
 		const path = getStringField(input, "path");
-		return path === undefined
+		return isUndefined(path)
 			? { kind: "literal", value: pattern }
 			: { input: path, kind: "path", pattern };
 	}
 	const path = getStringField(input, "path");
-	return path === undefined ? undefined : { input: path, kind: "path" };
+	return isUndefined(path) ? undefined : { input: path, kind: "path" };
 };
 const resolveReadGatePath = async (
 	input: string,
@@ -182,12 +187,7 @@ const resolveReadGatePath = async (
 			await lstat(canonicalLiteralPath);
 			return input;
 		} catch (error) {
-			if (
-				typeof error === "object" &&
-				error !== null &&
-				"code" in error &&
-				error.code === "ENOENT"
-			) {
+			if (isObjectLike(error) && "code" in error && error.code === "ENOENT") {
 				return resourcePath;
 			}
 			return input;
@@ -203,12 +203,12 @@ const staticRejectionText = (
 	resource: string,
 	feedback?: string
 ): string =>
-	feedback === undefined
+	isUndefined(feedback)
 		? `${label} was not approved: ${resource}`
 		: `${label} was not approved: ${resource} — ${feedback}`;
 
 const mcpRejectionText = (toolName: string, feedback?: string): string =>
-	feedback === undefined
+	isUndefined(feedback)
 		? `MCP tool '${toolName}' was not approved`
 		: `MCP tool '${toolName}' was not approved — ${feedback}`;
 
@@ -349,7 +349,7 @@ const decideShellCommand = (
 	nodes: ShellCommandNode[] | undefined,
 	permission: ToolPermission
 ): PermissionDecision => {
-	if (nodes === undefined) {
+	if (isUndefined(nodes)) {
 		return composePermissionDecisions(
 			permission.decide("shell", command),
 			"ask"
@@ -432,7 +432,7 @@ export const createToolGate = ({
 		}
 		const tool = toolCall.toolName;
 		const gateResource = resolveGateResource(tool, toolCall.input);
-		if (gateResource === undefined) {
+		if (isUndefined(gateResource)) {
 			return { kind: "allow" };
 		}
 		const label = STATIC_TOOL_LABELS[tool];
@@ -450,7 +450,7 @@ export const createToolGate = ({
 				{ label: "tool", value: tool },
 				{ label: "resource", value: resource },
 				...resourceLimitIdentity(resourceLimits),
-				...(boundaryResource === undefined
+				...(isUndefined(boundaryResource)
 					? []
 					: [{ label: "boundary", value: boundaryResource }]),
 				...(external ? [{ label: "scope", value: "external" }] : []),
@@ -577,7 +577,7 @@ export const createToolGate = ({
 					request: requestFor(
 						gateResource.pattern ?? resource,
 						true,
-						gateResource.pattern === undefined ? undefined : resource
+						isUndefined(gateResource.pattern) ? undefined : resource
 					),
 					safety: permission.safety,
 				},
@@ -597,17 +597,14 @@ export const createToolGate = ({
 				(feedback) =>
 					staticRejectionText(label, gateResource.pattern ?? resource, feedback)
 			);
-			if (outcome.kind !== "allow" || gateResource.pattern !== undefined) {
+			if (outcome.kind !== "allow" || !isUndefined(gateResource.pattern)) {
 				return outcome;
 			}
 			return {
 				...outcome,
-				input:
-					typeof toolCall.input === "object" &&
-					toolCall.input !== null &&
-					!Array.isArray(toolCall.input)
-						? { ...toolCall.input, path: resource }
-						: { path: resource },
+				input: isPlainObject(toolCall.input)
+					? { ...toolCall.input, path: resource }
+					: { path: resource },
 			};
 		}
 	};
@@ -655,7 +652,7 @@ export const createToolGate = ({
 		});
 
 		let externalResource: string | undefined;
-		if (cwd !== undefined) {
+		if (!isUndefined(cwd)) {
 			// `~` and `$HOME` point outside the workspace, so they are expanded
 			// before canonicalization exactly like the runner does; otherwise a
 			// `cwd: "~"` would silently resolve inside the workspace at gate time
@@ -678,7 +675,7 @@ export const createToolGate = ({
 			}
 		}
 
-		if (externalResource === undefined) {
+		if (isUndefined(externalResource)) {
 			const settled = await settleApproval(
 				{
 					checks: [

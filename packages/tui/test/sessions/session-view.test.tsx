@@ -1,3 +1,5 @@
+import { isNull } from "@wincode/runtime-utils";
+
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
 import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
@@ -146,7 +148,7 @@ const createTestConfigStore = () =>
 function AgentRegistryReadyProbe({ onReady }: { onReady: () => void }) {
 	const registry = useAgentRegistry();
 	useEffect(() => {
-		if (registry !== null) {
+		if (!isNull(registry)) {
 			onReady();
 		}
 	}, [onReady, registry]);

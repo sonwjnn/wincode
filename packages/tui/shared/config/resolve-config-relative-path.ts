@@ -1,4 +1,5 @@
 import { dirname, resolve } from "node:path";
+import { isUndefined } from "@wincode/runtime-utils";
 import type { ConfigScope, ConfigSnapshot } from "./config-store";
 
 export type ResolvedConfigPath = {
@@ -12,7 +13,7 @@ export const resolveConfigRelativePath = (
 	configuredPath: string
 ): ResolvedConfigPath | undefined => {
 	const origin = snapshot.sourceFor(fieldPath);
-	if (origin === undefined) {
+	if (isUndefined(origin)) {
 		return;
 	}
 	return {

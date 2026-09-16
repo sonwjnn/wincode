@@ -1,5 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import type { SessionMessageId } from "@wincode/agent-core";
+import { isUndefined } from "@wincode/runtime-utils";
 import { buildAgent } from "@/modules/agents";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -23,7 +24,7 @@ export function ChatMessage({
 	const { colors } = useTheme();
 	const retryMessageId = resolveRetryMessageId(messages);
 	const handleRetry = () => {
-		if (retryMessageId === undefined || onRetry === undefined) {
+		if (isUndefined(retryMessageId) || isUndefined(onRetry)) {
 			return;
 		}
 		void onRetry(retryMessageId);

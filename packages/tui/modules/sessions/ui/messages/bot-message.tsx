@@ -1,6 +1,12 @@
 import type { BoxRenderable } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
-import { isObjectLike, isPlainObject } from "@wincode/runtime-utils";
+import {
+	isArray,
+	isNull,
+	isPlainObject,
+	isString,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import { memo, type ReactNode, useMemo, useRef, useState } from "react";
 import type { UnknownRecord } from "type-fest";
 import { buildAgent } from "@/modules/agents";
@@ -74,12 +80,12 @@ const formatToolArgumentValue = (value: unknown): string => {
 const getToolResource = (part: ToolPart): string | undefined => {
 	const input = getToolInputRecord(part);
 	if (part.type === "tool-shell") {
-		return typeof input.command === "string" ? input.command : undefined;
+		return isString(input.command) ? input.command : undefined;
 	}
 	if (part.type === "tool-grep" || part.type === "tool-glob") {
-		return typeof input.pattern === "string" ? input.pattern : undefined;
+		return isString(input.pattern) ? input.pattern : undefined;
 	}
-	const path = typeof input.path === "string" ? input.path : undefined;
+	const path = isString(input.path) ? input.path : undefined;
 	return path;
 };
 
@@ -91,7 +97,7 @@ const getToolResource = (part: ToolPart): string | undefined => {
  */
 const stripErrorResource = (errorText: string, part: ToolPart): string => {
 	const resource = getToolResource(part);
-	return resource === undefined
+	return isUndefined(resource)
 		? errorText
 		: errorText.replace(`: ${resource}`, "");
 };
@@ -136,7 +142,7 @@ const getFallbackError = (part: ToolPart, auditOwnsError: boolean): string => {
 };
 
 const formatMcpToolArgs = (part: ToolPart): string => {
-	if (!isObjectLike(part.input) || Array.isArray(part.input)) {
+	if (!isPlainObject(part.input)) {
 		return formatToolArgumentValue(part.input);
 	}
 
@@ -161,10 +167,9 @@ const formatStaticToolSummary = (
 	isRunning = false
 ): string => {
 	const input = getToolInputRecord(part);
-	const path =
-		typeof input.path === "string"
-			? stripControlCharacters(input.path, MAX_TOOL_ARGUMENTS_LENGTH)
-			: "";
+	const path = isString(input.path)
+		? stripControlCharacters(input.path, MAX_TOOL_ARGUMENTS_LENGTH)
+		: "";
 	const pathSuffix = path ? ` ${path}` : "";
 	const pathOrCurrentDirectory = path || ".";
 	if (name === "grep" || name === "glob") {
@@ -176,7 +181,7 @@ const formatStaticToolSummary = (
 	}
 	if (name === "shell") {
 		const command = stripControlCharacters(
-			typeof input.command === "string" ? input.command : "",
+			isString(input.command) ? input.command : "",
 			MAX_TOOL_ARGUMENTS_LENGTH
 		);
 		return `$ ${command}`;
@@ -287,7 +292,7 @@ const resolveFooterItems = (
 		items.push({ color: colors.textMuted, label });
 	}
 
-	if (metadata.responseTimeMs !== undefined) {
+	if (!isUndefined(metadata.responseTimeMs)) {
 		items.push({
 			color: colors.textMuted,
 			label: formatResponseTime(metadata.responseTimeMs),
@@ -350,7 +355,7 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 			{isShellOutput ? <ShellOutputBlock part={part} /> : null}
 			{isEditPreview ? <EditDiffBlock agent={agent} part={part} /> : null}
 			{isWritePreview ? <WriteBlock agent={agent} part={part} /> : null}
-			{typeof part.toolCallId === "string" ? (
+			{isString(part.toolCallId) ? (
 				<ToolApprovalPanel
 					errorText={
 						part.state === "output-error"
@@ -424,13 +429,13 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 	};
 
 	const markers = [
-		exitCode === null ? null : `exit ${exitCode}`,
+		isNull(exitCode) ? null : `exit ${exitCode}`,
 		timedOut ? "timed out" : null,
 		truncated ? "truncated" : null,
 	]
-		.filter((marker): marker is string => marker !== null)
+		.filter((marker): marker is string => !isNull(marker))
 		.join(" · ");
-	const hasFailed = (exitCode !== null && exitCode !== 0) || timedOut;
+	const hasFailed = (!isNull(exitCode) && exitCode !== 0) || timedOut;
 
 	return (
 		<BorderedContentBlock
@@ -453,7 +458,7 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 			<text fg={colors.text} wrapMode="char">
 				{expanded ? sanitizedText : preview.text}
 			</text>
-			{expanded || indicator === null ? null : (
+			{expanded || isNull(indicator) ? null : (
 				<text fg={colors.textMuted}>{indicator}</text>
 			)}
 		</BorderedContentBlock>
@@ -572,7 +577,7 @@ function SkillActivityRow({ part }: { part: ToolPart }) {
 			: undefined;
 	const hash = formatSkillHash(output?.contentHash);
 	const activeNames =
-		status === "limit-reached" && Array.isArray(output?.activeSkillNames)
+		status === "limit-reached" && isArray(output?.activeSkillNames)
 			? ` · ${output.activeSkillNames.join(", ")}`
 			: "";
 

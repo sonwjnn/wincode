@@ -9,6 +9,7 @@ import type {
 	SupportedChatModel,
 	SupportedChatModelId,
 } from "@wincode/ai/models";
+import { isUndefined } from "@wincode/runtime-utils";
 import type { LanguageModel } from "ai";
 import type { Except } from "type-fest";
 
@@ -28,7 +29,7 @@ export type ResolvedModel = {
 export const toAiSdkProviderOptions = (
 	options: ModelProviderOptions | undefined
 ): ProviderOptions | undefined => {
-	if (options === undefined) {
+	if (isUndefined(options)) {
 		return;
 	}
 	if ("openai" in options) {
@@ -53,10 +54,10 @@ export const resolveModelWithProvider = <P extends ModelRuntimeProviderId>(
 		model: provider(model.id),
 		modelId: model.id as SupportedChatModelId,
 		provider: model.provider,
-		...(resolvedOptions.maxOutputTokens === undefined
+		...(isUndefined(resolvedOptions.maxOutputTokens)
 			? {}
 			: { maxOutputTokens: resolvedOptions.maxOutputTokens }),
-		...(resolvedOptions.providerOptions === undefined
+		...(isUndefined(resolvedOptions.providerOptions)
 			? {}
 			: {
 					providerOptions: toAiSdkProviderOptions(

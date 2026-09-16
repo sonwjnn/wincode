@@ -6,6 +6,8 @@ import {
 	isNonEmptyString,
 	isNonNegativeInteger,
 	isObjectLike,
+	isString,
+	isUndefined,
 } from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 import { type AgentId, isAgentId } from "./agent";
@@ -170,8 +172,10 @@ export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
 	}
 	const event = value as UnknownRecord;
 	if (
-		typeof event.type !== "string" ||
-		!(AGENT_TURN_EVENT_TYPES as readonly string[]).includes(event.type)
+		!(
+			isString(event.type) &&
+			(AGENT_TURN_EVENT_TYPES as readonly string[]).includes(event.type)
+		)
 	) {
 		return false;
 	}
@@ -179,23 +183,23 @@ export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
 		case "agent-turn-started":
 			return (
 				isAgentId(event.agentId) &&
-				(event.delegation === undefined ||
+				(isUndefined(event.delegation) ||
 					isAgentTurnDelegation(event.delegation)) &&
 				isFiniteNonNegativeNumber(event.startedAt)
 			);
 		case "model-step-started":
 			return (
 				isNonEmptyString(event.stepId) &&
-				(event.modelId === undefined || isNonEmptyString(event.modelId))
+				(isUndefined(event.modelId) || isNonEmptyString(event.modelId))
 			);
 		case "text-delta":
 		case "reasoning-delta":
-			return typeof event.delta === "string";
+			return isString(event.delta);
 		case "model-step-finished":
 			return (
 				isNonEmptyString(event.stepId) &&
-				(event.modelId === undefined || isNonEmptyString(event.modelId)) &&
-				(event.usage === undefined || isUsage(event.usage))
+				(isUndefined(event.modelId) || isNonEmptyString(event.modelId)) &&
+				(isUndefined(event.usage) || isUsage(event.usage))
 			);
 		case "tool-call-started":
 			return (
@@ -212,7 +216,7 @@ export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
 		case "agent-turn-completed":
 			return (
 				isFiniteNonNegativeNumber(event.finishedAt) &&
-				(event.usage === undefined || isUsage(event.usage))
+				(isUndefined(event.usage) || isUsage(event.usage))
 			);
 		case "agent-turn-cancelled":
 			return (

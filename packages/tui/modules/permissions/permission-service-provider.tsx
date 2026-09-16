@@ -1,3 +1,4 @@
+import { isNull } from "@wincode/runtime-utils";
 import {
 	createContext,
 	type ReactNode,
@@ -32,7 +33,7 @@ export function PermissionServiceProvider({
 
 export function usePermissionService(): PermissionService {
 	const service = useContext(PermissionServiceContext);
-	if (service === null) {
+	if (isNull(service)) {
 		throw new Error(
 			"usePermissionService must be used within a PermissionServiceProvider"
 		);

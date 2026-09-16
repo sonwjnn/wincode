@@ -1,5 +1,6 @@
 import type { SessionMessageId } from "@wincode/agent-core";
 import { isModelContextOverflowError } from "@wincode/ai/model-failures";
+import { getErrorMessage } from "@wincode/runtime-utils";
 import type { Except } from "type-fest";
 import type { SessionId } from "@/shared/identifiers";
 import type { SessionMessage } from "../message";
@@ -107,8 +108,7 @@ export const recoverContextOverflow = async ({
 			trigger: "overflow",
 		});
 	} catch (compactionError) {
-		const detail =
-			compactionError instanceof Error ? ` ${compactionError.message}` : "";
+		const detail = getErrorMessage(compactionError, "");
 		throw new OverflowRecoveryError(
 			"replay-failed",
 			`Context overflow recovery could not compact the session.${detail}`,

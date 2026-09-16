@@ -10,6 +10,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ConnectionProviderId } from "@wincode/ai/models";
+import { isError, isNull, isUndefined } from "@wincode/runtime-utils";
 import type { CredentialByProvider } from "./contract";
 import { defaultProviderRegistry } from "./provider-registry";
 
@@ -56,7 +57,7 @@ export class CredentialVaultV2 {
 	constructor(options: V2CredentialVaultOptions = {}) {
 		this.secretStore =
 			options.secretStore ??
-			(options.fileRoot === undefined
+			(isUndefined(options.fileRoot)
 				? getBunSecretStore(options.bunSecrets)
 				: null);
 		this.fileRoot = options.fileRoot ?? homedir();
@@ -68,14 +69,13 @@ export class CredentialVaultV2 {
 	async load<P extends ConnectionProviderId>(
 		providerId: P
 	): Promise<CredentialByProvider[P] | null> {
-		const raw =
-			this.secretStore === null
-				? await this.readFile(providerId)
-				: await this.secretStore.get(
-						SERVICE_NAME,
-						`connections-v2:${providerId}`
-					);
-		return raw === null ? null : parseStoredCredential(providerId, raw);
+		const raw = isNull(this.secretStore)
+			? await this.readFile(providerId)
+			: await this.secretStore.get(
+					SERVICE_NAME,
+					`connections-v2:${providerId}`
+				);
+		return isNull(raw) ? null : parseStoredCredential(providerId, raw);
 	}
 
 	async replaceValidated<P extends ConnectionProviderId>(
@@ -83,7 +83,7 @@ export class CredentialVaultV2 {
 		credential: CredentialByProvider[P]
 	): Promise<void> {
 		const validated = parseCredential(providerId, credential);
-		if (this.secretStore !== null) {
+		if (!isNull(this.secretStore)) {
 			await this.secretStore.set(
 				SERVICE_NAME,
 				`connections-v2:${providerId}`,
@@ -142,7 +142,7 @@ export class CredentialVaultV2 {
 const getBunSecretStore = (
 	injectedSecrets?: BunSecretStore | null
 ): SecretStore | null => {
-	if (injectedSecrets === null) {
+	if (isNull(injectedSecrets)) {
 		return null;
 	}
 	const secrets =
@@ -150,10 +150,10 @@ const getBunSecretStore = (
 		(globalThis as typeof globalThis & { Bun?: { secrets?: BunSecretStore } })
 			.Bun?.secrets;
 	if (
-		secrets === undefined ||
-		secrets === null ||
-		secrets.get === undefined ||
-		secrets.set === undefined
+		isUndefined(secrets) ||
+		isNull(secrets) ||
+		isUndefined(secrets.get) ||
+		isUndefined(secrets.set)
 	) {
 		return null;
 	}
@@ -234,7 +234,7 @@ const assertSecureMode = (mode: number, message: string): void => {
 };
 
 const isMissingFileError = (error: unknown): boolean =>
-	error instanceof Error && "code" in error && error.code === "ENOENT";
+	isError(error) && "code" in error && error.code === "ENOENT";
 
 const parseCredential = <P extends ConnectionProviderId>(
 	providerId: P,

@@ -4,6 +4,12 @@
   "exports": {
     ".": {
       "default": "./src/index.ts"
+    },
+    "./guards": {
+      "default": "./src/guards.ts"
+    },
+    "./errors": {
+      "default": "./src/errors.ts"
     }
   },
   "scripts": {

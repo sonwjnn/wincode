@@ -1,3 +1,4 @@
+import { isUndefined } from "@wincode/runtime-utils";
 export type StartTuiInput = {
 	args: readonly string[];
 	cwd: string;
@@ -10,7 +11,7 @@ export const setTuiRuntimeContext = (context: StartTuiInput): void => {
 };
 
 export const getTuiRuntimeContext = (): StartTuiInput => {
-	if (runtimeContext === undefined) {
+	if (isUndefined(runtimeContext)) {
 		throw new Error("TUI runtime context was not initialized");
 	}
 	return runtimeContext;

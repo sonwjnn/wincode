@@ -1,3 +1,4 @@
+import { isNull, isUndefined } from "@wincode/runtime-utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getFilteredCommands } from "@/modules/commands/filter-commands";
 import { filterCustomCommands } from "@/modules/custom-commands/filter";
@@ -187,7 +188,7 @@ export function useChatInputController({
 		activeTrigger?.kind === "file-mention" ? activeTrigger.query : undefined;
 	const filteredCommands = useMemo(
 		() =>
-			commandQuery === undefined
+			isUndefined(commandQuery)
 				? []
 				: [
 						...getFilteredCommands(commandQuery, {
@@ -200,7 +201,7 @@ export function useChatInputController({
 	);
 	const filteredFileMentions = useMemo(
 		() =>
-			fileMentionQuery === undefined
+			isUndefined(fileMentionQuery)
 				? []
 				: filterFileMentionOptions(fileMentionOptions, fileMentionQuery),
 		[fileMentionOptions, fileMentionQuery]
@@ -424,7 +425,7 @@ export function useChatInputController({
 			fileTokens: NonNullable<PromptHistoryEntry["fileTokens"]>,
 			pastedText: NonNullable<PromptHistoryEntry["pastedText"]>
 		) => {
-			if (disabled || (textValue.length === 0 && overlayKind === null)) {
+			if (disabled || (textValue.length === 0 && isNull(overlayKind))) {
 				return false;
 			}
 			if (
@@ -451,8 +452,8 @@ export function useChatInputController({
 
 	const onArrowUp = useCallback(
 		(cursor?: number, _textLength?: number): boolean => {
-			if (overlayKind === null) {
-				if (cursor === undefined) {
+			if (isNull(overlayKind)) {
+				if (isUndefined(cursor)) {
 					return false;
 				}
 				if (decideUpAction(cursor) === "moveToStart") {
@@ -495,10 +496,9 @@ export function useChatInputController({
 
 	const onArrowDown = useCallback(
 		(cursor?: number, length?: number): boolean => {
-			if (overlayKind === null) {
+			if (isNull(overlayKind)) {
 				if (
-					cursor !== undefined &&
-					length !== undefined &&
+					!(isUndefined(cursor) || isUndefined(length)) &&
 					decideDownAction(cursor, length) === "moveToEnd"
 				) {
 					setProgrammaticText(textValue, length);
@@ -548,7 +548,7 @@ export function useChatInputController({
 
 	const onItemSelect = useCallback(
 		(index: number) => {
-			if (overlayKind === null) {
+			if (isNull(overlayKind)) {
 				return;
 			}
 

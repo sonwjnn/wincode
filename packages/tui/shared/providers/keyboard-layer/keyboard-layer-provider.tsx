@@ -1,4 +1,5 @@
 import { useKeyboard, useRenderer } from "@opentui/react";
+import { isUndefined } from "@wincode/runtime-utils";
 import type React from "react";
 import {
 	createContext,
@@ -102,7 +103,7 @@ export function KeyboardLayerProvider({
 		}
 		const shortcut = `ctrl+${key.name}` as ToggleShortcut;
 		const handlers = toggleHandlers.current.get(shortcut);
-		if (handlers === undefined || handlers.size === 0) {
+		if (isUndefined(handlers) || handlers.size === 0) {
 			return false;
 		}
 

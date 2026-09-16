@@ -1,3 +1,4 @@
+import { isUndefined } from "@wincode/runtime-utils";
 import { z } from "zod";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { MAX_PERMISSION_PATTERN_LENGTH, type PermissionRules } from "./policy";
@@ -35,7 +36,7 @@ export function resolveTopLevelPermission(
 	snapshot: ConfigSnapshot
 ): PermissionRules | undefined {
 	const raw = snapshot.document.permission;
-	if (raw === undefined) {
+	if (isUndefined(raw)) {
 		return;
 	}
 	const parsed = topLevelPermissionSchema.safeParse(raw);

@@ -1,10 +1,10 @@
 import path from "node:path";
-
 import {
 	createWorkspaceSandbox,
 	defaultWorkspaceSandbox,
 	type WorkspacePolicy,
 } from "@wincode/coding-tools/workspace";
+import { isUndefined } from "@wincode/runtime-utils";
 import type { FileMentionOption } from "../types";
 import {
 	compareCanonicalRelativePaths,
@@ -351,10 +351,9 @@ const compareRankedOptions = (left: RankedOption, right: RankedOption) => {
 export const getFileMentionOptions = (
 	options: GetFileMentionOptionsOptions = {}
 ): Promise<FileMentionOption[]> => {
-	const policy =
-		options.root === undefined
-			? defaultWorkspaceSandbox
-			: createWorkspaceSandbox(options.root);
+	const policy = isUndefined(options.root)
+		? defaultWorkspaceSandbox
+		: createWorkspaceSandbox(options.root);
 
 	return discoverFileMentionOptions(policy);
 };

@@ -1,4 +1,5 @@
 import type { Extmark } from "@opentui/core";
+import { isUndefined } from "@wincode/runtime-utils";
 import type { SessionFilePart } from "@/modules/sessions/message";
 
 export type ChatAttachment = {
@@ -35,14 +36,13 @@ export const locateAttachmentTokens = (
 		}
 
 		const expectedStart = expectedStarts[index];
-		const matchedStart =
-			expectedStart === undefined
-				? candidates[0]
-				: candidates.toSorted(
-						(left, right) =>
-							Math.abs(left - expectedStart) - Math.abs(right - expectedStart)
-					)[0];
-		if (matchedStart === undefined) {
+		const matchedStart = isUndefined(expectedStart)
+			? candidates[0]
+			: candidates.toSorted(
+					(left, right) =>
+						Math.abs(left - expectedStart) - Math.abs(right - expectedStart)
+				)[0];
+		if (isUndefined(matchedStart)) {
 			return [];
 		}
 		claimedStarts.add(matchedStart);

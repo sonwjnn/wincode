@@ -1,7 +1,12 @@
 import { type SessionMessageId, toSessionMessageId } from "@wincode/agent-core";
 import { getModelFailureMessage } from "@wincode/ai/model-failures";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
-import { isObjectLike } from "@wincode/runtime-utils";
+import {
+	isNull,
+	isObjectLike,
+	isString,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import { isSkillToolPart } from "@wincode/skills";
 import { randomUUIDv7 } from "bun";
 import {
@@ -116,7 +121,7 @@ const applyDurableSplitBoundary = (
 	latest: SessionCompaction
 ): SessionMessage[] => {
 	const partIndex = latest.firstKeptAssistantPartIndex;
-	if (partIndex === undefined) {
+	if (isUndefined(partIndex)) {
 		return activeMessages;
 	}
 	const assistantIndex = activeMessages.findIndex(
@@ -151,7 +156,7 @@ export const rebuildActiveMessages = (
 	const replaySafeMessages = sanitizeSkillToolMessages(
 		sanitizeInterruptedSessionMessages([...messages])
 	);
-	if (latest === null) {
+	if (isNull(latest)) {
 		return replaySafeMessages;
 	}
 	const firstKeptIndex = replaySafeMessages.findIndex(
@@ -173,9 +178,9 @@ export const rebuildActiveMessages = (
 		);
 	}
 	if (
-		(latest.firstKeptAssistantPartIndex === undefined &&
+		(isUndefined(latest.firstKeptAssistantPartIndex) &&
 			throughIndex >= firstKeptIndex) ||
-		(latest.firstKeptAssistantPartIndex !== undefined &&
+		(!isUndefined(latest.firstKeptAssistantPartIndex) &&
 			throughIndex < firstKeptIndex)
 	) {
 		throw new SessionCompactionError(
@@ -278,7 +283,7 @@ const getTextFromPart = (part: unknown): string | null => {
 		!(isObjectLike(part) && "type" in part) ||
 		part.type !== "text" ||
 		!("text" in part) ||
-		typeof part.text !== "string"
+		!isString(part.text)
 	) {
 		return null;
 	}
@@ -289,7 +294,7 @@ const getPartType = (part: unknown): string => {
 	if (!(isObjectLike(part) && "type" in part)) {
 		return "unknown";
 	}
-	return typeof part.type === "string" ? part.type : "unknown";
+	return isString(part.type) ? part.type : "unknown";
 };
 
 const getStringField = (value: unknown, key: string): string | undefined => {
@@ -297,7 +302,7 @@ const getStringField = (value: unknown, key: string): string | undefined => {
 		return;
 	}
 	const field = Reflect.get(value, key);
-	return typeof field === "string" ? field : undefined;
+	return isString(field) ? field : undefined;
 };
 
 const getNumberField = (value: unknown, key: string): number | undefined => {
@@ -312,7 +317,7 @@ const getNumberField = (value: unknown, key: string): number | undefined => {
 
 const getDataUrlByteLength = (url: string): number => {
 	const payload = DATA_URL_PAYLOAD_PATTERN.exec(url)?.[1];
-	if (payload === undefined) {
+	if (isUndefined(payload)) {
 		return url.length;
 	}
 	const compactPayload = payload.replace(BASE64_WHITESPACE_PATTERN, "");
@@ -345,7 +350,7 @@ const replaceAttachmentPayload = (part: unknown) => {
 		mediaType,
 		payloadBytes:
 			getNumberField(part, "byteLength") ??
-			(url === undefined ? 0 : getDataUrlByteLength(url)),
+			(isUndefined(url) ? 0 : getDataUrlByteLength(url)),
 		payloadOmitted: true,
 	};
 };
@@ -353,7 +358,7 @@ const replaceAttachmentPayload = (part: unknown) => {
 const serializePart = (part: SessionMessage["parts"][number]): string => {
 	const type = getPartType(part);
 	const text = getTextFromPart(part);
-	if (text !== null) {
+	if (!isNull(text)) {
 		return text;
 	}
 	if (type === "file" || type === "image") {
@@ -413,7 +418,7 @@ const toolCallIdsForMessage = (
 			return [];
 		}
 		const toolCallId = getStringField(part, "toolCallId");
-		return toolCallId === undefined ? [] : [toolCallId];
+		return isUndefined(toolCallId) ? [] : [toolCallId];
 	});
 
 const collectToolMessageIndexes = (
@@ -461,7 +466,7 @@ const resolveToolSafeCutStart = (
 		const callBoundary = [...leftCalls].find(([toolCallId]) =>
 			rightResults.has(toolCallId)
 		)?.[1];
-		if (callBoundary !== undefined) {
+		if (!isUndefined(callBoundary)) {
 			boundary = callBoundary;
 			continue;
 		}
@@ -483,7 +488,7 @@ const resolveToolSafeCutStart = (
 		const resultBoundary = [...leftResults].find(([toolCallId]) =>
 			rightCalls.has(toolCallId)
 		)?.[1];
-		if (resultBoundary !== undefined) {
+		if (!isUndefined(resultBoundary)) {
 			boundary = resultBoundary + 1;
 			continue;
 		}
@@ -498,7 +503,7 @@ const splitsToolPairWithinAssistant = (
 	partIndex: number
 ): boolean => {
 	const assistant = messages[assistantIndex];
-	if (assistant === undefined) {
+	if (isUndefined(assistant)) {
 		return false;
 	}
 	const prefixCallIds = new Set(
@@ -540,7 +545,7 @@ const makeMessageCutPoint = (
 	estimateTokens: (messages: readonly SessionMessage[]) => number
 ): CutPoint | null => {
 	const firstKeptIndex = resolveToolSafeCutStart(messages, requestedIndex);
-	if (firstKeptIndex === null) {
+	if (isNull(firstKeptIndex)) {
 		return null;
 	}
 	const suffix = messages.slice(firstKeptIndex);
@@ -571,7 +576,7 @@ const makeAssistantCutPoint = (
 		return null;
 	}
 	const firstKeptIndex = resolveToolSafeCutStart(messages, assistantIndex);
-	if (firstKeptIndex === null) {
+	if (isNull(firstKeptIndex)) {
 		return null;
 	}
 	const userIndex = messages.findLastIndex(
@@ -579,7 +584,7 @@ const makeAssistantCutPoint = (
 	);
 	const user = messages[userIndex];
 	if (
-		user === undefined ||
+		isUndefined(user) ||
 		tokenCountForMessages([user], estimateTokens) <= keepRecentTokens
 	) {
 		return null;
@@ -670,7 +675,7 @@ const chooseCutPoint = (
 	const starts = getUserTurnStarts(messages);
 	for (let startIndex = starts.length - 1; startIndex > 0; startIndex -= 1) {
 		const firstKeptIndex = starts[startIndex];
-		if (firstKeptIndex === undefined) {
+		if (isUndefined(firstKeptIndex)) {
 			continue;
 		}
 		const cutPoint = makeMessageCutPoint(
@@ -710,14 +715,14 @@ const chooseCutPoint = (
 	}
 
 	const firstKeptIndex = starts.at(-1);
-	if (firstKeptIndex === undefined) {
+	if (isUndefined(firstKeptIndex)) {
 		throw new SessionCompactionError(
 			"history-too-short",
 			"There is not enough complete history to compact."
 		);
 	}
 	const safeFirstKeptIndex = resolveToolSafeCutStart(messages, firstKeptIndex);
-	if (safeFirstKeptIndex === null) {
+	if (isNull(safeFirstKeptIndex)) {
 		throw new SessionCompactionError(
 			"history-too-short",
 			"There is not enough complete history to compact."
@@ -741,7 +746,7 @@ const getSummarySpan = (
 	previous: SessionCompaction | null
 ): SessionMessage[] => {
 	if (cutPoint.summaryMessages) {
-		if (previous?.firstKeptAssistantPartIndex === undefined) {
+		if (isUndefined(previous?.firstKeptAssistantPartIndex)) {
 			return cutPoint.summaryMessages;
 		}
 		if (cutPoint.previousSplitApplied) {
@@ -768,7 +773,7 @@ const getSummarySpan = (
 		);
 		return splitMessages.slice(1);
 	}
-	if (previous === null) {
+	if (isNull(previous)) {
 		return messages.slice(0, cutPoint.throughIndex + 1);
 	}
 	const previousIndex = findMessageIndex(
@@ -778,7 +783,7 @@ const getSummarySpan = (
 	if (previousIndex < 0) {
 		return messages.slice(0, cutPoint.throughIndex + 1);
 	}
-	if (previous.firstKeptAssistantPartIndex === undefined) {
+	if (isUndefined(previous.firstKeptAssistantPartIndex)) {
 		return messages.slice(previousIndex, cutPoint.throughIndex + 1);
 	}
 	// A split-turn boundary keeps the user turn plus an assistant suffix; the
@@ -886,8 +891,8 @@ const resolveSummaryOutputBudget = (
 		)
 	);
 	const contextAvailable =
-		settings.modelContextLimit === undefined ||
-		settings.modelContextLimit === null
+		isUndefined(settings.modelContextLimit) ||
+		isNull(settings.modelContextLimit)
 			? Number.POSITIVE_INFINITY
 			: settings.modelContextLimit - retainedTokens - overheadTokens;
 	return Math.floor(
@@ -952,7 +957,7 @@ const appendInputFor = ({
 		createdAt: nowValue,
 		firstKeptUiMessageId: firstKept.id,
 		throughMessageUiId: through.id,
-		...(cutPoint.firstKeptAssistantPartIndex === undefined
+		...(isUndefined(cutPoint.firstKeptAssistantPartIndex)
 			? {}
 			: {
 					firstKeptAssistantPartIndex: cutPoint.firstKeptAssistantPartIndex,
@@ -966,7 +971,7 @@ const appendInputFor = ({
 		trigger,
 		...(focus?.trim() ? { focus: focus.trim() } : {}),
 		id: entryId,
-		...(variant === undefined ? {} : { summarizationVariant: variant }),
+		...(isUndefined(variant) ? {} : { summarizationVariant: variant }),
 		priorCompactionId: previous?.id,
 		sessionId: session.sessionId,
 		summarizationModel: model,
@@ -1015,24 +1020,23 @@ const chooseCompactionSpan = (
 	keepRecentTokens: number,
 	estimateTokens: (messages: readonly SessionMessage[]) => number
 ): { cutPoint: CutPoint; summarySpan: SessionMessage[] } => {
-	const previousIndex =
-		previous === null
-			? -1
-			: findMessageIndex(messages, previous.firstKeptUiMessageId);
-	const previousThroughIndex =
-		previous === null
-			? -1
-			: findMessageIndex(messages, previous.throughMessageUiId);
-	if (previous !== null && previousIndex < 0) {
+	const previousIndex = isNull(previous)
+		? -1
+		: findMessageIndex(messages, previous.firstKeptUiMessageId);
+	const previousThroughIndex = isNull(previous)
+		? -1
+		: findMessageIndex(messages, previous.throughMessageUiId);
+	if (!isNull(previous) && previousIndex < 0) {
 		throw new SessionCompactionError(
 			"invalid-boundary",
 			`Compaction boundary "${previous.id}" references a missing message.`
 		);
 	}
-	const previousSplitApplied =
-		previous?.firstKeptAssistantPartIndex !== undefined;
+	const previousSplitApplied = !isUndefined(
+		previous?.firstKeptAssistantPartIndex
+	);
 	if (
-		previous !== null &&
+		!isNull(previous) &&
 		(previousThroughIndex < 0 ||
 			(previousSplitApplied
 				? previousThroughIndex < previousIndex
@@ -1213,7 +1217,7 @@ export const createSessionCompaction = ({
 			);
 		}
 		if (
-			settings.thresholdTokens !== null &&
+			!isNull(settings.thresholdTokens) &&
 			entryInput.estimatedTokensAfter > settings.thresholdTokens
 		) {
 			throw new SessionCompactionError(
@@ -1285,7 +1289,7 @@ export const createSessionCompaction = ({
 				)
 			: { summaryMessages: summarySpan };
 		const generatorInput: SummaryGeneratorInput = {
-			...(input.variant === undefined ? {} : { variant: input.variant }),
+			...(isUndefined(input.variant) ? {} : { variant: input.variant }),
 			model: input.model,
 			previousSummary: previous?.summary,
 			serializedMessages: serializeMessagesForCompaction(
@@ -1342,7 +1346,7 @@ export const createSessionCompaction = ({
 		compact,
 		getInFlight: (sessionId) => inFlight.get(sessionId) ?? null,
 		needsCompaction: (messages, settings) => {
-			if (!settings.enabled || settings.thresholdTokens === null) {
+			if (!settings.enabled || isNull(settings.thresholdTokens)) {
 				return false;
 			}
 			return (

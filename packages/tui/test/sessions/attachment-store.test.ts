@@ -3,6 +3,7 @@ import { mkdtemp, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
+import { isObjectLike, isString } from "@wincode/runtime-utils";
 import type { SessionMessage } from "@/modules/sessions/message";
 import {
 	type AttachmentMetadataRecord,
@@ -100,10 +101,9 @@ test("externalizes inline image parts and hydrates them only on request", async 
 	expect(parsedReference.filename).toBe("diagram.png");
 	expect(parsedReference.mediaType).toBe("image/png");
 	expect(
-		typeof persistedPart === "object" &&
-			persistedPart !== null &&
+		isObjectLike(persistedPart) &&
 			"url" in persistedPart &&
-			typeof persistedPart.url === "string" &&
+			isString(persistedPart.url) &&
 			persistedPart.url.startsWith("attachment://")
 	).toBe(true);
 	expect(JSON.stringify(persisted)).not.toContain("data:image/png;base64");

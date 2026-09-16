@@ -3,6 +3,7 @@ import type {
 	ResolvedAgent,
 	ResolvedTool,
 } from "@wincode/agent-core";
+import { isNull, isUndefined } from "@wincode/runtime-utils";
 import {
 	describeVisibleToolPermission,
 	STATIC_TOOL_PERMISSION_ACTIONS,
@@ -173,7 +174,7 @@ const baseSafetyBlock = (): string =>
 const agentInstructionsBlock = (agent: ResolvedAgent): string =>
 	[
 		`Active Agent: ${escapePromptValue(agent.id)}${
-			agent.displayName === undefined
+			isUndefined(agent.displayName)
 				? ""
 				: ` (${escapePromptValue(agent.displayName)})`
 		}`,
@@ -181,7 +182,7 @@ const agentInstructionsBlock = (agent: ResolvedAgent): string =>
 	].join("\n");
 
 const environmentLine = (label: string, value: string | null): string =>
-	`- ${label}: ${value === null ? "none" : escapePromptValue(value)}`;
+	`- ${label}: ${isNull(value) ? "none" : escapePromptValue(value)}`;
 
 const stableEnvironmentBlock = (
 	environment: PromptEnvironmentSnapshot
@@ -232,7 +233,7 @@ const toolFamily = (
 	tool: EffectiveVisibleTool | ResolvedTool,
 	name: string
 ): PromptToolFamily =>
-	isEffectiveVisibleTool(tool) && tool.family !== undefined
+	isEffectiveVisibleTool(tool) && !isUndefined(tool.family)
 		? tool.family
 		: toolFamilyForName(name, "other");
 
@@ -305,7 +306,7 @@ const toolPolicyBlock = (
 	const codingLine = codingWorkflowLine(
 		normalized.filter((tool) => tool.family === "coding")
 	);
-	if (codingLine !== undefined) {
+	if (!isUndefined(codingLine)) {
 		lines.push(codingLine);
 	}
 	lines.push(
@@ -324,12 +325,12 @@ const toolPolicyBlock = (
 			lines.push(toolGroupLine(family, group));
 		}
 	}
-	if (delegation !== undefined) {
+	if (!isUndefined(delegation)) {
 		lines.push(
 			"- Delegation context: this is a bounded child turn; follow the active Agent role and parent task boundary."
 		);
 	}
-	if (normalized.length === 0 && delegation === undefined) {
+	if (normalized.length === 0 && isUndefined(delegation)) {
 		lines.push("- No effective tools are visible for this turn.");
 	}
 	return lines.join("\n");
@@ -465,23 +466,22 @@ export const describeAgentTurnTools = (input: {
 	readonly tools: readonly ResolvedTool[];
 }): readonly EffectiveVisibleTool[] => {
 	const permission = input.permission;
-	const codingPermissions =
-		permission === undefined
-			? undefined
-			: new Map(
-					input.agent.visibleCodingTools.map((name) => [
-						name,
-						describeVisibleToolPermission(
-							permission,
-							STATIC_TOOL_PERMISSION_ACTIONS[name]
-						),
-					])
-				);
+	const codingPermissions = isUndefined(permission)
+		? undefined
+		: new Map(
+				input.agent.visibleCodingTools.map((name) => [
+					name,
+					describeVisibleToolPermission(
+						permission,
+						STATIC_TOOL_PERMISSION_ACTIONS[name]
+					),
+				])
+			);
 	const mcpPolicies = new Map<string, PromptToolPermission>(
 		[...input.mcpTools].map(([name, tool]) => [name, tool.policy])
 	);
 	let skillPermission: PromptToolPermission;
-	if (permission === undefined) {
+	if (isUndefined(permission)) {
 		skillPermission = input.agent.requiresManualApproval ? "ask" : "allow";
 	} else {
 		skillPermission = describeVisibleToolPermission(permission, "skill");

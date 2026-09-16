@@ -1,6 +1,11 @@
 import { getModelContextTokens } from "@wincode/ai/model-usage";
 import type { ChatModelSelection } from "@wincode/ai/models";
-import { isObjectLike } from "@wincode/runtime-utils";
+import {
+	isBoolean,
+	isNull,
+	isObjectLike,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
 import type { ModelPricingTable } from "@/modules/model-pricing";
@@ -117,7 +122,7 @@ const getConfigRecord = (
 	record: SettingsRecord | null;
 } => {
 	const nested = snapshot.document.compaction;
-	if (nested === undefined) {
+	if (isUndefined(nested)) {
 		return { path: [], record: snapshot.document };
 	}
 	const parsed = settingsRecordSchema.safeParse(nested);
@@ -163,7 +168,7 @@ const settingValueIsValid = (
 	if (
 		BOOLEAN_SETTING_KEYS.includes(key as (typeof BOOLEAN_SETTING_KEYS)[number])
 	) {
-		return typeof value === "boolean";
+		return isBoolean(value);
 	}
 	return isPositiveInteger(value);
 };
@@ -235,7 +240,7 @@ const resolveDesiredSettings = (
 		])
 	) as Record<CompactionSettingKey, CompactionSettingSource>;
 
-	if (config?.record === null) {
+	if (isNull(config?.record)) {
 		diagnostics.push(
 			diagnosticFor(
 				snapshot,
@@ -283,7 +288,7 @@ const resolveDesiredSettings = (
 		const legacyPath = ["auto"];
 		const legacyValue = snapshot.document.auto;
 		settingPaths.auto = legacyPath;
-		if (typeof legacyValue === "boolean") {
+		if (isBoolean(legacyValue)) {
 			desired.auto = legacyValue;
 			sources.auto = sourceFor(snapshot, legacyPath);
 		} else {
@@ -320,7 +325,7 @@ export const resolveCompactionSettings = (
 		snapshot,
 	} = input;
 	let contextLimit = configuredContextLimit;
-	if (contextLimit === undefined) {
+	if (isUndefined(contextLimit)) {
 		if (model && pricing) {
 			contextLimit = resolveModelContextLimit(pricing, model);
 		} else {
@@ -332,7 +337,7 @@ export const resolveCompactionSettings = (
 	const resolved = { ...desired };
 	let thresholdTokens: number | null = null;
 
-	if (contextLimit === null || contextLimit === undefined) {
+	if (isNull(contextLimit) || isUndefined(contextLimit)) {
 		diagnostics.push(
 			diagnosticFor(
 				snapshot,
@@ -368,7 +373,7 @@ export const resolveCompactionSettings = (
 		configPath,
 		auto: resolved.auto,
 		autoAvailable:
-			resolved.enabled && resolved.auto && thresholdTokens !== null,
+			resolved.enabled && resolved.auto && !isNull(thresholdTokens),
 		desired,
 		diagnostics,
 		enabled: resolved.enabled,
@@ -377,10 +382,10 @@ export const resolveCompactionSettings = (
 		maxMediaBytes: resolved.maxMediaBytes,
 		maxMediaTokens: resolved.maxMediaTokens,
 		midTurnAvailable:
-			resolved.enabled && resolved.midTurnEnabled && thresholdTokens !== null,
+			resolved.enabled && resolved.midTurnEnabled && !isNull(thresholdTokens),
 		midTurnEnabled: resolved.midTurnEnabled,
 		modelContextLimit:
-			contextLimit !== undefined && contextLimit !== null && contextLimit > 0
+			!(isUndefined(contextLimit) || isNull(contextLimit)) && contextLimit > 0
 				? contextLimit
 				: null,
 		overflowRecovery: resolved.overflowRecovery,
@@ -463,7 +468,7 @@ const estimateToolPart = (part: SessionToolPart): CanonicalPartEstimate => {
 	}
 	if (part.state === "output-error" || part.state === "output-denied") {
 		let errorText = part.errorText ?? "";
-		if (part.state === "output-denied" && part.errorText === undefined) {
+		if (part.state === "output-denied" && isUndefined(part.errorText)) {
 			errorText = "Tool call denied.";
 		}
 		result = {
@@ -574,7 +579,7 @@ export const estimateSessionContextTokens = (
 	let lastUsageIndex = -1;
 	let providerTokens: number | null = null;
 	for (const [index, message] of messages.entries()) {
-		if (message.role !== "assistant" || message.metadata?.usage === undefined) {
+		if (message.role !== "assistant" || isUndefined(message.metadata?.usage)) {
 			continue;
 		}
 		lastUsageIndex = index;

@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { relative, resolve } from "node:path";
-import { isObjectLike } from "@wincode/runtime-utils";
+import {
+	isNull,
+	isObjectLike,
+	isString,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import {
 	canonicalPath,
 	getProjectRootsWithinWorkspace,
@@ -212,7 +217,7 @@ const fileSystemCacheIdentity = (
 		return "default";
 	}
 	const existingId = fileSystemCacheIds.get(fileSystem);
-	if (existingId !== undefined) {
+	if (!isUndefined(existingId)) {
 		return `custom-${existingId}`;
 	}
 	nextFileSystemCacheId += 1;
@@ -228,7 +233,7 @@ const isMissingError = (error: unknown): boolean => {
 };
 
 const isByteArray = (value: Uint8Array | string): value is Uint8Array =>
-	typeof value !== "string";
+	!isString(value);
 
 const countCharacters = (content: string): number => {
 	let count = 0;
@@ -249,7 +254,7 @@ const encodeMetadata = (metadata: FileMetadata): string => {
 		return "error";
 	}
 	let fileKind = "other";
-	if (metadata.isSymbolicLink === null) {
+	if (isNull(metadata.isSymbolicLink)) {
 		fileKind = "unknown";
 	} else if (metadata.isSymbolicLink) {
 		fileKind = "symlink";
@@ -293,7 +298,7 @@ const readMetadata = async (
 	fileSystem: ProjectInstructionFileSystem,
 	path: string
 ): Promise<FileMetadata> => {
-	if (fileSystem.stat === undefined) {
+	if (isUndefined(fileSystem.stat)) {
 		return { kind: "error" };
 	}
 	try {
@@ -333,18 +338,18 @@ const metadataKey = (
 const hasCompleteMetadata = (metadata: FileMetadata): boolean =>
 	metadata.kind === "missing" ||
 	(metadata.kind === "present" &&
-		metadata.isSymbolicLink !== null &&
-		metadata.size !== null &&
+		!isNull(metadata.isSymbolicLink) &&
+		!isNull(metadata.size) &&
 		Number.isFinite(metadata.size) &&
-		metadata.mtimeMs !== null &&
+		!isNull(metadata.mtimeMs) &&
 		Number.isFinite(metadata.mtimeMs) &&
-		metadata.ctimeMs !== null &&
+		!isNull(metadata.ctimeMs) &&
 		Number.isFinite(metadata.ctimeMs) &&
-		metadata.mode !== null &&
+		!isNull(metadata.mode) &&
 		Number.isFinite(metadata.mode) &&
-		metadata.ino !== null &&
+		!isNull(metadata.ino) &&
 		Number.isFinite(metadata.ino) &&
-		metadata.dev !== null &&
+		!isNull(metadata.dev) &&
 		Number.isFinite(metadata.dev));
 const snapshotCacheScope = (
 	workspace: string,
@@ -360,7 +365,7 @@ const cacheSnapshot = (
 	fileSystemIdentity: string,
 	snapshot: ProjectInstructionSnapshot
 ): void => {
-	if (cache === undefined) {
+	if (isUndefined(cache)) {
 		return;
 	}
 	const scope = snapshotCacheScope(
@@ -376,7 +381,7 @@ const cacheSnapshot = (
 	cache.set(key, snapshot);
 	while (cache.size > MAX_PROJECT_INSTRUCTION_CACHE_ENTRIES) {
 		const oldestKey = cache.keys().next().value;
-		if (oldestKey === undefined) {
+		if (isUndefined(oldestKey)) {
 			break;
 		}
 		cache.delete(oldestKey);
@@ -404,8 +409,8 @@ const invalidDiagnostic = (
 	byteLength?: number,
 	characterLength?: number
 ): ProjectInstructionDiagnostic => ({
-	...(byteLength === undefined ? {} : { byteLength }),
-	...(characterLength === undefined ? {} : { characterLength }),
+	...(isUndefined(byteLength) ? {} : { byteLength }),
+	...(isUndefined(characterLength) ? {} : { characterLength }),
 	code,
 	message: diagnosticMessage(code),
 	reason: code,
@@ -492,7 +497,7 @@ const readSource = async (
 	const characterLength =
 		sourceInspection.characterLength ?? countCharacters(content);
 	if (
-		sourceInspection.characterLength === undefined &&
+		isUndefined(sourceInspection.characterLength) &&
 		characterLength > MAX_PROJECT_INSTRUCTION_SOURCE_CHARS
 	) {
 		return {
@@ -561,7 +566,7 @@ const loadSourceCandidate = async (
 	}
 	if (
 		fileMetadata.kind === "present" &&
-		fileMetadata.size !== null &&
+		!isNull(fileMetadata.size) &&
 		fileMetadata.size > MAX_PROJECT_INSTRUCTION_SOURCE_BYTES
 	) {
 		return {
@@ -631,7 +636,7 @@ const selectProjectInstructionSources = (
 	let totalByteLength = 0;
 	let totalRenderedByteLength = 0;
 	for (const [index, loaded] of loadedSources.entries()) {
-		if (loaded === undefined) {
+		if (isUndefined(loaded)) {
 			continue;
 		}
 		selectedIndexes.push(index);
@@ -648,18 +653,18 @@ const selectProjectInstructionSources = (
 		) {
 			const omittedIndex = selectedIndexes[selectedStart];
 			selectedStart += 1;
-			if (omittedIndex === undefined) {
+			if (isUndefined(omittedIndex)) {
 				continue;
 			}
 			const omitted = loadedSources[omittedIndex];
-			if (omitted === undefined) {
+			if (isUndefined(omitted)) {
 				continue;
 			}
 			loadedSources[omittedIndex] = undefined;
 			totalByteLength -= omitted.bytes.byteLength;
 			totalRenderedByteLength -= omitted.renderedByteLength;
 			const candidate = candidates[omittedIndex];
-			if (candidate !== undefined) {
+			if (!isUndefined(candidate)) {
 				diagnosticsByCandidate[omittedIndex]?.push(
 					invalidDiagnostic(
 						candidate.sourcePath,
@@ -686,7 +691,7 @@ const buildProjectInstructionSources = (
 	for (const index of selectedIndexes) {
 		const candidate = candidates[index];
 		const loaded = loadedSources[index];
-		if (candidate === undefined || loaded === undefined) {
+		if (isUndefined(candidate) || isUndefined(loaded)) {
 			continue;
 		}
 		sources.push({
@@ -729,10 +734,9 @@ export const createProjectInstructionSnapshot = async (
 		input.provenanceWorkspace ?? workspace
 	);
 	const fileSystemIdentity = fileSystemCacheIdentity(fileSystem);
-	const roots =
-		input.projectRoots === undefined
-			? getProjectRootsWithinWorkspace(provenanceWorkspace, workspace)
-			: await Promise.all(input.projectRoots.map(normalizeWorkspacePath));
+	const roots = isUndefined(input.projectRoots)
+		? getProjectRootsWithinWorkspace(provenanceWorkspace, workspace)
+		: await Promise.all(input.projectRoots.map(normalizeWorkspacePath));
 	const candidates = sourceCandidates(provenanceWorkspace, roots);
 	const metadata = await Promise.all(
 		candidates.map((candidate) =>
@@ -749,7 +753,7 @@ export const createProjectInstructionSnapshot = async (
 	const cacheable = metadata.every(hasCompleteMetadata);
 	if (cacheable) {
 		const cached = cache?.get(key);
-		if (cached !== undefined) {
+		if (!isUndefined(cached)) {
 			return cached;
 		}
 	}

@@ -1,6 +1,7 @@
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type { AgentId, SessionMessageId } from "@wincode/agent-core";
+import { isUndefined } from "@wincode/runtime-utils";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useModelPricing } from "@/modules/model-pricing";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
@@ -99,7 +100,7 @@ const findNewestCompaction = (
 ): SessionCompaction | undefined => {
 	let newest: SessionCompaction | undefined;
 	for (const compaction of compactions) {
-		if (newest === undefined || compaction.sequence > newest.sequence) {
+		if (isUndefined(newest) || compaction.sequence > newest.sequence) {
 			newest = compaction;
 		}
 	}
@@ -128,8 +129,8 @@ export function ChatShell({
 	const { agent, model } = usePromptConfig();
 	const { colors } = useTheme();
 	const { table } = useModelPricing();
-	const hasPendingApproval = useApprovalPanels().entries.some(
-		(entry) => entry.resolution === undefined
+	const hasPendingApproval = useApprovalPanels().entries.some((entry) =>
+		isUndefined(entry.resolution)
 	);
 	const displayMessages = messages.filter(
 		(message) => !isCompactionSummaryMessage(message)
@@ -144,10 +145,9 @@ export function ChatShell({
 	const retryableMessages = activeMessages ?? displayMessages;
 	const latestRetryMessageId = resolveRetryMessageId(displayMessages);
 	const canRetry =
-		!isBusy &&
-		latestRetryMessageId !== undefined &&
+		!(isBusy || isUndefined(latestRetryMessageId)) &&
 		retryableMessages.some(({ id }) => id === latestRetryMessageId) &&
-		onRetry !== undefined;
+		!isUndefined(onRetry);
 	const usage = useMemo(
 		() => summarizeSessionUsage(displayMessages, model, table),
 		[displayMessages, model, table]
@@ -165,8 +165,8 @@ export function ChatShell({
 	useKeyboard((key) => {
 		if (
 			!canRetry ||
-			latestRetryMessageId === undefined ||
-			onRetry === undefined ||
+			isUndefined(latestRetryMessageId) ||
+			isUndefined(onRetry) ||
 			!isTopLayer("base") ||
 			!key.option ||
 			key.name !== "r"
@@ -225,8 +225,7 @@ export function ChatShell({
 								item.turn.messages
 							);
 							const canRetryTurn =
-								!isBusy &&
-								turnRetryMessageId !== undefined &&
+								!(isBusy || isUndefined(turnRetryMessageId)) &&
 								retryableMessages.some(({ id }) => id === turnRetryMessageId);
 							return (
 								<box

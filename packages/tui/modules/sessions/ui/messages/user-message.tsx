@@ -1,5 +1,5 @@
 import type { AgentId } from "@wincode/agent-core";
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isObjectLike, isString, isUndefined } from "@wincode/runtime-utils";
 import { findFileMentionRanges } from "@/modules/file-mentions";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -72,17 +72,14 @@ export const getAppliedSkill = (
 
 	const skill = metadata.skill;
 	if (
-		typeof skill.contentHash !== "string" ||
-		typeof skill.name !== "string" ||
+		!(isString(skill.contentHash) && isString(skill.name)) ||
 		skill.name.length === 0
 	) {
 		return;
 	}
 
 	return {
-		...(typeof skill.arguments === "string"
-			? { arguments: skill.arguments }
-			: {}),
+		...(isString(skill.arguments) ? { arguments: skill.arguments } : {}),
 		contentHash: skill.contentHash,
 		name: skill.name,
 		...(skill.source === "agent" || skill.source === "explicit"
@@ -119,7 +116,7 @@ export function UserMessage({ agent, appliedSkill, parts }: UserMessageProps) {
 	const imageParts = parts.filter(isImagePart);
 	const { body, fileMentions } = getMessageParts(message);
 	const hasAttachmentBadges = fileMentions.length > 0 || imageParts.length > 0;
-	const hasBadges = appliedSkill !== undefined || hasAttachmentBadges;
+	const hasBadges = !isUndefined(appliedSkill) || hasAttachmentBadges;
 
 	return (
 		<box alignItems="center" width="100%">

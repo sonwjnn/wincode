@@ -1,3 +1,4 @@
+import { isArray, isNull, isUndefined } from "@wincode/runtime-utils";
 import type { ReadonlyDeep } from "type-fest";
 import { z } from "zod";
 import type { ModelMetadataEntry } from "./model-metadata";
@@ -168,7 +169,7 @@ const normalizeVariantOrThrow = (
 	variant: string | undefined
 ): ModelVariant | undefined => {
 	const normalized = normalizeModelVariantForModel(model, variant);
-	if (variant !== undefined && normalized === undefined) {
+	if (!isUndefined(variant) && isUndefined(normalized)) {
 		throw unsupportedVariant(model, variant);
 	}
 	return normalized;
@@ -234,7 +235,7 @@ const withDerivedReasoningOutputTokens = (
 	shouldDerive: boolean,
 	outputTokens: number
 ): Pick<ResolvedModelProviderOptions, "maxOutputTokens"> => {
-	if (requestedOutputTokens === undefined && shouldDerive) {
+	if (isUndefined(requestedOutputTokens) && shouldDerive) {
 		return { maxOutputTokens: outputTokens };
 	}
 	return max;
@@ -259,14 +260,14 @@ const anthropicThinking = (
 		return { type: "adaptive" };
 	}
 	if (
-		level === undefined &&
-		policy.budgetMin === undefined &&
-		policy.budgetMax === undefined
+		isUndefined(level) &&
+		isUndefined(policy.budgetMin) &&
+		isUndefined(policy.budgetMax)
 	) {
 		return { type: "adaptive" };
 	}
 	const budget = reasoningBudget(policy, outputTokens);
-	return budget === null
+	return isNull(budget)
 		? { type: "disabled" }
 		: { budgetTokens: budget, type: "enabled" };
 };
@@ -281,17 +282,17 @@ const unlevelledReasoning = (
 	if (wiring === "google") {
 		return {
 			google: {
-				thinkingConfig:
-					budget === null ? { thinkingBudget: 0 } : { thinkingBudget: budget },
+				thinkingConfig: isNull(budget)
+					? { thinkingBudget: 0 }
+					: { thinkingBudget: budget },
 			},
 		};
 	}
 	return {
 		anthropic: {
-			thinking:
-				budget === null
-					? { type: "disabled" }
-					: { budgetTokens: budget, type: "enabled" },
+			thinking: isNull(budget)
+				? { type: "disabled" }
+				: { budgetTokens: budget, type: "enabled" },
 		},
 	};
 };
@@ -352,15 +353,16 @@ const openAIProviderOptions = (
 	metadata: ModelMetadataEntry | undefined,
 	variant: ModelVariant | undefined
 ): OpenAIProviderOptions => {
-	const reasoningEffort =
-		variant === undefined ? undefined : openAIReasoningEffort(variant);
+	const reasoningEffort = isUndefined(variant)
+		? undefined
+		: openAIReasoningEffort(variant);
 	return {
 		openai: {
 			store: false,
 			...(metadata?.reasoningSummary
 				? { reasoningSummary: "detailed" as const }
 				: {}),
-			...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+			...(isUndefined(reasoningEffort) ? {} : { reasoningEffort }),
 		},
 	};
 };
@@ -373,18 +375,18 @@ const googleThinkingConfig = (
 	outputTokens: number
 ): GoogleProviderOptions["google"]["thinkingConfig"] => {
 	const thinkingLevel = googleThinkingLevel(level);
-	if (level !== undefined && thinkingLevel === undefined) {
+	if (!isUndefined(level) && isUndefined(thinkingLevel)) {
 		throw unsupportedVariant(model, variant);
 	}
-	if (thinkingLevel !== undefined) {
+	if (!isUndefined(thinkingLevel)) {
 		return { thinkingLevel };
 	}
 	if (disabled) {
 		return { thinkingBudget: 0 };
 	}
-	if (policy.budgetMin !== undefined || policy.budgetMax !== undefined) {
+	if (!(isUndefined(policy.budgetMin) && isUndefined(policy.budgetMax))) {
 		const budget = reasoningBudget(policy, outputTokens);
-		return budget === null ? { thinkingBudget: 0 } : { thinkingBudget: budget };
+		return isNull(budget) ? { thinkingBudget: 0 } : { thinkingBudget: budget };
 	}
 	return {};
 };
@@ -404,11 +406,11 @@ export const resolveReasoning = (
 ): ResolvedModelProviderOptions => {
 	const wiring = reasoningWiring(model);
 	const max = withMaxOutputTokens(maxOutputTokens);
-	if (wiring === null) {
+	if (isNull(wiring)) {
 		return max;
 	}
 	const policy = metadata?.thinking;
-	if (variant === undefined) {
+	if (isUndefined(variant)) {
 		if (wiring === "openai") {
 			return {
 				...max,
@@ -476,7 +478,7 @@ export const resolveReasoning = (
 	}
 
 	const effort = anthropicEffort(level);
-	if (level !== undefined && effort === undefined) {
+	if (!isUndefined(level) && isUndefined(effort)) {
 		throw unsupportedVariant(model, variant);
 	}
 	const thinking = anthropicThinking(
@@ -488,8 +490,8 @@ export const resolveReasoning = (
 	);
 	const providerOptions: AnthropicProviderOptions = {
 		anthropic: {
-			...(effort === undefined ? {} : { effort }),
-			...(thinking === undefined ? {} : { thinking }),
+			...(isUndefined(effort) ? {} : { effort }),
+			...(isUndefined(thinking) ? {} : { thinking }),
 		},
 	};
 	return {
@@ -508,7 +510,7 @@ export const resolveReasoning = (
 const withMaxOutputTokens = (
 	maxOutputTokens: number | undefined
 ): Pick<ResolvedModelProviderOptions, "maxOutputTokens"> =>
-	maxOutputTokens === undefined ? {} : { maxOutputTokens };
+	isUndefined(maxOutputTokens) ? {} : { maxOutputTokens };
 
 /**
  * Whether a provider option bag actually says anything. A Google on/off switch
@@ -516,13 +518,13 @@ const withMaxOutputTokens = (
  * only add noise to the request.
  */
 const hasProviderOptions = (value: unknown): boolean => {
-	if (value === undefined || value === null) {
+	if (isUndefined(value) || isNull(value)) {
 		return false;
 	}
 	if (typeof value !== "object") {
 		return true;
 	}
-	if (Array.isArray(value)) {
+	if (isArray(value)) {
 		return value.length > 0;
 	}
 	return Object.values(value).some(hasProviderOptions);
@@ -534,7 +536,7 @@ export const resolveModelProviderOptions = (
 ): ResolvedModelProviderOptions => {
 	const variant = normalizeVariantOrThrow(model, options.variant);
 	const wiring = reasoningWiring(model);
-	if (wiring === null) {
+	if (isNull(wiring)) {
 		return withMaxOutputTokens(options.maxOutputTokens);
 	}
 	const metadata = getModelMetadata(model);
@@ -544,10 +546,9 @@ export const resolveModelProviderOptions = (
 		variant,
 		options.maxOutputTokens
 	);
-	const providerOptions =
-		resolved.providerOptions === undefined
-			? undefined
-			: Object.values(resolved.providerOptions)[0];
+	const providerOptions = isUndefined(resolved.providerOptions)
+		? undefined
+		: Object.values(resolved.providerOptions)[0];
 	return hasProviderOptions(providerOptions)
 		? resolved
 		: withMaxOutputTokens(options.maxOutputTokens);

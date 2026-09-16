@@ -1,4 +1,9 @@
-import { isObjectLike } from "@wincode/runtime-utils";
+import {
+	getErrorMessage,
+	isBoolean,
+	isPlainObject,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
 import {
@@ -44,11 +49,7 @@ const getValueAtPath = (
 ): { found: boolean; value: unknown } => {
 	let current: unknown = document;
 	for (const segment of configPath) {
-		if (
-			!isObjectLike(current) ||
-			Array.isArray(current) ||
-			!Object.hasOwn(current, segment)
-		) {
+		if (!(isPlainObject(current) && Object.hasOwn(current, segment))) {
 			return { found: false, value: undefined };
 		}
 		current = (current as UnknownRecord)[segment];
@@ -186,9 +187,6 @@ const restorePersistedValues = async (
 	}
 };
 
-const errorMessage = (error: unknown): string =>
-	error instanceof Error ? error.message : "Unknown settings error.";
-
 const changeAutoCompact = async (
 	value: boolean | undefined,
 	context: SettingOperationContext
@@ -200,7 +198,7 @@ const changeAutoCompact = async (
 	};
 	try {
 		let current = context.snapshot;
-		if (value === undefined) {
+		if (isUndefined(value)) {
 			current = await clearAutoCompactValues(context, current, markMutation, [
 				"project",
 				"global",
@@ -240,14 +238,17 @@ const changeAutoCompact = async (
 				await restorePersistedValues(context, previous);
 			} catch (rollbackError) {
 				throw new Error(
-					`Could not save Auto-compact: ${errorMessage(error)} Rollback failed: ${errorMessage(rollbackError)}`,
+					`Could not save Auto-compact: ${getErrorMessage(error, "Unknown settings error.")} Rollback failed: ${getErrorMessage(rollbackError, "Unknown settings error.")}`,
 					{ cause: error }
 				);
 			}
 		}
-		throw new Error(`Could not save Auto-compact: ${errorMessage(error)}`, {
-			cause: error,
-		});
+		throw new Error(
+			`Could not save Auto-compact: ${getErrorMessage(error, "Unknown settings error.")}`,
+			{
+				cause: error,
+			}
+		);
 	}
 };
 
@@ -262,9 +263,9 @@ export const AUTO_COMPACT_SETTING: BooleanSettingDescriptor = {
 	reset: (context) => changeAutoCompact(undefined, context),
 	scope: "global",
 	section: "Compaction",
-	validate: (value): value is boolean => typeof value === "boolean",
+	validate: (value): value is boolean => isBoolean(value),
 	write: (value, context) => {
-		if (typeof value !== "boolean") {
+		if (!isBoolean(value)) {
 			throw new Error("Auto-compact must be a boolean.");
 		}
 		return changeAutoCompact(value, context);

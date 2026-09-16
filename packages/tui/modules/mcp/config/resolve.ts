@@ -1,5 +1,10 @@
 import path from "node:path";
-import { isPlainObject } from "@wincode/runtime-utils";
+import {
+	isNull,
+	isPlainObject,
+	isString,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import type { Merge, OverrideProperties } from "type-fest";
 import type { ZodError } from "zod";
 import type {
@@ -57,7 +62,7 @@ const addDiagnostic = (
 		message,
 		path: `${origin.path}:${suffix}`,
 		scope: origin.scope,
-		...(serverName === undefined ? {} : { serverName }),
+		...(isUndefined(serverName) ? {} : { serverName }),
 	});
 };
 
@@ -116,16 +121,16 @@ const resolveString = (
 	context: ResolutionContext,
 	field: readonly string[]
 ): string | undefined => {
-	if (typeof value !== "string") {
+	if (!isString(value)) {
 		return;
 	}
 	const match = ENV_PATTERN.exec(value);
-	if (match === null) {
+	if (isNull(match)) {
 		return value;
 	}
 	const variable = match[1] ?? "";
 	const resolved = context.env[variable];
-	if (typeof resolved === "string") {
+	if (isString(resolved)) {
 		return resolved;
 	}
 	addDiagnostic(
@@ -148,17 +153,17 @@ const resolveLocalServer = (
 		isPlainObject(raw.environment) ? raw.environment : {}
 	)) {
 		const resolved = resolveString(value, context, ["environment", key]);
-		if (resolved === undefined) {
+		if (isUndefined(resolved)) {
 			return;
 		}
 		environment[key] = resolved;
 	}
-	const cwd = typeof raw.cwd === "string" ? raw.cwd : undefined;
+	const cwd = isString(raw.cwd) ? raw.cwd : undefined;
 	const parsed = resolvedServerSchema.safeParse({
 		...base,
 		type: "local" as const,
 		command: raw.command,
-		...(cwd === undefined
+		...(isUndefined(cwd)
 			? {}
 			: {
 					cwd:
@@ -197,7 +202,7 @@ const resolveRemoteServer = (
 		);
 		return;
 	}
-	if (raw.oauth !== undefined && raw.oauth !== false) {
+	if (!isUndefined(raw.oauth) && raw.oauth !== false) {
 		addDiagnostic(
 			context.diagnostics,
 			owner(context, ["oauth"]),
@@ -213,7 +218,7 @@ const resolveRemoteServer = (
 		isPlainObject(raw.headers) ? raw.headers : {}
 	)) {
 		const resolved = resolveString(value, context, ["headers", key]);
-		if (resolved === undefined) {
+		if (isUndefined(resolved)) {
 			return;
 		}
 		headers[key] = resolved;
@@ -259,7 +264,7 @@ const diagnoseMalformedEntries = (
 ): void => {
 	for (const source of sources) {
 		const mcp = source.document.mcp;
-		if (mcp === undefined) {
+		if (isUndefined(mcp)) {
 			continue;
 		}
 		if (!isPlainObject(mcp)) {
@@ -315,7 +320,7 @@ export const resolveServers = ({
 			continue;
 		}
 		const fallbackSource = snapshot.sourceFor(["mcp", name]);
-		if (fallbackSource === undefined) {
+		if (isUndefined(fallbackSource)) {
 			continue;
 		}
 		const context: ResolutionContext = {
@@ -332,15 +337,14 @@ export const resolveServers = ({
 			continue;
 		}
 		const resolved = resolveServer(context, validated.data);
-		if (resolved !== undefined) {
+		if (!isUndefined(resolved)) {
 			servers[name] = resolved;
 		}
 	}
 	const invalidServers: Record<string, InvalidMcpServerConfig> = {};
 	for (const [name, raw] of Object.entries(section)) {
 		if (
-			servers[name] !== undefined ||
-			!isPlainObject(raw) ||
+			!(isUndefined(servers[name]) && isPlainObject(raw)) ||
 			(raw.type !== "local" && raw.type !== "remote")
 		) {
 			continue;

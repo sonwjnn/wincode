@@ -4,6 +4,7 @@ import {
 	findSupportedChatModelSelection,
 	formatModelLabel,
 } from "@wincode/ai/models";
+import { isNull, isUndefined } from "@wincode/runtime-utils";
 import { useMemo } from "react";
 import { builtInAgents } from "@/modules/agents";
 import {
@@ -91,8 +92,7 @@ export function SessionSidebar({
 		? formatModelLabel(chatModel.displayName)
 		: model.modelId;
 	const isContextWarning =
-		usage?.contextPercent !== null &&
-		usage?.contextPercent !== undefined &&
+		!(isNull(usage?.contextPercent) || isUndefined(usage?.contextPercent)) &&
 		usage.contextPercent >= CONTEXT_WARNING_PERCENT;
 
 	return (
@@ -123,7 +123,7 @@ export function SessionSidebar({
 								<text fg={colors.textMuted}>
 									{`${formatModelTokenCount(usage.contextTokens)} tokens`}
 								</text>
-								{usage.contextPercent === null ? null : (
+								{isNull(usage.contextPercent) ? null : (
 									<text
 										fg={isContextWarning ? colors.error : colors.textMuted}
 									>{`${usage.contextPercent}% used`}</text>

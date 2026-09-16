@@ -1,5 +1,6 @@
 import type { InputRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
+import { getErrorMessage } from "@wincode/runtime-utils";
 import { useCallback, useEffect, useRef } from "react";
 import type { SessionId } from "@/shared/identifiers";
 import {
@@ -52,8 +53,7 @@ export function RenameSessionDialog({
 		} catch (error) {
 			show({
 				variant: "error",
-				message:
-					error instanceof Error ? error.message : "Failed to rename session",
+				message: getErrorMessage(error, "Failed to rename session"),
 			});
 		}
 	}, [session.id, session.title, close, onSuccess, show]);

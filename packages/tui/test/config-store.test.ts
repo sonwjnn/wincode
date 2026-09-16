@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isUndefined } from "@wincode/runtime-utils";
 import { createConfigStore } from "@/shared/config/config-store";
 
 const CONFIG_ROOT = "/home/user/.config/wincode";
@@ -12,7 +13,7 @@ const fileSystem = (files: Record<string, string>, reads?: string[]) => ({
 	readFile: async (file: string): Promise<string> => {
 		reads?.push(file);
 		const value = files[file];
-		if (value === undefined) {
+		if (isUndefined(value)) {
 			const error = new Error("missing") as Error & { code: string };
 			error.code = "ENOENT";
 			throw error;
@@ -367,7 +368,7 @@ describe("createConfigStore", () => {
 			fs: {
 				readFile: async (file) => {
 					const value = files[file];
-					if (value === undefined) {
+					if (isUndefined(value)) {
 						const error = new Error("missing") as Error & { code: string };
 						error.code = "ENOENT";
 						throw error;
@@ -408,7 +409,7 @@ describe("createConfigStore", () => {
 			fs: {
 				readFile: async (file) => {
 					const value = files[file];
-					if (value === undefined) {
+					if (isUndefined(value)) {
 						const error = new Error("missing") as Error & { code: string };
 						error.code = "ENOENT";
 						throw error;
@@ -443,7 +444,7 @@ describe("createConfigStore", () => {
 			fs: {
 				readFile: async (file) => {
 					const value = files[file];
-					if (value === undefined) {
+					if (isUndefined(value)) {
 						const error = new Error("missing") as Error & { code: string };
 						error.code = "ENOENT";
 						throw error;
@@ -488,7 +489,7 @@ describe("createConfigStore", () => {
 			fs: {
 				readFile: async (file) => {
 					const value = files[file];
-					if (value === undefined) {
+					if (isUndefined(value)) {
 						const error = new Error("missing") as Error & { code: string };
 						error.code = "ENOENT";
 						throw error;
@@ -546,7 +547,7 @@ describe("createConfigStore", () => {
 			fs: {
 				readFile: async (file) => {
 					const value = files[file];
-					if (value === undefined) {
+					if (isUndefined(value)) {
 						const error = new Error("missing") as Error & { code: string };
 						error.code = "ENOENT";
 						throw error;
@@ -597,7 +598,7 @@ describe("createConfigStore", () => {
 			fs: {
 				readFile: async (file) => {
 					const value = files[file];
-					if (value === undefined) {
+					if (isUndefined(value)) {
 						const error = new Error("missing") as Error & { code: string };
 						error.code = "ENOENT";
 						throw error;

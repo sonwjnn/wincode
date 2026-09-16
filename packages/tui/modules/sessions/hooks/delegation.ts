@@ -8,6 +8,7 @@ import type {
 import { createAgentTurnId } from "@wincode/agent-core";
 import type { ModelTarget } from "@wincode/ai/model";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import { isUndefined } from "@wincode/runtime-utils";
 import type { SkillExecution, SkillToolDefinition } from "@wincode/skills";
 import {
 	type AgentRegistry,
@@ -70,12 +71,11 @@ const createChildGate = (
 	gate: {
 		gate: async (call) => {
 			const toolCallId = toolCallIdOf(call);
-			const unregister =
-				toolCallId === undefined
-					? undefined
-					: gatedTooling.registerChildAbort?.(toolCallId, () =>
-							childController.abort("approval-abort")
-						);
+			const unregister = isUndefined(toolCallId)
+				? undefined
+				: gatedTooling.registerChildAbort?.(toolCallId, () =>
+						childController.abort("approval-abort")
+					);
 			try {
 				return await gatedTooling.gate.gate(call);
 			} finally {
@@ -201,10 +201,9 @@ export const createDelegationExecutor = ({
 	return async (request: DelegationRequest, signal) => {
 		activeChildCount += 1;
 		const childController = new AbortController();
-		const childSignal =
-			signal === undefined
-				? childController.signal
-				: AbortSignal.any([signal, childController.signal]);
+		const childSignal = isUndefined(signal)
+			? childController.signal
+			: AbortSignal.any([signal, childController.signal]);
 		const turnId = createAgentTurnId();
 		const delegation = {
 			parentToolCallId: request.parentToolCallId,
@@ -241,7 +240,7 @@ export const createDelegationExecutor = ({
 					isAvailable &&
 					(role === "subagent" || role === "all")
 			);
-			if (target === undefined) {
+			if (isUndefined(target)) {
 				throw new Error(`Delegation target '${request.agent}' is unavailable.`);
 			}
 			const prepared = prepareAgentCall(
@@ -263,7 +262,7 @@ export const createDelegationExecutor = ({
 				{
 					allowRetired: true,
 					signal: childSignal,
-					...(prepared.variant === undefined
+					...(isUndefined(prepared.variant)
 						? {}
 						: { variant: prepared.variant }),
 				}
@@ -328,7 +327,7 @@ export const createDelegationExecutor = ({
 			}
 			throw error;
 		} finally {
-			if (snapshot !== undefined) {
+			if (!isUndefined(snapshot)) {
 				mcp.releaseSnapshot?.(snapshot);
 			}
 			clearChildView();

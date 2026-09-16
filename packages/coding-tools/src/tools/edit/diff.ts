@@ -1,4 +1,9 @@
-import { isObjectLike } from "@wincode/runtime-utils";
+import {
+	isBoolean,
+	isPlainObject,
+	isString,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import { createTwoFilesPatch, parsePatch } from "diff";
 import type { UnknownRecord } from "type-fest";
 import {
@@ -70,11 +75,12 @@ const trimDiff = (patch: string): string => {
 		}
 
 		const indent = content.match(LEADING_WHITESPACE_RE)?.[0].length ?? 0;
-		minimumIndent =
-			minimumIndent === undefined ? indent : Math.min(minimumIndent, indent);
+		minimumIndent = isUndefined(minimumIndent)
+			? indent
+			: Math.min(minimumIndent, indent);
 	}
 
-	if (minimumIndent === undefined || minimumIndent === 0) {
+	if (isUndefined(minimumIndent) || minimumIndent === 0) {
 		return patch;
 	}
 
@@ -302,20 +308,20 @@ export const isRenderableEditDiff = (
 	value: unknown,
 	limits: ToolResourceLimits["edit"] = HARD_EDIT_DIFF_LIMITS
 ): value is EditDiff => {
-	if (!isObjectLike(value) || Array.isArray(value)) {
+	if (!isPlainObject(value)) {
 		return false;
 	}
 
 	const candidate = value as UnknownRecord;
 	if (
-		typeof candidate.patch !== "string" ||
+		!isString(candidate.patch) ||
 		typeof candidate.additions !== "number" ||
 		!Number.isInteger(candidate.additions) ||
 		candidate.additions < 0 ||
 		typeof candidate.deletions !== "number" ||
 		!Number.isInteger(candidate.deletions) ||
 		candidate.deletions < 0 ||
-		typeof candidate.truncated !== "boolean" ||
+		!isBoolean(candidate.truncated) ||
 		typeof candidate.omittedHunks !== "number" ||
 		!Number.isInteger(candidate.omittedHunks) ||
 		candidate.omittedHunks < 0

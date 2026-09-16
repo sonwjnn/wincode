@@ -13,6 +13,7 @@
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
+    "@wincode/runtime-utils": "workspace:*",
     "@wincode/tui": "workspace:*",
     "commander": "^14.0.3"
   },

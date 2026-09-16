@@ -1,5 +1,6 @@
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
+import { isError, isUndefined } from "@wincode/runtime-utils";
 import { spawn } from "bun";
 import {
 	compareStableStrings,
@@ -41,7 +42,7 @@ const SCRUBBED_ENVIRONMENT_NAMES = [
 ];
 
 const isMissingPathError = (error: unknown): boolean =>
-	error instanceof Error && "code" in error && error.code === "ENOENT";
+	isError(error) && "code" in error && error.code === "ENOENT";
 
 type RunnerArguments = {
 	readonly packageFilter?: string;
@@ -101,7 +102,7 @@ const createTestEnvironment = (
 ): Record<string, string> => {
 	const environment: Record<string, string> = {};
 	for (const [name, value] of Object.entries(process.env)) {
-		if (value !== undefined) {
+		if (!isUndefined(value)) {
 			environment[name] = value;
 		}
 	}
@@ -139,8 +140,9 @@ const runDefaultPackage = async (
 		);
 		return await result.exited;
 	} catch (error) {
-		const message =
-			error instanceof Error ? (error.stack ?? error.message) : String(error);
+		const message = isError(error)
+			? (error.stack ?? error.message)
+			: String(error);
 		console.error(`Default package process failed: ${message}`);
 		return 1;
 	}
@@ -275,8 +277,9 @@ const runE2EFile = async (
 		await retainE2EFailure(artifactDirectory, log);
 		return exitCode;
 	} catch (error) {
-		const message =
-			error instanceof Error ? (error.stack ?? error.message) : String(error);
+		const message = isError(error)
+			? (error.stack ?? error.message)
+			: String(error);
 		log.push(message);
 		process.stderr.write(`${message}\n`);
 		await retainE2EFailure(artifactDirectory, log);
@@ -294,7 +297,7 @@ const packageMatches = (
 	packageName: string,
 	packageFilter: string | undefined
 ): boolean =>
-	packageFilter === undefined ||
+	isUndefined(packageFilter) ||
 	packageFilter === packageName ||
 	packageFilter === `@wincode/${packageName}`;
 
@@ -394,7 +397,7 @@ export const runTestPortfolio = async (
 		}
 		return await runE2EPortfolio(arguments_.root, arguments_.packageFilter);
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const message = isError(error) ? error.message : String(error);
 		console.error(message);
 		return 2;
 	}

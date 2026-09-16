@@ -1,3 +1,4 @@
+import { isUndefined } from "@wincode/runtime-utils";
 import {
 	type ConfigStore,
 	createConfigStore,
@@ -32,11 +33,11 @@ export async function loadMcpConfig(
 	const configStore =
 		input.configStore ??
 		createConfigStore({
-			...(input.configRoot === undefined
+			...(isUndefined(input.configRoot)
 				? {}
 				: { configRoot: input.configRoot }),
-			...(input.fs === undefined ? {} : { fs: input.fs }),
-			...(input.homeRoot === undefined ? {} : { homeRoot: input.homeRoot }),
+			...(isUndefined(input.fs) ? {} : { fs: input.fs }),
+			...(isUndefined(input.homeRoot) ? {} : { homeRoot: input.homeRoot }),
 			xdgConfigHome: input.env.XDG_CONFIG_HOME ?? "",
 		});
 	const snapshot = await (input.refresh

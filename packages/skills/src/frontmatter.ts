@@ -1,3 +1,4 @@
+import { isUndefined } from "@wincode/runtime-utils";
 import { z } from "zod";
 import type { SkillFrontmatter } from "./types";
 
@@ -46,7 +47,7 @@ export function parseSkillFile(source: string): {
 	}
 	const values: Record<string, string | string[]> = {};
 	const yaml = match[1];
-	if (yaml === undefined) {
+	if (isUndefined(yaml)) {
 		throw new SkillValidationError("SKILL.md has empty frontmatter");
 	}
 	for (const line of yaml.split(LINE_PATTERN)) {

@@ -1,4 +1,5 @@
 import { TextAttributes } from "@opentui/core";
+import { isUndefined } from "@wincode/runtime-utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { redactSensitiveText } from "@/shared/display-sanitize";
 import { useDialogEscape } from "@/shared/providers/dialog/dialog-provider";
@@ -44,7 +45,7 @@ export function formatStatusRow(status: McpServerStatus): StatusRowFormat {
 	if (status.transport === "local") {
 		row.warning = MCP_LOCAL_WARNING;
 	}
-	if (status.error !== undefined && status.error.length > 0) {
+	if (!isUndefined(status.error) && status.error.length > 0) {
 		row.error = sanitizeStatusError(status.error);
 	}
 	return row;
@@ -197,7 +198,7 @@ export function McpStatusDialogContent() {
 				if (key.name !== "space") {
 					return false;
 				}
-				if (highlightedRow !== undefined) {
+				if (!isUndefined(highlightedRow)) {
 					handleAction(highlightedRow);
 				}
 				return true;

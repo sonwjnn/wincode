@@ -6,6 +6,7 @@ import {
 	type ModelVariant,
 	normalizeModelVariant,
 } from "@wincode/ai/models";
+import { isNull, isUndefined } from "@wincode/runtime-utils";
 import {
 	createContext,
 	type ReactNode,
@@ -71,7 +72,7 @@ export function PromptConfigProvider({
 	});
 
 	useEffect(() => {
-		if (registry === null || hasExplicitAgent.current) {
+		if (isNull(registry) || hasExplicitAgent.current) {
 			return;
 		}
 		setConfig((current) => ({
@@ -93,7 +94,7 @@ export function PromptConfigProvider({
 				);
 				const next =
 					selectableAgents[(currentIndex + 1) % selectableAgents.length];
-				return next === undefined ? current : { ...current, agent: next.id };
+				return isUndefined(next) ? current : { ...current, agent: next.id };
 			});
 		},
 		[]
@@ -148,7 +149,7 @@ export function PromptConfigProvider({
 export function usePromptConfig(): PromptConfig {
 	const context = useContext(PromptConfigContext);
 
-	if (context === null) {
+	if (isNull(context)) {
 		throw new Error(
 			"usePromptConfig must be used within a PromptConfigProvider"
 		);

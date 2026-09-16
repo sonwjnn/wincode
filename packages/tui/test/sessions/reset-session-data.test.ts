@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { ChatModelSelection } from "@wincode/ai/models";
+import { isUndefined } from "@wincode/runtime-utils";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import {
@@ -43,7 +44,7 @@ test("resets session data while preserving prompt history", async () => {
 		filename: "reset.png",
 		mediaType: "image/png",
 	});
-	if (reference === undefined) {
+	if (isUndefined(reference)) {
 		throw new Error("The attachment fixture was not stored.");
 	}
 	await store.appendCompaction({

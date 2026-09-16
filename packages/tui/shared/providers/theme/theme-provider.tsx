@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { isUndefined } from "@wincode/runtime-utils";
 import type { ReactNode } from "react";
 import {
 	createContext,
@@ -82,7 +83,7 @@ type ThemeProviderProps = {
 };
 
 const resolveThemeValue = (themeName: string | undefined): Theme =>
-	themeName === undefined
+	isUndefined(themeName)
 		? getInitialTheme()
 		: (findThemeByName(THEMES, themeName) ?? DEFAULT_THEME);
 
@@ -92,7 +93,7 @@ export function ThemeProvider({ children, themeName }: ThemeProviderProps) {
 	);
 
 	useEffect(() => {
-		if (themeName !== undefined) {
+		if (!isUndefined(themeName)) {
 			setCurrentTheme(resolveThemeValue(themeName));
 		}
 	}, [themeName]);

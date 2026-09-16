@@ -5,6 +5,7 @@ import {
 	type ModelRuntimeProviderId,
 } from "@wincode/ai/models";
 import type { ModelMetadataEntry } from "@wincode/ai/models-dev";
+import { isUndefined } from "@wincode/runtime-utils";
 
 /**
  * A runtime override table over the generated catalog metadata. Both sides are
@@ -44,8 +45,8 @@ const mergeModelCost = (
 	return {
 		input: live.input ?? catalog.input,
 		output: live.output ?? catalog.output,
-		...(cacheRead === undefined ? {} : { cacheRead }),
-		...(cacheWrite === undefined ? {} : { cacheWrite }),
+		...(isUndefined(cacheRead) ? {} : { cacheRead }),
+		...(isUndefined(cacheWrite) ? {} : { cacheWrite }),
 	};
 };
 

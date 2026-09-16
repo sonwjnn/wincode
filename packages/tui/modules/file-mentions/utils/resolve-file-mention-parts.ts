@@ -4,6 +4,7 @@ import {
 	createWorkspaceSandbox,
 	type WorkspacePolicy,
 } from "@wincode/coding-tools/workspace";
+import { getErrorMessage, isError } from "@wincode/runtime-utils";
 import type { FileMentionPart } from "@/modules/sessions/message";
 import type { FileMentionOption } from "../types";
 import { getFileMentionOptions } from "./file-mention-options";
@@ -133,7 +134,7 @@ const resolveMentionPath = async (
 	}
 };
 const isWorkspaceEscapeError = (error: unknown) =>
-	error instanceof Error && error.message.startsWith("Path escapes workspace:");
+	isError(error) && error.message.startsWith("Path escapes workspace:");
 
 const clampContentToBytes = (
 	content: string,
@@ -318,7 +319,7 @@ export const resolveFileMentionParts = async (
 			parts.push(
 				createErrorPart(
 					canonicalMentionPath,
-					error instanceof Error ? error.message : "Could not resolve mention."
+					getErrorMessage(error, "Could not resolve mention.")
 				)
 			);
 		}

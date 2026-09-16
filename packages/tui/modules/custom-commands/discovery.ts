@@ -1,6 +1,11 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { isNonEmptyString, isObjectLike } from "@wincode/runtime-utils";
+import {
+	isArray,
+	isNonEmptyString,
+	isPlainObject,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { resolveConfigRelativePath } from "@/shared/config/resolve-config-relative-path";
 import { getProjectRoots } from "@/shared/paths/project-roots";
@@ -32,10 +37,7 @@ function collect(
 const configuredRoots = (snapshot: ConfigSnapshot) => {
 	const commands = snapshot.document.commands;
 	if (
-		!isObjectLike(commands) ||
-		Array.isArray(commands) ||
-		!("paths" in commands) ||
-		!Array.isArray(commands.paths)
+		!(isPlainObject(commands) && "paths" in commands && isArray(commands.paths))
 	) {
 		return [];
 	}
@@ -48,7 +50,7 @@ const configuredRoots = (snapshot: ConfigSnapshot) => {
 			["commands", "paths", String(index)],
 			configuredPath
 		);
-		return resolved === undefined ? [] : [resolved];
+		return isUndefined(resolved) ? [] : [resolved];
 	});
 };
 

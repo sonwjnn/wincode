@@ -1,6 +1,7 @@
 import type { BoxRenderable } from "@opentui/core";
 import { RGBA, TextAttributes } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
+import { isNull, isUndefined } from "@wincode/runtime-utils";
 import type { ReactNode } from "react";
 import {
 	createContext,
@@ -178,10 +179,9 @@ function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 			? Math.floor(dimensions.width * 0.67)
 			: Math.min(100, dimensions.width - 2);
 	const maxWidth = Math.max(1, dimensions.width - 2);
-	const width =
-		config.width === undefined
-			? defaultWidth
-			: Math.max(1, Math.min(config.width, maxWidth));
+	const width = isUndefined(config.width)
+		? defaultWidth
+		: Math.max(1, Math.min(config.width, maxWidth));
 
 	useLayoutEffect(() => {
 		const dialogHeight = initialHeightRef.current ?? dialogRef.current?.height;
@@ -196,7 +196,7 @@ function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 	}, [dimensions.height]);
 
 	useEffect(() => {
-		if (anchoredTop !== null) {
+		if (!isNull(anchoredTop)) {
 			return;
 		}
 		const dialogHeight = dialogRef.current?.height;
@@ -245,7 +245,7 @@ function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 				paddingLeft={padLeft}
 				paddingRight={padRight}
 				paddingTop={padTop}
-				position={anchoredTop === null ? "relative" : "absolute"}
+				position={isNull(anchoredTop) ? "relative" : "absolute"}
 				ref={dialogRef}
 				top={anchoredTop ?? undefined}
 				width={width}

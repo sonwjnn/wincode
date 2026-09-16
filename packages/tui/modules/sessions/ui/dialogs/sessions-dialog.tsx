@@ -1,5 +1,6 @@
 import { RGBA, TextAttributes } from "@opentui/core";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
+import { getErrorMessage } from "@wincode/runtime-utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLatest } from "@/shared/hooks/use-latest";
 import type { SessionId } from "@/shared/identifiers";
@@ -154,8 +155,7 @@ export const SessionsDialogContent = () => {
 				}
 				show({
 					variant: "error",
-					message:
-						error instanceof Error ? error.message : "Failed to fetch sessions",
+					message: getErrorMessage(error, "Failed to fetch sessions"),
 				});
 				close();
 			}
@@ -205,8 +205,7 @@ export const SessionsDialogContent = () => {
 				setSessions(original);
 				show({
 					variant: "error",
-					message:
-						error instanceof Error ? error.message : "Failed to update session",
+					message: getErrorMessage(error, "Failed to update session"),
 				});
 			}
 		},
@@ -224,8 +223,7 @@ export const SessionsDialogContent = () => {
 				setSessions(original);
 				show({
 					variant: "error",
-					message:
-						error instanceof Error ? error.message : "Failed to delete session",
+					message: getErrorMessage(error, "Failed to delete session"),
 				});
 			}
 		},

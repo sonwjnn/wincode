@@ -3,6 +3,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { isUndefined } from "@wincode/runtime-utils";
 import { defaultWorkspaceSandbox } from "../../workspace";
 import { keepTailUtf8 } from "../output-bounds";
 import {
@@ -104,7 +105,7 @@ const findExistingPathAncestor = (targetPath: string): string => {
 };
 
 const resolveShellCwd = async (cwd: string | undefined): Promise<string> => {
-	if (cwd === undefined) {
+	if (isUndefined(cwd)) {
 		return defaultWorkspaceSandbox.root;
 	}
 	const expanded = expandHomeInShellPath(cwd);
@@ -141,7 +142,7 @@ const assertShellInputWithinLimits = (
 			`Shell command exceeds the ${limits.shell.maxCommandChars}-character limit for the ${limits.profile} resource profile.`
 		);
 	}
-	if (input.cwd !== undefined && input.cwd.length > limits.shell.maxCwdChars) {
+	if (!isUndefined(input.cwd) && input.cwd.length > limits.shell.maxCwdChars) {
 		throw new Error(
 			`Shell cwd exceeds the ${limits.shell.maxCwdChars}-character limit for the ${limits.profile} resource profile.`
 		);
@@ -184,7 +185,7 @@ const listDescendantPids = async (rootPid: number): Promise<number[]> => {
 	while (cursor < queue.length) {
 		const pid = queue[cursor];
 		cursor += 1;
-		if (pid === undefined) {
+		if (isUndefined(pid)) {
 			continue;
 		}
 		for (const childPid of childrenByParent.get(pid) ?? []) {
@@ -201,7 +202,7 @@ const killProcessTree = async (
 	force: boolean
 ): Promise<void> => {
 	if (platform === "win32") {
-		if (child.pid === undefined) {
+		if (isUndefined(child.pid)) {
 			return;
 		}
 		try {
@@ -218,7 +219,7 @@ const killProcessTree = async (
 	}
 	// Kill the process group first: while the command's shell is still alive
 	// this reaches the whole tree in one call.
-	if (child.pid !== undefined) {
+	if (!isUndefined(child.pid)) {
 		try {
 			process.kill(-child.pid, force ? "SIGKILL" : "SIGTERM");
 		} catch {
@@ -228,7 +229,7 @@ const killProcessTree = async (
 	// Background children whose output was redirected away from the captured
 	// pipes can outlive both the shell and its process group; walk the process
 	// table and terminate every descendant, deepest first.
-	if (child.pid === undefined) {
+	if (isUndefined(child.pid)) {
 		return;
 	}
 	const descendants = await listDescendantPids(child.pid);
@@ -371,7 +372,7 @@ export const createShellRunner = (
 			};
 
 			const scheduleDrain = (): void => {
-				if (drainTimer !== undefined) {
+				if (!isUndefined(drainTimer)) {
 					return;
 				}
 				drainTimer = setTimeout(() => {

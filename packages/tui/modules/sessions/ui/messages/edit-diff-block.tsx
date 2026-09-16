@@ -2,7 +2,7 @@ import { isAbsolute } from "node:path";
 import { type BoxRenderable, pathToFiletype } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
 import { type EditDiff, isRenderableEditDiff } from "@wincode/coding-tools";
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isPlainObject, isString, isUndefined } from "@wincode/runtime-utils";
 import { type ReactNode, useMemo, useRef, useState } from "react";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { stripControlCharacters } from "@/shared/display-sanitize";
@@ -51,14 +51,14 @@ type EditPartFields = {
 };
 
 const readEditPartFields = (value: unknown): EditPartFields => {
-	if (!isObjectLike(value) || Array.isArray(value)) {
+	if (!isPlainObject(value)) {
 		return {};
 	}
 	const path = Reflect.get(value, "path");
 	const editDiff = Reflect.get(value, "editDiff");
 	return {
-		...(path === undefined ? {} : { path }),
-		...(editDiff === undefined ? {} : { editDiff }),
+		...(isUndefined(path) ? {} : { path }),
+		...(isUndefined(editDiff) ? {} : { editDiff }),
 	};
 };
 
@@ -68,11 +68,11 @@ const getInput = (part: EditToolPart): EditPartFields =>
 	readEditPartFields(part.input);
 
 const getEditPath = (part: EditToolPart, output: EditPartFields): string => {
-	if (typeof output.path === "string") {
+	if (isString(output.path)) {
 		return output.path;
 	}
 	const input = getInput(part);
-	if (typeof input.path === "string") {
+	if (isString(input.path)) {
 		return input.path;
 	}
 	return ".";
@@ -211,7 +211,7 @@ const isEditOutputWithDiff = (
 	}
 
 	const output = getOutput(part);
-	if (output.editDiff === undefined) {
+	if (isUndefined(output.editDiff)) {
 		return null;
 	}
 
@@ -338,8 +338,7 @@ export function EditDiffBlock({ agent, part }: EditDiffBlockProps) {
 			return null;
 		}
 		const input = getInput(part);
-		const runningPath =
-			typeof input.path === "string" ? formatEditPath(input.path) : "";
+		const runningPath = isString(input.path) ? formatEditPath(input.path) : "";
 		return <EditRunningStatus agent={agent} path={runningPath} />;
 	}
 

@@ -1,3 +1,4 @@
+import { isUndefined } from "@wincode/runtime-utils";
 // End-to-end MCP transport integration tests using real SDK v2 clients and
 // real servers (no mocks of @modelcontextprotocol/client|server).
 //
@@ -85,7 +86,7 @@ const createRegistry = (config: ResolvedMcpServerConfig): McpRegistry =>
 
 const echoToolName = (snapshot: McpCatalogSnapshot): string => {
 	const entry = snapshot.manifest[0];
-	if (entry === undefined) {
+	if (isUndefined(entry)) {
 		throw new Error("expected a manifest with the echo tool");
 	}
 	return entry.name;
@@ -129,7 +130,7 @@ const waitForFile = (filePath: string): Promise<void> => {
 		}
 		settled = true;
 		watcher.close();
-		if (error === undefined) {
+		if (isUndefined(error)) {
 			resolve();
 		} else {
 			reject(error);
@@ -319,14 +320,14 @@ const openRules = (rules: Record<string, "allow" | "ask" | "deny">) =>
 
 const firstTool = (snapshot: McpCatalogSnapshot): McpSnapshotTool => {
 	const entry = snapshot.tools.values().next().value;
-	if (entry === undefined) {
+	if (isUndefined(entry)) {
 		throw new Error("expected at least one dispatch entry in the catalog");
 	}
 	return entry;
 };
 const dispatchNameOf = (snapshot: McpCatalogSnapshot): string => {
 	const name = snapshot.tools.keys().next().value;
-	if (name === undefined) {
+	if (isUndefined(name)) {
 		throw new Error("expected at least one dispatch entry in the catalog");
 	}
 	return name;

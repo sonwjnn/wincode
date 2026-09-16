@@ -1,3 +1,4 @@
+import { isUndefined } from "@wincode/runtime-utils";
 export type LineRange = {
 	endLine?: number;
 	startLine: number;
@@ -53,10 +54,11 @@ const parseLineRange = (selector: string): LineRange => {
 		throw new Error("Line selector 0 is invalid; lines are 1-indexed");
 	}
 	const separator = match[2] === ".." ? "-" : match[2];
-	const rightHandSide =
-		match[3] === undefined ? undefined : Number.parseInt(match[3], 10);
+	const rightHandSide = isUndefined(match[3])
+		? undefined
+		: Number.parseInt(match[3], 10);
 	if (separator === "+") {
-		if (rightHandSide === undefined || rightHandSide < 1) {
+		if (isUndefined(rightHandSide) || rightHandSide < 1) {
 			throw new Error(
 				`Invalid line range ${selector}: count must be at least 1`
 			);
@@ -68,7 +70,7 @@ const parseLineRange = (selector: string): LineRange => {
 	}
 	if (
 		separator === "-" &&
-		rightHandSide !== undefined &&
+		!isUndefined(rightHandSide) &&
 		rightHandSide < startLine
 	) {
 		throw new Error(
@@ -76,7 +78,7 @@ const parseLineRange = (selector: string): LineRange => {
 		);
 	}
 	return {
-		...(rightHandSide === undefined ? {} : { endLine: rightHandSide }),
+		...(isUndefined(rightHandSide) ? {} : { endLine: rightHandSide }),
 		startLine,
 	};
 };
@@ -94,17 +96,16 @@ export const normalizeLineRanges = (
 			normalizedRanges.push({ ...range });
 			continue;
 		}
-		if (previousRange.endLine === undefined) {
+		if (isUndefined(previousRange.endLine)) {
 			continue;
 		}
 		if (range.startLine > previousRange.endLine + 1) {
 			normalizedRanges.push({ ...range });
 			continue;
 		}
-		previousRange.endLine =
-			range.endLine === undefined
-				? undefined
-				: Math.max(previousRange.endLine, range.endLine);
+		previousRange.endLine = isUndefined(range.endLine)
+			? undefined
+			: Math.max(previousRange.endLine, range.endLine);
 	}
 	return normalizedRanges;
 };

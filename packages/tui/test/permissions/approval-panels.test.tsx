@@ -1,5 +1,6 @@
 import { expect, mock, test } from "bun:test";
 import { testRender } from "@opentui/react/test-utils";
+import { isUndefined } from "@wincode/runtime-utils";
 import { act } from "react";
 import {
 	type ApprovalPanelsContextValue,
@@ -25,7 +26,7 @@ const makeRequest = (
 		identity: [{ label: "tool", value: "read" }],
 		input: { path: ".env" },
 		...rest,
-		...(rawToolCallId === undefined
+		...(isUndefined(rawToolCallId)
 			? {}
 			: { toolCallId: toolCallId(rawToolCallId) }),
 	};

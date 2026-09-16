@@ -1,4 +1,5 @@
 import type { ConnectionProviderId } from "@wincode/ai/models";
+import { isNull, isUndefined } from "@wincode/runtime-utils";
 import type {
 	AuthorizationByProvider,
 	ConnectionProviderSummary,
@@ -108,13 +109,13 @@ export const createConnections = (
 				authCache ??
 				runQueued(queue, async () => {
 					const credential = await vault.load(id);
-					if (credential === null) {
+					if (isNull(credential)) {
 						throw new Error(
 							`Reconnect ${adapter.status(null).displayName} with /connect`
 						);
 					}
 					const result = await adapter.authorize(credential, undefined);
-					if (result.replacementCredential !== undefined) {
+					if (!isUndefined(result.replacementCredential)) {
 						await vault.replaceValidated(id, result.replacementCredential);
 					}
 					return result.authorization;

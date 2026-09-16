@@ -1,3 +1,5 @@
+import { isNull } from "@wincode/runtime-utils";
+
 const HEX_COLOR_RE = /^#?([\da-f]{3,4}|[\da-f]{6}(?:[\da-f]{2})?)$/iu;
 
 const getRelativeLuminance = (backgroundColor: string): number | null => {
@@ -36,7 +38,7 @@ export const getContrastRatio = (
 	textColor: "black" | "white"
 ): number => {
 	const backgroundLuminance = getRelativeLuminance(backgroundColor);
-	if (backgroundLuminance === null) {
+	if (isNull(backgroundLuminance)) {
 		return 1;
 	}
 
@@ -49,7 +51,7 @@ export const getContrastRatio = (
 export const getContrastingTextColor = (
 	backgroundColor: string
 ): "black" | "white" => {
-	if (getRelativeLuminance(backgroundColor) === null) {
+	if (isNull(getRelativeLuminance(backgroundColor))) {
 		return "black";
 	}
 

@@ -6,6 +6,7 @@ import {
 	type ToolResourceLimits,
 } from "@wincode/coding-tools";
 import { createWorkspaceSandbox } from "@wincode/coding-tools/workspace";
+import { isUndefined } from "@wincode/runtime-utils";
 import { mcpDeniedByPolicyText } from "@/modules/mcp/registry";
 import {
 	applyManualApprovalSafetyCeiling,
@@ -46,7 +47,7 @@ const shellCall = (
 ) => ({
 	family: "shell" as const,
 	toolCall: {
-		input: cwd === undefined ? { command } : { command, cwd },
+		input: isUndefined(cwd) ? { command } : { command, cwd },
 		toolCallId: makeToolCallId(toolCallId),
 	},
 });

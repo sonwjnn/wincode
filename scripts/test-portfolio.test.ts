@@ -10,6 +10,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { isError } from "@wincode/runtime-utils";
 import { spawnSync } from "bun";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
@@ -18,7 +19,7 @@ const runnerPath = join(repositoryRoot, "scripts/test-portfolio.ts");
 const output = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
 
 const isMissingPathError = (error: unknown): boolean =>
-	error instanceof Error && "code" in error && error.code === "ENOENT";
+	isError(error) && "code" in error && error.code === "ENOENT";
 
 const runPortfolio = (
 	root: string,

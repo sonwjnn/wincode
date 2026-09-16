@@ -1,5 +1,6 @@
 import { type InputRenderable, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
+import { getErrorMessage } from "@wincode/runtime-utils";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	useDialogEscape,
@@ -15,14 +16,6 @@ type ConnectionApiKeyDialogContentProps = {
 	onSubmit: (apiKey: string, signal: AbortSignal) => void | Promise<void>;
 	placeholder?: string;
 };
-
-function getErrorMessage(error: unknown): string {
-	if (error instanceof Error) {
-		return error.message;
-	}
-
-	return "Failed to save API key.";
-}
 
 export function ConnectionApiKeyDialogContent({
 	provider,
@@ -66,7 +59,7 @@ export function ConnectionApiKeyDialogContent({
 			}
 		} catch (submitError) {
 			if (!controller.signal.aborted) {
-				setError(getErrorMessage(submitError));
+				setError(getErrorMessage(submitError, "Failed to save API key."));
 			}
 		} finally {
 			if (submissionControllerRef.current === controller) {

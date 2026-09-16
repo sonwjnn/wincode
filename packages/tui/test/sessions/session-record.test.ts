@@ -10,6 +10,7 @@ import type {
 	SessionRecord,
 } from "@wincode/agent-core";
 import type { ChatModelSelection } from "@wincode/ai/models";
+import { isUndefined } from "@wincode/runtime-utils";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
@@ -48,7 +49,7 @@ const messageRecord = (
 	metadata?: SessionMessageRecord["metadata"]
 ): SessionMessageRecord => ({
 	id: sessionMessageId(id),
-	...(metadata === undefined ? {} : { metadata }),
+	...(isUndefined(metadata) ? {} : { metadata }),
 	parts: [{ text, type: "text" }],
 	role,
 });
@@ -160,7 +161,7 @@ const createSession = async (
 		turnId: agentTurnId(`turn-initial-${text}`),
 	});
 	const [initialRecord] = await store.listSessionRecords(id);
-	if (initialRecord === undefined) {
+	if (isUndefined(initialRecord)) {
 		throw new Error("The initial user record was not persisted.");
 	}
 	return { id, initialRecord };
@@ -185,7 +186,7 @@ test("round-trips the logical user link for retried assistant rows", async () =>
 	const { id } = await createSession(store);
 	const assistant = assistantRecord("record-retry", "retried");
 	const message = assistant.messages[0];
-	if (message === undefined) {
+	if (isUndefined(message)) {
 		throw new Error("The assistant record did not contain a message.");
 	}
 	const retriedRecord: SessionRecord = {

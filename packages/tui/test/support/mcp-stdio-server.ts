@@ -6,10 +6,11 @@
 import { writeFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import { isUndefined } from "@wincode/runtime-utils";
 import { z } from "zod";
 
 const exitMarker = process.env.WINCODE_MCP_EXIT_MARKER;
-if (exitMarker !== undefined) {
+if (!isUndefined(exitMarker)) {
 	let markerWritten = false;
 	const markExited = (): void => {
 		if (markerWritten) {

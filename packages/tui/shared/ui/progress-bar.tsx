@@ -1,5 +1,6 @@
 import { RGBA } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
+import { isNull } from "@wincode/runtime-utils";
 import { useEffect, useMemo, useState } from "react";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
@@ -84,15 +85,13 @@ export function ProgressBar({ agent }: Props) {
 			{frame.map(({ position, trailIndex }) => (
 				<span
 					fg={
-						trailIndex === null
+						isNull(trailIndex)
 							? colors.textMuted
 							: (trailColors[trailIndex] ?? agentColor)
 					}
 					key={position}
 				>
-					{trailIndex === null
-						? PROGRESS_INACTIVE_GLYPH
-						: PROGRESS_ACTIVE_GLYPH}
+					{isNull(trailIndex) ? PROGRESS_INACTIVE_GLYPH : PROGRESS_ACTIVE_GLYPH}
 				</span>
 			))}
 		</text>

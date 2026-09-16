@@ -8,6 +8,7 @@ import {
 	createAgentTurnLifecycle,
 	type ToolCallId,
 } from "@wincode/agent-core";
+import { isUndefined } from "@wincode/runtime-utils";
 import {
 	createSessionOperation,
 	type SessionOperation,
@@ -222,7 +223,7 @@ export const createSessionController = ({
 		getState: () => state,
 		interrupt: operation.interrupt,
 		respondToApproval: async (approvalId, outcome) => {
-			if (resolveApproval === undefined) {
+			if (isUndefined(resolveApproval)) {
 				reportError(new Error("Session approval adapter is unavailable."));
 				return;
 			}

@@ -1,3 +1,4 @@
+import { isUndefined } from "@wincode/runtime-utils";
 import { z } from "zod";
 import {
 	type ModelProviderOptions,
@@ -139,8 +140,10 @@ export const modelTargetSchema: z.ZodType<ModelTargetSchemaOutput> =
 			return;
 		}
 		if (
-			target.variant !== undefined &&
-			!getSupportedModelVariants(target).includes(target.variant)
+			!(
+				isUndefined(target.variant) ||
+				getSupportedModelVariants(target).includes(target.variant)
+			)
 		) {
 			context.addIssue({
 				code: "custom",
@@ -196,7 +199,7 @@ export const createModelTarget = (
 		);
 	}
 	const variant = normalizeModelVariantForModel(model, options.variant);
-	if (options.variant !== undefined && variant === undefined) {
+	if (!isUndefined(options.variant) && isUndefined(variant)) {
 		throw new Error(
 			`Unsupported model variant: ${selection.providerId}/${selection.modelId}/${options.variant}`
 		);
@@ -209,13 +212,13 @@ export const createModelTarget = (
 		authorization: toMinimalAuthorization(selection.providerId, authorization),
 		modelId: model.id as SupportedChatModelId,
 		providerId: model.connectionProviderId,
-		...(resolvedOptions.maxOutputTokens === undefined
+		...(isUndefined(resolvedOptions.maxOutputTokens)
 			? {}
 			: { maxOutputTokens: resolvedOptions.maxOutputTokens }),
-		...(resolvedOptions.providerOptions === undefined
+		...(isUndefined(resolvedOptions.providerOptions)
 			? {}
 			: { providerOptions: resolvedOptions.providerOptions }),
-		...(variant === undefined ? {} : { variant }),
+		...(isUndefined(variant) ? {} : { variant }),
 	};
 	modelTargetSchema.parse(target);
 	return target as ModelTarget;

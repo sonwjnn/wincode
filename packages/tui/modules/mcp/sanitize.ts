@@ -1,3 +1,4 @@
+import { getErrorMessage, isUndefined } from "@wincode/runtime-utils";
 import { sanitizeText } from "@/shared/display-sanitize";
 import type { ResolvedMcpServerConfig } from "./config";
 
@@ -20,8 +21,8 @@ export const sanitizeMessage = (
 	error: unknown,
 	fallback: string
 ): string => {
-	const message = error instanceof Error ? error.message : fallback;
-	if (config === undefined) {
+	const message = getErrorMessage(error, fallback);
+	if (isUndefined(config)) {
 		return fallback;
 	}
 	return sanitizeText(message, {

@@ -1,5 +1,6 @@
 import type { SessionMessageId } from "@wincode/agent-core";
 import { normalizeChatModelSelection } from "@wincode/ai/models";
+import { isNull, isString, isUndefined } from "@wincode/runtime-utils";
 import type { SessionMessage } from "@/modules/sessions/message";
 import {
 	getSessionAttemptMessages,
@@ -25,7 +26,7 @@ export const resolveTurnMetadataSignature = (
 
 	if (normalizedModel) {
 		modelKey = `${normalizedModel.providerId}/${normalizedModel.modelId}`;
-	} else if (typeof metadata.model === "string") {
+	} else if (isString(metadata.model)) {
 		modelKey = metadata.model;
 	} else if (metadata.model) {
 		modelKey = `${metadata.model.providerId}/${metadata.model.modelId}`;
@@ -40,14 +41,14 @@ const resolveTurnMetadataMessage = (
 	turn: SessionTurn
 ): SessionMessage | undefined => {
 	const assistant = turn.messages.findLast(
-		(message) => message.role === "assistant" && message.metadata !== undefined
+		(message) => message.role === "assistant" && !isUndefined(message.metadata)
 	);
 	if (assistant) {
 		return assistant;
 	}
 
 	return turn.messages.findLast(
-		(message) => message.role === "user" && message.metadata !== undefined
+		(message) => message.role === "user" && !isUndefined(message.metadata)
 	);
 };
 
@@ -83,7 +84,7 @@ export const groupMessagesBySessionTurn = (
 	let currentTurn: SessionTurn | null = null;
 
 	for (const message of messages) {
-		if (message.role === "user" || currentTurn === null) {
+		if (message.role === "user" || isNull(currentTurn)) {
 			currentTurn = { id: message.id, messages: [message] };
 			turns.push(currentTurn);
 			if (message.role === "user") {
@@ -92,10 +93,9 @@ export const groupMessagesBySessionTurn = (
 			continue;
 		}
 
-		const sourceTurn =
-			message.metadata?.sourceUserMessageId === undefined
-				? undefined
-				: turnsByUserMessageId.get(message.metadata.sourceUserMessageId);
+		const sourceTurn = isUndefined(message.metadata?.sourceUserMessageId)
+			? undefined
+			: turnsByUserMessageId.get(message.metadata.sourceUserMessageId);
 		(sourceTurn ?? currentTurn).messages.push(message);
 	}
 
@@ -113,9 +113,9 @@ const canRetryPrimaryUser = (
 		(message) => message.role === "assistant"
 	);
 	return (
-		latestAssistant === undefined ||
+		isUndefined(latestAssistant) ||
 		latestAssistant.metadata?.interrupted === true ||
-		latestAssistant.metadata?.terminalOutcome !== undefined
+		!isUndefined(latestAssistant.metadata?.terminalOutcome)
 	);
 };
 

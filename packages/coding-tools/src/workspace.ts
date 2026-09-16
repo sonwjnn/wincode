@@ -1,6 +1,7 @@
 import { type Dirent, existsSync, realpathSync } from "node:fs";
 import { readdir, readFile, readlink, realpath } from "node:fs/promises";
 import path from "node:path";
+import { isObjectLike, isUndefined } from "@wincode/runtime-utils";
 import ignore, { type Ignore } from "ignore";
 import type { Except } from "type-fest";
 
@@ -141,10 +142,7 @@ const compareDirectoryEntries = (left: Dirent, right: Dirent) =>
 	left.name.localeCompare(right.name);
 
 const isMissingIgnoreFile = (error: unknown): error is NodeJS.ErrnoException =>
-	typeof error === "object" &&
-	error !== null &&
-	"code" in error &&
-	error.code === "ENOENT";
+	isObjectLike(error) && "code" in error && error.code === "ENOENT";
 
 const getIgnoreRelativePath = (
 	ruleSet: IgnoreRuleSet,
@@ -183,7 +181,7 @@ const isGitignoredPath = (
 	return ignored;
 };
 const hasReachedEntryLimit = (context: TraversalContext) =>
-	context.maxEntries !== undefined &&
+	!isUndefined(context.maxEntries) &&
 	context.entries.length >= context.maxEntries;
 
 const markTraversalTruncated = (context: TraversalContext) => {
@@ -215,7 +213,7 @@ const pushTraversalEntry = (
 		absolutePath,
 		depth,
 		relativePath: context.policy.relativePath(absolutePath),
-		...(symlinkTarget === undefined ? {} : { symlinkTarget }),
+		...(isUndefined(symlinkTarget) ? {} : { symlinkTarget }),
 		type,
 	});
 

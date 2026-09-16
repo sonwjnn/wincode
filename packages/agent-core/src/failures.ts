@@ -1,4 +1,9 @@
-import { isNonEmptyString, isObjectLike } from "@wincode/runtime-utils";
+import {
+	isNonEmptyString,
+	isObjectLike,
+	isString,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 export const OPERATIONAL_FAILURE_VERSION = 1 as const;
 
@@ -72,18 +77,18 @@ const safeMessageByCode: Record<OperationalFailureCode, string> = {
 const isOperationalFailureCode = (
 	value: unknown
 ): value is OperationalFailureCode =>
-	typeof value === "string" &&
+	isString(value) &&
 	(operationalFailureCodes as readonly string[]).includes(value);
 const isOperationalFailureRetryDisposition = (
 	value: unknown
 ): value is OperationalFailureRetryDisposition =>
-	typeof value === "string" &&
+	isString(value) &&
 	(operationalFailureRetryDispositions as readonly string[]).includes(value);
 
 const isAllowedDetails = (
 	value: unknown
 ): value is OperationalFailureDetails => {
-	if (value === undefined) {
+	if (isUndefined(value)) {
 		return true;
 	}
 	if (!isObjectLike(value)) {
@@ -99,19 +104,28 @@ const isAllowedDetails = (
 	if (Object.keys(details).some((key) => !allowedKeys.has(key))) {
 		return false;
 	}
+	const hasInvalidModelId = !(
+		isUndefined(details.modelId) || isNonEmptyString(details.modelId)
+	);
+	const hasInvalidProviderId = !(
+		isUndefined(details.providerId) || isNonEmptyString(details.providerId)
+	);
+	const hasInvalidRetryAfterMs =
+		!isUndefined(details.retryAfterMs) &&
+		(typeof details.retryAfterMs !== "number" ||
+			!Number.isInteger(details.retryAfterMs) ||
+			details.retryAfterMs <= 0);
+	const hasInvalidStatusCode =
+		!isUndefined(details.statusCode) &&
+		(typeof details.statusCode !== "number" ||
+			!Number.isInteger(details.statusCode) ||
+			details.statusCode < 100 ||
+			details.statusCode > 599);
 	if (
-		(details.modelId !== undefined && !isNonEmptyString(details.modelId)) ||
-		(details.providerId !== undefined &&
-			!isNonEmptyString(details.providerId)) ||
-		(details.retryAfterMs !== undefined &&
-			(typeof details.retryAfterMs !== "number" ||
-				!Number.isInteger(details.retryAfterMs) ||
-				details.retryAfterMs <= 0)) ||
-		(details.statusCode !== undefined &&
-			(typeof details.statusCode !== "number" ||
-				!Number.isInteger(details.statusCode) ||
-				details.statusCode < 100 ||
-				details.statusCode > 599))
+		hasInvalidModelId ||
+		hasInvalidProviderId ||
+		hasInvalidRetryAfterMs ||
+		hasInvalidStatusCode
 	) {
 		return false;
 	}
@@ -123,23 +137,23 @@ const sanitizeOperationalFailureDetails = (
 	if (!isAllowedDetails(value)) {
 		return;
 	}
-	if (value === undefined) {
+	if (isUndefined(value)) {
 		return;
 	}
 	return {
-		...(value.modelId === undefined ? {} : { modelId: value.modelId }),
-		...(value.providerId === undefined ? {} : { providerId: value.providerId }),
-		...(value.retryAfterMs === undefined
+		...(isUndefined(value.modelId) ? {} : { modelId: value.modelId }),
+		...(isUndefined(value.providerId) ? {} : { providerId: value.providerId }),
+		...(isUndefined(value.retryAfterMs)
 			? {}
 			: { retryAfterMs: value.retryAfterMs }),
-		...(value.statusCode === undefined ? {} : { statusCode: value.statusCode }),
+		...(isUndefined(value.statusCode) ? {} : { statusCode: value.statusCode }),
 	};
 };
 
 export const isOperationalFailureSource = (
 	value: unknown
 ): value is OperationalFailureSource =>
-	typeof value === "string" &&
+	isString(value) &&
 	(operationalFailureSources as readonly string[]).includes(value);
 
 export const isOperationalFailure = (
@@ -179,12 +193,12 @@ export type OperationalFailureContext = Readonly<{
 const contextDetails = (
 	context: OperationalFailureContext | undefined
 ): OperationalFailureDetails | undefined => {
-	if (context?.modelId === undefined && context?.providerId === undefined) {
+	if (isUndefined(context?.modelId) && isUndefined(context?.providerId)) {
 		return;
 	}
 	return {
-		...(context.modelId === undefined ? {} : { modelId: context.modelId }),
-		...(context.providerId === undefined
+		...(isUndefined(context.modelId) ? {} : { modelId: context.modelId }),
+		...(isUndefined(context.providerId)
 			? {}
 			: { providerId: context.providerId }),
 	};
@@ -205,7 +219,7 @@ export const createOperationalFailure = ({
 	const safeDetails = sanitizeOperationalFailureDetails(details);
 	return {
 		code,
-		...(safeDetails === undefined ? {} : { details: safeDetails }),
+		...(isUndefined(safeDetails) ? {} : { details: safeDetails }),
 		message: safeMessageByCode[code],
 		retry,
 		source,
@@ -244,7 +258,7 @@ export const normalizeOperationalFailure = (
 	context?: OperationalFailureContext
 ): OperationalFailure => {
 	const normalized = normalizeFailureShape(value);
-	if (normalized !== undefined) {
+	if (!isUndefined(normalized)) {
 		return normalized;
 	}
 	return createOperationalFailure({

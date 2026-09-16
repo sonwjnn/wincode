@@ -1,4 +1,8 @@
-import { isNonNegativeInteger, isObjectLike } from "@wincode/runtime-utils";
+import {
+	isNonNegativeInteger,
+	isObjectLike,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
 import type { ModelCost, ModelCostTier, ModelMetadataEntry } from "./models";
@@ -64,7 +68,7 @@ export const normalizeModelUsage = (value: unknown): ModelUsage | null => {
 	const usage = objectValue(value);
 	const inputTokens = nonNegativeInteger(usage?.inputTokens);
 	const outputTokens = nonNegativeInteger(usage?.outputTokens);
-	if (inputTokens === undefined || outputTokens === undefined) {
+	if (isUndefined(inputTokens) || isUndefined(outputTokens)) {
 		return null;
 	}
 	const inputDetails = objectValue(usage?.inputTokenDetails);
@@ -80,10 +84,10 @@ export const normalizeModelUsage = (value: unknown): ModelUsage | null => {
 	return {
 		inputTokens,
 		outputTokens,
-		...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
-		...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
-		...(reasoningTokens === undefined ? {} : { reasoningTokens }),
-		...(totalTokens === undefined ? {} : { totalTokens }),
+		...(isUndefined(cacheReadTokens) ? {} : { cacheReadTokens }),
+		...(isUndefined(cacheWriteTokens) ? {} : { cacheWriteTokens }),
+		...(isUndefined(reasoningTokens) ? {} : { reasoningTokens }),
+		...(isUndefined(totalTokens) ? {} : { totalTokens }),
 	};
 };
 

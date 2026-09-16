@@ -19,7 +19,13 @@ import {
 	modelVariantSchema,
 } from "@wincode/ai/models";
 import type { CodingToolName } from "@wincode/coding-tools";
-import { isObjectLike } from "@wincode/runtime-utils";
+import {
+	isArray,
+	isObjectLike,
+	isPlainObject,
+	isString,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import type {
 	SkillActivation,
 	SkillActivationSource,
@@ -196,7 +202,7 @@ export const sessionMessageMetadataSchema = z
 	})
 	.strict()
 	.superRefine((metadata, context) => {
-		if (metadata.model === undefined) {
+		if (isUndefined(metadata.model)) {
 			return;
 		}
 		const model = metadata.model;
@@ -208,8 +214,10 @@ export const sessionMessageMetadataSchema = z
 			return;
 		}
 		if (
-			metadata.variant !== undefined &&
-			!getSupportedModelVariants(model).includes(metadata.variant)
+			!(
+				isUndefined(metadata.variant) ||
+				getSupportedModelVariants(model).includes(metadata.variant)
+			)
 		) {
 			context.addIssue({
 				code: "custom",
@@ -253,10 +261,9 @@ export const isSessionToolPart = (part: unknown): part is SessionToolPart => {
 	const candidate = part as UnknownRecord;
 	return (
 		(candidate.type === "dynamic-tool" ||
-			(typeof candidate.type === "string" &&
-				candidate.type.startsWith("tool-"))) &&
+			(isString(candidate.type) && candidate.type.startsWith("tool-"))) &&
 		isToolCallId(candidate.toolCallId) &&
-		typeof candidate.state === "string"
+		isString(candidate.state)
 	);
 };
 
@@ -282,15 +289,13 @@ const stripEditDiffFromModelPart = (part: SessionPart): SessionPart => {
 	if (
 		!isSessionToolPart(part) ||
 		part.type !== "tool-edit" ||
-		typeof part.output !== "object" ||
-		part.output === null ||
-		Array.isArray(part.output)
+		!isPlainObject(part.output)
 	) {
 		return part;
 	}
 	const output = part.output as UnknownRecord;
 	if (
-		typeof output.path !== "string" ||
+		!isString(output.path) ||
 		typeof output.replacements !== "number" ||
 		!("editDiff" in output)
 	) {
@@ -355,7 +360,7 @@ export const sanitizeInterruptedSessionMessages = (
 		}
 		const parts = message.parts.flatMap((part) => {
 			if (
-				preserveToolCallId !== undefined &&
+				!isUndefined(preserveToolCallId) &&
 				isSessionToolPart(part) &&
 				part.toolCallId === preserveToolCallId &&
 				part.state === "input-available"
@@ -383,7 +388,7 @@ export const createSessionUserMessage = (
 	files: SessionFilePart[] = []
 ): SessionMessage => ({
 	id: toSessionMessageId(`msg-${randomUUIDv7()}`),
-	...(metadata === undefined ? {} : { metadata }),
+	...(isUndefined(metadata) ? {} : { metadata }),
 	parts: [{ text, type: "text" }, ...fileMentions, ...files],
 	role: "user",
 });
@@ -394,8 +399,8 @@ export const isSessionMessage = (value: unknown): value is SessionMessage => {
 	}
 	const candidate = value as UnknownRecord;
 	return (
-		typeof candidate.id === "string" &&
-		Array.isArray(candidate.parts) &&
+		isString(candidate.id) &&
+		isArray(candidate.parts) &&
 		(candidate.role === "assistant" ||
 			candidate.role === "system" ||
 			candidate.role === "tool" ||

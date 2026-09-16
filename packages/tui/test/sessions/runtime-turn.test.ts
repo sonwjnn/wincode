@@ -7,7 +7,7 @@ import type {
 } from "@wincode/agent-core";
 import { createOperationalFailure } from "@wincode/agent-core";
 import { createModelTarget } from "@wincode/ai/model-target";
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isObjectLike, isUndefined } from "@wincode/runtime-utils";
 import { buildAgent } from "@/modules/agents/built-ins";
 import { RetiredModelError } from "@/modules/model-target";
 import {
@@ -125,7 +125,7 @@ test("forwards cancellation to a running coding tool", async () => {
 		agentTools: ["shell"],
 		gate: { gate: async () => ({ kind: "allow" }) },
 	});
-	if (shellTool === undefined) {
+	if (isUndefined(shellTool)) {
 		throw new Error("The shell tool was not registered.");
 	}
 	const result = await shellTool.execute(
@@ -200,7 +200,7 @@ test("commits only the durable assistant outcome before exposing terminal output
 	]);
 	expect(checkpoints).toHaveLength(1);
 	const record = checkpoints[0];
-	if (record === undefined) {
+	if (isUndefined(record)) {
 		throw new Error("The runtime did not produce a Session Record.");
 	}
 	expect(record.outcome).toMatchObject({

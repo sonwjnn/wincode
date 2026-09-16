@@ -1,3 +1,4 @@
+import { isUndefined } from "@wincode/runtime-utils";
 // Read path over the generated model metadata snapshot. Kept separate from
 // ./catalog so the catalog stays a compile-time constant that cannot depend on
 // generated output, and so removal of the snapshot never breaks selection.
@@ -81,7 +82,7 @@ const policyAdmits = (
 		return (
 			policy.toggle === true &&
 			!policy.unlevelled &&
-			(policy.levels === undefined || policy.levels.length === 0)
+			(isUndefined(policy.levels) || policy.levels.length === 0)
 		);
 	}
 	return false;
@@ -106,7 +107,7 @@ export const normalizeModelVariantForModel = (
 	model: SupportedChatModel | null,
 	variant: string | undefined
 ): ModelVariant | undefined => {
-	if (variant === undefined || !model || !supportsReasoningVariants(model)) {
+	if (isUndefined(variant) || !model || !supportsReasoningVariants(model)) {
 		return;
 	}
 	const parsed = modelVariantSchema.safeParse(variant);

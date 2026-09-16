@@ -6,6 +6,7 @@ import type {
 	SupportedChatModel,
 	SupportedChatModelId,
 } from "@wincode/ai/models";
+import { isUndefined } from "@wincode/runtime-utils";
 import {
 	defineModelResolver,
 	type ResolvedModel,
@@ -33,7 +34,7 @@ const resolve = (
 					),
 				}
 			: {}),
-		...(resolvedOptions.maxOutputTokens === undefined
+		...(isUndefined(resolvedOptions.maxOutputTokens)
 			? {}
 			: { maxOutputTokens: resolvedOptions.maxOutputTokens }),
 	};

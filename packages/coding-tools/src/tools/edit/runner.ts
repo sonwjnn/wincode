@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isUndefined } from "@wincode/runtime-utils";
 import { defaultWorkspaceSandbox } from "../../workspace";
 import {
 	getToolResourceLimits,
@@ -70,7 +71,7 @@ const applyHashlineEdit = (
 	const anchors = parseHashlineAnchors(input.lineHashes, input.path);
 	for (const anchor of anchors) {
 		const line = lines[anchor.line - 1];
-		if (line === undefined) {
+		if (isUndefined(line)) {
 			throw new Error(`Hashline anchor points past end of ${input.path}`);
 		}
 		const actualHash = hashLine(line.endsWith("\r") ? line.slice(0, -1) : line);

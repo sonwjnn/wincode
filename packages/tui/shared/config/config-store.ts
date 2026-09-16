@@ -8,9 +8,12 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 import {
+	isArray,
 	isNonEmptyString,
+	isNull,
 	isObjectLike,
 	isPlainObject,
+	isUndefined,
 } from "@wincode/runtime-utils";
 import {
 	applyEdits,
@@ -84,29 +87,29 @@ type ProvenanceEntry = {
 type MutableConfigDocument = Record<string, unknown>;
 
 const isNotFound = (error: unknown): boolean =>
-	isObjectLike(error) && !Array.isArray(error) && error.code === "ENOENT";
+	isObjectLike(error) && !isArray(error) && error.code === "ENOENT";
 
 const unsafeKeys = new Set(["__proto__", "constructor", "prototype"]);
 
 const findUnsafeKey = (node: Node | undefined): string | undefined => {
-	if (node === undefined) {
+	if (isUndefined(node)) {
 		return;
 	}
 	const propertyName =
 		node.type === "property" ? node.children?.[0]?.value : null;
-	if (propertyName !== null && unsafeKeys.has(String(propertyName))) {
+	if (!isNull(propertyName) && unsafeKeys.has(String(propertyName))) {
 		return String(propertyName);
 	}
 	for (const child of node.children ?? []) {
 		const unsafeKey = findUnsafeKey(child);
-		if (unsafeKey !== undefined) {
+		if (!isUndefined(unsafeKey)) {
 			return unsafeKey;
 		}
 	}
 };
 
 const cloneValue = (value: unknown): unknown => {
-	if (Array.isArray(value)) {
+	if (isArray(value)) {
 		return value.map(cloneValue);
 	}
 	if (!isPlainObject(value)) {
@@ -120,7 +123,7 @@ const cloneValue = (value: unknown): unknown => {
 };
 
 const freezeValue = <Value>(value: Value): Value => {
-	if (Array.isArray(value)) {
+	if (isArray(value)) {
 		for (const child of value) {
 			freezeValue(child);
 		}
@@ -163,7 +166,7 @@ const recordProvenance = (
 	origin: ConfigOrigin
 ): void => {
 	provenance.set(pathKey(pathSegments), { origin, path: pathSegments });
-	if (Array.isArray(value)) {
+	if (isArray(value)) {
 		for (const [index, child] of value.entries()) {
 			recordProvenance(
 				provenance,
@@ -321,18 +324,17 @@ const parseDocument = (
 	selected: SelectedConfigFile,
 	scope: ConfigScope
 ): { diagnostic?: ConfigDiagnostic; document: ConfigDocument } => {
-	if (selected.contents === undefined) {
+	if (isUndefined(selected.contents)) {
 		return { document: Object.create(null) };
 	}
 	const errors: ParseError[] = [];
 	const tree = parseTree(selected.contents, errors, {
 		allowTrailingComma: true,
 	});
-	const parsed =
-		tree === undefined
-			? undefined
-			: parseJsonc(selected.contents, [], { allowTrailingComma: true });
-	if (errors.length > 0 || !isObjectLike(parsed) || Array.isArray(parsed)) {
+	const parsed = isUndefined(tree)
+		? undefined
+		: parseJsonc(selected.contents, [], { allowTrailingComma: true });
+	if (errors.length > 0 || !isObjectLike(parsed) || isArray(parsed)) {
 		return {
 			diagnostic: diagnostic(
 				"parse-error",
@@ -344,7 +346,7 @@ const parseDocument = (
 		};
 	}
 	const unsafeKey = findUnsafeKey(tree);
-	if (unsafeKey !== undefined) {
+	if (!isUndefined(unsafeKey)) {
 		return {
 			diagnostic: diagnostic(
 				"unsafe-key",
@@ -380,10 +382,9 @@ const readSource = async (
 	const selected = await selectConfigFile(root, scope, fs);
 	const parsed = parseDocument(selected, scope);
 	return {
-		diagnostics:
-			parsed.diagnostic === undefined
-				? selected.diagnostics
-				: [...selected.diagnostics, parsed.diagnostic],
+		diagnostics: isUndefined(parsed.diagnostic)
+			? selected.diagnostics
+			: [...selected.diagnostics, parsed.diagnostic],
 		source: {
 			document: parsed.document,
 			path: selected.path,
@@ -431,7 +432,7 @@ const loadSnapshot = async (
 		sourceFor: (pathSegments: readonly string[]) => {
 			for (let length = pathSegments.length; length > 0; length -= 1) {
 				const entry = provenance.get(pathKey(pathSegments.slice(0, length)));
-				if (entry !== undefined) {
+				if (!isUndefined(entry)) {
 					return entry.origin;
 				}
 			}
@@ -464,20 +465,20 @@ const resolveConfigWritePath = (
 	configPath: readonly string[],
 	targetPath?: string
 ): string => {
-	if (targetPath !== undefined) {
+	if (!isUndefined(targetPath)) {
 		const targetSource = snapshot.sources.find(
 			(source) => source.scope === scope && source.path === targetPath
 		);
-		if (targetSource !== undefined) {
+		if (!isUndefined(targetSource)) {
 			return targetSource.path;
 		}
 	}
 	const existingSource = snapshot.sources.findLast(
 		(source) =>
 			source.scope === scope &&
-			valueAtPath(source.document, configPath) !== undefined
+			!isUndefined(valueAtPath(source.document, configPath))
 	);
-	if (existingSource !== undefined) {
+	if (!isUndefined(existingSource)) {
 		return existingSource.path;
 	}
 
@@ -510,8 +511,8 @@ const readConfigForWrite = async (
 	});
 	if (
 		errors.length > 0 ||
-		tree === undefined ||
-		findUnsafeKey(tree) !== undefined ||
+		isUndefined(tree) ||
+		!isUndefined(findUnsafeKey(tree)) ||
 		!isPlainObject(parsed)
 	) {
 		throw new Error(`Could not update invalid config file ${file}.`);
@@ -570,7 +571,7 @@ export const createConfigStore = (
 	const getSnapshot = (workspace: string): Promise<ConfigSnapshot> => {
 		const key = path.resolve(workspace);
 		const existing = snapshots.get(key);
-		if (existing !== undefined) {
+		if (!isUndefined(existing)) {
 			return existing;
 		}
 		const loaded = loadSnapshot(key, { configRoot, fs, homeRoot });
@@ -609,9 +610,9 @@ export const createConfigStore = (
 						allowTrailingComma: true,
 					});
 					if (
-						value === undefined &&
+						isUndefined(value) &&
 						(!isPlainObject(document) ||
-							valueAtPath(document, configPath) === undefined)
+							isUndefined(valueAtPath(document, configPath)))
 					) {
 						return;
 					}
@@ -621,7 +622,7 @@ export const createConfigStore = (
 							formattingOptions: { insertSpaces: true, tabSize: 2 },
 						})
 					);
-					if (fs.writeFile === undefined) {
+					if (isUndefined(fs.writeFile)) {
 						throw new Error("Config persistence is unavailable.");
 					}
 					await fs.writeFile(target, updated);

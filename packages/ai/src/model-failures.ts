@@ -1,3 +1,11 @@
+import {
+	isError,
+	isNull,
+	isObjectLike,
+	isString,
+	isUndefined,
+} from "@wincode/runtime-utils";
+
 import { z } from "zod";
 import {
 	type ConnectionProviderId,
@@ -103,13 +111,13 @@ const safeMessageByCode: Record<ModelFailureCode, string> = {
 };
 
 const getProperty = (value: unknown, key: string): unknown =>
-	typeof value === "object" && value !== null && key in value
+	isObjectLike(value) && key in value
 		? value[key as keyof typeof value]
 		: undefined;
 
 const getNestedError = (value: unknown): unknown => {
 	const cause = getProperty(value, "cause");
-	if (cause !== undefined && cause !== null) {
+	if (!(isUndefined(cause) || isNull(cause))) {
 		return cause;
 	}
 	return getProperty(value, "error");
@@ -119,7 +127,7 @@ const getErrorChain = (error: unknown): unknown[] => {
 	const chain: unknown[] = [];
 	const visited = new Set<unknown>();
 	let current: unknown = error;
-	while (current !== null && current !== undefined && !visited.has(current)) {
+	while (!(isNull(current) || isUndefined(current) || visited.has(current))) {
 		visited.add(current);
 		chain.push(current);
 		current = getNestedError(current);
@@ -156,15 +164,15 @@ const getRetryAfterMs = (chain: readonly unknown[]): number | undefined => {
 };
 
 const getDiagnosticText = (value: unknown): string => {
-	if (value instanceof Error) {
+	if (isError(value)) {
 		return value.message;
 	}
 	const message = getProperty(value, "message");
-	if (typeof message === "string") {
+	if (isString(message)) {
 		return message;
 	}
 	const responseBody = getProperty(value, "responseBody");
-	return typeof responseBody === "string" ? responseBody : "";
+	return isString(responseBody) ? responseBody : "";
 };
 
 const getCombinedDiagnosticText = (chain: readonly unknown[]): string =>
@@ -190,7 +198,7 @@ const getFailureCode = (
 	if (
 		chain.some(
 			(value) =>
-				value instanceof Error &&
+				isError(value) &&
 				(value.name === "TimeoutError" ||
 					value.name === "DeadlineExceededError")
 		) ||
@@ -199,9 +207,7 @@ const getFailureCode = (
 		return "deadline-exceeded";
 	}
 	if (
-		chain.some(
-			(value) => value instanceof Error && value.name === "AbortError"
-		) ||
+		chain.some((value) => isError(value) && value.name === "AbortError") ||
 		CANCEL_PATTERN.test(text)
 	) {
 		return "cancelled";
@@ -209,7 +215,7 @@ const getFailureCode = (
 	if (statusCode === 400 || INVALID_REQUEST_PATTERN.test(text)) {
 		return "invalid-request";
 	}
-	if (statusCode !== undefined && statusCode >= 500) {
+	if (!isUndefined(statusCode) && statusCode >= 500) {
 		return "unavailable";
 	}
 	if (NETWORK_PATTERN.test(text)) {
@@ -229,7 +235,7 @@ const getSource = (
 	) {
 		return "transport";
 	}
-	if (statusCode !== undefined || code !== "unknown") {
+	if (!isUndefined(statusCode) || code !== "unknown") {
 		return "provider";
 	}
 	return "runtime";
@@ -256,12 +262,12 @@ const buildDetails = (
 	retryAfterMs: number | undefined
 ): ModelFailureDetails | undefined => {
 	const details = {
-		...(context?.modelId === undefined ? {} : { modelId: context.modelId }),
-		...(context?.providerId === undefined
+		...(isUndefined(context?.modelId) ? {} : { modelId: context.modelId }),
+		...(isUndefined(context?.providerId)
 			? {}
 			: { providerId: context.providerId }),
-		...(retryAfterMs === undefined ? {} : { retryAfterMs }),
-		...(statusCode === undefined ? {} : { statusCode }),
+		...(isUndefined(retryAfterMs) ? {} : { retryAfterMs }),
+		...(isUndefined(statusCode) ? {} : { statusCode }),
 	};
 	return Object.keys(details).length === 0 ? undefined : details;
 };
@@ -283,7 +289,7 @@ export const normalizeModelFailure = (
 	const details = buildDetails(context, statusCode, retryAfterMs);
 	return {
 		code,
-		...(details === undefined ? {} : { details }),
+		...(isUndefined(details) ? {} : { details }),
 		message: safeMessageByCode[code],
 		retry: getRetryDisposition(code),
 		source: getSource(code, statusCode),

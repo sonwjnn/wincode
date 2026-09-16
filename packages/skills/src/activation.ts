@@ -1,4 +1,4 @@
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isObjectLike, isUndefined } from "@wincode/runtime-utils";
 import { SKILL_TOOL_INPUT_JSON_SCHEMA } from "./context";
 import { hashSkillBody } from "./hash";
 import type {
@@ -177,7 +177,7 @@ export const isSkillToolPart = (part: unknown): part is SkillToolPart => {
  * durable storage.
  */
 export const sanitizeSkillToolPart = (part: SkillToolPart): SkillToolPart => {
-	if (part.output === undefined) {
+	if (isUndefined(part.output)) {
 		return part;
 	}
 	const parsed = sanitizeSkillToolResult(

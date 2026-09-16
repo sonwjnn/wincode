@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { isNull, isUndefined } from "@wincode/runtime-utils";
 import { Language, type Node, Parser } from "web-tree-sitter";
 
 /**
@@ -81,11 +82,11 @@ const getParsers = async (): Promise<{
 	powershell: Parser;
 }> => {
 	const grammars = await loadShellGrammars();
-	if (bashParser === undefined) {
+	if (isUndefined(bashParser)) {
 		bashParser = new Parser();
 		bashParser.setLanguage(grammars.bash);
 	}
-	if (powershellParser === undefined) {
+	if (isUndefined(powershellParser)) {
 		powershellParser = new Parser();
 		powershellParser.setLanguage(grammars.powershell);
 	}
@@ -112,7 +113,7 @@ const collectCommandNodes = (root: Node): ShellCommandNode[] => {
 			}
 		}
 		for (const child of node.namedChildren) {
-			if (child !== null) {
+			if (!isNull(child)) {
 				walk(child);
 			}
 		}
@@ -137,7 +138,7 @@ export const parseShellCommandNodes = async (
 	const fallback = preferred === bash ? powershell : bash;
 	for (const parser of [preferred, fallback]) {
 		const tree = parser.parse(command);
-		if (tree === null || tree.rootNode.hasError) {
+		if (isNull(tree) || tree.rootNode.hasError) {
 			continue;
 		}
 		return collectCommandNodes(tree.rootNode);

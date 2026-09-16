@@ -2,6 +2,8 @@ import {
 	isJsonObject,
 	isNonEmptyString,
 	isObjectLike,
+	isString,
+	isUndefined,
 } from "@wincode/runtime-utils";
 import type { JsonObject, Promisable, UnknownRecord } from "type-fest";
 import type { z } from "zod";
@@ -61,10 +63,10 @@ export const isToolDefinition = (value: unknown): value is ToolDefinition => {
 		return false;
 	}
 	return (
-		typeof definition.description === "string" &&
+		isString(definition.description) &&
 		isSchema(definition.inputSchema) &&
 		isNonEmptyString(definition.name) &&
-		(definition.outputSchema === undefined || isSchema(definition.outputSchema))
+		(isUndefined(definition.outputSchema) || isSchema(definition.outputSchema))
 	);
 };
 
@@ -191,7 +193,7 @@ export const createToolRegistry = (
 	);
 	const require = (toolName: string): ToolDefinition => {
 		const definition = byName.get(toolName);
-		if (definition === undefined) {
+		if (isUndefined(definition)) {
 			throw new AgentInvariantError(
 				"tool-not-found",
 				`Tool Registry ${name} has no tool named '${toolName}'.`,

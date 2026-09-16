@@ -44,7 +44,14 @@ import {
 	runCodingTool,
 	type ToolResourceLimits,
 } from "@wincode/coding-tools";
-import { isNonEmptyString, isObjectLike } from "@wincode/runtime-utils";
+import {
+	getErrorMessage,
+	isNonEmptyString,
+	isNull,
+	isObjectLike,
+	isString,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import {
 	formatSkillUserContext,
 	type SkillExecution,
@@ -110,8 +117,6 @@ export const runtimeToolRegistry: ToolRegistry = createToolRegistry([
 	runtimeSkillToolDefinition,
 ]);
 
-const getErrorMessage = (error: unknown): string =>
-	error instanceof Error ? error.message : "Tool execution failed.";
 const runCodingToolThroughGate = async ({
 	input,
 	name,
@@ -134,7 +139,10 @@ const runCodingToolThroughGate = async ({
 		if (isAgentInvariantError(error)) {
 			throw error;
 		}
-		return { errorText: getErrorMessage(error), type: "failure" };
+		return {
+			errorText: getErrorMessage(error, "Tool execution failed."),
+			type: "failure",
+		};
 	}
 };
 export type GatedCodingToolsDeps = {
@@ -195,7 +203,7 @@ const evaluateGateWithAbort = (
 	evaluate: () => Promise<GateOutcome>,
 	signal: AbortSignal | undefined
 ): Promise<GateOutcome> => {
-	if (signal === undefined) {
+	if (isUndefined(signal)) {
 		return evaluate();
 	}
 	if (signal.aborted) {
@@ -218,7 +226,10 @@ const evaluateGateWithAbort = (
 			settle(
 				signal.aborted
 					? { errorText: ABORTED_TOOL_TEXT, kind: "deny" }
-					: { errorText: getErrorMessage(error), kind: "deny" }
+					: {
+							errorText: getErrorMessage(error, "Tool execution failed."),
+							kind: "deny",
+						}
 			);
 		});
 	});
@@ -267,7 +278,10 @@ const createDelegationTool = (
 			if (isAgentInvariantError(error)) {
 				throw error;
 			}
-			return { errorText: getErrorMessage(error), type: "failure" };
+			return {
+				errorText: getErrorMessage(error, "Tool execution failed."),
+				type: "failure",
+			};
 		}
 	},
 });
@@ -278,12 +292,12 @@ const createMcpTools = (
 	gate: ToolGate,
 	agentId: AgentId | undefined
 ): readonly ResolvedTool[] => {
-	if (snapshot === undefined || executeMcpTool === undefined) {
+	if (isUndefined(snapshot) || isUndefined(executeMcpTool)) {
 		return [];
 	}
 	return snapshot.manifest.flatMap((entry) => {
 		const tool: McpSnapshotTool | undefined = snapshot.tools.get(entry.name);
-		if (tool === undefined) {
+		if (isUndefined(tool)) {
 			return [];
 		}
 		return [
@@ -375,8 +389,8 @@ export const createGatedCodingTools = ({
 					input: outcome.input ?? input,
 					name,
 					options: {
-						allowExternalPath: outcome.input !== undefined,
-						...(resolveResourceLimits === undefined
+						allowExternalPath: !isUndefined(outcome.input),
+						...(isUndefined(resolveResourceLimits)
 							? {}
 							: {
 									resourceLimits: await resolveResourceLimits(agentId),
@@ -390,8 +404,8 @@ export const createGatedCodingTools = ({
 		...codingTools,
 		...createMcpTools(mcpSnapshot, executeMcpTool, gate, agentId),
 	];
-	if (skillTool === undefined || skillExecution === undefined) {
-		if (delegate !== undefined && parentTurnId !== undefined) {
+	if (isUndefined(skillTool) || isUndefined(skillExecution)) {
+		if (!(isUndefined(delegate) || isUndefined(parentTurnId))) {
 			tools.push(createDelegationTool(delegate, parentTurnId));
 		}
 		return tools;
@@ -420,7 +434,7 @@ export const createGatedCodingTools = ({
 				() =>
 					gate.gate({
 						agentId,
-						available: entry !== undefined,
+						available: !isUndefined(entry),
 						description: entry?.description ?? `Activate Skill ${name}`,
 						family: "skill",
 						name,
@@ -455,7 +469,7 @@ export const createGatedCodingTools = ({
 		},
 	} satisfies ResolvedTool;
 	tools.push(skill);
-	if (delegate !== undefined && parentTurnId !== undefined) {
+	if (!(isUndefined(delegate) || isUndefined(parentTurnId))) {
 		tools.push(createDelegationTool(delegate, parentTurnId));
 	}
 	return tools;
@@ -512,8 +526,8 @@ export const isSettledSessionToolCallPart = (
 	}
 	const candidate = part as UnknownRecord;
 	if (
-		typeof candidate.type !== "string" ||
-		settledToolName(candidate.type, candidate.toolName) === undefined
+		!isString(candidate.type) ||
+		isUndefined(settledToolName(candidate.type, candidate.toolName))
 	) {
 		return false;
 	}
@@ -598,7 +612,7 @@ const toAssistantTurnMessages = (
 			part.type,
 			"toolName" in part ? part.toolName : undefined
 		);
-		if (name === undefined) {
+		if (isUndefined(name)) {
 			continue;
 		}
 		const { request, result } = toToolCallParts(part, name);
@@ -625,7 +639,7 @@ const toUserTurnPart = (
 		return;
 	}
 	const reference = getAttachmentReference(part);
-	if (reference !== null) {
+	if (!isNull(reference)) {
 		return {
 			text: formatAttachmentUnavailableMarker(reference, "omitted"),
 			type: "text",
@@ -642,7 +656,7 @@ const toUserTurnPart = (
 const toUserTurnMessages = (message: SessionMessage): AgentTurnMessage[] => {
 	const parts = message.parts.flatMap((part) => {
 		const modelPart = toUserTurnPart(part);
-		return modelPart === undefined ? [] : [modelPart];
+		return isUndefined(modelPart) ? [] : [modelPart];
 	});
 	return parts.length === 0 ? [] : [{ id: message.id, parts, role: "user" }];
 };
@@ -688,9 +702,10 @@ export const buildAgentTurn = ({
 }): AgentTurn => {
 	const messages =
 		expandSessionMessagesForModel(modelMessages).flatMap(toAgentTurnMessages);
-	const effectiveRole =
-		delegation === undefined ? (role ?? "primary") : "subagent";
-	if (skill !== undefined) {
+	const effectiveRole = isUndefined(delegation)
+		? (role ?? "primary")
+		: "subagent";
+	if (!isUndefined(skill)) {
 		messages.push({
 			id: toSessionMessageId("skill-context"),
 			parts: [{ text: formatSkillUserContext(skill), type: "text" }],
@@ -705,7 +720,7 @@ export const buildAgentTurn = ({
 				`${BASE_AGENT_INSTRUCTIONS}\n\n${resolvedAgent.instructions}`,
 			role: effectiveRole,
 		},
-		...(delegation === undefined ? {} : { delegation }),
+		...(isUndefined(delegation) ? {} : { delegation }),
 		id: turnId,
 		input: { messages },
 		model: modelTarget,
@@ -768,20 +783,20 @@ const toDurableToolPart = (part: {
 const recordModelForTurn = (turn: AgentTurn): SessionRecord["model"] => ({
 	modelId: turn.model.modelId,
 	providerId: turn.model.providerId,
-	...(turn.model.variant === undefined ? {} : { variant: turn.model.variant }),
+	...(isUndefined(turn.model.variant) ? {} : { variant: turn.model.variant }),
 });
 const assistantRecordMetadata = (
 	turn: AgentTurn,
 	usage?: NonNullable<ReturnType<typeof normalizeModelUsage>>,
 	sourceUserMessageId?: SessionMessageId
 ): SessionMessageMetadataRecord => ({
-	...(sourceUserMessageId === undefined ? {} : { sourceUserMessageId }),
+	...(isUndefined(sourceUserMessageId) ? {} : { sourceUserMessageId }),
 	model: {
 		modelId: turn.model.modelId,
 		providerId: turn.model.providerId,
 	},
-	...(turn.model.variant === undefined ? {} : { variant: turn.model.variant }),
-	...(usage === undefined ? {} : { usage }),
+	...(isUndefined(turn.model.variant) ? {} : { variant: turn.model.variant }),
+	...(isUndefined(usage) ? {} : { usage }),
 });
 
 /**
@@ -831,7 +846,7 @@ export const buildTerminalSessionRecord = ({
 			terminal = {
 				finishedAt: safeEvent.finishedAt,
 				kind: "completed",
-				...(safeUsage === undefined ? {} : { usage: safeUsage }),
+				...(isUndefined(safeUsage) ? {} : { usage: safeUsage }),
 			};
 			break;
 		case "agent-turn-failed":
@@ -859,7 +874,7 @@ export const buildTerminalSessionRecord = ({
 
 	return {
 		agentId: turn.agent.id,
-		...(turn.delegation === undefined ? {} : { delegation: turn.delegation }),
+		...(isUndefined(turn.delegation) ? {} : { delegation: turn.delegation }),
 		id: toSessionRecordId(`record-${randomUUIDv7()}`),
 		messages: [
 			{
@@ -895,7 +910,7 @@ const buildAssistantOutcomeSessionRecord = ({
 	variant?: SessionRecord["model"]["variant"];
 }): SessionRecord => ({
 	agentId,
-	...(delegation === undefined ? {} : { delegation }),
+	...(isUndefined(delegation) ? {} : { delegation }),
 	id: toSessionRecordId(`record-${randomUUIDv7()}`),
 	messages: [
 		{
@@ -906,8 +921,8 @@ const buildAssistantOutcomeSessionRecord = ({
 					modelId: model.modelId,
 					providerId: model.providerId,
 				},
-				...(sourceUserMessageId === undefined ? {} : { sourceUserMessageId }),
-				...(variant === undefined ? {} : { variant }),
+				...(isUndefined(sourceUserMessageId) ? {} : { sourceUserMessageId }),
+				...(isUndefined(variant) ? {} : { variant }),
 			},
 			parts: [{ text, type: "text" }],
 			role: "assistant",
@@ -916,7 +931,7 @@ const buildAssistantOutcomeSessionRecord = ({
 	model: {
 		modelId: model.modelId,
 		providerId: model.providerId,
-		...(variant === undefined ? {} : { variant }),
+		...(isUndefined(variant) ? {} : { variant }),
 	},
 	outcome: { kind: "assistant", terminal },
 	turnId,
@@ -1014,7 +1029,7 @@ export const buildToolSessionRecord = ({
 	turn: AgentTurn;
 }): SessionRecord => ({
 	agentId: turn.agent.id,
-	...(turn.delegation === undefined ? {} : { delegation: turn.delegation }),
+	...(isUndefined(turn.delegation) ? {} : { delegation: turn.delegation }),
 	id: toSessionRecordId(`record-${randomUUIDv7()}`),
 	messages: [
 		{
@@ -1062,7 +1077,7 @@ const resolveMissingTerminalEvent = (
 	turn: AgentTurn,
 	lastSequence: number
 ): AgentTurnTerminalEvent =>
-	signal === undefined
+	isUndefined(signal)
 		? createLostExecutionEvent(turn, lastSequence + 1)
 		: createAgentTurnAbortEvent(turn, signal, lastSequence + 1);
 
@@ -1108,7 +1123,7 @@ export const runAgentTurnToText = async ({
 		committer: CheckpointCommitter | undefined,
 		record: SessionRecord | undefined
 	): Promise<void> => {
-		if (committer === undefined || record === undefined) {
+		if (isUndefined(committer) || isUndefined(record)) {
 			return;
 		}
 		try {
@@ -1134,7 +1149,7 @@ export const runAgentTurnToText = async ({
 			}
 			if (event.type === "tool-call-finished") {
 				const started = startedTools.get(event.toolCallId);
-				if (started !== undefined) {
+				if (!isUndefined(started)) {
 					completedToolCalls += 1;
 					await commit(
 						onToolCheckpoint,

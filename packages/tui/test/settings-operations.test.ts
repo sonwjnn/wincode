@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { isBoolean, isUndefined } from "@wincode/runtime-utils";
 import { createSettingsOperations } from "@/modules/settings/operations";
 import type {
 	BooleanSettingDescriptor,
@@ -16,7 +17,7 @@ const createTestStore = (files: Record<string, string>) =>
 		fs: {
 			readFile: async (file) => {
 				const value = files[file];
-				if (value === undefined) {
+				if (isUndefined(value)) {
 					const error = new Error("missing") as Error & { code: string };
 					error.code = "ENOENT";
 					throw error;
@@ -131,9 +132,9 @@ describe("createSettingsOperations", () => {
 			},
 			reset: async () => undefined,
 			scope: "global",
-			validate: (value): value is boolean => typeof value === "boolean",
+			validate: (value): value is boolean => isBoolean(value),
 			write: async (value) => {
-				if (typeof value !== "boolean") {
+				if (!isBoolean(value)) {
 					throw new Error("Expected a boolean.");
 				}
 				writes.push(value);
@@ -171,7 +172,7 @@ describe("createSettingsOperations", () => {
 			fs: {
 				readFile: async (file) => {
 					const value = files[file];
-					if (value === undefined) {
+					if (isUndefined(value)) {
 						const error = new Error("missing") as Error & { code: string };
 						error.code = "ENOENT";
 						throw error;

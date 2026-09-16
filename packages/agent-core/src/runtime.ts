@@ -1,4 +1,4 @@
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isObjectLike, isString } from "@wincode/runtime-utils";
 import { AgentInvariantError } from "./errors";
 import type { AgentTurnEvent, AgentTurnTerminalEvent } from "./events";
 import {
@@ -38,7 +38,7 @@ const isTimeoutLike = (value: unknown): boolean => {
 		name?: unknown;
 	};
 	const text = [candidate.code, candidate.name, candidate.message]
-		.filter((entry): entry is string => typeof entry === "string")
+		.filter((entry): entry is string => isString(entry))
 		.join(" ");
 	return TIMEOUT_PATTERN.test(text);
 };
@@ -52,8 +52,7 @@ export const getAgentTurnAbortDisposition = (
 	reason: unknown
 ): AgentTurnAbortDisposition => {
 	if (
-		typeof reason === "object" &&
-		reason !== null &&
+		isObjectLike(reason) &&
 		"type" in reason &&
 		reason.type === AGENT_TURN_ABORT_REASON_TYPE &&
 		"outcome" in reason &&

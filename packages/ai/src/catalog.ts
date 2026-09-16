@@ -1,3 +1,4 @@
+import { isNull } from "@wincode/runtime-utils";
 // The Model Catalog: Wincode's curated product definition of supported
 // models. Retired entries stay in the array so Session Records keep their
 // model identity; see ADR-0012. Metadata that is not a product decision
@@ -535,7 +536,7 @@ export const findSupportedChatModelSelection = (
 
 export const isSupportedChatModelSelection = (
 	selection: ChatModelSelection
-): boolean => findSupportedChatModelSelection(selection) !== null;
+): boolean => !isNull(findSupportedChatModelSelection(selection));
 
 /**
  * Whether a Model Target may use this entry for a new Agent Turn. Retired

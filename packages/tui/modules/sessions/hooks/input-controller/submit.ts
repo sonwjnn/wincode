@@ -1,3 +1,4 @@
+import { getErrorMessage, isNull } from "@wincode/runtime-utils";
 import type { Skill, SkillContext } from "@wincode/skills";
 import { parseSkillInvocation } from "@wincode/skills";
 import { expandCustomCommandTemplate } from "@/modules/custom-commands/expand";
@@ -13,9 +14,6 @@ type SkillPrompt = {
 };
 
 type DiscoverSkills = () => Promise<Skill[]>;
-
-const getErrorMessage = (error: unknown): string =>
-	error instanceof Error ? error.message : String(error);
 
 export type TrackedPastedText = {
 	end: number;
@@ -104,7 +102,7 @@ export const resolveCustomCommandPrompt = async (
 };
 
 const isBuiltinCommand = (text: string): boolean =>
-	isSettingsCommand(text) || parseCompactCommand(text) !== null;
+	isSettingsCommand(text) || !isNull(parseCompactCommand(text));
 
 /**
  * Resolve skill/custom-command intent, or report the failure through onError
@@ -132,7 +130,7 @@ const resolvePromptOrReportError = async (
 			dependencies.discoverCustomCommands
 		);
 	} catch (error) {
-		dependencies.onError(getErrorMessage(error));
+		dependencies.onError(getErrorMessage(error, String(error)));
 		return null;
 	}
 };
@@ -163,7 +161,7 @@ export async function submitPrompt(
 		visibleText,
 		dependencies
 	);
-	if (skillPrompt === null) {
+	if (isNull(skillPrompt)) {
 		return false;
 	}
 

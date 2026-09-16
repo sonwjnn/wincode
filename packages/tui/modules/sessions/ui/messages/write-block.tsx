@@ -1,7 +1,7 @@
 import { isAbsolute } from "node:path";
 import { pathToFiletype } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isNull, isPlainObject, isString } from "@wincode/runtime-utils";
 import { useMemo, useState } from "react";
 import type { UnknownRecord } from "type-fest";
 import type { SessionMessage } from "@/modules/sessions/message";
@@ -44,13 +44,12 @@ const sanitizeWriteContent = (content: string): string => {
 };
 
 const getWriteInput = (part: WriteToolPart): WriteInput | null => {
-	if (!isObjectLike(part.input) || Array.isArray(part.input)) {
+	if (!isPlainObject(part.input)) {
 		return null;
 	}
 	const input = part.input as UnknownRecord;
 	if (
-		typeof input.content !== "string" ||
-		typeof input.path !== "string" ||
+		!(isString(input.content) && isString(input.path)) ||
 		input.path.length === 0
 	) {
 		return null;
@@ -150,7 +149,7 @@ export function isRenderableWritePart(part: WriteToolPart): boolean {
 		(part.state === "input-available" ||
 			part.state === "output-available" ||
 			part.state === "output-error") &&
-		getWriteInput(part) !== null
+		!isNull(getWriteInput(part))
 	);
 }
 
@@ -223,16 +222,11 @@ export function WriteBlock({
 	part: WriteToolPart;
 }) {
 	const { colors } = useTheme();
-	const rawInput =
-		typeof part.input === "object" &&
-		part.input !== null &&
-		!Array.isArray(part.input)
-			? (part.input as UnknownRecord)
-			: {};
-	const content = typeof rawInput.content === "string" ? rawInput.content : "";
-	const path = formatWritePath(
-		typeof rawInput.path === "string" ? rawInput.path : ""
-	);
+	const rawInput = isPlainObject(part.input)
+		? (part.input as UnknownRecord)
+		: {};
+	const content = isString(rawInput.content) ? rawInput.content : "";
+	const path = formatWritePath(isString(rawInput.path) ? rawInput.path : "");
 	const displayData = useMemo(() => getWriteDisplayData(content), [content]);
 	const lineCount = displayData.lineCount;
 	const isFailed = part.state === "output-error";

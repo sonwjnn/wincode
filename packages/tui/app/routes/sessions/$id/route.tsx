@@ -1,7 +1,11 @@
 import { createFileRoute, useLocation } from "@tanstack/react-router";
 import { toSessionMessageId } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
-import { isNonEmptyString, isObjectLike } from "@wincode/runtime-utils";
+import {
+	getErrorMessage,
+	isNonEmptyString,
+	isObjectLike,
+} from "@wincode/runtime-utils";
 import { useEffect, useMemo, useState } from "react";
 import {
 	rebuildActiveMessages,
@@ -107,9 +111,7 @@ function SessionRoute() {
 			})
 			.catch((error: unknown) => {
 				if (!ignore) {
-					setErrorMessage(
-						error instanceof Error ? error.message : "Could not load session."
-					);
+					setErrorMessage(getErrorMessage(error, "Could not load session."));
 				}
 			});
 

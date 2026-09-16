@@ -6,6 +6,7 @@ import type {
 } from "@wincode/agent-core";
 import { createAgentTurnAbortReason } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import { isUndefined } from "@wincode/runtime-utils";
 import type { SkillContext } from "@wincode/skills";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import type { ResolvedCodingAgent } from "../agents/built-ins";
@@ -63,7 +64,7 @@ export const createSessionOperation = ({
 	onInterrupt,
 }: CreateSessionOperationOptions): SessionOperation => {
 	if (
-		deadlineMs !== undefined &&
+		!isUndefined(deadlineMs) &&
 		(!Number.isInteger(deadlineMs) || deadlineMs < 0)
 	) {
 		throw new Error("Session send deadline must be a non-negative integer.");
@@ -86,17 +87,16 @@ export const createSessionOperation = ({
 		}
 
 		const controller = new AbortController();
-		const deadlineTimer =
-			deadlineMs === undefined
-				? undefined
-				: setTimeout(() => {
-						controller.abort(createAgentTurnAbortReason("deadline-exceeded"));
-					}, deadlineMs);
+		const deadlineTimer = isUndefined(deadlineMs)
+			? undefined
+			: setTimeout(() => {
+					controller.abort(createAgentTurnAbortReason("deadline-exceeded"));
+				}, deadlineMs);
 		const clearIfCurrent = (): void => {
 			if (active?.controller !== controller) {
 				return;
 			}
-			if (active.deadlineTimer !== undefined) {
+			if (!isUndefined(active.deadlineTimer)) {
 				clearTimeout(active.deadlineTimer);
 			}
 			active = undefined;

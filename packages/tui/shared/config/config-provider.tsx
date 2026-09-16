@@ -1,3 +1,4 @@
+import { isNull } from "@wincode/runtime-utils";
 import { createContext, type ReactNode, useContext } from "react";
 import type { ConfigRuntime } from "./config-store";
 
@@ -17,7 +18,7 @@ export function ConfigProvider({
 
 export function useConfig(): ConfigRuntime {
 	const value = useContext(ConfigContext);
-	if (value === null) {
+	if (isNull(value)) {
 		throw new Error("useConfig must be used within a ConfigProvider");
 	}
 	return value;

@@ -1,3 +1,4 @@
+import { isArray, isString, isUndefined } from "@wincode/runtime-utils";
 // The single models.dev -> Wincode metadata converter. Both the offline
 // generator (`scripts/sync-model-metadata.ts`) and the runtime pricing refresh
 // call this, so a fact can only ever be interpreted one way. See ADR-0014.
@@ -42,7 +43,7 @@ export type { ModelsDevModel } from "./models-dev-payload";
 const parseReasoningOptions = (
 	value: unknown
 ): readonly UnknownRecord[] | undefined =>
-	Array.isArray(value)
+	isArray(value)
 		? value.filter((option): option is UnknownRecord => isPlainObject(option))
 		: undefined;
 
@@ -58,14 +59,13 @@ const positiveInteger = (value: unknown): number | undefined =>
 const LEVEL_IDS: ReadonlySet<string> = new Set(modelVariantIds);
 
 const asLevels = (value: unknown): readonly ModelVariant[] | undefined => {
-	if (!Array.isArray(value)) {
+	if (!isArray(value)) {
 		return;
 	}
 	// The catalog speaks a closed set of level identifiers. Upstream effort
 	// values outside it are dropped rather than emitted as an unusable level.
 	const levels = value.filter(
-		(level): level is ModelVariant =>
-			typeof level === "string" && LEVEL_IDS.has(level)
+		(level): level is ModelVariant => isString(level) && LEVEL_IDS.has(level)
 	);
 	return levels.length === 0 ? undefined : levels;
 };
@@ -81,21 +81,21 @@ const toThinkingPolicy = (raw: unknown): ModelThinkingPolicy | undefined => {
 	const levels = asLevels(effort?.values);
 	const budgetMin = nonNegativeInteger(budget?.min);
 	const budgetMax = nonNegativeInteger(budget?.max);
-	const budgetBounded = budgetMin !== undefined || budgetMax !== undefined;
+	const budgetBounded = !(isUndefined(budgetMin) && isUndefined(budgetMax));
 	// A published budget range is a reasoning control even with no ladder: it
 	// says how much thinking the model may do. With no switch and no ladder the
 	// user has nothing to pick, so the model gets no selectable level and its
 	// budget is derived rather than chosen. Without recording this, Claude 4.5
 	// would look like a model with no reasoning control at all.
-	const switchable = toggle !== undefined || budgetBounded;
+	const switchable = !isUndefined(toggle) || budgetBounded;
 	if (!(switchable || levels)) {
 		return;
 	}
 	return {
 		...(toggle ? { toggle: true as const } : {}),
 		...(levels ? { levels } : {}),
-		...(budgetMin === undefined ? {} : { budgetMin }),
-		...(budgetMax === undefined ? {} : { budgetMax }),
+		...(isUndefined(budgetMin) ? {} : { budgetMin }),
+		...(isUndefined(budgetMax) ? {} : { budgetMax }),
 		...(budgetBounded && !toggle && !levels
 			? { unlevelled: true as const }
 			: {}),
@@ -108,7 +108,7 @@ const toCost = (raw: unknown): ModelCost | undefined => {
 	}
 	const input = nonNegativeNumber(raw.input);
 	const output = nonNegativeNumber(raw.output);
-	if (input === undefined || output === undefined) {
+	if (isUndefined(input) || isUndefined(output)) {
 		return;
 	}
 	const cacheRead = nonNegativeNumber(raw.cache_read);
@@ -116,8 +116,8 @@ const toCost = (raw: unknown): ModelCost | undefined => {
 	return {
 		input,
 		output,
-		...(cacheRead === undefined ? {} : { cacheRead }),
-		...(cacheWrite === undefined ? {} : { cacheWrite }),
+		...(isUndefined(cacheRead) ? {} : { cacheRead }),
+		...(isUndefined(cacheWrite) ? {} : { cacheWrite }),
 	};
 };
 
@@ -131,7 +131,7 @@ const toTiers = (raw: unknown): readonly ModelCostTier[] => {
 	if (!isPlainObject(raw)) {
 		return [];
 	}
-	const tiers = Array.isArray(raw.tiers) ? raw.tiers : [];
+	const tiers = isArray(raw.tiers) ? raw.tiers : [];
 	const parsed: ModelCostTier[] = [];
 	for (const tier of tiers) {
 		if (!isPlainObject(tier)) {
@@ -140,7 +140,7 @@ const toTiers = (raw: unknown): readonly ModelCostTier[] => {
 		const threshold = isPlainObject(tier.tier) ? tier.tier : undefined;
 		const size = positiveInteger(threshold?.size);
 		const rates = toCost(tier);
-		if (size === undefined || !rates) {
+		if (isUndefined(size) || !rates) {
 			continue;
 		}
 		parsed.push({ inputTokensAbove: size, ...rates });
@@ -160,11 +160,11 @@ const toLimits = (raw: unknown): ModelLimits | undefined => {
 		return;
 	}
 	const context = positiveInteger(raw.context);
-	if (context === undefined) {
+	if (isUndefined(context)) {
 		return;
 	}
 	const output = positiveInteger(raw.output);
-	return { context, ...(output === undefined ? {} : { output }) };
+	return { context, ...(isUndefined(output) ? {} : { output }) };
 };
 
 export const metadataForModel = (raw: ModelsDevModel): ModelMetadataEntry => {

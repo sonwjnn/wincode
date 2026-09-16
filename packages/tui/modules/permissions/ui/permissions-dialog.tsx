@@ -1,5 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
+import { isUndefined } from "@wincode/runtime-utils";
 import { useEffect, useRef, useState } from "react";
 import {
 	useDialogEscape,
@@ -60,7 +61,7 @@ export function PermissionsDialogContent() {
 			return;
 		}
 		const grant = grants[index - 1];
-		if (grant !== undefined) {
+		if (!isUndefined(grant)) {
 			service.revoke(grant.action, grant.resource);
 		}
 	};

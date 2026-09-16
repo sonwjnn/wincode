@@ -6,6 +6,7 @@ import {
 } from "@wincode/coding-tools";
 import type { WorkspacePolicy } from "@wincode/coding-tools/workspace";
 import { createWorkspaceSandbox } from "@wincode/coding-tools/workspace";
+import { isNull } from "@wincode/runtime-utils";
 import { useCallback, useMemo, useRef } from "react";
 import { type AgentRegistry, useAgentRegistry } from "@/modules/agents";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
@@ -67,7 +68,7 @@ export const resolveToolPermissionPolicies = (
 ): ResolvedToolPermissionPolicies => {
 	// An unavailable registry fails closed: the caller's fallback permission
 	// applies and no MCP tool is visible until the registry resolves.
-	if (registry === null) {
+	if (isNull(registry)) {
 		return {
 			mcpPolicy: FAIL_CLOSED_MCP_POLICY,
 			permission: getFallbackPermission(),
@@ -131,7 +132,7 @@ export function useToolPermission(): ToolPermissionRuntime {
 		// While the registry is loading, resolution fails closed but the refs
 		// keep their previous values: a transient null never loosens a
 		// resolved policy.
-		if (registry !== null) {
+		if (!isNull(registry)) {
 			permissionRef.current = resolved.permission;
 			mcpPolicyRef.current = resolved.mcpPolicy;
 		}

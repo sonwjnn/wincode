@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { fromAny } from "@total-typescript/shoehorn";
 import type { AgentTurnDelegation, ResolvedTool } from "@wincode/agent-core";
+import { isString, isUndefined } from "@wincode/runtime-utils";
 import {
 	applyManualApprovalSafetyCeiling,
 	createResolvedToolPermission,
@@ -38,10 +39,9 @@ const metadataFor = (files: Record<string, Uint8Array | string>) =>
 				isSymbolicLink: () => false,
 				mode: 0o10_0644,
 				mtimeMs: index + 1,
-				size:
-					typeof contents === "string"
-						? new TextEncoder().encode(contents).byteLength
-						: contents.byteLength,
+				size: isString(contents)
+					? new TextEncoder().encode(contents).byteLength
+					: contents.byteLength,
 			},
 		])
 	);
@@ -56,7 +56,7 @@ const fileSystem = (
 	readFile: async (path: string): Promise<Uint8Array | string> => {
 		reads.push(path);
 		const contents = files[path];
-		if (contents === undefined) {
+		if (isUndefined(contents)) {
 			const error = new Error("missing") as Error & { code: string };
 			error.code = "ENOENT";
 			throw error;
@@ -65,7 +65,7 @@ const fileSystem = (
 	},
 	stat: async (path: string) => {
 		const value = metadata.get(path);
-		if (value === undefined) {
+		if (isUndefined(value)) {
 			const error = new Error("missing") as Error & { code: string };
 			error.code = "ENOENT";
 			throw error;
@@ -745,7 +745,7 @@ describe("Prompt Composition", () => {
 					throw error;
 				}
 				const content = files[path as keyof typeof files];
-				if (content === undefined) {
+				if (isUndefined(content)) {
 					const error = new Error("missing") as Error & { code: string };
 					error.code = "ENOENT";
 					throw error;
@@ -754,7 +754,7 @@ describe("Prompt Composition", () => {
 			},
 			stat: async (path: string) => {
 				const content = files[path as keyof typeof files];
-				if (content === undefined) {
+				if (isUndefined(content)) {
 					const error = new Error("missing") as Error & { code: string };
 					error.code = "ENOENT";
 					throw error;

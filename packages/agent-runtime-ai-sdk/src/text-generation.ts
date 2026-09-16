@@ -1,5 +1,6 @@
 import type { ModelTarget } from "@wincode/ai/model-target";
 import { type ModelUsage, normalizeModelUsage } from "@wincode/ai/model-usage";
+import { isNull, isUndefined } from "@wincode/runtime-utils";
 import { streamText } from "ai";
 import type { RequireOneOrNone } from "type-fest";
 import { resolveAiSdkModelTarget } from "./model-resolver";
@@ -47,7 +48,7 @@ export const generateAiSdkText = async (
 		...(supportsOutputLimit
 			? { maxOutputTokens: options.maxOutputTokens }
 			: {}),
-		...(options.messages === undefined
+		...(isUndefined(options.messages)
 			? { prompt: options.prompt ?? "" }
 			: { messages: [...options.messages] }),
 	});
@@ -64,5 +65,5 @@ export const generateAiSdkText = async (
 	}
 	const text = await result.text;
 	const usage = normalizeModelUsage(await result.usage);
-	return usage === null ? { text } : { text, usage };
+	return isNull(usage) ? { text } : { text, usage };
 };

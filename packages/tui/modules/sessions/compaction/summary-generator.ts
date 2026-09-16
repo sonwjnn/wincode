@@ -8,6 +8,7 @@ import type {
 	ModelTarget,
 	ModelVariant,
 } from "@wincode/ai/model";
+import { isUndefined } from "@wincode/runtime-utils";
 import type { Connections } from "@/modules/connections";
 import { resolveChatModelTarget } from "../../model-target";
 import type { SessionMessage } from "../message";
@@ -108,7 +109,7 @@ export const createLanguageModelSummaryGenerator =
 			maxOutputTokens,
 			maxRetries: 0,
 			model,
-			...(messages === undefined ? { prompt } : { messages }),
+			...(isUndefined(messages) ? { prompt } : { messages }),
 			system: COMPACTION_SUMMARY_SYSTEM_PROMPT,
 		});
 	};
@@ -122,9 +123,9 @@ export const resolveDirectSummaryModel = async (
 ): Promise<SummaryModel> =>
 	resolveChatModelTarget(selection, connections, {
 		allowRetired: true,
-		...(signal === undefined ? {} : { signal }),
-		...(variant === undefined ? {} : { variant }),
-		...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+		...(isUndefined(signal) ? {} : { signal }),
+		...(isUndefined(variant) ? {} : { variant }),
+		...(isUndefined(maxOutputTokens) ? {} : { maxOutputTokens }),
 	});
 export const createDirectSummaryGenerator = (
 	connections: Connections,

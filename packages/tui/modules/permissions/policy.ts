@@ -1,5 +1,5 @@
 import { type CodingToolName, codingToolNames } from "@wincode/coding-tools";
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isPlainObject, isString, isUndefined } from "@wincode/runtime-utils";
 import { expandHomeInPath } from "./external-directory";
 
 export type PermissionDecision = "allow" | "ask" | "deny";
@@ -180,8 +180,7 @@ export const shippedAgentPermissionRules = (agentId: string): PermissionRules =>
 
 const isResourceMap = (
 	value: PermissionDecision | PermissionResourceRules | undefined
-): value is PermissionResourceRules =>
-	typeof value === "object" && value !== null;
+): value is PermissionResourceRules => isPlainObject(value);
 
 /**
  * Merges one Permission patch over a base following the shared ConfigStore
@@ -198,7 +197,7 @@ export const mergePermissionRules = (
 	};
 	for (const action of Object.keys(patch) as PermissionAction[]) {
 		const incoming = patch[action];
-		if (incoming === undefined) {
+		if (isUndefined(incoming)) {
 			continue;
 		}
 		const current = merged[action];
@@ -361,11 +360,11 @@ const normalizeRules = (
 		{};
 	for (const action of Object.keys(rules) as PermissionAction[]) {
 		const rule = rules[action];
-		if (typeof rule === "string") {
+		if (isString(rule)) {
 			normalized[action] = rule;
 			continue;
 		}
-		if (rule === undefined) {
+		if (isUndefined(rule)) {
 			continue;
 		}
 		normalized[action] = normalizeResourceRules(action, rule);
@@ -389,10 +388,10 @@ export function createResolvedToolPermission(
 	return {
 		decide(action: PermissionAction, resource: string): PermissionDecision {
 			const rule = normalized[action];
-			if (rule === undefined) {
+			if (isUndefined(rule)) {
 				return action === "external_directory" ? "ask" : "allow";
 			}
-			if (typeof rule === "string") {
+			if (isString(rule)) {
 				return rule;
 			}
 			return decideByResourceMap(
@@ -513,7 +512,7 @@ const compileGlobStar = (
 	isDoubleStar: boolean
 ): number | undefined => {
 	const after = addGlobState(automaton);
-	if (after === undefined) {
+	if (isUndefined(after)) {
 		return;
 	}
 	addGlobEpsilon(automaton, current, after);
@@ -530,7 +529,7 @@ const compileGlobSegmentDoubleStar = (
 ): number | undefined => {
 	const after = addGlobState(automaton);
 	const inside = addGlobState(automaton);
-	if (after === undefined || inside === undefined) {
+	if (isUndefined(after) || isUndefined(inside)) {
 		return;
 	}
 	addGlobEpsilon(automaton, current, after);
@@ -557,7 +556,7 @@ const compileGlobCharacter = (
 	action: PermissionAction
 ): number | undefined => {
 	const after = addGlobState(automaton);
-	if (after === undefined) {
+	if (isUndefined(after)) {
 		return;
 	}
 	if (character === "?") {
@@ -593,7 +592,7 @@ const compileGlobPattern = (
 	let index = 0;
 	while (index < patternCharacters.length) {
 		const character = patternCharacters[index];
-		if (character === undefined) {
+		if (isUndefined(character)) {
 			return;
 		}
 		if (character === "*") {
@@ -605,7 +604,7 @@ const compileGlobPattern = (
 			const next = isSegmentDoubleStar
 				? compileGlobSegmentDoubleStar(automaton, current)
 				: compileGlobStar(automaton, current, action, isDoubleStar);
-			if (next === undefined) {
+			if (isUndefined(next)) {
 				return;
 			}
 			current = next;
@@ -613,7 +612,7 @@ const compileGlobPattern = (
 			continue;
 		}
 		const next = compileGlobCharacter(automaton, current, character, action);
-		if (next === undefined) {
+		if (isUndefined(next)) {
 			return;
 		}
 		current = next;
@@ -636,7 +635,7 @@ const createGlobUnionAutomaton = (
 	for (const pattern of patterns) {
 		const compiled = compileGlobPattern(pattern, action);
 		if (
-			compiled === undefined ||
+			isUndefined(compiled) ||
 			automaton.epsilon.length + compiled.epsilon.length >
 				MAX_GLOB_AUTOMATON_STATES
 		) {
@@ -674,7 +673,7 @@ const epsilonClosure = (
 	const pending = [...closure];
 	while (pending.length > 0) {
 		const state = pending.pop();
-		if (state === undefined) {
+		if (isUndefined(state)) {
 			continue;
 		}
 		for (const next of automaton.epsilon[state] ?? []) {
@@ -794,11 +793,11 @@ const hasGlobLanguageDifference = (
 ): boolean | undefined => {
 	const target = compileGlobPattern(targetPattern, action);
 	const blockers = createGlobUnionAutomaton(blockedPatterns, action);
-	if (target === undefined || blockers === undefined) {
+	if (isUndefined(target) || isUndefined(blockers)) {
 		return;
 	}
 	const alphabet = globAlphabet([targetPattern, ...blockedPatterns]);
-	if (alphabet === undefined) {
+	if (isUndefined(alphabet)) {
 		return;
 	}
 	const queue: GlobProductState[] = [
@@ -814,7 +813,7 @@ const hasGlobLanguageDifference = (
 	while (queueIndex < queue.length) {
 		const state = queue[queueIndex];
 		queueIndex += 1;
-		if (state === undefined) {
+		if (isUndefined(state)) {
 			continue;
 		}
 		const key = globProductKey(state);
@@ -870,7 +869,7 @@ const hasEffectiveResourceDecision = (
 		if (difference === true) {
 			return true;
 		}
-		if (difference === undefined) {
+		if (isUndefined(difference)) {
 			return;
 		}
 	}
@@ -911,7 +910,7 @@ const hasEffectiveResourceAsk = (
 	const result = hasEffectiveResourceDecision(entries, action, ["ask"], -1);
 	// If bounded analysis cannot decide, retain the approval signal rather than
 	// silently describing a possibly approval-gated resource as allowed.
-	return result === true || result === undefined;
+	return result === true || isUndefined(result);
 };
 
 /**
@@ -924,7 +923,7 @@ export const describeVisibleToolPermission = (
 	action: PermissionAction
 ): PermissionDecision => {
 	const rule = permission.rules?.[action];
-	if (!isObjectLike(rule)) {
+	if (!isResourceMap(rule)) {
 		return permission.decide(action, "");
 	}
 	if (isUniversalResourceDeny(rule, action)) {
@@ -950,7 +949,7 @@ export const isStaticToolUnconditionallyDenied = (
 	const action = STATIC_TOOL_PERMISSION_ACTIONS[tool];
 	return (
 		rule === "deny" ||
-		(typeof rule === "object" && isUniversalResourceDeny(rule, action))
+		(isResourceMap(rule) && isUniversalResourceDeny(rule, action))
 	);
 };
 /** Resolves the static coding tools a model may see, in canonical order. */
@@ -973,10 +972,10 @@ export const countFlattenedPermissionRules = (
 	let count = 0;
 	for (const action of Object.keys(rules)) {
 		const rule = rules[action as PermissionAction];
-		if (rule === undefined) {
+		if (isUndefined(rule)) {
 			continue;
 		}
-		count += typeof rule === "string" ? 1 : Object.keys(rule).length;
+		count += isString(rule) ? 1 : Object.keys(rule).length;
 	}
 	return count;
 };
@@ -1038,10 +1037,10 @@ export const decideOpenActionPermission = (
 			continue;
 		}
 		const rule = rules[key as PermissionAction];
-		if (rule === undefined) {
+		if (isUndefined(rule)) {
 			continue;
 		}
-		if (typeof rule === "string") {
+		if (isString(rule)) {
 			decision = rule;
 			continue;
 		}

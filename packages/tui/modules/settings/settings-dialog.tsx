@@ -1,4 +1,10 @@
 import { TextAttributes } from "@opentui/core";
+import {
+	getErrorMessage,
+	isBoolean,
+	isNull,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDialogEscape } from "@/shared/providers/dialog/dialog-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
@@ -39,7 +45,7 @@ const getSettingResolution = (
 ): SettingResolution<unknown> => ({
 	available: setting.available,
 	source: setting.source,
-	...(setting.unavailableReason === undefined
+	...(isUndefined(setting.unavailableReason)
 		? {}
 		: { unavailableReason: setting.unavailableReason }),
 	value: setting.value,
@@ -50,7 +56,7 @@ const getValueLabel = (
 	value: unknown
 ): string => {
 	if (descriptor.kind === "boolean") {
-		if (typeof value !== "boolean") {
+		if (!isBoolean(value)) {
 			return "unknown";
 		}
 		return descriptor.formatValue?.(value) ?? (value ? "on" : "off");
@@ -118,7 +124,7 @@ const getInitialSettingId = (
 	section: string | undefined
 ): string | undefined =>
 	settings.find(
-		(setting) => section === undefined || setting.descriptor.section === section
+		(setting) => isUndefined(section) || setting.descriptor.section === section
 	)?.descriptor.id;
 
 const replaceSetting = (
@@ -141,7 +147,7 @@ export function SettingsDialogContent({
 	);
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [selectedId, setSelectedId] = useState<string | undefined>(() =>
-		initialSettings === undefined
+		isUndefined(initialSettings)
 			? undefined
 			: getInitialSettingId(initialSettings, initialSection)
 	);
@@ -155,7 +161,7 @@ export function SettingsDialogContent({
 	useDialogEscape();
 
 	useEffect(() => {
-		if (initialSettings !== undefined) {
+		if (!isUndefined(initialSettings)) {
 			setSettings(initialSettings);
 			return;
 		}
@@ -170,8 +176,7 @@ export function SettingsDialogContent({
 				if (!active) {
 					return;
 				}
-				const message =
-					error instanceof Error ? error.message : "Could not load settings.";
+				const message = getErrorMessage(error, "Could not load settings.");
 				setLoadError(message);
 				show({ message, variant: "error" });
 			}
@@ -183,7 +188,7 @@ export function SettingsDialogContent({
 	}, [initialSettings, operations, show]);
 
 	useEffect(() => {
-		if (settings === null || initialSectionAppliedRef.current) {
+		if (isNull(settings) || initialSectionAppliedRef.current) {
 			return;
 		}
 		setSelectedId(getInitialSettingId(settings, initialSection));
@@ -191,7 +196,7 @@ export function SettingsDialogContent({
 	}, [initialSection, settings]);
 
 	const items = useMemo(
-		() => (settings === null ? [] : buildItems(settings)),
+		() => (isNull(settings) ? [] : buildItems(settings)),
 		[settings]
 	);
 	const selectedSetting = settings?.find(
@@ -203,26 +208,22 @@ export function SettingsDialogContent({
 			version: number,
 			error: unknown
 		): Promise<string | null> => {
-			let message =
-				error instanceof Error ? error.message : "Could not save setting.";
+			let message = getErrorMessage(error, "Could not save setting.");
 			try {
 				const resolved = await operations.getSettings();
 				if (versionsRef.current[id] !== version) {
 					return null;
 				}
 				const persisted = resolved.find((entry) => entry.descriptor.id === id);
-				if (persisted === undefined) {
+				if (isUndefined(persisted)) {
 					message = `${message} Could not refresh persisted setting.`;
 				} else {
 					setSettings((current) =>
-						current === null ? current : replaceSetting(current, persisted)
+						isNull(current) ? current : replaceSetting(current, persisted)
 					);
 				}
 			} catch (refreshError: unknown) {
-				message =
-					refreshError instanceof Error
-						? `${message} Could not refresh persisted setting: ${refreshError.message}`
-						: `${message} Could not refresh persisted setting.`;
+				message = `${message} Could not refresh persisted setting: ${getErrorMessage(refreshError, "Unknown settings error.")}`;
 			}
 			return message;
 		},
@@ -235,7 +236,7 @@ export function SettingsDialogContent({
 				return;
 			}
 			const message = await refreshSettingAfterFailure(id, version, error);
-			if (message === null || versionsRef.current[id] !== version) {
+			if (isNull(message) || versionsRef.current[id] !== version) {
 				return;
 			}
 			show({ message, variant: "error" });
@@ -257,7 +258,7 @@ export function SettingsDialogContent({
 			const id = setting.descriptor.id;
 			const version = (versionsRef.current[id] ?? 0) + 1;
 			versionsRef.current[id] = version;
-			if (intended !== undefined) {
+			if (!isUndefined(intended)) {
 				intendedValuesRef.current[id] = intended;
 			}
 			setPendingById((current) => ({ ...current, [id]: true }));
@@ -269,7 +270,7 @@ export function SettingsDialogContent({
 						return;
 					}
 					setSettings((current) =>
-						current === null ? current : replaceSetting(current, updated)
+						isNull(current) ? current : replaceSetting(current, updated)
 					);
 					delete intendedValuesRef.current[id];
 					setErrorsById((current) => ({ ...current, [id]: undefined }));
@@ -312,7 +313,7 @@ export function SettingsDialogContent({
 			const current =
 				intendedValuesRef.current[setting.descriptor.id] ?? setting.value;
 			if (setting.descriptor.kind === "boolean") {
-				if (typeof current !== "boolean") {
+				if (!isBoolean(current)) {
 					return;
 				}
 				const next = !current;
@@ -330,7 +331,7 @@ export function SettingsDialogContent({
 				setting.descriptor.options[
 					(optionIndex + 1) % setting.descriptor.options.length
 				];
-			if (nextOption === undefined) {
+			if (isUndefined(nextOption)) {
 				return;
 			}
 			runMutation(
@@ -353,7 +354,7 @@ export function SettingsDialogContent({
 		[operations, runMutation]
 	);
 
-	if (settings === null) {
+	if (isNull(settings)) {
 		return (
 			<box flexDirection="column" gap={1} marginX={4}>
 				<text fg={loadError ? colors.error : colors.textMuted}>
@@ -414,7 +415,7 @@ export function SettingsDialogContent({
 			}
 			getKey={(item) => item.id}
 			initialSelectedIndex={
-				initialSection === undefined
+				isUndefined(initialSection)
 					? undefined
 					: Math.max(
 							0,
@@ -495,10 +496,9 @@ export function SettingsDialogContent({
 				const intended = intendedValuesRef.current[setting.descriptor.id];
 				let pendingValue = "";
 				if (pending) {
-					pendingValue =
-						intended === undefined
-							? " (saving…)"
-							: ` → ${getValueLabel(setting.descriptor, intended)} (saving…)`;
+					pendingValue = isUndefined(intended)
+						? " (saving…)"
+						: ` → ${getValueLabel(setting.descriptor, intended)} (saving…)`;
 				}
 				let foregroundColor = colors.textMuted;
 				if (setting.available) {

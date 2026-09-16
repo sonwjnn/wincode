@@ -10,6 +10,7 @@ import {
 	getChatModelRoute,
 	normalizeChatModelSelection,
 } from "@wincode/ai/models";
+import { isNull, isUndefined } from "@wincode/runtime-utils";
 import {
 	type ResolvedModel,
 	type ResolverOptions,
@@ -50,7 +51,7 @@ export const resolveAiSdkModelTarget = (target: ModelTarget): ResolvedModel => {
 			options
 		);
 	}
-	if (target.providerOptions === undefined) {
+	if (isUndefined(target.providerOptions)) {
 		return resolved;
 	}
 	return {
@@ -65,13 +66,13 @@ export const resolveDirectChatModel = (
 	options: ResolverOptions = {}
 ): ResolvedModel => {
 	const normalized = normalizeChatModelSelection(selection);
-	if (normalized === null) {
+	if (isNull(normalized)) {
 		throw new Error(
 			`Unsupported direct chat model selection: ${selection.providerId}/${selection.modelId}`
 		);
 	}
 	const model = findSupportedChatModelSelection(normalized);
-	if (model === null || getChatModelRoute(normalized) !== "direct") {
+	if (isNull(model) || getChatModelRoute(normalized) !== "direct") {
 		throw new Error(
 			`Chat model selection is not direct: ${normalized.providerId}/${normalized.modelId}`
 		);
@@ -88,7 +89,7 @@ export const resolveSupportedChatModel = (
 	options: ResolverOptions = {}
 ): ResolvedModel => {
 	const resolver = modelResolverByProvider[model.provider];
-	if (resolver === undefined) {
+	if (isUndefined(resolver)) {
 		throw new Error("Unsupported provider");
 	}
 	return resolver.resolveWithEnvironment(model, options);
@@ -96,15 +97,15 @@ export const resolveSupportedChatModel = (
 
 export const isSupportedChatModel = (
 	modelId: string
-): modelId is SupportedChatModelId => findSupportedChatModel(modelId) !== null;
+): modelId is SupportedChatModelId => !isNull(findSupportedChatModel(modelId));
 
 export const isSupportedChatModelSelection = (
 	selection: ChatModelSelection
-): boolean => findSupportedChatModelSelection(selection) !== null;
+): boolean => !isNull(findSupportedChatModelSelection(selection));
 
 export const resolveChatModel = (modelId: string): ResolvedModel => {
 	const model = findSupportedChatModel(modelId);
-	if (model === null) {
+	if (isNull(model)) {
 		throw new Error(`Unsupported model: ${modelId}`);
 	}
 	return resolveSupportedChatModel(model);

@@ -1,5 +1,12 @@
 import type { ToolCallOutput } from "@wincode/agent-core";
-import { isPlainObject } from "@wincode/runtime-utils";
+import {
+	isArray,
+	isBoolean,
+	isNull,
+	isPlainObject,
+	isString,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import type { JsonValue } from "type-fest";
 import { MAX_MCP_RESULT_BYTES } from "./manifest";
 import type { McpCatalogSnapshot } from "./registry";
@@ -38,7 +45,7 @@ export type McpToolCallExecutor = (
 export const createMcpToolExecutor = (
 	execute: McpToolExecutor | undefined
 ): McpToolCallExecutor | undefined => {
-	if (execute === undefined) {
+	if (isUndefined(execute)) {
 		return;
 	}
 	return async (snapshot, toolName, input, signal) => {
@@ -52,7 +59,7 @@ const encoder = new TextEncoder();
 const size = (value: unknown): number =>
 	encoder.encode(JSON.stringify(value)).byteLength;
 const stringValue = (value: unknown): string =>
-	typeof value === "string" ? value : "unknown";
+	isString(value) ? value : "unknown";
 const HIGH_SURROGATE_START = 0xd8_00;
 const HIGH_SURROGATE_END = 0xdb_ff;
 const LOW_SURROGATE_START = 0xdc_00;
@@ -121,11 +128,7 @@ function safeJson(
 	ancestors = new WeakSet<object>(),
 	depth = 0
 ): JsonValue | undefined {
-	if (
-		value === null ||
-		typeof value === "string" ||
-		typeof value === "boolean"
-	) {
+	if (isNull(value) || isString(value) || isBoolean(value)) {
 		return value;
 	}
 	if (typeof value === "number") {
@@ -136,16 +139,16 @@ function safeJson(
 	}
 	ancestors.add(value);
 	let result: JsonValue | undefined;
-	if (Array.isArray(value)) {
+	if (isArray(value)) {
 		result = value.flatMap((item) => {
 			const safe = safeJson(item, ancestors, depth + 1);
-			return safe === undefined ? [] : [safe];
+			return isUndefined(safe) ? [] : [safe];
 		});
 	} else {
 		result = Object.fromEntries(
 			Object.entries(value).flatMap(([key, item]) => {
 				const safe = safeJson(item, ancestors, depth + 1);
-				return safe === undefined ? [] : [[bounded(key), safe]];
+				return isUndefined(safe) ? [] : [[bounded(key), safe]];
 			})
 		);
 	}
@@ -153,14 +156,14 @@ function safeJson(
 	return result;
 }
 function normalizeContent(value: unknown): JsonValue[] {
-	if (!Array.isArray(value)) {
+	if (!isArray(value)) {
 		return [];
 	}
 	return value.flatMap((item): JsonValue[] => {
 		if (!isPlainObject(item)) {
 			return [];
 		}
-		if (item.type === "text" && typeof item.text === "string") {
+		if (item.type === "text" && isString(item.text)) {
 			return [{ type: "text", text: item.text }];
 		}
 		if (item.type === "image" || item.type === "audio") {
@@ -174,7 +177,7 @@ function normalizeContent(value: unknown): JsonValue[] {
 		}
 		if (item.type === "resource" && isPlainObject(item.resource)) {
 			const resource = item.resource;
-			if (typeof resource.text === "string") {
+			if (isString(resource.text)) {
 				return [
 					{
 						type: "resource",
@@ -215,7 +218,7 @@ export function normalizeMcpResult(input: unknown): McpNormalizedResult {
 		truncated: false,
 	};
 	const structured = safeJson(source.structuredContent);
-	if (structured !== undefined) {
+	if (!isUndefined(structured)) {
 		result.structuredContent = structured;
 	}
 	if (size(result) <= cap) {
@@ -225,7 +228,7 @@ export function normalizeMcpResult(input: unknown): McpNormalizedResult {
 	const marker = { type: "text", text: "[MCP output truncated]" } as JsonValue;
 	const texts = result.content.filter(
 		(item): item is { text: string } =>
-			isPlainObject(item) && typeof item.text === "string"
+			isPlainObject(item) && isString(item.text)
 	);
 	const originals = texts.map((text) => text.text);
 	const lengths = texts.map((text) => text.text.length);

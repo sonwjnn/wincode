@@ -1,3 +1,4 @@
+import { isUndefined } from "@wincode/runtime-utils";
 import type { ReactNode } from "react";
 import {
 	createContext,
@@ -69,11 +70,11 @@ const withResolution = (
 				!(
 					matches(entry) &&
 					entry.target === "session" &&
-					entry.resolution === undefined
+					isUndefined(entry.resolution)
 				)
 		)
 		.map((entry) =>
-			matches(entry) && entry.resolution === undefined
+			matches(entry) && isUndefined(entry.resolution)
 				? { ...entry, resolution: { feedback, outcome } }
 				: entry
 		);
@@ -96,7 +97,7 @@ export function ApprovalPanelsProvider({ children }: { children: ReactNode }) {
 				actions,
 				id,
 				request,
-				target: request.toolCallId === undefined ? "session" : "tool-call",
+				target: isUndefined(request.toolCallId) ? "session" : "tool-call",
 			};
 			setEntries((prev) =>
 				prev.some((candidate) => candidate.id === id)

@@ -1,3 +1,5 @@
+import { isNull, isUndefined } from "@wincode/runtime-utils";
+
 type BunSpawnProcess = {
 	exited: Promise<number>;
 	kill?: (signal?: number) => void;
@@ -157,7 +159,7 @@ export const runBoundedGitCommand = async (
 	command: readonly string[]
 ): Promise<BoundedGitCommandResult | null> => {
 	const spawn = bunGlobal.Bun?.spawn;
-	if (spawn === undefined) {
+	if (isUndefined(spawn)) {
 		return null;
 	}
 	let child: BunSpawnProcess | undefined;
@@ -188,7 +190,7 @@ export const runBoundedGitCommand = async (
 			}, GIT_COMMAND_TIMEOUT_MS);
 		});
 		const result = await Promise.race([operation, timeoutResult]);
-		if (result === null) {
+		if (isNull(result)) {
 			await cancelOutput?.();
 			spawned.kill?.(GIT_HARD_KILL_SIGNAL);
 			await spawned.exited.catch(() => -1);
@@ -197,7 +199,7 @@ export const runBoundedGitCommand = async (
 		return result;
 	} catch {
 		await cancelOutput?.();
-		if (child !== undefined) {
+		if (!isUndefined(child)) {
 			child.kill?.(GIT_HARD_KILL_SIGNAL);
 			await child.exited.catch(() => -1);
 		}
@@ -218,7 +220,7 @@ export const getGitStatusSummary = async (
 		"--porcelain=v1",
 		"--untracked-files=all",
 	]);
-	if (result === null || (result.exitCode !== 0 && !result.truncated)) {
+	if (isNull(result) || (result.exitCode !== 0 && !result.truncated)) {
 		return unavailableSummary();
 	}
 	return parseStatus(
@@ -235,7 +237,7 @@ export const getGitRepositoryRoot = async (
 		"rev-parse",
 		"--show-toplevel",
 	]);
-	if (result === null || result.exitCode !== 0) {
+	if (isNull(result) || result.exitCode !== 0) {
 		return null;
 	}
 	const root = new TextDecoder("utf-8", { fatal: false })

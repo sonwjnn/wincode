@@ -1,7 +1,14 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { isObjectLike } from "@wincode/runtime-utils";
+import {
+	getErrorMessage,
+	isError,
+	isNull,
+	isObjectLike,
+	isString,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import { WORKSPACE_IGNORED_DIRECTORY_NAMES } from "../../workspace";
 import {
 	RipgrepUnavailableError,
@@ -30,11 +37,8 @@ const getErrorCode = (error: unknown): string | undefined => {
 		return;
 	}
 	const code = error.code;
-	return typeof code === "string" ? code : undefined;
+	return isString(code) ? code : undefined;
 };
-
-const getErrorMessage = (error: unknown): string =>
-	error instanceof Error ? error.message : "ripgrep glob search failed";
 
 const normalizeCandidatePath = (
 	cwd: string,
@@ -119,11 +123,15 @@ export const runRipgrepGlob = async (
 			reject(new RipgrepUnavailableError(executable));
 			return promise;
 		}
-		reject(error instanceof Error ? error : new Error(getErrorMessage(error)));
+		reject(
+			isError(error)
+				? error
+				: new Error(getErrorMessage(error, "ripgrep glob search failed"))
+		);
 		return promise;
 	}
 
-	if (child.stdout === null || child.stderr === null) {
+	if (isNull(child.stdout) || isNull(child.stderr)) {
 		child.kill();
 		reject(new Error("ripgrep did not expose output streams."));
 		return promise;
@@ -163,7 +171,11 @@ export const runRipgrepGlob = async (
 		settled = true;
 		cleanup();
 		terminate();
-		reject(error instanceof Error ? error : new Error(getErrorMessage(error)));
+		reject(
+			isError(error)
+				? error
+				: new Error(getErrorMessage(error, "ripgrep glob search failed"))
+		);
 	};
 
 	const acceptCandidate = (candidate: string): void => {
@@ -171,7 +183,7 @@ export const runRipgrepGlob = async (
 			return;
 		}
 		const normalizedPath = normalizeCandidatePath(input.cwd, candidate);
-		if (normalizedPath === undefined) {
+		if (isUndefined(normalizedPath)) {
 			return;
 		}
 		if (paths.length >= input.maxCandidates) {

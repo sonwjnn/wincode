@@ -1,4 +1,4 @@
-import { isPlainObject } from "@wincode/runtime-utils";
+import { isPlainObject, isUndefined } from "@wincode/runtime-utils";
 import type {
 	ConfigDocument,
 	ConfigOrigin,
@@ -47,7 +47,7 @@ export type ResolveAgentPermissionOptions = Readonly<{
 }>;
 
 const parsePermissionRules = (raw: unknown): PermissionRules | undefined => {
-	if (raw === undefined) {
+	if (isUndefined(raw)) {
 		return;
 	}
 	const parsed = topLevelPermissionSchema.safeParse(raw);
@@ -92,9 +92,9 @@ export const resolveAgentPermission = (
 	for (const source of snapshot.sources) {
 		const origin: ConfigOrigin = { path: source.path, scope: source.scope };
 		const rawTopLevel = source.document.permission;
-		if (rawTopLevel !== undefined) {
+		if (!isUndefined(rawTopLevel)) {
 			const topLevel = parsePermissionRules(rawTopLevel);
-			if (topLevel === undefined) {
+			if (isUndefined(topLevel)) {
 				safetyCeiling = true;
 				diagnostics.push({
 					code: "invalid-permission-policy",
@@ -114,7 +114,7 @@ export const resolveAgentPermission = (
 		const agentLevel = parsePermissionRules(
 			agentPermissionRaw(source.document, agentId)
 		);
-		if (agentLevel !== undefined) {
+		if (!isUndefined(agentLevel)) {
 			layers.push(agentLevel);
 		}
 	}
@@ -129,10 +129,9 @@ export const resolveAgentPermission = (
 			severity: "error",
 		});
 	}
-	const knownActions =
-		options.discoveredToolActions === undefined
-			? PERMISSION_TOOL_ACTIONS
-			: [...PERMISSION_TOOL_ACTIONS, ...options.discoveredToolActions];
+	const knownActions = isUndefined(options.discoveredToolActions)
+		? PERMISSION_TOOL_ACTIONS
+		: [...PERMISSION_TOOL_ACTIONS, ...options.discoveredToolActions];
 	for (const action of findUnmatchedActionKeys(rules, knownActions)) {
 		diagnostics.push({
 			code: "unmatched-permission-action",

@@ -1,3 +1,4 @@
+import { isString } from "@wincode/runtime-utils";
 // Model selection over the Model Catalog. Catalog data, entry lookups, and
 // types live in ./catalog; metadata that comes from the generated models.dev
 // snapshot lives in ./model-metadata-runtime. This module is the selection
@@ -73,7 +74,7 @@ export const getChatModelRoute = (
 export const normalizeChatModelSelection = (
 	selection: string | ChatModelSelection
 ): ChatModelSelection | null => {
-	if (typeof selection !== "string") {
+	if (!isString(selection)) {
 		const parsed = modelSelectionSchema.safeParse(selection);
 		return parsed.success ? parsed.data : null;
 	}

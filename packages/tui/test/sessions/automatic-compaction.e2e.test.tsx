@@ -1,3 +1,5 @@
+import { isUndefined } from "@wincode/runtime-utils";
+
 const previousEnvironment = {
 	WINCODE_E2E_HOME: process.env.WINCODE_E2E_HOME,
 	WINCODE_E2E_WORKSPACE: process.env.WINCODE_E2E_WORKSPACE,
@@ -7,7 +9,7 @@ const previousEnvironment = {
 
 const restoreEnvironment = (): void => {
 	for (const [key, value] of Object.entries(previousEnvironment)) {
-		if (value === undefined) {
+		if (isUndefined(value)) {
 			delete process.env[key];
 		} else {
 			process.env[key] = value;

@@ -1,3 +1,4 @@
+import { isString } from "@wincode/runtime-utils";
 import { serve } from "bun";
 import {
 	calculatePKCECodeChallenge,
@@ -257,7 +258,7 @@ function extractAccountId(jwt: string | undefined): string | undefined {
 		}
 		const payload = payloadResult.data;
 		const direct = payload.chatgpt_account_id;
-		if (typeof direct === "string") {
+		if (isString(direct)) {
 			return direct;
 		}
 		const nested = payload["https://api.openai.com/auth"];

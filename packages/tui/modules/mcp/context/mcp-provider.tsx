@@ -1,4 +1,5 @@
 import type { AgentId } from "@wincode/agent-core";
+import { isNull, isUndefined } from "@wincode/runtime-utils";
 import {
 	createContext,
 	type ReactNode,
@@ -113,7 +114,7 @@ export function McpProvider({
 			try {
 				await registry.initialize();
 				const summary = buildMcpSummary(registry.getStatuses());
-				if (summary !== null) {
+				if (!isNull(summary)) {
 					summaryToastShownRef.current = true;
 					toast.show({ message: summary, variant: "error" });
 				}
@@ -150,7 +151,7 @@ export function McpProvider({
 			);
 			if (agent === "build" && !summaryToastShownRef.current) {
 				const summary = buildMcpSummary(registry.getStatuses());
-				if (summary !== null) {
+				if (!isNull(summary)) {
 					summaryToastShownRef.current = true;
 					toast.show({ message: summary, variant: "error" });
 				}
@@ -175,7 +176,7 @@ export function McpProvider({
 	);
 
 	const getStatusesSnapshot = useCallback((): readonly McpServerStatus[] => {
-		if (statusesCacheRef.current === null) {
+		if (isNull(statusesCacheRef.current)) {
 			statusesCacheRef.current = registry.getStatuses();
 		}
 		return statusesCacheRef.current;
@@ -192,8 +193,8 @@ export function McpProvider({
 			const status = getStatusesSnapshot().find(
 				(item) => item.name === serverName
 			);
-			const summary = status === undefined ? null : buildMcpSummary([status]);
-			if (summary !== null) {
+			const summary = isUndefined(status) ? null : buildMcpSummary([status]);
+			if (!isNull(summary)) {
 				toast.show({
 					message: summary,
 					variant: "error",

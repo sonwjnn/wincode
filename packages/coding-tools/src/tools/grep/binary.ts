@@ -14,7 +14,13 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { isObjectLike } from "@wincode/runtime-utils";
+import {
+	getErrorMessage,
+	isNull,
+	isObjectLike,
+	isString,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import { truncateUtf8 } from "../output-bounds";
 
 export const RIPGREP_VERSION = "15.1.0";
@@ -198,11 +204,8 @@ const getErrorCode = (error: unknown): string | undefined => {
 		return;
 	}
 	const code = error.code;
-	return typeof code === "string" ? code : undefined;
+	return isString(code) ? code : undefined;
 };
-
-const getErrorMessage = (error: unknown): string =>
-	error instanceof Error ? error.message : String(error);
 
 const isExecutableFile = async (
 	filePath: string,
@@ -252,14 +255,14 @@ const runCommand = async (command: string, args: string[]): Promise<void> => {
 	} catch (error) {
 		reject(
 			new RipgrepDownloadError(
-				`failed to start ${command}: ${getErrorMessage(error)}`
+				`failed to start ${command}: ${getErrorMessage(error, String(error))}`
 			)
 		);
 		return promise;
 	}
 
 	const cleanup = (): void => {
-		if (timer !== undefined) {
+		if (!isUndefined(timer)) {
 			clearTimeout(timer);
 		}
 	};
@@ -285,7 +288,7 @@ const runCommand = async (command: string, args: string[]): Promise<void> => {
 	child.on("error", (error) => {
 		finish(
 			new RipgrepDownloadError(
-				`failed to run ${command}: ${getErrorMessage(error)}`
+				`failed to run ${command}: ${getErrorMessage(error, String(error))}`
 			)
 		);
 	});
@@ -362,7 +365,7 @@ const downloadArchive = async (
 			});
 		} catch (error) {
 			throw new RipgrepUnavailableError(
-				`download failed: ${getErrorMessage(error)}`
+				`download failed: ${getErrorMessage(error, String(error))}`
 			);
 		}
 
@@ -374,7 +377,7 @@ const downloadArchive = async (
 
 		const contentLength = response.headers.get("content-length");
 		if (
-			contentLength !== null &&
+			!isNull(contentLength) &&
 			Number.isFinite(Number(contentLength)) &&
 			Number(contentLength) > DOWNLOAD_MAX_BYTES
 		) {
@@ -400,7 +403,7 @@ const downloadArchive = async (
 					chunkValue = chunk.value;
 				} catch (error) {
 					throw new RipgrepUnavailableError(
-						`download stream failed: ${getErrorMessage(error)}`
+						`download stream failed: ${getErrorMessage(error, String(error))}`
 					);
 				}
 				if (chunkDone) {
@@ -419,7 +422,7 @@ const downloadArchive = async (
 					await file.write(chunkValue);
 				} catch (error) {
 					throw new RipgrepDownloadError(
-						`failed to write ripgrep archive: ${getErrorMessage(error)}`
+						`failed to write ripgrep archive: ${getErrorMessage(error, String(error))}`
 					);
 				}
 				hash.update(chunkValue);
@@ -455,7 +458,7 @@ const installStagedBinary = async (
 			return;
 		}
 		throw new RipgrepDownloadError(
-			`failed to install ripgrep: ${getErrorMessage(error)}`
+			`failed to install ripgrep: ${getErrorMessage(error, String(error))}`
 		);
 	}
 };

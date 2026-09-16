@@ -1,7 +1,14 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { isObjectLike, isPlainObject } from "@wincode/runtime-utils";
+import {
+	getErrorMessage,
+	isError,
+	isNull,
+	isObjectLike,
+	isPlainObject,
+	isString,
+} from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 import { truncateUtf8 } from "../output-bounds";
 import { getToolResourceLimits } from "../resource-limits";
@@ -33,11 +40,8 @@ const getErrorCode = (error: unknown): string | undefined => {
 		return;
 	}
 	const code = error.code;
-	return typeof code === "string" ? code : undefined;
+	return isString(code) ? code : undefined;
 };
-
-const getErrorMessage = (error: unknown): string =>
-	error instanceof Error ? error.message : "ripgrep search failed";
 
 const asRecord = (value: unknown): UnknownRecord | undefined =>
 	isPlainObject(value) ? value : undefined;
@@ -72,8 +76,7 @@ const parseRipgrepMatch = (line: string): GrepSearchMatch | undefined => {
 	const lineText = asRecord(data?.lines)?.text;
 	const lineNumber = data?.line_number;
 	if (
-		typeof matchPath !== "string" ||
-		typeof lineText !== "string" ||
+		!(isString(matchPath) && isString(lineText)) ||
 		typeof lineNumber !== "number" ||
 		!Number.isInteger(lineNumber) ||
 		lineNumber < 1
@@ -144,11 +147,15 @@ export const runRipgrepSearch: GrepSearch = async (
 			reject(new RipgrepUnavailableError(executable));
 			return promise;
 		}
-		reject(error instanceof Error ? error : new Error(getErrorMessage(error)));
+		reject(
+			isError(error)
+				? error
+				: new Error(getErrorMessage(error, "ripgrep search failed"))
+		);
 		return promise;
 	}
 
-	if (child.stdout === null || child.stderr === null) {
+	if (isNull(child.stdout) || isNull(child.stderr)) {
 		child.kill();
 		reject(new Error("ripgrep did not expose output streams."));
 		return promise;
@@ -189,7 +196,11 @@ export const runRipgrepSearch: GrepSearch = async (
 		settled = true;
 		cleanup();
 		terminate();
-		reject(error instanceof Error ? error : new Error(getErrorMessage(error)));
+		reject(
+			isError(error)
+				? error
+				: new Error(getErrorMessage(error, "ripgrep search failed"))
+		);
 	};
 
 	const finish = (code: number | null): void => {

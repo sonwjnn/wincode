@@ -1,5 +1,6 @@
 import { lstat, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isObjectLike } from "@wincode/runtime-utils";
 import { defaultWorkspaceSandbox } from "../../workspace";
 import type { ResourceLimitOptions } from "../resource-limits";
 import type { WriteInput, WriteOutput } from "./schema";
@@ -16,12 +17,7 @@ export const runWriteTool = async (
 	try {
 		await lstat(candidatePath);
 	} catch (error) {
-		if (
-			typeof error === "object" &&
-			error !== null &&
-			"code" in error &&
-			error.code === "ENOENT"
-		) {
+		if (isObjectLike(error) && "code" in error && error.code === "ENOENT") {
 			targetExists = false;
 		} else {
 			throw error;

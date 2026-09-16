@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CallToolResult } from "@modelcontextprotocol/client";
 import { fromAny } from "@total-typescript/shoehorn";
+import { isNull, isUndefined } from "@wincode/runtime-utils";
 import type { McpClient, McpClientTool } from "@/modules/mcp/client";
 import type {
 	LocalMcpServerConfig,
@@ -47,13 +48,13 @@ class FakeMcpClient implements McpClient {
 
 	async connect(signal?: AbortSignal): Promise<void> {
 		this.connectCount += 1;
-		if (this.connectImpl !== undefined) {
+		if (!isUndefined(this.connectImpl)) {
 			return this.connectImpl(signal);
 		}
 		if (signal?.aborted) {
 			throw new DOMException("Aborted", "AbortError");
 		}
-		if (this.connectFailure !== null) {
+		if (!isNull(this.connectFailure)) {
 			throw this.connectFailure;
 		}
 	}
@@ -66,7 +67,7 @@ class FakeMcpClient implements McpClient {
 		if (signal?.aborted) {
 			throw new DOMException("Aborted", "AbortError");
 		}
-		if (this.listFailure !== null) {
+		if (!isNull(this.listFailure)) {
 			throw this.listFailure;
 		}
 		return this.tools;
@@ -113,7 +114,7 @@ const hangingCall =
 const tool = (name: string, description?: string): McpClientTool => ({
 	name,
 	inputSchema: { type: "object" },
-	...(description === undefined ? {} : { description }),
+	...(isUndefined(description) ? {} : { description }),
 });
 
 const DEFAULT_TIMEOUTS = {
@@ -142,7 +143,7 @@ const serverConfig = (
 			disabled: patch.disabled ?? false,
 			permission: patch.permission ?? "ask",
 			timeout: patch.timeout ?? DEFAULT_TIMEOUTS,
-			...(patch.headers === undefined ? {} : { headers: patch.headers }),
+			...(isUndefined(patch.headers) ? {} : { headers: patch.headers }),
 		};
 	}
 	return {
@@ -177,7 +178,7 @@ const harness = (options: HarnessOptions = {}): Harness => {
 		workspace: "/workspace",
 		createClient: (config) => {
 			const existing = clients.get(config.name);
-			if (existing !== undefined) {
+			if (!isUndefined(existing)) {
 				return existing;
 			}
 			const created = new FakeMcpClient(config.name);

@@ -1,6 +1,7 @@
 import { TextAttributes } from "@opentui/core";
 import { useRouter } from "@tanstack/react-router";
 import { createAgentTurnId } from "@wincode/agent-core";
+import { isNull, isUndefined } from "@wincode/runtime-utils";
 import { createSkillSnapshot } from "@wincode/skills";
 import { useEffect, useState } from "react";
 import {
@@ -50,7 +51,7 @@ export const hasChatPromptContent = ({
 	skill,
 	text,
 }: ChatPromptSubmission): boolean =>
-	text.trim().length > 0 || files.length > 0 || skill !== undefined;
+	text.trim().length > 0 || files.length > 0 || !isUndefined(skill);
 
 export function NewSessionView() {
 	const router = useRouter();
@@ -69,14 +70,14 @@ export function NewSessionView() {
 	const defaultAgentId = registry?.defaultAgentId;
 
 	useEffect(() => {
-		if (defaultAgentId !== undefined) {
+		if (!isUndefined(defaultAgentId)) {
 			setAgent(defaultAgentId);
 			setInitializedDefaultAgentId(defaultAgentId);
 		}
 	}, [defaultAgentId, setAgent]);
 
 	useEffect(() => {
-		if (registry === null) {
+		if (isNull(registry)) {
 			setIsPromptConfigRestored(false);
 			return;
 		}
@@ -102,7 +103,7 @@ export function NewSessionView() {
 				if (ignore || !selection) {
 					return;
 				}
-				if (selection.agent !== undefined) {
+				if (!isUndefined(selection.agent)) {
 					setAgent(selection.agent);
 				}
 
@@ -144,7 +145,7 @@ export function NewSessionView() {
 				initializedDefaultAgentId,
 				isCreatingSession,
 				isPromptConfigRestored,
-				registryReady: registry !== null,
+				registryReady: !isNull(registry),
 			})
 		) {
 			return false;

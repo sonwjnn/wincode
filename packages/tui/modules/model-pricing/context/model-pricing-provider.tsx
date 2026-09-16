@@ -2,6 +2,7 @@ import {
 	modelMetadataSnapshotDate,
 	supportedChatModelIds,
 } from "@wincode/ai/models";
+import { isUndefined } from "@wincode/runtime-utils";
 import {
 	createContext,
 	type ReactNode,
@@ -81,7 +82,7 @@ export function ModelPricingProvider({
 	const table = pricing ?? loadedTable;
 
 	useEffect(() => {
-		if (pricing !== undefined || bootstrappedRef.current) {
+		if (!isUndefined(pricing) || bootstrappedRef.current) {
 			return;
 		}
 		bootstrappedRef.current = true;

@@ -10,7 +10,14 @@ import {
 } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import type { AttachmentId, SessionMessageId } from "@wincode/agent-core";
-import { isObjectLike } from "@wincode/runtime-utils";
+import {
+	isError,
+	isNull,
+	isObjectLike,
+	isPlainObject,
+	isString,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import { eq } from "drizzle-orm";
 import type { Except, Merge, UnknownRecord } from "type-fest";
 import { z } from "zod";
@@ -287,14 +294,11 @@ type AttachmentCandidate = {
 };
 
 const isNodeError = (error: unknown, code: string): boolean =>
-	typeof error === "object" &&
-	error !== null &&
-	"code" in error &&
-	error.code === code;
+	isObjectLike(error) && "code" in error && error.code === code;
 
 const assertNotAborted = (signal?: AbortSignal): void => {
 	if (signal?.aborted) {
-		throw signal.reason instanceof Error
+		throw isError(signal.reason)
 			? signal.reason
 			: new Error("Attachment operation was cancelled.");
 	}
@@ -447,7 +451,7 @@ const readJpegDimensions = (bytes: Uint8Array): ImageDimensions | undefined => {
 			offset += 1;
 		}
 		const marker = bytes[offset];
-		if (marker === undefined) {
+		if (isUndefined(marker)) {
 			return;
 		}
 		offset += 1;
@@ -491,7 +495,7 @@ const parseDataUrl = (
 	maxBytes: number
 ): { bytes: Uint8Array; mediaType: string } | null => {
 	const match = DATA_URL_PATTERN.exec(url);
-	if (!match || match[2] === undefined) {
+	if (!match || isUndefined(match[2])) {
 		return null;
 	}
 	const mediaType = sanitizeMediaType(match[1] ?? "");
@@ -525,16 +529,16 @@ export const attachmentReferenceToFilePart = (
 	const validated = attachmentReferenceSchema.parse(reference);
 	return {
 		attachmentId: validated.attachmentId,
-		...(validated.available === undefined
+		...(isUndefined(validated.available)
 			? {}
 			: { available: validated.available }),
 		byteLength: validated.byteLength,
 		filename: validated.filename,
-		...(validated.height === undefined ? {} : { height: validated.height }),
+		...(isUndefined(validated.height) ? {} : { height: validated.height }),
 		mediaType: validated.mediaType,
 		type: "file",
 		url: refUrl(validated.attachmentId),
-		...(validated.width === undefined ? {} : { width: validated.width }),
+		...(isUndefined(validated.width) ? {} : { width: validated.width }),
 	} as AttachmentReferenceFilePart;
 };
 
@@ -552,14 +556,14 @@ export const getAttachmentReference = (
 	const candidate = part as UnknownRecord;
 	const parsed = attachmentReferenceSchema.safeParse({
 		attachmentId: candidate.attachmentId,
-		...(candidate.available === undefined
+		...(isUndefined(candidate.available)
 			? {}
 			: { available: candidate.available }),
 		byteLength: candidate.byteLength,
 		filename: candidate.filename,
-		...(candidate.height === undefined ? {} : { height: candidate.height }),
+		...(isUndefined(candidate.height) ? {} : { height: candidate.height }),
 		mediaType: candidate.mediaType,
-		...(candidate.width === undefined ? {} : { width: candidate.width }),
+		...(isUndefined(candidate.width) ? {} : { width: candidate.width }),
 	});
 	if (!parsed.success || candidate.url !== refUrl(parsed.data.attachmentId)) {
 		return null;
@@ -571,10 +575,11 @@ export const stripAttachmentDisplayMetadata = (
 	part: SessionMessage["parts"][number]
 ): SessionMessage["parts"][number] => {
 	if (
-		!getAttachmentReference(part) ||
-		typeof part !== "object" ||
-		part === null ||
-		!("displayAvailability" in part)
+		!(
+			getAttachmentReference(part) &&
+			isPlainObject(part) &&
+			"displayAvailability" in part
+		)
 	) {
 		return part;
 	}
@@ -583,7 +588,7 @@ export const stripAttachmentDisplayMetadata = (
 };
 export const isAttachmentReferencePart = (
 	part: unknown
-): part is AttachmentReferenceFilePart => getAttachmentReference(part) !== null;
+): part is AttachmentReferenceFilePart => !isNull(getAttachmentReference(part));
 
 export const formatAttachmentUnavailableMarker = (
 	reference: Pick<AttachmentReference, "attachmentId">,
@@ -621,7 +626,7 @@ export const estimateAttachmentTokens = (
 	const byteTokens = Math.ceil(reference.byteLength / 1024);
 	const { height, width } = reference;
 	const dimensionTokens =
-		height === undefined || width === undefined
+		isUndefined(height) || isUndefined(width)
 			? 0
 			: estimateDimensionsTokens({ height, width });
 	return Math.max(64, byteTokens, dimensionTokens);
@@ -629,7 +634,7 @@ export const estimateAttachmentTokens = (
 
 export const estimateAttachmentTokensForDataUrl = (url: string): number => {
 	const match = DATA_URL_PATTERN.exec(url);
-	if (!match || match[2] === undefined) {
+	if (!match || isUndefined(match[2])) {
 		return Math.max(64, Math.ceil((url.length * 3) / 4 / 1024));
 	}
 	const payload = (match[3] ?? "").replace(BASE64_WHITESPACE_PATTERN, "");
@@ -735,15 +740,14 @@ const inlineFilePart = (
 });
 
 const isImageFilePart = (part: unknown): part is ImageFilePart =>
-	typeof part === "object" &&
-	part !== null &&
+	isObjectLike(part) &&
 	"type" in part &&
 	part.type === "file" &&
 	"mediaType" in part &&
-	typeof part.mediaType === "string" &&
+	isString(part.mediaType) &&
 	part.mediaType.startsWith("image/") &&
 	"url" in part &&
-	typeof part.url === "string";
+	isString(part.url);
 export const isLegacyImagePart = (part: unknown): part is ImageFilePart =>
 	isImageFilePart(part) && !isAttachmentReferencePart(part);
 
@@ -756,7 +760,7 @@ const copyMessagesWithParts = (
 ): SessionMessage[] =>
 	messages.map((message, index) => {
 		const parts = partsByMessage.get(index);
-		return parts === undefined ? message : { ...message, parts };
+		return isUndefined(parts) ? message : { ...message, parts };
 	});
 
 const collectReferences = (
@@ -1136,7 +1140,7 @@ export const createSessionAttachmentStore = ({
 				maxBytes,
 				signal
 			);
-			if (typeof existingBlob === "string") {
+			if (isString(existingBlob)) {
 				await writeBlobAtomically(
 					root,
 					blobKey,
@@ -1194,7 +1198,7 @@ export const createSessionAttachmentStore = ({
 			maxBytes,
 			signal
 		);
-		if (typeof result === "string") {
+		if (isString(result)) {
 			return { availability: result, reference };
 		}
 		return { availability: "available", bytes: result, reference };
@@ -1207,10 +1211,10 @@ export const createSessionAttachmentStore = ({
 	): Promise<SessionMessage["parts"][number]> => {
 		const parsed = parseDataUrl(part.url, maxBytes);
 		const valid =
-			parsed !== null &&
+			!isNull(parsed) &&
 			isSupportedImageMediaType(parsed.mediaType) &&
 			detectImageMediaType(parsed.bytes) === parsed.mediaType;
-		if (!valid || parsed === null) {
+		if (!valid || isNull(parsed)) {
 			if (options?.rejectInvalid === true) {
 				throw new Error("Image attachment data is invalid or too large.");
 			}
@@ -1391,7 +1395,7 @@ export const createSessionAttachmentStore = ({
 	const isReservationIntact = (record: AttachmentMetadataRecord): boolean => {
 		const current = repository.get(record.attachmentId);
 		return (
-			current !== undefined &&
+			!isUndefined(current) &&
 			current.createdAt.getTime() === record.createdAt.getTime()
 		);
 	};
@@ -1516,7 +1520,7 @@ export const createSessionAttachmentStore = ({
 			const bytes = Uint8Array.from(await readFile(path));
 			if (
 				`v1-${digestBytes(bytes)}` !== attachmentId ||
-				detectImageMediaType(bytes) === null
+				isNull(detectImageMediaType(bytes))
 			) {
 				return { orphanBytes: 0, orphanCount: 0 };
 			}
@@ -1635,7 +1639,7 @@ export const createSessionAttachmentStore = ({
 			orphanBytes < maxBytes
 		) {
 			const directory = stack.pop();
-			if (directory === undefined) {
+			if (isUndefined(directory)) {
 				break;
 			}
 			const result = await scanDirectoryForOrphans(

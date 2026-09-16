@@ -1,22 +1,12 @@
 import type { JsonObject, JsonValue, UnknownRecord } from "type-fest";
+import { isArray, isObjectLike, isPlainObject, isString } from "./guards";
 
-/** Options for validating JSON-compatible runtime values. */
+export { getErrorMessage } from "./errors";
+export * from "./guards";
+
 export type JsonValueValidationOptions = Readonly<{
 	maxDepth?: number;
 }>;
-
-/** Narrows an unknown value to a non-null object, including arrays. */
-export const isObjectLike = (value: unknown): value is UnknownRecord =>
-	typeof value === "object" && value !== null;
-
-/** Narrows an unknown value to a plain object with no custom class prototype. */
-export const isPlainObject = (value: unknown): value is UnknownRecord => {
-	if (!isObjectLike(value)) {
-		return false;
-	}
-	const prototype = Object.getPrototypeOf(value);
-	return prototype === null || prototype === Object.prototype;
-};
 
 const isJsonPrimitive = (
 	value: unknown
@@ -24,7 +14,7 @@ const isJsonPrimitive = (
 	value === null ||
 	typeof value === "boolean" ||
 	(typeof value === "number" && Number.isFinite(value)) ||
-	typeof value === "string";
+	isString(value);
 
 type PendingJsonValue = {
 	depth: number;
@@ -40,7 +30,7 @@ const enqueueJsonChildren = (
 	depth: number,
 	pending: PendingJsonValue[]
 ): boolean => {
-	if (Array.isArray(value)) {
+	if (isArray(value)) {
 		for (const item of value) {
 			pending.push({ depth, value: item });
 		}
@@ -98,7 +88,6 @@ export const isJsonValue = (
 	}
 };
 
-/** Narrows an unknown value to a JSON-compatible object. */
 export const isJsonObject = (
 	value: unknown,
 	options: JsonValueValidationOptions = {}
@@ -109,27 +98,3 @@ export const isJsonObject = (
 		return false;
 	}
 };
-
-/** Narrows an unknown value to undefined. */
-export const isUndefined = (value: unknown): value is undefined =>
-	value === undefined;
-
-/** Narrows an unknown value to a string, including empty strings. */
-export const isString = (value: unknown): value is string =>
-	typeof value === "string";
-
-/** Narrows an unknown value to a non-empty string without trimming it. */
-export const isNonEmptyString = (value: unknown): value is string =>
-	isString(value) && value.length > 0;
-
-/** Narrows an unknown value to a finite number greater than or equal to zero. */
-export const isFiniteNonNegativeNumber = (value: unknown): value is number =>
-	typeof value === "number" && Number.isFinite(value) && value >= 0;
-
-/** Narrows an unknown value to an integer greater than or equal to zero. */
-export const isNonNegativeInteger = (value: unknown): value is number =>
-	typeof value === "number" && Number.isInteger(value) && value >= 0;
-
-/** Narrows an unknown value to a positive integer. */
-export const isPositiveInteger = (value: unknown): value is number =>
-	isNonNegativeInteger(value) && value > 0;

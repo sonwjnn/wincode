@@ -7,6 +7,7 @@ import {
 	type Tool,
 } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { isNull, isUndefined } from "@wincode/runtime-utils";
 import type { ResolvedMcpServerConfig } from "./config";
 import { sanitizeMessage } from "./sanitize";
 
@@ -94,7 +95,7 @@ export class McpClientError extends Error {
 const toClientTool = (tool: Tool): McpClientTool => ({
 	name: tool.name,
 	inputSchema: tool.inputSchema,
-	...(tool.description === undefined ? {} : { description: tool.description }),
+	...(isUndefined(tool.description) ? {} : { description: tool.description }),
 });
 
 const localTransportOptions = (
@@ -102,11 +103,11 @@ const localTransportOptions = (
 	deps: McpClientFactoryDeps
 ): McpStdioTransportOptions => {
 	const [command, ...args] = config.command;
-	if (command === undefined) {
+	if (isUndefined(command)) {
 		throw new Error(`MCP server ${config.name} has an empty command`);
 	}
 	let cwd: string;
-	if (config.cwd === undefined) {
+	if (isUndefined(config.cwd)) {
 		cwd = deps.workspace;
 	} else if (path.isAbsolute(config.cwd)) {
 		cwd = config.cwd;
@@ -139,14 +140,14 @@ export function createSdkMcpClient(
 	let client: McpSdkClient | undefined;
 
 	const getClient = (): McpSdkClient => {
-		if (client !== undefined) {
+		if (!isUndefined(client)) {
 			return client;
 		}
 		client = deps.createClient({
 			listChanged: {
 				tools: {
 					onChanged: (error, tools) => {
-						if (error !== null || tools === null) {
+						if (!isNull(error) || isNull(tools)) {
 							return;
 						}
 						toolsChanged?.(tools.map(toClientTool));

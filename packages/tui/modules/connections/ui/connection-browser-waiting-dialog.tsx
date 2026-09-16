@@ -1,5 +1,6 @@
 import { useKeyboard } from "@opentui/react";
 import type { ConnectionProviderId as ProviderId } from "@wincode/ai/models";
+import { getErrorMessage as getRuntimeErrorMessage } from "@wincode/runtime-utils";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	useDialog,
@@ -31,11 +32,7 @@ function getErrorMessage(error: unknown): string {
 		return "";
 	}
 
-	if (error instanceof Error) {
-		return error.message;
-	}
-
-	return "Browser sign-in failed.";
+	return getRuntimeErrorMessage(error, "Browser sign-in failed.");
 }
 
 export function ConnectionBrowserWaitingDialogContent({

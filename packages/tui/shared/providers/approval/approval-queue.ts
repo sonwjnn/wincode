@@ -1,3 +1,4 @@
+import { isUndefined } from "@wincode/runtime-utils";
 /**
  * The outcome of one approval request. Reject blocks only that request. Abort
  * identifies the request whose user action must interrupt the active turn.
@@ -67,7 +68,7 @@ export function createApprovalQueue<Request>(): ApprovalQueue<Request> {
 				reject(feedback) {
 					settle(
 						entry,
-						feedback === undefined
+						isUndefined(feedback)
 							? { decision: "reject" }
 							: { decision: "reject", feedback }
 					);
@@ -85,7 +86,7 @@ export function createApprovalQueue<Request>(): ApprovalQueue<Request> {
 			for (const entry of entries) {
 				settle(
 					entry,
-					isSelected && feedback !== undefined
+					isSelected && !isUndefined(feedback)
 						? { decision: "reject", feedback }
 						: { decision: "reject" }
 				);

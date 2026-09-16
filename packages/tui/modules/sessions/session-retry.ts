@@ -1,3 +1,4 @@
+import { isUndefined } from "@wincode/runtime-utils";
 import type { SessionMessage } from "./message";
 import { isSessionToolPart, isTerminalSessionToolPart } from "./message";
 
@@ -14,7 +15,7 @@ export const getSessionAttemptMessages = (
 		(message, index) => index > userIndex && message.role === "user"
 	);
 	const userMessage = messages[userIndex];
-	if (userMessage === undefined) {
+	if (isUndefined(userMessage)) {
 		return messages.slice(
 			userIndex + 1,
 			nextUserIndex === -1 ? undefined : nextUserIndex
@@ -24,7 +25,7 @@ export const getSessionAttemptMessages = (
 		.slice(userIndex + 1, nextUserIndex === -1 ? undefined : nextUserIndex)
 		.filter(
 			(message) =>
-				message.metadata?.sourceUserMessageId === undefined ||
+				isUndefined(message.metadata?.sourceUserMessageId) ||
 				message.metadata.sourceUserMessageId === userMessage.id
 		);
 	if (nextUserIndex === -1) {

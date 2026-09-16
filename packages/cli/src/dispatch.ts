@@ -1,3 +1,4 @@
+import { getErrorMessage, isUndefined } from "@wincode/runtime-utils";
 import type { StartTuiInput } from "@wincode/tui";
 import { Command, CommanderError } from "commander";
 import packageJson from "../package.json" with { type: "json" };
@@ -44,7 +45,7 @@ const writeOperationalError = (
 	stderr: OutputWriter,
 	error: unknown
 ): number => {
-	const message = error instanceof Error ? error.message : "Invariant failure";
+	const message = getErrorMessage(error, "Invariant failure");
 	stderr.write(`error: ${message}\n`);
 	return 1;
 };
@@ -78,7 +79,7 @@ const dispatchNamedCommand = async (
 	program: Command
 ): Promise<number> => {
 	const command = CLI_COMMANDS.find(({ name }) => name === firstArg);
-	if (command === undefined) {
+	if (isUndefined(command)) {
 		input.stderr.write(`error: unknown command '${firstArg}'\n`);
 		return USAGE_EXIT_CODE;
 	}
@@ -111,11 +112,11 @@ export const dispatch = async (
 ): Promise<number> => {
 	const [firstArg] = input.args;
 	const isRootHelp =
-		firstArg !== undefined && ROOT_HELP_FLAGS[firstArg] === true;
+		!isUndefined(firstArg) && ROOT_HELP_FLAGS[firstArg] === true;
 	const isRootVersion =
-		firstArg !== undefined && ROOT_VERSION_FLAGS[firstArg] === true;
+		!isUndefined(firstArg) && ROOT_VERSION_FLAGS[firstArg] === true;
 	const isTuiInvocation =
-		firstArg === undefined ||
+		isUndefined(firstArg) ||
 		(firstArg.startsWith("-") && !(isRootHelp || isRootVersion));
 
 	if (isTuiInvocation) {

@@ -1,3 +1,4 @@
+import { isNull } from "@wincode/runtime-utils";
 import {
 	createContext,
 	type ReactNode,
@@ -73,7 +74,7 @@ export function AgentRegistryProvider({ children }: { children: ReactNode }) {
 
 	useEffect(() => {
 		if (
-			registry === null ||
+			isNull(registry) ||
 			registry.diagnostics.length === 0 ||
 			!claimAgentDiagnosticsToast(config.configStore)
 		) {
@@ -98,7 +99,7 @@ export function AgentRegistryProvider({ children }: { children: ReactNode }) {
 
 export function useAgentRegistry(): AgentRegistry | null {
 	const context = useContext(AgentRegistryContext);
-	if (context === null) {
+	if (isNull(context)) {
 		throw new Error(
 			"useAgentRegistry must be used within AgentRegistryProvider"
 		);
@@ -108,7 +109,7 @@ export function useAgentRegistry(): AgentRegistry | null {
 
 export function useRefreshAgentRegistry(): () => void {
 	const context = useContext(AgentRegistryContext);
-	if (context === null) {
+	if (isNull(context)) {
 		throw new Error(
 			"useRefreshAgentRegistry must be used within AgentRegistryProvider"
 		);

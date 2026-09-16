@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { AgentId } from "@wincode/agent-core";
+import { isUndefined } from "@wincode/runtime-utils";
 import type { JsonObject } from "type-fest";
 import {
 	composePermissionDecisions,
@@ -196,10 +197,10 @@ const defaultSdkClientFactory = (
 ): ((config: ResolvedMcpServerConfig) => McpClient) => {
 	let deps: McpClientFactoryDeps | undefined;
 	return (config) => {
-		if (deps === undefined) {
+		if (isUndefined(deps)) {
 			const environment = Object.fromEntries(
 				Object.entries(env).filter(
-					(entry): entry is [string, string] => entry[1] !== undefined
+					(entry): entry is [string, string] => !isUndefined(entry[1])
 				)
 			);
 			deps = createSdkMcpClientDeps({
@@ -265,7 +266,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 
 	const closeClient = async (entry: ServerEntry): Promise<void> => {
 		const client = entry.client;
-		if (client === undefined) {
+		if (isUndefined(client)) {
 			return;
 		}
 		entry.client = undefined;
@@ -319,7 +320,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	): Promise<boolean> => {
 		const configResult = await loadCurrentConfig(true);
 		const config = configResult.servers[serverName];
-		if (config !== undefined) {
+		if (!isUndefined(config)) {
 			entry.config = config;
 			return true;
 		}
@@ -407,7 +408,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	};
 
 	const init = (): Promise<void> => {
-		if (initPromise === undefined) {
+		if (isUndefined(initPromise)) {
 			initPromise = doInit().then(() => {
 				initialized = true;
 			});
@@ -427,7 +428,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		};
 		const candidates: Candidate[] = [];
 		for (const entry of serverEntries.values()) {
-			if (entry.client === undefined || entry.state !== "connected") {
+			if (isUndefined(entry.client) || entry.state !== "connected") {
 				continue;
 			}
 			const serverPolicy = entry.config.permission;
@@ -507,7 +508,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			untrackedSnapshotIds.add(snapshot.id);
 			return;
 		}
-		if (latestSnapshotId !== undefined) {
+		if (!isUndefined(latestSnapshotId)) {
 			activeSnapshotIds.delete(latestSnapshotId);
 		}
 		latestSnapshotId = snapshot.id;
@@ -589,7 +590,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			return outputError("MCP tool snapshot is stale or not executable");
 		}
 		const tool = snapshot.tools.get(toolName);
-		if (tool === undefined) {
+		if (isUndefined(tool)) {
 			return outputError(`Unknown MCP tool '${toolName}'`);
 		}
 		if (tool.policy === "deny") {
@@ -597,7 +598,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		}
 		const entry = serverEntries.get(tool.serverName);
 		if (
-			entry === undefined ||
+			isUndefined(entry) ||
 			entry.state !== "connected" ||
 			entry.client !== tool.client
 		) {
@@ -609,7 +610,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			closeController.signal,
 			entry.executionController.signal,
 		];
-		if (signal !== undefined) {
+		if (!isUndefined(signal)) {
 			signals.push(signal);
 		}
 		const combined = AbortSignal.any(signals);
@@ -702,7 +703,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		configResult: McpConfigResult
 	): Promise<boolean> => {
 		const config = configResult.servers[entry.config.name];
-		if (config === undefined) {
+		if (isUndefined(config)) {
 			await deactivateEntry(
 				entry,
 				"failed",
@@ -791,7 +792,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		if (!initialized) {
 			return init();
 		}
-		if (refreshPromise !== undefined) {
+		if (!isUndefined(refreshPromise)) {
 			return refreshPromise;
 		}
 		const refresh = doRefresh();
@@ -809,15 +810,15 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 
 	const reconnect = (serverName: string): Promise<void> => {
 		const inFlight = reconnects.get(serverName);
-		if (inFlight !== undefined) {
+		if (!isUndefined(inFlight)) {
 			return inFlight;
 		}
 		const run = runEntryOperation(serverName, async () => {
 			await init();
 			let entry = serverEntries.get(serverName);
-			if (entry === undefined && invalidStatuses.has(serverName)) {
+			if (isUndefined(entry) && invalidStatuses.has(serverName)) {
 				const config = (await loadCurrentConfig(true)).servers[serverName];
-				if (config === undefined) {
+				if (isUndefined(config)) {
 					emit();
 					return;
 				}
@@ -839,7 +840,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				return;
 			}
 			if (
-				entry === undefined ||
+				isUndefined(entry) ||
 				entry.state === "disabled" ||
 				entry.state === "connecting"
 			) {
@@ -864,13 +865,13 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 
 	const toggle = (serverName: string): Promise<void> => {
 		const inFlight = toggles.get(serverName);
-		if (inFlight !== undefined) {
+		if (!isUndefined(inFlight)) {
 			return inFlight;
 		}
 		const run = runEntryOperation(serverName, async () => {
 			await init();
 			const entry = serverEntries.get(serverName);
-			if (entry === undefined) {
+			if (isUndefined(entry)) {
 				return;
 			}
 			if (entry.state === "disabled") {
@@ -922,7 +923,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		}
 		closed = true;
 		closeController.abort();
-		if (initPromise !== undefined) {
+		if (!isUndefined(initPromise)) {
 			try {
 				await initPromise;
 			} catch {

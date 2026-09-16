@@ -3,6 +3,7 @@ import {
 	getModelContextTokens,
 } from "@wincode/ai/model-usage";
 import type { ChatModelSelection } from "@wincode/ai/models";
+import { isNull } from "@wincode/runtime-utils";
 import type {
 	ModelPricingEntry,
 	ModelPricingTable,
@@ -72,7 +73,7 @@ const collectCost = (
 		const selection = message.metadata?.model ?? fallbackModel;
 		const entry = resolveModelMetadata(table, selection);
 		const cost = turnCostUsd(entry ?? undefined, usage);
-		if (cost !== null) {
+		if (!isNull(cost)) {
 			total += cost;
 			costedTurns += 1;
 		}
@@ -93,7 +94,7 @@ export const summarizeSessionUsage = (
 	table: ModelPricingTable
 ): SessionUsageSummary | null => {
 	const { lastSelection, lastUsage } = collectMessageUsage(messages);
-	if (lastUsage === null) {
+	if (isNull(lastUsage)) {
 		return null;
 	}
 	const selection = lastSelection ?? fallbackModel;
@@ -101,7 +102,7 @@ export const summarizeSessionUsage = (
 		resolveModelMetadata(table, selection)?.limits?.context ?? null;
 	const contextTokens = getModelContextTokens(lastUsage);
 	const contextPercent =
-		contextLimit !== null && contextLimit > 0
+		!isNull(contextLimit) && contextLimit > 0
 			? clampPercent((contextTokens / contextLimit) * 100)
 			: null;
 	return {

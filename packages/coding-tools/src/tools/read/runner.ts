@@ -1,5 +1,7 @@
+import type { Stats } from "node:fs";
 import { lstat, readFile, readlink, stat } from "node:fs/promises";
 import path from "node:path";
+import { isObjectLike, isUndefined } from "@wincode/runtime-utils";
 import {
 	createWorkspaceSandbox,
 	defaultWorkspaceSandbox,
@@ -80,10 +82,7 @@ const hasErrorCode = (
 	error: unknown,
 	code: string
 ): error is NodeJS.ErrnoException =>
-	typeof error === "object" &&
-	error !== null &&
-	"code" in error &&
-	error.code === code;
+	isObjectLike(error) && "code" in error && error.code === code;
 
 const readResolvedTarget = async (
 	resolvedPath: string,
@@ -96,7 +95,7 @@ const readResolvedTarget = async (
 			absolutePath: resolvedPath,
 			kind: "directory",
 			path: displayPath,
-			...(ranges === undefined ? {} : { ranges }),
+			...(isUndefined(ranges) ? {} : { ranges }),
 		};
 	}
 	return {
@@ -104,7 +103,7 @@ const readResolvedTarget = async (
 		content: await readFile(resolvedPath, "utf8"),
 		kind: "file",
 		path: displayPath,
-		...(ranges === undefined ? {} : { ranges }),
+		...(isUndefined(ranges) ? {} : { ranges }),
 	};
 };
 
@@ -125,13 +124,15 @@ const readTextTarget = async (
 			allowExternalPath && path.isAbsolute(candidatePath)
 				? candidatePath
 				: await defaultWorkspaceSandbox.resolveNewPath(candidatePath);
-		const literalStat = await lstat(literalPath).catch((error: unknown) => {
-			if (hasErrorCode(error, "ENOENT")) {
-				return;
+		const literalStat = await lstat(literalPath).catch(
+			(error: unknown): Stats | undefined => {
+				if (hasErrorCode(error, "ENOENT")) {
+					return;
+				}
+				throw error;
 			}
-			throw error;
-		});
-		if (literalStat === undefined) {
+		);
+		if (isUndefined(literalStat)) {
 			return;
 		}
 		const resolvedPath = await resolvePath(candidatePath);
@@ -145,7 +146,7 @@ const readTextTarget = async (
 				absolutePath: resolvedPath,
 				kind: "symlink",
 				path: displayPath,
-				...(ranges === undefined ? {} : { ranges }),
+				...(isUndefined(ranges) ? {} : { ranges }),
 				symlinkTarget: await readlink(literalPath),
 			};
 		}
@@ -224,11 +225,11 @@ const remainingRangesAfter = (
 	const remainingRanges: LineRange[] = [];
 	for (const range of ranges) {
 		const rangeEnd = range.endLine ?? totalLines;
-		if (lastSelectedLine === undefined || lastSelectedLine < range.startLine) {
+		if (isUndefined(lastSelectedLine) || lastSelectedLine < range.startLine) {
 			remainingRanges.push({ ...range });
 		} else if (lastSelectedLine < rangeEnd) {
 			remainingRanges.push({
-				...(range.endLine === undefined ? {} : { endLine: range.endLine }),
+				...(isUndefined(range.endLine) ? {} : { endLine: range.endLine }),
 				startLine: lastSelectedLine + 1,
 			});
 		}
@@ -243,7 +244,7 @@ const continuationNotice = (
 ): string => {
 	const selector = ranges
 		.map((range) =>
-			range.endLine === undefined
+			isUndefined(range.endLine)
 				? `${range.startLine}-`
 				: `${range.startLine}-${range.endLine}`
 		)
@@ -322,7 +323,7 @@ const continuationRangesAfter = (
 		totalLines
 	);
 	const firstSelectedStart = selectedRemaining[0]?.startLine;
-	if (firstSelectedStart === undefined) {
+	if (isUndefined(firstSelectedStart)) {
 		return displayRemaining;
 	}
 	const omittedTrailingContext = displayRemaining.filter(
@@ -407,10 +408,9 @@ const buildDirectoryTree = (
 		);
 		const visibleChildren = children.slice(0, DIRECTORY_CHILD_LIMIT);
 		for (const child of visibleChildren) {
-			const symlinkSuffix =
-				child.entry.symlinkTarget === undefined
-					? ""
-					: ` -> ${sanitizeSymlinkTarget(child.entry.symlinkTarget)}`;
+			const symlinkSuffix = isUndefined(child.entry.symlinkTarget)
+				? ""
+				: ` -> ${sanitizeSymlinkTarget(child.entry.symlinkTarget)}`;
 			const suffix = child.entry.type === "directory" ? "/" : symlinkSuffix;
 			lines.push({
 				entryNumber: nextEntryNumber,
@@ -445,7 +445,7 @@ const isWithinRange = (lineNumber: number, ranges: readonly LineRange[]) =>
 	ranges.some(
 		(range) =>
 			lineNumber >= range.startLine &&
-			(range.endLine === undefined || lineNumber <= range.endLine)
+			(isUndefined(range.endLine) || lineNumber <= range.endLine)
 	);
 
 const selectDirectoryLines = (
@@ -455,19 +455,19 @@ const selectDirectoryLines = (
 	const selectedParents = new Set<string>();
 	for (const line of lines) {
 		if (
-			line.entryNumber !== undefined &&
+			!isUndefined(line.entryNumber) &&
 			isWithinRange(line.entryNumber, ranges) &&
-			line.parentPath !== undefined
+			!isUndefined(line.parentPath)
 		) {
 			selectedParents.add(line.parentPath);
 		}
 	}
 	return lines.filter((line) => {
-		if (line.entryNumber !== undefined) {
+		if (!isUndefined(line.entryNumber)) {
 			return isWithinRange(line.entryNumber, ranges);
 		}
 		return (
-			line.parentPath !== undefined && selectedParents.has(line.parentPath)
+			!isUndefined(line.parentPath) && selectedParents.has(line.parentPath)
 		);
 	});
 };
@@ -576,8 +576,9 @@ const boundOutputLines = ({
 		};
 	}
 	if (acceptedLines.length === 0) {
-		const oversizedLine =
-			failedLine === undefined ? undefined : oversizedLineMessage?.(failedLine);
+		const oversizedLine = isUndefined(failedLine)
+			? undefined
+			: oversizedLineMessage?.(failedLine);
 		throw new Error(oversizedLine ?? firstLineError);
 	}
 	const remainingRanges = getRemainingRanges(
@@ -617,7 +618,7 @@ const boundDirectoryLines = (
 		lines: lines.map((line) => ({
 			lineNumber: line.entryNumber,
 			selectedLine: line.entryNumber,
-			skipIfOverBudget: line.entryNumber === undefined,
+			skipIfOverBudget: isUndefined(line.entryNumber),
 			text: line.text,
 		})),
 		maxOutputBytes,
@@ -647,10 +648,9 @@ const formatDirectoryContent = async (
 	const selectedRanges = normalizeLineRanges(
 		ranges ?? [{ endLine: tree.entryCount, startLine: 1 }]
 	);
-	const selectedLines =
-		ranges === undefined
-			? tree.lines
-			: selectDirectoryLines(tree.lines, selectedRanges);
+	const selectedLines = isUndefined(ranges)
+		? tree.lines
+		: selectDirectoryLines(tree.lines, selectedRanges);
 	const bounded = boundDirectoryLines(
 		selectedLines,
 		selectedRanges,
@@ -686,7 +686,7 @@ const boundNumberedLines = (
 			yield {
 				...numberedLine,
 				selectedLine:
-					numberedLine.lineNumber !== undefined &&
+					!isUndefined(numberedLine.lineNumber) &&
 					isWithinRange(numberedLine.lineNumber, selectedRanges)
 						? numberedLine.lineNumber
 						: undefined,
@@ -708,7 +708,7 @@ const boundNumberedLines = (
 		lines: boundedLines(),
 		maxOutputBytes,
 		oversizedLineMessage: (line) => {
-			if (line.lineNumber === undefined) {
+			if (isUndefined(line.lineNumber)) {
 				return;
 			}
 			const lineBytes = Buffer.byteLength(line.text, "utf8");

@@ -1,4 +1,10 @@
-import { isNonEmptyString, isObjectLike } from "@wincode/runtime-utils";
+import {
+	isArray,
+	isNonEmptyString,
+	isObjectLike,
+	isString,
+	isUndefined,
+} from "@wincode/runtime-utils";
 
 const URL_LIKE_PATTERN = /https?:\/\/[^\s,;]+/gi;
 const SECRET_KEY_NAME_PATTERN =
@@ -48,7 +54,7 @@ export const stripControlCharacters = (
 		const code = character.charCodeAt(0);
 		return code <= 31 || (code >= 127 && code <= 159) ? " " : character;
 	}).join("");
-	return maxChars === undefined ? stripped : stripped.slice(0, maxChars);
+	return isUndefined(maxChars) ? stripped : stripped.slice(0, maxChars);
 };
 
 /** True when the key name itself is a secret (after stripping punctuation). */
@@ -122,7 +128,7 @@ export function sanitizeArgumentTree(
 		depth: number,
 		seen: WeakSet<object>
 	): unknown => {
-		if (typeof node === "string") {
+		if (isString(node)) {
 			return sanitizeString(node);
 		}
 		if (!isObjectLike(node)) {
@@ -136,7 +142,7 @@ export function sanitizeArgumentTree(
 		}
 
 		seen.add(node);
-		if (Array.isArray(node)) {
+		if (isArray(node)) {
 			return node
 				.slice(0, maxEntries)
 				.map((entry) => walk(entry, depth + 1, seen));

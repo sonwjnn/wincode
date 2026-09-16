@@ -21,7 +21,12 @@ import {
 	type ResourceLimitProfile,
 	resourceLimitProfileSchema,
 } from "@wincode/coding-tools";
-import { isPlainObject } from "@wincode/runtime-utils";
+import {
+	isNull,
+	isPlainObject,
+	isString,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import type { Except } from "type-fest";
 import { z } from "zod";
 import {
@@ -142,7 +147,7 @@ const modelAvailability = (
 	model: ChatModelSelection | undefined,
 	connectedProviderIds: ReadonlySet<ConnectionProviderId> | undefined
 ): ModelAvailability => {
-	if (model === undefined) {
+	if (isUndefined(model)) {
 		return { isAvailable: true, modelRetired: false };
 	}
 	const catalogModel = findSupportedChatModelSelection(model);
@@ -154,7 +159,7 @@ const modelAvailability = (
 		};
 	}
 	if (
-		connectedProviderIds === undefined ||
+		isUndefined(connectedProviderIds) ||
 		connectedProviderIds.has(model.providerId)
 	) {
 		return { isAvailable: true, modelRetired: false };
@@ -195,13 +200,13 @@ const builtInAgentIds = new Set<string>(builtInAgents.map(({ id }) => id));
 const agentDiagnostic = (
 	entry: Except<AgentDiagnostic, "origin">,
 	origin: ConfigOrigin | undefined
-): AgentDiagnostic => (origin === undefined ? entry : { ...entry, origin });
+): AgentDiagnostic => (isUndefined(origin) ? entry : { ...entry, origin });
 const resolveResourceProfile = (
 	snapshot: ConfigSnapshot,
 	diagnostics: AgentDiagnostic[]
 ): ResourceLimitProfile => {
 	const rawProfile = snapshot.document.resource_limits;
-	if (rawProfile === undefined) {
+	if (isUndefined(rawProfile)) {
 		return DEFAULT_RESOURCE_LIMIT_PROFILE;
 	}
 	const parsed = resourceLimitProfileSchema.safeParse(rawProfile);
@@ -316,7 +321,7 @@ const diagnoseSourcePatches = (
 	const invalidBuiltInAgentIds = new Set<string>();
 	for (const source of sources) {
 		const agents = source.document.agents;
-		if (agents === undefined) {
+		if (isUndefined(agents)) {
 			continue;
 		}
 		const origin = { path: source.path, scope: source.scope };
@@ -419,11 +424,10 @@ const resolveConfiguredAgentEntry = (
 			),
 		};
 	}
-	const parsedModel =
-		definition.data.model === undefined
-			? undefined
-			: parseCatalogModelSelection(definition.data.model);
-	if (definition.data.model !== undefined && parsedModel === null) {
+	const parsedModel = isUndefined(definition.data.model)
+		? undefined
+		: parseCatalogModelSelection(definition.data.model);
+	if (!isUndefined(definition.data.model) && isNull(parsedModel)) {
 		return {
 			diagnostic: validationDiagnostic(
 				"invalid-agent",
@@ -439,13 +443,12 @@ const resolveConfiguredAgentEntry = (
 		};
 	}
 	const model = parsedModel ?? undefined;
-	const variant =
-		definition.data.variant === undefined
-			? undefined
-			: modelVariantSchema.safeParse(definition.data.variant);
+	const variant = isUndefined(definition.data.variant)
+		? undefined
+		: modelVariantSchema.safeParse(definition.data.variant);
 	const hasInvalidVariant =
-		definition.data.variant !== undefined &&
-		(model === undefined ||
+		!isUndefined(definition.data.variant) &&
+		(isUndefined(model) ||
 			variant?.success !== true ||
 			!isSupportedModelVariant(model, variant.data));
 	if (hasInvalidVariant) {
@@ -507,10 +510,10 @@ const collectConfiguredAgents = (
 			options,
 			defaultResourceProfile
 		);
-		if (diagnostic !== undefined) {
+		if (!isUndefined(diagnostic)) {
 			diagnostics.push(diagnostic);
 		}
-		if (agent !== undefined) {
+		if (!isUndefined(agent)) {
 			if (resolved.length < MAX_CONFIGURED_AGENTS) {
 				resolved.push(agent);
 			} else if (!limitDiagnosed) {
@@ -552,7 +555,7 @@ const resolveBuiltInAgent = (
 			requiresManualApproval: true,
 		};
 	}
-	if (rawPatch === undefined) {
+	if (isUndefined(rawPatch)) {
 		return {
 			...shippedAgent,
 			isAvailable: true,
@@ -581,20 +584,17 @@ const resolveBuiltInAgent = (
 			requiresManualApproval: true,
 		};
 	}
-	const parsedModel =
-		patch.data.model === undefined
-			? undefined
-			: parseCatalogModelSelection(patch.data.model);
-	const variant =
-		patch.data.variant === undefined
-			? undefined
-			: modelVariantSchema.safeParse(patch.data.variant);
-	const hasInvalidModel =
-		patch.data.model !== undefined && parsedModel === null;
+	const parsedModel = isUndefined(patch.data.model)
+		? undefined
+		: parseCatalogModelSelection(patch.data.model);
+	const variant = isUndefined(patch.data.variant)
+		? undefined
+		: modelVariantSchema.safeParse(patch.data.variant);
+	const hasInvalidModel = !isUndefined(patch.data.model) && isNull(parsedModel);
 	const hasInvalidVariant =
-		patch.data.variant !== undefined &&
-		(parsedModel === undefined ||
-			parsedModel === null ||
+		!isUndefined(patch.data.variant) &&
+		(isUndefined(parsedModel) ||
+			isNull(parsedModel) ||
 			variant?.success !== true ||
 			!isSupportedModelVariant(parsedModel, variant.data));
 	if (hasInvalidModel || hasInvalidVariant) {
@@ -687,7 +687,7 @@ export const buildAgentRegistry = (
 		diagnostics
 	);
 
-	if (configured !== undefined) {
+	if (!isUndefined(configured)) {
 		if (isPlainObject(configured)) {
 			configuredAgents.push(
 				...collectConfiguredAgents(
@@ -749,14 +749,13 @@ export const buildAgentRegistry = (
 		({ isConfigured }) => isConfigured
 	);
 	const rawDefaultAgent = snapshot.document.default_agent;
-	const configuredDefault =
-		typeof rawDefaultAgent === "string"
-			? agents.find(({ id }) => id === rawDefaultAgent)
-			: undefined;
+	const configuredDefault = isString(rawDefaultAgent)
+		? agents.find(({ id }) => id === rawDefaultAgent)
+		: undefined;
 	const validDefault =
 		configuredDefault?.isSelectable === true && configuredDefault.isAvailable;
 	const defaultAgentId = validDefault ? configuredDefault.id : buildAgent.id;
-	if (rawDefaultAgent !== undefined && !validDefault) {
+	if (!(isUndefined(rawDefaultAgent) || validDefault)) {
 		diagnostics.push(
 			agentDiagnostic(
 				{
@@ -805,7 +804,7 @@ export const resolveActiveAgentId = (
 	registry: AgentRegistry,
 	restoredAgentId?: AgentId
 ): AgentId => {
-	if (restoredAgentId === undefined) {
+	if (isUndefined(restoredAgentId)) {
 		return registry.defaultAgentId;
 	}
 	return registry.selectableAgents.some(

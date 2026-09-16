@@ -1,5 +1,9 @@
 import type { ModelTarget } from "@wincode/ai/model-target";
-import { isNonEmptyString, isObjectLike } from "@wincode/runtime-utils";
+import {
+	isNonEmptyString,
+	isObjectLike,
+	isString,
+} from "@wincode/runtime-utils";
 import type { ReadonlyDeep, UnknownRecord } from "type-fest";
 import type { ResolvedAgent } from "./agent";
 import {
@@ -39,7 +43,7 @@ export type AgentTurnTerminalStatus =
 export const isAgentTurnTerminalStatus = (
 	value: unknown
 ): value is AgentTurnTerminalStatus =>
-	typeof value === "string" &&
+	isString(value) &&
 	(AGENT_TURN_TERMINAL_STATUSES as readonly string[]).includes(value);
 
 export const AGENT_TURN_INTERRUPTION_REASONS = [
@@ -170,7 +174,7 @@ export const isAgentTurnTextPart = (
 	return (
 		Object.keys(value).every((key) => key === "text" || key === "type") &&
 		value.type === "text" &&
-		typeof value.text === "string"
+		isString(value.text)
 	);
 };
 
@@ -186,7 +190,7 @@ export const isAgentTurnFilePart = (
 			(key) => key === "data" || key === "mediaType" || key === "type"
 		) &&
 		value.type === "file" &&
-		(typeof value.data === "string" || value.data instanceof Uint8Array) &&
+		(isString(value.data) || value.data instanceof Uint8Array) &&
 		isNonEmptyString(value.mediaType)
 	);
 };

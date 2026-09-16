@@ -13,6 +13,7 @@ import {
 	getSupportedModelVariants,
 	supportedChatModelIdSchema,
 } from "@wincode/ai/models";
+import { isNull, isUndefined } from "@wincode/runtime-utils";
 import { spawn } from "bun";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useCommandExecutor } from "@/app/commands/use-app-command-executor";
@@ -139,7 +140,7 @@ export function ChatTextArea({
 	const supportedModel = findSupportedChatModelSelection(model);
 	const registry = useAgentRegistry();
 	const hideVariants =
-		supportedModel === null ||
+		isNull(supportedModel) ||
 		getSupportedModelVariants({
 			modelId: supportedChatModelIdSchema.parse(supportedModel.id),
 			providerId: supportedModel.connectionProviderId,
@@ -217,7 +218,7 @@ export function ChatTextArea({
 			.filter(({ extmarkId, token }) => {
 				const extmark = textarea.extmarks.get(extmarkId);
 				return (
-					extmark !== null &&
+					!isNull(extmark) &&
 					isAttachmentTokenExtant(textarea.plainText, token, extmark)
 				);
 			})
@@ -260,14 +261,13 @@ export function ChatTextArea({
 			return;
 		}
 
-		const mentionDelete =
-			state.overlay.kind === null
-				? deleteFileMentionAfterTrailingCharacterDelete(
-						currentTextRef.current,
-						textarea.plainText,
-						textarea.cursorOffset
-					)
-				: null;
+		const mentionDelete = isNull(state.overlay.kind)
+			? deleteFileMentionAfterTrailingCharacterDelete(
+					currentTextRef.current,
+					textarea.plainText,
+					textarea.cursorOffset
+				)
+			: null;
 		if (mentionDelete) {
 			const previousAttachments = attachmentsRef.current;
 			const previousText = textarea.plainText;
@@ -345,7 +345,7 @@ export function ChatTextArea({
 			.filter((attachment) => {
 				const extmark = textarea.extmarks.get(attachment.extmarkId);
 				return (
-					extmark !== null &&
+					!isNull(extmark) &&
 					isAttachmentTokenExtant(textarea.plainText, attachment.token, extmark)
 				);
 			})
@@ -374,7 +374,7 @@ export function ChatTextArea({
 				start,
 				typeId: 1,
 				virtual: true,
-				...(styleId === null ? {} : { styleId }),
+				...(isNull(styleId) ? {} : { styleId }),
 			});
 		},
 		[mentionSyntaxStyle]
@@ -405,7 +405,7 @@ export function ChatTextArea({
 	const syncFileMentionExtmarks = useCallback(() => {
 		const textarea = textAreaRef.current;
 		const styleId = mentionSyntaxStyle.getStyleId("fileMention");
-		if (!(textarea && styleId !== null)) {
+		if (!(textarea && !isNull(styleId))) {
 			return;
 		}
 
@@ -483,7 +483,7 @@ export function ChatTextArea({
 					Math.abs(left - (expectedStart ?? left)) -
 					Math.abs(right - (expectedStart ?? right))
 			)[0];
-			if (matchedStart === undefined) {
+			if (isUndefined(matchedStart)) {
 				return [];
 			}
 			claimedPastedStarts.add(matchedStart);
@@ -494,7 +494,7 @@ export function ChatTextArea({
 						end: matchedStart + pasted.token.length,
 						start: matchedStart,
 						virtual: true,
-						...(pastedTextStyleId === null
+						...(isNull(pastedTextStyleId)
 							? {}
 							: { styleId: pastedTextStyleId }),
 					}),
@@ -507,7 +507,7 @@ export function ChatTextArea({
 		fileMentionExtmarkIdsRef.current = [];
 		syncFileMentionExtmarks();
 
-		if (state.cursorOffset !== null) {
+		if (!isNull(state.cursorOffset)) {
 			textarea.cursorOffset = state.cursorOffset;
 		}
 	}, [
@@ -598,7 +598,7 @@ export function ChatTextArea({
 				end: start + pasted.token.length,
 				start,
 				virtual: true,
-				...(pastedTextStyleId === null ? {} : { styleId: pastedTextStyleId }),
+				...(isNull(pastedTextStyleId) ? {} : { styleId: pastedTextStyleId }),
 			});
 			pastedTextRef.current.push({ extmarkId, ...pasted });
 		}
@@ -659,7 +659,7 @@ export function ChatTextArea({
 
 	onSubmitRef.current = async () => {
 		const overlay = state.overlay.kind;
-		if (overlay !== null) {
+		if (!isNull(overlay)) {
 			actions.onEnter();
 			return;
 		}
@@ -707,7 +707,7 @@ export function ChatTextArea({
 	};
 
 	useEffect(() => {
-		if (state.overlay.kind === null) {
+		if (isNull(state.overlay.kind)) {
 			return;
 		}
 
@@ -804,7 +804,7 @@ export function ChatTextArea({
 			const extmarkId = textarea.extmarks.create({
 				end: start + summary.token.length,
 				start,
-				...(pastedTextStyleId === null ? {} : { styleId: pastedTextStyleId }),
+				...(isNull(pastedTextStyleId) ? {} : { styleId: pastedTextStyleId }),
 				virtual: true,
 			});
 			pastedTextRef.current.push({ extmarkId, ...summary });
@@ -864,7 +864,7 @@ export function ChatTextArea({
 			return;
 		}
 
-		if (state.overlay.kind !== null && isTopLayer("command")) {
+		if (!isNull(state.overlay.kind) && isTopLayer("command")) {
 			if (key.name === "escape") {
 				key.preventDefault();
 				actions.onEscape();

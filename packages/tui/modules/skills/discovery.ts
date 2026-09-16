@@ -1,5 +1,10 @@
 import { dirname, join } from "node:path";
-import { isNonEmptyString, isObjectLike } from "@wincode/runtime-utils";
+import {
+	isArray,
+	isNonEmptyString,
+	isPlainObject,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import type {
 	SkillCandidate,
 	SkillRootDescriptor,
@@ -30,12 +35,7 @@ export type SkillDiscoveryInput = {
 
 const configuredRoots = (snapshot: ConfigSnapshot) => {
 	const skills = snapshot.document.skills;
-	if (
-		!isObjectLike(skills) ||
-		Array.isArray(skills) ||
-		!("paths" in skills) ||
-		!Array.isArray(skills.paths)
-	) {
+	if (!(isPlainObject(skills) && "paths" in skills && isArray(skills.paths))) {
 		return [];
 	}
 	return skills.paths.flatMap((configuredPath, index) => {
@@ -47,7 +47,7 @@ const configuredRoots = (snapshot: ConfigSnapshot) => {
 			["skills", "paths", String(index)],
 			configuredPath
 		);
-		return resolved === undefined ? [] : [resolved];
+		return isUndefined(resolved) ? [] : [resolved];
 	});
 };
 

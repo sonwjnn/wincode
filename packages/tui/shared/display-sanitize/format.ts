@@ -4,6 +4,7 @@ import {
 	formatModelLabel,
 	normalizeChatModelSelection,
 } from "@wincode/ai/models";
+import { isNull, isString, isUndefined } from "@wincode/runtime-utils";
 
 const CAMEL_CASE_BOUNDARY_PATTERN = /([a-z0-9])([A-Z])/g;
 const FIRST_CHARACTER_PATTERN = /^./;
@@ -12,11 +13,11 @@ const MCP_TOOL_PREFIX = "mcp_";
 
 /** Formats an unknown value as a display string, with a JSON fallback. */
 export const formatUnknown = (value: unknown): string => {
-	if (value === undefined || value === null) {
+	if (isUndefined(value) || isNull(value)) {
 		return "";
 	}
 
-	if (typeof value === "string") {
+	if (isString(value)) {
 		return value;
 	}
 
@@ -72,7 +73,7 @@ export const formatModel = (model: string | ChatModelSelection) => {
 		};
 	}
 
-	if (typeof model === "string") {
+	if (isString(model)) {
 		return { label: model, providerId: undefined };
 	}
 
@@ -81,7 +82,7 @@ export const formatModel = (model: string | ChatModelSelection) => {
 
 /** Shortens a skill content hash to 12 characters plus an ellipsis. */
 export const formatSkillHash = (hash: unknown): string => {
-	const value = typeof hash === "string" ? hash : "";
+	const value = isString(hash) ? hash : "";
 	return value.length > 12 ? `${value.slice(0, 12)}…` : value;
 };
 

@@ -4,7 +4,12 @@ import {
 	normalizeOperationalFailure,
 } from "@wincode/agent-core";
 import { normalizeModelFailure } from "@wincode/ai/model-failures";
-import { isObjectLike } from "@wincode/runtime-utils";
+import {
+	isError,
+	isObjectLike,
+	isString,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import { EmptyBorder } from "@/shared/constants";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 
@@ -19,7 +24,7 @@ const hasProviderDiagnostics = (error: unknown): boolean => {
 		return false;
 	}
 	return (
-		("responseBody" in error && typeof error.responseBody === "string") ||
+		("responseBody" in error && isString(error.responseBody)) ||
 		"statusCode" in error ||
 		"status" in error
 	);
@@ -48,9 +53,9 @@ export const getDisplayMessage = (error: unknown): string => {
 		message = normalizeOperationalFailure(error).message;
 	} else {
 		const providerMessage = getProviderErrorMessage(error);
-		if (providerMessage !== undefined) {
+		if (!isUndefined(providerMessage)) {
 			message = providerMessage;
-		} else if (error instanceof Error) {
+		} else if (isError(error)) {
 			message = error.message;
 		} else {
 			message = normalizeOperationalFailure(error).message;

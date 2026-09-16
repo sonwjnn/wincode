@@ -1,3 +1,4 @@
+import { isUndefined } from "@wincode/runtime-utils";
 import {
 	sanitizeArgumentTree,
 	truncateWithOverflow,
@@ -52,7 +53,7 @@ export function formatApprovalIdentity(identity: string): string {
 export function formatRejectionFeedback(
 	feedback: string | undefined
 ): string | undefined {
-	if (feedback === undefined) {
+	if (isUndefined(feedback)) {
 		return;
 	}
 	const trimmed = feedback.trim();

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { isObjectLike, isString, isUndefined } from "@wincode/runtime-utils";
 import type { McpCatalogSnapshot } from "@/modules/mcp/registry";
 import {
 	createMcpToolExecutor,
@@ -41,7 +42,7 @@ describe("MCP result normalization", () => {
 				};
 			}
 		);
-		if (executor === undefined) {
+		if (isUndefined(executor)) {
 			throw new Error("Expected an MCP tool executor.");
 		}
 
@@ -98,12 +99,7 @@ describe("MCP result normalization", () => {
 		});
 		const text = result.content[0];
 		expect(text).toMatchObject({ type: "text" });
-		if (
-			typeof text === "object" &&
-			text !== null &&
-			"text" in text &&
-			typeof text.text === "string"
-		) {
+		if (isObjectLike(text) && "text" in text && isString(text.text)) {
 			expect(text.text.endsWith("\ufffd")).toBe(false);
 			const lastCodeUnit = text.text.charCodeAt(text.text.length - 1);
 			if (lastCodeUnit >= 0xdc_00 && lastCodeUnit <= 0xdf_ff) {
@@ -121,12 +117,7 @@ describe("MCP result normalization", () => {
 		});
 		const text = result.content[0];
 		expect(text).toMatchObject({ type: "text" });
-		if (
-			typeof text === "object" &&
-			text !== null &&
-			"text" in text &&
-			typeof text.text === "string"
-		) {
+		if (isObjectLike(text) && "text" in text && isString(text.text)) {
 			expect(text.text.startsWith("\ufffdx")).toBe(true);
 		}
 
@@ -134,12 +125,7 @@ describe("MCP result normalization", () => {
 			content: [{ type: "text", text: `x\udc00${"x".repeat(300_000)}` }],
 		});
 		const midText = midStringResult.content[0];
-		if (
-			typeof midText === "object" &&
-			midText !== null &&
-			"text" in midText &&
-			typeof midText.text === "string"
-		) {
+		if (isObjectLike(midText) && "text" in midText && isString(midText.text)) {
 			expect(midText.text.startsWith("x\ufffdx")).toBe(true);
 		}
 	});
@@ -167,11 +153,7 @@ describe("MCP result normalization", () => {
 			new TextEncoder().encode(JSON.stringify(result)).byteLength
 		).toBeLessThanOrEqual(MAX_MCP_RESULT_BYTES);
 		const resource = result.content[0];
-		if (
-			typeof resource === "object" &&
-			resource !== null &&
-			"text" in resource
-		) {
+		if (isObjectLike(resource) && "text" in resource) {
 			expect(
 				new TextEncoder().encode(resource.text as string).byteLength % 4
 			).toBe(0);

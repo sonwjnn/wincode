@@ -5,6 +5,7 @@ import {
 	type SupportedChatModel,
 	supportedChatModelIdSchema,
 } from "@wincode/ai/models";
+import { isUndefined } from "@wincode/runtime-utils";
 import { useCallback } from "react";
 import {
 	useDialog,
@@ -73,7 +74,7 @@ export const VariantsDialogContent = ({
 			placeholder="Search variants"
 			renderItem={(variant, isSelected, isActive) => {
 				const activeTextColor =
-					isActive && variant.value !== undefined
+					isActive && !isUndefined(variant.value)
 						? colors.secondary
 						: colors.text;
 				const labelColor = isSelected ? selectedTextColor : activeTextColor;

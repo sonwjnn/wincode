@@ -29,7 +29,14 @@ import type { ModelFailure } from "@wincode/ai/model-failures";
 import { normalizeModelFailure } from "@wincode/ai/model-failures";
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import { normalizeModelUsage } from "@wincode/ai/model-usage";
-import { isNonEmptyString, isObjectLike } from "@wincode/runtime-utils";
+import {
+	getErrorMessage,
+	isError,
+	isNonEmptyString,
+	isObjectLike,
+	isString,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import {
 	jsonSchema,
 	stepCountIs,
@@ -59,8 +66,7 @@ const TOOL_ARMED_STEP_LIMIT = 20;
 const noToolSet = {} as ToolSet;
 
 const isAbortLike = (error: unknown): boolean =>
-	typeof error === "object" &&
-	error !== null &&
+	isObjectLike(error) &&
 	"name" in error &&
 	(error as { name?: unknown }).name === "AbortError";
 
@@ -84,10 +90,10 @@ const resolveTerminalFailure = (
 		code: modelFailure.code,
 		details: {
 			...getAgentTurnFailureDetails(turn),
-			...(modelFailure.details?.retryAfterMs === undefined
+			...(isUndefined(modelFailure.details?.retryAfterMs)
 				? {}
 				: { retryAfterMs: modelFailure.details.retryAfterMs }),
-			...(modelFailure.details?.statusCode === undefined
+			...(isUndefined(modelFailure.details?.statusCode)
 				? {}
 				: { statusCode: modelFailure.details.statusCode }),
 		},
@@ -103,7 +109,7 @@ const resolveRuntimeSignal = (
 	signal: AbortSignal | undefined,
 	deadlineMs: number | undefined
 ): AbortSignal | undefined => {
-	if (deadlineMs === undefined) {
+	if (isUndefined(deadlineMs)) {
 		return signal;
 	}
 	if (!Number.isInteger(deadlineMs) || deadlineMs < 0) {
@@ -114,20 +120,20 @@ const resolveRuntimeSignal = (
 		);
 	}
 	const deadlineSignal = AbortSignal.timeout(deadlineMs);
-	return signal === undefined
+	return isUndefined(signal)
 		? deadlineSignal
 		: AbortSignal.any([signal, deadlineSignal]);
 };
 
 const createAbortError = (reason: unknown): Error =>
-	reason instanceof Error
+	isError(reason)
 		? reason
 		: new Error("Agent Runtime operation was aborted.", { cause: reason });
 const awaitWithAbort = async <Value>(
 	operation: Promise<Value>,
 	signal: AbortSignal | undefined
 ): Promise<Value> => {
-	if (signal === undefined) {
+	if (isUndefined(signal)) {
 		return operation;
 	}
 	if (signal.aborted) {
@@ -191,7 +197,7 @@ const isAiSdkTextStreamPart = (
 	if (!(isObjectLike(value) && "type" in value)) {
 		return false;
 	}
-	return typeof value.type === "string";
+	return isString(value.type);
 };
 
 type StreamProjectionState = {
@@ -202,7 +208,7 @@ type StreamProjectionState = {
 };
 
 const requirePartText = (part: AiSdkTextStreamPart): string => {
-	if (typeof part.text !== "string") {
+	if (!isString(part.text)) {
 		throw new AgentInvariantError(
 			"invalid-event",
 			"AI SDK emitted a text event without text.",
@@ -226,11 +232,6 @@ const requirePartToolIdentity = (
 	}
 	return { toolCallId, toolName };
 };
-
-const toolErrorMessage = (error: unknown): string =>
-	error instanceof Error && error.message.length > 0
-		? error.message
-		: "Tool execution failed.";
 
 const projectAiSdkPart = (
 	part: AiSdkTextStreamPart,
@@ -293,7 +294,10 @@ const projectAiSdkPart = (
 			const { toolCallId, toolName } = requirePartToolIdentity(part);
 			state.startedToolCallIds.delete(toolCallId);
 			return {
-				outcome: { errorText: toolErrorMessage(part.error), type: "failure" },
+				outcome: {
+					errorText: getErrorMessage(part.error, "Tool execution failed."),
+					type: "failure",
+				},
 				sequence,
 				toolCallId,
 				toolName,
@@ -467,7 +471,7 @@ const runtimeInputSchema = (
 const toAiSdkToolSet = (tools: readonly ResolvedTool[]): ToolSet => {
 	const set: Record<string, unknown> = {};
 	for (const { definition, execute } of tools) {
-		if (set[definition.name] !== undefined) {
+		if (!isUndefined(set[definition.name])) {
 			throw new AgentInvariantError(
 				"invalid-runtime",
 				`Agent Turn supplied tool ${definition.name} twice.`,
@@ -477,7 +481,7 @@ const toAiSdkToolSet = (tools: readonly ResolvedTool[]): ToolSet => {
 		set[definition.name] = tool({
 			description: definition.description,
 			inputSchema: runtimeInputSchema(definition.inputSchema),
-			...(definition.outputSchema === undefined
+			...(isUndefined(definition.outputSchema)
 				? {}
 				: { outputSchema: definition.outputSchema }),
 			execute: async (
@@ -585,7 +589,7 @@ const runAgentTurn = async function* (
 
 	yield emit({
 		agentId: agent.id,
-		...(turn.delegation === undefined ? {} : { delegation: turn.delegation }),
+		...(isUndefined(turn.delegation) ? {} : { delegation: turn.delegation }),
 		sequence,
 		startedAt: Date.now(),
 		turnId: turn.id,
@@ -673,7 +677,7 @@ type AgentTurnStreamEmit = (event: AgentTurnEvent) => AgentTurnEvent;
 
 const closeModelStream = (iterator: AsyncIterator<unknown>): void => {
 	const closing = iterator.return?.();
-	if (closing !== undefined) {
+	if (!isUndefined(closing)) {
 		void closing.catch(() => undefined);
 	}
 };
@@ -739,7 +743,7 @@ const drainAgentStreamParts = async function* ({
 				runtimeSignal,
 				lifecycle.getState().lastSequence + 1
 			);
-			if (event === undefined) {
+			if (isUndefined(event)) {
 				continue;
 			}
 			yield emit(event);

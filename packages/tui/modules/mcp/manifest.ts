@@ -2,6 +2,7 @@ import {
 	isObjectLike,
 	isJsonObject as isRuntimeJsonObject,
 	isJsonValue as isRuntimeJsonValue,
+	isString,
 } from "@wincode/runtime-utils";
 import type { JsonObject, JsonValue, UnknownRecord } from "type-fest";
 import { z } from "zod";
@@ -46,7 +47,7 @@ export const mcpToolManifestEntrySchema: z.ZodType<McpToolManifestEntry> =
 				return false;
 			}
 			if (
-				typeof entry.name !== "string" ||
+				!isString(entry.name) ||
 				entry.name.length < 1 ||
 				entry.name.length > MAX_MCP_TOOL_NAME_LENGTH ||
 				!entry.name.startsWith("mcp_") ||
@@ -54,7 +55,7 @@ export const mcpToolManifestEntrySchema: z.ZodType<McpToolManifestEntry> =
 			) {
 				return false;
 			}
-			if (typeof entry.description !== "string") {
+			if (!isString(entry.description)) {
 				return false;
 			}
 			if (byteLength(entry.description) > MAX_MCP_TOOL_DESCRIPTION_BYTES) {

@@ -31,10 +31,13 @@ import {
 } from "@wincode/ai/models";
 import { codingToolNames } from "@wincode/coding-tools";
 import {
+	isArray,
 	isFiniteNonNegativeNumber,
 	isNonEmptyString,
 	isNonNegativeInteger,
+	isNull,
 	isObjectLike,
+	isUndefined,
 } from "@wincode/runtime-utils";
 import { randomUUIDv7 } from "bun";
 import type { UnknownRecord } from "type-fest";
@@ -70,13 +73,13 @@ const isRecordModel = (value: unknown): boolean => {
 		return false;
 	}
 	return (
-		model.variant === undefined ||
+		isUndefined(model.variant) ||
 		modelVariantSchema.safeParse(model.variant).success
 	);
 };
 
 const isOptionalNonNegativeInteger = (value: unknown): boolean =>
-	value === undefined || isNonNegativeInteger(value);
+	isUndefined(value) || isNonNegativeInteger(value);
 
 const isUsage = (value: unknown): boolean => {
 	if (!isObjectLike(value)) {
@@ -126,7 +129,7 @@ const isAgentTurnOutcome = (value: unknown): boolean => {
 		return false;
 	}
 	if (outcome.kind === "completed") {
-		return outcome.usage === undefined || isUsage(outcome.usage);
+		return isUndefined(outcome.usage) || isUsage(outcome.usage);
 	}
 	if (outcome.kind === "failed") {
 		return isFailure(outcome.failure);
@@ -198,8 +201,9 @@ export const getSessionRecordValidationError = (
 		return "record agent id must be a non-empty string";
 	}
 	if (
-		record.delegation !== undefined &&
-		!isAgentTurnDelegation(record.delegation)
+		!(
+			isUndefined(record.delegation) || isAgentTurnDelegation(record.delegation)
+		)
 	) {
 		return "record delegation correlation is invalid";
 	}
@@ -211,7 +215,7 @@ export const getSessionRecordValidationError = (
 	}
 	if (
 		!(
-			Array.isArray(record.messages) &&
+			isArray(record.messages) &&
 			record.messages.length === 1 &&
 			record.messages.every(isAgentTurnMessageRecord)
 		)
@@ -219,7 +223,7 @@ export const getSessionRecordValidationError = (
 		return "record must contain one durable message";
 	}
 	const message = record.messages[0];
-	if (message === undefined) {
+	if (isUndefined(message)) {
 		return "record must contain one durable message";
 	}
 	if (
@@ -254,7 +258,7 @@ const metadataForRecord = (
 	metadata: SessionMessageMetadataRecord | undefined
 ): SessionMessageMetadata | undefined => {
 	let model = modelSelectionForRecord(record.model);
-	if (metadata?.model !== undefined) {
+	if (!isUndefined(metadata?.model)) {
 		const parsedModel = modelSelectionSchema.safeParse(metadata.model);
 		model = parsedModel.success ? parsedModel.data : undefined;
 	}
@@ -263,16 +267,16 @@ const metadataForRecord = (
 		...((metadata?.agent ?? record.agentId)
 			? { agent: metadata?.agent ?? record.agentId }
 			: {}),
-		...(model === undefined ? {} : { model }),
-		...(metadata?.responseTimeMs === undefined
+		...(isUndefined(model) ? {} : { model }),
+		...(isUndefined(metadata?.responseTimeMs)
 			? {}
 			: { responseTimeMs: metadata.responseTimeMs }),
-		...(metadata?.skill === undefined ? {} : { skill: metadata.skill }),
-		...(metadata?.sourceUserMessageId === undefined
+		...(isUndefined(metadata?.skill) ? {} : { skill: metadata.skill }),
+		...(isUndefined(metadata?.sourceUserMessageId)
 			? {}
 			: { sourceUserMessageId: metadata.sourceUserMessageId }),
-		...(metadata?.usage === undefined ? {} : { usage: metadata.usage }),
-		...(variant === undefined ? {} : { variant }),
+		...(isUndefined(metadata?.usage) ? {} : { usage: metadata.usage }),
+		...(isUndefined(variant) ? {} : { variant }),
 	});
 	return parsed.success ? parsed.data : undefined;
 };
@@ -325,14 +329,12 @@ const toSessionPart = (
 			return [
 				attachmentReferenceToFilePart({
 					attachmentId: part.attachmentId,
-					...(part.available === undefined
-						? {}
-						: { available: part.available }),
+					...(isUndefined(part.available) ? {} : { available: part.available }),
 					byteLength: part.byteLength,
 					filename: part.filename,
-					...(part.height === undefined ? {} : { height: part.height }),
+					...(isUndefined(part.height) ? {} : { height: part.height }),
 					mediaType: part.mediaType,
-					...(part.width === undefined ? {} : { width: part.width }),
+					...(isUndefined(part.width) ? {} : { width: part.width }),
 				}),
 			];
 		} catch {
@@ -343,7 +345,7 @@ const toSessionPart = (
 		return [
 			{
 				data: part.data,
-				...(part.id === undefined ? {} : { id: part.id }),
+				...(isUndefined(part.id) ? {} : { id: part.id }),
 				type: "data-fileMention",
 			},
 		];
@@ -361,7 +363,7 @@ const toSessionMessage = (
 	const metadata = metadataForRecord(record, message.metadata);
 	return {
 		id: message.id,
-		...(metadata === undefined ? {} : { metadata }),
+		...(isUndefined(metadata) ? {} : { metadata }),
 		parts: message.parts.flatMap(toSessionPart),
 		role: message.role,
 	};
@@ -375,18 +377,18 @@ export const projectSessionMessageRecords = (
 const toDurableMetadata = (
 	metadata: SessionMessage["metadata"]
 ): SessionMessageMetadataRecord | undefined => {
-	if (metadata === undefined) {
+	if (isUndefined(metadata)) {
 		return;
 	}
 	const skill = metadata.skill;
 	const sourceUserMessageId = metadata.sourceUserMessageId;
 	return {
-		...(metadata.agent === undefined ? {} : { agent: metadata.agent }),
-		...(metadata.model === undefined ? {} : { model: metadata.model }),
-		...(metadata.responseTimeMs === undefined
+		...(isUndefined(metadata.agent) ? {} : { agent: metadata.agent }),
+		...(isUndefined(metadata.model) ? {} : { model: metadata.model }),
+		...(isUndefined(metadata.responseTimeMs)
 			? {}
 			: { responseTimeMs: metadata.responseTimeMs }),
-		...(skill === undefined
+		...(isUndefined(skill)
 			? {}
 			: {
 					skill: {
@@ -396,9 +398,9 @@ const toDurableMetadata = (
 						source: skill.source ?? "explicit",
 					},
 				}),
-		...(sourceUserMessageId === undefined ? {} : { sourceUserMessageId }),
-		...(metadata.usage === undefined ? {} : { usage: metadata.usage }),
-		...(metadata.variant === undefined ? {} : { variant: metadata.variant }),
+		...(isUndefined(sourceUserMessageId) ? {} : { sourceUserMessageId }),
+		...(isUndefined(metadata.usage) ? {} : { usage: metadata.usage }),
+		...(isUndefined(metadata.variant) ? {} : { variant: metadata.variant }),
 	};
 };
 
@@ -437,28 +439,28 @@ const toDurableSessionPart = (
 	if (isFileMentionPart(part)) {
 		const mention: SessionFileMentionPart = {
 			data: part.data,
-			...(part.id === undefined ? {} : { id: part.id }),
+			...(isUndefined(part.id) ? {} : { id: part.id }),
 			type: "file-mention",
 		};
 		return [mention];
 	}
 	const reference = getAttachmentReference(part);
-	if (reference !== null) {
+	if (!isNull(reference)) {
 		const attachment: SessionAttachmentReferencePart = {
 			attachmentId: reference.attachmentId,
 			available: reference.available,
 			byteLength: reference.byteLength,
 			filename: reference.filename,
-			...(reference.height === undefined ? {} : { height: reference.height }),
+			...(isUndefined(reference.height) ? {} : { height: reference.height }),
 			mediaType: reference.mediaType,
 			type: "attachment-reference",
-			...(reference.width === undefined ? {} : { width: reference.width }),
+			...(isUndefined(reference.width) ? {} : { width: reference.width }),
 		};
 		return [attachment];
 	}
 	if (isSessionToolPart(part)) {
 		const toolPart = toDurableSessionToolPart(part);
-		return toolPart === undefined ? [] : [toolPart];
+		return isUndefined(toolPart) ? [] : [toolPart];
 	}
 	return [];
 };
@@ -478,20 +480,20 @@ export const buildUserSessionRecord = ({
 	variant?: SessionRecord["model"]["variant"];
 }): SessionRecord => {
 	const durableMessage = toDurableSessionMessageRecord(message);
-	if (durableMessage === undefined || durableMessage.role !== "user") {
+	if (isUndefined(durableMessage) || durableMessage.role !== "user") {
 		throw new SessionRecordInvariantError(
 			"User Session Record has no durable message."
 		);
 	}
 	return {
 		agentId,
-		...(delegation === undefined ? {} : { delegation }),
+		...(isUndefined(delegation) ? {} : { delegation }),
 		id: toSessionRecordId(`record-${randomUUIDv7()}`),
 		messages: [durableMessage],
 		model: {
 			modelId: model.modelId,
 			providerId: model.providerId,
-			...(variant === undefined ? {} : { variant }),
+			...(isUndefined(variant) ? {} : { variant }),
 		},
 		outcome: { kind: "user" },
 		turnId,
@@ -512,7 +514,7 @@ export const toDurableSessionMessageRecord = (
 	const metadata = toDurableMetadata(message.metadata);
 	return {
 		id: message.id,
-		...(metadata === undefined ? {} : { metadata }),
+		...(isUndefined(metadata) ? {} : { metadata }),
 		parts,
 		role: message.role,
 	};
@@ -536,18 +538,17 @@ const projectRecord = (record: SessionRecord): SessionMessage[] =>
 			record.outcome.terminal.kind !== "completed"
 				? record.outcome.terminal.kind
 				: undefined;
-		const projectedWithOutcome =
-			terminalOutcome === undefined
-				? projected
-				: {
-						...projected,
-						metadata: {
-							...(projected.metadata ?? {}),
-							terminalOutcome,
-						},
-					};
+		const projectedWithOutcome = isUndefined(terminalOutcome)
+			? projected
+			: {
+					...projected,
+					metadata: {
+						...(projected.metadata ?? {}),
+						terminalOutcome,
+					},
+				};
 		return [
-			record.delegation === undefined
+			isUndefined(record.delegation)
 				? projectedWithOutcome
 				: {
 						...projectedWithOutcome,
@@ -565,9 +566,9 @@ export const projectSessionRecords = (
 	records: readonly SessionRecord[]
 ): SessionMessage[] => [
 	...records
-		.filter((record) => record.delegation === undefined)
+		.filter((record) => isUndefined(record.delegation))
 		.flatMap(projectRecord),
 	...records
-		.filter((record) => record.delegation !== undefined)
+		.filter((record) => !isUndefined(record.delegation))
 		.flatMap(projectRecord),
 ];

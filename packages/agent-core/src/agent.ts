@@ -1,4 +1,4 @@
-import { isNonEmptyString } from "@wincode/runtime-utils";
+import { isNonEmptyString, isString } from "@wincode/runtime-utils";
 import { z } from "zod";
 import type { AgentId } from "./identifiers";
 
@@ -48,5 +48,4 @@ export const isAgentId = (value: unknown): value is AgentId =>
 	AGENT_ID_PATTERN.test(value);
 
 export const isAgentRole = (value: unknown): value is AgentRole =>
-	typeof value === "string" &&
-	(AGENT_ROLES as readonly string[]).includes(value);
+	isString(value) && (AGENT_ROLES as readonly string[]).includes(value);

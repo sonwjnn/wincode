@@ -1,10 +1,14 @@
 import { type ModelUsage, modelUsageSchema } from "@wincode/ai/model-usage";
 import type { ModelId, ModelVariant } from "@wincode/ai/models";
 import {
+	isArray,
+	isBoolean,
 	isNonEmptyString,
 	isNonNegativeInteger,
 	isPlainObject,
 	isPositiveInteger,
+	isString,
+	isUndefined,
 } from "@wincode/runtime-utils";
 import type { SkillActivationSource } from "@wincode/skills";
 import type { ReadonlyDeep } from "type-fest";
@@ -203,7 +207,7 @@ const isSessionSkillActivationRecord = (
 		isNonEmptyString(value.name) &&
 		isNonEmptyString(value.contentHash) &&
 		(value.source === "agent" || value.source === "explicit") &&
-		(value.arguments === undefined || typeof value.arguments === "string")
+		(isUndefined(value.arguments) || isString(value.arguments))
 	);
 };
 
@@ -215,7 +219,7 @@ const isSessionMessageMetadataRecord = (
 	}
 	const modelMetadata = value.model;
 	const validModelMetadata =
-		modelMetadata === undefined ||
+		isUndefined(modelMetadata) ||
 		(isPlainObject(modelMetadata) &&
 			Object.keys(modelMetadata).every(
 				(key) => key === "modelId" || key === "providerId"
@@ -233,17 +237,16 @@ const isSessionMessageMetadataRecord = (
 				key === "usage" ||
 				key === "variant"
 		) &&
-		(value.agent === undefined || isAgentId(value.agent)) &&
+		(isUndefined(value.agent) || isAgentId(value.agent)) &&
 		validModelMetadata &&
-		(value.responseTimeMs === undefined ||
+		(isUndefined(value.responseTimeMs) ||
 			isNonNegativeInteger(value.responseTimeMs)) &&
-		(value.skill === undefined ||
-			isSessionSkillActivationRecord(value.skill)) &&
-		(value.sourceUserMessageId === undefined ||
+		(isUndefined(value.skill) || isSessionSkillActivationRecord(value.skill)) &&
+		(isUndefined(value.sourceUserMessageId) ||
 			isNonEmptyString(value.sourceUserMessageId)) &&
-		(value.usage === undefined ||
+		(isUndefined(value.usage) ||
 			modelUsageSchema.safeParse(value.usage).success) &&
-		(value.variant === undefined || typeof value.variant === "string")
+		(isUndefined(value.variant) || isString(value.variant))
 	);
 };
 export const isSessionAttachmentReferencePart = (
@@ -266,12 +269,12 @@ export const isSessionAttachmentReferencePart = (
 		) &&
 		value.type === "attachment-reference" &&
 		isNonEmptyString(value.attachmentId) &&
-		(value.available === undefined || typeof value.available === "boolean") &&
+		(isUndefined(value.available) || isBoolean(value.available)) &&
 		isNonNegativeInteger(value.byteLength) &&
 		isNonEmptyString(value.filename) &&
 		isNonEmptyString(value.mediaType) &&
-		(value.height === undefined || isPositiveInteger(value.height)) &&
-		(value.width === undefined || isPositiveInteger(value.width))
+		(isUndefined(value.height) || isPositiveInteger(value.height)) &&
+		(isUndefined(value.width) || isPositiveInteger(value.width))
 	);
 };
 export const isSessionFileMentionPart = (
@@ -286,7 +289,7 @@ export const isSessionFileMentionPart = (
 			(key) => key === "data" || key === "id" || key === "type"
 		) &&
 		value.type === "file-mention" &&
-		(value.id === undefined || typeof value.id === "string") &&
+		(isUndefined(value.id) || isString(value.id)) &&
 		Object.keys(mention).every(
 			(key) =>
 				key === "byteLength" ||
@@ -297,11 +300,11 @@ export const isSessionFileMentionPart = (
 				key === "truncated"
 		) &&
 		isNonNegativeInteger(mention.byteLength) &&
-		typeof mention.content === "string" &&
-		(mention.error === undefined || typeof mention.error === "string") &&
+		isString(mention.content) &&
+		(isUndefined(mention.error) || isString(mention.error)) &&
 		(mention.kind === "file" || mention.kind === "directory") &&
 		isNonEmptyString(mention.path) &&
-		typeof mention.truncated === "boolean"
+		isBoolean(mention.truncated)
 	);
 };
 
@@ -360,9 +363,9 @@ export const isAgentTurnMessageRecord = (
 		) &&
 		isNonEmptyString(record.id) &&
 		(record.role === "assistant" || record.role === "user") &&
-		Array.isArray(record.parts) &&
+		isArray(record.parts) &&
 		record.parts.every(isSessionMessagePart) &&
-		(record.metadata === undefined ||
+		(isUndefined(record.metadata) ||
 			isSessionMessageMetadataRecord(record.metadata))
 	);
 };

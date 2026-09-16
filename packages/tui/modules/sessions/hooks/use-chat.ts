@@ -22,6 +22,12 @@ import {
 	codingToolNames,
 } from "@wincode/coding-tools";
 import {
+	getErrorMessage,
+	isError,
+	isNull,
+	isUndefined,
+} from "@wincode/runtime-utils";
+import {
 	buildSkillToolDefinition,
 	createSkillExecution,
 	createSkillSnapshot,
@@ -138,7 +144,7 @@ const createEmptyRuntimeAssistantMessage = (
 	metadata: {
 		agent,
 		model,
-		...(sourceUserMessageId === null ? {} : { sourceUserMessageId }),
+		...(isNull(sourceUserMessageId) ? {} : { sourceUserMessageId }),
 	},
 	parts: [],
 	role: "assistant",
@@ -147,9 +153,6 @@ const createEmptyRuntimeAssistantMessage = (
 const isBenignCompactionError = (error: unknown): boolean =>
 	error instanceof SessionCompactionError &&
 	(error.code === "history-too-short" || error.code === "not-needed");
-
-const compactionErrorMessage = (error: unknown): string =>
-	error instanceof Error ? error.message : "Session compaction failed.";
 
 const waitForCompaction = async (
 	operation: Promise<CompactSessionResult> | null
@@ -163,7 +166,7 @@ const waitForCompaction = async (
 	} catch (error) {
 		return isBenignCompactionError(error)
 			? null
-			: compactionErrorMessage(error);
+			: getErrorMessage(error, "Session compaction failed.");
 	}
 };
 type RunCompaction = (
@@ -204,7 +207,10 @@ const prepareCompactionBeforeSubmit = async ({
 		await runCompaction("threshold", undefined, undefined, model);
 	} catch (cause) {
 		if (!isBenignCompactionError(cause)) {
-			return { ok: false, reason: compactionErrorMessage(cause) };
+			return {
+				ok: false,
+				reason: getErrorMessage(cause, "Session compaction failed."),
+			};
 		}
 	}
 	return { ok: true };
@@ -236,8 +242,8 @@ const createSubmitMetadata = (
 ): SessionMessageMetadata => ({
 	agent: input.agent,
 	model: input.model,
-	...(input.variant === undefined ? {} : { variant: input.variant }),
-	...(skill === undefined
+	...(isUndefined(input.variant) ? {} : { variant: input.variant }),
+	...(isUndefined(skill)
 		? {}
 		: { skill: createSkillSnapshot(skill, "explicit") }),
 });
@@ -260,17 +266,16 @@ const prepareSubmitContext = async ({
 		return { kind: "cancelled" };
 	}
 	const resolvedAgent = input.resolvedAgent;
-	if (resolvedAgent === undefined) {
+	if (isUndefined(resolvedAgent)) {
 		return {
 			kind: "rejected",
 			reason: "The resolved Agent is unavailable.",
 		};
 	}
-	const anchoredMessage =
-		input.messageId === undefined
-			? undefined
-			: activeMessages.find(({ id }) => id === input.messageId);
-	if (input.messageId !== undefined && anchoredMessage?.role !== "user") {
+	const anchoredMessage = isUndefined(input.messageId)
+		? undefined
+		: activeMessages.find(({ id }) => id === input.messageId);
+	if (!isUndefined(input.messageId) && anchoredMessage?.role !== "user") {
 		return {
 			kind: "rejected",
 			reason: "The stored message to continue is unavailable",
@@ -307,7 +312,7 @@ const prepareNewSessionMessage = async ({
 	signal: AbortSignal;
 }): Promise<NewSessionMessageResult> => {
 	const userText = input.userText;
-	if (userText === undefined) {
+	if (isUndefined(userText)) {
 		return { kind: "rejected", reason: "No prompt to submit" };
 	}
 	const fileMentions = await resolveFileMentionParts(userText);
@@ -336,7 +341,7 @@ const prepareNewSessionMessage = async ({
 };
 
 const sessionSendCancelled = (signal?: AbortSignal): SessionSendOutcome => {
-	if (signal === undefined) {
+	if (isUndefined(signal)) {
 		return { rejected: true, reason: "Session send cancelled." };
 	}
 	switch (getAgentTurnAbortDisposition(signal.reason)) {
@@ -371,8 +376,9 @@ const handleRunTurnError = ({
 			? { rejected: false }
 			: sessionSendCancelled(signal);
 	}
-	const normalizedError =
-		error instanceof Error ? error : new Error("The Agent Turn failed.");
+	const normalizedError = isError(error)
+		? error
+		: new Error("The Agent Turn failed.");
 	setError(normalizedError);
 	if (!executionStarted) {
 		return { rejected: true, reason: normalizedError.message };
@@ -431,7 +437,7 @@ export const prepareRetryMessages = (
 				(message) =>
 					message.role !== "assistant" ||
 					(message.metadata?.interrupted !== true &&
-						message.metadata?.terminalOutcome === undefined)
+						isUndefined(message.metadata?.terminalOutcome))
 			)
 		),
 	};
@@ -450,7 +456,7 @@ const prepareModelMessages = async ({
 	setIsPreparingMessage: (value: boolean) => void;
 	signal: AbortSignal;
 }): Promise<PreparedModelMessages> => {
-	if (context.anchoredMessage !== undefined && input.messageId !== undefined) {
+	if (!(isUndefined(context.anchoredMessage) || isUndefined(input.messageId))) {
 		return prepareRetryMessages(activeMessages, input.messageId);
 	}
 
@@ -529,7 +535,7 @@ const prepareSessionSubmission = async ({
 }): Promise<SessionPreparationResult> => {
 	try {
 		const preparationError = await waitForCompaction(compactionOperation);
-		if (preparationError !== null) {
+		if (!isNull(preparationError)) {
 			return { kind: "rejected", reason: preparationError };
 		}
 		const settings = await getCompactionSettings(input.model);
@@ -575,7 +581,7 @@ const prepareSessionSubmission = async ({
 			context,
 			kind: "ready",
 			messages: prepared.messages,
-			...(prepared.newMessage === undefined
+			...(isUndefined(prepared.newMessage)
 				? {}
 				: { newMessage: prepared.newMessage }),
 		};
@@ -583,8 +589,9 @@ const prepareSessionSubmission = async ({
 		if (signal.aborted) {
 			return { kind: "cancelled" };
 		}
-		const normalizedError =
-			error instanceof Error ? error : new Error("Session preparation failed.");
+		const normalizedError = isError(error)
+			? error
+			: new Error("Session preparation failed.");
 		return {
 			error: normalizedError,
 			kind: "rejected",
@@ -647,14 +654,14 @@ const handleSafeAssistantOutcome = async ({
 		metadata: {
 			agent,
 			model,
-			...(durableMessage?.metadata?.sourceUserMessageId === undefined
+			...(isUndefined(durableMessage?.metadata?.sourceUserMessageId)
 				? {}
 				: {
 						sourceUserMessageId: durableMessage.metadata.sourceUserMessageId,
 					}),
 			...(terminal === "interrupted" ? { interrupted: true } : {}),
 			...(terminal === "completed" ? {} : { terminalOutcome: terminal }),
-			...(variant === undefined ? {} : { variant }),
+			...(isUndefined(variant) ? {} : { variant }),
 		},
 		parts: [
 			{
@@ -796,7 +803,7 @@ const handleTurnFailure = async ({
 			variant,
 		});
 	}
-	if (!terminalObserved && currentTurn !== undefined) {
+	if (!(terminalObserved || isUndefined(currentTurn))) {
 		const fallbackRecord = signal.aborted
 			? buildTerminalSessionRecord({
 					assistantText: "",
@@ -813,7 +820,7 @@ const handleTurnFailure = async ({
 					turnId,
 					variant,
 				});
-		if (fallbackRecord !== undefined) {
+		if (!isUndefined(fallbackRecord)) {
 			return handleSafeAssistantOutcome({
 				agent,
 				commitRecord,
@@ -853,7 +860,7 @@ const updateRuntimeMessageFromEvent = ({
 		event: AgentTurnEvent
 	) => void;
 }): void => {
-	if (assistantId !== null) {
+	if (!isNull(assistantId)) {
 		updateRuntimeMessage(assistantId, event);
 	}
 	if (event.type !== "agent-turn-started") {
@@ -870,7 +877,7 @@ const releaseTurnSnapshot = ({
 	mcpSnapshotRef: { current: McpCatalogSnapshot | null };
 	snapshot: McpCatalogSnapshot | undefined;
 }): void => {
-	if (snapshot === undefined) {
+	if (isUndefined(snapshot)) {
 		return;
 	}
 	mcp.releaseSnapshot?.(snapshot);
@@ -918,7 +925,7 @@ export const sanitizeInterruptedMessagesForSession = (
 ): SessionMessage[] =>
 	sanitizeInterruptedSessionMessages(
 		messages.map((message) =>
-			preserveToolCallId === undefined
+			isUndefined(preserveToolCallId)
 				? message
 				: preserveInterruptedToolCall(message, preserveToolCallId)
 		),
@@ -950,8 +957,8 @@ export const finalizeAssistantMessageMetadata = (
 		agent: message.metadata?.agent ?? context.agent,
 		interrupted: context.interrupted,
 		model: message.metadata?.model ?? context.model,
-		...(variant === undefined ? {} : { variant }),
-		...(context.responseTimeMs === undefined
+		...(isUndefined(variant) ? {} : { variant }),
+		...(isUndefined(context.responseTimeMs)
 			? {}
 			: { responseTimeMs: context.responseTimeMs }),
 	};
@@ -973,7 +980,7 @@ export const activateExplicitSkill = async (
 		({ name }) => name === skill.name
 	);
 	const policyOutcome = await gate.gate({
-		available: entry !== undefined,
+		available: !isUndefined(entry),
 		description: entry?.description ?? `Activate Skill ${skill.name}`,
 		family: "skill",
 		name: skill.name,
@@ -982,7 +989,7 @@ export const activateExplicitSkill = async (
 		execution.markRejected(skill.name);
 		return { ok: false, reason: policyOutcome.errorText };
 	}
-	if (entry === undefined) {
+	if (isUndefined(entry)) {
 		return {
 			ok: false,
 			reason: `Unknown or unavailable Skill "${skill.name}"`,
@@ -1107,15 +1114,15 @@ const buildTerminalMessageMetadata = ({
 		...(base.metadata ?? {}),
 		agent: base.metadata?.agent ?? agent,
 		interrupted: event.type === "agent-turn-interrupted",
-		...(terminalOutcome === undefined ? {} : { terminalOutcome }),
-		...(model === undefined ? {} : { model: base.metadata?.model ?? model }),
-		...(variant === undefined
+		...(isUndefined(terminalOutcome) ? {} : { terminalOutcome }),
+		...(isUndefined(model) ? {} : { model: base.metadata?.model ?? model }),
+		...(isUndefined(variant)
 			? {}
 			: { variant: base.metadata?.variant ?? variant }),
-		...(startedAt === null
+		...(isNull(startedAt)
 			? {}
 			: { responseTimeMs: Math.max(0, Date.now() - startedAt) }),
-		...(usage === null ? {} : { usage }),
+		...(isNull(usage) ? {} : { usage }),
 	};
 };
 
@@ -1199,13 +1206,13 @@ export function useChat(
 			gate: createToolGate({
 				approvalQueue,
 				onAbort: (request) => {
-					if (request.toolCallId === undefined) {
+					if (isUndefined(request.toolCallId)) {
 						return;
 					}
 					const abortChild = childAbortControllersRef.current.get(
 						request.toolCallId
 					);
-					if (abortChild !== undefined) {
+					if (!isUndefined(abortChild)) {
 						abortChild();
 						return;
 					}
@@ -1213,11 +1220,11 @@ export function useChat(
 				},
 				openApproval,
 				resolvePermission: (agentId) =>
-					agentId === undefined
+					isUndefined(agentId)
 						? resolvePermissionRef.current()
 						: resolvePermissionForAgentRef.current(agentId),
 				resolveResourceLimits: (agentId) =>
-					agentId === undefined
+					isUndefined(agentId)
 						? resolveResourceLimitsRef.current()
 						: resolveResourceLimitsForAgentRef.current(agentId),
 				sandbox,
@@ -1391,7 +1398,7 @@ export function useChat(
 					session: { messages: sessionMessages, sessionId },
 					focus,
 					model: compactionModel,
-					...(compactionVariant === undefined
+					...(isUndefined(compactionVariant)
 						? {}
 						: { variant: compactionVariant }),
 					settings: {
@@ -1466,9 +1473,7 @@ export function useChat(
 				} catch (error) {
 					if (!isBenignCompactionError(error)) {
 						setCompactionError(
-							error instanceof Error
-								? error
-								: new Error("Automatic compaction failed.")
+							isError(error) ? error : new Error("Automatic compaction failed.")
 						);
 					}
 				}
@@ -1500,8 +1505,8 @@ export function useChat(
 			| { ok: false; reason: string }
 		> => {
 			const execution = skillExecutionRef.current;
-			if (explicitSkillInput !== undefined) {
-				if (execution === null) {
+			if (!isUndefined(explicitSkillInput)) {
+				if (isNull(execution)) {
 					return { ok: false, reason: "Skill catalog is unavailable" };
 				}
 				return activateExplicitSkill(explicitSkillInput, {
@@ -1509,7 +1514,7 @@ export function useChat(
 					gate: toolGateState.gate,
 				});
 			}
-			if (anchoredMessage === undefined || execution === null) {
+			if (isUndefined(anchoredMessage) || isNull(execution)) {
 				return { ok: true, skill: undefined };
 			}
 			const parsedSkill = sessionMessageSkillSchema.safeParse(
@@ -1522,7 +1527,7 @@ export function useChat(
 				const live = execution.catalog.entries.find(
 					({ name }) => name === parsedSkill.data.name
 				);
-				if (live === undefined) {
+				if (isUndefined(live)) {
 					return {
 						ok: false,
 						reason: `Skill "${parsedSkill.data.name}" is unavailable`,
@@ -1604,7 +1609,7 @@ export function useChat(
 					const existingPart = parts[partIndex];
 					if (
 						partIndex === -1 ||
-						existingPart === undefined ||
+						isUndefined(existingPart) ||
 						!isSessionToolPart(existingPart)
 					) {
 						parts.push(runtimeToolResultPart(event));
@@ -1642,7 +1647,7 @@ export function useChat(
 							modelRef.current
 						)
 					: current[index];
-			if (base === undefined) {
+			if (isUndefined(base)) {
 				return;
 			}
 			const startedAt = requestStartedAtRef.current;
@@ -1713,7 +1718,7 @@ export function useChat(
 			let terminalObserved = false;
 			const commitRecord = (record: SessionRecord) =>
 				store.commitSessionRecord({
-					...(delegation === undefined
+					...(isUndefined(delegation)
 						? {
 								sessionModel: sessionModelRef.current,
 								sessionVariant: sessionVariantRef.current,
@@ -1725,7 +1730,7 @@ export function useChat(
 			try {
 				const modelTarget = await resolveChatModelTarget(model, connections, {
 					signal,
-					...(variant === undefined ? {} : { variant }),
+					...(isUndefined(variant) ? {} : { variant }),
 				});
 				const mcpPolicy = await resolveMcpPolicyForAgentRef.current(agent);
 				snapshot = await mcp.createSnapshot(agent, mcpPolicy);
@@ -1748,7 +1753,7 @@ export function useChat(
 						return () => childAbortControllersRef.current.delete(toolCallId);
 					},
 					resolveResourceLimits: (agentId) =>
-						agentId === undefined
+						isUndefined(agentId)
 							? resolveResourceLimitsRef.current()
 							: resolveResourceLimitsForAgentRef.current(agentId),
 				};
@@ -1812,7 +1817,7 @@ export function useChat(
 					onTerminal: (event) => {
 						executionStarted = true;
 						terminalObserved = true;
-						if (currentAssistantIdRef.current !== null) {
+						if (!isNull(currentAssistantIdRef.current)) {
 							finalizeRuntimeMessage(currentAssistantIdRef.current, event);
 						}
 					},
@@ -1875,13 +1880,13 @@ export function useChat(
 	const runtimeGatedToolingRef = useLatest<RuntimeGatedTooling>({
 		delegate: (request, signal) => {
 			const execute = delegationExecutorRef.current;
-			return execute === undefined
+			return isUndefined(execute)
 				? Promise.reject(new Error("Delegation is unavailable."))
 				: execute(request, signal);
 		},
 		gate: toolGateState.gate,
 		resolveResourceLimits: (agentId) =>
-			agentId === undefined
+			isUndefined(agentId)
 				? resolveResourceLimitsRef.current()
 				: resolveResourceLimitsForAgentRef.current(agentId),
 	});
@@ -1897,7 +1902,7 @@ export function useChat(
 			);
 			const execution = createSkillExecution(catalog);
 			const tool = buildSkillToolDefinition(catalog);
-			return tool === undefined ? undefined : { execution, tool };
+			return isUndefined(tool) ? undefined : { execution, tool };
 		},
 		cwd: config.cwd,
 		fallbackModelRef: modelRef,
@@ -1954,13 +1959,13 @@ export function useChat(
 				signal,
 			});
 			if (prepared.kind !== "ready") {
-				if (prepared.kind === "rejected" && prepared.error !== undefined) {
+				if (prepared.kind === "rejected" && !isUndefined(prepared.error)) {
 					setError(prepared.error);
 				}
 				return sessionOutcomeForPreparation(prepared, signal);
 			}
 			const { context: readyContext, messages: modelMessages } = prepared;
-			if (prepared.newMessage !== undefined) {
+			if (!isUndefined(prepared.newMessage)) {
 				const userRecord = buildUserSessionRecord({
 					agentId: input.agent,
 					message: prepared.newMessage,
@@ -1976,10 +1981,9 @@ export function useChat(
 						sessionId,
 					});
 				} catch (error) {
-					const safeError =
-						error instanceof Error
-							? error
-							: new Error("Could not save the prompt.");
+					const safeError = isError(error)
+						? error
+						: new Error("Could not save the prompt.");
 					setError(safeError);
 					return {
 						rejected: true,
@@ -2025,7 +2029,7 @@ export function useChat(
 				return;
 			}
 			const target = activeMessagesRef.current[targetIndex];
-			if (target === undefined) {
+			if (isUndefined(target)) {
 				return;
 			}
 			const startedAt = requestStartedAtRef.current;
@@ -2034,7 +2038,7 @@ export function useChat(
 				interrupted: true,
 				model: modelRef.current,
 				variant: variantRef.current,
-				...(startedAt === null
+				...(isNull(startedAt)
 					? {}
 					: { responseTimeMs: Math.max(0, Date.now() - startedAt) }),
 			});
@@ -2075,7 +2079,7 @@ export function useChat(
 		const originalMessage = displayMessagesRef.current.findLast(
 			(message) => message.role === "user"
 		);
-		if (originalMessage === undefined) {
+		if (isUndefined(originalMessage)) {
 			return;
 		}
 		void (async () => {
@@ -2125,7 +2129,7 @@ export function useChat(
 								: [...current, entry]
 						);
 						const operation = sessionRef.current;
-						if (operation === null || !(await operation.waitForIdle())) {
+						if (isNull(operation) || !(await operation.waitForIdle())) {
 							return;
 						}
 						const outcome = await operation.send({
@@ -2144,7 +2148,7 @@ export function useChat(
 				});
 			} catch (recoveryError) {
 				setCompactionError(
-					recoveryError instanceof Error
+					isError(recoveryError)
 						? recoveryError
 						: new Error("Context overflow recovery failed.")
 				);
@@ -2174,14 +2178,12 @@ export function useChat(
 				},
 				onInterrupt: interruptLatestAssistantMessage,
 				onError: (error) =>
-					setError(
-						error instanceof Error ? error : new Error("Session failed.")
-					),
+					setError(isError(error) ? error : new Error("Session failed.")),
 				resolveApproval: async (approvalId, outcome) => {
 					const entry = approvalPanelsRef.current.entries.find(
 						(candidate) => candidate.id === approvalId
 					);
-					if (entry === undefined) {
+					if (isUndefined(entry)) {
 						throw new Error(`Session approval "${approvalId}" is unavailable.`);
 					}
 					if (outcome.decision === "allow") {

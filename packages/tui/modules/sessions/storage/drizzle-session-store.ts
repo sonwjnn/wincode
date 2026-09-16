@@ -16,6 +16,7 @@ import {
 	type ChatModelSelection,
 	modelSelectionSchema,
 } from "@wincode/ai/models";
+import { isArray, isNull, isUndefined } from "@wincode/runtime-utils";
 import { randomUUIDv7 } from "bun";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
@@ -364,7 +365,7 @@ const ensureWorkspace = (db: SessionDatabase, rootPath: string) => {
 
 const deriveSessionTitle = (messages: SessionMessage[]): string => {
 	for (const message of messages) {
-		if (message.role !== "user" || !Array.isArray(message.parts)) {
+		if (message.role !== "user" || !isArray(message.parts)) {
 			continue;
 		}
 
@@ -398,11 +399,11 @@ const toSessionRecordModel = (
 ): SessionRecord["model"] => ({
 	modelId: model.modelId,
 	providerId: model.providerId,
-	...(variant === undefined ? {} : { variant }),
+	...(isUndefined(variant) ? {} : { variant }),
 });
 const toSessionRecord = (row: SessionRecordRow): SessionRecord => {
 	let delegation: SessionRecord["delegation"];
-	if (row.delegationJson !== null) {
+	if (!isNull(row.delegationJson)) {
 		if (!isAgentTurnDelegation(row.delegationJson)) {
 			throw new SessionRecordInvariantError(
 				"Invalid persisted Session Record delegation."
@@ -412,7 +413,7 @@ const toSessionRecord = (row: SessionRecordRow): SessionRecord => {
 	}
 	const record = {
 		agentId: agentIdSchema.parse(row.agentId),
-		...(delegation === undefined ? {} : { delegation }),
+		...(isUndefined(delegation) ? {} : { delegation }),
 		id: toSessionRecordId(row.recordId),
 		messages: row.messagesJson,
 		model: row.modelJson,
@@ -421,7 +422,7 @@ const toSessionRecord = (row: SessionRecordRow): SessionRecord => {
 		version: row.version,
 	};
 	const validationError = getSessionRecordValidationError(record);
-	if (validationError !== null) {
+	if (!isNull(validationError)) {
 		throw new SessionRecordInvariantError(
 			`Invalid persisted Session Record: ${validationError}`
 		);
@@ -519,7 +520,7 @@ const writeSessionRecordCheckpoint = (
 	{ sessionModel, sessionVariant, record, sessionId }: CommitSessionRecordInput
 ): void => {
 	const validationError = getSessionRecordValidationError(record);
-	if (validationError !== null) {
+	if (!isNull(validationError)) {
 		throw new SessionRecordInvariantError(
 			`Invalid Session Record: ${validationError}`,
 			{ cause: new Error(validationError) }
@@ -566,7 +567,7 @@ const writeSessionRecordCheckpoint = (
 		tx.update(session)
 			.set({
 				lastMessageAt: now,
-				...(sessionModel === undefined
+				...(isUndefined(sessionModel)
 					? {}
 					: {
 							modelJson: serializeJson(sessionModel),
@@ -676,7 +677,7 @@ export const createDrizzleSessionStore = (
 			variant,
 		}: CreateSessionInput) => {
 			const durableMessage = toDurableSessionMessageRecord(message);
-			if (durableMessage === undefined || durableMessage.role !== "user") {
+			if (isUndefined(durableMessage) || durableMessage.role !== "user") {
 				throw new Error("Initial session message has no durable parts.");
 			}
 			const id = createSessionId();
@@ -864,8 +865,8 @@ export const createDrizzleSessionStore = (
 			db.update(session)
 				.set({
 					updatedAt: new Date(),
-					...(data.title === undefined ? {} : { title: data.title }),
-					...(data.pinned === undefined ? {} : { pinned: data.pinned }),
+					...(isUndefined(data.title) ? {} : { title: data.title }),
+					...(isUndefined(data.pinned) ? {} : { pinned: data.pinned }),
 				})
 				.where(
 					and(eq(session.id, sessionId), eq(session.workspaceId, workspace.id))

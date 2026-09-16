@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isUndefined } from "@wincode/runtime-utils";
 import { MAX_PERMISSION_PATTERN_LENGTH } from "@/modules/permissions/policy";
 import { resolveTopLevelPermission } from "@/modules/permissions/schema";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
@@ -14,7 +15,7 @@ const HOME_ROOT = "/home/user";
 const fileSystem = (files: Record<string, string>) => ({
 	readFile: async (file: string): Promise<string> => {
 		const value = files[file];
-		if (value === undefined) {
+		if (isUndefined(value)) {
 			const error = new Error("missing") as Error & { code: string };
 			error.code = "ENOENT";
 			throw error;

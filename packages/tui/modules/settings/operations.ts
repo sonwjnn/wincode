@@ -1,3 +1,4 @@
+import { isUndefined } from "@wincode/runtime-utils";
 import type { ConfigSnapshot, ConfigStore } from "@/shared/config/config-store";
 import { SETTINGS_CATALOG } from "./catalog";
 import type {
@@ -31,7 +32,7 @@ const resolveSetting = (
 		available: resolution.available,
 		descriptor,
 		source: resolution.source,
-		...(resolution.unavailableReason === undefined
+		...(isUndefined(resolution.unavailableReason)
 			? {}
 			: { unavailableReason: resolution.unavailableReason }),
 		value: resolution.value,
@@ -49,7 +50,7 @@ export const createSettingsOperations = ({
 
 	const findDescriptor = (id: string): SettingDescriptor => {
 		const descriptor = catalog.find((entry) => entry.id === id);
-		if (descriptor === undefined) {
+		if (isUndefined(descriptor)) {
 			throw new Error(`Unknown setting: ${id}.`);
 		}
 		return descriptor;

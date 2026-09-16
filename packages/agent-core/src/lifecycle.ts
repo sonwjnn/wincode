@@ -1,3 +1,4 @@
+import { isUndefined } from "@wincode/runtime-utils";
 import { AgentInvariantError } from "./errors";
 import {
 	type AgentTurnCancelledEvent,
@@ -63,7 +64,7 @@ const statusForTerminalEvent = (
 };
 
 const assertInterruptible = (state: AgentTurnLifecycleState): void => {
-	if (state.terminalEvent !== undefined) {
+	if (!isUndefined(state.terminalEvent)) {
 		throw new AgentInvariantError(
 			"duplicate-terminal-outcome",
 			`Agent Turn ${state.turnId} already has a terminal outcome.`,
@@ -138,7 +139,7 @@ const assertEventCanApply = (
 			{ cause: event }
 		);
 	}
-	if (state.terminalEvent !== undefined) {
+	if (!isUndefined(state.terminalEvent)) {
 		throw new AgentInvariantError(
 			"duplicate-terminal-outcome",
 			`Agent Turn ${turnId} emitted an event after its terminal outcome.`,

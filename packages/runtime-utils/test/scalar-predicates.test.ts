@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	isError,
 	isFiniteNonNegativeNumber,
 	isNonEmptyString,
 	isNonNegativeInteger,
@@ -9,6 +10,12 @@ import {
 } from "../src/index";
 
 describe("runtime scalar predicates", () => {
+	test("accepts Error instances without accepting error-shaped objects", () => {
+		expect(isError(new Error("failure"))).toBe(true);
+		expect(isError(new TypeError("failure"))).toBe(true);
+		expect(isError({ name: "Error", message: "failure" })).toBe(false);
+		expect(isError("failure")).toBe(false);
+	});
 	test("accepts non-empty strings without trimming", () => {
 		expect(isNonEmptyString("text")).toBe(true);
 		expect(isNonEmptyString(" ")).toBe(true);

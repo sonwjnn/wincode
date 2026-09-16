@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import type { ModelId } from "@wincode/ai/models";
+import { isNull, isString, isUndefined } from "@wincode/runtime-utils";
 import { getGitBranch } from "@/shared/git/get-git-branch";
 import {
 	formatGitStatusSummary,
@@ -68,7 +69,7 @@ const stableRepository = (
 	workspace: string,
 	projectRoot: string | null
 ): Pick<PromptStableEnvironment, "repository" | "worktree"> => {
-	if (projectRoot === null) {
+	if (isNull(projectRoot)) {
 		return { repository: "none", worktree: null };
 	}
 	return {
@@ -78,7 +79,7 @@ const stableRepository = (
 };
 
 const statusText = (status: string | GitStatusSummary): string =>
-	typeof status === "string" ? status : formatGitStatusSummary(status);
+	isString(status) ? status : formatGitStatusSummary(status);
 
 /**
  * Captures the stable and volatile context once for a Model Step. It reads no
@@ -91,21 +92,19 @@ export const createEnvironmentSnapshot = async (
 	const cwd = await canonicalPath(input.cwd ?? workspace);
 	const git = input.git ?? defaultGit;
 	let projectRoot: string | null;
-	if (input.projectRoot === undefined) {
+	if (isUndefined(input.projectRoot)) {
 		const discoveredProjectRoot = await git.getRepositoryRoot(workspace);
-		projectRoot =
-			discoveredProjectRoot === null
-				? null
-				: await canonicalPath(discoveredProjectRoot);
-	} else if (input.projectRoot === null) {
+		projectRoot = isNull(discoveredProjectRoot)
+			? null
+			: await canonicalPath(discoveredProjectRoot);
+	} else if (isNull(input.projectRoot)) {
 		projectRoot = null;
 	} else {
 		projectRoot = await canonicalPath(input.projectRoot);
 	}
-	const [branch, status] =
-		projectRoot === null
-			? [null, "unavailable" as const]
-			: await Promise.all([git.getBranch(workspace), git.getStatus(workspace)]);
+	const [branch, status] = isNull(projectRoot)
+		? [null, "unavailable" as const]
+		: await Promise.all([git.getBranch(workspace), git.getStatus(workspace)]);
 	return {
 		stable: {
 			...stableRepository(workspace, projectRoot),

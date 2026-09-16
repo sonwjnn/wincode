@@ -1,5 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
+import { isUndefined } from "@wincode/runtime-utils";
 import { useEffect, useRef, useState } from "react";
 import { sanitizeText } from "@/shared/display-sanitize";
 import { useLatest } from "@/shared/hooks/use-latest";
@@ -85,10 +86,10 @@ export function ToolApprovalPanel({
 }) {
 	const { entries } = useApprovalPanels();
 	const entry = entries.find((candidate) => candidate.id === id);
-	if (entry === undefined) {
+	if (isUndefined(entry)) {
 		return null;
 	}
-	if (entry.resolution !== undefined) {
+	if (!isUndefined(entry.resolution)) {
 		return <ApprovalResolvedLine entry={entry} errorText={errorText} />;
 	}
 	if (mode === "resolved-only") {
@@ -108,11 +109,11 @@ export function PendingApprovalDock({
 }: {
 	onResolve?: (id: string, outcome: ApprovalOutcome) => void;
 }) {
-	const pendingEntries = useApprovalPanels().entries.filter(
-		(entry) => entry.resolution === undefined
+	const pendingEntries = useApprovalPanels().entries.filter((entry) =>
+		isUndefined(entry.resolution)
 	);
 	const pendingEntry = pendingEntries[0];
-	if (pendingEntry === undefined) {
+	if (isUndefined(pendingEntry)) {
 		return null;
 	}
 	return (
@@ -143,26 +144,26 @@ function ApprovalResolvedLine({
 }) {
 	const { colors } = useTheme();
 	const resolution = entry.resolution;
-	if (resolution === undefined) {
+	if (isUndefined(resolution)) {
 		return null;
 	}
 	const isDenied =
 		resolution.outcome === "aborted" || resolution.outcome === "rejected";
-	const sanitizedErrorText =
-		errorText === undefined ? "" : sanitizeText(errorText);
+	const sanitizedErrorText = isUndefined(errorText)
+		? ""
+		: sanitizeText(errorText);
 	// The gated resource already renders on the tool row above, so the audit
 	// line strips the trailing `: resource` identity from the reason instead
 	// of repeating it. Feedback and non-gate wording stay untouched.
 	const identityResource = entry.request.identity.find(
 		(row) => row.label === "resource"
 	)?.value;
-	const displayErrorText =
-		identityResource === undefined
-			? sanitizedErrorText
-			: sanitizedErrorText.replace(`: ${identityResource}`, "");
+	const displayErrorText = isUndefined(identityResource)
+		? sanitizedErrorText
+		: sanitizedErrorText.replace(`: ${identityResource}`, "");
 	const denialReason = displayErrorText || resolution.feedback;
 	const displayLabel =
-		isDenied && denialReason !== undefined
+		isDenied && !isUndefined(denialReason)
 			? denialReason
 			: APPROVAL_RESOLUTION_LABELS[resolution.outcome];
 	return (
@@ -170,9 +171,9 @@ function ApprovalResolvedLine({
 			<text fg={isDenied ? colors.error : colors.textMuted}>
 				{isDenied ? "✗ " : "✓ "}
 				{displayLabel}
-				{!isDenied && resolution.feedback !== undefined ? (
+				{isDenied || isUndefined(resolution.feedback) ? null : (
 					<span fg={colors.textMuted}>{` — ${resolution.feedback}`}</span>
-				) : null}
+				)}
 			</text>
 		</box>
 	);
@@ -279,7 +280,7 @@ function ApprovalPendingPanel({
 
 	const confirm = (index: number) => {
 		const option = options[index];
-		if (option === undefined) {
+		if (isUndefined(option)) {
 			return;
 		}
 		if (option.kind === "abort") {

@@ -7,6 +7,7 @@ import {
 	normalizeChatModelSelection,
 	normalizeModelVariant,
 } from "@wincode/ai/models";
+import { getErrorMessage, isNull, isUndefined } from "@wincode/runtime-utils";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
 	type AgentRegistry,
@@ -137,8 +138,8 @@ export function SessionView({
 	const { isTopLayer } = useKeyboardLayer();
 	const { entries: approvalEntries, resolve: resolveApprovalPanel } =
 		useApprovalPanels();
-	const hasPendingApproval = approvalEntries.some(
-		(entry) => entry.resolution === undefined
+	const hasPendingApproval = approvalEntries.some((entry) =>
+		isUndefined(entry.resolution)
 	);
 	const submittedInitialMessageRef = useRef<SessionMessageId | null>(null);
 	const interruptResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -147,7 +148,7 @@ export function SessionView({
 	const interruptArmedRef = useRef(false);
 	const [isInterruptArmed, setIsInterruptArmed] = useState(false);
 	const [isStartingInitialTurn, setIsStartingInitialTurn] = useState(
-		initialSubmission !== undefined
+		!isUndefined(initialSubmission)
 	);
 	const [restoredMessages, setRestoredMessages] = useState<
 		SessionMessage[] | null
@@ -183,7 +184,7 @@ export function SessionView({
 		[initialMessages]
 	);
 	const restoredConfig = useMemo(() => {
-		if (registry === null) {
+		if (isNull(registry)) {
 			return null;
 		}
 		return resolveSessionSelection({
@@ -196,7 +197,7 @@ export function SessionView({
 	const isPromptConfigRestored = restoredMessages === initialMessages;
 
 	useEffect(() => {
-		if (registry === null) {
+		if (isNull(registry)) {
 			return;
 		}
 		if (!restoredConfig) {
@@ -211,7 +212,7 @@ export function SessionView({
 		setVariant(restoredConfig.variant);
 		setRestoredMessages(initialMessages);
 		if (
-			restoredConfig.persistedAgent !== undefined &&
+			!isUndefined(restoredConfig.persistedAgent) &&
 			restoredConfig.agent !== restoredConfig.persistedAgent
 		) {
 			show({
@@ -322,7 +323,7 @@ export function SessionView({
 		if (
 			isTurnBusy ||
 			isCompacting ||
-			registry === null ||
+			isNull(registry) ||
 			!isPromptConfigRestored
 		) {
 			show({
@@ -342,7 +343,7 @@ export function SessionView({
 			return true;
 		} catch (error) {
 			show({
-				message: error instanceof Error ? error.message : "Compaction failed.",
+				message: getErrorMessage(error, "Compaction failed."),
 				variant: "error",
 			});
 			return false;
@@ -355,7 +356,7 @@ export function SessionView({
 	const submitMessage = async (submission: ChatPromptSubmission) => {
 		const { files, text, skill } = submission;
 		const userText = text.trim();
-		if (text.trim().length === 0 && files.length === 0 && skill === undefined) {
+		if (text.trim().length === 0 && files.length === 0 && isUndefined(skill)) {
 			return false;
 		}
 		if (!skill && files.length === 0) {
@@ -371,7 +372,7 @@ export function SessionView({
 		if (
 			isTurnBusy ||
 			session.getState().status !== "ready" ||
-			registry === null ||
+			isNull(registry) ||
 			!isPromptConfigRestored
 		) {
 			return false;
@@ -417,7 +418,7 @@ export function SessionView({
 		if (
 			isTurnBusy ||
 			isCompacting ||
-			registry === null ||
+			isNull(registry) ||
 			!isPromptConfigRestored
 		) {
 			return;
@@ -485,7 +486,7 @@ export function SessionView({
 	}, [compactions, show]);
 
 	useEffect(() => {
-		if (catalogDiagnostic !== null) {
+		if (!isNull(catalogDiagnostic)) {
 			show({ message: catalogDiagnostic, variant: "error" });
 		}
 	}, [catalogDiagnostic, show]);
@@ -496,19 +497,19 @@ export function SessionView({
 			? initialMessages.find(({ id }) => id === submission.messageId)
 			: undefined;
 
-		if (submission === undefined) {
-			if (submittedInitialMessageRef.current === null) {
+		if (isUndefined(submission)) {
+			if (isNull(submittedInitialMessageRef.current)) {
 				setIsStartingInitialTurn(false);
 			}
 			return;
 		}
 
-		if (initialMessage === undefined || initialMessage.role !== "user") {
+		if (isUndefined(initialMessage) || initialMessage.role !== "user") {
 			setIsStartingInitialTurn(false);
 			return;
 		}
 
-		if (registry === null || !isPromptConfigRestored) {
+		if (isNull(registry) || !isPromptConfigRestored) {
 			return;
 		}
 
@@ -547,10 +548,7 @@ export function SessionView({
 
 		startInitialTurn().catch((error: unknown) => {
 			show({
-				message:
-					error instanceof Error
-						? error.message
-						: "Could not start the Agent Turn.",
+				message: getErrorMessage(error, "Could not start the Agent Turn."),
 				variant: "error",
 			});
 		});
