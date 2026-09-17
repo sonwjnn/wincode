@@ -33,7 +33,6 @@
   },
   "dependencies": {
     "@wincode/runtime-utils": "workspace:*",
-    "es-toolkit": "catalog:",
     "type-fest": "catalog:",
     "zod": "catalog:"
   },

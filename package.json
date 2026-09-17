@@ -14,8 +14,7 @@
       "@types/react-dom": "^19.2.3",
       "react": "^19.2.5",
       "@tanstack/react-router": "^1.168.22",
-      "type-fest": "^5.9.0",
-      "es-toolkit": "^1.52.0"
+      "type-fest": "^5.9.0"
     }
   },
   "overrides": {

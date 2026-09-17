@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { omitUndefined, pickTruthy } from "../src/index";
+import { omitBy, omitUndefined, pickBy, pickTruthy } from "../src/index";
 
 describe("omitUndefined", () => {
 	test("drops keys whose value is undefined", () => {
@@ -73,6 +73,44 @@ describe("pickTruthy", () => {
 		const input: { kept: number; dropped: number } = { kept: 1, dropped: 0 };
 
 		const result = pickTruthy(input);
+
+		expect(Object.keys(input)).toEqual(["kept", "dropped"]);
+		expect(result).not.toBe(input);
+	});
+});
+
+describe("omitBy", () => {
+	test("drops the keys the predicate accepts and keeps the rest", () => {
+		const result = omitBy(
+			{ drop: "x", keep: 1, also: 2 },
+			(entry) => typeof entry === "string"
+		);
+
+		expect(result).toStrictEqual({ keep: 1, also: 2 });
+	});
+
+	test("hands each key to the predicate", () => {
+		const visited: string[] = [];
+		omitBy({ first: 1, second: 2 }, (_entry, key) => {
+			visited.push(key);
+			return false;
+		});
+
+		expect(visited).toEqual(["first", "second"]);
+	});
+});
+
+describe("pickBy", () => {
+	test("keeps only the keys the predicate accepts", () => {
+		expect(
+			pickBy({ number: 1, text: "x" }, (entry) => typeof entry === "string")
+		).toStrictEqual({ text: "x" });
+	});
+
+	test("does not mutate its input", () => {
+		const input: { kept: number; dropped: number } = { kept: 1, dropped: 2 };
+
+		const result = pickBy(input, (entry) => entry === 1);
 
 		expect(Object.keys(input)).toEqual(["kept", "dropped"]);
 		expect(result).not.toBe(input);
