@@ -6,7 +6,7 @@ import {
 } from "@wincode/ai/models";
 import type { ModelMetadataEntry } from "@wincode/ai/models-dev";
 import { omitUndefined } from "@wincode/runtime-utils";
-import { omitBy } from "es-toolkit/object";
+import { pickBy } from "es-toolkit/object";
 
 /**
  * A runtime override table over the generated catalog metadata. Both sides are
@@ -62,7 +62,7 @@ const mergeModelLimits = (
 	}
 	return {
 		context: live.context ?? catalog.context,
-		...omitBy({ output: live.output ?? catalog.output }, (value) => !value),
+		...pickBy({ output: live.output ?? catalog.output }, Boolean),
 	};
 };
 
@@ -91,7 +91,7 @@ export const resolveModelMetadata = (
 	const merged: ModelMetadataEntry = {
 		...catalog,
 		...live,
-		...omitBy({ cost, limits, thinking }, (value) => !value),
+		...pickBy({ cost, limits, thinking }, Boolean),
 	};
 	return Object.keys(merged).length === 0 ? null : merged;
 };

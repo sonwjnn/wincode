@@ -41,7 +41,7 @@ import {
 	omitUndefined,
 } from "@wincode/runtime-utils";
 import { randomUUIDv7 } from "bun";
-import { omitBy } from "es-toolkit/object";
+import { pickBy } from "es-toolkit/object";
 import type { UnknownRecord } from "type-fest";
 import type {
 	SessionMessage,
@@ -266,7 +266,7 @@ const metadataForRecord = (
 	}
 	const variant = metadata?.variant ?? record.model.variant;
 	const parsed = sessionMessageMetadataSchema.safeParse({
-		...omitBy({ agent: metadata?.agent ?? record.agentId }, (value) => !value),
+		...pickBy({ agent: metadata?.agent ?? record.agentId }, Boolean),
 		...omitUndefined({
 			model,
 			responseTimeMs: metadata?.responseTimeMs,

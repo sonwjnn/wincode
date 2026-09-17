@@ -24,7 +24,7 @@ import {
 } from "@wincode/runtime-utils";
 import { randomUUIDv7 } from "bun";
 import { and, asc, desc, eq } from "drizzle-orm";
-import { omitBy } from "es-toolkit/object";
+import { pickBy } from "es-toolkit/object";
 import { z } from "zod";
 import {
 	type CompactionId,
@@ -175,9 +175,9 @@ const writePromptHistory = (
 			.values({
 				createdAt: new Date(),
 				entryJson: serializeJson({
-					...omitBy(
+					...pickBy(
 						{ fileTokens: entry.fileTokens, pastedText: entry.pastedText },
-						(value) => !value
+						Boolean
 					),
 					files: entry.files,
 				}),
@@ -279,12 +279,12 @@ export const createPromptHistory = (
 					tx.update(promptHistory)
 						.set({
 							entryJson: serializeJson({
-								...omitBy(
+								...pickBy(
 									{
 										fileTokens: entry.fileTokens,
 										pastedText: entry.pastedText,
 									},
-									(value) => !value
+									Boolean
 								),
 								files: entry.files,
 							}),
@@ -403,7 +403,7 @@ const toSession = (row: SessionRow): Session => {
 		...omitUndefined({ model: parsedModel?.data }),
 		pinned: row.pinned,
 		title: row.title ?? UNTITLED_SESSION_TITLE,
-		...omitBy({ variant: row.variant ?? undefined }, (value) => !value),
+		...pickBy({ variant: row.variant ?? undefined }, Boolean),
 	};
 };
 const toSessionRecordModel = (

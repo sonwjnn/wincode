@@ -6,7 +6,7 @@ import {
 	isUndefined,
 	omitUndefined,
 } from "@wincode/runtime-utils";
-import { omitBy } from "es-toolkit/object";
+import { pickBy } from "es-toolkit/object";
 import {
 	createWorkspaceSandbox,
 	defaultWorkspaceSandbox,
@@ -822,6 +822,6 @@ export const runReadTool = async (
 	return {
 		content: formattedContent.content,
 		path: target.path,
-		...omitBy({ truncated: formattedContent.truncated }, (value) => !value),
+		...pickBy({ truncated: formattedContent.truncated }, Boolean),
 	};
 };

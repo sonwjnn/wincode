@@ -9,7 +9,7 @@ import {
 	omitUndefined,
 } from "@wincode/runtime-utils";
 import { randomUUIDv7 } from "bun";
-import { omitBy } from "es-toolkit/object";
+import { pickBy } from "es-toolkit/object";
 import {
 	type CompactionId,
 	type SessionId,
@@ -935,7 +935,7 @@ const appendInputFor = ({
 		priorCompactionId: previous?.id,
 		sessionId: session.sessionId,
 		summarizationModel: model,
-		...omitBy({ summarizationUsage: summarization.usage }, (value) => !value),
+		...pickBy({ summarizationUsage: summarization.usage }, Boolean),
 		summary,
 	};
 };

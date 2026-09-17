@@ -27,7 +27,7 @@ import {
 	isString,
 	isUndefined,
 } from "@wincode/runtime-utils";
-import { omitBy } from "es-toolkit/object";
+import { pickBy } from "es-toolkit/object";
 import type { Except } from "type-fest";
 import { z } from "zod";
 import {
@@ -480,7 +480,7 @@ const resolveConfiguredAgentEntry = (
 			...availability,
 			isConfigured: true,
 			isSelectable: definition.data.role !== "subagent" && !modelRetired,
-			...omitBy({ model }, (value) => !value),
+			...pickBy({ model }, Boolean),
 			resourceProfile:
 				definition.data.resource_limits ?? defaultResourceProfile,
 			requiresManualApproval: false,
@@ -635,7 +635,7 @@ const resolveBuiltInAgent = (
 		...shippedAgent,
 		...validatedPatch,
 		...availability,
-		...omitBy({ model }, (value) => !value),
+		...pickBy({ model }, Boolean),
 		...(variant?.success ? { variant: variant.data } : {}),
 		isConfigured: false,
 		isSelectable: !modelRetired,

@@ -6,7 +6,7 @@ import {
 	isNonEmptyString,
 	isObjectLike,
 } from "@wincode/runtime-utils";
-import { omitBy } from "es-toolkit/object";
+import { pickBy } from "es-toolkit/object";
 import { useEffect, useMemo, useState } from "react";
 import {
 	rebuildActiveMessages,
@@ -105,10 +105,7 @@ function SessionRoute() {
 				setActiveMessages(rebuildActiveMessages(active, latestCompaction));
 				setCompactions(loadedCompactions);
 				setSessionConfig(
-					omitBy(
-						{ model: session.model, variant: session.variant },
-						(value) => !value
-					)
+					pickBy({ model: session.model, variant: session.variant }, Boolean)
 				);
 				setSessionTitle(session.title);
 			})

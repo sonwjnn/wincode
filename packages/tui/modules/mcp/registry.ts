@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { AgentId } from "@wincode/agent-core";
 import { isUndefined } from "@wincode/runtime-utils";
-import { omitBy } from "es-toolkit/object";
+import { pickBy } from "es-toolkit/object";
 import type { JsonObject } from "type-fest";
 import {
 	composePermissionDecisions,
@@ -310,13 +310,13 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			env,
 			refresh,
 			workspace,
-			...omitBy(
+			...pickBy(
 				{
 					configRoot: input.configRoot,
 					configStore: input.configStore,
 					homeRoot: input.homeRoot,
 				},
-				(value) => !value
+				Boolean
 			),
 		});
 
