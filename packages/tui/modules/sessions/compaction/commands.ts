@@ -12,6 +12,3 @@ export const parseCompactCommand = (text: string): CompactCommand | null => {
 	const focus = match[1]?.trim();
 	return focus ? { focus } : {};
 };
-
-export const isSettingsCommand = (text: string): boolean =>
-	text.trim() === "/settings";

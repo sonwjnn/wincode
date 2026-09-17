@@ -1,4 +1,4 @@
-export { isSettingsCommand, parseCompactCommand } from "./commands";
+export { parseCompactCommand } from "./commands";
 export type {
 	CompactSessionInput,
 	CompactSessionResult,

@@ -7,13 +7,15 @@ export type SkillCommandSpec = BaseSpec & { kind: "skill" };
 
 export type CommandItem = CommandSpec | CustomCommandSpec | SkillCommandSpec;
 
+const skillLabel = (name: string): string => `${SKILL_NAMESPACE_PREFIX}${name}`;
+
 /**
  * The row label. Only the leading `/` is dropped: Built-in and Custom Commands
  * show their bare name, Skills keep their namespace so a merged list stays
  * unambiguous.
  */
 export const getCommandLabel = (item: CommandItem): string =>
-	item.kind === "skill" ? `${SKILL_NAMESPACE_PREFIX}${item.name}` : item.name;
+	item.kind === "skill" ? skillLabel(item.name) : item.name;
 
 /** What selecting the row writes into the chat input. */
 export const getCommandInvocation = (item: CommandItem): string =>
@@ -27,7 +29,7 @@ export const createSkillCommandSpecs = (
 			description: skill.description,
 			kind: "skill" as const,
 			name: skill.name,
-			value: `/${SKILL_NAMESPACE_PREFIX}${skill.name}`,
+			value: `/${skillLabel(skill.name)}`,
 		}))
 		.toSorted((left, right) => left.name.localeCompare(right.name));
 

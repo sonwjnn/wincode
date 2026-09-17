@@ -28,7 +28,7 @@ export type TrackedPastedText = {
 };
 
 /** Expand extmark-backed markers without replacing literal lookalikes. */
-export const expandTrackedPastedText = (
+const expandTrackedPastedText = (
 	text: string,
 	markers: readonly TrackedPastedText[]
 ): string =>
