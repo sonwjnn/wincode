@@ -237,7 +237,7 @@ const buildTerminalMessageMetadata = ({
 		...(base.metadata ?? {}),
 		agent: base.metadata?.agent ?? agent,
 		interrupted: event.type === "agent-turn-interrupted",
-		...omitUndefined({ terminalOutcome }),
+		...omitUndefined({ terminalOutcome, usage: usage ?? undefined }),
 		...(isUndefined(model) ? {} : { model: base.metadata?.model ?? model }),
 		...(isUndefined(variant)
 			? {}
@@ -245,7 +245,6 @@ const buildTerminalMessageMetadata = ({
 		...(isNull(startedAt)
 			? {}
 			: { responseTimeMs: Math.max(0, Date.now() - startedAt) }),
-		...omitUndefined({ usage: usage ?? undefined }),
 	};
 };
 

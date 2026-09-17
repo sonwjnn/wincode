@@ -919,6 +919,8 @@ const appendInputFor = ({
 		throughMessageUiId: through.id,
 		...omitUndefined({
 			firstKeptAssistantPartIndex: cutPoint.firstKeptAssistantPartIndex,
+			focus: normalizedFocus,
+			summarizationVariant: variant,
 		}),
 		estimatedTokensAfter: estimateTokens([
 			createCompactionSummaryMessage({ id: entryId, summary }),
@@ -927,10 +929,6 @@ const appendInputFor = ({
 		tokensBefore: estimateSessionContextTokens(session.messages, estimateTokens)
 			.tokens,
 		trigger,
-		...omitUndefined({
-			focus: normalizedFocus,
-			summarizationVariant: variant,
-		}),
 		id: entryId,
 		priorCompactionId: previous?.id,
 		sessionId: session.sessionId,

@@ -675,12 +675,10 @@ const failureRecordInput = (execution: SessionExecution) => ({
 	...omitUndefined({
 		delegation: execution.parent,
 		variant: execution.variant,
+		sourceUserMessageId: execution.sourceUserMessageId ?? undefined,
 	}),
 	model: execution.model,
 	turnId: execution.turnId,
-	...omitUndefined({
-		sourceUserMessageId: execution.sourceUserMessageId ?? undefined,
-	}),
 });
 
 /**
