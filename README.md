@@ -138,7 +138,7 @@ Detailed configuration references:
 
 ### Skills
 
-A Skill is a directory containing a `SKILL.md` file with `name` and `description` frontmatter. Put project Skills in `.wincode/skills/<skill-name>/SKILL.md`, select one with `/skills`, or invoke it directly with `/skill-name arguments`. Agents can also activate available Skills when a task requires them.
+A Skill is a directory containing a `SKILL.md` file with `name` and `description` frontmatter. Put project Skills in `.wincode/skills/<skill-name>/SKILL.md` and invoke one with `/skill:name arguments`; Skill rows appear as `skill:name` in the `/` command list. Agents can also activate available Skills when a task requires them.
 
 ### Custom commands
 
@@ -160,7 +160,6 @@ Type `/` in the chat input to browse Built-in Commands, Custom Commands, and Ski
 | `/agents` | Switch agents and inspect agent configuration |
 | `/models` | Select a model |
 | `/variants` | Select a model variant |
-| `/skills` | Browse and insert available Skills |
 | `/sessions` | Browse, rename, pin, or delete local sessions |
 | `/themes` | Change the terminal color theme |
 | `/connect` | Connect a provider account or API key |

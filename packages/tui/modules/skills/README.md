@@ -20,8 +20,12 @@ activation live in `@wincode/skills`; Node/Bun discovery and content loading liv
 
 - `parseSkillFile(source)` — parse frontmatter and body; throws `SkillValidationError` on invalid
   input.
-- `parseSkillInvocation(input)` — parse `/skill-name arguments` into `{ name, arguments }`, or
+- `parseSkillInvocation(input)` — parse `/skill:name arguments` into `{ name, arguments }`, or
   return `null`.
+- `hasSkillNamespace(input)` — whether the input claims the reserved `skill:` namespace, valid or
+  not; the CLI reports those lines instead of sending them as prompt text.
+- `SKILL_NAMESPACE_PREFIX` — the reserved namespace (`skill:`) a Skill row renders and a typed
+  invocation must carry.
 - `buildSkillCatalog(skills, decideSkill)` — filter denied Skills, validate hard limits, and build
   the catalog (including the 24 KiB tool-description budget and diagnostics).
 - `buildSkillToolDefinition(catalog)` — the native `skill` tool definition sent to the model loop,
@@ -85,9 +89,12 @@ The remaining file content is the skill body.
 
 ## Invocation and transport
 
-`/skills` opens the picker. Selecting a skill creates a request-scoped skill invocation;
-`/skill-name arguments` parses the named skill and raw arguments for that request. The selected
-skill body and arguments propagate through both local and hosted chat execution paths.
+Skills appear in the `/` command list as `skill:<name>` rows; selecting one writes
+`/skill:<name> ` into the chat input, and `/skill:name arguments` parses the named skill and raw
+arguments for that request. A bare `/name` is never a Skill invocation, so a Custom Command of the
+same name stays reachable. The selected skill body and arguments propagate through both local and
+hosted chat execution paths. Text that claims the `skill:` namespace but names no discovered Skill
+(or is malformed) is reported as an input error and never sent as a prompt.
 
 ## Skill Activation
 
@@ -95,7 +102,7 @@ A native `skill` tool is exposed to Primary Agents and Subagents whenever at lea
 is not denied. Its description carries the permission-filtered `<available_skills>` catalog; the
 Agent selects by exact name and the CLI executes the load — for local and hosted models alike.
 
-- Explicit `/skill-name arguments` is resolved and authorized before the first model call and
+- Explicit `/skill:name arguments` is resolved and authorized before the first model call and
   consumes one activation slot; rejection preserves the input and sends no prompt.
 - An execution turn may activate at most three distinct Skills. Re-loading an active Skill is
   idempotent; rejected or failed loads consume no slot; a fourth distinct load returns a

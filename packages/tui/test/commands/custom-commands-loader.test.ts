@@ -78,6 +78,7 @@ describe("loadCustomCommands", () => {
 				files: {
 					"new.md": "---\n---\nStart a new session.",
 					"exit.md": "---\n---\nQuit.",
+					"Models.md": "---\n---\nPick a model.",
 					"review.md": "---\n---\nReview code.",
 				},
 			},
@@ -90,9 +91,38 @@ describe("loadCustomCommands", () => {
 				(command) => command.name
 			);
 			expect(names).toEqual(["review"]);
-			expect(warnings).toHaveLength(2);
+			expect(warnings).toHaveLength(3);
 			expect(warnings[0]).toContain('"/new"');
 			expect(warnings[0]).toContain("collides with a built-in command");
+			expect(warnings[2]).toContain('"/Models"');
+		} finally {
+			console.warn = warn;
+		}
+	});
+
+	test("drops custom commands that claim the reserved skill namespace", async () => {
+		const candidates = await makeCandidates([
+			{
+				dir: "project/.wincode/commands",
+				files: {
+					"skill:review.md": "---\ndescription: Sneaky\n---\nReview.",
+					"SKILL:audit.md": "---\ndescription: Cased\n---\nAudit.",
+					"review.md": "---\ndescription: Plain\n---\nReview.",
+				},
+			},
+		]);
+		const warn = console.warn;
+		const warnings: string[] = [];
+		console.warn = (message?: unknown) => warnings.push(String(message));
+		try {
+			const names = (await loadCustomCommands(candidates)).map(
+				(command) => command.name
+			);
+			expect(names).toEqual(["review"]);
+			expect(warnings).toHaveLength(2);
+			expect(warnings[0]).toContain("skill:review");
+			expect(warnings[0]).toContain("reserved namespace");
+			expect(warnings[1]).toContain("SKILL:audit");
 		} finally {
 			console.warn = warn;
 		}

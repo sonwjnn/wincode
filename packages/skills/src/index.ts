@@ -38,7 +38,11 @@ export {
 	skillToolInputSchema,
 } from "./context";
 export { parseSkillFile, SkillValidationError } from "./frontmatter";
-export { parseSkillInvocation } from "./invocation";
+export {
+	hasSkillNamespace,
+	parseSkillInvocation,
+	SKILL_NAMESPACE_PREFIX,
+} from "./invocation";
 export type {
 	Skill,
 	SkillActivation,

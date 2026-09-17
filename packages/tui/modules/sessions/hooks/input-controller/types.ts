@@ -1,4 +1,5 @@
 import type { Skill } from "@wincode/skills";
+import type { CommandItem } from "@/modules/commands/command-item";
 import type { CommandSpec } from "@/modules/commands/commands";
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import type { FileMentionOption } from "@/modules/file-mentions";
@@ -7,11 +8,14 @@ import type { ChatPromptSubmission } from "../../utils";
 import type { PromptHistoryEntry } from "./history";
 import type { SubmitSnapshot } from "./submit";
 
-export type CommandItem = CommandSpec | CustomCommandSpec;
-
 export type InputOverlayState =
 	| { items: []; kind: null; selectedIndex: -1 }
-	| { items: CommandItem[]; kind: "command"; selectedIndex: number }
+	| {
+			items: CommandItem[];
+			kind: "command";
+			labelWidth: number;
+			selectedIndex: number;
+	  }
 	| { items: FileMentionOption[]; kind: "file-mention"; selectedIndex: number };
 
 export type ChatInputControllerState = {

@@ -11,11 +11,11 @@ Built-in Commands in the `/` overlay.
 	children are candidates; subfolders are ignored.
 2. **Load** — `loadCustomCommands` parses each file (YAML frontmatter with an
    optional `description`; the body is the template), deduplicates by name with
-   project winning over global, and drops commands that collide with Built-in
-   Commands. Invalid files are skipped best-effort.
-3. **Filter** — `filterCustomCommands` prefix-matches the command name against
-   the `/` query (queries cannot carry arguments; the slash trigger ignores
-   text after whitespace).
+   project winning over global, and drops commands whose name matches a Built-in
+   Command (case-insensitively) or claims the reserved `skill:` namespace.
+   Invalid files are skipped best-effort.
+3. **Matching** — Custom Command rows join Built-in Commands and Skills in one overlay
+   list and are matched by `filterCommandItems` (see `modules/commands`).
 4. **Expand** — `expandCustomCommandTemplate` substitutes `$ARGUMENTS`,
    `$1..$n` (positional, split on whitespace), and `$$` (literal dollar).
    Unknown `$TOKENS` are left untouched. Arguments come from the invocation
@@ -25,8 +25,9 @@ Built-in Commands in the `/` overlay.
 6. **Execute** — selecting a custom command in the input controller inserts
    `/<name> ` into the textarea. On submit the template is expanded into the
    sent prompt, mirroring the skills flow; the visible invocation stays in
-   history. If a skill and a custom command both match the text, the skill
-   wins. There is no adapter dispatch for custom commands.
+   history. A bare `/name` always resolves to the Custom Command: Skills are only
+   reachable through `/skill:name`. There is no adapter dispatch for custom
+   commands.
 
 ## Public API
 
@@ -37,7 +38,6 @@ Built-in Commands in the `/` overlay.
 - `parseCustomCommandFile`, `CustomCommandValidationError` (`parse.ts`)
 - `parseCustomCommandInvocation`, `CustomCommandInvocation` (`invocation.ts`)
 - `expandCustomCommandTemplate` (`expand.ts`)
-- `filterCustomCommands` (`filter.ts`)
 - Types: `CustomCommandSpec`, `CustomCommandCandidate` (`types.ts`)
 
 ## Dependencies

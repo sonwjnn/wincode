@@ -22,11 +22,7 @@ import type { SessionId } from "@/shared/identifiers";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
-import {
-	isSettingsCommand,
-	parseCompactCommand,
-	type SessionCompaction,
-} from "../../compaction";
+import type { SessionCompaction } from "../../compaction";
 import { isSessionBusy } from "../../engine/utils";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
 import { useSessionEngine } from "../../hooks/use-session-engine";
@@ -327,16 +323,6 @@ export function SessionView({
 		const userText = text.trim();
 		if (text.trim().length === 0 && files.length === 0 && isUndefined(skill)) {
 			return false;
-		}
-		if (!skill && files.length === 0) {
-			if (isSettingsCommand(userText)) {
-				openSettings();
-				return true;
-			}
-			const compactCommand = parseCompactCommand(userText);
-			if (compactCommand) {
-				return executeCompactionCommand(compactCommand.focus);
-			}
 		}
 		if (isBusy || isNull(registry) || !isPromptConfigRestored) {
 			return false;

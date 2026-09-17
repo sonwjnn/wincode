@@ -46,36 +46,51 @@ const createDependencies = (
 describe("resolveSkillPrompt", () => {
 	test("resolves recognized skill invocations to request-scoped context", async () => {
 		await expect(
-			resolveSkillPrompt("/review focus on auth", async () => [TEST_SKILL])
+			resolveSkillPrompt("/skill:review focus on auth", async () => [
+				TEST_SKILL,
+			])
 		).resolves.toEqual({
 			skill: {
 				arguments: "focus on auth",
 				instructions: TEST_SKILL.body,
 				name: "review",
 			},
-			text: "/review focus on auth",
+			text: "/skill:review focus on auth",
 		});
 	});
 
 	test("accepts recognized zero-argument skill invocations", async () => {
 		await expect(
-			resolveSkillPrompt("/review", async () => [TEST_SKILL])
+			resolveSkillPrompt("/skill:review", async () => [TEST_SKILL])
 		).resolves.toEqual({
 			skill: {
 				arguments: "",
 				instructions: TEST_SKILL.body,
 				name: "review",
 			},
-			text: "/review",
+			text: "/skill:review",
+		});
+	});
+
+	test("resolves the namespace and name case-insensitively", async () => {
+		await expect(
+			resolveSkillPrompt("/SKILL:Review", async () => [TEST_SKILL])
+		).resolves.toEqual({
+			skill: {
+				arguments: "",
+				instructions: TEST_SKILL.body,
+				name: "review",
+			},
+			text: "/SKILL:Review",
 		});
 	});
 
 	test("keeps visible pasted-text tokens while resolving expanded skill args", async () => {
 		await expect(
 			resolveSkillPrompt(
-				"/review expanded pasted content",
+				"/skill:review expanded pasted content",
 				async () => [TEST_SKILL],
-				"/review [Pasted Text 1]"
+				"/skill:review [Pasted Text 1]"
 			)
 		).resolves.toEqual({
 			skill: {
@@ -83,8 +98,14 @@ describe("resolveSkillPrompt", () => {
 				instructions: TEST_SKILL.body,
 				name: "review",
 			},
-			text: "/review [Pasted Text 1]",
+			text: "/skill:review [Pasted Text 1]",
 		});
+	});
+
+	test("leaves a bare skill name as plain prompt text", async () => {
+		await expect(
+			resolveSkillPrompt("/review focus on auth", async () => [TEST_SKILL])
+		).resolves.toEqual({ text: "/review focus on auth" });
 	});
 
 	test("submits unknown slash text normally", async () => {
@@ -96,7 +117,7 @@ describe("resolveSkillPrompt", () => {
 	test("surfaces skill discovery failures", async () => {
 		const failure = new Error("Skill directory is unavailable");
 		await expect(
-			resolveSkillPrompt("/review", async () => {
+			resolveSkillPrompt("/skill:review", async () => {
 				throw failure;
 			})
 		).rejects.toBe(failure);
@@ -149,7 +170,7 @@ describe("submitPrompt", () => {
 			skill?: unknown;
 			text: string;
 		}) => {
-			expect(submission.text).toBe("/review focus on auth");
+			expect(submission.text).toBe("/skill:review focus on auth");
 			expect(submission.skill).toEqual({
 				arguments: "focus on auth",
 				instructions: TEST_SKILL.body,
@@ -163,41 +184,86 @@ describe("submitPrompt", () => {
 				discoverSkills: async () => [TEST_SKILL],
 				onSubmit,
 			}),
-			{ ...emptySnapshot(), rawText: "/review focus on auth" }
+			{ ...emptySnapshot(), rawText: "/skill:review focus on auth" }
 		);
 
 		expect(accepted).toBe(true);
 	});
 
-	test("submits compact focus text without discovering skills or custom commands", async () => {
-		let skillDiscoveryCalls = 0;
-		let customCommandDiscoveryCalls = 0;
-		const seen: string[] = [];
+	test("reports an unknown skill instead of submitting its text", async () => {
+		const errors: string[] = [];
+		let calls = 0;
 		const accepted = await submitPrompt(
 			createDependencies({
-				discoverCustomCommands: async () => {
-					customCommandDiscoveryCalls += 1;
-					return [];
+				discoverSkills: async () => [TEST_SKILL],
+				onError: (message) => {
+					errors.push(message);
 				},
-				discoverSkills: async () => {
-					skillDiscoveryCalls += 1;
-					return [];
-				},
-				onSubmit: (submission) => {
-					seen.push(submission.text);
+				onSubmit: () => {
+					calls += 1;
 					return true;
 				},
 			}),
-			{
-				...emptySnapshot(),
-				rawText: "/compact preserve database decisions",
-			}
+			{ ...emptySnapshot(), rawText: "/skill:missing focus" }
 		);
 
-		expect(accepted).toBe(true);
-		expect(seen).toEqual(["/compact preserve database decisions"]);
-		expect(skillDiscoveryCalls).toBe(0);
-		expect(customCommandDiscoveryCalls).toBe(0);
+		expect(accepted).toBe(false);
+		expect(errors).toEqual(['Unknown skill "/skill:missing".']);
+		expect(calls).toBe(0);
+	});
+
+	test("reports a malformed skill invocation instead of submitting its text", async () => {
+		const errors: string[] = [];
+		let calls = 0;
+		const accepted = await submitPrompt(
+			createDependencies({
+				discoverSkills: async () => [TEST_SKILL],
+				onError: (message) => {
+					errors.push(message);
+				},
+				onSubmit: () => {
+					calls += 1;
+					return true;
+				},
+			}),
+			{ ...emptySnapshot(), rawText: "/skill: review" }
+		);
+
+		expect(accepted).toBe(false);
+		expect(errors).toEqual(['Invalid skill invocation "/skill: review".']);
+		expect(calls).toBe(0);
+	});
+
+	test("routes a bare name to the custom command and the namespace to the skill", async () => {
+		const customReview: CustomCommandSpec = {
+			description: "Local review template",
+			kind: "custom",
+			name: "review",
+			template: "Review with the project checklist.",
+			value: "/review",
+		};
+		const seen: string[] = [];
+		const dependencies = createDependencies({
+			discoverCustomCommands: async () => [customReview],
+			discoverSkills: async () => [TEST_SKILL],
+			onSubmit: (submission) => {
+				seen.push(submission.text);
+			},
+		});
+
+		await submitPrompt(dependencies, {
+			...emptySnapshot(),
+			rawText: "/review",
+		});
+		await submitPrompt(dependencies, {
+			...emptySnapshot(),
+			rawText: "/skill:review",
+		});
+
+		expect(seen).toEqual([
+			"Review with the project checklist.",
+			"/skill:review",
+		]);
 	});
 
 	test("expands tracked pasted-text tokens before transport", async () => {
@@ -321,7 +387,7 @@ describe("submitPrompt", () => {
 					return true;
 				},
 			}),
-			{ ...emptySnapshot(), rawText: "/review" }
+			{ ...emptySnapshot(), rawText: "/skill:review" }
 		);
 
 		expect(accepted).toBe(false);

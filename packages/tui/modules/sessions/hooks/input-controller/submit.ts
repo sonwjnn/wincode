@@ -1,11 +1,14 @@
 import { getErrorMessage, isNull } from "@wincode/runtime-utils";
 import type { Skill, SkillContext } from "@wincode/skills";
-import { parseSkillInvocation } from "@wincode/skills";
+import {
+	hasSkillNamespace,
+	parseSkillInvocation,
+	SKILL_NAMESPACE_PREFIX,
+} from "@wincode/skills";
 import { expandCustomCommandTemplate } from "@/modules/custom-commands/expand";
 import { parseCustomCommandInvocation } from "@/modules/custom-commands/invocation";
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import type { SessionFilePart } from "@/modules/sessions/message";
-import { isSettingsCommand, parseCompactCommand } from "../../compaction";
 import type { ChatPromptSubmission } from "../../utils";
 
 type SkillPrompt = {
@@ -23,7 +26,7 @@ export type TrackedPastedText = {
 };
 
 /** Expand extmark-backed markers without replacing literal lookalikes. */
-const expandTrackedPastedText = (
+export const expandTrackedPastedText = (
 	text: string,
 	markers: readonly TrackedPastedText[]
 ): string =>
@@ -63,8 +66,9 @@ export const resolveSkillPrompt = async (
 		return { text };
 	}
 
+	const requested = invocation.name.toLowerCase();
 	const skills = await discover();
-	const skill = skills.find(({ name }) => name === invocation.name);
+	const skill = skills.find(({ name }) => name.toLowerCase() === requested);
 	if (!skill) {
 		return { text };
 	}
@@ -101,8 +105,19 @@ export const resolveCustomCommandPrompt = async (
 	};
 };
 
-const isBuiltinCommand = (text: string): boolean =>
-	isSettingsCommand(text) || !isNull(parseCompactCommand(text));
+/**
+ * The reserved `skill:` namespace reports its own failures: text that claims it
+ * never reaches the transport as ordinary prompt text.
+ */
+const describeSkillInvocationFailure = (
+	text: string,
+	visibleText: string
+): string => {
+	const invocation = parseSkillInvocation(text);
+	return invocation
+		? `Unknown skill "/${SKILL_NAMESPACE_PREFIX}${invocation.name}".`
+		: `Invalid skill invocation "${visibleText.trim()}".`;
+};
 
 /**
  * Resolve skill/custom-command intent, or report the failure through onError
@@ -114,19 +129,20 @@ const resolvePromptOrReportError = async (
 	dependencies: SubmitDependencies
 ): Promise<SkillPrompt | null> => {
 	try {
-		if (isBuiltinCommand(text)) {
-			return { text };
-		}
-		const skillPrompt = await resolveSkillPrompt(
-			text,
-			dependencies.discoverSkills,
-			visibleText
-		);
-		if (skillPrompt.skill) {
-			return skillPrompt;
+		if (hasSkillNamespace(text)) {
+			const skillPrompt = await resolveSkillPrompt(
+				text,
+				dependencies.discoverSkills,
+				visibleText
+			);
+			if (skillPrompt.skill) {
+				return skillPrompt;
+			}
+			dependencies.onError(describeSkillInvocationFailure(text, visibleText));
+			return null;
 		}
 		return resolveCustomCommandPrompt(
-			skillPrompt.text,
+			text,
 			dependencies.discoverCustomCommands
 		);
 	} catch (error) {

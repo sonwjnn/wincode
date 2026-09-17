@@ -7,10 +7,14 @@ Slash-command registry and dispatch for the CLI chat input.
 1. **Registration** — `CommandSpec` is a discriminated union of commands kept in
    `COMMANDS[]`. Each spec carries a `value` (`/new`, `/exit`, …), a display name, a
    description, and a `kind` discriminator.
-2. **Filter** — `getFilteredCommands` fuzzy-matches specs against the user's `/` query in
-   the chat input overlay.
+2. **Items** — `command-item.ts` merges Built-in Commands, Custom Commands, and Skills into
+   one `CommandItem[]` for the `/` overlay. Rows render without the leading slash; only
+   Skill rows keep a namespace (`skill:review`) so the merged list stays unambiguous.
+   Query matching is a prefix match on the label, plus the bare name for namespaced rows.
 3. **Dispatch** — `createCommandExecutor` receives an `AdapterMap` at app bootstrap and
    returns a function that switches on `spec.kind`, delegating to the matching adapter.
+   The same executor serves overlay selection and typed Built-in Commands
+   (`findBuiltinCommand` in the input controller).
 4. **Adapters** — each adapter class captures a side‑effect contract:
   - `ExitAdapter` → `renderer.destroy()`
   - `NewAdapter` → TanStack Router navigation
@@ -18,20 +22,22 @@ Slash-command registry and dispatch for the CLI chat input.
   - `ModelsAdapter` / `VariantsAdapter` / `AgentsAdapter` → open model-picker /
     variant-picker / agent-picker dialogs
   - `SettingsAdapter` → opens the global Settings hub
-  - `SkillsAdapter` → opens skill picker and queues selected skill command
 5. **Overlay** — `CommandMenu` renders the matched suggestions below the input. Arrow keys
    highlight, Enter executes.
 
 ## Public API
 
-- `COMMANDS`, `CommandSpec`
-- `getFilteredCommands(query)`
+- `COMMANDS`, `CommandSpec`, `getVisibleCommands(options)`
+- `CommandItem`, `getCommandLabel`, `getCommandInvocation`, `createSkillCommandSpecs`,
+  `filterCommandItems`, `getCommandLabelWidth` (`command-item.ts`)
 - `createCommandExecutor(adapters)`, `AdapterMap`
 - Adapter classes: `ExitAdapter`, `ConnectAdapter`, `DialogAdapter`, `ModelsAdapter`,
-  `VariantsAdapter`, `AgentsAdapter`, `SettingsAdapter`, `SkillsAdapter`
+  `VariantsAdapter`, `AgentsAdapter`, `SettingsAdapter`
 
 ## Dependencies
 
-- No sibling-module imports. Adapters receive their concrete deps (router, dialog, theme,
-  toast) from `app/` composition in `use-app-command-executor`.
+- `modules/custom-commands/types` — the Custom Command spec that joins the item union.
+- `@wincode/skills` — the reserved `skill:` namespace and the Skill row label.
+- Adapters receive their concrete deps (router, dialog, theme, toast) from `app/`
+  composition in `use-app-command-executor`.
 - `shared/terminal/theme` — terminal colour context (command‑menu overlay)

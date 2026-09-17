@@ -164,9 +164,6 @@ export function ChatTextArea({
 	>(() => []);
 	const syncAttachmentsRef = useRef<() => ChatAttachment[]>(() => []);
 	const syncFileMentionExtmarksRef = useRef<() => void>(() => undefined);
-	const insertSkillCommandRef = useRef<(command: string) => void>(
-		() => undefined
-	);
 
 	const { isTopLayer, pop, push, setResponder } = useKeyboardLayer();
 	const { colors } = useTheme();
@@ -180,10 +177,7 @@ export function ChatTextArea({
 		() => discoverSkills(config),
 		[config]
 	);
-	const handleSelectedSkillCommand = useCallback((command: string) => {
-		insertSkillCommandRef.current(command);
-	}, []);
-	const { executeCommand } = useCommandExecutor(handleSelectedSkillCommand, {
+	const { executeCommand } = useCommandExecutor({
 		onCompact,
 		onOpenSettings,
 	});
@@ -313,27 +307,6 @@ export function ChatTextArea({
 		);
 		syncFileMentionExtmarksRef.current();
 	}, [actions, state.overlay.kind, syncPastedTexts]);
-	insertSkillCommandRef.current = (command) => {
-		const textarea = textAreaRef.current;
-		if (!textarea) {
-			return;
-		}
-		for (const attachment of attachmentsRef.current) {
-			textarea.extmarks.delete(attachment.extmarkId);
-		}
-		for (const pastedText of pastedTextRef.current) {
-			textarea.extmarks.delete(pastedText.extmarkId);
-		}
-		for (const id of fileMentionExtmarkIdsRef.current) {
-			textarea.extmarks.delete(id);
-		}
-		attachmentsRef.current = [];
-		pastedTextRef.current = [];
-		fileMentionExtmarkIdsRef.current = [];
-		textarea.setText(command);
-		textarea.cursorOffset = command.length;
-		handleTextareaContentChange();
-	};
 
 	const syncAttachments = useCallback(() => {
 		const textarea = textAreaRef.current;
@@ -934,7 +907,8 @@ export function ChatTextArea({
 						paddingY={0}
 					>
 						<CommandMenu
-							commands={state.overlay.items}
+							items={state.overlay.items}
+							labelWidth={state.overlay.labelWidth}
 							onExecute={actions.onItemExecute}
 							onScroll={actions.onItemScroll}
 							onSelect={actions.onItemSelect}

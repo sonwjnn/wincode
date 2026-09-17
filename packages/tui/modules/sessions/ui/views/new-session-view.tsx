@@ -17,7 +17,6 @@ import { useSettingsHubDialog } from "@/modules/settings";
 import { APP_VERSION } from "@/shared/app-info";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
-import { isSettingsCommand, parseCompactCommand } from "../../compaction";
 import { resolveLastUsedSessionSelection } from "../../selection";
 import { getSessionStore } from "../../storage/get-session-store";
 import { projectSessionRecords } from "../../storage/session-record";
@@ -126,19 +125,6 @@ export function NewSessionView() {
 	const handleSubmit = async (submission: ChatPromptSubmission) => {
 		const { files, skill, text } = submission;
 		const prompt = text.trim();
-		if (!skill && files.length === 0) {
-			if (isSettingsCommand(prompt)) {
-				openSettings();
-				return true;
-			}
-			if (parseCompactCommand(prompt)) {
-				show({
-					message: "Compaction is unavailable without an active session.",
-					variant: "error",
-				});
-				return false;
-			}
-		}
 		if (
 			!canSubmitHomePrompt({
 				defaultAgentId,
@@ -236,6 +222,13 @@ export function NewSessionView() {
 				>
 					<ChatTextArea
 						disabled={isCreatingSession}
+						onCompact={() => {
+							show({
+								message: "Compaction is unavailable without an active session.",
+								variant: "error",
+							});
+							return false;
+						}}
 						onOpenSettings={openSettings}
 						onSubmit={handleSubmit}
 						showCompactCommand={false}

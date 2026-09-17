@@ -6,5 +6,4 @@ export { ExitAdapter } from "./exit-adapter";
 export { ModelsAdapter } from "./models-adapter";
 export { NewAdapter } from "./new-adapter";
 export { SettingsAdapter } from "./settings-adapter";
-export { SkillsAdapter } from "./skills-adapter";
 export { VariantsAdapter } from "./variants-adapter";

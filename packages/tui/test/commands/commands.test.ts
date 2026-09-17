@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { COMMANDS } from "@/modules/commands/commands";
+import { COMMANDS, getVisibleCommands } from "@/modules/commands/commands";
+import { findBuiltinCommand } from "@/modules/sessions/hooks/input-controller/builtin-command";
 
 test("keeps built-in command kinds and dialog routing stable", () => {
 	const expected = [
@@ -9,7 +10,6 @@ test("keeps built-in command kinds and dialog routing stable", () => {
 		{ kind: "agents", value: "/agents" },
 		{ kind: "models", value: "/models" },
 		{ kind: "variants", value: "/variants" },
-		{ kind: "skills", value: "/skills" },
 		{ dialogKey: "sessions", kind: "dialog", value: "/sessions" },
 		{ dialogKey: "theme", kind: "dialog", value: "/themes" },
 		{ kind: "connect", value: "/connect" },
@@ -29,4 +29,34 @@ test("keeps built-in command kinds and dialog routing stable", () => {
 
 	expect(actual).toHaveLength(expected.length);
 	expect(actual).toEqual(expect.arrayContaining(expected));
+});
+
+test("suppresses popover rows for commands the view cannot run", () => {
+	expect(getVisibleCommands()).toHaveLength(COMMANDS.length);
+	expect(
+		getVisibleCommands({ hideCompact: true }).map((command) => command.kind)
+	).not.toContain("compact");
+	expect(
+		getVisibleCommands({ hideVariants: true }).map((command) => command.kind)
+	).not.toContain("variants");
+});
+
+test("resolves typed built-in commands by exact name", () => {
+	expect(findBuiltinCommand(" /models ")).toMatchObject({ kind: "models" });
+	expect(findBuiltinCommand("/MODELS")).toMatchObject({ kind: "models" });
+	expect(findBuiltinCommand("/settings")).toMatchObject({ kind: "settings" });
+	expect(findBuiltinCommand("/models now")).toBeNull();
+	expect(findBuiltinCommand("/settings now")).toBeNull();
+	expect(findBuiltinCommand("models")).toBeNull();
+	expect(findBuiltinCommand("/skill:review")).toBeNull();
+	expect(findBuiltinCommand("/unknown")).toBeNull();
+});
+
+test("carries the compaction focus into the typed command", () => {
+	expect(findBuiltinCommand("/compact preserve decisions")).toMatchObject({
+		focus: "preserve decisions",
+		kind: "compact",
+	});
+	expect(findBuiltinCommand("/compact")).toMatchObject({ kind: "compact" });
+	expect(findBuiltinCommand("/compactible")).toBeNull();
 });

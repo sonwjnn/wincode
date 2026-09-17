@@ -1,7 +1,14 @@
 import { isNull, isUndefined } from "@wincode/runtime-utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getFilteredCommands } from "@/modules/commands/filter-commands";
-import { filterCustomCommands } from "@/modules/custom-commands/filter";
+import {
+	type CommandItem,
+	createSkillCommandSpecs,
+	filterCommandItems,
+	getCommandInvocation,
+	getCommandLabelWidth,
+	type SkillCommandSpec,
+} from "@/modules/commands/command-item";
+import { getVisibleCommands } from "@/modules/commands/commands";
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import type { FileMentionOption } from "@/modules/file-mentions";
 import {
@@ -11,6 +18,7 @@ import {
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useLatest } from "@/shared/hooks/use-latest";
 import { getSessionStore } from "../../storage/get-session-store";
+import { findBuiltinCommand } from "./builtin-command";
 import { removeTriggerText } from "./escape-trigger";
 import {
 	decideDownAction,
@@ -23,12 +31,15 @@ import {
 	shouldRecordCtrlC,
 } from "./history";
 import { scrollCommandViewport } from "./scroll-command";
-import { type SubmitSnapshot, submitPrompt } from "./submit";
+import {
+	expandTrackedPastedText,
+	type SubmitSnapshot,
+	submitPrompt,
+} from "./submit";
 import { type ActiveTrigger, detectTrigger } from "./triggers";
 import type {
 	ChatInputController,
 	ChatInputControllerOptions,
-	CommandItem,
 	InputOverlayState,
 } from "./types";
 
@@ -65,6 +76,7 @@ export function useChatInputController({
 		FileMentionOption[]
 	>([]);
 	const [customCommands, setCustomCommands] = useState<CustomCommandSpec[]>([]);
+	const [skillItems, setSkillItems] = useState<SkillCommandSpec[]>([]);
 	const [textSyncRevision, setTextSyncRevision] = useState(0);
 	const [visibleStartIndex, setVisibleStartIndex] = useState(0);
 	const historyRef = useRef<PromptHistoryEntry[]>([]);
@@ -177,27 +189,49 @@ export function useChatInputController({
 				}
 			});
 
+		getSkillsFromOptions()
+			.then((skills) => {
+				if (active) {
+					setSkillItems(createSkillCommandSpecs(skills));
+				}
+			})
+			.catch(() => {
+				if (active) {
+					setSkillItems([]);
+				}
+			});
+
 		return () => {
 			active = false;
 		};
-	}, [getCustomCommandsFromOptions, getFileMentionOptionsFromOptions]);
+	}, [
+		getCustomCommandsFromOptions,
+		getFileMentionOptionsFromOptions,
+		getSkillsFromOptions,
+	]);
 
 	const commandQuery =
 		activeTrigger?.kind === "command" ? activeTrigger.query : undefined;
 	const fileMentionQuery =
 		activeTrigger?.kind === "file-mention" ? activeTrigger.query : undefined;
+	const commandItems = useMemo(
+		() => [
+			...getVisibleCommands({ hideCompact, hideVariants }),
+			...customCommands,
+			...skillItems,
+		],
+		[customCommands, hideCompact, hideVariants, skillItems]
+	);
 	const filteredCommands = useMemo(
 		() =>
 			isUndefined(commandQuery)
 				? []
-				: [
-						...getFilteredCommands(commandQuery, {
-							hideCompact,
-							hideVariants,
-						}),
-						...filterCustomCommands(customCommands, commandQuery),
-					],
-		[commandQuery, customCommands, hideCompact, hideVariants]
+				: filterCommandItems(commandItems, commandQuery),
+		[commandItems, commandQuery]
+	);
+	const commandLabelWidth = useMemo(
+		() => getCommandLabelWidth(commandItems),
+		[commandItems]
 	);
 	const filteredFileMentions = useMemo(
 		() =>
@@ -288,8 +322,8 @@ export function useChatInputController({
 				return;
 			}
 
-			if (command.kind === "custom") {
-				const invocation = `/${command.name} `;
+			if (command.kind === "custom" || command.kind === "skill") {
+				const invocation = `${getCommandInvocation(command)} `;
 				setProgrammaticText(invocation, invocation.length);
 				closeOverlay();
 				return;
@@ -376,16 +410,31 @@ export function useChatInputController({
 
 	const submit = useCallback(
 		async (snapshot: SubmitSnapshot): Promise<boolean> => {
-			const accepted = await submitPrompt(
-				{
-					disabled,
-					discoverCustomCommands: getCustomCommandsFromOptions,
-					discoverSkills: getSkillsFromOptions,
-					onError,
-					onSubmit: onSubmitRef.current,
-				},
-				snapshot
-			);
+			if (disabled) {
+				return false;
+			}
+
+			const command =
+				snapshot.files.length === 0
+					? findBuiltinCommand(
+							expandTrackedPastedText(
+								snapshot.rawText.trim(),
+								snapshot.pastedTexts
+							)
+						)
+					: null;
+			const accepted = isNull(command)
+				? await submitPrompt(
+						{
+							disabled,
+							discoverCustomCommands: getCustomCommandsFromOptions,
+							discoverSkills: getSkillsFromOptions,
+							onError,
+							onSubmit: onSubmitRef.current,
+						},
+						snapshot
+					)
+				: true;
 			if (!accepted) {
 				return false;
 			}
@@ -405,11 +454,15 @@ export function useChatInputController({
 			resetHistoryBaseline("");
 			setProgrammaticText("", null);
 			closeOverlay();
+			if (!isNull(command)) {
+				await executeCommand(command);
+			}
 			return true;
 		},
 		[
 			closeOverlay,
 			disabled,
+			executeCommand,
 			getCustomCommandsFromOptions,
 			getSkillsFromOptions,
 			onError,
@@ -605,7 +658,12 @@ export function useChatInputController({
 
 	let overlay: InputOverlayState = EMPTY_OVERLAY;
 	if (overlayKind === "command") {
-		overlay = { items: filteredCommands, kind: "command", selectedIndex };
+		overlay = {
+			items: filteredCommands,
+			kind: "command",
+			labelWidth: commandLabelWidth,
+			selectedIndex,
+		};
 	} else if (overlayKind === "file-mention") {
 		overlay = {
 			items: filteredFileMentions,

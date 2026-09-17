@@ -1,12 +1,18 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
+import { SKILL_NAMESPACE_PREFIX } from "@wincode/skills";
 import { COMMANDS } from "@/modules/commands/commands";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import { discoverCustomCommandCandidates } from "./discovery";
 import { parseCustomCommandFile } from "./parse";
 import type { CustomCommandCandidate, CustomCommandSpec } from "./types";
 
-const BUILTIN_NAMES = new Set(COMMANDS.map((command) => command.name));
+// Built-in names are matched without case: the overlay search and the typed
+// resolver both compare case-insensitively, so a differently-cased filename
+// would list a row the submission path can never reach.
+const BUILTIN_NAMES = new Set(
+	COMMANDS.map((command) => command.name.toLowerCase())
+);
 
 export async function loadCustomCommands(
 	candidates: CustomCommandCandidate[]
@@ -17,10 +23,17 @@ export async function loadCustomCommands(
 			continue;
 		}
 		const name = basename(candidate.filePath, ".md");
-		if (BUILTIN_NAMES.has(name)) {
+		if (BUILTIN_NAMES.has(name.toLowerCase())) {
 			console.warn(
 				`Ignoring custom command "/${name}" in ${candidate.filePath}: ` +
 					"it collides with a built-in command."
+			);
+			continue;
+		}
+		if (name.toLowerCase().startsWith(SKILL_NAMESPACE_PREFIX)) {
+			console.warn(
+				`Ignoring custom command "${name}" in ${candidate.filePath}: ` +
+					`"${SKILL_NAMESPACE_PREFIX}" is a reserved namespace.`
 			);
 			continue;
 		}

@@ -14,7 +14,6 @@ export type CommandSpec = BaseSpec &
 				dialogKey: "sessions" | "theme" | "mcps" | "permissions";
 		  }
 		| { kind: "models" }
-		| { kind: "skills" }
 		| { kind: "variants" }
 		| { kind: "agents" }
 	);
@@ -57,12 +56,6 @@ export const COMMANDS: CommandSpec[] = [
 		kind: "variants",
 	},
 	{
-		description: "Browse and insert available skills",
-		name: "skills",
-		value: "/skills",
-		kind: "skills",
-	},
-	{
 		description: "Browse past sessions",
 		name: "sessions",
 		value: "/sessions",
@@ -103,3 +96,18 @@ export const COMMANDS: CommandSpec[] = [
 		kind: "exit",
 	},
 ];
+
+/**
+ * Built-in Commands whose popover row is offered in the current view. Hidden
+ * kinds stay reachable by typing their name; only the row is suppressed.
+ */
+export const getVisibleCommands = (
+	options: { hideCompact?: boolean; hideVariants?: boolean } = {}
+): CommandSpec[] =>
+	COMMANDS.filter(
+		(command) =>
+			!(
+				(options.hideCompact && command.kind === "compact") ||
+				(options.hideVariants && command.kind === "variants")
+			)
+	);

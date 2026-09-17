@@ -1,18 +1,20 @@
 import { TextAttributes } from "@opentui/core";
+import {
+	type CommandItem,
+	getCommandLabel,
+} from "@/modules/commands/command-item";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-import { type BaseSpec, COMMANDS } from "../commands";
 
 const MAX_VISIBLE_ITEMS = 8;
 
-// Align all command names in a fixed-width column so their descriptions
-// start at the same horizontal position for a clean tabular look.
-// The width adjusts to accommodate the longest command name.
-const COMMAND_COL_WIDTH =
-	Math.max(...COMMANDS.map((cmd) => cmd.name.length)) + 4;
+// Keep descriptions aligned across every source: padding on both sides of the
+// label plus the gap that separates it from the description column.
+const LABEL_COLUMN_PADDING = 4;
 
 type CommandMenuProps = {
-	commands: BaseSpec[];
+	items: CommandItem[];
+	labelWidth: number;
 	selectedIndex: number;
 	visibleStartIndex: number;
 	onScroll: (direction: "up" | "down") => void;
@@ -21,7 +23,8 @@ type CommandMenuProps = {
 };
 
 export function CommandMenu({
-	commands,
+	items,
+	labelWidth,
 	selectedIndex,
 	visibleStartIndex,
 	onScroll,
@@ -29,9 +32,9 @@ export function CommandMenu({
 	onExecute,
 }: CommandMenuProps) {
 	const { colors } = useTheme();
-	const visibleHeight = Math.min(commands.length, MAX_VISIBLE_ITEMS);
+	const visibleHeight = Math.min(items.length, MAX_VISIBLE_ITEMS);
 
-	if (commands.length === 0) {
+	if (items.length === 0) {
 		return (
 			<box paddingX={1}>
 				<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
@@ -41,8 +44,8 @@ export function CommandMenu({
 		);
 	}
 
-	const end = Math.min(visibleStartIndex + MAX_VISIBLE_ITEMS, commands.length);
-	const visibleSlice = commands.slice(visibleStartIndex, end);
+	const end = Math.min(visibleStartIndex + MAX_VISIBLE_ITEMS, items.length);
+	const visibleSlice = items.slice(visibleStartIndex, end);
 
 	return (
 		<box
@@ -56,7 +59,7 @@ export function CommandMenu({
 				}
 			}}
 		>
-			{visibleSlice.map((cmd, i) => {
+			{visibleSlice.map((item, i) => {
 				const realIndex = visibleStartIndex + i;
 				const isSelected = realIndex === selectedIndex;
 				const selectedTextColor = getContrastingTextColor(colors.selection);
@@ -67,18 +70,18 @@ export function CommandMenu({
 						backgroundColor={isSelected ? colors.selection : undefined}
 						flexDirection="row"
 						height={1}
-						key={cmd.value}
+						key={item.value}
 						onMouseDown={() => onExecute(realIndex)}
 						onMouseMove={() => onSelect(realIndex)}
 						overflow="hidden"
 						paddingX={1}
 					>
-						<box flexShrink={0} width={COMMAND_COL_WIDTH}>
+						<box flexShrink={0} width={labelWidth + LABEL_COLUMN_PADDING}>
 							<text
 								fg={isSelected ? selectedTextColor : colors.text}
 								selectable={false}
 							>
-								/{cmd.name}
+								{getCommandLabel(item)}
 							</text>
 						</box>
 						<box flexGrow={1} flexShrink={1} overflow="hidden">
@@ -86,7 +89,7 @@ export function CommandMenu({
 								fg={isSelected ? selectedTextColor : colors.textMuted}
 								selectable={false}
 							>
-								{cmd.description}
+								{item.description}
 							</text>
 						</box>
 					</box>
