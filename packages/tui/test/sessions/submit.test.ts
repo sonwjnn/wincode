@@ -202,6 +202,27 @@ describe("resolveBuiltinCommand", () => {
 			})
 		).toBeNull();
 	});
+
+	test("expands markers at their untrimmed offsets when the line is indented", () => {
+		const token = "[Pasted ~2 lines]";
+		const rawText = `  /compact ${token}`;
+		const start = rawText.indexOf(token);
+
+		expect(
+			resolveBuiltinCommand({
+				...emptySnapshot(),
+				pastedTexts: [
+					{
+						end: start + token.length,
+						start,
+						text: "line one\nline two",
+						token,
+					},
+				],
+				rawText,
+			})
+		).toMatchObject({ focus: "line one\nline two", kind: "compact" });
+	});
 });
 
 describe("submitPrompt", () => {
@@ -331,6 +352,35 @@ describe("submitPrompt", () => {
 		);
 
 		expect(seen).toEqual(["line one\nline two\nline three summarize"]);
+		expect(accepted).toBe(true);
+	});
+
+	test("expands tracked pasted-text tokens at their untrimmed offsets", async () => {
+		const seen: string[] = [];
+		const token = "[Pasted ~2 lines]";
+		const rawText = `  ${token} summarize`;
+		const start = rawText.indexOf(token);
+		const accepted = await submitPrompt(
+			createDependencies({
+				onSubmit: (submission) => {
+					seen.push(submission.text);
+				},
+			}),
+			{
+				...emptySnapshot(),
+				pastedTexts: [
+					{
+						end: start + token.length,
+						start,
+						text: "line one\nline two",
+						token,
+					},
+				],
+				rawText,
+			}
+		);
+
+		expect(seen).toEqual(["line one\nline two summarize"]);
 		expect(accepted).toBe(true);
 	});
 

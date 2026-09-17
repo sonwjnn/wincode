@@ -94,7 +94,9 @@ Skills appear in the `/` command list as `skill:<name>` rows; selecting one writ
 arguments for that request. A bare `/name` is never a Skill invocation, so a Custom Command of the
 same name stays reachable. The selected skill body and arguments propagate through both local and
 hosted chat execution paths. Text that claims the `skill:` namespace but names no discovered Skill
-(or is malformed) is reported as an input error and never sent as a prompt.
+(or is malformed) is reported as an input error and never sent as a prompt; while the command list
+is open, Enter belongs to the list, so a zero-argument line that matches no row stays in the
+composer until it is submitted with a space or an argument.
 
 ## Skill Activation
 

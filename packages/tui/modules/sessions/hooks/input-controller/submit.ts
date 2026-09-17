@@ -69,7 +69,7 @@ export const resolveBuiltinCommand = (
 ): CommandSpec | null =>
 	snapshot.files.length === 0
 		? findBuiltinCommand(
-				expandTrackedPastedText(snapshot.rawText.trim(), snapshot.pastedTexts)
+				expandTrackedPastedText(snapshot.rawText, snapshot.pastedTexts)
 			)
 		: null;
 
@@ -184,7 +184,9 @@ export async function submitPrompt(
 
 	const { files, pastedTexts, rawText } = snapshot;
 	const visibleText = rawText.trim();
-	const text = expandTrackedPastedText(visibleText, pastedTexts);
+	// Markers carry offsets into the untrimmed composition, so expand before
+	// trimming or a leading space shifts every replacement.
+	const text = expandTrackedPastedText(rawText, pastedTexts).trim();
 	if (!text && files.length === 0) {
 		return false;
 	}

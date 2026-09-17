@@ -26,9 +26,10 @@ tool, and durable activation records keep the raw Skill name.
 
 Text that claims the namespace but names no discovered Skill — or that is
 malformed — is reported as an input error and never reaches the transport as
-ordinary prompt text. A Custom Command may not claim the namespace: the loader
-rejects a filename that starts with `skill:` the same way it rejects a Built-in
-Command collision.
+ordinary prompt text. Enter inside the open command list belongs to that list,
+so the report is reachable once the line leaves it (a space or an argument).
+A Custom Command may not claim the namespace: the loader rejects a filename that
+starts with `skill:` the same way it rejects a Built-in Command collision.
 
 One `CommandItem` list merges Built-in Commands, Custom Commands, and Skills
 (sorted Built-in Commands, Custom Commands, Skills). Query matching is a prefix
