@@ -160,7 +160,7 @@ test("compacts and replays the prompt after a provider context overflow", async 
 	try {
 		const rendered = await renderSession({
 			configDocument: CONFIG_DOCUMENT,
-			initialMessages: messages,
+			initialTranscript: messages,
 			pricing: createE2ePricing(12_000),
 			sessionId,
 		});

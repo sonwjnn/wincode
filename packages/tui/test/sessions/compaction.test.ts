@@ -7,10 +7,10 @@ import type { ChatModelSelection } from "@wincode/ai/models";
 import {
 	createSessionCompaction,
 	rebuildActiveMessages,
-	type SessionCompactionError,
 	serializeMessagesForCompaction,
 } from "@/modules/sessions/compaction/compaction";
 import { estimateCompactionTokens } from "@/modules/sessions/compaction/config";
+import type { SessionCompactionError } from "@/modules/sessions/compaction/error";
 import type {
 	SessionCompaction,
 	SummaryGeneratorInput,

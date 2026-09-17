@@ -3,9 +3,12 @@ import { fromPartial } from "@total-typescript/shoehorn";
 import {
 	type AgentTurnId,
 	createOperationalFailure,
+	type SessionRecord,
 } from "@wincode/agent-core";
 import type { ChatModelSelection } from "@wincode/ai/models";
+import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import { createSessionCompaction } from "@/modules/sessions/compaction/compaction";
+import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
 import { compactionSummaryMessageId } from "@/modules/sessions/compaction/summary-message";
 import type {
 	AppendSessionCompactionInput,
@@ -14,15 +17,19 @@ import type {
 import { createSessionEngine } from "@/modules/sessions/engine/session-engine";
 import type {
 	SessionEngine,
+	SessionEnginePorts,
 	SessionOverflowRecoveryCommand,
 	SessionOverflowRecoveryTarget,
 	SessionOverflowReplayOutcome,
-	SessionViewState,
+	SessionSkillCatalog,
 } from "@/modules/sessions/engine/types";
+import type { SessionViewState } from "@/modules/sessions/hooks/runtime-turn";
 import type { SessionMessage } from "@/modules/sessions/message";
+import type { SessionSendInput } from "@/modules/sessions/session-operation";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import { createHangingSummary } from "../support/hanging-summary";
 import {
+	agentId,
 	agentTurnId,
 	compactionId,
 	modelId,
@@ -35,12 +42,6 @@ const model: ChatModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 };
-
-const compactionSettings = {
-	enabled: true,
-	keepRecentTokens: 1,
-	thresholdTokens: null,
-} as const;
 
 const message = (id: string, text = id): SessionMessage =>
 	fromPartial<SessionMessage>({
@@ -73,13 +74,53 @@ const createCompactionModule = (summaryGenerator: SummaryGenerator) =>
 		summaryGenerator,
 	});
 
+/** The ports one engine test runs against, unless it overrides them. */
+const createPorts = ({
+	compaction,
+	...overrides
+}: Partial<SessionEnginePorts> & {
+	compaction: SessionEnginePorts["compaction"];
+}): SessionEnginePorts => ({
+	attachments: {
+		externalize: async (messages) => [...messages],
+		hydrate: async ({ messages }) => [...messages],
+	},
+	commitRecord: async () => undefined,
+	compaction,
+	resolveCompactionSettings: async () =>
+		fromPartial<ResolvedCompactionSettings>({
+			autoAvailable: false,
+			enabled: true,
+			keepRecentTokens: 1,
+			maxMediaAttachments: 4,
+			maxMediaBytes: 1024,
+			maxMediaTokens: 128,
+			modelContextLimit: 10_000,
+			overflowRecoveryAvailable: false,
+			reserveTokens: 1000,
+			thresholdTokens: null,
+		}),
+	resolveFileMentions: async () => [],
+	runtime: {
+		requestOverheadTokens: () => 0,
+		run: async () => ({}),
+	},
+	skills: {
+		createTurnSkill: async () =>
+			fromPartial<SessionSkillCatalog>({ diagnostic: null }),
+		resolveSkill: async () => ({ ok: true }),
+	},
+	...overrides,
+});
+
 const createEngine = (
 	initialTranscript: readonly SessionMessage[],
-	compactionModule = createCompactionModule(async () => ({ text: "summary" }))
+	compactionModule = createCompactionModule(async () => ({ text: "summary" })),
+	overrides: Partial<SessionEnginePorts> = {}
 ): SessionEngine =>
 	createSessionEngine({
-		compaction: compactionModule,
 		initialTranscript,
+		ports: createPorts({ compaction: compactionModule, ...overrides }),
 		sessionId: sessionId("session-engine"),
 	});
 
@@ -132,17 +173,17 @@ test("publishes a new Session Snapshot only when a fact changes", () => {
 		notifications += 1;
 	});
 
-	engine.setStatus("ready");
+	// Nothing waits to be settled, so closing approvals changes no fact.
+	engine.closeApprovals();
 	expect(engine.getSnapshot()).toBe(initial);
 	expect(notifications).toBe(0);
 
-	engine.setStatus("streaming");
+	engine.mergeTranscript([message("u1")]);
 	expect(engine.getSnapshot()).not.toBe(initial);
-	expect(engine.getSnapshot().status).toBe("streaming");
 	expect(notifications).toBe(1);
 
 	unsubscribe();
-	engine.setStatus("ready");
+	engine.mergeTranscript([message("u2")]);
 	expect(notifications).toBe(1);
 });
 
@@ -156,9 +197,9 @@ test("isolates a failing observer from session state and other observers", () =>
 		observed += 1;
 	});
 
-	engine.setStatus("submitted");
+	engine.mergeTranscript([message("u1")]);
 
-	expect(engine.getSnapshot().status).toBe("submitted");
+	expect(engine.getSnapshot().transcript).toHaveLength(1);
 	expect(observed).toBe(1);
 });
 
@@ -171,7 +212,6 @@ test("runs a compaction command and publishes what it produced", async () => {
 
 	const command = engine.compact({
 		model,
-		settings: compactionSettings,
 		trigger: "threshold",
 	});
 
@@ -195,7 +235,6 @@ test("joins a compaction command in flight before a caller reads the context", a
 	);
 	const command = engine.compact({
 		model,
-		settings: compactionSettings,
 		trigger: "threshold",
 	});
 
@@ -220,12 +259,10 @@ test("settles a joined command only after the swap it joins has landed", async (
 	);
 	const owner = engine.compact({
 		model,
-		settings: compactionSettings,
 		trigger: "threshold",
 	});
 	const joined = engine.compact({
 		model,
-		settings: compactionSettings,
 		trigger: "threshold",
 	});
 
@@ -246,7 +283,6 @@ test("refuses another intent's compaction without disturbing the running command
 	);
 	const automatic = engine.compact({
 		model,
-		settings: compactionSettings,
 		trigger: "threshold",
 	});
 
@@ -254,7 +290,6 @@ test("refuses another intent's compaction without disturbing the running command
 		engine.compact({
 			focus: "preserve database decisions",
 			model,
-			settings: compactionSettings,
 			trigger: "manual",
 		})
 	).rejects.toMatchObject({ code: "in-flight" });
@@ -286,7 +321,6 @@ test("cancels the compaction command in flight without publishing its result", a
 
 	const command = engine.compact({
 		model,
-		settings: compactionSettings,
 		trigger: "threshold",
 	});
 	engine.cancelCompaction();
@@ -306,7 +340,6 @@ test("merges a command's own transcript update before compacting", async () => {
 	const result = await engine.compact({
 		model,
 		nextMessages: [message("a3", "terminal answer")],
-		settings: compactionSettings,
 		trigger: "threshold",
 	});
 
@@ -327,7 +360,6 @@ test("compacts a command's own source without touching the Transcript", async ()
 
 	const result = await engine.compact({
 		model,
-		settings: compactionSettings,
 		sourceMessages: compactionHistory(),
 		trigger: "overflow",
 	});
@@ -354,6 +386,22 @@ const viewState = (
 	turnId: agentTurnId(turnId),
 });
 
+const executionInput = (
+	turnId: AgentTurnId,
+	startedAt: number,
+	parent?: {
+		parentToolCallId: ReturnType<typeof toolCallId>;
+		parentTurnId: AgentTurnId;
+	}
+) => ({
+	agent: agentId("build"),
+	model,
+	sessionModel: model,
+	startedAt,
+	turnId,
+	...(parent === undefined ? {} : { parent }),
+});
+
 const beginExecutions = (): {
 	child: AgentTurnId;
 	engine: SessionEngine;
@@ -362,16 +410,14 @@ const beginExecutions = (): {
 	const engine = createEngine([]);
 	const parent = agentTurnId("turn-parent");
 	const child = agentTurnId("turn-child");
-	engine.beginExecution({ startedAt: 1, turnId: parent });
+	engine.beginExecution(executionInput(parent, 1));
 	engine.setExecutionViewState(parent, viewState("turn-parent", "parent text"));
-	engine.beginExecution({
-		parent: {
+	engine.beginExecution(
+		executionInput(child, 2, {
 			parentToolCallId: toolCallId("call-delegate"),
 			parentTurnId: parent,
-		},
-		startedAt: 2,
-		turnId: child,
-	});
+		})
+	);
 	return { child, engine, parent };
 };
 
@@ -411,18 +457,20 @@ test("exposes the newest live execution's view and drops it when it ends", () =>
 	const root = agentTurnId("turn-root");
 	const first = agentTurnId("turn-first");
 	const second = agentTurnId("turn-second");
-	engine.beginExecution({ startedAt: 1, turnId: root });
+	engine.beginExecution(executionInput(root, 1));
 	engine.setExecutionViewState(root, viewState("turn-root", "root text"));
-	engine.beginExecution({
-		parent: { parentToolCallId: toolCallId("call-1"), parentTurnId: root },
-		startedAt: 2,
-		turnId: first,
-	});
-	engine.beginExecution({
-		parent: { parentToolCallId: toolCallId("call-2"), parentTurnId: root },
-		startedAt: 3,
-		turnId: second,
-	});
+	engine.beginExecution(
+		executionInput(first, 2, {
+			parentToolCallId: toolCallId("call-1"),
+			parentTurnId: root,
+		})
+	);
+	engine.beginExecution(
+		executionInput(second, 3, {
+			parentToolCallId: toolCallId("call-2"),
+			parentTurnId: root,
+		})
+	);
 	engine.setExecutionViewState(first, viewState("turn-first", "first text"));
 	engine.setExecutionViewState(second, viewState("turn-second", "second text"));
 
@@ -580,10 +628,7 @@ test("keeps the first settlement when an abort and a close race", async () => {
 const overflowFailure = (): Error =>
 	new Error("This model's maximum context length is 128000 tokens.");
 
-const recoveryTarget: SessionOverflowRecoveryTarget = {
-	model,
-	settings: compactionSettings,
-};
+const recoveryTarget: SessionOverflowRecoveryTarget = { model };
 
 const recoveryCommand = ({
 	error = overflowFailure(),
@@ -658,7 +703,7 @@ test("recovers a message once, even when the replayed turn fails the same way", 
 	// The replayed Agent Turn answers the same user message, and the provider
 	// refuses it again: that is still this message's one attempt, so no send —
 	// the replay's own or a user's — can start another recovery of it.
-	engine.beginExecution({ startedAt: 2, turnId: agentTurnId("turn-2") });
+	engine.beginExecution(executionInput(agentTurnId("turn-2"), 2));
 	const exhausted = engine.recoverOverflow(
 		recoveryCommand({ replay, turnId: "turn-2" })
 	);
@@ -680,7 +725,7 @@ test("records the attempt when the recovery starts, not when it finishes", async
 	);
 	// Another Agent Turn starts while the recovery compacts; the recovery under
 	// way keeps its attempt.
-	engine.beginExecution({ startedAt: 2, turnId: agentTurnId("turn-2") });
+	engine.beginExecution(executionInput(agentTurnId("turn-2"), 2));
 	const duplicate = engine.recoverOverflow(
 		recoveryCommand({ turnId: "turn-2" })
 	);
@@ -784,10 +829,7 @@ test("replays only after the Agent Turn that proposed the recovery has ended", a
 		createCompactionModule(summaryGenerator)
 	);
 	const replay = mock(async () => ({ kind: "started" }) as const);
-	engine.beginExecution({
-		startedAt: 1,
-		turnId: agentTurnId("turn-overflow"),
-	});
+	engine.beginExecution(executionInput(agentTurnId("turn-overflow"), 1));
 	const compactionStarted = new Promise<void>((resolve) => {
 		const unsubscribe = engine.subscribe(() => {
 			if (engine.getSnapshot().isCompacting) {
@@ -811,4 +853,239 @@ test("replays only after the Agent Turn that proposed the recovery has ended", a
 
 	await expect(recovery).resolves.toMatchObject({ kind: "recovered" });
 	expect(replay).toHaveBeenCalledTimes(1);
+});
+
+/** One submission as a view sends it: a prompt, its selection, its Agent. */
+const sendInput = (
+	overrides: Partial<SessionSendInput> = {}
+): SessionSendInput => ({
+	agent: agentId("build"),
+	model,
+	resolvedAgent: fromPartial<ResolvedCodingAgent>({}),
+	sessionModel: model,
+	userText: "hello",
+	...overrides,
+});
+
+/** A turn that streams one answer through the callbacks it is handed. */
+const answeringRuntime = (): SessionEnginePorts["runtime"] => ({
+	requestOverheadTokens: () => 0,
+	run: async ({ callbacks, execution }) => {
+		callbacks.onEvent({
+			agentId: execution.agent,
+			sequence: 0,
+			startedAt: 1,
+			turnId: execution.turnId,
+			type: "agent-turn-started",
+		});
+		callbacks.onEvent({
+			delta: "hello back",
+			sequence: 1,
+			turnId: execution.turnId,
+			type: "text-delta",
+		});
+		await callbacks.commitTerminal(
+			fromPartial<SessionRecord>({
+				messages: [
+					{
+						id: sessionMessageId(`assistant-${execution.turnId}`),
+						parts: [{ text: "hello back", type: "text" }],
+						role: "assistant",
+					},
+				],
+				outcome: {
+					kind: "assistant",
+					terminal: { finishedAt: 2, kind: "completed" },
+				},
+				turnId: execution.turnId,
+			})
+		);
+		callbacks.onTerminal({
+			finishedAt: 2,
+			sequence: 2,
+			turnId: execution.turnId,
+			type: "agent-turn-completed",
+			usage: { inputTokens: 1, outputTokens: 1 },
+		});
+		return {};
+	},
+});
+
+/** A turn that streams one delta and then waits to be let go. */
+const createStreamingRuntime = (): {
+	/** Resolves once the turn has streamed and is waiting to be let go. */
+	readonly live: Promise<void>;
+	readonly release: () => void;
+	readonly runtime: SessionEnginePorts["runtime"];
+} => {
+	const parked = Promise.withResolvers<void>();
+	const live = Promise.withResolvers<void>();
+	return {
+		live: live.promise,
+		release: parked.resolve,
+		runtime: {
+			requestOverheadTokens: () => 0,
+			run: async ({ callbacks, execution }) => {
+				callbacks.onEvent({
+					agentId: execution.agent,
+					sequence: 0,
+					startedAt: 1,
+					turnId: execution.turnId,
+					type: "agent-turn-started",
+				});
+				callbacks.onEvent({
+					delta: "partial",
+					sequence: 1,
+					turnId: execution.turnId,
+					type: "text-delta",
+				});
+				live.resolve();
+				await parked.promise;
+				return { error: new Error("The Agent Turn was interrupted.") };
+			},
+		},
+	};
+};
+
+test("commits the accepted prompt and streams its Agent Turn", async () => {
+	const commits: SessionRecord[] = [];
+	const engine = createEngine([], undefined, {
+		commitRecord: async ({ record }) => {
+			commits.push(record);
+		},
+		runtime: answeringRuntime(),
+	});
+
+	const outcome = await engine.send(sendInput());
+
+	expect(outcome).toEqual({ rejected: false });
+	const prompt = engine
+		.getSnapshot()
+		.context.find(({ role }) => role === "user");
+	expect(prompt?.parts[0]).toMatchObject({ text: "hello", type: "text" });
+	const assistant = engine.getSnapshot().context.at(-1);
+	expect(assistant?.role).toBe("assistant");
+	expect(assistant?.parts[0]).toMatchObject({ text: "hello back" });
+	// The prompt is durable before the turn runs, and the terminal row follows it.
+	expect(commits).toHaveLength(2);
+	expect(commits[0]?.outcome).toEqual({ kind: "user" });
+	expect(commits[1]?.outcome).toMatchObject({
+		kind: "assistant",
+		terminal: { kind: "completed" },
+	});
+	expect(engine.getSnapshot().transcript.map(({ id }) => id)).toEqual(
+		engine.getSnapshot().context.map(({ id }) => id)
+	);
+	expect(engine.getSnapshot().turnActive).toBe(false);
+});
+
+test("retries a stored message without appending another user message", async () => {
+	const commits: SessionRecord[] = [];
+	const engine = createEngine([], undefined, {
+		commitRecord: async ({ record }) => {
+			commits.push(record);
+		},
+		runtime: answeringRuntime(),
+	});
+	// A reopened session already holds the stored prompt in its Session Context.
+	const stored = message("u1", "retry me");
+	engine.applyContext([stored]);
+	engine.mergeTranscript([stored]);
+
+	const outcome = await engine.send(
+		sendInput({ messageId: sessionMessageId("u1"), userText: undefined })
+	);
+
+	expect(outcome).toEqual({ rejected: false });
+	const context = engine.getSnapshot().context;
+	expect(context.filter(({ role }) => role === "user")).toHaveLength(1);
+	expect(context.at(-1)?.role).toBe("assistant");
+	// The retry reuses the stored message, so no second prompt row is committed.
+	expect(commits.map(({ outcome: record }) => record)).toEqual([
+		{
+			kind: "assistant",
+			terminal: expect.objectContaining({ kind: "completed" }),
+		},
+	]);
+});
+
+test("refuses a second submission while a turn is running", async () => {
+	const streaming = createStreamingRuntime();
+	const engine = createEngine([], undefined, { runtime: streaming.runtime });
+
+	const first = engine.send(sendInput());
+	const second = await engine.send(sendInput({ userText: "again" }));
+
+	expect(second).toEqual({
+		rejected: true,
+		reason: "A session send is already active.",
+	});
+	// The refused submission changed nothing: the session still runs one turn.
+	await streaming.live;
+	expect(
+		engine.getSnapshot().context.filter(({ role }) => role === "user")
+	).toHaveLength(1);
+	expect(
+		engine.getSnapshot().context.filter(({ role }) => role === "assistant")
+	).toHaveLength(1);
+
+	streaming.release();
+	await expect(first).resolves.toEqual({ rejected: false });
+});
+
+test("cancels the submission it is running and returns to ready", async () => {
+	const streaming = createStreamingRuntime();
+	const engine = createEngine([], undefined, { runtime: streaming.runtime });
+
+	const send = engine.send(sendInput());
+	engine.cancel();
+
+	await expect(send).resolves.toEqual({
+		rejected: true,
+		reason: "Session send cancelled.",
+	});
+	const snapshot = engine.getSnapshot();
+	expect(snapshot.turnActive).toBe(false);
+	expect(snapshot.executions).toEqual([]);
+	expect(snapshot.approvals).toEqual([]);
+});
+
+test("interrupting a turn keeps the Assistant message it already streamed", async () => {
+	const streaming = createStreamingRuntime();
+	const engine = createEngine([], undefined, { runtime: streaming.runtime });
+
+	const send = engine.send(sendInput());
+	await streaming.live;
+	engine.interrupt();
+	streaming.release();
+
+	await expect(send).resolves.toEqual({ rejected: false });
+	const assistant = engine
+		.getSnapshot()
+		.context.findLast(({ role }) => role === "assistant");
+	expect(assistant?.metadata?.interrupted).toBe(true);
+	expect(assistant?.parts).toContainEqual({
+		text: "partial",
+		type: "text",
+	});
+});
+
+test("ends the Agent Turn an aborted approval belongs to", async () => {
+	const streaming = createStreamingRuntime();
+	const engine = createEngine([], undefined, { runtime: streaming.runtime });
+
+	const send = engine.send(sendInput());
+	await streaming.live;
+	const settled = engine.requestApproval(
+		fromPartial<ToolApprovalRequest>({ toolCallId: toolCallId("call-1") })
+	);
+	engine.abortApprovalTurn(toolCallId("call-1"));
+
+	await expect(settled).resolves.toEqual({ decision: "reject" });
+	streaming.release();
+	await send;
+	const assistant = engine
+		.getSnapshot()
+		.context.findLast(({ role }) => role === "assistant");
+	expect(assistant?.metadata?.interrupted).toBe(true);
 });

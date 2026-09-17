@@ -40,16 +40,21 @@ answers, compacts the replay-safe history through the Engine's own compaction
 command, and replays that message; the record belongs to the command, so the
 replayed turn cannot chain into another recovery and no send can reset it, and
 a replay the send lane refuses is reported rather than queued behind, or
-overlapped with, a send the user started. The rest — Commands executed one at a
-time in submission order, orthogonal status facts, and the submission pipeline
-living in the Engine — is the design the migration is closing on, tracked by
-the Session Engine spec (issue #97) and its five step tickets (#98–#102), and
-is not yet the shipped execution model: the Engine
-still exposes granular state setters, sends are started by the binding rather
-than by a Session Command, chat status is still one union, and the shutdown
-command settles pending approvals without yet cancelling the active send or
-releasing the MCP snapshot. Read the consequences below as the target, not as a
-description of every line of running code.
+overlapped with, a send the user started. The submission pipeline has shipped
+too, closing the migration (spec issue #97, steps #98–#102): a send is a
+Session Command that prepares the submission, commits the accepted prompt, runs
+the Agent Turn with its terminal commit, and maintains the compaction threshold
+afterwards — all against ports the Engine defines — so retry, cancellation,
+interruption, and approval settlement are commands on the same lane. The hook
+is a binding that constructs one Engine per mounted session from the TUI-side
+ports and reads Session Snapshots, and it holds no session state; the
+Session Controller is deleted, with the Agent Runtime consumer and the Session
+View State living with the Agent Turn they consume; and the Snapshot publishes
+facts (`turnActive`, `isCompacting`, pending Approval Requests) with a derived
+`isSessionBusy` selector instead of a chat-status union. The Engine still
+exposes its granular state setters alongside the commands, and the port surface
+is the TUI's rather than a second host's, so a non-TUI host reuses the Engine
+without a workspace extraction but has not been built.
 
 ## Considered options
 
@@ -94,11 +99,10 @@ description of every line of running code.
   read-only projection, and closing approvals is a Session Command rather than
   a second, independent settlement path.
 - The Engine owns its own emitter, including the policy that a failing observer
-  cannot change session state. While `SessionController` still exists its
-  listener plumbing duplicates that shape; the copy is deleted with the
-  controller by the ticket that moves the submission pipeline into the Engine
-  (#102) rather than factored into a shared abstraction whose second user is one
-  ticket away from removal.
+  cannot change session state; the Session Controller's duplicate listener
+  plumbing was deleted with the controller when the submission pipeline moved
+  into the Engine (#102), rather than factored into a shared abstraction whose
+  second user was one ticket away from removal.
 - The Engine's React-free claim is checked, not asserted: a boundary test walks
   the Engine's module graph transitively and fails if React or a terminal
   renderer becomes reachable, so a barrel cannot smuggle one back in.

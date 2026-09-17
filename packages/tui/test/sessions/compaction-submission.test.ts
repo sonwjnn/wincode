@@ -1,13 +1,13 @@
 import { expect, mock, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
 import type { ChatModelSelection } from "@wincode/ai/models";
-import type { CompactSessionResult } from "@/modules/sessions/compaction/compaction";
-import {
-	SessionCompactionError,
-	type SessionCompactionModule,
-} from "@/modules/sessions/compaction/compaction";
+import type {
+	CompactSessionResult,
+	SessionCompactionModule,
+} from "@/modules/sessions/compaction";
 import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
-import { prepareCompactionBeforeSubmit } from "@/modules/sessions/hooks/use-chat";
+import { SessionCompactionError } from "@/modules/sessions/compaction/error";
+import { prepareCompactionBeforeSubmit } from "@/modules/sessions/engine/submission";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { modelId, sessionMessageId } from "../support/identifiers";
 
@@ -37,7 +37,7 @@ const createSubmission = ({
 	settleCompaction: () => Promise<Error | null>;
 }) =>
 	prepareCompactionBeforeSubmit({
-		compactionModule: fromPartial<SessionCompactionModule>({
+		compaction: fromPartial<SessionCompactionModule>({
 			needsCompaction: mock(() => needs.shift() ?? false),
 		}),
 		getActiveMessages: () => [message("u1")],

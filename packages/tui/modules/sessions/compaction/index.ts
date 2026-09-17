@@ -7,7 +7,6 @@ export type {
 export {
 	createSessionCompaction,
 	rebuildActiveMessages,
-	SessionCompactionError,
 	serializeMessagesForCompaction,
 } from "./compaction";
 export type {
@@ -27,6 +26,7 @@ export {
 	resolveCompactionSettingPath,
 	resolveCompactionSettings,
 } from "./config";
+export { SessionCompactionError } from "./error";
 export type {
 	SummaryModelResolver,
 	SummaryTextGenerationOptions,

@@ -34,6 +34,7 @@ import type {
 	TurnExecutionHost,
 	TurnExecutionSkill,
 } from "../turn-execution";
+import { buildAssistantFailureSessionRecord } from "../turn-records";
 import type {
 	DelegationExecutor,
 	DelegationRequest,
@@ -41,7 +42,6 @@ import type {
 } from "./runtime-turn";
 import {
 	buildAgentTurn,
-	buildAssistantFailureSessionRecord,
 	createGatedCodingTools,
 	defaultRuntimeFactory,
 	runAgentTurnToText,

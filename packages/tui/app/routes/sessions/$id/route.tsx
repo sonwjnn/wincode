@@ -130,11 +130,11 @@ function SessionRoute() {
 
 	return (
 		<SessionView
-			initialActiveMessages={activeMessages}
 			initialCompactions={compactions}
-			initialMessages={messages}
+			initialContext={activeMessages}
 			initialModel={sessionConfig.model}
 			initialSubmission={initialSubmission}
+			initialTranscript={messages}
 			initialVariant={sessionConfig.variant}
 			sessionId={sessionId}
 			sessionTitle={sessionTitle}

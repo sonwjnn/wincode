@@ -255,7 +255,7 @@ const waitForGatedOutcome = async (
 const renderApprovalJourney = async (): Promise<TestRendererSetup> => {
 	const rendered = await renderSession({
 		configDocument: CONFIG_DOCUMENT,
-		initialMessages: messages,
+		initialTranscript: messages,
 		pricing: createE2ePricing(200_000),
 		sessionId,
 	});

@@ -13,6 +13,7 @@ import {
 	RouterContextProvider,
 } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
+import type { SessionCompaction } from "@/modules/sessions/compaction/types";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionSendInput } from "@/modules/sessions/session-operation";
 import { agentId, sessionId, sessionMessageId } from "../support/identifiers";
@@ -69,58 +70,56 @@ function deferred<T>(): Deferred<T> {
 	return { promise, resolve };
 }
 
-type FakeChatRun = {
+type FakeSessionRun = {
 	navigationRelease: Deferred<void>;
 	navigationStarted: Deferred<void>;
 	release: Deferred<void>;
 	sendStarted: Deferred<void>;
 };
 
-let activeFakeChatRun: FakeChatRun | null = null;
+let activeFakeSessionRun: FakeSessionRun | null = null;
 
-mock.module("@/modules/sessions/hooks/use-chat", () => ({
-	useChat: (
+mock.module("@/modules/sessions/hooks/use-session-engine", () => ({
+	useSessionEngine: (
 		_sessionId: string,
-		initialMessages: SessionMessage[],
-		initialActiveMessages: SessionMessage[] = initialMessages,
-		initialCompactions = []
+		initialTranscript: SessionMessage[],
+		initialContext: SessionMessage[] = initialTranscript,
+		initialCompactions: SessionCompaction[] = []
 	) => {
-		const [status, setStatus] = useState("ready");
+		const [turnActive, setTurnActive] = useState(false);
 		const send = useCallback(async (input: SessionSendInput) => {
 			void input;
-			const run = activeFakeChatRun;
+			const run = activeFakeSessionRun;
 			if (!run) {
-				throw new Error("No fake chat run configured.");
+				throw new Error("No fake session run configured.");
 			}
 			run.sendStarted.resolve();
-			setStatus("submitted");
+			setTurnActive(true);
 			await run.release.promise;
-			setStatus("ready");
+			setTurnActive(false);
 			return { rejected: false as const };
 		}, []);
 		return {
-			activeMessages: initialActiveMessages,
 			cancel: () => undefined,
 			cancelCompaction: () => undefined,
-			catalogDiagnostic: null,
 			compact: async () => {
 				throw new Error("Compaction is not part of this test.");
 			},
-			compactions: initialCompactions,
-			session: {
-				cancel: () => undefined,
-				interrupt: () => undefined,
-				send,
-				getState: () => ({
-					status: status === "ready" ? "ready" : "running",
-				}),
+			interrupt: () => undefined,
+			send,
+			snapshot: {
+				approvals: [],
+				catalogDiagnostic: null,
+				compactions: initialCompactions,
+				compactionError: null,
+				context: initialContext,
+				error: null,
+				executions: [],
+				isCompacting: false,
+				transcript: initialTranscript,
+				turnActive,
+				viewState: undefined,
 			},
-			error: null,
-			isCompacting: false,
-			isPreparingMessage: false,
-			messages: initialMessages,
-			status,
-			viewState: undefined,
 		};
 	},
 }));
@@ -187,7 +186,7 @@ beforeAll(() => {
 });
 
 afterEach(() => {
-	activeFakeChatRun = null;
+	activeFakeSessionRun = null;
 });
 
 describe("SessionView initial submission", () => {
@@ -198,7 +197,7 @@ describe("SessionView initial submission", () => {
 		const release = deferred<void>();
 		let registryIsReady = false;
 		let navigationHasStarted = false;
-		activeFakeChatRun = {
+		activeFakeSessionRun = {
 			navigationRelease,
 			navigationStarted,
 			release,
@@ -212,7 +211,7 @@ describe("SessionView initial submission", () => {
 			navigationStarted.resolve();
 			return navigationRelease.promise.then(() => navigate(...args));
 		};
-		const initialMessages = [
+		const initialTranscript = [
 			userMessage("initial-user", "create the session prompt"),
 		];
 		const configStore = createTestConfigStore();
@@ -244,10 +243,10 @@ describe("SessionView initial submission", () => {
 														>
 															<RouterContextProvider router={router}>
 																<SessionView
-																	initialMessages={initialMessages}
 																	initialSubmission={{
 																		messageId: sessionMessageId("initial-user"),
 																	}}
+																	initialTranscript={initialTranscript}
 																	sessionId={sessionId("session-1")}
 																	sessionTitle="Create the session prompt"
 																/>
@@ -298,7 +297,7 @@ describe("SessionView initial submission", () => {
 		const sendStarted = deferred<void>();
 		const release = deferred<void>();
 		let registryIsReady = false;
-		activeFakeChatRun = {
+		activeFakeSessionRun = {
 			navigationRelease,
 			navigationStarted,
 			release,
@@ -335,7 +334,7 @@ describe("SessionView initial submission", () => {
 														>
 															<RouterContextProvider router={router}>
 																<SessionView
-																	initialMessages={[]}
+																	initialTranscript={[]}
 																	sessionId={sessionId("session-1")}
 																	sessionTitle="Send an entered prompt"
 																/>

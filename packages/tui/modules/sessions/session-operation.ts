@@ -9,7 +9,7 @@ import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { isUndefined } from "@wincode/runtime-utils";
 import type { SkillContext } from "@wincode/skills";
 import type { SessionFilePart } from "@/modules/sessions/message";
-import type { ResolvedCodingAgent } from "../agents/built-ins";
+import type { SessionResolvedAgent } from "./engine/types";
 
 export type SessionSendInput = {
 	agent: AgentId;
@@ -17,7 +17,7 @@ export type SessionSendInput = {
 	sessionVariant?: ModelVariant;
 	model: ChatModelSelection;
 	variant?: ModelVariant;
-	resolvedAgent?: ResolvedCodingAgent;
+	resolvedAgent?: SessionResolvedAgent;
 	/** Correlation for an internally delegated Subagent execution. */
 	delegation?: AgentTurnDelegation;
 	/** Prompt to append as a fresh user message. */

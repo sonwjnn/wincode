@@ -33,6 +33,7 @@ import type {
 	SkillToolPart,
 } from "@wincode/skills";
 import {
+	isSkillToolPart,
 	sanitizeSkillToolPart,
 	skillActivationSchema,
 	skillActivationSourceSchema,
@@ -237,6 +238,24 @@ export const sanitizeSessionSkillToolPart = (
 		toolCallId: part.toolCallId,
 	};
 };
+/**
+ * Sanitizes every Skill Tool part of the given messages, so a Skill Tool Call
+ * is presented from its sanitized form and never from its raw activation.
+ */
+export const sanitizeSessionSkillToolParts = (
+	messages: readonly SessionMessage[]
+): SessionMessage[] =>
+	messages.map((message) =>
+		message.parts.some(isSkillToolPart)
+			? {
+					...message,
+					parts: message.parts.map((part) =>
+						isSkillToolPart(part) ? sanitizeSessionSkillToolPart(part) : part
+					),
+				}
+			: message
+	);
+
 export const sessionDataSchemas = {
 	fileMention: z.object({
 		byteLength: z.number().int().nonnegative(),

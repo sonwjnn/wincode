@@ -7,7 +7,6 @@ import {
 	isString,
 	isUndefined,
 } from "@wincode/runtime-utils";
-import { isSkillToolPart } from "@wincode/skills";
 import { randomUUIDv7 } from "bun";
 import {
 	type CompactionId,
@@ -18,7 +17,7 @@ import {
 	isSessionToolPart,
 	type SessionMessage,
 	sanitizeInterruptedSessionMessages,
-	sanitizeSessionSkillToolPart,
+	sanitizeSessionSkillToolParts,
 } from "../message";
 import {
 	type CompactionAttachmentMetadata,
@@ -36,6 +35,7 @@ import {
 	estimateSessionContextTokens,
 	type ResolvedCompactionSettings,
 } from "./config";
+import { SessionCompactionError } from "./error";
 import { createCompactionSummaryMessage } from "./summary-message";
 import {
 	type AppendSessionCompactionInput,
@@ -57,20 +57,6 @@ const DATA_URL_PAYLOAD_PATTERN = /^data:[^,]+,(.*)$/su;
 const BASE64_WHITESPACE_PATTERN = /\s/gu;
 const sanitizeSummaryText = (text: string): string =>
 	text.replace(RAW_IMAGE_DATA_URL_PATTERN, "[attachment payload omitted]");
-
-const sanitizeSkillToolMessages = (
-	messages: SessionMessage[]
-): SessionMessage[] =>
-	messages.map((message) =>
-		message.parts.some(isSkillToolPart)
-			? {
-					...message,
-					parts: message.parts.map((part) =>
-						isSkillToolPart(part) ? sanitizeSessionSkillToolPart(part) : part
-					),
-				}
-			: message
-	);
 
 const applyDurableSplitBoundary = (
 	activeMessages: SessionMessage[],
@@ -109,7 +95,7 @@ export const rebuildActiveMessages = (
 	messages: readonly SessionMessage[],
 	latest: SessionCompaction | null
 ): SessionMessage[] => {
-	const replaySafeMessages = sanitizeSkillToolMessages(
+	const replaySafeMessages = sanitizeSessionSkillToolParts(
 		sanitizeInterruptedSessionMessages([...messages])
 	);
 	if (isNull(latest)) {
@@ -150,28 +136,6 @@ export const rebuildActiveMessages = (
 	);
 	return [createCompactionSummaryMessage(latest), ...activeMessages];
 };
-
-export class SessionCompactionError extends Error {
-	readonly code:
-		| "cancelled"
-		| "context-still-too-large"
-		| "history-too-short"
-		| "in-flight"
-		| "invalid-boundary"
-		| "not-needed"
-		| "persistence-failed"
-		| "summary-failed";
-
-	constructor(
-		code: SessionCompactionError["code"],
-		message: string,
-		options?: ErrorOptions
-	) {
-		super(message, options);
-		this.code = code;
-		this.name = "SessionCompactionError";
-	}
-}
 
 type CompactionStore = Pick<
 	SessionStore,
@@ -1249,7 +1213,7 @@ export const createSessionCompaction = ({
 			);
 		}
 		assertNotAborted(input.signal);
-		const replaySafeMessages = sanitizeSkillToolMessages(
+		const replaySafeMessages = sanitizeSessionSkillToolParts(
 			sanitizeInterruptedSessionMessages([...input.session.messages])
 		);
 		const externalizedMessages = attachmentStore

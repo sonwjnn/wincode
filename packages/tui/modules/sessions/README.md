@@ -13,33 +13,47 @@ starts the first Agent Turn once; opening the same session later only restores
 durable records and never runs the Agent.
 ### Join a session
 
-`SessionView` loads the transcript and ordered local compaction entries, validates the messages, rebuilds active context, and gives that context to the Wincode `SessionController`.
+`SessionView` loads the transcript and ordered local compaction entries, validates the messages, and gives them to the `useSessionEngine` binding as the session's initial Transcript, Context, and compaction entries.
 
 ### Send a message
 
-`SessionView` sends through the application-owned `SessionController`. The
-controller owns the submit, cancellation, interruption, state subscription, and
-the single Agent Runtime event consumer. The
-CLI projects those events into its OpenTUI message state.
+A send is a Session Command the Engine runs. The Engine prepares the
+submission — joining the compaction in flight, resolving the compaction
+settings and the attachment budget they carry, arming the Skill catalog,
+resolving the Skill the submission asks for, and materialising the user
+message — commits the accepted user message as its own Session Record, runs the
+Agent Turn, and maintains the compaction threshold afterwards. Retrying a
+stored message is the same command with a message identity instead of a prompt,
+and cancelling, interrupting, and answering an approval are commands too: the
+send lane runs one submission at a time, a cancel aborts the one it is running,
+and an interrupt ends the turn while keeping the interrupted Tool Call visible.
+The Agent Runtime consumer lives with the Agent Turn it consumes
+(`hooks/runtime-turn.ts`), and the CLI projects its events into its OpenTUI
+message state.
 
-Session state — Session Transcript, Session Context, chat status, errors,
-compaction facts, the approval lifecycle, and overflow recovery — is owned by
-the React-free Session Engine in `modules/sessions/engine`. The Engine is the
-only writer, and it runs the compaction, approval, and overflow-recovery
-Session Commands, each of which publishes what it produced before it settles.
-`useChat` binds it for rendering, mirrors its Session Snapshot in React state
-so the view re-renders, submits commands to it, projects its approvals into the
-panel registry, and never writes session state itself.
+Session state — Session Transcript, Session Context, turn activity, errors,
+compaction facts, the approval lifecycle, overflow recovery, and the live
+executions — is owned by the React-free Session Engine in
+`modules/sessions/engine`. The Engine is the only writer, and it runs every
+Session Command, each of which publishes what it produced before it settles.
+`useSessionEngine` binds it for rendering: it constructs the Engine from the
+TUI-side ports, mirrors its Session Snapshot in React state so the view
+re-renders, projects its approvals into the panel registry, and never writes
+session state itself. A Session Snapshot carries facts, not a second notion of
+"running": `turnActive`, `isCompacting`, and the pending Approval Requests,
+with `isSessionBusy` derived from them.
 
-Each Agent Turn execution owns its own scope (`modules/sessions/turn-execution.ts`):
-the Agent Turn Identifier, the assistant message identity, the source user
-message, the start time, the Agent and resolved Agent, the Model Target
-selection and variant, the session-level selection its records carry, the MCP
-snapshot, the child abort registry, and its own Session View State. The Engine
-tracks those executions, so the Snapshot exposes the live view of the most
-recently active one: a delegated Subagent execution — the same contract plus
-`parentTurnId`/`parentToolCallId` — streams in its own view while the parent
-keeps its own, and the parent's view returns when the Subagent ends. Delegation
+Each Agent Turn execution owns its own scope. The Engine's execution record
+carries the identity every observer reads — the Agent Turn Identifier, the
+assistant message identity, the source user message, the start time, the Agent,
+the Model Target selection and variant, the session-level selection its records
+carry, and its own Session View State — while the host scope
+(`modules/sessions/turn-execution.ts`) holds what only the TUI can own: the
+resolved Agent, the armed Skill, the MCP snapshot, the child abort registry,
+and delegation bookkeeping. The Snapshot exposes the live view of the most
+recently active execution: a delegated Subagent execution — the same contract
+plus its parent linkage — streams in its own view while the parent keeps its
+own, and the parent's view returns when the Subagent ends. Delegation
 bookkeeping (its executor and child abort registrations) is created with the
 execution, so re-rendering cannot reset an in-flight Subagent. The Tool Gate is
 session-scoped and consults the execution tree's shared abort index, so an
@@ -85,8 +99,8 @@ for its one settlement, and the binding projects the Engine's pending requests
 into the shared panel registry, which is read-only for the session layer: the
 panel asks for a settlement, and the resolution it renders is the Engine's own
 decision. `respondToApproval` settles one request, `closeApprovals` settles
-every pending request as rejected, and `shutdown` — the two of which the binding
-runs on abort and unmount — settles through the same path. Because a request
+every pending request as rejected, and `shutdown` — which the binding runs on
+unmount, cancelling the active send as it goes — settles through the same path. Because a request
 settles exactly once, a dismissed panel, an abort, or an unmount can never leave
 a Tool Gate evaluation waiting, and the one-shot abort latch the binding used to
 keep is gone: the second abort trigger finds nothing pending to handle.
@@ -153,10 +167,13 @@ It removes session records and attachment blobs while preserving prompt
 history and workspace/configuration data.
 
 - `getSessionStore()` — local sessions, Session Records, compactions, attachments, and maintenance.
-- `SessionOperation` — one application-owned send, cancellation, and interruption seam for the current turn path.
-- `engine/` (Session Engine) — the single owner of one session's live state; observers read Session Snapshots and never write, and it runs the compaction and approval Session Commands. `session-engine.ts` is the factory, `types.ts` the published Session Engine vocabulary, and `utils.ts` its pure snapshot and view-state helpers.
+- `SessionOperation` — the Engine's send lane: one application-owned send at a time, with the per-send deadline and the cancel and interrupt reasons.
+- `engine/` (Session Engine) — the single owner of one session's live state; observers read Session Snapshots and never write, and it runs every Session Command — submission, compaction, approval settlement, overflow recovery, shutdown. `session-engine.ts` is the factory, `types.ts` the published Session Engine vocabulary (Snapshot, Commands, and Ports), `submission.ts` the Submission Command's pipeline and its preparation, `turn.ts` the Agent Turn projection, and `utils.ts` its pure snapshot, view-state, and busy helpers.
+- `turn-records.ts` — the durable Session Records one Agent Turn produces (terminal assistant rows, safe failure and cancellation rows, Tool Call rows), shared by the Engine and the Agent Runtime consumer.
+- `hooks/runtime-turn.ts` — the Agent Runtime consumer: it iterates one Agent Turn's events, owns the Session View State they project, and synthesizes the missing terminal event.
+- `hooks/session-engine-host.ts` — the TUI-side adapter that supplies the Engine's ports: the Agent Runtime, MCP snapshots and Tools, the Tool Gate, Skill catalogs, prompt composition, attachments, and durable records.
 - `approval-projection.ts` — projects the Engine's approvals into the panel registry's read-only entries.
-- `useChat(sessionId, initialMessages)` — binds the Session Engine for rendering and runs turn submission and error projection.
+- `useSessionEngine(sessionId, initialTranscript, initialContext)` — binds the Session Engine to React: it constructs one Engine per mounted session, mirrors its Session Snapshot, forwards its commands, and projects its approvals.
 - `useChatInputController(options)` — command and file-mention input state.
 - `NewSessionView`, `SessionView`, `ChatShell`, `ChatTextArea` — session UI.
 - `SessionsDialog`, `RenameSessionDialog` — session management UI.

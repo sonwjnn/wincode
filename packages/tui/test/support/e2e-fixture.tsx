@@ -175,10 +175,10 @@ const RegistryReadyProbe = ({ onReady }: { onReady: () => void }) => {
 };
 
 const ReadySessionView = ({
-	initialMessages,
+	initialTranscript,
 	sessionId,
 }: {
-	readonly initialMessages: SessionMessage[];
+	readonly initialTranscript: SessionMessage[];
 	readonly sessionId: SessionId;
 }) => {
 	const registry = useAgentRegistry();
@@ -187,7 +187,7 @@ const ReadySessionView = ({
 	}
 	return (
 		<SessionView
-			initialMessages={initialMessages}
+			initialTranscript={initialTranscript}
 			sessionId={sessionId}
 			sessionTitle="Compaction E2E session"
 		/>
@@ -249,13 +249,13 @@ export const seedCompactionHistory = async (
 
 export const renderSession = async ({
 	configDocument,
-	initialMessages,
+	initialTranscript,
 	pricing,
 	sessionId,
 }: {
 	/** JSONC served as the workspace config; the registry reads it on mount. */
 	readonly configDocument?: string;
-	readonly initialMessages: SessionMessage[];
+	readonly initialTranscript: SessionMessage[];
 	readonly pricing: ModelPricingTable;
 	readonly sessionId: SessionId;
 }): Promise<{
@@ -306,7 +306,7 @@ export const renderSession = async ({
 													>
 														<RouterContextProvider router={router}>
 															<ReadySessionView
-																initialMessages={initialMessages}
+																initialTranscript={initialTranscript}
 																sessionId={sessionId}
 															/>
 															<RegistryReadyProbe

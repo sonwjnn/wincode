@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
+import { fromPartial } from "@total-typescript/shoehorn";
 import {
 	getToolResourceLimits,
 	type ToolResourceLimits,
@@ -20,6 +21,7 @@ import { createSessionEngine } from "@/modules/sessions/engine/session-engine";
 import type {
 	SessionApprovalOutcome,
 	SessionEngine,
+	SessionEnginePorts,
 } from "@/modules/sessions/engine/types";
 import {
 	createToolGate,
@@ -1039,13 +1041,17 @@ test("an external-directory grant does not satisfy an operation ask", async () =
 describe("approval settlement through the Session Engine", () => {
 	const createEngine = () =>
 		createSessionEngine({
-			compaction: {
-				// Compaction is not part of this seam; the Engine only needs the port.
-				compact: () =>
-					Promise.reject(new Error("Compaction is unavailable in this test.")),
-				getInFlight: () => null,
-			},
 			initialTranscript: [],
+			ports: fromPartial<SessionEnginePorts>({
+				// Compaction is not part of this seam; the Engine only needs the port.
+				compaction: {
+					compact: () =>
+						Promise.reject(
+							new Error("Compaction is unavailable in this test.")
+						),
+					getInFlight: () => null,
+				},
+			}),
 			sessionId: sessionId("gate-approval"),
 		});
 

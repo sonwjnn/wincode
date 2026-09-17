@@ -19,8 +19,8 @@ import {
 	isCompactionSummaryMessage,
 	type SessionCompaction,
 } from "../../compaction";
-import type { SessionViewState } from "../../engine/types";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
+import type { SessionViewState } from "../../hooks/runtime-turn";
 import { summarizeSessionUsage } from "../../usage/session-usage";
 import type { ChatPromptSubmission } from "../../utils";
 import { ErrorMessage } from "../messages";

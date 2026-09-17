@@ -1,4 +1,10 @@
-import type { AgentTurnId, SessionMessageId } from "@wincode/agent-core";
+import {
+	type AgentTurnId,
+	createAgentTurnId,
+	type SessionMessageId,
+	type ToolCallId,
+	toSessionMessageId,
+} from "@wincode/agent-core";
 import {
 	getErrorMessage,
 	isError,
@@ -18,18 +24,31 @@ import {
 import { isCompactionSummaryMessage } from "../compaction/summary-message";
 import type { SessionCompaction } from "../compaction/types";
 import type { SessionMessage } from "../message";
+import { createSessionOperation } from "../session-operation";
+import {
+	createSubmissionPipeline,
+	type SubmissionPipeline,
+	sessionSendCancelled,
+} from "./submission";
+import { interruptSessionContext } from "./turn";
 import type {
 	SessionApprovalOutcome,
 	SessionCompactionCommand,
 	SessionEngine,
 	SessionEngineOptions,
+	SessionExecution,
+	SessionExecutionInput,
 	SessionOverflowRecoveryCommand,
 	SessionOverflowRecoveryOutcome,
 	SessionOverflowRecoveryTarget,
 	SessionOverflowReplayOutcome,
 	SessionSnapshot,
+	SessionViewState,
 } from "./types";
-import { exposedViewState, hasChanged } from "./utils";
+import { exposedViewState, hasChanged, primaryEntry } from "./utils";
+
+/** The deadline one Agent Turn submission runs with. */
+const AGENT_TURN_DEADLINE_MS = 43_200_000;
 
 /**
  * The single owner of one session's live state and the only writer to it.
@@ -37,10 +56,10 @@ import { exposedViewState, hasChanged } from "./utils";
  * snapshot instead of mutating it.
  */
 export const createSessionEngine = ({
-	compaction,
 	initialCompactions = [],
 	initialContext,
 	initialTranscript,
+	ports,
 	sessionId,
 }: SessionEngineOptions): SessionEngine => {
 	let state: SessionSnapshot = {
@@ -52,9 +71,8 @@ export const createSessionEngine = ({
 		error: null,
 		executions: [],
 		isCompacting: false,
-		isPreparingMessage: false,
-		status: "ready",
 		transcript: [...initialTranscript],
+		turnActive: false,
 		viewState: undefined,
 	};
 	/**
@@ -66,6 +84,8 @@ export const createSessionEngine = ({
 		| {
 				abort: () => void;
 				promise: Promise<CompactSessionResult>;
+				/** Resolves once the Session Compaction module has admitted the request. */
+				registered: Promise<void>;
 		  }
 		| undefined;
 	const listeners = new Set<() => void>();
@@ -202,6 +222,27 @@ export const createSessionEngine = ({
 	const setCompactionError = (error: Error | null): void => {
 		publish({ compactionError: error });
 	};
+	/**
+	 * The settings one compaction command runs with: the resolved compaction
+	 * settings of its Model Target plus the request overhead of the Agent Turn
+	 * execution in flight, so the compaction reserves what the next turn sends.
+	 */
+	const compactionSettingsFor = async (
+		model: CompactSessionInput["model"]
+	): Promise<CompactSessionInput["settings"]> => {
+		const settings = await ports.resolveCompactionSettings(model);
+		return {
+			compactionOverheadTokens: ports.runtime.requestOverheadTokens(),
+			enabled: settings.enabled,
+			keepRecentTokens: settings.keepRecentTokens,
+			maxMediaAttachments: settings.maxMediaAttachments,
+			maxMediaBytes: settings.maxMediaBytes,
+			maxMediaTokens: settings.maxMediaTokens,
+			modelContextLimit: settings.modelContextLimit,
+			reserveTokens: settings.reserveTokens,
+			thresholdTokens: settings.thresholdTokens,
+		};
+	};
 	/** A command that carries its own transcript update merges it before running. */
 	const compactionSource = (
 		command: SessionCompactionCommand
@@ -214,17 +255,17 @@ export const createSessionEngine = ({
 		}
 		return state.transcript;
 	};
-	const compactionRequest = (
+	const compactionRequest = async (
 		command: SessionCompactionCommand,
 		messages: readonly SessionMessage[],
-		signal?: AbortSignal
-	): CompactSessionInput => ({
+		signal: AbortSignal
+	): Promise<CompactSessionInput> => ({
 		model: command.model,
 		session: { messages, sessionId },
-		settings: command.settings,
+		settings: await compactionSettingsFor(command.model),
 		trigger: command.trigger,
 		...(isUndefined(command.focus) ? {} : { focus: command.focus }),
-		...(isUndefined(signal) ? {} : { signal }),
+		signal,
 		...(isUndefined(command.variant) ? {} : { variant: command.variant }),
 	});
 	/**
@@ -233,26 +274,37 @@ export const createSessionEngine = ({
 	 * promise settles, so a caller that joins it reads a settled context.
 	 */
 	const startCompaction = (
-		command: SessionCompactionCommand
+		command: SessionCompactionCommand,
+		messages: readonly SessionMessage[]
 	): Promise<CompactSessionResult> => {
 		const controller = new AbortController();
-		const request = compactionRequest(
-			command,
-			compactionSource(command),
-			controller.signal
-		);
+		const registration = Promise.withResolvers<void>();
 		const { promise, reject, resolve } =
 			Promise.withResolvers<CompactSessionResult>();
-		compactionCommand = { abort: () => controller.abort(), promise };
+		compactionCommand = {
+			abort: () => controller.abort(),
+			promise,
+			registered: registration.promise,
+		};
 		setCompacting(true);
 		void (async () => {
 			try {
-				const result = await compaction.compact(request);
+				const request = await compactionRequest(
+					command,
+					messages,
+					controller.signal
+				);
+				// Admission happens when the module is entered, so a request that
+				// arrives while this one resolves its settings still joins it.
+				const admitted = ports.compaction.compact(request);
+				registration.resolve();
+				const result = await admitted;
 				applyContext(result.activeMessages);
 				recordCompaction(result.entry);
 				setCompactionError(null);
 				resolve(result);
 			} catch (error) {
+				registration.resolve();
 				reject(error);
 			} finally {
 				if (compactionCommand?.promise === promise) {
@@ -271,11 +323,19 @@ export const createSessionEngine = ({
 	 * Transcript is the source it names.
 	 */
 	const joinCompaction = async (
-		command: SessionCompactionCommand
+		command: SessionCompactionCommand,
+		messages: readonly SessionMessage[]
 	): Promise<CompactSessionResult> => {
 		const owner = compactionCommand;
-		const result = await compaction.compact(
-			compactionRequest(command, state.transcript)
+		// The command this one joins may still be resolving its settings, and the
+		// module only knows a request it has been entered with: wait for that
+		// admission before asking it to join, so its decision is about a request
+		// it can already see.
+		if (!isUndefined(owner)) {
+			await owner.registered;
+		}
+		const result = await ports.compaction.compact(
+			await compactionRequest(command, messages, new AbortController().signal)
 		);
 		if (!isUndefined(owner)) {
 			await owner.promise;
@@ -285,8 +345,15 @@ export const createSessionEngine = ({
 	const compact = (
 		command: SessionCompactionCommand
 	): Promise<CompactSessionResult> => {
-		const running = compaction.getInFlight(sessionId);
-		return isNull(running) ? startCompaction(command) : joinCompaction(command);
+		const messages = compactionSource(command);
+		// The Engine's own command is checked first: a request that arrives while
+		// that command still resolves its settings joins it rather than starting a
+		// second command the module would only refuse.
+		const running =
+			compactionCommand ?? ports.compaction.getInFlight(sessionId);
+		return isNull(running)
+			? startCompaction(command, messages)
+			: joinCompaction(command, messages);
 	};
 	const settleCompaction = async (): Promise<Error | null> => {
 		// A command that starts while this waits is joined too, so a caller that
@@ -378,7 +445,6 @@ export const createSessionEngine = ({
 		try {
 			result = await compact({
 				model: target.model,
-				settings: target.settings,
 				sourceMessages: prepareOverflowReplayMessages(
 					state.transcript,
 					command.originalMessageId
@@ -425,63 +491,161 @@ export const createSessionEngine = ({
 		return { kind: "recovered", entry: result.entry };
 	};
 
-	return {
-		applyContext,
-		beginExecution: ({ parent, startedAt, turnId }) =>
-			publish({
-				executions: [
-					...state.executions,
-					{
-						...(isUndefined(parent) ? {} : { parent }),
-						startedAt,
-						turnId,
-					},
-				],
-			}),
-		cancelCompaction: () => compactionCommand?.abort(),
-		closeApprovals,
-		compact,
-		endExecution: (turnId) => {
-			const waiters = executionEndWaiters.get(turnId);
-			if (!isUndefined(waiters)) {
-				executionEndWaiters.delete(turnId);
-				for (const resolveEnd of waiters) {
-					resolveEnd();
-				}
+	/** Drops an execution and wakes everything waiting for it to end. */
+	const endExecution = (turnId: AgentTurnId): void => {
+		const waiters = executionEndWaiters.get(turnId);
+		if (!isUndefined(waiters)) {
+			executionEndWaiters.delete(turnId);
+			for (const resolveEnd of waiters) {
+				resolveEnd();
 			}
-			const executions = state.executions.filter(
-				(execution) => execution.turnId !== turnId
-			);
-			if (executions.length === state.executions.length) {
-				return;
+		}
+		const executions = state.executions.filter(
+			(execution) => execution.turnId !== turnId
+		);
+		if (executions.length === state.executions.length) {
+			return;
+		}
+		publish({ executions, viewState: exposedViewState(executions) });
+	};
+	const setTurnActive = (value: boolean): void =>
+		publish({ turnActive: value });
+
+	const beginExecution = (input: SessionExecutionInput): SessionExecution => {
+		const turnId = input.turnId ?? createAgentTurnId();
+		const execution: SessionExecution = {
+			agent: input.agent,
+			assistantId: toSessionMessageId(`assistant-${turnId}`),
+			model: input.model,
+			...(isUndefined(input.parent) ? {} : { parent: input.parent }),
+			sessionModel: input.sessionModel,
+			...(isUndefined(input.sessionVariant)
+				? {}
+				: { sessionVariant: input.sessionVariant }),
+			sourceUserMessageId: input.sourceUserMessageId ?? null,
+			startedAt: input.startedAt,
+			turnId,
+			...(isUndefined(input.variant) ? {} : { variant: input.variant }),
+		};
+		publish({ executions: [...state.executions, execution] });
+		return execution;
+	};
+	const setExecutionViewState = (
+		turnId: AgentTurnId,
+		viewState: SessionViewState
+	): void => {
+		if (!state.executions.some((execution) => execution.turnId === turnId)) {
+			return;
+		}
+		const executions = state.executions.map((execution) =>
+			execution.turnId === turnId ? { ...execution, viewState } : execution
+		);
+		publish({ executions, viewState: exposedViewState(executions) });
+	};
+	/**
+	 * The Agent Turn execution the session's own sends run as: the newest
+	 * execution that is not a delegated Subagent, so an interrupt reaches the
+	 * turn the user started rather than a child it spawned.
+	 */
+	const primaryExecution = (): SessionExecution | undefined =>
+		primaryEntry(state.executions);
+	/**
+	 * Presents an interrupted turn: the target message keeps the interrupted
+	 * Tool Call the abort named and the context is sanitized around it.
+	 */
+	const interruptLatestAssistantMessage = (
+		preserveToolCallId?: ToolCallId
+	): void => {
+		const next = interruptSessionContext(
+			state.context,
+			primaryExecution(),
+			preserveToolCallId
+		);
+		if (isUndefined(next)) {
+			return;
+		}
+		applyContext(next);
+		mergeTranscript(next);
+	};
+
+	const cancelCompaction = (): void => compactionCommand?.abort();
+	let pipeline: SubmissionPipeline;
+	const operation = createSessionOperation({
+		deadlineMs: AGENT_TURN_DEADLINE_MS,
+		execute: async (input, signal) => {
+			if (signal.aborted) {
+				return sessionSendCancelled(signal);
 			}
-			publish({ executions, viewState: exposedViewState(executions) });
+			const stop = (): void => {
+				cancelCompaction();
+				closeApprovals();
+			};
+			signal.addEventListener("abort", stop, { once: true });
+			try {
+				return await pipeline.send(input, signal);
+			} catch (error) {
+				// A submission that throws still publishes its failure, and the
+				// caller that awaited the send is the one that answers it.
+				publish({
+					error: isError(error) ? error : new Error("Session failed."),
+				});
+				throw error;
+			} finally {
+				signal.removeEventListener("abort", stop);
+			}
 		},
-		getSnapshot: () => state,
+		onInterrupt: interruptLatestAssistantMessage,
+	});
+	pipeline = createSubmissionPipeline({
+		applyContext,
+		beginExecution,
+		compact,
+		endExecution,
+		getContext: () => state.context,
+		getTranscript: () => state.transcript,
 		mergeTranscript,
+		ports,
 		recoverOverflow,
-		requestApproval,
-		respondToApproval: settleApproval,
+		send: (input) => operation.send(input),
+		sessionId,
 		setCatalogDiagnostic: (diagnostic) =>
 			publish({ catalogDiagnostic: diagnostic }),
 		setCompactionError,
 		setError: (error) => publish({ error }),
-		setExecutionViewState: (turnId, viewState) => {
-			if (!state.executions.some((execution) => execution.turnId === turnId)) {
-				return;
-			}
-			const executions = state.executions.map((execution) =>
-				execution.turnId === turnId ? { ...execution, viewState } : execution
-			);
-			publish({ executions, viewState: exposedViewState(executions) });
+		setExecutionViewState,
+		setTurnActive,
+		settleCompaction,
+	});
+
+	return {
+		abortApprovalTurn: (toolCallId) => {
+			// The aborted request already settled in the Engine, so its siblings
+			// are closed as rejects and the turn stops exactly once: a second
+			// abort trigger finds nothing pending to handle.
+			closeApprovals();
+			interruptLatestAssistantMessage(toolCallId);
 		},
-		setPreparingMessage: (value) => publish({ isPreparingMessage: value }),
-		setStatus: (status) => publish({ status }),
+		applyContext,
+		beginExecution,
+		cancel: () => operation.cancel(),
+		cancelCompaction,
+		closeApprovals,
+		compact,
+		endExecution,
+		getSnapshot: () => state,
+		interrupt: (preserveToolCallId) => operation.interrupt(preserveToolCallId),
+		mergeTranscript,
+		recoverOverflow,
+		requestApproval,
+		respondToApproval: settleApproval,
+		setExecutionViewState,
 		settleCompaction,
 		shutdown: () => {
 			isShutDown = true;
+			operation.cancel();
 			closeApprovals();
 		},
+		send: (input) => operation.send(input),
 		subscribe: (listener) => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
