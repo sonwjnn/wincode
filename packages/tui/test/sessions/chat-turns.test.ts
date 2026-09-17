@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { prepareRetryMessages } from "@/modules/sessions/hooks/use-chat";
+import { prepareRetryMessages } from "@/modules/sessions/engine/submission";
 import type {
 	SessionMessage,
 	SessionMessageTerminalOutcome,

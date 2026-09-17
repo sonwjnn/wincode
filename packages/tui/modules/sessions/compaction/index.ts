@@ -1,4 +1,3 @@
-export { isModelContextOverflowError } from "@wincode/ai/model-failures";
 export { isSettingsCommand, parseCompactCommand } from "./commands";
 export type {
 	CompactSessionInput,
@@ -6,13 +5,8 @@ export type {
 	SessionCompactionModule,
 } from "./compaction";
 export {
-	compactionSummaryMessageId,
-	createCompactionSummaryMessage,
 	createSessionCompaction,
-	formatCompactionSummaryMessage,
-	isCompactionSummaryMessage,
 	rebuildActiveMessages,
-	SessionCompactionError,
 	serializeMessagesForCompaction,
 } from "./compaction";
 export type {
@@ -32,15 +26,7 @@ export {
 	resolveCompactionSettingPath,
 	resolveCompactionSettings,
 } from "./config";
-export type {
-	OverflowRecoveryInput,
-	OverflowReplay,
-} from "./overflow-recovery";
-export {
-	OverflowRecoveryError,
-	prepareOverflowReplayMessages,
-	recoverContextOverflow,
-} from "./overflow-recovery";
+export { SessionCompactionError } from "./error";
 export type {
 	SummaryModelResolver,
 	SummaryTextGenerationOptions,
@@ -52,6 +38,12 @@ export {
 	createLanguageModelSummaryGenerator,
 	resolveDirectSummaryModel,
 } from "./summary-generator";
+export {
+	compactionSummaryMessageId,
+	createCompactionSummaryMessage,
+	formatCompactionSummaryMessage,
+	isCompactionSummaryMessage,
+} from "./summary-message";
 export type {
 	AppendSessionCompactionInput,
 	CompactionSession,

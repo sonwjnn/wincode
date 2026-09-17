@@ -66,7 +66,7 @@ test("compacts automatically before sending and uses the rebuilt context", async
 	let setup: TestRendererSetup | undefined;
 	try {
 		const rendered = await renderSession({
-			initialMessages: messages,
+			initialTranscript: messages,
 			pricing: createE2ePricing(12_000),
 			sessionId,
 		});

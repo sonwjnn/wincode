@@ -1,11 +1,12 @@
-import { expect, mock, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
+import { createOperationalFailure } from "@wincode/agent-core";
 import {
+	isContextOverflowFailure,
 	prepareOverflowReplayMessages,
-	recoverContextOverflow,
 } from "@/modules/sessions/compaction/overflow-recovery";
 import type { SessionMessage } from "@/modules/sessions/message";
-import { modelId, sessionId, sessionMessageId } from "../support/identifiers";
+import { sessionMessageId } from "../support/identifiers";
 
 const message = (
 	id: string,
@@ -19,27 +20,6 @@ const message = (
 		parts: [{ text, type: "text" }],
 		role,
 	});
-
-const compaction = {
-	compact: mock(async () => ({
-		activeMessages: [
-			message("summary", "user", "summary"),
-			message("u2", "user", "retry"),
-		],
-		entry: {} as never,
-	})),
-	getInFlight: () => null,
-	needsCompaction: () => true,
-};
-
-const compactionInput = {
-	model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" } as const,
-	settings: {
-		enabled: true,
-		keepRecentTokens: 100,
-		thresholdTokens: 100,
-	} as const,
-};
 
 test("prepares overflow replay without the failed assistant turn", () => {
 	const messages = [
@@ -60,113 +40,48 @@ test("prepares overflow replay without the failed assistant turn", () => {
 	]);
 });
 
-test("replays a context-overflow turn exactly once with its original message id", async () => {
-	const replay = mock(async () => undefined);
-	const result = await recoverContextOverflow({
-		attempt: 0,
-		compaction,
-		compactionInput,
-		session: {
-			messages: [
-				message("u1", "user", "earlier"),
-				message("a1", "assistant", "earlier answer"),
-				message("u2", "user", "retry me"),
-				message("a2", "assistant", "partial output", { interrupted: true }),
-			],
-			sessionId: sessionId("session-1"),
-		},
-		enabled: true,
-		error: new Error("context_length_exceeded"),
-		originalMessageId: sessionMessageId("u2"),
-		replay,
-	});
-
-	expect(result?.activeMessages.map(({ id }) => id)).toEqual([
-		sessionMessageId("summary"),
-		sessionMessageId("u2"),
-	]);
-	expect(compaction.compact).toHaveBeenCalledWith(
-		expect.objectContaining({ trigger: "overflow" })
+test("refuses a replay whose original user message is gone", () => {
+	expect(() =>
+		prepareOverflowReplayMessages(
+			[message("a1", "assistant", "answer")],
+			sessionMessageId("u2")
+		)
+	).toThrow(
+		expect.objectContaining({
+			code: "replay-failed",
+			message: expect.stringContaining("original user message"),
+		})
 	);
-	expect(replay).toHaveBeenCalledWith({
-		activeMessages: result?.activeMessages,
-		entry: result?.entry,
-		originalMessageId: sessionMessageId("u2"),
-	});
 });
 
-test("preserves non-context provider errors without compacting", async () => {
-	const error = new Error("authentication failed");
-	await expect(
-		recoverContextOverflow({
-			attempt: 0,
-			compaction,
-			compactionInput,
-			session: {
-				messages: [message("u1", "user", "retry")],
-				sessionId: sessionId("session-non-context"),
-			},
-			enabled: true,
-			error,
-			originalMessageId: sessionMessageId("u1"),
-			replay: async () => undefined,
-		})
-	).rejects.toBe(error);
-});
-
-test("surfaces compaction failure without replaying the original turn", async () => {
-	const failingCompaction = {
-		...compaction,
-		compact: mock(async () => {
-			throw new Error("summary failed");
-		}),
-	};
-	const replay = mock(async () => undefined);
-
-	await expect(
-		recoverContextOverflow({
-			attempt: 0,
-			compaction: failingCompaction,
-			compactionInput,
-			session: {
-				messages: [
-					message("u1", "user", "earlier"),
-					message("a1", "assistant", "answer"),
-					message("u2", "user", "retry"),
-				],
-				sessionId: sessionId("session-failure"),
-			},
-			enabled: true,
-			error: new Error("context_length_exceeded"),
-			originalMessageId: sessionMessageId("u2"),
-			replay,
-		})
-	).rejects.toMatchObject({
-		code: "replay-failed",
-		message: expect.stringContaining("summary failed"),
-	});
-	expect(replay).not.toHaveBeenCalled();
-});
-
-test("does not replay disabled or already-replayed overflow requests", async () => {
-	for (const [enabled, attempt, code] of [
-		[false, 0, "disabled"],
-		[true, 1, "replay-exhausted"],
-	] as const) {
-		await expect(
-			recoverContextOverflow({
-				attempt,
-				compaction,
-				compactionInput,
-				session: {
-					messages: [message("u1", "user", "retry")],
-					sessionId: sessionId("session-2"),
-				},
-				enabled,
-				error: new Error("context_length_exceeded"),
-				originalMessageId: sessionMessageId("u1"),
-				replay: async () => undefined,
+test("recognizes a provider failure the runtime reported as context overflow", () => {
+	// The Agent Runtime turns a provider refusal into an Operational Failure
+	// whose message is presentation-safe, so the code — not the text — is what
+	// identifies the overflow.
+	expect(
+		isContextOverflowFailure(
+			createOperationalFailure({
+				code: "context-overflow",
+				retry: "with-changes",
+				source: "model",
 			})
-		).rejects.toMatchObject({ code });
-	}
+		)
+	).toBe(true);
+	expect(
+		isContextOverflowFailure(
+			createOperationalFailure({
+				code: "rate-limited",
+				retry: "after-delay",
+				source: "model",
+			})
+		)
+	).toBe(false);
+	expect(
+		isContextOverflowFailure(
+			new Error("This model's maximum context length is 128000 tokens.")
+		)
+	).toBe(true);
+	expect(isContextOverflowFailure(new Error("authentication failed"))).toBe(
+		false
+	);
 });

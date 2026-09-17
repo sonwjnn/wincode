@@ -75,6 +75,38 @@ broken metadata); the request body reads it strictly (only schema-valid pairs
 reach the send). Sources merge in a fixed order — session row, then message
 metadata, then prompt-config refs. _Avoid_: chat config, latest config
 
+## Session Execution
+
+**Session Engine**:
+The single owner of one session's live state and the only writer to it. Session state changes only through the Engine, and observers read a Session Snapshot. _Avoid_: session manager, session store, session state holder
+
+**Session Command**:
+A request to change session state, such as sending a prompt, interrupting a turn, compacting, recovering from a context overflow, or answering an approval. The Engine executes Commands one at a time in submission order, and no asynchronous continuation changes session state outside a Command. _Avoid_: operation, action, event, task
+
+**Compaction Intent**:
+What one compaction request asks for: its trigger and its focus, as distinct from the messages it runs over and the Model Target selection its summary is generated with. The Session Compaction module admits a request that carries the intent already in flight and refuses one that carries another, so no caller is answered with another caller's entry while two threshold passes, which share an intent, still meet in one operation. _Avoid_: compaction request, compaction options
+
+**Overflow Recovery**:
+The one recovery a context-overflow refusal buys for the Agent Turn it ended: the Engine compacts the replay-safe history — the Session Transcript up to that turn's original user message, with the interrupted turn that followed it sanitized away — and replays that message. The attempt is recorded against the message the turn answers, so the replayed turn cannot chain into another recovery and no send can reset it. _Avoid_: retry, resend
+
+**Approval Request**:
+One Tool Permission `ask` a waiting Tool Gate evaluation is registered for. The Session Engine owns it from registration to settlement: it is pending until exactly one settlement — allow, reject, or abort — whichever route triggers it, so no route can leave the evaluation waiting or settle the request twice. The session projects its pending Approval Requests into the panel surface, and closing them, aborting them, or shutting the session down runs through the same path. _Avoid_: approval prompt, approval handle, approval queue
+
+**Session Snapshot**:
+The session facts an observer reads at one moment. Observers read Snapshots only, so none of them sees a partially applied Session Command. _Avoid_: full state, state dump
+
+**Session Transcript**:
+The ordered messages a session presents to the user. Compaction summaries stay out of the Transcript even when they are part of the Session Context. _Avoid_: chat history, display messages, message log
+
+**Session Context**:
+The messages a session sends to the model for its next Agent Turn. It is derived from the Session Transcript through compaction and interruption sanitation, so the two can differ. _Avoid_: active messages, prompt history, context window
+
+**Agent Turn Execution**:
+One run of an Agent Turn and everything scoped to it: the Agent Turn Identifier, the assistant message identity, the source user message, the start time, the Agent and resolved Agent, the Model Target selection and variant, the session-level selection its records carry, the MCP snapshot, the child abort registry, and its own Session View State. The Engine's record of an execution carries the identity every observer reads, while the host scope carries what only the host owns — the resolved Agent, the armed Skill catalog, the MCP snapshot, the child abort registry, and delegation bookkeeping. A delegated Subagent execution uses the same contract plus its parent linkage (`parentTurnId`, `parentToolCallId`), and is created and discarded with the turn rather than rebuilt on render. _Avoid_: turn context, session refs, current turn
+
+**Session View State**:
+The live, transient projection of one Agent Turn Execution for the session UI. It never becomes a Session Record, and executions never share one: the Session Snapshot exposes the Session View State of the most recently active execution, so a delegated Subagent's stream replaces the view while it runs and the parent's view returns when it ends. _Avoid_: streaming state, live buffer
+
 ## Language
 
 **Wincode CLI**:
@@ -251,12 +283,13 @@ wins. _Avoid_: ACL entry, tool toggle
 **Tool Gate**:
 The runtime enforcement of Tool Permission for one tool call. The gate
 evaluates the effective decision against the call's actual resource, applies
-temporary grants and auto approval, and routes a surviving `ask` through the
-session approval queue and inline panel. It owns the manual-approval
-safety ceiling at execution time: a remembered grant is never recorded for a
-safety ask. Coding tools, shell (per-node evaluation with a doom_loop repeat
-guard, ADR-0008), MCP tools, and Skill Activation all resolve through the one
-gate, and the gate owns the deny/reject wording each family emits. _Avoid_:
+temporary grants and auto approval, and registers a surviving `ask` as an
+Approval Request the Session Engine settles through the panel the session
+projects. It owns the manual-approval safety ceiling at execution time: a
+remembered grant is never recorded for a safety ask. Coding tools, shell
+(per-node evaluation with a doom_loop repeat guard, ADR-0008), MCP tools, and
+Skill Activation all resolve through the one gate, and the gate owns the
+deny/reject wording each family emits. _Avoid_:
 approval service, permission middleware
 
 **Resolved Tool**:

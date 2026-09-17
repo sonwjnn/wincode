@@ -19,8 +19,6 @@ import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useSettingsHubDialog } from "@/modules/settings";
 import type { SessionId } from "@/shared/identifiers";
-import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
-import type { ApprovalOutcome } from "@/shared/providers/approval/types";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
@@ -29,8 +27,9 @@ import {
 	parseCompactCommand,
 	type SessionCompaction,
 } from "../../compaction";
+import { isSessionBusy } from "../../engine/utils";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
-import { useChat } from "../../hooks/use-chat";
+import { useSessionEngine } from "../../hooks/use-session-engine";
 import {
 	type ResolvedSessionSelection,
 	resolveSessionSelection,
@@ -47,9 +46,9 @@ export type SessionInitialSubmission = {
 };
 
 type SessionViewProps = {
-	initialActiveMessages?: SessionMessage[];
 	initialCompactions?: SessionCompaction[];
-	initialMessages: SessionMessage[];
+	initialContext?: SessionMessage[];
+	initialTranscript: SessionMessage[];
 	initialModel?: ChatModelSelection;
 	initialSubmission?: SessionInitialSubmission;
 	initialVariant?: ModelVariant;
@@ -115,8 +114,8 @@ const resolveInitialSessionSelection = ({
 };
 
 export function SessionView({
-	initialMessages,
-	initialActiveMessages = initialMessages,
+	initialTranscript,
+	initialContext = initialTranscript,
 	initialCompactions = [],
 	initialModel,
 	initialSubmission,
@@ -136,11 +135,6 @@ export function SessionView({
 	const { show } = useToast();
 	const openSettings = useSettingsHubDialog(settingsRuntime);
 	const { isTopLayer } = useKeyboardLayer();
-	const { entries: approvalEntries, resolve: resolveApprovalPanel } =
-		useApprovalPanels();
-	const hasPendingApproval = approvalEntries.some((entry) =>
-		isUndefined(entry.resolution)
-	);
 	const submittedInitialMessageRef = useRef<SessionMessageId | null>(null);
 	const interruptResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
 		null
@@ -153,55 +147,42 @@ export function SessionView({
 	const [restoredMessages, setRestoredMessages] = useState<
 		SessionMessage[] | null
 	>(null);
-	const {
-		activeMessages,
-		cancelCompaction,
-		catalogDiagnostic,
-		compact,
-		compactions,
-		session,
-		error,
-		isCompacting,
-		isPreparingMessage,
-		messages,
-		status,
-		viewState,
-	} = useChat(
-		sessionId,
-		initialMessages,
-		initialActiveMessages,
-		initialCompactions
-	);
-	const { cancel, interrupt, send } = session;
-	const isTurnBusy =
-		hasPendingApproval ||
-		isPreparingMessage ||
-		isStartingInitialTurn ||
-		status !== "ready";
-	const isBusy = isTurnBusy || isCompacting;
+	const { cancelCompaction, compact, interrupt, send, snapshot } =
+		useSessionEngine(
+			sessionId,
+			initialTranscript,
+			initialContext,
+			initialCompactions
+		);
+	const activeMessages = snapshot.context;
+	const messages = snapshot.transcript;
+	const error = snapshot.compactionError ?? snapshot.error;
+	// The session's own facts decide whether it is busy: a running turn, an
+	// approval that is waiting, or a compaction in flight.
+	const isBusy = isSessionBusy(snapshot) || isStartingInitialTurn;
 	const promptHistory = useMemo(
-		() => derivePromptHistory(initialMessages),
-		[initialMessages]
+		() => derivePromptHistory(initialTranscript),
+		[initialTranscript]
 	);
 	const restoredConfig = useMemo(() => {
 		if (isNull(registry)) {
 			return null;
 		}
 		return resolveSessionSelection({
-			messages: initialMessages,
+			messages: initialTranscript,
 			resolveAgent: (agentId) => resolveActiveAgentId(registry, agentId),
 			sessionModel: initialModel,
 			sessionVariant: initialVariant,
 		});
-	}, [initialMessages, initialModel, initialVariant, registry]);
-	const isPromptConfigRestored = restoredMessages === initialMessages;
+	}, [initialTranscript, initialModel, initialVariant, registry]);
+	const isPromptConfigRestored = restoredMessages === initialTranscript;
 
 	useEffect(() => {
 		if (isNull(registry)) {
 			return;
 		}
 		if (!restoredConfig) {
-			setRestoredMessages(initialMessages);
+			setRestoredMessages(initialTranscript);
 			return;
 		}
 
@@ -210,7 +191,7 @@ export function SessionView({
 		}
 		setModel(restoredConfig.model);
 		setVariant(restoredConfig.variant);
-		setRestoredMessages(initialMessages);
+		setRestoredMessages(initialTranscript);
 		if (
 			!isUndefined(restoredConfig.persistedAgent) &&
 			restoredConfig.agent !== restoredConfig.persistedAgent
@@ -221,7 +202,7 @@ export function SessionView({
 			});
 		}
 	}, [
-		initialMessages,
+		initialTranscript,
 		registry,
 		restoredConfig,
 		setAgent,
@@ -229,13 +210,6 @@ export function SessionView({
 		setVariant,
 		show,
 	]);
-
-	useEffect(
-		() => () => {
-			cancel();
-		},
-		[cancel]
-	);
 
 	const handleInterrupt = () => {
 		if (interruptArmedRef.current) {
@@ -266,7 +240,7 @@ export function SessionView({
 			return;
 		}
 		if (key.name === "escape") {
-			if (isCompacting) {
+			if (snapshot.isCompacting) {
 				key.preventDefault();
 				cancelCompaction();
 				return;
@@ -320,12 +294,7 @@ export function SessionView({
 	);
 
 	const runManualCompaction = async (focus?: string): Promise<boolean> => {
-		if (
-			isTurnBusy ||
-			isCompacting ||
-			isNull(registry) ||
-			!isPromptConfigRestored
-		) {
+		if (isBusy || isNull(registry) || !isPromptConfigRestored) {
 			show({
 				message: "Compaction is unavailable while the session is active.",
 				variant: "error",
@@ -369,12 +338,7 @@ export function SessionView({
 				return executeCompactionCommand(compactCommand.focus);
 			}
 		}
-		if (
-			isTurnBusy ||
-			session.getState().status !== "ready" ||
-			isNull(registry) ||
-			!isPromptConfigRestored
-		) {
+		if (isBusy || isNull(registry) || !isPromptConfigRestored) {
 			return false;
 		}
 
@@ -415,12 +379,7 @@ export function SessionView({
 	};
 
 	const retryMessage = async (messageId: SessionMessageId): Promise<void> => {
-		if (
-			isTurnBusy ||
-			isCompacting ||
-			isNull(registry) ||
-			!isPromptConfigRestored
-		) {
+		if (isBusy || isNull(registry) || !isPromptConfigRestored) {
 			return;
 		}
 		const initialMessage = messages.find(({ id }) => id === messageId);
@@ -443,37 +402,15 @@ export function SessionView({
 		}
 	};
 
-	const routeApproval = (id: string, outcome: ApprovalOutcome): void => {
-		let controllerOutcome:
-			| { decision: "allow"; remember: boolean }
-			| { decision: "reject"; feedback?: string }
-			| { decision: "abort" };
-		switch (outcome) {
-			case "allow-once":
-				controllerOutcome = { decision: "allow", remember: false };
-				break;
-			case "always":
-				controllerOutcome = { decision: "allow", remember: true };
-				break;
-			case "rejected":
-				controllerOutcome = { decision: "reject" };
-				break;
-			default:
-				controllerOutcome = { decision: "abort" };
-		}
-		resolveApprovalPanel(id, outcome);
-		void session.respondToApproval(id, controllerOutcome);
-	};
-
 	const observedCompactionCountRef = useRef(initialCompactions.length);
 	useEffect(() => {
 		const observed = observedCompactionCountRef.current;
-		if (compactions.length <= observed) {
-			observedCompactionCountRef.current = compactions.length;
+		if (snapshot.compactions.length <= observed) {
+			observedCompactionCountRef.current = snapshot.compactions.length;
 			return;
 		}
-		const added = compactions.slice(observed);
-		observedCompactionCountRef.current = compactions.length;
+		const added = snapshot.compactions.slice(observed);
+		observedCompactionCountRef.current = snapshot.compactions.length;
 		for (const entry of added) {
 			if (entry.trigger === "manual") {
 				continue;
@@ -483,18 +420,18 @@ export function SessionView({
 				variant: "success",
 			});
 		}
-	}, [compactions, show]);
+	}, [snapshot.compactions, show]);
 
 	useEffect(() => {
-		if (!isNull(catalogDiagnostic)) {
-			show({ message: catalogDiagnostic, variant: "error" });
+		if (!isNull(snapshot.catalogDiagnostic)) {
+			show({ message: snapshot.catalogDiagnostic, variant: "error" });
 		}
-	}, [catalogDiagnostic, show]);
+	}, [snapshot.catalogDiagnostic, show]);
 
 	useEffect(() => {
 		const submission = initialSubmission;
 		const initialMessage = submission
-			? initialMessages.find(({ id }) => id === submission.messageId)
+			? initialTranscript.find(({ id }) => id === submission.messageId)
 			: undefined;
 
 		if (isUndefined(submission)) {
@@ -554,7 +491,7 @@ export function SessionView({
 		});
 	}, [
 		agent,
-		initialMessages,
+		initialTranscript,
 		initialSubmission,
 		isPromptConfigRestored,
 		model,
@@ -572,19 +509,18 @@ export function SessionView({
 			<box flexGrow={1} height="100%" paddingX={1}>
 				<ChatShell
 					activeMessages={activeMessages}
-					compactions={compactions}
+					compactions={snapshot.compactions}
 					error={error}
 					isBusy={isBusy}
-					isCompacting={isCompacting}
+					isCompacting={snapshot.isCompacting}
 					isInterruptArmed={isInterruptArmed}
 					messages={messages}
-					onApproval={routeApproval}
 					onCompact={executeCompactionCommand}
 					onOpenSettings={openSettings}
 					onRetry={retryMessage}
 					onSubmit={submitMessage}
 					promptHistory={promptHistory}
-					viewState={viewState}
+					viewState={snapshot.viewState}
 				/>
 			</box>
 		</box>

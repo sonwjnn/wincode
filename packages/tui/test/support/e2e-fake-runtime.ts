@@ -27,59 +27,82 @@ export type FakeAiSdkRecorder = {
 	readonly summaryText: string;
 };
 
+/**
+ * One fake turn's event stream. Journeys that need Tool Calls — delegation in
+ * particular — supply their own script and drive `turn.tools` themselves, the
+ * way the real Agent Runtime does.
+ */
+export type FakeTurnScript = (
+	turn: AgentTurn,
+	recorder: FakeAiSdkRecorder
+) => AsyncGenerator<AgentTurnEvent>;
+
 const messageText = (message: AgentTurn["input"]["messages"][number]): string =>
 	message.parts.map((part) => ("text" in part ? part.text : "")).join("\n");
 
-const createFakeRuntime = (recorder: FakeAiSdkRecorder): AgentRuntime => ({
-	async *run(turn: AgentTurn): AsyncGenerator<AgentTurnEvent> {
-		recorder.requests.push({
-			kind: "chat",
-			messages: turn.input.messages.map((message) => ({
-				id: message.id,
-				role: message.role,
-				text: messageText(message),
-			})),
-		});
-		yield {
-			agentId: turn.agent.id,
-			sequence: 0,
-			startedAt: 1,
-			turnId: turn.id,
-			type: "agent-turn-started",
-		};
-		yield {
-			modelId: turn.model.modelId,
-			sequence: 1,
-			stepId: modelStepId("e2e-step"),
-			turnId: turn.id,
-			type: "model-step-started",
-		};
-		yield {
-			delta: "E2E chat response",
-			sequence: 2,
-			turnId: turn.id,
-			type: "text-delta",
-		};
-		yield {
-			modelId: turn.model.modelId,
-			sequence: 3,
-			stepId: modelStepId("e2e-step"),
-			turnId: turn.id,
-			type: "model-step-finished",
-			usage: { inputTokens: 1, outputTokens: 1 },
-		};
-		yield {
-			finishedAt: 2,
-			sequence: 4,
-			turnId: turn.id,
-			type: "agent-turn-completed",
-			usage: { inputTokens: 1, outputTokens: 1 },
-		};
+const defaultTurnScript: FakeTurnScript = async function* (
+	turn: AgentTurn,
+	recorder: FakeAiSdkRecorder
+): AsyncGenerator<AgentTurnEvent> {
+	recorder.requests.push({
+		kind: "chat",
+		messages: turn.input.messages.map((message) => ({
+			id: message.id,
+			role: message.role,
+			text: messageText(message),
+		})),
+	});
+	yield {
+		agentId: turn.agent.id,
+		sequence: 0,
+		startedAt: 1,
+		turnId: turn.id,
+		type: "agent-turn-started",
+	};
+	yield {
+		modelId: turn.model.modelId,
+		sequence: 1,
+		stepId: modelStepId("e2e-step"),
+		turnId: turn.id,
+		type: "model-step-started",
+	};
+	yield {
+		delta: "E2E chat response",
+		sequence: 2,
+		turnId: turn.id,
+		type: "text-delta",
+	};
+	yield {
+		modelId: turn.model.modelId,
+		sequence: 3,
+		stepId: modelStepId("e2e-step"),
+		turnId: turn.id,
+		type: "model-step-finished",
+		usage: { inputTokens: 1, outputTokens: 1 },
+	};
+	yield {
+		finishedAt: 2,
+		sequence: 4,
+		turnId: turn.id,
+		type: "agent-turn-completed",
+		usage: { inputTokens: 1, outputTokens: 1 },
+	};
+};
+
+const createFakeRuntime = (
+	recorder: FakeAiSdkRecorder,
+	run: FakeTurnScript
+): AgentRuntime => ({
+	run(turn: AgentTurn): AsyncGenerator<AgentTurnEvent> {
+		return run(turn, recorder);
 	},
 });
 
-export const createFakeAiSdkModule = (recorder: FakeAiSdkRecorder) => ({
-	createAiSdkAgentRuntime: () => createFakeRuntime(recorder),
+export const createFakeAiSdkModule = (
+	recorder: FakeAiSdkRecorder,
+	run: FakeTurnScript = defaultTurnScript
+) => ({
+	createAiSdkAgentRuntime: () => createFakeRuntime(recorder, run),
 	generateAiSdkText: async (options: {
 		readonly messages?: readonly {
 			content: string;

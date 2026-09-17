@@ -1,7 +1,7 @@
 import type { SessionMessageId } from "@wincode/agent-core";
 import { MODEL_OUTPUT_TOKEN_LIMIT } from "@wincode/ai/model";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
-import type { Except } from "type-fest";
+import type { Except, ReadonlyDeep } from "type-fest";
 import type {
 	SessionMessage,
 	SessionMessageUsage,
@@ -21,15 +21,15 @@ export const COMPACTION_TRIGGER_REASONS = [
 export type CompactionTriggerReason =
 	(typeof COMPACTION_TRIGGER_REASONS)[number];
 
-export type CompactionSummary = {
+export type CompactionSummary = ReadonlyDeep<{
 	attachments?: CompactionAttachmentMetadata[];
 	coveredMessageIds: SessionMessageId[];
 	formatVersion: 1;
 	focus?: string;
 	text: string;
-};
+}>;
 
-export type SessionCompaction = {
+export type SessionCompaction = ReadonlyDeep<{
 	id: CompactionId;
 	sessionId: SessionId;
 	sequence: number;
@@ -47,7 +47,7 @@ export type SessionCompaction = {
 	summarizationUsage?: SessionMessageUsage;
 	createdAt: Date;
 	completedAt: Date;
-};
+}>;
 
 export type AppendSessionCompactionInput = Except<
 	SessionCompaction,

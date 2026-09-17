@@ -226,7 +226,7 @@ const getContentPartKey = (
 	index: number
 ): string => `${part.type}-${index}`;
 
-const groupConsecutiveParts = (parts: MessagePart[]): PartGroup[] => {
+const groupConsecutiveParts = (parts: readonly MessagePart[]): PartGroup[] => {
 	const groups: PartGroup[] = [];
 
 	for (const [index, part] of parts.entries()) {

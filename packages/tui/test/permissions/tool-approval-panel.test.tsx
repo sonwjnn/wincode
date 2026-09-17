@@ -1,9 +1,12 @@
 import { expect, mock, test } from "bun:test";
 import type { Selection } from "@opentui/core";
+import type { TestRendererSetup } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { fromAny } from "@total-typescript/shoehorn";
-import { useEffect } from "react";
+import type { ReactNode } from "react";
+import { act } from "react";
 import {
+	type ApprovalPanelEntry,
 	ApprovalPanelsProvider,
 	useApprovalPanels,
 } from "@/shared/providers/approval/approval-panels-provider";
@@ -22,6 +25,7 @@ import {
 } from "@/shared/providers/approval/ui/tool-approval-panel";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+import { approvalPanelEntry } from "../support/approval-panel-entry";
 import { toolCallId } from "../support/identifiers";
 
 const makeRequest = (
@@ -51,17 +55,16 @@ const makeActions = (): ToolApprovalActions => ({
 
 type PanelSetup = {
 	actions: ToolApprovalActions;
-	setup: Awaited<ReturnType<typeof testRender>>;
+	project: (entries: readonly ApprovalPanelEntry[]) => void;
+	setup: TestRendererSetup;
 };
 
-const flushUi = async (
-	setup: Awaited<ReturnType<typeof testRender>>
-): Promise<void> => {
+const flushUi = async (setup: TestRendererSetup): Promise<void> => {
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	await setup.renderOnce();
 };
 const hoverAction = async (
-	setup: Awaited<ReturnType<typeof testRender>>,
+	setup: TestRendererSetup,
 	label: string
 ): Promise<void> => {
 	const rows = setup.captureCharFrame().split("\n");
@@ -73,36 +76,37 @@ const hoverAction = async (
 	await flushUi(setup);
 };
 
-function Register({
-	actions,
-	request,
+function ProjectionProbe({
+	onProject,
 }: {
-	actions: ToolApprovalActions;
-	request: ToolApprovalRequest;
+	onProject: (project: PanelSetup["project"]) => void;
 }) {
-	const { add } = useApprovalPanels();
-	useEffect(() => {
-		add(request, actions);
-	}, [add, actions, request]);
+	onProject(useApprovalPanels().project);
 	return null;
 }
 
-const renderPanel = async (
-	request: ToolApprovalRequest,
-	actions: ToolApprovalActions,
-	pendingCount = 1,
-	errorText?: string
-): Promise<PanelSetup> => {
+/**
+ * Renders an approval surface against the projection API the session uses:
+ * entries appear only when the binding projects them, exactly as they do from
+ * the Session Engine's approvals.
+ */
+const renderSurface = async (
+	children: ReactNode
+): Promise<{
+	project: PanelSetup["project"];
+	setup: TestRendererSetup;
+}> => {
+	let project: PanelSetup["project"] = () => undefined;
 	const setup = await testRender(
 		<ThemeProvider>
 			<KeyboardLayerProvider>
 				<ApprovalPanelsProvider>
-					<Register actions={actions} request={request} />
-					<ToolApprovalPanel
-						errorText={errorText}
-						id={request.toolCallId ?? "call-1"}
-						pendingCount={pendingCount}
+					<ProjectionProbe
+						onProject={(next) => {
+							project = next;
+						}}
 					/>
+					{children}
 				</ApprovalPanelsProvider>
 			</KeyboardLayerProvider>
 		</ThemeProvider>,
@@ -110,7 +114,55 @@ const renderPanel = async (
 	);
 	await setup.renderOnce();
 	await flushUi(setup);
-	return { actions, setup };
+	return {
+		project: (entries) => {
+			project(entries);
+		},
+		setup,
+	};
+};
+
+const projectEntries = async (
+	project: PanelSetup["project"],
+	setup: TestRendererSetup,
+	entries: readonly ApprovalPanelEntry[]
+): Promise<void> => {
+	await act(async () => {
+		project(entries);
+	});
+	await flushUi(setup);
+};
+
+const renderPanel = async (
+	request: ToolApprovalRequest,
+	actions: ToolApprovalActions,
+	pendingCount = 1,
+	errorText?: string,
+	resolution?: ApprovalPanelEntry["resolution"]
+): Promise<PanelSetup> => {
+	const surface = await renderSurface(
+		<ToolApprovalPanel
+			errorText={errorText}
+			id={request.toolCallId ?? "call-1"}
+			pendingCount={pendingCount}
+		/>
+	);
+	await projectEntries(surface.project, surface.setup, [
+		approvalPanelEntry(request, { actions, resolution }),
+	]);
+	return { ...surface, actions };
+};
+
+/** Settles the projected request the way the session's command would report it. */
+const settleProjection = async (
+	{ project, setup }: PanelSetup,
+	request: ToolApprovalRequest,
+	actions: ToolApprovalActions,
+	resolution: NonNullable<ApprovalPanelEntry["resolution"]>
+): Promise<void> => {
+	await projectEntries(project, setup, [
+		approvalPanelEntry(request, { actions, resolution }),
+	]);
 };
 
 test("hides the always option and warns under the safety ceiling", async () => {
@@ -133,22 +185,30 @@ test("hides the always option and warns under the safety ceiling", async () => {
 	setup.renderer.destroy();
 });
 
-test("allow once settles with allow(false) and collapses to a dim line", async () => {
-	const { actions, setup } = await renderPanel(makeRequest(), makeActions());
+test("allow once asks the session for allow(false) and renders its resolution", async () => {
+	const request = makeRequest();
+	const actions = makeActions();
+	const panel = await renderPanel(request, actions);
 
-	setup.mockInput.pressEnter();
-	await flushUi(setup);
+	panel.setup.mockInput.pressEnter();
+	await flushUi(panel.setup);
 
 	expect(actions.allow).toHaveBeenCalledWith(false);
 	expect(actions.reject).not.toHaveBeenCalled();
-	const frame = setup.captureCharFrame();
+	expect(panel.setup.captureCharFrame()).toContain("Allow once");
+
+	await settleProjection(panel, request, actions, { outcome: "allow-once" });
+	const frame = panel.setup.captureCharFrame();
 	expect(frame).toContain("allowed once");
 	expect(frame).not.toContain("Allow once");
-	setup.renderer.destroy();
+	panel.setup.renderer.destroy();
 });
 
 test("selecting always requires a second confirm before granting", async () => {
-	const { actions, setup } = await renderPanel(makeRequest(), makeActions());
+	const request = makeRequest();
+	const actions = makeActions();
+	const panel = await renderPanel(request, actions);
+	const { setup } = panel;
 
 	await hoverAction(setup, "Always allow");
 	setup.mockInput.pressEnter();
@@ -165,6 +225,7 @@ test("selecting always requires a second confirm before granting", async () => {
 	await flushUi(setup);
 
 	expect(actions.allow).toHaveBeenCalledWith(true);
+	await settleProjection(panel, request, actions, { outcome: "always" });
 	expect(setup.captureCharFrame()).toContain("always allowed");
 	setup.renderer.destroy();
 });
@@ -195,7 +256,10 @@ test("hovering an action applies its selected background and enter target", asyn
 });
 
 test("a click on the overlay confirm button grants", async () => {
-	const { actions, setup } = await renderPanel(makeRequest(), makeActions());
+	const request = makeRequest();
+	const actions = makeActions();
+	const panel = await renderPanel(request, actions);
+	const { setup } = panel;
 	const locate = (
 		label: string,
 		alsoOnRow: string
@@ -233,6 +297,7 @@ test("a click on the overlay confirm button grants", async () => {
 	await flushUi(setup);
 
 	expect(actions.allow).toHaveBeenCalledWith(true);
+	await settleProjection(panel, request, actions, { outcome: "always" });
 	expect(setup.captureCharFrame()).toContain("always allowed");
 	setup.renderer.destroy();
 });
@@ -251,29 +316,30 @@ test("rapid keyboard selection resolves against the latest option", async () => 
 	setup.renderer.destroy();
 });
 
-test("reject settles only the selected tool when approvals remain", async () => {
-	const { actions, setup } = await renderPanel(makeRequest(), makeActions(), 2);
+test("reject asks the session to reject only the selected tool when approvals remain", async () => {
+	const request = makeRequest();
+	const actions = makeActions();
+	const panel = await renderPanel(request, actions, 2);
 
-	await hoverAction(setup, "Reject");
-	setup.mockInput.pressEnter();
-	await flushUi(setup);
+	await hoverAction(panel.setup, "Reject");
+	panel.setup.mockInput.pressEnter();
+	await flushUi(panel.setup);
 
 	expect(actions.reject).toHaveBeenCalledWith(undefined);
 	expect(actions.abort).not.toHaveBeenCalled();
-	expect(setup.captureCharFrame()).toContain("rejected");
-	setup.renderer.destroy();
+	await settleProjection(panel, request, actions, { outcome: "rejected" });
+	expect(panel.setup.captureCharFrame()).toContain("rejected");
+	panel.setup.renderer.destroy();
 });
+
 test("strips the repeated resource from the resolved audit line", async () => {
 	const { setup } = await renderPanel(
 		makeRequest(),
 		makeActions(),
 		1,
-		"Read was not approved: .env"
+		"Read was not approved: .env",
+		{ outcome: "rejected" }
 	);
-
-	await hoverAction(setup, "Reject");
-	setup.mockInput.pressEnter();
-	await flushUi(setup);
 
 	const frame = setup.captureCharFrame();
 	expect(frame).toContain("✗ Read was not approved");
@@ -283,17 +349,20 @@ test("strips the repeated resource from the resolved audit line", async () => {
 });
 
 test("reject aborts the turn when it is the only approval", async () => {
-	const { actions, setup } = await renderPanel(makeRequest(), makeActions());
+	const request = makeRequest();
+	const actions = makeActions();
+	const panel = await renderPanel(request, actions);
 
-	expect(setup.captureCharFrame()).not.toContain("Abort");
-	await hoverAction(setup, "Reject");
-	setup.mockInput.pressEnter();
-	await flushUi(setup);
+	expect(panel.setup.captureCharFrame()).not.toContain("Abort");
+	await hoverAction(panel.setup, "Reject");
+	panel.setup.mockInput.pressEnter();
+	await flushUi(panel.setup);
 
 	expect(actions.abort).toHaveBeenCalledTimes(1);
 	expect(actions.reject).not.toHaveBeenCalled();
-	expect(setup.captureCharFrame()).toContain("aborted");
-	setup.renderer.destroy();
+	await settleProjection(panel, request, actions, { outcome: "aborted" });
+	expect(panel.setup.captureCharFrame()).toContain("aborted");
+	panel.setup.renderer.destroy();
 });
 
 test("abort settles separately from rejecting one tool", async () => {
@@ -305,33 +374,22 @@ test("abort settles separately from rejecting one tool", async () => {
 
 	expect(actions.abort).toHaveBeenCalledTimes(1);
 	expect(actions.reject).not.toHaveBeenCalled();
-	expect(setup.captureCharFrame()).toContain("aborted");
 	setup.renderer.destroy();
 });
 
 test("confirming always on the head does not leak the overlay into the next request", async () => {
+	const firstRequest = makeRequest();
+	const secondRequest = makeRequest({
+		description: "Second queued approval.",
+		toolCallId: "call-2",
+	});
 	const firstActions = makeActions();
 	const secondActions = makeActions();
-	const setup = await testRender(
-		<ThemeProvider>
-			<KeyboardLayerProvider>
-				<ApprovalPanelsProvider>
-					<Register actions={firstActions} request={makeRequest()} />
-					<Register
-						actions={secondActions}
-						request={makeRequest({
-							description: "Second queued approval.",
-							toolCallId: "call-2",
-						})}
-					/>
-					<PendingApprovalDock />
-				</ApprovalPanelsProvider>
-			</KeyboardLayerProvider>
-		</ThemeProvider>,
-		{ height: 40, width: 120 }
-	);
-	await setup.renderOnce();
-	await flushUi(setup);
+	const { project, setup } = await renderSurface(<PendingApprovalDock />);
+	await projectEntries(project, setup, [
+		approvalPanelEntry(firstRequest, { actions: firstActions }),
+		approvalPanelEntry(secondRequest, { actions: secondActions }),
+	]);
 
 	// Arm the overlay on the head request and confirm the always grant.
 	await hoverAction(setup, "Always allow");
@@ -346,8 +404,16 @@ test("confirming always on the head does not leak the overlay into the next requ
 
 	expect(firstActions.allow).toHaveBeenCalledWith(true);
 
-	// The next queued request presents the plain permission panel again: the
-	// overlay must not carry over to a request the user never armed.
+	// The session settles the head, and the next queued request is presented as
+	// a plain permission panel: the overlay must not carry over to a request the
+	// user never armed.
+	await projectEntries(project, setup, [
+		approvalPanelEntry(firstRequest, {
+			actions: firstActions,
+			resolution: { outcome: "always" },
+		}),
+		approvalPanelEntry(secondRequest, { actions: secondActions }),
+	]);
 	const frame = setup.captureCharFrame();
 	expect(frame).toContain("Second queued approval.");
 	expect(frame).toContain("Permission required");
@@ -387,29 +453,19 @@ test("micro-drag over an action button never selects or copies", async () => {
 	setup.renderer.destroy();
 });
 
-test("dock renders only the queue head", async () => {
+test("dock renders only the pending head of the projection", async () => {
+	const firstRequest = makeRequest();
+	const secondRequest = makeRequest({
+		description: "Second queued approval.",
+		toolCallId: "call-2",
+	});
 	const firstActions = makeActions();
 	const secondActions = makeActions();
-	const setup = await testRender(
-		<ThemeProvider>
-			<KeyboardLayerProvider>
-				<ApprovalPanelsProvider>
-					<Register actions={firstActions} request={makeRequest()} />
-					<Register
-						actions={secondActions}
-						request={makeRequest({
-							description: "Second queued approval.",
-							toolCallId: "call-2",
-						})}
-					/>
-					<PendingApprovalDock />
-				</ApprovalPanelsProvider>
-			</KeyboardLayerProvider>
-		</ThemeProvider>,
-		{ height: 40, width: 120 }
-	);
-	await setup.renderOnce();
-	await flushUi(setup);
+	const { project, setup } = await renderSurface(<PendingApprovalDock />);
+	await projectEntries(project, setup, [
+		approvalPanelEntry(firstRequest, { actions: firstActions }),
+		approvalPanelEntry(secondRequest, { actions: secondActions }),
+	]);
 
 	let frame = setup.captureCharFrame();
 	expect(frame).toContain("1 of 2");
@@ -421,6 +477,15 @@ test("dock renders only the queue head", async () => {
 	setup.mockInput.pressEnter();
 	await flushUi(setup);
 	expect(firstActions.allow).toHaveBeenCalledWith(false);
+
+	// Once the session settles the head, the dock presents the next request.
+	await projectEntries(project, setup, [
+		approvalPanelEntry(firstRequest, {
+			actions: firstActions,
+			resolution: { outcome: "allow-once" },
+		}),
+		approvalPanelEntry(secondRequest, { actions: secondActions }),
+	]);
 	frame = setup.captureCharFrame();
 	expect(frame).toContain("Second queued approval.");
 	expect(frame).not.toContain("1 of 2");
@@ -429,17 +494,20 @@ test("dock renders only the queue head", async () => {
 });
 
 test("escape aborts the approval flow", async () => {
-	const { actions, setup } = await renderPanel(makeRequest(), makeActions());
+	const request = makeRequest();
+	const actions = makeActions();
+	const panel = await renderPanel(request, actions);
 
-	setup.mockInput.pressEscape();
-	await flushUi(setup);
-	await flushUi(setup);
+	panel.setup.mockInput.pressEscape();
+	await flushUi(panel.setup);
+	await flushUi(panel.setup);
 
 	expect(actions.abort).toHaveBeenCalledTimes(1);
 	expect(actions.cancel).not.toHaveBeenCalled();
 	expect(actions.allow).not.toHaveBeenCalled();
-	expect(setup.captureCharFrame()).toContain("aborted");
-	setup.renderer.destroy();
+	await settleProjection(panel, request, actions, { outcome: "aborted" });
+	expect(panel.setup.captureCharFrame()).toContain("aborted");
+	panel.setup.renderer.destroy();
 });
 
 test("escape cancels an armed always-allow confirm without aborting", async () => {

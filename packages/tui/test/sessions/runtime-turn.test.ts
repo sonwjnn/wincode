@@ -12,10 +12,10 @@ import { buildAgent } from "@/modules/agents/built-ins";
 import { RetiredModelError } from "@/modules/model-target";
 import {
 	buildAgentTurn,
-	buildAssistantFailureSessionRecord,
 	createGatedCodingTools,
 	runAgentTurnToText,
 } from "@/modules/sessions/hooks/runtime-turn";
+import { buildAssistantFailureSessionRecord } from "@/modules/sessions/turn-records";
 import {
 	agentId,
 	agentTurnId,

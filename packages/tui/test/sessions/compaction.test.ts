@@ -10,6 +10,7 @@ import {
 	serializeMessagesForCompaction,
 } from "@/modules/sessions/compaction/compaction";
 import { estimateCompactionTokens } from "@/modules/sessions/compaction/config";
+import type { SessionCompactionError } from "@/modules/sessions/compaction/error";
 import type {
 	SessionCompaction,
 	SummaryGeneratorInput,
@@ -25,6 +26,7 @@ import {
 	createSessionAttachmentStore,
 	getAttachmentReference,
 } from "@/modules/sessions/storage/attachment-store";
+import { createHangingSummary } from "../support/hanging-summary";
 import {
 	compactionId,
 	modelId,
@@ -688,35 +690,39 @@ test("persistence failure does not commit a compaction entry", async () => {
 	expect(store.appendCompaction).toHaveBeenCalledTimes(1);
 });
 
+/** The shared hanging generator, mocked so a test can assert its call count. */
+const hangingCompaction = () => {
+	const hanging = createHangingSummary();
+	return {
+		release: hanging.release,
+		summaryGenerator: mock(hanging.summaryGenerator),
+	};
+};
+
+const compactionSession = () => ({
+	messages: [
+		message("u1", "user", "first"),
+		message("a1", "assistant", "answer"),
+		message("u2", "user", "second"),
+		message("a2", "assistant", "answer"),
+	],
+	sessionId: sessionId("session-4"),
+});
+
 test("only one compaction operation runs per session", async () => {
-	const store = makeStore();
-	let release: (() => void) | undefined;
-	const summaryGenerator = mock(
-		() =>
-			new Promise<{ text: string }>((resolve) => {
-				release = () => resolve({ text: "summary" });
-			})
-	);
+	const { release, summaryGenerator } = hangingCompaction();
 	const compaction = createSessionCompaction({
 		generateId: () => compactionId("entry-4"),
-		store,
+		store: makeStore(),
 		summaryGenerator,
 		estimateTokens: (messages) => messages.length,
 	});
-	const session = {
-		messages: [
-			message("u1", "user", "first"),
-			message("a1", "assistant", "answer"),
-			message("u2", "user", "second"),
-			message("a2", "assistant", "answer"),
-		],
-		sessionId: sessionId("session-4"),
-	};
+	const session = compactionSession();
 	const first = compaction.compact({
 		session,
 		model,
 		settings,
-		trigger: "manual",
+		trigger: "threshold",
 	});
 	const second = compaction.compact({
 		session,
@@ -724,10 +730,76 @@ test("only one compaction operation runs per session", async () => {
 		settings,
 		trigger: "threshold",
 	});
-	expect(first).toBe(second);
-	await Promise.resolve();
-	release?.();
+
+	expect(second).toBe(first);
+	release();
 	await first;
+	expect(summaryGenerator).toHaveBeenCalledTimes(1);
+});
+
+test("joins an in-flight maintenance compaction across a selection change", async () => {
+	const { release, summaryGenerator } = hangingCompaction();
+	const compaction = createSessionCompaction({
+		generateId: () => compactionId("entry-6"),
+		store: makeStore(),
+		summaryGenerator,
+		estimateTokens: (messages) => messages.length,
+	});
+	const session = compactionSession();
+	const first = compaction.compact({
+		session,
+		model,
+		settings,
+		trigger: "threshold",
+	});
+	// The selection only decides how the summary is generated: two threshold
+	// requests share an intent, so neither is refused and the prompt is not lost.
+	const second = compaction.compact({
+		session,
+		model: { modelId: modelId("gpt-5.6-vega"), providerId: "anthropic" },
+		settings,
+		trigger: "threshold",
+	});
+
+	expect(second).toBe(first);
+	release();
+	await first;
+	expect(summaryGenerator).toHaveBeenCalledTimes(1);
+});
+
+test("refuses another intent instead of answering with the in-flight entry", async () => {
+	const { release, summaryGenerator } = hangingCompaction();
+	const compaction = createSessionCompaction({
+		generateId: () => compactionId("entry-5"),
+		store: makeStore(),
+		summaryGenerator,
+		estimateTokens: (messages) => messages.length,
+	});
+	const session = compactionSession();
+	const automatic = compaction.compact({
+		session,
+		model,
+		settings,
+		trigger: "threshold",
+	});
+	// The manual caller must never receive the automatic entry: its focus would
+	// be dropped and it would be told the wrong intent ran.
+	const manual = compaction.compact({
+		focus: "preserve database decisions",
+		session,
+		model,
+		settings,
+		trigger: "manual",
+	});
+	const outcome = manual.then(
+		(result) => result.entry.trigger,
+		(error: unknown) => (error as SessionCompactionError).code
+	);
+
+	release();
+	const result = await automatic;
+	expect(result.entry.trigger).toBe("threshold");
+	await expect(outcome).resolves.toBe("in-flight");
 	expect(summaryGenerator).toHaveBeenCalledTimes(1);
 });
 

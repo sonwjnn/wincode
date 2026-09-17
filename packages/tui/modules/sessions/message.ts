@@ -33,13 +33,14 @@ import type {
 	SkillToolPart,
 } from "@wincode/skills";
 import {
+	isSkillToolPart,
 	sanitizeSkillToolPart,
 	skillActivationSchema,
 	skillActivationSourceSchema,
 	skillContextSchema,
 } from "@wincode/skills";
 import { randomUUIDv7 } from "bun";
-import type { UnknownRecord } from "type-fest";
+import type { ReadonlyDeep, UnknownRecord } from "type-fest";
 import { z } from "zod";
 
 export type SessionFilePart = {
@@ -156,12 +157,12 @@ export type SessionMessageMetadata = {
 	readonly variant?: ModelVariant;
 };
 
-export type SessionMessage = {
-	readonly id: SessionMessageId;
-	readonly metadata?: SessionMessageMetadata;
-	readonly parts: SessionPart[];
-	readonly role: SessionMessageRole;
-};
+export type SessionMessage = ReadonlyDeep<{
+	id: SessionMessageId;
+	metadata?: SessionMessageMetadata;
+	parts: SessionPart[];
+	role: SessionMessageRole;
+}>;
 
 export const sessionMessageSkillSchema = z.union([
 	skillActivationSchema,
@@ -237,6 +238,24 @@ export const sanitizeSessionSkillToolPart = (
 		toolCallId: part.toolCallId,
 	};
 };
+/**
+ * Sanitizes every Skill Tool part of the given messages, so a Skill Tool Call
+ * is presented from its sanitized form and never from its raw activation.
+ */
+export const sanitizeSessionSkillToolParts = (
+	messages: readonly SessionMessage[]
+): SessionMessage[] =>
+	messages.map((message) =>
+		message.parts.some(isSkillToolPart)
+			? {
+					...message,
+					parts: message.parts.map((part) =>
+						isSkillToolPart(part) ? sanitizeSessionSkillToolPart(part) : part
+					),
+				}
+			: message
+	);
+
 export const sessionDataSchemas = {
 	fileMention: z.object({
 		byteLength: z.number().int().nonnegative(),

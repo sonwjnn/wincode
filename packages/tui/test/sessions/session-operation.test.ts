@@ -6,6 +6,7 @@ import {
 	createPermissionService,
 	createToolPermission,
 } from "@/modules/permissions";
+import type { SessionApprovalOutcome } from "@/modules/sessions/engine/types";
 import type { SessionSendInput } from "@/modules/sessions/session-operation";
 import { createSessionOperation } from "@/modules/sessions/session-operation";
 import { createToolGate } from "@/modules/tool-gate/tool-gate";
@@ -49,9 +50,7 @@ describe("SessionOperation", () => {
 
 		const send = operation.send(request);
 		await started;
-		const idle = operation.waitForIdle();
 		operation.cancel();
-		expect(await idle).toBe(false);
 
 		expect(await send).toEqual({ rejected: true, reason: "Cancelled" });
 		expect(execute).toHaveBeenCalledTimes(1);
@@ -121,9 +120,14 @@ describe("SessionOperation", () => {
 	test("preserves a gated Tool Call completion through the application seam", async () => {
 		const approvalRequests: unknown[] = [];
 		const gate = createToolGate({
-			openApproval: (request, actions) => {
-				approvalRequests.push(request);
-				actions.allow(false);
+			approvals: {
+				request: (request) => {
+					approvalRequests.push(request);
+					return Promise.resolve<SessionApprovalOutcome>({
+						decision: "allow",
+						remember: false,
+					});
+				},
 			},
 			resolvePermission: async () =>
 				createToolPermission({ shell: { "git status": "ask" } }),

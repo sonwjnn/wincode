@@ -16,13 +16,16 @@ import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { homedir } from "node:os";
 import { RGBA, type ScrollBoxRenderable } from "@opentui/core";
 import { MockTreeSitterClient } from "@opentui/core/testing";
-import { useEffect, useState } from "react";
+import { act, useEffect, useState } from "react";
 import type { SessionCompaction } from "@/modules/sessions/compaction";
 import type { SessionMessage } from "@/modules/sessions/message";
+import type { ApprovalPanelEntry } from "@/shared/providers/approval/approval-panels-provider";
 import type {
 	ToolApprovalActions,
 	ToolApprovalRequest,
 } from "@/shared/providers/approval/types";
+
+import { approvalPanelEntry } from "../support/approval-panel-entry";
 
 const { testRender } = await import("@opentui/react/test-utils");
 const {
@@ -148,10 +151,7 @@ const lines = (prefix: string, count: number): string =>
 	);
 
 type ChatShellProbeHandle = {
-	addApproval: (
-		request: ToolApprovalRequest,
-		actions: ToolApprovalActions
-	) => string;
+	projectApprovals: (entries: readonly ApprovalPanelEntry[]) => void;
 	setCompactions: (compactions: SessionCompaction[]) => void;
 	setCompacting: (isCompacting: boolean) => void;
 	setMessages: (messages: SessionMessage[]) => void;
@@ -182,13 +182,13 @@ function ChatShellProbe({
 	isInterruptArmed = false,
 	onRetry,
 }: ChatShellProbeProps) {
-	const { add: addApproval } = useApprovalPanels();
+	const { project: projectApprovals } = useApprovalPanels();
 	const [compactions, setCompactions] = useState(initialCompactions);
 	const [isCompacting, setCompacting] = useState(initialIsCompacting);
 	const [messages, setMessages] = useState(initialMessages);
 	useEffect(() => {
 		holder.current = {
-			addApproval,
+			projectApprovals,
 			setCompactions,
 			setCompacting,
 			setMessages,
@@ -196,7 +196,7 @@ function ChatShellProbe({
 		return () => {
 			holder.current = null;
 		};
-	}, [addApproval, holder]);
+	}, [holder, projectApprovals]);
 	return (
 		<ChatShell
 			compactions={compactions}
@@ -447,35 +447,36 @@ describe("ChatShell approval dock", () => {
 				cancel: cancelFirstApproval,
 				reject: () => undefined,
 			};
-			holder.current?.addApproval(
-				{
-					description: "First queued approval.",
-					identity: [
-						{ label: "tool", value: "shell" },
-						{ label: "resource", value: "pwd" },
-					],
-					input: { command: "pwd" },
-					toolCallId: makeToolCallId("call-approval-sticky"),
-				},
-				firstActions
-			);
-			holder.current?.addApproval(
-				{
-					description: "Second queued approval.",
-					identity: [
-						{ label: "tool", value: "shell" },
-						{ label: "resource", value: "whoami" },
-					],
-					input: { command: "whoami" },
-					toolCallId: makeToolCallId("call-approval-second"),
-				},
-				{
-					abort: () => undefined,
-					allow: () => undefined,
-					cancel: () => undefined,
-					reject: () => undefined,
-				}
-			);
+			const firstRequest: ToolApprovalRequest = {
+				description: "First queued approval.",
+				identity: [
+					{ label: "tool", value: "shell" },
+					{ label: "resource", value: "pwd" },
+				],
+				input: { command: "pwd" },
+				toolCallId: makeToolCallId("call-approval-sticky"),
+			};
+			const secondRequest: ToolApprovalRequest = {
+				description: "Second queued approval.",
+				identity: [
+					{ label: "tool", value: "shell" },
+					{ label: "resource", value: "whoami" },
+				],
+				input: { command: "whoami" },
+				toolCallId: makeToolCallId("call-approval-second"),
+			};
+			const secondActions: ToolApprovalActions = {
+				abort: () => undefined,
+				allow: () => undefined,
+				cancel: () => undefined,
+				reject: () => undefined,
+			};
+			await act(async () => {
+				holder.current?.projectApprovals([
+					approvalPanelEntry(firstRequest, { actions: firstActions }),
+					approvalPanelEntry(secondRequest, { actions: secondActions }),
+				]);
+			});
 			await flushUi(setup);
 
 			const frame = setup.captureCharFrame();
@@ -494,13 +495,37 @@ describe("ChatShell approval dock", () => {
 			expect(cancelFirstApproval).not.toHaveBeenCalled();
 			setup.mockInput.pressEnter();
 			await flushUi(setup);
+			// The panel asked the session to settle the head; the session answers
+			// with the projection, so the dock presents the next request.
+			await act(async () => {
+				holder.current?.projectApprovals([
+					approvalPanelEntry(firstRequest, {
+						actions: firstActions,
+						resolution: { outcome: "allow-once" },
+					}),
+					approvalPanelEntry(secondRequest, { actions: secondActions }),
+				]);
+			});
+			await flushUi(setup);
 			const nextFrame = setup.captureCharFrame();
 			expect(nextFrame).toContain("Second queued approval.");
 			expect(nextFrame).not.toContain("1 of 2");
-			expect(nextFrame).not.toContain("First queued approval.");
 			expect(nextFrame).not.toContain("Ask anything");
 
 			setup.mockInput.pressEnter();
+			await flushUi(setup);
+			await act(async () => {
+				holder.current?.projectApprovals([
+					approvalPanelEntry(firstRequest, {
+						actions: firstActions,
+						resolution: { outcome: "allow-once" },
+					}),
+					approvalPanelEntry(secondRequest, {
+						actions: secondActions,
+						resolution: { outcome: "allow-once" },
+					}),
+				]);
+			});
 			await flushUi(setup);
 			const settledFrame = setup.captureCharFrame();
 			expect(settledFrame).toContain("allowed once");

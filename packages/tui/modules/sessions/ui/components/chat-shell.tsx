@@ -7,7 +7,6 @@ import { useModelPricing } from "@/modules/model-pricing";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
-import type { ApprovalOutcome } from "@/shared/providers/approval/types";
 import { PendingApprovalDock } from "@/shared/providers/approval/ui/tool-approval-panel";
 import {
 	useKeyboardLayer,
@@ -21,7 +20,7 @@ import {
 	type SessionCompaction,
 } from "../../compaction";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
-import type { SessionViewState } from "../../session-controller";
+import type { SessionViewState } from "../../hooks/runtime-turn";
 import { summarizeSessionUsage } from "../../usage/session-usage";
 import type { ChatPromptSubmission } from "../../utils";
 import { ErrorMessage } from "../messages";
@@ -44,8 +43,7 @@ type ChatShellProps = {
 	isBusy: boolean;
 	isCompacting: boolean;
 	isInterruptArmed: boolean;
-	messages: SessionMessage[];
-	onApproval?: (id: string, outcome: ApprovalOutcome) => void;
+	messages: readonly SessionMessage[];
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
 	onRetry?: (messageId: SessionMessageId) => void | Promise<void>;
@@ -115,7 +113,6 @@ export function ChatShell({
 	isCompacting,
 	isInterruptArmed,
 	messages,
-	onApproval,
 	onCompact,
 	onOpenSettings,
 	onRetry,
@@ -259,7 +256,7 @@ export function ChatShell({
 					// The pending dock replaces the composer AND the session
 					// footer row while a decision is owed.
 					<box flexShrink={0} width="100%">
-						<PendingApprovalDock onResolve={onApproval} />
+						<PendingApprovalDock />
 					</box>
 				) : (
 					<>

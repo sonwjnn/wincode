@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { fromAny } from "@total-typescript/shoehorn";
-import { useEffect, useState } from "react";
+import { act, useEffect, useMemo, useState } from "react";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { buildAddedPreviewPatch } from "@/modules/sessions/ui/messages/edit-diff-block";
 import { setTreeSitterClientForTests } from "@/modules/sessions/ui/messages/syntax-style";
@@ -11,6 +11,7 @@ import {
 	countWriteLines,
 } from "@/modules/sessions/ui/messages/write-block";
 import {
+	type ApprovalPanelEntry,
 	type ApprovalPanelsContextValue,
 	ApprovalPanelsProvider,
 	useApprovalPanels,
@@ -18,6 +19,7 @@ import {
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+import { approvalPanelEntry } from "../support/approval-panel-entry";
 import { toolCallId } from "../support/identifiers";
 
 const { BotMessageContent } = await import(
@@ -97,8 +99,19 @@ const flushUi = async (
 };
 
 type ApprovalFrame = {
-	api: ApprovalPanelsContextValue | null;
+	project: ApprovalPanelsContextValue["project"];
 	setup: Awaited<ReturnType<typeof testRender>>;
+};
+
+/** Answers a projected request the way the session's settlement would. */
+const settleProjectedApproval = async (
+	project: ApprovalPanelsContextValue["project"],
+	request: ToolApprovalRequest,
+	resolution: NonNullable<ApprovalPanelEntry["resolution"]>
+): Promise<void> => {
+	await act(async () => {
+		project([approvalPanelEntry(request, { resolution })]);
+	});
 };
 
 const renderFrameWithApproval = async (
@@ -106,17 +119,15 @@ const renderFrameWithApproval = async (
 	request: ToolApprovalRequest,
 	height = 8
 ): Promise<ApprovalFrame> => {
-	const holder: { api: ApprovalPanelsContextValue | null } = { api: null };
+	let projected: ApprovalPanelsContextValue["project"] = () => undefined;
 	function Probe() {
-		holder.api = useApprovalPanels();
+		const { project } = useApprovalPanels();
+		projected = project;
+		// biome-ignore lint/correctness/useExhaustiveDependencies: the request is fixed for the rendered frame.
+		const entry = useMemo(() => approvalPanelEntry(request), [request]);
 		useEffect(() => {
-			holder.api?.add(request, {
-				abort: () => undefined,
-				allow: () => undefined,
-				cancel: () => undefined,
-				reject: () => undefined,
-			});
-		}, []);
+			project([entry]);
+		}, [entry, project]);
 		return null;
 	}
 	const setup = await testRender(
@@ -132,7 +143,12 @@ const renderFrameWithApproval = async (
 	);
 	await setup.renderOnce();
 	await flushUi(setup);
-	return { api: holder.api, setup };
+	return {
+		project: (entries) => {
+			projected(entries);
+		},
+		setup,
+	};
 };
 
 describe("BotMessageContent", () => {
@@ -680,21 +696,24 @@ describe("BotMessageContent", () => {
 			toolCallId: toolCallId("call-owned-error"),
 			type: "tool-read",
 		} satisfies ReadToolPart;
-		const { api, setup } = await renderFrameWithApproval(
+		const request: ToolApprovalRequest = {
+			description: "Read a UTF-8 text file inside the workspace.",
+			identity: [
+				{ label: "tool", value: "read" },
+				{ label: "resource", value: "~/.claude/settings.json" },
+			],
+			input: { path: "~/.claude/settings.json" },
+			toolCallId: toolCallId("call-owned-error"),
+		};
+		const { project, setup } = await renderFrameWithApproval(
 			[part],
-			{
-				description: "Read a UTF-8 text file inside the workspace.",
-				identity: [
-					{ label: "tool", value: "read" },
-					{ label: "resource", value: "~/.claude/settings.json" },
-				],
-				input: { path: "~/.claude/settings.json" },
-				toolCallId: toolCallId("call-owned-error"),
-			},
+			request,
 			8
 		);
 
-		api?.resolve("call-owned-error", "rejected");
+		await settleProjectedApproval(project, request, {
+			outcome: "rejected",
+		});
 		await flushUi(setup);
 		const frame = setup.captureCharFrame();
 
@@ -717,21 +736,24 @@ describe("BotMessageContent", () => {
 			toolName: "mcp_context_7_query_docs_3f6b8a11",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
-		const { api, setup } = await renderFrameWithApproval(
+		const request: ToolApprovalRequest = {
+			description: "Search the documentation.",
+			identity: [
+				{ label: "tool", value: "mcp_context_7_query_docs_3f6b8a11" },
+				{ label: "resource", value: "*" },
+			],
+			input: { query: "verbose failed query" },
+			toolCallId: toolCallId("call-approved-failed"),
+		};
+		const { project, setup } = await renderFrameWithApproval(
 			[part],
-			{
-				description: "Search the documentation.",
-				identity: [
-					{ label: "tool", value: "mcp_context_7_query_docs_3f6b8a11" },
-					{ label: "resource", value: "*" },
-				],
-				input: { query: "verbose failed query" },
-				toolCallId: toolCallId("call-approved-failed"),
-			},
+			request,
 			8
 		);
 
-		api?.resolve("call-approved-failed", "allow-once");
+		await settleProjectedApproval(project, request, {
+			outcome: "allow-once",
+		});
 		await flushUi(setup);
 		const frame = setup.captureCharFrame();
 
@@ -1016,21 +1038,24 @@ describe("BotMessageContent", () => {
 			toolCallId: toolCallId("call-approval-settled"),
 			type: "tool-read",
 		} satisfies ReadToolPart;
-		const { api, setup } = await renderFrameWithApproval(
+		const request: ToolApprovalRequest = {
+			description: "Read a UTF-8 text file inside the workspace.",
+			identity: [
+				{ label: "tool", value: "read" },
+				{ label: "resource", value: "README.md" },
+			],
+			input: { path: "README.md" },
+			toolCallId: toolCallId("call-approval-settled"),
+		};
+		const { project, setup } = await renderFrameWithApproval(
 			[part],
-			{
-				description: "Read a UTF-8 text file inside the workspace.",
-				identity: [
-					{ label: "tool", value: "read" },
-					{ label: "resource", value: "README.md" },
-				],
-				input: { path: "README.md" },
-				toolCallId: toolCallId("call-approval-settled"),
-			},
+			request,
 			8
 		);
 
-		api?.resolve("call-approval-settled", "always");
+		await settleProjectedApproval(project, request, {
+			outcome: "always",
+		});
 		await flushUi(setup);
 		const frame = setup.captureCharFrame();
 		expect(frame).toContain("always allowed");

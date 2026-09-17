@@ -1,4 +1,3 @@
-import { type SessionMessageId, toSessionMessageId } from "@wincode/agent-core";
 import { getModelFailureMessage } from "@wincode/ai/model-failures";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import {
@@ -8,7 +7,6 @@ import {
 	isString,
 	isUndefined,
 } from "@wincode/runtime-utils";
-import { isSkillToolPart } from "@wincode/skills";
 import { randomUUIDv7 } from "bun";
 import {
 	type CompactionId,
@@ -19,7 +17,7 @@ import {
 	isSessionToolPart,
 	type SessionMessage,
 	sanitizeInterruptedSessionMessages,
-	sanitizeSessionSkillToolPart,
+	sanitizeSessionSkillToolParts,
 } from "../message";
 import {
 	type CompactionAttachmentMetadata,
@@ -37,6 +35,8 @@ import {
 	estimateSessionContextTokens,
 	type ResolvedCompactionSettings,
 } from "./config";
+import { SessionCompactionError } from "./error";
+import { createCompactionSummaryMessage } from "./summary-message";
 import {
 	type AppendSessionCompactionInput,
 	type CompactionSession,
@@ -50,8 +50,6 @@ import {
 	type SummaryGeneratorResult,
 } from "./types";
 
-const SUMMARY_MESSAGE_PREFIX = "<wincode-compaction-summary>";
-const SUMMARY_MESSAGE_SUFFIX = "</wincode-compaction-summary>";
 const MAX_SERIALIZED_PART_LENGTH = 12_000;
 const RAW_IMAGE_DATA_URL_PATTERN =
 	/data:image\/[^;,]+;base64,(?:(?:[A-Za-z0-9+/]\s*){4})*(?:(?:[A-Za-z0-9+/]\s*){2}==|(?:[A-Za-z0-9+/]\s*){3}=|(?:[A-Za-z0-9+/]\s*){1,4})(?![A-Za-z0-9+/=])/giu;
@@ -59,63 +57,6 @@ const DATA_URL_PAYLOAD_PATTERN = /^data:[^,]+,(.*)$/su;
 const BASE64_WHITESPACE_PATTERN = /\s/gu;
 const sanitizeSummaryText = (text: string): string =>
 	text.replace(RAW_IMAGE_DATA_URL_PATTERN, "[attachment payload omitted]");
-
-export const compactionSummaryMessageId = (
-	entryId: CompactionId
-): SessionMessageId => toSessionMessageId(`compaction:${entryId}`);
-
-export const formatCompactionSummaryMessage = (
-	summary: CompactionSummary
-): string => {
-	const attachmentMetadata = (summary.attachments ?? []).map((attachment) =>
-		JSON.stringify({
-			attachmentId: attachment.attachmentId,
-			available: attachment.available,
-			byteLength: attachment.byteLength,
-			filename: attachment.filename,
-			mediaType: attachment.mediaType,
-			payloadOmitted: true,
-		})
-	);
-	return [
-		SUMMARY_MESSAGE_PREFIX,
-		summary.text,
-		...(attachmentMetadata.length > 0
-			? ["Attachments:", ...attachmentMetadata]
-			: []),
-		SUMMARY_MESSAGE_SUFFIX,
-	].join("\n");
-};
-
-export const createCompactionSummaryMessage = (
-	entry: Pick<SessionCompaction, "id" | "summary">
-): SessionMessage => ({
-	id: compactionSummaryMessageId(entry.id),
-	parts: [
-		{
-			text: formatCompactionSummaryMessage(entry.summary),
-			type: "text",
-		},
-	],
-	role: "user",
-});
-export const isCompactionSummaryMessage = (
-	message: Pick<SessionMessage, "id">
-): boolean => message.id.startsWith("compaction:");
-
-const sanitizeSkillToolMessages = (
-	messages: SessionMessage[]
-): SessionMessage[] =>
-	messages.map((message) =>
-		message.parts.some(isSkillToolPart)
-			? {
-					...message,
-					parts: message.parts.map((part) =>
-						isSkillToolPart(part) ? sanitizeSessionSkillToolPart(part) : part
-					),
-				}
-			: message
-	);
 
 const applyDurableSplitBoundary = (
 	activeMessages: SessionMessage[],
@@ -154,7 +95,7 @@ export const rebuildActiveMessages = (
 	messages: readonly SessionMessage[],
 	latest: SessionCompaction | null
 ): SessionMessage[] => {
-	const replaySafeMessages = sanitizeSkillToolMessages(
+	const replaySafeMessages = sanitizeSessionSkillToolParts(
 		sanitizeInterruptedSessionMessages([...messages])
 	);
 	if (isNull(latest)) {
@@ -196,27 +137,6 @@ export const rebuildActiveMessages = (
 	return [createCompactionSummaryMessage(latest), ...activeMessages];
 };
 
-export class SessionCompactionError extends Error {
-	readonly code:
-		| "cancelled"
-		| "context-still-too-large"
-		| "history-too-short"
-		| "invalid-boundary"
-		| "not-needed"
-		| "persistence-failed"
-		| "summary-failed";
-
-	constructor(
-		code: SessionCompactionError["code"],
-		message: string,
-		options?: ErrorOptions
-	) {
-		super(message, options);
-		this.code = code;
-		this.name = "SessionCompactionError";
-	}
-}
-
 type CompactionStore = Pick<
 	SessionStore,
 	"appendCompaction" | "getLatestCompaction"
@@ -254,13 +174,51 @@ export type CompactSessionResult = {
 };
 
 export type SessionCompactionModule = {
+	/**
+	 * Runs a compaction intent. A request whose intent is already in flight
+	 * joins that operation; a request for another intent is refused, so no
+	 * caller is answered with another caller's result.
+	 */
 	compact: (input: CompactSessionInput) => Promise<CompactSessionResult>;
+	/**
+	 * The compaction operation in flight for a session, if any. It admits a
+	 * request; it is not a join handle for the Session Context, because it
+	 * settles before the swap it produces is published.
+	 */
 	getInFlight: (sessionId: SessionId) => Promise<CompactSessionResult> | null;
 	needsCompaction: (
 		messages: readonly SessionMessage[],
 		settings: Pick<ResolvedCompactionSettings, "enabled" | "thresholdTokens">
 	) => boolean;
 };
+
+/**
+ * What a caller asks for, as distinct from the inputs it asks with. The Model
+ * Target selection and variant only decide how a summary is generated, so two
+ * requests that share a trigger and focus share an intent even across a
+ * selection change: both want the session's threshold maintained, or both want
+ * the same focus honored.
+ */
+type CompactionIntent = {
+	focus?: string;
+	trigger: CompactionTriggerReason;
+};
+
+const normalizeFocus = (focus: string | undefined): string | undefined => {
+	const trimmed = focus?.trim();
+	return trimmed ? trimmed : undefined;
+};
+
+const intentOf = (input: CompactSessionInput): CompactionIntent => {
+	const focus = normalizeFocus(input.focus);
+	return {
+		...(isUndefined(focus) ? {} : { focus }),
+		trigger: input.trigger,
+	};
+};
+
+const sameIntent = (left: CompactionIntent, right: CompactionIntent): boolean =>
+	left.focus === right.focus && left.trigger === right.trigger;
 
 type CompactionModuleDependencies = {
 	attachmentStore?: SessionAttachmentStore;
@@ -941,6 +899,7 @@ const appendInputFor = ({
 			"There is not enough complete history to compact."
 		);
 	}
+	const normalizedFocus = normalizeFocus(focus);
 	const summary: CompactionSummary = {
 		...(attachmentMetadata && attachmentMetadata.length > 0
 			? { attachments: [...attachmentMetadata] }
@@ -948,7 +907,7 @@ const appendInputFor = ({
 		coveredMessageIds: summarySpan.map((message) => message.id),
 		formatVersion: 1,
 		text: sanitizeSummaryText(summarization.text),
-		...(focus?.trim() ? { focus: focus.trim() } : {}),
+		...(isUndefined(normalizedFocus) ? {} : { focus: normalizedFocus }),
 	};
 	const nowValue = now();
 	return {
@@ -968,7 +927,7 @@ const appendInputFor = ({
 		tokensBefore: estimateSessionContextTokens(session.messages, estimateTokens)
 			.tokens,
 		trigger,
-		...(focus?.trim() ? { focus: focus.trim() } : {}),
+		...(isUndefined(normalizedFocus) ? {} : { focus: normalizedFocus }),
 		id: entryId,
 		...(isUndefined(variant) ? {} : { summarizationVariant: variant }),
 		priorCompactionId: previous?.id,
@@ -1150,7 +1109,10 @@ export const createSessionCompaction = ({
 	generateId: createId = () => toCompactionId(randomUUIDv7()),
 	now = () => new Date(),
 }: CompactionModuleDependencies): SessionCompactionModule => {
-	const inFlight = new Map<SessionId, Promise<CompactSessionResult>>();
+	const inFlight = new Map<
+		SessionId,
+		{ intent: CompactionIntent; operation: Promise<CompactSessionResult> }
+	>();
 	const persistCompactionEntry = async ({
 		attachmentMetadata,
 		messages,
@@ -1251,7 +1213,7 @@ export const createSessionCompaction = ({
 			);
 		}
 		assertNotAborted(input.signal);
-		const replaySafeMessages = sanitizeSkillToolMessages(
+		const replaySafeMessages = sanitizeSessionSkillToolParts(
 			sanitizeInterruptedSessionMessages([...input.session.messages])
 		);
 		const externalizedMessages = attachmentStore
@@ -1287,6 +1249,7 @@ export const createSessionCompaction = ({
 					input.signal
 				)
 			: { summaryMessages: summarySpan };
+		const focus = normalizeFocus(input.focus);
 		const generatorInput: SummaryGeneratorInput = {
 			...(isUndefined(input.variant) ? {} : { variant: input.variant }),
 			model: input.model,
@@ -1298,7 +1261,7 @@ export const createSessionCompaction = ({
 				? { summaryMessages: preparedSummary.summaryMessages }
 				: {}),
 			maxOutputTokens,
-			...(input.focus?.trim() ? { focus: input.focus.trim() } : {}),
+			...(isUndefined(focus) ? {} : { focus }),
 			signal: input.signal,
 		};
 		const generated = await generateCompactionSummary(
@@ -1312,7 +1275,7 @@ export const createSessionCompaction = ({
 			cutPoint,
 			entryId: createId(),
 			estimateTokens,
-			focus: input.focus,
+			focus,
 			model: input.model,
 			now,
 			previous,
@@ -1328,22 +1291,31 @@ export const createSessionCompaction = ({
 	const compact = (
 		input: CompactSessionInput
 	): Promise<CompactSessionResult> => {
-		const existing = inFlight.get(input.session.sessionId);
-		if (existing) {
-			return existing;
+		const session = input.session.sessionId;
+		const running = inFlight.get(session);
+		if (running) {
+			if (sameIntent(running.intent, intentOf(input))) {
+				return running.operation;
+			}
+			return Promise.reject(
+				new SessionCompactionError(
+					"in-flight",
+					`A ${running.intent.trigger} compaction is already in flight for this session; the ${input.trigger} request was not started.`
+				)
+			);
 		}
 		let operation: Promise<CompactSessionResult>;
 		operation = compactNow(input).finally(() => {
-			if (inFlight.get(input.session.sessionId) === operation) {
-				inFlight.delete(input.session.sessionId);
+			if (inFlight.get(session)?.operation === operation) {
+				inFlight.delete(session);
 			}
 		});
-		inFlight.set(input.session.sessionId, operation);
+		inFlight.set(session, { intent: intentOf(input), operation });
 		return operation;
 	};
 	return {
 		compact,
-		getInFlight: (sessionId) => inFlight.get(sessionId) ?? null,
+		getInFlight: (sessionId) => inFlight.get(sessionId)?.operation ?? null,
 		needsCompaction: (messages, settings) => {
 			if (!settings.enabled || isNull(settings.thresholdTokens)) {
 				return false;

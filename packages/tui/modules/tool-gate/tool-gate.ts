@@ -37,15 +37,9 @@ import {
 	STATIC_TOOL_PERMISSION_ACTIONS,
 	type ToolPermission,
 } from "@/modules/permissions";
-import {
-	type ApprovalQueue,
-	createApprovalQueue,
-} from "@/shared/providers/approval/approval-queue";
+import type { SessionApprovalOutcome } from "@/modules/sessions/engine/types";
 import { formatRejectionFeedback } from "@/shared/providers/approval/format";
-import type {
-	ToolApprovalActions,
-	ToolApprovalRequest,
-} from "@/shared/providers/approval/types";
+import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 
 /**
  * The settled outcome of one tool call gated through the Tool Gate. `allow`
@@ -101,13 +95,19 @@ export type ToolGate = {
 	gate(call: GateCall): Promise<GateOutcome>;
 };
 
+/**
+ * The session's single approval settlement path. The Tool Gate registers a
+ * request and receives its one settlement; whether a panel action, the
+ * close-approvals command, an abort, or shutdown settles it is not the gate's
+ * concern.
+ */
+export type ToolGateApprovalPort = {
+	request: (request: ToolApprovalRequest) => Promise<SessionApprovalOutcome>;
+};
+
 export type ToolGateDeps = {
-	approvalQueue?: ApprovalQueue<ToolApprovalRequest>;
+	approvals: ToolGateApprovalPort;
 	onAbort?: (request: ToolApprovalRequest) => void;
-	openApproval: (
-		request: ToolApprovalRequest,
-		actions: ToolApprovalActions
-	) => void;
 	resolvePermission: (agentId?: AgentId) => Promise<ToolPermission>;
 	resolveResourceLimits?: (agentId?: AgentId) => Promise<ToolResourceLimits>;
 	sandbox: WorkspacePolicy;
@@ -218,12 +218,10 @@ const skillDenialText = (name: string): string =>
 const skillRejectionText = (name: string): string =>
 	`Skill "${name}" was not approved`;
 
-type InternalApprovalDeps = {
-	approvalQueue: ApprovalQueue<ToolApprovalRequest>;
-	onAbort?: (request: ToolApprovalRequest) => void;
-	openApproval: ToolGateDeps["openApproval"];
-	service: PermissionService;
-};
+type InternalApprovalDeps = Pick<
+	ToolGateDeps,
+	"approvals" | "onAbort" | "service"
+>;
 
 type InternalApprovalRequest = {
 	checks: ReadonlyArray<{
@@ -268,15 +266,16 @@ const grantResourceLimits = (
 /**
  * The single approval path shared by every gated tool family. It applies
  * temporary grants and auto approval to the raw policy `decision`
- * (`resolveApproval`), and for an `ask` enqueues the request on the
- * session approval queue, opens the shared inline approval panel, and
- * awaits the outcome. A remembered "always" outcome records the grant only
- * when the request is not under the safety ceiling, and reject feedback is
- * bounded before it reaches the Agent.
+ * (`resolveApproval`), and for an `ask` registers the request with the
+ * session's approval port and awaits its one settlement. A remembered "always"
+ * outcome records the grant only when the request is not under the safety
+ * ceiling, reject feedback is bounded before it reaches the Agent, and an abort
+ * stops the turn that owns the request once — the settlement is the only route,
+ * so two abort triggers cannot both handle the same request.
  */
 const settleApproval = async (
 	{ checks, doomAsk, request, safety }: InternalApprovalRequest,
-	{ approvalQueue, onAbort, openApproval, service }: InternalApprovalDeps,
+	{ approvals, onAbort, service }: InternalApprovalDeps,
 	recordGrant: () => void
 ): Promise<GateOutcome> => {
 	const effective = checks.map(({ action, decision, resource }) =>
@@ -302,18 +301,9 @@ const settleApproval = async (
 	if (effective.every((decision) => decision === "allow")) {
 		return { kind: "allow" };
 	}
-	const handle = approvalQueue.request(request);
-	openApproval(request, {
-		abort: () => {
-			handle.abort();
-			onAbort?.(request);
-		},
-		allow: (remember) => handle.allow(remember),
-		cancel: () => handle.reject(),
-		reject: (feedback) => handle.reject(feedback),
-	});
-	const outcome = await handle.outcome;
+	const outcome = await approvals.request(request);
 	if (outcome.decision === "abort") {
+		onAbort?.(request);
 		return {
 			errorText: request.description,
 			kind: "reject",
@@ -393,15 +383,15 @@ const withErrorText = (
  * The deep Tool Gate module: one interface enforcing Tool Permission at
  * execution time for every tool family. It owns resource resolution and
  * canonicalization, the external-directory composition, per-node shell
- * evaluation, the doom_loop repeat guard, the session approval queue,
- * exact temporary-grant recording, and the deny/reject wording each family
- * emits. Callers map the settled outcome onto their own output channel; the
- * gate emits nothing.
+ * evaluation, the doom_loop repeat guard, exact temporary-grant recording, and
+ * the deny/reject wording each family emits; it registers every `ask` with the
+ * session's single approval settlement path and never settles one itself.
+ * Callers map the settled outcome onto their own output channel; the gate emits
+ * nothing.
  */
 export const createToolGate = ({
-	approvalQueue: providedApprovalQueue,
+	approvals,
 	onAbort,
-	openApproval,
 	resolvePermission,
 	resolveResourceLimits: resolveResourceLimitsOption,
 	sandbox,
@@ -410,9 +400,7 @@ export const createToolGate = ({
 	const resolveResourceLimits =
 		resolveResourceLimitsOption ??
 		(() => Promise.resolve(getToolResourceLimits()));
-	const approvalQueue =
-		providedApprovalQueue ?? createApprovalQueue<ToolApprovalRequest>();
-	const approvalDeps = { approvalQueue, onAbort, openApproval, service };
+	const approvalDeps = { approvals, onAbort, service };
 
 	const gateCodingToolCall = async (
 		toolCall: { input: unknown; toolCallId: ToolCallId; toolName: string },

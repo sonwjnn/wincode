@@ -66,7 +66,7 @@ test("compacts manually through the UI and uses the summary on the next turn", a
 	let setup: TestRendererSetup | undefined;
 	try {
 		const rendered = await renderSession({
-			initialMessages: messages,
+			initialTranscript: messages,
 			pricing: createE2ePricing(20_000),
 			sessionId,
 		});

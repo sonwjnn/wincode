@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
+import { fromPartial } from "@total-typescript/shoehorn";
 import {
 	getToolResourceLimits,
 	type ToolResourceLimits,
@@ -16,24 +17,32 @@ import {
 	externalParentDirectoryGlob,
 	type PermissionService,
 } from "@/modules/permissions";
-import { createToolGate } from "@/modules/tool-gate/tool-gate";
+import { createSessionEngine } from "@/modules/sessions/engine/session-engine";
 import type {
-	ToolApprovalActions,
-	ToolApprovalRequest,
-} from "@/shared/providers/approval/types";
-import { toolCallId as makeToolCallId } from "../support/identifiers";
+	SessionApprovalOutcome,
+	SessionEngine,
+	SessionEnginePorts,
+} from "@/modules/sessions/engine/types";
+import {
+	createToolGate,
+	type ToolGateApprovalPort,
+} from "@/modules/tool-gate/tool-gate";
+import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
+import {
+	toolCallId as makeToolCallId,
+	sessionId,
+} from "../support/identifiers";
 
 const createGate = (
 	permission = createToolPermission(),
-	openApproval: Parameters<typeof createToolGate>[0]["openApproval"] = () =>
-		undefined,
+	approvals: ToolGateApprovalPort = allowOnceApproval().approvals,
 	onAbort?: Parameters<typeof createToolGate>[0]["onAbort"],
 	service: PermissionService = createPermissionService(),
 	resourceLimits: ToolResourceLimits = getToolResourceLimits()
 ) =>
 	createToolGate({
+		approvals,
 		onAbort,
-		openApproval,
 		resolvePermission: async () => permission,
 		resolveResourceLimits: async () => resourceLimits,
 		sandbox: createWorkspaceSandbox(process.cwd()),
@@ -52,22 +61,36 @@ const shellCall = (
 	},
 });
 
-const settlingApproval = () => {
+/** An approval port that records each request and settles it with `outcome`. */
+const settlingApprovalPort = (
+	outcome: SessionApprovalOutcome,
+	requests?: ToolApprovalRequest[]
+): ToolGateApprovalPort => ({
+	request: (request) => {
+		requests?.push(request);
+		return Promise.resolve(outcome);
+	},
+});
+
+/** An approval port that records each request and allows it once. */
+const allowOnceApproval = (): {
+	approvals: ToolGateApprovalPort;
+	requests: ToolApprovalRequest[];
+} => {
 	const requests: ToolApprovalRequest[] = [];
-	const openApproval = (
-		request: ToolApprovalRequest,
-		actions: ToolApprovalActions
-	) => {
-		requests.push(request);
-		actions.allow(false);
+	return {
+		approvals: settlingApprovalPort(
+			{ decision: "allow", remember: false },
+			requests
+		),
+		requests,
 	};
-	return { openApproval, requests };
 };
 
 describe("shell posture defaults", () => {
 	test("pwd, ls -la, and git status run without any approval", async () => {
-		const { openApproval, requests } = settlingApproval();
-		const gate = createGate(createToolPermission(), openApproval);
+		const { approvals, requests } = allowOnceApproval();
+		const gate = createGate(createToolPermission(), approvals);
 
 		for (const command of ["pwd", "ls -la", "git status"]) {
 			await expect(gate.gate(shellCall(command))).resolves.toEqual({
@@ -81,10 +104,7 @@ describe("shell posture defaults", () => {
 		const service = createPermissionService();
 		const gate = createGate(
 			createToolPermission(),
-			(request, actions) => {
-				requests.push(request);
-				actions.allow(true);
-			},
+			settlingApprovalPort({ decision: "allow", remember: true }, requests),
 			undefined,
 			service,
 			getToolResourceLimits("extended")
@@ -106,8 +126,8 @@ describe("shell posture defaults", () => {
 	});
 
 	test("rm and sudo are denied without an approval dialog", async () => {
-		const { openApproval, requests } = settlingApproval();
-		const gate = createGate(createToolPermission(), openApproval);
+		const { approvals, requests } = allowOnceApproval();
+		const gate = createGate(createToolPermission(), approvals);
 
 		await expect(gate.gate(shellCall("rm file.txt"))).resolves.toEqual({
 			errorText: "Shell denied by policy: rm file.txt",
@@ -125,8 +145,8 @@ describe("shell posture defaults", () => {
 	});
 
 	test("compound commands deny on the rm node", async () => {
-		const { openApproval, requests } = settlingApproval();
-		const gate = createGate(createToolPermission(), openApproval);
+		const { approvals, requests } = allowOnceApproval();
+		const gate = createGate(createToolPermission(), approvals);
 
 		await expect(gate.gate(shellCall("cd ~ && rm -rf *"))).resolves.toEqual({
 			errorText: "Shell denied by policy: cd ~ && rm -rf *",
@@ -142,8 +162,8 @@ describe("shell posture defaults", () => {
 	});
 
 	test("compound commands deny on the sudo node", async () => {
-		const { openApproval, requests } = settlingApproval();
-		const gate = createGate(createToolPermission(), openApproval);
+		const { approvals, requests } = allowOnceApproval();
+		const gate = createGate(createToolPermission(), approvals);
 
 		// `git status` alone is allowed, but the sudo node inside the compound
 		// command carries its own deny and composes most-restrictively.
@@ -158,8 +178,8 @@ describe("shell posture defaults", () => {
 
 	test("a compound command with one ask node and one allow node prompts once and runs only on approval", async () => {
 		const askPolicy = createToolPermission({ shell: { "git status": "ask" } });
-		const { openApproval, requests } = settlingApproval();
-		const gate = createGate(askPolicy, openApproval);
+		const { approvals, requests } = allowOnceApproval();
+		const gate = createGate(askPolicy, approvals);
 
 		// The ask node makes the whole compound an ask; the single approval
 		// covers the call, and approving it runs the command.
@@ -175,8 +195,9 @@ describe("shell posture defaults", () => {
 		});
 
 		// Rejecting that same ask never runs the command.
-		const rejectingGate = createGate(askPolicy, (_request, actions) =>
-			actions.reject()
+		const rejectingGate = createGate(
+			askPolicy,
+			settlingApprovalPort({ decision: "reject" })
 		);
 		await expect(
 			rejectingGate.gate(shellCall("git status && ls -la"))
@@ -187,10 +208,10 @@ describe("shell posture defaults", () => {
 	});
 
 	test("a compound command with one deny node never prompts even when another node asks", async () => {
-		const { openApproval, requests } = settlingApproval();
+		const { approvals, requests } = allowOnceApproval();
 		const gate = createGate(
 			createToolPermission({ shell: { "ls *": "ask" } }),
-			openApproval
+			approvals
 		);
 
 		// The ask node would prompt on its own, but the rm node's deny composes
@@ -205,10 +226,10 @@ describe("shell posture defaults", () => {
 	});
 
 	test("in a compound command only the cd node is exempt: the other node still evaluates", async () => {
-		const { openApproval, requests } = settlingApproval();
+		const { approvals, requests } = allowOnceApproval();
 		const askGate = createGate(
 			createToolPermission({ shell: { "git commit *": "ask" } }),
-			openApproval
+			approvals
 		);
 
 		// The cd node is exempt, but the git node's ask still prompts once for
@@ -225,7 +246,7 @@ describe("shell posture defaults", () => {
 		// A deny on the git node still denies the whole compound.
 		const denyGate = createGate(
 			createToolPermission({ shell: { "git *": "deny" } }),
-			openApproval
+			approvals
 		);
 		await expect(
 			denyGate.gate(shellCall("cd tmp && git commit -m x"))
@@ -239,7 +260,7 @@ describe("shell posture defaults", () => {
 		// exempt inside compounds while the other node still evaluates.
 		const cdAskGate = createGate(
 			createToolPermission({ shell: { "cd tmp": "ask" } }),
-			openApproval
+			approvals
 		);
 		await expect(
 			cdAskGate.gate(shellCall("cd tmp && ls -la"))
@@ -248,8 +269,8 @@ describe("shell posture defaults", () => {
 	});
 
 	test("cd-family commands are exempt from the shell ask", async () => {
-		const { openApproval, requests } = settlingApproval();
-		const gate = createGate(createToolPermission(), openApproval);
+		const { approvals, requests } = allowOnceApproval();
+		const gate = createGate(createToolPermission(), approvals);
 
 		for (const command of ["cd ~", "cd packages/tui", "pushd /tmp", "popd"]) {
 			await expect(gate.gate(shellCall(command))).resolves.toEqual({
@@ -260,10 +281,10 @@ describe("shell posture defaults", () => {
 	});
 
 	test("cd-family commands stay exempt under an ask policy but an explicit deny still holds", async () => {
-		const { openApproval, requests } = settlingApproval();
+		const { approvals, requests } = allowOnceApproval();
 		const askGate = createGate(
 			createToolPermission({ shell: "ask" }),
-			openApproval
+			approvals
 		);
 		for (const command of [
 			"cd packages/tui",
@@ -281,7 +302,7 @@ describe("shell posture defaults", () => {
 
 		const denyGate = createGate(
 			createToolPermission({ shell: "deny" }),
-			openApproval
+			approvals
 		);
 		await expect(denyGate.gate(shellCall("cd ~"))).resolves.toEqual({
 			errorText: "Shell denied by policy: cd ~",
@@ -290,10 +311,10 @@ describe("shell posture defaults", () => {
 	});
 
 	test("a command without any command node still honors explicit shell rules", async () => {
-		const { openApproval, requests } = settlingApproval();
+		const { approvals, requests } = allowOnceApproval();
 		const denyGate = createGate(
 			createToolPermission({ shell: "deny" }),
-			openApproval
+			approvals
 		);
 		// A bare assignment parses cleanly with no command node; an explicit
 		// deny must still block it (and never silently allow it).
@@ -304,22 +325,22 @@ describe("shell posture defaults", () => {
 
 		const askGate = createGate(
 			createToolPermission({ shell: "ask" }),
-			openApproval
+			approvals
 		);
 		await expect(askGate.gate(shellCall("FOO=bar"))).resolves.toEqual({
 			kind: "allow",
 		});
 		expect(requests).toHaveLength(1);
 
-		const defaultGate = createGate(createToolPermission(), openApproval);
+		const defaultGate = createGate(createToolPermission(), approvals);
 		await expect(defaultGate.gate(shellCall("FOO=bar"))).resolves.toEqual({
 			kind: "allow",
 		});
 	});
 
 	test("an unparseable command fails closed to an ask", async () => {
-		const { openApproval, requests } = settlingApproval();
-		const gate = createGate(createToolPermission(), openApproval);
+		const { approvals, requests } = allowOnceApproval();
+		const gate = createGate(createToolPermission(), approvals);
 
 		await expect(gate.gate(shellCall('echo "unterminated'))).resolves.toEqual({
 			kind: "allow",
@@ -334,10 +355,10 @@ describe("shell posture defaults", () => {
 
 describe("shell override and grants", () => {
 	test("a configured rm * ask turns rm into an ordinary ask where allow-once and always work", async () => {
-		const { openApproval, requests } = settlingApproval();
+		const { approvals, requests } = allowOnceApproval();
 		const gate = createGate(
 			createToolPermission({ shell: { "rm *": "ask" } }),
-			openApproval
+			approvals
 		);
 
 		await expect(gate.gate(shellCall("rm file.txt"))).resolves.toEqual({
@@ -355,10 +376,10 @@ describe("shell override and grants", () => {
 		const service = createPermissionService();
 		const alwaysRequests: ToolApprovalRequest[] = [];
 		const alwaysGate = createToolGate({
-			openApproval: (request, actions) => {
-				alwaysRequests.push(request);
-				actions.allow(true);
-			},
+			approvals: settlingApprovalPort(
+				{ decision: "allow", remember: true },
+				alwaysRequests
+			),
 			resolvePermission: async () =>
 				createToolPermission({ shell: { "rm *": "ask" } }),
 			sandbox: createWorkspaceSandbox(process.cwd()),
@@ -377,10 +398,10 @@ describe("shell override and grants", () => {
 		const service = createPermissionService();
 		const requests: ToolApprovalRequest[] = [];
 		const gate = createToolGate({
-			openApproval: (request, actions) => {
-				requests.push(request);
-				actions.allow(true);
-			},
+			approvals: settlingApprovalPort(
+				{ decision: "allow", remember: true },
+				requests
+			),
 			resolvePermission: async () =>
 				createToolPermission({ shell: { "*": "ask" } }),
 			sandbox: createWorkspaceSandbox(process.cwd()),
@@ -415,10 +436,10 @@ describe("shell override and grants", () => {
 		const service = createPermissionService();
 		const requests: ToolApprovalRequest[] = [];
 		const gate = createToolGate({
-			openApproval: (request, actions) => {
-				requests.push(request);
-				actions.allow(true);
-			},
+			approvals: settlingApprovalPort(
+				{ decision: "allow", remember: true },
+				requests
+			),
 			resolvePermission: async () =>
 				createToolPermission({ shell: { "*": "ask" } }),
 			sandbox: createWorkspaceSandbox(process.cwd()),
@@ -446,10 +467,10 @@ describe("shell override and grants", () => {
 		const service = createPermissionService();
 		const requests: ToolApprovalRequest[] = [];
 		const gate = createToolGate({
-			openApproval: (request, actions) => {
-				requests.push(request);
-				actions.allow(false);
-			},
+			approvals: settlingApprovalPort(
+				{ decision: "allow", remember: false },
+				requests
+			),
 			resolvePermission: async () => createToolPermission({ read: "ask" }),
 			sandbox: createWorkspaceSandbox(process.cwd()),
 			service,
@@ -493,10 +514,7 @@ describe("shell override and grants", () => {
 		const requests: ToolApprovalRequest[] = [];
 		const gate = createGate(
 			createToolPermission({ edit: "ask" }),
-			(request, actions) => {
-				requests.push(request);
-				actions.allow(true);
-			},
+			settlingApprovalPort({ decision: "allow", remember: true }, requests),
 			undefined,
 			service,
 			getToolResourceLimits("extended")
@@ -519,10 +537,10 @@ describe("shell override and grants", () => {
 	test("an explicit deny is never bypassed by grants or auto approval", async () => {
 		const service = createPermissionService({ autoApproval: true });
 		service.grant("shell", "rm -rf src/");
-		const { openApproval, requests } = settlingApproval();
+		const { approvals, requests } = allowOnceApproval();
 		const gate = createGate(
 			createToolPermission(),
-			openApproval,
+			approvals,
 			undefined,
 			service
 		);
@@ -543,10 +561,10 @@ describe("shell override and grants", () => {
 		const service = createPermissionService();
 		const requests: ToolApprovalRequest[] = [];
 		const gate = createToolGate({
-			openApproval: (request, actions) => {
-				requests.push(request);
-				actions.allow(true);
-			},
+			approvals: settlingApprovalPort(
+				{ decision: "allow", remember: true },
+				requests
+			),
 			resolvePermission: async () => createToolPermission(),
 			sandbox: createWorkspaceSandbox(workspace),
 			service,
@@ -575,10 +593,10 @@ describe("shell override and grants", () => {
 		const service = createPermissionService();
 		const requests: ToolApprovalRequest[] = [];
 		const gate = createToolGate({
-			openApproval: (request, actions) => {
-				requests.push(request);
-				actions.allow(true);
-			},
+			approvals: settlingApprovalPort(
+				{ decision: "allow", remember: true },
+				requests
+			),
 			resolvePermission: async () => createToolPermission(),
 			sandbox: createWorkspaceSandbox(workspace),
 			service,
@@ -607,10 +625,10 @@ describe("shell override and grants", () => {
 	});
 
 	test("a workspace-internal cwd gates without the external scope", async () => {
-		const { openApproval, requests } = settlingApproval();
+		const { approvals, requests } = allowOnceApproval();
 		const gate = createGate(
 			createToolPermission({ shell: { "*": "ask" } }),
-			openApproval
+			approvals
 		);
 
 		await expect(
@@ -626,8 +644,8 @@ describe("shell override and grants", () => {
 
 describe("doom_loop", () => {
 	test("the third identical shell call asks and a differing call resets the run", async () => {
-		const { openApproval, requests } = settlingApproval();
-		const gate = createGate(createToolPermission(), openApproval);
+		const { approvals, requests } = allowOnceApproval();
+		const gate = createGate(createToolPermission(), approvals);
 
 		await gate.gate(shellCall("pwd", "call-1"));
 		await gate.gate(shellCall("pwd", "call-2"));
@@ -644,10 +662,10 @@ describe("doom_loop", () => {
 
 	test("--auto bypasses the doom_loop ask but an explicit deny never does", async () => {
 		const service = createPermissionService({ autoApproval: true });
-		const { openApproval, requests } = settlingApproval();
+		const { approvals, requests } = allowOnceApproval();
 		const gate = createGate(
 			createToolPermission(),
-			openApproval,
+			approvals,
 			undefined,
 			service
 		);
@@ -671,8 +689,8 @@ describe("doom_loop", () => {
 	});
 
 	test("doom_loop applies to coding tools too", async () => {
-		const { openApproval, requests } = settlingApproval();
-		const gate = createGate(createToolPermission(), openApproval);
+		const { approvals, requests } = allowOnceApproval();
+		const gate = createGate(createToolPermission(), approvals);
 
 		const readCall = (toolCallId: string) => ({
 			family: "coding" as const,
@@ -691,8 +709,8 @@ describe("doom_loop", () => {
 	});
 
 	test("doom_loop applies to MCP tools and a differing input resets the run", async () => {
-		const { openApproval, requests } = settlingApproval();
-		const gate = createGate(createToolPermission(), openApproval);
+		const { approvals, requests } = allowOnceApproval();
+		const gate = createGate(createToolPermission(), approvals);
 		const mcpCall = (text: string, toolCallId: string) => ({
 			action: "demo_echo",
 			agentDecision: "allow" as const,
@@ -718,8 +736,8 @@ describe("doom_loop", () => {
 	});
 
 	test("a differing family or tool resets the doom run", async () => {
-		const { openApproval, requests } = settlingApproval();
-		const gate = createGate(createToolPermission(), openApproval);
+		const { approvals, requests } = allowOnceApproval();
+		const gate = createGate(createToolPermission(), approvals);
 
 		const mcpCall = (toolCallId: string) => ({
 			action: "demo_echo",
@@ -763,10 +781,10 @@ describe("shell manual safety ceiling", () => {
 		const requests: ToolApprovalRequest[] = [];
 		const permission = applyManualApprovalSafetyCeiling(createToolPermission());
 		const gate = createToolGate({
-			openApproval: (request, actions) => {
-				requests.push(request);
-				actions.allow(true);
-			},
+			approvals: settlingApprovalPort(
+				{ decision: "allow", remember: true },
+				requests
+			),
 			resolvePermission: async () => permission,
 			sandbox: createWorkspaceSandbox(process.cwd()),
 			service,
@@ -830,10 +848,11 @@ test("unknown authorization families fail closed at the runtime boundary", async
 });
 
 test("an unavailable ask-gated Skill does not open approval", async () => {
-	let approvalCount = 0;
-	const gate = createGate(createToolPermission({ skill: "ask" }), () => {
-		approvalCount += 1;
-	});
+	const requests: ToolApprovalRequest[] = [];
+	const gate = createGate(
+		createToolPermission({ skill: "ask" }),
+		settlingApprovalPort({ decision: "allow", remember: false }, requests)
+	);
 
 	await expect(
 		gate.gate({
@@ -843,15 +862,15 @@ test("an unavailable ask-gated Skill does not open approval", async () => {
 			name: "missing",
 		})
 	).resolves.toEqual({ kind: "allow" });
-	expect(approvalCount).toBe(0);
+	expect(requests).toHaveLength(0);
 });
 
 test("MCP policy and safety are composed inside the gate", async () => {
-	let approvalCount = 0;
-	const gate = createGate(createToolPermission(), (_request, actions) => {
-		approvalCount += 1;
-		actions.allow(false);
-	});
+	const requests: ToolApprovalRequest[] = [];
+	const gate = createGate(
+		createToolPermission(),
+		settlingApprovalPort({ decision: "allow", remember: false }, requests)
+	);
 
 	await expect(
 		gate.gate({
@@ -866,14 +885,14 @@ test("MCP policy and safety are composed inside the gate", async () => {
 			toolName: "mcp_demo_echo",
 		})
 	).resolves.toEqual({ kind: "allow" });
-	expect(approvalCount).toBe(1);
+	expect(requests).toHaveLength(1);
 });
 
 test("rejects one approval without notifying the session abort path", async () => {
 	let abortCount = 0;
 	const gate = createGate(
 		createToolPermission(),
-		(_request, actions) => actions.reject(),
+		settlingApprovalPort({ decision: "reject" }),
 		() => {
 			abortCount += 1;
 		}
@@ -902,7 +921,7 @@ test("abort notifies the session with the active tool call", async () => {
 	let abortedToolCallId: string | undefined;
 	const gate = createGate(
 		createToolPermission(),
-		(_request, actions) => actions.abort(),
+		settlingApprovalPort({ decision: "abort" }),
 		(request) => {
 			abortedToolCallId = request.toolCallId;
 		}
@@ -931,7 +950,7 @@ test("identifies an explicit Skill abort without an in-flight tool call", async 
 	let abortedToolCallId: string | undefined = "unexpected";
 	const gate = createGate(
 		createToolPermission({ skill: "ask" }),
-		(_request, actions) => actions.abort(),
+		settlingApprovalPort({ decision: "abort" }),
 		(request) => {
 			abortedToolCallId = request.toolCallId;
 		}
@@ -988,10 +1007,10 @@ test("an external-directory grant does not satisfy an operation ask", async () =
 	service.grant("external_directory", externalParentDirectoryGlob(resource));
 	const requests: ToolApprovalRequest[] = [];
 	const gate = createToolGate({
-		openApproval: (request, actions) => {
-			requests.push(request);
-			actions.allow(false);
-		},
+		approvals: settlingApprovalPort(
+			{ decision: "allow", remember: false },
+			requests
+		),
 		resolvePermission: async () =>
 			createToolPermission({
 				external_directory: "allow",
@@ -1017,4 +1036,102 @@ test("an external-directory grant does not satisfy an operation ask", async () =
 	// The call still reaches the approval panel because only the boundary was
 	// granted; the operation itself remained ask-gated.
 	expect(requests).toHaveLength(1);
+});
+
+describe("approval settlement through the Session Engine", () => {
+	const createEngine = () =>
+		createSessionEngine({
+			initialTranscript: [],
+			ports: fromPartial<SessionEnginePorts>({
+				// Compaction is not part of this seam; the Engine only needs the port.
+				compaction: {
+					compact: () =>
+						Promise.reject(
+							new Error("Compaction is unavailable in this test.")
+						),
+					getInFlight: () => null,
+				},
+			}),
+			sessionId: sessionId("gate-approval"),
+		});
+
+	const askGate = (engine: SessionEngine) =>
+		createToolGate({
+			approvals: { request: engine.requestApproval },
+			resolvePermission: async () =>
+				createToolPermission({ shell: { "git status": "ask" } }),
+			sandbox: createWorkspaceSandbox(process.cwd()),
+			service: createPermissionService(),
+		});
+
+	/** The gate registers its request after its own asynchronous resolution. */
+	const whenApprovalRequested = async (
+		engine: SessionEngine
+	): Promise<void> => {
+		for (let attempt = 0; attempt < 100; attempt += 1) {
+			if (engine.getSnapshot().approvals.length > 0) {
+				return;
+			}
+			await Promise.resolve();
+		}
+		throw new Error("The Tool Gate never requested an approval.");
+	};
+
+	test("closing approvals settles the waiting Tool Gate evaluation", async () => {
+		const engine = createEngine();
+		const gate = askGate(engine);
+		const evaluation = gate.gate(shellCall("git status", "call-close"));
+		await whenApprovalRequested(engine);
+
+		engine.closeApprovals();
+
+		await expect(evaluation).resolves.toEqual({
+			errorText: "Shell was not approved: git status",
+			feedback: undefined,
+			kind: "reject",
+		});
+		expect(engine.getSnapshot().approvals[0]?.decision).toEqual({
+			decision: "reject",
+		});
+	});
+
+	test("notifies the abort path once when two triggers abort the same request", async () => {
+		const engine = createEngine();
+		let abortCount = 0;
+		const gate = createToolGate({
+			approvals: { request: engine.requestApproval },
+			onAbort: () => {
+				abortCount += 1;
+			},
+			resolvePermission: async () =>
+				createToolPermission({ shell: { "git status": "ask" } }),
+			sandbox: createWorkspaceSandbox(process.cwd()),
+			service: createPermissionService(),
+		});
+		const evaluation = gate.gate(shellCall("git status", "call-abort-twice"));
+		await whenApprovalRequested(engine);
+
+		// Two abort triggers for the one request: the settlement is the only
+		// route, so the second one cannot handle the abort again.
+		engine.respondToApproval("call-abort-twice", { decision: "abort" });
+		engine.respondToApproval("call-abort-twice", { decision: "abort" });
+
+		await expect(evaluation).resolves.toMatchObject({ kind: "reject" });
+		expect(abortCount).toBe(1);
+	});
+
+	test("shutting the session down settles the waiting Tool Gate evaluation", async () => {
+		const engine = createEngine();
+		const gate = askGate(engine);
+		const evaluation = gate.gate(shellCall("git status", "call-shutdown"));
+		await whenApprovalRequested(engine);
+
+		engine.shutdown();
+
+		await expect(evaluation).resolves.toEqual({
+			errorText: "Shell was not approved: git status",
+			feedback: undefined,
+			kind: "reject",
+		});
+	});
 });

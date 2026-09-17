@@ -94,5 +94,42 @@
       "enabled": true
     }
   },
+  "overrides": [
+    {
+      "includes": ["packages/tui/modules/sessions/engine/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@opentui/core": "The Session Engine is React-free and host-agnostic (ADR-0019).",
+                  "@opentui/react": "The Session Engine is React-free and host-agnostic (ADR-0019).",
+                  "react": "The Session Engine is React-free and host-agnostic (ADR-0019).",
+                  "react-dom": "The Session Engine is React-free and host-agnostic (ADR-0019)."
+                },
+                "patterns": [
+                  {
+                    "group": [
+                      "../compaction",
+                      "../compaction/index",
+                      "../compaction/index.ts",
+                      "../compaction/use-compaction-settings",
+                      "./compaction",
+                      "./compaction/index",
+                      "@/modules/sessions/compaction",
+                      "@/modules/sessions/compaction/index"
+                    ],
+                    "message": "Import the React-free leaf instead of this barrel: a barrel re-exports React-using modules, so the Session Engine is no longer host-agnostic (ADR-0019)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "extends": ["ultracite/biome/core", "ultracite/biome/react"]
 }
