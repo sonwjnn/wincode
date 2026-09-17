@@ -7,9 +7,9 @@ import {
 	isString,
 	isUndefined,
 	omitUndefined,
+	pickTruthy,
 } from "@wincode/runtime-utils";
 import { randomUUIDv7 } from "bun";
-import { pickBy } from "es-toolkit/object";
 import {
 	type CompactionId,
 	type SessionId,
@@ -933,7 +933,7 @@ const appendInputFor = ({
 		priorCompactionId: previous?.id,
 		sessionId: session.sessionId,
 		summarizationModel: model,
-		...pickBy({ summarizationUsage: summarization.usage }, Boolean),
+		...pickTruthy({ summarizationUsage: summarization.usage }),
 		summary,
 	};
 };

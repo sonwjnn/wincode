@@ -29,3 +29,25 @@ export const omitUndefined = <T extends Record<string, unknown>>(
 	}
 	return defined as OmitUndefined<T>;
 };
+
+/**
+ * Keeps every own enumerable string key whose value is truthy, without mutating
+ * the input.
+ *
+ * Shallow by design — nested values are left untouched. Symbol-keyed
+ * properties are not copied because the filter walks string keys; call it with
+ * the object literals it exists for. Native on purpose: `@wincode/runtime-utils`
+ * stays a runtime-dependency-free leaf (ADR-0018).
+ */
+export const pickTruthy = <T extends Record<string, unknown>>(
+	value: T
+): Partial<T> => {
+	const picked: Record<string, unknown> = {};
+	for (const key of Object.keys(value)) {
+		const entry = value[key];
+		if (entry) {
+			picked[key] = entry;
+		}
+	}
+	return picked as Partial<T>;
+};

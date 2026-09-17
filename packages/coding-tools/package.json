@@ -16,7 +16,6 @@
   "dependencies": {
     "@wincode/runtime-utils": "workspace:*",
     "diff": "catalog:",
-    "es-toolkit": "catalog:",
     "ignore": "^5.3.2",
     "type-fest": "catalog:",
     "zod": "catalog:"

@@ -39,9 +39,9 @@ import {
 	isObjectLike,
 	isUndefined,
 	omitUndefined,
+	pickTruthy,
 } from "@wincode/runtime-utils";
 import { randomUUIDv7 } from "bun";
-import { pickBy } from "es-toolkit/object";
 import type { UnknownRecord } from "type-fest";
 import type {
 	SessionMessage,
@@ -266,7 +266,7 @@ const metadataForRecord = (
 	}
 	const variant = metadata?.variant ?? record.model.variant;
 	const parsed = sessionMessageMetadataSchema.safeParse({
-		...pickBy({ agent: metadata?.agent ?? record.agentId }, Boolean),
+		...pickTruthy({ agent: metadata?.agent ?? record.agentId }),
 		...omitUndefined({
 			model,
 			responseTimeMs: metadata?.responseTimeMs,

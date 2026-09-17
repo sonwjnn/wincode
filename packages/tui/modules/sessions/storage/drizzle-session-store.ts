@@ -21,10 +21,10 @@ import {
 	isNull,
 	isUndefined,
 	omitUndefined,
+	pickTruthy,
 } from "@wincode/runtime-utils";
 import { randomUUIDv7 } from "bun";
 import { and, asc, desc, eq } from "drizzle-orm";
-import { pickBy } from "es-toolkit/object";
 import { z } from "zod";
 import {
 	type CompactionId,
@@ -175,10 +175,10 @@ const writePromptHistory = (
 			.values({
 				createdAt: new Date(),
 				entryJson: serializeJson({
-					...pickBy(
-						{ fileTokens: entry.fileTokens, pastedText: entry.pastedText },
-						Boolean
-					),
+					...pickTruthy({
+						fileTokens: entry.fileTokens,
+						pastedText: entry.pastedText,
+					}),
 					files: entry.files,
 				}),
 				prompt: entry.text,
@@ -279,13 +279,10 @@ export const createPromptHistory = (
 					tx.update(promptHistory)
 						.set({
 							entryJson: serializeJson({
-								...pickBy(
-									{
-										fileTokens: entry.fileTokens,
-										pastedText: entry.pastedText,
-									},
-									Boolean
-								),
+								...pickTruthy({
+									fileTokens: entry.fileTokens,
+									pastedText: entry.pastedText,
+								}),
 								files: entry.files,
 							}),
 						})
@@ -403,7 +400,7 @@ const toSession = (row: SessionRow): Session => {
 		...omitUndefined({ model: parsedModel?.data }),
 		pinned: row.pinned,
 		title: row.title ?? UNTITLED_SESSION_TITLE,
-		...pickBy({ variant: row.variant ?? undefined }, Boolean),
+		...pickTruthy({ variant: row.variant ?? undefined }),
 	};
 };
 const toSessionRecordModel = (

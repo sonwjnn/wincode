@@ -6,8 +6,8 @@ import {
 	isNumber,
 	isObjectLike,
 	isUndefined,
+	pickTruthy,
 } from "@wincode/runtime-utils";
-import { pickBy } from "es-toolkit/object";
 import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
 import type { ModelPricingTable } from "@/modules/model-pricing";
@@ -157,7 +157,7 @@ const diagnosticFor = (
 	code,
 	configPath,
 	message,
-	...pickBy({ origin: getOrigin(snapshot, configPath) }, Boolean),
+	...pickTruthy({ origin: getOrigin(snapshot, configPath) }),
 	severity,
 });
 

@@ -89,7 +89,6 @@
       "dependencies": {
         "@wincode/runtime-utils": "workspace:*",
         "diff": "catalog:",
-        "es-toolkit": "catalog:",
         "ignore": "^5.3.2",
         "type-fest": "catalog:",
         "zod": "catalog:",
@@ -143,7 +142,6 @@
         "@wincode/runtime-utils": "workspace:*",
         "@wincode/skills": "workspace:*",
         "drizzle-orm": "^0.45.2",
-        "es-toolkit": "catalog:",
         "jsonc-parser": "^3.3.1",
         "oauth4webapi": "^3.8.3",
         "open": "^10.2.0",

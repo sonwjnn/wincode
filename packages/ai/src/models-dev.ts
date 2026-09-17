@@ -14,6 +14,7 @@ import {
 	isPlainObject,
 	isPositiveInteger,
 	omitUndefined,
+	pickTruthy,
 } from "@wincode/runtime-utils";
 import { pickBy } from "es-toolkit/object";
 import type { UnknownRecord } from "type-fest";
@@ -94,7 +95,7 @@ const toThinkingPolicy = (raw: unknown): ModelThinkingPolicy | undefined => {
 		return;
 	}
 	return {
-		...pickBy({ toggle: toggle ? true : undefined, levels }, Boolean),
+		...pickTruthy({ toggle: toggle ? true : undefined, levels }),
 		...omitUndefined({ budgetMin, budgetMax }),
 		...(budgetBounded && !toggle && !levels
 			? { unlevelled: true as const }
@@ -172,7 +173,7 @@ export const metadataForModel = (raw: ModelsDevModel): ModelMetadataEntry => {
 	const limits = toLimits(raw.limit);
 	const tiers = toTiers(raw.cost);
 	return {
-		...pickBy({ cost, limits, thinking }, Boolean),
+		...pickTruthy({ cost, limits, thinking }),
 		...pickBy({ tiers }, (value) => value.length > 0),
 	};
 };

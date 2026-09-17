@@ -5,8 +5,8 @@ import {
 	getErrorMessage,
 	isNonEmptyString,
 	isObjectLike,
+	pickTruthy,
 } from "@wincode/runtime-utils";
-import { pickBy } from "es-toolkit/object";
 import { useEffect, useMemo, useState } from "react";
 import {
 	rebuildActiveMessages,
@@ -105,7 +105,7 @@ function SessionRoute() {
 				setActiveMessages(rebuildActiveMessages(active, latestCompaction));
 				setCompactions(loadedCompactions);
 				setSessionConfig(
-					pickBy({ model: session.model, variant: session.variant }, Boolean)
+					pickTruthy({ model: session.model, variant: session.variant })
 				);
 				setSessionTitle(session.title);
 			})

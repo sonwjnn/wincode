@@ -5,8 +5,8 @@ import {
 	isObjectLike,
 	isUndefined,
 	omitUndefined,
+	pickTruthy,
 } from "@wincode/runtime-utils";
-import { pickBy } from "es-toolkit/object";
 import {
 	createWorkspaceSandbox,
 	defaultWorkspaceSandbox,
@@ -822,6 +822,6 @@ export const runReadTool = async (
 	return {
 		content: formattedContent.content,
 		path: target.path,
-		...pickBy({ truncated: formattedContent.truncated }, Boolean),
+		...pickTruthy({ truncated: formattedContent.truncated }),
 	};
 };
