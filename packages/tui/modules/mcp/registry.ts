@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { AgentId } from "@wincode/agent-core";
 import { isUndefined } from "@wincode/runtime-utils";
+import { omitBy } from "es-toolkit/object";
 import type { JsonObject } from "type-fest";
 import {
 	composePermissionDecisions,
@@ -309,9 +310,14 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			env,
 			refresh,
 			workspace,
-			...(input.configRoot ? { configRoot: input.configRoot } : {}),
-			...(input.configStore ? { configStore: input.configStore } : {}),
-			...(input.homeRoot ? { homeRoot: input.homeRoot } : {}),
+			...omitBy(
+				{
+					configRoot: input.configRoot,
+					configStore: input.configStore,
+					homeRoot: input.homeRoot,
+				},
+				(value) => !value
+			),
 		});
 
 	const refreshEntryConfig = async (

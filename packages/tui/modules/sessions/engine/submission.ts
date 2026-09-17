@@ -15,6 +15,7 @@ import {
 	isError,
 	isNull,
 	isUndefined,
+	omitUndefined,
 } from "@wincode/runtime-utils";
 import { createSkillSnapshot, type SkillRequestContext } from "@wincode/skills";
 import type { SessionId } from "@/shared/identifiers";
@@ -198,7 +199,7 @@ export const prepareCompactionBeforeSubmit = async ({
 			await runCompaction({
 				model,
 				trigger: "threshold",
-				...(isUndefined(variant) ? {} : { variant }),
+				...omitUndefined({ variant }),
 			});
 			return { ok: true };
 		} catch (cause) {
@@ -217,7 +218,7 @@ const createSubmitMetadata = (
 ): SessionMessageMetadata => ({
 	agent: input.agent,
 	model: input.model,
-	...(isUndefined(input.variant) ? {} : { variant: input.variant }),
+	...omitUndefined({ variant: input.variant }),
 	...(isUndefined(skill)
 		? {}
 		: { skill: createSkillSnapshot(skill, "explicit") }),
@@ -432,7 +433,7 @@ const prepareSessionSubmission = async ({
 			runCompaction: deps.compact,
 			settings,
 			settleCompaction: deps.settleCompaction,
-			...(isUndefined(input.variant) ? {} : { variant: input.variant }),
+			...omitUndefined({ variant: input.variant }),
 		});
 		if (!compactionResult.ok) {
 			return { kind: "rejected", reason: compactionResult.reason };
@@ -466,9 +467,7 @@ const prepareSessionSubmission = async ({
 			context,
 			kind: "ready",
 			messages: prepared.messages,
-			...(isUndefined(prepared.newMessage)
-				? {}
-				: { newMessage: prepared.newMessage }),
+			...omitUndefined({ newMessage: prepared.newMessage }),
 		};
 	} catch (error) {
 		if (signal.aborted) {
@@ -534,12 +533,12 @@ const executionInputForSubmit = ({
 	model: input.model,
 	sessionModel: input.sessionModel,
 	startedAt,
-	...(isUndefined(input.delegation) ? {} : { parent: input.delegation }),
-	...(isUndefined(input.sessionVariant)
-		? {}
-		: { sessionVariant: input.sessionVariant }),
-	...(isUndefined(sourceUserMessageId) ? {} : { sourceUserMessageId }),
-	...(isUndefined(input.variant) ? {} : { variant: input.variant }),
+	...omitUndefined({
+		parent: input.delegation,
+		sessionVariant: input.sessionVariant,
+		sourceUserMessageId,
+		variant: input.variant,
+	}),
 });
 
 /**
@@ -576,7 +575,7 @@ const commitPromptRecord = async ({
 			}),
 			sessionId,
 			sessionModel,
-			...(isUndefined(sessionVariant) ? {} : { sessionVariant }),
+			...omitUndefined({ sessionVariant }),
 		});
 		return null;
 	} catch (error) {
@@ -645,10 +644,12 @@ const handleSafeAssistantOutcome = async ({
 		metadata: {
 			agent: execution.agent,
 			model: execution.model,
-			...(isUndefined(sourceUserMessageId) ? {} : { sourceUserMessageId }),
+			...omitUndefined({
+				sourceUserMessageId,
+				variant: execution.variant,
+			}),
 			...(terminal === "interrupted" ? { interrupted: true } : {}),
 			...(terminal === "completed" ? {} : { terminalOutcome: terminal }),
-			...(isUndefined(execution.variant) ? {} : { variant: execution.variant }),
 		},
 		parts: [
 			{
@@ -671,13 +672,15 @@ const handleSafeAssistantOutcome = async ({
 /** The durable record inputs every terminal failure row of an execution shares. */
 const failureRecordInput = (execution: SessionExecution) => ({
 	agentId: execution.agent,
-	...(isUndefined(execution.parent) ? {} : { delegation: execution.parent }),
+	...omitUndefined({
+		delegation: execution.parent,
+		variant: execution.variant,
+	}),
 	model: execution.model,
 	turnId: execution.turnId,
-	...(isUndefined(execution.variant) ? {} : { variant: execution.variant }),
-	...(isNull(execution.sourceUserMessageId)
-		? {}
-		: { sourceUserMessageId: execution.sourceUserMessageId }),
+	...omitUndefined({
+		sourceUserMessageId: execution.sourceUserMessageId ?? undefined,
+	}),
 });
 
 /**
@@ -720,9 +723,7 @@ const proposeOverflowRecovery = ({
 			}
 			return {
 				model: execution.model,
-				...(isUndefined(execution.variant)
-					? {}
-					: { variant: execution.variant }),
+				...omitUndefined({ variant: execution.variant }),
 			};
 		},
 		turnId: execution.turnId,
@@ -752,10 +753,10 @@ const replayOverflowTurn = async ({
 		model: execution.model,
 		resolvedAgent: context.resolvedAgent,
 		sessionModel: execution.sessionModel,
-		...(isUndefined(execution.sessionVariant)
-			? {}
-			: { sessionVariant: execution.sessionVariant }),
-		...(isUndefined(execution.variant) ? {} : { variant: execution.variant }),
+		...omitUndefined({
+			sessionVariant: execution.sessionVariant,
+			variant: execution.variant,
+		}),
 	});
 	return outcome.rejected
 		? { kind: "refused", reason: outcome.reason }
@@ -850,9 +851,9 @@ const handleTurnFailure = async ({
 			? buildTerminalSessionRecord({
 					assistantText: "",
 					event: createAgentTurnAbortEvent(currentTurn, signal, 0),
-					...(isNull(execution.sourceUserMessageId)
-						? {}
-						: { sourceUserMessageId: execution.sourceUserMessageId }),
+					...omitUndefined({
+						sourceUserMessageId: execution.sourceUserMessageId ?? undefined,
+					}),
 					turn: currentTurn,
 				})
 			: buildAssistantFailureSessionRecord({
@@ -908,7 +909,7 @@ const maintainAfterTurn = (
 				model: selection,
 				nextMessages: messages,
 				trigger: "threshold",
-				...(isUndefined(variant) ? {} : { variant }),
+				...omitUndefined({ variant }),
 			});
 		} catch (error) {
 			if (!(isBenignCompactionError(error) || isInFlightCompaction(error))) {
@@ -989,7 +990,7 @@ const runTurn = async ({
 			execution,
 			messages: hydrated,
 			resolvedAgent: context.resolvedAgent,
-			...(isUndefined(context.skill) ? {} : { skillRequest: context.skill }),
+			...omitUndefined({ skillRequest: context.skill }),
 			signal,
 		});
 		if (isUndefined(outcome.error)) {
@@ -1084,10 +1085,10 @@ export const createSubmissionPipeline = (
 					model: input.model,
 					sessionId: deps.sessionId,
 					sessionModel: input.sessionModel,
-					...(isUndefined(input.sessionVariant)
-						? {}
-						: { sessionVariant: input.sessionVariant }),
-					...(isUndefined(input.variant) ? {} : { variant: input.variant }),
+					...omitUndefined({
+						sessionVariant: input.sessionVariant,
+						variant: input.variant,
+					}),
 				});
 				if (!isNull(promptError)) {
 					deps.setError(promptError);

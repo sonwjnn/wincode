@@ -8,7 +8,7 @@ import {
 	toSessionMessageId,
 } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
-import { isUndefined } from "@wincode/runtime-utils";
+import { omitUndefined } from "@wincode/runtime-utils";
 import type {
 	SkillExecution,
 	SkillRequestContext,
@@ -116,20 +116,22 @@ export const createTurnExecution = ({
 	const turnId = providedTurnId ?? createAgentTurnId();
 	return {
 		agent,
-		...(isUndefined(armedSkill) ? {} : { armedSkill }),
+		...omitUndefined({
+			armedSkill,
+			parent,
+			resolvedAgent,
+			sessionVariant,
+			skillRequest,
+			variant,
+		}),
 		assistantId: toSessionMessageId(`assistant-${turnId}`),
 		childAborts: childAborts ?? new Map(),
 		mcpSnapshot: null,
 		model,
-		...(isUndefined(parent) ? {} : { parent }),
-		...(isUndefined(resolvedAgent) ? {} : { resolvedAgent }),
 		sessionModel,
-		...(isUndefined(sessionVariant) ? {} : { sessionVariant }),
-		...(isUndefined(skillRequest) ? {} : { skillRequest }),
 		sourceUserMessageId: sourceUserMessageId ?? null,
 		startedAt,
 		turnId,
-		...(isUndefined(variant) ? {} : { variant }),
 	};
 };
 

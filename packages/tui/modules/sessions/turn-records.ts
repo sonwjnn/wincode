@@ -19,7 +19,7 @@ import {
 	toSessionRecordId,
 } from "@wincode/agent-core";
 import { normalizeModelUsage } from "@wincode/ai/model-usage";
-import { isUndefined } from "@wincode/runtime-utils";
+import { omitUndefined } from "@wincode/runtime-utils";
 import { randomUUIDv7 } from "bun";
 import { RetiredModelError } from "../model-target";
 
@@ -76,20 +76,22 @@ const toDurableToolPart = (part: {
 const recordModelForTurn = (turn: AgentTurn): SessionRecord["model"] => ({
 	modelId: turn.model.modelId,
 	providerId: turn.model.providerId,
-	...(isUndefined(turn.model.variant) ? {} : { variant: turn.model.variant }),
+	...omitUndefined({ variant: turn.model.variant }),
 });
 const assistantRecordMetadata = (
 	turn: AgentTurn,
 	usage?: NonNullable<ReturnType<typeof normalizeModelUsage>>,
 	sourceUserMessageId?: SessionMessageId
 ): SessionMessageMetadataRecord => ({
-	...(isUndefined(sourceUserMessageId) ? {} : { sourceUserMessageId }),
+	...omitUndefined({
+		sourceUserMessageId,
+		variant: turn.model.variant,
+		usage,
+	}),
 	model: {
 		modelId: turn.model.modelId,
 		providerId: turn.model.providerId,
 	},
-	...(isUndefined(turn.model.variant) ? {} : { variant: turn.model.variant }),
-	...(isUndefined(usage) ? {} : { usage }),
 });
 
 /**
@@ -139,7 +141,7 @@ export const buildTerminalSessionRecord = ({
 			terminal = {
 				finishedAt: safeEvent.finishedAt,
 				kind: "completed",
-				...(isUndefined(safeUsage) ? {} : { usage: safeUsage }),
+				...omitUndefined({ usage: safeUsage }),
 			};
 			break;
 		case "agent-turn-failed":
@@ -167,7 +169,7 @@ export const buildTerminalSessionRecord = ({
 
 	return {
 		agentId: turn.agent.id,
-		...(isUndefined(turn.delegation) ? {} : { delegation: turn.delegation }),
+		...omitUndefined({ delegation: turn.delegation }),
 		id: toSessionRecordId(`record-${randomUUIDv7()}`),
 		messages: [
 			{
@@ -203,7 +205,7 @@ const buildAssistantOutcomeSessionRecord = ({
 	variant?: SessionRecord["model"]["variant"];
 }): SessionRecord => ({
 	agentId,
-	...(isUndefined(delegation) ? {} : { delegation }),
+	...omitUndefined({ delegation }),
 	id: toSessionRecordId(`record-${randomUUIDv7()}`),
 	messages: [
 		{
@@ -214,8 +216,7 @@ const buildAssistantOutcomeSessionRecord = ({
 					modelId: model.modelId,
 					providerId: model.providerId,
 				},
-				...(isUndefined(sourceUserMessageId) ? {} : { sourceUserMessageId }),
-				...(isUndefined(variant) ? {} : { variant }),
+				...omitUndefined({ sourceUserMessageId, variant }),
 			},
 			parts: [{ text, type: "text" }],
 			role: "assistant",
@@ -224,7 +225,7 @@ const buildAssistantOutcomeSessionRecord = ({
 	model: {
 		modelId: model.modelId,
 		providerId: model.providerId,
-		...(isUndefined(variant) ? {} : { variant }),
+		...omitUndefined({ variant }),
 	},
 	outcome: { kind: "assistant", terminal },
 	turnId,
@@ -322,7 +323,7 @@ export const buildToolSessionRecord = ({
 	turn: AgentTurn;
 }): SessionRecord => ({
 	agentId: turn.agent.id,
-	...(isUndefined(turn.delegation) ? {} : { delegation: turn.delegation }),
+	...omitUndefined({ delegation: turn.delegation }),
 	id: toSessionRecordId(`record-${randomUUIDv7()}`),
 	messages: [
 		{

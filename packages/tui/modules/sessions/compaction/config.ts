@@ -7,6 +7,7 @@ import {
 	isObjectLike,
 	isUndefined,
 } from "@wincode/runtime-utils";
+import { omitBy } from "es-toolkit/object";
 import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
 import type { ModelPricingTable } from "@/modules/model-pricing";
@@ -156,9 +157,7 @@ const diagnosticFor = (
 	code,
 	configPath,
 	message,
-	...(getOrigin(snapshot, configPath)
-		? { origin: getOrigin(snapshot, configPath) }
-		: {}),
+	...omitBy({ origin: getOrigin(snapshot, configPath) }, (value) => !value),
 	severity,
 });
 

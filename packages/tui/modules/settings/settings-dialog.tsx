@@ -4,6 +4,7 @@ import {
 	isBoolean,
 	isNull,
 	isUndefined,
+	omitUndefined,
 } from "@wincode/runtime-utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDialogEscape } from "@/shared/providers/dialog/dialog-provider";
@@ -45,9 +46,7 @@ const getSettingResolution = (
 ): SettingResolution<unknown> => ({
 	available: setting.available,
 	source: setting.source,
-	...(isUndefined(setting.unavailableReason)
-		? {}
-		: { unavailableReason: setting.unavailableReason }),
+	...omitUndefined({ unavailableReason: setting.unavailableReason }),
 	value: setting.value,
 });
 

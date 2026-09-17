@@ -1,7 +1,11 @@
 import { type Dirent, existsSync, realpathSync } from "node:fs";
 import { readdir, readFile, readlink, realpath } from "node:fs/promises";
 import path from "node:path";
-import { isObjectLike, isUndefined } from "@wincode/runtime-utils";
+import {
+	isObjectLike,
+	isUndefined,
+	omitUndefined,
+} from "@wincode/runtime-utils";
 import ignore, { type Ignore } from "ignore";
 import type { Except } from "type-fest";
 
@@ -213,7 +217,7 @@ const pushTraversalEntry = (
 		absolutePath,
 		depth,
 		relativePath: context.policy.relativePath(absolutePath),
-		...(isUndefined(symlinkTarget) ? {} : { symlinkTarget }),
+		...omitUndefined({ symlinkTarget }),
 		type,
 	});
 

@@ -4,6 +4,7 @@ import {
 	isObjectLike,
 	isString,
 	isUndefined,
+	omitUndefined,
 } from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 export const OPERATIONAL_FAILURE_VERSION = 1 as const;
@@ -138,14 +139,12 @@ const sanitizeOperationalFailureDetails = (
 	if (isUndefined(value)) {
 		return;
 	}
-	return {
-		...(isUndefined(value.modelId) ? {} : { modelId: value.modelId }),
-		...(isUndefined(value.providerId) ? {} : { providerId: value.providerId }),
-		...(isUndefined(value.retryAfterMs)
-			? {}
-			: { retryAfterMs: value.retryAfterMs }),
-		...(isUndefined(value.statusCode) ? {} : { statusCode: value.statusCode }),
-	};
+	return omitUndefined({
+		modelId: value.modelId,
+		providerId: value.providerId,
+		retryAfterMs: value.retryAfterMs,
+		statusCode: value.statusCode,
+	});
 };
 
 export const isOperationalFailureSource = (
@@ -194,12 +193,10 @@ const contextDetails = (
 	if (isUndefined(context?.modelId) && isUndefined(context?.providerId)) {
 		return;
 	}
-	return {
-		...(isUndefined(context.modelId) ? {} : { modelId: context.modelId }),
-		...(isUndefined(context.providerId)
-			? {}
-			: { providerId: context.providerId }),
-	};
+	return omitUndefined({
+		modelId: context.modelId,
+		providerId: context.providerId,
+	});
 };
 
 /** Constructs a versioned failure using only the public safe fields. */
@@ -217,7 +214,7 @@ export const createOperationalFailure = ({
 	const safeDetails = sanitizeOperationalFailureDetails(details);
 	return {
 		code,
-		...(isUndefined(safeDetails) ? {} : { details: safeDetails }),
+		...omitUndefined({ details: safeDetails }),
 		message: safeMessageByCode[code],
 		retry,
 		source,

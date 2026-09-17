@@ -1,4 +1,4 @@
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined, omitUndefined } from "@wincode/runtime-utils";
 export type LineRange = {
 	endLine?: number;
 	startLine: number;
@@ -78,7 +78,7 @@ const parseLineRange = (selector: string): LineRange => {
 		);
 	}
 	return {
-		...(isUndefined(rightHandSide) ? {} : { endLine: rightHandSide }),
+		...omitUndefined({ endLine: rightHandSide }),
 		startLine,
 	};
 };

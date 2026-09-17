@@ -10,6 +10,7 @@ import {
 	isError,
 	isNull,
 	isUndefined,
+	omitUndefined,
 } from "@wincode/runtime-utils";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import type {
@@ -264,9 +265,8 @@ export const createSessionEngine = ({
 		session: { messages, sessionId },
 		settings: await compactionSettingsFor(command.model),
 		trigger: command.trigger,
-		...(isUndefined(command.focus) ? {} : { focus: command.focus }),
+		...omitUndefined({ focus: command.focus, variant: command.variant }),
 		signal,
-		...(isUndefined(command.variant) ? {} : { variant: command.variant }),
 	});
 	/**
 	 * Runs a command the module admitted. The Session Context swap and the
@@ -450,7 +450,7 @@ export const createSessionEngine = ({
 					command.originalMessageId
 				),
 				trigger: "overflow",
-				...(isUndefined(target.variant) ? {} : { variant: target.variant }),
+				...omitUndefined({ variant: target.variant }),
 			});
 		} catch (error) {
 			return failRecovery(
@@ -517,15 +517,15 @@ export const createSessionEngine = ({
 			agent: input.agent,
 			assistantId: toSessionMessageId(`assistant-${turnId}`),
 			model: input.model,
-			...(isUndefined(input.parent) ? {} : { parent: input.parent }),
+			...omitUndefined({
+				parent: input.parent,
+				sessionVariant: input.sessionVariant,
+				variant: input.variant,
+			}),
 			sessionModel: input.sessionModel,
-			...(isUndefined(input.sessionVariant)
-				? {}
-				: { sessionVariant: input.sessionVariant }),
 			sourceUserMessageId: input.sourceUserMessageId ?? null,
 			startedAt: input.startedAt,
 			turnId,
-			...(isUndefined(input.variant) ? {} : { variant: input.variant }),
 		};
 		publish({ executions: [...state.executions, execution] });
 		return execution;

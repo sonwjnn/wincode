@@ -17,6 +17,7 @@ import {
 	isPlainObject,
 	isString,
 	isUndefined,
+	omitUndefined,
 } from "@wincode/runtime-utils";
 import { eq } from "drizzle-orm";
 import type { Except, Merge, UnknownRecord } from "type-fest";
@@ -530,16 +531,16 @@ export const attachmentReferenceToFilePart = (
 	const validated = attachmentReferenceSchema.parse(reference);
 	return {
 		attachmentId: validated.attachmentId,
-		...(isUndefined(validated.available)
-			? {}
-			: { available: validated.available }),
+		...omitUndefined({
+			available: validated.available,
+			height: validated.height,
+			width: validated.width,
+		}),
 		byteLength: validated.byteLength,
 		filename: validated.filename,
-		...(isUndefined(validated.height) ? {} : { height: validated.height }),
 		mediaType: validated.mediaType,
 		type: "file",
 		url: refUrl(validated.attachmentId),
-		...(isUndefined(validated.width) ? {} : { width: validated.width }),
 	} as AttachmentReferenceFilePart;
 };
 
@@ -557,14 +558,14 @@ export const getAttachmentReference = (
 	const candidate = part as UnknownRecord;
 	const parsed = attachmentReferenceSchema.safeParse({
 		attachmentId: candidate.attachmentId,
-		...(isUndefined(candidate.available)
-			? {}
-			: { available: candidate.available }),
+		...omitUndefined({
+			available: candidate.available,
+			height: candidate.height,
+			width: candidate.width,
+		}),
 		byteLength: candidate.byteLength,
 		filename: candidate.filename,
-		...(isUndefined(candidate.height) ? {} : { height: candidate.height }),
 		mediaType: candidate.mediaType,
-		...(isUndefined(candidate.width) ? {} : { width: candidate.width }),
 	});
 	if (!parsed.success || candidate.url !== refUrl(parsed.data.attachmentId)) {
 		return null;

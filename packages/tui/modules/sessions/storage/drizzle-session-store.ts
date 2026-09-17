@@ -16,9 +16,15 @@ import {
 	type ChatModelSelection,
 	modelSelectionSchema,
 } from "@wincode/ai/models";
-import { isArray, isNull, isUndefined } from "@wincode/runtime-utils";
+import {
+	isArray,
+	isNull,
+	isUndefined,
+	omitUndefined,
+} from "@wincode/runtime-utils";
 import { randomUUIDv7 } from "bun";
 import { and, asc, desc, eq } from "drizzle-orm";
+import { omitBy } from "es-toolkit/object";
 import { z } from "zod";
 import {
 	type CompactionId,
@@ -169,8 +175,10 @@ const writePromptHistory = (
 			.values({
 				createdAt: new Date(),
 				entryJson: serializeJson({
-					...(entry.fileTokens ? { fileTokens: entry.fileTokens } : {}),
-					...(entry.pastedText ? { pastedText: entry.pastedText } : {}),
+					...omitBy(
+						{ fileTokens: entry.fileTokens, pastedText: entry.pastedText },
+						(value) => !value
+					),
 					files: entry.files,
 				}),
 				prompt: entry.text,
@@ -271,8 +279,13 @@ export const createPromptHistory = (
 					tx.update(promptHistory)
 						.set({
 							entryJson: serializeJson({
-								...(entry.fileTokens ? { fileTokens: entry.fileTokens } : {}),
-								...(entry.pastedText ? { pastedText: entry.pastedText } : {}),
+								...omitBy(
+									{
+										fileTokens: entry.fileTokens,
+										pastedText: entry.pastedText,
+									},
+									(value) => !value
+								),
 								files: entry.files,
 							}),
 						})
@@ -387,10 +400,10 @@ const toSession = (row: SessionRow): Session => {
 		createdAt: row.createdAt,
 		id: toSessionId(row.id),
 		lastMessageAt: row.lastMessageAt ?? null,
-		...(parsedModel?.success ? { model: parsedModel.data } : {}),
+		...omitUndefined({ model: parsedModel?.data }),
 		pinned: row.pinned,
 		title: row.title ?? UNTITLED_SESSION_TITLE,
-		...(row.variant ? { variant: row.variant } : {}),
+		...omitBy({ variant: row.variant ?? undefined }, (value) => !value),
 	};
 };
 const toSessionRecordModel = (
@@ -399,7 +412,7 @@ const toSessionRecordModel = (
 ): SessionRecord["model"] => ({
 	modelId: model.modelId,
 	providerId: model.providerId,
-	...(isUndefined(variant) ? {} : { variant }),
+	...omitUndefined({ variant }),
 });
 const toSessionRecord = (row: SessionRecordRow): SessionRecord => {
 	let delegation: SessionRecord["delegation"];
@@ -413,7 +426,7 @@ const toSessionRecord = (row: SessionRecordRow): SessionRecord => {
 	}
 	const record = {
 		agentId: agentIdSchema.parse(row.agentId),
-		...(isUndefined(delegation) ? {} : { delegation }),
+		...omitUndefined({ delegation }),
 		id: toSessionRecordId(row.recordId),
 		messages: row.messagesJson,
 		model: row.modelJson,
@@ -865,8 +878,7 @@ export const createDrizzleSessionStore = (
 			db.update(session)
 				.set({
 					updatedAt: new Date(),
-					...(isUndefined(data.title) ? {} : { title: data.title }),
-					...(isUndefined(data.pinned) ? {} : { pinned: data.pinned }),
+					...omitUndefined({ title: data.title, pinned: data.pinned }),
 				})
 				.where(
 					and(eq(session.id, sessionId), eq(session.workspaceId, workspace.id))

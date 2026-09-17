@@ -25,6 +25,7 @@ import {
 	isPlainObject,
 	isString,
 	isUndefined,
+	omitUndefined,
 } from "@wincode/runtime-utils";
 import type {
 	SkillActivation,
@@ -407,7 +408,7 @@ export const createSessionUserMessage = (
 	files: SessionFilePart[] = []
 ): SessionMessage => ({
 	id: toSessionMessageId(`msg-${randomUUIDv7()}`),
-	...(isUndefined(metadata) ? {} : { metadata }),
+	...omitUndefined({ metadata }),
 	parts: [{ text, type: "text" }, ...fileMentions, ...files],
 	role: "user",
 });

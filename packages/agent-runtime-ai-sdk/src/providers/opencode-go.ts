@@ -6,7 +6,7 @@ import type {
 	SupportedChatModel,
 	SupportedChatModelId,
 } from "@wincode/ai/models";
-import { isUndefined } from "@wincode/runtime-utils";
+import { omitUndefined } from "@wincode/runtime-utils";
 import {
 	defineModelResolver,
 	type ResolvedModel,
@@ -34,9 +34,7 @@ const resolve = (
 					),
 				}
 			: {}),
-		...(isUndefined(resolvedOptions.maxOutputTokens)
-			? {}
-			: { maxOutputTokens: resolvedOptions.maxOutputTokens }),
+		...omitUndefined({ maxOutputTokens: resolvedOptions.maxOutputTokens }),
 	};
 	switch (model.sdk) {
 		case "openai":

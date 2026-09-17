@@ -6,6 +6,7 @@ import {
 	isNonEmptyString,
 	isObjectLike,
 } from "@wincode/runtime-utils";
+import { omitBy } from "es-toolkit/object";
 import { useEffect, useMemo, useState } from "react";
 import {
 	rebuildActiveMessages,
@@ -103,10 +104,12 @@ function SessionRoute() {
 				setMessages(restored);
 				setActiveMessages(rebuildActiveMessages(active, latestCompaction));
 				setCompactions(loadedCompactions);
-				setSessionConfig({
-					...(session.model ? { model: session.model } : {}),
-					...(session.variant ? { variant: session.variant } : {}),
-				});
+				setSessionConfig(
+					omitBy(
+						{ model: session.model, variant: session.variant },
+						(value) => !value
+					)
+				);
 				setSessionTitle(session.title);
 			})
 			.catch((error: unknown) => {

@@ -6,8 +6,10 @@ import {
 	isObjectLike,
 	isString,
 	isUndefined,
+	omitUndefined,
 } from "@wincode/runtime-utils";
 import { randomUUIDv7 } from "bun";
+import { omitBy } from "es-toolkit/object";
 import {
 	type CompactionId,
 	type SessionId,
@@ -212,7 +214,7 @@ const normalizeFocus = (focus: string | undefined): string | undefined => {
 const intentOf = (input: CompactSessionInput): CompactionIntent => {
 	const focus = normalizeFocus(input.focus);
 	return {
-		...(isUndefined(focus) ? {} : { focus }),
+		...omitUndefined({ focus }),
 		trigger: input.trigger,
 	};
 };
@@ -907,7 +909,7 @@ const appendInputFor = ({
 		coveredMessageIds: summarySpan.map((message) => message.id),
 		formatVersion: 1,
 		text: sanitizeSummaryText(summarization.text),
-		...(isUndefined(normalizedFocus) ? {} : { focus: normalizedFocus }),
+		...omitUndefined({ focus: normalizedFocus }),
 	};
 	const nowValue = now();
 	return {
@@ -915,11 +917,9 @@ const appendInputFor = ({
 		createdAt: nowValue,
 		firstKeptUiMessageId: firstKept.id,
 		throughMessageUiId: through.id,
-		...(isUndefined(cutPoint.firstKeptAssistantPartIndex)
-			? {}
-			: {
-					firstKeptAssistantPartIndex: cutPoint.firstKeptAssistantPartIndex,
-				}),
+		...omitUndefined({
+			firstKeptAssistantPartIndex: cutPoint.firstKeptAssistantPartIndex,
+		}),
 		estimatedTokensAfter: estimateTokens([
 			createCompactionSummaryMessage({ id: entryId, summary }),
 			...projectMessagesForEstimate(cutPoint.activeMessages, settings),
@@ -927,13 +927,15 @@ const appendInputFor = ({
 		tokensBefore: estimateSessionContextTokens(session.messages, estimateTokens)
 			.tokens,
 		trigger,
-		...(isUndefined(normalizedFocus) ? {} : { focus: normalizedFocus }),
+		...omitUndefined({
+			focus: normalizedFocus,
+			summarizationVariant: variant,
+		}),
 		id: entryId,
-		...(isUndefined(variant) ? {} : { summarizationVariant: variant }),
 		priorCompactionId: previous?.id,
 		sessionId: session.sessionId,
 		summarizationModel: model,
-		...(summarization.usage ? { summarizationUsage: summarization.usage } : {}),
+		...omitBy({ summarizationUsage: summarization.usage }, (value) => !value),
 		summary,
 	};
 };
@@ -1251,7 +1253,10 @@ export const createSessionCompaction = ({
 			: { summaryMessages: summarySpan };
 		const focus = normalizeFocus(input.focus);
 		const generatorInput: SummaryGeneratorInput = {
-			...(isUndefined(input.variant) ? {} : { variant: input.variant }),
+			...omitUndefined({
+				variant: input.variant,
+				focus,
+			}),
 			model: input.model,
 			previousSummary: previous?.summary,
 			serializedMessages: serializeMessagesForCompaction(
@@ -1261,7 +1266,6 @@ export const createSessionCompaction = ({
 				? { summaryMessages: preparedSummary.summaryMessages }
 				: {}),
 			maxOutputTokens,
-			...(isUndefined(focus) ? {} : { focus }),
 			signal: input.signal,
 		};
 		const generated = await generateCompactionSummary(

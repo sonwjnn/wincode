@@ -5,6 +5,7 @@ import {
 	isObjectLike,
 	isString,
 	isUndefined,
+	omitUndefined,
 } from "@wincode/runtime-utils";
 
 import { z } from "zod";
@@ -254,12 +255,12 @@ const buildDetails = (
 	retryAfterMs: number | undefined
 ): ModelFailureDetails | undefined => {
 	const details = {
-		...(isUndefined(context?.modelId) ? {} : { modelId: context.modelId }),
-		...(isUndefined(context?.providerId)
-			? {}
-			: { providerId: context.providerId }),
-		...(isUndefined(retryAfterMs) ? {} : { retryAfterMs }),
-		...(isUndefined(statusCode) ? {} : { statusCode }),
+		...omitUndefined({
+			modelId: context?.modelId,
+			providerId: context?.providerId,
+			retryAfterMs,
+			statusCode,
+		}),
 	};
 	return Object.keys(details).length === 0 ? undefined : details;
 };
@@ -281,7 +282,7 @@ export const normalizeModelFailure = (
 	const details = buildDetails(context, statusCode, retryAfterMs);
 	return {
 		code,
-		...(isUndefined(details) ? {} : { details }),
+		...omitUndefined({ details }),
 		message: safeMessageByCode[code],
 		retry: getRetryDisposition(code),
 		source: getSource(code, statusCode),

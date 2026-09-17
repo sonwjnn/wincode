@@ -7,6 +7,7 @@ import {
 	isObjectLike,
 	isString,
 	isUndefined,
+	omitUndefined,
 } from "@wincode/runtime-utils";
 import {
 	canonicalPath,
@@ -409,8 +410,7 @@ const invalidDiagnostic = (
 	byteLength?: number,
 	characterLength?: number
 ): ProjectInstructionDiagnostic => ({
-	...(isUndefined(byteLength) ? {} : { byteLength }),
-	...(isUndefined(characterLength) ? {} : { characterLength }),
+	...omitUndefined({ byteLength, characterLength }),
 	code,
 	message: diagnosticMessage(code),
 	reason: code,

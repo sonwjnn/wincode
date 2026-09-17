@@ -10,7 +10,7 @@ import { normalizeModelUsage } from "@wincode/ai/model-usage";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { defaultChatModelSelection } from "@wincode/ai/models";
 import { type CodingToolName, codingToolNames } from "@wincode/coding-tools";
-import { isNull, isUndefined } from "@wincode/runtime-utils";
+import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import {
 	isSessionToolPart,
 	isTerminalSessionToolPart,
@@ -35,7 +35,7 @@ const createEmptyRuntimeAssistantMessage = (
 	metadata: {
 		agent,
 		model,
-		...(isNull(sourceUserMessageId) ? {} : { sourceUserMessageId }),
+		...omitUndefined({ sourceUserMessageId: sourceUserMessageId ?? undefined }),
 	},
 	parts: [],
 	role: "assistant",
@@ -237,7 +237,7 @@ const buildTerminalMessageMetadata = ({
 		...(base.metadata ?? {}),
 		agent: base.metadata?.agent ?? agent,
 		interrupted: event.type === "agent-turn-interrupted",
-		...(isUndefined(terminalOutcome) ? {} : { terminalOutcome }),
+		...omitUndefined({ terminalOutcome }),
 		...(isUndefined(model) ? {} : { model: base.metadata?.model ?? model }),
 		...(isUndefined(variant)
 			? {}
@@ -245,7 +245,7 @@ const buildTerminalMessageMetadata = ({
 		...(isNull(startedAt)
 			? {}
 			: { responseTimeMs: Math.max(0, Date.now() - startedAt) }),
-		...(isNull(usage) ? {} : { usage }),
+		...omitUndefined({ usage: usage ?? undefined }),
 	};
 };
 
@@ -393,13 +393,13 @@ const finalizeAssistantMessageMetadata = (
 	const variant = message.metadata?.variant ?? context.variant;
 	const metadata: SessionMessageMetadata = {
 		...(message.metadata ?? {}),
-		...(isUndefined(agent) ? {} : { agent }),
+		...omitUndefined({
+			agent,
+			model,
+			variant,
+			responseTimeMs: context.responseTimeMs,
+		}),
 		interrupted: context.interrupted,
-		...(isUndefined(model) ? {} : { model }),
-		...(isUndefined(variant) ? {} : { variant }),
-		...(isUndefined(context.responseTimeMs)
-			? {}
-			: { responseTimeMs: context.responseTimeMs }),
 	};
 	return { ...message, metadata };
 };
@@ -430,9 +430,7 @@ export const interruptSessionContext = (
 					agent: execution.agent,
 					model: execution.model,
 					responseTimeMs: Math.max(0, Date.now() - execution.startedAt),
-					...(isUndefined(execution.variant)
-						? {}
-						: { variant: execution.variant }),
+					...omitUndefined({ variant: execution.variant }),
 				}),
 	});
 	const next = [...messages];

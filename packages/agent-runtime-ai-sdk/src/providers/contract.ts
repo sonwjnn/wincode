@@ -9,7 +9,7 @@ import type {
 	SupportedChatModel,
 	SupportedChatModelId,
 } from "@wincode/ai/models";
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import type { LanguageModel } from "ai";
 import type { Except } from "type-fest";
 
@@ -54,16 +54,10 @@ export const resolveModelWithProvider = <P extends ModelRuntimeProviderId>(
 		model: provider(model.id),
 		modelId: model.id as SupportedChatModelId,
 		provider: model.provider,
-		...(isUndefined(resolvedOptions.maxOutputTokens)
-			? {}
-			: { maxOutputTokens: resolvedOptions.maxOutputTokens }),
-		...(isUndefined(resolvedOptions.providerOptions)
-			? {}
-			: {
-					providerOptions: toAiSdkProviderOptions(
-						resolvedOptions.providerOptions
-					),
-				}),
+		...omitUndefined({
+			maxOutputTokens: resolvedOptions.maxOutputTokens,
+			providerOptions: toAiSdkProviderOptions(resolvedOptions.providerOptions),
+		}),
 	};
 };
 

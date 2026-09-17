@@ -1,4 +1,4 @@
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import type { ConfigSnapshot, ConfigStore } from "@/shared/config/config-store";
 import { SETTINGS_CATALOG } from "./catalog";
 import type {
@@ -32,9 +32,7 @@ const resolveSetting = (
 		available: resolution.available,
 		descriptor,
 		source: resolution.source,
-		...(isUndefined(resolution.unavailableReason)
-			? {}
-			: { unavailableReason: resolution.unavailableReason }),
+		...omitUndefined({ unavailableReason: resolution.unavailableReason }),
 		value: resolution.value,
 	};
 };

@@ -4,6 +4,7 @@ import {
 	isPlainObject,
 	isString,
 	isUndefined,
+	omitUndefined,
 } from "@wincode/runtime-utils";
 import type { Merge, OverrideProperties } from "type-fest";
 import type { ZodError } from "zod";
@@ -62,7 +63,7 @@ const addDiagnostic = (
 		message,
 		path: `${origin.path}:${suffix}`,
 		scope: origin.scope,
-		...(isUndefined(serverName) ? {} : { serverName }),
+		...omitUndefined({ serverName }),
 	});
 };
 

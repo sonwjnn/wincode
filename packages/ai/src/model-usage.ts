@@ -3,6 +3,7 @@ import {
 	isNumber,
 	isObjectLike,
 	isUndefined,
+	omitUndefined,
 } from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
@@ -85,10 +86,12 @@ export const normalizeModelUsage = (value: unknown): ModelUsage | null => {
 	return {
 		inputTokens,
 		outputTokens,
-		...(isUndefined(cacheReadTokens) ? {} : { cacheReadTokens }),
-		...(isUndefined(cacheWriteTokens) ? {} : { cacheWriteTokens }),
-		...(isUndefined(reasoningTokens) ? {} : { reasoningTokens }),
-		...(isUndefined(totalTokens) ? {} : { totalTokens }),
+		...omitUndefined({
+			cacheReadTokens,
+			cacheWriteTokens,
+			reasoningTokens,
+			totalTokens,
+		}),
 	};
 };
 

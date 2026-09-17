@@ -38,8 +38,10 @@ import {
 	isNull,
 	isObjectLike,
 	isUndefined,
+	omitUndefined,
 } from "@wincode/runtime-utils";
 import { randomUUIDv7 } from "bun";
+import { omitBy } from "es-toolkit/object";
 import type { UnknownRecord } from "type-fest";
 import type {
 	SessionMessage,
@@ -264,19 +266,15 @@ const metadataForRecord = (
 	}
 	const variant = metadata?.variant ?? record.model.variant;
 	const parsed = sessionMessageMetadataSchema.safeParse({
-		...((metadata?.agent ?? record.agentId)
-			? { agent: metadata?.agent ?? record.agentId }
-			: {}),
-		...(isUndefined(model) ? {} : { model }),
-		...(isUndefined(metadata?.responseTimeMs)
-			? {}
-			: { responseTimeMs: metadata.responseTimeMs }),
-		...(isUndefined(metadata?.skill) ? {} : { skill: metadata.skill }),
-		...(isUndefined(metadata?.sourceUserMessageId)
-			? {}
-			: { sourceUserMessageId: metadata.sourceUserMessageId }),
-		...(isUndefined(metadata?.usage) ? {} : { usage: metadata.usage }),
-		...(isUndefined(variant) ? {} : { variant }),
+		...omitBy({ agent: metadata?.agent ?? record.agentId }, (value) => !value),
+		...omitUndefined({
+			model,
+			responseTimeMs: metadata?.responseTimeMs,
+			skill: metadata?.skill,
+			sourceUserMessageId: metadata?.sourceUserMessageId,
+			usage: metadata?.usage,
+			variant,
+		}),
 	});
 	return parsed.success ? parsed.data : undefined;
 };
@@ -329,12 +327,14 @@ const toSessionPart = (
 			return [
 				attachmentReferenceToFilePart({
 					attachmentId: part.attachmentId,
-					...(isUndefined(part.available) ? {} : { available: part.available }),
+					...omitUndefined({
+						available: part.available,
+						height: part.height,
+						width: part.width,
+					}),
 					byteLength: part.byteLength,
 					filename: part.filename,
-					...(isUndefined(part.height) ? {} : { height: part.height }),
 					mediaType: part.mediaType,
-					...(isUndefined(part.width) ? {} : { width: part.width }),
 				}),
 			];
 		} catch {
@@ -345,7 +345,7 @@ const toSessionPart = (
 		return [
 			{
 				data: part.data,
-				...(isUndefined(part.id) ? {} : { id: part.id }),
+				...omitUndefined({ id: part.id }),
 				type: "data-fileMention",
 			},
 		];
@@ -363,7 +363,7 @@ const toSessionMessage = (
 	const metadata = metadataForRecord(record, message.metadata);
 	return {
 		id: message.id,
-		...(isUndefined(metadata) ? {} : { metadata }),
+		...omitUndefined({ metadata }),
 		parts: message.parts.flatMap(toSessionPart),
 		role: message.role,
 	};
@@ -382,25 +382,24 @@ const toDurableMetadata = (
 	}
 	const skill = metadata.skill;
 	const sourceUserMessageId = metadata.sourceUserMessageId;
+	const durableSkill = isUndefined(skill)
+		? undefined
+		: {
+				arguments: skill.arguments,
+				contentHash: skill.contentHash,
+				name: skill.name,
+				source: skill.source ?? "explicit",
+			};
 	return {
-		...(isUndefined(metadata.agent) ? {} : { agent: metadata.agent }),
-		...(isUndefined(metadata.model) ? {} : { model: metadata.model }),
-		...(isUndefined(metadata.responseTimeMs)
-			? {}
-			: { responseTimeMs: metadata.responseTimeMs }),
-		...(isUndefined(skill)
-			? {}
-			: {
-					skill: {
-						arguments: skill.arguments,
-						contentHash: skill.contentHash,
-						name: skill.name,
-						source: skill.source ?? "explicit",
-					},
-				}),
-		...(isUndefined(sourceUserMessageId) ? {} : { sourceUserMessageId }),
-		...(isUndefined(metadata.usage) ? {} : { usage: metadata.usage }),
-		...(isUndefined(metadata.variant) ? {} : { variant: metadata.variant }),
+		...omitUndefined({
+			agent: metadata.agent,
+			model: metadata.model,
+			responseTimeMs: metadata.responseTimeMs,
+			skill: durableSkill,
+			sourceUserMessageId,
+			usage: metadata.usage,
+			variant: metadata.variant,
+		}),
 	};
 };
 
@@ -439,7 +438,7 @@ const toDurableSessionPart = (
 	if (isFileMentionPart(part)) {
 		const mention: SessionFileMentionPart = {
 			data: part.data,
-			...(isUndefined(part.id) ? {} : { id: part.id }),
+			...omitUndefined({ id: part.id }),
 			type: "file-mention",
 		};
 		return [mention];
@@ -451,10 +450,12 @@ const toDurableSessionPart = (
 			available: reference.available,
 			byteLength: reference.byteLength,
 			filename: reference.filename,
-			...(isUndefined(reference.height) ? {} : { height: reference.height }),
+			...omitUndefined({
+				height: reference.height,
+				width: reference.width,
+			}),
 			mediaType: reference.mediaType,
 			type: "attachment-reference",
-			...(isUndefined(reference.width) ? {} : { width: reference.width }),
 		};
 		return [attachment];
 	}
@@ -487,13 +488,13 @@ export const buildUserSessionRecord = ({
 	}
 	return {
 		agentId,
-		...(isUndefined(delegation) ? {} : { delegation }),
+		...omitUndefined({ delegation }),
 		id: toSessionRecordId(`record-${randomUUIDv7()}`),
 		messages: [durableMessage],
 		model: {
 			modelId: model.modelId,
 			providerId: model.providerId,
-			...(isUndefined(variant) ? {} : { variant }),
+			...omitUndefined({ variant }),
 		},
 		outcome: { kind: "user" },
 		turnId,
@@ -514,7 +515,7 @@ export const toDurableSessionMessageRecord = (
 	const metadata = toDurableMetadata(message.metadata);
 	return {
 		id: message.id,
-		...(isUndefined(metadata) ? {} : { metadata }),
+		...omitUndefined({ metadata }),
 		parts,
 		role: message.role,
 	};

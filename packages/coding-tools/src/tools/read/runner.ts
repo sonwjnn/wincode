@@ -1,7 +1,12 @@
 import type { Stats } from "node:fs";
 import { lstat, readFile, readlink, stat } from "node:fs/promises";
 import path from "node:path";
-import { isObjectLike, isUndefined } from "@wincode/runtime-utils";
+import {
+	isObjectLike,
+	isUndefined,
+	omitUndefined,
+} from "@wincode/runtime-utils";
+import { omitBy } from "es-toolkit/object";
 import {
 	createWorkspaceSandbox,
 	defaultWorkspaceSandbox,
@@ -95,7 +100,7 @@ const readResolvedTarget = async (
 			absolutePath: resolvedPath,
 			kind: "directory",
 			path: displayPath,
-			...(isUndefined(ranges) ? {} : { ranges }),
+			...omitUndefined({ ranges }),
 		};
 	}
 	return {
@@ -103,7 +108,7 @@ const readResolvedTarget = async (
 		content: await readFile(resolvedPath, "utf8"),
 		kind: "file",
 		path: displayPath,
-		...(isUndefined(ranges) ? {} : { ranges }),
+		...omitUndefined({ ranges }),
 	};
 };
 
@@ -146,7 +151,7 @@ const readTextTarget = async (
 				absolutePath: resolvedPath,
 				kind: "symlink",
 				path: displayPath,
-				...(isUndefined(ranges) ? {} : { ranges }),
+				...omitUndefined({ ranges }),
 				symlinkTarget: await readlink(literalPath),
 			};
 		}
@@ -229,7 +234,7 @@ const remainingRangesAfter = (
 			remainingRanges.push({ ...range });
 		} else if (lastSelectedLine < rangeEnd) {
 			remainingRanges.push({
-				...(isUndefined(range.endLine) ? {} : { endLine: range.endLine }),
+				...omitUndefined({ endLine: range.endLine }),
 				startLine: lastSelectedLine + 1,
 			});
 		}
@@ -817,6 +822,6 @@ export const runReadTool = async (
 	return {
 		content: formattedContent.content,
 		path: target.path,
-		...(formattedContent.truncated ? { truncated: true } : {}),
+		...omitBy({ truncated: formattedContent.truncated }, (value) => !value),
 	};
 };

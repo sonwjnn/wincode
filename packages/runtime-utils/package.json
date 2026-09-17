@@ -10,6 +10,9 @@
     },
     "./errors": {
       "default": "./src/errors.ts"
+    },
+    "./objects": {
+      "default": "./src/objects.ts"
     }
   },
   "scripts": {

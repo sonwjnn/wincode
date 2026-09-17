@@ -36,6 +36,7 @@ import {
 	isObjectLike,
 	isString,
 	isUndefined,
+	omitUndefined,
 } from "@wincode/runtime-utils";
 import {
 	jsonSchema,
@@ -90,12 +91,10 @@ const resolveTerminalFailure = (
 		code: modelFailure.code,
 		details: {
 			...getAgentTurnFailureDetails(turn),
-			...(isUndefined(modelFailure.details?.retryAfterMs)
-				? {}
-				: { retryAfterMs: modelFailure.details.retryAfterMs }),
-			...(isUndefined(modelFailure.details?.statusCode)
-				? {}
-				: { statusCode: modelFailure.details.statusCode }),
+			...omitUndefined({
+				retryAfterMs: modelFailure.details?.retryAfterMs,
+				statusCode: modelFailure.details?.statusCode,
+			}),
 		},
 		retry: modelFailure.retry,
 		source: modelFailure.source === "runtime" ? "runtime" : "model",
@@ -481,9 +480,7 @@ const toAiSdkToolSet = (tools: readonly ResolvedTool[]): ToolSet => {
 		set[definition.name] = tool({
 			description: definition.description,
 			inputSchema: runtimeInputSchema(definition.inputSchema),
-			...(isUndefined(definition.outputSchema)
-				? {}
-				: { outputSchema: definition.outputSchema }),
+			...omitUndefined({ outputSchema: definition.outputSchema }),
 			execute: async (
 				input: unknown,
 				options: ToolExecutionOptions
@@ -589,7 +586,7 @@ const runAgentTurn = async function* (
 
 	yield emit({
 		agentId: agent.id,
-		...(isUndefined(turn.delegation) ? {} : { delegation: turn.delegation }),
+		...omitUndefined({ delegation: turn.delegation }),
 		sequence,
 		startedAt: Date.now(),
 		turnId: turn.id,

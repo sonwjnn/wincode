@@ -8,7 +8,7 @@ import type {
 	ModelTarget,
 	ModelVariant,
 } from "@wincode/ai/model";
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import type { Connections } from "@/modules/connections";
 import { resolveChatModelTarget } from "../../model-target";
 import type { SessionMessage } from "../message";
@@ -123,9 +123,7 @@ export const resolveDirectSummaryModel = async (
 ): Promise<SummaryModel> =>
 	resolveChatModelTarget(selection, connections, {
 		allowRetired: true,
-		...(isUndefined(signal) ? {} : { signal }),
-		...(isUndefined(variant) ? {} : { variant }),
-		...(isUndefined(maxOutputTokens) ? {} : { maxOutputTokens }),
+		...omitUndefined({ signal, variant, maxOutputTokens }),
 	});
 export const createDirectSummaryGenerator = (
 	connections: Connections,

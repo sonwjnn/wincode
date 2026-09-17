@@ -1,6 +1,6 @@
 import type { ToolCallId } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
-import { isUndefined } from "@wincode/runtime-utils";
+import { omitUndefined } from "@wincode/runtime-utils";
 import { useEffect, useMemo, useState } from "react";
 import { useAgentRegistry } from "@/modules/agents";
 import { useConnections } from "@/modules/connections";
@@ -156,9 +156,7 @@ export function useSessionEngine(
 					focus,
 					model: selection,
 					trigger: "manual",
-					...(isUndefined(selectionVariant)
-						? {}
-						: { variant: selectionVariant }),
+					...omitUndefined({ variant: selectionVariant }),
 				}),
 		[engine]
 	);

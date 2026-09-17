@@ -13,7 +13,9 @@ import {
 	isNonNegativeInteger,
 	isPlainObject,
 	isPositiveInteger,
+	omitUndefined,
 } from "@wincode/runtime-utils";
+import { omitBy } from "es-toolkit/object";
 import type { UnknownRecord } from "type-fest";
 import {
 	type ModelCost,
@@ -92,10 +94,8 @@ const toThinkingPolicy = (raw: unknown): ModelThinkingPolicy | undefined => {
 		return;
 	}
 	return {
-		...(toggle ? { toggle: true as const } : {}),
-		...(levels ? { levels } : {}),
-		...(isUndefined(budgetMin) ? {} : { budgetMin }),
-		...(isUndefined(budgetMax) ? {} : { budgetMax }),
+		...omitBy({ toggle: toggle ? true : undefined, levels }, (value) => !value),
+		...omitUndefined({ budgetMin, budgetMax }),
 		...(budgetBounded && !toggle && !levels
 			? { unlevelled: true as const }
 			: {}),
@@ -116,8 +116,7 @@ const toCost = (raw: unknown): ModelCost | undefined => {
 	return {
 		input,
 		output,
-		...(isUndefined(cacheRead) ? {} : { cacheRead }),
-		...(isUndefined(cacheWrite) ? {} : { cacheWrite }),
+		...omitUndefined({ cacheRead, cacheWrite }),
 	};
 };
 
@@ -164,7 +163,7 @@ const toLimits = (raw: unknown): ModelLimits | undefined => {
 		return;
 	}
 	const output = positiveInteger(raw.output);
-	return { context, ...(isUndefined(output) ? {} : { output }) };
+	return { context, ...omitUndefined({ output }) };
 };
 
 export const metadataForModel = (raw: ModelsDevModel): ModelMetadataEntry => {
@@ -173,10 +172,8 @@ export const metadataForModel = (raw: ModelsDevModel): ModelMetadataEntry => {
 	const limits = toLimits(raw.limit);
 	const tiers = toTiers(raw.cost);
 	return {
-		...(cost ? { cost } : {}),
-		...(limits ? { limits } : {}),
-		...(thinking ? { thinking } : {}),
-		...(tiers.length === 0 ? {} : { tiers }),
+		...omitBy({ cost, limits, thinking }, (value) => !value),
+		...omitBy({ tiers }, (value) => value.length === 0),
 	};
 };
 

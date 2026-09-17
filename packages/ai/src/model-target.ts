@@ -1,4 +1,4 @@
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import type { ReadonlyDeep } from "type-fest";
 import { z } from "zod";
 import {
@@ -215,13 +215,11 @@ export const createModelTarget = (
 		authorization: toMinimalAuthorization(selection.providerId, authorization),
 		modelId: model.id as SupportedChatModelId,
 		providerId: model.connectionProviderId,
-		...(isUndefined(resolvedOptions.maxOutputTokens)
-			? {}
-			: { maxOutputTokens: resolvedOptions.maxOutputTokens }),
-		...(isUndefined(resolvedOptions.providerOptions)
-			? {}
-			: { providerOptions: resolvedOptions.providerOptions }),
-		...(isUndefined(variant) ? {} : { variant }),
+		...omitUndefined({
+			maxOutputTokens: resolvedOptions.maxOutputTokens,
+			providerOptions: resolvedOptions.providerOptions,
+			variant,
+		}),
 	};
 	modelTargetSchema.parse(target);
 	return target as ModelTarget;

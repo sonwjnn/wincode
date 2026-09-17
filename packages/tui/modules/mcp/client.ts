@@ -7,7 +7,7 @@ import {
 	type Tool,
 } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { isNull, isUndefined } from "@wincode/runtime-utils";
+import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import type { ResolvedMcpServerConfig } from "./config";
 import { sanitizeMessage } from "./sanitize";
 
@@ -95,7 +95,7 @@ export class McpClientError extends Error {
 const toClientTool = (tool: Tool): McpClientTool => ({
 	name: tool.name,
 	inputSchema: tool.inputSchema,
-	...(isUndefined(tool.description) ? {} : { description: tool.description }),
+	...omitUndefined({ description: tool.description }),
 });
 
 const localTransportOptions = (

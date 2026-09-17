@@ -13,7 +13,7 @@ import {
 	getSupportedModelVariants,
 	supportedChatModelIdSchema,
 } from "@wincode/ai/models";
-import { isNull, isUndefined } from "@wincode/runtime-utils";
+import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import { spawn } from "bun";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useCommandExecutor } from "@/app/commands/use-app-command-executor";
@@ -374,7 +374,7 @@ export function ChatTextArea({
 				start,
 				typeId: 1,
 				virtual: true,
-				...(isNull(styleId) ? {} : { styleId }),
+				...omitUndefined({ styleId: styleId ?? undefined }),
 			});
 		},
 		[mentionSyntaxStyle]
@@ -494,9 +494,7 @@ export function ChatTextArea({
 						end: matchedStart + pasted.token.length,
 						start: matchedStart,
 						virtual: true,
-						...(isNull(pastedTextStyleId)
-							? {}
-							: { styleId: pastedTextStyleId }),
+						...omitUndefined({ styleId: pastedTextStyleId ?? undefined }),
 					}),
 				},
 			];
@@ -598,7 +596,7 @@ export function ChatTextArea({
 				end: start + pasted.token.length,
 				start,
 				virtual: true,
-				...(isNull(pastedTextStyleId) ? {} : { styleId: pastedTextStyleId }),
+				...omitUndefined({ styleId: pastedTextStyleId ?? undefined }),
 			});
 			pastedTextRef.current.push({ extmarkId, ...pasted });
 		}
@@ -804,7 +802,7 @@ export function ChatTextArea({
 			const extmarkId = textarea.extmarks.create({
 				end: start + summary.token.length,
 				start,
-				...(isNull(pastedTextStyleId) ? {} : { styleId: pastedTextStyleId }),
+				...omitUndefined({ styleId: pastedTextStyleId ?? undefined }),
 				virtual: true,
 			});
 			pastedTextRef.current.push({ extmarkId, ...summary });

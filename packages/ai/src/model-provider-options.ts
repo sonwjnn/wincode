@@ -1,4 +1,10 @@
-import { isArray, isNull, isNumber, isUndefined } from "@wincode/runtime-utils";
+import {
+	isArray,
+	isNull,
+	isNumber,
+	isUndefined,
+	omitUndefined,
+} from "@wincode/runtime-utils";
 import type { ReadonlyDeep } from "type-fest";
 import { z } from "zod";
 import type { ModelMetadataEntry } from "./model-metadata";
@@ -362,7 +368,7 @@ const openAIProviderOptions = (
 			...(metadata?.reasoningSummary
 				? { reasoningSummary: "detailed" as const }
 				: {}),
-			...(isUndefined(reasoningEffort) ? {} : { reasoningEffort }),
+			...omitUndefined({ reasoningEffort }),
 		},
 	};
 };
@@ -490,8 +496,7 @@ export const resolveReasoning = (
 	);
 	const providerOptions: AnthropicProviderOptions = {
 		anthropic: {
-			...(isUndefined(effort) ? {} : { effort }),
-			...(isUndefined(thinking) ? {} : { thinking }),
+			...omitUndefined({ effort, thinking }),
 		},
 	};
 	return {
@@ -510,7 +515,7 @@ export const resolveReasoning = (
 const withMaxOutputTokens = (
 	maxOutputTokens: number | undefined
 ): Pick<ResolvedModelProviderOptions, "maxOutputTokens"> =>
-	isUndefined(maxOutputTokens) ? {} : { maxOutputTokens };
+	omitUndefined({ maxOutputTokens });
 
 /**
  * Whether a provider option bag actually says anything. A Google on/off switch

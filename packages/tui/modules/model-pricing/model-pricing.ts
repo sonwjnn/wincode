@@ -5,7 +5,8 @@ import {
 	type ModelRuntimeProviderId,
 } from "@wincode/ai/models";
 import type { ModelMetadataEntry } from "@wincode/ai/models-dev";
-import { isUndefined } from "@wincode/runtime-utils";
+import { omitUndefined } from "@wincode/runtime-utils";
+import { omitBy } from "es-toolkit/object";
 
 /**
  * A runtime override table over the generated catalog metadata. Both sides are
@@ -45,8 +46,7 @@ const mergeModelCost = (
 	return {
 		input: live.input ?? catalog.input,
 		output: live.output ?? catalog.output,
-		...(isUndefined(cacheRead) ? {} : { cacheRead }),
-		...(isUndefined(cacheWrite) ? {} : { cacheWrite }),
+		...omitUndefined({ cacheRead, cacheWrite }),
 	};
 };
 
@@ -62,9 +62,7 @@ const mergeModelLimits = (
 	}
 	return {
 		context: live.context ?? catalog.context,
-		...((live.output ?? catalog.output)
-			? { output: live.output ?? catalog.output }
-			: {}),
+		...omitBy({ output: live.output ?? catalog.output }, (value) => !value),
 	};
 };
 
@@ -93,9 +91,7 @@ export const resolveModelMetadata = (
 	const merged: ModelMetadataEntry = {
 		...catalog,
 		...live,
-		...(cost ? { cost } : {}),
-		...(limits ? { limits } : {}),
-		...(thinking ? { thinking } : {}),
+		...omitBy({ cost, limits, thinking }, (value) => !value),
 	};
 	return Object.keys(merged).length === 0 ? null : merged;
 };

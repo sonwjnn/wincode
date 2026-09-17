@@ -7,7 +7,7 @@ import {
 	type ToolCallId,
 } from "@wincode/agent-core";
 import type { ModelTarget } from "@wincode/ai/model";
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import {
 	type AgentRegistry,
 	type PreparedAgentCall,
@@ -285,10 +285,10 @@ export const createDelegationExecutor = (
 				sourceUserMessageId: userMessage.id,
 				startedAt: Date.now(),
 				turnId,
-				...(isUndefined(execution.sessionVariant)
-					? {}
-					: { sessionVariant: execution.sessionVariant }),
-				...(isUndefined(selectedVariant) ? {} : { variant: selectedVariant }),
+				...omitUndefined({
+					sessionVariant: execution.sessionVariant,
+					variant: selectedVariant,
+				}),
 			};
 			const child = host.begin(beginInput);
 			// Recorded the moment it begins, so a failing prompt commit still ends it.
@@ -315,9 +315,7 @@ export const createDelegationExecutor = (
 				{
 					allowRetired: true,
 					signal: childSignal,
-					...(isUndefined(prepared.variant)
-						? {}
-						: { variant: prepared.variant }),
+					...omitUndefined({ variant: prepared.variant }),
 				}
 			);
 			const mcpPolicy = await resolveMcpPolicyForAgent(prepared.agent);

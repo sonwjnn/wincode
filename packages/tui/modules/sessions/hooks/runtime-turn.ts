@@ -45,6 +45,7 @@ import {
 	isObjectLike,
 	isString,
 	isUndefined,
+	omitUndefined,
 } from "@wincode/runtime-utils";
 import {
 	formatSkillUserContext,
@@ -712,7 +713,7 @@ export const buildAgentTurn = ({
 				`${BASE_AGENT_INSTRUCTIONS}\n\n${resolvedAgent.instructions}`,
 			role: effectiveRole,
 		},
-		...(isUndefined(delegation) ? {} : { delegation }),
+		...omitUndefined({ delegation }),
 		id: turnId,
 		input: { messages },
 		model: modelTarget,

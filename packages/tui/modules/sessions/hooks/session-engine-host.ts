@@ -5,7 +5,7 @@ import type {
 } from "@wincode/agent-core";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import { codingToolDefinitions } from "@wincode/coding-tools";
-import { isNull, isUndefined } from "@wincode/runtime-utils";
+import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import {
 	buildSkillToolDefinition,
 	createSkillExecution,
@@ -200,14 +200,12 @@ export const createSessionEngineHost = (
 			sourceUserMessageId: execution.sourceUserMessageId ?? undefined,
 			startedAt: execution.startedAt,
 			turnId: execution.turnId,
-			...(isUndefined(execution.parent) ? {} : { parent: execution.parent }),
-			...(isUndefined(execution.sessionVariant)
-				? {}
-				: { sessionVariant: execution.sessionVariant }),
-			...(isUndefined(capabilities.skillRequest)
-				? {}
-				: { skillRequest: capabilities.skillRequest }),
-			...(isUndefined(execution.variant) ? {} : { variant: execution.variant }),
+			...omitUndefined({
+				parent: execution.parent,
+				sessionVariant: execution.sessionVariant,
+				skillRequest: capabilities.skillRequest,
+				variant: execution.variant,
+			}),
 		});
 	const releaseScope = (scope: TurnExecution): void => {
 		const snapshot = scope.mcpSnapshot;
@@ -294,7 +292,7 @@ export const createSessionEngineHost = (
 		return {
 			diagnostic: summarizeCatalogDiagnostics(catalog),
 			execution: createSkillExecution(catalog),
-			...(isUndefined(tool) ? {} : { tool }),
+			...omitUndefined({ tool }),
 		};
 	};
 	/** Arms the Skill catalog one Agent Turn runs with. */
@@ -366,9 +364,7 @@ export const createSessionEngineHost = (
 		const scope = scopeOf(execution, {
 			armedSkill: request.armedSkill,
 			resolvedAgent,
-			...(isUndefined(request.skillRequest)
-				? {}
-				: { skillRequest: request.skillRequest }),
+			...omitUndefined({ skillRequest: request.skillRequest }),
 		});
 		scopes.set(execution.turnId, scope);
 		let turn: AgentTurn | undefined;
@@ -378,9 +374,7 @@ export const createSessionEngineHost = (
 				connections,
 				{
 					signal,
-					...(isUndefined(execution.variant)
-						? {}
-						: { variant: execution.variant }),
+					...omitUndefined({ variant: execution.variant }),
 				}
 			);
 			const mcpPolicy = await toolPermission.resolveMcpPolicyForAgent(
@@ -489,9 +483,9 @@ export const createSessionEngineHost = (
 				onViewState: (viewState) => callbacks.onViewState(viewState),
 				runtime: defaultRuntimeFactory(),
 				signal,
-				...(isNull(execution.sourceUserMessageId)
-					? {}
-					: { sourceUserMessageId: execution.sourceUserMessageId }),
+				...omitUndefined({
+					sourceUserMessageId: execution.sourceUserMessageId ?? undefined,
+				}),
 				turn,
 			});
 			return { turn };
