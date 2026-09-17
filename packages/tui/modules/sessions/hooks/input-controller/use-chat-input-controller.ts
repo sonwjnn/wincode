@@ -18,7 +18,6 @@ import {
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useLatest } from "@/shared/hooks/use-latest";
 import { getSessionStore } from "../../storage/get-session-store";
-import { findBuiltinCommand } from "./builtin-command";
 import { removeTriggerText } from "./escape-trigger";
 import {
 	decideDownAction,
@@ -32,7 +31,7 @@ import {
 } from "./history";
 import { scrollCommandViewport } from "./scroll-command";
 import {
-	expandTrackedPastedText,
+	resolveBuiltinCommand,
 	type SubmitSnapshot,
 	submitPrompt,
 } from "./submit";
@@ -414,15 +413,7 @@ export function useChatInputController({
 				return false;
 			}
 
-			const command =
-				snapshot.files.length === 0
-					? findBuiltinCommand(
-							expandTrackedPastedText(
-								snapshot.rawText.trim(),
-								snapshot.pastedTexts
-							)
-						)
-					: null;
+			const command = resolveBuiltinCommand(snapshot);
 			const accepted = isNull(command)
 				? await submitPrompt(
 						{

@@ -5,11 +5,13 @@ import {
 	parseSkillInvocation,
 	SKILL_NAMESPACE_PREFIX,
 } from "@wincode/skills";
+import type { CommandSpec } from "@/modules/commands/commands";
 import { expandCustomCommandTemplate } from "@/modules/custom-commands/expand";
 import { parseCustomCommandInvocation } from "@/modules/custom-commands/invocation";
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import type { ChatPromptSubmission } from "../../utils";
+import { findBuiltinCommand } from "./builtin-command";
 
 type SkillPrompt = {
 	skill?: SkillContext;
@@ -55,6 +57,21 @@ export type SubmitDependencies = {
 		submission: ChatPromptSubmission
 	) => boolean | Promise<boolean> | void | Promise<void>;
 };
+
+/**
+ * The Built-in Command one composition invokes, or null when the line is
+ * ordinary prompt text. Pasted-text markers are expanded first, so a focus
+ * pasted after `/compact ` reaches the command as the pasted content, and a
+ * composition carrying attachments stays a prompt.
+ */
+export const resolveBuiltinCommand = (
+	snapshot: SubmitSnapshot
+): CommandSpec | null =>
+	snapshot.files.length === 0
+		? findBuiltinCommand(
+				expandTrackedPastedText(snapshot.rawText.trim(), snapshot.pastedTexts)
+			)
+		: null;
 
 export const resolveSkillPrompt = async (
 	text: string,

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Skill } from "@wincode/skills";
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import {
+	resolveBuiltinCommand,
 	resolveCustomCommandPrompt,
 	resolveSkillPrompt,
 	type SubmitDependencies,
@@ -160,6 +161,46 @@ describe("resolveCustomCommandPrompt", () => {
 				throw failure;
 			})
 		).rejects.toBe(failure);
+	});
+});
+
+describe("resolveBuiltinCommand", () => {
+	test("expands pasted-text markers before matching, so the focus is real text", () => {
+		const token = "[Pasted ~2 lines]";
+		const rawText = `/compact ${token}`;
+		const start = rawText.indexOf(token);
+
+		expect(
+			resolveBuiltinCommand({
+				...emptySnapshot(),
+				pastedTexts: [
+					{
+						end: start + token.length,
+						start,
+						text: "line one\nline two",
+						token,
+					},
+				],
+				rawText,
+			})
+		).toMatchObject({ focus: "line one\nline two", kind: "compact" });
+	});
+
+	test("keeps a composition carrying attachments a prompt", () => {
+		expect(
+			resolveBuiltinCommand({
+				...emptySnapshot(),
+				files: [
+					{
+						filename: "clipboard",
+						mediaType: "image/png",
+						type: "file",
+						url: "data:image/png;base64,aGVsbG8=",
+					},
+				],
+				rawText: "/models",
+			})
+		).toBeNull();
 	});
 });
 
