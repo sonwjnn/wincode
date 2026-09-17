@@ -29,15 +29,21 @@ Engine runs it against the Session Compaction module as its port, publishes the
 Session Context swap and the Compaction entry inside the command, and joins a
 caller to a compaction that carries the same intent, while the module's
 per-session in-flight map — the only admission decision — refuses another
-intent's. The rest — Commands executed one at a time in submission order,
-orthogonal status facts, a single approval settlement path, and the submission
-pipeline living in the Engine — is the design the migration is closing on,
-tracked by the Session Engine spec (issue #97) and its five step tickets
-(#98–#102), and is not yet the shipped execution model: the Engine still
-exposes granular state setters, sends are started by the binding rather than by
-a Session Command, chat status is still one union, and approvals still settle
-through two paths. Read the consequences below as the target, not as a
-description of every line of running code.
+intent's. The approval lifecycle has shipped as the Engine's own: an approval
+request is registered with the Engine, settles exactly once as allow, reject,
+or abort — whichever route triggers it — and the panel registry is a read-only
+projection of the Engine's pending requests, so the binding's second,
+independent settlement route and its one-shot abort latch are gone. The rest —
+Commands executed one at a time in submission order, orthogonal status facts,
+and the submission pipeline living in the Engine — is the design the migration
+is closing on, tracked by the Session Engine spec (issue #97) and its five step
+tickets (#98–#102), and is not yet the shipped execution model: the Engine
+still exposes granular state setters, sends are started by the binding rather
+than by a Session Command, chat status is still one union, context-overflow
+replay still runs as a detached continuation, and the shutdown command settles
+pending approvals without yet cancelling the active send or releasing the MCP
+snapshot. Read the consequences below as the target, not as a description of
+every line of running code.
 
 ## Considered options
 

@@ -7,7 +7,6 @@ import {
 	createAgentTurnLifecycle,
 	type ToolCallId,
 } from "@wincode/agent-core";
-import { isUndefined } from "@wincode/runtime-utils";
 import type { SessionViewState } from "./engine/session-engine";
 import {
 	createSessionOperation,
@@ -24,29 +23,16 @@ export type SessionControllerState = {
 	readonly status: SessionControllerStatus;
 };
 
-export type SessionApprovalOutcome =
-	| { readonly decision: "allow"; readonly remember: boolean }
-	| { readonly decision: "reject"; readonly feedback?: string }
-	| { readonly decision: "abort" };
-
 export type SessionControllerOptions = {
 	execute: SessionSendExecutor;
 	deadlineMs?: number;
 	onInterrupt?: (preserveToolCallId?: ToolCallId) => void;
-	resolveApproval?: (
-		approvalId: string,
-		outcome: SessionApprovalOutcome
-	) => void | Promise<void>;
 	onError?: (error: unknown) => void;
 };
 export type SessionController = {
 	readonly cancel: SessionOperation["cancel"];
 	readonly interrupt: SessionOperation["interrupt"];
 	readonly getState: () => SessionControllerState;
-	readonly respondToApproval: (
-		approvalId: string,
-		outcome: SessionApprovalOutcome
-	) => Promise<void>;
 	readonly send: (input: SessionSendInput) => Promise<SessionSendOutcome>;
 	readonly submit: (input: SessionSendInput) => Promise<SessionSendOutcome>;
 	readonly subscribe: (
@@ -159,7 +145,6 @@ export const createSessionController = ({
 	execute,
 	onError,
 	onInterrupt,
-	resolveApproval,
 }: SessionControllerOptions): SessionController => {
 	const listeners = new Set<(state: SessionControllerState) => void>();
 	let active = false;
@@ -213,17 +198,6 @@ export const createSessionController = ({
 		cancel: operation.cancel,
 		getState: () => state,
 		interrupt: operation.interrupt,
-		respondToApproval: async (approvalId, outcome) => {
-			if (isUndefined(resolveApproval)) {
-				reportError(new Error("Session approval adapter is unavailable."));
-				return;
-			}
-			try {
-				await resolveApproval(approvalId, outcome);
-			} catch (error) {
-				reportError(error);
-			}
-		},
 		send: submit,
 		submit,
 		subscribe: (listener) => {

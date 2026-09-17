@@ -77,19 +77,3 @@ test("routes cancel through the Wincode controller", async () => {
 	expect(cancelled).toBe(true);
 	expect(controller.getState().status).toBe("ready");
 });
-
-test("isolates approval response failures from turn state", async () => {
-	const errors: unknown[] = [];
-	const controller = createController({
-		resolveApproval: () => {
-			throw new Error("approval adapter failed");
-		},
-		onError: (error) => errors.push(error),
-	});
-	await controller.respondToApproval("approval-1", {
-		decision: "allow",
-		remember: false,
-	});
-	expect(errors).toHaveLength(1);
-	expect(controller.getState().status).toBe("ready");
-});

@@ -82,10 +82,13 @@ The single owner of one session's live state and the only writer to it. Session 
 
 **Session Command**:
 A request to change session state, such as sending a prompt, interrupting a turn, compacting, or answering an approval. The Engine executes Commands one at a time in submission order, and no asynchronous continuation changes session state outside a Command. _Avoid_: operation, action, event, task
-_Planned_: the Engine runs compaction Commands today, while sends, approvals, and turns still run in the binding; the rest of the command lane arrives with the Session Execution migration (issue #97).
+_Planned_: the Engine runs the compaction and approval Commands today, while sends and turns still run in the binding; the rest of the command lane arrives with the Session Execution migration (issue #97).
 
 **Compaction Intent**:
 What one compaction request asks for: its trigger and its focus, as distinct from the messages it runs over and the Model Target selection its summary is generated with. The Session Compaction module admits a request that carries the intent already in flight and refuses one that carries another, so no caller is answered with another caller's entry while two threshold passes, which share an intent, still meet in one operation. _Avoid_: compaction request, compaction options
+
+**Approval Request**:
+One Tool Permission `ask` a waiting Tool Gate evaluation is registered for. The Session Engine owns it from registration to settlement: it is pending until exactly one settlement — allow, reject, or abort — whichever route triggers it, so no route can leave the evaluation waiting or settle the request twice. The session projects its pending Approval Requests into the panel surface, and closing them, aborting them, or shutting the session down runs through the same path. _Avoid_: approval prompt, approval handle, approval queue
 
 **Session Snapshot**:
 The session facts an observer reads at one moment. Observers read Snapshots only, so none of them sees a partially applied Session Command. _Avoid_: full state, state dump
@@ -278,12 +281,13 @@ wins. _Avoid_: ACL entry, tool toggle
 **Tool Gate**:
 The runtime enforcement of Tool Permission for one tool call. The gate
 evaluates the effective decision against the call's actual resource, applies
-temporary grants and auto approval, and routes a surviving `ask` through the
-session approval queue and inline panel. It owns the manual-approval
-safety ceiling at execution time: a remembered grant is never recorded for a
-safety ask. Coding tools, shell (per-node evaluation with a doom_loop repeat
-guard, ADR-0008), MCP tools, and Skill Activation all resolve through the one
-gate, and the gate owns the deny/reject wording each family emits. _Avoid_:
+temporary grants and auto approval, and registers a surviving `ask` as an
+Approval Request the Session Engine settles through the panel the session
+projects. It owns the manual-approval safety ceiling at execution time: a
+remembered grant is never recorded for a safety ask. Coding tools, shell
+(per-node evaluation with a doom_loop repeat guard, ADR-0008), MCP tools, and
+Skill Activation all resolve through the one gate, and the gate owns the
+deny/reject wording each family emits. _Avoid_:
 approval service, permission middleware
 
 **Resolved Tool**:

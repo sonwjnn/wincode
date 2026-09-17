@@ -20,7 +20,6 @@ import type { SessionMessage } from "@/modules/sessions/message";
 import { useSettingsHubDialog } from "@/modules/settings";
 import type { SessionId } from "@/shared/identifiers";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
-import type { ApprovalOutcome } from "@/shared/providers/approval/types";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
@@ -136,8 +135,7 @@ export function SessionView({
 	const { show } = useToast();
 	const openSettings = useSettingsHubDialog(settingsRuntime);
 	const { isTopLayer } = useKeyboardLayer();
-	const { entries: approvalEntries, resolve: resolveApprovalPanel } =
-		useApprovalPanels();
+	const { entries: approvalEntries } = useApprovalPanels();
 	const hasPendingApproval = approvalEntries.some((entry) =>
 		isUndefined(entry.resolution)
 	);
@@ -443,28 +441,6 @@ export function SessionView({
 		}
 	};
 
-	const routeApproval = (id: string, outcome: ApprovalOutcome): void => {
-		let controllerOutcome:
-			| { decision: "allow"; remember: boolean }
-			| { decision: "reject"; feedback?: string }
-			| { decision: "abort" };
-		switch (outcome) {
-			case "allow-once":
-				controllerOutcome = { decision: "allow", remember: false };
-				break;
-			case "always":
-				controllerOutcome = { decision: "allow", remember: true };
-				break;
-			case "rejected":
-				controllerOutcome = { decision: "reject" };
-				break;
-			default:
-				controllerOutcome = { decision: "abort" };
-		}
-		resolveApprovalPanel(id, outcome);
-		void session.respondToApproval(id, controllerOutcome);
-	};
-
 	const observedCompactionCountRef = useRef(initialCompactions.length);
 	useEffect(() => {
 		const observed = observedCompactionCountRef.current;
@@ -578,7 +554,6 @@ export function SessionView({
 					isCompacting={isCompacting}
 					isInterruptArmed={isInterruptArmed}
 					messages={messages}
-					onApproval={routeApproval}
 					onCompact={executeCompactionCommand}
 					onOpenSettings={openSettings}
 					onRetry={retryMessage}

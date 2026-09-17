@@ -7,6 +7,7 @@ import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { isError, isNull, isUndefined } from "@wincode/runtime-utils";
 import type { ReadonlyDeep } from "type-fest";
 import type { SessionId } from "@/shared/identifiers";
+import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import type {
 	CompactSessionInput,
 	CompactSessionResult,
@@ -48,8 +49,29 @@ export type SessionExecution = ReadonlyDeep<{
 	viewState?: SessionViewState;
 }>;
 
+/** One settlement decision for an approval request. */
+export type SessionApprovalOutcome =
+	| { decision: "abort" }
+	| { decision: "allow"; remember: boolean }
+	| { decision: "reject"; feedback?: string };
+
+/**
+ * One approval request the Engine owns until it settles. `target` is
+ * `tool-call` when the request carries a Tool Call Identifier and `session`
+ * when it has no timeline anchor of its own. A request with no `decision` is
+ * pending; a settled request is never settled again.
+ */
+export type SessionApproval = ReadonlyDeep<{
+	decision?: SessionApprovalOutcome;
+	id: string;
+	request: ToolApprovalRequest;
+	target: "session" | "tool-call";
+}>;
+
 /** The session facts an observer reads at one moment. */
 export type SessionSnapshot = ReadonlyDeep<{
+	/** Approval requests the Engine owns, oldest first, settled ones included. */
+	approvals: SessionApproval[];
 	catalogDiagnostic: string | null;
 	compactions: SessionCompaction[];
 	compactionError: Error | null;
@@ -115,6 +137,12 @@ export type SessionEngine = Readonly<{
 	/** Aborts the compaction command in flight. */
 	cancelCompaction: () => void;
 	/**
+	 * Settles every pending approval as rejected, so no Tool Gate evaluation
+	 * that asked for one is left waiting. The newest pending request carries the
+	 * feedback.
+	 */
+	closeApprovals: (feedback?: string) => void;
+	/**
 	 * Runs a compaction command. A command whose intent is already in flight
 	 * joins it; one that carries another intent is refused, so no caller is
 	 * answered with another caller's entry.
@@ -131,6 +159,16 @@ export type SessionEngine = Readonly<{
 	mergeTranscript: (
 		messages: readonly SessionMessage[]
 	) => readonly SessionMessage[];
+	/**
+	 * Registers an approval request for the session's single settlement path.
+	 * The returned promise resolves once, when the request is settled by a panel
+	 * action, the close-approvals command, an abort, or shutdown.
+	 */
+	requestApproval: (
+		request: ToolApprovalRequest
+	) => Promise<SessionApprovalOutcome>;
+	/** Settles one pending approval; an already settled request is left alone. */
+	respondToApproval: (id: string, outcome: SessionApprovalOutcome) => void;
 	setCatalogDiagnostic: (diagnostic: string | null) => void;
 	setCompactionError: (error: Error | null) => void;
 	setError: (error: Error | null) => void;
@@ -147,6 +185,11 @@ export type SessionEngine = Readonly<{
 	 * wait, when a command ends with one.
 	 */
 	settleCompaction: () => Promise<Error | null>;
+	/**
+	 * Ends the session: settles every pending approval through the same path and
+	 * refuses later requests, so nothing stays waiting on a session that is gone.
+	 */
+	shutdown: () => void;
 	subscribe: (listener: () => void) => () => void;
 }>;
 
@@ -184,6 +227,7 @@ export const createSessionEngine = ({
 	sessionId,
 }: SessionEngineOptions): SessionEngine => {
 	let state: SessionSnapshot = {
+		approvals: [],
 		catalogDiagnostic: null,
 		compactions: [...initialCompactions],
 		compactionError: null,
@@ -208,6 +252,17 @@ export const createSessionEngine = ({
 		  }
 		| undefined;
 	const listeners = new Set<() => void>();
+	/**
+	 * The settlement of each pending approval, keyed by its registry id. A
+	 * request is removed before its settlement is published, so a second route
+	 * finds nothing to settle and can never settle the same request twice.
+	 */
+	const pendingApprovals = new Map<
+		string,
+		(outcome: SessionApprovalOutcome) => void
+	>();
+	let approvalCounter = 0;
+	let isShutDown = false;
 	const publish = (changes: Partial<SessionSnapshot>): void => {
 		if (!hasChanged(state, changes)) {
 			return;
@@ -219,6 +274,69 @@ export const createSessionEngine = ({
 			} catch {
 				// An observer cannot change session state.
 			}
+		}
+	};
+	/** Settles one request: publishes its decision and wakes its waiter, once. */
+	const settleApproval = (
+		id: string,
+		outcome: SessionApprovalOutcome
+	): void => {
+		const resolveApproval = pendingApprovals.get(id);
+		if (isUndefined(resolveApproval)) {
+			return;
+		}
+		pendingApprovals.delete(id);
+		publish({
+			approvals: state.approvals.map((approval) =>
+				approval.id === id ? { ...approval, decision: outcome } : approval
+			),
+		});
+		resolveApproval(outcome);
+	};
+	const requestApproval = (
+		request: ToolApprovalRequest
+	): Promise<SessionApprovalOutcome> => {
+		// A session that has shut down has nothing to ask: the request settles
+		// immediately so its Tool Gate evaluation can never wait forever.
+		if (isShutDown) {
+			return Promise.resolve({ decision: "reject" });
+		}
+		const id = request.toolCallId ?? `session-${approvalCounter++}`;
+		// One identifier addresses one pending request. A request that reuses a
+		// pending Tool Call Identifier is refused instead of replacing the request
+		// the panel still shows, so neither evaluation can be left waiting.
+		if (pendingApprovals.has(id)) {
+			return Promise.resolve({ decision: "reject" });
+		}
+		const { promise, resolve } =
+			Promise.withResolvers<SessionApprovalOutcome>();
+		pendingApprovals.set(id, resolve);
+		publish({
+			approvals: [
+				...state.approvals,
+				{
+					id,
+					request,
+					target: isUndefined(request.toolCallId) ? "session" : "tool-call",
+				},
+			],
+		});
+		return promise;
+	};
+	const closeApprovals = (feedback?: string): void => {
+		const pending = state.approvals.filter((approval) =>
+			isUndefined(approval.decision)
+		);
+		// The newest pending request — the panel on top of the stack — carries
+		// the typed feedback; every sibling is rejected without it.
+		const selectedId = isUndefined(feedback) ? undefined : pending.at(-1)?.id;
+		for (const approval of pending) {
+			settleApproval(
+				approval.id,
+				approval.id === selectedId
+					? { decision: "reject", feedback }
+					: { decision: "reject" }
+			);
 		}
 	};
 	const applyContext = (messages: readonly SessionMessage[]): void => {
@@ -370,6 +488,7 @@ export const createSessionEngine = ({
 				],
 			}),
 		cancelCompaction: () => compactionCommand?.abort(),
+		closeApprovals,
 		compact,
 		endExecution: (turnId) => {
 			const executions = state.executions.filter(
@@ -382,6 +501,8 @@ export const createSessionEngine = ({
 		},
 		getSnapshot: () => state,
 		mergeTranscript,
+		requestApproval,
+		respondToApproval: settleApproval,
 		setCatalogDiagnostic: (diagnostic) =>
 			publish({ catalogDiagnostic: diagnostic }),
 		setCompactionError,
@@ -398,6 +519,10 @@ export const createSessionEngine = ({
 		setPreparingMessage: (value) => publish({ isPreparingMessage: value }),
 		setStatus: (status) => publish({ status }),
 		settleCompaction,
+		shutdown: () => {
+			isShutDown = true;
+			closeApprovals();
+		},
 		subscribe: (listener) => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);

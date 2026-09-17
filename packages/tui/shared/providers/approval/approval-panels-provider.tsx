@@ -1,11 +1,9 @@
-import { isUndefined } from "@wincode/runtime-utils";
 import type { ReactNode } from "react";
 import {
 	createContext,
 	useCallback,
 	useContext,
 	useMemo,
-	useRef,
 	useState,
 } from "react";
 import type {
@@ -15,36 +13,26 @@ import type {
 } from "./types";
 
 /**
- * One live or recently settled approval. Pending entries replace the composer
- * with the approval controls. Tool-call entries remain after resolution so
- * their message part can render a compact audit line; session entries
- * have no timeline anchor and are removed when settled.
+ * One approval as the session projects it into the panel surface. Pending
+ * entries replace the composer with the approval controls, and a settled entry
+ * renders its audit line; the session decides which requests reach this list.
  */
 export type ApprovalPanelEntry = {
 	actions: ToolApprovalActions;
 	id: string;
 	request: ToolApprovalRequest;
 	resolution?: { feedback?: string; outcome: ApprovalOutcome };
-	target: "session" | "tool-call";
 };
 
+/**
+ * The read-only panel registry. The session publishes the approvals it owns
+ * through `project`, and the panel surface reads that projection; it never
+ * decides a settlement of its own, so closing the panel cannot leave a Tool
+ * Gate evaluation waiting.
+ */
 export type ApprovalPanelsContextValue = {
-	/**
-	 * Registers a pending approval and returns its registry id: the request's
-	 * `toolCallId` when present, otherwise a synthetic session id.
-	 */
-	add: (request: ToolApprovalRequest, actions: ToolApprovalActions) => string;
 	entries: readonly ApprovalPanelEntry[];
-	/** Settles a pending approval; session entries are then removed. */
-	resolve: (id: string, outcome: ApprovalOutcome, feedback?: string) => void;
-	/**
-	 * Settles every unresolved entry. Mirrors the session approval queue's
-	 * reject-all semantics: rejecting one panel rejects the pending siblings
-	 * the queue settled, so they collapse to their audit lines instead of
-	 * remaining interactive. The app renders one session at a time, so a
-	 * registry-wide settle matches the queue's session scope.
-	 */
-	resolveAll: (outcome: ApprovalOutcome, feedback?: string) => void;
+	project: (entries: readonly ApprovalPanelEntry[]) => void;
 };
 
 const ApprovalPanelsContext = createContext<ApprovalPanelsContextValue | null>(
@@ -52,83 +40,19 @@ const ApprovalPanelsContext = createContext<ApprovalPanelsContextValue | null>(
 );
 
 /**
- * Settles matching pending entries: session entries are removed on
- * resolution because they have no message part to anchor to, while tool-call
- * entries collapse to an audit line. Pure, so it lives outside the component.
- */
-const withResolution = (
-	prev: ApprovalPanelEntry[],
-	id: string | undefined,
-	outcome: ApprovalOutcome,
-	feedback: string | undefined,
-	settleAll: boolean
-): ApprovalPanelEntry[] => {
-	const matches = (entry: ApprovalPanelEntry) => settleAll || entry.id === id;
-	return prev
-		.filter(
-			(entry) =>
-				!(
-					matches(entry) &&
-					entry.target === "session" &&
-					isUndefined(entry.resolution)
-				)
-		)
-		.map((entry) =>
-			matches(entry) && isUndefined(entry.resolution)
-				? { ...entry, resolution: { feedback, outcome } }
-				: entry
-		);
-};
-
-/**
- * Session-scoped registry for the composer approval surface and timeline audit
- * records. Entries carry the exact `ToolApprovalActions` wired by the queue, so
- * the surface can allow once, grant, reject with feedback, or cancel without a
+ * Holds the approval projection for the session surface and the timeline audit
+ * lines. Entries carry the `ToolApprovalActions` the session bound for them, so
+ * the surface can allow once, grant, reject with feedback, or abort without a
  * modal or scroll-dependent interaction.
  */
 export function ApprovalPanelsProvider({ children }: { children: ReactNode }) {
-	const [entries, setEntries] = useState<ApprovalPanelEntry[]>([]);
-	const sessionCounter = useRef(0);
+	const [entries, setEntries] = useState<readonly ApprovalPanelEntry[]>([]);
 
-	const add = useCallback(
-		(request: ToolApprovalRequest, actions: ToolApprovalActions): string => {
-			const id = request.toolCallId ?? `session-${sessionCounter.current++}`;
-			const entry: ApprovalPanelEntry = {
-				actions,
-				id,
-				request,
-				target: isUndefined(request.toolCallId) ? "session" : "tool-call",
-			};
-			setEntries((prev) =>
-				prev.some((candidate) => candidate.id === id)
-					? prev.map((candidate) => (candidate.id === id ? entry : candidate))
-					: [...prev, entry]
-			);
-			return id;
-		},
-		[]
-	);
+	const project = useCallback((next: readonly ApprovalPanelEntry[]): void => {
+		setEntries((previous) => (previous === next ? previous : next));
+	}, []);
 
-	const resolve = useCallback(
-		(id: string, outcome: ApprovalOutcome, feedback?: string) => {
-			setEntries((prev) => withResolution(prev, id, outcome, feedback, false));
-		},
-		[]
-	);
-
-	const resolveAll = useCallback(
-		(outcome: ApprovalOutcome, feedback?: string) => {
-			setEntries((prev) =>
-				withResolution(prev, undefined, outcome, feedback, true)
-			);
-		},
-		[]
-	);
-
-	const value = useMemo(
-		() => ({ add, entries, resolve, resolveAll }),
-		[add, entries, resolve, resolveAll]
-	);
+	const value = useMemo(() => ({ entries, project }), [entries, project]);
 
 	return (
 		<ApprovalPanelsContext.Provider value={value}>

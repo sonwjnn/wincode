@@ -110,7 +110,6 @@ mock.module("@/modules/sessions/hooks/use-chat", () => ({
 			session: {
 				cancel: () => undefined,
 				interrupt: () => undefined,
-				respondToApproval: () => undefined,
 				send,
 				waitForIdle: async () => true,
 				getState: () => ({

@@ -6,6 +6,7 @@ import {
 	createPermissionService,
 	createToolPermission,
 } from "@/modules/permissions";
+import type { SessionApprovalOutcome } from "@/modules/sessions/engine/session-engine";
 import type { SessionSendInput } from "@/modules/sessions/session-operation";
 import { createSessionOperation } from "@/modules/sessions/session-operation";
 import { createToolGate } from "@/modules/tool-gate/tool-gate";
@@ -121,9 +122,14 @@ describe("SessionOperation", () => {
 	test("preserves a gated Tool Call completion through the application seam", async () => {
 		const approvalRequests: unknown[] = [];
 		const gate = createToolGate({
-			openApproval: (request, actions) => {
-				approvalRequests.push(request);
-				actions.allow(false);
+			approvals: {
+				request: (request) => {
+					approvalRequests.push(request);
+					return Promise.resolve<SessionApprovalOutcome>({
+						decision: "allow",
+						remember: false,
+					});
+				},
 			},
 			resolvePermission: async () =>
 				createToolPermission({ shell: { "git status": "ask" } }),

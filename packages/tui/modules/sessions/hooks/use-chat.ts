@@ -83,10 +83,9 @@ import { useConfig } from "@/shared/config/config-provider";
 import { useLatest } from "@/shared/hooks/use-latest";
 import type { SessionId } from "@/shared/identifiers";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
-import { createApprovalQueue } from "@/shared/providers/approval/approval-queue";
-import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import { buildAgent, type ResolvedCodingAgent } from "../../agents/built-ins";
 import { resolveChatModelTarget } from "../../model-target";
+import { projectSessionApprovals } from "../approval-projection";
 import {
 	createSessionEngine,
 	type SessionChatStatus,
@@ -1274,8 +1273,6 @@ export function useChat(
 	const registry = useAgentRegistry();
 	const registryRef = useLatest(registry);
 	const {
-		closeApprovals,
-		openApproval,
 		resolveMcpPolicyForAgent,
 		resolvePermission,
 		resolvePermissionForAgent,
@@ -1298,16 +1295,76 @@ export function useChat(
 	 * themselves live in the execution scope, never here.
 	 */
 	const primaryExecutionRef = useRef<TurnExecution | null>(null);
-	const approvalAbortHandledRef = useRef(false);
 	const abortApprovalTurnRef = useRef<(toolCallId: ToolCallId) => void>(
 		() => undefined
 	);
-	const toolGateState = useMemo(() => {
-		const approvalQueue = createApprovalQueue<ToolApprovalRequest>();
-		return {
-			approvalQueue,
+	const summaryGenerator = useMemo(
+		() => createDirectSummaryGenerator(connections),
+		[connections]
+	);
+	const compactionModule = useMemo(
+		() =>
+			createSessionCompaction({
+				attachmentStore: getSessionStore().attachmentStore,
+				estimateTokens: (messages) => estimateCompactionTokens(messages),
+				store: getSessionStore(),
+				summaryGenerator,
+			}),
+		[summaryGenerator]
+	);
+	const [engine] = useState(() =>
+		createSessionEngine({
+			compaction: compactionModule,
+			initialCompactions,
+			initialContext: initialActiveMessages,
+			initialTranscript: initialMessages,
+			sessionId,
+		})
+	);
+	const {
+		applyContext,
+		beginExecution,
+		closeApprovals,
+		endExecution,
+		getSnapshot,
+		mergeTranscript,
+		requestApproval,
+		respondToApproval,
+		setCatalogDiagnostic,
+		setCompactionError,
+		setError,
+		setExecutionViewState,
+		setPreparingMessage,
+		setStatus,
+		shutdown,
+	} = engine;
+	// Bound through a subscription rather than `useSyncExternalStore`: the
+	// synchronous re-render that hook performs inside the submit path stalls the
+	// automatic-compaction journey in the OpenTUI test renderer (`useSyncExternalStore`
+	// does receive updates in this renderer in isolation, so this is about that
+	// interaction, not about the renderer dropping notifications). The engine
+	// stays the only writer; this hook mirrors its Session Snapshot for
+	// rendering and re-reads it once after subscribing so a change between render
+	// and effect is not lost.
+	const [state, setState] = useState(getSnapshot);
+	useEffect(() => {
+		setState(getSnapshot());
+		return engine.subscribe(() => setState(getSnapshot()));
+	}, [engine, getSnapshot]);
+	// The panel surface reads the Engine's approvals; the binding is the only
+	// writer of that projection and never reads a settlement back out of it.
+	const { project: projectApprovalPanels } = useApprovalPanels();
+	const approvalEntries = useMemo(
+		() => projectSessionApprovals(state.approvals, respondToApproval),
+		[respondToApproval, state.approvals]
+	);
+	useEffect(() => {
+		projectApprovalPanels(approvalEntries);
+	}, [approvalEntries, projectApprovalPanels]);
+	const toolGateState = useMemo(
+		() => ({
 			gate: createToolGate({
-				approvalQueue,
+				approvals: { request: requestApproval },
 				onAbort: (request) => {
 					if (isUndefined(request.toolCallId)) {
 						return;
@@ -1321,7 +1378,6 @@ export function useChat(
 					}
 					abortApprovalTurnRef.current(request.toolCallId);
 				},
-				openApproval,
 				resolvePermission: (agentId) =>
 					isUndefined(agentId)
 						? resolvePermissionRef.current()
@@ -1334,18 +1390,17 @@ export function useChat(
 				service,
 			}),
 			scope: sessionId,
-		};
-	}, [openApproval, sandbox, service, sessionId]);
-	const approvalPanels = useApprovalPanels();
-	const approvalPanelsRef = useLatest(approvalPanels);
-	const approvalQueueRef = useLatest(toolGateState.approvalQueue);
-	const closeApprovalsRef = useLatest(closeApprovals);
+		}),
+		[requestApproval, sandbox, service, sessionId]
+	);
 	useEffect(
 		() => () => {
-			toolGateState.approvalQueue.rejectAll();
-			closeApprovals();
+			// The session is going away: every request it owns settles and the
+			// projection clears, so nothing waits on a panel that no longer exists.
+			shutdown();
+			projectApprovalPanels([]);
 		},
-		[closeApprovals, toolGateState]
+		[projectApprovalPanels, shutdown]
 	);
 
 	const estimateRuntimeRequestOverheadTokens = useCallback((): number => {
@@ -1376,20 +1431,6 @@ export function useChat(
 			Math.ceil(serializedContext.length / 4)
 		);
 	}, []);
-	const summaryGenerator = useMemo(
-		() => createDirectSummaryGenerator(connections),
-		[connections]
-	);
-	const compactionModule = useMemo(
-		() =>
-			createSessionCompaction({
-				attachmentStore: getSessionStore().attachmentStore,
-				estimateTokens: (messages) => estimateCompactionTokens(messages),
-				store: getSessionStore(),
-				summaryGenerator,
-			}),
-		[summaryGenerator]
-	);
 	const getCompactionSettings = useCallback(
 		(selection: ChatModelSelection) => getSettingsForModel(selection),
 		[getSettingsForModel]
@@ -1418,41 +1459,6 @@ export function useChat(
 		[estimateRuntimeRequestOverheadTokens, getCompactionSettings]
 	);
 
-	const [engine] = useState(() =>
-		createSessionEngine({
-			compaction: compactionModule,
-			initialCompactions,
-			initialContext: initialActiveMessages,
-			initialTranscript: initialMessages,
-			sessionId,
-		})
-	);
-	const {
-		applyContext,
-		beginExecution,
-		endExecution,
-		getSnapshot,
-		mergeTranscript,
-		setCatalogDiagnostic,
-		setCompactionError,
-		setError,
-		setExecutionViewState,
-		setPreparingMessage,
-		setStatus,
-	} = engine;
-	// Bound through a subscription rather than `useSyncExternalStore`: the
-	// synchronous re-render that hook performs inside the submit path stalls the
-	// automatic-compaction journey in the OpenTUI test renderer (`useSyncExternalStore`
-	// does receive updates in this renderer in isolation, so this is about that
-	// interaction, not about the renderer dropping notifications). The engine
-	// stays the only writer; this hook mirrors its Session Snapshot for
-	// rendering and re-reads it once after subscribing so a change between render
-	// and effect is not lost.
-	const [state, setState] = useState(getSnapshot);
-	useEffect(() => {
-		setState(getSnapshot());
-		return engine.subscribe(() => setState(getSnapshot()));
-	}, [engine, getSnapshot]);
 	const overflowAttemptRef = useRef(0);
 	const sessionRef = useRef<SessionOperation | null>(null);
 	const providerErrorRef = useRef<
@@ -1981,7 +1987,6 @@ export function useChat(
 			signal: AbortSignal
 		): Promise<SessionSendOutcome> => {
 			setCompactionError(null);
-			approvalAbortHandledRef.current = false;
 			overflowAttemptRef.current = 0;
 			const startedAt = Date.now();
 
@@ -2094,15 +2099,13 @@ export function useChat(
 	);
 	const abortApprovalTurn = useCallback(
 		(toolCallId: ToolCallId): void => {
-			if (approvalAbortHandledRef.current) {
-				return;
-			}
-			approvalAbortHandledRef.current = true;
-			toolGateState.approvalQueue.rejectAll();
+			// The aborted request already settled in the Engine, so its siblings
+			// are closed as rejects and the turn stops exactly once: a second
+			// abort trigger finds nothing pending to handle.
 			closeApprovals();
 			interruptLatestAssistantMessage(toolCallId);
 		},
-		[closeApprovals, interruptLatestAssistantMessage, toolGateState]
+		[closeApprovals, interruptLatestAssistantMessage]
 	);
 	abortApprovalTurnRef.current = abortApprovalTurn;
 
@@ -2201,8 +2204,7 @@ export function useChat(
 					}
 					const stop = (): void => {
 						cancelCompaction();
-						approvalQueueRef.current.rejectAll();
-						closeApprovalsRef.current();
+						closeApprovals();
 					};
 					signal.addEventListener("abort", stop, { once: true });
 					try {
@@ -2214,23 +2216,13 @@ export function useChat(
 				onInterrupt: interruptLatestAssistantMessage,
 				onError: (error) =>
 					setError(isError(error) ? error : new Error("Session failed.")),
-				resolveApproval: async (approvalId, outcome) => {
-					const entry = approvalPanelsRef.current.entries.find(
-						(candidate) => candidate.id === approvalId
-					);
-					if (isUndefined(entry)) {
-						throw new Error(`Session approval "${approvalId}" is unavailable.`);
-					}
-					if (outcome.decision === "allow") {
-						entry.actions.allow(outcome.remember);
-					} else if (outcome.decision === "reject") {
-						entry.actions.reject(outcome.feedback);
-					} else {
-						entry.actions.abort();
-					}
-				},
 			}),
-		[interruptLatestAssistantMessage, cancelCompaction, setError]
+		[
+			interruptLatestAssistantMessage,
+			cancelCompaction,
+			closeApprovals,
+			setError,
+		]
 	);
 	sessionRef.current = session;
 

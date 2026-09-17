@@ -14,6 +14,7 @@ import {
 	type SessionViewState,
 } from "@/modules/sessions/engine/session-engine";
 import type { SessionMessage } from "@/modules/sessions/message";
+import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import { createHangingSummary } from "../support/hanging-summary";
 import {
 	agentTurnId,
@@ -440,4 +441,131 @@ test("ignores a view state published for an execution that already ended", () =>
 
 	expect(engine.getSnapshot()).toBe(ended);
 	expect(engine.getSnapshot().viewState?.text).toBe("parent text");
+});
+
+const approvalRequest = (callId?: string): ToolApprovalRequest => ({
+	description: "Write denied by policy: src/index.ts",
+	identity: [{ label: "tool", value: "write" }],
+	input: { path: "src/index.ts" },
+	...(callId === undefined ? {} : { toolCallId: toolCallId(callId) }),
+});
+
+test("publishes a pending approval and settles it exactly once", async () => {
+	const engine = createEngine([]);
+	const settled = engine.requestApproval(approvalRequest("call-1"));
+
+	const pending = engine.getSnapshot().approvals;
+	expect(pending.map(({ id, target }) => [id, target])).toEqual([
+		["call-1", "tool-call"],
+	]);
+	expect(pending[0]?.decision).toBeUndefined();
+
+	engine.respondToApproval("call-1", { decision: "allow", remember: false });
+
+	await expect(settled).resolves.toEqual({
+		decision: "allow",
+		remember: false,
+	});
+	expect(engine.getSnapshot().approvals[0]?.decision).toEqual({
+		decision: "allow",
+		remember: false,
+	});
+
+	// A second trigger cannot settle a request the Engine already settled.
+	engine.respondToApproval("call-1", { decision: "abort" });
+	await expect(settled).resolves.toEqual({
+		decision: "allow",
+		remember: false,
+	});
+	expect(engine.getSnapshot().approvals[0]?.decision).toEqual({
+		decision: "allow",
+		remember: false,
+	});
+});
+
+test("gives a Tool-Call-less approval its own id and settles it with every sibling", async () => {
+	const engine = createEngine([]);
+	const first = engine.requestApproval(approvalRequest());
+	const second = engine.requestApproval(approvalRequest());
+	const [firstEntry, secondEntry] = engine.getSnapshot().approvals;
+
+	expect(firstEntry?.target).toBe("session");
+	expect(firstEntry?.id).toBeString();
+	expect(firstEntry?.id).not.toBe(secondEntry?.id);
+
+	engine.closeApprovals();
+	await expect(first).resolves.toEqual({ decision: "reject" });
+	await expect(second).resolves.toEqual({ decision: "reject" });
+});
+
+test("settles every pending approval when approvals close", async () => {
+	const engine = createEngine([]);
+	const first = engine.requestApproval(approvalRequest("call-1"));
+	const second = engine.requestApproval(approvalRequest("call-2"));
+
+	engine.closeApprovals("use the config loader");
+
+	// The newest pending request carries the feedback and every sibling is
+	// rejected without one, so no waiting Tool Gate evaluation is left open.
+	await expect(second).resolves.toEqual({
+		decision: "reject",
+		feedback: "use the config loader",
+	});
+	await expect(first).resolves.toEqual({ decision: "reject" });
+	expect(
+		engine.getSnapshot().approvals.map(({ decision }) => decision)
+	).toEqual([
+		{ decision: "reject" },
+		{ decision: "reject", feedback: "use the config loader" },
+	]);
+});
+
+test("settles a pending approval when the session shuts down", async () => {
+	const engine = createEngine([]);
+	const settled = engine.requestApproval(approvalRequest("call-1"));
+
+	engine.shutdown();
+
+	await expect(settled).resolves.toEqual({ decision: "reject" });
+	expect(engine.getSnapshot().approvals[0]?.decision).toEqual({
+		decision: "reject",
+	});
+});
+
+test("settles an approval that arrives after the session shut down", async () => {
+	const engine = createEngine([]);
+	engine.shutdown();
+
+	await expect(
+		engine.requestApproval(approvalRequest("call-1"))
+	).resolves.toEqual({ decision: "reject" });
+	expect(engine.getSnapshot().approvals).toEqual([]);
+});
+
+test("refuses a second pending request that reuses a Tool Call Identifier", async () => {
+	const engine = createEngine([]);
+	const first = engine.requestApproval(approvalRequest("call-1"));
+	const duplicate = engine.requestApproval(approvalRequest("call-1"));
+
+	await expect(duplicate).resolves.toEqual({ decision: "reject" });
+	expect(engine.getSnapshot().approvals).toHaveLength(1);
+
+	// The identifier still addresses the request the panel shows.
+	engine.respondToApproval("call-1", { decision: "allow", remember: false });
+	await expect(first).resolves.toEqual({
+		decision: "allow",
+		remember: false,
+	});
+});
+
+test("keeps the first settlement when an abort and a close race", async () => {
+	const engine = createEngine([]);
+	const aborted = engine.requestApproval(approvalRequest("call-1"));
+	const sibling = engine.requestApproval(approvalRequest("call-2"));
+
+	engine.respondToApproval("call-1", { decision: "abort" });
+	engine.closeApprovals();
+
+	await expect(aborted).resolves.toEqual({ decision: "abort" });
+	await expect(sibling).resolves.toEqual({ decision: "reject" });
 });

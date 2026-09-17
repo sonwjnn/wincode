@@ -11,11 +11,6 @@ import { useCallback, useMemo, useRef } from "react";
 import { type AgentRegistry, useAgentRegistry } from "@/modules/agents";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { useConfig } from "@/shared/config/config-provider";
-import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
-import type {
-	ToolApprovalActions,
-	ToolApprovalRequest,
-} from "@/shared/providers/approval/types";
 import type { PermissionService } from "./permission-service";
 import { usePermissionService } from "./permission-service-provider";
 import type { EffectiveAgentPolicy } from "./policy";
@@ -31,11 +26,6 @@ import {
 type MutableRefObject<T> = { current: T };
 
 export type ToolPermissionRuntime = {
-	closeApprovals: () => void;
-	openApproval: (
-		request: ToolApprovalRequest,
-		actions: ToolApprovalActions
-	) => void;
 	permissionRef: MutableRefObject<ToolPermission>;
 	resolveMcpPolicy: () => Promise<EffectiveAgentPolicy>;
 	resolveMcpPolicyForAgent: (agent: AgentId) => Promise<EffectiveAgentPolicy>;
@@ -103,15 +93,15 @@ export const resolveToolPermissionPolicies = (
 };
 
 /**
- * Composes the Tool Permission runtime for chat tool dispatch: the policy
+ * Composes the Tool Permission runtime for tool dispatch: the policy
  * evaluator seeded with defaults and refreshed from the top-level config
  * `permission` section once the ConfigStore snapshot resolves, the active
- * Agent's Tool Resource Profile, the workspace sandbox used to canonicalize
- * read resources, and the inline approval panel registry for `ask` decisions.
+ * Agent's Tool Resource Profile, and the workspace sandbox used to
+ * canonicalize read resources. Approval settlement is the Session Engine's,
+ * not this runtime's.
  */
 export function useToolPermission(): ToolPermissionRuntime {
 	const config = useConfig();
-	const { add, resolveAll } = useApprovalPanels();
 	const service = usePermissionService();
 	const { agent } = usePromptConfig();
 	const registry = useAgentRegistry();
@@ -175,19 +165,7 @@ export function useToolPermission(): ToolPermissionRuntime {
 		[resolvedPromise]
 	);
 
-	const openApproval = useCallback(
-		(request: ToolApprovalRequest, actions: ToolApprovalActions) => {
-			add(request, actions);
-		},
-		[add]
-	);
-	const closeApprovals = useCallback(() => {
-		resolveAll("rejected");
-	}, [resolveAll]);
-
 	return {
-		closeApprovals,
-		openApproval,
 		permissionRef,
 		resolveMcpPolicy,
 		resolveMcpPolicyForAgent,

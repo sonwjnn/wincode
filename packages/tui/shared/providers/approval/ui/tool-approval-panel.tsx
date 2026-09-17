@@ -73,14 +73,12 @@ export function ToolApprovalPanel({
 	errorText,
 	id,
 	mode = "all",
-	onResolve,
 	pendingCount = 1,
 	position = 1,
 }: {
 	errorText?: string;
 	id: string;
 	mode?: "all" | "resolved-only";
-	onResolve?: (id: string, outcome: ApprovalOutcome) => void;
 	pendingCount?: number;
 	position?: number;
 }) {
@@ -98,17 +96,12 @@ export function ToolApprovalPanel({
 	return (
 		<ApprovalPendingPanel
 			entry={entry}
-			onResolve={onResolve}
 			pendingCount={pendingCount}
 			position={position}
 		/>
 	);
 }
-export function PendingApprovalDock({
-	onResolve,
-}: {
-	onResolve?: (id: string, outcome: ApprovalOutcome) => void;
-}) {
+export function PendingApprovalDock() {
 	const pendingEntries = useApprovalPanels().entries.filter((entry) =>
 		isUndefined(entry.resolution)
 	);
@@ -121,7 +114,6 @@ export function PendingApprovalDock({
 			<ToolApprovalPanel
 				id={pendingEntry.id}
 				key={pendingEntry.id}
-				onResolve={onResolve}
 				pendingCount={pendingEntries.length}
 				position={1}
 			/>
@@ -181,21 +173,18 @@ function ApprovalResolvedLine({
 
 type ApprovalPendingPanelProps = {
 	entry: ApprovalPanelEntry;
-	onResolve?: (id: string, outcome: ApprovalOutcome) => void;
 	pendingCount: number;
 	position: number;
 };
 
 function ApprovalPendingPanel({
 	entry,
-	onResolve,
 	pendingCount,
 	position,
 }: ApprovalPendingPanelProps) {
 	const { colors } = useTheme();
 	const dimensions = useTerminalDimensions();
 	const { isTopLayer, pop, push } = useKeyboardLayer();
-	const { resolve } = useApprovalPanels();
 	const layerId = `approval-panel-${entry.id}`;
 	const confirmLayerId = `approval-confirm-${entry.id}`;
 	const { actions, request } = entry;
@@ -210,18 +199,13 @@ function ApprovalPendingPanel({
 
 	useEffect(() => {
 		push(layerId, () => {
-			if (onResolve) {
-				onResolve(entry.id, "aborted");
-			} else {
-				actions.abort();
-			}
-			resolve(entry.id, "aborted");
+			actions.abort();
 			return true;
 		});
 		return () => {
 			pop(layerId);
 		};
-	}, [actions, entry.id, layerId, onResolve, pop, push, resolve]);
+	}, [actions, layerId, pop, push]);
 
 	// The always-allow confirm is a pushed overlay: it owns the keyboard layer
 	// while armed, so enter/escape resolve against the confirm and the
@@ -262,20 +246,9 @@ function ApprovalPendingPanel({
 		const count = options.length;
 		selectIndex((selectedIndexRef.current + delta + count) % count);
 	};
-	const settle = (outcome: ApprovalOutcome): void => {
-		resolve(entry.id, outcome);
-	};
-	const applyOutcome = (outcome: ApprovalOutcome, action: () => void): void => {
-		if (onResolve) {
-			onResolve(entry.id, outcome);
-			return;
-		}
-		action();
-	};
 
 	const grantAlways = () => {
-		applyOutcome("always", () => actions.allow(true));
-		settle("always");
+		actions.allow(true);
 	};
 
 	const confirm = (index: number) => {
@@ -284,17 +257,14 @@ function ApprovalPendingPanel({
 			return;
 		}
 		if (option.kind === "abort") {
-			applyOutcome("aborted", actions.abort);
-			settle("aborted");
+			actions.abort();
 			return;
 		}
 		if (option.kind === "reject") {
 			if (pendingCount === 1) {
-				applyOutcome("aborted", actions.abort);
-				settle("aborted");
+				actions.abort();
 			} else {
-				applyOutcome("rejected", () => actions.reject(undefined));
-				settle("rejected");
+				actions.reject(undefined);
 			}
 			return;
 		}
@@ -305,10 +275,7 @@ function ApprovalPendingPanel({
 			armConfirm();
 			return;
 		}
-		const remember = option.kind === "always";
-		const outcome = remember ? "always" : "allow-once";
-		applyOutcome(outcome, () => actions.allow(remember));
-		settle(outcome);
+		actions.allow(option.kind === "always");
 	};
 
 	useKeyboard((key) => {
@@ -321,8 +288,7 @@ function ApprovalPendingPanel({
 				cancelConfirm();
 				return;
 			}
-			applyOutcome("aborted", actions.abort);
-			settle("aborted");
+			actions.abort();
 			return;
 		}
 		if (key.name === "left" || key.name === "up") {
