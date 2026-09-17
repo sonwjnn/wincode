@@ -186,9 +186,10 @@ type SubmitCompactionResult =
 	| { readonly ok: false; readonly reason: string };
 
 /**
- * The outcome for a threshold compaction that failed or was refused: null when
- * another compaction owns the Session Context swap, so the caller joins it and
- * re-checks the threshold instead of dropping the turn.
+ * The outcome for a threshold compaction that failed or was refused. A refusal
+ * because another caller owns the compaction is joined here, through the same
+ * settle a preparation takes, and returns null so the caller re-checks the
+ * threshold against the settled Session Context instead of dropping the turn.
  */
 const thresholdCompactionFailure = async (
 	cause: unknown,
@@ -225,7 +226,7 @@ export const prepareCompactionBeforeSubmit = async ({
 	// The threshold this Agent Turn needs has to hold on the Session Context it
 	// sends, so a compaction another caller owns is joined and the need
 	// re-checked against the settled context rather than raced.
-	for (;;) {
+	while (true) {
 		if (
 			!(
 				settings.autoAvailable &&

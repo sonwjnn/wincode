@@ -343,7 +343,7 @@ export const createSessionEngine = ({
 	const settleCompaction = async (): Promise<Error | null> => {
 		// A command that starts while this waits is joined too, so a caller that
 		// continues afterwards reads a context no compaction is about to replace.
-		for (;;) {
+		while (true) {
 			const command = compactionCommand;
 			if (isUndefined(command)) {
 				return null;
