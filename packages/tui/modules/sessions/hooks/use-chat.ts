@@ -86,11 +86,11 @@ import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-p
 import { buildAgent, type ResolvedCodingAgent } from "../../agents/built-ins";
 import { resolveChatModelTarget } from "../../model-target";
 import { projectSessionApprovals } from "../approval-projection";
-import {
-	createSessionEngine,
-	type SessionChatStatus,
-	type SessionCompactionCommand,
-} from "../engine/session-engine";
+import { createSessionEngine } from "../engine/session-engine";
+import type {
+	SessionChatStatus,
+	SessionCompactionCommand,
+} from "../engine/types";
 import type { SessionFilePart } from "../message";
 import { createSessionController } from "../session-controller";
 import type {

@@ -133,7 +133,7 @@ history and workspace/configuration data.
 
 - `getSessionStore()` — local sessions, Session Records, compactions, attachments, and maintenance.
 - `SessionOperation` — one application-owned send, cancellation, and interruption seam for the current turn path.
-- `session-engine.ts` (Session Engine) — the single owner of one session's live state; observers read Session Snapshots and never write, and it runs the compaction and approval Session Commands.
+- `engine/` (Session Engine) — the single owner of one session's live state; observers read Session Snapshots and never write, and it runs the compaction and approval Session Commands. `session-engine.ts` is the factory, `types.ts` the published Session Engine vocabulary, and `utils.ts` its pure snapshot and view-state helpers.
 - `approval-projection.ts` — projects the Engine's approvals into the panel registry's read-only entries.
 - `useChat(sessionId, initialMessages)` — binds the Session Engine for rendering and runs turn submission and error projection.
 - `useChatInputController(options)` — command and file-mention input state.

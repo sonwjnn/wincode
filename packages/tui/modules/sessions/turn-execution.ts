@@ -16,7 +16,7 @@ import type {
 } from "@wincode/skills";
 import type { McpCatalogSnapshot } from "@/modules/mcp";
 import type { ResolvedCodingAgent } from "../agents/built-ins";
-import type { SessionViewState } from "./engine/session-engine";
+import type { SessionViewState } from "./engine/types";
 import type { DelegationExecutor } from "./hooks/runtime-turn";
 
 /** The Skill catalog an execution armed for its own turn. */

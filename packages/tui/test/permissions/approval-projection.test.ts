@@ -4,7 +4,7 @@ import { projectSessionApprovals } from "@/modules/sessions/approval-projection"
 import type {
 	SessionApproval,
 	SessionApprovalOutcome,
-} from "@/modules/sessions/engine/session-engine";
+} from "@/modules/sessions/engine/types";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import { toolCallId } from "../support/identifiers";
 

@@ -7,7 +7,7 @@ import {
 	createAgentTurnLifecycle,
 	type ToolCallId,
 } from "@wincode/agent-core";
-import type { SessionViewState } from "./engine/session-engine";
+import type { SessionViewState } from "./engine/types";
 import {
 	createSessionOperation,
 	type SessionOperation,

@@ -16,11 +16,11 @@ import {
 	externalParentDirectoryGlob,
 	type PermissionService,
 } from "@/modules/permissions";
-import {
-	createSessionEngine,
-	type SessionApprovalOutcome,
-	type SessionEngine,
-} from "@/modules/sessions/engine/session-engine";
+import { createSessionEngine } from "@/modules/sessions/engine/session-engine";
+import type {
+	SessionApprovalOutcome,
+	SessionEngine,
+} from "@/modules/sessions/engine/types";
 import {
 	createToolGate,
 	type ToolGateApprovalPort,

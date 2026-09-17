@@ -37,7 +37,7 @@ import {
 	STATIC_TOOL_PERMISSION_ACTIONS,
 	type ToolPermission,
 } from "@/modules/permissions";
-import type { SessionApprovalOutcome } from "@/modules/sessions/engine/session-engine";
+import type { SessionApprovalOutcome } from "@/modules/sessions/engine/types";
 import { formatRejectionFeedback } from "@/shared/providers/approval/format";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 

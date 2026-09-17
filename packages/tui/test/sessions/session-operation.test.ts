@@ -6,7 +6,7 @@ import {
 	createPermissionService,
 	createToolPermission,
 } from "@/modules/permissions";
-import type { SessionApprovalOutcome } from "@/modules/sessions/engine/session-engine";
+import type { SessionApprovalOutcome } from "@/modules/sessions/engine/types";
 import type { SessionSendInput } from "@/modules/sessions/session-operation";
 import { createSessionOperation } from "@/modules/sessions/session-operation";
 import { createToolGate } from "@/modules/tool-gate/tool-gate";

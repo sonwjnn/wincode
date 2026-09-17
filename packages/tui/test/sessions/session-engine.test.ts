@@ -8,11 +8,11 @@ import type {
 	AppendSessionCompactionInput,
 	SummaryGenerator,
 } from "@/modules/sessions/compaction/types";
-import {
-	createSessionEngine,
-	type SessionEngine,
-	type SessionViewState,
-} from "@/modules/sessions/engine/session-engine";
+import { createSessionEngine } from "@/modules/sessions/engine/session-engine";
+import type {
+	SessionEngine,
+	SessionViewState,
+} from "@/modules/sessions/engine/types";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import { createHangingSummary } from "../support/hanging-summary";

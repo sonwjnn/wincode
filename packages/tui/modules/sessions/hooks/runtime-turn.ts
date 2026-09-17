@@ -67,7 +67,7 @@ import type { McpCatalogSnapshot, McpSnapshotTool } from "@/modules/mcp";
 import type { ResolvedCodingAgent } from "../../agents/built-ins";
 import { RetiredModelError } from "../../model-target";
 import type { GateOutcome, ToolGate } from "../../tool-gate/tool-gate";
-import type { SessionViewState } from "../engine/session-engine";
+import type { SessionViewState } from "../engine/types";
 import type { SessionMessage } from "../message";
 import { expandSessionMessagesForModel } from "../message";
 import { consumeAgentTurnEvents } from "../session-controller";
