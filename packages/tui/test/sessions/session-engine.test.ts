@@ -1,6 +1,9 @@
-import { expect, test } from "bun:test";
+import { expect, mock, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
-import type { AgentTurnId } from "@wincode/agent-core";
+import {
+	type AgentTurnId,
+	createOperationalFailure,
+} from "@wincode/agent-core";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import { createSessionCompaction } from "@/modules/sessions/compaction/compaction";
 import { compactionSummaryMessageId } from "@/modules/sessions/compaction/summary-message";
@@ -11,6 +14,9 @@ import type {
 import { createSessionEngine } from "@/modules/sessions/engine/session-engine";
 import type {
 	SessionEngine,
+	SessionOverflowRecoveryCommand,
+	SessionOverflowRecoveryTarget,
+	SessionOverflowReplayOutcome,
 	SessionViewState,
 } from "@/modules/sessions/engine/types";
 import type { SessionMessage } from "@/modules/sessions/message";
@@ -568,4 +574,241 @@ test("keeps the first settlement when an abort and a close race", async () => {
 
 	await expect(aborted).resolves.toEqual({ decision: "abort" });
 	await expect(sibling).resolves.toEqual({ decision: "reject" });
+});
+
+/** The provider refusal one recovery is proposed for. */
+const overflowFailure = (): Error =>
+	new Error("This model's maximum context length is 128000 tokens.");
+
+const recoveryTarget: SessionOverflowRecoveryTarget = {
+	model,
+	settings: compactionSettings,
+};
+
+const recoveryCommand = ({
+	error = overflowFailure(),
+	messageId = "u2",
+	replay = async () => ({ kind: "started" }) as const,
+	target = recoveryTarget as SessionOverflowRecoveryTarget | null,
+	turnId = "turn-overflow",
+}: {
+	error?: unknown;
+	messageId?: string;
+	replay?: () => Promise<SessionOverflowReplayOutcome>;
+	target?: SessionOverflowRecoveryTarget | null;
+	turnId?: string;
+} = {}): SessionOverflowRecoveryCommand => ({
+	error,
+	originalMessageId: sessionMessageId(messageId),
+	replay,
+	resolveTarget: async () => target,
+	turnId: agentTurnId(turnId),
+});
+
+test("recovers a context-overflow failure with one compaction and one replay", async () => {
+	const engine = createEngine(compactionHistory());
+	const replay = mock(async () => ({ kind: "started" }) as const);
+
+	const outcome = await engine.recoverOverflow(recoveryCommand({ replay }));
+
+	expect(outcome).toMatchObject({
+		entry: { trigger: "overflow" },
+		kind: "recovered",
+	});
+	expect(replay).toHaveBeenCalledWith({
+		originalMessageId: sessionMessageId("u2"),
+	});
+	// The compaction the recovery ran is the Engine's own compaction command:
+	// the Session Context swap and the entry land exactly as for any other one.
+	const snapshot = engine.getSnapshot();
+	expect(snapshot.compactions.map(({ trigger }) => trigger)).toEqual([
+		"overflow",
+	]);
+	expect(snapshot.context.map(({ id }) => id)).toEqual([
+		compactionSummaryMessageId(compactionId("entry-compacted")),
+		sessionMessageId("u2"),
+	]);
+	expect(snapshot.compactionError).toBeNull();
+});
+
+test("recovers a failure the provider reported as an Operational Failure", async () => {
+	const engine = createEngine(compactionHistory());
+
+	const outcome = await engine.recoverOverflow(
+		recoveryCommand({
+			error: createOperationalFailure({
+				code: "context-overflow",
+				retry: "with-changes",
+				source: "model",
+			}),
+		})
+	);
+
+	expect(outcome).toMatchObject({ kind: "recovered" });
+});
+
+test("recovers a message once, even when the replayed turn fails the same way", async () => {
+	const engine = createEngine(compactionHistory());
+	const replay = mock(async () => ({ kind: "started" }) as const);
+	const recovered = await engine.recoverOverflow(
+		recoveryCommand({ replay, turnId: "turn-1" })
+	);
+	expect(recovered).toMatchObject({ kind: "recovered" });
+
+	// The replayed Agent Turn answers the same user message, and the provider
+	// refuses it again: that is still this message's one attempt, so no send —
+	// the replay's own or a user's — can start another recovery of it.
+	engine.beginExecution({ startedAt: 2, turnId: agentTurnId("turn-2") });
+	const exhausted = engine.recoverOverflow(
+		recoveryCommand({ replay, turnId: "turn-2" })
+	);
+	engine.endExecution(agentTurnId("turn-2"));
+
+	expect(await exhausted).toEqual({ kind: "exhausted" });
+	expect(replay).toHaveBeenCalledTimes(1);
+	expect(engine.getSnapshot().compactions).toHaveLength(1);
+});
+
+test("records the attempt when the recovery starts, not when it finishes", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator)
+	);
+	const recovery = engine.recoverOverflow(
+		recoveryCommand({ turnId: "turn-1" })
+	);
+	// Another Agent Turn starts while the recovery compacts; the recovery under
+	// way keeps its attempt.
+	engine.beginExecution({ startedAt: 2, turnId: agentTurnId("turn-2") });
+	const duplicate = engine.recoverOverflow(
+		recoveryCommand({ turnId: "turn-2" })
+	);
+	engine.endExecution(agentTurnId("turn-2"));
+
+	release();
+
+	// The duplicate is refused while the recovery it would join still compacts:
+	// an attempt recorded only when the compaction finished would admit it.
+	await expect(duplicate).resolves.toEqual({ kind: "exhausted" });
+	await expect(recovery).resolves.toMatchObject({ kind: "recovered" });
+});
+
+test("ignores a failure that is not a context overflow", async () => {
+	const engine = createEngine(compactionHistory());
+	const replay = mock(async () => ({ kind: "started" }) as const);
+
+	const outcome = await engine.recoverOverflow(
+		recoveryCommand({ error: new Error("authentication failed"), replay })
+	);
+
+	expect(outcome).toEqual({ kind: "ineligible" });
+	expect(replay).not.toHaveBeenCalled();
+	expect(engine.getSnapshot().compactions).toEqual([]);
+});
+
+test("ignores an overflow for a Model Target without recovery", async () => {
+	const engine = createEngine(compactionHistory());
+	const replay = mock(async () => ({ kind: "started" }) as const);
+
+	const outcome = await engine.recoverOverflow(
+		recoveryCommand({ replay, target: null })
+	);
+
+	expect(outcome).toEqual({ kind: "ineligible" });
+	expect(replay).not.toHaveBeenCalled();
+	expect(engine.getSnapshot().compactions).toEqual([]);
+
+	// Nothing was tried, so the message keeps its one attempt: an eligible
+	// refusal of the same message still recovers.
+	await expect(
+		engine.recoverOverflow(recoveryCommand({ replay }))
+	).resolves.toMatchObject({ kind: "recovered" });
+	expect(replay).toHaveBeenCalledTimes(1);
+});
+
+test("reports a failed compaction without replaying the message", async () => {
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(() => Promise.reject(new Error("summary failed")))
+	);
+	const replay = mock(async () => ({ kind: "started" }) as const);
+
+	const outcome = await engine.recoverOverflow(recoveryCommand({ replay }));
+
+	expect(outcome).toMatchObject({
+		error: { code: "replay-failed" },
+		kind: "failed",
+	});
+	expect(outcome.kind === "failed" && outcome.error.message).toContain(
+		"could not compact the session"
+	);
+	expect(replay).not.toHaveBeenCalled();
+	expect(engine.getSnapshot().compactionError?.message).toContain(
+		"summary generation failed"
+	);
+	expect(engine.getSnapshot().compactions).toEqual([]);
+});
+
+test("reports a replay the session refused instead of overlapping it", async () => {
+	const engine = createEngine(compactionHistory());
+	const replay = mock(
+		async () =>
+			({
+				kind: "refused",
+				reason: "A session send is already active.",
+			}) as const
+	);
+
+	const outcome = await engine.recoverOverflow(recoveryCommand({ replay }));
+
+	expect(outcome).toMatchObject({
+		error: { code: "replay-refused" },
+		kind: "failed",
+	});
+	expect(replay).toHaveBeenCalledTimes(1);
+	const snapshot = engine.getSnapshot();
+	expect(snapshot.compactionError?.message).toContain(
+		"A session send is already active."
+	);
+	// Refusing the replay does not undo the compaction the recovery ran.
+	expect(snapshot.compactions.map(({ trigger }) => trigger)).toEqual([
+		"overflow",
+	]);
+});
+
+test("replays only after the Agent Turn that proposed the recovery has ended", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator)
+	);
+	const replay = mock(async () => ({ kind: "started" }) as const);
+	engine.beginExecution({
+		startedAt: 1,
+		turnId: agentTurnId("turn-overflow"),
+	});
+	const compactionStarted = new Promise<void>((resolve) => {
+		const unsubscribe = engine.subscribe(() => {
+			if (engine.getSnapshot().isCompacting) {
+				unsubscribe();
+				resolve();
+			}
+		});
+	});
+
+	const recovery = engine.recoverOverflow(recoveryCommand({ replay }));
+	await compactionStarted;
+	release();
+	await engine.settleCompaction();
+
+	// The compaction has landed, and the replay still waits for the turn that
+	// proposed the recovery: without that wait it would start here, while the
+	// execution that asked for it is still live.
+	expect(replay).not.toHaveBeenCalled();
+
+	engine.endExecution(agentTurnId("turn-overflow"));
+
+	await expect(recovery).resolves.toMatchObject({ kind: "recovered" });
+	expect(replay).toHaveBeenCalledTimes(1);
 });

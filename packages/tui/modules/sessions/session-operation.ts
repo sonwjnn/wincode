@@ -40,8 +40,6 @@ export type SessionSendExecutor = (
 export type SessionOperation = {
 	/** Starts one application-owned send through the current Session path. */
 	send: (input: SessionSendInput) => Promise<SessionSendOutcome>;
-	/** Waits until the active send, if any, has settled. */
-	waitForIdle: () => Promise<boolean>;
 	/** Cancels the active send and its owned execution signal. */
 	cancel: () => void;
 	/** Interrupts the active turn while preserving the existing terminal handling. */
@@ -112,15 +110,6 @@ export const createSessionOperation = ({
 		active = { controller, deadlineTimer, promise };
 		return promise;
 	};
-	const waitForIdle = async (): Promise<boolean> => {
-		const current = active;
-		if (!current) {
-			return true;
-		}
-		await current.promise.catch(() => undefined);
-		return !current.controller.signal.aborted;
-	};
-
 	const cancel = (): void => {
 		const current = active;
 		if (!current) {
@@ -133,5 +122,5 @@ export const createSessionOperation = ({
 		active?.controller.abort(createAgentTurnAbortReason("interrupted"));
 		onInterrupt?.(preserveToolCallId);
 	};
-	return { cancel, interrupt, send, waitForIdle };
+	return { cancel, interrupt, send };
 };

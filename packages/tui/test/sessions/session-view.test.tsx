@@ -111,7 +111,6 @@ mock.module("@/modules/sessions/hooks/use-chat", () => ({
 				cancel: () => undefined,
 				interrupt: () => undefined,
 				send,
-				waitForIdle: async () => true,
 				getState: () => ({
 					status: status === "ready" ? "ready" : "running",
 				}),

@@ -23,13 +23,13 @@ the single Agent Runtime event consumer. The
 CLI projects those events into its OpenTUI message state.
 
 Session state — Session Transcript, Session Context, chat status, errors,
-compaction facts, and the approval lifecycle — is owned by the React-free
-Session Engine in `modules/sessions/engine`. The Engine is the only writer, and
-it runs the compaction and approval Session Commands, each of which publishes
-what it produced before it settles. `useChat` binds it for
-rendering, mirrors its Session Snapshot in React state so the view re-renders,
-submits compaction commands to it, projects its approvals into the panel
-registry, and never writes session state itself.
+compaction facts, the approval lifecycle, and overflow recovery — is owned by
+the React-free Session Engine in `modules/sessions/engine`. The Engine is the
+only writer, and it runs the compaction, approval, and overflow-recovery
+Session Commands, each of which publishes what it produced before it settles.
+`useChat` binds it for rendering, mirrors its Session Snapshot in React state
+so the view re-renders, submits commands to it, projects its approvals into the
+panel registry, and never writes session state itself.
 
 Each Agent Turn execution owns its own scope (`modules/sessions/turn-execution.ts`):
 the Agent Turn Identifier, the assistant message identity, the source user
@@ -54,7 +54,28 @@ reuses the original logical user message without appending a duplicate.
 
 ### Compaction
 
-`/compact [focus]` summarizes completed history into a durable local compaction entry while keeping the full transcript visible. Compaction is a Session Command the Engine runs: the local Session Compaction module's per-session in-flight map is the single-flight, so a request joins the compaction in flight when it carries the same intent — the same trigger and focus, since a Model Target selection only decides how the summary is generated — and is refused with a reason when it carries another, and a caller is never answered with another caller's entry. The Engine publishes the Session Context swap and the Compaction entry as part of the command, so an Agent Turn's preparation settles any compaction in flight before it reads the Session Context and never sends a context the session has already replaced. Automatic threshold maintenance and one-attempt provider-overflow replay submit the same command.
+`/compact [focus]` summarizes completed history into a durable local
+compaction entry while keeping the full transcript visible. Compaction is a
+Session Command the Engine runs: the local Session Compaction module's
+per-session in-flight map is the single-flight, so a request joins the
+compaction in flight when it carries the same intent — the same trigger and
+focus, since a Model Target selection only decides how the summary is
+generated — and is refused with a reason when it carries another, and a caller
+is never answered with another caller's entry. The Engine publishes the Session
+Context swap and the Compaction entry as part of the command, so an Agent
+Turn's preparation settles any compaction in flight before it reads the Session
+Context and never sends a context the session has already replaced. Automatic
+threshold maintenance and provider-overflow recovery submit the same command.
+
+A provider refusal that reports the context as too large proposes one recovery
+for the Agent Turn it ended: the Engine records the user message that turn
+answers, compacts the replay-safe history — the Session Transcript up to that
+message, with the interrupted turn that followed it sanitized away — and
+replays the message. The record belongs to the command rather than to a ref a
+send can reset: the replayed turn answers the same message, so it cannot chain
+into another recovery, the message's later refusals are refused as exhausted,
+and a replay the send lane refuses is reported as the compaction error instead
+of being queued behind, or overlapped with, a send the user started.
 
 ### Approvals
 

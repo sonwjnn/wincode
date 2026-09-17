@@ -81,11 +81,14 @@ metadata, then prompt-config refs. _Avoid_: chat config, latest config
 The single owner of one session's live state and the only writer to it. Session state changes only through the Engine, and observers read a Session Snapshot. _Avoid_: session manager, session store, session state holder
 
 **Session Command**:
-A request to change session state, such as sending a prompt, interrupting a turn, compacting, or answering an approval. The Engine executes Commands one at a time in submission order, and no asynchronous continuation changes session state outside a Command. _Avoid_: operation, action, event, task
-_Planned_: the Engine runs the compaction and approval Commands today, while sends and turns still run in the binding; the rest of the command lane arrives with the Session Execution migration (issue #97).
+A request to change session state, such as sending a prompt, interrupting a turn, compacting, recovering from a context overflow, or answering an approval. The Engine executes Commands one at a time in submission order, and no asynchronous continuation changes session state outside a Command. _Avoid_: operation, action, event, task
+_Planned_: the Engine runs the compaction, approval, and context-overflow recovery Commands today, while sends and turns still run in the binding; the rest of the command lane arrives with the Session Execution migration (issue #97).
 
 **Compaction Intent**:
 What one compaction request asks for: its trigger and its focus, as distinct from the messages it runs over and the Model Target selection its summary is generated with. The Session Compaction module admits a request that carries the intent already in flight and refuses one that carries another, so no caller is answered with another caller's entry while two threshold passes, which share an intent, still meet in one operation. _Avoid_: compaction request, compaction options
+
+**Overflow Recovery**:
+The one recovery a context-overflow refusal buys for the Agent Turn it ended: the Engine compacts the replay-safe history — the Session Transcript up to that turn's original user message, with the interrupted turn that followed it sanitized away — and replays that message. The attempt is recorded against the message the turn answers, so the replayed turn cannot chain into another recovery and no send can reset it. _Avoid_: retry, resend
 
 **Approval Request**:
 One Tool Permission `ask` a waiting Tool Gate evaluation is registered for. The Session Engine owns it from registration to settlement: it is pending until exactly one settlement — allow, reject, or abort — whichever route triggers it, so no route can leave the evaluation waiting or settle the request twice. The session projects its pending Approval Requests into the panel surface, and closing them, aborting them, or shutting the session down runs through the same path. _Avoid_: approval prompt, approval handle, approval queue

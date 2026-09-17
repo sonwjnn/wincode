@@ -8,6 +8,7 @@ import {
 	createAgentTurnAbortEvent,
 	createAgentTurnId,
 	getAgentTurnAbortDisposition,
+	type OperationalFailure,
 	type SessionMessageId,
 	type SessionRecord,
 	type ToolCallId,
@@ -52,9 +53,7 @@ import {
 	createDirectSummaryGenerator,
 	createSessionCompaction,
 	estimateCompactionTokens,
-	isModelContextOverflowError,
 	type ResolvedCompactionSettings,
-	recoverContextOverflow,
 	type SessionCompaction,
 	SessionCompactionError,
 	type SessionCompactionModule,
@@ -90,11 +89,14 @@ import { createSessionEngine } from "../engine/session-engine";
 import type {
 	SessionChatStatus,
 	SessionCompactionCommand,
+	SessionOverflowReplayOutcome,
 } from "../engine/types";
 import type { SessionFilePart } from "../message";
-import { createSessionController } from "../session-controller";
+import {
+	createSessionController,
+	type SessionController,
+} from "../session-controller";
 import type {
-	SessionOperation,
 	SessionSendInput,
 	SessionSendOutcome,
 } from "../session-operation";
@@ -129,6 +131,33 @@ export const createChatMessageParts = (
 	...fileMentions,
 	...files,
 ];
+
+/**
+ * Replays the original user message as the Agent Turn the recovery continues.
+ * The send lane refuses a replay that would overlap a send the session already
+ * runs, and that refusal is the replay's outcome: a recovery never queues
+ * behind, or overlaps, work the user started.
+ */
+const replayOverflowTurn = async (
+	session: SessionController,
+	execution: TurnExecution,
+	originalMessageId: SessionMessageId
+): Promise<SessionOverflowReplayOutcome> => {
+	const outcome = await session.send({
+		agent: execution.agent,
+		messageId: originalMessageId,
+		model: execution.model,
+		resolvedAgent: execution.resolvedAgent,
+		sessionModel: execution.sessionModel,
+		...(isUndefined(execution.sessionVariant)
+			? {}
+			: { sessionVariant: execution.sessionVariant }),
+		...(isUndefined(execution.variant) ? {} : { variant: execution.variant }),
+	});
+	return outcome.rejected
+		? { kind: "refused", reason: outcome.reason }
+		: { kind: "started" };
+};
 
 const AGENT_TURN_DEADLINE_MS = 43_200_000;
 const INTERRUPTED_TOOL_ERROR = "Tool call interrupted";
@@ -401,13 +430,13 @@ const sessionSendCancelled = (signal?: AbortSignal): SessionSendOutcome => {
 const handleRunTurnError = ({
 	error,
 	executionStarted,
-	onProviderError,
+	onFailure,
 	setError,
 	signal,
 }: {
 	error: unknown;
 	executionStarted: boolean;
-	onProviderError: (error: unknown) => void;
+	onFailure: (error: unknown) => void;
 	setError: (error: Error) => void;
 	signal: AbortSignal;
 }): SessionSendOutcome => {
@@ -423,7 +452,7 @@ const handleRunTurnError = ({
 	if (!executionStarted) {
 		return { rejected: true, reason: normalizedError.message };
 	}
-	onProviderError(error);
+	onFailure(error);
 	return { rejected: false };
 };
 
@@ -788,7 +817,7 @@ const handleTurnFailure = async ({
 	terminalObserved,
 	turnId,
 	variant,
-	onProviderError,
+	onFailure,
 	commitRecord,
 }: {
 	agent: AgentId;
@@ -799,7 +828,7 @@ const handleTurnFailure = async ({
 	executionStarted: boolean;
 	mergeTranscript: (messages: readonly SessionMessage[]) => void;
 	model: ChatModelSelection;
-	onProviderError: (error: unknown) => void;
+	onFailure: (error: unknown) => void;
 	applyContext: (messages: SessionMessage[]) => void;
 	setError: (error: Error) => void;
 	signal: AbortSignal;
@@ -884,7 +913,7 @@ const handleTurnFailure = async ({
 	return handleRunTurnError({
 		error,
 		executionStarted,
-		onProviderError,
+		onFailure,
 		setError,
 		signal,
 	});
@@ -1439,31 +1468,31 @@ export function useChat(
 	 * The settings one compaction command runs with: the resolved compaction
 	 * settings plus the request overhead of the Agent Turn execution in flight.
 	 */
+	const compactionSettingsFrom = useCallback(
+		(
+			settings: ResolvedCompactionSettings
+		): SessionCompactionCommand["settings"] => ({
+			compactionOverheadTokens: estimateRuntimeRequestOverheadTokens(),
+			enabled: settings.enabled,
+			keepRecentTokens: settings.keepRecentTokens,
+			maxMediaAttachments: settings.maxMediaAttachments,
+			maxMediaBytes: settings.maxMediaBytes,
+			maxMediaTokens: settings.maxMediaTokens,
+			modelContextLimit: settings.modelContextLimit,
+			reserveTokens: settings.reserveTokens,
+			thresholdTokens: settings.thresholdTokens,
+		}),
+		[estimateRuntimeRequestOverheadTokens]
+	);
 	const compactionSettingsFor = useCallback(
 		async (
 			model: ChatModelSelection
-		): Promise<SessionCompactionCommand["settings"]> => {
-			const settings = await getCompactionSettings(model);
-			return {
-				compactionOverheadTokens: estimateRuntimeRequestOverheadTokens(),
-				enabled: settings.enabled,
-				keepRecentTokens: settings.keepRecentTokens,
-				maxMediaAttachments: settings.maxMediaAttachments,
-				maxMediaBytes: settings.maxMediaBytes,
-				maxMediaTokens: settings.maxMediaTokens,
-				modelContextLimit: settings.modelContextLimit,
-				reserveTokens: settings.reserveTokens,
-				thresholdTokens: settings.thresholdTokens,
-			};
-		},
-		[estimateRuntimeRequestOverheadTokens, getCompactionSettings]
+		): Promise<SessionCompactionCommand["settings"]> =>
+			compactionSettingsFrom(await getCompactionSettings(model)),
+		[compactionSettingsFrom, getCompactionSettings]
 	);
 
-	const overflowAttemptRef = useRef(0);
-	const sessionRef = useRef<SessionOperation | null>(null);
-	const providerErrorRef = useRef<
-		(error: unknown, execution: TurnExecution) => void
-	>(() => undefined);
+	const sessionRef = useRef<SessionController | null>(null);
 
 	/**
 	 * Starts an Agent Turn execution: its scope and its engine registration are
@@ -1568,6 +1597,49 @@ export function useChat(
 			void compactIfNeeded();
 		},
 		[compactionModule, getCompactionSettings, runCompaction, setCompactionError]
+	);
+
+	/**
+	 * Proposes the one overflow recovery the Engine may run for an Agent Turn a
+	 * provider refused. The Engine owns the attempt and the classification, so
+	 * this only supplies what a recovery needs: where to compact against, and
+	 * how to replay the original user message.
+	 */
+	const proposeOverflowRecovery = useCallback(
+		(failure: unknown, execution: TurnExecution): void => {
+			const originalMessageId = execution.sourceUserMessageId;
+			if (isNull(originalMessageId)) {
+				return;
+			}
+			void engine.recoverOverflow({
+				error: failure,
+				originalMessageId,
+				replay: ({ originalMessageId: replayId }) => {
+					const session = sessionRef.current;
+					return isNull(session)
+						? Promise.resolve({
+								kind: "refused",
+								reason: "The session is not available.",
+							} as const)
+						: replayOverflowTurn(session, execution, replayId);
+				},
+				resolveTarget: async () => {
+					const settings = await getCompactionSettings(execution.model);
+					if (!settings.overflowRecoveryAvailable) {
+						return null;
+					}
+					return {
+						model: execution.model,
+						settings: compactionSettingsFrom(settings),
+						...(isUndefined(execution.variant)
+							? {}
+							: { variant: execution.variant }),
+					};
+				},
+				turnId: execution.turnId,
+			});
+		},
+		[compactionSettingsFrom, engine, getCompactionSettings]
 	);
 
 	const createTurnSkillExecution =
@@ -1792,6 +1864,8 @@ export function useChat(
 				: { sourceUserMessageId };
 			let executionStarted = false;
 			let currentTurn: AgentTurn | undefined;
+			/** The failure the runtime reported for this turn, when it reported one. */
+			let terminalFailure: OperationalFailure | undefined;
 			let terminalObserved = false;
 			const commitRecord = (record: SessionRecord) =>
 				store.commitSessionRecord({
@@ -1925,6 +1999,8 @@ export function useChat(
 					onTerminal: (event) => {
 						executionStarted = true;
 						terminalObserved = true;
+						terminalFailure =
+							event.type === "agent-turn-failed" ? event.failure : undefined;
 						finalizeRuntimeMessage(execution, event);
 					},
 					onToolCheckpoint: commitRecord,
@@ -1949,8 +2025,8 @@ export function useChat(
 					executionStarted,
 					mergeTranscript,
 					model,
-					onProviderError: (error) =>
-						providerErrorRef.current(error, execution),
+					onFailure: (error) =>
+						proposeOverflowRecovery(terminalFailure ?? error, execution),
 					applyContext,
 					setError,
 					signal,
@@ -1971,6 +2047,7 @@ export function useChat(
 			maintainAfterTurn,
 			mcp,
 			mergeTranscript,
+			proposeOverflowRecovery,
 			applyContext,
 			resolveMcpPolicyForAgentRef,
 			resolveResourceLimitsForAgentRef,
@@ -1987,7 +2064,6 @@ export function useChat(
 			signal: AbortSignal
 		): Promise<SessionSendOutcome> => {
 			setCompactionError(null);
-			overflowAttemptRef.current = 0;
 			const startedAt = Date.now();
 
 			const prepared = await prepareSessionSubmission({
@@ -2108,91 +2184,6 @@ export function useChat(
 		[closeApprovals, interruptLatestAssistantMessage]
 	);
 	abortApprovalTurnRef.current = abortApprovalTurn;
-
-	providerErrorRef.current = (providerError, execution) => {
-		if (
-			overflowAttemptRef.current > 0 ||
-			!isModelContextOverflowError(providerError)
-		) {
-			return;
-		}
-		overflowAttemptRef.current = 1;
-		const failedModel = execution.model;
-		const originalMessage = getSnapshot().transcript.findLast(
-			(message) => message.role === "user"
-		);
-		if (isUndefined(originalMessage)) {
-			return;
-		}
-		void (async () => {
-			const settings = await getCompactionSettings(failedModel);
-			if (!settings.overflowRecoveryAvailable) {
-				return;
-			}
-			try {
-				await recoverContextOverflow({
-					attempt: 0,
-					compact: (input) =>
-						runCompaction({
-							compactionMessages: input.session.messages,
-							model: input.model,
-							trigger: "overflow",
-							...(isUndefined(execution.variant)
-								? {}
-								: { variant: execution.variant }),
-						}),
-					compaction: compactionModule,
-					compactionInput: {
-						model: failedModel,
-						settings: {
-							compactionOverheadTokens: estimateRuntimeRequestOverheadTokens(),
-							enabled: settings.enabled,
-							keepRecentTokens: settings.keepRecentTokens,
-							maxMediaAttachments: settings.maxMediaAttachments,
-							maxMediaBytes: settings.maxMediaBytes,
-							maxMediaTokens: settings.maxMediaTokens,
-							modelContextLimit: settings.modelContextLimit,
-							reserveTokens: settings.reserveTokens,
-							thresholdTokens: settings.thresholdTokens,
-						},
-					},
-					session: {
-						messages: getSnapshot().transcript,
-						sessionId,
-					},
-					enabled: settings.overflowRecoveryAvailable,
-					error: providerError,
-					originalMessageId: originalMessage.id,
-					replay: async ({ originalMessageId }) => {
-						// The compaction command published the Session Context swap
-						// and the entry it produced before this replay runs.
-						const operation = sessionRef.current;
-						if (isNull(operation) || !(await operation.waitForIdle())) {
-							return;
-						}
-						const outcome = await operation.send({
-							agent: execution.agent,
-							sessionModel: execution.sessionModel,
-							sessionVariant: execution.sessionVariant,
-							messageId: originalMessageId,
-							model: failedModel,
-							resolvedAgent: execution.resolvedAgent,
-							variant: execution.variant,
-						});
-						if (outcome.rejected) {
-							throw new Error(outcome.reason);
-						}
-					},
-				});
-			} catch (recoveryError) {
-				setCompactionError(
-					isError(recoveryError)
-						? recoveryError
-						: new Error("Context overflow recovery failed.")
-				);
-			}
-		})();
-	};
 
 	const session = useMemo(
 		() =>

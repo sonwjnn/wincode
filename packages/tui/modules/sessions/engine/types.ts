@@ -2,6 +2,7 @@ import type {
 	AgentTurn,
 	AgentTurnEvent,
 	AgentTurnId,
+	SessionMessageId,
 } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import type { ReadonlyDeep } from "type-fest";
@@ -12,6 +13,7 @@ import type {
 	CompactSessionResult,
 	SessionCompactionModule,
 } from "../compaction/compaction";
+import type { OverflowRecoveryError } from "../compaction/overflow-recovery";
 import type {
 	CompactionTriggerReason,
 	SessionCompaction,
@@ -96,6 +98,57 @@ export type SessionExecutionInput = ReadonlyDeep<{
 	turnId: AgentTurnId;
 }>;
 
+/** What one replay attempt asks the host to run: the turn's original message. */
+export type SessionOverflowReplayInput = ReadonlyDeep<{
+	originalMessageId: SessionMessageId;
+}>;
+
+/**
+ * What one replay attempt reported: the Agent Turn it starts, or the refusal
+ * that stopped it. A refusal — a send the session already runs — is reported
+ * instead of overlapped, and the recovery never queues it.
+ */
+export type SessionOverflowReplayOutcome =
+	| { readonly kind: "started" }
+	| { readonly kind: "refused"; readonly reason: string };
+
+/** The Model Target one overflow recovery compacts and replays with. */
+export type SessionOverflowRecoveryTarget = ReadonlyDeep<{
+	model: ChatModelSelection;
+	settings: CompactSessionInput["settings"];
+	variant?: ModelVariant;
+}>;
+
+/** One provider refusal proposed to the Engine for overflow recovery. */
+export type SessionOverflowRecoveryCommand = ReadonlyDeep<{
+	/** The failure that ended the Agent Turn; anything but an overflow is ignored. */
+	error: unknown;
+	/** The user message the failed Agent Turn answered; the recovery replays it. */
+	originalMessageId: SessionMessageId;
+	/**
+	 * The Model Target and settings the recovery's compaction runs against, or
+	 * null when that target has no overflow recovery available.
+	 */
+	resolveTarget: () => Promise<SessionOverflowRecoveryTarget | null>;
+	/** Runs the replay once the recovery has compacted. */
+	replay: (
+		input: SessionOverflowReplayInput
+	) => Promise<SessionOverflowReplayOutcome>;
+	/** The Agent Turn whose provider request overflowed. */
+	turnId: AgentTurnId;
+}>;
+
+/**
+ * What one overflow recovery did: it compacted and replayed the message, the
+ * failure was not eligible, the message had already used its one attempt, or
+ * the recovery failed and published that failure as the compaction error.
+ */
+export type SessionOverflowRecoveryOutcome =
+	| { readonly kind: "recovered"; readonly entry: SessionCompaction }
+	| { readonly kind: "ineligible" }
+	| { readonly kind: "exhausted" }
+	| { readonly kind: "failed"; readonly error: OverflowRecoveryError };
+
 /**
  * The Session Compaction module the Engine submits compaction commands to. Its
  * per-session in-flight map owns the admission decision: a request either runs,
@@ -167,6 +220,19 @@ export type SessionEngine = Readonly<{
 	) => Promise<SessionApprovalOutcome>;
 	/** Settles one pending approval; an already settled request is left alone. */
 	respondToApproval: (id: string, outcome: SessionApprovalOutcome) => void;
+	/**
+	 * Proposes the one recovery an Agent Turn may get from a provider refusal.
+	 * A failure that is not a context overflow, or one whose Model Target has no
+	 * overflow recovery, is ignored. The first eligible refusal records the user
+	 * message it answers, compacts the replay-safe history through the Engine's
+	 * own compaction command, and replays that message once the turn that
+	 * proposed the recovery has ended; every later refusal of the message is
+	 * refused as exhausted, so no new send can start a second attempt. A failed
+	 * or refused recovery is published as the compaction error.
+	 */
+	recoverOverflow: (
+		command: SessionOverflowRecoveryCommand
+	) => Promise<SessionOverflowRecoveryOutcome>;
 	setCatalogDiagnostic: (diagnostic: string | null) => void;
 	setCompactionError: (error: Error | null) => void;
 	setError: (error: Error | null) => void;

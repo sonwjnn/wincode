@@ -50,9 +50,7 @@ describe("SessionOperation", () => {
 
 		const send = operation.send(request);
 		await started;
-		const idle = operation.waitForIdle();
 		operation.cancel();
-		expect(await idle).toBe(false);
 
 		expect(await send).toEqual({ rejected: true, reason: "Cancelled" });
 		expect(execute).toHaveBeenCalledTimes(1);

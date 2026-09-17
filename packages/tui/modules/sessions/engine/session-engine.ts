@@ -1,9 +1,20 @@
-import { isError, isNull, isUndefined } from "@wincode/runtime-utils";
+import type { AgentTurnId, SessionMessageId } from "@wincode/agent-core";
+import {
+	getErrorMessage,
+	isError,
+	isNull,
+	isUndefined,
+} from "@wincode/runtime-utils";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import type {
 	CompactSessionInput,
 	CompactSessionResult,
 } from "../compaction/compaction";
+import {
+	isContextOverflowFailure,
+	OverflowRecoveryError,
+	prepareOverflowReplayMessages,
+} from "../compaction/overflow-recovery";
 import { isCompactionSummaryMessage } from "../compaction/summary-message";
 import type { SessionCompaction } from "../compaction/types";
 import type { SessionMessage } from "../message";
@@ -12,6 +23,10 @@ import type {
 	SessionCompactionCommand,
 	SessionEngine,
 	SessionEngineOptions,
+	SessionOverflowRecoveryCommand,
+	SessionOverflowRecoveryOutcome,
+	SessionOverflowRecoveryTarget,
+	SessionOverflowReplayOutcome,
 	SessionSnapshot,
 } from "./types";
 import { exposedViewState, hasChanged } from "./utils";
@@ -63,6 +78,19 @@ export const createSessionEngine = ({
 		string,
 		(outcome: SessionApprovalOutcome) => void
 	>();
+	/**
+	 * The user messages that have used their one overflow recovery attempt. The
+	 * attempt belongs to the message the Agent Turn answers — the replayed turn
+	 * answers the same one — so a replayed turn can never chain into another
+	 * recovery, and no send or command can reset an attempt that is under way.
+	 */
+	const recoveryAttempts = new Set<SessionMessageId>();
+	/**
+	 * The waiters of each live execution, resolved when that execution ends, so
+	 * work that must not run during an Agent Turn can wait for it to end instead
+	 * of guessing whether it has.
+	 */
+	const executionEndWaiters = new Map<AgentTurnId, (() => void)[]>();
 	let approvalCounter = 0;
 	let isShutDown = false;
 	const publish = (changes: Partial<SessionSnapshot>): void => {
@@ -275,6 +303,127 @@ export const createSessionEngine = ({
 			}
 		}
 	};
+	/**
+	 * Resolves once the Agent Turn that proposed a recovery has ended; an
+	 * execution that is not live has already ended.
+	 */
+	const waitForExecutionEnd = (turnId: AgentTurnId): Promise<void> => {
+		if (!state.executions.some((execution) => execution.turnId === turnId)) {
+			return Promise.resolve();
+		}
+		const { promise, resolve } = Promise.withResolvers<void>();
+		const waiters = executionEndWaiters.get(turnId);
+		if (isUndefined(waiters)) {
+			executionEndWaiters.set(turnId, [resolve]);
+		} else {
+			waiters.push(resolve);
+		}
+		return promise;
+	};
+	/** One recovery failure with the compaction error code it publishes. */
+	const recoveryError = (
+		message: string,
+		cause: unknown
+	): OverflowRecoveryError =>
+		new OverflowRecoveryError("replay-failed", message, { cause });
+	/**
+	 * Publishes one recovery failure as the compaction error and reports it, so
+	 * a caller that proposed the recovery has nothing left to continue.
+	 */
+	const failRecovery = (
+		error: OverflowRecoveryError
+	): SessionOverflowRecoveryOutcome => {
+		setCompactionError(error);
+		return { kind: "failed", error };
+	};
+	/**
+	 * Runs one recovery: it records the attempt against the user message the
+	 * failed turn answers, compacts the replay-safe history through the Engine's
+	 * own compaction command — so the Session Context swap and the entry are
+	 * published exactly as for any other compaction — and then replays that
+	 * message. A recovery the session refuses or that fails is published as the
+	 * compaction error instead of being continued by its caller.
+	 */
+	const recoverOverflow = async (
+		command: SessionOverflowRecoveryCommand
+	): Promise<SessionOverflowRecoveryOutcome> => {
+		if (!isContextOverflowFailure(command.error)) {
+			return { kind: "ineligible" };
+		}
+		// Recorded before anything is awaited, so the attempt covers the whole
+		// recovery: a refusal that arrives while this one is under way is refused
+		// as exhausted rather than starting a second compaction, and no send or
+		// command can reset it.
+		if (recoveryAttempts.has(command.originalMessageId)) {
+			return { kind: "exhausted" };
+		}
+		recoveryAttempts.add(command.originalMessageId);
+		let target: SessionOverflowRecoveryTarget | null;
+		try {
+			target = await command.resolveTarget();
+		} catch (error) {
+			return failRecovery(
+				recoveryError(
+					"Context overflow recovery could not resolve its compaction settings.",
+					error
+				)
+			);
+		}
+		if (isNull(target)) {
+			// Nothing was tried, so the message keeps its one attempt.
+			recoveryAttempts.delete(command.originalMessageId);
+			return { kind: "ineligible" };
+		}
+		let result: CompactSessionResult;
+		try {
+			result = await compact({
+				model: target.model,
+				settings: target.settings,
+				sourceMessages: prepareOverflowReplayMessages(
+					state.transcript,
+					command.originalMessageId
+				),
+				trigger: "overflow",
+				...(isUndefined(target.variant) ? {} : { variant: target.variant }),
+			});
+		} catch (error) {
+			return failRecovery(
+				error instanceof OverflowRecoveryError
+					? error
+					: recoveryError(
+							`Context overflow recovery could not compact the session.${getErrorMessage(error, "")}`,
+							error
+						)
+			);
+		}
+		// The replay never runs while the turn that proposed the recovery is
+		// still live, and a replay the session refuses is reported, never queued
+		// behind or overlapped with a send that is already running.
+		await waitForExecutionEnd(command.turnId);
+		let replayOutcome: SessionOverflowReplayOutcome;
+		try {
+			replayOutcome = await command.replay({
+				originalMessageId: command.originalMessageId,
+			});
+		} catch (error) {
+			return failRecovery(
+				recoveryError(
+					"Context overflow recovery could not replay the original user message.",
+					error
+				)
+			);
+		}
+		if (replayOutcome.kind === "refused") {
+			return failRecovery(
+				new OverflowRecoveryError(
+					"replay-refused",
+					`Context overflow recovery could not replay the original user message: ${replayOutcome.reason}`,
+					{ cause: command.error }
+				)
+			);
+		}
+		return { kind: "recovered", entry: result.entry };
+	};
 
 	return {
 		applyContext,
@@ -293,6 +442,13 @@ export const createSessionEngine = ({
 		closeApprovals,
 		compact,
 		endExecution: (turnId) => {
+			const waiters = executionEndWaiters.get(turnId);
+			if (!isUndefined(waiters)) {
+				executionEndWaiters.delete(turnId);
+				for (const resolveEnd of waiters) {
+					resolveEnd();
+				}
+			}
 			const executions = state.executions.filter(
 				(execution) => execution.turnId !== turnId
 			);
@@ -303,6 +459,7 @@ export const createSessionEngine = ({
 		},
 		getSnapshot: () => state,
 		mergeTranscript,
+		recoverOverflow,
 		requestApproval,
 		respondToApproval: settleApproval,
 		setCatalogDiagnostic: (diagnostic) =>

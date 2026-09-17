@@ -38,7 +38,6 @@ export type SessionController = {
 	readonly subscribe: (
 		listener: (state: SessionControllerState) => void
 	) => () => void;
-	readonly waitForIdle: SessionOperation["waitForIdle"];
 };
 export type AgentTurnEventConsumerOptions = {
 	lifecycle?: AgentTurnLifecycle;
@@ -204,6 +203,5 @@ export const createSessionController = ({
 			listeners.add(listener);
 			return () => listeners.delete(listener);
 		},
-		waitForIdle: operation.waitForIdle,
 	};
 };

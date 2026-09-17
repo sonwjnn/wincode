@@ -1,4 +1,3 @@
-export { isModelContextOverflowError } from "@wincode/ai/model-failures";
 export { isSettingsCommand, parseCompactCommand } from "./commands";
 export type {
 	CompactSessionInput,
@@ -28,15 +27,6 @@ export {
 	resolveCompactionSettingPath,
 	resolveCompactionSettings,
 } from "./config";
-export type {
-	OverflowRecoveryInput,
-	OverflowReplay,
-} from "./overflow-recovery";
-export {
-	OverflowRecoveryError,
-	prepareOverflowReplayMessages,
-	recoverContextOverflow,
-} from "./overflow-recovery";
 export type {
 	SummaryModelResolver,
 	SummaryTextGenerationOptions,

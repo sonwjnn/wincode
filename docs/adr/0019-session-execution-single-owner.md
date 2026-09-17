@@ -33,17 +33,23 @@ intent's. The approval lifecycle has shipped as the Engine's own: an approval
 request is registered with the Engine, settles exactly once as allow, reject,
 or abort — whichever route triggers it — and the panel registry is a read-only
 projection of the Engine's pending requests, so the binding's second,
-independent settlement route and its one-shot abort latch are gone. The rest —
-Commands executed one at a time in submission order, orthogonal status facts,
-and the submission pipeline living in the Engine — is the design the migration
-is closing on, tracked by the Session Engine spec (issue #97) and its five step
-tickets (#98–#102), and is not yet the shipped execution model: the Engine
+independent settlement route and its one-shot abort latch are gone. Context
+overflow recovery has shipped as a Session Command too: the first
+context-overflow refusal of an Agent Turn records the user message the turn
+answers, compacts the replay-safe history through the Engine's own compaction
+command, and replays that message; the record belongs to the command, so the
+replayed turn cannot chain into another recovery and no send can reset it, and
+a replay the send lane refuses is reported rather than queued behind, or
+overlapped with, a send the user started. The rest — Commands executed one at a
+time in submission order, orthogonal status facts, and the submission pipeline
+living in the Engine — is the design the migration is closing on, tracked by
+the Session Engine spec (issue #97) and its five step tickets (#98–#102), and
+is not yet the shipped execution model: the Engine
 still exposes granular state setters, sends are started by the binding rather
-than by a Session Command, chat status is still one union, context-overflow
-replay still runs as a detached continuation, and the shutdown command settles
-pending approvals without yet cancelling the active send or releasing the MCP
-snapshot. Read the consequences below as the target, not as a description of
-every line of running code.
+than by a Session Command, chat status is still one union, and the shutdown
+command settles pending approvals without yet cancelling the active send or
+releasing the MCP snapshot. Read the consequences below as the target, not as a
+description of every line of running code.
 
 ## Considered options
 
