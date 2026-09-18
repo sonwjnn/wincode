@@ -1,4 +1,4 @@
-import { isNull } from "@wincode/runtime-utils";
+import { isNull, isUndefined } from "@wincode/runtime-utils";
 
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
@@ -12,11 +12,25 @@ import {
 	createRouter,
 	RouterContextProvider,
 } from "@tanstack/react-router";
-import { useCallback, useEffect, useState } from "react";
+import { fromPartial } from "@total-typescript/shoehorn";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { SessionCompaction } from "@/modules/sessions/compaction/types";
-import type { SessionMessage } from "@/modules/sessions/message";
-import type { SessionSendInput } from "@/modules/sessions/session-operation";
-import { agentId, sessionId, sessionMessageId } from "../support/identifiers";
+import type { SessionQueuedSubmission } from "@/modules/sessions/engine/types";
+import type {
+	SessionFilePart,
+	SessionMessage,
+} from "@/modules/sessions/message";
+import type {
+	SessionSendInput,
+	SessionSubmissionComposition,
+} from "@/modules/sessions/session-operation";
+import type { QueuedSubmissionId } from "@/shared/identifiers";
+import {
+	agentId,
+	queuedSubmissionId,
+	sessionId,
+	sessionMessageId,
+} from "../support/identifiers";
 
 const { testRender } = await import("@opentui/react/test-utils");
 const { AgentRegistryProvider, useAgentRegistry } = await import(
@@ -40,7 +54,7 @@ const { createConfigStore } = await import("@/shared/config/config-store");
 const { DialogProvider } = await import(
 	"@/shared/providers/dialog/dialog-provider"
 );
-const { KeyboardLayerProvider } = await import(
+const { KeyboardLayerProvider, useKeyboardLayer } = await import(
 	"@/shared/providers/keyboard-layer/keyboard-layer-provider"
 );
 const { ThemeProvider } = await import(
@@ -78,6 +92,14 @@ type FakeSessionRun = {
 };
 
 let activeFakeSessionRun: FakeSessionRun | null = null;
+/** The compositions the view accepted as Queued Submissions, in order. */
+let fakeQueuedTexts: string[] = [];
+/** The same submissions' full compositions, so a round trip can be asserted. */
+let fakeQueuedCompositions: SessionSubmissionComposition[] = [];
+/** A Recall payload the test supplies, in place of what the fake queue holds. */
+let fakeRecalledPayload: SessionQueuedSubmission[] | null = null;
+/** How many times the view asked the session to recall its queue. */
+let fakeSessionRecalls = 0;
 
 mock.module("@/modules/sessions/hooks/use-session-engine", () => ({
 	useSessionEngine: (
@@ -87,11 +109,43 @@ mock.module("@/modules/sessions/hooks/use-session-engine", () => ({
 		initialCompactions: SessionCompaction[] = []
 	) => {
 		const [turnActive, setTurnActive] = useState(false);
+		const [queuedSubmissions, setQueuedSubmissions] = useState<
+			SessionQueuedSubmission[]
+		>([]);
+		const running = useRef(false);
+		running.current = turnActive;
+		const waiting = useRef<SessionQueuedSubmission[]>([]);
+		waiting.current = queuedSubmissions;
 		const send = useCallback(async (input: SessionSendInput) => {
-			void input;
 			const run = activeFakeSessionRun;
 			if (!run) {
 				throw new Error("No fake session run configured.");
+			}
+			if (running.current) {
+				// A busy session queues the submission and accepts it.
+				fakeQueuedTexts = [
+					...fakeQueuedTexts,
+					input.composition?.text ?? input.userText ?? "",
+				];
+				fakeQueuedCompositions = [
+					...fakeQueuedCompositions,
+					input.composition ?? {
+						files: input.files ?? [],
+						text: input.userText ?? "",
+					},
+				];
+				const composition = input.composition ?? {
+					files: input.files ?? [],
+					text: input.userText ?? "",
+				};
+				setQueuedSubmissions((queued) => [
+					...queued,
+					{
+						id: queuedSubmissionId(`queued-${queued.length + 1}`),
+						input: { ...input, composition },
+					},
+				]);
+				return { rejected: false as const };
 			}
 			run.sendStarted.resolve();
 			setTurnActive(true);
@@ -99,13 +153,39 @@ mock.module("@/modules/sessions/hooks/use-session-engine", () => ({
 			setTurnActive(false);
 			return { rejected: false as const };
 		}, []);
+		const recallQueuedSubmissions = useCallback(
+			(ids?: readonly QueuedSubmissionId[]) => {
+				// The fake keeps what the real Engine keeps, so a recall of one
+				// submission leaves the others in the queue and in its records.
+				const queue = fakeRecalledPayload ?? waiting.current;
+				const recalled = isUndefined(ids)
+					? queue
+					: queue.filter((submission) => ids.includes(submission.id));
+				if (recalled.length === 0) {
+					return [];
+				}
+				const recalledIds = new Set(recalled.map(({ id }) => id));
+				const remaining = waiting.current.filter(
+					(submission) => !recalledIds.has(submission.id)
+				);
+				fakeSessionRecalls += 1;
+				fakeQueuedCompositions = remaining.map(
+					({ input }) => input.composition
+				);
+				fakeQueuedTexts = remaining.map(({ input }) => input.composition.text);
+				setQueuedSubmissions(remaining);
+				return recalled;
+			},
+			[]
+		);
 		return {
 			cancel: () => undefined,
-			cancelCompaction: () => undefined,
+			cancelCompaction: () => [],
 			compact: async () => {
 				throw new Error("Compaction is not part of this test.");
 			},
-			interrupt: () => undefined,
+			interrupt: () => [],
+			recallQueuedSubmissions,
 			send,
 			snapshot: {
 				approvals: [],
@@ -116,6 +196,7 @@ mock.module("@/modules/sessions/hooks/use-session-engine", () => ({
 				error: null,
 				executions: [],
 				isCompacting: false,
+				queuedSubmissions,
 				transcript: initialTranscript,
 				turnActive,
 				viewState: undefined,
@@ -142,6 +223,18 @@ const createTestConfigStore = () =>
 		},
 	});
 
+function KeyboardLayerProbe({
+	onLayer,
+}: {
+	onLayer: (isCommandLayer: boolean) => void;
+}) {
+	const { isTopLayer } = useKeyboardLayer();
+	useEffect(() => {
+		onLayer(isTopLayer("command"));
+	});
+	return null;
+}
+
 function AgentRegistryReadyProbe({ onReady }: { onReady: () => void }) {
 	const registry = useAgentRegistry();
 	useEffect(() => {
@@ -151,6 +244,9 @@ function AgentRegistryReadyProbe({ onReady }: { onReady: () => void }) {
 	}, [onReady, registry]);
 	return null;
 }
+
+/** The strip's count line, e.g. `2 queued`; the workspace path never has one. */
+const QUEUED_COUNT_PATTERN = /\d+ queued/u;
 
 const userMessage = (id: string, text: string): SessionMessage => ({
 	id: sessionMessageId(id),
@@ -187,6 +283,10 @@ beforeAll(() => {
 
 afterEach(() => {
 	activeFakeSessionRun = null;
+	fakeQueuedCompositions = [];
+	fakeQueuedTexts = [];
+	fakeRecalledPayload = null;
+	fakeSessionRecalls = 0;
 });
 
 describe("SessionView initial submission", () => {
@@ -272,8 +372,9 @@ describe("SessionView initial submission", () => {
 		);
 
 		try {
-			await flushUi(setup);
-			expect(registryIsReady).toBe(true);
+			// The registry loads asynchronously, so readiness is awaited rather
+			// than assumed after a fixed flush.
+			await setup.waitFor(() => registryIsReady);
 			await flushUi(setup);
 			await setup.waitFor(() => navigationHasStarted);
 			const frameBeforeSend = setup.captureCharFrame();
@@ -360,8 +461,7 @@ describe("SessionView initial submission", () => {
 		);
 
 		try {
-			await flushUi(setup);
-			expect(registryIsReady).toBe(true);
+			await setup.waitFor(() => registryIsReady);
 			await flushUi(setup);
 			await setup.mockInput.typeText("entered prompt");
 			await flushUi(setup);
@@ -376,6 +476,360 @@ describe("SessionView initial submission", () => {
 			await flushUi(setup);
 			const frameWhileSendIsPending = setup.captureCharFrame();
 			expect(frameWhileSendIsPending).not.toContain("entered prompt");
+		} finally {
+			release.resolve();
+			await flushUi(setup);
+			setup.renderer.destroy();
+		}
+	});
+});
+
+/** The provider stack one SessionView test renders under. */
+const renderSessionView = async ({
+	height,
+	initialTranscript,
+	width,
+}: {
+	height: number;
+	initialTranscript: SessionMessage[];
+	width: number;
+}) => {
+	const router = buildRouter();
+	await router.load();
+	const configStore = createTestConfigStore();
+	const workspace = process.cwd();
+	let registryIsReady = false;
+	const commandLayer = { isTop: false };
+	const setup = await testRender(
+		<ThemeProvider themeName={DEFAULT_THEME.name}>
+			<ConfigProvider value={{ configStore, homeRoot: homedir(), workspace }}>
+				<ToastProvider>
+					<ConnectionsProvider connections={createConnections()}>
+						<PermissionServiceProvider service={createPermissionService()}>
+							<AgentRegistryProvider>
+								<KeyboardLayerProvider>
+									<ApprovalPanelsProvider>
+										<PromptConfigProvider>
+											<ModelPricingProvider>
+												<DialogProvider>
+													<McpProvider
+														closeRegistryOnUnmount={false}
+														createRegistry={() =>
+															createMcpRegistry({
+																loadConfig: async () => ({
+																	diagnostics: [],
+																	servers: {},
+																}),
+																workspace,
+															})
+														}
+														workspace={workspace}
+													>
+														<RouterContextProvider router={router}>
+															<SessionView
+																initialTranscript={initialTranscript}
+																sessionId={sessionId("session-1")}
+																sessionTitle="Queue a prompt"
+															/>
+															<AgentRegistryReadyProbe
+																onReady={() => {
+																	registryIsReady = true;
+																}}
+															/>
+															<KeyboardLayerProbe
+																onLayer={(isCommandLayer) => {
+																	commandLayer.isTop = isCommandLayer;
+																}}
+															/>
+														</RouterContextProvider>
+													</McpProvider>
+												</DialogProvider>
+											</ModelPricingProvider>
+										</PromptConfigProvider>
+									</ApprovalPanelsProvider>
+								</KeyboardLayerProvider>
+							</AgentRegistryProvider>
+						</PermissionServiceProvider>
+					</ConnectionsProvider>
+				</ToastProvider>
+			</ConfigProvider>
+		</ThemeProvider>,
+		{ height, width }
+	);
+	await setup.waitFor(() => registryIsReady);
+	await flushUi(setup);
+	return { commandLayer, setup };
+};
+
+/** Renders the view with one Agent Turn already running. */
+const renderBusySessionView = async () => {
+	const release = deferred<void>();
+	const sendStarted = deferred<void>();
+	activeFakeSessionRun = {
+		navigationRelease: deferred<void>(),
+		navigationStarted: deferred<void>(),
+		release,
+		sendStarted,
+	};
+	const { commandLayer, setup } = await renderSessionView({
+		height: 20,
+		initialTranscript: [],
+		width: 100,
+	});
+	for (let attempt = 0; attempt < 3; attempt += 1) {
+		await setup.mockInput.typeText("first prompt");
+		await flushUi(setup);
+		if (setup.captureCharFrame().includes("first prompt")) {
+			break;
+		}
+	}
+	setup.mockInput.pressEnter();
+	await sendStarted.promise;
+	await flushUi(setup);
+	return { commandLayer, release, setup };
+};
+
+describe("SessionView Submission Queue", () => {
+	/**
+	 * Types into the composer until the composition is really there. The
+	 * composer reset a previous submit triggered reaches the textarea through a
+	 * passive effect, and this harness can deliver keystrokes before that
+	 * effect runs; a real user cannot type inside that window.
+	 */
+	const typePrompt = async (
+		setup: Awaited<ReturnType<typeof testRender>>,
+		text: string
+	) => {
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			await setup.mockInput.typeText(text);
+			await flushUi(setup);
+			if (setup.captureCharFrame().includes(text)) {
+				return;
+			}
+		}
+		throw new Error(`The composer never held "${text}".`);
+	};
+
+	/** Types one submission into the composer and sends it. */
+	const submit = async (
+		setup: Awaited<ReturnType<typeof testRender>>,
+		text: string
+	) => {
+		await typePrompt(setup, text);
+		setup.mockInput.pressEnter();
+	};
+
+	/**
+	 * Lets the asynchronous work behind a keypress land before a condition is
+	 * checked, so the wait is about the condition rather than about patience.
+	 */
+	const waitFor = async (
+		setup: Awaited<ReturnType<typeof testRender>>,
+		condition: () => boolean
+	) => {
+		await flushUi(setup);
+		await setup.waitFor(condition);
+	};
+
+	test("holds a prompt entered while the turn is running", async () => {
+		const { release, setup } = await renderBusySessionView();
+		try {
+			await submit(setup, "second prompt");
+
+			// The session accepted it as a Queued Submission instead of running
+			// it, and the composer let the composition go.
+			await waitFor(setup, () => fakeQueuedTexts.length === 1);
+			await flushUi(setup);
+			await flushUi(setup);
+
+			const frame = setup.captureCharFrame();
+			expect(fakeQueuedTexts).toEqual(["second prompt"]);
+			expect(frame).toMatch(QUEUED_COUNT_PATTERN);
+			expect(frame).toContain("Alt+Up");
+			expect(frame.match(/second prompt/gu)).toHaveLength(1);
+		} finally {
+			release.resolve();
+			await flushUi(setup);
+			setup.renderer.destroy();
+		}
+	});
+
+	test("recalls the queue into the composer on Alt+Up", async () => {
+		const { release, setup } = await renderBusySessionView();
+		try {
+			await submit(setup, "second prompt");
+			await waitFor(setup, () => fakeQueuedTexts.length === 1);
+
+			setup.mockInput.pressArrow("up", { meta: true });
+			await waitFor(setup, () => fakeSessionRecalls === 1);
+			await flushUi(setup);
+			await flushUi(setup);
+
+			const frame = setup.captureCharFrame();
+			expect(frame.match(/second prompt/gu)).toHaveLength(1);
+			expect(frame).not.toMatch(QUEUED_COUNT_PATTERN);
+			expect(frame).not.toContain("Alt+Up");
+		} finally {
+			release.resolve();
+			await flushUi(setup);
+			setup.renderer.destroy();
+		}
+	});
+
+	test("recalls only the submission that runs next on Shift+Up", async () => {
+		const { release, setup } = await renderBusySessionView();
+		try {
+			await submit(setup, "first waiting");
+			await waitFor(setup, () => fakeQueuedTexts.length === 1);
+			await submit(setup, "second waiting");
+			await waitFor(setup, () => fakeQueuedTexts.length === 2);
+
+			setup.mockInput.pressArrow("up", { shift: true });
+			await waitFor(setup, () => fakeSessionRecalls === 1);
+			await flushUi(setup);
+			await flushUi(setup);
+
+			// The submission that would have run next is back in the composer,
+			// and the one behind it keeps waiting.
+			expect(fakeQueuedTexts).toEqual(["second waiting"]);
+			expect(setup.captureCharFrame()).toContain("1 queued");
+
+			// Submitting the withdrawn text again joins the tail of the queue,
+			// so the submission that stayed keeps its place.
+			setup.mockInput.pressEnter();
+			await waitFor(setup, () => fakeQueuedTexts.length === 2);
+			expect(fakeQueuedTexts).toEqual(["second waiting", "first waiting"]);
+		} finally {
+			release.resolve();
+			await flushUi(setup);
+			setup.renderer.destroy();
+		}
+	});
+
+	test("empties the queue one submission per Shift+Up, below the draft", async () => {
+		const { release, setup } = await renderBusySessionView();
+		try {
+			await submit(setup, "first waiting");
+			await waitFor(setup, () => fakeQueuedTexts.length === 1);
+			await submit(setup, "second waiting");
+			await waitFor(setup, () => fakeQueuedTexts.length === 2);
+			await typePrompt(setup, "my own draft");
+
+			setup.mockInput.pressArrow("up", { shift: true });
+			await waitFor(setup, () => fakeSessionRecalls === 1);
+			setup.mockInput.pressArrow("up", { shift: true });
+			await waitFor(setup, () => fakeSessionRecalls === 2);
+			await flushUi(setup);
+			await flushUi(setup);
+
+			// Recalling one at a time reaches the whole queue, and the strip goes
+			// with it.
+			expect(fakeQueuedTexts).toEqual([]);
+			const frame = setup.captureCharFrame();
+			expect(frame).not.toMatch(QUEUED_COUNT_PATTERN);
+			expect(frame).not.toContain("Shift+Up");
+
+			// The draft stays on top and each recall lands below the one before
+			// it, so the composer reads in the order the queue would have run.
+			const draftAt = frame.indexOf("my own draft");
+			const firstAt = frame.indexOf("first waiting");
+			const secondAt = frame.indexOf("second waiting");
+			expect(draftAt).toBeGreaterThanOrEqual(0);
+			expect(firstAt).toBeGreaterThan(draftAt);
+			expect(secondAt).toBeGreaterThan(firstAt);
+		} finally {
+			release.resolve();
+			await flushUi(setup);
+			setup.renderer.destroy();
+		}
+	});
+
+	test("restores a recalled composition's attachments and pasted text", async () => {
+		const { release, setup } = await renderBusySessionView();
+		try {
+			const file: SessionFilePart = {
+				filename: "clipboard.png",
+				mediaType: "image/png",
+				type: "file",
+				url: "data:image/png;base64,AAAA",
+			};
+			const composition: SessionSubmissionComposition = {
+				fileTokens: [{ start: 0, token: "[Image 1]" }],
+				files: [file],
+				pastedText: [
+					{
+						text: "pasted line one\npasted line two",
+						token: "[Pasted ~20 lines]",
+					},
+				],
+				text: "[Image 1] [Pasted ~20 lines] explain these",
+			};
+			fakeRecalledPayload = [
+				fromPartial<SessionQueuedSubmission>({
+					id: queuedSubmissionId("queued-recall"),
+					input: { composition, files: [file] },
+				}),
+			];
+
+			setup.mockInput.pressArrow("up", { meta: true });
+			await waitFor(setup, () => fakeSessionRecalls === 1);
+			await flushUi(setup);
+			await flushUi(setup);
+
+			// Both markers are back in the composer, so nothing of the recalled
+			// composition was lost on the way.
+			const recalledFrame = setup.captureCharFrame();
+			expect(recalledFrame).toContain("[Image 1]");
+			expect(recalledFrame).toContain("[Pasted ~20 lines]");
+			expect(recalledFrame).toContain("explain these");
+
+			// Submitting it again carries the same attachments, pasted text, and
+			// visible text the recalled composition held.
+			setup.mockInput.pressEnter();
+			await waitFor(setup, () => fakeQueuedCompositions.length === 1);
+			expect(fakeQueuedCompositions[0]).toEqual(composition);
+		} finally {
+			release.resolve();
+			await flushUi(setup);
+			setup.renderer.destroy();
+		}
+	});
+
+	test("recalls the queue with the fallback binding", async () => {
+		const { release, setup } = await renderBusySessionView();
+		try {
+			await submit(setup, "second prompt");
+			await waitFor(setup, () => fakeQueuedTexts.length === 1);
+
+			// A terminal that cannot deliver Alt+Arrow still reaches Recall.
+			setup.mockInput.pressKey("z", { meta: true });
+			await waitFor(setup, () => fakeSessionRecalls === 1);
+		} finally {
+			release.resolve();
+			await flushUi(setup);
+			setup.renderer.destroy();
+		}
+	});
+
+	test("leaves the queue alone while an overlay is open", async () => {
+		const { commandLayer, release, setup } = await renderBusySessionView();
+		try {
+			await submit(setup, "second prompt");
+			await waitFor(setup, () => fakeQueuedTexts.length === 1);
+			await setup.mockInput.typeText("/");
+			// The overlay renders before its keyboard layer is pushed, so the
+			// test waits for both before pressing a key.
+			await flushUi(setup);
+			await flushUi(setup);
+			expect(setup.captureCharFrame()).toContain("Start a new session");
+			await waitFor(setup, () => commandLayer.isTop);
+
+			setup.mockInput.pressArrow("up", { meta: true });
+			await flushUi(setup);
+			// The command overlay owns the keyboard: Alt+Up recalls nothing, and
+			// the queued submission stays queued.
+			expect(fakeSessionRecalls).toBe(0);
+			expect(fakeQueuedTexts).toEqual(["second prompt"]);
 		} finally {
 			release.resolve();
 			await flushUi(setup);

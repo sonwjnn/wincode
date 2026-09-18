@@ -513,6 +513,10 @@ export const createSessionEngineHost = (
 						purpose: "model",
 						signal,
 					}),
+				release: (attachmentIds) =>
+					getSessionStore().attachmentStore?.release(attachmentIds),
+				retain: (attachmentIds) =>
+					getSessionStore().attachmentStore?.retain(attachmentIds),
 			},
 			commitRecord: (input) => getSessionStore().commitSessionRecord(input),
 			compaction: {

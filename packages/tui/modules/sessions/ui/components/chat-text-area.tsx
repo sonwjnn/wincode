@@ -52,12 +52,14 @@ import { readClipboardImage, readImagePath } from "../../clipboard-image";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import type { TrackedPastedText } from "../../hooks/input-controller/submit";
 import { useChatInputController } from "../../hooks/input-controller/use-chat-input-controller";
+import type { SessionSubmissionComposition } from "../../session-operation";
 import type { ChatPromptSubmission } from "../../utils";
 import { summarizePastedText } from "./pasted-text";
 
 const MAX_IMAGE_ATTACHMENTS = 5;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const EMPTY_PROMPT_HISTORY: PromptHistoryEntry[] = [];
+const EMPTY_RECALLED_SUBMISSIONS: readonly SessionSubmissionComposition[] = [];
 
 const getAttachmentFileTokens = (
 	textarea: TextareaRenderable,
@@ -84,6 +86,10 @@ type ChatTextAreaProps = {
 	disabled?: boolean;
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
+	/** Compositions a Recall returned, oldest first, waiting to enter the composer. */
+	recalledSubmissions?: readonly SessionSubmissionComposition[];
+	/** Changes whenever `recalledSubmissions` holds something new to restore. */
+	recallRevision?: number;
 	sessionPromptHistory?: PromptHistoryEntry[];
 	showCompactCommand?: boolean;
 	onSubmit: (
@@ -133,6 +139,8 @@ export function ChatTextArea({
 	onCompact,
 	onOpenSettings,
 	onSubmit,
+	recalledSubmissions = EMPTY_RECALLED_SUBMISSIONS,
+	recallRevision = 0,
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
 	showCompactCommand = true,
 }: ChatTextAreaProps) {
@@ -148,6 +156,7 @@ export function ChatTextArea({
 	const textAreaRef = useRef<TextareaRenderable>(null);
 	const ctrlCRef = useRef<() => boolean>(() => false);
 	const lastRecalledFilesRevisionRef = useRef(0);
+	const lastRecallRevisionRef = useRef(recallRevision);
 	const lastTextSyncRevisionRef = useRef(0);
 	const programmaticTextRef = useRef<string | null>(null);
 	const onSubmitRef = useRef<() => Promise<void>>(async () => undefined);
@@ -577,6 +586,33 @@ export function ChatTextArea({
 		pastedTextStyleId,
 		state.recalledPastedTexts,
 		state.recalledPastedTextsRevision,
+	]);
+
+	useEffect(() => {
+		const textarea = textAreaRef.current;
+		if (!textarea || lastRecallRevisionRef.current === recallRevision) {
+			return;
+		}
+		lastRecallRevisionRef.current = recallRevision;
+		if (recalledSubmissions.length === 0) {
+			return;
+		}
+		const attachments = syncAttachments();
+		actions.recall(recalledSubmissions, {
+			fileTokens: getAttachmentFileTokens(textarea, attachments),
+			files: attachments.map((attachment) => attachment.file),
+			pastedText: syncPastedTexts().map(({ text, token }) => ({
+				text,
+				token,
+			})),
+			text: textarea.plainText,
+		});
+	}, [
+		actions.recall,
+		recalledSubmissions,
+		recallRevision,
+		syncAttachments,
+		syncPastedTexts,
 	]);
 
 	useEffect(() => {

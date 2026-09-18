@@ -252,6 +252,59 @@ describe("submitPrompt", () => {
 		expect(accepted).toBe(true);
 	});
 
+	test("carries the visible composition into the submission", async () => {
+		const submissions: Array<{
+			composition?: unknown;
+			files: SubmitSnapshot["files"];
+			text: string;
+		}> = [];
+		const files = [
+			{
+				filename: "clipboard.png",
+				mediaType: "image/png",
+				type: "file" as const,
+				url: "data:image/png;base64,AAAA",
+			},
+		];
+
+		const accepted = await submitPrompt(
+			createDependencies({
+				onSubmit: (submission) => {
+					submissions.push(submission);
+				},
+			}),
+			{
+				fileTokens: [{ start: 0, token: "[Image 1]" }],
+				files,
+				pastedTexts: [
+					{
+						end: 27,
+						start: 10,
+						text: "first line\nsecond line",
+						token: "[Pasted ~2 lines]",
+					},
+				],
+				rawText: "[Image 1] [Pasted ~2 lines] explain",
+			}
+		);
+
+		expect(accepted).toBe(true);
+		// The turn runs the expanded prompt; the composition keeps the markers,
+		// the attachments, and the pasted text, so a Recall restores what the
+		// composer showed.
+		expect(submissions[0]?.text).toBe(
+			"[Image 1] first line\nsecond line explain"
+		);
+		expect(submissions[0]?.composition).toEqual({
+			fileTokens: [{ start: 0, token: "[Image 1]" }],
+			files,
+			pastedText: [
+				{ text: "first line\nsecond line", token: "[Pasted ~2 lines]" },
+			],
+			text: "[Image 1] [Pasted ~2 lines] explain",
+		});
+	});
+
 	test("reports an unknown skill instead of submitting its text", async () => {
 		const errors: string[] = [];
 		let calls = 0;

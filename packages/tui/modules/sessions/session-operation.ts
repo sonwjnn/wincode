@@ -11,7 +11,22 @@ import type { SkillContext } from "@wincode/skills";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import type { SessionResolvedAgent } from "./engine/types";
 
-export type SessionSendInput = {
+/**
+ * The visible composition one Submission was composed from: the text the
+ * composer showed (attachment and pasted-text markers included), its
+ * attachments, and the pasted text those markers stand for. A Recall restores
+ * this, so a Queued Submission keeps it unchanged while it waits.
+ */
+export type SessionSubmissionComposition = Readonly<{
+	/** Where each attachment marker sits in `text`, in attachment order. */
+	fileTokens?: readonly { start: number; token: string }[];
+	files: readonly SessionFilePart[];
+	/** The pasted-text summaries in `text`, in the order they appear. */
+	pastedText?: readonly { text: string; token: string }[];
+	text: string;
+}>;
+
+export type SessionSendInput = Readonly<{
 	agent: AgentId;
 	sessionModel: ChatModelSelection;
 	sessionVariant?: ModelVariant;
@@ -22,11 +37,13 @@ export type SessionSendInput = {
 	delegation?: AgentTurnDelegation;
 	/** Prompt to append as a fresh user message. */
 	userText?: string;
-	files?: SessionFilePart[];
+	files?: readonly SessionFilePart[];
 	skill?: SkillContext;
 	/** Existing stored user message to run without appending another message. */
 	messageId?: SessionMessageId;
-};
+	/** The composition this submission was accepted from, when the composer held one. */
+	composition?: SessionSubmissionComposition;
+}>;
 
 export type SessionSendOutcome =
 	| { readonly rejected: false }

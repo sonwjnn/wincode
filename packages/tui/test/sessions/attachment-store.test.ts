@@ -296,6 +296,78 @@ test("collects only unreferenced blobs and reports bytes without content", async
 	expect(await stat(join(root, liveRecord.blobKey))).toBeTruthy();
 });
 
+test("keeps a retained blob through collection until it is released", async () => {
+	const root = await mkdtemp(join(tmpdir(), "wincode-attachments-"));
+	const repository = createRepository();
+	const attachments = createSessionAttachmentStore({
+		now: () => new Date(Date.now() + 1000),
+		repository,
+		root,
+	});
+	const held = await attachments.ingest({
+		bytes: PNG_BYTES,
+		filename: "held.png",
+		mediaType: "image/png",
+	});
+	const record = repository.get(held.attachmentId);
+	if (!record) {
+		throw new Error("held attachment metadata missing");
+	}
+
+	// A queued composition holds the blob, so a collection pass that would
+	// otherwise reclaim it leaves it alone.
+	attachments.retain([held.attachmentId]);
+	const retainedReport = await attachments.collect({
+		liveAttachmentIds: [],
+		safetyWindowMs: 0,
+	});
+	expect(retainedReport.reclaimedCount).toBe(0);
+	expect(repository.get(held.attachmentId)).toBeDefined();
+	expect(await stat(join(root, record.blobKey))).toBeTruthy();
+
+	// Once the composition is gone, the same pass reclaims it.
+	attachments.release([held.attachmentId]);
+	const releasedReport = await attachments.collect({
+		liveAttachmentIds: [],
+		safetyWindowMs: 0,
+	});
+	expect(releasedReport.reclaimedCount).toBe(1);
+	expect(repository.get(held.attachmentId)).toBeUndefined();
+});
+
+test("holds a blob retained twice until both holds are released", async () => {
+	const root = await mkdtemp(join(tmpdir(), "wincode-attachments-"));
+	const repository = createRepository();
+	const attachments = createSessionAttachmentStore({
+		now: () => new Date(Date.now() + 1000),
+		repository,
+		root,
+	});
+	const shared = await attachments.ingest({
+		bytes: PNG_BYTES,
+		filename: "shared.png",
+		mediaType: "image/png",
+	});
+
+	attachments.retain([shared.attachmentId]);
+	attachments.retain([shared.attachmentId]);
+	attachments.release([shared.attachmentId]);
+	const firstRelease = await attachments.collect({
+		liveAttachmentIds: [],
+		safetyWindowMs: 0,
+	});
+	expect(firstRelease.reclaimedCount).toBe(0);
+
+	attachments.release([shared.attachmentId]);
+	// Releasing a blob nothing holds any more changes nothing.
+	attachments.release([shared.attachmentId]);
+	const secondRelease = await attachments.collect({
+		liveAttachmentIds: [],
+		safetyWindowMs: 0,
+	});
+	expect(secondRelease.reclaimedCount).toBe(1);
+});
+
 test("validates magic bytes, size, cancellation, and bounded filenames", async () => {
 	const root = await mkdtemp(join(tmpdir(), "wincode-attachments-"));
 	const attachments = createSessionAttachmentStore({

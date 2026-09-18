@@ -4,6 +4,7 @@ import type { CommandSpec } from "@/modules/commands/commands";
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import type { FileMentionOption } from "@/modules/file-mentions";
 import type { SessionFilePart } from "@/modules/sessions/message";
+import type { SessionSubmissionComposition } from "@/modules/sessions/session-operation";
 import type { ChatPromptSubmission } from "../../utils";
 import type { PromptHistoryEntry } from "./history";
 import type { SubmitSnapshot } from "./submit";
@@ -52,6 +53,15 @@ export type ChatInputControllerActions = {
 		fileTokens: Array<{ start: number; token: string }>
 	) => void;
 	onProgrammaticTextChange: (text: string, cursorOffset: number) => void;
+	/**
+	 * Restores recalled compositions into the composer, oldest first and below
+	 * what the composer already holds. The draft carries the composer's own
+	 * state, because only the textarea knows its attachments and pasted text.
+	 */
+	recall: (
+		entries: readonly SessionSubmissionComposition[],
+		draft: SessionSubmissionComposition
+	) => void;
 	submit: (snapshot: SubmitSnapshot) => Promise<boolean>;
 };
 

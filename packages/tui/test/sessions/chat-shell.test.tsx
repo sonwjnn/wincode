@@ -4,6 +4,7 @@ import {
 	compactionId,
 	toolCallId as makeToolCallId,
 	modelId,
+	queuedSubmissionId,
 	sessionId,
 	sessionMessageId,
 } from "../support/identifiers";
@@ -18,7 +19,11 @@ import { RGBA, type ScrollBoxRenderable } from "@opentui/core";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import { act, useEffect, useState } from "react";
 import type { SessionCompaction } from "@/modules/sessions/compaction";
-import type { SessionMessage } from "@/modules/sessions/message";
+import type { SessionQueuedSubmission } from "@/modules/sessions/engine/types";
+import type {
+	SessionFilePart,
+	SessionMessage,
+} from "@/modules/sessions/message";
 import type { ApprovalPanelEntry } from "@/shared/providers/approval/approval-panels-provider";
 import type {
 	ToolApprovalActions,
@@ -93,6 +98,8 @@ type EditToolPart = Extract<
 >;
 
 const ACTIVE_PROGRESS_REGEX = /■+/u;
+/** The strip's count line, e.g. `2 queued`; the workspace path never has one. */
+const QUEUED_COUNT_PATTERN = /\d+ queued/u;
 const PROGRESS_BAR_REGEX = /[■⬝]{12}/u;
 
 const shellPart = (overrides: Partial<ShellToolPart> = {}): ShellToolPart =>
@@ -171,6 +178,7 @@ type ChatShellProbeProps = {
 	isCompacting?: boolean;
 	isInterruptArmed?: boolean;
 	onRetry?: (messageId: SessionMessageId) => void;
+	queuedSubmissions?: readonly SessionQueuedSubmission[];
 };
 
 function ChatShellProbe({
@@ -181,6 +189,7 @@ function ChatShellProbe({
 	isCompacting: initialIsCompacting = false,
 	isInterruptArmed = false,
 	onRetry,
+	queuedSubmissions,
 }: ChatShellProbeProps) {
 	const { project: projectApprovals } = useApprovalPanels();
 	const [compactions, setCompactions] = useState(initialCompactions);
@@ -208,6 +217,7 @@ function ChatShellProbe({
 			onRetry={onRetry}
 			onSubmit={() => true}
 			promptHistory={[]}
+			queuedSubmissions={queuedSubmissions}
 		/>
 	);
 }
@@ -224,6 +234,7 @@ type ChatShellRenderOptions = {
 	isCompacting?: boolean;
 	isInterruptArmed?: boolean;
 	onRetry?: (messageId: SessionMessageId) => void;
+	queuedSubmissions?: readonly SessionQueuedSubmission[];
 };
 
 const renderChatShell = async (
@@ -236,6 +247,7 @@ const renderChatShell = async (
 		isCompacting = false,
 		isInterruptArmed = false,
 		onRetry,
+		queuedSubmissions,
 	}: ChatShellRenderOptions
 ): Promise<ChatShellSetup> => {
 	const configStore = createConfigStore();
@@ -276,6 +288,7 @@ const renderChatShell = async (
 																isCompacting={isCompacting}
 																isInterruptArmed={isInterruptArmed}
 																onRetry={onRetry}
+																queuedSubmissions={queuedSubmissions}
 															/>
 														</RouterContextProvider>
 													</McpProvider>
@@ -532,6 +545,259 @@ describe("ChatShell approval dock", () => {
 			expect(settledFrame).not.toContain("Permission required");
 			expect(settledFrame).toContain("Ask anything");
 			expect(settledFrame).toContain("tab agents");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+});
+
+describe("ChatShell Submission Queue strip", () => {
+	const imageFile = (filename: string): SessionFilePart =>
+		fromPartial<SessionFilePart>({
+			filename,
+			mediaType: "image/png",
+			type: "file",
+			url: "data:image/png;base64,AAAA",
+		});
+
+	const queuedSubmission = (
+		id: string,
+		text: string,
+		files: SessionFilePart[] = [],
+		fileTokens: Array<{ start: number; token: string }> = [],
+		pastedText: Array<{ text: string; token: string }> = []
+	): SessionQueuedSubmission =>
+		fromPartial<SessionQueuedSubmission>({
+			id: queuedSubmissionId(id),
+			input: {
+				composition: { fileTokens, files, pastedText, text },
+				files,
+			},
+		});
+
+	test("renders nothing while no submission waits", async () => {
+		const { setup } = await renderChatShell([], { height: 12, width: 100 });
+
+		try {
+			await flushUi(setup);
+			const frame = setup.captureCharFrame();
+			expect(frame).not.toMatch(QUEUED_COUNT_PATTERN);
+			expect(frame).not.toContain("Alt+Up");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("names what waits and how to recall it", async () => {
+		const { setup } = await renderChatShell([], {
+			height: 16,
+			queuedSubmissions: [
+				queuedSubmission("queued-1", "rewrite the loader"),
+				queuedSubmission("queued-2", "then run the tests"),
+			],
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain("2 queued");
+			expect(frame).toContain("rewrite the loader");
+			expect(frame).toContain("then run the tests");
+			expect(frame).toContain("Shift+Up");
+			expect(frame).toContain("next");
+			expect(frame).toContain("Alt+Up");
+			expect(frame).toContain("all");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("marks the submission that the next Recall takes back", async () => {
+		const { setup } = await renderChatShell([], {
+			height: 16,
+			queuedSubmissions: [
+				queuedSubmission("queued-1", "rewrite the loader"),
+				queuedSubmission("queued-2", "then run the tests"),
+			],
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const frame = setup.captureCharFrame();
+			// The oldest waiting submission runs next, so it wears the marker and
+			// the one behind it does not.
+			expect(frame).toContain("▸ rewrite the loader");
+			expect(frame).not.toContain("▸ then run the tests");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("renders a marker-only submission as what the composer showed", async () => {
+		const { setup } = await renderChatShell([], {
+			height: 16,
+			queuedSubmissions: [
+				queuedSubmission(
+					"queued-1",
+					"[Pasted ~20 lines]",
+					[],
+					[],
+					[{ text: "line 1\nline 2", token: "[Pasted ~20 lines]" }]
+				),
+			],
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain("[Pasted ~20 lines]");
+			expect(frame).not.toContain("0 files");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("keeps a submission with line breaks on one line", async () => {
+		const { setup } = await renderChatShell([], {
+			height: 16,
+			queuedSubmissions: [
+				queuedSubmission("queued-1", "first line\nsecond line\nthird line"),
+			],
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain("first line second line third line");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("renders every queued item without a visible cap", async () => {
+		const { setup } = await renderChatShell([], {
+			height: 18,
+			queuedSubmissions: [
+				queuedSubmission("queued-1", "first waiting"),
+				queuedSubmission("queued-2", "second waiting"),
+				queuedSubmission("queued-3", "third waiting"),
+				queuedSubmission("queued-4", "fourth waiting"),
+				queuedSubmission("queued-5", "fifth waiting"),
+			],
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain("5 queued");
+			for (const text of [
+				"first waiting",
+				"second waiting",
+				"third waiting",
+				"fourth waiting",
+				"fifth waiting",
+			]) {
+				expect(frame).toContain(text);
+			}
+			expect(frame).not.toContain("+2");
+			expect(frame).not.toContain("+3");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("renders an attachment-only submission as its attachments", async () => {
+		const { setup } = await renderChatShell([], {
+			height: 16,
+			queuedSubmissions: [
+				queuedSubmission(
+					"queued-1",
+					"[Image 1]",
+					[imageFile("clipboard.png")],
+					[{ start: 0, token: "[Image 1]" }]
+				),
+				queuedSubmission("queued-2", "", [
+					imageFile("first.png"),
+					imageFile("second.png"),
+				]),
+			],
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain("1 image");
+			expect(frame).toContain("2 files");
+			expect(frame).not.toContain("[Image 1]");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("truncates a long submission to one line", async () => {
+		const { setup } = await renderChatShell([], {
+			height: 14,
+			queuedSubmissions: [
+				queuedSubmission("queued-1", `${"long ".repeat(40)}tail`),
+			],
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain("long long");
+			expect(frame).toContain("…");
+			expect(frame).not.toContain("tail");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("stays visible above the pending approval dock", async () => {
+		const { holder, setup } = await renderChatShell([], {
+			height: 20,
+			queuedSubmissions: [queuedSubmission("queued-1", "waiting prompt")],
+			width: 120,
+		});
+
+		try {
+			await flushUi(setup);
+			const request: ToolApprovalRequest = {
+				description: "Approval owed.",
+				identity: [{ label: "tool", value: "shell" }],
+				input: { command: "pwd" },
+				toolCallId: makeToolCallId("call-approval-queued"),
+			};
+			await act(async () => {
+				holder.current?.projectApprovals([
+					approvalPanelEntry(request, {
+						actions: {
+							abort: () => undefined,
+							allow: () => undefined,
+							cancel: () => undefined,
+							reject: () => undefined,
+						},
+					}),
+				]);
+			});
+			await flushUi(setup);
+
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain("1 queued");
+			expect(frame).toContain("waiting prompt");
+			expect(frame).toContain("Permission required");
+			// The strip sits between the Session Transcript and the dock, so an
+			// approval never hides waiting work.
+			expect(frame.indexOf("waiting prompt")).toBeLessThan(
+				frame.indexOf("Permission required")
+			);
 		} finally {
 			setup.renderer.destroy();
 		}

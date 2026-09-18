@@ -146,11 +146,16 @@ const {
 	renderSession,
 	seedCompactionHistory,
 	settleSessionUi,
+	waitForSessionCondition,
 	writeE2EFrame,
 } = await import("@/test/support/e2e-fixture");
 
 const store = createE2eStore();
 const { messages, sessionId } = await seedCompactionHistory(store);
+
+const waitForChatRequestCount = async (count: number): Promise<void> => {
+	await waitForSessionCondition(() => chatRequests().length >= count);
+};
 
 const chatRequests = () =>
 	recorder.requests.filter((request) => request.kind === "chat");
@@ -180,9 +185,8 @@ test("compacts and replays the prompt after a provider context overflow", async 
 
 		// The refused turn proposes the recovery, which compacts the replay-safe
 		// history before it replays the prompt.
-		await activeSetup.waitFor(
-			async () => (await store.getCompactions(sessionId)).length > 0,
-			{ maxPasses: 600 }
+		await waitForSessionCondition(
+			async () => (await store.getCompactions(sessionId)).length > 0
 		);
 		const compactions = await store.getCompactions(sessionId);
 		expect(compactions).toHaveLength(1);
@@ -193,15 +197,14 @@ test("compacts and replays the prompt after a provider context overflow", async 
 		expect(entry.trigger).toBe("overflow");
 		expect(entry.summary.text).toBe(recorder.summaryText);
 
-		// The replay runs the same user message again on the compacted context.
-		await activeSetup.waitFor(() => chatRequests().length > 1, {
-			maxPasses: 200,
-		});
+		// The replay runs outside the renderer scheduler, so poll its recorder
+		// signal before waiting for the response frame.
+		await waitForChatRequestCount(2);
 		await settleSessionUi(activeSetup);
 		await act(async () => {
 			await activeSetup.waitForFrame(
 				(frame) => frame.includes("E2E chat response"),
-				{ maxPasses: 200 }
+				{ maxPasses: 600 }
 			);
 		});
 
