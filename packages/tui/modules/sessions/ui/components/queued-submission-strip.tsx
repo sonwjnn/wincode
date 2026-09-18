@@ -8,6 +8,8 @@ import type { SessionSubmissionComposition } from "../../session-operation";
 const MAX_VISIBLE_SUBMISSIONS = 3;
 /** How much of one waiting submission fits on its line. */
 const MAX_ITEM_CHARS = 80;
+/** Marks the submission that the next Recall takes back. */
+const NEXT_MARKER = "▸";
 /** Line breaks and runs of spaces in a composition become one space. */
 const WHITESPACE_RUN = /\s+/gu;
 
@@ -59,8 +61,9 @@ const describeSubmission = (
 
 /**
  * What is waiting on the Submission Queue: the count, one line per waiting
- * submission, and the key that recalls them. It renders nothing while nothing
- * waits, so the composer never carries an empty affordance.
+ * submission with the next one marked, and the keys that recall them. It
+ * renders nothing while nothing waits, so the composer never carries an empty
+ * affordance.
  */
 export function QueuedSubmissionStrip({
 	submissions,
@@ -80,25 +83,38 @@ export function QueuedSubmissionStrip({
 					{`${submissions.length} queued`}
 				</text>
 				<box flexDirection="row" flexShrink={0} gap={1} marginLeft="auto">
+					<text fg={colors.text}>Shift+Up</text>
+					<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+						next
+					</text>
+					<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+						·
+					</text>
 					<text fg={colors.text}>Alt+Up</text>
 					<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-						edit
+						all
 					</text>
 				</box>
 			</box>
-			{visible.map((submission) => (
-				<text
-					attributes={TextAttributes.DIM}
-					fg={colors.textMuted}
-					key={submission.id}
-					truncate
-				>
-					{truncateWithOverflow(
-						describeSubmission(submission.input.composition),
-						MAX_ITEM_CHARS
-					)}
-				</text>
-			))}
+			{visible.map((submission, index) => {
+				// The oldest waiting submission is the one that runs next, so it
+				// is the one the next Recall takes back.
+				const isNext = index === 0;
+				const label = truncateWithOverflow(
+					describeSubmission(submission.input.composition),
+					isNext ? MAX_ITEM_CHARS - NEXT_MARKER.length - 1 : MAX_ITEM_CHARS
+				);
+				return (
+					<text
+						attributes={isNext ? TextAttributes.NONE : TextAttributes.DIM}
+						fg={isNext ? colors.text : colors.textMuted}
+						key={submission.id}
+						truncate
+					>
+						{isNext ? `${NEXT_MARKER} ${label}` : label}
+					</text>
+				);
+			})}
 			{hidden > 0 ? (
 				<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 					{`+${hidden}`}

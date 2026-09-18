@@ -1,4 +1,4 @@
-import { isNull } from "@wincode/runtime-utils";
+import { isNull, isUndefined } from "@wincode/runtime-utils";
 
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
@@ -24,6 +24,7 @@ import type {
 	SessionSendInput,
 	SessionSubmissionComposition,
 } from "@/modules/sessions/session-operation";
+import type { QueuedSubmissionId } from "@/shared/identifiers";
 import {
 	agentId,
 	queuedSubmissionId,
@@ -152,14 +153,31 @@ mock.module("@/modules/sessions/hooks/use-session-engine", () => ({
 			setTurnActive(false);
 			return { rejected: false as const };
 		}, []);
-		const recallQueuedSubmissions = useCallback(() => {
-			const recalled = fakeRecalledPayload ?? waiting.current;
-			fakeSessionRecalls += 1;
-			fakeQueuedTexts = [];
-			fakeQueuedCompositions = [];
-			setQueuedSubmissions([]);
-			return recalled;
-		}, []);
+		const recallQueuedSubmissions = useCallback(
+			(ids?: readonly QueuedSubmissionId[]) => {
+				// The fake keeps what the real Engine keeps, so a recall of one
+				// submission leaves the others in the queue and in its records.
+				const queue = fakeRecalledPayload ?? waiting.current;
+				const recalled = isUndefined(ids)
+					? queue
+					: queue.filter((submission) => ids.includes(submission.id));
+				if (recalled.length === 0) {
+					return [];
+				}
+				const recalledIds = new Set(recalled.map(({ id }) => id));
+				const remaining = waiting.current.filter(
+					(submission) => !recalledIds.has(submission.id)
+				);
+				fakeSessionRecalls += 1;
+				fakeQueuedCompositions = remaining.map(
+					({ input }) => input.composition
+				);
+				fakeQueuedTexts = remaining.map(({ input }) => input.composition.text);
+				setQueuedSubmissions(remaining);
+				return recalled;
+			},
+			[]
+		);
 		return {
 			cancel: () => undefined,
 			cancelCompaction: () => [],
@@ -651,6 +669,64 @@ describe("SessionView Submission Queue", () => {
 			expect(frame.match(/second prompt/gu)).toHaveLength(1);
 			expect(frame).not.toMatch(QUEUED_COUNT_PATTERN);
 			expect(frame).not.toContain("Alt+Up");
+		} finally {
+			release.resolve();
+			await flushUi(setup);
+			setup.renderer.destroy();
+		}
+	});
+
+	test("recalls only the submission that runs next on Shift+Up", async () => {
+		const { release, setup } = await renderBusySessionView();
+		try {
+			await submit(setup, "first waiting");
+			await waitFor(setup, () => fakeQueuedTexts.length === 1);
+			await submit(setup, "second waiting");
+			await waitFor(setup, () => fakeQueuedTexts.length === 2);
+
+			setup.mockInput.pressArrow("up", { shift: true });
+			await waitFor(setup, () => fakeSessionRecalls === 1);
+			await flushUi(setup);
+			await flushUi(setup);
+
+			// The submission that would have run next is back in the composer,
+			// and the one behind it keeps waiting.
+			expect(fakeQueuedTexts).toEqual(["second waiting"]);
+			expect(setup.captureCharFrame()).toContain("1 queued");
+
+			// Submitting the withdrawn text again joins the tail of the queue,
+			// so the submission that stayed keeps its place.
+			setup.mockInput.pressEnter();
+			await waitFor(setup, () => fakeQueuedTexts.length === 2);
+			expect(fakeQueuedTexts).toEqual(["second waiting", "first waiting"]);
+		} finally {
+			release.resolve();
+			await flushUi(setup);
+			setup.renderer.destroy();
+		}
+	});
+
+	test("empties the queue one submission per Shift+Up", async () => {
+		const { release, setup } = await renderBusySessionView();
+		try {
+			await submit(setup, "first waiting");
+			await waitFor(setup, () => fakeQueuedTexts.length === 1);
+			await submit(setup, "second waiting");
+			await waitFor(setup, () => fakeQueuedTexts.length === 2);
+
+			setup.mockInput.pressArrow("up", { shift: true });
+			await waitFor(setup, () => fakeSessionRecalls === 1);
+			setup.mockInput.pressArrow("up", { shift: true });
+			await waitFor(setup, () => fakeSessionRecalls === 2);
+			await flushUi(setup);
+			await flushUi(setup);
+
+			// Recalling one at a time reaches the whole queue, and the strip goes
+			// with it.
+			expect(fakeQueuedTexts).toEqual([]);
+			const frame = setup.captureCharFrame();
+			expect(frame).not.toMatch(QUEUED_COUNT_PATTERN);
+			expect(frame).not.toContain("Shift+Up");
 		} finally {
 			release.resolve();
 			await flushUi(setup);

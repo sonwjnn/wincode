@@ -36,7 +36,11 @@ exception, and so is cancelling a compaction: both recall the queue to the
 composer instead of draining it, so stopping work always hands the waiting text
 back. Recalling a queued submission returns the composition it was accepted with,
 including the Model Target selection it will run against, and releases the
-attachment blobs the Engine held for it while it waited.
+attachment blobs the Engine held for it while it waited. Recall answers to two
+gestures: `Alt+Up` (`Alt+Z` where a terminal cannot deliver Alt+Arrow) takes the
+whole queue, and `Shift+Up` takes only the submission that runs next — the rest
+keep waiting and draining, and resubmitting a withdrawn one joins the tail of
+the queue like any other send.
 
 The Agent Runtime consumer lives with the Agent Turn it consumes
 (`hooks/runtime-turn.ts`), and the CLI projects its events into its OpenTUI

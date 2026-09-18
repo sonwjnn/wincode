@@ -75,6 +75,14 @@ type SessionSelectionInput = {
 	variant?: ModelVariant;
 };
 
+type RecallKeyEvent = {
+	meta: boolean;
+	name: string;
+	option: boolean;
+	preventDefault: () => void;
+	shift: boolean;
+};
+
 const resolveInitialSessionSelection = ({
 	agent,
 	initialMessage,
@@ -257,16 +265,36 @@ export function SessionView({
 			interruptResetTimeoutRef.current = null;
 		}, INTERRUPT_CONFIRMATION_TIMEOUT_MS);
 	};
-	useKeyboard((key) => {
-		if (!isTopLayer("base")) {
-			return;
-		}
+	/**
+	 * The keyboard's Recall. `Alt` takes the whole queue; `Shift` takes only the
+	 * submission that runs next, so the ones behind it keep draining. Reports
+	 * whether the key was a Recall gesture.
+	 */
+	const handleRecallKey = (key: RecallKeyEvent): boolean => {
 		// Terminals encode Alt differently: a modified arrow arrives as a CSI
 		// sequence (`option`), an Alt+letter as an escape prefix (`meta`). Recall
 		// answers to either, so no terminal loses the binding.
 		if ((key.option || key.meta) && (key.name === "up" || key.name === "z")) {
 			key.preventDefault();
 			recallIntoComposer(recallQueuedSubmissions());
+			return true;
+		}
+		if (!(key.shift && key.name === "up")) {
+			return false;
+		}
+		key.preventDefault();
+		const next = snapshot.queuedSubmissions[0];
+		if (!isUndefined(next)) {
+			recallIntoComposer(recallQueuedSubmissions([next.id]));
+		}
+		return true;
+	};
+
+	useKeyboard((key) => {
+		if (!isTopLayer("base")) {
+			return;
+		}
+		if (handleRecallKey(key)) {
 			return;
 		}
 		if (key.name === "escape") {

@@ -604,8 +604,32 @@ describe("ChatShell Submission Queue strip", () => {
 			expect(frame).toContain("2 queued");
 			expect(frame).toContain("rewrite the loader");
 			expect(frame).toContain("then run the tests");
+			expect(frame).toContain("Shift+Up");
+			expect(frame).toContain("next");
 			expect(frame).toContain("Alt+Up");
-			expect(frame).toContain("edit");
+			expect(frame).toContain("all");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("marks the submission that the next Recall takes back", async () => {
+		const { setup } = await renderChatShell([], {
+			height: 16,
+			queuedSubmissions: [
+				queuedSubmission("queued-1", "rewrite the loader"),
+				queuedSubmission("queued-2", "then run the tests"),
+			],
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const frame = setup.captureCharFrame();
+			// The oldest waiting submission runs next, so it wears the marker and
+			// the one behind it does not.
+			expect(frame).toContain("▸ rewrite the loader");
+			expect(frame).not.toContain("▸ then run the tests");
 		} finally {
 			setup.renderer.destroy();
 		}
