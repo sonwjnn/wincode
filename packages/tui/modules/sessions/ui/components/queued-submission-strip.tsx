@@ -1,6 +1,5 @@
 import { truncateWithOverflow } from "@/shared/display-sanitize";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import type { SessionQueuedSubmission } from "../../engine/types";
 import type { SessionSubmissionComposition } from "../../session-operation";
@@ -74,7 +73,7 @@ const describeStripLine = (
 };
 
 /**
- * The live Submission Queue: a themed panel with one line per waiting
+ * The live Submission Queue: a transparent strip with one line per waiting
  * submission. The next item is marked so the two Recall gestures have a clear
  * target. The list scrolls when it grows beyond the available footer space, so
  * no queued item is discarded and the composer remains reachable.
@@ -89,14 +88,13 @@ export function QueuedSubmissionStrip({
 		return null;
 	}
 	return (
-		<BorderedContentBlock
-			borderColor={colors.borderActive}
-			colors={colors}
-			contentBackgroundColor={colors.backgroundPanel}
-			contentGap={0}
-			marginBottom={0}
+		<box
+			backgroundColor="transparent"
+			flexDirection="column"
+			flexShrink={0}
 			paddingX={1}
 			paddingY={1}
+			width="100%"
 		>
 			<box
 				alignItems="center"
@@ -147,6 +145,6 @@ export function QueuedSubmissionStrip({
 					);
 				})}
 			</scrollbox>
-		</BorderedContentBlock>
+		</box>
 	);
 }
