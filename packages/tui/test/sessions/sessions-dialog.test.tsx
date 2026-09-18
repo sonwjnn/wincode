@@ -47,6 +47,7 @@ const sessionStore = fromPartial<SessionStore>({
 	deleteSession: mock(async (sessionId: string) => {
 		deletedSessionIds.push(sessionId);
 	}),
+	getPromptHistory: mock(async () => []),
 	listSessions: mock(async () => sessions),
 });
 await mock.module(
