@@ -19,8 +19,10 @@ import {
 	isCompactionSummaryMessage,
 	type SessionCompaction,
 } from "../../compaction";
+import type { SessionQueuedSubmission } from "../../engine/types";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import type { SessionViewState } from "../../hooks/runtime-turn";
+import type { SessionSubmissionComposition } from "../../session-operation";
 import { summarizeSessionUsage } from "../../usage/session-usage";
 import type { ChatPromptSubmission } from "../../utils";
 import { ErrorMessage } from "../messages";
@@ -34,7 +36,10 @@ import {
 } from "./chat-turns";
 import { CompactionDivider } from "./compaction-divider";
 import { CompactionStatus } from "./compaction-status";
+import { QueuedSubmissionStrip } from "./queued-submission-strip";
 import { SessionUsageBar } from "./session-usage-bar";
+
+const EMPTY_QUEUED_SUBMISSIONS: readonly SessionQueuedSubmission[] = [];
 
 type ChatShellProps = {
 	activeMessages?: readonly SessionMessage[];
@@ -51,6 +56,12 @@ type ChatShellProps = {
 	onSubmit: (
 		submission: ChatPromptSubmission
 	) => boolean | Promise<boolean> | undefined;
+	/** Waiting submissions, oldest first; the strip shows them while they wait. */
+	queuedSubmissions?: readonly SessionQueuedSubmission[];
+	/** Compositions a Recall returned, waiting to enter the composer. */
+	recalledSubmissions?: readonly SessionSubmissionComposition[];
+	/** Changes whenever `recalledSubmissions` holds something new to restore. */
+	recallRevision?: number;
 	viewState?: SessionViewState;
 };
 function ActivityFooter({
@@ -118,6 +129,9 @@ export function ChatShell({
 	onRetry,
 	promptHistory,
 	onSubmit,
+	queuedSubmissions = EMPTY_QUEUED_SUBMISSIONS,
+	recalledSubmissions,
+	recallRevision,
 	viewState,
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
@@ -252,6 +266,7 @@ export function ChatShell({
 				paddingY={1}
 				width="100%"
 			>
+				<QueuedSubmissionStrip submissions={queuedSubmissions} />
 				{hasPendingApproval ? (
 					// The pending dock replaces the composer AND the session
 					// footer row while a decision is owed.
@@ -265,6 +280,8 @@ export function ChatShell({
 								onCompact={onCompact}
 								onOpenSettings={onOpenSettings}
 								onSubmit={handleSubmit}
+								recalledSubmissions={recalledSubmissions}
+								recallRevision={recallRevision}
 								sessionPromptHistory={promptHistory}
 							/>
 						</box>

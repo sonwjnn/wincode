@@ -13,6 +13,7 @@ import type { ModelId, SupportedChatModelId } from "@wincode/ai/models";
 import type {
 	CompactionId,
 	McpSnapshotId,
+	QueuedSubmissionId,
 	SessionId,
 } from "@/shared/identifiers";
 
@@ -46,6 +47,10 @@ export const modelStepId = <const Value extends string>(
 export const mcpSnapshotId = <const Value extends string>(
 	value: Value
 ): Value & McpSnapshotId => value as Value & McpSnapshotId;
+
+export const queuedSubmissionId = <const Value extends string>(
+	value: Value
+): Value & QueuedSubmissionId => value as Value & QueuedSubmissionId;
 
 export const sessionId = <const Value extends string>(
 	value: Value

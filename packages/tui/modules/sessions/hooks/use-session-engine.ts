@@ -16,6 +16,7 @@ import { useCompactionSettings } from "@/modules/sessions/compaction/use-compact
 import { createSessionEngine } from "@/modules/sessions/engine/session-engine";
 import type {
 	SessionEngine,
+	SessionQueuedSubmission,
 	SessionSnapshot,
 } from "@/modules/sessions/engine/types";
 import { createSessionEngineHost } from "@/modules/sessions/hooks/session-engine-host";
@@ -27,22 +28,26 @@ import type {
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import { useConfig } from "@/shared/config/config-provider";
 import { useLatest } from "@/shared/hooks/use-latest";
-import type { SessionId } from "@/shared/identifiers";
+import type { QueuedSubmissionId, SessionId } from "@/shared/identifiers";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
 
 export type SessionEngineBinding = Readonly<{
 	/** Cancels the Agent Turn the session is running. */
 	cancel: () => void;
-	/** Aborts the compaction command in flight. */
-	cancelCompaction: () => void;
+	/** Aborts the compaction command in flight and recalls the queue with it. */
+	cancelCompaction: () => SessionQueuedSubmission[];
 	/** Runs a manual compaction command against one Model Target. */
 	compact: (
 		focus: string | undefined,
 		selection: ChatModelSelection,
 		selectionVariant?: ModelVariant
 	) => Promise<CompactSessionResult>;
-	/** Interrupts the Agent Turn the session is running. */
-	interrupt: (preserveToolCallId?: ToolCallId) => void;
+	/** Interrupts the Agent Turn the session is running and recalls the queue. */
+	interrupt: (preserveToolCallId?: ToolCallId) => SessionQueuedSubmission[];
+	/** Withdraws the Queue Submissions for the composer, oldest first. */
+	recallQueuedSubmissions: (
+		ids?: readonly QueuedSubmissionId[]
+	) => SessionQueuedSubmission[];
 	/** Sends one submission as a Session Command. */
 	send: (input: SessionSendInput) => Promise<SessionSendOutcome>;
 	/** The session facts the view renders at one moment. */
@@ -166,6 +171,7 @@ export function useSessionEngine(
 		cancelCompaction: engine.cancelCompaction,
 		compact,
 		interrupt: engine.interrupt,
+		recallQueuedSubmissions: engine.recallQueuedSubmissions,
 		send: engine.send,
 		snapshot,
 	};

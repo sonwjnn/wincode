@@ -23,6 +23,7 @@ import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import type { SessionCompaction } from "../../compaction";
+import type { SessionQueuedSubmission } from "../../engine/types";
 import { isSessionBusy } from "../../engine/utils";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
 import { useSessionEngine } from "../../hooks/use-session-engine";
@@ -30,7 +31,10 @@ import {
 	type ResolvedSessionSelection,
 	resolveSessionSelection,
 } from "../../selection";
-import type { SessionSendInput as SessionOperationSendInput } from "../../session-operation";
+import type {
+	SessionSendInput as SessionOperationSendInput,
+	SessionSubmissionComposition,
+} from "../../session-operation";
 import type { ChatPromptSubmission } from "../../utils";
 import { ChatShell } from "../components/chat-shell";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
@@ -143,13 +147,35 @@ export function SessionView({
 	const [restoredMessages, setRestoredMessages] = useState<
 		SessionMessage[] | null
 	>(null);
-	const { cancelCompaction, compact, interrupt, send, snapshot } =
-		useSessionEngine(
-			sessionId,
-			initialTranscript,
-			initialContext,
-			initialCompactions
-		);
+	const [recalledSubmissions, setRecalledSubmissions] = useState<
+		readonly SessionSubmissionComposition[]
+	>([]);
+	const [recallRevision, setRecallRevision] = useState(0);
+	const {
+		cancelCompaction,
+		compact,
+		interrupt,
+		recallQueuedSubmissions,
+		send,
+		snapshot,
+	} = useSessionEngine(
+		sessionId,
+		initialTranscript,
+		initialContext,
+		initialCompactions
+	);
+	/**
+	 * Hands recalled submissions to the composer. A Recall that returns
+	 * nothing — an empty queue, or submissions that already started running —
+	 * changes nothing.
+	 */
+	const recallIntoComposer = (recalled: readonly SessionQueuedSubmission[]) => {
+		if (recalled.length === 0) {
+			return;
+		}
+		setRecalledSubmissions(recalled.map(({ input }) => input.composition));
+		setRecallRevision((revision) => revision + 1);
+	};
 	const activeMessages = snapshot.context;
 	const messages = snapshot.transcript;
 	const error = snapshot.compactionError ?? snapshot.error;
@@ -216,7 +242,7 @@ export function SessionView({
 
 			interruptArmedRef.current = false;
 			setIsInterruptArmed(false);
-			interrupt();
+			recallIntoComposer(interrupt());
 			return;
 		}
 
@@ -235,10 +261,18 @@ export function SessionView({
 		if (!isTopLayer("base")) {
 			return;
 		}
+		// Terminals encode Alt differently: a modified arrow arrives as a CSI
+		// sequence (`option`), an Alt+letter as an escape prefix (`meta`). Recall
+		// answers to either, so no terminal loses the binding.
+		if ((key.option || key.meta) && (key.name === "up" || key.name === "z")) {
+			key.preventDefault();
+			recallIntoComposer(recallQueuedSubmissions());
+			return;
+		}
 		if (key.name === "escape") {
 			if (snapshot.isCompacting) {
 				key.preventDefault();
-				cancelCompaction();
+				recallIntoComposer(cancelCompaction());
 				return;
 			}
 			if (!isBusy) {
@@ -319,12 +353,12 @@ export function SessionView({
 		runManualCompaction(focus);
 
 	const submitMessage = async (submission: ChatPromptSubmission) => {
-		const { files, text, skill } = submission;
+		const { composition, files, text, skill } = submission;
 		const userText = text.trim();
 		if (text.trim().length === 0 && files.length === 0 && isUndefined(skill)) {
 			return false;
 		}
-		if (isBusy || isNull(registry) || !isPromptConfigRestored) {
+		if (isNull(registry) || !isPromptConfigRestored) {
 			return false;
 		}
 
@@ -335,11 +369,13 @@ export function SessionView({
 			variant
 		);
 		// `send` resolves when the full turn completes; the composer should reset
-		// as soon as this session accepts the new send.
+		// as soon as this session accepts the new send, and a busy session accepts
+		// it as a Queued Submission.
 		void send({
 			agent: effective.agent,
 			sessionModel: model,
 			sessionVariant: variant,
+			composition,
 			files,
 			model: effective.model,
 			resolvedAgent: effective.resolvedAgent,
@@ -506,6 +542,9 @@ export function SessionView({
 					onRetry={retryMessage}
 					onSubmit={submitMessage}
 					promptHistory={promptHistory}
+					queuedSubmissions={snapshot.queuedSubmissions}
+					recalledSubmissions={recalledSubmissions}
+					recallRevision={recallRevision}
 					viewState={snapshot.viewState}
 				/>
 			</box>

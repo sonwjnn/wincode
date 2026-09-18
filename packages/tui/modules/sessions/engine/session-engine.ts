@@ -12,6 +12,10 @@ import {
 	isUndefined,
 	omitUndefined,
 } from "@wincode/runtime-utils";
+import {
+	type QueuedSubmissionId,
+	toQueuedSubmissionId,
+} from "@/shared/identifiers";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import type {
 	CompactSessionInput,
@@ -24,7 +28,16 @@ import {
 } from "../compaction/overflow-recovery";
 import { isCompactionSummaryMessage } from "../compaction/summary-message";
 import type { SessionCompaction } from "../compaction/types";
-import type { SessionMessage } from "../message";
+import {
+	createSessionUserMessage,
+	type SessionFilePart,
+	type SessionMessage,
+} from "../message";
+import type {
+	SessionSendInput,
+	SessionSendOutcome,
+	SessionSubmissionComposition,
+} from "../session-operation";
 import { createSessionOperation } from "../session-operation";
 import {
 	createSubmissionPipeline,
@@ -43,6 +56,8 @@ import type {
 	SessionOverflowRecoveryOutcome,
 	SessionOverflowRecoveryTarget,
 	SessionOverflowReplayOutcome,
+	SessionQueuedSendInput,
+	SessionQueuedSubmission,
 	SessionSnapshot,
 	SessionViewState,
 } from "./types";
@@ -50,6 +65,20 @@ import { exposedViewState, hasChanged, primaryEntry } from "./utils";
 
 /** The deadline one Agent Turn submission runs with. */
 const AGENT_TURN_DEADLINE_MS = 43_200_000;
+
+/** The reason a submission that arrives after the session ended is refused. */
+const SHUT_DOWN_SEND_ERROR = "The session has ended.";
+
+/** The reason a queued submission's attachments could not be kept. */
+const QUEUED_ATTACHMENT_ERROR = "Attachment data could not be stored.";
+
+/** The attachment blobs one queued composition holds. */
+const queuedAttachmentIds = ({
+	composition,
+}: SessionQueuedSendInput): string[] =>
+	composition.files.flatMap(({ attachmentId }) =>
+		isUndefined(attachmentId) ? [] : [attachmentId]
+	);
 
 /**
  * The single owner of one session's live state and the only writer to it.
@@ -72,6 +101,7 @@ export const createSessionEngine = ({
 		error: null,
 		executions: [],
 		isCompacting: false,
+		queuedSubmissions: [],
 		transcript: [...initialTranscript],
 		turnActive: false,
 		viewState: undefined,
@@ -114,6 +144,14 @@ export const createSessionEngine = ({
 	const executionEndWaiters = new Map<AgentTurnId, (() => void)[]>();
 	let approvalCounter = 0;
 	let isShutDown = false;
+	/**
+	 * Whether the send lane is occupied. `turnActive` publishes the same fact
+	 * once the pipeline starts, but the lane is taken a microtask earlier, and
+	 * a submission that arrives in that gap must queue rather than race it.
+	 */
+	let submissionActive = false;
+	/** Whether the drain loop is walking the Submission Queue. */
+	let draining = false;
 	const publish = (changes: Partial<SessionSnapshot>): void => {
 		if (!hasChanged(state, changes)) {
 			return;
@@ -311,6 +349,9 @@ export const createSessionEngine = ({
 					compactionCommand = undefined;
 					setCompacting(false);
 				}
+				// A submission that arrived while this compaction held the lane
+				// runs as soon as it no longer does.
+				void drainQueuedSubmissions();
 			}
 		})();
 		return promise;
@@ -568,7 +609,6 @@ export const createSessionEngine = ({
 		mergeTranscript(next);
 	};
 
-	const cancelCompaction = (): void => compactionCommand?.abort();
 	let pipeline: SubmissionPipeline;
 	const operation = createSessionOperation({
 		deadlineMs: AGENT_TURN_DEADLINE_MS,
@@ -577,7 +617,7 @@ export const createSessionEngine = ({
 				return sessionSendCancelled(signal);
 			}
 			const stop = (): void => {
-				cancelCompaction();
+				compactionCommand?.abort();
 				closeApprovals();
 			};
 			signal.addEventListener("abort", stop, { once: true });
@@ -617,6 +657,179 @@ export const createSessionEngine = ({
 		settleCompaction,
 	});
 
+	/**
+	 * Runs one submission on the send lane and holds it until its Agent Turn
+	 * settles, so no second submission can start beside it.
+	 */
+	const runSubmission = async (
+		input: SessionSendInput
+	): Promise<SessionSendOutcome> => {
+		submissionActive = true;
+		try {
+			return await operation.send(input);
+		} finally {
+			submissionActive = false;
+		}
+	};
+	/** Releases the blobs of compositions nothing holds any more. */
+	const releaseQueuedAttachments = (
+		submissions: readonly SessionQueuedSubmission[]
+	): void => {
+		const attachmentIds = submissions.flatMap(({ input }) =>
+			queuedAttachmentIds(input)
+		);
+		if (attachmentIds.length > 0) {
+			ports.attachments.release(attachmentIds);
+		}
+	};
+	/**
+	 * Stores a composition's attachments, so a queued wait cannot outlive the
+	 * blobs it still shows.
+	 */
+	const storeCompositionFiles = async (
+		files: readonly SessionFilePart[]
+	): Promise<SessionFilePart[]> => {
+		if (files.every((file) => !isUndefined(file.attachmentId))) {
+			return [...files];
+		}
+		const [stored] = await ports.attachments.externalize(
+			[createSessionUserMessage("", undefined, [], [...files])],
+			new AbortController().signal
+		);
+		return (stored?.parts ?? []).filter(
+			(part): part is SessionFilePart => part.type === "file"
+		);
+	};
+	/**
+	 * Runs queued submissions one Agent Turn at a time, oldest first, until the
+	 * queue is empty. It never overlaps the lane: while a submission runs, or
+	 * while the queue is already being walked, this does nothing, and the run
+	 * that holds the lane continues the walk when it ends. A compaction in
+	 * flight holds the queue too, so a waiting submission stays visible in the
+	 * Submission Queue until the compaction it would join has landed.
+	 */
+	const drainQueuedSubmissions = async (): Promise<void> => {
+		if (draining || isShutDown || submissionActive || state.isCompacting) {
+			return;
+		}
+		draining = true;
+		try {
+			while (!isShutDown) {
+				const next = state.queuedSubmissions[0];
+				if (isUndefined(next)) {
+					break;
+				}
+				// The item stops waiting before it runs: it is no longer
+				// something a Recall can withdraw, and its Agent Turn is what
+				// commits it to the Session Transcript.
+				publish({ queuedSubmissions: state.queuedSubmissions.slice(1) });
+				try {
+					await runSubmission(next.input);
+				} catch {
+					// The submission published its own failure, and a failed
+					// turn never strands the submissions behind it.
+				}
+				// The Session Records this run committed name these blobs now.
+				releaseQueuedAttachments([next]);
+			}
+		} finally {
+			draining = false;
+		}
+	};
+	/**
+	 * Accepts one submission into the Submission Queue: it stores the
+	 * composition's attachments and keeps their blobs alive for as long as the
+	 * item waits, so a slow Agent Turn can neither break nor run it.
+	 */
+	const acceptQueuedSubmission = async (
+		input: SessionSendInput
+	): Promise<SessionSendOutcome> => {
+		const composition: SessionSubmissionComposition = input.composition ?? {
+			files: input.files ?? [],
+			text: input.userText ?? "",
+		};
+		let files: SessionFilePart[];
+		try {
+			files = await storeCompositionFiles(composition.files);
+		} catch {
+			return { rejected: true, reason: QUEUED_ATTACHMENT_ERROR };
+		}
+		if (isShutDown) {
+			return { rejected: true, reason: SHUT_DOWN_SEND_ERROR };
+		}
+		const stored: SessionSubmissionComposition = { ...composition, files };
+		const queuedInput: SessionQueuedSendInput = {
+			...input,
+			composition: stored,
+			files,
+		};
+		const queued: SessionQueuedSubmission = {
+			id: toQueuedSubmissionId(crypto.randomUUID()),
+			input: queuedInput,
+		};
+		publish({ queuedSubmissions: [...state.queuedSubmissions, queued] });
+		ports.attachments.retain(queuedAttachmentIds(queuedInput));
+		// Storing the composition can outlast the work that was in flight, so
+		// the queue is walked again here; a busy lane makes that a no-op.
+		void drainQueuedSubmissions();
+		return { rejected: false };
+	};
+	/**
+	 * Withdraws waiting submissions for the composer, oldest first. Without
+	 * identifiers the whole queue is recalled; an identifier that names nothing
+	 * waiting is a no-op, so a submission that already started running is never
+	 * recalled and never runs twice.
+	 */
+	const recallQueuedSubmissions = (
+		ids?: readonly QueuedSubmissionId[]
+	): SessionQueuedSubmission[] => {
+		const recalled = isUndefined(ids)
+			? [...state.queuedSubmissions]
+			: state.queuedSubmissions.filter(({ id }) => ids.includes(id));
+		if (recalled.length === 0) {
+			return [];
+		}
+		const recalledIds = new Set(recalled.map(({ id }) => id));
+		publish({
+			queuedSubmissions: state.queuedSubmissions.filter(
+				({ id }) => !recalledIds.has(id)
+			),
+		});
+		releaseQueuedAttachments(recalled);
+		return recalled;
+	};
+	/**
+	 * Whether a submission is held instead of run now: the lane is taken, the
+	 * queue is already being walked, work the next submission would wait for is
+	 * in flight, or waiting submissions are already here.
+	 */
+	const queuesSubmission = (): boolean =>
+		submissionActive ||
+		draining ||
+		state.turnActive ||
+		state.isCompacting ||
+		state.queuedSubmissions.length > 0;
+	/**
+	 * The Engine's one send entry point: a submission that arrives while the
+	 * session is busy joins the Submission Queue instead of being refused, and
+	 * an idle session runs it on the lane and then keeps the queue moving.
+	 */
+	const send = async (input: SessionSendInput): Promise<SessionSendOutcome> => {
+		if (isShutDown) {
+			return { rejected: true, reason: SHUT_DOWN_SEND_ERROR };
+		}
+		if (queuesSubmission()) {
+			return await acceptQueuedSubmission(input);
+		}
+		try {
+			return await runSubmission(input);
+		} finally {
+			// The Agent Turn that just ended is not the last work here: what
+			// queued behind it starts now.
+			void drainQueuedSubmissions();
+		}
+	};
+
 	return {
 		abortApprovalTurn: (toolCallId) => {
 			// The aborted request already settled in the Engine, so its siblings
@@ -628,13 +841,20 @@ export const createSessionEngine = ({
 		applyContext,
 		beginExecution,
 		cancel: () => operation.cancel(),
-		cancelCompaction,
+		cancelCompaction: () => {
+			compactionCommand?.abort();
+			return recallQueuedSubmissions();
+		},
 		closeApprovals,
 		compact,
 		endExecution,
 		getSnapshot: () => state,
-		interrupt: (preserveToolCallId) => operation.interrupt(preserveToolCallId),
+		interrupt: (preserveToolCallId) => {
+			operation.interrupt(preserveToolCallId);
+			return recallQueuedSubmissions();
+		},
 		mergeTranscript,
+		recallQueuedSubmissions,
 		recoverOverflow,
 		requestApproval,
 		respondToApproval: settleApproval,
@@ -642,10 +862,12 @@ export const createSessionEngine = ({
 		settleCompaction,
 		shutdown: () => {
 			isShutDown = true;
+			releaseQueuedAttachments(state.queuedSubmissions);
+			publish({ queuedSubmissions: [] });
 			operation.cancel();
 			closeApprovals();
 		},
-		send: (input) => operation.send(input),
+		send,
 		subscribe: (listener) => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);

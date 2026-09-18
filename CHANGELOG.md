@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Features
 
+- **A submission written while the session is busy waits its turn.** Pressing
+  Enter during a running Agent Turn or a compaction queues the submission
+  instead of refusing it: a strip above the composer shows what is waiting, and
+  the queue drains one Agent Turn at a time, oldest first, after every completed,
+  failed, or cancelled turn. `Alt+Up` recalls the whole queue into the composer,
+  and Esc recalls it while it stops the running turn or cancels the compaction,
+  so stopping work hands the waiting text back. A queued submission keeps the
+  Agent, model, and variant it was accepted with, keeps its attachments alive
+  while it waits, records itself into prompt history so a dropped queue is
+  recoverable, and never survives a restart. See ADR-0021.
+
 - **Tool resource profiles are configurable.** Set `resource_limits` to
   `standard`, `extended`, or `deep` globally or per Agent in `wincode.json(c)`.
   Elevated profiles allow larger bounded reads, searches, listings, shell

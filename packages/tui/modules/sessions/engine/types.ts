@@ -18,7 +18,7 @@ import type {
 	SkillToolDefinition,
 } from "@wincode/skills";
 import type { ReadonlyDeep } from "type-fest";
-import type { SessionId } from "@/shared/identifiers";
+import type { QueuedSubmissionId, SessionId } from "@/shared/identifiers";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import type {
 	CompactSessionResult,
@@ -35,6 +35,7 @@ import type { FileMentionPart, SessionMessage } from "../message";
 import type {
 	SessionSendInput,
 	SessionSendOutcome,
+	SessionSubmissionComposition,
 } from "../session-operation";
 
 export type { SessionViewState } from "../hooks/runtime-turn";
@@ -71,6 +72,26 @@ export type SessionApprovalOutcome =
 	| { decision: "reject"; feedback?: string };
 
 /**
+ * The send the Engine runs when the Submission Queue reaches a Queued
+ * Submission: the submission as it was accepted, with the composition and the
+ * Model Target selection it keeps while it waits.
+ */
+export type SessionQueuedSendInput = SessionSendInput & {
+	composition: SessionSubmissionComposition;
+};
+
+/**
+ * One Submission a busy session accepted and holds instead of running: the send
+ * it will run, and its identifier. It is transient Engine state, never a
+ * Session Record, and it enters the Session Transcript only when it starts
+ * running.
+ */
+export type SessionQueuedSubmission = ReadonlyDeep<{
+	id: QueuedSubmissionId;
+	input: SessionQueuedSendInput;
+}>;
+
+/**
  * One approval request the Engine owns until it settles. `target` is
  * `tool-call` when the request carries a Tool Call Identifier and `session`
  * when it has no timeline anchor of its own. A request with no `decision` is
@@ -96,6 +117,11 @@ export type SessionSnapshot = ReadonlyDeep<{
 	/** Live Agent Turn executions, oldest first. */
 	executions: SessionExecution[];
 	isCompacting: boolean;
+	/**
+	 * Submission Queue: the Queued Submissions waiting for their Agent Turn,
+	 * oldest first. It is drain order, never a Session Record.
+	 */
+	queuedSubmissions: SessionQueuedSubmission[];
 	/** Whether the session is running a submission, from its command to its settle. */
 	turnActive: boolean;
 	/** Session Transcript: the messages the session presents to the user. */
@@ -194,6 +220,13 @@ export type SessionAttachmentPort = Readonly<{
 	) => Promise<SessionMessage[]>;
 	/** Hydrates the attachment data of the messages one Agent Turn sends. */
 	hydrate: (request: SessionHydrationRequest) => Promise<SessionMessage[]>;
+	/**
+	 * Keeps attachment blobs alive past the records and prompt history that
+	 * name them, so a waiting composition's attachments cannot be reclaimed.
+	 */
+	retain: (attachmentIds: readonly string[]) => void;
+	/** Releases blobs the composition that needed them no longer holds. */
+	release: (attachmentIds: readonly string[]) => void;
 }>;
 
 /**
@@ -361,8 +394,12 @@ export type SessionEngine = Readonly<{
 	beginExecution: (execution: SessionExecutionInput) => SessionExecution;
 	/** Cancels the Agent Turn the session is running. */
 	cancel: () => void;
-	/** Aborts the compaction command in flight. */
-	cancelCompaction: () => void;
+	/**
+	 * Aborts the compaction command in flight and recalls the queued
+	 * submissions with it: cancelling maintenance is still stopping work, and
+	 * stopping work hands the waiting text back.
+	 */
+	cancelCompaction: () => SessionQueuedSubmission[];
 	/**
 	 * Settles every pending approval as rejected, so no Tool Gate evaluation
 	 * that asked for one is left waiting. The newest pending request carries the
@@ -379,10 +416,12 @@ export type SessionEngine = Readonly<{
 	endExecution: (turnId: AgentTurnId) => void;
 	getSnapshot: () => SessionSnapshot;
 	/**
-	 * Interrupts the Agent Turn the session is running: the send ends, and the
-	 * assistant message it streams into keeps the interrupted Tool Call visible.
+	 * Interrupts the Agent Turn the session is running: the send ends, the
+	 * assistant message it streams into keeps the interrupted Tool Call
+	 * visible, and the Queued Submissions come back for the composer instead of
+	 * draining, so stopping work never strands waiting text.
 	 */
-	interrupt: (preserveToolCallId?: ToolCallId) => void;
+	interrupt: (preserveToolCallId?: ToolCallId) => SessionQueuedSubmission[];
 	/**
 	 * Merges messages into the Session Transcript: an existing message is
 	 * replaced by id, an unknown one is appended, and a compaction summary
@@ -414,6 +453,16 @@ export type SessionEngine = Readonly<{
 	recoverOverflow: (
 		command: SessionOverflowRecoveryCommand
 	) => Promise<SessionOverflowRecoveryOutcome>;
+	/**
+	 * Withdraws the Queued Submissions for the composer, oldest first. Without
+	 * identifiers the whole queue is recalled; an identifier that names nothing
+	 * waiting is a no-op, so a submission that already started running is never
+	 * recalled and never runs twice. The recalled submissions leave the queue,
+	 * so nothing auto-starts once the current work ends.
+	 */
+	recallQueuedSubmissions: (
+		ids?: readonly QueuedSubmissionId[]
+	) => SessionQueuedSubmission[];
 	/** Replaces one execution's Session View State, never another's. */
 	setExecutionViewState: (
 		turnId: AgentTurnId,
@@ -432,7 +481,12 @@ export type SessionEngine = Readonly<{
 	 * a session that is gone.
 	 */
 	shutdown: () => void;
-	/** Sends one submission as a Session Command. */
+	/**
+	 * Sends one submission as a Session Command. A submission that arrives
+	 * while the session is busy — a running Agent Turn or a compaction in
+	 * flight — becomes a Queued Submission instead of being refused, and is
+	 * accepted with the composition and Model Target selection it arrived with.
+	 */
 	send: (input: SessionSendInput) => Promise<SessionSendOutcome>;
 	subscribe: (listener: () => void) => () => void;
 }>;

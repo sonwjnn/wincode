@@ -272,6 +272,15 @@ export type SessionAttachmentStore = {
 		input: AttachmentInput,
 		signal?: AbortSignal
 	) => Promise<AttachmentReference>;
+	/**
+	 * Keeps blobs alive past the records and prompt history that name them, so
+	 * maintenance cannot reclaim a composition that is still waiting to run.
+	 * Retention counts, so the same blob held by two compositions survives
+	 * either release order.
+	 */
+	retain: (attachmentIds: Iterable<string>) => void;
+	/** Releases blobs a composition no longer holds; an unknown id is a no-op. */
+	release: (attachmentIds: Iterable<string>) => void;
 	resolve: (
 		reference: AttachmentReference,
 		signal?: AbortSignal
@@ -1661,6 +1670,30 @@ export const createSessionAttachmentStore = ({
 		return { orphanBytes, orphanCount };
 	};
 
+	/**
+	 * Attachment ids something holds beyond the records and prompt history that
+	 * name them, counted: the same blob held twice survives one release.
+	 */
+	const retained = new Map<string, number>();
+	const retain = (attachmentIds: Iterable<string>): void => {
+		for (const attachmentId of attachmentIds) {
+			retained.set(attachmentId, (retained.get(attachmentId) ?? 0) + 1);
+		}
+	};
+	const release = (attachmentIds: Iterable<string>): void => {
+		for (const attachmentId of attachmentIds) {
+			const count = retained.get(attachmentId);
+			if (isUndefined(count)) {
+				continue;
+			}
+			if (count <= 1) {
+				retained.delete(attachmentId);
+			} else {
+				retained.set(attachmentId, count - 1);
+			}
+		}
+	};
+
 	const collect = async ({
 		liveAttachmentIds,
 		maxBytes = DEFAULT_ATTACHMENT_MAINTENANCE_LIMITS.maxBytes,
@@ -1676,7 +1709,9 @@ export const createSessionAttachmentStore = ({
 		const boundedBytes = Math.max(0, Math.floor(maxBytes));
 		const currentTime = now().getTime();
 		const reclaimed = await reclaimUnreferenced(
-			new Set(liveAttachmentIds),
+			// A retained blob is live even though no Session Record or prompt
+			// history names it yet.
+			new Set([...liveAttachmentIds, ...retained.keys()]),
 			currentTime,
 			safetyWindowMs,
 			boundedEntries,
@@ -1702,6 +1737,8 @@ export const createSessionAttachmentStore = ({
 		hydrateMessages,
 		hydrateMessagesWithStats,
 		ingest,
+		release,
 		resolve: resolveAttachment,
+		retain,
 	};
 };

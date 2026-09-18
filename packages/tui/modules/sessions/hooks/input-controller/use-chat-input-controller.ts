@@ -15,8 +15,13 @@ import {
 	applyFileMentionReplacement,
 	filterFileMentionOptions,
 } from "@/modules/file-mentions";
-import type { SessionMessage } from "@/modules/sessions/message";
+import type {
+	SessionFilePart,
+	SessionMessage,
+} from "@/modules/sessions/message";
+import type { SessionSubmissionComposition } from "@/modules/sessions/session-operation";
 import { useLatest } from "@/shared/hooks/use-latest";
+import { normalizeFileTokensForTrimmedText } from "../../attachments";
 import { getSessionStore } from "../../storage/get-session-store";
 import { removeTriggerText } from "./escape-trigger";
 import {
@@ -299,6 +304,60 @@ export function useChatInputController({
 			setRecalledPastedTexts(result.entry.pastedText ?? []);
 			setRecalledPastedTextsRevision((revision) => revision + 1);
 			return true;
+		},
+		[setProgrammaticText]
+	);
+
+	/**
+	 * Restores recalled compositions through the same plumbing as history
+	 * recall: programmatic text, recalled attachments, and recalled pasted
+	 * text, old submissions first and the composer's own draft last.
+	 */
+	const recall = useCallback(
+		(
+			entries: readonly SessionSubmissionComposition[],
+			draft: SessionSubmissionComposition
+		) => {
+			const draftComposition: SessionSubmissionComposition = {
+				fileTokens: normalizeFileTokensForTrimmedText(draft.text, [
+					...(draft.fileTokens ?? []),
+				]),
+				files: draft.files,
+				pastedText: draft.pastedText,
+				text: draft.text.trim(),
+			};
+			const compositions = [...entries, draftComposition].filter(
+				(composition) =>
+					composition.text.length > 0 || composition.files.length > 0
+			);
+			if (compositions.length === 0) {
+				return;
+			}
+			let text = "";
+			const fileTokens: Array<{ start: number; token: string }> = [];
+			const files: SessionFilePart[] = [];
+			const pastedText: Array<{ text: string; token: string }> = [];
+			for (const composition of compositions) {
+				if (text.length > 0) {
+					text += "\n\n";
+				}
+				const base = text.length;
+				text += composition.text;
+				for (const { start, token } of composition.fileTokens ?? []) {
+					fileTokens.push({ start: base + start, token });
+				}
+				files.push(...composition.files);
+				pastedText.push(...(composition.pastedText ?? []));
+			}
+
+			historyIndexRef.current = -1;
+			draftRef.current = { fileTokens, files, text };
+			setProgrammaticText(text, 0);
+			setRecalledFiles(files);
+			setRecalledFileTokens(fileTokens);
+			setRecalledFilesRevision((revision) => revision + 1);
+			setRecalledPastedTexts(pastedText);
+			setRecalledPastedTextsRevision((revision) => revision + 1);
 		},
 		[setProgrammaticText]
 	);
@@ -676,6 +735,7 @@ export function useChatInputController({
 			onTab: handleTab,
 			onTextChange,
 			onProgrammaticTextChange,
+			recall,
 			submit,
 		},
 		state: {

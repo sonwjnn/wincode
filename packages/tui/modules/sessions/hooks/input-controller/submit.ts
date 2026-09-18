@@ -182,7 +182,7 @@ export async function submitPrompt(
 		return false;
 	}
 
-	const { files, pastedTexts, rawText } = snapshot;
+	const { files, fileTokens, pastedTexts, rawText } = snapshot;
 	const visibleText = rawText.trim();
 	// Markers carry offsets into the untrimmed composition, so expand before
 	// trimming or a leading space shifts every replacement.
@@ -200,6 +200,15 @@ export async function submitPrompt(
 		return false;
 	}
 
-	const accepted = await dependencies.onSubmit({ files, ...skillPrompt });
+	const accepted = await dependencies.onSubmit({
+		composition: {
+			fileTokens,
+			files,
+			pastedText: pastedTexts.map(({ text, token }) => ({ text, token })),
+			text: visibleText,
+		},
+		files,
+		...skillPrompt,
+	});
 	return accepted !== false;
 }

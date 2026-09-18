@@ -120,8 +120,9 @@ export const promptHistory = sqliteTable("prompt_history", {
  * `position` keeps checkpoints in commit order per session.
  *
  * TODO(issue-86): add richer durable interrupted metadata only when the
- * product has a defined resume/retry contract. Queued and retrying states are
- * intentionally not persisted.
+ * product has a defined resume/retry contract. A retrying turn is intentionally
+ * not persisted, and neither is a Queued Submission: it lives in the Session
+ * Engine until it starts running (ADR-0021), so a restart never replays one.
  */
 export const sessionRecord = sqliteTable(
 	"session_record",
