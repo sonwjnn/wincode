@@ -1219,6 +1219,99 @@ test("runs a queued submission with the Model Target selection it was accepted w
 	await first;
 });
 
+test("runs a submission accepted while an overflow replay holds the lane", async () => {
+	const gates: Array<() => void> = [];
+	const prompts: string[] = [];
+	const replayStarted = Promise.withResolvers<void>();
+	const queuedStarted = Promise.withResolvers<void>();
+	const engine = createEngine(compactionHistory(), undefined, {
+		resolveCompactionSettings: async () =>
+			fromPartial<ResolvedCompactionSettings>({
+				autoAvailable: false,
+				enabled: true,
+				keepRecentTokens: 1,
+				maxMediaAttachments: 4,
+				maxMediaBytes: 1024,
+				maxMediaTokens: 128,
+				modelContextLimit: 10_000,
+				overflowRecoveryAvailable: true,
+				reserveTokens: 1000,
+				thresholdTokens: null,
+			}),
+		runtime: {
+			requestOverheadTokens: () => 0,
+			run: async ({ callbacks, execution, messages }) => {
+				prompts.push(promptOfTurn(messages));
+				callbacks.onEvent({
+					agentId: execution.agent,
+					sequence: 0,
+					startedAt: 1,
+					turnId: execution.turnId,
+					type: "agent-turn-started",
+				});
+				if (prompts.length === 1) {
+					return { error: overflowFailure() };
+				}
+				if (prompts.length === 2) {
+					replayStarted.resolve();
+				} else {
+					queuedStarted.resolve();
+				}
+				const gate = Promise.withResolvers<void>();
+				gates.push(gate.resolve);
+				await gate.promise;
+				await callbacks.commitTerminal(
+					fromPartial<SessionRecord>({
+						messages: [
+							{
+								id: sessionMessageId(`assistant-${execution.turnId}`),
+								parts: [{ text: "answer", type: "text" }],
+								role: "assistant",
+							},
+						],
+						outcome: {
+							kind: "assistant",
+							terminal: { finishedAt: 2, kind: "completed" },
+						},
+						turnId: execution.turnId,
+					})
+				);
+				callbacks.onTerminal({
+					finishedAt: 2,
+					sequence: 2,
+					turnId: execution.turnId,
+					type: "agent-turn-completed",
+					usage: { inputTokens: 1, outputTokens: 1 },
+				});
+				return {};
+			},
+		},
+	});
+
+	const send = engine.send(sendInput({ userText: "first" }));
+	// The provider refusal buys the turn one recovery, whose replay runs the
+	// original message again on the send lane.
+	await replayStarted.promise;
+	const accepted = await engine.send(sendInput({ userText: "second" }));
+
+	// The replay holds the lane, so the submission waits in the queue instead of
+	// being handed to a lane that would refuse it.
+	expect(accepted).toEqual({ rejected: false });
+	expect(
+		engine
+			.getSnapshot()
+			.queuedSubmissions.map(({ input }) => input.composition.text)
+	).toEqual(["second"]);
+
+	gates.shift()?.();
+	await queuedStarted.promise;
+	// The queued submission runs once the replay ends, and the replay answered
+	// the original message.
+	expect(prompts).toEqual(["first", "first", "second"]);
+	gates.shift()?.();
+	await send;
+});
+
 test("retains a queued submission's attachments until its turn runs", async () => {
 	const runtime = createQueuedRuntime();
 	const retained: string[][] = [];
@@ -1284,6 +1377,50 @@ test("retains a queued submission's attachments until its turn runs", async () =
 	// Running the turn puts the blobs in Session Records, so the hold ends then.
 	await holdEnded.promise;
 	expect(released).toEqual([["stored-blob"]]);
+});
+
+test("drops the queue and its attachment holds when the session shuts down", async () => {
+	const runtime = createQueuedRuntime();
+	const released: string[][] = [];
+	const engine = createEngine([], undefined, {
+		attachments: {
+			externalize: async (messages) => [...messages],
+			hydrate: async ({ messages }) => [...messages],
+			release: (attachmentIds) => released.push([...attachmentIds]),
+			retain: () => undefined,
+		},
+		runtime: runtime.runtime,
+	});
+	const files: SessionFilePart[] = [
+		fromPartial<SessionFilePart>({
+			attachmentId: attachmentId("dropped-blob"),
+			type: "file",
+			url: "attachment://dropped-blob",
+		}),
+	];
+
+	const first = engine.send(sendInput({ userText: "one" }));
+	await runtime.started(1);
+	await engine.send(
+		sendInput({ composition: compositionOf("[Image 1]", files), files })
+	);
+
+	engine.shutdown();
+
+	expect(released).toEqual([["dropped-blob"]]);
+	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
+	runtime.release();
+	await first;
+});
+
+test("refuses a submission once the session has shut down", async () => {
+	const engine = createEngine([]);
+	engine.shutdown();
+
+	await expect(engine.send(sendInput())).resolves.toEqual({
+		rejected: true,
+		reason: "The session has ended.",
+	});
 });
 
 test("releases a recalled submission's attachment hold", async () => {

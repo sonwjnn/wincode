@@ -12,11 +12,18 @@ import {
 	createRouter,
 	RouterContextProvider,
 } from "@tanstack/react-router";
+import { fromPartial } from "@total-typescript/shoehorn";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SessionCompaction } from "@/modules/sessions/compaction/types";
 import type { SessionQueuedSubmission } from "@/modules/sessions/engine/types";
-import type { SessionMessage } from "@/modules/sessions/message";
-import type { SessionSendInput } from "@/modules/sessions/session-operation";
+import type {
+	SessionFilePart,
+	SessionMessage,
+} from "@/modules/sessions/message";
+import type {
+	SessionSendInput,
+	SessionSubmissionComposition,
+} from "@/modules/sessions/session-operation";
 import {
 	agentId,
 	queuedSubmissionId,
@@ -86,6 +93,10 @@ type FakeSessionRun = {
 let activeFakeSessionRun: FakeSessionRun | null = null;
 /** The compositions the view accepted as Queued Submissions, in order. */
 let fakeQueuedTexts: string[] = [];
+/** The same submissions' full compositions, so a round trip can be asserted. */
+let fakeQueuedCompositions: SessionSubmissionComposition[] = [];
+/** A Recall payload the test supplies, in place of what the fake queue holds. */
+let fakeRecalledPayload: SessionQueuedSubmission[] | null = null;
 /** How many times the view asked the session to recall its queue. */
 let fakeSessionRecalls = 0;
 
@@ -115,6 +126,13 @@ mock.module("@/modules/sessions/hooks/use-session-engine", () => ({
 					...fakeQueuedTexts,
 					input.composition?.text ?? input.userText ?? "",
 				];
+				fakeQueuedCompositions = [
+					...fakeQueuedCompositions,
+					input.composition ?? {
+						files: input.files ?? [],
+						text: input.userText ?? "",
+					},
+				];
 				const composition = input.composition ?? {
 					files: input.files ?? [],
 					text: input.userText ?? "",
@@ -135,9 +153,10 @@ mock.module("@/modules/sessions/hooks/use-session-engine", () => ({
 			return { rejected: false as const };
 		}, []);
 		const recallQueuedSubmissions = useCallback(() => {
-			const recalled = waiting.current;
+			const recalled = fakeRecalledPayload ?? waiting.current;
 			fakeSessionRecalls += 1;
 			fakeQueuedTexts = [];
+			fakeQueuedCompositions = [];
 			setQueuedSubmissions([]);
 			return recalled;
 		}, []);
@@ -246,7 +265,9 @@ beforeAll(() => {
 
 afterEach(() => {
 	activeFakeSessionRun = null;
+	fakeQueuedCompositions = [];
 	fakeQueuedTexts = [];
+	fakeRecalledPayload = null;
 	fakeSessionRecalls = 0;
 });
 
@@ -630,6 +651,57 @@ describe("SessionView Submission Queue", () => {
 			expect(frame.match(/second prompt/gu)).toHaveLength(1);
 			expect(frame).not.toMatch(QUEUED_COUNT_PATTERN);
 			expect(frame).not.toContain("Alt+Up");
+		} finally {
+			release.resolve();
+			await flushUi(setup);
+			setup.renderer.destroy();
+		}
+	});
+
+	test("restores a recalled composition's attachments and pasted text", async () => {
+		const { release, setup } = await renderBusySessionView();
+		try {
+			const file: SessionFilePart = {
+				filename: "clipboard.png",
+				mediaType: "image/png",
+				type: "file",
+				url: "data:image/png;base64,AAAA",
+			};
+			const composition: SessionSubmissionComposition = {
+				fileTokens: [{ start: 0, token: "[Image 1]" }],
+				files: [file],
+				pastedText: [
+					{
+						text: "pasted line one\npasted line two",
+						token: "[Pasted ~20 lines]",
+					},
+				],
+				text: "[Image 1] [Pasted ~20 lines] explain these",
+			};
+			fakeRecalledPayload = [
+				fromPartial<SessionQueuedSubmission>({
+					id: queuedSubmissionId("queued-recall"),
+					input: { composition, files: [file] },
+				}),
+			];
+
+			setup.mockInput.pressArrow("up", { meta: true });
+			await waitFor(setup, () => fakeSessionRecalls === 1);
+			await flushUi(setup);
+			await flushUi(setup);
+
+			// Both markers are back in the composer, so nothing of the recalled
+			// composition was lost on the way.
+			const recalledFrame = setup.captureCharFrame();
+			expect(recalledFrame).toContain("[Image 1]");
+			expect(recalledFrame).toContain("[Pasted ~20 lines]");
+			expect(recalledFrame).toContain("explain these");
+
+			// Submitting it again carries the same attachments, pasted text, and
+			// visible text the recalled composition held.
+			setup.mockInput.pressEnter();
+			await waitFor(setup, () => fakeQueuedCompositions.length === 1);
+			expect(fakeQueuedCompositions[0]).toEqual(composition);
 		} finally {
 			release.resolve();
 			await flushUi(setup);

@@ -145,11 +145,12 @@ export const createSessionEngine = ({
 	let approvalCounter = 0;
 	let isShutDown = false;
 	/**
-	 * Whether the send lane is occupied. `turnActive` publishes the same fact
-	 * once the pipeline starts, but the lane is taken a microtask earlier, and
-	 * a submission that arrives in that gap must queue rather than race it.
+	 * How many submission runs hold the send lane. A run can overlap another's
+	 * tail — an overflow replay starts once the failed turn's execution ends,
+	 * which can precede the run that proposed it — so the lane is counted rather
+	 * than flagged, and it is free only at zero.
 	 */
-	let submissionActive = false;
+	let laneRuns = 0;
 	/** Whether the drain loop is walking the Submission Queue. */
 	let draining = false;
 	const publish = (changes: Partial<SessionSnapshot>): void => {
@@ -646,7 +647,7 @@ export const createSessionEngine = ({
 		mergeTranscript,
 		ports,
 		recoverOverflow,
-		send: (input) => operation.send(input),
+		send: (input) => runSubmission(input),
 		sessionId,
 		setCatalogDiagnostic: (diagnostic) =>
 			publish({ catalogDiagnostic: diagnostic }),
@@ -658,17 +659,21 @@ export const createSessionEngine = ({
 	});
 
 	/**
-	 * Runs one submission on the send lane and holds it until its Agent Turn
-	 * settles, so no second submission can start beside it.
+	 * Runs one submission on the send lane, then keeps the queue moving: a run
+	 * that ends is not the last work here, and whatever queued behind it starts
+	 * now. Every lane run goes through here — the session's own sends, and the
+	 * overflow replay a recovery continues — so the Submission Queue is never
+	 * drained onto a lane that is still taken.
 	 */
 	const runSubmission = async (
 		input: SessionSendInput
 	): Promise<SessionSendOutcome> => {
-		submissionActive = true;
+		laneRuns += 1;
 		try {
 			return await operation.send(input);
 		} finally {
-			submissionActive = false;
+			laneRuns -= 1;
+			void drainQueuedSubmissions();
 		}
 	};
 	/** Releases the blobs of compositions nothing holds any more. */
@@ -702,14 +707,21 @@ export const createSessionEngine = ({
 	};
 	/**
 	 * Runs queued submissions one Agent Turn at a time, oldest first, until the
-	 * queue is empty. It never overlaps the lane: while a submission runs, or
-	 * while the queue is already being walked, this does nothing, and the run
-	 * that holds the lane continues the walk when it ends. A compaction in
-	 * flight holds the queue too, so a waiting submission stays visible in the
-	 * Submission Queue until the compaction it would join has landed.
+	 * queue is empty. It never overlaps the lane: while a submission run holds
+	 * it, while a turn is live, or while the queue is already being walked, this
+	 * does nothing, and the run that ends continues the walk through its own
+	 * release. A compaction in flight holds the queue too, so a waiting
+	 * submission stays visible in the Submission Queue until the compaction it
+	 * would join has landed.
 	 */
 	const drainQueuedSubmissions = async (): Promise<void> => {
-		if (draining || isShutDown || submissionActive || state.isCompacting) {
+		if (
+			draining ||
+			isShutDown ||
+			laneRuns > 0 ||
+			state.turnActive ||
+			state.isCompacting
+		) {
 			return;
 		}
 		draining = true;
@@ -804,7 +816,7 @@ export const createSessionEngine = ({
 	 * in flight, or waiting submissions are already here.
 	 */
 	const queuesSubmission = (): boolean =>
-		submissionActive ||
+		laneRuns > 0 ||
 		draining ||
 		state.turnActive ||
 		state.isCompacting ||
@@ -821,13 +833,7 @@ export const createSessionEngine = ({
 		if (queuesSubmission()) {
 			return await acceptQueuedSubmission(input);
 		}
-		try {
-			return await runSubmission(input);
-		} finally {
-			// The Agent Turn that just ended is not the last work here: what
-			// queued behind it starts now.
-			void drainQueuedSubmissions();
-		}
+		return await runSubmission(input);
 	};
 
 	return {
@@ -862,8 +868,9 @@ export const createSessionEngine = ({
 		settleCompaction,
 		shutdown: () => {
 			isShutDown = true;
-			releaseQueuedAttachments(state.queuedSubmissions);
-			publish({ queuedSubmissions: [] });
+			// Whatever was waiting is dropped with the session: its attachment
+			// holds end and nothing it held is ever run.
+			recallQueuedSubmissions();
 			operation.cancel();
 			closeApprovals();
 		},
