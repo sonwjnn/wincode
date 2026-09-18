@@ -23,6 +23,7 @@ import { afterAll, expect, mock, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { createOperationalFailure } from "@wincode/agent-core";
 import { act } from "react";
@@ -152,6 +153,22 @@ const {
 const store = createE2eStore();
 const { messages, sessionId } = await seedCompactionHistory(store);
 
+const waitForCondition = async (
+	predicate: () => boolean | Promise<boolean>
+): Promise<void> => {
+	const deadline = Date.now() + 5000;
+	while (!(await predicate())) {
+		if (Date.now() >= deadline) {
+			throw new Error("Timed out waiting for the recovery condition.");
+		}
+		await delay(10);
+	}
+};
+
+const waitForChatRequestCount = async (count: number): Promise<void> => {
+	await waitForCondition(() => chatRequests().length >= count);
+};
+
 const chatRequests = () =>
 	recorder.requests.filter((request) => request.kind === "chat");
 
@@ -180,9 +197,8 @@ test("compacts and replays the prompt after a provider context overflow", async 
 
 		// The refused turn proposes the recovery, which compacts the replay-safe
 		// history before it replays the prompt.
-		await activeSetup.waitFor(
-			async () => (await store.getCompactions(sessionId)).length > 0,
-			{ maxPasses: 600 }
+		await waitForCondition(
+			async () => (await store.getCompactions(sessionId)).length > 0
 		);
 		const compactions = await store.getCompactions(sessionId);
 		expect(compactions).toHaveLength(1);
@@ -193,15 +209,14 @@ test("compacts and replays the prompt after a provider context overflow", async 
 		expect(entry.trigger).toBe("overflow");
 		expect(entry.summary.text).toBe(recorder.summaryText);
 
-		// The replay runs the same user message again on the compacted context.
-		await activeSetup.waitFor(() => chatRequests().length > 1, {
-			maxPasses: 200,
-		});
+		// The replay runs outside the renderer scheduler, so poll its recorder
+		// signal before waiting for the response frame.
+		await waitForChatRequestCount(2);
 		await settleSessionUi(activeSetup);
 		await act(async () => {
 			await activeSetup.waitForFrame(
 				(frame) => frame.includes("E2E chat response"),
-				{ maxPasses: 200 }
+				{ maxPasses: 600 }
 			);
 		});
 
