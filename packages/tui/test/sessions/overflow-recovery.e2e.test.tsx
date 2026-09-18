@@ -23,7 +23,6 @@ import { afterAll, expect, mock, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { createOperationalFailure } from "@wincode/agent-core";
 import { act } from "react";
@@ -147,26 +146,15 @@ const {
 	renderSession,
 	seedCompactionHistory,
 	settleSessionUi,
+	waitForSessionCondition,
 	writeE2EFrame,
 } = await import("@/test/support/e2e-fixture");
 
 const store = createE2eStore();
 const { messages, sessionId } = await seedCompactionHistory(store);
 
-const waitForCondition = async (
-	predicate: () => boolean | Promise<boolean>
-): Promise<void> => {
-	const deadline = Date.now() + 5000;
-	while (!(await predicate())) {
-		if (Date.now() >= deadline) {
-			throw new Error("Timed out waiting for the recovery condition.");
-		}
-		await delay(10);
-	}
-};
-
 const waitForChatRequestCount = async (count: number): Promise<void> => {
-	await waitForCondition(() => chatRequests().length >= count);
+	await waitForSessionCondition(() => chatRequests().length >= count);
 };
 
 const chatRequests = () =>
@@ -197,7 +185,7 @@ test("compacts and replays the prompt after a provider context overflow", async 
 
 		// The refused turn proposes the recovery, which compacts the replay-safe
 		// history before it replays the prompt.
-		await waitForCondition(
+		await waitForSessionCondition(
 			async () => (await store.getCompactions(sessionId)).length > 0
 		);
 		const compactions = await store.getCompactions(sessionId);

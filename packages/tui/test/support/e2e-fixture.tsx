@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
@@ -349,5 +350,33 @@ export const settleSessionUi = async (
 	await act(async () => {
 		await setup.renderOnce();
 		await setup.waitForVisualIdle();
+	});
+};
+
+/**
+ * Waits for what the session's asynchronous work produces rather than for a
+ * renderer update: a pass budget the renderer cannot convert into progress
+ * gives up on a loaded machine, so this yields real time between checks.
+ */
+export const waitForSessionCondition = async (
+	predicate: () => boolean | Promise<boolean>
+): Promise<void> => {
+	const deadline = Date.now() + 5000;
+	while (!(await predicate())) {
+		if (Date.now() >= deadline) {
+			throw new Error("Timed out waiting for the session condition.");
+		}
+		await delay(10);
+	}
+};
+
+/** Waits for a frame the session's asynchronous work produces. */
+export const waitForSessionFrame = async (
+	setup: TestRendererSetup,
+	predicate: (frame: string) => boolean
+): Promise<void> => {
+	await waitForSessionCondition(async () => {
+		await settleSessionUi(setup);
+		return predicate(setup.captureCharFrame());
 	});
 };

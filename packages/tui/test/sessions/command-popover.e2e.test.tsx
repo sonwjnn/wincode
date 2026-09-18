@@ -65,6 +65,7 @@ const {
 	renderSession,
 	seedCompactionHistory,
 	settleSessionUi,
+	waitForSessionFrame,
 	writeE2EFrame,
 } = await import("@/test/support/e2e-fixture");
 
@@ -145,14 +146,13 @@ test("lists merged command rows and activates a skill typed through its namespac
 		});
 		await settleSessionUi(activeSetup);
 		await act(() => activeSetup.mockInput.pressEnter());
-		await act(async () => {
-			// The cleared composer plus the activation row prove the invocation
-			// resolved to a Skill instead of ordinary prompt text.
-			await activeSetup.waitForFrame(
-				(frame) => frame.includes("Ask anything") && frame.includes("Skill"),
-				{ maxPasses: 200 }
-			);
-		});
+		// The cleared composer plus the activation row prove the invocation
+		// resolved to a Skill instead of ordinary prompt text: both arrive with
+		// the submission, after the send path settles.
+		await waitForSessionFrame(
+			activeSetup,
+			(frame) => frame.includes("Ask anything") && frame.includes("Skill")
+		);
 		const submittedFrame = activeSetup.captureCharFrame();
 		expect(submittedFrame).toContain("/skill:review focus on auth");
 		expect(submittedFrame).toContain("review");
