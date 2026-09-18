@@ -127,12 +127,6 @@ export const SessionsDialogContent = () => {
 		}
 		return null;
 	}, [routerState.location.pathname]);
-	const selectedSessionRef = useLatest(
-		sessions.find((session) => session.id === currentSessionId) ??
-			sessions.find((session) => session.pinned) ??
-			sessions[0] ??
-			null
-	);
 
 	const filterFn = useCallback(
 		(session: Session, query: string) =>
@@ -255,11 +249,12 @@ export const SessionsDialogContent = () => {
 	);
 
 	const handleActionKeysRef = useRef(
-		(_key: { ctrl: boolean; name: string }) => false as boolean
+		(_key: { ctrl: boolean; name: string }, _item: ListItem | undefined) =>
+			false as boolean
 	);
 
-	handleActionKeysRef.current = (key) => {
-		const session = selectedSessionRef.current;
+	handleActionKeysRef.current = (key, item) => {
+		const session = item?.kind === "session" ? item.session : null;
 		const pending = pendingDeleteIdRef.current;
 		if (!session) {
 			return false;
@@ -289,13 +284,13 @@ export const SessionsDialogContent = () => {
 
 	const handleHighlight = useCallback((item: ListItem) => {
 		if (item.kind === "session") {
-			selectedSessionRef.current = item.session;
-			setPendingDeleteId(null);
+			setPendingDeleteId((pendingId) =>
+				pendingId === null || pendingId === item.session.id ? pendingId : null
+			);
 		}
 	}, []);
 
-	const isConfirmDelete =
-		pendingDeleteId && pendingDeleteId === selectedSessionRef.current?.id;
+	const isConfirmDelete = pendingDeleteId !== null;
 
 	return (
 		<SearchListDialogWrapper<ListItem>
@@ -344,7 +339,7 @@ export const SessionsDialogContent = () => {
 			maxVisibleItems={MAX_VISIBLE_ITEMS}
 			minVisibleItems={MIN_VISIBLE_ITEMS}
 			onHighlight={handleHighlight}
-			onKey={(key) => {
+			onKey={(key, highlightedItem) => {
 				if (key.name === "escape") {
 					if (pendingDeleteIdRef.current) {
 						setPendingDeleteId(null);
@@ -353,7 +348,7 @@ export const SessionsDialogContent = () => {
 					}
 					return true;
 				}
-				return handleActionKeysRef.current(key);
+				return handleActionKeysRef.current(key, highlightedItem);
 			}}
 			onSelect={(item) =>
 				item.kind === "session" && navigateToSession(item.session)
