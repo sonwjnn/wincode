@@ -194,7 +194,8 @@ const {
 	createE2eStore,
 	renderSession,
 	seedCompactionHistory,
-	settleSessionUi,
+	waitForSessionCondition,
+	waitForSessionFrame,
 	writeE2EFrame,
 } = await import("@/test/support/e2e-fixture");
 
@@ -217,39 +218,17 @@ const completedToolRecords = (
 	);
 
 /**
- * Waits until the session frame shows `predicate`. The send hydrates from the
- * store and the Tool Call reads from disk, so each readiness pass lets the
- * event loop turn before it reads the frame.
+ * Waits on time for the gated evaluation, which outlives the destroyed view.
  */
-const waitForFrame = async (
-	setup: TestRendererSetup,
-	predicate: (frame: string) => boolean
-): Promise<void> => {
-	await setup.waitFor(
-		async () => {
-			await settleSessionUi(setup);
-			if (predicate(setup.captureCharFrame())) {
-				return true;
-			}
-			await new Promise((resolve) => setTimeout(resolve, 10));
-			return false;
-		},
-		{ maxPasses: 300 }
-	);
-};
-
-/** Waits on time for the gated evaluation, which outlives the destroyed view. */
 const waitForGatedOutcome = async (
 	callId: ToolCallId
 ): Promise<ToolCallOutput> => {
-	for (let attempt = 0; attempt < 300; attempt += 1) {
-		const outcome = gatedOutcomes.get(callId);
-		if (!isUndefined(outcome)) {
-			return outcome;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 10));
+	await waitForSessionCondition(() => !isUndefined(gatedOutcomes.get(callId)));
+	const outcome = gatedOutcomes.get(callId);
+	if (isUndefined(outcome)) {
+		throw new Error("The gated Tool Call evaluation never settled.");
 	}
-	throw new Error("The gated Tool Call evaluation never settled.");
+	return outcome;
 };
 
 const renderApprovalJourney = async (): Promise<TestRendererSetup> => {
@@ -286,15 +265,17 @@ test("answers a pending approval and the gated Tool Call runs", async () => {
 
 		// The Tool Gate evaluation is waiting: the session projects the request
 		// into the panel the user answers.
-		await waitForFrame(setup, (frame) => frame.includes("Permission required"));
+		await waitForSessionFrame(setup, (frame) =>
+			frame.includes("Permission required")
+		);
 		const pendingFrame = setup.captureCharFrame();
 		expect(pendingFrame).toContain("notes.txt");
 		expect(pendingFrame).toContain("Allow once");
 
 		// Enter answers the pending approval through the session's command.
 		setup.mockInput.pressEnter();
-		await waitForFrame(setup, (frame) => frame.includes("allowed once"));
-		await waitForFrame(setup, (frame) => frame.includes("Notes read."));
+		await waitForSessionFrame(setup, (frame) => frame.includes("allowed once"));
+		await waitForSessionFrame(setup, (frame) => frame.includes("Notes read."));
 		const settledFrame = setup.captureCharFrame();
 		expect(settledFrame).not.toContain("Permission required");
 
@@ -315,7 +296,9 @@ test("settles an approval left pending when the session view unmounts", async ()
 	const setup = await renderApprovalJourney();
 	try {
 		await submitPrompt(setup, "read the notes again");
-		await waitForFrame(setup, (frame) => frame.includes("Permission required"));
+		await waitForSessionFrame(setup, (frame) =>
+			frame.includes("Permission required")
+		);
 
 		// The view goes away with the decision still owed. The waiting evaluation
 		// settles through the session's shutdown, and the turn's next approval
