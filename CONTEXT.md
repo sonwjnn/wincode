@@ -107,6 +107,18 @@ One run of an Agent Turn and everything scoped to it: the Agent Turn Identifier,
 **Session View State**:
 The live, transient projection of one Agent Turn Execution for the session UI. It never becomes a Session Record, and executions never share one: the Session Snapshot exposes the Session View State of the most recently active execution, so a delegated Subagent's stream replaces the view while it runs and the parent's view returns when it ends. _Avoid_: streaming state, live buffer
 
+**Submission**:
+The user-authored content one send accepts: text, attachments, pasted text, and an optional Skill or Custom Command invocation. _Avoid_: message, request
+
+**Queued Submission**:
+A Submission a busy session accepts and holds instead of running immediately. It is transient Session Engine state — not a Session Record, never replayed after a restart — and it enters the Session Transcript only when it starts running. _Avoid_: queued prompt, pending message, backlog item, steering, interjection
+
+**Submission Queue**:
+The FIFO order of a session's Queued Submissions, exposed in the Session Snapshot. The Session Engine drains it after each terminal Agent Turn outcome; a user interrupt recalls it to the composer instead of draining it. _Avoid_: message queue, follow-up list, outbox
+
+**Recall**:
+Withdrawing a session's queued submissions back into the composer in order, restoring their composition instead of running them. _Avoid_: dequeue, withdraw, unsend, retract, delete
+
 ## Language
 
 **Wincode CLI**:
