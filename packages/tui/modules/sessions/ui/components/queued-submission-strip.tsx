@@ -60,6 +60,19 @@ const describeSubmission = (
 };
 
 /**
+ * One line of the strip: the submission's description, wearing the marker when
+ * it is the submission the next Recall takes back. The marker and its separator
+ * are added here, so the line's width is measured against one string.
+ */
+const describeStripLine = (
+	composition: SessionSubmissionComposition,
+	isNext: boolean
+): string => {
+	const description = describeSubmission(composition);
+	return isNext ? `${NEXT_MARKER} ${description}` : description;
+};
+
+/**
  * What is waiting on the Submission Queue: the count, one line per waiting
  * submission with the next one marked, and the keys that recall them. It
  * renders nothing while nothing waits, so the composer never carries an empty
@@ -100,10 +113,6 @@ export function QueuedSubmissionStrip({
 				// The oldest waiting submission is the one that runs next, so it
 				// is the one the next Recall takes back.
 				const isNext = index === 0;
-				const label = truncateWithOverflow(
-					describeSubmission(submission.input.composition),
-					isNext ? MAX_ITEM_CHARS - NEXT_MARKER.length - 1 : MAX_ITEM_CHARS
-				);
 				return (
 					<text
 						attributes={isNext ? TextAttributes.NONE : TextAttributes.DIM}
@@ -111,7 +120,10 @@ export function QueuedSubmissionStrip({
 						key={submission.id}
 						truncate
 					>
-						{isNext ? `${NEXT_MARKER} ${label}` : label}
+						{truncateWithOverflow(
+							describeStripLine(submission.input.composition, isNext),
+							MAX_ITEM_CHARS
+						)}
 					</text>
 				);
 			})}
