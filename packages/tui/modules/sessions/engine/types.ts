@@ -454,11 +454,13 @@ export type SessionEngine = Readonly<{
 		command: SessionOverflowRecoveryCommand
 	) => Promise<SessionOverflowRecoveryOutcome>;
 	/**
-	 * Withdraws the Queued Submissions for the composer, oldest first. Without
-	 * identifiers the whole queue is recalled; an identifier that names nothing
-	 * waiting is a no-op, so a submission that already started running is never
-	 * recalled and never runs twice. The recalled submissions leave the queue,
-	 * so nothing auto-starts once the current work ends.
+	 * Withdraws the Queued Submissions for the composer, oldest first. The
+	 * session view always recalls the whole queue — Recall is one gesture — and
+	 * identifiers are for a caller that read the queue and must not withdraw
+	 * what has already started: an identifier that names nothing waiting is a
+	 * no-op, so a submission that started running is never recalled and never
+	 * runs twice. The recalled submissions leave the queue, so nothing
+	 * auto-starts once the current work ends.
 	 */
 	recallQueuedSubmissions: (
 		ids?: readonly QueuedSubmissionId[]
