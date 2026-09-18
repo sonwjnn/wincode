@@ -1,11 +1,14 @@
 import { truncateWithOverflow } from "@/shared/display-sanitize";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import type { SessionQueuedSubmission } from "../../engine/types";
 import type { SessionSubmissionComposition } from "../../session-operation";
 
 /** How much of one waiting submission fits on its line. */
 const MAX_ITEM_CHARS = 80;
+/** Maximum rows shown before the queue list scrolls above the composer. */
+const QUEUE_VIEWPORT_ROWS = 5;
 /** Marks the submission that the next Recall takes back. */
 const NEXT_MARKER = "▸";
 /** Line breaks and runs of spaces in a composition become one space. */
@@ -71,9 +74,10 @@ const describeStripLine = (
 };
 
 /**
- * The live Submission Queue: a compact themed panel with one line per waiting
+ * The live Submission Queue: a themed panel with one line per waiting
  * submission. The next item is marked so the two Recall gestures have a clear
- * target, and the panel stays quiet when the queue is empty.
+ * target. The list scrolls when it grows beyond the available footer space, so
+ * no queued item is discarded and the composer remains reachable.
  */
 export function QueuedSubmissionStrip({
 	submissions,
@@ -85,16 +89,14 @@ export function QueuedSubmissionStrip({
 		return null;
 	}
 	return (
-		<box
-			backgroundColor={colors.backgroundPanel}
-			border={["left"]}
+		<BorderedContentBlock
 			borderColor={colors.borderActive}
-			flexDirection="column"
-			flexShrink={0}
-			paddingLeft={1}
-			paddingRight={1}
+			colors={colors}
+			contentBackgroundColor={colors.backgroundPanel}
+			contentGap={0}
+			marginBottom={0}
+			paddingX={1}
 			paddingY={1}
-			width="100%"
 		>
 			<box
 				alignItems="center"
@@ -120,23 +122,31 @@ export function QueuedSubmissionStrip({
 					/>
 				</box>
 			</box>
-			{submissions.map((submission, index) => {
-				// The oldest waiting submission is the one that runs next, so it
-				// is the one the next Recall takes back.
-				const isNext = index === 0;
-				return (
-					<text
-						fg={isNext ? colors.text : colors.textMuted}
-						key={submission.id}
-						truncate
-					>
-						{truncateWithOverflow(
-							describeStripLine(submission.input.composition, isNext),
-							MAX_ITEM_CHARS
-						)}
-					</text>
-				);
-			})}
-		</box>
+			<scrollbox
+				height={Math.min(QUEUE_VIEWPORT_ROWS, submissions.length)}
+				verticalScrollbarOptions={{
+					visible: submissions.length > QUEUE_VIEWPORT_ROWS,
+				}}
+				width="100%"
+			>
+				{submissions.map((submission, index) => {
+					// The oldest waiting submission is the one that runs next, so it
+					// is the one the next Recall takes back.
+					const isNext = index === 0;
+					return (
+						<text
+							fg={isNext ? colors.text : colors.textMuted}
+							key={submission.id}
+							truncate
+						>
+							{truncateWithOverflow(
+								describeStripLine(submission.input.composition, isNext),
+								MAX_ITEM_CHARS
+							)}
+						</text>
+					);
+				})}
+			</scrollbox>
+		</BorderedContentBlock>
 	);
 }
