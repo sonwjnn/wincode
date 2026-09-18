@@ -54,7 +54,7 @@ export type ChatInputControllerActions = {
 	) => void;
 	onProgrammaticTextChange: (text: string, cursorOffset: number) => void;
 	/**
-	 * Restores recalled compositions into the composer, oldest first, ahead of
+	 * Restores recalled compositions into the composer, oldest first and below
 	 * what the composer already holds. The draft carries the composer's own
 	 * state, because only the textarea knows its attachments and pasted text.
 	 */
