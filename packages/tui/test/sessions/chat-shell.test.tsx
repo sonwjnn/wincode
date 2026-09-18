@@ -678,7 +678,7 @@ describe("ChatShell Submission Queue strip", () => {
 		}
 	});
 
-	test("caps the named items and counts the rest", async () => {
+	test("renders every queued item without a visible cap", async () => {
 		const { setup } = await renderChatShell([], {
 			height: 18,
 			queuedSubmissions: [
@@ -695,10 +695,17 @@ describe("ChatShell Submission Queue strip", () => {
 			await flushUi(setup);
 			const frame = setup.captureCharFrame();
 			expect(frame).toContain("5 queued");
-			expect(frame).toContain("first waiting");
-			expect(frame).toContain("third waiting");
-			expect(frame).toContain("+2");
-			expect(frame).not.toContain("fourth waiting");
+			for (const text of [
+				"first waiting",
+				"second waiting",
+				"third waiting",
+				"fourth waiting",
+				"fifth waiting",
+			]) {
+				expect(frame).toContain(text);
+			}
+			expect(frame).not.toContain("+2");
+			expect(frame).not.toContain("+3");
 		} finally {
 			setup.renderer.destroy();
 		}

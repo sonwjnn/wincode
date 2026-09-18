@@ -1,11 +1,9 @@
-import { TextAttributes } from "@opentui/core";
 import { truncateWithOverflow } from "@/shared/display-sanitize";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import type { SessionQueuedSubmission } from "../../engine/types";
 import type { SessionSubmissionComposition } from "../../session-operation";
 
-/** How many waiting submissions the strip names before it counts the rest. */
-const MAX_VISIBLE_SUBMISSIONS = 3;
 /** How much of one waiting submission fits on its line. */
 const MAX_ITEM_CHARS = 80;
 /** Marks the submission that the next Recall takes back. */
@@ -73,10 +71,9 @@ const describeStripLine = (
 };
 
 /**
- * What is waiting on the Submission Queue: the count, one line per waiting
- * submission with the next one marked, and the keys that recall them. It
- * renders nothing while nothing waits, so the composer never carries an empty
- * affordance.
+ * The live Submission Queue: a compact themed panel with one line per waiting
+ * submission. The next item is marked so the two Recall gestures have a clear
+ * target, and the panel stays quiet when the queue is empty.
  */
 export function QueuedSubmissionStrip({
 	submissions,
@@ -87,35 +84,48 @@ export function QueuedSubmissionStrip({
 	if (submissions.length === 0) {
 		return null;
 	}
-	const visible = submissions.slice(0, MAX_VISIBLE_SUBMISSIONS);
-	const hidden = submissions.length - visible.length;
 	return (
-		<box flexDirection="column" flexShrink={0} width="100%">
-			<box flexDirection="row" flexShrink={0} width="100%">
-				<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-					{`${submissions.length} queued`}
+		<box
+			backgroundColor={colors.backgroundPanel}
+			border={["left"]}
+			borderColor={colors.borderActive}
+			flexDirection="column"
+			flexShrink={0}
+			paddingLeft={1}
+			paddingRight={1}
+			paddingY={1}
+			width="100%"
+		>
+			<box
+				alignItems="center"
+				flexDirection="row"
+				flexShrink={0}
+				marginBottom={1}
+				width="100%"
+			>
+				<text fg={colors.text}>
+					<strong fg={colors.primary}>{submissions.length}</strong>
+					<span fg={colors.textMuted}> queued</span>
 				</text>
-				<box flexDirection="row" flexShrink={0} gap={1} marginLeft="auto">
-					<text fg={colors.text}>Shift+Up</text>
-					<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-						next
-					</text>
-					<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-						·
-					</text>
-					<text fg={colors.text}>Alt+Up</text>
-					<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-						all
-					</text>
+				<box flexDirection="row" gap={2} marginLeft="auto">
+					<DialogFooterHint
+						label="next"
+						shortcut="Shift+Up"
+						shortcutColor={colors.primary}
+					/>
+					<DialogFooterHint
+						label="all"
+						shortcut="Alt+Up"
+						shortcutColor={colors.secondary}
+					/>
 				</box>
 			</box>
-			{visible.map((submission, index) => {
+			{submissions.map((submission, index) => {
 				// The oldest waiting submission is the one that runs next, so it
 				// is the one the next Recall takes back.
 				const isNext = index === 0;
 				return (
 					<text
-						attributes={isNext ? TextAttributes.NONE : TextAttributes.DIM}
 						fg={isNext ? colors.text : colors.textMuted}
 						key={submission.id}
 						truncate
@@ -127,11 +137,6 @@ export function QueuedSubmissionStrip({
 					</text>
 				);
 			})}
-			{hidden > 0 ? (
-				<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-					{`+${hidden}`}
-				</text>
-			) : null}
 		</box>
 	);
 }
