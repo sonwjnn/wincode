@@ -766,6 +766,16 @@ const consumeAgentTurnEvents = async ({
 	turn,
 	signal,
 }: AgentTurnEventConsumerOptions): Promise<void> => {
+	const holdTurnMs = Number.parseInt(
+		process.env.WINCODE_DEBUG_HOLD_TURN_MS ?? "",
+		10
+	);
+	if (Number.isFinite(holdTurnMs) && holdTurnMs > 0) {
+		await new Promise<void>((resolve) => {
+			setTimeout(resolve, holdTurnMs);
+		});
+	}
+
 	const lifecycle = providedLifecycle ?? createAgentTurnLifecycle(turn.id);
 	let viewState: SessionViewState = {
 		delegation: turn.delegation,
