@@ -706,13 +706,14 @@ describe("SessionView Submission Queue", () => {
 		}
 	});
 
-	test("empties the queue one submission per Shift+Up", async () => {
+	test("empties the queue one submission per Shift+Up, below the draft", async () => {
 		const { release, setup } = await renderBusySessionView();
 		try {
 			await submit(setup, "first waiting");
 			await waitFor(setup, () => fakeQueuedTexts.length === 1);
 			await submit(setup, "second waiting");
 			await waitFor(setup, () => fakeQueuedTexts.length === 2);
+			await typePrompt(setup, "my own draft");
 
 			setup.mockInput.pressArrow("up", { shift: true });
 			await waitFor(setup, () => fakeSessionRecalls === 1);
@@ -727,6 +728,15 @@ describe("SessionView Submission Queue", () => {
 			const frame = setup.captureCharFrame();
 			expect(frame).not.toMatch(QUEUED_COUNT_PATTERN);
 			expect(frame).not.toContain("Shift+Up");
+
+			// The draft stays on top and each recall lands below the one before
+			// it, so the composer reads in the order the queue would have run.
+			const draftAt = frame.indexOf("my own draft");
+			const firstAt = frame.indexOf("first waiting");
+			const secondAt = frame.indexOf("second waiting");
+			expect(draftAt).toBeGreaterThanOrEqual(0);
+			expect(firstAt).toBeGreaterThan(draftAt);
+			expect(secondAt).toBeGreaterThan(firstAt);
 		} finally {
 			release.resolve();
 			await flushUi(setup);

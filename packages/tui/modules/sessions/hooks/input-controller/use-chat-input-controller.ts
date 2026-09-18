@@ -311,7 +311,9 @@ export function useChatInputController({
 	/**
 	 * Restores recalled compositions through the same plumbing as history
 	 * recall: programmatic text, recalled attachments, and recalled pasted
-	 * text, old submissions first and the composer's own draft last.
+	 * text. The composer's own draft comes first and the recalled submissions
+	 * follow it, oldest first, so recalling one at a time appends below what is
+	 * already there and the queue keeps its order.
 	 */
 	const recall = useCallback(
 		(
@@ -326,7 +328,7 @@ export function useChatInputController({
 				pastedText: draft.pastedText,
 				text: draft.text.trim(),
 			};
-			const compositions = [...entries, draftComposition].filter(
+			const compositions = [draftComposition, ...entries].filter(
 				(composition) =>
 					composition.text.length > 0 || composition.files.length > 0
 			);

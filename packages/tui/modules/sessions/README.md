@@ -40,7 +40,8 @@ attachment blobs the Engine held for it while it waited. Recall answers to two
 gestures: `Alt+Up` (`Alt+Z` where a terminal cannot deliver Alt+Arrow) takes the
 whole queue, and `Shift+Up` takes only the submission that runs next — the rest
 keep waiting and draining, and resubmitting a withdrawn one joins the tail of
-the queue like any other send.
+the queue like any other send. Recalled compositions land below the composer's
+draft, oldest first, so recalling one at a time appends in queue order.
 
 The Agent Runtime consumer lives with the Agent Turn it consumes
 (`hooks/runtime-turn.ts`), and the CLI projects its events into its OpenTUI
