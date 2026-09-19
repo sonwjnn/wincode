@@ -954,3 +954,162 @@ describe("createAiSdkAgentRuntime tool-armed turns", () => {
 		]);
 	});
 });
+/** One step's prompt as the SDK hands it to the step hook. */
+type StepPrompt = Array<{ content: unknown; role: string }>;
+
+/** The text every message of a step prompt carries, in order. */
+const promptTexts = (messages: StepPrompt): string[] =>
+	messages.flatMap(({ content }) =>
+		Array.isArray(content)
+			? content.flatMap((part) =>
+					typeof part === "object" &&
+					part !== null &&
+					"text" in part &&
+					typeof part.text === "string"
+						? [part.text]
+						: []
+				)
+			: []
+	);
+
+describe("createAiSdkAgentRuntime steering messages", () => {
+	test("inserts what the intake returns at a Model Step boundary after the first step", async () => {
+		const subject = await loadSubject([
+			{ type: "start-step", request: {}, warnings: [] },
+			{ type: "text-start", id: "t1" },
+			{ type: "text-delta", id: "t1", text: "Reading" },
+			{ type: "text-end", id: "t1" },
+			{
+				type: "finish-step",
+				response: {},
+				usage: { inputTokens: 5, outputTokens: 2 },
+				finishReason: "tool-calls",
+				rawFinishReason: "tool-calls",
+				providerMetadata: undefined,
+			},
+			{ type: "start-step", request: {}, warnings: [] },
+			{ type: "text-start", id: "t2" },
+			{ type: "text-delta", id: "t2", text: "Done" },
+			{ type: "text-end", id: "t2" },
+			{
+				type: "finish-step",
+				response: {},
+				usage: { inputTokens: 3, outputTokens: 1 },
+				finishReason: "stop",
+				rawFinishReason: "stop",
+				providerMetadata: undefined,
+			},
+			{
+				type: "finish",
+				finishReason: "stop",
+				rawFinishReason: "stop",
+				totalUsage: { inputTokens: 8, outputTokens: 3 },
+			},
+		]);
+		const delivered = [
+			{
+				id: makeMessageId("msg-steer"),
+				parts: [{ text: "Use the other approach", type: "text" }],
+				role: "user" as const,
+			},
+		];
+		let taken = 0;
+		const runtime = subject.createAiSdkAgentRuntime();
+		await consume(
+			runtime.run(toolArmedTurn(), {
+				// The Engine hands a message over once: a later boundary finds an
+				// empty lane.
+				takeSteeringMessages: () => {
+					taken += 1;
+					return taken === 1 ? delivered : [];
+				},
+			})
+		);
+		const prepareStep = subject.agentSettings[0]?.prepareStep as
+			| ((options: {
+					messages: StepPrompt;
+					stepNumber: number;
+			  }) => { messages?: StepPrompt } | undefined)
+			| undefined;
+		expect(typeof prepareStep).toBe("function");
+
+		const firstStep: StepPrompt = [
+			{ content: [{ text: "Say hello", type: "text" }], role: "user" },
+		];
+		const secondStep: StepPrompt = [
+			...firstStep,
+			{ content: [{ text: "Reading", type: "text" }], role: "assistant" },
+			{
+				content: [
+					{
+						output: { type: "json", value: { content: "c" } },
+						toolCallId: "call-1",
+						toolName: "read",
+						type: "tool-result",
+					},
+				],
+				role: "tool",
+			},
+		];
+		const thirdStep: StepPrompt = [
+			...secondStep,
+			{ content: [{ text: "Done", type: "text" }], role: "assistant" },
+		];
+
+		// The first Model Step has no boundary behind it, so nothing is taken and
+		// its prompt is left exactly as the SDK prepared it.
+		expect(
+			prepareStep?.({ messages: firstStep, stepNumber: 0 })
+		).toBeUndefined();
+		expect(taken).toBe(0);
+
+		// The boundary after the first step delivers the message to the next call,
+		// converted to the SDK's own message shape on the way.
+		expect(prepareStep?.({ messages: secondStep, stepNumber: 1 })).toEqual({
+			messages: [
+				...secondStep,
+				{
+					content: [{ text: "Use the other approach", type: "text" }],
+					role: "user",
+				},
+			],
+		});
+		expect(taken).toBe(1);
+
+		// The SDK rebuilds each step's prompt from its own list, so a later step
+		// must still carry what an earlier boundary inserted.
+		expect(
+			promptTexts(
+				prepareStep?.({ messages: thirdStep, stepNumber: 2 })?.messages ?? []
+			)
+		).toEqual(["Say hello", "Reading", "Use the other approach", "Done"]);
+	});
+
+	test("leaves the Model Steps alone when the caller provides no intake", async () => {
+		const subject = await loadSubject([
+			{ type: "start-step", request: {}, warnings: [] },
+			{ type: "text-start", id: "t1" },
+			{ type: "text-delta", id: "t1", text: "Done" },
+			{ type: "text-end", id: "t1" },
+			{
+				type: "finish-step",
+				response: {},
+				usage: { inputTokens: 3, outputTokens: 1 },
+				finishReason: "stop",
+				rawFinishReason: "stop",
+				providerMetadata: undefined,
+			},
+			{
+				type: "finish",
+				finishReason: "stop",
+				rawFinishReason: "stop",
+				totalUsage: { inputTokens: 3, outputTokens: 1 },
+			},
+		]);
+		const runtime = subject.createAiSdkAgentRuntime();
+		await consume(runtime.run(toolArmedTurn()));
+
+		// A turn nobody can steer keeps the SDK's own step handling untouched.
+		expect(subject.agentSettings[0]?.prepareStep).toBeUndefined();
+	});
+});

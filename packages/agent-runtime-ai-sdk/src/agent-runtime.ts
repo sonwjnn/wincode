@@ -40,6 +40,7 @@ import {
 } from "@wincode/runtime-utils";
 import {
 	jsonSchema,
+	type PrepareStepFunction,
 	stepCountIs,
 	type ToolExecutionOptions,
 	ToolLoopAgent,
@@ -423,22 +424,22 @@ const modelContentFor = (
 	return part.type === "file" ? fileContent(part) : textContent(part);
 };
 
+/** Converts one Wincode message to the AI SDK model message the Model receives. */
+const toAiSdkModelMessage = (message: AgentTurnMessage): ModelMessage => {
+	const content = message.parts.map((part) =>
+		modelContentFor(part, message.role)
+	);
+	const role = message.role;
+	return { content, role } as ModelMessage;
+};
+
 /**
  * Converts Wincode input messages to AI SDK model messages. Assistant
  * messages keep their text, file, and tool-call parts; `tool` role messages
  * carry the Tool Call results the next Model Step must observe.
  */
-const toAiSdkModelMessages = (turn: AgentTurn): ModelMessage[] => {
-	const modelMessages: ModelMessage[] = [];
-	for (const message of turn.input.messages) {
-		const content = message.parts.map((part) =>
-			modelContentFor(part, message.role)
-		);
-		const role = message.role;
-		modelMessages.push({ content, role } as ModelMessage);
-	}
-	return modelMessages;
-};
+const toAiSdkModelMessages = (turn: AgentTurn): ModelMessage[] =>
+	turn.input.messages.map(toAiSdkModelMessage);
 
 const resolveRuntimeModel = (
 	resolveModel: ResolveAgentModel,
@@ -507,10 +508,64 @@ const toAiSdkToolSet = (tools: readonly ResolvedTool[]): ToolSet => {
 	return set as ToolSet;
 };
 
+/**
+ * The Steering Messages one delivery point inserted, and where in the step's
+ * prompt they belong: a boundary takes them after everything the steps before
+ * it produced, and the SDK rebuilds each step's prompt from its own message
+ * list, so the insertion is replayed from this index for every later step.
+ */
+type SteeringInsertion = Readonly<{
+	at: number;
+	messages: readonly ModelMessage[];
+}>;
+
+/** One prompt with every Steering Message at the boundary it was delivered at. */
+const promptWithSteering = (
+	messages: readonly ModelMessage[],
+	insertions: readonly SteeringInsertion[]
+): ModelMessage[] => {
+	const prompt: ModelMessage[] = [];
+	let cursor = 0;
+	for (const insertion of insertions) {
+		prompt.push(...messages.slice(cursor, insertion.at), ...insertion.messages);
+		cursor = insertion.at;
+	}
+	return [...prompt, ...messages.slice(cursor)];
+};
+
+/**
+ * The AI SDK step hook the steering intake rides on. It runs before every
+ * model call, and the first Model Step is left alone: a turn that runs exactly
+ * one step has no boundary, so its Steering Messages keep waiting instead of
+ * being inserted before a call the turn never makes again. Nothing here
+ * interrupts a model call in flight — the hook only runs between them.
+ */
+const createSteeringPrepareStep = (
+	takeSteeringMessages: () => readonly AgentTurnMessage[]
+): PrepareStepFunction<ToolSet> => {
+	const insertions: SteeringInsertion[] = [];
+	return ({ messages, stepNumber }) => {
+		if (stepNumber > 0) {
+			const joined = takeSteeringMessages();
+			if (joined.length > 0) {
+				insertions.push({
+					at: messages.length,
+					messages: joined.map(toAiSdkModelMessage),
+				});
+			}
+		}
+		if (insertions.length === 0) {
+			return;
+		}
+		return { messages: promptWithSteering(messages, insertions) };
+	};
+};
+
 const createAgentLoop = (
 	agent: AgentTurn["agent"],
 	resolved: ResolvedModel,
-	tools: readonly ResolvedTool[]
+	tools: readonly ResolvedTool[],
+	takeSteeringMessages?: () => readonly AgentTurnMessage[]
 ): ToolLoopAgent<never, ToolSet> => {
 	const toolArmed = tools.length > 0;
 	try {
@@ -521,6 +576,11 @@ const createAgentLoop = (
 			instructions: agent.instructions,
 			maxOutputTokens: resolved.maxOutputTokens,
 			model: resolved.model,
+			...omitUndefined({
+				prepareStep: isUndefined(takeSteeringMessages)
+					? undefined
+					: createSteeringPrepareStep(takeSteeringMessages),
+			}),
 			providerOptions: resolved.providerOptions,
 			stopWhen: stepCountIs(toolArmed ? TOOL_ARMED_STEP_LIMIT : 1),
 			tools: toolArmed ? toAiSdkToolSet(tools) : noToolSet,
@@ -568,7 +628,7 @@ export const createAiSdkAgentRuntime = (
 
 const runAgentTurn = async function* (
 	turn: AgentTurn,
-	{ deadlineMs, signal }: AgentRuntimeRunOptions,
+	{ deadlineMs, signal, takeSteeringMessages }: AgentRuntimeRunOptions,
 	resolveModel: ResolveAgentModel
 ): AsyncGenerator<AgentTurnEvent, void, undefined> {
 	const lifecycle = createAgentTurnLifecycle(turn.id);
@@ -605,7 +665,12 @@ const runAgentTurn = async function* (
 	}
 
 	const resolved = resolveRuntimeModel(resolveModel, model);
-	const agentLoop = createAgentLoop(agent, resolved, tools);
+	const agentLoop = createAgentLoop(
+		agent,
+		resolved,
+		tools,
+		takeSteeringMessages
+	);
 
 	try {
 		const result = await awaitWithAbort(
