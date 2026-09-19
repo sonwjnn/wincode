@@ -14,7 +14,6 @@ export const MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS = 256;
 export const COMPACTION_TRIGGER_REASONS = [
 	"manual",
 	"threshold",
-	"mid-turn",
 	"overflow",
 ] as const;
 

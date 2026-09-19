@@ -36,7 +36,6 @@ export const DEFAULT_COMPACTION_SETTINGS = {
 	maxMediaAttachments: 2,
 	maxMediaBytes: 4 * 1024 * 1024,
 	maxMediaTokens: 4096,
-	midTurnEnabled: true,
 	overflowRecovery: true,
 	reserveTokens: 16_384,
 } as const;
@@ -49,7 +48,6 @@ export type CompactionSettings = {
 	maxMediaAttachments: number;
 	maxMediaBytes: number;
 	maxMediaTokens: number;
-	midTurnEnabled: boolean;
 	overflowRecovery: boolean;
 	reserveTokens: number;
 };
@@ -78,7 +76,6 @@ export type ResolvedCompactionSettings = {
 	maxMediaAttachments: number;
 	maxMediaBytes: number;
 	maxMediaTokens: number;
-	midTurnAvailable: boolean;
 	modelContextLimit: number | null;
 	overflowRecoveryAvailable: boolean;
 	resolved: CompactionSettings;
@@ -88,7 +85,6 @@ export type ResolvedCompactionSettings = {
 	thresholdTokens: number | null;
 	enabled: boolean;
 	auto: boolean;
-	midTurnEnabled: boolean;
 	overflowRecovery: boolean;
 };
 
@@ -104,12 +100,7 @@ type SettingsRecord = Readonly<Record<string, unknown>>;
 
 const settingsRecordSchema = z.record(z.string(), z.unknown());
 
-const BOOLEAN_SETTING_KEYS = [
-	"enabled",
-	"auto",
-	"overflowRecovery",
-	"midTurnEnabled",
-] as const;
+const BOOLEAN_SETTING_KEYS = ["enabled", "auto", "overflowRecovery"] as const;
 
 const isPositiveInteger = (value: unknown): value is number =>
 	isNumber(value) && Number.isSafeInteger(value) && value > 0;
@@ -381,9 +372,6 @@ export const resolveCompactionSettings = (
 		maxMediaAttachments: resolved.maxMediaAttachments,
 		maxMediaBytes: resolved.maxMediaBytes,
 		maxMediaTokens: resolved.maxMediaTokens,
-		midTurnAvailable:
-			resolved.enabled && resolved.midTurnEnabled && !isNull(thresholdTokens),
-		midTurnEnabled: resolved.midTurnEnabled,
 		modelContextLimit:
 			!(isUndefined(contextLimit) || isNull(contextLimit)) && contextLimit > 0
 				? contextLimit
