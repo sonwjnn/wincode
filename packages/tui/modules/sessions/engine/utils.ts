@@ -54,3 +54,12 @@ export const isSessionBusy = (snapshot: SessionSnapshot): boolean =>
 	snapshot.turnActive ||
 	snapshot.isCompacting ||
 	snapshot.approvals.some((approval) => isUndefined(approval.decision));
+
+/**
+ * Whether the session's Agent Turn is the one a submission may steer right now.
+ * It is the same fact the Engine admits on and the composer refuses by: while a
+ * turn runs, a submission joins that turn's Steering Lane instead of waiting
+ * for it to end.
+ */
+export const acceptsSteeringMessages = (snapshot: SessionSnapshot): boolean =>
+	snapshot.turnActive;

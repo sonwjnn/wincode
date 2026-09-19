@@ -1,5 +1,6 @@
 import type {
 	AgentId,
+	AgentTurnId,
 	AttachmentId,
 	SessionMessageId,
 	ToolCallId,
@@ -149,6 +150,12 @@ export type SessionMessageTerminalOutcome =
 export type SessionMessageMetadata = {
 	readonly agent?: AgentId;
 	readonly interrupted?: boolean;
+	/**
+	 * The Agent Turn a user message joined instead of opening. The message the
+	 * turn started from keeps `sourceUserMessageId` as its anchor, so retry and
+	 * Overflow Recovery keep walking the turn this message joined.
+	 */
+	readonly joinedTurnId?: AgentTurnId;
 	readonly model?: ChatModelSelection;
 	readonly responseTimeMs?: number;
 	readonly skill?: SessionMessageSkill;
@@ -190,6 +197,11 @@ export const sessionMessageMetadataSchema = z
 	.object({
 		agent: agentIdSchema.optional(),
 		interrupted: z.boolean().optional(),
+		joinedTurnId: z
+			.string()
+			.min(1)
+			.transform((value): AgentTurnId => value as AgentTurnId)
+			.optional(),
 		model: sessionMessageModelSchema.optional(),
 		responseTimeMs: z.number().int().nonnegative().optional(),
 		skill: sessionMessageSkillSchema.optional(),

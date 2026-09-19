@@ -9,6 +9,7 @@ import {
 	type SubmitSnapshot,
 	submitPrompt,
 } from "@/modules/sessions/hooks/input-controller/submit";
+import type { ChatPromptSubmission } from "@/modules/sessions/utils";
 
 const TEST_SKILL: Skill = {
 	body: "Review the implementation carefully.",
@@ -556,5 +557,108 @@ describe("submitPrompt", () => {
 			"Commit the staged changes with a conventional message.",
 		]);
 		expect(accepted).toBe(true);
+	});
+});
+
+describe("submitPrompt while steering a running Agent Turn", () => {
+	const imageFile = {
+		filename: "clipboard.png",
+		mediaType: "image/png",
+		type: "file" as const,
+		url: "data:image/png;base64,AAAA",
+	};
+
+	test("refuses attachments instead of promising the turn a delivery it cannot pay for", async () => {
+		const errors: string[] = [];
+		const submissions: ChatPromptSubmission[] = [];
+
+		const accepted = await submitPrompt(
+			createDependencies({
+				onError: (message) => errors.push(message),
+				onSubmit: (submission) => {
+					submissions.push(submission);
+				},
+				steering: true,
+			}),
+			{
+				...emptySnapshot(),
+				files: [imageFile],
+				rawText: "[Image 1] keep going",
+			}
+		);
+
+		expect(accepted).toBe(false);
+		expect(errors).toEqual(["Attachments cannot join a running Agent Turn."]);
+		expect(submissions).toEqual([]);
+	});
+
+	test("refuses a Skill invocation rather than arming a catalog inside the turn", async () => {
+		const errors: string[] = [];
+
+		const accepted = await submitPrompt(
+			createDependencies({
+				discoverSkills: async () => [TEST_SKILL],
+				onError: (message) => errors.push(message),
+				steering: true,
+			}),
+			{ ...emptySnapshot(), rawText: "/skill:review focus on auth" }
+		);
+
+		expect(accepted).toBe(false);
+		expect(errors).toEqual([
+			"A Skill cannot be invoked on a Steering Message.",
+		]);
+	});
+
+	test("refuses a Custom Command invocation", async () => {
+		const errors: string[] = [];
+
+		const accepted = await submitPrompt(
+			createDependencies({
+				discoverCustomCommands: async () => [TEST_CUSTOM_COMMAND],
+				onError: (message) => errors.push(message),
+				steering: true,
+			}),
+			{ ...emptySnapshot(), rawText: "/git-commit" }
+		);
+
+		expect(accepted).toBe(false);
+		expect(errors).toEqual([
+			"A Custom Command cannot be invoked on a Steering Message.",
+		]);
+	});
+
+	test("sends plain text with the composition it was written from", async () => {
+		const submissions: ChatPromptSubmission[] = [];
+
+		const accepted = await submitPrompt(
+			createDependencies({
+				discoverCustomCommands: async () => [TEST_CUSTOM_COMMAND],
+				onSubmit: (submission) => {
+					submissions.push(submission);
+				},
+				steering: true,
+			}),
+			{
+				...emptySnapshot(),
+				// A mention and an unknown slash word are ordinary text, not an
+				// invocation: the message carries them literally.
+				rawText: "use @src/index.ts and /unknown instead",
+			}
+		);
+
+		expect(accepted).toBe(true);
+		expect(submissions).toEqual([
+			{
+				composition: {
+					files: [],
+					fileTokens: [],
+					pastedText: [],
+					text: "use @src/index.ts and /unknown instead",
+				},
+				files: [],
+				text: "use @src/index.ts and /unknown instead",
+			},
+		]);
 	});
 });

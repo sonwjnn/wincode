@@ -8,6 +8,12 @@ entry point and accepts instead of rejecting while the session is busy.
 
 Status: accepted
 
+Revised 2026-09-19: the steering-lane rejection under "Considered options" is
+superseded by ADR-0022, which accepts a Steering Lane that delivers inside a
+running Agent Turn at a Model Step boundary. Nothing else here changes — the
+Submission Queue, its drain boundary after each terminal Agent Turn outcome, and
+Recall all stand as decided.
+
 ## Decision
 
 - While a session is busy — a running Agent Turn or a compaction in flight —

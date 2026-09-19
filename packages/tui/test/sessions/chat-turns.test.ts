@@ -11,6 +11,7 @@ import {
 } from "@/modules/sessions/ui/components/chat-turns";
 import {
 	agentId,
+	agentTurnId,
 	modelId,
 	sessionMessageId,
 	toolCallId,
@@ -252,4 +253,56 @@ test("groups matching metadata while the next turn runs and after completion", (
 			message.id,
 		])
 	).toEqual([["user-2", "assistant-2"]]);
+});
+
+test("keeps a Steering Message inside the turn it joined", () => {
+	const steering: SessionMessage = {
+		...user("user-steer"),
+		metadata: { joinedTurnId: agentTurnId("turn-1") },
+	};
+	const turns = groupMessagesBySessionTurn([
+		user("user-1"),
+		assistant("assistant-1"),
+		steering,
+		assistant("assistant-2"),
+		user("user-2"),
+	]);
+
+	// The correction is part of the turn it was delivered into: the transcript
+	// reads as the turn the model actually ran, and only the message that
+	// opened the next turn starts one.
+	expect(
+		turns.map((turn) => turn.messages.map((message) => message.id))
+	).toEqual([
+		[
+			sessionMessageId("user-1"),
+			sessionMessageId("assistant-1"),
+			sessionMessageId("user-steer"),
+			sessionMessageId("assistant-2"),
+		],
+		[sessionMessageId("user-2")],
+	]);
+});
+
+test("retries the message that opened the turn a Steering Message joined", () => {
+	const steering: SessionMessage = {
+		...user("user-steer"),
+		metadata: { joinedTurnId: agentTurnId("turn-1") },
+	};
+	const failedAssistant = assistant("assistant-1");
+	const messages = [
+		user("user-1"),
+		steering,
+		{ ...failedAssistant, metadata: { terminalOutcome: "failed" as const } },
+	];
+
+	// Retry replays the turn from the input that started it, so a joined message
+	// is never mistaken for a new attempt's opener, and the correction the user
+	// made inside the failed turn stays in the replayed context.
+	expect(resolveRetryMessageId(messages)).toBe(sessionMessageId("user-1"));
+	const retry = prepareRetryMessages(messages, sessionMessageId("user-1"));
+	expect(retry.kind).toBe("ready");
+	expect(
+		retry.kind === "ready" ? retry.messages.map(({ id }) => id) : []
+	).toEqual([sessionMessageId("user-1"), sessionMessageId("user-steer")]);
 });

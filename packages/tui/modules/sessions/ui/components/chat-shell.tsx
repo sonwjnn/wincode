@@ -19,7 +19,10 @@ import {
 	isCompactionSummaryMessage,
 	type SessionCompaction,
 } from "../../compaction";
-import type { SessionQueuedSubmission } from "../../engine/types";
+import type {
+	SessionQueuedSubmission,
+	SessionSteeringMessage,
+} from "../../engine/types";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import type { SessionViewState } from "../../hooks/runtime-turn";
 import type { SessionSubmissionComposition } from "../../session-operation";
@@ -36,10 +39,11 @@ import {
 } from "./chat-turns";
 import { CompactionDivider } from "./compaction-divider";
 import { CompactionStatus } from "./compaction-status";
-import { QueuedSubmissionStrip } from "./queued-submission-strip";
 import { SessionUsageBar } from "./session-usage-bar";
+import { WaitingMessageStrip } from "./waiting-message-strip";
 
 const EMPTY_QUEUED_SUBMISSIONS: readonly SessionQueuedSubmission[] = [];
+const EMPTY_STEERING_MESSAGES: readonly SessionSteeringMessage[] = [];
 
 type ChatShellProps = {
 	activeMessages?: readonly SessionMessage[];
@@ -62,6 +66,10 @@ type ChatShellProps = {
 	recalledSubmissions?: readonly SessionSubmissionComposition[];
 	/** Changes whenever `recalledSubmissions` holds something new to restore. */
 	recallRevision?: number;
+	/** Whether the composer submits into the running turn's Steering Lane. */
+	steering?: boolean;
+	/** Steering Messages, oldest first; the strip shows them ahead of the queue. */
+	steeringMessages?: readonly SessionSteeringMessage[];
 	viewState?: SessionViewState;
 };
 function ActivityFooter({
@@ -132,6 +140,8 @@ export function ChatShell({
 	queuedSubmissions = EMPTY_QUEUED_SUBMISSIONS,
 	recalledSubmissions,
 	recallRevision,
+	steering = false,
+	steeringMessages = EMPTY_STEERING_MESSAGES,
 	viewState,
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
@@ -266,7 +276,10 @@ export function ChatShell({
 				paddingY={1}
 				width="100%"
 			>
-				<QueuedSubmissionStrip submissions={queuedSubmissions} />
+				<WaitingMessageStrip
+					queued={queuedSubmissions}
+					steering={steeringMessages}
+				/>
 				{hasPendingApproval ? (
 					// The pending dock replaces the composer AND the session
 					// footer row while a decision is owed.
@@ -283,6 +296,7 @@ export function ChatShell({
 								recalledSubmissions={recalledSubmissions}
 								recallRevision={recallRevision}
 								sessionPromptHistory={promptHistory}
+								steering={steering}
 							/>
 						</box>
 						<box

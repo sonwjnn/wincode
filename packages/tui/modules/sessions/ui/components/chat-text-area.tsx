@@ -92,6 +92,11 @@ type ChatTextAreaProps = {
 	recallRevision?: number;
 	sessionPromptHistory?: PromptHistoryEntry[];
 	showCompactCommand?: boolean;
+	/**
+	 * Whether the composer is submitting into the running Agent Turn: it then
+	 * takes plain text only, and Tab cannot change the Agent inside that turn.
+	 */
+	steering?: boolean;
 	onSubmit: (
 		submission: ChatPromptSubmission
 	) => boolean | Promise<boolean> | void | Promise<void>;
@@ -143,6 +148,7 @@ export function ChatTextArea({
 	recallRevision = 0,
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
 	showCompactCommand = true,
+	steering = false,
 }: ChatTextAreaProps) {
 	const { agent, cycleAgent, cycleVariant, model } = usePromptConfig();
 	const supportedModel = findSupportedChatModelSelection(model);
@@ -254,6 +260,7 @@ export function ChatTextArea({
 				? cycleVariant()
 				: cycleAgent(registry?.selectableAgents ?? builtInAgents),
 		sessionPromptHistory,
+		steering,
 	});
 	const commandEscapeRef = useLatest(actions.onEscape);
 	const currentTextRef = useLatest(state.text);

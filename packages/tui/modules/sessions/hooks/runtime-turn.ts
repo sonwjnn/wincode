@@ -740,6 +740,7 @@ type AgentTurnEventConsumerOptions = {
 	onViewState?: (state: SessionViewState) => void;
 	runtime: AgentRuntime;
 	signal?: AbortSignal;
+	takeSteeringMessages?: () => readonly AgentTurnMessage[];
 	turn: AgentTurn;
 	onEvent: (event: AgentTurnEvent) => void | Promise<void>;
 	onTerminal: (event: AgentTurnTerminalEvent) => void | Promise<void>;
@@ -763,8 +764,9 @@ const consumeAgentTurnEvents = async ({
 	onTerminal,
 	onViewState,
 	runtime,
-	turn,
 	signal,
+	takeSteeringMessages,
+	turn,
 }: AgentTurnEventConsumerOptions): Promise<void> => {
 	const lifecycle = providedLifecycle ?? createAgentTurnLifecycle(turn.id);
 	let viewState: SessionViewState = {
@@ -806,7 +808,10 @@ const consumeAgentTurnEvents = async ({
 			// Presentation subscribers are observational only.
 		}
 	};
-	for await (const event of runtime.run(turn, { signal })) {
+	for await (const event of runtime.run(turn, {
+		...omitUndefined({ takeSteeringMessages }),
+		signal,
+	})) {
 		if (
 			signal?.aborted &&
 			!isTerminalEvent(event) &&
@@ -892,6 +897,7 @@ export const runAgentTurnToText = async ({
 	runtime,
 	signal,
 	sourceUserMessageId,
+	takeSteeringMessages,
 	turn,
 }: {
 	onCheckpoint?: CheckpointCommitter;
@@ -902,6 +908,7 @@ export const runAgentTurnToText = async ({
 	runtime: AgentRuntime;
 	signal?: AbortSignal;
 	sourceUserMessageId?: SessionMessageId;
+	takeSteeringMessages?: () => readonly SessionMessage[];
 	turn: AgentTurn;
 }): Promise<string> => {
 	let assistantText = "";
@@ -965,6 +972,11 @@ export const runAgentTurnToText = async ({
 		onViewState,
 		runtime,
 		signal,
+		...omitUndefined({
+			takeSteeringMessages: isUndefined(takeSteeringMessages)
+				? undefined
+				: () => takeSteeringMessages().flatMap(toAgentTurnMessages),
+		}),
 		turn,
 	});
 	const terminalEvent = terminalEventForOutcome(

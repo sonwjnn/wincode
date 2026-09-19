@@ -474,3 +474,57 @@ test("surfaces terminal checkpoint failures without exposing terminal output", a
 	).rejects.toThrow("The Agent Turn outcome could not be persisted.");
 	expect(terminalObserved).toBe(false);
 });
+
+test("hands Steering Messages to the runtime as Agent Turn messages", async () => {
+	const turn = createTurn();
+	let takenAtBoundary: AgentTurn["input"]["messages"] = [];
+	const runtime: AgentRuntime = {
+		async *run(currentTurn, options): AsyncGenerator<AgentTurnEvent> {
+			yield {
+				agentId: currentTurn.agent.id,
+				sequence: 0,
+				startedAt: 100,
+				turnId: currentTurn.id,
+				type: "agent-turn-started",
+			};
+			// The boundary the AI SDK adapter reaches between Model Steps.
+			takenAtBoundary = options?.takeSteeringMessages?.() ?? [];
+			yield {
+				delta: "Done",
+				sequence: 1,
+				turnId: currentTurn.id,
+				type: "text-delta",
+			};
+			yield {
+				finishedAt: 200,
+				sequence: 2,
+				turnId: currentTurn.id,
+				type: "agent-turn-completed",
+				usage: { inputTokens: 12, outputTokens: 4 },
+			};
+		},
+	};
+
+	await runAgentTurnToText({
+		runtime,
+		takeSteeringMessages: () => [
+			{
+				id: sessionMessageId("message-steer"),
+				metadata: { joinedTurnId: turn.id },
+				parts: [{ text: "use the cache instead", type: "text" }],
+				role: "user",
+			},
+		],
+		turn,
+	});
+
+	// The Engine's Session Message crosses the boundary as an Agent Turn
+	// message, so no session-layer type reaches the runtime.
+	expect(takenAtBoundary).toEqual([
+		{
+			id: sessionMessageId("message-steer"),
+			parts: [{ text: "use the cache instead", type: "text" }],
+			role: "user",
+		},
+	]);
+});

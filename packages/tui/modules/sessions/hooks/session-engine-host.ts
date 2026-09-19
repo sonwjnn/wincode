@@ -486,6 +486,10 @@ export const createSessionEngineHost = (
 				...omitUndefined({
 					sourceUserMessageId: execution.sourceUserMessageId ?? undefined,
 				}),
+				// The Engine hands this turn the Steering Messages that joined
+				// it; the host only forwards the intake, so the Agent Runtime
+				// boundary stays the one place that translates them.
+				takeSteeringMessages: request.takeSteeringMessages,
 				turn,
 			});
 			return { turn };

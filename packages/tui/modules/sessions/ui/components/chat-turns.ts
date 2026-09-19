@@ -84,7 +84,14 @@ export const groupMessagesBySessionTurn = (
 	let currentTurn: SessionTurn | null = null;
 
 	for (const message of messages) {
-		if (message.role === "user" || isNull(currentTurn)) {
+		// A user message that joined a running Agent Turn does not open one: it
+		// belongs to the turn it was delivered into, so the transcript reads as
+		// the turn the model actually ran.
+		const joinedTurnId = message.metadata?.joinedTurnId;
+		if (
+			isNull(currentTurn) ||
+			(message.role === "user" && isUndefined(joinedTurnId))
+		) {
 			currentTurn = { id: message.id, messages: [message] };
 			turns.push(currentTurn);
 			if (message.role === "user") {
@@ -121,9 +128,11 @@ const canRetryPrimaryUser = (
 
 /**
  * Returns the latest logical primary user message whose attempt can be retried.
- * An attempt ends at the next primary user; completed Tool Calls suppress replay
- * because repeating them can duplicate side effects. Persisted failure outcomes
- * remain explicitly retryable.
+ * An attempt ends at the next primary user — the message that opened its turn,
+ * never one that joined a running turn — because retry replays the turn from
+ * the input that started it. Completed Tool Calls suppress replay because
+ * repeating them can duplicate side effects. Persisted failure outcomes remain
+ * explicitly retryable.
  */
 export const resolveRetryMessageId = (
 	messages: readonly SessionMessage[]
@@ -133,7 +142,9 @@ export const resolveRetryMessageId = (
 	);
 	const userIndex = primaryMessages.findLastIndex(
 		(message, index) =>
-			message.role === "user" && canRetryPrimaryUser(primaryMessages, index)
+			message.role === "user" &&
+			isUndefined(message.metadata?.joinedTurnId) &&
+			canRetryPrimaryUser(primaryMessages, index)
 	);
 	return userIndex === -1 ? undefined : primaryMessages[userIndex]?.id;
 };

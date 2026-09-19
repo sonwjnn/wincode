@@ -13,8 +13,8 @@ import {
 	omitUndefined,
 } from "@wincode/runtime-utils";
 import {
-	type QueuedSubmissionId,
 	toQueuedSubmissionId,
+	toSteeringMessageId,
 } from "@/shared/identifiers";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import type {
@@ -39,6 +39,7 @@ import type {
 	SessionSubmissionComposition,
 } from "../session-operation";
 import { createSessionOperation } from "../session-operation";
+import { buildUserSessionRecord } from "../storage/session-record";
 import {
 	createSubmissionPipeline,
 	type SubmissionPipeline,
@@ -59,9 +60,17 @@ import type {
 	SessionQueuedSendInput,
 	SessionQueuedSubmission,
 	SessionSnapshot,
+	SessionSteeringMessage,
 	SessionViewState,
+	SessionWaitingMessage,
+	SessionWaitingMessageId,
 } from "./types";
-import { exposedViewState, hasChanged, primaryEntry } from "./utils";
+import {
+	acceptsSteeringMessages,
+	exposedViewState,
+	hasChanged,
+	primaryEntry,
+} from "./utils";
 
 /** The deadline one Agent Turn submission runs with. */
 const AGENT_TURN_DEADLINE_MS = 43_200_000;
@@ -71,6 +80,18 @@ const SHUT_DOWN_SEND_ERROR = "The session has ended.";
 
 /** The reason a queued submission's attachments could not be kept. */
 const QUEUED_ATTACHMENT_ERROR = "Attachment data could not be stored.";
+
+/** The reason a Steering Message carrying attachments is refused. */
+const STEERING_ATTACHMENT_ERROR =
+	"A Steering Message carries text only: attachments are not accepted.";
+
+/** The reason a Steering Message invoking a Skill is refused. */
+const STEERING_SKILL_ERROR =
+	"A Steering Message cannot invoke a Skill: it carries text only.";
+
+/** The reason a Steering Message that is not a fresh prompt is refused. */
+const STEERING_INVOCATION_ERROR =
+	"A Steering Message carries text only: it cannot resend or edit another message.";
 
 /** The attachment blobs one queued composition holds. */
 const queuedAttachmentIds = ({
@@ -102,6 +123,7 @@ export const createSessionEngine = ({
 		executions: [],
 		isCompacting: false,
 		queuedSubmissions: [],
+		steeringMessages: [],
 		transcript: [...initialTranscript],
 		turnActive: false,
 		viewState: undefined,
@@ -610,6 +632,106 @@ export const createSessionEngine = ({
 		mergeTranscript(next);
 	};
 
+	/**
+	 * Delivers the Steering Lane into the running Agent Turn: the lane is
+	 * popped and every message becomes a Session Record at this moment, so the
+	 * delivery point and the commit point are the same event. The message joins
+	 * the Session Context and the Session Transcript, and its metadata names
+	 * the Agent Turn it joined rather than moving the anchor Overflow Recovery
+	 * and retry walk.
+	 */
+	const takeSteeringMessages = (
+		execution: SessionExecution
+	): SessionMessage[] => {
+		if (!isUndefined(execution.parent) || state.steeringMessages.length === 0) {
+			return [];
+		}
+		const taken = state.steeringMessages;
+		publish({ steeringMessages: [] });
+		// The message joins the turn it was sent to, so it records the Agent and
+		// Model Target that turn is already running with: a correction made
+		// mid-turn cannot switch a model under the user.
+		const delivered = taken.map(({ input }) =>
+			createSessionUserMessage(input.text, {
+				agent: execution.agent,
+				joinedTurnId: execution.turnId,
+				model: execution.model,
+				...omitUndefined({ variant: execution.variant }),
+			})
+		);
+		applyContext([...state.context, ...delivered]);
+		mergeTranscript(delivered);
+		for (const message of delivered) {
+			commitSteeringRecord(execution, message);
+		}
+		return delivered;
+	};
+	/**
+	 * Writes the Session Record of one delivered Steering Message. The write is
+	 * started at the delivery point and its failure is published, so a durable
+	 * commit that cannot land never rolls the delivered message back out of the
+	 * turn it already joined.
+	 */
+	const commitSteeringRecord = (
+		execution: SessionExecution,
+		message: SessionMessage
+	): void => {
+		ports
+			.commitRecord({
+				record: buildUserSessionRecord({
+					agentId: execution.agent,
+					message,
+					model: execution.model,
+					turnId: execution.turnId,
+					...omitUndefined({ variant: execution.variant }),
+				}),
+				sessionId,
+				sessionModel: execution.sessionModel,
+				...omitUndefined({ sessionVariant: execution.sessionVariant }),
+			})
+			.catch((error: unknown) => {
+				publish({
+					error: isError(error)
+						? error
+						: new Error("Could not save the Steering Message."),
+				});
+			});
+	};
+	/**
+	 * Hands anything still waiting in the Steering Lane to the Submission
+	 * Queue when its Agent Turn ends without delivering it — a tool-less turn
+	 * runs exactly one Model Step and has no boundary to deliver at. Acceptance
+	 * order is kept, so nothing is silently dropped and every message runs as
+	 * its own Agent Turn.
+	 */
+	const fallbackSteeringMessages = (): void => {
+		if (state.steeringMessages.length === 0) {
+			return;
+		}
+		const waiting: SessionQueuedSubmission[] = state.steeringMessages.map(
+			({ input }) => ({
+				id: toQueuedSubmissionId(crypto.randomUUID()),
+				input: {
+					agent: input.agent,
+					composition: input.composition,
+					files: input.composition.files,
+					model: input.model,
+					sessionModel: input.sessionModel,
+					userText: input.text,
+					...omitUndefined({
+						resolvedAgent: input.resolvedAgent,
+						sessionVariant: input.sessionVariant,
+						variant: input.variant,
+					}),
+				},
+			})
+		);
+		publish({
+			queuedSubmissions: [...state.queuedSubmissions, ...waiting],
+			steeringMessages: [],
+		});
+	};
+
 	let pipeline: SubmissionPipeline;
 	const operation = createSessionOperation({
 		deadlineMs: AGENT_TURN_DEADLINE_MS,
@@ -642,6 +764,7 @@ export const createSessionEngine = ({
 		beginExecution,
 		compact,
 		endExecution,
+		fallbackSteeringMessages,
 		getContext: () => state.context,
 		getTranscript: () => state.transcript,
 		mergeTranscript,
@@ -656,6 +779,7 @@ export const createSessionEngine = ({
 		setExecutionViewState,
 		setTurnActive,
 		settleCompaction,
+		takeSteeringMessages,
 	});
 
 	/**
@@ -787,28 +911,69 @@ export const createSessionEngine = ({
 		return { rejected: false };
 	};
 	/**
-	 * Withdraws waiting submissions for the composer, oldest first. Without
-	 * identifiers the whole queue is recalled; an identifier that names nothing
-	 * waiting is a no-op, so a submission that already started running is never
-	 * recalled and never runs twice.
+	 * Accepts one submission into the Steering Lane of the running Agent Turn:
+	 * a Steering Message carries text only, so nothing is materialised and
+	 * nothing is hydrated — it waits exactly as it was composed and travels at
+	 * the next Model Step boundary.
 	 */
-	const recallQueuedSubmissions = (
-		ids?: readonly QueuedSubmissionId[]
-	): SessionQueuedSubmission[] => {
-		const recalled = isUndefined(ids)
+	const acceptSteeringMessage = (
+		input: SessionSendInput
+	): SessionSendOutcome => {
+		const composition: SessionSubmissionComposition = input.composition ?? {
+			files: [],
+			text: input.userText ?? "",
+		};
+		if ((input.files ?? composition.files).length > 0) {
+			return { rejected: true, reason: STEERING_ATTACHMENT_ERROR };
+		}
+		if (!isUndefined(input.skill)) {
+			return { rejected: true, reason: STEERING_SKILL_ERROR };
+		}
+		if (!(isUndefined(input.messageId) && isUndefined(input.delegation))) {
+			return { rejected: true, reason: STEERING_INVOCATION_ERROR };
+		}
+		const steering: SessionSteeringMessage = {
+			id: toSteeringMessageId(crypto.randomUUID()),
+			input: {
+				agent: input.agent,
+				// The message carries text only, so its composition travels back
+				// to the composer exactly as it was composed.
+				composition: { ...composition, files: [] },
+				model: input.model,
+				sessionModel: input.sessionModel,
+				text: input.userText ?? composition.text,
+				...omitUndefined({
+					resolvedAgent: input.resolvedAgent,
+					sessionVariant: input.sessionVariant,
+					variant: input.variant,
+				}),
+			},
+		};
+		publish({ steeringMessages: [...state.steeringMessages, steering] });
+		return { rejected: false };
+	};
+	const recallWaitingMessages = (
+		ids?: readonly SessionWaitingMessageId[]
+	): SessionWaitingMessage[] => {
+		const steering = isUndefined(ids)
+			? [...state.steeringMessages]
+			: state.steeringMessages.filter(({ id }) => ids.includes(id));
+		const queued = isUndefined(ids)
 			? [...state.queuedSubmissions]
 			: state.queuedSubmissions.filter(({ id }) => ids.includes(id));
-		if (recalled.length === 0) {
+		if (steering.length === 0 && queued.length === 0) {
 			return [];
 		}
-		const recalledIds = new Set(recalled.map(({ id }) => id));
 		publish({
 			queuedSubmissions: state.queuedSubmissions.filter(
-				({ id }) => !recalledIds.has(id)
+				(submission) => !queued.includes(submission)
+			),
+			steeringMessages: state.steeringMessages.filter(
+				(message) => !steering.includes(message)
 			),
 		});
-		releaseQueuedAttachments(recalled);
-		return recalled;
+		releaseQueuedAttachments(queued);
+		return [...steering, ...queued];
 	};
 	/**
 	 * Whether a submission is held instead of run now: the lane is taken, the
@@ -822,13 +987,18 @@ export const createSessionEngine = ({
 		state.isCompacting ||
 		state.queuedSubmissions.length > 0;
 	/**
-	 * The Engine's one send entry point: a submission that arrives while the
-	 * session is busy joins the Submission Queue instead of being refused, and
-	 * an idle session runs it on the lane and then keeps the queue moving.
+	 * The Engine's one send entry point. A submission that arrives while an
+	 * Agent Turn is running joins that turn's Steering Lane and is delivered
+	 * inside it; while the session is busy any other way it joins the
+	 * Submission Queue and runs as its own Agent Turn; an idle session runs it
+	 * on the lane and then keeps the queue moving.
 	 */
 	const send = async (input: SessionSendInput): Promise<SessionSendOutcome> => {
 		if (isShutDown) {
 			return { rejected: true, reason: SHUT_DOWN_SEND_ERROR };
+		}
+		if (acceptsSteeringMessages(state)) {
+			return acceptSteeringMessage(input);
 		}
 		if (queuesSubmission()) {
 			return await acceptQueuedSubmission(input);
@@ -849,7 +1019,7 @@ export const createSessionEngine = ({
 		cancel: () => operation.cancel(),
 		cancelCompaction: () => {
 			compactionCommand?.abort();
-			return recallQueuedSubmissions();
+			return recallWaitingMessages();
 		},
 		closeApprovals,
 		compact,
@@ -857,10 +1027,10 @@ export const createSessionEngine = ({
 		getSnapshot: () => state,
 		interrupt: (preserveToolCallId) => {
 			operation.interrupt(preserveToolCallId);
-			return recallQueuedSubmissions();
+			return recallWaitingMessages();
 		},
 		mergeTranscript,
-		recallQueuedSubmissions,
+		recallWaitingMessages,
 		recoverOverflow,
 		requestApproval,
 		respondToApproval: settleApproval,
@@ -870,7 +1040,7 @@ export const createSessionEngine = ({
 			isShutDown = true;
 			// Whatever was waiting is dropped with the session: its attachment
 			// holds end and nothing it held is ever run.
-			recallQueuedSubmissions();
+			recallWaitingMessages();
 			operation.cancel();
 			closeApprovals();
 		},

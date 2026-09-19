@@ -29,19 +29,38 @@ send lane runs one submission at a time, a cancel aborts the one it is running,
 and an interrupt ends the turn while keeping the interrupted Tool Call visible.
 
 A submission that arrives while the session is busy is not refused: it becomes a
-Queued Submission — transient Engine state, never a Session Record — and the
-Engine drains the Submission Queue oldest first after every terminal Agent Turn
-outcome, one Agent Turn per item, like any other send. An interrupt is the
-exception, and so is cancelling a compaction: both recall the queue to the
-composer instead of draining it, so stopping work always hands the waiting text
-back. Recalling a queued submission returns the composition it was accepted with,
-including the Model Target selection it will run against, and releases the
-attachment blobs the Engine held for it while it waited. Recall answers to two
-gestures: `Alt+Up` (`Alt+Z` where a terminal cannot deliver Alt+Arrow) takes the
-whole queue, and `Shift+Up` takes only the submission that runs next — the rest
-keep waiting and draining, and resubmitting a withdrawn one joins the tail of
-the queue like any other send. Recalled compositions land below the composer's
-draft, oldest first, so recalling one at a time appends in queue order.
+Steering Message or a Queued Submission — transient Engine state either way,
+never a Session Record until it runs — and the two lanes deliver at different
+points. A submission that arrives while an Agent Turn is running joins the
+Steering Lane: it carries text only, so nothing is materialised or hydrated, and
+the Agent Runtime takes the lane at a Model Step boundary and inserts what it
+returns before its next model call, without interrupting the call in flight. The
+Engine pops the lane and commits the message's Session Record at the moment it
+answers that intake, so it enters the Session Transcript as a user message of the
+turn it joined — its metadata names that Agent Turn, while the assistant output
+stays attached to the message that opened the turn, so retry and Overflow
+Recovery keep their anchor, and it records the Agent and Model Target the running
+turn already uses, so a correction cannot switch models mid-turn. A tool-less
+turn runs exactly one Model Step, so it has no boundary: anything still in the
+lane when its turn ends hands over to the Submission Queue in acceptance order
+and runs as its own Agent Turn.
+
+Any other busy session — a compaction in flight, or a lane that is still held —
+queues the submission instead, and the Engine drains the Submission Queue oldest
+first after every terminal Agent Turn outcome, one Agent Turn per item, like any
+other send. An interrupt is the exception, and so is cancelling a compaction:
+both recall the Steering Lane and the Submission Queue together to the composer
+instead of draining them, so stopping work always hands the waiting text back.
+Recalling a message returns the composition it was accepted with, including the
+Model Target selection it will run against, and releases the attachment blobs
+the Engine held for a queued one while it waited. Recall answers to two
+gestures: `Alt+Up` (`Alt+Z` where a terminal cannot deliver Alt+Arrow) takes
+everything waiting, and `Shift+Up` takes only the message that runs next — the
+Steering Lane's head whenever it holds anything, else the Submission Queue's —
+and the rest keep waiting and draining. Resubmitting a withdrawn one joins the
+tail of the lane it belongs to, like any other send. Recalled compositions land
+below the composer's draft, oldest first, so recalling one at a time appends in
+the order they would have run.
 
 The Agent Runtime consumer lives with the Agent Turn it consumes
 (`hooks/runtime-turn.ts`), and the CLI projects its events into its OpenTUI
@@ -184,14 +203,14 @@ history and workspace/configuration data.
 
 - `getSessionStore()` — local sessions, Session Records, compactions, attachments, and maintenance.
 - `SessionOperation` — the Engine's send lane: one application-owned send at a time, with the per-send deadline and the cancel and interrupt reasons.
-- `engine/` (Session Engine) — the single owner of one session's live state; observers read Session Snapshots and never write, and it runs every Session Command — submission, compaction, approval settlement, recall, overflow recovery, shutdown. It holds the Submission Queue: a busy send accepts a Queued Submission, the Engine drains it one Agent Turn at a time, and an interrupt recalls it. `session-engine.ts` is the factory, `types.ts` the published Session Engine vocabulary (Snapshot, Commands, and Ports), `submission.ts` the Submission Command's pipeline and its preparation, `turn.ts` the Agent Turn projection, and `utils.ts` its pure snapshot, view-state, and busy helpers.
+- `engine/` (Session Engine) — the single owner of one session's live state; observers read Session Snapshots and never write, and it runs every Session Command — submission, compaction, approval settlement, recall, overflow recovery, shutdown. It holds both waiting lanes: a send that arrives while an Agent Turn runs joins the Steering Lane, which the runtime takes at Model Step boundaries, and any other busy send becomes a Queued Submission the Engine drains one Agent Turn at a time; an interrupt recalls both. `session-engine.ts` is the factory, `types.ts` the published Session Engine vocabulary (Snapshot, Commands, and Ports), `submission.ts` the Submission Command's pipeline and its preparation, `turn.ts` the Agent Turn projection, and `utils.ts` its pure snapshot, view-state, and busy helpers.
 - `turn-records.ts` — the durable Session Records one Agent Turn produces (terminal assistant rows, safe failure and cancellation rows, Tool Call rows), shared by the Engine and the Agent Runtime consumer.
 - `hooks/runtime-turn.ts` — the Agent Runtime consumer: it iterates one Agent Turn's events, owns the Session View State they project, and synthesizes the missing terminal event.
 - `hooks/session-engine-host.ts` — the TUI-side adapter that supplies the Engine's ports: the Agent Runtime, MCP snapshots and Tools, the Tool Gate, Skill catalogs, prompt composition, attachments, and durable records.
 - `approval-projection.ts` — projects the Engine's approvals into the panel registry's read-only entries.
 - `useSessionEngine(sessionId, initialTranscript, initialContext)` — binds the Session Engine to React: it constructs one Engine per mounted session, mirrors its Session Snapshot, forwards its commands, and projects its approvals.
 - `useChatInputController(options)` — command and file-mention input state.
-- `NewSessionView`, `SessionView`, `ChatShell`, `ChatTextArea`, `QueuedSubmissionStrip` — session UI.
+- `NewSessionView`, `SessionView`, `ChatShell`, `ChatTextArea`, `WaitingMessageStrip` — session UI.
 - `SessionsDialog`, `RenameSessionDialog` — session management UI.
 
 ## Dependencies

@@ -23,8 +23,8 @@ import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import type { SessionCompaction } from "../../compaction";
-import type { SessionQueuedSubmission } from "../../engine/types";
-import { isSessionBusy } from "../../engine/utils";
+import type { SessionWaitingMessage } from "../../engine/types";
+import { acceptsSteeringMessages, isSessionBusy } from "../../engine/utils";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
 import { useSessionEngine } from "../../hooks/use-session-engine";
 import {
@@ -163,7 +163,7 @@ export function SessionView({
 		cancelCompaction,
 		compact,
 		interrupt,
-		recallQueuedSubmissions,
+		recallWaitingMessages,
 		send,
 		snapshot,
 	} = useSessionEngine(
@@ -173,11 +173,11 @@ export function SessionView({
 		initialCompactions
 	);
 	/**
-	 * Hands recalled submissions to the composer. A Recall that returns
-	 * nothing — an empty queue, or submissions that already started running —
-	 * changes nothing.
+	 * Hands recalled messages to the composer, in the order the Engine returned
+	 * them. A Recall that returns nothing — empty lanes, or messages that
+	 * already started running — changes nothing.
 	 */
-	const recallIntoComposer = (recalled: readonly SessionQueuedSubmission[]) => {
+	const recallIntoComposer = (recalled: readonly SessionWaitingMessage[]) => {
 		if (recalled.length === 0) {
 			return;
 		}
@@ -266,9 +266,10 @@ export function SessionView({
 		}, INTERRUPT_CONFIRMATION_TIMEOUT_MS);
 	};
 	/**
-	 * The keyboard's Recall. `Alt` takes the whole queue; `Shift` takes only the
-	 * submission that runs next, so the ones behind it keep draining. Reports
-	 * whether the key was a Recall gesture.
+	 * The keyboard's Recall. `Alt` takes everything waiting; `Shift` takes only
+	 * the message that runs next — the Steering Lane's head while it holds
+	 * anything, else the Submission Queue's — so the ones behind it keep
+	 * draining. Reports whether the key was a Recall gesture.
 	 */
 	const handleRecallKey = (key: RecallKeyEvent): boolean => {
 		// Terminals encode Alt differently: a modified arrow arrives as a CSI
@@ -276,16 +277,17 @@ export function SessionView({
 		// answers to either, so no terminal loses the binding.
 		if ((key.option || key.meta) && (key.name === "up" || key.name === "z")) {
 			key.preventDefault();
-			recallIntoComposer(recallQueuedSubmissions());
+			recallIntoComposer(recallWaitingMessages());
 			return true;
 		}
 		if (!(key.shift && key.name === "up")) {
 			return false;
 		}
 		key.preventDefault();
-		const next = snapshot.queuedSubmissions[0];
+		// The strip marks the same head: whichever lane holds a message first.
+		const next = snapshot.steeringMessages[0] ?? snapshot.queuedSubmissions[0];
 		if (!isUndefined(next)) {
-			recallIntoComposer(recallQueuedSubmissions([next.id]));
+			recallIntoComposer(recallWaitingMessages([next.id]));
 		}
 		return true;
 	};
@@ -573,6 +575,8 @@ export function SessionView({
 					queuedSubmissions={snapshot.queuedSubmissions}
 					recalledSubmissions={recalledSubmissions}
 					recallRevision={recallRevision}
+					steering={acceptsSteeringMessages(snapshot)}
+					steeringMessages={snapshot.steeringMessages}
 					viewState={snapshot.viewState}
 				/>
 			</box>

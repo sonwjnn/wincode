@@ -84,4 +84,10 @@ export type ChatInputControllerOptions = {
 	) => boolean | Promise<boolean> | void | Promise<void>;
 	onTab: (shift: boolean) => void;
 	sessionPromptHistory: PromptHistoryEntry[];
+	/**
+	 * Whether the composer is submitting into the running Agent Turn's Steering
+	 * Lane: it then accepts plain text only, so no attachment, Skill or Custom
+	 * Command can be armed inside a turn and no Agent change can happen there.
+	 */
+	steering?: boolean;
 };
