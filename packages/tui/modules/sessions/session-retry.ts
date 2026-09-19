@@ -5,14 +5,19 @@ import { isSessionToolPart, isTerminalSessionToolPart } from "./message";
 /**
  * Returns the logical attempt after a user message. Retry results may be
  * appended after later user turns, so source-linked messages remain part of
- * this attempt even when storage order crosses the next user boundary.
+ * this attempt even when storage order crosses the next user boundary. A user
+ * message that joined a running Agent Turn does not end the attempt: it is part
+ * of the turn the opener started.
  */
 export const getSessionAttemptMessages = (
 	messages: readonly SessionMessage[],
 	userIndex: number
 ): readonly SessionMessage[] => {
 	const nextUserIndex = messages.findIndex(
-		(message, index) => index > userIndex && message.role === "user"
+		(message, index) =>
+			index > userIndex &&
+			message.role === "user" &&
+			isUndefined(message.metadata?.joinedTurnId)
 	);
 	const userMessage = messages[userIndex];
 	if (isUndefined(userMessage)) {

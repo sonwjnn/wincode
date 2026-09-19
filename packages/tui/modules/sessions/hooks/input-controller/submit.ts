@@ -20,6 +20,16 @@ type SkillPrompt = {
 
 type DiscoverSkills = () => Promise<Skill[]>;
 
+/**
+ * Steering Messages are text-only: the running Agent Turn's Steering Lane
+ * refuses anything the turn cannot safely take mid-flight.
+ */
+const STEERING_ATTACHMENT_ERROR =
+	"Attachments cannot join a running Agent Turn.";
+const STEERING_SKILL_ERROR = "A Skill cannot be invoked on a Steering Message.";
+const STEERING_COMMAND_ERROR =
+	"A Custom Command cannot be invoked on a Steering Message.";
+
 export type TrackedPastedText = {
 	end: number;
 	start: number;
@@ -56,6 +66,11 @@ export type SubmitDependencies = {
 	onSubmit: (
 		submission: ChatPromptSubmission
 	) => boolean | Promise<boolean> | void | Promise<void>;
+	/**
+	 * True while the composer submits into the running Agent Turn's
+	 * Steering Lane.
+	 */
+	steering?: boolean;
 };
 
 /**
@@ -172,7 +187,9 @@ const resolvePromptOrReportError = async (
  * The single submit seam: expand, resolve skill/custom-command intent, hand the
  * submission to the transport, and report whether it was accepted. History
  * recording and state reset live with the caller (the input controller hook)
- * and run only on acceptance.
+ * and run only on acceptance. A Steering Message is text-only: attachments,
+ * Skill intent, and Custom Command intent are refused before the transport sees
+ * the submission.
  */
 export async function submitPrompt(
 	dependencies: SubmitDependencies,
@@ -189,6 +206,46 @@ export async function submitPrompt(
 	const text = expandTrackedPastedText(rawText, pastedTexts).trim();
 	if (!text && files.length === 0) {
 		return false;
+	}
+
+	if (dependencies.steering) {
+		if (files.length > 0) {
+			dependencies.onError(STEERING_ATTACHMENT_ERROR);
+			return false;
+		}
+		if (hasSkillNamespace(text)) {
+			dependencies.onError(STEERING_SKILL_ERROR);
+			return false;
+		}
+		const invocation = parseCustomCommandInvocation(text);
+		if (invocation) {
+			let commands: CustomCommandSpec[];
+			try {
+				commands = await dependencies.discoverCustomCommands();
+			} catch (error) {
+				dependencies.onError(getErrorMessage(error, String(error)));
+				return false;
+			}
+			if (commands.some(({ name }) => name === invocation.name)) {
+				dependencies.onError(STEERING_COMMAND_ERROR);
+				return false;
+			}
+		}
+
+		const accepted = await dependencies.onSubmit({
+			composition: {
+				fileTokens: [],
+				files: [],
+				pastedText: pastedTexts.map(({ text: pasted, token }) => ({
+					text: pasted,
+					token,
+				})),
+				text: visibleText,
+			},
+			files: [],
+			text,
+		});
+		return accepted !== false;
 	}
 
 	const skillPrompt = await resolvePromptOrReportError(

@@ -28,6 +28,7 @@ import {
 } from "@/modules/sessions/storage/attachment-store";
 import { createHangingSummary } from "../support/hanging-summary";
 import {
+	agentTurnId,
 	compactionId,
 	modelId,
 	sessionId,
@@ -154,6 +155,48 @@ test("compacts complete turns into a durable summary and recent tail", async () 
 			model,
 		})
 	);
+});
+
+test("keeps the turn a Steering Message joined whole", async () => {
+	const store = makeStore();
+	const compaction = createSessionCompaction({
+		generateId: () => compactionId("entry-1"),
+		now: () => new Date("2026-08-30T00:00:00.000Z"),
+		store,
+		summaryGenerator: async () => ({ text: "summary" }),
+		estimateTokens: (messages) => messages.length,
+	});
+	const messages: SessionMessage[] = [
+		message("u1", "user", "first request"),
+		message("a1", "assistant", "first answer"),
+		message("u2", "user", "current request"),
+		message("a2", "assistant", "current answer"),
+		{
+			...message("u3", "user", "use the cache instead"),
+			metadata: { joinedTurnId: agentTurnId("turn-2") },
+		},
+	];
+
+	const result = await compaction.compact({
+		session: { messages, sessionId: sessionId("session-1") },
+		model,
+		settings: { enabled: true, keepRecentTokens: 3, thresholdTokens: null },
+		trigger: "manual",
+	});
+
+	// The correction belongs to the turn it joined: the turn that opened it
+	// stays verbatim, and only the history before it is summarized.
+	expect(result.entry.firstKeptUiMessageId).toBe(sessionMessageId("u2"));
+	expect(result.entry.summary.coveredMessageIds).toEqual([
+		sessionMessageId("u1"),
+		sessionMessageId("a1"),
+	]);
+	expect(result.activeMessages.map(({ id }) => id)).toEqual([
+		sessionMessageId("compaction:entry-1"),
+		sessionMessageId("u2"),
+		sessionMessageId("a2"),
+		sessionMessageId("u3"),
+	]);
 });
 
 test("does not summarize history already covered by the recent budget", async () => {

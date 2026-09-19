@@ -268,6 +268,7 @@ const metadataForRecord = (
 	const parsed = sessionMessageMetadataSchema.safeParse({
 		...pickTruthy({ agent: metadata?.agent ?? record.agentId }),
 		...omitUndefined({
+			joinedTurnId: metadata?.joinedTurnId,
 			model,
 			responseTimeMs: metadata?.responseTimeMs,
 			skill: metadata?.skill,
@@ -393,6 +394,7 @@ const toDurableMetadata = (
 	return {
 		...omitUndefined({
 			agent: metadata.agent,
+			joinedTurnId: metadata.joinedTurnId,
 			model: metadata.model,
 			responseTimeMs: metadata.responseTimeMs,
 			skill: durableSkill,

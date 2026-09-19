@@ -22,6 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Features
 
+- **A correction reaches a running Agent Turn before it ends.** A message sent
+  while an Agent Turn runs joins a Steering Lane beside the Submission Queue and
+  is delivered at the next Model Step boundary, inside that same turn: the model
+  call in flight is never interrupted, so no Tool Call is torn from its request.
+  It carries text only — the composer accepts plain text and refuses
+  attachments, Skill and Custom Command invocation, and Agent changes while a
+  turn runs — and it enters the Session Transcript as a user message of the turn
+  it joined while the assistant output stays attached to the message that
+  opened the turn. A tool-less turn has no boundary, so its Steering Messages
+  fall back to the Submission Queue and run as their own Agent Turns. `Alt+Up`
+  and `Shift+Up` recall both lanes, with `Shift+Up` taking whichever message
+  runs next. See ADR-0022.
+
 - **A submission written while the session is busy waits its turn.** Pressing
   Enter during a running Agent Turn or a compaction queues the submission
   instead of refusing it: a strip above the composer shows what is waiting, and
@@ -32,7 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the compaction, so stopping work hands the waiting text back. A queued
   submission keeps the Agent, model, and variant it was accepted with, keeps its
   attachments alive while it waits, records itself into prompt history so a
-  dropped queue is recoverable, and never survives a restart. See ADR-0021.
+  dropped queue is recoverable, and never survives a restart. While an Agent
+  Turn runs, a message steers that turn instead — see the Steering Lane entry
+  above — and only the sessions busy any other way still queue this way. See
+  ADR-0021.
 
 - **Tool resource profiles are configurable.** Set `resource_limits` to
   `standard`, `extended`, or `deep` globally or per Agent in `wincode.json(c)`.
@@ -68,6 +84,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gpt-6-astra`, and `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash`.
 
 ### Removed
+
+- **The dead `mid-turn` compaction surface.** The `mid-turn` trigger reason, the
+  `midTurnEnabled` setting, and the `midTurnAvailable` availability flag are
+  gone: nothing produced the trigger, the availability flag had no reader, and
+  the setting had no effect. A threshold check that runs between Model Steps
+  remains a `threshold` trigger if it is ever wanted.
 
 - **OpenAI entries below version 5.6.** `o1*`, `o3*`, `o4-mini`, `gpt-5`,
   `gpt-5.1*`, `gpt-5.2*`, and `gpt-5.3*` are gone from the catalog. A session

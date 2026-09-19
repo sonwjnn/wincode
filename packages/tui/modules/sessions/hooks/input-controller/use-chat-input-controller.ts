@@ -67,6 +67,7 @@ export function useChatInputController({
 	onSubmit,
 	onTab,
 	sessionPromptHistory,
+	steering = false,
 }: ChatInputControllerOptions): ChatInputController {
 	const [textValue, setTextValue] = useState("");
 	const [selectedIndex, setSelectedIndex] = useState(0);
@@ -483,6 +484,7 @@ export function useChatInputController({
 							discoverSkills: getSkillsFromOptions,
 							onError,
 							onSubmit: onSubmitRef.current,
+							steering,
 						},
 						snapshot
 					)
@@ -521,6 +523,7 @@ export function useChatInputController({
 			rememberPrompt,
 			resetHistoryBaseline,
 			setProgrammaticText,
+			steering,
 		]
 	);
 
@@ -699,13 +702,13 @@ export function useChatInputController({
 
 	const handleTab = useCallback(
 		(shift: boolean) => {
-			if (disabled) {
+			if (disabled || steering) {
 				return;
 			}
 
 			onTab(shift);
 		},
-		[disabled, onTab]
+		[disabled, onTab, steering]
 	);
 
 	let overlay: InputOverlayState = EMPTY_OVERLAY;

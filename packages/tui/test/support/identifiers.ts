@@ -15,6 +15,7 @@ import type {
 	McpSnapshotId,
 	QueuedSubmissionId,
 	SessionId,
+	SteeringMessageId,
 } from "@/shared/identifiers";
 
 export const agentId = <const Value extends string>(
@@ -64,6 +65,10 @@ export const sessionMessageId = <const Value extends string>(
 export const sessionRecordId = <const Value extends string>(
 	value: Value
 ): Value & SessionRecordId => value as Value & SessionRecordId;
+
+export const steeringMessageId = <const Value extends string>(
+	value: Value
+): Value & SteeringMessageId => value as Value & SteeringMessageId;
 
 export const toolCallId = <const Value extends string>(
 	value: Value

@@ -3,6 +3,7 @@ import { fromPartial } from "@total-typescript/shoehorn";
 import {
 	type AgentTurnId,
 	createOperationalFailure,
+	type SessionMessageId,
 	type SessionRecord,
 } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
@@ -902,8 +903,23 @@ const promptOfTurn = (messages: readonly SessionMessage[]): string =>
  * A runtime that holds every Agent Turn until the test releases it, one release
  * per started turn, and records what each turn ran with, so queue order is
  * observed through awaited starts rather than through waiting on real time.
+ * With `boundary` it also models one Model Step boundary per turn: it asks the
+ * Engine what joined the turn and records what it was handed, exactly where a
+ * real runtime inserts a Steering Message before its next model call.
  */
-const createQueuedRuntime = (): {
+const createQueuedRuntime = ({
+	boundary = false,
+}: {
+	boundary?: boolean;
+} = {}): {
+	/**
+	 * What each Model Step boundary of each turn was handed, in boundary order,
+	 * with the message that turn still answers when it delivered.
+	 */
+	readonly boundaries: Array<{
+		readonly delivered: string[];
+		readonly sourceUserMessageId: SessionMessageId | null;
+	}>;
 	/** The prompt each started turn answers, in start order. */
 	readonly prompts: string[];
 	/** Lets the oldest started Agent Turn finish. */
@@ -917,6 +933,10 @@ const createQueuedRuntime = (): {
 		variant: ModelVariant | undefined;
 	}>;
 } => {
+	const boundaries: Array<{
+		delivered: string[];
+		sourceUserMessageId: SessionMessageId | null;
+	}> = [];
 	const gates: Array<() => void> = [];
 	const prompts: string[] = [];
 	const targets: Array<{
@@ -947,11 +967,12 @@ const createQueuedRuntime = (): {
 		return promise;
 	};
 	return {
+		boundaries,
 		prompts,
 		release: () => gates.shift()?.(),
 		runtime: {
 			requestOverheadTokens: () => 0,
-			run: async ({ callbacks, execution, messages }) => {
+			run: async ({ callbacks, execution, messages, takeSteeringMessages }) => {
 				prompts.push(promptOfTurn(messages));
 				targets.push({ model: execution.model, variant: execution.variant });
 				startedCount += 1;
@@ -959,6 +980,12 @@ const createQueuedRuntime = (): {
 				const gate = Promise.withResolvers<void>();
 				gates.push(gate.resolve);
 				await gate.promise;
+				if (boundary) {
+					boundaries.push({
+						delivered: userPrompts(takeSteeringMessages()),
+						sourceUserMessageId: execution.sourceUserMessageId,
+					});
+				}
 				await callbacks.commitTerminal(
 					fromPartial<SessionRecord>({
 						messages: [
@@ -990,12 +1017,16 @@ const createQueuedRuntime = (): {
 	};
 };
 
-test("queues a submission that arrives while a turn is running", async () => {
+test("queues a submission that arrives while a compaction is in flight", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
-	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator),
+		{ runtime: runtime.runtime }
+	);
 
-	const first = engine.send(sendInput());
-	await runtime.started(1);
+	const compaction = engine.compact({ model, trigger: "manual" });
 	const accepted = await engine.send(
 		sendInput({ composition: compositionOf("queued"), userText: "queued" })
 	);
@@ -1003,49 +1034,56 @@ test("queues a submission that arrives while a turn is running", async () => {
 	expect(accepted).toEqual({ rejected: false });
 	const queued = engine.getSnapshot().queuedSubmissions;
 	expect(queued.map(({ input }) => input.composition.text)).toEqual(["queued"]);
-	// A Queued Submission is not a Session Record: only the running turn's
-	// prompt is in the Session Transcript.
-	expect(userPrompts(engine.getSnapshot().transcript)).toEqual(["hello"]);
+	// A Queued Submission is not a Session Record: nothing has entered the
+	// Session Transcript but what the compaction already left there.
+	expect(userPrompts(engine.getSnapshot().transcript)).toEqual(
+		userPrompts(compactionHistory())
+	);
 
+	release();
+	await compaction;
+	await runtime.started(1);
+	expect(runtime.prompts).toEqual(["queued"]);
 	runtime.release();
-	await runtime.started(2);
-	expect(runtime.prompts).toEqual(["hello", "queued"]);
-	runtime.release();
-	await first;
 
 	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
-	expect(userPrompts(engine.getSnapshot().transcript)).toEqual([
-		"hello",
-		"queued",
-	]);
+	expect(userPrompts(engine.getSnapshot().transcript).at(-1)).toBe("queued");
 });
 
 test("drains the Submission Queue in order, one Agent Turn at a time", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
-	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator),
+		{ runtime: runtime.runtime }
+	);
 
-	const first = engine.send(sendInput({ userText: "one" }));
-	await runtime.started(1);
+	const compaction = engine.compact({ model, trigger: "manual" });
+	await engine.send(sendInput({ userText: "one" }));
 	await engine.send(sendInput({ userText: "two" }));
 	await engine.send(sendInput({ userText: "three" }));
-	expect(engine.getSnapshot().queuedSubmissions).toHaveLength(2);
+	expect(engine.getSnapshot().queuedSubmissions).toHaveLength(3);
 
+	release();
+	await compaction;
+	await runtime.started(1);
+	// The first submission runs alone; the rest still wait.
+	expect(runtime.prompts).toEqual(["one"]);
 	runtime.release();
 	await runtime.started(2);
-	// The second submission runs alone; the third still waits.
 	expect(runtime.prompts).toEqual(["one", "two"]);
 	runtime.release();
 	await runtime.started(3);
 	expect(runtime.prompts).toEqual(["one", "two", "three"]);
 	runtime.release();
-	await first;
 
 	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
-	expect(userPrompts(engine.getSnapshot().transcript)).toEqual([
-		"one",
-		"two",
-		"three",
-	]);
+	expect(
+		userPrompts(engine.getSnapshot().transcript).slice(
+			userPrompts(compactionHistory()).length
+		)
+	).toEqual(["one", "two", "three"]);
 });
 
 test("drains submissions queued while a compaction was in flight", async () => {
@@ -1105,26 +1143,33 @@ test("keeps draining the Submission Queue after a turn fails", async () => {
 });
 
 test("drains the Submission Queue after a cancelled turn", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
-	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator),
+		{ runtime: runtime.runtime }
+	);
 
-	const first = engine.send(sendInput({ userText: "one" }));
-	await runtime.started(1);
+	const compaction = engine.compact({ model, trigger: "manual" });
+	await engine.send(sendInput({ userText: "one" }));
 	await engine.send(sendInput({ userText: "two" }));
 
+	release();
+	await compaction;
+	await runtime.started(1);
 	engine.cancel();
 	runtime.release();
 	await runtime.started(2);
 	expect(runtime.prompts).toEqual(["one", "two"]);
 
 	runtime.release();
-	await first;
 	// A cancelled turn never strands the submissions behind it.
 	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
 });
 
-test("interrupts a turn by recalling the queue instead of draining it", async () => {
-	const runtime = createQueuedRuntime();
+test("interrupts a turn by recalling the Steering Lane instead of running it", async () => {
+	const runtime = createQueuedRuntime({ boundary: true });
 	const engine = createEngine([], undefined, { runtime: runtime.runtime });
 
 	const first = engine.send(sendInput({ userText: "one" }));
@@ -1142,33 +1187,315 @@ test("interrupts a turn by recalling the queue instead of draining it", async ()
 
 	const recalled = engine.interrupt();
 
+	// Everything waiting comes back, in the order it would have been delivered.
 	expect(recalled.map(({ input }) => input.composition.text)).toEqual([
 		marked.text,
 		"three",
 	]);
-	// Recall restores the composition the submission was accepted with, markers
-	// and pasted text included.
+	// Recall restores the composition the message was composed with, markers and
+	// pasted text included.
 	expect(recalled[0]?.input.composition).toEqual(marked);
+	expect(engine.getSnapshot().steeringMessages).toEqual([]);
 	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
 
 	runtime.release();
 	await first;
-	// Nothing auto-starts behind the interrupted turn: a fresh submission runs
-	// at once instead of waiting behind recalled work.
+	// The interrupted turn delivered nothing, so no turn ran behind it and a
+	// fresh submission runs at once instead of waiting behind recalled work.
+	expect(runtime.boundaries.map(({ delivered }) => delivered)).toEqual([[]]);
 	void engine.send(sendInput({ userText: "fresh" }));
 	await runtime.started(2);
 	expect(runtime.prompts).toEqual(["one", "fresh"]);
 
 	runtime.release();
-	expect(engine.recallQueuedSubmissions()).toEqual([]);
+	expect(engine.recallWaitingMessages()).toEqual([]);
 });
 
-test("recalls part of the queue by identifier and ignores an unknown one", async () => {
+test("recalls the Steering Lane ahead of the Submission Queue", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
+	const runtime = createQueuedRuntime({ boundary: true });
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator),
+		{ runtime: runtime.runtime }
+	);
+
+	// Two submissions wait in the Submission Queue while the compaction holds
+	// the lane; the drain then runs the first of them with the second still
+	// waiting, which is the one moment both lanes can hold something.
+	const compaction = engine.compact({ model, trigger: "manual" });
+	await engine.send(sendInput({ userText: "queued-first" }));
+	await engine.send(sendInput({ userText: "queued-second" }));
+	release();
+	await compaction;
+	await runtime.started(1);
+	await engine.send(sendInput({ userText: "steer" }));
+
+	expect(
+		engine.getSnapshot().steeringMessages.map(({ input }) => input.text)
+	).toEqual(["steer"]);
+	expect(
+		engine
+			.getSnapshot()
+			.queuedSubmissions.map(({ input }) => input.composition.text)
+	).toEqual(["queued-second"]);
+
+	const head = engine.getSnapshot().steeringMessages[0];
+	expect(head).toBeDefined();
+	const recalledHead = engine.recallWaitingMessages(
+		head ? [head.id] : undefined
+	);
+	// The Steering head is what the next Model Step boundary delivers, so it is
+	// the message the next Recall takes back; the queued one keeps waiting.
+	expect(recalledHead.map(({ input }) => input.composition.text)).toEqual([
+		"steer",
+	]);
+	expect(
+		engine
+			.getSnapshot()
+			.queuedSubmissions.map(({ input }) => input.composition.text)
+	).toEqual(["queued-second"]);
+
+	const everything = engine.interrupt();
+	expect(everything.map(({ input }) => input.composition.text)).toEqual([
+		"queued-second",
+	]);
+	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
+
+	runtime.release();
+});
+
+test("delivers a submission accepted while a turn is running into that turn", async () => {
+	const runtime = createQueuedRuntime({ boundary: true });
+	const commits: SessionRecord[] = [];
+	const engine = createEngine([], undefined, {
+		commitRecord: async ({ record }) => {
+			commits.push(record);
+		},
+		runtime: runtime.runtime,
+	});
+
+	const first = engine.send(sendInput({ userText: "one" }));
+	await runtime.started(1);
+	const accepted = await engine.send(sendInput({ userText: "correction" }));
+
+	expect(accepted).toEqual({ rejected: false });
+	expect(
+		engine.getSnapshot().steeringMessages.map(({ input }) => input.text)
+	).toEqual(["correction"]);
+	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
+	// A Steering Message is not a Session Record until it is delivered.
+	expect(userPrompts(engine.getSnapshot().transcript)).toEqual(["one"]);
+
+	runtime.release();
+	await first;
+
+	// The turn's Model Step boundary handed it over, and the Transcript holds it
+	// as a user message of that same turn.
+	expect(runtime.boundaries.map(({ delivered }) => delivered)).toEqual([
+		["correction"],
+	]);
+	expect(userPrompts(engine.getSnapshot().transcript)).toEqual([
+		"one",
+		"correction",
+	]);
+	// It ran inside the turn it joined instead of starting one of its own.
+	expect(runtime.prompts).toEqual(["one"]);
+	expect(engine.getSnapshot().steeringMessages).toEqual([]);
+
+	const opening = commits[0]?.messages[0];
+	const steering = commits[1];
+	expect(commits.map(({ outcome }) => outcome.kind)).toEqual([
+		"user",
+		"user",
+		"assistant",
+	]);
+	// The delivered message names the Agent Turn it joined, and the turn still
+	// answers the message that opened it.
+	expect(steering?.messages[0]?.metadata?.joinedTurnId).toBe(steering?.turnId);
+	expect(runtime.boundaries[0]?.sourceUserMessageId).toBe(opening?.id);
+});
+
+test("delivers Steering Messages in the order they were accepted", async () => {
+	const runtime = createQueuedRuntime({ boundary: true });
+	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+
+	const first = engine.send(sendInput({ userText: "one" }));
+	await runtime.started(1);
+	await engine.send(sendInput({ userText: "two" }));
+	await engine.send(sendInput({ userText: "three" }));
+
+	expect(
+		engine.getSnapshot().steeringMessages.map(({ input }) => input.text)
+	).toEqual(["two", "three"]);
+
+	runtime.release();
+	await first;
+
+	expect(runtime.boundaries.map(({ delivered }) => delivered)).toEqual([
+		["two", "three"],
+	]);
+	expect(userPrompts(engine.getSnapshot().transcript)).toEqual([
+		"one",
+		"two",
+		"three",
+	]);
+});
+
+test("keeps the Model Target of the turn a Steering Message joined", async () => {
+	const runtime = createQueuedRuntime({ boundary: true });
+	const commits: SessionRecord[] = [];
+	const engine = createEngine([], undefined, {
+		commitRecord: async ({ record }) => {
+			commits.push(record);
+		},
+		runtime: runtime.runtime,
+	});
+	const otherModel: ChatModelSelection = {
+		modelId: modelId("gpt-5.6-luna-pro"),
+		providerId: "openai",
+	};
+
+	const first = engine.send(sendInput({ userText: "one" }));
+	await runtime.started(1);
+	// The composer's selection changes while the turn runs: the correction still
+	// joins the turn on the Model Target that turn already runs with.
+	await engine.send(sendInput({ model: otherModel, userText: "correction" }));
+
+	runtime.release();
+	await first;
+
+	// The turn ran on its own Model Target, and the delivered message records
+	// that same one rather than the composer's newer selection.
+	expect(runtime.targets).toEqual([{ model, variant: undefined }]);
+	expect(commits[1]?.messages[0]?.metadata?.model).toEqual(model);
+});
+
+test("hands a Steering Message to the Submission Queue when the turn has no boundary", async () => {
+	// A tool-less turn runs exactly one Model Step, so its runtime never reaches
+	// a boundary to deliver at.
 	const runtime = createQueuedRuntime();
 	const engine = createEngine([], undefined, { runtime: runtime.runtime });
 
 	const first = engine.send(sendInput({ userText: "one" }));
 	await runtime.started(1);
+	await engine.send(sendInput({ userText: "correction" }));
+	expect(engine.getSnapshot().steeringMessages).toHaveLength(1);
+
+	runtime.release();
+	await runtime.started(2);
+
+	// Nothing was dropped: the message left the Steering Lane for the queue and
+	// now runs as its own Agent Turn.
+	expect(engine.getSnapshot().steeringMessages).toEqual([]);
+	expect(runtime.prompts).toEqual(["one", "correction"]);
+	runtime.release();
+	await first;
+
+	expect(userPrompts(engine.getSnapshot().transcript)).toEqual([
+		"one",
+		"correction",
+	]);
+});
+
+test("keeps a Steering Message that fell back on the Model Target it was accepted with", async () => {
+	const runtime = createQueuedRuntime();
+	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+	const otherModel: ChatModelSelection = {
+		modelId: modelId("gpt-5.6-luna-pro"),
+		providerId: "openai",
+	};
+
+	const first = engine.send(sendInput({ userText: "one" }));
+	await runtime.started(1);
+	await engine.send(sendInput({ model: otherModel, userText: "correction" }));
+
+	runtime.release();
+	await runtime.started(2);
+
+	// The fallback runs as a submission of its own, so it keeps the selection it
+	// was accepted with rather than inheriting the turn it could not join.
+	expect(runtime.targets).toEqual([
+		{ model, variant: undefined },
+		{ model: otherModel, variant: undefined },
+	]);
+	runtime.release();
+	await first;
+});
+
+test("hands a fallback Steering Message to the queue behind what already waits", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
+	const runtime = createQueuedRuntime();
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator),
+		{ runtime: runtime.runtime }
+	);
+
+	const compaction = engine.compact({ model, trigger: "manual" });
+	await engine.send(sendInput({ userText: "queued-first" }));
+	await engine.send(sendInput({ userText: "queued-second" }));
+	release();
+	await compaction;
+	await runtime.started(1);
+	await engine.send(sendInput({ userText: "steer" }));
+
+	runtime.release();
+	await runtime.started(2);
+	runtime.release();
+	await runtime.started(3);
+
+	// Acceptance order is kept: the submissions that waited first run first, and
+	// the message that could not steer still runs as its own Agent Turn.
+	expect(runtime.prompts).toEqual(["queued-first", "queued-second", "steer"]);
+	runtime.release();
+});
+
+test("refuses a Steering Message that invokes a Skill or resends another message", async () => {
+	const runtime = createQueuedRuntime();
+	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+
+	const first = engine.send(sendInput({ userText: "one" }));
+	await runtime.started(1);
+
+	await expect(
+		engine.send(
+			sendInput({
+				skill: fromPartial<SessionSendInput["skill"]>({ name: "review" }),
+				userText: "review this",
+			})
+		)
+	).resolves.toEqual({
+		rejected: true,
+		reason: "A Steering Message cannot invoke a Skill: it carries text only.",
+	});
+	await expect(
+		engine.send(
+			sendInput({ messageId: sessionMessageId("stored"), userText: "" })
+		)
+	).resolves.toEqual({
+		rejected: true,
+		reason:
+			"A Steering Message carries text only: it cannot resend or edit another message.",
+	});
+	expect(engine.getSnapshot().steeringMessages).toEqual([]);
+
+	runtime.release();
+	await first;
+});
+
+test("recalls part of the queue by identifier and ignores an unknown one", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
+	const runtime = createQueuedRuntime();
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator),
+		{ runtime: runtime.runtime }
+	);
+
+	// The submissions are accepted while a compaction holds the lane — the
+	// session is busy without a running Agent Turn — so they queue.
+	const compaction = engine.compact({ model, trigger: "manual" });
 	await engine.send(sendInput({ userText: "two" }));
 	await engine.send(sendInput({ userText: "three" }));
 	const waiting = engine.getSnapshot().queuedSubmissions;
@@ -1177,53 +1504,57 @@ test("recalls part of the queue by identifier and ignores an unknown one", async
 
 	expect(
 		engine
-			.recallQueuedSubmissions([second])
+			.recallWaitingMessages([second])
 			.map(({ input }) => input.composition.text)
 	).toEqual(["two"]);
 	expect(engine.getSnapshot().queuedSubmissions.map(({ id }) => id)).toEqual([
 		third,
 	]);
 	// An identifier that names nothing waiting changes nothing.
-	expect(engine.recallQueuedSubmissions([second])).toEqual([]);
+	expect(engine.recallWaitingMessages([second])).toEqual([]);
 	expect(engine.getSnapshot().queuedSubmissions.map(({ id }) => id)).toEqual([
 		third,
 	]);
 
-	engine.interrupt();
+	release();
+	await compaction;
+	await runtime.started(1);
+	// Only the submission that was left behind runs.
+	expect(runtime.prompts).toEqual(["three"]);
 	runtime.release();
-	await first;
 });
 
 test("runs a queued submission with the Model Target selection it was accepted with", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
-	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator),
+		{ runtime: runtime.runtime }
+	);
 	const queuedModel: ChatModelSelection = {
 		modelId: modelId("gpt-5.6-luna-pro"),
 		providerId: "openai",
 	};
 
-	const first = engine.send(sendInput({ userText: "one" }));
-	await runtime.started(1);
+	const compaction = engine.compact({ model, trigger: "manual" });
 	await engine.send(sendInput({ model: queuedModel, userText: "two" }));
 
-	runtime.release();
-	await runtime.started(2);
+	release();
+	await compaction;
+	await runtime.started(1);
 	// The selection the submission was accepted with is the one that runs, even
 	// though the session's own selection could change while it waits.
-	expect(runtime.targets).toEqual([
-		{ model, variant: undefined },
-		{ model: queuedModel, variant: undefined },
-	]);
+	expect(runtime.targets).toEqual([{ model: queuedModel, variant: undefined }]);
 
 	runtime.release();
-	await first;
 });
 
-test("runs a submission accepted while an overflow replay holds the lane", async () => {
+test("steers the Agent Turn an overflow replay runs", async () => {
 	const gates: Array<() => void> = [];
 	const prompts: string[] = [];
+	const delivered: string[][] = [];
 	const replayStarted = Promise.withResolvers<void>();
-	const queuedStarted = Promise.withResolvers<void>();
 	const engine = createEngine(compactionHistory(), undefined, {
 		resolveCompactionSettings: async () =>
 			fromPartial<ResolvedCompactionSettings>({
@@ -1240,7 +1571,7 @@ test("runs a submission accepted while an overflow replay holds the lane", async
 			}),
 		runtime: {
 			requestOverheadTokens: () => 0,
-			run: async ({ callbacks, execution, messages }) => {
+			run: async ({ callbacks, execution, messages, takeSteeringMessages }) => {
 				prompts.push(promptOfTurn(messages));
 				callbacks.onEvent({
 					agentId: execution.agent,
@@ -1252,14 +1583,11 @@ test("runs a submission accepted while an overflow replay holds the lane", async
 				if (prompts.length === 1) {
 					return { error: overflowFailure() };
 				}
-				if (prompts.length === 2) {
-					replayStarted.resolve();
-				} else {
-					queuedStarted.resolve();
-				}
+				replayStarted.resolve();
 				const gate = Promise.withResolvers<void>();
 				gates.push(gate.resolve);
 				await gate.promise;
+				delivered.push(userPrompts(takeSteeringMessages()));
 				await callbacks.commitTerminal(
 					fromPartial<SessionRecord>({
 						messages: [
@@ -1294,54 +1622,58 @@ test("runs a submission accepted while an overflow replay holds the lane", async
 	await replayStarted.promise;
 	const accepted = await engine.send(sendInput({ userText: "second" }));
 
-	// The replay holds the lane, so the submission waits in the queue instead of
-	// being handed to a lane that would refuse it.
+	// The replay is the Agent Turn the session is running, so the submission
+	// joins that turn's Steering Lane instead of waiting for it to end.
 	expect(accepted).toEqual({ rejected: false });
 	expect(
-		engine
-			.getSnapshot()
-			.queuedSubmissions.map(({ input }) => input.composition.text)
+		engine.getSnapshot().steeringMessages.map(({ input }) => input.text)
 	).toEqual(["second"]);
+	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
 
 	gates.shift()?.();
-	await queuedStarted.promise;
-	// The queued submission runs once the replay ends, and the replay answered
-	// the original message.
-	expect(prompts).toEqual(["first", "first", "second"]);
-	gates.shift()?.();
 	await send;
+	// The replay turn delivered it at its Model Step boundary and ran no turn of
+	// its own for it.
+	expect(delivered).toEqual([["second"]]);
+	expect(prompts).toEqual(["first", "first"]);
+	expect(userPrompts(engine.getSnapshot().transcript).at(-1)).toBe("second");
 });
 
 test("retains a queued submission's attachments until its turn runs", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
 	const retained: string[][] = [];
 	const released: string[][] = [];
 	const holdEnded = Promise.withResolvers<void>();
-	const engine = createEngine([], undefined, {
-		attachments: {
-			externalize: async (messages) =>
-				messages.map((sessionMessage) => ({
-					...sessionMessage,
-					parts: sessionMessage.parts.map((part) =>
-						part.type === "file"
-							? fromPartial<SessionFilePart>({
-									attachmentId: attachmentId("stored-blob"),
-									mediaType: part.mediaType,
-									type: "file",
-									url: "attachment://stored-blob",
-								})
-							: part
-					),
-				})),
-			hydrate: async ({ messages }) => [...messages],
-			release: (attachmentIds) => {
-				released.push([...attachmentIds]);
-				holdEnded.resolve();
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator),
+		{
+			attachments: {
+				externalize: async (messages) =>
+					messages.map((sessionMessage) => ({
+						...sessionMessage,
+						parts: sessionMessage.parts.map((part) =>
+							part.type === "file"
+								? fromPartial<SessionFilePart>({
+										attachmentId: attachmentId("stored-blob"),
+										mediaType: part.mediaType,
+										type: "file",
+										url: "attachment://stored-blob",
+									})
+								: part
+						),
+					})),
+				hydrate: async ({ messages }) => [...messages],
+				release: (attachmentIds) => {
+					released.push([...attachmentIds]);
+					holdEnded.resolve();
+				},
+				retain: (attachmentIds) => retained.push([...attachmentIds]),
 			},
-			retain: (attachmentIds) => retained.push([...attachmentIds]),
-		},
-		runtime: runtime.runtime,
-	});
+			runtime: runtime.runtime,
+		}
+	);
 	const files: SessionFilePart[] = [
 		{
 			filename: "clipboard.png",
@@ -1351,8 +1683,9 @@ test("retains a queued submission's attachments until its turn runs", async () =
 		},
 	];
 
-	const first = engine.send(sendInput({ userText: "one" }));
-	await runtime.started(1);
+	// Attachments are refused on a Steering Message, so a submission that
+	// carries one waits for the queue: the compaction is what holds the lane.
+	const compaction = engine.compact({ model, trigger: "manual" });
 	await engine.send(
 		sendInput({
 			composition: compositionOf("[Image 1]", files),
@@ -1368,9 +1701,9 @@ test("retains a queued submission's attachments until its turn runs", async () =
 		engine.getSnapshot().queuedSubmissions[0]?.input.composition.files
 	).toEqual([expect.objectContaining({ attachmentId: "stored-blob" })]);
 
-	runtime.release();
-	await first;
-	await runtime.started(2);
+	release();
+	await compaction;
+	await runtime.started(1);
 	expect(released).toEqual([]);
 	runtime.release();
 
@@ -1379,18 +1712,54 @@ test("retains a queued submission's attachments until its turn runs", async () =
 	expect(released).toEqual([["stored-blob"]]);
 });
 
+test("refuses a submission that carries attachments into a running turn", async () => {
+	const runtime = createQueuedRuntime();
+	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+	const files: SessionFilePart[] = [
+		fromPartial<SessionFilePart>({
+			attachmentId: attachmentId("unpaid-blob"),
+			type: "file",
+			url: "attachment://unpaid-blob",
+		}),
+	];
+
+	const first = engine.send(sendInput({ userText: "one" }));
+	await runtime.started(1);
+	const outcome = await engine.send(
+		sendInput({ composition: compositionOf("[Image 1]", files), files })
+	);
+
+	// A Steering Message carries text only, so the running turn is never
+	// promised a delivery it cannot pay for.
+	expect(outcome).toEqual({
+		rejected: true,
+		reason:
+			"A Steering Message carries text only: attachments are not accepted.",
+	});
+	expect(engine.getSnapshot().steeringMessages).toEqual([]);
+	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
+
+	runtime.release();
+	await first;
+});
+
 test("drops the queue and its attachment holds when the session shuts down", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
 	const released: string[][] = [];
-	const engine = createEngine([], undefined, {
-		attachments: {
-			externalize: async (messages) => [...messages],
-			hydrate: async ({ messages }) => [...messages],
-			release: (attachmentIds) => released.push([...attachmentIds]),
-			retain: () => undefined,
-		},
-		runtime: runtime.runtime,
-	});
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator),
+		{
+			attachments: {
+				externalize: async (messages) => [...messages],
+				hydrate: async ({ messages }) => [...messages],
+				release: (attachmentIds) => released.push([...attachmentIds]),
+				retain: () => undefined,
+			},
+			runtime: runtime.runtime,
+		}
+	);
 	const files: SessionFilePart[] = [
 		fromPartial<SessionFilePart>({
 			attachmentId: attachmentId("dropped-blob"),
@@ -1399,8 +1768,7 @@ test("drops the queue and its attachment holds when the session shuts down", asy
 		}),
 	];
 
-	const first = engine.send(sendInput({ userText: "one" }));
-	await runtime.started(1);
+	const compaction = engine.compact({ model, trigger: "manual" });
 	await engine.send(
 		sendInput({ composition: compositionOf("[Image 1]", files), files })
 	);
@@ -1409,8 +1777,8 @@ test("drops the queue and its attachment holds when the session shuts down", asy
 
 	expect(released).toEqual([["dropped-blob"]]);
 	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
-	runtime.release();
-	await first;
+	release();
+	await compaction;
 });
 
 test("refuses a submission once the session has shut down", async () => {
@@ -1424,17 +1792,22 @@ test("refuses a submission once the session has shut down", async () => {
 });
 
 test("releases a recalled submission's attachment hold", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
 	const released: string[][] = [];
-	const engine = createEngine([], undefined, {
-		attachments: {
-			externalize: async (messages) => [...messages],
-			hydrate: async ({ messages }) => [...messages],
-			release: (attachmentIds) => released.push([...attachmentIds]),
-			retain: () => undefined,
-		},
-		runtime: runtime.runtime,
-	});
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator),
+		{
+			attachments: {
+				externalize: async (messages) => [...messages],
+				hydrate: async ({ messages }) => [...messages],
+				release: (attachmentIds) => released.push([...attachmentIds]),
+				retain: () => undefined,
+			},
+			runtime: runtime.runtime,
+		}
+	);
 	const files: SessionFilePart[] = [
 		fromPartial<SessionFilePart>({
 			attachmentId: attachmentId("held-blob"),
@@ -1443,18 +1816,16 @@ test("releases a recalled submission's attachment hold", async () => {
 		}),
 	];
 
-	const first = engine.send(sendInput({ userText: "one" }));
-	await runtime.started(1);
+	const compaction = engine.compact({ model, trigger: "manual" });
 	await engine.send(
 		sendInput({ composition: compositionOf("[Image 1]", files), files })
 	);
 
-	engine.recallQueuedSubmissions();
+	engine.recallWaitingMessages();
 
 	expect(released).toEqual([["held-blob"]]);
-	engine.interrupt();
-	runtime.release();
-	await first;
+	release();
+	await compaction;
 });
 
 /** A turn that streams one answer through the callbacks it is handed. */
@@ -1614,6 +1985,57 @@ test("cancels the submission it is running and returns to ready", async () => {
 	expect(snapshot.turnActive).toBe(false);
 	expect(snapshot.executions).toEqual([]);
 	expect(snapshot.approvals).toEqual([]);
+});
+
+test("interrupts the turn, not the Steering Message it delivered", async () => {
+	const accepting = Promise.withResolvers<void>();
+	const corrected = Promise.withResolvers<void>();
+	const parked = Promise.withResolvers<void>();
+	const engine = createEngine([], undefined, {
+		runtime: {
+			requestOverheadTokens: () => 0,
+			run: async ({ callbacks, execution, takeSteeringMessages }) => {
+				callbacks.onEvent({
+					agentId: execution.agent,
+					sequence: 0,
+					startedAt: 1,
+					turnId: execution.turnId,
+					type: "agent-turn-started",
+				});
+				callbacks.onEvent({
+					delta: "Working",
+					sequence: 1,
+					turnId: execution.turnId,
+					type: "text-delta",
+				});
+				// The test steers the turn, and the boundary takes what joined it.
+				accepting.resolve();
+				await corrected.promise;
+				takeSteeringMessages();
+				await parked.promise;
+				return { error: new Error("The Agent Turn was interrupted.") };
+			},
+		},
+	});
+
+	const send = engine.send(sendInput({ userText: "one" }));
+	await accepting.promise;
+	await engine.send(sendInput({ userText: "correction" }));
+	corrected.resolve();
+	await Promise.resolve();
+	engine.interrupt();
+	parked.resolve();
+	await send;
+
+	const context = engine.getSnapshot().context;
+	const assistant = context.findLast(({ role }) => role === "assistant");
+	const steering = context.findLast(({ role }) => role === "user");
+	// The turn's own message wears the interruption, and the message that joined
+	// it stays in the context as the user message it was delivered as.
+	expect(assistant?.metadata?.interrupted).toBe(true);
+	expect(userPrompts(context)).toContain("correction");
+	expect(steering?.metadata?.interrupted).toBeUndefined();
+	expect(steering?.metadata?.responseTimeMs).toBeUndefined();
 });
 
 test("interrupting a turn keeps the Assistant message it already streamed", async () => {

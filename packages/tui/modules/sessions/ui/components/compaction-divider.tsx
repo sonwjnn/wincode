@@ -7,7 +7,6 @@ import type { SessionCompaction } from "../../compaction";
 const TRIGGER_LABELS: Record<SessionCompaction["trigger"], string> = {
 	manual: "manual",
 	threshold: "automatic",
-	"mid-turn": "mid-turn",
 	overflow: "overflow recovery",
 };
 

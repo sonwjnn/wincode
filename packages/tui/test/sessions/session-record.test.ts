@@ -530,3 +530,35 @@ test("projects a failed assistant row as its safe transcript message", () => {
 		},
 	]);
 });
+
+test("round-trips the Agent Turn a Steering Message joined", async () => {
+	const { store } = await createTestStore();
+	const { id } = await createSession(store);
+	const steering: SessionRecord = {
+		...buildUserSessionRecord({
+			agentId: agentId("build"),
+			message: {
+				id: sessionMessageId("msg-steer"),
+				metadata: { joinedTurnId: agentTurnId("turn-joined") },
+				parts: [{ text: "use the cache instead", type: "text" }],
+				role: "user",
+			},
+			model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
+			turnId: agentTurnId("turn-joined"),
+		}),
+	};
+	await store.commitSessionRecord({ record: steering, sessionId: id });
+
+	const records = await store.listSessionRecords(id);
+	const persisted = records.find(
+		({ id: recordId }) => recordId === steering.id
+	);
+	expect(persisted?.messages[0]?.metadata?.joinedTurnId).toBe(
+		agentTurnId("turn-joined")
+	);
+	// A reopened session still groups the message into the turn it joined
+	// instead of letting it open a turn of its own.
+	expect(projectSessionRecords([steering])[0]?.metadata).toMatchObject({
+		joinedTurnId: "turn-joined",
+	});
+});

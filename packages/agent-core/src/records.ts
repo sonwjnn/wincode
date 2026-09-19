@@ -94,6 +94,13 @@ export type SessionSkillActivationRecord = ReadonlyDeep<{
 /** Per-message metadata safe to retain outside a transient Model Target. */
 export type SessionMessageMetadataRecord = ReadonlyDeep<{
 	agent?: AgentId;
+	/**
+	 * The Agent Turn a user message joined instead of opening, so the
+	 * Transcript can distinguish the message that opened a turn from the ones
+	 * that joined one. It never replaces `sourceUserMessageId` on the
+	 * assistant records of that turn.
+	 */
+	joinedTurnId?: AgentTurnId;
 	model?: {
 		modelId: ModelId;
 		providerId: string;
@@ -230,6 +237,7 @@ const isSessionMessageMetadataRecord = (
 		Object.keys(value).every(
 			(key) =>
 				key === "agent" ||
+				key === "joinedTurnId" ||
 				key === "model" ||
 				key === "responseTimeMs" ||
 				key === "skill" ||
@@ -238,6 +246,7 @@ const isSessionMessageMetadataRecord = (
 				key === "variant"
 		) &&
 		(isUndefined(value.agent) || isAgentId(value.agent)) &&
+		(isUndefined(value.joinedTurnId) || isNonEmptyString(value.joinedTurnId)) &&
 		validModelMetadata &&
 		(isUndefined(value.responseTimeMs) ||
 			isNonNegativeInteger(value.responseTimeMs)) &&

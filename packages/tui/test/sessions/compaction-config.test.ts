@@ -109,7 +109,6 @@ describe("resolveCompactionSettings", () => {
 		});
 
 		expect(settings.auto).toBe(false);
-		expect(settings.midTurnAvailable).toBe(true);
 		expect(settings.reserveTokens).toBe(2000);
 		expect(settings.sources.auto).toEqual({ kind: "session" });
 		expect(settings.sources.reserveTokens).toEqual({ kind: "session" });

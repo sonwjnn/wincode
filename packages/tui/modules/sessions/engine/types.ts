@@ -18,7 +18,11 @@ import type {
 	SkillToolDefinition,
 } from "@wincode/skills";
 import type { ReadonlyDeep } from "type-fest";
-import type { QueuedSubmissionId, SessionId } from "@/shared/identifiers";
+import type {
+	QueuedSubmissionId,
+	SessionId,
+	SteeringMessageId,
+} from "@/shared/identifiers";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import type {
 	CompactSessionResult,
@@ -92,6 +96,43 @@ export type SessionQueuedSubmission = ReadonlyDeep<{
 }>;
 
 /**
+ * The send a Steering Message runs when the Agent Turn it joined reaches a
+ * Model Step boundary: text only, on the Model Target the running turn already
+ * runs with, so a mid-turn correction cannot switch anything under the user.
+ * It keeps everything a fallback submission needs to run as its own Agent Turn
+ * when the turn that accepted it reaches no boundary.
+ */
+export type SessionSteeringSendInput = Readonly<{
+	agent: AgentId;
+	/** The composition the Strip shows and a Recall restores. */
+	composition: SessionSubmissionComposition;
+	model: ChatModelSelection;
+	resolvedAgent?: SessionResolvedAgent;
+	sessionModel: ChatModelSelection;
+	sessionVariant?: ModelVariant;
+	text: string;
+	variant?: ModelVariant;
+}>;
+
+/**
+ * One Steering Message a running Agent Turn accepted and holds for its next
+ * Model Step boundary. It is transient Engine state, never a Session Record
+ * until it is delivered, and it is never replayed after a restart.
+ */
+export type SessionSteeringMessage = ReadonlyDeep<{
+	id: SteeringMessageId;
+	input: SessionSteeringSendInput;
+}>;
+
+/** One user message the Engine withdrew from a lane for the composer. */
+export type SessionWaitingMessage =
+	| SessionQueuedSubmission
+	| SessionSteeringMessage;
+
+/** The identity of one waiting user message in either lane. */
+export type SessionWaitingMessageId = QueuedSubmissionId | SteeringMessageId;
+
+/**
  * One approval request the Engine owns until it settles. `target` is
  * `tool-call` when the request carries a Tool Call Identifier and `session`
  * when it has no timeline anchor of its own. A request with no `decision` is
@@ -122,6 +163,12 @@ export type SessionSnapshot = ReadonlyDeep<{
 	 * oldest first. It is drain order, never a Session Record.
 	 */
 	queuedSubmissions: SessionQueuedSubmission[];
+	/**
+	 * Steering Lane: the Steering Messages waiting for the next Model Step
+	 * boundary of the running Agent Turn, oldest first. It is delivery order,
+	 * never a Session Record until it is delivered.
+	 */
+	steeringMessages: SessionSteeringMessage[];
 	/** Whether the session is running a submission, from its command to its settle. */
 	turnActive: boolean;
 	/** Session Transcript: the messages the session presents to the user. */
@@ -262,6 +309,13 @@ export type SessionTurnRequest = Readonly<{
 	/** The Skill this execution's turn must load, when the submission asked for one. */
 	skillRequest?: SkillRequestContext;
 	signal: AbortSignal;
+	/**
+	 * Hands the runtime the Steering Messages that joined this execution since
+	 * the last call, oldest first, at a Model Step boundary. The Engine pops the
+	 * Steering Lane and commits the Session Records as it answers, so the
+	 * delivery point and the commit point are the same event.
+	 */
+	takeSteeringMessages: () => readonly SessionMessage[];
 }>;
 
 /** What one Agent Turn execution reported to the Engine. */
@@ -395,11 +449,11 @@ export type SessionEngine = Readonly<{
 	/** Cancels the Agent Turn the session is running. */
 	cancel: () => void;
 	/**
-	 * Aborts the compaction command in flight and recalls the queued
-	 * submissions with it: cancelling maintenance is still stopping work, and
+	 * Aborts the compaction command in flight and recalls the waiting user
+	 * messages with it: cancelling maintenance is still stopping work, and
 	 * stopping work hands the waiting text back.
 	 */
-	cancelCompaction: () => SessionQueuedSubmission[];
+	cancelCompaction: () => SessionWaitingMessage[];
 	/**
 	 * Settles every pending approval as rejected, so no Tool Gate evaluation
 	 * that asked for one is left waiting. The newest pending request carries the
@@ -418,10 +472,11 @@ export type SessionEngine = Readonly<{
 	/**
 	 * Interrupts the Agent Turn the session is running: the send ends, the
 	 * assistant message it streams into keeps the interrupted Tool Call
-	 * visible, and the Queued Submissions come back for the composer instead of
-	 * draining, so stopping work never strands waiting text.
+	 * visible, and everything waiting — the Steering Lane and the Submission
+	 * Queue together — comes back for the composer instead of draining, so
+	 * stopping work never strands waiting text.
 	 */
-	interrupt: (preserveToolCallId?: ToolCallId) => SessionQueuedSubmission[];
+	interrupt: (preserveToolCallId?: ToolCallId) => SessionWaitingMessage[];
 	/**
 	 * Merges messages into the Session Transcript: an existing message is
 	 * replaced by id, an unknown one is appended, and a compaction summary
@@ -454,17 +509,18 @@ export type SessionEngine = Readonly<{
 		command: SessionOverflowRecoveryCommand
 	) => Promise<SessionOverflowRecoveryOutcome>;
 	/**
-	 * Withdraws the Queued Submissions for the composer, oldest first. The
-	 * session view always recalls the whole queue — Recall is one gesture — and
-	 * identifiers are for a caller that read the queue and must not withdraw
-	 * what has already started: an identifier that names nothing waiting is a
-	 * no-op, so a submission that started running is never recalled and never
-	 * runs twice. The recalled submissions leave the queue, so nothing
+	 * Withdraws the session's waiting user messages for the composer, in the
+	 * order they would run: the Steering Lane first, then the Submission Queue.
+	 * Without identifiers Recall withdraws both lanes — Recall is one action —
+	 * and identifiers are for a caller that read the lanes and must not
+	 * withdraw what has already started: an identifier that names nothing
+	 * waiting is a no-op, so a message that started running is never recalled
+	 * and never runs twice. Recalled messages leave their lane, so nothing
 	 * auto-starts once the current work ends.
 	 */
-	recallQueuedSubmissions: (
-		ids?: readonly QueuedSubmissionId[]
-	) => SessionQueuedSubmission[];
+	recallWaitingMessages: (
+		ids?: readonly SessionWaitingMessageId[]
+	) => SessionWaitingMessage[];
 	/** Replaces one execution's Session View State, never another's. */
 	setExecutionViewState: (
 		turnId: AgentTurnId,
@@ -486,8 +542,11 @@ export type SessionEngine = Readonly<{
 	/**
 	 * Sends one submission as a Session Command. A submission that arrives
 	 * while the session is busy — a running Agent Turn or a compaction in
-	 * flight — becomes a Queued Submission instead of being refused, and is
-	 * accepted with the composition and Model Target selection it arrived with.
+	 * flight — becomes a waiting user message instead of being refused: one
+	 * admitted while an Agent Turn is running joins the Steering Lane and
+	 * travels inside that turn, and every other one joins the Submission Queue
+	 * and runs as its own Agent Turn. Either way it is accepted with the
+	 * composition and Model Target selection it arrived with.
 	 */
 	send: (input: SessionSendInput) => Promise<SessionSendOutcome>;
 	subscribe: (listener: () => void) => () => void;

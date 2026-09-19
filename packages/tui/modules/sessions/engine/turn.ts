@@ -321,11 +321,19 @@ export const projectAgentTurnTerminal = (
 	);
 };
 
-/** The Session Context message the current Agent Turn's output belongs to. */
+/**
+ * The Session Context message the current Agent Turn's output belongs to. The
+ * turn's boundary is the message that opened it: a Steering Message delivered
+ * mid-turn sits after that output without opening anything, so it never takes
+ * the place the interruption belongs to.
+ */
 const findCurrentTurnAssistantIndex = (
 	messages: readonly SessionMessage[]
 ): number => {
-	const userIndex = messages.findLastIndex(({ role }) => role === "user");
+	const userIndex = messages.findLastIndex(
+		({ metadata, role }) =>
+			role === "user" && isUndefined(metadata?.joinedTurnId)
+	);
 	const assistantIndex = messages.findLastIndex(
 		({ role }) => role === "assistant"
 	);
@@ -373,7 +381,10 @@ const findCurrentTurnInterruptTargetIndex = (
 ): number => {
 	const assistantIndex = findCurrentTurnAssistantIndex(messages);
 	return assistantIndex === -1
-		? messages.findLastIndex(({ role }) => role === "user")
+		? messages.findLastIndex(
+				({ metadata, role }) =>
+					role === "user" && isUndefined(metadata?.joinedTurnId)
+			)
 		: assistantIndex;
 };
 

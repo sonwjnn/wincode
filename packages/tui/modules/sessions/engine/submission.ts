@@ -63,6 +63,11 @@ export type SubmissionDeps = Readonly<{
 	beginExecution: (input: SessionExecutionInput) => SessionExecution;
 	compact: (command: SessionCompactionCommand) => Promise<CompactSessionResult>;
 	endExecution: (turnId: AgentTurnId) => void;
+	/**
+	 * Hands anything still waiting in the Steering Lane to the Submission Queue
+	 * when the turn that would have delivered it ends.
+	 */
+	fallbackSteeringMessages: () => void;
 	getContext: () => readonly SessionMessage[];
 	getTranscript: () => readonly SessionMessage[];
 	mergeTranscript: (
@@ -83,6 +88,12 @@ export type SubmissionDeps = Readonly<{
 	) => void;
 	setTurnActive: (value: boolean) => void;
 	settleCompaction: () => Promise<Error | null>;
+	/**
+	 * Delivers the Steering Lane into one Agent Turn execution: the Engine pops
+	 * the lane, commits the Session Records, and returns the messages the
+	 * runtime inserts before its next model call.
+	 */
+	takeSteeringMessages: (execution: SessionExecution) => SessionMessage[];
 }>;
 
 type SubmitCompactionResult =
@@ -990,6 +1001,7 @@ const runTurn = async ({
 			resolvedAgent: context.resolvedAgent,
 			...omitUndefined({ skillRequest: context.skill }),
 			signal,
+			takeSteeringMessages: () => deps.takeSteeringMessages(execution),
 		});
 		if (isUndefined(outcome.error)) {
 			maintainAfterTurn(
@@ -1041,9 +1053,10 @@ export type SubmissionPipeline = Readonly<{
 
 /**
  * The Engine's Submission Command: it prepares the submission, commits the
- * accepted user message, runs the Agent Turn against the host's runtime, and
- * maintains the compaction threshold afterwards. Every state write happens
- * here, in submission order, so an observer only ever reads a settled session.
+ * accepted user message, runs the Agent Turn against the host's runtime,
+ * commits each Steering Message that turn takes at a Model Step boundary, and
+ * maintains the compaction threshold afterwards. Every state write is ordered
+ * by this command, so an observer only ever reads a settled session.
  */
 export const createSubmissionPipeline = (
 	deps: SubmissionDeps
@@ -1112,6 +1125,11 @@ export const createSubmissionPipeline = (
 				signal,
 			});
 		} finally {
+			// A turn that ended without delivering its Steering Lane — a
+			// tool-less one ran exactly one Model Step — hands it to the
+			// Submission Queue before the session reports the turn over, so the
+			// messages run as their own Agent Turns and nothing is dropped.
+			deps.fallbackSteeringMessages();
 			deps.setTurnActive(false);
 		}
 	};

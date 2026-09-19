@@ -15,7 +15,12 @@ import {
 import { fromPartial } from "@total-typescript/shoehorn";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SessionCompaction } from "@/modules/sessions/compaction/types";
-import type { SessionQueuedSubmission } from "@/modules/sessions/engine/types";
+import type {
+	SessionQueuedSubmission,
+	SessionSteeringMessage,
+	SessionWaitingMessage,
+	SessionWaitingMessageId,
+} from "@/modules/sessions/engine/types";
 import type {
 	SessionFilePart,
 	SessionMessage,
@@ -24,12 +29,12 @@ import type {
 	SessionSendInput,
 	SessionSubmissionComposition,
 } from "@/modules/sessions/session-operation";
-import type { QueuedSubmissionId } from "@/shared/identifiers";
 import {
 	agentId,
 	queuedSubmissionId,
 	sessionId,
 	sessionMessageId,
+	steeringMessageId,
 } from "../support/identifiers";
 
 const { testRender } = await import("@opentui/react/test-utils");
@@ -92,13 +97,17 @@ type FakeSessionRun = {
 };
 
 let activeFakeSessionRun: FakeSessionRun | null = null;
-/** The compositions the view accepted as Queued Submissions, in order. */
-let fakeQueuedTexts: string[] = [];
-/** The same submissions' full compositions, so a round trip can be asserted. */
-let fakeQueuedCompositions: SessionSubmissionComposition[] = [];
-/** A Recall payload the test supplies, in place of what the fake queue holds. */
-let fakeRecalledPayload: SessionQueuedSubmission[] | null = null;
-/** How many times the view asked the session to recall its queue. */
+/** The compositions the view accepted while the turn ran, in order. */
+let fakeWaitingTexts: string[] = [];
+/** The same messages' full compositions, so a round trip can be asserted. */
+let fakeWaitingCompositions: SessionSubmissionComposition[] = [];
+/** The Submission Queue a test starts the view with, before anything is sent. */
+let fakeQueuedSeed: SessionQueuedSubmission[] = [];
+/** A Recall payload the test supplies, in place of what the fake lanes hold. */
+let fakeRecalledPayload: SessionWaitingMessage[] | null = null;
+/** The compositions the view sent while the session was idle, in order. */
+let fakeRunCompositions: SessionSubmissionComposition[] = [];
+/** How many times the view asked the session to recall its waiting messages. */
 let fakeSessionRecalls = 0;
 
 mock.module("@/modules/sessions/hooks/use-session-engine", () => ({
@@ -109,71 +118,78 @@ mock.module("@/modules/sessions/hooks/use-session-engine", () => ({
 		initialCompactions: SessionCompaction[] = []
 	) => {
 		const [turnActive, setTurnActive] = useState(false);
-		const [queuedSubmissions, setQueuedSubmissions] = useState<
-			SessionQueuedSubmission[]
+		const [queuedSubmissions, setQueuedSubmissions] =
+			useState<SessionQueuedSubmission[]>(fakeQueuedSeed);
+		const [steeringMessages, setSteeringMessages] = useState<
+			SessionSteeringMessage[]
 		>([]);
 		const running = useRef(false);
 		running.current = turnActive;
-		const waiting = useRef<SessionQueuedSubmission[]>([]);
-		waiting.current = queuedSubmissions;
+		const waiting = useRef<SessionWaitingMessage[]>([]);
+		waiting.current = [...steeringMessages, ...queuedSubmissions];
 		const send = useCallback(async (input: SessionSendInput) => {
 			const run = activeFakeSessionRun;
 			if (!run) {
 				throw new Error("No fake session run configured.");
 			}
+			const composition = input.composition ?? {
+				files: input.files ?? [],
+				text: input.userText ?? "",
+			};
 			if (running.current) {
-				// A busy session queues the submission and accepts it.
-				fakeQueuedTexts = [
-					...fakeQueuedTexts,
-					input.composition?.text ?? input.userText ?? "",
-				];
-				fakeQueuedCompositions = [
-					...fakeQueuedCompositions,
-					input.composition ?? {
-						files: input.files ?? [],
-						text: input.userText ?? "",
-					},
-				];
-				const composition = input.composition ?? {
-					files: input.files ?? [],
-					text: input.userText ?? "",
-				};
-				setQueuedSubmissions((queued) => [
-					...queued,
+				// The session steering a running Agent Turn accepts the message
+				// into its Steering Lane instead of queueing it.
+				fakeWaitingTexts = [...fakeWaitingTexts, composition.text];
+				fakeWaitingCompositions = [...fakeWaitingCompositions, composition];
+				setSteeringMessages((messages) => [
+					...messages,
 					{
-						id: queuedSubmissionId(`queued-${queued.length + 1}`),
-						input: { ...input, composition },
+						id: steeringMessageId(`steering-${messages.length + 1}`),
+						input: {
+							agent: input.agent,
+							composition,
+							model: input.model,
+							sessionModel: input.sessionModel,
+							text: composition.text,
+						},
 					},
 				]);
 				return { rejected: false as const };
 			}
+			fakeRunCompositions = [...fakeRunCompositions, composition];
 			run.sendStarted.resolve();
 			setTurnActive(true);
 			await run.release.promise;
 			setTurnActive(false);
 			return { rejected: false as const };
 		}, []);
-		const recallQueuedSubmissions = useCallback(
-			(ids?: readonly QueuedSubmissionId[]) => {
-				// The fake keeps what the real Engine keeps, so a recall of one
-				// submission leaves the others in the queue and in its records.
-				const queue = fakeRecalledPayload ?? waiting.current;
+		const recallWaitingMessages = useCallback(
+			(ids?: readonly SessionWaitingMessageId[]) => {
+				// The fake keeps what the real Engine keeps: the Steering Lane
+				// first, then the Submission Queue, and a recall of one message
+				// leaves the others waiting.
+				const lanes = fakeRecalledPayload ?? waiting.current;
 				const recalled = isUndefined(ids)
-					? queue
-					: queue.filter((submission) => ids.includes(submission.id));
+					? lanes
+					: lanes.filter((message) => ids.includes(message.id));
 				if (recalled.length === 0) {
 					return [];
 				}
 				const recalledIds = new Set(recalled.map(({ id }) => id));
 				const remaining = waiting.current.filter(
-					(submission) => !recalledIds.has(submission.id)
+					(message) => !recalledIds.has(message.id)
 				);
 				fakeSessionRecalls += 1;
-				fakeQueuedCompositions = remaining.map(
+				fakeWaitingCompositions = remaining.map(
 					({ input }) => input.composition
 				);
-				fakeQueuedTexts = remaining.map(({ input }) => input.composition.text);
-				setQueuedSubmissions(remaining);
+				fakeWaitingTexts = remaining.map(({ input }) => input.composition.text);
+				setSteeringMessages((messages) =>
+					messages.filter(({ id }) => !recalledIds.has(id))
+				);
+				setQueuedSubmissions((queue) =>
+					queue.filter(({ id }) => !recalledIds.has(id))
+				);
 				return recalled;
 			},
 			[]
@@ -185,7 +201,7 @@ mock.module("@/modules/sessions/hooks/use-session-engine", () => ({
 				throw new Error("Compaction is not part of this test.");
 			},
 			interrupt: () => [],
-			recallQueuedSubmissions,
+			recallWaitingMessages,
 			send,
 			snapshot: {
 				approvals: [],
@@ -197,6 +213,7 @@ mock.module("@/modules/sessions/hooks/use-session-engine", () => ({
 				executions: [],
 				isCompacting: false,
 				queuedSubmissions,
+				steeringMessages,
 				transcript: initialTranscript,
 				turnActive,
 				viewState: undefined,
@@ -245,8 +262,11 @@ function AgentRegistryReadyProbe({ onReady }: { onReady: () => void }) {
 	return null;
 }
 
-/** The strip's count line, e.g. `2 queued`; the workspace path never has one. */
-const QUEUED_COUNT_PATTERN = /\d+ queued/u;
+/** The strip's count line, e.g. `2 waiting`; the workspace path never has one. */
+const WAITING_COUNT_PATTERN = /\d+ waiting/u;
+/** A strip row of one lane, so a lane tag is read off the row it belongs to. */
+const LANE_ROW = (lane: "queued" | "steering", description: string): RegExp =>
+	new RegExp(`${lane}\\s+${description}`, "u");
 
 const userMessage = (id: string, text: string): SessionMessage => ({
 	id: sessionMessageId(id),
@@ -283,8 +303,10 @@ beforeAll(() => {
 
 afterEach(() => {
 	activeFakeSessionRun = null;
-	fakeQueuedCompositions = [];
-	fakeQueuedTexts = [];
+	fakeQueuedSeed = [];
+	fakeRunCompositions = [];
+	fakeWaitingCompositions = [];
+	fakeWaitingTexts = [];
 	fakeRecalledPayload = null;
 	fakeSessionRecalls = 0;
 });
@@ -589,7 +611,7 @@ const renderBusySessionView = async () => {
 	return { commandLayer, release, setup };
 };
 
-describe("SessionView Submission Queue", () => {
+describe("SessionView waiting messages", () => {
 	/**
 	 * Types into the composer until the composition is really there. The
 	 * composer reset a previous submit triggered reaches the textarea through a
@@ -636,15 +658,18 @@ describe("SessionView Submission Queue", () => {
 		try {
 			await submit(setup, "second prompt");
 
-			// The session accepted it as a Queued Submission instead of running
-			// it, and the composer let the composition go.
-			await waitFor(setup, () => fakeQueuedTexts.length === 1);
+			// The session accepted it into the Steering Lane instead of running
+			// it, so the strip shows it as a message that will join the turn, and
+			// the composer let the composition go.
+			await waitFor(setup, () => fakeWaitingTexts.length === 1);
 			await flushUi(setup);
 			await flushUi(setup);
 
 			const frame = setup.captureCharFrame();
-			expect(fakeQueuedTexts).toEqual(["second prompt"]);
-			expect(frame).toMatch(QUEUED_COUNT_PATTERN);
+			expect(fakeWaitingTexts).toEqual(["second prompt"]);
+			expect(frame).toMatch(WAITING_COUNT_PATTERN);
+			expect(frame).toContain("▸ steering");
+			expect(frame).toMatch(LANE_ROW("steering", "second prompt"));
 			expect(frame).toContain("Alt+Up");
 			expect(frame.match(/second prompt/gu)).toHaveLength(1);
 		} finally {
@@ -658,7 +683,7 @@ describe("SessionView Submission Queue", () => {
 		const { release, setup } = await renderBusySessionView();
 		try {
 			await submit(setup, "second prompt");
-			await waitFor(setup, () => fakeQueuedTexts.length === 1);
+			await waitFor(setup, () => fakeWaitingTexts.length === 1);
 
 			setup.mockInput.pressArrow("up", { meta: true });
 			await waitFor(setup, () => fakeSessionRecalls === 1);
@@ -667,7 +692,7 @@ describe("SessionView Submission Queue", () => {
 
 			const frame = setup.captureCharFrame();
 			expect(frame.match(/second prompt/gu)).toHaveLength(1);
-			expect(frame).not.toMatch(QUEUED_COUNT_PATTERN);
+			expect(frame).not.toMatch(WAITING_COUNT_PATTERN);
 			expect(frame).not.toContain("Alt+Up");
 		} finally {
 			release.resolve();
@@ -680,9 +705,9 @@ describe("SessionView Submission Queue", () => {
 		const { release, setup } = await renderBusySessionView();
 		try {
 			await submit(setup, "first waiting");
-			await waitFor(setup, () => fakeQueuedTexts.length === 1);
+			await waitFor(setup, () => fakeWaitingTexts.length === 1);
 			await submit(setup, "second waiting");
-			await waitFor(setup, () => fakeQueuedTexts.length === 2);
+			await waitFor(setup, () => fakeWaitingTexts.length === 2);
 
 			setup.mockInput.pressArrow("up", { shift: true });
 			await waitFor(setup, () => fakeSessionRecalls === 1);
@@ -691,14 +716,14 @@ describe("SessionView Submission Queue", () => {
 
 			// The submission that would have run next is back in the composer,
 			// and the one behind it keeps waiting.
-			expect(fakeQueuedTexts).toEqual(["second waiting"]);
-			expect(setup.captureCharFrame()).toContain("1 queued");
+			expect(fakeWaitingTexts).toEqual(["second waiting"]);
+			expect(setup.captureCharFrame()).toContain("1 waiting");
 
 			// Submitting the withdrawn text again joins the tail of the queue,
 			// so the submission that stayed keeps its place.
 			setup.mockInput.pressEnter();
-			await waitFor(setup, () => fakeQueuedTexts.length === 2);
-			expect(fakeQueuedTexts).toEqual(["second waiting", "first waiting"]);
+			await waitFor(setup, () => fakeWaitingTexts.length === 2);
+			expect(fakeWaitingTexts).toEqual(["second waiting", "first waiting"]);
 		} finally {
 			release.resolve();
 			await flushUi(setup);
@@ -710,9 +735,9 @@ describe("SessionView Submission Queue", () => {
 		const { release, setup } = await renderBusySessionView();
 		try {
 			await submit(setup, "first waiting");
-			await waitFor(setup, () => fakeQueuedTexts.length === 1);
+			await waitFor(setup, () => fakeWaitingTexts.length === 1);
 			await submit(setup, "second waiting");
-			await waitFor(setup, () => fakeQueuedTexts.length === 2);
+			await waitFor(setup, () => fakeWaitingTexts.length === 2);
 			await typePrompt(setup, "my own draft");
 
 			setup.mockInput.pressArrow("up", { shift: true });
@@ -724,9 +749,9 @@ describe("SessionView Submission Queue", () => {
 
 			// Recalling one at a time reaches the whole queue, and the strip goes
 			// with it.
-			expect(fakeQueuedTexts).toEqual([]);
+			expect(fakeWaitingTexts).toEqual([]);
 			const frame = setup.captureCharFrame();
-			expect(frame).not.toMatch(QUEUED_COUNT_PATTERN);
+			expect(frame).not.toMatch(WAITING_COUNT_PATTERN);
 			expect(frame).not.toContain("Shift+Up");
 
 			// The draft stays on top and each recall lands below the one before
@@ -783,11 +808,15 @@ describe("SessionView Submission Queue", () => {
 			expect(recalledFrame).toContain("[Pasted ~20 lines]");
 			expect(recalledFrame).toContain("explain these");
 
-			// Submitting it again carries the same attachments, pasted text, and
-			// visible text the recalled composition held.
+			// The turn ends, and sending the restored composition carries the same
+			// attachments, pasted text, and visible text it was composed with.
+			const sentBefore = fakeRunCompositions.length;
+			release.resolve();
+			await flushUi(setup);
+			await flushUi(setup);
 			setup.mockInput.pressEnter();
-			await waitFor(setup, () => fakeQueuedCompositions.length === 1);
-			expect(fakeQueuedCompositions[0]).toEqual(composition);
+			await waitFor(setup, () => fakeRunCompositions.length === sentBefore + 1);
+			expect(fakeRunCompositions.at(-1)).toEqual(composition);
 		} finally {
 			release.resolve();
 			await flushUi(setup);
@@ -799,7 +828,7 @@ describe("SessionView Submission Queue", () => {
 		const { release, setup } = await renderBusySessionView();
 		try {
 			await submit(setup, "second prompt");
-			await waitFor(setup, () => fakeQueuedTexts.length === 1);
+			await waitFor(setup, () => fakeWaitingTexts.length === 1);
 
 			// A terminal that cannot deliver Alt+Arrow still reaches Recall.
 			setup.mockInput.pressKey("z", { meta: true });
@@ -811,11 +840,52 @@ describe("SessionView Submission Queue", () => {
 		}
 	});
 
+	test("recalls the Steering head while the queue keeps waiting", async () => {
+		fakeQueuedSeed = [
+			fromPartial<SessionQueuedSubmission>({
+				id: queuedSubmissionId("queued-later"),
+				input: { composition: { files: [], text: "later prompt" } },
+			}),
+		];
+		fakeWaitingTexts = ["later prompt"];
+		const { release, setup } = await renderBusySessionView();
+		try {
+			await submit(setup, "steer me");
+			await waitFor(setup, () => fakeWaitingTexts.length === 2);
+			await flushUi(setup);
+			await flushUi(setup);
+
+			// Both lanes are shown and marked apart, and the Steering head wears
+			// the next marker because that is what the next Model Step boundary
+			// delivers.
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain("▸ steering");
+			expect(frame).toMatch(LANE_ROW("steering", "steer me"));
+			expect(frame).toMatch(LANE_ROW("queued", "later prompt"));
+
+			setup.mockInput.pressArrow("up", { shift: true });
+			await waitFor(setup, () => fakeSessionRecalls === 1);
+			await flushUi(setup);
+			await flushUi(setup);
+
+			// Only the message that runs next came back; the queued submission
+			// still waits, and the marker has moved to it.
+			expect(fakeWaitingTexts).toEqual(["later prompt"]);
+			const afterRecall = setup.captureCharFrame();
+			expect(afterRecall).toContain("▸ queued");
+			expect(afterRecall).toMatch(LANE_ROW("queued", "later prompt"));
+		} finally {
+			release.resolve();
+			await flushUi(setup);
+			setup.renderer.destroy();
+		}
+	});
+
 	test("leaves the queue alone while an overlay is open", async () => {
 		const { commandLayer, release, setup } = await renderBusySessionView();
 		try {
 			await submit(setup, "second prompt");
-			await waitFor(setup, () => fakeQueuedTexts.length === 1);
+			await waitFor(setup, () => fakeWaitingTexts.length === 1);
 			await setup.mockInput.typeText("/");
 			// The overlay renders before its keyboard layer is pushed, so the
 			// test waits for both before pressing a key.
@@ -829,7 +899,7 @@ describe("SessionView Submission Queue", () => {
 			// The command overlay owns the keyboard: Alt+Up recalls nothing, and
 			// the queued submission stays queued.
 			expect(fakeSessionRecalls).toBe(0);
-			expect(fakeQueuedTexts).toEqual(["second prompt"]);
+			expect(fakeWaitingTexts).toEqual(["second prompt"]);
 		} finally {
 			release.resolve();
 			await flushUi(setup);

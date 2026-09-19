@@ -111,13 +111,19 @@ The live, transient projection of one Agent Turn Execution for the session UI. I
 The user-authored content one send accepts: text, attachments, pasted text, and an optional Skill or Custom Command invocation. _Avoid_: message, request
 
 **Queued Submission**:
-A Submission a busy session accepts and holds instead of running immediately. It is transient Session Engine state — not a Session Record, never replayed after a restart — and it enters the Session Transcript only when it starts running. _Avoid_: queued prompt, pending message, backlog item, steering, interjection
+A Submission a busy session accepts and holds instead of running immediately. It is transient Session Engine state — not a Session Record, never replayed after a restart — and it enters the Session Transcript only when it starts running. _Avoid_: queued prompt, pending message, backlog item, steering (that is a Steering Message), interjection
 
 **Submission Queue**:
 The FIFO order of a session's Queued Submissions, exposed in the Session Snapshot. The Session Engine drains it after each terminal Agent Turn outcome; a user interrupt recalls it to the composer instead of draining it. _Avoid_: message queue, follow-up list, outbox
 
 **Recall**:
-Withdrawing a session's queued submissions back into the composer in order, restoring their composition instead of running them. _Avoid_: dequeue, withdraw, unsend, retract, delete
+Withdrawing a session's waiting user messages back into the composer in order, restoring their composition instead of running them. It withdraws the Steering Lane and the Submission Queue together. _Avoid_: dequeue, withdraw, unsend, retract, delete
+
+**Steering Message**:
+A user-authored message a session accepts while an Agent Turn is running and delivers to the model inside that same turn, between Model Steps. It carries text only: it cannot carry attachments, invoke a Skill or Custom Command, or change the Agent. It becomes a Session Record and enters the Session Transcript when it is delivered. _Avoid_: mid-turn message, interjection, follow-up, steering prompt
+
+**Steering Lane**:
+The FIFO order of a session's Steering Messages. Its messages are delivered at Model Step boundaries inside the running Agent Turn, so they never wait for that Agent Turn to end. _Avoid_: steering queue, interjection lane, mid-turn queue
 
 ## Language
 

@@ -5,7 +5,7 @@ import {
 	createOperationalFailure,
 	type OperationalFailureDetails,
 } from "./failures";
-import type { AgentTurn } from "./turn";
+import type { AgentTurn, AgentTurnMessage } from "./turn";
 
 const TIMEOUT_PATTERN = /(?:deadline|timed? ?out|timeout)/iu;
 export const AGENT_TURN_ABORT_REASON_TYPE = "wincode-agent-turn" as const;
@@ -155,6 +155,15 @@ export type AgentRuntimeRunOptions = Readonly<{
 	signal?: AbortSignal;
 	/** Optional runtime-owned deadline in milliseconds from invocation. */
 	deadlineMs?: number;
+	/**
+	 * Returns the messages that joined the running Agent Turn since the last
+	 * call, oldest first, and hands them over: a message this returns is no
+	 * longer the caller's. The runtime calls it at each Model Step boundary
+	 * after the first step and inserts what it returns before the next model
+	 * call, so a Steering Message reaches the model without interrupting the
+	 * call in flight. An empty result leaves the next step's prompt unchanged.
+	 */
+	takeSteeringMessages?: () => readonly AgentTurnMessage[];
 }>;
 
 /**
