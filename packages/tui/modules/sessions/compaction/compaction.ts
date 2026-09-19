@@ -491,9 +491,18 @@ const tokenCountForMessages = (
 	estimateTokens: (messages: readonly SessionMessage[]) => number
 ): number => estimateTokens(messages);
 
+/**
+ * The indexes that start a turn: a user message that opened one. A Steering
+ * Message a turn delivered mid-flight is a user message too, but it opens
+ * nothing, so it never becomes a boundary a compaction may cut at — the turn it
+ * joined stays whole.
+ */
 const getUserTurnStarts = (messages: readonly SessionMessage[]): number[] =>
 	messages.flatMap((message, index) =>
-		index > 0 && message.role === "user" && isCompleteMessage(message)
+		index > 0 &&
+		message.role === "user" &&
+		isUndefined(message.metadata?.joinedTurnId) &&
+		isCompleteMessage(message)
 			? [index]
 			: []
 	);
@@ -564,7 +573,10 @@ const makeSplitTurnCutPoint = (
 	keepRecentTokens: number,
 	estimateTokens: (messages: readonly SessionMessage[]) => number
 ): CutPoint | null => {
-	const lastUserIndex = messages.findLastIndex(({ role }) => role === "user");
+	const lastUserIndex = messages.findLastIndex(
+		({ metadata, role }) =>
+			role === "user" && isUndefined(metadata?.joinedTurnId)
+	);
 	if (lastUserIndex === -1 || lastUserIndex >= messages.length - 1) {
 		return null;
 	}
