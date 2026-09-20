@@ -54,23 +54,31 @@ export function SessionSurface({
 				return null;
 			}
 			openedHost = host;
-			const store = getSessionStore();
-			const [row, transcript] = await Promise.all([
-				store.getSession(sessionId),
-				store.attachmentStore
-					? store.attachmentStore.annotateMessagesForDisplay(
-							host.getSnapshot().transcript
-						)
-					: host.getSnapshot().transcript,
-			]);
-			if (ignore) {
-				return null;
+			try {
+				const store = getSessionStore();
+				const [row, transcript] = await Promise.all([
+					store.getSession(sessionId),
+					store.attachmentStore
+						? store.attachmentStore.annotateMessagesForDisplay(
+								host.getSnapshot().transcript
+							)
+						: host.getSnapshot().transcript,
+				]);
+				if (ignore) {
+					return null;
+				}
+				return {
+					host,
+					sessionTitle: row.title,
+					transcript: host.engine.mergeTranscript(transcript),
+				};
+			} catch (error) {
+				// The session opened but its surface could not be prepared, so
+				// the failure screen replaces it and nothing keeps it running.
+				host.shutdown();
+				openedHost = null;
+				throw error;
 			}
-			return {
-				host,
-				sessionTitle: row.title,
-				transcript: host.engine.mergeTranscript(transcript),
-			};
 		};
 
 		open()
