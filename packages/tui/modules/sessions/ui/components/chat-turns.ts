@@ -6,6 +6,7 @@ import {
 	getSessionAttemptMessages,
 	hasCompletedToolArtifact,
 } from "@/modules/sessions/session-retry";
+import { isDelegatedSessionMessageId } from "@/modules/sessions/storage/session-record";
 
 export type SessionTurn = {
 	id: string;
@@ -138,7 +139,7 @@ export const resolveRetryMessageId = (
 	messages: readonly SessionMessage[]
 ): SessionMessageId | undefined => {
 	const primaryMessages = messages.filter(
-		({ id }) => !id.startsWith("delegated-turn:")
+		({ id }) => !isDelegatedSessionMessageId(id)
 	);
 	const userIndex = primaryMessages.findLastIndex(
 		(message, index) =>

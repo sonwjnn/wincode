@@ -70,13 +70,12 @@ const {
 } = await import("@/test/support/e2e-fixture");
 
 const store = createE2eStore();
-const { messages, sessionId } = await seedCompactionHistory(store, 2);
+const { sessionId } = await seedCompactionHistory(store, 2);
 
 test("lists merged command rows and activates a skill typed through its namespace", async () => {
 	let setup: TestRendererSetup | undefined;
 	try {
 		const rendered = await renderSession({
-			initialTranscript: messages,
 			pricing: createE2ePricing(20_000),
 			sessionId,
 		});

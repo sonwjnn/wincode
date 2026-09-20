@@ -200,7 +200,7 @@ const {
 } = await import("@/test/support/e2e-fixture");
 
 const store = createE2eStore();
-const { messages, sessionId } = await seedCompactionHistory(store, 1);
+const { sessionId } = await seedCompactionHistory(store, 1);
 await writeFile(join(testDirectory, FILE_NAME), FILE_CONTENT, "utf8");
 
 const completedToolRecords = (
@@ -234,7 +234,6 @@ const waitForGatedOutcome = async (
 const renderApprovalJourney = async (): Promise<TestRendererSetup> => {
 	const rendered = await renderSession({
 		configDocument: CONFIG_DOCUMENT,
-		initialTranscript: messages,
 		pricing: createE2ePricing(200_000),
 		sessionId,
 	});

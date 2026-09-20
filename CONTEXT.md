@@ -80,6 +80,9 @@ metadata, then prompt-config refs. _Avoid_: chat config, latest config
 **Session Engine**:
 The single owner of one session's live state and the only writer to it. Session state changes only through the Engine, and observers read a Session Snapshot. _Avoid_: session manager, session store, session state holder
 
+**Session Host**:
+The composition that assembles one session — its capabilities, its Session Engine, and its subscription to that Engine — and owns that assembly's lifetime. It carries no session state of its own and is UI-neutral, so the Wincode TUI and a non-interactive consumer each construct one against the same contract. _Avoid_: bootstrap, session manager, runtime, composition root
+
 **Session Command**:
 A request to change session state, such as sending a prompt, interrupting a turn, compacting, recovering from a context overflow, or answering an approval. The Engine executes Commands one at a time in submission order, and no asynchronous continuation changes session state outside a Command. _Avoid_: operation, action, event, task
 

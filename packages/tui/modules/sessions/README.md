@@ -13,7 +13,7 @@ starts the first Agent Turn once; opening the same session later only restores
 durable records and never runs the Agent.
 ### Join a session
 
-`SessionView` loads the transcript and ordered local compaction entries, validates the messages, and gives them to the `useSessionEngine` binding as the session's initial Transcript, Context, and compaction entries.
+`SessionSurface` opens the session and renders it: it constructs the Session Host, which loads the transcript and ordered local compaction entries, validates the messages, rebuilds the Session Context around the latest compaction, and constructs the Session Engine with all three. The surface shows the opening state until that resolves, the failure when it rejects, and hands the already-open Host to `SessionView`.
 
 ### Send a message
 
@@ -71,12 +71,14 @@ compaction facts, the approval lifecycle, overflow recovery, and the live
 executions — is owned by the React-free Session Engine in
 `modules/sessions/engine`. The Engine is the only writer, and it runs every
 Session Command, each of which publishes what it produced before it settles.
-`useSessionEngine` binds it for rendering: it constructs the Engine from the
-TUI-side ports, mirrors its Session Snapshot in React state so the view
-re-renders, projects its approvals into the panel registry, and never writes
-session state itself. A Session Snapshot carries facts, not a second notion of
-"running": `turnActive`, `isCompacting`, and the pending Approval Requests,
-with `isSessionBusy` derived from them.
+`useSessionEngine` binds it for rendering: it reads an already-open Session
+Host, mirrors its Session Snapshot in React state so the view re-renders,
+projects its approvals into the panel registry, and never writes session state
+itself. It constructs nothing and holds no session state: opening, the Engine,
+and teardown belong to the Host that the surface mounted it with. A Session
+Snapshot carries facts, not a second notion of "running": `turnActive`,
+`isCompacting`, and the pending Approval Requests, with `isSessionBusy` derived
+from them.
 
 Each Agent Turn execution owns its own scope. The Engine's execution record
 carries the identity every observer reads — the Agent Turn Identifier, the
@@ -134,11 +136,12 @@ for its one settlement, and the binding projects the Engine's pending requests
 into the shared panel registry, which is read-only for the session layer: the
 panel asks for a settlement, and the resolution it renders is the Engine's own
 decision. `respondToApproval` settles one request, `closeApprovals` settles
-every pending request as rejected, and `shutdown` — which the binding runs on
-unmount, cancelling the active send as it goes — settles through the same path. Because a request
-settles exactly once, a dismissed panel, an abort, or an unmount can never leave
-a Tool Gate evaluation waiting, and the one-shot abort latch the binding used to
-keep is gone: the second abort trigger finds nothing pending to handle.
+every pending request as rejected, and `shutdown` — which the surface that
+constructed the Host runs when it unmounts, cancelling the active send as it
+goes — settles through the same path. Because a request settles exactly once, a
+dismissed panel, an abort, or an unmount can never leave a Tool Gate evaluation
+waiting, and the one-shot abort latch the binding used to keep is gone: the
+second abort trigger finds nothing pending to handle.
 
 ### Input overlays
 
@@ -206,9 +209,12 @@ history and workspace/configuration data.
 - `engine/` (Session Engine) — the single owner of one session's live state; observers read Session Snapshots and never write, and it runs every Session Command — submission, compaction, approval settlement, recall, overflow recovery, shutdown. It holds both waiting lanes: a send that arrives while an Agent Turn runs joins the Steering Lane, which the runtime takes at Model Step boundaries, and any other busy send becomes a Queued Submission the Engine drains one Agent Turn at a time; an interrupt recalls both. `session-engine.ts` is the factory, `types.ts` the published Session Engine vocabulary (Snapshot, Commands, and Ports), `submission.ts` the Submission Command's pipeline and its preparation, `turn.ts` the Agent Turn projection, and `utils.ts` its pure snapshot, view-state, and busy helpers.
 - `turn-records.ts` — the durable Session Records one Agent Turn produces (terminal assistant rows, safe failure and cancellation rows, Tool Call rows), shared by the Engine and the Agent Runtime consumer.
 - `hooks/runtime-turn.ts` — the Agent Runtime consumer: it iterates one Agent Turn's events, owns the Session View State they project, and synthesizes the missing terminal event.
-- `hooks/session-engine-host.ts` — the TUI-side adapter that supplies the Engine's ports: the Agent Runtime, MCP snapshots and Tools, the Tool Gate, Skill catalogs, prompt composition, attachments, and durable records.
+- `host/session-host.ts` — the Session Host: it opens one session (durable records into a Session Transcript, a Session Context rebuilt around the latest compaction, and its Session Selection), assembles its capabilities, Engine, and Snapshot subscription, re-exposes the Agent Turn Events, and owns that assembly's lifetime. It is React-free and reached through the `@wincode/tui/session-host` subpath export.
+- `host/session-ports.ts` — `createSessionPorts`: materializes the Engine's ports from a Host's capabilities — the Agent Runtime, MCP snapshots and Tools, the Tool Gate, Skill catalogs, prompt composition, attachments, and durable records — and owns no lifetime.
+- `host/use-session-capabilities.ts` — composes a Host's capabilities from the TUI's providers, each as a lazy getter, so a session outlives the render that supplied them.
 - `approval-projection.ts` — projects the Engine's approvals into the panel registry's read-only entries.
-- `useSessionEngine(sessionId, initialTranscript, initialContext)` — binds the Session Engine to React: it constructs one Engine per mounted session, mirrors its Session Snapshot, forwards its commands, and projects its approvals.
+- `useSessionEngine(host)` — binds an already-open Session Host to React: it mirrors its Session Snapshot, forwards its commands, and projects its approvals. It constructs nothing and holds no session state.
+- `SessionSurface` — the surface that mounts a session: it constructs the Host, renders the opening state until it resolves and the failure when it rejects, and shuts the session down when it unmounts.
 - `useChatInputController(options)` — command and file-mention input state.
 - `NewSessionView`, `SessionView`, `ChatShell`, `ChatTextArea`, `WaitingMessageStrip` — session UI.
 - `SessionsDialog`, `RenameSessionDialog` — session management UI.

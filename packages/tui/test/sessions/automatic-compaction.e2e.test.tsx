@@ -60,13 +60,12 @@ const {
 } = await import("@/test/support/e2e-fixture");
 
 const store = createE2eStore();
-const { messages, sessionId } = await seedCompactionHistory(store);
+const { sessionId } = await seedCompactionHistory(store);
 
 test("compacts automatically before sending and uses the rebuilt context", async () => {
 	let setup: TestRendererSetup | undefined;
 	try {
 		const rendered = await renderSession({
-			initialTranscript: messages,
 			pricing: createE2ePricing(12_000),
 			sessionId,
 		});

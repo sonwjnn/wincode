@@ -7,7 +7,7 @@ import {
 	DEFAULT_EFFECTIVE_AGENT_POLICY,
 	decideOpenActionPermission,
 	type EffectiveAgentPolicy,
-} from "@/modules/permissions";
+} from "@/modules/permissions/policy";
 import type { ConfigStore } from "@/shared/config/config-store";
 import { type McpSnapshotId, toMcpSnapshotId } from "@/shared/identifiers";
 import {

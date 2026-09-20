@@ -3,7 +3,6 @@ import type {
 	AgentTurnEvent,
 	AgentTurnTerminalEvent,
 } from "@wincode/agent-core";
-import type { ChatModelSelection } from "@wincode/ai/models";
 import { codingToolDefinitions } from "@wincode/coding-tools";
 import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import {
@@ -14,22 +13,14 @@ import {
 	type SkillExecution,
 	type SkillRequestContext,
 } from "@wincode/skills";
-import type { AgentRegistry } from "@/modules/agents";
-import type { Connections } from "@/modules/connections";
-import { resolveFileMentionParts } from "@/modules/file-mentions";
-import { createMcpToolExecutor, type McpContextValue } from "@/modules/mcp";
-import type {
-	ToolPermission,
-	ToolPermissionRuntime,
-} from "@/modules/permissions";
+import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
+import { createMcpToolExecutor } from "@/modules/mcp/result";
+import type { ToolPermission } from "@/modules/permissions/policy";
 import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import { MAX_PROJECT_INSTRUCTION_TOTAL_BYTES } from "@/modules/prompt-composition/project-instructions";
-import { COMPACTION_REQUEST_OVERHEAD_TOKENS } from "@/modules/sessions/compaction";
-import type { SessionCompactionModule } from "@/modules/sessions/compaction/compaction";
-import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
+import { COMPACTION_REQUEST_OVERHEAD_TOKENS } from "@/modules/sessions/compaction/config";
 import { sessionMessageSkillSchema } from "@/modules/sessions/message";
 import { discoverSkillCatalog } from "@/modules/skills";
-import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { SessionId } from "@/shared/identifiers";
 import { resolveChatModelTarget } from "../../model-target";
 import { createToolGate, type ToolGate } from "../../tool-gate/tool-gate";
@@ -44,40 +35,30 @@ import type {
 	SessionTurnRequest,
 } from "../engine/types";
 import { primaryEntry } from "../engine/utils";
-import type { SessionMessage } from "../message";
-import { getSessionStore } from "../storage/get-session-store";
 import {
-	createTurnExecution,
-	type TurnExecution,
-	type TurnExecutionSkill,
-} from "../turn-execution";
-import { createDelegationExecutor, delegationThrough } from "./delegation";
+	createDelegationExecutor,
+	delegationThrough,
+} from "../hooks/delegation";
 import {
 	buildAgentTurn,
 	createGatedCodingTools,
 	defaultRuntimeFactory,
 	type RuntimeGatedTooling,
 	runAgentTurnToText,
-} from "./runtime-turn";
+} from "../hooks/runtime-turn";
+import type { SessionMessage } from "../message";
+import {
+	createTurnExecution,
+	type TurnExecution,
+	type TurnExecutionSkill,
+} from "../turn-execution";
+import type { SessionCapabilities } from "./types";
 
-export type SessionEngineHostDeps = Readonly<{
-	/** The Session Compaction module whose in-flight map owns admission. */
-	getCompactionModule: () => SessionCompactionModule;
-	getCompactionSettings: (
-		model: ChatModelSelection
-	) => Promise<ResolvedCompactionSettings>;
-	getConfig: () => ConfigRuntime;
-	getConnections: () => Connections;
-	getMcp: () => McpContextValue;
-	getRegistry: () => AgentRegistry | null;
-	getToolPermission: () => ToolPermissionRuntime;
+export type SessionPortsOptions = Readonly<{
+	capabilities: SessionCapabilities;
+	/** The Engine whose ports these are, available once it is constructed. */
+	engine: () => SessionEngine;
 	sessionId: SessionId;
-}>;
-
-export type SessionEngineHost = Readonly<{
-	/** Binds the Engine whose ports this host supplies. */
-	attach: (engine: SessionEngine) => void;
-	ports: SessionEnginePorts;
 }>;
 
 const summarizeCatalogDiagnostics = (catalog: SkillCatalog): string | null => {
@@ -152,40 +133,34 @@ const activateExplicitSkill = async (
 };
 
 /**
- * The TUI-side adapter that supplies the Session Engine's ports. It owns the
- * host capabilities one session runs with — the Agent Runtime, MCP snapshots,
- * Tools and the Tool Gate, Skill catalogs, prompt composition, attachments,
- * and durable records — and holds no session state: every fact it observes
- * comes from the Engine's Session Snapshot.
+ * Materializes the Session Engine's ports from one session's capabilities and
+ * owns no lifetime: it holds the Agent Runtime, MCP snapshots, Tools and the
+ * Tool Gate, Skill catalogs, prompt composition, attachments, and durable
+ * records, and keeps no session state — every fact it observes comes from the
+ * Engine's Session Snapshot.
  */
-export const createSessionEngineHost = (
-	deps: SessionEngineHostDeps
-): SessionEngineHost => {
-	const { sessionId } = deps;
-	let engine: SessionEngine | undefined;
+export const createSessionPorts = ({
+	capabilities,
+	engine,
+	sessionId,
+}: SessionPortsOptions): SessionEnginePorts => {
 	/**
-	 * The execution scopes the host runs, keyed by Agent Turn Identifier. A
+	 * The execution scopes the ports run, keyed by Agent Turn Identifier. A
 	 * scope holds what only the host can own — the MCP snapshot, the child abort
 	 * registry, and delegation bookkeeping — while the Engine owns the session
 	 * state every observer reads.
 	 */
 	const scopes = new Map<string, TurnExecution>();
-	const requireEngine = (): SessionEngine => {
-		if (isUndefined(engine)) {
-			throw new Error("The Session Engine is not attached to its host.");
-		}
-		return engine;
-	};
 	/** The newest execution scope that is not a delegated Subagent. */
 	const primaryScope = (): TurnExecution | undefined =>
 		primaryEntry(scopes.values());
 	/**
-	 * The host scope of one Agent Turn execution: the Engine's execution record
-	 * plus the capabilities only the host can hold.
+	 * The scope of one Agent Turn execution: the Engine's execution record plus
+	 * the capabilities only the host can hold.
 	 */
 	const scopeOf = (
 		execution: SessionExecution,
-		capabilities: Readonly<{
+		turn: Readonly<{
 			armedSkill?: TurnExecutionSkill;
 			resolvedAgent?: SessionResolvedAgent;
 			skillRequest?: SkillRequestContext;
@@ -193,9 +168,9 @@ export const createSessionEngineHost = (
 	): TurnExecution =>
 		createTurnExecution({
 			agent: execution.agent,
-			armedSkill: capabilities.armedSkill,
+			armedSkill: turn.armedSkill,
 			model: execution.model,
-			resolvedAgent: capabilities.resolvedAgent,
+			resolvedAgent: turn.resolvedAgent,
 			sessionModel: execution.sessionModel,
 			sourceUserMessageId: execution.sourceUserMessageId ?? undefined,
 			startedAt: execution.startedAt,
@@ -203,21 +178,21 @@ export const createSessionEngineHost = (
 			...omitUndefined({
 				parent: execution.parent,
 				sessionVariant: execution.sessionVariant,
-				skillRequest: capabilities.skillRequest,
+				skillRequest: turn.skillRequest,
 				variant: execution.variant,
 			}),
 		});
 	const releaseScope = (scope: TurnExecution): void => {
 		const snapshot = scope.mcpSnapshot;
 		if (!isNull(snapshot)) {
-			deps.getMcp().releaseSnapshot?.(snapshot);
+			capabilities.getMcp().releaseSnapshot?.(snapshot);
 			scope.mcpSnapshot = null;
 		}
 		scopes.delete(scope.turnId);
 	};
 	const toolGate: ToolGate = createToolGate({
 		approvals: {
-			request: (request) => requireEngine().requestApproval(request),
+			request: (request) => engine().requestApproval(request),
 		},
 		onAbort: (request) => {
 			if (isUndefined(request.toolCallId)) {
@@ -228,22 +203,22 @@ export const createSessionEngineHost = (
 				abortChild();
 				return;
 			}
-			requireEngine().abortApprovalTurn(request.toolCallId);
+			engine().abortApprovalTurn(request.toolCallId);
 		},
 		resolvePermission: (agentId) => {
-			const permission = deps.getToolPermission();
+			const permission = capabilities.getToolPermission();
 			return isUndefined(agentId)
 				? permission.resolvePermission()
 				: permission.resolvePermissionForAgent(agentId);
 		},
 		resolveResourceLimits: (agentId) => {
-			const permission = deps.getToolPermission();
+			const permission = capabilities.getToolPermission();
 			return isUndefined(agentId)
 				? permission.resolveResourceLimits()
 				: permission.resolveResourceLimitsForAgent(agentId);
 		},
-		sandbox: deps.getToolPermission().sandbox,
-		service: deps.getToolPermission().service,
+		sandbox: capabilities.getToolPermission().sandbox,
+		service: capabilities.getToolPermission().service,
 	});
 	/**
 	 * The request overhead of the Agent Turn execution in flight: the bounded
@@ -285,8 +260,9 @@ export const createSessionEngineHost = (
 	const armSkillCatalog = async (
 		permission: ToolPermission
 	): Promise<SessionSkillCatalog> => {
-		const catalog = await discoverSkillCatalog(deps.getConfig(), (name) =>
-			permission.decide("skill", name)
+		const catalog = await discoverSkillCatalog(
+			capabilities.getConfig(),
+			(name) => permission.decide("skill", name)
 		);
 		const tool = buildSkillToolDefinition(catalog);
 		return {
@@ -297,7 +273,9 @@ export const createSessionEngineHost = (
 	};
 	/** Arms the Skill catalog one Agent Turn runs with. */
 	const createTurnSkill = async (): Promise<SessionSkillCatalog> =>
-		await armSkillCatalog(await deps.getToolPermission().resolvePermission());
+		await armSkillCatalog(
+			await capabilities.getToolPermission().resolvePermission()
+		);
 	/**
 	 * Resolves the Skill a submission asks for: the one it names, or the one
 	 * its source message recorded, against the armed catalog.
@@ -357,10 +335,10 @@ export const createSessionEngineHost = (
 		request: SessionTurnRequest
 	): Promise<SessionTurnOutcome> => {
 		const { callbacks, execution, messages, resolvedAgent, signal } = request;
-		const config = deps.getConfig();
-		const connections = deps.getConnections();
-		const mcp = deps.getMcp();
-		const toolPermission = deps.getToolPermission();
+		const config = capabilities.getConfig();
+		const connections = capabilities.getConnections();
+		const mcp = capabilities.getMcp();
+		const toolPermission = capabilities.getToolPermission();
 		const scope = scopeOf(execution, {
 			armedSkill: request.armedSkill,
 			resolvedAgent,
@@ -408,7 +386,7 @@ export const createSessionEngineHost = (
 				execution: scope,
 				host: {
 					begin: (input) => {
-						const child = scopeOf(requireEngine().beginExecution(input), {
+						const child = scopeOf(engine().beginExecution(input), {
 							armedSkill: input.armedSkill,
 							resolvedAgent: input.resolvedAgent,
 							skillRequest: input.skillRequest,
@@ -418,13 +396,13 @@ export const createSessionEngineHost = (
 					},
 					end: (ended) => {
 						releaseScope(ended);
-						requireEngine().endExecution(ended.turnId);
+						engine().endExecution(ended.turnId);
 					},
 					publishViewState: (published, viewState) =>
-						requireEngine().setExecutionViewState(published.turnId, viewState),
+						engine().setExecutionViewState(published.turnId, viewState),
 				},
 				mcp,
-				registry: deps.getRegistry(),
+				registry: capabilities.getRegistry(),
 				resolveMcpPolicyForAgent: (agentId) =>
 					toolPermission.resolveMcpPolicyForAgent(agentId),
 				resolvePermissionForAgent: (agentId) =>
@@ -436,7 +414,7 @@ export const createSessionEngineHost = (
 			const tools = createGatedCodingTools({
 				agentId: execution.agent,
 				agentTools: resolvedAgent.visibleCodingTools,
-				delegate: hasDelegationTargets(deps)
+				delegate: hasDelegationTargets(capabilities)
 					? delegationThrough(scope)
 					: undefined,
 				executeMcpTool,
@@ -501,48 +479,44 @@ export const createSessionEngineHost = (
 	};
 
 	return {
-		attach: (attached) => {
-			engine = attached;
+		attachments: {
+			externalize: (messages, signal) =>
+				capabilities.getStore().externalizeAttachments(messages, signal, {
+					rejectInvalid: true,
+				}),
+			hydrate: ({ budget, messages, priorityMessageId, signal }) =>
+				capabilities.getStore().hydrateAttachments(messages, {
+					...budget,
+					priorityMessageId,
+					purpose: "model",
+					signal,
+				}),
+			release: (attachmentIds) =>
+				capabilities.getStore().attachmentStore?.release(attachmentIds),
+			retain: (attachmentIds) =>
+				capabilities.getStore().attachmentStore?.retain(attachmentIds),
 		},
-		ports: {
-			attachments: {
-				externalize: (messages, signal) =>
-					getSessionStore().externalizeAttachments(messages, signal, {
-						rejectInvalid: true,
-					}),
-				hydrate: ({ budget, messages, priorityMessageId, signal }) =>
-					getSessionStore().hydrateAttachments(messages, {
-						...budget,
-						priorityMessageId,
-						purpose: "model",
-						signal,
-					}),
-				release: (attachmentIds) =>
-					getSessionStore().attachmentStore?.release(attachmentIds),
-				retain: (attachmentIds) =>
-					getSessionStore().attachmentStore?.retain(attachmentIds),
-			},
-			commitRecord: (input) => getSessionStore().commitSessionRecord(input),
-			compaction: {
-				compact: (input) => deps.getCompactionModule().compact(input),
-				getInFlight: (id) => deps.getCompactionModule().getInFlight(id),
-				needsCompaction: (messages, settings) =>
-					deps.getCompactionModule().needsCompaction(messages, settings),
-			},
-			resolveCompactionSettings: (model) => deps.getCompactionSettings(model),
-			resolveFileMentions: (text) => resolveFileMentionParts(text),
-			runtime: {
-				requestOverheadTokens,
-				run: runTurn,
-			},
-			skills: { createTurnSkill, resolveSkill },
+		commitRecord: (input) => capabilities.getStore().commitSessionRecord(input),
+		compaction: {
+			compact: (input) => capabilities.getCompactionModule().compact(input),
+			getInFlight: (id) => capabilities.getCompactionModule().getInFlight(id),
+			needsCompaction: (messages, settings) =>
+				capabilities.getCompactionModule().needsCompaction(messages, settings),
 		},
+		resolveCompactionSettings: (model) =>
+			capabilities.getCompactionSettings(model),
+		resolveFileMentions: (text) => resolveFileMentionParts(text),
+		runtime: {
+			requestOverheadTokens,
+			run: runTurn,
+		},
+		skills: { createTurnSkill, resolveSkill },
 	};
 };
 
 /** Whether the registry offers a Subagent the session can delegate to. */
-const hasDelegationTargets = (deps: SessionEngineHostDeps): boolean =>
-	deps
+const hasDelegationTargets = (capabilities: SessionCapabilities): boolean =>
+	capabilities
 		.getRegistry()
 		?.agents.some(
 			({ isAvailable, role }) =>

@@ -16,6 +16,11 @@ live state. The hook binds that Engine and never writes session state.
 
 Status: accepted
 
+Revised 2026-09-20: the clause that "the port surface is the TUI's rather than a
+second host's" is superseded by ADR-0023, which builds the non-TUI host this ADR
+anticipated and makes that surface UI-neutral. Nothing else here changes — the
+Engine keeps one owner, one command lane, and per-execution scope.
+
 The state-ownership half of this decision has shipped, and so has execution
 scoping: the Engine tracks the live Agent Turn executions of a session with
 their parent linkage, exposes the Session View State of the most recently

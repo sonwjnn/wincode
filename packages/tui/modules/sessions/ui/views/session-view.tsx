@@ -11,26 +11,22 @@ import { getErrorMessage, isNull, isUndefined } from "@wincode/runtime-utils";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
 	type AgentRegistry,
-	resolveActiveAgentId,
 	resolveEffectiveAgentSelection,
 	useAgentRegistry,
 } from "@/modules/agents";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import type { SessionHost } from "@/modules/sessions/host/types";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useSettingsHubDialog } from "@/modules/settings";
 import type { SessionId } from "@/shared/identifiers";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
-import type { SessionCompaction } from "../../compaction";
 import type { SessionWaitingMessage } from "../../engine/types";
 import { acceptsSteeringMessages, isSessionBusy } from "../../engine/utils";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
 import { useSessionEngine } from "../../hooks/use-session-engine";
-import {
-	type ResolvedSessionSelection,
-	resolveSessionSelection,
-} from "../../selection";
+import type { ResolvedSessionSelection } from "../../selection";
 import type {
 	SessionSendInput as SessionOperationSendInput,
 	SessionSubmissionComposition,
@@ -46,12 +42,15 @@ export type SessionInitialSubmission = {
 };
 
 type SessionViewProps = {
-	initialCompactions?: SessionCompaction[];
-	initialContext?: SessionMessage[];
-	initialTranscript: SessionMessage[];
-	initialModel?: ChatModelSelection;
+	/** The already-open session this view renders and sends through. */
+	host: SessionHost;
 	initialSubmission?: SessionInitialSubmission;
-	initialVariant?: ModelVariant;
+	/**
+	 * Session Transcript as the session opened, display-annotated by the
+	 * surface: the prompt history and the first turn's message come from what
+	 * the session was opened with, not from what it has streamed since.
+	 */
+	initialTranscript: readonly SessionMessage[];
 	sessionId: SessionId;
 	sessionTitle: string;
 };
@@ -122,12 +121,9 @@ const resolveInitialSessionSelection = ({
 };
 
 export function SessionView({
-	initialTranscript,
-	initialContext = initialTranscript,
-	initialCompactions = [],
-	initialModel,
+	host,
 	initialSubmission,
-	initialVariant,
+	initialTranscript,
 	sessionId,
 	sessionTitle,
 }: SessionViewProps) {
@@ -153,7 +149,7 @@ export function SessionView({
 		!isUndefined(initialSubmission)
 	);
 	const [restoredMessages, setRestoredMessages] = useState<
-		SessionMessage[] | null
+		readonly SessionMessage[] | null
 	>(null);
 	const [recalledSubmissions, setRecalledSubmissions] = useState<
 		readonly SessionSubmissionComposition[]
@@ -166,12 +162,7 @@ export function SessionView({
 		recallWaitingMessages,
 		send,
 		snapshot,
-	} = useSessionEngine(
-		sessionId,
-		initialTranscript,
-		initialContext,
-		initialCompactions
-	);
+	} = useSessionEngine(host);
 	/**
 	 * Hands recalled messages to the composer, in the order the Engine returned
 	 * them. A Recall that returns nothing — empty lanes, or messages that
@@ -194,17 +185,12 @@ export function SessionView({
 		() => derivePromptHistory(initialTranscript),
 		[initialTranscript]
 	);
-	const restoredConfig = useMemo(() => {
-		if (isNull(registry)) {
-			return null;
-		}
-		return resolveSessionSelection({
-			messages: initialTranscript,
-			resolveAgent: (agentId) => resolveActiveAgentId(registry, agentId),
-			sessionModel: initialModel,
-			sessionVariant: initialVariant,
-		});
-	}, [initialTranscript, initialModel, initialVariant, registry]);
+	const restoredConfig = useMemo<ResolvedSessionSelection | null>(
+		// The Host resolves the selection against the live registry; while that
+		// registry is still loading there is nothing to restore yet.
+		() => (isNull(registry) ? null : host.getSelection()),
+		[host, registry]
+	);
 	const isPromptConfigRestored = restoredMessages === initialTranscript;
 
 	useEffect(() => {
@@ -454,7 +440,9 @@ export function SessionView({
 		}
 	};
 
-	const observedCompactionCountRef = useRef(initialCompactions.length);
+	// The session's compaction history is what it opened with: only compactions
+	// this view observes being added are announced.
+	const observedCompactionCountRef = useRef(snapshot.compactions.length);
 	useEffect(() => {
 		const observed = observedCompactionCountRef.current;
 		if (snapshot.compactions.length <= observed) {

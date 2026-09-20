@@ -31,11 +31,13 @@ import {
 import type { Except } from "type-fest";
 import { z } from "zod";
 import {
-	type PermissionDiagnostic,
 	type PermissionRules,
-	resolveAgentPermission,
 	resolveVisibleCodingTools,
-} from "@/modules/permissions";
+} from "@/modules/permissions/policy";
+import {
+	type PermissionDiagnostic,
+	resolveAgentPermission,
+} from "@/modules/permissions/resolve";
 import { topLevelPermissionSchema } from "@/modules/permissions/schema";
 import type {
 	ConfigDiagnostic,

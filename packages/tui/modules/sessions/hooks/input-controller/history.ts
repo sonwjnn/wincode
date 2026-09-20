@@ -27,7 +27,7 @@ const expandedText = (entry: PromptHistoryEntry): string =>
 	);
 
 export const derivePromptHistory = (
-	messages: SessionMessage[]
+	messages: readonly SessionMessage[]
 ): PromptHistoryEntry[] => {
 	const entries: PromptHistoryEntry[] = [];
 

@@ -9,19 +9,21 @@ import {
 import type { ModelTarget } from "@wincode/ai/model";
 import { isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import {
-	type AgentRegistry,
 	type PreparedAgentCall,
 	prepareAgentCall,
-} from "@/modules/agents";
-import type { Connections } from "@/modules/connections";
+} from "@/modules/agents/agent-call";
+import type { AgentRegistry } from "@/modules/agents/registry";
+import type { Connections } from "@/modules/connections/contract";
+import type { McpSessionCapability } from "@/modules/mcp/capability";
+import type {
+	McpAgentPolicy,
+	McpCatalogSnapshot,
+} from "@/modules/mcp/registry";
 import {
 	createMcpToolExecutor,
-	type McpAgentPolicy,
-	type McpCatalogSnapshot,
-	type McpContextValue,
 	type McpToolCallExecutor,
-} from "@/modules/mcp";
-import type { ToolPermission } from "@/modules/permissions";
+} from "@/modules/mcp/result";
+import type { ToolPermission } from "@/modules/permissions/policy";
 import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import type { SessionId } from "@/shared/identifiers";
 import { resolveChatModelTarget } from "../../model-target";
@@ -171,7 +173,7 @@ export type CreateDelegationExecutorOptions = {
 	/** The execution whose delegation bookkeeping this executor is. */
 	readonly execution: TurnExecution;
 	readonly host: TurnExecutionHost;
-	readonly mcp: McpContextValue;
+	readonly mcp: McpSessionCapability;
 	readonly registry: AgentRegistry | null;
 	readonly resolveMcpPolicyForAgent: (
 		agent: AgentId

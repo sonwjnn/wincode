@@ -523,12 +523,25 @@ export const toDurableSessionMessageRecord = (
 	};
 };
 
+/** The identity prefix a delegated Subagent row's projected messages carry. */
+const DELEGATED_MESSAGE_ID_PREFIX = "delegated-turn:";
+
+/**
+ * Whether a projected message identity belongs to a delegated Subagent row:
+ * the Transcript presents those grouped after the primary turns, while a
+ * Session Context leaves them out.
+ */
+export const isDelegatedSessionMessageId = (id: SessionMessageId): boolean =>
+	id.startsWith(DELEGATED_MESSAGE_ID_PREFIX);
+
 const delegatedMessageId = (
 	record: SessionRecord,
 	message: SessionMessageRecord,
 	index: number
 ): SessionMessageId =>
-	toSessionMessageId(`delegated-turn:${record.turnId}:${index}:${message.id}`);
+	toSessionMessageId(
+		`${DELEGATED_MESSAGE_ID_PREFIX}${record.turnId}:${index}:${message.id}`
+	);
 
 const projectRecord = (record: SessionRecord): SessionMessage[] =>
 	record.messages.flatMap((message, index) => {

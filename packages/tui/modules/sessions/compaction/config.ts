@@ -10,8 +10,10 @@ import {
 } from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
-import type { ModelPricingTable } from "@/modules/model-pricing";
-import { resolveModelContextLimit } from "@/modules/model-pricing";
+import {
+	type ModelPricingTable,
+	resolveModelContextLimit,
+} from "@/modules/model-pricing/model-pricing";
 import type {
 	ConfigDiagnostic,
 	ConfigOrigin,
