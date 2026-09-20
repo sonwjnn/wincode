@@ -147,14 +147,76 @@ _Avoid_: Command, Built-in Command, slash command
 
 **Line Range**:
 A 1-indexed, inclusive selection of consecutive lines in a text file. Multiple
-Line Ranges in one read form a single ordered selection; overlapping or
-adjacent ranges collapse into one. _Avoid_: line slice, offset window
+Line Ranges in one ordered selection collapse when they overlap or are adjacent.
+_Avoid_: line slice, offset window
 
 **Line Range Selector**:
 The optional part of a Read Tool target that names one or more Line Ranges.
 When a complete target also names an existing literal file, the literal file
 takes precedence over interpreting its suffix as a Line Range Selector.
 _Avoid_: pagination, read offset
+
+**Line Range Edit**:
+An Edit Tool operation that replaces or deletes one Line Range. Its replacement
+content is independent of the number of selected lines.
+_Avoid_: multiline edit, line slice edit
+
+**Range Revision**:
+A compact proof of the complete content of one Line Range at observation time.
+It becomes stale when any line inside that range changes, but is unaffected by
+changes outside the range. _Avoid_: endpoint hash, file version
+
+**File Version**:
+A content-derived identifier for one complete state of a file. Reads of unchanged
+content return the same File Version; an Edit Tool operation uses it to identify
+the snapshot on which its addresses and observations were based.
+_Avoid_: tag, revision counter, read ID
+
+**File Snapshot**:
+The exact content of a file identified by a File Version and retained so an
+Edit Tool operation can interpret addresses from an earlier observation.
+_Avoid_: backup, current file
+
+**Seen Lines**:
+The complete file lines actually returned to an Agent for one File Snapshot.
+Lines omitted or truncated from tool output are not Seen Lines.
+_Avoid_: requested lines, readable lines
+
+**File Observation**:
+A session-scoped association between a canonical file identity, one File Version,
+and the Seen Lines returned from that version. It records what an Agent observed,
+not merely what the Read Tool accessed. _Avoid_: File Snapshot, read result
+
+**Edit Mode**:
+A named Edit Tool strategy with its own addressing and verification contract.
+Choosing an Edit Mode changes how a target is identified and validated, not the
+user-visible intent to modify content. _Avoid_: edit type, fallback level
+
+**Edit Hunk**:
+One contiguous replacement, deletion, or insertion within an Edit Tool
+operation. Multiple Edit Hunks in one operation are resolved before any is
+applied. _Avoid_: edit, diff chunk
+
+**Edit Section**:
+The path, File Version, and ordered Edit Hunks for one file in a multi-file
+Edit Tool operation. _Avoid_: file patch, patch file
+
+**Full Diff Artifact**:
+The complete human-readable diff of an Edit Tool operation, retained outside
+inline tool output when that output would exceed its display budget. It supports
+audit and continuation, not verification or rollback. _Avoid_: File Snapshot,
+recovery artifact
+
+**Recovery Artifact**:
+An immutable manifest and retained original content used to reconcile paths left
+unresolved by a failed multi-file mutation. It remains pinned until reconciliation
+or explicit destructive discard. _Avoid_: Full Diff Artifact, File Snapshot
+
+**Unresolved Recovery**:
+A persistent workspace state created when a mutation cannot prove that every
+affected path was committed or restored. Coding-tool mutations of those paths
+remain blocked until explicit reconciliation or destructive discard.
+_Avoid_: failed edit, stale lock
 
 **Built-in Command**:
 A fixed UI action the CLI ships with, dispatched by kind to an adapter
