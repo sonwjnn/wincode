@@ -41,7 +41,7 @@ export type SessionInitialSubmission = {
 	messageId: SessionMessageId;
 };
 
-export type SessionViewProps = {
+type SessionViewProps = {
 	/** The already-open session this view renders and sends through. */
 	host: SessionHost;
 	initialSubmission?: SessionInitialSubmission;

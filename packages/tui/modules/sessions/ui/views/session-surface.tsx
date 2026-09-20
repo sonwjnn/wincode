@@ -73,10 +73,14 @@ export function SessionSurface({
 					transcript: host.engine.mergeTranscript(transcript),
 				};
 			} catch (error) {
-				// The session opened but its surface could not be prepared, so
-				// the failure screen replaces it and nothing keeps it running.
-				host.shutdown();
+				// The session opened but its surface could not be prepared. The
+				// unmount cleanup already ended it when the surface was gone, so
+				// this shuts it down only while this effect still owns it, and
+				// never leaves the handle for a second call.
 				openedHost = null;
+				if (!ignore) {
+					host.shutdown();
+				}
 				throw error;
 			}
 		};
