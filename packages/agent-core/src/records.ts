@@ -21,6 +21,7 @@ import type {
 	SessionRecordId,
 	ToolCallId,
 } from "./identifiers";
+import { isToolFailureDetails, type ToolFailureDetails } from "./tools";
 import type {
 	AgentTurnDelegation,
 	AgentTurnId,
@@ -39,6 +40,7 @@ export type ToolCallOutcomeRecord = ReadonlyDeep<
 	  }
 	| {
 			errorText: string;
+			failure?: ToolFailureDetails;
 			kind: "failure";
 	  }
 >;
@@ -331,9 +333,10 @@ export const isSessionToolCallPart = (
 				) && "output" in outcome
 			: outcome.kind === "failure" &&
 				Object.keys(outcome).every(
-					(key) => key === "errorText" || key === "kind"
+					(key) => key === "errorText" || key === "failure" || key === "kind"
 				) &&
-				isNonEmptyString(outcome.errorText);
+				isNonEmptyString(outcome.errorText) &&
+				(isUndefined(outcome.failure) || isToolFailureDetails(outcome.failure));
 	return (
 		Object.keys(value).every(
 			(key) =>

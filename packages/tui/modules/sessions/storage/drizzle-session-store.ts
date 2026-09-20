@@ -16,6 +16,7 @@ import {
 	type ChatModelSelection,
 	modelSelectionSchema,
 } from "@wincode/ai/models";
+import type { EditMode } from "@wincode/coding-tools";
 import {
 	isArray,
 	isNull,
@@ -54,7 +55,7 @@ import {
 	isLegacyImagePart,
 } from "./attachment-store";
 import { createDatabase, type SessionDatabase } from "./client";
-import { resolveLocalAttachmentRoot } from "./path";
+import { resolveLocalAttachmentRoot, resolveLocalSnapshotRoot } from "./path";
 import {
 	promptHistory,
 	type SerializedJson,
@@ -78,6 +79,7 @@ import {
 	UNTITLED_SESSION_TITLE,
 	type UpdateSessionInput,
 } from "./session-store";
+import { createDrizzleFileObservationStore } from "./versioned-editing-store";
 
 const createSessionId = (): SessionId => toSessionId(randomUUIDv7());
 const createCompactionId = (): CompactionId => toCompactionId(randomUUIDv7());
@@ -347,6 +349,7 @@ const toSessionCompaction = (row: CompactionRow): SessionCompaction => {
 export type DrizzleSessionStoreOptions = {
 	attachmentRoot?: string;
 	attachmentStore?: SessionAttachmentStore;
+	snapshotRoot?: string;
 	workspaceRoot?: string;
 };
 
@@ -625,6 +628,7 @@ export const createDrizzleSessionStore = (
 	const db = database ?? createDatabase().db;
 
 	const attachmentRoot = options.attachmentRoot ?? resolveLocalAttachmentRoot();
+	const snapshotRoot = options.snapshotRoot ?? resolveLocalSnapshotRoot();
 	const attachmentStore =
 		options.attachmentStore ??
 		createSessionAttachmentStore({
@@ -652,6 +656,10 @@ export const createDrizzleSessionStore = (
 			: Promise.resolve([...messages]);
 	const promptHistoryStore = createPromptHistory(db, attachmentStore);
 	const workspace = ensureWorkspace(db, options.workspaceRoot ?? process.cwd());
+	const fileObservationStore = createDrizzleFileObservationStore(
+		db,
+		snapshotRoot
+	);
 	const collectAttachments = (
 		safetyWindowMs = 60_000
 	): Promise<AttachmentMaintenanceReport> =>
@@ -738,6 +746,10 @@ export const createDrizzleSessionStore = (
 				)
 				.run();
 			await collectAttachments().catch(() => undefined);
+			const prune = fileObservationStore.pruneSnapshots;
+			if (prune) {
+				await prune().catch(() => undefined);
+			}
 		},
 
 		resetSessionData: async () => {
@@ -748,6 +760,10 @@ export const createDrizzleSessionStore = (
 				tx.delete(sessionAttachment).run();
 			});
 			await clearAttachmentRoot(attachmentRoot);
+			const prune = fileObservationStore.pruneSnapshots;
+			if (prune) {
+				await prune().catch(() => undefined);
+			}
 		},
 
 		getCompactions: (sessionId: SessionId) => {
@@ -819,6 +835,24 @@ export const createDrizzleSessionStore = (
 
 			return Promise.resolve(toSession(row));
 		},
+		getEditMode: async (sessionId: SessionId): Promise<EditMode> => {
+			const row = db
+				.select({ editMode: session.editMode })
+				.from(session)
+				.where(
+					and(eq(session.id, sessionId), eq(session.workspaceId, workspace.id))
+				)
+				.get();
+			return row?.editMode ?? "hashline";
+		},
+		setEditMode: async (sessionId: SessionId, mode: EditMode) => {
+			db.update(session)
+				.set({ editMode: mode, updatedAt: new Date() })
+				.where(
+					and(eq(session.id, sessionId), eq(session.workspaceId, workspace.id))
+				)
+				.run();
+		},
 		listSessions: () => {
 			const rows = db
 				.select()
@@ -884,6 +918,7 @@ export const createDrizzleSessionStore = (
 
 			return Promise.resolve();
 		},
+		fileObservationStore,
 		attachmentStore,
 		externalizeAttachments,
 		hydrateAttachments,

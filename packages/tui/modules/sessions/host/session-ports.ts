@@ -3,7 +3,10 @@ import type {
 	AgentTurnEvent,
 	AgentTurnTerminalEvent,
 } from "@wincode/agent-core";
-import { codingToolDefinitions } from "@wincode/coding-tools";
+import {
+	codingToolDefinitions,
+	type VersionedEditingContext,
+} from "@wincode/coding-tools";
 import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import {
 	buildSkillToolDefinition,
@@ -347,6 +350,16 @@ export const createSessionPorts = ({
 		scopes.set(execution.turnId, scope);
 		let turn: AgentTurn | undefined;
 		try {
+			const sessionStore = capabilities.getStore();
+			const versionedEditing: VersionedEditingContext | undefined =
+				sessionStore.fileObservationStore === undefined
+					? undefined
+					: {
+							editMode:
+								(await sessionStore.getEditMode?.(sessionId)) ?? "hashline",
+							sessionId,
+							store: sessionStore.fileObservationStore,
+						};
 			const modelTarget = await resolveChatModelTarget(
 				execution.model,
 				connections,
@@ -373,6 +386,7 @@ export const createSessionPorts = ({
 					isUndefined(agentId)
 						? toolPermission.resolveResourceLimits()
 						: toolPermission.resolveResourceLimitsForAgent(agentId),
+				versionedEditing,
 			};
 			scope.delegate = createDelegationExecutor({
 				connections,
@@ -424,6 +438,7 @@ export const createSessionPorts = ({
 				resolveResourceLimits: tooling.resolveResourceLimits,
 				skillExecution: scope.armedSkill?.execution,
 				skillTool: scope.armedSkill?.tool,
+				versionedEditing,
 			});
 			const agentPermission = await toolPermission.resolvePermissionForAgent(
 				execution.agent

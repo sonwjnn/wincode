@@ -121,6 +121,7 @@ export type {
 	ToolDefinition,
 	ToolExecutor,
 	ToolExecutorOptions,
+	ToolFailureDetails,
 	ToolJsonSchema,
 	ToolRegistry,
 } from "./tools";
@@ -130,6 +131,8 @@ export {
 	isToolCallId,
 	isToolCallOutput,
 	isToolDefinition,
+	isToolFailureDetails,
+	ToolCallFailureError,
 } from "./tools";
 export type {
 	AgentTurn,

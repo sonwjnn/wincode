@@ -10,6 +10,17 @@ const applyPragmas = (sqlite: Database): void => {
 	sqlite.exec("PRAGMA foreign_keys = ON;");
 	sqlite.exec("PRAGMA busy_timeout = 5000;");
 };
+const ensureSessionEditModeColumn = (sqlite: Database): void => {
+	const columns = sqlite.query("PRAGMA table_info(session)").all() as Array<{
+		name: string;
+	}>;
+	if (columns.some(({ name }) => name === "edit_mode")) {
+		return;
+	}
+	sqlite.exec(
+		"ALTER TABLE session ADD COLUMN edit_mode TEXT DEFAULT 'hashline' NOT NULL;"
+	);
+};
 const initializeSchema = (sqlite: Database): void => {
 	sqlite.exec(`
 		CREATE TABLE IF NOT EXISTS session_workspace (
@@ -44,9 +55,37 @@ const initializeSchema = (sqlite: Database): void => {
 			updated_at INTEGER NOT NULL,
 			last_message_at INTEGER,
 			model_json TEXT,
-			variant TEXT
+			variant TEXT,
+			edit_mode TEXT DEFAULT 'hashline' NOT NULL
 		);
 
+		CREATE TABLE IF NOT EXISTS file_snapshot (
+			path TEXT NOT NULL,
+			file_version TEXT NOT NULL,
+			algorithm TEXT NOT NULL,
+			blob_key TEXT NOT NULL,
+			line_count INTEGER NOT NULL,
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY (path, file_version)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_file_snapshot_path_created
+			ON file_snapshot (path, created_at);
+
+		CREATE TABLE IF NOT EXISTS file_observation (
+			id TEXT PRIMARY KEY NOT NULL,
+			session_id TEXT NOT NULL REFERENCES session(id)
+				ON UPDATE CASCADE ON DELETE CASCADE,
+			path TEXT NOT NULL,
+			file_version TEXT NOT NULL,
+			seen_lines_json TEXT NOT NULL,
+			snapshot_available INTEGER DEFAULT 0 NOT NULL,
+			created_at INTEGER NOT NULL,
+			UNIQUE (session_id, path, file_version)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_file_observation_session_path_created
+			ON file_observation (session_id, path, created_at);
 		CREATE INDEX IF NOT EXISTS idx_session_pinned_last_message
 			ON session (pinned, last_message_at);
 		CREATE INDEX IF NOT EXISTS idx_session_updated
@@ -107,6 +146,7 @@ const initializeSchema = (sqlite: Database): void => {
 		CREATE UNIQUE INDEX IF NOT EXISTS uq_session_record_session_position
 			ON session_record (session_id, position);
 	`);
+	ensureSessionEditModeColumn(sqlite);
 };
 
 export const createDatabase = (

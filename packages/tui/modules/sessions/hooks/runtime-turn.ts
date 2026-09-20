@@ -27,6 +27,7 @@ import {
 	type ToolCallOutput,
 	type ToolDefinition,
 	type ToolExecutorOptions,
+	type ToolFailureDetails,
 	type ToolRegistry,
 	toSessionMessageId,
 } from "@wincode/agent-core";
@@ -35,8 +36,12 @@ import type { ModelTarget } from "@wincode/ai/model-target";
 import {
 	type CodingToolName,
 	codingToolDefinitionFor,
+	type EditMode,
+	editInputSchemaForMode,
 	runCodingTool,
 	type ToolResourceLimits,
+	toCodingToolFailure,
+	type VersionedEditingContext,
 } from "@wincode/coding-tools";
 import {
 	getErrorMessage,
@@ -93,9 +98,23 @@ export type RuntimeToolName = RuntimeCodingToolName | "delegate" | "skill";
 
 const isRuntimeCodingToolName = (name: string): name is RuntimeCodingToolName =>
 	(RUNTIME_CODING_TOOL_NAMES as readonly string[]).includes(name);
+const isSloppyCodingInput = (value: unknown): boolean =>
+	isObjectLike(value) && "mode" in value && value.mode === "sloppy";
 
-const runtimeToolDefinition = (name: RuntimeCodingToolName): ToolDefinition =>
-	codingToolDefinitionFor(name);
+const runtimeToolDefinition = (
+	name: RuntimeCodingToolName,
+	editMode?: EditMode
+): ToolDefinition => {
+	const definition = codingToolDefinitionFor(name);
+	if (name !== "edit" || editMode === undefined) {
+		return definition;
+	}
+	return {
+		...definition,
+		description: `${definition.description} Active Edit Mode: ${editMode}. Use only this mode; a different mode takes effect on the next Agent Turn.`,
+		inputSchema: editInputSchemaForMode(editMode),
+	};
+};
 
 const runtimeSkillToolDefinition: ToolDefinition = {
 	description:
@@ -106,7 +125,7 @@ const runtimeSkillToolDefinition: ToolDefinition = {
 
 /** The application Tool Registry of runtime-eligible tools. */
 export const runtimeToolRegistry: ToolRegistry = createToolRegistry([
-	...RUNTIME_CODING_TOOL_NAMES.map(runtimeToolDefinition),
+	...RUNTIME_CODING_TOOL_NAMES.map((name) => runtimeToolDefinition(name)),
 	runtimeSkillToolDefinition,
 ]);
 
@@ -119,8 +138,10 @@ const runCodingToolThroughGate = async ({
 	name: RuntimeCodingToolName;
 	options: {
 		allowExternalPath: boolean;
+		allowSloppy?: boolean;
 		resourceLimits?: ToolResourceLimits;
 		signal?: AbortSignal;
+		versionedEditing?: VersionedEditingContext;
 	};
 }): Promise<ToolCallOutput> => {
 	try {
@@ -132,10 +153,17 @@ const runCodingToolThroughGate = async ({
 		if (isAgentInvariantError(error)) {
 			throw error;
 		}
-		return {
-			errorText: getErrorMessage(error, "Tool execution failed."),
-			type: "failure",
-		};
+		const failure = toCodingToolFailure(error);
+		return failure === undefined
+			? {
+					errorText: getErrorMessage(error, "Tool execution failed."),
+					type: "failure",
+				}
+			: {
+					errorText: getErrorMessage(error, "Tool execution failed."),
+					failure,
+					type: "failure",
+				};
 	}
 };
 export type GatedCodingToolsDeps = {
@@ -156,6 +184,7 @@ export type GatedCodingToolsDeps = {
 	skillTool?: SkillToolDefinition;
 	delegate?: DelegationExecutor;
 	parentTurnId?: AgentTurnId;
+	versionedEditing?: VersionedEditingContext;
 };
 
 /**
@@ -172,6 +201,7 @@ export type RuntimeGatedTooling = {
 	) => () => void;
 	mcpSnapshot?: McpCatalogSnapshot;
 	executeMcpTool?: GatedCodingToolsDeps["executeMcpTool"];
+	versionedEditing?: VersionedEditingContext;
 };
 export type DelegationRequest = {
 	readonly agent: AgentId;
@@ -354,11 +384,12 @@ export const createGatedCodingTools = ({
 	resolveResourceLimits,
 	skillExecution,
 	skillTool,
+	versionedEditing,
 }: GatedCodingToolsDeps): readonly ResolvedTool[] => {
 	const codingTools = agentTools
 		.filter(isRuntimeCodingToolName)
 		.map((name) => ({
-			definition: runtimeToolRegistry.require(name),
+			definition: runtimeToolDefinition(name, versionedEditing?.editMode),
 			execute: async (
 				{ input, toolCallId }: { input: unknown; toolCallId: ToolCallId },
 				{ signal }: ToolExecutorOptions = {}
@@ -383,12 +414,14 @@ export const createGatedCodingTools = ({
 					name,
 					options: {
 						allowExternalPath: !isUndefined(outcome.input),
+						allowSloppy: isSloppyCodingInput(outcome.input ?? input),
 						...(isUndefined(resolveResourceLimits)
 							? {}
 							: {
 									resourceLimits: await resolveResourceLimits(agentId),
 								}),
 						signal,
+						versionedEditing,
 					},
 				});
 			},
@@ -507,7 +540,11 @@ export type SettledSessionToolCallPart = {
 	type: string;
 } & (
 	| { output: unknown; state: "output-available" }
-	| { errorText: string; state: "output-error" }
+	| {
+			errorText: string;
+			failure?: ToolFailureDetails;
+			state: "output-error";
+	  }
 );
 
 /** Only settled tool calls are replayed into a new Agent Turn. */
@@ -576,7 +613,8 @@ const toToolCallParts = (
 		request,
 		result: {
 			errorText: part.errorText,
-			toolCallId,
+			...(part.failure === undefined ? {} : { failure: part.failure }),
+			toolCallId: part.toolCallId,
 			toolName: name,
 			type: "tool-failure",
 		},

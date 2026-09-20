@@ -1,5 +1,6 @@
 import type { SessionMessageRecord, SessionRecord } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import type { EditMode, FileVersion } from "@wincode/coding-tools";
 import {
 	index,
 	integer,
@@ -48,6 +49,7 @@ export const session = sqliteTable(
 			SerializedJson<ChatModelSelection>
 		>(),
 		variant: text("variant").$type<ModelVariant>(),
+		editMode: text("edit_mode").$type<EditMode>().notNull().default("hashline"),
 	},
 	(table) => [
 		index("idx_session_pinned_last_message").on(
@@ -55,6 +57,53 @@ export const session = sqliteTable(
 			table.lastMessageAt
 		),
 		index("idx_session_updated").on(table.updatedAt),
+	]
+);
+export const fileSnapshot = sqliteTable(
+	"file_snapshot",
+	{
+		path: text("path").notNull(),
+		fileVersion: text("file_version").$type<FileVersion>().notNull(),
+		algorithm: text("algorithm").notNull(),
+		blobKey: text("blob_key").notNull(),
+		lineCount: integer("line_count").notNull(),
+		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+	},
+	(table) => [
+		unique("uq_file_snapshot_path_version").on(table.path, table.fileVersion),
+		index("idx_file_snapshot_path_created").on(table.path, table.createdAt),
+	]
+);
+
+export const fileObservation = sqliteTable(
+	"file_observation",
+	{
+		id: text("id").primaryKey(),
+		sessionId: text("session_id")
+			.notNull()
+			.references(() => session.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		path: text("path").notNull(),
+		fileVersion: text("file_version").$type<FileVersion>().notNull(),
+		seenLinesJson: text("seen_lines_json").notNull(),
+		snapshotAvailable: integer("snapshot_available", { mode: "boolean" })
+			.notNull()
+			.default(false),
+		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+	},
+	(table) => [
+		index("idx_file_observation_session_path_created").on(
+			table.sessionId,
+			table.path,
+			table.createdAt
+		),
+		unique("uq_file_observation_session_path_version").on(
+			table.sessionId,
+			table.path,
+			table.fileVersion
+		),
 	]
 );
 
@@ -168,6 +217,8 @@ export const sessionRecord = sqliteTable(
 	]
 );
 export const sessionSchema = {
+	fileObservation,
+	fileSnapshot,
 	sessionAttachment,
 	sessionCompaction,
 	sessionRecord,

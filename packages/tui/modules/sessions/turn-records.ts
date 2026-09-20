@@ -15,6 +15,7 @@ import {
 	type SessionRecord,
 	type SessionToolCallPart,
 	type ToolCallId,
+	type ToolFailureDetails,
 	toSessionMessageId,
 	toSessionRecordId,
 } from "@wincode/agent-core";
@@ -52,6 +53,7 @@ const toDurableToolPart = (part: {
 	outcome:
 		| {
 				errorText: string;
+				failure?: ToolFailureDetails;
 				type: "failure";
 		  }
 		| {
@@ -66,7 +68,11 @@ const toDurableToolPart = (part: {
 	outcome:
 		part.outcome.type === "success"
 			? { kind: "success", output: part.outcome.output }
-			: { errorText: part.outcome.errorText, kind: "failure" },
+			: {
+					errorText: part.outcome.errorText,
+					...omitUndefined({ failure: part.outcome.failure }),
+					kind: "failure",
+				},
 	sequence: part.sequence,
 	toolCallId: part.toolCallId,
 	toolName: part.toolName,

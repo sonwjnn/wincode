@@ -1,0 +1,80 @@
+const isControlCharacter = (character: string): boolean => {
+	const code = character.codePointAt(0) ?? 0;
+	return code < 0x20 || code === 0x7f;
+};
+
+const PATCH_LINE_PATTERN = /\r\n?|\n/u;
+const PATCH_UPDATE_PATTERN = /^\*\*\* Update File: (.+)$/mu;
+
+/** Decode the escaped path form used by verified and sloppy patch envelopes. */
+export const decodeEscapedPatchPath = (encoded: string): string | undefined => {
+	let decoded = "";
+	for (let index = 0; index < encoded.length; index += 1) {
+		const character = encoded[index] as string;
+		if (character === "\\") {
+			const escaped = encoded[index + 1];
+			if (escaped !== "]" && escaped !== "\\") {
+				return;
+			}
+			decoded += escaped;
+			index += 1;
+			continue;
+		}
+		if (character === "]" || isControlCharacter(character)) {
+			return;
+		}
+		decoded += character;
+	}
+	return decoded.length === 0 ? undefined : decoded;
+};
+
+/** Extract the single filesystem resource named by a coding patch envelope. */
+export const getPatchResourcePath = (patch: string): string | undefined => {
+	const lines = patch.split(PATCH_LINE_PATTERN);
+	const firstLine = lines[0] ?? "";
+	if (firstLine.startsWith("[") && firstLine.endsWith("]")) {
+		const inner = firstLine.slice(1, -1);
+		const separator = inner.lastIndexOf("#");
+		return separator > 0
+			? decodeEscapedPatchPath(inner.slice(0, separator))
+			: undefined;
+	}
+	for (const line of lines) {
+		const updateMatch = PATCH_UPDATE_PATTERN.exec(line);
+		if (updateMatch?.[1] !== undefined) {
+			return updateMatch[1];
+		}
+	}
+	return;
+};
+const escapePatchPath = (value: string): string =>
+	value.replaceAll("\\", "\\\\").replaceAll("]", "\\]");
+
+/** Rewrite the single filesystem path carried by a verified or sloppy patch. */
+export const rewritePatchResourcePath = (
+	patch: string,
+	resourcePath: string
+): string => {
+	const lines = patch.split(PATCH_LINE_PATTERN);
+	const firstLine = lines[0] ?? "";
+	if (firstLine.startsWith("[") && firstLine.endsWith("]")) {
+		const inner = firstLine.slice(1, -1);
+		const separator = inner.lastIndexOf("#");
+		if (separator > 0) {
+			const version = inner.slice(separator + 1);
+			const replacement = `[${escapePatchPath(resourcePath)}#${version}]`;
+			return replacement + patch.slice(firstLine.length);
+		}
+	}
+	const updateMatch = PATCH_UPDATE_PATTERN.exec(patch);
+	if (updateMatch?.[1] === undefined || updateMatch.index === undefined) {
+		return patch;
+	}
+	const pathStart =
+		updateMatch.index + updateMatch[0].length - updateMatch[1].length;
+	return (
+		patch.slice(0, pathStart) +
+		resourcePath +
+		patch.slice(pathStart + updateMatch[1].length)
+	);
+};

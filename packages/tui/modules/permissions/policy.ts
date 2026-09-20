@@ -8,13 +8,13 @@ export type PermissionAction =
 	| "read"
 	| "write"
 	| "edit"
+	| "edit:sloppy"
 	| "list"
 	| "glob"
 	| "grep"
 	| "shell"
 	| "skill"
 	| "external_directory";
-
 export type PermissionResourceRules = Readonly<
 	Record<string, PermissionDecision>
 >;
@@ -82,6 +82,7 @@ export const MAX_PERMISSION_PATTERN_LENGTH = 512;
 export const PERMISSION_TOOL_ACTIONS = [
 	"read",
 	"edit",
+	"edit:sloppy",
 	"list",
 	"glob",
 	"grep",
@@ -145,6 +146,7 @@ export const DEFAULT_SHELL_PERMISSION_RULES: PermissionResourceRules = {
 export const DEFAULT_PERMISSION_RULES: PermissionRules = {
 	read: DEFAULT_READ_PERMISSION_RULES,
 	edit: "allow",
+	"edit:sloppy": "ask",
 	list: "allow",
 	glob: "allow",
 	grep: "allow",

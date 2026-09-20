@@ -7,8 +7,9 @@ import {
 	normalizeChatModelSelection,
 	normalizeModelVariant,
 } from "@wincode/ai/models";
+import type { EditMode } from "@wincode/coding-tools";
 import { getErrorMessage, isNull, isUndefined } from "@wincode/runtime-utils";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	type AgentRegistry,
 	resolveEffectiveAgentSelection,
@@ -31,6 +32,7 @@ import type {
 	SessionSendInput as SessionOperationSendInput,
 	SessionSubmissionComposition,
 } from "../../session-operation";
+import { getSessionStore } from "../../storage/get-session-store";
 import type { ChatPromptSubmission } from "../../utils";
 import { ChatShell } from "../components/chat-shell";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
@@ -130,12 +132,47 @@ export function SessionView({
 	const router = useRouter();
 	const { agent, model, setAgent, setModel, setVariant, variant } =
 		usePromptConfig();
-	const settingsRuntime = useMemo(
-		() => ({ model, sessionId }),
-		[model, sessionId]
-	);
 	const registry = useAgentRegistry();
 	const dialog = useDialog();
+	const sessionStore = useMemo(() => getSessionStore(), []);
+	const [editMode, setEditMode] = useState<EditMode>("hashline");
+	const editModeLoadRevisionRef = useRef(0);
+	const setSessionEditMode = useCallback((mode: EditMode) => {
+		editModeLoadRevisionRef.current += 1;
+		setEditMode(mode);
+	}, []);
+	useEffect(() => {
+		let active = true;
+		const loadRevision = ++editModeLoadRevisionRef.current;
+		const loadEditMode = async (): Promise<void> => {
+			try {
+				const mode = await sessionStore.getEditMode?.(sessionId);
+				if (
+					active &&
+					loadRevision === editModeLoadRevisionRef.current &&
+					mode !== undefined
+				) {
+					setEditMode(mode);
+				}
+			} catch {
+				return;
+			}
+		};
+		void loadEditMode();
+		return () => {
+			active = false;
+		};
+	}, [sessionId, sessionStore]);
+	const settingsRuntime = useMemo(
+		() => ({
+			editMode,
+			model,
+			onEditModeChanged: setSessionEditMode,
+			sessionId,
+			sessionStore,
+		}),
+		[editMode, model, sessionId, sessionStore, setSessionEditMode]
+	);
 	const { show } = useToast();
 	const openSettings = useSettingsHubDialog(settingsRuntime);
 	const { isTopLayer } = useKeyboardLayer();
