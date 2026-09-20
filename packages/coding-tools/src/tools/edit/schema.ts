@@ -17,6 +17,20 @@ const hashlineEditSchema = z
 	})
 	.strict();
 
+const patchEditSchema = z
+	.object({
+		mode: z.literal("patch"),
+		patch: z.string().min(1),
+	})
+	.strict();
+
+const applyPatchEditSchema = z
+	.object({
+		mode: z.literal("apply_patch"),
+		patch: z.string().min(1),
+	})
+	.strict();
+
 const replaceEditSchema = z
 	.object({
 		mode: z.literal("replace"),
@@ -36,6 +50,8 @@ const sloppyEditSchema = z
 
 export const editInputSchema = z.union([
 	hashlineEditSchema,
+	patchEditSchema,
+	applyPatchEditSchema,
 	replaceEditSchema,
 	sloppyEditSchema,
 ]);
@@ -43,6 +59,10 @@ export const editInputSchemaForMode = (mode: EditMode) => {
 	switch (mode) {
 		case "hashline":
 			return hashlineEditSchema;
+		case "patch":
+			return patchEditSchema;
+		case "apply_patch":
+			return applyPatchEditSchema;
 		case "replace":
 			return replaceEditSchema;
 		case "sloppy":
@@ -52,21 +72,53 @@ export const editInputSchemaForMode = (mode: EditMode) => {
 	}
 };
 
-export const editOutputSchema = z
+const editFileResultSchema = z
 	.object({
 		editDiff: editDiffSchema.optional(),
+		fullDiffArtifact: z
+			.object({
+				byteLength: z.number().int().nonnegative(),
+				id: z.string().min(1),
+			})
+			.strict()
+			.optional(),
+		hunkCount: z.number().int().positive(),
 		newFileVersion: fileVersionSchema,
-		observationId: z.string().min(1).optional(),
-		oldFileVersion: fileVersionSchema.optional(),
+		oldFileVersion: fileVersionSchema,
 		path: z.string(),
-		replacements: z.number().int().min(1),
-		seenLines: z.array(lineRangeSchema).optional(),
+		status: z.literal("committed"),
 	})
 	.strict();
 
+export const editOutputSchema = z
+	.object({
+		editDiff: editDiffSchema.optional(),
+		files: z.array(editFileResultSchema).min(1).optional(),
+		fullDiffArtifact: z
+			.object({
+				byteLength: z.number().int().nonnegative(),
+				id: z.string().min(1),
+			})
+			.strict()
+			.optional(),
+		newFileVersion: fileVersionSchema.optional(),
+		observationId: z.string().min(1).optional(),
+		oldFileVersion: fileVersionSchema.optional(),
+		path: z.string().optional(),
+		replacements: z.number().int().positive().optional(),
+		seenLines: z.array(lineRangeSchema).optional(),
+	})
+	.strict()
+	.refine(
+		(value) =>
+			value.files !== undefined ||
+			(value.path !== undefined && value.newFileVersion !== undefined),
+		"Edit output must include a committed file result."
+	);
+
 export const editToolSchema = {
 	description:
-		"Edit one existing UTF-8 text file. Hashline is the verified default and accepts one versioned line-range patch. Replace requires one exact live-text match. Sloppy is weaker, one-file context matching and is separately permissioned.",
+		"Edit existing UTF-8 text files with verified File Versions. Hashline accepts one hunk, patch accepts multiple hunks for one file, and apply_patch accepts multiple sections across files. Replace requires one exact live-text match. Sloppy is weaker, one-file context matching and is separately permissioned.",
 	name: "edit",
 	schema: editInputSchema,
 } as const;

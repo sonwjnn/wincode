@@ -1,16 +1,20 @@
 import { lstat } from "node:fs/promises";
+import path from "node:path";
 import type { AgentId, ToolCallId } from "@wincode/agent-core";
 import {
+	byteLength,
 	type CodingToolName,
 	codingToolDefinitions,
 	codingToolNames,
-	getPatchResourcePath,
+	getPatchResourcePaths,
 	getReadResourcePath,
 	getToolResourceLimits,
 	isElevatedResourceProfile,
 	RESOURCE_LIMIT_PERMISSION_ACTION,
 	rewritePatchResourcePath,
+	rewritePatchResourcePaths,
 	type ToolResourceLimits,
+	validateMultiEditPatch,
 } from "@wincode/coding-tools";
 import type { WorkspacePolicy } from "@wincode/coding-tools/workspace";
 import {
@@ -55,7 +59,12 @@ import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
  * it (coding, shell, and MCP).
  */
 export type GateOutcome =
-	| { kind: "allow"; input?: unknown }
+	| {
+			approvedExternalPaths?: readonly string[];
+			approvedWorkspacePaths?: readonly string[];
+			input?: unknown;
+			kind: "allow";
+	  }
 	| { kind: "deny"; errorText: string }
 	| { kind: "reject"; errorText: string; feedback?: string };
 
@@ -145,12 +154,17 @@ const getStringField = (input: unknown, field: string): string | undefined => {
 	return isString(candidate) ? candidate : undefined;
 };
 
-const getPatchResource = (input: unknown): string | undefined => {
+const getPatchResources = (input: unknown): readonly string[] => {
 	const patch = getStringField(input, "patch");
-	return patch === undefined ? undefined : getPatchResourcePath(patch);
+	return patch === undefined ? [] : getPatchResourcePaths(patch);
 };
 type GateResource =
-	| { kind: "path"; input: string; pattern?: string }
+	| {
+			kind: "path";
+			input: string;
+			inputs?: readonly string[];
+			pattern?: string;
+	  }
 	| { kind: "literal"; value: string };
 
 /**
@@ -175,16 +189,20 @@ const resolveGateResource = (
 			: { input: path, kind: "path", pattern };
 	}
 	const path = getStringField(input, "path");
+	if (tool === "read" && path?.startsWith("artifact://")) {
+		return { kind: "literal", value: path };
+	}
 	if (!isUndefined(path)) {
 		return { input: path, kind: "path" };
 	}
 	if (tool !== "edit") {
 		return;
 	}
-	const patchPath = getPatchResource(input);
-	return isUndefined(patchPath)
+	const patchPaths = getPatchResources(input);
+	const patchPath = patchPaths[0];
+	return patchPath === undefined
 		? undefined
-		: { input: patchPath, kind: "path" };
+		: { input: patchPath, inputs: patchPaths, kind: "path" };
 };
 const resolveReadGatePath = async (
 	input: string,
@@ -438,13 +456,42 @@ export const createToolGate = ({
 			};
 		}
 		const tool = toolCall.toolName;
+		const resourceLimits = await resolveResourceLimits(agentId);
+		const patchInput = getStringField(toolCall.input, "patch");
+		if (
+			tool === "edit" &&
+			patchInput !== undefined &&
+			byteLength(patchInput) > resourceLimits.edit.maxPatchBytes
+		) {
+			return {
+				errorText: "Edit patch input exceeds the configured input budget.",
+				kind: "deny",
+			};
+		}
+		const editMode = getStringField(toolCall.input, "mode");
+		if (
+			tool === "edit" &&
+			patchInput !== undefined &&
+			(editMode === "patch" || editMode === "apply_patch")
+		) {
+			try {
+				validateMultiEditPatch(patchInput, editMode);
+			} catch (error) {
+				return {
+					errorText:
+						error instanceof Error
+							? error.message
+							: "Invalid edit patch input.",
+					kind: "reject",
+				};
+			}
+		}
 		const gateResource = resolveGateResource(tool, toolCall.input);
 		if (isUndefined(gateResource)) {
 			return { kind: "allow" };
 		}
 		const label = STATIC_TOOL_LABELS[tool];
 		const action = STATIC_TOOL_PERMISSION_ACTIONS[tool];
-		const resourceLimits = await resolveResourceLimits(agentId);
 		const limitChecks =
 			tool === "write" ? [] : resourceLimitChecks(resourceLimits);
 		const sloppyEdit =
@@ -494,6 +541,110 @@ export const createToolGate = ({
 			}
 			grantResourceLimits(service, resourceLimits, grant);
 		};
+		if (
+			tool === "edit" &&
+			gateResource.kind === "path" &&
+			(gateResource.inputs?.length ?? 0) > 1
+		) {
+			const declaredPaths = gateResource.inputs ?? [gateResource.input];
+			const canonicalByDeclared = new Map<string, string>();
+			const resources: string[] = [];
+			const externalResources: string[] = [];
+			const approvedWorkspacePaths: string[] = [];
+			const approvedExternalPaths: string[] = [];
+			for (const declaredPath of declaredPaths) {
+				let resource: string;
+				try {
+					resource = await canonicalizeResource(
+						expandHomeInPath(declaredPath),
+						sandbox
+					);
+					approvedWorkspacePaths.push(path.resolve(sandbox.root, resource));
+				} catch {
+					resource = await canonicalizeExternalPath(
+						expandHomeInPath(declaredPath),
+						sandbox.root
+					);
+					if (!externalResources.includes(resource)) {
+						externalResources.push(resource);
+					}
+					approvedExternalPaths.push(path.resolve(sandbox.root, resource));
+				}
+				canonicalByDeclared.set(declaredPath, resource);
+				if (!resources.includes(resource)) {
+					resources.push(resource);
+				}
+			}
+			resources.sort();
+			externalResources.sort();
+			for (const [declaredPath, resource] of canonicalByDeclared) {
+				canonicalByDeclared.set(
+					declaredPath,
+					path.resolve(sandbox.root, resource)
+				);
+			}
+			const writeSet = resources.join(", ");
+			const boundary = externalResources.join(", ");
+			const settled = await settleApproval(
+				{
+					checks: [
+						...limitChecks,
+						...externalResources.map((resource) => ({
+							action: "external_directory" as const,
+							decision: permission.decide("external_directory", resource),
+							resource,
+						})),
+						...resources.map((resource) => ({
+							action,
+							decision: permission.decide(action, resource),
+							resource,
+						})),
+					],
+					doomAsk,
+					request: requestFor(
+						writeSet,
+						externalResources.length > 0,
+						externalResources.length > 0 ? boundary : undefined
+					),
+					safety: permission.safety,
+				},
+				approvalDeps,
+				() =>
+					grantApprovedAccess(() => {
+						for (const resource of externalResources) {
+							service.grant(
+								"external_directory",
+								externalParentDirectoryGlob(resource)
+							);
+						}
+						for (const resource of resources) {
+							grantCodingAccess(resource);
+						}
+					})
+			);
+			const outcome = withErrorText(
+				settled,
+				staticDenialText(label, writeSet),
+				(feedback) => staticRejectionText(label, writeSet, feedback)
+			);
+			if (outcome.kind !== "allow") {
+				return outcome;
+			}
+			const input = isPlainObject(toolCall.input) ? toolCall.input : {};
+			const patch = Reflect.get(input, "patch");
+			if (!isString(patch)) {
+				return outcome;
+			}
+			return {
+				...outcome,
+				approvedExternalPaths,
+				approvedWorkspacePaths,
+				input: {
+					...input,
+					patch: rewritePatchResourcePaths(patch, canonicalByDeclared),
+				},
+			};
+		}
 
 		if (gateResource.kind === "literal") {
 			const settled = await settleApproval(
@@ -550,12 +701,32 @@ export const createToolGate = ({
 				approvalDeps,
 				() => grantApprovedAccess(() => grantCodingAccess(resource))
 			);
-			return withErrorText(
+			const outcome = withErrorText(
 				settled,
 				staticDenialText(label, gateResource.pattern ?? resource),
 				(feedback) =>
 					staticRejectionText(label, gateResource.pattern ?? resource, feedback)
 			);
+			if (outcome.kind !== "allow" || tool !== "edit") {
+				return outcome;
+			}
+			const input = isPlainObject(toolCall.input) ? toolCall.input : {};
+			const patch = Reflect.get(input, "patch");
+			const approvedPath = path.resolve(sandbox.root, canonical);
+			return isString(patch)
+				? {
+						...outcome,
+						approvedWorkspacePaths: [approvedPath],
+						input: {
+							...input,
+							patch: rewritePatchResourcePath(patch, approvedPath),
+						},
+					}
+				: {
+						...outcome,
+						approvedWorkspacePaths: [approvedPath],
+						input: { ...input, path: approvedPath },
+					};
 		} catch {
 			// Glob results are workspace-relative, so an external scope cannot
 			// produce a valid result. Deny it here instead of approving a call the
@@ -635,10 +806,18 @@ export const createToolGate = ({
 			if (tool === "edit" && isString(patch)) {
 				return {
 					...outcome,
+					approvedExternalPaths: [resource],
 					input: {
 						...input,
 						patch: rewritePatchResourcePath(patch, resource),
 					},
+				};
+			}
+			if (tool === "edit") {
+				return {
+					...outcome,
+					approvedExternalPaths: [resource],
+					input: { ...input, path: resource },
 				};
 			}
 			return {
@@ -647,9 +826,7 @@ export const createToolGate = ({
 			};
 		}
 	};
-
-	/**
-	 * Enforces the Tool Permission policy for a `shell` tool call (ADR-0008).
+	/** Enforces the Tool Permission policy for a `shell` tool call (ADR-0008).
 	 * The command is parsed per node: each command node is its own resource
 	 * evaluated against the shell rules, composed most-restrictively, and
 	 * cd-family nodes are exempt. An unparseable command fails closed to ask,

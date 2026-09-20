@@ -139,6 +139,8 @@ const runCodingToolThroughGate = async ({
 	options: {
 		allowExternalPath: boolean;
 		allowSloppy?: boolean;
+		approvedExternalPaths?: readonly string[];
+		approvedWorkspacePaths?: readonly string[];
 		resourceLimits?: ToolResourceLimits;
 		signal?: AbortSignal;
 		versionedEditing?: VersionedEditingContext;
@@ -415,6 +417,12 @@ export const createGatedCodingTools = ({
 					options: {
 						allowExternalPath: !isUndefined(outcome.input),
 						allowSloppy: isSloppyCodingInput(outcome.input ?? input),
+						...(outcome.approvedWorkspacePaths === undefined
+							? {}
+							: { approvedWorkspacePaths: outcome.approvedWorkspacePaths }),
+						...(outcome.approvedExternalPaths === undefined
+							? {}
+							: { approvedExternalPaths: outcome.approvedExternalPaths }),
 						...(isUndefined(resolveResourceLimits)
 							? {}
 							: {

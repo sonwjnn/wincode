@@ -47,6 +47,30 @@ export const getPatchResourcePath = (patch: string): string | undefined => {
 	}
 	return;
 };
+/** Extracts every filesystem resource declaration from a patch. */
+export const getPatchResourcePaths = (patch: string): string[] => {
+	const paths: string[] = [];
+	for (const line of patch.split(PATCH_LINE_PATTERN)) {
+		if (line.startsWith("[") && line.endsWith("]")) {
+			const inner = line.slice(1, -1);
+			const separator = inner.lastIndexOf("#");
+			const decoded =
+				separator > 0
+					? decodeEscapedPatchPath(inner.slice(0, separator))
+					: undefined;
+			if (decoded !== undefined) {
+				paths.push(decoded);
+			}
+			continue;
+		}
+		const updateMatch = PATCH_UPDATE_PATTERN.exec(line);
+		if (updateMatch?.[1] !== undefined) {
+			paths.push(updateMatch[1]);
+		}
+	}
+	return paths;
+};
+
 const escapePatchPath = (value: string): string =>
 	value.replaceAll("\\", "\\\\").replaceAll("]", "\\]");
 
@@ -77,4 +101,30 @@ export const rewritePatchResourcePath = (
 		resourcePath +
 		patch.slice(pathStart + updateMatch[1].length)
 	);
+};
+/** Rewrites every verified section path while preserving each File Version. */
+export const rewritePatchResourcePaths = (
+	patch: string,
+	resources: ReadonlyMap<string, string>
+): string => {
+	const lines = patch.split(PATCH_LINE_PATTERN);
+	return lines
+		.map((line) => {
+			if (!(line.startsWith("[") && line.endsWith("]"))) {
+				return line;
+			}
+			const inner = line.slice(1, -1);
+			const separator = inner.lastIndexOf("#");
+			if (separator <= 0) {
+				return line;
+			}
+			const decoded = decodeEscapedPatchPath(inner.slice(0, separator));
+			const replacement =
+				decoded === undefined ? undefined : resources.get(decoded);
+			if (replacement === undefined) {
+				return line;
+			}
+			return `[${escapePatchPath(replacement)}${inner.slice(separator)}]`;
+		})
+		.join("\n");
 };

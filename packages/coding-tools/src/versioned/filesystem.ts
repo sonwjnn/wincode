@@ -184,6 +184,13 @@ const canonicalLineRanges = (
 	}
 	return lineRangeForLines([...lines]);
 };
+export const assertObservedLineBudget = (
+	ranges: readonly LineRange[],
+	maxObservedLines: number,
+	resolvedPath: string
+): void => {
+	canonicalLineRanges(ranges, maxObservedLines, resolvedPath);
+};
 export const persistFileObservation = async ({
 	context,
 	limits,
@@ -301,7 +308,8 @@ export const withSnapshotFailureCleanup = async <T>(
 
 export const atomicReplaceFile = async (
 	resolvedPath: string,
-	bytes: Uint8Array
+	bytes: Uint8Array,
+	expectedFileVersion?: FileVersion
 ): Promise<void> => {
 	const existingMode = await lstat(resolvedPath)
 		.then((metadata) => metadata.mode % 0o1_0000)
@@ -332,6 +340,18 @@ export const atomicReplaceFile = async (
 		await writeFile(temporaryPath, bytes);
 		if (existingMode !== undefined) {
 			await chmod(temporaryPath, existingMode);
+		}
+		if (expectedFileVersion !== undefined) {
+			const canonicalPath = await realpath(resolvedPath);
+			if (canonicalPath !== resolvedPath) {
+				throw new CodingToolError(
+					"approved-path-changed",
+					"The canonical edit path changed before replacement.",
+					{ recovery: { action: "reread", path: resolvedPath } }
+				);
+			}
+			const latest = await readVersionedFile(resolvedPath);
+			expectFileVersion(latest.fileVersion, expectedFileVersion, resolvedPath);
 		}
 		await rename(temporaryPath, resolvedPath);
 	} catch (error) {

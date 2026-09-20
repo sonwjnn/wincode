@@ -83,6 +83,27 @@ const initializeSchema = (sqlite: Database): void => {
 			created_at INTEGER NOT NULL,
 			UNIQUE (session_id, path, file_version)
 		);
+		CREATE TABLE IF NOT EXISTS full_diff_artifact (
+			id TEXT PRIMARY KEY NOT NULL,
+			session_id TEXT NOT NULL REFERENCES session(id)
+				ON UPDATE CASCADE ON DELETE CASCADE,
+			byte_length INTEGER NOT NULL,
+			content TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_full_diff_artifact_session_created
+			ON full_diff_artifact (session_id, created_at);
+
+		CREATE TABLE IF NOT EXISTS file_lease (
+			canonical_path TEXT PRIMARY KEY NOT NULL,
+			owner_token TEXT NOT NULL,
+			expires_at INTEGER NOT NULL,
+			created_at INTEGER NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_file_lease_expiry
+			ON file_lease (expires_at);
 
 		CREATE INDEX IF NOT EXISTS idx_file_observation_session_path_created
 			ON file_observation (session_id, path, created_at);

@@ -107,6 +107,39 @@ export const fileObservation = sqliteTable(
 	]
 );
 
+export const fullDiffArtifact = sqliteTable(
+	"full_diff_artifact",
+	{
+		id: text("id").primaryKey(),
+		sessionId: text("session_id")
+			.notNull()
+			.references(() => session.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		byteLength: integer("byte_length").notNull(),
+		content: text("content").notNull(),
+		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+	},
+	(table) => [
+		index("idx_full_diff_artifact_session_created").on(
+			table.sessionId,
+			table.createdAt
+		),
+	]
+);
+
+export const fileLease = sqliteTable(
+	"file_lease",
+	{
+		canonicalPath: text("canonical_path").primaryKey(),
+		ownerToken: text("owner_token").notNull(),
+		expiresAt: integer("expires_at").notNull(),
+		createdAt: integer("created_at").notNull(),
+	},
+	(table) => [index("idx_file_lease_expiry").on(table.expiresAt)]
+);
+
 export const sessionCompaction = sqliteTable(
 	"session_compaction",
 	{
@@ -217,6 +250,8 @@ export const sessionRecord = sqliteTable(
 	]
 );
 export const sessionSchema = {
+	fullDiffArtifact,
+	fileLease,
 	fileObservation,
 	fileSnapshot,
 	sessionAttachment,

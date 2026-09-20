@@ -7,6 +7,7 @@ import {
 	type VersionedEditingContext,
 } from "../../versioned/contracts";
 import {
+	assertObservedLineBudget,
 	atomicReplaceFile,
 	createParentDirectories,
 	expectFileVersion,
@@ -96,7 +97,11 @@ const restoreWriteAfterFailure = async ({
 		if (existing === null) {
 			await rm(resolvedPath, { force: true });
 		} else {
-			await atomicReplaceFile(resolvedPath, existing.bytes);
+			await atomicReplaceFile(
+				resolvedPath,
+				existing.bytes,
+				newState.fileVersion
+			);
 		}
 		return true;
 	} catch {
@@ -208,43 +213,59 @@ export const runWriteTool = async (
 	}
 
 	const newState = parseUtf8Content(input.content);
-	return withFileMutationLock(resolvedPath, () =>
-		withSnapshotFailureCleanup(
-			context,
-			{ fileVersion: newState.fileVersion, path: resolvedPath },
-			async () => {
-				const createdParents = await createParentDirectories(resolvedPath);
-				try {
-					await assertWriteTargetUnchanged({
-						existing,
-						pathName: input.path,
-						resolvedPath,
-					});
-					await atomicReplaceFile(resolvedPath, newState.bytes);
-					const observation = await persistWriteObservation({
-						context,
-						existing,
-						input,
-						limits,
-						newState,
-						resolvedPath,
-						snapshotPersisted: false,
-					});
-					return {
-						bytesWritten: newState.bytes.byteLength,
-						newFileVersion: newState.fileVersion,
-						observationId: observation.id,
-						oldFileVersion: existing?.fileVersion,
-						path: input.path,
-						seenLines: [...observation.seenLines],
-					};
-				} catch (error) {
-					if (existing === null) {
-						await removeEmptyCreatedParents(createdParents);
-					}
-					throw error;
-				}
-			}
-		)
+	assertObservedLineBudget(
+		allLines(newState),
+		limits.read.maxObservedLines,
+		resolvedPath
 	);
+	const mutate = (assertLease: () => void) =>
+		withFileMutationLock(resolvedPath, () =>
+			withSnapshotFailureCleanup(
+				context,
+				{ fileVersion: newState.fileVersion, path: resolvedPath },
+				async () => {
+					const createdParents = await createParentDirectories(resolvedPath);
+					try {
+						assertLease();
+						await assertWriteTargetUnchanged({
+							existing,
+							pathName: input.path,
+							resolvedPath,
+						});
+						assertLease();
+						await atomicReplaceFile(
+							resolvedPath,
+							newState.bytes,
+							existing?.fileVersion
+						);
+						const observation = await persistWriteObservation({
+							context,
+							existing,
+							input,
+							limits,
+							newState,
+							resolvedPath,
+							snapshotPersisted: false,
+						});
+						assertLease();
+						return {
+							bytesWritten: newState.bytes.byteLength,
+							newFileVersion: newState.fileVersion,
+							observationId: observation.id,
+							oldFileVersion: existing?.fileVersion,
+							path: input.path,
+							seenLines: [...observation.seenLines],
+						};
+					} catch (error) {
+						if (existing === null) {
+							await removeEmptyCreatedParents(createdParents);
+						}
+						throw error;
+					}
+				}
+			)
+		);
+	return context.store.withPathLeases === undefined
+		? mutate(() => undefined)
+		: context.store.withPathLeases([resolvedPath], mutate);
 };

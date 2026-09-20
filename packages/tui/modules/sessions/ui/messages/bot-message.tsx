@@ -72,6 +72,17 @@ const getToolInputRecord = (part: ToolPart): UnknownRecord =>
 
 const getToolOutputRecord = (part: ToolPart): UnknownRecord =>
 	isPlainObject(part.output) ? part.output : {};
+const hasEditOutput = (part: ToolPart): boolean => {
+	if (part.type !== "tool-edit" || part.state !== "output-available") {
+		return false;
+	}
+	const output = getToolOutputRecord(part);
+	return (
+		"editDiff" in output ||
+		"fullDiffArtifact" in output ||
+		(isArray(output.files) && output.files.length > 0)
+	);
+};
 
 const formatToolArgumentValue = (value: unknown): string => {
 	const sanitized = sanitizeArgumentTree(value);
@@ -326,10 +337,7 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 		(part.state === "output-available" || part.state === "output-error");
 	const isShellOutput =
 		part.type === "tool-shell" && part.state === "output-available";
-	const isEditOutput =
-		part.type === "tool-edit" &&
-		part.state === "output-available" &&
-		"editDiff" in getToolOutputRecord(part);
+	const isEditOutput = hasEditOutput(part);
 	const isEditRunning =
 		part.type === "tool-edit" &&
 		(part.state === "input-streaming" || part.state === "input-available");
@@ -354,7 +362,9 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 		<>
 			{toolLine}
 			{isShellOutput ? <ShellOutputBlock part={part} /> : null}
-			{isEditPreview ? <EditDiffBlock agent={agent} part={part} /> : null}
+			{isEditPreview && part.type === "tool-edit" ? (
+				<EditDiffBlock agent={agent} part={part} />
+			) : null}
 			{isWritePreview ? <WriteBlock agent={agent} part={part} /> : null}
 			{isString(part.toolCallId) ? (
 				<ToolApprovalPanel

@@ -16,6 +16,7 @@ import {
 import {
 	expandExternalPath,
 	type FileState,
+	parseUtf8Content,
 	persistFileObservation,
 	readVersionedFile,
 	withFileMutationLock,
@@ -845,17 +846,79 @@ const formatNonFileRead = async (
 		path: target.path,
 	};
 };
+const readFullDiffArtifact = async (
+	input: ReadInput,
+	limits: ToolResourceLimits,
+	context: VersionedEditingContext
+): Promise<ReadOutput | undefined> => {
+	if (!input.path.startsWith("artifact://")) {
+		return;
+	}
+	if (input.expectedVersion !== undefined) {
+		throw new CodingToolError(
+			"artifact-version-unsupported",
+			"Full Diff Artifacts do not have File Versions.",
+			{ recovery: { action: "correct-input", path: input.path } }
+		);
+	}
+	const resource = input.path.slice("artifact://".length);
+	const selectorIndex = resource.indexOf(":");
+	const artifactId =
+		selectorIndex < 0 ? resource : resource.slice(0, selectorIndex);
+	if (artifactId.length === 0) {
+		throw new CodingToolError(
+			"artifact-not-found",
+			"Full Diff Artifact id is missing.",
+			{ recovery: { action: "correct-input", path: input.path } }
+		);
+	}
+	const artifact = await context.store.getFullDiffArtifact?.(
+		context.sessionId,
+		artifactId
+	);
+	if (artifact === undefined || artifact === null) {
+		throw new CodingToolError(
+			"artifact-not-found",
+			`Full Diff Artifact '${artifactId}' was not found.`,
+			{ recovery: { action: "correct-input", path: input.path } }
+		);
+	}
+	const selector =
+		selectorIndex < 0
+			? undefined
+			: splitLineRangeSelector(
+					`artifact-${artifactId}${resource.slice(selectorIndex)}`
+				).ranges;
+	const formatted = formatVersionedFileContent(
+		parseUtf8Content(artifact.content).text.lines,
+		`artifact://${artifactId}`,
+		selector,
+		limits.read,
+		input.fullLines === true
+	);
+	return {
+		content: formatted.content,
+		continuationRanges: formatted.continuationRanges,
+		displayedRanges: formatted.displayedRanges,
+		path: input.path,
+		...pickTruthy({ truncated: formatted.truncated }),
+	};
+};
 
 export const runReadTool = async (
 	input: ReadInput,
 	options: ReadToolOptions = {}
 ): Promise<ReadOutput> => {
+	const limits = options.resourceLimits ?? getToolResourceLimits();
+	const context = options.versionedEditing ?? defaultVersionedEditingContext;
+	const artifact = await readFullDiffArtifact(input, limits, context);
+	if (artifact !== undefined) {
+		return artifact;
+	}
 	const target = await readTextTarget(
 		input.path,
 		options.allowExternalPath === true
 	);
-	const limits = options.resourceLimits ?? getToolResourceLimits();
-	const context = options.versionedEditing ?? defaultVersionedEditingContext;
 	const previousObservation = await context.store.getLatestObservation(
 		context.sessionId,
 		target.absolutePath

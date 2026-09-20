@@ -278,6 +278,8 @@ export const AUTO_COMPACT_SETTING: BooleanSettingDescriptor = {
 export const EDIT_MODE_SETTING_ID = "editing.mode";
 const EDIT_MODE_LABELS: Record<EditMode, string> = {
 	hashline: "Hashline (verified)",
+	patch: "Patch (verified)",
+	apply_patch: "Apply patch (verified)",
 	replace: "Exact replace",
 	sloppy: "Sloppy patch",
 };

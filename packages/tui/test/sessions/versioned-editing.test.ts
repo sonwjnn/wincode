@@ -149,6 +149,14 @@ test("persists observations across restart and gates sloppy edits separately", a
 		expect(
 			await context().store.getSnapshot(filePath, readOutput.fileVersion)
 		).not.toBeNull();
+		const artifact = {
+			byteLength: 4,
+			content: "diff",
+			createdAt: Date.now(),
+			id: "artifact-restart",
+			sessionId,
+		};
+		await context().store.saveFullDiffArtifact?.(artifact);
 
 		activeDatabase.sqlite.close();
 		activeDatabase = undefined;
@@ -168,6 +176,12 @@ test("persists observations across restart and gates sloppy edits separately", a
 				readOutput.fileVersion
 			)
 		).not.toBeNull();
+		expect(
+			await restartedContext().store.getFullDiffArtifact?.(
+				sessionId,
+				artifact.id
+			)
+		).toEqual(artifact);
 		const restartedRequests: ToolApprovalRequest[] = [];
 		const restartedTools = createTools(
 			root,

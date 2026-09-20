@@ -543,6 +543,7 @@ describe("shell override and grants", () => {
 			undefined,
 			service
 		);
+		const canonicalPath = join(process.cwd(), "package.json");
 		const sloppyInput = {
 			mode: "sloppy",
 			patch:
@@ -558,7 +559,17 @@ describe("shell override and grants", () => {
 					toolName: "edit",
 				},
 			})
-		).resolves.toEqual({ kind: "allow" });
+		).resolves.toEqual({
+			approvedWorkspacePaths: [canonicalPath],
+			input: {
+				...sloppyInput,
+				patch: sloppyInput.patch.replace(
+					"*** Update File: package.json",
+					`*** Update File: ${canonicalPath}`
+				),
+			},
+			kind: "allow",
+		});
 		expect(service.listGrants()).toEqual([
 			{ action: "edit:sloppy", resource: "package.json" },
 		]);
@@ -577,7 +588,16 @@ describe("shell override and grants", () => {
 					toolName: "edit",
 				},
 			})
-		).resolves.toEqual({ kind: "allow" });
+		).resolves.toEqual({
+			approvedWorkspacePaths: [canonicalPath],
+			input: {
+				mode: "replace",
+				newString: "new",
+				oldString: "old",
+				path: canonicalPath,
+			},
+			kind: "allow",
+		});
 		expect(requests).toHaveLength(2);
 	});
 
@@ -686,6 +706,142 @@ describe("shell override and grants", () => {
 			"tool",
 			"resource",
 		]);
+	});
+	test("asks once for the complete apply_patch write set", async () => {
+		const { approvals, requests } = allowOnceApproval();
+		const gate = createGate(createToolPermission({ edit: "ask" }), approvals);
+		const firstVersion = "a".repeat(32);
+		const secondVersion = "b".repeat(32);
+		const outcome = await gate.gate({
+			family: "coding",
+			toolCall: {
+				input: {
+					mode: "apply_patch",
+					patch: [
+						`[package.json#${firstVersion}]`,
+						"PUT 1.=1:",
+						"+one",
+						`[README.md#${secondVersion}]`,
+						"PUT 1.=1:",
+						"+two",
+					].join("\n"),
+				},
+				toolCallId: makeToolCallId("call-apply-patch-write-set"),
+				toolName: "edit",
+			},
+		});
+		expect(outcome.kind).toBe("allow");
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.identity).toContainEqual({
+			label: "resource",
+			value: "README.md, package.json",
+		});
+	});
+	test("denies an apply_patch when any external boundary is denied", async () => {
+		const { approvals, requests } = allowOnceApproval();
+		const gate = createGate(
+			createToolPermission({
+				edit: "allow",
+				external_directory: "deny",
+			}),
+			approvals
+		);
+		const externalPath = join(
+			process.env.TMPDIR ?? "/tmp",
+			"wincode-external-denied",
+			"one.txt"
+		);
+		const outcome = await gate.gate({
+			family: "coding",
+			toolCall: {
+				input: {
+					mode: "apply_patch",
+					patch: [
+						`[${externalPath}#${"a".repeat(32)}]`,
+						"PUT 1.=1:",
+						"+one",
+					].join("\n"),
+				},
+				toolCallId: makeToolCallId("call-apply-patch-external-denied"),
+				toolName: "edit",
+			},
+		});
+		expect(outcome.kind).toBe("deny");
+		expect(requests).toHaveLength(0);
+	});
+	test("rejects malformed multi-file patches before requesting approval", async () => {
+		const { approvals, requests } = allowOnceApproval();
+		const gate = createGate(createToolPermission({ edit: "ask" }), approvals);
+		const outcome = await gate.gate({
+			family: "coding",
+			toolCall: {
+				input: {
+					mode: "apply_patch",
+					patch: [
+						`[package.json#${"a".repeat(32)}]`,
+						"NOT A VERIFIED HUNK",
+					].join("\n"),
+				},
+				toolCallId: makeToolCallId("call-apply-patch-invalid"),
+				toolName: "edit",
+			},
+		});
+		expect(outcome.kind).toBe("reject");
+		expect(requests).toHaveLength(0);
+	});
+	test("rewrites mixed approved paths to absolute runner resources", async () => {
+		const { approvals } = allowOnceApproval();
+		const gate = createGate(
+			createToolPermission({
+				edit: "ask",
+				external_directory: "allow",
+			}),
+			approvals
+		);
+		const externalPath = join(
+			process.env.TMPDIR ?? "/tmp",
+			"wincode-external-mixed",
+			"two.txt"
+		);
+		const canonicalExternalPath = await canonicalizeExternalPath(
+			externalPath,
+			process.cwd()
+		);
+		const version = "a".repeat(32);
+		const outcome = await gate.gate({
+			family: "coding",
+			toolCall: {
+				input: {
+					mode: "apply_patch",
+					patch: [
+						`[package.json#${version}]`,
+						"PUT 1.=1:",
+						"+one",
+						`[${externalPath}#${version}]`,
+						"PUT 1.=1:",
+						"+two",
+					].join("\n"),
+				},
+				toolCallId: makeToolCallId("call-apply-patch-mixed"),
+				toolName: "edit",
+			},
+		});
+		expect(outcome).toEqual({
+			approvedExternalPaths: [canonicalExternalPath],
+			approvedWorkspacePaths: [join(process.cwd(), "package.json")],
+			input: {
+				mode: "apply_patch",
+				patch: [
+					`[${join(process.cwd(), "package.json")}#${version}]`,
+					"PUT 1.=1:",
+					"+one",
+					`[${canonicalExternalPath}#${version}]`,
+					"PUT 1.=1:",
+					"+two",
+				].join("\n"),
+			},
+			kind: "allow",
+		});
 	});
 });
 
@@ -1120,6 +1276,7 @@ test("rewrites an approved external edit patch to its canonical resource", async
 				},
 			})
 		).resolves.toEqual({
+			approvedExternalPaths: [resource],
 			input: {
 				patch: `[${resource}#${version}]\nPUT 1.=1:\n+updated`,
 			},

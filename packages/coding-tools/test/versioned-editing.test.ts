@@ -4,11 +4,16 @@ import {
 	mkdir,
 	mkdtemp,
 	readFile,
+	realpath,
 	rm,
+	symlink,
 	writeFile,
 } from "node:fs/promises";
 import path from "node:path";
-import type { VersionedEditingContext } from "@wincode/coding-tools";
+import type {
+	FileObservationStore,
+	VersionedEditingContext,
+} from "@wincode/coding-tools";
 import {
 	computeFileVersion,
 	createMemoryFileObservationStore,
@@ -800,7 +805,12 @@ describe("versioned coding tools", () => {
 			const limits = getToolResourceLimits();
 			const constrained = {
 				...limits,
-				edit: { ...limits.edit, maxDiffBytes: 1, maxDiffLines: 1 },
+				edit: {
+					...limits.edit,
+					maxDiffBytes: 1,
+					maxDiffLines: 1,
+					maxFullDiffArtifactBytes: 1,
+				},
 			};
 			await expect(
 				runEditTool(
@@ -816,7 +826,7 @@ describe("versioned coding tools", () => {
 						versionedEditing: { ...context, editMode: "replace" },
 					}
 				)
-			).rejects.toMatchObject({ code: "edit-diff-out-of-budget" });
+			).rejects.toMatchObject({ code: "edit-diff-artifact-out-of-budget" });
 			expect(await readFile(filePath, "utf8")).toBe("one\n");
 		});
 	});
@@ -887,6 +897,517 @@ describe("versioned coding tools", () => {
 			);
 			expect(result.oldFileVersion).toBe(read.fileVersion);
 			expect(await readFile(filePath, "utf8")).toBe("new\n");
+		});
+	});
+	test("patch applies multiple disjoint hunks atomically from one snapshot", async () => {
+		await withTempFile("one\ntwo\nthree\nfour\n", async (filePath, context) => {
+			const read = await runReadTool(
+				{ path: filePath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			const result = await runEditTool(
+				{
+					mode: "patch",
+					patch: [
+						`[${filePath}#${read.fileVersion}]`,
+						"PUT 1.=1:",
+						"+ONE",
+						"PUT 3.=3:",
+						"+THREE",
+					].join("\n"),
+				},
+				{
+					allowExternalPath: true,
+					versionedEditing: { ...context, editMode: "patch" },
+				}
+			);
+			expect(result.files?.[0]?.hunkCount).toBe(2);
+			expect(await readFile(filePath, "utf8")).toBe("ONE\ntwo\nTHREE\nfour\n");
+		});
+	});
+
+	test("apply_patch deduplicates repeated same-version sections across files", async () => {
+		await withTempFile("one\nthree\n", async (firstPath, context) => {
+			const secondPath = path.join(path.dirname(firstPath), "second.txt");
+			await writeFile(secondPath, "alpha\nbeta\n");
+			const firstRead = await runReadTool(
+				{ path: firstPath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			const secondRead = await runReadTool(
+				{ path: secondPath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			const result = await runEditTool(
+				{
+					mode: "apply_patch",
+					patch: [
+						"*** Begin Patch",
+						`[${firstPath}#${firstRead.fileVersion}]`,
+						"PUT 1.=1:",
+						"+ONE",
+						`[${secondPath}#${secondRead.fileVersion}]`,
+						"PUT 1.=1:",
+						"+ALPHA",
+						"*** End Patch",
+					].join("\n"),
+				},
+				{
+					allowExternalPath: true,
+					versionedEditing: { ...context, editMode: "apply_patch" },
+				}
+			);
+			expect(result.files).toHaveLength(2);
+			expect(await readFile(firstPath, "utf8")).toBe("ONE\nthree\n");
+			expect(await readFile(secondPath, "utf8")).toBe("ALPHA\nbeta\n");
+		});
+	});
+	test("merges canonical and symlink aliases into one committed file", async () => {
+		await withTempFile("one\ntwo\n", async (filePath, context) => {
+			const aliasPath = path.join(path.dirname(filePath), "alias.txt");
+			await symlink(filePath, aliasPath);
+			const read = await runReadTool(
+				{ path: filePath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			const result = await runEditTool(
+				{
+					mode: "apply_patch",
+					patch: [
+						`[${filePath}#${read.fileVersion}]`,
+						"PUT 1.=1:",
+						"+ONE",
+						`[${aliasPath}#${read.fileVersion}]`,
+						"PUT 2.=2:",
+						"+TWO",
+					].join("\n"),
+				},
+				{
+					allowExternalPath: true,
+					versionedEditing: { ...context, editMode: "apply_patch" },
+				}
+			);
+			expect(result.files).toHaveLength(1);
+			expect(result.files?.[0]?.hunkCount).toBe(2);
+			expect(await readFile(filePath, "utf8")).toBe("ONE\nTWO\n");
+		});
+	});
+	test("rejects an approved symlink retarget before editing", async () => {
+		await withTempFile("one\ntwo\n", async (filePath, context) => {
+			const aliasPath = path.join(path.dirname(filePath), "alias.txt");
+			const replacementPath = path.join(
+				path.dirname(filePath),
+				"replacement.txt"
+			);
+			await writeFile(replacementPath, "outside\n");
+			await symlink(filePath, aliasPath);
+			const read = await runReadTool(
+				{ fullLines: true, path: aliasPath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			await rm(aliasPath);
+			await symlink(replacementPath, aliasPath);
+			await expect(
+				runEditTool(
+					{
+						patch: `[${aliasPath}#${read.fileVersion}]\nPUT 1.=1:\n+ONE`,
+					},
+					{
+						allowExternalPath: true,
+						approvedExternalPaths: [filePath],
+						versionedEditing: context,
+					}
+				)
+			).rejects.toMatchObject({ code: "approved-path-changed" });
+			expect(await readFile(replacementPath, "utf8")).toBe("outside\n");
+		});
+	});
+	test("preserves observed lines across unrelated apply_patch drift", async () => {
+		await withTempFile("one\ntwo\nthree\nfour\n", async (filePath, context) => {
+			const read = await runReadTool(
+				{ fullLines: true, path: filePath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			await writeFile(filePath, "zero\none\ntwo\nthree\nfour\n");
+			const first = await runEditTool(
+				{
+					mode: "apply_patch",
+					patch: `[${filePath}#${read.fileVersion}]\nPUT 3.=3:\n+THREE`,
+				},
+				{
+					allowExternalPath: true,
+					versionedEditing: { ...context, editMode: "apply_patch" },
+				}
+			);
+			const newVersion = first.files?.[0]?.newFileVersion;
+			expect(newVersion).toBeString();
+			await runEditTool(
+				{
+					mode: "apply_patch",
+					patch: `[${filePath}#${newVersion}]\nPUT 2.=2:\n+ONE`,
+				},
+				{
+					allowExternalPath: true,
+					versionedEditing: { ...context, editMode: "apply_patch" },
+				}
+			);
+			expect(await readFile(filePath, "utf8")).toBe(
+				"zero\nONE\ntwo\nTHREE\nfour\n"
+			);
+		});
+	});
+	test("acquires the complete canonical lease set in sorted order", async () => {
+		await withTempFile("one\n", async (firstPath, context) => {
+			const secondPath = path.join(path.dirname(firstPath), "a.txt");
+			await writeFile(secondPath, "two\n");
+			const firstRead = await runReadTool(
+				{ path: firstPath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			const secondRead = await runReadTool(
+				{ path: secondPath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			const baseStore = context.store;
+			let leasePaths: readonly string[] = [];
+			const leaseStore: FileObservationStore = {
+				...baseStore,
+				withPathLeases: async (paths, operation) => {
+					leasePaths = [...paths];
+					return (
+						baseStore.withPathLeases?.(paths, operation) ??
+						operation(() => undefined)
+					);
+				},
+			};
+			await runEditTool(
+				{
+					mode: "apply_patch",
+					patch: [
+						`[${firstPath}#${firstRead.fileVersion}]`,
+						"PUT 1.=1:",
+						"+ONE",
+						`[${secondPath}#${secondRead.fileVersion}]`,
+						"PUT 1.=1:",
+						"+TWO",
+					].join("\n"),
+				},
+				{
+					allowExternalPath: true,
+					versionedEditing: {
+						...context,
+						editMode: "apply_patch",
+						store: leaseStore,
+					},
+				}
+			);
+			const expectedLeasePaths = await Promise.all(
+				[firstPath, secondPath].map((candidate) => realpath(candidate))
+			);
+			expect(leasePaths).toEqual(expectedLeasePaths.sort());
+		});
+	});
+
+	test("repeated sections with different versions fail before any write", async () => {
+		await withTempFile("one\nthree\n", async (filePath, context) => {
+			const read = await runReadTool(
+				{ path: filePath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			await expect(
+				runEditTool(
+					{
+						mode: "apply_patch",
+						patch: [
+							`[${filePath}#${read.fileVersion}]`,
+							"PUT 1.=1:",
+							"+ONE",
+							`[${filePath}#${"0".repeat(32)}]`,
+							"PUT 2.=2:",
+							"+THREE",
+						].join("\n"),
+					},
+					{
+						allowExternalPath: true,
+						versionedEditing: { ...context, editMode: "apply_patch" },
+					}
+				)
+			).rejects.toMatchObject({ code: "version-conflict" });
+			expect(await readFile(filePath, "utf8")).toBe("one\nthree\n");
+		});
+	});
+
+	test("overlapping multi-hunks fail before mutation", async () => {
+		await withTempFile("one\ntwo\nthree\n", async (filePath, context) => {
+			const read = await runReadTool(
+				{ path: filePath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			await expect(
+				runEditTool(
+					{
+						mode: "patch",
+						patch: [
+							`[${filePath}#${read.fileVersion}]`,
+							"PUT 1.=2:",
+							"+ONE",
+							"+TWO",
+							"PUT 2.=3:",
+							"+TWO",
+							"+THREE",
+						].join("\n"),
+					},
+					{
+						allowExternalPath: true,
+						versionedEditing: { ...context, editMode: "patch" },
+					}
+				)
+			).rejects.toMatchObject({ code: "hunk-overlap" });
+			expect(await readFile(filePath, "utf8")).toBe("one\ntwo\nthree\n");
+		});
+	});
+
+	test("rechecks live versions after preparation before replacement", async () => {
+		await withTempFile("one\n", async (filePath, context) => {
+			const read = await runReadTool(
+				{ path: filePath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			const baseStore = context.store;
+			let raced = false;
+			const raceStore: FileObservationStore = {
+				...baseStore,
+				saveSnapshot: async (snapshot) => {
+					await baseStore.saveSnapshot(snapshot);
+					if (!raced) {
+						raced = true;
+						await writeFile(filePath, "raced\n");
+					}
+				},
+			};
+			await expect(
+				runEditTool(
+					{
+						mode: "patch",
+						patch: [
+							`[${filePath}#${read.fileVersion}]`,
+							"PUT 1.=1:",
+							"+ONE",
+						].join("\n"),
+					},
+					{
+						allowExternalPath: true,
+						versionedEditing: {
+							...context,
+							editMode: "patch",
+							store: raceStore,
+						},
+					}
+				)
+			).rejects.toMatchObject({ code: "file-version-mismatch" });
+			expect(await readFile(filePath, "utf8")).toBe("raced\n");
+		});
+	});
+	test("rolls back earlier files when a later replacement fails", async () => {
+		await withTempFile("one\n", async (firstPath, context) => {
+			const secondPath = path.join(path.dirname(firstPath), "second.txt");
+			await writeFile(secondPath, "two\n");
+			const firstRead = await runReadTool(
+				{ path: firstPath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			const secondRead = await runReadTool(
+				{ path: secondPath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			await chmod(secondPath, 0o444);
+			await expect(
+				runEditTool(
+					{
+						mode: "apply_patch",
+						patch: [
+							`[${firstPath}#${firstRead.fileVersion}]`,
+							"PUT 1.=1:",
+							"+ONE",
+							`[${secondPath}#${secondRead.fileVersion}]`,
+							"PUT 1.=1:",
+							"+TWO",
+						].join("\n"),
+					},
+					{
+						allowExternalPath: true,
+						versionedEditing: { ...context, editMode: "apply_patch" },
+					}
+				)
+			).rejects.toMatchObject({ code: "file-not-writable" });
+			expect(await readFile(firstPath, "utf8")).toBe("one\n");
+			expect(await readFile(secondPath, "utf8")).toBe("two\n");
+		});
+	});
+	test("same-boundary insertions preserve declaration order", async () => {
+		await withTempFile("one\ntwo\n", async (filePath, context) => {
+			const read = await runReadTool(
+				{ path: filePath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			await runEditTool(
+				{
+					mode: "patch",
+					patch: [
+						`[${filePath}#${read.fileVersion}]`,
+						"PUT >1:",
+						"+A",
+						"PUT <2:",
+						"+B",
+					].join("\n"),
+				},
+				{
+					allowExternalPath: true,
+					versionedEditing: { ...context, editMode: "patch" },
+				}
+			);
+			expect(await readFile(filePath, "utf8")).toBe("one\nA\nB\ntwo\n");
+		});
+	});
+	test("allows insertion immediately after a changed range", async () => {
+		await withTempFile("one\ntwo\nthree\n", async (filePath, context) => {
+			const read = await runReadTool(
+				{ path: filePath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			await runEditTool(
+				{
+					mode: "patch",
+					patch: [
+						`[${filePath}#${read.fileVersion}]`,
+						"PUT 1.=2:",
+						"+ONE",
+						"+TWO",
+						"PUT >2:",
+						"+AFTER",
+					].join("\n"),
+				},
+				{
+					allowExternalPath: true,
+					versionedEditing: { ...context, editMode: "patch" },
+				}
+			);
+			expect(await readFile(filePath, "utf8")).toBe("ONE\nTWO\nAFTER\nthree\n");
+		});
+	});
+	test("rejects unauditable full diffs before mutation", async () => {
+		await withTempFile("one\ntwo\n", async (filePath, context) => {
+			const read = await runReadTool(
+				{ path: filePath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			const standard = getToolResourceLimits();
+			await expect(
+				runEditTool(
+					{
+						mode: "patch",
+						patch: [
+							`[${filePath}#${read.fileVersion}]`,
+							"PUT 1.=1:",
+							"+ONE",
+						].join("\n"),
+					},
+					{
+						allowExternalPath: true,
+						resourceLimits: {
+							...standard,
+							edit: {
+								...standard.edit,
+								maxDiffBytes: 1,
+								maxDiffLines: 1,
+								maxFullDiffArtifactBytes: 1,
+							},
+						},
+						versionedEditing: { ...context, editMode: "patch" },
+					}
+				)
+			).rejects.toMatchObject({
+				code: "edit-diff-artifact-out-of-budget",
+			});
+			expect(await readFile(filePath, "utf8")).toBe("one\ntwo\n");
+		});
+	});
+	test("large inline diffs spill to a session-scoped artifact", async () => {
+		await withTempFile("one\ntwo\n", async (filePath, context) => {
+			const read = await runReadTool(
+				{ path: filePath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			const standard = getToolResourceLimits();
+			const result = await runEditTool(
+				{
+					mode: "patch",
+					patch: [
+						`[${filePath}#${read.fileVersion}]`,
+						"PUT 1.=1:",
+						"+ONE",
+					].join("\n"),
+				},
+				{
+					allowExternalPath: true,
+					resourceLimits: {
+						...standard,
+						edit: {
+							...standard.edit,
+							maxDiffBytes: 1,
+							maxDiffLines: 1,
+							maxFullDiffArtifactBytes: 10_000,
+						},
+					},
+					versionedEditing: { ...context, editMode: "patch" },
+				}
+			);
+			const artifact = result.files?.[0]?.fullDiffArtifact;
+			expect(artifact?.id).toBeString();
+			expect(
+				await context.store.getFullDiffArtifact?.(
+					context.sessionId,
+					artifact?.id as string
+				)
+			).toMatchObject({ id: artifact?.id });
+			const artifactRead = await runReadTool(
+				{ path: `artifact://${artifact?.id}:1-` },
+				{ versionedEditing: context }
+			);
+			expect(artifactRead.content).toContain("-one");
+		});
+	});
+	test("replace spills a large diff into the same artifact channel", async () => {
+		await withTempFile("one\n", async (filePath, context) => {
+			const read = await runReadTool(
+				{ path: filePath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			const standard = getToolResourceLimits();
+			const result = await runEditTool(
+				{
+					mode: "replace",
+					newString: "ONE",
+					oldString: "one",
+					path: filePath,
+				},
+				{
+					allowExternalPath: true,
+					resourceLimits: {
+						...standard,
+						edit: {
+							...standard.edit,
+							maxDiffBytes: 1,
+							maxDiffLines: 1,
+							maxFullDiffArtifactBytes: 10_000,
+						},
+					},
+					versionedEditing: { ...context, editMode: "replace" },
+				}
+			);
+			expect(result.fullDiffArtifact?.id).toBeString();
+			expect(result.newFileVersion).not.toBe(read.fileVersion);
+			expect(await readFile(filePath, "utf8")).toBe("ONE\n");
 		});
 	});
 });

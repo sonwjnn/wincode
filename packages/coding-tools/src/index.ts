@@ -1,6 +1,7 @@
 // biome-ignore-all lint/performance/noBarrelFile: Public coding-tools package entry point.
 
 export { isRenderableEditDiff } from "./tools/edit/diff";
+export { validateMultiEditPatch } from "./tools/edit/multi";
 export { getReadResourcePath } from "./tools/read/selector";
 export type {
 	ResourceLimitProfile,
@@ -62,6 +63,9 @@ export type {
 	FileObservation,
 	FileObservationStore,
 	FileSnapshot,
+	FullDiffArtifact,
+	LeaseAssertion,
+	PathLeaseOperation,
 	VersionedEditingContext,
 } from "./versioned/contracts";
 export {
@@ -96,7 +100,9 @@ export {
 export {
 	decodeEscapedPatchPath,
 	getPatchResourcePath,
+	getPatchResourcePaths,
 	rewritePatchResourcePath,
+	rewritePatchResourcePaths,
 } from "./versioned/patch";
 export type {
 	WorkspacePolicy,

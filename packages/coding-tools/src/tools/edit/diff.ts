@@ -274,6 +274,17 @@ export const buildEditDiff = (
 		truncated: true,
 	};
 };
+export const buildFullEditDiff = (
+	before: string,
+	after: string,
+	filePath: string,
+	limits: ToolResourceLimits["edit"] = DEFAULT_EDIT_DIFF_LIMITS
+): EditDiff =>
+	buildEditDiff(before, after, filePath, {
+		...limits,
+		maxDiffBytes: limits.maxFullDiffArtifactBytes,
+		maxDiffLines: Number.MAX_SAFE_INTEGER,
+	});
 
 export const buildFullFileEditDiff = (
 	before: string,

@@ -13,20 +13,46 @@ import type {
 	FileObservationStore,
 	FileSnapshot,
 	FileVersion,
+	FullDiffArtifact,
+	LeaseAssertion,
 	LineRange,
+	PathLeaseOperation,
 } from "@wincode/coding-tools";
 import {
+	CodingToolError,
 	computeFileVersion,
 	FILE_VERSION_ALGORITHM,
 	lineRangeSchema,
 } from "@wincode/coding-tools";
 import { isObjectLike } from "@wincode/runtime-utils";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, lt } from "drizzle-orm";
 import type { SessionDatabase } from "./client";
-import { fileObservation, fileSnapshot } from "./schema";
+import {
+	fileLease,
+	fileObservation,
+	fileSnapshot,
+	fullDiffArtifact,
+} from "./schema";
 
 const SNAPSHOT_BLOB_PREFIX = "v1";
 const FILE_VERSION_PATTERN = /^[0-9a-f]{32}$/u;
+const SNAPSHOT_PRUNE_GRACE_MS = 30_000;
+const SQLITE_TRANSIENT_ERROR_PATTERN =
+	/(?:SQLITE_BUSY|SQLITE_LOCKED|database is locked)/iu;
+
+const isTransientSqliteError = (error: unknown): boolean => {
+	if (!isObjectLike(error)) {
+		return false;
+	}
+	const code = Reflect.get(error, "code");
+	const message = Reflect.get(error, "message");
+	return (
+		code === "SQLITE_BUSY" ||
+		code === "SQLITE_LOCKED" ||
+		(typeof message === "string" &&
+			SQLITE_TRANSIENT_ERROR_PATTERN.test(message))
+	);
+};
 
 type SnapshotRow = typeof fileSnapshot.$inferSelect;
 
@@ -159,6 +185,15 @@ const toObservation = (
 	seenLines: parseSeenLines(row.seenLinesJson),
 	snapshotAvailable: row.snapshotAvailable,
 });
+const toFullDiffArtifact = (
+	row: typeof fullDiffArtifact.$inferSelect
+): FullDiffArtifact => ({
+	byteLength: row.byteLength,
+	content: row.content,
+	createdAt: timestamp(row.createdAt),
+	id: row.id,
+	sessionId: row.sessionId,
+});
 
 const toSnapshot = (
 	row: SnapshotRow,
@@ -203,6 +238,7 @@ const pruneUnreferencedSnapshots = async (
 	for (const snapshot of db
 		.select({
 			blobKey: fileSnapshot.blobKey,
+			createdAt: fileSnapshot.createdAt,
 			fileVersion: fileSnapshot.fileVersion,
 			path: fileSnapshot.path,
 		})
@@ -211,6 +247,9 @@ const pruneUnreferencedSnapshots = async (
 		if (
 			referenced.has(snapshotReferenceKey(snapshot.path, snapshot.fileVersion))
 		) {
+			continue;
+		}
+		if (Date.now() - timestamp(snapshot.createdAt) < SNAPSHOT_PRUNE_GRACE_MS) {
 			continue;
 		}
 		db.delete(fileSnapshot)
@@ -290,6 +329,163 @@ const discardSnapshot = async (
 		.run();
 	await removeSnapshotBlobIfUnreferenced(db, snapshotRoot, snapshot.blobKey);
 };
+const PATH_LEASE_DURATION_MS = 30_000;
+const PATH_LEASE_WAIT_MS = 25;
+const PATH_LEASE_MAX_WAIT_MS = 5000;
+const PATH_LEASE_HEARTBEAT_MS = 10_000;
+
+const delay = async (milliseconds: number): Promise<void> => {
+	await new Promise<void>((resolve) => {
+		setTimeout(resolve, milliseconds);
+	});
+};
+const pathLeaseTimeout = (canonicalPath: string): CodingToolError =>
+	new CodingToolError(
+		"path-lease-timeout",
+		`Could not acquire the edit lease for '${canonicalPath}'.`,
+		{ recovery: { action: "reread", path: canonicalPath } }
+	);
+const pathLeaseLost = (canonicalPath: string): CodingToolError =>
+	new CodingToolError(
+		"path-lease-lost",
+		`The edit lease for '${canonicalPath}' was lost during the operation.`,
+		{ recovery: { action: "reread", path: canonicalPath } }
+	);
+
+const renewPathLease = (
+	db: SessionDatabase,
+	canonicalPath: string,
+	ownerToken: string,
+	expiresAt: number
+): boolean => {
+	try {
+		db.update(fileLease)
+			.set({ expiresAt })
+			.where(
+				and(
+					eq(fileLease.canonicalPath, canonicalPath),
+					eq(fileLease.ownerToken, ownerToken)
+				)
+			)
+			.run();
+		const row = db
+			.select({ ownerToken: fileLease.ownerToken })
+			.from(fileLease)
+			.where(
+				and(
+					eq(fileLease.canonicalPath, canonicalPath),
+					eq(fileLease.ownerToken, ownerToken)
+				)
+			)
+			.get();
+		return row?.ownerToken === ownerToken;
+	} catch {
+		return false;
+	}
+};
+
+const releasePathLease = (
+	db: SessionDatabase,
+	canonicalPath: string,
+	ownerToken: string
+): void => {
+	try {
+		db.delete(fileLease)
+			.where(
+				and(
+					eq(fileLease.canonicalPath, canonicalPath),
+					eq(fileLease.ownerToken, ownerToken)
+				)
+			)
+			.run();
+	} catch {
+		// Expiry is the fallback when lease release is contended.
+	}
+};
+
+const acquirePathLease = async (
+	db: SessionDatabase,
+	canonicalPath: string,
+	ownerToken: string
+): Promise<void> => {
+	const deadline = Date.now() + PATH_LEASE_MAX_WAIT_MS;
+	while (true) {
+		const now = Date.now();
+		let row: { ownerToken: string } | undefined;
+		try {
+			db.delete(fileLease).where(lt(fileLease.expiresAt, now)).run();
+			db.insert(fileLease)
+				.values({
+					canonicalPath,
+					createdAt: now,
+					expiresAt: now + PATH_LEASE_DURATION_MS,
+					ownerToken,
+				})
+				.onConflictDoNothing()
+				.run();
+			row = db
+				.select({ ownerToken: fileLease.ownerToken })
+				.from(fileLease)
+				.where(eq(fileLease.canonicalPath, canonicalPath))
+				.get();
+		} catch (error) {
+			if (!isTransientSqliteError(error)) {
+				throw error;
+			}
+			if (Date.now() >= deadline) {
+				throw pathLeaseTimeout(canonicalPath);
+			}
+			await delay(PATH_LEASE_WAIT_MS);
+			continue;
+		}
+		if (row?.ownerToken === ownerToken) {
+			return;
+		}
+		if (Date.now() >= deadline) {
+			throw pathLeaseTimeout(canonicalPath);
+		}
+		await delay(PATH_LEASE_WAIT_MS);
+	}
+};
+
+const withPersistentPathLeases =
+	(db: SessionDatabase): PathLeaseOperation =>
+	async <T>(
+		paths: readonly string[],
+		operation: (assertLease: LeaseAssertion) => Promise<T>
+	): Promise<T> => {
+		const ownerToken = randomUUID();
+		const orderedPaths = [...new Set(paths)].sort();
+		const acquired: string[] = [];
+		let lostPath: string | undefined;
+		const assertLease = (): void => {
+			if (lostPath !== undefined) {
+				throw pathLeaseLost(lostPath);
+			}
+		};
+		const heartbeat = setInterval(() => {
+			const expiresAt = Date.now() + PATH_LEASE_DURATION_MS;
+			for (const acquiredPath of acquired) {
+				if (!renewPathLease(db, acquiredPath, ownerToken, expiresAt)) {
+					lostPath ??= acquiredPath;
+				}
+			}
+		}, PATH_LEASE_HEARTBEAT_MS);
+		try {
+			for (const canonicalPath of orderedPaths) {
+				await acquirePathLease(db, canonicalPath, ownerToken);
+				acquired.push(canonicalPath);
+			}
+			assertLease();
+			return await operation(assertLease);
+		} finally {
+			clearInterval(heartbeat);
+			for (const canonicalPath of acquired.reverse()) {
+				releasePathLease(db, canonicalPath, ownerToken);
+			}
+		}
+	};
+
 const snapshotStoreLocks = new Map<string, Promise<void>>();
 
 const withSnapshotStoreLock = async <T>(
@@ -349,6 +545,17 @@ export const createDrizzleFileObservationStore = (
 				.get();
 			return row === undefined ? null : toObservation(row);
 		},
+		discardObservation: async (sessionId, pathName, fileVersion) => {
+			db.delete(fileObservation)
+				.where(
+					and(
+						eq(fileObservation.sessionId, sessionId),
+						eq(fileObservation.path, pathName),
+						eq(fileObservation.fileVersion, fileVersion)
+					)
+				)
+				.run();
+		},
 		getSnapshot: async (pathName, fileVersion) =>
 			withSnapshotStoreLock(lockKey, async () => {
 				const row = db
@@ -372,6 +579,40 @@ export const createDrizzleFileObservationStore = (
 			withSnapshotStoreLock(lockKey, () =>
 				discardSnapshot(db, snapshotRoot, pathName, fileVersion)
 			),
+		getFullDiffArtifact: async (sessionId, artifactId) => {
+			const row = db
+				.select()
+				.from(fullDiffArtifact)
+				.where(
+					and(
+						eq(fullDiffArtifact.sessionId, sessionId),
+						eq(fullDiffArtifact.id, artifactId)
+					)
+				)
+				.limit(1)
+				.get();
+			return row === undefined ? null : toFullDiffArtifact(row);
+		},
+		saveFullDiffArtifact: async (artifact) => {
+			db.insert(fullDiffArtifact)
+				.values({
+					byteLength: artifact.byteLength,
+					content: artifact.content,
+					createdAt: new Date(artifact.createdAt),
+					id: artifact.id,
+					sessionId: artifact.sessionId,
+				})
+				.onConflictDoUpdate({
+					target: fullDiffArtifact.id,
+					set: {
+						byteLength: artifact.byteLength,
+						content: artifact.content,
+						createdAt: new Date(artifact.createdAt),
+						sessionId: artifact.sessionId,
+					},
+				})
+				.run();
+		},
 		pruneSnapshots: async () =>
 			withSnapshotStoreLock(lockKey, () =>
 				pruneUnreferencedSnapshots(db, snapshotRoot)
@@ -433,5 +674,6 @@ export const createDrizzleFileObservationStore = (
 		},
 		withSnapshotTransaction: (operation) =>
 			withSnapshotStoreLock(lockKey, operation),
+		withPathLeases: withPersistentPathLeases(db),
 	};
 };

@@ -47,7 +47,9 @@ export type ToolResourceLimits = ReadonlyDeep<{
 	edit: {
 		maxDiffBytes: number;
 		maxDiffLines: number;
+		maxFullDiffArtifactBytes: number;
 		maxPatchBytes: number;
+		maxPreflightBytes: number;
 		maxRecoveryComparisons: number;
 	};
 }>;
@@ -61,7 +63,9 @@ export const TOOL_RESOURCE_LIMITS = {
 		edit: {
 			maxDiffBytes: 256 * 1024,
 			maxDiffLines: 2000,
+			maxFullDiffArtifactBytes: 8 * 1024 * 1024,
 			maxPatchBytes: 256 * 1024,
+			maxPreflightBytes: 32 * 1024 * 1024,
 			maxRecoveryComparisons: 200_000,
 		},
 		grep: {
@@ -99,7 +103,9 @@ export const TOOL_RESOURCE_LIMITS = {
 		edit: {
 			maxDiffBytes: 1024 * 1024,
 			maxDiffLines: 10_000,
+			maxFullDiffArtifactBytes: 8 * 1024 * 1024,
 			maxPatchBytes: 1024 * 1024,
+			maxPreflightBytes: 32 * 1024 * 1024,
 			maxRecoveryComparisons: 2_000_000,
 		},
 		grep: {
@@ -137,7 +143,9 @@ export const TOOL_RESOURCE_LIMITS = {
 		edit: {
 			maxDiffBytes: 4 * 1024 * 1024,
 			maxDiffLines: 50_000,
+			maxFullDiffArtifactBytes: 8 * 1024 * 1024,
 			maxPatchBytes: 4 * 1024 * 1024,
+			maxPreflightBytes: 32 * 1024 * 1024,
 			maxRecoveryComparisons: 8_000_000,
 		},
 		grep: {
