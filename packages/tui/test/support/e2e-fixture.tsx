@@ -190,12 +190,15 @@ export const createE2eStore = (): SessionStore => {
 	});
 };
 
+/**
+ * Seeds one session whose committed records the Session Host projects on open:
+ * a user turn, and a completed assistant turn for each turn count.
+ */
 export const seedCompactionHistory = async (
 	store: SessionStore,
 	turnCount = 10
-): Promise<{ messages: SessionMessage[]; sessionId: SessionId }> => {
+): Promise<{ sessionId: SessionId }> => {
 	const firstUser = createMessage("user", 1);
-	const messages: SessionMessage[] = [firstUser];
 	const { id: sessionId } = await store.createSession({
 		agent: agentId("build"),
 		message: firstUser,
@@ -204,29 +207,28 @@ export const seedCompactionHistory = async (
 	});
 
 	for (let turnIndex = 1; turnIndex <= turnCount; turnIndex += 1) {
-		const assistant = createMessage("assistant", turnIndex);
 		await store.commitSessionRecord({
-			record: createAssistantRecord(assistant, turnIndex),
+			record: createAssistantRecord(
+				createMessage("assistant", turnIndex),
+				turnIndex
+			),
 			sessionId,
 		});
-		messages.push(assistant);
 		if (turnIndex === turnCount) {
 			continue;
 		}
-		const user = createMessage("user", turnIndex + 1);
 		await store.commitSessionRecord({
 			record: buildUserSessionRecord({
 				agentId: agentId("build"),
-				message: user,
+				message: createMessage("user", turnIndex + 1),
 				model: E2E_MODEL,
 				turnId: agentTurnId(`turn-${turnIndex + 1}`),
 			}),
 			sessionId,
 		});
-		messages.push(user);
 	}
 
-	return { messages, sessionId };
+	return { sessionId };
 };
 
 export const renderSession = async ({
