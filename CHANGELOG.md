@@ -93,12 +93,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Engine, its Snapshot and subscription, the Agent Turn Events, the session's
   Session Selection, and one `shutdown`. Capabilities arrive as lazy getters and
   carry nothing React-shaped, so a plain Node process satisfies the same
-  contract. The Wincode TUI is now one such consumer: the route keeps the title
-  and the navigation-state submission, the session surface owns opening and the
-  failure that ends it, and the binding reads an already-open Host and holds no
-  session state. The engine-host factory is renamed `createSessionPorts` (it
-  materializes the Engine's ports and owns no lifetime), the React-free boundary
-  check walks from the Host entry as well as the Engine's, and the display
+  contract. The Wincode TUI is now one such consumer: the route keeps what the
+  navigation owns — which session to mount and the transient submission that
+  starts its first turn — the session surface owns opening, the opening state,
+  the failure that ends it, and the session title, and the binding reads an
+  already-open Host and holds no session state. The engine-host factory is
+  renamed `createSessionPorts` (it materializes the Engine's ports and owns no
+  lifetime), the React-free boundary check walks from the Host entry as well as
+  the Engine's, and the display
   annotation of attachments no longer reaches the Session Context. See
   ADR-0023.
 
