@@ -67,9 +67,13 @@ export {
 	parseShellCommandNodes,
 	type ShellCommandNode,
 } from "./shell-command";
+export {
+	createToolPermissionPolicyState,
+	createToolPermissionRuntime,
+	resolveToolPermissionPolicies,
+	type ToolPermissionPolicyState,
+	type ToolPermissionRuntime,
+} from "./tool-permission-runtime";
 export { AutoApprovalIndicator } from "./ui/auto-approval-indicator";
 export { PermissionsDialogContent } from "./ui/permissions-dialog";
-export {
-	type ToolPermissionRuntime,
-	useToolPermission,
-} from "./use-tool-permission";
+export { useToolPermission } from "./use-tool-permission";

@@ -1,4 +1,5 @@
 export type { JsonObject, JsonValue } from "type-fest";
+export type { McpSessionCapability } from "./capability";
 export type { McpContextValue } from "./context/mcp-provider";
 export { McpProvider, useMcp } from "./context/mcp-provider";
 export type { McpToolManifest, McpToolManifestEntry } from "./manifest";

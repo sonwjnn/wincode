@@ -43,7 +43,8 @@ import { resolveLocalAttachmentRoot } from "@/modules/sessions/storage/path";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
-import { SessionView } from "@/modules/sessions/ui/views/session-view";
+import { SessionSurface } from "@/modules/sessions/ui/views/session-surface";
+import type { SessionInitialSubmission } from "@/modules/sessions/ui/views/session-view";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { SessionId } from "@/shared/identifiers";
@@ -175,26 +176,6 @@ const RegistryReadyProbe = ({ onReady }: { onReady: () => void }) => {
 	return null;
 };
 
-const ReadySessionView = ({
-	initialTranscript,
-	sessionId,
-}: {
-	readonly initialTranscript: SessionMessage[];
-	readonly sessionId: SessionId;
-}) => {
-	const registry = useAgentRegistry();
-	if (!registry) {
-		return null;
-	}
-	return (
-		<SessionView
-			initialTranscript={initialTranscript}
-			sessionId={sessionId}
-			sessionTitle="Compaction E2E session"
-		/>
-	);
-};
-
 export const createE2eStore = (): SessionStore => {
 	const databasePath = process.env.WINCODE_LOCAL_DB_PATH;
 	if (!databasePath) {
@@ -250,13 +231,14 @@ export const seedCompactionHistory = async (
 
 export const renderSession = async ({
 	configDocument,
-	initialTranscript,
+	initialSubmission,
 	pricing,
 	sessionId,
 }: {
 	/** JSONC served as the workspace config; the registry reads it on mount. */
 	readonly configDocument?: string;
-	readonly initialTranscript: SessionMessage[];
+	/** Navigation state that starts the session's first turn. */
+	readonly initialSubmission?: SessionInitialSubmission;
 	readonly pricing: ModelPricingTable;
 	readonly sessionId: SessionId;
 }): Promise<{
@@ -306,8 +288,8 @@ export const renderSession = async ({
 														workspace={workspace}
 													>
 														<RouterContextProvider router={router}>
-															<ReadySessionView
-																initialTranscript={initialTranscript}
+															<SessionSurface
+																initialSubmission={initialSubmission}
 																sessionId={sessionId}
 															/>
 															<RegistryReadyProbe

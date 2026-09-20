@@ -12,6 +12,7 @@ import {
 	useSyncExternalStore,
 } from "react";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import type { McpSessionCapability } from "../capability";
 import {
 	createMcpRegistry,
 	type McpAgentPolicy,
@@ -20,24 +21,11 @@ import {
 	type McpRegistryDeps,
 	type McpServerStatus,
 } from "../registry";
-import type { McpNormalizedResult } from "../result";
 
-export type McpContextValue = {
+export type McpContextValue = McpSessionCapability & {
 	close(): Promise<void>;
 	initialize(): Promise<void>;
 	isLoading: boolean;
-	createSnapshot(
-		agent: AgentId,
-		agentPolicy?: McpAgentPolicy,
-		trackLatest?: boolean
-	): Promise<McpCatalogSnapshot>;
-	execute?(
-		snapshot: McpCatalogSnapshot,
-		toolName: string,
-		input: unknown,
-		signal?: AbortSignal
-	): Promise<McpNormalizedResult>;
-	releaseSnapshot?(snapshot: McpCatalogSnapshot): void;
 	reconnect(serverName: string): Promise<void>;
 	statuses: readonly McpServerStatus[];
 	toggle(serverName: string): Promise<void>;

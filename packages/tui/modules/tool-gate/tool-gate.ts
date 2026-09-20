@@ -21,22 +21,26 @@ import {
 	MCP_PERMISSION_RESOURCE,
 	mcpDeniedByPolicyText,
 } from "@/modules/mcp/registry";
+import { resolveApproval } from "@/modules/permissions/approval-resolution";
+import { canonicalizeResource } from "@/modules/permissions/canonical";
 import {
 	canonicalizeExternalPath,
-	canonicalizeResource,
-	composePermissionDecisions,
 	expandHomeInPath,
 	externalParentDirectoryGlob,
-	isCdFamilyCommand,
-	normalizeShellCommand,
+} from "@/modules/permissions/external-directory";
+import type { PermissionService } from "@/modules/permissions/permission-service";
+import {
+	composePermissionDecisions,
 	type PermissionDecision,
-	type PermissionService,
-	parseShellCommandNodes,
-	resolveApproval,
-	type ShellCommandNode,
 	STATIC_TOOL_PERMISSION_ACTIONS,
 	type ToolPermission,
-} from "@/modules/permissions";
+} from "@/modules/permissions/policy";
+import {
+	isCdFamilyCommand,
+	normalizeShellCommand,
+	parseShellCommandNodes,
+	type ShellCommandNode,
+} from "@/modules/permissions/shell-command";
 import type { SessionApprovalOutcome } from "@/modules/sessions/engine/types";
 import { formatRejectionFeedback } from "@/shared/providers/approval/format";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";

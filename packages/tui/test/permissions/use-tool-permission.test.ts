@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { buildAgentRegistry } from "@/modules/agents";
 import { createToolPermission } from "@/modules/permissions/policy";
-import { resolveToolPermissionPolicies } from "@/modules/permissions/use-tool-permission";
+import { resolveToolPermissionPolicies } from "@/modules/permissions/tool-permission-runtime";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { agentId } from "../support/identifiers";
 

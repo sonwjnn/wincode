@@ -151,7 +151,7 @@ const {
 } = await import("@/test/support/e2e-fixture");
 
 const store = createE2eStore();
-const { messages, sessionId } = await seedCompactionHistory(store);
+const { sessionId } = await seedCompactionHistory(store);
 
 const waitForChatRequestCount = async (count: number): Promise<void> => {
 	await waitForSessionCondition(() => chatRequests().length >= count);
@@ -165,7 +165,6 @@ test("compacts and replays the prompt after a provider context overflow", async 
 	try {
 		const rendered = await renderSession({
 			configDocument: CONFIG_DOCUMENT,
-			initialTranscript: messages,
 			pricing: createE2ePricing(12_000),
 			sessionId,
 		});

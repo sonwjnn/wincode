@@ -14,13 +14,13 @@ import {
 } from "@tanstack/react-router";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { SessionCompaction } from "@/modules/sessions/compaction/types";
 import type {
 	SessionQueuedSubmission,
 	SessionSteeringMessage,
 	SessionWaitingMessage,
 	SessionWaitingMessageId,
 } from "@/modules/sessions/engine/types";
+import type { SessionHost } from "@/modules/sessions/host/types";
 import type {
 	SessionFilePart,
 	SessionMessage,
@@ -111,18 +111,16 @@ let fakeRunCompositions: SessionSubmissionComposition[] = [];
 let fakeSessionRecalls = 0;
 
 mock.module("@/modules/sessions/hooks/use-session-engine", () => ({
-	useSessionEngine: (
-		_sessionId: string,
-		initialTranscript: SessionMessage[],
-		initialContext: SessionMessage[] = initialTranscript,
-		initialCompactions: SessionCompaction[] = []
-	) => {
+	useSessionEngine: (host: SessionHost) => {
 		const [turnActive, setTurnActive] = useState(false);
 		const [queuedSubmissions, setQueuedSubmissions] =
 			useState<SessionQueuedSubmission[]>(fakeQueuedSeed);
 		const [steeringMessages, setSteeringMessages] = useState<
 			SessionSteeringMessage[]
 		>([]);
+		// The opened facts the fake host holds, read once as the real binding
+		// reads a Snapshot.
+		const [opened] = useState(host.getSnapshot);
 		const running = useRef(false);
 		running.current = turnActive;
 		const waiting = useRef<SessionWaitingMessage[]>([]);
@@ -204,19 +202,10 @@ mock.module("@/modules/sessions/hooks/use-session-engine", () => ({
 			recallWaitingMessages,
 			send,
 			snapshot: {
-				approvals: [],
-				catalogDiagnostic: null,
-				compactions: initialCompactions,
-				compactionError: null,
-				context: initialContext,
-				error: null,
-				executions: [],
-				isCompacting: false,
+				...opened,
 				queuedSubmissions,
 				steeringMessages,
-				transcript: initialTranscript,
 				turnActive,
-				viewState: undefined,
 			},
 		};
 	},
@@ -287,6 +276,33 @@ const buildRouter = () => {
 		routeTree: rootRoute.addChildren([sessionRoute]),
 	});
 };
+
+/**
+ * The Session View's seam is an already-open Host, so the fake one carries the
+ * opened facts a Snapshot publishes. The binding is mocked too, so the Host's
+ * Engine is never reached from this test.
+ */
+const createFakeSessionHost = (
+	transcript: readonly SessionMessage[]
+): SessionHost =>
+	fromPartial<SessionHost>({
+		getSelection: () => null,
+		getSnapshot: () => ({
+			approvals: [],
+			catalogDiagnostic: null,
+			compactions: [],
+			compactionError: null,
+			context: transcript,
+			error: null,
+			executions: [],
+			isCompacting: false,
+			queuedSubmissions: [],
+			steeringMessages: [],
+			transcript,
+			turnActive: false,
+			viewState: undefined,
+		}),
+	});
 
 const flushUi = async (
 	setup: Awaited<ReturnType<typeof testRender>>
@@ -365,6 +381,9 @@ describe("SessionView initial submission", () => {
 														>
 															<RouterContextProvider router={router}>
 																<SessionView
+																	host={createFakeSessionHost(
+																		initialTranscript
+																	)}
 																	initialSubmission={{
 																		messageId: sessionMessageId("initial-user"),
 																	}}
@@ -457,6 +476,7 @@ describe("SessionView initial submission", () => {
 														>
 															<RouterContextProvider router={router}>
 																<SessionView
+																	host={createFakeSessionHost([])}
 																	initialTranscript={[]}
 																	sessionId={sessionId("session-1")}
 																	sessionTitle="Send an entered prompt"
@@ -549,6 +569,7 @@ const renderSessionView = async ({
 													>
 														<RouterContextProvider router={router}>
 															<SessionView
+																host={createFakeSessionHost(initialTranscript)}
 																initialTranscript={initialTranscript}
 																sessionId={sessionId("session-1")}
 																sessionTitle="Queue a prompt"

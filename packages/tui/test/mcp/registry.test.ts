@@ -22,7 +22,7 @@ import {
 	createToolPermission,
 	type PermissionRules,
 } from "@/modules/permissions";
-import { resolveToolPermissionPolicies } from "@/modules/permissions/use-tool-permission";
+import { resolveToolPermissionPolicies } from "@/modules/permissions/tool-permission-runtime";
 import { agentId } from "../support/identifiers";
 
 class FakeMcpClient implements McpClient {

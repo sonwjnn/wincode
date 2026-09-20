@@ -27,6 +27,8 @@ export {
 	resolveCompactionSettings,
 } from "./config";
 export { SessionCompactionError } from "./error";
+export type { CompactionSettingsOperations } from "./settings-operations";
+export { createCompactionSettingsOperations } from "./settings-operations";
 export type {
 	SummaryModelResolver,
 	SummaryTextGenerationOptions,
@@ -58,8 +60,4 @@ export {
 	DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS,
 	MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS,
 } from "./types";
-export type { CompactionSettingsOperations } from "./use-compaction-settings";
-export {
-	createCompactionSettingsOperations,
-	useCompactionSettings,
-} from "./use-compaction-settings";
+export { useCompactionSettings } from "./use-compaction-settings";

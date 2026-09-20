@@ -83,6 +83,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The catalog covers newer models.** Added `claude-fable-5-1`, `claude-opus-5`,
   `gpt-6-astra`, and `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash`.
 
+### Changed
+
+- **A Session Host opens a session and owns its lifetime, so a non-renderer can
+  run one.** `createSessionHost` — reached through the declared
+  `@wincode/tui/session-host` subpath — reads a session's durable records,
+  projects its Session Transcript, rebuilds its Session Context around the
+  latest compaction, and constructs the Session Engine with them: it exposes the
+  Engine, its Snapshot and subscription, the Agent Turn Events, the session's
+  Session Selection, and one `shutdown`. Capabilities arrive as lazy getters and
+  carry nothing React-shaped, so a plain Node process satisfies the same
+  contract. The Wincode TUI is now one such consumer: the route keeps the title
+  and the navigation-state submission, the session surface owns opening and the
+  failure that ends it, and the binding reads an already-open Host and holds no
+  session state. The engine-host factory is renamed `createSessionPorts` (it
+  materializes the Engine's ports and owns no lifetime), the React-free boundary
+  check walks from the Host entry as well as the Engine's, and the display
+  annotation of attachments no longer reaches the Session Context. See
+  ADR-0023.
+
 ### Removed
 
 - **The dead `mid-turn` compaction surface.** The `mid-turn` trigger reason, the

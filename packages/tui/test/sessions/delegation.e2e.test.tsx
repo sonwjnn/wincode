@@ -282,7 +282,7 @@ const textOfCall = (callId: ToolCallId): string =>
 
 test("keeps the parent's live view while a Subagent streams and ends", async () => {
 	const store = createE2eStore();
-	const { messages, sessionId } = await seedCompactionHistory(store, 1);
+	const { sessionId } = await seedCompactionHistory(store, 1);
 	const waitForRecords = async (
 		callId: ToolCallId,
 		minimum: number
@@ -298,7 +298,6 @@ test("keeps the parent's live view while a Subagent streams and ends", async () 
 	try {
 		const rendered = await renderSession({
 			configDocument: CONFIG_DOCUMENT,
-			initialTranscript: messages,
 			pricing: createE2ePricing(200_000),
 			sessionId,
 		});

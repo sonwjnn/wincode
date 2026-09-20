@@ -1,10 +1,5 @@
 import type { ChatModelSelection } from "@wincode/ai/models";
-import { useMemo } from "react";
-import {
-	type ModelPricingTable,
-	useModelPricing,
-} from "@/modules/model-pricing";
-import { useConfig } from "@/shared/config/config-provider";
+import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
 import type { ConfigStore } from "@/shared/config/config-store";
 import {
 	type ResolvedCompactionSettings,
@@ -23,6 +18,13 @@ type CompactionSettingsDependencies = {
 	workspace: string;
 };
 
+/**
+ * Composes the compaction settings operations a compaction module and a
+ * Session Engine port both read: the workspace's ConfigStore snapshot, the
+ * Model Catalog pricing table, and the compaction settings resolution. It is
+ * React-free, so a non-renderer consumer composes it from the same call the
+ * TUI makes.
+ */
 export const createCompactionSettingsOperations = ({
 	configStore,
 	pricing,
@@ -39,17 +41,3 @@ export const createCompactionSettingsOperations = ({
 
 	return { getCompactionSettings };
 };
-
-export function useCompactionSettings(): CompactionSettingsOperations {
-	const config = useConfig();
-	const { table: pricing } = useModelPricing();
-	return useMemo(
-		() =>
-			createCompactionSettingsOperations({
-				configStore: config.configStore,
-				pricing,
-				workspace: config.workspace,
-			}),
-		[config.configStore, config.workspace, pricing]
-	);
-}

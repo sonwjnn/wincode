@@ -8,6 +8,10 @@
     ".": {
       "types": "./index.d.ts",
       "import": "./index.ts"
+    },
+    "./session-host": {
+      "types": "./modules/sessions/host/session-host.ts",
+      "import": "./modules/sessions/host/session-host.ts"
     }
   },
   "scripts": {
