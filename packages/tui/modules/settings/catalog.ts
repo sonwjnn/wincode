@@ -1,3 +1,4 @@
+import { type EditMode, editModeSchema } from "@wincode/coding-tools";
 import {
 	getErrorMessage,
 	isBoolean,
@@ -12,19 +13,22 @@ import {
 	resolveCompactionSettingPath,
 	resolveCompactionSettings,
 } from "@/modules/sessions/compaction/config";
+import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import type {
 	ConfigDocument,
 	ConfigScope,
 	ConfigSnapshot,
 } from "@/shared/config/config-store";
+import type { SessionId } from "@/shared/identifiers";
 import type {
 	BooleanSettingDescriptor,
+	SelectSettingDescriptor,
 	SettingOperationContext,
 	SettingResolution,
+	SettingRuntimeContext,
 	SettingSource,
 	SettingsCatalog,
 } from "./types";
-
 export const AUTO_COMPACT_SETTING_ID = "compaction.auto";
 export const AUTO_COMPACT_GLOBAL_PATH = ["compaction", "auto"] as const;
 const LEGACY_AUTO_COMPACT_PATH = ["auto"] as const;
@@ -271,7 +275,77 @@ export const AUTO_COMPACT_SETTING: BooleanSettingDescriptor = {
 		return changeAutoCompact(value, context);
 	},
 };
+export const EDIT_MODE_SETTING_ID = "editing.mode";
+const EDIT_MODE_LABELS: Record<EditMode, string> = {
+	hashline: "Hashline (verified)",
+	replace: "Exact replace",
+	sloppy: "Sloppy patch",
+};
+const EDIT_MODE_OPTIONS = editModeSchema.options.map((value) => ({
+	label: EDIT_MODE_LABELS[value],
+	value,
+})) satisfies readonly { label: string; value: EditMode }[];
+
+const isEditMode = (value: unknown): value is EditMode =>
+	editModeSchema.safeParse(value).success;
+
+const readEditMode = (
+	_snapshot: ConfigSnapshot,
+	runtime: SettingRuntimeContext
+): SettingResolution<EditMode> =>
+	runtime.sessionId === undefined
+		? {
+				available: false,
+				source: { kind: "session" },
+				unavailableReason: "Open a session to choose an Edit Mode.",
+				value: "hashline",
+			}
+		: {
+				available: true,
+				source: { kind: "session" },
+				value: runtime.editMode ?? "hashline",
+			};
+
+const changeEditMode = async (
+	value: EditMode | undefined,
+	context: SettingOperationContext
+): Promise<void> => {
+	const sessionId = context.runtime.sessionId;
+	if (sessionId === undefined) {
+		throw new Error("Edit Mode requires an open session.");
+	}
+	const store = context.runtime.sessionStore ?? getSessionStore();
+	if (store.setEditMode === undefined) {
+		throw new Error("Session storage does not support Edit Mode.");
+	}
+	const next = value ?? "hashline";
+	await store.setEditMode(sessionId as SessionId, next);
+	context.runtime.onEditModeChanged?.(next);
+};
+
+export const EDIT_MODE_SETTING: SelectSettingDescriptor = {
+	description:
+		"Choose the editing protocol used by the next Agent Turn. The current turn keeps its immutable mode.",
+	id: EDIT_MODE_SETTING_ID,
+	kind: "select",
+	label: "Edit Mode",
+	options: EDIT_MODE_OPTIONS,
+	persistence: "session",
+	requiredContext: "session",
+	read: readEditMode,
+	reset: (context) => changeEditMode(undefined, context),
+	scope: "session",
+	section: "Editing",
+	validate: isEditMode,
+	write: (value, context) => {
+		if (!isEditMode(value)) {
+			throw new Error("Edit Mode must be hashline, replace, or sloppy.");
+		}
+		return changeEditMode(value, context);
+	},
+};
 
 export const SETTINGS_CATALOG = [
 	AUTO_COMPACT_SETTING,
+	EDIT_MODE_SETTING,
 ] as const satisfies SettingsCatalog;

@@ -4,6 +4,7 @@ import type {
 	AttachmentId,
 	SessionMessageId,
 	ToolCallId,
+	ToolFailureDetails,
 } from "@wincode/agent-core";
 import {
 	agentIdSchema,
@@ -82,6 +83,7 @@ type SessionToolState =
 type ToolPartFields = {
 	readonly approval?: unknown;
 	readonly errorText?: string;
+	readonly failure?: ToolFailureDetails;
 	readonly input?: unknown;
 	readonly output?: unknown;
 	readonly providerExecuted?: boolean;
@@ -338,6 +340,18 @@ const stripEditDiffFromModelPart = (part: SessionPart): SessionPart => {
 		output: {
 			path: output.path,
 			replacements: output.replacements,
+			...omitUndefined({
+				newFileVersion: isString(output.newFileVersion)
+					? output.newFileVersion
+					: undefined,
+				observationId: isString(output.observationId)
+					? output.observationId
+					: undefined,
+				oldFileVersion: isString(output.oldFileVersion)
+					? output.oldFileVersion
+					: undefined,
+				seenLines: isArray(output.seenLines) ? output.seenLines : undefined,
+			}),
 		},
 	};
 };

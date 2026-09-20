@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import {
@@ -534,6 +534,53 @@ describe("shell override and grants", () => {
 		expect(service.isGranted("resource_limits", "extended")).toBe(false);
 	});
 
+	test("a remembered sloppy approval does not grant ordinary editing", async () => {
+		const service = createPermissionService();
+		const requests: ToolApprovalRequest[] = [];
+		const gate = createGate(
+			createToolPermission({ edit: "ask", "edit:sloppy": "ask" }),
+			settlingApprovalPort({ decision: "allow", remember: true }, requests),
+			undefined,
+			service
+		);
+		const sloppyInput = {
+			mode: "sloppy",
+			patch:
+				"*** Begin Patch\n*** Update File: package.json\n@@\n-old\n+new\n*** End Patch",
+		};
+
+		await expect(
+			gate.gate({
+				family: "coding",
+				toolCall: {
+					input: sloppyInput,
+					toolCallId: makeToolCallId("call-sloppy-grant"),
+					toolName: "edit",
+				},
+			})
+		).resolves.toEqual({ kind: "allow" });
+		expect(service.listGrants()).toEqual([
+			{ action: "edit:sloppy", resource: "package.json" },
+		]);
+
+		await expect(
+			gate.gate({
+				family: "coding",
+				toolCall: {
+					input: {
+						mode: "replace",
+						newString: "new",
+						oldString: "old",
+						path: "package.json",
+					},
+					toolCallId: makeToolCallId("call-ordinary-edit"),
+					toolName: "edit",
+				},
+			})
+		).resolves.toEqual({ kind: "allow" });
+		expect(requests).toHaveLength(2);
+	});
+
 	test("an explicit deny is never bypassed by grants or auto approval", async () => {
 		const service = createPermissionService({ autoApproval: true });
 		service.grant("shell", "rm -rf src/");
@@ -1036,6 +1083,51 @@ test("an external-directory grant does not satisfy an operation ask", async () =
 	// The call still reaches the approval panel because only the boundary was
 	// granted; the operation itself remained ask-gated.
 	expect(requests).toHaveLength(1);
+});
+test("rewrites an approved external edit patch to its canonical resource", async () => {
+	const parent = await mkdtemp(
+		join(process.env.TMPDIR ?? "/tmp", "wincode-gate-")
+	);
+	try {
+		const workspace = join(parent, "workspace");
+		await mkdir(workspace);
+		const resource = await canonicalizeExternalPath(
+			"../outside/file.txt",
+			workspace
+		);
+		const gate = createToolGate({
+			approvals: settlingApprovalPort({
+				decision: "allow",
+				remember: false,
+			}),
+			resolvePermission: async () =>
+				createToolPermission({
+					edit: "ask",
+					external_directory: "allow",
+				}),
+			sandbox: createWorkspaceSandbox(workspace),
+			service: createPermissionService(),
+		});
+		const version = "0123456789abcdef0123456789abcdef";
+		const patch = `[../outside/file.txt#${version}]\nPUT 1.=1:\n+updated`;
+		await expect(
+			gate.gate({
+				family: "coding",
+				toolCall: {
+					input: { patch },
+					toolCallId: makeToolCallId("call-external-edit-patch"),
+					toolName: "edit",
+				},
+			})
+		).resolves.toEqual({
+			input: {
+				patch: `[${resource}#${version}]\nPUT 1.=1:\n+updated`,
+			},
+			kind: "allow",
+		});
+	} finally {
+		await rm(parent, { force: true, recursive: true });
+	}
 });
 
 describe("approval settlement through the Session Engine", () => {

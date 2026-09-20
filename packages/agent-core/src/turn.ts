@@ -12,7 +12,13 @@ import {
 	toAgentTurnId,
 	toSessionMessageId,
 } from "./identifiers";
-import { isToolCallId, type ResolvedTool, type ToolCallId } from "./tools";
+import {
+	isToolCallId,
+	isToolFailureDetails,
+	type ResolvedTool,
+	type ToolCallId,
+	type ToolFailureDetails,
+} from "./tools";
 
 export type { AgentTurnId } from "./identifiers";
 
@@ -89,6 +95,7 @@ export type AgentTurnToolResultPart = Readonly<{
 /** One `tool` role message carrying a safe Tool Call failure text. */
 export type AgentTurnToolFailurePart = Readonly<{
 	errorText: string;
+	failure?: ToolFailureDetails;
 	toolCallId: ToolCallId;
 	toolName: string;
 	type: "tool-failure";
@@ -250,6 +257,7 @@ export const isAgentTurnToolFailurePart = (
 		Object.keys(value).every(
 			(key) =>
 				key === "errorText" ||
+				key === "failure" ||
 				key === "toolCallId" ||
 				key === "toolName" ||
 				key === "type"
@@ -257,7 +265,8 @@ export const isAgentTurnToolFailurePart = (
 		value.type === "tool-failure" &&
 		isToolCallId(value.toolCallId) &&
 		isNonEmptyString(value.toolName) &&
-		isNonEmptyString(value.errorText)
+		isNonEmptyString(value.errorText) &&
+		(value.failure === undefined || isToolFailureDetails(value.failure))
 	);
 };
 

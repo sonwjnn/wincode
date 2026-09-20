@@ -1,4 +1,5 @@
 import type { ChatModelSelection } from "@wincode/ai/models";
+import type { EditMode } from "@wincode/coding-tools";
 import type { ReactNode } from "react";
 import type {
 	ConfigOrigin,
@@ -6,14 +7,18 @@ import type {
 	ConfigSnapshot,
 	ConfigStore,
 } from "@/shared/config/config-store";
+import type { SessionStore } from "../sessions/storage/session-store";
 
 export type SettingScope = ConfigScope | "runtime" | "session";
 export type SettingKind = "boolean" | "select" | "custom";
 export type SettingContextRequirement = "model" | "none" | "session";
 export type SettingPersistence = "config" | "runtime" | "session";
 export type SettingRuntimeContext = {
+	readonly editMode?: EditMode;
 	readonly model?: ChatModelSelection;
+	readonly onEditModeChanged?: (mode: EditMode) => void;
 	readonly sessionId?: string;
+	readonly sessionStore?: SessionStore;
 };
 
 export type SettingSource =

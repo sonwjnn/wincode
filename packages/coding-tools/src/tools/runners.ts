@@ -1,5 +1,6 @@
 // biome-ignore-all lint/performance/noBarrelFile: Node-only runner entry point.
 
+import type { VersionedEditingContext } from "../versioned/contracts";
 import { runEditTool } from "./edit/runner";
 import { runGlobTool } from "./glob/runner";
 import { runGrepTool } from "./grep/runner";
@@ -21,7 +22,9 @@ export { runShellTool } from "./shell/runner";
 export { runWriteTool } from "./write/runner";
 export type CodingToolRunnerOptions = ResourceLimitOptions & {
 	allowExternalPath?: boolean;
+	allowSloppy?: boolean;
 	signal?: AbortSignal;
+	versionedEditing?: VersionedEditingContext;
 };
 
 export type CodingToolRunnerMap = {

@@ -4,10 +4,12 @@ import {
 	type CodingToolName,
 	codingToolDefinitions,
 	codingToolNames,
+	getPatchResourcePath,
 	getReadResourcePath,
 	getToolResourceLimits,
 	isElevatedResourceProfile,
 	RESOURCE_LIMIT_PERMISSION_ACTION,
+	rewritePatchResourcePath,
 	type ToolResourceLimits,
 } from "@wincode/coding-tools";
 import type { WorkspacePolicy } from "@wincode/coding-tools/workspace";
@@ -143,6 +145,10 @@ const getStringField = (input: unknown, field: string): string | undefined => {
 	return isString(candidate) ? candidate : undefined;
 };
 
+const getPatchResource = (input: unknown): string | undefined => {
+	const patch = getStringField(input, "patch");
+	return patch === undefined ? undefined : getPatchResourcePath(patch);
+};
 type GateResource =
 	| { kind: "path"; input: string; pattern?: string }
 	| { kind: "literal"; value: string };
@@ -169,7 +175,16 @@ const resolveGateResource = (
 			: { input: path, kind: "path", pattern };
 	}
 	const path = getStringField(input, "path");
-	return isUndefined(path) ? undefined : { input: path, kind: "path" };
+	if (!isUndefined(path)) {
+		return { input: path, kind: "path" };
+	}
+	if (tool !== "edit") {
+		return;
+	}
+	const patchPath = getPatchResource(input);
+	return isUndefined(patchPath)
+		? undefined
+		: { input: patchPath, kind: "path" };
 };
 const resolveReadGatePath = async (
 	input: string,
@@ -432,6 +447,25 @@ export const createToolGate = ({
 		const resourceLimits = await resolveResourceLimits(agentId);
 		const limitChecks =
 			tool === "write" ? [] : resourceLimitChecks(resourceLimits);
+		const sloppyEdit =
+			tool === "edit" && getStringField(toolCall.input, "mode") === "sloppy";
+		const editModeChecks = (resource: string) =>
+			sloppyEdit
+				? [
+						{
+							action: "edit:sloppy" as const,
+							decision: permission.decide("edit:sloppy", resource),
+							resource,
+						},
+					]
+				: [];
+		const grantCodingAccess = (resource: string): void => {
+			if (sloppyEdit) {
+				service.grant("edit:sloppy", resource);
+			} else {
+				service.grant(action, resource);
+			}
+		};
 		const requestFor = (
 			resource: string,
 			external: boolean,
@@ -471,14 +505,14 @@ export const createToolGate = ({
 							decision: permission.decide(action, gateResource.value),
 							resource: gateResource.value,
 						},
+						...editModeChecks(gateResource.value),
 					],
 					doomAsk,
 					request: requestFor(gateResource.value, false),
 					safety: permission.safety,
 				},
 				approvalDeps,
-				() =>
-					grantApprovedAccess(() => service.grant(action, gateResource.value))
+				() => grantApprovedAccess(() => grantCodingAccess(gateResource.value))
 			);
 			return withErrorText(
 				settled,
@@ -507,13 +541,14 @@ export const createToolGate = ({
 					checks: [
 						...limitChecks,
 						{ action, decision: permission.decide(action, resource), resource },
+						...editModeChecks(resource),
 					],
 					doomAsk,
 					request: requestFor(resource, false),
 					safety: permission.safety,
 				},
 				approvalDeps,
-				() => grantApprovedAccess(() => service.grant(action, resource))
+				() => grantApprovedAccess(() => grantCodingAccess(resource))
 			);
 			return withErrorText(
 				settled,
@@ -564,6 +599,7 @@ export const createToolGate = ({
 							),
 							resource: gateResource.pattern ?? resource,
 						},
+						...editModeChecks(gateResource.pattern ?? resource),
 					],
 					doomAsk,
 					request: requestFor(
@@ -580,7 +616,7 @@ export const createToolGate = ({
 							"external_directory",
 							externalParentDirectoryGlob(resource)
 						);
-						service.grant(action, gateResource.pattern ?? resource);
+						grantCodingAccess(gateResource.pattern ?? resource);
 					})
 			);
 			const outcome = withErrorText(
@@ -592,11 +628,22 @@ export const createToolGate = ({
 			if (outcome.kind !== "allow" || !isUndefined(gateResource.pattern)) {
 				return outcome;
 			}
+			const input = isPlainObject(toolCall.input)
+				? toolCall.input
+				: { path: resource };
+			const patch = Reflect.get(input, "patch");
+			if (tool === "edit" && isString(patch)) {
+				return {
+					...outcome,
+					input: {
+						...input,
+						patch: rewritePatchResourcePath(patch, resource),
+					},
+				};
+			}
 			return {
 				...outcome,
-				input: isPlainObject(toolCall.input)
-					? { ...toolCall.input, path: resource }
-					: { path: resource },
+				input: { ...input, path: resource },
 			};
 		}
 	};

@@ -739,6 +739,71 @@ describe("createAiSdkAgentRuntime tool-armed turns", () => {
 		}
 	});
 
+	test("preserves structured tool failures when replaying tool messages", async () => {
+		const subject = await loadSubject([
+			{ type: "start-step", request: {}, warnings: [] },
+			{
+				type: "finish-step",
+				response: {},
+				usage: { inputTokens: 1, outputTokens: 1 },
+				finishReason: "stop",
+				rawFinishReason: "stop",
+				providerMetadata: undefined,
+			},
+			{
+				type: "finish",
+				finishReason: "stop",
+				rawFinishReason: "stop",
+				totalUsage: { inputTokens: 1, outputTokens: 1 },
+			},
+		]);
+		const runtime = subject.createAiSdkAgentRuntime();
+		const failure = {
+			code: "policy-denied",
+			details: { action: "read", path: "src/x.ts" },
+		};
+		const turn = toolArmedTurn(
+			[],
+			[
+				{
+					id: makeMessageId("msg-tool"),
+					parts: [
+						{
+							errorText: "Read denied by policy: src/x.ts",
+							failure,
+							toolCallId: makeToolCallId("call-1"),
+							toolName: "read",
+							type: "tool-failure",
+						},
+					],
+					role: "tool",
+				},
+			]
+		);
+
+		await consume(runtime.run(turn));
+
+		expect(subject.streamCalls[0]?.prompt).toEqual([
+			{
+				content: [
+					{
+						output: {
+							type: "error-json",
+							value: {
+								errorText: "Read denied by policy: src/x.ts",
+								failure,
+							},
+						},
+						toolCallId: "call-1",
+						toolName: "read",
+						type: "tool-result",
+					},
+				],
+				role: "tool",
+			},
+		]);
+	});
+
 	test("maps tool results and tool errors to correlated finished events", async () => {
 		const subject = await loadSubject([
 			{ type: "start-step", request: {}, warnings: [] },

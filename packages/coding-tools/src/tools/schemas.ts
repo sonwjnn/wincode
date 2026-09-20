@@ -4,6 +4,7 @@ import { z } from "zod";
 export type { EditDiff, EditInput, EditOutput } from "./edit/schema";
 export {
 	editInputSchema,
+	editInputSchemaForMode,
 	editOutputSchema,
 	editToolSchema,
 } from "./edit/schema";

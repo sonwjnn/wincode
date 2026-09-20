@@ -1,7 +1,6 @@
 // biome-ignore-all lint/performance/noBarrelFile: Public coding-tools package entry point.
 
 export { isRenderableEditDiff } from "./tools/edit/diff";
-export { editModelInputJsonSchema } from "./tools/edit/schema";
 export { getReadResourcePath } from "./tools/read/selector";
 export type {
 	ResourceLimitProfile,
@@ -48,12 +47,57 @@ export {
 	codingToolSchemas,
 	composeShellToolDescription,
 	editInputSchema,
+	editInputSchemaForMode,
 	editOutputSchema,
 	shellPlatformFromNode,
 	writeInputSchema,
 	writeOutputSchema,
 } from "./tools/schemas";
 export { SHELL_OUTPUT_TAIL_BYTES } from "./tools/shell/schema";
+export type {
+	CodingToolErrorDetails,
+	CodingToolErrorOptions,
+	CodingToolRecovery,
+	EditMode,
+	FileObservation,
+	FileObservationStore,
+	FileSnapshot,
+	VersionedEditingContext,
+} from "./versioned/contracts";
+export {
+	CodingToolError,
+	createFileObservation,
+	createMemoryFileObservationStore,
+	defaultVersionedEditingContext,
+	editModeSchema,
+	isCodingToolError,
+	toCodingToolFailure,
+} from "./versioned/contracts";
+export type {
+	FileVersion,
+	LineEnding,
+	LineRange,
+	LosslessText,
+	LosslessTextLine,
+} from "./versioned/model";
+export {
+	byteLength,
+	computeFileVersion,
+	decodeLosslessText,
+	encodeLosslessText,
+	FILE_VERSION_ALGORITHM,
+	fileVersionSchema,
+	lineRangeContains,
+	lineRangeForLines,
+	lineRangeSchema,
+	lineRangesContain,
+	normalizeLineRanges,
+} from "./versioned/model";
+export {
+	decodeEscapedPatchPath,
+	getPatchResourcePath,
+	rewritePatchResourcePath,
+} from "./versioned/patch";
 export type {
 	WorkspacePolicy,
 	WorkspaceTraversalEntry,

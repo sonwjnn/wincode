@@ -1,0 +1,216 @@
+import { randomUUID } from "node:crypto";
+import { isObjectLike } from "@wincode/runtime-utils";
+import { z } from "zod";
+import type { FILE_VERSION_ALGORITHM, FileVersion, LineRange } from "./model";
+
+export const editModeSchema = z.enum(["hashline", "replace", "sloppy"]);
+export type EditMode = z.infer<typeof editModeSchema>;
+
+export type CodingToolRecovery = Readonly<{
+	action: "reread" | "provide-file-version" | "grant-sloppy" | "correct-input";
+	currentFileVersion?: FileVersion;
+	lineRange?: LineRange;
+	path?: string;
+	message?: string;
+}>;
+
+export type CodingToolErrorDetails = Readonly<Record<string, unknown>>;
+
+export type CodingToolErrorOptions = Readonly<{
+	details?: CodingToolErrorDetails;
+	recovery?: CodingToolRecovery;
+}>;
+
+/** A stable machine-readable failure from a coding-tool operation. */
+export class CodingToolError extends Error {
+	readonly code: string;
+	readonly details?: CodingToolErrorDetails;
+	readonly recovery?: CodingToolRecovery;
+
+	constructor(
+		code: string,
+		message: string,
+		{ details, recovery }: CodingToolErrorOptions = {}
+	) {
+		super(message);
+		this.name = "CodingToolError";
+		this.code = code;
+		this.details = details;
+		this.recovery = recovery;
+	}
+}
+
+export const isCodingToolError = (value: unknown): value is CodingToolError =>
+	value instanceof CodingToolError;
+
+export const toCodingToolFailure = (
+	error: unknown
+):
+	| {
+			code: string;
+			details?: CodingToolErrorDetails;
+			recovery?: CodingToolRecovery;
+	  }
+	| undefined => {
+	if (isCodingToolError(error)) {
+		return {
+			code: error.code,
+			...Object.fromEntries(
+				[
+					["details", error.details],
+					["recovery", error.recovery],
+				].filter(([, value]) => value !== undefined)
+			),
+		};
+	}
+	if (!isObjectLike(error)) {
+		return;
+	}
+	const candidate = error as {
+		code?: unknown;
+		details?: unknown;
+		recovery?: unknown;
+	};
+	if (typeof candidate.code !== "string" || candidate.code.length === 0) {
+		return;
+	}
+	return {
+		code: candidate.code,
+		...(isObjectLike(candidate.details)
+			? { details: candidate.details as CodingToolErrorDetails }
+			: {}),
+		...(isObjectLike(candidate.recovery)
+			? { recovery: candidate.recovery as CodingToolRecovery }
+			: {}),
+	};
+};
+
+export type FileSnapshot = Readonly<{
+	algorithm: typeof FILE_VERSION_ALGORITHM;
+	bytes: Uint8Array;
+	createdAt: number;
+	fileVersion: FileVersion;
+	lineCount: number;
+	path: string;
+}>;
+
+export type FileObservation = Readonly<{
+	createdAt: number;
+	fileVersion: FileVersion;
+	id: string;
+	path: string;
+	sessionId: string;
+	seenLines: readonly LineRange[];
+	snapshotAvailable: boolean;
+}>;
+
+export type FileObservationStore = Readonly<{
+	getLatestObservation: (
+		sessionId: string,
+		path: string
+	) => Promise<FileObservation | null>;
+	getObservation: (
+		sessionId: string,
+		path: string,
+		fileVersion: FileVersion
+	) => Promise<FileObservation | null>;
+	getSnapshot: (
+		path: string,
+		fileVersion: FileVersion
+	) => Promise<FileSnapshot | null>;
+	discardSnapshot?: (path: string, fileVersion: FileVersion) => Promise<void>;
+	pruneSnapshots?: () => Promise<void>;
+	saveObservation: (observation: FileObservation) => Promise<void>;
+	saveSnapshot: (snapshot: FileSnapshot) => Promise<void>;
+	withSnapshotTransaction?: <T>(operation: () => Promise<T>) => Promise<T>;
+}>;
+
+export type VersionedEditingContext = Readonly<{
+	editMode: EditMode;
+	sessionId: string;
+	store: FileObservationStore;
+}>;
+
+const snapshotKey = (path: string, version: FileVersion): string =>
+	`${path}\0${version}`;
+
+const observationKey = (
+	sessionId: string,
+	path: string,
+	version: FileVersion
+): string => `${sessionId}\0${path}\0${version}`;
+
+/** A deterministic adapter for direct tool callers and offline tests. */
+export const createMemoryFileObservationStore = (): FileObservationStore => {
+	const snapshots = new Map<string, FileSnapshot>();
+	const observations = new Map<string, FileObservation>();
+	return {
+		getLatestObservation: async (sessionId, path) => {
+			let latest: FileObservation | null = null;
+			for (const observation of observations.values()) {
+				if (observation.sessionId !== sessionId || observation.path !== path) {
+					continue;
+				}
+				if (latest === null || observation.createdAt > latest.createdAt) {
+					latest = observation;
+				}
+			}
+			return latest;
+		},
+		getObservation: async (sessionId, path, fileVersion) =>
+			observations.get(observationKey(sessionId, path, fileVersion)) ?? null,
+		getSnapshot: async (path, fileVersion) =>
+			snapshots.get(snapshotKey(path, fileVersion)) ?? null,
+		discardSnapshot: async (path, fileVersion) => {
+			const referenced = [...observations.values()].some(
+				(observation) =>
+					observation.path === path &&
+					observation.fileVersion === fileVersion &&
+					observation.snapshotAvailable
+			);
+			if (!referenced) {
+				snapshots.delete(snapshotKey(path, fileVersion));
+			}
+		},
+		saveObservation: async (observation) => {
+			observations.set(
+				observationKey(
+					observation.sessionId,
+					observation.path,
+					observation.fileVersion
+				),
+				{
+					...observation,
+					seenLines: observation.seenLines.map((range) => ({ ...range })),
+				}
+			);
+		},
+		saveSnapshot: async (snapshot) => {
+			snapshots.set(snapshotKey(snapshot.path, snapshot.fileVersion), {
+				...snapshot,
+				bytes: new Uint8Array(snapshot.bytes),
+			});
+		},
+	};
+};
+
+const defaultStore = createMemoryFileObservationStore();
+
+export const defaultVersionedEditingContext: VersionedEditingContext = {
+	editMode: "hashline",
+	sessionId: "default",
+	store: defaultStore,
+};
+
+export const createFileObservation = (
+	input: Omit<FileObservation, "createdAt" | "id"> &
+		Partial<Pick<FileObservation, "createdAt" | "id">>
+): FileObservation => ({
+	createdAt: input.createdAt ?? Date.now(),
+	fileVersion: input.fileVersion,
+	id: input.id ?? randomUUID(),
+	path: input.path,
+	sessionId: input.sessionId,
+	seenLines: input.seenLines,
+	snapshotAvailable: input.snapshotAvailable,
+});

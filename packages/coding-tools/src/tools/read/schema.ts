@@ -1,28 +1,40 @@
 import { z } from "zod";
+import { fileVersionSchema, lineRangeSchema } from "../../versioned/model";
 
-export const readInputSchema = z.object({
-	hashline: z
-		.boolean()
-		.optional()
-		.describe("Render file lines with content hashes for hashline edits."),
-	path: z
-		.string()
-		.min(1)
-		.describe(
-			"File or directory path, optionally suffixed by a 1-indexed line selector: :N, :N-M, :N+K, :N-, or comma-separated ranges. File selectors address numbered lines; directory selectors address rendered entry positions and omission notices do not consume positions. L prefixes and .. ranges are accepted. Preserve a leading ~."
-		),
-});
+export const readInputSchema = z
+	.object({
+		expectedVersion: fileVersionSchema.optional(),
+		fullLines: z
+			.boolean()
+			.optional()
+			.describe(
+				"Render complete lines, including lines longer than the default display limit."
+			),
+		path: z
+			.string()
+			.min(1)
+			.describe(
+				"File or directory path, optionally suffixed by a 1-indexed line selector: :N, :N-M, :N+K, :N-, or comma-separated ranges."
+			),
+	})
+	.strict();
 
-export const readOutputSchema = z.object({
-	content: z.string(),
-	path: z.string(),
-	truncated: z.boolean().optional(),
-});
-
+export const readOutputSchema = z
+	.object({
+		content: z.string(),
+		continuationRanges: z.array(lineRangeSchema).optional(),
+		displayedRanges: z.array(lineRangeSchema).optional(),
+		fileVersion: fileVersionSchema.optional(),
+		observationId: z.string().min(1).optional(),
+		path: z.string(),
+		seenLines: z.array(lineRangeSchema).optional(),
+		snapshotAvailable: z.boolean().optional(),
+		truncated: z.boolean().optional(),
+	})
+	.strict();
 export const readToolSchema = {
 	description:
-		"Read a UTF-8 text file with numbered lines, or an existing directory as a compact two-level tree (directories first, twelve children max, omissions reported). Selectors :N, :N-M, :N+K, :N-, or comma-separated ranges address file lines or directory entries; omission notices do not consume positions. Existing literal paths take precedence. Preserve ~ paths; never guess an absolute home. If you are unsure of a file path, use glob first.",
-	name: "read",
+		"Read a UTF-8 text file with numbered lines, or an existing directory as a compact two-level tree. Every successful text read returns a content-derived File Version and records only complete displayed lines as Seen Lines. Continuation reads for an already observed text file must include the current File Version; when output is capped, continue with the typed continuationRanges using that same File Version. Use fullLines when long lines must be observed for editing.",
 	schema: readInputSchema,
 } as const;
 

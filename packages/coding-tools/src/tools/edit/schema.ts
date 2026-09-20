@@ -1,4 +1,6 @@
 import { z } from "zod";
+import type { EditMode } from "../../versioned/contracts";
+import { fileVersionSchema, lineRangeSchema } from "../../versioned/model";
 
 const editDiffSchema = z.object({
 	additions: z.number().int().nonnegative(),
@@ -8,79 +10,63 @@ const editDiffSchema = z.object({
 	truncated: z.boolean(),
 });
 
+const hashlineEditSchema = z
+	.object({
+		mode: z.literal("hashline").optional(),
+		patch: z.string().min(1),
+	})
+	.strict();
+
+const replaceEditSchema = z
+	.object({
+		mode: z.literal("replace"),
+		newString: z.string(),
+		oldString: z.string().min(1),
+		path: z.string().min(1),
+		replaceAll: z.boolean().optional(),
+	})
+	.strict();
+
+const sloppyEditSchema = z
+	.object({
+		mode: z.literal("sloppy"),
+		patch: z.string().min(1),
+	})
+	.strict();
+
 export const editInputSchema = z.union([
-	z
-		.object({
-			content: z.string(),
-			path: z.string().min(1),
-		})
-		.strict(),
-	z
-		.object({
-			find: z.string().min(1),
-			path: z.string().min(1),
-			replace: z.string(),
-			replaceAll: z.boolean().optional(),
-		})
-		.strict()
-		.refine((input) => input.find !== input.replace, {
-			message: "find and replace must differ",
-			path: ["replace"],
-		}),
-	z
-		.object({
-			content: z.string(),
-			insertAfter: z.boolean().optional(),
-			lineHashes: z.string().min(1),
-			path: z.string().min(1),
-		})
-		.strict(),
+	hashlineEditSchema,
+	replaceEditSchema,
+	sloppyEditSchema,
 ]);
+export const editInputSchemaForMode = (mode: EditMode) => {
+	switch (mode) {
+		case "hashline":
+			return hashlineEditSchema;
+		case "replace":
+			return replaceEditSchema;
+		case "sloppy":
+			return sloppyEditSchema;
+		default:
+			throw new Error(`Unsupported Edit Mode: ${mode}`);
+	}
+};
 
-export const editModelInputJsonSchema = {
-	oneOf: [
-		{
-			additionalProperties: false,
-			properties: {
-				content: { type: "string" },
-				path: { minLength: 1, type: "string" },
-			},
-			required: ["content", "path"],
-			type: "object",
-		},
-		{
-			additionalProperties: false,
-			properties: {
-				find: { minLength: 1, type: "string" },
-				path: { minLength: 1, type: "string" },
-				replace: { type: "string" },
-				replaceAll: { type: "boolean" },
-			},
-			required: ["find", "path", "replace"],
-			type: "object",
-		},
-		{
-			additionalProperties: false,
-			properties: {
-				content: { type: "string" },
-				insertAfter: { type: "boolean" },
-				lineHashes: { minLength: 1, type: "string" },
-				path: { minLength: 1, type: "string" },
-			},
-			required: ["content", "lineHashes", "path"],
-			type: "object",
-		},
-	],
-} as const;
+export const editOutputSchema = z
+	.object({
+		editDiff: editDiffSchema.optional(),
+		newFileVersion: fileVersionSchema,
+		observationId: z.string().min(1).optional(),
+		oldFileVersion: fileVersionSchema.optional(),
+		path: z.string(),
+		replacements: z.number().int().min(1),
+		seenLines: z.array(lineRangeSchema).optional(),
+	})
+	.strict();
 
-export const editOutputSchema = z.object({
-	editDiff: editDiffSchema.optional(),
-	path: z.string(),
-	replacements: z.number().int().min(0),
-});
 export const editToolSchema = {
 	description:
-		"Edit an existing file, optionally verifying hashline anchors before writing.",
+		"Edit one existing UTF-8 text file. Hashline is the verified default and accepts one versioned line-range patch. Replace requires one exact live-text match. Sloppy is weaker, one-file context matching and is separately permissioned.",
 	name: "edit",
 	schema: editInputSchema,
 } as const;

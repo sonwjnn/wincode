@@ -104,6 +104,7 @@ const settleRuntimeToolPart = (
 		: {
 				...part,
 				errorText: event.outcome.errorText,
+				...omitUndefined({ failure: event.outcome.failure }),
 				state: "output-error",
 			};
 
@@ -121,6 +122,7 @@ const runtimeToolResultPart = (
 			}
 		: {
 				errorText: event.outcome.errorText,
+				...omitUndefined({ failure: event.outcome.failure }),
 				state: "output-error",
 				toolCallId: event.toolCallId,
 				toolName: event.toolName,
