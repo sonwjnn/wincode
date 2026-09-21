@@ -27,9 +27,13 @@ import type {
 	AppendSessionCompactionInput,
 	SummaryGenerator,
 } from "@/modules/sessions/compaction/types";
-import type { SessionCapabilities } from "@/modules/sessions/host/types";
+import type {
+	SessionCapabilities,
+	SessionHostFailure,
+} from "@/modules/sessions/host/types";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionSendInput } from "@/modules/sessions/session-operation";
+import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { CompactionId, SessionId } from "@/shared/identifiers";
@@ -249,7 +253,9 @@ const compactionModule = (summaryGenerator: SummaryGenerator) =>
  * built-in Agent registry, the Tool Permission runtime, and the Session
  * Compaction module the engine suite fakes the same way.
  */
-const createCapabilities = (): SessionCapabilities => {
+const createCapabilities = (
+	sessionStore: SessionStore = store
+): SessionCapabilities => {
 	const workspace = process.cwd();
 	const registry = buildAgentRegistry(
 		fromPartial<ConfigSnapshot>({
@@ -313,7 +319,7 @@ const createCapabilities = (): SessionCapabilities => {
 			}),
 		}),
 		getRegistry: () => registry,
-		getStore: () => store,
+		getStore: () => sessionStore,
 		getToolPermission: () => toolPermission,
 	};
 };
@@ -398,6 +404,31 @@ describe("Session Host opening", () => {
 
 		host.shutdown();
 	});
+	test("refuses a second Host while the first Host owns the Session", async () => {
+		const seeded = await seedSession("contention");
+		const secondDatabase = createDatabase(join(testDirectory, "sessions.db"));
+		const secondStore = createDrizzleSessionStore(secondDatabase.db, {
+			attachmentRoot: join(testDirectory, "second-attachments"),
+			snapshotRoot: join(testDirectory, "second-snapshots"),
+			workspaceRoot: process.cwd(),
+		});
+		const firstHost = await createSessionHost({
+			capabilities: createCapabilities(),
+			sessionId: seeded.sessionId,
+		});
+
+		try {
+			await expect(
+				createSessionHost({
+					capabilities: createCapabilities(secondStore),
+					sessionId: seeded.sessionId,
+				})
+			).rejects.toMatchObject({ code: "session_in_use" });
+		} finally {
+			firstHost.shutdown();
+			secondDatabase.sqlite.close();
+		}
+	});
 });
 
 describe("Session Host lifetime", () => {
@@ -464,5 +495,59 @@ describe("Session Host lifetime", () => {
 		host.shutdown();
 
 		expect(await settlement).toEqual({ decision: "reject" });
+	});
+	test("reports lease loss and closes the Host without releasing a takeover", async () => {
+		const seeded = await seedSession("lease-loss");
+		const takeoverDatabase = createDatabase(join(testDirectory, "sessions.db"));
+		const takeoverStore = createDrizzleSessionStore(takeoverDatabase.db, {
+			attachmentRoot: join(testDirectory, "takeover-attachments"),
+			snapshotRoot: join(testDirectory, "takeover-snapshots"),
+			workspaceRoot: process.cwd(),
+		});
+		const now = { value: 1000 };
+		const ticks = new Set<() => void>();
+		const capabilities = createCapabilities();
+		const host = await createSessionHost({
+			capabilities,
+			lease: {
+				now: () => now.value,
+				schedule: (callback) => {
+					ticks.add(callback);
+					return () => ticks.delete(callback);
+				},
+			},
+			sessionId: seeded.sessionId,
+		});
+		const failures: SessionHostFailure[] = [];
+		host.onFatal((next) => {
+			failures.push(next);
+		});
+		const approval = host.engine.requestApproval(approvalRequest);
+
+		try {
+			now.value = 31_001;
+			const takeover = await takeoverStore.acquireSessionLease(
+				seeded.sessionId,
+				{ now: () => now.value }
+			);
+			for (const tick of ticks) {
+				tick();
+			}
+
+			expect(failures).toEqual([{ code: "session_lease_lost" }]);
+			expect(await approval).toEqual({ decision: "reject" });
+			expect(await host.engine.send(sendInput(capabilities))).toMatchObject({
+				rejected: true,
+			});
+			await expect(
+				takeoverStore.acquireSessionLease(seeded.sessionId, {
+					now: () => now.value,
+				})
+			).rejects.toMatchObject({ code: "session_in_use" });
+			takeover.release();
+			host.shutdown();
+		} finally {
+			takeoverDatabase.sqlite.close();
+		}
 	});
 });

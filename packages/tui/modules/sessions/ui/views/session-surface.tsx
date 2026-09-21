@@ -1,7 +1,10 @@
 import { getErrorMessage } from "@wincode/runtime-utils";
 import { useEffect, useState } from "react";
 import { createSessionHost } from "@/modules/sessions/host/session-host";
-import type { SessionHost } from "@/modules/sessions/host/types";
+import type {
+	SessionHost,
+	SessionHostFailure,
+} from "@/modules/sessions/host/types";
 import { useSessionCapabilities } from "@/modules/sessions/host/use-session-capabilities";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
@@ -44,6 +47,8 @@ export function SessionSurface({
 	useEffect(() => {
 		let ignore = false;
 		let openedHost: SessionHost | null = null;
+		let removeFatalListener: (() => void) | null = null;
+		let hostFailure: SessionHostFailure | null = null;
 		setSession(null);
 		setErrorMessage(null);
 		const open = async (): Promise<OpenedSession | null> => {
@@ -54,6 +59,17 @@ export function SessionSurface({
 				return null;
 			}
 			openedHost = host;
+			removeFatalListener = host.onFatal((failure) => {
+				hostFailure = failure;
+				if (!ignore) {
+					setSession(null);
+					setErrorMessage(
+						failure.code === "session_lease_lost"
+							? "Session lease lost; the session was closed."
+							: "The session closed unexpectedly."
+					);
+				}
+			});
 			try {
 				const store = getSessionStore();
 				const [row, transcript] = await Promise.all([
@@ -64,7 +80,7 @@ export function SessionSurface({
 							)
 						: host.getSnapshot().transcript,
 				]);
-				if (ignore) {
+				if (hostFailure !== null || ignore) {
 					return null;
 				}
 				return {
@@ -78,6 +94,8 @@ export function SessionSurface({
 				// this shuts it down only while this effect still owns it, and
 				// never leaves the handle for a second call.
 				openedHost = null;
+				removeFatalListener?.();
+				removeFatalListener = null;
 				if (!ignore) {
 					host.shutdown();
 				}
@@ -99,6 +117,7 @@ export function SessionSurface({
 
 		return () => {
 			ignore = true;
+			removeFatalListener?.();
 			openedHost?.shutdown();
 		};
 	}, [capabilities, sessionId]);
