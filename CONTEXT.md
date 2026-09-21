@@ -83,6 +83,10 @@ The single owner of one session's live state and the only writer to it. Session 
 **Session Host**:
 The composition that assembles one session — its capabilities, its Session Engine, and its subscription to that Engine — and owns that assembly's lifetime. It carries no session state of its own and is UI-neutral, so the Wincode TUI and a non-interactive consumer each construct one against the same contract. _Avoid_: bootstrap, session manager, runtime, composition root
 
+**Session Lease**:
+The exclusive live claim a Session Host holds while its session is open, so only that Host's Session Engine may write the session. The claim ends with the Host and can be recovered after its owner disappears; losing it ends the Host rather than allowing two live writers.
+_Avoid_: session lock, presence, session status
+
 **Session Command**:
 A request to change session state, such as sending a prompt, interrupting a turn, compacting, recovering from a context overflow, or answering an approval. The Engine executes Commands one at a time in submission order, and no asynchronous continuation changes session state outside a Command. _Avoid_: operation, action, event, task
 
@@ -290,6 +294,10 @@ _Avoid_: Agent Turn Identifier
 **Session Message Identifier**:
 The identity of one user or assistant message tracked by a session and referenced by session operations such as compaction.
 _Avoid_: Tool Call Identifier
+
+**Submission Identifier**:
+The stable identity assigned when the Session Engine admits one Submission. It follows that Submission whether it starts immediately, waits in either lane, or changes disposition, and is distinct from both a lane-local waiting-message identifier and a transport request identifier.
+_Avoid_: RPC request identifier, Queued Submission Identifier, Steering Message Identifier
 
 **Session Record Identifier**:
 The identity of one committed durable Session Record. It is distinct from the Session, its messages, and the Agent Turn that produced it.
