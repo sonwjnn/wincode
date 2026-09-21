@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { Tagged } from "type-fest";
 import { z } from "zod";
 
 export const FILE_VERSION_ALGORITHM = "sha256-128" as const;
@@ -6,7 +7,7 @@ export const FILE_VERSION_BYTES = 16 as const;
 export const UTF8_BOM = new Uint8Array([0xef, 0xbb, 0xbf]);
 
 export const fileVersionSchema = z.string().regex(/^[0-9a-f]{32}$/u);
-export type FileVersion = string & { readonly __fileVersion: unique symbol };
+export type FileVersion = Tagged<string, "FileVersion">;
 
 export type LineEnding = "" | "\n" | "\r" | "\r\n";
 
