@@ -160,15 +160,23 @@ export const createSessionHost = async ({
 		}
 		return engine;
 	};
+	const stopRenewal = (): void => {
+		stopLeaseRenewal?.();
+		stopLeaseRenewal = undefined;
+	};
 	const shutdown = (): Promise<void> => {
 		if (shutdownPromise !== undefined) {
 			return shutdownPromise;
 		}
 		isShutDown = true;
 		const activeEngine = engine;
+		let releaseImmediately = activeEngine === undefined;
 		let engineShutdown = Promise.resolve();
 		if (activeEngine !== undefined) {
 			const snapshot = activeEngine.getSnapshot();
+			releaseImmediately =
+				!(snapshot.turnActive || snapshot.isCompacting) &&
+				snapshot.executions.length === 0;
 			if (snapshot.isCompacting) {
 				activeEngine.cancelCompaction();
 			}
@@ -179,13 +187,18 @@ export const createSessionHost = async ({
 			activeEngine.recallWaitingMessages();
 			engineShutdown = activeEngine.shutdown();
 		}
-		stopLeaseRenewal?.();
-		stopLeaseRenewal = undefined;
 		eventListeners.clear();
 		fatalListeners.clear();
-		shutdownPromise = engineShutdown.then(() => {
+		if (releaseImmediately) {
+			stopRenewal();
 			sessionLease.release();
-		});
+			shutdownPromise = engineShutdown.then(() => undefined);
+		} else {
+			shutdownPromise = engineShutdown.then(() => {
+				stopRenewal();
+				sessionLease.release();
+			});
+		}
 		return shutdownPromise;
 	};
 	const reportLeaseLoss = (): void => {
@@ -195,6 +208,7 @@ export const createSessionHost = async ({
 		isLeaseLost = true;
 		fatalFailure = { code: "session_lease_lost" };
 		const listeners = [...fatalListeners];
+		stopRenewal();
 		void shutdown();
 		for (const listener of listeners) {
 			try {

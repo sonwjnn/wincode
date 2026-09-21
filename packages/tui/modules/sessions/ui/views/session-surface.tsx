@@ -55,7 +55,7 @@ export function SessionSurface({
 			const host = await createSessionHost({ capabilities, sessionId });
 			if (ignore) {
 				// The surface is gone: nobody would own this session.
-				host.shutdown();
+				await host.shutdown();
 				return null;
 			}
 			openedHost = host;
@@ -97,7 +97,7 @@ export function SessionSurface({
 				removeFatalListener?.();
 				removeFatalListener = null;
 				if (!ignore) {
-					host.shutdown();
+					await host.shutdown();
 				}
 				throw error;
 			}
@@ -118,7 +118,7 @@ export function SessionSurface({
 		return () => {
 			ignore = true;
 			removeFatalListener?.();
-			openedHost?.shutdown();
+			void openedHost?.shutdown();
 		};
 	}, [capabilities, sessionId]);
 

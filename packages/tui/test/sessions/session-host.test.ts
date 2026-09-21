@@ -76,9 +76,8 @@ const { createPermissionService } = await import(
 );
 const { createToolPermissionPolicyState, createToolPermissionRuntime } =
 	await import("@/modules/permissions/tool-permission-runtime");
-const { SESSION_LEASE_TTL_MS } = await import(
-	"@/modules/sessions/storage/session-lease"
-);
+const { SESSION_LEASE_RENEWAL_INTERVAL_MS, SESSION_LEASE_TTL_MS } =
+	await import("@/modules/sessions/storage/session-lease");
 
 const model: ChatModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
@@ -88,6 +87,8 @@ const buildId = agentId("build");
 const parentTurnId = agentTurnId("turn-parent");
 const COMPACTION_SUMMARY_TEXT = "the first turn, summarized";
 const SESSION_LEASE_START_TIME_MS = 1000;
+const SESSION_LEASE_RENEWED_TIME_MS =
+	SESSION_LEASE_START_TIME_MS + SESSION_LEASE_RENEWAL_INTERVAL_MS;
 const LEASE_EXPIRY_BOUNDARY_OFFSET_MS = 1;
 const SESSION_LEASE_EXPIRED_TIME_MS =
 	SESSION_LEASE_START_TIME_MS +
@@ -428,7 +429,7 @@ describe("Session Host opening", () => {
 			variant: undefined,
 		});
 
-		host.shutdown();
+		await host.shutdown();
 	});
 	test("refuses a second Host while the first Host owns the Session", async () => {
 		const seeded = await seedSession("contention");
@@ -451,7 +452,7 @@ describe("Session Host opening", () => {
 				})
 			).rejects.toMatchObject({ code: "session_in_use" });
 		} finally {
-			firstHost.shutdown();
+			await firstHost.shutdown();
 			secondDatabase.sqlite.close();
 		}
 	});
@@ -490,7 +491,7 @@ describe("Session Host lifetime", () => {
 		expect(textOf(sent[0]?.parts ?? [])).toBe("third request");
 		expect(textOf(sent[1]?.parts ?? [])).toBe("E2E chat response");
 
-		host.shutdown();
+		await host.shutdown();
 
 		// Shutdown ends the session: nothing keeps running, the send that
 		// arrives after it is refused instead of being queued, and neither
@@ -509,10 +510,12 @@ describe("Session Host lifetime", () => {
 		expect(events).toHaveLength(eventsAtShutdown);
 	});
 
-	test("holds the lease until an interrupted turn finishes its checkpoint", async () => {
+	test("holds the lease and heartbeat until an interrupted turn checkpoints", async () => {
 		const seeded = await seedSession("shutdown-quiescence");
 		const delayed = createDelayedTerminalStore(store);
 		const capabilities = createCapabilities(delayed.delayed);
+		const now = { value: SESSION_LEASE_START_TIME_MS };
+		const ticks = new Set<() => void>();
 		const competingDatabase = createDatabase(
 			join(testDirectory, "sessions.db")
 		);
@@ -522,6 +525,13 @@ describe("Session Host lifetime", () => {
 		});
 		const host = await createSessionHost({
 			capabilities,
+			lease: {
+				now: () => now.value,
+				schedule: (callback) => {
+					ticks.add(callback);
+					return () => ticks.delete(callback);
+				},
+			},
 			sessionId: seeded.sessionId,
 		});
 		let competingLease:
@@ -532,16 +542,28 @@ describe("Session Host lifetime", () => {
 			const send = host.engine.send(sendInput(capabilities));
 			await delayed.terminalCommitStarted.promise;
 			const shutdown = host.shutdown();
-
+			expect(host.getSnapshot().turnActive).toBe(true);
+			now.value = SESSION_LEASE_RENEWED_TIME_MS;
+			for (const tick of ticks) {
+				tick();
+			}
+			now.value = SESSION_LEASE_EXPIRED_TIME_MS;
+			for (const tick of ticks) {
+				tick();
+			}
+			expect(ticks.size).toBe(1);
 			await expect(
-				competingStore.acquireSessionLease(seeded.sessionId)
+				competingStore.acquireSessionLease(seeded.sessionId, {
+					now: () => now.value,
+				})
 			).rejects.toMatchObject({ code: "session_in_use" });
 
 			delayed.allowTerminalCommit.resolve();
 			await shutdown;
 			await send;
 			competingLease = await competingStore.acquireSessionLease(
-				seeded.sessionId
+				seeded.sessionId,
+				{ now: () => now.value }
 			);
 		} finally {
 			delayed.allowTerminalCommit.resolve();
@@ -560,7 +582,7 @@ describe("Session Host lifetime", () => {
 		});
 		const settlement = host.engine.requestApproval(approvalRequest);
 
-		host.shutdown();
+		await host.shutdown();
 
 		expect(await settlement).toEqual({ decision: "reject" });
 	});
@@ -623,7 +645,7 @@ describe("Session Host lifetime", () => {
 			).rejects.toMatchObject({ code: "session_in_use" });
 		} finally {
 			takeover?.release();
-			host.shutdown();
+			await host.shutdown();
 			takeoverDatabase.sqlite.close();
 		}
 	});

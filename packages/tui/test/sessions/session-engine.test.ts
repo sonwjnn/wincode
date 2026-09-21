@@ -589,7 +589,7 @@ test("settles a pending approval when the session shuts down", async () => {
 	const engine = createEngine([]);
 	const settled = engine.requestApproval(approvalRequest("call-1"));
 
-	engine.shutdown();
+	await engine.shutdown();
 
 	await expect(settled).resolves.toEqual({ decision: "reject" });
 	expect(engine.getSnapshot().approvals[0]?.decision).toEqual({
@@ -599,7 +599,7 @@ test("settles a pending approval when the session shuts down", async () => {
 
 test("settles an approval that arrives after the session shut down", async () => {
 	const engine = createEngine([]);
-	engine.shutdown();
+	await engine.shutdown();
 
 	await expect(
 		engine.requestApproval(approvalRequest("call-1"))
@@ -662,7 +662,7 @@ const recoveryCommand = ({
 });
 test("refuses compaction and overflow recovery after shutdown", async () => {
 	const engine = createEngine([]);
-	engine.shutdown();
+	await engine.shutdown();
 
 	await expect(
 		engine.compact({ model, trigger: "manual" })
@@ -1784,17 +1784,18 @@ test("drops the queue and its attachment holds when the session shuts down", asy
 		sendInput({ composition: compositionOf("[Image 1]", files), files })
 	);
 
-	engine.shutdown();
+	const shutdown = engine.shutdown();
 
 	expect(released).toEqual([["dropped-blob"]]);
 	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
 	release();
 	await compaction;
+	await shutdown;
 });
 
 test("refuses a submission once the session has shut down", async () => {
 	const engine = createEngine([]);
-	engine.shutdown();
+	await engine.shutdown();
 
 	await expect(engine.send(sendInput())).resolves.toEqual({
 		rejected: true,

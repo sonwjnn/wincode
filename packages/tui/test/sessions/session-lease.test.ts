@@ -103,6 +103,7 @@ type LeaseContender = Readonly<{
 	process: ReturnType<BunSpawn>;
 	release: () => Promise<void>;
 	result: Promise<ContenderResult>;
+	stop: () => Promise<void>;
 }>;
 
 const startLeaseContender = (
@@ -127,10 +128,6 @@ const startLeaseContender = (
 		],
 		{ stderr: "ignore", stdin: "pipe", stdout: "pipe" }
 	);
-	if (contender.stdin === undefined || contender.stdout === undefined) {
-		contender.kill();
-		throw new Error("Lease contender did not expose stdio pipes.");
-	}
 	const result = readLine(contender.stdout).then(
 		(line) => JSON.parse(line) as ContenderResult
 	);
@@ -143,6 +140,10 @@ const startLeaseContender = (
 			if (exitCode !== 0) {
 				throw new Error(`Lease contender exited with code ${exitCode}.`);
 			}
+		},
+		stop: async () => {
+			contender.kill();
+			await contender.exited;
 		},
 		result,
 	};
@@ -242,9 +243,11 @@ describe("Session Lease storage", () => {
 		} finally {
 			for (const [index, contender] of contenders.entries()) {
 				if (results?.[index]?.kind === "acquired") {
-					await contender.release().catch(() => contender.process.kill());
+					await contender.release().catch(async () => {
+						await contender.stop();
+					});
 				} else {
-					contender.process.kill();
+					await contender.stop();
 				}
 			}
 		}
