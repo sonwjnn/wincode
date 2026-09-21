@@ -53,6 +53,7 @@ import type {
 	SessionCompactionCommand,
 	SessionEngine,
 	SessionEngineOptions,
+	SessionEnginePorts,
 	SessionExecution,
 	SessionExecutionInput,
 	SessionOverflowRecoveryCommand,
@@ -180,6 +181,18 @@ export const createSessionEngine = ({
 	 * including a request whose owner finishes before its own settings resolve.
 	 */
 	const pendingCompactions = new Set<Promise<CompactSessionResult>>();
+	/**
+	 * Post-turn maintenance starts without delaying the command response, but
+	 * ownership still covers its compaction decision until it settles.
+	 */
+	const pendingBackgroundTasks = new Set<Promise<unknown>>();
+	/**
+	 * Late runtime callbacks can still settle after cancellation. They must not
+	 * reach the durable store once the Engine has lost authority.
+	 */
+	const commitRecord: SessionEnginePorts["commitRecord"] = (input) =>
+		isShutDown ? Promise.resolve() : ports.commitRecord(input);
+	const enginePorts: SessionEnginePorts = { ...ports, commitRecord };
 	/**
 	 * How many submission runs hold the send lane. A run can overlap another's
 	 * tail — an overflow replay starts once the failed turn's execution ends,
@@ -369,6 +382,9 @@ export const createSessionEngine = ({
 					messages,
 					controller.signal
 				);
+				if (controller.signal.aborted || isShutDown) {
+					throw new SessionCompactionError("cancelled", SHUT_DOWN_SEND_ERROR);
+				}
 				// Admission happens when the module is entered, so a request that
 				// arrives while this one resolves its settings still joins it.
 				const admitted = ports.compaction.compact(request);
@@ -388,7 +404,7 @@ export const createSessionEngine = ({
 				}
 				// A submission that arrived while this compaction held the lane
 				// runs as soon as it no longer does.
-				void drainQueuedSubmissions();
+				trackBackgroundTask(drainQueuedSubmissions());
 			}
 		})();
 		return promise;
@@ -732,7 +748,7 @@ export const createSessionEngine = ({
 		execution: SessionExecution,
 		message: SessionMessage
 	): void => {
-		const write = ports
+		const write = enginePorts
 			.commitRecord({
 				record: buildUserSessionRecord({
 					agentId: execution.agent,
@@ -771,6 +787,31 @@ export const createSessionEngine = ({
 						await compaction;
 					} catch {
 						// A shutdown-triggered compaction cancellation is expected.
+					}
+				})
+			);
+		}
+	};
+	const trackBackgroundTask = (task: Promise<unknown>): void => {
+		pendingBackgroundTasks.add(task);
+		void (async () => {
+			try {
+				await task;
+			} catch {
+				// Maintenance failures are surfaced by their own error path.
+			} finally {
+				pendingBackgroundTasks.delete(task);
+			}
+		})();
+	};
+	const waitForBackgroundTasks = async (): Promise<void> => {
+		while (pendingBackgroundTasks.size > 0) {
+			await Promise.all(
+				[...pendingBackgroundTasks].map(async (task) => {
+					try {
+						await task;
+					} catch {
+						// A shutdown-triggered maintenance cancellation is expected.
 					}
 				})
 			);
@@ -847,7 +888,7 @@ export const createSessionEngine = ({
 		getContext: () => state.context,
 		getTranscript: () => state.transcript,
 		mergeTranscript,
-		ports,
+		ports: enginePorts,
 		recoverOverflow,
 		send: (input) =>
 			isShutDown
@@ -864,6 +905,7 @@ export const createSessionEngine = ({
 		setExecutionViewState,
 		setTurnActive,
 		settleCompaction,
+		trackBackgroundTask,
 		takeSteeringMessages,
 	});
 
@@ -882,7 +924,7 @@ export const createSessionEngine = ({
 			return await operation.send(input);
 		} finally {
 			laneRuns -= 1;
-			void drainQueuedSubmissions();
+			trackBackgroundTask(drainQueuedSubmissions());
 		}
 	};
 	/** Releases the blobs of compositions nothing holds any more. */
@@ -992,7 +1034,7 @@ export const createSessionEngine = ({
 		ports.attachments.retain(queuedAttachmentIds(queuedInput));
 		// Storing the composition can outlast the work that was in flight, so
 		// the queue is walked again here; a busy lane makes that a no-op.
-		void drainQueuedSubmissions();
+		trackBackgroundTask(drainQueuedSubmissions());
 		return { rejected: false };
 	};
 	/**
@@ -1086,7 +1128,9 @@ export const createSessionEngine = ({
 			return acceptSteeringMessage(input);
 		}
 		if (queuesSubmission()) {
-			return await acceptQueuedSubmission(input);
+			const queued = acceptQueuedSubmission(input);
+			trackBackgroundTask(queued);
+			return await queued;
 		}
 		return await runSubmission(input);
 	};
@@ -1097,6 +1141,7 @@ export const createSessionEngine = ({
 		pendingCompactions.size > 0 ||
 		pendingApprovals.size > 0 ||
 		pendingDurableWrites.size > 0 ||
+		pendingBackgroundTasks.size > 0 ||
 		state.turnActive ||
 		state.isCompacting ||
 		state.executions.length > 0;
@@ -1125,6 +1170,7 @@ export const createSessionEngine = ({
 			})();
 			await operationIdle;
 			await compactionSettled;
+			await waitForBackgroundTasks();
 			await waitForCompactions();
 			await waitForDurableWrites();
 		})();

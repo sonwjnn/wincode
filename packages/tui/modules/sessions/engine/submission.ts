@@ -89,6 +89,11 @@ export type SubmissionDeps = Readonly<{
 	setTurnActive: (value: boolean) => void;
 	settleCompaction: () => Promise<Error | null>;
 	/**
+	 * Tracks maintenance and queue work that begins outside the active Agent
+	 * Turn, so Host shutdown can wait before releasing ownership.
+	 */
+	trackBackgroundTask: (task: Promise<unknown>) => void;
+	/**
 	 * Delivers the Steering Lane into one Agent Turn execution: the Engine pops
 	 * the lane, commits the Session Records, and returns the messages the
 	 * runtime inserts before its next model call.
@@ -930,7 +935,7 @@ const maintainAfterTurn = (
 			}
 		}
 	};
-	void compactIfNeeded();
+	deps.trackBackgroundTask(compactIfNeeded());
 };
 
 /** Runs one Agent Turn execution and turns its outcome into session state. */

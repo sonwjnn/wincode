@@ -1795,6 +1795,62 @@ test("retains a queued submission's attachments until its turn runs", async () =
 	expect(released).toEqual([["stored-blob"]]);
 });
 
+test("waits for queued attachment externalization before shutdown settles", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
+	const externalizeStarted = Promise.withResolvers<void>();
+	const allowExternalize = Promise.withResolvers<void>();
+	const runtime = createQueuedRuntime();
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator),
+		{
+			attachments: {
+				externalize: async (messages) => {
+					externalizeStarted.resolve();
+					await allowExternalize.promise;
+					return [...messages];
+				},
+				hydrate: async ({ messages }) => [...messages],
+				release: () => undefined,
+				retain: () => undefined,
+			},
+			runtime: runtime.runtime,
+		}
+	);
+	const files: SessionFilePart[] = [
+		{
+			filename: "clipboard.png",
+			mediaType: "image/png",
+			type: "file",
+			url: "data:image/png;base64,AAAA",
+		},
+	];
+
+	const compaction = engine.compact({ model, trigger: "manual" });
+	const queued = engine.send(
+		sendInput({ composition: compositionOf("[Image 1]", files), files })
+	);
+	await externalizeStarted.promise;
+	engine.cancelCompaction();
+	const shutdown = engine.shutdown();
+	const probe = Promise.withResolvers<"probe">();
+	queueMicrotask(() => probe.resolve("probe"));
+	const result = await Promise.race([
+		shutdown.then(() => "shutdown" as const),
+		probe.promise,
+	]);
+	expect(result).toBe("probe");
+
+	allowExternalize.resolve();
+	release();
+	await expect(queued).resolves.toMatchObject({
+		rejected: true,
+		reason: "The session has ended.",
+	});
+	await expect(compaction).rejects.toMatchObject({ code: "cancelled" });
+	await shutdown;
+});
+
 test("refuses a submission that carries attachments into a running turn", async () => {
 	const runtime = createQueuedRuntime();
 	const engine = createEngine([], undefined, { runtime: runtime.runtime });
