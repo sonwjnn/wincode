@@ -174,17 +174,13 @@ export const createSessionHost = async ({
 		let engineShutdown = Promise.resolve();
 		if (activeEngine !== undefined) {
 			const snapshot = activeEngine.getSnapshot();
-			releaseImmediately =
-				!(snapshot.turnActive || snapshot.isCompacting) &&
-				snapshot.executions.length === 0;
+			releaseImmediately = !activeEngine.hasPendingWork();
 			if (snapshot.isCompacting) {
 				activeEngine.cancelCompaction();
 			}
 			if (snapshot.turnActive) {
 				activeEngine.interrupt();
 			}
-			activeEngine.closeApprovals();
-			activeEngine.recallWaitingMessages();
 			engineShutdown = activeEngine.shutdown();
 		}
 		eventListeners.clear();
@@ -192,14 +188,24 @@ export const createSessionHost = async ({
 		if (releaseImmediately) {
 			stopRenewal();
 			sessionLease.release();
-			shutdownPromise = engineShutdown.then(() => undefined);
-		} else {
-			shutdownPromise = engineShutdown.then(() => {
+		}
+		shutdownPromise = (async () => {
+			await engineShutdown;
+			if (!releaseImmediately) {
 				stopRenewal();
 				sessionLease.release();
-			});
-		}
+			}
+		})();
 		return shutdownPromise;
+	};
+	const observeLeaseLossShutdown = async (
+		shutdownWork: Promise<void>
+	): Promise<void> => {
+		try {
+			await shutdownWork;
+		} catch {
+			// Lease loss is already fatal; cleanup cannot restore ownership.
+		}
 	};
 	const reportLeaseLoss = (): void => {
 		if (isLeaseLost || isShutDown) {
@@ -209,7 +215,9 @@ export const createSessionHost = async ({
 		fatalFailure = { code: "session_lease_lost" };
 		const listeners = [...fatalListeners];
 		stopRenewal();
-		void shutdown();
+		// Renewal callbacks are synchronous; start quiescence before notifying
+		// observers, and observe cleanup failures without detaching a rejection.
+		void observeLeaseLossShutdown(shutdown());
 		for (const listener of listeners) {
 			try {
 				listener(fatalFailure);

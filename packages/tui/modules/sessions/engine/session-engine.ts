@@ -170,6 +170,12 @@ export const createSessionEngine = ({
 	let isShutDown = false;
 	let shutdownPromise: Promise<void> | undefined;
 	/**
+	 * Session records delivered by the Steering Lane are started at the Model
+	 * Step boundary and intentionally do not block that step. Shutdown must still
+	 * await them before the Session Host can release its lease.
+	 */
+	const pendingDurableWrites = new Set<Promise<void>>();
+	/**
 	 * How many submission runs hold the send lane. A run can overlap another's
 	 * tail — an overflow replay starts once the failed turn's execution ends,
 	 * which can precede the run that proposed it — so the lane is counted rather
@@ -401,9 +407,18 @@ export const createSessionEngine = ({
 		if (!isUndefined(owner)) {
 			await owner.registered;
 		}
-		const result = await ports.compaction.compact(
-			await compactionRequest(command, messages, new AbortController().signal)
+		if (isShutDown) {
+			throw new SessionCompactionError("cancelled", SHUT_DOWN_SEND_ERROR);
+		}
+		const request = await compactionRequest(
+			command,
+			messages,
+			new AbortController().signal
 		);
+		if (isShutDown) {
+			throw new SessionCompactionError("cancelled", SHUT_DOWN_SEND_ERROR);
+		}
+		const result = await ports.compaction.compact(request);
 		if (!isUndefined(owner)) {
 			await owner.promise;
 		}
@@ -534,10 +549,14 @@ export const createSessionEngine = ({
 						)
 			);
 		}
-		// The replay never runs while the turn that proposed the recovery is
-		// still live, and a replay the session refuses is reported, never queued
-		// behind or overlapped with a send that is already running.
+		// The replay waits for the failed execution so it cannot overlap its
+		// interrupted turn.
 		await waitForExecutionEnd(command.turnId);
+		// Shutdown can race the recovery's execution-end wake-up. The replay is
+		// fenced again here because its callback bypasses the public send entrypoint.
+		if (isShutDown) {
+			return { kind: "ineligible" };
+		}
 		let replayOutcome: SessionOverflowReplayOutcome;
 		try {
 			replayOutcome = await command.replay({
@@ -692,7 +711,7 @@ export const createSessionEngine = ({
 		execution: SessionExecution,
 		message: SessionMessage
 	): void => {
-		ports
+		const write = ports
 			.commitRecord({
 				record: buildUserSessionRecord({
 					agentId: execution.agent,
@@ -712,6 +731,16 @@ export const createSessionEngine = ({
 						: new Error("Could not save the Steering Message."),
 				});
 			});
+		pendingDurableWrites.add(write);
+		void write.then(
+			() => pendingDurableWrites.delete(write),
+			() => pendingDurableWrites.delete(write)
+		);
+	};
+	const waitForDurableWrites = async (): Promise<void> => {
+		while (pendingDurableWrites.size > 0) {
+			await Promise.all([...pendingDurableWrites]);
+		}
 	};
 	/**
 	 * Hands anything still waiting in the Steering Lane to the Submission
@@ -786,7 +815,13 @@ export const createSessionEngine = ({
 		mergeTranscript,
 		ports,
 		recoverOverflow,
-		send: (input) => runSubmission(input),
+		send: (input) =>
+			isShutDown
+				? Promise.resolve({
+						rejected: true,
+						reason: SHUT_DOWN_SEND_ERROR,
+					})
+				: runSubmission(input),
 		sessionId,
 		setCatalogDiagnostic: (diagnostic) =>
 			publish({ catalogDiagnostic: diagnostic }),
@@ -1021,6 +1056,15 @@ export const createSessionEngine = ({
 		}
 		return await runSubmission(input);
 	};
+	const hasPendingWork = (): boolean =>
+		laneRuns > 0 ||
+		draining ||
+		compactionCommand !== undefined ||
+		pendingApprovals.size > 0 ||
+		pendingDurableWrites.size > 0 ||
+		state.turnActive ||
+		state.isCompacting ||
+		state.executions.length > 0;
 	const shutdown = (): Promise<void> => {
 		if (shutdownPromise !== undefined) {
 			return shutdownPromise;
@@ -1032,10 +1076,22 @@ export const createSessionEngine = ({
 		operation.cancel();
 		closeApprovals();
 		const compaction = compactionCommand?.promise;
-		shutdownPromise = Promise.all([
-			operation.waitForIdle(),
-			compaction?.catch(() => undefined) ?? Promise.resolve(),
-		]).then(() => undefined);
+		shutdownPromise = (async () => {
+			const operationIdle = operation.waitForIdle();
+			const compactionSettled = (async (): Promise<void> => {
+				if (compaction === undefined) {
+					return;
+				}
+				try {
+					await compaction;
+				} catch {
+					// A shutdown-triggered compaction cancellation is expected.
+				}
+			})();
+			await operationIdle;
+			await compactionSettled;
+			await waitForDurableWrites();
+		})();
 		return shutdownPromise;
 	};
 
@@ -1056,6 +1112,7 @@ export const createSessionEngine = ({
 		},
 		closeApprovals,
 		compact,
+		hasPendingWork,
 		endExecution,
 		getSnapshot: () => state,
 		interrupt: (preserveToolCallId) => {

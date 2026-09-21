@@ -877,6 +877,37 @@ test("replays only after the Agent Turn that proposed the recovery has ended", a
 	expect(replay).toHaveBeenCalledTimes(1);
 });
 
+test("does not replay overflow recovery after shutdown", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator)
+	);
+	const replay = mock(async () => ({ kind: "started" }) as const);
+	engine.beginExecution(executionInput(agentTurnId("turn-overflow"), 1));
+	const compactionStarted = new Promise<void>((resolve) => {
+		const unsubscribe = engine.subscribe(() => {
+			if (engine.getSnapshot().isCompacting) {
+				unsubscribe();
+				resolve();
+			}
+		});
+	});
+
+	const recovery = engine.recoverOverflow(
+		recoveryCommand({ replay, turnId: "turn-overflow" })
+	);
+	await compactionStarted;
+	release();
+	await engine.settleCompaction();
+	const shutdown = engine.shutdown();
+	engine.endExecution(agentTurnId("turn-overflow"));
+
+	await shutdown;
+	await expect(recovery).resolves.toEqual({ kind: "ineligible" });
+	expect(replay).not.toHaveBeenCalled();
+});
+
 /** One submission as a view sends it: a prompt, its selection, its Agent. */
 const sendInput = (
 	overrides: Partial<SessionSendInput> = {}
@@ -1325,6 +1356,47 @@ test("delivers a submission accepted while a turn is running into that turn", as
 	// answers the message that opened it.
 	expect(steering?.messages[0]?.metadata?.joinedTurnId).toBe(steering?.turnId);
 	expect(runtime.boundaries[0]?.sourceUserMessageId).toBe(opening?.id);
+});
+
+test("waits for a delivered Steering checkpoint before shutdown settles", async () => {
+	const runtime = createQueuedRuntime({ boundary: true });
+	const commitStarted = Promise.withResolvers<void>();
+	const allowCommit = Promise.withResolvers<void>();
+	let steeringCommitted = false;
+	const engine = createEngine([], undefined, {
+		commitRecord: async ({ record }) => {
+			const message = record.messages[0];
+			if (
+				record.outcome.kind === "user" &&
+				message?.metadata?.joinedTurnId !== undefined
+			) {
+				commitStarted.resolve();
+				await allowCommit.promise;
+				steeringCommitted = true;
+			}
+		},
+		runtime: runtime.runtime,
+	});
+
+	const first = engine.send(sendInput({ userText: "one" }));
+	await runtime.started(1);
+	await engine.send(sendInput({ userText: "correction" }));
+	runtime.release();
+	await commitStarted.promise;
+	await first;
+
+	const shutdown = engine.shutdown();
+	const probe = Promise.withResolvers<"probe">();
+	queueMicrotask(() => probe.resolve("probe"));
+	const result = await Promise.race([
+		shutdown.then(() => "shutdown" as const),
+		probe.promise,
+	]);
+	expect(result).toBe("probe");
+
+	allowCommit.resolve();
+	await shutdown;
+	expect(steeringCommitted).toBe(true);
 });
 
 test("delivers Steering Messages in the order they were accepted", async () => {

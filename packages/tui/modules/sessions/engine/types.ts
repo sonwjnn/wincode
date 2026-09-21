@@ -470,6 +470,11 @@ export type SessionEngine = Readonly<{
 	endExecution: (turnId: AgentTurnId) => void;
 	getSnapshot: () => SessionSnapshot;
 	/**
+	 * Reports work that can still write or settle after shutdown starts, so the
+	 * Session Host can keep ownership until the shutdown promise is complete.
+	 */
+	hasPendingWork: () => boolean;
+	/**
 	 * Interrupts the Agent Turn the session is running: the send ends, the
 	 * assistant message it streams into keeps the interrupted Tool Call
 	 * visible, and everything waiting — the Steering Lane and the Submission
