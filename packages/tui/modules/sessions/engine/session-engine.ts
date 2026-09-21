@@ -765,7 +765,15 @@ export const createSessionEngine = ({
 	};
 	const waitForCompactions = async (): Promise<void> => {
 		while (pendingCompactions.size > 0) {
-			await Promise.all([...pendingCompactions]);
+			await Promise.all(
+				[...pendingCompactions].map(async (compaction) => {
+					try {
+						await compaction;
+					} catch {
+						// A shutdown-triggered compaction cancellation is expected.
+					}
+				})
+			);
 		}
 	};
 	/**
