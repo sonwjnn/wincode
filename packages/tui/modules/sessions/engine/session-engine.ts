@@ -176,6 +176,11 @@ export const createSessionEngine = ({
 	 */
 	const pendingDurableWrites = new Set<Promise<void>>();
 	/**
+	 * Every public compaction request remains tracked through joined admission,
+	 * including a request whose owner finishes before its own settings resolve.
+	 */
+	const pendingCompactions = new Set<Promise<CompactSessionResult>>();
+	/**
 	 * How many submission runs hold the send lane. A run can overlap another's
 	 * tail — an overflow replay starts once the failed turn's execution ends,
 	 * which can precede the run that proposed it — so the lane is counted rather
@@ -424,6 +429,21 @@ export const createSessionEngine = ({
 		}
 		return result;
 	};
+	const trackPendingCompaction = (
+		result: Promise<CompactSessionResult>
+	): Promise<CompactSessionResult> => {
+		pendingCompactions.add(result);
+		void (async () => {
+			try {
+				await result;
+			} catch {
+				// The compaction caller observes the original rejection.
+			} finally {
+				pendingCompactions.delete(result);
+			}
+		})();
+		return result;
+	};
 	const compact = (
 		command: SessionCompactionCommand
 	): Promise<CompactSessionResult> => {
@@ -438,9 +458,10 @@ export const createSessionEngine = ({
 		// a second command the module would only refuse.
 		const running =
 			compactionCommand ?? ports.compaction.getInFlight(sessionId);
-		return isNull(running)
+		const result = isNull(running)
 			? startCompaction(command, messages)
 			: joinCompaction(command, messages);
+		return trackPendingCompaction(result);
 	};
 	const settleCompaction = async (): Promise<Error | null> => {
 		// A command that starts while this waits is joined too, so a caller that
@@ -740,6 +761,11 @@ export const createSessionEngine = ({
 	const waitForDurableWrites = async (): Promise<void> => {
 		while (pendingDurableWrites.size > 0) {
 			await Promise.all([...pendingDurableWrites]);
+		}
+	};
+	const waitForCompactions = async (): Promise<void> => {
+		while (pendingCompactions.size > 0) {
+			await Promise.all([...pendingCompactions]);
 		}
 	};
 	/**
@@ -1060,6 +1086,7 @@ export const createSessionEngine = ({
 		laneRuns > 0 ||
 		draining ||
 		compactionCommand !== undefined ||
+		pendingCompactions.size > 0 ||
 		pendingApprovals.size > 0 ||
 		pendingDurableWrites.size > 0 ||
 		state.turnActive ||
@@ -1090,6 +1117,7 @@ export const createSessionEngine = ({
 			})();
 			await operationIdle;
 			await compactionSettled;
+			await waitForCompactions();
 			await waitForDurableWrites();
 		})();
 		return shutdownPromise;
