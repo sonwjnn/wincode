@@ -72,8 +72,8 @@ export type SessionHost = Readonly<{
 	 * without reading whole Snapshots per token.
 	 */
 	onEvent: (listener: (event: AgentTurnEvent) => void) => () => void;
-	/** Ends the session: no turn, approval, or attachment keeps running after it. */
-	shutdown: () => void;
+	/** Ends the session and resolves after active durable cleanup completes. */
+	shutdown: () => Promise<void>;
 	/** Notifies that session facts changed; no payload, as the Engine publishes. */
 	subscribe: (listener: () => void) => () => void;
 }>;

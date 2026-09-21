@@ -534,11 +534,10 @@ export type SessionEngine = Readonly<{
 	settleCompaction: () => Promise<Error | null>;
 	/**
 	 * Ends the session: it cancels the Agent Turn the session is running,
-	 * settles every pending approval through the same path, and refuses later
-	 * requests, so nothing keeps running invisibly and nothing stays waiting on
-	 * a session that is gone.
+	 * settles every pending approval through the same path, refuses later
+	 * requests, and resolves after active durable cleanup has completed.
 	 */
-	shutdown: () => void;
+	shutdown: () => Promise<void>;
 	/**
 	 * Sends one submission as a Session Command. A submission that arrives
 	 * while the session is busy — a running Agent Turn or a compaction in

@@ -88,8 +88,11 @@ const buildId = agentId("build");
 const parentTurnId = agentTurnId("turn-parent");
 const COMPACTION_SUMMARY_TEXT = "the first turn, summarized";
 const SESSION_LEASE_START_TIME_MS = 1000;
+const LEASE_EXPIRY_BOUNDARY_OFFSET_MS = 1;
 const SESSION_LEASE_EXPIRED_TIME_MS =
-	SESSION_LEASE_START_TIME_MS + SESSION_LEASE_TTL_MS + 1;
+	SESSION_LEASE_START_TIME_MS +
+	SESSION_LEASE_TTL_MS +
+	LEASE_EXPIRY_BOUNDARY_OFFSET_MS;
 const store = createDrizzleSessionStore(
 	createDatabase(join(testDirectory, "sessions.db")).db,
 	{
@@ -329,6 +332,23 @@ const createCapabilities = (
 		getToolPermission: () => toolPermission,
 	};
 };
+const createDelayedTerminalStore = (base: SessionStore) => {
+	const terminalCommitStarted = Promise.withResolvers<void>();
+	const allowTerminalCommit = Promise.withResolvers<void>();
+	let blocksTerminalCommit = true;
+	const delayed: SessionStore = {
+		...base,
+		commitSessionRecord: async (input) => {
+			if (blocksTerminalCommit && input.record.outcome.kind === "assistant") {
+				blocksTerminalCommit = false;
+				terminalCommitStarted.resolve();
+				await allowTerminalCommit.promise;
+			}
+			await base.commitSessionRecord(input);
+		},
+	};
+	return { allowTerminalCommit, delayed, terminalCommitStarted };
+};
 
 const resolvedAgentOf = (
 	capabilities: SessionCapabilities
@@ -487,6 +507,48 @@ describe("Session Host lifetime", () => {
 		});
 		expect(snapshotChanges).toBe(changesAtShutdown);
 		expect(events).toHaveLength(eventsAtShutdown);
+	});
+
+	test("holds the lease until an interrupted turn finishes its checkpoint", async () => {
+		const seeded = await seedSession("shutdown-quiescence");
+		const delayed = createDelayedTerminalStore(store);
+		const capabilities = createCapabilities(delayed.delayed);
+		const competingDatabase = createDatabase(
+			join(testDirectory, "sessions.db")
+		);
+		const competingStore = createDrizzleSessionStore(competingDatabase.db, {
+			attachmentRoot: join(testDirectory, "competing-attachments"),
+			workspaceRoot: process.cwd(),
+		});
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		let competingLease:
+			| Awaited<ReturnType<SessionStore["acquireSessionLease"]>>
+			| undefined;
+
+		try {
+			const send = host.engine.send(sendInput(capabilities));
+			await delayed.terminalCommitStarted.promise;
+			const shutdown = host.shutdown();
+
+			await expect(
+				competingStore.acquireSessionLease(seeded.sessionId)
+			).rejects.toMatchObject({ code: "session_in_use" });
+
+			delayed.allowTerminalCommit.resolve();
+			await shutdown;
+			await send;
+			competingLease = await competingStore.acquireSessionLease(
+				seeded.sessionId
+			);
+		} finally {
+			delayed.allowTerminalCommit.resolve();
+			await host.shutdown();
+			competingLease?.release();
+			competingDatabase.sqlite.close();
+		}
 	});
 
 	test("settles an approval a consumer is waiting on when the session shuts down", async () => {

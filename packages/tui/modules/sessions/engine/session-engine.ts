@@ -168,6 +168,7 @@ export const createSessionEngine = ({
 	const executionEndWaiters = new Map<AgentTurnId, (() => void)[]>();
 	let approvalCounter = 0;
 	let isShutDown = false;
+	let shutdownPromise: Promise<void> | undefined;
 	/**
 	 * How many submission runs hold the send lane. A run can overlap another's
 	 * tail — an overflow replay starts once the failed turn's execution ends,
@@ -1020,6 +1021,23 @@ export const createSessionEngine = ({
 		}
 		return await runSubmission(input);
 	};
+	const shutdown = (): Promise<void> => {
+		if (shutdownPromise !== undefined) {
+			return shutdownPromise;
+		}
+		isShutDown = true;
+		// Whatever was waiting is dropped with the session: its attachment
+		// holds end and nothing it held is ever run.
+		recallWaitingMessages();
+		operation.cancel();
+		closeApprovals();
+		const compaction = compactionCommand?.promise;
+		shutdownPromise = Promise.all([
+			operation.waitForIdle(),
+			compaction?.catch(() => undefined) ?? Promise.resolve(),
+		]).then(() => undefined);
+		return shutdownPromise;
+	};
 
 	return {
 		abortApprovalTurn: (toolCallId) => {
@@ -1051,14 +1069,7 @@ export const createSessionEngine = ({
 		respondToApproval: settleApproval,
 		setExecutionViewState,
 		settleCompaction,
-		shutdown: () => {
-			isShutDown = true;
-			// Whatever was waiting is dropped with the session: its attachment
-			// holds end and nothing it held is ever run.
-			recallWaitingMessages();
-			operation.cancel();
-			closeApprovals();
-		},
+		shutdown,
 		send,
 		subscribe: (listener) => {
 			listeners.add(listener);

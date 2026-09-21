@@ -133,6 +133,7 @@ export const createSessionHost = async ({
 	let isLeaseLost = false;
 	let fatalFailure: SessionHostFailure | null = null;
 	let stopLeaseRenewal: (() => void) | undefined;
+	let shutdownPromise: Promise<void> | undefined;
 
 	/**
 	 * Reports one event to the Host's observers. Everything the Engine reads
@@ -159,11 +160,13 @@ export const createSessionHost = async ({
 		}
 		return engine;
 	};
-	const shutdown = (): void => {
-		if (isShutDown) {
-			return;
+	const shutdown = (): Promise<void> => {
+		if (shutdownPromise !== undefined) {
+			return shutdownPromise;
 		}
+		isShutDown = true;
 		const activeEngine = engine;
+		let engineShutdown = Promise.resolve();
 		if (activeEngine !== undefined) {
 			const snapshot = activeEngine.getSnapshot();
 			if (snapshot.isCompacting) {
@@ -174,14 +177,16 @@ export const createSessionHost = async ({
 			}
 			activeEngine.closeApprovals();
 			activeEngine.recallWaitingMessages();
-			activeEngine.shutdown();
+			engineShutdown = activeEngine.shutdown();
 		}
-		isShutDown = true;
 		stopLeaseRenewal?.();
 		stopLeaseRenewal = undefined;
-		sessionLease.release();
 		eventListeners.clear();
 		fatalListeners.clear();
+		shutdownPromise = engineShutdown.then(() => {
+			sessionLease.release();
+		});
+		return shutdownPromise;
 	};
 	const reportLeaseLoss = (): void => {
 		if (isLeaseLost || isShutDown) {
@@ -190,7 +195,7 @@ export const createSessionHost = async ({
 		isLeaseLost = true;
 		fatalFailure = { code: "session_lease_lost" };
 		const listeners = [...fatalListeners];
-		shutdown();
+		void shutdown();
 		for (const listener of listeners) {
 			try {
 				listener(fatalFailure);
@@ -282,7 +287,7 @@ export const createSessionHost = async ({
 				}),
 		};
 	} catch (error) {
-		shutdown();
+		await shutdown();
 		throw error;
 	}
 };

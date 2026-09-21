@@ -61,6 +61,8 @@ export type SessionOperation = {
 	cancel: () => void;
 	/** Interrupts the active turn while preserving the existing terminal handling. */
 	interrupt: (preserveToolCallId?: ToolCallId) => void;
+	/** Resolves after the active send, including its durable checkpoint, settles. */
+	waitForIdle: () => Promise<void>;
 };
 
 export type CreateSessionOperationOptions = {
@@ -139,5 +141,12 @@ export const createSessionOperation = ({
 		active?.controller.abort(createAgentTurnAbortReason("interrupted"));
 		onInterrupt?.(preserveToolCallId);
 	};
-	return { cancel, interrupt, send };
+	const waitForIdle = async (): Promise<void> => {
+		while (active) {
+			const current = active;
+			await current.promise.catch(() => undefined);
+		}
+	};
+
+	return { cancel, interrupt, send, waitForIdle };
 };
