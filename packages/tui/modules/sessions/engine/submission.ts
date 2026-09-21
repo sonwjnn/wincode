@@ -229,10 +229,12 @@ const createSubmitMetadata = (
 ): SessionMessageMetadata => ({
 	agent: input.agent,
 	model: input.model,
-	...omitUndefined({ variant: input.variant }),
-	...(isUndefined(skill)
-		? {}
-		: { skill: createSkillSnapshot(skill, "explicit") }),
+	...omitUndefined({
+		variant: input.variant,
+		skill: isUndefined(skill)
+			? undefined
+			: createSkillSnapshot(skill, "explicit"),
+	}),
 });
 
 const prepareSubmitContext = async ({

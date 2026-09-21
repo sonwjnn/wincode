@@ -814,12 +814,10 @@ const formatNonFileRead = async (
 			`Read continuation target '${target.path}' is no longer a text file.`,
 			{
 				details: {
-					...(input.expectedVersion === undefined
-						? {}
-						: { expected: input.expectedVersion }),
-					...(previousObservation === null
-						? {}
-						: { previous: previousObservation.fileVersion }),
+					...omitUndefined({
+						expected: input.expectedVersion,
+						previous: previousObservation?.fileVersion,
+					}),
 					path: target.path,
 					targetKind: target.kind,
 				},

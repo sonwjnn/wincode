@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isObjectLike, omitUndefined } from "@wincode/runtime-utils";
 import { z } from "zod";
 import type { FILE_VERSION_ALGORITHM, FileVersion, LineRange } from "./model";
 import { createMemoryRecoveryStore, type RecoveryStore } from "./recovery";
@@ -97,12 +97,10 @@ export const toCodingToolFailure = (
 	if (isCodingToolError(error)) {
 		return {
 			code: error.code,
-			...Object.fromEntries(
-				[
-					["details", error.details],
-					["recovery", error.recovery],
-				].filter(([, value]) => value !== undefined)
-			),
+			...omitUndefined({
+				details: error.details,
+				recovery: error.recovery,
+			}),
 		};
 	}
 	if (!isObjectLike(error)) {

@@ -160,18 +160,18 @@ const resolveLocalServer = (
 		environment[key] = resolved;
 	}
 	const cwd = isString(raw.cwd) ? raw.cwd : undefined;
+	let resolvedCwd: string | undefined;
+	if (!isUndefined(cwd)) {
+		resolvedCwd =
+			path.isAbsolute(cwd) || path.win32.isAbsolute(cwd)
+				? cwd
+				: path.resolve(context.workspace, cwd);
+	}
 	const parsed = resolvedServerSchema.safeParse({
 		...base,
 		type: "local" as const,
 		command: raw.command,
-		...(isUndefined(cwd)
-			? {}
-			: {
-					cwd:
-						path.isAbsolute(cwd) || path.win32.isAbsolute(cwd)
-							? cwd
-							: path.resolve(context.workspace, cwd),
-				}),
+		...omitUndefined({ cwd: resolvedCwd }),
 		...(Object.keys(environment).length === 0 ? {} : { environment }),
 	});
 	if (!parsed.success) {

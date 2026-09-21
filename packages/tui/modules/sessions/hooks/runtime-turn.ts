@@ -620,7 +620,7 @@ const toToolCallParts = (
 		request,
 		result: {
 			errorText: part.errorText,
-			...(part.failure === undefined ? {} : { failure: part.failure }),
+			...omitUndefined({ failure: part.failure }),
 			toolCallId: part.toolCallId,
 			toolName: name,
 			type: "tool-failure",

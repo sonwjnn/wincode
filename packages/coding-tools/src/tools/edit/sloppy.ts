@@ -1,3 +1,4 @@
+import { omitUndefined } from "@wincode/runtime-utils";
 import {
 	CodingToolError,
 	type VersionedEditingContext,
@@ -143,7 +144,7 @@ const parseSloppyPatch = (patch: string): SloppyPatch => {
 		hunks.push({
 			context: contextLines,
 			contextPositions,
-			...(hint === undefined ? {} : { hint }),
+			...omitUndefined({ hint }),
 			newLines: currentNew,
 			oldLines: currentOld,
 		});
