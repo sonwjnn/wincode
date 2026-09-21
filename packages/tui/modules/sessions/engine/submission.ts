@@ -720,30 +720,32 @@ const proposeOverflowRecovery = ({
 	if (isNull(originalMessageId)) {
 		return;
 	}
-	void deps.recoverOverflow({
-		error: failure,
-		originalMessageId,
-		replay: ({ originalMessageId: replayId }) =>
-			replayOverflowTurn({
-				context,
-				deps,
-				execution,
-				originalMessageId: replayId,
-			}),
-		resolveTarget: async () => {
-			const settings = await deps.ports.resolveCompactionSettings(
-				execution.model
-			);
-			if (!settings.overflowRecoveryAvailable) {
-				return null;
-			}
-			return {
-				model: execution.model,
-				...omitUndefined({ variant: execution.variant }),
-			};
-		},
-		turnId: execution.turnId,
-	});
+	deps.trackBackgroundTask(
+		deps.recoverOverflow({
+			error: failure,
+			originalMessageId,
+			replay: ({ originalMessageId: replayId }) =>
+				replayOverflowTurn({
+					context,
+					deps,
+					execution,
+					originalMessageId: replayId,
+				}),
+			resolveTarget: async () => {
+				const settings = await deps.ports.resolveCompactionSettings(
+					execution.model
+				);
+				if (!settings.overflowRecoveryAvailable) {
+					return null;
+				}
+				return {
+					model: execution.model,
+					...omitUndefined({ variant: execution.variant }),
+				};
+			},
+			turnId: execution.turnId,
+		})
+	);
 };
 
 /**

@@ -1282,6 +1282,7 @@ export const createSessionCompaction = ({
 			summaryGenerator,
 			generatorInput
 		);
+		assertNotAborted(input.signal);
 		const { activeMessages, entry } = await persistCompactionEntry({
 			attachmentMetadata: preparedSummary.attachmentMetadata,
 			messages: externalizedMessages,

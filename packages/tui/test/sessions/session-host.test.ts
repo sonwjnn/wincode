@@ -573,6 +573,38 @@ describe("Session Host lifetime", () => {
 		}
 	});
 
+	test("waits for same-process Host shutdown before remounting", async () => {
+		const seeded = await seedSession("shutdown-remount");
+		const delayed = createDelayedTerminalStore(store);
+		const host = await createSessionHost({
+			capabilities: createCapabilities(delayed.delayed),
+			sessionId: seeded.sessionId,
+		});
+		const send = host.engine.send(
+			sendInput(createCapabilities(delayed.delayed))
+		);
+		await delayed.terminalCommitStarted.promise;
+		const shutdown = host.shutdown();
+		const remount = createSessionHost({
+			capabilities: createCapabilities(),
+			sessionId: seeded.sessionId,
+		});
+		const probe = Promise.withResolvers<"probe">();
+		queueMicrotask(() => probe.resolve("probe"));
+		expect(
+			await Promise.race([
+				remount.then(() => "remounted" as const),
+				probe.promise,
+			])
+		).toBe("probe");
+
+		delayed.allowTerminalCommit.resolve();
+		await shutdown;
+		await send;
+		const remountedHost = await remount;
+		await remountedHost.shutdown();
+	});
+
 	test("settles an approval a consumer is waiting on when the session shuts down", async () => {
 		const seeded = await seedSession("approval");
 		const capabilities = createCapabilities();

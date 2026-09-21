@@ -186,6 +186,7 @@ export const createSessionEngine = ({
 	 * ownership still covers its compaction decision until it settles.
 	 */
 	const pendingBackgroundTasks = new Set<Promise<unknown>>();
+	const pendingAttachmentControllers = new Set<AbortController>();
 	/**
 	 * Late runtime callbacks can still settle after cancellation. They must not
 	 * reach the durable store once the Engine has lost authority.
@@ -943,14 +944,15 @@ export const createSessionEngine = ({
 	 * blobs it still shows.
 	 */
 	const storeCompositionFiles = async (
-		files: readonly SessionFilePart[]
+		files: readonly SessionFilePart[],
+		signal: AbortSignal
 	): Promise<SessionFilePart[]> => {
 		if (files.every((file) => !isUndefined(file.attachmentId))) {
 			return [...files];
 		}
 		const [stored] = await ports.attachments.externalize(
 			[createSessionUserMessage("", undefined, [], [...files])],
-			new AbortController().signal
+			signal
 		);
 		return (stored?.parts ?? []).filter(
 			(part): part is SessionFilePart => part.type === "file"
@@ -1011,11 +1013,21 @@ export const createSessionEngine = ({
 			files: input.files ?? [],
 			text: input.userText ?? "",
 		};
+		const attachmentController = new AbortController();
+		pendingAttachmentControllers.add(attachmentController);
 		let files: SessionFilePart[];
 		try {
-			files = await storeCompositionFiles(composition.files);
+			files = await storeCompositionFiles(
+				composition.files,
+				attachmentController.signal
+			);
 		} catch {
-			return { rejected: true, reason: QUEUED_ATTACHMENT_ERROR };
+			return {
+				rejected: true,
+				reason: isShutDown ? SHUT_DOWN_SEND_ERROR : QUEUED_ATTACHMENT_ERROR,
+			};
+		} finally {
+			pendingAttachmentControllers.delete(attachmentController);
 		}
 		if (isShutDown) {
 			return { rejected: true, reason: SHUT_DOWN_SEND_ERROR };
@@ -1142,6 +1154,7 @@ export const createSessionEngine = ({
 		pendingApprovals.size > 0 ||
 		pendingDurableWrites.size > 0 ||
 		pendingBackgroundTasks.size > 0 ||
+		pendingAttachmentControllers.size > 0 ||
 		state.turnActive ||
 		state.isCompacting ||
 		state.executions.length > 0;
@@ -1150,6 +1163,9 @@ export const createSessionEngine = ({
 			return shutdownPromise;
 		}
 		isShutDown = true;
+		for (const controller of pendingAttachmentControllers) {
+			controller.abort();
+		}
 		// Whatever was waiting is dropped with the session: its attachment
 		// holds end and nothing it held is ever run.
 		recallWaitingMessages();

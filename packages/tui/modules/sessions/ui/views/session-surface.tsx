@@ -118,7 +118,14 @@ export function SessionSurface({
 		return () => {
 			ignore = true;
 			removeFatalListener?.();
-			void openedHost?.shutdown();
+			const closingHost = openedHost;
+			if (closingHost !== null) {
+				try {
+					void closingHost.shutdown().catch(() => undefined);
+				} catch {
+					// Unmount cleanup cannot report to a detached renderer.
+				}
+			}
 		};
 	}, [capabilities, sessionId]);
 

@@ -40,6 +40,16 @@ type OpenedSession = Readonly<{
 	transcript: SessionMessage[];
 	variant: ModelVariant | undefined;
 }>;
+const closingHosts = new Map<SessionHostOptions["sessionId"], Promise<void>>();
+
+const waitForClosingHost = async (
+	sessionId: SessionHostOptions["sessionId"]
+): Promise<void> => {
+	const closing = closingHosts.get(sessionId);
+	if (closing !== undefined) {
+		await closing.catch(() => undefined);
+	}
+};
 
 /**
  * Reads one session's durable state and projects it into the session the Engine
@@ -122,6 +132,7 @@ export const createSessionHost = async ({
 	lease: leaseOptions,
 	sessionId,
 }: SessionHostOptions): Promise<SessionHost> => {
+	await waitForClosingHost(sessionId);
 	const leaseClock = leaseOptions?.now ?? Date.now;
 	const sessionLease: SessionLease = await capabilities
 		.getStore()
@@ -189,14 +200,31 @@ export const createSessionHost = async ({
 			stopRenewal();
 			sessionLease.release();
 		}
-		shutdownPromise = (async () => {
-			await engineShutdown;
-			if (!releaseImmediately) {
-				stopRenewal();
-				sessionLease.release();
+		const closingShutdown = (async () => {
+			try {
+				await engineShutdown;
+			} finally {
+				if (!releaseImmediately) {
+					stopRenewal();
+					sessionLease.release();
+				}
 			}
 		})();
-		return shutdownPromise;
+		shutdownPromise = closingShutdown;
+		closingHosts.set(sessionId, closingShutdown);
+		void closingShutdown.then(
+			() => {
+				if (closingHosts.get(sessionId) === closingShutdown) {
+					closingHosts.delete(sessionId);
+				}
+			},
+			() => {
+				if (closingHosts.get(sessionId) === closingShutdown) {
+					closingHosts.delete(sessionId);
+				}
+			}
+		);
+		return closingShutdown;
 	};
 	const observeLeaseLossShutdown = async (
 		shutdownWork: Promise<void>
@@ -217,7 +245,13 @@ export const createSessionHost = async ({
 		stopRenewal();
 		// Renewal callbacks are synchronous; start quiescence before notifying
 		// observers, and observe cleanup failures without detaching a rejection.
-		void observeLeaseLossShutdown(shutdown());
+		let shutdownWork: Promise<void>;
+		try {
+			shutdownWork = shutdown();
+		} catch {
+			shutdownWork = Promise.resolve();
+		}
+		void observeLeaseLossShutdown(shutdownWork);
 		for (const listener of listeners) {
 			try {
 				listener(fatalFailure);
