@@ -418,20 +418,15 @@ export const createGatedCodingTools = ({
 					options: {
 						allowExternalPath: !isUndefined(outcome.input),
 						allowSloppy: isSloppyCodingInput(outcome.input ?? input),
-						...(outcome.approvedWorkspacePaths === undefined
-							? {}
-							: { approvedWorkspacePaths: outcome.approvedWorkspacePaths }),
-						...(outcome.approvedExternalPaths === undefined
-							? {}
-							: { approvedExternalPaths: outcome.approvedExternalPaths }),
-						...(outcome.approvedCrossSession === true
-							? { allowCrossSession: true }
-							: {}),
-						...(isUndefined(resolveResourceLimits)
-							? {}
-							: {
-									resourceLimits: await resolveResourceLimits(agentId),
-								}),
+						...omitUndefined({
+							approvedWorkspacePaths: outcome.approvedWorkspacePaths,
+							approvedExternalPaths: outcome.approvedExternalPaths,
+							allowCrossSession:
+								outcome.approvedCrossSession === true ? true : undefined,
+							resourceLimits: isUndefined(resolveResourceLimits)
+								? undefined
+								: await resolveResourceLimits(agentId),
+						}),
 						signal,
 						versionedEditing,
 					},
