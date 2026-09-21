@@ -391,6 +391,9 @@ export const createSessionEngine = ({
 				const admitted = ports.compaction.compact(request);
 				registration.resolve();
 				const result = await admitted;
+				if (controller.signal.aborted || isShutDown) {
+					throw new SessionCompactionError("cancelled", SHUT_DOWN_SEND_ERROR);
+				}
 				applyContext(result.activeMessages);
 				recordCompaction(result.entry);
 				setCompactionError(null);
@@ -525,7 +528,9 @@ export const createSessionEngine = ({
 	const failRecovery = (
 		error: OverflowRecoveryError
 	): SessionOverflowRecoveryOutcome => {
-		setCompactionError(error);
+		if (!isShutDown) {
+			setCompactionError(error);
+		}
 		return { kind: "failed", error };
 	};
 	/**

@@ -1917,7 +1917,7 @@ test("drops the queue and its attachment holds when the session shuts down", asy
 	expect(released).toEqual([["dropped-blob"]]);
 	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
 	release();
-	await compaction;
+	await expect(compaction).rejects.toMatchObject({ code: "cancelled" });
 	await shutdown;
 });
 

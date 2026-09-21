@@ -18,6 +18,29 @@ type OpenedSession = Readonly<{
 	sessionTitle: string;
 	transcript: readonly SessionMessage[];
 }>;
+const pendingSurfaceClosures = new Map<SessionId, Promise<void>>();
+
+const waitForPendingSurfaceClosure = async (
+	sessionId: SessionId
+): Promise<void> => {
+	const pending = pendingSurfaceClosures.get(sessionId);
+	if (pending !== undefined) {
+		await pending;
+	}
+};
+
+const trackSurfaceClosure = (
+	sessionId: SessionId,
+	closing: Promise<void>
+): void => {
+	const observed = closing.catch(() => undefined);
+	pendingSurfaceClosures.set(sessionId, observed);
+	void observed.then(() => {
+		if (pendingSurfaceClosures.get(sessionId) === observed) {
+			pendingSurfaceClosures.delete(sessionId);
+		}
+	});
+};
 
 /**
  * Opens one session and renders it. This is the surface that owns the
@@ -47,12 +70,15 @@ export function SessionSurface({
 	useEffect(() => {
 		let ignore = false;
 		let openedHost: SessionHost | null = null;
+		let openingHost: Promise<SessionHost> | null = null;
 		let removeFatalListener: (() => void) | null = null;
 		let hostFailure: SessionHostFailure | null = null;
 		setSession(null);
 		setErrorMessage(null);
 		const open = async (): Promise<OpenedSession | null> => {
-			const host = await createSessionHost({ capabilities, sessionId });
+			await waitForPendingSurfaceClosure(sessionId);
+			openingHost = createSessionHost({ capabilities, sessionId });
+			const host = await openingHost;
 			if (ignore) {
 				// The surface is gone: nobody would own this session.
 				await host.shutdown();
@@ -119,12 +145,16 @@ export function SessionSurface({
 			ignore = true;
 			removeFatalListener?.();
 			const closingHost = openedHost;
-			if (closingHost !== null) {
-				try {
-					void closingHost.shutdown().catch(() => undefined);
-				} catch {
-					// Unmount cleanup cannot report to a detached renderer.
-				}
+			let closing: Promise<void> | undefined;
+			try {
+				closing =
+					closingHost?.shutdown() ??
+					openingHost?.then((host) => host.shutdown());
+			} catch {
+				closing = Promise.resolve();
+			}
+			if (closing !== undefined) {
+				trackSurfaceClosure(sessionId, closing);
 			}
 		};
 	}, [capabilities, sessionId]);
