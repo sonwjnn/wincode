@@ -189,14 +189,15 @@ export const createSessionHost = async ({
 		}
 		isLeaseLost = true;
 		fatalFailure = { code: "session_lease_lost" };
-		for (const listener of [...fatalListeners]) {
+		const listeners = [...fatalListeners];
+		shutdown();
+		for (const listener of listeners) {
 			try {
 				listener(fatalFailure);
 			} catch {
 				// A failure observer cannot keep a lost Host alive.
 			}
 		}
-		shutdown();
 	};
 	const schedule =
 		leaseOptions?.schedule ??

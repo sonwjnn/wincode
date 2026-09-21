@@ -41,26 +41,25 @@ export class SessionLeaseLostError extends Error {
 }
 
 export type SessionLeaseStoreOptions = Readonly<{
-	workspaceId?: WorkspaceId;
+	workspaceId: WorkspaceId;
 }>;
 
 const toLeaseDate = (milliseconds: number): Date => new Date(milliseconds);
 
 export const createSessionLeaseStore = (
 	db: SessionDatabase,
-	options: SessionLeaseStoreOptions = {}
+	options: SessionLeaseStoreOptions
 ): SessionLeaseStore => ({
 	acquire: async (sessionId, leaseOptions = {}) => {
-		const sessionWhere = options.workspaceId
-			? and(
-					eq(session.id, sessionId),
-					eq(session.workspaceId, options.workspaceId)
-				)
-			: eq(session.id, sessionId);
 		const existingSession = db
 			.select({ id: session.id })
 			.from(session)
-			.where(sessionWhere)
+			.where(
+				and(
+					eq(session.id, sessionId),
+					eq(session.workspaceId, options.workspaceId)
+				)
+			)
 			.get();
 		if (!existingSession) {
 			throw new Error("Session not found");

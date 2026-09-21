@@ -76,6 +76,9 @@ const { createPermissionService } = await import(
 );
 const { createToolPermissionPolicyState, createToolPermissionRuntime } =
 	await import("@/modules/permissions/tool-permission-runtime");
+const { SESSION_LEASE_TTL_MS } = await import(
+	"@/modules/sessions/storage/session-lease"
+);
 
 const model: ChatModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
@@ -84,6 +87,9 @@ const model: ChatModelSelection = {
 const buildId = agentId("build");
 const parentTurnId = agentTurnId("turn-parent");
 const COMPACTION_SUMMARY_TEXT = "the first turn, summarized";
+const SESSION_LEASE_START_TIME_MS = 1000;
+const SESSION_LEASE_EXPIRED_TIME_MS =
+	SESSION_LEASE_START_TIME_MS + SESSION_LEASE_TTL_MS + 1;
 const store = createDrizzleSessionStore(
 	createDatabase(join(testDirectory, "sessions.db")).db,
 	{
@@ -504,7 +510,7 @@ describe("Session Host lifetime", () => {
 			snapshotRoot: join(testDirectory, "takeover-snapshots"),
 			workspaceRoot: process.cwd(),
 		});
-		const now = { value: 1000 };
+		const now = { value: SESSION_LEASE_START_TIME_MS };
 		const ticks = new Set<() => void>();
 		const capabilities = createCapabilities();
 		const host = await createSessionHost({
@@ -519,24 +525,33 @@ describe("Session Host lifetime", () => {
 			sessionId: seeded.sessionId,
 		});
 		const failures: SessionHostFailure[] = [];
+		let sendDuringFailure: Promise<unknown> | null = null;
 		host.onFatal((next) => {
 			failures.push(next);
+			sendDuringFailure = host.engine.send(sendInput(capabilities));
 		});
 		const approval = host.engine.requestApproval(approvalRequest);
+		let takeover:
+			| Awaited<ReturnType<SessionStore["acquireSessionLease"]>>
+			| undefined;
 
 		try {
-			now.value = 31_001;
-			const takeover = await takeoverStore.acquireSessionLease(
-				seeded.sessionId,
-				{ now: () => now.value }
-			);
+			now.value = SESSION_LEASE_EXPIRED_TIME_MS;
+			takeover = await takeoverStore.acquireSessionLease(seeded.sessionId, {
+				now: () => now.value,
+			});
 			for (const tick of ticks) {
 				tick();
 			}
 
 			expect(failures).toEqual([{ code: "session_lease_lost" }]);
 			expect(await approval).toEqual({ decision: "reject" });
-			expect(await host.engine.send(sendInput(capabilities))).toMatchObject({
+			if (sendDuringFailure === null) {
+				throw new Error(
+					"Lease-loss observer did not receive a command result."
+				);
+			}
+			expect(await sendDuringFailure).toMatchObject({
 				rejected: true,
 			});
 			await expect(
@@ -544,9 +559,9 @@ describe("Session Host lifetime", () => {
 					now: () => now.value,
 				})
 			).rejects.toMatchObject({ code: "session_in_use" });
-			takeover.release();
-			host.shutdown();
 		} finally {
+			takeover?.release();
+			host.shutdown();
 			takeoverDatabase.sqlite.close();
 		}
 	});

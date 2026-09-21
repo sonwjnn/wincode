@@ -8,6 +8,11 @@ import {
 	type SessionDatabase,
 } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
+import {
+	SESSION_LEASE_RENEWAL_INTERVAL_MS,
+	SESSION_LEASE_TTL_MS,
+	type SessionLease,
+} from "@/modules/sessions/storage/session-lease";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import {
 	agentId,
@@ -15,6 +20,10 @@ import {
 	modelId,
 	sessionMessageId,
 } from "../support/identifiers";
+
+const INITIAL_TIME_MS = 1000;
+const RENEWED_TIME_MS = INITIAL_TIME_MS + SESSION_LEASE_RENEWAL_INTERVAL_MS;
+const STALE_TIME_MS = RENEWED_TIME_MS + SESSION_LEASE_TTL_MS + 1;
 
 type DatabaseHandle = Readonly<{
 	db: SessionDatabase;
@@ -75,7 +84,7 @@ describe("Session Lease storage", () => {
 	test("refuses a live contender and lets an explicit release reopen the Session", async () => {
 		const fixture = createFixture();
 		const session = await createSession(fixture);
-		const clock = () => 1000;
+		const clock = () => INITIAL_TIME_MS;
 		const firstLease = await fixture.firstStore.acquireSessionLease(
 			session.id,
 			{ now: clock }
@@ -96,7 +105,7 @@ describe("Session Lease storage", () => {
 	test("renews with the owner token and permits stale takeover", async () => {
 		const fixture = createFixture();
 		const session = await createSession(fixture);
-		const now = { value: 1000 };
+		const now = { value: INITIAL_TIME_MS };
 		const clock = () => now.value;
 		const firstLease = await fixture.firstStore.acquireSessionLease(
 			session.id,
@@ -108,18 +117,24 @@ describe("Session Lease storage", () => {
 				"SELECT expires_at, renewed_at FROM session_lease WHERE session_id = ?"
 			)
 			.get(session.id) as { expires_at: number; renewed_at: number };
-		expect(initial).toEqual({ expires_at: 31_000, renewed_at: 1000 });
+		expect(initial).toEqual({
+			expires_at: INITIAL_TIME_MS + SESSION_LEASE_TTL_MS,
+			renewed_at: INITIAL_TIME_MS,
+		});
 
-		now.value = 11_000;
+		now.value = RENEWED_TIME_MS;
 		expect(firstLease.renew()).toBe(true);
 		const renewed = fixture.second.sqlite
 			.query(
 				"SELECT expires_at, renewed_at FROM session_lease WHERE session_id = ?"
 			)
 			.get(session.id) as { expires_at: number; renewed_at: number };
-		expect(renewed).toEqual({ expires_at: 41_000, renewed_at: 11_000 });
+		expect(renewed).toEqual({
+			expires_at: RENEWED_TIME_MS + SESSION_LEASE_TTL_MS,
+			renewed_at: RENEWED_TIME_MS,
+		});
 
-		now.value = 41_001;
+		now.value = STALE_TIME_MS;
 		const secondLease = await fixture.secondStore.acquireSessionLease(
 			session.id,
 			{ now: clock }
@@ -134,12 +149,19 @@ describe("Session Lease storage", () => {
 	test("serializes concurrent contenders so exactly one obtains the lease", async () => {
 		const fixture = createFixture();
 		const session = await createSession(fixture);
-		const clock = () => 1000;
+		const clock = () => INITIAL_TIME_MS;
 
-		const results = await Promise.allSettled([
-			fixture.firstStore.acquireSessionLease(session.id, { now: clock }),
-			fixture.secondStore.acquireSessionLease(session.id, { now: clock }),
-		]);
+		const contenders = [fixture.firstStore, fixture.secondStore].map(
+			(store) =>
+				new Promise<SessionLease>((resolve, reject) => {
+					queueMicrotask(() => {
+						store
+							.acquireSessionLease(session.id, { now: clock })
+							.then(resolve, reject);
+					});
+				})
+		);
+		const results = await Promise.allSettled(contenders);
 
 		expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(
 			1
