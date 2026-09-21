@@ -105,6 +105,89 @@ const initializeSchema = (sqlite: Database): void => {
 		CREATE INDEX IF NOT EXISTS idx_file_lease_expiry
 			ON file_lease (expires_at);
 
+		CREATE TABLE IF NOT EXISTS file_transaction (
+			id TEXT PRIMARY KEY NOT NULL,
+			workspace_id TEXT NOT NULL REFERENCES session_workspace(id)
+				ON UPDATE CASCADE ON DELETE CASCADE,
+			origin_session_id TEXT REFERENCES session(id)
+				ON UPDATE CASCADE ON DELETE SET NULL,
+			status TEXT NOT NULL,
+			reason TEXT,
+			created_at INTEGER NOT NULL,
+			closed_at INTEGER
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_file_transaction_workspace_status
+			ON file_transaction (workspace_id, status);
+
+		CREATE TABLE IF NOT EXISTS file_transaction_path (
+			transaction_id TEXT NOT NULL REFERENCES file_transaction(id)
+				ON UPDATE CASCADE ON DELETE CASCADE,
+			canonical_path TEXT NOT NULL,
+			display_path TEXT NOT NULL,
+			original_file_version TEXT,
+			new_file_version TEXT NOT NULL,
+			original_blob_key TEXT,
+			status TEXT NOT NULL,
+			PRIMARY KEY (transaction_id, canonical_path)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_file_transaction_path_canonical
+			ON file_transaction_path (canonical_path);
+
+		CREATE TABLE IF NOT EXISTS recovery_artifact (
+			id TEXT PRIMARY KEY NOT NULL,
+			transaction_id TEXT NOT NULL REFERENCES file_transaction(id)
+				ON UPDATE CASCADE ON DELETE RESTRICT,
+			workspace_id TEXT NOT NULL REFERENCES session_workspace(id)
+				ON UPDATE CASCADE ON DELETE CASCADE,
+			origin_session_id TEXT REFERENCES session(id)
+				ON UPDATE CASCADE ON DELETE SET NULL,
+			created_at INTEGER NOT NULL,
+			pinned INTEGER DEFAULT 1 NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_recovery_artifact_workspace_created
+			ON recovery_artifact (workspace_id, created_at);
+
+		CREATE TABLE IF NOT EXISTS recovery_artifact_path (
+			artifact_id TEXT NOT NULL REFERENCES recovery_artifact(id)
+				ON UPDATE CASCADE ON DELETE CASCADE,
+			canonical_path TEXT NOT NULL,
+			display_path TEXT NOT NULL,
+			current_file_version TEXT,
+			original_file_version TEXT,
+			new_file_version TEXT NOT NULL,
+			original_blob_key TEXT,
+			PRIMARY KEY (artifact_id, canonical_path)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_recovery_artifact_path_canonical
+			ON recovery_artifact_path (canonical_path);
+
+		CREATE TABLE IF NOT EXISTS unresolved_recovery (
+			id TEXT PRIMARY KEY NOT NULL,
+			artifact_id TEXT NOT NULL REFERENCES recovery_artifact(id)
+				ON UPDATE CASCADE ON DELETE RESTRICT,
+			transaction_id TEXT NOT NULL REFERENCES file_transaction(id)
+				ON UPDATE CASCADE ON DELETE RESTRICT,
+			workspace_id TEXT NOT NULL REFERENCES session_workspace(id)
+				ON UPDATE CASCADE ON DELETE CASCADE,
+			origin_session_id TEXT REFERENCES session(id)
+				ON UPDATE CASCADE ON DELETE SET NULL,
+			status TEXT NOT NULL,
+			reason TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			resolved_at INTEGER,
+			reconciled_by_session_id TEXT REFERENCES session(id)
+				ON UPDATE CASCADE ON DELETE SET NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_unresolved_recovery_workspace_status
+			ON unresolved_recovery (workspace_id, status);
+
+		CREATE UNIQUE INDEX IF NOT EXISTS uq_unresolved_recovery_transaction
+			ON unresolved_recovery (transaction_id);
 		CREATE INDEX IF NOT EXISTS idx_file_observation_session_path_created
 			ON file_observation (session_id, path, created_at);
 		CREATE INDEX IF NOT EXISTS idx_session_pinned_last_message

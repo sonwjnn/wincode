@@ -90,6 +90,7 @@ const RUNTIME_CODING_TOOL_NAMES = [
 	"write",
 	"edit",
 	"glob",
+	"recover",
 	"grep",
 	"shell",
 ] as const;
@@ -423,6 +424,9 @@ export const createGatedCodingTools = ({
 						...(outcome.approvedExternalPaths === undefined
 							? {}
 							: { approvedExternalPaths: outcome.approvedExternalPaths }),
+						...(outcome.approvedCrossSession === true
+							? { allowCrossSession: true }
+							: {}),
 						...(isUndefined(resolveResourceLimits)
 							? {}
 							: {

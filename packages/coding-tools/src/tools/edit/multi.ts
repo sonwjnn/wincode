@@ -7,12 +7,14 @@ import {
 import type { FileState } from "../../versioned/filesystem";
 import {
 	assertObservedLineBudget,
+	assertRecoveryAllowsMutation,
 	atomicReplaceFile,
 	expectFileVersion,
 	persistFileObservation,
 	readVersionedFile,
 	resolveExistingTextPath,
 	snapshotForState,
+	throwPartialRecoveryFailure,
 	withFileMutationLock,
 } from "../../versioned/filesystem";
 import {
@@ -454,13 +456,15 @@ const cleanupNewObservations = async (
 };
 
 const rollbackCommitted = async (
-	committed: readonly PlannedFile[],
-	failure: unknown
-): Promise<void> => {
-	let rollbackError: unknown;
+	committed: readonly PlannedFile[]
+): Promise<readonly string[]> => {
+	const unresolved: string[] = [];
 	for (const plan of [...committed].reverse()) {
 		try {
 			const current = await readVersionedFile(plan.canonicalPath);
+			if (current.fileVersion === plan.oldState.fileVersion) {
+				continue;
+			}
 			expectFileVersion(
 				current.fileVersion,
 				plan.newState.fileVersion,
@@ -471,35 +475,24 @@ const rollbackCommitted = async (
 				plan.oldState.bytes,
 				plan.newState.fileVersion
 			);
-		} catch (error) {
-			rollbackError = error;
-			break;
+			const restored = await readVersionedFile(plan.canonicalPath);
+			if (restored.fileVersion !== plan.oldState.fileVersion) {
+				unresolved.push(plan.canonicalPath);
+			}
+		} catch {
+			unresolved.push(plan.canonicalPath);
 		}
 	}
-	if (rollbackError !== undefined) {
-		throw new CodingToolError(
-			"transaction-rollback-failed",
-			"The edit transaction could not prove that every changed file was restored.",
-			{
-				details: {
-					cause: failure instanceof Error ? failure.message : String(failure),
-					rollback:
-						rollbackError instanceof Error
-							? rollbackError.message
-							: String(rollbackError),
-				},
-				recovery: { action: "reread" },
-			}
-		);
-	}
+	return [...new Set(unresolved)];
 };
 
-const executePlans = async (
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: transaction execution keeps validation, commit, rollback, and durable recovery in one boundary
+async function executePlans(
 	context: VersionedEditingContext,
 	limits: ToolResourceLimits,
 	plans: readonly PlannedFile[],
 	assertLease: () => void
-): Promise<EditOutput> => {
+): Promise<EditOutput> {
 	const artifacts = plans.flatMap((plan) => {
 		if (!plan.editDiff.truncated) {
 			return [];
@@ -562,6 +555,12 @@ const executePlans = async (
 			}
 		);
 	}
+	const recovery = context.store.recovery;
+	await assertRecoveryAllowsMutation(
+		context,
+		plans.map((plan) => plan.canonicalPath),
+		"edit"
+	);
 	for (const { artifact } of artifacts) {
 		await context.store.saveFullDiffArtifact?.(artifact);
 	}
@@ -572,6 +571,19 @@ const executePlans = async (
 			);
 		}
 	}
+	const transaction =
+		recovery === undefined
+			? undefined
+			: await recovery.beginTransaction({
+					originSessionId: context.sessionId,
+					paths: plans.map((plan) => ({
+						canonicalPath: plan.canonicalPath,
+						displayPath: plan.displayPath,
+						newFileVersion: plan.newState.fileVersion,
+						originalBytes: new Uint8Array(plan.oldState.bytes),
+						originalFileVersion: plan.oldState.fileVersion,
+					})),
+				});
 	const committed: PlannedFile[] = [];
 	try {
 		assertLease();
@@ -583,12 +595,20 @@ const executePlans = async (
 				plan.displayPath
 			);
 			assertLease();
+			await assertRecoveryAllowsMutation(context, [plan.canonicalPath], "edit");
 			await atomicReplaceFile(
 				plan.canonicalPath,
 				plan.newState.bytes,
 				plan.oldState.fileVersion
 			);
 			committed.push(plan);
+			if (transaction !== undefined) {
+				await recovery?.updateTransactionPath(
+					transaction.id,
+					plan.canonicalPath,
+					"committed"
+				);
+			}
 		}
 		for (const plan of plans) {
 			assertLease();
@@ -601,9 +621,73 @@ const executePlans = async (
 			});
 			assertLease();
 		}
+		if (transaction !== undefined) {
+			await recovery?.closeTransaction(transaction.id, "completed");
+		}
 	} catch (error) {
 		await cleanupNewObservations(context, committed);
-		await rollbackCommitted(committed, error);
+		const unresolvedPaths = await rollbackCommitted(committed);
+		if (transaction !== undefined && recovery !== undefined) {
+			if (unresolvedPaths.length > 0) {
+				await throwPartialRecoveryFailure({
+					cause: error,
+					message:
+						"The edit transaction could not prove that every file was restored.",
+					operation: "edit",
+					recovery,
+					transactionId: transaction.id,
+					unresolvedPaths,
+				});
+			}
+			try {
+				for (const plan of committed) {
+					await recovery.updateTransactionPath(
+						transaction.id,
+						plan.canonicalPath,
+						"rolled_back"
+					);
+				}
+				await recovery.closeTransaction(transaction.id, "rolled_back");
+			} catch (cleanupError) {
+				await throwPartialRecoveryFailure({
+					cause: new Error(
+						`${error instanceof Error ? error.message : String(error)}; recovery cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`
+					),
+					message:
+						"The edit transaction could not prove that every file was restored.",
+					operation: "edit",
+					recovery,
+					transactionId: transaction.id,
+					unresolvedPaths: plans.map((plan) => plan.canonicalPath),
+				});
+			}
+			if (error instanceof CodingToolError) {
+				throw error;
+			}
+			throw new CodingToolError(
+				"edit-transaction-failed",
+				"The edit transaction failed and was rolled back.",
+				{
+					details: {
+						cause: error instanceof Error ? error.message : String(error),
+					},
+					recovery: { action: "reread" },
+				}
+			);
+		}
+		if (unresolvedPaths.length > 0) {
+			throw new CodingToolError(
+				"transaction-rollback-failed",
+				"The edit transaction could not prove that every changed file was restored.",
+				{
+					details: {
+						cause: error instanceof Error ? error.message : String(error),
+						unresolvedPaths,
+					},
+					recovery: { action: "reread" },
+				}
+			);
+		}
 		if (error instanceof CodingToolError) {
 			throw error;
 		}
@@ -635,7 +719,7 @@ const executePlans = async (
 			};
 		}),
 	};
-};
+}
 
 const planFiles = async (
 	input: MultiEditInput,

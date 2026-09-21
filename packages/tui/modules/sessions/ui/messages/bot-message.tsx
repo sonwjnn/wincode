@@ -144,6 +144,10 @@ const getRecoveryHint = (part: ToolPart): string => {
 				: `Next: read ${path} again and use its current version, then retry.`;
 		case "grant-sloppy":
 			return "Next: approve sloppy editing, then retry.";
+		case "recover":
+			return recovery.recoveryId === undefined
+				? "Next: inspect and reconcile the unresolved recovery."
+				: `Next: inspect and reconcile recovery ${recovery.recoveryId}.`;
 		case "correct-input":
 			return "Next: correct the input, then retry.";
 		default:

@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sloppy mode is separately permissioned, and Write requires an expected
   version for overwrites.
 
+- **Edit and Write transactions are recoverable across restart.** Every
+  mutation now persists its canonical write set and original bytes before the
+  first replacement. Interrupted commits create pinned Recovery Artifacts and
+  block conflicting mutations until the new Recover Tool explicitly inspects,
+  restores originals, keeps verified current bytes, or discards the artifact.
+  Legacy full-content and compatibility Edit inputs are not accepted; this is a
+  breaking protocol cutover.
+
 ### Features
 
 - **A correction reaches a running Agent Turn before it ends.** A message sent

@@ -41,7 +41,7 @@ export const shellPlatformFromNode = (platform: string): ShellPlatform =>
 // The permissive shell posture is recorded in ADR-0008; the model-facing copy
 // below deliberately stays free of internal document references.
 const SHELL_TOOL_BOUNDS_DESCRIPTION =
-	"Commands are non-interactive: no stdin is provided, output keeps the final 30 KiB by default (up to 128 KiB in the deep resource profile), and the default timeout is 30 s (up to 900 s in the deep resource profile). Resource profiles are selected in Wincode configuration; elevated profiles require approval.";
+	"Commands are non-interactive: no stdin is provided, output keeps the final 30 KiB by default (up to 128 KiB in the deep resource profile), and the default timeout is 30 s (up to 900 s in the deep resource profile). Resource profiles are selected in Wincode configuration; elevated profiles require approval. An unresolved workspace recovery never disables Shell, but its warning remains until explicit reconciliation or discard; recheck File Versions before coding-tool mutations.";
 
 /**
  * The generic catalog description used by the approval panel and the shared

@@ -8,6 +8,7 @@ import {
 } from "../../versioned/contracts";
 import {
 	assertObservedLineBudget,
+	assertRecoveryAllowsMutation,
 	atomicReplaceFile,
 	createParentDirectories,
 	expectFileVersion,
@@ -18,6 +19,7 @@ import {
 	removeEmptyCreatedParents,
 	resolveExistingTextPath,
 	resolveNewTextPath,
+	throwPartialRecoveryFailure,
 	withFileMutationLock,
 	withSnapshotFailureCleanup,
 } from "../../versioned/filesystem";
@@ -91,6 +93,9 @@ const restoreWriteAfterFailure = async ({
 }): Promise<boolean> => {
 	try {
 		const current = await readVersionedFile(resolvedPath);
+		if (existing !== null && current.fileVersion === existing.fileVersion) {
+			return true;
+		}
 		if (current.fileVersion !== newState.fileVersion) {
 			return false;
 		}
@@ -104,8 +109,8 @@ const restoreWriteAfterFailure = async ({
 			);
 		}
 		return true;
-	} catch {
-		return false;
+	} catch (error) {
+		return existing === null && isMissingPath(error);
 	}
 };
 
@@ -218,14 +223,38 @@ export const runWriteTool = async (
 		limits.read.maxObservedLines,
 		resolvedPath
 	);
+	const recovery = context.store.recovery;
 	const mutate = (assertLease: () => void) =>
 		withFileMutationLock(resolvedPath, () =>
 			withSnapshotFailureCleanup(
 				context,
 				{ fileVersion: newState.fileVersion, path: resolvedPath },
+				// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: mutation boundary co-locates preflight, replacement, observation, rollback, and recovery
 				async () => {
-					const createdParents = await createParentDirectories(resolvedPath);
+					assertLease();
+					await assertRecoveryAllowsMutation(context, [resolvedPath], "write");
+					const transaction =
+						recovery === undefined
+							? undefined
+							: await recovery.beginTransaction({
+									originSessionId: context.sessionId,
+									paths: [
+										{
+											canonicalPath: resolvedPath,
+											displayPath: input.path,
+											newFileVersion: newState.fileVersion,
+											originalBytes:
+												existing === null
+													? null
+													: new Uint8Array(existing.bytes),
+											originalFileVersion: existing?.fileVersion ?? null,
+										},
+									],
+								});
+					let createdParents: readonly string[] = [];
+					let committed = false;
 					try {
+						createdParents = await createParentDirectories(resolvedPath);
 						assertLease();
 						await assertWriteTargetUnchanged({
 							existing,
@@ -233,11 +262,24 @@ export const runWriteTool = async (
 							resolvedPath,
 						});
 						assertLease();
+						await assertRecoveryAllowsMutation(
+							context,
+							[resolvedPath],
+							"write"
+						);
 						await atomicReplaceFile(
 							resolvedPath,
 							newState.bytes,
 							existing?.fileVersion
 						);
+						committed = true;
+						if (transaction !== undefined) {
+							await recovery?.updateTransactionPath(
+								transaction.id,
+								resolvedPath,
+								"committed"
+							);
+						}
 						const observation = await persistWriteObservation({
 							context,
 							existing,
@@ -248,6 +290,9 @@ export const runWriteTool = async (
 							snapshotPersisted: false,
 						});
 						assertLease();
+						if (transaction !== undefined) {
+							await recovery?.closeTransaction(transaction.id, "completed");
+						}
 						return {
 							bytesWritten: newState.bytes.byteLength,
 							newFileVersion: newState.fileVersion,
@@ -257,8 +302,48 @@ export const runWriteTool = async (
 							seenLines: [...observation.seenLines],
 						};
 					} catch (error) {
-						if (existing === null) {
+						const restored =
+							!committed ||
+							(await restoreWriteAfterFailure({
+								existing,
+								newState,
+								resolvedPath,
+							}));
+						if (restored && existing === null) {
 							await removeEmptyCreatedParents(createdParents);
+						}
+						if (transaction !== undefined && recovery !== undefined) {
+							if (!restored) {
+								await throwPartialRecoveryFailure({
+									cause: error,
+									message:
+										"The write could not prove that the file was restored.",
+									operation: "write",
+									recovery,
+									transactionId: transaction.id,
+									unresolvedPaths: [resolvedPath],
+								});
+							}
+							try {
+								await recovery.updateTransactionPath(
+									transaction.id,
+									resolvedPath,
+									"rolled_back"
+								);
+								await recovery.closeTransaction(transaction.id, "rolled_back");
+							} catch (cleanupError) {
+								await throwPartialRecoveryFailure({
+									cause: new Error(
+										`${error instanceof Error ? error.message : String(error)}; recovery cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`
+									),
+									message:
+										"The write could not prove that the file was restored.",
+									operation: "write",
+									recovery,
+									transactionId: transaction.id,
+									unresolvedPaths: [resolvedPath],
+								});
+							}
 						}
 						throw error;
 					}

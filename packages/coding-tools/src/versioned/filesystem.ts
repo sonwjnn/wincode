@@ -254,6 +254,97 @@ export const persistFileObservation = async ({
 	const transaction = context.store.withSnapshotTransaction;
 	return transaction ? transaction(persist) : persist();
 };
+export const assertRecoveryAllowsMutation = async (
+	context: VersionedEditingContext,
+	paths: readonly string[],
+	operation: "edit" | "write" | "recover",
+	exceptRecoveryId?: string
+): Promise<void> => {
+	const recovery = context.store.recovery;
+	if (recovery === undefined) {
+		return;
+	}
+	await recovery.ensureReady?.();
+	try {
+		await recovery.assertMutationAllowed(
+			paths,
+			context.sessionId,
+			operation,
+			exceptRecoveryId
+		);
+	} catch (error) {
+		if (isCodingToolError(error)) {
+			throw error;
+		}
+		if (isObjectLike(error) && typeof error.code === "string") {
+			const details = isObjectLike(error.details)
+				? error.details
+				: { paths, operation };
+			throw new CodingToolError(
+				error.code,
+				error instanceof Error
+					? error.message
+					: "Recovery blocks this mutation.",
+				{
+					details,
+					recovery: {
+						action: "recover",
+						message: "Resolve the pinned recovery first.",
+					},
+				}
+			);
+		}
+		throw error;
+	}
+};
+export const throwPartialRecoveryFailure = async ({
+	cause,
+	message,
+	operation,
+	recovery,
+	transactionId,
+	unresolvedPaths,
+}: {
+	cause: unknown;
+	message: string;
+	operation: "edit" | "write";
+	recovery: import("./recovery").RecoveryStore;
+	transactionId: string;
+	unresolvedPaths: readonly string[];
+}): Promise<never> => {
+	const causeText = cause instanceof Error ? cause.message : String(cause);
+	try {
+		const unresolved = await recovery.createUnresolvedRecovery({
+			reason: causeText,
+			transactionId,
+			unresolvedPaths,
+		});
+		throw new CodingToolError("partial_failure", message, {
+			details: {
+				cause: causeText,
+				operation,
+				recoveryId: unresolved.id,
+				transactionId,
+				unresolvedPaths,
+			},
+			recovery: { action: "recover", recoveryId: unresolved.id },
+		});
+	} catch (error) {
+		if (error instanceof CodingToolError) {
+			throw error;
+		}
+		throw new CodingToolError("partial_failure", message, {
+			details: {
+				cause: causeText,
+				operation,
+				recoveryError: error instanceof Error ? error.message : String(error),
+				transactionId,
+				unresolvedPaths,
+			},
+			recovery: { action: "recover" },
+		});
+	}
+};
 
 const hasWriteModeBit = (mode: number, bit: number): boolean =>
 	Math.floor(mode / bit) % 2 === 1;

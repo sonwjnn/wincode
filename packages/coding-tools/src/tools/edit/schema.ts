@@ -40,7 +40,6 @@ const replaceEditSchema = z
 		replaceAll: z.boolean().optional(),
 	})
 	.strict();
-
 const sloppyEditSchema = z
 	.object({
 		mode: z.literal("sloppy"),
@@ -48,25 +47,58 @@ const sloppyEditSchema = z
 	})
 	.strict();
 
-export const editInputSchema = z.union([
-	hashlineEditSchema,
-	patchEditSchema,
-	applyPatchEditSchema,
-	replaceEditSchema,
-	sloppyEditSchema,
-]);
+const legacyEditGuardSchema = z.unknown().superRefine((value, context) => {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return;
+	}
+	if ("content" in value) {
+		context.addIssue({
+			code: "custom",
+			message:
+				"Edit no longer accepts full-file content; use Write with an expected File Version for overwrites.",
+		});
+		return;
+	}
+	if (
+		"line" in value ||
+		"hash" in value ||
+		"lineHash" in value ||
+		"oldText" in value ||
+		"newText" in value ||
+		"find" in value ||
+		"replace" in value ||
+		"old" in value ||
+		"new" in value
+	) {
+		context.addIssue({
+			code: "custom",
+			message:
+				"Legacy Edit fields are unsupported; use the active Edit Mode patch protocol or explicit replace mode.",
+		});
+	}
+});
+
+export const editInputSchema = legacyEditGuardSchema.pipe(
+	z.union([
+		hashlineEditSchema,
+		patchEditSchema,
+		applyPatchEditSchema,
+		replaceEditSchema,
+		sloppyEditSchema,
+	])
+);
 export const editInputSchemaForMode = (mode: EditMode) => {
 	switch (mode) {
 		case "hashline":
-			return hashlineEditSchema;
+			return legacyEditGuardSchema.pipe(hashlineEditSchema);
 		case "patch":
-			return patchEditSchema;
+			return legacyEditGuardSchema.pipe(patchEditSchema);
 		case "apply_patch":
-			return applyPatchEditSchema;
+			return legacyEditGuardSchema.pipe(applyPatchEditSchema);
 		case "replace":
-			return replaceEditSchema;
+			return legacyEditGuardSchema.pipe(replaceEditSchema);
 		case "sloppy":
-			return sloppyEditSchema;
+			return legacyEditGuardSchema.pipe(sloppyEditSchema);
 		default:
 			throw new Error(`Unsupported Edit Mode: ${mode}`);
 	}

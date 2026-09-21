@@ -658,7 +658,8 @@ export const createDrizzleSessionStore = (
 	const workspace = ensureWorkspace(db, options.workspaceRoot ?? process.cwd());
 	const fileObservationStore = createDrizzleFileObservationStore(
 		db,
-		snapshotRoot
+		snapshotRoot,
+		workspace.id
 	);
 	const collectAttachments = (
 		safetyWindowMs = 60_000
@@ -674,6 +675,30 @@ export const createDrizzleSessionStore = (
 					reclaimedBytes: 0,
 					reclaimedCount: 0,
 				});
+	const assertRecoveryResolvedForSessionDeletion = async (
+		sessionId: SessionId
+	): Promise<void> => {
+		const recovery = fileObservationStore.recovery;
+		if (recovery === undefined) {
+			return;
+		}
+		await recovery.ensureReady?.();
+		const unresolved = (await recovery.listUnresolvedRecoveries()).filter(
+			(entry) => entry.originSessionId === sessionId
+		);
+		if (unresolved.length === 0) {
+			return;
+		}
+		const error = new Error(
+			"Session deletion is blocked until its unresolved recovery is resolved, exported, discarded, or cancelled."
+		) as Error & { code: string; details: Record<string, unknown> };
+		error.code = "session-recovery-required";
+		error.details = {
+			actions: ["resolve", "export", "discard", "cancel"],
+			recoveryIds: unresolved.map(({ id }) => id),
+		};
+		throw error;
+	};
 
 	return {
 		appendCompaction: (input) =>
@@ -740,6 +765,7 @@ export const createDrizzleSessionStore = (
 		},
 
 		deleteSession: async (sessionId: SessionId) => {
+			await assertRecoveryResolvedForSessionDeletion(sessionId);
 			db.delete(session)
 				.where(
 					and(eq(session.id, sessionId), eq(session.workspaceId, workspace.id))
@@ -751,8 +777,17 @@ export const createDrizzleSessionStore = (
 				await prune().catch(() => undefined);
 			}
 		},
-
 		resetSessionData: async () => {
+			const recovery = fileObservationStore.recovery;
+			if (recovery !== undefined) {
+				await recovery.ensureReady?.();
+				const unresolved = await recovery.listUnresolvedRecoveries();
+				if (unresolved.length > 0) {
+					throw new Error(
+						"Reset is blocked until every workspace recovery is reconciled or discarded."
+					);
+				}
+			}
 			db.transaction((tx) => {
 				tx.delete(sessionCompaction).run();
 				tx.delete(sessionRecord).run();

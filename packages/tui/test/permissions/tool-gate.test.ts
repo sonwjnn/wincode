@@ -600,6 +600,45 @@ describe("shell override and grants", () => {
 		});
 		expect(requests).toHaveLength(2);
 	});
+	test("gates cross-session recovery with a separate approval", async () => {
+		const requests: ToolApprovalRequest[] = [];
+		const gate = createToolGate({
+			approvals: settlingApprovalPort(
+				{ decision: "allow", remember: false },
+				requests
+			),
+			resolvePermission: async () =>
+				createToolPermission({
+					recover: "ask",
+					"recover:cross-session": "ask",
+				}),
+			resolveRecovery: async (recoveryId) =>
+				recoveryId === "recovery-1"
+					? { originSessionId: "origin-session", paths: [] }
+					: undefined,
+			sandbox: createWorkspaceSandbox(process.cwd()),
+			service: createPermissionService(),
+			sessionId: "reconciler-session",
+		});
+		await expect(
+			gate.gate({
+				family: "coding",
+				toolCall: {
+					input: { action: "inspect", recoveryId: "recovery-1" },
+					toolCallId: makeToolCallId("call-recover-cross-session"),
+					toolName: "recover",
+				},
+			})
+		).resolves.toEqual({ approvedCrossSession: true, kind: "allow" });
+		expect(requests[0]?.identity).toContainEqual({
+			label: "tool",
+			value: "recover",
+		});
+		expect(requests[0]?.identity).toContainEqual({
+			label: "resource",
+			value: "recovery-1",
+		});
+	});
 
 	test("an explicit deny is never bypassed by grants or auto approval", async () => {
 		const service = createPermissionService({ autoApproval: true });

@@ -60,6 +60,7 @@ import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
  */
 export type GateOutcome =
 	| {
+			approvedCrossSession?: boolean;
 			approvedExternalPaths?: readonly string[];
 			approvedWorkspacePaths?: readonly string[];
 			input?: unknown;
@@ -123,16 +124,24 @@ export type ToolGateApprovalPort = {
 export type ToolGateDeps = {
 	approvals: ToolGateApprovalPort;
 	onAbort?: (request: ToolApprovalRequest) => void;
+	recoveryWarning?: () => Promise<string | undefined>;
 	resolvePermission: (agentId?: AgentId) => Promise<ToolPermission>;
+	resolveRecovery?: (
+		recoveryId: string
+	) => Promise<
+		{ originSessionId: string; paths: readonly string[] } | undefined
+	>;
 	resolveResourceLimits?: (agentId?: AgentId) => Promise<ToolResourceLimits>;
 	sandbox: WorkspacePolicy;
 	service: PermissionService;
+	sessionId?: string;
 };
 
 const STATIC_TOOL_LABELS = {
 	read: "Read",
 	write: "Write",
 	edit: "Edit",
+	recover: "Recover",
 	glob: "Glob",
 	grep: "Grep",
 	shell: "Shell",
@@ -178,6 +187,12 @@ const resolveGateResource = (
 	tool: CodingToolName,
 	input: unknown
 ): GateResource | undefined => {
+	if (tool === "recover") {
+		const recoveryId = getStringField(input, "recoveryId");
+		return recoveryId === undefined
+			? undefined
+			: { kind: "literal", value: recoveryId };
+	}
 	if (tool === "grep" || tool === "glob") {
 		const pattern = getStringField(input, "pattern");
 		if (!pattern) {
@@ -429,10 +444,13 @@ const withErrorText = (
 export const createToolGate = ({
 	approvals,
 	onAbort,
+	recoveryWarning,
 	resolvePermission,
+	resolveRecovery,
 	resolveResourceLimits: resolveResourceLimitsOption,
 	sandbox,
 	service,
+	sessionId,
 }: ToolGateDeps): ToolGate => {
 	const resolveResourceLimits =
 		resolveResourceLimitsOption ??
@@ -645,8 +663,74 @@ export const createToolGate = ({
 				},
 			};
 		}
-
 		if (gateResource.kind === "literal") {
+			const recoveryAction =
+				tool === "recover"
+					? getStringField(toolCall.input, "action")
+					: undefined;
+			const recoveryContext =
+				tool === "recover" && resolveRecovery !== undefined
+					? await resolveRecovery(gateResource.value)
+					: undefined;
+			const crossSessionRecovery =
+				tool === "recover" &&
+				recoveryContext !== undefined &&
+				sessionId !== undefined &&
+				recoveryContext.originSessionId !== sessionId;
+			const externalRecoveryResources: string[] = [];
+			if (tool === "recover" && recoveryContext !== undefined) {
+				for (const recoveryPath of recoveryContext.paths) {
+					try {
+						await canonicalizeResource(recoveryPath, sandbox);
+					} catch {
+						try {
+							externalRecoveryResources.push(
+								await canonicalizeExternalPath(recoveryPath, sandbox.root)
+							);
+						} catch {
+							return {
+								errorText:
+									"Recover target is outside the permitted filesystem scope.",
+								kind: "deny",
+							};
+						}
+					}
+				}
+			}
+			const extraRecoveryChecks =
+				tool === "recover"
+					? [
+							...externalRecoveryResources.map((resource) => ({
+								action: "external_directory" as const,
+								decision: permission.decide("external_directory", resource),
+								resource,
+							})),
+							...(recoveryAction === "discard"
+								? [
+										{
+											action: "recover:discard",
+											decision: permission.decide(
+												"recover:discard",
+												gateResource.value
+											),
+											resource: gateResource.value,
+										},
+									]
+								: []),
+							...(crossSessionRecovery
+								? [
+										{
+											action: "recover:cross-session",
+											decision: permission.decide(
+												"recover:cross-session",
+												gateResource.value
+											),
+											resource: gateResource.value,
+										},
+									]
+								: []),
+						]
+					: [];
 			const settled = await settleApproval(
 				{
 					checks: [
@@ -657,19 +741,44 @@ export const createToolGate = ({
 							resource: gateResource.value,
 						},
 						...editModeChecks(gateResource.value),
+						...extraRecoveryChecks,
 					],
 					doomAsk,
-					request: requestFor(gateResource.value, false),
+					request: requestFor(
+						gateResource.value,
+						externalRecoveryResources.length > 0,
+						externalRecoveryResources.length > 0
+							? externalRecoveryResources.join(", ")
+							: undefined
+					),
 					safety: permission.safety,
 				},
 				approvalDeps,
-				() => grantApprovedAccess(() => grantCodingAccess(gateResource.value))
+				() =>
+					grantApprovedAccess(() => {
+						for (const resource of externalRecoveryResources) {
+							service.grant(
+								"external_directory",
+								externalParentDirectoryGlob(resource)
+							);
+						}
+						grantCodingAccess(gateResource.value);
+						if (recoveryAction === "discard") {
+							service.grant("recover:discard", gateResource.value);
+						}
+						if (crossSessionRecovery) {
+							service.grant("recover:cross-session", gateResource.value);
+						}
+					})
 			);
-			return withErrorText(
+			const outcome = withErrorText(
 				settled,
 				staticDenialText(label, gateResource.value),
 				(feedback) => staticRejectionText(label, gateResource.value, feedback)
 			);
+			return crossSessionRecovery && outcome.kind === "allow"
+				? { ...outcome, approvedCrossSession: true }
+				: outcome;
 		}
 		const pathInput =
 			tool === "read"
@@ -854,18 +963,27 @@ export const createToolGate = ({
 		const resourceLimits = await resolveResourceLimits(agentId);
 		const limitChecks = resourceLimitChecks(resourceLimits);
 		const cwd = getStringField(toolCall.input, "cwd");
-		const request = (external: boolean): ToolApprovalRequest => ({
-			description: codingToolDefinitions.shell.description,
-			identity: [
-				{ label: "tool", value: "shell" },
-				{ label: "resource", value: command },
-				...resourceLimitIdentity(resourceLimits),
-				...(external ? [{ label: "scope", value: "external" }] : []),
-			],
-			input: toolCall.input,
-			safety: permission.safety,
-			toolCallId: toolCall.toolCallId,
-		});
+		const request = async (external: boolean): Promise<ToolApprovalRequest> => {
+			const warning = await recoveryWarning?.();
+			return {
+				description:
+					warning === undefined
+						? codingToolDefinitions.shell.description
+						: `${codingToolDefinitions.shell.description}\n\n${warning}`,
+				identity: [
+					{ label: "tool", value: "shell" },
+					{ label: "resource", value: command },
+					...resourceLimitIdentity(resourceLimits),
+					...(warning === undefined
+						? []
+						: [{ label: "recovery", value: warning }]),
+					...(external ? [{ label: "scope", value: "external" }] : []),
+				],
+				input: toolCall.input,
+				safety: permission.safety,
+				toolCallId: toolCall.toolCallId,
+			};
+		};
 
 		let externalResource: string | undefined;
 		if (!isUndefined(cwd)) {
@@ -903,7 +1021,7 @@ export const createToolGate = ({
 						},
 					],
 					doomAsk,
-					request: request(false),
+					request: await request(false),
 					safety: permission.safety,
 				},
 				approvalDeps,
@@ -935,7 +1053,7 @@ export const createToolGate = ({
 					},
 				],
 				doomAsk,
-				request: request(true),
+				request: await request(true),
 				safety: permission.safety,
 			},
 			approvalDeps,

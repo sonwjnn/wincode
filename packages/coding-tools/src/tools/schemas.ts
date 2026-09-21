@@ -26,6 +26,12 @@ export {
 	readOutputSchema,
 	readToolSchema,
 } from "./read/schema";
+export type { RecoverInput, RecoverOutput } from "./recover/schema";
+export {
+	recoverInputSchema,
+	recoverOutputSchema,
+	recoverToolSchema,
+} from "./recover/schema";
 export type { ShellInput, ShellOutput, ShellPlatform } from "./shell/schema";
 export {
 	composeShellToolDescription,
@@ -68,6 +74,11 @@ import {
 	readToolSchema,
 } from "./read/schema";
 import {
+	recoverInputSchema,
+	recoverOutputSchema,
+	recoverToolSchema,
+} from "./recover/schema";
+import {
 	composeShellToolDescription,
 	shellInputSchema,
 	shellOutputSchema,
@@ -105,6 +116,11 @@ export const codingToolDefinitions = {
 		inputSchema: editInputSchema,
 		outputSchema: editOutputSchema,
 	},
+	recover: {
+		description: recoverToolSchema.description,
+		inputSchema: recoverInputSchema,
+		outputSchema: recoverOutputSchema,
+	},
 	glob: {
 		description: globToolSchema.description,
 		inputSchema: globInputSchema,
@@ -127,6 +143,10 @@ export const codingToolDefinitions = {
 		typeof writeOutputSchema
 	>;
 	edit: CodingToolDefinition<typeof editInputSchema, typeof editOutputSchema>;
+	recover: CodingToolDefinition<
+		typeof recoverInputSchema,
+		typeof recoverOutputSchema
+	>;
 	glob: CodingToolDefinition<typeof globInputSchema, typeof globOutputSchema>;
 	grep: CodingToolDefinition<typeof grepInputSchema, typeof grepOutputSchema>;
 	shell: CodingToolDefinition<
@@ -141,6 +161,7 @@ export const codingToolNames = [
 	"read",
 	"write",
 	"edit",
+	"recover",
 	"glob",
 	"grep",
 	"shell",
@@ -171,6 +192,11 @@ export const codingToolSchemas = {
 		name: "edit",
 		schema: codingToolDefinitions.edit.inputSchema,
 	},
+	recover: {
+		description: codingToolDefinitions.recover.description,
+		name: "recover",
+		schema: codingToolDefinitions.recover.inputSchema,
+	},
 	glob: {
 		description: codingToolDefinitions.glob.description,
 		name: "glob",
@@ -198,6 +224,7 @@ export const codingToolSchemaList = [
 	codingToolSchemas.read,
 	codingToolSchemas.write,
 	codingToolSchemas.edit,
+	codingToolSchemas.recover,
 	codingToolSchemas.glob,
 	codingToolSchemas.grep,
 	codingToolSchemas.shell,

@@ -214,6 +214,33 @@ export const createSessionPorts = ({
 				? permission.resolvePermission()
 				: permission.resolvePermissionForAgent(agentId);
 		},
+		recoveryWarning: async () => {
+			const recovery = capabilities.getStore().fileObservationStore?.recovery;
+			if (recovery === undefined) {
+				return;
+			}
+			const unresolved = await recovery.listUnresolvedRecoveries();
+			return unresolved.length === 0
+				? undefined
+				: `Unresolved recovery remains in this workspace (${unresolved
+						.map(({ id }) => id)
+						.join(", ")}). Reconcile it with recover; Shell remains available.`;
+		},
+		resolveRecovery: async (recoveryId) => {
+			const recovery = capabilities.getStore().fileObservationStore?.recovery;
+			if (recovery === undefined) {
+				return;
+			}
+			const inspection = await recovery.getRecoveryInspection(recoveryId);
+			return inspection === null
+				? undefined
+				: {
+						originSessionId: inspection.recovery.originSessionId,
+						paths: inspection.artifact.paths.map(
+							({ canonicalPath }) => canonicalPath
+						),
+					};
+		},
 		resolveResourceLimits: (agentId) => {
 			const permission = capabilities.getToolPermission();
 			return isUndefined(agentId)
@@ -222,6 +249,7 @@ export const createSessionPorts = ({
 		},
 		sandbox: capabilities.getToolPermission().sandbox,
 		service: capabilities.getToolPermission().service,
+		sessionId,
 	});
 	/**
 	 * The request overhead of the Agent Turn execution in flight: the bounded

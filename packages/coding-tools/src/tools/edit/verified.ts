@@ -8,12 +8,14 @@ import {
 } from "../../versioned/contracts";
 import {
 	assertObservedLineBudget,
+	assertRecoveryAllowsMutation,
 	atomicReplaceFile,
 	expectFileVersion,
 	type FileState,
 	persistFileObservation,
 	readVersionedFile,
 	resolveExistingTextPath,
+	throwPartialRecoveryFailure,
 	withFileMutationLock,
 	withSnapshotFailureCleanup,
 } from "../../versioned/filesystem";
@@ -669,6 +671,9 @@ const restoreMutationAfterFailure = async ({
 }): Promise<boolean> => {
 	try {
 		const current = await readVersionedFile(resolvedPath);
+		if (current.fileVersion === oldState.fileVersion) {
+			return true;
+		}
 		if (current.fileVersion !== newState.fileVersion) {
 			return false;
 		}
@@ -812,59 +817,138 @@ export const commitMutation = async ({
 			withSnapshotFailureCleanup(
 				context,
 				{ fileVersion: newState.fileVersion, path: resolvedPath },
+				// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: mutation boundary co-locates preflight, replacement, observation, rollback, and recovery
 				async () => {
 					assertLease();
-					const latest = await readVersionedFile(resolvedPath);
-					expectFileVersion(latest.fileVersion, oldState.fileVersion, pathName);
-					const latestBeforeRename = await readVersionedFile(resolvedPath);
-					expectFileVersion(
-						latestBeforeRename.fileVersion,
-						oldState.fileVersion,
-						pathName
-					);
-					if (fullDiffArtifact !== undefined) {
-						if (context.store.saveFullDiffArtifact === undefined) {
-							throw new CodingToolError(
-								"edit-diff-artifact-unavailable",
-								"A complete diff is required but the active session store cannot persist it.",
-								{ recovery: { action: "correct-input" } }
+					await assertRecoveryAllowsMutation(context, [resolvedPath], "edit");
+					const recovery = context.store.recovery;
+					const transaction =
+						recovery === undefined
+							? undefined
+							: await recovery.beginTransaction({
+									originSessionId: context.sessionId,
+									paths: [
+										{
+											canonicalPath: resolvedPath,
+											displayPath: pathName,
+											newFileVersion: newState.fileVersion,
+											originalBytes: new Uint8Array(oldState.bytes),
+											originalFileVersion: oldState.fileVersion,
+										},
+									],
+								});
+					let committed = false;
+					try {
+						const latest = await readVersionedFile(resolvedPath);
+						expectFileVersion(
+							latest.fileVersion,
+							oldState.fileVersion,
+							pathName
+						);
+						const latestBeforeRename = await readVersionedFile(resolvedPath);
+						expectFileVersion(
+							latestBeforeRename.fileVersion,
+							oldState.fileVersion,
+							pathName
+						);
+						if (fullDiffArtifact !== undefined) {
+							if (context.store.saveFullDiffArtifact === undefined) {
+								throw new CodingToolError(
+									"edit-diff-artifact-unavailable",
+									"A complete diff is required but the active session store cannot persist it.",
+									{ recovery: { action: "correct-input" } }
+								);
+							}
+							await context.store.saveFullDiffArtifact(fullDiffArtifact);
+						}
+						assertLease();
+						await assertRecoveryAllowsMutation(context, [resolvedPath], "edit");
+						await atomicReplaceFile(
+							resolvedPath,
+							newState.bytes,
+							oldState.fileVersion
+						);
+						committed = true;
+						if (transaction !== undefined) {
+							await recovery?.updateTransactionPath(
+								transaction.id,
+								resolvedPath,
+								"committed"
 							);
 						}
-						await context.store.saveFullDiffArtifact(fullDiffArtifact);
+						const observation = await persistEditObservation({
+							context,
+							limits,
+							newState,
+							oldState,
+							pathName,
+							resolvedPath,
+							seenLines,
+							snapshotPersisted: false,
+						});
+						assertLease();
+						if (transaction !== undefined) {
+							await recovery?.closeTransaction(transaction.id, "completed");
+						}
+						return {
+							editDiff: editDiff.truncated ? undefined : editDiff,
+							fullDiffArtifact:
+								fullDiffArtifact === undefined
+									? undefined
+									: {
+											byteLength: fullDiffArtifact.byteLength,
+											id: fullDiffArtifact.id,
+										},
+							newFileVersion: newState.fileVersion,
+							observationId: observation.id,
+							oldFileVersion: oldState.fileVersion,
+							path: pathName,
+							replacements,
+							seenLines: [...observation.seenLines],
+						};
+					} catch (error) {
+						const restored =
+							!committed ||
+							(await restoreMutationAfterFailure({
+								newState,
+								oldState,
+								resolvedPath,
+							}));
+						if (transaction !== undefined && recovery !== undefined) {
+							if (!restored) {
+								await throwPartialRecoveryFailure({
+									cause: error,
+									message:
+										"The edit could not prove that the file was restored.",
+									operation: "edit",
+									recovery,
+									transactionId: transaction.id,
+									unresolvedPaths: [resolvedPath],
+								});
+							}
+							try {
+								await recovery.updateTransactionPath(
+									transaction.id,
+									resolvedPath,
+									"rolled_back"
+								);
+								await recovery.closeTransaction(transaction.id, "rolled_back");
+							} catch (cleanupError) {
+								await throwPartialRecoveryFailure({
+									cause: new Error(
+										`${error instanceof Error ? error.message : String(error)}; recovery cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`
+									),
+									message:
+										"The edit could not prove that the file was restored.",
+									operation: "edit",
+									recovery,
+									transactionId: transaction.id,
+									unresolvedPaths: [resolvedPath],
+								});
+							}
+						}
+						throw error;
 					}
-					assertLease();
-					await atomicReplaceFile(
-						resolvedPath,
-						newState.bytes,
-						oldState.fileVersion
-					);
-					const observation = await persistEditObservation({
-						context,
-						limits,
-						newState,
-						oldState,
-						pathName,
-						resolvedPath,
-						seenLines,
-						snapshotPersisted: false,
-					});
-					assertLease();
-					return {
-						editDiff: editDiff.truncated ? undefined : editDiff,
-						fullDiffArtifact:
-							fullDiffArtifact === undefined
-								? undefined
-								: {
-										byteLength: fullDiffArtifact.byteLength,
-										id: fullDiffArtifact.id,
-									},
-						newFileVersion: newState.fileVersion,
-						observationId: observation.id,
-						oldFileVersion: oldState.fileVersion,
-						path: pathName,
-						replacements,
-						seenLines: [...observation.seenLines],
-					};
 				}
 			)
 		);

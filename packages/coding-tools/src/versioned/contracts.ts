@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isObjectLike } from "@wincode/runtime-utils";
 import { z } from "zod";
 import type { FILE_VERSION_ALGORITHM, FileVersion, LineRange } from "./model";
+import { createMemoryRecoveryStore, type RecoveryStore } from "./recovery";
 
 export const editModeSchema = z.enum([
 	"hashline",
@@ -28,10 +29,16 @@ export type PathLeaseOperation = <T>(
 ) => Promise<T>;
 
 export type CodingToolRecovery = Readonly<{
-	action: "reread" | "provide-file-version" | "grant-sloppy" | "correct-input";
+	action:
+		| "reread"
+		| "provide-file-version"
+		| "grant-sloppy"
+		| "correct-input"
+		| "recover";
 	currentFileVersion?: FileVersion;
 	lineRange?: LineRange;
 	path?: string;
+	recoveryId?: string;
 	message?: string;
 }>;
 export const isCodingToolRecovery = (
@@ -44,7 +51,8 @@ export const isCodingToolRecovery = (
 		value.action === "reread" ||
 		value.action === "provide-file-version" ||
 		value.action === "grant-sloppy" ||
-		value.action === "correct-input"
+		value.action === "correct-input" ||
+		value.action === "recover"
 	);
 };
 
@@ -167,6 +175,7 @@ export type FileObservationStore = Readonly<{
 	saveObservation: (observation: FileObservation) => Promise<void>;
 	saveSnapshot: (snapshot: FileSnapshot) => Promise<void>;
 	withPathLeases?: PathLeaseOperation;
+	recovery?: RecoveryStore;
 	withSnapshotTransaction?: <T>(operation: () => Promise<T>) => Promise<T>;
 }>;
 
@@ -225,7 +234,9 @@ export const createMemoryFileObservationStore = (): FileObservationStore => {
 	const observations = new Map<string, FileObservation>();
 	const artifacts = new Map<string, FullDiffArtifact>();
 	const leases = new Map<string, Promise<void>>();
+	const recovery = createMemoryRecoveryStore();
 	return {
+		recovery,
 		getLatestObservation: async (sessionId, path) => {
 			let latest: FileObservation | null = null;
 			for (const observation of observations.values()) {

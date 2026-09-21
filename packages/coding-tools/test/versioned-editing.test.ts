@@ -19,6 +19,7 @@ import {
 	createMemoryFileObservationStore,
 	decodeEscapedPatchPath,
 	decodeLosslessText,
+	editInputSchema,
 	encodeLosslessText,
 	FILE_VERSION_ALGORITHM,
 	getToolResourceLimits,
@@ -86,6 +87,29 @@ describe("versioned text model", () => {
 	test("decodes bracket escapes and rejects raw closing brackets", () => {
 		expect(decodeEscapedPatchPath("/tmp/a\\]b")).toBe("/tmp/a]b");
 		expect(decodeEscapedPatchPath("/tmp/a]b")).toBeUndefined();
+	});
+	test("rejects legacy Edit shapes with actionable guidance", () => {
+		const fullFile = editInputSchema.safeParse({
+			content: "replacement",
+			path: "sample.txt",
+		});
+		expect(fullFile.success).toBe(false);
+		if (!fullFile.success) {
+			expect(fullFile.error.issues[0]?.message).toContain(
+				"use Write with an expected File Version"
+			);
+		}
+		const legacyReplacement = editInputSchema.safeParse({
+			find: "old",
+			path: "sample.txt",
+			replace: "new",
+		});
+		expect(legacyReplacement.success).toBe(false);
+		if (!legacyReplacement.success) {
+			expect(legacyReplacement.error.issues[0]?.message).toContain(
+				"active Edit Mode patch protocol"
+			);
+		}
 	});
 });
 describe("versioned coding tools", () => {
@@ -1409,5 +1433,137 @@ describe("versioned coding tools", () => {
 			expect(result.newFileVersion).not.toBe(read.fileVersion);
 			expect(await readFile(filePath, "utf8")).toBe("ONE\n");
 		});
+	});
+	test("persists unresolved recovery when manifest progress cleanup fails", async () => {
+		await withTempFile("one\ntwo\n", async (filePath, context) => {
+			const recovery = context.store.recovery;
+			if (recovery === undefined) {
+				throw new Error("The memory observation store has no recovery store.");
+			}
+			const failingRecovery = {
+				...recovery,
+				updateTransactionPath: async () => {
+					throw new Error("injected manifest progress failure");
+				},
+			};
+			const failingContext: VersionedEditingContext = {
+				...context,
+				store: { ...context.store, recovery: failingRecovery },
+			};
+			const read = await runReadTool(
+				{ path: filePath },
+				{ allowExternalPath: true, versionedEditing: failingContext }
+			);
+			let failure: unknown;
+			try {
+				await runEditTool(
+					{
+						patch: `[${filePath}#${read.fileVersion}]\nPUT 1.=1:\n+ONE`,
+					},
+					{ allowExternalPath: true, versionedEditing: failingContext }
+				);
+			} catch (error) {
+				failure = error;
+			}
+			expect(failure).toBeInstanceOf(Error);
+			if (!(failure instanceof Error)) {
+				throw new Error("Expected a structured coding-tool failure.");
+			}
+			const structuredFailure = failure as Error & {
+				code?: string;
+				details?: { unresolvedPaths?: string[] };
+			};
+			expect(structuredFailure.code).toBe("partial_failure");
+			expect(structuredFailure.details?.unresolvedPaths).toEqual([
+				await realpath(filePath),
+			]);
+			expect(await readFile(filePath, "utf8")).toBe("one\ntwo\n");
+			expect(await recovery.listUnresolvedRecoveries()).toHaveLength(1);
+		});
+	});
+	test("pins only the path whose rollback is unprovable", async () => {
+		const directory = await mkdtemp("/tmp/wincode-versioned-multi-");
+		const firstPath = path.join(directory, "first.txt");
+		const secondPath = path.join(directory, "second.txt");
+		try {
+			await writeFile(firstPath, "one\n");
+			await writeFile(secondPath, "two\n");
+			const baseStore = createMemoryFileObservationStore();
+			const recovery = baseStore.recovery;
+			if (recovery === undefined) {
+				throw new Error("The memory observation store has no recovery store.");
+			}
+			let committedPaths = 0;
+			const failingRecovery = {
+				...recovery,
+				updateTransactionPath: async (
+					transactionId: string,
+					canonicalPath: string,
+					status: "prepared" | "committed" | "rolled_back" | "unknown"
+				) => {
+					if (status === "committed") {
+						committedPaths += 1;
+						if (committedPaths === 2) {
+							await writeFile(firstPath, "external\n");
+							throw new Error("injected second commit failure");
+						}
+					}
+					await recovery.updateTransactionPath(
+						transactionId,
+						canonicalPath,
+						status
+					);
+				},
+			};
+			const context: VersionedEditingContext = {
+				editMode: "apply_patch",
+				sessionId: "multi-failure-session",
+				store: { ...baseStore, recovery: failingRecovery },
+			};
+			const firstRead = await runReadTool(
+				{ path: firstPath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			const secondRead = await runReadTool(
+				{ path: secondPath },
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			let failure: unknown;
+			try {
+				await runEditTool(
+					{
+						mode: "apply_patch",
+						patch: [
+							`[${firstPath}#${firstRead.fileVersion}]`,
+							"PUT 1.=1:",
+							"+ONE",
+							`[${secondPath}#${secondRead.fileVersion}]`,
+							"PUT 1.=1:",
+							"+TWO",
+						].join("\n"),
+					},
+					{ allowExternalPath: true, versionedEditing: context }
+				);
+			} catch (error) {
+				failure = error;
+			}
+			expect(failure).toBeInstanceOf(Error);
+			if (!(failure instanceof Error)) {
+				throw new Error("Expected a structured coding-tool failure.");
+			}
+			const structuredFailure = failure as Error & {
+				code?: string;
+				details?: { unresolvedPaths?: string[] };
+			};
+			expect(structuredFailure.code).toBe("partial_failure");
+			expect(structuredFailure.details?.unresolvedPaths).toEqual([
+				await realpath(firstPath),
+			]);
+			expect(await readFile(firstPath, "utf8")).toBe("external\n");
+			expect(await readFile(secondPath, "utf8")).toBe("two\n");
+			expect(await recovery.listUnresolvedRecoveries()).toHaveLength(1);
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
 	});
 });

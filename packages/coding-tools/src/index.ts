@@ -20,6 +20,7 @@ export {
 	runEditTool,
 	runGrepTool,
 	runReadTool,
+	runRecoverTool,
 	runShellTool,
 	runWriteTool,
 } from "./tools/runners";
@@ -36,6 +37,8 @@ export type {
 	GrepOutput,
 	ReadInput,
 	ReadOutput,
+	RecoverInput,
+	RecoverOutput,
 	ShellInput,
 	ShellOutput,
 	WriteInput,
@@ -50,6 +53,9 @@ export {
 	editInputSchema,
 	editInputSchemaForMode,
 	editOutputSchema,
+	recoverInputSchema,
+	recoverOutputSchema,
+	recoverToolSchema,
 	shellPlatformFromNode,
 	writeInputSchema,
 	writeOutputSchema,
@@ -105,6 +111,21 @@ export {
 	rewritePatchResourcePath,
 	rewritePatchResourcePaths,
 } from "./versioned/patch";
+export type {
+	RecoveryArtifact,
+	RecoveryArtifactPath,
+	RecoveryInspection,
+	RecoveryPathStatus,
+	RecoveryReconciliation,
+	RecoveryStore,
+	RecoveryTransaction,
+	RecoveryTransactionInput,
+	RecoveryTransactionPath,
+	RecoveryTransactionStatus,
+	UnresolvedRecovery,
+	UnresolvedRecoveryStatus,
+} from "./versioned/recovery";
+export { createMemoryRecoveryStore } from "./versioned/recovery";
 export type {
 	WorkspacePolicy,
 	WorkspaceTraversalEntry,

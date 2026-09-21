@@ -27,6 +27,7 @@ import {
 import { isObjectLike } from "@wincode/runtime-utils";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type { SessionDatabase } from "./client";
+import { createDrizzleRecoveryStore } from "./recovery-store";
 import {
 	fileLease,
 	fileObservation,
@@ -511,8 +512,13 @@ const withSnapshotStoreLock = async <T>(
 
 export const createDrizzleFileObservationStore = (
 	db: SessionDatabase,
-	snapshotRoot: string
+	snapshotRoot: string,
+	workspaceId?: string
 ): FileObservationStore => {
+	const recovery =
+		workspaceId === undefined
+			? undefined
+			: createDrizzleRecoveryStore(db, snapshotRoot, workspaceId);
 	const lockKey = path.resolve(snapshotRoot);
 	return {
 		getLatestObservation: async (sessionId, pathName) => {
@@ -675,5 +681,6 @@ export const createDrizzleFileObservationStore = (
 		withSnapshotTransaction: (operation) =>
 			withSnapshotStoreLock(lockKey, operation),
 		withPathLeases: withPersistentPathLeases(db),
+		recovery,
 	};
 };
