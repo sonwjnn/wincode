@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { isObjectLike, omitUndefined } from "@wincode/runtime-utils";
+import { isObjectLike, isString, omitUndefined } from "@wincode/runtime-utils";
 import { z } from "zod";
 import type { FILE_VERSION_ALGORITHM, FileVersion, LineRange } from "./model";
 import { createMemoryRecoveryStore, type RecoveryStore } from "./recovery";
@@ -111,7 +111,7 @@ export const toCodingToolFailure = (
 		details?: unknown;
 		recovery?: unknown;
 	};
-	if (typeof candidate.code !== "string" || candidate.code.length === 0) {
+	if (!isString(candidate.code) || candidate.code.length === 0) {
 		return;
 	}
 	return {

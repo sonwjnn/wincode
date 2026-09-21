@@ -24,7 +24,7 @@ import {
 	FILE_VERSION_ALGORITHM,
 	lineRangeSchema,
 } from "@wincode/coding-tools";
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isObjectLike, isString } from "@wincode/runtime-utils";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type { SessionDatabase } from "./client";
 import { createDrizzleRecoveryStore } from "./recovery-store";
@@ -50,8 +50,7 @@ const isTransientSqliteError = (error: unknown): boolean => {
 	return (
 		code === "SQLITE_BUSY" ||
 		code === "SQLITE_LOCKED" ||
-		(typeof message === "string" &&
-			SQLITE_TRANSIENT_ERROR_PATTERN.test(message))
+		(isString(message) && SQLITE_TRANSIENT_ERROR_PATTERN.test(message))
 	);
 };
 

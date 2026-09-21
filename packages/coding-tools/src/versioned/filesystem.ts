@@ -14,7 +14,7 @@ import {
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isObjectLike, isString } from "@wincode/runtime-utils";
 import type { ToolResourceLimits } from "../tools/resource-limits";
 import { defaultWorkspaceSandbox, type WorkspacePolicy } from "../workspace";
 import {
@@ -276,7 +276,7 @@ export const assertRecoveryAllowsMutation = async (
 		if (isCodingToolError(error)) {
 			throw error;
 		}
-		if (isObjectLike(error) && typeof error.code === "string") {
+		if (isObjectLike(error) && isString(error.code)) {
 			const details = isObjectLike(error.details)
 				? error.details
 				: { paths, operation };
