@@ -11,7 +11,6 @@ import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-se
 import {
 	SESSION_LEASE_RENEWAL_INTERVAL_MS,
 	SESSION_LEASE_TTL_MS,
-	type SessionLease,
 } from "@/modules/sessions/storage/session-lease";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import {
@@ -23,6 +22,8 @@ import {
 
 const INITIAL_TIME_MS = 1000;
 const RENEWED_TIME_MS = INITIAL_TIME_MS + SESSION_LEASE_RENEWAL_INTERVAL_MS;
+const ORIGINAL_EXPIRY_PASSED_TIME_MS =
+	INITIAL_TIME_MS + SESSION_LEASE_TTL_MS + 1;
 const STALE_TIME_MS = RENEWED_TIME_MS + SESSION_LEASE_TTL_MS + 1;
 
 type DatabaseHandle = Readonly<{
@@ -58,6 +59,91 @@ const createFixture = (): Fixture => {
 	const fixture = { first, firstStore, root, second, secondStore };
 	fixtures.push(fixture);
 	return fixture;
+};
+type ContenderResult =
+	| Readonly<{ kind: "acquired" }>
+	| Readonly<{ code: string; kind: "rejected" }>;
+
+const readLine = async (
+	stream: ReadableStream<Uint8Array>
+): Promise<string> => {
+	const reader = stream.getReader();
+	const decoder = new TextDecoder();
+	let text = "";
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) {
+			throw new Error("Lease contender exited before reporting its result.");
+		}
+		text += decoder.decode(value, { stream: true });
+		const newline = text.indexOf("\n");
+		if (newline >= 0) {
+			return text.slice(0, newline);
+		}
+	}
+};
+
+type BunSpawn = (
+	command: string[],
+	options: { stderr: "ignore"; stdin: "pipe"; stdout: "pipe" }
+) => {
+	exited: Promise<number>;
+	kill: () => void;
+	stdin: { end: () => void; write: (input: string) => void };
+	stdout: ReadableStream<Uint8Array>;
+};
+
+const bunGlobal = globalThis as typeof globalThis & {
+	Bun: { spawn: BunSpawn };
+};
+
+type LeaseContender = Readonly<{
+	process: ReturnType<BunSpawn>;
+	release: () => Promise<void>;
+	result: Promise<ContenderResult>;
+}>;
+
+const startLeaseContender = (
+	fixture: Fixture,
+	sessionId: string,
+	name: string
+): LeaseContender => {
+	const contender = bunGlobal.Bun.spawn(
+		[
+			process.execPath,
+			"run",
+			new URL("../support/session-lease-contender.ts", import.meta.url)
+				.pathname,
+			JSON.stringify({
+				attachmentRoot: join(fixture.root, `${name}-attachments`),
+				databasePath: join(fixture.root, "sessions.db"),
+				now: INITIAL_TIME_MS,
+				sessionId,
+				snapshotRoot: join(fixture.root, `${name}-snapshots`),
+				workspaceRoot: fixture.root,
+			}),
+		],
+		{ stderr: "ignore", stdin: "pipe", stdout: "pipe" }
+	);
+	if (contender.stdin === undefined || contender.stdout === undefined) {
+		contender.kill();
+		throw new Error("Lease contender did not expose stdio pipes.");
+	}
+	const result = readLine(contender.stdout).then(
+		(line) => JSON.parse(line) as ContenderResult
+	);
+	return {
+		process: contender,
+		release: async () => {
+			contender.stdin.write("release\n");
+			contender.stdin.end();
+			const exitCode = await contender.exited;
+			if (exitCode !== 0) {
+				throw new Error(`Lease contender exited with code ${exitCode}.`);
+			}
+		},
+		result,
+	};
 };
 
 const createSession = async (fixture: Fixture) =>
@@ -112,27 +198,13 @@ describe("Session Lease storage", () => {
 			{ now: clock }
 		);
 
-		const initial = fixture.second.sqlite
-			.query(
-				"SELECT expires_at, renewed_at FROM session_lease WHERE session_id = ?"
-			)
-			.get(session.id) as { expires_at: number; renewed_at: number };
-		expect(initial).toEqual({
-			expires_at: INITIAL_TIME_MS + SESSION_LEASE_TTL_MS,
-			renewed_at: INITIAL_TIME_MS,
-		});
-
 		now.value = RENEWED_TIME_MS;
 		expect(firstLease.renew()).toBe(true);
-		const renewed = fixture.second.sqlite
-			.query(
-				"SELECT expires_at, renewed_at FROM session_lease WHERE session_id = ?"
-			)
-			.get(session.id) as { expires_at: number; renewed_at: number };
-		expect(renewed).toEqual({
-			expires_at: RENEWED_TIME_MS + SESSION_LEASE_TTL_MS,
-			renewed_at: RENEWED_TIME_MS,
-		});
+
+		now.value = ORIGINAL_EXPIRY_PASSED_TIME_MS;
+		await expect(
+			fixture.secondStore.acquireSessionLease(session.id, { now: clock })
+		).rejects.toMatchObject({ code: "session_in_use" });
 
 		now.value = STALE_TIME_MS;
 		const secondLease = await fixture.secondStore.acquireSessionLease(
@@ -149,34 +221,29 @@ describe("Session Lease storage", () => {
 	test("serializes concurrent contenders so exactly one obtains the lease", async () => {
 		const fixture = createFixture();
 		const session = await createSession(fixture);
-		const clock = () => INITIAL_TIME_MS;
+		const contenders = [
+			startLeaseContender(fixture, session.id, "first"),
+			startLeaseContender(fixture, session.id, "second"),
+		];
+		let results: ContenderResult[] | undefined;
 
-		const contenders = [fixture.firstStore, fixture.secondStore].map(
-			(store) =>
-				new Promise<SessionLease>((resolve, reject) => {
-					queueMicrotask(() => {
-						store
-							.acquireSessionLease(session.id, { now: clock })
-							.then(resolve, reject);
-					});
-				})
-		);
-		const results = await Promise.allSettled(contenders);
-
-		expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(
-			1
-		);
-		expect(results.filter(({ status }) => status === "rejected")).toHaveLength(
-			1
-		);
-		expect(results.find(({ status }) => status === "rejected")).toMatchObject({
-			status: "rejected",
-			reason: { code: "session_in_use" },
-		});
-
-		for (const result of results) {
-			if (result.status === "fulfilled") {
-				result.value.release();
+		try {
+			results = await Promise.all(
+				contenders.map((contender) => contender.result)
+			);
+			expect(results.filter(({ kind }) => kind === "acquired")).toHaveLength(1);
+			expect(results.filter(({ kind }) => kind === "rejected")).toHaveLength(1);
+			expect(results.find(({ kind }) => kind === "rejected")).toEqual({
+				code: "session_in_use",
+				kind: "rejected",
+			});
+		} finally {
+			for (const [index, contender] of contenders.entries()) {
+				if (results?.[index]?.kind === "acquired") {
+					await contender.release().catch(() => contender.process.kill());
+				} else {
+					contender.process.kill();
+				}
 			}
 		}
 	});

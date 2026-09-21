@@ -660,6 +660,17 @@ const recoveryCommand = ({
 	resolveTarget: async () => target,
 	turnId: agentTurnId(turnId),
 });
+test("refuses compaction and overflow recovery after shutdown", async () => {
+	const engine = createEngine([]);
+	engine.shutdown();
+
+	await expect(
+		engine.compact({ model, trigger: "manual" })
+	).rejects.toMatchObject({ code: "cancelled" });
+	await expect(engine.recoverOverflow(recoveryCommand())).resolves.toEqual({
+		kind: "ineligible",
+	});
+});
 
 test("recovers a context-overflow failure with one compaction and one replay", async () => {
 	const engine = createEngine(compactionHistory());

@@ -21,6 +21,8 @@ import type {
 	CompactSessionInput,
 	CompactSessionResult,
 } from "../compaction/compaction";
+import { SessionCompactionError } from "../compaction/error";
+
 import {
 	isContextOverflowFailure,
 	OverflowRecoveryError,
@@ -409,10 +411,15 @@ export const createSessionEngine = ({
 	const compact = (
 		command: SessionCompactionCommand
 	): Promise<CompactSessionResult> => {
+		if (isShutDown) {
+			return Promise.reject(
+				new SessionCompactionError("cancelled", SHUT_DOWN_SEND_ERROR)
+			);
+		}
 		const messages = compactionSource(command);
 		// The Engine's own command is checked first: a request that arrives while
-		// that command still resolves its settings joins it rather than starting a
-		// second command the module would only refuse.
+		// that command still resolves its settings joins it rather than starting
+		// a second command the module would only refuse.
 		const running =
 			compactionCommand ?? ports.compaction.getInFlight(sessionId);
 		return isNull(running)
@@ -475,7 +482,7 @@ export const createSessionEngine = ({
 	 * message. A recovery the session refuses or that fails is published as the
 	 * compaction error instead of being continued by its caller.
 	 */
-	const recoverOverflow = async (
+	const runOverflowRecovery = async (
 		command: SessionOverflowRecoveryCommand
 	): Promise<SessionOverflowRecoveryOutcome> => {
 		if (!isContextOverflowFailure(command.error)) {
@@ -553,6 +560,14 @@ export const createSessionEngine = ({
 			);
 		}
 		return { kind: "recovered", entry: result.entry };
+	};
+	const recoverOverflow = (
+		command: SessionOverflowRecoveryCommand
+	): Promise<SessionOverflowRecoveryOutcome> => {
+		if (isShutDown) {
+			return Promise.resolve({ kind: "ineligible" });
+		}
+		return runOverflowRecovery(command);
 	};
 
 	/** Drops an execution and wakes everything waiting for it to end. */
