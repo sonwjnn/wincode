@@ -75,6 +75,7 @@ export {
 	defaultVersionedEditingContext,
 	editModeSchema,
 	isCodingToolError,
+	isCodingToolRecovery,
 	toCodingToolFailure,
 } from "./versioned/contracts";
 export type {

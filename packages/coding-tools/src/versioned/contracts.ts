@@ -34,6 +34,19 @@ export type CodingToolRecovery = Readonly<{
 	path?: string;
 	message?: string;
 }>;
+export const isCodingToolRecovery = (
+	value: unknown
+): value is CodingToolRecovery => {
+	if (!isObjectLike(value)) {
+		return false;
+	}
+	return (
+		value.action === "reread" ||
+		value.action === "provide-file-version" ||
+		value.action === "grant-sloppy" ||
+		value.action === "correct-input"
+	);
+};
 
 export type CodingToolErrorDetails = Readonly<Record<string, unknown>>;
 

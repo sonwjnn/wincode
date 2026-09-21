@@ -1,6 +1,10 @@
 import type { BoxRenderable } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
 import {
+	type CodingToolRecovery,
+	isCodingToolRecovery,
+} from "@wincode/coding-tools";
+import {
 	isArray,
 	isNull,
 	isNumber,
@@ -112,6 +116,39 @@ const stripErrorResource = (errorText: string, part: ToolPart): string => {
 	return isUndefined(resource)
 		? errorText
 		: errorText.replace(`: ${resource}`, "");
+};
+
+const getToolRecovery = (part: ToolPart): CodingToolRecovery | undefined => {
+	if (!isPlainObject(part.failure)) {
+		return;
+	}
+	return isCodingToolRecovery(part.failure.recovery)
+		? part.failure.recovery
+		: undefined;
+};
+
+const getRecoveryHint = (part: ToolPart): string => {
+	const recovery = getToolRecovery(part);
+	if (recovery === undefined) {
+		return "";
+	}
+	const path = recovery.path ?? getToolResource(part);
+	switch (recovery.action) {
+		case "reread":
+			return path === undefined
+				? "Next: read the file again, then retry."
+				: `Next: read ${path} again, then retry.`;
+		case "provide-file-version":
+			return path === undefined
+				? "Next: read the file again and use its current version, then retry."
+				: `Next: read ${path} again and use its current version, then retry.`;
+		case "grant-sloppy":
+			return "Next: approve sloppy editing, then retry.";
+		case "correct-input":
+			return "Next: correct the input, then retry.";
+		default:
+			return "";
+	}
 };
 
 /**
@@ -317,6 +354,25 @@ const resolveFooterItems = (
 
 	return items;
 };
+const ToolFailureMessage = ({
+	colors,
+	errorText,
+	part,
+}: {
+	colors: ThemeColors;
+	errorText: string;
+	part: ToolPart;
+}) => {
+	const recoveryHint = getRecoveryHint(part);
+	return (
+		<box marginBottom={1} paddingX={3} width="100%">
+			<text fg={colors.error}>{errorText}</text>
+			{recoveryHint === "" ? null : (
+				<text fg={colors.textMuted}>{`↳ ${recoveryHint}`}</text>
+			)}
+		</box>
+	);
+};
 
 function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 	const { colors } = useTheme();
@@ -378,9 +434,11 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 				/>
 			) : null}
 			{fallbackError === "" ? null : (
-				<box marginBottom={1} paddingX={3} width="100%">
-					<text fg={colors.error}>{`✗ ${fallbackError}`}</text>
-				</box>
+				<ToolFailureMessage
+					colors={colors}
+					errorText={fallbackError}
+					part={part}
+				/>
 			)}
 		</>
 	);
