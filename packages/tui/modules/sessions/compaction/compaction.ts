@@ -168,6 +168,8 @@ export type CompactSessionInput = {
 	trigger: CompactionTriggerReason;
 	focus?: string;
 	signal?: AbortSignal;
+	/** Revalidates Session Host authority immediately before persistence. */
+	assertAuthority?: () => void;
 };
 
 export type CompactSessionResult = {
@@ -1126,6 +1128,7 @@ export const createSessionCompaction = ({
 		{ intent: CompactionIntent; operation: Promise<CompactSessionResult> }
 	>();
 	const persistCompactionEntry = async ({
+		assertAuthority,
 		attachmentMetadata,
 		messages,
 		sessionId,
@@ -1142,6 +1145,7 @@ export const createSessionCompaction = ({
 		trigger,
 		variant,
 	}: {
+		assertAuthority?: () => void;
 		attachmentMetadata?: readonly CompactionAttachmentMetadata[];
 		messages: readonly SessionMessage[];
 		sessionId: SessionId;
@@ -1198,6 +1202,7 @@ export const createSessionCompaction = ({
 				`Compaction still leaves ${entryInput.estimatedTokensAfter} estimated tokens, above the ${settings.thresholdTokens} token safe limit; shorten the latest turn or remove attachments.`
 			);
 		}
+		assertAuthority?.();
 		let entry: SessionCompaction;
 		try {
 			entry = await store.appendCompaction(entryInput);
@@ -1284,6 +1289,7 @@ export const createSessionCompaction = ({
 		);
 		assertNotAborted(input.signal);
 		const { activeMessages, entry } = await persistCompactionEntry({
+			assertAuthority: input.assertAuthority,
 			attachmentMetadata: preparedSummary.attachmentMetadata,
 			messages: externalizedMessages,
 			sessionId: input.session.sessionId,

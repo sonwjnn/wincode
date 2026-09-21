@@ -286,6 +286,9 @@ export const createSessionHost = async ({
 			createSessionPorts({
 				capabilities,
 				engine: getEngine,
+				isShutDown: () => isShutDown,
+				onLeaseLost: reportLeaseLoss,
+				renewLease: sessionLease.renew,
 				sessionId,
 			}),
 			publish

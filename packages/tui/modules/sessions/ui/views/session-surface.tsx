@@ -76,9 +76,12 @@ export function SessionSurface({
 		setSession(null);
 		setErrorMessage(null);
 		const open = async (): Promise<OpenedSession | null> => {
-			await waitForPendingSurfaceClosure(sessionId);
-			openingHost = createSessionHost({ capabilities, sessionId });
-			const host = await openingHost;
+			const pendingOpen = (async (): Promise<SessionHost> => {
+				await waitForPendingSurfaceClosure(sessionId);
+				return createSessionHost({ capabilities, sessionId });
+			})();
+			openingHost = pendingOpen;
+			const host = await pendingOpen;
 			if (ignore) {
 				// The surface is gone: nobody would own this session.
 				await host.shutdown();

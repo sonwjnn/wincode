@@ -77,6 +77,19 @@ import {
 
 /** The deadline one Agent Turn submission runs with. */
 const AGENT_TURN_DEADLINE_MS = 43_200_000;
+/** The maximum time local shutdown waits for abort-resistant work to settle. */
+const SESSION_SHUTDOWN_WAIT_TIMEOUT_MS = 5000;
+const waitForShutdownWork = async (work: Promise<void>): Promise<void> => {
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	const deadline = new Promise<void>((resolve) => {
+		timeout = setTimeout(resolve, SESSION_SHUTDOWN_WAIT_TIMEOUT_MS);
+	});
+	try {
+		await Promise.race([work, deadline]);
+	} finally {
+		clearTimeout(timeout);
+	}
+};
 
 /** The reason a submission that arrives after the session ended is refused. */
 const SHUT_DOWN_SEND_ERROR = "The session has ended.";
@@ -142,6 +155,7 @@ export const createSessionEngine = ({
 				promise: Promise<CompactSessionResult>;
 				/** Resolves once the Session Compaction module has admitted the request. */
 				registered: Promise<void>;
+				settled: boolean;
 		  }
 		| undefined;
 	const listeners = new Set<() => void>();
@@ -169,6 +183,7 @@ export const createSessionEngine = ({
 	const executionEndWaiters = new Map<AgentTurnId, (() => void)[]>();
 	let approvalCounter = 0;
 	let isShutDown = false;
+	const shutdownController = new AbortController();
 	let shutdownPromise: Promise<void> | undefined;
 	/**
 	 * Session records delivered by the Steering Lane are started at the Model
@@ -176,6 +191,18 @@ export const createSessionEngine = ({
 	 * await them before the Session Host can release its lease.
 	 */
 	const pendingDurableWrites = new Set<Promise<void>>();
+	const commitRecord: SessionEnginePorts["commitRecord"] = (input) => {
+		if (isShutDown) {
+			return Promise.resolve();
+		}
+		const write = ports.commitRecord(input);
+		pendingDurableWrites.add(write);
+		void write.then(
+			() => pendingDurableWrites.delete(write),
+			() => pendingDurableWrites.delete(write)
+		);
+		return write;
+	};
 	/**
 	 * Every public compaction request remains tracked through joined admission,
 	 * including a request whose owner finishes before its own settings resolve.
@@ -191,8 +218,6 @@ export const createSessionEngine = ({
 	 * Late runtime callbacks can still settle after cancellation. They must not
 	 * reach the durable store once the Engine has lost authority.
 	 */
-	const commitRecord: SessionEnginePorts["commitRecord"] = (input) =>
-		isShutDown ? Promise.resolve() : ports.commitRecord(input);
 	const enginePorts: SessionEnginePorts = { ...ports, commitRecord };
 	/**
 	 * How many submission runs hold the send lane. A run can overlap another's
@@ -310,6 +335,9 @@ export const createSessionEngine = ({
 		publish({ isCompacting: value });
 	};
 	const setCompactionError = (error: Error | null): void => {
+		if (isShutDown) {
+			return;
+		}
 		publish({ compactionError: error });
 	};
 	/**
@@ -374,6 +402,7 @@ export const createSessionEngine = ({
 			abort: () => controller.abort(),
 			promise,
 			registered: registration.promise,
+			settled: false,
 		};
 		setCompacting(true);
 		void (async () => {
@@ -381,7 +410,7 @@ export const createSessionEngine = ({
 				const request = await compactionRequest(
 					command,
 					messages,
-					controller.signal
+					AbortSignal.any([controller.signal, shutdownController.signal])
 				);
 				if (controller.signal.aborted || isShutDown) {
 					throw new SessionCompactionError("cancelled", SHUT_DOWN_SEND_ERROR);
@@ -403,6 +432,7 @@ export const createSessionEngine = ({
 				reject(error);
 			} finally {
 				if (compactionCommand?.promise === promise) {
+					compactionCommand.settled = true;
 					compactionCommand = undefined;
 					setCompacting(false);
 				}
@@ -431,6 +461,9 @@ export const createSessionEngine = ({
 		// it can already see.
 		if (!isUndefined(owner)) {
 			await owner.registered;
+			if (owner.settled) {
+				return compact(command);
+			}
 		}
 		if (isShutDown) {
 			throw new SessionCompactionError("cancelled", SHUT_DOWN_SEND_ERROR);
@@ -438,10 +471,13 @@ export const createSessionEngine = ({
 		const request = await compactionRequest(
 			command,
 			messages,
-			new AbortController().signal
+			shutdownController.signal
 		);
 		if (isShutDown) {
 			throw new SessionCompactionError("cancelled", SHUT_DOWN_SEND_ERROR);
+		}
+		if (!isUndefined(owner) && owner.settled) {
+			return compact(command);
 		}
 		const result = await ports.compaction.compact(request);
 		if (!isUndefined(owner)) {
@@ -721,7 +757,11 @@ export const createSessionEngine = ({
 	const takeSteeringMessages = (
 		execution: SessionExecution
 	): SessionMessage[] => {
-		if (!isUndefined(execution.parent) || state.steeringMessages.length === 0) {
+		if (
+			isShutDown ||
+			!isUndefined(execution.parent) ||
+			state.steeringMessages.length === 0
+		) {
 			return [];
 		}
 		const taken = state.steeringMessages;
@@ -831,7 +871,7 @@ export const createSessionEngine = ({
 	 * its own Agent Turn.
 	 */
 	const fallbackSteeringMessages = (): void => {
-		if (state.steeringMessages.length === 0) {
+		if (isShutDown || state.steeringMessages.length === 0) {
 			return;
 		}
 		const waiting: SessionQueuedSubmission[] = state.steeringMessages.map(
@@ -875,9 +915,11 @@ export const createSessionEngine = ({
 			} catch (error) {
 				// A submission that throws still publishes its failure, and the
 				// caller that awaited the send is the one that answers it.
-				publish({
-					error: isError(error) ? error : new Error("Session failed."),
-				});
+				if (!isShutDown) {
+					publish({
+						error: isError(error) ? error : new Error("Session failed."),
+					});
+				}
 				throw error;
 			} finally {
 				signal.removeEventListener("abort", stop);
@@ -893,6 +935,7 @@ export const createSessionEngine = ({
 		fallbackSteeringMessages,
 		getContext: () => state.context,
 		getTranscript: () => state.transcript,
+		isShutDown: () => isShutDown,
 		mergeTranscript,
 		ports: enginePorts,
 		recoverOverflow,
@@ -1168,6 +1211,7 @@ export const createSessionEngine = ({
 			return shutdownPromise;
 		}
 		isShutDown = true;
+		shutdownController.abort();
 		for (const controller of pendingAttachmentControllers) {
 			controller.abort();
 		}
@@ -1177,24 +1221,26 @@ export const createSessionEngine = ({
 		operation.cancel();
 		closeApprovals();
 		const compaction = compactionCommand?.promise;
-		shutdownPromise = (async () => {
-			const operationIdle = operation.waitForIdle();
-			const compactionSettled = (async (): Promise<void> => {
-				if (compaction === undefined) {
-					return;
-				}
-				try {
-					await compaction;
-				} catch {
-					// A shutdown-triggered compaction cancellation is expected.
-				}
-			})();
-			await operationIdle;
-			await compactionSettled;
-			await waitForBackgroundTasks();
-			await waitForCompactions();
-			await waitForDurableWrites();
-		})();
+		shutdownPromise = waitForShutdownWork(
+			(async () => {
+				const operationIdle = operation.waitForIdle();
+				const compactionSettled = (async (): Promise<void> => {
+					if (compaction === undefined) {
+						return;
+					}
+					try {
+						await compaction;
+					} catch {
+						// A shutdown-triggered compaction cancellation is expected.
+					}
+				})();
+				await operationIdle;
+				await compactionSettled;
+				await waitForBackgroundTasks();
+				await waitForCompactions();
+				await waitForDurableWrites();
+			})()
+		);
 		return shutdownPromise;
 	};
 
@@ -1207,6 +1253,7 @@ export const createSessionEngine = ({
 			interruptLatestAssistantMessage(toolCallId);
 		},
 		applyContext,
+		commitRecord,
 		beginExecution,
 		cancel: () => operation.cancel(),
 		cancelCompaction: () => {

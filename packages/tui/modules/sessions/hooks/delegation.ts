@@ -27,8 +27,8 @@ import type { ToolPermission } from "@/modules/permissions/policy";
 import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import type { SessionId } from "@/shared/identifiers";
 import { resolveChatModelTarget } from "../../model-target";
+import type { SessionCommitInput } from "../engine/types";
 import { createSessionUserMessage, type SessionMessage } from "../message";
-import { getSessionStore } from "../storage/get-session-store";
 import { buildUserSessionRecord } from "../storage/session-record";
 import type {
 	BeginTurnExecutionInput,
@@ -168,6 +168,8 @@ const buildChildTurn = async ({
 };
 
 export type CreateDelegationExecutorOptions = {
+	readonly commitRecord: (input: SessionCommitInput) => Promise<void>;
+	readonly isShutDown: () => boolean;
 	readonly connections: Connections;
 	readonly createSkillContext?: ChildSkillContextFactory;
 	readonly cwd?: string;
@@ -197,6 +199,8 @@ export const createDelegationExecutor = (
 	options: CreateDelegationExecutorOptions
 ): DelegationExecutor => {
 	const {
+		isShutDown,
+		commitRecord,
 		connections,
 		createSkillContext,
 		cwd,
@@ -210,8 +214,14 @@ export const createDelegationExecutor = (
 		tooling,
 		workspace,
 	} = options;
+	const assertOpen = (): void => {
+		if (isShutDown()) {
+			throw new Error("The session has ended.");
+		}
+	};
 
 	return async (request: DelegationRequest, signal) => {
+		assertOpen();
 		const childController = new AbortController();
 		const childSignal = isUndefined(signal)
 			? childController.signal
@@ -222,7 +232,6 @@ export const createDelegationExecutor = (
 			parentTurnId: request.parentTurnId,
 		};
 		const userMessage = createSessionUserMessage(request.prompt);
-		const store = getSessionStore();
 		let started: TurnExecution | undefined;
 		let selectedAgent = request.agent;
 		let selectedModel = execution.model;
@@ -233,7 +242,7 @@ export const createDelegationExecutor = (
 		let snapshot: McpCatalogSnapshot | undefined;
 		const commitUserMessage = async (): Promise<void> => {
 			userCommitAttempted = true;
-			await store.commitSessionRecord({
+			await commitRecord({
 				record: buildUserSessionRecord({
 					agentId: selectedAgent,
 					delegation,
@@ -257,6 +266,7 @@ export const createDelegationExecutor = (
 			childTooling: RuntimeGatedTooling;
 			prepared: PreparedAgentCall;
 		}> => {
+			assertOpen();
 			const target = registry?.agents.find(
 				({ id, isAvailable, role }) =>
 					id === request.agent &&
@@ -293,6 +303,7 @@ export const createDelegationExecutor = (
 					variant: selectedVariant,
 				}),
 			};
+			assertOpen();
 			const child = host.begin(beginInput);
 			// Recorded the moment it begins, so a failing prompt commit still ends it.
 			started = child;
@@ -306,6 +317,7 @@ export const createDelegationExecutor = (
 				execution: child,
 				tooling: childTooling,
 			});
+			assertOpen();
 			await commitUserMessage();
 			return { child, childTooling, prepared };
 		};
@@ -343,9 +355,10 @@ export const createDelegationExecutor = (
 				userMessage,
 				workspace,
 			});
+			assertOpen();
 			return await runAgentTurnToText({
 				onCheckpoint: (record) =>
-					store.commitSessionRecord({
+					commitRecord({
 						record,
 						sessionId,
 					}),
@@ -353,11 +366,15 @@ export const createDelegationExecutor = (
 					terminalObserved = true;
 				},
 				onToolCheckpoint: (record) =>
-					store.commitSessionRecord({
+					commitRecord({
 						record,
 						sessionId,
 					}),
-				onViewState: (viewState) => host.publishViewState(child, viewState),
+				onViewState: (viewState) => {
+					if (!isShutDown()) {
+						host.publishViewState(child, viewState);
+					}
+				},
 				runtime: defaultRuntimeFactory(),
 				signal: childSignal,
 				sourceUserMessageId: userMessage.id,
@@ -368,20 +385,18 @@ export const createDelegationExecutor = (
 				await commitUserMessage();
 			}
 			if (userCommitted && !terminalObserved) {
-				await store
-					.commitSessionRecord({
-						record: buildAssistantFailureSessionRecord({
-							agentId: selectedAgent,
-							delegation,
-							error,
-							model: selectedModel,
-							sourceUserMessageId: userMessage.id,
-							turnId,
-							variant: selectedVariant,
-						}),
-						sessionId,
-					})
-					.catch(() => undefined);
+				await commitRecord({
+					record: buildAssistantFailureSessionRecord({
+						agentId: selectedAgent,
+						delegation,
+						error,
+						model: selectedModel,
+						sourceUserMessageId: userMessage.id,
+						turnId,
+						variant: selectedVariant,
+					}),
+					sessionId,
+				}).catch(() => undefined);
 			}
 			throw error;
 		} finally {

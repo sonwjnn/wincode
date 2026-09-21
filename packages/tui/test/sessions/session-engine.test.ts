@@ -1930,6 +1930,24 @@ test("refuses a submission once the session has shut down", async () => {
 		reason: "The session has ended.",
 	});
 });
+test("ignores runtime callbacks that arrive after shutdown", async () => {
+	const runtime = createQueuedRuntime();
+	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+	const send = engine.send(sendInput());
+	await runtime.started(1);
+
+	const shutdown = engine.shutdown();
+	const snapshotAtShutdown = engine.getSnapshot();
+	runtime.release();
+	await shutdown;
+	await send;
+
+	expect(engine.getSnapshot().context).toEqual(snapshotAtShutdown.context);
+	expect(engine.getSnapshot().transcript).toEqual(
+		snapshotAtShutdown.transcript
+	);
+	expect(engine.getSnapshot().viewState).toEqual(snapshotAtShutdown.viewState);
+});
 
 test("releases a recalled submission's attachment hold", async () => {
 	const { release, summaryGenerator } = createHangingSummary();

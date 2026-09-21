@@ -437,17 +437,22 @@ export type SessionCompactionCommand = ReadonlyDeep<{
 
 export type SessionEngine = Readonly<{
 	/**
-	 * Ends the Agent Turn an abort-settled approval belongs to: settles every
-	 * remaining pending request and preserves the interrupted Tool Call, so the
-	 * session stops waiting exactly once.
+	 * Writes one durable Session Record while the Engine still owns the
+	 * session. Late runtime callbacks are ignored after shutdown.
 	 */
-	abortApprovalTurn: (toolCallId: ToolCallId) => void;
+	commitRecord: (input: SessionCommitInput) => Promise<void>;
 	/** Replaces the Session Context. */
 	applyContext: (messages: readonly SessionMessage[]) => void;
 	/** Registers a starting Agent Turn execution and its parent linkage. */
 	beginExecution: (execution: SessionExecutionInput) => SessionExecution;
 	/** Cancels the Agent Turn the session is running. */
 	cancel: () => void;
+	/**
+	 * Ends the Agent Turn an abort-settled approval belongs to: settles every
+	 * remaining pending request and preserves the interrupted Tool Call, so the
+	 * session stops waiting exactly once.
+	 */
+	abortApprovalTurn: (toolCallId: ToolCallId) => void;
 	/**
 	 * Aborts the compaction command in flight and recalls the waiting user
 	 * messages with it: cancelling maintenance is still stopping work, and

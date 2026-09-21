@@ -510,6 +510,38 @@ describe("Session Host lifetime", () => {
 		expect(events).toHaveLength(eventsAtShutdown);
 	});
 
+	test("fences durable commits after the Session Lease is lost", async () => {
+		const seeded = await seedSession("lease-write-fence");
+		let commitCount = 0;
+		const leaseLostStore: SessionStore = {
+			...store,
+			acquireSessionLease: async () => ({
+				release: () => undefined,
+				renew: () => false,
+			}),
+			commitSessionRecord: async (input) => {
+				commitCount += 1;
+				await store.commitSessionRecord(input);
+			},
+		};
+		const capabilities = createCapabilities(leaseLostStore);
+		const host = await createSessionHost({
+			capabilities,
+			lease: { schedule: () => () => undefined },
+			sessionId: seeded.sessionId,
+		});
+
+		try {
+			await expect(host.engine.send(sendInput(capabilities))).resolves.toEqual({
+				reason: "The session has ended.",
+				rejected: true,
+			});
+			expect(commitCount).toBe(0);
+		} finally {
+			await host.shutdown();
+		}
+	});
+
 	test("holds the lease and heartbeat until an interrupted turn checkpoints", async () => {
 		const seeded = await seedSession("shutdown-quiescence");
 		const delayed = createDelayedTerminalStore(store);
