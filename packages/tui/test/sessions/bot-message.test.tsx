@@ -640,7 +640,8 @@ describe("BotMessageContent", () => {
 		expect(frame).toContain(
 			"⚙ context_7_query_docs [query=verbose failed query]"
 		);
-		expect(frame).toContain("✗ Chat request failed.");
+		expect(frame).toContain("Chat request failed.");
+		expect(frame).not.toContain("✗ Chat request failed.");
 		expect(frame).not.toContain("failed Chat request failed.");
 		expect(frame).not.toContain("3f6b8a11");
 	});
@@ -668,10 +669,73 @@ describe("BotMessageContent", () => {
 		const frame = await renderFrame([part]);
 
 		expect(frame).toContain("→ Read README.md");
-		expect(frame).toContain("✗ Tool call interrupted");
+		expect(frame).toContain("Tool call interrupted");
 		expect(frame).not.toContain("→ Read README.md Tool call interrupted");
 	});
-	test("renders an aborted read as a red tool row without a status suffix", async () => {
+
+	test("renders actionable guidance for structured tool failures", async () => {
+		const parts = [
+			{
+				errorText: "File changed while editing.",
+				failure: {
+					code: "file-version-mismatch",
+					recovery: { action: "reread", path: "src/example.ts" },
+				},
+				input: { path: "src/example.ts" },
+				state: "output-error",
+				toolCallId: toolCallId("call-reread"),
+				type: "tool-edit",
+			},
+			{
+				errorText: "Current file version is required.",
+				failure: {
+					code: "expected-file-version",
+					recovery: {
+						action: "provide-file-version",
+						path: "src/versioned.ts",
+					},
+				},
+				input: { path: "src/versioned.ts" },
+				state: "output-error",
+				toolCallId: toolCallId("call-version"),
+				type: "tool-edit",
+			},
+			{
+				errorText: "Sloppy editing is not approved.",
+				failure: {
+					code: "sloppy-edit-not-approved",
+					recovery: { action: "grant-sloppy" },
+				},
+				input: { path: "src/sloppy.ts" },
+				state: "output-error",
+				toolCallId: toolCallId("call-sloppy"),
+				type: "tool-edit",
+			},
+			{
+				errorText: "Patch input is invalid.",
+				failure: {
+					code: "invalid-patch",
+					recovery: { action: "correct-input" },
+				},
+				input: { path: "src/patch.ts" },
+				state: "output-error",
+				toolCallId: toolCallId("call-input"),
+				type: "tool-edit",
+			},
+		] satisfies MessagePart[];
+
+		const frame = await renderFrame(parts, 24, 140);
+		expect(frame).not.toContain("✗ File changed while editing.");
+
+		expect(frame).toContain("↳ Next: read src/example.ts again, then retry.");
+		expect(frame).toContain(
+			"↳ Next: read src/versioned.ts again and use its current version, then retry."
+		);
+		expect(frame).toContain("↳ Next: approve sloppy editing, then retry.");
+		expect(frame).toContain("↳ Next: correct the input, then retry.");
+	});
+
+	test("renders an aborted read without a status suffix", async () => {
 		const part = {
 			errorText: "Read was not approved: ~/.claude/settings.json",
 			input: { path: "~/.claude/settings.json" },
@@ -682,7 +746,7 @@ describe("BotMessageContent", () => {
 		const frame = await renderFrame([part]);
 
 		expect(frame).toContain("→ Read ~/.claude/settings.json");
-		expect(frame).toContain("✗ Read was not approved");
+		expect(frame).toContain("Read was not approved");
 		expect(frame).not.toContain(
 			"Read was not approved: ~/.claude/settings.json"
 		);
@@ -760,7 +824,7 @@ describe("BotMessageContent", () => {
 		// An approved tool can still fail at runtime; the `✓` audit line is not
 		// an error surface, so the fallback error line renders below it.
 		expect(frame).toContain("✓ allowed once");
-		expect(frame).toContain("✗ Chat request failed.");
+		expect(frame).toContain("Chat request failed.");
 		setup.renderer.destroy();
 	});
 	test("renders the original MCP rejection reason without a status suffix", async () => {
@@ -775,7 +839,7 @@ describe("BotMessageContent", () => {
 		const frame = await renderFrame([part]);
 
 		expect(frame).toContain("⚙ demo_echo [query=echo]");
-		expect(frame).toContain("✗ MCP tool 'mcp_demo_echo' was not approved");
+		expect(frame).toContain("MCP tool 'mcp_demo_echo' was not approved");
 		expect(frame).not.toContain("Rejected");
 	});
 
@@ -918,7 +982,7 @@ describe("BotMessageContent", () => {
 		} satisfies DynamicToolPart;
 		const frame = await renderFrame([part]);
 
-		expect(frame).toContain("✗ failed [redacted]");
+		expect(frame).toContain("failed [redacted]");
 		expect(frame).not.toContain("hidden-error");
 
 		expect(frame).not.toContain("failed\n");
@@ -1122,7 +1186,7 @@ describe("BotMessageContent skill activity row", () => {
 
 		expect(frame).toContain("Skill lint — rejected");
 		expect(frame).toContain("Skill missing — failed");
-		expect(frame).toContain("✗ Unknown Skill");
+		expect(frame).toContain("Unknown Skill");
 		expect(frame).toContain("Skill commit — limit reached");
 		expect(frame).toContain("review, lint, commit");
 	});

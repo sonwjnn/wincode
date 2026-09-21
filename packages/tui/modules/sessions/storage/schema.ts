@@ -1,8 +1,10 @@
 import type { SessionMessageRecord, SessionRecord } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import type { EditMode, FileVersion } from "@wincode/coding-tools";
 import {
 	index,
 	integer,
+	primaryKey,
 	sqliteTable,
 	text,
 	unique,
@@ -48,6 +50,7 @@ export const session = sqliteTable(
 			SerializedJson<ChatModelSelection>
 		>(),
 		variant: text("variant").$type<ModelVariant>(),
+		editMode: text("edit_mode").$type<EditMode>().notNull().default("hashline"),
 	},
 	(table) => [
 		index("idx_session_pinned_last_message").on(
@@ -55,6 +58,237 @@ export const session = sqliteTable(
 			table.lastMessageAt
 		),
 		index("idx_session_updated").on(table.updatedAt),
+	]
+);
+export const fileSnapshot = sqliteTable(
+	"file_snapshot",
+	{
+		path: text("path").notNull(),
+		fileVersion: text("file_version").$type<FileVersion>().notNull(),
+		algorithm: text("algorithm").notNull(),
+		blobKey: text("blob_key").notNull(),
+		lineCount: integer("line_count").notNull(),
+		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+	},
+	(table) => [
+		unique("uq_file_snapshot_path_version").on(table.path, table.fileVersion),
+		index("idx_file_snapshot_path_created").on(table.path, table.createdAt),
+	]
+);
+
+export const fileObservation = sqliteTable(
+	"file_observation",
+	{
+		id: text("id").primaryKey(),
+		sessionId: text("session_id")
+			.notNull()
+			.references(() => session.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		path: text("path").notNull(),
+		fileVersion: text("file_version").$type<FileVersion>().notNull(),
+		seenLinesJson: text("seen_lines_json").notNull(),
+		snapshotAvailable: integer("snapshot_available", { mode: "boolean" })
+			.notNull()
+			.default(false),
+		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+	},
+	(table) => [
+		index("idx_file_observation_session_path_created").on(
+			table.sessionId,
+			table.path,
+			table.createdAt
+		),
+		unique("uq_file_observation_session_path_version").on(
+			table.sessionId,
+			table.path,
+			table.fileVersion
+		),
+	]
+);
+
+export const fullDiffArtifact = sqliteTable(
+	"full_diff_artifact",
+	{
+		id: text("id").primaryKey(),
+		sessionId: text("session_id")
+			.notNull()
+			.references(() => session.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		byteLength: integer("byte_length").notNull(),
+		content: text("content").notNull(),
+		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+	},
+	(table) => [
+		index("idx_full_diff_artifact_session_created").on(
+			table.sessionId,
+			table.createdAt
+		),
+	]
+);
+
+export const fileLease = sqliteTable(
+	"file_lease",
+	{
+		canonicalPath: text("canonical_path").primaryKey(),
+		ownerToken: text("owner_token").notNull(),
+		expiresAt: integer("expires_at").notNull(),
+		createdAt: integer("created_at").notNull(),
+	},
+	(table) => [index("idx_file_lease_expiry").on(table.expiresAt)]
+);
+export const fileTransaction = sqliteTable(
+	"file_transaction",
+	{
+		id: text("id").primaryKey(),
+		workspaceId: text("workspace_id")
+			.notNull()
+			.references(() => sessionWorkspace.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		originSessionId: text("origin_session_id").references(() => session.id, {
+			onDelete: "set null",
+			onUpdate: "cascade",
+		}),
+		status: text("status").notNull(),
+		reason: text("reason"),
+		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+		closedAt: integer("closed_at", { mode: "timestamp_ms" }),
+	},
+	(table) => [
+		index("idx_file_transaction_workspace_status").on(
+			table.workspaceId,
+			table.status
+		),
+	]
+);
+
+export const fileTransactionPath = sqliteTable(
+	"file_transaction_path",
+	{
+		transactionId: text("transaction_id")
+			.notNull()
+			.references(() => fileTransaction.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		canonicalPath: text("canonical_path").notNull(),
+		displayPath: text("display_path").notNull(),
+		originalFileVersion: text(
+			"original_file_version"
+		).$type<FileVersion | null>(),
+		newFileVersion: text("new_file_version").$type<FileVersion>().notNull(),
+		originalBlobKey: text("original_blob_key"),
+		status: text("status").notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.transactionId, table.canonicalPath] }),
+		index("idx_file_transaction_path_canonical").on(table.canonicalPath),
+	]
+);
+
+export const recoveryArtifact = sqliteTable(
+	"recovery_artifact",
+	{
+		id: text("id").primaryKey(),
+		transactionId: text("transaction_id")
+			.notNull()
+			.references(() => fileTransaction.id, {
+				onDelete: "restrict",
+				onUpdate: "cascade",
+			}),
+		workspaceId: text("workspace_id")
+			.notNull()
+			.references(() => sessionWorkspace.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		originSessionId: text("origin_session_id").references(() => session.id, {
+			onDelete: "set null",
+			onUpdate: "cascade",
+		}),
+		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+		pinned: integer("pinned", { mode: "boolean" }).notNull().default(true),
+	},
+	(table) => [
+		index("idx_recovery_artifact_workspace_created").on(
+			table.workspaceId,
+			table.createdAt
+		),
+	]
+);
+
+export const recoveryArtifactPath = sqliteTable(
+	"recovery_artifact_path",
+	{
+		artifactId: text("artifact_id")
+			.notNull()
+			.references(() => recoveryArtifact.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		canonicalPath: text("canonical_path").notNull(),
+		displayPath: text("display_path").notNull(),
+		currentFileVersion: text(
+			"current_file_version"
+		).$type<FileVersion | null>(),
+		originalFileVersion: text(
+			"original_file_version"
+		).$type<FileVersion | null>(),
+		newFileVersion: text("new_file_version").$type<FileVersion>().notNull(),
+		originalBlobKey: text("original_blob_key"),
+	},
+	(table) => [
+		primaryKey({ columns: [table.artifactId, table.canonicalPath] }),
+		index("idx_recovery_artifact_path_canonical").on(table.canonicalPath),
+	]
+);
+
+export const unresolvedRecovery = sqliteTable(
+	"unresolved_recovery",
+	{
+		id: text("id").primaryKey(),
+		artifactId: text("artifact_id")
+			.notNull()
+			.references(() => recoveryArtifact.id, {
+				onDelete: "restrict",
+				onUpdate: "cascade",
+			}),
+		transactionId: text("transaction_id")
+			.notNull()
+			.references(() => fileTransaction.id, {
+				onDelete: "restrict",
+				onUpdate: "cascade",
+			}),
+		workspaceId: text("workspace_id")
+			.notNull()
+			.references(() => sessionWorkspace.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		originSessionId: text("origin_session_id").references(() => session.id, {
+			onDelete: "set null",
+			onUpdate: "cascade",
+		}),
+		status: text("status").notNull(),
+		reason: text("reason").notNull(),
+		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+		resolvedAt: integer("resolved_at", { mode: "timestamp_ms" }),
+		reconciledBySessionId: text("reconciled_by_session_id").references(
+			() => session.id,
+			{ onDelete: "set null", onUpdate: "cascade" }
+		),
+	},
+	(table) => [
+		unique("uq_unresolved_recovery_transaction").on(table.transactionId),
+		index("idx_unresolved_recovery_workspace_status").on(
+			table.workspaceId,
+			table.status
+		),
 	]
 );
 
@@ -168,10 +402,19 @@ export const sessionRecord = sqliteTable(
 	]
 );
 export const sessionSchema = {
+	fileTransaction,
+	fileTransactionPath,
+	fullDiffArtifact,
+	fileLease,
+	fileObservation,
+	fileSnapshot,
+	recoveryArtifact,
+	recoveryArtifactPath,
 	sessionAttachment,
 	sessionCompaction,
 	sessionRecord,
 	session,
 	sessionWorkspace,
 	promptHistory,
+	unresolvedRecovery,
 };

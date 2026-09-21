@@ -302,6 +302,7 @@ const toSessionToolPart = (part: SessionToolCallPart): SessionToolPart => {
 	return isStaticToolName(part.toolName)
 		? {
 				errorText: part.outcome.errorText,
+				...omitUndefined({ failure: part.outcome.failure }),
 				input: part.input,
 				state: "output-error",
 				toolCallId: part.toolCallId,
@@ -309,6 +310,7 @@ const toSessionToolPart = (part: SessionToolCallPart): SessionToolPart => {
 			}
 		: {
 				errorText: part.outcome.errorText,
+				...omitUndefined({ failure: part.outcome.failure }),
 				input: part.input,
 				state: "output-error",
 				toolCallId: part.toolCallId,
@@ -416,6 +418,7 @@ const toDurableSessionToolPart = (
 			? { kind: "success" as const, output: part.output }
 			: {
 					errorText: part.errorText ?? "Tool call denied.",
+					...omitUndefined({ failure: part.failure }),
 					kind: "failure" as const,
 				};
 	return {

@@ -15,10 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ceiling is unchanged. See ADR-0008.
 
 - **Read output is line-addressed.** Text reads now prefix every line with its
-  1-indexed line number. Read targets accept Oh My Pi-compatible single and
-  multi-range selectors, preserve literal colon-containing paths, add bounded
-  code context, and return a continuation selector when the output byte limit
-  is reached.
+  1-indexed line number. Read targets accept single and multi-range selectors,
+  preserve literal colon-containing paths, add bounded code context, and return
+  a continuation selector when the output byte limit is reached.
+
+- **Versioned single-file editing is available.** Read returns exact-byte
+  File Versions, bounded private snapshots, and Seen Lines; hashline edits
+  recover only provably safe drift, replace mode requires unique live text,
+  sloppy mode is separately permissioned, and Write requires an expected
+  version for overwrites.
+
+- **Edit and Write transactions are recoverable across restart.** Every
+  mutation now persists its canonical write set and original bytes before the
+  first replacement. Interrupted commits create pinned Recovery Artifacts and
+  block conflicting mutations until the new Recover Tool explicitly inspects,
+  restores originals, keeps verified current bytes, or discards the artifact.
+  Legacy full-content and compatibility Edit inputs are not accepted; this is a
+  breaking protocol cutover.
 
 ### Features
 

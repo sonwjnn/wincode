@@ -8,13 +8,16 @@ export type PermissionAction =
 	| "read"
 	| "write"
 	| "edit"
+	| "edit:sloppy"
 	| "list"
 	| "glob"
 	| "grep"
 	| "shell"
+	| "recover"
+	| "recover:cross-session"
+	| "recover:discard"
 	| "skill"
 	| "external_directory";
-
 export type PermissionResourceRules = Readonly<
 	Record<string, PermissionDecision>
 >;
@@ -82,9 +85,13 @@ export const MAX_PERMISSION_PATTERN_LENGTH = 512;
 export const PERMISSION_TOOL_ACTIONS = [
 	"read",
 	"edit",
+	"edit:sloppy",
 	"list",
 	"glob",
 	"grep",
+	"recover",
+	"recover:cross-session",
+	"recover:discard",
 	"shell",
 	"skill",
 	"external_directory",
@@ -102,6 +109,7 @@ export const STATIC_TOOL_PERMISSION_ACTIONS = {
 	glob: "glob",
 	grep: "grep",
 	shell: "shell",
+	recover: "recover",
 } as const satisfies Record<CodingToolName, PermissionAction>;
 
 /** Tightens every non-denied decision to an approval that must be handled manually. */
@@ -145,12 +153,16 @@ export const DEFAULT_SHELL_PERMISSION_RULES: PermissionResourceRules = {
 export const DEFAULT_PERMISSION_RULES: PermissionRules = {
 	read: DEFAULT_READ_PERMISSION_RULES,
 	edit: "allow",
+	"edit:sloppy": "ask",
 	list: "allow",
 	glob: "allow",
 	grep: "allow",
 	// Shell defaults to permissive allow with shipped `rm *`/`sudo *` denies
 	// that users can override through config (ADR-0008).
 	shell: DEFAULT_SHELL_PERMISSION_RULES,
+	recover: "ask",
+	"recover:cross-session": "ask",
+	"recover:discard": "ask",
 	// Access outside the workspace is a visible boundary: it always requires
 	// explicit approval unless a configured rule or remembered grant allows it.
 	external_directory: "ask",

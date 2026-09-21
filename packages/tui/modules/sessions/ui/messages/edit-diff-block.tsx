@@ -3,6 +3,7 @@ import { type BoxRenderable, pathToFiletype } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
 import { type EditDiff, isRenderableEditDiff } from "@wincode/coding-tools";
 import {
+	isArray,
 	isPlainObject,
 	isString,
 	isUndefined,
@@ -49,9 +50,10 @@ const formatEditPath = (filePath: string): string => {
 	const sanitized = stripControlCharacters(filePath, 512);
 	return isAbsolute(sanitized) ? sanitized : sanitized.replaceAll("\\", "/");
 };
-
 type EditPartFields = {
 	readonly editDiff?: unknown;
+	readonly files?: unknown;
+	readonly fullDiffArtifact?: unknown;
 	readonly path?: unknown;
 };
 
@@ -61,8 +63,10 @@ const readEditPartFields = (value: unknown): EditPartFields => {
 	}
 	const path = Reflect.get(value, "path");
 	const editDiff = Reflect.get(value, "editDiff");
+	const files = Reflect.get(value, "files");
+	const fullDiffArtifact = Reflect.get(value, "fullDiffArtifact");
 	return {
-		...omitUndefined({ path, editDiff }),
+		...omitUndefined({ editDiff, files, fullDiffArtifact, path }),
 	};
 };
 
@@ -71,6 +75,34 @@ const getOutput = (part: EditToolPart): EditPartFields =>
 const getInput = (part: EditToolPart): EditPartFields =>
 	readEditPartFields(part.input);
 
+type MultiEditFile = {
+	artifact: boolean;
+	hunkCount: number;
+	path: string;
+};
+
+const readMultiEditFiles = (output: EditPartFields): MultiEditFile[] | null => {
+	if (!isArray(output.files)) {
+		return null;
+	}
+	const files = output.files.map((file) => {
+		if (!isPlainObject(file)) {
+			return null;
+		}
+		const path = Reflect.get(file, "path");
+		const hunkCount = Reflect.get(file, "hunkCount");
+		return isString(path) && typeof hunkCount === "number"
+			? {
+					artifact: isPlainObject(Reflect.get(file, "fullDiffArtifact")),
+					hunkCount,
+					path,
+				}
+			: null;
+	});
+	return files.every((file) => file !== null)
+		? (files as MultiEditFile[])
+		: null;
+};
 const getEditPath = (part: EditToolPart, output: EditPartFields): string => {
 	if (isString(output.path)) {
 		return output.path;
@@ -206,20 +238,26 @@ export const buildAddedPreviewPatch = (
 	}
 	return limitPatchLines(`${output.join("\n")}\n`, maxLines);
 };
-
 const isEditOutputWithDiff = (
 	part: EditToolPart
-): { path: string; editDiff?: EditDiff; invalid: boolean } | null => {
+): {
+	artifact?: boolean;
+	path: string;
+	editDiff?: EditDiff;
+	invalid: boolean;
+} | null => {
 	if (part.state !== "output-available") {
 		return null;
 	}
 
 	const output = getOutput(part);
+	const path = getEditPath(part, output);
 	if (isUndefined(output.editDiff)) {
-		return null;
+		return isPlainObject(output.fullDiffArtifact)
+			? { artifact: true, invalid: false, path }
+			: null;
 	}
 
-	const path = getEditPath(part, output);
 	if (!isRenderableEditDiff(output.editDiff)) {
 		return { invalid: true, path };
 	}
@@ -309,8 +347,36 @@ const EditRunningStatus = ({
 		</DiffStatusPanel>
 	);
 };
+const MultiEditStatus = ({ files }: { files: readonly MultiEditFile[] }) => {
+	const { colors } = useTheme();
+	return (
+		<DiffStatusPanel colors={colors}>
+			<text fg={colors.textMuted}>{`← Edited ${files.length} files`}</text>
+			{files.map((file) => (
+				<box flexDirection="row" gap={1} key={file.path} width="100%">
+					<text fg={colors.textMuted}>{`✓ ${formatEditPath(file.path)}`}</text>
+					<text fg={colors.textMuted}>
+						{file.artifact
+							? `${file.hunkCount} hunks · full diff available`
+							: `${file.hunkCount} hunks`}
+					</text>
+				</box>
+			))}
+		</DiffStatusPanel>
+	);
+};
+const getMultiEditStatus = (
+	part: EditToolPart,
+	files: readonly MultiEditFile[] | null
+): ReactNode | null => {
+	if (part.state !== "output-available" || files === null) {
+		return null;
+	}
+	return <MultiEditStatus files={files} />;
+};
 
-export function EditDiffBlock({ agent, part }: EditDiffBlockProps) {
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: output states intentionally share one compact diff/status renderer.
+function EditDiffContent({ agent, part }: EditDiffBlockProps) {
 	const { colors } = useTheme();
 	const blockRef = useRef<BoxRenderable>(null);
 	const [blockWidth, setBlockWidth] = useState(0);
@@ -346,6 +412,14 @@ export function EditDiffBlock({ agent, part }: EditDiffBlockProps) {
 		return <EditRunningStatus agent={agent} path={runningPath} />;
 	}
 
+	if (result.artifact && !editDiff) {
+		return (
+			<DiffStatusPanel colors={colors}>
+				<text fg={colors.textMuted}>{`← Edit ${path}`}</text>
+				<text fg={colors.textMuted}>Full diff available as artifact</text>
+			</DiffStatusPanel>
+		);
+	}
 	if (result.invalid || !editDiff) {
 		return (
 			<DiffStatusPanel colors={colors}>
@@ -423,4 +497,12 @@ export function EditDiffBlock({ agent, part }: EditDiffBlockProps) {
 			) : null}
 		</BorderedContentBlock>
 	);
+}
+export function EditDiffBlock({ agent, part }: EditDiffBlockProps) {
+	const output = getOutput(part);
+	const multiStatus = getMultiEditStatus(part, readMultiEditFiles(output));
+	if (multiStatus !== null) {
+		return multiStatus;
+	}
+	return <EditDiffContent agent={agent} part={part} />;
 }

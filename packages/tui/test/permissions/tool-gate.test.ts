@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import {
@@ -534,6 +534,112 @@ describe("shell override and grants", () => {
 		expect(service.isGranted("resource_limits", "extended")).toBe(false);
 	});
 
+	test("a remembered sloppy approval does not grant ordinary editing", async () => {
+		const service = createPermissionService();
+		const requests: ToolApprovalRequest[] = [];
+		const gate = createGate(
+			createToolPermission({ edit: "ask", "edit:sloppy": "ask" }),
+			settlingApprovalPort({ decision: "allow", remember: true }, requests),
+			undefined,
+			service
+		);
+		const canonicalPath = join(process.cwd(), "package.json");
+		const sloppyInput = {
+			mode: "sloppy",
+			patch:
+				"*** Begin Patch\n*** Update File: package.json\n@@\n-old\n+new\n*** End Patch",
+		};
+
+		await expect(
+			gate.gate({
+				family: "coding",
+				toolCall: {
+					input: sloppyInput,
+					toolCallId: makeToolCallId("call-sloppy-grant"),
+					toolName: "edit",
+				},
+			})
+		).resolves.toEqual({
+			approvedWorkspacePaths: [canonicalPath],
+			input: {
+				...sloppyInput,
+				patch: sloppyInput.patch.replace(
+					"*** Update File: package.json",
+					`*** Update File: ${canonicalPath}`
+				),
+			},
+			kind: "allow",
+		});
+		expect(service.listGrants()).toEqual([
+			{ action: "edit:sloppy", resource: "package.json" },
+		]);
+
+		await expect(
+			gate.gate({
+				family: "coding",
+				toolCall: {
+					input: {
+						mode: "replace",
+						newString: "new",
+						oldString: "old",
+						path: "package.json",
+					},
+					toolCallId: makeToolCallId("call-ordinary-edit"),
+					toolName: "edit",
+				},
+			})
+		).resolves.toEqual({
+			approvedWorkspacePaths: [canonicalPath],
+			input: {
+				mode: "replace",
+				newString: "new",
+				oldString: "old",
+				path: canonicalPath,
+			},
+			kind: "allow",
+		});
+		expect(requests).toHaveLength(2);
+	});
+	test("gates cross-session recovery with a separate approval", async () => {
+		const requests: ToolApprovalRequest[] = [];
+		const gate = createToolGate({
+			approvals: settlingApprovalPort(
+				{ decision: "allow", remember: false },
+				requests
+			),
+			resolvePermission: async () =>
+				createToolPermission({
+					recover: "ask",
+					"recover:cross-session": "ask",
+				}),
+			resolveRecovery: async (recoveryId) =>
+				recoveryId === "recovery-1"
+					? { originSessionId: "origin-session", paths: [] }
+					: undefined,
+			sandbox: createWorkspaceSandbox(process.cwd()),
+			service: createPermissionService(),
+			sessionId: "reconciler-session",
+		});
+		await expect(
+			gate.gate({
+				family: "coding",
+				toolCall: {
+					input: { action: "inspect", recoveryId: "recovery-1" },
+					toolCallId: makeToolCallId("call-recover-cross-session"),
+					toolName: "recover",
+				},
+			})
+		).resolves.toEqual({ approvedCrossSession: true, kind: "allow" });
+		expect(requests[0]?.identity).toContainEqual({
+			label: "tool",
+			value: "recover",
+		});
+		expect(requests[0]?.identity).toContainEqual({
+			label: "resource",
+			value: "recovery-1",
+		});
+	});
+
 	test("an explicit deny is never bypassed by grants or auto approval", async () => {
 		const service = createPermissionService({ autoApproval: true });
 		service.grant("shell", "rm -rf src/");
@@ -639,6 +745,142 @@ describe("shell override and grants", () => {
 			"tool",
 			"resource",
 		]);
+	});
+	test("asks once for the complete apply_patch write set", async () => {
+		const { approvals, requests } = allowOnceApproval();
+		const gate = createGate(createToolPermission({ edit: "ask" }), approvals);
+		const firstVersion = "a".repeat(32);
+		const secondVersion = "b".repeat(32);
+		const outcome = await gate.gate({
+			family: "coding",
+			toolCall: {
+				input: {
+					mode: "apply_patch",
+					patch: [
+						`[package.json#${firstVersion}]`,
+						"PUT 1.=1:",
+						"+one",
+						`[README.md#${secondVersion}]`,
+						"PUT 1.=1:",
+						"+two",
+					].join("\n"),
+				},
+				toolCallId: makeToolCallId("call-apply-patch-write-set"),
+				toolName: "edit",
+			},
+		});
+		expect(outcome.kind).toBe("allow");
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.identity).toContainEqual({
+			label: "resource",
+			value: "README.md, package.json",
+		});
+	});
+	test("denies an apply_patch when any external boundary is denied", async () => {
+		const { approvals, requests } = allowOnceApproval();
+		const gate = createGate(
+			createToolPermission({
+				edit: "allow",
+				external_directory: "deny",
+			}),
+			approvals
+		);
+		const externalPath = join(
+			process.env.TMPDIR ?? "/tmp",
+			"wincode-external-denied",
+			"one.txt"
+		);
+		const outcome = await gate.gate({
+			family: "coding",
+			toolCall: {
+				input: {
+					mode: "apply_patch",
+					patch: [
+						`[${externalPath}#${"a".repeat(32)}]`,
+						"PUT 1.=1:",
+						"+one",
+					].join("\n"),
+				},
+				toolCallId: makeToolCallId("call-apply-patch-external-denied"),
+				toolName: "edit",
+			},
+		});
+		expect(outcome.kind).toBe("deny");
+		expect(requests).toHaveLength(0);
+	});
+	test("rejects malformed multi-file patches before requesting approval", async () => {
+		const { approvals, requests } = allowOnceApproval();
+		const gate = createGate(createToolPermission({ edit: "ask" }), approvals);
+		const outcome = await gate.gate({
+			family: "coding",
+			toolCall: {
+				input: {
+					mode: "apply_patch",
+					patch: [
+						`[package.json#${"a".repeat(32)}]`,
+						"NOT A VERIFIED HUNK",
+					].join("\n"),
+				},
+				toolCallId: makeToolCallId("call-apply-patch-invalid"),
+				toolName: "edit",
+			},
+		});
+		expect(outcome.kind).toBe("reject");
+		expect(requests).toHaveLength(0);
+	});
+	test("rewrites mixed approved paths to absolute runner resources", async () => {
+		const { approvals } = allowOnceApproval();
+		const gate = createGate(
+			createToolPermission({
+				edit: "ask",
+				external_directory: "allow",
+			}),
+			approvals
+		);
+		const externalPath = join(
+			process.env.TMPDIR ?? "/tmp",
+			"wincode-external-mixed",
+			"two.txt"
+		);
+		const canonicalExternalPath = await canonicalizeExternalPath(
+			externalPath,
+			process.cwd()
+		);
+		const version = "a".repeat(32);
+		const outcome = await gate.gate({
+			family: "coding",
+			toolCall: {
+				input: {
+					mode: "apply_patch",
+					patch: [
+						`[package.json#${version}]`,
+						"PUT 1.=1:",
+						"+one",
+						`[${externalPath}#${version}]`,
+						"PUT 1.=1:",
+						"+two",
+					].join("\n"),
+				},
+				toolCallId: makeToolCallId("call-apply-patch-mixed"),
+				toolName: "edit",
+			},
+		});
+		expect(outcome).toEqual({
+			approvedExternalPaths: [canonicalExternalPath],
+			approvedWorkspacePaths: [join(process.cwd(), "package.json")],
+			input: {
+				mode: "apply_patch",
+				patch: [
+					`[${join(process.cwd(), "package.json")}#${version}]`,
+					"PUT 1.=1:",
+					"+one",
+					`[${canonicalExternalPath}#${version}]`,
+					"PUT 1.=1:",
+					"+two",
+				].join("\n"),
+			},
+			kind: "allow",
+		});
 	});
 });
 
@@ -1036,6 +1278,52 @@ test("an external-directory grant does not satisfy an operation ask", async () =
 	// The call still reaches the approval panel because only the boundary was
 	// granted; the operation itself remained ask-gated.
 	expect(requests).toHaveLength(1);
+});
+test("rewrites an approved external edit patch to its canonical resource", async () => {
+	const parent = await mkdtemp(
+		join(process.env.TMPDIR ?? "/tmp", "wincode-gate-")
+	);
+	try {
+		const workspace = join(parent, "workspace");
+		await mkdir(workspace);
+		const resource = await canonicalizeExternalPath(
+			"../outside/file.txt",
+			workspace
+		);
+		const gate = createToolGate({
+			approvals: settlingApprovalPort({
+				decision: "allow",
+				remember: false,
+			}),
+			resolvePermission: async () =>
+				createToolPermission({
+					edit: "ask",
+					external_directory: "allow",
+				}),
+			sandbox: createWorkspaceSandbox(workspace),
+			service: createPermissionService(),
+		});
+		const version = "0123456789abcdef0123456789abcdef";
+		const patch = `[../outside/file.txt#${version}]\nPUT 1.=1:\n+updated`;
+		await expect(
+			gate.gate({
+				family: "coding",
+				toolCall: {
+					input: { patch },
+					toolCallId: makeToolCallId("call-external-edit-patch"),
+					toolName: "edit",
+				},
+			})
+		).resolves.toEqual({
+			approvedExternalPaths: [resource],
+			input: {
+				patch: `[${resource}#${version}]\nPUT 1.=1:\n+updated`,
+			},
+			kind: "allow",
+		});
+	} finally {
+		await rm(parent, { force: true, recursive: true });
+	}
 });
 
 describe("approval settlement through the Session Engine", () => {

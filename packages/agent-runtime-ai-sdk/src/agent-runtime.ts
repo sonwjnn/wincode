@@ -1,21 +1,15 @@
 import type { ModelMessage } from "@ai-sdk/provider-utils";
-import type {
-	AgentRuntime,
-	AgentRuntimeRunOptions,
-	AgentTurn,
-	AgentTurnEvent,
-	AgentTurnEventStream,
-	AgentTurnLifecycle,
-	AgentTurnMessage,
-	AgentTurnPart,
-	AgentTurnTerminalEvent,
-	ModelStepId,
-	OperationalFailure,
-	ResolvedTool,
-	ToolCallId,
-} from "@wincode/agent-core";
 import {
 	AgentInvariantError,
+	type AgentRuntime,
+	type AgentRuntimeRunOptions,
+	type AgentTurn,
+	type AgentTurnEvent,
+	type AgentTurnEventStream,
+	type AgentTurnLifecycle,
+	type AgentTurnMessage,
+	type AgentTurnPart,
+	type AgentTurnTerminalEvent,
 	createAgentTurnAbortEvent,
 	createAgentTurnLifecycle,
 	createOperationalFailure,
@@ -23,6 +17,13 @@ import {
 	isAgentInvariantError,
 	isAgentTurnTerminalEvent,
 	isToolCallId,
+	isToolFailureDetails,
+	type ModelStepId,
+	type OperationalFailure,
+	type ResolvedTool,
+	ToolCallFailureError,
+	type ToolCallId,
+	type ToolFailureDetails,
 	toModelStepId,
 } from "@wincode/agent-core";
 import type { ModelFailure } from "@wincode/ai/model-failures";
@@ -232,6 +233,18 @@ const requirePartToolIdentity = (
 	}
 	return { toolCallId, toolName };
 };
+const toolFailureDetailsFrom = (
+	error: unknown
+): ToolFailureDetails | undefined => {
+	if (error instanceof ToolCallFailureError) {
+		return error.failure;
+	}
+	if (isObjectLike(error) && "failure" in error) {
+		const failure = error.failure;
+		return isToolFailureDetails(failure) ? failure : undefined;
+	}
+	return;
+};
 
 const projectAiSdkPart = (
 	part: AiSdkTextStreamPart,
@@ -293,11 +306,20 @@ const projectAiSdkPart = (
 		case "tool-error": {
 			const { toolCallId, toolName } = requirePartToolIdentity(part);
 			state.startedToolCallIds.delete(toolCallId);
+			const failure = toolFailureDetailsFrom(part.error);
+			const outcome =
+				failure === undefined
+					? {
+							errorText: getErrorMessage(part.error, "Tool execution failed."),
+							type: "failure" as const,
+						}
+					: {
+							errorText: getErrorMessage(part.error, "Tool execution failed."),
+							failure,
+							type: "failure" as const,
+						};
 			return {
-				outcome: {
-					errorText: getErrorMessage(part.error, "Tool execution failed."),
-					type: "failure",
-				},
+				outcome,
 				sequence,
 				toolCallId,
 				toolName,
@@ -372,7 +394,16 @@ const toolResultContent = (part: AgentTurnPart): unknown => {
 	}
 	if (part.type === "tool-failure") {
 		return {
-			output: { type: "error-text", value: part.errorText },
+			output:
+				part.failure === undefined
+					? { type: "error-text", value: part.errorText }
+					: {
+							type: "error-json",
+							value: {
+								errorText: part.errorText,
+								failure: part.failure,
+							},
+						},
 			toolCallId: part.toolCallId,
 			toolName: part.toolName,
 			type: "tool-result",
@@ -499,6 +530,9 @@ const toAiSdkToolSet = (tools: readonly ResolvedTool[]): ToolSet => {
 					{ signal: options.abortSignal }
 				);
 				if (outcome.type === "failure") {
+					if (outcome.failure !== undefined) {
+						throw new ToolCallFailureError(outcome.errorText, outcome.failure);
+					}
 					throw new Error(outcome.errorText);
 				}
 				return outcome.output;

@@ -104,6 +104,7 @@ const settleRuntimeToolPart = (
 		: {
 				...part,
 				errorText: event.outcome.errorText,
+				...omitUndefined({ failure: event.outcome.failure }),
 				state: "output-error",
 			};
 
@@ -121,6 +122,7 @@ const runtimeToolResultPart = (
 			}
 		: {
 				errorText: event.outcome.errorText,
+				...omitUndefined({ failure: event.outcome.failure }),
 				state: "output-error",
 				toolCallId: event.toolCallId,
 				toolName: event.toolName,
@@ -237,14 +239,17 @@ const buildTerminalMessageMetadata = ({
 		...(base.metadata ?? {}),
 		agent: base.metadata?.agent ?? agent,
 		interrupted: event.type === "agent-turn-interrupted",
-		...omitUndefined({ terminalOutcome, usage: usage ?? undefined }),
-		...(isUndefined(model) ? {} : { model: base.metadata?.model ?? model }),
-		...(isUndefined(variant)
-			? {}
-			: { variant: base.metadata?.variant ?? variant }),
-		...(isNull(startedAt)
-			? {}
-			: { responseTimeMs: Math.max(0, Date.now() - startedAt) }),
+		...omitUndefined({
+			terminalOutcome,
+			usage: usage ?? undefined,
+			model: isUndefined(model) ? undefined : (base.metadata?.model ?? model),
+			variant: isUndefined(variant)
+				? undefined
+				: (base.metadata?.variant ?? variant),
+			responseTimeMs: isNull(startedAt)
+				? undefined
+				: Math.max(0, Date.now() - startedAt),
+		}),
 	};
 };
 

@@ -1,14 +1,20 @@
 import { lstat } from "node:fs/promises";
+import path from "node:path";
 import type { AgentId, ToolCallId } from "@wincode/agent-core";
 import {
+	byteLength,
 	type CodingToolName,
 	codingToolDefinitions,
 	codingToolNames,
+	getPatchResourcePaths,
 	getReadResourcePath,
 	getToolResourceLimits,
 	isElevatedResourceProfile,
 	RESOURCE_LIMIT_PERMISSION_ACTION,
+	rewritePatchResourcePath,
+	rewritePatchResourcePaths,
 	type ToolResourceLimits,
+	validateMultiEditPatch,
 } from "@wincode/coding-tools";
 import type { WorkspacePolicy } from "@wincode/coding-tools/workspace";
 import {
@@ -53,7 +59,13 @@ import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
  * it (coding, shell, and MCP).
  */
 export type GateOutcome =
-	| { kind: "allow"; input?: unknown }
+	| {
+			approvedCrossSession?: boolean;
+			approvedExternalPaths?: readonly string[];
+			approvedWorkspacePaths?: readonly string[];
+			input?: unknown;
+			kind: "allow";
+	  }
 	| { kind: "deny"; errorText: string }
 	| { kind: "reject"; errorText: string; feedback?: string };
 
@@ -112,16 +124,24 @@ export type ToolGateApprovalPort = {
 export type ToolGateDeps = {
 	approvals: ToolGateApprovalPort;
 	onAbort?: (request: ToolApprovalRequest) => void;
+	recoveryWarning?: () => Promise<string | undefined>;
 	resolvePermission: (agentId?: AgentId) => Promise<ToolPermission>;
+	resolveRecovery?: (
+		recoveryId: string
+	) => Promise<
+		{ originSessionId: string; paths: readonly string[] } | undefined
+	>;
 	resolveResourceLimits?: (agentId?: AgentId) => Promise<ToolResourceLimits>;
 	sandbox: WorkspacePolicy;
 	service: PermissionService;
+	sessionId?: string;
 };
 
 const STATIC_TOOL_LABELS = {
 	read: "Read",
 	write: "Write",
 	edit: "Edit",
+	recover: "Recover",
 	glob: "Glob",
 	grep: "Grep",
 	shell: "Shell",
@@ -143,8 +163,17 @@ const getStringField = (input: unknown, field: string): string | undefined => {
 	return isString(candidate) ? candidate : undefined;
 };
 
+const getPatchResources = (input: unknown): readonly string[] => {
+	const patch = getStringField(input, "patch");
+	return patch === undefined ? [] : getPatchResourcePaths(patch);
+};
 type GateResource =
-	| { kind: "path"; input: string; pattern?: string }
+	| {
+			kind: "path";
+			input: string;
+			inputs?: readonly string[];
+			pattern?: string;
+	  }
 	| { kind: "literal"; value: string };
 
 /**
@@ -158,6 +187,12 @@ const resolveGateResource = (
 	tool: CodingToolName,
 	input: unknown
 ): GateResource | undefined => {
+	if (tool === "recover") {
+		const recoveryId = getStringField(input, "recoveryId");
+		return recoveryId === undefined
+			? undefined
+			: { kind: "literal", value: recoveryId };
+	}
 	if (tool === "grep" || tool === "glob") {
 		const pattern = getStringField(input, "pattern");
 		if (!pattern) {
@@ -169,7 +204,20 @@ const resolveGateResource = (
 			: { input: path, kind: "path", pattern };
 	}
 	const path = getStringField(input, "path");
-	return isUndefined(path) ? undefined : { input: path, kind: "path" };
+	if (tool === "read" && path?.startsWith("artifact://")) {
+		return { kind: "literal", value: path };
+	}
+	if (!isUndefined(path)) {
+		return { input: path, kind: "path" };
+	}
+	if (tool !== "edit") {
+		return;
+	}
+	const patchPaths = getPatchResources(input);
+	const patchPath = patchPaths[0];
+	return patchPath === undefined
+		? undefined
+		: { input: patchPath, inputs: patchPaths, kind: "path" };
 };
 const resolveReadGatePath = async (
 	input: string,
@@ -396,10 +444,13 @@ const withErrorText = (
 export const createToolGate = ({
 	approvals,
 	onAbort,
+	recoveryWarning,
 	resolvePermission,
+	resolveRecovery,
 	resolveResourceLimits: resolveResourceLimitsOption,
 	sandbox,
 	service,
+	sessionId,
 }: ToolGateDeps): ToolGate => {
 	const resolveResourceLimits =
 		resolveResourceLimitsOption ??
@@ -423,15 +474,63 @@ export const createToolGate = ({
 			};
 		}
 		const tool = toolCall.toolName;
+		const resourceLimits = await resolveResourceLimits(agentId);
+		const patchInput = getStringField(toolCall.input, "patch");
+		if (
+			tool === "edit" &&
+			patchInput !== undefined &&
+			byteLength(patchInput) > resourceLimits.edit.maxPatchBytes
+		) {
+			return {
+				errorText: "Edit patch input exceeds the configured input budget.",
+				kind: "deny",
+			};
+		}
+		const editMode = getStringField(toolCall.input, "mode");
+		if (
+			tool === "edit" &&
+			patchInput !== undefined &&
+			(editMode === "patch" || editMode === "apply_patch")
+		) {
+			try {
+				validateMultiEditPatch(patchInput, editMode);
+			} catch (error) {
+				return {
+					errorText:
+						error instanceof Error
+							? error.message
+							: "Invalid edit patch input.",
+					kind: "reject",
+				};
+			}
+		}
 		const gateResource = resolveGateResource(tool, toolCall.input);
 		if (isUndefined(gateResource)) {
 			return { kind: "allow" };
 		}
 		const label = STATIC_TOOL_LABELS[tool];
 		const action = STATIC_TOOL_PERMISSION_ACTIONS[tool];
-		const resourceLimits = await resolveResourceLimits(agentId);
 		const limitChecks =
 			tool === "write" ? [] : resourceLimitChecks(resourceLimits);
+		const sloppyEdit =
+			tool === "edit" && getStringField(toolCall.input, "mode") === "sloppy";
+		const editModeChecks = (resource: string) =>
+			sloppyEdit
+				? [
+						{
+							action: "edit:sloppy" as const,
+							decision: permission.decide("edit:sloppy", resource),
+							resource,
+						},
+					]
+				: [];
+		const grantCodingAccess = (resource: string): void => {
+			if (sloppyEdit) {
+				service.grant("edit:sloppy", resource);
+			} else {
+				service.grant(action, resource);
+			}
+		};
 		const requestFor = (
 			resource: string,
 			external: boolean,
@@ -460,8 +559,178 @@ export const createToolGate = ({
 			}
 			grantResourceLimits(service, resourceLimits, grant);
 		};
-
+		if (
+			tool === "edit" &&
+			gateResource.kind === "path" &&
+			(gateResource.inputs?.length ?? 0) > 1
+		) {
+			const declaredPaths = gateResource.inputs ?? [gateResource.input];
+			const canonicalByDeclared = new Map<string, string>();
+			const resources: string[] = [];
+			const externalResources: string[] = [];
+			const approvedWorkspacePaths: string[] = [];
+			const approvedExternalPaths: string[] = [];
+			for (const declaredPath of declaredPaths) {
+				let resource: string;
+				try {
+					resource = await canonicalizeResource(
+						expandHomeInPath(declaredPath),
+						sandbox
+					);
+					approvedWorkspacePaths.push(path.resolve(sandbox.root, resource));
+				} catch {
+					resource = await canonicalizeExternalPath(
+						expandHomeInPath(declaredPath),
+						sandbox.root
+					);
+					if (!externalResources.includes(resource)) {
+						externalResources.push(resource);
+					}
+					approvedExternalPaths.push(path.resolve(sandbox.root, resource));
+				}
+				canonicalByDeclared.set(declaredPath, resource);
+				if (!resources.includes(resource)) {
+					resources.push(resource);
+				}
+			}
+			resources.sort();
+			externalResources.sort();
+			for (const [declaredPath, resource] of canonicalByDeclared) {
+				canonicalByDeclared.set(
+					declaredPath,
+					path.resolve(sandbox.root, resource)
+				);
+			}
+			const writeSet = resources.join(", ");
+			const boundary = externalResources.join(", ");
+			const settled = await settleApproval(
+				{
+					checks: [
+						...limitChecks,
+						...externalResources.map((resource) => ({
+							action: "external_directory" as const,
+							decision: permission.decide("external_directory", resource),
+							resource,
+						})),
+						...resources.map((resource) => ({
+							action,
+							decision: permission.decide(action, resource),
+							resource,
+						})),
+					],
+					doomAsk,
+					request: requestFor(
+						writeSet,
+						externalResources.length > 0,
+						externalResources.length > 0 ? boundary : undefined
+					),
+					safety: permission.safety,
+				},
+				approvalDeps,
+				() =>
+					grantApprovedAccess(() => {
+						for (const resource of externalResources) {
+							service.grant(
+								"external_directory",
+								externalParentDirectoryGlob(resource)
+							);
+						}
+						for (const resource of resources) {
+							grantCodingAccess(resource);
+						}
+					})
+			);
+			const outcome = withErrorText(
+				settled,
+				staticDenialText(label, writeSet),
+				(feedback) => staticRejectionText(label, writeSet, feedback)
+			);
+			if (outcome.kind !== "allow") {
+				return outcome;
+			}
+			const input = isPlainObject(toolCall.input) ? toolCall.input : {};
+			const patch = Reflect.get(input, "patch");
+			if (!isString(patch)) {
+				return outcome;
+			}
+			return {
+				...outcome,
+				approvedExternalPaths,
+				approvedWorkspacePaths,
+				input: {
+					...input,
+					patch: rewritePatchResourcePaths(patch, canonicalByDeclared),
+				},
+			};
+		}
 		if (gateResource.kind === "literal") {
+			const recoveryAction =
+				tool === "recover"
+					? getStringField(toolCall.input, "action")
+					: undefined;
+			const recoveryContext =
+				tool === "recover" && resolveRecovery !== undefined
+					? await resolveRecovery(gateResource.value)
+					: undefined;
+			const crossSessionRecovery =
+				tool === "recover" &&
+				recoveryContext !== undefined &&
+				sessionId !== undefined &&
+				recoveryContext.originSessionId !== sessionId;
+			const externalRecoveryResources: string[] = [];
+			if (tool === "recover" && recoveryContext !== undefined) {
+				for (const recoveryPath of recoveryContext.paths) {
+					try {
+						await canonicalizeResource(recoveryPath, sandbox);
+					} catch {
+						try {
+							externalRecoveryResources.push(
+								await canonicalizeExternalPath(recoveryPath, sandbox.root)
+							);
+						} catch {
+							return {
+								errorText:
+									"Recover target is outside the permitted filesystem scope.",
+								kind: "deny",
+							};
+						}
+					}
+				}
+			}
+			const extraRecoveryChecks =
+				tool === "recover"
+					? [
+							...externalRecoveryResources.map((resource) => ({
+								action: "external_directory" as const,
+								decision: permission.decide("external_directory", resource),
+								resource,
+							})),
+							...(recoveryAction === "discard"
+								? [
+										{
+											action: "recover:discard",
+											decision: permission.decide(
+												"recover:discard",
+												gateResource.value
+											),
+											resource: gateResource.value,
+										},
+									]
+								: []),
+							...(crossSessionRecovery
+								? [
+										{
+											action: "recover:cross-session",
+											decision: permission.decide(
+												"recover:cross-session",
+												gateResource.value
+											),
+											resource: gateResource.value,
+										},
+									]
+								: []),
+						]
+					: [];
 			const settled = await settleApproval(
 				{
 					checks: [
@@ -471,20 +740,45 @@ export const createToolGate = ({
 							decision: permission.decide(action, gateResource.value),
 							resource: gateResource.value,
 						},
+						...editModeChecks(gateResource.value),
+						...extraRecoveryChecks,
 					],
 					doomAsk,
-					request: requestFor(gateResource.value, false),
+					request: requestFor(
+						gateResource.value,
+						externalRecoveryResources.length > 0,
+						externalRecoveryResources.length > 0
+							? externalRecoveryResources.join(", ")
+							: undefined
+					),
 					safety: permission.safety,
 				},
 				approvalDeps,
 				() =>
-					grantApprovedAccess(() => service.grant(action, gateResource.value))
+					grantApprovedAccess(() => {
+						for (const resource of externalRecoveryResources) {
+							service.grant(
+								"external_directory",
+								externalParentDirectoryGlob(resource)
+							);
+						}
+						grantCodingAccess(gateResource.value);
+						if (recoveryAction === "discard") {
+							service.grant("recover:discard", gateResource.value);
+						}
+						if (crossSessionRecovery) {
+							service.grant("recover:cross-session", gateResource.value);
+						}
+					})
 			);
-			return withErrorText(
+			const outcome = withErrorText(
 				settled,
 				staticDenialText(label, gateResource.value),
 				(feedback) => staticRejectionText(label, gateResource.value, feedback)
 			);
+			return crossSessionRecovery && outcome.kind === "allow"
+				? { ...outcome, approvedCrossSession: true }
+				: outcome;
 		}
 		const pathInput =
 			tool === "read"
@@ -507,20 +801,41 @@ export const createToolGate = ({
 					checks: [
 						...limitChecks,
 						{ action, decision: permission.decide(action, resource), resource },
+						...editModeChecks(resource),
 					],
 					doomAsk,
 					request: requestFor(resource, false),
 					safety: permission.safety,
 				},
 				approvalDeps,
-				() => grantApprovedAccess(() => service.grant(action, resource))
+				() => grantApprovedAccess(() => grantCodingAccess(resource))
 			);
-			return withErrorText(
+			const outcome = withErrorText(
 				settled,
 				staticDenialText(label, gateResource.pattern ?? resource),
 				(feedback) =>
 					staticRejectionText(label, gateResource.pattern ?? resource, feedback)
 			);
+			if (outcome.kind !== "allow" || tool !== "edit") {
+				return outcome;
+			}
+			const input = isPlainObject(toolCall.input) ? toolCall.input : {};
+			const patch = Reflect.get(input, "patch");
+			const approvedPath = path.resolve(sandbox.root, canonical);
+			return isString(patch)
+				? {
+						...outcome,
+						approvedWorkspacePaths: [approvedPath],
+						input: {
+							...input,
+							patch: rewritePatchResourcePath(patch, approvedPath),
+						},
+					}
+				: {
+						...outcome,
+						approvedWorkspacePaths: [approvedPath],
+						input: { ...input, path: approvedPath },
+					};
 		} catch {
 			// Glob results are workspace-relative, so an external scope cannot
 			// produce a valid result. Deny it here instead of approving a call the
@@ -564,6 +879,7 @@ export const createToolGate = ({
 							),
 							resource: gateResource.pattern ?? resource,
 						},
+						...editModeChecks(gateResource.pattern ?? resource),
 					],
 					doomAsk,
 					request: requestFor(
@@ -580,7 +896,7 @@ export const createToolGate = ({
 							"external_directory",
 							externalParentDirectoryGlob(resource)
 						);
-						service.grant(action, gateResource.pattern ?? resource);
+						grantCodingAccess(gateResource.pattern ?? resource);
 					})
 			);
 			const outcome = withErrorText(
@@ -592,17 +908,34 @@ export const createToolGate = ({
 			if (outcome.kind !== "allow" || !isUndefined(gateResource.pattern)) {
 				return outcome;
 			}
+			const input = isPlainObject(toolCall.input)
+				? toolCall.input
+				: { path: resource };
+			const patch = Reflect.get(input, "patch");
+			if (tool === "edit" && isString(patch)) {
+				return {
+					...outcome,
+					approvedExternalPaths: [resource],
+					input: {
+						...input,
+						patch: rewritePatchResourcePath(patch, resource),
+					},
+				};
+			}
+			if (tool === "edit") {
+				return {
+					...outcome,
+					approvedExternalPaths: [resource],
+					input: { ...input, path: resource },
+				};
+			}
 			return {
 				...outcome,
-				input: isPlainObject(toolCall.input)
-					? { ...toolCall.input, path: resource }
-					: { path: resource },
+				input: { ...input, path: resource },
 			};
 		}
 	};
-
-	/**
-	 * Enforces the Tool Permission policy for a `shell` tool call (ADR-0008).
+	/** Enforces the Tool Permission policy for a `shell` tool call (ADR-0008).
 	 * The command is parsed per node: each command node is its own resource
 	 * evaluated against the shell rules, composed most-restrictively, and
 	 * cd-family nodes are exempt. An unparseable command fails closed to ask,
@@ -630,18 +963,27 @@ export const createToolGate = ({
 		const resourceLimits = await resolveResourceLimits(agentId);
 		const limitChecks = resourceLimitChecks(resourceLimits);
 		const cwd = getStringField(toolCall.input, "cwd");
-		const request = (external: boolean): ToolApprovalRequest => ({
-			description: codingToolDefinitions.shell.description,
-			identity: [
-				{ label: "tool", value: "shell" },
-				{ label: "resource", value: command },
-				...resourceLimitIdentity(resourceLimits),
-				...(external ? [{ label: "scope", value: "external" }] : []),
-			],
-			input: toolCall.input,
-			safety: permission.safety,
-			toolCallId: toolCall.toolCallId,
-		});
+		const request = async (external: boolean): Promise<ToolApprovalRequest> => {
+			const warning = await recoveryWarning?.();
+			return {
+				description:
+					warning === undefined
+						? codingToolDefinitions.shell.description
+						: `${codingToolDefinitions.shell.description}\n\n${warning}`,
+				identity: [
+					{ label: "tool", value: "shell" },
+					{ label: "resource", value: command },
+					...resourceLimitIdentity(resourceLimits),
+					...(warning === undefined
+						? []
+						: [{ label: "recovery", value: warning }]),
+					...(external ? [{ label: "scope", value: "external" }] : []),
+				],
+				input: toolCall.input,
+				safety: permission.safety,
+				toolCallId: toolCall.toolCallId,
+			};
+		};
 
 		let externalResource: string | undefined;
 		if (!isUndefined(cwd)) {
@@ -679,7 +1021,7 @@ export const createToolGate = ({
 						},
 					],
 					doomAsk,
-					request: request(false),
+					request: await request(false),
 					safety: permission.safety,
 				},
 				approvalDeps,
@@ -711,7 +1053,7 @@ export const createToolGate = ({
 					},
 				],
 				doomAsk,
-				request: request(true),
+				request: await request(true),
 				safety: permission.safety,
 			},
 			approvalDeps,

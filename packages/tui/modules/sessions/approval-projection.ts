@@ -1,4 +1,4 @@
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import type { ApprovalPanelEntry } from "@/shared/providers/approval/approval-panels-provider";
 import type { ApprovalOutcome } from "@/shared/providers/approval/types";
 import type { SessionApproval, SessionApprovalOutcome } from "./engine/types";
@@ -55,8 +55,8 @@ export const projectSessionApprovals = (
 				},
 				id: approval.id,
 				request: approval.request,
-				...(isUndefined(decision)
-					? {}
-					: { resolution: approvalResolutionOf(decision) }),
+				...omitUndefined({
+					resolution: decision && approvalResolutionOf(decision),
+				}),
 			};
 		});

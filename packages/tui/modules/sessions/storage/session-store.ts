@@ -5,6 +5,7 @@ import type {
 	SessionRecordOutcome,
 } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import type { EditMode, FileObservationStore } from "@wincode/coding-tools";
 import type {
 	SessionFilePart,
 	SessionMessage,
@@ -88,6 +89,9 @@ export type SessionStore = {
 	getPromptHistory: () => Promise<PromptHistoryEntry[]>;
 	recordPrompt: (entry: PromptHistoryEntry) => Promise<void>;
 	clearPromptHistory: () => Promise<void>;
+	getEditMode?: (sessionId: SessionId) => Promise<EditMode>;
+	setEditMode?: (sessionId: SessionId, mode: EditMode) => Promise<void>;
+	fileObservationStore?: FileObservationStore;
 	attachmentStore?: SessionAttachmentStore;
 	hydrateAttachments: (
 		messages: readonly SessionMessage[],

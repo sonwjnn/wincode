@@ -83,6 +83,37 @@ export type ToolCallSuccess = Readonly<{
 }>;
 
 /**
+ * Structured, provider-neutral details for a Tool Call failure. The `code`
+ * identifies the machine-readable contract; `details` and `recovery` remain
+ * opaque to Agent Core so tool families can evolve without provider coupling.
+ */
+export type ToolFailureDetails = Readonly<{
+	code: string;
+	details?: unknown;
+	recovery?: unknown;
+}>;
+
+export const isToolFailureDetails = (
+	value: unknown
+): value is ToolFailureDetails =>
+	isObjectLike(value) &&
+	isNonEmptyString(value.code) &&
+	Object.keys(value).every((key) =>
+		["code", "details", "recovery"].includes(key)
+	);
+
+/** Error carrier used only while crossing an SDK adapter boundary. */
+export class ToolCallFailureError extends Error {
+	readonly failure: ToolFailureDetails;
+
+	constructor(errorText: string, failure: ToolFailureDetails) {
+		super(errorText);
+		this.name = "ToolCallFailureError";
+		this.failure = failure;
+	}
+}
+
+/**
  * One Tool Call finished without executing its effect: a policy deny or
  * approval rejection, an Agent that cannot use the tool, or an execution
  * failure. `errorText` is presentation-safe and owned by the caller that
@@ -91,11 +122,10 @@ export type ToolCallSuccess = Readonly<{
  */
 export type ToolCallFailure = Readonly<{
 	errorText: string;
+	failure?: ToolFailureDetails;
 	type: "failure";
 }>;
-
 export type ToolCallOutput = ToolCallSuccess | ToolCallFailure;
-
 export const isToolCallOutput = (value: unknown): value is ToolCallOutput => {
 	if (!isObjectLike(value)) {
 		return false;
@@ -110,8 +140,10 @@ export const isToolCallOutput = (value: unknown): value is ToolCallOutput => {
 	if (output.type === "failure") {
 		return (
 			Object.keys(output).every(
-				(key) => key === "errorText" || key === "type"
-			) && isNonEmptyString(output.errorText)
+				(key) => key === "errorText" || key === "failure" || key === "type"
+			) &&
+			isNonEmptyString(output.errorText) &&
+			(isUndefined(output.failure) || isToolFailureDetails(output.failure))
 		);
 	}
 	return false;

@@ -320,6 +320,7 @@ describe("STATIC_TOOL_PERMISSION_ACTIONS", () => {
 			glob: "glob",
 			grep: "grep",
 			shell: "shell",
+			recover: "recover",
 		});
 	});
 });
@@ -611,7 +612,16 @@ describe("resolveVisibleCodingTools", () => {
 
 	for (const { name, rules, visible } of cases) {
 		test(name, () => {
-			expect(resolveVisibleCodingTools(rules) as string[]).toEqual(visible);
+			const recoverIndex = visible.indexOf("glob");
+			const expected =
+				visible.includes("recover") || recoverIndex < 0
+					? visible
+					: [
+							...visible.slice(0, recoverIndex),
+							"recover",
+							...visible.slice(recoverIndex),
+						];
+			expect(resolveVisibleCodingTools(rules) as string[]).toEqual(expected);
 		});
 	}
 });

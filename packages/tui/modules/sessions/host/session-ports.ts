@@ -3,7 +3,10 @@ import type {
 	AgentTurnEvent,
 	AgentTurnTerminalEvent,
 } from "@wincode/agent-core";
-import { codingToolDefinitions } from "@wincode/coding-tools";
+import {
+	codingToolDefinitions,
+	type VersionedEditingContext,
+} from "@wincode/coding-tools";
 import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import {
 	buildSkillToolDefinition,
@@ -211,6 +214,33 @@ export const createSessionPorts = ({
 				? permission.resolvePermission()
 				: permission.resolvePermissionForAgent(agentId);
 		},
+		recoveryWarning: async () => {
+			const recovery = capabilities.getStore().fileObservationStore?.recovery;
+			if (recovery === undefined) {
+				return;
+			}
+			const unresolved = await recovery.listUnresolvedRecoveries();
+			return unresolved.length === 0
+				? undefined
+				: `Unresolved recovery remains in this workspace (${unresolved
+						.map(({ id }) => id)
+						.join(", ")}). Reconcile it with recover; Shell remains available.`;
+		},
+		resolveRecovery: async (recoveryId) => {
+			const recovery = capabilities.getStore().fileObservationStore?.recovery;
+			if (recovery === undefined) {
+				return;
+			}
+			const inspection = await recovery.getRecoveryInspection(recoveryId);
+			return inspection === null
+				? undefined
+				: {
+						originSessionId: inspection.recovery.originSessionId,
+						paths: inspection.artifact.paths.map(
+							({ canonicalPath }) => canonicalPath
+						),
+					};
+		},
 		resolveResourceLimits: (agentId) => {
 			const permission = capabilities.getToolPermission();
 			return isUndefined(agentId)
@@ -219,6 +249,7 @@ export const createSessionPorts = ({
 		},
 		sandbox: capabilities.getToolPermission().sandbox,
 		service: capabilities.getToolPermission().service,
+		sessionId,
 	});
 	/**
 	 * The request overhead of the Agent Turn execution in flight: the bounded
@@ -347,6 +378,16 @@ export const createSessionPorts = ({
 		scopes.set(execution.turnId, scope);
 		let turn: AgentTurn | undefined;
 		try {
+			const sessionStore = capabilities.getStore();
+			const versionedEditing: VersionedEditingContext | undefined =
+				sessionStore.fileObservationStore === undefined
+					? undefined
+					: {
+							editMode:
+								(await sessionStore.getEditMode?.(sessionId)) ?? "hashline",
+							sessionId,
+							store: sessionStore.fileObservationStore,
+						};
 			const modelTarget = await resolveChatModelTarget(
 				execution.model,
 				connections,
@@ -373,6 +414,7 @@ export const createSessionPorts = ({
 					isUndefined(agentId)
 						? toolPermission.resolveResourceLimits()
 						: toolPermission.resolveResourceLimitsForAgent(agentId),
+				versionedEditing,
 			};
 			scope.delegate = createDelegationExecutor({
 				connections,
@@ -424,6 +466,7 @@ export const createSessionPorts = ({
 				resolveResourceLimits: tooling.resolveResourceLimits,
 				skillExecution: scope.armedSkill?.execution,
 				skillTool: scope.armedSkill?.tool,
+				versionedEditing,
 			});
 			const agentPermission = await toolPermission.resolvePermissionForAgent(
 				execution.agent

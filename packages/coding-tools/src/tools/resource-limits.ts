@@ -16,7 +16,11 @@ export const RESOURCE_LIMIT_PERMISSION_ACTION = "resource_limits" as const;
 export type ToolResourceLimits = ReadonlyDeep<{
 	profile: ResourceLimitProfile;
 	read: {
+		maxLineBytes: number;
+		maxObservedLines: number;
 		maxOutputBytes: number;
+		maxOutputLines: number;
+		maxSnapshotBytes: number;
 		maxDirectoryOutputBytes: number;
 	};
 	glob: {
@@ -43,6 +47,10 @@ export type ToolResourceLimits = ReadonlyDeep<{
 	edit: {
 		maxDiffBytes: number;
 		maxDiffLines: number;
+		maxFullDiffArtifactBytes: number;
+		maxPatchBytes: number;
+		maxPreflightBytes: number;
+		maxRecoveryComparisons: number;
 	};
 }>;
 export type ResourceLimitOptions = Readonly<{
@@ -55,6 +63,10 @@ export const TOOL_RESOURCE_LIMITS = {
 		edit: {
 			maxDiffBytes: 256 * 1024,
 			maxDiffLines: 2000,
+			maxFullDiffArtifactBytes: 8 * 1024 * 1024,
+			maxPatchBytes: 256 * 1024,
+			maxPreflightBytes: 32 * 1024 * 1024,
+			maxRecoveryComparisons: 200_000,
 		},
 		grep: {
 			maxDepth: 5,
@@ -73,7 +85,11 @@ export const TOOL_RESOURCE_LIMITS = {
 		profile: "standard",
 		read: {
 			maxDirectoryOutputBytes: 50 * 1024,
-			maxOutputBytes: 6000,
+			maxLineBytes: 512,
+			maxObservedLines: 3000,
+			maxOutputBytes: 50 * 1024,
+			maxOutputLines: 3000,
+			maxSnapshotBytes: 4 * 1024 * 1024,
 		},
 		shell: {
 			defaultTimeoutSeconds: 30,
@@ -87,6 +103,10 @@ export const TOOL_RESOURCE_LIMITS = {
 		edit: {
 			maxDiffBytes: 1024 * 1024,
 			maxDiffLines: 10_000,
+			maxFullDiffArtifactBytes: 8 * 1024 * 1024,
+			maxPatchBytes: 1024 * 1024,
+			maxPreflightBytes: 32 * 1024 * 1024,
+			maxRecoveryComparisons: 2_000_000,
 		},
 		grep: {
 			maxDepth: 12,
@@ -105,7 +125,11 @@ export const TOOL_RESOURCE_LIMITS = {
 		profile: "extended",
 		read: {
 			maxDirectoryOutputBytes: 128 * 1024,
+			maxLineBytes: 2048,
+			maxObservedLines: 10_000,
 			maxOutputBytes: 128 * 1024,
+			maxOutputLines: 10_000,
+			maxSnapshotBytes: 4 * 1024 * 1024,
 		},
 		shell: {
 			defaultTimeoutSeconds: 60,
@@ -119,6 +143,10 @@ export const TOOL_RESOURCE_LIMITS = {
 		edit: {
 			maxDiffBytes: 4 * 1024 * 1024,
 			maxDiffLines: 50_000,
+			maxFullDiffArtifactBytes: 8 * 1024 * 1024,
+			maxPatchBytes: 4 * 1024 * 1024,
+			maxPreflightBytes: 32 * 1024 * 1024,
+			maxRecoveryComparisons: 8_000_000,
 		},
 		grep: {
 			maxDepth: 32,
@@ -137,7 +165,11 @@ export const TOOL_RESOURCE_LIMITS = {
 		profile: "deep",
 		read: {
 			maxDirectoryOutputBytes: 512 * 1024,
+			maxLineBytes: 8192,
+			maxObservedLines: 50_000,
 			maxOutputBytes: 512 * 1024,
+			maxOutputLines: 50_000,
+			maxSnapshotBytes: 4 * 1024 * 1024,
 		},
 		shell: {
 			defaultTimeoutSeconds: 120,

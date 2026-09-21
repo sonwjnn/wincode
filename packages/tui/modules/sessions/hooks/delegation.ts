@@ -139,6 +139,7 @@ const buildChildTurn = async ({
 		skillTool: skill?.tool,
 		parentTurnId: turnId,
 		resolveResourceLimits: childTooling.resolveResourceLimits,
+		versionedEditing: childTooling.versionedEditing,
 	});
 	const childPermission = await resolvePermissionForAgent?.(prepared.agent);
 	const prompt = await prepareAgentTurnPrompt({

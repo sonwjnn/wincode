@@ -4,6 +4,7 @@ import type {
 	AttachmentId,
 	SessionMessageId,
 	ToolCallId,
+	ToolFailureDetails,
 } from "@wincode/agent-core";
 import {
 	agentIdSchema,
@@ -82,6 +83,7 @@ type SessionToolState =
 type ToolPartFields = {
 	readonly approval?: unknown;
 	readonly errorText?: string;
+	readonly failure?: ToolFailureDetails;
 	readonly input?: unknown;
 	readonly output?: unknown;
 	readonly providerExecuted?: boolean;
@@ -326,11 +328,45 @@ const stripEditDiffFromModelPart = (part: SessionPart): SessionPart => {
 		return part;
 	}
 	const output = part.output as UnknownRecord;
-	if (
-		!isString(output.path) ||
-		typeof output.replacements !== "number" ||
-		!("editDiff" in output)
-	) {
+	const files = output.files;
+	if (isArray(files)) {
+		const strippedFiles = files.map((file) => {
+			if (!isPlainObject(file)) {
+				return null;
+			}
+			const candidate = file as UnknownRecord;
+			if (
+				!(
+					isString(candidate.path) &&
+					isString(candidate.newFileVersion) &&
+					isString(candidate.oldFileVersion)
+				) ||
+				typeof candidate.hunkCount !== "number"
+			) {
+				return null;
+			}
+			return {
+				hunkCount: candidate.hunkCount,
+				newFileVersion: candidate.newFileVersion,
+				oldFileVersion: candidate.oldFileVersion,
+				path: candidate.path,
+				status: candidate.status,
+				...omitUndefined({
+					fullDiffArtifact: isPlainObject(candidate.fullDiffArtifact)
+						? candidate.fullDiffArtifact
+						: undefined,
+				}),
+			};
+		});
+		if (strippedFiles.some((file) => file === null)) {
+			return part;
+		}
+		return {
+			...part,
+			output: { files: strippedFiles },
+		};
+	}
+	if (!isString(output.path) || typeof output.replacements !== "number") {
 		return part;
 	}
 	return {
@@ -338,6 +374,21 @@ const stripEditDiffFromModelPart = (part: SessionPart): SessionPart => {
 		output: {
 			path: output.path,
 			replacements: output.replacements,
+			...omitUndefined({
+				fullDiffArtifact: isPlainObject(output.fullDiffArtifact)
+					? output.fullDiffArtifact
+					: undefined,
+				newFileVersion: isString(output.newFileVersion)
+					? output.newFileVersion
+					: undefined,
+				observationId: isString(output.observationId)
+					? output.observationId
+					: undefined,
+				oldFileVersion: isString(output.oldFileVersion)
+					? output.oldFileVersion
+					: undefined,
+				seenLines: isArray(output.seenLines) ? output.seenLines : undefined,
+			}),
 		},
 	};
 };

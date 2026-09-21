@@ -1,6 +1,10 @@
 import type { BoxRenderable } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
 import {
+	type CodingToolRecovery,
+	isCodingToolRecovery,
+} from "@wincode/coding-tools";
+import {
 	isArray,
 	isNull,
 	isNumber,
@@ -72,6 +76,17 @@ const getToolInputRecord = (part: ToolPart): UnknownRecord =>
 
 const getToolOutputRecord = (part: ToolPart): UnknownRecord =>
 	isPlainObject(part.output) ? part.output : {};
+const hasEditOutput = (part: ToolPart): boolean => {
+	if (part.type !== "tool-edit" || part.state !== "output-available") {
+		return false;
+	}
+	const output = getToolOutputRecord(part);
+	return (
+		"editDiff" in output ||
+		"fullDiffArtifact" in output ||
+		(isArray(output.files) && output.files.length > 0)
+	);
+};
 
 const formatToolArgumentValue = (value: unknown): string => {
 	const sanitized = sanitizeArgumentTree(value);
@@ -101,6 +116,43 @@ const stripErrorResource = (errorText: string, part: ToolPart): string => {
 	return isUndefined(resource)
 		? errorText
 		: errorText.replace(`: ${resource}`, "");
+};
+
+const getToolRecovery = (part: ToolPart): CodingToolRecovery | undefined => {
+	if (!isPlainObject(part.failure)) {
+		return;
+	}
+	return isCodingToolRecovery(part.failure.recovery)
+		? part.failure.recovery
+		: undefined;
+};
+
+const getRecoveryHint = (part: ToolPart): string => {
+	const recovery = getToolRecovery(part);
+	if (recovery === undefined) {
+		return "";
+	}
+	const path = recovery.path ?? getToolResource(part);
+	switch (recovery.action) {
+		case "reread":
+			return path === undefined
+				? "Next: read the file again, then retry."
+				: `Next: read ${path} again, then retry.`;
+		case "provide-file-version":
+			return path === undefined
+				? "Next: read the file again and use its current version, then retry."
+				: `Next: read ${path} again and use its current version, then retry.`;
+		case "grant-sloppy":
+			return "Next: approve sloppy editing, then retry.";
+		case "recover":
+			return recovery.recoveryId === undefined
+				? "Next: inspect and reconcile the unresolved recovery."
+				: `Next: inspect and reconcile recovery ${recovery.recoveryId}.`;
+		case "correct-input":
+			return "Next: correct the input, then retry.";
+		default:
+			return "";
+	}
 };
 
 /**
@@ -306,6 +358,25 @@ const resolveFooterItems = (
 
 	return items;
 };
+const ToolFailureMessage = ({
+	colors,
+	errorText,
+	part,
+}: {
+	colors: ThemeColors;
+	errorText: string;
+	part: ToolPart;
+}) => {
+	const recoveryHint = getRecoveryHint(part);
+	return (
+		<box marginBottom={1} paddingX={3} width="100%">
+			<text fg={colors.error}>{errorText}</text>
+			{recoveryHint === "" ? null : (
+				<text fg={colors.textMuted}>{`↳ ${recoveryHint}`}</text>
+			)}
+		</box>
+	);
+};
 
 function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 	const { colors } = useTheme();
@@ -326,10 +397,7 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 		(part.state === "output-available" || part.state === "output-error");
 	const isShellOutput =
 		part.type === "tool-shell" && part.state === "output-available";
-	const isEditOutput =
-		part.type === "tool-edit" &&
-		part.state === "output-available" &&
-		"editDiff" in getToolOutputRecord(part);
+	const isEditOutput = hasEditOutput(part);
 	const isEditRunning =
 		part.type === "tool-edit" &&
 		(part.state === "input-streaming" || part.state === "input-available");
@@ -354,7 +422,9 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 		<>
 			{toolLine}
 			{isShellOutput ? <ShellOutputBlock part={part} /> : null}
-			{isEditPreview ? <EditDiffBlock agent={agent} part={part} /> : null}
+			{isEditPreview && part.type === "tool-edit" ? (
+				<EditDiffBlock agent={agent} part={part} />
+			) : null}
 			{isWritePreview ? <WriteBlock agent={agent} part={part} /> : null}
 			{isString(part.toolCallId) ? (
 				<ToolApprovalPanel
@@ -368,9 +438,11 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 				/>
 			) : null}
 			{fallbackError === "" ? null : (
-				<box marginBottom={1} paddingX={3} width="100%">
-					<text fg={colors.error}>{`✗ ${fallbackError}`}</text>
-				</box>
+				<ToolFailureMessage
+					colors={colors}
+					errorText={fallbackError}
+					part={part}
+				/>
 			)}
 		</>
 	);
