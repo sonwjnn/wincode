@@ -18,6 +18,7 @@ const executableEnvironment = {
 
 const run = (args: readonly string[], input?: string) =>
 	spawnSync(["bun", executable, ...args], {
+		cwd: executableTestRoot,
 		env: executableEnvironment,
 		stderr: "pipe",
 		stdin: input === undefined ? "ignore" : new TextEncoder().encode(input),
