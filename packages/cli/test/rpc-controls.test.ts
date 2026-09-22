@@ -3,6 +3,7 @@ import { fromPartial } from "@total-typescript/shoehorn";
 import type {
 	SessionApprovalResult,
 	SessionHost,
+	SessionId,
 	SessionInterruptResult,
 	SessionSendInput,
 	SessionStore,
@@ -330,7 +331,7 @@ test("failed Session creation stays durable and can be reopened", async () => {
 		},
 		createSessionUserMessage: () => fromPartial({ id: "message-1" }),
 		resolveWorkspaceRoot: (start: string): string => start,
-		toSessionId: (value: string): string => value,
+		toSessionId: (value: string): SessionId => value as SessionId,
 	});
 	const bind = (nextHost: SessionHost, sessionId: string): void => {
 		state.host = nextHost;

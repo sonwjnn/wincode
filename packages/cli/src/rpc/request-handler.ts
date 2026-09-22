@@ -230,7 +230,7 @@ export const createRpcRequestHandler = (
 					? {}
 					: { variant: selection.variant }),
 			});
-			const createdId = String(created.id);
+			const createdId = activeRuntime.toSessionId(String(created.id));
 			let createdHost: SessionHost | undefined;
 			try {
 				createdHost = await activeRuntime.createSessionHost({
@@ -333,12 +333,13 @@ export const createRpcRequestHandler = (
 				throw appError("not_initialized", "Session storage is unavailable.");
 			}
 			const store = activeAssembly.store;
-			const sessionId = stringValue(paramsOf(request).sessionId);
-			if (sessionId === undefined) {
+			const requestedSessionId = stringValue(paramsOf(request).sessionId);
+			if (requestedSessionId === undefined) {
 				throw rpcInvalidParams("sessionId is required.");
 			}
+			const sessionId = activeRuntime.toSessionId(requestedSessionId);
 			try {
-				await store.getSession(activeRuntime.toSessionId(sessionId));
+				await store.getSession(sessionId);
 			} catch (error) {
 				if (error instanceof Error && error.message === "Session not found") {
 					throw appError(

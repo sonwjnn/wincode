@@ -5,6 +5,7 @@ import type {
 	SessionCapabilities,
 	SessionCapabilitiesAssembly,
 	SessionHost,
+	SessionId,
 	SessionMessage,
 	SessionMessageMetadata,
 	SessionStore,
@@ -90,7 +91,7 @@ export type RuntimeModules = Readonly<{
 	createAgentTurnId: () => AgentTurnId;
 	createSessionHost: (input: {
 		capabilities: SessionCapabilities;
-		sessionId: string;
+		sessionId: SessionId;
 	}) => Promise<SessionHost>;
 	createSessionCapabilities: (
 		input: RpcCompositionInput
@@ -114,7 +115,7 @@ export type RuntimeModules = Readonly<{
 		variant: ModelVariant
 	) => boolean;
 	resolveWorkspaceRoot: (start: string) => string;
-	toSessionId: (value: string) => string;
+	toSessionId: (value: string) => SessionId;
 }>;
 
 export type WireValue =

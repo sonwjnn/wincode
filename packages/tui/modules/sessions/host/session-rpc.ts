@@ -7,6 +7,7 @@ export {
 	normalizeModelVariant,
 } from "@wincode/ai/models";
 export { resolveWorkspaceRoot } from "@wincode/coding-tools/workspace";
+export type { SessionId, SubmissionId } from "@/shared/identifiers";
 export { toSessionId, toSubmissionId } from "@/shared/identifiers";
 export type { Connections } from "../../connections/contract";
 export type {
