@@ -49,6 +49,16 @@ export async function runRpc({
 	stdout,
 }: RpcRunnerOptions): Promise<number> {
 	const output = new SerializedWriter(stdout);
+	const inputAbortController = new AbortController();
+	const inputSignal =
+		signal === undefined
+			? inputAbortController.signal
+			: AbortSignal.any([signal, inputAbortController.signal]);
+	let stopOutputError: (() => void) | undefined;
+	const detachOutputError = (): void => {
+		stopOutputError?.();
+		stopOutputError = undefined;
+	};
 	const processId = randomUUID();
 	const seenRequestIds = new Set<string>();
 	const approvalWireIds = new WeakMap<
@@ -126,58 +136,69 @@ export async function runRpc({
 		abortRequested.resolve();
 	};
 
-	const cleanup = async (): Promise<void> => {
-		if (state.lifecycle === "closed") {
-			return;
-		}
-		state.lifecycle = "closing";
-		const deadline = Date.now() + 5000;
-		const settle = async (
-			work: Promise<void>,
-			label: string
-		): Promise<void> => {
-			const remaining = Math.max(0, deadline - Date.now());
-			if (remaining === 0) {
-				writeDiagnostic(`RPC ${label} shutdown deadline exceeded.`);
-				return;
+	const cleanup = (() => {
+		let cleanupPromise: Promise<void> | undefined;
+		return (): Promise<void> => {
+			if (cleanupPromise !== undefined) {
+				return cleanupPromise;
 			}
-			const deferred = Promise.withResolvers<boolean>();
-			const timer = setTimeout(() => deferred.resolve(false), remaining);
-			void work.then(
-				() => deferred.resolve(true),
-				(error: unknown) => {
-					writeDiagnostic(`RPC ${label} shutdown failed: ${String(error)}`);
-					deferred.resolve(true);
+			cleanupPromise = (async (): Promise<void> => {
+				if (state.lifecycle === "closed") {
+					return;
 				}
-			);
-			const completed = await deferred.promise;
-			clearTimeout(timer);
-			if (!completed) {
-				writeDiagnostic(`RPC ${label} shutdown deadline exceeded.`);
-			}
+				state.lifecycle = "closing";
+				inputAbortController.abort();
+				const deadline = Date.now() + 5000;
+				const settle = async (
+					work: Promise<void>,
+					label: string
+				): Promise<void> => {
+					const remaining = Math.max(0, deadline - Date.now());
+					if (remaining === 0) {
+						writeDiagnostic(`RPC ${label} shutdown deadline exceeded.`);
+						return;
+					}
+					const deferred = Promise.withResolvers<boolean>();
+					const timer = setTimeout(() => deferred.resolve(false), remaining);
+					void work.then(
+						() => deferred.resolve(true),
+						(error: unknown) => {
+							writeDiagnostic(`RPC ${label} shutdown failed: ${String(error)}`);
+							deferred.resolve(true);
+						}
+					);
+					const completed = await deferred.promise;
+					clearTimeout(timer);
+					if (!completed) {
+						writeDiagnostic(`RPC ${label} shutdown deadline exceeded.`);
+					}
+				};
+				const activeHost = state.host;
+				const hostShutdown = Promise.resolve().then(async () => {
+					await activeHost?.shutdown();
+				});
+				await settle(hostShutdown, "host");
+				state.host = undefined;
+				for (const unsubscribe of unsubscribers.splice(0)) {
+					unsubscribe();
+				}
+				const assemblyShutdown = Promise.resolve().then(async () => {
+					await state.assembly?.shutdown();
+				});
+				await settle(assemblyShutdown, "capability");
+				state.lifecycle = "closed";
+				signal?.removeEventListener("abort", onAbort);
+			})();
+			return cleanupPromise;
 		};
-		const activeHost = state.host;
-		const hostShutdown = Promise.resolve().then(async () => {
-			await activeHost?.shutdown();
-		});
-		await settle(hostShutdown, "host");
-		state.host = undefined;
-		for (const unsubscribe of unsubscribers.splice(0)) {
-			unsubscribe();
-		}
-		const assemblyShutdown = Promise.resolve().then(async () => {
-			await state.assembly?.shutdown();
-		});
-		await settle(assemblyShutdown, "capability");
-		state.lifecycle = "closed";
-		signal?.removeEventListener("abort", onAbort);
-	};
+	})();
 
 	const fatalShutdown = (error: unknown): Promise<void> => {
 		if (fatalPromise !== undefined) {
 			return fatalPromise;
 		}
 		fatal = true;
+		inputAbortController.abort();
 		writeDiagnostic(
 			`RPC fatal error: ${error instanceof Error ? error.message : String(error)}`
 		);
@@ -200,6 +221,10 @@ export async function runRpc({
 		return fatalPromise;
 	};
 
+	stopOutputError = stdout.onError?.((error: unknown) => {
+		output.fail(error);
+		void fatalShutdown(error);
+	});
 	signal?.addEventListener("abort", onAbort, { once: true });
 	if (signal?.aborted === true) {
 		onAbort();
@@ -213,6 +238,9 @@ export async function runRpc({
 		};
 		const coalescable = method === "session/stateChanged";
 		if (handlingRequest) {
+			if (deferredOverflow) {
+				return;
+			}
 			const bytes = Buffer.byteLength(`${JSON.stringify(frame)}\n`, "utf8");
 			const tail = deferred.at(-1);
 			if (coalescable && tail?.coalescable === true) {
@@ -220,9 +248,6 @@ export async function runRpc({
 					output.bufferedBytes + deferredBytes - tail.bytes + bytes >
 					MAX_OUTPUT_BYTES
 				) {
-					deferred.length = 0;
-					deferredBytes = 0;
-					deferredHead = 0;
 					deferredOverflow = true;
 					return;
 				}
@@ -232,9 +257,6 @@ export async function runRpc({
 				return;
 			}
 			if (output.bufferedBytes + deferredBytes + bytes > MAX_OUTPUT_BYTES) {
-				deferred.length = 0;
-				deferredBytes = 0;
-				deferredHead = 0;
 				deferredOverflow = true;
 				return;
 			}
@@ -245,6 +267,31 @@ export async function runRpc({
 		void output
 			.enqueue(frame, { coalescable })
 			.catch((error: unknown) => fatalShutdown(error));
+	};
+	const resetDeferred = (): void => {
+		deferred.length = 0;
+		deferredHead = 0;
+		deferredBytes = 0;
+		deferredOverflow = false;
+	};
+	const flushDeferred = async (): Promise<boolean> => {
+		const alreadyOverflowed = deferredOverflow;
+		while (deferredHead < deferred.length) {
+			const notification = deferred[deferredHead];
+			deferred[deferredHead] = undefined;
+			deferredHead += 1;
+			if (notification === undefined) {
+				continue;
+			}
+			deferredBytes -= notification.bytes;
+			await output.enqueue(notification.value, {
+				coalescable: notification.coalescable,
+			});
+		}
+		handlingRequest = false;
+		const overflowed = alreadyOverflowed || deferredOverflow;
+		resetDeferred();
+		return overflowed;
 	};
 
 	const currentState = (): Record<string, unknown> => {
@@ -406,7 +453,7 @@ export async function runRpc({
 		state,
 	});
 	try {
-		for await (const record of readJsonl(input, signal)) {
+		for await (const record of readJsonl(input, inputSignal)) {
 			if (fatal) {
 				break;
 			}
@@ -429,6 +476,9 @@ export async function runRpc({
 				);
 				continue;
 			}
+			if (rawId !== undefined) {
+				seenRequestIds.add(rawId);
+			}
 			const parsed = parseRpcRequest(record.value);
 			if (parsed.request === undefined) {
 				await output.enqueue(
@@ -441,12 +491,8 @@ export async function runRpc({
 				continue;
 			}
 			const request = parsed.request;
-			seenRequestIds.add(request.id);
 			handlingRequest = true;
-			deferred.length = 0;
-			deferredHead = 0;
-			deferredBytes = 0;
-			deferredOverflow = false;
+			resetDeferred();
 			let response: RpcResponse;
 			try {
 				const requestResult = await Promise.race([
@@ -458,10 +504,7 @@ export async function runRpc({
 				]);
 				if (requestResult.kind === "aborted") {
 					handlingRequest = false;
-					deferred.length = 0;
-					deferredHead = 0;
-					deferredBytes = 0;
-					deferredOverflow = false;
+					resetDeferred();
 					await cleanup();
 					break;
 				}
@@ -470,36 +513,41 @@ export async function runRpc({
 				}
 				response = requestResult.value;
 			} catch (error) {
+				if (
+					error instanceof RpcApplicationError &&
+					error.code === "session_lease_lost"
+				) {
+					try {
+						await flushDeferred();
+					} catch {
+						resetDeferred();
+						handlingRequest = false;
+					}
+					await fatalShutdown(error);
+					break;
+				}
 				if (error instanceof RpcApplicationError) {
 					response = failure(
 						request.id,
 						APPLICATION_ERROR_CODE,
 						error.message,
 						{
-							code: error.code,
 							...(error.data ?? {}),
+							code: error.code,
 						}
 					);
 				} else if (error instanceof RpcProtocolError) {
 					response = failure(request.id, error.code, error.message);
 				} else {
-					handlingRequest = false;
-					deferred.length = 0;
-					deferredHead = 0;
-					deferredBytes = 0;
-					deferredOverflow = false;
+					try {
+						await flushDeferred();
+					} catch {
+						resetDeferred();
+						handlingRequest = false;
+					}
 					await fatalShutdown(error);
 					break;
 				}
-			}
-			if (deferredOverflow) {
-				handlingRequest = false;
-				deferred.length = 0;
-				deferredHead = 0;
-				deferredBytes = 0;
-				deferredOverflow = false;
-				await fatalShutdown(new RpcOutputOverflowError());
-				break;
 			}
 			if (state.shutdownRequested) {
 				await cleanup();
@@ -508,38 +556,31 @@ export async function runRpc({
 				`${JSON.stringify(response)}\n`,
 				"utf8"
 			);
-			if (
-				deferredOverflow ||
-				output.bufferedBytes + deferredBytes + responseBytes > MAX_OUTPUT_BYTES
-			) {
+			const responseWouldOverflow =
+				output.bufferedBytes + deferredBytes + responseBytes > MAX_OUTPUT_BYTES;
+			if (deferredOverflow || responseWouldOverflow) {
+				if (
+					deferredOverflow &&
+					output.bufferedBytes + responseBytes <= MAX_OUTPUT_BYTES
+				) {
+					await output.enqueue(response);
+				}
+				try {
+					await flushDeferred();
+				} catch {
+					resetDeferred();
+				}
 				handlingRequest = false;
-				deferred.length = 0;
-				deferredHead = 0;
-				deferredBytes = 0;
-				deferredOverflow = false;
 				await fatalShutdown(new RpcOutputOverflowError());
 				break;
 			}
 			await output.enqueue(response);
-			while (deferredHead < deferred.length) {
-				if (deferredOverflow) {
-					throw new RpcOutputOverflowError();
-				}
-				const notification = deferred[deferredHead];
-				deferred[deferredHead] = undefined;
-				deferredHead += 1;
-				if (notification === undefined) {
-					continue;
-				}
-				deferredBytes -= notification.bytes;
-				await output.enqueue(notification.value, {
-					coalescable: notification.coalescable,
-				});
-			}
-			deferred.length = 0;
-			deferredHead = 0;
-			deferredBytes = 0;
+			const overflowedDuringFlush = await flushDeferred();
 			handlingRequest = false;
+			if (overflowedDuringFlush) {
+				await fatalShutdown(new RpcOutputOverflowError());
+				break;
+			}
 			if (state.shutdownRequested) {
 				break;
 			}
@@ -547,17 +588,27 @@ export async function runRpc({
 	} catch (error) {
 		if (state.signalRequested && !fatal) {
 			await cleanup();
+			detachOutputError();
 			return requestedExitCode ?? 1;
 		}
 		await fatalShutdown(error);
+		detachOutputError();
 		return 1;
 	}
 	if (fatalPromise !== undefined) {
 		await fatalPromise;
+		detachOutputError();
 		return 1;
 	}
 	await cleanup();
-	await output.drain();
+	try {
+		await output.drain();
+	} catch (error) {
+		await fatalShutdown(error);
+		return 1;
+	} finally {
+		detachOutputError();
+	}
 	return requestedExitCode ?? (fatal ? 1 : 0);
 }
 

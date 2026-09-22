@@ -231,13 +231,15 @@ export const createRpcRequestHandler = (
 					: { variant: selection.variant }),
 			});
 			const createdId = String(created.id);
+			let createdHost: SessionHost | undefined;
 			try {
-				const createdHost = await activeRuntime.createSessionHost({
+				createdHost = await activeRuntime.createSessionHost({
 					capabilities: activeAssembly.capabilities,
 					sessionId: createdId,
 				});
 				if (state.signalRequested || state.lifecycle !== "initialized") {
 					await createdHost.shutdown().catch(() => undefined);
+					createdHost = undefined;
 					throw appError("server_closing", "The RPC server is closing.");
 				}
 				bind(createdHost, createdId);
@@ -248,10 +250,12 @@ export const createRpcRequestHandler = (
 					})
 				);
 				if (admission === undefined || admission.rejected) {
-					await state.host?.shutdown();
+					const failedHost = state.host;
 					state.host = undefined;
 					state.boundSessionId = undefined;
 					state.lifecycle = "initialized";
+					createdHost = undefined;
+					await failedHost?.shutdown().catch(() => undefined);
 					throw appError(
 						"session_created_but_unbound",
 						"Session admission failed after creation.",
@@ -267,6 +271,16 @@ export const createRpcRequestHandler = (
 					state: currentState(),
 				});
 			} catch (error) {
+				if (createdHost !== undefined) {
+					const failedHost = createdHost;
+					createdHost = undefined;
+					if (state.host === failedHost) {
+						state.host = undefined;
+						state.boundSessionId = undefined;
+						state.lifecycle = "initialized";
+					}
+					await failedHost.shutdown().catch(() => undefined);
+				}
 				if (error instanceof RpcApplicationError) {
 					throw error;
 				}

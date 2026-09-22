@@ -43,6 +43,57 @@ describe("wincode executable", () => {
 		expect(output(result.stderr)).toBe("");
 	});
 
+	test("rpc completes an initialize and shutdown journey through the executable", () => {
+		const result = run(
+			["rpc"],
+			`${[
+				JSON.stringify({
+					id: "initialize-1",
+					jsonrpc: "2.0",
+					method: "initialize",
+					params: {
+						capabilities: {},
+						clientInfo: { name: "executable-smoke" },
+						cwd: process.cwd(),
+						protocolVersion: 1,
+					},
+				}),
+				JSON.stringify({
+					id: "shutdown-1",
+					jsonrpc: "2.0",
+					method: "server/shutdown",
+					params: {},
+				}),
+			].join("\n")}\n`
+		);
+		const frames = output(result.stdout)
+			.trim()
+			.split("\n")
+			.map((frame) => JSON.parse(frame) as Record<string, unknown>);
+
+		expect(result.exitCode).toBe(0);
+		expect(output(result.stderr)).toBe("");
+		expect(frames).toHaveLength(2);
+		expect(frames[0]).toMatchObject({
+			id: "initialize-1",
+			jsonrpc: "2.0",
+			result: {
+				capabilities: {
+					approvalResponses: true,
+					stateNotifications: true,
+					submissionEvents: true,
+					transcriptPagination: true,
+				},
+				protocolVersion: 1,
+			},
+		});
+		expect(frames[1]).toEqual({
+			id: "shutdown-1",
+			jsonrpc: "2.0",
+			result: { shutdown: true },
+		});
+	});
+
 	test.each(["--version", "-v"])("%s prints the package version", (flag) => {
 		const result = run([flag]);
 		expect(result.exitCode).toBe(0);

@@ -30,6 +30,11 @@ export const runRpcCommand = async (
 				},
 			},
 			stdout: {
+				onError: (listener): (() => void) => {
+					const onError = (error: Error): void => listener(error);
+					process.stdout.once("error", onError);
+					return () => process.stdout.removeListener("error", onError);
+				},
 				write: (text: string): boolean => process.stdout.write(text),
 				drain: (): Promise<void> => {
 					const deferred = Promise.withResolvers<void>();

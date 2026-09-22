@@ -34,13 +34,25 @@ export class SerializedWriter {
 		  }
 		| undefined;
 	private readonly writer: OutputWriter;
-	private failure: unknown;
+	private failure: Error | undefined;
+	private drainFailure: { reject: (reason?: unknown) => void } | undefined;
 
 	constructor(writer: OutputWriter) {
 		this.writer = writer;
 	}
 	get bufferedBytes(): number {
 		return this.pendingBytes;
+	}
+	fail(error: unknown): void {
+		if (this.failure !== undefined) {
+			return;
+		}
+		this.failure = error instanceof Error ? error : new Error(String(error));
+		this.drainFailure?.reject(this.failure);
+		for (const queued of this.queue.splice(0)) {
+			this.pendingBytes -= queued.bytes;
+			queued.reject(this.failure);
+		}
 	}
 
 	enqueue(
@@ -52,7 +64,11 @@ export class SerializedWriter {
 		}
 		let encoded: string;
 		try {
-			encoded = `${JSON.stringify(value)}\n`;
+			const serialized = JSON.stringify(value);
+			if (serialized === undefined) {
+				return Promise.reject(new Error("RPC frame is not JSON serializable."));
+			}
+			encoded = `${serialized}\n`;
 		} catch {
 			return Promise.reject(new Error("RPC frame is not JSON serializable."));
 		}
@@ -133,18 +149,26 @@ export class SerializedWriter {
 		}
 	}
 	private async waitForDrain(): Promise<void> {
+		if (this.failure !== undefined) {
+			throw this.failure;
+		}
 		const drain = this.writer.drain?.();
 		if (drain === undefined) {
 			return;
 		}
 		const timeout = Promise.withResolvers<void>();
+		const drainFailure = Promise.withResolvers<never>();
+		this.drainFailure = drainFailure;
 		const timer = setTimeout(() => {
 			timeout.reject(new Error("RPC output drain timed out."));
 		}, OUTPUT_DRAIN_TIMEOUT_MS);
 		try {
-			await Promise.race([drain, timeout.promise]);
+			await Promise.race([drain, timeout.promise, drainFailure.promise]);
 		} finally {
 			clearTimeout(timer);
+			if (this.drainFailure === drainFailure) {
+				this.drainFailure = undefined;
+			}
 		}
 	}
 

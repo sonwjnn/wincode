@@ -40,9 +40,6 @@ export type JsonlRecord =
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 const decodeJsonlLine = (line: Uint8Array<ArrayBufferLike>): JsonlRecord => {
-	if (line.length > MAX_JSONL_RECORD_BYTES) {
-		return { kind: "error", message: "JSONL frame exceeds the size limit." };
-	}
 	let raw: string;
 	try {
 		raw = utf8Decoder.decode(line);
@@ -82,8 +79,8 @@ export const readJsonl = async function* (
 		const required = pendingLength + chunk.length;
 		if (required > pending.length) {
 			let capacity = Math.max(1024, pending.length);
-			while (capacity < required) {
-				capacity *= 2;
+			while (capacity < required && capacity < MAX_JSONL_RECORD_BYTES) {
+				capacity = Math.min(MAX_JSONL_RECORD_BYTES, capacity * 2);
 			}
 			const next = new Uint8Array(capacity) as Uint8Array<ArrayBufferLike>;
 			next.set(pending.subarray(0, pendingLength));
@@ -92,6 +89,10 @@ export const readJsonl = async function* (
 		pending.set(chunk, pendingLength);
 		pendingLength = required;
 	};
+	const oversizedRecord = (): JsonlRecord => ({
+		kind: "error",
+		message: "JSONL frame exceeds the size limit.",
+	});
 	const iterator: AsyncIterator<Uint8Array<ArrayBufferLike>> =
 		Symbol.asyncIterator in input
 			? input[Symbol.asyncIterator]()
@@ -120,37 +121,46 @@ export const readJsonl = async function* (
 			if (next === null || next.done) {
 				break;
 			}
-			let available = next.value;
-			if (discardingOversized) {
-				const newline = available.indexOf(10);
-				if (newline < 0) {
+			const available = next.value;
+			let offset = 0;
+			while (offset < available.length) {
+				if (discardingOversized) {
+					const newline = available.subarray(offset).indexOf(10);
+					if (newline < 0) {
+						break;
+					}
+					offset += newline + 1;
+					discardingOversized = false;
+					pendingLength = 0;
 					continue;
 				}
-				available = available.subarray(newline + 1);
-				discardingOversized = false;
-			}
-			append(available);
-			let lineStart = 0;
-			let cursor = 0;
-			while (cursor < pendingLength) {
-				const newline = pending.subarray(cursor, pendingLength).indexOf(10);
+
+				const newline = available.subarray(offset).indexOf(10);
 				if (newline < 0) {
+					const remaining = available.length - offset;
+					const capacity = MAX_JSONL_RECORD_BYTES - pendingLength;
+					if (remaining > capacity) {
+						pendingLength = 0;
+						discardingOversized = true;
+						yield oversizedRecord();
+					} else {
+						append(available.subarray(offset));
+					}
 					break;
 				}
-				const lineEnd = cursor + newline;
-				yield decodeJsonlLine(pending.subarray(lineStart, lineEnd));
-				lineStart = lineEnd + 1;
-				cursor = lineStart;
-			}
-			if (lineStart > 0) {
-				pending.copyWithin(0, lineStart, pendingLength);
-				pendingLength -= lineStart;
-			}
-			if (pendingLength > MAX_JSONL_RECORD_BYTES) {
-				yield { kind: "error", message: "JSONL frame exceeds the size limit." };
-				pending = new Uint8Array(0) as Uint8Array<ArrayBufferLike>;
-				pendingLength = 0;
-				discardingOversized = true;
+
+				const lineEnd = offset + newline;
+				const lineLength = lineEnd - offset;
+				if (pendingLength + lineLength > MAX_JSONL_RECORD_BYTES) {
+					pendingLength = 0;
+					yield oversizedRecord();
+				} else {
+					append(available.subarray(offset, lineEnd));
+					const record = decodeJsonlLine(pending.subarray(0, pendingLength));
+					pendingLength = 0;
+					yield record;
+				}
+				offset = lineEnd + 1;
 			}
 		}
 	} finally {

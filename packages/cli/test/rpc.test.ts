@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionCapabilities } from "@wincode/tui/session-host";
 import { runRpc } from "../src/rpc/runner";
+import {
+	MAX_OUTPUT_BYTES,
+	type OutputWriter,
+	RpcOutputOverflowError,
+} from "../src/rpc/types";
 
-type FrameWriter = {
+type FrameWriter = OutputWriter & {
 	readonly frames: string[];
-	write: (text: string) => boolean | undefined;
 };
 
 const writer = (): FrameWriter => {
@@ -235,3 +239,299 @@ test("lifecycle guards use stable application and JSON-RPC errors", async () => 
 	]);
 	expect(stderr.frames).toEqual([]);
 });
+
+test("request IDs are reserved before shape validation and remain unique", async () => {
+	const stdout = writer();
+	const stderr = writer();
+	const request = (value: unknown): Uint8Array =>
+		new TextEncoder().encode(`${JSON.stringify(value)}\n`);
+	const exitCode = await runRpc({
+		input: [
+			request({
+				id: "same",
+				jsonrpc: "2.0",
+				method: "server/shutdown",
+				params: [],
+			}),
+			request({
+				id: "same",
+				jsonrpc: "2.0",
+				method: "server/shutdown",
+				params: {},
+			}),
+			request({
+				id: "shutdown",
+				jsonrpc: "2.0",
+				method: "server/shutdown",
+				params: {},
+			}),
+		],
+		stderr,
+		stdout,
+	});
+
+	expect(exitCode).toBe(0);
+	expect(stderr.frames).toEqual([]);
+	expect(stdout.frames.map((frame) => JSON.parse(frame))).toEqual([
+		{
+			error: { code: -32_600, message: "Invalid Request" },
+			id: null,
+			jsonrpc: "2.0",
+		},
+		{
+			error: {
+				code: -32_600,
+				data: { code: "duplicate_request_id" },
+				message: "Invalid Request",
+			},
+			id: "same",
+			jsonrpc: "2.0",
+		},
+		{ id: "shutdown", jsonrpc: "2.0", result: { shutdown: true } },
+	]);
+});
+
+test("a stdout failure aborts input and returns a fatal status", async () => {
+	const stdoutFrames: string[] = [];
+	const firstWrite = Promise.withResolvers<void>();
+	const inputReleased = Promise.withResolvers<void>();
+	const listeners = new Set<(error: unknown) => void>();
+	const stdout: FrameWriter = {
+		frames: stdoutFrames,
+		onError: (listener) => {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		},
+		write: (text) => {
+			stdoutFrames.push(text);
+			firstWrite.resolve();
+		},
+	};
+	const input: AsyncIterable<Uint8Array> = {
+		async *[Symbol.asyncIterator]() {
+			yield new TextEncoder().encode("not-json\n");
+			await inputReleased.promise;
+		},
+	};
+	const stderr = writer();
+	const run = runRpc({ input, stderr, stdout });
+
+	await firstWrite.promise;
+	for (const listener of listeners) {
+		listener(new Error("broken pipe"));
+	}
+	inputReleased.resolve();
+
+	expect(await run).toBe(1);
+	expect(stderr.frames.join("")).toContain("RPC fatal error: broken pipe");
+	expect(stdoutFrames.map((frame) => JSON.parse(frame))).toEqual([
+		{
+			error: { code: -32_700, message: "Parse error" },
+			id: null,
+			jsonrpc: "2.0",
+		},
+	]);
+});
+
+test("a stdout failure during shutdown response remains fatal", async () => {
+	const stdout = writer();
+	const stderr = writer();
+	const listeners = new Set<(error: unknown) => void>();
+	stdout.onError = (listener) => {
+		listeners.add(listener);
+		return () => listeners.delete(listener);
+	};
+	stdout.write = (text) => {
+		stdout.frames.push(text);
+		const frame = JSON.parse(text) as { id?: string };
+		if (frame.id === "shutdown-1") {
+			for (const listener of listeners) {
+				listener(new Error("broken pipe"));
+			}
+		}
+	};
+	const request = (id: string, method: string): Uint8Array =>
+		new TextEncoder().encode(
+			`${JSON.stringify({ id, jsonrpc: "2.0", method, params: {} })}\n`
+		);
+
+	const exitCode = await runRpc({
+		composeCapabilities: async () => ({
+			capabilities: emptyCapabilities(),
+			shutdown: async () => undefined,
+			workspace: process.cwd(),
+			workspaceId: "workspace-test",
+		}),
+		input: [
+			new TextEncoder().encode(
+				`${JSON.stringify({
+					id: "initialize-1",
+					jsonrpc: "2.0",
+					method: "initialize",
+					params: {
+						capabilities: {},
+						clientInfo: { name: "test-client" },
+						cwd: process.cwd(),
+						protocolVersion: 1,
+					},
+				})}\n`
+			),
+			request("shutdown-1", "server/shutdown"),
+		],
+		stderr,
+		stdout,
+	});
+
+	expect(exitCode).toBe(1);
+	expect(stderr.frames.join("")).toContain("RPC fatal error: broken pipe");
+	expect(stdout.frames.map((frame) => JSON.parse(frame))).toHaveLength(2);
+});
+
+test("abort signals preserve deterministic interrupt and terminate statuses", async () => {
+	for (const exitCode of [130, 143]) {
+		const controller = new AbortController();
+		controller.abort();
+		const stdout = writer();
+		const stderr = writer();
+
+		await expect(
+			runRpc({
+				input: [],
+				signal: controller.signal,
+				signalExitCode: exitCode,
+				stderr,
+				stdout,
+			})
+		).resolves.toBe(exitCode);
+		expect(stdout.frames).toEqual([]);
+		expect(stderr.frames).toEqual([]);
+	}
+});
+
+test("output overflow terminates the runner with the stable fatal code", async () => {
+	const stdout = writer();
+	const firstWrite = Promise.withResolvers<void>();
+	const listeners = new Set<(error: unknown) => void>();
+	stdout.onError = (listener) => {
+		listeners.add(listener);
+		return () => listeners.delete(listener);
+	};
+	stdout.write = (text) => {
+		stdout.frames.push(text);
+		firstWrite.resolve();
+	};
+	const stderr = writer();
+	const run = runRpc({
+		input: [new TextEncoder().encode("not-json\n")],
+		stderr,
+		stdout,
+	});
+
+	await firstWrite.promise;
+	for (const listener of listeners) {
+		listener(new RpcOutputOverflowError());
+	}
+
+	expect(await run).toBe(1);
+	expect(stderr.frames.join("")).toContain(
+		"RPC fatal error: RPC output exceeded the 16 MiB limit."
+	);
+	expect(stdout.frames.map((frame) => JSON.parse(frame))).toEqual([
+		{
+			error: { code: -32_700, message: "Parse error" },
+			id: null,
+			jsonrpc: "2.0",
+		},
+	]);
+});
+
+test("a response beyond the exact output bound emits output_overflow", async () => {
+	const id = "x".repeat(MAX_OUTPUT_BYTES - 192);
+	const stdout = writer();
+	const stderr = writer();
+	const exitCode = await runRpc({
+		composeCapabilities: async () => ({
+			capabilities: emptyCapabilities(),
+			shutdown: async () => undefined,
+			workspace: process.cwd(),
+			workspaceId: "workspace-test",
+		}),
+		input: [
+			new TextEncoder().encode(
+				`${JSON.stringify({
+					id,
+					jsonrpc: "2.0",
+					method: "initialize",
+					params: {
+						capabilities: {},
+						clientInfo: { name: "test-client" },
+						cwd: process.cwd(),
+						protocolVersion: 1,
+					},
+				})}\n`
+			),
+		],
+		stderr,
+		stdout,
+	});
+
+	expect(exitCode).toBe(1);
+	expect(stdout.frames.map((frame) => JSON.parse(frame))).toEqual([
+		{
+			jsonrpc: "2.0",
+			method: "server/fatal",
+			params: {
+				error: { code: "output_overflow" },
+				sequence: 1,
+			},
+		},
+	]);
+});
+
+test("ignored aborts finish cleanup at one bounded deadline", async () => {
+	const controller = new AbortController();
+	const shutdownGate = Promise.withResolvers<void>();
+	let shutdownCalls = 0;
+	const stdout = writer();
+	stdout.write = (text) => {
+		stdout.frames.push(text);
+		controller.abort();
+	};
+	const stderr = writer();
+	const exitCode = await runRpc({
+		composeCapabilities: async () => ({
+			capabilities: emptyCapabilities(),
+			shutdown: async () => {
+				shutdownCalls += 1;
+				await shutdownGate.promise;
+			},
+			workspace: process.cwd(),
+			workspaceId: "workspace-test",
+		}),
+		input: [
+			new TextEncoder().encode(
+				`${JSON.stringify({
+					id: "initialize-1",
+					jsonrpc: "2.0",
+					method: "initialize",
+					params: {
+						capabilities: {},
+						clientInfo: { name: "test-client" },
+						cwd: process.cwd(),
+						protocolVersion: 1,
+					},
+				})}\n`
+			),
+		],
+		signal: controller.signal,
+		signalExitCode: 130,
+		stderr,
+		stdout,
+	});
+
+	expect(exitCode).toBe(130);
+	expect(shutdownCalls).toBe(1);
+	expect(stderr.frames.join("")).toContain(
+		"RPC capability shutdown deadline exceeded."
+	);
+}, 10_000);

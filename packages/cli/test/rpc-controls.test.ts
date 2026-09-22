@@ -5,6 +5,7 @@ import type {
 	SessionHost,
 	SessionInterruptResult,
 	SessionSendInput,
+	SessionStore,
 	SessionSubmissionAdmission,
 } from "@wincode/tui/session-rpc";
 import type { RpcRequest } from "../src/rpc/protocol";
@@ -284,4 +285,102 @@ test("submit refuses when fallback selection is unavailable before admission", a
 		)
 	).rejects.toMatchObject({ code: "selection_required" });
 	expect(controls.inputs).toHaveLength(0);
+});
+
+test("failed Session creation stays durable and can be reopened", async () => {
+	const selection: Selection = { agentId: "build", model };
+	const store = fromPartial<SessionStore>({
+		createSession: async () => ({ id: "session-1" }),
+		getSession: async () => fromPartial({ id: "session-1" }),
+	});
+	const state: RpcSessionState = {
+		lifecycle: "uninitialized",
+		shutdownRequested: false,
+		signalRequested: false,
+	};
+	const host = fromPartial<SessionHost>({
+		engine: {
+			admit: () =>
+				fromPartial<SessionSubmissionAdmission>({
+					disposition: "started",
+					messageId: "message-1",
+					rejected: false,
+					submissionId: "submission-1",
+				}),
+		},
+		shutdown: async () => undefined,
+	});
+	let hostAttempts = 0;
+	const runtime = fromPartial<RuntimeModules>({
+		createAgentTurnId: () => "turn-1",
+		createSessionCapabilities: async () =>
+			fromPartial({
+				capabilities: {},
+				shutdown: async () => undefined,
+				store,
+				workspace: process.cwd(),
+				workspaceId: "workspace-1",
+			}),
+		createSessionHost: async () => {
+			hostAttempts += 1;
+			if (hostAttempts === 1) {
+				throw new Error("host unavailable");
+			}
+			return host;
+		},
+		createSessionUserMessage: () => fromPartial({ id: "message-1" }),
+		resolveWorkspaceRoot: (start: string): string => start,
+		toSessionId: (value: string): string => value,
+	});
+	const bind = (nextHost: SessionHost, sessionId: string): void => {
+		state.host = nextHost;
+		state.boundSessionId = sessionId;
+		state.lifecycle = "bound";
+	};
+	const handler = createRpcRequestHandler({
+		bind,
+		currentState: () => ({}),
+		getRuntime: async () => runtime,
+		parseSelection: async () => selection,
+		processId: "process-1",
+		requireBound: () => {
+			if (state.host === undefined) {
+				throw new Error("not bound");
+			}
+			return state.host;
+		},
+		requireInitialized: () => undefined,
+		resolveApprovalId: () => undefined,
+		sendInput: (_selected, text) =>
+			fromPartial({ model, sessionModel: model, userText: text }),
+		state,
+	});
+
+	await handler(
+		request("initialize", "initialize", {
+			capabilities: {},
+			clientInfo: { name: "test-client" },
+			cwd: process.cwd(),
+			protocolVersion: 1,
+		})
+	);
+	await expect(
+		handler(
+			request("create", "session/create", {
+				initialSubmission: { text: "start" },
+				selection,
+			})
+		)
+	).rejects.toMatchObject({
+		code: "session_created_but_unbound",
+		data: { sessionId: "session-1", stage: "host" },
+	});
+	expect(state.host).toBeUndefined();
+	expect(state.boundSessionId).toBeUndefined();
+	expect(state.lifecycle).toBe("initialized");
+
+	await expect(
+		handler(request("open", "session/open", { sessionId: "session-1" }))
+	).resolves.toMatchObject({ result: { sessionId: "session-1" } });
+	expect(hostAttempts).toBe(2);
 });

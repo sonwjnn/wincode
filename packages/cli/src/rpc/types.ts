@@ -53,6 +53,7 @@ export const SESSION_TOOL_PART_TYPES = new Set([
 ]);
 
 export type OutputWriter = {
+	onError?: (listener: (error: unknown) => void) => () => void;
 	write: (text: string) => boolean | undefined;
 	drain?: () => Promise<void>;
 };
