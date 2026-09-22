@@ -51,7 +51,7 @@ const connectionFilePath = (
 ) => join(fileRoot, ".wincode", "connections-v2", `${providerId}.json`);
 
 export class CredentialVaultV2 {
-	private readonly secretStore: SecretStore | null;
+	private secretStore: SecretStore | null;
 	private readonly fileRoot: string;
 
 	constructor(options: V2CredentialVaultOptions = {}) {
@@ -69,12 +69,7 @@ export class CredentialVaultV2 {
 	async load<P extends ConnectionProviderId>(
 		providerId: P
 	): Promise<CredentialByProvider[P] | null> {
-		const raw = isNull(this.secretStore)
-			? await this.readFile(providerId)
-			: await this.secretStore.get(
-					SERVICE_NAME,
-					`connections-v2:${providerId}`
-				);
+		const raw = await this.readRaw(providerId);
 		return isNull(raw) ? null : parseStoredCredential(providerId, raw);
 	}
 
@@ -93,6 +88,30 @@ export class CredentialVaultV2 {
 		}
 
 		await this.writeFile(providerId, validated);
+	}
+
+	/**
+	 * Reads the raw stored credential. An OS secret backend that is present but
+	 * unusable — a headless Linux host without libsecret, for instance — is
+	 * disabled for the vault's lifetime and its file store takes over, so
+	 * listing and connecting providers still work where no keyring exists.
+	 */
+	private async readRaw(
+		providerId: ConnectionProviderId
+	): Promise<string | null> {
+		const secretStore = this.secretStore;
+		if (isNull(secretStore)) {
+			return await this.readFile(providerId);
+		}
+		try {
+			return await secretStore.get(
+				SERVICE_NAME,
+				`connections-v2:${providerId}`
+			);
+		} catch {
+			this.secretStore = null;
+			return await this.readFile(providerId);
+		}
 	}
 
 	private async readFile(
@@ -145,32 +164,25 @@ const getBunSecretStore = (
 	if (isNull(injectedSecrets)) {
 		return null;
 	}
-	let secrets: BunSecretStore | null | undefined;
-	try {
-		secrets =
-			injectedSecrets ??
-			(globalThis as typeof globalThis & { Bun?: { secrets?: BunSecretStore } })
-				.Bun?.secrets;
-		if (
-			isUndefined(secrets) ||
-			isNull(secrets) ||
-			isUndefined(secrets.get) ||
-			isUndefined(secrets.set)
-		) {
-			return null;
-		}
-	} catch {
+	const secrets =
+		injectedSecrets ??
+		(globalThis as typeof globalThis & { Bun?: { secrets?: BunSecretStore } })
+			.Bun?.secrets;
+	if (
+		isUndefined(secrets) ||
+		isNull(secrets) ||
+		isUndefined(secrets.get) ||
+		isUndefined(secrets.set)
+	) {
 		return null;
 	}
-	const availableSecrets = secrets;
+
 	return {
 		get(service: string, account: string): Promise<string | null> {
-			return Promise.resolve(
-				availableSecrets.get?.({ service, name: account }) ?? null
-			);
+			return Promise.resolve(secrets.get?.({ service, name: account }) ?? null);
 		},
 		async set(service: string, account: string, secret: string): Promise<void> {
-			await availableSecrets.set?.({ service, name: account, value: secret });
+			await secrets.set?.({ service, name: account, value: secret });
 		},
 	};
 };
