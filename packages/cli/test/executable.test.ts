@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "bun";
 
@@ -54,7 +55,7 @@ describe("wincode executable", () => {
 					params: {
 						capabilities: {},
 						clientInfo: { name: "executable-smoke" },
-						cwd: process.cwd(),
+						cwd: tmpdir(),
 						protocolVersion: 1,
 					},
 				}),
