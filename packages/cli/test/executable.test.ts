@@ -9,13 +9,16 @@ const executableTestRoot = mkdtempSync(
 	path.join(tmpdir(), "wincode-executable-")
 );
 const sessionDatabasePath = path.join(executableTestRoot, "sessions.db");
+const executableEnvironment = {
+	...process.env,
+	HOME: path.join(executableTestRoot, "home"),
+	WINCODE_LOCAL_DB_PATH: sessionDatabasePath,
+	XDG_CONFIG_HOME: path.join(executableTestRoot, "config"),
+};
 
 const run = (args: readonly string[], input?: string) =>
 	spawnSync(["bun", executable, ...args], {
-		env: {
-			...process.env,
-			WINCODE_LOCAL_DB_PATH: sessionDatabasePath,
-		},
+		env: executableEnvironment,
 		stderr: "pipe",
 		stdin: input === undefined ? "ignore" : new TextEncoder().encode(input),
 		stdout: "pipe",
