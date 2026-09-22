@@ -1,12 +1,21 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "bun";
 
 const executable = path.join(import.meta.dir, "../src/index.ts");
+const executableTestRoot = mkdtempSync(
+	path.join(tmpdir(), "wincode-executable-")
+);
+const sessionDatabasePath = path.join(executableTestRoot, "sessions.db");
 
 const run = (args: readonly string[], input?: string) =>
 	spawnSync(["bun", executable, ...args], {
+		env: {
+			...process.env,
+			WINCODE_LOCAL_DB_PATH: sessionDatabasePath,
+		},
 		stderr: "pipe",
 		stdin: input === undefined ? "ignore" : new TextEncoder().encode(input),
 		stdout: "pipe",
@@ -55,7 +64,7 @@ describe("wincode executable", () => {
 					params: {
 						capabilities: {},
 						clientInfo: { name: "executable-smoke" },
-						cwd: tmpdir(),
+						cwd: executableTestRoot,
 						protocolVersion: 1,
 					},
 				}),
