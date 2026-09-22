@@ -11,7 +11,6 @@ This repo contains multiple packages, but `packages/tui/` is the primary focus. 
 | ----------------------- | --------------------------------------------------------------------------------------- |
 | `packages/agent-runtime-ai-sdk`         | Multi-provider LLM client with streaming support, Model catalog                                      |
 | `packages/ai`         | Model catalog                                      |
-| `packages/agent`        | Agent runtime with tool calling and state management                                    |
 | `packages/tui` | Main CLI application (primary focus)                                                    |
 | `packages/runtime-utils`| Shared utilities                                       |
 
