@@ -27,9 +27,13 @@ import type {
 	AppendSessionCompactionInput,
 	SummaryGenerator,
 } from "@/modules/sessions/compaction/types";
-import type { SessionCapabilities } from "@/modules/sessions/host/types";
+import type {
+	SessionCapabilities,
+	SessionHostFailure,
+} from "@/modules/sessions/host/types";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionSendInput } from "@/modules/sessions/session-operation";
+import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { CompactionId, SessionId } from "@/shared/identifiers";
@@ -72,6 +76,8 @@ const { createPermissionService } = await import(
 );
 const { createToolPermissionPolicyState, createToolPermissionRuntime } =
 	await import("@/modules/permissions/tool-permission-runtime");
+const { SESSION_LEASE_RENEWAL_INTERVAL_MS, SESSION_LEASE_TTL_MS } =
+	await import("@/modules/sessions/storage/session-lease");
 
 const model: ChatModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
@@ -80,6 +86,14 @@ const model: ChatModelSelection = {
 const buildId = agentId("build");
 const parentTurnId = agentTurnId("turn-parent");
 const COMPACTION_SUMMARY_TEXT = "the first turn, summarized";
+const SESSION_LEASE_START_TIME_MS = 1000;
+const SESSION_LEASE_RENEWED_TIME_MS =
+	SESSION_LEASE_START_TIME_MS + SESSION_LEASE_RENEWAL_INTERVAL_MS;
+const LEASE_EXPIRY_BOUNDARY_OFFSET_MS = 1;
+const SESSION_LEASE_EXPIRED_TIME_MS =
+	SESSION_LEASE_START_TIME_MS +
+	SESSION_LEASE_TTL_MS +
+	LEASE_EXPIRY_BOUNDARY_OFFSET_MS;
 const store = createDrizzleSessionStore(
 	createDatabase(join(testDirectory, "sessions.db")).db,
 	{
@@ -249,7 +263,9 @@ const compactionModule = (summaryGenerator: SummaryGenerator) =>
  * built-in Agent registry, the Tool Permission runtime, and the Session
  * Compaction module the engine suite fakes the same way.
  */
-const createCapabilities = (): SessionCapabilities => {
+const createCapabilities = (
+	sessionStore: SessionStore = store
+): SessionCapabilities => {
 	const workspace = process.cwd();
 	const registry = buildAgentRegistry(
 		fromPartial<ConfigSnapshot>({
@@ -313,9 +329,26 @@ const createCapabilities = (): SessionCapabilities => {
 			}),
 		}),
 		getRegistry: () => registry,
-		getStore: () => store,
+		getStore: () => sessionStore,
 		getToolPermission: () => toolPermission,
 	};
+};
+const createDelayedTerminalStore = (base: SessionStore) => {
+	const terminalCommitStarted = Promise.withResolvers<void>();
+	const allowTerminalCommit = Promise.withResolvers<void>();
+	let blocksTerminalCommit = true;
+	const delayed: SessionStore = {
+		...base,
+		commitSessionRecord: async (input) => {
+			if (blocksTerminalCommit && input.record.outcome.kind === "assistant") {
+				blocksTerminalCommit = false;
+				terminalCommitStarted.resolve();
+				await allowTerminalCommit.promise;
+			}
+			await base.commitSessionRecord(input);
+		},
+	};
+	return { allowTerminalCommit, delayed, terminalCommitStarted };
 };
 
 const resolvedAgentOf = (
@@ -396,7 +429,32 @@ describe("Session Host opening", () => {
 			variant: undefined,
 		});
 
-		host.shutdown();
+		await host.shutdown();
+	});
+	test("refuses a second Host while the first Host owns the Session", async () => {
+		const seeded = await seedSession("contention");
+		const secondDatabase = createDatabase(join(testDirectory, "sessions.db"));
+		const secondStore = createDrizzleSessionStore(secondDatabase.db, {
+			attachmentRoot: join(testDirectory, "second-attachments"),
+			snapshotRoot: join(testDirectory, "second-snapshots"),
+			workspaceRoot: process.cwd(),
+		});
+		const firstHost = await createSessionHost({
+			capabilities: createCapabilities(),
+			sessionId: seeded.sessionId,
+		});
+
+		try {
+			await expect(
+				createSessionHost({
+					capabilities: createCapabilities(secondStore),
+					sessionId: seeded.sessionId,
+				})
+			).rejects.toMatchObject({ code: "session_in_use" });
+		} finally {
+			await firstHost.shutdown();
+			secondDatabase.sqlite.close();
+		}
 	});
 });
 
@@ -433,7 +491,7 @@ describe("Session Host lifetime", () => {
 		expect(textOf(sent[0]?.parts ?? [])).toBe("third request");
 		expect(textOf(sent[1]?.parts ?? [])).toBe("E2E chat response");
 
-		host.shutdown();
+		await host.shutdown();
 
 		// Shutdown ends the session: nothing keeps running, the send that
 		// arrives after it is refused instead of being queued, and neither
@@ -452,6 +510,133 @@ describe("Session Host lifetime", () => {
 		expect(events).toHaveLength(eventsAtShutdown);
 	});
 
+	test("fences durable commits after the Session Lease is lost", async () => {
+		const seeded = await seedSession("lease-write-fence");
+		let commitCount = 0;
+		const leaseLostStore: SessionStore = {
+			...store,
+			acquireSessionLease: async () => ({
+				release: () => undefined,
+				renew: () => false,
+			}),
+			commitSessionRecord: async (input) => {
+				commitCount += 1;
+				await store.commitSessionRecord(input);
+			},
+		};
+		const capabilities = createCapabilities(leaseLostStore);
+		const host = await createSessionHost({
+			capabilities,
+			lease: { schedule: () => () => undefined },
+			sessionId: seeded.sessionId,
+		});
+
+		try {
+			await expect(host.engine.send(sendInput(capabilities))).resolves.toEqual({
+				reason: "The session has ended.",
+				rejected: true,
+			});
+			expect(commitCount).toBe(0);
+		} finally {
+			await host.shutdown();
+		}
+	});
+
+	test("holds the lease and heartbeat until an interrupted turn checkpoints", async () => {
+		const seeded = await seedSession("shutdown-quiescence");
+		const delayed = createDelayedTerminalStore(store);
+		const capabilities = createCapabilities(delayed.delayed);
+		const now = { value: SESSION_LEASE_START_TIME_MS };
+		const ticks = new Set<() => void>();
+		const competingDatabase = createDatabase(
+			join(testDirectory, "sessions.db")
+		);
+		const competingStore = createDrizzleSessionStore(competingDatabase.db, {
+			attachmentRoot: join(testDirectory, "competing-attachments"),
+			workspaceRoot: process.cwd(),
+		});
+		const host = await createSessionHost({
+			capabilities,
+			lease: {
+				now: () => now.value,
+				schedule: (callback) => {
+					ticks.add(callback);
+					return () => ticks.delete(callback);
+				},
+			},
+			sessionId: seeded.sessionId,
+		});
+		let competingLease:
+			| Awaited<ReturnType<SessionStore["acquireSessionLease"]>>
+			| undefined;
+
+		try {
+			const send = host.engine.send(sendInput(capabilities));
+			await delayed.terminalCommitStarted.promise;
+			const shutdown = host.shutdown();
+			expect(host.getSnapshot().turnActive).toBe(true);
+			now.value = SESSION_LEASE_RENEWED_TIME_MS;
+			for (const tick of ticks) {
+				tick();
+			}
+			now.value = SESSION_LEASE_EXPIRED_TIME_MS;
+			for (const tick of ticks) {
+				tick();
+			}
+			expect(ticks.size).toBe(1);
+			await expect(
+				competingStore.acquireSessionLease(seeded.sessionId, {
+					now: () => now.value,
+				})
+			).rejects.toMatchObject({ code: "session_in_use" });
+
+			delayed.allowTerminalCommit.resolve();
+			await shutdown;
+			await send;
+			competingLease = await competingStore.acquireSessionLease(
+				seeded.sessionId,
+				{ now: () => now.value }
+			);
+		} finally {
+			delayed.allowTerminalCommit.resolve();
+			await host.shutdown();
+			competingLease?.release();
+			competingDatabase.sqlite.close();
+		}
+	});
+
+	test("waits for same-process Host shutdown before remounting", async () => {
+		const seeded = await seedSession("shutdown-remount");
+		const delayed = createDelayedTerminalStore(store);
+		const host = await createSessionHost({
+			capabilities: createCapabilities(delayed.delayed),
+			sessionId: seeded.sessionId,
+		});
+		const send = host.engine.send(
+			sendInput(createCapabilities(delayed.delayed))
+		);
+		await delayed.terminalCommitStarted.promise;
+		const shutdown = host.shutdown();
+		const remount = createSessionHost({
+			capabilities: createCapabilities(),
+			sessionId: seeded.sessionId,
+		});
+		const probe = Promise.withResolvers<"probe">();
+		queueMicrotask(() => probe.resolve("probe"));
+		expect(
+			await Promise.race([
+				remount.then(() => "remounted" as const),
+				probe.promise,
+			])
+		).toBe("probe");
+
+		delayed.allowTerminalCommit.resolve();
+		await shutdown;
+		await send;
+		const remountedHost = await remount;
+		await remountedHost.shutdown();
+	});
+
 	test("settles an approval a consumer is waiting on when the session shuts down", async () => {
 		const seeded = await seedSession("approval");
 		const capabilities = createCapabilities();
@@ -461,8 +646,71 @@ describe("Session Host lifetime", () => {
 		});
 		const settlement = host.engine.requestApproval(approvalRequest);
 
-		host.shutdown();
+		await host.shutdown();
 
 		expect(await settlement).toEqual({ decision: "reject" });
+	});
+	test("reports lease loss and closes the Host without releasing a takeover", async () => {
+		const seeded = await seedSession("lease-loss");
+		const takeoverDatabase = createDatabase(join(testDirectory, "sessions.db"));
+		const takeoverStore = createDrizzleSessionStore(takeoverDatabase.db, {
+			attachmentRoot: join(testDirectory, "takeover-attachments"),
+			snapshotRoot: join(testDirectory, "takeover-snapshots"),
+			workspaceRoot: process.cwd(),
+		});
+		const now = { value: SESSION_LEASE_START_TIME_MS };
+		const ticks = new Set<() => void>();
+		const capabilities = createCapabilities();
+		const host = await createSessionHost({
+			capabilities,
+			lease: {
+				now: () => now.value,
+				schedule: (callback) => {
+					ticks.add(callback);
+					return () => ticks.delete(callback);
+				},
+			},
+			sessionId: seeded.sessionId,
+		});
+		const failures: SessionHostFailure[] = [];
+		let sendDuringFailure: Promise<unknown> | null = null;
+		host.onFatal((next) => {
+			failures.push(next);
+			sendDuringFailure = host.engine.send(sendInput(capabilities));
+		});
+		const approval = host.engine.requestApproval(approvalRequest);
+		let takeover:
+			| Awaited<ReturnType<SessionStore["acquireSessionLease"]>>
+			| undefined;
+
+		try {
+			now.value = SESSION_LEASE_EXPIRED_TIME_MS;
+			takeover = await takeoverStore.acquireSessionLease(seeded.sessionId, {
+				now: () => now.value,
+			});
+			for (const tick of ticks) {
+				tick();
+			}
+
+			expect(failures).toEqual([{ code: "session_lease_lost" }]);
+			expect(await approval).toEqual({ decision: "reject" });
+			if (sendDuringFailure === null) {
+				throw new Error(
+					"Lease-loss observer did not receive a command result."
+				);
+			}
+			expect(await sendDuringFailure).toMatchObject({
+				rejected: true,
+			});
+			await expect(
+				takeoverStore.acquireSessionLease(seeded.sessionId, {
+					now: () => now.value,
+				})
+			).rejects.toMatchObject({ code: "session_in_use" });
+		} finally {
+			takeover?.release();
+			await host.shutdown();
+			takeoverDatabase.sqlite.close();
+		}
 	});
 });

@@ -27,6 +27,7 @@ import { discoverSkillCatalog } from "@/modules/skills";
 import type { SessionId } from "@/shared/identifiers";
 import { resolveChatModelTarget } from "../../model-target";
 import { createToolGate, type ToolGate } from "../../tool-gate/tool-gate";
+import { SessionCompactionError } from "../compaction/error";
 import type {
 	SessionEngine,
 	SessionEnginePorts,
@@ -61,6 +62,9 @@ export type SessionPortsOptions = Readonly<{
 	capabilities: SessionCapabilities;
 	/** The Engine whose ports these are, available once it is constructed. */
 	engine: () => SessionEngine;
+	isShutDown: () => boolean;
+	onLeaseLost: () => void;
+	renewLease: () => boolean;
 	sessionId: SessionId;
 }>;
 
@@ -145,8 +149,29 @@ const activateExplicitSkill = async (
 export const createSessionPorts = ({
 	capabilities,
 	engine,
+	isShutDown,
+	onLeaseLost,
+	renewLease,
 	sessionId,
 }: SessionPortsOptions): SessionEnginePorts => {
+	const assertLease = (): void => {
+		if (isShutDown()) {
+			throw new SessionCompactionError(
+				"cancelled",
+				"Session Lease was lost before durable compaction persistence."
+			);
+		}
+		if (renewLease() && !isShutDown()) {
+			return;
+		}
+		if (!isShutDown()) {
+			onLeaseLost();
+		}
+		throw new SessionCompactionError(
+			"cancelled",
+			"Session Lease was lost before durable compaction persistence."
+		);
+	};
 	/**
 	 * The execution scopes the ports run, keyed by Agent Turn Identifier. A
 	 * scope holds what only the host can own — the MCP snapshot, the child abort
@@ -417,6 +442,8 @@ export const createSessionPorts = ({
 				versionedEditing,
 			};
 			scope.delegate = createDelegationExecutor({
+				commitRecord: (input) => engine().commitRecord(input),
+				isShutDown,
 				connections,
 				createSkillContext: async (agentId) => {
 					const catalog = await armSkillCatalog(
@@ -539,9 +566,21 @@ export const createSessionPorts = ({
 			retain: (attachmentIds) =>
 				capabilities.getStore().attachmentStore?.retain(attachmentIds),
 		},
-		commitRecord: (input) => capabilities.getStore().commitSessionRecord(input),
+		commitRecord: async (input) => {
+			if (isShutDown() || !renewLease()) {
+				if (!isShutDown()) {
+					onLeaseLost();
+				}
+				return;
+			}
+			await capabilities.getStore().commitSessionRecord(input);
+		},
 		compaction: {
-			compact: (input) => capabilities.getCompactionModule().compact(input),
+			compact: (input) =>
+				capabilities.getCompactionModule().compact({
+					...input,
+					assertAuthority: assertLease,
+				}),
 			getInFlight: (id) => capabilities.getCompactionModule().getInFlight(id),
 			needsCompaction: (messages, settings) =>
 				capabilities.getCompactionModule().needsCompaction(messages, settings),

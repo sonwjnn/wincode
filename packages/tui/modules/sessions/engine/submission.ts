@@ -57,17 +57,21 @@ import type {
 	SessionTurnCallbacks,
 } from "./types";
 
+const SESSION_SHUT_DOWN_ERROR = "The session has ended.";
+
 /** The Session Engine state and commands one submission runs against. */
 export type SubmissionDeps = Readonly<{
 	applyContext: (messages: readonly SessionMessage[]) => void;
 	beginExecution: (input: SessionExecutionInput) => SessionExecution;
 	compact: (command: SessionCompactionCommand) => Promise<CompactSessionResult>;
 	endExecution: (turnId: AgentTurnId) => void;
+	isShutDown: () => boolean;
 	/**
 	 * Hands anything still waiting in the Steering Lane to the Submission Queue
-	 * when the turn that would have delivered it ends.
+	 * when the turn that would have delivered it ends. Only that turn's lane
+	 * entries are moved, so a newer turn can start while this one unwinds.
 	 */
-	fallbackSteeringMessages: () => void;
+	fallbackSteeringMessages: (turnId?: AgentTurnId) => void;
 	getContext: () => readonly SessionMessage[];
 	getTranscript: () => readonly SessionMessage[];
 	mergeTranscript: (
@@ -89,12 +93,41 @@ export type SubmissionDeps = Readonly<{
 	setTurnActive: (value: boolean) => void;
 	settleCompaction: () => Promise<Error | null>;
 	/**
+	 * Tracks maintenance and queue work that begins outside the active Agent
+	 * Turn, so Host shutdown can wait before releasing ownership.
+	 */
+	trackBackgroundTask: (task: Promise<unknown>) => void;
+	/**
 	 * Delivers the Steering Lane into one Agent Turn execution: the Engine pops
 	 * the lane, commits the Session Records, and returns the messages the
 	 * runtime inserts before its next model call.
 	 */
 	takeSteeringMessages: (execution: SessionExecution) => SessionMessage[];
 }>;
+class SessionClosedError extends Error {
+	constructor() {
+		super(SESSION_SHUT_DOWN_ERROR);
+		this.name = "SessionClosedError";
+	}
+}
+class SessionSendCancelledError extends Error {
+	constructor() {
+		super("The Session send was cancelled.");
+		this.name = "SessionSendCancelledError";
+	}
+}
+
+const assertSendNotCancelled = (signal: AbortSignal): void => {
+	if (signal.aborted) {
+		throw new SessionSendCancelledError();
+	}
+};
+
+const assertSessionOpen = (deps: Pick<SubmissionDeps, "isShutDown">): void => {
+	if (deps.isShutDown()) {
+		throw new SessionClosedError();
+	}
+};
 
 type SubmitCompactionResult =
 	| { readonly ok: true }
@@ -245,12 +278,12 @@ const prepareSubmitContext = async ({
 	signal,
 }: {
 	activeMessages: readonly SessionMessage[];
-	armSkill: () => Promise<SessionSkillCatalog>;
+	armSkill: (signal: AbortSignal) => Promise<SessionSkillCatalog>;
 	input: SessionSendInput;
 	resolveSkill: SessionEnginePorts["skills"]["resolveSkill"];
 	signal: AbortSignal;
 }): Promise<SubmitContextResult> => {
-	const armedSkill = await armSkill();
+	const armedSkill = await armSkill(signal);
 	if (signal.aborted) {
 		return { kind: "cancelled" };
 	}
@@ -314,7 +347,8 @@ const prepareNewSessionMessage = async ({
 		userText,
 		metadata,
 		fileMentions,
-		input.files ?? []
+		input.files ?? [],
+		input.reservedMessageId ?? input.messageId
 	);
 	try {
 		const [externalized] = await externalize([optimistic], signal);
@@ -415,7 +449,7 @@ const prepareSessionSubmission = async ({
 	resolveSkill,
 	signal,
 }: {
-	armSkill: () => Promise<SessionSkillCatalog>;
+	armSkill: (signal: AbortSignal) => Promise<SessionSkillCatalog>;
 	deps: SubmissionDeps;
 	input: SessionSendInput;
 	resolveSkill: SessionEnginePorts["skills"]["resolveSkill"];
@@ -550,6 +584,8 @@ const executionInputForSubmit = ({
 		parent: input.delegation,
 		sessionVariant: input.sessionVariant,
 		sourceUserMessageId,
+		submissionId: input.submissionId,
+		turnId: input.turnId,
 		variant: input.variant,
 	}),
 });
@@ -595,6 +631,51 @@ const commitPromptRecord = async ({
 		return isError(error) ? error : new Error("Could not save the prompt.");
 	}
 };
+const commitPreparedPrompt = async ({
+	deps,
+	input,
+	message,
+	signal,
+}: {
+	deps: SubmissionDeps;
+	input: SessionSendInput;
+	message: SessionMessage;
+	signal: AbortSignal;
+}): Promise<Error | null> => {
+	assertSendNotCancelled(signal);
+	const promptError = await commitPromptRecord({
+		agent: input.agent,
+		commitRecord: deps.ports.commitRecord,
+		message,
+		model: input.model,
+		sessionId: deps.sessionId,
+		sessionModel: input.sessionModel,
+		...omitUndefined({
+			sessionVariant: input.sessionVariant,
+			variant: input.variant,
+		}),
+	});
+	assertSessionOpen(deps);
+	return promptError;
+};
+
+const applyPreparedMessages = (
+	deps: SubmissionDeps,
+	signal: AbortSignal,
+	messages: readonly SessionMessage[],
+	allowCancelled: boolean
+): void => {
+	if (!allowCancelled) {
+		assertSendNotCancelled(signal);
+	}
+	assertSessionOpen(deps);
+	deps.applyContext(messages);
+	deps.mergeTranscript(messages);
+	if (!allowCancelled) {
+		assertSendNotCancelled(signal);
+	}
+	assertSessionOpen(deps);
+};
 
 /**
  * Commits one Session Record of an execution: a delegated execution's records
@@ -637,12 +718,18 @@ const handleSafeAssistantOutcome = async ({
 	try {
 		await commitRecord(record);
 	} catch (commitError) {
+		if (deps.isShutDown()) {
+			return { rejected: false };
+		}
 		const safeError = new Error(
 			"The Agent Turn outcome could not be persisted.",
 			{ cause: commitError }
 		);
 		deps.setError(safeError);
 		return { rejected: true, reason: safeError.message };
+	}
+	if (deps.isShutDown()) {
+		return { rejected: false };
 	}
 	const durableMessage = record.messages[0];
 	const textPart = durableMessage?.parts.find((part) => part.type === "text");
@@ -715,30 +802,32 @@ const proposeOverflowRecovery = ({
 	if (isNull(originalMessageId)) {
 		return;
 	}
-	void deps.recoverOverflow({
-		error: failure,
-		originalMessageId,
-		replay: ({ originalMessageId: replayId }) =>
-			replayOverflowTurn({
-				context,
-				deps,
-				execution,
-				originalMessageId: replayId,
-			}),
-		resolveTarget: async () => {
-			const settings = await deps.ports.resolveCompactionSettings(
-				execution.model
-			);
-			if (!settings.overflowRecoveryAvailable) {
-				return null;
-			}
-			return {
-				model: execution.model,
-				...omitUndefined({ variant: execution.variant }),
-			};
-		},
-		turnId: execution.turnId,
-	});
+	deps.trackBackgroundTask(
+		deps.recoverOverflow({
+			error: failure,
+			originalMessageId,
+			replay: ({ originalMessageId: replayId }) =>
+				replayOverflowTurn({
+					context,
+					deps,
+					execution,
+					originalMessageId: replayId,
+				}),
+			resolveTarget: async () => {
+				const settings = await deps.ports.resolveCompactionSettings(
+					execution.model
+				);
+				if (!settings.overflowRecoveryAvailable) {
+					return null;
+				}
+				return {
+					model: execution.model,
+					...omitUndefined({ variant: execution.variant }),
+				};
+			},
+			turnId: execution.turnId,
+		})
+	);
 };
 
 /**
@@ -930,7 +1019,7 @@ const maintainAfterTurn = (
 			}
 		}
 	};
-	void compactIfNeeded();
+	deps.trackBackgroundTask(compactIfNeeded());
 };
 
 /** Runs one Agent Turn execution and turns its outcome into session state. */
@@ -949,16 +1038,31 @@ const runTurn = async ({
 	modelMessages: readonly SessionMessage[];
 	signal: AbortSignal;
 }): Promise<SessionSendOutcome> => {
-	deps.setError(null);
-	const commitRecord = (record: SessionRecord) =>
-		commitExecutionRecord(deps, execution, record);
+	let executionActive = true;
+	const turnIsLive = (): boolean =>
+		executionActive && !deps.isShutDown() && !signal.aborted;
+	const commitRecord = async (record: SessionRecord): Promise<void> => {
+		if (!turnIsLive()) {
+			return;
+		}
+		await commitExecutionRecord(deps, execution, record);
+	};
+	const commitTerminal = async (record: SessionRecord): Promise<void> => {
+		if (!executionActive || deps.isShutDown()) {
+			return;
+		}
+		await commitExecutionRecord(deps, execution, record);
+	};
 	let executionStarted = false;
 	let terminalObserved = false;
 	let terminalFailure: OperationalFailure | undefined;
 	const callbacks: SessionTurnCallbacks = {
-		commitTerminal: commitRecord,
+		commitTerminal,
 		commitToolCall: commitRecord,
 		onEvent: (event) => {
+			if (!turnIsLive()) {
+				return;
+			}
 			executionStarted = true;
 			const projected = projectAgentTurnEvent(
 				deps.getContext(),
@@ -972,6 +1076,9 @@ const runTurn = async ({
 			deps.mergeTranscript([projected.message]);
 		},
 		onTerminal: (event) => {
+			if (!turnIsLive()) {
+				return;
+			}
 			executionStarted = true;
 			terminalObserved = true;
 			terminalFailure =
@@ -984,10 +1091,16 @@ const runTurn = async ({
 			deps.applyContext(messages);
 			deps.mergeTranscript(messages);
 		},
-		onViewState: (viewState) =>
-			deps.setExecutionViewState(execution.turnId, viewState),
+		onViewState: (viewState) => {
+			if (!turnIsLive()) {
+				return;
+			}
+			deps.setExecutionViewState(execution.turnId, viewState);
+		},
 	};
 	try {
+		assertSessionOpen(deps);
+		deps.setError(null);
 		const hydrated = await deps.ports.attachments.hydrate({
 			budget: attachmentBudget,
 			messages: modelMessages,
@@ -995,6 +1108,10 @@ const runTurn = async ({
 				?.id,
 			signal,
 		});
+		assertSessionOpen(deps);
+		if (!turnIsLive()) {
+			return { rejected: false };
+		}
 		const outcome = await deps.ports.runtime.run({
 			armedSkill: context.armedSkill,
 			callbacks,
@@ -1003,8 +1120,12 @@ const runTurn = async ({
 			resolvedAgent: context.resolvedAgent,
 			...omitUndefined({ skillRequest: context.skill }),
 			signal,
-			takeSteeringMessages: () => deps.takeSteeringMessages(execution),
+			takeSteeringMessages: () =>
+				turnIsLive() ? deps.takeSteeringMessages(execution) : [],
 		});
+		if (!turnIsLive()) {
+			return { rejected: false };
+		}
 		if (isUndefined(outcome.error)) {
 			maintainAfterTurn(
 				deps,
@@ -1028,6 +1149,9 @@ const runTurn = async ({
 			terminalObserved,
 		});
 	} catch (error) {
+		if (deps.isShutDown() || signal.aborted || !executionActive) {
+			return { rejected: false };
+		}
 		return handleTurnFailure({
 			commitRecord,
 			context,
@@ -1042,6 +1166,7 @@ const runTurn = async ({
 			terminalObserved,
 		});
 	} finally {
+		executionActive = false;
 		deps.endExecution(execution.turnId);
 	}
 };
@@ -1063,15 +1188,26 @@ export type SubmissionPipeline = Readonly<{
 export const createSubmissionPipeline = (
 	deps: SubmissionDeps
 ): SubmissionPipeline => {
-	const armSkill = async (): Promise<SessionSkillCatalog> => {
+	const armSkill = async (
+		signal: AbortSignal
+	): Promise<SessionSkillCatalog> => {
 		const catalog = await deps.ports.skills.createTurnSkill();
+		if (signal.aborted || deps.isShutDown()) {
+			return catalog;
+		}
 		deps.setCatalogDiagnostic(catalog.diagnostic);
 		return catalog;
 	};
 	const send = async (
 		input: SessionSendInput,
 		signal: AbortSignal
+		// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Each cancellation checkpoint fences one awaited state mutation.
 	): Promise<SessionSendOutcome> => {
+		if (deps.isShutDown() || signal.aborted) {
+			return signal.aborted
+				? sessionSendCancelled(signal)
+				: { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
+		}
 		deps.setCompactionError(null);
 		deps.setTurnActive(true);
 		try {
@@ -1083,6 +1219,8 @@ export const createSubmissionPipeline = (
 				resolveSkill: deps.ports.skills.resolveSkill,
 				signal,
 			});
+			assertSendNotCancelled(signal);
+			assertSessionOpen(deps);
 			if (prepared.kind !== "ready") {
 				if (prepared.kind === "rejected" && !isUndefined(prepared.error)) {
 					deps.setError(prepared.error);
@@ -1090,26 +1228,23 @@ export const createSubmissionPipeline = (
 				return sessionOutcomeForPreparation(prepared, signal);
 			}
 			const { attachmentBudget, context, messages: modelMessages } = prepared;
-			if (!isUndefined(prepared.newMessage)) {
-				const promptError = await commitPromptRecord({
-					agent: input.agent,
-					commitRecord: deps.ports.commitRecord,
+			const hasCommittedPrompt = !isUndefined(prepared.newMessage);
+			if (hasCommittedPrompt) {
+				const promptError = await commitPreparedPrompt({
+					deps,
+					input,
 					message: prepared.newMessage,
-					model: input.model,
-					sessionId: deps.sessionId,
-					sessionModel: input.sessionModel,
-					...omitUndefined({
-						sessionVariant: input.sessionVariant,
-						variant: input.variant,
-					}),
+					signal,
 				});
 				if (!isNull(promptError)) {
 					deps.setError(promptError);
 					return { rejected: true, reason: "Could not save the prompt." };
 				}
 			}
-			deps.applyContext(modelMessages);
-			deps.mergeTranscript(modelMessages);
+			applyPreparedMessages(deps, signal, modelMessages, hasCommittedPrompt);
+			if (signal.aborted) {
+				return sessionSendCancelled(signal);
+			}
 			const execution = deps.beginExecution(
 				executionInputForSubmit({
 					input,
@@ -1126,12 +1261,20 @@ export const createSubmissionPipeline = (
 				modelMessages,
 				signal,
 			});
+		} catch (error) {
+			if (error instanceof SessionSendCancelledError) {
+				return sessionSendCancelled(signal);
+			}
+			if (error instanceof SessionClosedError) {
+				return { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
+			}
+			throw error;
 		} finally {
 			// A turn that ended without delivering its Steering Lane — a
 			// tool-less one ran exactly one Model Step — hands it to the
 			// Submission Queue before the session reports the turn over, so the
-			// messages run as their own Agent Turns and nothing is dropped.
-			deps.fallbackSteeringMessages();
+			// lane remains ordered even when the turn was interrupted.
+			deps.fallbackSteeringMessages(input.turnId);
 			deps.setTurnActive(false);
 		}
 	};

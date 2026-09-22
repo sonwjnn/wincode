@@ -3,11 +3,15 @@
     "allowImportingTsExtensions": true,
     "ignoreDeprecations": "6.0",
     "lib": ["ESNext"],
-    "jsx": "preserve",
+    "jsx": "react-jsx",
+    "jsxImportSource": "@opentui/react",
     "module": "Preserve",
     "moduleDetection": "force",
     "moduleResolution": "bundler",
     "noEmit": true,
+    "paths": {
+      "@/*": ["../tui/*"]
+    },
     "noFallthroughCasesInSwitch": true,
     "noImplicitOverride": true,
     "noUncheckedIndexedAccess": true,

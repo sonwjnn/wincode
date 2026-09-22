@@ -1,6 +1,7 @@
 import type {
 	AgentId,
 	AgentTurnDelegation,
+	AgentTurnId,
 	SessionMessageId,
 	ToolCallId,
 } from "@wincode/agent-core";
@@ -9,6 +10,7 @@ import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { isUndefined } from "@wincode/runtime-utils";
 import type { SkillContext } from "@wincode/skills";
 import type { SessionFilePart } from "@/modules/sessions/message";
+import type { SubmissionId } from "@/shared/identifiers";
 import type { SessionResolvedAgent } from "./engine/types";
 
 /**
@@ -28,6 +30,12 @@ export type SessionSubmissionComposition = Readonly<{
 
 export type SessionSendInput = Readonly<{
 	agent: AgentId;
+	/** A transient RPC Submission Identifier, when a transport owns admission. */
+	submissionId?: SubmissionId;
+	/** A preallocated Agent Turn Identifier for immediate admission. */
+	turnId?: AgentTurnId;
+	/** A reserved user-message identity for a new Submission. */
+	reservedMessageId?: SessionMessageId;
 	sessionModel: ChatModelSelection;
 	sessionVariant?: ModelVariant;
 	model: ChatModelSelection;
@@ -61,6 +69,8 @@ export type SessionOperation = {
 	cancel: () => void;
 	/** Interrupts the active turn while preserving the existing terminal handling. */
 	interrupt: (preserveToolCallId?: ToolCallId) => void;
+	/** Resolves after the active send, including its durable checkpoint, settles. */
+	waitForIdle: () => Promise<void>;
 };
 
 export type CreateSessionOperationOptions = {
@@ -71,7 +81,7 @@ export type CreateSessionOperationOptions = {
 };
 
 const ACTIVE_SEND_ERROR = "A session send is already active.";
-type SessionDeadlineTimer = ReturnType<typeof setTimeout>;
+type SessionDeadlineTimer = NodeJS.Timeout;
 
 export const createSessionOperation = ({
 	deadlineMs,
@@ -139,5 +149,12 @@ export const createSessionOperation = ({
 		active?.controller.abort(createAgentTurnAbortReason("interrupted"));
 		onInterrupt?.(preserveToolCallId);
 	};
-	return { cancel, interrupt, send };
+	const waitForIdle = async (): Promise<void> => {
+		while (active) {
+			const current = active;
+			await current.promise.catch(() => undefined);
+		}
+	};
+
+	return { cancel, interrupt, send, waitForIdle };
 };

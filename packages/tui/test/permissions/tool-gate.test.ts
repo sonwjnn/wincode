@@ -1414,7 +1414,7 @@ describe("approval settlement through the Session Engine", () => {
 		const evaluation = gate.gate(shellCall("git status", "call-shutdown"));
 		await whenApprovalRequested(engine);
 
-		engine.shutdown();
+		await engine.shutdown();
 
 		await expect(evaluation).resolves.toEqual({
 			errorText: "Shell was not approved: git status",

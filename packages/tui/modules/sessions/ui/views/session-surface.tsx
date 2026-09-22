@@ -1,7 +1,10 @@
 import { getErrorMessage } from "@wincode/runtime-utils";
 import { useEffect, useState } from "react";
 import { createSessionHost } from "@/modules/sessions/host/session-host";
-import type { SessionHost } from "@/modules/sessions/host/types";
+import type {
+	SessionHost,
+	SessionHostFailure,
+} from "@/modules/sessions/host/types";
 import { useSessionCapabilities } from "@/modules/sessions/host/use-session-capabilities";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
@@ -15,6 +18,29 @@ type OpenedSession = Readonly<{
 	sessionTitle: string;
 	transcript: readonly SessionMessage[];
 }>;
+const pendingSurfaceClosures = new Map<SessionId, Promise<void>>();
+
+const waitForPendingSurfaceClosure = async (
+	sessionId: SessionId
+): Promise<void> => {
+	const pending = pendingSurfaceClosures.get(sessionId);
+	if (pending !== undefined) {
+		await pending;
+	}
+};
+
+const trackSurfaceClosure = (
+	sessionId: SessionId,
+	closing: Promise<void>
+): void => {
+	const observed = closing.catch(() => undefined);
+	pendingSurfaceClosures.set(sessionId, observed);
+	void observed.then(() => {
+		if (pendingSurfaceClosures.get(sessionId) === observed) {
+			pendingSurfaceClosures.delete(sessionId);
+		}
+	});
+};
 
 /**
  * Opens one session and renders it. This is the surface that owns the
@@ -44,16 +70,35 @@ export function SessionSurface({
 	useEffect(() => {
 		let ignore = false;
 		let openedHost: SessionHost | null = null;
+		let openingHost: Promise<SessionHost> | null = null;
+		let removeFatalListener: (() => void) | null = null;
+		let hostFailure: SessionHostFailure | null = null;
 		setSession(null);
 		setErrorMessage(null);
 		const open = async (): Promise<OpenedSession | null> => {
-			const host = await createSessionHost({ capabilities, sessionId });
+			const pendingOpen = (async (): Promise<SessionHost> => {
+				await waitForPendingSurfaceClosure(sessionId);
+				return createSessionHost({ capabilities, sessionId });
+			})();
+			openingHost = pendingOpen;
+			const host = await pendingOpen;
 			if (ignore) {
 				// The surface is gone: nobody would own this session.
-				host.shutdown();
+				await host.shutdown();
 				return null;
 			}
 			openedHost = host;
+			removeFatalListener = host.onFatal((failure) => {
+				hostFailure = failure;
+				if (!ignore) {
+					setSession(null);
+					setErrorMessage(
+						failure.code === "session_lease_lost"
+							? "Session lease lost; the session was closed."
+							: "The session closed unexpectedly."
+					);
+				}
+			});
 			try {
 				const store = getSessionStore();
 				const [row, transcript] = await Promise.all([
@@ -64,7 +109,7 @@ export function SessionSurface({
 							)
 						: host.getSnapshot().transcript,
 				]);
-				if (ignore) {
+				if (hostFailure !== null || ignore) {
 					return null;
 				}
 				return {
@@ -78,8 +123,10 @@ export function SessionSurface({
 				// this shuts it down only while this effect still owns it, and
 				// never leaves the handle for a second call.
 				openedHost = null;
+				removeFatalListener?.();
+				removeFatalListener = null;
 				if (!ignore) {
-					host.shutdown();
+					await host.shutdown();
 				}
 				throw error;
 			}
@@ -99,7 +146,19 @@ export function SessionSurface({
 
 		return () => {
 			ignore = true;
-			openedHost?.shutdown();
+			removeFatalListener?.();
+			const closingHost = openedHost;
+			let closing: Promise<void> | undefined;
+			try {
+				closing =
+					closingHost?.shutdown() ??
+					openingHost?.then((host) => host.shutdown());
+			} catch {
+				closing = Promise.resolve();
+			}
+			if (closing !== undefined) {
+				trackSurfaceClosure(sessionId, closing);
+			}
 		};
 	}, [capabilities, sessionId]);
 

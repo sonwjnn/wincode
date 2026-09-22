@@ -12,6 +12,11 @@ import {
 } from "../message";
 import { resolveSessionSelection } from "../selection";
 import {
+	SESSION_LEASE_RENEWAL_INTERVAL_MS,
+	type SessionLease,
+	SessionLeaseLostError,
+} from "../storage/session-lease";
+import {
 	isDelegatedSessionMessageId,
 	projectSessionRecords,
 } from "../storage/session-record";
@@ -19,6 +24,7 @@ import { createSessionPorts } from "./session-ports";
 import type {
 	SessionCapabilities,
 	SessionHost,
+	SessionHostFailure,
 	SessionHostOptions,
 } from "./types";
 
@@ -34,6 +40,16 @@ type OpenedSession = Readonly<{
 	transcript: SessionMessage[];
 	variant: ModelVariant | undefined;
 }>;
+const closingHosts = new Map<SessionHostOptions["sessionId"], Promise<void>>();
+
+const waitForClosingHost = async (
+	sessionId: SessionHostOptions["sessionId"]
+): Promise<void> => {
+	const closing = closingHosts.get(sessionId);
+	if (closing !== undefined) {
+		await closing.catch(() => undefined);
+	}
+};
 
 /**
  * Reads one session's durable state and projects it into the session the Engine
@@ -113,11 +129,23 @@ const withEventChannel = (
  */
 export const createSessionHost = async ({
 	capabilities,
+	lease: leaseOptions,
 	sessionId,
 }: SessionHostOptions): Promise<SessionHost> => {
-	const opened = await openSession(capabilities, sessionId);
+	await waitForClosingHost(sessionId);
+	const leaseClock = leaseOptions?.now ?? Date.now;
+	const sessionLease: SessionLease = await capabilities
+		.getStore()
+		.acquireSessionLease(sessionId, { now: leaseClock });
 	const eventListeners = new Set<(event: AgentTurnEvent) => void>();
+	const fatalListeners = new Set<(failure: SessionHostFailure) => void>();
+	let engine: SessionEngine | undefined;
 	let isShutDown = false;
+	let isLeaseLost = false;
+	let fatalFailure: SessionHostFailure | null = null;
+	let stopLeaseRenewal: (() => void) | undefined;
+	let shutdownPromise: Promise<void> | undefined;
+
 	/**
 	 * Reports one event to the Host's observers. Everything the Engine reads
 	 * has already been reported through its own callbacks, so a listener that
@@ -137,63 +165,199 @@ export const createSessionHost = async ({
 			}
 		}
 	};
-	let engine: SessionEngine;
-	const ports: SessionEnginePorts = withEventChannel(
-		createSessionPorts({
-			capabilities,
-			engine: () => engine,
-			sessionId,
-		}),
-		publish
-	);
-	engine = createSessionEngine({
-		initialCompactions: opened.compactions,
-		initialContext: opened.context,
-		initialTranscript: opened.transcript,
-		ports,
-		sessionId,
-	});
-
-	return {
-		engine,
-		getSelection: () => {
-			const registry = capabilities.getRegistry();
-			return resolveSessionSelection({
-				messages: [...opened.transcript],
-				sessionModel: opened.model,
-				sessionVariant: opened.variant,
-				...(isNull(registry)
-					? {}
-					: {
-							resolveAgent: (agentId: AgentId | undefined) =>
-								resolveActiveAgentId(registry, agentId),
-						}),
-			});
-		},
-		getSnapshot: engine.getSnapshot,
-		onEvent: (listener) => {
-			eventListeners.add(listener);
-			return () => eventListeners.delete(listener);
-		},
-		shutdown: () => {
-			// The session ends first, so an observer still sees the approvals
-			// and waiting messages shutdown settles; nothing reaches either
-			// channel afterwards, when its consumer is tearing down.
-			engine.shutdown();
-			isShutDown = true;
-			eventListeners.clear();
-		},
-		subscribe: (listener) =>
-			engine.subscribe(() => {
-				if (!isShutDown) {
-					listener();
-				}
-			}),
+	const getEngine = (): SessionEngine => {
+		if (engine === undefined) {
+			throw new Error("Session Host Engine is not ready.");
+		}
+		return engine;
 	};
+	const stopRenewal = (): void => {
+		stopLeaseRenewal?.();
+		stopLeaseRenewal = undefined;
+	};
+	const shutdown = (): Promise<void> => {
+		if (shutdownPromise !== undefined) {
+			return shutdownPromise;
+		}
+		isShutDown = true;
+		const activeEngine = engine;
+		let releaseImmediately = activeEngine === undefined;
+		let engineShutdown = Promise.resolve();
+		if (activeEngine !== undefined) {
+			const snapshot = activeEngine.getSnapshot();
+			releaseImmediately = !activeEngine.hasPendingWork();
+			if (snapshot.isCompacting) {
+				activeEngine.cancelCompaction();
+			}
+			// Cancel rather than interrupt: the turn must unwind through its
+			// pipeline so its pending durable checkpoint holds the Session Lease.
+			if (snapshot.turnActive) {
+				activeEngine.cancel();
+			}
+			engineShutdown = activeEngine.shutdown();
+		}
+		eventListeners.clear();
+		fatalListeners.clear();
+		if (releaseImmediately) {
+			stopRenewal();
+			sessionLease.release();
+		}
+		const closingShutdown = (async () => {
+			try {
+				await engineShutdown;
+			} finally {
+				if (!releaseImmediately) {
+					stopRenewal();
+					sessionLease.release();
+				}
+			}
+		})();
+		shutdownPromise = closingShutdown;
+		closingHosts.set(sessionId, closingShutdown);
+		void closingShutdown.then(
+			() => {
+				if (closingHosts.get(sessionId) === closingShutdown) {
+					closingHosts.delete(sessionId);
+				}
+			},
+			() => {
+				if (closingHosts.get(sessionId) === closingShutdown) {
+					closingHosts.delete(sessionId);
+				}
+			}
+		);
+		return closingShutdown;
+	};
+	const observeLeaseLossShutdown = async (
+		shutdownWork: Promise<void>
+	): Promise<void> => {
+		try {
+			await shutdownWork;
+		} catch {
+			// Lease loss is already fatal; cleanup cannot restore ownership.
+		}
+	};
+	const reportLeaseLoss = (): void => {
+		if (isLeaseLost || isShutDown) {
+			return;
+		}
+		isLeaseLost = true;
+		fatalFailure = { code: "session_lease_lost" };
+		const listeners = [...fatalListeners];
+		stopRenewal();
+		// Renewal callbacks are synchronous; start quiescence before notifying
+		// observers, and observe cleanup failures without detaching a rejection.
+		let shutdownWork: Promise<void>;
+		try {
+			shutdownWork = shutdown();
+		} catch {
+			shutdownWork = Promise.resolve();
+		}
+		void observeLeaseLossShutdown(shutdownWork);
+		for (const listener of listeners) {
+			try {
+				listener(fatalFailure);
+			} catch {
+				// A failure observer cannot keep a lost Host alive.
+			}
+		}
+	};
+	const schedule =
+		leaseOptions?.schedule ??
+		((callback: () => void, intervalMs: number): (() => void) => {
+			const timer = setInterval(callback, intervalMs);
+			return () => clearInterval(timer);
+		});
+
+	try {
+		const scheduledStop = schedule(() => {
+			if (!sessionLease.renew()) {
+				reportLeaseLoss();
+			}
+		}, SESSION_LEASE_RENEWAL_INTERVAL_MS);
+		if (isShutDown) {
+			scheduledStop();
+		} else {
+			stopLeaseRenewal = scheduledStop;
+		}
+		const opened = await openSession(capabilities, sessionId);
+		if (isShutDown) {
+			throw new SessionLeaseLostError();
+		}
+		const ports: SessionEnginePorts = withEventChannel(
+			createSessionPorts({
+				capabilities,
+				engine: getEngine,
+				isShutDown: () => isShutDown,
+				onLeaseLost: reportLeaseLoss,
+				renewLease: sessionLease.renew,
+				sessionId,
+			}),
+			publish
+		);
+		const openedEngine = createSessionEngine({
+			initialCompactions: opened.compactions,
+			initialContext: opened.context,
+			initialTranscript: opened.transcript,
+			ports,
+			sessionId,
+		});
+		engine = openedEngine;
+		if (isShutDown) {
+			throw new SessionLeaseLostError();
+		}
+
+		return {
+			engine: openedEngine,
+			getSelection: () => {
+				const registry = capabilities.getRegistry();
+				return resolveSessionSelection({
+					messages: [...opened.transcript],
+					sessionModel: opened.model,
+					sessionVariant: opened.variant,
+					...(isNull(registry)
+						? {}
+						: {
+								resolveAgent: (agentId: AgentId | undefined) =>
+									resolveActiveAgentId(registry, agentId),
+							}),
+				});
+			},
+			getSnapshot: openedEngine.getSnapshot,
+			onEvent: (listener) => {
+				eventListeners.add(listener);
+				return () => eventListeners.delete(listener);
+			},
+			onFatal: (listener) => {
+				if (fatalFailure !== null) {
+					listener(fatalFailure);
+					return () => false;
+				}
+				if (isShutDown) {
+					return () => false;
+				}
+				fatalListeners.add(listener);
+				return () => fatalListeners.delete(listener);
+			},
+			shutdown,
+			subscribe: (listener) =>
+				openedEngine.subscribe(() => {
+					if (!isShutDown) {
+						listener();
+					}
+				}),
+		};
+	} catch (error) {
+		await shutdown();
+		throw error;
+	}
 };
 
 export type {
 	SessionCapabilities,
 	SessionHost,
+	SessionHostFailure,
+	SessionHostLeaseOptions,
 	SessionHostOptions,
+	SessionLeaseScheduler,
 } from "./types";

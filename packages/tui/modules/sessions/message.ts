@@ -468,9 +468,10 @@ export const createSessionUserMessage = (
 	text: string,
 	metadata?: SessionMessageMetadata,
 	fileMentions: FileMentionPart[] = [],
-	files: readonly SessionFilePart[] = []
+	files: readonly SessionFilePart[] = [],
+	id?: SessionMessageId
 ): SessionMessage => ({
-	id: toSessionMessageId(`msg-${randomUUIDv7()}`),
+	id: id ?? toSessionMessageId(`msg-${randomUUIDv7()}`),
 	...omitUndefined({ metadata }),
 	parts: [{ text, type: "text" }, ...fileMentions, ...files],
 	role: "user",

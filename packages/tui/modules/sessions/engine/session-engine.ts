@@ -13,14 +13,18 @@ import {
 	omitUndefined,
 } from "@wincode/runtime-utils";
 import {
+	type SubmissionId,
 	toQueuedSubmissionId,
 	toSteeringMessageId,
+	toSubmissionId,
 } from "@/shared/identifiers";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import type {
 	CompactSessionInput,
 	CompactSessionResult,
 } from "../compaction/compaction";
+import { SessionCompactionError } from "../compaction/error";
+
 import {
 	isContextOverflowFailure,
 	OverflowRecoveryError,
@@ -48,11 +52,14 @@ import {
 import { interruptSessionContext } from "./turn";
 import type {
 	SessionApprovalOutcome,
+	SessionApprovalResult,
 	SessionCompactionCommand,
 	SessionEngine,
 	SessionEngineOptions,
+	SessionEnginePorts,
 	SessionExecution,
 	SessionExecutionInput,
+	SessionInterruptResult,
 	SessionOverflowRecoveryCommand,
 	SessionOverflowRecoveryOutcome,
 	SessionOverflowRecoveryTarget,
@@ -61,6 +68,8 @@ import type {
 	SessionQueuedSubmission,
 	SessionSnapshot,
 	SessionSteeringMessage,
+	SessionSubmissionAdmission,
+	SessionSubmissionEvent,
 	SessionViewState,
 	SessionWaitingMessage,
 	SessionWaitingMessageId,
@@ -74,6 +83,19 @@ import {
 
 /** The deadline one Agent Turn submission runs with. */
 const AGENT_TURN_DEADLINE_MS = 43_200_000;
+/** The maximum time local shutdown waits for abort-resistant work to settle. */
+const SESSION_SHUTDOWN_WAIT_TIMEOUT_MS = 5000;
+const waitForShutdownWork = async (work: Promise<void>): Promise<void> => {
+	let timeout: NodeJS.Timeout | undefined;
+	const deadline = new Promise<void>((resolve) => {
+		timeout = setTimeout(resolve, SESSION_SHUTDOWN_WAIT_TIMEOUT_MS);
+	});
+	try {
+		await Promise.race([work, deadline]);
+	} finally {
+		clearTimeout(timeout);
+	}
+};
 
 /** The reason a submission that arrives after the session ended is refused. */
 const SHUT_DOWN_SEND_ERROR = "The session has ended.";
@@ -125,6 +147,7 @@ export const createSessionEngine = ({
 		queuedSubmissions: [],
 		steeringMessages: [],
 		transcript: [...initialTranscript],
+		transcriptRevision: 0,
 		turnActive: false,
 		viewState: undefined,
 	};
@@ -139,9 +162,22 @@ export const createSessionEngine = ({
 				promise: Promise<CompactSessionResult>;
 				/** Resolves once the Session Compaction module has admitted the request. */
 				registered: Promise<void>;
+				settled: boolean;
 		  }
 		| undefined;
 	const listeners = new Set<() => void>();
+	const submissionListeners = new Set<
+		(event: SessionSubmissionEvent) => void
+	>();
+	const emitSubmissionEvent = (event: SessionSubmissionEvent): void => {
+		for (const listener of [...submissionListeners]) {
+			try {
+				listener(event);
+			} catch {
+				// Observers cannot change Engine authority.
+			}
+		}
+	};
 	/**
 	 * The settlement of each pending approval, keyed by its registry id. A
 	 * request is removed before its settlement is published, so a second route
@@ -158,14 +194,58 @@ export const createSessionEngine = ({
 	 * recovery, and no send or command can reset an attempt that is under way.
 	 */
 	const recoveryAttempts = new Set<SessionMessageId>();
+	/** Monotonic fence for recovery work after any local interruption. */
+	let interruptEpoch = 0;
+	let activeOverflowRecoveries = 0;
+
 	/**
 	 * The waiters of each live execution, resolved when that execution ends, so
 	 * work that must not run during an Agent Turn can wait for it to end instead
 	 * of guessing whether it has.
 	 */
 	const executionEndWaiters = new Map<AgentTurnId, (() => void)[]>();
+	/** Assigned once the operation exists so approval aborts use its command. */
+	let interruptApprovalTurn: (toolCallId?: ToolCallId) => void = () =>
+		undefined;
+
 	let approvalCounter = 0;
 	let isShutDown = false;
+	const shutdownController = new AbortController();
+	let shutdownPromise: Promise<void> | undefined;
+	/**
+	 * Session records delivered by the Steering Lane are started at the Model
+	 * Step boundary and intentionally do not block that step. Shutdown must still
+	 * await them before the Session Host can release its lease.
+	 */
+	const pendingDurableWrites = new Set<Promise<void>>();
+	const commitRecord: SessionEnginePorts["commitRecord"] = (input) => {
+		if (isShutDown) {
+			return Promise.resolve();
+		}
+		const write = ports.commitRecord(input);
+		pendingDurableWrites.add(write);
+		void write.then(
+			() => pendingDurableWrites.delete(write),
+			() => pendingDurableWrites.delete(write)
+		);
+		return write;
+	};
+	/**
+	 * Every public compaction request remains tracked through joined admission,
+	 * including a request whose owner finishes before its own settings resolve.
+	 */
+	const pendingCompactions = new Set<Promise<CompactSessionResult>>();
+	/**
+	 * Post-turn maintenance starts without delaying the command response, but
+	 * ownership still covers its compaction decision until it settles.
+	 */
+	const pendingBackgroundTasks = new Set<Promise<unknown>>();
+	const pendingAttachmentControllers = new Set<AbortController>();
+	/**
+	 * Late runtime callbacks can still settle after cancellation. They must not
+	 * reach the durable store once the Engine has lost authority.
+	 */
+	const enginePorts: SessionEnginePorts = { ...ports, commitRecord };
 	/**
 	 * How many submission runs hold the send lane. A run can overlap another's
 	 * tail — an overflow replay starts once the failed turn's execution ends,
@@ -173,13 +253,29 @@ export const createSessionEngine = ({
 	 * than flagged, and it is free only at zero.
 	 */
 	let laneRuns = 0;
-	/** Whether the drain loop is walking the Submission Queue. */
+	/** The turn reserved by a run before its execution enters the snapshot. */
+	let activeAdmissionTurnId: AgentTurnId | undefined;
 	let draining = false;
+	/** Whether the drain loop is walking the Submission Queue. */
 	const publish = (changes: Partial<SessionSnapshot>): void => {
 		if (!hasChanged(state, changes)) {
 			return;
 		}
-		state = { ...state, ...changes };
+		const transcript = changes.transcript;
+		const transcriptChanged =
+			transcript !== undefined &&
+			(state.transcript.length !== transcript.length ||
+				state.transcript.some(
+					(message, index) => message !== transcript[index]
+				));
+		const nextChanges =
+			transcriptChanged === true
+				? {
+						...changes,
+						transcriptRevision: (state.transcriptRevision ?? 0) + 1,
+					}
+				: changes;
+		state = { ...state, ...nextChanges };
 		for (const listener of listeners) {
 			try {
 				listener();
@@ -188,22 +284,40 @@ export const createSessionEngine = ({
 			}
 		}
 	};
-	/** Settles one request: publishes its decision and wakes its waiter, once. */
+	/** Settles one request through the Engine's single authority path. */
 	const settleApproval = (
 		id: string,
 		outcome: SessionApprovalOutcome
-	): void => {
+	): SessionApprovalResult => {
 		const resolveApproval = pendingApprovals.get(id);
-		if (isUndefined(resolveApproval)) {
-			return;
+		const approval = state.approvals.find(
+			(candidate) => candidate.id === id && isUndefined(candidate.decision)
+		);
+		if (isUndefined(resolveApproval) || approval === undefined) {
+			return { applied: false };
+		}
+		if (
+			outcome.decision === "allow" &&
+			outcome.remember &&
+			approval.request.safety === true
+		) {
+			return {
+				applied: false,
+				reason: "persistence-forbidden",
+			};
 		}
 		pendingApprovals.delete(id);
 		publish({
-			approvals: state.approvals.map((approval) =>
-				approval.id === id ? { ...approval, decision: outcome } : approval
+			approvals: state.approvals.map((candidate) =>
+				candidate.id === id ? { ...candidate, decision: outcome } : candidate
 			),
 		});
+		if (outcome.decision === "abort") {
+			closeApprovals();
+			interruptApprovalTurn(approval.request.toolCallId);
+		}
 		resolveApproval(outcome);
+		return { applied: true };
 	};
 	const requestApproval = (
 		request: ToolApprovalRequest
@@ -282,6 +396,9 @@ export const createSessionEngine = ({
 		publish({ isCompacting: value });
 	};
 	const setCompactionError = (error: Error | null): void => {
+		if (isShutDown) {
+			return;
+		}
 		publish({ compactionError: error });
 	};
 	/**
@@ -346,6 +463,7 @@ export const createSessionEngine = ({
 			abort: () => controller.abort(),
 			promise,
 			registered: registration.promise,
+			settled: false,
 		};
 		setCompacting(true);
 		void (async () => {
@@ -353,13 +471,19 @@ export const createSessionEngine = ({
 				const request = await compactionRequest(
 					command,
 					messages,
-					controller.signal
+					AbortSignal.any([controller.signal, shutdownController.signal])
 				);
+				if (controller.signal.aborted || isShutDown) {
+					throw new SessionCompactionError("cancelled", SHUT_DOWN_SEND_ERROR);
+				}
 				// Admission happens when the module is entered, so a request that
 				// arrives while this one resolves its settings still joins it.
 				const admitted = ports.compaction.compact(request);
 				registration.resolve();
 				const result = await admitted;
+				if (controller.signal.aborted || isShutDown) {
+					throw new SessionCompactionError("cancelled", SHUT_DOWN_SEND_ERROR);
+				}
 				applyContext(result.activeMessages);
 				recordCompaction(result.entry);
 				setCompactionError(null);
@@ -369,12 +493,13 @@ export const createSessionEngine = ({
 				reject(error);
 			} finally {
 				if (compactionCommand?.promise === promise) {
+					compactionCommand.settled = true;
 					compactionCommand = undefined;
 					setCompacting(false);
 				}
 				// A submission that arrived while this compaction held the lane
 				// runs as soon as it no longer does.
-				void drainQueuedSubmissions();
+				trackBackgroundTask(drainQueuedSubmissions());
 			}
 		})();
 		return promise;
@@ -397,27 +522,63 @@ export const createSessionEngine = ({
 		// it can already see.
 		if (!isUndefined(owner)) {
 			await owner.registered;
+			if (owner.settled) {
+				return compact(command);
+			}
 		}
-		const result = await ports.compaction.compact(
-			await compactionRequest(command, messages, new AbortController().signal)
+		if (isShutDown) {
+			throw new SessionCompactionError("cancelled", SHUT_DOWN_SEND_ERROR);
+		}
+		const request = await compactionRequest(
+			command,
+			messages,
+			shutdownController.signal
 		);
+		if (isShutDown) {
+			throw new SessionCompactionError("cancelled", SHUT_DOWN_SEND_ERROR);
+		}
+		if (!isUndefined(owner) && owner.settled) {
+			return compact(command);
+		}
+		const result = await ports.compaction.compact(request);
 		if (!isUndefined(owner)) {
 			await owner.promise;
 		}
 		return result;
 	};
+	const trackPendingCompaction = (
+		result: Promise<CompactSessionResult>
+	): Promise<CompactSessionResult> => {
+		pendingCompactions.add(result);
+		void (async () => {
+			try {
+				await result;
+			} catch {
+				// The compaction caller observes the original rejection.
+			} finally {
+				pendingCompactions.delete(result);
+			}
+		})();
+		return result;
+	};
 	const compact = (
 		command: SessionCompactionCommand
 	): Promise<CompactSessionResult> => {
+		if (isShutDown) {
+			return Promise.reject(
+				new SessionCompactionError("cancelled", SHUT_DOWN_SEND_ERROR)
+			);
+		}
 		const messages = compactionSource(command);
 		// The Engine's own command is checked first: a request that arrives while
-		// that command still resolves its settings joins it rather than starting a
-		// second command the module would only refuse.
+		// that command still resolves its settings joins it rather than starting
+		// a second command the module would only refuse.
 		const running =
 			compactionCommand ?? ports.compaction.getInFlight(sessionId);
-		return isNull(running)
+		const result = isNull(running)
 			? startCompaction(command, messages)
 			: joinCompaction(command, messages);
+		return trackPendingCompaction(result);
 	};
 	const settleCompaction = async (): Promise<Error | null> => {
 		// A command that starts while this waits is joined too, so a caller that
@@ -464,7 +625,9 @@ export const createSessionEngine = ({
 	const failRecovery = (
 		error: OverflowRecoveryError
 	): SessionOverflowRecoveryOutcome => {
-		setCompactionError(error);
+		if (!isShutDown) {
+			setCompactionError(error);
+		}
 		return { kind: "failed", error };
 	};
 	/**
@@ -475,8 +638,9 @@ export const createSessionEngine = ({
 	 * message. A recovery the session refuses or that fails is published as the
 	 * compaction error instead of being continued by its caller.
 	 */
-	const recoverOverflow = async (
+	const runOverflowRecovery = async (
 		command: SessionOverflowRecoveryCommand
+		// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Recovery owns independent eligibility, compaction, and replay failure boundaries.
 	): Promise<SessionOverflowRecoveryOutcome> => {
 		if (!isContextOverflowFailure(command.error)) {
 			return { kind: "ineligible" };
@@ -489,10 +653,14 @@ export const createSessionEngine = ({
 			return { kind: "exhausted" };
 		}
 		recoveryAttempts.add(command.originalMessageId);
+		const recoveryEpoch = interruptEpoch;
 		let target: SessionOverflowRecoveryTarget | null;
 		try {
 			target = await command.resolveTarget();
 		} catch (error) {
+			if (isShutDown || recoveryEpoch !== interruptEpoch) {
+				return { kind: "ineligible" };
+			}
 			return failRecovery(
 				recoveryError(
 					"Context overflow recovery could not resolve its compaction settings.",
@@ -503,6 +671,9 @@ export const createSessionEngine = ({
 		if (isNull(target)) {
 			// Nothing was tried, so the message keeps its one attempt.
 			recoveryAttempts.delete(command.originalMessageId);
+			return { kind: "ineligible" };
+		}
+		if (isShutDown || recoveryEpoch !== interruptEpoch) {
 			return { kind: "ineligible" };
 		}
 		let result: CompactSessionResult;
@@ -517,6 +688,9 @@ export const createSessionEngine = ({
 				...omitUndefined({ variant: target.variant }),
 			});
 		} catch (error) {
+			if (isShutDown || recoveryEpoch !== interruptEpoch) {
+				return { kind: "ineligible" };
+			}
 			return failRecovery(
 				error instanceof OverflowRecoveryError
 					? error
@@ -526,22 +700,30 @@ export const createSessionEngine = ({
 						)
 			);
 		}
-		// The replay never runs while the turn that proposed the recovery is
-		// still live, and a replay the session refuses is reported, never queued
-		// behind or overlapped with a send that is already running.
 		await waitForExecutionEnd(command.turnId);
+		// The replay waits for the failed execution so it cannot overlap its
+		// interrupted turn or outlive a local interruption.
+		if (isShutDown || recoveryEpoch !== interruptEpoch) {
+			return { kind: "ineligible" };
+		}
 		let replayOutcome: SessionOverflowReplayOutcome;
 		try {
 			replayOutcome = await command.replay({
 				originalMessageId: command.originalMessageId,
 			});
 		} catch (error) {
+			if (isShutDown || recoveryEpoch !== interruptEpoch) {
+				return { kind: "ineligible" };
+			}
 			return failRecovery(
 				recoveryError(
 					"Context overflow recovery could not replay the original user message.",
 					error
 				)
 			);
+		}
+		if (isShutDown || recoveryEpoch !== interruptEpoch) {
+			return { kind: "ineligible" };
 		}
 		if (replayOutcome.kind === "refused") {
 			return failRecovery(
@@ -554,8 +736,26 @@ export const createSessionEngine = ({
 		}
 		return { kind: "recovered", entry: result.entry };
 	};
+	const recoverOverflow = (
+		command: SessionOverflowRecoveryCommand
+	): Promise<SessionOverflowRecoveryOutcome> => {
+		if (isShutDown) {
+			return Promise.resolve({ kind: "ineligible" });
+		}
+		activeOverflowRecoveries += 1;
+		const recovery = runOverflowRecovery(command);
+		void recovery.then(
+			() => {
+				activeOverflowRecoveries -= 1;
+			},
+			() => {
+				activeOverflowRecoveries -= 1;
+			}
+		);
+		return recovery;
+	};
 
-	/** Drops an execution and wakes everything waiting for it to end. */
+	/** Ends an execution and wakes everything waiting for it to end. */
 	const endExecution = (turnId: AgentTurnId): void => {
 		const waiters = executionEndWaiters.get(turnId);
 		if (!isUndefined(waiters)) {
@@ -584,6 +784,7 @@ export const createSessionEngine = ({
 			...omitUndefined({
 				parent: input.parent,
 				sessionVariant: input.sessionVariant,
+				submissionId: input.submissionId,
 				variant: input.variant,
 			}),
 			sessionModel: input.sessionModel,
@@ -643,7 +844,11 @@ export const createSessionEngine = ({
 	const takeSteeringMessages = (
 		execution: SessionExecution
 	): SessionMessage[] => {
-		if (!isUndefined(execution.parent) || state.steeringMessages.length === 0) {
+		if (
+			isShutDown ||
+			!isUndefined(execution.parent) ||
+			state.steeringMessages.length === 0
+		) {
 			return [];
 		}
 		const taken = state.steeringMessages;
@@ -652,16 +857,35 @@ export const createSessionEngine = ({
 		// Model Target that turn is already running with: a correction made
 		// mid-turn cannot switch a model under the user.
 		const delivered = taken.map(({ input }) =>
-			createSessionUserMessage(input.text, {
-				agent: execution.agent,
-				joinedTurnId: execution.turnId,
-				model: execution.model,
-				...omitUndefined({ variant: execution.variant }),
-			})
+			createSessionUserMessage(
+				input.text,
+				{
+					agent: execution.agent,
+					joinedTurnId: execution.turnId,
+					model: execution.model,
+					...omitUndefined({ variant: execution.variant }),
+				},
+				[],
+				[],
+				input.messageId
+			)
 		);
 		applyContext([...state.context, ...delivered]);
 		mergeTranscript(delivered);
-		for (const message of delivered) {
+		for (const [index, message] of delivered.entries()) {
+			const source = taken[index];
+			if (
+				source !== undefined &&
+				source.input.messageId !== undefined &&
+				source.input.submissionId !== undefined
+			) {
+				emitSubmissionEvent({
+					kind: "delivered",
+					messageId: source.input.messageId,
+					submissionId: source.input.submissionId,
+					turnId: execution.turnId,
+				});
+			}
 			commitSteeringRecord(execution, message);
 		}
 		return delivered;
@@ -676,7 +900,7 @@ export const createSessionEngine = ({
 		execution: SessionExecution,
 		message: SessionMessage
 	): void => {
-		ports
+		const write = enginePorts
 			.commitRecord({
 				record: buildUserSessionRecord({
 					agentId: execution.agent,
@@ -696,6 +920,54 @@ export const createSessionEngine = ({
 						: new Error("Could not save the Steering Message."),
 				});
 			});
+		pendingDurableWrites.add(write);
+		void write.then(
+			() => pendingDurableWrites.delete(write),
+			() => pendingDurableWrites.delete(write)
+		);
+	};
+	const waitForDurableWrites = async (): Promise<void> => {
+		while (pendingDurableWrites.size > 0) {
+			await Promise.all([...pendingDurableWrites]);
+		}
+	};
+	const waitForCompactions = async (): Promise<void> => {
+		while (pendingCompactions.size > 0) {
+			await Promise.all(
+				[...pendingCompactions].map(async (compaction) => {
+					try {
+						await compaction;
+					} catch {
+						// A shutdown-triggered compaction cancellation is expected.
+					}
+				})
+			);
+		}
+	};
+	const trackBackgroundTask = (task: Promise<unknown>): void => {
+		pendingBackgroundTasks.add(task);
+		void (async () => {
+			try {
+				await task;
+			} catch {
+				// Maintenance failures are surfaced by their own error path.
+			} finally {
+				pendingBackgroundTasks.delete(task);
+			}
+		})();
+	};
+	const waitForBackgroundTasks = async (): Promise<void> => {
+		while (pendingBackgroundTasks.size > 0) {
+			await Promise.all(
+				[...pendingBackgroundTasks].map(async (task) => {
+					try {
+						await task;
+					} catch {
+						// A shutdown-triggered maintenance cancellation is expected.
+					}
+				})
+			);
+		}
 	};
 	/**
 	 * Hands anything still waiting in the Steering Lane to the Submission
@@ -704,31 +976,51 @@ export const createSessionEngine = ({
 	 * order is kept, so nothing is silently dropped and every message runs as
 	 * its own Agent Turn.
 	 */
-	const fallbackSteeringMessages = (): void => {
-		if (state.steeringMessages.length === 0) {
+	const fallbackSteeringMessages = (turnId?: AgentTurnId): void => {
+		if (isShutDown || state.steeringMessages.length === 0) {
 			return;
 		}
-		const waiting: SessionQueuedSubmission[] = state.steeringMessages.map(
-			({ input }) => ({
-				id: toQueuedSubmissionId(crypto.randomUUID()),
-				input: {
-					agent: input.agent,
-					composition: input.composition,
-					files: input.composition.files,
-					model: input.model,
-					sessionModel: input.sessionModel,
-					userText: input.text,
-					...omitUndefined({
-						resolvedAgent: input.resolvedAgent,
-						sessionVariant: input.sessionVariant,
-						variant: input.variant,
-					}),
-				},
-			})
-		);
+		const isOwnedByTurn = (message: SessionSteeringMessage): boolean =>
+			turnId === undefined || message.input.turnId === turnId;
+		const waiting = state.steeringMessages
+			.filter(isOwnedByTurn)
+			.map(({ input }) => {
+				const messageId =
+					input.messageId ?? toSessionMessageId(`msg-${crypto.randomUUID()}`);
+				const submissionId =
+					input.submissionId ??
+					toSubmissionId(`submission-${crypto.randomUUID()}`);
+				const turnId = createAgentTurnId();
+				return {
+					id: toQueuedSubmissionId(crypto.randomUUID()),
+					messageId,
+					submissionId,
+					input: {
+						agent: input.agent,
+						composition: input.composition,
+						files: input.composition.files,
+						model: input.model,
+						sessionModel: input.sessionModel,
+						submissionId,
+						reservedMessageId: messageId,
+						turnId,
+						userText: input.text,
+						...omitUndefined({
+							resolvedAgent: input.resolvedAgent,
+							sessionVariant: input.sessionVariant,
+							variant: input.variant,
+						}),
+					},
+				};
+			});
+		if (waiting.length === 0) {
+			return;
+		}
 		publish({
 			queuedSubmissions: [...state.queuedSubmissions, ...waiting],
-			steeringMessages: [],
+			steeringMessages: state.steeringMessages.filter(
+				(message) => !isOwnedByTurn(message)
+			),
 		});
 	};
 
@@ -749,9 +1041,11 @@ export const createSessionEngine = ({
 			} catch (error) {
 				// A submission that throws still publishes its failure, and the
 				// caller that awaited the send is the one that answers it.
-				publish({
-					error: isError(error) ? error : new Error("Session failed."),
-				});
+				if (!isShutDown) {
+					publish({
+						error: isError(error) ? error : new Error("Session failed."),
+					});
+				}
 				throw error;
 			} finally {
 				signal.removeEventListener("abort", stop);
@@ -767,10 +1061,17 @@ export const createSessionEngine = ({
 		fallbackSteeringMessages,
 		getContext: () => state.context,
 		getTranscript: () => state.transcript,
+		isShutDown: () => isShutDown,
 		mergeTranscript,
-		ports,
+		ports: enginePorts,
 		recoverOverflow,
-		send: (input) => runSubmission(input),
+		send: (input) =>
+			isShutDown
+				? Promise.resolve({
+						rejected: true,
+						reason: SHUT_DOWN_SEND_ERROR,
+					})
+				: runSubmission(input),
 		sessionId,
 		setCatalogDiagnostic: (diagnostic) =>
 			publish({ catalogDiagnostic: diagnostic }),
@@ -779,27 +1080,77 @@ export const createSessionEngine = ({
 		setExecutionViewState,
 		setTurnActive,
 		settleCompaction,
+		trackBackgroundTask,
 		takeSteeringMessages,
 	});
 
-	/**
-	 * Runs one submission on the send lane, then keeps the queue moving: a run
-	 * that ends is not the last work here, and whatever queued behind it starts
-	 * now. Every lane run goes through here — the session's own sends, and the
-	 * overflow replay a recovery continues — so the Submission Queue is never
-	 * drained onto a lane that is still taken.
-	 */
 	const runSubmission = async (
 		input: SessionSendInput
 	): Promise<SessionSendOutcome> => {
 		laneRuns += 1;
+		const ownsTurnReservation =
+			activeAdmissionTurnId === undefined && input.turnId !== undefined;
+		if (ownsTurnReservation) {
+			activeAdmissionTurnId = input.turnId;
+		}
+		const messageId = input.messageId ?? input.reservedMessageId;
+		if (input.submissionId !== undefined && messageId !== undefined) {
+			emitSubmissionEvent({
+				kind: "started",
+				messageId,
+				submissionId: input.submissionId,
+				...omitUndefined({ turnId: input.turnId }),
+			});
+		}
 		try {
-			return await operation.send(input);
+			const outcome = await operation.send(input);
+			if (
+				outcome.rejected &&
+				input.submissionId !== undefined &&
+				messageId !== undefined
+			) {
+				emitSubmissionEvent({
+					kind: "failed",
+					messageId,
+					reason: outcome.reason,
+					submissionId: input.submissionId,
+					...omitUndefined({ turnId: input.turnId }),
+				});
+			}
+			return outcome;
+		} catch (error) {
+			if (input.submissionId !== undefined && messageId !== undefined) {
+				emitSubmissionEvent({
+					kind: "failed",
+					messageId,
+					reason: getErrorMessage(error, "The Submission failed."),
+					submissionId: input.submissionId,
+					...omitUndefined({ turnId: input.turnId }),
+				});
+			}
+			throw error;
 		} finally {
+			if (ownsTurnReservation && activeAdmissionTurnId === input.turnId) {
+				activeAdmissionTurnId = undefined;
+			}
 			laneRuns -= 1;
-			void drainQueuedSubmissions();
+			trackBackgroundTask(drainQueuedSubmissions());
 		}
 	};
+	/**
+	 * Interrupts local Engine authority immediately while the provider may still
+	 * be physically unwinding. The execution signal fences every late callback.
+	 */
+	const interruptActiveWork = (preserveToolCallId?: ToolCallId): void => {
+		interruptEpoch += 1;
+		operation.interrupt(preserveToolCallId);
+		for (const execution of [...state.executions]) {
+			endExecution(execution.turnId);
+		}
+		setTurnActive(false);
+	};
+	interruptApprovalTurn = interruptActiveWork;
+
 	/** Releases the blobs of compositions nothing holds any more. */
 	const releaseQueuedAttachments = (
 		submissions: readonly SessionQueuedSubmission[]
@@ -816,14 +1167,15 @@ export const createSessionEngine = ({
 	 * blobs it still shows.
 	 */
 	const storeCompositionFiles = async (
-		files: readonly SessionFilePart[]
+		files: readonly SessionFilePart[],
+		signal: AbortSignal
 	): Promise<SessionFilePart[]> => {
 		if (files.every((file) => !isUndefined(file.attachmentId))) {
 			return [...files];
 		}
 		const [stored] = await ports.attachments.externalize(
 			[createSessionUserMessage("", undefined, [], [...files])],
-			new AbortController().signal
+			signal
 		);
 		return (stored?.parts ?? []).filter(
 			(part): part is SessionFilePart => part.type === "file"
@@ -844,7 +1196,8 @@ export const createSessionEngine = ({
 			isShutDown ||
 			laneRuns > 0 ||
 			state.turnActive ||
-			state.isCompacting
+			state.isCompacting ||
+			compactionCommand !== undefined
 		) {
 			return;
 		}
@@ -884,30 +1237,52 @@ export const createSessionEngine = ({
 			files: input.files ?? [],
 			text: input.userText ?? "",
 		};
+		const attachmentController = new AbortController();
+		pendingAttachmentControllers.add(attachmentController);
 		let files: SessionFilePart[];
 		try {
-			files = await storeCompositionFiles(composition.files);
+			files = await storeCompositionFiles(
+				composition.files,
+				attachmentController.signal
+			);
 		} catch {
-			return { rejected: true, reason: QUEUED_ATTACHMENT_ERROR };
+			return {
+				rejected: true,
+				reason: isShutDown ? SHUT_DOWN_SEND_ERROR : QUEUED_ATTACHMENT_ERROR,
+			};
+		} finally {
+			pendingAttachmentControllers.delete(attachmentController);
 		}
 		if (isShutDown) {
 			return { rejected: true, reason: SHUT_DOWN_SEND_ERROR };
 		}
+		const submissionId =
+			input.submissionId ?? toSubmissionId(`submission-${crypto.randomUUID()}`);
+		const messageId =
+			input.messageId ??
+			input.reservedMessageId ??
+			toSessionMessageId(`msg-${crypto.randomUUID()}`);
+		const turnId = input.turnId ?? createAgentTurnId();
 		const stored: SessionSubmissionComposition = { ...composition, files };
 		const queuedInput: SessionQueuedSendInput = {
 			...input,
 			composition: stored,
 			files,
+			reservedMessageId: messageId,
+			submissionId,
+			turnId,
 		};
 		const queued: SessionQueuedSubmission = {
 			id: toQueuedSubmissionId(crypto.randomUUID()),
 			input: queuedInput,
+			messageId,
+			submissionId,
 		};
 		publish({ queuedSubmissions: [...state.queuedSubmissions, queued] });
 		ports.attachments.retain(queuedAttachmentIds(queuedInput));
 		// Storing the composition can outlast the work that was in flight, so
 		// the queue is walked again here; a busy lane makes that a no-op.
-		void drainQueuedSubmissions();
+		trackBackgroundTask(drainQueuedSubmissions());
 		return { rejected: false };
 	};
 	/**
@@ -932,6 +1307,15 @@ export const createSessionEngine = ({
 		if (!(isUndefined(input.messageId) && isUndefined(input.delegation))) {
 			return { rejected: true, reason: STEERING_INVOCATION_ERROR };
 		}
+		const submissionId =
+			input.submissionId ?? toSubmissionId(`submission-${crypto.randomUUID()}`);
+		const messageId =
+			input.reservedMessageId ??
+			toSessionMessageId(`msg-${crypto.randomUUID()}`);
+		const turnId =
+			input.turnId ??
+			primaryEntry(state.executions)?.turnId ??
+			createAgentTurnId();
 		const steering: SessionSteeringMessage = {
 			id: toSteeringMessageId(crypto.randomUUID()),
 			input: {
@@ -939,9 +1323,12 @@ export const createSessionEngine = ({
 				// The message carries text only, so its composition travels back
 				// to the composer exactly as it was composed.
 				composition: { ...composition, files: [] },
+				messageId,
 				model: input.model,
 				sessionModel: input.sessionModel,
+				submissionId,
 				text: input.userText ?? composition.text,
+				turnId,
 				...omitUndefined({
 					resolvedAgent: input.resolvedAgent,
 					sessionVariant: input.sessionVariant,
@@ -952,15 +1339,46 @@ export const createSessionEngine = ({
 		publish({ steeringMessages: [...state.steeringMessages, steering] });
 		return { rejected: false };
 	};
+	const waitingMessageMatches = (
+		ids: readonly SessionWaitingMessageId[] | undefined,
+		id: SessionWaitingMessageId,
+		submissionId: SessionWaitingMessageId | undefined
+	): boolean =>
+		isUndefined(ids) ||
+		ids.includes(id) ||
+		(submissionId !== undefined && ids.includes(submissionId));
+	const emitRecalledSubmission = (message: SessionWaitingMessage): void => {
+		const messageId =
+			"messageId" in message ? message.messageId : message.input.messageId;
+		const submissionId =
+			"submissionId" in message
+				? message.submissionId
+				: message.input.submissionId;
+		if (messageId === undefined || submissionId === undefined) {
+			return;
+		}
+		emitSubmissionEvent({
+			kind: "recalled",
+			messageId,
+			reason: "recall",
+			submissionId,
+			...omitUndefined({
+				turnId:
+					"input" in message && message.input.turnId !== undefined
+						? message.input.turnId
+						: undefined,
+			}),
+		});
+	};
 	const recallWaitingMessages = (
 		ids?: readonly SessionWaitingMessageId[]
 	): SessionWaitingMessage[] => {
-		const steering = isUndefined(ids)
-			? [...state.steeringMessages]
-			: state.steeringMessages.filter(({ id }) => ids.includes(id));
-		const queued = isUndefined(ids)
-			? [...state.queuedSubmissions]
-			: state.queuedSubmissions.filter(({ id }) => ids.includes(id));
+		const steering = state.steeringMessages.filter((message) =>
+			waitingMessageMatches(ids, message.id, message.input.submissionId)
+		);
+		const queued = state.queuedSubmissions.filter((submission) =>
+			waitingMessageMatches(ids, submission.id, submission.submissionId)
+		);
 		if (steering.length === 0 && queued.length === 0) {
 			return [];
 		}
@@ -973,6 +1391,9 @@ export const createSessionEngine = ({
 			),
 		});
 		releaseQueuedAttachments(queued);
+		for (const message of [...steering, ...queued]) {
+			emitRecalledSubmission(message);
+		}
 		return [...steering, ...queued];
 	};
 	/**
@@ -985,13 +1406,107 @@ export const createSessionEngine = ({
 		draining ||
 		state.turnActive ||
 		state.isCompacting ||
+		compactionCommand !== undefined ||
 		state.queuedSubmissions.length > 0;
+	const prepareAdmission = (
+		input: SessionSendInput,
+		composition: SessionSubmissionComposition
+	): {
+		admittedInput: SessionSendInput;
+		messageId: SessionMessageId;
+		submissionId: SubmissionId;
+		turnId: AgentTurnId;
+	} => {
+		const submissionId =
+			input.submissionId ?? toSubmissionId(`submission-${crypto.randomUUID()}`);
+		const messageId =
+			input.messageId ??
+			input.reservedMessageId ??
+			toSessionMessageId(`msg-${crypto.randomUUID()}`);
+		const turnId = input.turnId ?? createAgentTurnId();
+		return {
+			admittedInput: {
+				...input,
+				composition: { ...composition, files: [] },
+				submissionId,
+				turnId,
+				...omitUndefined({
+					reservedMessageId:
+						input.messageId === undefined ? messageId : undefined,
+				}),
+			},
+			messageId,
+			submissionId,
+			turnId,
+		};
+	};
+	const admit = (input: SessionSendInput): SessionSubmissionAdmission => {
+		if (isShutDown) {
+			return { rejected: true, reason: SHUT_DOWN_SEND_ERROR };
+		}
+		const composition: SessionSubmissionComposition = input.composition ?? {
+			files: input.files ?? [],
+			text: input.userText ?? "",
+		};
+		if (composition.files.length > 0 || (input.files ?? []).length > 0) {
+			return { rejected: true, reason: "Submissions accept text only." };
+		}
+		const { admittedInput, messageId, submissionId, turnId } = prepareAdmission(
+			input,
+			composition
+		);
+		if (acceptsSteeringMessages(state)) {
+			const activeTurnId =
+				primaryEntry(state.executions)?.turnId ??
+				activeAdmissionTurnId ??
+				turnId;
+			const outcome = acceptSteeringMessage({
+				...admittedInput,
+				turnId: activeTurnId,
+			});
+			return outcome.rejected
+				? outcome
+				: {
+						rejected: false,
+						disposition: "steering",
+						messageId,
+						submissionId,
+						turnId: activeTurnId,
+					};
+		}
+		if (queuesSubmission()) {
+			const queuedInput: SessionQueuedSendInput = {
+				...admittedInput,
+				composition: { ...composition, files: [] },
+				files: [],
+			};
+			const queued: SessionQueuedSubmission = {
+				id: toQueuedSubmissionId(crypto.randomUUID()),
+				input: queuedInput,
+				messageId,
+				submissionId,
+			};
+			publish({ queuedSubmissions: [...state.queuedSubmissions, queued] });
+			trackBackgroundTask(drainQueuedSubmissions());
+			return {
+				rejected: false,
+				disposition: "queued",
+				messageId,
+				submissionId,
+			};
+		}
+		void runSubmission(admittedInput).catch(() => undefined);
+		return {
+			rejected: false,
+			disposition: "started",
+			messageId,
+			submissionId,
+			turnId,
+		};
+	};
 	/**
-	 * The Engine's one send entry point. A submission that arrives while an
-	 * Agent Turn is running joins that turn's Steering Lane and is delivered
-	 * inside it; while the session is busy any other way it joins the
-	 * Submission Queue and runs as its own Agent Turn; an idle session runs it
-	 * on the lane and then keeps the queue moving.
+	 * The Engine's one send entry point. A submission that arrives while the
+	 * session is running joins the Steering Lane or Submission Queue.
 	 */
 	const send = async (input: SessionSendInput): Promise<SessionSendOutcome> => {
 		if (isShutDown) {
@@ -1001,34 +1516,129 @@ export const createSessionEngine = ({
 			return acceptSteeringMessage(input);
 		}
 		if (queuesSubmission()) {
-			return await acceptQueuedSubmission(input);
+			const queued = acceptQueuedSubmission(input);
+			trackBackgroundTask(queued);
+			return await queued;
 		}
 		return await runSubmission(input);
 	};
+	const interruptAll = (): SessionInterruptResult => {
+		const approvalsSettled = state.approvals.filter(
+			(approval) => approval.decision === undefined
+		).length;
+		const hasCompaction = state.isCompacting || compactionCommand !== undefined;
+		const hasTurn =
+			state.turnActive ||
+			laneRuns > 0 ||
+			state.executions.length > 0 ||
+			activeOverflowRecoveries > 0;
+		let kind: SessionInterruptResult["kind"] = "none";
+		if (hasCompaction) {
+			kind = "compaction";
+		} else if (hasTurn) {
+			kind = "turn";
+		}
+		closeApprovals();
+		if (hasCompaction) {
+			compactionCommand?.abort();
+			setCompacting(false);
+			if (!hasTurn) {
+				interruptEpoch += 1;
+			}
+		}
+		if (hasTurn) {
+			interruptActiveWork();
+		}
+		const recalled = recallWaitingMessages();
+		return { approvalsSettled, kind, recalled };
+	};
+	const hasPendingWork = (): boolean =>
+		laneRuns > 0 ||
+		draining ||
+		compactionCommand !== undefined ||
+		pendingCompactions.size > 0 ||
+		pendingApprovals.size > 0 ||
+		pendingDurableWrites.size > 0 ||
+		pendingBackgroundTasks.size > 0 ||
+		activeOverflowRecoveries > 0 ||
+		pendingAttachmentControllers.size > 0 ||
+		state.turnActive ||
+		state.isCompacting ||
+		state.executions.length > 0;
+	const shutdown = (): Promise<void> => {
+		if (shutdownPromise !== undefined) {
+			return shutdownPromise;
+		}
+		isShutDown = true;
+		shutdownController.abort();
+		for (const controller of pendingAttachmentControllers) {
+			controller.abort();
+		}
+		// Whatever was waiting is dropped with the session: its attachment
+		// holds end and nothing it held is ever run.
+		recallWaitingMessages();
+		operation.cancel();
+		closeApprovals();
+		const compaction = compactionCommand?.promise;
+		shutdownPromise = waitForShutdownWork(
+			(async () => {
+				const operationIdle = operation.waitForIdle();
+				const compactionSettled = (async (): Promise<void> => {
+					if (compaction === undefined) {
+						return;
+					}
+					try {
+						await compaction;
+					} catch {
+						// A shutdown-triggered compaction cancellation is expected.
+					}
+				})();
+				await operationIdle;
+				await compactionSettled;
+				await waitForBackgroundTasks();
+				await waitForCompactions();
+				await waitForDurableWrites();
+			})()
+		);
+		return shutdownPromise;
+	};
 
 	return {
+		admit,
 		abortApprovalTurn: (toolCallId) => {
-			// The aborted request already settled in the Engine, so its siblings
-			// are closed as rejects and the turn stops exactly once: a second
-			// abort trigger finds nothing pending to handle.
 			closeApprovals();
-			interruptLatestAssistantMessage(toolCallId);
+			interruptActiveWork(toolCallId);
 		},
 		applyContext,
+		commitRecord,
 		beginExecution,
-		cancel: () => operation.cancel(),
+		cancel: () => {
+			interruptEpoch += 1;
+			operation.cancel();
+		},
 		cancelCompaction: () => {
+			if (
+				compactionCommand !== undefined ||
+				state.isCompacting ||
+				activeOverflowRecoveries > 0
+			) {
+				interruptEpoch += 1;
+			}
 			compactionCommand?.abort();
+			setCompacting(false);
 			return recallWaitingMessages();
 		},
 		closeApprovals,
 		compact,
+		hasPendingWork,
 		endExecution,
 		getSnapshot: () => state,
 		interrupt: (preserveToolCallId) => {
-			operation.interrupt(preserveToolCallId);
+			closeApprovals();
+			interruptActiveWork(preserveToolCallId);
 			return recallWaitingMessages();
 		},
+		interruptAll,
 		mergeTranscript,
 		recallWaitingMessages,
 		recoverOverflow,
@@ -1036,14 +1646,11 @@ export const createSessionEngine = ({
 		respondToApproval: settleApproval,
 		setExecutionViewState,
 		settleCompaction,
-		shutdown: () => {
-			isShutDown = true;
-			// Whatever was waiting is dropped with the session: its attachment
-			// holds end and nothing it held is ever run.
-			recallWaitingMessages();
-			operation.cancel();
-			closeApprovals();
+		onSubmissionEvent: (listener) => {
+			submissionListeners.add(listener);
+			return () => submissionListeners.delete(listener);
 		},
+		shutdown,
 		send,
 		subscribe: (listener) => {
 			listeners.add(listener);

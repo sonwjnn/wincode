@@ -11,6 +11,19 @@ import type { ResolvedCompactionSettings } from "../compaction/config";
 import type { SessionEngine, SessionSnapshot } from "../engine/types";
 import type { ResolvedSessionSelection } from "../selection";
 import type { SessionStore } from "../storage/session-store";
+export type SessionHostFailure = Readonly<{
+	code: "session_lease_lost";
+}>;
+
+export type SessionLeaseScheduler = (
+	callback: () => void,
+	intervalMs: number
+) => () => void;
+
+export type SessionHostLeaseOptions = Readonly<{
+	now?: () => number;
+	schedule?: SessionLeaseScheduler;
+}>;
 
 /**
  * What one Session Host needs from the surface that constructed it, as lazy
@@ -51,14 +64,16 @@ export type SessionHost = Readonly<{
 	 */
 	getSelection: () => ResolvedSessionSelection | null;
 	getSnapshot: () => SessionSnapshot;
+	/** Reports a fatal Host lifecycle failure, such as losing its Session Lease. */
+	onFatal: (listener: (failure: SessionHostFailure) => void) => () => void;
 	/**
 	 * Observes the Agent Turn Events the Engine receives, in order, terminal
 	 * ones included: the stream a consumer renders text and reasoning from
 	 * without reading whole Snapshots per token.
 	 */
 	onEvent: (listener: (event: AgentTurnEvent) => void) => () => void;
-	/** Ends the session: no turn, approval, or attachment keeps running after it. */
-	shutdown: () => void;
+	/** Ends the session and resolves after active durable cleanup completes. */
+	shutdown: () => Promise<void>;
 	/** Notifies that session facts changed; no payload, as the Engine publishes. */
 	subscribe: (listener: () => void) => () => void;
 }>;
@@ -66,4 +81,5 @@ export type SessionHost = Readonly<{
 export type SessionHostOptions = Readonly<{
 	capabilities: SessionCapabilities;
 	sessionId: SessionId;
+	lease?: SessionHostLeaseOptions;
 }>;

@@ -31,6 +31,19 @@ export type CliCommand = {
 };
 
 type StartTui = (input: StartTuiInput) => Promise<number>;
+const rpcCommand: CliCommand = {
+	name: "rpc",
+	configure: (program: Command): void => {
+		program
+			.command("rpc")
+			.description("Run the JSONL Session RPC protocol")
+			.allowExcessArguments(false);
+	},
+	run: async (context): Promise<number> => {
+		const { runRpcCommand } = await import("./rpc-command");
+		return runRpcCommand(context);
+	},
+};
 
 const ROOT_HELP_FLAGS: Record<string, true> = { "--help": true, "-h": true };
 const ROOT_VERSION_FLAGS: Record<string, true> = {
@@ -39,7 +52,13 @@ const ROOT_VERSION_FLAGS: Record<string, true> = {
 };
 const USAGE_EXIT_CODE = 2;
 
-const CLI_COMMANDS: readonly CliCommand[] = [];
+const CLI_COMMANDS: readonly CliCommand[] = [rpcCommand];
+
+const configureCommands = (program: Command): void => {
+	for (const command of CLI_COMMANDS) {
+		command.configure(program);
+	}
+};
 
 const writeOperationalError = (
 	stderr: OutputWriter,
@@ -83,9 +102,7 @@ const dispatchNamedCommand = async (
 		input.stderr.write(`error: unknown command '${firstArg}'\n`);
 		return USAGE_EXIT_CODE;
 	}
-	for (const registeredCommand of CLI_COMMANDS) {
-		registeredCommand.configure(program);
-	}
+	configureCommands(program);
 	try {
 		await program.parseAsync(input.args, { from: "user" });
 	} catch (error) {
@@ -140,6 +157,7 @@ export const dispatch = async (
 		input.stdout.write(`${packageJson.version}\n`);
 		return 0;
 	}
+	configureCommands(program);
 
 	// The TUI entry module is intentionally lightweight and safe to load for help.
 	try {

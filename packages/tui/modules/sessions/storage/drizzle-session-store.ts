@@ -65,6 +65,7 @@ import {
 	sessionRecord,
 	sessionWorkspace,
 } from "./schema";
+import { createSessionLeaseStore } from "./session-lease";
 import {
 	getSessionRecordValidationError,
 	SessionRecordInvariantError,
@@ -656,6 +657,9 @@ export const createDrizzleSessionStore = (
 			: Promise.resolve([...messages]);
 	const promptHistoryStore = createPromptHistory(db, attachmentStore);
 	const workspace = ensureWorkspace(db, options.workspaceRoot ?? process.cwd());
+	const sessionLeaseStore = createSessionLeaseStore(db, {
+		workspaceId: workspace.id,
+	});
 	const fileObservationStore = createDrizzleFileObservationStore(
 		db,
 		snapshotRoot,
@@ -870,6 +874,8 @@ export const createDrizzleSessionStore = (
 
 			return Promise.resolve(toSession(row));
 		},
+		acquireSessionLease: (sessionId, leaseOptions) =>
+			sessionLeaseStore.acquire(sessionId, leaseOptions),
 		getEditMode: async (sessionId: SessionId): Promise<EditMode> => {
 			const row = db
 				.select({ editMode: session.editMode })

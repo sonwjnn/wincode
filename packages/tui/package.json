@@ -12,6 +12,14 @@
     "./session-host": {
       "types": "./modules/sessions/host/session-host.ts",
       "import": "./modules/sessions/host/session-host.ts"
+    },
+    "./session-capabilities": {
+      "types": "./modules/sessions/host/session-capabilities.ts",
+      "import": "./modules/sessions/host/session-capabilities.ts"
+    },
+    "./session-rpc": {
+      "types": "./modules/sessions/host/session-rpc.ts",
+      "import": "./modules/sessions/host/session-rpc.ts"
     }
   },
   "scripts": {

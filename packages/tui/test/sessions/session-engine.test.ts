@@ -23,6 +23,7 @@ import type {
 	SessionOverflowRecoveryTarget,
 	SessionOverflowReplayOutcome,
 	SessionSkillCatalog,
+	SessionSubmissionEvent,
 } from "@/modules/sessions/engine/types";
 import type { SessionViewState } from "@/modules/sessions/hooks/runtime-turn";
 import type {
@@ -345,6 +346,51 @@ test("cancels the compaction command in flight without publishing its result", a
 	);
 });
 
+test("interruptAll settles idle approvals and reports no stopped work", async () => {
+	const engine = createEngine([]);
+	const approval = engine.requestApproval(
+		fromPartial<ToolApprovalRequest>({
+			toolCallId: toolCallId("idle-approval"),
+		})
+	);
+
+	expect(engine.interruptAll()).toMatchObject({
+		approvalsSettled: 1,
+		kind: "none",
+		recalled: [],
+	});
+	await expect(approval).resolves.toEqual({ decision: "reject" });
+});
+
+test("interruptAll aborts compaction and recalls queued submissions", async () => {
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule((input) => {
+			const { promise, reject } = Promise.withResolvers<{ text: string }>();
+			const cancel = () => reject(new Error("summary cancelled"));
+			if (input.signal?.aborted) {
+				cancel();
+			} else {
+				input.signal?.addEventListener("abort", cancel, { once: true });
+			}
+			return promise;
+		})
+	);
+
+	const compaction = engine.compact({ model, trigger: "manual" });
+	await engine.send(sendInput({ userText: "waiting" }));
+
+	const result = engine.interruptAll();
+
+	expect(result.kind).toBe("compaction");
+	expect(result.approvalsSettled).toBe(0);
+	expect(result.recalled.map(({ input }) => input.composition.text)).toEqual([
+		"waiting",
+	]);
+	await expect(compaction).rejects.toMatchObject({ code: "cancelled" });
+	expect(engine.getSnapshot().isCompacting).toBe(false);
+});
+
 test("merges a command's own transcript update before compacting", async () => {
 	const engine = createEngine(compactionHistory());
 
@@ -547,6 +593,54 @@ test("publishes a pending approval and settles it exactly once", async () => {
 		remember: false,
 	});
 });
+test("keeps a safety approval pending when persistence is requested", async () => {
+	const engine = createEngine([]);
+	const settled = engine.requestApproval({
+		...approvalRequest("call-safety"),
+		safety: true,
+	});
+
+	expect(
+		engine.respondToApproval("call-safety", {
+			decision: "allow",
+			remember: true,
+		})
+	).toEqual({
+		applied: false,
+		reason: "persistence-forbidden",
+	});
+	expect(engine.getSnapshot().approvals[0]?.decision).toBeUndefined();
+
+	engine.respondToApproval("call-safety", {
+		decision: "allow",
+		remember: false,
+	});
+	await expect(settled).resolves.toEqual({
+		decision: "allow",
+		remember: false,
+	});
+});
+test("aborts the active turn through an approval response", async () => {
+	const streaming = createStreamingRuntime();
+	const engine = createEngine([], undefined, { runtime: streaming.runtime });
+	const send = engine.send(sendInput());
+
+	await streaming.live;
+	const settled = engine.requestApproval(approvalRequest("call-abort"));
+
+	expect(engine.respondToApproval("call-abort", { decision: "abort" })).toEqual(
+		{ applied: true }
+	);
+	await expect(settled).resolves.toEqual({ decision: "abort" });
+	expect(engine.getSnapshot().turnActive).toBe(false);
+
+	streaming.release();
+	await send;
+	expect(
+		engine.getSnapshot().context.findLast(({ role }) => role === "assistant")
+			?.metadata?.interrupted
+	).toBe(true);
+});
 
 test("gives a Tool-Call-less approval its own id and settles it with every sibling", async () => {
 	const engine = createEngine([]);
@@ -589,7 +683,7 @@ test("settles a pending approval when the session shuts down", async () => {
 	const engine = createEngine([]);
 	const settled = engine.requestApproval(approvalRequest("call-1"));
 
-	engine.shutdown();
+	await engine.shutdown();
 
 	await expect(settled).resolves.toEqual({ decision: "reject" });
 	expect(engine.getSnapshot().approvals[0]?.decision).toEqual({
@@ -599,7 +693,7 @@ test("settles a pending approval when the session shuts down", async () => {
 
 test("settles an approval that arrives after the session shut down", async () => {
 	const engine = createEngine([]);
-	engine.shutdown();
+	await engine.shutdown();
 
 	await expect(
 		engine.requestApproval(approvalRequest("call-1"))
@@ -659,6 +753,17 @@ const recoveryCommand = ({
 	replay,
 	resolveTarget: async () => target,
 	turnId: agentTurnId(turnId),
+});
+test("refuses compaction and overflow recovery after shutdown", async () => {
+	const engine = createEngine([]);
+	await engine.shutdown();
+
+	await expect(
+		engine.compact({ model, trigger: "manual" })
+	).rejects.toMatchObject({ code: "cancelled" });
+	await expect(engine.recoverOverflow(recoveryCommand())).resolves.toEqual({
+		kind: "ineligible",
+	});
 });
 
 test("recovers a context-overflow failure with one compaction and one replay", async () => {
@@ -748,6 +853,50 @@ test("records the attempt when the recovery starts, not when it finishes", async
 	// an attempt recorded only when the compaction finished would admit it.
 	await expect(duplicate).resolves.toEqual({ kind: "exhausted" });
 	await expect(recovery).resolves.toMatchObject({ kind: "recovered" });
+});
+
+test("does not replay overflow after interruption before recovery compaction", async () => {
+	const targetReady = Promise.withResolvers<void>();
+	const replay = mock(async () => ({ kind: "started" }) as const);
+	const engine = createEngine(compactionHistory());
+	const recovery = engine.recoverOverflow({
+		...recoveryCommand({ replay, turnId: "turn-interrupted" }),
+		resolveTarget: async () => {
+			await targetReady.promise;
+			return recoveryTarget;
+		},
+	});
+	engine.beginExecution(
+		executionInput(agentTurnId("turn-interrupted"), Date.now())
+	);
+
+	expect(engine.interruptAll().kind).toBe("turn");
+	targetReady.resolve();
+
+	await expect(recovery).resolves.toEqual({ kind: "ineligible" });
+	expect(replay).not.toHaveBeenCalled();
+});
+
+test("suppresses overflow cancellation after interrupting recovery compaction", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
+	const replay = mock(async () => ({ kind: "started" }) as const);
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator)
+	);
+	const recovery = engine.recoverOverflow(
+		recoveryCommand({ replay, turnId: "turn-compaction" })
+	);
+	while (!engine.getSnapshot().isCompacting) {
+		await Promise.resolve();
+	}
+
+	expect(engine.interruptAll().kind).toBe("compaction");
+	release();
+
+	await expect(recovery).resolves.toEqual({ kind: "ineligible" });
+	expect(replay).not.toHaveBeenCalled();
+	expect(engine.getSnapshot().compactionError).toBeNull();
 });
 
 test("ignores a failure that is not a context overflow", async () => {
@@ -864,6 +1013,37 @@ test("replays only after the Agent Turn that proposed the recovery has ended", a
 
 	await expect(recovery).resolves.toMatchObject({ kind: "recovered" });
 	expect(replay).toHaveBeenCalledTimes(1);
+});
+
+test("does not replay overflow recovery after shutdown", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator)
+	);
+	const replay = mock(async () => ({ kind: "started" }) as const);
+	engine.beginExecution(executionInput(agentTurnId("turn-overflow"), 1));
+	const compactionStarted = new Promise<void>((resolve) => {
+		const unsubscribe = engine.subscribe(() => {
+			if (engine.getSnapshot().isCompacting) {
+				unsubscribe();
+				resolve();
+			}
+		});
+	});
+
+	const recovery = engine.recoverOverflow(
+		recoveryCommand({ replay, turnId: "turn-overflow" })
+	);
+	await compactionStarted;
+	release();
+	await engine.settleCompaction();
+	const shutdown = engine.shutdown();
+	engine.endExecution(agentTurnId("turn-overflow"));
+
+	await shutdown;
+	await expect(recovery).resolves.toEqual({ kind: "ineligible" });
+	expect(replay).not.toHaveBeenCalled();
 });
 
 /** One submission as a view sends it: a prompt, its selection, its Agent. */
@@ -1016,6 +1196,133 @@ const createQueuedRuntime = ({
 		targets,
 	};
 };
+
+test("keeps admission identities across a Steering delivery lifecycle", async () => {
+	const runtime = createQueuedRuntime({ boundary: true });
+	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+	const events: SessionSubmissionEvent[] = [];
+	const delivered = Promise.withResolvers<void>();
+	engine.onSubmissionEvent((event) => {
+		events.push(event);
+		if (event.kind === "delivered") {
+			delivered.resolve();
+		}
+	});
+
+	const started = engine.admit(sendInput({ userText: "one" }));
+	if (started.rejected) {
+		throw new Error(started.reason);
+	}
+	await runtime.started(1);
+
+	const steering = engine.admit(sendInput({ userText: "correction" }));
+	if (steering.rejected) {
+		throw new Error(steering.reason);
+	}
+	expect(steering.disposition).toBe("steering");
+	expect(steering.submissionId).not.toBe(started.submissionId);
+	expect(steering.messageId).not.toBe(started.messageId);
+	expect(events).toEqual([
+		{
+			kind: "started",
+			messageId: started.messageId,
+			submissionId: started.submissionId,
+			turnId: started.turnId,
+		},
+	]);
+
+	runtime.release();
+	await delivered.promise;
+	await engine.shutdown();
+
+	expect(events).toEqual([
+		{
+			kind: "started",
+			messageId: started.messageId,
+			submissionId: started.submissionId,
+			turnId: started.turnId,
+		},
+		{
+			kind: "delivered",
+			messageId: steering.messageId,
+			submissionId: steering.submissionId,
+			turnId: steering.turnId,
+		},
+	]);
+});
+
+test("starts a queued admission with the identity it reserved", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
+	const runtime = createQueuedRuntime();
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator),
+		{ runtime: runtime.runtime }
+	);
+	const events: SessionSubmissionEvent[] = [];
+	engine.onSubmissionEvent((event) => events.push(event));
+
+	const compaction = engine.compact({ model, trigger: "manual" });
+	const queued = engine.admit(sendInput({ userText: "queued" }));
+	if (queued.rejected) {
+		throw new Error(queued.reason);
+	}
+	expect(queued.disposition).toBe("queued");
+	expect(events).toEqual([]);
+
+	release();
+	await compaction;
+	await runtime.started(1);
+	expect(events).toHaveLength(1);
+	expect(events[0]).toMatchObject({
+		kind: "started",
+		messageId: queued.messageId,
+		submissionId: queued.submissionId,
+	});
+	expect(events[0]?.turnId).toBeDefined();
+	runtime.release();
+	await engine.shutdown();
+});
+
+test("recalls a queued admission before it creates a Session Record", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator)
+	);
+	const events: SessionSubmissionEvent[] = [];
+	engine.onSubmissionEvent((event) => events.push(event));
+
+	const compaction = engine.compact({ model, trigger: "manual" });
+	const queued = engine.admit(sendInput({ userText: "withdraw me" }));
+	if (queued.rejected) {
+		throw new Error(queued.reason);
+	}
+	const recalled = engine.recallWaitingMessages([queued.submissionId]);
+
+	expect(recalled).toHaveLength(1);
+	const recalledQueued = recalled[0];
+	if (recalledQueued === undefined || !("submissionId" in recalledQueued)) {
+		throw new Error("The queued submission was not recalled.");
+	}
+	expect(recalledQueued.submissionId).toBe(queued.submissionId);
+	expect(recalledQueued.messageId).toBe(queued.messageId);
+	expect(events).toHaveLength(1);
+	expect(events[0]).toMatchObject({
+		kind: "recalled",
+		messageId: queued.messageId,
+		reason: "recall",
+		submissionId: queued.submissionId,
+	});
+	expect(events[0]?.turnId).toBeDefined();
+	expect(userPrompts(engine.getSnapshot().transcript)).not.toContain(
+		"withdraw me"
+	);
+
+	release();
+	await compaction;
+	await engine.shutdown();
+});
 
 test("queues a submission that arrives while a compaction is in flight", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
@@ -1314,6 +1621,47 @@ test("delivers a submission accepted while a turn is running into that turn", as
 	// answers the message that opened it.
 	expect(steering?.messages[0]?.metadata?.joinedTurnId).toBe(steering?.turnId);
 	expect(runtime.boundaries[0]?.sourceUserMessageId).toBe(opening?.id);
+});
+
+test("waits for a delivered Steering checkpoint before shutdown settles", async () => {
+	const runtime = createQueuedRuntime({ boundary: true });
+	const commitStarted = Promise.withResolvers<void>();
+	const allowCommit = Promise.withResolvers<void>();
+	let steeringCommitted = false;
+	const engine = createEngine([], undefined, {
+		commitRecord: async ({ record }) => {
+			const message = record.messages[0];
+			if (
+				record.outcome.kind === "user" &&
+				message?.metadata?.joinedTurnId !== undefined
+			) {
+				commitStarted.resolve();
+				await allowCommit.promise;
+				steeringCommitted = true;
+			}
+		},
+		runtime: runtime.runtime,
+	});
+
+	const first = engine.send(sendInput({ userText: "one" }));
+	await runtime.started(1);
+	await engine.send(sendInput({ userText: "correction" }));
+	runtime.release();
+	await commitStarted.promise;
+	await first;
+
+	const shutdown = engine.shutdown();
+	const probe = Promise.withResolvers<"probe">();
+	queueMicrotask(() => probe.resolve("probe"));
+	const result = await Promise.race([
+		shutdown.then(() => "shutdown" as const),
+		probe.promise,
+	]);
+	expect(result).toBe("probe");
+
+	allowCommit.resolve();
+	await shutdown;
+	expect(steeringCommitted).toBe(true);
 });
 
 test("delivers Steering Messages in the order they were accepted", async () => {
@@ -1712,6 +2060,62 @@ test("retains a queued submission's attachments until its turn runs", async () =
 	expect(released).toEqual([["stored-blob"]]);
 });
 
+test("waits for queued attachment externalization before shutdown settles", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
+	const externalizeStarted = Promise.withResolvers<void>();
+	const allowExternalize = Promise.withResolvers<void>();
+	const runtime = createQueuedRuntime();
+	const engine = createEngine(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator),
+		{
+			attachments: {
+				externalize: async (messages) => {
+					externalizeStarted.resolve();
+					await allowExternalize.promise;
+					return [...messages];
+				},
+				hydrate: async ({ messages }) => [...messages],
+				release: () => undefined,
+				retain: () => undefined,
+			},
+			runtime: runtime.runtime,
+		}
+	);
+	const files: SessionFilePart[] = [
+		{
+			filename: "clipboard.png",
+			mediaType: "image/png",
+			type: "file",
+			url: "data:image/png;base64,AAAA",
+		},
+	];
+
+	const compaction = engine.compact({ model, trigger: "manual" });
+	const queued = engine.send(
+		sendInput({ composition: compositionOf("[Image 1]", files), files })
+	);
+	await externalizeStarted.promise;
+	engine.cancelCompaction();
+	const shutdown = engine.shutdown();
+	const probe = Promise.withResolvers<"probe">();
+	queueMicrotask(() => probe.resolve("probe"));
+	const result = await Promise.race([
+		shutdown.then(() => "shutdown" as const),
+		probe.promise,
+	]);
+	expect(result).toBe("probe");
+
+	allowExternalize.resolve();
+	release();
+	await expect(queued).resolves.toMatchObject({
+		rejected: true,
+		reason: "The session has ended.",
+	});
+	await expect(compaction).rejects.toMatchObject({ code: "cancelled" });
+	await shutdown;
+});
+
 test("refuses a submission that carries attachments into a running turn", async () => {
 	const runtime = createQueuedRuntime();
 	const engine = createEngine([], undefined, { runtime: runtime.runtime });
@@ -1773,22 +2177,41 @@ test("drops the queue and its attachment holds when the session shuts down", asy
 		sendInput({ composition: compositionOf("[Image 1]", files), files })
 	);
 
-	engine.shutdown();
+	const shutdown = engine.shutdown();
 
 	expect(released).toEqual([["dropped-blob"]]);
 	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
 	release();
-	await compaction;
+	await expect(compaction).rejects.toMatchObject({ code: "cancelled" });
+	await shutdown;
 });
 
 test("refuses a submission once the session has shut down", async () => {
 	const engine = createEngine([]);
-	engine.shutdown();
+	await engine.shutdown();
 
 	await expect(engine.send(sendInput())).resolves.toEqual({
 		rejected: true,
 		reason: "The session has ended.",
 	});
+});
+test("ignores runtime callbacks that arrive after shutdown", async () => {
+	const runtime = createQueuedRuntime();
+	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+	const send = engine.send(sendInput());
+	await runtime.started(1);
+
+	const shutdown = engine.shutdown();
+	const snapshotAtShutdown = engine.getSnapshot();
+	runtime.release();
+	await shutdown;
+	await send;
+
+	expect(engine.getSnapshot().context).toEqual(snapshotAtShutdown.context);
+	expect(engine.getSnapshot().transcript).toEqual(
+		snapshotAtShutdown.transcript
+	);
+	expect(engine.getSnapshot().viewState).toEqual(snapshotAtShutdown.viewState);
 });
 
 test("releases a recalled submission's attachment hold", async () => {
@@ -1940,6 +2363,66 @@ test("commits the accepted prompt and streams its Agent Turn", async () => {
 	expect(engine.getSnapshot().turnActive).toBe(false);
 });
 
+test("ignores late provider callbacks after local interruption", async () => {
+	const live = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const engine = createEngine([], undefined, {
+		runtime: {
+			requestOverheadTokens: () => 0,
+			run: async ({ callbacks, execution }) => {
+				callbacks.onEvent({
+					agentId: execution.agent,
+					sequence: 0,
+					startedAt: 1,
+					turnId: execution.turnId,
+					type: "agent-turn-started",
+				});
+				callbacks.onEvent({
+					delta: "before interruption",
+					sequence: 1,
+					turnId: execution.turnId,
+					type: "text-delta",
+				});
+				live.resolve();
+				await release.promise;
+				callbacks.onEvent({
+					delta: "late provider text",
+					sequence: 2,
+					turnId: execution.turnId,
+					type: "text-delta",
+				});
+				callbacks.onTerminal({
+					finishedAt: 2,
+					sequence: 3,
+					turnId: execution.turnId,
+					type: "agent-turn-completed",
+					usage: { inputTokens: 1, outputTokens: 1 },
+				});
+				return {};
+			},
+		},
+	});
+
+	const send = engine.send(sendInput());
+	await live.promise;
+	engine.interrupt();
+	release.resolve();
+	await send;
+
+	const assistant = engine
+		.getSnapshot()
+		.context.findLast(({ role }) => role === "assistant");
+	expect(assistant?.metadata?.interrupted).toBe(true);
+	expect(assistant?.parts).toContainEqual({
+		text: "before interruption",
+		type: "text",
+	});
+	expect(assistant?.parts).not.toContainEqual({
+		text: "late provider text",
+		type: "text",
+	});
+});
+
 test("retries a stored message without appending another user message", async () => {
 	const commits: SessionRecord[] = [];
 	const engine = createEngine([], undefined, {
@@ -2056,6 +2539,69 @@ test("interrupting a turn keeps the Assistant message it already streamed", asyn
 		text: "partial",
 		type: "text",
 	});
+});
+
+test("persists the interrupted Agent Turn terminal checkpoint", async () => {
+	const commits: SessionRecord[] = [];
+	const streaming = createStreamingRuntime();
+	const engine = createEngine([], undefined, {
+		commitRecord: async ({ record }) => {
+			commits.push(record);
+		},
+		runtime: {
+			requestOverheadTokens: () => 0,
+			run: async (request) => {
+				const result = await streaming.runtime.run(request);
+				await request.callbacks.commitTerminal(
+					fromPartial<SessionRecord>({
+						outcome: {
+							kind: "assistant",
+							terminal: { kind: "cancelled" },
+						},
+					})
+				);
+				return result;
+			},
+		},
+	});
+
+	const send = engine.send(sendInput());
+	await streaming.live;
+	engine.interrupt();
+	streaming.release();
+	await expect(send).resolves.toEqual({ rejected: false });
+
+	expect(commits.map(({ outcome }) => outcome.kind)).toEqual([
+		"user",
+		"assistant",
+	]);
+	expect(commits[1]?.outcome).toMatchObject({
+		kind: "assistant",
+		terminal: { kind: "cancelled" },
+	});
+});
+test("reflects a durable prompt when interruption lands during its commit", async () => {
+	const commitStarted = Promise.withResolvers<void>();
+	const releaseCommit = Promise.withResolvers<void>();
+	const engine = createEngine([], undefined, {
+		commitRecord: async ({ record }) => {
+			if (record.outcome.kind === "user") {
+				commitStarted.resolve();
+				await releaseCommit.promise;
+			}
+		},
+	});
+
+	const send = engine.send(sendInput({ userText: "durable prompt" }));
+	await commitStarted.promise;
+	engine.interrupt();
+	releaseCommit.resolve();
+
+	await expect(send).resolves.toMatchObject({ rejected: true });
+	expect(userPrompts(engine.getSnapshot().context)).toEqual(["durable prompt"]);
+	expect(userPrompts(engine.getSnapshot().transcript)).toEqual([
+		"durable prompt",
+	]);
 });
 
 test("ends the Agent Turn an aborted approval belongs to", async () => {

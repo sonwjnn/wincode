@@ -59,6 +59,17 @@ const initializeSchema = (sqlite: Database): void => {
 			edit_mode TEXT DEFAULT 'hashline' NOT NULL
 		);
 
+		CREATE TABLE IF NOT EXISTS session_lease (
+			session_id TEXT PRIMARY KEY NOT NULL REFERENCES session(id)
+				ON UPDATE CASCADE ON DELETE CASCADE,
+			owner_token TEXT NOT NULL,
+			expires_at INTEGER NOT NULL,
+			renewed_at INTEGER NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_session_lease_expiry
+			ON session_lease (expires_at);
+
 		CREATE TABLE IF NOT EXISTS file_snapshot (
 			path TEXT NOT NULL,
 			file_version TEXT NOT NULL,

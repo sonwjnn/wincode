@@ -22,6 +22,7 @@ import type {
 	QueuedSubmissionId,
 	SessionId,
 	SteeringMessageId,
+	SubmissionId,
 } from "@/shared/identifiers";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import type {
@@ -43,6 +44,34 @@ import type {
 } from "../session-operation";
 
 export type { SessionViewState } from "../hooks/runtime-turn";
+/**
+ * The disposition the Session Engine chose for one admitted Submission.
+ * Clients observe this immediately; execution remains asynchronous.
+ */
+export type SessionSubmissionDisposition = "started" | "steering" | "queued";
+
+export type SessionSubmissionAdmission =
+	| { readonly rejected: true; readonly reason: string }
+	| {
+			readonly rejected: false;
+			readonly disposition: SessionSubmissionDisposition;
+			readonly messageId: SessionMessageId;
+			readonly submissionId: SubmissionId;
+			readonly turnId?: AgentTurnId;
+	  };
+
+export type SessionSubmissionEvent = Readonly<{
+	kind: "started" | "delivered" | "recalled" | "failed";
+	messageId: SessionMessageId;
+	reason?: string;
+	submissionId: SubmissionId;
+	turnId?: AgentTurnId;
+}>;
+export type SessionInterruptResult = Readonly<{
+	approvalsSettled: number;
+	kind: "turn" | "compaction" | "none";
+	recalled: SessionWaitingMessage[];
+}>;
 
 /**
  * One live Agent Turn execution the Engine tracks, oldest first. Its view
@@ -50,6 +79,8 @@ export type { SessionViewState } from "../hooks/runtime-turn";
  * replaces the view of the execution that spawned it.
  */
 export type SessionExecution = ReadonlyDeep<{
+	/** The Submission that admitted this execution, when user-originated. */
+	submissionId?: SubmissionId;
 	/** The Agent the execution runs as. */
 	agent: AgentId;
 	/** The assistant Session Message the execution streams into. */
@@ -68,6 +99,14 @@ export type SessionExecution = ReadonlyDeep<{
 	variant?: ModelVariant;
 	viewState?: SessionViewState;
 }>;
+
+/** One result from the Engine's approval settlement command. */
+export type SessionApprovalResult =
+	| { readonly applied: true }
+	| {
+			readonly applied: false;
+			readonly reason?: "persistence-forbidden";
+	  };
 
 /** One settlement decision for an approval request. */
 export type SessionApprovalOutcome =
@@ -92,6 +131,8 @@ export type SessionQueuedSendInput = SessionSendInput & {
  */
 export type SessionQueuedSubmission = ReadonlyDeep<{
 	id: QueuedSubmissionId;
+	messageId: SessionMessageId;
+	submissionId: SubmissionId;
 	input: SessionQueuedSendInput;
 }>;
 
@@ -110,7 +151,10 @@ export type SessionSteeringSendInput = Readonly<{
 	resolvedAgent?: SessionResolvedAgent;
 	sessionModel: ChatModelSelection;
 	sessionVariant?: ModelVariant;
+	submissionId?: SubmissionId;
+	messageId?: SessionMessageId;
 	text: string;
+	turnId?: AgentTurnId;
 	variant?: ModelVariant;
 }>;
 
@@ -129,8 +173,10 @@ export type SessionWaitingMessage =
 	| SessionQueuedSubmission
 	| SessionSteeringMessage;
 
-/** The identity of one waiting user message in either lane. */
-export type SessionWaitingMessageId = QueuedSubmissionId | SteeringMessageId;
+export type SessionWaitingMessageId =
+	| QueuedSubmissionId
+	| SteeringMessageId
+	| SubmissionId;
 
 /**
  * One approval request the Engine owns until it settles. `target` is
@@ -173,6 +219,8 @@ export type SessionSnapshot = ReadonlyDeep<{
 	turnActive: boolean;
 	/** Session Transcript: the messages the session presents to the user. */
 	transcript: SessionMessage[];
+	/** Monotonic internal revision for durable transcript changes. */
+	transcriptRevision?: number;
 	/**
 	 * The live view of the most recently active execution, so the parent's view
 	 * returns when a delegated Subagent ends.
@@ -187,6 +235,7 @@ export type SessionExecutionInput = ReadonlyDeep<{
 	parent?: AgentTurn["delegation"];
 	sessionModel: ChatModelSelection;
 	sessionVariant?: ModelVariant;
+	submissionId?: SubmissionId;
 	/** The Session Context message this execution answers, when known. */
 	sourceUserMessageId?: SessionMessageId;
 	startedAt: number;
@@ -437,17 +486,27 @@ export type SessionCompactionCommand = ReadonlyDeep<{
 
 export type SessionEngine = Readonly<{
 	/**
-	 * Ends the Agent Turn an abort-settled approval belongs to: settles every
-	 * remaining pending request and preserves the interrupted Tool Call, so the
-	 * session stops waiting exactly once.
+	 * Admits a Submission into the Engine without waiting for preparation,
+	 * provider work, or terminal persistence.
 	 */
-	abortApprovalTurn: (toolCallId: ToolCallId) => void;
+	admit: (input: SessionSendInput) => SessionSubmissionAdmission;
+	/**
+	 * Writes one durable Session Record while the Engine still owns the
+	 * session. Late runtime callbacks are ignored after shutdown.
+	 */
+	commitRecord: (input: SessionCommitInput) => Promise<void>;
 	/** Replaces the Session Context. */
 	applyContext: (messages: readonly SessionMessage[]) => void;
 	/** Registers a starting Agent Turn execution and its parent linkage. */
 	beginExecution: (execution: SessionExecutionInput) => SessionExecution;
 	/** Cancels the Agent Turn the session is running. */
 	cancel: () => void;
+	/**
+	 * Ends the Agent Turn an abort-settled approval belongs to: settles every
+	 * remaining pending request and preserves the interrupted Tool Call, so the
+	 * session stops waiting exactly once.
+	 */
+	abortApprovalTurn: (toolCallId: ToolCallId) => void;
 	/**
 	 * Aborts the compaction command in flight and recalls the waiting user
 	 * messages with it: cancelling maintenance is still stopping work, and
@@ -470,6 +529,11 @@ export type SessionEngine = Readonly<{
 	endExecution: (turnId: AgentTurnId) => void;
 	getSnapshot: () => SessionSnapshot;
 	/**
+	 * Reports work that can still write or settle after shutdown starts, so the
+	 * Session Host can keep ownership until the shutdown promise is complete.
+	 */
+	hasPendingWork: () => boolean;
+	/**
 	 * Interrupts the Agent Turn the session is running: the send ends, the
 	 * assistant message it streams into keeps the interrupted Tool Call
 	 * visible, and everything waiting — the Steering Lane and the Submission
@@ -477,6 +541,8 @@ export type SessionEngine = Readonly<{
 	 * stopping work never strands waiting text.
 	 */
 	interrupt: (preserveToolCallId?: ToolCallId) => SessionWaitingMessage[];
+	/** Interrupts compaction or the active turn and recalls waiting work atomically. */
+	interruptAll: () => SessionInterruptResult;
 	/**
 	 * Merges messages into the Session Transcript: an existing message is
 	 * replaced by id, an unknown one is appended, and a compaction summary
@@ -486,15 +552,20 @@ export type SessionEngine = Readonly<{
 		messages: readonly SessionMessage[]
 	) => readonly SessionMessage[];
 	/**
-	 * Registers an approval request for the session's single settlement path.
-	 * The returned promise resolves once, when the request is settled by a panel
-	 * action, the close-approvals command, an abort, or shutdown.
+	 * Creates one pending approval owned by the Engine and settles it exactly
+	 * once through the returned promise.
 	 */
 	requestApproval: (
 		request: ToolApprovalRequest
 	) => Promise<SessionApprovalOutcome>;
-	/** Settles one pending approval; an already settled request is left alone. */
-	respondToApproval: (id: string, outcome: SessionApprovalOutcome) => void;
+	/**
+	 * Settles one pending approval; an already settled request is left alone.
+	 * A forbidden remembered grant leaves the request pending.
+	 */
+	respondToApproval: (
+		id: string,
+		outcome: SessionApprovalOutcome
+	) => SessionApprovalResult;
 	/**
 	 * Proposes the one recovery an Agent Turn may get from a provider refusal.
 	 * A failure that is not a context overflow, or one whose Model Target has no
@@ -534,11 +605,10 @@ export type SessionEngine = Readonly<{
 	settleCompaction: () => Promise<Error | null>;
 	/**
 	 * Ends the session: it cancels the Agent Turn the session is running,
-	 * settles every pending approval through the same path, and refuses later
-	 * requests, so nothing keeps running invisibly and nothing stays waiting on
-	 * a session that is gone.
+	 * settles every pending approval through the same path, refuses later
+	 * requests, and resolves after active durable cleanup has completed.
 	 */
-	shutdown: () => void;
+	shutdown: () => Promise<void>;
 	/**
 	 * Sends one submission as a Session Command. A submission that arrives
 	 * while the session is busy — a running Agent Turn or a compaction in
@@ -549,5 +619,8 @@ export type SessionEngine = Readonly<{
 	 * composition and Model Target selection it arrived with.
 	 */
 	send: (input: SessionSendInput) => Promise<SessionSendOutcome>;
+	onSubmissionEvent: (
+		listener: (event: SessionSubmissionEvent) => void
+	) => () => void;
 	subscribe: (listener: () => void) => () => void;
 }>;
