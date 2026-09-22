@@ -100,6 +100,14 @@ export type SessionExecution = ReadonlyDeep<{
 	viewState?: SessionViewState;
 }>;
 
+/** One result from the Engine's approval settlement command. */
+export type SessionApprovalResult =
+	| { readonly applied: true }
+	| {
+			readonly applied: false;
+			readonly reason?: "persistence-forbidden";
+	  };
+
 /** One settlement decision for an approval request. */
 export type SessionApprovalOutcome =
 	| { decision: "abort" }
@@ -544,15 +552,20 @@ export type SessionEngine = Readonly<{
 		messages: readonly SessionMessage[]
 	) => readonly SessionMessage[];
 	/**
-	 * Registers an approval request for the session's single settlement path.
-	 * The returned promise resolves once, when the request is settled by a panel
-	 * action, the close-approvals command, an abort, or shutdown.
+	 * Creates one pending approval owned by the Engine and settles it exactly
+	 * once through the returned promise.
 	 */
 	requestApproval: (
 		request: ToolApprovalRequest
 	) => Promise<SessionApprovalOutcome>;
-	/** Settles one pending approval; an already settled request is left alone. */
-	respondToApproval: (id: string, outcome: SessionApprovalOutcome) => void;
+	/**
+	 * Settles one pending approval; an already settled request is left alone.
+	 * A forbidden remembered grant leaves the request pending.
+	 */
+	respondToApproval: (
+		id: string,
+		outcome: SessionApprovalOutcome
+	) => SessionApprovalResult;
 	/**
 	 * Proposes the one recovery an Agent Turn may get from a provider refusal.
 	 * A failure that is not a context overflow, or one whose Model Target has no

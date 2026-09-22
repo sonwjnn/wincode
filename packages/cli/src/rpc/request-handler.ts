@@ -45,6 +45,7 @@ export type RpcRequestHandlerContext = Readonly<{
 	providedComposer?: (input: RpcCompositionInput) => Promise<RpcAssembly>;
 	requireBound: () => SessionHost;
 	requireInitialized: () => void;
+	resolveApprovalId: (wireApprovalId: string) => string | undefined;
 	sendInput: (
 		selection: Selection,
 		text: string,
@@ -65,6 +66,7 @@ export const createRpcRequestHandler = (
 		providedComposer,
 		requireBound,
 		requireInitialized,
+		resolveApprovalId,
 		sendInput,
 		state,
 	} = context;
@@ -503,55 +505,54 @@ export const createRpcRequestHandler = (
 		if (request.method === "session/respondToApproval") {
 			const activeHost = requireBound();
 			const params = paramsOf(request);
-			const approvalId = stringValue(params.approvalId);
-			if (approvalId === undefined) {
+			const wireApprovalId = stringValue(params.approvalId);
+			if (wireApprovalId === undefined) {
 				throw rpcInvalidParams("approvalId is required.");
 			}
-			const approval = activeHost
-				.getSnapshot()
-				.approvals.find(
-					(candidate) =>
-						candidate.id === approvalId && candidate.decision === undefined
-				);
-			if (approval === undefined) {
+			const approvalId = resolveApprovalId(wireApprovalId);
+			if (approvalId === undefined) {
 				return success(request.id, { applied: false });
 			}
-			const decision = params.decision;
-			if (decision === "alwaysAllow" && approval.request.safety === true) {
-				throw appError(
-					"approval_persistence_forbidden",
-					"This approval cannot be persisted."
-				);
-			}
-			if (decision === "allowOnce" || decision === "alwaysAllow") {
-				activeHost.engine.respondToApproval(approvalId, {
+			if (params.decision === "allowOnce") {
+				const result = activeHost.engine.respondToApproval(approvalId, {
 					decision: "allow",
-					remember: decision === "alwaysAllow",
+					remember: false,
 				});
-				return success(request.id, { applied: true });
+				return success(request.id, { applied: result.applied });
 			}
-			if (decision === "reject") {
+			if (params.decision === "alwaysAllow") {
+				const result = activeHost.engine.respondToApproval(approvalId, {
+					decision: "allow",
+					remember: true,
+				});
+				if (!result.applied && result.reason === "persistence-forbidden") {
+					throw appError(
+						"approval_persistence_forbidden",
+						"This approval cannot be persisted."
+					);
+				}
+				return success(request.id, { applied: result.applied });
+			}
+			if (params.decision === "reject") {
 				if (
 					params.feedback !== undefined &&
 					typeof params.feedback !== "string"
 				) {
 					throw rpcInvalidParams("feedback must be a string.");
 				}
-				activeHost.engine.respondToApproval(approvalId, {
+				const result = activeHost.engine.respondToApproval(approvalId, {
 					decision: "reject",
 					...(params.feedback === undefined
 						? {}
 						: { feedback: params.feedback }),
 				});
-				return success(request.id, { applied: true });
+				return success(request.id, { applied: result.applied });
 			}
-			if (decision === "abort") {
-				if (approval.request.toolCallId === undefined) {
-					activeHost.engine.interruptAll();
-				} else {
-					activeHost.engine.abortApprovalTurn(approval.request.toolCallId);
-				}
-				return success(request.id, { applied: true });
+			if (params.decision === "abort") {
+				const result = activeHost.engine.respondToApproval(approvalId, {
+					decision: "abort",
+				});
+				return success(request.id, { applied: result.applied });
 			}
 			throw rpcInvalidParams("Unknown approval decision.");
 		}

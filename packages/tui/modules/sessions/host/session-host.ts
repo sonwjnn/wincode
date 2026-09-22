@@ -189,8 +189,10 @@ export const createSessionHost = async ({
 			if (snapshot.isCompacting) {
 				activeEngine.cancelCompaction();
 			}
+			// Cancel rather than interrupt: the turn must unwind through its
+			// pipeline so its pending durable checkpoint holds the Session Lease.
 			if (snapshot.turnActive) {
-				activeEngine.interrupt();
+				activeEngine.cancel();
 			}
 			engineShutdown = activeEngine.shutdown();
 		}

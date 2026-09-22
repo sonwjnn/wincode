@@ -51,6 +51,39 @@ export async function runRpc({
 	const output = new SerializedWriter(stdout);
 	const processId = randomUUID();
 	const seenRequestIds = new Set<string>();
+	const approvalWireIds = new WeakMap<
+		SessionSnapshot["approvals"][number],
+		string
+	>();
+	const approvalEngineIdsByWire = new Map<string, string>();
+	const activeApprovalWireIds = new Map<string, string>();
+	const wireApprovalId = (
+		approval: SessionSnapshot["approvals"][number]
+	): string => {
+		const existing = approvalWireIds.get(approval);
+		if (existing !== undefined) {
+			return existing;
+		}
+		const previousWireId = activeApprovalWireIds.get(approval.id);
+		if (previousWireId !== undefined) {
+			approvalEngineIdsByWire.delete(previousWireId);
+		}
+		const wireId = `approval-${randomUUID()}`;
+		approvalWireIds.set(approval, wireId);
+		activeApprovalWireIds.set(approval.id, wireId);
+		approvalEngineIdsByWire.set(wireId, approval.id);
+		return wireId;
+	};
+	const retireSettledApprovalWireIds = (
+		pendingApprovalIds: ReadonlySet<string>
+	): void => {
+		for (const [engineApprovalId, wireId] of activeApprovalWireIds) {
+			if (!pendingApprovalIds.has(engineApprovalId)) {
+				activeApprovalWireIds.delete(engineApprovalId);
+				approvalEngineIdsByWire.delete(wireId);
+			}
+		}
+	};
 	const deferred: Array<DeferredNotification | undefined> = [];
 	let deferredHead = 0;
 	let deferredBytes = 0;
@@ -223,9 +256,16 @@ export async function runRpc({
 		const primary = [...snapshot.executions]
 			.reverse()
 			.find((execution) => execution.parent === undefined);
-		const approvals = snapshot.approvals
-			.filter((approval) => approval.decision === undefined)
-			.map(projectApproval);
+		const pendingApprovals = snapshot.approvals.filter(
+			(approval) => approval.decision === undefined
+		);
+		const pendingApprovalIds = new Set(
+			pendingApprovals.map((approval) => approval.id)
+		);
+		retireSettledApprovalWireIds(pendingApprovalIds);
+		const approvals = pendingApprovals.map((approval) =>
+			projectApproval(approval, wireApprovalId(approval))
+		);
 		const steering = snapshot.steeringMessages.map(projectSteering);
 		const queue = snapshot.queuedSubmissions.map(projectQueued);
 		const transcriptSignature =
@@ -360,6 +400,8 @@ export async function runRpc({
 		providedComposer,
 		requireBound,
 		requireInitialized,
+		resolveApprovalId: (wireApprovalId) =>
+			approvalEngineIdsByWire.get(wireApprovalId),
 		sendInput,
 		state,
 	});

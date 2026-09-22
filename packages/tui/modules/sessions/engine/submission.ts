@@ -65,13 +65,13 @@ export type SubmissionDeps = Readonly<{
 	beginExecution: (input: SessionExecutionInput) => SessionExecution;
 	compact: (command: SessionCompactionCommand) => Promise<CompactSessionResult>;
 	endExecution: (turnId: AgentTurnId) => void;
-	/** Reports whether the Engine has closed its authority. */
 	isShutDown: () => boolean;
 	/**
 	 * Hands anything still waiting in the Steering Lane to the Submission Queue
-	 * when the turn that would have delivered it ends.
+	 * when the turn that would have delivered it ends. Only that turn's lane
+	 * entries are moved, so a newer turn can start while this one unwinds.
 	 */
-	fallbackSteeringMessages: () => void;
+	fallbackSteeringMessages: (turnId?: AgentTurnId) => void;
 	getContext: () => readonly SessionMessage[];
 	getTranscript: () => readonly SessionMessage[];
 	mergeTranscript: (
@@ -110,6 +110,18 @@ class SessionClosedError extends Error {
 		this.name = "SessionClosedError";
 	}
 }
+class SessionSendCancelledError extends Error {
+	constructor() {
+		super("The Session send was cancelled.");
+		this.name = "SessionSendCancelledError";
+	}
+}
+
+const assertSendNotCancelled = (signal: AbortSignal): void => {
+	if (signal.aborted) {
+		throw new SessionSendCancelledError();
+	}
+};
 
 const assertSessionOpen = (deps: Pick<SubmissionDeps, "isShutDown">): void => {
 	if (deps.isShutDown()) {
@@ -266,12 +278,12 @@ const prepareSubmitContext = async ({
 	signal,
 }: {
 	activeMessages: readonly SessionMessage[];
-	armSkill: () => Promise<SessionSkillCatalog>;
+	armSkill: (signal: AbortSignal) => Promise<SessionSkillCatalog>;
 	input: SessionSendInput;
 	resolveSkill: SessionEnginePorts["skills"]["resolveSkill"];
 	signal: AbortSignal;
 }): Promise<SubmitContextResult> => {
-	const armedSkill = await armSkill();
+	const armedSkill = await armSkill(signal);
 	if (signal.aborted) {
 		return { kind: "cancelled" };
 	}
@@ -437,7 +449,7 @@ const prepareSessionSubmission = async ({
 	resolveSkill,
 	signal,
 }: {
-	armSkill: () => Promise<SessionSkillCatalog>;
+	armSkill: (signal: AbortSignal) => Promise<SessionSkillCatalog>;
 	deps: SubmissionDeps;
 	input: SessionSendInput;
 	resolveSkill: SessionEnginePorts["skills"]["resolveSkill"];
@@ -618,6 +630,51 @@ const commitPromptRecord = async ({
 	} catch (error) {
 		return isError(error) ? error : new Error("Could not save the prompt.");
 	}
+};
+const commitPreparedPrompt = async ({
+	deps,
+	input,
+	message,
+	signal,
+}: {
+	deps: SubmissionDeps;
+	input: SessionSendInput;
+	message: SessionMessage;
+	signal: AbortSignal;
+}): Promise<Error | null> => {
+	assertSendNotCancelled(signal);
+	const promptError = await commitPromptRecord({
+		agent: input.agent,
+		commitRecord: deps.ports.commitRecord,
+		message,
+		model: input.model,
+		sessionId: deps.sessionId,
+		sessionModel: input.sessionModel,
+		...omitUndefined({
+			sessionVariant: input.sessionVariant,
+			variant: input.variant,
+		}),
+	});
+	assertSessionOpen(deps);
+	return promptError;
+};
+
+const applyPreparedMessages = (
+	deps: SubmissionDeps,
+	signal: AbortSignal,
+	messages: readonly SessionMessage[],
+	allowCancelled: boolean
+): void => {
+	if (!allowCancelled) {
+		assertSendNotCancelled(signal);
+	}
+	assertSessionOpen(deps);
+	deps.applyContext(messages);
+	deps.mergeTranscript(messages);
+	if (!allowCancelled) {
+		assertSendNotCancelled(signal);
+	}
+	assertSessionOpen(deps);
 };
 
 /**
@@ -981,16 +1038,29 @@ const runTurn = async ({
 	modelMessages: readonly SessionMessage[];
 	signal: AbortSignal;
 }): Promise<SessionSendOutcome> => {
-	const commitRecord = (record: SessionRecord) =>
-		commitExecutionRecord(deps, execution, record);
+	let executionActive = true;
+	const turnIsLive = (): boolean =>
+		executionActive && !deps.isShutDown() && !signal.aborted;
+	const commitRecord = async (record: SessionRecord): Promise<void> => {
+		if (!turnIsLive()) {
+			return;
+		}
+		await commitExecutionRecord(deps, execution, record);
+	};
+	const commitTerminal = async (record: SessionRecord): Promise<void> => {
+		if (!executionActive || deps.isShutDown()) {
+			return;
+		}
+		await commitExecutionRecord(deps, execution, record);
+	};
 	let executionStarted = false;
 	let terminalObserved = false;
 	let terminalFailure: OperationalFailure | undefined;
 	const callbacks: SessionTurnCallbacks = {
-		commitTerminal: commitRecord,
+		commitTerminal,
 		commitToolCall: commitRecord,
 		onEvent: (event) => {
-			if (deps.isShutDown()) {
+			if (!turnIsLive()) {
 				return;
 			}
 			executionStarted = true;
@@ -1006,7 +1076,7 @@ const runTurn = async ({
 			deps.mergeTranscript([projected.message]);
 		},
 		onTerminal: (event) => {
-			if (deps.isShutDown()) {
+			if (!turnIsLive()) {
 				return;
 			}
 			executionStarted = true;
@@ -1022,7 +1092,7 @@ const runTurn = async ({
 			deps.mergeTranscript(messages);
 		},
 		onViewState: (viewState) => {
-			if (deps.isShutDown()) {
+			if (!turnIsLive()) {
 				return;
 			}
 			deps.setExecutionViewState(execution.turnId, viewState);
@@ -1039,6 +1109,9 @@ const runTurn = async ({
 			signal,
 		});
 		assertSessionOpen(deps);
+		if (!turnIsLive()) {
+			return { rejected: false };
+		}
 		const outcome = await deps.ports.runtime.run({
 			armedSkill: context.armedSkill,
 			callbacks,
@@ -1048,9 +1121,9 @@ const runTurn = async ({
 			...omitUndefined({ skillRequest: context.skill }),
 			signal,
 			takeSteeringMessages: () =>
-				deps.isShutDown() ? [] : deps.takeSteeringMessages(execution),
+				turnIsLive() ? deps.takeSteeringMessages(execution) : [],
 		});
-		if (deps.isShutDown()) {
+		if (!turnIsLive()) {
 			return { rejected: false };
 		}
 		if (isUndefined(outcome.error)) {
@@ -1076,7 +1149,7 @@ const runTurn = async ({
 			terminalObserved,
 		});
 	} catch (error) {
-		if (deps.isShutDown()) {
+		if (deps.isShutDown() || signal.aborted || !executionActive) {
 			return { rejected: false };
 		}
 		return handleTurnFailure({
@@ -1093,6 +1166,7 @@ const runTurn = async ({
 			terminalObserved,
 		});
 	} finally {
+		executionActive = false;
 		deps.endExecution(execution.turnId);
 	}
 };
@@ -1114,19 +1188,25 @@ export type SubmissionPipeline = Readonly<{
 export const createSubmissionPipeline = (
 	deps: SubmissionDeps
 ): SubmissionPipeline => {
-	const armSkill = async (): Promise<SessionSkillCatalog> => {
+	const armSkill = async (
+		signal: AbortSignal
+	): Promise<SessionSkillCatalog> => {
 		const catalog = await deps.ports.skills.createTurnSkill();
-		if (!deps.isShutDown()) {
-			deps.setCatalogDiagnostic(catalog.diagnostic);
+		if (signal.aborted || deps.isShutDown()) {
+			return catalog;
 		}
+		deps.setCatalogDiagnostic(catalog.diagnostic);
 		return catalog;
 	};
 	const send = async (
 		input: SessionSendInput,
 		signal: AbortSignal
+		// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Each cancellation checkpoint fences one awaited state mutation.
 	): Promise<SessionSendOutcome> => {
-		if (deps.isShutDown()) {
-			return { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
+		if (deps.isShutDown() || signal.aborted) {
+			return signal.aborted
+				? sessionSendCancelled(signal)
+				: { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
 		}
 		deps.setCompactionError(null);
 		deps.setTurnActive(true);
@@ -1139,6 +1219,7 @@ export const createSubmissionPipeline = (
 				resolveSkill: deps.ports.skills.resolveSkill,
 				signal,
 			});
+			assertSendNotCancelled(signal);
 			assertSessionOpen(deps);
 			if (prepared.kind !== "ready") {
 				if (prepared.kind === "rejected" && !isUndefined(prepared.error)) {
@@ -1147,30 +1228,23 @@ export const createSubmissionPipeline = (
 				return sessionOutcomeForPreparation(prepared, signal);
 			}
 			const { attachmentBudget, context, messages: modelMessages } = prepared;
-			if (!isUndefined(prepared.newMessage)) {
-				const promptError = await commitPromptRecord({
-					agent: input.agent,
-					commitRecord: deps.ports.commitRecord,
+			const hasCommittedPrompt = !isUndefined(prepared.newMessage);
+			if (hasCommittedPrompt) {
+				const promptError = await commitPreparedPrompt({
+					deps,
+					input,
 					message: prepared.newMessage,
-					model: input.model,
-					sessionId: deps.sessionId,
-					sessionModel: input.sessionModel,
-					...omitUndefined({
-						sessionVariant: input.sessionVariant,
-						variant: input.variant,
-					}),
+					signal,
 				});
-				assertSessionOpen(deps);
 				if (!isNull(promptError)) {
 					deps.setError(promptError);
 					return { rejected: true, reason: "Could not save the prompt." };
 				}
 			}
-			assertSessionOpen(deps);
-			deps.applyContext(modelMessages);
-			assertSessionOpen(deps);
-			deps.mergeTranscript(modelMessages);
-			assertSessionOpen(deps);
+			applyPreparedMessages(deps, signal, modelMessages, hasCommittedPrompt);
+			if (signal.aborted) {
+				return sessionSendCancelled(signal);
+			}
 			const execution = deps.beginExecution(
 				executionInputForSubmit({
 					input,
@@ -1188,6 +1262,9 @@ export const createSubmissionPipeline = (
 				signal,
 			});
 		} catch (error) {
+			if (error instanceof SessionSendCancelledError) {
+				return sessionSendCancelled(signal);
+			}
 			if (error instanceof SessionClosedError) {
 				return { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
 			}
@@ -1196,8 +1273,8 @@ export const createSubmissionPipeline = (
 			// A turn that ended without delivering its Steering Lane — a
 			// tool-less one ran exactly one Model Step — hands it to the
 			// Submission Queue before the session reports the turn over, so the
-			// messages run as their own Agent Turns and nothing is dropped.
-			deps.fallbackSteeringMessages();
+			// lane remains ordered even when the turn was interrupted.
+			deps.fallbackSteeringMessages(input.turnId);
 			deps.setTurnActive(false);
 		}
 	};

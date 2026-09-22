@@ -10,6 +10,7 @@ export { resolveWorkspaceRoot } from "@wincode/coding-tools/workspace";
 export { toSessionId, toSubmissionId } from "@/shared/identifiers";
 export type { Connections } from "../../connections/contract";
 export type {
+	SessionApprovalResult,
 	SessionInterruptResult,
 	SessionQueuedSubmission,
 	SessionSnapshot,

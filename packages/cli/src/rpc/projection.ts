@@ -511,9 +511,10 @@ export const projectExecution = (
 });
 
 export const projectApproval = (
-	approval: SessionSnapshot["approvals"][number]
+	approval: SessionSnapshot["approvals"][number],
+	wireApprovalId: string
 ): Record<string, unknown> => ({
-	approvalId: approval.id,
+	approvalId: wireApprovalId,
 	description: approval.request.description,
 	identity: safeJson(approval.request.identity),
 	input: safeJson(approval.request.input),

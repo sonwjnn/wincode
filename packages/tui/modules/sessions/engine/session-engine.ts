@@ -52,6 +52,7 @@ import {
 import { interruptSessionContext } from "./turn";
 import type {
 	SessionApprovalOutcome,
+	SessionApprovalResult,
 	SessionCompactionCommand,
 	SessionEngine,
 	SessionEngineOptions,
@@ -193,12 +194,20 @@ export const createSessionEngine = ({
 	 * recovery, and no send or command can reset an attempt that is under way.
 	 */
 	const recoveryAttempts = new Set<SessionMessageId>();
+	/** Monotonic fence for recovery work after any local interruption. */
+	let interruptEpoch = 0;
+	let activeOverflowRecoveries = 0;
+
 	/**
 	 * The waiters of each live execution, resolved when that execution ends, so
 	 * work that must not run during an Agent Turn can wait for it to end instead
 	 * of guessing whether it has.
 	 */
 	const executionEndWaiters = new Map<AgentTurnId, (() => void)[]>();
+	/** Assigned once the operation exists so approval aborts use its command. */
+	let interruptApprovalTurn: (toolCallId?: ToolCallId) => void = () =>
+		undefined;
+
 	let approvalCounter = 0;
 	let isShutDown = false;
 	const shutdownController = new AbortController();
@@ -275,22 +284,40 @@ export const createSessionEngine = ({
 			}
 		}
 	};
-	/** Settles one request: publishes its decision and wakes its waiter, once. */
+	/** Settles one request through the Engine's single authority path. */
 	const settleApproval = (
 		id: string,
 		outcome: SessionApprovalOutcome
-	): void => {
+	): SessionApprovalResult => {
 		const resolveApproval = pendingApprovals.get(id);
-		if (isUndefined(resolveApproval)) {
-			return;
+		const approval = state.approvals.find(
+			(candidate) => candidate.id === id && isUndefined(candidate.decision)
+		);
+		if (isUndefined(resolveApproval) || approval === undefined) {
+			return { applied: false };
+		}
+		if (
+			outcome.decision === "allow" &&
+			outcome.remember &&
+			approval.request.safety === true
+		) {
+			return {
+				applied: false,
+				reason: "persistence-forbidden",
+			};
 		}
 		pendingApprovals.delete(id);
 		publish({
-			approvals: state.approvals.map((approval) =>
-				approval.id === id ? { ...approval, decision: outcome } : approval
+			approvals: state.approvals.map((candidate) =>
+				candidate.id === id ? { ...candidate, decision: outcome } : candidate
 			),
 		});
+		if (outcome.decision === "abort") {
+			closeApprovals();
+			interruptApprovalTurn(approval.request.toolCallId);
+		}
 		resolveApproval(outcome);
+		return { applied: true };
 	};
 	const requestApproval = (
 		request: ToolApprovalRequest
@@ -613,6 +640,7 @@ export const createSessionEngine = ({
 	 */
 	const runOverflowRecovery = async (
 		command: SessionOverflowRecoveryCommand
+		// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Recovery owns independent eligibility, compaction, and replay failure boundaries.
 	): Promise<SessionOverflowRecoveryOutcome> => {
 		if (!isContextOverflowFailure(command.error)) {
 			return { kind: "ineligible" };
@@ -625,10 +653,14 @@ export const createSessionEngine = ({
 			return { kind: "exhausted" };
 		}
 		recoveryAttempts.add(command.originalMessageId);
+		const recoveryEpoch = interruptEpoch;
 		let target: SessionOverflowRecoveryTarget | null;
 		try {
 			target = await command.resolveTarget();
 		} catch (error) {
+			if (isShutDown || recoveryEpoch !== interruptEpoch) {
+				return { kind: "ineligible" };
+			}
 			return failRecovery(
 				recoveryError(
 					"Context overflow recovery could not resolve its compaction settings.",
@@ -639,6 +671,9 @@ export const createSessionEngine = ({
 		if (isNull(target)) {
 			// Nothing was tried, so the message keeps its one attempt.
 			recoveryAttempts.delete(command.originalMessageId);
+			return { kind: "ineligible" };
+		}
+		if (isShutDown || recoveryEpoch !== interruptEpoch) {
 			return { kind: "ineligible" };
 		}
 		let result: CompactSessionResult;
@@ -653,6 +688,9 @@ export const createSessionEngine = ({
 				...omitUndefined({ variant: target.variant }),
 			});
 		} catch (error) {
+			if (isShutDown || recoveryEpoch !== interruptEpoch) {
+				return { kind: "ineligible" };
+			}
 			return failRecovery(
 				error instanceof OverflowRecoveryError
 					? error
@@ -662,12 +700,10 @@ export const createSessionEngine = ({
 						)
 			);
 		}
-		// The replay waits for the failed execution so it cannot overlap its
-		// interrupted turn.
 		await waitForExecutionEnd(command.turnId);
-		// Shutdown can race the recovery's execution-end wake-up. The replay is
-		// fenced again here because its callback bypasses the public send entrypoint.
-		if (isShutDown) {
+		// The replay waits for the failed execution so it cannot overlap its
+		// interrupted turn or outlive a local interruption.
+		if (isShutDown || recoveryEpoch !== interruptEpoch) {
 			return { kind: "ineligible" };
 		}
 		let replayOutcome: SessionOverflowReplayOutcome;
@@ -676,12 +712,18 @@ export const createSessionEngine = ({
 				originalMessageId: command.originalMessageId,
 			});
 		} catch (error) {
+			if (isShutDown || recoveryEpoch !== interruptEpoch) {
+				return { kind: "ineligible" };
+			}
 			return failRecovery(
 				recoveryError(
 					"Context overflow recovery could not replay the original user message.",
 					error
 				)
 			);
+		}
+		if (isShutDown || recoveryEpoch !== interruptEpoch) {
+			return { kind: "ineligible" };
 		}
 		if (replayOutcome.kind === "refused") {
 			return failRecovery(
@@ -700,10 +742,20 @@ export const createSessionEngine = ({
 		if (isShutDown) {
 			return Promise.resolve({ kind: "ineligible" });
 		}
-		return runOverflowRecovery(command);
+		activeOverflowRecoveries += 1;
+		const recovery = runOverflowRecovery(command);
+		void recovery.then(
+			() => {
+				activeOverflowRecoveries -= 1;
+			},
+			() => {
+				activeOverflowRecoveries -= 1;
+			}
+		);
+		return recovery;
 	};
 
-	/** Drops an execution and wakes everything waiting for it to end. */
+	/** Ends an execution and wakes everything waiting for it to end. */
 	const endExecution = (turnId: AgentTurnId): void => {
 		const waiters = executionEndWaiters.get(turnId);
 		if (!isUndefined(waiters)) {
@@ -924,12 +976,15 @@ export const createSessionEngine = ({
 	 * order is kept, so nothing is silently dropped and every message runs as
 	 * its own Agent Turn.
 	 */
-	const fallbackSteeringMessages = (): void => {
+	const fallbackSteeringMessages = (turnId?: AgentTurnId): void => {
 		if (isShutDown || state.steeringMessages.length === 0) {
 			return;
 		}
-		const waiting: SessionQueuedSubmission[] = state.steeringMessages.map(
-			({ input }) => {
+		const isOwnedByTurn = (message: SessionSteeringMessage): boolean =>
+			turnId === undefined || message.input.turnId === turnId;
+		const waiting = state.steeringMessages
+			.filter(isOwnedByTurn)
+			.map(({ input }) => {
 				const messageId =
 					input.messageId ?? toSessionMessageId(`msg-${crypto.randomUUID()}`);
 				const submissionId =
@@ -957,11 +1012,15 @@ export const createSessionEngine = ({
 						}),
 					},
 				};
-			}
-		);
+			});
+		if (waiting.length === 0) {
+			return;
+		}
 		publish({
 			queuedSubmissions: [...state.queuedSubmissions, ...waiting],
-			steeringMessages: [],
+			steeringMessages: state.steeringMessages.filter(
+				(message) => !isOwnedByTurn(message)
+			),
 		});
 	};
 
@@ -1078,6 +1137,20 @@ export const createSessionEngine = ({
 			trackBackgroundTask(drainQueuedSubmissions());
 		}
 	};
+	/**
+	 * Interrupts local Engine authority immediately while the provider may still
+	 * be physically unwinding. The execution signal fences every late callback.
+	 */
+	const interruptActiveWork = (preserveToolCallId?: ToolCallId): void => {
+		interruptEpoch += 1;
+		operation.interrupt(preserveToolCallId);
+		for (const execution of [...state.executions]) {
+			endExecution(execution.turnId);
+		}
+		setTurnActive(false);
+	};
+	interruptApprovalTurn = interruptActiveWork;
+
 	/** Releases the blobs of compositions nothing holds any more. */
 	const releaseQueuedAttachments = (
 		submissions: readonly SessionQueuedSubmission[]
@@ -1123,7 +1196,8 @@ export const createSessionEngine = ({
 			isShutDown ||
 			laneRuns > 0 ||
 			state.turnActive ||
-			state.isCompacting
+			state.isCompacting ||
+			compactionCommand !== undefined
 		) {
 			return;
 		}
@@ -1332,6 +1406,7 @@ export const createSessionEngine = ({
 		draining ||
 		state.turnActive ||
 		state.isCompacting ||
+		compactionCommand !== undefined ||
 		state.queuedSubmissions.length > 0;
 	const prepareAdmission = (
 		input: SessionSendInput,
@@ -1451,23 +1526,30 @@ export const createSessionEngine = ({
 		const approvalsSettled = state.approvals.filter(
 			(approval) => approval.decision === undefined
 		).length;
+		const hasCompaction = state.isCompacting || compactionCommand !== undefined;
+		const hasTurn =
+			state.turnActive ||
+			laneRuns > 0 ||
+			state.executions.length > 0 ||
+			activeOverflowRecoveries > 0;
 		let kind: SessionInterruptResult["kind"] = "none";
-		if (state.isCompacting) {
+		if (hasCompaction) {
 			kind = "compaction";
-		} else if (state.turnActive || laneRuns > 0) {
+		} else if (hasTurn) {
 			kind = "turn";
 		}
 		closeApprovals();
-		let recalled: SessionWaitingMessage[];
-		if (kind === "compaction") {
+		if (hasCompaction) {
 			compactionCommand?.abort();
-			recalled = recallWaitingMessages();
-		} else if (kind === "turn") {
-			operation.interrupt();
-			recalled = recallWaitingMessages();
-		} else {
-			recalled = recallWaitingMessages();
+			setCompacting(false);
+			if (!hasTurn) {
+				interruptEpoch += 1;
+			}
 		}
+		if (hasTurn) {
+			interruptActiveWork();
+		}
+		const recalled = recallWaitingMessages();
 		return { approvalsSettled, kind, recalled };
 	};
 	const hasPendingWork = (): boolean =>
@@ -1478,6 +1560,7 @@ export const createSessionEngine = ({
 		pendingApprovals.size > 0 ||
 		pendingDurableWrites.size > 0 ||
 		pendingBackgroundTasks.size > 0 ||
+		activeOverflowRecoveries > 0 ||
 		pendingAttachmentControllers.size > 0 ||
 		state.turnActive ||
 		state.isCompacting ||
@@ -1523,18 +1606,26 @@ export const createSessionEngine = ({
 	return {
 		admit,
 		abortApprovalTurn: (toolCallId) => {
-			// The aborted request already settled in the Engine, so its siblings
-			// are closed as rejects and the turn stops exactly once: a second
-			// abort trigger finds nothing pending to handle.
 			closeApprovals();
-			interruptLatestAssistantMessage(toolCallId);
+			interruptActiveWork(toolCallId);
 		},
 		applyContext,
 		commitRecord,
 		beginExecution,
-		cancel: () => operation.cancel(),
+		cancel: () => {
+			interruptEpoch += 1;
+			operation.cancel();
+		},
 		cancelCompaction: () => {
+			if (
+				compactionCommand !== undefined ||
+				state.isCompacting ||
+				activeOverflowRecoveries > 0
+			) {
+				interruptEpoch += 1;
+			}
 			compactionCommand?.abort();
+			setCompacting(false);
 			return recallWaitingMessages();
 		},
 		closeApprovals,
@@ -1543,7 +1634,8 @@ export const createSessionEngine = ({
 		endExecution,
 		getSnapshot: () => state,
 		interrupt: (preserveToolCallId) => {
-			operation.interrupt(preserveToolCallId);
+			closeApprovals();
+			interruptActiveWork(preserveToolCallId);
 			return recallWaitingMessages();
 		},
 		interruptAll,
