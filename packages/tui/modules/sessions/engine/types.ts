@@ -22,6 +22,7 @@ import type {
 	QueuedSubmissionId,
 	SessionId,
 	SteeringMessageId,
+	SubmissionId,
 } from "@/shared/identifiers";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import type {
@@ -43,6 +44,34 @@ import type {
 } from "../session-operation";
 
 export type { SessionViewState } from "../hooks/runtime-turn";
+/**
+ * The disposition the Session Engine chose for one admitted Submission.
+ * Clients observe this immediately; execution remains asynchronous.
+ */
+export type SessionSubmissionDisposition = "started" | "steering" | "queued";
+
+export type SessionSubmissionAdmission =
+	| { readonly rejected: true; readonly reason: string }
+	| {
+			readonly rejected: false;
+			readonly disposition: SessionSubmissionDisposition;
+			readonly messageId: SessionMessageId;
+			readonly submissionId: SubmissionId;
+			readonly turnId?: AgentTurnId;
+	  };
+
+export type SessionSubmissionEvent = Readonly<{
+	kind: "started" | "delivered" | "recalled" | "failed";
+	messageId: SessionMessageId;
+	reason?: string;
+	submissionId: SubmissionId;
+	turnId?: AgentTurnId;
+}>;
+export type SessionInterruptResult = Readonly<{
+	approvalsSettled: number;
+	kind: "turn" | "compaction" | "none";
+	recalled: SessionWaitingMessage[];
+}>;
 
 /**
  * One live Agent Turn execution the Engine tracks, oldest first. Its view
@@ -50,6 +79,8 @@ export type { SessionViewState } from "../hooks/runtime-turn";
  * replaces the view of the execution that spawned it.
  */
 export type SessionExecution = ReadonlyDeep<{
+	/** The Submission that admitted this execution, when user-originated. */
+	submissionId?: SubmissionId;
 	/** The Agent the execution runs as. */
 	agent: AgentId;
 	/** The assistant Session Message the execution streams into. */
@@ -92,6 +123,8 @@ export type SessionQueuedSendInput = SessionSendInput & {
  */
 export type SessionQueuedSubmission = ReadonlyDeep<{
 	id: QueuedSubmissionId;
+	messageId: SessionMessageId;
+	submissionId: SubmissionId;
 	input: SessionQueuedSendInput;
 }>;
 
@@ -110,7 +143,10 @@ export type SessionSteeringSendInput = Readonly<{
 	resolvedAgent?: SessionResolvedAgent;
 	sessionModel: ChatModelSelection;
 	sessionVariant?: ModelVariant;
+	submissionId?: SubmissionId;
+	messageId?: SessionMessageId;
 	text: string;
+	turnId?: AgentTurnId;
 	variant?: ModelVariant;
 }>;
 
@@ -129,8 +165,10 @@ export type SessionWaitingMessage =
 	| SessionQueuedSubmission
 	| SessionSteeringMessage;
 
-/** The identity of one waiting user message in either lane. */
-export type SessionWaitingMessageId = QueuedSubmissionId | SteeringMessageId;
+export type SessionWaitingMessageId =
+	| QueuedSubmissionId
+	| SteeringMessageId
+	| SubmissionId;
 
 /**
  * One approval request the Engine owns until it settles. `target` is
@@ -173,6 +211,8 @@ export type SessionSnapshot = ReadonlyDeep<{
 	turnActive: boolean;
 	/** Session Transcript: the messages the session presents to the user. */
 	transcript: SessionMessage[];
+	/** Monotonic internal revision for durable transcript changes. */
+	transcriptRevision?: number;
 	/**
 	 * The live view of the most recently active execution, so the parent's view
 	 * returns when a delegated Subagent ends.
@@ -187,6 +227,7 @@ export type SessionExecutionInput = ReadonlyDeep<{
 	parent?: AgentTurn["delegation"];
 	sessionModel: ChatModelSelection;
 	sessionVariant?: ModelVariant;
+	submissionId?: SubmissionId;
 	/** The Session Context message this execution answers, when known. */
 	sourceUserMessageId?: SessionMessageId;
 	startedAt: number;
@@ -437,6 +478,11 @@ export type SessionCompactionCommand = ReadonlyDeep<{
 
 export type SessionEngine = Readonly<{
 	/**
+	 * Admits a Submission into the Engine without waiting for preparation,
+	 * provider work, or terminal persistence.
+	 */
+	admit: (input: SessionSendInput) => SessionSubmissionAdmission;
+	/**
 	 * Writes one durable Session Record while the Engine still owns the
 	 * session. Late runtime callbacks are ignored after shutdown.
 	 */
@@ -487,6 +533,8 @@ export type SessionEngine = Readonly<{
 	 * stopping work never strands waiting text.
 	 */
 	interrupt: (preserveToolCallId?: ToolCallId) => SessionWaitingMessage[];
+	/** Interrupts compaction or the active turn and recalls waiting work atomically. */
+	interruptAll: () => SessionInterruptResult;
 	/**
 	 * Merges messages into the Session Transcript: an existing message is
 	 * replaced by id, an unknown one is appended, and a compaction summary
@@ -558,5 +606,8 @@ export type SessionEngine = Readonly<{
 	 * composition and Model Target selection it arrived with.
 	 */
 	send: (input: SessionSendInput) => Promise<SessionSendOutcome>;
+	onSubmissionEvent: (
+		listener: (event: SessionSubmissionEvent) => void
+	) => () => void;
 	subscribe: (listener: () => void) => () => void;
 }>;

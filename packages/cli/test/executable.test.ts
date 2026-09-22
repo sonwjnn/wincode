@@ -4,9 +4,10 @@ import { spawnSync } from "bun";
 
 const executable = path.join(import.meta.dir, "../src/index.ts");
 
-const run = (args: readonly string[]) =>
+const run = (args: readonly string[], input?: string) =>
 	spawnSync(["bun", executable, ...args], {
 		stderr: "pipe",
+		stdin: input === undefined ? "ignore" : new TextEncoder().encode(input),
 		stdout: "pipe",
 	});
 
@@ -20,7 +21,25 @@ describe("wincode executable", () => {
 		const result = run([flag]);
 		expect(result.exitCode).toBe(0);
 		expect(output(result.stdout)).toContain("Usage: wincode");
+		expect(output(result.stdout)).toContain("rpc");
 		expect(output(result.stdout)).toContain("--auto");
+		expect(output(result.stderr)).toBe("");
+	});
+
+	test("rpc emits only protocol frames and preserves planned shutdown status", () => {
+		const result = run(
+			["rpc"],
+			`${JSON.stringify({
+				id: "shutdown-1",
+				jsonrpc: "2.0",
+				method: "server/shutdown",
+				params: {},
+			})}\n`
+		);
+		expect(result.exitCode).toBe(0);
+		expect(output(result.stdout)).toBe(
+			'{"id":"shutdown-1","jsonrpc":"2.0","result":{"shutdown":true}}\n'
+		);
 		expect(output(result.stderr)).toBe("");
 	});
 

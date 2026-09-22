@@ -13,8 +13,10 @@ import {
 	omitUndefined,
 } from "@wincode/runtime-utils";
 import {
+	type SubmissionId,
 	toQueuedSubmissionId,
 	toSteeringMessageId,
+	toSubmissionId,
 } from "@/shared/identifiers";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import type {
@@ -56,6 +58,7 @@ import type {
 	SessionEnginePorts,
 	SessionExecution,
 	SessionExecutionInput,
+	SessionInterruptResult,
 	SessionOverflowRecoveryCommand,
 	SessionOverflowRecoveryOutcome,
 	SessionOverflowRecoveryTarget,
@@ -64,6 +67,8 @@ import type {
 	SessionQueuedSubmission,
 	SessionSnapshot,
 	SessionSteeringMessage,
+	SessionSubmissionAdmission,
+	SessionSubmissionEvent,
 	SessionViewState,
 	SessionWaitingMessage,
 	SessionWaitingMessageId,
@@ -80,7 +85,7 @@ const AGENT_TURN_DEADLINE_MS = 43_200_000;
 /** The maximum time local shutdown waits for abort-resistant work to settle. */
 const SESSION_SHUTDOWN_WAIT_TIMEOUT_MS = 5000;
 const waitForShutdownWork = async (work: Promise<void>): Promise<void> => {
-	let timeout: ReturnType<typeof setTimeout> | undefined;
+	let timeout: NodeJS.Timeout | undefined;
 	const deadline = new Promise<void>((resolve) => {
 		timeout = setTimeout(resolve, SESSION_SHUTDOWN_WAIT_TIMEOUT_MS);
 	});
@@ -141,6 +146,7 @@ export const createSessionEngine = ({
 		queuedSubmissions: [],
 		steeringMessages: [],
 		transcript: [...initialTranscript],
+		transcriptRevision: 0,
 		turnActive: false,
 		viewState: undefined,
 	};
@@ -159,6 +165,18 @@ export const createSessionEngine = ({
 		  }
 		| undefined;
 	const listeners = new Set<() => void>();
+	const submissionListeners = new Set<
+		(event: SessionSubmissionEvent) => void
+	>();
+	const emitSubmissionEvent = (event: SessionSubmissionEvent): void => {
+		for (const listener of [...submissionListeners]) {
+			try {
+				listener(event);
+			} catch {
+				// Observers cannot change Engine authority.
+			}
+		}
+	};
 	/**
 	 * The settlement of each pending approval, keyed by its registry id. A
 	 * request is removed before its settlement is published, so a second route
@@ -226,13 +244,29 @@ export const createSessionEngine = ({
 	 * than flagged, and it is free only at zero.
 	 */
 	let laneRuns = 0;
-	/** Whether the drain loop is walking the Submission Queue. */
+	/** The turn reserved by a run before its execution enters the snapshot. */
+	let activeAdmissionTurnId: AgentTurnId | undefined;
 	let draining = false;
+	/** Whether the drain loop is walking the Submission Queue. */
 	const publish = (changes: Partial<SessionSnapshot>): void => {
 		if (!hasChanged(state, changes)) {
 			return;
 		}
-		state = { ...state, ...changes };
+		const transcript = changes.transcript;
+		const transcriptChanged =
+			transcript !== undefined &&
+			(state.transcript.length !== transcript.length ||
+				state.transcript.some(
+					(message, index) => message !== transcript[index]
+				));
+		const nextChanges =
+			transcriptChanged === true
+				? {
+						...changes,
+						transcriptRevision: (state.transcriptRevision ?? 0) + 1,
+					}
+				: changes;
+		state = { ...state, ...nextChanges };
 		for (const listener of listeners) {
 			try {
 				listener();
@@ -698,6 +732,7 @@ export const createSessionEngine = ({
 			...omitUndefined({
 				parent: input.parent,
 				sessionVariant: input.sessionVariant,
+				submissionId: input.submissionId,
 				variant: input.variant,
 			}),
 			sessionModel: input.sessionModel,
@@ -770,16 +805,35 @@ export const createSessionEngine = ({
 		// Model Target that turn is already running with: a correction made
 		// mid-turn cannot switch a model under the user.
 		const delivered = taken.map(({ input }) =>
-			createSessionUserMessage(input.text, {
-				agent: execution.agent,
-				joinedTurnId: execution.turnId,
-				model: execution.model,
-				...omitUndefined({ variant: execution.variant }),
-			})
+			createSessionUserMessage(
+				input.text,
+				{
+					agent: execution.agent,
+					joinedTurnId: execution.turnId,
+					model: execution.model,
+					...omitUndefined({ variant: execution.variant }),
+				},
+				[],
+				[],
+				input.messageId
+			)
 		);
 		applyContext([...state.context, ...delivered]);
 		mergeTranscript(delivered);
-		for (const message of delivered) {
+		for (const [index, message] of delivered.entries()) {
+			const source = taken[index];
+			if (
+				source !== undefined &&
+				source.input.messageId !== undefined &&
+				source.input.submissionId !== undefined
+			) {
+				emitSubmissionEvent({
+					kind: "delivered",
+					messageId: source.input.messageId,
+					submissionId: source.input.submissionId,
+					turnId: execution.turnId,
+				});
+			}
 			commitSteeringRecord(execution, message);
 		}
 		return delivered;
@@ -875,22 +929,35 @@ export const createSessionEngine = ({
 			return;
 		}
 		const waiting: SessionQueuedSubmission[] = state.steeringMessages.map(
-			({ input }) => ({
-				id: toQueuedSubmissionId(crypto.randomUUID()),
-				input: {
-					agent: input.agent,
-					composition: input.composition,
-					files: input.composition.files,
-					model: input.model,
-					sessionModel: input.sessionModel,
-					userText: input.text,
-					...omitUndefined({
-						resolvedAgent: input.resolvedAgent,
-						sessionVariant: input.sessionVariant,
-						variant: input.variant,
-					}),
-				},
-			})
+			({ input }) => {
+				const messageId =
+					input.messageId ?? toSessionMessageId(`msg-${crypto.randomUUID()}`);
+				const submissionId =
+					input.submissionId ??
+					toSubmissionId(`submission-${crypto.randomUUID()}`);
+				const turnId = createAgentTurnId();
+				return {
+					id: toQueuedSubmissionId(crypto.randomUUID()),
+					messageId,
+					submissionId,
+					input: {
+						agent: input.agent,
+						composition: input.composition,
+						files: input.composition.files,
+						model: input.model,
+						sessionModel: input.sessionModel,
+						submissionId,
+						reservedMessageId: messageId,
+						turnId,
+						userText: input.text,
+						...omitUndefined({
+							resolvedAgent: input.resolvedAgent,
+							sessionVariant: input.sessionVariant,
+							variant: input.variant,
+						}),
+					},
+				};
+			}
 		);
 		publish({
 			queuedSubmissions: [...state.queuedSubmissions, ...waiting],
@@ -958,20 +1025,55 @@ export const createSessionEngine = ({
 		takeSteeringMessages,
 	});
 
-	/**
-	 * Runs one submission on the send lane, then keeps the queue moving: a run
-	 * that ends is not the last work here, and whatever queued behind it starts
-	 * now. Every lane run goes through here — the session's own sends, and the
-	 * overflow replay a recovery continues — so the Submission Queue is never
-	 * drained onto a lane that is still taken.
-	 */
 	const runSubmission = async (
 		input: SessionSendInput
 	): Promise<SessionSendOutcome> => {
 		laneRuns += 1;
+		const ownsTurnReservation =
+			activeAdmissionTurnId === undefined && input.turnId !== undefined;
+		if (ownsTurnReservation) {
+			activeAdmissionTurnId = input.turnId;
+		}
+		const messageId = input.messageId ?? input.reservedMessageId;
+		if (input.submissionId !== undefined && messageId !== undefined) {
+			emitSubmissionEvent({
+				kind: "started",
+				messageId,
+				submissionId: input.submissionId,
+				...omitUndefined({ turnId: input.turnId }),
+			});
+		}
 		try {
-			return await operation.send(input);
+			const outcome = await operation.send(input);
+			if (
+				outcome.rejected &&
+				input.submissionId !== undefined &&
+				messageId !== undefined
+			) {
+				emitSubmissionEvent({
+					kind: "failed",
+					messageId,
+					reason: outcome.reason,
+					submissionId: input.submissionId,
+					...omitUndefined({ turnId: input.turnId }),
+				});
+			}
+			return outcome;
+		} catch (error) {
+			if (input.submissionId !== undefined && messageId !== undefined) {
+				emitSubmissionEvent({
+					kind: "failed",
+					messageId,
+					reason: getErrorMessage(error, "The Submission failed."),
+					submissionId: input.submissionId,
+					...omitUndefined({ turnId: input.turnId }),
+				});
+			}
+			throw error;
 		} finally {
+			if (ownsTurnReservation && activeAdmissionTurnId === input.turnId) {
+				activeAdmissionTurnId = undefined;
+			}
 			laneRuns -= 1;
 			trackBackgroundTask(drainQueuedSubmissions());
 		}
@@ -1080,15 +1182,27 @@ export const createSessionEngine = ({
 		if (isShutDown) {
 			return { rejected: true, reason: SHUT_DOWN_SEND_ERROR };
 		}
+		const submissionId =
+			input.submissionId ?? toSubmissionId(`submission-${crypto.randomUUID()}`);
+		const messageId =
+			input.messageId ??
+			input.reservedMessageId ??
+			toSessionMessageId(`msg-${crypto.randomUUID()}`);
+		const turnId = input.turnId ?? createAgentTurnId();
 		const stored: SessionSubmissionComposition = { ...composition, files };
 		const queuedInput: SessionQueuedSendInput = {
 			...input,
 			composition: stored,
 			files,
+			reservedMessageId: messageId,
+			submissionId,
+			turnId,
 		};
 		const queued: SessionQueuedSubmission = {
 			id: toQueuedSubmissionId(crypto.randomUUID()),
 			input: queuedInput,
+			messageId,
+			submissionId,
 		};
 		publish({ queuedSubmissions: [...state.queuedSubmissions, queued] });
 		ports.attachments.retain(queuedAttachmentIds(queuedInput));
@@ -1119,6 +1233,15 @@ export const createSessionEngine = ({
 		if (!(isUndefined(input.messageId) && isUndefined(input.delegation))) {
 			return { rejected: true, reason: STEERING_INVOCATION_ERROR };
 		}
+		const submissionId =
+			input.submissionId ?? toSubmissionId(`submission-${crypto.randomUUID()}`);
+		const messageId =
+			input.reservedMessageId ??
+			toSessionMessageId(`msg-${crypto.randomUUID()}`);
+		const turnId =
+			input.turnId ??
+			primaryEntry(state.executions)?.turnId ??
+			createAgentTurnId();
 		const steering: SessionSteeringMessage = {
 			id: toSteeringMessageId(crypto.randomUUID()),
 			input: {
@@ -1126,9 +1249,12 @@ export const createSessionEngine = ({
 				// The message carries text only, so its composition travels back
 				// to the composer exactly as it was composed.
 				composition: { ...composition, files: [] },
+				messageId,
 				model: input.model,
 				sessionModel: input.sessionModel,
+				submissionId,
 				text: input.userText ?? composition.text,
+				turnId,
 				...omitUndefined({
 					resolvedAgent: input.resolvedAgent,
 					sessionVariant: input.sessionVariant,
@@ -1139,15 +1265,46 @@ export const createSessionEngine = ({
 		publish({ steeringMessages: [...state.steeringMessages, steering] });
 		return { rejected: false };
 	};
+	const waitingMessageMatches = (
+		ids: readonly SessionWaitingMessageId[] | undefined,
+		id: SessionWaitingMessageId,
+		submissionId: SessionWaitingMessageId | undefined
+	): boolean =>
+		isUndefined(ids) ||
+		ids.includes(id) ||
+		(submissionId !== undefined && ids.includes(submissionId));
+	const emitRecalledSubmission = (message: SessionWaitingMessage): void => {
+		const messageId =
+			"messageId" in message ? message.messageId : message.input.messageId;
+		const submissionId =
+			"submissionId" in message
+				? message.submissionId
+				: message.input.submissionId;
+		if (messageId === undefined || submissionId === undefined) {
+			return;
+		}
+		emitSubmissionEvent({
+			kind: "recalled",
+			messageId,
+			reason: "recall",
+			submissionId,
+			...omitUndefined({
+				turnId:
+					"input" in message && message.input.turnId !== undefined
+						? message.input.turnId
+						: undefined,
+			}),
+		});
+	};
 	const recallWaitingMessages = (
 		ids?: readonly SessionWaitingMessageId[]
 	): SessionWaitingMessage[] => {
-		const steering = isUndefined(ids)
-			? [...state.steeringMessages]
-			: state.steeringMessages.filter(({ id }) => ids.includes(id));
-		const queued = isUndefined(ids)
-			? [...state.queuedSubmissions]
-			: state.queuedSubmissions.filter(({ id }) => ids.includes(id));
+		const steering = state.steeringMessages.filter((message) =>
+			waitingMessageMatches(ids, message.id, message.input.submissionId)
+		);
+		const queued = state.queuedSubmissions.filter((submission) =>
+			waitingMessageMatches(ids, submission.id, submission.submissionId)
+		);
 		if (steering.length === 0 && queued.length === 0) {
 			return [];
 		}
@@ -1160,6 +1317,9 @@ export const createSessionEngine = ({
 			),
 		});
 		releaseQueuedAttachments(queued);
+		for (const message of [...steering, ...queued]) {
+			emitRecalledSubmission(message);
+		}
 		return [...steering, ...queued];
 	};
 	/**
@@ -1173,12 +1333,105 @@ export const createSessionEngine = ({
 		state.turnActive ||
 		state.isCompacting ||
 		state.queuedSubmissions.length > 0;
+	const prepareAdmission = (
+		input: SessionSendInput,
+		composition: SessionSubmissionComposition
+	): {
+		admittedInput: SessionSendInput;
+		messageId: SessionMessageId;
+		submissionId: SubmissionId;
+		turnId: AgentTurnId;
+	} => {
+		const submissionId =
+			input.submissionId ?? toSubmissionId(`submission-${crypto.randomUUID()}`);
+		const messageId =
+			input.messageId ??
+			input.reservedMessageId ??
+			toSessionMessageId(`msg-${crypto.randomUUID()}`);
+		const turnId = input.turnId ?? createAgentTurnId();
+		return {
+			admittedInput: {
+				...input,
+				composition: { ...composition, files: [] },
+				submissionId,
+				turnId,
+				...omitUndefined({
+					reservedMessageId:
+						input.messageId === undefined ? messageId : undefined,
+				}),
+			},
+			messageId,
+			submissionId,
+			turnId,
+		};
+	};
+	const admit = (input: SessionSendInput): SessionSubmissionAdmission => {
+		if (isShutDown) {
+			return { rejected: true, reason: SHUT_DOWN_SEND_ERROR };
+		}
+		const composition: SessionSubmissionComposition = input.composition ?? {
+			files: input.files ?? [],
+			text: input.userText ?? "",
+		};
+		if (composition.files.length > 0 || (input.files ?? []).length > 0) {
+			return { rejected: true, reason: "Submissions accept text only." };
+		}
+		const { admittedInput, messageId, submissionId, turnId } = prepareAdmission(
+			input,
+			composition
+		);
+		if (acceptsSteeringMessages(state)) {
+			const activeTurnId =
+				primaryEntry(state.executions)?.turnId ??
+				activeAdmissionTurnId ??
+				turnId;
+			const outcome = acceptSteeringMessage({
+				...admittedInput,
+				turnId: activeTurnId,
+			});
+			return outcome.rejected
+				? outcome
+				: {
+						rejected: false,
+						disposition: "steering",
+						messageId,
+						submissionId,
+						turnId: activeTurnId,
+					};
+		}
+		if (queuesSubmission()) {
+			const queuedInput: SessionQueuedSendInput = {
+				...admittedInput,
+				composition: { ...composition, files: [] },
+				files: [],
+			};
+			const queued: SessionQueuedSubmission = {
+				id: toQueuedSubmissionId(crypto.randomUUID()),
+				input: queuedInput,
+				messageId,
+				submissionId,
+			};
+			publish({ queuedSubmissions: [...state.queuedSubmissions, queued] });
+			trackBackgroundTask(drainQueuedSubmissions());
+			return {
+				rejected: false,
+				disposition: "queued",
+				messageId,
+				submissionId,
+			};
+		}
+		void runSubmission(admittedInput).catch(() => undefined);
+		return {
+			rejected: false,
+			disposition: "started",
+			messageId,
+			submissionId,
+			turnId,
+		};
+	};
 	/**
-	 * The Engine's one send entry point. A submission that arrives while an
-	 * Agent Turn is running joins that turn's Steering Lane and is delivered
-	 * inside it; while the session is busy any other way it joins the
-	 * Submission Queue and runs as its own Agent Turn; an idle session runs it
-	 * on the lane and then keeps the queue moving.
+	 * The Engine's one send entry point. A submission that arrives while the
+	 * session is running joins the Steering Lane or Submission Queue.
 	 */
 	const send = async (input: SessionSendInput): Promise<SessionSendOutcome> => {
 		if (isShutDown) {
@@ -1193,6 +1446,29 @@ export const createSessionEngine = ({
 			return await queued;
 		}
 		return await runSubmission(input);
+	};
+	const interruptAll = (): SessionInterruptResult => {
+		const approvalsSettled = state.approvals.filter(
+			(approval) => approval.decision === undefined
+		).length;
+		let kind: SessionInterruptResult["kind"] = "none";
+		if (state.isCompacting) {
+			kind = "compaction";
+		} else if (state.turnActive || laneRuns > 0) {
+			kind = "turn";
+		}
+		closeApprovals();
+		let recalled: SessionWaitingMessage[];
+		if (kind === "compaction") {
+			compactionCommand?.abort();
+			recalled = recallWaitingMessages();
+		} else if (kind === "turn") {
+			operation.interrupt();
+			recalled = recallWaitingMessages();
+		} else {
+			recalled = recallWaitingMessages();
+		}
+		return { approvalsSettled, kind, recalled };
 	};
 	const hasPendingWork = (): boolean =>
 		laneRuns > 0 ||
@@ -1245,6 +1521,7 @@ export const createSessionEngine = ({
 	};
 
 	return {
+		admit,
 		abortApprovalTurn: (toolCallId) => {
 			// The aborted request already settled in the Engine, so its siblings
 			// are closed as rejects and the turn stops exactly once: a second
@@ -1269,6 +1546,7 @@ export const createSessionEngine = ({
 			operation.interrupt(preserveToolCallId);
 			return recallWaitingMessages();
 		},
+		interruptAll,
 		mergeTranscript,
 		recallWaitingMessages,
 		recoverOverflow,
@@ -1276,6 +1554,10 @@ export const createSessionEngine = ({
 		respondToApproval: settleApproval,
 		setExecutionViewState,
 		settleCompaction,
+		onSubmissionEvent: (listener) => {
+			submissionListeners.add(listener);
+			return () => submissionListeners.delete(listener);
+		},
 		shutdown,
 		send,
 		subscribe: (listener) => {

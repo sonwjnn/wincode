@@ -33,6 +33,14 @@ const ENTRIES = [
 		name: "Session Host",
 		path: resolve(TUI_ROOT, "modules/sessions/host/session-host.ts"),
 	},
+	{
+		name: "Session Capabilities",
+		path: resolve(TUI_ROOT, "modules/sessions/host/session-capabilities.ts"),
+	},
+	{
+		name: "Session RPC boundary",
+		path: resolve(TUI_ROOT, "modules/sessions/host/session-rpc.ts"),
+	},
 ];
 
 const walkModuleGraph = (

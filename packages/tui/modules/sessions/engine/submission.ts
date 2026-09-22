@@ -335,7 +335,8 @@ const prepareNewSessionMessage = async ({
 		userText,
 		metadata,
 		fileMentions,
-		input.files ?? []
+		input.files ?? [],
+		input.reservedMessageId ?? input.messageId
 	);
 	try {
 		const [externalized] = await externalize([optimistic], signal);
@@ -571,6 +572,8 @@ const executionInputForSubmit = ({
 		parent: input.delegation,
 		sessionVariant: input.sessionVariant,
 		sourceUserMessageId,
+		submissionId: input.submissionId,
+		turnId: input.turnId,
 		variant: input.variant,
 	}),
 });
