@@ -145,25 +145,32 @@ const getBunSecretStore = (
 	if (isNull(injectedSecrets)) {
 		return null;
 	}
-	const secrets =
-		injectedSecrets ??
-		(globalThis as typeof globalThis & { Bun?: { secrets?: BunSecretStore } })
-			.Bun?.secrets;
-	if (
-		isUndefined(secrets) ||
-		isNull(secrets) ||
-		isUndefined(secrets.get) ||
-		isUndefined(secrets.set)
-	) {
+	let secrets: BunSecretStore | null | undefined;
+	try {
+		secrets =
+			injectedSecrets ??
+			(globalThis as typeof globalThis & { Bun?: { secrets?: BunSecretStore } })
+				.Bun?.secrets;
+		if (
+			isUndefined(secrets) ||
+			isNull(secrets) ||
+			isUndefined(secrets.get) ||
+			isUndefined(secrets.set)
+		) {
+			return null;
+		}
+	} catch {
 		return null;
 	}
-
+	const availableSecrets = secrets;
 	return {
 		get(service: string, account: string): Promise<string | null> {
-			return Promise.resolve(secrets.get?.({ service, name: account }) ?? null);
+			return Promise.resolve(
+				availableSecrets.get?.({ service, name: account }) ?? null
+			);
 		},
 		async set(service: string, account: string, secret: string): Promise<void> {
-			await secrets.set?.({ service, name: account, value: secret });
+			await availableSecrets.set?.({ service, name: account, value: secret });
 		},
 	};
 };
