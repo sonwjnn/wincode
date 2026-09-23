@@ -240,6 +240,26 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 	};
 }
 
+const isJsonModeRequested = (args: readonly string[]): boolean => {
+	let mode: string | undefined;
+	for (let index = 0; index < args.length; index += 1) {
+		const argument = args[index];
+		if (argument === undefined) {
+			continue;
+		}
+		const equalsIndex = argument.indexOf("=");
+		const option =
+			equalsIndex === -1 ? argument : argument.slice(0, equalsIndex);
+		const inlineValue =
+			equalsIndex === -1 ? undefined : argument.slice(equalsIndex + 1);
+		if (option !== "--mode" && option !== "-m") {
+			continue;
+		}
+		mode = inlineValue ?? args[index + 1];
+	}
+	return mode === "json";
+};
+
 export const getCliHelpText = (): string => HELP_TEXT;
 
 export const dispatch = async (
@@ -275,6 +295,9 @@ export const dispatch = async (
 		return await resolvedRunners[parsed.invocation.mode](context);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
+		if (isJsonModeRequested(input.args)) {
+			writeLine(input.stdout, JSON.stringify({ error: message }));
+		}
 		writeLine(input.stderr, `error: ${message}`);
 		return error instanceof InvocationError ? error.exitCode : 1;
 	}

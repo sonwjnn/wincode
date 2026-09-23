@@ -137,6 +137,20 @@ describe("application dispatch", () => {
 		expect(stderr.output).toBe("error: unknown option '--typo'.\n");
 	});
 
+	test("emits a machine-readable JSON error for JSON parse failures", async () => {
+		const stdout = capture();
+		const stderr = capture();
+		const exitCode = await dispatch(
+			input(stdout.writer, stderr.writer, ["--mode", "json", "--bogus"]),
+			noOpRunners
+		);
+		expect(exitCode).toBe(2);
+		expect(JSON.parse(stdout.output) as Record<string, unknown>).toEqual({
+			error: "unknown option '--bogus'.",
+		});
+		expect(stderr.output).toBe("error: unknown option '--bogus'.\n");
+	});
+
 	test("prints root help without invoking a mode", async () => {
 		const stdout = capture();
 		const stderr = capture();

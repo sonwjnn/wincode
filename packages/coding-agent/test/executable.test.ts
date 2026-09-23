@@ -122,6 +122,15 @@ describe("wincode executable", () => {
 		expect(output(result.stderr)).toBe("error: unknown command 'rpc'.\n");
 	});
 
+	test("JSON mode reports parser failures as JSONL", () => {
+		const result = run(["--mode", "json", "--bogus"]);
+		expect(result.exitCode).toBe(2);
+		expect(output(result.stdout)).toBe(
+			`${JSON.stringify({ error: "unknown option '--bogus'." })}\n`
+		);
+		expect(output(result.stderr)).toBe("error: unknown option '--bogus'.\n");
+	});
+
 	test("unknown commands are concise usage failures", () => {
 		const result = run(["tui"]);
 		expect(result.exitCode).toBe(2);
