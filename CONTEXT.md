@@ -81,7 +81,7 @@ metadata, then prompt-config refs. _Avoid_: chat config, latest config
 The single owner of one session's live state and the only writer to it. Session state changes only through the Engine, and observers read a Session Snapshot. _Avoid_: session manager, session store, session state holder
 
 **Session Host**:
-The composition that assembles one session — its capabilities, its Session Engine, and its subscription to that Engine — and owns that assembly's lifetime. It carries no session state of its own and is UI-neutral, so the Wincode TUI and a non-interactive consumer each construct one against the same contract. _Avoid_: bootstrap, session manager, runtime, composition root
+The composition that assembles one session — its capabilities, its Session Engine, and its subscription to that Engine — and owns that assembly's lifetime. It carries no session state of its own and is UI-neutral, so Interactive Mode and non-interactive modes each construct one against the same contract. _Avoid_: bootstrap, session manager, runtime, composition root
 
 **Session Lease**:
 The exclusive live claim a Session Host holds while its session is open, so only that Host's Session Engine may write the session. The claim ends with the Host and can be recovered after its owner disappears; losing it ends the Host rather than allowing two live writers.
@@ -135,19 +135,40 @@ The FIFO order of a session's Steering Messages. Its messages are delivered at M
 ## Language
 
 **Wincode CLI**:
-The user-facing command-line entry point that selects and dispatches a CLI
-Command. It does not refer to the interactive terminal application.
-_Avoid_: TUI, interactive application
+The user-facing command-line entry point for the Coding-Agent Application. A bare invocation selects Interactive Mode; `--mode` or `-m` selects another Execution Mode by its full name, and `--prompt` or `-p` supplies one-shot input. It does not own Agent or Session state. _Avoid_: Wincode TUI, command dispatcher
 
-**Wincode TUI**:
-The interactive terminal application through which users conduct Wincode
-sessions. It is launched by a CLI Command.
-_Avoid_: CLI, command dispatcher
+**Coding-Agent Application**:
+The user-facing Wincode application that runs an Agent through one of four Execution Modes: Interactive, Print, JSON, or RPC. It owns application lifetime and the input/output boundary while the Session Engine owns live session state. _Avoid_: Wincode TUI, CLI package, agent core
+
+**Execution Mode**:
+A user-facing way to run the Coding-Agent Application. Each mode chooses input, output, and process lifecycle but does not own Session state. _Avoid_: Coding Mode, agent loop
+
+**Interactive Mode**:
+The terminal interface through which users conduct Wincode sessions. It is the default mode of a bare `wincode` invocation. _Avoid_: Wincode TUI, TUI application, CLI
+
+**Print Mode**:
+A one-shot mode that opens or creates one One-Shot Session, accepts exactly one Submission from `--prompt`, `-p`, or stdin, and streams only human-readable assistant text to stdout before exiting. _Avoid_: text mode, batch mode
+
+**JSON Mode**:
+A one-shot mode that opens or creates one One-Shot Session, accepts exactly one Submission from `--prompt`, `-p`, or stdin, and emits one JSONL record per structured Agent Turn event, not JSON-RPC request/response frames. _Avoid_: JSON-RPC mode, RPC
+
+**One-Shot Session**:
+The durable Session opened or created for one Print Mode or JSON Mode invocation. It accepts exactly one Submission for that invocation and remains persisted after the mode exits; its Session Host ends after the terminal Agent Turn outcome. _Avoid_: ephemeral session, batch session
+
+**Invocation Selection**:
+The Agent, Model, and Thinking Level resolved for one Print Mode or JSON Mode invocation. Explicit CLI selectors override a Session Selection; omitted selectors restore it or use configuration, and creating a One-Shot Session requires complete resolution before its first record. _Avoid_: command-line config, request selection
+
+**JSON Event Stream**:
+The ordered public Agent Turn events emitted by JSON Mode as JSONL. It uses the same event vocabulary and projection as RPC Mode but does not include JSON-RPC envelopes, request IDs, commands, or state notifications. _Avoid_: raw Session Snapshot, JSON-RPC stream
+
+**Non-Interactive Approval**:
+A Tool Permission `ask` encountered by Print Mode or JSON Mode. Without explicit auto-approval it fails closed rather than waiting; `--auto` may allow ordinary asks, while safety asks and explicit denies remain blocked. _Avoid_: unattended approval, automatic permission
+
+**RPC Mode**:
+A long-lived mode that communicates over JSON-RPC 2.0 framed as JSONL. The client initializes the process and then creates or opens exactly one Session Host; the protocol remains independent of CLI mode selection. _Avoid_: JSON mode, session server
 
 **CLI Command**:
-A user-invoked operation dispatched by the Wincode CLI. A CLI Command may launch
-the Wincode TUI or complete without an interactive interface.
-_Avoid_: Command, Built-in Command, slash command
+A user-invoked operation that is not an Execution Mode, such as help, version, or a future administrative command, dispatched by Wincode CLI. It may complete without running an Agent. _Avoid_: Execution Mode, Built-in Command, slash command
 
 **Line Range**:
 A 1-indexed, inclusive selection of consecutive lines in a text file. Multiple

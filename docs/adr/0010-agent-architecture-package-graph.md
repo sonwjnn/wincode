@@ -2,22 +2,24 @@
 
 Wincode's agent architecture is split into public `@wincode/ai`,
 `@wincode/agent-core`, `@wincode/coding-tools`, and `@wincode/skills` packages,
-plus the private `@wincode/agent-runtime-ai-sdk` adapter and the `@wincode/tui`
-composition root. MCP transport and OpenTUI presentation remain TUI-owned for
-this cutover; no public MCP or TUI package is introduced.
+plus the private `@wincode/agent-runtime-ai-sdk` adapter and the
+`@wincode/coding-agent` application composition root. MCP transport and OpenTUI
+presentation remain application-owned; no public MCP or TUI package is
+introduced.
 
 Status: accepted
+Application-boundary note: ADR-0027 renames the private composition-root package to `@wincode/coding-agent` and gives it peer execution modes. The package graph, reusable contract ownership, and `@wincode/agent-core` dependency direction remain unchanged.
 
 ## Decision
 
 - `@wincode/ai` owns provider-neutral model contracts, catalog, targets, options, capabilities, usage, and failures.
 - `@wincode/agent-core` owns Agents, Agent Turns, lifecycle, events, records, failures, the Agent Runtime interface, and generic tool definitions, registry, calls, and results.
 - `@wincode/coding-tools` implements filesystem, search, edit, shell, workspace-policy, hashline, diff, and resource-limit tools against core tool contracts.
-- `@wincode/skills` owns Skill contracts, parsing, catalog, snapshots, and activation semantics; its `./filesystem` export owns Node/Bun discovery and content loading. TUI supplies explicit root descriptors, permission enforcement, persistence, and presentation.
-- `@wincode/tui` owns MCP transport, client lifecycle, discovery, invocation, configuration, approval, status presentation, and adaptation to core Tool contracts.
-- `@wincode/tui` owns OpenTUI rendering, Session View State, approval presentation, input callbacks, and projections of Session Records and Agent Turn Events.
+- `@wincode/skills` owns Skill contracts, parsing, catalog, snapshots, and activation semantics; its `./filesystem` export owns Node/Bun discovery and content loading. The Coding-Agent Application supplies explicit root descriptors, permission enforcement, persistence, and presentation.
+- `@wincode/coding-agent` owns MCP transport, client lifecycle, discovery, invocation, configuration, approval, status presentation, and adaptation to core Tool contracts.
+- `@wincode/coding-agent` owns OpenTUI rendering, Session View State, approval presentation, input callbacks, and projections of Session Records and Agent Turn Events.
 - `@wincode/agent-runtime-ai-sdk` privately implements the core runtime interface with AI SDK.
-- `@wincode/tui` owns Connections, session orchestration and persistence, Tool Gate, approval, configuration, routing, and composition.
+- `@wincode/coding-agent` owns Connections, session orchestration and persistence, Tool Gate, approval, configuration, routing, and composition.
 
 `@wincode/ai` and `@wincode/skills` are base packages; `@wincode/agent-core`
 depends on both for model and typed Skill Activation contracts. Core does not
@@ -31,6 +33,6 @@ Concrete coding tools remain separate from their agent-facing registry and
 protocol, preventing filesystem and shell dependencies from entering core.
 MCP and OpenTUI remain application-owned until an independent reusable seam is
 demonstrated. No native, generic utilities, persistence, RPC/ACP, or separate
-TUI application-state package is created without an independent seam. The
-broad `@wincode/ai` exports are removed after all callers migrate; no
-compatibility umbrella remains.
+application-state package is created without an independent seam. The broad
+`@wincode/ai` exports are removed after all callers migrate; no compatibility
+umbrella remains.

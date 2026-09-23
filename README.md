@@ -54,14 +54,14 @@ To use the checkout against another project, start the entrypoint from that proj
 
 ```bash
 cd /path/to/your/project
-bun run /path/to/wincode/packages/cli/src/index.ts
+bun run /path/to/wincode/packages/coding-agent/app/executable.ts
 ```
 
 > [!TIP]
 > Pass `--auto` to start with automatic approval enabled. Explicit `deny` rules still take precedence.
 >
 > ```bash
-> bun run /path/to/wincode/packages/cli/src/index.ts --auto
+> bun run /path/to/wincode/packages/coding-agent/app/executable.ts --auto
 > ```
 
 ### Supported providers
@@ -129,12 +129,12 @@ Objects merge recursively; arrays and scalar values replace lower-precedence val
 
 Detailed configuration references:
 
-- [Agents](packages/tui/modules/agents/README.md)
-- [Tool permissions](packages/tui/modules/permissions/README.md)
-- [Skills](packages/tui/modules/skills/README.md)
-- [Custom commands](packages/tui/modules/custom-commands/README.md)
-- [MCP servers](packages/tui/modules/mcp/README.md)
-- [Configuration precedence](packages/tui/shared/config/README.md)
+- [Agents](packages/coding-agent/modules/agents/README.md)
+- [Tool permissions](packages/coding-agent/modules/permissions/README.md)
+- [Skills](packages/coding-agent/modules/skills/README.md)
+- [Custom commands](packages/coding-agent/modules/custom-commands/README.md)
+- [MCP servers](packages/coding-agent/modules/mcp/README.md)
+- [Configuration precedence](packages/coding-agent/shared/config/README.md)
 
 ### Skills
 
@@ -207,27 +207,26 @@ bun install --frozen-lockfile
 
 Tests belong to the owning package's `test/` tree. Keep small package test trees
 flat; add only shallow product-area directories when test volume or cohesive
-navigation makes them useful. The TUI groups sessions, MCP, commands, and
+navigation makes them useful. The Coding-Agent groups sessions, MCP, commands, and
 permissions under `test/sessions`, `test/mcp`, `test/commands`, and
-`test/permissions`; do not mirror technical source roots such as `src`,
-`modules`, `shared`, or `app`. Default tests use ordinary `*.test.ts` or
-`*.test.tsx` names. E2E tests use `*.e2e.test.ts` or `*.e2e.test.tsx`; External
-tests are reserved for a real provider contract and use `*.external.test.ts` or
-`*.external.test.tsx`.
+`test/permissions`; do not mirror technical source roots such as `modules`,
+`shared`, or `app`. Default tests use ordinary `*.test.ts` or `*.test.tsx` names.
+E2E tests use `*.e2e.test.ts` or `*.e2e.test.tsx`; External tests are reserved for
+a real provider contract and use `*.external.test.ts` or `*.external.test.tsx`.
 
 The central runner audits the whole repository before applying a package filter:
-`bun run test -- --package tui` runs only TUI Default files while still rejecting
+`bun run test -- --package coding-agent` runs only Coding-Agent Default files while still rejecting
 misplaced or unsupported test files elsewhere. A package-local `test` script is
 the same runner with that package filter.
 
-Session storage uses the current Drizzle schema without migration history. After changing `packages/tui/modules/sessions/storage/schema.ts`, run:
+Session storage uses the current Drizzle schema without migration history. After changing `packages/coding-agent/modules/sessions/storage/schema.ts`, run:
 
 ```bash
-bun run --cwd packages/tui db:push
+bun run --cwd packages/coding-agent db:push
 ```
 
 If Drizzle cannot reconcile a local schema change safely, reset the local database and attachment data before restarting Wincode. The session-only reset command is:
 
 ```bash
-bun run --cwd packages/tui db:reset-sessions
+bun run --cwd packages/coding-agent db:reset-sessions
 ```

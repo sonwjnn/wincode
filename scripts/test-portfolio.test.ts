@@ -173,7 +173,7 @@ test("records the later package", () => {
 		try {
 			await writeFixture(
 				root,
-				"packages/tui/test/a-fails.e2e.test.ts",
+				"packages/coding-agent/test/a-fails.e2e.test.ts",
 				`import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "bun:test";
@@ -193,7 +193,7 @@ test("fails with an actionable frame", () => {
 			);
 			await writeFixture(
 				root,
-				"packages/tui/test/b-runs.e2e.test.ts",
+				"packages/coding-agent/test/b-runs.e2e.test.ts",
 				`import { appendFileSync } from "node:fs";
 import { test } from "bun:test";
 test("must not run after a failure", () => {
@@ -209,7 +209,7 @@ test("must not run after a failure", () => {
 				root,
 				"test-artifacts",
 				"e2e",
-				"tui",
+				"coding-agent",
 				"a-fails"
 			);
 			expect(result.exitCode).not.toBe(0);
@@ -236,7 +236,7 @@ test("must not run after a failure", () => {
 		try {
 			await writeFixture(
 				root,
-				"packages/tui/test/...e2e.test.ts",
+				"packages/coding-agent/test/...e2e.test.ts",
 				`import { writeFileSync } from "node:fs";
 import { test } from "bun:test";
 const framePath = process.env.WINCODE_E2E_FRAME_PATH!;
@@ -248,7 +248,13 @@ test("fails after writing the final frame", () => {
 			);
 
 			const result = runPortfolio(root, "e2e");
-			const artifactDirectory = join(root, "test-artifacts", "e2e", "tui", "-");
+			const artifactDirectory = join(
+				root,
+				"test-artifacts",
+				"e2e",
+				"coding-agent",
+				"-"
+			);
 			expect(result.exitCode).not.toBe(0);
 			expect(result.output).toContain("Executed E2E test files: 1");
 			expect(await exists(join(artifactDirectory, "runner.log"))).toBe(true);

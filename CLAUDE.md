@@ -2,7 +2,7 @@
 
 ## Default Context
 
-## This repo contains multiple packages, but `packages/tui/` is the primary focus. Unless otherwise specified, assume work refers to this package.
+## This repo contains multiple packages, but `packages/coding-agent/` is the primary focus. Unless otherwise specified, assume work refers to this package.
 
 ### Package Structure
 
@@ -10,7 +10,7 @@
 | ------------------------------- | --------------------------------------------------------------- |
 | `packages/agent-runtime-ai-sdk` | Multi-provider LLM client with streaming support, Model catalog |
 | `packages/ai`                   | Model catalog                                                   |
-| `packages/tui`                  | Main CLI application (primary focus)                            |
+| `packages/coding-agent`                  | Main CLI application (primary focus)                            |
 | `packages/runtime-utils`        | Shared utilities                                                |
 
 ---
@@ -139,7 +139,7 @@ Use `node:fs/promises` for directory ops (`fs.mkdir`, `fs.rm`, `fs.readdir`) —
 
 This is a solo-dev project. The local SQLite schema is synchronized directly
 from the current Drizzle schema; Wincode does not maintain migration history.
-Use `bun run --cwd packages/tui db:push` after schema changes. If a schema change
+Use `bun run --cwd packages/coding-agent db:push` after schema changes. If a schema change
 cannot be reconciled safely, delete the local database and attachment data
 before restarting; no compatibility migration is provided.
 

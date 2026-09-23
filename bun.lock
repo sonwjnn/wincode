@@ -65,19 +65,41 @@
         "typescript": "catalog:",
       },
     },
-    "packages/cli": {
-      "name": "@wincode/cli",
+    "packages/coding-agent": {
+      "name": "@wincode/coding-agent",
       "version": "0.1.0",
       "bin": {
-        "wincode": "./src/index.ts",
+        "wincode": "./app/executable.ts",
       },
       "dependencies": {
+        "@modelcontextprotocol/client": "^2.0.0",
+        "@opentui/core": "0.4.5",
+        "@opentui/react": "0.4.5",
+        "@tanstack/react-router": "catalog:",
+        "@wincode/agent-core": "workspace:*",
+        "@wincode/agent-runtime-ai-sdk": "workspace:*",
+        "@wincode/ai": "workspace:*",
+        "@wincode/coding-tools": "workspace:*",
         "@wincode/runtime-utils": "workspace:*",
-        "@wincode/tui": "workspace:*",
-        "commander": "^14.0.3",
+        "@wincode/skills": "workspace:*",
+        "drizzle-orm": "^0.45.2",
+        "jsonc-parser": "^3.3.1",
+        "oauth4webapi": "^3.8.3",
+        "open": "^10.2.0",
+        "react": "catalog:",
+        "tree-sitter-powershell": "^0.26.4",
+        "tree-sitter-wasms": "^0.1.13",
+        "web-tree-sitter": "^0.25.10",
+        "zod": "catalog:",
       },
       "devDependencies": {
+        "@libsql/client": "^0.17.4",
+        "@modelcontextprotocol/server": "^2.0.0",
+        "@tanstack/router-cli": "1.166.43",
         "@types/bun": "catalog:",
+        "@types/react": "^19.2.10",
+        "@types/react-dom": "catalog:",
+        "drizzle-kit": "^0.31.10",
       },
       "peerDependencies": {
         "typescript": "catalog:",
@@ -123,44 +145,6 @@
         "@types/bun": "catalog:",
         "@types/node": "^26.3.0",
         "@wincode/config": "workspace:*",
-        "typescript": "catalog:",
-      },
-    },
-    "packages/tui": {
-      "name": "@wincode/tui",
-      "version": "0.1.0",
-      "dependencies": {
-        "@modelcontextprotocol/client": "^2.0.0",
-        "@opentui/core": "0.4.5",
-        "@opentui/react": "0.4.5",
-        "@tanstack/react-router": "catalog:",
-        "@wincode/agent-core": "workspace:*",
-        "@wincode/agent-runtime-ai-sdk": "workspace:*",
-        "@wincode/ai": "workspace:*",
-        "@wincode/coding-tools": "workspace:*",
-        "@wincode/runtime-utils": "workspace:*",
-        "@wincode/skills": "workspace:*",
-        "drizzle-orm": "^0.45.2",
-        "jsonc-parser": "^3.3.1",
-        "oauth4webapi": "^3.8.3",
-        "open": "^10.2.0",
-        "react": "catalog:",
-        "tree-sitter-powershell": "^0.26.4",
-        "tree-sitter-wasms": "^0.1.13",
-        "type-fest": "catalog:",
-        "web-tree-sitter": "^0.25.10",
-        "zod": "catalog:",
-      },
-      "devDependencies": {
-        "@libsql/client": "^0.17.4",
-        "@modelcontextprotocol/server": "^2.0.0",
-        "@tanstack/router-cli": "1.166.43",
-        "@types/bun": "catalog:",
-        "@types/react": "^19.2.10",
-        "@types/react-dom": "catalog:",
-        "drizzle-kit": "^0.31.10",
-      },
-      "peerDependencies": {
         "typescript": "catalog:",
       },
     },
@@ -457,7 +441,7 @@
 
     "@wincode/ai": ["@wincode/ai@workspace:packages/ai"],
 
-    "@wincode/cli": ["@wincode/cli@workspace:packages/cli"],
+    "@wincode/coding-agent": ["@wincode/coding-agent@workspace:packages/coding-agent"],
 
     "@wincode/coding-tools": ["@wincode/coding-tools@workspace:packages/coding-tools"],
 
@@ -466,8 +450,6 @@
     "@wincode/runtime-utils": ["@wincode/runtime-utils@workspace:packages/runtime-utils"],
 
     "@wincode/skills": ["@wincode/skills@workspace:packages/skills"],
-
-    "@wincode/tui": ["@wincode/tui@workspace:packages/tui"],
 
     "ai": ["ai@6.0.277", "", { "dependencies": { "@ai-sdk/gateway": "3.0.189", "@ai-sdk/provider": "3.0.15", "@ai-sdk/provider-utils": "4.0.50", "@opentelemetry/api": "^1.9.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-fYlPj2QsisCH66SsEfWM8gV0ZR+6NLuRYSnVw3GKUKlvP+iIAUQR1bUJn1Y6lcAKeoEWQeZaann2ahXZY2HXtQ=="],
 

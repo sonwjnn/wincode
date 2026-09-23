@@ -2,7 +2,7 @@
 
 Wincode separates its executable dispatch boundary from its interactive application. The private `@wincode/cli` package owns the `wincode` binary, Commander-based dispatch, help, version, diagnostics, and process exit status; the private `@wincode/tui` package becomes the composition root for the existing OpenTUI application, routing, sessions, persistence, configuration, credentials, MCP, permissions, and approvals.
 
-Status: accepted
+Status: superseded by ADR-0027
 
 ## Decision
 

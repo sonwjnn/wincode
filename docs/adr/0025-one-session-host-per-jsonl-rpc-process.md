@@ -3,6 +3,7 @@
 Wincode will expose its first non-interactive session surface as a private JSON-RPC 2.0 protocol over strict JSONL stdin/stdout. The first consumer is a trusted local orchestrator, so one process initializes one Workspace, binds exactly once to one Session Host, and keeps that Host until shutdown; the Session Engine remains the sole state authority behind the adapter.
 
 Status: accepted
+Application-boundary note: ADR-0027 moves ownership of the RPC adapter from the CLI package into RPC Mode of `@wincode/coding-agent`. The protocol, one-Host-per-process lifecycle, and wire semantics remain unchanged.
 
 ## Decision
 
@@ -29,5 +30,5 @@ Status: accepted
 
 - A React-free capability composer must supply the existing `SessionCapabilities` contract before the RPC controller can create a Host.
 - Submission admission needs a uniform immediate Engine contract and a stable Submission Identifier; the adapter must not infer admission from the timing of the current `send` promise.
-- The CLI gains one lazily loaded non-interactive command without loading OpenTUI. `stdout` is protocol-only and human-readable diagnostics use `stderr`.
+- The Coding-Agent Application gains one lazily loaded non-interactive RPC Mode without loading OpenTUI. `stdout` is protocol-only and human-readable diagnostics use `stderr`.
 - Concurrent Sessions require concurrent child processes in v1. The protocol may gain Host replacement later, but doing so reopens this decision rather than silently turning the controller into a session server.

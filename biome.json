@@ -96,7 +96,7 @@
   },
   "overrides": [
     {
-      "includes": ["packages/tui/modules/sessions/engine/**"],
+      "includes": ["packages/coding-agent/modules/sessions/engine/**"],
       "linter": {
         "rules": {
           "style": {

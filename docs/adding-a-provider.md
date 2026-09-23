@@ -41,7 +41,7 @@ Register the resolver in `packages/agent-runtime-ai-sdk/src/providers/registry.t
 
 ## CLI credentials
 
-Add the provider definition in `packages/tui/modules/connections/provider-definition.ts`:
+Add the provider definition in `packages/coding-agent/modules/connections/provider-definition.ts`:
 
 - display name;
 - supported connection methods;
@@ -57,8 +57,8 @@ Add the factory and deterministic order entry in `provider-registry.ts`. The pro
 Run:
 
 ```sh
-bun run --cwd packages/tui check-types
-bun run --cwd packages/tui test
+bun run --cwd packages/coding-agent check-types
+bun run --cwd packages/coding-agent test
 bun run test
 bun run check
 ```

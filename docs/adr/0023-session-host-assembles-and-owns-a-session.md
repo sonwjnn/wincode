@@ -10,6 +10,7 @@ it opens the session — the transcript, context, and compactions the Engine is
 born with — before the Engine exists.
 
 Status: accepted
+Package placement note: ADR-0027 revises the temporary `@wincode/tui` location and the deferral of a coding-agent application package. The Session Host's UI-neutral contract, opening, lease, subscription, and shutdown decisions remain accepted.
 
 ## Decision
 
@@ -35,15 +36,8 @@ Status: accepted
 - **The Host's module graph is checked, not asserted.** The React-free boundary
   test walks from the Host entry, not only from `session-engine.ts`, so a
   React-free module reaching React through a barrel fails the check.
-- **The Host lives in `@wincode/tui` for now**, in its own module reached
-  through a declared subpath export, and the split between the two factories is
-  named so that "host" means exactly one thing: `createSessionHost` owns
-  opening, the Engine, subscription, and shutdown, while `createSessionPorts`
-  materializes Session Engine Ports from capabilities and owns no lifetime.
-- **No workspace package is created.** A package boundary earns its cost by
-  making React-freeness structural rather than test-enforced, so the split stays
-  deferred until a non-interactive consumer exercises the seam and shows what
-  the package actually has to contain.
+- **The Host lives in `@wincode/coding-agent`**, the private Coding-Agent Application package, in its own module reached through a declared subpath export. The split between the two factories is named so that "host" means exactly one thing: `createSessionHost` owns opening, the Engine, subscription, and shutdown, while `createSessionPorts` materializes Session Engine Ports from capabilities and owns no lifetime.
+- **No separate session workspace package is created.** ADR-0027 places the Host in the application package; an independent package remains unnecessary until a genuinely reusable seam requires one.
 
 ## Considered options
 
@@ -57,33 +51,17 @@ Status: accepted
   and `mergeTranscript` exist for interruption and compaction, and opening
   through them would widen the setters ADR-0019 already records as the
   remaining exception instead of shrinking them.
-- **A workspace package now** — a `coding-agent` package beside `@wincode/tui`
-  — rejected for now: ADR-0010 allows a package only behind an independent
-  seam, and the consumer that would define the package's content does not exist
-  yet, so a split would move files without knowing which side they belong on.
-- **Handing the non-TUI host TUI-shaped dependencies** — rejected: it would put
-  `MutableRefObject` and provider types in a contract a non-React process has to
-  satisfy, which is exactly the port surface ADR-0019 left as debt.
+- **A separate workspace package now** — rejected: ADR-0027 uses the Coding-Agent Application package as the existing non-interactive seam, so creating another package would add a boundary without a distinct contract.
+- **Handing the non-interactive host Interactive Mode-shaped dependencies** — rejected: it would put `MutableRefObject` and provider types in a contract a non-React process has to satisfy, which is exactly the port surface ADR-0019 left as debt.
 
 ## Consequences
 
-- ADR-0019's clause that the port surface is "the TUI's rather than a second
-  host's" is superseded. The rest of that ADR — one owner, one command lane,
-  per-execution scope — stands.
+- ADR-0019's clause that the port surface is "the Interactive Mode's rather than a second host's" is superseded. The rest of that ADR — one owner, one command lane, per-execution scope — stands.
 - The engine-host factory is renamed: it materializes Session Engine Ports from
   capabilities and owns no lifetime.
 - Modules that mix React and React-free exports in one barrel must be split,
   because a React-free module importing such a barrel reaches React
   transitively. `modules/agents/registry.ts` is the known instance.
-- The TUI must render a session whose Host has not finished opening, because the
-  Engine does not exist until opening completes. That asynchronous boundary
-  belongs to the surface that mounts a session, so the binding stays synchronous
-  and reads an already-open Host. The Engine's own constructor contract is
-  otherwise unchanged.
-- No composition root for capabilities outside React lands with the Host. A Host
-  consumes capabilities as lazy getters, so the first non-React consumer
-  composes them from the same React-free factories the TUI uses; designing that
-  composition before its consumer exists would decide its lifecycle blind.
-- The `@wincode/tui` package surface widens to a second declared entry. ADR-0011's
-  intent still holds: help, version, and non-TUI commands never load the
-  interactive application.
+- Interactive Mode must render a session whose Host has not finished opening, because the Engine does not exist until opening completes. That asynchronous boundary belongs to the surface that mounts a session, so the binding stays synchronous and reads an already-open Host. The Engine's own constructor contract is otherwise unchanged.
+- No composition root for capabilities outside React lands with the Host. A Host consumes capabilities as lazy getters, so the first non-React consumer composes them from the same React-free factories used by Interactive Mode; the application package owns that composition without introducing a second session package.
+- The Host's declared subpath is now part of `@wincode/coding-agent`. ADR-0027 supersedes ADR-0011's package names while preserving the rule that help/version do not load the interactive application.

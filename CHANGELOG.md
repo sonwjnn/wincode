@@ -100,13 +100,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A Session Host opens a session and owns its lifetime, so a non-renderer can
   run one.** `createSessionHost` — reached through the declared
-  `@wincode/tui/session-host` subpath — reads a session's durable records,
+  `@wincode/coding-agent/session-host` subpath — reads a session's durable records,
   projects its Session Transcript, rebuilds its Session Context around the
   latest compaction, and constructs the Session Engine with them: it exposes the
   Engine, its Snapshot and subscription, the Agent Turn Events, the session's
   Session Selection, and one `shutdown`. Capabilities arrive as lazy getters and
   carry nothing React-shaped, so a plain Node process satisfies the same
-  contract. The Wincode TUI is now one such consumer: the route keeps what the
+  contract. The Coding-Agent application is now one such consumer: the route keeps what the
   navigation owns — which session to mount and the transient submission that
   starts its first turn — the session surface owns opening, the opening state,
   the failure that ends it, and the session title, and the binding reads an
