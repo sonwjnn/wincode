@@ -12,9 +12,9 @@ import type { SubmitSnapshot } from "./submit";
 export type InputOverlayState =
 	| { items: []; kind: null; selectedIndex: -1 }
 	| {
+			allItems: CommandItem[];
 			items: CommandItem[];
 			kind: "command";
-			labelWidth: number;
 			selectedIndex: number;
 	  }
 	| { items: FileMentionOption[]; kind: "file-mention"; selectedIndex: number };
@@ -29,7 +29,6 @@ export type ChatInputControllerState = {
 	recalledFilesRevision: number;
 	recalledPastedTexts: NonNullable<PromptHistoryEntry["pastedText"]>;
 	recalledPastedTextsRevision: number;
-	visibleStartIndex: number;
 };
 
 export type ChatInputControllerActions = {
@@ -43,7 +42,6 @@ export type ChatInputControllerActions = {
 	onEnter: () => void;
 	onEscape: () => void;
 	onItemExecute: (index: number) => void;
-	onItemScroll: (direction: "up" | "down") => void;
 	onItemSelect: (index: number) => void;
 	onTab: (shift: boolean) => void;
 	onTextChange: (

@@ -1,5 +1,4 @@
 export type { FileMentionOption } from "./types";
-export { FileMentionMenu } from "./ui/file-mention-menu";
 export {
 	filterFileMentionOptions,
 	getFileMentionOptions,

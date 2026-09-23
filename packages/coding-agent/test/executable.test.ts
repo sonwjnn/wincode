@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "bun";
 
-const executable = path.join(import.meta.dir, "../cli/executable.ts");
+const executable = path.join(import.meta.dir, "../bin/wincode.ts");
 const executableTestRoot = mkdtempSync(
 	path.join(tmpdir(), "wincode-executable-")
 );

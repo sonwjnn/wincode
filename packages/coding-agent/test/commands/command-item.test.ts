@@ -4,7 +4,6 @@ import {
 	createSkillCommandSpecs,
 	filterCommandItems,
 	getCommandLabel,
-	getCommandLabelWidth,
 } from "@/modules/commands/command-item";
 
 const MODELS: CommandItem = {
@@ -65,12 +64,5 @@ describe("filterCommandItems", () => {
 	test("does not match inside a name or against a description", () => {
 		expect(filterCommandItems(ITEMS, "eview")).toEqual([]);
 		expect(filterCommandItems(ITEMS, "conventional")).toEqual([]);
-	});
-});
-
-describe("getCommandLabelWidth", () => {
-	test("measures the longest label across every source", () => {
-		expect(getCommandLabelWidth(ITEMS)).toBe("skill:review".length);
-		expect(getCommandLabelWidth([])).toBe(0);
 	});
 });
