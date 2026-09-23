@@ -14,8 +14,8 @@ for AI context.
    subsequence matches. Slash-containing queries retain their relative path context; a trailing
    slash scopes results to recursive descendants and omits the queried directory itself. Results
    are sorted deterministically before the existing 100-option limit is applied.
-3. **Overlay** — `FileMentionMenu` renders the active suggestion list inside the chat input
-   area. Keyboard events cycle selection; Enter applies the chosen mention.
+3. **Overlay** — the shared `SelectableList` renders the active suggestion list inside the
+   chat input area. Keyboard events cycle selection; Enter applies the chosen mention.
 4. **Replacement** — `applyFileMentionReplacement` inserts the selected label into the
    textarea, replacing the raw trigger text. `deleteFileMentionAfterTrailingCharacterDelete`
    handles backspace-to-remove behaviour.
@@ -32,7 +32,6 @@ for AI context.
 - `applyFileMentionReplacement`, `deleteFileMentionAfterTrailingCharacterDelete`
 - `getFileMentionOptions`, `filterFileMentionOptions`
 - `resolveFileMentionParts`
-- `FileMentionMenu`
 - `FileMentionOption`, `FileMentionRange`, `FileMentionReplacement`
 
 ## Dependencies
@@ -40,4 +39,4 @@ for AI context.
 - `@wincode/agent-core` — shared Agent identity contracts
 - `packages/coding-agent/modules/sessions/message` — Coding-Agent-owned `FileMentionPart`
 - `@wincode/coding-tools/workspace` — `createWorkspaceSandbox`, `traverseWorkspaceEntries`
-- `shared/terminal/theme` — terminal colour context
+- `shared/ui/selectable-list` — terminal suggestion-list rendering

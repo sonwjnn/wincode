@@ -54,13 +54,3 @@ export const filterCommandItems = (
 	query.length === 0
 		? [...items]
 		: items.filter((item) => matchesCommandQuery(item, query));
-
-/**
- * Longest visible label, measured over every source so the description column
- * stays aligned while the query narrows the list.
- */
-export const getCommandLabelWidth = (items: readonly CommandItem[]): number =>
-	items.reduce(
-		(width, item) => Math.max(width, getCommandLabel(item).length),
-		0
-	);

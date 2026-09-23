@@ -5,7 +5,6 @@ import {
 	createSkillCommandSpecs,
 	filterCommandItems,
 	getCommandInvocation,
-	getCommandLabelWidth,
 	type SkillCommandSpec,
 } from "@/modules/commands/command-item";
 import { getVisibleCommands } from "@/modules/commands/commands";
@@ -34,7 +33,6 @@ import {
 	resetHistoryNavigation,
 	shouldRecordCtrlC,
 } from "./history";
-import { scrollCommandViewport } from "./scroll-command";
 import {
 	resolveBuiltinCommand,
 	type SubmitSnapshot,
@@ -46,8 +44,6 @@ import type {
 	ChatInputControllerOptions,
 	InputOverlayState,
 } from "./types";
-
-const MAX_VISIBLE_ITEMS = 8;
 
 const EMPTY_OVERLAY: InputOverlayState = {
 	items: [],
@@ -83,7 +79,6 @@ export function useChatInputController({
 	const [customCommands, setCustomCommands] = useState<CustomCommandSpec[]>([]);
 	const [skillItems, setSkillItems] = useState<SkillCommandSpec[]>([]);
 	const [textSyncRevision, setTextSyncRevision] = useState(0);
-	const [visibleStartIndex, setVisibleStartIndex] = useState(0);
 	const historyRef = useRef<PromptHistoryEntry[]>([]);
 	const historyIndexRef = useRef(-1);
 	const draftRef = useRef<PromptHistoryEntry>({ text: "", files: [] });
@@ -234,10 +229,6 @@ export function useChatInputController({
 				: filterCommandItems(commandItems, commandQuery),
 		[commandItems, commandQuery]
 	);
-	const commandLabelWidth = useMemo(
-		() => getCommandLabelWidth(commandItems),
-		[commandItems]
-	);
 	const filteredFileMentions = useMemo(
 		() =>
 			isUndefined(fileMentionQuery)
@@ -250,7 +241,6 @@ export function useChatInputController({
 		setActiveTrigger(null);
 		setOverlayKind(null);
 		setSelectedIndex(0);
-		setVisibleStartIndex(0);
 	}, []);
 
 	const onTextChange = useCallback(
@@ -265,7 +255,6 @@ export function useChatInputController({
 			setTextValue(text);
 			setCursorOffset(null);
 			setSelectedIndex(0);
-			setVisibleStartIndex(0);
 
 			const nextTrigger = detectTrigger(text, cursorOffset);
 			setActiveTrigger(nextTrigger);
@@ -585,11 +574,6 @@ export function useChatInputController({
 					: selectedIndexRef.current - 1;
 			selectedIndexRef.current = nextIndex;
 			setSelectedIndex(nextIndex);
-			setVisibleStartIndex((start) =>
-				nextIndex < start || nextIndex >= start + MAX_VISIBLE_ITEMS
-					? Math.max(0, nextIndex - MAX_VISIBLE_ITEMS + 1)
-					: start
-			);
 			return true;
 		},
 		[
@@ -633,15 +617,6 @@ export function useChatInputController({
 					: selectedIndexRef.current + 1;
 			selectedIndexRef.current = nextIndex;
 			setSelectedIndex(nextIndex);
-			setVisibleStartIndex((start) => {
-				if (nextIndex < start) {
-					return 0;
-				}
-				if (nextIndex >= start + MAX_VISIBLE_ITEMS) {
-					return nextIndex - MAX_VISIBLE_ITEMS + 1;
-				}
-				return start;
-			});
 			return true;
 		},
 		[
@@ -683,23 +658,6 @@ export function useChatInputController({
 		[disabled, executeCommandAtIndex, executeFileMentionAtIndex, overlayKind]
 	);
 
-	const onItemScroll = useCallback(
-		(direction: "up" | "down") => {
-			if (overlayKind !== "command") {
-				return;
-			}
-			setVisibleStartIndex(
-				scrollCommandViewport(
-					visibleStartIndex,
-					direction,
-					filteredCommands.length,
-					MAX_VISIBLE_ITEMS
-				)
-			);
-		},
-		[filteredCommands.length, overlayKind, visibleStartIndex]
-	);
-
 	const handleTab = useCallback(
 		(shift: boolean) => {
 			if (disabled || steering) {
@@ -714,9 +672,9 @@ export function useChatInputController({
 	let overlay: InputOverlayState = EMPTY_OVERLAY;
 	if (overlayKind === "command") {
 		overlay = {
+			allItems: commandItems,
 			items: filteredCommands,
 			kind: "command",
-			labelWidth: commandLabelWidth,
 			selectedIndex,
 		};
 	} else if (overlayKind === "file-mention") {
@@ -735,7 +693,6 @@ export function useChatInputController({
 			onEnter,
 			onEscape,
 			onItemExecute,
-			onItemScroll,
 			onItemSelect,
 			onTab: handleTab,
 			onTextChange,
@@ -753,7 +710,6 @@ export function useChatInputController({
 			recalledFilesRevision,
 			recalledPastedTexts,
 			recalledPastedTextsRevision,
-			visibleStartIndex,
 		},
 	};
 }

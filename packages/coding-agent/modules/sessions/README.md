@@ -145,7 +145,11 @@ second abort trigger finds nothing pending to handle.
 
 ### Input overlays
 
-`useChatInputController` detects `/` command and `@path` file-mention triggers. `CommandMenu` and `FileMentionMenu` render the overlays and support keyboard selection. The controller resolves the selected command row — executing a Built-in Command through the app command executor, or writing a Custom Command (`/name `) or Skill (`/skill:name `) invocation into the input — and dispatches a typed Built-in Command through that same executor before the view's submit guards.
+`useChatInputController` detects `/` command and `@path` file-mention triggers. The shared
+`SelectableList` renders both overlays and supports keyboard selection. The controller resolves
+the selected command row — executing a Built-in Command through the app command executor, or
+writing a Custom Command (`/name `) or Skill (`/skill:name `) invocation into the input — and
+dispatches a typed Built-in Command through that same executor before the view's submit guards.
 
 ### Session management
 
