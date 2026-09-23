@@ -9,12 +9,8 @@
   },
   "exports": {
     ".": {
-      "types": "./index.d.ts",
+      "types": "./index.ts",
       "import": "./index.ts"
-    },
-    "./application": {
-      "types": "./modules/application/application.ts",
-      "import": "./modules/application/application.ts"
     },
     "./session-host": {
       "types": "./modules/sessions/host/session-host.ts",
