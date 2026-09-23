@@ -41,6 +41,20 @@ const registry = buildAgentRegistry(
 	})
 );
 
+const connections = {
+	authorize: async () => ({ kind: "api-key" as const, apiKey: "test-key" }),
+	connect: async () => undefined,
+	listProviders: async () => [
+		{
+			connected: true as const,
+			connectionMethod: "api-key" as const,
+			displayName: "OpenAI",
+			id: "openai" as const,
+			methods: ["api-key", "browser"] as const,
+		},
+	],
+};
+
 const composeCapabilities = async ({
 	autoApproval,
 	cwd,
@@ -49,10 +63,11 @@ const composeCapabilities = async ({
 	createSessionCapabilities({
 		approvalMode: "non-interactive",
 		cwd,
-		databasePath: path.join(workspace, "sessions.sqlite"),
+		databasePath: path.join(root, "sessions.sqlite"),
 		permissionService: createPermissionService({ autoApproval }),
 		registry,
 		workspace: root,
+		connections,
 	});
 
 const writer = (): { text: string; writer: TextWriter } => {
@@ -333,6 +348,45 @@ test("one-shot input rejects empty submissions before creating a Session", async
 		}
 	} finally {
 		await rm(emptyWorkspace, { force: true, recursive: true });
+	}
+});
+
+test("one-shot rejects a disconnected model before creating a Session", async () => {
+	const disconnectedWorkspace = await mkdtemp(
+		path.join("/tmp", "wincode-disconnected-model-")
+	);
+	try {
+		const stdout = writer();
+		const stderr = writer();
+		const exitCode = await runPrintMode(
+			context(
+				"print",
+				"hello",
+				stdout.writer,
+				stderr.writer,
+				undefined,
+				undefined,
+				true,
+				{ model: "anthropic/claude-sonnet-4-5" },
+				disconnectedWorkspace
+			),
+			dependencies
+		);
+
+		expect(exitCode).toBe(1);
+		expect(stderr.text).toContain("Connect anthropic");
+		const verification = await composeCapabilities({
+			autoApproval: false,
+			cwd: disconnectedWorkspace,
+			workspace: disconnectedWorkspace,
+		});
+		try {
+			expect(await verification.store.listSessions()).toHaveLength(0);
+		} finally {
+			await verification.shutdown();
+		}
+	} finally {
+		await rm(disconnectedWorkspace, { force: true, recursive: true });
 	}
 });
 

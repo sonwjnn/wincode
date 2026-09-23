@@ -20,9 +20,14 @@ export type DispatchInput = Readonly<{
 }>;
 
 export type DispatchModeRunner = (
-	mode: ExecutionMode,
 	context: ApplicationContext
 ) => Promise<number>;
+
+export type DispatchModeRunners = Readonly<
+	Record<ExecutionMode, DispatchModeRunner>
+>;
+
+export type DispatchModeLoader = () => Promise<DispatchModeRunners>;
 
 const USAGE_EXIT_CODE = 2;
 const HELP_TEXT = [
@@ -240,18 +245,9 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 
 export const getCliHelpText = (): string => HELP_TEXT;
 
-const runDefaultMode = async (
-	mode: ExecutionMode,
-	context: ApplicationContext
-): Promise<number> => {
-	// Help and version must not load the Session/Engine or OpenTUI graphs.
-	const { runExecutionMode } = await import("./modes/registry");
-	return runExecutionMode(mode, context);
-};
-
 export const dispatch = async (
 	input: DispatchInput,
-	runMode: DispatchModeRunner = runDefaultMode
+	runners: DispatchModeRunners | DispatchModeLoader
 ): Promise<number> => {
 	try {
 		const parsed = parseInvocation(input.args);
@@ -277,7 +273,9 @@ export const dispatch = async (
 			stdinIsTTY: input.stdinIsTTY,
 			stdout: input.stdout,
 		};
-		return await runMode(parsed.invocation.mode, context);
+		const resolvedRunners =
+			typeof runners === "function" ? await runners() : runners;
+		return await resolvedRunners[parsed.invocation.mode](context);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		writeLine(input.stderr, `error: ${message}`);

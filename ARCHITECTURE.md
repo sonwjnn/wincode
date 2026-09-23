@@ -40,15 +40,23 @@ Session Engine.
 ```text
 .
 ├── packages/
-│   ├── coding-agent/             # Executable dispatch, modes, OpenTUI, sessions, persistence, connections, MCP, approvals
-│   ├── ai/                      # Provider-neutral model catalog, targets, options, usage, failures
-│   ├── agent-core/              # Agents, Agent Turns, events, records, runtime and tool contracts
-│   ├── agent-runtime-ai-sdk/    # Private AI SDK implementation and provider adapters
-│   ├── coding-tools/            # Workspace sandbox plus read, search, edit, write, shell tools
-│   └── skills/                  # Skill parsing, discovery, catalog, snapshots, activation
+│   ├── coding-agent/
+│   │   ├── cli/                  # Process adapters and composition root
+│   │   ├── tui/                  # OpenTUI runtime, routes, layouts, commands
+│   │   └── modules/application/  # Mode orchestration and shared execution contracts
+│   ├── ai/                       # Provider-neutral model catalog, targets, options, usage, failures
+│   ├── agent-core/               # Agents, Agent Turns, events, records, runtime and tool contracts
+│   ├── agent-runtime-ai-sdk/     # Private AI SDK implementation and provider adapters
+│   ├── coding-tools/             # Workspace sandbox plus read, search, edit, write, shell tools
+│   └── skills/                   # Skill parsing, discovery, catalog, snapshots, activation
 └── docs/
-    └── adr/                     # Accepted architecture decisions
+    └── adr/                      # Accepted architecture decisions
 ```
+
+The Coding-Agent composition root is `cli/`. It injects the Interactive TUI
+adapter and the non-interactive mode runners into `modules/application/`.
+Application orchestration depends on mode contracts, never on `tui/`; the
+dependency direction is `cli/` and `tui/` toward `modules/application/`.
 
 Dependency direction is inward toward contracts:
 

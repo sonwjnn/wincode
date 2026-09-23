@@ -30,10 +30,6 @@ export type ApplicationContext = Readonly<{
 	stdout: TextWriter;
 }>;
 
-export type ExecutionModeFactory = (
-	context: ApplicationContext
-) => Promise<number>;
-
 export class InvocationError extends Error {
 	readonly exitCode: number;
 

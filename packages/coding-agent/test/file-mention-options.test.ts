@@ -8,8 +8,8 @@ describe("file mention options", () => {
 				[
 					{ label: "packages/foo/", path: "packages/foo", type: "directory" },
 					{
-						label: "packages/coding-agent/app/index.ts",
-						path: "packages/coding-agent/app/index.ts",
+						label: "packages/coding-agent/tui/index.ts",
+						path: "packages/coding-agent/tui/index.ts",
 						type: "file",
 					},
 				],
@@ -17,8 +17,8 @@ describe("file mention options", () => {
 			)
 		).toEqual([
 			{
-				label: "packages/coding-agent/app/index.ts",
-				path: "packages/coding-agent/app/index.ts",
+				label: "packages/coding-agent/tui/index.ts",
+				path: "packages/coding-agent/tui/index.ts",
 				type: "file",
 			},
 		]);
@@ -125,8 +125,8 @@ describe("file mention options", () => {
 				type: "file" as const,
 			},
 			{
-				label: "packages/coding-agent/app/index.ts",
-				path: "packages/coding-agent/app/index.ts",
+				label: "packages/coding-agent/tui/index.ts",
+				path: "packages/coding-agent/tui/index.ts",
 				type: "file" as const,
 			},
 		];
@@ -156,8 +156,8 @@ describe("file mention options", () => {
 		]);
 
 		expect(
-			filterFileMentionOptions(options, "app/").map((option) => option.path)
-		).toEqual(["packages/coding-agent/app/index.ts"]);
+			filterFileMentionOptions(options, "tui/").map((option) => option.path)
+		).toEqual(["packages/coding-agent/tui/index.ts"]);
 	});
 
 	test("orders equal-quality matches by canonical path", () => {

@@ -8,6 +8,8 @@ import {
 	type ChatModelSelection,
 	defaultChatModelSelection,
 	findSupportedChatModel,
+	findSupportedChatModelSelection,
+	isActiveChatModel,
 	type ModelVariant,
 	modelSelectionSchema,
 	normalizeModelVariant,
@@ -16,6 +18,7 @@ import {
 import { resolveWorkspaceRoot } from "@wincode/coding-tools/workspace";
 import { getErrorMessage } from "@wincode/runtime-utils";
 import type { AgentRegistry } from "../../../modules/agents/registry";
+import type { Connections } from "../../../modules/connections/contract";
 import { createPermissionService } from "../../../modules/permissions/permission-service";
 import type { SessionCapabilitiesAssembly } from "../../../modules/sessions/host/session-capabilities";
 import { createSessionCapabilities } from "../../../modules/sessions/host/session-capabilities";
@@ -127,6 +130,31 @@ const parseModel = (
 		throw new InvocationError(`Invalid Model selector: ${value}`);
 	}
 	return parsed.data;
+};
+
+const validateModelAvailability = async (
+	model: ChatModelSelection,
+	connections: Connections
+): Promise<void> => {
+	const catalogModel = findSupportedChatModelSelection(model);
+	if (catalogModel === null) {
+		throw new InvocationError(
+			`Invalid Model selector: ${model.providerId}/${model.modelId}`
+		);
+	}
+	if (!isActiveChatModel(catalogModel)) {
+		throw new InvocationError(
+			`Model ${model.providerId}/${model.modelId} is retired.`
+		);
+	}
+	const provider = (await connections.listProviders()).find(
+		(candidate) => candidate.id === model.providerId
+	);
+	if (provider?.connected !== true) {
+		throw new InvocationError(
+			`Connect ${model.providerId} to use Model ${model.modelId}.`
+		);
+	}
 };
 
 const candidateAgent = (
@@ -281,6 +309,10 @@ const runOneShot = async (
 				restored: null,
 				thinkingOption: context.invocation.thinking,
 			});
+			await validateModelAvailability(
+				selection.model,
+				assembly.capabilities.getConnections()
+			);
 			initialMessage = createSessionUserMessage(text, {
 				agent: selection.agent,
 				model: selection.model,

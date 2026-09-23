@@ -54,14 +54,14 @@ To use the checkout against another project, start the entrypoint from that proj
 
 ```bash
 cd /path/to/your/project
-bun run /path/to/wincode/packages/coding-agent/app/executable.ts
+bun run /path/to/wincode/packages/coding-agent/cli/executable.ts
 ```
 
 > [!TIP]
 > Pass `--auto` to start with automatic approval enabled. Explicit `deny` rules still take precedence.
 >
 > ```bash
-> bun run /path/to/wincode/packages/coding-agent/app/executable.ts --auto
+> bun run /path/to/wincode/packages/coding-agent/cli/executable.ts --auto
 > ```
 
 ### Supported providers

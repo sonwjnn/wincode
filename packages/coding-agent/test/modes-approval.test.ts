@@ -99,6 +99,20 @@ const registry = buildAgentRegistry(
 		sources: [],
 	})
 );
+
+const connections = {
+	authorize: async () => ({ kind: "api-key" as const, apiKey: "test-key" }),
+	connect: async () => undefined,
+	listProviders: async () => [
+		{
+			connected: true as const,
+			connectionMethod: "api-key" as const,
+			displayName: "OpenAI",
+			id: "openai" as const,
+			methods: ["api-key", "browser"] as const,
+		},
+	],
+};
 const { runPrintMode } = await import("../modules/application/modes/one-shot");
 
 type CapturedOutput = {
@@ -132,6 +146,7 @@ const composeCapabilities = async ({
 		permissionService: createPermissionService({ autoApproval }),
 		registry,
 		workspace: root,
+		connections,
 	});
 
 const context = (

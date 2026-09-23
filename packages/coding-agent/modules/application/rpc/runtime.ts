@@ -1,28 +1,32 @@
 import { createPermissionService } from "../../../modules/permissions/permission-service";
+import { createSessionCapabilities } from "../../../modules/sessions/host/session-capabilities";
+import { createSessionHost } from "../../../modules/sessions/host/session-host";
+import {
+	createAgentTurnId,
+	createSessionUserMessage,
+	isSupportedModelVariant,
+	modelSelectionSchema,
+	normalizeModelVariant,
+	resolveWorkspaceRoot,
+	toSessionId,
+} from "../../../modules/sessions/host/session-rpc";
 import type { RuntimeModules } from "./types";
 
-export const loadRuntime = async (): Promise<RuntimeModules> => {
-	const [capabilities, host, rpc] = await Promise.all([
-		import("../../../modules/sessions/host/session-capabilities"),
-		import("../../../modules/sessions/host/session-host"),
-		import("../../../modules/sessions/host/session-rpc"),
-	]);
-	return {
-		createAgentTurnId: rpc.createAgentTurnId,
-		createSessionCapabilities: (input) =>
-			capabilities.createSessionCapabilities({
-				cwd: input.cwd,
-				permissionService: createPermissionService({
-					autoApproval: input.autoApproval,
-				}),
-				workspace: input.workspace,
+export const loadRuntime = async (): Promise<RuntimeModules> => ({
+	createAgentTurnId,
+	createSessionCapabilities: (input) =>
+		createSessionCapabilities({
+			cwd: input.cwd,
+			permissionService: createPermissionService({
+				autoApproval: input.autoApproval,
 			}),
-		createSessionHost: host.createSessionHost,
-		createSessionUserMessage: rpc.createSessionUserMessage,
-		isSupportedModelVariant: rpc.isSupportedModelVariant,
-		modelSelectionSchema: rpc.modelSelectionSchema,
-		normalizeModelVariant: rpc.normalizeModelVariant,
-		resolveWorkspaceRoot: rpc.resolveWorkspaceRoot,
-		toSessionId: rpc.toSessionId,
-	};
-};
+			workspace: input.workspace,
+		}),
+	createSessionHost,
+	createSessionUserMessage,
+	isSupportedModelVariant,
+	modelSelectionSchema,
+	normalizeModelVariant,
+	resolveWorkspaceRoot,
+	toSessionId,
+});

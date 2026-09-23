@@ -5,13 +5,13 @@ import {
 	createRouter,
 	RouterProvider,
 } from "@tanstack/react-router";
-import { routeTree } from "../routeTree.gen";
 import {
 	ThemeProvider,
 	useTheme,
 } from "../shared/providers/theme/theme-provider";
 import { runInteractiveCleanup } from "../shared/runtime-lifecycle";
 import { ThemedRoot } from "./layouts/themed-root";
+import { routeTree } from "./routeTree.gen";
 
 const PendingFallback = () => {
 	const { colors } = useTheme();

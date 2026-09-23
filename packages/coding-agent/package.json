@@ -5,7 +5,7 @@
   "type": "module",
   "module": "./index.ts",
   "bin": {
-    "wincode": "./app/executable.ts"
+    "wincode": "./cli/executable.ts"
   },
   "exports": {
     ".": {
@@ -30,7 +30,7 @@
     }
   },
   "scripts": {
-    "dev": "bun run --watch app/executable.ts",
+    "dev": "bun run --watch cli/executable.ts",
     "test": "bun ../../scripts/test-portfolio.ts default --package coding-agent",
     "test:e2e": "bun ../../scripts/test-portfolio.ts e2e --package coding-agent",
     "check-types": "tsc --noEmit",

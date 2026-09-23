@@ -16,7 +16,6 @@ import {
 import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import { spawn } from "bun";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { useCommandExecutor } from "@/app/commands/use-app-command-executor";
 import { builtInAgents, useAgentRegistry } from "@/modules/agents";
 import { CommandMenu } from "@/modules/commands/ui/command-menu";
 import { getCustomCommands } from "@/modules/custom-commands/loader";
@@ -37,6 +36,7 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
+import { useCommandExecutor } from "@/tui/commands/use-app-command-executor";
 import {
 	areFileMentionExtmarksCurrent,
 	type ChatAttachment,

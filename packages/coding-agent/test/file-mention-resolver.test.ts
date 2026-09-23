@@ -164,7 +164,7 @@ describe("file mention resolver", () => {
 		await mkdir(path.join(workspace, "packages/coding-agent/modules"), {
 			recursive: true,
 		});
-		await mkdir(path.join(workspace, "packages/coding-agent/app"), {
+		await mkdir(path.join(workspace, "packages/coding-agent/tui"), {
 			recursive: true,
 		});
 		await writeFile(
@@ -172,8 +172,8 @@ describe("file mention resolver", () => {
 			"modules"
 		);
 		await writeFile(
-			path.join(workspace, "packages/coding-agent/app/index.ts"),
-			"app"
+			path.join(workspace, "packages/coding-agent/tui/index.ts"),
+			"tui"
 		);
 
 		const [part] = await resolveFileMentionParts("inspect @index", {
@@ -184,7 +184,7 @@ describe("file mention resolver", () => {
 		expect(part?.data.error).toContain(
 			"packages/coding-agent/modules/index.ts"
 		);
-		expect(part?.data.error).toContain("packages/coding-agent/app/index.ts");
+		expect(part?.data.error).toContain("packages/coding-agent/tui/index.ts");
 		expect(part?.data.content).toBe("");
 	});
 
