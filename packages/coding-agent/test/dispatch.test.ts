@@ -125,6 +125,18 @@ describe("application dispatch", () => {
 		expect(stderr.output).toContain("unknown mode 'p'");
 	});
 
+	test("rejects unknown options before launching interactive mode", async () => {
+		const stdout = capture();
+		const stderr = capture();
+		const exitCode = await dispatch(
+			input(stdout.writer, stderr.writer, ["--typo"]),
+			noOpRunners
+		);
+		expect(exitCode).toBe(2);
+		expect(stdout.output).toBe("");
+		expect(stderr.output).toBe("error: unknown option '--typo'.\n");
+	});
+
 	test("prints root help without invoking a mode", async () => {
 		const stdout = capture();
 		const stderr = capture();

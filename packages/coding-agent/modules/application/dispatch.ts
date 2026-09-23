@@ -190,13 +190,10 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			continue;
 		}
 		if (argument.startsWith("-")) {
-			if (modeExplicit || oneShotOption) {
-				throw new InvocationError(
-					`unknown option '${argument}'.`,
-					USAGE_EXIT_CODE
-				);
-			}
-			continue;
+			throw new InvocationError(
+				`unknown option '${argument}'.`,
+				USAGE_EXIT_CODE
+			);
 		}
 		if (modeExplicit || oneShotOption) {
 			throw new InvocationError(
