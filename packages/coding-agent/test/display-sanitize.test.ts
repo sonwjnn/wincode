@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { SHELL_OUTPUT_TAIL_BYTES } from "@/modules/tools";
 import {
 	boundCommandHeader,
 	boundPreview,
@@ -162,21 +163,28 @@ describe("stripAnsi and sanitizeShellOutput", () => {
 	});
 
 	test("sanitizeShellOutput collapses CRLF and drops bare carriage returns", () => {
-		expect(sanitizeShellOutput("a\r\nb\rc")).toBe("a\nbc");
+		expect(sanitizeShellOutput("a\r\nb\rc", SHELL_OUTPUT_TAIL_BYTES)).toBe(
+			"a\nbc"
+		);
 	});
 
 	test("sanitizeShellOutput drops the trailing newline", () => {
-		expect(sanitizeShellOutput("a\n")).toBe("a");
+		expect(sanitizeShellOutput("a\n", SHELL_OUTPUT_TAIL_BYTES)).toBe("a");
 	});
 
 	test("sanitizes shell output end to end", () => {
 		expect(
-			sanitizeShellOutput("\u001b[31mboom\nAuthorization: Bearer hidden-token")
+			sanitizeShellOutput(
+				"\u001b[31mboom\nAuthorization: Bearer hidden-token",
+				SHELL_OUTPUT_TAIL_BYTES
+			)
 		).toBe("boom\n[redacted]");
 	});
 
 	test("keeps newlines and tabs but removes other control characters", () => {
-		expect(sanitizeShellOutput("a\nb\tc\u0000d")).toBe("a\nb\tcd");
+		expect(sanitizeShellOutput("a\nb\tc\u0000d", SHELL_OUTPUT_TAIL_BYTES)).toBe(
+			"a\nb\tcd"
+		);
 	});
 
 	test("bounds to maxChars", () => {

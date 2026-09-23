@@ -12,7 +12,11 @@ import { memo, type ReactNode, useMemo, useRef, useState } from "react";
 import type { UnknownRecord } from "type-fest";
 import { buildAgent } from "@/modules/agents";
 import type { SessionMessage } from "@/modules/sessions/message";
-import { type CodingToolRecovery, isCodingToolRecovery } from "@/modules/tools";
+import {
+	type CodingToolRecovery,
+	isCodingToolRecovery,
+	SHELL_OUTPUT_TAIL_BYTES,
+} from "@/modules/tools";
 import {
 	boundCommandHeader,
 	boundPreview,
@@ -472,7 +476,10 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 		MAX_TOOL_ARGUMENTS_LENGTH
 	);
 
-	const sanitizedText = useMemo(() => sanitizeShellOutput(rawText), [rawText]);
+	const sanitizedText = useMemo(
+		() => sanitizeShellOutput(rawText, SHELL_OUTPUT_TAIL_BYTES),
+		[rawText]
+	);
 	const preview = useMemo(
 		() => boundPreview(sanitizedText, contentWidth),
 		[sanitizedText, contentWidth]

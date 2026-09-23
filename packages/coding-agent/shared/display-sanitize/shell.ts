@@ -1,4 +1,3 @@
-import { SHELL_OUTPUT_TAIL_BYTES } from "@/modules/tools";
 import { redactSensitiveText } from "./redact";
 
 const CRLF_PATTERN = /\r\n/g;
@@ -38,10 +37,7 @@ const normalizeShellNewlines = (value: string): string =>
  * multi-line output renders faithfully, secrets are redacted, and the result
  * is bounded to `maxChars`.
  */
-export function sanitizeShellOutput(
-	value: string,
-	maxChars = SHELL_OUTPUT_TAIL_BYTES
-): string {
+export function sanitizeShellOutput(value: string, maxChars: number): string {
 	return redactSensitiveText(
 		stripShellOutputControlCharacters(normalizeShellNewlines(stripAnsi(value)))
 	).slice(0, maxChars);
