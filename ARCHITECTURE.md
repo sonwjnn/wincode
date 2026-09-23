@@ -58,6 +58,23 @@ adapter and the non-interactive mode runners into `modules/application/`.
 Application orchestration depends on mode contracts, never on `tui/`; the
 dependency direction is `cli/` and `tui/` toward `modules/application/`.
 
+### Public package interface
+
+`packages/coding-agent/index.ts` is the canonical application barrel:
+
+```ts
+import { dispatch } from "@wincode/coding-agent";
+```
+
+The package root export points both `types` and `import` at that source file.
+`modules/application/`, `cli/`, and `tui/` are implementation paths, not
+alternate application entrypoints; the package does not export
+`@wincode/coding-agent/application`. Session Host, capability, and RPC contracts
+retain their explicit UI-neutral subpath exports.
+
+This keeps one public application seam while allowing the implementation to
+move underneath `modules/application/` without changing package consumers.
+
 Dependency direction is inward toward contracts:
 
 - `agent-core` does not import the Coding-Agent Application, persistence,
