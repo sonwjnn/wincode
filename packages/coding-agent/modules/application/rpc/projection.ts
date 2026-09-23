@@ -148,6 +148,17 @@ const requiredEventString = (
 	return value;
 };
 
+const requiredEventText = (
+	event: Record<string, unknown>,
+	key: string
+): string => {
+	const value = event[key];
+	if (typeof value !== "string") {
+		throw new Error(`Agent event field ${key} is invalid.`);
+	}
+	return value;
+};
+
 const requiredEventNumber = (
 	event: Record<string, unknown>,
 	key: string
@@ -367,7 +378,7 @@ export const projectAgentEvent = (value: unknown): Record<string, unknown> => {
 			};
 		case "text-delta":
 		case "reasoning-delta":
-			return { ...base, delta: requiredEventString(event, "delta") };
+			return { ...base, delta: requiredEventText(event, "delta") };
 		case "model-step-finished":
 			return {
 				...base,
