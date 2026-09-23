@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 // biome-ignore lint/performance/noNamespaceImport: AGENTS.md requires namespace imports for node modules.
 import * as os from "node:os";
 // biome-ignore lint/performance/noNamespaceImport: AGENTS.md requires namespace imports for node modules.
@@ -30,7 +30,10 @@ import { modelStepId, toolCallId } from "./support/identifiers";
 const workspace = await mkdtemp(
 	path.join(os.tmpdir(), "wincode-mode-approval-")
 );
-await writeFile(path.join(workspace, ".env"), "SECRET=not-for-agents\n");
+await globalThis.Bun.write(
+	path.join(workspace, ".env"),
+	"SECRET=not-for-agents\n"
+);
 let approvalErrorText = "";
 const recorder = createFakeAiSdkRecorder();
 const approvalScript: FakeTurnScript = async function* (
