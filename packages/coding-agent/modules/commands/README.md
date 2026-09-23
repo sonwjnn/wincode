@@ -22,14 +22,14 @@ Slash-command registry and dispatch for the CLI chat input.
   - `ModelsAdapter` / `VariantsAdapter` / `AgentsAdapter` → open model-picker /
     variant-picker / agent-picker dialogs
   - `SettingsAdapter` → opens the global Settings hub
-5. **Overlay** — `CommandMenu` renders the matched suggestions below the input. Arrow keys
+5. **Overlay** — `SelectableList` renders the matched suggestions below the input. Arrow keys
    highlight, Enter executes.
 
 ## Public API
 
 - `COMMANDS`, `CommandSpec`, `getVisibleCommands(options)`
 - `CommandItem`, `getCommandLabel`, `getCommandInvocation`, `createSkillCommandSpecs`,
-  `filterCommandItems`, `getCommandLabelWidth` (`command-item.ts`)
+- `filterCommandItems` (`command-item.ts`)
 - `createCommandExecutor(adapters)`, `AdapterMap`
 - Adapter classes: `ExitAdapter`, `ConnectAdapter`, `DialogAdapter`, `ModelsAdapter`,
   `VariantsAdapter`, `AgentsAdapter`, `SettingsAdapter`
@@ -39,5 +39,6 @@ Slash-command registry and dispatch for the CLI chat input.
 - `modules/custom-commands/types` — the Custom Command spec that joins the item union.
 - `@/modules/skills` — the reserved `skill:` namespace and the Skill row label.
 - Adapters receive their concrete deps (router, dialog, theme, toast) from `tui/`
-  composition in `use-app-command-executor`.
-- `shared/terminal/theme` — terminal colour context (command‑menu overlay)
+  composition in `use-command-executor`.
+- `shared/ui/selectable-list` — shared OpenTUI selection surface used by command
+  and file-mention menus.

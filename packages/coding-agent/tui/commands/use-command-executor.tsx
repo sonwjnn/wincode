@@ -1,3 +1,4 @@
+import type { CliRenderer } from "@opentui/core";
 import { useRenderer } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
 import { findSupportedChatModelSelection } from "@wincode/ai/models";
@@ -42,7 +43,7 @@ type UseCommandExecutorReturn = {
 	executeCommand: (spec: CommandSpec) => Promise<void>;
 };
 export async function copyBrowserAuthorizationUrl(
-	renderer: Pick<ReturnType<typeof useRenderer>, "copyToClipboardOSC52">,
+	renderer: Pick<CliRenderer, "copyToClipboardOSC52">,
 	url: string,
 	spawnProcess?: ClipboardSpawn
 ): Promise<void> {

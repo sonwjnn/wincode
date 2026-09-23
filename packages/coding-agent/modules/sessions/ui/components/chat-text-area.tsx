@@ -17,11 +17,14 @@ import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import { spawn } from "bun";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { builtInAgents, useAgentRegistry } from "@/modules/agents";
-import { CommandMenu } from "@/modules/commands/ui/command-menu";
+import {
+	type CommandItem,
+	getCommandLabel,
+} from "@/modules/commands/command-item";
 import { getCustomCommands } from "@/modules/custom-commands/loader";
 import {
 	deleteFileMentionAfterTrailingCharacterDelete,
-	FileMentionMenu,
+	type FileMentionOption,
 	findFileMentionRanges,
 	getFileMentionOptions,
 } from "@/modules/file-mentions";
@@ -36,7 +39,8 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
-import { useCommandExecutor } from "@/tui/commands/use-app-command-executor";
+import { SelectableList } from "@/shared/ui/selectable-list";
+import { useCommandExecutor } from "@/tui/commands/use-command-executor";
 import {
 	areFileMentionExtmarksCurrent,
 	type ChatAttachment,
@@ -60,6 +64,16 @@ const MAX_IMAGE_ATTACHMENTS = 5;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const EMPTY_PROMPT_HISTORY: PromptHistoryEntry[] = [];
 const EMPTY_RECALLED_SUBMISSIONS: readonly SessionSubmissionComposition[] = [];
+const toSelectableCommandItem = (item: CommandItem) => ({
+	description: item.description,
+	id: `${item.kind}:${item.value}`,
+	label: getCommandLabel(item),
+});
+
+const toSelectableFileMentionItem = (item: FileMentionOption) => ({
+	id: item.path,
+	label: item.label,
+});
 
 const getAttachmentFileTokens = (
 	textarea: TextareaRenderable,
@@ -949,14 +963,13 @@ export function ChatTextArea({
 						paddingX={0}
 						paddingY={0}
 					>
-						<CommandMenu
-							items={state.overlay.items}
-							labelWidth={state.overlay.labelWidth}
-							onExecute={actions.onItemExecute}
-							onScroll={actions.onItemScroll}
+						<SelectableList
+							emptyMessage="No matching commands"
+							items={state.overlay.items.map(toSelectableCommandItem)}
+							onConfirm={actions.onItemExecute}
 							onSelect={actions.onItemSelect}
 							selectedIndex={state.overlay.selectedIndex}
-							visibleStartIndex={state.visibleStartIndex}
+							widthBasis={state.overlay.allItems.map(toSelectableCommandItem)}
 						/>
 					</BorderedContentBlock>
 				</box>
@@ -974,12 +987,12 @@ export function ChatTextArea({
 						paddingX={0}
 						paddingY={0}
 					>
-						<FileMentionMenu
-							items={state.overlay.items}
-							onExecute={actions.onItemExecute}
+						<SelectableList
+							emptyMessage="No matching files"
+							items={state.overlay.items.map(toSelectableFileMentionItem)}
+							onConfirm={actions.onItemExecute}
 							onSelect={actions.onItemSelect}
 							selectedIndex={state.overlay.selectedIndex}
-							visibleStartIndex={state.visibleStartIndex}
 						/>
 					</BorderedContentBlock>
 				</box>

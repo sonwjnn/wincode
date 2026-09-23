@@ -68,7 +68,7 @@
       "name": "@wincode/coding-agent",
       "version": "0.1.0",
       "bin": {
-        "wincode": "./cli/executable.ts",
+        "wincode": "./bin/wincode.ts",
       },
       "dependencies": {
         "@modelcontextprotocol/client": "^2.0.0",

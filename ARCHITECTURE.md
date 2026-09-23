@@ -54,10 +54,10 @@ Session Engine.
     └── adr/                       # Accepted architecture decisions
 ```
 
-The Coding-Agent composition root is `cli/`. It injects the Interactive TUI
+The Coding-Agent composition root is `bin/`. It injects the Interactive TUI
 adapter and the non-interactive mode runners into `modules/application/`.
 Application orchestration depends on mode contracts, never on `tui/`; the
-dependency direction is `cli/` and `tui/` toward `modules/application/`.
+dependency direction is `bin/` and `tui/` toward `modules/application/`.
 
 ### Public package interface
 
@@ -68,7 +68,7 @@ import { dispatch } from "@wincode/coding-agent";
 ```
 
 The package root export points both `types` and `import` at that source file.
-`modules/application/`, `cli/`, and `tui/` are implementation paths, not
+`modules/application/`, `bin/`, and `tui/` are implementation paths, not
 alternate application entrypoints; the package does not export
 `@wincode/coding-agent/application`. Session Host, capability, and RPC contracts
 retain their explicit UI-neutral subpath exports.
