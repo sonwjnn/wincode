@@ -177,7 +177,7 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			oneShotOption = true;
 			continue;
 		}
-		if (option === "--thinking" || option === "--thinking-level") {
+		if (option === "--thinking") {
 			const next = nextValue(args, index, option, inlineValue);
 			index = next.index;
 			thinking = next.value;

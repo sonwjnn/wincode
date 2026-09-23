@@ -52,7 +52,7 @@ type ResolvedSelection = Readonly<{
 }>;
 
 type OneShotResult = Readonly<{
-	emittedTerminalEvent: boolean;
+	terminalFailureMessage?: string;
 	terminalSucceeded: boolean;
 }>;
 
@@ -263,8 +263,8 @@ const runOneShot = async (
 	let host: SessionHost | undefined;
 	let removeEventListener: (() => void) | undefined;
 	let removeFatalListener: (() => void) | undefined;
+	let terminalFailureMessage: string | undefined;
 	let terminalSucceeded = false;
-	let emittedTerminalEvent = false;
 	let leaseLost = false;
 	try {
 		const selectedSession = context.invocation.session;
@@ -332,8 +332,12 @@ const runOneShot = async (
 				event.type === "agent-turn-cancelled" ||
 				event.type === "agent-turn-interrupted"
 			) {
-				emittedTerminalEvent = true;
-				terminalSucceeded = event.type === "agent-turn-completed";
+				if (event.type === "agent-turn-completed") {
+					terminalSucceeded = true;
+				} else {
+					terminalSucceeded = false;
+					terminalFailureMessage = event.failure.message;
+				}
 			}
 			if (format === "json") {
 				emitJsonEvent(context, event);
@@ -353,10 +357,18 @@ const runOneShot = async (
 			if (leaseLost) {
 				throw new Error("Session lease lost during the Agent Turn.");
 			}
+			if (!terminalSucceeded) {
+				if (format === "json" && terminalFailureMessage !== undefined) {
+					return { terminalFailureMessage, terminalSucceeded: false };
+				}
+				throw new Error(
+					terminalFailureMessage ?? "Agent Turn did not complete."
+				);
+			}
 		} finally {
 			context.signal?.removeEventListener("abort", abort);
 		}
-		return { emittedTerminalEvent, terminalSucceeded };
+		return { terminalSucceeded };
 	} finally {
 		removeEventListener?.();
 		removeFatalListener?.();
@@ -386,6 +398,12 @@ export const runJsonMode = async (
 ): Promise<number> => {
 	try {
 		const result = await runOneShot(context, "json", dependencies);
+		if (
+			!result.terminalSucceeded &&
+			result.terminalFailureMessage !== undefined
+		) {
+			context.stderr.write(`error: ${result.terminalFailureMessage}\n`);
+		}
 		return result.terminalSucceeded ? 0 : 1;
 	} catch (error) {
 		const message = getErrorMessage(error, "JSON Mode failed.");

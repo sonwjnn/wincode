@@ -169,23 +169,27 @@ Type `/` in the chat input to browse Built-in Commands, Custom Commands, and Ski
 
 ## Architecture
 
-Wincode is a Bun workspace with separate executable and interactive composition roots:
+Wincode is a Bun workspace with one private Coding-Agent Application package:
 
 ```text
 .
 ├── packages/
-│   ├── cli/                      # Executable dispatch, help, version, diagnostics
-│   ├── tui/                      # OpenTUI app, routing, sessions, config, MCP, approvals
-│   ├── ai/                       # Provider-neutral model catalog, targets, options, usage, failures
-│   ├── agent-core/               # Agent Turns, records, events, runtime and tool contracts
-│   ├── agent-runtime-ai-sdk/     # Private AI SDK runtime and provider adapters
-│   ├── coding-tools/             # Workspace sandbox, filesystem, search, edit, and shell tools
-│   └── skills/                   # Skill parsing, discovery, catalog, snapshots, and activation
+│   ├── coding-agent/              # Executable, modes, OpenTUI, sessions, config, MCP, approvals
+│   ├── ai/                        # Provider-neutral model catalog, targets, options, usage, failures
+│   ├── agent-core/                # Agent Turns, records, events, runtime and tool contracts
+│   ├── agent-runtime-ai-sdk/      # Private AI SDK runtime and provider adapters
+│   ├── coding-tools/              # Workspace sandbox, filesystem, search, edit, and shell tools
+│   └── skills/                    # Skill parsing, discovery, catalog, snapshots, and activation
 └── docs/
-    └── adr/                      # Accepted architecture decisions
+    └── adr/                       # Accepted architecture decisions
 ```
 
-The dependency direction keeps model and Agent contracts independent from the CLI, OpenTUI, persistence, MCP transports, and concrete coding tools. See the concise [architecture guide](ARCHITECTURE.md) for the runtime flow and boundaries, or [ADR 0010](docs/adr/0010-agent-architecture-package-graph.md) for the underlying decision.
+The Coding-Agent Application owns the executable and application composition;
+the reusable model, Agent, tool, and Skill contracts remain independent from
+its terminal surfaces. See the concise [architecture guide](ARCHITECTURE.md)
+for the runtime flow and boundaries, or [ADR 0010](docs/adr/0010-agent-architecture-package-graph.md)
+and [ADR 0027](docs/adr/0027-coding-agent-application-modes.md) for the
+application-boundary decisions.
 
 ## Development
 

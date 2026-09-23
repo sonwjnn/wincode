@@ -1,6 +1,7 @@
 import { afterAll, expect, mock, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
+// biome-ignore lint/performance/noNamespaceImport: AGENTS.md requires namespace imports for node modules.
+import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { agentIdSchema } from "@wincode/agent-core";
 import { buildAgentRegistry } from "../modules/agents/registry";
@@ -30,7 +31,7 @@ const { runJsonMode, runPrintMode } = await import(
 	"../modules/application/modes/one-shot"
 );
 
-const workspace = await mkdtemp(join("/tmp", "wincode-one-shot-"));
+const workspace = await mkdtemp(path.join("/tmp", "wincode-one-shot-"));
 const registry = buildAgentRegistry(
 	fromPartial<ConfigSnapshot>({
 		diagnostics: [],
@@ -48,7 +49,7 @@ const composeCapabilities = async ({
 	createSessionCapabilities({
 		approvalMode: "non-interactive",
 		cwd,
-		databasePath: join(workspace, "sessions.sqlite"),
+		databasePath: path.join(workspace, "sessions.sqlite"),
 		permissionService: createPermissionService({ autoApproval }),
 		registry,
 		workspace: root,
@@ -72,7 +73,6 @@ type SelectorOptions = Readonly<{
 	model?: string;
 	thinking?: string;
 }>;
-
 const context = (
 	mode: "json" | "print",
 	prompt: string | undefined,
@@ -83,10 +83,11 @@ const context = (
 		yield* [];
 	})(),
 	stdinIsTTY = prompt !== undefined,
-	selectors: SelectorOptions = {}
+	selectors: SelectorOptions = {},
+	workingDirectory = workspace
 ): ApplicationContext => ({
 	args: [],
-	cwd: workspace,
+	cwd: workingDirectory,
 	invocation: {
 		auto: false,
 		mode,
@@ -120,7 +121,7 @@ test("Print mode creates a durable One-Shot Session and writes assistant text on
 	const verification = await createSessionCapabilities({
 		approvalMode: "non-interactive",
 		cwd: workspace,
-		databasePath: join(workspace, "sessions.sqlite"),
+		databasePath: path.join(workspace, "sessions.sqlite"),
 		permissionService: createPermissionService(),
 		registry,
 		workspace,
@@ -207,7 +208,7 @@ test("Print mode reports an existing Session Lease conflict", async () => {
 	const lookup = await createSessionCapabilities({
 		approvalMode: "non-interactive",
 		cwd: workspace,
-		databasePath: join(workspace, "sessions.sqlite"),
+		databasePath: path.join(workspace, "sessions.sqlite"),
 		permissionService: createPermissionService(),
 		registry,
 		workspace,
@@ -297,23 +298,42 @@ test("Print mode reads one Submission from non-TTY stdin", async () => {
 	expect(stderr.text).toBe("");
 });
 
-test("one-shot input rejects empty submissions before composing capabilities", async () => {
-	const stdout = writer();
-	const stderr = writer();
-	let composeCalls = 0;
-	const noCompose: OneShotDependencies = {
-		composeCapabilities: async () => {
-			composeCalls += 1;
-			throw new Error("capabilities should not be composed");
-		},
-	};
-	const exitCode = await runPrintMode(
-		context("print", "   ", stdout.writer, stderr.writer),
-		noCompose
+test("one-shot input rejects empty submissions before creating a Session", async () => {
+	const emptyWorkspace = await mkdtemp(
+		path.join("/tmp", "wincode-empty-submission-")
 	);
+	try {
+		const stdout = writer();
+		const stderr = writer();
+		const exitCode = await runPrintMode(
+			context(
+				"print",
+				"   ",
+				stdout.writer,
+				stderr.writer,
+				undefined,
+				undefined,
+				true,
+				{},
+				emptyWorkspace
+			),
+			dependencies
+		);
 
-	expect(exitCode).toBe(1);
-	expect(composeCalls).toBe(0);
+		expect(exitCode).toBe(1);
+		const verification = await composeCapabilities({
+			autoApproval: false,
+			cwd: emptyWorkspace,
+			workspace: emptyWorkspace,
+		});
+		try {
+			expect(await verification.store.listSessions()).toHaveLength(0);
+		} finally {
+			await verification.shutdown();
+		}
+	} finally {
+		await rm(emptyWorkspace, { force: true, recursive: true });
+	}
 });
 
 test("one-shot input rejects simultaneous prompt and stdin", async () => {

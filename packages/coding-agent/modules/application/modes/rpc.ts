@@ -27,6 +27,7 @@ export const runRpcExecutionMode = async (
 		return await runRpc({
 			autoApproval: context.invocation.auto,
 			input: context.stdin,
+			signal: controller.signal,
 			signalExitCode: context.signalExitCode ?? (() => signalExitCode),
 			stderr: {
 				write: (text: string): undefined => {
