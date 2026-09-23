@@ -1,7 +1,6 @@
 import { isAbsolute } from "node:path";
 import { type BoxRenderable, pathToFiletype } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
-import { type EditDiff, isRenderableEditDiff } from "@wincode/coding-tools";
 import {
 	isArray,
 	isPlainObject,
@@ -11,6 +10,7 @@ import {
 } from "@wincode/runtime-utils";
 import { type ReactNode, useMemo, useRef, useState } from "react";
 import type { SessionMessage } from "@/modules/sessions/message";
+import { type EditDiff, isRenderableEditDiff } from "@/modules/tools";
 import { stripControlCharacters } from "@/shared/display-sanitize";
 import { useToggleShortcut } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";

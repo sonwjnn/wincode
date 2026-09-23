@@ -1,6 +1,5 @@
 import type { SessionMessageRecord, SessionRecord } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
-import type { EditMode, FileVersion } from "@wincode/coding-tools";
 import {
 	index,
 	integer,
@@ -10,6 +9,7 @@ import {
 	unique,
 } from "drizzle-orm/sqlite-core";
 import type { Jsonify } from "type-fest";
+import type { EditMode, FileVersion } from "@/modules/tools";
 import type { SessionCompaction } from "../compaction/types";
 import type {
 	PromptHistoryEntry,

@@ -15,8 +15,8 @@ import {
 	normalizeModelVariant,
 	parseCatalogModelSelection,
 } from "@wincode/ai/models";
-import { resolveWorkspaceRoot } from "@wincode/coding-tools/workspace";
 import { getErrorMessage } from "@wincode/runtime-utils";
+import { resolveWorkspaceRoot } from "@/modules/tools";
 import type { AgentRegistry } from "../../../modules/agents/registry";
 import type { Connections } from "../../../modules/connections/contract";
 import { createPermissionService } from "../../../modules/permissions/permission-service";

@@ -1,7 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
 import { getAgentTurnAbortDisposition } from "@wincode/agent-core";
-import { getToolResourceLimits } from "@wincode/coding-tools";
-import { createWorkspaceSandbox } from "@wincode/coding-tools/workspace";
 import {
 	createPermissionService,
 	createToolPermission,
@@ -10,6 +8,7 @@ import type { SessionApprovalOutcome } from "@/modules/sessions/engine/types";
 import type { SessionSendInput } from "@/modules/sessions/session-operation";
 import { createSessionOperation } from "@/modules/sessions/session-operation";
 import { createToolGate } from "@/modules/tool-gate/tool-gate";
+import { createWorkspaceSandbox, getToolResourceLimits } from "@/modules/tools";
 import { agentId, modelId, toolCallId } from "../support/identifiers";
 
 const request: SessionSendInput = {

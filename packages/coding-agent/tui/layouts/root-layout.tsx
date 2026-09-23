@@ -1,6 +1,5 @@
 import { homedir } from "node:os";
 import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
-import { resolveWorkspaceRoot } from "@wincode/coding-tools/workspace";
 import { useEffect, useReducer } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { ConnectionsProvider, createConnections } from "@/modules/connections";
@@ -11,6 +10,7 @@ import {
 	PermissionServiceProvider,
 } from "@/modules/permissions";
 import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
+import { resolveWorkspaceRoot } from "@/modules/tools";
 import { parseCliOptions } from "@/shared/cli-options";
 import { CopyOnSelect } from "@/shared/clipboard/copy-on-select";
 import { ConfigProvider } from "@/shared/config/config-provider";

@@ -34,16 +34,6 @@ import {
 import { createAiSdkAgentRuntime } from "@wincode/agent-runtime-ai-sdk";
 import type { ModelTarget } from "@wincode/ai/model-target";
 import {
-	type CodingToolName,
-	codingToolDefinitionFor,
-	type EditMode,
-	editInputSchemaForMode,
-	runCodingTool,
-	type ToolResourceLimits,
-	toCodingToolFailure,
-	type VersionedEditingContext,
-} from "@wincode/coding-tools";
-import {
 	getErrorMessage,
 	isNonEmptyString,
 	isNull,
@@ -52,17 +42,27 @@ import {
 	isUndefined,
 	omitUndefined,
 } from "@wincode/runtime-utils";
+import type { ReadonlyDeep, UnknownRecord } from "type-fest";
+import { z } from "zod";
+import type { McpCatalogSnapshot, McpSnapshotTool } from "@/modules/mcp";
 import {
 	formatSkillUserContext,
 	type SkillExecution,
 	type SkillRequestContext,
 	type SkillToolDefinition,
+	sampleSkillResources,
 	skillToolInputSchema,
-} from "@wincode/skills";
-import { sampleSkillResources } from "@wincode/skills/filesystem";
-import type { ReadonlyDeep, UnknownRecord } from "type-fest";
-import { z } from "zod";
-import type { McpCatalogSnapshot, McpSnapshotTool } from "@/modules/mcp";
+} from "@/modules/skills";
+import {
+	type CodingToolName,
+	codingToolDefinitionFor,
+	type EditMode,
+	editInputSchemaForMode,
+	runCodingTool,
+	type ToolResourceLimits,
+	toCodingToolFailure,
+	type VersionedEditingContext,
+} from "@/modules/tools";
 import type { ResolvedCodingAgent } from "../../agents/built-ins";
 import type { GateOutcome, ToolGate } from "../../tool-gate/tool-gate";
 import type { SessionMessage } from "../message";

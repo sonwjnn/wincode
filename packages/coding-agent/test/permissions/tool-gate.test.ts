@@ -2,11 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
-import {
-	getToolResourceLimits,
-	type ToolResourceLimits,
-} from "@wincode/coding-tools";
-import { createWorkspaceSandbox } from "@wincode/coding-tools/workspace";
 import { isUndefined } from "@wincode/runtime-utils";
 import { mcpDeniedByPolicyText } from "@/modules/mcp/registry";
 import {
@@ -27,6 +22,11 @@ import {
 	createToolGate,
 	type ToolGateApprovalPort,
 } from "@/modules/tool-gate/tool-gate";
+import {
+	createWorkspaceSandbox,
+	getToolResourceLimits,
+	type ToolResourceLimits,
+} from "@/modules/tools";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import {
 	toolCallId as makeToolCallId,

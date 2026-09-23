@@ -1,5 +1,5 @@
-import { SKILL_NAMESPACE_PREFIX, type Skill } from "@wincode/skills";
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
+import { SKILL_NAMESPACE_PREFIX, type Skill } from "@/modules/skills";
 import type { BaseSpec, CommandSpec } from "./commands";
 
 /** A discovered Skill offered as a row under the reserved `skill:` namespace. */

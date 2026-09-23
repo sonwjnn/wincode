@@ -1,5 +1,5 @@
-import { type CodingToolName, codingToolNames } from "@wincode/coding-tools";
 import { isPlainObject, isString, isUndefined } from "@wincode/runtime-utils";
+import { type CodingToolName, codingToolNames } from "@/modules/tools";
 import { expandHomeInPath } from "./external-directory";
 
 export type PermissionDecision = "allow" | "ask" | "deny";

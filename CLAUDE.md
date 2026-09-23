@@ -6,12 +6,14 @@
 
 ### Package Structure
 
-| Package                         | Description                                                     |
-| ------------------------------- | --------------------------------------------------------------- |
-| `packages/agent-runtime-ai-sdk` | Multi-provider LLM client with streaming support, Model catalog |
-| `packages/ai`                   | Model catalog                                                   |
-| `packages/coding-agent`                  | Main CLI application (primary focus)                            |
-| `packages/runtime-utils`        | Shared utilities                                                |
+| Package                         | Description                                                        |
+| ------------------------------- | ------------------------------------------------------------------ |
+| `packages/agent-core`           | Agent Turns, records, events, runtime and generic tool contracts  |
+| `packages/agent-runtime-ai-sdk` | Multi-provider LLM client with streaming support, Model catalog   |
+| `packages/ai`                   | Model catalog                                                      |
+| `packages/coding-agent`         | Main CLI application, including Skills and concrete coding tools   |
+| `packages/config`               | Shared configuration contracts and loaders                         |
+| `packages/runtime-utils`        | Shared utilities                                                   |
 
 ---
 

@@ -1,9 +1,9 @@
 # Architecture
 
-Wincode is a local-first terminal application for running coding agents. The
-Coding-Agent Application owns the executable boundary and its Interactive,
-Print, JSON, and RPC modes; reusable packages define model, agent, tool, and
-Skill contracts without depending on the application, UI, or persistence layer.
+Wincode is a local-first terminal application for running coding agents.
+The Coding-Agent Application owns the executable boundary and its Interactive,
+Print, JSON, and RPC modes; reusable packages define model and agent contracts,
+while application modules provide concrete coding tools and Skills.
 
 ## System shape
 
@@ -41,16 +41,17 @@ Session Engine.
 .
 ├── packages/
 │   ├── coding-agent/
-│   │   ├── cli/                  # Process adapters and composition root
-│   │   ├── tui/                  # OpenTUI runtime, routes, layouts, commands
-│   │   └── modules/application/  # Mode orchestration and shared execution contracts
-│   ├── ai/                       # Provider-neutral model catalog, targets, options, usage, failures
-│   ├── agent-core/               # Agents, Agent Turns, events, records, runtime and tool contracts
-│   ├── agent-runtime-ai-sdk/     # Private AI SDK implementation and provider adapters
-│   ├── coding-tools/             # Workspace sandbox plus read, search, edit, write, shell tools
-│   └── skills/                   # Skill parsing, discovery, catalog, snapshots, activation
+│   │   ├── bin/                   # Process entrypoint
+│   │   ├── tui/                   # OpenTUI runtime, routes, layouts, and TUI composition
+│   │   └── modules/
+│   │       ├── application/       # Mode orchestration and shared execution contracts
+│   │       ├── skills/            # Skill parsing, discovery, catalog, snapshots, activation
+│   │       └── tools/             # Workspace sandbox plus read, search, edit, write, shell tools
+│   ├── ai/                        # Provider-neutral model catalog, targets, options, usage, failures
+│   ├── agent-core/                # Agents, Agent Turns, events, records, runtime and tool contracts
+│   └── agent-runtime-ai-sdk/      # Private AI SDK implementation and provider adapters
 └── docs/
-    └── adr/                      # Accepted architecture decisions
+    └── adr/                       # Accepted architecture decisions
 ```
 
 The Coding-Agent composition root is `cli/`. It injects the Interactive TUI

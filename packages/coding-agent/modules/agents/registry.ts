@@ -16,12 +16,6 @@ import {
 	parseCatalogModelSelection,
 } from "@wincode/ai/models";
 import {
-	type CodingToolName,
-	DEFAULT_RESOURCE_LIMIT_PROFILE,
-	type ResourceLimitProfile,
-	resourceLimitProfileSchema,
-} from "@wincode/coding-tools";
-import {
 	isNull,
 	isPlainObject,
 	isString,
@@ -39,6 +33,12 @@ import {
 	resolveAgentPermission,
 } from "@/modules/permissions/resolve";
 import { topLevelPermissionSchema } from "@/modules/permissions/schema";
+import {
+	type CodingToolName,
+	DEFAULT_RESOURCE_LIMIT_PROFILE,
+	type ResourceLimitProfile,
+	resourceLimitProfileSchema,
+} from "@/modules/tools";
 import type {
 	ConfigDiagnostic,
 	ConfigOrigin,

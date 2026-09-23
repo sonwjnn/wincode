@@ -8,8 +8,8 @@ import type {
 import { createAgentTurnAbortReason } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { isUndefined } from "@wincode/runtime-utils";
-import type { SkillContext } from "@wincode/skills";
 import type { SessionFilePart } from "@/modules/sessions/message";
+import type { SkillContext } from "@/modules/skills";
 import type { SubmissionId } from "@/shared/identifiers";
 import type { SessionResolvedAgent } from "./engine/types";
 

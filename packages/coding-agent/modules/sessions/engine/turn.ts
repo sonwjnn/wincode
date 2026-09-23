@@ -9,8 +9,8 @@ import type { ModelUsage } from "@wincode/ai/model-usage";
 import { normalizeModelUsage } from "@wincode/ai/model-usage";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { defaultChatModelSelection } from "@wincode/ai/models";
-import { type CodingToolName, codingToolNames } from "@wincode/coding-tools";
 import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
+import { type CodingToolName, codingToolNames } from "@/modules/tools";
 import {
 	isSessionToolPart,
 	isTerminalSessionToolPart,

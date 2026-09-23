@@ -10,7 +10,6 @@ import {
 	isString,
 	isUndefined,
 } from "@wincode/runtime-utils";
-import type { SkillActivationSource } from "@wincode/skills";
 import type { ReadonlyDeep } from "type-fest";
 import { isAgentId } from "./agent";
 import type { OperationalFailure } from "./failures";
@@ -21,6 +20,7 @@ import type {
 	SessionRecordId,
 	ToolCallId,
 } from "./identifiers";
+import type { SkillActivationSource } from "./skill-activation";
 import { isToolFailureDetails, type ToolFailureDetails } from "./tools";
 import type {
 	AgentTurnDelegation,

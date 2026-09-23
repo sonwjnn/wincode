@@ -3,19 +3,7 @@ import type {
 	AgentTurnEvent,
 	AgentTurnTerminalEvent,
 } from "@wincode/agent-core";
-import {
-	codingToolDefinitions,
-	type VersionedEditingContext,
-} from "@wincode/coding-tools";
 import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
-import {
-	buildSkillToolDefinition,
-	createSkillExecution,
-	type SkillCatalog,
-	type SkillContext,
-	type SkillExecution,
-	type SkillRequestContext,
-} from "@wincode/skills";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
 import { createMcpToolExecutor } from "@/modules/mcp/result";
 import type { ToolPermission } from "@/modules/permissions/policy";
@@ -23,7 +11,19 @@ import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import { MAX_PROJECT_INSTRUCTION_TOTAL_BYTES } from "@/modules/prompt-composition/project-instructions";
 import { COMPACTION_REQUEST_OVERHEAD_TOKENS } from "@/modules/sessions/compaction/config";
 import { sessionMessageSkillSchema } from "@/modules/sessions/message";
-import { discoverSkillCatalog } from "@/modules/skills";
+import {
+	buildSkillToolDefinition,
+	createSkillExecution,
+	discoverSkillCatalog,
+	type SkillCatalog,
+	type SkillContext,
+	type SkillExecution,
+	type SkillRequestContext,
+} from "@/modules/skills";
+import {
+	codingToolDefinitions,
+	type VersionedEditingContext,
+} from "@/modules/tools";
 import type { SessionId } from "@/shared/identifiers";
 import { resolveChatModelTarget } from "../../model-target";
 import { createToolGate, type ToolGate } from "../../tool-gate/tool-gate";

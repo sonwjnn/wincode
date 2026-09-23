@@ -1,4 +1,4 @@
-import { SHELL_OUTPUT_TAIL_BYTES } from "@wincode/coding-tools";
+import { SHELL_OUTPUT_TAIL_BYTES } from "@/modules/tools";
 import { redactSensitiveText } from "./redact";
 
 const CRLF_PATTERN = /\r\n/g;

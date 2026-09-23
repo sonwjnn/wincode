@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createWorkspaceSandbox } from "@wincode/coding-tools/workspace";
 import { canonicalizeResource } from "@/modules/permissions/canonical";
+import { createWorkspaceSandbox } from "@/modules/tools";
 
 describe("canonicalizeResource", () => {
 	test("resolves to the workspace-relative POSIX path of the real file", async () => {

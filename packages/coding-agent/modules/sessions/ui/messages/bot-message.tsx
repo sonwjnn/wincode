@@ -1,10 +1,6 @@
 import type { BoxRenderable } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
 import {
-	type CodingToolRecovery,
-	isCodingToolRecovery,
-} from "@wincode/coding-tools";
-import {
 	isArray,
 	isNull,
 	isNumber,
@@ -16,6 +12,7 @@ import { memo, type ReactNode, useMemo, useRef, useState } from "react";
 import type { UnknownRecord } from "type-fest";
 import { buildAgent } from "@/modules/agents";
 import type { SessionMessage } from "@/modules/sessions/message";
+import { type CodingToolRecovery, isCodingToolRecovery } from "@/modules/tools";
 import {
 	boundCommandHeader,
 	boundPreview,

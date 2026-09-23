@@ -29,7 +29,6 @@ import {
 	modelSelectionSchema,
 	modelVariantSchema,
 } from "@wincode/ai/models";
-import { codingToolNames } from "@wincode/coding-tools";
 import {
 	isArray,
 	isFiniteNonNegativeNumber,
@@ -43,6 +42,7 @@ import {
 } from "@wincode/runtime-utils";
 import { randomUUIDv7 } from "bun";
 import type { UnknownRecord } from "type-fest";
+import { codingToolNames } from "@/modules/tools";
 import type {
 	SessionMessage,
 	SessionMessageMetadata,

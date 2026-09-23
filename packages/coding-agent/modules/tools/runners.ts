@@ -1,0 +1,60 @@
+// biome-ignore-all lint/performance/noBarrelFile: Node-only runner entry point.
+
+import { runEditTool } from "./edit/runner";
+import { runGlobTool } from "./glob/runner";
+import { runGrepTool } from "./grep/runner";
+import { runReadTool } from "./read/runner";
+import { runRecoverTool } from "./recover/runner";
+import type { ResourceLimitOptions } from "./resource-limits";
+import type {
+	CodingToolInput,
+	CodingToolName,
+	CodingToolOutput,
+} from "./schemas";
+import { runShellTool } from "./shell/runner";
+import type { VersionedEditingContext } from "./versioned/contracts";
+import { runWriteTool } from "./write/runner";
+
+export { runEditTool } from "./edit/runner";
+export { runGlobTool } from "./glob/runner";
+export { runGrepTool } from "./grep/runner";
+export { runReadTool } from "./read/runner";
+export { runRecoverTool } from "./recover/runner";
+export { runShellTool } from "./shell/runner";
+export { runWriteTool } from "./write/runner";
+export type CodingToolRunnerOptions = ResourceLimitOptions & {
+	allowCrossSession?: boolean;
+	allowExternalPath?: boolean;
+	allowSloppy?: boolean;
+	signal?: AbortSignal;
+	versionedEditing?: VersionedEditingContext;
+};
+
+export type CodingToolRunnerMap = {
+	[Name in CodingToolName]: (
+		input: CodingToolInput<Name>,
+		options?: CodingToolRunnerOptions
+	) => Promise<CodingToolOutput<Name>>;
+};
+
+export const codingToolRunners = {
+	read: runReadTool,
+	write: runWriteTool,
+	edit: runEditTool,
+	recover: runRecoverTool,
+	glob: runGlobTool,
+	grep: runGrepTool,
+	shell: runShellTool,
+} satisfies CodingToolRunnerMap;
+
+export const runCodingTool = async (
+	name: CodingToolName,
+	input: unknown,
+	options?: CodingToolRunnerOptions
+): Promise<unknown> => {
+	const runner = codingToolRunners[name] as (
+		value: unknown,
+		runnerOptions?: CodingToolRunnerOptions
+	) => Promise<unknown>;
+	return runner(input, options);
+};

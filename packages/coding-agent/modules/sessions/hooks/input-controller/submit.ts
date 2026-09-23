@@ -1,15 +1,15 @@
 import { getErrorMessage, isNull } from "@wincode/runtime-utils";
-import type { Skill, SkillContext } from "@wincode/skills";
-import {
-	hasSkillNamespace,
-	parseSkillInvocation,
-	SKILL_NAMESPACE_PREFIX,
-} from "@wincode/skills";
 import type { CommandSpec } from "@/modules/commands/commands";
 import { expandCustomCommandTemplate } from "@/modules/custom-commands/expand";
 import { parseCustomCommandInvocation } from "@/modules/custom-commands/invocation";
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import type { SessionFilePart } from "@/modules/sessions/message";
+import type { Skill, SkillContext } from "@/modules/skills";
+import {
+	hasSkillNamespace,
+	parseSkillInvocation,
+	SKILL_NAMESPACE_PREFIX,
+} from "@/modules/skills";
 import type { ChatPromptSubmission } from "../../utils";
 import { findBuiltinCommand } from "./builtin-command";
 

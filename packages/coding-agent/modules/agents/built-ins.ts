@@ -4,7 +4,7 @@ import {
 	agentIdSchema,
 	type ResolvedAgent,
 } from "@wincode/agent-core";
-import type { CodingToolName } from "@wincode/coding-tools";
+import type { CodingToolName } from "@/modules/tools";
 
 export type CliAgentDefinition = AgentDefinition & {
 	readonly visibleCodingTools: readonly CodingToolName[];

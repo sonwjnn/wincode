@@ -5,14 +5,14 @@ import {
 	isPlainObject,
 	isUndefined,
 } from "@wincode/runtime-utils";
-import type {
-	SkillCandidate,
-	SkillRootDescriptor,
-} from "@wincode/skills/filesystem";
-import { discoverSkillCandidates as discoverFilesystemSkillCandidates } from "@wincode/skills/filesystem";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { resolveConfigRelativePath } from "@/shared/config/resolve-config-relative-path";
 import { getProjectRoots } from "@/shared/paths/project-roots";
+import {
+	discoverSkillCandidates as discoverFilesystemSkillCandidates,
+	type SkillCandidate,
+	type SkillRootDescriptor,
+} from "./filesystem";
 
 const LEGACY_LOCATIONS = [
 	".agents/skills",

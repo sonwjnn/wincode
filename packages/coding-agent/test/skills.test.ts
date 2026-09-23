@@ -3,12 +3,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	discoverSkillCandidates,
 	hasSkillNamespace,
+	loadSkills,
 	parseSkillFile,
 	parseSkillInvocation,
-} from "@wincode/skills";
-import { loadSkills } from "@wincode/skills/filesystem";
-import { discoverSkillCandidates } from "@/modules/skills/discovery";
+} from "@/modules/skills";
 import { createConfigStore } from "@/shared/config/config-store";
 
 describe("skills", () => {

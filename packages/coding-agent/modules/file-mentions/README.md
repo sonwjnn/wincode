@@ -39,5 +39,5 @@ for AI context.
 
 - `@wincode/agent-core` — shared Agent identity contracts
 - `packages/coding-agent/modules/sessions/message` — Coding-Agent-owned `FileMentionPart`
-- `@wincode/coding-tools/workspace` — `createWorkspaceSandbox`, `traverseWorkspaceEntries`
-- `shared/terminal/theme` — terminal colour context
+- `@/modules/tools` — `createWorkspaceSandbox`, `traverseWorkspaceEntries`
+- `shared/ui/selectable-list` — terminal suggestion-list rendering

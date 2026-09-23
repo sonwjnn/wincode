@@ -1,6 +1,6 @@
 import type { ChatModelSelection } from "@wincode/ai/models";
-import type { EditMode } from "@wincode/coding-tools";
 import type { ReactNode } from "react";
+import type { EditMode } from "@/modules/tools";
 import type {
 	ConfigOrigin,
 	ConfigScope,

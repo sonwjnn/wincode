@@ -7,7 +7,7 @@ import {
 	normalizeModelVariant,
 } from "@wincode/ai/models";
 import { isPlainObject, isString, isUndefined } from "@wincode/runtime-utils";
-import type { SkillRequestContext } from "@wincode/skills";
+import type { SkillRequestContext } from "@/modules/skills";
 import type { SessionMessage } from "./message";
 import {
 	sessionMessageMetadataSchema,

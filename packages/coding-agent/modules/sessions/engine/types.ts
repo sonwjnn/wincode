@@ -10,14 +10,14 @@ import type {
 	ToolCallId,
 } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
-import type { CodingToolName } from "@wincode/coding-tools";
+import type { ReadonlyDeep } from "type-fest";
 import type {
 	SkillContext,
 	SkillExecution,
 	SkillRequestContext,
 	SkillToolDefinition,
-} from "@wincode/skills";
-import type { ReadonlyDeep } from "type-fest";
+} from "@/modules/skills";
+import type { CodingToolName } from "@/modules/tools";
 import type {
 	QueuedSubmissionId,
 	SessionId,
