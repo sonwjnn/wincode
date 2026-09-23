@@ -35,7 +35,7 @@ describe("wincode executable", () => {
 		const result = run([flag]);
 		expect(result.exitCode).toBe(0);
 		expect(output(result.stdout)).toContain("Usage: wincode");
-		expect(output(result.stdout)).toContain("--mode");
+		expect(output(result.stdout)).toContain("-m, --mode");
 		expect(output(result.stdout)).toContain("--auto");
 		expect(output(result.stderr)).toBe("");
 	});

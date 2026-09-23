@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
+import type { AgentRuntime } from "@wincode/agent-core";
 import { DEFAULT_AGENT_ID } from "@/modules/agents/built-ins";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import { resolveAgentRegistry } from "@/modules/agents/registry";
@@ -46,6 +47,7 @@ export type SessionCapabilitiesOptions = Readonly<{
 	permissionService?: PermissionService;
 	pricing?: ModelPricingTable;
 	registry?: AgentRegistry | null;
+	runtimeFactory?: () => AgentRuntime;
 	store?: SessionStore;
 	workspace: string;
 	cwd: string;
@@ -89,6 +91,7 @@ export const createSessionCapabilities = async ({
 	permissionService: providedPermissionService,
 	pricing = {},
 	registry: providedRegistry,
+	runtimeFactory,
 	store: providedStore,
 	workspace,
 }: SessionCapabilitiesOptions): Promise<SessionCapabilitiesAssembly> => {
@@ -175,6 +178,7 @@ export const createSessionCapabilities = async ({
 			getRegistry: () => registry,
 			getStore: () => store,
 			getToolPermission: () => toolPermission,
+			...(runtimeFactory === undefined ? {} : { getRuntime: runtimeFactory }),
 		};
 		return {
 			capabilities,

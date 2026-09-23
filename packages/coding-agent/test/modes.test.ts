@@ -1,13 +1,15 @@
-import { afterAll, expect, mock, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 // biome-ignore lint/performance/noNamespaceImport: AGENTS.md requires namespace imports for node modules.
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { agentIdSchema } from "@wincode/agent-core";
 import { buildAgentRegistry } from "../modules/agents/registry";
-import type {
-	OneShotCompositionInput,
-	OneShotDependencies,
+import {
+	type OneShotCompositionInput,
+	type OneShotDependencies,
+	runJsonMode,
+	runPrintMode,
 } from "../modules/application/modes/one-shot";
 import type {
 	ApplicationContext,
@@ -24,12 +26,8 @@ import {
 } from "./support/e2e-fake-runtime";
 
 const fakeRecorder = createFakeAiSdkRecorder();
-await mock.module("@wincode/agent-runtime-ai-sdk", () =>
-	createFakeAiSdkModule(fakeRecorder)
-);
-const { runJsonMode, runPrintMode } = await import(
-	"../modules/application/modes/one-shot"
-);
+const fakeRuntime =
+	createFakeAiSdkModule(fakeRecorder).createAiSdkAgentRuntime();
 
 const workspace = await mkdtemp(path.join("/tmp", "wincode-one-shot-"));
 const registry = buildAgentRegistry(
@@ -66,6 +64,7 @@ const composeCapabilities = async ({
 		databasePath: path.join(root, "sessions.sqlite"),
 		permissionService: createPermissionService({ autoApproval }),
 		registry,
+		runtimeFactory: () => fakeRuntime,
 		workspace: root,
 		connections,
 	});

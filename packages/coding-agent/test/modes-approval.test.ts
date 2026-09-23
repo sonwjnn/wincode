@@ -1,4 +1,4 @@
-import { afterAll, expect, mock, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 // biome-ignore lint/performance/noNamespaceImport: AGENTS.md requires namespace imports for node modules.
 import * as os from "node:os";
@@ -6,15 +6,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import type { AgentTurnEvent } from "@wincode/agent-core";
-import type {
-	OneShotCompositionInput,
-	OneShotDependencies,
+import { buildAgentRegistry } from "../modules/agents/registry";
+import {
+	type OneShotCompositionInput,
+	type OneShotDependencies,
+	runPrintMode,
 } from "../modules/application/modes/one-shot";
 import type {
 	ApplicationContext,
 	TextWriter,
 } from "../modules/application/modes/types";
+import { createPermissionService } from "../modules/permissions/permission-service";
 import type { SessionCapabilitiesAssembly } from "../modules/sessions/host/session-capabilities";
+import { createSessionCapabilities } from "../modules/sessions/host/session-capabilities";
 import type { ConfigSnapshot } from "../shared/config/config-store";
 import {
 	createFakeAiSdkModule,
@@ -81,16 +85,10 @@ const approvalScript: FakeTurnScript = async function* (
 		throw error;
 	}
 };
-await mock.module("@wincode/agent-runtime-ai-sdk", () =>
-	createFakeAiSdkModule(recorder, approvalScript)
-);
-const { buildAgentRegistry } = await import("../modules/agents/registry");
-const { createPermissionService } = await import(
-	"../modules/permissions/permission-service"
-);
-const { createSessionCapabilities } = await import(
-	"../modules/sessions/host/session-capabilities"
-);
+const fakeRuntime = createFakeAiSdkModule(
+	recorder,
+	approvalScript
+).createAiSdkAgentRuntime();
 const registry = buildAgentRegistry(
 	fromPartial<ConfigSnapshot>({
 		diagnostics: [],
@@ -113,7 +111,6 @@ const connections = {
 		},
 	],
 };
-const { runPrintMode } = await import("../modules/application/modes/one-shot");
 
 type CapturedOutput = {
 	readonly text: string;
@@ -145,6 +142,7 @@ const composeCapabilities = async ({
 		databasePath: path.join(root, "sessions.sqlite"),
 		permissionService: createPermissionService({ autoApproval }),
 		registry,
+		runtimeFactory: () => fakeRuntime,
 		workspace: root,
 		connections,
 	});

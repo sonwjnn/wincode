@@ -536,7 +536,7 @@ export const createSessionPorts = ({
 					callbacks.onTerminal(event),
 				onToolCheckpoint: callbacks.commitToolCall,
 				onViewState: (viewState) => callbacks.onViewState(viewState),
-				runtime: defaultRuntimeFactory(),
+				runtime: capabilities.getRuntime?.() ?? defaultRuntimeFactory(),
 				signal,
 				...omitUndefined({
 					sourceUserMessageId: execution.sourceUserMessageId ?? undefined,

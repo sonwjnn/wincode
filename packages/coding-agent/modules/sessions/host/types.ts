@@ -1,4 +1,4 @@
-import type { AgentTurnEvent } from "@wincode/agent-core";
+import type { AgentRuntime, AgentTurnEvent } from "@wincode/agent-core";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import type { Connections } from "@/modules/connections/contract";
@@ -48,6 +48,8 @@ export type SessionCapabilities = Readonly<{
 	/** The durable store this session's records, compactions, and attachments live in. */
 	getStore: () => SessionStore;
 	getToolPermission: () => ToolPermissionRuntime;
+	/** Optional runtime factory for non-default application adapters and tests. */
+	getRuntime?: () => AgentRuntime;
 	/**
 	 * Approval settlement policy for surfaces without an interactive approval
 	 * channel. Omitted means the historical interactive behavior.

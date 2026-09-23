@@ -10,13 +10,15 @@ Status: accepted
 
 ## Context
 
-`scripts/sync-model-pricing.ts` was deleted in `49548ee` (remove hosted cloud
-product surface), but the two files it produced are still imported at runtime:
-`packages/ai/src/generated/model-variants.generated.ts` by `models.ts` and
-`model-provider-options.ts`, and
-`packages/tui/modules/model-pricing/model-pricing-snapshot.generated.ts` by
-`model-pricing-provider.tsx`. Both carry a `2026-08-08` header naming a script
-that no longer exists. They cannot be regenerated.
+Before this decision, `scripts/sync-model-pricing.ts` was deleted in `49548ee`
+(remove hosted cloud product surface) while the generated variants and pricing
+artifacts it produced remained imported at runtime. The consolidated metadata
+output now lives at `packages/ai/src/generated/model-metadata.generated.ts`,
+read through `packages/ai/src/model-metadata-runtime.ts`; the Coding-Agent
+pricing presentation lives under
+`packages/coding-agent/modules/model-pricing/`. The stale generated artifacts
+carried a `2026-08-08` header naming a script that no longer exists and could
+not be regenerated.
 
 The two files also drifted by construction. Variants and pricing were generated
 separately and refreshed on different rhythms, so the UI could resolve a
@@ -56,7 +58,7 @@ the `opencode-go` resolver read the generated one.
   reasoning policy; `cost` (including `tiers[]` and `context_over_200k`) and
   `limit` are the upstream sources for pricing and limits.
 - `ModelCost` has one definition, in `@wincode/ai`. The duplicate in
-  `packages/tui/modules/model-pricing/model-pricing.ts` is removed.
+  `packages/coding-agent/modules/model-pricing/model-pricing.ts` is removed.
 - `MODEL_OUTPUT_TOKEN_LIMIT` stops pretending to be a model capability. The
   per-model `limit.output` lives in the catalog; the 32k figure remains a
   separate operational ceiling, and the thinking-budget clamp reads the

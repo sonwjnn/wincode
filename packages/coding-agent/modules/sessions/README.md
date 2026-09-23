@@ -63,8 +63,8 @@ below the composer's draft, oldest first, so recalling one at a time appends in
 the order they would have run.
 
 The Agent Runtime consumer lives with the Agent Turn it consumes
-(`hooks/runtime-turn.ts`), and the CLI projects its events into its OpenTUI
-message state.
+(`hooks/runtime-turn.ts`), and the Interactive TUI projects its events into
+OpenTUI message state.
 
 Session state — Session Transcript, Session Context, turn activity, errors,
 compaction facts, the approval lifecycle, overflow recovery, and the live
@@ -85,9 +85,9 @@ carries the identity every observer reads — the Agent Turn Identifier, the
 assistant message identity, the source user message, the start time, the Agent,
 the Model Target selection and variant, the session-level selection its records
 carry, and its own Session View State — while the host scope
-(`modules/sessions/turn-execution.ts`) holds what only the TUI can own: the
-resolved Agent, the armed Skill, the MCP snapshot, the child abort registry,
-and delegation bookkeeping. The Snapshot exposes the live view of the most
+(`modules/sessions/turn-execution.ts`) holds what only the mounted surface can
+own: the resolved Agent, the armed Skill, the MCP snapshot, the child abort
+registry, and delegation bookkeeping. The Snapshot exposes the live view of the
 recently active execution: a delegated Subagent execution — the same contract
 plus its parent linkage — streams in its own view while the parent keeps its
 own, and the parent's view returns when the Subagent ends. Delegation
