@@ -3,14 +3,6 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-	computeFileVersion,
-	type FileObservationStore,
-	type FileVersion,
-	getToolResourceLimits,
-	type VersionedEditingContext,
-} from "@wincode/coding-tools";
-import { createWorkspaceSandbox } from "@wincode/coding-tools/workspace";
-import {
 	createPermissionService,
 	createToolPermission,
 } from "@/modules/permissions";
@@ -22,6 +14,14 @@ import {
 	createToolGate,
 	type ToolGateApprovalPort,
 } from "@/modules/tool-gate/tool-gate";
+import {
+	computeFileVersion,
+	createWorkspaceSandbox,
+	type FileObservationStore,
+	type FileVersion,
+	getToolResourceLimits,
+	type VersionedEditingContext,
+} from "@/modules/tools";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import {
 	agentId,

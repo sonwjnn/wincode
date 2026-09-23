@@ -111,6 +111,7 @@ export {
 	getAgentTurnAbortDisposition,
 	getAgentTurnFailureDetails,
 } from "./runtime";
+export * from "./skill-activation";
 export type {
 	ResolvedTool,
 	ToolCallFailure,

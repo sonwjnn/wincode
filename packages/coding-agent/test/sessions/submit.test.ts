@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import type { Skill } from "@wincode/skills";
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import {
 	resolveBuiltinCommand,
@@ -10,6 +9,7 @@ import {
 	submitPrompt,
 } from "@/modules/sessions/hooks/input-controller/submit";
 import type { ChatPromptSubmission } from "@/modules/sessions/utils";
+import type { Skill } from "@/modules/skills";
 
 const TEST_SKILL: Skill = {
 	body: "Review the implementation carefully.",

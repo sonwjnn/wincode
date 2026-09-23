@@ -37,7 +37,7 @@ Slash-command registry and dispatch for the CLI chat input.
 ## Dependencies
 
 - `modules/custom-commands/types` — the Custom Command spec that joins the item union.
-- `@wincode/skills` — the reserved `skill:` namespace and the Skill row label.
+- `@/modules/skills` — the reserved `skill:` namespace and the Skill row label.
 - Adapters receive their concrete deps (router, dialog, theme, toast) from `tui/`
   composition in `use-command-executor`.
 - `shared/ui/selectable-list` — shared OpenTUI selection surface used by command

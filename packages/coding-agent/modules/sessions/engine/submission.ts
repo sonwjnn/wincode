@@ -17,7 +17,10 @@ import {
 	isUndefined,
 	omitUndefined,
 } from "@wincode/runtime-utils";
-import { createSkillSnapshot, type SkillRequestContext } from "@wincode/skills";
+import {
+	createSkillSnapshot,
+	type SkillRequestContext,
+} from "@/modules/skills";
 import type { SessionId } from "@/shared/identifiers";
 import type { CompactSessionResult } from "../compaction/compaction";
 import type { ResolvedCompactionSettings } from "../compaction/config";

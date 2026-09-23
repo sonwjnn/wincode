@@ -7,7 +7,6 @@ import {
 	normalizeChatModelSelection,
 	normalizeModelVariant,
 } from "@wincode/ai/models";
-import type { EditMode } from "@wincode/coding-tools";
 import { getErrorMessage, isNull, isUndefined } from "@wincode/runtime-utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -19,6 +18,7 @@ import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config
 import type { SessionHost } from "@/modules/sessions/host/types";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useSettingsHubDialog } from "@/modules/settings";
+import type { EditMode } from "@/modules/tools";
 import type { SessionId } from "@/shared/identifiers";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";

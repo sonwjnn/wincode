@@ -3,6 +3,7 @@ import type {
 	AgentTurnId,
 	AttachmentId,
 	SessionMessageId,
+	SkillActivationSource,
 	ToolCallId,
 	ToolFailureDetails,
 } from "@wincode/agent-core";
@@ -20,7 +21,6 @@ import {
 	modelSelectionSchema,
 	modelVariantSchema,
 } from "@wincode/ai/models";
-import type { CodingToolName } from "@wincode/coding-tools";
 import {
 	isArray,
 	isObjectLike,
@@ -29,22 +29,22 @@ import {
 	isUndefined,
 	omitUndefined,
 } from "@wincode/runtime-utils";
+import { randomUUIDv7 } from "bun";
+import type { ReadonlyDeep, UnknownRecord } from "type-fest";
+import { z } from "zod";
 import type {
 	SkillActivation,
-	SkillActivationSource,
 	SkillContext,
 	SkillToolPart,
-} from "@wincode/skills";
+} from "@/modules/skills";
 import {
 	isSkillToolPart,
 	sanitizeSkillToolPart,
 	skillActivationSchema,
 	skillActivationSourceSchema,
 	skillContextSchema,
-} from "@wincode/skills";
-import { randomUUIDv7 } from "bun";
-import type { ReadonlyDeep, UnknownRecord } from "type-fest";
-import { z } from "zod";
+} from "@/modules/skills";
+import type { CodingToolName } from "@/modules/tools";
 
 export type SessionFilePart = {
 	readonly available?: boolean;

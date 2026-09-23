@@ -5,11 +5,11 @@ import type {
 	SessionRecordOutcome,
 } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
-import type { EditMode, FileObservationStore } from "@wincode/coding-tools";
 import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
+import type { EditMode, FileObservationStore } from "@/modules/tools";
 import type { SessionId } from "@/shared/identifiers";
 import type {
 	AppendSessionCompactionInput,

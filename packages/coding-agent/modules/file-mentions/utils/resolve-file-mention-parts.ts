@@ -1,11 +1,8 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import {
-	createWorkspaceSandbox,
-	type WorkspacePolicy,
-} from "@wincode/coding-tools/workspace";
 import { getErrorMessage, isError } from "@wincode/runtime-utils";
 import type { FileMentionPart } from "@/modules/sessions/message";
+import { createWorkspaceSandbox, type WorkspacePolicy } from "@/modules/tools";
 import type { FileMentionOption } from "../types";
 import { getFileMentionOptions } from "./file-mention-options";
 import {

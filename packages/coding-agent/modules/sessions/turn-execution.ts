@@ -9,12 +9,12 @@ import {
 } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 import { omitUndefined } from "@wincode/runtime-utils";
+import type { McpCatalogSnapshot } from "@/modules/mcp";
 import type {
 	SkillExecution,
 	SkillRequestContext,
 	SkillToolDefinition,
-} from "@wincode/skills";
-import type { McpCatalogSnapshot } from "@/modules/mcp";
+} from "@/modules/skills";
 import type { ResolvedCodingAgent } from "../agents/built-ins";
 import type {
 	DelegationExecutor,

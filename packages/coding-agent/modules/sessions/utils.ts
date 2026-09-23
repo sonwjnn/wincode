@@ -1,6 +1,6 @@
-import type { SkillContext } from "@wincode/skills";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import type { SessionSubmissionComposition } from "@/modules/sessions/session-operation";
+import type { SkillContext } from "@/modules/skills";
 import type { Session } from "./storage/session-store";
 
 export const getMostRecentSession = (

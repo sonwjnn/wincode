@@ -2,8 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildSkillRootDescriptors } from "@/modules/skills/discovery";
-import { discoverSkills } from "@/modules/skills/index";
+import { buildSkillRootDescriptors, discoverSkills } from "@/modules/skills";
 import { createConfigStore } from "@/shared/config/config-store";
 import { writeFixture } from "@/test/support/filesystem";
 

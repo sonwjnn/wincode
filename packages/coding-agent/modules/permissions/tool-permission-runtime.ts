@@ -1,13 +1,13 @@
 import type { AgentId } from "@wincode/agent-core";
+import { isNull } from "@wincode/runtime-utils";
+import type { AgentRegistry } from "@/modules/agents/registry";
+import type { WorkspacePolicy } from "@/modules/tools";
 import {
+	createWorkspaceSandbox,
 	DEFAULT_RESOURCE_LIMIT_PROFILE,
 	getToolResourceLimits,
 	type ToolResourceLimits,
-} from "@wincode/coding-tools";
-import type { WorkspacePolicy } from "@wincode/coding-tools/workspace";
-import { createWorkspaceSandbox } from "@wincode/coding-tools/workspace";
-import { isNull } from "@wincode/runtime-utils";
-import type { AgentRegistry } from "@/modules/agents/registry";
+} from "@/modules/tools";
 import type { PermissionService } from "./permission-service";
 import {
 	applyManualApprovalSafetyCeiling,

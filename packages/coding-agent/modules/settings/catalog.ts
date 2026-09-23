@@ -1,4 +1,3 @@
-import { type EditMode, editModeSchema } from "@wincode/coding-tools";
 import {
 	getErrorMessage,
 	isBoolean,
@@ -14,6 +13,7 @@ import {
 	resolveCompactionSettings,
 } from "@/modules/sessions/compaction/config";
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
+import { type EditMode, editModeSchema } from "@/modules/tools";
 import type {
 	ConfigDocument,
 	ConfigScope,

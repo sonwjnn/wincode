@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
-import { SKILL_NAMESPACE_PREFIX } from "@wincode/skills";
 import { COMMANDS } from "@/modules/commands/commands";
+import { SKILL_NAMESPACE_PREFIX } from "@/modules/skills";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import { discoverCustomCommandCandidates } from "./discovery";
 import { parseCustomCommandFile } from "./parse";

@@ -16,7 +16,6 @@ import {
 	type ChatModelSelection,
 	modelSelectionSchema,
 } from "@wincode/ai/models";
-import type { EditMode } from "@wincode/coding-tools";
 import {
 	isArray,
 	isNull,
@@ -27,6 +26,7 @@ import {
 import { randomUUIDv7 } from "bun";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
+import type { EditMode } from "@/modules/tools";
 import {
 	type CompactionId,
 	type SessionId,

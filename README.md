@@ -175,18 +175,19 @@ Wincode is a Bun workspace with one private Coding-Agent Application package:
 .
 ├── packages/
 │   ├── coding-agent/              # Executable, modes, OpenTUI, sessions, config, MCP, approvals
+│   │   └── modules/
+│   │       ├── skills/            # Skill parsing, discovery, catalog, snapshots, activation
+│   │       └── tools/             # Workspace sandbox, filesystem, search, edit, and shell tools
 │   ├── ai/                        # Provider-neutral model catalog, targets, options, usage, failures
 │   ├── agent-core/                # Agent Turns, records, events, runtime and tool contracts
-│   ├── agent-runtime-ai-sdk/      # Private AI SDK runtime and provider adapters
-│   ├── coding-tools/              # Workspace sandbox, filesystem, search, edit, and shell tools
-│   └── skills/                    # Skill parsing, discovery, catalog, snapshots, and activation
+│   └── agent-runtime-ai-sdk/      # Private AI SDK runtime and provider adapters
 └── docs/
     └── adr/                       # Accepted architecture decisions
 ```
 
-The Coding-Agent Application owns the executable and application composition;
-the reusable model, Agent, tool, and Skill contracts remain independent from
-its terminal surfaces. See the concise [architecture guide](ARCHITECTURE.md)
+The Coding-Agent Application owns the executable, application composition, Skills,
+and concrete coding tools; reusable model and Agent contracts remain independent
+from its terminal surfaces. See the concise [architecture guide](ARCHITECTURE.md)
 for the runtime flow and boundaries, or [ADR 0010](docs/adr/0010-agent-architecture-package-graph.md)
 and [ADR 0027](docs/adr/0027-coding-agent-application-modes.md) for the
 application-boundary decisions.

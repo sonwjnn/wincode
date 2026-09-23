@@ -2,8 +2,7 @@
 
 The CLI composes configuration, conventional roots, Skill scope/source metadata, and Tool
 Permission. Platform-light Skill contracts, parsing, catalog construction, invocation, and
-activation live in `@wincode/skills`; Node/Bun discovery and content loading live in
-`@wincode/skills/filesystem`.
+activation live in this module, including Node/Bun discovery and content loading.
 
 ## CLI composition API
 
@@ -13,10 +12,9 @@ activation live in `@wincode/skills`; Node/Bun discovery and content loading liv
   permission-filtered catalog snapshot for one execution turn.
 - `buildSkillRootDescriptors({ homeRoot, snapshot, workspace })` — map conventional and configured
   roots to deterministic `{ path, scope, source, precedence }` descriptors.
-- `discoverSkillCandidates({ homeRoot, snapshot, workspace })` — return deterministic candidates
-  through the filesystem export.
+- `discoverSkillCandidates({ homeRoot, snapshot, workspace })` — return deterministic candidates through the merged module.
 
-## Public `@wincode/skills` API
+## Public Skills module API
 
 - `parseSkillFile(source)` — parse frontmatter and body; throws `SkillValidationError` on invalid
   input.
@@ -38,9 +36,9 @@ activation live in `@wincode/skills`; Node/Bun discovery and content loading liv
 - Types: `Skill`, `SkillContext`, `SkillInvocation`, `SkillRequestContext`, `SkillCatalog`,
   `SkillExecution`, `SkillActivationSnapshot`, `SkillToolResult`, `SanitizedSkillToolResult`.
 
-## Public `@wincode/skills/filesystem` API
+## Filesystem discovery API
 
-- `discoverSkillCandidates(roots)` / `discoverSkills(roots)` — discover and load explicit root
+- `discoverFilesystemSkillCandidates(roots)` / `discoverFilesystemSkills(roots)` — discover and load explicit root
   descriptors.
 - `loadSkill(candidate)` / `loadSkills(candidates)` — load validated Skill bodies.
 - `sampleSkillResources(baseDirectory)` — bounded, deterministic sample of bundled resource paths.

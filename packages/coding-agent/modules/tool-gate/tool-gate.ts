@@ -2,22 +2,6 @@ import { lstat } from "node:fs/promises";
 import path from "node:path";
 import type { AgentId, ToolCallId } from "@wincode/agent-core";
 import {
-	byteLength,
-	type CodingToolName,
-	codingToolDefinitions,
-	codingToolNames,
-	getPatchResourcePaths,
-	getReadResourcePath,
-	getToolResourceLimits,
-	isElevatedResourceProfile,
-	RESOURCE_LIMIT_PERMISSION_ACTION,
-	rewritePatchResourcePath,
-	rewritePatchResourcePaths,
-	type ToolResourceLimits,
-	validateMultiEditPatch,
-} from "@wincode/coding-tools";
-import type { WorkspacePolicy } from "@wincode/coding-tools/workspace";
-import {
 	isObjectLike,
 	isPlainObject,
 	isString,
@@ -48,6 +32,22 @@ import {
 	type ShellCommandNode,
 } from "@/modules/permissions/shell-command";
 import type { SessionApprovalOutcome } from "@/modules/sessions/engine/types";
+import type { WorkspacePolicy } from "@/modules/tools";
+import {
+	byteLength,
+	type CodingToolName,
+	codingToolDefinitions,
+	codingToolNames,
+	getPatchResourcePaths,
+	getReadResourcePath,
+	getToolResourceLimits,
+	isElevatedResourceProfile,
+	RESOURCE_LIMIT_PERMISSION_ACTION,
+	rewritePatchResourcePath,
+	rewritePatchResourcePaths,
+	type ToolResourceLimits,
+	validateMultiEditPatch,
+} from "@/modules/tools";
 import { formatRejectionFeedback } from "@/shared/providers/approval/format";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 

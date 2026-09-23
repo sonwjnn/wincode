@@ -2,6 +2,9 @@ import type { Database as SqliteDatabase } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { createDatabase } from "@/modules/sessions/storage/client";
+import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
+import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import {
 	computeFileVersion,
 	type FileObservationStore,
@@ -9,10 +12,7 @@ import {
 	runCodingTool,
 	runRecoverTool,
 	type VersionedEditingContext,
-} from "@wincode/coding-tools";
-import { createDatabase } from "@/modules/sessions/storage/client";
-import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
-import type { SessionStore } from "@/modules/sessions/storage/session-store";
+} from "@/modules/tools";
 import {
 	agentId,
 	agentTurnId,

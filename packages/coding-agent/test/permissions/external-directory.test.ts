@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { createWorkspaceSandbox } from "@wincode/coding-tools/workspace";
 import {
 	canonicalizeExternalPath,
 	createPermissionService,
@@ -10,6 +9,7 @@ import {
 	expandHomeInPath,
 	externalParentDirectoryGlob,
 } from "@/modules/permissions/index";
+import { createWorkspaceSandbox } from "@/modules/tools";
 
 describe("skill permission action", () => {
 	test("defaults to allow when no rule exists", () => {

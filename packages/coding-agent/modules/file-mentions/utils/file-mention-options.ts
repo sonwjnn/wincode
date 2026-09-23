@@ -1,10 +1,10 @@
 import path from "node:path";
+import { isUndefined } from "@wincode/runtime-utils";
 import {
 	createWorkspaceSandbox,
 	defaultWorkspaceSandbox,
 	type WorkspacePolicy,
-} from "@wincode/coding-tools/workspace";
-import { isUndefined } from "@wincode/runtime-utils";
+} from "@/modules/tools";
 import type { FileMentionOption } from "../types";
 import {
 	compareCanonicalRelativePaths,

@@ -1,4 +1,4 @@
-import type { WorkspacePolicy } from "@wincode/coding-tools/workspace";
+import type { WorkspacePolicy } from "@/modules/tools";
 
 /**
  * Canonicalizes a read resource to a workspace-relative POSIX path after
