@@ -1,11 +1,10 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import type { AgentRuntime } from "@wincode/agent-core";
+import { type Connections, createConnections } from "@wincode/ai/connections";
 import { DEFAULT_AGENT_ID } from "@/modules/agents/built-ins";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import { resolveAgentRegistry } from "@/modules/agents/registry";
-import type { Connections } from "@/modules/connections/contract";
-import { createConnections } from "@/modules/connections/facade";
 import type { McpSessionCapability } from "@/modules/mcp/capability";
 import { createMcpRegistry, type McpRegistry } from "@/modules/mcp/registry";
 import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";

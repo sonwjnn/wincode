@@ -26,8 +26,8 @@ import { join } from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { act } from "react";
 import {
-	createFakeAiSdkModule,
-	createFakeAiSdkRecorder,
+	createFakeModelClientModule,
+	createFakeModelClientRecorder,
 } from "@/test/support/e2e-fake-runtime";
 import { agentId, agentTurnId, sessionMessageId } from "../support/identifiers";
 
@@ -42,9 +42,9 @@ afterAll(async () => {
 	await rm(testDirectory, { force: true, recursive: true });
 });
 
-const recorder = createFakeAiSdkRecorder();
-await mock.module("@wincode/agent-runtime-ai-sdk", () =>
-	createFakeAiSdkModule(recorder)
+const recorder = createFakeModelClientRecorder();
+await mock.module("@wincode/ai/model-client", () =>
+	createFakeModelClientModule(recorder)
 );
 
 // The module mock must be installed before the production Session Surface graph

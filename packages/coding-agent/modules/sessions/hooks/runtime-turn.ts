@@ -1,4 +1,5 @@
 import {
+	AGENT_ID_PATTERN,
 	type AgentId,
 	type AgentRole,
 	type AgentRuntime,
@@ -13,6 +14,7 @@ import {
 	type AgentTurnPart,
 	type AgentTurnTerminalEvent,
 	agentIdSchema,
+	createAgentRuntime,
 	createAgentTurnAbortEvent,
 	createAgentTurnLifecycle,
 	createOperationalFailure,
@@ -20,6 +22,7 @@ import {
 	getAgentTurnFailureDetails,
 	isAgentInvariantError,
 	isToolCallId,
+	MAX_AGENT_ID_LENGTH,
 	type ResolvedTool,
 	type SessionMessageId,
 	type SessionRecord,
@@ -31,7 +34,7 @@ import {
 	type ToolRegistry,
 	toSessionMessageId,
 } from "@wincode/agent-core";
-import { createAiSdkAgentRuntime } from "@wincode/agent-runtime-ai-sdk";
+import { createModelClient } from "@wincode/ai/model-client";
 import type { ModelTarget } from "@wincode/ai/model-target";
 import {
 	getErrorMessage,
@@ -82,9 +85,9 @@ import {
 
 export type RuntimeFactory = () => AgentRuntime;
 
-/** Composition-root default: the private AI SDK Agent Runtime adapter. */
+/** Composition-root default: the provider-neutral Agent Runtime. */
 export const defaultRuntimeFactory: RuntimeFactory = () =>
-	createAiSdkAgentRuntime();
+	createAgentRuntime({ modelClient: createModelClient() });
 const BASE_AGENT_INSTRUCTIONS =
 	"You are a basic coding agent running in a user's CLI.\nAll file tools are limited to the CLI workspace.";
 
@@ -235,30 +238,31 @@ const evaluateGateWithAbort = (
 	if (signal.aborted) {
 		return Promise.resolve({ errorText: ABORTED_TOOL_TEXT, kind: "deny" });
 	}
-	return new Promise<GateOutcome>((resolve) => {
-		let settled = false;
-		const settle = (outcome: GateOutcome): void => {
-			if (!settled) {
-				settled = true;
-				signal.removeEventListener("abort", onAbort);
-				resolve(outcome);
-			}
-		};
-		const onAbort = (): void => {
-			settle({ errorText: ABORTED_TOOL_TEXT, kind: "deny" });
-		};
-		signal.addEventListener("abort", onAbort, { once: true });
-		void evaluate().then(settle, (error: unknown) => {
-			settle(
-				signal.aborted
-					? { errorText: ABORTED_TOOL_TEXT, kind: "deny" }
-					: {
-							errorText: getErrorMessage(error, "Tool execution failed."),
-							kind: "deny",
-						}
-			);
-		});
+	const { promise, resolve } = Promise.withResolvers<GateOutcome>();
+	let settled = false;
+	const settle = (outcome: GateOutcome): void => {
+		if (settled) {
+			return;
+		}
+		settled = true;
+		signal.removeEventListener("abort", onAbort);
+		resolve(outcome);
+	};
+	const onAbort = (): void => {
+		settle({ errorText: ABORTED_TOOL_TEXT, kind: "deny" });
+	};
+	signal.addEventListener("abort", onAbort, { once: true });
+	void evaluate().then(settle, (error: unknown) => {
+		settle(
+			signal.aborted
+				? { errorText: ABORTED_TOOL_TEXT, kind: "deny" }
+				: {
+						errorText: getErrorMessage(error, "Tool execution failed."),
+						kind: "deny",
+					}
+		);
 	});
+	return promise;
 };
 
 const delegationInputSchema = z.object({
@@ -273,7 +277,22 @@ const createDelegationTool = (
 	definition: {
 		description:
 			"Delegate a focused task to a configured Subagent and return its result.",
-		inputSchema: delegationInputSchema,
+		inputSchema: {
+			jsonSchema: {
+				additionalProperties: false,
+				properties: {
+					agent: {
+						maxLength: MAX_AGENT_ID_LENGTH,
+						minLength: 1,
+						pattern: AGENT_ID_PATTERN.source,
+						type: "string",
+					},
+					prompt: { minLength: 1, type: "string" },
+				},
+				required: ["agent", "prompt"],
+				type: "object",
+			},
+		},
 		name: "delegate",
 	},
 	execute: async (

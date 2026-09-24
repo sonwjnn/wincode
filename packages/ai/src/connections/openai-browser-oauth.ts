@@ -282,11 +282,9 @@ type CallbackServer = {
 
 function startCallbackServer(serveImpl: typeof serve): CallbackServer {
 	const callbackUrl = new URL(OPENAI_REDIRECT_URI);
-	let resolveCallback: ((url: URL) => void) | undefined;
+	const { promise: callbackPromise, resolve: resolveCallback } =
+		Promise.withResolvers<URL>();
 	let received = false;
-	const callbackPromise = new Promise<URL>((resolve) => {
-		resolveCallback = resolve;
-	});
 	const server = serveImpl({
 		fetch(request) {
 			const requestUrl = new URL(request.url);
@@ -298,7 +296,7 @@ function startCallbackServer(serveImpl: typeof serve): CallbackServer {
 				return new Response("Not found", { status: 404 });
 			}
 			received = true;
-			resolveCallback?.(requestUrl);
+			resolveCallback(requestUrl);
 			return new Response(
 				"<title>OpenAI</title><p>Connected. You can close this tab.</p>",
 				{ headers: { "content-type": "text/html; charset=utf-8" } }
@@ -309,43 +307,44 @@ function startCallbackServer(serveImpl: typeof serve): CallbackServer {
 	});
 	return {
 		stop: () => server.stop(false),
-		waitForCallback: (timeoutMs, signal) =>
-			new Promise((resolve, reject) => {
-				let settled = false;
-				let abortListenerAttached = false;
-				const cleanup = () => {
-					clearTimeout(timeout);
-					if (abortListenerAttached) {
-						signal?.removeEventListener("abort", onAbort);
-					}
-					abortListenerAttached = false;
-				};
-				const finish = (handler: () => void): void => {
-					if (settled) {
-						return;
-					}
-					settled = true;
-					cleanup();
-					handler();
-				};
-				const onAbort = () => {
-					finish(() => {
-						server.stop(false);
-						reject(new Error("Browser sign-in aborted."));
-					});
-				};
-				const timeout = setTimeout(() => {
-					finish(() => reject(new Error("Browser sign-in timed out.")));
-				}, timeoutMs).unref();
-				if (signal?.aborted) {
-					onAbort();
+		waitForCallback: (timeoutMs, signal) => {
+			const { promise, reject, resolve } = Promise.withResolvers<URL>();
+			let settled = false;
+			let abortListenerAttached = false;
+			const cleanup = () => {
+				clearTimeout(timeout);
+				if (abortListenerAttached) {
+					signal?.removeEventListener("abort", onAbort);
+				}
+				abortListenerAttached = false;
+			};
+			const finish = (handler: () => void): void => {
+				if (settled) {
 					return;
 				}
-				signal?.addEventListener("abort", onAbort, { once: true });
-				abortListenerAttached = true;
-				callbackPromise.then((url) => {
-					finish(() => resolve(url));
+				settled = true;
+				cleanup();
+				handler();
+			};
+			const onAbort = () => {
+				finish(() => {
+					server.stop(false);
+					reject(new Error("Browser sign-in aborted."));
 				});
-			}),
+			};
+			const timeout = setTimeout(() => {
+				finish(() => reject(new Error("Browser sign-in timed out.")));
+			}, timeoutMs).unref();
+			if (signal?.aborted) {
+				onAbort();
+				return promise;
+			}
+			signal?.addEventListener("abort", onAbort, { once: true });
+			abortListenerAttached = true;
+			callbackPromise.then((url) => {
+				finish(() => resolve(url));
+			});
+			return promise;
+		},
 	};
 }

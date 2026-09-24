@@ -4,6 +4,7 @@ import {
 	agentIdSchema,
 	createAgentTurnId,
 } from "@wincode/agent-core";
+import type { Connections } from "@wincode/ai/connections";
 import {
 	type ChatModelSelection,
 	defaultChatModelSelection,
@@ -18,7 +19,6 @@ import {
 import { getErrorMessage } from "@wincode/runtime-utils";
 import { resolveWorkspaceRoot } from "@/modules/tools";
 import type { AgentRegistry } from "../../../modules/agents/registry";
-import type { Connections } from "../../../modules/connections/contract";
 import { createPermissionService } from "../../../modules/permissions/permission-service";
 import type { SessionCapabilitiesAssembly } from "../../../modules/sessions/host/session-capabilities";
 import { createSessionCapabilities } from "../../../modules/sessions/host/session-capabilities";

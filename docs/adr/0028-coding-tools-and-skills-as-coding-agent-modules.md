@@ -72,3 +72,6 @@ remaining package roles stay in force.
 - The package graph in ADR-0010 is reduced to `@wincode/ai` and
   `@wincode/agent-core` as reusable packages, `@wincode/agent-runtime-ai-sdk` as
   the private adapter, and `@wincode/coding-agent` as the composition root.
+- Runtime-boundary note: ADR-0029 replaces the private adapter with native Model
+  Protocol clients and Connections in `@wincode/ai` and the Agent Runtime in
+  `@wincode/agent-core`.

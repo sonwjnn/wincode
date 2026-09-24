@@ -1,11 +1,12 @@
+import {
+	type ConnectionProviderSummary,
+	type Connections,
+	connectionProviderDisplayNames,
+	isBrowserCapableProvider,
+} from "@wincode/ai/connections";
 import { useCallback, useState } from "react";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useConnections } from "../context/connections-provider";
-import {
-	type ConnectionProviderSummary,
-	connectionProviderDisplayNames,
-	isBrowserCapableProvider,
-} from "../contract";
 import { ConnectionApiKeyDialogContent } from "./connection-api-key-dialog";
 import { ConnectionBrowserWaitingDialogContent } from "./connection-browser-waiting-dialog";
 import type { ConnectionMethodId } from "./connection-dialog-options";
@@ -50,7 +51,7 @@ const getConnectedProvider = (
 };
 
 export const connectProviderApiKey = async (
-	connections: ReturnType<typeof useConnections>,
+	connections: Connections,
 	providerId: ConnectionProviderSummary["id"],
 	apiKey: string,
 	signal?: AbortSignal
@@ -64,7 +65,7 @@ export const connectProviderApiKey = async (
 };
 
 export const connectProviderBrowser = async (
-	connections: ReturnType<typeof useConnections>,
+	connections: Connections,
 	provider: ConnectionProviderSummary,
 	callbacks: BrowserConnectCallbacks
 ): Promise<void> => {

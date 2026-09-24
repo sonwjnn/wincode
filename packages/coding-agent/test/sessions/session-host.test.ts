@@ -40,8 +40,8 @@ import type { CompactionId, SessionId } from "@/shared/identifiers";
 import { toMcpSnapshotId } from "@/shared/identifiers";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import {
-	createFakeAiSdkModule,
-	createFakeAiSdkRecorder,
+	createFakeModelClientModule,
+	createFakeModelClientRecorder,
 } from "../support/e2e-fake-runtime";
 import {
 	agentId,
@@ -53,12 +53,12 @@ import {
 	toolCallId,
 } from "../support/identifiers";
 
-const recorder = createFakeAiSdkRecorder();
+const recorder = createFakeModelClientRecorder();
 // The module mock must be installed before the production Session Host graph
 // loads, so the Agent Runtime the Host composes is the fake one. The production
 // modules are imported dynamically for that reason alone.
-await mock.module("@wincode/agent-runtime-ai-sdk", () =>
-	createFakeAiSdkModule(recorder)
+await mock.module("@wincode/ai/model-client", () =>
+	createFakeModelClientModule(recorder)
 );
 
 const { createSessionHost } = await import(

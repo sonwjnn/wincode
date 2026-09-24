@@ -152,8 +152,8 @@ export const sanitizeSkillToolResult = (
 };
 
 /**
- * Identifies a dynamic `skill` tool part without importing an AI SDK message
- * type. Parts that are already sanitized (without output) pass through.
+ * Identifies a dynamic `skill` tool part without importing a provider-specific
+ * message type. Parts that are already sanitized (without output) pass through.
  */
 export const isSkillToolPart = (part: unknown): part is SkillToolPart => {
 	if (!isObjectLike(part)) {

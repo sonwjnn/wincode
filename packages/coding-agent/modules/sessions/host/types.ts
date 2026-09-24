@@ -1,7 +1,7 @@
 import type { AgentRuntime, AgentTurnEvent } from "@wincode/agent-core";
+import type { Connections } from "@wincode/ai/connections";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import type { AgentRegistry } from "@/modules/agents/registry";
-import type { Connections } from "@/modules/connections/contract";
 import type { McpSessionCapability } from "@/modules/mcp/capability";
 import type { ToolPermissionRuntime } from "@/modules/permissions/tool-permission-runtime";
 import type { ConfigRuntime } from "@/shared/config/config-store";

@@ -1,6 +1,6 @@
 # Connections
 
-The connections module owns direct model-provider credentials for the CLI.
+The `@wincode/ai/connections` subpath owns direct provider credentials and runtime behavior. Coding-Agent keeps the React context and connection dialogs here.
 
 ## Providers
 
@@ -11,10 +11,10 @@ The connections module owns direct model-provider credentials for the CLI.
 
 ## Connection APIs
 
-- `createConnections()` creates the application facade.
-- `ConnectionsProvider` and `useConnections()` expose the process-scoped facade.
+- `createConnections()` from `@wincode/ai/connections` creates the backend facade.
+- `ConnectionsProvider` and `useConnections()` expose the facade to app-owned UI.
 - Public behavior is limited to listing providers, connecting, and authorizing.
-- Credential validation, OAuth refresh, secure storage, and provider adapters remain internal.
+- Credential validation, OAuth refresh, secure storage, and provider adapters remain internal to the AI package.
 
 ## Storage
 
@@ -24,11 +24,10 @@ Credentials are stored in the platform secret store when available, with a secur
 
 Canonical contributor instructions are in [`docs/adding-a-provider.md`](../../../../docs/adding-a-provider.md).
 
-1. A direct model entry in `packages/ai/src/models.ts`.
-2. A resolver under `packages/agent-runtime-ai-sdk/src/providers/`.
-3. A resolver entry in `packages/agent-runtime-ai-sdk/src/providers/registry.ts`.
-4. A credential definition in `provider-definition.ts`.
-5. A registry entry in `provider-registry.ts`.
-6. Manifest and lockfile updates when a new SDK dependency is needed.
+1. A model entry in `packages/ai/src/catalog.ts`.
+2. Native request and stream handling under `packages/ai/src/model-client/`.
+3. A credential definition in `packages/ai/src/connections/provider-definition.ts`.
+4. A registry entry in `packages/ai/src/connections/provider-registry.ts`.
+5. Manifest and lockfile updates when a new protocol dependency is needed.
 
-For direct models, the connection provider and runtime provider identify the same provider. Every selectable model must have a matching resolver and credential path. Keep provider order deterministic and preserve unique `(provider, modelId)` pairs.
+Every selectable model must have a supported protocol route and credential path. Keep provider order deterministic and preserve unique `(provider, modelId)` pairs.

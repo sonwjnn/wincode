@@ -6,6 +6,7 @@ import {
 	createAgentTurnId,
 	type ToolCallId,
 } from "@wincode/agent-core";
+import type { Connections } from "@wincode/ai/connections";
 import type { ModelTarget } from "@wincode/ai/model";
 import { isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import {
@@ -13,7 +14,6 @@ import {
 	prepareAgentCall,
 } from "@/modules/agents/agent-call";
 import type { AgentRegistry } from "@/modules/agents/registry";
-import type { Connections } from "@/modules/connections/contract";
 import type { McpSessionCapability } from "@/modules/mcp/capability";
 import type {
 	McpAgentPolicy,

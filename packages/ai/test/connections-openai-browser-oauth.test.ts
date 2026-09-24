@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import {
 	acquireOpenAIBrowserCredential,
 	refreshOpenAIOAuthCredential,
-} from "@/modules/connections/openai-browser-oauth";
+} from "../src/connections/openai-browser-oauth";
 
 describe("openai browser oauth primitives", () => {
 	test("rejects state mismatch", async () => {

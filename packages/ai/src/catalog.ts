@@ -42,10 +42,10 @@ export type ModelRuntimeProviderId = (typeof modelRuntimeProviderIds)[number];
 export const modelVariantSchema = z.enum(modelVariantIds);
 
 /**
- * OpenCode Go model families are served by different AI SDK providers behind
- * one connection. The SDK identifies the runtime construction, not the model.
+ * OpenCode Go model families use different wire protocols behind one
+ * Connection Provider; this field selects the provider-neutral protocol client.
  */
-export type OpenCodeGoSdk = "openai" | "anthropic" | "openai-compatible";
+export type OpenCodeGoProtocol = "openai" | "anthropic" | "openai-compatible";
 
 export type ModelCatalogEntryBase = {
 	connectionProviderId: ConnectionProviderId;
@@ -69,7 +69,7 @@ export type ModelCatalogEntry =
 			route: "direct";
 			connectionProviderId: "opencode-go";
 			provider: "opencode-go";
-			sdk: OpenCodeGoSdk;
+			protocol: OpenCodeGoProtocol;
 	  });
 
 export const modelCatalog = [
@@ -255,7 +255,7 @@ export const modelCatalog = [
 		displayName: "Grok 4.6",
 		id: "grok-4.6",
 		provider: "opencode-go",
-		sdk: "openai-compatible",
+		protocol: "openai-compatible",
 		lifecycle: "active",
 	},
 	{
@@ -264,7 +264,7 @@ export const modelCatalog = [
 		displayName: "GPT 5.6 Luna",
 		id: "gpt-5.6-luna",
 		provider: "opencode-go",
-		sdk: "openai",
+		protocol: "openai",
 		lifecycle: "active",
 	},
 	{
@@ -273,7 +273,7 @@ export const modelCatalog = [
 		displayName: "GLM-5.3-Flash",
 		id: "glm-5.3-flash",
 		provider: "opencode-go",
-		sdk: "openai-compatible",
+		protocol: "openai-compatible",
 		lifecycle: "active",
 	},
 	{
@@ -282,7 +282,7 @@ export const modelCatalog = [
 		displayName: "GLM-5.3",
 		id: "glm-5.3",
 		provider: "opencode-go",
-		sdk: "openai-compatible",
+		protocol: "openai-compatible",
 		lifecycle: "active",
 	},
 	{
@@ -291,7 +291,7 @@ export const modelCatalog = [
 		displayName: "GLM-5.2",
 		id: "glm-5.2",
 		provider: "opencode-go",
-		sdk: "openai-compatible",
+		protocol: "openai-compatible",
 		lifecycle: "active",
 	},
 	{
@@ -300,7 +300,7 @@ export const modelCatalog = [
 		displayName: "GLM-5.1",
 		id: "glm-5.1",
 		provider: "opencode-go",
-		sdk: "openai-compatible",
+		protocol: "openai-compatible",
 		lifecycle: "active",
 	},
 	{
@@ -309,7 +309,7 @@ export const modelCatalog = [
 		displayName: "Kimi K3",
 		id: "kimi-k3",
 		provider: "opencode-go",
-		sdk: "openai-compatible",
+		protocol: "openai-compatible",
 		lifecycle: "active",
 	},
 	{
@@ -318,7 +318,7 @@ export const modelCatalog = [
 		displayName: "Kimi K2.7 Code",
 		id: "kimi-k2.7-code",
 		provider: "opencode-go",
-		sdk: "openai-compatible",
+		protocol: "openai-compatible",
 		lifecycle: "active",
 	},
 	{
@@ -327,7 +327,7 @@ export const modelCatalog = [
 		displayName: "Kimi K2.6",
 		id: "kimi-k2.6",
 		provider: "opencode-go",
-		sdk: "openai-compatible",
+		protocol: "openai-compatible",
 		lifecycle: "active",
 	},
 	{
@@ -336,7 +336,7 @@ export const modelCatalog = [
 		displayName: "LongCat-2.0",
 		id: "longcat-2.0",
 		provider: "opencode-go",
-		sdk: "openai-compatible",
+		protocol: "openai-compatible",
 		lifecycle: "active",
 	},
 	{
@@ -345,7 +345,7 @@ export const modelCatalog = [
 		displayName: "Muse Spark 1.3 Contributor",
 		id: "muse-spark-1.3-contributor",
 		provider: "opencode-go",
-		sdk: "openai",
+		protocol: "openai",
 		lifecycle: "active",
 	},
 	{
@@ -354,7 +354,7 @@ export const modelCatalog = [
 		displayName: "Muse Spark 1.2 Contributor",
 		id: "muse-spark-1.2-contributor",
 		provider: "opencode-go",
-		sdk: "openai",
+		protocol: "openai",
 		lifecycle: "active",
 	},
 	{
@@ -363,7 +363,7 @@ export const modelCatalog = [
 		displayName: "MiniMax M3",
 		id: "minimax-m3",
 		provider: "opencode-go",
-		sdk: "anthropic",
+		protocol: "anthropic",
 		lifecycle: "active",
 	},
 	{
@@ -372,7 +372,7 @@ export const modelCatalog = [
 		displayName: "MiniMax M2.7",
 		id: "minimax-m2.7",
 		provider: "opencode-go",
-		sdk: "anthropic",
+		protocol: "anthropic",
 		lifecycle: "active",
 	},
 	{
@@ -381,7 +381,7 @@ export const modelCatalog = [
 		displayName: "Qwen3.8 Max",
 		id: "qwen3.8-max",
 		provider: "opencode-go",
-		sdk: "anthropic",
+		protocol: "anthropic",
 		lifecycle: "active",
 	},
 	{
@@ -390,7 +390,7 @@ export const modelCatalog = [
 		displayName: "Qwen3.8 Flash",
 		id: "qwen3.8-flash",
 		provider: "opencode-go",
-		sdk: "anthropic",
+		protocol: "anthropic",
 		lifecycle: "active",
 	},
 	{
@@ -399,7 +399,7 @@ export const modelCatalog = [
 		displayName: "Qwen3.7 Max",
 		id: "qwen3.7-max",
 		provider: "opencode-go",
-		sdk: "anthropic",
+		protocol: "anthropic",
 		lifecycle: "active",
 	},
 	{
@@ -408,7 +408,7 @@ export const modelCatalog = [
 		displayName: "Qwen3.7 Plus",
 		id: "qwen3.7-plus",
 		provider: "opencode-go",
-		sdk: "anthropic",
+		protocol: "anthropic",
 		lifecycle: "active",
 	},
 	{
@@ -417,7 +417,7 @@ export const modelCatalog = [
 		displayName: "Qwen3.6 Plus",
 		id: "qwen3.6-plus",
 		provider: "opencode-go",
-		sdk: "anthropic",
+		protocol: "anthropic",
 		lifecycle: "active",
 	},
 	{
@@ -426,7 +426,7 @@ export const modelCatalog = [
 		displayName: "DeepSeek V4.1 Flash",
 		id: "deepseek-v4.1-flash",
 		provider: "opencode-go",
-		sdk: "openai-compatible",
+		protocol: "openai-compatible",
 		lifecycle: "active",
 	},
 	{
@@ -435,7 +435,7 @@ export const modelCatalog = [
 		displayName: "DeepSeek V4 Pro",
 		id: "deepseek-v4-pro",
 		provider: "opencode-go",
-		sdk: "openai-compatible",
+		protocol: "openai-compatible",
 		lifecycle: "active",
 	},
 	{
@@ -444,7 +444,7 @@ export const modelCatalog = [
 		displayName: "DeepSeek V4 Flash",
 		id: "deepseek-v4-flash",
 		provider: "opencode-go",
-		sdk: "openai-compatible",
+		protocol: "openai-compatible",
 		lifecycle: "active",
 	},
 	{
@@ -453,7 +453,7 @@ export const modelCatalog = [
 		displayName: "DeepSeek V4 Flash Vision Exp",
 		id: "deepseek-v4-flash-vision-exp",
 		provider: "opencode-go",
-		sdk: "openai-compatible",
+		protocol: "openai-compatible",
 		lifecycle: "active",
 	},
 	{
@@ -462,7 +462,7 @@ export const modelCatalog = [
 		displayName: "MiMo-V2.5",
 		id: "mimo-v2.5",
 		provider: "opencode-go",
-		sdk: "openai-compatible",
+		protocol: "openai-compatible",
 		lifecycle: "active",
 	},
 	{
@@ -471,7 +471,7 @@ export const modelCatalog = [
 		displayName: "MiMo-V2.5-Pro",
 		id: "mimo-v2.5-pro",
 		provider: "opencode-go",
-		sdk: "openai-compatible",
+		protocol: "openai-compatible",
 		lifecycle: "active",
 	},
 	{
@@ -480,7 +480,7 @@ export const modelCatalog = [
 		displayName: "Hy4 preview",
 		id: "hy4-preview",
 		provider: "opencode-go",
-		sdk: "openai-compatible",
+		protocol: "openai-compatible",
 		lifecycle: "active",
 	},
 	{
@@ -489,7 +489,7 @@ export const modelCatalog = [
 		displayName: "Hy3",
 		id: "hy3",
 		provider: "opencode-go",
-		sdk: "openai-compatible",
+		protocol: "openai-compatible",
 		lifecycle: "active",
 	},
 ] as const satisfies readonly ModelCatalogEntry[];
@@ -499,7 +499,7 @@ export type ReasoningCapableChatModel = Exclude<
 	SupportedChatModel,
 	{
 		readonly provider: "opencode-go";
-		readonly sdk: "openai-compatible";
+		readonly protocol: "openai-compatible";
 	}
 >;
 
@@ -550,4 +550,4 @@ export const isActiveChatModel = (model: ModelCatalogEntry): boolean =>
 export const supportsReasoningVariants = (
 	model: SupportedChatModel
 ): model is ReasoningCapableChatModel =>
-	!(model.provider === "opencode-go" && model.sdk === "openai-compatible");
+	!(model.provider === "opencode-go" && model.protocol === "openai-compatible");

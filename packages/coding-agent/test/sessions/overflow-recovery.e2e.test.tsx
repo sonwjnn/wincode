@@ -24,14 +24,16 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
-import { createOperationalFailure } from "@wincode/agent-core";
+import type {
+	ModelStepRequest,
+	ModelStreamPart,
+} from "@wincode/ai/model-client";
 import { act } from "react";
-import type { FakeTurnScript } from "@/test/support/e2e-fake-runtime";
+import type { FakeModelStepScript } from "@/test/support/e2e-fake-runtime";
 import {
-	createFakeAiSdkModule,
-	createFakeAiSdkRecorder,
+	createFakeModelClientModule,
+	createFakeModelClientRecorder,
 } from "@/test/support/e2e-fake-runtime";
-import { modelStepId } from "../support/identifiers";
 
 const testDirectory = await mkdtemp(
 	join(tmpdir(), "wincode-overflow-recovery-e2e-")
@@ -60,82 +62,31 @@ let turnCount = 0;
  * recovery replays answers normally, so the journey proves the replay ran on
  * the compacted Session Context.
  */
-const overflowThenAnswer: FakeTurnScript = async function* (turn, recorder) {
+const overflowThenAnswer: FakeModelStepScript = async function* (
+	request: ModelStepRequest,
+	recorder
+): AsyncGenerator<ModelStreamPart> {
 	turnCount += 1;
 	recorder.requests.push({
 		kind: "chat",
-		messages: turn.input.messages.map((message) => ({
-			id: message.id,
+		messages: request.messages.map((message) => ({
 			role: message.role,
-			text: message.parts
-				.map((part) => ("text" in part ? part.text : ""))
+			text: message.content
+				.flatMap((part) => (part.type === "text" ? [part.text] : []))
 				.join("\n"),
 		})),
 	});
-	yield {
-		agentId: turn.agent.id,
-		sequence: 0,
-		startedAt: 1,
-		turnId: turn.id,
-		type: "agent-turn-started",
-	};
-	yield {
-		modelId: turn.model.modelId,
-		sequence: 1,
-		stepId: modelStepId("e2e-step"),
-		turnId: turn.id,
-		type: "model-step-started",
-	};
 	if (turnCount === 1) {
-		yield {
-			delta: "partial output",
-			sequence: 2,
-			turnId: turn.id,
-			type: "text-delta",
-		};
-		yield {
-			failure: createOperationalFailure({
-				code: "context-overflow",
-				details: {
-					modelId: turn.model.modelId,
-					providerId: turn.model.providerId,
-				},
-				retry: "with-changes",
-				source: "model",
-			}),
-			finishedAt: 2,
-			sequence: 3,
-			turnId: turn.id,
-			type: "agent-turn-failed",
-		};
-		return;
+		yield { delta: "partial output", type: "text-delta" };
+		throw new Error("The prompt exceeds the model context window.");
 	}
-	yield {
-		delta: "E2E chat response",
-		sequence: 2,
-		turnId: turn.id,
-		type: "text-delta",
-	};
-	yield {
-		modelId: turn.model.modelId,
-		sequence: 3,
-		stepId: modelStepId("e2e-step"),
-		turnId: turn.id,
-		type: "model-step-finished",
-		usage: { inputTokens: 1, outputTokens: 1 },
-	};
-	yield {
-		finishedAt: 2,
-		sequence: 4,
-		turnId: turn.id,
-		type: "agent-turn-completed",
-		usage: { inputTokens: 1, outputTokens: 1 },
-	};
+	yield { delta: "E2E chat response", type: "text-delta" };
+	yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
 };
 
-const recorder = createFakeAiSdkRecorder();
-await mock.module("@wincode/agent-runtime-ai-sdk", () =>
-	createFakeAiSdkModule(recorder, overflowThenAnswer)
+const recorder = createFakeModelClientRecorder();
+await mock.module("@wincode/ai/model-client", () =>
+	createFakeModelClientModule(recorder, overflowThenAnswer)
 );
 
 // The module mock must be installed before the production SessionView graph loads.

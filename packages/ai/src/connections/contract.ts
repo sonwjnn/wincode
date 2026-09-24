@@ -1,4 +1,5 @@
 import type { ConnectionProviderId } from "@wincode/ai/models";
+import type { ProviderSummary } from "./provider-definition";
 import type {
 	AuthorizationByProvider,
 	CredentialByProvider,
@@ -22,8 +23,7 @@ export { credentialSchemas } from "./provider-registry";
 
 export const connectionProviderDisplayNames = providerDisplayNames;
 export type { ProviderMethod } from "./provider-definition";
-export type ConnectionProviderSummary =
-	import("./provider-definition").ProviderSummary;
+export type ConnectionProviderSummary = ProviderSummary;
 export type Credential = CredentialByProvider[keyof CredentialByProvider];
 export type ConnectionAuthorization =
 	AuthorizationByProvider[ConnectionProviderId];

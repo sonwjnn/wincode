@@ -121,7 +121,7 @@ export type SessionMessagePart =
 	| SessionToolCallPart;
 
 /**
- * Wincode-owned durable Session content. AI SDK part shapes never
+ * Wincode-owned durable Session content. Provider-specific part shapes never
  * appear here; attachments and file mentions retain bounded references/data
  * owned by the application.
  */

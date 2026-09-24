@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useAgentRegistry } from "@/modules/agents/agent-registry-provider";
-import { useConnections } from "@/modules/connections/context/connections-provider";
+import { useConnections } from "@/modules/connections";
 import { useMcp } from "@/modules/mcp/context/mcp-provider";
 import { useToolPermission } from "@/modules/permissions/use-tool-permission";
 import { useConfig } from "@/shared/config/config-provider";

@@ -41,8 +41,10 @@ const { testRender } = await import("@opentui/react/test-utils");
 const { AgentRegistryProvider, useAgentRegistry } = await import(
 	"@/modules/agents"
 );
-const { createConnections: createDefaultConnections, ConnectionsProvider } =
-	await import("@/modules/connections");
+const { createConnections: createDefaultConnections } = await import(
+	"@wincode/ai/connections"
+);
+const { ConnectionsProvider } = await import("@/modules/connections");
 const { createMcpRegistry, McpProvider } = await import("@/modules/mcp");
 const { ModelPricingProvider } = await import("@/modules/model-pricing");
 const { createPermissionService, PermissionServiceProvider } = await import(

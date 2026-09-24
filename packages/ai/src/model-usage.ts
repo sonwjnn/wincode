@@ -65,7 +65,7 @@ const nestedToken = (
 	key: string
 ): number | undefined => nonNegativeInteger(value?.[key]);
 
-/** Normalize provider or SDK usage without exposing its provider-specific type. */
+/** Normalize provider usage without exposing provider-specific types. */
 export const normalizeModelUsage = (value: unknown): ModelUsage | null => {
 	const usage = objectValue(value);
 	const inputTokens = nonNegativeInteger(usage?.inputTokens);

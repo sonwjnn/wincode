@@ -102,17 +102,6 @@ export const isToolFailureDetails = (
 		["code", "details", "recovery"].includes(key)
 	);
 
-/** Error carrier used only while crossing an SDK adapter boundary. */
-export class ToolCallFailureError extends Error {
-	readonly failure: ToolFailureDetails;
-
-	constructor(errorText: string, failure: ToolFailureDetails) {
-		super(errorText);
-		this.name = "ToolCallFailureError";
-		this.failure = failure;
-	}
-}
-
 /**
  * One Tool Call finished without executing its effect: a policy deny or
  * approval rejection, an Agent that cannot use the tool, or an execution

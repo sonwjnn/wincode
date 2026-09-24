@@ -61,7 +61,13 @@ stays immutable. _Avoid_: model record, merged model
 
 A Model Target is the effective Connection Provider, model, Thinking Level, and
 minimal authorization selected for one Agent Turn. It is transient and must not
-become a Session Record. _Avoid_: AI SDK model, persisted model handle
+become a Session Record. _Avoid_: provider SDK model handle, persisted model handle
+
+## Model Protocol
+
+The provider-facing request and stream dialect used to invoke a Model Target.
+One Connection Provider can serve models through multiple Model Protocols;
+OpenCode Go is one such Connection Provider. _Avoid_: SDK, Connection Provider
 
 ## Session Selection
 
@@ -404,11 +410,17 @@ Skill Activation all resolve through the one gate, and the gate owns the
 deny/reject wording each family emits. _Avoid_:
 approval service, permission middleware
 
+**Coding Tool Catalog**:
+The set of coding tools the application knows how to describe and execute.
+Catalog membership does not make a tool visible to an Agent or grant Tool
+Permission; those are separate decisions. _Avoid_: Runtime Tool Registry,
+permission allowlist
+
 **Runtime Tool Registry**:
 The definition-only collection of Tool Definitions recognized by the Agent
 Runtime; it carries no executor or Tool Permission decision. The Coding-Agent
 Application composes selected catalog tools as Resolved Tools through the Tool
-Gate for each Agent Turn. _Avoid_: executable registry
+Gate for each Agent Turn. _Avoid_: Coding Tool Catalog, executable registry
 
 **Resolved Tool**:
 A tool definition whose executable path has been composed through the Tool Gate

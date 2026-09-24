@@ -16,6 +16,7 @@ export {
 	MAX_AGENT_ID_LENGTH,
 	MAX_AGENT_INSTRUCTIONS_LENGTH,
 } from "./agent";
+export * from "./agent-runtime";
 export type { AgentInvariantCode } from "./errors";
 export {
 	AgentInvariantError,
@@ -133,7 +134,6 @@ export {
 	isToolCallOutput,
 	isToolDefinition,
 	isToolFailureDetails,
-	ToolCallFailureError,
 } from "./tools";
 export type {
 	AgentTurn,

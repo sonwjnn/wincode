@@ -120,7 +120,7 @@ const hasCompatibleProviderOptions = (
 	if (model.provider !== "opencode-go") {
 		return hasProviderOption(options, model.provider);
 	}
-	switch (model.sdk) {
+	switch (model.protocol) {
 		case "openai":
 			return hasProviderOption(options, "openai");
 		case "anthropic":

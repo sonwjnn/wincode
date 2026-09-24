@@ -42,33 +42,33 @@ const expectedGoogleModelIds = [
 ] as const;
 
 const expectedOpenCodeGoModels = [
-	{ id: "grok-4.6", sdk: "openai-compatible" },
-	{ id: "gpt-5.6-luna", sdk: "openai" },
-	{ id: "glm-5.3-flash", sdk: "openai-compatible" },
-	{ id: "glm-5.3", sdk: "openai-compatible" },
-	{ id: "glm-5.2", sdk: "openai-compatible" },
-	{ id: "glm-5.1", sdk: "openai-compatible" },
-	{ id: "kimi-k3", sdk: "openai-compatible" },
-	{ id: "kimi-k2.7-code", sdk: "openai-compatible" },
-	{ id: "kimi-k2.6", sdk: "openai-compatible" },
-	{ id: "longcat-2.0", sdk: "openai-compatible" },
-	{ id: "muse-spark-1.3-contributor", sdk: "openai" },
-	{ id: "muse-spark-1.2-contributor", sdk: "openai" },
-	{ id: "minimax-m3", sdk: "anthropic" },
-	{ id: "minimax-m2.7", sdk: "anthropic" },
-	{ id: "qwen3.8-max", sdk: "anthropic" },
-	{ id: "qwen3.8-flash", sdk: "anthropic" },
-	{ id: "qwen3.7-max", sdk: "anthropic" },
-	{ id: "qwen3.7-plus", sdk: "anthropic" },
-	{ id: "qwen3.6-plus", sdk: "anthropic" },
-	{ id: "deepseek-v4.1-flash", sdk: "openai-compatible" },
-	{ id: "deepseek-v4-pro", sdk: "openai-compatible" },
-	{ id: "deepseek-v4-flash", sdk: "openai-compatible" },
-	{ id: "deepseek-v4-flash-vision-exp", sdk: "openai-compatible" },
-	{ id: "mimo-v2.5", sdk: "openai-compatible" },
-	{ id: "mimo-v2.5-pro", sdk: "openai-compatible" },
-	{ id: "hy4-preview", sdk: "openai-compatible" },
-	{ id: "hy3", sdk: "openai-compatible" },
+	{ id: "grok-4.6", protocol: "openai-compatible" },
+	{ id: "gpt-5.6-luna", protocol: "openai" },
+	{ id: "glm-5.3-flash", protocol: "openai-compatible" },
+	{ id: "glm-5.3", protocol: "openai-compatible" },
+	{ id: "glm-5.2", protocol: "openai-compatible" },
+	{ id: "glm-5.1", protocol: "openai-compatible" },
+	{ id: "kimi-k3", protocol: "openai-compatible" },
+	{ id: "kimi-k2.7-code", protocol: "openai-compatible" },
+	{ id: "kimi-k2.6", protocol: "openai-compatible" },
+	{ id: "longcat-2.0", protocol: "openai-compatible" },
+	{ id: "muse-spark-1.3-contributor", protocol: "openai" },
+	{ id: "muse-spark-1.2-contributor", protocol: "openai" },
+	{ id: "minimax-m3", protocol: "anthropic" },
+	{ id: "minimax-m2.7", protocol: "anthropic" },
+	{ id: "qwen3.8-max", protocol: "anthropic" },
+	{ id: "qwen3.8-flash", protocol: "anthropic" },
+	{ id: "qwen3.7-max", protocol: "anthropic" },
+	{ id: "qwen3.7-plus", protocol: "anthropic" },
+	{ id: "qwen3.6-plus", protocol: "anthropic" },
+	{ id: "deepseek-v4.1-flash", protocol: "openai-compatible" },
+	{ id: "deepseek-v4-pro", protocol: "openai-compatible" },
+	{ id: "deepseek-v4-flash", protocol: "openai-compatible" },
+	{ id: "deepseek-v4-flash-vision-exp", protocol: "openai-compatible" },
+	{ id: "mimo-v2.5", protocol: "openai-compatible" },
+	{ id: "mimo-v2.5-pro", protocol: "openai-compatible" },
+	{ id: "hy4-preview", protocol: "openai-compatible" },
+	{ id: "hy3", protocol: "openai-compatible" },
 ] as const;
 
 test("keeps the curated Google and OpenCode Go allowlists", () => {
@@ -80,7 +80,7 @@ test("keeps the curated Google and OpenCode Go allowlists", () => {
 	expect(
 		modelCatalog
 			.filter((model) => model.connectionProviderId === "opencode-go")
-			.map(({ id, sdk }) => ({ id, sdk }))
+			.map(({ id, protocol }) => ({ id, protocol }))
 	).toEqual([...expectedOpenCodeGoModels]);
 });
 

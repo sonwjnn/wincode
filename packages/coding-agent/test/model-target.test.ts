@@ -1,12 +1,11 @@
 import { expect, test } from "bun:test";
 import { fromAny } from "@total-typescript/shoehorn";
-import { resolveAiSdkModelTarget } from "@wincode/agent-runtime-ai-sdk";
-import type { ConnectionProviderId } from "@wincode/ai/models";
-import { getSupportedModelVariants, modelCatalog } from "@wincode/ai/models";
 import type {
 	AuthorizationByProvider,
 	Connections,
-} from "@/modules/connections";
+} from "@wincode/ai/connections";
+import type { ConnectionProviderId } from "@wincode/ai/models";
+import { modelCatalog } from "@wincode/ai/models";
 import { resolveChatModelTarget } from "@/modules/model-target";
 import { modelId } from "./support/identifiers";
 
@@ -48,43 +47,6 @@ const createConnections = (
 	return { connections, getLastSignal: () => lastSignal };
 };
 
-test("resolves every catalog model and variant through the CLI seam", async () => {
-	const { connections, getLastSignal } = createConnections();
-	const controller = new AbortController();
-	const expectedTargets = modelCatalog.reduce(
-		(total, model) =>
-			total +
-			Math.max(
-				1,
-				getSupportedModelVariants({
-					modelId: modelId(model.id),
-					providerId: model.connectionProviderId,
-				}).length
-			),
-		0
-	);
-	let resolvedTargets = 0;
-
-	for (const model of modelCatalog) {
-		const selection = {
-			modelId: modelId(model.id),
-			providerId: model.connectionProviderId,
-		};
-		const variants = getSupportedModelVariants(selection);
-		for (const variant of variants.length ? variants : [undefined]) {
-			const target = await resolveChatModelTarget(selection, connections, {
-				signal: controller.signal,
-				variant,
-			});
-			resolveAiSdkModelTarget(target);
-			resolvedTargets += 1;
-		}
-	}
-
-	expect(resolvedTargets).toBe(expectedTargets);
-	expect(getLastSignal()).toBe(controller.signal);
-});
-
 test("carries one-turn OpenAI OAuth authorization into the target", async () => {
 	const { connections } = createConnections(true);
 	const target = await resolveChatModelTarget(
@@ -97,7 +59,6 @@ test("carries one-turn OpenAI OAuth authorization into the target", async () => 
 		accountId: "oauth-account",
 		kind: "oauth",
 	});
-	expect(resolveAiSdkModelTarget(target).modelId).toBe(modelId("gpt-5.6-luna"));
 });
 
 test("refuses to send with a retired entry unless the caller opts in", async () => {

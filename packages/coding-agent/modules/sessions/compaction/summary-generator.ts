@@ -1,15 +1,15 @@
-import {
-	generateAiSdkText,
-	type RuntimePromptMessage,
-	type RuntimePromptSource,
-} from "@wincode/agent-runtime-ai-sdk";
+import type { Connections } from "@wincode/ai/connections";
 import type {
 	ChatModelSelection,
 	ModelTarget,
 	ModelVariant,
 } from "@wincode/ai/model";
+import {
+	generateModelText,
+	type ModelTextGenerationMessage,
+	type ModelTextGenerationOptions,
+} from "@wincode/ai/model-client";
 import { isUndefined, omitUndefined } from "@wincode/runtime-utils";
-import type { Connections } from "@/modules/connections";
 import { resolveChatModelTarget } from "../../model-target";
 import type { SessionMessage } from "../message";
 import { serializeMessagesForCompaction } from "./compaction";
@@ -22,13 +22,7 @@ import {
 
 export const COMPACTION_SUMMARY_SYSTEM_PROMPT = `You are Wincode's session maintenance summarizer. Summarize only the supplied transcript for a future coding-agent turn. Preserve user requests, decisions, current work, unresolved errors, exact identifiers, file paths, and tool call/result pairings. Current-window attachments may be inspected when supplied; historical attachments are metadata only. Never reproduce attachment payloads. Return a concise plain-text summary.`;
 
-export type SummaryTextGenerationOptions = {
-	readonly abortSignal?: AbortSignal;
-	readonly maxOutputTokens: number;
-	readonly maxRetries: number;
-	readonly model: ModelTarget;
-	readonly system: string;
-} & RuntimePromptSource;
+export type SummaryTextGenerationOptions = ModelTextGenerationOptions;
 
 export type SummaryTextGenerator = (
 	options: SummaryTextGenerationOptions
@@ -43,7 +37,7 @@ export type SummaryModelResolver = (
 	maxOutputTokens?: number
 ) => Promise<SummaryModel>;
 const defaultTextGenerator: SummaryTextGenerator = async (options) =>
-	generateAiSdkText(options);
+	generateModelText(options);
 
 const buildSummaryPrompt = (input: SummaryGeneratorInput): string => {
 	const focus = input.focus?.trim();
@@ -62,7 +56,7 @@ const buildSummaryPrompt = (input: SummaryGeneratorInput): string => {
 
 const summaryPromptMessages = (
 	messages: readonly SessionMessage[]
-): RuntimePromptMessage[] =>
+): ModelTextGenerationMessage[] =>
 	messages.flatMap((message) => {
 		if (message.role === "system") {
 			return [];
@@ -105,9 +99,8 @@ export const createLanguageModelSummaryGenerator =
 				]
 			: undefined;
 		return generate({
-			abortSignal: input.signal,
+			signal: input.signal,
 			maxOutputTokens,
-			maxRetries: 0,
 			model,
 			...(isUndefined(messages) ? { prompt } : { messages }),
 			system: COMPACTION_SUMMARY_SYSTEM_PROMPT,

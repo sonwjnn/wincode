@@ -1,11 +1,13 @@
 import type { ConnectionProviderId } from "@wincode/ai/models";
-import type { AsyncReturnType } from "type-fest";
 import {
+	type ApiKeyAuthorization,
 	createAnthropicProviderDefinition,
 	createGoogleProviderDefinition,
 	createOpenAIProviderDefinition,
 	createOpenCodeGoProviderDefinition,
+	type OpenAIAuthorization,
 	type ProviderAdapterDependencies,
+	type ProviderDefinitionByProvider,
 	type ProviderSummary,
 } from "./provider-definition";
 
@@ -21,16 +23,12 @@ const providerFactories = {
 	openai: createOpenAIProviderDefinition,
 	"opencode-go": createOpenCodeGoProviderDefinition,
 } satisfies {
-	[P in ConnectionProviderId]: (deps: ProviderAdapterDependencies) => {
-		readonly id: P;
-	};
+	[P in ConnectionProviderId]: (
+		deps: ProviderAdapterDependencies
+	) => ProviderDefinitionByProvider[P];
 };
 
-export type ProviderRegistry = {
-	[P in keyof typeof providerFactories]: ReturnType<
-		(typeof providerFactories)[P]
-	>;
-};
+export type ProviderRegistry = ProviderDefinitionByProvider;
 export type ProviderAdapterMap = {
 	[P in keyof ProviderRegistry]: Pick<
 		ProviderRegistry[P],
@@ -52,9 +50,10 @@ export type CredentialByProvider = {
 	>[0];
 };
 export type AuthorizationByProvider = {
-	[P in keyof ProviderRegistry]: AsyncReturnType<
-		ProviderRegistry[P]["authorize"]
-	>["authorization"];
+	anthropic: ApiKeyAuthorization;
+	google: ApiKeyAuthorization;
+	openai: OpenAIAuthorization;
+	"opencode-go": ApiKeyAuthorization;
 };
 export const createProviderRegistry = (
 	deps: ProviderAdapterDependencies

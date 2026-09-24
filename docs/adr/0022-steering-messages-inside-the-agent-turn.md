@@ -11,6 +11,8 @@ unchanged.
 
 Status: accepted
 
+Runtime-mechanism note: [ADR-0029](0029-own-model-protocols-and-agent-runtime.md) replaces the AI SDK step hook with a Wincode-owned Model Step boundary. Steering delivery semantics remain unchanged; references below to the AI SDK describe the earlier implementation.
+
 ## Decision
 
 - The Engine gains a Steering Lane beside the Submission Queue. `send` stays the

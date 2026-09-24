@@ -59,7 +59,7 @@ export type SkillToolDefinition = {
 
 /**
  * The structural shape of a dynamic `skill` UI part. It intentionally does
- * not import an AI SDK message type so the Skills module stays portable.
+ * not import a provider-specific message type so the Skills module stays portable.
  */
 export type SkillToolPart =
 	| {

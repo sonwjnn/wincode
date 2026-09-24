@@ -1,5 +1,6 @@
 export type { AgentTurnId } from "@wincode/agent-core";
 export { createAgentTurnId } from "@wincode/agent-core";
+export type { Connections } from "@wincode/ai/connections";
 export type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
 export {
 	isSupportedModelVariant,
@@ -9,7 +10,6 @@ export {
 export { resolveWorkspaceRoot } from "@/modules/tools";
 export type { SessionId, SubmissionId } from "@/shared/identifiers";
 export { toSessionId, toSubmissionId } from "@/shared/identifiers";
-export type { Connections } from "../../connections/contract";
 export type {
 	SessionApprovalResult,
 	SessionInterruptResult,

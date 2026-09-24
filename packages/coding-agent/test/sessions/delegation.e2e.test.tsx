@@ -24,20 +24,18 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
+import type { SessionRecord, ToolCallId } from "@wincode/agent-core";
 import type {
-	AgentTurn,
-	AgentTurnEvent,
-	SessionRecord,
-	ToolCallId,
-	ToolCallOutput,
-} from "@wincode/agent-core";
+	ModelStepRequest,
+	ModelStreamPart,
+} from "@wincode/ai/model-client";
 import { act } from "react";
-import type { FakeTurnScript } from "@/test/support/e2e-fake-runtime";
+import type { FakeModelStepScript } from "@/test/support/e2e-fake-runtime";
 import {
-	createFakeAiSdkModule,
-	createFakeAiSdkRecorder,
+	createFakeModelClientModule,
+	createFakeModelClientRecorder,
 } from "@/test/support/e2e-fake-runtime";
-import { agentId, modelStepId, toolCallId } from "../support/identifiers";
+import { agentId, toolCallId } from "../support/identifiers";
 
 const testDirectory = await mkdtemp(join(tmpdir(), "wincode-delegation-e2e-"));
 process.env.WINCODE_LOCAL_DB_PATH = join(testDirectory, "conversation.sqlite");
@@ -80,15 +78,14 @@ const turnGate = (task: string): TurnGate => {
 	if (!isUndefined(existing)) {
 		return existing;
 	}
-	let markReached: () => void = () => undefined;
-	let release: () => void = () => undefined;
-	const reached = new Promise<void>((resolve) => {
-		markReached = resolve;
-	});
-	const promise = new Promise<void>((resolve) => {
-		release = resolve;
-	});
-	const gate = { markReached, promise, reached, release };
+	const reached = Promise.withResolvers<void>();
+	const completion = Promise.withResolvers<void>();
+	const gate = {
+		markReached: () => reached.resolve(undefined),
+		promise: completion.promise,
+		reached: reached.promise,
+		release: () => completion.resolve(undefined),
+	};
 	gates.set(task, gate);
 	return gate;
 };
@@ -115,149 +112,82 @@ const settleUntilStable = async (setup: TestRendererSetup): Promise<string> => {
 	return previous;
 };
 
-const textOf = (turn: AgentTurn): string =>
-	turn.input.messages
-		.flatMap((message) =>
-			message.parts.map((part) => ("text" in part ? part.text : ""))
-		)
-		.join("\n");
-
-const createTurnEvents = (turn: AgentTurn) => {
-	let sequence = 0;
-	const stepId = modelStepId("e2e-step");
-	const next = () => {
-		sequence += 1;
-		return sequence - 1;
-	};
-	return {
-		completed: (): AgentTurnEvent => ({
-			finishedAt: Date.now(),
-			sequence: next(),
-			turnId: turn.id,
-			type: "agent-turn-completed",
-			usage: { inputTokens: 1, outputTokens: 1 },
-		}),
-		started: (): AgentTurnEvent => ({
-			agentId: turn.agent.id,
-			sequence: next(),
-			startedAt: Date.now(),
-			turnId: turn.id,
-			type: "agent-turn-started",
-		}),
-		stepFinished: (): AgentTurnEvent => ({
-			modelId: turn.model.modelId,
-			sequence: next(),
-			stepId,
-			turnId: turn.id,
-			type: "model-step-finished",
-			usage: { inputTokens: 1, outputTokens: 1 },
-		}),
-		stepStarted: (): AgentTurnEvent => ({
-			modelId: turn.model.modelId,
-			sequence: next(),
-			stepId,
-			turnId: turn.id,
-			type: "model-step-started",
-		}),
-		text: (delta: string): AgentTurnEvent => ({
-			delta,
-			sequence: next(),
-			turnId: turn.id,
-			type: "text-delta",
-		}),
-		toolFinished: (
-			callId: ToolCallId,
-			outcome: ToolCallOutput
-		): AgentTurnEvent => ({
-			outcome,
-			sequence: next(),
-			toolCallId: callId,
-			toolName: "delegate",
-			turnId: turn.id,
-			type: "tool-call-finished",
-		}),
-		toolStarted: (callId: ToolCallId, input: unknown): AgentTurnEvent => ({
-			input,
-			sequence: next(),
-			toolCallId: callId,
-			toolName: "delegate",
-			turnId: turn.id,
-			type: "tool-call-started",
-		}),
-	};
+const latestUserText = (request: ModelStepRequest): string => {
+	const latestUserMessage = request.messages
+		.filter((message) => message.role === "user")
+		.at(-1);
+	return (
+		latestUserMessage?.content
+			.flatMap((part) => (part.type === "text" ? [part.text] : []))
+			.join("\n") ?? ""
+	);
 };
 
 /**
- * The parent turn delegates to two Subagents at once, the way the Agent
- * Runtime executes two concurrent `delegate` Tool Calls, and streams again once
- * both return. Each turn streams its text and then waits, so the journey
- * decides when a Subagent execution and the parent turn end.
+ * The parent emits two concurrent Tool Calls. Child and parent streams pause at
+ * the same gates as the user-visible journey, but the Agent Runtime owns calls.
  */
-const delegationScript: FakeTurnScript = async function* (
-	turn,
+const delegationScript: FakeModelStepScript = async function* (
+	request: ModelStepRequest,
 	recorder
-): AsyncGenerator<AgentTurnEvent> {
+): AsyncGenerator<ModelStreamPart> {
 	recorder.requests.push({
 		kind: "chat",
-		messages: turn.input.messages.map((message) => ({
-			id: message.id,
+		messages: request.messages.map((message) => ({
 			role: message.role,
-			text: textOf(turn),
+			text: message.content
+				.flatMap((part) => (part.type === "text" ? [part.text] : []))
+				.join("\n"),
 		})),
 	});
-	const events = createTurnEvents(turn);
-	yield events.started();
-	yield events.stepStarted();
-	if (!isUndefined(turn.delegation)) {
-		const task = textOf(turn);
-		yield events.text(`subagent output for ${task}`);
-		yield events.stepFinished();
-		childGate(task).markReached();
-		await childGate(task).promise;
-		yield events.completed();
+	const prompt = latestUserText(request);
+	const childTask = [FIRST_TASK, SECOND_TASK].find((task) =>
+		prompt.includes(task)
+	);
+	if (childTask) {
+		yield {
+			delta: `subagent output for ${childTask}`,
+			type: "text-delta",
+		};
+		const gate = childGate(childTask);
+		gate.markReached();
+		await gate.promise;
+		yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
 		return;
 	}
-	const delegate = turn.tools?.find(
-		({ definition }) => definition.name === "delegate"
-	);
-	if (isUndefined(delegate)) {
-		throw new Error("The parent turn was not armed with the delegate Tool.");
-	}
-	yield events.text(PARENT_BEFORE);
-	const calls = [
-		{ callId: FIRST_CALL, task: FIRST_TASK },
-		{ callId: SECOND_CALL, task: SECOND_TASK },
-	];
-	for (const { callId, task } of calls) {
-		yield events.toolStarted(callId, { agent: SUBAGENT, prompt: task });
-	}
-	const outputs = await Promise.all(
-		calls.map(({ callId, task }) =>
-			delegate.execute(
-				{ input: { agent: SUBAGENT, prompt: task }, toolCallId: callId },
-				{}
-			)
+	const hasDelegationResults = request.messages.some((message) =>
+		message.content.some(
+			(part) =>
+				part.type === "tool-result" &&
+				(part.toolCallId === FIRST_CALL || part.toolCallId === SECOND_CALL)
 		)
 	);
-	for (const [index, { callId }] of calls.entries()) {
-		const output = outputs[index];
-		if (isUndefined(output)) {
-			throw new Error("A delegated Tool Call returned no outcome.");
-		}
-		yield events.toolFinished(callId, output);
+	if (hasDelegationResults) {
+		parentGate.markReached();
+		await parentGate.promise;
+		yield { delta: PARENT_AFTER, type: "text-delta" };
+		yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+		return;
 	}
-	parentGate.markReached();
-	await parentGate.promise;
-	yield events.stepFinished();
-	yield events.stepStarted();
-	yield events.text(PARENT_AFTER);
-	yield events.stepFinished();
-	yield events.completed();
+	yield { delta: PARENT_BEFORE, type: "text-delta" };
+	yield {
+		input: { agent: SUBAGENT, prompt: FIRST_TASK },
+		toolCallId: FIRST_CALL,
+		toolName: "delegate",
+		type: "tool-call",
+	};
+	yield {
+		input: { agent: SUBAGENT, prompt: SECOND_TASK },
+		toolCallId: SECOND_CALL,
+		toolName: "delegate",
+		type: "tool-call",
+	};
+	yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
 };
 
-const recorder = createFakeAiSdkRecorder();
-await mock.module("@wincode/agent-runtime-ai-sdk", () =>
-	createFakeAiSdkModule(recorder, delegationScript)
+const recorder = createFakeModelClientRecorder();
+await mock.module("@wincode/ai/model-client", () =>
+	createFakeModelClientModule(recorder, delegationScript)
 );
 
 // The module mock must be installed before the production SessionView graph loads.

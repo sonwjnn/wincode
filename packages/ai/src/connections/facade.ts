@@ -45,10 +45,8 @@ export const createConnections = (
 		task: () => Promise<T>
 	): Promise<T> => {
 		const previous = queue.current ?? Promise.resolve();
-		let release: (() => void) | undefined;
-		const current = new Promise<void>((resolve) => {
-			release = resolve;
-		});
+		const { promise: current, resolve: release } =
+			Promise.withResolvers<void>();
 		queue.current = previous.then(
 			() => current,
 			() => current
@@ -57,7 +55,7 @@ export const createConnections = (
 		try {
 			return await task();
 		} finally {
-			release?.();
+			release();
 		}
 	};
 	const raceAbort = async <T>(
@@ -67,17 +65,18 @@ export const createConnections = (
 		if (signal.aborted) {
 			throw signal.reason ?? new DOMException("Aborted", "AbortError");
 		}
-		return await Promise.race([
-			promise,
-			new Promise<T>((_, reject) =>
-				signal.addEventListener(
-					"abort",
-					() =>
-						reject(signal.reason ?? new DOMException("Aborted", "AbortError")),
-					{ once: true }
-				)
-			),
-		]);
+		const aborted = Promise.withResolvers<never>();
+		const onAbort = (): void => {
+			aborted.reject(
+				signal.reason ?? new DOMException("Aborted", "AbortError")
+			);
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+		try {
+			return await Promise.race([promise, aborted.promise]);
+		} finally {
+			signal.removeEventListener("abort", onAbort);
+		}
 	};
 
 	type RuntimeAdapter<P extends ConnectionProviderId> = {

@@ -15,17 +15,17 @@ import {
 import { fromAny } from "@total-typescript/shoehorn";
 import type { SessionMessageRecord, SessionRecord } from "@wincode/agent-core";
 import type {
+	AuthorizationByProvider,
+	Connections,
+} from "@wincode/ai/connections";
+import type {
 	ChatModelSelection,
 	ConnectionProviderId,
 } from "@wincode/ai/models";
 import { isUndefined } from "@wincode/runtime-utils";
 import { act, useEffect } from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
-import {
-	type AuthorizationByProvider,
-	type Connections,
-	ConnectionsProvider,
-} from "@/modules/connections";
+import { ConnectionsProvider } from "@/modules/connections";
 import { createMcpRegistry, McpProvider } from "@/modules/mcp";
 import {
 	ModelPricingProvider,
@@ -254,10 +254,10 @@ export const renderSession = async ({
 	setMarkdownTreeSitterClientForTests(
 		new MockTreeSitterClient({ autoResolveTimeout: 0 })
 	);
-	let resolveRegistryReady: () => void = () => undefined;
-	const registryReady = new Promise<void>((resolve) => {
-		resolveRegistryReady = resolve;
-	});
+	const registryReady = Promise.withResolvers<void>();
+	const resolveRegistryReady = (): void => {
+		registryReady.resolve(undefined);
+	};
 	const setup = await testRender(
 		<ThemeProvider themeName={DEFAULT_THEME.name}>
 			<ConfigProvider
@@ -312,7 +312,7 @@ export const renderSession = async ({
 		</ThemeProvider>,
 		{ height: 40, width: 120 }
 	);
-	return { registryReady, setup };
+	return { registryReady: registryReady.promise, setup };
 };
 
 export const cleanupSessionRender = (): void => {

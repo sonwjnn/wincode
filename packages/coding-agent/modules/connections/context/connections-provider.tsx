@@ -1,7 +1,7 @@
+import type { Connections } from "@wincode/ai/connections";
 import { isNull } from "@wincode/runtime-utils";
 import type { ReactNode } from "react";
 import { createContext, useContext, useRef } from "react";
-import type { Connections } from "../contract";
 
 type ConnectionsProviderProps = {
 	children: ReactNode;

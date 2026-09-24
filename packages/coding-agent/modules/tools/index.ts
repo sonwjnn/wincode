@@ -1,10 +1,6 @@
 // biome-ignore-all lint/performance/noBarrelFile: Public coding tools module entry point.
 
-export {
-	codingToolCatalog,
-	codingToolDefinitionFor,
-	codingToolNames,
-} from "./catalog";
+export * from "./catalog";
 export { isRenderableEditDiff } from "./edit/diff";
 export { validateMultiEditPatch } from "./edit/multi";
 export { getReadResourcePath } from "./read/selector";

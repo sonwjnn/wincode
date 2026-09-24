@@ -1,8 +1,9 @@
 import { homedir } from "node:os";
 import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
+import { createConnections } from "@wincode/ai/connections";
 import { useEffect, useReducer } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
-import { ConnectionsProvider, createConnections } from "@/modules/connections";
+import { ConnectionsProvider } from "@/modules/connections";
 import { createMcpRegistry, McpProvider } from "@/modules/mcp";
 import { ModelPricingProvider } from "@/modules/model-pricing";
 import {

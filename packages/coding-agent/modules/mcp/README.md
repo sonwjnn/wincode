@@ -95,7 +95,7 @@ Gate:
      stable, sanitized error. No config, credentials, headers, URL, or command reaches tool output.
 
 MCP execution is consumed by the Wincode Agent Runtime through the CLI Tool
-Registry; no AI SDK callback or transport type crosses this module.
+Registry; no provider-specific callback or transport type crosses this module.
 
 ## Local-command trust warning
 

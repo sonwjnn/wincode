@@ -54,14 +54,20 @@ export type Request<
 				onAuthorizationUrl?: (url: URL) => void;
 			};
 }[M[number]];
+export type ApiKeyAuthorization = Readonly<{
+	apiKey: string;
+	kind: "api-key";
+}>;
+type OAuthAuthorization = Readonly<{
+	accountId: string;
+	accessToken: string;
+	kind: "oauth";
+}>;
 type Authorization =
-	| { kind: "api-key"; apiKey: string }
-	| { kind: "oauth"; accessToken: string; accountId: string }
+	| ApiKeyAuthorization
+	| OAuthAuthorization
 	| { kind: "bearer"; token: string };
-type OpenAIAuthorization = Extract<
-	Authorization,
-	{ kind: "api-key" | "oauth" }
->;
+export type OpenAIAuthorization = ApiKeyAuthorization | OAuthAuthorization;
 export type ProviderDefinition<
 	P extends ConnectionProviderId,
 	Schema extends ZodType,
@@ -114,6 +120,34 @@ const methods = {
 	"opencode-go": ["api-key"],
 	openai: ["api-key", "browser"],
 } as const;
+
+export type ProviderDefinitionByProvider = {
+	anthropic: ProviderDefinition<
+		"anthropic",
+		typeof apiKeyCredentialSchema,
+		typeof methods.anthropic,
+		ApiKeyAuthorization
+	>;
+	google: ProviderDefinition<
+		"google",
+		typeof apiKeyCredentialSchema,
+		typeof methods.google,
+		ApiKeyAuthorization
+	>;
+	openai: ProviderDefinition<
+		"openai",
+		typeof openAICredentialSchema,
+		typeof methods.openai,
+		OpenAIAuthorization
+	>;
+	"opencode-go": ProviderDefinition<
+		"opencode-go",
+		typeof apiKeyCredentialSchema,
+		(typeof methods)["opencode-go"],
+		ApiKeyAuthorization
+	>;
+};
+
 const summary = <P extends ConnectionProviderId, C extends { kind: string }>(
 	id: P,
 	credential: C | null

@@ -1,3 +1,4 @@
+import type { Connections } from "@wincode/ai/connections";
 import {
 	createModelTarget,
 	type ModelProviderResolutionOptions,
@@ -9,7 +10,6 @@ import {
 	type ModelCatalogEntry,
 	modelCatalog,
 } from "@wincode/ai/models";
-import type { Connections } from "./connections";
 
 export type ResolveChatModelTargetOptions = ModelProviderResolutionOptions & {
 	/**

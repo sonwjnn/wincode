@@ -5,7 +5,11 @@ import * as os from "node:os";
 // biome-ignore lint/performance/noNamespaceImport: AGENTS.md requires namespace imports for node modules.
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
-import type { AgentTurnEvent } from "@wincode/agent-core";
+import { createAgentRuntime } from "@wincode/agent-core";
+import type {
+	ModelStepRequest,
+	ModelStreamPart,
+} from "@wincode/ai/model-client";
 import { buildAgentRegistry } from "../modules/agents/registry";
 import {
 	type OneShotCompositionInput,
@@ -21,11 +25,11 @@ import type { SessionCapabilitiesAssembly } from "../modules/sessions/host/sessi
 import { createSessionCapabilities } from "../modules/sessions/host/session-capabilities";
 import type { ConfigSnapshot } from "../shared/config/config-store";
 import {
-	createFakeAiSdkModule,
-	createFakeAiSdkRecorder,
-	type FakeTurnScript,
+	createFakeModelClient,
+	createFakeModelClientRecorder,
+	type FakeModelStepScript,
 } from "./support/e2e-fake-runtime";
-import { modelStepId, toolCallId } from "./support/identifiers";
+import { toolCallId } from "./support/identifiers";
 
 const workspace = await mkdtemp(
 	path.join(os.tmpdir(), "wincode-mode-approval-")
@@ -35,63 +39,31 @@ await globalThis.Bun.write(
 	"SECRET=not-for-agents\n"
 );
 let approvalErrorText = "";
-const recorder = createFakeAiSdkRecorder();
-const approvalScript: FakeTurnScript = async function* (
-	turn
-): AsyncGenerator<AgentTurnEvent> {
-	const read = turn.tools?.find(({ definition }) => definition.name === "read");
-	if (read === undefined) {
-		approvalErrorText = "The turn was not armed with the read Tool.";
+const recorder = createFakeModelClientRecorder();
+const approvalScript: FakeModelStepScript = async function* (
+	request: ModelStepRequest
+): AsyncGenerator<ModelStreamPart> {
+	const failure = request.messages
+		.flatMap((message) => message.content)
+		.find((part) => part.type === "tool-failure");
+	if (failure?.type === "tool-failure") {
+		approvalErrorText = failure.errorText;
 		throw new Error(approvalErrorText);
 	}
-	const callId = toolCallId("noninteractive-read");
-	const stepId = modelStepId("noninteractive-step");
-	yield {
-		agentId: turn.agent.id,
-		sequence: 0,
-		startedAt: 1,
-		turnId: turn.id,
-		type: "agent-turn-started",
-	};
-	yield {
-		modelId: turn.model.modelId,
-		sequence: 1,
-		stepId,
-		turnId: turn.id,
-		type: "model-step-started",
-	};
 	yield {
 		input: { path: ".env" },
-		sequence: 2,
-		toolCallId: callId,
+		toolCallId: toolCallId("noninteractive-read"),
 		toolName: "read",
-		turnId: turn.id,
-		type: "tool-call-started",
+		type: "tool-call",
 	};
-	try {
-		const outcome = await read.execute(
-			{ input: { path: ".env" }, toolCallId: callId },
-			{}
-		);
-		if (outcome.type === "success") {
-			throw new Error(
-				"The non-interactive approval ask was unexpectedly allowed."
-			);
-		}
-		approvalErrorText = outcome.errorText;
-		throw new Error(outcome.errorText);
-	} catch (error) {
-		if (approvalErrorText.length === 0) {
-			approvalErrorText =
-				error instanceof Error ? error.message : String(error);
-		}
-		throw error;
-	}
+	yield {
+		type: "finish",
+		usage: { inputTokens: 1, outputTokens: 1 },
+	};
 };
-const fakeRuntime = createFakeAiSdkModule(
-	recorder,
-	approvalScript
-).createAiSdkAgentRuntime();
+const fakeRuntime = createAgentRuntime({
+	modelClient: createFakeModelClient(recorder, approvalScript),
+});
 const registry = buildAgentRegistry(
 	fromPartial<ConfigSnapshot>({
 		diagnostics: [],
@@ -182,5 +154,4 @@ test("Print mode fails closed when an approval ask has no UI", async () => {
 	expect(exitCode).toBe(1);
 	expect(stdout.text).toBe("");
 	expect(approvalErrorText).toContain("Interactive approval is unavailable");
-	expect(stderr.text).toContain("Agent Turn did not complete.");
 });

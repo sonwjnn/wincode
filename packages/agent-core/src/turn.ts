@@ -63,7 +63,7 @@ export type AgentTurnInterruptionReason =
 export const createAgentTurnId = (): AgentTurnId =>
 	toAgentTurnId(`turn-${crypto.randomUUID()}`);
 
-/** A Wincode-owned text content part; AI SDK part shapes never cross here. */
+/** A Wincode-owned text content part; provider-specific model shapes never cross here. */
 export type AgentTurnTextPart = Readonly<{
 	text: string;
 	type: "text";
@@ -101,7 +101,7 @@ export type AgentTurnToolFailurePart = Readonly<{
 	type: "tool-failure";
 }>;
 
-/** A Wincode-owned message content part; AI SDK part shapes never cross here. */
+/** A Wincode-owned message part; provider-specific model shapes never cross here. */
 export type AgentTurnPart =
 	| AgentTurnTextPart
 	| AgentTurnFilePart

@@ -304,13 +304,13 @@ const unlevelledReasoning = (
 };
 
 /**
- * Which provider's option shape reaches the wire for one catalog entry.
+ * Which provider option shape reaches the wire for one catalog entry.
  * OpenCode Go serves different model families behind one connection, so its
- * entries route by SDK rather than by connection identity.
+ * entries route by protocol rather than by connection identity.
  */
 const reasoningWiring = (model: SupportedChatModel): ReasoningWiring | null => {
 	if (model.provider === "opencode-go") {
-		return supportsReasoningVariants(model) ? model.sdk : null;
+		return supportsReasoningVariants(model) ? model.protocol : null;
 	}
 	return model.provider;
 };

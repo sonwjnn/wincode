@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 // biome-ignore lint/performance/noNamespaceImport: AGENTS.md requires namespace imports for node modules.
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
-import { agentIdSchema } from "@wincode/agent-core";
+import { agentIdSchema, createAgentRuntime } from "@wincode/agent-core";
 import { buildAgentRegistry } from "../modules/agents/registry";
 import {
 	type OneShotCompositionInput,
@@ -21,13 +21,14 @@ import { createSessionCapabilities } from "../modules/sessions/host/session-capa
 import { createSessionHost } from "../modules/sessions/host/session-host";
 import type { ConfigSnapshot } from "../shared/config/config-store";
 import {
-	createFakeAiSdkModule,
-	createFakeAiSdkRecorder,
+	createFakeModelClient,
+	createFakeModelClientRecorder,
 } from "./support/e2e-fake-runtime";
 
-const fakeRecorder = createFakeAiSdkRecorder();
-const fakeRuntime =
-	createFakeAiSdkModule(fakeRecorder).createAiSdkAgentRuntime();
+const fakeRecorder = createFakeModelClientRecorder();
+const fakeRuntime = createAgentRuntime({
+	modelClient: createFakeModelClient(fakeRecorder),
+});
 
 const workspace = await mkdtemp(path.join("/tmp", "wincode-one-shot-"));
 const registry = buildAgentRegistry(

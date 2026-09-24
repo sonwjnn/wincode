@@ -45,9 +45,8 @@ const {
 	RouterContextProvider,
 } = await import("@tanstack/react-router");
 const { AgentRegistryProvider } = await import("@/modules/agents");
-const { createConnections, ConnectionsProvider } = await import(
-	"@/modules/connections"
-);
+const { createConnections } = await import("@wincode/ai/connections");
+const { ConnectionsProvider } = await import("@/modules/connections");
 const { createMcpRegistry, McpProvider } = await import("@/modules/mcp");
 const { ModelPricingProvider } = await import("@/modules/model-pricing");
 const { createPermissionService, PermissionServiceProvider } = await import(

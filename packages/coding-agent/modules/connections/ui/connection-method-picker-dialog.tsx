@@ -1,11 +1,11 @@
 import { TextAttributes } from "@opentui/core";
+import type { ConnectionProviderSummary } from "@wincode/ai/connections";
 import { useCallback } from "react";
 import { useDialogEscape } from "@/shared/providers/dialog/dialog-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
-import type { ConnectionProviderSummary } from "../contract";
 import {
 	CONNECTION_LABEL_COLUMN_WIDTH,
 	type ConnectionMethodOption,

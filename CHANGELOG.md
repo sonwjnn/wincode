@@ -98,6 +98,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Model protocol and Agent Runtime ownership moved into Wincode.** `@wincode/ai`
+  owns the provider clients and Connections; `@wincode/agent-core` runs Model
+  Steps and Tools over their provider-neutral stream. Compaction uses the same
+  client, catalog routes and OpenAI OAuth remain supported, and the AI SDK
+  adapter and dependencies are removed. Responses tool turns replay the
+  provider's complete output items, and stream decoders reject incomplete
+  streams instead of reporting successful completion. See ADR-0029.
+
 - **A Session Host opens a session and owns its lifetime, so a non-renderer can
   run one.** `createSessionHost` — reached through the declared
   `@wincode/coding-agent/session-host` subpath — reads a session's durable records,

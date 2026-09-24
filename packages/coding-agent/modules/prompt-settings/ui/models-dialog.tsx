@@ -1,5 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/react";
+import { connectionProviderDisplayNames } from "@wincode/ai/connections";
 import {
 	type ChatModelSelection,
 	connectionProviderIds,
@@ -9,7 +10,6 @@ import {
 	supportedChatModelIdSchema,
 } from "@wincode/ai/models";
 import { useCallback } from "react";
-import { connectionProviderDisplayNames } from "@/modules/connections";
 import {
 	useDialog,
 	useDialogEscape,

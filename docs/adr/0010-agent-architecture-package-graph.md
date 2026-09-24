@@ -10,6 +10,7 @@ introduced.
 Status: accepted
 Application-boundary note: ADR-0027 renames the private composition-root package to `@wincode/coding-agent` and gives it peer execution modes. The package graph, reusable contract ownership, and `@wincode/agent-core` dependency direction remain unchanged.
 Package-list note: [ADR-0028](0028-coding-tools-and-skills-as-coding-agent-modules.md) removes `@wincode/coding-tools` and `@wincode/skills` as packages, making them `modules/tools/` and `modules/skills/` of `@wincode/coding-agent` and moving `SkillActivationSource` into `@wincode/agent-core`. The acyclic concern-package rule, reusable contract ownership, and the remaining package roles stay in force; the package list below is historical.
+Runtime-boundary note: [ADR-0029](0029-own-model-protocols-and-agent-runtime.md) replaces the private AI SDK adapter with model clients and Connections in `@wincode/ai` and the Agent Runtime implementation in `@wincode/agent-core`. The SDK-specific package roles and dependency prohibition below are historical; the acyclic dependency direction remains.
 
 ## Decision
 

@@ -6,9 +6,9 @@ import { runRpc } from "../modules/application/rpc/runner";
 const workspace = await mkdtemp(join("/tmp", "wincode-rpc-journey-"));
 const databasePath = join(workspace, "conversation.sqlite");
 const fakeSupport = await import("./support/e2e-fake-runtime");
-const recorder = fakeSupport.createFakeAiSdkRecorder();
-await mock.module("@wincode/agent-runtime-ai-sdk", () =>
-	fakeSupport.createFakeAiSdkModule(recorder)
+const recorder = fakeSupport.createFakeModelClientRecorder();
+await mock.module("@wincode/ai/model-client", () =>
+	fakeSupport.createFakeModelClientModule(recorder)
 );
 const { createSessionCapabilities } = await import(
 	"../modules/sessions/host/session-capabilities"

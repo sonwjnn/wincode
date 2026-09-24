@@ -229,7 +229,7 @@ history and workspace/configuration data.
 | --- | --- |
 | `modules/commands` | slash-command specs, filtering, and execution |
 | `modules/file-mentions` | `@path` detection and resolution |
-| `modules/connections` | direct provider credentials |
+| `modules/connections` | app-owned context and provider dialogs |
 | `modules/prompt-settings` | current agent and model |
 | `modules/mcp` | local MCP snapshots and tool dispatch |
 | `shared/providers` | terminal theme, keyboard, dialogs, and toast state |

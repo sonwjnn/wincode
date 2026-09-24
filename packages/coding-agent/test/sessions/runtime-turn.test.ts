@@ -589,7 +589,7 @@ test("hands Steering Messages to the runtime as Agent Turn messages", async () =
 				turnId: currentTurn.id,
 				type: "agent-turn-started",
 			};
-			// The boundary the AI SDK adapter reaches between Model Steps.
+			// The boundary the Agent Runtime reaches between Model Steps.
 			takenAtBoundary = options?.takeSteeringMessages?.() ?? [];
 			yield {
 				delta: "Done",

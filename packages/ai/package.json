@@ -20,6 +20,12 @@
     "./model-usage": {
       "default": "./src/model-usage.ts"
     },
+    "./model-client": {
+      "default": "./src/model-client/index.ts"
+    },
+    "./connections": {
+      "default": "./src/connections/index.ts"
+    },
     "./models-dev": {
       "default": "./src/models-dev.ts"
     },
@@ -33,10 +39,11 @@
   },
   "dependencies": {
     "@wincode/runtime-utils": "workspace:*",
+    "oauth4webapi": "^3.8.3",
+    "open": "^10.2.0",
     "type-fest": "catalog:",
     "zod": "catalog:"
   },
-
   "devDependencies": {
     "@types/bun": "catalog:",
     "@wincode/config": "workspace:*",

@@ -1,5 +1,6 @@
 import { type InputRenderable, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
+import type { ConnectionProviderSummary } from "@wincode/ai/connections";
 import { getErrorMessage } from "@wincode/runtime-utils";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -9,7 +10,6 @@ import {
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
-import type { ConnectionProviderSummary } from "../contract";
 
 type ConnectionApiKeyDialogContentProps = {
 	provider: ConnectionProviderSummary;

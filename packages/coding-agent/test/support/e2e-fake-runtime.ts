@@ -1,12 +1,14 @@
 import type {
-	AgentRuntime,
-	AgentTurn,
-	AgentTurnEvent,
-} from "@wincode/agent-core";
-import { modelStepId } from "./identifiers";
+	ModelClient,
+	ModelPromptMessage,
+	ModelStepRequest,
+	ModelStreamPart,
+	ModelTextGenerationMessage,
+	ModelTextGenerationOptions,
+	ModelTextGenerationResult,
+} from "@wincode/ai/model-client";
 
 export type FakeMessageRequest = {
-	readonly id: string;
 	readonly role: string;
 	readonly text: string;
 };
@@ -22,97 +24,56 @@ export type FakeGenerationRequest =
 			readonly text: string;
 	  };
 
-export type FakeAiSdkRecorder = {
+export type FakeModelClientRecorder = {
 	readonly requests: FakeGenerationRequest[];
 	readonly summaryText: string;
 };
 
-/**
- * One fake turn's event stream. Journeys that need Tool Calls — delegation in
- * particular — supply their own script and drive `turn.tools` themselves, the
- * way the real Agent Runtime does.
- */
-export type FakeTurnScript = (
-	turn: AgentTurn,
-	recorder: FakeAiSdkRecorder
-) => AsyncGenerator<AgentTurnEvent>;
+export type FakeModelStepScript = (
+	request: ModelStepRequest,
+	recorder: FakeModelClientRecorder
+) => AsyncGenerator<ModelStreamPart>;
 
-const messageText = (message: AgentTurn["input"]["messages"][number]): string =>
-	message.parts.map((part) => ("text" in part ? part.text : "")).join("\n");
+const promptMessageText = (message: ModelPromptMessage): string =>
+	message.content
+		.flatMap((part) => (part.type === "text" ? [part.text] : []))
+		.join("\n");
 
-const defaultTurnScript: FakeTurnScript = async function* (
-	turn: AgentTurn,
-	recorder: FakeAiSdkRecorder
-): AsyncGenerator<AgentTurnEvent> {
+const defaultModelStepScript: FakeModelStepScript = async function* (
+	request,
+	recorder
+): AsyncGenerator<ModelStreamPart> {
 	recorder.requests.push({
 		kind: "chat",
-		messages: turn.input.messages.map((message) => ({
-			id: message.id,
+		messages: request.messages.map((message) => ({
 			role: message.role,
-			text: messageText(message),
+			text: promptMessageText(message),
 		})),
 	});
+	yield { delta: "E2E chat response", type: "text-delta" };
 	yield {
-		agentId: turn.agent.id,
-		sequence: 0,
-		startedAt: 1,
-		turnId: turn.id,
-		type: "agent-turn-started",
-	};
-	yield {
-		modelId: turn.model.modelId,
-		sequence: 1,
-		stepId: modelStepId("e2e-step"),
-		turnId: turn.id,
-		type: "model-step-started",
-	};
-	yield {
-		delta: "E2E chat response",
-		sequence: 2,
-		turnId: turn.id,
-		type: "text-delta",
-	};
-	yield {
-		modelId: turn.model.modelId,
-		sequence: 3,
-		stepId: modelStepId("e2e-step"),
-		turnId: turn.id,
-		type: "model-step-finished",
-		usage: { inputTokens: 1, outputTokens: 1 },
-	};
-	yield {
-		finishedAt: 2,
-		sequence: 4,
-		turnId: turn.id,
-		type: "agent-turn-completed",
+		type: "finish",
 		usage: { inputTokens: 1, outputTokens: 1 },
 	};
 };
 
-const createFakeRuntime = (
-	recorder: FakeAiSdkRecorder,
-	run: FakeTurnScript
-): AgentRuntime => ({
-	run(turn: AgentTurn): AsyncGenerator<AgentTurnEvent> {
-		return run(turn, recorder);
-	},
-});
+export const createFakeModelClient = (
+	recorder: FakeModelClientRecorder,
+	run: FakeModelStepScript = defaultModelStepScript
+): ModelClient => ({ stream: (request) => run(request, recorder) });
 
-export const createFakeAiSdkModule = (
-	recorder: FakeAiSdkRecorder,
-	run: FakeTurnScript = defaultTurnScript
+export const createFakeModelClientModule = (
+	recorder: FakeModelClientRecorder,
+	run: FakeModelStepScript = defaultModelStepScript
 ) => ({
-	createAiSdkAgentRuntime: () => createFakeRuntime(recorder, run),
-	generateAiSdkText: async (options: {
-		readonly messages?: readonly {
-			content: string;
-			role: "assistant" | "user";
-		}[];
-		readonly prompt?: string;
-		readonly system: string;
-	}) => {
+	createModelClient: () => createFakeModelClient(recorder, run),
+	generateModelText: async (
+		options: ModelTextGenerationOptions
+	): Promise<ModelTextGenerationResult> => {
 		const text =
-			options.messages?.map((message) => message.content).join("\n") ??
+			options.messages
+				?.map((message: ModelTextGenerationMessage) => message.content)
+				.join("\n") ??
 			options.prompt ??
 			"";
 		recorder.requests.push({
@@ -127,7 +88,7 @@ export const createFakeAiSdkModule = (
 	},
 });
 
-export const createFakeAiSdkRecorder = (): FakeAiSdkRecorder => ({
+export const createFakeModelClientRecorder = (): FakeModelClientRecorder => ({
 	requests: [],
 	summaryText: "E2E compacted summary",
 });
