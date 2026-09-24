@@ -565,7 +565,7 @@ type ExecuteModelStepsOptions = Readonly<{
 	turn: AgentTurn;
 }>;
 
-const executeModelSteps = async function* ({
+const runLoop = async function* ({
 	emit,
 	lifecycle,
 	modelClient,
@@ -687,7 +687,7 @@ const runAgentTurn = async function* (
 		return;
 	}
 	try {
-		yield* executeModelSteps({
+		yield* runLoop({
 			emit,
 			lifecycle,
 			modelClient,
