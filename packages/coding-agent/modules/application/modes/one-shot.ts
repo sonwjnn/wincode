@@ -377,10 +377,10 @@ const runOneShot = async (
 				context.stdout.write(event.delta);
 			}
 		});
-		const abort = () => host?.engine.cancel();
+		const abort = () => host?.agentSession.cancel();
 		context.signal?.addEventListener("abort", abort, { once: true });
 		try {
-			const outcome = await host.engine.send(
+			const outcome = await host.agentSession.send(
 				sendInputFor(selection, text, initialMessage)
 			);
 			if (outcome.rejected) {

@@ -44,8 +44,6 @@ import {
 } from "./tools";
 import type { AgentTurn, AgentTurnMessage, AgentTurnPart } from "./turn";
 
-const TOOL_ARMED_STEP_LIMIT = 20;
-
 export type AgentRuntimeOptions = Readonly<{
 	/** Provider-neutral Model Client stream consumed by this runtime. */
 	modelClient: ModelClient;
@@ -579,8 +577,8 @@ const runLoop = async function* ({
 	let totalUsage: ModelUsage | undefined;
 	const seenToolCallIds = new Set<ToolCallId>();
 	const toolDefinitions = tools.map(toModelTool);
-	const stepLimit = tools.length > 0 ? TOOL_ARMED_STEP_LIMIT : 1;
-	for (let stepNumber = 1; stepNumber <= stepLimit; stepNumber += 1) {
+	let stepNumber = 1;
+	while (true) {
 		if (runtimeSignal?.aborted) {
 			yield emit(
 				createAgentTurnAbortEvent(turn, runtimeSignal, emit.nextSequence())
@@ -642,7 +640,7 @@ const runLoop = async function* ({
 			...omitUndefined({ usage: output.usage }),
 		});
 		totalUsage = sumUsage(totalUsage, output.usage);
-		if (output.toolCalls.length === 0 || stepNumber === stepLimit) {
+		if (output.toolCalls.length === 0) {
 			yield emit({
 				finishedAt: Date.now(),
 				sequence: emit.nextSequence(),
@@ -652,6 +650,7 @@ const runLoop = async function* ({
 			});
 			return;
 		}
+		stepNumber += 1;
 	}
 };
 

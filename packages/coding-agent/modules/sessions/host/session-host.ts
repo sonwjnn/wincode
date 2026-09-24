@@ -1,11 +1,11 @@
 import type { AgentId, AgentTurnEvent } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
-import { isNull } from "@wincode/runtime-utils";
+import { isNull, omitUndefined } from "@wincode/runtime-utils";
 import { resolveActiveAgentId } from "@/modules/agents/registry";
 import { rebuildActiveMessages } from "../compaction/compaction";
 import type { SessionCompaction } from "../compaction/types";
-import { createSessionEngine } from "../engine/session-engine";
-import type { SessionEngine, SessionEnginePorts } from "../engine/types";
+import { createAgentSession } from "../engine/agent-session";
+import type { AgentSession, AgentSessionPorts } from "../engine/types";
 import {
 	type SessionMessage,
 	sanitizeInterruptedSessionMessages,
@@ -29,9 +29,9 @@ import type {
 } from "./types";
 
 /**
- * What opening produced: the session the Engine is born with, plus the
- * session-row facts a Session Selection resolves against. It is the one place
- * durable records become a Session Transcript and a Session Context.
+ * The durable Session projection used to initialize the Agent Session, plus
+ * the session-row facts Session Selection resolves against. This is where
+ * durable records become a Session Transcript and Session Context.
  */
 type OpenedSession = Readonly<{
 	compactions: SessionCompaction[];
@@ -52,10 +52,9 @@ const waitForClosingHost = async (
 };
 
 /**
- * Reads one session's durable state and projects it into the session the Engine
- * is born with: the Session Transcript as the surface presents it, the Session
- * Context rebuilt around the latest compaction, and that session's compaction
- * history.
+ * Reads one session's durable state and projects it into the Agent Session's
+ * initial state: the Session Transcript as the surface presents it, the
+ * Session Context rebuilt around the latest compaction, and compaction history.
  *
  * The Context is derived from the un-annotated projection — display annotation
  * is the surface's, and never reaches what the model is sent — and delegated
@@ -88,14 +87,14 @@ const openSession = async (
 };
 
 /**
- * Re-exposes the Agent Turn Events the Engine receives: every event the ports
- * report is forwarded to the Engine through its callbacks and observed by the
- * Host's listeners, in the order the turn produced them.
+ * Re-exposes Agent Turn Events the Agent Session receives: each event the
+ * ports report is forwarded through its callbacks and to Host listeners, in
+ * the order the turn produced them.
  */
 const withEventChannel = (
-	ports: SessionEnginePorts,
+	ports: AgentSessionPorts,
 	publish: (event: AgentTurnEvent) => void
-): SessionEnginePorts => ({
+): AgentSessionPorts => ({
 	...ports,
 	runtime: {
 		...ports.runtime,
@@ -120,8 +119,8 @@ const withEventChannel = (
 /**
  * Opens one session and owns the assembly's lifetime. Its factory is
  * asynchronous because opening is construction, not a Session Command: the
- * Transcript, Context, and compactions a session is born with are read and
- * projected here, and the Engine itself stays synchronous.
+ * Transcript, Context, and compactions used to initialize the Agent Session
+ * are projected here; creating the Agent Session itself stays synchronous.
  *
  * The consumer that constructs a Host owns calling `shutdown`. Capabilities are
  * read through the getters the caller supplied, so a long session keeps seeing
@@ -139,7 +138,7 @@ export const createSessionHost = async ({
 		.acquireSessionLease(sessionId, { now: leaseClock });
 	const eventListeners = new Set<(event: AgentTurnEvent) => void>();
 	const fatalListeners = new Set<(failure: SessionHostFailure) => void>();
-	let engine: SessionEngine | undefined;
+	let agentSession: AgentSession | undefined;
 	let isShutDown = false;
 	let isLeaseLost = false;
 	let fatalFailure: SessionHostFailure | null = null;
@@ -147,11 +146,11 @@ export const createSessionHost = async ({
 	let shutdownPromise: Promise<void> | undefined;
 
 	/**
-	 * Reports one event to the Host's observers. Everything the Engine reads
-	 * has already been reported through its own callbacks, so a listener that
-	 * takes a Session Snapshot sees what the event did. A failing observer
-	 * cannot change session state or stop the turn, as with the Engine's own
-	 * emitter.
+	 * Reports one event to the Host's observers. Everything the Agent Session
+	 * reads has already been reported through its own callbacks, so a listener
+	 * that takes a Session Snapshot sees what the event did. A failing observer
+	 * cannot change session state or stop the turn, as with the Agent Session's
+	 * own emitter.
 	 */
 	const publish = (event: AgentTurnEvent): void => {
 		if (isShutDown) {
@@ -165,11 +164,11 @@ export const createSessionHost = async ({
 			}
 		}
 	};
-	const getEngine = (): SessionEngine => {
-		if (engine === undefined) {
-			throw new Error("Session Host Engine is not ready.");
+	const getAgentSession = (): AgentSession => {
+		if (agentSession === undefined) {
+			throw new Error("Agent Session is not ready.");
 		}
-		return engine;
+		return agentSession;
 	};
 	const stopRenewal = (): void => {
 		stopLeaseRenewal?.();
@@ -180,21 +179,21 @@ export const createSessionHost = async ({
 			return shutdownPromise;
 		}
 		isShutDown = true;
-		const activeEngine = engine;
-		let releaseImmediately = activeEngine === undefined;
-		let engineShutdown = Promise.resolve();
-		if (activeEngine !== undefined) {
-			const snapshot = activeEngine.getSnapshot();
-			releaseImmediately = !activeEngine.hasPendingWork();
+		const activeAgentSession = agentSession;
+		let releaseImmediately = activeAgentSession === undefined;
+		let agentSessionShutdown = Promise.resolve();
+		if (activeAgentSession !== undefined) {
+			const snapshot = activeAgentSession.getSnapshot();
+			releaseImmediately = !activeAgentSession.hasPendingWork();
 			if (snapshot.isCompacting) {
-				activeEngine.cancelCompaction();
+				activeAgentSession.cancelCompaction();
 			}
 			// Cancel rather than interrupt: the turn must unwind through its
 			// pipeline so its pending durable checkpoint holds the Session Lease.
 			if (snapshot.turnActive) {
-				activeEngine.cancel();
+				activeAgentSession.cancel();
 			}
-			engineShutdown = activeEngine.shutdown();
+			agentSessionShutdown = activeAgentSession.shutdown();
 		}
 		eventListeners.clear();
 		fatalListeners.clear();
@@ -204,7 +203,7 @@ export const createSessionHost = async ({
 		}
 		const closingShutdown = (async () => {
 			try {
-				await engineShutdown;
+				await agentSessionShutdown;
 			} finally {
 				if (!releaseImmediately) {
 					stopRenewal();
@@ -284,10 +283,10 @@ export const createSessionHost = async ({
 		if (isShutDown) {
 			throw new SessionLeaseLostError();
 		}
-		const ports: SessionEnginePorts = withEventChannel(
+		const ports: AgentSessionPorts = withEventChannel(
 			createSessionPorts({
 				capabilities,
-				engine: getEngine,
+				agentSession: getAgentSession,
 				isShutDown: () => isShutDown,
 				onLeaseLost: reportLeaseLoss,
 				renewLease: sessionLease.renew,
@@ -295,20 +294,40 @@ export const createSessionHost = async ({
 			}),
 			publish
 		);
-		const openedEngine = createSessionEngine({
+		const initialRegistry = capabilities.getRegistry();
+		const initialSelection = resolveSessionSelection({
+			messages: [...opened.transcript],
+			sessionModel: opened.model,
+			sessionVariant: opened.variant,
+			...(isNull(initialRegistry)
+				? {}
+				: {
+						resolveAgent: (agentId: AgentId | undefined) =>
+							resolveActiveAgentId(initialRegistry, agentId),
+					}),
+		});
+		const initialAgent = isNull(initialRegistry)
+			? initialSelection?.agent
+			: resolveActiveAgentId(initialRegistry, initialSelection?.agent);
+		const openedAgentSession = createAgentSession({
 			initialCompactions: opened.compactions,
+			...omitUndefined({
+				initialAgent,
+				initialSessionModel: opened.model ?? initialSelection?.model,
+				initialSessionVariant: opened.variant ?? initialSelection?.variant,
+			}),
 			initialContext: opened.context,
 			initialTranscript: opened.transcript,
 			ports,
 			sessionId,
 		});
-		engine = openedEngine;
+		agentSession = openedAgentSession;
 		if (isShutDown) {
 			throw new SessionLeaseLostError();
 		}
 
 		return {
-			engine: openedEngine,
+			agentSession: openedAgentSession,
 			getSelection: () => {
 				const registry = capabilities.getRegistry();
 				return resolveSessionSelection({
@@ -323,7 +342,7 @@ export const createSessionHost = async ({
 							}),
 				});
 			},
-			getSnapshot: openedEngine.getSnapshot,
+			getSnapshot: openedAgentSession.getSnapshot,
 			onEvent: (listener) => {
 				eventListeners.add(listener);
 				return () => eventListeners.delete(listener);
@@ -341,7 +360,7 @@ export const createSessionHost = async ({
 			},
 			shutdown,
 			subscribe: (listener) =>
-				openedEngine.subscribe(() => {
+				openedAgentSession.subscribe(() => {
 					if (!isShutDown) {
 						listener();
 					}

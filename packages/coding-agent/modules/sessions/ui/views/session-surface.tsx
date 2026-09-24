@@ -43,10 +43,10 @@ const trackSurfaceClosure = (
 };
 
 /**
- * Opens one session and renders it. This is the surface that owns the
- * asynchronous boundary: it constructs the Session Host, shows the opening
- * state until the session exists, and shows the failure when it cannot open —
- * the Engine does not exist until opening completes.
+ * Opens one session and renders it. This surface owns the asynchronous
+ * boundary: it constructs the Session Host, shows the opening state until the
+ * session exists, and shows failure when it cannot open — the Agent Session
+ * does not exist until opening completes.
  *
  * It owns the session's presentation-only facts as well: the title read from the
  * session row, and the display-only annotation of the Transcript, which marks
@@ -115,7 +115,7 @@ export function SessionSurface({
 				return {
 					host,
 					sessionTitle: row.title,
-					transcript: host.engine.mergeTranscript(transcript),
+					transcript: host.agentSession.mergeTranscript(transcript),
 				};
 			} catch (error) {
 				// The session opened but its surface could not be prepared. The

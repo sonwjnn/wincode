@@ -370,8 +370,8 @@ export const promptHistory = sqliteTable("prompt_history", {
  *
  * TODO(issue-86): add richer durable interrupted metadata only when the
  * product has a defined resume/retry contract. A retrying turn is intentionally
- * not persisted, and neither is a Queued Submission: it lives in the Session
- * Engine until it starts running (ADR-0021), so a restart never replays one.
+ * not persisted, and neither is a Queued Submission: it lives in the Agent
+ * Session until it starts running (ADR-0021), so a restart never restores it.
  */
 export const sessionRecord = sqliteTable(
 	"session_record",

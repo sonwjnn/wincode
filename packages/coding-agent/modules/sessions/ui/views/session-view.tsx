@@ -26,7 +26,7 @@ import { useToast } from "@/shared/providers/toast/toast-provider";
 import type { SessionWaitingMessage } from "../../engine/types";
 import { acceptsSteeringMessages, isSessionBusy } from "../../engine/utils";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
-import { useSessionEngine } from "../../hooks/use-session-engine";
+import { useAgentSession } from "../../hooks/use-agent-session";
 import type { ResolvedSessionSelection } from "../../selection";
 import type {
 	SessionSendInput as SessionOperationSendInput,
@@ -199,11 +199,11 @@ export function SessionView({
 		recallWaitingMessages,
 		send,
 		snapshot,
-	} = useSessionEngine(host);
+	} = useAgentSession(host);
 	/**
-	 * Hands recalled messages to the composer, in the order the Engine returned
-	 * them. A Recall that returns nothing — empty lanes, or messages that
-	 * already started running — changes nothing.
+	 * Hands recalled messages to the composer in Agent Session order. A Recall
+	 * that returns nothing — empty lanes, or messages already running — changes
+	 * nothing.
 	 */
 	const recallIntoComposer = (recalled: readonly SessionWaitingMessage[]) => {
 		if (recalled.length === 0) {

@@ -48,21 +48,21 @@ import {
 } from "../turn-records";
 import { projectAgentTurnEvent, projectAgentTurnTerminal } from "./turn";
 import type {
+	AgentSessionPorts,
 	SessionAttachmentBudget,
 	SessionCompactionCommand,
-	SessionEnginePorts,
 	SessionExecution,
 	SessionExecutionInput,
+	SessionOverflowContinuationOutcome,
 	SessionOverflowRecoveryCommand,
 	SessionOverflowRecoveryOutcome,
-	SessionOverflowReplayOutcome,
 	SessionSkillCatalog,
 	SessionTurnCallbacks,
 } from "./types";
 
 const SESSION_SHUT_DOWN_ERROR = "The session has ended.";
 
-/** The Session Engine state and commands one submission runs against. */
+/** The Agent Session state and commands one submission runs against. */
 export type SubmissionDeps = Readonly<{
 	applyContext: (messages: readonly SessionMessage[]) => void;
 	beginExecution: (input: SessionExecutionInput) => SessionExecution;
@@ -80,11 +80,12 @@ export type SubmissionDeps = Readonly<{
 	mergeTranscript: (
 		messages: readonly SessionMessage[]
 	) => readonly SessionMessage[];
-	ports: SessionEnginePorts;
+	ports: AgentSessionPorts;
 	recoverOverflow: (
 		command: SessionOverflowRecoveryCommand
 	) => Promise<SessionOverflowRecoveryOutcome>;
-	send: (input: SessionSendInput) => Promise<SessionSendOutcome>;
+	continueContext: (input: SessionSendInput) => Promise<SessionSendOutcome>;
+	isContextContinuation: (input: SessionSendInput) => boolean;
 	sessionId: SessionId;
 	setCatalogDiagnostic: (diagnostic: string | null) => void;
 	setCompactionError: (error: Error | null) => void;
@@ -101,9 +102,9 @@ export type SubmissionDeps = Readonly<{
 	 */
 	trackBackgroundTask: (task: Promise<unknown>) => void;
 	/**
-	 * Delivers the Steering Lane into one Agent Turn execution: the Engine pops
-	 * the lane, commits the Session Records, and returns the messages the
-	 * runtime inserts before its next model call.
+	 * Delivers the Steering Lane into one Agent Turn execution: the Agent Session
+	 * pops the lane, commits Session Records, and returns messages the runtime
+	 * inserts before its next model call.
 	 */
 	takeSteeringMessages: (execution: SessionExecution) => SessionMessage[];
 }>;
@@ -210,7 +211,7 @@ const thresholdCompactionFailure = async (
 
 /** Whether the Session Context needs a threshold compaction under these settings. */
 const needsThresholdCompaction = (
-	compaction: SessionEnginePorts["compaction"],
+	compaction: AgentSessionPorts["compaction"],
 	messages: readonly SessionMessage[],
 	settings: ResolvedCompactionSettings
 ): boolean =>
@@ -225,7 +226,7 @@ export const prepareCompactionBeforeSubmit = async ({
 	settleCompaction,
 	variant,
 }: {
-	compaction: SessionEnginePorts["compaction"];
+	compaction: AgentSessionPorts["compaction"];
 	getActiveMessages: () => readonly SessionMessage[];
 	model: ChatModelSelection;
 	runCompaction: (
@@ -283,7 +284,7 @@ const prepareSubmitContext = async ({
 	activeMessages: readonly SessionMessage[];
 	armSkill: (signal: AbortSignal) => Promise<SessionSkillCatalog>;
 	input: SessionSendInput;
-	resolveSkill: SessionEnginePorts["skills"]["resolveSkill"];
+	resolveSkill: AgentSessionPorts["skills"]["resolveSkill"];
 	signal: AbortSignal;
 }): Promise<SubmitContextResult> => {
 	const armedSkill = await armSkill(signal);
@@ -331,10 +332,10 @@ const prepareNewSessionMessage = async ({
 	resolveFileMentions,
 	signal,
 }: {
-	externalize: SessionEnginePorts["attachments"]["externalize"];
+	externalize: AgentSessionPorts["attachments"]["externalize"];
 	input: SessionSendInput;
 	metadata: SessionMessageMetadata;
-	resolveFileMentions: SessionEnginePorts["resolveFileMentions"];
+	resolveFileMentions: AgentSessionPorts["resolveFileMentions"];
 	signal: AbortSignal;
 }): Promise<
 	| { readonly kind: "ready"; readonly message: SessionMessage }
@@ -406,16 +407,24 @@ const prepareModelMessages = async ({
 	context,
 	externalize,
 	input,
+	isContextContinuation,
 	resolveFileMentions,
 	signal,
 }: {
 	activeMessages: readonly SessionMessage[];
 	context: Extract<SubmitContextResult, { kind: "ready" }>;
-	externalize: SessionEnginePorts["attachments"]["externalize"];
+	externalize: AgentSessionPorts["attachments"]["externalize"];
 	input: SessionSendInput;
-	resolveFileMentions: SessionEnginePorts["resolveFileMentions"];
+	isContextContinuation: boolean;
+	resolveFileMentions: AgentSessionPorts["resolveFileMentions"];
 	signal: AbortSignal;
 }): Promise<PreparedModelMessages> => {
+	if (isContextContinuation) {
+		return {
+			kind: "ready",
+			messages: sanitizeSessionSkillToolParts(activeMessages),
+		};
+	}
 	if (!(isUndefined(context.anchoredMessage) || isUndefined(input.messageId))) {
 		return prepareRetryMessages(activeMessages, input.messageId);
 	}
@@ -449,13 +458,15 @@ const prepareSessionSubmission = async ({
 	armSkill,
 	deps,
 	input,
+	isContextContinuation,
 	resolveSkill,
 	signal,
 }: {
 	armSkill: (signal: AbortSignal) => Promise<SessionSkillCatalog>;
 	deps: SubmissionDeps;
 	input: SessionSendInput;
-	resolveSkill: SessionEnginePorts["skills"]["resolveSkill"];
+	isContextContinuation: boolean;
+	resolveSkill: AgentSessionPorts["skills"]["resolveSkill"];
 	signal: AbortSignal;
 }): Promise<SessionPreparationResult> => {
 	const { ports } = deps;
@@ -507,6 +518,7 @@ const prepareSessionSubmission = async ({
 			externalize: ports.attachments.externalize,
 			input,
 			resolveFileMentions: ports.resolveFileMentions,
+			isContextContinuation,
 			signal,
 		});
 		if (prepared.kind !== "ready") {
@@ -608,7 +620,7 @@ const commitPromptRecord = async ({
 	commitRecord,
 }: {
 	agent: SessionSendInput["agent"];
-	commitRecord: SessionEnginePorts["commitRecord"];
+	commitRecord: AgentSessionPorts["commitRecord"];
 	message: SessionMessage;
 	model: ChatModelSelection;
 	sessionId: SessionId;
@@ -785,10 +797,10 @@ const failureRecordInput = (execution: SessionExecution) => ({
 });
 
 /**
- * Proposes the one overflow recovery the Engine may run for the Agent Turn a
- * provider refused. The Engine owns the attempt and the classification, so
- * this only supplies what a recovery needs: where to compact against, and how
- * to replay the original user message.
+ * Proposes the one overflow recovery the Agent Session may run for the Agent
+ * Turn a provider refused. The Agent Session owns the attempt and the
+ * classification, so this supplies what recovery needs: where to compact
+ * against and how to continue the existing Session Context.
  */
 const proposeOverflowRecovery = ({
 	context,
@@ -809,12 +821,12 @@ const proposeOverflowRecovery = ({
 		deps.recoverOverflow({
 			error: failure,
 			originalMessageId,
-			replay: ({ originalMessageId: replayId }) =>
-				replayOverflowTurn({
+			continueContext: ({ originalMessageId: contextMessageId }) =>
+				continueOverflowContext({
 					context,
 					deps,
 					execution,
-					originalMessageId: replayId,
+					originalMessageId: contextMessageId,
 				}),
 			resolveTarget: async () => {
 				const settings = await deps.ports.resolveCompactionSettings(
@@ -834,12 +846,11 @@ const proposeOverflowRecovery = ({
 };
 
 /**
- * Replays the original user message as the Agent Turn the recovery continues.
- * The send lane refuses a replay that would overlap a send the session already
- * runs, and that refusal is the replay's outcome: a recovery never queues
- * behind, or overlaps, work the user started.
+ * Starts a new Agent Turn from the existing Session Context after compaction.
+ * The send lane refuses a continuation that would overlap work the session
+ * already runs; recovery never queues behind or overlaps user-started work.
  */
-const replayOverflowTurn = async ({
+const continueOverflowContext = async ({
 	context,
 	deps,
 	execution,
@@ -849,8 +860,8 @@ const replayOverflowTurn = async ({
 	deps: SubmissionDeps;
 	execution: SessionExecution;
 	originalMessageId: SessionMessageId;
-}): Promise<SessionOverflowReplayOutcome> => {
-	const outcome = await deps.send({
+}): Promise<SessionOverflowContinuationOutcome> => {
+	const outcome = await deps.continueContext({
 		agent: execution.agent,
 		messageId: originalMessageId,
 		model: execution.model,
@@ -1182,11 +1193,11 @@ export type SubmissionPipeline = Readonly<{
 }>;
 
 /**
- * The Engine's Submission Command: it prepares the submission, commits the
- * accepted user message, runs the Agent Turn against the host's runtime,
+ * The Agent Session's Submission Command: it prepares the submission, commits
+ * the accepted user message, runs the Agent Turn against the Host runtime,
  * commits each Steering Message that turn takes at a Model Step boundary, and
  * maintains the compaction threshold afterwards. Every state write is ordered
- * by this command, so an observer only ever reads a settled session.
+ * by this command, so observers only ever read settled session state.
  */
 export const createSubmissionPipeline = (
 	deps: SubmissionDeps
@@ -1215,10 +1226,13 @@ export const createSubmissionPipeline = (
 		deps.setTurnActive(true);
 		try {
 			const startedAt = Date.now();
+			const isContextContinuation = deps.isContextContinuation(input);
+			const resolvedInput = deps.ports.resolveSubmission(input);
 			const prepared = await prepareSessionSubmission({
 				armSkill,
 				deps,
-				input,
+				input: resolvedInput,
+				isContextContinuation,
 				resolveSkill: deps.ports.skills.resolveSkill,
 				signal,
 			});
@@ -1235,7 +1249,7 @@ export const createSubmissionPipeline = (
 			if (hasCommittedPrompt) {
 				const promptError = await commitPreparedPrompt({
 					deps,
-					input,
+					input: resolvedInput,
 					message: prepared.newMessage,
 					signal,
 				});
@@ -1250,7 +1264,7 @@ export const createSubmissionPipeline = (
 			}
 			const execution = deps.beginExecution(
 				executionInputForSubmit({
-					input,
+					input: resolvedInput,
 					sourceUserMessageId:
 						context.anchoredMessage?.id ?? prepared.newMessage?.id,
 					startedAt,

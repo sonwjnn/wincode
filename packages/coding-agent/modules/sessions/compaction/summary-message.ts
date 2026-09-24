@@ -5,7 +5,7 @@ import type { CompactionSummary, SessionCompaction } from "./types";
 
 /**
  * The Session Message form of a compaction summary. These helpers are a leaf on
- * purpose: the Session Engine depends on them, so they must not reach React
+ * purpose: the Agent Session depends on them, so they must not reach React
  * through the compaction module (ADR-0019).
  */
 const SUMMARY_MESSAGE_PREFIX = "<wincode-compaction-summary>";

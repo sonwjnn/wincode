@@ -393,18 +393,20 @@ export async function runRpc({
 					void fatalShutdown(error);
 				}
 			}),
-			nextHost.engine.onSubmissionEvent((event: SessionSubmissionEvent) => {
-				try {
-					emit("session/event", {
-						event: {
-							kind: "submission",
-							event: projectSubmissionEvent(event),
-						},
-					});
-				} catch (error) {
-					void fatalShutdown(error);
+			nextHost.agentSession.onSubmissionEvent(
+				(event: SessionSubmissionEvent) => {
+					try {
+						emit("session/event", {
+							event: {
+								kind: "submission",
+								event: projectSubmissionEvent(event),
+							},
+						});
+					} catch (error) {
+						void fatalShutdown(error);
+					}
 				}
-			}),
+			),
 			nextHost.onFatal((failureValue) => {
 				void fatalShutdown(appError(failureValue.code, failureValue.code));
 			}),

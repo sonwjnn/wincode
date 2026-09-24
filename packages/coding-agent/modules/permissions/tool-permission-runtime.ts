@@ -112,7 +112,7 @@ export const resolveToolPermissionPolicies = (
  * evaluator seeded with defaults and refreshed from the top-level config
  * `permission` section once the ConfigStore snapshot resolves, the active
  * Agent's Tool Resource Profile, and the workspace sandbox used to
- * canonicalize read resources. Approval settlement is the Session Engine's,
+ * canonicalize read resources. Approval settlement is the Agent Session's,
  * not this runtime's. It is React-free, so a non-renderer consumer composes
  * it from the same call the TUI makes.
  */

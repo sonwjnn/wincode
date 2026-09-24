@@ -21,12 +21,12 @@ const approvalResolutionOf = (
 		: { outcome: approvalOutcomeOf(decision) };
 
 /**
- * Projects the Engine's approvals into the panel registry the session UI reads.
- * Every entry settles through the Engine's approval command, so the panel asks
- * for a settlement instead of applying one and the resolution it renders is the
- * Engine's own decision. A settled session entry is dropped: it has no timeline
- * anchor to render an audit line into, while a settled Tool Call entry stays so
- * its message part can show one.
+ * Projects the Agent Session's approvals into the panel registry the session UI
+ * reads. Every entry settles through the Agent Session's approval command, so
+ * the panel asks for settlement instead of applying one, and the resolution it
+ * renders is the Agent Session's own decision. Settled session entries are
+ * dropped without a timeline anchor; settled Tool Call entries remain so their
+ * message parts can show one.
  */
 export const projectSessionApprovals = (
 	approvals: readonly SessionApproval[],

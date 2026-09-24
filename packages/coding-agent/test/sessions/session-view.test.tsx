@@ -112,8 +112,8 @@ let fakeRunCompositions: SessionSubmissionComposition[] = [];
 /** How many times the view asked the session to recall its waiting messages. */
 let fakeSessionRecalls = 0;
 
-mock.module("@/modules/sessions/hooks/use-session-engine", () => ({
-	useSessionEngine: (host: SessionHost) => {
+mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
+	useAgentSession: (host: SessionHost) => {
 		const [turnActive, setTurnActive] = useState(false);
 		const [queuedSubmissions, setQueuedSubmissions] =
 			useState<SessionQueuedSubmission[]>(fakeQueuedSeed);
@@ -165,8 +165,8 @@ mock.module("@/modules/sessions/hooks/use-session-engine", () => ({
 		}, []);
 		const recallWaitingMessages = useCallback(
 			(ids?: readonly SessionWaitingMessageId[]) => {
-				// The fake keeps what the real Engine keeps: the Steering Lane
-				// first, then the Submission Queue, and a recall of one message
+				// The fake keeps what the real Agent Session keeps: the Steering
+				// Lane first, then the Submission Queue, and a recall of one item
 				// leaves the others waiting.
 				const lanes = fakeRecalledPayload ?? waiting.current;
 				const recalled = isUndefined(ids)
@@ -282,7 +282,7 @@ const buildRouter = () => {
 /**
  * The Session View's seam is an already-open Host, so the fake one carries the
  * opened facts a Snapshot publishes. The binding is mocked too, so the Host's
- * Engine is never reached from this test.
+ * Agent Session is never reached from this test.
  */
 const createFakeSessionHost = (
 	transcript: readonly SessionMessage[]

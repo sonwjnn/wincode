@@ -16,7 +16,7 @@ import type {
 } from "@/modules/sessions/session-operation";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
 
-export type SessionEngineBinding = Readonly<{
+export type AgentSessionBinding = Readonly<{
 	/** Cancels the Agent Turn the session is running. */
 	cancel: () => void;
 	/** Aborts the compaction command in flight and recalls the waiting messages with it. */
@@ -43,11 +43,11 @@ export type SessionEngineBinding = Readonly<{
 }>;
 
 /**
- * Binds an already-open Session Host to React: it mirrors the Engine's Session
- * Snapshot into React state so the view re-renders, projects the Engine's
- * approvals into the panel surface, and forwards the session's commands. It
- * holds no session state and opens nothing: the Engine is the only writer, and
- * every fact this binding renders comes from a snapshot it read.
+ * Binds an already-open Session Host to React: it mirrors the Agent Session's
+ * Snapshot into React state so the view re-renders, projects its approvals into
+ * the panel surface, and forwards session commands. It holds no session state
+ * and opens nothing: the Agent Session is the only writer, and every fact this
+ * binding renders comes from a snapshot it read.
  *
  * The snapshot is mirrored through a subscription rather than
  * `useSyncExternalStore`: the synchronous re-render that hook performs inside
@@ -57,19 +57,25 @@ export type SessionEngineBinding = Readonly<{
  * notifications). The binding re-reads the snapshot once after subscribing, so
  * a change between render and effect is not lost.
  */
-export function useSessionEngine(host: SessionHost): SessionEngineBinding {
-	const { engine } = host;
+export function useAgentSession(host: SessionHost): AgentSessionBinding {
+	const { agentSession } = host;
 	const { project: projectApprovalPanels } = useApprovalPanels();
-	const [snapshot, setSnapshot] = useState(engine.getSnapshot);
+	const [snapshot, setSnapshot] = useState(agentSession.getSnapshot);
 	useEffect(() => {
-		setSnapshot(engine.getSnapshot());
-		return engine.subscribe(() => setSnapshot(engine.getSnapshot()));
-	}, [engine]);
-	// The panel surface reads the Engine's approvals; the binding only projects
-	// them, and never reads a settlement back out of it.
+		setSnapshot(agentSession.getSnapshot());
+		return agentSession.subscribe(() =>
+			setSnapshot(agentSession.getSnapshot())
+		);
+	}, [agentSession]);
+	// The panel surface reads the Agent Session's approvals; the binding only
+	// projects them and never reads a settlement back out of it.
 	const approvalEntries = useMemo(
-		() => projectSessionApprovals(snapshot.approvals, engine.respondToApproval),
-		[engine.respondToApproval, snapshot.approvals]
+		() =>
+			projectSessionApprovals(
+				snapshot.approvals,
+				agentSession.respondToApproval
+			),
+		[agentSession.respondToApproval, snapshot.approvals]
 	);
 	useEffect(() => {
 		projectApprovalPanels(approvalEntries);
@@ -89,22 +95,22 @@ export function useSessionEngine(host: SessionHost): SessionEngineBinding {
 				selection: ChatModelSelection,
 				selectionVariant?: ModelVariant
 			) =>
-				engine.compact({
+				agentSession.compact({
 					focus,
 					model: selection,
 					trigger: "manual",
 					...omitUndefined({ variant: selectionVariant }),
 				}),
-		[engine]
+		[agentSession]
 	);
 
 	return {
-		cancel: engine.cancel,
-		cancelCompaction: engine.cancelCompaction,
+		cancel: agentSession.cancel,
+		cancelCompaction: agentSession.cancelCompaction,
 		compact,
-		interrupt: engine.interrupt,
-		recallWaitingMessages: engine.recallWaitingMessages,
-		send: engine.send,
+		interrupt: agentSession.interrupt,
+		recallWaitingMessages: agentSession.recallWaitingMessages,
+		send: agentSession.send,
 		snapshot,
 	};
 }

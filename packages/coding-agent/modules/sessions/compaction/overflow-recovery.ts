@@ -7,7 +7,7 @@ import type { SessionMessage } from "../message";
 import { sanitizeInterruptedSessionMessages } from "../message";
 
 export class OverflowRecoveryError extends Error {
-	readonly code: "replay-failed" | "replay-refused";
+	readonly code: "continuation-failed" | "continuation-refused";
 
 	constructor(
 		code: OverflowRecoveryError["code"],
@@ -33,10 +33,10 @@ export const isContextOverflowFailure = (error: unknown): boolean =>
 /**
  * The messages one overflow recovery compacts: the Session Transcript up to and
  * including the original user message, with the interrupted turn that followed
- * it sanitized away, so the replay runs the message again on a context the
- * provider accepts.
+ * it sanitized away. The resulting Session Context can continue from that
+ * original message without appending it again.
  */
-export const prepareOverflowReplayMessages = (
+export const prepareOverflowRecoveryMessages = (
 	messages: readonly SessionMessage[],
 	originalMessageId: SessionMessageId
 ): SessionMessage[] => {
@@ -45,7 +45,7 @@ export const prepareOverflowReplayMessages = (
 	);
 	if (originalIndex === -1) {
 		throw new OverflowRecoveryError(
-			"replay-failed",
+			"continuation-failed",
 			"Context overflow recovery could not find the original user message."
 		);
 	}

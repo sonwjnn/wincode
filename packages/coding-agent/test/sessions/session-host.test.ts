@@ -261,7 +261,7 @@ const compactionModule = (summaryGenerator: SummaryGenerator) =>
  * The capabilities one Host runs against outside React: the workspace config,
  * a connection that authorizes the Model Target, an empty MCP catalog, the
  * built-in Agent registry, the Tool Permission runtime, and the Session
- * Compaction module the engine suite fakes the same way.
+ * Compaction module the Agent Session contract tests fake the same way.
  */
 const createCapabilities = (
 	sessionStore: SessionStore = store
@@ -473,11 +473,11 @@ describe("Session Host lifetime", () => {
 			snapshotChanges += 1;
 		});
 
-		const outcome = await host.engine.send(sendInput(capabilities));
+		const outcome = await host.agentSession.send(sendInput(capabilities));
 
 		expect(outcome).toEqual({ rejected: false });
 		expect(snapshotChanges).toBeGreaterThan(0);
-		// The Agent Turn Events the Engine receives reach a consumer in order,
+		// The Agent Turn Events the Agent Session emits reach a consumer in order,
 		// terminal event included.
 		expect(events.map(({ type }) => type)).toEqual([
 			"agent-turn-started",
@@ -498,14 +498,16 @@ describe("Session Host lifetime", () => {
 		// channel reaches its observer once the consumer is tearing down.
 		const changesAtShutdown = snapshotChanges;
 		const eventsAtShutdown = events.length;
-		// A context swap still publishes inside the Engine, so it is what proves
+		// A context swap still publishes inside the Agent Session, so it proves
 		// the subscription is over rather than merely quiet.
-		host.engine.applyContext([
+		host.agentSession.applyContext([
 			message("after-shutdown", "user", "after shutdown"),
 		]);
-		expect(await host.engine.send(sendInput(capabilities))).toMatchObject({
-			rejected: true,
-		});
+		expect(await host.agentSession.send(sendInput(capabilities))).toMatchObject(
+			{
+				rejected: true,
+			}
+		);
 		expect(snapshotChanges).toBe(changesAtShutdown);
 		expect(events).toHaveLength(eventsAtShutdown);
 	});
@@ -532,7 +534,9 @@ describe("Session Host lifetime", () => {
 		});
 
 		try {
-			await expect(host.engine.send(sendInput(capabilities))).resolves.toEqual({
+			await expect(
+				host.agentSession.send(sendInput(capabilities))
+			).resolves.toEqual({
 				reason: "The session has ended.",
 				rejected: true,
 			});
@@ -571,7 +575,7 @@ describe("Session Host lifetime", () => {
 			| undefined;
 
 		try {
-			const send = host.engine.send(sendInput(capabilities));
+			const send = host.agentSession.send(sendInput(capabilities));
 			await delayed.terminalCommitStarted.promise;
 			const shutdown = host.shutdown();
 			expect(host.getSnapshot().turnActive).toBe(true);
@@ -612,7 +616,7 @@ describe("Session Host lifetime", () => {
 			capabilities: createCapabilities(delayed.delayed),
 			sessionId: seeded.sessionId,
 		});
-		const send = host.engine.send(
+		const send = host.agentSession.send(
 			sendInput(createCapabilities(delayed.delayed))
 		);
 		await delayed.terminalCommitStarted.promise;
@@ -644,7 +648,7 @@ describe("Session Host lifetime", () => {
 			capabilities,
 			sessionId: seeded.sessionId,
 		});
-		const settlement = host.engine.requestApproval(approvalRequest);
+		const settlement = host.agentSession.requestApproval(approvalRequest);
 
 		await host.shutdown();
 
@@ -676,9 +680,9 @@ describe("Session Host lifetime", () => {
 		let sendDuringFailure: Promise<unknown> | null = null;
 		host.onFatal((next) => {
 			failures.push(next);
-			sendDuringFailure = host.engine.send(sendInput(capabilities));
+			sendDuringFailure = host.agentSession.send(sendInput(capabilities));
 		});
-		const approval = host.engine.requestApproval(approvalRequest);
+		const approval = host.agentSession.requestApproval(approvalRequest);
 		let takeover:
 			| Awaited<ReturnType<SessionStore["acquireSessionLease"]>>
 			| undefined;

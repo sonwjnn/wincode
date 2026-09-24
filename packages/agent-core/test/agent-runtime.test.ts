@@ -267,7 +267,7 @@ test("cancellation during a model step emits cancellation rather than completion
 	expect(terminal).toMatchObject({ type: "agent-turn-cancelled" });
 });
 
-test("tool-armed turns stop after twenty model steps", async () => {
+test("tool-armed turns continue past twenty model steps until the model completes", async () => {
 	let executions = 0;
 	const tool: ResolvedTool = {
 		definition: readDefinition,
@@ -277,26 +277,37 @@ test("tool-armed turns stop after twenty model steps", async () => {
 		},
 	};
 	const { client, requests } = scriptedClient((_request, index) =>
-		scriptedParts(
-			{
-				input: { path: `src/file-${index}.ts` },
-				toolCallId: `call-${index}`,
-				toolName: "read",
-				type: "tool-call",
-			},
-			{ type: "finish" }
-		)
+		index < 25
+			? scriptedParts(
+					{
+						input: { path: `src/file-${index}.ts` },
+						toolCallId: `call-${index}`,
+						toolName: "read",
+						type: "tool-call",
+					},
+					{ type: "finish" }
+				)
+			: scriptedParts(
+					{ delta: "Finished all files.", type: "text-delta" },
+					{ type: "finish" }
+				)
 	);
 
 	const events = await consume(
 		createAgentRuntime({ modelClient: client }).run(buildTurn([tool]))
 	);
 
-	expect(requests).toHaveLength(20);
-	expect(executions).toBe(20);
+	expect(requests).toHaveLength(26);
+	expect(executions).toBe(25);
 	expect(
 		events.filter(({ type }) => type === "model-step-finished")
-	).toHaveLength(20);
+	).toHaveLength(26);
+	expect(events).toContainEqual(
+		expect.objectContaining({
+			delta: "Finished all files.",
+			type: "text-delta",
+		})
+	);
 	expect(events.at(-1)?.type).toBe("agent-turn-completed");
 });
 

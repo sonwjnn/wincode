@@ -57,8 +57,8 @@ export const isSessionBusy = (snapshot: SessionSnapshot): boolean =>
 
 /**
  * Whether the session's Agent Turn is the one a submission may steer right now.
- * It is the same fact the Engine admits on and the composer refuses by: while a
- * turn runs, a submission joins that turn's Steering Lane instead of waiting
+ * It is the same fact the Agent Session admits on and the composer refuses by:
+ * while a turn runs, a submission joins its Steering Lane instead of waiting
  * for it to end.
  */
 export const acceptsSteeringMessages = (snapshot: SessionSnapshot): boolean =>

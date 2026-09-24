@@ -104,10 +104,10 @@
               "level": "error",
               "options": {
                 "paths": {
-                  "@opentui/core": "The Session Engine is React-free and host-agnostic (ADR-0019).",
-                  "@opentui/react": "The Session Engine is React-free and host-agnostic (ADR-0019).",
-                  "react": "The Session Engine is React-free and host-agnostic (ADR-0019).",
-                  "react-dom": "The Session Engine is React-free and host-agnostic (ADR-0019)."
+                  "@opentui/core": "The Agent Session is React-free and host-agnostic (ADR-0019).",
+                  "@opentui/react": "The Agent Session is React-free and host-agnostic (ADR-0019).",
+                  "react": "The Agent Session is React-free and host-agnostic (ADR-0019).",
+                  "react-dom": "The Agent Session is React-free and host-agnostic (ADR-0019)."
                 },
                 "patterns": [
                   {
@@ -121,7 +121,7 @@
                       "@/modules/sessions/compaction",
                       "@/modules/sessions/compaction/index"
                     ],
-                    "message": "Import the React-free leaf instead of this barrel: a barrel re-exports React-using modules, so the Session Engine is no longer host-agnostic (ADR-0019)."
+                    "message": "Import the React-free leaf instead of this barrel: a barrel re-exports React-using modules, so the Agent Session is no longer host-agnostic (ADR-0019)."
                   }
                 ]
               }

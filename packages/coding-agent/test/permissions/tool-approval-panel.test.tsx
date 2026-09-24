@@ -88,7 +88,7 @@ function ProjectionProbe({
 /**
  * Renders an approval surface against the projection API the session uses:
  * entries appear only when the binding projects them, exactly as they do from
- * the Session Engine's approvals.
+ * the Agent Session's approvals.
  */
 const renderSurface = async (
 	children: ReactNode

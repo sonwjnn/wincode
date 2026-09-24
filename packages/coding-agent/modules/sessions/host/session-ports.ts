@@ -4,6 +4,7 @@ import type {
 	AgentTurnTerminalEvent,
 } from "@wincode/agent-core";
 import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
+import { resolveEffectiveAgentSelection } from "@/modules/agents/agent-call";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
 import { createMcpToolExecutor } from "@/modules/mcp/result";
 import type { ToolPermission } from "@/modules/permissions/policy";
@@ -29,8 +30,8 @@ import { resolveChatModelTarget } from "../../model-target";
 import { createToolGate, type ToolGate } from "../../tool-gate/tool-gate";
 import { SessionCompactionError } from "../compaction/error";
 import type {
-	SessionEngine,
-	SessionEnginePorts,
+	AgentSession,
+	AgentSessionPorts,
 	SessionExecution,
 	SessionResolvedAgent,
 	SessionSkillCatalog,
@@ -60,8 +61,8 @@ import type { SessionCapabilities } from "./types";
 
 export type SessionPortsOptions = Readonly<{
 	capabilities: SessionCapabilities;
-	/** The Engine whose ports these are, available once it is constructed. */
-	engine: () => SessionEngine;
+	/** The Agent Session whose ports these are, available once it is constructed. */
+	agentSession: () => AgentSession;
 	isShutDown: () => boolean;
 	onLeaseLost: () => void;
 	renewLease: () => boolean;
@@ -140,20 +141,20 @@ const activateExplicitSkill = async (
 };
 
 /**
- * Materializes the Session Engine's ports from one session's capabilities and
+ * Materializes the Agent Session's ports from one session's capabilities and
  * owns no lifetime: it holds the Agent Runtime, MCP snapshots, Tools and the
  * Tool Gate, Skill catalogs, prompt composition, attachments, and durable
  * records, and keeps no session state — every fact it observes comes from the
- * Engine's Session Snapshot.
+ * Agent Session Snapshot.
  */
 export const createSessionPorts = ({
 	capabilities,
-	engine,
+	agentSession,
 	isShutDown,
 	onLeaseLost,
 	renewLease,
 	sessionId,
-}: SessionPortsOptions): SessionEnginePorts => {
+}: SessionPortsOptions): AgentSessionPorts => {
 	const assertLease = (): void => {
 		if (isShutDown()) {
 			throw new SessionCompactionError(
@@ -174,17 +175,17 @@ export const createSessionPorts = ({
 	};
 	/**
 	 * The execution scopes the ports run, keyed by Agent Turn Identifier. A
-	 * scope holds what only the host can own — the MCP snapshot, the child abort
-	 * registry, and delegation bookkeeping — while the Engine owns the session
-	 * state every observer reads.
+	 * scope holds what only the Host can own — the MCP snapshot, the child abort
+	 * registry, and delegation bookkeeping — while the Agent Session owns the
+	 * session state every observer reads.
 	 */
 	const scopes = new Map<string, TurnExecution>();
 	/** The newest execution scope that is not a delegated Subagent. */
 	const primaryScope = (): TurnExecution | undefined =>
 		primaryEntry(scopes.values());
 	/**
-	 * The scope of one Agent Turn execution: the Engine's execution record plus
-	 * the capabilities only the host can hold.
+	 * The scope of one Agent Turn execution: the Agent Session's execution record
+	 * plus the capabilities only the Host can hold.
 	 */
 	const scopeOf = (
 		execution: SessionExecution,
@@ -227,7 +228,7 @@ export const createSessionPorts = ({
 							feedback:
 								"Interactive approval is unavailable in non-interactive mode.",
 						})
-					: engine().requestApproval(request),
+					: agentSession().requestApproval(request),
 		},
 		onAbort: (request) => {
 			if (isUndefined(request.toolCallId)) {
@@ -238,7 +239,7 @@ export const createSessionPorts = ({
 				abortChild();
 				return;
 			}
-			engine().abortApprovalTurn(request.toolCallId);
+			agentSession().abortApprovalTurn(request.toolCallId);
 		},
 		resolvePermission: (agentId) => {
 			const permission = capabilities.getToolPermission();
@@ -391,8 +392,8 @@ export const createSessionPorts = ({
 
 	/**
 	 * Runs one Agent Turn execution: it resolves the Model Target, snapshots
-	 * MCP, composes the Tools and the prompt, and consumes the Agent Runtime,
-	 * reporting every event and checkpoint back to the Engine.
+	 * MCP, composes the Tools and prompt, and consumes the Agent Runtime,
+	 * reporting every event and checkpoint to the Agent Session.
 	 */
 	const runTurn = async (
 		request: SessionTurnRequest
@@ -449,7 +450,7 @@ export const createSessionPorts = ({
 				versionedEditing,
 			};
 			scope.delegate = createDelegationExecutor({
-				commitRecord: (input) => engine().commitRecord(input),
+				commitRecord: (input) => agentSession().commitRecord(input),
 				isShutDown,
 				connections,
 				createSkillContext: async (agentId) => {
@@ -462,7 +463,7 @@ export const createSessionPorts = ({
 				execution: scope,
 				host: {
 					begin: (input) => {
-						const child = scopeOf(engine().beginExecution(input), {
+						const child = scopeOf(agentSession().beginExecution(input), {
 							armedSkill: input.armedSkill,
 							resolvedAgent: input.resolvedAgent,
 							skillRequest: input.skillRequest,
@@ -472,10 +473,10 @@ export const createSessionPorts = ({
 					},
 					end: (ended) => {
 						releaseScope(ended);
-						engine().endExecution(ended.turnId);
+						agentSession().endExecution(ended.turnId);
 					},
 					publishViewState: (published, viewState) =>
-						engine().setExecutionViewState(published.turnId, viewState),
+						agentSession().setExecutionViewState(published.turnId, viewState),
 				},
 				mcp,
 				registry: capabilities.getRegistry(),
@@ -541,9 +542,9 @@ export const createSessionPorts = ({
 				...omitUndefined({
 					sourceUserMessageId: execution.sourceUserMessageId ?? undefined,
 				}),
-				// The Engine hands this turn the Steering Messages that joined
-				// it; the host only forwards the intake, so the Agent Runtime
-				// boundary stays the one place that translates them.
+				// The Agent Session hands this turn its waiting Steering Messages;
+				// the Host only forwards them, leaving translation at the Agent
+				// Runtime boundary.
 				takeSteeringMessages: request.takeSteeringMessages,
 				turn,
 			});
@@ -591,6 +592,32 @@ export const createSessionPorts = ({
 			getInFlight: (id) => capabilities.getCompactionModule().getInFlight(id),
 			needsCompaction: (messages, settings) =>
 				capabilities.getCompactionModule().needsCompaction(messages, settings),
+		},
+		resolveSubmission: (input) => {
+			const registry = capabilities.getRegistry();
+			if (isNull(registry)) {
+				return input;
+			}
+			const selection = resolveEffectiveAgentSelection(
+				registry,
+				input.agent,
+				input.model,
+				input.variant
+			);
+			const {
+				resolvedAgent: _resolvedAgent,
+				variant: _variant,
+				...unresolvedInput
+			} = input;
+			return {
+				...unresolvedInput,
+				agent: selection.agent,
+				model: selection.model,
+				...omitUndefined({
+					resolvedAgent: selection.resolvedAgent,
+					variant: selection.variant,
+				}),
+			};
 		},
 		resolveCompactionSettings: (model) =>
 			capabilities.getCompactionSettings(model),
