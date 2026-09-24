@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { join } from "node:path";
+// biome-ignore lint/performance/noNamespaceImport: AGENTS.md requires namespace imports for node modules.
+import * as path from "node:path";
 import type {
 	AgentRuntime,
 	AgentTurn,
@@ -150,9 +151,9 @@ test("forwards cancellation to a running coding tool", async () => {
 });
 
 test("coding tools execute only after the gate and remain Agent-selective", async () => {
-	const root = await mkdtemp(join(process.cwd(), ".wincode-catalog-"));
-	const allowedPath = join(root, "allowed.txt");
-	const deniedPath = join(root, "denied.txt");
+	const root = await mkdtemp(path.join(process.cwd(), ".wincode-catalog-"));
+	const allowedPath = path.join(root, "allowed.txt");
+	const deniedPath = path.join(root, "denied.txt");
 	try {
 		let allowedGateCalls = 0;
 		const allowedTool = createGatedCodingTools({
