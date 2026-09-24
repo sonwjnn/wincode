@@ -40,6 +40,7 @@
   "dependencies": {
     "@wincode/runtime-utils": "workspace:*",
     "oauth4webapi": "^3.8.3",
+    "open": "^10.2.0",
     "type-fest": "catalog:",
     "zod": "catalog:"
   },
