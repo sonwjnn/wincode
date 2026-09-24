@@ -404,6 +404,12 @@ Skill Activation all resolve through the one gate, and the gate owns the
 deny/reject wording each family emits. _Avoid_:
 approval service, permission middleware
 
+**Runtime Tool Registry**:
+The definition-only collection of Tool Definitions recognized by the Agent
+Runtime; it carries no executor or Tool Permission decision. The Coding-Agent
+Application composes selected catalog tools as Resolved Tools through the Tool
+Gate for each Agent Turn. _Avoid_: executable registry
+
 **Resolved Tool**:
 A tool definition whose executable path has been composed through the Tool Gate
 for an Agent Turn. Resolution makes a tool available; Tool Permission is still

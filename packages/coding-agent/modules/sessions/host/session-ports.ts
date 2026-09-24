@@ -21,7 +21,7 @@ import {
 	type SkillRequestContext,
 } from "@/modules/skills";
 import {
-	codingToolDefinitions,
+	codingToolCatalog,
 	type VersionedEditingContext,
 } from "@/modules/tools";
 import type { SessionId } from "@/shared/identifiers";
@@ -293,7 +293,7 @@ export const createSessionPorts = ({
 		const resolvedAgent = scope?.resolvedAgent;
 		const codingTools =
 			resolvedAgent?.visibleCodingTools.map((name) => {
-				const definition = codingToolDefinitions[name];
+				const definition = codingToolCatalog[name];
 				return { description: definition.description, name };
 			}) ?? [];
 		const skillTool = scope?.armedSkill?.tool;

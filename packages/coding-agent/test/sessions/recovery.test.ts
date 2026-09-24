@@ -9,8 +9,8 @@ import {
 	computeFileVersion,
 	type FileObservationStore,
 	getToolResourceLimits,
-	runCodingTool,
 	runRecoverTool,
+	runWriteTool,
 	type VersionedEditingContext,
 } from "@/modules/tools";
 import {
@@ -125,8 +125,7 @@ test("restarts expose prepared transactions and reconcile with expected versions
 		const aliasPath = join(root, "note-alias.txt");
 		await symlink(filePath, aliasPath);
 		await expect(
-			runCodingTool(
-				"write",
+			runWriteTool(
 				{
 					content: "blocked alias\n",
 					expectedVersion: computeFileVersion(changedBytes),
@@ -140,8 +139,7 @@ test("restarts expose prepared transactions and reconcile with expected versions
 			)
 		).rejects.toMatchObject({ code: "unresolved-recovery" });
 		await expect(
-			runCodingTool(
-				"write",
+			runWriteTool(
 				{
 					content: "blocked\n",
 					expectedVersion: computeFileVersion(changedBytes),

@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
 import type {
 	AgentRuntime,
 	AgentTurn,
@@ -16,10 +18,12 @@ import {
 	runAgentTurnToText,
 } from "@/modules/sessions/hooks/runtime-turn";
 import { buildAssistantFailureSessionRecord } from "@/modules/sessions/turn-records";
+import { createMemoryFileObservationStore } from "@/modules/tools";
 import {
 	agentId,
 	agentTurnId,
 	modelId,
+	sessionId,
 	sessionMessageId,
 	toolCallId,
 } from "../support/identifiers";
@@ -143,6 +147,104 @@ test("forwards cancellation to a running coding tool", async () => {
 		throw new Error("The shell tool returned an invalid output.");
 	}
 	expect(Reflect.get(result.output, "exitCode")).toBeNull();
+});
+
+test("coding tools execute only after the gate and remain Agent-selective", async () => {
+	const root = await mkdtemp(join(process.cwd(), ".wincode-catalog-"));
+	const allowedPath = join(root, "allowed.txt");
+	const deniedPath = join(root, "denied.txt");
+	try {
+		let allowedGateCalls = 0;
+		const allowedTool = createGatedCodingTools({
+			agentTools: ["write"],
+			gate: {
+				gate: async () => {
+					allowedGateCalls += 1;
+					return { kind: "allow" };
+				},
+			},
+		}).find(({ definition }) => definition.name === "write");
+		if (isUndefined(allowedTool)) {
+			throw new Error("The selected write tool was not resolved.");
+		}
+		const allowed = await allowedTool.execute({
+			input: { content: "gated write\n", path: allowedPath },
+			toolCallId: toolCallId("catalog-write-allowed"),
+		});
+		expect(allowed.type).toBe("success");
+		expect(allowedGateCalls).toBe(1);
+		expect(await readFile(allowedPath, "utf8")).toBe("gated write\n");
+
+		let deniedGateCalls = 0;
+		const deniedTool = createGatedCodingTools({
+			agentTools: ["write"],
+			gate: {
+				gate: async () => {
+					deniedGateCalls += 1;
+					return { errorText: "Write denied by policy.", kind: "deny" };
+				},
+			},
+		}).find(({ definition }) => definition.name === "write");
+		if (isUndefined(deniedTool)) {
+			throw new Error("The selected write tool was not resolved.");
+		}
+		const denied = await deniedTool.execute({
+			input: { content: "must not be written\n", path: deniedPath },
+			toolCallId: toolCallId("catalog-write-denied"),
+		});
+		expect(denied).toMatchObject({
+			errorText: "Write denied by policy.",
+			type: "failure",
+		});
+		expect(deniedGateCalls).toBe(1);
+		expect(await globalThis.Bun.file(deniedPath).exists()).toBe(false);
+
+		const readOnlyTools = createGatedCodingTools({
+			agentTools: ["read"],
+			gate: { gate: async () => ({ kind: "allow" }) },
+		});
+		expect(
+			readOnlyTools.some(({ definition }) => definition.name === "write")
+		).toBe(false);
+	} finally {
+		await rm(root, { force: true, recursive: true });
+	}
+});
+
+test("Agent Turn definitions restrict edit input to the active mode", () => {
+	const editTool = createGatedCodingTools({
+		agentTools: ["edit"],
+		gate: { gate: async () => ({ kind: "allow" }) },
+		versionedEditing: {
+			editMode: "replace",
+			sessionId: sessionId("catalog-edit-mode"),
+			store: createMemoryFileObservationStore(),
+		},
+	}).find(({ definition }) => definition.name === "edit");
+	if (isUndefined(editTool)) {
+		throw new Error("The selected edit tool was not resolved.");
+	}
+	expect(editTool.definition.description).toContain(
+		"Active Edit Mode: replace."
+	);
+	const schema = editTool.definition.inputSchema;
+	if (!("safeParse" in schema)) {
+		throw new Error("The edit definition has no executable input schema.");
+	}
+	expect(
+		schema.safeParse({
+			mode: "replace",
+			newString: "replacement",
+			oldString: "original",
+			path: "note.txt",
+		}).success
+	).toBe(true);
+	expect(
+		schema.safeParse({
+			mode: "patch",
+			patch: "*** Begin Patch",
+		}).success
+	).toBe(false);
 });
 
 test("commits only the durable assistant outcome before exposing terminal output", async () => {

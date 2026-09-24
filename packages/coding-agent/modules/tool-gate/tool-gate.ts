@@ -36,7 +36,7 @@ import type { WorkspacePolicy } from "@/modules/tools";
 import {
 	byteLength,
 	type CodingToolName,
-	codingToolDefinitions,
+	codingToolCatalog,
 	codingToolNames,
 	getPatchResourcePaths,
 	getReadResourcePath,
@@ -536,7 +536,7 @@ export const createToolGate = ({
 			external: boolean,
 			boundaryResource?: string
 		): ToolApprovalRequest => ({
-			description: codingToolDefinitions[tool].description,
+			description: codingToolCatalog[tool].description,
 			identity: [
 				{ label: "tool", value: tool },
 				{ label: "resource", value: resource },
@@ -968,8 +968,8 @@ export const createToolGate = ({
 			return {
 				description:
 					warning === undefined
-						? codingToolDefinitions.shell.description
-						: `${codingToolDefinitions.shell.description}\n\n${warning}`,
+						? codingToolCatalog.shell.description
+						: `${codingToolCatalog.shell.description}\n\n${warning}`,
 				identity: [
 					{ label: "tool", value: "shell" },
 					{ label: "resource", value: command },

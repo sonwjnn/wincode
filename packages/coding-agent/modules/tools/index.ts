@@ -1,5 +1,10 @@
 // biome-ignore-all lint/performance/noBarrelFile: Public coding tools module entry point.
 
+export {
+	codingToolCatalog,
+	codingToolDefinitionFor,
+	codingToolNames,
+} from "./catalog";
 export { isRenderableEditDiff } from "./edit/diff";
 export { validateMultiEditPatch } from "./edit/multi";
 export { getReadResourcePath } from "./read/selector";
@@ -14,10 +19,10 @@ export {
 	RESOURCE_LIMIT_PERMISSION_ACTION,
 	resourceLimitProfileSchema,
 } from "./resource-limits";
+export type { CodingToolRunnerOptions } from "./runners";
 export {
-	codingToolRunners,
-	runCodingTool,
 	runEditTool,
+	runGlobTool,
 	runGrepTool,
 	runReadTool,
 	runRecoverTool,
@@ -41,14 +46,11 @@ export type {
 	RecoverOutput,
 	ShellInput,
 	ShellOutput,
+	ShellPlatform,
 	WriteInput,
 	WriteOutput,
 } from "./schemas";
 export {
-	codingToolDefinitionFor,
-	codingToolDefinitions,
-	codingToolNames,
-	codingToolSchemas,
 	composeShellToolDescription,
 	editInputSchema,
 	editInputSchemaForMode,

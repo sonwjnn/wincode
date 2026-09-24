@@ -1,5 +1,5 @@
 // biome-ignore-all lint/performance/noBarrelFile: Public Zod-only tool schema entry point.
-import { z } from "zod";
+import type { z } from "zod";
 
 export type { EditDiff, EditInput, EditOutput } from "./edit/schema";
 export {
@@ -53,191 +53,34 @@ export {
 	writeToolSchema,
 } from "./write/schema";
 
-import {
-	editInputSchema,
-	editOutputSchema,
-	editToolSchema,
-} from "./edit/schema";
-import {
-	globInputSchema,
-	globOutputSchema,
-	globToolSchema,
-} from "./glob/schema";
-import {
-	grepInputSchema,
-	grepOutputSchema,
-	grepToolSchema,
-} from "./grep/schema";
-import {
-	readInputSchema,
-	readOutputSchema,
-	readToolSchema,
-} from "./read/schema";
-import {
-	recoverInputSchema,
-	recoverOutputSchema,
-	recoverToolSchema,
-} from "./recover/schema";
-import {
-	composeShellToolDescription,
-	shellInputSchema,
-	shellOutputSchema,
-	shellPlatformFromNode,
-	shellToolDescription,
-} from "./shell/schema";
-import {
-	writeInputSchema,
-	writeOutputSchema,
-	writeToolSchema,
-} from "./write/schema";
+import { editInputSchema, editOutputSchema } from "./edit/schema";
+import { globInputSchema, globOutputSchema } from "./glob/schema";
+import { grepInputSchema, grepOutputSchema } from "./grep/schema";
+import { readInputSchema, readOutputSchema } from "./read/schema";
+import { recoverInputSchema, recoverOutputSchema } from "./recover/schema";
+import { shellInputSchema, shellOutputSchema } from "./shell/schema";
+import { writeInputSchema, writeOutputSchema } from "./write/schema";
 
-type CodingToolDefinition<
-	InputSchema extends z.ZodType,
-	OutputSchema extends z.ZodType,
-> = {
-	description: string;
-	inputSchema: InputSchema;
-	outputSchema: OutputSchema;
-};
-
-export const codingToolDefinitions = {
-	read: {
-		description: readToolSchema.description,
-		inputSchema: readInputSchema,
-		outputSchema: readOutputSchema,
-	},
-	write: {
-		description: writeToolSchema.description,
-		inputSchema: writeInputSchema,
-		outputSchema: writeOutputSchema,
-	},
-	edit: {
-		description: editToolSchema.description,
-		inputSchema: editInputSchema,
-		outputSchema: editOutputSchema,
-	},
+/** Input and output contracts only; descriptions and runners live in the catalog. */
+export const codingToolSchemaContracts = {
+	read: { inputSchema: readInputSchema, outputSchema: readOutputSchema },
+	write: { inputSchema: writeInputSchema, outputSchema: writeOutputSchema },
+	edit: { inputSchema: editInputSchema, outputSchema: editOutputSchema },
 	recover: {
-		description: recoverToolSchema.description,
 		inputSchema: recoverInputSchema,
 		outputSchema: recoverOutputSchema,
 	},
-	glob: {
-		description: globToolSchema.description,
-		inputSchema: globInputSchema,
-		outputSchema: globOutputSchema,
-	},
-	grep: {
-		description: grepToolSchema.description,
-		inputSchema: grepInputSchema,
-		outputSchema: grepOutputSchema,
-	},
-	shell: {
-		description: shellToolDescription,
-		inputSchema: shellInputSchema,
-		outputSchema: shellOutputSchema,
-	},
-} satisfies {
-	read: CodingToolDefinition<typeof readInputSchema, typeof readOutputSchema>;
-	write: CodingToolDefinition<
-		typeof writeInputSchema,
-		typeof writeOutputSchema
-	>;
-	edit: CodingToolDefinition<typeof editInputSchema, typeof editOutputSchema>;
-	recover: CodingToolDefinition<
-		typeof recoverInputSchema,
-		typeof recoverOutputSchema
-	>;
-	glob: CodingToolDefinition<typeof globInputSchema, typeof globOutputSchema>;
-	grep: CodingToolDefinition<typeof grepInputSchema, typeof grepOutputSchema>;
-	shell: CodingToolDefinition<
-		typeof shellInputSchema,
-		typeof shellOutputSchema
-	>;
-};
+	glob: { inputSchema: globInputSchema, outputSchema: globOutputSchema },
+	grep: { inputSchema: grepInputSchema, outputSchema: grepOutputSchema },
+	shell: { inputSchema: shellInputSchema, outputSchema: shellOutputSchema },
+} as const;
 
-export type CodingToolName = keyof typeof codingToolDefinitions;
-
-export const codingToolNames = [
-	"read",
-	"write",
-	"edit",
-	"recover",
-	"glob",
-	"grep",
-	"shell",
-] as const satisfies readonly CodingToolName[];
-export const codingToolNameSchema = z.enum(codingToolNames);
+export type CodingToolName = keyof typeof codingToolSchemaContracts;
 
 export type CodingToolInput<Name extends CodingToolName> = z.infer<
-	(typeof codingToolDefinitions)[Name]["inputSchema"]
+	(typeof codingToolSchemaContracts)[Name]["inputSchema"]
 >;
 
 export type CodingToolOutput<Name extends CodingToolName> = z.infer<
-	(typeof codingToolDefinitions)[Name]["outputSchema"]
+	(typeof codingToolSchemaContracts)[Name]["outputSchema"]
 >;
-
-export const codingToolSchemas = {
-	read: {
-		description: codingToolDefinitions.read.description,
-		name: "read",
-		schema: codingToolDefinitions.read.inputSchema,
-	},
-	write: {
-		description: codingToolDefinitions.write.description,
-		name: "write",
-		schema: codingToolDefinitions.write.inputSchema,
-	},
-	edit: {
-		description: codingToolDefinitions.edit.description,
-		name: "edit",
-		schema: codingToolDefinitions.edit.inputSchema,
-	},
-	recover: {
-		description: codingToolDefinitions.recover.description,
-		name: "recover",
-		schema: codingToolDefinitions.recover.inputSchema,
-	},
-	glob: {
-		description: codingToolDefinitions.glob.description,
-		name: "glob",
-		schema: codingToolDefinitions.glob.inputSchema,
-	},
-	grep: {
-		description: codingToolDefinitions.grep.description,
-		name: "grep",
-		schema: codingToolDefinitions.grep.inputSchema,
-	},
-	shell: {
-		description: codingToolDefinitions.shell.description,
-		name: "shell",
-		schema: codingToolDefinitions.shell.inputSchema,
-	},
-} satisfies {
-	[Name in CodingToolName]: {
-		description: string;
-		name: Name;
-		schema: (typeof codingToolDefinitions)[Name]["inputSchema"];
-	};
-};
-
-export const codingToolSchemaList = [
-	codingToolSchemas.read,
-	codingToolSchemas.write,
-	codingToolSchemas.edit,
-	codingToolSchemas.recover,
-	codingToolSchemas.glob,
-	codingToolSchemas.grep,
-	codingToolSchemas.shell,
-] as const;
-
-export const codingToolDefinitionFor = (
-	name: CodingToolName,
-	platform = shellPlatformFromNode(process.platform)
-): CodingToolDefinition<z.ZodType, z.ZodType> & { name: CodingToolName } => ({
-	...codingToolDefinitions[name],
-	description:
-		name === "shell"
-			? composeShellToolDescription(platform)
-			: codingToolDefinitions[name].description,
-	name,
-});

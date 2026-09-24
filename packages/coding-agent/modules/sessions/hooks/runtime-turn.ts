@@ -55,10 +55,14 @@ import {
 } from "@/modules/skills";
 import {
 	type CodingToolName,
+	type CodingToolRunnerOptions,
+	codingToolCatalog,
 	codingToolDefinitionFor,
+	codingToolNames,
 	type EditMode,
 	editInputSchemaForMode,
-	runCodingTool,
+	type ShellPlatform,
+	shellPlatformFromNode,
 	type ToolResourceLimits,
 	toCodingToolFailure,
 	type VersionedEditingContext,
@@ -84,29 +88,19 @@ export const defaultRuntimeFactory: RuntimeFactory = () =>
 const BASE_AGENT_INSTRUCTIONS =
 	"You are a basic coding agent running in a user's CLI.\nAll file tools are limited to the CLI workspace.";
 
-/** Coding, Skill, MCP, and delegation Tools are composed by the CLI. */
-const RUNTIME_CODING_TOOL_NAMES = [
-	"read",
-	"write",
-	"edit",
-	"glob",
-	"recover",
-	"grep",
-	"shell",
-] as const;
-export type RuntimeCodingToolName = (typeof RUNTIME_CODING_TOOL_NAMES)[number];
-export type RuntimeToolName = RuntimeCodingToolName | "delegate" | "skill";
+const HOST_SHELL_PLATFORM: ShellPlatform = shellPlatformFromNode(
+	process.platform
+);
 
-const isRuntimeCodingToolName = (name: string): name is RuntimeCodingToolName =>
-	(RUNTIME_CODING_TOOL_NAMES as readonly string[]).includes(name);
 const isSloppyCodingInput = (value: unknown): boolean =>
 	isObjectLike(value) && "mode" in value && value.mode === "sloppy";
 
 const runtimeToolDefinition = (
-	name: RuntimeCodingToolName,
+	name: CodingToolName,
+	shellPlatform: ShellPlatform,
 	editMode?: EditMode
 ): ToolDefinition => {
-	const definition = codingToolDefinitionFor(name);
+	const definition = codingToolDefinitionFor(name, shellPlatform);
 	if (name !== "edit" || editMode === undefined) {
 		return definition;
 	}
@@ -126,7 +120,9 @@ const runtimeSkillToolDefinition: ToolDefinition = {
 
 /** The application Tool Registry of runtime-eligible tools. */
 export const runtimeToolRegistry: ToolRegistry = createToolRegistry([
-	...RUNTIME_CODING_TOOL_NAMES.map((name) => runtimeToolDefinition(name)),
+	...codingToolNames.map((name) =>
+		runtimeToolDefinition(name, HOST_SHELL_PLATFORM)
+	),
 	runtimeSkillToolDefinition,
 ]);
 
@@ -136,7 +132,7 @@ const runCodingToolThroughGate = async ({
 	options,
 }: {
 	input: unknown;
-	name: RuntimeCodingToolName;
+	name: CodingToolName;
 	options: {
 		allowExternalPath: boolean;
 		allowSloppy?: boolean;
@@ -147,9 +143,13 @@ const runCodingToolThroughGate = async ({
 		versionedEditing?: VersionedEditingContext;
 	};
 }): Promise<ToolCallOutput> => {
+	const runner = codingToolCatalog[name].run as (
+		value: unknown,
+		runnerOptions?: CodingToolRunnerOptions
+	) => Promise<unknown>;
 	try {
 		return {
-			output: await runCodingTool(name, input, options),
+			output: await runner(input, options),
 			type: "success",
 		};
 	} catch (error) {
@@ -389,50 +389,52 @@ export const createGatedCodingTools = ({
 	skillTool,
 	versionedEditing,
 }: GatedCodingToolsDeps): readonly ResolvedTool[] => {
-	const codingTools = agentTools
-		.filter(isRuntimeCodingToolName)
-		.map((name) => ({
-			definition: runtimeToolDefinition(name, versionedEditing?.editMode),
-			execute: async (
-				{ input, toolCallId }: { input: unknown; toolCallId: ToolCallId },
-				{ signal }: ToolExecutorOptions = {}
-			): Promise<ToolCallOutput> => {
-				const outcome = await evaluateGateWithAbort(
-					() =>
-						gate.gate({
-							agentId,
-							family: "coding",
-							toolCall: { input, toolCallId, toolName: name },
-						}),
-					signal
-				);
-				if (outcome.kind !== "allow") {
-					return {
-						errorText: outcome.errorText ?? "Tool call was blocked",
-						type: "failure",
-					};
-				}
-				return runCodingToolThroughGate({
-					input: outcome.input ?? input,
-					name,
-					options: {
-						allowExternalPath: !isUndefined(outcome.input),
-						allowSloppy: isSloppyCodingInput(outcome.input ?? input),
-						...omitUndefined({
-							approvedWorkspacePaths: outcome.approvedWorkspacePaths,
-							approvedExternalPaths: outcome.approvedExternalPaths,
-							allowCrossSession:
-								outcome.approvedCrossSession === true ? true : undefined,
-							resourceLimits: isUndefined(resolveResourceLimits)
-								? undefined
-								: await resolveResourceLimits(agentId),
-						}),
-						signal,
-						versionedEditing,
-					},
-				});
-			},
-		}));
+	const codingTools = agentTools.map((name) => ({
+		definition: runtimeToolDefinition(
+			name,
+			HOST_SHELL_PLATFORM,
+			versionedEditing?.editMode
+		),
+		execute: async (
+			{ input, toolCallId }: { input: unknown; toolCallId: ToolCallId },
+			{ signal }: ToolExecutorOptions = {}
+		): Promise<ToolCallOutput> => {
+			const outcome = await evaluateGateWithAbort(
+				() =>
+					gate.gate({
+						agentId,
+						family: "coding",
+						toolCall: { input, toolCallId, toolName: name },
+					}),
+				signal
+			);
+			if (outcome.kind !== "allow") {
+				return {
+					errorText: outcome.errorText ?? "Tool call was blocked",
+					type: "failure",
+				};
+			}
+			return runCodingToolThroughGate({
+				input: outcome.input ?? input,
+				name,
+				options: {
+					allowExternalPath: !isUndefined(outcome.input),
+					allowSloppy: isSloppyCodingInput(outcome.input ?? input),
+					...omitUndefined({
+						approvedWorkspacePaths: outcome.approvedWorkspacePaths,
+						approvedExternalPaths: outcome.approvedExternalPaths,
+						allowCrossSession:
+							outcome.approvedCrossSession === true ? true : undefined,
+						resourceLimits: isUndefined(resolveResourceLimits)
+							? undefined
+							: await resolveResourceLimits(agentId),
+					}),
+					signal,
+					versionedEditing,
+				},
+			});
+		},
+	}));
 	const tools = [
 		...codingTools,
 		...createMcpTools(mcpSnapshot, executeMcpTool, gate, agentId),

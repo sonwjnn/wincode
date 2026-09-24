@@ -125,6 +125,33 @@ describe("shell posture defaults", () => {
 		expect(service.isGranted("resource_limits", "extended")).toBe(true);
 	});
 
+	test("shell approvals retain neutral wording and recovery context", async () => {
+		const requests: ToolApprovalRequest[] = [];
+		const warning = "Resolve recovery transaction recovery-123.";
+		const gate = createToolGate({
+			approvals: settlingApprovalPort(
+				{ decision: "allow", remember: false },
+				requests
+			),
+			recoveryWarning: async () => warning,
+			resolvePermission: async () =>
+				createToolPermission({ shell: { "rm *": "ask" } }),
+			sandbox: createWorkspaceSandbox(process.cwd()),
+			service: createPermissionService(),
+		});
+
+		await expect(gate.gate(shellCall("rm file.txt"))).resolves.toMatchObject({
+			kind: "allow",
+		});
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.description).toContain(
+			"Run a bounded shell command on the user's machine."
+		);
+		expect(requests[0]?.description).toContain(warning);
+		expect(requests[0]?.description).not.toContain("/bin/bash");
+		expect(requests[0]?.description).not.toContain("PowerShell");
+	});
+
 	test("rm and sudo are denied without an approval dialog", async () => {
 		const { approvals, requests } = allowOnceApproval();
 		const gate = createGate(createToolPermission(), approvals);
