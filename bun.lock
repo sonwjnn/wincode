@@ -34,7 +34,6 @@
       "dependencies": {
         "@wincode/runtime-utils": "workspace:*",
         "oauth4webapi": "^3.8.3",
-        "open": "^10.2.0",
         "type-fest": "catalog:",
         "zod": "catalog:",
       },
@@ -62,6 +61,7 @@
         "drizzle-orm": "^0.45.2",
         "ignore": "^5.3.2",
         "jsonc-parser": "^3.3.1",
+        "open": "^10.2.0",
         "react": "catalog:",
         "tree-sitter-powershell": "^0.26.4",
         "tree-sitter-wasms": "^0.1.13",
