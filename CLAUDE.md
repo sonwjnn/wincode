@@ -24,6 +24,7 @@
 - **NEVER use inline imports** — no `await import()`, no `import("pkg").Type` in type positions, no dynamic type imports. Always top-level.
 - Check `node_modules` for external API types instead of guessing.
 - **Barrel exports**: prefer `export * from "./module"` over named re-exports, including `export type { ... } from`. In pure `index.ts` barrels, use star re-exports even for single-specifier cases. If stars create ambiguity, remove the redundant export path; do not keep duplicates.
+- **Class privac**: #private fields for private members, bare for public ones. No private/protected/public modifiers on fields or methods — except constructor parameter properties, where TS requires them (e.g. constructor(private readonly session: SessionType))
 - **Promises**: use `Promise.withResolvers()` instead of `new Promise((resolve, reject) => ...)`.
 
 ---
