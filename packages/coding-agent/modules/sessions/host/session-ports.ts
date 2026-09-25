@@ -30,7 +30,7 @@ import { resolveChatModelTarget } from "../../model-target";
 import { createToolGate, type ToolGate } from "../../tool-gate/tool-gate";
 import { SessionCompactionError } from "../compaction/error";
 import type {
-	AgentSession,
+	AgentSessionInternalPort,
 	AgentSessionPorts,
 	SessionExecution,
 	SessionResolvedAgent,
@@ -62,7 +62,7 @@ import type { SessionCapabilities } from "./types";
 export type SessionPortsOptions = Readonly<{
 	capabilities: SessionCapabilities;
 	/** The Agent Session whose ports these are, available once it is constructed. */
-	agentSession: () => AgentSession;
+	agentSession: () => AgentSessionInternalPort;
 	isShutDown: () => boolean;
 	onLeaseLost: () => void;
 	renewLease: () => boolean;
@@ -622,7 +622,7 @@ export const createSessionPorts = ({
 		resolveCompactionSettings: (model) =>
 			capabilities.getCompactionSettings(model),
 		resolveFileMentions: (text) => resolveFileMentionParts(text),
-		runtime: {
+		turnRunner: {
 			requestOverheadTokens,
 			run: runTurn,
 		},

@@ -1123,7 +1123,7 @@ const runTurn = async ({
 		if (!turnIsLive()) {
 			return { rejected: false };
 		}
-		const outcome = await deps.ports.runtime.run({
+		const outcome = await deps.ports.turnRunner.run({
 			armedSkill: context.armedSkill,
 			callbacks,
 			execution,

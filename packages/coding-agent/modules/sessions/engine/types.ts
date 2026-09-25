@@ -395,8 +395,8 @@ export type SessionTurnOutcome = Readonly<{
 	turn?: AgentTurn;
 }>;
 
-/** The Agent Runtime capability one session runs its Agent Turns through. */
-export type SessionRuntimePort = Readonly<{
+/** The Session Host capability that prepares and runs coding-agent turns. */
+export type SessionTurnRunner = Readonly<{
 	/** The request overhead of the Agent Turn execution in flight, in tokens. */
 	requestOverheadTokens: () => number;
 	/** Runs one Agent Turn execution and reports what it did through the callbacks. */
@@ -421,7 +421,7 @@ export type AgentSessionPorts = Readonly<{
 	resolveCompactionSettings: (
 		selection: ChatModelSelection
 	) => Promise<ResolvedCompactionSettings>;
-	runtime: SessionRuntimePort;
+	turnRunner: SessionTurnRunner;
 	skills: SessionSkillPort;
 }>;
 
@@ -509,6 +509,35 @@ export type SessionCompactionCommand = ReadonlyDeep<{
 	variant?: ModelVariant;
 }>;
 
+/**
+ * Internal capability for the Session Host and runtime adapter. These state
+ * writes are not part of the caller-facing Agent Session API.
+ */
+export type AgentSessionInternalPort = Readonly<{
+	/** Ends the turn whose approval request was aborted. */
+	abortApprovalTurn: (toolCallId: ToolCallId) => void;
+	/** Registers a starting Agent Turn execution and its parent linkage. */
+	beginExecution: (execution: SessionExecutionInput) => SessionExecution;
+	/** Writes one durable Session Record while the Agent Session still owns it. */
+	commitRecord: (input: SessionCommitInput) => Promise<void>;
+	/** Drops an execution and everything that belonged to it. */
+	endExecution: (turnId: AgentTurnId) => void;
+	/** Reports work that can still write or settle after shutdown starts. */
+	hasPendingWork: () => boolean;
+	/** Creates one pending approval owned by the Agent Session. */
+	requestApproval: (
+		request: ToolApprovalRequest
+	) => Promise<SessionApprovalOutcome>;
+	/** Ends the session after active durable cleanup has completed. */
+	shutdown: () => Promise<void>;
+	/** Replaces one execution's Session View State, never another's. */
+	setExecutionViewState: (
+		turnId: AgentTurnId,
+		viewState: SessionViewState
+	) => void;
+}>;
+
+/** Commands, immutable Snapshots, and ordered events for one Agent Session. */
 export type AgentSession = Readonly<{
 	/** Starts a new Submission or admits it to the FIFO Submission Queue. */
 	prompt: (input: SessionSendInput) => Promise<SessionSubmissionAdmission>;
@@ -516,71 +545,29 @@ export type AgentSession = Readonly<{
 	steer: (text: string) => SessionSteeringAdmission;
 	/** Resumes a valid idle context or starts the next waiting user input. */
 	continue: () => SessionContinuationOutcome;
-	/**
-	 * Writes one durable Session Record while the Agent Session still owns the
-	 * session. Late runtime callbacks are ignored after shutdown.
-	 */
-	commitRecord: (input: SessionCommitInput) => Promise<void>;
-	/** Replaces the Session Context. */
-	applyContext: (messages: readonly SessionMessage[]) => void;
-	/** Registers a starting Agent Turn execution and its parent linkage. */
-	beginExecution: (execution: SessionExecutionInput) => SessionExecution;
 	/** Cancels the Agent Turn the session is running. */
 	cancel: () => void;
-	/**
-	 * Ends the Agent Turn an abort-settled approval belongs to: settles every
-	 * remaining pending request and preserves the interrupted Tool Call, so the
-	 * session stops waiting exactly once.
-	 */
-	abortApprovalTurn: (toolCallId: ToolCallId) => void;
 	/**
 	 * Aborts the compaction command in flight and recalls the waiting messages
 	 * with it.
 	 */
 	cancelCompaction: () => SessionWaitingMessage[];
-	/** Settles every pending approval as rejected. */
-	closeApprovals: (feedback?: string) => void;
 	/** Runs a compaction command. */
 	compact: (command: SessionCompactionCommand) => Promise<CompactSessionResult>;
-	/** Drops an execution and everything that belonged to it. */
-	endExecution: (turnId: AgentTurnId) => void;
 	getSnapshot: () => SessionSnapshot;
-	/** Reports work that can still write or settle after shutdown starts. */
-	hasPendingWork: () => boolean;
 	/** Interrupts the active Agent Turn and recalls all waiting work. */
 	interrupt: (preserveToolCallId?: ToolCallId) => SessionWaitingMessage[];
 	/** Interrupts compaction or the active turn and recalls waiting work atomically. */
 	interruptAll: () => SessionInterruptResult;
-	/** Merges messages into the Session Transcript by message identity. */
-	mergeTranscript: (
-		messages: readonly SessionMessage[]
-	) => readonly SessionMessage[];
-	/** Creates one pending approval owned by the Agent Session. */
-	requestApproval: (
-		request: ToolApprovalRequest
-	) => Promise<SessionApprovalOutcome>;
 	/** Settles one pending approval; an already settled request is left alone. */
 	respondToApproval: (
 		id: string,
 		outcome: SessionApprovalOutcome
 	) => SessionApprovalResult;
-	/** Proposes the one overflow recovery an Agent Turn may get. */
-	recoverOverflow: (
-		command: SessionOverflowRecoveryCommand
-	) => Promise<SessionOverflowRecoveryOutcome>;
 	/** Withdraws waiting user messages back to the composer. */
 	recallWaitingMessages: (
 		ids?: readonly SessionWaitingMessageId[]
 	) => SessionWaitingMessage[];
-	/** Replaces one execution's Session View State, never another's. */
-	setExecutionViewState: (
-		turnId: AgentTurnId,
-		viewState: SessionViewState
-	) => void;
-	/** Waits until no compaction command is in flight. */
-	settleCompaction: () => Promise<Error | null>;
-	/** Ends the session after active durable cleanup has completed. */
-	shutdown: () => Promise<void>;
 	/**
 	 * Compatibility entry point. A busy send still routes to steering or the
 	 * Submission Queue using the historical automatic policy.

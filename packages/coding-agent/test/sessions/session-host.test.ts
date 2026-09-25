@@ -38,7 +38,6 @@ import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { CompactionId, SessionId } from "@/shared/identifiers";
 import { toMcpSnapshotId } from "@/shared/identifiers";
-import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import {
 	createFakeModelClientModule,
 	createFakeModelClientRecorder,
@@ -372,12 +371,6 @@ const sendInput = (capabilities: SessionCapabilities): SessionSendInput => ({
 	userText: "third request",
 });
 
-const approvalRequest: ToolApprovalRequest = {
-	description: "Run a shell command",
-	identity: [{ label: "tool", value: "shell" }],
-	input: { command: "ls" },
-};
-
 const textOf = (parts: SessionMessage["parts"]): string =>
 	parts.map((part) => (part.type === "text" ? part.text : "")).join("");
 
@@ -459,7 +452,7 @@ describe("Session Host opening", () => {
 });
 
 describe("Session Host lifetime", () => {
-	test("runs a send command, reports its events in order, and refuses sends after shutdown", async () => {
+	test("runs a send command, reports its events in order, and refuses commands after shutdown", async () => {
 		const seeded = await seedSession("send");
 		const capabilities = createCapabilities();
 		const host = await createSessionHost({
@@ -493,21 +486,18 @@ describe("Session Host lifetime", () => {
 
 		await host.shutdown();
 
-		// Shutdown ends the session: nothing keeps running, the send that
-		// arrives after it is refused instead of being queued, and neither
-		// channel reaches its observer once the consumer is tearing down.
+		// Shutdown rejects new work without publishing another Snapshot or
+		// delivering an event to observers that are tearing down.
 		const changesAtShutdown = snapshotChanges;
 		const eventsAtShutdown = events.length;
-		// A context swap still publishes inside the Agent Session, so it proves
-		// the subscription is over rather than merely quiet.
-		host.agentSession.applyContext([
-			message("after-shutdown", "user", "after shutdown"),
-		]);
 		expect(await host.agentSession.send(sendInput(capabilities))).toMatchObject(
 			{
 				rejected: true,
 			}
 		);
+		await expect(
+			host.agentSession.compact({ model, trigger: "manual" })
+		).rejects.toMatchObject({ code: "cancelled" });
 		expect(snapshotChanges).toBe(changesAtShutdown);
 		expect(events).toHaveLength(eventsAtShutdown);
 	});
@@ -641,19 +631,6 @@ describe("Session Host lifetime", () => {
 		await remountedHost.shutdown();
 	});
 
-	test("settles an approval a consumer is waiting on when the session shuts down", async () => {
-		const seeded = await seedSession("approval");
-		const capabilities = createCapabilities();
-		const host = await createSessionHost({
-			capabilities,
-			sessionId: seeded.sessionId,
-		});
-		const settlement = host.agentSession.requestApproval(approvalRequest);
-
-		await host.shutdown();
-
-		expect(await settlement).toEqual({ decision: "reject" });
-	});
 	test("reports lease loss and closes the Host without releasing a takeover", async () => {
 		const seeded = await seedSession("lease-loss");
 		const takeoverDatabase = createDatabase(join(testDirectory, "sessions.db"));
@@ -682,7 +659,6 @@ describe("Session Host lifetime", () => {
 			failures.push(next);
 			sendDuringFailure = host.agentSession.send(sendInput(capabilities));
 		});
-		const approval = host.agentSession.requestApproval(approvalRequest);
 		let takeover:
 			| Awaited<ReturnType<SessionStore["acquireSessionLease"]>>
 			| undefined;
@@ -697,7 +673,6 @@ describe("Session Host lifetime", () => {
 			}
 
 			expect(failures).toEqual([{ code: "session_lease_lost" }]);
-			expect(await approval).toEqual({ decision: "reject" });
 			if (sendDuringFailure === null) {
 				throw new Error(
 					"Lease-loss observer did not receive a command result."

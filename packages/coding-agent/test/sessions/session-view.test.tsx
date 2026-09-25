@@ -31,6 +31,7 @@ import type {
 } from "@/modules/sessions/submission-types";
 import {
 	agentId,
+	attachmentId,
 	queuedSubmissionId,
 	sessionId,
 	sessionMessageId,
@@ -532,10 +533,12 @@ describe("SessionView initial submission", () => {
 const renderSessionView = async ({
 	height,
 	initialTranscript,
+	liveTranscript = initialTranscript,
 	width,
 }: {
 	height: number;
 	initialTranscript: SessionMessage[];
+	liveTranscript?: SessionMessage[];
 	width: number;
 }) => {
 	const router = buildRouter();
@@ -571,7 +574,7 @@ const renderSessionView = async ({
 													>
 														<RouterContextProvider router={router}>
 															<SessionView
-																host={createFakeSessionHost(initialTranscript)}
+																host={createFakeSessionHost(liveTranscript)}
 																initialTranscript={initialTranscript}
 																sessionId={sessionId("session-1")}
 																sessionTitle="Queue a prompt"
@@ -605,6 +608,35 @@ const renderSessionView = async ({
 	await flushUi(setup);
 	return { commandLayer, setup };
 };
+
+test("renders unavailable attachment annotations over the unannotated Host transcript", async () => {
+	const id = attachmentId("missing");
+	const livePart: SessionFilePart = {
+		attachmentId: id,
+		mediaType: "image/png",
+		type: "file",
+		url: `attachment://${id}`,
+	};
+	const liveMessage: SessionMessage = {
+		...userMessage("missing-attachment", ""),
+		parts: [livePart],
+	};
+	const displayMessage: SessionMessage = {
+		...liveMessage,
+		parts: [{ ...livePart, displayAvailability: "missing" }],
+	};
+	const { setup } = await renderSessionView({
+		height: 20,
+		initialTranscript: [displayMessage],
+		liveTranscript: [liveMessage],
+		width: 100,
+	});
+	try {
+		expect(setup.captureCharFrame()).toContain("Unavailable");
+	} finally {
+		setup.renderer.destroy();
+	}
+});
 
 /** Renders the view with one Agent Turn already running. */
 const renderBusySessionView = async () => {
