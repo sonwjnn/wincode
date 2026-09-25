@@ -3,7 +3,7 @@ import type { CommandSpec } from "@/modules/commands/commands";
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import type { FileMentionOption } from "@/modules/file-mentions";
 import type { SessionFilePart } from "@/modules/sessions/message";
-import type { SessionSubmissionComposition } from "@/modules/sessions/session-operation";
+import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";
 import type { Skill } from "@/modules/skills";
 import type { ChatPromptSubmission } from "../../utils";
 import type { PromptHistoryEntry } from "./history";

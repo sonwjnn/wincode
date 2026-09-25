@@ -32,15 +32,12 @@ import {
 	type SessionMessageMetadata,
 	sanitizeSessionSkillToolParts,
 } from "../message";
-import type {
-	SessionSendInput,
-	SessionSendOutcome,
-} from "../session-operation";
 import {
 	getSessionAttemptMessages,
 	hasCompletedToolArtifact,
 } from "../session-retry";
 import { buildUserSessionRecord } from "../storage/session-record";
+import type { SessionSendInput, SessionSendOutcome } from "../submission-types";
 import {
 	buildAssistantCancelledSessionRecord,
 	buildAssistantFailureSessionRecord,
@@ -94,7 +91,7 @@ export type SubmissionDeps = Readonly<{
 		turnId: AgentTurnId,
 		viewState: SessionViewState
 	) => void;
-	setTurnActive: (value: boolean) => void;
+	setRunPhase: (phase: "preparing" | "running" | "settling") => void;
 	settleCompaction: () => Promise<Error | null>;
 	/**
 	 * Tracks maintenance and queue work that begins outside the active Agent
@@ -1126,7 +1123,7 @@ const runTurn = async ({
 		if (!turnIsLive()) {
 			return { rejected: false };
 		}
-		const outcome = await deps.ports.runtime.run({
+		const outcome = await deps.ports.turnRunner.run({
 			armedSkill: context.armedSkill,
 			callbacks,
 			execution,
@@ -1223,7 +1220,7 @@ export const createSubmissionPipeline = (
 				: { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
 		}
 		deps.setCompactionError(null);
-		deps.setTurnActive(true);
+		deps.setRunPhase("preparing");
 		try {
 			const startedAt = Date.now();
 			const isContextContinuation = deps.isContextContinuation(input);
@@ -1270,6 +1267,7 @@ export const createSubmissionPipeline = (
 					startedAt,
 				})
 			);
+			deps.setRunPhase("running");
 			return await runTurn({
 				attachmentBudget,
 				context,
@@ -1292,7 +1290,7 @@ export const createSubmissionPipeline = (
 			// Submission Queue before the session reports the turn over, so the
 			// lane remains ordered even when the turn was interrupted.
 			deps.fallbackSteeringMessages(input.turnId);
-			deps.setTurnActive(false);
+			deps.setRunPhase("settling");
 		}
 	};
 	return { send };

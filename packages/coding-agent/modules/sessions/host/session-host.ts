@@ -4,8 +4,12 @@ import { isNull, omitUndefined } from "@wincode/runtime-utils";
 import { resolveActiveAgentId } from "@/modules/agents/registry";
 import { rebuildActiveMessages } from "../compaction/compaction";
 import type { SessionCompaction } from "../compaction/types";
-import { createAgentSession } from "../engine/agent-session";
-import type { AgentSession, AgentSessionPorts } from "../engine/types";
+import { AgentSessionImpl } from "../engine/agent-session";
+import type {
+	AgentSession,
+	AgentSessionInternalPort,
+	AgentSessionPorts,
+} from "../engine/types";
 import {
 	type SessionMessage,
 	sanitizeInterruptedSessionMessages,
@@ -96,10 +100,10 @@ const withEventChannel = (
 	publish: (event: AgentTurnEvent) => void
 ): AgentSessionPorts => ({
 	...ports,
-	runtime: {
-		...ports.runtime,
+	turnRunner: {
+		...ports.turnRunner,
 		run: (request) =>
-			ports.runtime.run({
+			ports.turnRunner.run({
 				...request,
 				callbacks: {
 					...request.callbacks,
@@ -139,6 +143,7 @@ export const createSessionHost = async ({
 	const eventListeners = new Set<(event: AgentTurnEvent) => void>();
 	const fatalListeners = new Set<(failure: SessionHostFailure) => void>();
 	let agentSession: AgentSession | undefined;
+	let agentSessionInternalPort: AgentSessionInternalPort | undefined;
 	let isShutDown = false;
 	let isLeaseLost = false;
 	let fatalFailure: SessionHostFailure | null = null;
@@ -164,11 +169,11 @@ export const createSessionHost = async ({
 			}
 		}
 	};
-	const getAgentSession = (): AgentSession => {
-		if (agentSession === undefined) {
+	const getAgentSessionInternalPort = (): AgentSessionInternalPort => {
+		if (agentSessionInternalPort === undefined) {
 			throw new Error("Agent Session is not ready.");
 		}
-		return agentSession;
+		return agentSessionInternalPort;
 	};
 	const stopRenewal = (): void => {
 		stopLeaseRenewal?.();
@@ -180,11 +185,14 @@ export const createSessionHost = async ({
 		}
 		isShutDown = true;
 		const activeAgentSession = agentSession;
+		const activeInternalPort = agentSessionInternalPort;
 		let releaseImmediately = activeAgentSession === undefined;
 		let agentSessionShutdown = Promise.resolve();
 		if (activeAgentSession !== undefined) {
 			const snapshot = activeAgentSession.getSnapshot();
-			releaseImmediately = !activeAgentSession.hasPendingWork();
+			releaseImmediately =
+				activeInternalPort === undefined ||
+				!activeInternalPort.hasPendingWork();
 			if (snapshot.isCompacting) {
 				activeAgentSession.cancelCompaction();
 			}
@@ -193,7 +201,8 @@ export const createSessionHost = async ({
 			if (snapshot.turnActive) {
 				activeAgentSession.cancel();
 			}
-			agentSessionShutdown = activeAgentSession.shutdown();
+			agentSessionShutdown =
+				activeInternalPort?.shutdown() ?? Promise.resolve();
 		}
 		eventListeners.clear();
 		fatalListeners.clear();
@@ -286,7 +295,7 @@ export const createSessionHost = async ({
 		const ports: AgentSessionPorts = withEventChannel(
 			createSessionPorts({
 				capabilities,
-				agentSession: getAgentSession,
+				agentSession: getAgentSessionInternalPort,
 				isShutDown: () => isShutDown,
 				onLeaseLost: reportLeaseLoss,
 				renewLease: sessionLease.renew,
@@ -309,7 +318,7 @@ export const createSessionHost = async ({
 		const initialAgent = isNull(initialRegistry)
 			? initialSelection?.agent
 			: resolveActiveAgentId(initialRegistry, initialSelection?.agent);
-		const openedAgentSession = createAgentSession({
+		const openedAgentSession = new AgentSessionImpl({
 			initialCompactions: opened.compactions,
 			...omitUndefined({
 				initialAgent,
@@ -321,6 +330,7 @@ export const createSessionHost = async ({
 			ports,
 			sessionId,
 		});
+		agentSessionInternalPort = openedAgentSession.internalPort;
 		agentSession = openedAgentSession;
 		if (isShutDown) {
 			throw new SessionLeaseLostError();

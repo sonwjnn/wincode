@@ -6,7 +6,7 @@ import type {
 	SessionSteeringMessage,
 	SessionWaitingMessageId,
 } from "../../engine/types";
-import type { SessionSubmissionComposition } from "../../session-operation";
+import type { SessionSubmissionComposition } from "../../submission-types";
 
 /** How much of one waiting message fits on its line. */
 const MAX_ITEM_CHARS = 80;

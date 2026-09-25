@@ -16,7 +16,10 @@ import {
 } from "@/modules/agents";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { SessionHost } from "@/modules/sessions/host/types";
-import type { SessionMessage } from "@/modules/sessions/message";
+import type {
+	SessionFilePart,
+	SessionMessage,
+} from "@/modules/sessions/message";
 import { useSettingsHubDialog } from "@/modules/settings";
 import type { EditMode } from "@/modules/tools";
 import type { SessionId } from "@/shared/identifiers";
@@ -28,11 +31,11 @@ import { acceptsSteeringMessages, isSessionBusy } from "../../engine/utils";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
 import { useAgentSession } from "../../hooks/use-agent-session";
 import type { ResolvedSessionSelection } from "../../selection";
-import type {
-	SessionSendInput as SessionOperationSendInput,
-	SessionSubmissionComposition,
-} from "../../session-operation";
 import { getSessionStore } from "../../storage/get-session-store";
+import type {
+	SessionSubmissionComposition,
+	SessionSendInput as SessionSubmissionInput,
+} from "../../submission-types";
 import type { ChatPromptSubmission } from "../../utils";
 import { ChatShell } from "../components/chat-shell";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
@@ -58,7 +61,7 @@ type SessionViewProps = {
 };
 
 type SessionSendInput = Pick<
-	SessionOperationSendInput,
+	SessionSubmissionInput,
 	| "agent"
 	| "sessionModel"
 	| "sessionVariant"
@@ -213,7 +216,47 @@ export function SessionView({
 		setRecallRevision((revision) => revision + 1);
 	};
 	const activeMessages = snapshot.context;
-	const messages = snapshot.transcript;
+	const displayAnnotationsByMessage = useMemo(() => {
+		const annotations = new Map<
+			SessionMessage["id"],
+			readonly (SessionFilePart | undefined)[]
+		>();
+		for (const message of initialTranscript) {
+			const parts = message.parts.map((part) =>
+				part.type === "file" && part.displayAvailability === "missing"
+					? part
+					: undefined
+			);
+			if (parts.some((part) => part !== undefined)) {
+				annotations.set(message.id, parts);
+			}
+		}
+		return annotations;
+	}, [initialTranscript]);
+	const messages = useMemo(
+		() =>
+			snapshot.transcript.map((message) => {
+				const annotations = displayAnnotationsByMessage.get(message.id);
+				if (annotations === undefined) {
+					return message;
+				}
+				let hasAnnotation = false;
+				const parts = message.parts.map((part, index) => {
+					const annotation = annotations[index];
+					if (
+						part.type !== "file" ||
+						annotation?.attachmentId === undefined ||
+						part.attachmentId !== annotation.attachmentId
+					) {
+						return part;
+					}
+					hasAnnotation = true;
+					return annotation;
+				});
+				return hasAnnotation ? { ...message, parts } : message;
+			}),
+		[displayAnnotationsByMessage, snapshot.transcript]
+	);
 	const error = snapshot.compactionError ?? snapshot.error;
 	// The session's own facts decide whether it is busy: a running turn, an
 	// approval that is waiting, or a compaction in flight.

@@ -115,7 +115,7 @@ export function SessionSurface({
 				return {
 					host,
 					sessionTitle: row.title,
-					transcript: host.agentSession.mergeTranscript(transcript),
+					transcript,
 				};
 			} catch (error) {
 				// The session opened but its surface could not be prepared. The

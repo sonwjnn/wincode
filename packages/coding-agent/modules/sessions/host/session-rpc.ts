@@ -28,8 +28,8 @@ export type {
 	SessionMessageMetadata,
 } from "../message";
 export { createSessionUserMessage } from "../message";
-export type { SessionSendInput } from "../session-operation";
 export type { SessionStore } from "../storage/session-store";
+export type { SessionSendInput } from "../submission-types";
 export type {
 	SessionCapabilitiesAssembly,
 	SessionCapabilitiesOptions,

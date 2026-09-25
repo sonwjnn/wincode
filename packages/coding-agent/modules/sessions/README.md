@@ -17,13 +17,14 @@ durable records and never runs the Agent.
 
 ### Submit, steer, and continue
 
-The Agent Session prepares each accepted prompt — joining in-flight compaction,
-resolving settings and attachment budgets, arming and resolving Skills, and
-materialising the user message — then commits the prompt, runs the Agent Turn,
-and maintains the compaction threshold. Cancelling, interrupting, and answering
-an approval are commands too. The send lane serializes submissions; cancel
-aborts the active command, while interrupt ends its Agent Turn and preserves
-the interrupted Tool Call.
+The public `AgentSession` API admits accepted prompts while the class remains
+the sole long-lived owner and writer of session run state. `input-lane.ts`
+coordinates queue and steering-lane transitions; `submission-command.ts`
+coordinates one submission and its cancellation. These workflows retain
+per-command temporaries only: the owner stores active sends, queue contents,
+cancellation state, and Snapshots. Preparation joins in-flight compaction,
+resolves settings and attachment budgets, arms and resolves Skills, and
+materializes the user message before committing and running the Agent Turn.
 
 `agentSession.prompt(input)` always admits a new user Submission: it starts
 when idle and joins the FIFO Submission Queue when busy, preserving its full
@@ -36,9 +37,9 @@ Target. A tool-less turn has no later boundary, so its undelivered Steering
 Messages become queued submissions ahead of newer prompts.
 
 `agentSession.send(input)` remains the compatibility command: it automatically
-steers an active turn, queues when another operation holds the session, and
-starts a turn when idle. Retrying a stored message reuses its identity rather
-than appending a duplicate user message.
+steers an active turn, queues when another submission or session command holds
+the session, and starts a turn when idle. Retrying a stored message reuses its
+identity rather than appending a duplicate user message.
 
 The Agent Session drains queued submissions oldest first after each terminal
 Agent Turn outcome, one turn per item. An interrupt or cancelled compaction
@@ -64,15 +65,20 @@ The Agent Runtime consumer lives with the Agent Turn it consumes
 (`hooks/runtime-turn.ts`), and the Interactive TUI projects its events into
 OpenTUI message state.
 
-Session state — Session Transcript, Session Context, turn activity, errors,
-compaction facts, approvals, overflow recovery, and live executions — belongs to
-the React-free Agent Session in `modules/sessions/engine`. It owns every Session
-Command and publishes each result before settling. `useAgentSession` binds an
-already-open Session Host, mirrors its Snapshot in React state, projects
-approvals into the panel registry, and never writes session state. The Host
-opens the session, exposes the owner as `agentSession`, and owns teardown.
-`turnActive`, `isCompacting`, and pending approvals provide the facts from which
-`isSessionBusy` is derived.
+The Agent Session class is the sole long-lived owner and writer for Session
+Transcript, Session Context, admission lanes, approvals, compaction and recovery
+attempts, live executions, and operation maps. Focused internal workflows
+coordinate input admission and draining, one submission, approval settlement,
+and compaction/overflow recovery through narrow callbacks; they retain
+per-command temporaries only. The class publishes immutable Snapshots and
+ordered events. `AgentSession` exposes commands, Snapshots, and event
+subscriptions, never state-write capabilities. The Session Host and Runtime
+receive state writes only through the internal `AgentSessionInternalPort`;
+`SessionTurnRunner` is the runtime execution port. `useAgentSession` binds an
+already-open Host, mirrors its Snapshot in React state, projects approvals into
+the panel registry, and never writes session state. The Host opens the session,
+constructs the owner, and owns teardown. `isCompacting` and pending approvals
+provide the other facts from which `isSessionBusy` is derived.
 
 Each Agent Turn execution owns its own scope. The Agent Session's execution record
 carries the identity every observer reads — the Agent Turn Identifier, the
@@ -124,18 +130,16 @@ work.
 ### Approvals
 
 An `ask` Tool Permission reaches the user as an Approval Request the Agent
-Session owns. The Tool Gate registers it through the Agent Session's approval
-port and waits for its one settlement, and the binding projects the Agent
-Session's pending requests into the shared panel registry, which is read-only
-for the session layer: the panel asks for a settlement, and the resolution it
-renders is the Agent Session's own decision.
-`respondToApproval` settles one request, and `closeApprovals` settles
-every pending request as rejected, and `shutdown` — which the surface that
-constructed the Host runs when it unmounts, cancelling the active send as it
-goes — settles through the same path. Because a request settles exactly once, a
-dismissed panel, an abort, or an unmount can never leave a Tool Gate evaluation
-waiting, and the one-shot abort latch the binding used to keep is gone: the
-second abort trigger finds nothing pending to handle.
+Session owns. The Tool Gate registers requests through the Host/Runtime-only
+`AgentSessionInternalPort`; the binding projects pending requests into the
+shared panel registry, which is read-only for the session layer. The panel
+requests a settlement, and the resolution it renders is the Agent Session's
+own decision.
+
+`respondToApproval` settles one request. Interrupt, abort, and shutdown settle
+pending requests through the same internal workflow, so a dismissed panel or
+unmount cannot leave a Tool Gate evaluation waiting. Settlement and approval
+records remain owned by the Agent Session, not by the workflow or panel.
 
 ### Input overlays
 
@@ -202,16 +206,19 @@ The reset command only clears session data and is not a schema reset:
 It removes session records and attachment blobs while preserving prompt
 history and workspace/configuration data.
 
-- `getSessionStore()` — local sessions, Session Records, compactions, attachments, and maintenance.
-- `SessionOperation` — the Agent Session's send lane: one active submission at a time, with the per-send deadline and cancellation/interrupt reasons.
-- `engine/` (Agent Session) — the single owner of session state and commands. `agent-session.ts` implements its `prompt`, `steer`, `continue`, and compatibility `send` commands; `types.ts` defines its Snapshot, Ports, and admission outcomes; `submission.ts` prepares and runs submissions; `turn.ts` projects Agent Turn events; `utils.ts` provides snapshot helpers.
+- `submission-types.ts` — immutable Submission inputs, compositions, and outcomes shared by session commands and their consumers.
+- `engine/` (Agent Session) — the single class owner of session state and commands. `agent-session.ts` implements the public `AgentSession` API and keeps state-write capabilities in `AgentSessionInternalPort`; `types.ts` defines its Snapshot, internal Ports, `SessionTurnRunner`, and admission outcomes; `submission.ts` prepares and runs submissions.
+- `engine/input-lane.ts` — admission, steering, queue draining, fallback, recall, and queued attachment ownership orchestration through Agent Session callbacks.
+- `engine/submission-command.ts` — one submission's run/cancellation/deadline ordering; active-send state remains on the owner.
+- `engine/maintenance-workflow.ts` — compaction and overflow-recovery orchestration through Agent Session callbacks.
+- `engine/approval-workflow.ts` — approval settlement policy; snapshots and settlement maps remain owner-owned.
 - `turn-records.ts` — durable Session Records produced by Agent Turns, shared by the Agent Session and runtime consumer.
 - `hooks/runtime-turn.ts` — the Agent Runtime consumer: it processes Agent Turn events, owns their live Session View State, and synthesizes missing terminal events.
-- `host/session-host.ts` — opens the transcript and context, assembles capabilities and the Agent Session, exposes `agentSession`, and owns the Host lifetime. React-free; exported through `@wincode/coding-agent/session-host`.
-- `host/session-ports.ts` — `createSessionPorts`: materializes the Host capabilities required by the runtime, Tools, Tool Gate, Skills, prompt composition, attachments, and persistence.
+- `host/session-host.ts` — opens transcript and context, assembles capabilities and the Agent Session, exposes only its public command/snapshot/event API, and owns the Host lifetime. React-free; exported through `@wincode/coding-agent/session-host`.
+- `host/session-ports.ts` — `createSessionPorts`: materializes Host capabilities required by the `SessionTurnRunner`, Tools, Tool Gate, Skills, prompt composition, attachments, and persistence.
 - `host/use-session-capabilities.ts` — composes Host capabilities from lazy application-provider getters.
 - `approval-projection.ts` — projects Agent Session approvals into read-only panel entries.
-- `useAgentSession(host)` — binds an open Host to React, mirrors its Snapshot, forwards commands, and projects approvals.
+- `useAgentSession(host)` — binds an open Host to React, mirrors its Snapshot, forwards public commands, and projects approvals.
 - `SessionSurface` — the surface that mounts a session: it constructs the Host, renders the opening state until it resolves and the failure when it rejects, and shuts the session down when it unmounts.
 - `useChatInputController(options)` — command and file-mention input state.
 - `NewSessionView`, `SessionView`, `ChatShell`, `ChatTextArea`, `WaitingMessageStrip` — session UI.

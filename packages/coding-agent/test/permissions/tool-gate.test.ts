@@ -12,7 +12,7 @@ import {
 	externalParentDirectoryGlob,
 	type PermissionService,
 } from "@/modules/permissions";
-import { createAgentSession } from "@/modules/sessions/engine/agent-session";
+import { AgentSessionImpl } from "@/modules/sessions/engine/agent-session";
 import type {
 	AgentSession,
 	AgentSessionPorts,
@@ -1360,9 +1360,10 @@ test("rewrites an approved external edit patch to its canonical resource", async
 
 describe("approval settlement through the Agent Session", () => {
 	const createTestAgentSession = () =>
-		createAgentSession({
+		new AgentSessionImpl({
 			initialTranscript: [],
 			ports: fromPartial<AgentSessionPorts>({
+				turnRunner: { requestOverheadTokens: () => 0 },
 				// Compaction is not part of this seam; the Agent Session only needs the port.
 				compaction: {
 					compact: () =>
@@ -1375,9 +1376,9 @@ describe("approval settlement through the Agent Session", () => {
 			sessionId: sessionId("gate-approval"),
 		});
 
-	const askGate = (agentSession: AgentSession) =>
+	const askGate = (agentSession: AgentSessionImpl) =>
 		createToolGate({
-			approvals: { request: agentSession.requestApproval },
+			approvals: { request: agentSession.internalPort.requestApproval },
 			resolvePermission: async () =>
 				createToolPermission({ shell: { "git status": "ask" } }),
 			sandbox: createWorkspaceSandbox(process.cwd()),
@@ -1401,7 +1402,7 @@ describe("approval settlement through the Agent Session", () => {
 		const evaluation = gate.gate(shellCall("git status", "call-close"));
 		await whenApprovalRequested(engine);
 
-		engine.closeApprovals();
+		engine.interruptAll();
 
 		await expect(evaluation).resolves.toEqual({
 			errorText: "Shell was not approved: git status",
@@ -1417,7 +1418,7 @@ describe("approval settlement through the Agent Session", () => {
 		const engine = createTestAgentSession();
 		let abortCount = 0;
 		const gate = createToolGate({
-			approvals: { request: engine.requestApproval },
+			approvals: { request: engine.internalPort.requestApproval },
 			onAbort: () => {
 				abortCount += 1;
 			},
@@ -1444,7 +1445,7 @@ describe("approval settlement through the Agent Session", () => {
 		const evaluation = gate.gate(shellCall("git status", "call-shutdown"));
 		await whenApprovalRequested(engine);
 
-		await engine.shutdown();
+		await engine.internalPort.shutdown();
 
 		await expect(evaluation).resolves.toEqual({
 			errorText: "Shell was not approved: git status",

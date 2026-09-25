@@ -27,7 +27,7 @@ import type { SessionHost } from "../../../modules/sessions/host/types";
 import type { SessionMessage } from "../../../modules/sessions/message";
 import { createSessionUserMessage } from "../../../modules/sessions/message";
 import type { ResolvedSessionSelection } from "../../../modules/sessions/selection";
-import type { SessionSendInput } from "../../../modules/sessions/session-operation";
+import type { SessionSendInput } from "../../../modules/sessions/submission-types";
 import { toSessionId } from "../../../shared/identifiers";
 import { projectAgentEvent } from "../rpc/projection";
 import type { ApplicationContext } from "./types";
