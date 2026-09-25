@@ -4,7 +4,7 @@ import { isNull, omitUndefined } from "@wincode/runtime-utils";
 import { resolveActiveAgentId } from "@/modules/agents/registry";
 import { rebuildActiveMessages } from "../compaction/compaction";
 import type { SessionCompaction } from "../compaction/types";
-import { createAgentSession } from "../engine/agent-session";
+import { AgentSessionImpl } from "../engine/agent-session";
 import type { AgentSession, AgentSessionPorts } from "../engine/types";
 import {
 	type SessionMessage,
@@ -309,7 +309,7 @@ export const createSessionHost = async ({
 		const initialAgent = isNull(initialRegistry)
 			? initialSelection?.agent
 			: resolveActiveAgentId(initialRegistry, initialSelection?.agent);
-		const openedAgentSession = createAgentSession({
+		const openedAgentSession = new AgentSessionImpl({
 			initialCompactions: opened.compactions,
 			...omitUndefined({
 				initialAgent,

@@ -18,7 +18,7 @@ import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
-import type { SessionSubmissionComposition } from "@/modules/sessions/session-operation";
+import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";
 import { useLatest } from "@/shared/hooks/use-latest";
 import { normalizeFileTokensForTrimmedText } from "../../attachments";
 import { getSessionStore } from "../../storage/get-session-store";

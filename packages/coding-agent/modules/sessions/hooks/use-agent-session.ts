@@ -13,7 +13,7 @@ import type { SessionHost } from "@/modules/sessions/host/types";
 import type {
 	SessionSendInput,
 	SessionSendOutcome,
-} from "@/modules/sessions/session-operation";
+} from "@/modules/sessions/submission-types";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
 
 export type AgentSessionBinding = Readonly<{

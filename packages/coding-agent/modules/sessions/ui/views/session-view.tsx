@@ -28,11 +28,11 @@ import { acceptsSteeringMessages, isSessionBusy } from "../../engine/utils";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
 import { useAgentSession } from "../../hooks/use-agent-session";
 import type { ResolvedSessionSelection } from "../../selection";
-import type {
-	SessionSendInput as SessionOperationSendInput,
-	SessionSubmissionComposition,
-} from "../../session-operation";
 import { getSessionStore } from "../../storage/get-session-store";
+import type {
+	SessionSubmissionComposition,
+	SessionSendInput as SessionSubmissionInput,
+} from "../../submission-types";
 import type { ChatPromptSubmission } from "../../utils";
 import { ChatShell } from "../components/chat-shell";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
@@ -58,7 +58,7 @@ type SessionViewProps = {
 };
 
 type SessionSendInput = Pick<
-	SessionOperationSendInput,
+	SessionSubmissionInput,
 	| "agent"
 	| "sessionModel"
 	| "sessionVariant"

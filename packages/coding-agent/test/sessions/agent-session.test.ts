@@ -15,7 +15,7 @@ import type {
 	AppendSessionCompactionInput,
 	SummaryGenerator,
 } from "@/modules/sessions/compaction/types";
-import { createAgentSession } from "@/modules/sessions/engine/agent-session";
+import { AgentSessionImpl } from "@/modules/sessions/engine/agent-session";
 import type {
 	AgentSession,
 	AgentSessionPorts,
@@ -33,7 +33,7 @@ import type {
 import type {
 	SessionSendInput,
 	SessionSubmissionComposition,
-} from "@/modules/sessions/session-operation";
+} from "@/modules/sessions/submission-types";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import { createHangingSummary } from "../support/hanging-summary";
 import {
@@ -131,7 +131,7 @@ const createTestAgentSession = (
 	compactionModule = createCompactionModule(async () => ({ text: "summary" })),
 	overrides: Partial<AgentSessionPorts> = {}
 ): AgentSession =>
-	createAgentSession({
+	new AgentSessionImpl({
 		initialTranscript,
 		ports: createPorts({ compaction: compactionModule, ...overrides }),
 		sessionId: sessionId("agent-session-test"),
@@ -1332,6 +1332,59 @@ test("prompt queues a second submission instead of steering a live turn", async 
 	runtime.release();
 	await runtime.started(2);
 	expect(runtime.prompts).toEqual(["first", "second with file"]);
+	runtime.release();
+	await engine.shutdown();
+});
+
+test("compatibility send queues while the active submission is still preparing", async () => {
+	const externalizeStarted = Promise.withResolvers<void>();
+	const allowExternalize = Promise.withResolvers<void>();
+	const runtime = createQueuedRuntime();
+	const engine = createTestAgentSession([], undefined, {
+		attachments: {
+			externalize: async (messages) => {
+				externalizeStarted.resolve();
+				await allowExternalize.promise;
+				return [...messages];
+			},
+			hydrate: async ({ messages }) => [...messages],
+			release: () => undefined,
+			retain: () => undefined,
+		},
+		runtime: runtime.runtime,
+	});
+	const files: SessionFilePart[] = [
+		{
+			filename: "first.txt",
+			mediaType: "text/plain",
+			type: "file",
+			url: "data:text/plain;base64,QQ==",
+		},
+	];
+	const started = await engine.prompt(sendInput({ files, userText: "first" }));
+	if (started.rejected) {
+		throw new Error(started.reason);
+	}
+	await externalizeStarted.promise;
+
+	const queued = await engine.send(sendInput({ userText: "second" }));
+	const preparingSnapshot = engine.getSnapshot();
+
+	expect(queued).toEqual({ rejected: false });
+	expect(preparingSnapshot.turnActive).toBe(true);
+	expect(
+		preparingSnapshot.queuedSubmissions.map(
+			({ input }) => input.composition.text
+		)
+	).toEqual(["second"]);
+	expect(runtime.prompts).toEqual([]);
+
+	allowExternalize.resolve();
+	await runtime.started(1);
+	expect(runtime.prompts).toEqual(["first"]);
+	runtime.release();
+	await runtime.started(2);
+	expect(runtime.prompts).toEqual(["first", "second"]);
 	runtime.release();
 	await engine.shutdown();
 });
@@ -2936,6 +2989,53 @@ test("cancels the submission it is running and returns to ready", async () => {
 	expect(snapshot.turnActive).toBe(false);
 	expect(snapshot.executions).toEqual([]);
 	expect(snapshot.approvals).toEqual([]);
+});
+
+test("deadline expiration aborts a preparing Agent Session send", async () => {
+	const externalizeStarted = Promise.withResolvers<void>();
+	const files: SessionFilePart[] = [
+		{
+			filename: "deadline.txt",
+			mediaType: "text/plain",
+			type: "file",
+			url: "data:text/plain;base64,QQ==",
+		},
+	];
+	const engine = new AgentSessionImpl({
+		deadlineMs: 0,
+		initialTranscript: [],
+		ports: createPorts({
+			compaction: createCompactionModule(async () => ({ text: "summary" })),
+			attachments: {
+				externalize: async (messages, signal) => {
+					externalizeStarted.resolve();
+					const released = Promise.withResolvers<void>();
+					const onAbort = (): void => released.resolve();
+					if (signal.aborted) {
+						onAbort();
+					} else {
+						signal.addEventListener("abort", onAbort, { once: true });
+					}
+					await released.promise;
+					signal.removeEventListener("abort", onAbort);
+					return [...messages];
+				},
+				hydrate: async ({ messages }) => [...messages],
+				release: () => undefined,
+				retain: () => undefined,
+			},
+		}),
+		sessionId: sessionId("agent-session-deadline-test"),
+	});
+	const send = engine.send(sendInput({ files, userText: "deadline" }));
+	await externalizeStarted.promise;
+
+	await expect(send).resolves.toEqual({
+		rejected: true,
+		reason: "Session send deadline exceeded.",
+	});
+	expect(engine.getSnapshot().turnActive).toBe(false);
+	await engine.shutdown();
 });
 
 test("interrupts the turn, not the Steering Message it delivered", async () => {

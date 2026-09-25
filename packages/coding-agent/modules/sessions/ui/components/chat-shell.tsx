@@ -25,7 +25,7 @@ import type {
 } from "../../engine/types";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import type { SessionViewState } from "../../hooks/runtime-turn";
-import type { SessionSubmissionComposition } from "../../session-operation";
+import type { SessionSubmissionComposition } from "../../submission-types";
 import { summarizeSessionUsage } from "../../usage/session-usage";
 import type { ChatPromptSubmission } from "../../utils";
 import { ErrorMessage } from "../messages";

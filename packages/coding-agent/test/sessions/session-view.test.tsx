@@ -28,7 +28,7 @@ import type {
 import type {
 	SessionSendInput,
 	SessionSubmissionComposition,
-} from "@/modules/sessions/session-operation";
+} from "@/modules/sessions/submission-types";
 import {
 	agentId,
 	queuedSubmissionId,

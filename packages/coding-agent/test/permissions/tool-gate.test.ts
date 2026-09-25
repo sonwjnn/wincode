@@ -12,7 +12,7 @@ import {
 	externalParentDirectoryGlob,
 	type PermissionService,
 } from "@/modules/permissions";
-import { createAgentSession } from "@/modules/sessions/engine/agent-session";
+import { AgentSessionImpl } from "@/modules/sessions/engine/agent-session";
 import type {
 	AgentSession,
 	AgentSessionPorts,
@@ -1360,7 +1360,7 @@ test("rewrites an approved external edit patch to its canonical resource", async
 
 describe("approval settlement through the Agent Session", () => {
 	const createTestAgentSession = () =>
-		createAgentSession({
+		new AgentSessionImpl({
 			initialTranscript: [],
 			ports: fromPartial<AgentSessionPorts>({
 				// Compaction is not part of this seam; the Agent Session only needs the port.

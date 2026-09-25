@@ -41,7 +41,7 @@ import type {
 	SessionSendInput,
 	SessionSendOutcome,
 	SessionSubmissionComposition,
-} from "../session-operation";
+} from "../submission-types";
 
 export type { SessionViewState } from "../hooks/runtime-turn";
 /**

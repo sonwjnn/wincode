@@ -32,8 +32,8 @@ import type {
 	SessionHostFailure,
 } from "@/modules/sessions/host/types";
 import type { SessionMessage } from "@/modules/sessions/message";
-import type { SessionSendInput } from "@/modules/sessions/session-operation";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
+import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { CompactionId, SessionId } from "@/shared/identifiers";

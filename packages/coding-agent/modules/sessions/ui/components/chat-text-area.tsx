@@ -56,7 +56,7 @@ import { readClipboardImage, readImagePath } from "../../clipboard-image";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import type { TrackedPastedText } from "../../hooks/input-controller/submit";
 import { useChatInputController } from "../../hooks/input-controller/use-chat-input-controller";
-import type { SessionSubmissionComposition } from "../../session-operation";
+import type { SessionSubmissionComposition } from "../../submission-types";
 import type { ChatPromptSubmission } from "../../utils";
 import { summarizePastedText } from "./pasted-text";
 

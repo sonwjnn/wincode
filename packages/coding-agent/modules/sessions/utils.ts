@@ -1,5 +1,5 @@
 import type { SessionFilePart } from "@/modules/sessions/message";
-import type { SessionSubmissionComposition } from "@/modules/sessions/session-operation";
+import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";
 import type { SkillContext } from "@/modules/skills";
 import type { Session } from "./storage/session-store";
 
