@@ -28,7 +28,7 @@ import { RetiredModelError } from "../model-target";
  * Durable Session Record synthesis for one Agent Turn: the assistant row a
  * terminal Agent Turn Event produces, the safe assistant rows a failed or
  * cancelled turn produces, and the tool row each completed Tool Call produces.
- * The Session Engine and the Agent Runtime consumer both write through these,
+ * The Agent Session and the Agent Runtime consumer both write through these,
  * so the durable shape of a turn is defined once.
  */
 

@@ -15,6 +15,7 @@ export type {
 	SessionInterruptResult,
 	SessionQueuedSubmission,
 	SessionSnapshot,
+	SessionSteeringAdmission,
 	SessionSteeringMessage,
 	SessionSubmissionAdmission,
 	SessionSubmissionEvent,

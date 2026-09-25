@@ -621,7 +621,7 @@ test("hands Steering Messages to the runtime as Agent Turn messages", async () =
 		turn,
 	});
 
-	// The Engine's Session Message crosses the boundary as an Agent Turn
+	// The Agent Session's Session Message crosses the boundary as an Agent Turn
 	// message, so no session-layer type reaches the runtime.
 	expect(takenAtBoundary).toEqual([
 		{

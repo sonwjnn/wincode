@@ -28,14 +28,16 @@ import { SessionCompactionError } from "../compaction/error";
 import {
 	isContextOverflowFailure,
 	OverflowRecoveryError,
-	prepareOverflowReplayMessages,
+	prepareOverflowRecoveryMessages,
 } from "../compaction/overflow-recovery";
 import { isCompactionSummaryMessage } from "../compaction/summary-message";
 import type { SessionCompaction } from "../compaction/types";
 import {
 	createSessionUserMessage,
+	isSessionToolPart,
 	type SessionFilePart,
 	type SessionMessage,
+	type SessionToolPart,
 } from "../message";
 import type {
 	SessionSendInput,
@@ -43,6 +45,10 @@ import type {
 	SessionSubmissionComposition,
 } from "../session-operation";
 import { createSessionOperation } from "../session-operation";
+import {
+	getSessionAttemptMessages,
+	hasCompletedToolArtifact,
+} from "../session-retry";
 import { buildUserSessionRecord } from "../storage/session-record";
 import {
 	createSubmissionPipeline,
@@ -51,22 +57,24 @@ import {
 } from "./submission";
 import { interruptSessionContext } from "./turn";
 import type {
+	AgentSession,
+	AgentSessionOptions,
+	AgentSessionPorts,
 	SessionApprovalOutcome,
 	SessionApprovalResult,
 	SessionCompactionCommand,
-	SessionEngine,
-	SessionEngineOptions,
-	SessionEnginePorts,
+	SessionContinuationOutcome,
 	SessionExecution,
 	SessionExecutionInput,
 	SessionInterruptResult,
+	SessionOverflowContinuationOutcome,
 	SessionOverflowRecoveryCommand,
 	SessionOverflowRecoveryOutcome,
 	SessionOverflowRecoveryTarget,
-	SessionOverflowReplayOutcome,
 	SessionQueuedSendInput,
 	SessionQueuedSubmission,
 	SessionSnapshot,
+	SessionSteeringAdmission,
 	SessionSteeringMessage,
 	SessionSubmissionAdmission,
 	SessionSubmissionEvent,
@@ -115,6 +123,72 @@ const STEERING_SKILL_ERROR =
 const STEERING_INVOCATION_ERROR =
 	"A Steering Message carries text only: it cannot resend or edit another message.";
 
+/** The reason an explicit Steering Message has no live Agent Turn to join. */
+const STEERING_INACTIVE_ERROR =
+	"An active Agent Turn is required to accept a Steering Message.";
+type ContinuationContextMessages =
+	| {
+			kind: "ready";
+			anchor: SessionMessage;
+			lastMessage: SessionMessage;
+	  }
+	| { kind: "rejected"; reason: string };
+
+const isCompleteToolCall = (part: SessionToolPart): boolean =>
+	part.state === "output-denied" ||
+	(part.state === "output-available" && "output" in part) ||
+	(part.state === "output-error" &&
+		typeof part.errorText === "string" &&
+		part.errorText.length > 0);
+
+const findContinuationContextMessages = (
+	context: readonly SessionMessage[]
+): ContinuationContextMessages => {
+	const lastMessage = context.at(-1);
+	if (lastMessage === undefined) {
+		return {
+			kind: "rejected",
+			reason: "The Agent Session has no context to continue.",
+		};
+	}
+	const hasIncompleteToolCall = context.some(({ parts }) =>
+		parts.some((part) => isSessionToolPart(part) && !isCompleteToolCall(part))
+	);
+	if (hasIncompleteToolCall) {
+		return {
+			kind: "rejected",
+			reason: "Incomplete Tool Calls cannot be continued.",
+		};
+	}
+	const toolParts = lastMessage.parts.filter(isSessionToolPart);
+	const completeToolCall =
+		lastMessage.role === "assistant" &&
+		toolParts.length > 0 &&
+		toolParts.every(isCompleteToolCall);
+	if (!(lastMessage.role === "user" || completeToolCall)) {
+		return {
+			kind: "rejected",
+			reason:
+				"The Agent Session can only continue from a user message or completed Tool Call.",
+		};
+	}
+	let anchor: SessionMessage | undefined;
+	for (let index = context.length - 1; index >= 0; index -= 1) {
+		const candidate = context[index];
+		if (candidate?.role === "user") {
+			anchor = candidate;
+			break;
+		}
+	}
+	if (anchor === undefined) {
+		return {
+			kind: "rejected",
+			reason: "The Agent Session has no user message to continue.",
+		};
+	}
+	return { kind: "ready", anchor, lastMessage };
+};
+
 /** The attachment blobs one queued composition holds. */
 const queuedAttachmentIds = ({
 	composition,
@@ -123,18 +197,44 @@ const queuedAttachmentIds = ({
 		isUndefined(attachmentId) ? [] : [attachmentId]
 	);
 
+/** Preserves attachment reference counts while compositions are externalized. */
+const subtractAttachmentIds = (
+	attachmentIds: readonly string[],
+	subtracted: readonly string[]
+): string[] => {
+	const counts = new Map<string, number>();
+	for (const id of subtracted) {
+		counts.set(id, (counts.get(id) ?? 0) + 1);
+	}
+	return attachmentIds.filter((id) => {
+		const count = counts.get(id) ?? 0;
+		if (count === 0) {
+			return true;
+		}
+		if (count === 1) {
+			counts.delete(id);
+		} else {
+			counts.set(id, count - 1);
+		}
+		return false;
+	});
+};
+
 /**
  * The single owner of one session's live state and the only writer to it.
- * Observers read a Session Snapshot and never write; the engine replaces the
- * snapshot instead of mutating it.
+ * Observers read a Session Snapshot and never write; the Agent Session replaces
+ * it instead of mutating it.
  */
-export const createSessionEngine = ({
+export const createAgentSession = ({
 	initialCompactions = [],
+	initialAgent,
 	initialContext,
+	initialSessionModel,
+	initialSessionVariant,
 	initialTranscript,
 	ports,
 	sessionId,
-}: SessionEngineOptions): SessionEngine => {
+}: AgentSessionOptions): AgentSession => {
 	let state: SessionSnapshot = {
 		approvals: [],
 		catalogDiagnostic: null,
@@ -152,9 +252,9 @@ export const createSessionEngine = ({
 		viewState: undefined,
 	};
 	/**
-	 * The compaction command the Engine is running, kept for its abort handle and
-	 * for callers that join it. Whether a request may run at all is the Session
-	 * Compaction module's decision, never this record's.
+	 * The compaction command the Agent Session is running, kept for its abort
+	 * handle and for callers that join it. Whether a request may run at all is
+	 * the Session Compaction module's decision, never this record's.
 	 */
 	let compactionCommand:
 		| {
@@ -174,7 +274,7 @@ export const createSessionEngine = ({
 			try {
 				listener(event);
 			} catch {
-				// Observers cannot change Engine authority.
+				// Observers cannot change Agent Session authority.
 			}
 		}
 	};
@@ -189,9 +289,8 @@ export const createSessionEngine = ({
 	>();
 	/**
 	 * The user messages that have used their one overflow recovery attempt. The
-	 * attempt belongs to the message the Agent Turn answers — the replayed turn
-	 * answers the same one — so a replayed turn can never chain into another
-	 * recovery, and no send or command can reset an attempt that is under way.
+	 * attempt stays keyed to the failed turn's original message, so continuing
+	 * its context cannot chain into another recovery and no command resets it.
 	 */
 	const recoveryAttempts = new Set<SessionMessageId>();
 	/** Monotonic fence for recovery work after any local interruption. */
@@ -218,7 +317,7 @@ export const createSessionEngine = ({
 	 * await them before the Session Host can release its lease.
 	 */
 	const pendingDurableWrites = new Set<Promise<void>>();
-	const commitRecord: SessionEnginePorts["commitRecord"] = (input) => {
+	const commitRecord: AgentSessionPorts["commitRecord"] = (input) => {
 		if (isShutDown) {
 			return Promise.resolve();
 		}
@@ -240,21 +339,26 @@ export const createSessionEngine = ({
 	 * ownership still covers its compaction decision until it settles.
 	 */
 	const pendingBackgroundTasks = new Set<Promise<unknown>>();
-	const pendingAttachmentControllers = new Set<AbortController>();
+	const pendingAttachmentControllers = new Map<
+		SessionQueuedSubmission["id"],
+		AbortController
+	>();
 	/**
 	 * Late runtime callbacks can still settle after cancellation. They must not
-	 * reach the durable store once the Engine has lost authority.
+	 * reach the durable store once the Agent Session has lost authority.
 	 */
-	const enginePorts: SessionEnginePorts = { ...ports, commitRecord };
+	const agentSessionPorts: AgentSessionPorts = { ...ports, commitRecord };
 	/**
-	 * How many submission runs hold the send lane. A run can overlap another's
-	 * tail — an overflow replay starts once the failed turn's execution ends,
-	 * which can precede the run that proposed it — so the lane is counted rather
-	 * than flagged, and it is free only at zero.
+	 * How many submission runs hold the send lane. An overflow continuation may
+	 * start after the failed turn ends but before its proposing run settles, so
+	 * the lane is counted rather than flagged, and is free only at zero.
 	 */
 	let laneRuns = 0;
+	let laneIdle: Promise<void> = Promise.resolve();
+	let resolveLaneIdle: (() => void) | undefined;
 	/** The turn reserved by a run before its execution enters the snapshot. */
 	let activeAdmissionTurnId: AgentTurnId | undefined;
+	const contextContinuationInputs = new WeakSet<SessionSendInput>();
 	let draining = false;
 	/** Whether the drain loop is walking the Submission Queue. */
 	const publish = (changes: Partial<SessionSnapshot>): void => {
@@ -284,7 +388,7 @@ export const createSessionEngine = ({
 			}
 		}
 	};
-	/** Settles one request through the Engine's single authority path. */
+	/** Settles one request through the Agent Session's single authority path. */
 	const settleApproval = (
 		id: string,
 		outcome: SessionApprovalOutcome
@@ -570,9 +674,9 @@ export const createSessionEngine = ({
 			);
 		}
 		const messages = compactionSource(command);
-		// The Engine's own command is checked first: a request that arrives while
-		// that command still resolves its settings joins it rather than starting
-		// a second command the module would only refuse.
+		// The Agent Session's own command is checked first: a request that arrives
+		// while it still resolves settings joins it rather than starting a second
+		// command the Session Compaction module would refuse.
 		const running =
 			compactionCommand ?? ports.compaction.getInFlight(sessionId);
 		const result = isNull(running)
@@ -612,12 +716,12 @@ export const createSessionEngine = ({
 		}
 		return promise;
 	};
-	/** One recovery failure with the compaction error code it publishes. */
+	/** One recovery failure with the context-continuation error code it publishes. */
 	const recoveryError = (
 		message: string,
 		cause: unknown
 	): OverflowRecoveryError =>
-		new OverflowRecoveryError("replay-failed", message, { cause });
+		new OverflowRecoveryError("continuation-failed", message, { cause });
 	/**
 	 * Publishes one recovery failure as the compaction error and reports it, so
 	 * a caller that proposed the recovery has nothing left to continue.
@@ -632,15 +736,14 @@ export const createSessionEngine = ({
 	};
 	/**
 	 * Runs one recovery: it records the attempt against the user message the
-	 * failed turn answers, compacts the replay-safe history through the Engine's
-	 * own compaction command — so the Session Context swap and the entry are
-	 * published exactly as for any other compaction — and then replays that
-	 * message. A recovery the session refuses or that fails is published as the
-	 * compaction error instead of being continued by its caller.
+	 * failed turn answers, compacts eligible history through the Agent
+	 * Session's own compaction command, then continues the resulting Session
+	 * Context without appending the original user message. A refused or failed
+	 * continuation is published as the compaction error, not queued by its caller.
 	 */
 	const runOverflowRecovery = async (
 		command: SessionOverflowRecoveryCommand
-		// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Recovery owns independent eligibility, compaction, and replay failure boundaries.
+		// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Recovery owns independent eligibility, compaction, and continuation failure boundaries.
 	): Promise<SessionOverflowRecoveryOutcome> => {
 		if (!isContextOverflowFailure(command.error)) {
 			return { kind: "ineligible" };
@@ -651,6 +754,18 @@ export const createSessionEngine = ({
 		// command can reset it.
 		if (recoveryAttempts.has(command.originalMessageId)) {
 			return { kind: "exhausted" };
+		}
+		const originalMessageIndex = state.context.findIndex(
+			(message) =>
+				message.id === command.originalMessageId && message.role === "user"
+		);
+		if (
+			originalMessageIndex !== -1 &&
+			hasCompletedToolArtifact(
+				getSessionAttemptMessages(state.context, originalMessageIndex)
+			)
+		) {
+			return { kind: "ineligible" };
 		}
 		recoveryAttempts.add(command.originalMessageId);
 		const recoveryEpoch = interruptEpoch;
@@ -680,7 +795,7 @@ export const createSessionEngine = ({
 		try {
 			result = await compact({
 				model: target.model,
-				sourceMessages: prepareOverflowReplayMessages(
+				sourceMessages: prepareOverflowRecoveryMessages(
 					state.transcript,
 					command.originalMessageId
 				),
@@ -701,14 +816,14 @@ export const createSessionEngine = ({
 			);
 		}
 		await waitForExecutionEnd(command.turnId);
-		// The replay waits for the failed execution so it cannot overlap its
-		// interrupted turn or outlive a local interruption.
+		// Context continuation waits for the failed execution so it cannot overlap
+		// that turn or outlive a local interruption.
 		if (isShutDown || recoveryEpoch !== interruptEpoch) {
 			return { kind: "ineligible" };
 		}
-		let replayOutcome: SessionOverflowReplayOutcome;
+		let continuationOutcome: SessionOverflowContinuationOutcome;
 		try {
-			replayOutcome = await command.replay({
+			continuationOutcome = await command.continueContext({
 				originalMessageId: command.originalMessageId,
 			});
 		} catch (error) {
@@ -717,7 +832,7 @@ export const createSessionEngine = ({
 			}
 			return failRecovery(
 				recoveryError(
-					"Context overflow recovery could not replay the original user message.",
+					"Context overflow recovery could not continue the compacted Session Context.",
 					error
 				)
 			);
@@ -725,11 +840,11 @@ export const createSessionEngine = ({
 		if (isShutDown || recoveryEpoch !== interruptEpoch) {
 			return { kind: "ineligible" };
 		}
-		if (replayOutcome.kind === "refused") {
+		if (continuationOutcome.kind === "refused") {
 			return failRecovery(
 				new OverflowRecoveryError(
-					"replay-refused",
-					`Context overflow recovery could not replay the original user message: ${replayOutcome.reason}`,
+					"continuation-refused",
+					`Context overflow recovery could not continue the compacted Session Context: ${continuationOutcome.reason}`,
 					{ cause: command.error }
 				)
 			);
@@ -747,9 +862,11 @@ export const createSessionEngine = ({
 		void recovery.then(
 			() => {
 				activeOverflowRecoveries -= 1;
+				trackBackgroundTask(drainQueuedSubmissions());
 			},
 			() => {
 				activeOverflowRecoveries -= 1;
+				trackBackgroundTask(drainQueuedSubmissions());
 			}
 		);
 		return recovery;
@@ -900,7 +1017,7 @@ export const createSessionEngine = ({
 		execution: SessionExecution,
 		message: SessionMessage
 	): void => {
-		const write = enginePorts
+		const write = agentSessionPorts
 			.commitRecord({
 				record: buildUserSessionRecord({
 					agentId: execution.agent,
@@ -970,11 +1087,9 @@ export const createSessionEngine = ({
 		}
 	};
 	/**
-	 * Hands anything still waiting in the Steering Lane to the Submission
-	 * Queue when its Agent Turn ends without delivering it — a tool-less turn
-	 * runs exactly one Model Step and has no boundary to deliver at. Acceptance
-	 * order is kept, so nothing is silently dropped and every message runs as
-	 * its own Agent Turn.
+	 * Moves Steering Messages that missed their Model Step boundary to the
+	 * Submission Queue when their turn ends. Their relative acceptance order is
+	 * kept, and they run ahead of newer queued prompts.
 	 */
 	const fallbackSteeringMessages = (turnId?: AgentTurnId): void => {
 		if (isShutDown || state.steeringMessages.length === 0) {
@@ -1017,7 +1132,7 @@ export const createSessionEngine = ({
 			return;
 		}
 		publish({
-			queuedSubmissions: [...state.queuedSubmissions, ...waiting],
+			queuedSubmissions: [...waiting, ...state.queuedSubmissions],
 			steeringMessages: state.steeringMessages.filter(
 				(message) => !isOwnedByTurn(message)
 			),
@@ -1057,21 +1172,16 @@ export const createSessionEngine = ({
 		applyContext,
 		beginExecution,
 		compact,
+		continueContext: (input) => continueContextRun(input),
 		endExecution,
 		fallbackSteeringMessages,
 		getContext: () => state.context,
 		getTranscript: () => state.transcript,
 		isShutDown: () => isShutDown,
+		isContextContinuation: (input) => contextContinuationInputs.has(input),
 		mergeTranscript,
-		ports: enginePorts,
+		ports: agentSessionPorts,
 		recoverOverflow,
-		send: (input) =>
-			isShutDown
-				? Promise.resolve({
-						rejected: true,
-						reason: SHUT_DOWN_SEND_ERROR,
-					})
-				: runSubmission(input),
 		sessionId,
 		setCatalogDiagnostic: (diagnostic) =>
 			publish({ catalogDiagnostic: diagnostic }),
@@ -1084,9 +1194,17 @@ export const createSessionEngine = ({
 		takeSteeringMessages,
 	});
 
-	const runSubmission = async (
+	const beginSubmission = (
 		input: SessionSendInput
-	): Promise<SessionSendOutcome> => {
+	): {
+		messageId: SessionMessageId | undefined;
+		ownsTurnReservation: boolean;
+	} => {
+		if (laneRuns === 0) {
+			const idle = Promise.withResolvers<void>();
+			laneIdle = idle.promise;
+			resolveLaneIdle = idle.resolve;
+		}
 		laneRuns += 1;
 		const ownsTurnReservation =
 			activeAdmissionTurnId === undefined && input.turnId !== undefined;
@@ -1102,44 +1220,87 @@ export const createSessionEngine = ({
 				...omitUndefined({ turnId: input.turnId }),
 			});
 		}
+		return { messageId, ownsTurnReservation };
+	};
+	const reportSubmissionFailure = (
+		input: SessionSendInput,
+		messageId: SessionMessageId | undefined,
+		reason: string
+	): void => {
+		if (input.submissionId === undefined || messageId === undefined) {
+			return;
+		}
+		emitSubmissionEvent({
+			kind: "failed",
+			messageId,
+			reason,
+			submissionId: input.submissionId,
+			...omitUndefined({ turnId: input.turnId }),
+		});
+	};
+	const finishSubmission = (
+		input: SessionSendInput,
+		ownsTurnReservation: boolean
+	): void => {
+		if (ownsTurnReservation && activeAdmissionTurnId === input.turnId) {
+			activeAdmissionTurnId = undefined;
+		}
+		laneRuns -= 1;
+		if (laneRuns === 0) {
+			resolveLaneIdle?.();
+			resolveLaneIdle = undefined;
+		}
+		trackBackgroundTask(drainQueuedSubmissions());
+	};
+	const runSubmission = async (
+		input: SessionSendInput
+	): Promise<SessionSendOutcome> => {
+		const { messageId, ownsTurnReservation } = beginSubmission(input);
 		try {
 			const outcome = await operation.send(input);
-			if (
-				outcome.rejected &&
-				input.submissionId !== undefined &&
-				messageId !== undefined
-			) {
-				emitSubmissionEvent({
-					kind: "failed",
-					messageId,
-					reason: outcome.reason,
-					submissionId: input.submissionId,
-					...omitUndefined({ turnId: input.turnId }),
-				});
+			if (outcome.rejected) {
+				reportSubmissionFailure(input, messageId, outcome.reason);
 			}
 			return outcome;
 		} catch (error) {
-			if (input.submissionId !== undefined && messageId !== undefined) {
-				emitSubmissionEvent({
-					kind: "failed",
-					messageId,
-					reason: getErrorMessage(error, "The Submission failed."),
-					submissionId: input.submissionId,
-					...omitUndefined({ turnId: input.turnId }),
-				});
-			}
+			reportSubmissionFailure(
+				input,
+				messageId,
+				getErrorMessage(error, "The Submission failed.")
+			);
 			throw error;
 		} finally {
-			if (ownsTurnReservation && activeAdmissionTurnId === input.turnId) {
-				activeAdmissionTurnId = undefined;
-			}
-			laneRuns -= 1;
-			trackBackgroundTask(drainQueuedSubmissions());
+			finishSubmission(input, ownsTurnReservation);
 		}
 	};
+	const continueContextRun = async (
+		input: SessionSendInput
+	): Promise<SessionSendOutcome> => {
+		if (isShutDown) {
+			return { rejected: true, reason: SHUT_DOWN_SEND_ERROR };
+		}
+		await operation.waitForIdle();
+		while (laneRuns > 0) {
+			await laneIdle;
+		}
+		if (
+			isShutDown ||
+			state.turnActive ||
+			state.isCompacting ||
+			compactionCommand !== undefined
+		) {
+			return { rejected: true, reason: "The Agent Session is busy." };
+		}
+		const continuationInput = {
+			...input,
+			turnId: input.turnId ?? createAgentTurnId(),
+		};
+		contextContinuationInputs.add(continuationInput);
+		return await runSubmission(continuationInput);
+	};
 	/**
-	 * Interrupts local Engine authority immediately while the provider may still
-	 * be physically unwinding. The execution signal fences every late callback.
+	 * Interrupts local Agent Session authority immediately while the provider may
+	 * still be physically unwinding. The execution signal fences every callback.
 	 */
 	const interruptActiveWork = (preserveToolCallId?: ToolCallId): void => {
 		interruptEpoch += 1;
@@ -1197,7 +1358,8 @@ export const createSessionEngine = ({
 			laneRuns > 0 ||
 			state.turnActive ||
 			state.isCompacting ||
-			compactionCommand !== undefined
+			compactionCommand !== undefined ||
+			activeOverflowRecoveries > 0
 		) {
 			return;
 		}
@@ -1205,7 +1367,7 @@ export const createSessionEngine = ({
 		try {
 			while (!isShutDown) {
 				const next = state.queuedSubmissions[0];
-				if (isUndefined(next)) {
+				if (isUndefined(next) || pendingAttachmentControllers.has(next.id)) {
 					break;
 				}
 				// The item stops waiting before it runs: it is no longer
@@ -1226,36 +1388,110 @@ export const createSessionEngine = ({
 		}
 	};
 	/**
-	 * Accepts one submission into the Submission Queue: it stores the
-	 * composition's attachments and keeps their blobs alive for as long as the
-	 * item waits, so a slow Agent Turn can neither break nor run it.
+	 * Reserves a queue position immediately, then externalizes attachments
+	 * without allowing later Submissions to pass the pending entry.
 	 */
-	const acceptQueuedSubmission = async (
+	const removeQueuedSubmission = (
+		id: SessionQueuedSubmission["id"]
+	): SessionQueuedSubmission | undefined => {
+		const queued = state.queuedSubmissions.find(
+			(submission) => submission.id === id
+		);
+		if (queued === undefined) {
+			return;
+		}
+		publish({
+			queuedSubmissions: state.queuedSubmissions.filter(
+				(submission) => submission.id !== id
+			),
+		});
+		releaseQueuedAttachments([queued]);
+		return queued;
+	};
+	const failQueuedSubmissionAttachments = (
+		queued: SessionQueuedSubmission
+	): SessionSendOutcome => {
+		if (removeQueuedSubmission(queued.id) === undefined) {
+			return isShutDown
+				? { rejected: true, reason: SHUT_DOWN_SEND_ERROR }
+				: { rejected: false };
+		}
+		const reason = isShutDown ? SHUT_DOWN_SEND_ERROR : QUEUED_ATTACHMENT_ERROR;
+		reportSubmissionFailure(queued.input, queued.messageId, reason);
+		return { rejected: true, reason };
+	};
+	const publishQueuedSubmissionAttachments = (
+		queued: SessionQueuedSubmission,
+		controller: AbortController,
+		originalAttachmentIds: readonly string[],
+		files: SessionFilePart[]
+	): SessionSendOutcome => {
+		const input: SessionQueuedSendInput = {
+			...queued.input,
+			composition: { ...queued.input.composition, files },
+			files,
+		};
+		const storedAttachmentIds = queuedAttachmentIds(input);
+		const newAttachmentIds = subtractAttachmentIds(
+			storedAttachmentIds,
+			originalAttachmentIds
+		);
+		const releasedAttachmentIds = subtractAttachmentIds(
+			originalAttachmentIds,
+			storedAttachmentIds
+		);
+		const stillQueued = state.queuedSubmissions.some(
+			(submission) => submission.id === queued.id
+		);
+		if (isShutDown || controller.signal.aborted || !stillQueued) {
+			if (newAttachmentIds.length > 0) {
+				ports.attachments.release(newAttachmentIds);
+			}
+			return isShutDown
+				? { rejected: true, reason: SHUT_DOWN_SEND_ERROR }
+				: { rejected: false };
+		}
+		if (newAttachmentIds.length > 0) {
+			ports.attachments.retain(newAttachmentIds);
+		}
+		if (releasedAttachmentIds.length > 0) {
+			ports.attachments.release(releasedAttachmentIds);
+		}
+		const updated: SessionQueuedSubmission = { ...queued, input };
+		publish({
+			queuedSubmissions: state.queuedSubmissions.map((submission) =>
+				submission.id === queued.id ? updated : submission
+			),
+		});
+		return { rejected: false };
+	};
+	const finishQueuedSubmissionAttachments = async (
+		queued: SessionQueuedSubmission,
+		controller: AbortController,
+		originalAttachmentIds: readonly string[]
+	): Promise<SessionSendOutcome> => {
+		try {
+			const files = await storeCompositionFiles(
+				queued.input.composition.files,
+				controller.signal
+			);
+			return publishQueuedSubmissionAttachments(
+				queued,
+				controller,
+				originalAttachmentIds,
+				files
+			);
+		} catch {
+			return failQueuedSubmissionAttachments(queued);
+		}
+	};
+	const acceptQueuedSubmission = (
 		input: SessionSendInput
 	): Promise<SessionSendOutcome> => {
 		const composition: SessionSubmissionComposition = input.composition ?? {
 			files: input.files ?? [],
 			text: input.userText ?? "",
 		};
-		const attachmentController = new AbortController();
-		pendingAttachmentControllers.add(attachmentController);
-		let files: SessionFilePart[];
-		try {
-			files = await storeCompositionFiles(
-				composition.files,
-				attachmentController.signal
-			);
-		} catch {
-			return {
-				rejected: true,
-				reason: isShutDown ? SHUT_DOWN_SEND_ERROR : QUEUED_ATTACHMENT_ERROR,
-			};
-		} finally {
-			pendingAttachmentControllers.delete(attachmentController);
-		}
-		if (isShutDown) {
-			return { rejected: true, reason: SHUT_DOWN_SEND_ERROR };
-		}
 		const submissionId =
 			input.submissionId ?? toSubmissionId(`submission-${crypto.randomUUID()}`);
 		const messageId =
@@ -1263,11 +1499,10 @@ export const createSessionEngine = ({
 			input.reservedMessageId ??
 			toSessionMessageId(`msg-${crypto.randomUUID()}`);
 		const turnId = input.turnId ?? createAgentTurnId();
-		const stored: SessionSubmissionComposition = { ...composition, files };
 		const queuedInput: SessionQueuedSendInput = {
 			...input,
-			composition: stored,
-			files,
+			composition,
+			files: composition.files,
 			reservedMessageId: messageId,
 			submissionId,
 			turnId,
@@ -1278,12 +1513,22 @@ export const createSessionEngine = ({
 			messageId,
 			submissionId,
 		};
+		const originalAttachmentIds = queuedAttachmentIds(queuedInput);
+		if (originalAttachmentIds.length > 0) {
+			ports.attachments.retain(originalAttachmentIds);
+		}
+		const attachmentController = new AbortController();
+		pendingAttachmentControllers.set(queued.id, attachmentController);
 		publish({ queuedSubmissions: [...state.queuedSubmissions, queued] });
-		ports.attachments.retain(queuedAttachmentIds(queuedInput));
-		// Storing the composition can outlast the work that was in flight, so
-		// the queue is walked again here; a busy lane makes that a no-op.
-		trackBackgroundTask(drainQueuedSubmissions());
-		return { rejected: false };
+		const pending = finishQueuedSubmissionAttachments(
+			queued,
+			attachmentController,
+			originalAttachmentIds
+		);
+		return pending.finally(() => {
+			pendingAttachmentControllers.delete(queued.id);
+			trackBackgroundTask(drainQueuedSubmissions());
+		});
 	};
 	/**
 	 * Accepts one submission into the Steering Lane of the running Agent Turn:
@@ -1293,7 +1538,7 @@ export const createSessionEngine = ({
 	 */
 	const acceptSteeringMessage = (
 		input: SessionSendInput
-	): SessionSendOutcome => {
+	): SessionSteeringAdmission => {
 		const composition: SessionSubmissionComposition = input.composition ?? {
 			files: [],
 			text: input.userText ?? "",
@@ -1337,7 +1582,13 @@ export const createSessionEngine = ({
 			},
 		};
 		publish({ steeringMessages: [...state.steeringMessages, steering] });
-		return { rejected: false };
+		return {
+			rejected: false,
+			disposition: "steering",
+			messageId,
+			submissionId,
+			turnId,
+		};
 	};
 	const waitingMessageMatches = (
 		ids: readonly SessionWaitingMessageId[] | undefined,
@@ -1390,6 +1641,9 @@ export const createSessionEngine = ({
 				(message) => !steering.includes(message)
 			),
 		});
+		for (const submission of queued) {
+			pendingAttachmentControllers.get(submission.id)?.abort();
+		}
 		releaseQueuedAttachments(queued);
 		for (const message of [...steering, ...queued]) {
 			emitRecalledSubmission(message);
@@ -1407,6 +1661,8 @@ export const createSessionEngine = ({
 		state.turnActive ||
 		state.isCompacting ||
 		compactionCommand !== undefined ||
+		activeOverflowRecoveries > 0 ||
+		pendingAttachmentControllers.size > 0 ||
 		state.queuedSubmissions.length > 0;
 	const prepareAdmission = (
 		input: SessionSendInput,
@@ -1427,9 +1683,11 @@ export const createSessionEngine = ({
 		return {
 			admittedInput: {
 				...input,
-				composition: { ...composition, files: [] },
+				composition,
+				files: composition.files,
 				submissionId,
 				turnId,
+				userText: input.userText ?? composition.text,
 				...omitUndefined({
 					reservedMessageId:
 						input.messageId === undefined ? messageId : undefined,
@@ -1440,7 +1698,9 @@ export const createSessionEngine = ({
 			turnId,
 		};
 	};
-	const admit = (input: SessionSendInput): SessionSubmissionAdmission => {
+	const prompt = async (
+		input: SessionSendInput
+	): Promise<SessionSubmissionAdmission> => {
 		if (isShutDown) {
 			return { rejected: true, reason: SHUT_DOWN_SEND_ERROR };
 		}
@@ -1448,51 +1708,19 @@ export const createSessionEngine = ({
 			files: input.files ?? [],
 			text: input.userText ?? "",
 		};
-		if (composition.files.length > 0 || (input.files ?? []).length > 0) {
-			return { rejected: true, reason: "Submissions accept text only." };
-		}
 		const { admittedInput, messageId, submissionId, turnId } = prepareAdmission(
 			input,
 			composition
 		);
-		if (acceptsSteeringMessages(state)) {
-			const activeTurnId =
-				primaryEntry(state.executions)?.turnId ??
-				activeAdmissionTurnId ??
-				turnId;
-			const outcome = acceptSteeringMessage({
-				...admittedInput,
-				turnId: activeTurnId,
-			});
-			return outcome.rejected
-				? outcome
-				: {
-						rejected: false,
-						disposition: "steering",
-						messageId,
-						submissionId,
-						turnId: activeTurnId,
-					};
-		}
 		if (queuesSubmission()) {
-			const queuedInput: SessionQueuedSendInput = {
-				...admittedInput,
-				composition: { ...composition, files: [] },
-				files: [],
-			};
-			const queued: SessionQueuedSubmission = {
-				id: toQueuedSubmissionId(crypto.randomUUID()),
-				input: queuedInput,
-				messageId,
-				submissionId,
-			};
-			publish({ queuedSubmissions: [...state.queuedSubmissions, queued] });
-			trackBackgroundTask(drainQueuedSubmissions());
+			const queued = acceptQueuedSubmission(admittedInput);
+			trackBackgroundTask(queued);
 			return {
 				rejected: false,
 				disposition: "queued",
 				messageId,
 				submissionId,
+				turnId,
 			};
 		}
 		void runSubmission(admittedInput).catch(() => undefined);
@@ -1504,16 +1732,38 @@ export const createSessionEngine = ({
 			turnId,
 		};
 	};
+	const steer = (text: string): SessionSteeringAdmission => {
+		if (isShutDown) {
+			return { rejected: true, reason: SHUT_DOWN_SEND_ERROR };
+		}
+		const execution = primaryEntry(state.executions);
+		if (!acceptsSteeringMessages(state) || execution === undefined) {
+			return { rejected: true, reason: STEERING_INACTIVE_ERROR };
+		}
+		return acceptSteeringMessage({
+			agent: execution.agent,
+			composition: { files: [], text },
+			model: execution.model,
+			sessionModel: execution.sessionModel,
+			userText: text,
+			turnId: execution.turnId,
+			...omitUndefined({
+				sessionVariant: execution.sessionVariant,
+				variant: execution.variant,
+			}),
+		});
+	};
 	/**
-	 * The Engine's one send entry point. A submission that arrives while the
-	 * session is running joins the Steering Lane or Submission Queue.
+	 * The Agent Session's compatibility `send()` entry point. A submission that
+	 * arrives while it is running joins the Steering Lane or Submission Queue.
 	 */
 	const send = async (input: SessionSendInput): Promise<SessionSendOutcome> => {
 		if (isShutDown) {
 			return { rejected: true, reason: SHUT_DOWN_SEND_ERROR };
 		}
 		if (acceptsSteeringMessages(state)) {
-			return acceptSteeringMessage(input);
+			const outcome = acceptSteeringMessage(input);
+			return outcome.rejected ? outcome : { rejected: false };
 		}
 		if (queuesSubmission()) {
 			const queued = acceptQueuedSubmission(input);
@@ -1521,6 +1771,95 @@ export const createSessionEngine = ({
 			return await queued;
 		}
 		return await runSubmission(input);
+	};
+	const createContextContinuationInput = (
+		anchor: SessionMessage,
+		lastMessage: SessionMessage
+	):
+		| {
+				kind: "ready";
+				input: SessionSendInput;
+				turnId: AgentTurnId;
+		  }
+		| { kind: "rejected"; reason: string } => {
+		const agent =
+			lastMessage.metadata?.agent ?? anchor.metadata?.agent ?? initialAgent;
+		if (isUndefined(agent)) {
+			return {
+				kind: "rejected",
+				reason: "The Agent selection is unavailable.",
+			};
+		}
+		const model =
+			lastMessage.metadata?.model ??
+			anchor.metadata?.model ??
+			initialSessionModel;
+		if (isUndefined(model)) {
+			return {
+				kind: "rejected",
+				reason: "The Model selection is unavailable.",
+			};
+		}
+		const turnId = createAgentTurnId();
+		const input: SessionSendInput = {
+			agent,
+			messageId: anchor.id,
+			model,
+			sessionModel: initialSessionModel ?? anchor.metadata?.model ?? model,
+			turnId,
+			...omitUndefined({
+				sessionVariant: initialSessionVariant ?? anchor.metadata?.variant,
+				variant:
+					lastMessage.metadata?.variant ??
+					anchor.metadata?.variant ??
+					initialSessionVariant,
+			}),
+		};
+		return { kind: "ready", input, turnId };
+	};
+	const continueSession = (): SessionContinuationOutcome => {
+		if (isShutDown) {
+			return { kind: "rejected", reason: SHUT_DOWN_SEND_ERROR };
+		}
+		if (
+			laneRuns > 0 ||
+			draining ||
+			state.turnActive ||
+			state.isCompacting ||
+			compactionCommand !== undefined ||
+			activeOverflowRecoveries > 0 ||
+			pendingAttachmentControllers.size > 0
+		) {
+			return {
+				kind: "rejected",
+				reason: "The Agent Session is busy.",
+			};
+		}
+		fallbackSteeringMessages();
+		const waiting = state.queuedSubmissions[0];
+		if (waiting !== undefined) {
+			trackBackgroundTask(drainQueuedSubmissions());
+			return {
+				kind: "started-submission",
+				messageId: waiting.messageId,
+				submissionId: waiting.submissionId,
+				...omitUndefined({ turnId: waiting.input.turnId }),
+			};
+		}
+		const messages = findContinuationContextMessages(state.context);
+		if (messages.kind === "rejected") {
+			return messages;
+		}
+		const continuation = createContextContinuationInput(
+			messages.anchor,
+			messages.lastMessage
+		);
+		if (continuation.kind === "rejected") {
+			return continuation;
+		}
+		contextContinuationInputs.add(continuation.input);
+		void runSubmission(continuation.input).catch(() => undefined);
+		return { kind: "resumed", turnId: continuation.turnId };
 	};
 	const interruptAll = (): SessionInterruptResult => {
 		const approvalsSettled = state.approvals.filter(
@@ -1571,7 +1910,7 @@ export const createSessionEngine = ({
 		}
 		isShutDown = true;
 		shutdownController.abort();
-		for (const controller of pendingAttachmentControllers) {
+		for (const controller of pendingAttachmentControllers.values()) {
 			controller.abort();
 		}
 		// Whatever was waiting is dropped with the session: its attachment
@@ -1604,7 +1943,7 @@ export const createSessionEngine = ({
 	};
 
 	return {
-		admit,
+		continue: continueSession,
 		abortApprovalTurn: (toolCallId) => {
 			closeApprovals();
 			interruptActiveWork(toolCallId);
@@ -1646,12 +1985,14 @@ export const createSessionEngine = ({
 		respondToApproval: settleApproval,
 		setExecutionViewState,
 		settleCompaction,
+		prompt,
 		onSubmissionEvent: (listener) => {
 			submissionListeners.add(listener);
 			return () => submissionListeners.delete(listener);
 		},
 		shutdown,
 		send,
+		steer,
 		subscribe: (listener) => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);

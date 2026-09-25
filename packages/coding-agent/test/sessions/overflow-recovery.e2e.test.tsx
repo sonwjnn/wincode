@@ -58,9 +58,9 @@ const CONFIG_DOCUMENT = `{
 let turnCount = 0;
 
 /**
- * The first turn is refused by the provider as a context overflow; the turn the
- * recovery replays answers normally, so the journey proves the replay ran on
- * the compacted Session Context.
+ * The first turn is refused by the provider as a context overflow; continuation
+ * after compaction answers normally, proving the Agent Runtime received the
+ * updated Session Context.
  */
 const overflowThenAnswer: FakeModelStepScript = async function* (
 	request: ModelStepRequest,
@@ -111,7 +111,7 @@ const waitForChatRequestCount = async (count: number): Promise<void> => {
 const chatRequests = () =>
 	recorder.requests.filter((request) => request.kind === "chat");
 
-test("compacts and replays the prompt after a provider context overflow", async () => {
+test("continues the compacted Session Context after a provider context overflow", async () => {
 	let setup: TestRendererSetup | undefined;
 	try {
 		const rendered = await renderSession({
@@ -133,8 +133,8 @@ test("compacts and replays the prompt after a provider context overflow", async 
 		await activeSetup.flush();
 		activeSetup.mockInput.pressEnter();
 
-		// The refused turn proposes the recovery, which compacts the replay-safe
-		// history before it replays the prompt.
+		// The refused turn proposes recovery, which compacts eligible history
+		// before continuing the existing Session Context.
 		await waitForSessionCondition(
 			async () => (await store.getCompactions(sessionId)).length > 0
 		);
@@ -147,8 +147,8 @@ test("compacts and replays the prompt after a provider context overflow", async 
 		expect(entry.trigger).toBe("overflow");
 		expect(entry.summary.text).toBe(recorder.summaryText);
 
-		// The replay runs outside the renderer scheduler, so poll its recorder
-		// signal before waiting for the response frame.
+		// Context continuation runs outside the renderer scheduler, so poll its
+		// recorder signal before waiting for the response frame.
 		await waitForChatRequestCount(2);
 		await settleSessionUi(activeSetup);
 		await act(async () => {
@@ -158,20 +158,20 @@ test("compacts and replays the prompt after a provider context overflow", async 
 			);
 		});
 
-		const [refused, replayed] = chatRequests();
-		if (!(refused && replayed)) {
-			throw new Error("The refused and replayed requests were not recorded.");
+		const [refused, continued] = chatRequests();
+		if (!(refused && continued)) {
+			throw new Error("The refused and continued requests were not recorded.");
 		}
 		const refusedText = refused.messages.map(({ text }) => text).join("\n");
-		const replayedText = replayed.messages.map(({ text }) => text).join("\n");
+		const continuedText = continued.messages.map(({ text }) => text).join("\n");
 		expect(refusedText).toContain(PROMPT);
 		expect(refusedText).not.toContain(recorder.summaryText);
-		expect(replayedText).toContain(PROMPT);
-		expect(replayedText).toContain(recorder.summaryText);
-		expect(replayedText).not.toContain("partial output");
+		expect(continuedText).toContain(PROMPT);
+		expect(continuedText).toContain(recorder.summaryText);
+		expect(continuedText).not.toContain("partial output");
 
-		// The recovery compacted once and replayed the prompt once: the prompt
-		// stays one user message, and the overflow attempt is not repeated.
+		// Recovery compacts once and continues once. The prompt still has one
+		// durable user message, and the overflow attempt is not repeated.
 		expect(
 			recorder.requests.filter((request) => request.kind === "summary")
 		).toHaveLength(1);

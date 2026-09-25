@@ -248,7 +248,7 @@ test("keeps the parent's live view while a Subagent streams and ends", async () 
 		// Both Subagent executions stream while the parent is still running, and
 		// each holds its turn open until the journey ends it. The journey proves
 		// the view the user reads; the parent's own Session View State is asserted
-		// at the engine seam.
+		// at the Agent Session seam.
 		await childGate(FIRST_TASK).reached;
 		await childGate(SECOND_TASK).reached;
 		const whileBothStream = await settleUntilStable(activeSetup);

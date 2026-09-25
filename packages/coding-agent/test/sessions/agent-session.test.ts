@@ -15,13 +15,13 @@ import type {
 	AppendSessionCompactionInput,
 	SummaryGenerator,
 } from "@/modules/sessions/compaction/types";
-import { createSessionEngine } from "@/modules/sessions/engine/session-engine";
+import { createAgentSession } from "@/modules/sessions/engine/agent-session";
 import type {
-	SessionEngine,
-	SessionEnginePorts,
+	AgentSession,
+	AgentSessionPorts,
+	SessionOverflowContinuationOutcome,
 	SessionOverflowRecoveryCommand,
 	SessionOverflowRecoveryTarget,
-	SessionOverflowReplayOutcome,
 	SessionSkillCatalog,
 	SessionSubmissionEvent,
 } from "@/modules/sessions/engine/types";
@@ -84,13 +84,13 @@ const createCompactionModule = (summaryGenerator: SummaryGenerator) =>
 		summaryGenerator,
 	});
 
-/** The ports one engine test runs against, unless it overrides them. */
+/** The ports one Agent Session test runs against, unless it overrides them. */
 const createPorts = ({
 	compaction,
 	...overrides
-}: Partial<SessionEnginePorts> & {
-	compaction: SessionEnginePorts["compaction"];
-}): SessionEnginePorts => ({
+}: Partial<AgentSessionPorts> & {
+	compaction: AgentSessionPorts["compaction"];
+}): AgentSessionPorts => ({
 	attachments: {
 		externalize: async (messages) => [...messages],
 		hydrate: async ({ messages }) => [...messages],
@@ -98,6 +98,7 @@ const createPorts = ({
 		retain: () => undefined,
 	},
 	commitRecord: async () => undefined,
+	resolveSubmission: (input) => input,
 	compaction,
 	resolveCompactionSettings: async () =>
 		fromPartial<ResolvedCompactionSettings>({
@@ -125,19 +126,19 @@ const createPorts = ({
 	...overrides,
 });
 
-const createEngine = (
+const createTestAgentSession = (
 	initialTranscript: readonly SessionMessage[],
 	compactionModule = createCompactionModule(async () => ({ text: "summary" })),
-	overrides: Partial<SessionEnginePorts> = {}
-): SessionEngine =>
-	createSessionEngine({
+	overrides: Partial<AgentSessionPorts> = {}
+): AgentSession =>
+	createAgentSession({
 		initialTranscript,
 		ports: createPorts({ compaction: compactionModule, ...overrides }),
-		sessionId: sessionId("session-engine"),
+		sessionId: sessionId("agent-session-test"),
 	});
 
 test("merges a message into the Session Transcript by id", () => {
-	const engine = createEngine([message("u1", "first request")]);
+	const engine = createTestAgentSession([message("u1", "first request")]);
 
 	const merged = engine.mergeTranscript([
 		message("a1", "answer"),
@@ -152,7 +153,7 @@ test("merges a message into the Session Transcript by id", () => {
 });
 
 test("keeps a compaction summary out of the Session Transcript", () => {
-	const engine = createEngine([message("u1")]);
+	const engine = createTestAgentSession([message("u1")]);
 
 	engine.mergeTranscript([message("compaction:entry-1", "summary")]);
 
@@ -162,7 +163,7 @@ test("keeps a compaction summary out of the Session Transcript", () => {
 });
 
 test("keeps the Session Context independent from the Session Transcript", () => {
-	const engine = createEngine([message("u1"), message("a1")]);
+	const engine = createTestAgentSession([message("u1"), message("a1")]);
 
 	engine.applyContext([message("compaction:entry-1")]);
 	engine.mergeTranscript([message("a2")]);
@@ -178,7 +179,7 @@ test("keeps the Session Context independent from the Session Transcript", () => 
 });
 
 test("publishes a new Session Snapshot only when a fact changes", () => {
-	const engine = createEngine([]);
+	const engine = createTestAgentSession([]);
 	const initial = engine.getSnapshot();
 	let notifications = 0;
 	const unsubscribe = engine.subscribe(() => {
@@ -200,7 +201,7 @@ test("publishes a new Session Snapshot only when a fact changes", () => {
 });
 
 test("isolates a failing observer from session state and other observers", () => {
-	const engine = createEngine([]);
+	const engine = createTestAgentSession([]);
 	let observed = 0;
 	engine.subscribe(() => {
 		throw new Error("observer failed");
@@ -217,7 +218,7 @@ test("isolates a failing observer from session state and other observers", () =>
 
 test("runs a compaction command and publishes what it produced", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator)
 	);
@@ -241,7 +242,7 @@ test("runs a compaction command and publishes what it produced", async () => {
 
 test("joins a compaction command in flight before a caller reads the context", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator)
 	);
@@ -265,7 +266,7 @@ test("joins a compaction command in flight before a caller reads the context", a
 
 test("settles a joined command only after the swap it joins has landed", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator)
 	);
@@ -289,7 +290,7 @@ test("settles a joined command only after the swap it joins has landed", async (
 
 test("refuses another intent's compaction without disturbing the running command", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator)
 	);
@@ -317,7 +318,7 @@ test("refuses another intent's compaction without disturbing the running command
 });
 
 test("cancels the compaction command in flight without publishing its result", async () => {
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule((input) => {
 			const { promise, reject } = Promise.withResolvers<{ text: string }>();
@@ -347,7 +348,7 @@ test("cancels the compaction command in flight without publishing its result", a
 });
 
 test("interruptAll settles idle approvals and reports no stopped work", async () => {
-	const engine = createEngine([]);
+	const engine = createTestAgentSession([]);
 	const approval = engine.requestApproval(
 		fromPartial<ToolApprovalRequest>({
 			toolCallId: toolCallId("idle-approval"),
@@ -363,7 +364,7 @@ test("interruptAll settles idle approvals and reports no stopped work", async ()
 });
 
 test("interruptAll aborts compaction and recalls queued submissions", async () => {
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule((input) => {
 			const { promise, reject } = Promise.withResolvers<{ text: string }>();
@@ -392,7 +393,7 @@ test("interruptAll aborts compaction and recalls queued submissions", async () =
 });
 
 test("merges a command's own transcript update before compacting", async () => {
-	const engine = createEngine(compactionHistory());
+	const engine = createTestAgentSession(compactionHistory());
 
 	const result = await engine.compact({
 		model,
@@ -413,7 +414,7 @@ test("merges a command's own transcript update before compacting", async () => {
 });
 
 test("compacts a command's own source without touching the Transcript", async () => {
-	const engine = createEngine([message("a9", "unrelated")]);
+	const engine = createTestAgentSession([message("a9", "unrelated")]);
 
 	const result = await engine.compact({
 		model,
@@ -461,10 +462,10 @@ const executionInput = (
 
 const beginExecutions = (): {
 	child: AgentTurnId;
-	engine: SessionEngine;
+	engine: AgentSession;
 	parent: AgentTurnId;
 } => {
-	const engine = createEngine([]);
+	const engine = createTestAgentSession([]);
 	const parent = agentTurnId("turn-parent");
 	const child = agentTurnId("turn-child");
 	engine.beginExecution(executionInput(parent, 1));
@@ -510,7 +511,7 @@ test("returns the parent's live view when a delegated execution ends", () => {
 });
 
 test("exposes the newest live execution's view and drops it when it ends", () => {
-	const engine = createEngine([]);
+	const engine = createTestAgentSession([]);
 	const root = agentTurnId("turn-root");
 	const first = agentTurnId("turn-first");
 	const second = agentTurnId("turn-second");
@@ -562,7 +563,7 @@ const approvalRequest = (callId?: string): ToolApprovalRequest => ({
 });
 
 test("publishes a pending approval and settles it exactly once", async () => {
-	const engine = createEngine([]);
+	const engine = createTestAgentSession([]);
 	const settled = engine.requestApproval(approvalRequest("call-1"));
 
 	const pending = engine.getSnapshot().approvals;
@@ -582,7 +583,7 @@ test("publishes a pending approval and settles it exactly once", async () => {
 		remember: false,
 	});
 
-	// A second trigger cannot settle a request the Engine already settled.
+	// A second trigger cannot settle a request the Agent Session already settled.
 	engine.respondToApproval("call-1", { decision: "abort" });
 	await expect(settled).resolves.toEqual({
 		decision: "allow",
@@ -594,7 +595,7 @@ test("publishes a pending approval and settles it exactly once", async () => {
 	});
 });
 test("keeps a safety approval pending when persistence is requested", async () => {
-	const engine = createEngine([]);
+	const engine = createTestAgentSession([]);
 	const settled = engine.requestApproval({
 		...approvalRequest("call-safety"),
 		safety: true,
@@ -622,7 +623,9 @@ test("keeps a safety approval pending when persistence is requested", async () =
 });
 test("aborts the active turn through an approval response", async () => {
 	const streaming = createStreamingRuntime();
-	const engine = createEngine([], undefined, { runtime: streaming.runtime });
+	const engine = createTestAgentSession([], undefined, {
+		runtime: streaming.runtime,
+	});
 	const send = engine.send(sendInput());
 
 	await streaming.live;
@@ -643,7 +646,7 @@ test("aborts the active turn through an approval response", async () => {
 });
 
 test("gives a Tool-Call-less approval its own id and settles it with every sibling", async () => {
-	const engine = createEngine([]);
+	const engine = createTestAgentSession([]);
 	const first = engine.requestApproval(approvalRequest());
 	const second = engine.requestApproval(approvalRequest());
 	const [firstEntry, secondEntry] = engine.getSnapshot().approvals;
@@ -658,7 +661,7 @@ test("gives a Tool-Call-less approval its own id and settles it with every sibli
 });
 
 test("settles every pending approval when approvals close", async () => {
-	const engine = createEngine([]);
+	const engine = createTestAgentSession([]);
 	const first = engine.requestApproval(approvalRequest("call-1"));
 	const second = engine.requestApproval(approvalRequest("call-2"));
 
@@ -680,7 +683,7 @@ test("settles every pending approval when approvals close", async () => {
 });
 
 test("settles a pending approval when the session shuts down", async () => {
-	const engine = createEngine([]);
+	const engine = createTestAgentSession([]);
 	const settled = engine.requestApproval(approvalRequest("call-1"));
 
 	await engine.shutdown();
@@ -692,7 +695,7 @@ test("settles a pending approval when the session shuts down", async () => {
 });
 
 test("settles an approval that arrives after the session shut down", async () => {
-	const engine = createEngine([]);
+	const engine = createTestAgentSession([]);
 	await engine.shutdown();
 
 	await expect(
@@ -702,7 +705,7 @@ test("settles an approval that arrives after the session shut down", async () =>
 });
 
 test("refuses a second pending request that reuses a Tool Call Identifier", async () => {
-	const engine = createEngine([]);
+	const engine = createTestAgentSession([]);
 	const first = engine.requestApproval(approvalRequest("call-1"));
 	const duplicate = engine.requestApproval(approvalRequest("call-1"));
 
@@ -718,7 +721,7 @@ test("refuses a second pending request that reuses a Tool Call Identifier", asyn
 });
 
 test("keeps the first settlement when an abort and a close race", async () => {
-	const engine = createEngine([]);
+	const engine = createTestAgentSession([]);
 	const aborted = engine.requestApproval(approvalRequest("call-1"));
 	const sibling = engine.requestApproval(approvalRequest("call-2"));
 
@@ -738,24 +741,24 @@ const recoveryTarget: SessionOverflowRecoveryTarget = { model };
 const recoveryCommand = ({
 	error = overflowFailure(),
 	messageId = "u2",
-	replay = async () => ({ kind: "started" }) as const,
+	continueContext = async () => ({ kind: "started" }) as const,
 	target = recoveryTarget as SessionOverflowRecoveryTarget | null,
 	turnId = "turn-overflow",
 }: {
 	error?: unknown;
 	messageId?: string;
-	replay?: () => Promise<SessionOverflowReplayOutcome>;
+	continueContext?: () => Promise<SessionOverflowContinuationOutcome>;
 	target?: SessionOverflowRecoveryTarget | null;
 	turnId?: string;
 } = {}): SessionOverflowRecoveryCommand => ({
 	error,
 	originalMessageId: sessionMessageId(messageId),
-	replay,
+	continueContext,
 	resolveTarget: async () => target,
 	turnId: agentTurnId(turnId),
 });
 test("refuses compaction and overflow recovery after shutdown", async () => {
-	const engine = createEngine([]);
+	const engine = createTestAgentSession([]);
 	await engine.shutdown();
 
 	await expect(
@@ -766,21 +769,23 @@ test("refuses compaction and overflow recovery after shutdown", async () => {
 	});
 });
 
-test("recovers a context-overflow failure with one compaction and one replay", async () => {
-	const engine = createEngine(compactionHistory());
-	const replay = mock(async () => ({ kind: "started" }) as const);
+test("recovers a context-overflow failure with one compaction and one continuation", async () => {
+	const engine = createTestAgentSession(compactionHistory());
+	const continueContext = mock(async () => ({ kind: "started" }) as const);
 
-	const outcome = await engine.recoverOverflow(recoveryCommand({ replay }));
+	const outcome = await engine.recoverOverflow(
+		recoveryCommand({ continueContext })
+	);
 
 	expect(outcome).toMatchObject({
 		entry: { trigger: "overflow" },
 		kind: "recovered",
 	});
-	expect(replay).toHaveBeenCalledWith({
+	expect(continueContext).toHaveBeenCalledWith({
 		originalMessageId: sessionMessageId("u2"),
 	});
-	// The compaction the recovery ran is the Engine's own compaction command:
-	// the Session Context swap and the entry land exactly as for any other one.
+	// The compaction the recovery ran is the Agent Session's own command:
+	// the Session Context swap and entry land as they do for any other one.
 	const snapshot = engine.getSnapshot();
 	expect(snapshot.compactions.map(({ trigger }) => trigger)).toEqual([
 		"overflow",
@@ -792,8 +797,38 @@ test("recovers a context-overflow failure with one compaction and one replay", a
 	expect(snapshot.compactionError).toBeNull();
 });
 
+test("refuses overflow recovery after completed Tool Calls", async () => {
+	const originalMessageId = sessionMessageId("u2");
+	const completedToolCall = fromPartial<SessionMessage>({
+		id: sessionMessageId("a-tool"),
+		metadata: { sourceUserMessageId: originalMessageId },
+		parts: [
+			{
+				output: { content: "completed side effect" },
+				state: "output-available",
+				toolCallId: toolCallId("call-completed"),
+				type: "tool-read",
+			},
+		],
+		role: "assistant",
+	});
+	const engine = createTestAgentSession([
+		...compactionHistory().slice(0, 3),
+		completedToolCall,
+	]);
+	const continueContext = mock(async () => ({ kind: "started" }) as const);
+
+	const outcome = await engine.recoverOverflow(
+		recoveryCommand({ continueContext })
+	);
+
+	expect(outcome).toEqual({ kind: "ineligible" });
+	expect(continueContext).not.toHaveBeenCalled();
+	expect(engine.getSnapshot().compactions).toHaveLength(0);
+});
+
 test("recovers a failure the provider reported as an Operational Failure", async () => {
-	const engine = createEngine(compactionHistory());
+	const engine = createTestAgentSession(compactionHistory());
 
 	const outcome = await engine.recoverOverflow(
 		recoveryCommand({
@@ -808,31 +843,31 @@ test("recovers a failure the provider reported as an Operational Failure", async
 	expect(outcome).toMatchObject({ kind: "recovered" });
 });
 
-test("recovers a message once, even when the replayed turn fails the same way", async () => {
-	const engine = createEngine(compactionHistory());
-	const replay = mock(async () => ({ kind: "started" }) as const);
+test("recovers a message once, even when its context continuation fails the same way", async () => {
+	const engine = createTestAgentSession(compactionHistory());
+	const continueContext = mock(async () => ({ kind: "started" }) as const);
 	const recovered = await engine.recoverOverflow(
-		recoveryCommand({ replay, turnId: "turn-1" })
+		recoveryCommand({ continueContext, turnId: "turn-1" })
 	);
 	expect(recovered).toMatchObject({ kind: "recovered" });
 
-	// The replayed Agent Turn answers the same user message, and the provider
+	// The continued Agent Turn answers the same user message, and the provider
 	// refuses it again: that is still this message's one attempt, so no send —
-	// the replay's own or a user's — can start another recovery of it.
+	// this continuation or a user's — can start another recovery of it.
 	engine.beginExecution(executionInput(agentTurnId("turn-2"), 2));
 	const exhausted = engine.recoverOverflow(
-		recoveryCommand({ replay, turnId: "turn-2" })
+		recoveryCommand({ continueContext, turnId: "turn-2" })
 	);
 	engine.endExecution(agentTurnId("turn-2"));
 
 	expect(await exhausted).toEqual({ kind: "exhausted" });
-	expect(replay).toHaveBeenCalledTimes(1);
+	expect(continueContext).toHaveBeenCalledTimes(1);
 	expect(engine.getSnapshot().compactions).toHaveLength(1);
 });
 
 test("records the attempt when the recovery starts, not when it finishes", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator)
 	);
@@ -855,12 +890,12 @@ test("records the attempt when the recovery starts, not when it finishes", async
 	await expect(recovery).resolves.toMatchObject({ kind: "recovered" });
 });
 
-test("does not replay overflow after interruption before recovery compaction", async () => {
+test("does not continue overflow recovery after interruption before compaction", async () => {
 	const targetReady = Promise.withResolvers<void>();
-	const replay = mock(async () => ({ kind: "started" }) as const);
-	const engine = createEngine(compactionHistory());
+	const continueContext = mock(async () => ({ kind: "started" }) as const);
+	const engine = createTestAgentSession(compactionHistory());
 	const recovery = engine.recoverOverflow({
-		...recoveryCommand({ replay, turnId: "turn-interrupted" }),
+		...recoveryCommand({ continueContext, turnId: "turn-interrupted" }),
 		resolveTarget: async () => {
 			await targetReady.promise;
 			return recoveryTarget;
@@ -874,18 +909,18 @@ test("does not replay overflow after interruption before recovery compaction", a
 	targetReady.resolve();
 
 	await expect(recovery).resolves.toEqual({ kind: "ineligible" });
-	expect(replay).not.toHaveBeenCalled();
+	expect(continueContext).not.toHaveBeenCalled();
 });
 
 test("suppresses overflow cancellation after interrupting recovery compaction", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
-	const replay = mock(async () => ({ kind: "started" }) as const);
-	const engine = createEngine(
+	const continueContext = mock(async () => ({ kind: "started" }) as const);
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator)
 	);
 	const recovery = engine.recoverOverflow(
-		recoveryCommand({ replay, turnId: "turn-compaction" })
+		recoveryCommand({ continueContext, turnId: "turn-compaction" })
 	);
 	while (!engine.getSnapshot().isCompacting) {
 		await Promise.resolve();
@@ -895,100 +930,107 @@ test("suppresses overflow cancellation after interrupting recovery compaction", 
 	release();
 
 	await expect(recovery).resolves.toEqual({ kind: "ineligible" });
-	expect(replay).not.toHaveBeenCalled();
+	expect(continueContext).not.toHaveBeenCalled();
 	expect(engine.getSnapshot().compactionError).toBeNull();
 });
 
 test("ignores a failure that is not a context overflow", async () => {
-	const engine = createEngine(compactionHistory());
-	const replay = mock(async () => ({ kind: "started" }) as const);
+	const engine = createTestAgentSession(compactionHistory());
+	const continueContext = mock(async () => ({ kind: "started" }) as const);
 
 	const outcome = await engine.recoverOverflow(
-		recoveryCommand({ error: new Error("authentication failed"), replay })
+		recoveryCommand({
+			error: new Error("authentication failed"),
+			continueContext,
+		})
 	);
 
 	expect(outcome).toEqual({ kind: "ineligible" });
-	expect(replay).not.toHaveBeenCalled();
+	expect(continueContext).not.toHaveBeenCalled();
 	expect(engine.getSnapshot().compactions).toEqual([]);
 });
 
 test("ignores an overflow for a Model Target without recovery", async () => {
-	const engine = createEngine(compactionHistory());
-	const replay = mock(async () => ({ kind: "started" }) as const);
+	const engine = createTestAgentSession(compactionHistory());
+	const continueContext = mock(async () => ({ kind: "started" }) as const);
 
 	const outcome = await engine.recoverOverflow(
-		recoveryCommand({ replay, target: null })
+		recoveryCommand({ continueContext, target: null })
 	);
 
 	expect(outcome).toEqual({ kind: "ineligible" });
-	expect(replay).not.toHaveBeenCalled();
+	expect(continueContext).not.toHaveBeenCalled();
 	expect(engine.getSnapshot().compactions).toEqual([]);
 
 	// Nothing was tried, so the message keeps its one attempt: an eligible
 	// refusal of the same message still recovers.
 	await expect(
-		engine.recoverOverflow(recoveryCommand({ replay }))
+		engine.recoverOverflow(recoveryCommand({ continueContext }))
 	).resolves.toMatchObject({ kind: "recovered" });
-	expect(replay).toHaveBeenCalledTimes(1);
+	expect(continueContext).toHaveBeenCalledTimes(1);
 });
 
-test("reports a failed compaction without replaying the message", async () => {
-	const engine = createEngine(
+test("does not continue after a failed overflow compaction", async () => {
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(() => Promise.reject(new Error("summary failed")))
 	);
-	const replay = mock(async () => ({ kind: "started" }) as const);
+	const continueContext = mock(async () => ({ kind: "started" }) as const);
 
-	const outcome = await engine.recoverOverflow(recoveryCommand({ replay }));
+	const outcome = await engine.recoverOverflow(
+		recoveryCommand({ continueContext })
+	);
 
 	expect(outcome).toMatchObject({
-		error: { code: "replay-failed" },
+		error: { code: "continuation-failed" },
 		kind: "failed",
 	});
 	expect(outcome.kind === "failed" && outcome.error.message).toContain(
 		"could not compact the session"
 	);
-	expect(replay).not.toHaveBeenCalled();
+	expect(continueContext).not.toHaveBeenCalled();
 	expect(engine.getSnapshot().compactionError?.message).toContain(
 		"summary generation failed"
 	);
 	expect(engine.getSnapshot().compactions).toEqual([]);
 });
 
-test("reports a replay the session refused instead of overlapping it", async () => {
-	const engine = createEngine(compactionHistory());
-	const replay = mock(
+test("reports a refused context continuation instead of overlapping active work", async () => {
+	const engine = createTestAgentSession(compactionHistory());
+	const continueContext = mock(
 		async () =>
 			({
 				kind: "refused",
-				reason: "A session send is already active.",
+				reason: "A Session Command is already active.",
 			}) as const
 	);
 
-	const outcome = await engine.recoverOverflow(recoveryCommand({ replay }));
+	const outcome = await engine.recoverOverflow(
+		recoveryCommand({ continueContext })
+	);
 
 	expect(outcome).toMatchObject({
-		error: { code: "replay-refused" },
+		error: { code: "continuation-refused" },
 		kind: "failed",
 	});
-	expect(replay).toHaveBeenCalledTimes(1);
+	expect(continueContext).toHaveBeenCalledTimes(1);
 	const snapshot = engine.getSnapshot();
 	expect(snapshot.compactionError?.message).toContain(
-		"A session send is already active."
+		"A Session Command is already active."
 	);
-	// Refusing the replay does not undo the compaction the recovery ran.
+	// Refusing continuation does not undo the compaction the recovery ran.
 	expect(snapshot.compactions.map(({ trigger }) => trigger)).toEqual([
 		"overflow",
 	]);
 });
 
-test("replays only after the Agent Turn that proposed the recovery has ended", async () => {
+test("continues only after the Agent Turn that proposed recovery has ended", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator)
 	);
-	const replay = mock(async () => ({ kind: "started" }) as const);
+	const continueContext = mock(async () => ({ kind: "started" }) as const);
 	engine.beginExecution(executionInput(agentTurnId("turn-overflow"), 1));
 	const compactionStarted = new Promise<void>((resolve) => {
 		const unsubscribe = engine.subscribe(() => {
@@ -999,29 +1041,28 @@ test("replays only after the Agent Turn that proposed the recovery has ended", a
 		});
 	});
 
-	const recovery = engine.recoverOverflow(recoveryCommand({ replay }));
+	const recovery = engine.recoverOverflow(recoveryCommand({ continueContext }));
 	await compactionStarted;
 	release();
 	await engine.settleCompaction();
 
-	// The compaction has landed, and the replay still waits for the turn that
-	// proposed the recovery: without that wait it would start here, while the
-	// execution that asked for it is still live.
-	expect(replay).not.toHaveBeenCalled();
+	// Compaction has landed, but continuation waits for the turn that proposed
+	// the recovery: without that wait it would start while that execution is live.
+	expect(continueContext).not.toHaveBeenCalled();
 
 	engine.endExecution(agentTurnId("turn-overflow"));
 
 	await expect(recovery).resolves.toMatchObject({ kind: "recovered" });
-	expect(replay).toHaveBeenCalledTimes(1);
+	expect(continueContext).toHaveBeenCalledTimes(1);
 });
 
-test("does not replay overflow recovery after shutdown", async () => {
+test("does not continue overflow recovery after shutdown", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator)
 	);
-	const replay = mock(async () => ({ kind: "started" }) as const);
+	const continueContext = mock(async () => ({ kind: "started" }) as const);
 	engine.beginExecution(executionInput(agentTurnId("turn-overflow"), 1));
 	const compactionStarted = new Promise<void>((resolve) => {
 		const unsubscribe = engine.subscribe(() => {
@@ -1033,7 +1074,7 @@ test("does not replay overflow recovery after shutdown", async () => {
 	});
 
 	const recovery = engine.recoverOverflow(
-		recoveryCommand({ replay, turnId: "turn-overflow" })
+		recoveryCommand({ continueContext, turnId: "turn-overflow" })
 	);
 	await compactionStarted;
 	release();
@@ -1043,7 +1084,7 @@ test("does not replay overflow recovery after shutdown", async () => {
 
 	await shutdown;
 	await expect(recovery).resolves.toEqual({ kind: "ineligible" });
-	expect(replay).not.toHaveBeenCalled();
+	expect(continueContext).not.toHaveBeenCalled();
 });
 
 /** One submission as a view sends it: a prompt, its selection, its Agent. */
@@ -1104,7 +1145,7 @@ const createQueuedRuntime = ({
 	readonly prompts: string[];
 	/** Lets the oldest started Agent Turn finish. */
 	readonly release: () => void;
-	readonly runtime: SessionEnginePorts["runtime"];
+	readonly runtime: AgentSessionPorts["runtime"];
 	/** Resolves once `count` Agent Turns have started. */
 	readonly started: (count: number) => Promise<void>;
 	/** The Model Target selection each started turn ran with, in start order. */
@@ -1199,7 +1240,9 @@ const createQueuedRuntime = ({
 
 test("keeps admission identities across a Steering delivery lifecycle", async () => {
 	const runtime = createQueuedRuntime({ boundary: true });
-	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+	const engine = createTestAgentSession([], undefined, {
+		runtime: runtime.runtime,
+	});
 	const events: SessionSubmissionEvent[] = [];
 	const delivered = Promise.withResolvers<void>();
 	engine.onSubmissionEvent((event) => {
@@ -1209,13 +1252,13 @@ test("keeps admission identities across a Steering delivery lifecycle", async ()
 		}
 	});
 
-	const started = engine.admit(sendInput({ userText: "one" }));
+	const started = await engine.prompt(sendInput({ userText: "one" }));
 	if (started.rejected) {
 		throw new Error(started.reason);
 	}
 	await runtime.started(1);
 
-	const steering = engine.admit(sendInput({ userText: "correction" }));
+	const steering = engine.steer("correction");
 	if (steering.rejected) {
 		throw new Error(steering.reason);
 	}
@@ -1251,10 +1294,420 @@ test("keeps admission identities across a Steering delivery lifecycle", async ()
 	]);
 });
 
+test("prompt queues a second submission instead of steering a live turn", async () => {
+	const runtime = createQueuedRuntime({ boundary: true });
+	const engine = createTestAgentSession([], undefined, {
+		runtime: runtime.runtime,
+	});
+	const started = await engine.prompt(sendInput({ userText: "first" }));
+	if (started.rejected) {
+		throw new Error(started.reason);
+	}
+	await runtime.started(1);
+
+	const files: SessionFilePart[] = [
+		fromPartial<SessionFilePart>({
+			attachmentId: attachmentId("queued-file"),
+			mediaType: "image/png",
+			type: "file",
+			url: "attachment://queued-file",
+		}),
+	];
+	const composition = compositionOf("second with file", files);
+	const queued = await engine.prompt(
+		sendInput({
+			composition,
+			files,
+			userText: "second with file",
+		})
+	);
+
+	expect(queued).toMatchObject({ rejected: false, disposition: "queued" });
+	expect(engine.getSnapshot().steeringMessages).toEqual([]);
+	expect(engine.getSnapshot().queuedSubmissions[0]?.input.composition).toEqual(
+		composition
+	);
+	expect(engine.continue().kind).toBe("rejected");
+
+	runtime.release();
+	await runtime.started(2);
+	expect(runtime.prompts).toEqual(["first", "second with file"]);
+	runtime.release();
+	await engine.shutdown();
+});
+
+test("admits queued attachment prompts before externalization finishes in FIFO order", async () => {
+	const { release, summaryGenerator } = createHangingSummary();
+	const externalizeStarted = Promise.withResolvers<void>();
+	const allowExternalize = Promise.withResolvers<void>();
+	const runtime = createQueuedRuntime();
+	const engine = createTestAgentSession(
+		compactionHistory(),
+		createCompactionModule(summaryGenerator),
+		{
+			attachments: {
+				externalize: async (messages) => {
+					externalizeStarted.resolve();
+					await allowExternalize.promise;
+					return [...messages];
+				},
+				hydrate: async ({ messages }) => [...messages],
+				release: () => undefined,
+				retain: () => undefined,
+			},
+			runtime: runtime.runtime,
+		}
+	);
+	const files: SessionFilePart[] = [
+		{
+			filename: "clipboard.png",
+			mediaType: "image/png",
+			type: "file",
+			url: "data:image/png;base64,AAAA",
+		},
+	];
+	const compaction = engine.compact({ model, trigger: "manual" });
+	const firstAdmissionPromise = engine.prompt(
+		sendInput({
+			composition: compositionOf("first with file", files),
+			files,
+			userText: "first with file",
+		})
+	);
+	await externalizeStarted.promise;
+	let firstAdmissionResolved = false;
+	void firstAdmissionPromise.then(() => {
+		firstAdmissionResolved = true;
+	});
+	await Promise.resolve();
+	const admittedBeforeExternalization = firstAdmissionResolved;
+	const secondAdmission = await engine.prompt(
+		sendInput({ userText: "second" })
+	);
+	const queuedOrderBeforeExternalization = engine
+		.getSnapshot()
+		.queuedSubmissions.map(({ input }) => input.composition.text);
+
+	allowExternalize.resolve();
+	await firstAdmissionPromise;
+	release();
+	await compaction;
+	await runtime.started(1);
+	const firstStartedPrompt = runtime.prompts[0];
+	runtime.release();
+	await runtime.started(2);
+	const secondStartedPrompt = runtime.prompts[1];
+	runtime.release();
+	await engine.shutdown();
+
+	expect(admittedBeforeExternalization).toBe(true);
+	expect(secondAdmission).toMatchObject({
+		disposition: "queued",
+		rejected: false,
+	});
+	expect(queuedOrderBeforeExternalization).toEqual([
+		"first with file",
+		"second",
+	]);
+	expect(firstStartedPrompt).toBe("first with file");
+	expect(secondStartedPrompt).toBe("second");
+});
+
+test("interruptAll recalls queued attachments before externalization completes", async () => {
+	const externalizeStarted = Promise.withResolvers<void>();
+	const allowExternalize = Promise.withResolvers<void>();
+	let externalizeSignal: AbortSignal | undefined;
+	const engine = createTestAgentSession(
+		compactionHistory(),
+		createCompactionModule((input) => {
+			const { promise, reject } = Promise.withResolvers<{ text: string }>();
+			const cancel = () => reject(new Error("summary cancelled"));
+			if (input.signal?.aborted) {
+				cancel();
+			} else {
+				input.signal?.addEventListener("abort", cancel, { once: true });
+			}
+			return promise;
+		}),
+		{
+			attachments: {
+				externalize: async (messages, signal) => {
+					externalizeSignal = signal;
+					externalizeStarted.resolve();
+					await allowExternalize.promise;
+					return [...messages];
+				},
+				hydrate: async ({ messages }) => [...messages],
+				release: () => undefined,
+				retain: () => undefined,
+			},
+		}
+	);
+	const files: SessionFilePart[] = [
+		{
+			filename: "clipboard.png",
+			mediaType: "image/png",
+			type: "file",
+			url: "data:image/png;base64,AAAA",
+		},
+	];
+	const compaction = engine.compact({ model, trigger: "manual" });
+	const admissionPromise = engine.prompt(
+		sendInput({
+			composition: compositionOf("waiting", files),
+			files,
+			userText: "waiting",
+		})
+	);
+	await externalizeStarted.promise;
+	const interrupted = engine.interruptAll();
+	const externalizationAborted = externalizeSignal?.aborted ?? false;
+	const queueAfterInterrupt = engine.getSnapshot().queuedSubmissions;
+
+	allowExternalize.resolve();
+	const admission = await admissionPromise;
+	await expect(compaction).rejects.toMatchObject({ code: "cancelled" });
+	await engine.shutdown();
+
+	expect(admission).toMatchObject({ disposition: "queued", rejected: false });
+	expect(
+		interrupted.recalled.map(({ input }) => input.composition.text)
+	).toEqual(["waiting"]);
+	expect(externalizationAborted).toBe(true);
+	expect(queueAfterInterrupt).toEqual([]);
+});
+
+test("continue resumes the last user context without appending another prompt", async () => {
+	const runtime = createQueuedRuntime();
+	const refreshedModel: ChatModelSelection = {
+		modelId: modelId("gpt-5.6-luna-pro"),
+		providerId: "openai",
+	};
+	const stored = fromPartial<SessionMessage>({
+		id: sessionMessageId("u-continue"),
+		metadata: { agent: agentId("build"), model },
+		parts: [{ text: "continue me", type: "text" }],
+		role: "user",
+	});
+	const resolvedInputs: SessionSendInput[] = [];
+	const engine = createTestAgentSession([stored], undefined, {
+		resolveSubmission: (input) => {
+			resolvedInputs.push(input);
+			return {
+				...input,
+				model: refreshedModel,
+				resolvedAgent: sendInput().resolvedAgent,
+			};
+		},
+		runtime: runtime.runtime,
+	});
+
+	const outcome = engine.continue();
+	expect(outcome.kind).toBe("resumed");
+	await runtime.started(1);
+
+	expect(runtime.prompts).toEqual(["continue me"]);
+	expect(runtime.targets).toEqual([
+		{ model: refreshedModel, variant: undefined },
+	]);
+	expect(resolvedInputs).toHaveLength(1);
+	expect(
+		engine.getSnapshot().context.filter(({ role }) => role === "user")
+	).toEqual([stored]);
+	runtime.release();
+	await engine.shutdown();
+	expect(
+		engine.getSnapshot().context.filter(({ role }) => role === "user")
+	).toEqual([stored]);
+});
+
+test("continue retains completed Tool Calls as context without rerunning them", async () => {
+	const user = fromPartial<SessionMessage>({
+		id: sessionMessageId("u-tool-context"),
+		metadata: { agent: agentId("build"), model },
+		parts: [{ text: "inspect this", type: "text" }],
+		role: "user",
+	});
+	const toolMessage = fromPartial<SessionMessage>({
+		id: sessionMessageId("a-tool-context"),
+		metadata: {
+			agent: agentId("build"),
+			model,
+			sourceUserMessageId: user.id,
+		},
+		parts: [
+			{
+				input: { path: "file.txt" },
+				output: { text: "contents" },
+				state: "output-available",
+				toolCallId: toolCallId("call-complete"),
+				type: "tool-read",
+			},
+		],
+		role: "assistant",
+	});
+	const messagesSeen: SessionMessage[][] = [];
+	const completed = Promise.withResolvers<void>();
+	const answer = answeringRuntime();
+	const engine = createTestAgentSession([user, toolMessage], undefined, {
+		resolveSubmission: (input) => ({
+			...input,
+			resolvedAgent: sendInput().resolvedAgent,
+		}),
+		runtime: {
+			requestOverheadTokens: answer.requestOverheadTokens,
+			run: async (request) => {
+				messagesSeen.push([...request.messages]);
+				const outcome = await answer.run(request);
+				completed.resolve();
+				return outcome;
+			},
+		},
+	});
+
+	expect(engine.continue().kind).toBe("resumed");
+	await completed.promise;
+	await engine.shutdown();
+
+	expect(messagesSeen).toEqual([[user, toolMessage]]);
+	expect(
+		engine.getSnapshot().context.filter(({ role }) => role === "user")
+	).toEqual([user]);
+	expect(
+		engine
+			.getSnapshot()
+			.context.flatMap(({ parts }) =>
+				parts.filter(
+					(part) =>
+						"type" in part &&
+						part.type === "tool-read" &&
+						"toolCallId" in part &&
+						part.toolCallId === toolCallId("call-complete")
+				)
+			)
+	).toHaveLength(1);
+});
+test("continue resumes retained denied Tool Calls without rerunning them", async () => {
+	const user = fromPartial<SessionMessage>({
+		id: sessionMessageId("u-denied-context"),
+		metadata: { agent: agentId("build"), model },
+		parts: [{ text: "run a protected tool", type: "text" }],
+		role: "user",
+	});
+	const toolMessage = fromPartial<SessionMessage>({
+		id: sessionMessageId("a-denied-context"),
+		metadata: {
+			agent: agentId("build"),
+			model,
+			sourceUserMessageId: user.id,
+		},
+		parts: [
+			{
+				approval: { approved: false },
+				input: { path: "secret.txt" },
+				state: "output-denied",
+				toolCallId: toolCallId("call-denied"),
+				type: "tool-read",
+			},
+		],
+		role: "assistant",
+	});
+	const messagesSeen: SessionMessage[][] = [];
+	const completed = Promise.withResolvers<void>();
+	const answer = answeringRuntime();
+	const engine = createTestAgentSession([user, toolMessage], undefined, {
+		resolveSubmission: (input) => ({
+			...input,
+			resolvedAgent: sendInput().resolvedAgent,
+		}),
+		runtime: {
+			requestOverheadTokens: answer.requestOverheadTokens,
+			run: async (request) => {
+				messagesSeen.push([...request.messages]);
+				const outcome = await answer.run(request);
+				completed.resolve();
+				return outcome;
+			},
+		},
+	});
+
+	expect(engine.continue().kind).toBe("resumed");
+	await completed.promise;
+	await engine.shutdown();
+
+	expect(messagesSeen).toEqual([[user, toolMessage]]);
+	expect(
+		engine.getSnapshot().context.filter(({ role }) => role === "user")
+	).toEqual([user]);
+	expect(
+		engine
+			.getSnapshot()
+			.context.flatMap(({ parts }) =>
+				parts.filter(
+					(part) =>
+						"type" in part &&
+						part.type === "tool-read" &&
+						"toolCallId" in part &&
+						part.toolCallId === toolCallId("call-denied")
+				)
+			)
+	).toHaveLength(1);
+});
+
+test("continue rejects incomplete Tool Calls even when a later user is last", async () => {
+	let runtimeStarts = 0;
+	const user = fromPartial<SessionMessage>({
+		id: sessionMessageId("u-incomplete"),
+		metadata: { agent: agentId("build"), model },
+		parts: [{ text: "run a tool", type: "text" }],
+		role: "user",
+	});
+	const assistant = fromPartial<SessionMessage>({
+		id: sessionMessageId("a-incomplete"),
+		metadata: {
+			agent: agentId("build"),
+			model,
+			sourceUserMessageId: user.id,
+		},
+		parts: [
+			{
+				input: { path: "file.txt" },
+				state: "input-available",
+				toolCallId: toolCallId("call-incomplete"),
+				type: "tool-read",
+			},
+		],
+		role: "assistant",
+	});
+	const laterUser = fromPartial<SessionMessage>({
+		id: sessionMessageId("u-after-incomplete"),
+		metadata: { agent: agentId("build"), model },
+		parts: [{ text: "continue anyway", type: "text" }],
+		role: "user",
+	});
+	const engine = createTestAgentSession(
+		[user, assistant, laterUser],
+		undefined,
+		{
+			runtime: {
+				requestOverheadTokens: () => 0,
+				run: async () => {
+					runtimeStarts += 1;
+					return {};
+				},
+			},
+		}
+	);
+
+	expect(engine.continue()).toMatchObject({ kind: "rejected" });
+	expect(runtimeStarts).toBe(0);
+	await engine.shutdown();
+});
+
 test("starts a queued admission with the identity it reserved", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator),
 		{ runtime: runtime.runtime }
@@ -1263,7 +1716,7 @@ test("starts a queued admission with the identity it reserved", async () => {
 	engine.onSubmissionEvent((event) => events.push(event));
 
 	const compaction = engine.compact({ model, trigger: "manual" });
-	const queued = engine.admit(sendInput({ userText: "queued" }));
+	const queued = await engine.prompt(sendInput({ userText: "queued" }));
 	if (queued.rejected) {
 		throw new Error(queued.reason);
 	}
@@ -1286,7 +1739,7 @@ test("starts a queued admission with the identity it reserved", async () => {
 
 test("recalls a queued admission before it creates a Session Record", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator)
 	);
@@ -1294,7 +1747,7 @@ test("recalls a queued admission before it creates a Session Record", async () =
 	engine.onSubmissionEvent((event) => events.push(event));
 
 	const compaction = engine.compact({ model, trigger: "manual" });
-	const queued = engine.admit(sendInput({ userText: "withdraw me" }));
+	const queued = await engine.prompt(sendInput({ userText: "withdraw me" }));
 	if (queued.rejected) {
 		throw new Error(queued.reason);
 	}
@@ -1327,7 +1780,7 @@ test("recalls a queued admission before it creates a Session Record", async () =
 test("queues a submission that arrives while a compaction is in flight", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator),
 		{ runtime: runtime.runtime }
@@ -1360,7 +1813,7 @@ test("queues a submission that arrives while a compaction is in flight", async (
 test("drains the Submission Queue in order, one Agent Turn at a time", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator),
 		{ runtime: runtime.runtime }
@@ -1396,7 +1849,7 @@ test("drains the Submission Queue in order, one Agent Turn at a time", async () 
 test("drains submissions queued while a compaction was in flight", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator),
 		{ runtime: runtime.runtime }
@@ -1424,7 +1877,7 @@ test("drains submissions queued while a compaction was in flight", async () => {
 test("keeps draining the Submission Queue after a turn fails", async () => {
 	const prompts: string[] = [];
 	const drained = Promise.withResolvers<void>();
-	const engine = createEngine([], undefined, {
+	const engine = createTestAgentSession([], undefined, {
 		runtime: {
 			requestOverheadTokens: () => 0,
 			run: async ({ messages }) => {
@@ -1452,7 +1905,7 @@ test("keeps draining the Submission Queue after a turn fails", async () => {
 test("drains the Submission Queue after a cancelled turn", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator),
 		{ runtime: runtime.runtime }
@@ -1477,7 +1930,9 @@ test("drains the Submission Queue after a cancelled turn", async () => {
 
 test("interrupts a turn by recalling the Steering Lane instead of running it", async () => {
 	const runtime = createQueuedRuntime({ boundary: true });
-	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+	const engine = createTestAgentSession([], undefined, {
+		runtime: runtime.runtime,
+	});
 
 	const first = engine.send(sendInput({ userText: "one" }));
 	await runtime.started(1);
@@ -1521,7 +1976,7 @@ test("interrupts a turn by recalling the Steering Lane instead of running it", a
 test("recalls the Steering Lane ahead of the Submission Queue", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime({ boundary: true });
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator),
 		{ runtime: runtime.runtime }
@@ -1575,7 +2030,7 @@ test("recalls the Steering Lane ahead of the Submission Queue", async () => {
 test("delivers a submission accepted while a turn is running into that turn", async () => {
 	const runtime = createQueuedRuntime({ boundary: true });
 	const commits: SessionRecord[] = [];
-	const engine = createEngine([], undefined, {
+	const engine = createTestAgentSession([], undefined, {
 		commitRecord: async ({ record }) => {
 			commits.push(record);
 		},
@@ -1628,7 +2083,7 @@ test("waits for a delivered Steering checkpoint before shutdown settles", async 
 	const commitStarted = Promise.withResolvers<void>();
 	const allowCommit = Promise.withResolvers<void>();
 	let steeringCommitted = false;
-	const engine = createEngine([], undefined, {
+	const engine = createTestAgentSession([], undefined, {
 		commitRecord: async ({ record }) => {
 			const message = record.messages[0];
 			if (
@@ -1666,7 +2121,9 @@ test("waits for a delivered Steering checkpoint before shutdown settles", async 
 
 test("delivers Steering Messages in the order they were accepted", async () => {
 	const runtime = createQueuedRuntime({ boundary: true });
-	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+	const engine = createTestAgentSession([], undefined, {
+		runtime: runtime.runtime,
+	});
 
 	const first = engine.send(sendInput({ userText: "one" }));
 	await runtime.started(1);
@@ -1693,7 +2150,7 @@ test("delivers Steering Messages in the order they were accepted", async () => {
 test("keeps the Model Target of the turn a Steering Message joined", async () => {
 	const runtime = createQueuedRuntime({ boundary: true });
 	const commits: SessionRecord[] = [];
-	const engine = createEngine([], undefined, {
+	const engine = createTestAgentSession([], undefined, {
 		commitRecord: async ({ record }) => {
 			commits.push(record);
 		},
@@ -1723,7 +2180,9 @@ test("hands a Steering Message to the Submission Queue when the turn has no boun
 	// A tool-less turn runs exactly one Model Step, so its runtime never reaches
 	// a boundary to deliver at.
 	const runtime = createQueuedRuntime();
-	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+	const engine = createTestAgentSession([], undefined, {
+		runtime: runtime.runtime,
+	});
 
 	const first = engine.send(sendInput({ userText: "one" }));
 	await runtime.started(1);
@@ -1748,7 +2207,9 @@ test("hands a Steering Message to the Submission Queue when the turn has no boun
 
 test("keeps a Steering Message that fell back on the Model Target it was accepted with", async () => {
 	const runtime = createQueuedRuntime();
-	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+	const engine = createTestAgentSession([], undefined, {
+		runtime: runtime.runtime,
+	});
 	const otherModel: ChatModelSelection = {
 		modelId: modelId("gpt-5.6-luna-pro"),
 		providerId: "openai",
@@ -1771,10 +2232,10 @@ test("keeps a Steering Message that fell back on the Model Target it was accepte
 	await first;
 });
 
-test("hands a fallback Steering Message to the queue behind what already waits", async () => {
+test("hands a fallback Steering Message ahead of later queued work", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator),
 		{ runtime: runtime.runtime }
@@ -1793,15 +2254,17 @@ test("hands a fallback Steering Message to the queue behind what already waits",
 	runtime.release();
 	await runtime.started(3);
 
-	// Acceptance order is kept: the submissions that waited first run first, and
-	// the message that could not steer still runs as its own Agent Turn.
-	expect(runtime.prompts).toEqual(["queued-first", "queued-second", "steer"]);
+	// Steering that missed its delivery boundary becomes the next submission;
+	// it does not overtake the older queued prompt.
+	expect(runtime.prompts).toEqual(["queued-first", "steer", "queued-second"]);
 	runtime.release();
 });
 
 test("refuses a Steering Message that invokes a Skill or resends another message", async () => {
 	const runtime = createQueuedRuntime();
-	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+	const engine = createTestAgentSession([], undefined, {
+		runtime: runtime.runtime,
+	});
 
 	const first = engine.send(sendInput({ userText: "one" }));
 	await runtime.started(1);
@@ -1835,7 +2298,7 @@ test("refuses a Steering Message that invokes a Skill or resends another message
 test("recalls part of the queue by identifier and ignores an unknown one", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator),
 		{ runtime: runtime.runtime }
@@ -1875,7 +2338,7 @@ test("recalls part of the queue by identifier and ignores an unknown one", async
 test("runs a queued submission with the Model Target selection it was accepted with", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator),
 		{ runtime: runtime.runtime }
@@ -1898,12 +2361,12 @@ test("runs a queued submission with the Model Target selection it was accepted w
 	runtime.release();
 });
 
-test("steers the Agent Turn an overflow replay runs", async () => {
+test("steers the Agent Turn started by overflow context continuation", async () => {
 	const gates: Array<() => void> = [];
 	const prompts: string[] = [];
 	const delivered: string[][] = [];
-	const replayStarted = Promise.withResolvers<void>();
-	const engine = createEngine(compactionHistory(), undefined, {
+	const continuationStarted = Promise.withResolvers<void>();
+	const engine = createTestAgentSession(compactionHistory(), undefined, {
 		resolveCompactionSettings: async () =>
 			fromPartial<ResolvedCompactionSettings>({
 				autoAvailable: false,
@@ -1931,7 +2394,7 @@ test("steers the Agent Turn an overflow replay runs", async () => {
 				if (prompts.length === 1) {
 					return { error: overflowFailure() };
 				}
-				replayStarted.resolve();
+				continuationStarted.resolve();
 				const gate = Promise.withResolvers<void>();
 				gates.push(gate.resolve);
 				await gate.promise;
@@ -1965,13 +2428,13 @@ test("steers the Agent Turn an overflow replay runs", async () => {
 	});
 
 	const send = engine.send(sendInput({ userText: "first" }));
-	// The provider refusal buys the turn one recovery, whose replay runs the
-	// original message again on the send lane.
-	await replayStarted.promise;
+	// Recovery continues from the compacted Session Context; it does not add
+	// another user message to the Submission Queue or Transcript.
+	await continuationStarted.promise;
 	const accepted = await engine.send(sendInput({ userText: "second" }));
 
-	// The replay is the Agent Turn the session is running, so the submission
-	// joins that turn's Steering Lane instead of waiting for it to end.
+	// The context continuation is the Agent Turn the session is running, so the
+	// submission joins its Steering Lane instead of waiting for it to end.
 	expect(accepted).toEqual({ rejected: false });
 	expect(
 		engine.getSnapshot().steeringMessages.map(({ input }) => input.text)
@@ -1980,8 +2443,7 @@ test("steers the Agent Turn an overflow replay runs", async () => {
 
 	gates.shift()?.();
 	await send;
-	// The replay turn delivered it at its Model Step boundary and ran no turn of
-	// its own for it.
+	// The continuation delivers the correction at its Model Step boundary.
 	expect(delivered).toEqual([["second"]]);
 	expect(prompts).toEqual(["first", "first"]);
 	expect(userPrompts(engine.getSnapshot().transcript).at(-1)).toBe("second");
@@ -1993,7 +2455,7 @@ test("retains a queued submission's attachments until its turn runs", async () =
 	const retained: string[][] = [];
 	const released: string[][] = [];
 	const holdEnded = Promise.withResolvers<void>();
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator),
 		{
@@ -2065,7 +2527,7 @@ test("waits for queued attachment externalization before shutdown settles", asyn
 	const externalizeStarted = Promise.withResolvers<void>();
 	const allowExternalize = Promise.withResolvers<void>();
 	const runtime = createQueuedRuntime();
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator),
 		{
@@ -2118,7 +2580,9 @@ test("waits for queued attachment externalization before shutdown settles", asyn
 
 test("refuses a submission that carries attachments into a running turn", async () => {
 	const runtime = createQueuedRuntime();
-	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+	const engine = createTestAgentSession([], undefined, {
+		runtime: runtime.runtime,
+	});
 	const files: SessionFilePart[] = [
 		fromPartial<SessionFilePart>({
 			attachmentId: attachmentId("unpaid-blob"),
@@ -2151,7 +2615,7 @@ test("drops the queue and its attachment holds when the session shuts down", asy
 	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
 	const released: string[][] = [];
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator),
 		{
@@ -2187,7 +2651,7 @@ test("drops the queue and its attachment holds when the session shuts down", asy
 });
 
 test("refuses a submission once the session has shut down", async () => {
-	const engine = createEngine([]);
+	const engine = createTestAgentSession([]);
 	await engine.shutdown();
 
 	await expect(engine.send(sendInput())).resolves.toEqual({
@@ -2197,7 +2661,9 @@ test("refuses a submission once the session has shut down", async () => {
 });
 test("ignores runtime callbacks that arrive after shutdown", async () => {
 	const runtime = createQueuedRuntime();
-	const engine = createEngine([], undefined, { runtime: runtime.runtime });
+	const engine = createTestAgentSession([], undefined, {
+		runtime: runtime.runtime,
+	});
 	const send = engine.send(sendInput());
 	await runtime.started(1);
 
@@ -2218,7 +2684,7 @@ test("releases a recalled submission's attachment hold", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
 	const released: string[][] = [];
-	const engine = createEngine(
+	const engine = createTestAgentSession(
 		compactionHistory(),
 		createCompactionModule(summaryGenerator),
 		{
@@ -2252,7 +2718,7 @@ test("releases a recalled submission's attachment hold", async () => {
 });
 
 /** A turn that streams one answer through the callbacks it is handed. */
-const answeringRuntime = (): SessionEnginePorts["runtime"] => ({
+const answeringRuntime = (): AgentSessionPorts["runtime"] => ({
 	requestOverheadTokens: () => 0,
 	run: async ({ callbacks, execution }) => {
 		callbacks.onEvent({
@@ -2300,7 +2766,7 @@ const createStreamingRuntime = (): {
 	/** Resolves once the turn has streamed and is waiting to be let go. */
 	readonly live: Promise<void>;
 	readonly release: () => void;
-	readonly runtime: SessionEnginePorts["runtime"];
+	readonly runtime: AgentSessionPorts["runtime"];
 } => {
 	const parked = Promise.withResolvers<void>();
 	const live = Promise.withResolvers<void>();
@@ -2333,7 +2799,7 @@ const createStreamingRuntime = (): {
 
 test("commits the accepted prompt and streams its Agent Turn", async () => {
 	const commits: SessionRecord[] = [];
-	const engine = createEngine([], undefined, {
+	const engine = createTestAgentSession([], undefined, {
 		commitRecord: async ({ record }) => {
 			commits.push(record);
 		},
@@ -2366,7 +2832,7 @@ test("commits the accepted prompt and streams its Agent Turn", async () => {
 test("ignores late provider callbacks after local interruption", async () => {
 	const live = Promise.withResolvers<void>();
 	const release = Promise.withResolvers<void>();
-	const engine = createEngine([], undefined, {
+	const engine = createTestAgentSession([], undefined, {
 		runtime: {
 			requestOverheadTokens: () => 0,
 			run: async ({ callbacks, execution }) => {
@@ -2425,7 +2891,7 @@ test("ignores late provider callbacks after local interruption", async () => {
 
 test("retries a stored message without appending another user message", async () => {
 	const commits: SessionRecord[] = [];
-	const engine = createEngine([], undefined, {
+	const engine = createTestAgentSession([], undefined, {
 		commitRecord: async ({ record }) => {
 			commits.push(record);
 		},
@@ -2455,7 +2921,9 @@ test("retries a stored message without appending another user message", async ()
 
 test("cancels the submission it is running and returns to ready", async () => {
 	const streaming = createStreamingRuntime();
-	const engine = createEngine([], undefined, { runtime: streaming.runtime });
+	const engine = createTestAgentSession([], undefined, {
+		runtime: streaming.runtime,
+	});
 
 	const send = engine.send(sendInput());
 	engine.cancel();
@@ -2474,7 +2942,7 @@ test("interrupts the turn, not the Steering Message it delivered", async () => {
 	const accepting = Promise.withResolvers<void>();
 	const corrected = Promise.withResolvers<void>();
 	const parked = Promise.withResolvers<void>();
-	const engine = createEngine([], undefined, {
+	const engine = createTestAgentSession([], undefined, {
 		runtime: {
 			requestOverheadTokens: () => 0,
 			run: async ({ callbacks, execution, takeSteeringMessages }) => {
@@ -2523,7 +2991,9 @@ test("interrupts the turn, not the Steering Message it delivered", async () => {
 
 test("interrupting a turn keeps the Assistant message it already streamed", async () => {
 	const streaming = createStreamingRuntime();
-	const engine = createEngine([], undefined, { runtime: streaming.runtime });
+	const engine = createTestAgentSession([], undefined, {
+		runtime: streaming.runtime,
+	});
 
 	const send = engine.send(sendInput());
 	await streaming.live;
@@ -2544,7 +3014,7 @@ test("interrupting a turn keeps the Assistant message it already streamed", asyn
 test("persists the interrupted Agent Turn terminal checkpoint", async () => {
 	const commits: SessionRecord[] = [];
 	const streaming = createStreamingRuntime();
-	const engine = createEngine([], undefined, {
+	const engine = createTestAgentSession([], undefined, {
 		commitRecord: async ({ record }) => {
 			commits.push(record);
 		},
@@ -2583,7 +3053,7 @@ test("persists the interrupted Agent Turn terminal checkpoint", async () => {
 test("reflects a durable prompt when interruption lands during its commit", async () => {
 	const commitStarted = Promise.withResolvers<void>();
 	const releaseCommit = Promise.withResolvers<void>();
-	const engine = createEngine([], undefined, {
+	const engine = createTestAgentSession([], undefined, {
 		commitRecord: async ({ record }) => {
 			if (record.outcome.kind === "user") {
 				commitStarted.resolve();
@@ -2606,7 +3076,9 @@ test("reflects a durable prompt when interruption lands during its commit", asyn
 
 test("ends the Agent Turn an aborted approval belongs to", async () => {
 	const streaming = createStreamingRuntime();
-	const engine = createEngine([], undefined, { runtime: streaming.runtime });
+	const engine = createTestAgentSession([], undefined, {
+		runtime: streaming.runtime,
+	});
 
 	const send = engine.send(sendInput());
 	await streaming.live;

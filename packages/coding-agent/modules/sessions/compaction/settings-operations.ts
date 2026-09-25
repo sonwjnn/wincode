@@ -19,8 +19,8 @@ type CompactionSettingsDependencies = {
 };
 
 /**
- * Composes the compaction settings operations a compaction module and a
- * Session Engine port both read: the workspace's ConfigStore snapshot, the
+ * Composes the compaction settings operations a compaction module and the
+ * Agent Session port both read: the workspace's ConfigStore snapshot, the
  * Model Catalog pricing table, and the compaction settings resolution. It is
  * React-free, so a non-renderer consumer composes it from the same call the
  * TUI makes.

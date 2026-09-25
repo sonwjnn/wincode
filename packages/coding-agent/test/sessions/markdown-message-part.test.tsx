@@ -9,7 +9,7 @@ import {
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 
 /**
- * Grows the rendered text once after mount, matching a live `useSessionEngine` text
+ * Grows the rendered text once after mount, matching a live `useAgentSession`
  * part while the Markdown renderable remains in incremental mode.
  */
 function GrowingMarkdown() {

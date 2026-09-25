@@ -1,7 +1,7 @@
 /**
  * The Session Compaction module's failure vocabulary. It lives apart from the
- * module itself so the Session Engine can classify a compaction failure
- * without importing the compaction implementation's configuration graph.
+ * so the Agent Session can classify a compaction failure without importing
+ * the compaction implementation's configuration graph.
  */
 export class SessionCompactionError extends Error {
 	readonly code:

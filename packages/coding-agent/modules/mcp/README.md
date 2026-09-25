@@ -21,7 +21,7 @@ user's working directory — the server never runs file-system tools.
 	`McpServerStatus` only, so no config, env, headers, or URLs can appear.
 
 MCP tools resolve approvals through the Tool Gate, sharing the generic Permission engine,
-the Session Engine's approval lifecycle, and the approval panel with static coding tools. The
+the Agent Session's approval lifecycle, and the approval panel with static coding tools. The
 registry owns only snapshot validity, dispatch, normalization, and the deny defense-in-depth
 check; the provider adapts an MCP snapshot tool to the Tool Gate's primitive call shape.
 

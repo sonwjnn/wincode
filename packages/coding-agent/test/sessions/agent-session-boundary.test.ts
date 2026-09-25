@@ -3,12 +3,10 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 /**
- * ADR-0019 says a non-TUI host can reuse the Session Engine, and ADR-0023 says
- * the Session Host is that host, which only holds while their module graphs
- * stay free of React and the terminal renderers. Lint catches direct imports;
- * this walks the graphs transitively, so a barrel (or a barrel behind a barrel)
- * cannot smuggle React back in — the Host's walk is the one that catches a
- * React-free module reaching a React re-export.
+ * ADR-0019's non-TUI reuse boundary and ADR-0023's Host boundary require both
+ * the Agent Session and Session Host graphs to stay free of React and terminal
+ * renderers. Lint catches direct imports; this walks transitively so a barrel
+ * cannot smuggle a renderer into either entry point.
  */
 const TUI_ROOT = resolve(import.meta.dir, "../..");
 const FORBIDDEN_MODULE_ROOTS: Record<string, true> = {
@@ -21,13 +19,13 @@ const MODULE_EDGE_PATTERN =
 const RESOLUTION_SUFFIXES = ["", ".ts", ".tsx", "/index.ts", "/index.tsx"];
 
 /**
- * The entries a non-renderer consumer loads: the Engine itself, and the
- * Session Host that assembles one.
+ * The entries a non-renderer consumer loads: the Agent Session and the Host
+ * that assembles it.
  */
 const ENTRIES = [
 	{
-		name: "Session Engine",
-		path: resolve(TUI_ROOT, "modules/sessions/engine/session-engine.ts"),
+		name: "Agent Session",
+		path: resolve(TUI_ROOT, "modules/sessions/engine/agent-session.ts"),
 	},
 	{
 		name: "Session Host",

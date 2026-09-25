@@ -3,7 +3,7 @@ import { fromPartial } from "@total-typescript/shoehorn";
 import { createOperationalFailure } from "@wincode/agent-core";
 import {
 	isContextOverflowFailure,
-	prepareOverflowReplayMessages,
+	prepareOverflowRecoveryMessages,
 } from "@/modules/sessions/compaction/overflow-recovery";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { sessionMessageId } from "../support/identifiers";
@@ -21,7 +21,7 @@ const message = (
 		role,
 	});
 
-test("prepares overflow replay without the failed assistant turn", () => {
+test("prepares eligible overflow context without the failed assistant turn", () => {
 	const messages = [
 		message("u1", "user", "earlier"),
 		message("a1", "assistant", "earlier answer"),
@@ -30,7 +30,7 @@ test("prepares overflow replay without the failed assistant turn", () => {
 	];
 
 	expect(
-		prepareOverflowReplayMessages(messages, sessionMessageId("u2")).map(
+		prepareOverflowRecoveryMessages(messages, sessionMessageId("u2")).map(
 			({ id }) => id
 		)
 	).toEqual([
@@ -40,15 +40,15 @@ test("prepares overflow replay without the failed assistant turn", () => {
 	]);
 });
 
-test("refuses a replay whose original user message is gone", () => {
+test("refuses recovery when its original user message is gone", () => {
 	expect(() =>
-		prepareOverflowReplayMessages(
+		prepareOverflowRecoveryMessages(
 			[message("a1", "assistant", "answer")],
 			sessionMessageId("u2")
 		)
 	).toThrow(
 		expect.objectContaining({
-			code: "replay-failed",
+			code: "continuation-failed",
 			message: expect.stringContaining("original user message"),
 		})
 	);

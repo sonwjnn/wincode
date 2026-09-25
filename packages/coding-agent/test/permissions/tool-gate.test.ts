@@ -12,11 +12,11 @@ import {
 	externalParentDirectoryGlob,
 	type PermissionService,
 } from "@/modules/permissions";
-import { createSessionEngine } from "@/modules/sessions/engine/session-engine";
+import { createAgentSession } from "@/modules/sessions/engine/agent-session";
 import type {
+	AgentSession,
+	AgentSessionPorts,
 	SessionApprovalOutcome,
-	SessionEngine,
-	SessionEnginePorts,
 } from "@/modules/sessions/engine/types";
 import {
 	createToolGate,
@@ -1358,12 +1358,12 @@ test("rewrites an approved external edit patch to its canonical resource", async
 	}
 });
 
-describe("approval settlement through the Session Engine", () => {
-	const createEngine = () =>
-		createSessionEngine({
+describe("approval settlement through the Agent Session", () => {
+	const createTestAgentSession = () =>
+		createAgentSession({
 			initialTranscript: [],
-			ports: fromPartial<SessionEnginePorts>({
-				// Compaction is not part of this seam; the Engine only needs the port.
+			ports: fromPartial<AgentSessionPorts>({
+				// Compaction is not part of this seam; the Agent Session only needs the port.
 				compaction: {
 					compact: () =>
 						Promise.reject(
@@ -1375,9 +1375,9 @@ describe("approval settlement through the Session Engine", () => {
 			sessionId: sessionId("gate-approval"),
 		});
 
-	const askGate = (engine: SessionEngine) =>
+	const askGate = (agentSession: AgentSession) =>
 		createToolGate({
-			approvals: { request: engine.requestApproval },
+			approvals: { request: agentSession.requestApproval },
 			resolvePermission: async () =>
 				createToolPermission({ shell: { "git status": "ask" } }),
 			sandbox: createWorkspaceSandbox(process.cwd()),
@@ -1385,9 +1385,7 @@ describe("approval settlement through the Session Engine", () => {
 		});
 
 	/** The gate registers its request after its own asynchronous resolution. */
-	const whenApprovalRequested = async (
-		engine: SessionEngine
-	): Promise<void> => {
+	const whenApprovalRequested = async (engine: AgentSession): Promise<void> => {
 		for (let attempt = 0; attempt < 100; attempt += 1) {
 			if (engine.getSnapshot().approvals.length > 0) {
 				return;
@@ -1398,7 +1396,7 @@ describe("approval settlement through the Session Engine", () => {
 	};
 
 	test("closing approvals settles the waiting Tool Gate evaluation", async () => {
-		const engine = createEngine();
+		const engine = createTestAgentSession();
 		const gate = askGate(engine);
 		const evaluation = gate.gate(shellCall("git status", "call-close"));
 		await whenApprovalRequested(engine);
@@ -1416,7 +1414,7 @@ describe("approval settlement through the Session Engine", () => {
 	});
 
 	test("notifies the abort path once when two triggers abort the same request", async () => {
-		const engine = createEngine();
+		const engine = createTestAgentSession();
 		let abortCount = 0;
 		const gate = createToolGate({
 			approvals: { request: engine.requestApproval },
@@ -1441,7 +1439,7 @@ describe("approval settlement through the Session Engine", () => {
 	});
 
 	test("shutting the session down settles the waiting Tool Gate evaluation", async () => {
-		const engine = createEngine();
+		const engine = createTestAgentSession();
 		const gate = askGate(engine);
 		const evaluation = gate.gate(shellCall("git status", "call-shutdown"));
 		await whenApprovalRequested(engine);

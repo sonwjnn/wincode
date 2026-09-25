@@ -14,7 +14,7 @@ flowchart LR
     App --> Print[Print Mode]
     App --> JSON[JSON Mode]
     App --> RPC[RPC Mode]
-    Interactive --> Session[Session Host / Session Engine]
+    Interactive --> Session[Session Host / Agent Session]
     Print --> Session
     JSON --> Session
     RPC --> Session
@@ -30,10 +30,10 @@ flowchart LR
 ```
 
 The Coding-Agent Application selects an Execution Mode. Modes share the
-Session Host and Session Engine contracts: Interactive Mode renders live
+Session Host and Agent Session contracts: Interactive Mode renders live
 state, Print and JSON project one-shot turns, and RPC exposes the stable
 JSON-RPC protocol. Mode selection and process exit status stay outside the
-Session Engine.
+Agent Session.
 
 ## Package boundaries
 
@@ -90,8 +90,8 @@ Dependency direction is inward toward contracts:
 
 1. The selected mode resolves the workspace, configuration, active Agent,
    model, variant, and provider credential.
-2. It creates or opens a Session Host, whose Session Engine owns the live
-   session state and durable writes.
+2. It creates or opens a Session Host, which exposes one Agent Session that
+   owns live state and coordinates durable writes through Host-provided ports.
 3. The Agent Runtime invokes the provider and emits Wincode events for text,
    reasoning, tool calls, usage, failures, and completion.
 4. Every tool call passes through the Tool Gate before coding tools, MCP

@@ -93,8 +93,8 @@ test("shows the opening state, then the session it opened", async () => {
 			sessionId: seeded.sessionId,
 		});
 		setup = rendered.setup;
-		// The Engine does not exist until opening completes, so the surface
-		// shows that a session is opening rather than a blank frame.
+		// The Agent Session does not exist until opening completes, so the surface
+		// shows a session opening rather than a blank frame.
 		await setup.renderOnce();
 		expect(setup.captureCharFrame()).toContain("Loading session...");
 

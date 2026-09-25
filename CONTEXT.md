@@ -83,27 +83,27 @@ metadata, then prompt-config refs. _Avoid_: chat config, latest config
 
 ## Session Execution
 
-**Session Engine**:
-The single owner of one session's live state and the only writer to it. Session state changes only through the Engine, and observers read a Session Snapshot. _Avoid_: session manager, session store, session state holder
+**Agent Session**:
+The single owner of one session's conversation, Session Context, waiting Submissions, approvals, compaction state, and Agent Turn execution state across turns. It is the only writer; observers read its immutable Session Snapshot. `prompt()` admits new user input, `steer()` delivers a text-only correction to a live turn, and `continue()` resumes valid idle context or starts waiting work. Its Agent and Model selection may change between turns. _Avoid_: Agent Controller, one Agent instance, Session Engine
 
 **Session Host**:
-The composition that assembles one session — its capabilities, its Session Engine, and its subscription to that Engine — and owns that assembly's lifetime. It carries no session state of its own and is UI-neutral, so Interactive Mode and non-interactive modes each construct one against the same contract. _Avoid_: bootstrap, session manager, runtime, composition root
+The composition that opens one session, assembles capabilities, creates its Agent Session, exposes it as `agentSession`, and owns that assembly's lifetime. It carries no session state of its own and is UI-neutral, so Interactive and non-interactive modes use the same contract. _Avoid_: bootstrap, session manager, runtime, composition root
 
 **Session Lease**:
-The exclusive live claim a Session Host holds while its session is open, so only that Host's Session Engine may write the session. The claim ends with the Host and can be recovered after its owner disappears; losing it ends the Host rather than allowing two live writers.
+The exclusive live claim a Session Host holds while its session is open, so only that Host's Agent Session may write the session. The claim ends with the Host and can be recovered after its owner disappears; losing it ends the Host rather than allowing two live writers.
 _Avoid_: session lock, presence, session status
 
 **Session Command**:
-A request to change session state, such as sending a prompt, interrupting a turn, compacting, recovering from a context overflow, or answering an approval. The Engine executes Commands one at a time in submission order, and no asynchronous continuation changes session state outside a Command. _Avoid_: operation, action, event, task
+A request to change session state, such as submitting a prompt, steering or continuing a turn, interrupting, compacting, recovering from context overflow, or answering an approval. The Agent Session orders commands and no asynchronous continuation changes session state outside a Command. _Avoid_: operation, action, event, task
 
 **Compaction Intent**:
 What one compaction request asks for: its trigger and its focus, as distinct from the messages it runs over and the Model Target selection its summary is generated with. The Session Compaction module admits a request that carries the intent already in flight and refuses one that carries another, so no caller is answered with another caller's entry while two threshold passes, which share an intent, still meet in one operation. _Avoid_: compaction request, compaction options
 
 **Overflow Recovery**:
-The one recovery a context-overflow refusal buys for the Agent Turn it ended: the Engine compacts the replay-safe history — the Session Transcript up to that turn's original user message, with the interrupted turn that followed it sanitized away — and replays that message. The attempt is recorded against the message the turn answers, so the replayed turn cannot chain into another recovery and no send can reset it. _Avoid_: retry, resend
+The one recovery a context-overflow refusal buys for the Agent Turn it ended: the Agent Session compacts eligible history through that turn's original user message, sanitizes the interrupted turn, then continues the resulting Session Context without appending another user message. The attempt stays keyed to the original message, so its continuation cannot chain another recovery and no new send can reset it. _Avoid_: retry, resend
 
 **Approval Request**:
-One Tool Permission `ask` a waiting Tool Gate evaluation is registered for. The Session Engine owns it from registration to settlement: it is pending until exactly one settlement — allow, reject, or abort — whichever route triggers it, so no route can leave the evaluation waiting or settle the request twice. The session projects its pending Approval Requests into the panel surface, and closing them, aborting them, or shutting the session down runs through the same path. _Avoid_: approval prompt, approval handle, approval queue
+One Tool Permission `ask` a waiting Tool Gate evaluation is registered for. The Agent Session owns it from registration to settlement: it is pending until exactly one settlement — allow, reject, or abort — whichever route triggers it, so no route can leave the evaluation waiting or settle the request twice. The session projects pending Approval Requests into the panel surface, and closing them, aborting them, or shutting the session down runs through the same path. _Avoid_: approval prompt, approval handle, approval queue
 
 **Session Snapshot**:
 The session facts an observer reads at one moment. Observers read Snapshots only, so none of them sees a partially applied Session Command. _Avoid_: full state, state dump
@@ -115,7 +115,7 @@ The ordered messages a session presents to the user. Compaction summaries stay o
 The messages a session sends to the model for its next Agent Turn. It is derived from the Session Transcript through compaction and interruption sanitation, so the two can differ. _Avoid_: active messages, prompt history, context window
 
 **Agent Turn Execution**:
-One run of an Agent Turn and everything scoped to it: the Agent Turn Identifier, the assistant message identity, the source user message, the start time, the Agent and resolved Agent, the Model Target selection and variant, the session-level selection its records carry, the MCP snapshot, the child abort registry, and its own Session View State. The Engine's record of an execution carries the identity every observer reads, while the host scope carries what only the host owns — the resolved Agent, the armed Skill catalog, the MCP snapshot, the child abort registry, and delegation bookkeeping. A delegated Subagent execution uses the same contract plus its parent linkage (`parentTurnId`, `parentToolCallId`), and is created and discarded with the turn rather than rebuilt on render. _Avoid_: turn context, session refs, current turn
+One run of an Agent Turn and everything scoped to it: the Agent Turn Identifier, assistant message identity, source user message, start time, Agent and resolved Agent, Model Target selection and variant, session-level selection its records carry, MCP snapshot, child abort registry, and Session View State. The Agent Session record carries the identity every observer reads, while the Host scope carries what only the Host owns — the resolved Agent, armed Skill catalog, MCP snapshot, child abort registry, and delegation bookkeeping. A delegated Subagent execution uses the same contract plus its parent linkage (`parentTurnId`, `parentToolCallId`), and is created and discarded with the turn rather than rebuilt on render. _Avoid_: turn context, session refs, current turn
 
 **Session View State**:
 The live, transient projection of one Agent Turn Execution for the session UI. It never becomes a Session Record, and executions never share one: the Session Snapshot exposes the Session View State of the most recently active execution, so a delegated Subagent's stream replaces the view while it runs and the parent's view returns when it ends. _Avoid_: streaming state, live buffer
@@ -124,10 +124,10 @@ The live, transient projection of one Agent Turn Execution for the session UI. I
 The user-authored content one send accepts: text, attachments, pasted text, and an optional Skill or Custom Command invocation. _Avoid_: message, request
 
 **Queued Submission**:
-A Submission a busy session accepts and holds instead of running immediately. It is transient Session Engine state — not a Session Record, never replayed after a restart — and it enters the Session Transcript only when it starts running. _Avoid_: queued prompt, pending message, backlog item, steering (that is a Steering Message), interjection
+A Submission a busy session accepts and holds instead of running immediately. It is transient Agent Session state — not a Session Record, never replayed after a restart — and it enters the Session Transcript only when it starts running. _Avoid_: queued prompt, pending message, backlog item, steering (that is a Steering Message), interjection
 
 **Submission Queue**:
-The FIFO order of a session's Queued Submissions, exposed in the Session Snapshot. The Session Engine drains it after each terminal Agent Turn outcome; a user interrupt recalls it to the composer instead of draining it. _Avoid_: message queue, follow-up list, outbox
+The FIFO order of a session's Queued Submissions, exposed in the Session Snapshot. The Agent Session drains it after terminal Agent Turn outcomes; Steering Messages that missed their Model Step boundary are inserted ahead of newer queued prompts. A user interrupt recalls the queue instead of draining it. _Avoid_: message queue, follow-up list, outbox
 
 **Recall**:
 Withdrawing a session's waiting user messages back into the composer in order, restoring their composition instead of running them. It withdraws the Steering Lane and the Submission Queue together. _Avoid_: dequeue, withdraw, unsend, retract, delete
@@ -138,13 +138,18 @@ A user-authored message a session accepts while an Agent Turn is running and del
 **Steering Lane**:
 The FIFO order of a session's Steering Messages. Its messages are delivered at Model Step boundaries inside the running Agent Turn, so they never wait for that Agent Turn to end. _Avoid_: steering queue, interjection lane, mid-turn queue
 
+## Agent Session API
+
+**Agent Continuation**:
+The resumption of an idle Agent Session without a caller-supplied Submission. It starts waiting Steering Messages before Queued Submissions; with no waiting input, it resumes only from a last user message or a complete retained Tool Call result. It appends no duplicate user message and does not rerun completed tools. Incomplete Tool Calls/results and other context endpoints are rejected. Overflow recovery uses this context-only path after compaction. _Avoid_: retry, resend, new prompt
+
 ## Language
 
 **Wincode CLI**:
 The user-facing command-line entry point for the Coding-Agent Application. A bare invocation selects Interactive Mode; `--mode` or `-m` selects another Execution Mode by its full name, and `--prompt` or `-p` supplies one-shot input. It does not own Agent or Session state. _Avoid_: Wincode TUI, command dispatcher
 
 **Coding-Agent Application**:
-The user-facing Wincode application that runs an Agent through one of four Execution Modes: Interactive, Print, JSON, or RPC. It owns application lifetime and the input/output boundary while the Session Engine owns live session state. _Avoid_: Wincode TUI, CLI package, agent core
+The user-facing Wincode application that runs an Agent through one of four Execution Modes: Interactive, Print, JSON, or RPC. It owns application lifetime and the input/output boundary while the Agent Session owns live session state. _Avoid_: Wincode TUI, CLI package, agent core
 
 **Execution Mode**:
 A user-facing way to run the Coding-Agent Application. Each mode chooses input, output, and process lifecycle but does not own Session state. _Avoid_: Coding Mode, agent loop
@@ -323,7 +328,7 @@ The identity of one user or assistant message tracked by a session and reference
 _Avoid_: Tool Call Identifier
 
 **Submission Identifier**:
-The stable identity assigned when the Session Engine admits one Submission. It follows that Submission whether it starts immediately, waits in either lane, or changes disposition, and is distinct from both a lane-local waiting-message identifier and a transport request identifier.
+The stable identity assigned when the Agent Session admits one Submission. It follows that Submission whether it starts immediately, waits in either lane, or changes disposition, and is distinct from both a lane-local waiting-message identifier and a transport request identifier.
 _Avoid_: RPC request identifier, Queued Submission Identifier, Steering Message Identifier
 
 **Session Record Identifier**:
@@ -402,7 +407,7 @@ wins. _Avoid_: ACL entry, tool toggle
 The runtime enforcement of Tool Permission for one tool call. The gate
 evaluates the effective decision against the call's actual resource, applies
 temporary grants and auto approval, and registers a surviving `ask` as an
-Approval Request the Session Engine settles through the panel the session
+Approval Request the Agent Session settles through the panel the session
 projects. It owns the manual-approval safety ceiling at execution time: a
 remembered grant is never recorded for a safety ask. Coding tools, shell
 (per-node evaluation with a doom_loop repeat guard, ADR-0008), MCP tools, and

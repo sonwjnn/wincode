@@ -45,16 +45,36 @@ import type {
 
 export type { SessionViewState } from "../hooks/runtime-turn";
 /**
- * The disposition the Session Engine chose for one admitted Submission.
- * Clients observe this immediately; execution remains asynchronous.
+ * The disposition the Agent Session chose for one admitted Submission.
+ * Prompt reports this before provider work starts.
  */
-export type SessionSubmissionDisposition = "started" | "steering" | "queued";
+export type SessionSubmissionDisposition = "started" | "queued";
 
 export type SessionSubmissionAdmission =
 	| { readonly rejected: true; readonly reason: string }
 	| {
 			readonly rejected: false;
 			readonly disposition: SessionSubmissionDisposition;
+			readonly messageId: SessionMessageId;
+			readonly submissionId: SubmissionId;
+			readonly turnId?: AgentTurnId;
+	  };
+
+export type SessionSteeringAdmission =
+	| { readonly rejected: true; readonly reason: string }
+	| {
+			readonly rejected: false;
+			readonly disposition: "steering";
+			readonly messageId: SessionMessageId;
+			readonly submissionId: SubmissionId;
+			readonly turnId: AgentTurnId;
+	  };
+
+export type SessionContinuationOutcome =
+	| { readonly kind: "rejected"; readonly reason: string }
+	| { readonly kind: "resumed"; readonly turnId: AgentTurnId }
+	| {
+			readonly kind: "started-submission";
 			readonly messageId: SessionMessageId;
 			readonly submissionId: SubmissionId;
 			readonly turnId?: AgentTurnId;
@@ -74,8 +94,8 @@ export type SessionInterruptResult = Readonly<{
 }>;
 
 /**
- * One live Agent Turn execution the Engine tracks, oldest first. Its view
- * state belongs to that execution alone, so a delegated Subagent never
+ * One live Agent Turn execution the Agent Session tracks, oldest first. Its
+ * view state belongs to that execution alone, so a delegated Subagent never
  * replaces the view of the execution that spawned it.
  */
 export type SessionExecution = ReadonlyDeep<{
@@ -100,7 +120,7 @@ export type SessionExecution = ReadonlyDeep<{
 	viewState?: SessionViewState;
 }>;
 
-/** One result from the Engine's approval settlement command. */
+/** One result from the Agent Session's approval settlement command. */
 export type SessionApprovalResult =
 	| { readonly applied: true }
 	| {
@@ -115,9 +135,9 @@ export type SessionApprovalOutcome =
 	| { decision: "reject"; feedback?: string };
 
 /**
- * The send the Engine runs when the Submission Queue reaches a Queued
- * Submission: the submission as it was accepted, with the composition and the
- * Model Target selection it keeps while it waits.
+ * The input the Agent Session starts when the Submission Queue reaches a
+ * Queued Submission: the submission as it was accepted, with the composition
+ * and Model Target selection it keeps while it waits.
  */
 export type SessionQueuedSendInput = SessionSendInput & {
 	composition: SessionSubmissionComposition;
@@ -125,8 +145,8 @@ export type SessionQueuedSendInput = SessionSendInput & {
 
 /**
  * One Submission a busy session accepted and holds instead of running: the send
- * it will run, and its identifier. It is transient Engine state, never a
- * Session Record, and it enters the Session Transcript only when it starts
+ * it will run, and its identifier. It is transient Agent Session state, never
+ * a Session Record, and it enters the Session Transcript only when it starts
  * running.
  */
 export type SessionQueuedSubmission = ReadonlyDeep<{
@@ -160,15 +180,15 @@ export type SessionSteeringSendInput = Readonly<{
 
 /**
  * One Steering Message a running Agent Turn accepted and holds for its next
- * Model Step boundary. It is transient Engine state, never a Session Record
- * until it is delivered, and it is never replayed after a restart.
+ * Model Step boundary. It is transient Agent Session state, never a Session
+ * Record until it is delivered, and is never restored after a restart.
  */
 export type SessionSteeringMessage = ReadonlyDeep<{
 	id: SteeringMessageId;
 	input: SessionSteeringSendInput;
 }>;
 
-/** One user message the Engine withdrew from a lane for the composer. */
+/** One user message the Agent Session withdrew from a lane for the composer. */
 export type SessionWaitingMessage =
 	| SessionQueuedSubmission
 	| SessionSteeringMessage;
@@ -179,7 +199,7 @@ export type SessionWaitingMessageId =
 	| SubmissionId;
 
 /**
- * One approval request the Engine owns until it settles. `target` is
+ * One approval request the Agent Session owns until it settles. `target` is
  * `tool-call` when the request carries a Tool Call Identifier and `session`
  * when it has no timeline anchor of its own. A request with no `decision` is
  * pending; a settled request is never settled again.
@@ -193,7 +213,7 @@ export type SessionApproval = ReadonlyDeep<{
 
 /** The session facts an observer reads at one moment. */
 export type SessionSnapshot = ReadonlyDeep<{
-	/** Approval requests the Engine owns, oldest first, settled ones included. */
+	/** Approval requests the Agent Session owns, oldest first, settled ones included. */
 	approvals: SessionApproval[];
 	catalogDiagnostic: string | null;
 	compactions: SessionCompaction[];
@@ -245,9 +265,9 @@ export type SessionExecutionInput = ReadonlyDeep<{
 }>;
 
 /**
- * The resolved Agent one Agent Turn runs as, as the host resolved it: the
- * Engine forwards it to its runtime port and never reads it, so the port names
- * only the domain fields a host must supply.
+ * The resolved Agent one Agent Turn runs as, as the Host resolved it. The
+ * Agent Session forwards it to its runtime port and never reads it, so the
+ * port names only the domain fields a Host must supply.
  */
 export type SessionResolvedAgent = Readonly<
 	ResolvedAgent & {
@@ -256,7 +276,7 @@ export type SessionResolvedAgent = Readonly<
 	}
 >;
 
-/** One durable Session Record commit the Engine performs. */
+/** One durable Session Record commit the Agent Session performs. */
 export type SessionCommitInput = {
 	record: SessionRecord;
 	sessionId: SessionId;
@@ -326,9 +346,9 @@ export type SessionAttachmentPort = Readonly<{
 }>;
 
 /**
- * What the Agent Runtime reports about one Agent Turn execution. The Engine
- * owns every state write; the host reports events, and commits the Durable
- * Session Records the runtime produced through the Engine.
+ * What the Agent Runtime reports about one Agent Turn execution. The Agent
+ * Session owns every state write; the Host reports events and commits the
+ * Durable Session Records the runtime produced through the Agent Session.
  */
 export type SessionTurnCallbacks = Readonly<{
 	/** Commits the terminal Session Record of the execution. */
@@ -347,7 +367,7 @@ export type SessionTurnCallbacks = Readonly<{
 export type SessionTurnRequest = Readonly<{
 	/** The Skill catalog the submission armed for this execution. */
 	armedSkill: SessionSkillCatalog;
-	/** Reports what happens inside the execution back to the Engine. */
+	/** Reports what happens inside the execution back to the Agent Session. */
 	callbacks: SessionTurnCallbacks;
 	/** The Agent Turn execution the host runs. */
 	execution: SessionExecution;
@@ -360,14 +380,14 @@ export type SessionTurnRequest = Readonly<{
 	signal: AbortSignal;
 	/**
 	 * Hands the runtime the Steering Messages that joined this execution since
-	 * the last call, oldest first, at a Model Step boundary. The Engine pops the
-	 * Steering Lane and commits the Session Records as it answers, so the
-	 * delivery point and the commit point are the same event.
+	 * the last call, oldest first, at a Model Step boundary. The Agent Session
+	 * pops the Steering Lane and commits Session Records as it answers, so
+	 * delivery and commit are atomic.
 	 */
 	takeSteeringMessages: () => readonly SessionMessage[];
 }>;
 
-/** What one Agent Turn execution reported to the Engine. */
+/** What one Agent Turn execution reported to the Agent Session. */
 export type SessionTurnOutcome = Readonly<{
 	/** The failure that ended the execution, when it ended without a terminal event. */
 	error?: unknown;
@@ -384,16 +404,17 @@ export type SessionRuntimePort = Readonly<{
 }>;
 
 /**
- * The host capabilities the Engine runs a session with. The Engine owns the
- * session's state and its command ordering; a port only performs the work the
- * Engine asks for and reports what happened.
+ * The Host capabilities an Agent Session runs with. The Agent Session owns the
+ * session's state and command ordering; each port performs work it requests.
  */
-export type SessionEnginePorts = Readonly<{
+export type AgentSessionPorts = Readonly<{
 	attachments: SessionAttachmentPort;
 	/** The Session Compaction module whose per-session in-flight map owns admission. */
 	compaction: SessionCompactionPort;
 	/** Writes one durable Session Record. */
 	commitRecord: (input: SessionCommitInput) => Promise<void>;
+	/** Resolves the Agent, Model, and variant when a Submission starts. */
+	resolveSubmission: (input: SessionSendInput) => SessionSendInput;
 	/** Resolves the @path file mentions of a prompt. */
 	resolveFileMentions: (text: string) => Promise<FileMentionPart[]>;
 	/** Resolves the compaction settings one Model Target runs with. */
@@ -404,57 +425,61 @@ export type SessionEnginePorts = Readonly<{
 	skills: SessionSkillPort;
 }>;
 
-export type SessionEngineOptions = ReadonlyDeep<{
+export type AgentSessionOptions = ReadonlyDeep<{
 	initialCompactions?: readonly SessionCompaction[];
+	initialAgent?: AgentId;
 	initialContext?: readonly SessionMessage[];
+	initialSessionModel?: ChatModelSelection;
+	initialSessionVariant?: ModelVariant;
 	initialTranscript: readonly SessionMessage[];
-	ports: SessionEnginePorts;
+	ports: AgentSessionPorts;
 	sessionId: SessionId;
 }>;
 
-/** What one replay attempt asks the host to run: the turn's original message. */
-export type SessionOverflowReplayInput = ReadonlyDeep<{
+/** What one context continuation asks the Host to run: the original user message. */
+export type SessionOverflowContinuationInput = ReadonlyDeep<{
 	originalMessageId: SessionMessageId;
 }>;
 
 /**
- * What one replay attempt reported: the Agent Turn it starts, or the refusal
- * that stopped it. A refusal — a send the session already runs — is reported
+ * What one context continuation reported: the Agent Turn it starts, or the
+ * refusal that stopped it. A refusal — an active Session Command — is reported
  * instead of overlapped, and the recovery never queues it.
  */
-export type SessionOverflowReplayOutcome =
+export type SessionOverflowContinuationOutcome =
 	| { readonly kind: "started" }
 	| { readonly kind: "refused"; readonly reason: string };
 
-/** The Model Target one overflow recovery compacts and replays with. */
+/** The Model Target one overflow recovery compacts and continues with. */
 export type SessionOverflowRecoveryTarget = ReadonlyDeep<{
 	model: ChatModelSelection;
 	variant?: ModelVariant;
 }>;
 
-/** One provider refusal proposed to the Engine for overflow recovery. */
+/** One provider refusal proposed to the Agent Session for overflow recovery. */
 export type SessionOverflowRecoveryCommand = ReadonlyDeep<{
 	/** The failure that ended the Agent Turn; anything but an overflow is ignored. */
 	error: unknown;
-	/** The user message the failed Agent Turn answered; the recovery replays it. */
+	/** The user message the failed Agent Turn answered; continuation resumes it. */
 	originalMessageId: SessionMessageId;
 	/**
 	 * The Model Target the recovery's compaction runs against, or null when that
 	 * target has no overflow recovery available.
 	 */
 	resolveTarget: () => Promise<SessionOverflowRecoveryTarget | null>;
-	/** Runs the replay once the recovery has compacted. */
-	replay: (
-		input: SessionOverflowReplayInput
-	) => Promise<SessionOverflowReplayOutcome>;
+	/** Continues the existing context once the recovery has compacted. */
+	continueContext: (
+		input: SessionOverflowContinuationInput
+	) => Promise<SessionOverflowContinuationOutcome>;
 	/** The Agent Turn whose provider request overflowed. */
 	turnId: AgentTurnId;
 }>;
 
 /**
- * What one overflow recovery did: it compacted and replayed the message, the
- * failure was not eligible, the message had already used its one attempt, or
- * the recovery failed and published that failure as the compaction error.
+ * What one overflow recovery did: it compacted and continued the existing
+ * context, the failure was not eligible, the message had already used its one
+ * attempt, or the recovery failed and published that failure as the compaction
+ * error.
  */
 export type SessionOverflowRecoveryOutcome =
 	| { readonly kind: "recovered"; readonly entry: SessionCompaction }
@@ -463,16 +488,16 @@ export type SessionOverflowRecoveryOutcome =
 	| { readonly kind: "failed"; readonly error: OverflowRecoveryError };
 
 /**
- * The Session Compaction module the Engine submits compaction commands to. Its
- * per-session in-flight map owns the admission decision: a request either runs,
- * joins one that carries the same intent, or is refused.
+ * The Session Compaction module the Agent Session submits compaction commands
+ * to. Its per-session in-flight map owns admission: a request runs, joins one
+ * with the same intent, or is refused.
  */
 export type SessionCompactionPort = Pick<
 	SessionCompactionModule,
 	"compact" | "getInFlight" | "needsCompaction"
 >;
 
-/** One compaction request as the Session Command the Engine runs. */
+/** One compaction request as a Session Command the Agent Session runs. */
 export type SessionCompactionCommand = ReadonlyDeep<{
 	focus?: string;
 	model: ChatModelSelection;
@@ -484,14 +509,15 @@ export type SessionCompactionCommand = ReadonlyDeep<{
 	variant?: ModelVariant;
 }>;
 
-export type SessionEngine = Readonly<{
+export type AgentSession = Readonly<{
+	/** Starts a new Submission or admits it to the FIFO Submission Queue. */
+	prompt: (input: SessionSendInput) => Promise<SessionSubmissionAdmission>;
+	/** Delivers a text-only correction to a running Agent Turn. */
+	steer: (text: string) => SessionSteeringAdmission;
+	/** Resumes a valid idle context or starts the next waiting user input. */
+	continue: () => SessionContinuationOutcome;
 	/**
-	 * Admits a Submission into the Engine without waiting for preparation,
-	 * provider work, or terminal persistence.
-	 */
-	admit: (input: SessionSendInput) => SessionSubmissionAdmission;
-	/**
-	 * Writes one durable Session Record while the Engine still owns the
+	 * Writes one durable Session Record while the Agent Session still owns the
 	 * session. Late runtime callbacks are ignored after shutdown.
 	 */
 	commitRecord: (input: SessionCommitInput) => Promise<void>;
@@ -508,87 +534,41 @@ export type SessionEngine = Readonly<{
 	 */
 	abortApprovalTurn: (toolCallId: ToolCallId) => void;
 	/**
-	 * Aborts the compaction command in flight and recalls the waiting user
-	 * messages with it: cancelling maintenance is still stopping work, and
-	 * stopping work hands the waiting text back.
+	 * Aborts the compaction command in flight and recalls the waiting messages
+	 * with it.
 	 */
 	cancelCompaction: () => SessionWaitingMessage[];
-	/**
-	 * Settles every pending approval as rejected, so no Tool Gate evaluation
-	 * that asked for one is left waiting. The newest pending request carries the
-	 * feedback.
-	 */
+	/** Settles every pending approval as rejected. */
 	closeApprovals: (feedback?: string) => void;
-	/**
-	 * Runs a compaction command. A command whose intent is already in flight
-	 * joins it; one that carries another intent is refused, so no caller is
-	 * answered with another caller's entry.
-	 */
+	/** Runs a compaction command. */
 	compact: (command: SessionCompactionCommand) => Promise<CompactSessionResult>;
 	/** Drops an execution and everything that belonged to it. */
 	endExecution: (turnId: AgentTurnId) => void;
 	getSnapshot: () => SessionSnapshot;
-	/**
-	 * Reports work that can still write or settle after shutdown starts, so the
-	 * Session Host can keep ownership until the shutdown promise is complete.
-	 */
+	/** Reports work that can still write or settle after shutdown starts. */
 	hasPendingWork: () => boolean;
-	/**
-	 * Interrupts the Agent Turn the session is running: the send ends, the
-	 * assistant message it streams into keeps the interrupted Tool Call
-	 * visible, and everything waiting — the Steering Lane and the Submission
-	 * Queue together — comes back for the composer instead of draining, so
-	 * stopping work never strands waiting text.
-	 */
+	/** Interrupts the active Agent Turn and recalls all waiting work. */
 	interrupt: (preserveToolCallId?: ToolCallId) => SessionWaitingMessage[];
 	/** Interrupts compaction or the active turn and recalls waiting work atomically. */
 	interruptAll: () => SessionInterruptResult;
-	/**
-	 * Merges messages into the Session Transcript: an existing message is
-	 * replaced by id, an unknown one is appended, and a compaction summary
-	 * never enters the Transcript.
-	 */
+	/** Merges messages into the Session Transcript by message identity. */
 	mergeTranscript: (
 		messages: readonly SessionMessage[]
 	) => readonly SessionMessage[];
-	/**
-	 * Creates one pending approval owned by the Engine and settles it exactly
-	 * once through the returned promise.
-	 */
+	/** Creates one pending approval owned by the Agent Session. */
 	requestApproval: (
 		request: ToolApprovalRequest
 	) => Promise<SessionApprovalOutcome>;
-	/**
-	 * Settles one pending approval; an already settled request is left alone.
-	 * A forbidden remembered grant leaves the request pending.
-	 */
+	/** Settles one pending approval; an already settled request is left alone. */
 	respondToApproval: (
 		id: string,
 		outcome: SessionApprovalOutcome
 	) => SessionApprovalResult;
-	/**
-	 * Proposes the one recovery an Agent Turn may get from a provider refusal.
-	 * A failure that is not a context overflow, or one whose Model Target has no
-	 * overflow recovery, is ignored. The first eligible refusal records the user
-	 * message it answers, compacts the replay-safe history through the Engine's
-	 * own compaction command, and replays that message once the turn that
-	 * proposed the recovery has ended; every later refusal of the message is
-	 * refused as exhausted, so no new send can start a second attempt. A failed
-	 * or refused recovery is published as the compaction error.
-	 */
+	/** Proposes the one overflow recovery an Agent Turn may get. */
 	recoverOverflow: (
 		command: SessionOverflowRecoveryCommand
 	) => Promise<SessionOverflowRecoveryOutcome>;
-	/**
-	 * Withdraws the session's waiting user messages for the composer, in the
-	 * order they would run: the Steering Lane first, then the Submission Queue.
-	 * Without identifiers Recall withdraws both lanes — Recall is one action —
-	 * and identifiers are for a caller that read the lanes and must not
-	 * withdraw what has already started: an identifier that names nothing
-	 * waiting is a no-op, so a message that started running is never recalled
-	 * and never runs twice. Recalled messages leave their lane, so nothing
-	 * auto-starts once the current work ends.
-	 */
+	/** Withdraws waiting user messages back to the composer. */
 	recallWaitingMessages: (
 		ids?: readonly SessionWaitingMessageId[]
 	) => SessionWaitingMessage[];
@@ -597,26 +577,13 @@ export type SessionEngine = Readonly<{
 		turnId: AgentTurnId,
 		viewState: SessionViewState
 	) => void;
-	/**
-	 * Waits until no compaction command is in flight, so the Session Context a
-	 * caller reads next is the settled one. Reports the failure that ended the
-	 * wait, when a command ends with one.
-	 */
+	/** Waits until no compaction command is in flight. */
 	settleCompaction: () => Promise<Error | null>;
-	/**
-	 * Ends the session: it cancels the Agent Turn the session is running,
-	 * settles every pending approval through the same path, refuses later
-	 * requests, and resolves after active durable cleanup has completed.
-	 */
+	/** Ends the session after active durable cleanup has completed. */
 	shutdown: () => Promise<void>;
 	/**
-	 * Sends one submission as a Session Command. A submission that arrives
-	 * while the session is busy — a running Agent Turn or a compaction in
-	 * flight — becomes a waiting user message instead of being refused: one
-	 * admitted while an Agent Turn is running joins the Steering Lane and
-	 * travels inside that turn, and every other one joins the Submission Queue
-	 * and runs as its own Agent Turn. Either way it is accepted with the
-	 * composition and Model Target selection it arrived with.
+	 * Compatibility entry point. A busy send still routes to steering or the
+	 * Submission Queue using the historical automatic policy.
 	 */
 	send: (input: SessionSendInput) => Promise<SessionSendOutcome>;
 	onSubmissionEvent: (

@@ -8,7 +8,7 @@ import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { SessionId } from "@/shared/identifiers";
 import type { SessionCompactionModule } from "../compaction/compaction";
 import type { ResolvedCompactionSettings } from "../compaction/config";
-import type { SessionEngine, SessionSnapshot } from "../engine/types";
+import type { AgentSession, SessionSnapshot } from "../engine/types";
 import type { ResolvedSessionSelection } from "../selection";
 import type { SessionStore } from "../storage/session-store";
 export type SessionApprovalMode = "interactive" | "non-interactive";
@@ -59,11 +59,11 @@ export type SessionCapabilities = Readonly<{
 
 /**
  * One open session and the assembly that owns its lifetime. The consumer that
- * constructs a Host owns calling `shutdown`; a Host holds no session state of
- * its own, so every fact an observer reads comes from the Engine it assembled.
+ * constructs a Host owns calling `shutdown`; the Host holds no session state,
+ * so every observed fact comes from the Agent Session it assembled.
  */
 export type SessionHost = Readonly<{
-	engine: SessionEngine;
+	agentSession: AgentSession;
 	/**
 	 * The Session Selection the session opened with — the last-used Agent,
 	 * model, and variant, resolved against the live Agent registry — so a
@@ -75,14 +75,14 @@ export type SessionHost = Readonly<{
 	/** Reports a fatal Host lifecycle failure, such as losing its Session Lease. */
 	onFatal: (listener: (failure: SessionHostFailure) => void) => () => void;
 	/**
-	 * Observes the Agent Turn Events the Engine receives, in order, terminal
-	 * ones included: the stream a consumer renders text and reasoning from
-	 * without reading whole Snapshots per token.
+	 * Observes Agent Turn Events the Agent Session emits, in order, terminal
+	 * ones included: the stream a consumer renders without reading full Snapshots
+	 * per token.
 	 */
 	onEvent: (listener: (event: AgentTurnEvent) => void) => () => void;
 	/** Ends the session and resolves after active durable cleanup completes. */
 	shutdown: () => Promise<void>;
-	/** Notifies that session facts changed; no payload, as the Engine publishes. */
+	/** Notifies that session facts changed; no payload, as the Agent Session publishes. */
 	subscribe: (listener: () => void) => () => void;
 }>;
 

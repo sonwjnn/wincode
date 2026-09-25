@@ -249,7 +249,7 @@ export const createRpcRequestHandler = (
 					throw appError("server_closing", "The RPC server is closing.");
 				}
 				bind(createdHost, createdId);
-				const admission = state.host?.engine.admit(
+				const admission = await state.host?.agentSession.prompt(
 					sendInput(selection, text, {
 						messageId: message.id,
 						turnId,
@@ -419,7 +419,13 @@ export const createRpcRequestHandler = (
 							});
 						})()
 					: await parseSelection(params.selection);
-			const admission = activeHost.engine.admit(sendInput(selection, text, {}));
+			const steering = activeHost.getSnapshot().turnActive
+				? activeHost.agentSession.steer(text)
+				: undefined;
+			const admission =
+				steering === undefined || steering.rejected
+					? await activeHost.agentSession.prompt(sendInput(selection, text, {}))
+					: steering;
 			if (admission.rejected) {
 				throw appError("submission_rejected", admission.reason);
 			}
@@ -427,7 +433,7 @@ export const createRpcRequestHandler = (
 		}
 		if (request.method === "session/interrupt") {
 			const activeHost = requireBound();
-			const result = activeHost.engine.interruptAll();
+			const result = activeHost.agentSession.interruptAll();
 			return success(request.id, {
 				recalled: result.recalled.map(submissionFromWaiting),
 				settledApprovals: result.approvalsSettled,
@@ -449,7 +455,7 @@ export const createRpcRequestHandler = (
 			if (ids !== undefined && new Set(ids).size !== ids.length) {
 				throw rpcInvalidParams("submissionIds must be unique.");
 			}
-			const recalled = activeHost.engine.recallWaitingMessages(
+			const recalled = activeHost.agentSession.recallWaitingMessages(
 				ids as SessionWaitingMessageId[] | undefined
 			);
 			return success(request.id, {
@@ -535,14 +541,14 @@ export const createRpcRequestHandler = (
 				return success(request.id, { applied: false });
 			}
 			if (params.decision === "allowOnce") {
-				const result = activeHost.engine.respondToApproval(approvalId, {
+				const result = activeHost.agentSession.respondToApproval(approvalId, {
 					decision: "allow",
 					remember: false,
 				});
 				return success(request.id, { applied: result.applied });
 			}
 			if (params.decision === "alwaysAllow") {
-				const result = activeHost.engine.respondToApproval(approvalId, {
+				const result = activeHost.agentSession.respondToApproval(approvalId, {
 					decision: "allow",
 					remember: true,
 				});
@@ -561,7 +567,7 @@ export const createRpcRequestHandler = (
 				) {
 					throw rpcInvalidParams("feedback must be a string.");
 				}
-				const result = activeHost.engine.respondToApproval(approvalId, {
+				const result = activeHost.agentSession.respondToApproval(approvalId, {
 					decision: "reject",
 					...(params.feedback === undefined
 						? {}
@@ -570,7 +576,7 @@ export const createRpcRequestHandler = (
 				return success(request.id, { applied: result.applied });
 			}
 			if (params.decision === "abort") {
-				const result = activeHost.engine.respondToApproval(approvalId, {
+				const result = activeHost.agentSession.respondToApproval(approvalId, {
 					decision: "abort",
 				});
 				return success(request.id, { applied: result.applied });

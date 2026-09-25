@@ -13,6 +13,7 @@ import type {
 	SessionId,
 	SessionInterruptResult,
 	SessionSendInput,
+	SessionSteeringAdmission,
 	SessionStore,
 	SessionSubmissionAdmission,
 } from "../modules/sessions/host/session-rpc";
@@ -40,6 +41,13 @@ const createHandler = ({
 		rejected: false,
 		submissionId: "submission-1",
 	}),
+	steeringAdmission = fromPartial<SessionSteeringAdmission>({
+		disposition: "steering",
+		messageId: "steered-message-1",
+		rejected: false,
+		submissionId: "steered-submission-1",
+		turnId: "turn-1",
+	}),
 	approvalResult = { applied: true } as SessionApprovalResult,
 	interruptResult = fromPartial<SessionInterruptResult>({
 		approvalsSettled: 0,
@@ -47,26 +55,37 @@ const createHandler = ({
 		recalled: [],
 	}),
 	selected = true,
+	active = false,
 }: Readonly<{
 	admission?: SessionSubmissionAdmission;
 	approvalResult?: SessionApprovalResult;
 	interruptResult?: SessionInterruptResult;
 	selected?: boolean;
+	active?: boolean;
+	steeringAdmission?: SessionSteeringAdmission;
 }> = {}): {
 	handler: (requestValue: RpcRequest) => Promise<unknown>;
 	approvals: CapturedApproval[];
 	inputs: SessionSendInput[];
 	recalledIds: Array<readonly string[] | undefined>;
+	steeredTexts: string[];
 	setApprovalResult: (result: SessionApprovalResult) => void;
 } => {
 	const approvals: CapturedApproval[] = [];
 	const inputs: SessionSendInput[] = [];
 	const recalledIds: Array<readonly string[] | undefined> = [];
+	const steeredTexts: string[] = [];
 	let currentApprovalResult = approvalResult;
 	const engine = {
-		admit: (input: SessionSendInput): SessionSubmissionAdmission => {
+		prompt: async (
+			input: SessionSendInput
+		): Promise<SessionSubmissionAdmission> => {
 			inputs.push(input);
 			return admission;
+		},
+		steer: (text: string): SessionSteeringAdmission => {
+			steeredTexts.push(text);
+			return steeringAdmission;
 		},
 		interruptAll: () => interruptResult,
 		recallWaitingMessages: (ids: readonly string[] | undefined) => {
@@ -82,7 +101,7 @@ const createHandler = ({
 		},
 	};
 	const host = {
-		engine,
+		agentSession: engine,
 		getSelection: () =>
 			selected
 				? {
@@ -92,9 +111,7 @@ const createHandler = ({
 						variant: undefined,
 					}
 				: null,
-		getSnapshot: () => {
-			throw new Error("The RPC adapter must not read a snapshot.");
-		},
+		getSnapshot: () => fromPartial({ turnActive: active }),
 	} as unknown as SessionHost;
 	const state: RpcSessionState = {
 		boundSessionId: "session-1",
@@ -126,6 +143,7 @@ const createHandler = ({
 	});
 	return {
 		handler,
+		steeredTexts,
 		approvals,
 		inputs,
 		recalledIds,
@@ -137,7 +155,7 @@ const createHandler = ({
 
 test("session submit uses fallback selection and honors a complete override", async () => {
 	const admission = fromPartial<SessionSubmissionAdmission>({
-		disposition: "steering",
+		disposition: "started",
 		messageId: "message-1",
 		rejected: false,
 		submissionId: "submission-1",
@@ -176,6 +194,26 @@ test("session submit uses fallback selection and honors a complete override", as
 		agent: "review",
 		userText: "override text",
 	});
+});
+
+test("session submit routes a live turn through explicit Steering", async () => {
+	const steeringAdmission = fromPartial<SessionSteeringAdmission>({
+		disposition: "steering",
+		messageId: "steered-message-1",
+		rejected: false,
+		submissionId: "steered-submission-1",
+		turnId: "turn-1",
+	});
+	const controls = createHandler({ active: true, steeringAdmission });
+
+	await expect(
+		controls.handler(
+			request("submit-steering", "session/submit", {
+				submission: { text: "correction" },
+			})
+		)
+	).resolves.toMatchObject({ result: steeringAdmission });
+	expect(controls.steeredTexts).toEqual(["correction"]);
 });
 
 test("approval responses use wire identities and Engine authority", async () => {
@@ -300,8 +338,8 @@ test("failed Session creation stays durable and can be reopened", async () => {
 		signalRequested: false,
 	};
 	const host = fromPartial<SessionHost>({
-		engine: {
-			admit: () =>
+		agentSession: {
+			prompt: async () =>
 				fromPartial<SessionSubmissionAdmission>({
 					disposition: "started",
 					messageId: "message-1",
