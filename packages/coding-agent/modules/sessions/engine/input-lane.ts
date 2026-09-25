@@ -577,7 +577,9 @@ export const createSessionInputLaneWorkflow = (
 			return outcome.rejected ? outcome : { rejected: false };
 		}
 		if (port.isSubmissionBusy()) {
-			return await acceptQueuedSubmission(input);
+			const pending = acceptQueuedSubmission(input);
+			port.trackBackgroundTask(pending);
+			return await pending;
 		}
 		return await port.runSubmission(input);
 	};
