@@ -60,4 +60,11 @@ temp
 .agents
 wincode.json
 wincode.jsonc
-.wincode
+
+# Teach skill
+reference/
+lessons/
+MISSION.md
+NOTES.md
+RESOURCES.md
+
