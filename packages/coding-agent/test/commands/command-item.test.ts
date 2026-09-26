@@ -77,6 +77,22 @@ describe("filterCommandItems", () => {
 		]);
 	});
 
+	test("does not return every skill for punctuation-only queries", () => {
+		expect(labels(filterCommandItems(SKILLS, "!!!"))).toEqual([]);
+	});
+
+	test("fuzzy-matches skill names when adjacent letters and numbers are swapped", () => {
+		const modelSkill = createSkillCommandSpecs([
+			{ description: "Model helpers", name: "model-4o" },
+		]);
+
+		for (const query of ["modelo4", "skill:modelo4"]) {
+			expect(labels(filterCommandItems(modelSkill, query))).toEqual([
+				"skill:model-4o",
+			]);
+		}
+	});
+
 	test("keeps prefix matching for commands and ignores descriptions", () => {
 		expect(filterCommandItems([GIT_COMMIT], "commit")).toEqual([]);
 		expect(filterCommandItems(ITEMS, "conventional")).toEqual([]);

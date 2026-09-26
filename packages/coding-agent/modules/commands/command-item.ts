@@ -1,6 +1,6 @@
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import { SKILL_NAMESPACE_PREFIX, type Skill } from "@/modules/skills";
-import { findSubsequenceMatch } from "@/shared/utils/string-matching";
+import { fuzzyMatch } from "@/shared/fuzzy";
 import type { BaseSpec, CommandSpec } from "./commands";
 
 /** A discovered Skill offered as a row under the reserved `skill:` namespace. */
@@ -8,6 +8,7 @@ export type SkillCommandSpec = BaseSpec & { kind: "skill" };
 
 export type CommandItem = CommandSpec | CustomCommandSpec | SkillCommandSpec;
 
+const SEARCHABLE_CHARACTER_RE = /[\p{Letter}\p{Mark}\p{Number}]/u;
 const skillLabel = (name: string): string => `${SKILL_NAMESPACE_PREFIX}${name}`;
 
 /**
@@ -35,8 +36,8 @@ export const createSkillCommandSpecs = (
 		.toSorted((left, right) => left.name.localeCompare(right.name));
 
 /**
- * Commands match by label prefix. Skills also match fuzzy subsequences of their
- * name, with an optional namespace prefix in the query.
+ * Commands match by label prefix. Skills also use fuzzy matching on their bare
+ * names, with an optional namespace prefix in the query.
  */
 const matchesCommandQuery = (item: CommandItem, query: string): boolean => {
 	const normalized = query.toLowerCase();
@@ -51,10 +52,9 @@ const matchesCommandQuery = (item: CommandItem, query: string): boolean => {
 	const skillQuery = normalized.startsWith(SKILL_NAMESPACE_PREFIX)
 		? normalized.slice(SKILL_NAMESPACE_PREFIX.length)
 		: normalized;
-	return (
-		skillQuery.length > 0 &&
-		findSubsequenceMatch(item.name.toLowerCase(), skillQuery) !== null
-	);
+	// fuzzyMatch treats a query that normalizes to empty as a match.
+	const hasSearchableCharacter = SEARCHABLE_CHARACTER_RE.test(skillQuery);
+	return hasSearchableCharacter && fuzzyMatch(skillQuery, item.name).matches;
 };
 
 export const filterCommandItems = (

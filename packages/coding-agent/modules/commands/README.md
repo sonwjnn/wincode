@@ -10,8 +10,8 @@ Slash-command registry and dispatch for the CLI chat input.
 2. **Items** — `command-item.ts` merges Built-in Commands, Custom Commands, and Skills into
    one `CommandItem[]` for the `/` overlay. Rows render without the leading slash; only
    Skill rows keep a namespace (`skill:review`) so the merged list stays unambiguous.
-   Built-in and Custom Commands use label prefixes; Skills additionally fuzzy-match
-   subsequences of their bare names, whether or not the query includes `skill:`.
+   Built-in and Custom Commands use label prefixes; Skills use shared fuzzy matching on
+   their bare names, with or without a `skill:` query prefix.
 3. **Dispatch** — `createCommandExecutor` receives an `AdapterMap` at app bootstrap and
    returns a function that switches on `spec.kind`, delegating to the matching adapter.
    The same executor serves overlay selection and typed Built-in Commands

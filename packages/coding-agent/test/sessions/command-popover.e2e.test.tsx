@@ -52,13 +52,13 @@ await globalThis.Bun.write(
 );
 await Promise.all([
 	mkdir(join(testDirectory, ".git"), { recursive: true }),
-	mkdir(join(testDirectory, ".wincode", "skills", "review"), {
+	mkdir(join(testDirectory, ".wincode", "skills", "model-4o"), {
 		recursive: true,
 	}),
 ]);
 await writeFile(
-	join(testDirectory, ".wincode", "skills", "review", "SKILL.md"),
-	"---\nname: review\ndescription: Reviews implementation\n---\nReview the implementation carefully."
+	join(testDirectory, ".wincode", "skills", "model-4o", "SKILL.md"),
+	"---\nname: model-4o\ndescription: Model helper skill\n---\nUse the model helper skill."
 );
 afterAll(async () => {
 	mock.restore();
@@ -87,7 +87,7 @@ const {
 const store = createE2eStore();
 const { sessionId } = await seedCompactionHistory(store, 2);
 
-test("keeps folder mentions searchable and activates a typed skill", async () => {
+test("filters a transposed skill query and keeps folder mentions searchable", async () => {
 	let setup: TestRendererSetup | undefined;
 	try {
 		const rendered = await renderSession({
@@ -118,7 +118,7 @@ test("keeps folder mentions searchable and activates a typed skill", async () =>
 		// eight-row window while the query is empty.
 		const emptyQueryFrame = activeSetup.captureCharFrame();
 		expect(emptyQueryFrame).toContain("Start a new session");
-		expect(emptyQueryFrame).not.toContain("skill:review");
+		expect(emptyQueryFrame).not.toContain("skill:model-4o");
 
 		await act(async () => {
 			await activeSetup.mockInput.typeText("mo");
@@ -141,22 +141,22 @@ test("keeps folder mentions searchable and activates a typed skill", async () =>
 			]);
 		});
 		await act(async () => {
-			await activeSetup.mockInput.typeText("/skill:rev");
+			await activeSetup.mockInput.typeText("/skill:modelo4");
 		});
 		await act(async () => {
 			await activeSetup.waitForFrame(
-				(frame) => frame.includes("skill:review"),
+				(frame) => frame.includes("skill:model-4o"),
 				{ maxPasses: 200 }
 			);
 		});
 		const skillRowFrame = activeSetup.captureCharFrame();
-		expect(skillRowFrame).toContain("skill:review");
-		expect(skillRowFrame).toContain("Reviews implementation");
+		expect(skillRowFrame).toContain("skill:model-4o");
+		expect(skillRowFrame).toContain("Model helper skill");
 
 		// Tab completes the selected Skill row into its namespaced invocation.
 		await act(() => activeSetup.mockInput.pressTab());
 		await settleSessionUi(activeSetup);
-		expect(activeSetup.captureCharFrame()).toContain("/skill:review ");
+		expect(activeSetup.captureCharFrame()).toContain("/skill:model-4o ");
 
 		await act(async () => {
 			await activeSetup.mockInput.typeText("focus on auth");
@@ -171,8 +171,8 @@ test("keeps folder mentions searchable and activates a typed skill", async () =>
 			(frame) => frame.includes("Ask anything") && frame.includes("Skill")
 		);
 		const submittedFrame = activeSetup.captureCharFrame();
-		expect(submittedFrame).toContain("/skill:review focus on auth");
-		expect(submittedFrame).toContain("review");
+		expect(submittedFrame).toContain("/skill:model-4o focus on auth");
+		expect(submittedFrame).toContain("model-4o");
 
 		const folderQuery = `@${mentionFixturePath}/utils`;
 		const folderLabel = `${mentionFixturePath}/utils/`;
