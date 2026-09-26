@@ -119,7 +119,7 @@ type ChatTextAreaProps = {
 const readPastedImage = () =>
 	readClipboardImage({
 		environment: process.env,
-		readFile: (path) => globalThis.Bun.file(path).bytes(),
+		readFile: (path) => Bun.file(path).bytes(),
 		stat: async (path) => stat(path),
 		removeFile: (path) => rm(path, { force: true }),
 		run: async (command, args) => {
@@ -141,7 +141,7 @@ const readPastedImage = () =>
 const readPastedImageOrPath = async (pastedText: string) => {
 	const pathImage = pastedText
 		? await readImagePath(pastedText, {
-				readFile: (path) => globalThis.Bun.file(path).bytes(),
+				readFile: (path) => Bun.file(path).bytes(),
 				stat: async (path) => stat(path),
 			})
 		: { unavailable: true as const };

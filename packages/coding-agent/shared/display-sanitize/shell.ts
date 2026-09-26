@@ -16,8 +16,7 @@ const stripShellOutputControlCharacters = (value: string): string =>
 	).join("");
 
 /** Strips ANSI escape sequences from command output using Bun's native utility. */
-export const stripAnsi = (value: string): string =>
-	globalThis.Bun.stripANSI(value);
+export const stripAnsi = (value: string): string => Bun.stripANSI(value);
 
 /**
  * Normalizes command-output newlines: CRLF collapses to LF, bare carriage

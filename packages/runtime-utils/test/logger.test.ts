@@ -183,12 +183,9 @@ describe("runtime logger", () => {
 			await mkdir(directory, { recursive: true });
 			const expired = `wincode.${daysAgo(15)}.log`;
 			const retained = `wincode.${daysAgo(13)}.log`;
-			await globalThis.Bun.write(path.join(directory, expired), "expired");
-			await globalThis.Bun.write(path.join(directory, retained), "retained");
-			await globalThis.Bun.write(
-				path.join(directory, "notes.log"),
-				"not a Wincode log"
-			);
+			await Bun.write(path.join(directory, expired), "expired");
+			await Bun.write(path.join(directory, retained), "retained");
+			await Bun.write(path.join(directory, "notes.log"), "not a Wincode log");
 
 			await logger.warn("retention sweep");
 			const names = await readdir(directory);
@@ -201,10 +198,7 @@ describe("runtime logger", () => {
 		});
 
 		await withLoggerHome(async (home) => {
-			await globalThis.Bun.write(
-				path.join(home, ".wincode"),
-				"not a directory"
-			);
+			await Bun.write(path.join(home, ".wincode"), "not a directory");
 			const output: string[] = [];
 			const originalConsole = {
 				error: console.error,
@@ -231,7 +225,7 @@ describe("runtime logger", () => {
 			const directory = logDirectory(home);
 			await mkdir(directory, { recursive: true });
 			const expired = `wincode.${daysAgo(15)}.log`;
-			await globalThis.Bun.write(path.join(directory, expired), "expired");
+			await Bun.write(path.join(directory, expired), "expired");
 			await chmod(directory, 0);
 			try {
 				await logger.warn("retention directory is inaccessible");
@@ -248,7 +242,7 @@ describe("runtime logger", () => {
 			const directory = logDirectory(home);
 			await mkdir(directory, { recursive: true });
 			const expired = `wincode.${daysAgo(15)}.log`;
-			await globalThis.Bun.write(path.join(directory, expired), "expired");
+			await Bun.write(path.join(directory, expired), "expired");
 			await chmod(directory, 0o500);
 			try {
 				await logger.warn("retention deletion unavailable");

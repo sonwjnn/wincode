@@ -57,7 +57,7 @@ const makeRegistry = (
 });
 
 const waitForUiTick = (milliseconds: number): Promise<void> =>
-	globalThis.Bun.sleep(milliseconds);
+	Bun.sleep(milliseconds);
 const flushUi = async (
 	setup: Awaited<ReturnType<typeof testRender>>
 ): Promise<void> => {

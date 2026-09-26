@@ -9,7 +9,7 @@ test("preserves UTF-8 BOM and replacement decoding in file contents", async () =
 	try {
 		const path = join(directory, "input.txt");
 		const bytes = Uint8Array.of(0xef, 0xbb, 0xbf, 0x61, 0xff);
-		await globalThis.Bun.write(path, bytes);
+		await Bun.write(path, bytes);
 
 		expect(decodeUtf8(bytes)).toBe("\uFEFFa\uFFFD");
 		expect(await readUtf8File(path)).toBe("\uFEFFa\uFFFD");

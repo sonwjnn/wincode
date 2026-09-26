@@ -80,6 +80,6 @@ if (isCheck) {
 	}
 	process.stdout.write("Generated model metadata is current.\n");
 } else {
-	await globalThis.Bun.write(OUTPUT_PATH, rendered.contents);
+	await Bun.write(OUTPUT_PATH, rendered.contents);
 	process.stdout.write(`Wrote ${OUTPUT_PATH}\n`);
 }

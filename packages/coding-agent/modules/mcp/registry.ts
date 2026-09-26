@@ -712,11 +712,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			);
 			return false;
 		}
-		const configChanged = !globalThis.Bun.deepEquals(
-			entry.config,
-			config,
-			true
-		);
+		const configChanged = !Bun.deepEquals(entry.config, config, true);
 		entry.config = config;
 		if (config.disabled) {
 			if (entry.state !== "disabled") {

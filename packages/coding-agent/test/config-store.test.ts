@@ -302,27 +302,27 @@ describe("createConfigStore", () => {
 				mkdir(projectConfigRoot, { recursive: true }),
 			]);
 			await Promise.all([
-				globalThis.Bun.write(
+				Bun.write(
 					join(configRoot, "wincode.json"),
 					JSON.stringify({
 						settings: { layers: { xdg: true }, selected: "xdg" },
 					})
 				),
-				globalThis.Bun.write(
+				Bun.write(
 					join(homeRoot, ".wincode", "wincode.json"),
 					JSON.stringify({ settings: { layers: { home: true } } })
 				),
-				globalThis.Bun.write(
+				Bun.write(
 					join(workspace, "wincode.json"),
 					JSON.stringify({ settings: { layers: { workspace: true } } })
 				),
-				globalThis.Bun.write(
+				Bun.write(
 					projectJsonPath,
 					JSON.stringify({
 						settings: { layers: { ignoredJson: true }, selected: "json" },
 					})
 				),
-				globalThis.Bun.write(
+				Bun.write(
 					projectJsoncPath,
 					'// JSONC wins\n{"settings":{"layers":{"project":true},"selected":"jsonc",},}'
 				),

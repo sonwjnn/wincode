@@ -354,10 +354,7 @@ export type DrizzleSessionStoreOptions = {
 };
 
 const hashWorkspace = (rootPath: string): string =>
-	new globalThis.Bun.CryptoHasher("sha256")
-		.update(rootPath)
-		.digest("hex")
-		.slice(0, 16);
+	new Bun.CryptoHasher("sha256").update(rootPath).digest("hex").slice(0, 16);
 
 const ensureWorkspace = (db: SessionDatabase, rootPath: string) => {
 	const now = new Date();

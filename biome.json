@@ -92,7 +92,8 @@
   "javascript": {
     "formatter": {
       "enabled": true
-    }
+    },
+    "globals": ["Bun"]
   },
   "overrides": [
     {

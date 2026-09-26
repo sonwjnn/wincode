@@ -51,7 +51,7 @@ describe("loadMcpConfig", () => {
 				mkdir(join(root, ".git")),
 				mkdir(workspace, { recursive: true }),
 			]);
-			await globalThis.Bun.write(
+			await Bun.write(
 				join(root, "wincode.json"),
 				JSON.stringify({
 					mcp: {

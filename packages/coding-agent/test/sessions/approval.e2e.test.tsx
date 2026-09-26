@@ -170,7 +170,7 @@ const {
 
 const store = createE2eStore();
 const { sessionId } = await seedCompactionHistory(store, 1);
-await globalThis.Bun.write(join(testDirectory, FILE_NAME), FILE_CONTENT);
+await Bun.write(join(testDirectory, FILE_NAME), FILE_CONTENT);
 
 const completedToolRecords = (
 	records: readonly SessionRecord[],

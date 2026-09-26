@@ -46,7 +46,7 @@ const mentionFixturePath = mentionFixtureDirectory.slice(
 await mkdir(join(mentionFixtureDirectory, "utils", "empty"), {
 	recursive: true,
 });
-await globalThis.Bun.write(
+await Bun.write(
 	join(mentionFixtureDirectory, "utils", "child.ts"),
 	"export const child = true;"
 );
@@ -56,7 +56,7 @@ await Promise.all([
 		recursive: true,
 	}),
 ]);
-await globalThis.Bun.write(
+await Bun.write(
 	join(testDirectory, ".wincode", "skills", "model-4o", "SKILL.md"),
 	"---\nname: model-4o\ndescription: Model helper skill\n---\nUse the model helper skill."
 );

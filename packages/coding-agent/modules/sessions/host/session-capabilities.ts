@@ -61,10 +61,7 @@ export type SessionCapabilitiesAssembly = Readonly<{
 
 const workspaceIdentity = (workspace: string): WorkspaceId =>
 	toWorkspaceId(
-		new globalThis.Bun.CryptoHasher("sha256")
-			.update(workspace)
-			.digest("hex")
-			.slice(0, 16)
+		new Bun.CryptoHasher("sha256").update(workspace).digest("hex").slice(0, 16)
 	);
 
 const asMcpCapability = (registry: McpRegistry): McpSessionCapability => ({

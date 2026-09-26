@@ -7,7 +7,7 @@ import { isUndefined } from "@wincode/runtime-utils";
 //   `[process.execPath, "run", fixturePath]` where fixturePath is the
 //   runnable `test/support/mcp-stdio-server.ts` entrypoint (see its header comment).
 // - HTTP uses the documented v2 `createMcpHandler` factory entry wrapped by
-//   `globalThis.Bun.serve`; the factory creates a fresh McpServer per request.
+//   `Bun.serve`; the factory creates a fresh McpServer per request.
 // - `registry.close()` must always run, so every test wraps its registry in
 //   try/finally.
 
@@ -108,7 +108,7 @@ const createEchoServer = (): McpServer => {
 };
 
 const hasChildProcess = (fixture: string): boolean => {
-	const result = globalThis.Bun.spawnSync(["ps", "-axo", "pid=,command="], {
+	const result = Bun.spawnSync(["ps", "-axo", "pid=,command="], {
 		stdout: "pipe",
 	});
 	return result.stdout
@@ -245,7 +245,7 @@ describe("MCP transport integration", () => {
 				await registry.close();
 			}
 			await waitForFile(exitMarker);
-			expect(await globalThis.Bun.file(exitMarker).text()).toBe("exited");
+			expect(await Bun.file(exitMarker).text()).toBe("exited");
 		} finally {
 			await rm(markerDirectory, { force: true, recursive: true });
 		}
@@ -253,7 +253,7 @@ describe("MCP transport integration", () => {
 
 	test("http: discovers and executes echo over streamable HTTP", async () => {
 		const handler = createMcpHandler(() => createEchoServer());
-		const server = globalThis.Bun.serve({
+		const server = Bun.serve({
 			hostname: "127.0.0.1",
 			port: 0,
 			fetch: (request) => handler.fetch(request),
@@ -290,7 +290,7 @@ describe("MCP transport integration", () => {
 
 	test("http: port is released after close", async () => {
 		const handler = createMcpHandler(() => createEchoServer());
-		const server = globalThis.Bun.serve({
+		const server = Bun.serve({
 			hostname: "127.0.0.1",
 			port: 0,
 			fetch: (request) => handler.fetch(request),

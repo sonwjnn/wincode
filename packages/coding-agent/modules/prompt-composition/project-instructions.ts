@@ -509,7 +509,7 @@ const readSource = async (
 		};
 	}
 
-	const contentHash = new globalThis.Bun.CryptoHasher("sha256")
+	const contentHash = new Bun.CryptoHasher("sha256")
 		.update(bytes)
 		.digest("hex");
 	const renderedByteLength = projectInstructionEncoder.encode(

@@ -119,7 +119,7 @@ export const encodeLosslessText = (text: LosslessText): Uint8Array => {
 
 /** Computes the content identity from exact on-disk bytes. */
 export const computeFileVersion = (bytes: Uint8Array): FileVersion =>
-	new globalThis.Bun.CryptoHasher("sha256")
+	new Bun.CryptoHasher("sha256")
 		.update(bytes)
 		.digest("hex")
 		.slice(0, FILE_VERSION_BYTES * 2) as FileVersion;

@@ -307,7 +307,7 @@ const assertNotAborted = (signal?: AbortSignal): void => {
 };
 
 const digestBytes = (bytes: Uint8Array): string =>
-	new globalThis.Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+	new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 
 const digestUnavailableInput = (value: string): string =>
 	`v1-${digestBytes(new TextEncoder().encode(`unavailable:${value}`))}`;
@@ -707,7 +707,7 @@ const writeBlobAtomically = async (
 		if (temporaryInfo.size !== bytes.byteLength) {
 			throw new Error("Attachment blob length validation failed.");
 		}
-		const writtenBytes = await globalThis.Bun.file(temporaryPath).bytes();
+		const writtenBytes = await Bun.file(temporaryPath).bytes();
 		if (`v1-${digestBytes(writtenBytes)}` !== expectedAttachmentId) {
 			throw new Error("Attachment blob integrity validation failed.");
 		}
@@ -1519,7 +1519,7 @@ export const createSessionAttachmentStore = ({
 			) {
 				return { orphanBytes: 0, orphanCount: 0 };
 			}
-			const bytes = await globalThis.Bun.file(path).bytes();
+			const bytes = await Bun.file(path).bytes();
 			if (
 				`v1-${digestBytes(bytes)}` !== attachmentId ||
 				isNull(detectImageMediaType(bytes))

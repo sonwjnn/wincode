@@ -85,7 +85,7 @@ const writePinnedBlob = async (
 	const targetPath = resolveBlobPath(root, blobKey);
 	await ensurePrivateBlobPath(root, targetPath);
 	try {
-		const existing = await globalThis.Bun.file(targetPath).bytes();
+		const existing = await Bun.file(targetPath).bytes();
 		if (computeFileVersion(existing) === expectedVersion) {
 			await chmod(targetPath, 0o600);
 			return;
@@ -123,9 +123,7 @@ const readPinnedBlob = async (
 		return { bytes: null, valid: false };
 	}
 	try {
-		const bytes = await globalThis.Bun.file(
-			resolveBlobPath(root, blobKey)
-		).bytes();
+		const bytes = await Bun.file(resolveBlobPath(root, blobKey)).bytes();
 		const actualVersion = computeFileVersion(bytes);
 		return {
 			bytes: actualVersion === expectedVersion ? bytes : null,
@@ -139,7 +137,7 @@ const readCurrentFileVersion = async (
 	canonicalPath: string
 ): Promise<FileVersion | null | undefined> => {
 	try {
-		return computeFileVersion(await globalThis.Bun.file(canonicalPath).bytes());
+		return computeFileVersion(await Bun.file(canonicalPath).bytes());
 	} catch (error) {
 		if (isMissingPath(error)) {
 			return null;

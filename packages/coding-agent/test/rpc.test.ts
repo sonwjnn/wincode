@@ -610,7 +610,7 @@ test("records shutdown failures without writing diagnostics to RPC stderr", asyn
 				record.context?.errorType === "Error"
 		)
 	).toBe(true);
-	const contents = await globalThis.Bun.file(
+	const contents = await Bun.file(
 		path.join(
 			logHome,
 			".wincode",

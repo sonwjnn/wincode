@@ -118,7 +118,7 @@ const writeSnapshotBlob = async (
 	const targetPath = resolveSnapshotBlobPath(root, blobKey);
 	await ensurePrivateSnapshotDirectories(root, targetPath);
 	try {
-		const existing = await globalThis.Bun.file(targetPath).bytes();
+		const existing = await Bun.file(targetPath).bytes();
 		if (computeFileVersion(existing) === snapshot.fileVersion) {
 			await chmod(targetPath, 0o600);
 			return blobKey;
@@ -154,9 +154,7 @@ const readSnapshotBlob = async (
 	}
 	let bytes: Uint8Array;
 	try {
-		bytes = await globalThis.Bun.file(
-			resolveSnapshotBlobPath(root, row.blobKey)
-		).bytes();
+		bytes = await Bun.file(resolveSnapshotBlobPath(root, row.blobKey)).bytes();
 	} catch (error) {
 		if (isMissingPath(error)) {
 			return null;
@@ -327,7 +325,7 @@ const PATH_LEASE_MAX_WAIT_MS = 5000;
 const PATH_LEASE_HEARTBEAT_MS = 10_000;
 
 const delay = async (milliseconds: number): Promise<void> => {
-	await globalThis.Bun.sleep(milliseconds);
+	await Bun.sleep(milliseconds);
 };
 const pathLeaseTimeout = (canonicalPath: string): CodingToolError =>
 	new CodingToolError(

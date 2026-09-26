@@ -53,7 +53,7 @@ const HELP_TEXT = [
 const VERSION_URL = new URL("../../package.json", import.meta.url);
 
 const getVersion = async (): Promise<string> => {
-	const metadata = (await globalThis.Bun.file(VERSION_URL).json()) as {
+	const metadata = (await Bun.file(VERSION_URL).json()) as {
 		version?: unknown;
 	};
 	return typeof metadata.version === "string" ? metadata.version : "unknown";

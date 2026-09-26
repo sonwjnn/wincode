@@ -31,7 +31,7 @@ const withTempFile = async <T>(
 		store: createMemoryFileObservationStore(),
 	};
 	try {
-		await globalThis.Bun.write(filePath, content);
+		await Bun.write(filePath, content);
 		return await callback(filePath, context);
 	} finally {
 		await rm(directory, { force: true, recursive: true });
@@ -113,7 +113,7 @@ describe("versioned coding tools", () => {
 			const version = first.fileVersion as string;
 			expect(version).toMatch(FILE_VERSION_PATTERN);
 			expect(first.seenLines).toEqual([{ endLine: 2, startLine: 1 }]);
-			await globalThis.Bun.write(filePath, "changed\ntwo\n");
+			await Bun.write(filePath, "changed\ntwo\n");
 			await expect(
 				runReadTool(
 					{ expectedVersion: version, path: filePath },
@@ -138,7 +138,7 @@ describe("versioned coding tools", () => {
 				code: "expected-file-version",
 				recovery: { action: "provide-file-version" },
 			});
-			await globalThis.Bun.write(filePath, "changed\ntwo\n");
+			await Bun.write(filePath, "changed\ntwo\n");
 			await expect(
 				runReadTool(
 					{
@@ -297,16 +297,14 @@ describe("versioned coding tools", () => {
 				{ path: filePath, fullLines: true },
 				{ allowExternalPath: true, versionedEditing: context }
 			);
-			await globalThis.Bun.write(filePath, "zero\none\ntwo\nthree\n");
+			await Bun.write(filePath, "zero\none\ntwo\nthree\n");
 			await runEditTool(
 				{
 					patch: `[${filePath}#${read.fileVersion as string}]\nPUT 2.=2:\n+TWO`,
 				},
 				{ allowExternalPath: true, versionedEditing: context }
 			);
-			expect(await globalThis.Bun.file(filePath).text()).toBe(
-				"zero\none\nTWO\nthree\n"
-			);
+			expect(await Bun.file(filePath).text()).toBe("zero\none\nTWO\nthree\n");
 		});
 	});
 
@@ -316,14 +314,14 @@ describe("versioned coding tools", () => {
 				{ fullLines: true, path: filePath },
 				{ allowExternalPath: true, versionedEditing: context }
 			);
-			await globalThis.Bun.write(filePath, "one\ntwo\nthree\nchanged\n");
+			await Bun.write(filePath, "one\ntwo\nthree\nchanged\n");
 			await runEditTool(
 				{
 					patch: `[${filePath}#${read.fileVersion as string}]\nPUT 2.=2:\n+TWO`,
 				},
 				{ allowExternalPath: true, versionedEditing: context }
 			);
-			expect(await globalThis.Bun.file(filePath).text()).toBe(
+			expect(await Bun.file(filePath).text()).toBe(
 				"one\nTWO\nthree\nchanged\n"
 			);
 		});
@@ -335,16 +333,14 @@ describe("versioned coding tools", () => {
 				{ fullLines: true, path: filePath },
 				{ allowExternalPath: true, versionedEditing: context }
 			);
-			await globalThis.Bun.write(filePath, "zero\none\ntwo\n");
+			await Bun.write(filePath, "zero\none\ntwo\n");
 			await runEditTool(
 				{
 					patch: `[${filePath}#${read.fileVersion as string}]\nPUT 1.=1:\n+ONE`,
 				},
 				{ allowExternalPath: true, versionedEditing: context }
 			);
-			expect(await globalThis.Bun.file(filePath).text()).toBe(
-				"zero\nONE\ntwo\n"
-			);
+			expect(await Bun.file(filePath).text()).toBe("zero\nONE\ntwo\n");
 		});
 	});
 	test("does not remap changed observed lines onto later duplicates", async () => {
@@ -355,10 +351,7 @@ describe("versioned coding tools", () => {
 					{ fullLines: false, path: `${filePath}:1-1,8-8` },
 					{ allowExternalPath: true, versionedEditing: context }
 				);
-				await globalThis.Bun.write(
-					filePath,
-					"A\nB\nC\nD\nE\nF\nG\nY\nZ\nQ\nR\nX\nS\n"
-				);
+				await Bun.write(filePath, "A\nB\nC\nD\nE\nF\nG\nY\nZ\nQ\nR\nX\nS\n");
 				const result = await runEditTool(
 					{
 						patch: `[${filePath}#${read.fileVersion as string}]\nPUT 1.=1:\n+AA`,
@@ -393,7 +386,7 @@ describe("versioned coding tools", () => {
 				},
 				{ allowExternalPath: true, versionedEditing: context }
 			);
-			expect(await globalThis.Bun.file(filePath).text()).toBe("x\na");
+			expect(await Bun.file(filePath).text()).toBe("x\na");
 		});
 	});
 
@@ -405,7 +398,7 @@ describe("versioned coding tools", () => {
 					{ fullLines: true, path: filePath },
 					{ allowExternalPath: true, versionedEditing: context }
 				);
-				await globalThis.Bun.write(filePath, "P\nA\nX\nQ\nP\nA\nB\nQ\n");
+				await Bun.write(filePath, "P\nA\nX\nQ\nP\nA\nB\nQ\n");
 				await expect(
 					runEditTool(
 						{
@@ -414,7 +407,7 @@ describe("versioned coding tools", () => {
 						{ allowExternalPath: true, versionedEditing: context }
 					)
 				).rejects.toMatchObject({ code: "stale-edit" });
-				expect(await globalThis.Bun.file(filePath).text()).toBe(
+				expect(await Bun.file(filePath).text()).toBe(
 					"P\nA\nX\nQ\nP\nA\nB\nQ\n"
 				);
 			}
@@ -426,7 +419,7 @@ describe("versioned coding tools", () => {
 				{ fullLines: true, path: filePath },
 				{ allowExternalPath: true, versionedEditing: context }
 			);
-			await globalThis.Bun.write(filePath, "one\nexternal\ntwo\n");
+			await Bun.write(filePath, "one\nexternal\ntwo\n");
 			await expect(
 				runEditTool(
 					{
@@ -454,7 +447,7 @@ describe("versioned coding tools", () => {
 						{ allowExternalPath: true, versionedEditing: context }
 					)
 				).rejects.toMatchObject({ code: "file-not-writable" });
-				expect(await globalThis.Bun.file(filePath).text()).toBe("one\n");
+				expect(await Bun.file(filePath).text()).toBe("one\n");
 			} finally {
 				await chmod(filePath, 0o644);
 			}
@@ -476,7 +469,7 @@ describe("versioned coding tools", () => {
 			);
 			expect(result.newFileVersion).toMatch(FILE_VERSION_PATTERN);
 			expect(result.oldFileVersion).toBe(read.fileVersion);
-			expect(await globalThis.Bun.file(filePath).bytes()).toEqual(
+			expect(await Bun.file(filePath).bytes()).toEqual(
 				new TextEncoder().encode("ONE\r\ntwo\n")
 			);
 		});
@@ -500,7 +493,7 @@ describe("versioned coding tools", () => {
 					versionedEditing: { ...context, editMode: "replace" },
 				}
 			);
-			expect(await globalThis.Bun.file(filePath).bytes()).toEqual(
+			expect(await Bun.file(filePath).bytes()).toEqual(
 				new TextEncoder().encode("one\r\nTWO\r\nthree\n")
 			);
 		});
@@ -521,9 +514,7 @@ describe("versioned coding tools", () => {
 				}
 			);
 			expect(result.seenLines).toEqual([{ endLine: 3, startLine: 2 }]);
-			expect(await globalThis.Bun.file(filePath).text()).toBe(
-				"one\nTWO\nNEW\nthree\n"
-			);
+			expect(await Bun.file(filePath).text()).toBe("one\nTWO\nNEW\nthree\n");
 		});
 	});
 
@@ -595,7 +586,7 @@ describe("versioned coding tools", () => {
 				}
 			);
 			expect(result.seenLines).toEqual([{ startLine: 2 }]);
-			expect(await globalThis.Bun.file(filePath).text()).toBe("Xb\nc\n");
+			expect(await Bun.file(filePath).text()).toBe("Xb\nc\n");
 		});
 	});
 
@@ -615,7 +606,7 @@ describe("versioned coding tools", () => {
 					}
 				)
 			).rejects.toMatchObject({ code: "replacement-ambiguous" });
-			expect(await globalThis.Bun.file(filePath).text()).toBe("aaa");
+			expect(await Bun.file(filePath).text()).toBe("aaa");
 		});
 	});
 
@@ -638,7 +629,7 @@ describe("versioned coding tools", () => {
 				}
 			);
 			expect(read.fileVersion).toMatch(FILE_VERSION_PATTERN);
-			expect(await globalThis.Bun.file(filePath).text()).toBe("one\nTWO");
+			expect(await Bun.file(filePath).text()).toBe("one\nTWO");
 		});
 	});
 
@@ -654,7 +645,7 @@ describe("versioned coding tools", () => {
 				},
 				{ allowExternalPath: true, versionedEditing: context }
 			);
-			expect(await globalThis.Bun.file(filePath).text()).toBe("ONE\rtwo\r");
+			expect(await Bun.file(filePath).text()).toBe("ONE\rtwo\r");
 		});
 	});
 
@@ -670,7 +661,7 @@ describe("versioned coding tools", () => {
 				},
 				{ allowExternalPath: true, versionedEditing: context }
 			);
-			expect(await globalThis.Bun.file(filePath).text()).toBe("one\ntwo\n");
+			expect(await Bun.file(filePath).text()).toBe("one\ntwo\n");
 		});
 	});
 
@@ -686,7 +677,7 @@ describe("versioned coding tools", () => {
 				},
 				{ allowExternalPath: true, versionedEditing: context }
 			);
-			expect(await globalThis.Bun.file(filePath).text()).toBe("one\ntwo");
+			expect(await Bun.file(filePath).text()).toBe("one\ntwo");
 		});
 	});
 
@@ -702,7 +693,7 @@ describe("versioned coding tools", () => {
 				},
 				{ allowExternalPath: true, versionedEditing: context }
 			);
-			expect(await globalThis.Bun.file(filePath).text()).toBe("one\nthree\n");
+			expect(await Bun.file(filePath).text()).toBe("one\nthree\n");
 		});
 	});
 	test("sloppy resolves all hunks against original content", async () => {
@@ -728,7 +719,7 @@ describe("versioned coding tools", () => {
 					}
 				)
 			).rejects.toMatchObject({ code: "sloppy-no-match" });
-			expect(await globalThis.Bun.file(filePath).text()).toBe("one\ntwo\n");
+			expect(await Bun.file(filePath).text()).toBe("one\ntwo\n");
 		});
 	});
 	test("sloppy hunk hints do not break repeated-context ambiguity", async () => {
@@ -753,9 +744,7 @@ describe("versioned coding tools", () => {
 					}
 				)
 			).rejects.toMatchObject({ code: "sloppy-ambiguous" });
-			expect(await globalThis.Bun.file(filePath).text()).toBe(
-				"same\none\nsame\n"
-			);
+			expect(await Bun.file(filePath).text()).toBe("same\none\nsame\n");
 		});
 	});
 	test("sloppy edits preserve previously observed untouched lines", async () => {
@@ -788,9 +777,7 @@ describe("versioned coding tools", () => {
 				},
 				{ allowExternalPath: true, versionedEditing: context }
 			);
-			expect(await globalThis.Bun.file(filePath).text()).toBe(
-				"one\nTWO\nTHREE\n"
-			);
+			expect(await Bun.file(filePath).text()).toBe("one\nTWO\nTHREE\n");
 			expect(read.seenLines).toEqual([{ endLine: 3, startLine: 1 }]);
 		});
 	});
@@ -807,7 +794,7 @@ describe("versioned coding tools", () => {
 				},
 				{ allowExternalPath: true, versionedEditing: context }
 			);
-			expect(await globalThis.Bun.file(filePath).text()).toBe("one");
+			expect(await Bun.file(filePath).text()).toBe("one");
 		});
 	});
 
@@ -824,7 +811,7 @@ describe("versioned coding tools", () => {
 					{ allowExternalPath: true, versionedEditing: context }
 				)
 			).rejects.toMatchObject({ code: "edit-mode-mismatch" });
-			expect(await globalThis.Bun.file(filePath).text()).toBe("one\n");
+			expect(await Bun.file(filePath).text()).toBe("one\n");
 		});
 	});
 
@@ -855,7 +842,7 @@ describe("versioned coding tools", () => {
 					}
 				)
 			).rejects.toMatchObject({ code: "edit-diff-artifact-out-of-budget" });
-			expect(await globalThis.Bun.file(filePath).text()).toBe("one\n");
+			expect(await Bun.file(filePath).text()).toBe("one\n");
 		});
 	});
 	test("rejects patch input over budget before parsing or mutation", async () => {
@@ -875,7 +862,7 @@ describe("versioned coding tools", () => {
 					}
 				)
 			).rejects.toMatchObject({ code: "edit-input-out-of-budget" });
-			expect(await globalThis.Bun.file(filePath).text()).toBe("one\n");
+			expect(await Bun.file(filePath).text()).toBe("one\n");
 		});
 	});
 	test("sloppy normalization preserves live context bytes", async () => {
@@ -899,7 +886,7 @@ describe("versioned coding tools", () => {
 					versionedEditing: { ...context, editMode: "sloppy" },
 				}
 			);
-			expect(await globalThis.Bun.file(filePath).text()).toBe("  one\ndone\n");
+			expect(await Bun.file(filePath).text()).toBe("  one\ndone\n");
 		});
 	});
 
@@ -924,7 +911,7 @@ describe("versioned coding tools", () => {
 				{ allowExternalPath: true, versionedEditing: context }
 			);
 			expect(result.oldFileVersion).toBe(read.fileVersion);
-			expect(await globalThis.Bun.file(filePath).text()).toBe("new\n");
+			expect(await Bun.file(filePath).text()).toBe("new\n");
 		});
 	});
 	test("patch applies multiple disjoint hunks atomically from one snapshot", async () => {
@@ -950,16 +937,14 @@ describe("versioned coding tools", () => {
 				}
 			);
 			expect(result.files?.[0]?.hunkCount).toBe(2);
-			expect(await globalThis.Bun.file(filePath).text()).toBe(
-				"ONE\ntwo\nTHREE\nfour\n"
-			);
+			expect(await Bun.file(filePath).text()).toBe("ONE\ntwo\nTHREE\nfour\n");
 		});
 	});
 
 	test("apply_patch deduplicates repeated same-version sections across files", async () => {
 		await withTempFile("one\nthree\n", async (firstPath, context) => {
 			const secondPath = path.join(path.dirname(firstPath), "second.txt");
-			await globalThis.Bun.write(secondPath, "alpha\nbeta\n");
+			await Bun.write(secondPath, "alpha\nbeta\n");
 			const firstRead = await runReadTool(
 				{ path: firstPath },
 				{ allowExternalPath: true, versionedEditing: context }
@@ -988,10 +973,8 @@ describe("versioned coding tools", () => {
 				}
 			);
 			expect(result.files).toHaveLength(2);
-			expect(await globalThis.Bun.file(firstPath).text()).toBe("ONE\nthree\n");
-			expect(await globalThis.Bun.file(secondPath).text()).toBe(
-				"ALPHA\nbeta\n"
-			);
+			expect(await Bun.file(firstPath).text()).toBe("ONE\nthree\n");
+			expect(await Bun.file(secondPath).text()).toBe("ALPHA\nbeta\n");
 		});
 	});
 	test("merges canonical and symlink aliases into one committed file", async () => {
@@ -1021,7 +1004,7 @@ describe("versioned coding tools", () => {
 			);
 			expect(result.files).toHaveLength(1);
 			expect(result.files?.[0]?.hunkCount).toBe(2);
-			expect(await globalThis.Bun.file(filePath).text()).toBe("ONE\nTWO\n");
+			expect(await Bun.file(filePath).text()).toBe("ONE\nTWO\n");
 		});
 	});
 	test("rejects an approved symlink retarget before editing", async () => {
@@ -1031,7 +1014,7 @@ describe("versioned coding tools", () => {
 				path.dirname(filePath),
 				"replacement.txt"
 			);
-			await globalThis.Bun.write(replacementPath, "outside\n");
+			await Bun.write(replacementPath, "outside\n");
 			await symlink(filePath, aliasPath);
 			const read = await runReadTool(
 				{ fullLines: true, path: aliasPath },
@@ -1051,9 +1034,7 @@ describe("versioned coding tools", () => {
 					}
 				)
 			).rejects.toMatchObject({ code: "approved-path-changed" });
-			expect(await globalThis.Bun.file(replacementPath).text()).toBe(
-				"outside\n"
-			);
+			expect(await Bun.file(replacementPath).text()).toBe("outside\n");
 		});
 	});
 	test("preserves observed lines across unrelated apply_patch drift", async () => {
@@ -1062,7 +1043,7 @@ describe("versioned coding tools", () => {
 				{ fullLines: true, path: filePath },
 				{ allowExternalPath: true, versionedEditing: context }
 			);
-			await globalThis.Bun.write(filePath, "zero\none\ntwo\nthree\nfour\n");
+			await Bun.write(filePath, "zero\none\ntwo\nthree\nfour\n");
 			const first = await runEditTool(
 				{
 					mode: "apply_patch",
@@ -1085,7 +1066,7 @@ describe("versioned coding tools", () => {
 					versionedEditing: { ...context, editMode: "apply_patch" },
 				}
 			);
-			expect(await globalThis.Bun.file(filePath).text()).toBe(
+			expect(await Bun.file(filePath).text()).toBe(
 				"zero\nONE\ntwo\nTHREE\nfour\n"
 			);
 		});
@@ -1093,7 +1074,7 @@ describe("versioned coding tools", () => {
 	test("acquires the complete canonical lease set in sorted order", async () => {
 		await withTempFile("one\n", async (firstPath, context) => {
 			const secondPath = path.join(path.dirname(firstPath), "a.txt");
-			await globalThis.Bun.write(secondPath, "two\n");
+			await Bun.write(secondPath, "two\n");
 			const firstRead = await runReadTool(
 				{ path: firstPath },
 				{ allowExternalPath: true, versionedEditing: context }
@@ -1167,7 +1148,7 @@ describe("versioned coding tools", () => {
 					}
 				)
 			).rejects.toMatchObject({ code: "version-conflict" });
-			expect(await globalThis.Bun.file(filePath).text()).toBe("one\nthree\n");
+			expect(await Bun.file(filePath).text()).toBe("one\nthree\n");
 		});
 	});
 
@@ -1197,9 +1178,7 @@ describe("versioned coding tools", () => {
 					}
 				)
 			).rejects.toMatchObject({ code: "hunk-overlap" });
-			expect(await globalThis.Bun.file(filePath).text()).toBe(
-				"one\ntwo\nthree\n"
-			);
+			expect(await Bun.file(filePath).text()).toBe("one\ntwo\nthree\n");
 		});
 	});
 
@@ -1217,7 +1196,7 @@ describe("versioned coding tools", () => {
 					await baseStore.saveSnapshot(snapshot);
 					if (!raced) {
 						raced = true;
-						await globalThis.Bun.write(filePath, "raced\n");
+						await Bun.write(filePath, "raced\n");
 					}
 				},
 			};
@@ -1241,13 +1220,13 @@ describe("versioned coding tools", () => {
 					}
 				)
 			).rejects.toMatchObject({ code: "file-version-mismatch" });
-			expect(await globalThis.Bun.file(filePath).text()).toBe("raced\n");
+			expect(await Bun.file(filePath).text()).toBe("raced\n");
 		});
 	});
 	test("rolls back earlier files when a later replacement fails", async () => {
 		await withTempFile("one\n", async (firstPath, context) => {
 			const secondPath = path.join(path.dirname(firstPath), "second.txt");
-			await globalThis.Bun.write(secondPath, "two\n");
+			await Bun.write(secondPath, "two\n");
 			const firstRead = await runReadTool(
 				{ path: firstPath },
 				{ allowExternalPath: true, versionedEditing: context }
@@ -1276,8 +1255,8 @@ describe("versioned coding tools", () => {
 					}
 				)
 			).rejects.toMatchObject({ code: "file-not-writable" });
-			expect(await globalThis.Bun.file(firstPath).text()).toBe("one\n");
-			expect(await globalThis.Bun.file(secondPath).text()).toBe("two\n");
+			expect(await Bun.file(firstPath).text()).toBe("one\n");
+			expect(await Bun.file(secondPath).text()).toBe("two\n");
 		});
 	});
 	test("same-boundary insertions preserve declaration order", async () => {
@@ -1302,9 +1281,7 @@ describe("versioned coding tools", () => {
 					versionedEditing: { ...context, editMode: "patch" },
 				}
 			);
-			expect(await globalThis.Bun.file(filePath).text()).toBe(
-				"one\nA\nB\ntwo\n"
-			);
+			expect(await Bun.file(filePath).text()).toBe("one\nA\nB\ntwo\n");
 		});
 	});
 	test("allows insertion immediately after a changed range", async () => {
@@ -1330,9 +1307,7 @@ describe("versioned coding tools", () => {
 					versionedEditing: { ...context, editMode: "patch" },
 				}
 			);
-			expect(await globalThis.Bun.file(filePath).text()).toBe(
-				"ONE\nTWO\nAFTER\nthree\n"
-			);
+			expect(await Bun.file(filePath).text()).toBe("ONE\nTWO\nAFTER\nthree\n");
 		});
 	});
 	test("rejects unauditable full diffs before mutation", async () => {
@@ -1369,7 +1344,7 @@ describe("versioned coding tools", () => {
 			).rejects.toMatchObject({
 				code: "edit-diff-artifact-out-of-budget",
 			});
-			expect(await globalThis.Bun.file(filePath).text()).toBe("one\ntwo\n");
+			expect(await Bun.file(filePath).text()).toBe("one\ntwo\n");
 		});
 	});
 	test("large inline diffs spill to a session-scoped artifact", async () => {
@@ -1447,7 +1422,7 @@ describe("versioned coding tools", () => {
 			);
 			expect(result.fullDiffArtifact?.id).toBeString();
 			expect(result.newFileVersion).not.toBe(read.fileVersion);
-			expect(await globalThis.Bun.file(filePath).text()).toBe("ONE\n");
+			expect(await Bun.file(filePath).text()).toBe("ONE\n");
 		});
 	});
 	test("persists unresolved recovery when manifest progress cleanup fails", async () => {
@@ -1493,7 +1468,7 @@ describe("versioned coding tools", () => {
 			expect(structuredFailure.details?.unresolvedPaths).toEqual([
 				await realpath(filePath),
 			]);
-			expect(await globalThis.Bun.file(filePath).text()).toBe("one\ntwo\n");
+			expect(await Bun.file(filePath).text()).toBe("one\ntwo\n");
 			expect(await recovery.listUnresolvedRecoveries()).toHaveLength(1);
 		});
 	});
@@ -1502,8 +1477,8 @@ describe("versioned coding tools", () => {
 		const firstPath = path.join(directory, "first.txt");
 		const secondPath = path.join(directory, "second.txt");
 		try {
-			await globalThis.Bun.write(firstPath, "one\n");
-			await globalThis.Bun.write(secondPath, "two\n");
+			await Bun.write(firstPath, "one\n");
+			await Bun.write(secondPath, "two\n");
 			const baseStore = createMemoryFileObservationStore();
 			const recovery = baseStore.recovery;
 			if (recovery === undefined) {
@@ -1520,7 +1495,7 @@ describe("versioned coding tools", () => {
 					if (status === "committed") {
 						committedPaths += 1;
 						if (committedPaths === 2) {
-							await globalThis.Bun.write(firstPath, "external\n");
+							await Bun.write(firstPath, "external\n");
 							throw new Error("injected second commit failure");
 						}
 					}
@@ -1575,8 +1550,8 @@ describe("versioned coding tools", () => {
 			expect(structuredFailure.details?.unresolvedPaths).toEqual([
 				await realpath(firstPath),
 			]);
-			expect(await globalThis.Bun.file(firstPath).text()).toBe("external\n");
-			expect(await globalThis.Bun.file(secondPath).text()).toBe("two\n");
+			expect(await Bun.file(firstPath).text()).toBe("external\n");
+			expect(await Bun.file(secondPath).text()).toBe("two\n");
 			expect(await recovery.listUnresolvedRecoveries()).toHaveLength(1);
 		} finally {
 			await rm(directory, { force: true, recursive: true });

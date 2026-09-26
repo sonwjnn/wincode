@@ -12,7 +12,7 @@ function ToggleProbe({ label }: { label: string }) {
 	return <text>{`${label}: ${expanded ? "open" : "closed"}`}</text>;
 }
 const flushInput = async (): Promise<void> => {
-	await globalThis.Bun.sleep(20);
+	await Bun.sleep(20);
 };
 
 test("Ctrl+O toggles every registered block handler", async () => {

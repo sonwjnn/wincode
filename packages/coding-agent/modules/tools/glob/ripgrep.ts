@@ -119,7 +119,7 @@ export const runRipgrepGlob = async (
 	const spawnProcess: RipgrepSpawnProcess =
 		options.spawnProcess ??
 		((command, args, spawnOptions) =>
-			globalThis.Bun.spawn([command, ...args], {
+			Bun.spawn([command, ...args], {
 				cwd: spawnOptions.cwd,
 				env: spawnOptions.env,
 				stdin: "ignore",

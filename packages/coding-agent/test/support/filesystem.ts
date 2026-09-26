@@ -6,5 +6,5 @@ export const writeFixture = async (
 	contents: string
 ): Promise<void> => {
 	await mkdir(dirname(filePath), { recursive: true });
-	await globalThis.Bun.write(filePath, contents);
+	await Bun.write(filePath, contents);
 };

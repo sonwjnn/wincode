@@ -64,7 +64,7 @@ const errorForTextDecode = (
 export const readVersionedFile = async (
 	resolvedPath: string
 ): Promise<FileState> => {
-	const bytes = await globalThis.Bun.file(resolvedPath).bytes();
+	const bytes = await Bun.file(resolvedPath).bytes();
 	let text: LosslessText;
 	try {
 		text = decodeLosslessText(bytes);

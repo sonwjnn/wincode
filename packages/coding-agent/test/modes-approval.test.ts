@@ -34,10 +34,7 @@ import { toolCallId } from "./support/identifiers";
 const workspace = await mkdtemp(
 	path.join(os.tmpdir(), "wincode-mode-approval-")
 );
-await globalThis.Bun.write(
-	path.join(workspace, ".env"),
-	"SECRET=not-for-agents\n"
-);
+await Bun.write(path.join(workspace, ".env"), "SECRET=not-for-agents\n");
 let approvalErrorText = "";
 const recorder = createFakeModelClientRecorder();
 const approvalScript: FakeModelStepScript = async function* (

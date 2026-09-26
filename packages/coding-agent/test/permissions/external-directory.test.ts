@@ -143,7 +143,7 @@ describe("workspace boundary", () => {
 		const dir = await realpath(
 			await mkdtemp(join(tmpdir(), "wincode-ext-inside-"))
 		);
-		await globalThis.Bun.write(join(dir, "file.txt"), "x");
+		await Bun.write(join(dir, "file.txt"), "x");
 		const sandbox = createWorkspaceSandbox(dir);
 		const inside = await sandbox.resolveExistingPath("file.txt");
 		expect(inside).toBe(join(dir, "file.txt"));

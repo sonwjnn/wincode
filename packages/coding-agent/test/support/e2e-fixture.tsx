@@ -349,7 +349,7 @@ export const waitForSessionCondition = async (
 		if (Date.now() >= deadline) {
 			throw new Error("Timed out waiting for the session condition.");
 		}
-		await globalThis.Bun.sleep(10);
+		await Bun.sleep(10);
 	}
 };
 

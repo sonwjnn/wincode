@@ -61,7 +61,7 @@ describe("skills", () => {
 			join(cwd, ".claude", "skills", "same"),
 		]) {
 			await mkdir(path, { recursive: true });
-			await globalThis.Bun.write(
+			await Bun.write(
 				join(path, "SKILL.md"),
 				`---\nname: same\ndescription: ${path}\n---\nbody`
 			);
@@ -96,15 +96,12 @@ describe("skills", () => {
 		await mkdir(join(root, "good"), { recursive: true });
 		await mkdir(join(root, "bad"), { recursive: true });
 		await mkdir(join(root, "mismatch"), { recursive: true });
-		await globalThis.Bun.write(
+		await Bun.write(
 			join(root, "good", "SKILL.md"),
 			"---\nname: good\ndescription: Good\n---\nbody"
 		);
-		await globalThis.Bun.write(
-			join(root, "bad", "SKILL.md"),
-			"not frontmatter"
-		);
-		await globalThis.Bun.write(
+		await Bun.write(join(root, "bad", "SKILL.md"), "not frontmatter");
+		await Bun.write(
 			join(root, "mismatch", "SKILL.md"),
 			"---\nname: other\ndescription: Bad\n---\nbody"
 		);

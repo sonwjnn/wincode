@@ -208,7 +208,7 @@ const killProcessTree = async (
 ): Promise<void> => {
 	if (platform === "win32") {
 		try {
-			const killer = globalThis.Bun.spawn(
+			const killer = Bun.spawn(
 				["taskkill", "/pid", String(child.pid), "/T", "/F"],
 				{ stdin: "ignore", stdout: "ignore", stderr: "ignore" }
 			);
@@ -315,18 +315,15 @@ export const createShellRunner = (
 
 		let child: Bun.Subprocess;
 		try {
-			child = globalThis.Bun.spawn(
-				[invocation.executable, ...invocation.args],
-				{
-					cwd,
-					detached: platform === "posix",
-					env: process.env,
-					stdin: "ignore",
-					stdout: "pipe",
-					stderr: "pipe",
-					windowsHide: true,
-				}
-			);
+			child = Bun.spawn([invocation.executable, ...invocation.args], {
+				cwd,
+				detached: platform === "posix",
+				env: process.env,
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+				windowsHide: true,
+			});
 		} catch (error) {
 			reject(error);
 			return promise;

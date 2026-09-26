@@ -5,4 +5,4 @@ export const decodeUtf8 = (bytes: Uint8Array): string =>
 	utf8Decoder.decode(bytes);
 
 export const readUtf8File = async (path: string): Promise<string> =>
-	decodeUtf8(await globalThis.Bun.file(path).bytes());
+	decodeUtf8(await Bun.file(path).bytes());

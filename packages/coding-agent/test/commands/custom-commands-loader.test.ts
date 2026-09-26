@@ -23,7 +23,7 @@ const makeCandidates = async (
 			const directory = path.join(root, dir);
 			await mkdir(directory, { recursive: true });
 			const filePath = path.join(directory, name);
-			await globalThis.Bun.write(filePath, source);
+			await Bun.write(filePath, source);
 			candidates.push({
 				filePath,
 				scope: dir.startsWith("home") ? "global" : "project",
@@ -200,7 +200,7 @@ describe("discoverCustomCommandCandidates", () => {
 		for (const [relativePath, source] of Object.entries(files)) {
 			const filePath = path.join(root, relativePath);
 			await mkdir(path.dirname(filePath), { recursive: true });
-			await globalThis.Bun.write(filePath, source);
+			await Bun.write(filePath, source);
 		}
 		const snapshot = await createConfigStore({
 			homeRoot: home,

@@ -214,14 +214,11 @@ const retainE2EFailure = async (
 		}
 		await rm(entryPath, { force: true, recursive: true });
 	}
-	await globalThis.Bun.write(
+	await Bun.write(
 		join(artifactDirectory, TERMINAL_FRAME_NAME),
 		terminalFrame ?? ""
 	);
-	await globalThis.Bun.write(
-		join(artifactDirectory, RUNNER_LOG_NAME),
-		log.join("")
-	);
+	await Bun.write(join(artifactDirectory, RUNNER_LOG_NAME), log.join(""));
 };
 
 const runE2EFile = async (

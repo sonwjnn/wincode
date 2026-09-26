@@ -30,18 +30,15 @@ describe("file mention option discovery", () => {
 		await mkdir(path.join(workspace, deepDirectory), { recursive: true });
 		await mkdir(path.join(workspace, "node_modules/deep"), { recursive: true });
 		await mkdir(path.join(workspace, "dist"), { recursive: true });
-		await globalThis.Bun.write(
+		await Bun.write(
 			path.join(workspace, `${deepDirectory}/bot-message.tsx`),
 			"content"
 		);
-		await globalThis.Bun.write(
+		await Bun.write(
 			path.join(workspace, "node_modules/deep/bot-message.tsx"),
 			"ignored"
 		);
-		await globalThis.Bun.write(
-			path.join(workspace, "dist/generated.ts"),
-			"ignored"
-		);
+		await Bun.write(path.join(workspace, "dist/generated.ts"), "ignored");
 
 		const options = await getFileMentionOptions({ root: workspace });
 		const paths = options.map((option) => option.path);
@@ -57,30 +54,21 @@ describe("file mention option discovery", () => {
 	});
 	test("omits gitignored entries from autocomplete discovery", async () => {
 		const workspace = await createWorkspace();
-		await globalThis.Bun.write(
+		await Bun.write(
 			path.join(workspace, ".gitignore"),
 			"ignored.ts\nignored-dir/\n*.secret\n"
 		);
 		await mkdir(path.join(workspace, "ignored-dir"));
-		await globalThis.Bun.write(path.join(workspace, "ignored.ts"), "ignored");
-		await globalThis.Bun.write(
-			path.join(workspace, "ignored-dir/nested.ts"),
-			"ignored"
-		);
+		await Bun.write(path.join(workspace, "ignored.ts"), "ignored");
+		await Bun.write(path.join(workspace, "ignored-dir/nested.ts"), "ignored");
 		await mkdir(path.join(workspace, "nested"));
-		await globalThis.Bun.write(
+		await Bun.write(
 			path.join(workspace, "nested/.gitignore"),
 			"secret.ts\n!keep.secret\n"
 		);
-		await globalThis.Bun.write(
-			path.join(workspace, "nested/secret.ts"),
-			"ignored"
-		);
-		await globalThis.Bun.write(
-			path.join(workspace, "nested/keep.secret"),
-			"visible"
-		);
-		await globalThis.Bun.write(path.join(workspace, "visible.ts"), "visible");
+		await Bun.write(path.join(workspace, "nested/secret.ts"), "ignored");
+		await Bun.write(path.join(workspace, "nested/keep.secret"), "visible");
+		await Bun.write(path.join(workspace, "visible.ts"), "visible");
 
 		const options = await getFileMentionOptions({ root: workspace });
 		const paths = options.map((option) => option.path);

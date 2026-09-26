@@ -246,7 +246,7 @@ const runCommand = async (command: string, args: string[]): Promise<void> => {
 
 	let child: Bun.Subprocess;
 	try {
-		child = globalThis.Bun.spawn([command, ...args], {
+		child = Bun.spawn([command, ...args], {
 			stdin: "ignore",
 			stdout: "ignore",
 			stderr: "pipe",
@@ -421,7 +421,7 @@ const downloadArchive = async (
 		}
 
 		const file = await open(archivePath, "wx", 0o600);
-		const hash = new globalThis.Bun.CryptoHasher("sha256");
+		const hash = new Bun.CryptoHasher("sha256");
 		let totalBytes = 0;
 		const reader = response.body.getReader();
 		try {

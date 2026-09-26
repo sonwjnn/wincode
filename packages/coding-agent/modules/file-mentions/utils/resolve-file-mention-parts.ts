@@ -172,7 +172,7 @@ const readFileMention = async (
 	mentionPath: string,
 	maxBytes: number
 ): Promise<FileMentionPart> => {
-	const buffer = await globalThis.Bun.file(realPath).bytes();
+	const buffer = await Bun.file(realPath).bytes();
 	const isBinary = buffer.subarray(0, BINARY_SAMPLE_BYTES).includes(0);
 	if (isBinary) {
 		return {

@@ -347,7 +347,7 @@ const renderChatShell = async (
 const flushUi = async (
 	setup: Awaited<ReturnType<typeof testRender>>
 ): Promise<void> => {
-	await globalThis.Bun.sleep(20);
+	await Bun.sleep(20);
 	await setup.renderOnce();
 };
 
@@ -1005,7 +1005,7 @@ describe("ChatShell activity footer", () => {
 			expect(frame).toContain("again to interrupt");
 			expect(frame).not.toContain(process.cwd());
 
-			await globalThis.Bun.sleep(450);
+			await Bun.sleep(450);
 			await setup.renderOnce();
 			const trailSpans = setup
 				.captureSpans()
@@ -1053,7 +1053,7 @@ describe("ChatShell activity footer", () => {
 			expect(loadingFrame).toContain("7.3K");
 			expect(loadingFrame).toMatch(PROGRESS_BAR_REGEX);
 
-			await globalThis.Bun.sleep(2000);
+			await Bun.sleep(2000);
 			await setup.renderOnce();
 			expect(setup.captureCharFrame()).toMatch(ACTIVE_PROGRESS_REGEX);
 

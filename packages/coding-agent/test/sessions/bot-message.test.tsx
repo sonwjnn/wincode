@@ -62,7 +62,7 @@ const flushRenderPasses = async (
 	// Markdown blocks resolve their (mocked) highlight asynchronously, so
 	// settle a few passes before capturing the frame.
 	for (let pass = 0; pass < 3; pass += 1) {
-		await globalThis.Bun.sleep(10);
+		await Bun.sleep(10);
 		await setup.renderOnce();
 	}
 };
@@ -94,7 +94,7 @@ const renderFrame = async (
 const flushUi = async (
 	setup: Awaited<ReturnType<typeof testRender>>
 ): Promise<void> => {
-	await globalThis.Bun.sleep(20);
+	await Bun.sleep(20);
 	await setup.renderOnce();
 };
 

@@ -45,7 +45,7 @@ const readCurrentVersion = async (
 	pathName: string
 ): Promise<FileVersion | null> => {
 	try {
-		return computeFileVersion(await globalThis.Bun.file(pathName).bytes());
+		return computeFileVersion(await Bun.file(pathName).bytes());
 	} catch (error) {
 		if (isMissingPath(error)) {
 			return null;
