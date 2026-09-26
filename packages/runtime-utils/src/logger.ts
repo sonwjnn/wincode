@@ -9,7 +9,7 @@ import type { JsonValue } from "type-fest";
 const LOG_RETENTION_DAYS = 14;
 const REDACTED = "[REDACTED]";
 const SENSITIVE_FIELD_PATTERN =
-	/(?:password|passwd|secret|credential|authorization|cookie|api[_-]?key|private[_-]?key)/i;
+	/(?:password|passwd|secret|credential|authorization|cookie|api[_-]?key|access[_-]?key|private[_-]?key)/i;
 const AUTH_FIELD_PATTERN = /^auth(?:entication)?(?:[_-]?(?:header|value))?$/i;
 const TOKEN_FIELD_PATTERN = /token$/i;
 const URL_FIELD_PATTERN = /(?:url|uri|endpoint)$/i;
@@ -27,26 +27,43 @@ const isSensitiveField = (name: string): boolean =>
 	TOKEN_FIELD_PATTERN.test(name);
 
 const redactUrl = (value: string): string => {
+	const queryStart = value.indexOf("?");
+	const fragmentStart = value.indexOf("#");
+	let redacted = value;
+	if (
+		queryStart !== -1 &&
+		(fragmentStart === -1 || queryStart < fragmentStart)
+	) {
+		const queryEnd = fragmentStart === -1 ? value.length : fragmentStart;
+		const parameters = new URLSearchParams(
+			value.slice(queryStart + 1, queryEnd)
+		);
+		let queryChanged = false;
+		for (const [name] of [...parameters]) {
+			if (isSensitiveField(name)) {
+				parameters.set(name, REDACTED);
+				queryChanged = true;
+			}
+		}
+		if (queryChanged) {
+			redacted = `${value.slice(0, queryStart + 1)}${parameters.toString()}${value.slice(queryEnd)}`;
+		}
+	}
+
 	try {
-		const url = new URL(value);
-		let changed = false;
+		const url = new URL(redacted);
+		let credentialsChanged = false;
 		if (url.username.length > 0) {
 			url.username = REDACTED;
-			changed = true;
+			credentialsChanged = true;
 		}
 		if (url.password.length > 0) {
 			url.password = REDACTED;
-			changed = true;
+			credentialsChanged = true;
 		}
-		for (const [name] of [...url.searchParams]) {
-			if (isSensitiveField(name)) {
-				url.searchParams.set(name, REDACTED);
-				changed = true;
-			}
-		}
-		return changed ? url.toString() : value;
+		return credentialsChanged ? url.toString() : redacted;
 	} catch {
-		return value;
+		return redacted;
 	}
 };
 

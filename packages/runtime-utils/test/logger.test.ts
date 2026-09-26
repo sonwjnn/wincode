@@ -61,10 +61,13 @@ describe("runtime logger", () => {
 				],
 				auth: "Bearer do-not-write-auth",
 				headers: { authorization: "Bearer do-not-write-header" },
+				access_key: "do-not-write-access-key",
 				accessToken: "do-not-write-token",
 				method: "GET",
 				retryCount: 2,
-				url: "https://alice:do-not-write-password@example.test/mcp?api_key=do-not-write-key&auth=do-not-write-query-auth&region=west",
+				relativeUrl:
+					"/mcp?access_key=do-not-write-relative-key&token=do-not-write-relative-token",
+				url: "https://alice:do-not-write-password@example.test/mcp?api_key=do-not-write-key&access_key=do-not-write-query-key&auth=do-not-write-query-auth&region=west",
 			});
 
 			const contents = await readFile(logFile(home), "utf8");
@@ -83,10 +86,12 @@ describe("runtime logger", () => {
 					],
 					auth: "[REDACTED]",
 					headers: { authorization: "[REDACTED]" },
+					access_key: "[REDACTED]",
 					accessToken: "[REDACTED]",
 					method: "GET",
 					retryCount: 2,
-					url: "https://%5BREDACTED%5D:%5BREDACTED%5D@example.test/mcp?api_key=%5BREDACTED%5D&auth=%5BREDACTED%5D&region=west",
+					relativeUrl: "/mcp?access_key=%5BREDACTED%5D&token=%5BREDACTED%5D",
+					url: "https://%5BREDACTED%5D:%5BREDACTED%5D@example.test/mcp?api_key=%5BREDACTED%5D&access_key=%5BREDACTED%5D&auth=%5BREDACTED%5D&region=west",
 				},
 				level: "error",
 				message: "MCP request failed",
