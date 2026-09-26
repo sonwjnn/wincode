@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -61,7 +61,7 @@ describe("skills", () => {
 			join(cwd, ".claude", "skills", "same"),
 		]) {
 			await mkdir(path, { recursive: true });
-			await writeFile(
+			await Bun.write(
 				join(path, "SKILL.md"),
 				`---\nname: same\ndescription: ${path}\n---\nbody`
 			);
@@ -96,12 +96,12 @@ describe("skills", () => {
 		await mkdir(join(root, "good"), { recursive: true });
 		await mkdir(join(root, "bad"), { recursive: true });
 		await mkdir(join(root, "mismatch"), { recursive: true });
-		await writeFile(
+		await Bun.write(
 			join(root, "good", "SKILL.md"),
 			"---\nname: good\ndescription: Good\n---\nbody"
 		);
-		await writeFile(join(root, "bad", "SKILL.md"), "not frontmatter");
-		await writeFile(
+		await Bun.write(join(root, "bad", "SKILL.md"), "not frontmatter");
+		await Bun.write(
 			join(root, "mismatch", "SKILL.md"),
 			"---\nname: other\ndescription: Bad\n---\nbody"
 		);

@@ -4,7 +4,7 @@ export const SHELL_BLOCK_BORDER_SIDES = 1;
 
 /** Terminal columns for one character: tabs occupy one cell, wide characters two. */
 export const measureCellWidth = (character: string): number =>
-	character === "\t" ? 1 : globalThis.Bun.stringWidth(character);
+	character === "\t" ? 1 : Bun.stringWidth(character);
 
 /**
  * Wraps one logical line into rows that each fit the given content width,

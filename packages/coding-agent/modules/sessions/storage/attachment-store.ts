@@ -1,13 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
-import {
-	mkdir,
-	open,
-	opendir,
-	readFile,
-	rename,
-	stat,
-	unlink,
-} from "node:fs/promises";
+import { mkdir, open, opendir, rename, stat, unlink } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import type { AttachmentId, SessionMessageId } from "@wincode/agent-core";
 import {
@@ -316,7 +307,7 @@ const assertNotAborted = (signal?: AbortSignal): void => {
 };
 
 const digestBytes = (bytes: Uint8Array): string =>
-	createHash("sha256").update(bytes).digest("hex");
+	new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 
 const digestUnavailableInput = (value: string): string =>
 	`v1-${digestBytes(new TextEncoder().encode(`unavailable:${value}`))}`;
@@ -519,7 +510,7 @@ const parseDataUrl = (
 	) {
 		return null;
 	}
-	const bytes = Uint8Array.from(Buffer.from(payload, "base64"));
+	const bytes = Uint8Array.fromBase64(payload);
 	if (bytes.byteLength > maxBytes) {
 		return null;
 	}
@@ -654,7 +645,7 @@ export const estimateAttachmentTokensForDataUrl = (url: string): number => {
 		0,
 		Math.ceil((MAX_DIMENSION_HEADER_BYTES * 4) / 3)
 	);
-	const headerBytes = Uint8Array.from(Buffer.from(headerPayload, "base64"));
+	const headerBytes = Buffer.from(headerPayload, "base64");
 	const dimensions = detectImageDimensions(
 		headerBytes,
 		sanitizeMediaType(match[1] ?? "")
@@ -697,7 +688,7 @@ const writeBlobAtomically = async (
 	assertNotAborted(signal);
 	const targetPath = resolveBlobPath(root, blobKey);
 	await mkdir(dirname(targetPath), { recursive: true });
-	const temporaryPath = `${targetPath}.${randomUUID()}.tmp`;
+	const temporaryPath = `${targetPath}.${crypto.randomUUID()}.tmp`;
 	let handle: Awaited<ReturnType<typeof open>> | null = null;
 	try {
 		handle = await open(temporaryPath, "wx");
@@ -716,7 +707,7 @@ const writeBlobAtomically = async (
 		if (temporaryInfo.size !== bytes.byteLength) {
 			throw new Error("Attachment blob length validation failed.");
 		}
-		const writtenBytes = Uint8Array.from(await readFile(temporaryPath));
+		const writtenBytes = await Bun.file(temporaryPath).bytes();
 		if (`v1-${digestBytes(writtenBytes)}` !== expectedAttachmentId) {
 			throw new Error("Attachment blob integrity validation failed.");
 		}
@@ -747,7 +738,7 @@ const inlineFilePart = (
 	filename: part.filename,
 	mediaType: part.mediaType,
 	type: "file",
-	url: `data:${part.mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
+	url: `data:${part.mediaType};base64,${bytes.toBase64()}`,
 });
 
 const isImageFilePart = (part: unknown): part is ImageFilePart =>
@@ -1528,7 +1519,7 @@ export const createSessionAttachmentStore = ({
 			) {
 				return { orphanBytes: 0, orphanCount: 0 };
 			}
-			const bytes = Uint8Array.from(await readFile(path));
+			const bytes = await Bun.file(path).bytes();
 			if (
 				`v1-${digestBytes(bytes)}` !== attachmentId ||
 				isNull(detectImageMediaType(bytes))

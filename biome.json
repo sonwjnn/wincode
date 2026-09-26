@@ -82,7 +82,8 @@
         "useAwait": "off"
       },
       "performance": {
-        "noBarrelFile": "off"
+        "noBarrelFile": "off",
+        "noNamespaceImport": "off"
       },
       "complexity": {
         "noVoid": "off"
@@ -92,7 +93,8 @@
   "javascript": {
     "formatter": {
       "enabled": true
-    }
+    },
+    "globals": ["Bun"]
   },
   "overrides": [
     {

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { logger } from "@wincode/runtime-utils";
 import type {
 	SessionHost,
@@ -61,7 +60,7 @@ export async function runRpc({
 		stopOutputError?.();
 		stopOutputError = undefined;
 	};
-	const processId = randomUUID();
+	const processId = crypto.randomUUID();
 	const seenRequestIds = new Set<string>();
 	const approvalWireIds = new WeakMap<
 		SessionSnapshot["approvals"][number],
@@ -80,7 +79,7 @@ export async function runRpc({
 		if (previousWireId !== undefined) {
 			approvalEngineIdsByWire.delete(previousWireId);
 		}
-		const wireId = `approval-${randomUUID()}`;
+		const wireId = `approval-${crypto.randomUUID()}`;
 		approvalWireIds.set(approval, wireId);
 		activeApprovalWireIds.set(approval.id, wireId);
 		approvalEngineIdsByWire.set(wireId, approval.id);

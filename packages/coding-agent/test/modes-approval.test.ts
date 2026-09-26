@@ -1,8 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
-// biome-ignore lint/performance/noNamespaceImport: AGENTS.md requires namespace imports for node modules.
 import * as os from "node:os";
-// biome-ignore lint/performance/noNamespaceImport: AGENTS.md requires namespace imports for node modules.
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { createAgentRuntime } from "@wincode/agent-core";
@@ -34,10 +32,7 @@ import { toolCallId } from "./support/identifiers";
 const workspace = await mkdtemp(
 	path.join(os.tmpdir(), "wincode-mode-approval-")
 );
-await globalThis.Bun.write(
-	path.join(workspace, ".env"),
-	"SECRET=not-for-agents\n"
-);
+await Bun.write(path.join(workspace, ".env"), "SECRET=not-for-agents\n");
 let approvalErrorText = "";
 const recorder = createFakeModelClientRecorder();
 const approvalScript: FakeModelStepScript = async function* (

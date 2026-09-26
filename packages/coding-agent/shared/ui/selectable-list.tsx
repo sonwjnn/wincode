@@ -66,7 +66,7 @@ export const getSelectableListRange = (
 
 const getLabelWidth = (items: readonly SelectableListItem[]): number =>
 	items.reduce(
-		(width, item) => Math.max(width, globalThis.Bun.stringWidth(item.label)),
+		(width, item) => Math.max(width, Bun.stringWidth(item.label)),
 		0
 	);
 

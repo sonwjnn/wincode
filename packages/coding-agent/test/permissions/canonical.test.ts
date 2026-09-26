@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalizeResource } from "@/modules/permissions/canonical";
@@ -8,7 +8,7 @@ import { createWorkspaceSandbox } from "@/modules/tools";
 describe("canonicalizeResource", () => {
 	test("resolves to the workspace-relative POSIX path of the real file", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "wincode-canonical-test-"));
-		await writeFile(join(dir, ".env"), "SECRET=1");
+		await Bun.write(join(dir, ".env"), "SECRET=1");
 		const sandbox = createWorkspaceSandbox(dir);
 
 		expect(await canonicalizeResource(".env", sandbox)).toBe(".env");
@@ -17,7 +17,7 @@ describe("canonicalizeResource", () => {
 
 	test("normalizes dot segments after sandbox resolution", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "wincode-canonical-test-"));
-		await writeFile(join(dir, ".env"), "SECRET=1");
+		await Bun.write(join(dir, ".env"), "SECRET=1");
 		const sandbox = createWorkspaceSandbox(dir);
 
 		expect(await canonicalizeResource("sub/../.env", sandbox)).toBe(".env");
@@ -25,7 +25,7 @@ describe("canonicalizeResource", () => {
 
 	test("resolves symlinks to the canonical target path", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "wincode-canonical-test-"));
-		await writeFile(join(dir, "secret.txt"), "SECRET=1");
+		await Bun.write(join(dir, "secret.txt"), "SECRET=1");
 		await symlink(join(dir, "secret.txt"), join(dir, "link.txt"));
 		const sandbox = createWorkspaceSandbox(dir);
 
@@ -56,7 +56,7 @@ describe("canonicalizeResource", () => {
 	test("always returns POSIX separators", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "wincode-canonical-test-"));
 		await mkdir(join(dir, "nested"), { recursive: true });
-		await writeFile(join(dir, "nested", "file.txt"), "x");
+		await Bun.write(join(dir, "nested", "file.txt"), "x");
 		const sandbox = createWorkspaceSandbox(dir);
 
 		expect(await canonicalizeResource("nested/file.txt", sandbox)).toBe(

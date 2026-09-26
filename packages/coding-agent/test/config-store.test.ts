@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isUndefined } from "@wincode/runtime-utils";
@@ -302,27 +302,27 @@ describe("createConfigStore", () => {
 				mkdir(projectConfigRoot, { recursive: true }),
 			]);
 			await Promise.all([
-				writeFile(
+				Bun.write(
 					join(configRoot, "wincode.json"),
 					JSON.stringify({
 						settings: { layers: { xdg: true }, selected: "xdg" },
 					})
 				),
-				writeFile(
+				Bun.write(
 					join(homeRoot, ".wincode", "wincode.json"),
 					JSON.stringify({ settings: { layers: { home: true } } })
 				),
-				writeFile(
+				Bun.write(
 					join(workspace, "wincode.json"),
 					JSON.stringify({ settings: { layers: { workspace: true } } })
 				),
-				writeFile(
+				Bun.write(
 					projectJsonPath,
 					JSON.stringify({
 						settings: { layers: { ignoredJson: true }, selected: "json" },
 					})
 				),
-				writeFile(
+				Bun.write(
 					projectJsoncPath,
 					'// JSONC wins\n{"settings":{"layers":{"project":true},"selected":"jsonc",},}'
 				),

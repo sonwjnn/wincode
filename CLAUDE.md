@@ -67,24 +67,32 @@ Before writing a helper, check whether one already exists — `packages/coding-a
 
 ## Bun Over Node
 
-Use Bun APIs where they provide a cleaner alternative; fall back to `node:*` only for what Bun doesn't cover. **Never spawn shell commands for operations with proper APIs** (e.g., don't `Bun.spawnSync(["mkdir", "-p", dir])` — use `mkdirSync`).
+Prefer Bun-native APIs whenever they preserve the required observable behavior; use `node:*` only when no Bun-native API preserves that contract. Avoid spawning a process when an in-process API can perform the same operation; keep external processes when running the external program is itself required.
 
 ### Quick reference
 
 | Operation       | Use                                       | Not                                |
 | --------------- | ----------------------------------------- | ---------------------------------- |
-| File read/write | `Bun.file()`, `Bun.write()`               | `readFileSync`, `writeFileSync`    |
+| File read/write | `readUtf8File()` / `decodeUtf8()` (`@wincode/runtime-utils`); `Bun.file().bytes()`, `Bun.write()` | `readFileSync`, `writeFileSync` |
 | Spawn process   | `$cmd`, `Bun.spawn()`                     | `child_process`                    |
 | Sleep           | `Bun.sleep(ms)`                           | `setTimeout` promise               |
 | Binary lookup   | `$which("git")` from `@oh-my-pi/pi-utils` | `spawnSync(["which", "git"])`      |
 | HTTP server     | `Bun.serve()`                             | `http.createServer()`              |
 | SQLite          | `bun:sqlite`                              | `better-sqlite3`                   |
-| Hashing         | `Bun.hash()`, `Bun.password.*`, WebCrypto | `node:crypto`                      |
-| Path resolution | `import.meta.dir`, `import.meta.path`     | `fileURLToPath` dance              |
+| Hashing         | `Bun.CryptoHasher` / Web Crypto (cryptographic); `Bun.hash` (non-cryptographic); `Bun.password.*` (passwords) | `node:crypto` when an equivalent Bun API exists |
+| UUID generation | `crypto.randomUUID()`                   | `node:crypto.randomUUID()` when Bun exposes the same contract |
+| Base64          | `Uint8Array.fromBase64()` / `.toBase64()` for validated data | `Buffer.from(..., "base64")` when permissive decoding is required |
+| Path resolution | `import.meta.dir`, `import.meta.path` for current module | `fileURLToPath(import.meta.url)` |
 | JSON5           | `Bun.JSON5.parse()` / `.stringify()`      | `json5` package                    |
 | JSONL           | `Bun.JSONL.parse()` / `.parseChunk()`     | `text.split("\n").map(JSON.parse)` |
+| Deep equality   | `Bun.deepEquals(a, b, true)` for strict JSON-shaped values | `node:util.isDeepStrictEqual` when Bun preserves the needed semantics |
 | String width    | `Bun.stringWidth()`                       | `get-east-asian-width`, custom     |
-| Text wrapping   | `Bun.wrapAnsi()`                          | custom ANSI-aware wrappers         |
+| Text wrapping   | `Bun.wrapAnsi()` when word, whitespace, and Unicode boundaries match | custom layout semantics |
+
+`Bun.file(path).text()` strips a leading UTF-8 BOM, unlike Node UTF-8 reads. Use `readUtf8File()` when preserving that behavior; `Bun.write()` creates missing parent directories and does not provide Node's exclusive, permission, or append semantics.
+
+`import.meta.path` identifies only the current module; use `fileURLToPath()` for a resolved asset URL when an OS path is required.
+
 
 ### Process execution
 

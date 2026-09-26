@@ -1,4 +1,5 @@
-import { readFile, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
+import { readUtf8File } from "@wincode/runtime-utils";
 import { truncateUtf8 } from "../output-bounds";
 import { getToolResourceLimits } from "../resource-limits";
 import { traverseWorkspace } from "../traversal";
@@ -42,7 +43,7 @@ export const runJavascriptGrep: GrepSearch = async (
 			continue;
 		}
 
-		const content = await readFile(entry.absolutePath, "utf8");
+		const content = await readUtf8File(entry.absolutePath);
 		const lines = content.split("\n");
 
 		for (const [index, line] of lines.entries()) {

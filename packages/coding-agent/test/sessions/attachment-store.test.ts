@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, stat, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
@@ -62,7 +62,7 @@ test("ingests exact bytes once and preserves per-reference filenames", async () 
 		reference: second,
 	});
 	const blobPath = join(root, repository.list()[0]?.blobKey ?? "");
-	expect(Uint8Array.from(await readFile(blobPath))).toEqual(PNG_BYTES);
+	expect(await Bun.file(blobPath).bytes()).toEqual(PNG_BYTES);
 });
 
 test("externalizes inline image parts and hydrates them only on request", async () => {
@@ -71,7 +71,7 @@ test("externalizes inline image parts and hydrates them only on request", async 
 		repository: createRepository(),
 		root,
 	});
-	const inlineUrl = `data:image/png;base64,${Buffer.from(PNG_BYTES).toString("base64")}`;
+	const inlineUrl = `data:image/png;base64,${PNG_BYTES.toBase64()}`;
 	const message = fromPartial<SessionMessage>({
 		id: sessionMessageId("user-1"),
 		parts: [
@@ -129,7 +129,7 @@ test("returns bounded unavailable markers for missing or corrupted blobs", async
 	}
 	const corruptedBytes = new Uint8Array(PNG_BYTES);
 	corruptedBytes[corruptedBytes.length - 1] = 0x02;
-	await writeFile(join(root, record.blobKey), corruptedBytes);
+	await Bun.write(join(root, record.blobKey), corruptedBytes);
 
 	const resolved = await attachments.resolve(reference);
 	expect(resolved.availability).toBe("corrupt");
@@ -279,7 +279,7 @@ test("collects only unreferenced blobs and reports bytes without content", async
 		throw new Error("orphan attachment metadata missing");
 	}
 	const temporaryPath = `${join(root, orphanRecord.blobKey)}.crashed.tmp`;
-	await writeFile(temporaryPath, PNG_BYTES);
+	await Bun.write(temporaryPath, PNG_BYTES);
 	expect((await stat(temporaryPath)).size).toBe(PNG_BYTES.byteLength);
 	repository.delete(orphan.attachmentId);
 	const report = await attachments.collect({

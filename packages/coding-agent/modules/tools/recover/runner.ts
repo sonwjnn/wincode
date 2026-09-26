@@ -1,4 +1,4 @@
-import { readFile, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { isObjectLike } from "@wincode/runtime-utils";
 import {
 	getToolResourceLimits,
@@ -45,7 +45,7 @@ const readCurrentVersion = async (
 	pathName: string
 ): Promise<FileVersion | null> => {
 	try {
-		return computeFileVersion(new Uint8Array(await readFile(pathName)));
+		return computeFileVersion(await Bun.file(pathName).bytes());
 	} catch (error) {
 		if (isMissingPath(error)) {
 			return null;

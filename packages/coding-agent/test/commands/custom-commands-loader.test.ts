@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, writeFile } from "node:fs/promises";
-// biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
+import { mkdir } from "node:fs/promises";
 import * as os from "node:os";
-// biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as path from "node:path";
 import { discoverCustomCommandCandidates } from "@/modules/custom-commands/discovery";
 import { loadCustomCommands } from "@/modules/custom-commands/loader";
@@ -23,7 +21,7 @@ const makeCandidates = async (
 			const directory = path.join(root, dir);
 			await mkdir(directory, { recursive: true });
 			const filePath = path.join(directory, name);
-			await writeFile(filePath, source);
+			await Bun.write(filePath, source);
 			candidates.push({
 				filePath,
 				scope: dir.startsWith("home") ? "global" : "project",
@@ -200,7 +198,7 @@ describe("discoverCustomCommandCandidates", () => {
 		for (const [relativePath, source] of Object.entries(files)) {
 			const filePath = path.join(root, relativePath);
 			await mkdir(path.dirname(filePath), { recursive: true });
-			await writeFile(filePath, source);
+			await Bun.write(filePath, source);
 		}
 		const snapshot = await createConfigStore({
 			homeRoot: home,

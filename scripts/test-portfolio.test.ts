@@ -1,13 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-	access,
-	mkdir,
-	mkdtemp,
-	readdir,
-	readFile,
-	rm,
-	writeFile,
-} from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { isError } from "@wincode/runtime-utils";
@@ -49,7 +41,7 @@ const writeFixture = async (
 ): Promise<void> => {
 	const path = join(root, relativePath);
 	await mkdir(join(path, ".."), { recursive: true });
-	await writeFile(path, contents);
+	await Bun.write(path, contents);
 };
 
 const exists = async (path: string): Promise<boolean> => {
@@ -106,7 +98,7 @@ test("valid package named after an ignored directory", () => {
 			expect(valid.exitCode).toBe(0);
 			expect(valid.output).toContain("Discovered Default test files: 2");
 			expect(valid.output).toContain("Executed Default test files: 2");
-			expect(await readFile(marker, "utf8")).toBe("default\nnamed\n");
+			expect(await Bun.file(marker).text()).toBe("default\nnamed\n");
 
 			await writeFixture(root, "packages/alpha/src/colocated.test.ts", "");
 			await writeFixture(
@@ -161,7 +153,7 @@ test("records the later package", () => {
 			expect(result.output).toContain("Discovered Default test files: 2");
 			expect(result.output).toContain("Executed Default test files: 2");
 			expect(result.output).toContain("Default package failed: a-fails");
-			expect(await readFile(marker, "utf8")).toBe("a-fails\nb-runs\n");
+			expect(await Bun.file(marker).text()).toBe("a-fails\nb-runs\n");
 		} finally {
 			await rm(root, { force: true, recursive: true });
 		}
@@ -215,12 +207,12 @@ test("must not run after a failure", () => {
 			expect(result.exitCode).not.toBe(0);
 			expect(result.output).toContain("Discovered E2E test files: 2");
 			expect(result.output).toContain("Executed E2E test files: 1");
-			expect(await readFile(marker, "utf8")).toBe("a-fails\n");
+			expect(await Bun.file(marker).text()).toBe("a-fails\n");
 			expect(
-				await readFile(join(artifactDirectory, "runner.log"), "utf8")
+				await Bun.file(join(artifactDirectory, "runner.log")).text()
 			).toContain("intentional E2E failure");
 			expect(
-				await readFile(join(artifactDirectory, "terminal-frame.txt"), "utf8")
+				await Bun.file(join(artifactDirectory, "terminal-frame.txt")).text()
 			).toBe("final character frame");
 			expect((await readdir(artifactDirectory)).sort()).toEqual([
 				"runner.log",
@@ -259,7 +251,7 @@ test("fails after writing the final frame", () => {
 			expect(result.output).toContain("Executed E2E test files: 1");
 			expect(await exists(join(artifactDirectory, "runner.log"))).toBe(true);
 			expect(
-				await readFile(join(artifactDirectory, "terminal-frame.txt"), "utf8")
+				await Bun.file(join(artifactDirectory, "terminal-frame.txt")).text()
 			).toBe("safe frame");
 			expect(
 				await exists(join(root, "test-artifacts", "e2e", "terminal-frame.txt"))
@@ -287,7 +279,7 @@ test("completes successfully", () => {
 			});
 			expect(success.exitCode).toBe(0);
 			expect(success.output).toContain("Executed E2E test files: 1");
-			expect(await readFile(marker, "utf8")).toBe("success\n");
+			expect(await Bun.file(marker).text()).toBe("success\n");
 			expect(await exists(join(root, "test-artifacts", "e2e"))).toBe(false);
 
 			await writeFixture(root, "packages/other/src/forgotten.test.ts", "");

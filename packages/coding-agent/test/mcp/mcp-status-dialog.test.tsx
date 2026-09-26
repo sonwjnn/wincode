@@ -56,11 +56,8 @@ const makeRegistry = (
 	toggle: toggle ?? (async () => undefined),
 });
 
-const waitForUiTick = (milliseconds: number): Promise<void> => {
-	const { promise, resolve } = Promise.withResolvers<void>();
-	setTimeout(resolve, milliseconds);
-	return promise;
-};
+const waitForUiTick = (milliseconds: number): Promise<void> =>
+	Bun.sleep(milliseconds);
 const flushUi = async (
 	setup: Awaited<ReturnType<typeof testRender>>
 ): Promise<void> => {

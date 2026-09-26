@@ -60,7 +60,7 @@ type PanelSetup = {
 };
 
 const flushUi = async (setup: TestRendererSetup): Promise<void> => {
-	await new Promise((resolve) => setTimeout(resolve, 20));
+	await Bun.sleep(20);
 	await setup.renderOnce();
 };
 const hoverAction = async (

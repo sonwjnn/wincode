@@ -14,6 +14,7 @@ import {
 	isObjectLike,
 	isPlainObject,
 	isUndefined,
+	readUtf8File,
 } from "@wincode/runtime-utils";
 import {
 	applyEdits,
@@ -563,7 +564,7 @@ export const createConfigStore = (
 	const fs: ConfigFileSystem =
 		options.fs ??
 		({
-			readFile: (file: string) => globalThis.Bun.file(file).text(),
+			readFile: (file: string) => readUtf8File(file),
 			writeFile: writeConfigFileAtomically,
 		} satisfies ConfigFileSystem);
 	const snapshots = new Map<string, Promise<ConfigSnapshot>>();

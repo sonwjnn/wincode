@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import type { AgentRuntime } from "@wincode/agent-core";
 import { type Connections, createConnections } from "@wincode/ai/connections";
@@ -62,7 +61,7 @@ export type SessionCapabilitiesAssembly = Readonly<{
 
 const workspaceIdentity = (workspace: string): WorkspaceId =>
 	toWorkspaceId(
-		createHash("sha256").update(workspace).digest("hex").slice(0, 16)
+		new Bun.CryptoHasher("sha256").update(workspace).digest("hex").slice(0, 16)
 	);
 
 const asMcpCapability = (registry: McpRegistry): McpSessionCapability => ({

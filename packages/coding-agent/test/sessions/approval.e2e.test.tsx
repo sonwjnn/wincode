@@ -20,7 +20,7 @@ const restoreEnvironment = (): void => {
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
 import { afterAll, expect, mock, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
@@ -170,7 +170,7 @@ const {
 
 const store = createE2eStore();
 const { sessionId } = await seedCompactionHistory(store, 1);
-await writeFile(join(testDirectory, FILE_NAME), FILE_CONTENT, "utf8");
+await Bun.write(join(testDirectory, FILE_NAME), FILE_CONTENT);
 
 const completedToolRecords = (
 	records: readonly SessionRecord[],

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined, readUtf8File } from "@wincode/runtime-utils";
 import { MAX_PERMISSION_PATTERN_LENGTH } from "@/modules/permissions/policy";
 import { resolveTopLevelPermission } from "@/modules/permissions/schema";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
@@ -129,7 +129,7 @@ describe("resolveTopLevelPermission with real files", () => {
 		const store = createConfigStore({
 			configRoot: CONFIG_ROOT,
 			fs: {
-				readFile: (file: string) => readFile(file, "utf8"),
+				readFile: (file: string) => readUtf8File(file),
 			},
 			homeRoot: HOME_ROOT,
 		});

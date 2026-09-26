@@ -1,10 +1,11 @@
 import { type Dirent, existsSync, realpathSync } from "node:fs";
-import { readdir, readFile, readlink, realpath } from "node:fs/promises";
+import { readdir, readlink, realpath } from "node:fs/promises";
 import path from "node:path";
 import {
 	isObjectLike,
 	isUndefined,
 	omitUndefined,
+	readUtf8File,
 } from "@wincode/runtime-utils";
 import ignore, { type Ignore } from "ignore";
 import type { Except } from "type-fest";
@@ -391,10 +392,7 @@ export const createWorkspaceSandbox = (
 			return cachedRules;
 		}
 
-		const rulesPromise = readFile(
-			path.join(directoryPath, ".gitignore"),
-			"utf8"
-		)
+		const rulesPromise = readUtf8File(path.join(directoryPath, ".gitignore"))
 			.then((contents) => ({
 				directoryPath,
 				matcher: ignore().add(contents),

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { and, eq, gt, lte } from "drizzle-orm";
 import type { SessionId, WorkspaceId } from "@/shared/identifiers";
 import type { SessionDatabase } from "./client";
@@ -65,7 +64,7 @@ export const createSessionLeaseStore = (
 			throw new Error("Session not found");
 		}
 
-		const ownerToken = randomUUID();
+		const ownerToken = crypto.randomUUID();
 		const now = leaseOptions.now?.() ?? Date.now();
 		const renewedAt = toLeaseDate(now);
 		const expiresAt = toLeaseDate(now + SESSION_LEASE_TTL_MS);

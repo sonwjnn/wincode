@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { Tagged } from "type-fest";
 import { z } from "zod";
 
@@ -120,11 +119,10 @@ export const encodeLosslessText = (text: LosslessText): Uint8Array => {
 
 /** Computes the content identity from exact on-disk bytes. */
 export const computeFileVersion = (bytes: Uint8Array): FileVersion =>
-	createHash("sha256")
+	new Bun.CryptoHasher("sha256")
 		.update(bytes)
-		.digest()
-		.subarray(0, FILE_VERSION_BYTES)
-		.toString("hex") as FileVersion;
+		.digest("hex")
+		.slice(0, FILE_VERSION_BYTES * 2) as FileVersion;
 
 export const byteLength = (value: string): number =>
 	textEncoder.encode(value).byteLength;

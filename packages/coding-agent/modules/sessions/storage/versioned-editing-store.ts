@@ -1,12 +1,4 @@
-import { randomUUID } from "node:crypto";
-import {
-	chmod,
-	mkdir,
-	readFile,
-	rename,
-	rm,
-	writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isObjectLike, isString } from "@wincode/runtime-utils";
 import { and, desc, eq, lt } from "drizzle-orm";
@@ -126,7 +118,7 @@ const writeSnapshotBlob = async (
 	const targetPath = resolveSnapshotBlobPath(root, blobKey);
 	await ensurePrivateSnapshotDirectories(root, targetPath);
 	try {
-		const existing = Uint8Array.from(await readFile(targetPath));
+		const existing = await Bun.file(targetPath).bytes();
 		if (computeFileVersion(existing) === snapshot.fileVersion) {
 			await chmod(targetPath, 0o600);
 			return blobKey;
@@ -136,9 +128,9 @@ const writeSnapshotBlob = async (
 			throw error;
 		}
 	}
-	const temporaryPath = `${targetPath}.${randomUUID()}.tmp`;
+	const temporaryPath = `${targetPath}.${crypto.randomUUID()}.tmp`;
 	try {
-		await writeFile(temporaryPath, Buffer.from(snapshot.bytes), {
+		await writeFile(temporaryPath, snapshot.bytes, {
 			flag: "wx",
 			mode: 0o600,
 		});
@@ -162,9 +154,7 @@ const readSnapshotBlob = async (
 	}
 	let bytes: Uint8Array;
 	try {
-		bytes = Uint8Array.from(
-			await readFile(resolveSnapshotBlobPath(root, row.blobKey))
-		);
+		bytes = await Bun.file(resolveSnapshotBlobPath(root, row.blobKey)).bytes();
 	} catch (error) {
 		if (isMissingPath(error)) {
 			return null;
@@ -335,9 +325,7 @@ const PATH_LEASE_MAX_WAIT_MS = 5000;
 const PATH_LEASE_HEARTBEAT_MS = 10_000;
 
 const delay = async (milliseconds: number): Promise<void> => {
-	await new Promise<void>((resolve) => {
-		setTimeout(resolve, milliseconds);
-	});
+	await Bun.sleep(milliseconds);
 };
 const pathLeaseTimeout = (canonicalPath: string): CodingToolError =>
 	new CodingToolError(
@@ -454,7 +442,7 @@ const withPersistentPathLeases =
 		paths: readonly string[],
 		operation: (assertLease: LeaseAssertion) => Promise<T>
 	): Promise<T> => {
-		const ownerToken = randomUUID();
+		const ownerToken = crypto.randomUUID();
 		const orderedPaths = [...new Set(paths)].sort();
 		const acquired: string[] = [];
 		let lostPath: string | undefined;
