@@ -932,6 +932,16 @@ export function ChatTextArea({
 			return;
 		}
 
+		if (
+			key.name === "tab" &&
+			state.overlay.kind === "file-mention" &&
+			isTopLayer("command")
+		) {
+			key.preventDefault();
+			actions.onTab(key.shift);
+			return;
+		}
+
 		if (!isTopLayer("base")) {
 			return;
 		}

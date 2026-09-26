@@ -174,14 +174,17 @@ export const deleteFileMentionAfterTrailingCharacterDelete = (
 export const applyFileMentionReplacement = (
 	text: string,
 	range: FileMentionRange,
-	replacement: string
+	replacement: string,
+	options: { addTrailingSpace?: boolean } = {}
 ): FileMentionReplacement => {
 	const nextChar = text[range.end] ?? "";
 	const shouldUseExistingSpace = WHITESPACE_RE.test(nextChar);
-	const shouldInsertSpace = !(
-		nextChar &&
-		(shouldUseExistingSpace || MENTION_SPACE_BLOCKING_RE.test(nextChar))
-	);
+	const shouldInsertSpace =
+		options.addTrailingSpace !== false &&
+		!(
+			nextChar &&
+			(shouldUseExistingSpace || MENTION_SPACE_BLOCKING_RE.test(nextChar))
+		);
 	const replacementText = `${replacement}${shouldInsertSpace ? " " : ""}`;
 
 	return {

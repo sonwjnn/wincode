@@ -414,7 +414,8 @@ export function useChatInputController({
 			const replacement = applyFileMentionReplacement(
 				textValue,
 				activeTrigger,
-				`@${option.label}`
+				`@${option.label}`,
+				{ addTrailingSpace: option.type !== "directory" }
 			);
 			setProgrammaticText(replacement.text, replacement.cursorOffset);
 			closeOverlay();
@@ -664,9 +665,21 @@ export function useChatInputController({
 				return;
 			}
 
+			if (!shift && overlayKind === "file-mention") {
+				executeFileMentionAtIndex(selectedIndex);
+				return;
+			}
+
 			onTab(shift);
 		},
-		[disabled, onTab, steering]
+		[
+			disabled,
+			executeFileMentionAtIndex,
+			onTab,
+			overlayKind,
+			selectedIndex,
+			steering,
+		]
 	);
 
 	let overlay: InputOverlayState = EMPTY_OVERLAY;
