@@ -25,14 +25,14 @@ export async function loadCustomCommands(
 		}
 		const name = basename(candidate.filePath, ".md");
 		if (BUILTIN_NAMES.has(name.toLowerCase())) {
-			logger.warn(
+			await logger.warn(
 				"Ignoring custom command because it collides with a built-in command.",
 				{ filePath: candidate.filePath, name }
 			);
 			continue;
 		}
 		if (name.toLowerCase().startsWith(SKILL_NAMESPACE_PREFIX)) {
-			logger.warn(
+			await logger.warn(
 				"Ignoring custom command because it uses the reserved skill namespace.",
 				{ filePath: candidate.filePath, name }
 			);

@@ -1,5 +1,4 @@
-// biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
-import * as fs from "node:fs";
+import { appendFile, mkdir, readdir, unlink } from "node:fs/promises";
 // biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as os from "node:os";
 // biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
@@ -50,8 +49,11 @@ const redactUrl = (value: string): string => {
 		}
 	}
 
+	const isNetworkPathReference = redacted.startsWith("//");
 	try {
-		const url = new URL(redacted);
+		const url = isNetworkPathReference
+			? new URL(redacted, "https://wincode.invalid")
+			: new URL(redacted);
 		let credentialsChanged = false;
 		if (url.username.length > 0) {
 			url.username = REDACTED;
@@ -61,7 +63,13 @@ const redactUrl = (value: string): string => {
 			url.password = REDACTED;
 			credentialsChanged = true;
 		}
-		return credentialsChanged ? url.toString() : redacted;
+		if (!credentialsChanged) {
+			return redacted;
+		}
+		const formatted = url.toString();
+		return isNetworkPathReference
+			? formatted.slice("https:".length)
+			: formatted;
 	} catch {
 		return redacted;
 	}
@@ -96,20 +104,19 @@ const redactValue = (value: JsonValue, fieldName?: string): JsonValue => {
 const dateString = (date: Date): string => date.toISOString().slice(0, 10);
 
 let lastRetentionCheck: string | undefined;
-const removeExpiredLogs = (directory: string, currentDate: string): void => {
+const removeExpiredLogs = async (
+	directory: string,
+	currentDate: string
+): Promise<void> => {
 	const checkKey = `${directory}\0${currentDate}`;
 	if (checkKey === lastRetentionCheck) {
 		return;
 	}
 	lastRetentionCheck = checkKey;
 
-	let entries: fs.Dirent[];
-	try {
-		entries = fs.readdirSync(directory, { withFileTypes: true });
-	} catch {
-		return;
-	}
-
+	const entries = await readdir(directory, { withFileTypes: true }).catch(
+		() => []
+	);
 	const oldestRetainedDate = new Date(`${currentDate}T00:00:00.000Z`);
 	oldestRetainedDate.setUTCDate(
 		oldestRetainedDate.getUTCDate() - (LOG_RETENTION_DAYS - 1)
@@ -131,60 +138,65 @@ const removeExpiredLogs = (directory: string, currentDate: string): void => {
 		) {
 			continue;
 		}
-		try {
-			fs.unlinkSync(path.join(directory, entry.name));
-		} catch {
-			// Retention is best-effort; a stale log must not prevent a new record.
-		}
+		await unlink(path.join(directory, entry.name)).catch(() => undefined);
 	}
 };
-
+let logQueue = Promise.resolve();
 const writeRecord = (
 	level: LoggerLevel,
 	message: string,
 	fields?: LogFields
-): void => {
+): Promise<void> => {
 	if (level === "debug" && process.env.WINCODE_DEBUG !== "1") {
-		return;
+		return logQueue;
 	}
+	let directory: string;
+	let currentDate: string;
+	let line: string;
 	try {
 		const timestamp = new Date();
-		const currentDate = dateString(timestamp);
-		const directory = path.join(
-			process.env.HOME || os.homedir(),
-			".wincode",
-			"logs"
-		);
-		fs.mkdirSync(directory, { mode: 0o700, recursive: true });
-		removeExpiredLogs(directory, currentDate);
+		currentDate = dateString(timestamp);
+		directory = path.join(process.env.HOME || os.homedir(), ".wincode", "logs");
 		const record = {
 			timestamp: timestamp.toISOString(),
 			level,
 			message,
 			...(fields === undefined ? {} : { context: redactValue(fields) }),
 		};
-		const line = JSON.stringify(record);
-		if (line !== undefined) {
-			fs.appendFileSync(
+		const serialized = JSON.stringify(record);
+		if (serialized === undefined) {
+			return logQueue;
+		}
+		line = `${serialized}\n`;
+	} catch {
+		return logQueue;
+	}
+	logQueue = logQueue.then(async () => {
+		try {
+			await mkdir(directory, { mode: 0o700, recursive: true });
+			await removeExpiredLogs(directory, currentDate);
+			await appendFile(
 				path.join(directory, `wincode.${currentDate}.log`),
-				`${line}\n`,
+				line,
 				{ encoding: "utf8", mode: 0o600 }
 			);
+		} catch {
+			// Diagnostics must never interrupt a runtime or contaminate its output streams.
 		}
-	} catch {
-		// Diagnostics must never interrupt a runtime or contaminate its output streams.
-	}
+	});
+	return logQueue;
 };
 
 /**
  * File-backed diagnostics that never write to CLI or protocol output streams.
  * Keep message text non-secret; credential redaction applies to fields only.
+ * Await a call when the runtime must wait for its write attempt.
  */
 export const logger = Object.freeze({
-	debug: (message: string, fields?: LogFields): void =>
+	debug: (message: string, fields?: LogFields): Promise<void> =>
 		writeRecord("debug", message, fields),
-	error: (message: string, fields?: LogFields): void =>
+	error: (message: string, fields?: LogFields): Promise<void> =>
 		writeRecord("error", message, fields),
-	warn: (message: string, fields?: LogFields): void =>
+	warn: (message: string, fields?: LogFields): Promise<void> =>
 		writeRecord("warn", message, fields),
 });

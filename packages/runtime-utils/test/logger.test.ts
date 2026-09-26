@@ -55,7 +55,7 @@ const daysAgo = (days: number): string => {
 describe("runtime logger", () => {
 	test("writes structured diagnostics and redacts credential fields and URL query secrets", async () => {
 		await withLoggerHome(async (home) => {
-			logger.error("MCP request failed", {
+			await logger.error("MCP request failed", {
 				alternateUrl: [
 					"https://bob:do-not-write-alternate@backup.test/path?token=do-not-write-alt-token",
 				],
@@ -64,6 +64,8 @@ describe("runtime logger", () => {
 				access_key: "do-not-write-access-key",
 				accessToken: "do-not-write-token",
 				method: "GET",
+				networkUrl:
+					"//alice:do-not-write-network-password@example.test/path?api_key=do-not-write-network-key",
 				retryCount: 2,
 				relativeUrl:
 					"/mcp?access_key=do-not-write-relative-key&token=do-not-write-relative-token",
@@ -89,6 +91,8 @@ describe("runtime logger", () => {
 					access_key: "[REDACTED]",
 					accessToken: "[REDACTED]",
 					method: "GET",
+					networkUrl:
+						"//%5BREDACTED%5D:%5BREDACTED%5D@example.test/path?api_key=%5BREDACTED%5D",
 					retryCount: 2,
 					relativeUrl: "/mcp?access_key=%5BREDACTED%5D&token=%5BREDACTED%5D",
 					url: "https://%5BREDACTED%5D:%5BREDACTED%5D@example.test/mcp?api_key=%5BREDACTED%5D&access_key=%5BREDACTED%5D&auth=%5BREDACTED%5D&region=west",
@@ -103,11 +107,11 @@ describe("runtime logger", () => {
 
 	test("writes debug diagnostics only when explicitly enabled", async () => {
 		await withLoggerHome(async (home) => {
-			logger.debug("hidden unless enabled");
+			await logger.debug("hidden unless enabled");
 			expect(await readdir(logDirectory(home)).catch(() => [])).toEqual([]);
 
 			process.env.WINCODE_DEBUG = "1";
-			logger.debug("debug enabled");
+			await logger.debug("debug enabled");
 			expect(await readFile(logFile(home), "utf8")).toContain(
 				'"level":"debug","message":"debug enabled"'
 			);
@@ -124,7 +128,7 @@ describe("runtime logger", () => {
 			await writeFile(path.join(directory, retained), "retained");
 			await writeFile(path.join(directory, "notes.log"), "not a Wincode log");
 
-			logger.warn("retention sweep");
+			await logger.warn("retention sweep");
 			const names = await readdir(directory);
 			expect(names).not.toContain(expired);
 			expect(names).toContain(retained);
@@ -146,7 +150,9 @@ describe("runtime logger", () => {
 			console.log = (message?: unknown) => output.push(String(message));
 			console.warn = (message?: unknown) => output.push(String(message));
 			try {
-				expect(() => logger.error("diagnostics unavailable")).not.toThrow();
+				await expect(
+					logger.error("diagnostics unavailable")
+				).resolves.toBeUndefined();
 				expect(output).toEqual([]);
 			} finally {
 				console.error = originalConsole.error;

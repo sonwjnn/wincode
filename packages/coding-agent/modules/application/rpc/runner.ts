@@ -157,15 +157,15 @@ export async function runRpc({
 				): Promise<void> => {
 					const remaining = Math.max(0, deadline - Date.now());
 					if (remaining === 0) {
-						logger.warn("RPC shutdown deadline exceeded", { label });
+						await logger.warn("RPC shutdown deadline exceeded", { label });
 						return;
 					}
 					const deferred = Promise.withResolvers<boolean>();
 					const timer = setTimeout(() => deferred.resolve(false), remaining);
 					void work.then(
 						() => deferred.resolve(true),
-						(error: unknown) => {
-							logger.error("RPC shutdown failed", {
+						async (error: unknown) => {
+							await logger.error("RPC shutdown failed", {
 								errorType: error instanceof Error ? error.name : typeof error,
 								label,
 							});
@@ -175,7 +175,7 @@ export async function runRpc({
 					const completed = await deferred.promise;
 					clearTimeout(timer);
 					if (!completed) {
-						logger.warn("RPC shutdown deadline exceeded", { label });
+						await logger.warn("RPC shutdown deadline exceeded", { label });
 					}
 				};
 				const activeHost = state.host;
@@ -210,7 +210,7 @@ export async function runRpc({
 		} else if (error instanceof RpcApplicationError) {
 			code = error.code;
 		}
-		logger.error("RPC fatal error", {
+		const diagnosticWrite = logger.error("RPC fatal error", {
 			code,
 			errorType: error instanceof Error ? error.name : typeof error,
 		});
@@ -226,7 +226,9 @@ export async function runRpc({
 			},
 		};
 		const notification = output.enqueue(fatalFrame).catch(() => undefined);
-		fatalPromise = Promise.all([cleanup(), notification]).then(() => undefined);
+		fatalPromise = Promise.all([cleanup(), notification, diagnosticWrite]).then(
+			() => undefined
+		);
 		return fatalPromise;
 	};
 
