@@ -1,5 +1,4 @@
 import { afterAll, describe, expect, test } from "bun:test";
-// biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as path from "node:path";
 import { logger } from "@wincode/runtime-utils";
 import {

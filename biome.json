@@ -82,7 +82,8 @@
         "useAwait": "off"
       },
       "performance": {
-        "noBarrelFile": "off"
+        "noBarrelFile": "off",
+        "noNamespaceImport": "off"
       },
       "complexity": {
         "noVoid": "off"

@@ -1,17 +1,6 @@
-import { constants } from "node:fs";
-import {
-	access,
-	chmod,
-	lstat,
-	mkdir,
-	realpath,
-	rename,
-	rm,
-	rmdir,
-	writeFile,
-} from "node:fs/promises";
-import { homedir } from "node:os";
-import path from "node:path";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { isObjectLike, isString } from "@wincode/runtime-utils";
 import type { ToolResourceLimits } from "../resource-limits";
 import { defaultWorkspaceSandbox, type WorkspacePolicy } from "../workspace";
@@ -76,10 +65,10 @@ export const readVersionedFile = async (
 
 export const expandExternalPath = (inputPath: string): string => {
 	if (inputPath === "~") {
-		return homedir();
+		return os.homedir();
 	}
 	if (inputPath.startsWith("~/")) {
-		return path.join(homedir(), inputPath.slice(2));
+		return path.join(os.homedir(), inputPath.slice(2));
 	}
 	return inputPath;
 };
@@ -90,7 +79,7 @@ export const resolveExistingTextPath = async (
 	sandbox: WorkspacePolicy = defaultWorkspaceSandbox
 ): Promise<string> =>
 	allowExternalPath
-		? realpath(path.resolve(expandExternalPath(inputPath)))
+		? fs.promises.realpath(path.resolve(expandExternalPath(inputPath)))
 		: sandbox.resolveExistingPath(inputPath);
 
 const resolveMissingPath = async (resolvedPath: string): Promise<string> => {
@@ -98,7 +87,7 @@ const resolveMissingPath = async (resolvedPath: string): Promise<string> => {
 	let current = path.dirname(resolvedPath);
 	while (true) {
 		try {
-			const canonicalParent = await realpath(current);
+			const canonicalParent = await fs.promises.realpath(current);
 			return path.join(canonicalParent, ...missingSegments);
 		} catch (error) {
 			if (!hasErrorCode(error, "ENOENT")) {
@@ -123,7 +112,7 @@ export const resolveNewTextPath = async (
 		? path.resolve(expandExternalPath(inputPath))
 		: await sandbox.resolveNewPath(inputPath);
 	try {
-		return await realpath(resolvedPath);
+		return await fs.promises.realpath(resolvedPath);
 	} catch (error) {
 		if (!hasErrorCode(error, "ENOENT")) {
 			throw error;
@@ -400,7 +389,8 @@ export const atomicReplaceFile = async (
 	bytes: Uint8Array,
 	expectedFileVersion?: FileVersion
 ): Promise<void> => {
-	const existingMode = await lstat(resolvedPath)
+	const existingMode = await fs.promises
+		.lstat(resolvedPath)
 		.then((metadata) => metadata.mode % 0o1_0000)
 		.catch((error: unknown) => {
 			if (hasErrorCode(error, "ENOENT")) {
@@ -416,7 +406,7 @@ export const atomicReplaceFile = async (
 	}
 	if (existingMode !== undefined) {
 		try {
-			await access(resolvedPath, constants.W_OK);
+			await fs.promises.access(resolvedPath, fs.constants.W_OK);
 		} catch (error) {
 			if (!(hasErrorCode(error, "EACCES") || hasErrorCode(error, "EPERM"))) {
 				throw error;
@@ -426,12 +416,12 @@ export const atomicReplaceFile = async (
 	}
 	const temporaryPath = `${resolvedPath}.wincode-${crypto.randomUUID()}.tmp`;
 	try {
-		await writeFile(temporaryPath, bytes);
+		await fs.promises.writeFile(temporaryPath, bytes);
 		if (existingMode !== undefined) {
-			await chmod(temporaryPath, existingMode);
+			await fs.promises.chmod(temporaryPath, existingMode);
 		}
 		if (expectedFileVersion !== undefined) {
-			const canonicalPath = await realpath(resolvedPath);
+			const canonicalPath = await fs.promises.realpath(resolvedPath);
 			if (canonicalPath !== resolvedPath) {
 				throw new CodingToolError(
 					"approved-path-changed",
@@ -442,9 +432,9 @@ export const atomicReplaceFile = async (
 			const latest = await readVersionedFile(resolvedPath);
 			expectFileVersion(latest.fileVersion, expectedFileVersion, resolvedPath);
 		}
-		await rename(temporaryPath, resolvedPath);
+		await fs.promises.rename(temporaryPath, resolvedPath);
 	} catch (error) {
-		await rm(temporaryPath, { force: true }).catch(() => undefined);
+		await fs.promises.rm(temporaryPath, { force: true }).catch(() => undefined);
 		if (hasErrorCode(error, "EACCES") || hasErrorCode(error, "EPERM")) {
 			throw fileNotWritableError(resolvedPath);
 		}
@@ -462,7 +452,7 @@ export const createParentDirectories = async (
 	let current = parentPath;
 	while (true) {
 		try {
-			await lstat(current);
+			await fs.promises.lstat(current);
 			break;
 		} catch (error) {
 			if (!hasErrorCode(error, "ENOENT")) {
@@ -479,11 +469,11 @@ export const createParentDirectories = async (
 	const created: string[] = [];
 	for (const directory of [...missing].reverse()) {
 		try {
-			await mkdir(directory);
+			await fs.promises.mkdir(directory);
 			created.push(directory);
 		} catch (error) {
 			if (hasErrorCode(error, "EEXIST")) {
-				const metadata = await lstat(directory);
+				const metadata = await fs.promises.lstat(directory);
 				if (metadata.isDirectory()) {
 					continue;
 				}
@@ -499,7 +489,7 @@ export const removeEmptyCreatedParents = async (
 	directories: CreatedParentDirectories
 ): Promise<void> => {
 	for (const directory of directories) {
-		await rmdir(directory).catch(() => undefined);
+		await fs.promises.rmdir(directory).catch(() => undefined);
 	}
 };
 

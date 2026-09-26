@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { chmod, mkdir, readdir, stat, writeFile } from "node:fs/promises";
-// biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as path from "node:path";
 import { readUtf8File } from "../src/file-io";
 import { logger } from "../src/index";

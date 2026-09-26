@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir } from "node:fs/promises";
-// biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as os from "node:os";
-// biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as path from "node:path";
 import { discoverCustomCommandCandidates } from "@/modules/custom-commands/discovery";
 import { loadCustomCommands } from "@/modules/custom-commands/loader";

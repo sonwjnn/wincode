@@ -9,7 +9,6 @@
 // Entries absent upstream are reported, never fabricated. Run with `--check`
 // to fail when the committed file is not what the current inputs produce.
 
-// biome-ignore lint/performance/noNamespaceImport: Repository rules require namespace imports for node:* modules.
 import * as path from "node:path";
 import { readUtf8File } from "@wincode/runtime-utils";
 import { modelCatalog } from "../src/catalog";

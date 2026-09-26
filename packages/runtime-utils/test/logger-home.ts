@@ -1,7 +1,5 @@
 import { mkdtemp, rm } from "node:fs/promises";
-// biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as os from "node:os";
-// biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as path from "node:path";
 import { readUtf8File } from "../src/file-io";
 
