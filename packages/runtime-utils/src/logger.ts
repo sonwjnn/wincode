@@ -1,9 +1,10 @@
-import { appendFile, mkdir, readdir, unlink } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readdir, unlink } from "node:fs/promises";
 // biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as os from "node:os";
 // biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as path from "node:path";
 import type { JsonValue } from "type-fest";
+import { isObjectLike } from "./guards";
 import { isSensitiveKey } from "./sensitive-key";
 
 const LOG_RETENTION_DAYS = 14;
@@ -154,6 +155,8 @@ const redactValue = (value: JsonValue, fieldName?: string): JsonValue => {
 };
 
 const dateString = (date: Date): string => date.toISOString().slice(0, 10);
+const isMissingPathError = (error: unknown): boolean =>
+	isObjectLike(error) && "code" in error && error.code === "ENOENT";
 
 let lastRetentionCheck: string | undefined;
 const removeExpiredLogs = async (
@@ -237,11 +240,19 @@ const writeRecord = (
 		try {
 			await mkdir(directory, { mode: 0o700, recursive: true });
 			await removeExpiredLogs(directory, currentDate);
-			await appendFile(
-				path.join(directory, `wincode.${currentDate}.log`),
-				line,
-				{ encoding: "utf8", mode: 0o600 }
-			);
+			await chmod(directory, 0o700);
+			const logFile = path.join(directory, `wincode.${currentDate}.log`);
+			try {
+				await chmod(logFile, 0o600);
+			} catch (error) {
+				if (!isMissingPathError(error)) {
+					throw error;
+				}
+			}
+			await appendFile(logFile, line, {
+				encoding: "utf8",
+				mode: 0o600,
+			});
 		} catch {
 			// Diagnostics must never interrupt a runtime or contaminate its output streams.
 		}

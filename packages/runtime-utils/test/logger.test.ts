@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { chmod, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdir,
+	readdir,
+	readFile,
+	stat,
+	writeFile,
+} from "node:fs/promises";
 // biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as path from "node:path";
 import { logger } from "../src/index";
@@ -138,6 +145,25 @@ describe("runtime logger", () => {
 		});
 	});
 
+	test("keeps existing diagnostic directories and files private before appending", async () => {
+		await withLoggerHome(async (home) => {
+			const directory = logDirectory(home);
+			const file = logFile(home);
+			await mkdir(directory, { mode: 0o755, recursive: true });
+			await chmod(directory, 0o755);
+			await writeFile(file, "existing diagnostic\n", { mode: 0o644 });
+			await chmod(file, 0o644);
+
+			await logger.warn("private log permissions");
+
+			const fileMode = (await stat(file)).mode;
+			const directoryMode = (await stat(directory)).mode;
+			// biome-ignore lint/suspicious/noBitwiseOperators: stat.mode stores permissions in its low nine bits.
+			expect(fileMode & 0o777).toBe(0o600);
+			// biome-ignore lint/suspicious/noBitwiseOperators: stat.mode stores permissions in its low nine bits.
+			expect(directoryMode & 0o777).toBe(0o700);
+		});
+	});
 	test("retains only recent Wincode log files and continues when logging is unavailable", async () => {
 		await withLoggerHome(async (home) => {
 			const directory = logDirectory(home);
