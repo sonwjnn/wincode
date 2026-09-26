@@ -10,12 +10,39 @@ const LOG_RETENTION_DAYS = 14;
 const REDACTED = "[REDACTED]";
 const URL_FIELD_PATTERN = /(?:url|uri|endpoint)$/i;
 const LOG_FILE_PATTERN = /^wincode\.(\d{4}-\d{2}-\d{2})\.log$/;
+const URL_AUTHORITY_PREFIX_PATTERN = /^[a-z][a-z\d+.-]*:\/\//i;
+const URL_AUTHORITY_END_PATTERN = /[/?#]/;
 
 type LoggerLevel = "debug" | "error" | "warn";
 
 /** Non-secret JSON metadata; known credential fields and URL query keys are redacted. */
 export type LogFields = Readonly<Record<string, JsonValue>>;
 
+const redactUrlAuthorityCredentials = (value: string): string => {
+	const schemePrefix = URL_AUTHORITY_PREFIX_PATTERN.exec(value)?.[0];
+	const authorityStart =
+		schemePrefix?.length ?? (value.startsWith("//") ? 2 : undefined);
+	if (authorityStart === undefined) {
+		return value;
+	}
+	const relativeAuthorityEnd = value
+		.slice(authorityStart)
+		.search(URL_AUTHORITY_END_PATTERN);
+	const authorityEnd =
+		relativeAuthorityEnd === -1
+			? value.length
+			: authorityStart + relativeAuthorityEnd;
+	const atIndex = value.lastIndexOf("@", authorityEnd - 1);
+	if (atIndex < authorityStart) {
+		return value;
+	}
+	const credentials = value.slice(authorityStart, atIndex);
+	const replacement = encodeURIComponent(REDACTED);
+	const redactedCredentials = credentials.includes(":")
+		? `${replacement}:${replacement}`
+		: replacement;
+	return `${value.slice(0, authorityStart)}${redactedCredentials}${value.slice(atIndex)}`;
+};
 const redactUrl = (value: string): string => {
 	const queryStart = value.indexOf("?");
 	const fragmentStart = value.indexOf("#");
@@ -62,7 +89,7 @@ const redactUrl = (value: string): string => {
 			? formatted.slice("https:".length)
 			: formatted;
 	} catch {
-		return redacted;
+		return redactUrlAuthorityCredentials(redacted);
 	}
 };
 
