@@ -513,9 +513,7 @@ describe("SessionView initial submission", () => {
 			setup.mockInput.pressEnter();
 			const sendOutcome = await Promise.race([
 				sendStarted.promise.then(() => "sent" as const),
-				new Promise<"timeout">((resolve) =>
-					setTimeout(() => resolve("timeout"), 200)
-				),
+				Bun.sleep(200).then(() => "timeout" as const),
 			]);
 			expect(sendOutcome).toBe("sent");
 			await flushUi(setup);
