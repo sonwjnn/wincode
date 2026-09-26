@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
@@ -27,7 +27,7 @@ describe("file mention resolver", () => {
 		await mkdir(path.join(workspace, "packages/coding-agent/modules"), {
 			recursive: true,
 		});
-		await writeFile(
+		await globalThis.Bun.write(
 			path.join(workspace, "packages/coding-agent/modules/file.ts"),
 			"export const x = 1;"
 		);
@@ -58,11 +58,11 @@ describe("file mention resolver", () => {
 		await mkdir(path.join(workspace, "packages/coding-agent/modules/src"), {
 			recursive: true,
 		});
-		await writeFile(
+		await globalThis.Bun.write(
 			path.join(workspace, "packages/coding-agent/modules/package.json"),
 			"{}"
 		);
-		await writeFile(
+		await globalThis.Bun.write(
 			path.join(workspace, "packages/coding-agent/modules/src/index.ts"),
 			""
 		);
@@ -87,7 +87,7 @@ describe("file mention resolver", () => {
 	test("rejects mentions that escape the workspace", async () => {
 		const workspace = await createWorkspace();
 		const outside = await createWorkspace();
-		await writeFile(path.join(outside, "secret.txt"), "secret");
+		await globalThis.Bun.write(path.join(outside, "secret.txt"), "secret");
 		await symlink(
 			path.join(outside, "secret.txt"),
 			path.join(workspace, "link")
@@ -102,7 +102,7 @@ describe("file mention resolver", () => {
 
 	test("ignores quoted file mentions", async () => {
 		const workspace = await createWorkspace();
-		await writeFile(path.join(workspace, "secret.txt"), "secret");
+		await globalThis.Bun.write(path.join(workspace, "secret.txt"), "secret");
 
 		await expect(
 			resolveFileMentionParts('ignore "@secret.txt"', { root: workspace })
@@ -114,7 +114,7 @@ describe("file mention resolver", () => {
 		await mkdir(path.join(workspace, "packages/coding-agent/modules/src"), {
 			recursive: true,
 		});
-		await writeFile(
+		await globalThis.Bun.write(
 			path.join(workspace, "packages/coding-agent/modules/src/bot-message.tsx"),
 			"export const message = true;"
 		);
@@ -133,7 +133,10 @@ describe("file mention resolver", () => {
 	test("resolves an extensionless stem fallback", async () => {
 		const workspace = await createWorkspace();
 		await mkdir(path.join(workspace, "src"), { recursive: true });
-		await writeFile(path.join(workspace, "src/config.json"), '{"ok":true}');
+		await globalThis.Bun.write(
+			path.join(workspace, "src/config.json"),
+			'{"ok":true}'
+		);
 
 		const [part] = await resolveFileMentionParts("inspect @config", {
 			root: workspace,
@@ -146,8 +149,11 @@ describe("file mention resolver", () => {
 	test("keeps literal paths ahead of basename fallback", async () => {
 		const workspace = await createWorkspace();
 		await mkdir(path.join(workspace, "nested"), { recursive: true });
-		await writeFile(path.join(workspace, "target"), "literal");
-		await writeFile(path.join(workspace, "nested/target.ts"), "fallback");
+		await globalThis.Bun.write(path.join(workspace, "target"), "literal");
+		await globalThis.Bun.write(
+			path.join(workspace, "nested/target.ts"),
+			"fallback"
+		);
 
 		const [part] = await resolveFileMentionParts("inspect @target", {
 			root: workspace,
@@ -167,11 +173,11 @@ describe("file mention resolver", () => {
 		await mkdir(path.join(workspace, "packages/coding-agent/tui"), {
 			recursive: true,
 		});
-		await writeFile(
+		await globalThis.Bun.write(
 			path.join(workspace, "packages/coding-agent/modules/index.ts"),
 			"modules"
 		);
-		await writeFile(
+		await globalThis.Bun.write(
 			path.join(workspace, "packages/coding-agent/tui/index.ts"),
 			"tui"
 		);
@@ -191,7 +197,10 @@ describe("file mention resolver", () => {
 	test("does not use fuzzy suggestions for resolver fallback", async () => {
 		const workspace = await createWorkspace();
 		await mkdir(path.join(workspace, "src"), { recursive: true });
-		await writeFile(path.join(workspace, "src/bot-message.tsx"), "content");
+		await globalThis.Bun.write(
+			path.join(workspace, "src/bot-message.tsx"),
+			"content"
+		);
 
 		const [part] = await resolveFileMentionParts("inspect @botmsg", {
 			root: workspace,
@@ -203,7 +212,10 @@ describe("file mention resolver", () => {
 	test("deduplicates literal and fallback references by canonical path", async () => {
 		const workspace = await createWorkspace();
 		await mkdir(path.join(workspace, "src"), { recursive: true });
-		await writeFile(path.join(workspace, "src/target.ts"), "content");
+		await globalThis.Bun.write(
+			path.join(workspace, "src/target.ts"),
+			"content"
+		);
 
 		const parts = await resolveFileMentionParts(
 			"inspect @target and @src/target.ts",
@@ -217,7 +229,10 @@ describe("file mention resolver", () => {
 	test("does not resolve files from ignored directories by basename", async () => {
 		const workspace = await createWorkspace();
 		await mkdir(path.join(workspace, "node_modules"), { recursive: true });
-		await writeFile(path.join(workspace, "node_modules/ignored.ts"), "ignored");
+		await globalThis.Bun.write(
+			path.join(workspace, "node_modules/ignored.ts"),
+			"ignored"
+		);
 
 		const [part] = await resolveFileMentionParts("inspect @ignored", {
 			root: workspace,
@@ -230,8 +245,11 @@ describe("file mention resolver", () => {
 		const workspace = await createWorkspace();
 		const outside = await createWorkspace();
 		await mkdir(path.join(workspace, "nested"), { recursive: true });
-		await writeFile(path.join(outside, "secret.txt"), "secret");
-		await writeFile(path.join(workspace, "nested/link.ts"), "inside");
+		await globalThis.Bun.write(path.join(outside, "secret.txt"), "secret");
+		await globalThis.Bun.write(
+			path.join(workspace, "nested/link.ts"),
+			"inside"
+		);
 		await symlink(
 			path.join(outside, "secret.txt"),
 			path.join(workspace, "link")
@@ -246,8 +264,14 @@ describe("file mention resolver", () => {
 	test("allows exact ignored paths but excludes them from basename fallback", async () => {
 		const workspace = await createWorkspace();
 		await mkdir(path.join(workspace, "private"));
-		await writeFile(path.join(workspace, ".gitignore"), "private/\n");
-		await writeFile(path.join(workspace, "private/secret.ts"), "secret");
+		await globalThis.Bun.write(
+			path.join(workspace, ".gitignore"),
+			"private/\n"
+		);
+		await globalThis.Bun.write(
+			path.join(workspace, "private/secret.ts"),
+			"secret"
+		);
 
 		const [literalPart] = await resolveFileMentionParts(
 			"inspect @private/secret.ts",

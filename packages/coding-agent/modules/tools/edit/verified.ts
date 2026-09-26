@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { diffArrays } from "diff";
 import type {
 	ResourceLimitOptions,
@@ -804,7 +803,7 @@ export const commitMutation = async ({
 					byteLength: new TextEncoder().encode(fullDiff.patch).byteLength,
 					content: fullDiff.patch,
 					createdAt: Date.now(),
-					id: randomUUID(),
+					id: crypto.randomUUID(),
 					sessionId: context.sessionId,
 				};
 	assertObservedLineBudget(

@@ -1,7 +1,8 @@
 import type { Dirent } from "node:fs";
 import { readdirSync, statSync } from "node:fs";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { readUtf8File } from "@wincode/runtime-utils";
 import type { SetReadonly, SetRequired } from "type-fest";
 import { parseSkillFile } from "./frontmatter";
 import { hashSkillBody } from "./hash";
@@ -129,7 +130,7 @@ export function discoverSkillCandidates(
 export async function loadSkill(
 	candidate: SkillCandidate
 ): Promise<LoadedSkill> {
-	const parsed = parseSkillFile(await readFile(candidate.filePath, "utf8"));
+	const parsed = parseSkillFile(await readUtf8File(candidate.filePath));
 	if (parsed.frontmatter.name !== basename(dirname(candidate.filePath))) {
 		throw new Error("Skill name must match containing directory");
 	}

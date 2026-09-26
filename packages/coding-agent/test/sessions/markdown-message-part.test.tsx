@@ -56,7 +56,7 @@ const settleRenders = async (
 	setup: Awaited<ReturnType<typeof testRender>>
 ): Promise<void> => {
 	for (let index = 0; index < 3; index++) {
-		await new Promise((resolve) => setTimeout(resolve, 10));
+		await globalThis.Bun.sleep(10);
 		await setup.renderOnce();
 	}
 };
@@ -118,7 +118,7 @@ describe("MarkdownMessagePart", () => {
 		try {
 			let grownFrame = "";
 			for (let attempt = 0; attempt < 20; attempt++) {
-				await new Promise((resolve) => setTimeout(resolve, 10));
+				await globalThis.Bun.sleep(10);
 				await setup.renderOnce();
 				grownFrame = setup.captureCharFrame();
 				if (grownFrame.includes("Two")) {

@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
 export const writeFixture = async (
@@ -6,5 +6,5 @@ export const writeFixture = async (
 	contents: string
 ): Promise<void> => {
 	await mkdir(dirname(filePath), { recursive: true });
-	await writeFile(filePath, contents);
+	await globalThis.Bun.write(filePath, contents);
 };

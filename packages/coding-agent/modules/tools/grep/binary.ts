@@ -1,5 +1,3 @@
-import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import {
 	access,
@@ -244,18 +242,22 @@ const runCommand = async (command: string, args: string[]): Promise<void> => {
 	const { promise, resolve, reject } = Promise.withResolvers<void>();
 	let stderr = "";
 	let settled = false;
-	let timer: ReturnType<typeof setTimeout> | undefined;
+	let timer: Timer | undefined;
 
-	let child: ReturnType<typeof spawn>;
+	let child: Bun.Subprocess;
 	try {
-		child = spawn(command, args, {
-			stdio: ["ignore", "ignore", "pipe"],
+		child = globalThis.Bun.spawn([command, ...args], {
+			stdin: "ignore",
+			stdout: "ignore",
+			stderr: "pipe",
 			windowsHide: true,
 		});
 	} catch (error) {
+		const prefix =
+			getErrorCode(error) === "ENOENT" ? "failed to run" : "failed to start";
 		reject(
 			new RipgrepDownloadError(
-				`failed to start ${command}: ${getErrorMessage(error, String(error))}`
+				`${prefix} ${command}: ${getErrorMessage(error, String(error))}`
 			)
 		);
 		return promise;
@@ -279,31 +281,33 @@ const runCommand = async (command: string, args: string[]): Promise<void> => {
 		resolve();
 	};
 
-	child.stderr?.on("data", (chunk: Buffer) => {
-		stderr = truncateUtf8(
-			`${stderr}${chunk.toString("utf8")}`,
-			COMMAND_OUTPUT_MAX_BYTES
-		);
-	});
-	child.on("error", (error) => {
-		finish(
-			new RipgrepDownloadError(
-				`failed to run ${command}: ${getErrorMessage(error, String(error))}`
-			)
-		);
-	});
-	child.on("close", (code) => {
-		if (code === 0) {
-			finish();
+	const stderrTask = (async (): Promise<void> => {
+		const stream = child.stderr;
+		if (stream === null || stream === undefined || typeof stream === "number") {
 			return;
 		}
-		const detail = stderr.trim();
-		finish(
-			new RipgrepDownloadError(
-				detail || `${command} exited with code ${String(code)}`
-			)
-		);
-	});
+		const reader = stream.getReader();
+		const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) {
+					break;
+				}
+				stderr = truncateUtf8(
+					`${stderr}${decoder.decode(value, { stream: true })}`,
+					COMMAND_OUTPUT_MAX_BYTES
+				);
+			}
+			stderr = truncateUtf8(
+				`${stderr}${decoder.decode()}`,
+				COMMAND_OUTPUT_MAX_BYTES
+			);
+		} finally {
+			reader.releaseLock();
+		}
+	})();
+
 	timer = setTimeout(() => {
 		child.kill();
 		finish(
@@ -312,6 +316,33 @@ const runCommand = async (command: string, args: string[]): Promise<void> => {
 			)
 		);
 	}, EXTRACTION_TIMEOUT_MS);
+
+	void (async () => {
+		let code: number;
+		try {
+			code = await child.exited;
+			await stderrTask;
+		} catch (error) {
+			finish(
+				new RipgrepDownloadError(
+					`failed to run ${command}: ${getErrorMessage(error, String(error))}`
+				)
+			);
+			return;
+		}
+
+		const exitCode = child.signalCode === null ? code : null;
+		if (exitCode === 0) {
+			finish();
+			return;
+		}
+		const detail = stderr.trim();
+		finish(
+			new RipgrepDownloadError(
+				detail || `${command} exited with code ${String(exitCode)}`
+			)
+		);
+	})();
 
 	return promise;
 };
@@ -390,7 +421,7 @@ const downloadArchive = async (
 		}
 
 		const file = await open(archivePath, "wx", 0o600);
-		const hash = createHash("sha256");
+		const hash = new globalThis.Bun.CryptoHasher("sha256");
 		let totalBytes = 0;
 		const reader = response.body.getReader();
 		try {
@@ -476,14 +507,14 @@ export const downloadRipgrepBinary = async (
 
 	const archivePath = path.join(
 		paths.cacheDirectory,
-		`${paths.archiveFilename}.${randomUUID()}.partial`
+		`${paths.archiveFilename}.${crypto.randomUUID()}.partial`
 	);
 	const extractionDirectory = await mkdtemp(
 		path.join(paths.cacheDirectory, ".extract-")
 	);
 	const stagedPath = path.join(
 		paths.cacheDirectory,
-		`${paths.executableName}.${randomUUID()}.staged`
+		`${paths.executableName}.${crypto.randomUUID()}.staged`
 	);
 
 	try {

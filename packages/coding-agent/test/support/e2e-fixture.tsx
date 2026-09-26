@@ -1,7 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
@@ -350,7 +349,7 @@ export const waitForSessionCondition = async (
 		if (Date.now() >= deadline) {
 			throw new Error("Timed out waiting for the session condition.");
 		}
-		await delay(10);
+		await globalThis.Bun.sleep(10);
 	}
 };
 

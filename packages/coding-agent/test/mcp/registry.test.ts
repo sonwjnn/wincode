@@ -635,7 +635,7 @@ describe("createMcpRegistry", () => {
 		const first = registry.reconnect("demo");
 		const second = registry.reconnect("demo");
 		expect(second).toBe(first);
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await globalThis.Bun.sleep(0);
 		expect(created).toHaveLength(2);
 		expect(created[1]?.connectCount).toBe(1);
 		for (const release of releases) {
@@ -664,7 +664,7 @@ describe("createMcpRegistry", () => {
 			});
 
 		const reconnecting = registry.reconnect("demo");
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await globalThis.Bun.sleep(0);
 		const toggling = registry.toggle("demo");
 		releaseReconnect?.();
 		await Promise.all([reconnecting, toggling]);
@@ -902,9 +902,9 @@ describe("createMcpRegistry", () => {
 		await registry.initialize();
 
 		const reconnecting = registry.reconnect("websearch");
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await globalThis.Bun.sleep(0);
 		const refreshing = registry.initialize();
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await globalThis.Bun.sleep(0);
 		expect(clients).toHaveLength(0);
 
 		releaseReconnectLoad?.();
@@ -972,11 +972,11 @@ describe("createMcpRegistry", () => {
 		});
 		await registry.initialize();
 		const reconnecting = registry.reconnect("demo");
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await globalThis.Bun.sleep(0);
 		config = serverConfig("demo", { command: ["bun", "x", "demo-next"] });
 
 		const refreshing = registry.initialize();
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await globalThis.Bun.sleep(0);
 		expect(created).toHaveLength(2);
 
 		releaseReconnect?.();
@@ -1019,7 +1019,7 @@ describe("createMcpRegistry", () => {
 			snapshot.manifest[0]?.name ?? "",
 			{}
 		);
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await globalThis.Bun.sleep(0);
 
 		await registry.toggle("demo");
 		const result = await execution;
@@ -1053,7 +1053,7 @@ describe("createMcpRegistry", () => {
 			},
 		});
 		const pending = registry.createSnapshot(agentId("build"));
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await globalThis.Bun.sleep(0);
 		expect(created).toHaveLength(1);
 		await registry.close();
 		const snapshot = await pending;
@@ -1077,7 +1077,7 @@ describe("createMcpRegistry", () => {
 		const name = snapshot.manifest[0]?.name ?? "";
 		const controller = new AbortController();
 		const pending = registry.execute(snapshot, name, {}, controller.signal);
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await globalThis.Bun.sleep(0);
 		expect(callStarted).toBe(true);
 		controller.abort();
 		const result = await pending;

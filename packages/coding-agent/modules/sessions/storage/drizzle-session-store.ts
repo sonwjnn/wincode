@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { mkdir, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -355,7 +354,10 @@ export type DrizzleSessionStoreOptions = {
 };
 
 const hashWorkspace = (rootPath: string): string =>
-	createHash("sha256").update(rootPath).digest("hex").slice(0, 16);
+	new globalThis.Bun.CryptoHasher("sha256")
+		.update(rootPath)
+		.digest("hex")
+		.slice(0, 16);
 
 const ensureWorkspace = (db: SessionDatabase, rootPath: string) => {
 	const now = new Date();

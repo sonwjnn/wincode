@@ -1,6 +1,6 @@
 import type { Database as SqliteDatabase } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
 	createPermissionService,
@@ -106,7 +106,7 @@ test("persists observations across restart and gates sloppy edits separately", a
 	const filePath = join(root, "note.txt");
 	let activeDatabase: OpenedSessionStore["database"] | undefined;
 	try {
-		await writeFile(filePath, "one\ntwo\n");
+		await globalThis.Bun.write(filePath, "one\ntwo\n");
 		const opened = openStore(root, databasePath);
 		activeDatabase = opened.database;
 		let store = opened.store;
@@ -218,7 +218,7 @@ test("persists observations across restart and gates sloppy edits separately", a
 		if (editResult.type !== "success") {
 			throw new Error(editResult.errorText);
 		}
-		expect(await readFile(filePath, "utf8")).toBe("ONE\ntwo\n");
+		expect(await globalThis.Bun.file(filePath).text()).toBe("ONE\ntwo\n");
 		await store.setEditMode?.(sessionId, "sloppy");
 
 		activeDatabase.sqlite.close();
@@ -248,7 +248,7 @@ test("persists observations across restart and gates sloppy edits separately", a
 			throw new Error(sloppyResult.errorText);
 		}
 		expect(sloppyRequests.length).toBeGreaterThan(0);
-		expect(await readFile(filePath, "utf8")).toBe("DONE\ntwo\n");
+		expect(await globalThis.Bun.file(filePath).text()).toBe("DONE\ntwo\n");
 
 		const newFilePath = join(root, "nested", "created.txt");
 		const writeResult = await sloppyTools.find("write").execute(
@@ -261,7 +261,7 @@ test("persists observations across restart and gates sloppy edits separately", a
 		if (writeResult.type !== "success") {
 			throw new Error(writeResult.errorText);
 		}
-		expect(await readFile(newFilePath, "utf8")).toBe("created\n");
+		expect(await globalThis.Bun.file(newFilePath).text()).toBe("created\n");
 	} finally {
 		activeDatabase?.sqlite.close();
 		await rm(root, { force: true, recursive: true });
@@ -275,8 +275,8 @@ test("smoke: gates multi-file artifacts, restart recovery, and a later edit", as
 	const secondPath = join(root, "second.txt");
 	let activeDatabase: OpenedSessionStore["database"] | undefined;
 	try {
-		await writeFile(firstPath, "one\n");
-		await writeFile(secondPath, "two\n");
+		await globalThis.Bun.write(firstPath, "one\n");
+		await globalThis.Bun.write(secondPath, "two\n");
 		const opened = openStore(root, databasePath);
 		activeDatabase = opened.database;
 		let store = opened.store;
@@ -368,8 +368,8 @@ test("smoke: gates multi-file artifacts, restart recovery, and a later edit", as
 			{}
 		);
 		expect(artifactRead.type).toBe("success");
-		expect(await readFile(firstPath, "utf8")).toBe("ONE\n");
-		expect(await readFile(secondPath, "utf8")).toBe("TWO\n");
+		expect(await globalThis.Bun.file(firstPath).text()).toBe("ONE\n");
+		expect(await globalThis.Bun.file(secondPath).text()).toBe("TWO\n");
 
 		activeDatabase.sqlite.close();
 		activeDatabase = undefined;
@@ -394,7 +394,7 @@ test("smoke: gates multi-file artifacts, restart recovery, and a later edit", as
 				},
 			],
 		});
-		await writeFile(firstPath, crashBytes);
+		await globalThis.Bun.write(firstPath, crashBytes);
 		activeDatabase.sqlite.close();
 		activeDatabase = undefined;
 
@@ -430,7 +430,7 @@ test("smoke: gates multi-file artifacts, restart recovery, and a later edit", as
 		if (restored.type !== "success") {
 			throw new Error(restored.errorText);
 		}
-		expect(await readFile(firstPath, "utf8")).toBe("ONE\n");
+		expect(await globalThis.Bun.file(firstPath).text()).toBe("ONE\n");
 
 		const finalRead = await restartedTools.find("read").execute(
 			{
@@ -459,7 +459,7 @@ test("smoke: gates multi-file artifacts, restart recovery, and a later edit", as
 		if (finalEdit.type !== "success") {
 			throw new Error(finalEdit.errorText);
 		}
-		expect(await readFile(firstPath, "utf8")).toBe("FINAL\n");
+		expect(await globalThis.Bun.file(firstPath).text()).toBe("FINAL\n");
 	} finally {
 		activeDatabase?.sqlite.close();
 		await rm(root, { force: true, recursive: true });

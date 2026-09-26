@@ -1,6 +1,5 @@
-import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
-import { logger } from "@wincode/runtime-utils";
+import { logger, readUtf8File } from "@wincode/runtime-utils";
 import { COMMANDS } from "@/modules/commands/commands";
 import { SKILL_NAMESPACE_PREFIX } from "@/modules/skills";
 import type { ConfigRuntime } from "@/shared/config/config-store";
@@ -40,7 +39,7 @@ export async function loadCustomCommands(
 		}
 		try {
 			const parsed = parseCustomCommandFile(
-				await readFile(candidate.filePath, "utf8")
+				await readUtf8File(candidate.filePath)
 			);
 			byName.set(name, {
 				description: parsed.description,

@@ -1,5 +1,4 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
 // biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as path from "node:path";
 import { logger } from "@wincode/runtime-utils";
@@ -611,15 +610,14 @@ test("records shutdown failures without writing diagnostics to RPC stderr", asyn
 				record.context?.errorType === "Error"
 		)
 	).toBe(true);
-	const contents = await readFile(
+	const contents = await globalThis.Bun.file(
 		path.join(
 			logHome,
 			".wincode",
 			"logs",
 			`wincode.${new Date().toISOString().slice(0, 10)}.log`
-		),
-		"utf8"
-	);
+		)
+	).text();
 	expect(contents).not.toContain(
 		"shutdown contained sensitive response details"
 	);

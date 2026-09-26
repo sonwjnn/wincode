@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { relative, resolve } from "node:path";
@@ -510,7 +509,9 @@ const readSource = async (
 		};
 	}
 
-	const contentHash = createHash("sha256").update(bytes).digest("hex");
+	const contentHash = new globalThis.Bun.CryptoHasher("sha256")
+		.update(bytes)
+		.digest("hex");
 	const renderedByteLength = projectInstructionEncoder.encode(
 		renderProjectInstructionSource({
 			byteLength: bytes.byteLength,

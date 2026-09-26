@@ -1,6 +1,6 @@
-import { readFile, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import path from "node:path";
-import { getErrorMessage, isError } from "@wincode/runtime-utils";
+import { decodeUtf8, getErrorMessage, isError } from "@wincode/runtime-utils";
 import type { FileMentionPart } from "@/modules/sessions/message";
 import { createWorkspaceSandbox, type WorkspacePolicy } from "@/modules/tools";
 import type { FileMentionOption } from "../types";
@@ -172,7 +172,7 @@ const readFileMention = async (
 	mentionPath: string,
 	maxBytes: number
 ): Promise<FileMentionPart> => {
-	const buffer = await readFile(realPath);
+	const buffer = await globalThis.Bun.file(realPath).bytes();
 	const isBinary = buffer.subarray(0, BINARY_SAMPLE_BYTES).includes(0);
 	if (isBinary) {
 		return {
@@ -188,7 +188,7 @@ const readFileMention = async (
 	}
 
 	const { content, truncated } = clampContentToBytes(
-		buffer.toString("utf8"),
+		decodeUtf8(buffer),
 		maxBytes
 	);
 

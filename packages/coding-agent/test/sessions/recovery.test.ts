@@ -1,6 +1,6 @@
 import type { Database as SqliteDatabase } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
@@ -67,7 +67,7 @@ test("restarts expose prepared transactions and reconcile with expected versions
 	try {
 		const originalBytes = new TextEncoder().encode("original\n");
 		const changedBytes = new TextEncoder().encode("changed\n");
-		await writeFile(filePath, originalBytes);
+		await globalThis.Bun.write(filePath, originalBytes);
 		const opened = openStore(root, databasePath);
 		activeDatabase = opened.database;
 		const { id: sessionId } = await createSession(opened.store);
@@ -87,7 +87,7 @@ test("restarts expose prepared transactions and reconcile with expected versions
 		if (transaction === undefined) {
 			throw new Error("The session store has no recovery store.");
 		}
-		await writeFile(filePath, changedBytes);
+		await globalThis.Bun.write(filePath, changedBytes);
 		activeDatabase.sqlite.close();
 		activeDatabase = undefined;
 
@@ -121,7 +121,7 @@ test("restarts expose prepared transactions and reconcile with expected versions
 			{ versionedEditing: context }
 		);
 		expect(inspected.status).toBe("inspected");
-		expect(await readFile(filePath, "utf8")).toBe("changed\n");
+		expect(await globalThis.Bun.file(filePath).text()).toBe("changed\n");
 		const aliasPath = join(root, "note-alias.txt");
 		await symlink(filePath, aliasPath);
 		await expect(
@@ -161,7 +161,7 @@ test("restarts expose prepared transactions and reconcile with expected versions
 			}
 		);
 
-		await writeFile(filePath, originalBytes);
+		await globalThis.Bun.write(filePath, originalBytes);
 		const currentVersion = computeFileVersion(originalBytes);
 		const restored = await runRecoverTool(
 			{
@@ -172,7 +172,7 @@ test("restarts expose prepared transactions and reconcile with expected versions
 			{ resourceLimits: getToolResourceLimits(), versionedEditing: context }
 		);
 		expect(restored.status).toBe("resolved");
-		expect(await readFile(filePath, "utf8")).toBe("original\n");
+		expect(await globalThis.Bun.file(filePath).text()).toBe("original\n");
 		expect(
 			await restartedObservationStore.recovery?.listUnresolvedRecoveries()
 		).toHaveLength(0);
@@ -208,7 +208,7 @@ test("restore-original removes files that did not exist before the transaction",
 				},
 			],
 		});
-		await writeFile(filePath, changedBytes);
+		await globalThis.Bun.write(filePath, changedBytes);
 		const currentVersion = computeFileVersion(changedBytes);
 		activeDatabase.sqlite.close();
 		activeDatabase = undefined;
@@ -237,7 +237,9 @@ test("restore-original removes files that did not exist before the transaction",
 			}
 		);
 		expect(restored.status).toBe("resolved");
-		await expect(readFile(filePath)).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(globalThis.Bun.file(filePath).bytes()).rejects.toMatchObject({
+			code: "ENOENT",
+		});
 	} finally {
 		activeDatabase?.sqlite.close();
 		await rm(root, { force: true, recursive: true });
@@ -254,7 +256,7 @@ test("missing pinned bytes stay critical until an explicit discard", async () =>
 	try {
 		const originalBytes = new TextEncoder().encode("original\n");
 		const changedBytes = new TextEncoder().encode("changed\n");
-		await writeFile(filePath, changedBytes);
+		await globalThis.Bun.write(filePath, changedBytes);
 		const opened = openStore(root, databasePath);
 		activeDatabase = opened.database;
 		const { id: sessionId } = await createSession(opened.store);
@@ -340,7 +342,7 @@ test("recovery inspects and discards current binary bytes by raw File Version", 
 	try {
 		const originalBytes = new TextEncoder().encode("original\n");
 		const changedBytes = new Uint8Array([0, 255, 1, 2]);
-		await writeFile(filePath, changedBytes);
+		await globalThis.Bun.write(filePath, changedBytes);
 		const opened = openStore(root, databasePath);
 		activeDatabase = opened.database;
 		const { id: sessionId } = await createSession(opened.store);
@@ -388,7 +390,7 @@ test("recovery inspects and discards current binary bytes by raw File Version", 
 			{ versionedEditing: context }
 		);
 		expect(discarded.status).toBe("discarded");
-		expect(new Uint8Array(await readFile(filePath))).toEqual(changedBytes);
+		expect(await globalThis.Bun.file(filePath).bytes()).toEqual(changedBytes);
 	} finally {
 		activeDatabase?.sqlite.close();
 		await rm(root, { force: true, recursive: true });

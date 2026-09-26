@@ -13,7 +13,7 @@ import { isUndefined } from "@wincode/runtime-utils";
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, watch } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -245,7 +245,7 @@ describe("MCP transport integration", () => {
 				await registry.close();
 			}
 			await waitForFile(exitMarker);
-			expect(await readFile(exitMarker, "utf8")).toBe("exited");
+			expect(await globalThis.Bun.file(exitMarker).text()).toBe("exited");
 		} finally {
 			await rm(markerDirectory, { force: true, recursive: true });
 		}

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { ToolResourceLimits } from "../resource-limits";
 import {
 	CodingToolError,
@@ -510,7 +509,7 @@ async function executePlans(
 					byteLength: byteLength(plan.fullDiff.patch),
 					content: plan.fullDiff.patch,
 					createdAt: Date.now(),
-					id: randomUUID(),
+					id: crypto.randomUUID(),
 					sessionId: context.sessionId,
 				},
 				plan,

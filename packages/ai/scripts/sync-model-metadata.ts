@@ -9,15 +9,15 @@
 // Entries absent upstream are reported, never fabricated. Run with `--check`
 // to fail when the committed file is not what the current inputs produce.
 
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-
+// biome-ignore lint/performance/noNamespaceImport: Repository rules require namespace imports for node:* modules.
+import * as path from "node:path";
+import { readUtf8File } from "@wincode/runtime-utils";
 import { modelCatalog } from "../src/catalog";
 import { buildModelMetadataFile, MANUAL_OVERLAYS } from "./metadata-model";
 
 const DEFAULT_URL = "https://models.dev/api.json";
 const REQUEST_TIMEOUT_MS = 20_000;
-const OUTPUT_PATH = join(
+const OUTPUT_PATH = path.join(
 	import.meta.dir,
 	"../src/generated/model-metadata.generated.ts"
 );
@@ -36,7 +36,7 @@ const sourceUrlForOutput = (value: string): string => {
 };
 
 const isCheck = process.argv.includes("--check");
-const current = isCheck ? await readFile(OUTPUT_PATH, "utf8") : undefined;
+const current = isCheck ? await readUtf8File(OUTPUT_PATH) : undefined;
 const committedSnapshotDate = current?.match(
 	/^\/\/ Snapshot date: (\d{4}-\d{2}-\d{2})\./m
 )?.[1];
@@ -80,6 +80,6 @@ if (isCheck) {
 	}
 	process.stdout.write("Generated model metadata is current.\n");
 } else {
-	await writeFile(OUTPUT_PATH, rendered.contents);
+	await globalThis.Bun.write(OUTPUT_PATH, rendered.contents);
 	process.stdout.write(`Wrote ${OUTPUT_PATH}\n`);
 }

@@ -1,10 +1,7 @@
-import { type ChildProcess, spawn } from "node:child_process";
 import path from "node:path";
-import { StringDecoder } from "node:string_decoder";
 import {
 	getErrorMessage,
 	isError,
-	isNull,
 	isObjectLike,
 	isString,
 	isUndefined,
@@ -92,10 +89,23 @@ export const buildRipgrepGlobArguments = (input: GlobSearchInput): string[] => {
 	return args;
 };
 
+type RipgrepSpawnOptions = {
+	cwd: string;
+	env: NodeJS.ProcessEnv;
+	stdio: ["ignore", "pipe", "pipe"];
+	windowsHide: true;
+};
+
+type RipgrepSpawnProcess = (
+	executable: string,
+	args: string[],
+	options: RipgrepSpawnOptions
+) => Bun.Subprocess;
+
 export type RipgrepGlobOptions = {
 	executable?: string;
 	resolveExecutable?: () => Promise<string>;
-	spawnProcess?: typeof spawn;
+	spawnProcess?: RipgrepSpawnProcess;
 };
 
 export const runRipgrepGlob = async (
@@ -106,11 +116,21 @@ export const runRipgrepGlob = async (
 	const executable =
 		options.executable ??
 		(await (options.resolveExecutable ?? resolveRipgrepExecutable)());
-	const spawnProcess = options.spawnProcess ?? spawn;
+	const spawnProcess: RipgrepSpawnProcess =
+		options.spawnProcess ??
+		((command, args, spawnOptions) =>
+			globalThis.Bun.spawn([command, ...args], {
+				cwd: spawnOptions.cwd,
+				env: spawnOptions.env,
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+				windowsHide: spawnOptions.windowsHide,
+			}));
 	const { promise, resolve, reject } =
 		Promise.withResolvers<GlobSearchResult>();
 
-	let child: ChildProcess;
+	let child: Bun.Subprocess;
 	try {
 		child = spawnProcess(executable, buildRipgrepGlobArguments(input), {
 			cwd: input.cwd,
@@ -131,24 +151,45 @@ export const runRipgrepGlob = async (
 		return promise;
 	}
 
-	if (isNull(child.stdout) || isNull(child.stderr)) {
+	const stdout = child.stdout;
+	const stderrStream = child.stderr;
+	if (
+		stdout === null ||
+		stdout === undefined ||
+		typeof stdout === "number" ||
+		stderrStream === null ||
+		stderrStream === undefined ||
+		typeof stderrStream === "number"
+	) {
 		child.kill();
 		reject(new Error("ripgrep did not expose output streams."));
 		return promise;
 	}
 
-	const decoder = new StringDecoder("utf8");
+	const stdoutReader = stdout.getReader();
+	const stderrReader = stderrStream.getReader();
+	const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+	const stderrDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
 	const paths: string[] = [];
 	let stderr = "";
 	let truncated = false;
 	let settled = false;
-	let timer: ReturnType<typeof setTimeout> | undefined;
+	let processExited = false;
+	let stdoutDone = false;
+	let stderrDone = false;
+	let exitCode: number | null = null;
+	let timer: Timer | undefined;
 	let pending = "";
 
 	const terminate = (): void => {
 		if (!child.killed) {
 			child.kill();
 		}
+	};
+
+	const cancelReaders = (): void => {
+		void stdoutReader.cancel().catch(() => undefined);
+		void stderrReader.cancel().catch(() => undefined);
 	};
 
 	const cleanup = (): void => {
@@ -171,6 +212,7 @@ export const runRipgrepGlob = async (
 		settled = true;
 		cleanup();
 		terminate();
+		cancelReaders();
 		reject(
 			isError(error)
 				? error
@@ -216,7 +258,7 @@ export const runRipgrepGlob = async (
 	};
 
 	const finishPending = (): void => {
-		const finalText = `${pending}${decoder.end()}`;
+		const finalText = pending;
 		pending = "";
 		if (finalText !== "") {
 			acceptCandidate(finalText);
@@ -227,7 +269,6 @@ export const runRipgrepGlob = async (
 		if (settled) {
 			return;
 		}
-		finishPending();
 		if (truncated) {
 			resolveResult();
 			return;
@@ -248,29 +289,73 @@ export const runRipgrepGlob = async (
 		);
 	};
 
-	child.stderr.on("data", (chunk: Buffer) => {
-		stderr = truncateUtf8(
-			`${stderr}${chunk.toString("utf8")}`,
-			RIPGREP_ERROR_MAX_BYTES
-		);
-	});
-	child.stdout.on("data", (chunk: Buffer) => {
-		consume(decoder.write(chunk));
-	});
-	child.on("error", (error) => {
-		if (getErrorCode(error) === "ENOENT") {
-			rejectResult(new RipgrepUnavailableError(executable));
-			return;
+	const maybeFinish = (): void => {
+		if (processExited && stdoutDone && stderrDone) {
+			finish(exitCode);
 		}
-		rejectResult(error);
-	});
-	child.on("close", finish);
+	};
 
 	timer = setTimeout(() => {
 		rejectResult(
 			new Error(`ripgrep glob search timed out after ${timeoutMs}ms.`)
 		);
 	}, timeoutMs);
+
+	void (async () => {
+		try {
+			while (true) {
+				const { done, value } = await stdoutReader.read();
+				if (done) {
+					break;
+				}
+				consume(decoder.decode(value, { stream: true }));
+			}
+			consume(decoder.decode());
+			finishPending();
+			stdoutDone = true;
+			maybeFinish();
+		} catch (error) {
+			rejectResult(error);
+		}
+	})();
+
+	void (async () => {
+		try {
+			while (true) {
+				const { done, value } = await stderrReader.read();
+				if (done) {
+					break;
+				}
+				stderr = truncateUtf8(
+					`${stderr}${stderrDecoder.decode(value, { stream: true })}`,
+					RIPGREP_ERROR_MAX_BYTES
+				);
+			}
+			stderr = truncateUtf8(
+				`${stderr}${stderrDecoder.decode()}`,
+				RIPGREP_ERROR_MAX_BYTES
+			);
+			stderrDone = true;
+			maybeFinish();
+		} catch (error) {
+			rejectResult(error);
+		}
+	})();
+
+	void child.exited.then(
+		(code) => {
+			exitCode = child.signalCode === null ? code : null;
+			processExited = true;
+			maybeFinish();
+		},
+		(error: unknown) => {
+			rejectResult(
+				getErrorCode(error) === "ENOENT"
+					? new RipgrepUnavailableError(executable)
+					: error
+			);
+		}
+	);
 
 	return promise;
 };

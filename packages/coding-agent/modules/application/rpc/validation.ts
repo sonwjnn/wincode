@@ -8,6 +8,7 @@ import {
 	type WireValue,
 } from "./types";
 
+const utf8Encoder = new TextEncoder();
 export const asRecord = (
 	value: unknown
 ): Record<string, unknown> | undefined =>
@@ -139,7 +140,10 @@ export const encodeCursor = (value: {
 	revision: number;
 	sessionId: string;
 	processId: string;
-}): string => Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+}): string =>
+	utf8Encoder
+		.encode(JSON.stringify(value))
+		.toBase64({ alphabet: "base64url", omitPadding: true });
 
 export const decodeCursor = (value: string): Record<string, unknown> => {
 	try {

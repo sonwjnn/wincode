@@ -1,6 +1,6 @@
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
-import { isError, isUndefined } from "@wincode/runtime-utils";
+import { isError, isUndefined, readUtf8File } from "@wincode/runtime-utils";
 import { spawn } from "bun";
 import {
 	compareStableStrings,
@@ -210,19 +210,17 @@ const retainE2EFailure = async (
 	})) {
 		const entryPath = join(artifactDirectory, entry.name);
 		if (entry.name === TERMINAL_FRAME_NAME && entry.isFile()) {
-			terminalFrame = await readFile(entryPath, "utf8");
+			terminalFrame = await readUtf8File(entryPath);
 		}
 		await rm(entryPath, { force: true, recursive: true });
 	}
-	await writeFile(
+	await globalThis.Bun.write(
 		join(artifactDirectory, TERMINAL_FRAME_NAME),
-		terminalFrame ?? "",
-		"utf8"
+		terminalFrame ?? ""
 	);
-	await writeFile(
+	await globalThis.Bun.write(
 		join(artifactDirectory, RUNNER_LOG_NAME),
-		log.join(""),
-		"utf8"
+		log.join("")
 	);
 };
 

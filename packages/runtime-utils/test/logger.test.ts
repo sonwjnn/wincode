@@ -1,14 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import {
-	chmod,
-	mkdir,
-	readdir,
-	readFile,
-	stat,
-	writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, readdir, stat, writeFile } from "node:fs/promises";
 // biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as path from "node:path";
+import { readUtf8File } from "../src/file-io";
 import { logger } from "../src/index";
 import { withLoggerHome } from "./logger-home";
 
@@ -78,7 +72,7 @@ describe("runtime logger", () => {
 					"Callback rejected with #access_token=do-not-write-fragment-only-token.",
 			});
 
-			const contents = await readFile(logFile(home), "utf8");
+			const contents = await readUtf8File(logFile(home));
 			const [line] = contents.trim().split("\n");
 			expect(line).toBeDefined();
 			const record = JSON.parse(line ?? "null") as {
@@ -149,7 +143,7 @@ describe("runtime logger", () => {
 
 			process.env.WINCODE_DEBUG = "1";
 			await logger.debug("debug enabled");
-			expect(await readFile(logFile(home), "utf8")).toContain(
+			expect(await readUtf8File(logFile(home))).toContain(
 				'"level":"debug","message":"debug enabled"'
 			);
 		});
@@ -158,7 +152,7 @@ describe("runtime logger", () => {
 		await withLoggerHome(async (home) => {
 			void logger.warn("flush boundary");
 			await logger.flush();
-			expect(await readFile(logFile(home), "utf8")).toContain(
+			expect(await readUtf8File(logFile(home))).toContain(
 				'"level":"warn","message":"flush boundary"'
 			);
 		});
@@ -189,9 +183,12 @@ describe("runtime logger", () => {
 			await mkdir(directory, { recursive: true });
 			const expired = `wincode.${daysAgo(15)}.log`;
 			const retained = `wincode.${daysAgo(13)}.log`;
-			await writeFile(path.join(directory, expired), "expired");
-			await writeFile(path.join(directory, retained), "retained");
-			await writeFile(path.join(directory, "notes.log"), "not a Wincode log");
+			await globalThis.Bun.write(path.join(directory, expired), "expired");
+			await globalThis.Bun.write(path.join(directory, retained), "retained");
+			await globalThis.Bun.write(
+				path.join(directory, "notes.log"),
+				"not a Wincode log"
+			);
 
 			await logger.warn("retention sweep");
 			const names = await readdir(directory);
@@ -204,7 +201,10 @@ describe("runtime logger", () => {
 		});
 
 		await withLoggerHome(async (home) => {
-			await writeFile(path.join(home, ".wincode"), "not a directory");
+			await globalThis.Bun.write(
+				path.join(home, ".wincode"),
+				"not a directory"
+			);
 			const output: string[] = [];
 			const originalConsole = {
 				error: console.error,
@@ -231,7 +231,7 @@ describe("runtime logger", () => {
 			const directory = logDirectory(home);
 			await mkdir(directory, { recursive: true });
 			const expired = `wincode.${daysAgo(15)}.log`;
-			await writeFile(path.join(directory, expired), "expired");
+			await globalThis.Bun.write(path.join(directory, expired), "expired");
 			await chmod(directory, 0);
 			try {
 				await logger.warn("retention directory is inaccessible");
@@ -248,7 +248,7 @@ describe("runtime logger", () => {
 			const directory = logDirectory(home);
 			await mkdir(directory, { recursive: true });
 			const expired = `wincode.${daysAgo(15)}.log`;
-			await writeFile(path.join(directory, expired), "expired");
+			await globalThis.Bun.write(path.join(directory, expired), "expired");
 			await chmod(directory, 0o500);
 			try {
 				await logger.warn("retention deletion unavailable");

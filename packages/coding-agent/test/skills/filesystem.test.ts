@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SkillRootDescriptor } from "@/modules/skills";
@@ -36,8 +35,11 @@ describe("Skill filesystem export", () => {
 				mkdir(join(high, "review"), { recursive: true }),
 			]);
 			await Promise.all([
-				writeFile(join(low, "review", "SKILL.md"), skillFile("review", "low")),
-				writeFile(
+				globalThis.Bun.write(
+					join(low, "review", "SKILL.md"),
+					skillFile("review", "low")
+				),
+				globalThis.Bun.write(
 					join(high, "review", "SKILL.md"),
 					skillFile("review", "high")
 				),
@@ -71,13 +73,13 @@ describe("Skill filesystem export", () => {
 		const skillPath = join(skillDirectory, "SKILL.md");
 		try {
 			await mkdir(skillDirectory, { recursive: true });
-			await writeFile(skillPath, skillFile("review", "first"));
+			await globalThis.Bun.write(skillPath, skillFile("review", "first"));
 			const roots = [root(directory, 1)];
 			const [first] = await discoverFilesystemSkills(roots);
 			const [cached] = await discoverFilesystemSkills(roots);
 			expect(cached).toBe(first);
 
-			await writeFile(skillPath, skillFile("review", "updated"));
+			await globalThis.Bun.write(skillPath, skillFile("review", "updated"));
 			const [updated] = await discoverFilesystemSkills(roots);
 			expect(updated).not.toBe(cached);
 			expect(updated?.description).toBe("updated");
@@ -101,20 +103,23 @@ describe("Skill filesystem export", () => {
 				}),
 			]);
 			await Promise.all([
-				writeFile(
+				globalThis.Bun.write(
 					join(directory, "good", "SKILL.md"),
 					skillFile("good", "Good")
 				),
-				writeFile(join(directory, "bad", "SKILL.md"), "not frontmatter"),
-				writeFile(
+				globalThis.Bun.write(
+					join(directory, "bad", "SKILL.md"),
+					"not frontmatter"
+				),
+				globalThis.Bun.write(
 					join(directory, "mismatch", "SKILL.md"),
 					skillFile("other", "Bad")
 				),
-				writeFile(
+				globalThis.Bun.write(
 					join(directory, "fallback-low", "fallback", "SKILL.md"),
 					skillFile("fallback", "Fallback")
 				),
-				writeFile(
+				globalThis.Bun.write(
 					join(directory, "fallback-high", "fallback", "SKILL.md"),
 					"not frontmatter"
 				),
@@ -135,9 +140,9 @@ describe("Skill filesystem export", () => {
 		const directory = await mkdtemp(join(tmpdir(), "wincode-skills-resource-"));
 		try {
 			await Promise.all([
-				writeFile(join(directory, "SKILL.md"), "body"),
-				writeFile(join(directory, "z.txt"), "z"),
-				writeFile(join(directory, "a.txt"), "a"),
+				globalThis.Bun.write(join(directory, "SKILL.md"), "body"),
+				globalThis.Bun.write(join(directory, "z.txt"), "z"),
+				globalThis.Bun.write(join(directory, "a.txt"), "a"),
 				mkdir(join(directory, "nested")),
 			]);
 			expect(await sampleSkillResources(directory)).toEqual([
@@ -150,10 +155,16 @@ describe("Skill filesystem export", () => {
 		}
 	});
 
-	test("hashes UTF-8 content with SHA-256", () => {
+	test("hashes UTF-8 content with SHA-256", async () => {
 		for (const body of ["", "abc", "skills 💾".repeat(200)]) {
+			const digest = await crypto.subtle.digest(
+				"SHA-256",
+				new TextEncoder().encode(body)
+			);
 			expect(hashSkillBody(body)).toBe(
-				createHash("sha256").update(body).digest("hex")
+				Array.from(new Uint8Array(digest), (byte) =>
+					byte.toString(16).padStart(2, "0")
+				).join("")
 			);
 		}
 	});

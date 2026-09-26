@@ -310,7 +310,7 @@ const createFakeSessionHost = (
 const flushUi = async (
 	setup: Awaited<ReturnType<typeof testRender>>
 ): Promise<void> => {
-	await new Promise((resolve) => setTimeout(resolve, 20));
+	await globalThis.Bun.sleep(20);
 	await setup.renderOnce();
 };
 

@@ -1,12 +1,4 @@
-import { randomUUID } from "node:crypto";
-import {
-	chmod,
-	mkdir,
-	readFile,
-	rename,
-	rm,
-	writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isObjectLike } from "@wincode/runtime-utils";
 import { and, desc, eq } from "drizzle-orm";
@@ -93,7 +85,7 @@ const writePinnedBlob = async (
 	const targetPath = resolveBlobPath(root, blobKey);
 	await ensurePrivateBlobPath(root, targetPath);
 	try {
-		const existing = Uint8Array.from(await readFile(targetPath));
+		const existing = await globalThis.Bun.file(targetPath).bytes();
 		if (computeFileVersion(existing) === expectedVersion) {
 			await chmod(targetPath, 0o600);
 			return;
@@ -103,9 +95,9 @@ const writePinnedBlob = async (
 			throw error;
 		}
 	}
-	const temporaryPath = `${targetPath}.${randomUUID()}.tmp`;
+	const temporaryPath = `${targetPath}.${crypto.randomUUID()}.tmp`;
 	try {
-		await writeFile(temporaryPath, Buffer.from(bytes), {
+		await writeFile(temporaryPath, bytes, {
 			flag: "wx",
 			mode: 0o600,
 		});
@@ -131,9 +123,9 @@ const readPinnedBlob = async (
 		return { bytes: null, valid: false };
 	}
 	try {
-		const bytes = Uint8Array.from(
-			await readFile(resolveBlobPath(root, blobKey))
-		);
+		const bytes = await globalThis.Bun.file(
+			resolveBlobPath(root, blobKey)
+		).bytes();
 		const actualVersion = computeFileVersion(bytes);
 		return {
 			bytes: actualVersion === expectedVersion ? bytes : null,
@@ -147,7 +139,7 @@ const readCurrentFileVersion = async (
 	canonicalPath: string
 ): Promise<FileVersion | null | undefined> => {
 	try {
-		return computeFileVersion(Uint8Array.from(await readFile(canonicalPath)));
+		return computeFileVersion(await globalThis.Bun.file(canonicalPath).bytes());
 	} catch (error) {
 		if (isMissingPath(error)) {
 			return null;
@@ -318,8 +310,8 @@ export const createDrizzleRecoveryStore = (
 			);
 			return toUnresolvedRecovery(existing, paths);
 		}
-		const artifactId = randomUUID();
-		const recoveryId = randomUUID();
+		const artifactId = crypto.randomUUID();
+		const recoveryId = crypto.randomUUID();
 		const createdAt = new Date();
 		const selected = await Promise.all(
 			pathRowsForTransaction(db, transactionId)
@@ -690,7 +682,7 @@ export const createDrizzleRecoveryStore = (
 					"A recovery transaction must contain at least one path."
 				);
 			}
-			const id = randomUUID();
+			const id = crypto.randomUUID();
 			const paths = input.paths.map((entry, index) => {
 				if (
 					(entry.originalFileVersion === null) !==

@@ -1,11 +1,9 @@
-import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import {
 	access,
 	chmod,
 	lstat,
 	mkdir,
-	readFile,
 	realpath,
 	rename,
 	rm,
@@ -66,7 +64,7 @@ const errorForTextDecode = (
 export const readVersionedFile = async (
 	resolvedPath: string
 ): Promise<FileState> => {
-	const bytes = new Uint8Array(await readFile(resolvedPath));
+	const bytes = await globalThis.Bun.file(resolvedPath).bytes();
 	let text: LosslessText;
 	try {
 		text = decodeLosslessText(bytes);
@@ -426,7 +424,7 @@ export const atomicReplaceFile = async (
 			throw fileNotWritableError(resolvedPath);
 		}
 	}
-	const temporaryPath = `${resolvedPath}.wincode-${randomUUID()}.tmp`;
+	const temporaryPath = `${resolvedPath}.wincode-${crypto.randomUUID()}.tmp`;
 	try {
 		await writeFile(temporaryPath, bytes);
 		if (existingMode !== undefined) {

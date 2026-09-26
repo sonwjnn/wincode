@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { fromAny } from "@total-typescript/shoehorn";
 import type { AgentTurnDelegation, ResolvedTool } from "@wincode/agent-core";
 import { isString, isUndefined } from "@wincode/runtime-utils";
@@ -368,8 +367,14 @@ describe("Prompt Composition", () => {
 			"/repo/packages/AGENTS.md",
 			"/repo/packages/coding-agent/AGENTS.md",
 		]);
+		const expectedContentHash = await crypto.subtle.digest(
+			"SHA-256",
+			new TextEncoder().encode("Repository defaults")
+		);
 		expect(snapshot.sources[0]?.contentHash).toBe(
-			createHash("sha256").update("Repository defaults").digest("hex")
+			Array.from(new Uint8Array(expectedContentHash), (byte) =>
+				byte.toString(16).padStart(2, "0")
+			).join("")
 		);
 	});
 	test("rejects symlinked project instructions before reading content", async () => {

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 // biome-ignore lint/performance/noNamespaceImport: AGENTS.md requires namespace imports for node modules.
 import * as path from "node:path";
 import type {
@@ -174,7 +174,7 @@ test("coding tools execute only after the gate and remain Agent-selective", asyn
 		});
 		expect(allowed.type).toBe("success");
 		expect(allowedGateCalls).toBe(1);
-		expect(await readFile(allowedPath, "utf8")).toBe("gated write\n");
+		expect(await globalThis.Bun.file(allowedPath).text()).toBe("gated write\n");
 
 		let deniedGateCalls = 0;
 		const deniedTool = createGatedCodingTools({

@@ -9,6 +9,7 @@ import {
 } from "./guards";
 
 export { getErrorMessage } from "./errors";
+export * from "./file-io";
 export * from "./guards";
 export * from "./logger";
 export * from "./objects";

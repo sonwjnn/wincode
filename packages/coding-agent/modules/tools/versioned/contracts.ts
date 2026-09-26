@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { isObjectLike, isString, omitUndefined } from "@wincode/runtime-utils";
 import { z } from "zod";
 import type { FILE_VERSION_ALGORITHM, FileVersion, LineRange } from "./model";
@@ -310,7 +309,7 @@ export const createFileObservation = (
 ): FileObservation => ({
 	createdAt: input.createdAt ?? Date.now(),
 	fileVersion: input.fileVersion,
-	id: input.id ?? randomUUID(),
+	id: input.id ?? crypto.randomUUID(),
 	path: input.path,
 	sessionId: input.sessionId,
 	seenLines: input.seenLines,

@@ -1,9 +1,8 @@
-import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { isUndefined } from "@wincode/runtime-utils";
+import { $ } from "bun";
 import { keepTailUtf8 } from "../output-bounds";
 import {
 	getToolResourceLimits,
@@ -18,8 +17,6 @@ import {
 	type ShellPlatform,
 	shellPlatformFromNode,
 } from "./schema";
-
-const runPs = promisify(execFile);
 
 export const composeShellTruncationBanner = (maxOutputBytes: number): string =>
 	`\n[output truncated — kept the final ${maxOutputBytes} bytes]\n`;
@@ -150,6 +147,7 @@ const assertShellInputWithinLimits = (
 };
 
 const PS_LINE_FIELDS_REGEX = /\s+/;
+const PS_OUTPUT_MAX_BYTES = 1024 * 1024;
 
 /**
  * Collects every descendant pid of `rootPid` from the process table, so a
@@ -159,26 +157,33 @@ const PS_LINE_FIELDS_REGEX = /\s+/;
  * extra rather than failing the tool call.
  */
 const listDescendantPids = async (rootPid: number): Promise<number[]> => {
-	let stdout: string;
+	const childrenByParent = new Map<number, number[]>();
+	let outputBytes = 0;
+	let exceededOutputLimit = false;
 	try {
-		({ stdout } = await runPs("ps", ["-axo", "pid=,ppid="], {
-			encoding: "utf8",
-		}));
+		for await (const line of $`ps -axo pid=,ppid=`.lines()) {
+			outputBytes += Buffer.byteLength(line, "utf8") + 1;
+			if (outputBytes > PS_OUTPUT_MAX_BYTES) {
+				exceededOutputLimit = true;
+				continue;
+			}
+			const [pidText, ppidText] = line.trim().split(PS_LINE_FIELDS_REGEX);
+			const pid = Number(pidText);
+			const ppid = Number(ppidText);
+			if (!(Number.isInteger(pid) && Number.isInteger(ppid))) {
+				continue;
+			}
+			const siblings = childrenByParent.get(ppid) ?? [];
+			siblings.push(pid);
+			childrenByParent.set(ppid, siblings);
+		}
 	} catch {
 		return [];
 	}
-	const childrenByParent = new Map<number, number[]>();
-	for (const line of stdout.split("\n")) {
-		const [pidText, ppidText] = line.trim().split(PS_LINE_FIELDS_REGEX);
-		const pid = Number(pidText);
-		const ppid = Number(ppidText);
-		if (!(Number.isInteger(pid) && Number.isInteger(ppid))) {
-			continue;
-		}
-		const siblings = childrenByParent.get(ppid) ?? [];
-		siblings.push(pid);
-		childrenByParent.set(ppid, siblings);
+	if (exceededOutputLimit) {
+		return [];
 	}
+
 	const descendants: number[] = [];
 	const queue = [rootPid];
 	let cursor = 0;
@@ -197,21 +202,17 @@ const listDescendantPids = async (rootPid: number): Promise<number[]> => {
 };
 
 const killProcessTree = async (
-	child: ChildProcess,
+	child: Bun.Subprocess,
 	platform: ShellPlatform,
 	force: boolean
 ): Promise<void> => {
 	if (platform === "win32") {
-		if (isUndefined(child.pid)) {
-			return;
-		}
 		try {
-			const killer = spawn(
-				"taskkill",
-				["/pid", String(child.pid), "/T", "/F"],
-				{ stdio: "ignore" }
+			const killer = globalThis.Bun.spawn(
+				["taskkill", "/pid", String(child.pid), "/T", "/F"],
+				{ stdin: "ignore", stdout: "ignore", stderr: "ignore" }
 			);
-			killer.on("error", () => undefined);
+			void killer.exited.catch(() => undefined);
 		} catch {
 			// The process is already gone; nothing to terminate.
 		}
@@ -219,19 +220,14 @@ const killProcessTree = async (
 	}
 	// Kill the process group first: while the command's shell is still alive
 	// this reaches the whole tree in one call.
-	if (!isUndefined(child.pid)) {
-		try {
-			process.kill(-child.pid, force ? "SIGKILL" : "SIGTERM");
-		} catch {
-			// The group is already gone; fall through to the table walk.
-		}
+	try {
+		process.kill(-child.pid, force ? "SIGKILL" : "SIGTERM");
+	} catch {
+		// The group is already gone; fall through to the table walk.
 	}
 	// Background children whose output was redirected away from the captured
 	// pipes can outlive both the shell and its process group; walk the process
 	// table and terminate every descendant, deepest first.
-	if (isUndefined(child.pid)) {
-		return;
-	}
 	const descendants = await listDescendantPids(child.pid);
 	for (const pid of descendants.toReversed()) {
 		try {
@@ -281,6 +277,7 @@ export type ShellRunnerOptions = ResourceLimitOptions & {
  * builder is injected so tests can pin the PowerShell branch without a Windows
  * host; every other execution primitive is real.
  */
+
 export const createShellRunner = (
 	deps: ShellRunnerDeps = {}
 ): ((
@@ -306,112 +303,190 @@ export const createShellRunner = (
 		// memory; older bytes are dropped as new ones arrive.
 		const maxBufferedOutputBytes = limits.shell.maxOutputBytes * 2;
 
-		return await new Promise<ShellOutput>((resolve, reject) => {
-			let retainedOutput: Buffer = Buffer.alloc(0);
-			let timedOut = false;
-			let settled = false;
-			let exitCode: number | null = null;
-			let aborted = false;
+		const { promise, resolve, reject } = Promise.withResolvers<ShellOutput>();
+		let retainedOutput: Buffer = Buffer.alloc(0);
+		let timedOut = false;
+		let settled = false;
+		let processExited = false;
+		let stdoutDone = false;
+		let stderrDone = false;
+		let exitCode: number | null = null;
+		let aborted = false;
 
-			const child = spawn(invocation.executable, [...invocation.args], {
-				cwd,
-				detached: platform === "posix",
-				env: process.env,
-				stdio: ["ignore", "pipe", "pipe"],
-				windowsHide: true,
-			});
+		let child: Bun.Subprocess;
+		try {
+			child = globalThis.Bun.spawn(
+				[invocation.executable, ...invocation.args],
+				{
+					cwd,
+					detached: platform === "posix",
+					env: process.env,
+					stdin: "ignore",
+					stdout: "pipe",
+					stderr: "pipe",
+					windowsHide: true,
+				}
+			);
+		} catch (error) {
+			reject(error);
+			return promise;
+		}
+		const stdout = child.stdout;
+		const stderr = child.stderr;
+		if (
+			stdout === null ||
+			stdout === undefined ||
+			typeof stdout === "number" ||
+			stderr === null ||
+			stderr === undefined ||
+			typeof stderr === "number"
+		) {
+			child.kill();
+			reject(new Error("Shell process did not expose output streams."));
+			return promise;
+		}
+		const stdoutReader = stdout.getReader();
+		const stderrReader = stderr.getReader();
 
-			const collect = (chunk: Buffer): void => {
-				if (chunk.length >= maxBufferedOutputBytes) {
-					retainedOutput = chunk.subarray(
-						chunk.length - maxBufferedOutputBytes
-					);
-					return;
-				}
-				if (retainedOutput.length + chunk.length <= maxBufferedOutputBytes) {
-					retainedOutput = Buffer.concat([retainedOutput, chunk]);
-					return;
-				}
-				retainedOutput = Buffer.concat([retainedOutput, chunk]).subarray(
-					retainedOutput.length + chunk.length - maxBufferedOutputBytes
+		const collect = (chunk: Uint8Array): void => {
+			const buffer = Buffer.from(
+				chunk.buffer,
+				chunk.byteOffset,
+				chunk.byteLength
+			);
+			if (buffer.length >= maxBufferedOutputBytes) {
+				retainedOutput = buffer.subarray(
+					buffer.length - maxBufferedOutputBytes
 				);
-			};
-
-			const timer = setTimeout(() => {
-				timedOut = true;
-				void killProcessTree(child, platform, true);
-			}, timeoutSeconds * 1000);
-
-			let drainTimer: ReturnType<typeof setTimeout> | undefined;
-
-			const settle = async (): Promise<void> => {
-				if (settled) {
-					return;
-				}
-				settled = true;
-				clearTimeout(timer);
-				clearTimeout(drainTimer);
-				options.signal?.removeEventListener("abort", onAbort);
-				await killProcessTree(child, platform, timedOut || aborted);
-				const rawOutput = decodeShellOutput(
-					retainedOutput,
-					invocation.decodeUtf16Le
-				);
-				const { output, truncated } = composeShellOutput(
-					rawOutput,
-					timedOut,
-					timeoutSeconds,
-					limits.shell.maxOutputBytes
-				);
-				resolve({
-					exitCode: aborted || timedOut ? null : exitCode,
-					output,
-					...(timedOut ? { timedOut: true } : {}),
-					...(truncated === true ? { truncated: true } : {}),
-				});
-			};
-
-			const scheduleDrain = (): void => {
-				if (!isUndefined(drainTimer)) {
-					return;
-				}
-				drainTimer = setTimeout(() => {
-					void settle();
-				}, OUTPUT_DRAIN_MS);
-			};
-
-			const onAbort = (): void => {
-				if (settled) {
-					return;
-				}
-				aborted = true;
-				void killProcessTree(child, platform, true);
-			};
-			options.signal?.addEventListener("abort", onAbort, { once: true });
-			if (options.signal?.aborted) {
-				onAbort();
+				return;
 			}
+			if (retainedOutput.length + buffer.length <= maxBufferedOutputBytes) {
+				retainedOutput = Buffer.concat([retainedOutput, buffer]);
+				return;
+			}
+			retainedOutput = Buffer.concat([retainedOutput, buffer]).subarray(
+				retainedOutput.length + buffer.length - maxBufferedOutputBytes
+			);
+		};
 
-			child.stdout.on("data", collect);
-			child.stderr.on("data", collect);
-			child.on("error", (error) => {
-				if (!settled) {
-					settled = true;
-					clearTimeout(timer);
-					clearTimeout(drainTimer);
-					options.signal?.removeEventListener("abort", onAbort);
-					reject(error);
-				}
+		const timer = setTimeout(() => {
+			timedOut = true;
+			void killProcessTree(child, platform, true);
+		}, timeoutSeconds * 1000);
+
+		let drainTimer: Timer | undefined;
+
+		const cancelReaders = (): void => {
+			if (!stdoutDone) {
+				void stdoutReader.cancel().catch(() => undefined);
+			}
+			if (!stderrDone) {
+				void stderrReader.cancel().catch(() => undefined);
+			}
+		};
+
+		const fail = (error: unknown): void => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			clearTimeout(timer);
+			clearTimeout(drainTimer);
+			options.signal?.removeEventListener("abort", onAbort);
+			cancelReaders();
+			reject(error);
+		};
+
+		const settle = async (): Promise<void> => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			clearTimeout(timer);
+			clearTimeout(drainTimer);
+			options.signal?.removeEventListener("abort", onAbort);
+			await killProcessTree(child, platform, timedOut || aborted);
+			cancelReaders();
+			const rawOutput = decodeShellOutput(
+				retainedOutput,
+				invocation.decodeUtf16Le
+			);
+			const { output, truncated } = composeShellOutput(
+				rawOutput,
+				timedOut,
+				timeoutSeconds,
+				limits.shell.maxOutputBytes
+			);
+			resolve({
+				exitCode: aborted || timedOut ? null : exitCode,
+				output,
+				...(timedOut ? { timedOut: true } : {}),
+				...(truncated === true ? { truncated: true } : {}),
 			});
-			child.on("exit", (code) => {
-				exitCode = code;
-				scheduleDrain();
-			});
-			child.on("close", (code) => {
-				exitCode = code;
+		};
+
+		const scheduleDrain = (): void => {
+			if (!isUndefined(drainTimer)) {
+				return;
+			}
+			drainTimer = setTimeout(() => {
 				void settle();
-			});
-		});
+			}, OUTPUT_DRAIN_MS);
+		};
+
+		const onAbort = (): void => {
+			if (settled) {
+				return;
+			}
+			aborted = true;
+			void killProcessTree(child, platform, true);
+		};
+		options.signal?.addEventListener("abort", onAbort, { once: true });
+		if (options.signal?.aborted) {
+			onAbort();
+		}
+
+		const finishReader = (reader: typeof stdoutReader): void => {
+			reader.releaseLock();
+			if (reader === stdoutReader) {
+				stdoutDone = true;
+			} else {
+				stderrDone = true;
+			}
+			if (processExited && stdoutDone && stderrDone) {
+				void settle();
+			}
+		};
+		const consume = async (reader: typeof stdoutReader): Promise<void> => {
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) {
+						break;
+					}
+					if (!settled) {
+						collect(value);
+					}
+				}
+			} catch (error) {
+				fail(error);
+			} finally {
+				finishReader(reader);
+			}
+		};
+
+		void consume(stdoutReader);
+		void consume(stderrReader);
+		void child.exited.then((code) => {
+			exitCode = child.signalCode === null ? code : null;
+			processExited = true;
+			if (stdoutDone && stderrDone) {
+				void settle();
+				return;
+			}
+			scheduleDrain();
+		}, fail);
+		return promise;
 	};
 };
 

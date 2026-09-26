@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isUndefined } from "@wincode/runtime-utils";
@@ -51,7 +51,7 @@ describe("loadMcpConfig", () => {
 				mkdir(join(root, ".git")),
 				mkdir(workspace, { recursive: true }),
 			]);
-			await writeFile(
+			await globalThis.Bun.write(
 				join(root, "wincode.json"),
 				JSON.stringify({
 					mcp: {

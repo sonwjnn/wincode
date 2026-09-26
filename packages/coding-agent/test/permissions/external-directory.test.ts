@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, symlink } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -143,7 +143,7 @@ describe("workspace boundary", () => {
 		const dir = await realpath(
 			await mkdtemp(join(tmpdir(), "wincode-ext-inside-"))
 		);
-		await writeFile(join(dir, "file.txt"), "x");
+		await globalThis.Bun.write(join(dir, "file.txt"), "x");
 		const sandbox = createWorkspaceSandbox(dir);
 		const inside = await sandbox.resolveExistingPath("file.txt");
 		expect(inside).toBe(join(dir, "file.txt"));

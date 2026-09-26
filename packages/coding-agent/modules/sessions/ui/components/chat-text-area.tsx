@@ -1,4 +1,4 @@
-import { readFile, rm, stat } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import {
@@ -119,7 +119,7 @@ type ChatTextAreaProps = {
 const readPastedImage = () =>
 	readClipboardImage({
 		environment: process.env,
-		readFile: (path) => readFile(path),
+		readFile: (path) => globalThis.Bun.file(path).bytes(),
 		stat: async (path) => stat(path),
 		removeFile: (path) => rm(path, { force: true }),
 		run: async (command, args) => {
@@ -141,7 +141,7 @@ const readPastedImage = () =>
 const readPastedImageOrPath = async (pastedText: string) => {
 	const pathImage = pastedText
 		? await readImagePath(pastedText, {
-				readFile: (path) => readFile(path),
+				readFile: (path) => globalThis.Bun.file(path).bytes(),
 				stat: async (path) => stat(path),
 			})
 		: { unavailable: true as const };
@@ -787,7 +787,7 @@ export function ChatTextArea({
 					filename,
 					mediaType,
 					type: "file",
-					url: `data:${mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
+					url: `data:${mediaType};base64,${bytes.toBase64()}`,
 				},
 				id,
 				token,

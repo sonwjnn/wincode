@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import type { AgentId } from "@wincode/agent-core";
 import { isUndefined, pickTruthy } from "@wincode/runtime-utils";
 import type { JsonObject } from "type-fest";
@@ -713,7 +712,11 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			);
 			return false;
 		}
-		const configChanged = !isDeepStrictEqual(entry.config, config);
+		const configChanged = !globalThis.Bun.deepEquals(
+			entry.config,
+			config,
+			true
+		);
 		entry.config = config;
 		if (config.disabled) {
 			if (entry.state !== "disabled") {

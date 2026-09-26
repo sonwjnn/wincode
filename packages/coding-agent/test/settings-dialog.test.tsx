@@ -25,9 +25,7 @@ const flushUi = async (
 	setup: Awaited<ReturnType<typeof testRender>>
 ): Promise<void> => {
 	await act(async () => {
-		const { promise, resolve } = Promise.withResolvers<void>();
-		setTimeout(resolve, 20);
-		await promise;
+		await globalThis.Bun.sleep(20);
 		await setup.renderOnce();
 	});
 };

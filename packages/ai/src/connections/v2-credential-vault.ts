@@ -1,16 +1,13 @@
-import {
-	chmod,
-	lstat,
-	mkdir,
-	readFile,
-	rename,
-	rm,
-	writeFile,
-} from "node:fs/promises";
+import { chmod, lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ConnectionProviderId } from "@wincode/ai/models";
-import { isError, isNull, isUndefined } from "@wincode/runtime-utils";
+import {
+	isError,
+	isNull,
+	isUndefined,
+	readUtf8File,
+} from "@wincode/runtime-utils";
 import type { CredentialByProvider } from "./contract";
 import { defaultProviderRegistry } from "./provider-registry";
 
@@ -121,7 +118,7 @@ export class CredentialVaultV2 {
 		try {
 			await assertSecureVaultDirectories(path);
 			await assertSecurePath(path);
-			return await readFile(path, "utf8");
+			return await readUtf8File(path);
 		} catch (error) {
 			if (isMissingFileError(error)) {
 				return null;
