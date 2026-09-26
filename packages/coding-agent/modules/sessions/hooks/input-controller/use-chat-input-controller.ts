@@ -661,12 +661,16 @@ export function useChatInputController({
 
 	const handleTab = useCallback(
 		(shift: boolean) => {
-			if (disabled || steering) {
+			if (disabled) {
 				return;
 			}
 
 			if (!shift && overlayKind === "file-mention") {
 				executeFileMentionAtIndex(selectedIndex);
+				return;
+			}
+
+			if (steering) {
 				return;
 			}
 
