@@ -125,7 +125,39 @@ const redactEmbeddedUrls = (value: string): string =>
 		.replace(URL_IN_TEXT_PATTERN, redactEmbeddedUrl)
 		.replace(RELATIVE_URL_IN_TEXT_PATTERN, redactEmbeddedUrl);
 
-const redactValue = (value: JsonValue, fieldName?: string): JsonValue => {
+const redactArray = (value: JsonValue[], fieldName?: string): JsonValue[] => {
+	let redacted: JsonValue[] | undefined;
+	for (let index = 0; index < value.length; index++) {
+		if (!(index in value)) {
+			continue;
+		}
+		const item = value[index] as JsonValue;
+		const redactedItem = redactValue(item, fieldName);
+		if (redactedItem !== item) {
+			redacted ??= value.slice();
+			redacted[index] = redactedItem;
+		}
+	}
+	return redacted ?? value;
+};
+const redactObject = (
+	value: Record<string, JsonValue>
+): Record<string, JsonValue> => {
+	let redacted: Record<string, JsonValue> | undefined;
+	for (const name in value) {
+		if (!Object.hasOwn(value, name)) {
+			continue;
+		}
+		const nestedValue = value[name] as JsonValue;
+		const redactedValue = redactValue(nestedValue, name);
+		if (redactedValue !== nestedValue) {
+			redacted ??= { ...value };
+			redacted[name] = redactedValue;
+		}
+	}
+	return redacted ?? value;
+};
+function redactValue(value: JsonValue, fieldName?: string): JsonValue {
 	if (fieldName !== undefined && isSensitiveKey(fieldName)) {
 		return REDACTED;
 	}
@@ -145,19 +177,13 @@ const redactValue = (value: JsonValue, fieldName?: string): JsonValue => {
 		}
 	}
 	if (Array.isArray(value)) {
-		return value.map((item: JsonValue) => redactValue(item, fieldName));
+		return redactArray(value as JsonValue[], fieldName);
 	}
 	if (value !== null && typeof value === "object") {
-		const redacted: Record<string, JsonValue> = {};
-		for (const [name, nestedValue] of Object.entries(
-			value as Readonly<Record<string, JsonValue>>
-		)) {
-			redacted[name] = redactValue(nestedValue, name);
-		}
-		return redacted;
+		return redactObject(value as Record<string, JsonValue>);
 	}
 	return value;
-};
+}
 
 const dateString = (date: Date): string => date.toISOString().slice(0, 10);
 const isMissingPathError = (error: unknown): boolean =>
