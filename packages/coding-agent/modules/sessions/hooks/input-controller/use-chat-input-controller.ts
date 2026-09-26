@@ -365,6 +365,20 @@ export function useChatInputController({
 		[filteredCommands, overlayKind]
 	);
 
+	const completeCommandAtIndex = useCallback(
+		(index: number) => {
+			const command = resolveCommand(index);
+			if (!command) {
+				return;
+			}
+
+			const invocation = `${getCommandInvocation(command)} `;
+			setProgrammaticText(invocation, invocation.length);
+			closeOverlay();
+		},
+		[closeOverlay, resolveCommand, setProgrammaticText]
+	);
+
 	const executeCommandAtIndex = useCallback(
 		(index: number) => {
 			const command = resolveCommand(index);
@@ -373,9 +387,7 @@ export function useChatInputController({
 			}
 
 			if (command.kind === "custom" || command.kind === "skill") {
-				const invocation = `${getCommandInvocation(command)} `;
-				setProgrammaticText(invocation, invocation.length);
-				closeOverlay();
+				completeCommandAtIndex(index);
 				return;
 			}
 
@@ -389,6 +401,7 @@ export function useChatInputController({
 		[
 			activeTrigger,
 			closeOverlay,
+			completeCommandAtIndex,
 			executeCommand,
 			resolveCommand,
 			setProgrammaticText,
@@ -673,10 +686,15 @@ export function useChatInputController({
 			if (steering) {
 				return;
 			}
+			if (!shift && overlayKind === "command") {
+				completeCommandAtIndex(selectedIndex);
+				return;
+			}
 
 			onTab(shift);
 		},
 		[
+			completeCommandAtIndex,
 			disabled,
 			executeFileMentionAtIndex,
 			onTab,

@@ -24,7 +24,8 @@ Slash-command registry and dispatch for the CLI chat input.
     variant-picker / agent-picker dialogs
   - `SettingsAdapter` → opens the global Settings hub
 5. **Overlay** — `SelectableList` renders the matched suggestions below the input. Arrow keys
-   highlight, Enter executes.
+   highlight; Tab inserts the selected command into the composer, and Enter executes Built-in
+   Commands or inserts Custom Commands and Skills.
 
 ## Public API
 

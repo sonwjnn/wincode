@@ -135,8 +135,8 @@ test("lists merged command rows and activates a skill typed through its namespac
 		expect(skillRowFrame).toContain("skill:review");
 		expect(skillRowFrame).toContain("Reviews implementation");
 
-		// Enter runs the selected row, which writes the namespaced invocation.
-		await act(() => activeSetup.mockInput.pressEnter());
+		// Tab completes the selected Skill row into its namespaced invocation.
+		await act(() => activeSetup.mockInput.pressTab());
 		await settleSessionUi(activeSetup);
 		expect(activeSetup.captureCharFrame()).toContain("/skill:review ");
 

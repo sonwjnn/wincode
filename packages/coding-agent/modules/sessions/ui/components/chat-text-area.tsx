@@ -934,7 +934,7 @@ export function ChatTextArea({
 
 		if (
 			key.name === "tab" &&
-			state.overlay.kind === "file-mention" &&
+			!isNull(state.overlay.kind) &&
 			isTopLayer("command")
 		) {
 			key.preventDefault();
