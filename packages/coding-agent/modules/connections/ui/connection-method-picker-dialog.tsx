@@ -37,11 +37,8 @@ export function ConnectionMethodPickerDialogContent({
 	return (
 		<SearchListDialogWrapper<ConnectionMethodOption>
 			emptyText="No available methods"
-			filterFn={(method, query) => {
-				const value = `${method.label} ${method.details}`;
-				return value.toLowerCase().includes(query.toLowerCase());
-			}}
 			getKey={(method) => method.id}
+			getSearchText={(method) => `${method.label} ${method.details}`}
 			items={methods}
 			onSelect={handleSelect}
 			placeholder="Search methods"

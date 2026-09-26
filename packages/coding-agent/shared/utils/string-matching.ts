@@ -50,14 +50,14 @@ function matchSubsequence(
 		}
 
 		if (includeScore) {
-			if (lastMatchIndex === matchIndex - 1) {
+			if (lastMatchIndex < 0) {
+				consecutiveMatches = 0;
+			} else if (lastMatchIndex === matchIndex - 1) {
 				consecutiveMatches++;
 				score -= consecutiveMatches * CONSECUTIVE_MATCH_PENALTY;
 			} else {
 				consecutiveMatches = 0;
-				if (lastMatchIndex >= 0) {
-					score += (matchIndex - lastMatchIndex - 1) * GAP_PENALTY;
-				}
+				score += (matchIndex - lastMatchIndex - 1) * GAP_PENALTY;
 			}
 
 			score += matchIndex * POSITION_PENALTY;

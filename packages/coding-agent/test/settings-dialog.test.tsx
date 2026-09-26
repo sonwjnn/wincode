@@ -138,6 +138,26 @@ test("search reports no matching settings without hiding the hub", async () => {
 	await act(() => setup.renderer.destroy());
 });
 
+test("search fuzzy-matches settings with subsequences across words", async () => {
+	const operations: SettingsOperations = {
+		catalog: SETTINGS_CATALOG,
+		getSettings: async () => [createSetting(false)],
+		resetValue: async () => createSetting(true),
+		setValue: async (_id, value) => createSetting(value === true),
+	};
+	const setup = await renderSettingsDialog(operations);
+
+	await act(async () => {
+		await setup.mockInput.typeText("cmpt");
+	});
+	await flushUi(setup);
+
+	expect(setup.captureCharFrame()).toContain("Auto-compact");
+	expect(setup.captureCharFrame()).toContain("Compaction");
+	expect(setup.captureCharFrame()).not.toContain("No matching settings.");
+	await act(() => setup.renderer.destroy());
+});
+
 test("reset uses the descriptor reset operation", async () => {
 	let resetCount = 0;
 	const operations: SettingsOperations = {

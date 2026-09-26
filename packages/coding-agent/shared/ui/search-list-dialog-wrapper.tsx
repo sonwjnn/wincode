@@ -1,7 +1,8 @@
 import type { RGBA } from "@opentui/core";
 import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
-import { type ReactNode, useEffect } from "react";
+import { type ReactNode, useCallback, useEffect } from "react";
+import { fuzzyMatch } from "../fuzzy";
 import { useSearchableList } from "../hooks/use-searchable-list";
 import { useDialogLayer } from "../providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "../providers/keyboard-layer/keyboard-layer-provider";
@@ -9,6 +10,7 @@ import { useTheme } from "../providers/theme/theme-provider";
 
 const MAX_VISIBLE_ITEMS = 6;
 type KeyboardKey = Parameters<Parameters<typeof useKeyboard>[0]>[0];
+type SearchText = string | readonly string[];
 
 const getInitialSelectedIndex = <T,>(
 	items: readonly T[],
@@ -26,7 +28,7 @@ type SearchListDialogWrapperProps<T> = {
 	items: readonly T[];
 	onSelect: (item: T) => void;
 	onHighlight?: (item: T) => void;
-	filterFn: (item: T, query: string) => boolean;
+	getSearchText: (item: T) => SearchText;
 	renderItem: (
 		item: T,
 		isSelected: boolean,
@@ -58,7 +60,7 @@ export function SearchListDialogWrapper<T>({
 	items,
 	onSelect,
 	onHighlight,
-	filterFn,
+	getSearchText,
 	renderItem,
 	getKey,
 	isItemActive,
@@ -77,6 +79,15 @@ export function SearchListDialogWrapper<T>({
 	getItemBackgroundColor,
 	onKey,
 }: SearchListDialogWrapperProps<T>) {
+	const filterFn = useCallback(
+		(item: T, query: string) => {
+			const searchText = getSearchText(item);
+			return typeof searchText === "string"
+				? fuzzyMatch(query, searchText).matches
+				: searchText.some((text) => fuzzyMatch(query, text).matches);
+		},
+		[getSearchText]
+	);
 	const {
 		filtered,
 		isScrollReady,

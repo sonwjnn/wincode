@@ -134,12 +134,6 @@ export const SessionsDialogContent = () => {
 			null
 	);
 
-	const filterFn = useCallback(
-		(session: Session, query: string) =>
-			session.title.toLowerCase().includes(query.toLowerCase()),
-		[]
-	);
-
 	const fetchSessions = useCallback(
 		async (ignoreRef?: { current: boolean }) => {
 			try {
@@ -300,11 +294,6 @@ export const SessionsDialogContent = () => {
 	return (
 		<SearchListDialogWrapper<ListItem>
 			emptyText={loading ? "Loading sessions..." : "No matching sessions"}
-			filterFn={(item, query) =>
-				item.kind === "header"
-					? query.length === 0
-					: filterFn(item.session, query)
-			}
 			footer={
 				loading ? null : (
 					<box flexDirection="row" gap={2} height={1} marginX={4}>
@@ -335,6 +324,9 @@ export const SessionsDialogContent = () => {
 			}}
 			getKey={(item) =>
 				item.kind === "header" ? `header:${item.label}` : item.session.id
+			}
+			getSearchText={(item) =>
+				item.kind === "session" ? item.session.title : ""
 			}
 			isItemActive={(item) =>
 				item.kind === "session" && item.session.id === currentSessionId

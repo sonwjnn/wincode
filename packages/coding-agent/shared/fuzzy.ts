@@ -121,8 +121,8 @@ function buildUncachedSearchIndex(text: string): SearchIndex {
 	};
 }
 
-function buildAlphanumericSwapQueries(queryLower: string): string[] {
-	const variants = new Set<string>();
+function buildAlphanumericSwapQueries(queryLower: string): string[] | null {
+	let variants: string[] | null = null;
 	for (let i = 0; i < queryLower.length - 1; i++) {
 		const current = queryLower[i];
 		const next = queryLower[i + 1];
@@ -140,9 +140,10 @@ function buildAlphanumericSwapQueries(queryLower: string): string[] {
 		}
 		const swapped =
 			queryLower.slice(0, i) + next + current + queryLower.slice(i + 2);
-		variants.add(swapped);
+		variants ??= [];
+		variants.push(swapped);
 	}
-	return [...variants];
+	return variants;
 }
 
 function withPosition(score: number, index: number): number {
@@ -337,7 +338,11 @@ function scoreToken(token: string, index: SearchIndex): FuzzyMatch {
 		return best;
 	}
 
-	for (const variant of buildAlphanumericSwapQueries(token)) {
+	const variants = buildAlphanumericSwapQueries(token);
+	if (!variants) {
+		return best;
+	}
+	for (const variant of variants) {
 		const match = scoreTokenDirect(variant, index);
 		if (!match.matches) {
 			continue;
@@ -414,11 +419,7 @@ function fuzzyMatchCore(
 	return { matches: true, score: totalScore };
 }
 
-/**
- * Empty queries match; non-empty queries that normalize to no tokens do not.
- */
-
-export function fuzzyMatch(query: string, text: string): FuzzyMatch {
+function matchQuery(query: string, target: string | SearchIndex): FuzzyMatch {
 	if (query.length === 0) {
 		return { matches: true, score: 0 };
 	}
@@ -427,7 +428,15 @@ export function fuzzyMatch(query: string, text: string): FuzzyMatch {
 	if (preparedQuery === null) {
 		return { matches: false, score: 0 };
 	}
-	return fuzzyMatchCore(preparedQuery, buildSearchIndex(text));
+	const index = typeof target === "string" ? buildSearchIndex(target) : target;
+	return fuzzyMatchCore(preparedQuery, index);
+}
+
+/**
+ * Empty queries match; non-empty queries that normalize to no tokens do not.
+ */
+export function fuzzyMatch(query: string, text: string): FuzzyMatch {
+	return matchQuery(query, text);
 }
 
 /**
@@ -448,15 +457,7 @@ export class FuzzyText {
 	}
 
 	match(query: string): FuzzyMatch {
-		if (query.length === 0) {
-			return { matches: true, score: 0 };
-		}
-
-		const preparedQuery = prepareQuery(query);
-		if (preparedQuery === null) {
-			return { matches: false, score: 0 };
-		}
-		return fuzzyMatchCore(preparedQuery, this.#index);
+		return matchQuery(query, this.#index);
 	}
 }
 

@@ -49,10 +49,8 @@ export const ThemeDialogContent = () => {
 	return (
 		<SearchListDialogWrapper
 			emptyText="No matching themes"
-			filterFn={(t, query) =>
-				t.name.toLowerCase().includes(query.toLowerCase())
-			}
 			getKey={(t) => t.name}
+			getSearchText={(theme) => theme.name}
 			isItemActive={(theme) => theme.name === originalThemeRef.current.name}
 			items={THEMES}
 			maxVisibleItems={Math.max(1, Math.floor(height * 0.5))}

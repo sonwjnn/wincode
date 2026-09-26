@@ -176,23 +176,16 @@ export function McpStatusDialogContent() {
 		[reconnect, toggle]
 	);
 
-	const filterFn = useCallback((row: StatusRowFormat, query: string) => {
-		const q = query.toLowerCase();
-		return `${row.server} ${row.state} ${row.transport}`
-			.toLowerCase()
-			.includes(q);
-	}, []);
-
 	return (
 		<SearchListDialogWrapper<StatusRowFormat>
 			emptyText="No MCPs"
-			filterFn={filterFn}
 			footer={
 				<box flexDirection="row" gap={2} height={1} marginX={4}>
 					<DialogFooterHint label="toggle/reconnect" shortcut="space" />
 				</box>
 			}
 			getKey={(row) => row.server}
+			getSearchText={(row) => `${row.server} ${row.state} ${row.transport}`}
 			items={rows}
 			onKey={(key, highlightedRow) => {
 				if (key.name !== "space") {
