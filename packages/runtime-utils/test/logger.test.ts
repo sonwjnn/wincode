@@ -1,42 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import {
-	mkdir,
-	mkdtemp,
-	readdir,
-	readFile,
-	rm,
-	writeFile,
-} from "node:fs/promises";
-// biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
-import * as os from "node:os";
+import { chmod, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 // biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as path from "node:path";
 import { logger } from "../src/index";
-
-const withLoggerHome = async <T>(
-	run: (home: string) => Promise<T>
-): Promise<T> => {
-	const home = await mkdtemp(path.join(os.tmpdir(), "wincode-logger-"));
-	const originalHome = process.env.HOME;
-	const originalDebug = process.env.WINCODE_DEBUG;
-	process.env.HOME = home;
-	delete process.env.WINCODE_DEBUG;
-	try {
-		return await run(home);
-	} finally {
-		if (originalHome === undefined) {
-			delete process.env.HOME;
-		} else {
-			process.env.HOME = originalHome;
-		}
-		if (originalDebug === undefined) {
-			delete process.env.WINCODE_DEBUG;
-		} else {
-			process.env.WINCODE_DEBUG = originalDebug;
-		}
-		await rm(home, { force: true, recursive: true });
-	}
-};
+import { withLoggerHome } from "./logger-home";
 
 const logDirectory = (home: string): string =>
 	path.join(home, ".wincode", "logs");
@@ -83,6 +50,10 @@ describe("runtime logger", () => {
 					"https://id.example/callback#access_token=do-not-write-fragment-token&state=do-not-write-fragment-state&theme=dark",
 				routeUrl:
 					"https://id.example/#/callback?access_token=do-not-write-route-token&state=do-not-write-route-state&theme=light",
+				redirect:
+					"https://alice:do-not-write-redirect-password@example.test/callback?code=do-not-write-redirect-code&state=do-not-write-redirect-state#access_token=do-not-write-redirect-token",
+				details:
+					"https://storage.example.test/item?access_key=do-not-write-unlabeled-key",
 			});
 
 			const contents = await readFile(logFile(home), "utf8");
@@ -121,6 +92,10 @@ describe("runtime logger", () => {
 						"https://id.example/callback#access_token=%5BREDACTED%5D&state=%5BREDACTED%5D&theme=dark",
 					routeUrl:
 						"https://id.example/#/callback?access_token=%5BREDACTED%5D&state=%5BREDACTED%5D&theme=light",
+					redirect:
+						"https://%5BREDACTED%5D:%5BREDACTED%5D@example.test/callback?code=%5BREDACTED%5D&state=%5BREDACTED%5D#access_token=%5BREDACTED%5D",
+					details:
+						"https://storage.example.test/item?access_key=%5BREDACTED%5D",
 					url: "https://%5BREDACTED%5D:%5BREDACTED%5D@example.test/mcp?api_key=%5BREDACTED%5D&access_key=%5BREDACTED%5D&auth=%5BREDACTED%5D&region=west",
 				},
 				level: "error",
@@ -140,6 +115,15 @@ describe("runtime logger", () => {
 			await logger.debug("debug enabled");
 			expect(await readFile(logFile(home), "utf8")).toContain(
 				'"level":"debug","message":"debug enabled"'
+			);
+		});
+	});
+	test("flush waits for earlier queued fire-and-forget writes", async () => {
+		await withLoggerHome(async (home) => {
+			void logger.warn("flush boundary");
+			await logger.flush();
+			expect(await readFile(logFile(home), "utf8")).toContain(
+				'"level":"warn","message":"flush boundary"'
 			);
 		});
 	});
@@ -185,6 +169,41 @@ describe("runtime logger", () => {
 				console.log = originalConsole.log;
 				console.warn = originalConsole.warn;
 			}
+		});
+	});
+	test("retries retention after the log directory becomes readable", async () => {
+		await withLoggerHome(async (home) => {
+			const directory = logDirectory(home);
+			await mkdir(directory, { recursive: true });
+			const expired = `wincode.${daysAgo(15)}.log`;
+			await writeFile(path.join(directory, expired), "expired");
+			await chmod(directory, 0);
+			try {
+				await logger.warn("retention directory is inaccessible");
+			} finally {
+				await chmod(directory, 0o700);
+			}
+
+			await logger.warn("retention retry");
+			expect(await readdir(directory)).not.toContain(expired);
+		});
+	});
+	test("retries retention when deleting an expired log fails", async () => {
+		await withLoggerHome(async (home) => {
+			const directory = logDirectory(home);
+			await mkdir(directory, { recursive: true });
+			const expired = `wincode.${daysAgo(15)}.log`;
+			await writeFile(path.join(directory, expired), "expired");
+			await chmod(directory, 0o500);
+			try {
+				await logger.warn("retention deletion unavailable");
+				expect(await readdir(directory)).toContain(expired);
+			} finally {
+				await chmod(directory, 0o700);
+			}
+
+			await logger.warn("retention deletion retry");
+			expect(await readdir(directory)).not.toContain(expired);
 		});
 	});
 });

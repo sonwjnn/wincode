@@ -157,7 +157,7 @@ export async function runRpc({
 				): Promise<void> => {
 					const remaining = Math.max(0, deadline - Date.now());
 					if (remaining === 0) {
-						await logger.warn("RPC shutdown deadline exceeded", { label });
+						void logger.warn("RPC shutdown deadline exceeded", { label });
 						return;
 					}
 					const deferred = Promise.withResolvers<boolean>();
@@ -175,7 +175,7 @@ export async function runRpc({
 					const completed = await deferred.promise;
 					clearTimeout(timer);
 					if (!completed) {
-						await logger.warn("RPC shutdown deadline exceeded", { label });
+						void logger.warn("RPC shutdown deadline exceeded", { label });
 					}
 				};
 				const activeHost = state.host;

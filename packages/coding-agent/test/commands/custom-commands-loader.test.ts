@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 // biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as os from "node:os";
 // biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
@@ -8,6 +8,7 @@ import { discoverCustomCommandCandidates } from "@/modules/custom-commands/disco
 import { loadCustomCommands } from "@/modules/custom-commands/loader";
 import type { CustomCommandCandidate } from "@/modules/custom-commands/types";
 import { createConfigStore } from "@/shared/config/config-store";
+import { withLoggerHome } from "../../../runtime-utils/test/logger-home";
 
 const makeCandidates = async (
 	dirs: Array<{ dir: string; files: Record<string, string> }>
@@ -34,24 +35,6 @@ type WarningRecord = Readonly<{
 	level: string;
 	message: string;
 }>;
-
-const withLoggerHome = async <T>(
-	run: (home: string) => Promise<T>
-): Promise<T> => {
-	const home = await mkdtemp(path.join(os.tmpdir(), "custom-command-logs-"));
-	const originalHome = process.env.HOME;
-	process.env.HOME = home;
-	try {
-		return await run(home);
-	} finally {
-		if (originalHome === undefined) {
-			delete process.env.HOME;
-		} else {
-			process.env.HOME = originalHome;
-		}
-		await rm(home, { force: true, recursive: true });
-	}
-};
 
 const readWarningRecords = async (home: string): Promise<WarningRecord[]> => {
 	const date = new Date().toISOString().slice(0, 10);

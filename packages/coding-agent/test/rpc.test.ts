@@ -1,9 +1,9 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-// biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
-import * as os from "node:os";
+import { readFile } from "node:fs/promises";
 // biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as path from "node:path";
+import { logger } from "@wincode/runtime-utils";
+import { createLoggerHome } from "../../runtime-utils/test/logger-home";
 import { runRpc } from "../modules/application/rpc/runner";
 import {
 	MAX_OUTPUT_BYTES,
@@ -18,19 +18,14 @@ type LogRecord = Readonly<{
 	message: string;
 }>;
 
-const logHome = await mkdtemp(path.join(os.tmpdir(), "rpc-logs-"));
-const originalHome = process.env.HOME;
-process.env.HOME = logHome;
+const loggerHome = await createLoggerHome("rpc-logs-");
+const logHome = loggerHome.home;
 afterAll(async () => {
-	if (originalHome === undefined) {
-		delete process.env.HOME;
-	} else {
-		process.env.HOME = originalHome;
-	}
-	await rm(logHome, { force: true, recursive: true });
+	await loggerHome.cleanup();
 });
 
 const readRpcLogRecords = async (): Promise<LogRecord[]> => {
+	await logger.flush();
 	const date = new Date().toISOString().slice(0, 10);
 	const contents = await readFile(
 		path.join(logHome, ".wincode", "logs", `wincode.${date}.log`),

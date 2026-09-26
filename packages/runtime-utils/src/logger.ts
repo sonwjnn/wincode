@@ -8,7 +8,8 @@ import { isSensitiveKey } from "./sensitive-key";
 
 const LOG_RETENTION_DAYS = 14;
 const REDACTED = "[REDACTED]";
-const URL_FIELD_PATTERN = /(?:url|uri|endpoint)$/i;
+const URL_FIELD_PATTERN =
+	/(?:url|uri|endpoint|redirect|callback|href|link|location)$/i;
 const LOG_FILE_PATTERN = /^wincode\.(\d{4}-\d{2}-\d{2})\.log$/;
 const URL_AUTHORITY_PREFIX_PATTERN = /^[a-z][a-z\d+.-]*:\/\//i;
 const URL_AUTHORITY_END_PATTERN = /[/?#]/;
@@ -115,8 +116,12 @@ const redactValue = (value: JsonValue, fieldName?: string): JsonValue => {
 	}
 	if (
 		typeof value === "string" &&
-		fieldName !== undefined &&
-		URL_FIELD_PATTERN.test(fieldName)
+		((fieldName !== undefined && URL_FIELD_PATTERN.test(fieldName)) ||
+			URL_AUTHORITY_PREFIX_PATTERN.test(value) ||
+			value.startsWith("//") ||
+			value.startsWith("/") ||
+			value.startsWith("?") ||
+			value.startsWith("#"))
 	) {
 		return redactUrl(value);
 	}
@@ -146,15 +151,18 @@ const removeExpiredLogs = async (
 	if (checkKey === lastRetentionCheck) {
 		return;
 	}
-	lastRetentionCheck = checkKey;
 
 	const entries = await readdir(directory, { withFileTypes: true }).catch(
-		() => []
+		() => undefined
 	);
+	if (entries === undefined) {
+		return;
+	}
 	const oldestRetainedDate = new Date(`${currentDate}T00:00:00.000Z`);
 	oldestRetainedDate.setUTCDate(
 		oldestRetainedDate.getUTCDate() - (LOG_RETENTION_DAYS - 1)
 	);
+	let sweepSucceeded = true;
 	for (const entry of entries) {
 		if (!entry.isFile()) {
 			continue;
@@ -172,7 +180,14 @@ const removeExpiredLogs = async (
 		) {
 			continue;
 		}
-		await unlink(path.join(directory, entry.name)).catch(() => undefined);
+		try {
+			await unlink(path.join(directory, entry.name));
+		} catch {
+			sweepSucceeded = false;
+		}
+	}
+	if (sweepSucceeded) {
+		lastRetentionCheck = checkKey;
 	}
 };
 let logQueue = Promise.resolve();
@@ -224,7 +239,7 @@ const writeRecord = (
 /**
  * File-backed diagnostics that never write to CLI or protocol output streams.
  * Keep message text non-secret; credential redaction applies to fields only.
- * Await a call when the runtime must wait for its write attempt.
+ * Await a call when the runtime must wait for its write attempt; `flush` waits for earlier queued writes.
  */
 export const logger = Object.freeze({
 	debug: (message: string, fields?: LogFields): Promise<void> =>
@@ -233,4 +248,5 @@ export const logger = Object.freeze({
 		writeRecord("error", message, fields),
 	warn: (message: string, fields?: LogFields): Promise<void> =>
 		writeRecord("warn", message, fields),
+	flush: (): Promise<void> => logQueue,
 });
