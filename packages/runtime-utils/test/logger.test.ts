@@ -62,6 +62,7 @@ describe("runtime logger", () => {
 				auth: "Bearer do-not-write-auth",
 				headers: { authorization: "Bearer do-not-write-header" },
 				access_key: "do-not-write-access-key",
+				signature: "do-not-write-signature",
 				accessToken: "do-not-write-token",
 				method: "GET",
 				networkUrl:
@@ -69,6 +70,8 @@ describe("runtime logger", () => {
 				retryCount: 2,
 				relativeUrl:
 					"/mcp?access_key=do-not-write-relative-key&token=do-not-write-relative-token",
+				signedUrl:
+					"https://downloads.example.test/file?X-Amz-Signature=do-not-write-signed-signature&sig=do-not-write-sig&signal=public",
 				url: "https://alice:do-not-write-password@example.test/mcp?api_key=do-not-write-key&access_key=do-not-write-query-key&auth=do-not-write-query-auth&region=west",
 			});
 
@@ -89,12 +92,15 @@ describe("runtime logger", () => {
 					auth: "[REDACTED]",
 					headers: { authorization: "[REDACTED]" },
 					access_key: "[REDACTED]",
+					signature: "[REDACTED]",
 					accessToken: "[REDACTED]",
 					method: "GET",
 					networkUrl:
 						"//%5BREDACTED%5D:%5BREDACTED%5D@example.test/path?api_key=%5BREDACTED%5D",
 					retryCount: 2,
 					relativeUrl: "/mcp?access_key=%5BREDACTED%5D&token=%5BREDACTED%5D",
+					signedUrl:
+						"https://downloads.example.test/file?X-Amz-Signature=%5BREDACTED%5D&sig=%5BREDACTED%5D&signal=public",
 					url: "https://%5BREDACTED%5D:%5BREDACTED%5D@example.test/mcp?api_key=%5BREDACTED%5D&access_key=%5BREDACTED%5D&auth=%5BREDACTED%5D&region=west",
 				},
 				level: "error",

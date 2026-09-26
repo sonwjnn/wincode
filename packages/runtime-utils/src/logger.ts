@@ -8,7 +8,7 @@ import type { JsonValue } from "type-fest";
 const LOG_RETENTION_DAYS = 14;
 const REDACTED = "[REDACTED]";
 const SENSITIVE_FIELD_PATTERN =
-	/(?:password|passwd|secret|credential|authorization|cookie|api[_-]?key|access[_-]?key|private[_-]?key)/i;
+	/(?:password|passwd|secret|credential|authorization|cookie|api[_-]?key|access[_-]?key|signature|(?:^|[_-])sig(?:$|[_-])|private[_-]?key)/i;
 const AUTH_FIELD_PATTERN = /^auth(?:entication)?(?:[_-]?(?:header|value))?$/i;
 const TOKEN_FIELD_PATTERN = /token$/i;
 const URL_FIELD_PATTERN = /(?:url|uri|endpoint)$/i;
