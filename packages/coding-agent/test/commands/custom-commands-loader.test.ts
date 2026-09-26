@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 // biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as os from "node:os";
 // biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
@@ -8,7 +8,10 @@ import { discoverCustomCommandCandidates } from "@/modules/custom-commands/disco
 import { loadCustomCommands } from "@/modules/custom-commands/loader";
 import type { CustomCommandCandidate } from "@/modules/custom-commands/types";
 import { createConfigStore } from "@/shared/config/config-store";
-import { withLoggerHome } from "../../../runtime-utils/test/logger-home";
+import {
+	readLoggerRecords,
+	withLoggerHome,
+} from "../../../runtime-utils/test/logger-home";
 
 const makeCandidates = async (
 	dirs: Array<{ dir: string; files: Record<string, string> }>
@@ -28,24 +31,6 @@ const makeCandidates = async (
 		}
 	}
 	return candidates;
-};
-
-type WarningRecord = Readonly<{
-	context?: Readonly<Record<string, unknown>>;
-	level: string;
-	message: string;
-}>;
-
-const readWarningRecords = async (home: string): Promise<WarningRecord[]> => {
-	const date = new Date().toISOString().slice(0, 10);
-	const contents = await readFile(
-		path.join(home, ".wincode", "logs", `wincode.${date}.log`),
-		"utf8"
-	);
-	return contents
-		.trim()
-		.split("\n")
-		.map((line) => JSON.parse(line) as WarningRecord);
 };
 
 describe("loadCustomCommands", () => {
@@ -109,7 +94,7 @@ describe("loadCustomCommands", () => {
 				(command) => command.name
 			);
 			expect(names).toEqual(["review"]);
-			const warnings = await readWarningRecords(home);
+			const warnings = await readLoggerRecords(home);
 			expect(warnings).toHaveLength(3);
 			expect(warnings.map((warning) => warning.context?.name)).toEqual([
 				"new",
@@ -141,7 +126,7 @@ describe("loadCustomCommands", () => {
 				(command) => command.name
 			);
 			expect(names).toEqual(["review"]);
-			const warnings = await readWarningRecords(home);
+			const warnings = await readLoggerRecords(home);
 			expect(warnings).toHaveLength(2);
 			expect(warnings.map((warning) => warning.context?.name)).toEqual([
 				"skill:review",

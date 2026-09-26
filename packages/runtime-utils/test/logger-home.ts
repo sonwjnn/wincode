@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 // biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as os from "node:os";
 // biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
@@ -8,6 +8,25 @@ type LoggerHome = Readonly<{
 	cleanup: () => Promise<void>;
 	home: string;
 }>;
+export type LoggerRecord = Readonly<{
+	context?: Readonly<Record<string, unknown>>;
+	level: string;
+	message: string;
+}>;
+
+export const readLoggerRecords = async (
+	home: string
+): Promise<LoggerRecord[]> => {
+	const date = new Date().toISOString().slice(0, 10);
+	const contents = await readFile(
+		path.join(home, ".wincode", "logs", `wincode.${date}.log`),
+		"utf8"
+	);
+	return contents
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line) as LoggerRecord);
+};
 
 export const createLoggerHome = async (
 	prefix = "wincode-logger-"

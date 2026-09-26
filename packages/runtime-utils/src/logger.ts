@@ -47,7 +47,7 @@ const redactUrlAuthorityCredentials = (value: string): string => {
 const redactUrlParameters = (value: string): string => {
 	const parameters = new URLSearchParams(value);
 	let changed = false;
-	for (const [name] of [...parameters]) {
+	for (const name of parameters.keys()) {
 		if (isSensitiveKey(name)) {
 			parameters.set(name, REDACTED);
 			changed = true;

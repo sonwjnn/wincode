@@ -1,5 +1,5 @@
 const SENSITIVE_KEY_NAME_PATTERN =
-	/(?:accesskey|apikey|auth|authorization|bearer|cookie|credential|password|passwd|privatekey|secret|session|signature|token)/i;
+	/(?:accesskey|apikey|auth|authorization|bearer|cookie|credential|passphrase|password|passwd|privatekey|secret|session|signature|token)/i;
 const SENSITIVE_EXACT_KEY_PATTERN = /^(?:code|key|sig|state)$/i;
 const SENSITIVE_SIGNATURE_KEY_PATTERN = /(?:^|[_-])sig(?:$|[_-])/i;
 

@@ -3,7 +3,11 @@ import { readFile } from "node:fs/promises";
 // biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as path from "node:path";
 import { logger } from "@wincode/runtime-utils";
-import { createLoggerHome } from "../../runtime-utils/test/logger-home";
+import {
+	createLoggerHome,
+	type LoggerRecord,
+	readLoggerRecords,
+} from "../../runtime-utils/test/logger-home";
 import { runRpc } from "../modules/application/rpc/runner";
 import {
 	MAX_OUTPUT_BYTES,
@@ -12,29 +16,15 @@ import {
 } from "../modules/application/rpc/types";
 import type { SessionCapabilities } from "../modules/sessions/host/session-rpc";
 
-type LogRecord = Readonly<{
-	context?: Readonly<Record<string, unknown>>;
-	level: string;
-	message: string;
-}>;
-
 const loggerHome = await createLoggerHome("rpc-logs-");
 const logHome = loggerHome.home;
 afterAll(async () => {
 	await loggerHome.cleanup();
 });
 
-const readRpcLogRecords = async (): Promise<LogRecord[]> => {
+const readRpcLogRecords = async (): Promise<LoggerRecord[]> => {
 	await logger.flush();
-	const date = new Date().toISOString().slice(0, 10);
-	const contents = await readFile(
-		path.join(logHome, ".wincode", "logs", `wincode.${date}.log`),
-		"utf8"
-	);
-	return contents
-		.trim()
-		.split("\n")
-		.map((line) => JSON.parse(line) as LogRecord);
+	return readLoggerRecords(logHome);
 };
 
 type FrameWriter = OutputWriter & {
@@ -353,11 +343,12 @@ test("a stdout failure aborts input and returns a fatal status", async () => {
 	inputReleased.resolve();
 
 	expect(await run).toBe(1);
-	expect(
-		(await readRpcLogRecords()).some(
-			(record) => record.message === "RPC fatal error"
-		)
-	).toBe(true);
+	const fatalRecord = (await readRpcLogRecords()).find(
+		(record) => record.message === "RPC fatal error"
+	);
+	expect(fatalRecord?.context).toMatchObject({
+		rpcErrorCode: "internal_error",
+	});
 	expect(stderr.frames.join("")).toContain("RPC fatal error: broken pipe");
 	expect(stdoutFrames.map((frame) => JSON.parse(frame))).toEqual([
 		{

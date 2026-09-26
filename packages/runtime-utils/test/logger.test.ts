@@ -27,6 +27,7 @@ describe("runtime logger", () => {
 					"https://bob:do-not-write-alternate@backup.test/path?token=do-not-write-alt-token",
 				],
 				auth: "Bearer do-not-write-auth",
+				passphrase: "do-not-write-passphrase",
 				headers: { authorization: "Bearer do-not-write-header" },
 				access_key: "do-not-write-access-key",
 				signature: "do-not-write-signature",
@@ -43,7 +44,7 @@ describe("runtime logger", () => {
 					"/mcp?access_key=do-not-write-relative-key&token=do-not-write-relative-token",
 				signedUrl:
 					"https://downloads.example.test/file?X-Amz-Signature=do-not-write-signed-signature&sig=do-not-write-sig&code=do-not-write-query-code&state=do-not-write-query-state&signal=public",
-				url: "https://alice:do-not-write-password@example.test/mcp?api_key=do-not-write-key&access_key=do-not-write-query-key&auth=do-not-write-query-auth&region=west",
+				url: "https://alice:do-not-write-password@example.test/mcp?api_key=do-not-write-key&access_key=do-not-write-query-key&auth=do-not-write-query-auth&passphrase=do-not-write-query-passphrase&region=west",
 				invalidUrl:
 					"https://alice:do-not-write-invalid-port@example.test:bad/path?token=do-not-write-invalid-query",
 				callbackUrl:
@@ -75,6 +76,7 @@ describe("runtime logger", () => {
 					access_key: "[REDACTED]",
 					signature: "[REDACTED]",
 					accessToken: "[REDACTED]",
+					passphrase: "[REDACTED]",
 					bearer: "[REDACTED]",
 					code: "[REDACTED]",
 					session: "[REDACTED]",
@@ -96,7 +98,7 @@ describe("runtime logger", () => {
 						"https://%5BREDACTED%5D:%5BREDACTED%5D@example.test/callback?code=%5BREDACTED%5D&state=%5BREDACTED%5D#access_token=%5BREDACTED%5D",
 					details:
 						"https://storage.example.test/item?access_key=%5BREDACTED%5D",
-					url: "https://%5BREDACTED%5D:%5BREDACTED%5D@example.test/mcp?api_key=%5BREDACTED%5D&access_key=%5BREDACTED%5D&auth=%5BREDACTED%5D&region=west",
+					url: "https://%5BREDACTED%5D:%5BREDACTED%5D@example.test/mcp?api_key=%5BREDACTED%5D&access_key=%5BREDACTED%5D&auth=%5BREDACTED%5D&passphrase=%5BREDACTED%5D&region=west",
 				},
 				level: "error",
 				message: "MCP request failed",

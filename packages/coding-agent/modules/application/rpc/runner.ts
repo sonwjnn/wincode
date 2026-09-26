@@ -211,7 +211,7 @@ export async function runRpc({
 			code = error.code;
 		}
 		const diagnosticWrite = logger.error("RPC fatal error", {
-			code,
+			rpcErrorCode: code,
 			errorType: error instanceof Error ? error.name : typeof error,
 		});
 		writeStderrDiagnostic(
