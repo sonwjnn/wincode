@@ -12,6 +12,8 @@ const URL_FIELD_PATTERN =
 	/(?:url|uri|endpoint|redirect|callback|href|link|location)$/i;
 const LOG_FILE_PATTERN = /^wincode\.(\d{4}-\d{2}-\d{2})\.log$/;
 const URL_AUTHORITY_PREFIX_PATTERN = /^[a-z][a-z\d+.-]*:\/\//i;
+const URL_IN_TEXT_PATTERN = /[a-z][a-z\d+.-]*:\/\/[^\s"'<>`]+/gi;
+const URL_TRAILING_PUNCTUATION_PATTERN = /[.,;!)]*$/;
 const URL_AUTHORITY_END_PATTERN = /[/?#]/;
 
 type LoggerLevel = "debug" | "error" | "warn";
@@ -109,21 +111,32 @@ const redactUrl = (value: string): string => {
 		return redactUrlAuthorityCredentials(redacted);
 	}
 };
+const redactEmbeddedUrls = (value: string): string =>
+	value.replace(URL_IN_TEXT_PATTERN, (matchedUrl) => {
+		const punctuation =
+			URL_TRAILING_PUNCTUATION_PATTERN.exec(matchedUrl)?.[0] ?? "";
+		const url = matchedUrl.slice(0, matchedUrl.length - punctuation.length);
+		return `${redactUrl(url)}${punctuation}`;
+	});
 
 const redactValue = (value: JsonValue, fieldName?: string): JsonValue => {
 	if (fieldName !== undefined && isSensitiveKey(fieldName)) {
 		return REDACTED;
 	}
-	if (
-		typeof value === "string" &&
-		((fieldName !== undefined && URL_FIELD_PATTERN.test(fieldName)) ||
+	if (typeof value === "string") {
+		if (
+			(fieldName !== undefined && URL_FIELD_PATTERN.test(fieldName)) ||
 			URL_AUTHORITY_PREFIX_PATTERN.test(value) ||
 			value.startsWith("//") ||
 			value.startsWith("/") ||
 			value.startsWith("?") ||
-			value.startsWith("#"))
-	) {
-		return redactUrl(value);
+			value.startsWith("#")
+		) {
+			return redactEmbeddedUrls(redactUrl(value));
+		}
+		if (value.includes("://")) {
+			return redactEmbeddedUrls(value);
+		}
 	}
 	if (Array.isArray(value)) {
 		return value.map((item: JsonValue) => redactValue(item, fieldName));

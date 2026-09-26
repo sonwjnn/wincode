@@ -55,6 +55,10 @@ describe("runtime logger", () => {
 					"https://alice:do-not-write-redirect-password@example.test/callback?code=do-not-write-redirect-code&state=do-not-write-redirect-state#access_token=do-not-write-redirect-token",
 				details:
 					"https://storage.example.test/item?access_key=do-not-write-unlabeled-key",
+				failureDetails:
+					"Request failed at https://alice:do-not-write-embedded-password@api.example.test/session?token=do-not-write-embedded-token.",
+				pathDetails:
+					"/rpc error at https://alice:do-not-write-path-password@api.example.test/session?token=do-not-write-path-token",
 			});
 
 			const contents = await readFile(logFile(home), "utf8");
@@ -98,6 +102,10 @@ describe("runtime logger", () => {
 						"https://%5BREDACTED%5D:%5BREDACTED%5D@example.test/callback?code=%5BREDACTED%5D&state=%5BREDACTED%5D#access_token=%5BREDACTED%5D",
 					details:
 						"https://storage.example.test/item?access_key=%5BREDACTED%5D",
+					failureDetails:
+						"Request failed at https://%5BREDACTED%5D:%5BREDACTED%5D@api.example.test/session?token=%5BREDACTED%5D.",
+					pathDetails:
+						"/rpc error at https://%5BREDACTED%5D:%5BREDACTED%5D@api.example.test/session?token=%5BREDACTED%5D",
 					url: "https://%5BREDACTED%5D:%5BREDACTED%5D@example.test/mcp?api_key=%5BREDACTED%5D&access_key=%5BREDACTED%5D&auth=%5BREDACTED%5D&passphrase=%5BREDACTED%5D&region=west",
 				},
 				level: "error",
