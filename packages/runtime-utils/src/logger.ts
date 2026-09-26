@@ -4,13 +4,10 @@ import * as os from "node:os";
 // biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
 import * as path from "node:path";
 import type { JsonValue } from "type-fest";
+import { isSensitiveKey } from "./sensitive-key";
 
 const LOG_RETENTION_DAYS = 14;
 const REDACTED = "[REDACTED]";
-const SENSITIVE_FIELD_PATTERN =
-	/(?:password|passwd|secret|credential|authorization|cookie|api[_-]?key|access[_-]?key|signature|(?:^|[_-])sig(?:$|[_-])|private[_-]?key)/i;
-const AUTH_FIELD_PATTERN = /^auth(?:entication)?(?:[_-]?(?:header|value))?$/i;
-const TOKEN_FIELD_PATTERN = /token$/i;
 const URL_FIELD_PATTERN = /(?:url|uri|endpoint)$/i;
 const LOG_FILE_PATTERN = /^wincode\.(\d{4}-\d{2}-\d{2})\.log$/;
 
@@ -18,12 +15,6 @@ type LoggerLevel = "debug" | "error" | "warn";
 
 /** Non-secret JSON metadata; known credential fields and URL query keys are redacted. */
 export type LogFields = Readonly<Record<string, JsonValue>>;
-
-const isSensitiveField = (name: string): boolean =>
-	AUTH_FIELD_PATTERN.test(name) ||
-	SENSITIVE_FIELD_PATTERN.test(name) ||
-	name.toLowerCase() === "key" ||
-	TOKEN_FIELD_PATTERN.test(name);
 
 const redactUrl = (value: string): string => {
 	const queryStart = value.indexOf("?");
@@ -39,7 +30,7 @@ const redactUrl = (value: string): string => {
 		);
 		let queryChanged = false;
 		for (const [name] of [...parameters]) {
-			if (isSensitiveField(name)) {
+			if (isSensitiveKey(name)) {
 				parameters.set(name, REDACTED);
 				queryChanged = true;
 			}
@@ -76,7 +67,7 @@ const redactUrl = (value: string): string => {
 };
 
 const redactValue = (value: JsonValue, fieldName?: string): JsonValue => {
-	if (fieldName !== undefined && isSensitiveField(fieldName)) {
+	if (fieldName !== undefined && isSensitiveKey(fieldName)) {
 		return REDACTED;
 	}
 	if (

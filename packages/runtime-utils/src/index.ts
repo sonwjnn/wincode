@@ -12,6 +12,7 @@ export { getErrorMessage } from "./errors";
 export * from "./guards";
 export * from "./logger";
 export * from "./objects";
+export * from "./sensitive-key";
 
 export type JsonValueValidationOptions = Readonly<{
 	maxDepth?: number;

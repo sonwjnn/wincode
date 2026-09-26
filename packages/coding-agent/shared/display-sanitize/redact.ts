@@ -2,13 +2,15 @@ import {
 	isArray,
 	isNonEmptyString,
 	isObjectLike,
+	isSensitiveKey as isSensitiveRuntimeKey,
 	isString,
 	isUndefined,
 } from "@wincode/runtime-utils";
 
 const URL_LIKE_PATTERN = /https?:\/\/[^\s,;]+/gi;
-const SECRET_KEY_NAME_PATTERN =
-	/(?:apikey|auth|authorization|bearer|cookie|credential|password|privatekey|secret|session|token)/i;
+
+export { isSensitiveKey } from "@wincode/runtime-utils";
+
 const SECRET_VALUE_PATTERN =
 	/\b(?:(api[ _-]?key|auth(?:orization)?|cookie|credential|password|private[ _-]?key|secret|session|token)\s*[:=]\s*(?:bearer\s+)?[^\s,;}\]]+|bearer\s+[^\s,;}\]]+)/gi;
 
@@ -56,12 +58,6 @@ export const stripControlCharacters = (
 	}).join("");
 	return isUndefined(maxChars) ? stripped : stripped.slice(0, maxChars);
 };
-
-/** True when the key name itself is a secret (after stripping punctuation). */
-export const isSensitiveKey = (key: string): boolean =>
-	SECRET_KEY_NAME_PATTERN.test(
-		stripControlCharacters(key).replace(/[^a-z0-9]/gi, "")
-	);
 
 /**
  * Redacts secret material for display. Exact `secrets` are substituted first,
@@ -150,7 +146,7 @@ export function sanitizeArgumentTree(
 
 		const result: Record<string, unknown> = {};
 		for (const [key, entry] of Object.entries(node).slice(0, maxEntries)) {
-			result[sanitizeKey(key)] = isSensitiveKey(key)
+			result[sanitizeKey(key)] = isSensitiveRuntimeKey(key)
 				? REDACTED
 				: walk(entry, depth + 1, seen);
 		}
