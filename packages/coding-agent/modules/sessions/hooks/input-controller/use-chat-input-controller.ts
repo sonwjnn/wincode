@@ -424,13 +424,28 @@ export function useChatInputController({
 				return;
 			}
 
+			const isDirectory = option.type === "directory";
 			const replacement = applyFileMentionReplacement(
 				textValue,
 				activeTrigger,
 				`@${option.label}`,
-				{ addTrailingSpace: option.type !== "directory" }
+				{ addTrailingSpace: !isDirectory }
 			);
 			setProgrammaticText(replacement.text, replacement.cursorOffset);
+
+			if (isDirectory) {
+				const nextTrigger = detectTrigger(
+					replacement.text,
+					replacement.cursorOffset
+				);
+				if (nextTrigger?.kind === "file-mention") {
+					setActiveTrigger(nextTrigger);
+					setOverlayKind("file-mention");
+					setSelectedIndex(0);
+					return;
+				}
+			}
+
 			closeOverlay();
 		},
 		[

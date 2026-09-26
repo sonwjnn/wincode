@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { act } from "react";
+import { getFileMentionOptions } from "@/modules/file-mentions";
 import {
 	createFakeModelClientModule,
 	createFakeModelClientRecorder,
@@ -36,6 +37,19 @@ const testDirectory = await mkdtemp(
 process.env.WINCODE_LOCAL_DB_PATH = join(testDirectory, "conversation.sqlite");
 process.env.WINCODE_E2E_HOME = testDirectory;
 process.env.WINCODE_E2E_WORKSPACE = testDirectory;
+const mentionFixtureDirectory = await mkdtemp(
+	join(process.cwd(), "packages/coding-agent/test/mention-e2e-")
+);
+const mentionFixturePath = mentionFixtureDirectory.slice(
+	process.cwd().length + 1
+);
+await mkdir(join(mentionFixtureDirectory, "utils", "empty"), {
+	recursive: true,
+});
+await globalThis.Bun.write(
+	join(mentionFixtureDirectory, "utils", "child.ts"),
+	"export const child = true;"
+);
 await Promise.all([
 	mkdir(join(testDirectory, ".git"), { recursive: true }),
 	mkdir(join(testDirectory, ".wincode", "skills", "review"), {
@@ -50,6 +64,7 @@ afterAll(async () => {
 	mock.restore();
 	restoreEnvironment();
 	await rm(testDirectory, { force: true, recursive: true });
+	await rm(mentionFixtureDirectory, { force: true, recursive: true });
 });
 
 const recorder = createFakeModelClientRecorder();
@@ -72,7 +87,7 @@ const {
 const store = createE2eStore();
 const { sessionId } = await seedCompactionHistory(store, 2);
 
-test("lists merged command rows and activates a skill typed through its namespace", async () => {
+test("keeps folder mentions searchable and activates a typed skill", async () => {
 	let setup: TestRendererSetup | undefined;
 	try {
 		const rendered = await renderSession({
@@ -82,6 +97,9 @@ test("lists merged command rows and activates a skill typed through its namespac
 		const activeSetup = rendered.setup;
 		setup = activeSetup;
 		await rendered.registryReady;
+		await act(async () => {
+			await getFileMentionOptions();
+		});
 		await act(async () => {
 			await activeSetup.flush();
 			await activeSetup.flush();
@@ -155,6 +173,82 @@ test("lists merged command rows and activates a skill typed through its namespac
 		const submittedFrame = activeSetup.captureCharFrame();
 		expect(submittedFrame).toContain("/skill:review focus on auth");
 		expect(submittedFrame).toContain("review");
+
+		const folderQuery = `@${mentionFixturePath}/utils`;
+		const folderLabel = `${mentionFixturePath}/utils/`;
+		const waitForFolderSuggestions = async () => {
+			await act(async () => {
+				await activeSetup.waitForFrame(
+					(frame) => frame.includes(folderLabel) && frame.includes("child.ts"),
+					{ maxPasses: 200 }
+				);
+			});
+		};
+		await act(async () => {
+			await activeSetup.mockInput.typeText(folderQuery);
+		});
+		await waitForFolderSuggestions();
+
+		await act(() => activeSetup.mockInput.pressTab());
+		await settleSessionUi(activeSetup);
+		expect(activeSetup.captureCharFrame()).toContain(`${folderQuery}/`);
+		expect(activeSetup.captureCharFrame()).toContain("child.ts");
+
+		await act(async () => {
+			await activeSetup.mockInput.typeText(" ");
+		});
+		await settleSessionUi(activeSetup);
+		expect(activeSetup.captureCharFrame()).not.toContain("child.ts");
+
+		await act(() => activeSetup.mockInput.pressKey("BACKSPACE"));
+		await settleSessionUi(activeSetup);
+		expect(activeSetup.captureCharFrame()).toContain("child.ts");
+
+		await act(() => activeSetup.mockInput.pressKey("BACKSPACE"));
+		await settleSessionUi(activeSetup);
+		await waitForFolderSuggestions();
+		await act(() => activeSetup.mockInput.pressEnter());
+		await settleSessionUi(activeSetup);
+		expect(activeSetup.captureCharFrame()).toContain(`${folderQuery}/`);
+		expect(activeSetup.captureCharFrame()).toContain("child.ts");
+
+		await act(() => activeSetup.mockInput.pressKey("BACKSPACE"));
+		await settleSessionUi(activeSetup);
+		await waitForFolderSuggestions();
+		const folderRows = activeSetup.captureCharFrame().split("\n");
+		const folderRowIndex = folderRows.findIndex((row) =>
+			row.includes(folderLabel)
+		);
+		const folderColumnIndex =
+			folderRows[folderRowIndex]?.indexOf(folderLabel) ?? -1;
+		if (folderRowIndex < 0 || folderColumnIndex < 0) {
+			throw new Error("Folder mention row is not visible for mouse selection");
+		}
+		await act(async () => {
+			await activeSetup.mockMouse.click(
+				folderColumnIndex + Math.floor(folderLabel.length / 2),
+				folderRowIndex
+			);
+		});
+		await settleSessionUi(activeSetup);
+		expect(activeSetup.captureCharFrame()).toContain(`${folderQuery}/`);
+		expect(activeSetup.captureCharFrame()).toContain("child.ts");
+
+		await act(async () => {
+			await activeSetup.mockInput.typeText("empty");
+		});
+		await act(async () => {
+			await activeSetup.waitForFrame(
+				(frame) => frame.includes(`${mentionFixturePath}/utils/empty/`),
+				{ maxPasses: 200 }
+			);
+		});
+		await act(() => activeSetup.mockInput.pressTab());
+		await settleSessionUi(activeSetup);
+		expect(activeSetup.captureCharFrame()).toContain(
+			`@${mentionFixturePath}/utils/empty/`
+		);
+		expect(activeSetup.captureCharFrame()).toContain("No matching files");
 	} finally {
 		if (setup) {
 			writeE2EFrame(setup);

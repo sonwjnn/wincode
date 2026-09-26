@@ -186,10 +186,14 @@ export const applyFileMentionReplacement = (
 			(shouldUseExistingSpace || MENTION_SPACE_BLOCKING_RE.test(nextChar))
 		);
 	const replacementText = `${replacement}${shouldInsertSpace ? " " : ""}`;
+	const shouldAdvanceCursorPastExistingSpace =
+		shouldUseExistingSpace && options.addTrailingSpace !== false;
 
 	return {
 		cursorOffset:
-			range.start + replacementText.length + (shouldUseExistingSpace ? 1 : 0),
+			range.start +
+			replacementText.length +
+			(shouldAdvanceCursorPastExistingSpace ? 1 : 0),
 		text: replaceFileMentionRange(text, range, replacementText),
 	};
 };
