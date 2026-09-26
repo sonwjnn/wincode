@@ -64,10 +64,8 @@ export const VariantsDialogContent = ({
 	return (
 		<SearchListDialogWrapper
 			emptyText="No variants available"
-			filterFn={(variant, query) =>
-				`${variant.label}`.toLowerCase().includes(query.toLowerCase())
-			}
 			getKey={(variant) => variant.label}
+			getSearchText={(variant) => variant.label}
 			isItemActive={(variant) => variant.value === currentVariant}
 			items={variants}
 			onSelect={handleSelect}

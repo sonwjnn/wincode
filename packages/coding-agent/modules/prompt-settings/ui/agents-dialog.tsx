@@ -97,17 +97,13 @@ export const AgentsDialogContent = ({
 	return (
 		<SearchListDialogWrapper
 			emptyText="No matching agents"
-			filterFn={(item, query) =>
-				`${item.displayName} ${item.description}`
-					.toLowerCase()
-					.includes(query.toLowerCase())
-			}
 			footer={
 				!isNull(registry) && registry.diagnostics.length > 0 ? (
 					<AgentDiagnosticsFooter diagnostics={registry.diagnostics} />
 				) : undefined
 			}
 			getKey={(item) => item.id}
+			getSearchText={(item) => `${item.displayName} ${item.description}`}
 			isItemActive={(item) => item.id === currentAgent}
 			isItemSelectable={(item) =>
 				isUndefined(getAgentUnavailableReason(item, connectedProviderIds))

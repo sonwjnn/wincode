@@ -96,6 +96,48 @@ describe("mention grammar", () => {
 			text: "see @packages/foo.ts now",
 		});
 	});
+	test("omits the automatic trailing space for directory completion", () => {
+		expect(
+			applyFileMentionReplacement(
+				"see @packages/foo",
+				{
+					end: 17,
+					query: "packages/foo",
+					start: 4,
+				},
+				"@packages/foo/",
+				{ addTrailingSpace: false }
+			)
+		).toEqual({
+			cursorOffset: 18,
+			text: "see @packages/foo/",
+		});
+	});
+
+	test("keeps directory mention active before existing whitespace", () => {
+		const replacement = applyFileMentionReplacement(
+			"see @packages/foo now",
+			{
+				end: 17,
+				query: "packages/foo",
+				start: 4,
+			},
+			"@packages/foo/",
+			{ addTrailingSpace: false }
+		);
+
+		expect(replacement).toEqual({
+			cursorOffset: 18,
+			text: "see @packages/foo/ now",
+		});
+		expect(
+			detectFileMentionAtCursor(replacement.text, replacement.cursorOffset)
+		).toEqual({
+			end: 18,
+			query: "packages/foo/",
+			start: 4,
+		});
+	});
 
 	test("deletes whole mention after its trailing character is deleted", () => {
 		expect(

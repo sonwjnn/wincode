@@ -5,6 +5,7 @@ import {
 	defaultWorkspaceSandbox,
 	type WorkspacePolicy,
 } from "@/modules/tools";
+import { findSubsequenceMatch as findStringSubsequenceMatch } from "@/shared/utils/string-matching";
 import type { FileMentionOption } from "../types";
 import {
 	compareCanonicalRelativePaths,
@@ -145,32 +146,15 @@ const findSubsequenceMatch = (
 	query: string,
 	rank: number
 ): Match | null => {
-	let candidateIndex = 0;
-	let previousMatchIndex = -1;
-	let firstMatchIndex = -1;
-	let gaps = 0;
-
-	for (const character of query) {
-		const matchIndex = candidate.indexOf(character, candidateIndex);
-		if (matchIndex === -1) {
-			return null;
-		}
-
-		if (firstMatchIndex === -1) {
-			firstMatchIndex = matchIndex;
-		}
-		if (previousMatchIndex !== -1) {
-			gaps += matchIndex - previousMatchIndex - 1;
-		}
-
-		previousMatchIndex = matchIndex;
-		candidateIndex = matchIndex + 1;
+	const match = findStringSubsequenceMatch(candidate, query);
+	if (!match) {
+		return null;
 	}
+
 	return {
-		gaps,
+		...match,
 		rank,
 		specificity: DEFAULT_MATCH_SPECIFICITY,
-		start: firstMatchIndex,
 	};
 };
 

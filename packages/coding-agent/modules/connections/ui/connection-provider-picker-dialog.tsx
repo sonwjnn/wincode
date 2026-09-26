@@ -38,11 +38,10 @@ export function ConnectionProviderPickerDialogContent({
 	return (
 		<SearchListDialogWrapper<ConnectionProviderSummary>
 			emptyText="No matching providers"
-			filterFn={(provider, query) => {
-				const value = `${provider.displayName} ${getConnectionProviderDetails(provider)} ${provider.id}`;
-				return value.toLowerCase().includes(query.toLowerCase());
-			}}
 			getKey={(provider) => provider.id}
+			getSearchText={(provider) =>
+				`${provider.displayName} ${getConnectionProviderDetails(provider)} ${provider.id}`
+			}
 			isItemActive={(provider) => connectedProviders.has(provider.id)}
 			items={providers}
 			onSelect={handleSelect}

@@ -28,7 +28,12 @@ export type SettingsDialogContentProps = {
 };
 
 type SettingsListItem =
-	| { readonly id: string; readonly kind: "section"; readonly section: string }
+	| {
+			readonly id: string;
+			readonly kind: "section";
+			readonly section: string;
+			readonly searchTexts: readonly string[];
+	  }
 	| {
 			readonly id: string;
 			readonly kind: "setting";
@@ -82,22 +87,28 @@ const getSourceLabel = (setting: ResolvedSetting): string => {
 	}
 };
 
-const matchesSetting = (setting: ResolvedSetting, query: string): boolean => {
-	const searchable = [
+const getSettingSearchText = (setting: ResolvedSetting): string =>
+	[
 		setting.descriptor.description,
 		setting.descriptor.id,
 		setting.descriptor.label,
 		setting.descriptor.section,
-	]
-		.join(" ")
-		.toLowerCase();
-	return searchable.includes(query.toLowerCase());
-};
+	].join(" ");
 
 const buildItems = (
 	settings: readonly ResolvedSetting[]
 ): SettingsListItem[] => {
 	const items: SettingsListItem[] = [];
+	const searchTextsBySection = new Map<string, string[]>();
+	for (const setting of settings) {
+		const section = setting.descriptor.section;
+		let searchTexts = searchTextsBySection.get(section);
+		if (!searchTexts) {
+			searchTexts = [];
+			searchTextsBySection.set(section, searchTexts);
+		}
+		searchTexts.push(getSettingSearchText(setting));
+	}
 	let lastSection: string | undefined;
 	for (const setting of settings) {
 		const section = setting.descriptor.section;
@@ -106,6 +117,7 @@ const buildItems = (
 				id: `section:${section}`,
 				kind: "section",
 				section,
+				searchTexts: searchTextsBySection.get(section) ?? [],
 			});
 			lastSection = section;
 		}
@@ -375,16 +387,6 @@ export function SettingsDialogContent({
 					? "No settings registered."
 					: "No matching settings."
 			}
-			filterFn={(item, query) => {
-				if (item.kind === "section") {
-					return settings.some(
-						(setting) =>
-							setting.descriptor.section === item.section &&
-							matchesSetting(setting, query)
-					);
-				}
-				return matchesSetting(item.setting, query);
-			}}
 			footer={
 				<box flexDirection="column" gap={1} marginX={4}>
 					{selectedSetting ? (
@@ -413,6 +415,11 @@ export function SettingsDialogContent({
 				</box>
 			}
 			getKey={(item) => item.id}
+			getSearchText={(item) =>
+				item.kind === "section"
+					? item.searchTexts
+					: getSettingSearchText(item.setting)
+			}
 			initialSelectedIndex={
 				isUndefined(initialSection)
 					? undefined

@@ -1,5 +1,6 @@
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import { SKILL_NAMESPACE_PREFIX, type Skill } from "@/modules/skills";
+import { fuzzyMatch } from "@/shared/fuzzy";
 import type { BaseSpec, CommandSpec } from "./commands";
 
 /** A discovered Skill offered as a row under the reserved `skill:` namespace. */
@@ -34,17 +35,23 @@ export const createSkillCommandSpecs = (
 		.toSorted((left, right) => left.name.localeCompare(right.name));
 
 /**
- * Prefix match on the row label, plus the bare name for namespaced rows so
- * typing `foo` still surfaces `skill:foo`.
+ * Commands match by label prefix. Skills also use fuzzy matching on their bare
+ * names, with an optional namespace prefix in the query.
  */
 const matchesCommandQuery = (item: CommandItem, query: string): boolean => {
 	const normalized = query.toLowerCase();
 	if (getCommandLabel(item).toLowerCase().startsWith(normalized)) {
 		return true;
 	}
-	return (
-		item.kind === "skill" && item.name.toLowerCase().startsWith(normalized)
-	);
+
+	if (item.kind !== "skill") {
+		return false;
+	}
+
+	const skillQuery = normalized.startsWith(SKILL_NAMESPACE_PREFIX)
+		? normalized.slice(SKILL_NAMESPACE_PREFIX.length)
+		: normalized;
+	return fuzzyMatch(skillQuery, item.name).matches;
 };
 
 export const filterCommandItems = (

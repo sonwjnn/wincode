@@ -100,14 +100,6 @@ export const ModelsDialogContent = ({
 	return (
 		<SearchListDialogWrapper
 			emptyText="No matching models"
-			filterFn={(row, query) => {
-				if (row.kind !== "model") {
-					return query.length === 0;
-				}
-				return `${formatModelLabel(row.model.displayName)} ${row.model.id} ${connectionProviderDisplayNames[row.model.connectionProviderId]}`
-					.toLowerCase()
-					.includes(query.toLowerCase());
-			}}
 			getKey={(row) => {
 				if (row.kind === "header") {
 					return `header:${row.label}`;
@@ -117,6 +109,11 @@ export const ModelsDialogContent = ({
 				}
 				return `${row.recent ? "recent" : "provider"}:${row.model.connectionProviderId}:${row.model.id}`;
 			}}
+			getSearchText={(row) =>
+				row.kind === "model"
+					? `${formatModelLabel(row.model.displayName)} ${row.model.id} ${connectionProviderDisplayNames[row.model.connectionProviderId]}`
+					: ""
+			}
 			isItemActive={(row) =>
 				row.kind === "model" &&
 				row.model.id === currentModel?.modelId &&

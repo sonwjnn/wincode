@@ -61,8 +61,46 @@ describe("filterCommandItems", () => {
 		]);
 	});
 
-	test("does not match inside a name or against a description", () => {
-		expect(filterCommandItems(ITEMS, "eview")).toEqual([]);
+	test("fuzzy-matches skill names with or without the namespace", () => {
+		const sdkSkill = createSkillCommandSpecs([
+			{ description: "SDK helpers", name: "ai-sdk" },
+		]);
+
+		for (const query of ["sdk", "skill:sdk"]) {
+			expect(labels(filterCommandItems(sdkSkill, query))).toEqual([
+				"skill:ai-sdk",
+			]);
+		}
+
+		expect(labels(filterCommandItems(sdkSkill, "skill:"))).toEqual([
+			"skill:ai-sdk",
+		]);
+	});
+
+	test("matches skill names with an ordered subsequence inside a word", () => {
+		expect(labels(filterCommandItems(SKILLS, "riew"))).toEqual([
+			"skill:review",
+		]);
+	});
+
+	test("does not return every skill for punctuation-only queries", () => {
+		expect(labels(filterCommandItems(SKILLS, "!!!"))).toEqual([]);
+	});
+
+	test("fuzzy-matches skill names when adjacent letters and numbers are swapped", () => {
+		const modelSkill = createSkillCommandSpecs([
+			{ description: "Model helpers", name: "model-4o" },
+		]);
+
+		for (const query of ["modelo4", "skill:modelo4"]) {
+			expect(labels(filterCommandItems(modelSkill, query))).toEqual([
+				"skill:model-4o",
+			]);
+		}
+	});
+
+	test("keeps prefix matching for commands and ignores descriptions", () => {
+		expect(filterCommandItems([GIT_COMMIT], "commit")).toEqual([]);
 		expect(filterCommandItems(ITEMS, "conventional")).toEqual([]);
 	});
 });

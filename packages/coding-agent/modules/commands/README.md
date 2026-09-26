@@ -10,7 +10,8 @@ Slash-command registry and dispatch for the CLI chat input.
 2. **Items** — `command-item.ts` merges Built-in Commands, Custom Commands, and Skills into
    one `CommandItem[]` for the `/` overlay. Rows render without the leading slash; only
    Skill rows keep a namespace (`skill:review`) so the merged list stays unambiguous.
-   Query matching is a prefix match on the label, plus the bare name for namespaced rows.
+   Built-in and Custom Commands use label prefixes; Skills use shared fuzzy matching on
+   their bare names, with or without a `skill:` query prefix.
 3. **Dispatch** — `createCommandExecutor` receives an `AdapterMap` at app bootstrap and
    returns a function that switches on `spec.kind`, delegating to the matching adapter.
    The same executor serves overlay selection and typed Built-in Commands
@@ -23,7 +24,8 @@ Slash-command registry and dispatch for the CLI chat input.
     variant-picker / agent-picker dialogs
   - `SettingsAdapter` → opens the global Settings hub
 5. **Overlay** — `SelectableList` renders the matched suggestions below the input. Arrow keys
-   highlight, Enter executes.
+   highlight; Tab inserts the selected command into the composer, and Enter executes Built-in
+   Commands or inserts Custom Commands and Skills.
 
 ## Public API
 

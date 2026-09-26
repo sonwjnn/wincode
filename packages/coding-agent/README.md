@@ -9,6 +9,9 @@ implementation paths; `@wincode/coding-agent/application` is intentionally not
 exported. Session Host, capability, and RPC contracts use their explicit
 UI-neutral subpath exports.
 
+Searchable list dialogs and skill suggestions share `shared/fuzzy.ts` for
+subsequence matching. Interactive lists preserve their original item order.
+
 ```bash
 bun run bin/wincode.ts --help
 bun run bin/wincode.ts --mode print --prompt "hello"

@@ -15,7 +15,8 @@ for AI context.
    slash scopes results to recursive descendants and omits the queried directory itself. Results
    are sorted deterministically before the existing 100-option limit is applied.
 3. **Overlay** — the shared `SelectableList` renders the active suggestion list inside the
-   chat input area. Keyboard events cycle selection; Enter applies the chosen mention.
+   chat input area. Arrow keys change the selection; Tab or Enter completes the
+   selected mention. File completions add a trailing space; directory completions do not.
 4. **Replacement** — `applyFileMentionReplacement` inserts the selected label into the
    textarea, replacing the raw trigger text. `deleteFileMentionAfterTrailingCharacterDelete`
    handles backspace-to-remove behaviour.

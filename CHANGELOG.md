@@ -125,6 +125,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   annotation of attachments no longer reaches the Session Context. See
   ADR-0023.
 
+### Fixed
+
+- **Directory file mentions remain searchable after completion.** Selecting a
+  folder with Tab, Enter, or the mouse keeps descendant suggestions open,
+  including an empty-results state. Typing a space closes the list; deleting it
+  reopens the list, and existing whitespace stays after the caret.
+
 ### Removed
 
 - **The dead `mid-turn` compaction surface.** The `mid-turn` trigger reason, the

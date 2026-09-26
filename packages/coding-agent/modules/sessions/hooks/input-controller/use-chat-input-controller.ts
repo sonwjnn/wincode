@@ -365,6 +365,20 @@ export function useChatInputController({
 		[filteredCommands, overlayKind]
 	);
 
+	const completeCommandAtIndex = useCallback(
+		(index: number) => {
+			const command = resolveCommand(index);
+			if (!command) {
+				return;
+			}
+
+			const invocation = `${getCommandInvocation(command)} `;
+			setProgrammaticText(invocation, invocation.length);
+			closeOverlay();
+		},
+		[closeOverlay, resolveCommand, setProgrammaticText]
+	);
+
 	const executeCommandAtIndex = useCallback(
 		(index: number) => {
 			const command = resolveCommand(index);
@@ -373,9 +387,7 @@ export function useChatInputController({
 			}
 
 			if (command.kind === "custom" || command.kind === "skill") {
-				const invocation = `${getCommandInvocation(command)} `;
-				setProgrammaticText(invocation, invocation.length);
-				closeOverlay();
+				completeCommandAtIndex(index);
 				return;
 			}
 
@@ -389,6 +401,7 @@ export function useChatInputController({
 		[
 			activeTrigger,
 			closeOverlay,
+			completeCommandAtIndex,
 			executeCommand,
 			resolveCommand,
 			setProgrammaticText,
@@ -411,12 +424,28 @@ export function useChatInputController({
 				return;
 			}
 
+			const isDirectory = option.type === "directory";
 			const replacement = applyFileMentionReplacement(
 				textValue,
 				activeTrigger,
-				`@${option.label}`
+				`@${option.label}`,
+				{ addTrailingSpace: !isDirectory }
 			);
 			setProgrammaticText(replacement.text, replacement.cursorOffset);
+
+			if (isDirectory) {
+				const nextTrigger = detectTrigger(
+					replacement.text,
+					replacement.cursorOffset
+				);
+				if (nextTrigger?.kind === "file-mention") {
+					setActiveTrigger(nextTrigger);
+					setOverlayKind("file-mention");
+					setSelectedIndex(0);
+					return;
+				}
+			}
+
 			closeOverlay();
 		},
 		[
@@ -660,13 +689,34 @@ export function useChatInputController({
 
 	const handleTab = useCallback(
 		(shift: boolean) => {
-			if (disabled || steering) {
+			if (disabled) {
+				return;
+			}
+
+			if (!shift && overlayKind === "file-mention") {
+				executeFileMentionAtIndex(selectedIndex);
+				return;
+			}
+
+			if (steering) {
+				return;
+			}
+			if (!shift && overlayKind === "command") {
+				completeCommandAtIndex(selectedIndex);
 				return;
 			}
 
 			onTab(shift);
 		},
-		[disabled, onTab, steering]
+		[
+			completeCommandAtIndex,
+			disabled,
+			executeFileMentionAtIndex,
+			onTab,
+			overlayKind,
+			selectedIndex,
+			steering,
+		]
 	);
 
 	let overlay: InputOverlayState = EMPTY_OVERLAY;
