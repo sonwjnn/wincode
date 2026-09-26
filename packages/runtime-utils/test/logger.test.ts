@@ -53,7 +53,7 @@ const daysAgo = (days: number): string => {
 };
 
 describe("runtime logger", () => {
-	test("writes structured diagnostics and redacts credential fields and URL query secrets", async () => {
+	test("writes structured diagnostics and redacts URL credentials and query/fragment secrets", async () => {
 		await withLoggerHome(async (home) => {
 			await logger.error("MCP request failed", {
 				alternateUrl: [
@@ -79,6 +79,10 @@ describe("runtime logger", () => {
 				url: "https://alice:do-not-write-password@example.test/mcp?api_key=do-not-write-key&access_key=do-not-write-query-key&auth=do-not-write-query-auth&region=west",
 				invalidUrl:
 					"https://alice:do-not-write-invalid-port@example.test:bad/path?token=do-not-write-invalid-query",
+				callbackUrl:
+					"https://id.example/callback#access_token=do-not-write-fragment-token&state=do-not-write-fragment-state&theme=dark",
+				routeUrl:
+					"https://id.example/#/callback?access_token=do-not-write-route-token&state=do-not-write-route-state&theme=light",
 			});
 
 			const contents = await readFile(logFile(home), "utf8");
@@ -113,6 +117,10 @@ describe("runtime logger", () => {
 						"https://downloads.example.test/file?X-Amz-Signature=%5BREDACTED%5D&sig=%5BREDACTED%5D&code=%5BREDACTED%5D&state=%5BREDACTED%5D&signal=public",
 					invalidUrl:
 						"https://%5BREDACTED%5D:%5BREDACTED%5D@example.test:bad/path?token=%5BREDACTED%5D",
+					callbackUrl:
+						"https://id.example/callback#access_token=%5BREDACTED%5D&state=%5BREDACTED%5D&theme=dark",
+					routeUrl:
+						"https://id.example/#/callback?access_token=%5BREDACTED%5D&state=%5BREDACTED%5D&theme=light",
 					url: "https://%5BREDACTED%5D:%5BREDACTED%5D@example.test/mcp?api_key=%5BREDACTED%5D&access_key=%5BREDACTED%5D&auth=%5BREDACTED%5D&region=west",
 				},
 				level: "error",

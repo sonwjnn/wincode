@@ -15,7 +15,7 @@ const URL_AUTHORITY_END_PATTERN = /[/?#]/;
 
 type LoggerLevel = "debug" | "error" | "warn";
 
-/** Non-secret JSON metadata; known credential fields and URL query keys are redacted. */
+/** Structured fields with known credential, URL query, and fragment secrets redacted. */
 export type LogFields = Readonly<Record<string, JsonValue>>;
 
 const redactUrlAuthorityCredentials = (value: string): string => {
@@ -43,27 +43,43 @@ const redactUrlAuthorityCredentials = (value: string): string => {
 		: replacement;
 	return `${value.slice(0, authorityStart)}${redactedCredentials}${value.slice(atIndex)}`;
 };
+const redactUrlParameters = (value: string): string => {
+	const parameters = new URLSearchParams(value);
+	let changed = false;
+	for (const [name] of [...parameters]) {
+		if (isSensitiveKey(name)) {
+			parameters.set(name, REDACTED);
+			changed = true;
+		}
+	}
+	return changed ? parameters.toString() : value;
+};
 const redactUrl = (value: string): string => {
-	const queryStart = value.indexOf("?");
-	const fragmentStart = value.indexOf("#");
 	let redacted = value;
+	const queryStart = redacted.indexOf("?");
+	const initialFragmentStart = redacted.indexOf("#");
 	if (
 		queryStart !== -1 &&
-		(fragmentStart === -1 || queryStart < fragmentStart)
+		(initialFragmentStart === -1 || queryStart < initialFragmentStart)
 	) {
-		const queryEnd = fragmentStart === -1 ? value.length : fragmentStart;
-		const parameters = new URLSearchParams(
-			value.slice(queryStart + 1, queryEnd)
-		);
-		let queryChanged = false;
-		for (const [name] of [...parameters]) {
-			if (isSensitiveKey(name)) {
-				parameters.set(name, REDACTED);
-				queryChanged = true;
-			}
+		const queryEnd =
+			initialFragmentStart === -1 ? redacted.length : initialFragmentStart;
+		const query = redacted.slice(queryStart + 1, queryEnd);
+		const sanitizedQuery = redactUrlParameters(query);
+		if (sanitizedQuery !== query) {
+			redacted = `${redacted.slice(0, queryStart + 1)}${sanitizedQuery}${redacted.slice(queryEnd)}`;
 		}
-		if (queryChanged) {
-			redacted = `${value.slice(0, queryStart + 1)}${parameters.toString()}${value.slice(queryEnd)}`;
+	}
+
+	const fragmentStart = redacted.indexOf("#");
+	if (fragmentStart !== -1) {
+		const fragmentQueryStart = redacted.indexOf("?", fragmentStart + 1);
+		const parametersStart =
+			fragmentQueryStart === -1 ? fragmentStart + 1 : fragmentQueryStart + 1;
+		const fragmentParameters = redacted.slice(parametersStart);
+		const sanitizedFragment = redactUrlParameters(fragmentParameters);
+		if (sanitizedFragment !== fragmentParameters) {
+			redacted = `${redacted.slice(0, parametersStart)}${sanitizedFragment}`;
 		}
 	}
 
