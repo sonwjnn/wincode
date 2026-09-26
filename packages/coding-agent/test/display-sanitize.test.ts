@@ -90,6 +90,13 @@ describe("isSensitiveKey", () => {
 		expect(isSensitiveKey("apiKey")).toBe(true);
 		expect(isSensitiveKey("a\nuth")).toBe(true);
 		expect(isSensitiveKey("query")).toBe(false);
+		expect(isSensitiveKey("bearer")).toBe(true);
+		expect(isSensitiveKey("sessionId")).toBe(true);
+		expect(isSensitiveKey("X-Amz-Signature")).toBe(true);
+		expect(isSensitiveKey("code")).toBe(true);
+		expect(isSensitiveKey("state")).toBe(true);
+		expect(isSensitiveKey("signal")).toBe(false);
+		expect(isSensitiveKey("statusCode")).toBe(false);
 	});
 });
 

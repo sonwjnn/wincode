@@ -1,4 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+// biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
+import * as path from "node:path";
+import { logger } from "@wincode/runtime-utils";
+import {
+	createLoggerHome,
+	type LoggerRecord,
+	readLoggerRecords,
+} from "../../runtime-utils/test/logger-home";
 import { runRpc } from "../modules/application/rpc/runner";
 import {
 	MAX_OUTPUT_BYTES,
@@ -6,6 +15,17 @@ import {
 	RpcOutputOverflowError,
 } from "../modules/application/rpc/types";
 import type { SessionCapabilities } from "../modules/sessions/host/session-rpc";
+
+const loggerHome = await createLoggerHome("rpc-logs-");
+const logHome = loggerHome.home;
+afterAll(async () => {
+	await loggerHome.cleanup();
+});
+
+const readRpcLogRecords = async (): Promise<LoggerRecord[]> => {
+	await logger.flush();
+	return readLoggerRecords(logHome);
+};
 
 type FrameWriter = OutputWriter & {
 	readonly frames: string[];
@@ -323,6 +343,12 @@ test("a stdout failure aborts input and returns a fatal status", async () => {
 	inputReleased.resolve();
 
 	expect(await run).toBe(1);
+	const fatalRecord = (await readRpcLogRecords()).find(
+		(record) => record.message === "RPC fatal error"
+	);
+	expect(fatalRecord?.context).toMatchObject({
+		rpcErrorCode: "internal_error",
+	});
 	expect(stderr.frames.join("")).toContain("RPC fatal error: broken pipe");
 	expect(stdoutFrames.map((frame) => JSON.parse(frame))).toEqual([
 		{
@@ -531,7 +557,70 @@ test("ignored aborts finish cleanup at one bounded deadline", async () => {
 
 	expect(exitCode).toBe(130);
 	expect(shutdownCalls).toBe(1);
-	expect(stderr.frames.join("")).toContain(
-		"RPC capability shutdown deadline exceeded."
-	);
+	expect(stderr.frames).toEqual([]);
+	expect(
+		(await readRpcLogRecords()).some(
+			(record) =>
+				record.level === "warn" &&
+				record.message === "RPC shutdown deadline exceeded" &&
+				record.context?.label === "capability"
+		)
+	).toBe(true);
 }, 10_000);
+
+test("records shutdown failures without writing diagnostics to RPC stderr", async () => {
+	const stdout = writer();
+	const stderr = writer();
+	const records = [
+		{
+			id: "initialize-1",
+			jsonrpc: "2.0",
+			method: "initialize",
+			params: {
+				capabilities: {},
+				clientInfo: { name: "test-client" },
+				cwd: process.cwd(),
+				protocolVersion: 1,
+			},
+		},
+		{ id: "shutdown-1", jsonrpc: "2.0", method: "server/shutdown", params: {} },
+	];
+	await runRpc({
+		composeCapabilities: async () => ({
+			capabilities: emptyCapabilities(),
+			shutdown: async () => {
+				throw new Error("shutdown contained sensitive response details");
+			},
+			workspace: process.cwd(),
+			workspaceId: "workspace-test",
+		}),
+		input: records.map((record) =>
+			new TextEncoder().encode(`${JSON.stringify(record)}\n`)
+		),
+		stderr,
+		stdout,
+	});
+
+	expect(stderr.frames).toEqual([]);
+	expect(
+		(await readRpcLogRecords()).some(
+			(record) =>
+				record.level === "error" &&
+				record.message === "RPC shutdown failed" &&
+				record.context?.label === "capability" &&
+				record.context?.errorType === "Error"
+		)
+	).toBe(true);
+	const contents = await readFile(
+		path.join(
+			logHome,
+			".wincode",
+			"logs",
+			`wincode.${new Date().toISOString().slice(0, 10)}.log`
+		),
+		"utf8"
+	);
+	expect(contents).not.toContain(
+		"shutdown contained sensitive response details"
+	);
+});

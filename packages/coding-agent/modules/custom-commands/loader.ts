@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
+import { logger } from "@wincode/runtime-utils";
 import { COMMANDS } from "@/modules/commands/commands";
 import { SKILL_NAMESPACE_PREFIX } from "@/modules/skills";
 import type { ConfigRuntime } from "@/shared/config/config-store";
@@ -24,16 +25,16 @@ export async function loadCustomCommands(
 		}
 		const name = basename(candidate.filePath, ".md");
 		if (BUILTIN_NAMES.has(name.toLowerCase())) {
-			console.warn(
-				`Ignoring custom command "/${name}" in ${candidate.filePath}: ` +
-					"it collides with a built-in command."
+			await logger.warn(
+				"Ignoring custom command because it collides with a built-in command.",
+				{ filePath: candidate.filePath, name }
 			);
 			continue;
 		}
 		if (name.toLowerCase().startsWith(SKILL_NAMESPACE_PREFIX)) {
-			console.warn(
-				`Ignoring custom command "${name}" in ${candidate.filePath}: ` +
-					`"${SKILL_NAMESPACE_PREFIX}" is a reserved namespace.`
+			await logger.warn(
+				"Ignoring custom command because it uses the reserved skill namespace.",
+				{ filePath: candidate.filePath, name }
 			);
 			continue;
 		}

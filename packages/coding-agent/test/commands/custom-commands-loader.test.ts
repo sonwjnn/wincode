@@ -1,22 +1,28 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+// biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
+import * as os from "node:os";
+// biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
+import * as path from "node:path";
 import { discoverCustomCommandCandidates } from "@/modules/custom-commands/discovery";
 import { loadCustomCommands } from "@/modules/custom-commands/loader";
 import type { CustomCommandCandidate } from "@/modules/custom-commands/types";
 import { createConfigStore } from "@/shared/config/config-store";
+import {
+	readLoggerRecords,
+	withLoggerHome,
+} from "../../../runtime-utils/test/logger-home";
 
 const makeCandidates = async (
 	dirs: Array<{ dir: string; files: Record<string, string> }>
 ): Promise<CustomCommandCandidate[]> => {
-	const root = join(tmpdir(), `custom-commands-${crypto.randomUUID()}`);
+	const root = path.join(os.tmpdir(), `custom-commands-${crypto.randomUUID()}`);
 	const candidates: CustomCommandCandidate[] = [];
 	for (const { dir, files } of dirs) {
 		for (const [name, source] of Object.entries(files)) {
-			const directory = join(root, dir);
+			const directory = path.join(root, dir);
 			await mkdir(directory, { recursive: true });
-			const filePath = join(directory, name);
+			const filePath = path.join(directory, name);
 			await writeFile(filePath, source);
 			candidates.push({
 				filePath,
@@ -83,21 +89,25 @@ describe("loadCustomCommands", () => {
 				},
 			},
 		]);
-		const warn = console.warn;
-		const warnings: string[] = [];
-		console.warn = (message?: unknown) => warnings.push(String(message));
-		try {
+		await withLoggerHome(async (home) => {
 			const names = (await loadCustomCommands(candidates)).map(
 				(command) => command.name
 			);
 			expect(names).toEqual(["review"]);
+			const warnings = await readLoggerRecords(home);
 			expect(warnings).toHaveLength(3);
-			expect(warnings[0]).toContain('"/new"');
-			expect(warnings[0]).toContain("collides with a built-in command");
-			expect(warnings[2]).toContain('"/Models"');
-		} finally {
-			console.warn = warn;
-		}
+			expect(warnings.map((warning) => warning.context?.name)).toEqual([
+				"new",
+				"exit",
+				"Models",
+			]);
+			expect(warnings[0]).toMatchObject({
+				context: { filePath: candidates[0]?.filePath, name: "new" },
+				level: "warn",
+				message:
+					"Ignoring custom command because it collides with a built-in command.",
+			});
+		});
 	});
 
 	test("drops custom commands that claim the reserved skill namespace", async () => {
@@ -111,21 +121,24 @@ describe("loadCustomCommands", () => {
 				},
 			},
 		]);
-		const warn = console.warn;
-		const warnings: string[] = [];
-		console.warn = (message?: unknown) => warnings.push(String(message));
-		try {
+		await withLoggerHome(async (home) => {
 			const names = (await loadCustomCommands(candidates)).map(
 				(command) => command.name
 			);
 			expect(names).toEqual(["review"]);
+			const warnings = await readLoggerRecords(home);
 			expect(warnings).toHaveLength(2);
-			expect(warnings[0]).toContain("skill:review");
-			expect(warnings[0]).toContain("reserved namespace");
-			expect(warnings[1]).toContain("SKILL:audit");
-		} finally {
-			console.warn = warn;
-		}
+			expect(warnings.map((warning) => warning.context?.name)).toEqual([
+				"skill:review",
+				"SKILL:audit",
+			]);
+			expect(warnings[0]).toMatchObject({
+				context: { filePath: candidates[0]?.filePath, name: "skill:review" },
+				level: "warn",
+				message:
+					"Ignoring custom command because it uses the reserved skill namespace.",
+			});
+		});
 	});
 
 	test("skips files with invalid frontmatter and non-markdown names", async () => {
@@ -169,11 +182,14 @@ describe("loadCustomCommands", () => {
 
 describe("discoverCustomCommandCandidates", () => {
 	test("scans global and project command folders in precedence order", async () => {
-		const root = join(tmpdir(), `custom-discovery-${crypto.randomUUID()}`);
-		const home = join(root, "home");
-		const repo = join(root, "repo");
-		const cwd = join(repo, "packages", "app");
-		await mkdir(join(repo, ".git"), { recursive: true });
+		const root = path.join(
+			os.tmpdir(),
+			`custom-discovery-${crypto.randomUUID()}`
+		);
+		const home = path.join(root, "home");
+		const repo = path.join(root, "repo");
+		const cwd = path.join(repo, "packages", "app");
+		await mkdir(path.join(repo, ".git"), { recursive: true });
 		const files = {
 			"home/.wincode/commands/test.md": "---\n---\nG",
 			"repo/.wincode/commands/repo.md": "---\n---\nR",
@@ -181,14 +197,14 @@ describe("discoverCustomCommandCandidates", () => {
 			"home/.wincode/commands/nested/skip.md": "---\n---\nS",
 			"repo/packages/app/.wincode/commands/notes.txt": "not a command",
 		};
-		for (const [path, source] of Object.entries(files)) {
-			const filePath = join(root, path);
-			await mkdir(dirname(filePath), { recursive: true });
+		for (const [relativePath, source] of Object.entries(files)) {
+			const filePath = path.join(root, relativePath);
+			await mkdir(path.dirname(filePath), { recursive: true });
 			await writeFile(filePath, source);
 		}
 		const snapshot = await createConfigStore({
 			homeRoot: home,
-			xdgConfigHome: join(root, "xdg"),
+			xdgConfigHome: path.join(root, "xdg"),
 		}).getSnapshot(cwd);
 		const candidates = discoverCustomCommandCandidates({
 			homeRoot: home,
@@ -201,9 +217,9 @@ describe("discoverCustomCommandCandidates", () => {
 			"project",
 		]);
 		expect(candidates.map((candidate) => candidate.filePath)).toEqual([
-			join(home, ".wincode", "commands", "test.md"),
-			join(repo, ".wincode", "commands", "repo.md"),
-			join(cwd, ".wincode", "commands", "local.md"),
+			path.join(home, ".wincode", "commands", "test.md"),
+			path.join(repo, ".wincode", "commands", "repo.md"),
+			path.join(cwd, ".wincode", "commands", "local.md"),
 		]);
 	});
 });

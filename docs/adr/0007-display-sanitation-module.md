@@ -3,23 +3,29 @@
 Secret redaction, ANSI stripping, cell measurement, and preview bounding are
 display concerns that previously lived in four independent copies: the chat
 renderer's unexported helpers, the approval dialog's formatter, the MCP error
-sanitizer, and the MCP status dialog's defense-in-depth scrubber. The secret
-key/value regex family was byte-identical in three of them, yet a fix had to
-land in four places and could only be verified through rendered frames.
+sanitizer, and the MCP status dialog's defense-in-depth scrubber. The free-text
+secret key/value regex family was byte-identical in three of them, yet a fix
+had to land in four places and could only be verified through rendered frames.
 
-One display-sanitize module now owns the shared core — the secret regex
-family, replacement literal, control-character and ANSI stripping, cell
-measurement, wrapping, and preview bounds — behind a public seam. The chat
-renderer, approval panels, and MCP dialogs are thin adapters over it.
+The `display-sanitize` module owns the display-specific shared core — the
+free-text secret regex family, replacement literal, control-character and ANSI
+stripping, cell measurement, wrapping, and preview bounds — behind a public
+seam. The generic sensitive-key predicate lives in `@wincode/runtime-utils`,
+so structured diagnostic fields and display trees share one classifier without
+a dependency from the lower-level runtime package on Coding-Agent. The chat
+renderer, approval panels, and MCP dialogs are thin adapters over
+`display-sanitize`.
 
 Status: accepted
 
 ## Considered Options
 
-- **One module, parameterized site budgets (accepted)** - A single regex
-  family, replacement, and operation order (strip, then redact) live in
-  `packages/coding-agent/shared/display-sanitize`. Contexts that genuinely show
-  different amounts keep their budgets as named options: chat tool arguments
+- **One module, parameterized site budgets (accepted)** - A single free-text
+  display regex family, replacement, and operation order (strip, then redact)
+  live in `packages/coding-agent/shared/display-sanitize`; generic structured
+  key-name matching lives in `@wincode/runtime-utils` for runtime diagnostics
+  and display trees. Contexts that genuinely show different amounts keep their
+  budgets as named options: chat tool arguments
   stay at 512 chars / depth 2 / 12 entries with a `[…]` depth marker, the
   approval dialog keeps 2048 chars / depth 4 / 24 entries with a plain `…`,
   and MCP error messages keep 2048 chars plus exact-config-secret
