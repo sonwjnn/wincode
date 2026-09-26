@@ -66,6 +66,8 @@ describe("runtime logger", () => {
 					"Request failed at https://alice:do-not-write-embedded-password@api.example.test/session?token=do-not-write-embedded-token.",
 				pathDetails:
 					"/rpc error at https://alice:do-not-write-path-password@api.example.test/session?token=do-not-write-path-token",
+				relativeDetails:
+					"Request failed for /v1?access_token=do-not-write-relative-embedded-token.",
 			});
 
 			const contents = await readFile(logFile(home), "utf8");
@@ -113,6 +115,8 @@ describe("runtime logger", () => {
 						"Request failed at https://%5BREDACTED%5D:%5BREDACTED%5D@api.example.test/session?token=%5BREDACTED%5D.",
 					pathDetails:
 						"/rpc error at https://%5BREDACTED%5D:%5BREDACTED%5D@api.example.test/session?token=%5BREDACTED%5D",
+					relativeDetails:
+						"Request failed for /v1?access_token=%5BREDACTED%5D.",
 					url: "https://%5BREDACTED%5D:%5BREDACTED%5D@example.test/mcp?api_key=%5BREDACTED%5D&access_key=%5BREDACTED%5D&auth=%5BREDACTED%5D&passphrase=%5BREDACTED%5D&region=west",
 				},
 				level: "error",

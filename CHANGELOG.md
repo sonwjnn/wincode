@@ -40,9 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `~/.wincode/logs/wincode.YYYY-MM-DD.log`; `WINCODE_DEBUG=1` enables debug
   records, and dated logs rotate with 14-day retention. Credential-bearing
   fields and URL credentials, query parameters, and fragment secrets are
-  redacted, including URLs embedded in diagnostic fields; logging failures are
-  ignored rather than corrupting output or interrupting execution. RPC fatal
-  diagnostics are also sent to stderr; JSON-RPC stdout remains protocol-only.
+  redacted, including absolute and relative URLs embedded in diagnostic fields;
+  logging failures are ignored rather than corrupting output or interrupting
+  execution. RPC fatal diagnostics are also sent to stderr; JSON-RPC stdout
+  remains protocol-only.
 
 - **A correction reaches a running Agent Turn before it ends.** A message sent
   while an Agent Turn runs joins a Steering Lane beside the Submission Queue and

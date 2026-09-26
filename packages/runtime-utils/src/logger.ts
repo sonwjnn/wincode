@@ -14,6 +14,7 @@ const URL_FIELD_PATTERN =
 const LOG_FILE_PATTERN = /^wincode\.(\d{4}-\d{2}-\d{2})\.log$/;
 const URL_AUTHORITY_PREFIX_PATTERN = /^[a-z][a-z\d+.-]*:\/\//i;
 const URL_IN_TEXT_PATTERN = /[a-z][a-z\d+.-]*:\/\/[^\s"'<>`]+/gi;
+const RELATIVE_URL_IN_TEXT_PATTERN = /(?<![\w./:-])(?:\.\.?\/|\/)[^\s"'<>`]+/g;
 const URL_TRAILING_PUNCTUATION_PATTERN = /[.,;!)]*$/;
 const URL_AUTHORITY_END_PATTERN = /[/?#]/;
 
@@ -112,13 +113,16 @@ const redactUrl = (value: string): string => {
 		return redactUrlAuthorityCredentials(redacted);
 	}
 };
+const redactEmbeddedUrl = (matchedUrl: string): string => {
+	const punctuation =
+		URL_TRAILING_PUNCTUATION_PATTERN.exec(matchedUrl)?.[0] ?? "";
+	const url = matchedUrl.slice(0, matchedUrl.length - punctuation.length);
+	return `${redactUrl(url)}${punctuation}`;
+};
 const redactEmbeddedUrls = (value: string): string =>
-	value.replace(URL_IN_TEXT_PATTERN, (matchedUrl) => {
-		const punctuation =
-			URL_TRAILING_PUNCTUATION_PATTERN.exec(matchedUrl)?.[0] ?? "";
-		const url = matchedUrl.slice(0, matchedUrl.length - punctuation.length);
-		return `${redactUrl(url)}${punctuation}`;
-	});
+	value
+		.replace(URL_IN_TEXT_PATTERN, redactEmbeddedUrl)
+		.replace(RELATIVE_URL_IN_TEXT_PATTERN, redactEmbeddedUrl);
 
 const redactValue = (value: JsonValue, fieldName?: string): JsonValue => {
 	if (fieldName !== undefined && isSensitiveKey(fieldName)) {
@@ -135,7 +139,7 @@ const redactValue = (value: JsonValue, fieldName?: string): JsonValue => {
 		) {
 			return redactEmbeddedUrls(redactUrl(value));
 		}
-		if (value.includes("://")) {
+		if (value.includes("/")) {
 			return redactEmbeddedUrls(value);
 		}
 	}
