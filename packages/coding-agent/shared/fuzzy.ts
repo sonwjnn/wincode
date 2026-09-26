@@ -1,3 +1,5 @@
+import { scoreSubsequenceMatch } from "@/shared/utils/string-matching";
+
 /**
  * Fuzzy matching utilities.
  *
@@ -16,12 +18,6 @@ export type FuzzyMatch = {
 export type FuzzyFilterResult<T> = {
 	item: T;
 	score: number;
-};
-
-type CharacterMatch = {
-	matches: boolean;
-	score: number;
-	span: number;
 };
 
 type SearchWord = {
@@ -125,53 +121,6 @@ function buildUncachedSearchIndex(text: string): SearchIndex {
 	};
 }
 
-function scoreCharacters(
-	queryLower: string,
-	textLower: string
-): CharacterMatch {
-	if (queryLower.length === 0) {
-		return { matches: true, score: 0, span: 0 };
-	}
-
-	if (queryLower.length > textLower.length) {
-		return { matches: false, score: 0, span: 0 };
-	}
-
-	let queryIndex = 0;
-	let score = 0;
-	let firstMatchIndex = -1;
-	let lastMatchIndex = -1;
-	let consecutiveMatches = 0;
-
-	for (let i = 0; i < textLower.length && queryIndex < queryLower.length; i++) {
-		if (textLower[i] === queryLower[queryIndex]) {
-			if (firstMatchIndex < 0) {
-				firstMatchIndex = i;
-			}
-
-			if (lastMatchIndex === i - 1) {
-				consecutiveMatches++;
-				score -= consecutiveMatches * 5;
-			} else {
-				consecutiveMatches = 0;
-				if (lastMatchIndex >= 0) {
-					score += (i - lastMatchIndex - 1) * 2;
-				}
-			}
-
-			score += i * 0.1;
-			lastMatchIndex = i;
-			queryIndex++;
-		}
-	}
-
-	if (queryIndex < queryLower.length) {
-		return { matches: false, score: 0, span: 0 };
-	}
-
-	return { matches: true, score, span: lastMatchIndex - firstMatchIndex + 1 };
-}
-
 function buildAlphanumericSwapQueries(queryLower: string): string[] {
 	const variants = new Set<string>();
 	for (let i = 0; i < queryLower.length - 1; i++) {
@@ -213,76 +162,50 @@ function isWordBoundaryPhrase(
 }
 
 /**
- * Offset of the first whole-word occurrence of `phrase` in `normalized`, or -1.
- *
- * A bare `indexOf` reports only the leading occurrence, so a qualifying match is
- * dropped whenever an earlier non-qualifying one shadows it — the whole word
- * "image" in "reimage image provider" loses to the "image" inside "reimage".
- * Occurrences are scanned left to right, so the first qualifying hit is also the
- * best-scoring one: the caller's position tiebreak grows with the offset.
- *
- * Only a hit buried inside a word can shadow. A leading hit that already starts
- * a word is an ordinary prefix match — the query is "image" and the text says
- * "images" — and it is scored exactly as before rather than borrowing a
- * whole-word bonus from some later occurrence; `findCompactWordStart` treats its
- * leading word-start hit the same way. The rescan is additionally limited to
- * {@link MIN_SHADOW_RESCAN_LENGTH} and longer needles.
+ * Find the first whole-phrase or compact word-start occurrence. An embedded
+ * leading hit can shadow a later boundary match, so only that case is rescanned;
+ * short needles stay local to avoid broad, unstable matches.
  */
-function findWordBoundaryPhrase(normalized: string, phrase: string): number {
-	if (phrase.length === 0) {
-		return -1;
-	}
-	const first = normalized.indexOf(phrase);
-	if (first < 0) {
-		return -1;
-	}
-	if (isWordBoundaryPhrase(normalized, first, phrase.length)) {
-		return first;
-	}
-	if (first === 0 || normalized[first - 1] === " ") {
-		return -1;
-	}
-	if (phrase.length < MIN_SHADOW_RESCAN_LENGTH) {
-		return -1;
-	}
-	for (
-		let at = normalized.indexOf(phrase, first + 1);
-		at >= 0;
-		at = normalized.indexOf(phrase, at + 1)
-	) {
-		if (isWordBoundaryPhrase(normalized, at, phrase.length)) {
-			return at;
-		}
-	}
-	return -1;
-}
-
-/**
- * Offset of the first occurrence of `needle` that starts a word in `index.compact`,
- * or -1. Same shadowing hazard, and the same length floor, as
- * {@link findWordBoundaryPhrase}.
- */
-function findCompactWordStart(index: SearchIndex, needle: string): number {
+function findFirstShadowedOccurrence(
+	text: string,
+	needle: string,
+	compactWordStarts?: ReadonlySet<number>
+): number {
 	if (needle.length === 0) {
 		return -1;
 	}
-	const { compact, compactWordStarts } = index;
-	const first = compact.indexOf(needle);
+
+	const first = text.indexOf(needle);
 	if (first < 0) {
 		return -1;
 	}
-	if (compactWordStarts.has(first)) {
+	const firstIsQualified =
+		compactWordStarts === undefined
+			? isWordBoundaryPhrase(text, first, needle.length)
+			: compactWordStarts.has(first);
+	if (firstIsQualified) {
 		return first;
+	}
+	if (
+		compactWordStarts === undefined &&
+		(first === 0 || text[first - 1] === " ")
+	) {
+		return -1;
 	}
 	if (needle.length < MIN_SHADOW_RESCAN_LENGTH) {
 		return -1;
 	}
+
 	for (
-		let at = compact.indexOf(needle, first + 1);
+		let at = text.indexOf(needle, first + 1);
 		at >= 0;
-		at = compact.indexOf(needle, at + 1)
+		at = text.indexOf(needle, at + 1)
 	) {
-		if (compactWordStarts.has(at)) {
+		if (
+			compactWordStarts === undefined
+				? isWordBoundaryPhrase(text, at, needle.length)
+				: compactWordStarts.has(at)
+		) {
 			return at;
 		}
 	}
@@ -322,8 +245,8 @@ function scoreTokenAgainstWord(
 		};
 	}
 
-	const characterMatch = scoreCharacters(token, word.text);
-	if (!characterMatch.matches) {
+	const characterMatch = scoreSubsequenceMatch(word.text, token);
+	if (characterMatch === null) {
 		return null;
 	}
 
@@ -384,7 +307,11 @@ function scoreTokenDirect(token: string, index: SearchIndex): FuzzyMatch {
 	}
 
 	let best: FuzzyMatch | null = null;
-	const compactIndex = findCompactWordStart(index, token);
+	const compactIndex = findFirstShadowedOccurrence(
+		index.compact,
+		token,
+		index.compactWordStarts
+	);
 	if (compactIndex >= 0) {
 		best = { matches: true, score: withPosition(-140, compactIndex) };
 	}
@@ -445,10 +372,10 @@ function prepareQuery(query: string): PreparedQuery | null {
 }
 
 function fuzzyMatchCore(
-	pq: PreparedQuery | null,
+	preparedQuery: PreparedQuery | null,
 	index: SearchIndex
 ): FuzzyMatch {
-	if (pq === null) {
+	if (preparedQuery === null) {
 		return { matches: true, score: 0 };
 	}
 
@@ -457,19 +384,26 @@ function fuzzyMatchCore(
 	}
 
 	let totalScore = 0;
-	const phraseIndex = findWordBoundaryPhrase(index.normalized, pq.normalized);
+	const phraseIndex = findFirstShadowedOccurrence(
+		index.normalized,
+		preparedQuery.normalized
+	);
 	if (phraseIndex >= 0) {
 		totalScore -= PHRASE_BONUS;
 		totalScore += phraseIndex * 0.01;
 	}
 
-	const compactPhraseIndex = findCompactWordStart(index, pq.compact);
+	const compactPhraseIndex = findFirstShadowedOccurrence(
+		index.compact,
+		preparedQuery.compact,
+		index.compactWordStarts
+	);
 	if (compactPhraseIndex >= 0) {
 		totalScore -= COMPACT_PHRASE_BONUS;
 		totalScore += compactPhraseIndex * 0.01;
 	}
 
-	for (const token of pq.tokens) {
+	for (const token of preparedQuery.tokens) {
 		const match = scoreToken(token, index);
 		if (!match.matches) {
 			return { matches: false, score: 0 };
@@ -480,12 +414,20 @@ function fuzzyMatchCore(
 	return { matches: true, score: totalScore };
 }
 
+/**
+ * Empty queries match; non-empty queries that normalize to no tokens do not.
+ */
+
 export function fuzzyMatch(query: string, text: string): FuzzyMatch {
-	const pq = prepareQuery(query);
-	if (pq === null) {
+	if (query.length === 0) {
 		return { matches: true, score: 0 };
 	}
-	return fuzzyMatchCore(pq, buildSearchIndex(text));
+
+	const preparedQuery = prepareQuery(query);
+	if (preparedQuery === null) {
+		return { matches: false, score: 0 };
+	}
+	return fuzzyMatchCore(preparedQuery, buildSearchIndex(text));
 }
 
 /**
@@ -505,9 +447,16 @@ export class FuzzyText {
 		this.#index = buildUncachedSearchIndex(text);
 	}
 
-	/** Match `query` (space-separated tokens; all must match) against the prepared text. */
 	match(query: string): FuzzyMatch {
-		return fuzzyMatchCore(prepareQuery(query), this.#index);
+		if (query.length === 0) {
+			return { matches: true, score: 0 };
+		}
+
+		const preparedQuery = prepareQuery(query);
+		if (preparedQuery === null) {
+			return { matches: false, score: 0 };
+		}
+		return fuzzyMatchCore(preparedQuery, this.#index);
 	}
 }
 
@@ -527,14 +476,14 @@ export function fuzzyRank<T>(
 	// A non-blank query that normalizes to empty (pure punctuation) matches
 	// everything with score 0, but still calls getText per item — consumers rely
 	// on its side effects (see fuzzy-cache.test.ts).
-	const pq = prepareQuery(query);
+	const preparedQuery = prepareQuery(query);
 	const results: FuzzyFilterResult<T>[] = [];
 	for (const item of items) {
 		const text = getText(item);
 		const match =
-			pq === null
+			preparedQuery === null
 				? { matches: true, score: 0 }
-				: fuzzyMatchCore(pq, buildSearchIndex(text));
+				: fuzzyMatchCore(preparedQuery, buildSearchIndex(text));
 		if (match.matches) {
 			results.push({ item, score: match.score });
 		}

@@ -8,7 +8,6 @@ export type SkillCommandSpec = BaseSpec & { kind: "skill" };
 
 export type CommandItem = CommandSpec | CustomCommandSpec | SkillCommandSpec;
 
-const SEARCHABLE_CHARACTER_RE = /[\p{Letter}\p{Mark}\p{Number}]/u;
 const skillLabel = (name: string): string => `${SKILL_NAMESPACE_PREFIX}${name}`;
 
 /**
@@ -52,9 +51,7 @@ const matchesCommandQuery = (item: CommandItem, query: string): boolean => {
 	const skillQuery = normalized.startsWith(SKILL_NAMESPACE_PREFIX)
 		? normalized.slice(SKILL_NAMESPACE_PREFIX.length)
 		: normalized;
-	// fuzzyMatch treats a query that normalizes to empty as a match.
-	const hasSearchableCharacter = SEARCHABLE_CHARACTER_RE.test(skillQuery);
-	return hasSearchableCharacter && fuzzyMatch(skillQuery, item.name).matches;
+	return fuzzyMatch(skillQuery, item.name).matches;
 };
 
 export const filterCommandItems = (

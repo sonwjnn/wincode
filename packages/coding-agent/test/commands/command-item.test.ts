@@ -77,6 +77,12 @@ describe("filterCommandItems", () => {
 		]);
 	});
 
+	test("matches skill names with an ordered subsequence inside a word", () => {
+		expect(labels(filterCommandItems(SKILLS, "riew"))).toEqual([
+			"skill:review",
+		]);
+	});
+
 	test("does not return every skill for punctuation-only queries", () => {
 		expect(labels(filterCommandItems(SKILLS, "!!!"))).toEqual([]);
 	});
