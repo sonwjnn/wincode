@@ -7,14 +7,16 @@ import {
 	rm,
 	writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+// biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
+import * as os from "node:os";
+// biome-ignore lint/performance/noNamespaceImport: Repo policy requires namespace imports for node built-ins.
+import * as path from "node:path";
 import { logger } from "../src/index";
 
 const withLoggerHome = async <T>(
 	run: (home: string) => Promise<T>
 ): Promise<T> => {
-	const home = await mkdtemp(join(tmpdir(), "wincode-logger-"));
+	const home = await mkdtemp(path.join(os.tmpdir(), "wincode-logger-"));
 	const originalHome = process.env.HOME;
 	const originalDebug = process.env.WINCODE_DEBUG;
 	process.env.HOME = home;
@@ -36,9 +38,10 @@ const withLoggerHome = async <T>(
 	}
 };
 
-const logDirectory = (home: string): string => join(home, ".wincode", "logs");
+const logDirectory = (home: string): string =>
+	path.join(home, ".wincode", "logs");
 const logFile = (home: string): string =>
-	join(
+	path.join(
 		logDirectory(home),
 		`wincode.${new Date().toISOString().slice(0, 10)}.log`
 	);
@@ -53,11 +56,15 @@ describe("runtime logger", () => {
 	test("writes structured diagnostics and redacts credential fields and URL query secrets", async () => {
 		await withLoggerHome(async (home) => {
 			logger.error("MCP request failed", {
-				auth: { authorization: "Bearer do-not-write-auth" },
+				alternateUrl: [
+					"https://bob:do-not-write-alternate@backup.test/path?token=do-not-write-alt-token",
+				],
+				auth: "Bearer do-not-write-auth",
+				headers: { authorization: "Bearer do-not-write-header" },
 				accessToken: "do-not-write-token",
 				method: "GET",
 				retryCount: 2,
-				url: "https://alice:do-not-write-password@example.test/mcp?api_key=do-not-write-key&region=west",
+				url: "https://alice:do-not-write-password@example.test/mcp?api_key=do-not-write-key&auth=do-not-write-query-auth&region=west",
 			});
 
 			const contents = await readFile(logFile(home), "utf8");
@@ -71,11 +78,15 @@ describe("runtime logger", () => {
 			};
 			expect(record).toMatchObject({
 				context: {
-					auth: { authorization: "[REDACTED]" },
+					alternateUrl: [
+						"https://%5BREDACTED%5D:%5BREDACTED%5D@backup.test/path?token=%5BREDACTED%5D",
+					],
+					auth: "[REDACTED]",
+					headers: { authorization: "[REDACTED]" },
 					accessToken: "[REDACTED]",
 					method: "GET",
 					retryCount: 2,
-					url: "https://%5BREDACTED%5D:%5BREDACTED%5D@example.test/mcp?api_key=%5BREDACTED%5D&region=west",
+					url: "https://%5BREDACTED%5D:%5BREDACTED%5D@example.test/mcp?api_key=%5BREDACTED%5D&auth=%5BREDACTED%5D&region=west",
 				},
 				level: "error",
 				message: "MCP request failed",
@@ -104,9 +115,9 @@ describe("runtime logger", () => {
 			await mkdir(directory, { recursive: true });
 			const expired = `wincode.${daysAgo(15)}.log`;
 			const retained = `wincode.${daysAgo(13)}.log`;
-			await writeFile(join(directory, expired), "expired");
-			await writeFile(join(directory, retained), "retained");
-			await writeFile(join(directory, "notes.log"), "not a Wincode log");
+			await writeFile(path.join(directory, expired), "expired");
+			await writeFile(path.join(directory, retained), "retained");
+			await writeFile(path.join(directory, "notes.log"), "not a Wincode log");
 
 			logger.warn("retention sweep");
 			const names = await readdir(directory);
@@ -119,7 +130,7 @@ describe("runtime logger", () => {
 		});
 
 		await withLoggerHome(async (home) => {
-			await writeFile(join(home, ".wincode"), "not a directory");
+			await writeFile(path.join(home, ".wincode"), "not a directory");
 			const output: string[] = [];
 			const originalConsole = {
 				error: console.error,

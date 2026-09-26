@@ -10,6 +10,7 @@ const LOG_RETENTION_DAYS = 14;
 const REDACTED = "[REDACTED]";
 const SENSITIVE_FIELD_PATTERN =
 	/(?:password|passwd|secret|credential|authorization|cookie|api[_-]?key|private[_-]?key)/i;
+const AUTH_FIELD_PATTERN = /^auth(?:entication)?(?:[_-]?(?:header|value))?$/i;
 const TOKEN_FIELD_PATTERN = /token$/i;
 const URL_FIELD_PATTERN = /(?:url|uri|endpoint)$/i;
 const LOG_FILE_PATTERN = /^wincode\.(\d{4}-\d{2}-\d{2})\.log$/;
@@ -20,6 +21,7 @@ type LoggerLevel = "debug" | "error" | "warn";
 export type LogFields = Readonly<Record<string, JsonValue>>;
 
 const isSensitiveField = (name: string): boolean =>
+	AUTH_FIELD_PATTERN.test(name) ||
 	SENSITIVE_FIELD_PATTERN.test(name) ||
 	name.toLowerCase() === "key" ||
 	TOKEN_FIELD_PATTERN.test(name);
@@ -60,7 +62,7 @@ const redactValue = (value: JsonValue, fieldName?: string): JsonValue => {
 		return redactUrl(value);
 	}
 	if (Array.isArray(value)) {
-		return value.map((item: JsonValue) => redactValue(item));
+		return value.map((item: JsonValue) => redactValue(item, fieldName));
 	}
 	if (value !== null && typeof value === "object") {
 		const redacted: Record<string, JsonValue> = {};
