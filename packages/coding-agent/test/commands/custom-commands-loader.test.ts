@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { discoverCustomCommandCandidates } from "@/modules/custom-commands/discovery";
@@ -25,6 +25,42 @@ const makeCandidates = async (
 		}
 	}
 	return candidates;
+};
+
+type WarningRecord = Readonly<{
+	context?: Readonly<Record<string, unknown>>;
+	level: string;
+	message: string;
+}>;
+
+const withLoggerHome = async <T>(
+	run: (home: string) => Promise<T>
+): Promise<T> => {
+	const home = await mkdtemp(join(tmpdir(), "custom-command-logs-"));
+	const originalHome = process.env.HOME;
+	process.env.HOME = home;
+	try {
+		return await run(home);
+	} finally {
+		if (originalHome === undefined) {
+			delete process.env.HOME;
+		} else {
+			process.env.HOME = originalHome;
+		}
+		await rm(home, { force: true, recursive: true });
+	}
+};
+
+const readWarningRecords = async (home: string): Promise<WarningRecord[]> => {
+	const date = new Date().toISOString().slice(0, 10);
+	const contents = await readFile(
+		join(home, ".wincode", "logs", `wincode.${date}.log`),
+		"utf8"
+	);
+	return contents
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line) as WarningRecord);
 };
 
 describe("loadCustomCommands", () => {
@@ -83,21 +119,25 @@ describe("loadCustomCommands", () => {
 				},
 			},
 		]);
-		const warn = console.warn;
-		const warnings: string[] = [];
-		console.warn = (message?: unknown) => warnings.push(String(message));
-		try {
+		await withLoggerHome(async (home) => {
 			const names = (await loadCustomCommands(candidates)).map(
 				(command) => command.name
 			);
 			expect(names).toEqual(["review"]);
+			const warnings = await readWarningRecords(home);
 			expect(warnings).toHaveLength(3);
-			expect(warnings[0]).toContain('"/new"');
-			expect(warnings[0]).toContain("collides with a built-in command");
-			expect(warnings[2]).toContain('"/Models"');
-		} finally {
-			console.warn = warn;
-		}
+			expect(warnings.map((warning) => warning.context?.name)).toEqual([
+				"new",
+				"exit",
+				"Models",
+			]);
+			expect(warnings[0]).toMatchObject({
+				context: { filePath: candidates[0]?.filePath, name: "new" },
+				level: "warn",
+				message:
+					"Ignoring custom command because it collides with a built-in command.",
+			});
+		});
 	});
 
 	test("drops custom commands that claim the reserved skill namespace", async () => {
@@ -111,21 +151,24 @@ describe("loadCustomCommands", () => {
 				},
 			},
 		]);
-		const warn = console.warn;
-		const warnings: string[] = [];
-		console.warn = (message?: unknown) => warnings.push(String(message));
-		try {
+		await withLoggerHome(async (home) => {
 			const names = (await loadCustomCommands(candidates)).map(
 				(command) => command.name
 			);
 			expect(names).toEqual(["review"]);
+			const warnings = await readWarningRecords(home);
 			expect(warnings).toHaveLength(2);
-			expect(warnings[0]).toContain("skill:review");
-			expect(warnings[0]).toContain("reserved namespace");
-			expect(warnings[1]).toContain("SKILL:audit");
-		} finally {
-			console.warn = warn;
-		}
+			expect(warnings.map((warning) => warning.context?.name)).toEqual([
+				"skill:review",
+				"SKILL:audit",
+			]);
+			expect(warnings[0]).toMatchObject({
+				context: { filePath: candidates[0]?.filePath, name: "skill:review" },
+				level: "warn",
+				message:
+					"Ignoring custom command because it uses the reserved skill namespace.",
+			});
+		});
 	});
 
 	test("skips files with invalid frontmatter and non-markdown names", async () => {

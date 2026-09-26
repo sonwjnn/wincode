@@ -145,6 +145,9 @@ The resumption of an idle Agent Session without a caller-supplied Submission. It
 
 ## Language
 
+**Diagnostic Log**:
+A persistent, non-user-facing record of Wincode runtime diagnostics. It is distinct from Execution Mode output, CLI Command output, and the JSON Event Stream. _Avoid_: CLI output, protocol event, session transcript
+
 **Wincode CLI**:
 The user-facing command-line entry point for the Coding-Agent Application. A bare invocation selects Interactive Mode; `--mode` or `-m` selects another Execution Mode by its full name, and `--prompt` or `-p` supplies one-shot input. It does not own Agent or Session state. _Avoid_: Wincode TUI, command dispatcher
 

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { logger } from "@wincode/runtime-utils";
 import type {
 	SessionHost,
 	SessionSnapshot,
@@ -124,7 +125,7 @@ export async function runRpc({
 		return runtime;
 	};
 
-	const writeDiagnostic = (message: string): void => {
+	const writeStderrDiagnostic = (message: string): void => {
 		stderr.write(`${message}\n`);
 	};
 	const onAbort = (): void => {
@@ -156,7 +157,7 @@ export async function runRpc({
 				): Promise<void> => {
 					const remaining = Math.max(0, deadline - Date.now());
 					if (remaining === 0) {
-						writeDiagnostic(`RPC ${label} shutdown deadline exceeded.`);
+						logger.warn("RPC shutdown deadline exceeded", { label });
 						return;
 					}
 					const deferred = Promise.withResolvers<boolean>();
@@ -164,14 +165,17 @@ export async function runRpc({
 					void work.then(
 						() => deferred.resolve(true),
 						(error: unknown) => {
-							writeDiagnostic(`RPC ${label} shutdown failed: ${String(error)}`);
+							logger.error("RPC shutdown failed", {
+								errorType: error instanceof Error ? error.name : typeof error,
+								label,
+							});
 							deferred.resolve(true);
 						}
 					);
 					const completed = await deferred.promise;
 					clearTimeout(timer);
 					if (!completed) {
-						writeDiagnostic(`RPC ${label} shutdown deadline exceeded.`);
+						logger.warn("RPC shutdown deadline exceeded", { label });
 					}
 				};
 				const activeHost = state.host;
@@ -200,15 +204,19 @@ export async function runRpc({
 		}
 		fatal = true;
 		inputAbortController.abort();
-		writeDiagnostic(
-			`RPC fatal error: ${error instanceof Error ? error.message : String(error)}`
-		);
 		let code = "internal_error";
 		if (error instanceof RpcOutputOverflowError) {
 			code = "output_overflow";
 		} else if (error instanceof RpcApplicationError) {
 			code = error.code;
 		}
+		logger.error("RPC fatal error", {
+			code,
+			errorType: error instanceof Error ? error.name : typeof error,
+		});
+		writeStderrDiagnostic(
+			`RPC fatal error: ${error instanceof Error ? error.message : String(error)}`
+		);
 		const fatalFrame = {
 			jsonrpc: JSON_RPC_VERSION,
 			method: "server/fatal",

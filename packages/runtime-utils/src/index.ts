@@ -10,6 +10,7 @@ import {
 
 export { getErrorMessage } from "./errors";
 export * from "./guards";
+export * from "./logger";
 export * from "./objects";
 
 export type JsonValueValidationOptions = Readonly<{
