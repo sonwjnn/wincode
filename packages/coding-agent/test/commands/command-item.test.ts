@@ -61,8 +61,24 @@ describe("filterCommandItems", () => {
 		]);
 	});
 
-	test("does not match inside a name or against a description", () => {
-		expect(filterCommandItems(ITEMS, "eview")).toEqual([]);
+	test("fuzzy-matches skill names with or without the namespace", () => {
+		const sdkSkill = createSkillCommandSpecs([
+			{ description: "SDK helpers", name: "ai-sdk" },
+		]);
+
+		for (const query of ["sdk", "skill:sdk"]) {
+			expect(labels(filterCommandItems(sdkSkill, query))).toEqual([
+				"skill:ai-sdk",
+			]);
+		}
+
+		expect(labels(filterCommandItems(sdkSkill, "skill:"))).toEqual([
+			"skill:ai-sdk",
+		]);
+	});
+
+	test("keeps prefix matching for commands and ignores descriptions", () => {
+		expect(filterCommandItems([GIT_COMMIT], "commit")).toEqual([]);
 		expect(filterCommandItems(ITEMS, "conventional")).toEqual([]);
 	});
 });

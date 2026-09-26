@@ -32,10 +32,12 @@ A Custom Command may not claim the namespace: the loader rejects a filename that
 starts with `skill:` the same way it rejects a Built-in Command collision.
 
 One `CommandItem` list merges Built-in Commands, Custom Commands, and Skills
-(sorted Built-in Commands, Custom Commands, Skills). Query matching is a prefix
-match on the row label plus the bare name of a namespaced row, so `rev` surfaces
-`skill:review`. The `/skills` picker and its `kind: "skills"` adapter are
-removed: the command list is the one surface that lists and inserts Skills.
+(sorted Built-in Commands, Custom Commands, Skills). Built-in and Custom
+Commands match by label prefix. Skill rows match by label prefix and fuzzy
+subsequence against the bare Skill name, whether or not the query includes the
+`skill:` namespace. This keeps `/skill:sdk` able to find `skill:ai-sdk`. The
+`/skills` picker and its `kind: "skills"` adapter are removed: the command list
+is the one surface that lists and inserts Skills.
 
 Typed Built-in Commands dispatch through the same command executor the overlay
 uses, ahead of the view's busy guard, so `/models` and `/compact focus` behave

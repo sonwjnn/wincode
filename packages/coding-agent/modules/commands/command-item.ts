@@ -1,5 +1,6 @@
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
 import { SKILL_NAMESPACE_PREFIX, type Skill } from "@/modules/skills";
+import { findSubsequenceMatch } from "@/shared/utils/string-matching";
 import type { BaseSpec, CommandSpec } from "./commands";
 
 /** A discovered Skill offered as a row under the reserved `skill:` namespace. */
@@ -34,16 +35,25 @@ export const createSkillCommandSpecs = (
 		.toSorted((left, right) => left.name.localeCompare(right.name));
 
 /**
- * Prefix match on the row label, plus the bare name for namespaced rows so
- * typing `foo` still surfaces `skill:foo`.
+ * Commands match by label prefix. Skills also match fuzzy subsequences of their
+ * name, with an optional namespace prefix in the query.
  */
 const matchesCommandQuery = (item: CommandItem, query: string): boolean => {
 	const normalized = query.toLowerCase();
 	if (getCommandLabel(item).toLowerCase().startsWith(normalized)) {
 		return true;
 	}
+
+	if (item.kind !== "skill") {
+		return false;
+	}
+
+	const skillQuery = normalized.startsWith(SKILL_NAMESPACE_PREFIX)
+		? normalized.slice(SKILL_NAMESPACE_PREFIX.length)
+		: normalized;
 	return (
-		item.kind === "skill" && item.name.toLowerCase().startsWith(normalized)
+		skillQuery.length > 0 &&
+		findSubsequenceMatch(item.name.toLowerCase(), skillQuery) !== null
 	);
 };
 
