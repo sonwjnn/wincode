@@ -16,6 +16,15 @@
 | `packages/runtime-utils`        | Shared utilities                                                   |
 
 ---
+## GitHub
+
+### Pull requests
+
+When authorized to create or edit a PR, follow the checklist below.
+
+- MUST `.github/pull_request_template.md` first. Preserve the template sections and checklist, including when shortening an existing description.
+- MUST read back the published PR description after creating or editing it. Check only verified checklist items; explain skipped or inapplicable checks in `Testing`.
+---
 
 ## Code Quality
 
@@ -45,6 +54,14 @@
 Tests are contract-first. Every test must defend one externally observable behavior,
 state transition, error mapping, precedence rule, or regression-prone boundary, and
 its name or nearby rationale must state the consumer-visible failure mode. If you cannot name the contract, do not add the test.
+
+---
+## Central Utilities
+
+Before writing a helper, check whether one already exists — `packages/coding-agent/shared/utils/`, `@wincode/runtime-utils`, and the domain modules next to your callsite. This applies to **everything**.
+
+- Search first: `grep` for the operation before implementing it. Two implementations of the same thing is a bug even when both work.
+- Missing capability? Extend the central helper (new option, new sub-function on the namespace) and call it — don't fork its logic locally.
 
 ---
 
