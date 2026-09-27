@@ -174,9 +174,6 @@ export function ChatTextArea({
 			providerId: supportedModel.connectionProviderId,
 		}).length === 0;
 	const textAreaRef = useRef<TextareaRenderable>(null);
-	const insertSkillCommandRef = useRef<(command: string) => void>(
-		() => undefined
-	);
 	const ctrlCRef = useRef<() => boolean>(() => false);
 	const lastRecalledFilesRevisionRef = useRef(0);
 	const lastRecallRevisionRef = useRef(recallRevision);
@@ -209,13 +206,9 @@ export function ChatTextArea({
 		() => discoverSkills(config),
 		[config]
 	);
-	const handleSelectedSkillCommand = useCallback((command: string) => {
-		insertSkillCommandRef.current(command);
-	}, []);
 	const { executeCommand } = useCommandExecutor({
 		onCompact,
 		onOpenSettings,
-		onSelectSkill: handleSelectedSkillCommand,
 	});
 	const mentionSyntaxStyle = useMemo(
 		() =>
@@ -344,27 +337,6 @@ export function ChatTextArea({
 		);
 		syncFileMentionExtmarksRef.current();
 	}, [actions, state.overlay.kind, syncPastedTexts]);
-	insertSkillCommandRef.current = (command) => {
-		const textarea = textAreaRef.current;
-		if (!textarea) {
-			return;
-		}
-		for (const attachment of attachmentsRef.current) {
-			textarea.extmarks.delete(attachment.extmarkId);
-		}
-		for (const pastedText of pastedTextRef.current) {
-			textarea.extmarks.delete(pastedText.extmarkId);
-		}
-		for (const id of fileMentionExtmarkIdsRef.current) {
-			textarea.extmarks.delete(id);
-		}
-		attachmentsRef.current = [];
-		pastedTextRef.current = [];
-		fileMentionExtmarkIdsRef.current = [];
-		textarea.setText(command);
-		textarea.cursorOffset = command.length;
-		handleTextareaContentChange();
-	};
 
 	const syncAttachments = useCallback(() => {
 		const textarea = textAreaRef.current;
@@ -714,8 +686,11 @@ export function ChatTextArea({
 	}, []);
 
 	onSubmitRef.current = async () => {
-		const overlay = state.overlay.kind;
-		if (!isNull(overlay)) {
+		const overlay = state.overlay;
+		if (
+			overlay.kind !== null &&
+			(overlay.kind !== "command" || overlay.items.length > 0)
+		) {
 			actions.onEnter();
 			return;
 		}

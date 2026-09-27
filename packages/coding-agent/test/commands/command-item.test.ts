@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import {
 	type CommandItem,
 	createSkillCommandSpecs,
+	createSkillSearchCommandSpec,
 	filterCommandItems,
+	getCommandInvocation,
 	getCommandLabel,
 } from "@/modules/commands/command-item";
 
@@ -38,6 +40,24 @@ describe("getCommandLabel", () => {
 			"skill:audit",
 			"skill:review",
 		]);
+	});
+});
+
+describe("aggregate Skill suggestion", () => {
+	test("shows a search prefix and the number of available Skills", () => {
+		const oneSkill = createSkillSearchCommandSpec(1);
+		expect({
+			description: oneSkill.description,
+			invocation: getCommandInvocation(oneSkill),
+			label: getCommandLabel(oneSkill),
+		}).toEqual({
+			description: "1 skill",
+			invocation: "/skill:",
+			label: "skill:",
+		});
+
+		const manySkills = createSkillSearchCommandSpec(65);
+		expect(manySkills.description).toBe("65 skills");
 	});
 });
 

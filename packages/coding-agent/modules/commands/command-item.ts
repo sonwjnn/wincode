@@ -7,10 +7,17 @@ import {
 import { fuzzyMatch } from "@/shared/fuzzy";
 import type { BaseSpec, CommandSpec } from "./commands";
 
-/** A discovered Skill offered as a row under the reserved `skill:` namespace. */
+/** A discovered Skill offered under the reserved `skill:` namespace. */
 export type SkillCommandSpec = BaseSpec & { kind: "skill" };
 
-export type CommandItem = CommandSpec | CustomCommandSpec | SkillCommandSpec;
+/** A single slash suggestion that enters the Skill namespace search. */
+export type SkillSearchCommandSpec = BaseSpec & { kind: "skill-search" };
+
+export type CommandItem =
+	| CommandSpec
+	| CustomCommandSpec
+	| SkillCommandSpec
+	| SkillSearchCommandSpec;
 
 const skillLabel = (name: string): string => `${SKILL_NAMESPACE_PREFIX}${name}`;
 
@@ -37,6 +44,15 @@ export const createSkillCommandSpecs = (
 			value: `/${skillLabel(skill.name)}`,
 		}))
 		.toSorted((left, right) => left.name.localeCompare(right.name));
+
+export const createSkillSearchCommandSpec = (
+	skillCount: number
+): SkillSearchCommandSpec => ({
+	description: `${skillCount} ${skillCount === 1 ? "skill" : "skills"}`,
+	kind: "skill-search",
+	name: SKILL_NAMESPACE_PREFIX,
+	value: `/${SKILL_NAMESPACE_PREFIX}`,
+});
 
 /**
  * Commands match by label prefix. Skills fuzzy-match names and descriptions,

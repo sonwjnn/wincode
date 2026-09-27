@@ -109,6 +109,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The catalog covers newer models.** Added `claude-fable-5-1`, `claude-opus-5`,
   `gpt-6-astra`, and `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash`.
 
+- **Skill command suggestions are consolidated.** The root `/` list includes one counted
+  `skill:` aggregate whenever Skills are discoverable; selecting it enters `/skill:` search.
+  Skills fuzzy-match names and descriptions in namespaced and bare slash queries. The separate
+  `/skills` browser and command are removed; unmatched slash text submits as a normal prompt.
+
 ### Changed
 
 - **Model protocol and Agent Runtime ownership moved into Wincode.** `@wincode/ai`

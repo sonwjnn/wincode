@@ -120,7 +120,7 @@ test("Tab opens a Built-in Command that does not accept invocation arguments", a
 	}
 });
 
-test("opens the Skills picker and inserts a namespaced invocation", async () => {
+test("bare slash queries fuzzy-match Skills without the namespace", async () => {
 	let setup: TestRendererSetup | undefined;
 	try {
 		const rendered = await renderSession({
@@ -132,34 +132,63 @@ test("opens the Skills picker and inserts a namespaced invocation", async () => 
 		await rendered.registryReady;
 
 		await act(async () => {
-			await activeSetup.mockInput.typeText("/skills");
+			await activeSetup.mockInput.typeText("/hlpr");
 		});
-		await act(async () => {
-			await activeSetup.waitForFrame(
-				(frame) => frame.includes("Browse and insert available skills"),
-				{ maxPasses: 200 }
-			);
-		});
+		await waitForSessionFrame(
+			activeSetup,
+			(frame) =>
+				frame.includes("skill:model-4o") && frame.includes("Model helper skill")
+		);
 		await act(() => activeSetup.mockInput.pressEnter());
-		await act(async () => {
-			await activeSetup.waitForFrame(
-				(frame) =>
-					frame.includes("Search skills") &&
-					frame.includes("Model helper skill"),
-				{ maxPasses: 200 }
-			);
+		await settleSessionUi(activeSetup);
+		expect(activeSetup.captureCharFrame()).toContain("/skill:model-4o ");
+	} finally {
+		if (setup) {
+			writeE2EFrame(setup);
+			setup.renderer.destroy();
+		}
+		cleanupSessionRender();
+	}
+});
+
+test("the aggregate Skill suggestion enters namespaced search before selection", async () => {
+	let setup: TestRendererSetup | undefined;
+	try {
+		const rendered = await renderSession({
+			pricing: createE2ePricing(20_000),
+			sessionId,
 		});
+		const activeSetup = rendered.setup;
+		setup = activeSetup;
+		await rendered.registryReady;
+
+		await act(async () => {
+			await activeSetup.mockInput.typeText("/skill");
+		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("1 skill")
+		);
+		const aggregateFrame = activeSetup.captureCharFrame();
+		expect(aggregateFrame).toContain("skill:");
+		expect(aggregateFrame).toContain("1 skill");
+		expect(aggregateFrame).not.toContain("skill:model-4o");
+
+		await act(() => activeSetup.mockInput.pressEnter());
+		await waitForSessionFrame(
+			activeSetup,
+			(frame) =>
+				frame.includes("/skill:") &&
+				frame.includes("skill:model-4o") &&
+				frame.includes("Model helper skill")
+		);
 
 		await act(async () => {
 			await activeSetup.mockInput.typeText("hlpr");
 		});
-		await act(async () => {
-			await activeSetup.waitForFrame(
-				(frame) =>
-					frame.includes("hlpr") && frame.includes("Model helper skill"),
-				{ maxPasses: 200 }
-			);
-		});
+		await waitForSessionFrame(
+			activeSetup,
+			(frame) => frame.includes("hlpr") && frame.includes("Model helper skill")
+		);
 
 		await act(() => activeSetup.mockInput.pressEnter());
 		await settleSessionUi(activeSetup);
@@ -233,8 +262,8 @@ test("filters a transposed skill query and keeps folder mentions searchable", as
 				{ maxPasses: 200 }
 			);
 		});
-		// Built-in Commands lead the merged list, so the Skill rows sit past the
-		// eight-row window while the query is empty.
+		// Built-ins precede the aggregate, which is below the visible eight-row
+		// window at the empty query.
 		const emptyQueryFrame = activeSetup.captureCharFrame();
 		expect(emptyQueryFrame).toContain("Start a new session");
 		expect(emptyQueryFrame).not.toContain("skill:model-4o");
@@ -368,6 +397,109 @@ test("filters a transposed skill query and keeps folder mentions searchable", as
 			`@${mentionFixturePath}/utils/empty/`
 		);
 		expect(activeSetup.captureCharFrame()).toContain("No matching files");
+	} finally {
+		if (setup) {
+			writeE2EFrame(setup);
+			setup.renderer.destroy();
+		}
+		cleanupSessionRender();
+	}
+});
+
+test("bare queries still find Skills whose names start with skills", async () => {
+	const skillDirectory = join(
+		testDirectory,
+		".wincode",
+		"skills",
+		"skills-helper"
+	);
+	await mkdir(skillDirectory, { recursive: true });
+	await Bun.write(
+		join(skillDirectory, "SKILL.md"),
+		"---\nname: skills-helper\ndescription: Skills helper\n---\nHelp with Skills."
+	);
+	let setup: TestRendererSetup | undefined;
+	try {
+		const rendered = await renderSession({
+			pricing: createE2ePricing(20_000),
+			sessionId,
+		});
+		const activeSetup = rendered.setup;
+		setup = activeSetup;
+		await rendered.registryReady;
+
+		await act(async () => {
+			await activeSetup.mockInput.typeText("/skills-helper");
+		});
+		await waitForSessionFrame(
+			activeSetup,
+			(frame) =>
+				frame.includes("skill:skills-helper") && frame.includes("Skills helper")
+		);
+		await act(() => activeSetup.mockInput.pressArrow("down"));
+		await act(() => activeSetup.mockInput.pressEnter());
+		await settleSessionUi(activeSetup);
+		expect(activeSetup.captureCharFrame()).toContain("/skill:skills-helper ");
+	} finally {
+		if (setup) {
+			writeE2EFrame(setup);
+			setup.renderer.destroy();
+		}
+		cleanupSessionRender();
+	}
+});
+
+test("hides the aggregate Skill suggestion when no Skills are discovered", async () => {
+	await rm(join(testDirectory, ".wincode", "skills"), {
+		force: true,
+		recursive: true,
+	});
+	let setup: TestRendererSetup | undefined;
+	try {
+		const rendered = await renderSession({
+			pricing: createE2ePricing(20_000),
+			sessionId,
+		});
+		const activeSetup = rendered.setup;
+		setup = activeSetup;
+		await rendered.registryReady;
+
+		await act(async () => {
+			await activeSetup.mockInput.typeText("/skill");
+		});
+		await settleSessionUi(activeSetup);
+		const frame = activeSetup.captureCharFrame();
+		expect(frame).toContain("No matching commands");
+	} finally {
+		if (setup) {
+			writeE2EFrame(setup);
+			setup.renderer.destroy();
+		}
+		cleanupSessionRender();
+	}
+});
+test("an unrecognized slash prompt submits without a Skills command", async () => {
+	let setup: TestRendererSetup | undefined;
+	try {
+		const rendered = await renderSession({
+			pricing: createE2ePricing(20_000),
+			sessionId,
+		});
+		const activeSetup = rendered.setup;
+		setup = activeSetup;
+		await rendered.registryReady;
+
+		await act(async () => {
+			await activeSetup.mockInput.typeText("/skills");
+		});
+		await act(() => activeSetup.mockInput.pressEnter());
+		await waitForSessionFrame(
+			activeSetup,
+			(frame) => frame.includes("Ask anything") && frame.includes("/skills")
+		);
+		const submittedFrame = activeSetup.captureCharFrame();
+		expect(submittedFrame).toContain("/skills");
+		expect(submittedFrame).toContain("Ask anything");
 	} finally {
 		if (setup) {
 			writeE2EFrame(setup);

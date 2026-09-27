@@ -31,18 +31,14 @@ so the report is reachable once the line leaves it (a space or an argument).
 A Custom Command may not claim the namespace: the loader rejects a filename that
 starts with `skill:` the same way it rejects a Built-in Command collision.
 
-One `CommandItem` list merges Built-in Commands, Custom Commands, and Skills
-(sorted Built-in Commands, Custom Commands, Skills). Built-in and Custom
-Commands match by label prefix. Skill rows match by label prefix and fuzzy
-subsequence against the bare Skill name and description, whether or not the
-query includes the `skill:` namespace. This keeps `/skill:sdk` able to find
-`skill:ai-sdk`.
+The root command list always shows Built-in Commands, Custom Commands, and one aggregate
+`skill:` row when Skills are discoverable. The row's count reflects the current chat's catalog;
+selecting it enters `/skill:` search. Skill results fuzzy-match names and descriptions in that
+search and in nonempty bare slash queries. `/skill` shows the namespace chooser rather than
+individual Skills; `/skills` has no command match and submits as ordinary prompt text.
 
-The `/skills` picker is restored as a dedicated browse/search surface. It uses
-fuzzy subsequence matching against both Skill names and descriptions, and
-selection writes a namespaced invocation such as `/skill:review ` into the
-composer. The command list and picker are distinct entry points, but both use
-the same Skill matching context.
+The dedicated `/skills` browser and its Built-in Command were removed. More generally, an open
+command list with no matching row submits the typed line instead of swallowing it.
 
 Typed Built-in Commands dispatch through the same command executor the overlay
 uses, ahead of the view's busy guard, so `/models` and `/compact focus` behave
