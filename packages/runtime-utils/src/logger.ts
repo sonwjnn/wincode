@@ -250,7 +250,11 @@ const writeRecord = (
 	try {
 		const timestamp = new Date();
 		currentDate = dateString(timestamp);
-		directory = path.join(process.env.HOME || os.homedir(), ".wincode", "logs");
+		const logRoot =
+			process.env.WINCODE_DEBUG === "1"
+				? process.cwd()
+				: process.env.HOME || os.homedir();
+		directory = path.join(logRoot, ".wincode", "logs");
 		const record = {
 			timestamp: timestamp.toISOString(),
 			level,

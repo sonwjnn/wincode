@@ -15,6 +15,7 @@ import {
 	isError,
 	isNull,
 	isUndefined,
+	logger,
 	omitUndefined,
 } from "@wincode/runtime-utils";
 import {
@@ -22,6 +23,8 @@ import {
 	type SkillRequestContext,
 } from "@/modules/skills";
 import type { SessionId } from "@/shared/identifiers";
+import { errorLogFields } from "@/shared/utils/error-log-fields";
+import { logSessionPersistenceFailure } from "@/shared/utils/session-persistence-diagnostics";
 import type { CompactSessionResult } from "../compaction/compaction";
 import type { ResolvedCompactionSettings } from "../compaction/config";
 import { SessionCompactionError } from "../compaction/error";
@@ -43,6 +46,7 @@ import {
 	buildAssistantFailureSessionRecord,
 	buildTerminalSessionRecord,
 } from "../turn-records";
+import { getReportableSessionFailureFields } from "./session-error-diagnostics";
 import { projectAgentTurnEvent, projectAgentTurnTerminal } from "./turn";
 import type {
 	AgentSessionPorts,
@@ -221,6 +225,7 @@ export const prepareCompactionBeforeSubmit = async ({
 	runCompaction,
 	settings,
 	settleCompaction,
+	turnId,
 	variant,
 }: {
 	compaction: AgentSessionPorts["compaction"];
@@ -231,6 +236,7 @@ export const prepareCompactionBeforeSubmit = async ({
 	) => Promise<CompactSessionResult>;
 	settings: ResolvedCompactionSettings;
 	settleCompaction: () => Promise<Error | null>;
+	turnId?: AgentTurnId;
 	variant?: ModelVariant;
 }): Promise<SubmitCompactionResult> => {
 	// The threshold this Agent Turn needs has to hold on the Session Context it
@@ -244,7 +250,7 @@ export const prepareCompactionBeforeSubmit = async ({
 			await runCompaction({
 				model,
 				trigger: "threshold",
-				...omitUndefined({ variant }),
+				...omitUndefined({ turnId, variant }),
 			});
 			return { ok: true };
 		} catch (cause) {
@@ -491,7 +497,7 @@ const prepareSessionSubmission = async ({
 			runCompaction: deps.compact,
 			settings,
 			settleCompaction: deps.settleCompaction,
-			...omitUndefined({ variant: input.variant }),
+			...omitUndefined({ turnId: input.turnId, variant: input.variant }),
 		});
 		if (!compactionResult.ok) {
 			return { kind: "rejected", reason: compactionResult.reason };
@@ -531,6 +537,15 @@ const prepareSessionSubmission = async ({
 	} catch (error) {
 		if (signal.aborted) {
 			return { kind: "cancelled" };
+		}
+		const fields = getReportableSessionFailureFields(error);
+		if (fields !== null) {
+			void logger.error("Session submission preparation failed", {
+				...fields,
+				operation: "session.submission",
+				phase: "preparation",
+				...omitUndefined({ turnId: input.turnId }),
+			});
 		}
 		const normalizedError = isError(error)
 			? error
@@ -615,9 +630,11 @@ const commitPromptRecord = async ({
 	sessionVariant,
 	variant,
 	commitRecord,
+	diagnosticTurnId,
 }: {
 	agent: SessionSendInput["agent"];
 	commitRecord: AgentSessionPorts["commitRecord"];
+	diagnosticTurnId?: AgentTurnId;
 	message: SessionMessage;
 	model: ChatModelSelection;
 	sessionId: SessionId;
@@ -625,13 +642,14 @@ const commitPromptRecord = async ({
 	sessionVariant?: ModelVariant;
 	variant?: ModelVariant;
 }): Promise<Error | null> => {
+	const recordTurnId = createAgentTurnId();
 	try {
 		await commitRecord({
 			record: buildUserSessionRecord({
 				agentId: agent,
 				message,
 				model,
-				turnId: createAgentTurnId(),
+				turnId: recordTurnId,
 				variant,
 			}),
 			sessionId,
@@ -640,6 +658,11 @@ const commitPromptRecord = async ({
 		});
 		return null;
 	} catch (error) {
+		logSessionPersistenceFailure("Session prompt persistence failed", error, {
+			operation: "session.prompt",
+			phase: "persistence",
+			turnId: diagnosticTurnId ?? recordTurnId,
+		});
 		return isError(error) ? error : new Error("Could not save the prompt.");
 	}
 };
@@ -656,6 +679,7 @@ const commitPreparedPrompt = async ({
 }): Promise<Error | null> => {
 	assertSendNotCancelled(signal);
 	const promptError = await commitPromptRecord({
+		...omitUndefined({ diagnosticTurnId: input.turnId }),
 		agent: input.agent,
 		commitRecord: deps.ports.commitRecord,
 		message,
@@ -733,6 +757,15 @@ const handleSafeAssistantOutcome = async ({
 		if (deps.isShutDown()) {
 			return { rejected: false };
 		}
+		logSessionPersistenceFailure(
+			"Agent turn outcome persistence failed",
+			commitError,
+			{
+				operation: "session.turn",
+				phase: "terminal-persistence",
+				turnId: execution.turnId,
+			}
+		);
 		const safeError = new Error(
 			"The Agent Turn outcome could not be persisted.",
 			{ cause: commitError }
@@ -934,6 +967,22 @@ const handleTurnFailure = async ({
 	terminalFailure: OperationalFailure | undefined;
 	terminalObserved: boolean;
 }): Promise<SessionSendOutcome> => {
+	const fields = errorLogFields(error);
+	const errorCode = terminalFailure?.code ?? fields.errorCode;
+	if (
+		!signal.aborted &&
+		getReportableSessionFailureFields(error, fields, errorCode) !== null
+	) {
+		void logger.error("Agent turn failed", {
+			...fields,
+			...(terminalFailure === undefined
+				? {}
+				: { errorCode: terminalFailure.code }),
+			operation: "session.turn",
+			phase: executionStarted ? "execution" : "preparation",
+			turnId: execution.turnId,
+		});
+	}
 	if (!executionStarted) {
 		if (signal.aborted) {
 			return handleSafeAssistantOutcome({
@@ -999,6 +1048,22 @@ const handleTurnFailure = async ({
 	});
 };
 
+const logThresholdSettingsFailure = (
+	error: unknown,
+	turnId: AgentTurnId
+): void => {
+	const fields = getReportableSessionFailureFields(error);
+	if (fields === null) {
+		return;
+	}
+	void logger.warn("Automatic compaction threshold check failed", {
+		...fields,
+		operation: "session.compaction",
+		phase: "check",
+		trigger: "threshold",
+		turnId,
+	});
+};
 /**
  * Maintains the session's compaction threshold after a completed turn. A
  * compaction another caller owns is left to that caller: the next submission
@@ -1008,11 +1073,20 @@ const maintainAfterTurn = (
 	deps: SubmissionDeps,
 	messages: readonly SessionMessage[],
 	selection: ChatModelSelection,
+	turnId: AgentTurnId,
 	variant?: ModelVariant
 ): void => {
 	const compactIfNeeded = async (): Promise<void> => {
-		const settings = await deps.ports.resolveCompactionSettings(selection);
-		if (!needsThresholdCompaction(deps.ports.compaction, messages, settings)) {
+		let settings: ResolvedCompactionSettings;
+		try {
+			settings = await deps.ports.resolveCompactionSettings(selection);
+			if (
+				!needsThresholdCompaction(deps.ports.compaction, messages, settings)
+			) {
+				return;
+			}
+		} catch (error) {
+			logThresholdSettingsFailure(error, turnId);
 			return;
 		}
 		try {
@@ -1020,14 +1094,16 @@ const maintainAfterTurn = (
 				model: selection,
 				nextMessages: messages,
 				trigger: "threshold",
+				turnId,
 				...omitUndefined({ variant }),
 			});
 		} catch (error) {
-			if (!(isBenignCompactionError(error) || isInFlightCompaction(error))) {
-				deps.setCompactionError(
-					isError(error) ? error : new Error("Automatic compaction failed.")
-				);
+			if (isBenignCompactionError(error) || isInFlightCompaction(error)) {
+				return;
 			}
+			deps.setCompactionError(
+				isError(error) ? error : new Error("Automatic compaction failed.")
+			);
 		}
 	};
 	deps.trackBackgroundTask(compactIfNeeded());
@@ -1110,6 +1186,11 @@ const runTurn = async ({
 		},
 	};
 	try {
+		void logger.debug("Agent turn started", {
+			operation: "session.turn",
+			phase: "started",
+			turnId: execution.turnId,
+		});
 		assertSessionOpen(deps);
 		deps.setError(null);
 		const hydrated = await deps.ports.attachments.hydrate({
@@ -1138,10 +1219,16 @@ const runTurn = async ({
 			return { rejected: false };
 		}
 		if (isUndefined(outcome.error)) {
+			void logger.debug("Agent turn completed", {
+				operation: "session.turn",
+				phase: "completed",
+				turnId: execution.turnId,
+			});
 			maintainAfterTurn(
 				deps,
 				deps.getTranscript(),
 				execution.model,
+				execution.turnId,
 				execution.variant
 			);
 			return { rejected: false };

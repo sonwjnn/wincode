@@ -18,6 +18,7 @@ import {
 	type SessionRecord,
 } from "@wincode/agent-core";
 import type { ChatModelSelection } from "@wincode/ai/models";
+import { logger } from "@wincode/runtime-utils";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import { buildAgentRegistry } from "@/modules/agents/registry";
 import { createSessionCompaction } from "@/modules/sessions/compaction/compaction";
@@ -32,12 +33,18 @@ import type {
 	SessionHostFailure,
 } from "@/modules/sessions/host/types";
 import type { SessionMessage } from "@/modules/sessions/message";
+import type { SessionLease } from "@/modules/sessions/storage/session-lease";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { CompactionId, SessionId } from "@/shared/identifiers";
 import { toMcpSnapshotId } from "@/shared/identifiers";
+import {
+	readLoggerRecords,
+	withDebugProject,
+	withLoggerHome,
+} from "../../../runtime-utils/test/logger-home";
 import {
 	createFakeModelClientModule,
 	createFakeModelClientRecorder,
@@ -501,6 +508,51 @@ describe("Session Host lifetime", () => {
 		expect(snapshotChanges).toBe(changesAtShutdown);
 		expect(events).toHaveLength(eventsAtShutdown);
 	});
+	test("debug diagnostics mark host and turn lifecycle without session content", async () => {
+		const seeded = await seedSession("debug-lifecycle");
+		const capabilities = createCapabilities();
+		await withLoggerHome(async () => {
+			await withDebugProject(testDirectory, async () => {
+				const host = await createSessionHost({
+					capabilities,
+					sessionId: seeded.sessionId,
+				});
+				try {
+					expect(await host.agentSession.send(sendInput(capabilities))).toEqual(
+						{ rejected: false }
+					);
+				} finally {
+					await host.shutdown();
+				}
+
+				await logger.flush();
+				const records = await readLoggerRecords(testDirectory);
+				const debugRecords = records.filter(({ level }) => level === "debug");
+				for (const phase of ["opened", "shutdown", "shutdown-completed"]) {
+					expect(debugRecords).toContainEqual(
+						expect.objectContaining({
+							context: expect.objectContaining({
+								operation: "session-host",
+								phase,
+							}),
+						})
+					);
+				}
+				for (const phase of ["started", "completed"]) {
+					expect(debugRecords).toContainEqual(
+						expect.objectContaining({
+							context: expect.objectContaining({
+								operation: "session.turn",
+								phase,
+								turnId: expect.any(String),
+							}),
+						})
+					);
+				}
+				expect(JSON.stringify(debugRecords)).not.toContain("third request");
+			});
+		});
+	});
 
 	test("fences durable commits after the Session Lease is lost", async () => {
 		const seeded = await seedSession("lease-write-fence");
@@ -632,64 +684,308 @@ describe("Session Host lifetime", () => {
 	});
 
 	test("reports lease loss and closes the Host without releasing a takeover", async () => {
-		const seeded = await seedSession("lease-loss");
-		const takeoverDatabase = createDatabase(join(testDirectory, "sessions.db"));
-		const takeoverStore = createDrizzleSessionStore(takeoverDatabase.db, {
-			attachmentRoot: join(testDirectory, "takeover-attachments"),
-			snapshotRoot: join(testDirectory, "takeover-snapshots"),
-			workspaceRoot: process.cwd(),
-		});
-		const now = { value: SESSION_LEASE_START_TIME_MS };
-		const ticks = new Set<() => void>();
-		const capabilities = createCapabilities();
-		const host = await createSessionHost({
-			capabilities,
-			lease: {
-				now: () => now.value,
-				schedule: (callback) => {
-					ticks.add(callback);
-					return () => ticks.delete(callback);
-				},
-			},
-			sessionId: seeded.sessionId,
-		});
-		const failures: SessionHostFailure[] = [];
-		let sendDuringFailure: Promise<unknown> | null = null;
-		host.onFatal((next) => {
-			failures.push(next);
-			sendDuringFailure = host.agentSession.send(sendInput(capabilities));
-		});
-		let takeover:
-			| Awaited<ReturnType<SessionStore["acquireSessionLease"]>>
-			| undefined;
-
-		try {
-			now.value = SESSION_LEASE_EXPIRED_TIME_MS;
-			takeover = await takeoverStore.acquireSessionLease(seeded.sessionId, {
-				now: () => now.value,
+		await withLoggerHome(async (home) => {
+			const seeded = await seedSession("lease-loss");
+			const takeoverDatabase = createDatabase(
+				join(testDirectory, "sessions.db")
+			);
+			const takeoverStore = createDrizzleSessionStore(takeoverDatabase.db, {
+				attachmentRoot: join(testDirectory, "takeover-attachments"),
+				snapshotRoot: join(testDirectory, "takeover-snapshots"),
+				workspaceRoot: process.cwd(),
 			});
-			for (const tick of ticks) {
-				tick();
-			}
-
-			expect(failures).toEqual([{ code: "session_lease_lost" }]);
-			if (sendDuringFailure === null) {
-				throw new Error(
-					"Lease-loss observer did not receive a command result."
-				);
-			}
-			expect(await sendDuringFailure).toMatchObject({
-				rejected: true,
-			});
-			await expect(
-				takeoverStore.acquireSessionLease(seeded.sessionId, {
+			const now = { value: SESSION_LEASE_START_TIME_MS };
+			const ticks = new Set<() => void>();
+			const capabilities = createCapabilities();
+			const host = await createSessionHost({
+				capabilities,
+				lease: {
 					now: () => now.value,
-				})
-			).rejects.toMatchObject({ code: "session_in_use" });
-		} finally {
-			takeover?.release();
+					schedule: (callback) => {
+						ticks.add(callback);
+						return () => ticks.delete(callback);
+					},
+				},
+				sessionId: seeded.sessionId,
+			});
+			const failures: SessionHostFailure[] = [];
+			let sendDuringFailure: Promise<unknown> | null = null;
+			host.onFatal((next) => {
+				failures.push(next);
+				sendDuringFailure = host.agentSession.send(sendInput(capabilities));
+			});
+			let takeover: SessionLease | undefined;
+
+			try {
+				now.value = SESSION_LEASE_EXPIRED_TIME_MS;
+				takeover = await takeoverStore.acquireSessionLease(seeded.sessionId, {
+					now: () => now.value,
+				});
+				for (const tick of ticks) {
+					tick();
+				}
+
+				expect(failures).toEqual([{ code: "session_lease_lost" }]);
+				if (sendDuringFailure === null) {
+					throw new Error(
+						"Lease-loss observer did not receive a command result."
+					);
+				}
+				expect(await sendDuringFailure).toMatchObject({
+					rejected: true,
+				});
+				await expect(
+					takeoverStore.acquireSessionLease(seeded.sessionId, {
+						now: () => now.value,
+					})
+				).rejects.toMatchObject({ code: "session_in_use" });
+			} finally {
+				takeover?.release();
+				await host.shutdown();
+				takeoverDatabase.sqlite.close();
+			}
+
+			await logger.flush();
+			const records = await readLoggerRecords(home);
+			const leaseLossRecords = records.filter(
+				({ message }) => message === "Session Host lost its lease"
+			);
+			expect(leaseLossRecords).toHaveLength(1);
+			expect(leaseLossRecords[0]).toMatchObject({
+				context: {
+					errorCode: "session_lease_lost",
+					errorType: "SessionLeaseLostError",
+					operation: "session-host.lease",
+					phase: "lost",
+				},
+				level: "error",
+			});
+			expect(JSON.stringify(leaseLossRecords[0])).not.toContain(
+				seeded.sessionId
+			);
+		});
+	});
+
+	test("reports lease-loss cleanup failure once and settles shared shutdown", async () => {
+		await withLoggerHome(async (home) => {
+			const seeded = await seedSession("lease-loss-cleanup");
+			const ticks = new Set<() => void>();
+			let releaseCount = 0;
+			const leaseFailureStore: SessionStore = {
+				...store,
+				acquireSessionLease: async () => ({
+					release: () => {
+						releaseCount += 1;
+						throw Object.assign(new Error("private lease cleanup detail"), {
+							code: "EIO",
+						});
+					},
+					renew: () => false,
+				}),
+			};
+			const capabilities = createCapabilities(leaseFailureStore);
+			const host = await createSessionHost({
+				capabilities,
+				lease: {
+					schedule: (callback) => {
+						ticks.add(callback);
+						return () => ticks.delete(callback);
+					},
+				},
+				sessionId: seeded.sessionId,
+			});
+
+			try {
+				for (const tick of [...ticks]) {
+					tick();
+				}
+				await expect(host.shutdown()).resolves.toBeUndefined();
+				await logger.flush();
+
+				const cleanupRecords = (await readLoggerRecords(home)).filter(
+					({ message }) =>
+						message === "Session Host cleanup after lease loss failed"
+				);
+				expect(cleanupRecords).toHaveLength(1);
+				expect(cleanupRecords[0]).toMatchObject({
+					context: {
+						errorCode: "EIO",
+						errorType: "Error",
+						operation: "session-host.shutdown",
+						phase: "lease-loss",
+					},
+					level: "warn",
+				});
+				expect(JSON.stringify(cleanupRecords[0])).not.toContain(
+					"private lease cleanup detail"
+				);
+				expect(releaseCount).toBe(1);
+			} finally {
+				await host.shutdown();
+			}
+		});
+	});
+	test("logs prompt persistence failures without prompt or exception content", async () => {
+		await withLoggerHome(async (home) => {
+			const seeded = await seedSession("prompt-persistence");
+			const turnId = agentTurnId("prompt-persistence-turn");
+			const failureMessage = "private database detail";
+			const failingStore: SessionStore = {
+				...store,
+				commitSessionRecord: async () => {
+					throw Object.assign(new Error(failureMessage), { code: "EIO" });
+				},
+			};
+			const capabilities = createCapabilities(failingStore);
+			const host = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+
+			try {
+				expect(
+					await host.agentSession.send({ ...sendInput(capabilities), turnId })
+				).toMatchObject({ rejected: true });
+			} finally {
+				await host.shutdown();
+			}
+
+			await logger.flush();
+			const records = await readLoggerRecords(home);
+			const persistenceRecords = records.filter(
+				({ message }) => message === "Session prompt persistence failed"
+			);
+			expect(persistenceRecords).toHaveLength(1);
+			expect(persistenceRecords[0]).toMatchObject({
+				context: {
+					errorCode: "EIO",
+					errorType: "Error",
+					operation: "session.prompt",
+					phase: "persistence",
+					turnId,
+				},
+				level: "error",
+			});
+			expect(JSON.stringify(persistenceRecords[0])).not.toContain(
+				failureMessage
+			);
+			expect(JSON.stringify(persistenceRecords[0])).not.toContain(
+				"third request"
+			);
+			expect(JSON.stringify(persistenceRecords[0])).not.toContain(
+				seeded.sessionId
+			);
+		});
+	});
+	test("records background compaction failures without failing the completed turn", async () => {
+		const seeded = await seedSession("background-compaction");
+		const modelRequestsBeforeTurn = recorder.requests.length;
+		const summaryStarted = Promise.withResolvers<void>();
+		const allowSummaryFailure = Promise.withResolvers<void>();
+		const compactionFailureObserved = Promise.withResolvers<void>();
+		const capabilities: SessionCapabilities = {
+			...createCapabilities(),
+			getCompactionModule: () =>
+				compactionModule(async () => {
+					summaryStarted.resolve();
+					await allowSummaryFailure.promise;
+					throw Object.assign(new Error("private summary detail"), {
+						code: "SUMMARY_FAILED",
+					});
+				}),
+			getCompactionSettings: async () =>
+				fromPartial<ResolvedCompactionSettings>({
+					autoAvailable: recorder.requests.length > modelRequestsBeforeTurn,
+					enabled: true,
+					thresholdTokens: 1,
+				}),
+		};
+		await withLoggerHome(async (home) => {
+			const host = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+			const unsubscribe = host.subscribe(() => {
+				if (host.getSnapshot().compactionError !== null) {
+					compactionFailureObserved.resolve();
+				}
+			});
+			try {
+				expect(await host.agentSession.send(sendInput(capabilities))).toEqual({
+					rejected: false,
+				});
+				await summaryStarted.promise;
+				allowSummaryFailure.resolve();
+				await compactionFailureObserved.promise;
+			} finally {
+				allowSummaryFailure.resolve();
+				unsubscribe();
+				await host.shutdown();
+			}
+
+			await logger.flush();
+			const records = await readLoggerRecords(home);
+			const compactionRecords = records.filter(
+				({ context }) =>
+					context?.operation === "session.compaction" &&
+					context?.trigger === "threshold"
+			);
+			expect(compactionRecords).toHaveLength(1);
+			expect(compactionRecords[0]).toMatchObject({
+				context: {
+					errorCode: "summary-failed",
+					errorType: "SessionCompactionError",
+					phase: "failed",
+					trigger: "threshold",
+					turnId: expect.any(String),
+				},
+				level: "warn",
+			});
+			expect(JSON.stringify(compactionRecords[0])).not.toContain(
+				"private summary detail"
+			);
+			expect(JSON.stringify(compactionRecords[0])).not.toContain(
+				"third request"
+			);
+		});
+	});
+	test("does not warn for shutdown-cancelled background compaction", async () => {
+		const seeded = await seedSession("cancelled-background-compaction");
+		const modelRequestsBeforeTurn = recorder.requests.length;
+		const capabilities: SessionCapabilities = {
+			...createCapabilities(),
+			getCompactionModule: () =>
+				compactionModule(async () => {
+					throw Object.assign(new Error("private summary detail"), {
+						code: "SUMMARY_FAILED",
+					});
+				}),
+			getCompactionSettings: async () =>
+				fromPartial<ResolvedCompactionSettings>({
+					autoAvailable: recorder.requests.length > modelRequestsBeforeTurn,
+					enabled: true,
+					thresholdTokens: 1,
+				}),
+		};
+		await withLoggerHome(async (home) => {
+			const host = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+			expect(await host.agentSession.send(sendInput(capabilities))).toEqual({
+				rejected: false,
+			});
 			await host.shutdown();
-			takeoverDatabase.sqlite.close();
-		}
+
+			await logger.flush();
+			const records = await readLoggerRecords(home).catch(() => []);
+			expect(
+				records.filter(
+					({ context }) =>
+						context?.operation === "session.compaction" &&
+						context?.trigger === "threshold"
+				)
+			).toEqual([]);
+		});
 	});
 });

@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import type { AgentRuntime } from "@wincode/agent-core";
 import { type Connections, createConnections } from "@wincode/ai/connections";
+import { logger } from "@wincode/runtime-utils";
 import { DEFAULT_AGENT_ID } from "@/modules/agents/built-ins";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import { resolveAgentRegistry } from "@/modules/agents/registry";
@@ -19,6 +20,7 @@ import {
 import type { ConfigRuntime, ConfigStore } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import { toWorkspaceId, type WorkspaceId } from "@/shared/identifiers";
+import { errorLogFields } from "@/shared/utils/error-log-fields";
 import {
 	createSessionCompaction,
 	type SessionCompactionModule,
@@ -108,6 +110,20 @@ export const createSessionCapabilities = async ({
 			? createDatabase(databasePath)
 			: undefined;
 	let ownedMcp: McpRegistry | undefined;
+	const closeOwnedMcp = async (
+		mcp: McpRegistry,
+		phase: "shutdown" | "initialization-failure"
+	): Promise<void> => {
+		try {
+			await mcp.close();
+		} catch (error) {
+			void logger.warn("MCP cleanup failed", {
+				...errorLogFields(error),
+				operation: "session-capabilities.mcp",
+				phase,
+			});
+		}
+	};
 	try {
 		const connections = providedConnections ?? createConnections();
 		const mcp = providedMcp ?? createMcpRegistry({ configStore, workspace });
@@ -162,7 +178,7 @@ export const createSessionCapabilities = async ({
 			}
 			isShutdown = true;
 			if (ownsMcp) {
-				await mcp.close().catch(() => undefined);
+				await closeOwnedMcp(mcp, "shutdown");
 			}
 			ownedDatabase?.sqlite.close();
 		};
@@ -187,7 +203,7 @@ export const createSessionCapabilities = async ({
 		};
 	} catch (error) {
 		if (ownedMcp !== undefined) {
-			await ownedMcp.close().catch(() => undefined);
+			await closeOwnedMcp(ownedMcp, "initialization-failure");
 		}
 		ownedDatabase?.sqlite.close();
 		throw error;

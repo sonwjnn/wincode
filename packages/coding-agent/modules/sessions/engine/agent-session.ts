@@ -6,6 +6,7 @@ import {
 	toSessionMessageId,
 } from "@wincode/agent-core";
 import { isError, isUndefined, omitUndefined } from "@wincode/runtime-utils";
+import { logSessionPersistenceFailure } from "@/shared/utils/session-persistence-diagnostics";
 import type { CompactSessionResult } from "../compaction/compaction";
 import { isCompactionSummaryMessage } from "../compaction/summary-message";
 import type { SessionCompaction } from "../compaction/types";
@@ -599,6 +600,15 @@ export class AgentSessionImpl implements AgentSession {
 					...omitUndefined({ sessionVariant: execution.sessionVariant }),
 				})
 				.catch((error: unknown) => {
+					logSessionPersistenceFailure(
+						"Steering message persistence failed",
+						error,
+						{
+							operation: "session.steering",
+							phase: "persistence",
+							turnId: execution.turnId,
+						}
+					);
 					publish({
 						error: isError(error)
 							? error

@@ -506,6 +506,8 @@ export type SessionCompactionCommand = ReadonlyDeep<{
 	/** Compacted in place of the Session Transcript, when supplied. */
 	sourceMessages?: readonly SessionMessage[];
 	trigger: CompactionTriggerReason;
+	/** The Agent Turn that initiated this compaction, for diagnostics. */
+	turnId?: AgentTurnId;
 	variant?: ModelVariant;
 }>;
 

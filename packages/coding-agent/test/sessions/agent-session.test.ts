@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
 import type { SessionMessageId, SessionRecord } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import { logger } from "@wincode/runtime-utils";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import { createSessionCompaction } from "@/modules/sessions/compaction/compaction";
 import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
@@ -26,9 +27,15 @@ import type {
 	SessionSubmissionComposition,
 } from "@/modules/sessions/submission-types";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
+import {
+	readLoggerRecords,
+	withDebugProject,
+	withLoggerHome,
+} from "../../../runtime-utils/test/logger-home";
 import { createHangingSummary } from "../support/hanging-summary";
 import {
 	agentId,
+	agentTurnId,
 	attachmentId,
 	compactionId,
 	modelId,
@@ -126,6 +133,109 @@ const createTestAgentSession = (
 		ports: createPorts({ compaction: compactionModule, ...overrides }),
 		sessionId: sessionId("agent-session-test"),
 	});
+
+test("logs unexpected submission preparation failures without user content", async () => {
+	await withLoggerHome(async (home) => {
+		const turnId = agentTurnId("preparation-turn");
+		const engine = createTestAgentSession([], undefined, {
+			resolveCompactionSettings: async () => {
+				throw Object.assign(new Error("private preparation detail"), {
+					code: "SETTINGS_FAILED",
+				});
+			},
+		});
+		try {
+			expect(
+				await engine.send(
+					sendInput({ turnId, userText: "private prompt text" })
+				)
+			).toMatchObject({ rejected: true });
+			await logger.flush();
+			const records = await readLoggerRecords(home).catch(() => []);
+			const preparationRecords = records.filter(
+				({ message }) => message === "Session submission preparation failed"
+			);
+			expect(preparationRecords).toHaveLength(1);
+			expect(preparationRecords[0]).toMatchObject({
+				context: {
+					errorCode: "SETTINGS_FAILED",
+					errorType: "Error",
+					operation: "session.submission",
+					phase: "preparation",
+					turnId,
+				},
+				level: "error",
+			});
+			expect(JSON.stringify(preparationRecords[0])).not.toContain(
+				"private preparation detail"
+			);
+			expect(JSON.stringify(preparationRecords[0])).not.toContain(
+				"private prompt text"
+			);
+		} finally {
+			await engine.internalPort.shutdown();
+		}
+	});
+});
+
+test("keeps the admission turn ID on preparation-triggered threshold diagnostics", async () => {
+	await withLoggerHome(async (home) => {
+		const turnId = agentTurnId("threshold-preparation-turn");
+		const engine = createTestAgentSession(
+			compactionHistory(),
+			createCompactionModule(async () => {
+				throw new Error("private summary failure");
+			}),
+			{
+				resolveCompactionSettings: async () =>
+					fromPartial<ResolvedCompactionSettings>({
+						autoAvailable: true,
+						enabled: true,
+						keepRecentTokens: 1,
+						maxMediaAttachments: 4,
+						maxMediaBytes: 1024,
+						maxMediaTokens: 128,
+						modelContextLimit: 10_000,
+						overflowRecoveryAvailable: false,
+						reserveTokens: 1000,
+						thresholdTokens: 1,
+					}),
+			}
+		);
+		try {
+			expect(
+				await engine.send(
+					sendInput({ turnId, userText: "private preparation prompt" })
+				)
+			).toMatchObject({ rejected: true });
+			await logger.flush();
+
+			const failureRecords = await readLoggerRecords(home);
+			const compactionFailure = failureRecords.find(
+				({ message }) => message === "Session compaction failed"
+			);
+			expect(compactionFailure).toMatchObject({
+				context: {
+					errorCode: "summary-failed",
+					errorType: "SessionCompactionError",
+					operation: "session.compaction",
+					phase: "failed",
+					trigger: "threshold",
+					turnId,
+				},
+				level: "warn",
+			});
+			expect(JSON.stringify(compactionFailure)).not.toContain(
+				"private summary failure"
+			);
+			expect(JSON.stringify(compactionFailure)).not.toContain(
+				"private preparation prompt"
+			);
+		} finally {
+			await engine.internalPort.shutdown();
+		}
+	});
+});
 
 test("publishes snapshots only when public commands change session facts", async () => {
 	const engine = createTestAgentSession([]);
@@ -397,6 +507,36 @@ test("compacts a command's own source without touching the Transcript", async ()
 		compactionSummaryMessageId(compactionId("entry-compacted")),
 		sessionMessageId("a2"),
 	]);
+});
+test("debug compaction records manual lifecycle transitions", async () => {
+	await withLoggerHome(async (home) => {
+		await withDebugProject(home, async () => {
+			const engine = createTestAgentSession(compactionHistory());
+			try {
+				const result = await engine.compact({ model, trigger: "manual" });
+				expect(result.entry.trigger).toBe("manual");
+			} finally {
+				await engine.internalPort.shutdown();
+			}
+
+			await logger.flush();
+			const records = await readLoggerRecords(home);
+			const compactionRecords = records.filter(
+				({ context }) => context?.operation === "session.compaction"
+			);
+			for (const phase of ["started", "completed"]) {
+				expect(compactionRecords).toContainEqual(
+					expect.objectContaining({
+						context: expect.objectContaining({
+							phase,
+							trigger: "manual",
+						}),
+						level: "debug",
+					})
+				);
+			}
+		});
+	});
 });
 
 const approvalRequest = (callId?: string): ToolApprovalRequest => ({
@@ -1506,6 +1646,72 @@ test("keeps draining the Submission Queue after a turn fails", async () => {
 	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
 });
 
+test("does not log operational cancellations as unexpected turn failures", async () => {
+	await withLoggerHome(async (home) => {
+		const engine = createTestAgentSession([], undefined, {
+			turnRunner: {
+				requestOverheadTokens: () => 0,
+				run: async () => ({
+					error: Object.assign(new Error("provider request cancelled"), {
+						code: "cancelled",
+					}),
+				}),
+			},
+		});
+		try {
+			await engine.send(sendInput());
+			await logger.flush();
+
+			const failureRecords = (
+				await readLoggerRecords(home).catch(() => [])
+			).filter(
+				({ message: recordMessage }) => recordMessage === "Agent turn failed"
+			);
+			expect(failureRecords).toEqual([]);
+		} finally {
+			await engine.internalPort.shutdown();
+		}
+	});
+});
+
+test("logs failed manual compactions at error severity without summary content", async () => {
+	await withLoggerHome(async (home) => {
+		const engine = createTestAgentSession(
+			compactionHistory(),
+			createCompactionModule(async () => {
+				throw new Error("private summary failure");
+			})
+		);
+		try {
+			await expect(
+				engine.compact({ model, trigger: "manual" })
+			).rejects.toBeInstanceOf(Error);
+			await logger.flush();
+
+			const failureRecords = (await readLoggerRecords(home)).filter(
+				({ message: recordMessage }) =>
+					recordMessage === "Session compaction failed"
+			);
+			expect(failureRecords).toHaveLength(1);
+			expect(failureRecords[0]).toMatchObject({
+				context: {
+					errorCode: "summary-failed",
+					errorType: "SessionCompactionError",
+					operation: "session.compaction",
+					phase: "failed",
+					trigger: "manual",
+				},
+				level: "error",
+			});
+			expect(JSON.stringify(failureRecords[0])).not.toContain(
+				"private summary failure"
+			);
+		} finally {
+			await engine.internalPort.shutdown();
+		}
+	});
+});
+
 test("drains the Submission Queue after a cancelled turn", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
@@ -1680,6 +1886,58 @@ test("delivers a submission accepted while a turn is running into that turn", as
 	// answers the message that opened it.
 	expect(steering?.messages[0]?.metadata?.joinedTurnId).toBe(steering?.turnId);
 	expect(runtime.boundaries[0]?.sourceUserMessageId).toBe(opening?.id);
+});
+
+test("logs failed Steering checkpoints without Steering content", async () => {
+	await withLoggerHome(async (home) => {
+		const runtime = createQueuedRuntime({ boundary: true });
+		const engine = createTestAgentSession([], undefined, {
+			commitRecord: async ({ record }) => {
+				const committed = record.messages[0];
+				if (
+					record.outcome.kind === "user" &&
+					committed?.metadata?.joinedTurnId !== undefined
+				) {
+					throw Object.assign(new Error("private steering detail"), {
+						code: "STEERING_WRITE_FAILED",
+					});
+				}
+			},
+			turnRunner: runtime.runtime,
+		});
+		try {
+			const first = engine.send(sendInput({ userText: "opening prompt" }));
+			await runtime.started(1);
+			await engine.send(sendInput({ userText: "private steering text" }));
+			runtime.release();
+			await first;
+
+			await logger.flush();
+			const records = await readLoggerRecords(home);
+			const persistenceRecords = records.filter(
+				({ message }) => message === "Steering message persistence failed"
+			);
+			expect(persistenceRecords).toHaveLength(1);
+			expect(persistenceRecords[0]).toMatchObject({
+				context: {
+					errorCode: "STEERING_WRITE_FAILED",
+					errorType: "Error",
+					operation: "session.steering",
+					phase: "persistence",
+					turnId: expect.any(String),
+				},
+				level: "error",
+			});
+			expect(JSON.stringify(persistenceRecords[0])).not.toContain(
+				"private steering detail"
+			);
+			expect(JSON.stringify(persistenceRecords[0])).not.toContain(
+				"private steering text"
+			);
+		} finally {
+			await engine.internalPort.shutdown();
+		}
+	});
 });
 
 test("waits for a delivered Steering checkpoint before shutdown settles", async () => {
@@ -2371,117 +2629,163 @@ test("shutdown prevents overflow recovery from continuing after compaction", asy
 });
 
 test("refuses overflow continuation while a public compaction is active", async () => {
-	const recoverySummaryStarted = Promise.withResolvers<void>();
-	const allowRecoverySummary = Promise.withResolvers<void>();
-	const manualSummaryStarted = Promise.withResolvers<void>();
-	const allowManualSummary = Promise.withResolvers<void>();
-	const continuationRefused = Promise.withResolvers<Error>();
-	let summaryCount = 0;
-	let manualCompactionStarted = false;
-	let manualCompaction: Promise<unknown> | undefined;
-	const summaryGenerator: SummaryGenerator = async () => {
-		summaryCount += 1;
-		if (summaryCount === 1) {
-			recoverySummaryStarted.resolve();
-			await allowRecoverySummary.promise;
-			return { text: "overflow summary" };
-		}
-		if (summaryCount === 2) {
-			manualSummaryStarted.resolve();
-			await allowManualSummary.promise;
-			return { text: "manual summary" };
-		}
-		throw new Error("Unexpected extra compaction.");
-	};
-	const engine = createOverflowTestSession(
-		compactionHistory(),
-		{},
-		summaryGenerator
-	);
-	const unsubscribe = engine.subscribe(() => {
-		const snapshot = engine.getSnapshot();
-		if (
-			!snapshot.isCompacting &&
-			snapshot.compactions.some(({ trigger }) => trigger === "overflow") &&
-			!manualCompactionStarted
-		) {
-			manualCompactionStarted = true;
-			manualCompaction = engine.compact({ model, trigger: "manual" });
-		}
-		const error = snapshot.compactionError;
-		if (
-			error?.message.includes(
-				"could not continue the compacted Session Context"
-			)
-		) {
-			continuationRefused.resolve(error);
+	await withLoggerHome(async (home) => {
+		const recoverySummaryStarted = Promise.withResolvers<void>();
+		const allowRecoverySummary = Promise.withResolvers<void>();
+		const manualSummaryStarted = Promise.withResolvers<void>();
+		const allowManualSummary = Promise.withResolvers<void>();
+		const continuationRefused = Promise.withResolvers<Error>();
+		let summaryCount = 0;
+		let manualCompactionStarted = false;
+		let manualCompaction: Promise<unknown> | undefined;
+		const summaryGenerator: SummaryGenerator = async () => {
+			summaryCount += 1;
+			if (summaryCount === 1) {
+				recoverySummaryStarted.resolve();
+				await allowRecoverySummary.promise;
+				return { text: "overflow summary" };
+			}
+			if (summaryCount === 2) {
+				manualSummaryStarted.resolve();
+				await allowManualSummary.promise;
+				return { text: "manual summary" };
+			}
+			throw new Error("Unexpected extra compaction.");
+		};
+		const engine = createOverflowTestSession(
+			compactionHistory(),
+			{},
+			summaryGenerator
+		);
+		const unsubscribe = engine.subscribe(() => {
+			const snapshot = engine.getSnapshot();
+			if (
+				!snapshot.isCompacting &&
+				snapshot.compactions.some(({ trigger }) => trigger === "overflow") &&
+				!manualCompactionStarted
+			) {
+				manualCompactionStarted = true;
+				manualCompaction = engine.compact({ model, trigger: "manual" });
+			}
+			const error = snapshot.compactionError;
+			if (
+				error?.message.includes(
+					"could not continue the compacted Session Context"
+				)
+			) {
+				continuationRefused.resolve(error);
+			}
+		});
+
+		try {
+			await engine.send(sendInput({ userText: "overflowing request" }));
+			await recoverySummaryStarted.promise;
+			allowRecoverySummary.resolve();
+			await manualSummaryStarted.promise;
+			const error = await continuationRefused.promise;
+
+			expect(error).toMatchObject({ code: "continuation-refused" });
+			expect(engine.getSnapshot().isCompacting).toBe(true);
+			expect(
+				engine.getSnapshot().compactions.map(({ trigger }) => trigger)
+			).toEqual(["overflow"]);
+
+			allowManualSummary.resolve();
+			if (manualCompaction === undefined) {
+				throw new Error("The competing compaction did not start.");
+			}
+			await manualCompaction;
+			expect(summaryCount).toBe(2);
+
+			await logger.flush();
+			const records = await readLoggerRecords(home).catch(() => []);
+			const refusalRecords = records.filter(
+				({ message }) => message === "Context overflow recovery failed"
+			);
+			expect(refusalRecords).toHaveLength(1);
+			expect(refusalRecords[0]).toMatchObject({
+				context: {
+					errorCode: "continuation-refused",
+					errorType: "OverflowRecoveryError",
+					operation: "session.compaction.overflow",
+					phase: "continuation",
+					turnId: expect.any(String),
+				},
+				level: "warn",
+			});
+			expect(JSON.stringify(refusalRecords[0])).not.toContain(error.message);
+		} finally {
+			unsubscribe();
+			allowRecoverySummary.resolve();
+			allowManualSummary.resolve();
+			await manualCompaction?.catch(() => undefined);
+			await engine.internalPort.shutdown();
 		}
 	});
-
-	try {
-		await engine.send(sendInput({ userText: "overflowing request" }));
-		await recoverySummaryStarted.promise;
-		allowRecoverySummary.resolve();
-		await manualSummaryStarted.promise;
-		const error = await continuationRefused.promise;
-
-		expect(error).toMatchObject({ code: "continuation-refused" });
-		expect(engine.getSnapshot().isCompacting).toBe(true);
-		expect(
-			engine.getSnapshot().compactions.map(({ trigger }) => trigger)
-		).toEqual(["overflow"]);
-
-		allowManualSummary.resolve();
-		if (manualCompaction === undefined) {
-			throw new Error("The competing compaction did not start.");
-		}
-		await manualCompaction;
-		expect(summaryCount).toBe(2);
-	} finally {
-		unsubscribe();
-		allowRecoverySummary.resolve();
-		allowManualSummary.resolve();
-		await manualCompaction?.catch(() => undefined);
-		await engine.internalPort.shutdown();
-	}
 });
-test("reports a failed overflow compaction without starting a continuation", async () => {
-	const compactionError = Promise.withResolvers<Error>();
-	let runCount = 0;
-	const engine = createOverflowTestSession(
-		compactionHistory(),
-		{
-			turnRunner: {
-				requestOverheadTokens: () => 0,
-				run: async (request) => {
-					runCount += 1;
-					reportTurnStarted(request);
-					return { error: overflowFailure() };
+test("logs failed overflow compaction without continuation or payloads", async () => {
+	await withLoggerHome(async (home) => {
+		const compactionError = Promise.withResolvers<Error>();
+		let runCount = 0;
+		const engine = createOverflowTestSession(
+			compactionHistory(),
+			{
+				turnRunner: {
+					requestOverheadTokens: () => 0,
+					run: async (request) => {
+						runCount += 1;
+						reportTurnStarted(request);
+						return { error: overflowFailure() };
+					},
 				},
 			},
-		},
-		async () => {
-			throw new Error("summary generation failed");
-		}
-	);
-	const unsubscribe = engine.subscribe(() => {
-		const error = engine.getSnapshot().compactionError;
-		if (error !== null) {
-			compactionError.resolve(error);
+			async () => {
+				throw new Error("private summary generation failure");
+			}
+		);
+		const unsubscribe = engine.subscribe(() => {
+			const error = engine.getSnapshot().compactionError;
+			if (error !== null) {
+				compactionError.resolve(error);
+			}
+		});
+
+		try {
+			await engine.send(sendInput({ userText: "private overflow request" }));
+			const failure = await compactionError.promise;
+
+			expect(failure.message).toContain("could not compact the session");
+			expect(engine.getSnapshot().compactions).toEqual([]);
+			expect(runCount).toBe(1);
+
+			await logger.flush();
+			const records = await readLoggerRecords(home);
+			const compactionRecords = records.filter(
+				({ context }) =>
+					context?.operation === "session.compaction" &&
+					context?.trigger === "overflow"
+			);
+			expect(compactionRecords).toHaveLength(1);
+			expect(compactionRecords[0]).toMatchObject({
+				context: {
+					errorCode: "summary-failed",
+					errorType: "SessionCompactionError",
+					phase: "failed",
+					turnId: expect.any(String),
+				},
+				level: "warn",
+			});
+			expect(JSON.stringify(compactionRecords[0])).not.toContain(
+				"private summary generation failure"
+			);
+			expect(JSON.stringify(compactionRecords[0])).not.toContain(
+				"private overflow request"
+			);
+		} finally {
+			unsubscribe();
+			await engine.internalPort.shutdown();
 		}
 	});
-
-	try {
-		await engine.send(sendInput({ userText: "overflowing request" }));
-		const failure = await compactionError.promise;
-
-		expect(failure.message).toContain("could not compact the session");
-		expect(engine.getSnapshot().compactions).toEqual([]);
-		expect(runCount).toBe(1);
-	} finally {
-		unsubscribe();
-		await engine.internalPort.shutdown();
-	}
 });
 
 test("retains a queued submission's attachments until its turn runs", async () => {

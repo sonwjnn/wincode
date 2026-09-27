@@ -5,8 +5,13 @@ import {
 	createLoggerHome,
 	type LoggerRecord,
 	readLoggerRecords,
+	withLoggerHome,
 } from "../../runtime-utils/test/logger-home";
-import { runRpc } from "../modules/application/rpc/runner";
+import { SerializedWriter } from "../modules/application/rpc/output";
+import {
+	reportDeferredFlushFailure,
+	runRpc,
+} from "../modules/application/rpc/runner";
 import {
 	MAX_OUTPUT_BYTES,
 	type OutputWriter,
@@ -309,6 +314,64 @@ test("request IDs are reserved before shape validation and remain unique", async
 	]);
 });
 
+test("does not repeat failed writer errors as deferred-flush warnings", async () => {
+	await withLoggerHome(async (home) => {
+		const brokenPipe = new Error("private broken pipe");
+		const output = new SerializedWriter({
+			write: () => {
+				throw brokenPipe;
+			},
+		});
+		let observedFailure: unknown;
+		try {
+			await output.enqueue({
+				jsonrpc: "2.0",
+				method: "session/stateChanged",
+				params: {},
+			});
+		} catch (error) {
+			observedFailure = error;
+		}
+
+		expect(observedFailure).toBe(brokenPipe);
+		expect(output.failureError).toBe(brokenPipe);
+		reportDeferredFlushFailure(brokenPipe, output.failureError, "session/send");
+		await logger.flush();
+
+		const records = await readLoggerRecords(home).catch(() => []);
+		expect(
+			records.filter(
+				({ message }) => message === "RPC deferred output flush failed"
+			)
+		).toEqual([]);
+	});
+});
+
+test("warns once for deferred flush failures without a fatal output owner", async () => {
+	await withLoggerHome(async (home) => {
+		const flushFailure = Object.assign(new Error("private flush detail"), {
+			code: "EPIPE",
+		});
+		reportDeferredFlushFailure(flushFailure, undefined, "session/send");
+		await logger.flush();
+
+		const records = (await readLoggerRecords(home)).filter(
+			({ message }) => message === "RPC deferred output flush failed"
+		);
+		expect(records).toHaveLength(1);
+		expect(records[0]).toMatchObject({
+			context: {
+				errorCode: "EPIPE",
+				errorType: "Error",
+				operation: "rpc.output",
+				phase: "deferred-flush",
+				rpcMethod: "session/send",
+			},
+			level: "warn",
+		});
+		expect(JSON.stringify(records[0])).not.toContain("private flush detail");
+	});
+});
 test("a stdout failure aborts input and returns a fatal status", async () => {
 	const stdoutFrames: string[] = [];
 	const firstWrite = Promise.withResolvers<void>();
@@ -355,6 +418,58 @@ test("a stdout failure aborts input and returns a fatal status", async () => {
 			jsonrpc: "2.0",
 		},
 	]);
+});
+test("unknown RPC method strings are omitted from fatal diagnostics", async () => {
+	await withLoggerHome(async (home) => {
+		const secretMethod = "private prompt body at /tmp/private/file.txt";
+		const requestId = "unknown-method";
+		const frames: string[] = [];
+		const listeners = new Set<(error: unknown) => void>();
+		const stdout: FrameWriter = {
+			frames,
+			onError: (listener) => {
+				listeners.add(listener);
+				return () => listeners.delete(listener);
+			},
+			write: (text) => {
+				const frame = JSON.parse(text) as { id?: unknown };
+				if (frame.id === requestId) {
+					const brokenPipe = new Error("private broken pipe");
+					for (const listener of listeners) {
+						listener(brokenPipe);
+					}
+					throw brokenPipe;
+				}
+				frames.push(text);
+			},
+		};
+		const exitCode = await runRpc({
+			input: [
+				new TextEncoder().encode(
+					`${JSON.stringify({
+						id: requestId,
+						jsonrpc: "2.0",
+						method: secretMethod,
+						params: {},
+					})}\n`
+				),
+			],
+			stderr: writer(),
+			stdout,
+		});
+
+		expect(exitCode).toBe(1);
+		await logger.flush();
+		const fatalRecord = (await readLoggerRecords(home)).find(
+			({ message }) => message === "RPC fatal error"
+		);
+		expect(fatalRecord?.context).toMatchObject({
+			operation: "rpc",
+			phase: "fatal",
+		});
+		expect(fatalRecord?.context?.rpcMethod).toBeUndefined();
+		expect(JSON.stringify(fatalRecord)).not.toContain(secretMethod);
+	});
 });
 
 test("a stdout failure during shutdown response remains fatal", async () => {
@@ -510,6 +625,20 @@ test("a response beyond the exact output bound emits output_overflow", async () 
 			},
 		},
 	]);
+	const fatalRecord = (await readRpcLogRecords()).find(
+		(record) =>
+			record.message === "RPC fatal error" &&
+			record.context?.rpcErrorCode === "output_overflow" &&
+			record.context?.rpcMethod === "initialize"
+	);
+	expect(fatalRecord?.context).toMatchObject({
+		errorType: "RpcOutputOverflowError",
+		operation: "rpc",
+		phase: "fatal",
+		rpcErrorCode: "output_overflow",
+		rpcMethod: "initialize",
+	});
+	expect(JSON.stringify(fatalRecord)).not.toContain(id);
 });
 
 test("ignored aborts finish cleanup at one bounded deadline", async () => {
@@ -569,6 +698,10 @@ test("ignored aborts finish cleanup at one bounded deadline", async () => {
 test("records shutdown failures without writing diagnostics to RPC stderr", async () => {
 	const stdout = writer();
 	const stderr = writer();
+	const shutdownFailure = Object.assign(
+		new Error("shutdown contained sensitive response details"),
+		{ code: "EIO" }
+	);
 	const records = [
 		{
 			id: "initialize-1",
@@ -587,7 +720,7 @@ test("records shutdown failures without writing diagnostics to RPC stderr", asyn
 		composeCapabilities: async () => ({
 			capabilities: emptyCapabilities(),
 			shutdown: async () => {
-				throw new Error("shutdown contained sensitive response details");
+				throw shutdownFailure;
 			},
 			workspace: process.cwd(),
 			workspaceId: "workspace-test",
@@ -600,15 +733,21 @@ test("records shutdown failures without writing diagnostics to RPC stderr", asyn
 	});
 
 	expect(stderr.frames).toEqual([]);
-	expect(
-		(await readRpcLogRecords()).some(
-			(record) =>
-				record.level === "error" &&
-				record.message === "RPC shutdown failed" &&
-				record.context?.label === "capability" &&
-				record.context?.errorType === "Error"
-		)
-	).toBe(true);
+	const shutdownRecords = (await readRpcLogRecords()).filter(
+		(record) => record.message === "RPC shutdown failed"
+	);
+	expect(shutdownRecords).toHaveLength(1);
+	expect(shutdownRecords[0]).toMatchObject({
+		context: {
+			errorCode: "EIO",
+			errorType: "Error",
+			label: "capability",
+			operation: "rpc.shutdown",
+			phase: "capability",
+			rpcMethod: "server/shutdown",
+		},
+		level: "error",
+	});
 	const contents = await Bun.file(
 		path.join(
 			logHome,

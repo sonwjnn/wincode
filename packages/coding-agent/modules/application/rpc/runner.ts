@@ -1,4 +1,5 @@
 import { logger } from "@wincode/runtime-utils";
+import { errorLogFields } from "@/shared/utils/error-log-fields";
 import type {
 	SessionHost,
 	SessionSnapshot,
@@ -36,8 +37,31 @@ import {
 	type RpcRunnerOptions,
 	type RpcSessionState,
 	type RuntimeModules,
+	SESSION_RPC_METHODS,
 } from "./types";
 import { appError, asRecord, stringValue } from "./validation";
+
+export const reportDeferredFlushFailure = (
+	error: unknown,
+	outputFailure: Error | undefined,
+	rpcMethod: string | undefined
+): void => {
+	if (outputFailure !== undefined && error === outputFailure) {
+		return;
+	}
+	void logger.warn("RPC deferred output flush failed", {
+		...errorLogFields(error),
+		operation: "rpc.output",
+		phase: "deferred-flush",
+		...(rpcMethod === undefined ? {} : { rpcMethod }),
+	});
+};
+const diagnosticRpcMethod = (method: string): string | undefined =>
+	method === "initialize" ||
+	method === "server/shutdown" ||
+	SESSION_RPC_METHODS.has(method)
+		? method
+		: undefined;
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: This controller owns the JSONL lifecycle, output ordering, and teardown boundary.
 export async function runRpc({
@@ -107,6 +131,7 @@ export async function runRpc({
 		signalRequested: false,
 	};
 	let handlingRequest = false;
+	let activeRpcMethod: string | undefined;
 	let requestedExitCode: number | undefined;
 	const abortRequested = Promise.withResolvers<void>();
 	let fatal = false;
@@ -154,9 +179,17 @@ export async function runRpc({
 					work: Promise<void>,
 					label: string
 				): Promise<void> => {
+					const fields = {
+						operation: "rpc.shutdown",
+						phase: label,
+						label,
+						...(activeRpcMethod === undefined
+							? {}
+							: { rpcMethod: activeRpcMethod }),
+					};
 					const remaining = Math.max(0, deadline - Date.now());
 					if (remaining === 0) {
-						void logger.warn("RPC shutdown deadline exceeded", { label });
+						void logger.warn("RPC shutdown deadline exceeded", fields);
 						return;
 					}
 					const deferred = Promise.withResolvers<boolean>();
@@ -165,8 +198,8 @@ export async function runRpc({
 						() => deferred.resolve(true),
 						async (error: unknown) => {
 							await logger.error("RPC shutdown failed", {
-								errorType: error instanceof Error ? error.name : typeof error,
-								label,
+								...errorLogFields(error),
+								...fields,
 							});
 							deferred.resolve(true);
 						}
@@ -174,7 +207,7 @@ export async function runRpc({
 					const completed = await deferred.promise;
 					clearTimeout(timer);
 					if (!completed) {
-						void logger.warn("RPC shutdown deadline exceeded", { label });
+						void logger.warn("RPC shutdown deadline exceeded", fields);
 					}
 				};
 				const activeHost = state.host;
@@ -209,10 +242,19 @@ export async function runRpc({
 		} else if (error instanceof RpcApplicationError) {
 			code = error.code;
 		}
-		const diagnosticWrite = logger.error("RPC fatal error", {
-			rpcErrorCode: code,
-			errorType: error instanceof Error ? error.name : typeof error,
-		});
+		const fields = errorLogFields(error);
+		const diagnosticWrite =
+			code === "session_lease_lost"
+				? logger.flush()
+				: logger.error("RPC fatal error", {
+						...fields,
+						operation: "rpc",
+						phase: "fatal",
+						rpcErrorCode: code,
+						...(activeRpcMethod === undefined
+							? {}
+							: { rpcMethod: activeRpcMethod }),
+					});
 		writeStderrDiagnostic(
 			`RPC fatal error: ${error instanceof Error ? error.message : String(error)}`
 		);
@@ -232,8 +274,13 @@ export async function runRpc({
 	};
 
 	stopOutputError = stdout.onError?.((error: unknown) => {
-		output.fail(error);
-		void fatalShutdown(error);
+		const normalizedError =
+			error instanceof Error ? error : new Error(String(error));
+		const fatalOwner = !fatal;
+		output.fail(normalizedError);
+		if (fatalOwner) {
+			void fatalShutdown(error);
+		}
 	});
 	signal?.addEventListener("abort", onAbort, { once: true });
 	if (signal?.aborted === true) {
@@ -503,6 +550,7 @@ export async function runRpc({
 				continue;
 			}
 			const request = parsed.request;
+			activeRpcMethod = diagnosticRpcMethod(request.method);
 			handlingRequest = true;
 			resetDeferred();
 			let response: RpcResponse;
@@ -516,6 +564,7 @@ export async function runRpc({
 				]);
 				if (requestResult.kind === "aborted") {
 					handlingRequest = false;
+					activeRpcMethod = undefined;
 					resetDeferred();
 					await cleanup();
 					break;
@@ -531,7 +580,12 @@ export async function runRpc({
 				) {
 					try {
 						await flushDeferred();
-					} catch {
+					} catch (flushError) {
+						reportDeferredFlushFailure(
+							flushError,
+							output.failureError,
+							activeRpcMethod
+						);
 						resetDeferred();
 						handlingRequest = false;
 					}
@@ -553,7 +607,12 @@ export async function runRpc({
 				} else {
 					try {
 						await flushDeferred();
-					} catch {
+					} catch (flushError) {
+						reportDeferredFlushFailure(
+							flushError,
+							output.failureError,
+							activeRpcMethod
+						);
 						resetDeferred();
 						handlingRequest = false;
 					}
@@ -579,7 +638,12 @@ export async function runRpc({
 				}
 				try {
 					await flushDeferred();
-				} catch {
+				} catch (flushError) {
+					reportDeferredFlushFailure(
+						flushError,
+						output.failureError,
+						activeRpcMethod
+					);
 					resetDeferred();
 				}
 				handlingRequest = false;
@@ -593,6 +657,7 @@ export async function runRpc({
 				await fatalShutdown(new RpcOutputOverflowError());
 				break;
 			}
+			activeRpcMethod = undefined;
 			if (state.shutdownRequested) {
 				break;
 			}

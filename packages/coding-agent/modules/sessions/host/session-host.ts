@@ -1,7 +1,8 @@
 import type { AgentId, AgentTurnEvent } from "@wincode/agent-core";
 import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
-import { isNull, omitUndefined } from "@wincode/runtime-utils";
+import { isNull, logger, omitUndefined } from "@wincode/runtime-utils";
 import { resolveActiveAgentId } from "@/modules/agents/registry";
+import { errorLogFields } from "@/shared/utils/error-log-fields";
 import { rebuildActiveMessages } from "../compaction/compaction";
 import type { SessionCompaction } from "../compaction/types";
 import { AgentSessionImpl } from "../engine/agent-session";
@@ -184,6 +185,10 @@ export const createSessionHost = async ({
 			return shutdownPromise;
 		}
 		isShutDown = true;
+		void logger.debug("Session Host shutdown started", {
+			operation: "session-host",
+			phase: "shutdown",
+		});
 		const activeAgentSession = agentSession;
 		const activeInternalPort = agentSessionInternalPort;
 		let releaseImmediately = activeAgentSession === undefined;
@@ -224,6 +229,10 @@ export const createSessionHost = async ({
 		closingHosts.set(sessionId, closingShutdown);
 		void closingShutdown.then(
 			() => {
+				void logger.debug("Session Host shutdown completed", {
+					operation: "session-host",
+					phase: "shutdown-completed",
+				});
 				if (closingHosts.get(sessionId) === closingShutdown) {
 					closingHosts.delete(sessionId);
 				}
@@ -241,8 +250,15 @@ export const createSessionHost = async ({
 	): Promise<void> => {
 		try {
 			await shutdownWork;
-		} catch {
-			// Lease loss is already fatal; cleanup cannot restore ownership.
+		} catch (error) {
+			const fields = errorLogFields(error);
+			if (fields.errorCode !== "session_lease_lost") {
+				void logger.warn("Session Host cleanup after lease loss failed", {
+					...fields,
+					operation: "session-host.shutdown",
+					phase: "lease-loss",
+				});
+			}
 		}
 	};
 	const reportLeaseLoss = (): void => {
@@ -251,6 +267,12 @@ export const createSessionHost = async ({
 		}
 		isLeaseLost = true;
 		fatalFailure = { code: "session_lease_lost" };
+		void logger.error("Session Host lost its lease", {
+			errorCode: "session_lease_lost",
+			errorType: "SessionLeaseLostError",
+			operation: "session-host.lease",
+			phase: "lost",
+		});
 		const listeners = [...fatalListeners];
 		stopRenewal();
 		// Renewal callbacks are synchronous; start quiescence before notifying
@@ -258,10 +280,10 @@ export const createSessionHost = async ({
 		let shutdownWork: Promise<void>;
 		try {
 			shutdownWork = shutdown();
-		} catch {
-			shutdownWork = Promise.resolve();
+		} catch (error) {
+			shutdownWork = Promise.reject(error);
 		}
-		void observeLeaseLossShutdown(shutdownWork);
+		shutdownPromise = observeLeaseLossShutdown(shutdownWork);
 		for (const listener of listeners) {
 			try {
 				listener(fatalFailure);
@@ -335,6 +357,10 @@ export const createSessionHost = async ({
 		if (isShutDown) {
 			throw new SessionLeaseLostError();
 		}
+		void logger.debug("Session Host opened", {
+			operation: "session-host",
+			phase: "opened",
+		});
 
 		return {
 			agentSession: openedAgentSession,
