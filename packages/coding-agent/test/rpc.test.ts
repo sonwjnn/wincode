@@ -314,7 +314,7 @@ test("request IDs are reserved before shape validation and remain unique", async
 	]);
 });
 
-test("does not repeat failed writer errors as deferred-flush warnings", async () => {
+test("reports deferred writer errors without a fatal log owner", async () => {
 	await withLoggerHome(async (home) => {
 		const brokenPipe = new Error("private broken pipe");
 		const output = new SerializedWriter({
@@ -335,15 +335,41 @@ test("does not repeat failed writer errors as deferred-flush warnings", async ()
 
 		expect(observedFailure).toBe(brokenPipe);
 		expect(output.failureError).toBe(brokenPipe);
-		reportDeferredFlushFailure(brokenPipe, output.failureError, "session/send");
+		reportDeferredFlushFailure(brokenPipe, undefined, "session/send");
 		await logger.flush();
 
-		const records = await readLoggerRecords(home).catch(() => []);
-		expect(
-			records.filter(
-				({ message }) => message === "RPC deferred output flush failed"
-			)
-		).toEqual([]);
+		const records = await readLoggerRecords(home);
+		const deferredRecords = records.filter(
+			({ message }) => message === "RPC deferred output flush failed"
+		);
+		expect(deferredRecords).toHaveLength(1);
+		expect(deferredRecords[0]).toMatchObject({
+			context: {
+				errorType: "Error",
+				operation: "rpc.output",
+				phase: "deferred-flush",
+				rpcMethod: "session/send",
+			},
+			level: "warn",
+		});
+		expect(JSON.stringify(deferredRecords[0])).not.toContain(
+			"private broken pipe"
+		);
+	});
+});
+test("suppresses a deferred duplicate owned by a fatal diagnostic", async () => {
+	await withLoggerHome(async (home) => {
+		const brokenPipe = new Error("private broken pipe");
+		await logger.error("RPC fatal error", {
+			errorType: "Error",
+			operation: "rpc",
+			phase: "fatal",
+		});
+		reportDeferredFlushFailure(brokenPipe, brokenPipe, "session/send");
+		await logger.flush();
+
+		const records = await readLoggerRecords(home);
+		expect(records.map(({ message }) => message)).toEqual(["RPC fatal error"]);
 	});
 });
 
@@ -625,20 +651,30 @@ test("a response beyond the exact output bound emits output_overflow", async () 
 			},
 		},
 	]);
-	const fatalRecord = (await readRpcLogRecords()).find(
-		(record) =>
-			record.message === "RPC fatal error" &&
-			record.context?.rpcErrorCode === "output_overflow" &&
-			record.context?.rpcMethod === "initialize"
+	const records = await readRpcLogRecords();
+	const overflowRecord = records.find(
+		({ context, message }) =>
+			message === "RPC output overflow; continuation refused" &&
+			context?.rpcMethod === "initialize"
 	);
-	expect(fatalRecord?.context).toMatchObject({
-		errorType: "RpcOutputOverflowError",
-		operation: "rpc",
-		phase: "fatal",
-		rpcErrorCode: "output_overflow",
-		rpcMethod: "initialize",
+	expect(overflowRecord).toMatchObject({
+		context: {
+			errorType: "RpcOutputOverflowError",
+			operation: "rpc.output",
+			phase: "overflow",
+			rpcErrorCode: "output_overflow",
+			rpcMethod: "initialize",
+		},
+		level: "warn",
 	});
-	expect(JSON.stringify(fatalRecord)).not.toContain(id);
+	expect(JSON.stringify(overflowRecord)).not.toContain(id);
+	expect(
+		records.some(
+			(record) =>
+				record.message === "RPC fatal error" &&
+				record.context?.rpcErrorCode === "output_overflow"
+		)
+	).toBe(false);
 });
 
 test("ignored aborts finish cleanup at one bounded deadline", async () => {

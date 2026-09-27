@@ -43,10 +43,10 @@ import { appError, asRecord, stringValue } from "./validation";
 
 export const reportDeferredFlushFailure = (
 	error: unknown,
-	outputFailure: Error | undefined,
+	loggedOutputFailure: Error | undefined,
 	rpcMethod: string | undefined
 ): void => {
-	if (outputFailure !== undefined && error === outputFailure) {
+	if (loggedOutputFailure !== undefined && error === loggedOutputFailure) {
 		return;
 	}
 	void logger.warn("RPC deferred output flush failed", {
@@ -62,6 +62,32 @@ const diagnosticRpcMethod = (method: string): string | undefined =>
 	SESSION_RPC_METHODS.has(method)
 		? method
 		: undefined;
+const logRpcFatalDiagnostic = (
+	error: unknown,
+	code: string,
+	rpcMethod: string | undefined
+): Promise<void> => {
+	if (code === "session_lease_lost") {
+		return logger.flush();
+	}
+	const context = {
+		...errorLogFields(error),
+		rpcErrorCode: code,
+		...(rpcMethod === undefined ? {} : { rpcMethod }),
+	};
+	if (error instanceof RpcOutputOverflowError) {
+		return logger.warn("RPC output overflow; continuation refused", {
+			...context,
+			operation: "rpc.output",
+			phase: "overflow",
+		});
+	}
+	return logger.error("RPC fatal error", {
+		...context,
+		operation: "rpc",
+		phase: "fatal",
+	});
+};
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: This controller owns the JSONL lifecycle, output ordering, and teardown boundary.
 export async function runRpc({
@@ -135,6 +161,7 @@ export async function runRpc({
 	let requestedExitCode: number | undefined;
 	const abortRequested = Promise.withResolvers<void>();
 	let fatal = false;
+	let loggedOutputFailure: Error | undefined;
 	let fatalPromise: Promise<void> | undefined;
 	let notificationSequence = 0;
 	let stateRevision = 0;
@@ -242,19 +269,14 @@ export async function runRpc({
 		} else if (error instanceof RpcApplicationError) {
 			code = error.code;
 		}
-		const fields = errorLogFields(error);
-		const diagnosticWrite =
-			code === "session_lease_lost"
-				? logger.flush()
-				: logger.error("RPC fatal error", {
-						...fields,
-						operation: "rpc",
-						phase: "fatal",
-						rpcErrorCode: code,
-						...(activeRpcMethod === undefined
-							? {}
-							: { rpcMethod: activeRpcMethod }),
-					});
+		const outputFailure =
+			error instanceof Error && error === output.failureError
+				? error
+				: undefined;
+		if (code !== "session_lease_lost" && outputFailure !== undefined) {
+			loggedOutputFailure = outputFailure;
+		}
+		const diagnosticWrite = logRpcFatalDiagnostic(error, code, activeRpcMethod);
 		writeStderrDiagnostic(
 			`RPC fatal error: ${error instanceof Error ? error.message : String(error)}`
 		);
@@ -279,7 +301,7 @@ export async function runRpc({
 		const fatalOwner = !fatal;
 		output.fail(normalizedError);
 		if (fatalOwner) {
-			void fatalShutdown(error);
+			void fatalShutdown(normalizedError);
 		}
 	});
 	signal?.addEventListener("abort", onAbort, { once: true });
@@ -583,7 +605,7 @@ export async function runRpc({
 					} catch (flushError) {
 						reportDeferredFlushFailure(
 							flushError,
-							output.failureError,
+							loggedOutputFailure,
 							activeRpcMethod
 						);
 						resetDeferred();
@@ -610,7 +632,7 @@ export async function runRpc({
 					} catch (flushError) {
 						reportDeferredFlushFailure(
 							flushError,
-							output.failureError,
+							loggedOutputFailure,
 							activeRpcMethod
 						);
 						resetDeferred();
@@ -641,7 +663,7 @@ export async function runRpc({
 				} catch (flushError) {
 					reportDeferredFlushFailure(
 						flushError,
-						output.failureError,
+						loggedOutputFailure,
 						activeRpcMethod
 					);
 					resetDeferred();
