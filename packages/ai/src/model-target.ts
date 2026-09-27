@@ -12,11 +12,12 @@ import {
 	type ChatModelSelection,
 	type ConnectionProviderId,
 	connectionProviderIdSchema,
+	effortSchema,
 	findSupportedChatModelSelection,
-	getSupportedModelVariants,
-	type ModelVariant,
-	modelVariantSchema,
-	normalizeModelVariantForModel,
+	getSupportedModelEfforts,
+	getSupportedReasoningModes,
+	type ReasoningSelection,
+	reasoningModeSchema,
 	type SupportedChatModel,
 	type SupportedChatModelId,
 } from "./models";
@@ -53,8 +54,8 @@ export type ModelTargetFor<P extends ConnectionProviderId> = Readonly<{
 	modelId: ModelIdForProvider<P>;
 	providerId: P;
 	providerOptions?: ProviderOptionsFor<P>;
-	variant?: ModelVariant;
-}>;
+}> &
+	ReasoningSelection;
 
 /**
  * The effective model inputs for one Agent Turn. This object is transient:
@@ -71,8 +72,8 @@ type ModelTargetSchemaOutput = Readonly<{
 	modelId: SupportedChatModelId;
 	providerId: ConnectionProviderId;
 	providerOptions?: ModelProviderOptions;
-	variant?: ModelVariant;
-}>;
+}> &
+	ReasoningSelection;
 
 export const apiKeyModelAuthorizationSchema = z
 	.object({ kind: z.literal("api-key"), apiKey: z.string().min(1) })
@@ -89,9 +90,29 @@ export const modelAuthorizationSchema = z.union([
 	oauthModelAuthorizationSchema,
 ]);
 
+const modelChoiceSchema = <T extends string>(
+	schema: z.ZodType<T>,
+	label: "Effort" | "Reasoning Mode"
+) =>
+	z
+		.unknown()
+		.optional()
+		.transform((value, context): T | undefined => {
+			if (isUndefined(value)) {
+				return;
+			}
+			const parsed = schema.safeParse(value);
+			if (!parsed.success) {
+				context.addIssue({ code: "custom", message: `Invalid ${label}.` });
+				return z.NEVER;
+			}
+			return parsed.data;
+		});
+
 const modelTargetShapeSchema = z
 	.object({
 		authorization: modelAuthorizationSchema,
+		effort: modelChoiceSchema(effortSchema, "Effort"),
 		maxOutputTokens: z.number().int().positive().optional(),
 		modelId: z
 			.string()
@@ -101,7 +122,7 @@ const modelTargetShapeSchema = z
 			),
 		providerId: connectionProviderIdSchema,
 		providerOptions: modelProviderOptionsSchema.optional(),
-		variant: modelVariantSchema.optional(),
+		reasoningMode: modelChoiceSchema(reasoningModeSchema, "Reasoning Mode"),
 	})
 	.strict();
 
@@ -132,46 +153,67 @@ const hasCompatibleProviderOptions = (
 	}
 };
 export const modelTargetSchema: z.ZodType<ModelTargetSchemaOutput> =
-	modelTargetShapeSchema.superRefine((target, context) => {
-		const model = findSupportedChatModelSelection(target);
-		if (!model) {
-			context.addIssue({
-				code: "custom",
-				message: `Unsupported model target: ${target.providerId}/${target.modelId}`,
-				path: ["modelId"],
-			});
-			return;
-		}
-		if (
-			!(
-				isUndefined(target.variant) ||
-				getSupportedModelVariants(target).includes(target.variant)
-			)
-		) {
-			context.addIssue({
-				code: "custom",
-				message: `Unsupported model variant: ${target.providerId}/${target.modelId}/${target.variant}`,
-				path: ["variant"],
-			});
-		}
-		if (
-			target.authorization.kind === "oauth" &&
-			target.providerId !== "openai"
-		) {
-			context.addIssue({
-				code: "custom",
-				message: "OAuth authorization is only supported by OpenAI.",
-				path: ["authorization"],
-			});
-		}
-		if (!hasCompatibleProviderOptions(model, target.providerOptions)) {
-			context.addIssue({
-				code: "custom",
-				message: "Provider options do not match the selected model provider.",
-				path: ["providerOptions"],
-			});
-		}
-	});
+	modelTargetShapeSchema
+		.superRefine((target, context) => {
+			const model = findSupportedChatModelSelection(target);
+			if (!model) {
+				context.addIssue({
+					code: "custom",
+					message: `Unsupported model target: ${target.providerId}/${target.modelId}`,
+					path: ["modelId"],
+				});
+				return;
+			}
+			if (!(isUndefined(target.effort) || isUndefined(target.reasoningMode))) {
+				context.addIssue({
+					code: "custom",
+					message: "Select either an Effort or a Reasoning Mode, not both.",
+					path: ["reasoningMode"],
+				});
+			}
+			if (
+				!(
+					isUndefined(target.effort) ||
+					getSupportedModelEfforts(target).includes(target.effort)
+				)
+			) {
+				context.addIssue({
+					code: "custom",
+					message: `Unsupported model Effort: ${target.providerId}/${target.modelId}/${target.effort}`,
+					path: ["effort"],
+				});
+			}
+			if (
+				!(
+					isUndefined(target.reasoningMode) ||
+					getSupportedReasoningModes(target).includes(target.reasoningMode)
+				)
+			) {
+				context.addIssue({
+					code: "custom",
+					message: `Unsupported Reasoning Mode: ${target.providerId}/${target.modelId}/${target.reasoningMode}`,
+					path: ["reasoningMode"],
+				});
+			}
+			if (
+				target.authorization.kind === "oauth" &&
+				target.providerId !== "openai"
+			) {
+				context.addIssue({
+					code: "custom",
+					message: "OAuth authorization is only supported by OpenAI.",
+					path: ["authorization"],
+				});
+			}
+			if (!hasCompatibleProviderOptions(model, target.providerOptions)) {
+				context.addIssue({
+					code: "custom",
+					message: "Provider options do not match the selected model provider.",
+					path: ["providerOptions"],
+				});
+			}
+		})
+		.transform((target) => target as ModelTargetSchemaOutput);
 
 const toMinimalAuthorization = (
 	providerId: ConnectionProviderId,
@@ -201,24 +243,16 @@ export const createModelTarget = (
 			`Unsupported model target: ${selection.providerId}/${selection.modelId}`
 		);
 	}
-	const variant = normalizeModelVariantForModel(model, options.variant);
-	if (!isUndefined(options.variant) && isUndefined(variant)) {
-		throw new Error(
-			`Unsupported model variant: ${selection.providerId}/${selection.modelId}/${options.variant}`
-		);
-	}
-	const resolvedOptions = resolveModelProviderOptions(model, {
-		maxOutputTokens: options.maxOutputTokens,
-		variant,
-	});
+	const resolvedOptions = resolveModelProviderOptions(model, options);
 	const target = {
 		authorization: toMinimalAuthorization(selection.providerId, authorization),
 		modelId: model.id as SupportedChatModelId,
 		providerId: model.connectionProviderId,
 		...omitUndefined({
+			effort: options.effort,
 			maxOutputTokens: resolvedOptions.maxOutputTokens,
 			providerOptions: resolvedOptions.providerOptions,
-			variant,
+			reasoningMode: options.reasoningMode,
 		}),
 	};
 	modelTargetSchema.parse(target);

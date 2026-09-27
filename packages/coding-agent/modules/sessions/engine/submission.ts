@@ -9,7 +9,11 @@ import {
 	type SessionRecord,
 	toSessionMessageId,
 } from "@wincode/agent-core";
-import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import type {
+	ChatModelSelection,
+	Effort,
+	ReasoningMode,
+} from "@wincode/ai/models";
 import {
 	getErrorMessage,
 	isError,
@@ -226,7 +230,8 @@ export const prepareCompactionBeforeSubmit = async ({
 	settings,
 	settleCompaction,
 	turnId,
-	variant,
+	effort,
+	reasoningMode,
 }: {
 	compaction: AgentSessionPorts["compaction"];
 	getActiveMessages: () => readonly SessionMessage[];
@@ -237,7 +242,8 @@ export const prepareCompactionBeforeSubmit = async ({
 	settings: ResolvedCompactionSettings;
 	settleCompaction: () => Promise<Error | null>;
 	turnId?: AgentTurnId;
-	variant?: ModelVariant;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
 }): Promise<SubmitCompactionResult> => {
 	// The threshold this Agent Turn needs has to hold on the Session Context it
 	// sends, so a compaction another caller owns is joined and the need
@@ -250,7 +256,7 @@ export const prepareCompactionBeforeSubmit = async ({
 			await runCompaction({
 				model,
 				trigger: "threshold",
-				...omitUndefined({ turnId, variant }),
+				...omitUndefined({ turnId, effort, reasoningMode }),
 			});
 			return { ok: true };
 		} catch (cause) {
@@ -270,7 +276,8 @@ const createSubmitMetadata = (
 	agent: input.agent,
 	model: input.model,
 	...omitUndefined({
-		variant: input.variant,
+		effort: input.effort,
+		reasoningMode: input.reasoningMode,
 		skill: isUndefined(skill)
 			? undefined
 			: createSkillSnapshot(skill, "explicit"),
@@ -497,7 +504,11 @@ const prepareSessionSubmission = async ({
 			runCompaction: deps.compact,
 			settings,
 			settleCompaction: deps.settleCompaction,
-			...omitUndefined({ turnId: input.turnId, variant: input.variant }),
+			...omitUndefined({
+				turnId: input.turnId,
+				effort: input.effort,
+				reasoningMode: input.reasoningMode,
+			}),
 		});
 		if (!compactionResult.ok) {
 			return { kind: "rejected", reason: compactionResult.reason };
@@ -609,11 +620,13 @@ const executionInputForSubmit = ({
 	startedAt,
 	...omitUndefined({
 		parent: input.delegation,
-		sessionVariant: input.sessionVariant,
+		sessionEffort: input.sessionEffort,
+		sessionReasoningMode: input.sessionReasoningMode,
 		sourceUserMessageId,
 		submissionId: input.submissionId,
 		turnId: input.turnId,
-		variant: input.variant,
+		effort: input.effort,
+		reasoningMode: input.reasoningMode,
 	}),
 });
 
@@ -627,8 +640,10 @@ const commitPromptRecord = async ({
 	model,
 	sessionId,
 	sessionModel,
-	sessionVariant,
-	variant,
+	sessionEffort,
+	sessionReasoningMode,
+	effort,
+	reasoningMode,
 	commitRecord,
 	diagnosticTurnId,
 }: {
@@ -639,8 +654,10 @@ const commitPromptRecord = async ({
 	model: ChatModelSelection;
 	sessionId: SessionId;
 	sessionModel: ChatModelSelection;
-	sessionVariant?: ModelVariant;
-	variant?: ModelVariant;
+	sessionEffort?: Effort;
+	sessionReasoningMode?: ReasoningMode;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
 }): Promise<Error | null> => {
 	const recordTurnId = createAgentTurnId();
 	try {
@@ -650,11 +667,12 @@ const commitPromptRecord = async ({
 				message,
 				model,
 				turnId: recordTurnId,
-				variant,
+				effort,
+				reasoningMode,
 			}),
 			sessionId,
 			sessionModel,
-			...omitUndefined({ sessionVariant }),
+			...omitUndefined({ sessionEffort, sessionReasoningMode }),
 		});
 		return null;
 	} catch (error) {
@@ -687,8 +705,10 @@ const commitPreparedPrompt = async ({
 		sessionId: deps.sessionId,
 		sessionModel: input.sessionModel,
 		...omitUndefined({
-			sessionVariant: input.sessionVariant,
-			variant: input.variant,
+			sessionEffort: input.sessionEffort,
+			sessionReasoningMode: input.sessionReasoningMode,
+			effort: input.effort,
+			reasoningMode: input.reasoningMode,
 		}),
 	});
 	assertSessionOpen(deps);
@@ -726,7 +746,8 @@ const commitExecutionRecord = (
 		...(isUndefined(execution.parent)
 			? {
 					sessionModel: execution.sessionModel,
-					sessionVariant: execution.sessionVariant,
+					sessionEffort: execution.sessionEffort,
+					sessionReasoningMode: execution.sessionReasoningMode,
 				}
 			: {}),
 		record,
@@ -791,7 +812,8 @@ const handleSafeAssistantOutcome = async ({
 			model: execution.model,
 			...omitUndefined({
 				sourceUserMessageId,
-				variant: execution.variant,
+				effort: execution.effort,
+				reasoningMode: execution.reasoningMode,
 			}),
 			...(terminal === "interrupted" ? { interrupted: true } : {}),
 			...(terminal === "completed" ? {} : { terminalOutcome: terminal }),
@@ -819,8 +841,9 @@ const failureRecordInput = (execution: SessionExecution) => ({
 	agentId: execution.agent,
 	...omitUndefined({
 		delegation: execution.parent,
-		variant: execution.variant,
 		sourceUserMessageId: execution.sourceUserMessageId ?? undefined,
+		effort: execution.effort,
+		reasoningMode: execution.reasoningMode,
 	}),
 	model: execution.model,
 	turnId: execution.turnId,
@@ -867,7 +890,8 @@ const proposeOverflowRecovery = ({
 				}
 				return {
 					model: execution.model,
-					...omitUndefined({ variant: execution.variant }),
+					effort: execution.effort,
+					reasoningMode: execution.reasoningMode,
 				};
 			},
 			turnId: execution.turnId,
@@ -898,8 +922,10 @@ const continueOverflowContext = async ({
 		resolvedAgent: context.resolvedAgent,
 		sessionModel: execution.sessionModel,
 		...omitUndefined({
-			sessionVariant: execution.sessionVariant,
-			variant: execution.variant,
+			sessionEffort: execution.sessionEffort,
+			sessionReasoningMode: execution.sessionReasoningMode,
+			effort: execution.effort,
+			reasoningMode: execution.reasoningMode,
 		}),
 	});
 	return outcome.rejected
@@ -1074,7 +1100,8 @@ const maintainAfterTurn = (
 	messages: readonly SessionMessage[],
 	selection: ChatModelSelection,
 	turnId: AgentTurnId,
-	variant?: ModelVariant
+	effort?: Effort,
+	reasoningMode?: ReasoningMode
 ): void => {
 	const compactIfNeeded = async (): Promise<void> => {
 		let settings: ResolvedCompactionSettings;
@@ -1095,7 +1122,7 @@ const maintainAfterTurn = (
 				nextMessages: messages,
 				trigger: "threshold",
 				turnId,
-				...omitUndefined({ variant }),
+				...omitUndefined({ effort, reasoningMode }),
 			});
 		} catch (error) {
 			if (isBenignCompactionError(error) || isInFlightCompaction(error)) {
@@ -1229,7 +1256,8 @@ const runTurn = async ({
 				deps.getTranscript(),
 				execution.model,
 				execution.turnId,
-				execution.variant
+				execution.effort,
+				execution.reasoningMode
 			);
 			return { rejected: false };
 		}

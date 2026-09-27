@@ -66,7 +66,7 @@ export type SessionHost = Readonly<{
 	agentSession: AgentSession;
 	/**
 	 * The Session Selection the session opened with — the last-used Agent,
-	 * model, and variant, resolved against the live Agent registry — so a
+	 * model, and reasoning choice, resolved against the live Agent registry — so a
 	 * consumer runs the next turn with what the session was using. Null when no
 	 * source carries a model.
 	 */

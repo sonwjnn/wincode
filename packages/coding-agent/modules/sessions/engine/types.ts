@@ -9,7 +9,11 @@ import type {
 	SessionRecord,
 	ToolCallId,
 } from "@wincode/agent-core";
-import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import type {
+	ChatModelSelection,
+	Effort,
+	ReasoningMode,
+} from "@wincode/ai/models";
 import type { ReadonlyDeep } from "type-fest";
 import type {
 	SkillContext,
@@ -111,12 +115,14 @@ export type SessionExecution = ReadonlyDeep<{
 	parent?: AgentTurn["delegation"];
 	/** The session-level selection recorded on this execution's Session Records. */
 	sessionModel: ChatModelSelection;
-	sessionVariant?: ModelVariant;
+	sessionEffort?: Effort;
+	sessionReasoningMode?: ReasoningMode;
 	/** The Session Context message this execution answers. */
 	sourceUserMessageId: SessionMessageId | null;
 	startedAt: number;
 	turnId: AgentTurnId;
-	variant?: ModelVariant;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
 	viewState?: SessionViewState;
 }>;
 
@@ -170,12 +176,14 @@ export type SessionSteeringSendInput = Readonly<{
 	model: ChatModelSelection;
 	resolvedAgent?: SessionResolvedAgent;
 	sessionModel: ChatModelSelection;
-	sessionVariant?: ModelVariant;
+	sessionEffort?: Effort;
+	sessionReasoningMode?: ReasoningMode;
 	submissionId?: SubmissionId;
 	messageId?: SessionMessageId;
 	text: string;
 	turnId?: AgentTurnId;
-	variant?: ModelVariant;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
 }>;
 
 /**
@@ -254,14 +262,16 @@ export type SessionExecutionInput = ReadonlyDeep<{
 	model: ChatModelSelection;
 	parent?: AgentTurn["delegation"];
 	sessionModel: ChatModelSelection;
-	sessionVariant?: ModelVariant;
+	sessionEffort?: Effort;
+	sessionReasoningMode?: ReasoningMode;
 	submissionId?: SubmissionId;
 	/** The Session Context message this execution answers, when known. */
 	sourceUserMessageId?: SessionMessageId;
 	startedAt: number;
 	/** The Agent Turn Identifier; generated when the caller has none yet. */
 	turnId?: AgentTurnId;
-	variant?: ModelVariant;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
 }>;
 
 /**
@@ -281,7 +291,8 @@ export type SessionCommitInput = {
 	record: SessionRecord;
 	sessionId: SessionId;
 	sessionModel?: ChatModelSelection;
-	sessionVariant?: ModelVariant;
+	sessionEffort?: Effort;
+	sessionReasoningMode?: ReasoningMode;
 };
 
 /** The attachment ceilings one submission resolved from its compaction settings. */
@@ -413,7 +424,7 @@ export type AgentSessionPorts = Readonly<{
 	compaction: SessionCompactionPort;
 	/** Writes one durable Session Record. */
 	commitRecord: (input: SessionCommitInput) => Promise<void>;
-	/** Resolves the Agent, Model, and variant when a Submission starts. */
+	/** Resolves the Agent, Model, and reasoning selection when a Submission starts. */
 	resolveSubmission: (input: SessionSendInput) => SessionSendInput;
 	/** Resolves the @path file mentions of a prompt. */
 	resolveFileMentions: (text: string) => Promise<FileMentionPart[]>;
@@ -430,7 +441,8 @@ export type AgentSessionOptions = ReadonlyDeep<{
 	initialAgent?: AgentId;
 	initialContext?: readonly SessionMessage[];
 	initialSessionModel?: ChatModelSelection;
-	initialSessionVariant?: ModelVariant;
+	initialSessionEffort?: Effort;
+	initialSessionReasoningMode?: ReasoningMode;
 	initialTranscript: readonly SessionMessage[];
 	ports: AgentSessionPorts;
 	sessionId: SessionId;
@@ -453,7 +465,8 @@ export type SessionOverflowContinuationOutcome =
 /** The Model Target one overflow recovery compacts and continues with. */
 export type SessionOverflowRecoveryTarget = ReadonlyDeep<{
 	model: ChatModelSelection;
-	variant?: ModelVariant;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
 }>;
 
 /** One provider refusal proposed to the Agent Session for overflow recovery. */
@@ -508,7 +521,8 @@ export type SessionCompactionCommand = ReadonlyDeep<{
 	trigger: CompactionTriggerReason;
 	/** The Agent Turn that initiated this compaction, for diagnostics. */
 	turnId?: AgentTurnId;
-	variant?: ModelVariant;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
 }>;
 
 /**

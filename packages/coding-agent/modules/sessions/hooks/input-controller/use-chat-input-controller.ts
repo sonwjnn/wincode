@@ -60,7 +60,7 @@ export function useChatInputController({
 	getFileMentionOptions: getFileMentionOptionsFromOptions,
 	getSkills: getSkillsFromOptions,
 	hideCompact,
-	hideVariants,
+	hideEffort,
 	onError,
 	onSubmit,
 	onTab,
@@ -224,7 +224,7 @@ export function useChatInputController({
 		normalizedCommandQuery.length > 0 && normalizedCommandQuery !== "skill";
 	const commandItems = useMemo(() => {
 		const commands = [
-			...getVisibleCommands({ hideCompact, hideVariants }),
+			...getVisibleCommands({ hideCompact, hideEffort }),
 			...customCommands,
 		];
 		if (isSkillSearchQuery) {
@@ -241,7 +241,7 @@ export function useChatInputController({
 	}, [
 		customCommands,
 		hideCompact,
-		hideVariants,
+		hideEffort,
 		isBareSkillSearchQuery,
 		isSkillSearchQuery,
 		skillItems,

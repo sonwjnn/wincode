@@ -7,7 +7,11 @@ import type {
 } from "@wincode/agent-core";
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import { normalizeModelUsage } from "@wincode/ai/model-usage";
-import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import type {
+	ChatModelSelection,
+	Effort,
+	ReasoningMode,
+} from "@wincode/ai/models";
 import { defaultChatModelSelection } from "@wincode/ai/models";
 import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import { type CodingToolName, codingToolNames } from "@/modules/tools";
@@ -224,7 +228,8 @@ const buildTerminalMessageMetadata = ({
 	model,
 	startedAt,
 	usage,
-	variant,
+	effort,
+	reasoningMode,
 }: {
 	agent: AgentId;
 	base: SessionMessage;
@@ -232,9 +237,14 @@ const buildTerminalMessageMetadata = ({
 	model?: ChatModelSelection;
 	startedAt: number | null;
 	usage: ModelUsage | null;
-	variant?: ModelVariant;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
 }): SessionMessageMetadata => {
 	const terminalOutcome = terminalOutcomeForEvent(event);
+	const baseHasChoice = !(
+		isUndefined(base.metadata?.effort) &&
+		isUndefined(base.metadata?.reasoningMode)
+	);
 	return {
 		...(base.metadata ?? {}),
 		agent: base.metadata?.agent ?? agent,
@@ -243,9 +253,10 @@ const buildTerminalMessageMetadata = ({
 			terminalOutcome,
 			usage: usage ?? undefined,
 			model: isUndefined(model) ? undefined : (base.metadata?.model ?? model),
-			variant: isUndefined(variant)
-				? undefined
-				: (base.metadata?.variant ?? variant),
+			effort: baseHasChoice ? base.metadata?.effort : effort,
+			reasoningMode: baseHasChoice
+				? base.metadata?.reasoningMode
+				: reasoningMode,
 			responseTimeMs: isNull(startedAt)
 				? undefined
 				: Math.max(0, Date.now() - startedAt),
@@ -317,7 +328,8 @@ export const projectAgentTurnTerminal = (
 		model: execution.model,
 		startedAt: execution.startedAt,
 		usage,
-		variant: execution.variant,
+		effort: execution.effort,
+		reasoningMode: execution.reasoningMode,
 	});
 	return sanitizeRuntimeMessagesForTerminal(
 		replaceMessage(messages, { ...base, metadata }),
@@ -398,20 +410,29 @@ const finalizeAssistantMessageMetadata = (
 	context: {
 		agent?: AgentId;
 		model?: ChatModelSelection;
-		variant?: ModelVariant;
+		effort?: Effort;
+		reasoningMode?: ReasoningMode;
 		interrupted: boolean;
 		responseTimeMs?: number;
 	}
 ): SessionMessage => {
 	const agent = message.metadata?.agent ?? context.agent;
 	const model = message.metadata?.model ?? context.model;
-	const variant = message.metadata?.variant ?? context.variant;
+	const hasMessageChoice = !(
+		isUndefined(message.metadata?.effort) &&
+		isUndefined(message.metadata?.reasoningMode)
+	);
+	const effort = hasMessageChoice ? message.metadata?.effort : context.effort;
+	const reasoningMode = hasMessageChoice
+		? message.metadata?.reasoningMode
+		: context.reasoningMode;
 	const metadata: SessionMessageMetadata = {
 		...(message.metadata ?? {}),
 		...omitUndefined({
 			agent,
 			model,
-			variant,
+			effort,
+			reasoningMode,
 			responseTimeMs: context.responseTimeMs,
 		}),
 		interrupted: context.interrupted,
@@ -445,7 +466,10 @@ export const interruptSessionContext = (
 					agent: execution.agent,
 					model: execution.model,
 					responseTimeMs: Math.max(0, Date.now() - execution.startedAt),
-					...omitUndefined({ variant: execution.variant }),
+					...omitUndefined({
+						effort: execution.effort,
+						reasoningMode: execution.reasoningMode,
+					}),
 				}),
 	});
 	const next = [...messages];

@@ -13,8 +13,9 @@ export type InvocationOptions = Readonly<{
 	mode: ExecutionMode;
 	model?: string;
 	prompt?: string;
+	reasoningMode?: string;
 	session?: string;
-	thinking?: string;
+	effort?: string;
 }>;
 
 export type ApplicationContext = Readonly<{

@@ -1,13 +1,16 @@
 import type { AgentId } from "@wincode/agent-core";
-import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import {
+	type ChatModelSelection,
+	createReasoningSelection,
+	type ReasoningSelection,
+} from "@wincode/ai/models";
 import { buildAgent, type ResolvedCodingAgent } from "./built-ins";
 import type { AgentRegistry } from "./registry";
 
 export type AgentCallSelection = {
 	readonly agent: AgentId;
 	readonly model: ChatModelSelection;
-	readonly variant?: ModelVariant;
-};
+} & ReasoningSelection;
 
 export type PreparedAgentCall = AgentCallSelection & {
 	readonly resolvedAgent: ResolvedCodingAgent;
@@ -17,14 +20,13 @@ export type EffectiveAgentSelection = {
 	readonly agent: AgentId;
 	readonly model: ChatModelSelection;
 	readonly resolvedAgent?: ResolvedCodingAgent;
-	readonly variant?: ModelVariant;
-};
+} & ReasoningSelection;
 
 export const resolveEffectiveAgentSelection = (
 	registry: AgentRegistry | null,
 	agentId: AgentId,
 	fallbackModel: ChatModelSelection,
-	fallbackVariant: ModelVariant | undefined,
+	fallbackSelection: ReasoningSelection,
 	allowSubagent = false
 ): EffectiveAgentSelection => {
 	const candidates = allowSubagent
@@ -39,6 +41,10 @@ export const resolveEffectiveAgentSelection = (
 	const effectiveAgent = selected ?? fallbackAgent;
 	const effectiveAgentId =
 		effectiveAgent?.id ?? (registry ? buildAgent.id : agentId);
+	const selectedReasoning = createReasoningSelection(
+		effectiveAgent?.effort,
+		effectiveAgent?.reasoningMode
+	);
 	return {
 		agent: effectiveAgentId,
 		model: effectiveAgent?.model ?? fallbackModel,
@@ -55,7 +61,7 @@ export const resolveEffectiveAgentSelection = (
 					},
 				}
 			: {}),
-		variant: effectiveAgent?.model ? effectiveAgent.variant : fallbackVariant,
+		...(effectiveAgent?.model ? selectedReasoning : fallbackSelection),
 	};
 };
 
@@ -68,16 +74,20 @@ export const prepareAgentCall = (
 		registry,
 		selection.agent,
 		selection.model,
-		selection.variant,
+		selection,
 		options?.allowSubagent ?? false
 	);
 	if (!effective.resolvedAgent) {
 		throw new Error("No resolved Agent or model to send");
 	}
+	const reasoningSelection = createReasoningSelection(
+		effective.effort,
+		effective.reasoningMode
+	);
 	return {
 		agent: effective.agent,
 		model: effective.model,
-		variant: effective.variant,
+		...reasoningSelection,
 		resolvedAgent: effective.resolvedAgent,
 	};
 };

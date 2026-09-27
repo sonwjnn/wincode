@@ -11,11 +11,11 @@ import {
 	CompactAdapter,
 	ConnectAdapter,
 	DialogAdapter,
+	EffortAdapter,
 	ExitAdapter,
 	ModelsAdapter,
 	NewAdapter,
 	SettingsAdapter,
-	VariantsAdapter,
 } from "@/modules/commands/adapters";
 import type { CommandSpec } from "@/modules/commands/commands";
 import { createCommandExecutor } from "@/modules/commands/execute-command";
@@ -28,9 +28,9 @@ import { McpStatusDialogContent } from "@/modules/mcp";
 import { PermissionsDialogContent } from "@/modules/permissions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { AgentsDialogContent } from "@/modules/prompt-settings/ui/agents-dialog";
+import { EffortDialogContent } from "@/modules/prompt-settings/ui/effort-dialog";
 import { ModelsDialogContent } from "@/modules/prompt-settings/ui/models-dialog";
 import { ThemeDialogContent } from "@/modules/prompt-settings/ui/theme-dialog";
-import { VariantsDialogContent } from "@/modules/prompt-settings/ui/variants-dialog";
 import { SessionsDialogContent } from "@/modules/sessions/ui/dialogs/sessions-dialog";
 import {
 	type ClipboardSpawn,
@@ -69,8 +69,16 @@ export function useCommandExecutor(
 	const toast = useToast();
 	const connections = useConnections();
 	const refreshAgentRegistry = useRefreshAgentRegistry();
-	const { agent, model, setAgent, setModel, setVariant, variant } =
-		usePromptConfig();
+	const {
+		agent,
+		effort,
+		model,
+		reasoningMode,
+		setAgent,
+		setEffort,
+		setModel,
+		setReasoningMode,
+	} = usePromptConfig();
 	const supportedModel = findSupportedChatModelSelection(model);
 
 	const execute = useMemo(
@@ -192,25 +200,37 @@ export function useCommandExecutor(
 					currentModel: model,
 					setModel,
 				}),
-				variants: supportedModel
-					? new VariantsAdapter({
-							open: ({ currentModel, currentVariant, onSelectVariant }) =>
+				effort: supportedModel
+					? new EffortAdapter({
+							open: ({
+								currentEffort,
+								currentModel,
+								currentReasoningMode,
+								onSelectEffort,
+								onSelectReasoningMode,
+								onSelectDefault,
+							}) =>
 								dialog.open({
 									children: (
-										<VariantsDialogContent
+										<EffortDialogContent
+											currentEffort={currentEffort}
 											currentModel={currentModel}
-											currentVariant={currentVariant}
-											onSelectVariant={onSelectVariant}
+											currentReasoningMode={currentReasoningMode}
+											onSelectDefault={onSelectDefault}
+											onSelectEffort={onSelectEffort}
+											onSelectReasoningMode={onSelectReasoningMode}
 										/>
 									),
 									padding: { bottom: 1, left: 0, right: 0, top: 1 },
-									title: "Select Variant",
+									title: "Select Effort",
 									titleMargin: { left: 4, right: 4 },
 									width: CONNECTION_DIALOG_WIDTH,
 								}),
+							currentEffort: effort,
 							currentModel: supportedModel,
-							currentVariant: variant,
-							setVariant,
+							currentReasoningMode: reasoningMode,
+							setEffort,
+							setReasoningMode,
 						})
 					: undefined,
 				agents: new AgentsAdapter({
@@ -252,10 +272,12 @@ export function useCommandExecutor(
 			router,
 			setAgent,
 			setModel,
-			setVariant,
+			setEffort,
+			setReasoningMode,
 			supportedModel,
 			toast.show,
-			variant,
+			effort,
+			reasoningMode,
 		]
 	);
 

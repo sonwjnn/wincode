@@ -28,8 +28,8 @@ export const modelMetadataByKey: Readonly<
 			"output": 128000
 		},
 		"thinking": {
+			"toggle": true,
 			"levels": [
-				"none",
 				"low",
 				"medium",
 				"high",
@@ -67,8 +67,8 @@ export const modelMetadataByKey: Readonly<
 			"output": 128000
 		},
 		"thinking": {
+			"toggle": true,
 			"levels": [
-				"none",
 				"low",
 				"medium",
 				"high",
@@ -106,8 +106,8 @@ export const modelMetadataByKey: Readonly<
 			"output": 128000
 		},
 		"thinking": {
+			"toggle": true,
 			"levels": [
-				"none",
 				"low",
 				"medium",
 				"high",
@@ -145,8 +145,8 @@ export const modelMetadataByKey: Readonly<
 			"output": 128000
 		},
 		"thinking": {
+			"toggle": true,
 			"levels": [
-				"none",
 				"low",
 				"medium",
 				"high",
@@ -582,8 +582,8 @@ export const modelMetadataByKey: Readonly<
 			"output": 128000
 		},
 		"thinking": {
+			"toggle": true,
 			"levels": [
-				"none",
 				"low",
 				"medium",
 				"high",
@@ -1030,8 +1030,8 @@ export const modelMetadataByKey: Readonly<
 			"output": 64000
 		},
 		"thinking": {
+			"toggle": true,
 			"levels": [
-				"none",
 				"high"
 			]
 		}
@@ -1047,8 +1047,8 @@ export const modelMetadataByKey: Readonly<
 			"output": 128000
 		},
 		"thinking": {
+			"toggle": true,
 			"levels": [
-				"none",
 				"low",
 				"high"
 			]

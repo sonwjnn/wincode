@@ -15,14 +15,7 @@ import {
 } from "./catalog";
 
 export * from "./catalog";
-export {
-	getModelMetadata,
-	getSupportedModelVariants,
-	isSupportedModelVariant,
-	modelMetadataSnapshotDate,
-	normalizeModelVariant,
-	normalizeModelVariantForModel,
-} from "./model-metadata-runtime";
+export * from "./model-metadata-runtime";
 
 const modelSelectionBaseSchema = z.object({
 	modelId: z

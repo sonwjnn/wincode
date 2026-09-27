@@ -3,9 +3,10 @@ import { useRouter } from "@tanstack/react-router";
 import type { AgentId, SessionMessageId } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
-	type ModelVariant,
+	createReasoningSelection,
 	normalizeChatModelSelection,
-	normalizeModelVariant,
+	normalizeReasoningSelection,
+	type ReasoningSelection,
 } from "@wincode/ai/models";
 import { getErrorMessage, isNull, isUndefined } from "@wincode/runtime-utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -64,10 +65,12 @@ type SessionSendInput = Pick<
 	SessionSubmissionInput,
 	| "agent"
 	| "sessionModel"
-	| "sessionVariant"
+	| "sessionEffort"
+	| "sessionReasoningMode"
 	| "model"
 	| "resolvedAgent"
-	| "variant"
+	| "effort"
+	| "reasoningMode"
 >;
 
 type SessionSelectionInput = {
@@ -76,7 +79,7 @@ type SessionSelectionInput = {
 	model: ChatModelSelection;
 	registry: AgentRegistry;
 	restoredConfig: ResolvedSessionSelection | null;
-	variant?: ModelVariant;
+	reasoningSelection: ReasoningSelection;
 };
 
 type RecallKeyEvent = {
@@ -93,17 +96,46 @@ const resolveInitialSessionSelection = ({
 	model,
 	registry,
 	restoredConfig,
-	variant,
+	reasoningSelection,
 }: SessionSelectionInput): SessionSendInput => {
 	const resolvedModel =
 		normalizeChatModelSelection(initialMessage.metadata?.model ?? model) ??
 		model;
-	const persistedVariant = normalizeModelVariant(
-		resolvedModel,
-		restoredConfig?.variant ?? initialMessage.metadata?.variant
-	);
 	const sessionModel = restoredConfig?.model ?? model;
-	const sessionVariant = restoredConfig?.variant ?? variant;
+	const sessionChoice =
+		restoredConfig?.effort !== undefined ||
+		restoredConfig?.reasoningMode !== undefined
+			? createReasoningSelection(
+					restoredConfig?.effort,
+					restoredConfig?.reasoningMode
+				)
+			: reasoningSelection;
+	const sessionReasoningSelection = normalizeReasoningSelection(
+		sessionModel,
+		sessionChoice
+	);
+	let persistedChoice: ReasoningSelection = {};
+	if (
+		restoredConfig?.effort !== undefined ||
+		restoredConfig?.reasoningMode !== undefined
+	) {
+		persistedChoice = createReasoningSelection(
+			restoredConfig?.effort,
+			restoredConfig?.reasoningMode
+		);
+	} else if (
+		initialMessage.metadata?.effort !== undefined ||
+		initialMessage.metadata?.reasoningMode !== undefined
+	) {
+		persistedChoice = createReasoningSelection(
+			initialMessage.metadata?.effort,
+			initialMessage.metadata?.reasoningMode
+		);
+	}
+	const persistedSelection = normalizeReasoningSelection(
+		resolvedModel,
+		persistedChoice
+	);
 	const persistedAgentId =
 		initialMessage.metadata?.agent ?? restoredConfig?.agent ?? agent;
 	const persistedAgentIsAvailable = registry.selectableAgents.some(
@@ -113,15 +145,17 @@ const resolveInitialSessionSelection = ({
 		registry,
 		persistedAgentId,
 		persistedAgentIsAvailable ? resolvedModel : sessionModel,
-		persistedAgentIsAvailable ? persistedVariant : sessionVariant
+		persistedAgentIsAvailable ? persistedSelection : sessionReasoningSelection
 	);
 	return {
 		agent: effective.agent,
 		sessionModel,
-		sessionVariant,
+		sessionEffort: sessionReasoningSelection.effort,
+		sessionReasoningMode: sessionReasoningSelection.reasoningMode,
 		model: effective.model,
 		resolvedAgent: effective.resolvedAgent,
-		variant: effective.variant,
+		effort: effective.effort,
+		reasoningMode: effective.reasoningMode,
 	};
 };
 
@@ -133,8 +167,20 @@ export function SessionView({
 	sessionTitle,
 }: SessionViewProps) {
 	const router = useRouter();
-	const { agent, model, setAgent, setModel, setVariant, variant } =
-		usePromptConfig();
+	const {
+		agent,
+		effort,
+		model,
+		reasoningMode,
+		setAgent,
+		setEffort,
+		setModel,
+		setReasoningMode,
+	} = usePromptConfig();
+	const currentReasoningSelection = useMemo(
+		() => createReasoningSelection(effort, reasoningMode),
+		[effort, reasoningMode]
+	);
 	const registry = useAgentRegistry();
 	const dialog = useDialog();
 	const sessionStore = useMemo(() => getSessionStore(), []);
@@ -286,7 +332,11 @@ export function SessionView({
 			setAgent(restoredConfig.agent);
 		}
 		setModel(restoredConfig.model);
-		setVariant(restoredConfig.variant);
+		if (restoredConfig.effort === undefined) {
+			setReasoningMode(restoredConfig.reasoningMode);
+		} else {
+			setEffort(restoredConfig.effort);
+		}
 		setRestoredMessages(initialTranscript);
 		if (
 			!isUndefined(restoredConfig.persistedAgent) &&
@@ -303,7 +353,8 @@ export function SessionView({
 		restoredConfig,
 		setAgent,
 		setModel,
-		setVariant,
+		setEffort,
+		setReasoningMode,
 		show,
 	]);
 
@@ -432,9 +483,10 @@ export function SessionView({
 				registry,
 				agent,
 				model,
-				variant
+				currentReasoningSelection
 			);
-			await compact(focus, effective.model, effective.variant);
+			const reasoningSelection: ReasoningSelection = effective;
+			await compact(focus, effective.model, reasoningSelection);
 			return true;
 		} catch (error) {
 			show({
@@ -462,7 +514,7 @@ export function SessionView({
 			registry,
 			agent,
 			model,
-			variant
+			currentReasoningSelection
 		);
 		// `send` resolves when the full turn completes; the composer should reset
 		// as soon as this session accepts the new send, and a busy session accepts
@@ -470,12 +522,14 @@ export function SessionView({
 		void send({
 			agent: effective.agent,
 			sessionModel: model,
-			sessionVariant: variant,
+			sessionEffort: effort,
+			sessionReasoningMode: reasoningMode,
 			composition,
 			files,
 			model: effective.model,
 			resolvedAgent: effective.resolvedAgent,
-			variant: effective.variant,
+			effort: effective.effort,
+			reasoningMode: effective.reasoningMode,
 			userText,
 			skill,
 		})
@@ -511,7 +565,7 @@ export function SessionView({
 				model,
 				registry,
 				restoredConfig,
-				variant,
+				reasoningSelection: currentReasoningSelection,
 			}),
 			messageId,
 		});
@@ -591,7 +645,7 @@ export function SessionView({
 						model,
 						registry,
 						restoredConfig,
-						variant,
+						reasoningSelection: currentReasoningSelection,
 					}),
 					messageId: initialMessage.id,
 				});
@@ -621,7 +675,7 @@ export function SessionView({
 		send,
 		sessionId,
 		show,
-		variant,
+		currentReasoningSelection,
 	]);
 
 	return (

@@ -132,7 +132,10 @@ export const selectionWire = (
 ): Record<string, unknown> => ({
 	agentId: selection.agentId,
 	model: selection.model,
-	...(selection.variant === undefined ? {} : { variant: selection.variant }),
+	...(selection.effort === undefined ? {} : { effort: selection.effort }),
+	...(selection.reasoningMode === undefined
+		? {}
+		: { reasoningMode: selection.reasoningMode }),
 });
 
 export const encodeCursor = (value: {

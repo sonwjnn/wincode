@@ -35,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Features
 
+- **Reasoning choices are split into Effort and Reasoning Mode.** The `/effort`
+  picker offers only the selected model's supported Efforts and Modes; one-shot
+  CLI uses `--effort` and `--reasoning-mode`. Session records, RPC, configured
+  Agents, and compaction persist the provider-neutral choice. Reasoning `variant`,
+  `--thinking`, and `/variants` aliases are removed; existing Agent configuration
+  using `variant` must be updated manually.
+
 - **Runtime diagnostics stay out of CLI and protocol streams.** Runtime code uses
   the shared `logger` to append structured records to
   `~/.wincode/logs/wincode.YYYY-MM-DD.log`; with `WINCODE_DEBUG=1`, all levels

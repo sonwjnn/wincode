@@ -10,7 +10,8 @@ import {
 import { useKeyboard, usePaste } from "@opentui/react";
 import {
 	findSupportedChatModelSelection,
-	getSupportedModelVariants,
+	getSupportedModelEfforts,
+	getSupportedReasoningModes,
 	supportedChatModelIdSchema,
 } from "@wincode/ai/models";
 import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
@@ -164,15 +165,19 @@ export function ChatTextArea({
 	showCompactCommand = true,
 	steering = false,
 }: ChatTextAreaProps) {
-	const { agent, cycleAgent, cycleVariant, model } = usePromptConfig();
+	const { agent, cycleAgent, cycleReasoningChoice, model } = usePromptConfig();
 	const supportedModel = findSupportedChatModelSelection(model);
 	const registry = useAgentRegistry();
-	const hideVariants =
-		isNull(supportedModel) ||
-		getSupportedModelVariants({
-			modelId: supportedChatModelIdSchema.parse(supportedModel.id),
-			providerId: supportedModel.connectionProviderId,
-		}).length === 0;
+	const chatModelSelection = isNull(supportedModel)
+		? null
+		: {
+				modelId: supportedChatModelIdSchema.parse(supportedModel.id),
+				providerId: supportedModel.connectionProviderId,
+			};
+	const hideEffort =
+		chatModelSelection === null ||
+		(getSupportedModelEfforts(chatModelSelection).length === 0 &&
+			getSupportedReasoningModes(chatModelSelection).length === 0);
 	const textAreaRef = useRef<TextareaRenderable>(null);
 	const ctrlCRef = useRef<() => boolean>(() => false);
 	const lastRecalledFilesRevisionRef = useRef(0);
@@ -266,12 +271,12 @@ export function ChatTextArea({
 		getFileMentionOptions,
 		getSkills: discoverAvailableSkills,
 		hideCompact: !showCompactCommand,
-		hideVariants,
+		hideEffort,
 		onError: handleSubmitError,
 		onSubmit,
 		onTab: (shift) =>
 			shift
-				? cycleVariant()
+				? cycleReasoningChoice()
 				: cycleAgent(registry?.selectableAgents ?? builtInAgents),
 		sessionPromptHistory,
 		steering,

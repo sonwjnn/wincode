@@ -1,4 +1,6 @@
 import { Database } from "bun:sqlite";
+import { effortSchema, reasoningModeSchema } from "@wincode/ai/models";
+import { isPlainObject } from "@wincode/runtime-utils";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { resolveLocalDatabasePath } from "./path";
 import { sessionSchema } from "./schema";
@@ -21,7 +23,198 @@ const ensureSessionEditModeColumn = (sqlite: Database): void => {
 		"ALTER TABLE session ADD COLUMN edit_mode TEXT DEFAULT 'hashline' NOT NULL;"
 	);
 };
-const initializeSchema = (sqlite: Database): void => {
+type LegacyChoiceColumns = Readonly<{
+	table: string;
+	id: string;
+	legacy: string;
+	effort: string;
+	reasoningMode: string;
+}>;
+
+const legacySessionChoiceColumns = {
+	table: "session",
+	id: "id",
+	legacy: "variant",
+	effort: "effort",
+	reasoningMode: "reasoning_mode",
+} as const satisfies LegacyChoiceColumns;
+const legacyCompactionChoiceColumns = {
+	table: "session_compaction",
+	id: "id",
+	legacy: "summarization_variant",
+	effort: "summarization_effort",
+	reasoningMode: "summarization_reasoning_mode",
+} as const satisfies LegacyChoiceColumns;
+
+const columnNames = (sqlite: Database, table: string): Set<string> =>
+	new Set(
+		(
+			sqlite.query(`PRAGMA table_info(${table})`).all() as Array<{
+				name: string;
+			}>
+		).map(({ name }) => name)
+	);
+
+const ensureTextColumn = (
+	sqlite: Database,
+	table: string,
+	column: string
+): void => {
+	if (!columnNames(sqlite, table).has(column)) {
+		sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT;`);
+	}
+};
+
+const classifyLegacyChoice = (
+	value: unknown,
+	table: string
+): { effort: string | null; reasoningMode: string | null } => {
+	const effort = effortSchema.safeParse(value);
+	if (effort.success) {
+		return { effort: effort.data, reasoningMode: null };
+	}
+	const reasoningMode = reasoningModeSchema.safeParse(value);
+	if (reasoningMode.success) {
+		return { effort: null, reasoningMode: reasoningMode.data };
+	}
+	throw new Error(
+		`Cannot safely migrate an unknown persisted reasoning choice in ${table}.`
+	);
+};
+
+const migrateLegacyChoiceProperty = (
+	value: Record<string, unknown>,
+	table: string
+): boolean => {
+	if (!Object.hasOwn(value, "variant")) {
+		return false;
+	}
+	const choice = classifyLegacyChoice(value.variant, table);
+	const existingEffort = value.effort;
+	const existingReasoningMode = value.reasoningMode;
+	if (
+		(existingEffort != null && existingEffort !== choice.effort) ||
+		(existingReasoningMode != null &&
+			existingReasoningMode !== choice.reasoningMode)
+	) {
+		throw new Error(
+			`Conflicting persisted reasoning choices prevent safe migration in ${table}.`
+		);
+	}
+	value.variant = undefined;
+	value.effort = undefined;
+	value.reasoningMode = undefined;
+	if (choice.effort === null) {
+		value.reasoningMode = choice.reasoningMode;
+	} else {
+		value.effort = choice.effort;
+	}
+	return true;
+};
+
+const migrateLegacySessionRecordChoices = (sqlite: Database): void => {
+	const rows = sqlite
+		.query("SELECT record_id, model_json, messages_json FROM session_record")
+		.all() as Array<{
+		record_id: string;
+		model_json: string;
+		messages_json: string;
+	}>;
+	const update = sqlite.query(
+		"UPDATE session_record SET model_json = ?, messages_json = ? WHERE record_id = ?"
+	);
+	for (const row of rows) {
+		const model = JSON.parse(row.model_json) as unknown;
+		if (!isPlainObject(model)) {
+			throw new Error("Cannot safely migrate an invalid Session Record model.");
+		}
+		let changed = migrateLegacyChoiceProperty(
+			model,
+			"session_record.model_json"
+		);
+		const messages = JSON.parse(row.messages_json) as unknown;
+		if (!Array.isArray(messages)) {
+			throw new Error("Cannot safely migrate invalid Session Record messages.");
+		}
+		for (const message of messages) {
+			if (!(isPlainObject(message) && isPlainObject(message.metadata))) {
+				continue;
+			}
+			changed =
+				migrateLegacyChoiceProperty(
+					message.metadata,
+					"session_record.messages_json"
+				) || changed;
+		}
+		if (changed) {
+			update.run(
+				JSON.stringify(model),
+				JSON.stringify(messages),
+				row.record_id
+			);
+		}
+	}
+};
+
+const reconcileLegacyChoiceColumn = (
+	sqlite: Database,
+	columns: LegacyChoiceColumns
+): void => {
+	ensureTextColumn(sqlite, columns.table, columns.effort);
+	ensureTextColumn(sqlite, columns.table, columns.reasoningMode);
+	if (!columnNames(sqlite, columns.table).has(columns.legacy)) {
+		return;
+	}
+	const rows = sqlite
+		.query(
+			`SELECT ${columns.id}, ${columns.legacy}, ${columns.effort}, ${columns.reasoningMode}
+			FROM ${columns.table}
+			WHERE ${columns.legacy} IS NOT NULL`
+		)
+		.all() as Record<string, string | null>[];
+	const update = sqlite.query(
+		`UPDATE ${columns.table}
+		SET ${columns.effort} = ?, ${columns.reasoningMode} = ?
+		WHERE ${columns.id} = ?`
+	);
+	for (const row of rows) {
+		const choice = classifyLegacyChoice(row[columns.legacy], columns.table);
+		if (
+			(row[columns.effort] !== null && row[columns.effort] !== choice.effort) ||
+			(row[columns.reasoningMode] !== null &&
+				row[columns.reasoningMode] !== choice.reasoningMode)
+		) {
+			throw new Error(
+				`Conflicting persisted reasoning choices prevent safe migration in ${columns.table}.`
+			);
+		}
+		const id = row[columns.id];
+		if (typeof id !== "string") {
+			throw new Error(
+				`A row in ${columns.table} is missing its persisted identifier.`
+			);
+		}
+		update.run(choice.effort ?? null, choice.reasoningMode ?? null, id);
+	}
+	sqlite.exec(`ALTER TABLE ${columns.table} DROP COLUMN ${columns.legacy};`);
+};
+
+const syncReasoningSelectionSchema = (sqlite: Database): void => {
+	sqlite.exec("BEGIN IMMEDIATE;");
+	try {
+		reconcileLegacyChoiceColumn(sqlite, legacySessionChoiceColumns);
+		reconcileLegacyChoiceColumn(sqlite, legacyCompactionChoiceColumns);
+		migrateLegacySessionRecordChoices(sqlite);
+		sqlite.exec("COMMIT;");
+	} catch (error) {
+		sqlite.exec("ROLLBACK;");
+		throw error;
+	}
+};
+const initializeSchema = (
+	sqlite: Database,
+	skipReasoningSelectionSync: boolean
+): void => {
 	sqlite.exec(`
 		CREATE TABLE IF NOT EXISTS session_workspace (
 			id TEXT PRIMARY KEY NOT NULL,
@@ -55,7 +248,8 @@ const initializeSchema = (sqlite: Database): void => {
 			updated_at INTEGER NOT NULL,
 			last_message_at INTEGER,
 			model_json TEXT,
-			variant TEXT,
+			effort TEXT,
+			reasoning_mode TEXT,
 			edit_mode TEXT DEFAULT 'hashline' NOT NULL
 		);
 
@@ -221,7 +415,8 @@ const initializeSchema = (sqlite: Database): void => {
 			trigger TEXT NOT NULL,
 			focus TEXT,
 			summarization_model_json TEXT NOT NULL,
-			summarization_variant TEXT,
+			summarization_effort TEXT,
+			summarization_reasoning_mode TEXT,
 			summarization_usage_json TEXT,
 			created_at INTEGER NOT NULL,
 			completed_at INTEGER NOT NULL
@@ -262,14 +457,39 @@ const initializeSchema = (sqlite: Database): void => {
 			ON session_record (session_id, position);
 	`);
 	ensureSessionEditModeColumn(sqlite);
+	if (!skipReasoningSelectionSync) {
+		try {
+			syncReasoningSelectionSchema(sqlite);
+		} catch (error) {
+			throw new Error(
+				"Session reasoning choices cannot be reconciled safely. To discard local Session data and attachments, run `bun run --cwd packages/coding-agent db:reset-sessions`, then restart.",
+				{ cause: error }
+			);
+		}
+	}
+};
+
+const openDatabase = (
+	path: string,
+	skipReasoningSelectionSync: boolean
+): { db: SessionDatabase; sqlite: Database } => {
+	const sqlite = new Database(path, { create: true });
+	try {
+		applyPragmas(sqlite);
+		initializeSchema(sqlite, skipReasoningSelectionSync);
+		const db = drizzle(sqlite, { schema: sessionSchema });
+		return { db, sqlite };
+	} catch (error) {
+		sqlite.close();
+		throw error;
+	}
 };
 
 export const createDatabase = (
 	path: string = resolveLocalDatabasePath()
-): { db: SessionDatabase; sqlite: Database } => {
-	const sqlite = new Database(path, { create: true });
-	applyPragmas(sqlite);
-	initializeSchema(sqlite);
-	const db = drizzle(sqlite, { schema: sessionSchema });
-	return { db, sqlite };
-};
+): { db: SessionDatabase; sqlite: Database } => openDatabase(path, false);
+
+/** Opens the database without reasoning reconciliation for explicit reset only. */
+export const createDatabaseForSessionReset = (
+	path: string
+): { db: SessionDatabase; sqlite: Database } => openDatabase(path, true);

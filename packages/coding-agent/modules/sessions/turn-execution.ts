@@ -7,7 +7,11 @@ import {
 	type ToolCallId,
 	toSessionMessageId,
 } from "@wincode/agent-core";
-import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import type {
+	ChatModelSelection,
+	Effort,
+	ReasoningMode,
+} from "@wincode/ai/models";
 import { omitUndefined } from "@wincode/runtime-utils";
 import type { McpCatalogSnapshot } from "@/modules/mcp";
 import type {
@@ -58,12 +62,14 @@ export type TurnExecution = {
 	readonly resolvedAgent?: ResolvedCodingAgent;
 	/** The session-level selection recorded on this execution's Session Records. */
 	readonly sessionModel: ChatModelSelection;
-	readonly sessionVariant?: ModelVariant;
+	readonly sessionEffort?: Effort;
+	readonly sessionReasoningMode?: ReasoningMode;
 	/** The Session Context message this execution answers. */
 	readonly sourceUserMessageId: SessionMessageId | null;
 	readonly startedAt: number;
 	readonly turnId: AgentTurnId;
-	readonly variant?: ModelVariant;
+	readonly effort?: Effort;
+	readonly reasoningMode?: ReasoningMode;
 	/** The Skill catalog armed for the execution's turn, when one was built. */
 	armedSkill?: TurnExecutionSkill;
 	/**
@@ -87,7 +93,8 @@ export type BeginTurnExecutionInput = {
 	readonly parent?: AgentTurnDelegation;
 	readonly resolvedAgent?: ResolvedCodingAgent;
 	readonly sessionModel: ChatModelSelection;
-	readonly sessionVariant?: ModelVariant;
+	readonly sessionEffort?: Effort;
+	readonly sessionReasoningMode?: ReasoningMode;
 	/** The Skill, if any, this execution's turn must load. */
 	readonly skillRequest?: SkillRequestContext;
 	/** The Session Context message this execution answers, when known. */
@@ -95,7 +102,8 @@ export type BeginTurnExecutionInput = {
 	readonly startedAt: number;
 	/** The Agent Turn Identifier; generated when the caller has none yet. */
 	readonly turnId?: AgentTurnId;
-	readonly variant?: ModelVariant;
+	readonly effort?: Effort;
+	readonly reasoningMode?: ReasoningMode;
 };
 
 export const createTurnExecution = ({
@@ -106,12 +114,14 @@ export const createTurnExecution = ({
 	parent,
 	resolvedAgent,
 	sessionModel,
-	sessionVariant,
+	sessionEffort,
+	sessionReasoningMode,
 	skillRequest,
 	sourceUserMessageId,
 	startedAt,
 	turnId: providedTurnId,
-	variant,
+	effort,
+	reasoningMode,
 }: BeginTurnExecutionInput): TurnExecution => {
 	const turnId = providedTurnId ?? createAgentTurnId();
 	return {
@@ -120,9 +130,11 @@ export const createTurnExecution = ({
 			armedSkill,
 			parent,
 			resolvedAgent,
-			sessionVariant,
+			sessionEffort,
+			sessionReasoningMode,
 			skillRequest,
-			variant,
+			effort,
+			reasoningMode,
 		}),
 		assistantId: toSessionMessageId(`assistant-${turnId}`),
 		childAborts: childAborts ?? new Map(),

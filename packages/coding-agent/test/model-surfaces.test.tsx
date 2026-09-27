@@ -2,13 +2,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { modelCatalog } from "@wincode/ai/models";
-import { act } from "react";
+import { act, useEffect, useRef } from "react";
 import {
 	getActiveModels,
 	getModelsForPicker,
 } from "@/modules/commands/adapters/models-adapter";
+import { EffortDialogContent } from "@/modules/prompt-settings/ui/effort-dialog";
 import { ModelsDialogContent } from "@/modules/prompt-settings/ui/models-dialog";
-import { VariantsDialogContent } from "@/modules/prompt-settings/ui/variants-dialog";
 import { SessionUsageBar } from "@/modules/sessions/ui/components/session-usage-bar";
 import type { SessionUsageSummary } from "@/modules/sessions/usage/session-usage";
 import {
@@ -59,6 +59,35 @@ const renderSurfaces = async (
 		{ height: 40, width: 120 }
 	);
 	activeSetups.push(setup);
+	await flushUi(setup);
+	return setup;
+};
+
+const renderDialogSurface = async (content: React.ReactNode) => {
+	function Harness() {
+		const dialog = useDialog();
+		const opened = useRef(false);
+		useEffect(() => {
+			if (opened.current) {
+				return;
+			}
+			opened.current = true;
+			dialog.open({ children: content, title: "Select Effort" });
+		}, [dialog]);
+		return null;
+	}
+	const setup = await testRender(
+		<ThemeProvider>
+			<KeyboardLayerProvider>
+				<DialogProvider>
+					<Harness />
+				</DialogProvider>
+			</KeyboardLayerProvider>
+		</ThemeProvider>,
+		{ height: 40, width: 120 }
+	);
+	activeSetups.push(setup);
+	await flushUi(setup);
 	await flushUi(setup);
 	return setup;
 };
@@ -135,67 +164,116 @@ describe("model picker", () => {
 	});
 });
 
-describe("variants dialog", () => {
-	test("renders the independently specified variant options", async () => {
+describe("Effort and Reasoning Mode picker", () => {
+	test("renders distinct Modes and supported Efforts for a toggle-plus-ladder model", async () => {
 		const model = modelCatalog.find(
 			(entry) =>
-				entry.connectionProviderId === "openai" && entry.id === "gpt-5.6-luna"
+				entry.connectionProviderId === "opencode-go" &&
+				entry.id === "qwen3.8-flash"
 		);
 		if (!model) {
 			throw new Error("fixture model missing");
 		}
 		const setup = await renderSurfaces(() => (
-			<VariantsDialogContent
+			<EffortDialogContent
+				currentEffort={undefined}
 				currentModel={model}
-				currentVariant={undefined}
-				onSelectVariant={() => undefined}
+				currentReasoningMode={undefined}
+				onSelectDefault={() => undefined}
+				onSelectEffort={() => undefined}
+				onSelectReasoningMode={() => undefined}
 			/>
 		));
 
-		// These labels are the catalog contract for this fixture, not a second
-		// call to the helper that the component uses to build its options.
-		const expectedVariants = [
-			"default",
-			"none",
-			"low",
-			"medium",
-			"high",
-			"xhigh",
-			"max",
-		];
-		await setup.waitForFrame((frame) => frame.includes("xhigh"));
-		let frame = setup.captureCharFrame();
+		await setup.waitForFrame((frame) => frame.includes("Effort: xhigh"));
+		const frame = setup.captureCharFrame();
 		expect(frame).toContain("default");
-		for (const variant of expectedVariants.slice(1, -1)) {
-			expect(frame).toContain(`\n    ${variant}`);
+		expect(frame).toContain("Reasoning Mode: none");
+		expect(frame).toContain("Effort: low");
+		expect(frame).toContain("Effort: medium");
+		expect(frame).toContain("Effort: xhigh");
+		expect(frame).not.toContain("Reasoning Mode: thinking");
+		expect(frame).not.toContain("Effort: high");
+	});
+	test("selecting default clears an active Effort", async () => {
+		const model = modelCatalog.find(
+			(entry) =>
+				entry.connectionProviderId === "opencode-go" &&
+				entry.id === "qwen3.8-flash"
+		);
+		if (!model) {
+			throw new Error("fixture model missing");
 		}
-		await act(async () => {
-			await setup.mockInput.typeText("max");
-		});
+		let cleared = false;
+		const setup = await renderDialogSurface(
+			<EffortDialogContent
+				currentEffort="low"
+				currentModel={model}
+				currentReasoningMode={undefined}
+				onSelectDefault={() => {
+					cleared = true;
+				}}
+				onSelectEffort={() => undefined}
+				onSelectReasoningMode={() => undefined}
+			/>
+		);
+
+		await act(async () => setup.mockInput.typeText("default"));
 		await flushUi(setup);
-		frame = setup.captureCharFrame();
-		expect(frame).toContain("\n    max");
+		await act(() => setup.mockInput.pressEnter());
+		await flushUi(setup);
+
+		expect(cleared).toBe(true);
 	});
 
-	test("reports an empty list for a model with no reasoning control", async () => {
+	test("renders both available Reasoning Modes without Efforts for a toggle-only model", async () => {
 		const model = modelCatalog.find(
 			(entry) =>
-				entry.connectionProviderId === "opencode-go" && entry.id === "kimi-k2.6"
+				entry.connectionProviderId === "opencode-go" &&
+				entry.id === "qwen3.7-max"
 		);
 		if (!model) {
 			throw new Error("fixture model missing");
 		}
 		const setup = await renderSurfaces(() => (
-			<VariantsDialogContent
+			<EffortDialogContent
+				currentEffort={undefined}
 				currentModel={model}
-				currentVariant={undefined}
-				onSelectVariant={() => undefined}
+				currentReasoningMode={undefined}
+				onSelectDefault={() => undefined}
+				onSelectEffort={() => undefined}
+				onSelectReasoningMode={() => undefined}
+			/>
+		));
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("Reasoning Mode: none");
+		expect(frame).toContain("Reasoning Mode: thinking");
+		expect(frame).not.toContain("Effort:");
+	});
+
+	test("renders no choices for a budget-only model", async () => {
+		const model = modelCatalog.find(
+			(entry) =>
+				entry.connectionProviderId === "anthropic" &&
+				entry.id === "claude-sonnet-4-5"
+		);
+		if (!model) {
+			throw new Error("fixture model missing");
+		}
+		const setup = await renderSurfaces(() => (
+			<EffortDialogContent
+				currentEffort={undefined}
+				currentModel={model}
+				currentReasoningMode={undefined}
+				onSelectDefault={() => undefined}
+				onSelectEffort={() => undefined}
+				onSelectReasoningMode={() => undefined}
 			/>
 		));
 
-		// Reasoning is always on upstream with nothing to configure, so the
-		// dialog says so rather than offering a level that does nothing.
-		expect(setup.captureCharFrame()).toContain("No variants available");
+		expect(setup.captureCharFrame()).toContain(
+			"No Efforts or Reasoning Modes available"
+		);
 	});
 });
 

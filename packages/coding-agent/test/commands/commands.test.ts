@@ -9,7 +9,7 @@ test("keeps built-in command kinds and dialog routing stable", () => {
 		{ kind: "settings", value: "/settings" },
 		{ kind: "agents", value: "/agents" },
 		{ kind: "models", value: "/models" },
-		{ kind: "variants", value: "/variants" },
+		{ kind: "effort", value: "/effort" },
 		{ dialogKey: "sessions", kind: "dialog", value: "/sessions" },
 		{ dialogKey: "theme", kind: "dialog", value: "/themes" },
 		{ kind: "connect", value: "/connect" },
@@ -37,16 +37,18 @@ test("suppresses popover rows for commands the view cannot run", () => {
 		getVisibleCommands({ hideCompact: true }).map((command) => command.kind)
 	).not.toContain("compact");
 	expect(
-		getVisibleCommands({ hideVariants: true }).map((command) => command.kind)
-	).not.toContain("variants");
+		getVisibleCommands({ hideEffort: true }).map((command) => command.kind)
+	).not.toContain("effort");
 });
 
 test("resolves typed built-in commands by exact name", () => {
 	expect(findBuiltinCommand(" /models ")).toMatchObject({ kind: "models" });
+	expect(findBuiltinCommand(" /effort ")).toMatchObject({ kind: "effort" });
 	expect(findBuiltinCommand("/MODELS")).toMatchObject({ kind: "models" });
 	expect(findBuiltinCommand("/settings")).toMatchObject({ kind: "settings" });
 	expect(findBuiltinCommand("/models now")).toBeNull();
 	expect(findBuiltinCommand("/settings now")).toBeNull();
+	expect(findBuiltinCommand("/variants")).toBeNull();
 	expect(findBuiltinCommand("models")).toBeNull();
 	expect(findBuiltinCommand("/skill:review")).toBeNull();
 	expect(findBuiltinCommand("/unknown")).toBeNull();

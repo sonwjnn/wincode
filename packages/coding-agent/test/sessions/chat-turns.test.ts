@@ -32,7 +32,7 @@ const assistant = (id: string, interrupted = false): SessionMessage => ({
 const sharedTurnMetadata: NonNullable<SessionMessage["metadata"]> = {
 	agent: agentId("build"),
 	model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
-	variant: "low",
+	effort: "low",
 };
 
 const userWithSharedMetadata = (id: string): SessionMessage => ({

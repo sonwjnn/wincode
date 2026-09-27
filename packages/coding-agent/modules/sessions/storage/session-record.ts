@@ -26,8 +26,11 @@ import {
 } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
+	effortSchema,
 	modelSelectionSchema,
-	modelVariantSchema,
+	normalizeReasoningSelection,
+	type ReasoningSelection,
+	reasoningModeSchema,
 } from "@wincode/ai/models";
 import {
 	isArray,
@@ -67,16 +70,36 @@ const isRecordModel = (value: unknown): boolean => {
 	const model = value as {
 		modelId?: unknown;
 		providerId?: unknown;
-		variant?: unknown;
+		effort?: unknown;
+		reasoningMode?: unknown;
 	};
+	if (!isNonEmptyString(model.modelId)) {
+		return false;
+	}
+	if (!isNonEmptyString(model.providerId)) {
+		return false;
+	}
 	if (
-		!(isNonEmptyString(model.modelId) && isNonEmptyString(model.providerId))
+		Object.keys(model).some(
+			(key) =>
+				key !== "modelId" &&
+				key !== "providerId" &&
+				key !== "effort" &&
+				key !== "reasoningMode"
+		)
 	) {
 		return false;
 	}
+	const hasEffort = !isUndefined(model.effort);
+	const hasReasoningMode = !isUndefined(model.reasoningMode);
+	if (hasEffort && hasReasoningMode) {
+		return false;
+	}
 	return (
-		isUndefined(model.variant) ||
-		modelVariantSchema.safeParse(model.variant).success
+		(isUndefined(model.effort) ||
+			effortSchema.safeParse(model.effort).success) &&
+		(isUndefined(model.reasoningMode) ||
+			reasoningModeSchema.safeParse(model.reasoningMode).success)
 	);
 };
 
@@ -264,7 +287,24 @@ const metadataForRecord = (
 		const parsedModel = modelSelectionSchema.safeParse(metadata.model);
 		model = parsedModel.success ? parsedModel.data : undefined;
 	}
-	const variant = metadata?.variant ?? record.model.variant;
+	const hasMessageChoice = !isUndefined(
+		metadata?.effort ?? metadata?.reasoningMode
+	);
+	const effortValue = hasMessageChoice ? metadata?.effort : record.model.effort;
+	const reasoningModeValue = hasMessageChoice
+		? metadata?.reasoningMode
+		: record.model.reasoningMode;
+	const parsedEffort = effortSchema.safeParse(effortValue);
+	const parsedReasoningMode = reasoningModeSchema.safeParse(reasoningModeValue);
+	let choice: ReasoningSelection = {};
+	if (isUndefined(effortValue) && parsedReasoningMode.success) {
+		choice = { reasoningMode: parsedReasoningMode.data };
+	} else if (isUndefined(reasoningModeValue) && parsedEffort.success) {
+		choice = { effort: parsedEffort.data };
+	}
+	const normalizedChoice = model
+		? normalizeReasoningSelection(model, choice)
+		: {};
 	const parsed = sessionMessageMetadataSchema.safeParse({
 		...pickTruthy({ agent: metadata?.agent ?? record.agentId }),
 		...omitUndefined({
@@ -274,7 +314,7 @@ const metadataForRecord = (
 			skill: metadata?.skill,
 			sourceUserMessageId: metadata?.sourceUserMessageId,
 			usage: metadata?.usage,
-			variant,
+			...normalizedChoice,
 		}),
 	});
 	return parsed.success ? parsed.data : undefined;
@@ -402,7 +442,8 @@ const toDurableMetadata = (
 			skill: durableSkill,
 			sourceUserMessageId,
 			usage: metadata.usage,
-			variant: metadata.variant,
+			effort: metadata.effort,
+			reasoningMode: metadata.reasoningMode,
 		}),
 	};
 };
@@ -476,14 +517,16 @@ export const buildUserSessionRecord = ({
 	message,
 	model,
 	turnId,
-	variant,
+	effort,
+	reasoningMode,
 }: {
 	agentId: AgentId;
 	delegation?: SessionRecord["delegation"];
 	message: SessionMessage;
 	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
 	turnId: AgentTurnId;
-	variant?: SessionRecord["model"]["variant"];
+	effort?: SessionRecord["model"]["effort"];
+	reasoningMode?: SessionRecord["model"]["reasoningMode"];
 }): SessionRecord => {
 	const durableMessage = toDurableSessionMessageRecord(message);
 	if (isUndefined(durableMessage) || durableMessage.role !== "user") {
@@ -491,6 +534,7 @@ export const buildUserSessionRecord = ({
 			"User Session Record has no durable message."
 		);
 	}
+	const hasChoice = !isUndefined(effort ?? reasoningMode);
 	return {
 		agentId,
 		...omitUndefined({ delegation }),
@@ -499,7 +543,12 @@ export const buildUserSessionRecord = ({
 		model: {
 			modelId: model.modelId,
 			providerId: model.providerId,
-			...omitUndefined({ variant }),
+			...omitUndefined({
+				effort: hasChoice ? effort : message.metadata?.effort,
+				reasoningMode: hasChoice
+					? reasoningMode
+					: message.metadata?.reasoningMode,
+			}),
 		},
 		outcome: { kind: "user" },
 		turnId,

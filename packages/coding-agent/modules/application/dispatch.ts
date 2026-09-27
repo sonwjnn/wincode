@@ -44,7 +44,8 @@ const HELP_TEXT = [
 	"      --session <id>   Continue a durable Session",
 	"      --agent <id>     Select an Agent",
 	"      --model <id>     Select a Model",
-	"      --thinking <v>   Select a Thinking Level",
+	"      --effort <id>    Select an Effort",
+	"      --reasoning-mode <id>  Select a Reasoning Mode",
 	"      --auto           Auto-approve ordinary tool requests",
 	"  -h, --help           Show this help",
 	"  -v, --version        Show the version",
@@ -112,7 +113,8 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 	let model: string | undefined;
 	let prompt: string | undefined;
 	let session: string | undefined;
-	let thinking: string | undefined;
+	let effort: string | undefined;
+	let reasoningMode: string | undefined;
 	let help = false;
 	let version = false;
 	let oneShotOption = false;
@@ -182,10 +184,17 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			oneShotOption = true;
 			continue;
 		}
-		if (option === "--thinking") {
+		if (option === "--effort") {
 			const next = nextValue(args, index, option, inlineValue);
 			index = next.index;
-			thinking = next.value;
+			effort = next.value;
+			oneShotOption = true;
+			continue;
+		}
+		if (option === "--reasoning-mode") {
+			const next = nextValue(args, index, option, inlineValue);
+			index = next.index;
+			reasoningMode = next.value;
 			oneShotOption = true;
 			continue;
 		}
@@ -213,6 +222,12 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			invocation: { auto, mode },
 		};
 	}
+	if (effort !== undefined && reasoningMode !== undefined) {
+		throw new InvocationError(
+			"Use either --effort or --reasoning-mode, not both.",
+			USAGE_EXIT_CODE
+		);
+	}
 	if (oneShotOption && !modeExplicit) {
 		throw new InvocationError(
 			"One-shot options require --mode print or --mode json.",
@@ -235,7 +250,8 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			...(model === undefined ? {} : { model }),
 			...(prompt === undefined ? {} : { prompt }),
 			...(session === undefined ? {} : { session }),
-			...(thinking === undefined ? {} : { thinking }),
+			...(effort === undefined ? {} : { effort }),
+			...(reasoningMode === undefined ? {} : { reasoningMode }),
 		},
 	};
 }

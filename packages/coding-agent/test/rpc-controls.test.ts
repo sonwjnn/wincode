@@ -108,7 +108,8 @@ const createHandler = ({
 						agent: "build",
 						model,
 						persistedAgent: "build",
-						variant: undefined,
+						effort: undefined,
+						reasoningMode: undefined,
 					}
 				: null,
 		getSnapshot: () => fromPartial({ turnActive: active }),

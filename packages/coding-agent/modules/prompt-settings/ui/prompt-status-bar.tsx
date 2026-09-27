@@ -2,7 +2,6 @@ import { TextAttributes } from "@opentui/core";
 import {
 	findSupportedChatModelSelection,
 	formatModelLabel,
-	normalizeModelVariant,
 } from "@wincode/ai/models";
 import { agentLabelFromId, useAgentRegistry } from "@/modules/agents";
 import { AutoApprovalIndicator } from "@/modules/permissions";
@@ -11,7 +10,7 @@ import { getAgentColor } from "@/shared/providers/theme/themes";
 import { usePromptConfig } from "../context/prompt-config-provider";
 
 export function StatusBar() {
-	const { agent, model, variant } = usePromptConfig();
+	const { agent, effort, model, reasoningMode } = usePromptConfig();
 	const { colors } = useTheme();
 	const agentColor = getAgentColor(colors, agent);
 	const registry = useAgentRegistry();
@@ -22,7 +21,13 @@ export function StatusBar() {
 	const modelName = chatModel
 		? formatModelLabel(chatModel.displayName)
 		: model.modelId;
-	const variantName = normalizeModelVariant(model, variant) ?? "default";
+	let reasoningLabel = "default";
+	if (reasoningMode !== undefined) {
+		reasoningLabel = `Reasoning Mode: ${reasoningMode}`;
+	}
+	if (effort !== undefined) {
+		reasoningLabel = `Effort: ${effort}`;
+	}
 	return (
 		<box flexDirection="row" gap={1}>
 			<text fg={agentColor}>{agentLabel}</text>
@@ -34,7 +39,7 @@ export function StatusBar() {
 				∙
 			</text>
 			<text attributes={TextAttributes.BOLD} fg={colors.secondary}>
-				{variantName}
+				{reasoningLabel}
 			</text>
 			<AutoApprovalIndicator />
 		</box>

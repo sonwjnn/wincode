@@ -22,21 +22,22 @@ Status: accepted
   `subagent` are loaded now so the config contract does not need to change when
   delegation is added, but v1 does not execute or manually invoke them.
 - **Patchable built-ins over shadowing or replacement** - `agents.build` and
-  `agents.plan` may patch description, instructions, model, variant, and permission.
-  Their reserved identities and `primary` roles are immutable, and they cannot be
-  disabled. Configured instructions replace the built-in-specific text while the
-  Wincode base instructions remain immutable.
+  `agents.plan` may patch description, instructions, model, one of `effort` or
+  `reasoningMode`, and permission. Their reserved identities and `primary` roles
+  are immutable, and they cannot be disabled. Configured instructions replace the
+  built-in-specific text while the Wincode base instructions remain immutable.
 - **Catalog-backed model overrides** - optional `model` uses
   `<connectionProviderId>/<modelId>` and is authoritative for that Agent. Optional
-  `variant` is valid only with a configured model and must belong to that model's
-  catalog entry. Without a model, the Agent inherits the session model and
-  variant.
+  `effort` or `reasoningMode` (not both) is valid only with a configured model and
+  must be supported by that model's catalog entry. Without a model, the Agent
+  inherits the session model and its selected Effort or Reasoning Mode.
 
 ## Consequences
 
 - A Configured Agent name is lowercase kebab-case, 1-64 characters. Effective custom
   definitions require `role` and a non-empty `description`; `instructions`, `model`,
-  `variant`, and `permission` are optional. `disable: true` is a layerable tombstone
+  `effort`, `reasoningMode`, and `permission` are optional. `effort` and
+  `reasoningMode` are mutually exclusive. `disable: true` is a layerable tombstone
   for Configured Agents only.
 - Agent patches are strict: unknown Agent fields are errors rather than provider
   option passthrough. Instructions are literal strings capped at 12,000 characters;

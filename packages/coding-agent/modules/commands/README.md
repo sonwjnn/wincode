@@ -35,7 +35,7 @@ Slash-command registry and dispatch for the CLI chat input.
 - `createSkillSearchCommandSpec`, `filterCommandItems` (`command-item.ts`)
 - `createCommandExecutor(adapters)`, `AdapterMap`
 - Adapter classes: `ExitAdapter`, `ConnectAdapter`, `DialogAdapter`, `ModelsAdapter`,
-  `VariantsAdapter`, `AgentsAdapter`, `SettingsAdapter`
+  `EffortAdapter`, `AgentsAdapter`, `SettingsAdapter`
 
 ## Dependencies
 

@@ -1,6 +1,8 @@
 import type { ToolCallId } from "@wincode/agent-core";
-import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
-import { omitUndefined } from "@wincode/runtime-utils";
+import type {
+	ChatModelSelection,
+	ReasoningSelection,
+} from "@wincode/ai/models";
 import { useEffect, useMemo, useState } from "react";
 import { projectSessionApprovals } from "@/modules/sessions/approval-projection";
 import type { CompactSessionResult } from "@/modules/sessions/compaction/compaction";
@@ -25,7 +27,7 @@ export type AgentSessionBinding = Readonly<{
 	compact: (
 		focus: string | undefined,
 		selection: ChatModelSelection,
-		selectionVariant?: ModelVariant
+		reasoningSelection?: ReasoningSelection
 	) => Promise<CompactSessionResult>;
 	/** Interrupts the Agent Turn the session is running and recalls everything waiting. */
 	interrupt: (preserveToolCallId?: ToolCallId) => SessionWaitingMessage[];
@@ -93,13 +95,13 @@ export function useAgentSession(host: SessionHost): AgentSessionBinding {
 			(
 				focus: string | undefined,
 				selection: ChatModelSelection,
-				selectionVariant?: ModelVariant
+				reasoningSelection: ReasoningSelection = {}
 			) =>
 				agentSession.compact({
 					focus,
 					model: selection,
 					trigger: "manual",
-					...omitUndefined({ variant: selectionVariant }),
+					...reasoningSelection,
 				}),
 		[agentSession]
 	);

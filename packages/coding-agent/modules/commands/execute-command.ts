@@ -3,11 +3,11 @@ import type {
 	CompactAdapter,
 	ConnectAdapter,
 	DialogAdapter,
+	EffortAdapter,
 	ExitAdapter,
 	ModelsAdapter,
 	NewAdapter,
 	SettingsAdapter,
-	VariantsAdapter,
 } from "./adapters";
 import type { CommandSpec } from "./commands";
 
@@ -16,11 +16,11 @@ export type AdapterMap = {
 	compact?: CompactAdapter;
 	connect: ConnectAdapter;
 	dialog: DialogAdapter;
+	effort?: EffortAdapter;
 	exit: ExitAdapter;
 	models: ModelsAdapter;
 	new: NewAdapter;
 	settings?: SettingsAdapter;
-	variants?: VariantsAdapter;
 };
 
 export function createCommandExecutor(adapters: AdapterMap) {
@@ -49,11 +49,11 @@ export function createCommandExecutor(adapters: AdapterMap) {
 				break;
 			case "models":
 				return adapters.models.execute(spec);
-			case "variants":
-				if (!adapters.variants) {
-					throw new Error("Model variants are unavailable in this view.");
+			case "effort":
+				if (!adapters.effort) {
+					throw new Error("Effort selection is unavailable in this view.");
 				}
-				adapters.variants.execute(spec);
+				adapters.effort.execute(spec);
 				break;
 			case "agents":
 				adapters.agents.execute(spec);

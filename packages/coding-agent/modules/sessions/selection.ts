@@ -1,10 +1,12 @@
 import type { AgentId } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
-	type ModelVariant,
+	type Effort,
 	modelSelectionSchema,
 	normalizeChatModelSelection,
-	normalizeModelVariant,
+	normalizeReasoningSelection,
+	type ReasoningMode,
+	type ReasoningSelection,
 } from "@wincode/ai/models";
 import { isPlainObject, isString, isUndefined } from "@wincode/runtime-utils";
 import type { SkillRequestContext } from "@/modules/skills";
@@ -27,14 +29,15 @@ import {
 export type LastUsedSelection = {
 	agent: AgentId;
 	model: ChatModelSelection;
-	variant?: ModelVariant;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
 };
 
 /**
  * The last selection actually used in a session: agent and model come
- * from the newest message that carries both; the variant scans back to the
- * last message that used one with that model, because a user message
- * submitted without re-picking a variant drops it at the JSON round trip.
+ * from the newest message that carries both; the Effort or Reasoning Mode
+ * scans back to the last choice used with that model, because a user message
+ * submitted without re-picking a choice drops those keys at the JSON round trip.
  */
 export const getLastUsedSelection = (
 	messages: SessionMessage[]
@@ -64,21 +67,20 @@ export const getLastUsedSelection = (
 		return;
 	}
 
-	const variant = findLastUsedVariant(messages, selection.model);
-	return isUndefined(variant) ? selection : { ...selection, variant };
+	const reasoning = findLastUsedReasoningSelection(messages, selection.model);
+	return { ...selection, ...reasoning };
 };
 
 /**
- * The last variant actually used with `model`: scans back because a user
- * message submitted without re-picking a variant drops the key at the JSON
- * round trip, while its preceding assistant turn still carries it. Variants
- * are normalized against the resolved model so an unsupported pair never
- * restores.
+ * The last Effort or Reasoning Mode used with `model`: scans back because a
+ * user message submitted without re-picking a choice drops the key at the JSON
+ * round trip, while its preceding assistant turn still carries it. Choices
+ * are normalized against the resolved model so unsupported pairs never restore.
  */
-const findLastUsedVariant = (
+const findLastUsedReasoningSelection = (
 	messages: SessionMessage[],
 	model: ChatModelSelection
-): ModelVariant | undefined => {
+): ReasoningSelection => {
 	for (let index = messages.length - 1; index >= 0; index -= 1) {
 		const metadata = messages[index]?.metadata;
 		if (!metadata?.model) {
@@ -92,12 +94,16 @@ const findLastUsedVariant = (
 		) {
 			continue;
 		}
-		const variant = normalizeModelVariant(model, metadata.variant);
-		if (!isUndefined(variant)) {
-			return variant;
+		const reasoning = normalizeSelectionChoice(
+			model,
+			metadata.effort,
+			metadata.reasoningMode
+		);
+		if (hasReasoningSelection(reasoning)) {
+			return reasoning;
 		}
 	}
-	return;
+	return {};
 };
 
 const normalizeSelection = (model: unknown): ChatModelSelection | null => {
@@ -156,20 +162,23 @@ export type ResolvedSessionSelection = {
 	agent: AgentId | undefined;
 	persistedAgent: AgentId | undefined;
 	model: ChatModelSelection;
-	variant: ModelVariant | undefined;
+	effort: Effort | undefined;
+	reasoningMode: ReasoningMode | undefined;
 };
 
 export type SessionSelectionRefs = {
 	agent?: AgentId;
 	model?: ChatModelSelection;
-	variant?: ModelVariant;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
 };
 
 type ResolveSessionSelectionInput = {
 	messages: SessionMessage[];
 	resolveAgent?: (agentId: AgentId | undefined) => AgentId;
 	sessionModel?: ChatModelSelection;
-	sessionVariant?: ModelVariant;
+	sessionEffort?: Effort;
+	sessionReasoningMode?: ReasoningMode;
 	refs?: SessionSelectionRefs;
 };
 
@@ -178,17 +187,16 @@ type ResolveSessionSelectionInput = {
  * order — session row, then message metadata, then prompt-config refs —
  * for each field. Agent has no session-row source, so it merges messages
  * then refs, and passes through `resolveAgent` when the caller wants it
- * resolved against an Agent registry. The session-row variant is null for
- * sessions created before variant support or when the variant came from an
- * Agent pin, so the metadata scan-back keeps the last-used variant. The
- * resolved variant is normalized against the resolved model. Returns null
- * when no source carries a model.
+ * resolved against an Agent registry. Session-row Effort/Mode values take
+ * precedence over message metadata as one mutually-exclusive selection pair.
+ * Returns null when no source carries a model.
  */
 export const resolveSessionSelection = ({
 	messages,
 	resolveAgent,
 	sessionModel,
-	sessionVariant,
+	sessionEffort,
+	sessionReasoningMode,
 	refs,
 }: ResolveSessionSelectionInput): ResolvedSessionSelection | null => {
 	const persisted = getLastUsedSelection(messages);
@@ -201,16 +209,56 @@ export const resolveSessionSelection = ({
 		resolveAgent && !isUndefined(persistedAgent)
 			? resolveAgent(persistedAgent)
 			: persistedAgent;
+	const sessionChoice = normalizeSelectionChoice(
+		model,
+		sessionEffort,
+		sessionReasoningMode
+	);
+	const messageChoice = normalizeSelectionChoice(
+		model,
+		persisted?.effort,
+		persisted?.reasoningMode
+	);
+	const refsChoice = normalizeSelectionChoice(
+		model,
+		refs?.effort,
+		refs?.reasoningMode
+	);
+	let choice = refsChoice;
+	if (hasReasoningSelection(messageChoice)) {
+		choice = messageChoice;
+	}
+	if (hasReasoningSelection(sessionChoice)) {
+		choice = sessionChoice;
+	}
 	return {
 		agent,
 		persistedAgent,
 		model,
-		variant: normalizeModelVariant(
-			model,
-			sessionVariant ?? persisted?.variant ?? refs?.variant
-		),
+		effort: choice.effort,
+		reasoningMode: choice.reasoningMode,
 	};
 };
+
+const normalizeSelectionChoice = (
+	model: ChatModelSelection,
+	effort: Effort | undefined,
+	reasoningMode: ReasoningMode | undefined
+): ReasoningSelection => {
+	if (!(isUndefined(effort) || isUndefined(reasoningMode))) {
+		return {};
+	}
+	if (!isUndefined(effort)) {
+		return normalizeReasoningSelection(model, { effort });
+	}
+	if (!isUndefined(reasoningMode)) {
+		return normalizeReasoningSelection(model, { reasoningMode });
+	}
+	return {};
+};
+
+const hasReasoningSelection = (choice: ReasoningSelection): boolean =>
+	choice.effort !== undefined || choice.reasoningMode !== undefined;
 
 /**
  * Restores the prompt config used by the newest message. Session-row values
@@ -223,7 +271,8 @@ export const resolveLastUsedSessionSelection = ({
 	messages,
 	resolveAgent,
 	sessionModel,
-	sessionVariant,
+	sessionEffort,
+	sessionReasoningMode,
 	refs,
 }: ResolveSessionSelectionInput): ResolvedSessionSelection | null => {
 	const persisted = getLastUsedSelection(messages);
@@ -232,7 +281,8 @@ export const resolveLastUsedSessionSelection = ({
 			messages,
 			resolveAgent,
 			sessionModel,
-			sessionVariant,
+			sessionEffort,
+			sessionReasoningMode,
 			refs,
 		});
 	}
@@ -241,21 +291,24 @@ export const resolveLastUsedSessionSelection = ({
 		agent: resolveAgent ? resolveAgent(persisted.agent) : persisted.agent,
 		persistedAgent: persisted.agent,
 		model: persisted.model,
-		variant: normalizeModelVariant(persisted.model, persisted.variant),
+		effort: persisted.effort,
+		reasoningMode: persisted.reasoningMode,
 	};
 };
 
 export type SelectionFallback = {
 	agent: AgentId;
 	model: ChatModelSelection;
-	variant?: ModelVariant;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
 	skill?: SkillRequestContext;
 };
 
 export type OutgoingChatSelection = {
 	agent: AgentId | undefined;
 	model: ChatModelSelection | undefined;
-	variant: ModelVariant | undefined;
+	effort: Effort | undefined;
+	reasoningMode: ReasoningMode | undefined;
 	skill: SkillRequestContext | undefined;
 };
 
@@ -274,13 +327,35 @@ export const resolveOutgoingSelection = (
 	}
 
 	const metadata = findLastValidMetadata(messages);
+	const model =
+		normalizeSelection(message.metadata?.model) ??
+		normalizeSelection(metadata?.model) ??
+		fallback?.model;
+	const messageChoice = model
+		? normalizeSelectionChoice(
+				model,
+				message.metadata?.effort,
+				message.metadata?.reasoningMode
+			)
+		: {};
+	const metadataChoice = model
+		? normalizeSelectionChoice(model, metadata?.effort, metadata?.reasoningMode)
+		: {};
+	const fallbackChoice = model
+		? normalizeSelectionChoice(model, fallback?.effort, fallback?.reasoningMode)
+		: {};
+	let choice = fallbackChoice;
+	if (hasReasoningSelection(metadataChoice)) {
+		choice = metadataChoice;
+	}
+	if (hasReasoningSelection(messageChoice)) {
+		choice = messageChoice;
+	}
 	return {
 		agent: message.metadata?.agent ?? metadata?.agent ?? fallback?.agent,
-		model:
-			normalizeSelection(message.metadata?.model) ??
-			normalizeSelection(metadata?.model) ??
-			fallback?.model,
-		variant: metadata?.variant ?? fallback?.variant,
+		model,
+		effort: choice.effort,
+		reasoningMode: choice.reasoningMode,
 		skill: getOriginatingUserSkill(messages) ?? fallback?.skill,
 	};
 };

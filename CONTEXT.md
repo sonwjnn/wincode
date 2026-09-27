@@ -27,8 +27,9 @@ while users reconnect providers into the new format.
 ## Model Catalog
 
 The Model Catalog is the static product definition of supported models and
-variants. It references a Connection Provider by ID but does not own credentials
-or authentication behavior. An entry that remains in the catalog but is no
+their Effort and Reasoning Mode capabilities. It references a Connection
+Provider by ID but does not own credentials or authentication behavior.
+An entry that remains in the catalog but is no
 longer selectable is retired rather than deleted, so existing Session Records
 keep their model identity. A deliberate clean-cutover prune MAY delete legacy
 IDs after the corresponding persisted data is reset; the 2026-09 prune used
@@ -40,17 +41,20 @@ Whether a Model Catalog entry may be selected for a new turn: `active` or
 `retired`. Retirement is a product decision, independent of whether the
 provider still serves the model. _Avoid_: deprecation, availability
 
-**Thinking Level**:
-A named reasoning effort a model supports, or the absence of one. It is a
-property of a Model Catalog entry's thinking policy, and the level identifier
-is what a session persists. _Avoid_: effort, thinking mode, variant
+**Effort**:
+A named reasoning level advertised by a Model Catalog entry. Each model supports
+its declared subset; an Effort describes a level, not whether reasoning is
+enabled. _Avoid_: thinking level, variant
 
-**Variant ID**:
-The stored and wire name of a Thinking Level — `modelVariantIds` in
-`@wincode/ai`, the `variant` column on `session`, and the `variant` key in
-message metadata. The identifier is stable; only the identifier is persisted,
-never the expanded provider request. _Avoid_: treating the ID as the model's
-capability
+**Effort ID**:
+The stable identifier of an Effort that a Session may retain and restore. It
+identifies the chosen level, not a model's capability or the provider-specific
+request generated from that choice. _Avoid_: variant ID
+
+**Reasoning Mode**:
+A non-effort reasoning choice a model supports through its toggle: `none`
+requests reasoning off; `thinking` requests it on without a named Effort. _Avoid_:
+effort, thinking level, variant
 
 **Model Descriptor**:
 A Model Catalog entry together with where its metadata came from and whether
@@ -59,9 +63,9 @@ stays immutable. _Avoid_: model record, merged model
 
 ## Model Target
 
-A Model Target is the effective Connection Provider, model, Thinking Level, and
-minimal authorization selected for one Agent Turn. It is transient and must not
-become a Session Record. _Avoid_: provider SDK model handle, persisted model handle
+A Model Target is the effective Connection Provider, model, Effort, Reasoning
+Mode, and minimal authorization selected for one Agent Turn. It is transient and
+must not become a Session Record. _Avoid_: provider SDK model handle, persisted model handle
 
 ## Model Protocol
 
@@ -71,9 +75,9 @@ OpenCode Go is one such Connection Provider. _Avoid_: SDK, Connection Provider
 
 ## Session Selection
 
-The last-used Agent, Model, and variant recorded in a session's message
-metadata, resolved when a session opens or a turn is sent. Two tiers are
-recorded on write and merged on read: the session row holds the
+The last-used Agent, Model, and reasoning choice—an Effort or Reasoning Mode—
+recorded in a session's message metadata, resolved when a session opens or a turn
+is sent. Two tiers are recorded on write and merged on read: the session row holds
 session-level choice (the user's prompt-config selection), and message
 metadata holds the effective selection (what a turn actually ran with,
 including Agent pins). Restore reads leniently (a selection survives partially
@@ -115,7 +119,7 @@ The ordered messages a session presents to the user. Compaction summaries stay o
 The messages a session sends to the model for its next Agent Turn. It is derived from the Session Transcript through compaction and interruption sanitation, so the two can differ. _Avoid_: active messages, prompt history, context window
 
 **Agent Turn Execution**:
-One run of an Agent Turn and everything scoped to it: the Agent Turn Identifier, assistant message identity, source user message, start time, Agent and resolved Agent, Model Target selection and variant, session-level selection its records carry, MCP snapshot, child abort registry, and Session View State. The Agent Session record carries the identity every observer reads, while the Host scope carries what only the Host owns — the resolved Agent, armed Skill catalog, MCP snapshot, child abort registry, and delegation bookkeeping. A delegated Subagent execution uses the same contract plus its parent linkage (`parentTurnId`, `parentToolCallId`), and is created and discarded with the turn rather than rebuilt on render. _Avoid_: turn context, session refs, current turn
+One run of an Agent Turn and everything scoped to it: the Agent Turn Identifier, assistant message identity, source user message, start time, Agent and resolved Agent, Model Target selection, Effort, and Reasoning Mode, session-level selection its records carry, MCP snapshot, child abort registry, and Session View State. The Agent Session record carries the identity every observer reads, while the Host scope carries what only the Host owns — the resolved Agent, armed Skill catalog, MCP snapshot, child abort registry, and delegation bookkeeping. A delegated Subagent execution uses the same contract plus its parent linkage (`parentTurnId`, `parentToolCallId`), and is created and discarded with the turn rather than rebuilt on render. _Avoid_: turn context, session refs, current turn
 
 **Session View State**:
 The live, transient projection of one Agent Turn Execution for the session UI. It never becomes a Session Record, and executions never share one: the Session Snapshot exposes the Session View State of the most recently active execution, so a delegated Subagent's stream replaces the view while it runs and the parent's view returns when it ends. _Avoid_: streaming state, live buffer
@@ -170,7 +174,7 @@ A one-shot mode that opens or creates one One-Shot Session, accepts exactly one 
 The durable Session opened or created for one Print Mode or JSON Mode invocation. It accepts exactly one Submission for that invocation and remains persisted after the mode exits; its Session Host ends after the terminal Agent Turn outcome. _Avoid_: ephemeral session, batch session
 
 **Invocation Selection**:
-The Agent, Model, and Thinking Level resolved for one Print Mode or JSON Mode invocation. Explicit CLI selectors override a Session Selection; omitted selectors restore it or use configuration, and creating a One-Shot Session requires complete resolution before its first record. _Avoid_: command-line config, request selection
+The Agent, Model, Effort, and Reasoning Mode resolved for one Print Mode or JSON Mode invocation. Explicit CLI selectors override a Session Selection; omitted selectors restore it or use configuration, and creating a One-Shot Session requires complete resolution before its first record. _Avoid_: command-line config, request selection
 
 **JSON Event Stream**:
 The ordered public Agent Turn events emitted by JSON Mode as JSONL. It uses the same event vocabulary and projection as RPC Mode but does not include JSON-RPC envelopes, request IDs, commands, or state notifications. _Avoid_: raw Session Snapshot, JSON-RPC stream

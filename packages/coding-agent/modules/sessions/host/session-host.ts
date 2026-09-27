@@ -1,5 +1,9 @@
 import type { AgentId, AgentTurnEvent } from "@wincode/agent-core";
-import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import type {
+	ChatModelSelection,
+	Effort,
+	ReasoningMode,
+} from "@wincode/ai/models";
 import { isNull, logger, omitUndefined } from "@wincode/runtime-utils";
 import { resolveActiveAgentId } from "@/modules/agents/registry";
 import { errorLogFields } from "@/shared/utils/error-log-fields";
@@ -43,7 +47,8 @@ type OpenedSession = Readonly<{
 	context: SessionMessage[];
 	model: ChatModelSelection | undefined;
 	transcript: SessionMessage[];
-	variant: ModelVariant | undefined;
+	effort: Effort | undefined;
+	reasoningMode: ReasoningMode | undefined;
 }>;
 const closingHosts = new Map<SessionHostOptions["sessionId"], Promise<void>>();
 
@@ -87,7 +92,8 @@ const openSession = async (
 		context: rebuildActiveMessages(active, compactions.at(-1) ?? null),
 		model: session.model,
 		transcript,
-		variant: session.variant,
+		effort: session.effort,
+		reasoningMode: session.reasoningMode,
 	};
 };
 
@@ -329,7 +335,8 @@ export const createSessionHost = async ({
 		const initialSelection = resolveSessionSelection({
 			messages: [...opened.transcript],
 			sessionModel: opened.model,
-			sessionVariant: opened.variant,
+			sessionEffort: opened.effort,
+			sessionReasoningMode: opened.reasoningMode,
 			...(isNull(initialRegistry)
 				? {}
 				: {
@@ -344,8 +351,9 @@ export const createSessionHost = async ({
 			initialCompactions: opened.compactions,
 			...omitUndefined({
 				initialAgent,
-				initialSessionModel: opened.model ?? initialSelection?.model,
-				initialSessionVariant: opened.variant ?? initialSelection?.variant,
+				initialSessionEffort: opened.effort ?? initialSelection?.effort,
+				initialSessionReasoningMode:
+					opened.reasoningMode ?? initialSelection?.reasoningMode,
 			}),
 			initialContext: opened.context,
 			initialTranscript: opened.transcript,
@@ -369,7 +377,8 @@ export const createSessionHost = async ({
 				return resolveSessionSelection({
 					messages: [...opened.transcript],
 					sessionModel: opened.model,
-					sessionVariant: opened.variant,
+					sessionEffort: opened.effort,
+					sessionReasoningMode: opened.reasoningMode,
 					...(isNull(registry)
 						? {}
 						: {

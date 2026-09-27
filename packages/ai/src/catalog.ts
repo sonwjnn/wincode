@@ -7,17 +7,23 @@ import { isNull } from "@wincode/runtime-utils";
 
 import type { Tagged } from "type-fest";
 import { z } from "zod";
-import { modelVariantIds } from "./model-metadata";
 
 export type {
+	Effort,
 	ModelCost,
 	ModelCostTier,
 	ModelLimits,
 	ModelMetadataEntry,
 	ModelThinkingPolicy,
-	ModelVariant,
+	ReasoningMode,
+	ReasoningSelection,
 } from "./model-metadata";
-export { modelVariantIds } from "./model-metadata";
+export {
+	effortIds,
+	effortSchema,
+	reasoningModeIds,
+	reasoningModeSchema,
+} from "./model-metadata";
 
 export type ModelLifecycle = "active" | "retired";
 
@@ -38,8 +44,6 @@ export const modelRuntimeProviderIds = [
 	"opencode-go",
 ] as const;
 export type ModelRuntimeProviderId = (typeof modelRuntimeProviderIds)[number];
-
-export const modelVariantSchema = z.enum(modelVariantIds);
 
 /**
  * OpenCode Go model families use different wire protocols behind one
@@ -546,8 +550,8 @@ export const isSupportedChatModelSelection = (
 export const isActiveChatModel = (model: ModelCatalogEntry): boolean =>
 	model.lifecycle === "active";
 
-/** Whether the selected runtime adapter can carry reasoning variants. */
-export const supportsReasoningVariants = (
+/** Whether the selected runtime adapter can carry reasoning selections. */
+export const supportsSelectableReasoning = (
 	model: SupportedChatModel
 ): model is ReasoningCapableChatModel =>
 	!(model.provider === "opencode-go" && model.protocol === "openai-compatible");

@@ -389,8 +389,10 @@ export const createSessionInputLaneWorkflow = (
 				turnId,
 				...omitUndefined({
 					resolvedAgent: input.resolvedAgent,
-					sessionVariant: input.sessionVariant,
-					variant: input.variant,
+					sessionEffort: input.sessionEffort,
+					sessionReasoningMode: input.sessionReasoningMode,
+					effort: input.effort,
+					reasoningMode: input.reasoningMode,
 				}),
 			},
 		};
@@ -440,8 +442,10 @@ export const createSessionInputLaneWorkflow = (
 						userText: input.text,
 						...omitUndefined({
 							resolvedAgent: input.resolvedAgent,
-							sessionVariant: input.sessionVariant,
-							variant: input.variant,
+							sessionEffort: input.sessionEffort,
+							sessionReasoningMode: input.sessionReasoningMode,
+							effort: input.effort,
+							reasoningMode: input.reasoningMode,
 						}),
 					},
 				};
@@ -563,8 +567,10 @@ export const createSessionInputLaneWorkflow = (
 			userText: text,
 			turnId: execution.turnId,
 			...omitUndefined({
-				sessionVariant: execution.sessionVariant,
-				variant: execution.variant,
+				sessionEffort: execution.sessionEffort,
+				sessionReasoningMode: execution.sessionReasoningMode,
+				effort: execution.effort,
+				reasoningMode: execution.reasoningMode,
 			}),
 		});
 	};

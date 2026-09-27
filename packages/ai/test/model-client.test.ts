@@ -121,7 +121,7 @@ describe("native model client routes", () => {
 		const client = createModelClient({ fetch: mock.fetch });
 		const target = makeTarget("openai", "gpt-5.6-luna", undefined, {
 			maxOutputTokens: 1200,
-			variant: "high",
+			effort: "high",
 		});
 		const parts = await collect(
 			client,
@@ -194,6 +194,45 @@ describe("native model client routes", () => {
 				},
 			},
 		]);
+	});
+
+	test("keeps provider defaults without an Effort or Reasoning Mode", async () => {
+		const mock = mockFetch(
+			sseResponse(
+				'event: response.completed\ndata: {"response":{"usage":{"input_tokens":1,"output_tokens":1}}}\n\n'
+			)
+		);
+		const client = createModelClient({ fetch: mock.fetch });
+
+		await collect(client, makeTarget("openai", "gpt-5.6-luna"));
+
+		const body = responseBody(mock);
+		expect(body.reasoning).toEqual({ summary: "detailed" });
+		expect(body.store).toBe(false);
+	});
+
+	test("preserves OpenAI's provider-native off wire option", async () => {
+		const mock = mockFetch(
+			sseResponse(
+				'event: response.completed\ndata: {"response":{"usage":{"input_tokens":1,"output_tokens":1}}}\n\n'
+			)
+		);
+		const client = createModelClient({ fetch: mock.fetch });
+		const baseTarget = makeTarget("openai", "gpt-5.6-luna");
+		if (baseTarget.providerId !== "openai") {
+			throw new Error("Expected an OpenAI model target.");
+		}
+		const target: ModelTarget = {
+			...baseTarget,
+			providerOptions: { openai: { reasoningEffort: "none" } },
+		};
+
+		await collect(client, target);
+
+		expect(responseBody(mock).reasoning).toEqual({
+			effort: "none",
+			summary: "detailed",
+		});
 	});
 
 	test("replays raw Responses output items when continuing a tool step", async () => {
@@ -342,7 +381,7 @@ describe("native model client routes", () => {
 			"openai",
 			"gpt-5.6-luna",
 			{ accessToken: "oauth-token", accountId: "acct-123", kind: "oauth" },
-			{ maxOutputTokens: 800, variant: "low" }
+			{ maxOutputTokens: 800, effort: "low" }
 		);
 
 		const parts = await collect(client, target);
@@ -378,7 +417,7 @@ describe("native model client routes", () => {
 		const client = createModelClient({ fetch: mock.fetch });
 		const target = makeTarget("anthropic", "claude-opus-4-5", undefined, {
 			maxOutputTokens: 9000,
-			variant: "high",
+			effort: "high",
 		});
 		const parts = await collect(
 			client,
@@ -486,6 +525,23 @@ describe("native model client routes", () => {
 		);
 	});
 
+	test("keeps budget-only Anthropic reasoning automatic without a selection", async () => {
+		const mock = mockFetch(
+			sseResponse(
+				'event: message_start\ndata: {"message":{"usage":{"input_tokens":2}}}\n\n',
+				'event: message_delta\ndata: {"usage":{"output_tokens":1}}\n\n',
+				"event: message_stop\ndata: {}\n\n"
+			)
+		);
+		const target = makeTarget("anthropic", "claude-haiku-4-5");
+
+		await collect(createModelClient({ fetch: mock.fetch }), target);
+
+		const body = responseBody(mock);
+		expect(body.thinking).toEqual({ type: "enabled", budget_tokens: 8000 });
+		expect(body.output_config).toBeUndefined();
+	});
+
 	test("uses Google GenerateContent with thinking, files, functions, and thought deltas", async () => {
 		const mock = mockFetch(
 			sseResponse(
@@ -496,7 +552,7 @@ describe("native model client routes", () => {
 		const client = createModelClient({ fetch: mock.fetch });
 		const target = makeTarget("google", "gemini-3.6-flash", undefined, {
 			maxOutputTokens: 1000,
-			variant: "high",
+			effort: "high",
 		});
 		const parts = await collect(
 			client,
@@ -594,7 +650,7 @@ describe("native model client routes", () => {
 		const client = createModelClient({ fetch: mock.fetch });
 		const target = makeTarget("opencode-go", "gpt-5.6-luna", undefined, {
 			maxOutputTokens: 320,
-			variant: "high",
+			effort: "high",
 		});
 
 		await collect(client, target);
@@ -632,10 +688,58 @@ describe("native model client routes", () => {
 			max_tokens: 256,
 			stream: true,
 		});
+
+		// No explicit selector keeps the provider's default thinking behavior.
+		expect(responseBody(mock).thinking).toBeUndefined();
 		expect(parts.at(-1)).toEqual({
 			type: "finish",
 			usage: { inputTokens: 2, outputTokens: 1 },
 		});
+	});
+
+	test("maps an explicit thinking Mode to Anthropic adaptive thinking", async () => {
+		const mock = mockFetch(
+			sseResponse(
+				'event: message_start\ndata: {"message":{"usage":{"input_tokens":2}}}\n\n',
+				'event: message_delta\ndata: {"usage":{"output_tokens":1}}\n\n',
+				"event: message_stop\ndata: {}\n\n"
+			)
+		);
+		const target = makeTarget("opencode-go", "minimax-m3", undefined, {
+			maxOutputTokens: 256,
+			reasoningMode: "thinking",
+		});
+
+		await collect(createModelClient({ fetch: mock.fetch }), target);
+
+		expect(responseBody(mock).thinking).toEqual({ type: "adaptive" });
+	});
+
+	test("preserves OpenCode Go's omission of disabled Anthropic thinking", async () => {
+		const mock = mockFetch(
+			sseResponse(
+				'event: message_start\ndata: {"message":{"usage":{"input_tokens":2}}}\n\n',
+				'event: message_delta\ndata: {"usage":{"output_tokens":1}}\n\n',
+				"event: message_stop\ndata: {}\n\n"
+			)
+		);
+		const target = makeTarget("opencode-go", "qwen3.8-max", undefined, {
+			maxOutputTokens: 256,
+			reasoningMode: "none",
+		});
+
+		await collect(createModelClient({ fetch: mock.fetch }), target);
+
+		// The adapter omits disabled thinking; this does not signal off to Qwen.
+		expect(responseBody(mock).thinking).toBeUndefined();
+	});
+
+	test("target creation rejects a Reasoning Mode unsupported by the model", () => {
+		expect(() =>
+			makeTarget("openai", "gpt-5.6-luna", undefined, {
+				reasoningMode: "thinking",
+			})
+		).toThrow("Unsupported Reasoning Mode");
 	});
 
 	test("routes OpenCode Go compatible models through Chat Completions", async () => {

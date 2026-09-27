@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { agentIdSchema, createAgentRuntime } from "@wincode/agent-core";
+import type { AgentRegistry } from "../modules/agents/registry";
 import { buildAgentRegistry } from "../modules/agents/registry";
 import {
 	type OneShotCompositionInput,
@@ -38,6 +39,26 @@ const registry = buildAgentRegistry(
 		sources: [],
 	})
 );
+const buildConfiguredAgentRegistry = (
+	agents: Record<string, unknown>
+): AgentRegistry =>
+	buildAgentRegistry(
+		fromPartial<ConfigSnapshot>({
+			diagnostics: [],
+			document: { agents },
+			sourceFor: () => undefined,
+			sources: [],
+		})
+	);
+
+const configuredReviewRegistry = buildConfiguredAgentRegistry({
+	review: {
+		description: "Review changes without editing files.",
+		effort: "high",
+		model: "openai/gpt-5.6-luna",
+		role: "primary",
+	},
+});
 
 const connections = {
 	authorize: async () => ({ kind: "api-key" as const, apiKey: "test-key" }),
@@ -53,21 +74,27 @@ const connections = {
 	],
 };
 
-const composeCapabilities = async ({
-	autoApproval,
-	cwd,
-	workspace: root,
-}: OneShotCompositionInput): Promise<SessionCapabilitiesAssembly> =>
-	createSessionCapabilities({
-		approvalMode: "non-interactive",
+const composeCapabilitiesFor =
+	(agentRegistry: AgentRegistry) =>
+	async ({
+		autoApproval,
 		cwd,
-		databasePath: path.join(root, "sessions.sqlite"),
-		permissionService: createPermissionService({ autoApproval }),
-		registry,
-		runtimeFactory: () => fakeRuntime,
 		workspace: root,
-		connections,
-	});
+	}: OneShotCompositionInput): Promise<SessionCapabilitiesAssembly> =>
+		createSessionCapabilities({
+			approvalMode: "non-interactive",
+			cwd,
+			databasePath: path.join(root, "sessions.sqlite"),
+			permissionService: createPermissionService({ autoApproval }),
+			registry: agentRegistry,
+			runtimeFactory: () => fakeRuntime,
+			workspace: root,
+			connections,
+		});
+const composeCapabilities = composeCapabilitiesFor(registry);
+const composeConfiguredReview = composeCapabilitiesFor(
+	configuredReviewRegistry
+);
 
 const writer = (): { text: string; writer: TextWriter } => {
 	const state = { text: "" };
@@ -82,10 +109,12 @@ const writer = (): { text: string; writer: TextWriter } => {
 		},
 	};
 };
+
 type SelectorOptions = Readonly<{
 	agent?: string;
+	effort?: string;
 	model?: string;
-	thinking?: string;
+	reasoningMode?: string;
 }>;
 const context = (
 	mode: "json" | "print",
@@ -116,6 +145,113 @@ const context = (
 });
 
 const dependencies: OneShotDependencies = { composeCapabilities };
+const configuredReviewDependencies: OneShotDependencies = {
+	composeCapabilities: composeConfiguredReview,
+};
+
+test("configured Agents retain model-supported Effort and Reasoning Mode choices", () => {
+	const configured = buildConfiguredAgentRegistry({
+		"effort-review": {
+			description: "Review with a selected Effort.",
+			effort: "high",
+			model: "anthropic/claude-sonnet-5",
+			role: "primary",
+		},
+		"mode-review": {
+			description: "Review with a selected Reasoning Mode.",
+			model: "anthropic/claude-sonnet-5",
+			reasoningMode: "none",
+			role: "primary",
+		},
+	});
+
+	expect(configured.configuredAgents).toHaveLength(2);
+	expect(
+		configured.configuredAgents.find(({ id }) => id === "effort-review")
+	).toMatchObject({
+		effort: "high",
+		model: { modelId: "claude-sonnet-5", providerId: "anthropic" },
+	});
+	expect(
+		configured.configuredAgents.find(({ id }) => id === "mode-review")
+	).toMatchObject({
+		model: { modelId: "claude-sonnet-5", providerId: "anthropic" },
+		reasoningMode: "none",
+	});
+	expect(
+		configured.diagnostics.filter(({ severity }) => severity === "error")
+	).toEqual([]);
+});
+
+test("configured Agents reject unsupported, conflicting, invalid, and legacy choices by field", () => {
+	const configured = buildConfiguredAgentRegistry({
+		both: {
+			description: "Two choices are not valid.",
+			effort: "high",
+			model: "anthropic/claude-sonnet-5",
+			reasoningMode: "none",
+			role: "primary",
+		},
+		legacy: {
+			description: "The old key is not valid.",
+			model: "anthropic/claude-sonnet-5",
+			role: "primary",
+			variant: "high",
+		},
+		"unsupported-effort": {
+			description: "This model has no selectable Effort.",
+			effort: "low",
+			model: "opencode-go/qwen3.7-max",
+			role: "primary",
+		},
+		"unsupported-mode": {
+			description: "This model has no selectable Reasoning Mode.",
+			model: "openai/gpt-5.6-luna",
+			reasoningMode: "thinking",
+			role: "primary",
+		},
+		"invalid-effort": {
+			description: "Efforts must be valid identifiers.",
+			effort: "extreme",
+			model: "anthropic/claude-sonnet-5",
+			role: "primary",
+		},
+		"invalid-mode": {
+			description: "Reasoning Modes must be valid identifiers.",
+			model: "anthropic/claude-sonnet-5",
+			reasoningMode: "deliberate",
+			role: "primary",
+		},
+	});
+
+	expect(configured.configuredAgents).toHaveLength(0);
+	for (const [agentId, field] of [
+		["both", "reasoningMode"],
+		["legacy", "variant"],
+		["unsupported-effort", "effort"],
+		["unsupported-mode", "reasoningMode"],
+		["invalid-effort", "effort"],
+		["invalid-mode", "reasoningMode"],
+	] as const) {
+		expect(configured.diagnostics).toContainEqual(
+			expect.objectContaining({
+				configPath: ["agents", agentId, field],
+				severity: "error",
+			})
+		);
+	}
+	expect(
+		configured.diagnostics.find(
+			({ configPath }) =>
+				configPath[1] === "unsupported-effort" && configPath[2] === "effort"
+		)?.message
+	).toContain('"effort"');
+	expect(
+		configured.diagnostics.find(
+			({ configPath }) => configPath[1] === "unsupported-mode"
+		)?.message
+	).toContain('"reasoningMode"');
+});
 
 afterAll(async () => {
 	await rm(workspace, { force: true, recursive: true });
@@ -201,6 +337,143 @@ test("Print mode creates a durable One-Shot Session and writes assistant text on
 		expect(records.at(-1)?.agentId).toBe(agentIdSchema.parse("plan"));
 	} finally {
 		await finalVerification.shutdown();
+	}
+});
+
+test("one-shot Effort selectors override configured and restored choices", async () => {
+	const reasoningWorkspace = await mkdtemp(
+		path.join("/tmp", "wincode-one-shot-effort-")
+	);
+	try {
+		const initialOutput = writer();
+		const initialErrors = writer();
+		const initialExitCode = await runPrintMode(
+			context(
+				"print",
+				"choose a configured Agent Effort",
+				initialOutput.writer,
+				initialErrors.writer,
+				undefined,
+				undefined,
+				true,
+				{ agent: "review", effort: "medium" },
+				reasoningWorkspace
+			),
+			configuredReviewDependencies
+		);
+		expect(initialExitCode).toBe(0);
+		expect(initialOutput.text).toBe("E2E chat response");
+		expect(initialErrors.text).toBe("");
+		const firstVerification = await composeConfiguredReview({
+			autoApproval: false,
+			cwd: reasoningWorkspace,
+			workspace: reasoningWorkspace,
+		});
+		let sessionId: string | undefined;
+		try {
+			const sessions = await firstVerification.store.listSessions();
+			expect(sessions).toHaveLength(1);
+			expect(sessions[0]?.effort).toBe("medium");
+			sessionId = sessions[0]?.id;
+		} finally {
+			await firstVerification.shutdown();
+		}
+		if (sessionId === undefined) {
+			throw new Error(
+				"Expected the selected Effort to persist in the Session."
+			);
+		}
+
+		const continuationOutput = writer();
+		const continuationErrors = writer();
+		const continuationExitCode = await runPrintMode(
+			context(
+				"print",
+				"override the restored Effort",
+				continuationOutput.writer,
+				continuationErrors.writer,
+				sessionId,
+				undefined,
+				true,
+				{ agent: "review", effort: "low" },
+				reasoningWorkspace
+			),
+			configuredReviewDependencies
+		);
+		expect(continuationExitCode).toBe(0);
+		expect(continuationOutput.text).toBe("E2E chat response");
+		expect(continuationErrors.text).toBe("");
+		const finalVerification = await composeConfiguredReview({
+			autoApproval: false,
+			cwd: reasoningWorkspace,
+			workspace: reasoningWorkspace,
+		});
+		try {
+			const sessions = await finalVerification.store.listSessions();
+			expect(sessions).toHaveLength(1);
+			expect(sessions[0]?.effort).toBe("low");
+		} finally {
+			await finalVerification.shutdown();
+		}
+	} finally {
+		await rm(reasoningWorkspace, { force: true, recursive: true });
+	}
+});
+
+test("one-shot invalid explicit choices name their field and fail before send", async () => {
+	const invalidWorkspace = await mkdtemp(
+		path.join("/tmp", "wincode-invalid-reasoning-choice-")
+	);
+	try {
+		const invalidChoices: readonly {
+			readonly field: string;
+			readonly selectors: SelectorOptions;
+		}[] = [
+			{ field: "--effort", selectors: { effort: "extreme" } },
+			{
+				field: "--reasoning-mode",
+				selectors: { reasoningMode: "thinking" },
+			},
+		];
+		const initialChatRequestCount = fakeRecorder.requests.filter(
+			({ kind }) => kind === "chat"
+		).length;
+		for (const { field, selectors } of invalidChoices) {
+			const stdout = writer();
+			const stderr = writer();
+			const exitCode = await runPrintMode(
+				context(
+					"print",
+					"invalid reasoning selector",
+					stdout.writer,
+					stderr.writer,
+					undefined,
+					undefined,
+					true,
+					{ model: "openai/gpt-5.6-luna", ...selectors },
+					invalidWorkspace
+				),
+				dependencies
+			);
+			expect(exitCode).toBe(1);
+			expect(stdout.text).toBe("");
+			expect(stderr.text).toContain(field);
+		}
+		expect(
+			fakeRecorder.requests.filter(({ kind }) => kind === "chat")
+		).toHaveLength(initialChatRequestCount);
+		const verification = await composeCapabilities({
+			autoApproval: false,
+			cwd: invalidWorkspace,
+			workspace: invalidWorkspace,
+		});
+		try {
+			expect(await verification.store.listSessions()).toHaveLength(0);
+		} finally {
+			await verification.shutdown();
+		}
+	} finally {
+		await rm(invalidWorkspace, { force: true, recursive: true });
 	}
 });
 
