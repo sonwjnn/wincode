@@ -64,3 +64,23 @@ export const withLoggerHome = async <T>(
 		await loggerHome.cleanup();
 	}
 };
+
+export const withDebugProject = async <T>(
+	projectRoot: string,
+	run: () => Promise<T>
+): Promise<T> => {
+	const originalCwd = process.cwd();
+	const originalDebug = process.env.WINCODE_DEBUG;
+	try {
+		process.chdir(projectRoot);
+		process.env.WINCODE_DEBUG = "1";
+		return await run();
+	} finally {
+		process.chdir(originalCwd);
+		if (originalDebug === undefined) {
+			delete process.env.WINCODE_DEBUG;
+		} else {
+			process.env.WINCODE_DEBUG = originalDebug;
+		}
+	}
+};

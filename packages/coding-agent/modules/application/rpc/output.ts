@@ -43,6 +43,9 @@ export class SerializedWriter {
 	get bufferedBytes(): number {
 		return this.pendingBytes;
 	}
+	get failureError(): Error | undefined {
+		return this.failure;
+	}
 	fail(error: unknown): void {
 		if (this.failure !== undefined) {
 			return;

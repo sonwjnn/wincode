@@ -4,6 +4,8 @@ import {
 	isError,
 	isNull,
 	isUndefined,
+	type LogFields,
+	logger,
 	omitUndefined,
 } from "@wincode/runtime-utils";
 import type { SessionId } from "@/shared/identifiers";
@@ -23,6 +25,7 @@ import {
 	getSessionAttemptMessages,
 	hasCompletedToolArtifact,
 } from "../session-retry";
+import { getReportableSessionFailureFields } from "./session-error-diagnostics";
 import type {
 	AgentSessionPorts,
 	SessionCompactionCommand,
@@ -34,6 +37,52 @@ import type {
 } from "./types";
 
 const SESSION_SHUT_DOWN_ERROR = "The session has ended.";
+const compactionDiagnosticFields = (
+	command: SessionCompactionCommand,
+	phase: "started" | "completed" | "failed"
+): LogFields => ({
+	operation: "session.compaction",
+	phase,
+	trigger: command.trigger,
+	...omitUndefined({ turnId: command.turnId }),
+});
+const logCompactionFailure = (
+	error: unknown,
+	command: SessionCompactionCommand
+): void => {
+	const fields = getReportableSessionFailureFields(error);
+	if (fields === null) {
+		return;
+	}
+	const record = {
+		...fields,
+		...compactionDiagnosticFields(command, "failed"),
+	};
+	if (
+		command.trigger === "manual" ||
+		fields.errorCode === "persistence-failed"
+	) {
+		void logger.error("Session compaction failed", record);
+	} else {
+		void logger.warn("Session compaction failed", record);
+	}
+};
+const logOverflowRecoveryFailure = (
+	error: unknown,
+	phase: "target-resolution" | "continuation",
+	turnId: AgentTurnId
+): void => {
+	const fields = getReportableSessionFailureFields(error);
+	if (fields === null) {
+		return;
+	}
+	void logger.warn("Context overflow recovery failed", {
+		...fields,
+		operation: "session.compaction.overflow",
+		phase,
+		turnId,
+	});
+};
 
 /** Active compaction metadata remains stored and transitioned by Agent Session. */
 export type SessionMaintenanceCommandState = {
@@ -146,6 +195,10 @@ export const createSessionMaintenanceWorkflow = (
 			registered: registration.promise,
 		};
 		port.setActiveCompaction(activeCommand);
+		void logger.debug(
+			"Session compaction started",
+			compactionDiagnosticFields(command, "started")
+		);
 		void (async () => {
 			try {
 				const request = await compactionRequest(
@@ -172,8 +225,13 @@ export const createSessionMaintenanceWorkflow = (
 				port.applyContext(result.activeMessages);
 				port.recordCompaction(result.entry);
 				port.setCompactionError(null);
+				void logger.debug(
+					"Session compaction completed",
+					compactionDiagnosticFields(command, "completed")
+				);
 				resolve(result);
 			} catch (error) {
+				logCompactionFailure(error, command);
 				registration.resolve();
 				reject(error);
 			} finally {
@@ -314,6 +372,7 @@ export const createSessionMaintenanceWorkflow = (
 			if (port.isClosed() || recoveryEpoch !== port.getRecoveryGeneration()) {
 				return { kind: "ineligible" };
 			}
+			logOverflowRecoveryFailure(error, "target-resolution", command.turnId);
 			return failRecovery(
 				recoveryError(
 					"Context overflow recovery could not resolve its compaction settings.",
@@ -337,6 +396,7 @@ export const createSessionMaintenanceWorkflow = (
 					command.originalMessageId
 				),
 				trigger: "overflow",
+				turnId: command.turnId,
 				...omitUndefined({ variant: target.variant }),
 			});
 		} catch (error) {
@@ -365,6 +425,7 @@ export const createSessionMaintenanceWorkflow = (
 			if (port.isClosed() || recoveryEpoch !== port.getRecoveryGeneration()) {
 				return { kind: "ineligible" };
 			}
+			logOverflowRecoveryFailure(error, "continuation", command.turnId);
 			return failRecovery(
 				recoveryError(
 					"Context overflow recovery could not continue the compacted Session Context.",
@@ -376,13 +437,13 @@ export const createSessionMaintenanceWorkflow = (
 			return { kind: "ineligible" };
 		}
 		if (continuationOutcome.kind === "refused") {
-			return failRecovery(
-				new OverflowRecoveryError(
-					"continuation-refused",
-					`Context overflow recovery could not continue the compacted Session Context: ${continuationOutcome.reason}`,
-					{ cause: command.error }
-				)
+			const error = new OverflowRecoveryError(
+				"continuation-refused",
+				`Context overflow recovery could not continue the compacted Session Context: ${continuationOutcome.reason}`,
+				{ cause: command.error }
 			);
+			logOverflowRecoveryFailure(error, "continuation", command.turnId);
+			return failRecovery(error);
 		}
 		return { kind: "recovered", entry: result.entry };
 	};

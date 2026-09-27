@@ -3,7 +3,7 @@ import { chmod, mkdir, readdir, stat, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { readUtf8File } from "../src/file-io";
 import { logger } from "../src/index";
-import { withLoggerHome } from "./logger-home";
+import { withDebugProject, withLoggerHome } from "./logger-home";
 
 const logDirectory = (home: string): string =>
 	path.join(home, ".wincode", "logs");
@@ -137,14 +137,60 @@ describe("runtime logger", () => {
 
 	test("writes debug diagnostics only when explicitly enabled", async () => {
 		await withLoggerHome(async (home) => {
-			await logger.debug("hidden unless enabled");
-			expect(await readdir(logDirectory(home)).catch(() => [])).toEqual([]);
+			const originalCwd = process.cwd();
+			const projectRoot = path.join(home, "project");
+			await mkdir(projectRoot);
+			try {
+				process.chdir(projectRoot);
+				await logger.debug("hidden unless enabled");
+				expect(await readdir(logDirectory(home)).catch(() => [])).toEqual([]);
+				expect(
+					await readdir(path.join(projectRoot, ".wincode", "logs")).catch(
+						() => []
+					)
+				).toEqual([]);
 
-			process.env.WINCODE_DEBUG = "1";
-			await logger.debug("debug enabled");
-			expect(await readUtf8File(logFile(home))).toContain(
-				'"level":"debug","message":"debug enabled"'
-			);
+				await withDebugProject(projectRoot, async () => {
+					await logger.debug("debug enabled");
+					const projectLogFile = path.join(
+						projectRoot,
+						".wincode",
+						"logs",
+						`wincode.${new Date().toISOString().slice(0, 10)}.log`
+					);
+					expect(await readUtf8File(projectLogFile)).toContain(
+						'"level":"debug","message":"debug enabled"'
+					);
+					expect(await readdir(logDirectory(home)).catch(() => [])).toEqual([]);
+				});
+			} finally {
+				process.chdir(originalCwd);
+			}
+		});
+	});
+	test("routes all log levels to the project when debug is enabled", async () => {
+		await withLoggerHome(async (home) => {
+			const projectRoot = path.join(home, "project");
+			await mkdir(projectRoot);
+			await withDebugProject(projectRoot, async () => {
+				await logger.warn("project warning");
+				await logger.error("project error");
+				await logger.debug("project debug");
+
+				const projectLogFile = path.join(
+					projectRoot,
+					".wincode",
+					"logs",
+					`wincode.${new Date().toISOString().slice(0, 10)}.log`
+				);
+				const contents = await readUtf8File(projectLogFile);
+				expect(contents).toContain(
+					'"level":"warn","message":"project warning"'
+				);
+				expect(contents).toContain('"level":"error","message":"project error"');
+				expect(contents).toContain('"level":"debug","message":"project debug"');
+				expect(await readdir(logDirectory(home)).catch(() => [])).toEqual([]);
+			});
 		});
 	});
 	test("flush waits for earlier queued fire-and-forget writes", async () => {

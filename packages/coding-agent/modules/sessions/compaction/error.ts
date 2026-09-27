@@ -24,3 +24,10 @@ export class SessionCompactionError extends Error {
 		this.name = "SessionCompactionError";
 	}
 }
+
+export const isExpectedCompactionError = (error: unknown): boolean =>
+	error instanceof SessionCompactionError &&
+	(error.code === "cancelled" ||
+		error.code === "history-too-short" ||
+		error.code === "in-flight" ||
+		error.code === "not-needed");
