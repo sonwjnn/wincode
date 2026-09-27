@@ -15,6 +15,7 @@ import {
 	ModelsAdapter,
 	NewAdapter,
 	SettingsAdapter,
+	SkillsAdapter,
 	VariantsAdapter,
 } from "@/modules/commands/adapters";
 import type { CommandSpec } from "@/modules/commands/commands";
@@ -32,6 +33,10 @@ import { ModelsDialogContent } from "@/modules/prompt-settings/ui/models-dialog"
 import { ThemeDialogContent } from "@/modules/prompt-settings/ui/theme-dialog";
 import { VariantsDialogContent } from "@/modules/prompt-settings/ui/variants-dialog";
 import { SessionsDialogContent } from "@/modules/sessions/ui/dialogs/sessions-dialog";
+import {
+	SKILLS_DIALOG_WIDTH,
+	SkillsDialogContent,
+} from "@/modules/skills/ui/skills-dialog";
 import {
 	type ClipboardSpawn,
 	writeClipboard,
@@ -58,10 +63,11 @@ export async function copyBrowserAuthorizationUrl(
 type CommandExecutorOptions = {
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
+	onSelectSkill: (command: string) => void;
 };
 
 export function useCommandExecutor(
-	options: CommandExecutorOptions = {}
+	options: CommandExecutorOptions
 ): UseCommandExecutorReturn {
 	const renderer = useRenderer();
 	const router = useRouter();
@@ -127,6 +133,18 @@ export function useCommandExecutor(
 						options.onOpenSettings ??
 						(() => {
 							throw new Error("Settings are unavailable in this view.");
+						}),
+				}),
+				skills: new SkillsAdapter({
+					open: () =>
+						dialog.open({
+							children: (
+								<SkillsDialogContent onSelectSkill={options.onSelectSkill} />
+							),
+							padding: { bottom: 1, left: 0, right: 0, top: 1 },
+							title: "Skills",
+							titleMargin: { left: 4, right: 4 },
+							width: SKILLS_DIALOG_WIDTH,
 						}),
 				}),
 				dialog: new DialogAdapter({
@@ -247,6 +265,7 @@ export function useCommandExecutor(
 			model,
 			options.onCompact,
 			options.onOpenSettings,
+			options.onSelectSkill,
 			refreshAgentRegistry,
 			renderer,
 			router,

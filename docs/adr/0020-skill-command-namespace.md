@@ -34,10 +34,15 @@ starts with `skill:` the same way it rejects a Built-in Command collision.
 One `CommandItem` list merges Built-in Commands, Custom Commands, and Skills
 (sorted Built-in Commands, Custom Commands, Skills). Built-in and Custom
 Commands match by label prefix. Skill rows match by label prefix and fuzzy
-subsequence against the bare Skill name, whether or not the query includes the
-`skill:` namespace. This keeps `/skill:sdk` able to find `skill:ai-sdk`. The
-`/skills` picker and its `kind: "skills"` adapter are removed: the command list
-is the one surface that lists and inserts Skills.
+subsequence against the bare Skill name and description, whether or not the
+query includes the `skill:` namespace. This keeps `/skill:sdk` able to find
+`skill:ai-sdk`.
+
+The `/skills` picker is restored as a dedicated browse/search surface. It uses
+fuzzy subsequence matching against both Skill names and descriptions, and
+selection writes a namespaced invocation such as `/skill:review ` into the
+composer. The command list and picker are distinct entry points, but both use
+the same Skill matching context.
 
 Typed Built-in Commands dispatch through the same command executor the overlay
 uses, ahead of the view's busy guard, so `/models` and `/compact focus` behave

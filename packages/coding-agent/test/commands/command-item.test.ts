@@ -83,6 +83,14 @@ describe("filterCommandItems", () => {
 		]);
 	});
 
+	test("matches Skills by fuzzy description when their names do not match", () => {
+		for (const query of ["implmntn", "skill:implmntn"]) {
+			expect(labels(filterCommandItems(SKILLS, query))).toEqual([
+				"skill:review",
+			]);
+		}
+	});
+
 	test("does not return every skill for punctuation-only queries", () => {
 		expect(labels(filterCommandItems(SKILLS, "!!!"))).toEqual([]);
 	});

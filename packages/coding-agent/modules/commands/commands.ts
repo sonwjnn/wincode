@@ -15,6 +15,7 @@ export type CommandSpec = BaseSpec &
 		  }
 		| { kind: "models" }
 		| { kind: "variants" }
+		| { kind: "skills" }
 		| { kind: "agents" }
 	);
 
@@ -54,6 +55,12 @@ export const COMMANDS: CommandSpec[] = [
 		name: "variants",
 		value: "/variants",
 		kind: "variants",
+	},
+	{
+		description: "Browse and insert available skills",
+		name: "skills",
+		value: "/skills",
+		kind: "skills",
 	},
 	{
 		description: "Browse past sessions",

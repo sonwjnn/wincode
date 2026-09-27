@@ -7,6 +7,7 @@ import type {
 	ModelsAdapter,
 	NewAdapter,
 	SettingsAdapter,
+	SkillsAdapter,
 	VariantsAdapter,
 } from "./adapters";
 import type { CommandSpec } from "./commands";
@@ -20,6 +21,7 @@ export type AdapterMap = {
 	models: ModelsAdapter;
 	new: NewAdapter;
 	settings?: SettingsAdapter;
+	skills: SkillsAdapter;
 	variants?: VariantsAdapter;
 };
 
@@ -49,6 +51,9 @@ export function createCommandExecutor(adapters: AdapterMap) {
 				break;
 			case "models":
 				return adapters.models.execute(spec);
+			case "skills":
+				adapters.skills.execute(spec);
+				break;
 			case "variants":
 				if (!adapters.variants) {
 					throw new Error("Model variants are unavailable in this view.");

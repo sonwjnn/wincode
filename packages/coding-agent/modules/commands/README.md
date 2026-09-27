@@ -10,8 +10,8 @@ Slash-command registry and dispatch for the CLI chat input.
 2. **Items** — `command-item.ts` merges Built-in Commands, Custom Commands, and Skills into
    one `CommandItem[]` for the `/` overlay. Rows render without the leading slash; only
    Skill rows keep a namespace (`skill:review`) so the merged list stays unambiguous.
-   Built-in and Custom Commands use label prefixes; Skills use shared fuzzy matching on
-   their bare names, with or without a `skill:` query prefix.
+   Built-in and Custom Commands use label prefixes; Skills fuzzy-match both their
+   names and descriptions, with or without a `skill:` query prefix.
 3. **Dispatch** — `createCommandExecutor` receives an `AdapterMap` at app bootstrap and
    returns a function that switches on `spec.kind`, delegating to the matching adapter.
    The same executor serves overlay selection and typed Built-in Commands
@@ -20,6 +20,8 @@ Slash-command registry and dispatch for the CLI chat input.
   - `ExitAdapter` → `renderer.destroy()`
   - `NewAdapter` → TanStack Router navigation
   - `DialogAdapter` → opens sessions / theme dialogs
+  - `SkillsAdapter` → opens the searchable Skills dialog and inserts a namespaced
+    Skill command
   - `ModelsAdapter` / `VariantsAdapter` / `AgentsAdapter` → open model-picker /
     variant-picker / agent-picker dialogs
   - `SettingsAdapter` → opens the global Settings hub
@@ -34,7 +36,7 @@ Slash-command registry and dispatch for the CLI chat input.
 - `filterCommandItems` (`command-item.ts`)
 - `createCommandExecutor(adapters)`, `AdapterMap`
 - Adapter classes: `ExitAdapter`, `ConnectAdapter`, `DialogAdapter`, `ModelsAdapter`,
-  `VariantsAdapter`, `AgentsAdapter`, `SettingsAdapter`
+  `VariantsAdapter`, `AgentsAdapter`, `SettingsAdapter`, `SkillsAdapter`
 
 ## Dependencies
 
