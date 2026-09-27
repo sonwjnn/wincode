@@ -16,6 +16,7 @@ export type SettingPersistence = "config" | "runtime" | "session";
 export type SettingRuntimeContext = {
 	readonly editMode?: EditMode;
 	readonly model?: ChatModelSelection;
+	readonly onCopyOnSelectChanged?: (enabled: boolean) => void;
 	readonly onEditModeChanged?: (mode: EditMode) => void;
 	readonly sessionId?: string;
 	readonly sessionStore?: SessionStore;

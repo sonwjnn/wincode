@@ -6,32 +6,126 @@ import type {
 	SettingRuntimeContext,
 } from "@/modules/settings/types";
 import { createConfigStore } from "@/shared/config/config-store";
+import {
+	TEST_CONFIG_ROOT as CONFIG_ROOT,
+	createInMemoryConfigStore as createTestStore,
+	TEST_HOME_ROOT as HOME_ROOT,
+} from "./support/config-store";
 
-const CONFIG_ROOT = "/home/user/.config/wincode";
-const HOME_ROOT = "/home/user";
 const WORKSPACE = "/workspace";
 
-const createTestStore = (files: Record<string, string>) =>
-	createConfigStore({
-		configRoot: CONFIG_ROOT,
-		fs: {
-			readFile: async (file) => {
-				const value = files[file];
-				if (isUndefined(value)) {
-					const error = new Error("missing") as Error & { code: string };
-					error.code = "ENOENT";
-					throw error;
-				}
-				return value;
-			},
-			writeFile: async (file, contents) => {
-				files[file] = contents;
-			},
-		},
-		homeRoot: HOME_ROOT,
+describe("createSettingsOperations", () => {
+	test("defaults Copy on select to enabled without writing missing config", async () => {
+		const files: Record<string, string> = {};
+		const operations = createSettingsOperations({
+			configStore: createTestStore(files),
+			workspace: WORKSPACE,
+		});
+		const setting = (await operations.getSettings()).find(
+			({ descriptor }) => descriptor.id === "clipboard.copyOnSelect"
+		);
+		expect(setting).toMatchObject({
+			available: true,
+			source: { kind: "default" },
+			value: true,
+		});
+		expect(files).toEqual({});
+	});
+	test("uses the global copy preference and leaves project config untouched", async () => {
+		const projectConfig =
+			'{"clipboard":{"copyOnSelect":true},"agents":{"build":{"description":"Keep"}}}';
+		const files: Record<string, string> = {
+			[`${CONFIG_ROOT}/wincode.json`]: '{"clipboard":{"copyOnSelect":false}}',
+			[`${WORKSPACE}/wincode.json`]: projectConfig,
+		};
+		const operations = createSettingsOperations({
+			configStore: createTestStore(files),
+			workspace: WORKSPACE,
+		});
+
+		const setting = (await operations.getSettings()).find(
+			({ descriptor }) => descriptor.id === "clipboard.copyOnSelect"
+		);
+
+		expect(setting).toMatchObject({
+			source: { kind: "config", scope: "global" },
+			value: false,
+		});
+		expect(files[`${WORKSPACE}/wincode.json`]).toBe(projectConfig);
+	});
+	test("writes and resets Copy on select in global config only", async () => {
+		const projectConfig =
+			'{"clipboard":{"copyOnSelect":false},"agents":{"build":{"description":"Keep"}}}';
+		const files: Record<string, string> = {
+			[`${WORKSPACE}/wincode.json`]: projectConfig,
+		};
+		const operations = createSettingsOperations({
+			configStore: createTestStore(files),
+			workspace: WORKSPACE,
+		});
+
+		const disabled = await operations.setValue("clipboard.copyOnSelect", false);
+		expect(disabled).toMatchObject({
+			source: { kind: "config", scope: "global" },
+			value: false,
+		});
+		expect(JSON.parse(files[`${CONFIG_ROOT}/wincode.json`] ?? "{}")).toEqual({
+			clipboard: { copyOnSelect: false },
+		});
+		expect(files[`${WORKSPACE}/wincode.json`]).toBe(projectConfig);
+
+		const reset = await operations.resetValue("clipboard.copyOnSelect");
+		expect(reset).toMatchObject({
+			source: { kind: "default" },
+			value: true,
+		});
+		expect(JSON.parse(files[`${CONFIG_ROOT}/wincode.json`] ?? "{}")).toEqual({
+			clipboard: {},
+		});
+		expect(files[`${WORKSPACE}/wincode.json`]).toBe(projectConfig);
+	});
+	test("reset removes duplicate copy preferences from all global config sources", async () => {
+		const secondaryGlobalConfig = `${HOME_ROOT}/.wincode/wincode.json`;
+		const files: Record<string, string> = {
+			[`${CONFIG_ROOT}/wincode.json`]: '{"clipboard":{"copyOnSelect":false}}',
+			[secondaryGlobalConfig]: '{"clipboard":{"copyOnSelect":false}}',
+		};
+		const operations = createSettingsOperations({
+			configStore: createTestStore(files),
+			workspace: WORKSPACE,
+		});
+
+		const reset = await operations.resetValue("clipboard.copyOnSelect");
+
+		expect(reset).toMatchObject({
+			source: { kind: "default" },
+			value: true,
+		});
+		expect(JSON.parse(files[`${CONFIG_ROOT}/wincode.json`] ?? "{}")).toEqual({
+			clipboard: {},
+		});
+		expect(JSON.parse(files[secondaryGlobalConfig] ?? "{}")).toEqual({
+			clipboard: {},
+		});
 	});
 
-describe("createSettingsOperations", () => {
+	test("notifies the live copy preference after global writes and reset", async () => {
+		const changes: boolean[] = [];
+		const operations = createSettingsOperations({
+			configStore: createTestStore({}),
+			runtime: {
+				onCopyOnSelectChanged: (enabled: boolean) => changes.push(enabled),
+			},
+			workspace: WORKSPACE,
+		});
+
+		await operations.setValue("clipboard.copyOnSelect", false);
+		expect(changes).toEqual([false]);
+
+		await operations.resetValue("clipboard.copyOnSelect");
+		expect(changes).toEqual([false, true]);
+	});
+
 	test("resolves Auto-compact without a model and migrates project overrides to global", async () => {
 		const files: Record<string, string> = {
 			[`${WORKSPACE}/wincode.json`]:

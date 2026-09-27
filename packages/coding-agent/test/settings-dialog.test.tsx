@@ -3,8 +3,10 @@ import { testRender } from "@opentui/react/test-utils";
 import { act, useEffect } from "react";
 import {
 	AUTO_COMPACT_SETTING,
+	COPY_ON_SELECT_SETTING,
 	SETTINGS_CATALOG,
 } from "@/modules/settings/catalog";
+import { createSettingsOperations } from "@/modules/settings/operations";
 import { SettingsDialogContent } from "@/modules/settings/settings-dialog";
 import type {
 	ResolvedSetting,
@@ -20,19 +22,21 @@ import {
 } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
-
-const flushUi = async (
-	setup: Awaited<ReturnType<typeof testRender>>
-): Promise<void> => {
-	await act(async () => {
-		await Bun.sleep(20);
-		await setup.renderOnce();
-	});
-};
+import {
+	createInMemoryConfigStore,
+	TEST_CONFIG_ROOT,
+} from "./support/config-store";
+import { flushTestRenderer as flushUi } from "./support/opentui";
 
 const createSetting = (value: boolean): ResolvedSetting => ({
 	available: true,
 	descriptor: AUTO_COMPACT_SETTING,
+	source: { kind: "default" },
+	value,
+});
+const copyOnSelectSetting = (value: boolean): ResolvedSetting => ({
+	available: true,
+	descriptor: COPY_ON_SELECT_SETTING,
 	source: { kind: "default" },
 	value,
 });
@@ -71,12 +75,17 @@ const renderSettingsDialog = async (
 		</ThemeProvider>,
 		{ height: 40, width: 120 }
 	);
+	const settingLabel = initialSettings[0]?.descriptor.label;
 	for (let attempt = 0; attempt < 5; attempt += 1) {
 		await flushUi(setup);
-		if (setup.captureCharFrame().includes("Auto-compact")) {
+		if (
+			settingLabel === undefined ||
+			setup.captureCharFrame().includes(settingLabel)
+		) {
 			break;
 		}
 	}
+
 	return setup;
 };
 
@@ -115,6 +124,33 @@ test("space persists the selected setting and escape closes the hub", async () =
 	await flushUi(setup);
 	expect(setup.captureCharFrame()).toContain("base");
 	expect(setup.captureCharFrame()).not.toContain("Auto-compact");
+	await act(() => setup.renderer.destroy());
+});
+test("Settings dialog toggles Copy on select", async () => {
+	let changed: { id: string; value: unknown } | undefined;
+	const setting = copyOnSelectSetting(true);
+	const operations: SettingsOperations = {
+		catalog: SETTINGS_CATALOG,
+		getSettings: async () => [setting],
+		resetValue: async () => copyOnSelectSetting(true),
+		setValue: async (id, value) => {
+			changed = { id, value };
+			return copyOnSelectSetting(value === true);
+		},
+	};
+	const setup = await renderSettingsDialog(operations, [setting]);
+
+	expect(setup.captureCharFrame()).toContain("Copy on select: on");
+	await act(async () => {
+		await setup.mockInput.typeText(" ");
+	});
+	await flushUi(setup);
+
+	expect(changed).toEqual({
+		id: "clipboard.copyOnSelect",
+		value: false,
+	});
+	expect(setup.captureCharFrame()).toContain("Copy on select: off");
 	await act(() => setup.renderer.destroy());
 });
 test("search reports no matching settings without hiding the hub", async () => {
@@ -175,6 +211,31 @@ test("reset uses the descriptor reset operation", async () => {
 	expect(resetCount).toBe(1);
 	expect(setup.captureCharFrame()).toContain("Auto-compact: on");
 	await act(() => setup.renderer.destroy());
+});
+test("Ctrl+R removes the persisted copy preference and restores the default", async () => {
+	const configFile = `${TEST_CONFIG_ROOT}/wincode.json`;
+	const files: Record<string, string> = {
+		[configFile]: '{"clipboard":{"copyOnSelect":false}}',
+	};
+	const configStore = createInMemoryConfigStore(files);
+	const operations = createSettingsOperations({
+		catalog: [COPY_ON_SELECT_SETTING],
+		configStore,
+		workspace: "/workspace",
+	});
+	const setup = await renderSettingsDialog(
+		operations,
+		await operations.getSettings()
+	);
+
+	act(() => setup.mockInput.pressKey("r", { ctrl: true }));
+	await flushUi(setup);
+
+	expect(await operations.getSettings()).toMatchObject([
+		{ source: { kind: "default" }, value: true },
+	]);
+	expect(JSON.parse(files[configFile] ?? "{}")).toEqual({ clipboard: {} });
+	act(() => setup.renderer.destroy());
 });
 
 test("keeps the persisted value visible while a write is pending and reports errors", async () => {
