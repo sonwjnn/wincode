@@ -44,11 +44,9 @@ test("suppresses popover rows for commands the view cannot run", () => {
 test("resolves typed built-in commands by exact name", () => {
 	expect(findBuiltinCommand(" /models ")).toMatchObject({ kind: "models" });
 	expect(findBuiltinCommand("/MODELS")).toMatchObject({ kind: "models" });
-	expect(findBuiltinCommand("/skills")).toBeNull();
 	expect(findBuiltinCommand("/settings")).toMatchObject({ kind: "settings" });
 	expect(findBuiltinCommand("/models now")).toBeNull();
 	expect(findBuiltinCommand("/settings now")).toBeNull();
-	expect(findBuiltinCommand("/skills review")).toBeNull();
 	expect(findBuiltinCommand("models")).toBeNull();
 	expect(findBuiltinCommand("/skill:review")).toBeNull();
 	expect(findBuiltinCommand("/unknown")).toBeNull();

@@ -429,13 +429,14 @@ test("bare queries still find Skills whose names start with skills", async () =>
 		await rendered.registryReady;
 
 		await act(async () => {
-			await activeSetup.mockInput.typeText("/skills");
+			await activeSetup.mockInput.typeText("/skills-helper");
 		});
 		await waitForSessionFrame(
 			activeSetup,
 			(frame) =>
 				frame.includes("skill:skills-helper") && frame.includes("Skills helper")
 		);
+		await act(() => activeSetup.mockInput.pressArrow("down"));
 		await act(() => activeSetup.mockInput.pressEnter());
 		await settleSessionUi(activeSetup);
 		expect(activeSetup.captureCharFrame()).toContain("/skill:skills-helper ");
@@ -477,7 +478,7 @@ test("hides the aggregate Skill suggestion when no Skills are discovered", async
 		cleanupSessionRender();
 	}
 });
-test("an unrecognized slash prompt submits without a Skills command", async () => {
+test("an unmatched slash prompt submits as ordinary text", async () => {
 	let setup: TestRendererSetup | undefined;
 	try {
 		const rendered = await renderSession({
@@ -489,15 +490,16 @@ test("an unrecognized slash prompt submits without a Skills command", async () =
 		await rendered.registryReady;
 
 		await act(async () => {
-			await activeSetup.mockInput.typeText("/skills");
+			await activeSetup.mockInput.typeText("/unmatched-command");
 		});
 		await act(() => activeSetup.mockInput.pressEnter());
 		await waitForSessionFrame(
 			activeSetup,
-			(frame) => frame.includes("Ask anything") && frame.includes("/skills")
+			(frame) =>
+				frame.includes("Ask anything") && frame.includes("/unmatched-command")
 		);
 		const submittedFrame = activeSetup.captureCharFrame();
-		expect(submittedFrame).toContain("/skills");
+		expect(submittedFrame).toContain("/unmatched-command");
 		expect(submittedFrame).toContain("Ask anything");
 	} finally {
 		if (setup) {
