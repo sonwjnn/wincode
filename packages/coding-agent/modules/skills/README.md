@@ -90,7 +90,8 @@ The remaining file content is the skill body.
 The root `/` suggestions always show Built-in and Custom Commands plus one `skill:` aggregate
 when Skills are discoverable. Selecting the aggregate enters `/skill:` search; Skill results
 fuzzy-match names and descriptions both there and in nonempty bare slash queries. `/skill` shows
-the namespace chooser rather than individual Skills, while `/skills` is ordinary prompt text.
+the namespace chooser rather than individual Skills. `/skills` is not a Built-in Command, but
+follows the same bare-query matching behavior.
 Selecting an individual Skill writes `/skill:<name> ` into the chat input.
 
 A bare `/name` is never a Skill invocation, so a Custom Command of the same name stays reachable.

@@ -10,8 +10,9 @@ Slash-command registry and dispatch for the CLI chat input.
 2. **Items** — `command-item.ts` builds the `/` overlay from Built-in Commands and
    Custom Commands, adding one `skill:` aggregate when Skills are discoverable.
    Selecting the aggregate enters `/skill:` search. Skills fuzzy-match names and
-   descriptions in that namespace search and in nonempty bare slash queries, except
-   `/skill` (the namespace chooser) and `/skills` (ordinary prompt text).
+   descriptions in that namespace search and in nonempty bare slash queries. `/skill`
+   (the namespace chooser) is excluded; `/skills` has no built-in command of its own
+   but may fuzzy-match Skill rows like any other bare query.
 3. **Dispatch** — `createCommandExecutor` receives an `AdapterMap` at app bootstrap and
    returns a function that switches on `spec.kind`, delegating to the matching adapter.
    The same executor serves overlay selection and typed Built-in Commands

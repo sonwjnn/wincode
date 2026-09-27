@@ -35,7 +35,8 @@ The root command list always shows Built-in Commands, Custom Commands, and one a
 `skill:` row when Skills are discoverable. The row's count reflects the current chat's catalog;
 selecting it enters `/skill:` search. Skill results fuzzy-match names and descriptions in that
 search and in nonempty bare slash queries. `/skill` shows the namespace chooser rather than
-individual Skills; `/skills` has no command match and submits as ordinary prompt text.
+individual Skills. `/skills` is not a Built-in Command, but may fuzzy-match Skills like any
+other bare slash query.
 
 The dedicated `/skills` browser and its Built-in Command were removed. More generally, an open
 command list with no matching row submits the typed line instead of swallowing it.

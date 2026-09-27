@@ -220,14 +220,8 @@ export function useChatInputController({
 	const isSkillSearchQuery = normalizedCommandQuery.startsWith(
 		SKILL_NAMESPACE_PREFIX
 	);
-	// Preserve the removed `/skills` command text while allowing `skills-*` names.
-	const isRemovedSkillsCommandQuery =
-		normalizedCommandQuery === "skills" ||
-		normalizedCommandQuery.startsWith("skills ");
 	const isBareSkillSearchQuery =
-		normalizedCommandQuery.length > 0 &&
-		normalizedCommandQuery !== "skill" &&
-		!isRemovedSkillsCommandQuery;
+		normalizedCommandQuery.length > 0 && normalizedCommandQuery !== "skill";
 	const commandItems = useMemo(() => {
 		const commands = [
 			...getVisibleCommands({ hideCompact, hideVariants }),

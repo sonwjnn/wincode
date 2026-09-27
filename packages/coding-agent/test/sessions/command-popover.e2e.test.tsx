@@ -429,14 +429,13 @@ test("bare queries still find Skills whose names start with skills", async () =>
 		await rendered.registryReady;
 
 		await act(async () => {
-			await activeSetup.mockInput.typeText("/skills-helper");
+			await activeSetup.mockInput.typeText("/skills");
 		});
 		await waitForSessionFrame(
 			activeSetup,
 			(frame) =>
 				frame.includes("skill:skills-helper") && frame.includes("Skills helper")
 		);
-		await act(() => activeSetup.mockInput.pressArrow("down"));
 		await act(() => activeSetup.mockInput.pressEnter());
 		await settleSessionUi(activeSetup);
 		expect(activeSetup.captureCharFrame()).toContain("/skill:skills-helper ");

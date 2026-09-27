@@ -97,6 +97,16 @@ describe("filterCommandItems", () => {
 		]);
 	});
 
+	test("fuzzy-matches `/skills` as a bare Skill query", () => {
+		const skills = createSkillCommandSpecs([
+			{ description: "Skills helper", name: "skills-helper" },
+		]);
+
+		expect(labels(filterCommandItems(skills, "skills"))).toEqual([
+			"skill:skills-helper",
+		]);
+	});
+
 	test("matches skill names with an ordered subsequence inside a word", () => {
 		expect(labels(filterCommandItems(SKILLS, "riew"))).toEqual([
 			"skill:review",
