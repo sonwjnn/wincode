@@ -258,7 +258,10 @@ test("groups matching metadata while the next turn runs and after completion", (
 });
 
 test("moves matching metadata to the newest turn before its assistant completes", () => {
-	const model = { modelId: modelId("gpt-5.6-luna"), providerId: "openai" };
+	const model = {
+		modelId: modelId("gpt-5.6-luna"),
+		providerId: "openai" as const,
+	};
 	const execution: SessionExecution = {
 		agent: agentId("build"),
 		assistantId: sessionMessageId("assistant-2"),

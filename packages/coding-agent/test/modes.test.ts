@@ -9,6 +9,7 @@ import {
 	resolveActiveAgentId,
 } from "../modules/agents/registry";
 import {
+	type OneShotCompositionInput,
 	type OneShotDependencies,
 	runJsonMode,
 	runPrintMode,
