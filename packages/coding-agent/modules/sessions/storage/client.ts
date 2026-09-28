@@ -1,50 +1,19 @@
 import { Database } from "bun:sqlite";
-import { effortSchema, reasoningModeSchema } from "@wincode/ai/models";
-import { isPlainObject } from "@wincode/runtime-utils";
-import { drizzle } from "drizzle-orm/bun-sqlite";
+import { type BunSQLiteDatabase, drizzle } from "drizzle-orm/bun-sqlite";
 import { resolveLocalDatabasePath } from "./path";
 import { sessionSchema } from "./schema";
-
-export type SessionDatabase = ReturnType<typeof drizzle<typeof sessionSchema>>;
-
-const applyPragmas = (sqlite: Database): void => {
-	sqlite.exec("PRAGMA journal_mode = WAL;");
-	sqlite.exec("PRAGMA foreign_keys = ON;");
-	sqlite.exec("PRAGMA busy_timeout = 5000;");
+export type SessionDatabase = BunSQLiteDatabase<typeof sessionSchema> & {
+	$client: Database;
 };
-const ensureSessionEditModeColumn = (sqlite: Database): void => {
-	const columns = sqlite.query("PRAGMA table_info(session)").all() as Array<{
-		name: string;
-	}>;
-	if (columns.some(({ name }) => name === "edit_mode")) {
-		return;
+
+export class SessionDatabaseResetRequiredError extends Error {
+	constructor() {
+		super(
+			"Local Session data uses an incompatible schema. Clear local Session data and attachments with `bun run --cwd packages/coding-agent db:reset-sessions`."
+		);
+		this.name = "SessionDatabaseResetRequiredError";
 	}
-	sqlite.exec(
-		"ALTER TABLE session ADD COLUMN edit_mode TEXT DEFAULT 'hashline' NOT NULL;"
-	);
-};
-type LegacyChoiceColumns = Readonly<{
-	table: string;
-	id: string;
-	legacy: string;
-	effort: string;
-	reasoningMode: string;
-}>;
-
-const legacySessionChoiceColumns = {
-	table: "session",
-	id: "id",
-	legacy: "variant",
-	effort: "effort",
-	reasoningMode: "reasoning_mode",
-} as const satisfies LegacyChoiceColumns;
-const legacyCompactionChoiceColumns = {
-	table: "session_compaction",
-	id: "id",
-	legacy: "summarization_variant",
-	effort: "summarization_effort",
-	reasoningMode: "summarization_reasoning_mode",
-} as const satisfies LegacyChoiceColumns;
+}
 
 const columnNames = (sqlite: Database, table: string): Set<string> =>
 	new Set(
@@ -65,155 +34,47 @@ const ensureTextColumn = (
 	}
 };
 
-const classifyLegacyChoice = (
-	value: unknown,
-	table: string
-): { effort: string | null; reasoningMode: string | null } => {
-	const effort = effortSchema.safeParse(value);
-	if (effort.success) {
-		return { effort: effort.data, reasoningMode: null };
-	}
-	const reasoningMode = reasoningModeSchema.safeParse(value);
-	if (reasoningMode.success) {
-		return { effort: null, reasoningMode: reasoningMode.data };
-	}
-	throw new Error(
-		`Cannot safely migrate an unknown persisted reasoning choice in ${table}.`
+const hasCurrentReasoningSelectionSchema = (sqlite: Database): boolean => {
+	const sessionColumns = columnNames(sqlite, "session");
+	const compactionColumns = columnNames(sqlite, "session_compaction");
+	return (
+		sessionColumns.has("effort") &&
+		sessionColumns.has("reasoning_mode") &&
+		compactionColumns.has("summarization_effort") &&
+		compactionColumns.has("summarization_reasoning_mode")
 	);
 };
 
-const migrateLegacyChoiceProperty = (
-	value: Record<string, unknown>,
-	table: string
-): boolean => {
-	if (!Object.hasOwn(value, "variant")) {
-		return false;
-	}
-	const choice = classifyLegacyChoice(value.variant, table);
-	const existingEffort = value.effort;
-	const existingReasoningMode = value.reasoningMode;
-	if (
-		(existingEffort != null && existingEffort !== choice.effort) ||
-		(existingReasoningMode != null &&
-			existingReasoningMode !== choice.reasoningMode)
-	) {
-		throw new Error(
-			`Conflicting persisted reasoning choices prevent safe migration in ${table}.`
-		);
-	}
-	value.variant = undefined;
-	value.effort = undefined;
-	value.reasoningMode = undefined;
-	if (choice.effort === null) {
-		value.reasoningMode = choice.reasoningMode;
-	} else {
-		value.effort = choice.effort;
-	}
-	return true;
+const ensureReasoningSelectionColumns = (sqlite: Database): void => {
+	ensureTextColumn(sqlite, "session", "effort");
+	ensureTextColumn(sqlite, "session", "reasoning_mode");
+	ensureTextColumn(sqlite, "session_compaction", "summarization_effort");
+	ensureTextColumn(
+		sqlite,
+		"session_compaction",
+		"summarization_reasoning_mode"
+	);
+};
+const applyPragmas = (sqlite: Database): void => {
+	sqlite.exec("PRAGMA journal_mode = WAL;");
+	sqlite.exec("PRAGMA foreign_keys = ON;");
+	sqlite.exec("PRAGMA busy_timeout = 5000;");
 };
 
-const migrateLegacySessionRecordChoices = (sqlite: Database): void => {
-	const rows = sqlite
-		.query("SELECT record_id, model_json, messages_json FROM session_record")
-		.all() as Array<{
-		record_id: string;
-		model_json: string;
-		messages_json: string;
+const ensureSessionEditModeColumn = (sqlite: Database): void => {
+	const columns = sqlite.query("PRAGMA table_info(session)").all() as Array<{
+		name: string;
 	}>;
-	const update = sqlite.query(
-		"UPDATE session_record SET model_json = ?, messages_json = ? WHERE record_id = ?"
-	);
-	for (const row of rows) {
-		const model = JSON.parse(row.model_json) as unknown;
-		if (!isPlainObject(model)) {
-			throw new Error("Cannot safely migrate an invalid Session Record model.");
-		}
-		let changed = migrateLegacyChoiceProperty(
-			model,
-			"session_record.model_json"
-		);
-		const messages = JSON.parse(row.messages_json) as unknown;
-		if (!Array.isArray(messages)) {
-			throw new Error("Cannot safely migrate invalid Session Record messages.");
-		}
-		for (const message of messages) {
-			if (!(isPlainObject(message) && isPlainObject(message.metadata))) {
-				continue;
-			}
-			changed =
-				migrateLegacyChoiceProperty(
-					message.metadata,
-					"session_record.messages_json"
-				) || changed;
-		}
-		if (changed) {
-			update.run(
-				JSON.stringify(model),
-				JSON.stringify(messages),
-				row.record_id
-			);
-		}
-	}
-};
-
-const reconcileLegacyChoiceColumn = (
-	sqlite: Database,
-	columns: LegacyChoiceColumns
-): void => {
-	ensureTextColumn(sqlite, columns.table, columns.effort);
-	ensureTextColumn(sqlite, columns.table, columns.reasoningMode);
-	if (!columnNames(sqlite, columns.table).has(columns.legacy)) {
+	if (columns.some(({ name }) => name === "edit_mode")) {
 		return;
 	}
-	const rows = sqlite
-		.query(
-			`SELECT ${columns.id}, ${columns.legacy}, ${columns.effort}, ${columns.reasoningMode}
-			FROM ${columns.table}
-			WHERE ${columns.legacy} IS NOT NULL`
-		)
-		.all() as Record<string, string | null>[];
-	const update = sqlite.query(
-		`UPDATE ${columns.table}
-		SET ${columns.effort} = ?, ${columns.reasoningMode} = ?
-		WHERE ${columns.id} = ?`
+	sqlite.exec(
+		"ALTER TABLE session ADD COLUMN edit_mode TEXT DEFAULT 'hashline' NOT NULL;"
 	);
-	for (const row of rows) {
-		const choice = classifyLegacyChoice(row[columns.legacy], columns.table);
-		if (
-			(row[columns.effort] !== null && row[columns.effort] !== choice.effort) ||
-			(row[columns.reasoningMode] !== null &&
-				row[columns.reasoningMode] !== choice.reasoningMode)
-		) {
-			throw new Error(
-				`Conflicting persisted reasoning choices prevent safe migration in ${columns.table}.`
-			);
-		}
-		const id = row[columns.id];
-		if (typeof id !== "string") {
-			throw new Error(
-				`A row in ${columns.table} is missing its persisted identifier.`
-			);
-		}
-		update.run(choice.effort ?? null, choice.reasoningMode ?? null, id);
-	}
-	sqlite.exec(`ALTER TABLE ${columns.table} DROP COLUMN ${columns.legacy};`);
-};
-
-const syncReasoningSelectionSchema = (sqlite: Database): void => {
-	sqlite.exec("BEGIN IMMEDIATE;");
-	try {
-		reconcileLegacyChoiceColumn(sqlite, legacySessionChoiceColumns);
-		reconcileLegacyChoiceColumn(sqlite, legacyCompactionChoiceColumns);
-		migrateLegacySessionRecordChoices(sqlite);
-		sqlite.exec("COMMIT;");
-	} catch (error) {
-		sqlite.exec("ROLLBACK;");
-		throw error;
-	}
 };
 const initializeSchema = (
 	sqlite: Database,
-	skipReasoningSelectionSync: boolean
+	allowIncompatibleSessionSchema: boolean
 ): void => {
 	sqlite.exec(`
 		CREATE TABLE IF NOT EXISTS session_workspace (
@@ -456,27 +317,26 @@ const initializeSchema = (
 		CREATE UNIQUE INDEX IF NOT EXISTS uq_session_record_session_position
 			ON session_record (session_id, position);
 	`);
-	ensureSessionEditModeColumn(sqlite);
-	if (!skipReasoningSelectionSync) {
-		try {
-			syncReasoningSelectionSchema(sqlite);
-		} catch (error) {
-			throw new Error(
-				"Session reasoning choices cannot be reconciled safely. To discard local Session data and attachments, run `bun run --cwd packages/coding-agent db:reset-sessions`, then restart.",
-				{ cause: error }
-			);
-		}
+	if (
+		!(
+			allowIncompatibleSessionSchema ||
+			hasCurrentReasoningSelectionSchema(sqlite)
+		)
+	) {
+		throw new SessionDatabaseResetRequiredError();
 	}
+	ensureSessionEditModeColumn(sqlite);
+	ensureReasoningSelectionColumns(sqlite);
 };
 
 const openDatabase = (
 	path: string,
-	skipReasoningSelectionSync: boolean
+	allowIncompatibleSessionSchema: boolean
 ): { db: SessionDatabase; sqlite: Database } => {
 	const sqlite = new Database(path, { create: true });
 	try {
 		applyPragmas(sqlite);
-		initializeSchema(sqlite, skipReasoningSelectionSync);
+		initializeSchema(sqlite, allowIncompatibleSessionSchema);
 		const db = drizzle(sqlite, { schema: sessionSchema });
 		return { db, sqlite };
 	} catch (error) {
@@ -489,7 +349,7 @@ export const createDatabase = (
 	path: string = resolveLocalDatabasePath()
 ): { db: SessionDatabase; sqlite: Database } => openDatabase(path, false);
 
-/** Opens the database without reasoning reconciliation for explicit reset only. */
+/** Opens the local database solely to clear Session data before a reset. */
 export const createDatabaseForSessionReset = (
 	path: string
 ): { db: SessionDatabase; sqlite: Database } => openDatabase(path, true);

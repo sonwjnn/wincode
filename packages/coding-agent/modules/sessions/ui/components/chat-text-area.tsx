@@ -17,7 +17,6 @@ import {
 import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import { spawn } from "bun";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { builtInAgents, useAgentRegistry } from "@/modules/agents";
 import {
 	type CommandItem,
 	getCommandLabel,
@@ -106,10 +105,9 @@ type ChatTextAreaProps = {
 	/** Changes whenever `recalledSubmissions` holds something new to restore. */
 	recallRevision?: number;
 	sessionPromptHistory?: PromptHistoryEntry[];
-	showCompactCommand?: boolean;
 	/**
 	 * Whether the composer is submitting into the running Agent Turn: it then
-	 * takes plain text only, and Tab cannot change the Agent inside that turn.
+	 * takes plain text only.
 	 */
 	steering?: boolean;
 	onSubmit: (
@@ -162,12 +160,10 @@ export function ChatTextArea({
 	recalledSubmissions = EMPTY_RECALLED_SUBMISSIONS,
 	recallRevision = 0,
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
-	showCompactCommand = true,
 	steering = false,
 }: ChatTextAreaProps) {
-	const { agent, cycleAgent, cycleReasoningChoice, model } = usePromptConfig();
+	const { agent, cycleReasoningChoice, model } = usePromptConfig();
 	const supportedModel = findSupportedChatModelSelection(model);
-	const registry = useAgentRegistry();
 	const chatModelSelection = isNull(supportedModel)
 		? null
 		: {
@@ -270,14 +266,14 @@ export function ChatTextArea({
 		getCustomCommands: discoverCustomCommands,
 		getFileMentionOptions,
 		getSkills: discoverAvailableSkills,
-		hideCompact: !showCompactCommand,
 		hideEffort,
 		onError: handleSubmitError,
 		onSubmit,
-		onTab: (shift) =>
-			shift
-				? cycleReasoningChoice()
-				: cycleAgent(registry?.selectableAgents ?? builtInAgents),
+		onTab: (shift) => {
+			if (shift) {
+				cycleReasoningChoice();
+			}
+		},
 		sessionPromptHistory,
 		steering,
 	});

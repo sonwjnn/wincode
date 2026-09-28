@@ -117,6 +117,32 @@ describe("focused model contracts", () => {
 		).toBe(false);
 		expect(findSupportedChatModelSelection(selection)?.id).toBe("gpt-5.6-luna");
 	});
+	test("resolves every requested direct model from the catalog", () => {
+		const requestedDirectModels = [
+			{ providerId: "openai", id: "gpt-6-sol", displayName: "GPT-6 Sol" },
+			{ providerId: "openai", id: "gpt-6-luna", displayName: "GPT-6 Luna" },
+			{ providerId: "openai", id: "gpt-6-terra", displayName: "GPT-6 Terra" },
+			{
+				providerId: "anthropic",
+				id: "claude-opus-5.5",
+				displayName: "Claude Opus 5.5",
+			},
+		] as const;
+		for (const expected of requestedDirectModels) {
+			expect(
+				modelCatalog.find(
+					(model) =>
+						model.connectionProviderId === expected.providerId &&
+						model.id === expected.id
+				)
+			).toMatchObject({
+				displayName: expected.displayName,
+				lifecycle: "active",
+				provider: expected.providerId,
+				route: "direct",
+			});
+		}
+	});
 
 	test("creates a transient target with minimal authorization", () => {
 		const target = createModelTarget(

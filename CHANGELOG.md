@@ -40,7 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CLI uses `--effort` and `--reasoning-mode`. Session records, RPC, configured
   Agents, and compaction persist the provider-neutral choice. Reasoning `variant`,
   `--thinking`, and `/variants` aliases are removed; existing Agent configuration
-  using `variant` must be updated manually.
+  using `variant` must be updated manually. On startup, Sessions with an
+  incompatible selection schema and their attachments are cleared, not converted;
+  prompt history is preserved.
+
+- **Build is the only shipped Primary Agent.** Plan was removed from agent selection,
+  and Tab no longer cycles Agents. Its shipped Plan-only Permission restrictions
+  were also removed. Unresolvable saved Plan selections and `default_agent: "plan"`
+  fall back to Build; user-configured Agents remain supported.
 
 - **Runtime diagnostics stay out of CLI and protocol streams.** Runtime code uses
   the shared `logger` to append structured records to
@@ -108,13 +115,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refresh share one converter, so a fact can only be interpreted one way, and
   the converter never imports its own output. See ADR-0014.
 
-- **The session usage bar shows an estimated cost.** Estimated USD for the
-  session appears beside the context measure as `~$0.00`, from the catalog's
-  rates including cache read and write. It is labelled as an estimate and is
-  never presented as billing. See ADR-0015.
+- **The session usage bar shows context percentage/max and estimated cost.**
+  Context usage appears without spaces as `42%/1.0M`; when the model has no
+  usable context limit, the bar falls back to the used-token count. Estimated
+  USD for the session appears beside it as `~$0.00`, from the catalog's rates
+  including cache read and write. It is labelled as an estimate and is never
+  presented as billing. See ADR-0015.
 
 - **The catalog covers newer models.** Added `claude-fable-5-1`, `claude-opus-5`,
   `gpt-6-astra`, and `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash`.
+
+- **The Model Catalog adds GPT-6 Sol, Luna, and Terra plus Claude Opus 5.5.**
+  All four are available as active direct-provider models.
+
 
 - **Skill command suggestions are consolidated.** The root `/` list includes one counted
   `skill:` aggregate whenever Skills are discoverable; selecting it enters `/skill:` search.
@@ -151,6 +164,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ADR-0023.
 
 ### Fixed
+- **Command and file suggestions stay aligned after an empty search.** Returning
+  from "No matching commands" or "No matching files" clears the empty-state
+  horizontal padding before showing selectable rows.
 
 - **Directory file mentions remain searchable after completion.** Selecting a
   folder with Tab, Enter, or the mouse keeps descendant suggestions open,

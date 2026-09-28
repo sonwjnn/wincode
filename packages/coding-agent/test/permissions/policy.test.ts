@@ -18,7 +18,6 @@ import {
 	type PermissionRules,
 	resolveVisibleCodingTools,
 	STATIC_TOOL_PERMISSION_ACTIONS,
-	shippedAgentPermissionRules,
 } from "@/modules/permissions/policy";
 
 describe("matchesResourcePattern", () => {
@@ -369,22 +368,6 @@ describe("foldPermissionRules", () => {
 	});
 });
 
-describe("shippedAgentPermissionRules", () => {
-	test("denies edit, shell, and every open-glob action for Plan", () => {
-		// The `*` deny is honored only by the MCP open-glob evaluator, so it makes
-		// Plan's baseline expose no MCP tools while leaving static tool visibility
-		// (which matches exact action keys) unchanged.
-		const expectedPlanRules: PermissionRules = fromAny({
-			"*": "deny",
-			edit: "deny",
-			shell: "deny",
-		});
-		expect(shippedAgentPermissionRules("plan")).toEqual(expectedPlanRules);
-		expect(shippedAgentPermissionRules("build")).toEqual({});
-		expect(shippedAgentPermissionRules("code-reviewer")).toEqual({});
-	});
-});
-
 describe("composePermissionDecisions", () => {
 	test("takes the most-restrictive of the two decisions", () => {
 		expect(composePermissionDecisions("allow", "allow")).toBe("allow");
@@ -401,8 +384,8 @@ describe("composePermissionDecisions", () => {
 
 describe("decideOpenActionPermission", () => {
 	// Open-glob keys (`*`, `demo_*`) sit outside the nominal PermissionAction
-	// union, exactly like the shipped Plan rule; the evaluator matches them as
-	// globs, so the tests cast the literals the same way the policy module does.
+	// union; the evaluator matches them as globs, so the tests cast the literals
+	// the same way the policy module does.
 	const openRules = (
 		rules: Record<
 			string,

@@ -134,8 +134,15 @@ export const calculateModelUsageCostUsd = (
 
 const TRAILING_ZERO = /\.0$/;
 
-/** `34.3K` / `1.2M` / `999`. */
-export const formatModelTokenCount = (tokens: number): string => {
+type FormatModelTokenCountOptions = {
+	readonly preserveTrailingZero?: boolean;
+};
+
+/** `34.3K` / `1.2M` / `999`; `preserveTrailingZero` keeps forms like `1.0M`. */
+export const formatModelTokenCount = (
+	tokens: number,
+	options?: FormatModelTokenCountOptions
+): string => {
 	if (tokens < 1000) {
 		return String(Math.round(tokens));
 	}
@@ -143,11 +150,17 @@ export const formatModelTokenCount = (tokens: number): string => {
 		const thousands = tokens / 1000;
 		const formatted =
 			thousands >= 100 ? thousands.toFixed(0) : thousands.toFixed(1);
-		return `${formatted.replace(TRAILING_ZERO, "")}K`;
+		const display = options?.preserveTrailingZero
+			? formatted
+			: formatted.replace(TRAILING_ZERO, "");
+		return `${display}K`;
 	}
 	const millions = tokens / 1_000_000;
 	const formatted = millions >= 100 ? millions.toFixed(0) : millions.toFixed(1);
-	return `${formatted.replace(TRAILING_ZERO, "")}M`;
+	const display = options?.preserveTrailingZero
+		? formatted
+		: formatted.replace(TRAILING_ZERO, "");
+	return `${display}M`;
 };
 
 /** `"$0.02"` / `"<$0.01"` / `"$0.00"`. */

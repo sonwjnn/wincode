@@ -22,7 +22,6 @@ export {
 	buildAgent,
 	builtInAgents,
 	DEFAULT_AGENT_ID,
-	planAgent,
 } from "./built-ins";
 export type {
 	AgentDiagnostic,

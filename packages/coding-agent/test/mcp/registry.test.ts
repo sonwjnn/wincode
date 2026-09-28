@@ -197,11 +197,11 @@ const harness = (options: HarnessOptions = {}): Harness => {
 };
 
 describe("createMcpRegistry", () => {
-	test("a null Agent Registry leaves Plan with no visible MCP tools", async () => {
+	test("a null Agent Registry applies fallback rules to Build MCP tools", async () => {
 		const fallbackPermission = createToolPermission({ edit: "deny" });
 		const resolution = resolveToolPermissionPolicies(
 			null,
-			agentId("plan"),
+			agentId("build"),
 			() => fallbackPermission
 		);
 		const demo = new FakeMcpClient("demo", [tool("echo")]);
@@ -211,7 +211,7 @@ describe("createMcpRegistry", () => {
 		});
 
 		const snapshot = await registry.createSnapshot(
-			agentId("plan"),
+			agentId("build"),
 			resolution.mcpPolicy
 		);
 
@@ -222,19 +222,14 @@ describe("createMcpRegistry", () => {
 			expect(entry.policy).toBe("deny");
 		}
 	});
-
-	test("plan snapshot connects and builds a catalog under the default policy", async () => {
-		// Plan no longer short-circuits: visibility is purely policy-driven, so a
-		// plan snapshot with the permissive default policy connects and exposes
-		// tools exactly like build. The empty-Plan baseline comes from the shipped
-		// Plan policy denying every open-glob action (see the next test).
+	test("Build snapshot connects and builds a catalog under the default policy", async () => {
 		const demo = new FakeMcpClient("demo", [tool("echo")]);
 		const { registry } = harness({
 			clients: { demo },
 			configs: [serverConfig("demo", { permission: "allow" })],
 		});
-		const snapshot = await registry.createSnapshot(agentId("plan"));
-		expect(snapshot.agent).toBe(agentId("plan"));
+		const snapshot = await registry.createSnapshot(agentId("build"));
+		expect(snapshot.agent).toBe(agentId("build"));
 		expect(snapshot.manifest).toHaveLength(1);
 		expect(snapshot.tools.size).toBe(1);
 		expect(demo.connectCount).toBe(1);
@@ -246,7 +241,7 @@ describe("createMcpRegistry", () => {
 			clients: { demo },
 			configs: [serverConfig("demo", { permission: "allow" })],
 		});
-		const snapshot = await registry.createSnapshot(agentId("plan"), {
+		const snapshot = await registry.createSnapshot(agentId("build"), {
 			rules: openRules({ "*": "deny" }),
 			safety: false,
 		});
@@ -455,7 +450,7 @@ describe("createMcpRegistry", () => {
 			clients: { demo },
 			configs: [serverConfig("demo", { permission: "allow" })],
 		});
-		const snapshot = await registry.createSnapshot(agentId("plan"), {
+		const snapshot = await registry.createSnapshot(agentId("build"), {
 			rules: openRules({ "*": "deny" }),
 			safety: false,
 		});

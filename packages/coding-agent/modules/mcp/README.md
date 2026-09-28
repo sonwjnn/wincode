@@ -68,17 +68,14 @@ Permission rules target the stable logical name; the collision-resistant hashed 
 (`mcp_<server>_<tool>_<digest>`) remains the only dispatch identity used to actually execute a
 tool.
 
-## Build/Plan semantics
+## Agent semantics
 
-Catalog contents are purely policy-driven — neither mode is special-cased:
+Catalog contents are policy-driven for every Agent:
 
-- **Build** connects servers and produces a catalog; a tool whose composed decision is `deny` is
-  hidden from the model but kept in the dispatch map so a stray call fails closed with a policy
-  denial rather than an unknown-tool error.
-- **Plan** connects the same way, but its shipped baseline policy denies every open-glob action
-  (`"*": "deny"`), so a default Plan exposes and executes no MCP tools. A higher-precedence policy
-  that explicitly overrides that rule can re-enable specific tools, since the rule composes like
-  any other.
+- A tool whose composed decision is `deny` is hidden from the model but kept in the dispatch map,
+  so a stray call fails closed with a policy denial rather than an unknown-tool error.
+- Build's baseline policy follows the shared defaults. Configured Agents can restrict or allow
+  MCP tools through their per-Agent Permission rules.
 
 ## Tool-call handling
 

@@ -3,10 +3,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { agentIdSchema, createAgentRuntime } from "@wincode/agent-core";
-import type { AgentRegistry } from "../modules/agents/registry";
-import { buildAgentRegistry } from "../modules/agents/registry";
 import {
-	type OneShotCompositionInput,
+	type AgentRegistry,
+	buildAgentRegistry,
+	resolveActiveAgentId,
+} from "../modules/agents/registry";
+import {
 	type OneShotDependencies,
 	runJsonMode,
 	runPrintMode,
@@ -34,7 +36,14 @@ const workspace = await mkdtemp(path.join("/tmp", "wincode-one-shot-"));
 const registry = buildAgentRegistry(
 	fromPartial<ConfigSnapshot>({
 		diagnostics: [],
-		document: {},
+		document: {
+			agents: {
+				review: {
+					description: "Review changes without editing files.",
+					role: "primary",
+				},
+			},
+		},
 		sourceFor: () => undefined,
 		sources: [],
 	})
@@ -183,6 +192,43 @@ test("configured Agents retain model-supported Effort and Reasoning Mode choices
 	).toEqual([]);
 });
 
+test("agent selection offers only Build and falls back from stale Plan choices", () => {
+	const buildId = agentIdSchema.parse("build");
+	const removedPlanId = agentIdSchema.parse("plan");
+	const defaultRegistry = buildAgentRegistry(
+		fromPartial<ConfigSnapshot>({
+			diagnostics: [],
+			document: {},
+			sourceFor: () => undefined,
+			sources: [],
+		})
+	);
+	const planDefaultRegistry = buildAgentRegistry(
+		fromPartial<ConfigSnapshot>({
+			diagnostics: [],
+			document: { default_agent: "plan" },
+			sourceFor: () => undefined,
+			sources: [],
+		})
+	);
+
+	expect(defaultRegistry.selectableAgents.map((agent) => agent.id)).toEqual([
+		buildId,
+	]);
+	expect(defaultRegistry.defaultAgentId).toBe(buildId);
+	expect(resolveActiveAgentId(defaultRegistry, removedPlanId)).toBe(buildId);
+	expect(planDefaultRegistry.defaultAgentId).toBe(buildId);
+	expect(planDefaultRegistry.selectableAgents.map((agent) => agent.id)).toEqual(
+		[buildId]
+	);
+	expect(planDefaultRegistry.diagnostics).toContainEqual(
+		expect.objectContaining({
+			code: "invalid-agent",
+			configPath: ["default_agent"],
+		})
+	);
+});
+
 test("configured Agents reject unsupported, conflicting, invalid, and legacy choices by field", () => {
 	const configured = buildConfiguredAgentRegistry({
 		both: {
@@ -314,7 +360,7 @@ test("Print mode creates a durable One-Shot Session and writes assistant text on
 			sessionId,
 			undefined,
 			true,
-			{ agent: "plan" }
+			{ agent: "review" }
 		),
 		dependencies
 	);
@@ -334,7 +380,7 @@ test("Print mode creates a durable One-Shot Session and writes assistant text on
 		const records = await finalVerification.store.listSessionRecords(
 			session.id
 		);
-		expect(records.at(-1)?.agentId).toBe(agentIdSchema.parse("plan"));
+		expect(records.at(-1)?.agentId).toBe(agentIdSchema.parse("review"));
 	} finally {
 		await finalVerification.shutdown();
 	}

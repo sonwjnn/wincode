@@ -12,7 +12,6 @@ test("dispatches manual compaction focus through its adapter", async () => {
 		exit: { execute: () => undefined } as never,
 		models: { execute: () => undefined } as never,
 		new: { execute: () => undefined } as never,
-		skills: { execute: () => undefined } as never,
 		settings: { execute: () => undefined } as never,
 	});
 

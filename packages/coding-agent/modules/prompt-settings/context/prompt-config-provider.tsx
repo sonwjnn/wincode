@@ -9,7 +9,7 @@ import {
 	type ReasoningMode,
 	type ReasoningSelection,
 } from "@wincode/ai/models";
-import { isNull, isUndefined } from "@wincode/runtime-utils";
+import { isNull } from "@wincode/runtime-utils";
 import {
 	createContext,
 	type ReactNode,
@@ -30,7 +30,6 @@ type PromptConfigState = {
 	model: ChatModelSelection;
 } & ReasoningSelection;
 export type PromptConfig = PromptConfigState & {
-	cycleAgent: (selectableAgents: readonly { id: AgentId }[]) => void;
 	cycleReasoningChoice: () => void;
 	setAgent: (agent: AgentId) => void;
 	setEffort: (effort: Effort | undefined) => void;
@@ -114,25 +113,6 @@ export function PromptConfigProvider({
 		}));
 	}, [registry]);
 
-	const cycleAgent = useCallback(
-		(selectableAgents: readonly { id: AgentId }[]) => {
-			hasExplicitAgent.current = true;
-			setConfig((current) => {
-				if (selectableAgents.length === 0) {
-					return current;
-				}
-
-				const currentIndex = selectableAgents.findIndex(
-					({ id }) => id === current.agent
-				);
-				const next =
-					selectableAgents[(currentIndex + 1) % selectableAgents.length];
-				return isUndefined(next) ? current : { ...current, agent: next.id };
-			});
-		},
-		[]
-	);
-
 	const cycleReasoningChoice = useCallback(() => {
 		setConfig((current) => {
 			const options: ReasoningSelection[] = [
@@ -187,7 +167,6 @@ export function PromptConfigProvider({
 	return (
 		<PromptConfigContext.Provider
 			value={{
-				cycleAgent,
 				...config,
 				cycleReasoningChoice,
 				setAgent,

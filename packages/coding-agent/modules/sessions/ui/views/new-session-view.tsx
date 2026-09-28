@@ -251,7 +251,6 @@ export function NewSessionView() {
 						}}
 						onOpenSettings={openSettings}
 						onSubmit={handleSubmit}
-						showCompactCommand={false}
 					/>
 					<box
 						flexDirection="row"
@@ -261,12 +260,6 @@ export function NewSessionView() {
 						width="100%"
 					>
 						<WorkspacePath />
-						<box flexDirection="row" flexShrink={0} gap={1}>
-							<text fg={colors.text}>tab</text>
-							<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-								agents
-							</text>
-						</box>
 					</box>
 				</box>
 			</box>

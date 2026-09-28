@@ -1,9 +1,9 @@
 # Configured Agents
 
 Wincode models an Agent as a named AI behavior with an Agent Role of `primary`,
-`subagent`, or `all`. Built-in Build and Plan are Primary Agents; user-owned
-Configured Agents are declared inline under an `agents` record in `wincode.json`
-or `wincode.jsonc`. The canonical selection is an Agent, not a Coding Mode.
+`subagent`, or `all`. Build is the only shipped Primary Agent; user-owned Configured
+Agents are declared inline under an `agents` record in `wincode.json` or
+`wincode.jsonc`. The canonical selection is an Agent, not a Coding Mode.
 
 Status: accepted
 
@@ -17,15 +17,15 @@ Status: accepted
   plural `agents`; eligibility is `role`, not the overloaded `mode`; agent-specific
   system text is `instructions`, not the ambiguous `prompt`. The deprecated OpenCode
   `tools` alias is not accepted.
-- **One Agent selector over separate Agent and Mode selectors** - `/agents` and agent
-  cycling contain only effective `primary` and `all` Agents. Definitions with role
-  `subagent` are loaded now so the config contract does not need to change when
-  delegation is added, but v1 does not execute or manually invoke them.
-- **Patchable built-ins over shadowing or replacement** - `agents.build` and
-  `agents.plan` may patch description, instructions, model, one of `effort` or
-  `reasoningMode`, and permission. Their reserved identities and `primary` roles
-  are immutable, and they cannot be disabled. Configured instructions replace the
-  built-in-specific text while the Wincode base instructions remain immutable.
+- **One Agent selector over separate Agent and Mode selectors** - `/agents` lists
+  only effective `primary` and `all` Agents. Definitions with role `subagent` are
+  loaded now so the config contract does not need to change when delegation is
+  added, but v1 does not execute or manually invoke them.
+- **Patchable built-ins over shadowing or replacement** - `agents.build` may patch
+  description, instructions, model, effort, reasoning mode, and permission. Its
+  reserved identity and `primary` role are immutable, and it cannot be disabled.
+  Configured instructions replace the built-in-specific text while the Wincode
+  base instructions remain immutable.
 - **Catalog-backed model overrides** - optional `model` uses
   `<connectionProviderId>/<modelId>` and is authoritative for that Agent. Optional
   `effort` or `reasoningMode` (not both) is valid only with a configured model and
@@ -56,9 +56,10 @@ Status: accepted
   canonical ID. Model-pinned Agents with a missing Connection remain visible but are
   disabled; an unavailable configured default falls back to Build with a notice.
 - Persisted session state and message metadata migrate from `mode` to `agent`.
-  Legacy `mode: build | plan` metadata is normalized when read; new writes use only
-  `agent`. If a saved Agent no longer resolves, history retains its name while the
-  active selection visibly falls back to Build.
+  Legacy `mode: build | plan` metadata is normalized when read; this preserves
+  compatibility for stored history only, not a selectable Plan Agent. New writes use
+  only `agent`. If a saved Agent no longer resolves, history retains its name while
+  the active selection visibly falls back to Build.
 - Config changes require a restart. A first-resolution toast summarizes diagnostics,
   and `/agents` retains source-attributed details. Editor-facing JSON Schema, live
   reload, sampling controls, provider options, color, hidden agents, Markdown agents,

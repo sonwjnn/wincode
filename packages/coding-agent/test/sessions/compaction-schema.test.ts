@@ -2,7 +2,10 @@ import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { createDatabase } from "@/modules/sessions/storage/client";
+import {
+	createDatabase,
+	SessionDatabaseResetRequiredError,
+} from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import { sessionId } from "../support/identifiers";
 
@@ -22,10 +25,9 @@ test("initializes the current compaction schema in a fresh local database", asyn
 	const store = createDrizzleSessionStore(db);
 	expect(await store.getCompactions(sessionId("missing-session"))).toEqual([]);
 });
-test("adds edit mode and reconciles stored reasoning choices", async () => {
+test("requires resetting local data instead of converting an incompatible reasoning schema", async () => {
 	const directory = await mkdtemp(join("/tmp", "wincode-edit-mode-schema-"));
 	const databasePath = join(directory, "session.sqlite");
-	let sqlite: Database | undefined;
 	try {
 		const legacy = new Database(databasePath);
 		legacy.exec(`
@@ -91,64 +93,10 @@ test("adds edit mode and reconciles stored reasoning choices", async () => {
 		`);
 		legacy.close();
 
-		const opened = createDatabase(databasePath);
-		sqlite = opened.sqlite;
-		const columns = sqlite.query("PRAGMA table_info(session)").all() as Array<{
-			name: string;
-		}>;
-		expect(columns.map(({ name }) => name)).toContain("edit_mode");
-		expect(columns.map(({ name }) => name)).toContain("effort");
-		expect(columns.map(({ name }) => name)).toContain("reasoning_mode");
-		expect(columns.map(({ name }) => name)).not.toContain("variant");
-		expect(
-			sqlite
-				.query(
-					"SELECT effort, reasoning_mode FROM session WHERE id = 'session-a'"
-				)
-				.get()
-		).toEqual({ effort: null, reasoning_mode: "thinking" });
-		const compactionColumns = sqlite
-			.query("PRAGMA table_info(session_compaction)")
-			.all() as Array<{ name: string }>;
-		expect(compactionColumns.map(({ name }) => name)).toContain(
-			"summarization_effort"
+		expect(() => createDatabase(databasePath)).toThrow(
+			SessionDatabaseResetRequiredError
 		);
-		expect(compactionColumns.map(({ name }) => name)).toContain(
-			"summarization_reasoning_mode"
-		);
-		expect(compactionColumns.map(({ name }) => name)).not.toContain(
-			"summarization_variant"
-		);
-		expect(
-			sqlite
-				.query(
-					"SELECT summarization_effort, summarization_reasoning_mode FROM session_compaction WHERE id = 'compaction-a'"
-				)
-				.get()
-		).toEqual({
-			summarization_effort: "high",
-			summarization_reasoning_mode: null,
-		});
-		const record = sqlite
-			.query(
-				"SELECT model_json, messages_json FROM session_record WHERE record_id = 'record-a'"
-			)
-			.get() as { model_json: string; messages_json: string };
-		expect(JSON.parse(record.model_json)).toEqual({
-			effort: "high",
-			modelId: "model-a",
-			providerId: "provider-a",
-		});
-		expect(JSON.parse(record.messages_json)).toEqual([
-			{
-				id: "assistant-a",
-				role: "assistant",
-				metadata: { reasoningMode: "none" },
-				parts: [{ type: "text", text: "kept" }],
-			},
-		]);
 	} finally {
-		sqlite?.close();
 		await rm(directory, { force: true, recursive: true });
 	}
 });

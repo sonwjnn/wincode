@@ -14,7 +14,6 @@ test("keeps built-in command kinds and dialog routing stable", () => {
 		{ dialogKey: "theme", kind: "dialog", value: "/themes" },
 		{ kind: "connect", value: "/connect" },
 		{ dialogKey: "mcps", kind: "dialog", value: "/mcps" },
-		{ dialogKey: "permissions", kind: "dialog", value: "/permissions" },
 		{ kind: "exit", value: "/exit" },
 	];
 	const actual = COMMANDS.map((command) =>

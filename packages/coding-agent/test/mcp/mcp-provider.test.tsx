@@ -404,10 +404,6 @@ test("provider shows no summary toast when all MCP servers connect", async () =>
 	await flushUi(setup);
 	expect(setup.captureCharFrame()).not.toContain("MCP:");
 
-	// A plan snapshot never summarizes either.
-	await captured.value?.createSnapshot(agentId("plan"));
-	await flushUi(setup);
-	expect(setup.captureCharFrame()).not.toContain("MCP:");
 	setup.renderer.destroy();
 });
 

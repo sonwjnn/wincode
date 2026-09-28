@@ -8,5 +8,5 @@ Status: accepted
 
 - Rename Wincode-owned reasoning selection contracts and persisted fields to `effort` and `reasoningMode`; do not retain `variant` compatibility aliases.
 - `min` is not added to the current Effort vocabulary. Add it only when an official model source publishes it as a distinct level; a documented alias does not add another Effort ID.
-- Preserve existing session data when the schema can be reconciled safely. If it cannot, use the project's clean-reset policy for the local database and attachment data before restart.
+- Do not convert old Session selection values. If the local Session schema lacks current Effort/Reasoning Mode columns, clear Session records, compactions, and attachments at Session Host startup; preserve prompt history.
 - Existing provider-specific request serialization remains model- and protocol-specific. The literal Reasoning Mode names are not a shared provider wire enum.

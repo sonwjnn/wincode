@@ -9,8 +9,7 @@ export type ResetLocalSessionDataInput = Readonly<{
 }>;
 
 /**
- * Explicitly clears local Session data when the normal schema reconciliation
- * cannot safely open it. Callers must opt into this destructive fallback.
+ * Clears local Session records and attachments when their schema is incompatible.
  */
 export const resetLocalSessionData = async ({
 	attachmentRoot,
@@ -26,6 +25,18 @@ export const resetLocalSessionData = async ({
 			...(workspaceRoot === undefined ? {} : { workspaceRoot }),
 		});
 		await store.resetSessionData();
+		const obsoleteSelectionColumns = [
+			["session", "variant"],
+			["session_compaction", "summarization_variant"],
+		] as const;
+		for (const [table, column] of obsoleteSelectionColumns) {
+			const columns = sqlite
+				.query(`PRAGMA table_info(${table})`)
+				.all() as Array<{ name: string }>;
+			if (columns.some((entry) => entry.name === column)) {
+				sqlite.exec(`ALTER TABLE ${table} DROP COLUMN ${column};`);
+			}
+		}
 	} finally {
 		sqlite.close();
 	}

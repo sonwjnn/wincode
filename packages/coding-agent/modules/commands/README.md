@@ -21,12 +21,13 @@ Slash-command registry and dispatch for the CLI chat input.
   - `ExitAdapter` → `renderer.destroy()`
   - `NewAdapter` → TanStack Router navigation
   - `DialogAdapter` → opens sessions / theme dialogs
-  - `ModelsAdapter` / `VariantsAdapter` / `AgentsAdapter` → open model-picker /
-    variant-picker / agent-picker dialogs
-  - `SettingsAdapter` → opens the global Settings hub
-5. **Overlay** — `SelectableList` renders the matched suggestions below the input. Arrow keys
-   highlight; Tab inserts the selected command into the composer, and Enter executes Built-in
-   Commands or inserts Custom Commands and Skills.
+  - `ModelsAdapter` / `EffortAdapter` / `AgentsAdapter` → open model-picker /
+    Effort-and-Reasoning-Mode / agent-picker dialogs
+5. **Overlay** — `SelectableList` renders matched suggestions below the input. Arrow keys
+   highlight. Tab executes Built-in Commands with no invocation arguments; it completes `/compact`
+   (which accepts optional focus text), Custom Commands, and Skills into the composer with a
+   trailing space. Enter enters Skill search from the aggregate, executes Built-in Commands, or
+   inserts Custom Commands and Skills. With no command match, Enter submits the prompt normally.
 
 ## Public API
 

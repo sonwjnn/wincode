@@ -329,15 +329,7 @@ export function ChatShell({
 								)}
 							</box>
 
-							<box flexDirection="row" flexShrink={0} gap={2} marginLeft="auto">
-								{usage ? <SessionUsageBar summary={usage} /> : null}
-								<box flexDirection="row" flexShrink={0} gap={1}>
-									<text fg={colors.text}>tab</text>
-									<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-										agents
-									</text>
-								</box>
-							</box>
+							{usage ? <SessionUsageBar summary={usage} /> : null}
 						</box>
 					</>
 				)}

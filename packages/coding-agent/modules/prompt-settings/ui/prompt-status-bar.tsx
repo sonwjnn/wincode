@@ -21,12 +21,12 @@ export function StatusBar() {
 	const modelName = chatModel
 		? formatModelLabel(chatModel.displayName)
 		: model.modelId;
-	let reasoningLabel = "default";
+	let reasoningValue = "default";
 	if (reasoningMode !== undefined) {
-		reasoningLabel = `Reasoning Mode: ${reasoningMode}`;
+		reasoningValue = reasoningMode;
 	}
 	if (effort !== undefined) {
-		reasoningLabel = `Effort: ${effort}`;
+		reasoningValue = effort;
 	}
 	return (
 		<box flexDirection="row" gap={1}>
@@ -39,7 +39,7 @@ export function StatusBar() {
 				∙
 			</text>
 			<text attributes={TextAttributes.BOLD} fg={colors.secondary}>
-				{reasoningLabel}
+				{reasoningValue}
 			</text>
 			<AutoApprovalIndicator />
 		</box>

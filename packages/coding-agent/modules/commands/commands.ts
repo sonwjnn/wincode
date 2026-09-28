@@ -11,7 +11,7 @@ export type CommandSpec = BaseSpec &
 		| { kind: "settings" }
 		| {
 				kind: "dialog";
-				dialogKey: "sessions" | "theme" | "mcps" | "permissions";
+				dialogKey: "sessions" | "theme" | "mcps";
 		  }
 		| { kind: "models" }
 		| { kind: "effort" }
@@ -81,13 +81,6 @@ export const COMMANDS: CommandSpec[] = [
 		value: "/mcps",
 		kind: "dialog",
 		dialogKey: "mcps",
-	},
-	{
-		description: "Manage tool approvals, temporary grants, and auto mode",
-		name: "permissions",
-		value: "/permissions",
-		kind: "dialog",
-		dialogKey: "permissions",
 	},
 	{
 		description: "Quit the application",

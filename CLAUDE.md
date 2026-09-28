@@ -9,8 +9,7 @@
 | Package                         | Description                                                        |
 | ------------------------------- | ------------------------------------------------------------------ |
 | `packages/agent-core`           | Agent Turns, records, events, runtime and generic tool contracts  |
-| `packages/agent-runtime-ai-sdk` | Multi-provider LLM client with streaming support, Model catalog   |
-| `packages/ai`                   | Model catalog                                                      |
+| `packages/ai`                   | Model catalog, Multi-provider LLM client with streaming support                                                     |
 | `packages/coding-agent`         | Main CLI application, including Skills and concrete coding tools   |
 | `packages/config`               | Shared configuration contracts and loaders                         |
 | `packages/runtime-utils`        | Shared utilities                                                   |
@@ -32,20 +31,17 @@ When authorized to create or edit a PR, follow the checklist below.
 - **NEVER use `ReturnType<>`** — use the actual type name.
 - **NEVER use inline imports** — no `await import()`, no `import("pkg").Type` in type positions, no dynamic type imports. Always top-level.
 - Check `node_modules` for external API types instead of guessing.
+- **NEVER use preserve backward compatibility** unless the user asks for it.
 - **Barrel exports**: prefer `export * from "./module"` over named re-exports, including `export type { ... } from`. In pure `index.ts` barrels, use star re-exports even for single-specifier cases. If stars create ambiguity, remove the redundant export path; do not keep duplicates.
 - **Class privac**: #private fields for private members, bare for public ones. No private/protected/public modifiers on fields or methods — except constructor parameter properties, where TS requires them (e.g. constructor(private readonly session: SessionType))
 - **Promises**: use `Promise.withResolvers()` instead of `new Promise((resolve, reject) => ...)`.
+- **NEVER modify `packages/ai/src/generated/model-metadata.generated.ts`** directly; update `packages/ai/scripts/sync-model-metadata.ts` instead, then regenerate. Including the resulting `model-metadata.generated.ts` diff is always OK, even if regeneration includes unrelated upstream model metadata changes.
 
 ---
 
 ## Commands
-
-- **Format code**: `bun run fix` (Most formatting and common issues are automatically fixed. Run it before committing to ensure compliance)
-- **Check for issues**: `bun run check`
-- **Type check all workspaces**: `bun run check-types`
-- **Run the Default test portfolio**: `bun run test`
-- **Run TUI E2E tests**: `bun run test:e2e`
-- **Start the CLI in watch mode**: `bun run dev:cli`
+- NEVER commit unless asked.
+- NEVER use `tsc/npx tsc` — always `bun check`
 
 ---
 

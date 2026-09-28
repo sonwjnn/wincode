@@ -735,7 +735,11 @@ export function useChatInputController({
 				return;
 			}
 			if (!shift && overlayKind === "command") {
-				completeCommandAtIndex(selectedIndex);
+				if (resolveCommand(selectedIndex)?.kind === "compact") {
+					completeCommandAtIndex(selectedIndex);
+				} else {
+					executeCommandAtIndex(selectedIndex);
+				}
 				return;
 			}
 
@@ -744,9 +748,11 @@ export function useChatInputController({
 		[
 			completeCommandAtIndex,
 			disabled,
+			executeCommandAtIndex,
 			executeFileMentionAtIndex,
 			onTab,
 			overlayKind,
+			resolveCommand,
 			selectedIndex,
 			steering,
 		]

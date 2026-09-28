@@ -48,9 +48,7 @@ export {
 	type PermissionResourceRules,
 	type PermissionRules,
 	resolveVisibleCodingTools,
-	SHIPPED_AGENT_PERMISSION_RULES,
 	STATIC_TOOL_PERMISSION_ACTIONS,
-	shippedAgentPermissionRules,
 	type ToolPermission,
 } from "./policy";
 export {
@@ -75,5 +73,4 @@ export {
 	type ToolPermissionRuntime,
 } from "./tool-permission-runtime";
 export { AutoApprovalIndicator } from "./ui/auto-approval-indicator";
-export { PermissionsDialogContent } from "./ui/permissions-dialog";
 export { useToolPermission } from "./use-tool-permission";

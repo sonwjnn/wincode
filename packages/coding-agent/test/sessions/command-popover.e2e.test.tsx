@@ -449,6 +449,58 @@ test("bare queries still find Skills whose names start with skills", async () =>
 	}
 });
 
+test("restoring command results after no matches keeps the item aligned", async () => {
+	let setup: TestRendererSetup | undefined;
+	try {
+		const rendered = await renderSession({
+			pricing: createE2ePricing(20_000),
+			sessionId,
+		});
+		const activeSetup = rendered.setup;
+		setup = activeSetup;
+		await rendered.registryReady;
+
+		await act(async () => {
+			await activeSetup.mockInput.typeText("/models");
+		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Select AI model for generation")
+		);
+		const commandColumn = (frame: string): number => {
+			const row = frame
+				.split("\n")
+				.find((line) => line.includes("Select AI model for generation"));
+			if (!row) {
+				throw new Error("Models command row is not visible");
+			}
+			return row.indexOf("models");
+		};
+		const initialColumn = commandColumn(activeSetup.captureCharFrame());
+
+		await act(async () => {
+			await activeSetup.mockInput.typeText("zzzzzz");
+		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("No matching commands")
+		);
+		await act(() => {
+			for (let i = 0; i < 6; i += 1) {
+				activeSetup.mockInput.pressKey("BACKSPACE");
+			}
+		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Select AI model for generation")
+		);
+		expect(commandColumn(activeSetup.captureCharFrame())).toBe(initialColumn);
+	} finally {
+		if (setup) {
+			writeE2EFrame(setup);
+			setup.renderer.destroy();
+		}
+		cleanupSessionRender();
+	}
+});
+
 test("hides the aggregate Skill suggestion when no Skills are discovered", async () => {
 	await rm(join(testDirectory, ".wincode", "skills"), {
 		force: true,

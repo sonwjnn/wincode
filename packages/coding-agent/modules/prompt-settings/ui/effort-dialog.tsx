@@ -48,12 +48,12 @@ export const EffortDialogContent = ({
 	const choices: ReasoningOption[] = [
 		...getSupportedReasoningModes(modelSelection).map((value) => ({
 			kind: "mode" as const,
-			label: `Reasoning Mode: ${value}`,
+			label: value,
 			value,
 		})),
 		...getSupportedModelEfforts(modelSelection).map((value) => ({
 			kind: "effort" as const,
-			label: `Effort: ${value}`,
+			label: value,
 			value,
 		})),
 	];

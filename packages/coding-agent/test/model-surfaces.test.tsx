@@ -185,15 +185,17 @@ describe("Effort and Reasoning Mode picker", () => {
 			/>
 		));
 
-		await setup.waitForFrame((frame) => frame.includes("Effort: xhigh"));
+		await setup.waitForFrame((frame) => frame.includes("xhigh"));
 		const frame = setup.captureCharFrame();
 		expect(frame).toContain("default");
-		expect(frame).toContain("Reasoning Mode: none");
-		expect(frame).toContain("Effort: low");
-		expect(frame).toContain("Effort: medium");
-		expect(frame).toContain("Effort: xhigh");
-		expect(frame).not.toContain("Reasoning Mode: thinking");
-		expect(frame).not.toContain("Effort: high");
+		expect(frame).toContain("none");
+		expect(frame).toContain("low");
+		expect(frame).toContain("medium");
+		expect(frame).toContain("xhigh");
+		expect(frame.split("\n").map((line) => line.trim())).not.toContain("high");
+		expect(frame).not.toContain("thinking");
+		expect(frame).not.toContain("Effort:");
+		expect(frame).not.toContain("Reasoning Mode:");
 	});
 	test("selecting default clears an active Effort", async () => {
 		const model = modelCatalog.find(
@@ -245,10 +247,18 @@ describe("Effort and Reasoning Mode picker", () => {
 				onSelectReasoningMode={() => undefined}
 			/>
 		));
+		await setup.waitForFrame((frame) => frame.includes("thinking"));
 		const frame = setup.captureCharFrame();
-		expect(frame).toContain("Reasoning Mode: none");
-		expect(frame).toContain("Reasoning Mode: thinking");
+		expect(frame).toContain("none");
+		expect(frame).toContain("thinking");
 		expect(frame).not.toContain("Effort:");
+		expect(frame).not.toContain("Reasoning Mode:");
+		const renderedRows = frame.split("\n").map((line) => line.trim());
+		expect(
+			renderedRows.filter((row) =>
+				["minimal", "low", "medium", "high", "xhigh", "max"].includes(row)
+			)
+		).toEqual([]);
 	});
 
 	test("renders no choices for a budget-only model", async () => {
@@ -289,25 +299,44 @@ describe("session usage bar", () => {
 		...overrides,
 	});
 
-	test("shows context and marks an estimated cost as an estimate", async () => {
+	test("shows used context within the limit and marks estimated cost", async () => {
 		const setup = await renderSurfaces(() => (
-			<SessionUsageBar summary={summary({ costUsd: 1.2345 })} />
+			<SessionUsageBar
+				summary={summary({ contextLimit: 1_000_000, costUsd: 1.2345 })}
+			/>
 		));
 
 		const frame = setup.captureCharFrame();
-		expect(frame).toContain("84K");
-		expect(frame).toContain("42%");
+		expect(frame).toContain("42%(84K/1.0M)");
 		// The tilde is the honesty marker: these are published rates, not a bill.
 		expect(frame).toContain("~$1.23");
 	});
 
-	test("omits the cost entirely when no rate is known", async () => {
+	test("shows the requested used/limit context and omits unknown cost", async () => {
 		const setup = await renderSurfaces(() => (
-			<SessionUsageBar summary={summary({})} />
+			<SessionUsageBar
+				summary={summary({
+					contextLimit: 272_000,
+					contextPercent: 29,
+					contextTokens: 79_000,
+				})}
+			/>
+		));
+
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("29%(79K/272K)");
+		expect(frame).not.toContain("$");
+	});
+
+	test("shows used tokens when max context is unavailable", async () => {
+		const setup = await renderSurfaces(() => (
+			<SessionUsageBar
+				summary={summary({ contextLimit: null, contextPercent: null })}
+			/>
 		));
 
 		const frame = setup.captureCharFrame();
 		expect(frame).toContain("84K");
-		expect(frame).not.toContain("$");
+		expect(frame).not.toContain("42%");
 	});
 });

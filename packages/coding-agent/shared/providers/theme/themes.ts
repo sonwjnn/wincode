@@ -13,7 +13,6 @@ export type ThemeColors = {
 	agent: Record<string, string>;
 	primary: string;
 	secondary: string;
-	planMode: string;
 	selection: string;
 	thinking: string;
 	thinkingText: string;
@@ -78,7 +77,6 @@ export type ThemeDefinition = {
 		Partial<Except<ThemeColors, "agent">>,
 		| "primary"
 		| "secondary"
-		| "planMode"
 		| "selection"
 		| "thinking"
 		| "success"
@@ -200,7 +198,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#a277ff",
 			secondary: "#f694ff",
-			planMode: "#a277ff",
 			selection: "#a277ff",
 			thinking: "#a277ff",
 			success: "#61ffca",
@@ -222,7 +219,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#59C2FF",
 			secondary: "#D2A6FF",
-			planMode: "#E6B450",
 			selection: "#59C2FF",
 			thinking: "#E6B450",
 			success: "#7FD962",
@@ -245,7 +241,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#33b1ff",
 			secondary: "#78a9ff",
-			planMode: "#ff7eb6",
 			selection: "#33b1ff",
 			thinking: "#ff7eb6",
 			success: "#25be6a",
@@ -268,7 +263,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#8da4e2",
 			secondary: "#ca9ee6",
-			planMode: "#f4b8e4",
 			selection: "#8da4e2",
 			thinking: "#f4b8e4",
 			success: "#a6d189",
@@ -291,7 +285,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#8aadf4",
 			secondary: "#c6a0f6",
-			planMode: "#f5bde6",
 			selection: "#8aadf4",
 			thinking: "#f5bde6",
 			success: "#a6da95",
@@ -314,7 +307,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#89b4fa",
 			secondary: "#cba6f7",
-			planMode: "#f5c2e7",
 			selection: "#89b4fa",
 			thinking: "#f5c2e7",
 			success: "#a6e3a1",
@@ -337,7 +329,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#0088ff",
 			secondary: "#9a5feb",
-			planMode: "#2affdf",
 			selection: "#0088ff",
 			thinking: "#2affdf",
 			success: "#9eff80",
@@ -360,7 +351,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#88c0d0",
 			secondary: "#81a1c1",
-			planMode: "#88c0d0",
 			selection: "#88c0d0",
 			thinking: "#88c0d0",
 			success: "#3fa266",
@@ -383,7 +373,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#bd93f9",
 			secondary: "#ff79c6",
-			planMode: "#8be9fd",
 			selection: "#bd93f9",
 			thinking: "#8be9fd",
 			success: "#50fa7b",
@@ -406,7 +395,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#a7c080",
 			secondary: "#7fbbb3",
-			planMode: "#d699b6",
 			selection: "#a7c080",
 			thinking: "#d699b6",
 			success: "#a7c080",
@@ -429,7 +417,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#DA702C",
 			secondary: "#4385BE",
-			planMode: "#8B7EC8",
 			selection: "#DA702C",
 			thinking: "#8B7EC8",
 			success: "#879A39",
@@ -452,7 +439,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#58a6ff",
 			secondary: "#bc8cff",
-			planMode: "#39c5cf",
 			selection: "#58a6ff",
 			thinking: "#39c5cf",
 			success: "#3fb950",
@@ -475,7 +461,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#83a598",
 			secondary: "#d3869b",
-			planMode: "#8ec07c",
 			selection: "#83a598",
 			thinking: "#8ec07c",
 			success: "#b8bb26",
@@ -498,7 +483,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#7E9CD8",
 			secondary: "#957FB8",
-			planMode: "#D27E99",
 			selection: "#7E9CD8",
 			thinking: "#D27E99",
 			success: "#98BB6C",
@@ -521,7 +505,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#EC5B2B",
 			secondary: "#EE7948",
-			planMode: "#FFF7F1",
 			selection: "#EC5B2B",
 			thinking: "#FFF7F1",
 			success: "#6ba1e6",
@@ -543,7 +526,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#82aaff",
 			secondary: "#c792ea",
-			planMode: "#89ddff",
 			selection: "#82aaff",
 			thinking: "#89ddff",
 			success: "#c3e88d",
@@ -566,7 +548,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#2eff6a",
 			secondary: "#00efff",
-			planMode: "#c770ff",
 			selection: "#2eff6a",
 			thinking: "#c770ff",
 			success: "#62ff94",
@@ -589,7 +570,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#8da4f5",
 			secondary: "#a7b6f8",
-			planMode: "#8da4f5",
 			selection: "#8da4f5",
 			thinking: "#8da4f5",
 			success: "#77c599",
@@ -612,7 +592,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#66d9ef",
 			secondary: "#ae81ff",
-			planMode: "#a6e22e",
 			selection: "#66d9ef",
 			thinking: "#a6e22e",
 			success: "#a6e22e",
@@ -635,7 +614,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#82AAFF",
 			secondary: "#7fdbca",
-			planMode: "#c792ea",
 			selection: "#82AAFF",
 			thinking: "#c792ea",
 			success: "#c5e478",
@@ -657,7 +635,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#88C0D0",
 			secondary: "#81A1C1",
-			planMode: "#8FBCBB",
 			selection: "#88C0D0",
 			thinking: "#8FBCBB",
 			success: "#A3BE8C",
@@ -680,7 +657,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#61afef",
 			secondary: "#c678dd",
-			planMode: "#56b6c2",
 			selection: "#61afef",
 			thinking: "#56b6c2",
 			success: "#98c379",
@@ -703,7 +679,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#fab283",
 			secondary: "#5c9cf5",
-			planMode: "#9d7cd8",
 			selection: "#fab283",
 			thinking: "#9d7cd8",
 			success: "#7fd88f",
@@ -726,7 +701,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#EC5B2B",
 			secondary: "#EE7948",
-			planMode: "#FFF7F1",
 			selection: "#EC5B2B",
 			thinking: "#FFF7F1",
 			success: "#6ba1e6",
@@ -749,7 +723,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#2DD5B7",
 			secondary: "#D2689C",
-			planMode: "#549e6a",
 			selection: "#2DD5B7",
 			thinking: "#549e6a",
 			success: "#549e6a",
@@ -772,7 +745,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#82aaff",
 			secondary: "#c792ea",
-			planMode: "#89ddff",
 			selection: "#82aaff",
 			thinking: "#89ddff",
 			success: "#c3e88d",
@@ -795,7 +767,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#9ccfd8",
 			secondary: "#c4a7e7",
-			planMode: "#ebbcba",
 			selection: "#9ccfd8",
 			thinking: "#ebbcba",
 			success: "#31748f",
@@ -818,7 +789,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#268bd2",
 			secondary: "#6c71c4",
-			planMode: "#2aa198",
 			selection: "#268bd2",
 			thinking: "#2aa198",
 			success: "#859900",
@@ -840,7 +810,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#36f9f6",
 			secondary: "#ff7edb",
-			planMode: "#b084eb",
 			selection: "#36f9f6",
 			thinking: "#b084eb",
 			success: "#72f1b8",
@@ -863,7 +832,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#82aaff",
 			secondary: "#c099ff",
-			planMode: "#ff966c",
 			selection: "#82aaff",
 			thinking: "#ff966c",
 			success: "#c3e88d",
@@ -886,7 +854,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#0070F3",
 			secondary: "#52A8FF",
-			planMode: "#8E4EC6",
 			selection: "#0070F3",
 			thinking: "#8E4EC6",
 			success: "#46A758",
@@ -909,7 +876,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#FFC799",
 			secondary: "#99FFE4",
-			planMode: "#FFC799",
 			selection: "#FFC799",
 			thinking: "#FFC799",
 			success: "#99FFE4",
@@ -931,7 +897,6 @@ const THEME_DEFINITIONS = [
 		colors: {
 			primary: "#8cd0d3",
 			secondary: "#dc8cc3",
-			planMode: "#93e0e3",
 			selection: "#8cd0d3",
 			thinking: "#93e0e3",
 			success: "#7f9f7f",
@@ -1079,7 +1044,7 @@ export const resolveTheme = ({ colors, name }: ThemeDefinition): Theme => {
 			...colors,
 			...resolveDiffTokens(colors, name, backgroundElement, textMuted),
 			...resolveMarkdownAndSyntaxTokens(colors, name),
-			agent: { build: colors.primary, plan: colors.planMode },
+			agent: { build: colors.primary },
 			backgroundElement,
 			borderActive: colors.borderActive ?? colors.primary,
 			fileBadgeBackground: colors.fileBadgeBackground ?? colors.primary,

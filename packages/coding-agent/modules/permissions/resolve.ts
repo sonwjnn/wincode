@@ -12,7 +12,6 @@ import {
 	MAX_FLATTENED_PERMISSION_RULES,
 	PERMISSION_TOOL_ACTIONS,
 	type PermissionRules,
-	shippedAgentPermissionRules,
 } from "./policy";
 import { topLevelPermissionSchema } from "./schema";
 
@@ -68,9 +67,9 @@ const agentPermissionRaw = (
 
 /**
  * Resolves the effective Permission policy for one selected Agent using
- * source-first precedence: the Wincode defaults and the Agent's shipped
- * restrictions come first, then each config source from low to high precedence,
- * with a source's top-level policy applied before that Agent's policy.
+ * source-first precedence: Wincode defaults come first, then each config source
+ * from low to high precedence, with a source's top-level policy applied before
+ * that Agent's policy.
  *
  * A present top-level `permission` that is malformed does not partially apply
  * and does not fall back to permissive defaults; it is skipped as a policy layer
@@ -85,10 +84,7 @@ export const resolveAgentPermission = (
 ): ResolvedAgentPermission => {
 	const diagnostics: PermissionDiagnostic[] = [];
 	let safetyCeiling = false;
-	const layers: PermissionRules[] = [
-		DEFAULT_PERMISSION_RULES,
-		shippedAgentPermissionRules(agentId),
-	];
+	const layers: PermissionRules[] = [DEFAULT_PERMISSION_RULES];
 	for (const source of snapshot.sources) {
 		const origin: ConfigOrigin = { path: source.path, scope: source.scope };
 		const rawTopLevel = source.document.permission;
