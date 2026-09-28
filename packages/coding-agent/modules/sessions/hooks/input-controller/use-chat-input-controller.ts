@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	type CommandItem,
 	createSkillCommandSpecs,
+	createSkillSearchCommandSpec,
 	filterCommandItems,
 	getCommandInvocation,
 	type SkillCommandSpec,
@@ -19,6 +20,7 @@ import type {
 	SessionMessage,
 } from "@/modules/sessions/message";
 import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";
+import { SKILL_NAMESPACE_PREFIX } from "@/modules/skills";
 import { useLatest } from "@/shared/hooks/use-latest";
 import { normalizeFileTokensForTrimmedText } from "../../attachments";
 import { getSessionStore } from "../../storage/get-session-store";
@@ -58,7 +60,7 @@ export function useChatInputController({
 	getFileMentionOptions: getFileMentionOptionsFromOptions,
 	getSkills: getSkillsFromOptions,
 	hideCompact,
-	hideVariants,
+	hideEffort,
 	onError,
 	onSubmit,
 	onTab,
@@ -214,14 +216,36 @@ export function useChatInputController({
 		activeTrigger?.kind === "command" ? activeTrigger.query : undefined;
 	const fileMentionQuery =
 		activeTrigger?.kind === "file-mention" ? activeTrigger.query : undefined;
-	const commandItems = useMemo(
-		() => [
-			...getVisibleCommands({ hideCompact, hideVariants }),
-			...customCommands,
-			...skillItems,
-		],
-		[customCommands, hideCompact, hideVariants, skillItems]
+	const normalizedCommandQuery = commandQuery?.toLowerCase() ?? "";
+	const isSkillSearchQuery = normalizedCommandQuery.startsWith(
+		SKILL_NAMESPACE_PREFIX
 	);
+	const isBareSkillSearchQuery =
+		normalizedCommandQuery.length > 0 && normalizedCommandQuery !== "skill";
+	const commandItems = useMemo(() => {
+		const commands = [
+			...getVisibleCommands({ hideCompact, hideEffort }),
+			...customCommands,
+		];
+		if (isSkillSearchQuery) {
+			return skillItems;
+		}
+		if (skillItems.length > 0) {
+			return [
+				...commands,
+				...(isBareSkillSearchQuery ? skillItems : []),
+				createSkillSearchCommandSpec(skillItems.length),
+			];
+		}
+		return commands;
+	}, [
+		customCommands,
+		hideCompact,
+		hideEffort,
+		isBareSkillSearchQuery,
+		isSkillSearchQuery,
+		skillItems,
+	]);
 	const filteredCommands = useMemo(
 		() =>
 			isUndefined(commandQuery)
@@ -386,6 +410,15 @@ export function useChatInputController({
 				return;
 			}
 
+			if (command.kind === "skill-search") {
+				const invocation = getCommandInvocation(command);
+				const trigger = detectTrigger(invocation, invocation.length);
+				setProgrammaticText(invocation, invocation.length);
+				setActiveTrigger(trigger);
+				setOverlayKind(trigger?.kind ?? null);
+				setSelectedIndex(0);
+				return;
+			}
 			if (command.kind === "custom" || command.kind === "skill") {
 				completeCommandAtIndex(index);
 				return;
@@ -702,7 +735,11 @@ export function useChatInputController({
 				return;
 			}
 			if (!shift && overlayKind === "command") {
-				completeCommandAtIndex(selectedIndex);
+				if (resolveCommand(selectedIndex)?.kind === "compact") {
+					completeCommandAtIndex(selectedIndex);
+				} else {
+					executeCommandAtIndex(selectedIndex);
+				}
 				return;
 			}
 
@@ -711,9 +748,11 @@ export function useChatInputController({
 		[
 			completeCommandAtIndex,
 			disabled,
+			executeCommandAtIndex,
 			executeFileMentionAtIndex,
 			onTab,
 			overlayKind,
+			resolveCommand,
 			selectedIndex,
 			steering,
 		]

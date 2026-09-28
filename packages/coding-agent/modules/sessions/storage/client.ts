@@ -1,15 +1,66 @@
 import { Database } from "bun:sqlite";
-import { drizzle } from "drizzle-orm/bun-sqlite";
+import { type BunSQLiteDatabase, drizzle } from "drizzle-orm/bun-sqlite";
 import { resolveLocalDatabasePath } from "./path";
 import { sessionSchema } from "./schema";
+export type SessionDatabase = BunSQLiteDatabase<typeof sessionSchema> & {
+	$client: Database;
+};
 
-export type SessionDatabase = ReturnType<typeof drizzle<typeof sessionSchema>>;
+export class SessionDatabaseResetRequiredError extends Error {
+	constructor() {
+		super(
+			"Local Session data uses an incompatible schema. Clear local Session data and attachments with `bun run --cwd packages/coding-agent db:reset-sessions`."
+		);
+		this.name = "SessionDatabaseResetRequiredError";
+	}
+}
 
+const columnNames = (sqlite: Database, table: string): Set<string> =>
+	new Set(
+		(
+			sqlite.query(`PRAGMA table_info(${table})`).all() as Array<{
+				name: string;
+			}>
+		).map(({ name }) => name)
+	);
+
+const ensureTextColumn = (
+	sqlite: Database,
+	table: string,
+	column: string
+): void => {
+	if (!columnNames(sqlite, table).has(column)) {
+		sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT;`);
+	}
+};
+
+const hasCurrentReasoningSelectionSchema = (sqlite: Database): boolean => {
+	const sessionColumns = columnNames(sqlite, "session");
+	const compactionColumns = columnNames(sqlite, "session_compaction");
+	return (
+		sessionColumns.has("effort") &&
+		sessionColumns.has("reasoning_mode") &&
+		compactionColumns.has("summarization_effort") &&
+		compactionColumns.has("summarization_reasoning_mode")
+	);
+};
+
+const ensureReasoningSelectionColumns = (sqlite: Database): void => {
+	ensureTextColumn(sqlite, "session", "effort");
+	ensureTextColumn(sqlite, "session", "reasoning_mode");
+	ensureTextColumn(sqlite, "session_compaction", "summarization_effort");
+	ensureTextColumn(
+		sqlite,
+		"session_compaction",
+		"summarization_reasoning_mode"
+	);
+};
 const applyPragmas = (sqlite: Database): void => {
 	sqlite.exec("PRAGMA journal_mode = WAL;");
 	sqlite.exec("PRAGMA foreign_keys = ON;");
 	sqlite.exec("PRAGMA busy_timeout = 5000;");
 };
+
 const ensureSessionEditModeColumn = (sqlite: Database): void => {
 	const columns = sqlite.query("PRAGMA table_info(session)").all() as Array<{
 		name: string;
@@ -21,7 +72,10 @@ const ensureSessionEditModeColumn = (sqlite: Database): void => {
 		"ALTER TABLE session ADD COLUMN edit_mode TEXT DEFAULT 'hashline' NOT NULL;"
 	);
 };
-const initializeSchema = (sqlite: Database): void => {
+const initializeSchema = (
+	sqlite: Database,
+	allowIncompatibleSessionSchema: boolean
+): void => {
 	sqlite.exec(`
 		CREATE TABLE IF NOT EXISTS session_workspace (
 			id TEXT PRIMARY KEY NOT NULL,
@@ -55,7 +109,8 @@ const initializeSchema = (sqlite: Database): void => {
 			updated_at INTEGER NOT NULL,
 			last_message_at INTEGER,
 			model_json TEXT,
-			variant TEXT,
+			effort TEXT,
+			reasoning_mode TEXT,
 			edit_mode TEXT DEFAULT 'hashline' NOT NULL
 		);
 
@@ -221,7 +276,8 @@ const initializeSchema = (sqlite: Database): void => {
 			trigger TEXT NOT NULL,
 			focus TEXT,
 			summarization_model_json TEXT NOT NULL,
-			summarization_variant TEXT,
+			summarization_effort TEXT,
+			summarization_reasoning_mode TEXT,
 			summarization_usage_json TEXT,
 			created_at INTEGER NOT NULL,
 			completed_at INTEGER NOT NULL
@@ -261,15 +317,39 @@ const initializeSchema = (sqlite: Database): void => {
 		CREATE UNIQUE INDEX IF NOT EXISTS uq_session_record_session_position
 			ON session_record (session_id, position);
 	`);
+	if (
+		!(
+			allowIncompatibleSessionSchema ||
+			hasCurrentReasoningSelectionSchema(sqlite)
+		)
+	) {
+		throw new SessionDatabaseResetRequiredError();
+	}
 	ensureSessionEditModeColumn(sqlite);
+	ensureReasoningSelectionColumns(sqlite);
+};
+
+const openDatabase = (
+	path: string,
+	allowIncompatibleSessionSchema: boolean
+): { db: SessionDatabase; sqlite: Database } => {
+	const sqlite = new Database(path, { create: true });
+	try {
+		applyPragmas(sqlite);
+		initializeSchema(sqlite, allowIncompatibleSessionSchema);
+		const db = drizzle(sqlite, { schema: sessionSchema });
+		return { db, sqlite };
+	} catch (error) {
+		sqlite.close();
+		throw error;
+	}
 };
 
 export const createDatabase = (
 	path: string = resolveLocalDatabasePath()
-): { db: SessionDatabase; sqlite: Database } => {
-	const sqlite = new Database(path, { create: true });
-	applyPragmas(sqlite);
-	initializeSchema(sqlite);
-	const db = drizzle(sqlite, { schema: sessionSchema });
-	return { db, sqlite };
-};
+): { db: SessionDatabase; sqlite: Database } => openDatabase(path, false);
+
+/** Opens the local database solely to clear Session data before a reset. */
+export const createDatabaseForSessionReset = (
+	path: string
+): { db: SessionDatabase; sqlite: Database } => openDatabase(path, true);

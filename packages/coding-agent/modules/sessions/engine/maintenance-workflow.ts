@@ -177,7 +177,11 @@ export const createSessionMaintenanceWorkflow = (
 		session: { messages, sessionId: port.sessionId },
 		settings: await compactionSettingsFor(command.model),
 		trigger: command.trigger,
-		...omitUndefined({ focus: command.focus, variant: command.variant }),
+		...omitUndefined({
+			focus: command.focus,
+			effort: command.effort,
+			reasoningMode: command.reasoningMode,
+		}),
 		signal,
 	});
 	const startCompaction = (
@@ -397,7 +401,10 @@ export const createSessionMaintenanceWorkflow = (
 				),
 				trigger: "overflow",
 				turnId: command.turnId,
-				...omitUndefined({ variant: target.variant }),
+				...omitUndefined({
+					effort: target.effort,
+					reasoningMode: target.reasoningMode,
+				}),
 			});
 		} catch (error) {
 			if (port.isClosed() || recoveryEpoch !== port.getRecoveryGeneration()) {

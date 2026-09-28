@@ -1,6 +1,9 @@
+import {
+	createReasoningSelection,
+	type ReasoningSelection,
+} from "@wincode/ai/models";
 import type {
 	ChatModelSelection,
-	ModelVariant,
 	SessionSendInput,
 } from "../../../modules/sessions/host/session-rpc";
 import type { RpcAssembly, RuntimeModules, Selection } from "./types";
@@ -42,27 +45,66 @@ export const createSelectionHelpers = (
 		return { agentId, model, record };
 	};
 
-	const parseSelectionVariant = (
+	const parseSelectionEffort = (
+		value: unknown,
+		model: ChatModelSelection,
+		activeRuntime: RuntimeModules
+	): ReasoningSelection => {
+		const effort = activeRuntime.effortSchema.safeParse(value);
+		if (effort.success !== true || effort.data === undefined) {
+			throw appError("selection_unavailable", "Model effort is invalid.");
+		}
+		if (!activeRuntime.isSupportedModelEffort(model, effort.data)) {
+			throw appError("selection_unavailable", "Model effort is unavailable.");
+		}
+		return { effort: effort.data };
+	};
+
+	const parseSelectionReasoningMode = (
+		value: unknown,
+		model: ChatModelSelection,
+		activeRuntime: RuntimeModules
+	): ReasoningSelection => {
+		const reasoningMode = activeRuntime.reasoningModeSchema.safeParse(value);
+		if (reasoningMode.success !== true || reasoningMode.data === undefined) {
+			throw appError("selection_unavailable", "Reasoning mode is invalid.");
+		}
+		if (!activeRuntime.isSupportedReasoningMode(model, reasoningMode.data)) {
+			throw appError("selection_unavailable", "Reasoning mode is unavailable.");
+		}
+		return { reasoningMode: reasoningMode.data };
+	};
+
+	const parseSelectionReasoning = (
 		record: Record<string, unknown>,
 		model: ChatModelSelection,
 		activeRuntime: RuntimeModules
-	): ModelVariant | undefined => {
-		const variantValue = record.variant;
-		if (variantValue !== undefined && typeof variantValue !== "string") {
-			throw appError("selection_unavailable", "Model variant is invalid.");
+	): ReasoningSelection => {
+		if (Object.hasOwn(record, "variant")) {
+			throw appError(
+				"selection_unavailable",
+				"Model selection must use effort or reasoningMode."
+			);
 		}
-		const variant = activeRuntime.normalizeModelVariant(
-			model,
-			variantValue as ModelVariant | undefined
-		);
-		if (
-			variantValue !== undefined &&
-			(variant === undefined ||
-				!activeRuntime.isSupportedModelVariant(model, variant))
-		) {
-			throw appError("selection_unavailable", "Model variant is unavailable.");
+		const effortValue = record.effort;
+		const reasoningModeValue = record.reasoningMode;
+		if (effortValue !== undefined && reasoningModeValue !== undefined) {
+			throw appError(
+				"selection_unavailable",
+				"Choose either effort or reasoningMode, not both."
+			);
 		}
-		return variant;
+		if (effortValue !== undefined) {
+			return parseSelectionEffort(effortValue, model, activeRuntime);
+		}
+		if (reasoningModeValue !== undefined) {
+			return parseSelectionReasoningMode(
+				reasoningModeValue,
+				model,
+				activeRuntime
+			);
+		}
+		return {};
 	};
 
 	const requireSelectableAgent = (
@@ -129,14 +171,14 @@ export const createSelectionHelpers = (
 			);
 		}
 		const model = modelResult.data;
-		const variant = parseSelectionVariant(record, model, activeRuntime);
+		const reasoningSelection = parseSelectionReasoning(
+			record,
+			model,
+			activeRuntime
+		);
 		requireSelectableAgent(activeAssembly, agentId);
 		await requireConnectedProvider(activeAssembly, model.providerId);
-		return {
-			agentId,
-			model,
-			...(variant === undefined ? {} : { variant }),
-		};
+		return { agentId, model, ...reasoningSelection };
 	};
 
 	const sendInput = (
@@ -150,6 +192,21 @@ export const createSelectionHelpers = (
 		const resolvedAgent = registry?.agents.find(
 			(agent: { id: string }) => agent.id === selection.agentId
 		);
+		const reasoningSelection = createReasoningSelection(
+			selection.effort,
+			selection.reasoningMode
+		);
+		let sessionReasoning: Pick<
+			SessionSendInput,
+			"sessionEffort" | "sessionReasoningMode"
+		> = {};
+		if (selection.effort !== undefined) {
+			sessionReasoning = { sessionEffort: selection.effort };
+		} else if (selection.reasoningMode !== undefined) {
+			sessionReasoning = {
+				sessionReasoningMode: selection.reasoningMode,
+			};
+		}
 		return {
 			agent: selection.agentId as SessionSendInput["agent"],
 			composition: { files: [], text },
@@ -157,15 +214,8 @@ export const createSelectionHelpers = (
 			resolvedAgent: resolvedAgent as SessionSendInput["resolvedAgent"],
 			sessionModel: selection.model as SessionSendInput["sessionModel"],
 			userText: text,
-			...(selection.variant === undefined
-				? {}
-				: { variant: selection.variant as SessionSendInput["variant"] }),
-			...(selection.variant === undefined
-				? {}
-				: {
-						sessionVariant:
-							selection.variant as SessionSendInput["sessionVariant"],
-					}),
+			...reasoningSelection,
+			...sessionReasoning,
 			...(ids.messageId === undefined
 				? {}
 				: { messageId: ids.messageId as SessionSendInput["messageId"] }),

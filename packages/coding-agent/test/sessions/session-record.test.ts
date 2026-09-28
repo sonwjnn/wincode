@@ -294,6 +294,26 @@ test("round-trips a cancelled assistant record without an interrupted badge", as
 	});
 });
 
+test("reopening a record drops an unsupported Reasoning Mode but preserves valid metadata", () => {
+	const record: SessionRecord = {
+		...assistantRecord("record-unsupported-mode", "done"),
+		messages: [
+			messageRecord("assistant-unsupported-mode", "assistant", "done", {
+				agent: agentId("build"),
+				model,
+				reasoningMode: "thinking",
+				usage: { inputTokens: 10, outputTokens: 5 },
+			}),
+		],
+	};
+
+	expect(projectSessionRecords([record])[0]?.metadata).toEqual({
+		agent: agentId("build"),
+		model,
+		usage: { inputTokens: 10, outputTokens: 5 },
+	});
+});
+
 test("keeps records isolated per session and per workspace", async () => {
 	const dir = await mkdtemp(join(tmpdir(), "wincode-conversation-record-"));
 	const databasePath = join(dir, "conversation.sqlite");

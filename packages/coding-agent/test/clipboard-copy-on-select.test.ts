@@ -8,18 +8,41 @@ const baseRenderer = () => ({
 });
 
 describe("handleSelection", () => {
+	test("preserves the selection without copying or toasting when disabled", async () => {
+		let writes = 0;
+		let clears = 0;
+		const toasts: unknown[] = [];
+		await handleSelection(
+			selection("hello"),
+			{
+				...baseRenderer(),
+				clearSelection: () => {
+					clears += 1;
+				},
+			},
+			(toast) => toasts.push(toast),
+			{
+				enabled: false,
+				write: async () => {
+					writes += 1;
+					return true;
+				},
+			}
+		);
+		expect(writes).toBe(0);
+		expect(toasts).toHaveLength(0);
+		expect(clears).toBe(0);
+	});
+
 	test("ignores empty selection", async () => {
 		let writes = 0;
 		const renderer = baseRenderer();
-		await handleSelection(
-			selection(""),
-			renderer,
-			() => undefined,
-			async () => {
+		await handleSelection(selection(""), renderer, () => undefined, {
+			write: async () => {
 				writes += 1;
 				return true;
-			}
-		);
+			},
+		});
 		expect(writes).toBe(0);
 	});
 
@@ -40,9 +63,11 @@ describe("handleSelection", () => {
 					},
 				},
 				(toast) => toasts.push(toast),
-				async () => {
-					writes += 1;
-					return result;
+				{
+					write: async () => {
+						writes += 1;
+						return result;
+					},
 				}
 			);
 			expect(writes).toBe(1);
@@ -64,8 +89,10 @@ describe("handleSelection", () => {
 				},
 			},
 			(toast) => toasts.push(toast.message),
-			async () => {
-				throw new Error("failed");
+			{
+				write: async () => {
+					throw new Error("failed");
+				},
 			}
 		);
 		expect(clears).toBe(1);

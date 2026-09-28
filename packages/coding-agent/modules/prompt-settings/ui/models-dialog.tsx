@@ -20,9 +20,17 @@ import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper"
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 
 type Row =
-	| { kind: "header"; label: string }
-	| { kind: "model"; model: ModelCatalogEntry; recent: boolean }
-	| { kind: "spacer"; id: string };
+	| { kind: "header"; label: string; sectionKey: string }
+	| { kind: "model"; model: ModelCatalogEntry; recent: boolean };
+const getModelSectionKey = (row: Row): string => {
+	if (row.kind === "header") {
+		return row.sectionKey;
+	}
+	if (row.recent) {
+		return "recent";
+	}
+	return `provider:${row.model.connectionProviderId}`;
+};
 type Props = {
 	currentModel?: ChatModelSelection;
 	models: readonly ModelCatalogEntry[];
@@ -58,7 +66,11 @@ export const ModelsDialogContent = ({
 	const rows: Row[] = [
 		...(recent.length
 			? [
-					{ kind: "header" as const, label: "Recent" },
+					{
+						kind: "header" as const,
+						label: "Recent",
+						sectionKey: "recent",
+					},
 					...recent.map((model) => ({
 						kind: "model" as const,
 						model,
@@ -66,13 +78,11 @@ export const ModelsDialogContent = ({
 					})),
 				]
 			: []),
-		...providerIds.flatMap((providerId, index) => [
-			...(recent.length > 0 || index > 0
-				? [{ id: `spacer:${providerId}`, kind: "spacer" as const }]
-				: []),
+		...providerIds.flatMap((providerId) => [
 			{
 				kind: "header" as const,
 				label: connectionProviderDisplayNames[providerId],
+				sectionKey: `provider:${providerId}`,
 			},
 			...models
 				.filter(
@@ -100,12 +110,10 @@ export const ModelsDialogContent = ({
 	return (
 		<SearchListDialogWrapper
 			emptyText="No matching models"
+			getItemSectionKey={getModelSectionKey}
 			getKey={(row) => {
 				if (row.kind === "header") {
 					return `header:${row.label}`;
-				}
-				if (row.kind === "spacer") {
-					return row.id;
 				}
 				return `${row.recent ? "recent" : "provider"}:${row.model.connectionProviderId}:${row.model.id}`;
 			}}
@@ -127,9 +135,6 @@ export const ModelsDialogContent = ({
 			onSelect={(row) => row.kind === "model" && handleSelect(row.model)}
 			placeholder="Search models"
 			renderItem={(row, isSelected, isActive, isSearching) => {
-				if (row.kind === "spacer") {
-					return null;
-				}
 				if (row.kind === "header") {
 					return (
 						<SelectableDialogItem>

@@ -3,11 +3,17 @@ import { useRouter } from "@tanstack/react-router";
 import type { AgentId, SessionMessageId } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
-	type ModelVariant,
+	createReasoningSelection,
 	normalizeChatModelSelection,
-	normalizeModelVariant,
+	normalizeReasoningSelection,
+	type ReasoningSelection,
 } from "@wincode/ai/models";
-import { getErrorMessage, isNull, isUndefined } from "@wincode/runtime-utils";
+import {
+	getErrorMessage,
+	isNull,
+	isUndefined,
+	omitUndefined,
+} from "@wincode/runtime-utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	type AgentRegistry,
@@ -16,9 +22,10 @@ import {
 } from "@/modules/agents";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { SessionHost } from "@/modules/sessions/host/types";
-import type {
-	SessionFilePart,
-	SessionMessage,
+import {
+	createSessionUserMessage,
+	type SessionFilePart,
+	type SessionMessage,
 } from "@/modules/sessions/message";
 import { useSettingsHubDialog } from "@/modules/settings";
 import type { EditMode } from "@/modules/tools";
@@ -64,10 +71,12 @@ type SessionSendInput = Pick<
 	SessionSubmissionInput,
 	| "agent"
 	| "sessionModel"
-	| "sessionVariant"
+	| "sessionEffort"
+	| "sessionReasoningMode"
 	| "model"
 	| "resolvedAgent"
-	| "variant"
+	| "effort"
+	| "reasoningMode"
 >;
 
 type SessionSelectionInput = {
@@ -76,7 +85,7 @@ type SessionSelectionInput = {
 	model: ChatModelSelection;
 	registry: AgentRegistry;
 	restoredConfig: ResolvedSessionSelection | null;
-	variant?: ModelVariant;
+	reasoningSelection: ReasoningSelection;
 };
 
 type RecallKeyEvent = {
@@ -93,17 +102,46 @@ const resolveInitialSessionSelection = ({
 	model,
 	registry,
 	restoredConfig,
-	variant,
+	reasoningSelection,
 }: SessionSelectionInput): SessionSendInput => {
 	const resolvedModel =
 		normalizeChatModelSelection(initialMessage.metadata?.model ?? model) ??
 		model;
-	const persistedVariant = normalizeModelVariant(
-		resolvedModel,
-		restoredConfig?.variant ?? initialMessage.metadata?.variant
-	);
 	const sessionModel = restoredConfig?.model ?? model;
-	const sessionVariant = restoredConfig?.variant ?? variant;
+	const sessionChoice =
+		restoredConfig?.effort !== undefined ||
+		restoredConfig?.reasoningMode !== undefined
+			? createReasoningSelection(
+					restoredConfig?.effort,
+					restoredConfig?.reasoningMode
+				)
+			: reasoningSelection;
+	const sessionReasoningSelection = normalizeReasoningSelection(
+		sessionModel,
+		sessionChoice
+	);
+	let persistedChoice: ReasoningSelection = {};
+	if (
+		restoredConfig?.effort !== undefined ||
+		restoredConfig?.reasoningMode !== undefined
+	) {
+		persistedChoice = createReasoningSelection(
+			restoredConfig?.effort,
+			restoredConfig?.reasoningMode
+		);
+	} else if (
+		initialMessage.metadata?.effort !== undefined ||
+		initialMessage.metadata?.reasoningMode !== undefined
+	) {
+		persistedChoice = createReasoningSelection(
+			initialMessage.metadata?.effort,
+			initialMessage.metadata?.reasoningMode
+		);
+	}
+	const persistedSelection = normalizeReasoningSelection(
+		resolvedModel,
+		persistedChoice
+	);
 	const persistedAgentId =
 		initialMessage.metadata?.agent ?? restoredConfig?.agent ?? agent;
 	const persistedAgentIsAvailable = registry.selectableAgents.some(
@@ -113,15 +151,17 @@ const resolveInitialSessionSelection = ({
 		registry,
 		persistedAgentId,
 		persistedAgentIsAvailable ? resolvedModel : sessionModel,
-		persistedAgentIsAvailable ? persistedVariant : sessionVariant
+		persistedAgentIsAvailable ? persistedSelection : sessionReasoningSelection
 	);
 	return {
 		agent: effective.agent,
 		sessionModel,
-		sessionVariant,
+		sessionEffort: sessionReasoningSelection.effort,
+		sessionReasoningMode: sessionReasoningSelection.reasoningMode,
 		model: effective.model,
 		resolvedAgent: effective.resolvedAgent,
-		variant: effective.variant,
+		effort: effective.effort,
+		reasoningMode: effective.reasoningMode,
 	};
 };
 
@@ -133,8 +173,20 @@ export function SessionView({
 	sessionTitle,
 }: SessionViewProps) {
 	const router = useRouter();
-	const { agent, model, setAgent, setModel, setVariant, variant } =
-		usePromptConfig();
+	const {
+		agent,
+		effort,
+		model,
+		reasoningMode,
+		setAgent,
+		setEffort,
+		setModel,
+		setReasoningMode,
+	} = usePromptConfig();
+	const currentReasoningSelection = useMemo(
+		() => createReasoningSelection(effort, reasoningMode),
+		[effort, reasoningMode]
+	);
 	const registry = useAgentRegistry();
 	const dialog = useDialog();
 	const sessionStore = useMemo(() => getSessionStore(), []);
@@ -195,6 +247,9 @@ export function SessionView({
 		readonly SessionSubmissionComposition[]
 	>([]);
 	const [recallRevision, setRecallRevision] = useState(0);
+	const [optimisticMessages, setOptimisticMessages] = useState<
+		readonly SessionMessage[]
+	>([]);
 	const {
 		cancelCompaction,
 		compact,
@@ -233,30 +288,36 @@ export function SessionView({
 		}
 		return annotations;
 	}, [initialTranscript]);
-	const messages = useMemo(
-		() =>
-			snapshot.transcript.map((message) => {
-				const annotations = displayAnnotationsByMessage.get(message.id);
-				if (annotations === undefined) {
-					return message;
+	const messages = useMemo(() => {
+		const transcript = snapshot.transcript.map((message) => {
+			const annotations = displayAnnotationsByMessage.get(message.id);
+			if (annotations === undefined) {
+				return message;
+			}
+			let hasAnnotation = false;
+			const parts = message.parts.map((part, index) => {
+				const annotation = annotations[index];
+				if (
+					part.type !== "file" ||
+					annotation?.attachmentId === undefined ||
+					part.attachmentId !== annotation.attachmentId
+				) {
+					return part;
 				}
-				let hasAnnotation = false;
-				const parts = message.parts.map((part, index) => {
-					const annotation = annotations[index];
-					if (
-						part.type !== "file" ||
-						annotation?.attachmentId === undefined ||
-						part.attachmentId !== annotation.attachmentId
-					) {
-						return part;
-					}
-					hasAnnotation = true;
-					return annotation;
-				});
-				return hasAnnotation ? { ...message, parts } : message;
-			}),
-		[displayAnnotationsByMessage, snapshot.transcript]
-	);
+				hasAnnotation = true;
+				return annotation;
+			});
+			return hasAnnotation ? { ...message, parts } : message;
+		});
+		if (optimisticMessages.length === 0) {
+			return transcript;
+		}
+		const committedIds = new Set(snapshot.transcript.map(({ id }) => id));
+		return [
+			...transcript,
+			...optimisticMessages.filter(({ id }) => !committedIds.has(id)),
+		];
+	}, [displayAnnotationsByMessage, optimisticMessages, snapshot.transcript]);
 	const error = snapshot.compactionError ?? snapshot.error;
 	// The session's own facts decide whether it is busy: a running turn, an
 	// approval that is waiting, or a compaction in flight.
@@ -286,7 +347,11 @@ export function SessionView({
 			setAgent(restoredConfig.agent);
 		}
 		setModel(restoredConfig.model);
-		setVariant(restoredConfig.variant);
+		if (restoredConfig.effort === undefined) {
+			setReasoningMode(restoredConfig.reasoningMode);
+		} else {
+			setEffort(restoredConfig.effort);
+		}
 		setRestoredMessages(initialTranscript);
 		if (
 			!isUndefined(restoredConfig.persistedAgent) &&
@@ -303,7 +368,8 @@ export function SessionView({
 		restoredConfig,
 		setAgent,
 		setModel,
-		setVariant,
+		setEffort,
+		setReasoningMode,
 		show,
 	]);
 
@@ -432,9 +498,10 @@ export function SessionView({
 				registry,
 				agent,
 				model,
-				variant
+				currentReasoningSelection
 			);
-			await compact(focus, effective.model, effective.variant);
+			const reasoningSelection: ReasoningSelection = effective;
+			await compact(focus, effective.model, reasoningSelection);
 			return true;
 		} catch (error) {
 			show({
@@ -462,21 +529,42 @@ export function SessionView({
 			registry,
 			agent,
 			model,
-			variant
+			currentReasoningSelection
 		);
+		const optimisticMessage = isBusy
+			? undefined
+			: createSessionUserMessage(
+					userText,
+					{
+						agent: effective.agent,
+						model: effective.model,
+						...omitUndefined({
+							effort: effective.effort,
+							reasoningMode: effective.reasoningMode,
+						}),
+					},
+					[],
+					files
+				);
+		if (optimisticMessage) {
+			setOptimisticMessages((pending) => [...pending, optimisticMessage]);
+		}
 		// `send` resolves when the full turn completes; the composer should reset
 		// as soon as this session accepts the new send, and a busy session accepts
 		// it as a Queued Submission.
 		void send({
 			agent: effective.agent,
 			sessionModel: model,
-			sessionVariant: variant,
+			sessionEffort: effort,
+			sessionReasoningMode: reasoningMode,
 			composition,
 			files,
 			model: effective.model,
 			resolvedAgent: effective.resolvedAgent,
-			variant: effective.variant,
+			effort: effective.effort,
+			reasoningMode: effective.reasoningMode,
 			userText,
+			reservedMessageId: optimisticMessage?.id,
 			skill,
 		})
 			.then((outcome) => {
@@ -492,6 +580,13 @@ export function SessionView({
 					message: "Could not submit the prompt",
 					variant: "error",
 				});
+			})
+			.finally(() => {
+				if (optimisticMessage) {
+					setOptimisticMessages((pending) =>
+						pending.filter(({ id }) => id !== optimisticMessage.id)
+					);
+				}
 			});
 		return true;
 	};
@@ -511,7 +606,7 @@ export function SessionView({
 				model,
 				registry,
 				restoredConfig,
-				variant,
+				reasoningSelection: currentReasoningSelection,
 			}),
 			messageId,
 		});
@@ -591,7 +686,7 @@ export function SessionView({
 						model,
 						registry,
 						restoredConfig,
-						variant,
+						reasoningSelection: currentReasoningSelection,
 					}),
 					messageId: initialMessage.id,
 				});
@@ -621,7 +716,7 @@ export function SessionView({
 		send,
 		sessionId,
 		show,
-		variant,
+		currentReasoningSelection,
 	]);
 
 	return (

@@ -19,13 +19,13 @@ import {
 } from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
 import {
+	type Effort,
+	effortIds,
 	type ModelCost,
 	type ModelCostTier,
 	type ModelLimits,
 	type ModelMetadataEntry,
 	type ModelThinkingPolicy,
-	type ModelVariant,
-	modelVariantIds,
 } from "./model-metadata";
 import {
 	type ModelsDevModel,
@@ -33,12 +33,12 @@ import {
 } from "./models-dev-payload";
 
 export type {
+	Effort,
 	ModelCost,
 	ModelCostTier,
 	ModelLimits,
 	ModelMetadataEntry,
 	ModelThinkingPolicy,
-	ModelVariant,
 } from "./model-metadata";
 export { modelMetadataEntrySchema } from "./model-metadata";
 export type { ModelsDevModel } from "./models-dev-payload";
@@ -59,21 +59,51 @@ const nonNegativeInteger = (value: unknown): number | undefined =>
 const positiveInteger = (value: unknown): number | undefined =>
 	isPositiveInteger(value) ? value : undefined;
 
-const LEVEL_IDS: ReadonlySet<string> = new Set(modelVariantIds);
+const EFFORT_IDS: ReadonlySet<string> = new Set(effortIds);
 
-const asLevels = (value: unknown): readonly ModelVariant[] | undefined => {
+type ModelSource = Readonly<{ modelId: string; providerId: string }>;
+
+// DeepSeek publishes these only as aliases for the named models below.
+// `minimal` remains distinct for other model catalogs.
+const DEEPSEEK_EFFORT_ALIASES: Readonly<Record<string, Effort>> = {
+	minimal: "low",
+	medium: "high",
+	xhigh: "high",
+};
+const DEEPSEEK_ALIAS_MODELS: Readonly<Record<string, true>> = {
+	"deepseek-flash": true,
+	"deepseek-v4-pro": true,
+};
+
+const asLevels = (
+	value: unknown,
+	source: ModelSource | undefined
+): readonly Effort[] | undefined => {
 	if (!isArray(value)) {
 		return;
 	}
-	// The catalog speaks a closed set of level identifiers. Upstream effort
-	// values outside it are dropped rather than emitted as an unusable level.
-	const levels = value.filter(
-		(level): level is ModelVariant => isString(level) && LEVEL_IDS.has(level)
-	);
-	return levels.length === 0 ? undefined : levels;
+	const aliases =
+		source?.providerId === "deepseek" &&
+		DEEPSEEK_ALIAS_MODELS[source.modelId] === true
+			? DEEPSEEK_EFFORT_ALIASES
+			: undefined;
+	const levels = new Set<Effort>();
+	for (const rawLevel of value) {
+		if (!isString(rawLevel)) {
+			continue;
+		}
+		const canonical = aliases?.[rawLevel] ?? rawLevel;
+		if (EFFORT_IDS.has(canonical)) {
+			levels.add(canonical as Effort);
+		}
+	}
+	return levels.size === 0 ? undefined : [...levels];
 };
 
-const toThinkingPolicy = (raw: unknown): ModelThinkingPolicy | undefined => {
+const toThinkingPolicy = (
+	raw: unknown,
+	source: ModelSource | undefined
+): ModelThinkingPolicy | undefined => {
 	const options = parseReasoningOptions(raw);
 	if (!options) {
 		return;
@@ -81,23 +111,29 @@ const toThinkingPolicy = (raw: unknown): ModelThinkingPolicy | undefined => {
 	const effort = options.find((option) => option.type === "effort");
 	const budget = options.find((option) => option.type === "budget_tokens");
 	const toggle = options.find((option) => option.type === "toggle");
-	const levels = asLevels(effort?.values);
+	const levels = asLevels(effort?.values, source);
+	const effortValues = effort?.values;
+	const hasToggle =
+		!isUndefined(toggle) ||
+		(isArray(effortValues) && effortValues.includes("none"));
 	const budgetMin = nonNegativeInteger(budget?.min);
 	const budgetMax = nonNegativeInteger(budget?.max);
 	const budgetBounded = !(isUndefined(budgetMin) && isUndefined(budgetMax));
+	// A published `none` Effort value is a no-reasoning Mode, not a ladder
+	// level. Preserve it as a toggle when the source has no separate toggle.
 	// A published budget range is a reasoning control even with no ladder: it
 	// says how much thinking the model may do. With no switch and no ladder the
 	// user has nothing to pick, so the model gets no selectable level and its
 	// budget is derived rather than chosen. Without recording this, Claude 4.5
 	// would look like a model with no reasoning control at all.
-	const switchable = !isUndefined(toggle) || budgetBounded;
+	const switchable = hasToggle || budgetBounded;
 	if (!(switchable || levels)) {
 		return;
 	}
 	return {
-		...pickTruthy({ toggle: toggle ? true : undefined, levels }),
+		...pickTruthy({ toggle: hasToggle ? true : undefined, levels }),
 		...omitUndefined({ budgetMin, budgetMax }),
-		...(budgetBounded && !toggle && !levels
+		...(budgetBounded && !hasToggle && !levels
 			? { unlevelled: true as const }
 			: {}),
 	};
@@ -167,8 +203,11 @@ const toLimits = (raw: unknown): ModelLimits | undefined => {
 	return { context, ...omitUndefined({ output }) };
 };
 
-export const metadataForModel = (raw: ModelsDevModel): ModelMetadataEntry => {
-	const thinking = toThinkingPolicy(raw.reasoning_options);
+export const metadataForModel = (
+	raw: ModelsDevModel,
+	source?: ModelSource
+): ModelMetadataEntry => {
+	const thinking = toThinkingPolicy(raw.reasoning_options, source);
 	const cost = toCost(raw.cost);
 	const limits = toLimits(raw.limit);
 	const tiers = toTiers(raw.cost);
@@ -190,7 +229,10 @@ export const convertModelsDevPayload = (
 	const converted = new Map<string, ModelMetadataEntry>();
 	for (const [providerId, models] of modelsDevBlocksFromPayload(payload)) {
 		for (const [modelId, model] of models) {
-			converted.set(`${providerId}/${modelId}`, metadataForModel(model));
+			converted.set(
+				`${providerId}/${modelId}`,
+				metadataForModel(model, { modelId, providerId })
+			);
 		}
 	}
 	return converted;

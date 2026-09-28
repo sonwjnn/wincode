@@ -16,7 +16,6 @@ export type ResolvedCodingAgent = ResolvedAgent & {
 };
 
 const BUILD_AGENT_ID = agentIdSchema.parse("build");
-const PLAN_AGENT_ID = agentIdSchema.parse("plan");
 export const buildAgent = {
 	description: "Implement changes with read and write access.",
 	displayName: "Build",
@@ -29,20 +28,7 @@ Prefer glob, grep, and read before editing. Use edit for targeted changes to exi
 	visibleCodingTools: ["read", "write", "edit", "recover", "glob", "grep"],
 } as const satisfies CliAgentDefinition;
 
-export const planAgent = {
-	description: "Read-only analysis and planning.",
-	displayName: "Plan",
-	id: PLAN_AGENT_ID,
-	instructions: `Mode: PLAN.
-Purpose: read-only analysis and implementation planning.
-Do not modify files. Do not write files. Do not call edit or write tools.
-Use only read-only inspection tools to understand the workspace.
-Return a concrete plan, risks, and verification steps instead of implementing changes.`,
-	role: "primary",
-	visibleCodingTools: ["read", "glob", "grep"],
-} as const satisfies CliAgentDefinition;
-
-export const builtInAgents = [buildAgent, planAgent] as const;
+export const builtInAgents = [buildAgent] as const;
 export type BuiltInAgentId = (typeof builtInAgents)[number]["id"];
 export type BuiltInAgentDefinition = (typeof builtInAgents)[number];
 

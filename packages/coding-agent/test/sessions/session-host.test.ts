@@ -426,7 +426,8 @@ describe("Session Host opening", () => {
 			agent: buildId,
 			model,
 			persistedAgent: buildId,
-			variant: undefined,
+			effort: undefined,
+			reasoningMode: undefined,
 		});
 
 		await host.shutdown();

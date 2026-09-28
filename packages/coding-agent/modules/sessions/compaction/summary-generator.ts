@@ -1,14 +1,11 @@
 import type { Connections } from "@wincode/ai/connections";
-import type {
-	ChatModelSelection,
-	ModelTarget,
-	ModelVariant,
-} from "@wincode/ai/model";
+import type { ChatModelSelection, ModelTarget } from "@wincode/ai/model";
 import {
 	generateModelText,
 	type ModelTextGenerationMessage,
 	type ModelTextGenerationOptions,
 } from "@wincode/ai/model-client";
+import type { Effort, ReasoningMode } from "@wincode/ai/models";
 import { isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import { resolveChatModelTarget } from "../../model-target";
 import type { SessionMessage } from "../message";
@@ -33,7 +30,8 @@ export type SummaryModel = ModelTarget;
 export type SummaryModelResolver = (
 	selection: ChatModelSelection,
 	signal?: AbortSignal,
-	variant?: ModelVariant,
+	effort?: Effort,
+	reasoningMode?: ReasoningMode,
 	maxOutputTokens?: number
 ) => Promise<SummaryModel>;
 const defaultTextGenerator: SummaryTextGenerator = async (options) =>
@@ -84,7 +82,8 @@ export const createLanguageModelSummaryGenerator =
 		const model = await resolveModel(
 			input.model,
 			input.signal,
-			input.variant,
+			input.effort,
+			input.reasoningMode,
 			requestedOutputTokens
 		);
 		const maxOutputTokens = Math.min(
@@ -111,25 +110,45 @@ export const resolveDirectSummaryModel = async (
 	selection: ChatModelSelection,
 	connections: Connections,
 	signal?: AbortSignal,
-	variant?: ModelVariant,
+	effort?: Effort,
+	reasoningMode?: ReasoningMode,
 	maxOutputTokens?: number
-): Promise<SummaryModel> =>
-	resolveChatModelTarget(selection, connections, {
+): Promise<SummaryModel> => {
+	const targetOptions = omitUndefined({
 		allowRetired: true,
-		...omitUndefined({ signal, variant, maxOutputTokens }),
+		maxOutputTokens,
+		signal,
 	});
+	if (effort !== undefined && reasoningMode !== undefined) {
+		throw new Error("Select either an Effort or a Reasoning Mode, not both.");
+	}
+	if (effort !== undefined) {
+		return resolveChatModelTarget(selection, connections, {
+			...targetOptions,
+			effort,
+		});
+	}
+	if (reasoningMode !== undefined) {
+		return resolveChatModelTarget(selection, connections, {
+			...targetOptions,
+			reasoningMode,
+		});
+	}
+	return resolveChatModelTarget(selection, connections, targetOptions);
+};
 export const createDirectSummaryGenerator = (
 	connections: Connections,
 	generate?: SummaryTextGenerator
 ): SummaryGenerator =>
 	createLanguageModelSummaryGenerator({
 		generate,
-		resolveModel: (selection, signal, variant, maxOutputTokens) =>
+		resolveModel: (selection, signal, effort, reasoningMode, maxOutputTokens) =>
 			resolveDirectSummaryModel(
 				selection,
 				connections,
 				signal,
-				variant,
+				effort,
+				reasoningMode,
 				maxOutputTokens
 			),
 	});

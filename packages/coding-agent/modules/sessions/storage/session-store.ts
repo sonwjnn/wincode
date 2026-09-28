@@ -4,7 +4,11 @@ import type {
 	SessionRecord,
 	SessionRecordOutcome,
 } from "@wincode/agent-core";
-import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import type {
+	ChatModelSelection,
+	Effort,
+	ReasoningMode,
+} from "@wincode/ai/models";
 import type {
 	SessionFilePart,
 	SessionMessage,
@@ -38,7 +42,8 @@ export type Session = {
 	model?: ChatModelSelection;
 	pinned: boolean;
 	title: string;
-	variant?: ModelVariant;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
 };
 
 export type CreateSessionInput = {
@@ -46,7 +51,8 @@ export type CreateSessionInput = {
 	message: SessionMessage;
 	model: ChatModelSelection;
 	turnId: AgentTurnId;
-	variant?: ModelVariant;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
 };
 
 export type UpdateSessionInput = {
@@ -62,7 +68,8 @@ export type UpdateSessionInput = {
  */
 export type CommitSessionRecordInput = {
 	sessionModel?: ChatModelSelection;
-	sessionVariant?: ModelVariant;
+	sessionEffort?: Effort;
+	sessionReasoningMode?: ReasoningMode;
 	record: SessionRecord;
 	sessionId: SessionId;
 };

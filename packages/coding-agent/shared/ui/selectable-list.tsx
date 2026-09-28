@@ -131,6 +131,7 @@ export function SelectableList({
 				}
 				onSelect(getNextIndex(selectedIndex, direction, items.length));
 			}}
+			paddingX={0}
 		>
 			{visibleItems.map((item, index) => {
 				const realIndex = startIndex + index;

@@ -1,4 +1,7 @@
-import { getModelMetadata } from "../model-metadata-runtime";
+import {
+	createReasoningSelection,
+	getModelMetadata,
+} from "../model-metadata-runtime";
 import {
 	MODEL_OUTPUT_TOKEN_LIMIT,
 	type ModelProviderOptions,
@@ -583,9 +586,16 @@ const providerRequestContext = (
 	model: SupportedChatModel
 ): ProviderRequestContext => {
 	const { target } = request;
+	if (target.effort !== undefined && target.reasoningMode !== undefined) {
+		throw new Error("Select either an Effort or a Reasoning Mode, not both.");
+	}
+	const reasoningSelection = createReasoningSelection(
+		target.effort,
+		target.reasoningMode
+	);
 	const resolved = resolveModelProviderOptions(model, {
 		maxOutputTokens: target.maxOutputTokens,
-		variant: target.variant,
+		...reasoningSelection,
 	});
 	const maxOutputTokens = resolved.maxOutputTokens ?? target.maxOutputTokens;
 	const providerOptions = mergeProviderOptions(

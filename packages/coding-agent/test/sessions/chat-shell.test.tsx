@@ -17,6 +17,7 @@ process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { homedir } from "node:os";
+import * as path from "node:path";
 import { RGBA, type ScrollBoxRenderable } from "@opentui/core";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import { act, useEffect, useState } from "react";
@@ -141,7 +142,7 @@ const completedCompaction = (): SessionCompaction => ({
 		modelId: modelId("gpt-5.6-luna"),
 		providerId: "openai",
 	},
-	summarizationVariant: "high",
+	summarizationEffort: "high",
 	summary: {
 		coveredMessageIds: [
 			sessionMessageId("user-1"),
@@ -258,6 +259,7 @@ type ChatShellRenderOptions = {
 	height: number;
 	width: number;
 	initialCompactions?: SessionCompaction[];
+	configuredAgent?: boolean;
 	isBusy?: boolean;
 	isCompacting?: boolean;
 	isInterruptArmed?: boolean;
@@ -273,6 +275,7 @@ const renderChatShell = async (
 		height,
 		width,
 		initialCompactions = [],
+		configuredAgent = false,
 		isBusy = false,
 		isCompacting = false,
 		isInterruptArmed = false,
@@ -282,9 +285,29 @@ const renderChatShell = async (
 		steeringMessages,
 	}: ChatShellRenderOptions
 ): Promise<ChatShellSetup> => {
-	const configStore = createConfigStore();
 	const workspace = process.cwd();
 	const agent = { current: "" };
+	const configStore = configuredAgent
+		? createConfigStore({
+				fs: {
+					readFile: async (file) => {
+						if (file === path.join(workspace, ".wincode", "wincode.jsonc")) {
+							return JSON.stringify({
+								agents: {
+									review: {
+										description: "Review changes.",
+										role: "primary",
+									},
+								},
+							});
+						}
+						throw Object.assign(new Error("Test config is unavailable."), {
+							code: "ENOENT",
+						});
+					},
+				},
+			})
+		: createConfigStore();
 	const holder: { current: ChatShellProbeHandle | null } = { current: null };
 	const router = buildTestRouter();
 	const setup = await testRender(
@@ -580,7 +603,7 @@ describe("ChatShell approval dock", () => {
 			expect(settledFrame).toContain("allowed once");
 			expect(settledFrame).not.toContain("Permission required");
 			expect(settledFrame).toContain("Ask anything");
-			expect(settledFrame).toContain("tab agents");
+			expect(settledFrame).not.toContain("tab agents");
 		} finally {
 			setup.renderer.destroy();
 		}
@@ -1050,7 +1073,7 @@ describe("ChatShell activity footer", () => {
 			const loadingFrame = setup.captureCharFrame();
 			expect(loadingFrame).toContain("Compacting context... (esc to cancel)");
 			expect(loadingFrame).toContain("Compacting context · Esc cancel");
-			expect(loadingFrame).toContain("7.3K");
+			expect(loadingFrame).toContain("1%(7.3K/1.1M)");
 			expect(loadingFrame).toMatch(PROGRESS_BAR_REGEX);
 
 			await Bun.sleep(2000);
@@ -1557,7 +1580,7 @@ describe("ChatShell edit diff blocks", () => {
 	});
 });
 
-describe("ChatShell composer while steering a running Agent Turn", () => {
+describe("ChatShell Agent keyboard shortcuts", () => {
 	/** Presses Tab and reports the Agent the prompt configuration holds after. */
 	const agentAfterTab = async (
 		setup: ChatShellSetup
@@ -1568,35 +1591,18 @@ describe("ChatShell composer while steering a running Agent Turn", () => {
 		return { after: setup.agent.current, before };
 	};
 
-	test("refuses an Agent change while the turn runs", async () => {
+	test("Tab does not cycle the Agent when another Agent is available", async () => {
 		const setup = await renderChatShell([], {
 			height: 12,
-			isBusy: true,
-			steering: true,
+			configuredAgent: true,
 			width: 100,
 		});
-
 		try {
 			await flushUi(setup.setup);
 			const { after, before } = await agentAfterTab(setup);
 
-			// Tab cannot arm another Agent inside a turn that already runs, while
-			// the same binding still changes it when the composer is idle.
-			expect(after).toBe(before);
-		} finally {
-			setup.setup.renderer.destroy();
-		}
-	});
-
-	test("changes the Agent on Tab when no turn is being steered", async () => {
-		const setup = await renderChatShell([], { height: 12, width: 100 });
-
-		try {
-			await flushUi(setup.setup);
-			const { after, before } = await agentAfterTab(setup);
-
-			// The same binding still works when the composer is not steering.
-			expect(after).not.toBe(before);
+			expect(before).toBe("build");
+			expect(after).toBe("build");
 		} finally {
 			setup.setup.renderer.destroy();
 		}

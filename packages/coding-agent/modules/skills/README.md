@@ -87,14 +87,18 @@ The remaining file content is the skill body.
 
 ## Invocation and transport
 
-Skills appear in the `/` command list as `skill:<name>` rows; selecting one writes
-`/skill:<name> ` into the chat input, and `/skill:name arguments` parses the named skill and raw
-arguments for that request. A bare `/name` is never a Skill invocation, so a Custom Command of the
-same name stays reachable. The selected skill body and arguments propagate through both local and
-hosted chat execution paths. Text that claims the `skill:` namespace but names no discovered Skill
-(or is malformed) is reported as an input error and never sent as a prompt; while the command list
-is open, Enter belongs to the list, so a zero-argument line that matches no row stays in the
-composer until it is submitted with a space or an argument.
+The root `/` suggestions always show Built-in and Custom Commands plus one `skill:` aggregate
+when Skills are discoverable. Selecting the aggregate enters `/skill:` search; Skill results
+fuzzy-match names and descriptions both there and in nonempty bare slash queries. `/skill` shows
+the namespace chooser rather than individual Skills. `/skills` is not a Built-in Command, but
+follows the same bare-query matching behavior.
+Selecting an individual Skill writes `/skill:<name> ` into the chat input.
+
+A bare `/name` is never a Skill invocation, so a Custom Command of the same name stays reachable.
+The selected Skill body and arguments propagate through both local and hosted chat execution
+paths. Text that claims the `skill:` namespace but names no discovered Skill (or is malformed) is
+reported as an input error and never sent as a prompt. Enter selects a matching row; when no
+command row matches, Enter submits the line normally.
 
 ## Skill Activation
 

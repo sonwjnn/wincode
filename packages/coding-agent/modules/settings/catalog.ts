@@ -61,10 +61,13 @@ const getValueAtPath = (
 	return { found: true, value: current };
 };
 
-const collectPersistedValues = (snapshot: ConfigSnapshot): PersistedValue[] => {
+const collectPersistedValues = (
+	snapshot: ConfigSnapshot,
+	paths: readonly (readonly string[])[] = AUTO_COMPACT_PATHS
+): PersistedValue[] => {
 	const values: PersistedValue[] = [];
 	for (const source of snapshot.sources) {
-		for (const path of AUTO_COMPACT_PATHS) {
+		for (const path of paths) {
 			const entry = getValueAtPath(source.document, path);
 			if (entry.found) {
 				values.push({
@@ -78,15 +81,6 @@ const collectPersistedValues = (snapshot: ConfigSnapshot): PersistedValue[] => {
 	}
 	return values;
 };
-
-const hasPotentialValue = (
-	snapshot: ConfigSnapshot,
-	scope: ConfigScope,
-	path: readonly string[]
-): boolean =>
-	collectPersistedValues(snapshot).some(
-		(entry) => entry.scope === scope && entry.path.join(".") === path.join(".")
-	) || snapshot.sourceFor(path)?.scope === scope;
 
 const settingSource = (settings: ResolvedCompactionSettings): SettingSource => {
 	const source = getCompactionSettingSource(settings, "auto");
@@ -121,15 +115,16 @@ const clearPath = async (
 	scope: ConfigScope,
 	path: readonly string[],
 	onMutation: () => void,
-	snapshot: ConfigSnapshot
+	snapshot: ConfigSnapshot,
+	paths: readonly (readonly string[])[] = AUTO_COMPACT_PATHS
 ): Promise<ConfigSnapshot> => {
 	let current = snapshot;
 	for (let attempt = 0; attempt < MAX_PATH_CLEAR_ATTEMPTS; attempt += 1) {
-		const entries = collectPersistedValues(current).filter(
+		const entries = collectPersistedValues(current, paths).filter(
 			(entry) =>
 				entry.scope === scope && entry.path.join(".") === path.join(".")
 		);
-		if (entries.length === 0 && !hasPotentialValue(current, scope, path)) {
+		if (entries.length === 0 && current.sourceFor(path)?.scope !== scope) {
 			return current;
 		}
 		onMutation();
@@ -139,7 +134,7 @@ const clearPath = async (
 			path,
 			undefined
 		);
-		const remaining = collectPersistedValues(next).filter(
+		const remaining = collectPersistedValues(next, paths).filter(
 			(entry) =>
 				entry.scope === scope && entry.path.join(".") === path.join(".")
 		);
@@ -173,13 +168,23 @@ const clearAutoCompactValues = async (
 
 const restorePersistedValues = async (
 	context: SettingOperationContext,
-	values: readonly PersistedValue[]
+	values: readonly PersistedValue[],
+	paths: readonly (readonly string[])[] = AUTO_COMPACT_PATHS,
+	scopes: readonly ConfigScope[] = ["project", "global"]
 ): Promise<void> => {
 	let current = await context.configStore.refreshSnapshot(context.workspace);
-	current = await clearAutoCompactValues(context, current, () => undefined, [
-		"project",
-		"global",
-	]);
+	for (const scope of scopes) {
+		for (const path of paths) {
+			current = await clearPath(
+				context,
+				scope,
+				path,
+				() => undefined,
+				current,
+				paths
+			);
+		}
+	}
 	for (const entry of values) {
 		current = await context.configStore.setValue(
 			context.workspace,
@@ -275,6 +280,129 @@ export const AUTO_COMPACT_SETTING: BooleanSettingDescriptor = {
 		return changeAutoCompact(value, context);
 	},
 };
+export const COPY_ON_SELECT_SETTING_ID = "clipboard.copyOnSelect";
+export const COPY_ON_SELECT_GLOBAL_PATH = [
+	"clipboard",
+	"copyOnSelect",
+] as const;
+const COPY_ON_SELECT_PATHS = [COPY_ON_SELECT_GLOBAL_PATH] as const;
+
+const getGlobalValueAtPath = (
+	snapshot: ConfigSnapshot,
+	configPath: readonly string[]
+) => {
+	let found = false;
+	let value: unknown;
+	let sourcePath: string | undefined;
+	for (const source of snapshot.sources) {
+		if (source.scope !== "global") {
+			continue;
+		}
+		const entry = getValueAtPath(source.document, configPath);
+		if (entry.found) {
+			found = true;
+			value = entry.value;
+			sourcePath = source.path;
+		}
+	}
+	return { found, sourcePath, value };
+};
+
+const readCopyOnSelect = (
+	snapshot: ConfigSnapshot
+): SettingResolution<boolean> => {
+	const entry = getGlobalValueAtPath(snapshot, COPY_ON_SELECT_GLOBAL_PATH);
+	if (!isBoolean(entry.value) || entry.sourcePath === undefined) {
+		return {
+			available: true,
+			source: { kind: "default" },
+			value: true,
+		};
+	}
+	return {
+		available: true,
+		source: {
+			configPath: COPY_ON_SELECT_GLOBAL_PATH,
+			kind: "config",
+			path: entry.sourcePath,
+			scope: "global",
+		},
+		value: entry.value,
+	};
+};
+
+const changeCopyOnSelect = async (
+	value: boolean | undefined,
+	context: SettingOperationContext
+): Promise<void> => {
+	const previous = collectPersistedValues(
+		context.snapshot,
+		COPY_ON_SELECT_PATHS
+	).filter((entry) => entry.scope === "global");
+	let mutated = false;
+	const markMutation = () => {
+		mutated = true;
+	};
+	try {
+		if (isUndefined(value)) {
+			await clearPath(
+				context,
+				"global",
+				COPY_ON_SELECT_GLOBAL_PATH,
+				markMutation,
+				context.snapshot,
+				COPY_ON_SELECT_PATHS
+			);
+		} else {
+			markMutation();
+			await context.configStore.setValue(
+				context.workspace,
+				"global",
+				COPY_ON_SELECT_GLOBAL_PATH,
+				value
+			);
+		}
+		context.runtime.onCopyOnSelectChanged?.(value ?? true);
+	} catch (error) {
+		if (mutated) {
+			try {
+				await restorePersistedValues(context, previous, COPY_ON_SELECT_PATHS, [
+					"global",
+				]);
+			} catch (rollbackError) {
+				throw new Error(
+					`Could not save Copy on select: ${getErrorMessage(error, "Unknown settings error.")} Rollback failed: ${getErrorMessage(rollbackError, "Unknown settings error.")}`,
+					{ cause: error }
+				);
+			}
+		}
+		throw new Error(
+			`Could not save Copy on select: ${getErrorMessage(error, "Unknown settings error.")}`,
+			{ cause: error }
+		);
+	}
+};
+
+export const COPY_ON_SELECT_SETTING: BooleanSettingDescriptor = {
+	description: "Copy selected terminal text to the clipboard automatically.",
+	id: COPY_ON_SELECT_SETTING_ID,
+	kind: "boolean",
+	label: "Copy on select",
+	persistence: "config",
+	requiredContext: "none",
+	read: readCopyOnSelect,
+	reset: (context) => changeCopyOnSelect(undefined, context),
+	scope: "global",
+	section: "Clipboard",
+	validate: (value): value is boolean => isBoolean(value),
+	write: (value, context) => {
+		if (!isBoolean(value)) {
+			throw new Error("Copy on select must be a boolean.");
+		}
+		return changeCopyOnSelect(value, context);
+	},
+};
+
 export const EDIT_MODE_SETTING_ID = "editing.mode";
 const EDIT_MODE_LABELS: Record<EditMode, string> = {
 	hashline: "Hashline (verified)",
@@ -350,4 +478,5 @@ export const EDIT_MODE_SETTING: SelectSettingDescriptor = {
 export const SETTINGS_CATALOG = [
 	AUTO_COMPACT_SETTING,
 	EDIT_MODE_SETTING,
+	COPY_ON_SELECT_SETTING,
 ] as const satisfies SettingsCatalog;

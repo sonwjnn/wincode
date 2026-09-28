@@ -84,7 +84,19 @@ Wincode reads `wincode.jsonc` or `wincode.json`, with JSONC taking precedence at
 3. The workspace root
 4. `<workspace>/.wincode/`
 
-Objects merge recursively; arrays and scalar values replace lower-precedence values. Restart Wincode after changing configuration.
+Objects merge recursively; arrays and scalar values replace lower-precedence values. Restart Wincode after editing configuration files.
+
+The Settings dialog exposes the global-only `clipboard.copyOnSelect` setting (default `true`). Project-scope values are ignored; changes in Settings apply immediately, and Reset removes the key to restore the default.
+
+To disable automatic clipboard writes, set this value in a global config file:
+
+```jsonc
+{
+  "clipboard": {
+    "copyOnSelect": false
+  }
+}
+```
 
 ```jsonc
 {

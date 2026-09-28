@@ -74,7 +74,7 @@ export type ChatInputControllerOptions = {
 	getCustomCommands: () => Promise<CustomCommandSpec[]>;
 	getFileMentionOptions: () => Promise<FileMentionOption[]>;
 	getSkills: () => Promise<Skill[]>;
-	hideVariants?: boolean;
+	hideEffort?: boolean;
 	hideCompact?: boolean;
 	onError: (message: string) => void;
 	onSubmit: (

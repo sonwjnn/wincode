@@ -1,6 +1,10 @@
 import type { SessionMessageId } from "@wincode/agent-core";
 import { MODEL_OUTPUT_TOKEN_LIMIT } from "@wincode/ai/model";
-import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import type {
+	ChatModelSelection,
+	Effort,
+	ReasoningMode,
+} from "@wincode/ai/models";
 import type { Except, ReadonlyDeep } from "type-fest";
 import type {
 	SessionMessage,
@@ -42,7 +46,8 @@ export type SessionCompaction = ReadonlyDeep<{
 	trigger: CompactionTriggerReason;
 	focus?: string;
 	summarizationModel: ChatModelSelection;
-	summarizationVariant?: ModelVariant;
+	summarizationEffort?: Effort;
+	summarizationReasoningMode?: ReasoningMode;
 	summarizationUsage?: SessionMessageUsage;
 	createdAt: Date;
 	completedAt: Date;
@@ -58,7 +63,8 @@ export type AppendSessionCompactionInput = Except<
 };
 export type SummaryGeneratorInput = {
 	model: ChatModelSelection;
-	variant?: ModelVariant;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
 	previousSummary?: CompactionSummary;
 	serializedMessages: string;
 	summaryMessages?: SessionMessage[];

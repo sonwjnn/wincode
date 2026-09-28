@@ -8,12 +8,15 @@ import {
 import {
 	type ChatModelSelection,
 	type ConnectionProviderId,
+	type Effort,
+	effortSchema,
 	findSupportedChatModelSelection,
 	isActiveChatModel,
-	isSupportedModelVariant,
-	type ModelVariant,
-	modelVariantSchema,
+	isSupportedModelEffort,
+	isSupportedReasoningMode,
 	parseCatalogModelSelection,
+	type ReasoningMode,
+	reasoningModeSchema,
 } from "@wincode/ai/models";
 import {
 	isNull,
@@ -65,42 +68,65 @@ export const configuredAgentVisibleCodingTools = [
 const agentPatchFields = {
 	description: z.string().min(1).max(MAX_CONFIGURED_AGENT_DESCRIPTION_LENGTH),
 	disable: z.boolean(),
+	effort: effortSchema,
 	instructions: z.string().max(MAX_CONFIGURED_AGENT_INSTRUCTIONS_LENGTH),
 	model: z.string().min(1),
 	permission: topLevelPermissionSchema,
+	reasoningMode: reasoningModeSchema,
 	resource_limits: resourceLimitProfileSchema,
 	role: agentRoleSchema,
-	variant: z.string().min(1),
 } as const;
 
-const configuredAgentPatchSchema = z
+const hasExclusiveReasoningSelection = <
+	T extends { effort?: unknown; reasoningMode?: unknown },
+>(
+	selection: T,
+	context: z.core.$RefinementCtx<T>
+): void => {
+	if (selection.effort !== undefined && selection.reasoningMode !== undefined) {
+		context.addIssue({
+			code: "custom",
+			message: "Choose either effort or reasoningMode, not both",
+			path: ["reasoningMode"],
+		});
+	}
+};
+
+const configuredAgentPatchFieldsSchema = z
 	.object({
 		description: agentPatchFields.description.optional(),
 		disable: agentPatchFields.disable.optional(),
+		effort: agentPatchFields.effort.optional(),
 		instructions: agentPatchFields.instructions.optional(),
 		model: agentPatchFields.model.optional(),
 		permission: agentPatchFields.permission.optional(),
+		reasoningMode: agentPatchFields.reasoningMode.optional(),
 		resource_limits: agentPatchFields.resource_limits.optional(),
 		role: agentPatchFields.role.optional(),
-		variant: agentPatchFields.variant.optional(),
 	})
 	.strict();
-
-const completeConfiguredAgentSchema = configuredAgentPatchSchema.required({
-	description: true,
-	role: true,
-});
+const configuredAgentPatchSchema = configuredAgentPatchFieldsSchema.superRefine(
+	hasExclusiveReasoningSelection
+);
+const completeConfiguredAgentSchema = configuredAgentPatchFieldsSchema
+	.required({
+		description: true,
+		role: true,
+	})
+	.superRefine(hasExclusiveReasoningSelection);
 
 const builtInAgentPatchSchema = z
 	.object({
 		description: agentPatchFields.description.optional(),
+		effort: agentPatchFields.effort.optional(),
 		instructions: agentPatchFields.instructions.optional(),
 		model: agentPatchFields.model.optional(),
 		permission: agentPatchFields.permission.optional(),
+		reasoningMode: agentPatchFields.reasoningMode.optional(),
 		resource_limits: agentPatchFields.resource_limits.optional(),
-		variant: agentPatchFields.variant.optional(),
 	})
-	.strict();
+	.strict()
+	.superRefine(hasExclusiveReasoningSelection);
 
 export type AgentDiagnosticCode =
 	| ConfigDiagnostic["code"]
@@ -121,16 +147,17 @@ export type AgentDiagnostic = {
 };
 
 export type RegistryAgent = AgentDefinition & {
+	readonly effort?: Effort;
 	readonly visibleCodingTools: readonly CodingToolName[];
 	readonly isConfigured: boolean;
 	readonly isAvailable: boolean;
 	readonly isSelectable: boolean;
 	readonly model?: ChatModelSelection;
 	readonly permission?: PermissionRules;
+	readonly reasoningMode?: ReasoningMode;
 	readonly requiresManualApproval: boolean;
 	readonly resourceProfile: ResourceLimitProfile;
 	readonly unavailableReason?: string;
-	readonly variant?: ModelVariant;
 };
 
 export type AgentRegistry = {
@@ -447,15 +474,12 @@ const resolveConfiguredAgentEntry = (
 		};
 	}
 	const model = parsedModel ?? undefined;
-	const variant = isUndefined(definition.data.variant)
-		? undefined
-		: modelVariantSchema.safeParse(definition.data.variant);
-	const hasInvalidVariant =
-		!isUndefined(definition.data.variant) &&
-		(isUndefined(model) ||
-			variant?.success !== true ||
-			!isSupportedModelVariant(model, variant.data));
-	if (hasInvalidVariant) {
+	const effort = definition.data.effort;
+	const reasoningMode = definition.data.reasoningMode;
+	const hasInvalidEffort =
+		!isUndefined(effort) &&
+		(isUndefined(model) || !isSupportedModelEffort(model, effort));
+	if (hasInvalidEffort) {
 		return {
 			diagnostic: validationDiagnostic(
 				"invalid-agent",
@@ -463,8 +487,26 @@ const resolveConfiguredAgentEntry = (
 				{
 					code: "custom",
 					message:
-						"Variant requires a configured model and must be supported by its Model Catalog entry",
-					path: ["variant"],
+						'"effort" requires a configured model and must be supported by its Model Catalog entry',
+					path: ["effort"],
+				},
+				snapshot
+			),
+		};
+	}
+	const hasInvalidReasoningMode =
+		!isUndefined(reasoningMode) &&
+		(isUndefined(model) || !isSupportedReasoningMode(model, reasoningMode));
+	if (hasInvalidReasoningMode) {
+		return {
+			diagnostic: validationDiagnostic(
+				"invalid-agent",
+				agentId,
+				{
+					code: "custom",
+					message:
+						'"reasoningMode" requires a configured model and must be supported by its Model Catalog entry',
+					path: ["reasoningMode"],
 				},
 				snapshot
 			),
@@ -488,7 +530,8 @@ const resolveConfiguredAgentEntry = (
 				definition.data.resource_limits ?? defaultResourceProfile,
 			requiresManualApproval: false,
 			role: definition.data.role,
-			...(variant?.success ? { variant: variant.data } : {}),
+			...(isUndefined(effort) ? {} : { effort }),
+			...(isUndefined(reasoningMode) ? {} : { reasoningMode }),
 			visibleCodingTools: configuredAgentVisibleCodingTools,
 		},
 	};
@@ -537,6 +580,39 @@ const collectConfiguredAgents = (
 		}
 	}
 	return resolved;
+};
+
+type InvalidBuiltInChoice = "effort" | "reasoningMode" | "model";
+
+const resolveConfiguredSelection = (
+	patch: z.infer<typeof builtInAgentPatchSchema>
+): {
+	invalidChoice?: InvalidBuiltInChoice;
+	model: ChatModelSelection | undefined;
+} => {
+	const parsedModel = isUndefined(patch.model)
+		? undefined
+		: parseCatalogModelSelection(patch.model);
+	const hasInvalidEffort =
+		!isUndefined(patch.effort) &&
+		(isUndefined(parsedModel) ||
+			isNull(parsedModel) ||
+			!isSupportedModelEffort(parsedModel, patch.effort));
+	if (hasInvalidEffort) {
+		return { invalidChoice: "effort", model: undefined };
+	}
+	const hasInvalidReasoningMode =
+		!isUndefined(patch.reasoningMode) &&
+		(isUndefined(parsedModel) ||
+			isNull(parsedModel) ||
+			!isSupportedReasoningMode(parsedModel, patch.reasoningMode));
+	if (hasInvalidReasoningMode) {
+		return { invalidChoice: "reasoningMode", model: undefined };
+	}
+	if (!isUndefined(patch.model) && isNull(parsedModel)) {
+		return { invalidChoice: "model", model: undefined };
+	}
+	return { model: parsedModel ?? undefined };
 };
 
 const resolveBuiltInAgent = (
@@ -588,20 +664,11 @@ const resolveBuiltInAgent = (
 			requiresManualApproval: true,
 		};
 	}
-	const parsedModel = isUndefined(patch.data.model)
-		? undefined
-		: parseCatalogModelSelection(patch.data.model);
-	const variant = isUndefined(patch.data.variant)
-		? undefined
-		: modelVariantSchema.safeParse(patch.data.variant);
-	const hasInvalidModel = !isUndefined(patch.data.model) && isNull(parsedModel);
-	const hasInvalidVariant =
-		!isUndefined(patch.data.variant) &&
-		(isUndefined(parsedModel) ||
-			isNull(parsedModel) ||
-			variant?.success !== true ||
-			!isSupportedModelVariant(parsedModel, variant.data));
-	if (hasInvalidModel || hasInvalidVariant) {
+	const effort = patch.data.effort;
+	const reasoningMode = patch.data.reasoningMode;
+	const selection = resolveConfiguredSelection(patch.data);
+	if (selection.invalidChoice !== undefined) {
+		const invalidChoice = selection.invalidChoice;
 		diagnostics.push(
 			validationDiagnostic(
 				"invalid-built-in-agent",
@@ -609,8 +676,10 @@ const resolveBuiltInAgent = (
 				{
 					code: "custom",
 					message:
-						"Configured model or variant is not supported by the Model Catalog",
-					path: [hasInvalidModel ? "model" : "variant"],
+						invalidChoice === "model"
+							? "Configured model is not supported by the Model Catalog"
+							: `"${invalidChoice}" requires a configured model and must be supported by its Model Catalog entry`,
+					path: [invalidChoice],
 				},
 				snapshot
 			)
@@ -624,14 +693,15 @@ const resolveBuiltInAgent = (
 			requiresManualApproval: true,
 		};
 	}
-	const model = parsedModel ?? undefined;
+	const model = selection.model;
 	const { modelRetired, ...availability } = modelAvailability(
 		model,
 		options.connectedProviderIds
 	);
 	const {
+		effort: _configuredEffort,
 		model: _configuredModel,
-		variant: _configuredVariant,
+		reasoningMode: _configuredReasoningMode,
 		...validatedPatch
 	} = patch.data;
 	return {
@@ -639,7 +709,8 @@ const resolveBuiltInAgent = (
 		...validatedPatch,
 		...availability,
 		...pickTruthy({ model }),
-		...(variant?.success ? { variant: variant.data } : {}),
+		...(isUndefined(effort) ? {} : { effort }),
+		...(isUndefined(reasoningMode) ? {} : { reasoningMode }),
 		isConfigured: false,
 		isSelectable: !modelRetired,
 		resourceProfile: patch.data.resource_limits ?? defaultResourceProfile,

@@ -155,7 +155,6 @@ describe("skills", () => {
 	test("recognizes the reserved namespace even when the name is malformed", () => {
 		expect(hasSkillNamespace("/skill:review")).toBe(true);
 		expect(hasSkillNamespace("  /SKILL:")).toBe(true);
-		expect(hasSkillNamespace("/skills")).toBe(false);
 		expect(hasSkillNamespace("/review")).toBe(false);
 	});
 });

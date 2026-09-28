@@ -5,9 +5,30 @@ import type {
 	SessionSteeringMessage,
 	SessionWaitingMessage,
 } from "../../../modules/sessions/host/session-rpc";
-import { AGENT_EVENT_TYPES, SESSION_TOOL_PART_TYPES } from "./types";
+import {
+	AGENT_EVENT_TYPES,
+	SESSION_TOOL_PART_TYPES,
+	type Selection,
+} from "./types";
 import { asRecord, safeJson, selectionWire } from "./validation";
 
+const projectSelection = (
+	agentId: Selection["agentId"],
+	model: Selection["model"],
+	effort: Selection["effort"],
+	reasoningMode: Selection["reasoningMode"]
+): Selection => {
+	if (effort !== undefined && reasoningMode !== undefined) {
+		throw new Error("Select either an Effort or a Reasoning Mode, not both.");
+	}
+	if (effort !== undefined) {
+		return { agentId, effort, model };
+	}
+	if (reasoningMode !== undefined) {
+		return { agentId, model, reasoningMode };
+	}
+	return { agentId, model };
+};
 const projectFilePart = (
 	part: Record<string, unknown>
 ): Record<string, unknown> => ({
@@ -130,7 +151,8 @@ export const projectMessage = (message: unknown): unknown => {
 						terminalOutcome: metadata.terminalOutcome,
 						turnId: metadata.joinedTurnId,
 						usage: metadata.usage,
-						variant: metadata.variant,
+						effort: metadata.effort,
+						reasoningMode: metadata.reasoningMode,
 					}),
 		parts,
 		role: record.role,
@@ -471,7 +493,10 @@ export const selectionFromHost = (host: SessionHost): unknown => {
 	return {
 		agentId: selection.agent,
 		model: selection.model,
-		...(selection.variant === undefined ? {} : { variant: selection.variant }),
+		...(selection.effort === undefined ? {} : { effort: selection.effort }),
+		...(selection.reasoningMode === undefined
+			? {}
+			: { reasoningMode: selection.reasoningMode }),
 	};
 };
 
@@ -486,7 +511,10 @@ export const submissionFromWaiting = (
 			selection: {
 				agentId: input.agent,
 				model: input.model,
-				...(input.variant === undefined ? {} : { variant: input.variant }),
+				...(input.effort === undefined ? {} : { effort: input.effort }),
+				...(input.reasoningMode === undefined
+					? {}
+					: { reasoningMode: input.reasoningMode }),
 			},
 			submissionId: queued.submissionId,
 			disposition: "queued",
@@ -501,7 +529,10 @@ export const submissionFromWaiting = (
 		selection: {
 			agentId: input.agent,
 			model: input.model,
-			...(input.variant === undefined ? {} : { variant: input.variant }),
+			...(input.effort === undefined ? {} : { effort: input.effort }),
+			...(input.reasoningMode === undefined
+				? {}
+				: { reasoningMode: input.reasoningMode }),
 		},
 		submissionId: input.submissionId,
 		disposition: "steering",
@@ -518,7 +549,10 @@ export const projectExecution = (
 	startedAt: execution.startedAt,
 	submissionId: execution.submissionId,
 	turnId: execution.turnId,
-	variant: execution.variant,
+	...(execution.effort === undefined ? {} : { effort: execution.effort }),
+	...(execution.reasoningMode === undefined
+		? {}
+		: { reasoningMode: execution.reasoningMode }),
 });
 
 export const projectApproval = (
@@ -540,31 +574,32 @@ export const projectSteering = (
 	message: SessionSnapshot["steeringMessages"][number]
 ): Record<string, unknown> => ({
 	messageId: message.input.messageId,
-	selection: selectionWire({
-		agentId: message.input.agent,
-		model: message.input.model,
-		...(message.input.variant === undefined
-			? {}
-			: { variant: message.input.variant }),
-	}),
+	selection: selectionWire(
+		projectSelection(
+			message.input.agent,
+			message.input.model,
+			message.input.effort,
+			message.input.reasoningMode
+		)
+	),
 	submissionId: message.input.submissionId,
 	text: message.input.text,
 	...(message.input.turnId === undefined
 		? {}
 		: { turnId: message.input.turnId }),
 });
-
 export const projectQueued = (
 	submission: SessionSnapshot["queuedSubmissions"][number]
 ): Record<string, unknown> => ({
 	messageId: submission.messageId,
-	selection: selectionWire({
-		agentId: submission.input.agent,
-		model: submission.input.model,
-		...(submission.input.variant === undefined
-			? {}
-			: { variant: submission.input.variant }),
-	}),
+	selection: selectionWire(
+		projectSelection(
+			submission.input.agent,
+			submission.input.model,
+			submission.input.effort,
+			submission.input.reasoningMode
+		)
+	),
 	submissionId: submission.submissionId,
 	text: submission.input.userText ?? submission.input.composition?.text ?? "",
 	...(submission.input.turnId === undefined

@@ -1,12 +1,23 @@
 import type { CustomCommandSpec } from "@/modules/custom-commands/types";
-import { SKILL_NAMESPACE_PREFIX, type Skill } from "@/modules/skills";
+import {
+	getSkillSearchText,
+	SKILL_NAMESPACE_PREFIX,
+	type Skill,
+} from "@/modules/skills";
 import { fuzzyMatch } from "@/shared/fuzzy";
 import type { BaseSpec, CommandSpec } from "./commands";
 
-/** A discovered Skill offered as a row under the reserved `skill:` namespace. */
+/** A discovered Skill offered under the reserved `skill:` namespace. */
 export type SkillCommandSpec = BaseSpec & { kind: "skill" };
 
-export type CommandItem = CommandSpec | CustomCommandSpec | SkillCommandSpec;
+/** A single slash suggestion that enters the Skill namespace search. */
+export type SkillSearchCommandSpec = BaseSpec & { kind: "skill-search" };
+
+export type CommandItem =
+	| CommandSpec
+	| CustomCommandSpec
+	| SkillCommandSpec
+	| SkillSearchCommandSpec;
 
 const skillLabel = (name: string): string => `${SKILL_NAMESPACE_PREFIX}${name}`;
 
@@ -34,9 +45,18 @@ export const createSkillCommandSpecs = (
 		}))
 		.toSorted((left, right) => left.name.localeCompare(right.name));
 
+export const createSkillSearchCommandSpec = (
+	skillCount: number
+): SkillSearchCommandSpec => ({
+	description: `${skillCount} ${skillCount === 1 ? "skill" : "skills"}`,
+	kind: "skill-search",
+	name: SKILL_NAMESPACE_PREFIX,
+	value: `/${SKILL_NAMESPACE_PREFIX}`,
+});
+
 /**
- * Commands match by label prefix. Skills also use fuzzy matching on their bare
- * names, with an optional namespace prefix in the query.
+ * Commands match by label prefix. Skills fuzzy-match names and descriptions,
+ * with or without the `skill:` namespace in the query.
  */
 const matchesCommandQuery = (item: CommandItem, query: string): boolean => {
 	const normalized = query.toLowerCase();
@@ -51,7 +71,7 @@ const matchesCommandQuery = (item: CommandItem, query: string): boolean => {
 	const skillQuery = normalized.startsWith(SKILL_NAMESPACE_PREFIX)
 		? normalized.slice(SKILL_NAMESPACE_PREFIX.length)
 		: normalized;
-	return fuzzyMatch(skillQuery, item.name).matches;
+	return fuzzyMatch(skillQuery, getSkillSearchText(item)).matches;
 };
 
 export const filterCommandItems = (

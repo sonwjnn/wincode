@@ -223,18 +223,20 @@ export const createRpcRequestHandler = (
 			const message = activeRuntime.createSessionUserMessage(text, {
 				agent: selection.agentId as SessionSendInput["agent"],
 				model: selection.model,
-				...(selection.variant === undefined
+				...(selection.effort === undefined ? {} : { effort: selection.effort }),
+				...(selection.reasoningMode === undefined
 					? {}
-					: { variant: selection.variant }),
+					: { reasoningMode: selection.reasoningMode }),
 			});
 			const created = await store.createSession({
 				agent: selection.agentId as SessionSendInput["agent"],
 				message,
 				model: selection.model,
 				turnId,
-				...(selection.variant === undefined
+				...(selection.effort === undefined ? {} : { effort: selection.effort }),
+				...(selection.reasoningMode === undefined
 					? {}
-					: { variant: selection.variant }),
+					: { reasoningMode: selection.reasoningMode }),
 			});
 			const createdId = activeRuntime.toSessionId(String(created.id));
 			let createdHost: SessionHost | undefined;
@@ -413,9 +415,12 @@ export const createRpcRequestHandler = (
 							return parseSelection({
 								agentId: active.agent,
 								model: active.model,
-								...(active.variant === undefined
+								...(active.effort === undefined
 									? {}
-									: { variant: active.variant }),
+									: { effort: active.effort }),
+								...(active.reasoningMode === undefined
+									? {}
+									: { reasoningMode: active.reasoningMode }),
 							});
 						})()
 					: await parseSelection(params.selection);

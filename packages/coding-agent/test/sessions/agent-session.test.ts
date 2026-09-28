@@ -1,7 +1,11 @@
 import { expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
 import type { SessionMessageId, SessionRecord } from "@wincode/agent-core";
-import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import type {
+	ChatModelSelection,
+	Effort,
+	ReasoningMode,
+} from "@wincode/ai/models";
 import { logger } from "@wincode/runtime-utils";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import { createSessionCompaction } from "@/modules/sessions/compaction/compaction";
@@ -842,7 +846,8 @@ const createQueuedRuntime = ({
 	/** The Model Target selection each started turn ran with, in start order. */
 	readonly targets: Array<{
 		model: ChatModelSelection;
-		variant: ModelVariant | undefined;
+		effort: Effort | undefined;
+		reasoningMode: ReasoningMode | undefined;
 	}>;
 } => {
 	const boundaries: Array<{
@@ -853,7 +858,8 @@ const createQueuedRuntime = ({
 	const prompts: string[] = [];
 	const targets: Array<{
 		model: ChatModelSelection;
-		variant: ModelVariant | undefined;
+		effort: Effort | undefined;
+		reasoningMode: ReasoningMode | undefined;
 	}> = [];
 	const startWaiters: Array<{ count: number; resolve: () => void }> = [];
 	let startedCount = 0;
@@ -886,7 +892,11 @@ const createQueuedRuntime = ({
 			requestOverheadTokens: () => 0,
 			run: async ({ callbacks, execution, messages, takeSteeringMessages }) => {
 				prompts.push(promptOfTurn(messages));
-				targets.push({ model: execution.model, variant: execution.variant });
+				targets.push({
+					model: execution.model,
+					effort: execution.effort,
+					reasoningMode: execution.reasoningMode,
+				});
 				startedCount += 1;
 				settleReached(startWaiters, startedCount);
 				const gate = Promise.withResolvers<void>();
@@ -1252,7 +1262,11 @@ test("continue resumes the last user context without appending another prompt", 
 
 	expect(runtime.prompts).toEqual(["continue me"]);
 	expect(runtime.targets).toEqual([
-		{ model: refreshedModel, variant: undefined },
+		{
+			model: refreshedModel,
+			effort: undefined,
+			reasoningMode: undefined,
+		},
 	]);
 	expect(resolvedInputs).toHaveLength(1);
 	expect(
@@ -2034,7 +2048,9 @@ test("keeps the Model Target of the turn a Steering Message joined", async () =>
 
 	// The turn ran on its own Model Target, and the delivered message records
 	// that same one rather than the composer's newer selection.
-	expect(runtime.targets).toEqual([{ model, variant: undefined }]);
+	expect(runtime.targets).toEqual([
+		{ model, effort: undefined, reasoningMode: undefined },
+	]);
 	expect(commits[1]?.messages[0]?.metadata?.model).toEqual(model);
 });
 
@@ -2087,8 +2103,8 @@ test("keeps a Steering Message that fell back on the Model Target it was accepte
 	// The fallback runs as a submission of its own, so it keeps the selection it
 	// was accepted with rather than inheriting the turn it could not join.
 	expect(runtime.targets).toEqual([
-		{ model, variant: undefined },
-		{ model: otherModel, variant: undefined },
+		{ model, effort: undefined, reasoningMode: undefined },
+		{ model: otherModel, effort: undefined, reasoningMode: undefined },
 	]);
 	runtime.release();
 	await first;
@@ -2218,7 +2234,9 @@ test("runs a queued submission with the Model Target selection it was accepted w
 	await runtime.started(1);
 	// The selection the submission was accepted with is the one that runs, even
 	// though the session's own selection could change while it waits.
-	expect(runtime.targets).toEqual([{ model: queuedModel, variant: undefined }]);
+	expect(runtime.targets).toEqual([
+		{ model: queuedModel, effort: undefined, reasoningMode: undefined },
+	]);
 
 	runtime.release();
 });

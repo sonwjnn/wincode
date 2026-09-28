@@ -27,6 +27,7 @@ export {
 } from "./filesystem";
 export * from "./frontmatter";
 export * from "./invocation";
+export * from "./search-text";
 export * from "./types";
 
 export async function discoverSkills(

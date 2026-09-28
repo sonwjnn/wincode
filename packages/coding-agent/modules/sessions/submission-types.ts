@@ -4,7 +4,11 @@ import type {
 	AgentTurnId,
 	SessionMessageId,
 } from "@wincode/agent-core";
-import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import type {
+	ChatModelSelection,
+	Effort,
+	ReasoningMode,
+} from "@wincode/ai/models";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import type { SkillContext } from "@/modules/skills";
 import type { SubmissionId } from "@/shared/identifiers";
@@ -34,9 +38,11 @@ export type SessionSendInput = Readonly<{
 	/** A reserved user-message identity for a new Submission. */
 	reservedMessageId?: SessionMessageId;
 	sessionModel: ChatModelSelection;
-	sessionVariant?: ModelVariant;
+	sessionEffort?: Effort;
+	sessionReasoningMode?: ReasoningMode;
 	model: ChatModelSelection;
-	variant?: ModelVariant;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
 	resolvedAgent?: SessionResolvedAgent;
 	/** Correlation for an internally delegated Subagent execution. */
 	delegation?: AgentTurnDelegation;

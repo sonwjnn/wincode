@@ -33,7 +33,7 @@ const snapshot = (sources: ConfigSource[]): ConfigSnapshot => ({
 });
 
 describe("resolveAgentPermission effective rules", () => {
-	test("seeds defaults and shipped Agent restrictions with no sources", () => {
+	test("seeds defaults with no sources", () => {
 		const build = resolveRules(snapshot([]), "build");
 		expect(build.edit).toBe("allow");
 		expect(build.read).toEqual({
@@ -41,21 +41,6 @@ describe("resolveAgentPermission effective rules", () => {
 			".env.*": "ask",
 			".env.example": "allow",
 		});
-
-		const plan = resolveRules(snapshot([]), "plan");
-		expect(plan.edit).toBe("deny");
-	});
-
-	test("a valid higher policy overrides the shipped Plan edit restriction", () => {
-		const rules = resolveRules(
-			snapshot([
-				source("/w/wincode.json", {
-					agents: { plan: { permission: { edit: "allow" } } },
-				}),
-			]),
-			"plan"
-		);
-		expect(rules.edit).toBe("allow");
 	});
 
 	test("higher precedence sources win over lower ones", () => {

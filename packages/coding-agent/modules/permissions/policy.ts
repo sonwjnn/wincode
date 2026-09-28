@@ -168,28 +168,6 @@ export const DEFAULT_PERMISSION_RULES: PermissionRules = {
 	external_directory: "ask",
 };
 
-/**
- * Shipped per-Agent Permission restrictions applied at the defaults layer, below
- * every config source. Plan denies `edit`, which also hides the write and edit
- * tools, denies `shell`, which hides command execution, and denies every MCP
- * tool through the `*` action glob, until a valid higher policy explicitly
- * overrides either restriction.
- *
- * The `*` deny only reaches MCP tools: static coding-tool gating consults the
- * exact `STATIC_TOOL_PERMISSION_ACTIONS` keys and never honors an action glob, so
- * Plan keeps its read, glob, and grep tools while every discovered MCP tool
- * is denied unless a higher layer re-allows a specific logical name.
- */
-export const SHIPPED_AGENT_PERMISSION_RULES: Readonly<
-	Record<string, PermissionRules>
-> = {
-	plan: { edit: "deny", shell: "deny", "*": "deny" } as PermissionRules,
-};
-
-/** Resolves the shipped defaults-layer Permission rules for an Agent id. */
-export const shippedAgentPermissionRules = (agentId: string): PermissionRules =>
-	SHIPPED_AGENT_PERMISSION_RULES[agentId] ?? {};
-
 const isResourceMap = (
 	value: PermissionDecision | PermissionResourceRules | undefined
 ): value is PermissionResourceRules => isPlainObject(value);

@@ -336,7 +336,8 @@ const toSessionCompaction = (row: CompactionRow): SessionCompaction => {
 		sequence: row.sequence,
 		sessionId: toSessionId(row.sessionId),
 		summarizationModel,
-		summarizationVariant: row.summarizationVariant ?? undefined,
+		summarizationEffort: row.summarizationEffort ?? undefined,
+		summarizationReasoningMode: row.summarizationReasoningMode ?? undefined,
 		summarizationUsage: row.summarizationUsageJson ?? undefined,
 		summary,
 		throughMessageUiId: toSessionMessageId(row.throughMessageUiId),
@@ -400,19 +401,23 @@ const toSession = (row: SessionRow): Session => {
 		createdAt: row.createdAt,
 		id: toSessionId(row.id),
 		lastMessageAt: row.lastMessageAt ?? null,
-		...omitUndefined({ model: parsedModel?.data }),
 		pinned: row.pinned,
 		title: row.title ?? UNTITLED_SESSION_TITLE,
-		...pickTruthy({ variant: row.variant ?? undefined }),
+		...omitUndefined({
+			model: parsedModel?.data,
+			effort: row.effort ?? undefined,
+			reasoningMode: row.reasoningMode ?? undefined,
+		}),
 	};
 };
 const toSessionRecordModel = (
 	model: Pick<SessionRecord["model"], "modelId" | "providerId">,
-	variant: SessionRecord["model"]["variant"]
+	effort: SessionRecord["model"]["effort"],
+	reasoningMode: SessionRecord["model"]["reasoningMode"]
 ): SessionRecord["model"] => ({
 	modelId: model.modelId,
 	providerId: model.providerId,
-	...omitUndefined({ variant }),
+	...omitUndefined({ effort, reasoningMode }),
 });
 const toSessionRecord = (row: SessionRecordRow): SessionRecord => {
 	let delegation: SessionRecord["delegation"];
@@ -509,7 +514,8 @@ const appendCompaction = (
 			createdAt,
 			firstKeptAssistantPartIndex: input.firstKeptAssistantPartIndex ?? null,
 			firstKeptUiMessageId: input.firstKeptUiMessageId,
-			summarizationVariant: input.summarizationVariant ?? null,
+			summarizationEffort: input.summarizationEffort ?? null,
+			summarizationReasoningMode: input.summarizationReasoningMode ?? null,
 			focus: input.focus ?? null,
 			id,
 			priorCompactionId: input.priorCompactionId ?? null,
@@ -530,7 +536,13 @@ const appendCompaction = (
 const writeSessionRecordCheckpoint = (
 	db: SessionDatabase,
 	workspaceId: WorkspaceId,
-	{ sessionModel, sessionVariant, record, sessionId }: CommitSessionRecordInput
+	{
+		sessionModel,
+		sessionEffort,
+		sessionReasoningMode,
+		record,
+		sessionId,
+	}: CommitSessionRecordInput
 ): void => {
 	const validationError = getSessionRecordValidationError(record);
 	if (!isNull(validationError)) {
@@ -540,7 +552,11 @@ const writeSessionRecordCheckpoint = (
 		);
 	}
 	const modelJson = serializeJson(
-		toSessionRecordModel(record.model, record.model.variant)
+		toSessionRecordModel(
+			record.model,
+			record.model.effort,
+			record.model.reasoningMode
+		)
 	);
 	db.transaction((tx) => {
 		const sessionRow = tx
@@ -584,7 +600,8 @@ const writeSessionRecordCheckpoint = (
 					? {}
 					: {
 							modelJson: serializeJson(sessionModel),
-							variant: sessionVariant ?? null,
+							effort: sessionEffort ?? null,
+							reasoningMode: sessionReasoningMode ?? null,
 						}),
 				updatedAt: now,
 			})
@@ -720,7 +737,8 @@ export const createDrizzleSessionStore = (
 			message,
 			model,
 			turnId,
-			variant,
+			effort,
+			reasoningMode,
 		}: CreateSessionInput) => {
 			const durableMessage = toDurableSessionMessageRecord(message);
 			if (isUndefined(durableMessage) || durableMessage.role !== "user") {
@@ -728,9 +746,14 @@ export const createDrizzleSessionStore = (
 			}
 			const id = createSessionId();
 			const now = new Date();
+			const hasMessageChoice = !(
+				isUndefined(message.metadata?.effort) &&
+				isUndefined(message.metadata?.reasoningMode)
+			);
 			const recordModel = toSessionRecordModel(
 				message.metadata?.model ?? model,
-				message.metadata?.variant ?? variant
+				hasMessageChoice ? message.metadata?.effort : effort,
+				hasMessageChoice ? message.metadata?.reasoningMode : reasoningMode
 			);
 
 			db.transaction((tx) => {
@@ -743,7 +766,8 @@ export const createDrizzleSessionStore = (
 						pinned: false,
 						title: deriveSessionTitle([message]),
 						updatedAt: now,
-						variant,
+						effort,
+						reasoningMode,
 						workspaceId: workspace.id,
 					})
 					.run();
@@ -845,13 +869,15 @@ export const createDrizzleSessionStore = (
 
 		commitSessionRecord: async ({
 			sessionModel,
-			sessionVariant,
+			sessionEffort,
+			sessionReasoningMode,
 			record,
 			sessionId,
 		}) => {
 			writeSessionRecordCheckpoint(db, workspace.id, {
 				sessionModel,
-				sessionVariant,
+				sessionEffort,
+				sessionReasoningMode,
 				record,
 				sessionId,
 			});

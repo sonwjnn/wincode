@@ -10,6 +10,7 @@ import type { Connections } from "@wincode/ai/connections";
 import type { ModelTarget } from "@wincode/ai/model";
 import { isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import {
+	type AgentCallSelection,
 	type PreparedAgentCall,
 	prepareAgentCall,
 } from "@/modules/agents/agent-call";
@@ -235,7 +236,8 @@ export const createDelegationExecutor = (
 		let started: TurnExecution | undefined;
 		let selectedAgent = request.agent;
 		let selectedModel = execution.model;
-		let selectedVariant = execution.variant;
+		let selectedEffort = execution.effort;
+		let selectedReasoningMode = execution.reasoningMode;
 		let userCommitted = false;
 		let userCommitAttempted = false;
 		let terminalObserved = false;
@@ -249,7 +251,8 @@ export const createDelegationExecutor = (
 					message: userMessage,
 					model: selectedModel,
 					turnId,
-					variant: selectedVariant,
+					effort: selectedEffort,
+					reasoningMode: selectedReasoningMode,
 				}),
 				sessionId,
 			});
@@ -276,18 +279,30 @@ export const createDelegationExecutor = (
 			if (isUndefined(target)) {
 				throw new Error(`Delegation target '${request.agent}' is unavailable.`);
 			}
-			const prepared = prepareAgentCall(
-				registry,
-				{
+			let agentCallSelection: AgentCallSelection = {
+				agent: target.id,
+				model: execution.model,
+			};
+			if (execution.effort !== undefined) {
+				agentCallSelection = {
+					agent: target.id,
+					effort: execution.effort,
+					model: execution.model,
+				};
+			} else if (execution.reasoningMode !== undefined) {
+				agentCallSelection = {
 					agent: target.id,
 					model: execution.model,
-					variant: execution.variant,
-				},
-				{ allowSubagent: true }
-			);
+					reasoningMode: execution.reasoningMode,
+				};
+			}
+			const prepared = prepareAgentCall(registry, agentCallSelection, {
+				allowSubagent: true,
+			});
 			selectedAgent = prepared.agent;
 			selectedModel = prepared.model;
-			selectedVariant = prepared.variant;
+			selectedEffort = prepared.effort;
+			selectedReasoningMode = prepared.reasoningMode;
 			const beginInput: BeginTurnExecutionInput = {
 				agent: prepared.agent,
 				childAborts: execution.childAborts,
@@ -299,8 +314,10 @@ export const createDelegationExecutor = (
 				startedAt: Date.now(),
 				turnId,
 				...omitUndefined({
-					sessionVariant: execution.sessionVariant,
-					variant: selectedVariant,
+					sessionEffort: execution.sessionEffort,
+					sessionReasoningMode: execution.sessionReasoningMode,
+					effort: selectedEffort,
+					reasoningMode: selectedReasoningMode,
 				}),
 			};
 			assertOpen();
@@ -324,15 +341,30 @@ export const createDelegationExecutor = (
 
 		try {
 			const { child, childTooling, prepared } = await startChild();
-			const modelTarget = await resolveChatModelTarget(
-				prepared.model,
-				connections,
-				{
-					allowRetired: true,
-					signal: childSignal,
-					...omitUndefined({ variant: prepared.variant }),
-				}
-			);
+			let modelTarget: ModelTarget;
+			const targetOptions = {
+				allowRetired: true,
+				signal: childSignal,
+			};
+			if (prepared.effort !== undefined) {
+				modelTarget = await resolveChatModelTarget(
+					prepared.model,
+					connections,
+					{ ...targetOptions, effort: prepared.effort }
+				);
+			} else if (prepared.reasoningMode === undefined) {
+				modelTarget = await resolveChatModelTarget(
+					prepared.model,
+					connections,
+					targetOptions
+				);
+			} else {
+				modelTarget = await resolveChatModelTarget(
+					prepared.model,
+					connections,
+					{ ...targetOptions, reasoningMode: prepared.reasoningMode }
+				);
+			}
 			const mcpPolicy = await resolveMcpPolicyForAgent(prepared.agent);
 			snapshot = await mcp.createSnapshot(prepared.agent, mcpPolicy, false);
 			child.mcpSnapshot = snapshot;
@@ -393,7 +425,8 @@ export const createDelegationExecutor = (
 						model: selectedModel,
 						sourceUserMessageId: userMessage.id,
 						turnId,
-						variant: selectedVariant,
+						effort: selectedEffort,
+						reasoningMode: selectedReasoningMode,
 					}),
 					sessionId,
 				}).catch(() => undefined);

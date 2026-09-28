@@ -5,16 +5,8 @@
 
 import { z } from "zod";
 
-/**
- * The closed set of reasoning-level identifiers Wincode can persist and send.
- * A Model Catalog entry supports a subset of these; `"thinking"` exists for
- * models that expose only an on/off switch. `models.ts` re-exports this as the
- * `ModelVariant` type, and the metadata generator filters upstream effort
- * values against it.
- */
-export const modelVariantIds = [
-	"none",
-	"thinking",
+/** Stable Effort identifiers Wincode can persist and send. */
+export const effortIds = [
 	"minimal",
 	"low",
 	"medium",
@@ -22,28 +14,38 @@ export const modelVariantIds = [
 	"xhigh",
 	"max",
 ] as const;
-export type ModelVariant = (typeof modelVariantIds)[number];
+export type Effort = (typeof effortIds)[number];
+
+/** Non-effort reasoning controls; availability is declared per model. */
+export const reasoningModeIds = ["none", "thinking"] as const;
+export type ReasoningMode = (typeof reasoningModeIds)[number];
+
+export const effortSchema = z.enum(effortIds);
+export const reasoningModeSchema = z.enum(reasoningModeIds);
+
+export type ReasoningSelection = Readonly<
+	| { effort: Effort; reasoningMode?: never }
+	| { effort?: never; reasoningMode: ReasoningMode }
+	| { effort?: never; reasoningMode?: never }
+>;
 
 /**
  * How a model expresses reasoning, normalized from models.dev
- * `reasoning_options[]`. The two axes are independent, not alternatives:
- * `claude-sonnet-5` carries both `toggle` and `effort`, so a model can be
- * switchable *and* levelled, and its `"none"` level means the same thing as
- * the toggle's off state. Four Anthropic models carry budget bounds with no
- * level ladder at all.
+ * `reasoning_options[]`. The source may publish an Effort ladder, a toggle, and
+ * budget bounds independently. A toggle supplies Modes; Efforts remain named
+ * ladder entries, and budget-only models keep their derived automatic budget.
  */
 export type ModelThinkingPolicy = Readonly<{
-	/** The model exposes an on/off switch, i.e. `"none"` is a legal level. */
+	/** The model exposes an on/off switch that can provide Reasoning Modes. */
 	toggle?: true;
-	/** The level ladder, when the source publishes one (`effort.values`). */
-	levels?: readonly ModelVariant[];
+	/** The named Effort ladder published by the model's source. */
+	levels?: readonly Effort[];
 	/** Reasoning budget bounds (`budget_tokens.min` / `.max`). */
 	budgetMin?: number;
 	budgetMax?: number;
 	/**
-	 * The model is budget-bounded with no ladder and no switch, so there is
-	 * nothing for a user to pick: it reasons within a derived budget. Such a
-	 * model offers no selectable level at all.
+	 * The model has a budget but no Effort ladder or toggle. Its budget is
+	 * derived automatically and offers no selectable reasoning choice.
 	 */
 	unlevelled?: true;
 }>;
@@ -100,7 +102,7 @@ const modelThinkingPolicySchema = z
 	.object({
 		budgetMax: z.number().int().nonnegative().optional(),
 		budgetMin: z.number().int().nonnegative().optional(),
-		levels: z.array(z.enum(modelVariantIds)).optional(),
+		levels: z.array(effortSchema).optional(),
 		toggle: z.literal(true).optional(),
 		unlevelled: z.literal(true).optional(),
 	})

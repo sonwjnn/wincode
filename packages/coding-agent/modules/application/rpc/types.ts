@@ -1,7 +1,11 @@
 import type {
+	Effort,
+	ReasoningMode,
+	ReasoningSelection,
+} from "@wincode/ai/models";
+import type {
 	AgentTurnId,
 	ChatModelSelection,
-	ModelVariant,
 	SessionCapabilities,
 	SessionCapabilitiesAssembly,
 	SessionHost,
@@ -86,8 +90,8 @@ export type RpcRunnerOptions = Readonly<{
 export type Selection = Readonly<{
 	agentId: string;
 	model: ChatModelSelection;
-	variant?: ModelVariant;
-}>;
+}> &
+	ReasoningSelection;
 
 export type RuntimeModules = Readonly<{
 	createAgentTurnId: () => AgentTurnId;
@@ -108,13 +112,25 @@ export type RuntimeModules = Readonly<{
 			data?: ChatModelSelection;
 		};
 	};
-	normalizeModelVariant: (
+	effortSchema: {
+		safeParse: (value: unknown) => {
+			success: boolean;
+			data?: Effort;
+		};
+	};
+	reasoningModeSchema: {
+		safeParse: (value: unknown) => {
+			success: boolean;
+			data?: ReasoningMode;
+		};
+	};
+	isSupportedModelEffort: (
 		selection: ChatModelSelection,
-		variant: ModelVariant | undefined
-	) => ModelVariant | undefined;
-	isSupportedModelVariant: (
+		effort: Effort
+	) => boolean;
+	isSupportedReasoningMode: (
 		selection: ChatModelSelection,
-		variant: ModelVariant
+		reasoningMode: ReasoningMode
 	) => boolean;
 	resolveWorkspaceRoot: (start: string) => string;
 	toSessionId: (value: string) => SessionId;

@@ -15,11 +15,14 @@ import {
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import {
 	type ChatModelSelection,
+	type Effort,
+	effortSchema,
 	findSupportedChatModelSelection,
-	getSupportedModelVariants,
-	type ModelVariant,
+	getSupportedModelEfforts,
+	getSupportedReasoningModes,
 	modelSelectionSchema,
-	modelVariantSchema,
+	type ReasoningMode,
+	reasoningModeSchema,
 } from "@wincode/ai/models";
 import {
 	isArray,
@@ -164,7 +167,8 @@ export type SessionMessageMetadata = {
 	readonly sourceUserMessageId?: SessionMessageId;
 	readonly terminalOutcome?: SessionMessageTerminalOutcome;
 	readonly usage?: SessionMessageUsage;
-	readonly variant?: ModelVariant;
+	readonly effort?: Effort;
+	readonly reasoningMode?: ReasoningMode;
 };
 
 export type SessionMessage = ReadonlyDeep<{
@@ -214,11 +218,29 @@ export const sessionMessageMetadataSchema = z
 			.optional(),
 		terminalOutcome: z.enum(["cancelled", "failed", "interrupted"]).optional(),
 		usage: sessionMessageUsageSchema.optional(),
-		variant: modelVariantSchema.optional(),
+		effort: effortSchema.optional(),
+		reasoningMode: reasoningModeSchema.optional(),
 	})
 	.strict()
 	.superRefine((metadata, context) => {
+		if (
+			!(isUndefined(metadata.effort) || isUndefined(metadata.reasoningMode))
+		) {
+			context.addIssue({
+				code: "custom",
+				message: "Select either Effort or Reasoning Mode, not both",
+			});
+			return;
+		}
 		if (isUndefined(metadata.model)) {
+			if (
+				!(isUndefined(metadata.effort) && isUndefined(metadata.reasoningMode))
+			) {
+				context.addIssue({
+					code: "custom",
+					message: "Reasoning choice requires a model selection",
+				});
+			}
 			return;
 		}
 		const model = metadata.model;
@@ -231,13 +253,24 @@ export const sessionMessageMetadataSchema = z
 		}
 		if (
 			!(
-				isUndefined(metadata.variant) ||
-				getSupportedModelVariants(model).includes(metadata.variant)
+				isUndefined(metadata.effort) ||
+				getSupportedModelEfforts(model).includes(metadata.effort)
 			)
 		) {
 			context.addIssue({
 				code: "custom",
-				message: "Variant is not supported for selected model",
+				message: "Effort is not supported for selected model",
+			});
+		}
+		if (
+			!(
+				isUndefined(metadata.reasoningMode) ||
+				getSupportedReasoningModes(model).includes(metadata.reasoningMode)
+			)
+		) {
+			context.addIssue({
+				code: "custom",
+				message: "Reasoning Mode is not supported for selected model",
 			});
 		}
 	});

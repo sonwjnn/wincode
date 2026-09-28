@@ -33,9 +33,10 @@ export const resolveTurnMetadataSignature = (
 		modelKey = `${metadata.model.providerId}/${metadata.model.modelId}`;
 	}
 	const interrupted = metadata.interrupted === true ? "1" : "0";
-	const variant = metadata.variant ?? "";
+	const effort = metadata.effort ?? "";
+	const reasoningMode = metadata.reasoningMode ?? "";
 
-	return `${agent}|${modelKey}|${variant}|${interrupted}`;
+	return `${agent}|${modelKey}|${effort}|${reasoningMode}|${interrupted}`;
 };
 
 const resolveTurnMetadataMessage = (
@@ -66,10 +67,11 @@ const resolveTurnFooterMessage = (
 		return current;
 	}
 
-	const next = resolveTurnMetadataMessage(nextTurn);
+	const nextMetadataMessage = resolveTurnMetadataMessage(nextTurn);
 	if (
-		!next ||
-		resolveTurnMetadataSignature(current) !== resolveTurnMetadataSignature(next)
+		!nextMetadataMessage ||
+		resolveTurnMetadataSignature(current) !==
+			resolveTurnMetadataSignature(nextMetadataMessage)
 	) {
 		return current;
 	}

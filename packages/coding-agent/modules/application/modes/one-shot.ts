@@ -7,14 +7,19 @@ import {
 import type { Connections } from "@wincode/ai/connections";
 import {
 	type ChatModelSelection,
+	createReasoningSelection,
 	defaultChatModelSelection,
+	type Effort,
 	findSupportedChatModel,
 	findSupportedChatModelSelection,
 	isActiveChatModel,
-	type ModelVariant,
 	modelSelectionSchema,
-	normalizeModelVariant,
+	normalizeModelEffort,
+	normalizeReasoningMode,
+	normalizeReasoningSelection,
 	parseCatalogModelSelection,
+	type ReasoningMode,
+	type ReasoningSelection,
 } from "@wincode/ai/models";
 import { getErrorMessage } from "@wincode/runtime-utils";
 import { resolveWorkspaceRoot } from "@/modules/tools";
@@ -28,7 +33,7 @@ import type { SessionMessage } from "../../../modules/sessions/message";
 import { createSessionUserMessage } from "../../../modules/sessions/message";
 import type { ResolvedSessionSelection } from "../../../modules/sessions/selection";
 import type { SessionSendInput } from "../../../modules/sessions/submission-types";
-import { toSessionId } from "../../../shared/identifiers";
+import { type SessionId, toSessionId } from "../../../shared/identifiers";
 import { projectAgentEvent } from "../rpc/projection";
 import type { ApplicationContext } from "./types";
 import { InvocationError } from "./types";
@@ -51,15 +56,15 @@ type ResolvedSelection = Readonly<{
 	agent: AgentId;
 	model: ChatModelSelection;
 	resolvedAgent?: SessionSendInput["resolvedAgent"];
-	variant?: ModelVariant;
-}>;
+}> &
+	ReasoningSelection;
 
 type OneShotResult = Readonly<{
 	terminalFailureMessage?: string;
 	terminalSucceeded: boolean;
 }>;
 
-const DEFAULT_THINKING_LEVEL = "low";
+const DEFAULT_EFFORT = "low";
 
 const decodeInput = async (
 	input: ApplicationContext["stdin"]
@@ -180,30 +185,49 @@ const resolvedAgentFor = (
 				visibleCodingTools: [...candidate.visibleCodingTools],
 			};
 
-const resolveVariant = (
+const resolveExplicitEffort = (
 	model: ChatModelSelection,
-	value: string | undefined,
-	explicit: boolean
-): ModelVariant | undefined => {
-	const variant = normalizeModelVariant(model, value);
-	if (explicit && value !== undefined && variant === undefined) {
-		throw new InvocationError(`Invalid Thinking Level selector: ${value}`);
+	value: string
+): Effort => {
+	const effort = normalizeModelEffort(model, value);
+	if (effort === undefined) {
+		throw new InvocationError(`Invalid --effort value: ${value}`);
 	}
-	return variant;
+	return effort;
 };
+
+const resolveExplicitReasoningMode = (
+	model: ChatModelSelection,
+	value: string
+): ReasoningMode => {
+	const reasoningMode = normalizeReasoningMode(model, value);
+	if (reasoningMode === undefined) {
+		throw new InvocationError(`Invalid --reasoning-mode value: ${value}`);
+	}
+	return reasoningMode;
+};
+
 const resolveSelection = ({
 	agentOption,
+	effortOption,
 	modelOption,
 	restored,
 	registry,
-	thinkingOption,
+	reasoningModeOption,
 }: {
 	agentOption: string | undefined;
+	effortOption: string | undefined;
 	modelOption: string | undefined;
 	registry: AgentRegistry | null;
 	restored: ResolvedSessionSelection | null;
-	thinkingOption: string | undefined;
+	reasoningModeOption: string | undefined;
 }): ResolvedSelection => {
+	if (effortOption !== undefined && reasoningModeOption !== undefined) {
+		throw new InvocationError(
+			"Use either --effort or --reasoning-mode, not both.",
+			2
+		);
+	}
 	const explicitAgent = parseAgent(agentOption);
 	const explicitModel = parseModel(modelOption);
 	const agent =
@@ -221,21 +245,37 @@ const resolveSelection = ({
 		restored?.model ??
 		candidate?.model ??
 		defaultChatModelSelection;
-	const restoredVariant = restored?.variant;
-	const candidateVariant = candidate?.variant;
-	const variant = resolveVariant(
+	let explicitChoice: ReasoningSelection | undefined;
+	if (effortOption !== undefined) {
+		explicitChoice = createReasoningSelection(
+			resolveExplicitEffort(model, effortOption),
+			undefined
+		);
+	} else if (reasoningModeOption !== undefined) {
+		explicitChoice = createReasoningSelection(
+			undefined,
+			resolveExplicitReasoningMode(model, reasoningModeOption)
+		);
+	}
+	const restoredChoice =
+		restored?.effort === undefined && restored?.reasoningMode === undefined
+			? undefined
+			: createReasoningSelection(restored?.effort, restored?.reasoningMode);
+	const candidateChoice =
+		candidate?.effort === undefined && candidate?.reasoningMode === undefined
+			? undefined
+			: createReasoningSelection(candidate?.effort, candidate?.reasoningMode);
+	const defaultEffort = normalizeModelEffort(model, DEFAULT_EFFORT);
+	const defaultChoice = createReasoningSelection(defaultEffort, undefined);
+	const selection = normalizeReasoningSelection(
 		model,
-		thinkingOption ??
-			restoredVariant ??
-			candidateVariant ??
-			DEFAULT_THINKING_LEVEL,
-		thinkingOption !== undefined
+		explicitChoice ?? restoredChoice ?? candidateChoice ?? defaultChoice
 	);
 	return {
 		agent,
 		model,
 		resolvedAgent: resolvedAgentFor(candidate),
-		...(variant === undefined ? {} : { variant }),
+		...selection,
 	};
 };
 
@@ -261,9 +301,15 @@ const sendInputFor = (
 	model: selection.model,
 	resolvedAgent: selection.resolvedAgent,
 	sessionModel: selection.model,
-	...(selection.variant === undefined
+	...(selection.effort === undefined
 		? {}
-		: { sessionVariant: selection.variant, variant: selection.variant }),
+		: { effort: selection.effort, sessionEffort: selection.effort }),
+	...(selection.reasoningMode === undefined
+		? {}
+		: {
+				reasoningMode: selection.reasoningMode,
+				sessionReasoningMode: selection.reasoningMode,
+			}),
 	...(message === undefined ? { userText: text } : { messageId: message.id }),
 });
 
@@ -272,6 +318,63 @@ const emitJsonEvent = (
 	event: AgentTurnEvent
 ): void => {
 	context.stdout.write(`${JSON.stringify(projectAgentEvent(event))}\n`);
+};
+const initializeOneShotSession = async (
+	context: ApplicationContext,
+	assembly: SessionCapabilitiesAssembly,
+	text: string
+): Promise<{
+	initialMessage: SessionMessage | undefined;
+	sessionId: SessionId;
+}> => {
+	let initialMessage: SessionMessage | undefined;
+	let sessionId =
+		context.invocation.session === undefined
+			? undefined
+			: toSessionId(context.invocation.session);
+	if (sessionId === undefined) {
+		const registry = assembly.capabilities.getRegistry();
+		const selection = resolveSelection({
+			agentOption: context.invocation.agent,
+			effortOption: context.invocation.effort,
+			modelOption: context.invocation.model,
+			registry,
+			restored: null,
+			reasoningModeOption: context.invocation.reasoningMode,
+		});
+		await validateModelAvailability(
+			selection.model,
+			assembly.capabilities.getConnections()
+		);
+		initialMessage = createSessionUserMessage(text, {
+			agent: selection.agent,
+			model: selection.model,
+			...(selection.effort === undefined ? {} : { effort: selection.effort }),
+			...(selection.reasoningMode === undefined
+				? {}
+				: { reasoningMode: selection.reasoningMode }),
+		});
+		const [durableMessage] = await assembly.store.externalizeAttachments(
+			[initialMessage],
+			undefined,
+			{ rejectInvalid: true }
+		);
+		const created = await assembly.store.createSession({
+			agent: selection.agent,
+			message: durableMessage ?? initialMessage,
+			model: selection.model,
+			turnId: createAgentTurnId(),
+			...(selection.effort === undefined ? {} : { effort: selection.effort }),
+			...(selection.reasoningMode === undefined
+				? {}
+				: { reasoningMode: selection.reasoningMode }),
+		});
+		sessionId = created.id;
+	}
+	if (sessionId === undefined) {
+		throw new Error("One-Shot Session creation did not return an ID.");
+	}
+	return { initialMessage, sessionId };
 };
 
 const runOneShot = async (
@@ -295,62 +398,24 @@ const runOneShot = async (
 	let terminalSucceeded = false;
 	let leaseLost = false;
 	try {
-		const selectedSession = context.invocation.session;
-		let initialMessage: SessionMessage | undefined;
-		let sessionId =
-			selectedSession === undefined ? undefined : toSessionId(selectedSession);
-		let restored: ResolvedSessionSelection | null = null;
-		if (sessionId === undefined) {
-			const registry = assembly.capabilities.getRegistry();
-			const selection = resolveSelection({
-				agentOption: context.invocation.agent,
-				modelOption: context.invocation.model,
-				registry,
-				restored: null,
-				thinkingOption: context.invocation.thinking,
-			});
-			await validateModelAvailability(
-				selection.model,
-				assembly.capabilities.getConnections()
-			);
-			initialMessage = createSessionUserMessage(text, {
-				agent: selection.agent,
-				model: selection.model,
-				...(selection.variant === undefined
-					? {}
-					: { variant: selection.variant }),
-			});
-			const [durableMessage] = await assembly.store.externalizeAttachments(
-				[initialMessage],
-				undefined,
-				{ rejectInvalid: true }
-			);
-			const created = await assembly.store.createSession({
-				agent: selection.agent,
-				message: durableMessage ?? initialMessage,
-				model: selection.model,
-				turnId: createAgentTurnId(),
-				...(selection.variant === undefined
-					? {}
-					: { variant: selection.variant }),
-			});
-			sessionId = created.id;
-		}
-		if (sessionId === undefined) {
-			throw new Error("One-Shot Session creation did not return an ID.");
-		}
+		const { initialMessage, sessionId } = await initializeOneShotSession(
+			context,
+			assembly,
+			text
+		);
 		host = await createSessionHost({
 			capabilities: assembly.capabilities,
 			sessionId,
 		});
 		const registry = assembly.capabilities.getRegistry();
-		restored = host.getSelection();
+		const restored = host.getSelection();
 		const selection = resolveSelection({
 			agentOption: context.invocation.agent,
+			effortOption: context.invocation.effort,
 			modelOption: context.invocation.model,
 			registry,
 			restored,
-			thinkingOption: context.invocation.thinking,
+			reasoningModeOption: context.invocation.reasoningMode,
 		});
 		removeFatalListener = host.onFatal((failure) => {
 			if (failure.code === "session_lease_lost") {

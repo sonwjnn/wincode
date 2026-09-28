@@ -8,11 +8,24 @@ import {
 } from "react";
 import { useLatest } from "./use-latest";
 
+function defaultItemHeight<T>(
+	_item: T,
+	_index: number,
+	_items: readonly T[]
+): number {
+	return 1;
+}
+
 export function useSearchableList<T>(
 	items: readonly T[],
 	filterFn: (item: T, query: string) => boolean,
 	initialSelectedIndex = 0,
-	isSelectable: (item: T) => boolean = () => true
+	isSelectable: (item: T) => boolean = () => true,
+	getItemHeight: (
+		item: T,
+		index: number,
+		items: readonly T[]
+	) => number = defaultItemHeight
 ) {
 	const [selectedIndex, setSelectedIndex] = useState(initialSelectedIndex);
 	const [isScrollReady, setIsScrollReady] = useState(false);
@@ -43,34 +56,46 @@ export function useSearchableList<T>(
 	const filtered = searchValue
 		? items.filter((item) => filterFn(item, searchValue))
 		: items.slice();
+
+	let contentHeight = 0;
+	let selectedItemOffset = 0;
+	for (let index = 0; index < filtered.length; index += 1) {
+		const item = filtered[index];
+		if (item === undefined) {
+			continue;
+		}
+		const itemHeight = getItemHeight(item, index, filtered);
+		contentHeight += itemHeight;
+		if (index < selectedIndex) {
+			selectedItemOffset += itemHeight;
+		}
+	}
+
 	const selectableIndices = filtered.flatMap((item, index) =>
 		isSelectable(item) ? [index] : []
 	);
 
-	const scrollSelectedItemIntoCenter = useCallback(
-		(index: number) => {
-			const scrollbox = scrollRef.current;
-			if (!scrollbox) {
-				return false;
-			}
+	const scrollSelectedItemIntoCenter = useCallback(() => {
+		const scrollbox = scrollRef.current;
+		if (!scrollbox) {
+			return false;
+		}
 
-			const viewportHeight = scrollbox.viewport.height;
-			if (viewportHeight <= 0) {
-				return false;
-			}
+		const viewportHeight = scrollbox.viewport.height;
+		if (viewportHeight <= 0) {
+			return false;
+		}
 
-			const centerOffset = Math.floor(viewportHeight / 2);
-			const maxScrollTop = Math.max(0, filtered.length - viewportHeight);
-			const targetScrollTop = Math.min(
-				maxScrollTop,
-				Math.max(0, index - centerOffset)
-			);
+		const centerOffset = Math.floor(viewportHeight / 2);
+		const maxScrollTop = Math.max(0, contentHeight - viewportHeight);
+		const targetScrollTop = Math.min(
+			maxScrollTop,
+			Math.max(0, selectedItemOffset - centerOffset)
+		);
 
-			scrollbox.scrollTo(targetScrollTop);
-			return true;
-		},
-		[filtered.length]
-	);
+		scrollbox.scrollTo(targetScrollTop);
+		return true;
+	}, [contentHeight, selectedItemOffset]);
 
 	useEffect(() => {
 		if (initialSelectedIndexRef.current === initialSelectedIndex) {
@@ -83,24 +108,24 @@ export function useSearchableList<T>(
 	}, [initialSelectedIndex]);
 
 	useLayoutEffect(() => {
-		if (scrollSelectedItemIntoCenter(selectedIndex)) {
+		if (scrollSelectedItemIntoCenter()) {
 			setIsScrollReady(true);
 		}
-	}, [scrollSelectedItemIntoCenter, selectedIndex]);
+	}, [scrollSelectedItemIntoCenter]);
 
 	useEffect(() => {
-		if (scrollSelectedItemIntoCenter(selectedIndex)) {
+		if (scrollSelectedItemIntoCenter()) {
 			setIsScrollReady(true);
 			return;
 		}
 
 		const timeout = setTimeout(() => {
-			scrollSelectedItemIntoCenter(selectedIndex);
+			scrollSelectedItemIntoCenter();
 			setIsScrollReady(true);
 		}, 0);
 
 		return () => clearTimeout(timeout);
-	}, [scrollSelectedItemIntoCenter, selectedIndex]);
+	}, [scrollSelectedItemIntoCenter]);
 
 	useEffect(() => {
 		if (selectedIndex < filtered.length || filtered.length === 0) {
@@ -164,6 +189,7 @@ export function useSearchableList<T>(
 	);
 
 	return {
+		contentHeight,
 		filtered,
 		isScrollReady,
 		searchValue,

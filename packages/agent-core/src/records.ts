@@ -1,5 +1,11 @@
 import { type ModelUsage, modelUsageSchema } from "@wincode/ai/model-usage";
-import type { ModelId, ModelVariant } from "@wincode/ai/models";
+import {
+	type Effort,
+	effortSchema,
+	type ModelId,
+	type ReasoningMode,
+	reasoningModeSchema,
+} from "@wincode/ai/models";
 import {
 	isArray,
 	isBoolean,
@@ -111,7 +117,8 @@ export type SessionMessageMetadataRecord = ReadonlyDeep<{
 	skill?: SessionSkillActivationRecord;
 	sourceUserMessageId?: SessionMessageId;
 	usage?: ModelUsage;
-	variant?: ModelVariant;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
 }>;
 
 export type SessionMessagePart =
@@ -192,7 +199,8 @@ export type SessionRecord = ReadonlyDeep<{
 	model: {
 		modelId: ModelId;
 		providerId: string;
-		variant?: ModelVariant;
+		effort?: Effort;
+		reasoningMode?: ReasoningMode;
 	};
 	outcome: SessionRecordOutcome;
 	turnId: AgentTurnId;
@@ -245,7 +253,8 @@ const isSessionMessageMetadataRecord = (
 				key === "skill" ||
 				key === "sourceUserMessageId" ||
 				key === "usage" ||
-				key === "variant"
+				key === "effort" ||
+				key === "reasoningMode"
 		) &&
 		(isUndefined(value.agent) || isAgentId(value.agent)) &&
 		(isUndefined(value.joinedTurnId) || isNonEmptyString(value.joinedTurnId)) &&
@@ -257,7 +266,11 @@ const isSessionMessageMetadataRecord = (
 			isNonEmptyString(value.sourceUserMessageId)) &&
 		(isUndefined(value.usage) ||
 			modelUsageSchema.safeParse(value.usage).success) &&
-		(isUndefined(value.variant) || isString(value.variant))
+		(isUndefined(value.effort) ||
+			effortSchema.safeParse(value.effort).success) &&
+		(isUndefined(value.reasoningMode) ||
+			reasoningModeSchema.safeParse(value.reasoningMode).success) &&
+		(isUndefined(value.effort) || isUndefined(value.reasoningMode))
 	);
 };
 export const isSessionAttachmentReferencePart = (

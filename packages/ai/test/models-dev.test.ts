@@ -23,20 +23,59 @@ describe("convertModelsDevPayload", () => {
 		});
 	});
 
-	test("drops upstream effort values outside the catalog's level set", () => {
+	test("maps source none to a Reasoning Mode, not an Effort", () => {
 		const converted = convertModelsDevPayload({
 			openai: {
 				models: {
 					"weird-effort": {
 						reasoning_options: [
-							{ type: "effort", values: ["low", "ludicrous", "high"] },
+							{
+								type: "effort",
+								values: [
+									"minimal",
+									"low",
+									"none",
+									"thinking",
+									"min",
+									"ludicrous",
+									"high",
+								],
+							},
 						],
 					},
 				},
 			},
 		});
 		expect(converted.get("openai/weird-effort")).toEqual({
-			thinking: { levels: ["low", "high"] },
+			thinking: { levels: ["minimal", "low", "high"], toggle: true },
+		});
+	});
+
+	test("collapses documented DeepSeek Effort aliases to canonical IDs", () => {
+		const converted = convertModelsDevPayload({
+			deepseek: {
+				models: {
+					"deepseek-v4-pro": {
+						reasoning_options: [
+							{
+								type: "effort",
+								values: [
+									"minimal",
+									"low",
+									"medium",
+									"high",
+									"xhigh",
+									"max",
+									"min",
+								],
+							},
+						],
+					},
+				},
+			},
+		});
+		expect(converted.get("deepseek/deepseek-v4-pro")).toEqual({
+			thinking: { levels: ["low", "high", "max"] },
 		});
 	});
 

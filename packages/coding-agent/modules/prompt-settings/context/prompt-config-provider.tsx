@@ -2,11 +2,14 @@ import type { AgentId } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
 	defaultChatModelSelection,
-	getSupportedModelVariants,
-	type ModelVariant,
-	normalizeModelVariant,
+	type Effort,
+	getSupportedModelEfforts,
+	getSupportedReasoningModes,
+	normalizeReasoningSelection,
+	type ReasoningMode,
+	type ReasoningSelection,
 } from "@wincode/ai/models";
-import { isNull, isUndefined } from "@wincode/runtime-utils";
+import { isNull } from "@wincode/runtime-utils";
 import {
 	createContext,
 	type ReactNode,
@@ -25,51 +28,80 @@ import {
 type PromptConfigState = {
 	agent: AgentId;
 	model: ChatModelSelection;
-	variant: ModelVariant | undefined;
-};
+} & ReasoningSelection;
 export type PromptConfig = PromptConfigState & {
-	cycleAgent: (selectableAgents: readonly { id: AgentId }[]) => void;
-	cycleVariant: () => void;
+	cycleReasoningChoice: () => void;
 	setAgent: (agent: AgentId) => void;
+	setEffort: (effort: Effort | undefined) => void;
 	setModel: (model: ChatModelSelection) => void;
-	setVariant: (variant: ModelVariant | undefined) => void;
+	setReasoningMode: (reasoningMode: ReasoningMode | undefined) => void;
 };
 
 const PromptConfigContext = createContext<PromptConfig | null>(null);
 
+export const resolveInitialPromptReasoningSelection = (
+	model: ChatModelSelection,
+	initialEffort: Effort | undefined,
+	initialReasoningMode: ReasoningMode | undefined
+): ReasoningSelection =>
+	normalizeReasoningSelection(
+		model,
+		initialReasoningMode === undefined
+			? { effort: initialEffort ?? "low" }
+			: { reasoningMode: initialReasoningMode }
+	);
+
 export const updatePromptConfigModel = (
 	current: PromptConfigState,
 	nextModel: ChatModelSelection
-): PromptConfigState => {
-	if (
-		current.model.modelId === nextModel.modelId &&
-		current.model.providerId === nextModel.providerId
-	) {
-		return { ...current, model: nextModel };
-	}
+): PromptConfigState => ({
+	agent: current.agent,
+	model: nextModel,
+	...normalizeReasoningSelection(nextModel, current),
+});
 
-	return { ...current, model: nextModel, variant: undefined };
-};
+export const updatePromptConfigSelection = (
+	current: PromptConfigState,
+	selection: ReasoningSelection
+): PromptConfigState => ({
+	agent: current.agent,
+	model: current.model,
+	...normalizeReasoningSelection(current.model, selection),
+});
+
+type InitialReasoningSelection =
+	| {
+			initialEffort?: Effort;
+			initialReasoningMode?: never;
+	  }
+	| {
+			initialEffort?: never;
+			initialReasoningMode?: ReasoningMode;
+	  };
 
 type PromptConfigProviderProps = {
 	children: ReactNode;
 	initialAgent?: AgentId;
 	initialModel?: ChatModelSelection;
-	initialVariant?: ModelVariant;
-};
+} & InitialReasoningSelection;
 export function PromptConfigProvider({
 	children,
 	initialAgent = buildAgent.id,
 	initialModel = defaultChatModelSelection,
-	initialVariant = "low",
+	initialEffort,
+	initialReasoningMode,
 }: PromptConfigProviderProps) {
 	const registry = useAgentRegistry();
 	const hasExplicitAgent = useRef(initialAgent !== buildAgent.id);
-	const [config, setConfig] = useState<PromptConfigState>({
+	const [config, setConfig] = useState<PromptConfigState>(() => ({
 		agent: initialAgent,
 		model: initialModel,
-		variant: normalizeModelVariant(initialModel, initialVariant),
-	});
+		...resolveInitialPromptReasoningSelection(
+			initialModel,
+			initialEffort,
+			initialReasoningMode
+		),
+	}));
 
 	useEffect(() => {
 		if (isNull(registry) || hasExplicitAgent.current) {
@@ -81,34 +113,24 @@ export function PromptConfigProvider({
 		}));
 	}, [registry]);
 
-	const cycleAgent = useCallback(
-		(selectableAgents: readonly { id: AgentId }[]) => {
-			hasExplicitAgent.current = true;
-			setConfig((current) => {
-				if (selectableAgents.length === 0) {
-					return current;
-				}
-
-				const currentIndex = selectableAgents.findIndex(
-					({ id }) => id === current.agent
-				);
-				const next =
-					selectableAgents[(currentIndex + 1) % selectableAgents.length];
-				return isUndefined(next) ? current : { ...current, agent: next.id };
-			});
-		},
-		[]
-	);
-
-	const cycleVariant = useCallback(() => {
+	const cycleReasoningChoice = useCallback(() => {
 		setConfig((current) => {
-			const options: Array<ModelVariant | undefined> = [
-				undefined,
-				...getSupportedModelVariants(current.model),
+			const options: ReasoningSelection[] = [
+				{},
+				...getSupportedReasoningModes(current.model).map((reasoningMode) => ({
+					reasoningMode,
+				})),
+				...getSupportedModelEfforts(current.model).map((effort) => ({
+					effort,
+				})),
 			];
-			const currentIndex = options.indexOf(current.variant);
-			const next = options[(currentIndex + 1) % options.length];
-			return { ...current, variant: next };
+			const currentIndex = options.findIndex(
+				(option) =>
+					option.effort === current.effort &&
+					option.reasoningMode === current.reasoningMode
+			);
+			const next = options[(currentIndex + 1) % options.length] ?? {};
+			return updatePromptConfigSelection(current, next);
 		});
 	}, []);
 
@@ -117,28 +139,40 @@ export function PromptConfigProvider({
 		setConfig((current) => ({ ...current, agent }));
 	}, []);
 
+	const setEffort = useCallback((effort: Effort | undefined) => {
+		setConfig((current) =>
+			updatePromptConfigSelection(
+				current,
+				effort === undefined ? {} : { effort }
+			)
+		);
+	}, []);
+
 	const setModel = useCallback((model: ChatModelSelection) => {
 		setConfig((current) => updatePromptConfigModel(current, model));
 	}, []);
 
-	const setVariant = useCallback((variant: ModelVariant | undefined) => {
-		setConfig((current) => ({
-			...current,
-			variant: normalizeModelVariant(current.model, variant),
-		}));
-	}, []);
+	const setReasoningMode = useCallback(
+		(reasoningMode: ReasoningMode | undefined) => {
+			setConfig((current) =>
+				updatePromptConfigSelection(
+					current,
+					reasoningMode === undefined ? {} : { reasoningMode }
+				)
+			);
+		},
+		[]
+	);
 
 	return (
 		<PromptConfigContext.Provider
 			value={{
-				agent: config.agent,
-				cycleAgent,
-				cycleVariant,
-				model: config.model,
+				...config,
+				cycleReasoningChoice,
 				setAgent,
+				setEffort,
 				setModel,
-				setVariant,
-				variant: config.variant,
+				setReasoningMode,
 			}}
 		>
 			{children}

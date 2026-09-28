@@ -54,7 +54,7 @@ export type BuildResult = {
 /**
  * Builds the generated metadata module plus a coverage summary. Active catalog
  * entries with no upstream model are reported; retired entries retain any
- * available source or overlay metadata so persisted variants can be restored.
+ * available source or overlay metadata so persisted reasoning choices survive.
  */
 export const buildModelMetadataFile = (input: BuildInput): BuildResult => {
 	const blocks = modelsDevBlocksFromPayload(input.payload);
@@ -70,7 +70,12 @@ export const buildModelMetadataFile = (input: BuildInput): BuildResult => {
 		const key = `${entry.connectionProviderId}/${entry.id}`;
 		const upstream = blocks.get(entry.provider)?.get(entry.id);
 		const overlay = input.overlays[key];
-		const sourceMetadata = upstream ? metadataForModel(upstream) : undefined;
+		const sourceMetadata = upstream
+			? metadataForModel(upstream, {
+					modelId: entry.id,
+					providerId: entry.provider,
+				})
+			: undefined;
 		const upstreamMetadata =
 			sourceMetadata && Object.keys(sourceMetadata).length > 0
 				? sourceMetadata

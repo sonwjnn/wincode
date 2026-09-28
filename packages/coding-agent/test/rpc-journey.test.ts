@@ -38,6 +38,7 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		},
 	};
 	const initialized = Promise.withResolvers<void>();
+	const invalidSelectionRejected = Promise.withResolvers<void>();
 	const transcriptReady = Promise.withResolvers<void>();
 	const connections = {
 		authorize: async () => ({ kind: "api-key" as const, apiKey: "test-key" }),
@@ -74,13 +75,43 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		selection: {
 			agentId: "build",
 			model: { modelId: "gpt-5.6-luna", providerId: "openai" },
+			effort: "high",
+		},
+	})}\n`;
+	const invalidCreate = `${request("invalid-create", "session/create", {
+		initialSubmission: { text: "reject unsupported effort" },
+		selection: {
+			agentId: "build",
+			model: { modelId: "gpt-5.6-luna", providerId: "openai" },
+			effort: "minimal",
+		},
+	})}\n`;
+	const legacyCreate = `${request("legacy-create", "session/create", {
+		initialSubmission: { text: "reject legacy variant" },
+		selection: {
+			agentId: "build",
+			model: { modelId: "gpt-5.6-luna", providerId: "openai" },
+			variant: "high",
+		},
+	})}\n`;
+	const conflictingCreate = `${request("conflicting-create", "session/create", {
+		initialSubmission: { text: "reject conflicting choices" },
+		selection: {
+			agentId: "build",
+			model: { modelId: "gpt-5.6-luna", providerId: "openai" },
+			effort: "high",
+			reasoningMode: "none",
 		},
 	})}\n`;
 	const transcript = `${request("transcript", "session/getTranscript", {})}\n`;
 	const shutdown = `${request("shutdown", "server/shutdown", {})}\n`;
 	const input = (async function* (): AsyncGenerator<Uint8Array> {
-		yield new TextEncoder().encode(`${initialize}${create.slice(0, 11)}`);
+		yield new TextEncoder().encode(initialize);
 		await initialized.promise;
+		yield new TextEncoder().encode(
+			`${invalidCreate}${legacyCreate}${conflictingCreate}${create.slice(0, 11)}`
+		);
+		await invalidSelectionRejected.promise;
 		yield new TextEncoder().encode(create.slice(11));
 		await transcriptReady.promise;
 		yield new TextEncoder().encode(transcript + shutdown);
@@ -99,6 +130,9 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		};
 		if (frame.id === "initialize") {
 			initialized.resolve();
+		}
+		if (frame.id === "invalid-create") {
+			invalidSelectionRejected.resolve();
 		}
 		if (
 			frame.method === "session/stateChanged" &&
@@ -121,13 +155,33 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 	const firstEventIndex = frames.findIndex(
 		(frame) => frame.method === "session/event"
 	);
+	const invalidSelectionFrame = frames.find(
+		(frame) => frame.id === "invalid-create"
+	);
+	expect(invalidSelectionFrame?.error).toMatchObject({
+		data: { code: "selection_unavailable" },
+	});
+	const legacySelectionFrame = frames.find(
+		(frame) => frame.id === "legacy-create"
+	);
+	expect(legacySelectionFrame?.error).toMatchObject({
+		data: { code: "selection_unavailable" },
+	});
+	const conflictingSelectionFrame = frames.find(
+		(frame) => frame.id === "conflicting-create"
+	);
+	expect(conflictingSelectionFrame?.error).toMatchObject({
+		data: { code: "selection_unavailable" },
+	});
 	expect(exitCode).toBe(0);
 	expect(stderrFrames).toEqual([]);
 	expect(createIndex).toBeGreaterThanOrEqual(0);
 	expect(firstEventIndex).toBeGreaterThan(createIndex);
 	expect(frames.some((frame) => frame.id === "transcript")).toBe(true);
 	expect(frames.some((frame) => frame.id === "shutdown")).toBe(true);
-	expect(recorder.requests.some((entry) => entry.kind === "chat")).toBe(true);
+	expect(
+		recorder.requests.filter((entry) => entry.kind === "chat")
+	).toHaveLength(1);
 	const createFrame = frames[createIndex];
 	const createResult = createFrame?.result;
 	const sessionId =
@@ -197,6 +251,7 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 	expect(secondExitCode).toBe(0);
 	expect(secondStderrFrames).toEqual([]);
 	expect(openState).toBeDefined();
+	expect(openState).toMatchObject({ selection: { effort: "high" } });
 	expect(secondFrames.some((frame) => frame.id === "reopen-transcript")).toBe(
 		true
 	);
@@ -216,6 +271,13 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		throw new Error("The reopened RPC journey did not return a transcript.");
 	}
 	expect(reopenMessages.length).toBeGreaterThanOrEqual(2);
+	expect(reopenMessages).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({
+				metadata: expect.objectContaining({ effort: "high" }),
+			}),
+		])
+	);
 	const reopened = createDatabase(databasePath);
 	const store = createDrizzleSessionStore(reopened.db, {
 		workspaceRoot: workspace,
@@ -229,5 +291,20 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 	const records = await store.listSessionRecords(session.id);
 	expect(records.some((record) => record.outcome.kind === "user")).toBe(true);
 	expect(records.map((record) => record.outcome.kind)).toContain("assistant");
-	reopened.sqlite.close();
+	expect(
+		records.some(
+			(record) =>
+				record.outcome.kind === "user" && record.model.effort === "high"
+		)
+	).toBe(true);
+	const assistantRecord = records.find(
+		(record) => record.outcome.kind === "assistant"
+	);
+	expect(assistantRecord?.model.effort).toBe("high");
+	expect(
+		assistantRecord?.messages.some(
+			(message) => message.metadata?.effort === "high"
+		)
+	).toBe(true);
+	expect(session.effort).toBe("high");
 });

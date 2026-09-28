@@ -5,114 +5,159 @@ import { isUndefined } from "@wincode/runtime-utils";
 
 import {
 	type ChatModelSelection,
+	effortSchema,
 	findSupportedChatModelSelection,
-	modelVariantSchema,
+	reasoningModeSchema,
 	type SupportedChatModel,
-	supportsReasoningVariants,
+	supportsSelectableReasoning,
 } from "./catalog";
 import { modelMetadataByKey } from "./generated/model-metadata.generated";
 import type {
+	Effort,
 	ModelMetadataEntry,
-	ModelThinkingPolicy,
-	ModelVariant,
+	ReasoningMode,
+	ReasoningSelection,
 } from "./model-metadata";
 
 export { modelMetadataSnapshotDate } from "./generated/model-metadata.generated";
 
-/**
- * Metadata for one catalog entry, resolved from the generated models.dev
- * snapshot. An entry absent from the snapshot carries no metadata, which is
- * reported by the generator rather than fabricated here.
- */
+/** Builds one mutually exclusive Effort or Reasoning Mode selection. */
+export const createReasoningSelection = (
+	effort: Effort | undefined,
+	reasoningMode: ReasoningMode | undefined
+): ReasoningSelection => {
+	if (effort !== undefined && reasoningMode !== undefined) {
+		throw new Error("Select either an Effort or a Reasoning Mode, not both.");
+	}
+	if (effort !== undefined) {
+		return { effort };
+	}
+	if (reasoningMode !== undefined) {
+		return { reasoningMode };
+	}
+	return {};
+};
+
 export const getModelMetadata = (
-	model: SupportedChatModel
+	model: SupportedChatModel | null
 ): ModelMetadataEntry | undefined =>
-	modelMetadataByKey[`${model.connectionProviderId}/${model.id}`];
+	model ? modelMetadataByKey[`${model.provider}/${model.id}`] : undefined;
 
 /**
- * The levels a user may pick for a model. The published ladder when there is
- * one, both `"none"` and `"thinking"` for a toggle-only model, and nothing at
- * all for a model with no reasoning policy.
- *
- * `"thinking"` is not a published level: it exists because the catalog's level
- * vocabulary has no other way to name "on, at the provider's default effort".
- * It is therefore offered only when there is no ladder to name an effort with.
+ * The named Efforts a model publishes. Toggle states are deliberately absent;
+ * a budget-only model keeps its derived automatic budget without a choice.
  */
-export const getSupportedModelVariants = (
-	selection: ChatModelSelection
-): readonly ModelVariant[] => {
-	const model = findSupportedChatModelSelection(selection);
-	if (!(model && supportsReasoningVariants(model))) {
+const getSupportedEffortsForModel = (
+	model: SupportedChatModel | null
+): readonly Effort[] => {
+	if (!model) {
+		return [];
+	}
+	if (!supportsSelectableReasoning(model)) {
 		return [];
 	}
 	const policy = getModelMetadata(model)?.thinking;
-	if (!policy) {
-		return [];
-	}
-	if (policy.levels && policy.levels.length > 0) {
-		return policy.toggle
-			? (["none", ...policy.levels] as const)
-			: policy.levels;
-	}
-	// A switch-only model offers both states. A budget-only model has no
-	// user-selectable level: its budget is derived from the request.
-	if (policy.unlevelled) {
-		return [];
-	}
-	return policy.toggle
-		? (["none", "thinking"] as const)
-		: (["thinking"] as const);
+	return policy?.unlevelled ? [] : (policy?.levels ?? []);
 };
 
-/** Whether `level` is one of the levels this model's policy publishes. */
-const policyAdmits = (
-	policy: ModelThinkingPolicy,
-	level: ModelVariant
-): boolean => {
-	if (policy.levels?.includes(level)) {
-		return true;
+/** Available off/on controls are determined by the model's declared toggle. */
+const getSupportedModesForModel = (
+	model: SupportedChatModel | null
+): readonly ReasoningMode[] => {
+	if (!model) {
+		return [];
 	}
-	// An unresolvable variant value still reaches the resolver as `undefined`,
-	// and `"none"` is how a caller asks for reasoning off without naming an
-	// effort. Both are only legal where reasoning has an on/off dimension.
-	if (level === "none") {
-		return policy.toggle === true;
+	if (!supportsSelectableReasoning(model)) {
+		return [];
 	}
-	if (level === "thinking") {
-		return (
-			policy.toggle === true &&
-			!policy.unlevelled &&
-			(isUndefined(policy.levels) || policy.levels.length === 0)
-		);
+	const policy = getModelMetadata(model)?.thinking;
+	if (!policy?.toggle || policy.unlevelled) {
+		return [];
 	}
-	return false;
+	return policy.levels?.length ? ["none"] : ["none", "thinking"];
 };
 
-export const isSupportedModelVariant = (
-	selection: ChatModelSelection,
-	variant: ModelVariant
-): boolean => getSupportedModelVariants(selection).includes(variant);
+export const getSupportedModelEfforts = (
+	selection: ChatModelSelection
+): readonly Effort[] =>
+	getSupportedEffortsForModel(findSupportedChatModelSelection(selection));
 
-export const normalizeModelVariant = (
+export const getSupportedReasoningModes = (
+	selection: ChatModelSelection
+): readonly ReasoningMode[] =>
+	getSupportedModesForModel(findSupportedChatModelSelection(selection));
+
+export const isSupportedModelEffort = (
 	selection: ChatModelSelection,
-	variant: string | undefined
-): ModelVariant | undefined =>
-	normalizeModelVariantForModel(
+	effort: Effort
+): boolean => getSupportedModelEfforts(selection).includes(effort);
+
+export const isSupportedReasoningMode = (
+	selection: ChatModelSelection,
+	reasoningMode: ReasoningMode
+): boolean => getSupportedReasoningModes(selection).includes(reasoningMode);
+
+export const normalizeModelEffort = (
+	selection: ChatModelSelection,
+	effort: string | undefined
+): Effort | undefined =>
+	normalizeModelEffortForModel(
 		findSupportedChatModelSelection(selection),
-		variant
+		effort
 	);
 
-/** Validate variant against the selected catalog entry, not its runtime provider. */
-export const normalizeModelVariantForModel = (
+export const normalizeModelEffortForModel = (
 	model: SupportedChatModel | null,
-	variant: string | undefined
-): ModelVariant | undefined => {
-	if (isUndefined(variant) || !model || !supportsReasoningVariants(model)) {
+	effort: string | undefined
+): Effort | undefined => {
+	if (isUndefined(effort)) {
 		return;
 	}
-	const parsed = modelVariantSchema.safeParse(variant);
-	const policy = getModelMetadata(model)?.thinking;
-	return parsed.success && policy && policyAdmits(policy, parsed.data)
+	const parsed = effortSchema.safeParse(effort);
+	return parsed.success &&
+		getSupportedEffortsForModel(model).includes(parsed.data)
 		? parsed.data
 		: undefined;
+};
+
+export const normalizeReasoningMode = (
+	selection: ChatModelSelection,
+	reasoningMode: string | undefined
+): ReasoningMode | undefined =>
+	normalizeReasoningModeForModel(
+		findSupportedChatModelSelection(selection),
+		reasoningMode
+	);
+
+export const normalizeReasoningModeForModel = (
+	model: SupportedChatModel | null,
+	reasoningMode: string | undefined
+): ReasoningMode | undefined => {
+	if (isUndefined(reasoningMode)) {
+		return;
+	}
+	const parsed = reasoningModeSchema.safeParse(reasoningMode);
+	return parsed.success &&
+		getSupportedModesForModel(model).includes(parsed.data)
+		? parsed.data
+		: undefined;
+};
+
+/** Normalizes a mutually exclusive Effort or Reasoning Mode for one model. */
+export const normalizeReasoningSelection = (
+	selection: ChatModelSelection,
+	choice: ReasoningSelection
+): ReasoningSelection => {
+	if (choice.effort !== undefined) {
+		const effort = normalizeModelEffort(selection, choice.effort);
+		return effort === undefined ? {} : { effort };
+	}
+	if (choice.reasoningMode !== undefined) {
+		const reasoningMode = normalizeReasoningMode(
+			selection,
+			choice.reasoningMode
+		);
+		return reasoningMode === undefined ? {} : { reasoningMode };
+	}
+	return {};
 };

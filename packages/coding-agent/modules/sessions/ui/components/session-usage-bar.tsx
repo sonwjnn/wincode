@@ -8,6 +8,7 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { SessionUsageSummary } from "../../usage/session-usage";
 
 const CONTEXT_WARNING_PERCENT = 80;
+const CONTEXT_LIMIT_FORMAT_OPTIONS = { preserveTrailingZero: true };
 
 export function SessionUsageBar({ summary }: { summary: SessionUsageSummary }) {
 	const { colors } = useTheme();
@@ -21,13 +22,19 @@ export function SessionUsageBar({ summary }: { summary: SessionUsageSummary }) {
 	return (
 		<box flexDirection="row" flexShrink={0}>
 			<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-				<span>{tokensText}</span>
-				{isNull(summary.contextPercent) ? null : (
+				{!(isNull(summary.contextPercent) || isNull(summary.contextLimit)) &&
+				summary.contextLimit > 0 ? (
 					<>
-						<span> (</span>
 						<span fg={percentColor}>{summary.contextPercent}%</span>
-						<span>)</span>
+						<span>
+							{`(${tokensText}/${formatModelTokenCount(
+								summary.contextLimit,
+								CONTEXT_LIMIT_FORMAT_OPTIONS
+							)})`}
+						</span>
 					</>
+				) : (
+					<span>{tokensText}</span>
 				)}
 				{isNull(summary.costUsd) ? null : (
 					// "~" marks a figure derived from published rates instead of an

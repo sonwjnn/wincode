@@ -10,10 +10,9 @@ import {
 	createPermissionService,
 	PermissionServiceProvider,
 } from "@/modules/permissions";
-import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
+import { CopyOnSelectFromSettings } from "@/modules/settings";
 import { resolveWorkspaceRoot } from "@/modules/tools";
 import { parseCliOptions } from "@/shared/cli-options";
-import { CopyOnSelect } from "@/shared/clipboard/copy-on-select";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
 import { ApprovalPanelsProvider } from "@/shared/providers/approval/approval-panels-provider";
@@ -22,6 +21,7 @@ import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboar
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { getInteractiveRuntimeContext } from "@/shared/runtime-context";
 import { setInteractiveCleanup } from "@/shared/runtime-lifecycle";
+import { SettingsProviders } from "./settings-providers";
 
 const { args, cwd } = getInteractiveRuntimeContext();
 const connections = createConnections();
@@ -60,7 +60,7 @@ export function RootLayout() {
 						<AgentRegistryProvider>
 							<KeyboardLayerProvider>
 								<ApprovalPanelsProvider>
-									<PromptConfigProvider>
+									<SettingsProviders>
 										<ModelPricingProvider>
 											<DialogProvider>
 												<McpProvider
@@ -69,14 +69,14 @@ export function RootLayout() {
 													refreshKey={currentPath}
 													workspace={workspace}
 												>
-													<CopyOnSelect />
+													<CopyOnSelectFromSettings />
 													<DialogProvider>
 														<Outlet key={currentPath} />
 													</DialogProvider>
 												</McpProvider>
 											</DialogProvider>
 										</ModelPricingProvider>
-									</PromptConfigProvider>
+									</SettingsProviders>
 								</ApprovalPanelsProvider>
 							</KeyboardLayerProvider>
 						</AgentRegistryProvider>

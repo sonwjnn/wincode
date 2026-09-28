@@ -32,5 +32,5 @@ commands, and those denies are ordinary overridable rules (ADR-0008).
 The CLI evaluates actual tool arguments and owns approvals. Raw permission rules,
 paths, and temporary grants never cross the hosted boundary. Configuration changes
 require a restart. Permission V2, editor-facing schema, live reload, and provider
-options are deferred; approvals, temporary grants, auto approval, and `/permissions`
-inspection are supported.
+options are deferred; approvals, temporary grants, and auto approval via `--auto`
+are supported.

@@ -10,13 +10,13 @@ import {
 import { useKeyboard, usePaste } from "@opentui/react";
 import {
 	findSupportedChatModelSelection,
-	getSupportedModelVariants,
+	getSupportedModelEfforts,
+	getSupportedReasoningModes,
 	supportedChatModelIdSchema,
 } from "@wincode/ai/models";
 import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import { spawn } from "bun";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { builtInAgents, useAgentRegistry } from "@/modules/agents";
 import {
 	type CommandItem,
 	getCommandLabel,
@@ -105,10 +105,9 @@ type ChatTextAreaProps = {
 	/** Changes whenever `recalledSubmissions` holds something new to restore. */
 	recallRevision?: number;
 	sessionPromptHistory?: PromptHistoryEntry[];
-	showCompactCommand?: boolean;
 	/**
 	 * Whether the composer is submitting into the running Agent Turn: it then
-	 * takes plain text only, and Tab cannot change the Agent inside that turn.
+	 * takes plain text only.
 	 */
 	steering?: boolean;
 	onSubmit: (
@@ -161,18 +160,20 @@ export function ChatTextArea({
 	recalledSubmissions = EMPTY_RECALLED_SUBMISSIONS,
 	recallRevision = 0,
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
-	showCompactCommand = true,
 	steering = false,
 }: ChatTextAreaProps) {
-	const { agent, cycleAgent, cycleVariant, model } = usePromptConfig();
+	const { agent, cycleReasoningChoice, model } = usePromptConfig();
 	const supportedModel = findSupportedChatModelSelection(model);
-	const registry = useAgentRegistry();
-	const hideVariants =
-		isNull(supportedModel) ||
-		getSupportedModelVariants({
-			modelId: supportedChatModelIdSchema.parse(supportedModel.id),
-			providerId: supportedModel.connectionProviderId,
-		}).length === 0;
+	const chatModelSelection = isNull(supportedModel)
+		? null
+		: {
+				modelId: supportedChatModelIdSchema.parse(supportedModel.id),
+				providerId: supportedModel.connectionProviderId,
+			};
+	const hideEffort =
+		chatModelSelection === null ||
+		(getSupportedModelEfforts(chatModelSelection).length === 0 &&
+			getSupportedReasoningModes(chatModelSelection).length === 0);
 	const textAreaRef = useRef<TextareaRenderable>(null);
 	const ctrlCRef = useRef<() => boolean>(() => false);
 	const lastRecalledFilesRevisionRef = useRef(0);
@@ -265,14 +266,14 @@ export function ChatTextArea({
 		getCustomCommands: discoverCustomCommands,
 		getFileMentionOptions,
 		getSkills: discoverAvailableSkills,
-		hideCompact: !showCompactCommand,
-		hideVariants,
+		hideEffort,
 		onError: handleSubmitError,
 		onSubmit,
-		onTab: (shift) =>
-			shift
-				? cycleVariant()
-				: cycleAgent(registry?.selectableAgents ?? builtInAgents),
+		onTab: (shift) => {
+			if (shift) {
+				cycleReasoningChoice();
+			}
+		},
 		sessionPromptHistory,
 		steering,
 	});
@@ -686,8 +687,11 @@ export function ChatTextArea({
 	}, []);
 
 	onSubmitRef.current = async () => {
-		const overlay = state.overlay.kind;
-		if (!isNull(overlay)) {
+		const overlay = state.overlay;
+		if (
+			overlay.kind !== null &&
+			(overlay.kind !== "command" || overlay.items.length > 0)
+		) {
 			actions.onEnter();
 			return;
 		}

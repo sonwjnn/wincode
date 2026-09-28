@@ -11,10 +11,10 @@ export type CommandSpec = BaseSpec &
 		| { kind: "settings" }
 		| {
 				kind: "dialog";
-				dialogKey: "sessions" | "theme" | "mcps" | "permissions";
+				dialogKey: "sessions" | "theme" | "mcps";
 		  }
 		| { kind: "models" }
-		| { kind: "variants" }
+		| { kind: "effort" }
 		| { kind: "agents" }
 	);
 
@@ -50,10 +50,10 @@ export const COMMANDS: CommandSpec[] = [
 		kind: "models",
 	},
 	{
-		description: "Select model variant",
-		name: "variants",
-		value: "/variants",
-		kind: "variants",
+		description: "Select Effort or Reasoning Mode",
+		name: "effort",
+		value: "/effort",
+		kind: "effort",
 	},
 	{
 		description: "Browse past sessions",
@@ -83,13 +83,6 @@ export const COMMANDS: CommandSpec[] = [
 		dialogKey: "mcps",
 	},
 	{
-		description: "Manage tool approvals, temporary grants, and auto mode",
-		name: "permissions",
-		value: "/permissions",
-		kind: "dialog",
-		dialogKey: "permissions",
-	},
-	{
 		description: "Quit the application",
 		name: "exit",
 		value: "/exit",
@@ -102,12 +95,12 @@ export const COMMANDS: CommandSpec[] = [
  * kinds stay reachable by typing their name; only the row is suppressed.
  */
 export const getVisibleCommands = (
-	options: { hideCompact?: boolean; hideVariants?: boolean } = {}
+	options: { hideCompact?: boolean; hideEffort?: boolean } = {}
 ): CommandSpec[] =>
 	COMMANDS.filter(
 		(command) =>
 			!(
 				(options.hideCompact && command.kind === "compact") ||
-				(options.hideVariants && command.kind === "variants")
+				(options.hideEffort && command.kind === "effort")
 			)
 	);

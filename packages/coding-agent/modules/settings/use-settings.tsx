@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { useConfig } from "@/shared/config/config-provider";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
+import { useCopyOnSelectSettings } from "./copy-on-select-settings";
 import { createSettingsOperations } from "./operations";
 import { SettingsDialogContent } from "./settings-dialog";
 import type { SettingRuntimeContext, SettingsOperations } from "./types";
@@ -13,14 +14,26 @@ export function useSettingsOperations(
 	runtime: SettingRuntimeContext = EMPTY_SETTING_RUNTIME_CONTEXT
 ): SettingsOperations {
 	const config = useConfig();
+	const copyOnSelectSettings = useCopyOnSelectSettings();
 	return useMemo(
 		() =>
 			createSettingsOperations({
 				configStore: config.configStore,
-				runtime,
+				runtime: {
+					...runtime,
+					onCopyOnSelectChanged: (enabled) => {
+						runtime.onCopyOnSelectChanged?.(enabled);
+						copyOnSelectSettings?.setEnabled(enabled);
+					},
+				},
 				workspace: config.workspace,
 			}),
-		[config.configStore, config.workspace, runtime]
+		[
+			config.configStore,
+			config.workspace,
+			copyOnSelectSettings?.setEnabled,
+			runtime,
+		]
 	);
 }
 

@@ -12,7 +12,6 @@ import {
 const MINIMAL_COLORS: ThemeDefinition["colors"] = {
 	primary: "#fab283",
 	secondary: "#5c9cf5",
-	planMode: "#9d7cd8",
 	selection: "#fab283",
 	thinking: "#9d7cd8",
 	success: "#7fd88f",

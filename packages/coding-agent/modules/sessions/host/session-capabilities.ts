@@ -1,3 +1,4 @@
+import type { Database } from "bun:sqlite";
 import { homedir } from "node:os";
 import type { AgentRuntime } from "@wincode/agent-core";
 import { type Connections, createConnections } from "@wincode/ai/connections";
@@ -28,11 +29,21 @@ import {
 import { estimateCompactionTokens } from "../compaction/config";
 import { createCompactionSettingsOperations } from "../compaction/settings-operations";
 import { createDirectSummaryGenerator } from "../compaction/summary-generator";
-import { createDatabase, type SessionDatabase } from "../storage/client";
+import {
+	createDatabase,
+	type SessionDatabase,
+	SessionDatabaseResetRequiredError,
+} from "../storage/client";
 import {
 	createDrizzleSessionStore,
 	type DrizzleSessionStoreOptions,
 } from "../storage/drizzle-session-store";
+import {
+	resolveLocalAttachmentRoot,
+	resolveLocalDatabasePath,
+	resolveLocalSnapshotRoot,
+} from "../storage/path";
+import { resetLocalSessionData } from "../storage/reset-local-session-data";
 import type { SessionStore } from "../storage/session-store";
 import type { SessionCapabilities } from "./types";
 
@@ -73,6 +84,36 @@ const asMcpCapability = (registry: McpRegistry): McpSessionCapability => ({
 		registry.execute(snapshot, toolName, input, signal),
 	releaseSnapshot: (snapshot) => registry.releaseSnapshot?.(snapshot),
 });
+type OpenSessionDatabaseInput = Readonly<{
+	databasePath?: string;
+	workspace: string;
+}>;
+
+type OpenedSessionDatabase = {
+	db: SessionDatabase;
+	sqlite: Database;
+};
+
+const openSessionDatabase = async ({
+	databasePath,
+	workspace,
+}: OpenSessionDatabaseInput): Promise<OpenedSessionDatabase> => {
+	const localDatabasePath = databasePath ?? resolveLocalDatabasePath();
+	try {
+		return createDatabase(localDatabasePath);
+	} catch (error) {
+		if (!(error instanceof SessionDatabaseResetRequiredError)) {
+			throw error;
+		}
+		await resetLocalSessionData({
+			attachmentRoot: resolveLocalAttachmentRoot(localDatabasePath),
+			databasePath: localDatabasePath,
+			snapshotRoot: resolveLocalSnapshotRoot(localDatabasePath),
+			workspaceRoot: workspace,
+		});
+		return createDatabase(localDatabasePath);
+	}
+};
 
 /**
  * Composes the same React-free capability graph used by Session Host, suitable
@@ -105,10 +146,7 @@ export const createSessionCapabilities = async ({
 		homeRoot: homedir(),
 		workspace,
 	};
-	const ownedDatabase =
-		providedDatabase === undefined && providedStore === undefined
-			? createDatabase(databasePath)
-			: undefined;
+	let ownedDatabase: OpenedSessionDatabase | undefined;
 	let ownedMcp: McpRegistry | undefined;
 	const closeOwnedMcp = async (
 		mcp: McpRegistry,
@@ -125,6 +163,9 @@ export const createSessionCapabilities = async ({
 		}
 	};
 	try {
+		if (providedDatabase === undefined && providedStore === undefined) {
+			ownedDatabase = await openSessionDatabase({ databasePath, workspace });
+		}
 		const connections = providedConnections ?? createConnections();
 		const mcp = providedMcp ?? createMcpRegistry({ configStore, workspace });
 		if (providedMcp === undefined) {

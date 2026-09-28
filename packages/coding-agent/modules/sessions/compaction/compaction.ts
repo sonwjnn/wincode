@@ -1,5 +1,9 @@
 import { getModelFailureMessage } from "@wincode/ai/model-failures";
-import type { ChatModelSelection, ModelVariant } from "@wincode/ai/models";
+import type {
+	ChatModelSelection,
+	Effort,
+	ReasoningMode,
+} from "@wincode/ai/models";
 import {
 	isNull,
 	isNumber,
@@ -147,7 +151,8 @@ type CompactionStore = Pick<
 export type CompactSessionInput = {
 	session: CompactionSession;
 	model: ChatModelSelection;
-	variant?: ModelVariant;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
 	settings: Pick<
 		ResolvedCompactionSettings,
 		"enabled" | "keepRecentTokens" | "thresholdTokens"
@@ -198,10 +203,10 @@ export type SessionCompactionModule = {
 
 /**
  * What a caller asks for, as distinct from the inputs it asks with. The Model
- * Target selection and variant only decide how a summary is generated, so two
- * requests that share a trigger and focus share an intent even across a
- * selection change: both want the session's threshold maintained, or both want
- * the same focus honored.
+ * Target selection and Effort/Reasoning Mode only decide how a summary is
+ * generated, so two requests that share a trigger and focus share an intent
+ * even across a selection change: both want the session's threshold maintained,
+ * or both want the same focus honored.
  */
 type CompactionIntent = {
 	focus?: string;
@@ -347,7 +352,8 @@ export const serializeMessagesForCompaction = (
 				? JSON.stringify({
 						agent: message.metadata.agent,
 						model: message.metadata.model,
-						variant: message.metadata.variant,
+						effort: message.metadata.effort,
+						reasoningMode: message.metadata.reasoningMode,
 					})
 				: "{}";
 			const parts = message.parts.map(serializePart).join("\n");
@@ -887,13 +893,15 @@ const appendInputFor = ({
 	entryId,
 	now,
 	summarization,
-	variant,
+	effort,
+	reasoningMode,
 }: {
 	attachmentMetadata?: readonly CompactionAttachmentMetadata[];
 	session: CompactionSession;
 	cutPoint: CutPoint;
 	focus?: string;
-	variant?: ModelVariant;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
 	model: ChatModelSelection;
 	previous: SessionCompaction | null;
 	settings: CompactSessionInput["settings"];
@@ -934,7 +942,8 @@ const appendInputFor = ({
 		...omitUndefined({
 			firstKeptAssistantPartIndex: cutPoint.firstKeptAssistantPartIndex,
 			focus: normalizedFocus,
-			summarizationVariant: variant,
+			summarizationEffort: effort,
+			summarizationReasoningMode: reasoningMode,
 		}),
 		estimatedTokensAfter: estimateTokens([
 			createCompactionSummaryMessage({ id: entryId, summary }),
@@ -1143,7 +1152,8 @@ export const createSessionCompaction = ({
 		summarySpan,
 		summarization,
 		trigger,
-		variant,
+		effort,
+		reasoningMode,
 	}: {
 		assertAuthority?: () => void;
 		attachmentMetadata?: readonly CompactionAttachmentMetadata[];
@@ -1163,7 +1173,8 @@ export const createSessionCompaction = ({
 			usage?: SessionCompaction["summarizationUsage"];
 		};
 		trigger: CompactionTriggerReason;
-		variant?: ModelVariant;
+		effort?: Effort;
+		reasoningMode?: ReasoningMode;
 	}): Promise<{
 		activeMessages: SessionMessage[];
 		entry: SessionCompaction;
@@ -1182,7 +1193,8 @@ export const createSessionCompaction = ({
 			summarySpan,
 			summarization,
 			trigger,
-			variant,
+			effort,
+			reasoningMode,
 		});
 		const estimatedTokensBefore = estimate(
 			projectMessagesForEstimate(messages, settings)
@@ -1269,7 +1281,8 @@ export const createSessionCompaction = ({
 		const focus = normalizeFocus(input.focus);
 		const generatorInput: SummaryGeneratorInput = {
 			...omitUndefined({
-				variant: input.variant,
+				effort: input.effort,
+				reasoningMode: input.reasoningMode,
 				focus,
 			}),
 			model: input.model,
@@ -1304,7 +1317,8 @@ export const createSessionCompaction = ({
 			summarySpan,
 			summarization: generated,
 			trigger: input.trigger,
-			variant: input.variant,
+			effort: input.effort,
+			reasoningMode: input.reasoningMode,
 		});
 		return { activeMessages, entry };
 	};

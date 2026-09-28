@@ -14,7 +14,6 @@ const DIALOG_TITLES: Record<
 	sessions: "Sessions",
 	theme: "Select Theme",
 	mcps: "MCPs",
-	permissions: "Permissions",
 };
 
 export class DialogAdapter {

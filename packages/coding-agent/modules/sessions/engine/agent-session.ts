@@ -230,7 +230,8 @@ export class AgentSessionImpl implements AgentSession {
 		initialAgent,
 		initialContext,
 		initialSessionModel,
-		initialSessionVariant,
+		initialSessionEffort,
+		initialSessionReasoningMode,
 		initialTranscript,
 		ports,
 		sessionId,
@@ -467,9 +468,11 @@ export class AgentSessionImpl implements AgentSession {
 				model: input.model,
 				...omitUndefined({
 					parent: input.parent,
-					sessionVariant: input.sessionVariant,
+					sessionEffort: input.sessionEffort,
+					sessionReasoningMode: input.sessionReasoningMode,
 					submissionId: input.submissionId,
-					variant: input.variant,
+					effort: input.effort,
+					reasoningMode: input.reasoningMode,
 				}),
 				sessionModel: input.sessionModel,
 				sourceUserMessageId: input.sourceUserMessageId ?? null,
@@ -549,7 +552,10 @@ export class AgentSessionImpl implements AgentSession {
 						agent: execution.agent,
 						joinedTurnId: execution.turnId,
 						model: execution.model,
-						...omitUndefined({ variant: execution.variant }),
+						...omitUndefined({
+							effort: execution.effort,
+							reasoningMode: execution.reasoningMode,
+						}),
 					},
 					[],
 					[],
@@ -593,11 +599,17 @@ export class AgentSessionImpl implements AgentSession {
 						message,
 						model: execution.model,
 						turnId: execution.turnId,
-						...omitUndefined({ variant: execution.variant }),
+						...omitUndefined({
+							effort: execution.effort,
+							reasoningMode: execution.reasoningMode,
+						}),
 					}),
 					sessionId,
 					sessionModel: execution.sessionModel,
-					...omitUndefined({ sessionVariant: execution.sessionVariant }),
+					...omitUndefined({
+						sessionEffort: execution.sessionEffort,
+						sessionReasoningMode: execution.sessionReasoningMode,
+					}),
 				})
 				.catch((error: unknown) => {
 					logSessionPersistenceFailure(
@@ -987,6 +999,36 @@ export class AgentSessionImpl implements AgentSession {
 				};
 			}
 			const turnId = createAgentTurnId();
+			const sessionSelection =
+				isUndefined(initialSessionEffort) &&
+				isUndefined(initialSessionReasoningMode)
+					? {
+							effort: anchor.metadata?.effort,
+							reasoningMode: anchor.metadata?.reasoningMode,
+						}
+					: {
+							effort: initialSessionEffort,
+							reasoningMode: initialSessionReasoningMode,
+						};
+			const messageSelection = (() => {
+				if (
+					!(
+						isUndefined(lastMessage.metadata?.effort) &&
+						isUndefined(lastMessage.metadata?.reasoningMode)
+					)
+				) {
+					return lastMessage.metadata;
+				}
+				if (
+					!(
+						isUndefined(anchor.metadata?.effort) &&
+						isUndefined(anchor.metadata?.reasoningMode)
+					)
+				) {
+					return anchor.metadata;
+				}
+				return sessionSelection;
+			})();
 			const input: SessionSendInput = {
 				agent,
 				messageId: anchor.id,
@@ -994,11 +1036,10 @@ export class AgentSessionImpl implements AgentSession {
 				sessionModel: initialSessionModel ?? anchor.metadata?.model ?? model,
 				turnId,
 				...omitUndefined({
-					sessionVariant: initialSessionVariant ?? anchor.metadata?.variant,
-					variant:
-						lastMessage.metadata?.variant ??
-						anchor.metadata?.variant ??
-						initialSessionVariant,
+					sessionEffort: sessionSelection.effort,
+					sessionReasoningMode: sessionSelection.reasoningMode,
+					effort: messageSelection.effort,
+					reasoningMode: messageSelection.reasoningMode,
 				}),
 			};
 			return { kind: "ready", input, turnId };

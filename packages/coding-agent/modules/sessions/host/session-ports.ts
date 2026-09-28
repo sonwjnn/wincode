@@ -3,6 +3,15 @@ import type {
 	AgentTurnEvent,
 	AgentTurnTerminalEvent,
 } from "@wincode/agent-core";
+import type { ModelTarget } from "@wincode/ai/model";
+import {
+	type ChatModelSelection,
+	effortSchema,
+	isSupportedModelEffort,
+	isSupportedReasoningMode,
+	type ReasoningSelection,
+	reasoningModeSchema,
+} from "@wincode/ai/models";
 import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import { resolveEffectiveAgentSelection } from "@/modules/agents/agent-call";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
@@ -68,6 +77,31 @@ export type SessionPortsOptions = Readonly<{
 	renewLease: () => boolean;
 	sessionId: SessionId;
 }>;
+
+const strictReasoningSelection = (
+	model: ChatModelSelection,
+	effort: unknown,
+	reasoningMode: unknown
+): ReasoningSelection => {
+	if (effort !== undefined && reasoningMode !== undefined) {
+		throw new Error("Select either Effort or Reasoning Mode, not both.");
+	}
+	if (effort !== undefined) {
+		const parsed = effortSchema.safeParse(effort);
+		if (!(parsed.success && isSupportedModelEffort(model, parsed.data))) {
+			throw new Error("Effort is unavailable for the selected model.");
+		}
+		return { effort: parsed.data };
+	}
+	if (reasoningMode !== undefined) {
+		const parsed = reasoningModeSchema.safeParse(reasoningMode);
+		if (!(parsed.success && isSupportedReasoningMode(model, parsed.data))) {
+			throw new Error("Reasoning Mode is unavailable for the selected model.");
+		}
+		return { reasoningMode: parsed.data };
+	}
+	return {};
+};
 
 const summarizeCatalogDiagnostics = (catalog: SkillCatalog): string | null => {
 	if (catalog.diagnostics.length === 0) {
@@ -206,9 +240,11 @@ export const createSessionPorts = ({
 			turnId: execution.turnId,
 			...omitUndefined({
 				parent: execution.parent,
-				sessionVariant: execution.sessionVariant,
+				sessionEffort: execution.sessionEffort,
+				sessionReasoningMode: execution.sessionReasoningMode,
 				skillRequest: turn.skillRequest,
-				variant: execution.variant,
+				effort: execution.effort,
+				reasoningMode: execution.reasoningMode,
 			}),
 		});
 	const releaseScope = (scope: TurnExecution): void => {
@@ -421,14 +457,36 @@ export const createSessionPorts = ({
 							sessionId,
 							store: sessionStore.fileObservationStore,
 						};
-			const modelTarget = await resolveChatModelTarget(
+			const reasoningSelection = strictReasoningSelection(
 				execution.model,
-				connections,
-				{
-					signal,
-					...omitUndefined({ variant: execution.variant }),
-				}
+				execution.effort,
+				execution.reasoningMode
 			);
+			let modelTarget: ModelTarget;
+			if (reasoningSelection.effort !== undefined) {
+				modelTarget = await resolveChatModelTarget(
+					execution.model,
+					connections,
+					{ effort: reasoningSelection.effort, signal }
+				);
+			} else if (reasoningSelection.reasoningMode === undefined) {
+				modelTarget = await resolveChatModelTarget(
+					execution.model,
+					connections,
+					{
+						signal,
+					}
+				);
+			} else {
+				modelTarget = await resolveChatModelTarget(
+					execution.model,
+					connections,
+					{
+						reasoningMode: reasoningSelection.reasoningMode,
+						signal,
+					}
+				);
+			}
 			const mcpPolicy = await toolPermission.resolveMcpPolicyForAgent(
 				execution.agent
 			);
@@ -594,28 +652,45 @@ export const createSessionPorts = ({
 				capabilities.getCompactionModule().needsCompaction(messages, settings),
 		},
 		resolveSubmission: (input) => {
+			const selection = strictReasoningSelection(
+				input.model,
+				input.effort,
+				input.reasoningMode
+			);
+			strictReasoningSelection(
+				input.sessionModel,
+				input.sessionEffort,
+				input.sessionReasoningMode
+			);
 			const registry = capabilities.getRegistry();
 			if (isNull(registry)) {
 				return input;
 			}
-			const selection = resolveEffectiveAgentSelection(
+			const effective = resolveEffectiveAgentSelection(
 				registry,
 				input.agent,
 				input.model,
-				input.variant
+				selection
+			);
+			strictReasoningSelection(
+				effective.model,
+				effective.effort,
+				effective.reasoningMode
 			);
 			const {
 				resolvedAgent: _resolvedAgent,
-				variant: _variant,
+				effort: _effort,
+				reasoningMode: _reasoningMode,
 				...unresolvedInput
 			} = input;
 			return {
 				...unresolvedInput,
-				agent: selection.agent,
-				model: selection.model,
+				agent: effective.agent,
+				model: effective.model,
 				...omitUndefined({
-					resolvedAgent: selection.resolvedAgent,
-					variant: selection.variant,
+					resolvedAgent: effective.resolvedAgent,
+					effort: effective.effort,
+					reasoningMode: effective.reasoningMode,
 				}),
 			};
 		},
