@@ -517,8 +517,12 @@ describe("SessionView initial submission", () => {
 			]);
 			expect(sendOutcome).toBe("sent");
 			await flushUi(setup);
+			await setup.mockInput.typeText("next draft");
+			await flushUi(setup);
 			const frameWhileSendIsPending = setup.captureCharFrame();
-			expect(frameWhileSendIsPending).not.toContain("entered prompt");
+			expect(frameWhileSendIsPending.match(/entered prompt/gu)).toHaveLength(1);
+			expect(frameWhileSendIsPending).toContain("next draft");
+			expect(frameWhileSendIsPending).not.toContain("entered promptnext draft");
 		} finally {
 			release.resolve();
 			await flushUi(setup);

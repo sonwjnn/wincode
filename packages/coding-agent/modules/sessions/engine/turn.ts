@@ -29,31 +29,22 @@ import type { SessionExecution } from "./types";
 const INTERRUPTED_TOOL_ERROR = "Tool call interrupted";
 
 /** The assistant Session Message an execution streams into, before its first event. */
-const createEmptyRuntimeAssistantMessage = (
-	assistantId: SessionMessageId,
-	sourceUserMessageId: SessionMessageId | null,
-	agent: AgentId,
-	model: ChatModelSelection
+const emptyAssistantMessageFor = (
+	execution: SessionExecution
 ): SessionMessage => ({
-	id: assistantId,
+	id: execution.assistantId,
 	metadata: {
-		agent,
-		model,
-		...omitUndefined({ sourceUserMessageId: sourceUserMessageId ?? undefined }),
+		agent: execution.agent,
+		model: execution.model,
+		...omitUndefined({
+			sourceUserMessageId: execution.sourceUserMessageId ?? undefined,
+			effort: execution.effort,
+			reasoningMode: execution.reasoningMode,
+		}),
 	},
 	parts: [],
 	role: "assistant",
 });
-
-const emptyAssistantMessageFor = (
-	execution: SessionExecution
-): SessionMessage =>
-	createEmptyRuntimeAssistantMessage(
-		execution.assistantId,
-		execution.sourceUserMessageId,
-		execution.agent,
-		execution.model
-	);
 
 const replaceMessage = (
 	messages: readonly SessionMessage[],

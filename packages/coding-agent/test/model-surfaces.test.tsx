@@ -130,6 +130,46 @@ describe("model picker", () => {
 		expect(frame).toContain("GPT-5.6 Luna");
 		expect(frame).not.toContain("Retired fixture");
 	});
+
+	test("preserves one blank row between provider groups", async () => {
+		const openai = modelCatalog.find(
+			(entry) =>
+				entry.connectionProviderId === "openai" && entry.id === "gpt-5.6-luna"
+		);
+		const anthropic = modelCatalog.find(
+			(entry) => entry.connectionProviderId === "anthropic"
+		);
+		if (!(openai && anthropic)) {
+			throw new Error("fixture models missing");
+		}
+		const models = [
+			{ ...openai, displayName: "OpenAI spacing sentinel" },
+			{ ...anthropic, displayName: "Anthropic spacing sentinel" },
+		];
+		const setup = await renderSurfaces(() => (
+			<ModelsDialogContent
+				models={models}
+				onSelectModel={() => undefined}
+				recentSelections={[]}
+			/>
+		));
+		await setup.waitForFrame(
+			(frame) =>
+				frame.includes("OpenAI spacing sentinel") &&
+				frame.includes("Anthropic spacing sentinel")
+		);
+
+		const lines = setup.captureCharFrame().split("\n");
+		const modelRows = [
+			lines.findIndex((line) => line.includes("OpenAI spacing sentinel")),
+			lines.findIndex((line) => line.includes("Anthropic spacing sentinel")),
+		].sort((left, right) => left - right);
+		const [firstModelRow, secondModelRow] = modelRows;
+		if (firstModelRow === undefined || secondModelRow === undefined) {
+			throw new Error("provider model rows missing");
+		}
+		expect(secondModelRow - firstModelRow).toBe(3);
+	});
 	test("keeps a retired current selection visible", async () => {
 		const active = modelCatalog.find(
 			(entry) =>

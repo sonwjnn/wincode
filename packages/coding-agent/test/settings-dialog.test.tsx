@@ -40,6 +40,90 @@ const copyOnSelectSetting = (value: boolean): ResolvedSetting => ({
 	source: { kind: "default" },
 	value,
 });
+const settingInSection = (
+	id: string,
+	label: string,
+	section: string
+): ResolvedSetting => ({
+	...createSetting(false),
+	descriptor: {
+		...AUTO_COMPACT_SETTING,
+		id,
+		label,
+		section,
+	},
+});
+
+test("omits settings section headings and keeps rows adjacent", async () => {
+	const first = settingInSection("first", "First option", "General");
+	const second = settingInSection("second", "Second option", "Advanced");
+	const operations: SettingsOperations = {
+		catalog: SETTINGS_CATALOG,
+		getSettings: async () => [first, second],
+		resetValue: async () => first,
+		setValue: async () => first,
+	};
+	const setup = await renderSettingsDialog(operations, [first, second]);
+	const frame = setup.captureCharFrame();
+	const lines = frame.split("\n");
+	const firstIndex = lines.findIndex((line) => line.includes("First option"));
+	const secondIndex = lines.findIndex((line) => line.includes("Second option"));
+
+	expect(frame).not.toContain("General");
+	expect(frame).not.toContain("Advanced");
+	expect(secondIndex - firstIndex).toBe(1);
+	await act(() => setup.renderer.destroy());
+});
+
+test("shows the final setting without scrolling", async () => {
+	const first = settingInSection("first", "First option", "General");
+	const second = settingInSection("second", "Second option", "Advanced");
+	const third = settingInSection("third", "Third option", "Display");
+	const settings = [first, second, third];
+	const operations: SettingsOperations = {
+		catalog: SETTINGS_CATALOG,
+		getSettings: async () => settings,
+		resetValue: async () => first,
+		setValue: async () => first,
+	};
+	const setup = await renderSettingsDialog(operations, settings);
+
+	expect(setup.captureCharFrame()).toContain("Third option");
+	await act(() => setup.renderer.destroy());
+});
+
+test("keeps the settings dialog height independent of item count", async () => {
+	const first = settingInSection("first", "First option", "General");
+	const multiple = [
+		first,
+		settingInSection("second", "Second option", "Advanced"),
+		settingInSection("third", "Third option", "Display"),
+	];
+	const operations: SettingsOperations = {
+		catalog: SETTINGS_CATALOG,
+		getSettings: async () => multiple,
+		resetValue: async () => first,
+		setValue: async () => first,
+	};
+	const oneItemSetup = await renderSettingsDialog(operations, [first]);
+	const singleFooterIndex = oneItemSetup
+		.captureCharFrame()
+		.split("\n")
+		.findIndex((line) => line.includes("navigate"));
+	await act(() => oneItemSetup.renderer.destroy());
+
+	const multipleItemsSetup = await renderSettingsDialog(operations, multiple);
+	const multipleFooterIndex = multipleItemsSetup
+		.captureCharFrame()
+		.split("\n")
+		.findIndex((line) => line.includes("navigate"));
+	if (singleFooterIndex < 0 || multipleFooterIndex < 0) {
+		throw new Error("Settings footer not rendered.");
+	}
+
+	expect(singleFooterIndex).toBe(multipleFooterIndex);
+	await act(() => multipleItemsSetup.renderer.destroy());
+});
 
 const renderSettingsDialog = async (
 	operations: SettingsOperations,
@@ -187,7 +271,6 @@ test("search fuzzy-matches settings with subsequences across words", async () =>
 	await flushUi(setup);
 
 	expect(setup.captureCharFrame()).toContain("Auto-compact");
-	expect(setup.captureCharFrame()).toContain("Compaction");
 	expect(setup.captureCharFrame()).not.toContain("No matching settings.");
 	await act(() => setup.renderer.destroy());
 });

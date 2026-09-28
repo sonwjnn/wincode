@@ -20,8 +20,14 @@ const MIN_VISIBLE_ITEMS = 8;
 const CONFIRM_DELETE_BG = RGBA.fromInts(60, 20, 20, 255);
 
 type ListItem =
-	| { kind: "header"; label: string }
+	| { kind: "header"; label: string; sectionKey: string }
 	| { kind: "session"; session: Session };
+const getSessionSectionKey = (item: ListItem): string => {
+	if (item.kind === "header") {
+		return item.sectionKey;
+	}
+	return item.session.pinned ? "pinned" : "recent";
+};
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
 	hour: "numeric",
@@ -44,14 +50,14 @@ function buildListItems(
 	const items: ListItem[] = [];
 
 	if (pinned.length > 0) {
-		items.push({ kind: "header", label: "Pinned" });
+		items.push({ kind: "header", label: "Pinned", sectionKey: "pinned" });
 		for (const session of pinned) {
 			items.push({ kind: "session", session });
 		}
 	}
 
 	if (recent.length > 0) {
-		items.push({ kind: "header", label: "Recent" });
+		items.push({ kind: "header", label: "Recent", sectionKey: "recent" });
 		for (const session of recent) {
 			items.push({ kind: "session", session });
 		}
@@ -322,6 +328,7 @@ export const SessionsDialogContent = () => {
 				}
 				return;
 			}}
+			getItemSectionKey={getSessionSectionKey}
 			getKey={(item) =>
 				item.kind === "header" ? `header:${item.label}` : item.session.id
 			}

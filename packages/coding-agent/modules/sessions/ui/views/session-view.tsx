@@ -8,7 +8,12 @@ import {
 	normalizeReasoningSelection,
 	type ReasoningSelection,
 } from "@wincode/ai/models";
-import { getErrorMessage, isNull, isUndefined } from "@wincode/runtime-utils";
+import {
+	getErrorMessage,
+	isNull,
+	isUndefined,
+	omitUndefined,
+} from "@wincode/runtime-utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	type AgentRegistry,
@@ -17,9 +22,10 @@ import {
 } from "@/modules/agents";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { SessionHost } from "@/modules/sessions/host/types";
-import type {
-	SessionFilePart,
-	SessionMessage,
+import {
+	createSessionUserMessage,
+	type SessionFilePart,
+	type SessionMessage,
 } from "@/modules/sessions/message";
 import { useSettingsHubDialog } from "@/modules/settings";
 import type { EditMode } from "@/modules/tools";
@@ -241,6 +247,9 @@ export function SessionView({
 		readonly SessionSubmissionComposition[]
 	>([]);
 	const [recallRevision, setRecallRevision] = useState(0);
+	const [optimisticMessages, setOptimisticMessages] = useState<
+		readonly SessionMessage[]
+	>([]);
 	const {
 		cancelCompaction,
 		compact,
@@ -279,30 +288,36 @@ export function SessionView({
 		}
 		return annotations;
 	}, [initialTranscript]);
-	const messages = useMemo(
-		() =>
-			snapshot.transcript.map((message) => {
-				const annotations = displayAnnotationsByMessage.get(message.id);
-				if (annotations === undefined) {
-					return message;
+	const messages = useMemo(() => {
+		const transcript = snapshot.transcript.map((message) => {
+			const annotations = displayAnnotationsByMessage.get(message.id);
+			if (annotations === undefined) {
+				return message;
+			}
+			let hasAnnotation = false;
+			const parts = message.parts.map((part, index) => {
+				const annotation = annotations[index];
+				if (
+					part.type !== "file" ||
+					annotation?.attachmentId === undefined ||
+					part.attachmentId !== annotation.attachmentId
+				) {
+					return part;
 				}
-				let hasAnnotation = false;
-				const parts = message.parts.map((part, index) => {
-					const annotation = annotations[index];
-					if (
-						part.type !== "file" ||
-						annotation?.attachmentId === undefined ||
-						part.attachmentId !== annotation.attachmentId
-					) {
-						return part;
-					}
-					hasAnnotation = true;
-					return annotation;
-				});
-				return hasAnnotation ? { ...message, parts } : message;
-			}),
-		[displayAnnotationsByMessage, snapshot.transcript]
-	);
+				hasAnnotation = true;
+				return annotation;
+			});
+			return hasAnnotation ? { ...message, parts } : message;
+		});
+		if (optimisticMessages.length === 0) {
+			return transcript;
+		}
+		const committedIds = new Set(snapshot.transcript.map(({ id }) => id));
+		return [
+			...transcript,
+			...optimisticMessages.filter(({ id }) => !committedIds.has(id)),
+		];
+	}, [displayAnnotationsByMessage, optimisticMessages, snapshot.transcript]);
 	const error = snapshot.compactionError ?? snapshot.error;
 	// The session's own facts decide whether it is busy: a running turn, an
 	// approval that is waiting, or a compaction in flight.
@@ -516,6 +531,24 @@ export function SessionView({
 			model,
 			currentReasoningSelection
 		);
+		const optimisticMessage = isBusy
+			? undefined
+			: createSessionUserMessage(
+					userText,
+					{
+						agent: effective.agent,
+						model: effective.model,
+						...omitUndefined({
+							effort: effective.effort,
+							reasoningMode: effective.reasoningMode,
+						}),
+					},
+					[],
+					files
+				);
+		if (optimisticMessage) {
+			setOptimisticMessages((pending) => [...pending, optimisticMessage]);
+		}
 		// `send` resolves when the full turn completes; the composer should reset
 		// as soon as this session accepts the new send, and a busy session accepts
 		// it as a Queued Submission.
@@ -531,6 +564,7 @@ export function SessionView({
 			effort: effective.effort,
 			reasoningMode: effective.reasoningMode,
 			userText,
+			reservedMessageId: optimisticMessage?.id,
 			skill,
 		})
 			.then((outcome) => {
@@ -546,6 +580,13 @@ export function SessionView({
 					message: "Could not submit the prompt",
 					variant: "error",
 				});
+			})
+			.finally(() => {
+				if (optimisticMessage) {
+					setOptimisticMessages((pending) =>
+						pending.filter(({ id }) => id !== optimisticMessage.id)
+					);
+				}
 			});
 		return true;
 	};

@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import { prepareRetryMessages } from "@/modules/sessions/engine/submission";
+import { projectAgentTurnEvent } from "@/modules/sessions/engine/turn";
+import type { SessionExecution } from "@/modules/sessions/engine/types";
 import type {
 	SessionMessage,
 	SessionMessageTerminalOutcome,
@@ -253,6 +255,42 @@ test("groups matching metadata while the next turn runs and after completion", (
 			message.id,
 		])
 	).toEqual([["user-2", "assistant-2"]]);
+});
+
+test("moves matching metadata to the newest turn before its assistant completes", () => {
+	const model = { modelId: modelId("gpt-5.6-luna"), providerId: "openai" };
+	const execution: SessionExecution = {
+		agent: agentId("build"),
+		assistantId: sessionMessageId("assistant-2"),
+		effort: "low",
+		model,
+		sessionModel: model,
+		sourceUserMessageId: sessionMessageId("user-2"),
+		startedAt: 0,
+		turnId: agentTurnId("turn-2"),
+	};
+	const streamed = projectAgentTurnEvent(
+		[
+			userWithSharedMetadata("user-1"),
+			assistantWithSharedMetadata("assistant-1"),
+			userWithSharedMetadata("user-2"),
+		],
+		execution,
+		{
+			delta: "working",
+			sequence: 1,
+			turnId: execution.turnId,
+			type: "text-delta",
+		}
+	);
+	if (!streamed) {
+		throw new Error("Streaming text must produce an assistant message.");
+	}
+	const footers = resolveSessionTurnFooterMessages(
+		groupMessagesBySessionTurn(streamed.messages)
+	);
+	expect([...footers.keys()]).toEqual(["user-2"]);
+	expect(footers.get("user-2")?.id).toBe(sessionMessageId("assistant-2"));
 });
 
 test("keeps a Steering Message inside the turn it joined", () => {

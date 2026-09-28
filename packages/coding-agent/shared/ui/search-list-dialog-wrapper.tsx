@@ -1,7 +1,7 @@
 import type { RGBA } from "@opentui/core";
 import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
-import { type ReactNode, useCallback, useEffect } from "react";
+import { Fragment, type ReactNode, useCallback, useEffect } from "react";
 import { fuzzyMatch } from "../fuzzy";
 import { useSearchableList } from "../hooks/use-searchable-list";
 import { useDialogLayer } from "../providers/dialog/dialog-provider";
@@ -9,6 +9,7 @@ import { useKeyboardLayer } from "../providers/keyboard-layer/keyboard-layer-pro
 import { useTheme } from "../providers/theme/theme-provider";
 
 const MAX_VISIBLE_ITEMS = 6;
+const DIALOG_SECTION_SPACING = 1;
 type KeyboardKey = Parameters<Parameters<typeof useKeyboard>[0]>[0];
 type SearchText = string | readonly string[];
 
@@ -38,6 +39,7 @@ type SearchListDialogWrapperProps<T> = {
 	getKey: (item: T) => string;
 	isItemActive?: (item: T) => boolean;
 	isItemSelectable?: (item: T) => boolean;
+	getItemSectionKey?: (item: T) => string | undefined;
 	placeholder?: string;
 	showSearch?: boolean;
 	emptyText?: string;
@@ -77,6 +79,7 @@ export function SearchListDialogWrapper<T>({
 	minVisibleItems = 0,
 	footer,
 	getItemBackgroundColor,
+	getItemSectionKey,
 	onKey,
 }: SearchListDialogWrapperProps<T>) {
 	const filterFn = useCallback(
@@ -88,7 +91,29 @@ export function SearchListDialogWrapper<T>({
 		},
 		[getSearchText]
 	);
+
+	const getItemHeight = useCallback(
+		(item: T, index: number, list: readonly T[]) => {
+			if (index === 0 || !getItemSectionKey) {
+				return 1;
+			}
+			const previousItem = list[index - 1];
+			if (previousItem === undefined) {
+				return 1;
+			}
+			const sectionKey = getItemSectionKey(item);
+			if (
+				sectionKey === undefined ||
+				sectionKey === getItemSectionKey(previousItem)
+			) {
+				return 1;
+			}
+			return 1 + DIALOG_SECTION_SPACING;
+		},
+		[getItemSectionKey]
+	);
 	const {
+		contentHeight,
 		filtered,
 		isScrollReady,
 		searchValue,
@@ -105,7 +130,8 @@ export function SearchListDialogWrapper<T>({
 		items,
 		filterFn,
 		initialSelectedIndex,
-		isItemSelectable
+		isItemSelectable,
+		getItemHeight
 	);
 	const { isTopLayer } = useKeyboardLayer();
 	const layerId = useDialogLayer();
@@ -113,7 +139,7 @@ export function SearchListDialogWrapper<T>({
 
 	const visibleHeight = Math.max(
 		minVisibleItems,
-		Math.min(filtered.length, maxVisibleItems)
+		Math.min(contentHeight, maxVisibleItems)
 	);
 	const highlightedItem = filtered[selectedIndex];
 
@@ -178,34 +204,39 @@ export function SearchListDialogWrapper<T>({
 					{filtered.map((item, i) => {
 						const isSelected = i === selectedIndex;
 						const selectable = isItemSelectable(item);
+						const sectionSpacing = getItemHeight(item, i, filtered) - 1;
 						return (
-							// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events.
-							<box
-								backgroundColor={
-									getItemBackgroundColor?.(item, isSelected) ??
-									(isSelected ? colors.selection : undefined)
-								}
-								flexDirection="row"
-								height={1}
-								key={getKey(item)}
-								marginX={1}
-								onMouseDown={() => selectable && onSelect(item)}
-								onMouseMove={() => {
-									if (!selectable) {
-										return;
+							<Fragment key={getKey(item)}>
+								{sectionSpacing > 0 ? (
+									<box height={sectionSpacing} marginX={1} />
+								) : null}
+								{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events. */}
+								<box
+									backgroundColor={
+										getItemBackgroundColor?.(item, isSelected) ??
+										(isSelected ? colors.selection : undefined)
 									}
-									selectedIndexRef.current = i;
-									setSelectedIndex(i);
-								}}
-								overflow="hidden"
-							>
-								{renderItem(
-									item,
-									isSelected,
-									isItemActive?.(item) ?? false,
-									searchValue.length > 0
-								)}
-							</box>
+									flexDirection="row"
+									height={1}
+									marginX={1}
+									onMouseDown={() => selectable && onSelect(item)}
+									onMouseMove={() => {
+										if (!selectable) {
+											return;
+										}
+										selectedIndexRef.current = i;
+										setSelectedIndex(i);
+									}}
+									overflow="hidden"
+								>
+									{renderItem(
+										item,
+										isSelected,
+										isItemActive?.(item) ?? false,
+										searchValue.length > 0
+									)}
+								</box>
+							</Fragment>
 						);
 					})}
 				</scrollbox>

@@ -41,6 +41,7 @@ import { CompactionDivider } from "./compaction-divider";
 import { CompactionStatus } from "./compaction-status";
 import { SessionUsageBar } from "./session-usage-bar";
 import { WaitingMessageStrip } from "./waiting-message-strip";
+import { WorkspacePath } from "./workspace-path";
 
 const EMPTY_QUEUED_SUBMISSIONS: readonly SessionQueuedSubmission[] = [];
 const EMPTY_STEERING_MESSAGES: readonly SessionSteeringMessage[] = [];
@@ -242,21 +243,16 @@ export function ChatShell({
 									/>
 								);
 							}
-							const turnRetryMessageId = resolveRetryMessageId(
-								item.turn.messages
-							);
+							const turn = item.turn;
+							const turnRetryMessageId = resolveRetryMessageId(turn.messages);
 							const canRetryTurn =
 								!(isBusy || isUndefined(turnRetryMessageId)) &&
 								retryableMessages.some(({ id }) => id === turnRetryMessageId);
 							return (
-								<box
-									key={item.turn.id}
-									marginTop={index === 0 ? 1 : 0}
-									width="100%"
-								>
+								<box key={turn.id} marginTop={index === 0 ? 1 : 0} width="100%">
 									<ChatMessage
-										footerMessage={footerMessages.get(item.turn.id)}
-										messages={item.turn.messages}
+										footerMessage={footerMessages.get(turn.id)}
+										messages={turn.messages}
 										onRetry={canRetryTurn ? onRetry : undefined}
 									/>
 								</box>
@@ -323,9 +319,7 @@ export function ChatShell({
 										viewState={viewState}
 									/>
 								) : (
-									<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-										{process.cwd()}
-									</text>
+									<WorkspacePath />
 								)}
 							</box>
 

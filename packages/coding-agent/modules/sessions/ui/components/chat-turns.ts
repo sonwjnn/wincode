@@ -67,10 +67,11 @@ const resolveTurnFooterMessage = (
 		return current;
 	}
 
-	const next = resolveTurnMetadataMessage(nextTurn);
+	const nextMetadataMessage = resolveTurnMetadataMessage(nextTurn);
 	if (
-		!next ||
-		resolveTurnMetadataSignature(current) !== resolveTurnMetadataSignature(next)
+		!nextMetadataMessage ||
+		resolveTurnMetadataSignature(current) !==
+			resolveTurnMetadataSignature(nextMetadataMessage)
 	) {
 		return current;
 	}

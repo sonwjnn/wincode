@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+- **Session metadata groups as soon as a prompt is submitted.** An idle
+  submission appears optimistically in the transcript on Enter and reconciles
+  with its stored message by ID. Streaming assistant messages carry the
+  execution's reasoning selection from the start, so matching metadata stays
+  only on the newest turn without waiting for completion.
+
 - **Shell permission flips to a permissive posture (0.1.0).** Shell commands
   default to `allow` instead of `ask`; `rm *` and `sudo *` deny by default as
   overridable rules. Commands are matched as string globs and evaluated per
@@ -164,6 +170,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ADR-0023.
 
 ### Fixed
+- **Settings rows have no section headings or inter-item gaps.** Model and
+  Session headings keep the shared blank-row gap; Settings keeps its
+  terminal-capped fixed-height viewport independent of item count.
 - **Command and file suggestions stay aligned after an empty search.** Returning
   from "No matching commands" or "No matching files" clears the empty-state
   horizontal padding before showing selectable rows.

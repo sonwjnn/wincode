@@ -1,4 +1,5 @@
 import { TextAttributes } from "@opentui/core";
+import { useTerminalDimensions } from "@opentui/react";
 import {
 	getErrorMessage,
 	isBoolean,
@@ -27,18 +28,10 @@ export type SettingsDialogContentProps = {
 	readonly operations: SettingsOperations;
 };
 
-type SettingsListItem =
-	| {
-			readonly id: string;
-			readonly kind: "section";
-			readonly section: string;
-			readonly searchTexts: readonly string[];
-	  }
-	| {
-			readonly id: string;
-			readonly kind: "setting";
-			readonly setting: ResolvedSetting;
-	  };
+type SettingsListItem = {
+	readonly id: string;
+	readonly setting: ResolvedSetting;
+};
 
 type SettingMutation = () => Promise<ResolvedSetting>;
 
@@ -95,40 +88,11 @@ const getSettingSearchText = (setting: ResolvedSetting): string =>
 		setting.descriptor.section,
 	].join(" ");
 
-const buildItems = (
-	settings: readonly ResolvedSetting[]
-): SettingsListItem[] => {
-	const items: SettingsListItem[] = [];
-	const searchTextsBySection = new Map<string, string[]>();
-	for (const setting of settings) {
-		const section = setting.descriptor.section;
-		let searchTexts = searchTextsBySection.get(section);
-		if (!searchTexts) {
-			searchTexts = [];
-			searchTextsBySection.set(section, searchTexts);
-		}
-		searchTexts.push(getSettingSearchText(setting));
-	}
-	let lastSection: string | undefined;
-	for (const setting of settings) {
-		const section = setting.descriptor.section;
-		if (section !== lastSection) {
-			items.push({
-				id: `section:${section}`,
-				kind: "section",
-				section,
-				searchTexts: searchTextsBySection.get(section) ?? [],
-			});
-			lastSection = section;
-		}
-		items.push({
-			id: setting.descriptor.id,
-			kind: "setting",
-			setting,
-		});
-	}
-	return items;
-};
+const buildItems = (settings: readonly ResolvedSetting[]): SettingsListItem[] =>
+	settings.map((setting) => ({
+		id: setting.descriptor.id,
+		setting,
+	}));
 
 const getInitialSettingId = (
 	settings: readonly ResolvedSetting[],
@@ -151,6 +115,8 @@ export function SettingsDialogContent({
 	initialSettings,
 	operations,
 }: SettingsDialogContentProps) {
+	const { height } = useTerminalDimensions();
+	const settingsListMaxHeight = Math.max(1, Math.floor(height * 0.5));
 	const { colors } = useTheme();
 	const { show } = useToast();
 	const [settings, setSettings] = useState<readonly ResolvedSetting[] | null>(
@@ -415,66 +381,36 @@ export function SettingsDialogContent({
 				</box>
 			}
 			getKey={(item) => item.id}
-			getSearchText={(item) =>
-				item.kind === "section"
-					? item.searchTexts
-					: getSettingSearchText(item.setting)
-			}
+			getSearchText={(item) => getSettingSearchText(item.setting)}
 			initialSelectedIndex={
 				isUndefined(initialSection)
 					? undefined
 					: Math.max(
 							0,
 							items.findIndex(
-								(item) =>
-									item.kind === "setting" &&
-									item.setting.descriptor.section === initialSection
+								(item) => item.setting.descriptor.section === initialSection
 							)
 						)
 			}
-			isItemSelectable={(item) =>
-				item.kind === "setting" && item.setting.available
-			}
+			isItemSelectable={(item) => item.setting.available}
 			items={items}
-			minVisibleItems={1}
-			onHighlight={(item) => {
-				if (item.kind === "setting") {
-					setSelectedId(item.setting.descriptor.id);
-				}
-			}}
+			maxVisibleItems={settingsListMaxHeight}
+			minVisibleItems={settingsListMaxHeight}
+			onHighlight={(item) => setSelectedId(item.setting.descriptor.id)}
 			onKey={(key, highlightedItem, isSearching) => {
-				if (
-					key.ctrl &&
-					key.name === "r" &&
-					highlightedItem?.kind === "setting"
-				) {
+				if (key.ctrl && key.name === "r" && highlightedItem) {
 					resetSetting(highlightedItem.setting);
 					return true;
 				}
-				if (
-					!isSearching &&
-					key.name === "space" &&
-					highlightedItem?.kind === "setting"
-				) {
+				if (!isSearching && key.name === "space" && highlightedItem) {
 					activateSetting(highlightedItem.setting);
 					return true;
 				}
 				return false;
 			}}
-			onSelect={(item) => {
-				if (item.kind === "setting") {
-					activateSetting(item.setting);
-				}
-			}}
+			onSelect={(item) => activateSetting(item.setting)}
 			placeholder="Search settings"
 			renderItem={(item, isSelected) => {
-				if (item.kind === "section") {
-					return (
-						<SelectableDialogItem>
-							<text fg={colors.primary}>{item.section}</text>
-						</SelectableDialogItem>
-					);
-				}
 				const setting = item.setting;
 				const pending = pendingById[setting.descriptor.id] === true;
 				if (setting.descriptor.kind === "custom") {
