@@ -201,18 +201,26 @@ export const runWriteTool = async (
 		existing = await readVersionedFile(resolvedPath);
 		expectFileVersion(
 			existing.fileVersion,
-			input.expectedVersion as FileVersion | undefined,
+			(input.expectedVersion ?? undefined) as FileVersion | undefined,
 			input.path
 		);
 	} catch (error) {
 		if (!isMissingPath(error)) {
 			throw error;
 		}
-		if (input.expectedVersion !== undefined) {
+		if (input.expectedVersion !== null) {
+			const recoveryMessage =
+				"Set expectedVersion to null for a new file; for an existing file, Read it and use the returned File Version.";
 			throw new CodingToolError(
 				"file-not-found",
-				`Cannot apply expected File Version because '${input.path}' does not exist.`,
-				{ recovery: { action: "reread", path: input.path } }
+				`Cannot apply expected File Version because '${input.path}' does not exist. ${recoveryMessage}`,
+				{
+					recovery: {
+						action: "correct-input",
+						message: recoveryMessage,
+						path: input.path,
+					},
+				}
 			);
 		}
 	}

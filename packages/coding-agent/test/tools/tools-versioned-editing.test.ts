@@ -104,6 +104,25 @@ describe("versioned text model", () => {
 	});
 });
 describe("versioned coding tools", () => {
+	test("a first Read establishes current content without requiring a prior File Version", async () => {
+		for (const expectedVersion of [
+			"00000000000000000000000000000000",
+			"ffffffffffffffffffffffffffffffff",
+		]) {
+			await withTempFile("first read\n", async (filePath, context) => {
+				const first = await runReadTool(
+					{ expectedVersion, path: filePath },
+					{ allowExternalPath: true, versionedEditing: context }
+				);
+
+				expect(first.content).toContain("first read");
+				expect(first.fileVersion).toBe(
+					computeFileVersion(new TextEncoder().encode("first read\n"))
+				);
+			});
+		}
+	});
+
 	test("read returns a stable version and continuation rejects drift", async () => {
 		await withTempFile("one\ntwo\n", async (filePath, context) => {
 			const first = await runReadTool(
@@ -894,7 +913,11 @@ describe("versioned coding tools", () => {
 		await withTempFile("old\n", async (filePath, context) => {
 			await expect(
 				runWriteTool(
-					{ content: "new\n", path: filePath },
+					{
+						content: "new\n",
+						expectedVersion: null,
+						path: filePath,
+					},
 					{ allowExternalPath: true, versionedEditing: context }
 				)
 			).rejects.toMatchObject({ code: "expected-file-version" });
@@ -912,6 +935,45 @@ describe("versioned coding tools", () => {
 			);
 			expect(result.oldFileVersion).toBe(read.fileVersion);
 			expect(await Bun.file(filePath).text()).toBe("new\n");
+		});
+	});
+	test("write creates a new file when expectedVersion is null", async () => {
+		await withTempFile("existing\n", async (filePath, context) => {
+			const newPath = path.join(path.dirname(filePath), "new.txt");
+			const result = await runWriteTool(
+				{
+					content: "created\n",
+					expectedVersion: null,
+					path: newPath,
+				},
+				{ allowExternalPath: true, versionedEditing: context }
+			);
+			expect(result.oldFileVersion).toBeUndefined();
+			expect(await Bun.file(newPath).text()).toBe("created\n");
+		});
+	});
+	test("new-file writes reject guessed versions with null-sentinel guidance", async () => {
+		await withTempFile("existing\n", async (filePath, context) => {
+			const newPath = path.join(path.dirname(filePath), "new.txt");
+			await expect(
+				runWriteTool(
+					{
+						content: "new\n",
+						expectedVersion: "0".repeat(32),
+						path: newPath,
+					},
+					{ allowExternalPath: true, versionedEditing: context }
+				)
+			).rejects.toMatchObject({
+				message: expect.stringContaining("Set expectedVersion to null"),
+				code: "file-not-found",
+				recovery: {
+					action: "correct-input",
+					message: expect.stringContaining("Set expectedVersion to null"),
+					path: newPath,
+				},
+			});
+			expect(await Bun.file(newPath).exists()).toBe(false);
 		});
 	});
 	test("patch applies multiple disjoint hunks atomically from one snapshot", async () => {

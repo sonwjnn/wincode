@@ -101,9 +101,14 @@ const isSloppyCodingInput = (value: unknown): boolean =>
 const runtimeToolDefinition = (
 	name: CodingToolName,
 	shellPlatform: ShellPlatform,
-	editMode?: EditMode
+	editMode?: EditMode,
+	resourceLimits?: ToolResourceLimits
 ): ToolDefinition => {
-	const definition = codingToolDefinitionFor(name, shellPlatform);
+	const definition = codingToolDefinitionFor(
+		name,
+		shellPlatform,
+		resourceLimits
+	);
 	if (name !== "edit" || editMode === undefined) {
 		return definition;
 	}
@@ -186,6 +191,8 @@ export type GatedCodingToolsDeps = {
 		signal?: AbortSignal
 	) => Promise<ToolCallOutput>;
 	resolveResourceLimits?: (agentId?: AgentId) => Promise<ToolResourceLimits>;
+	/** Active profile snapshot used to shape model-facing tool schemas. */
+	resourceLimits?: ToolResourceLimits;
 	skillExecution?: SkillExecution;
 	skillTool?: SkillToolDefinition;
 	delegate?: DelegationExecutor;
@@ -404,6 +411,7 @@ export const createGatedCodingTools = ({
 	mcpSnapshot,
 	parentTurnId,
 	resolveResourceLimits,
+	resourceLimits,
 	skillExecution,
 	skillTool,
 	versionedEditing,
@@ -412,7 +420,8 @@ export const createGatedCodingTools = ({
 		definition: runtimeToolDefinition(
 			name,
 			HOST_SHELL_PLATFORM,
-			versionedEditing?.editMode
+			versionedEditing?.editMode,
+			resourceLimits
 		),
 		execute: async (
 			{ input, toolCallId }: { input: unknown; toolCallId: ToolCallId },

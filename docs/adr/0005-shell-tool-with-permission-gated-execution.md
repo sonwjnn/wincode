@@ -6,7 +6,7 @@ Status: accepted
 
 ## Decision
 
-- Shell execution is bounded by timeout, output limits, no stdin, and process-tree termination.
+- Shell execution is bounded by active-profile command/cwd lengths, timeout, output limits, no stdin, and process-tree termination; the model-facing input schema reflects the active profile.
 - Commands are parsed with the platform shell grammar when available; malformed commands fail closed.
 - A safety classifier keeps destructive commands behind approval even when a temporary grant exists.
 - The tool receives the workspace root as its default working directory and applies platform-specific path semantics.

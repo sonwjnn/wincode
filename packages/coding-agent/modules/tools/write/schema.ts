@@ -4,7 +4,11 @@ import { fileVersionSchema, lineRangeSchema } from "../versioned/model";
 export const writeInputSchema = z
 	.object({
 		content: z.string(),
-		expectedVersion: fileVersionSchema.optional(),
+		expectedVersion: fileVersionSchema
+			.nullable()
+			.describe(
+				"Set this field to null when creating a new file. For an existing file, supply the exact current File Version returned by Read; never guess or use a placeholder."
+			),
 		path: z.string().min(1),
 	})
 	.strict();
@@ -22,7 +26,7 @@ export const writeOutputSchema = z
 
 export const writeToolSchema = {
 	description:
-		"Create a UTF-8 text file or overwrite an existing file only with its expected File Version. Missing parent directories are created and newly created empty parents are removed if the write fails.",
+		"Create a new UTF-8 text file with expectedVersion set to null. To overwrite an existing file, use the exact File Version returned by Read; never guess or use a placeholder. Missing parent directories are created and newly created empty parents are removed if the write fails.",
 	name: "write",
 	schema: writeInputSchema,
 } as const;

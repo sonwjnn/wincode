@@ -10,6 +10,7 @@ import type {
 import { createOperationalFailure } from "@wincode/agent-core";
 import { createModelTarget } from "@wincode/ai/model-target";
 import { isObjectLike, isUndefined } from "@wincode/runtime-utils";
+import { z } from "zod";
 import { buildAgent } from "@/modules/agents/built-ins";
 import { RetiredModelError } from "@/modules/model-target";
 import {
@@ -18,7 +19,10 @@ import {
 	runAgentTurnToText,
 } from "@/modules/sessions/hooks/runtime-turn";
 import { buildAssistantFailureSessionRecord } from "@/modules/sessions/turn-records";
-import { createMemoryFileObservationStore } from "@/modules/tools";
+import {
+	createMemoryFileObservationStore,
+	getToolResourceLimits,
+} from "@/modules/tools";
 import {
 	agentId,
 	agentTurnId,
@@ -124,6 +128,45 @@ class AbortOnSecondReadSignal extends EventTarget implements AbortSignal {
 	}
 }
 
+test("Agent Turn shell schemas enforce the active resource profile command limit", () => {
+	const shellToolFor = (profile: "standard" | "extended" | "deep") => {
+		const tool = createGatedCodingTools({
+			agentTools: ["shell"],
+			gate: { gate: async () => ({ kind: "allow" }) },
+			resourceLimits: getToolResourceLimits(profile),
+		})[0];
+		if (isUndefined(tool)) {
+			throw new Error("The shell tool was not registered.");
+		}
+		const schema = tool.definition.inputSchema;
+		if (!("safeParse" in schema)) {
+			throw new Error("The shell definition has no executable input schema.");
+		}
+		return schema;
+	};
+
+	for (const profile of ["standard", "extended", "deep"] as const) {
+		const maxCommandChars =
+			getToolResourceLimits(profile).shell.maxCommandChars;
+		const schema = shellToolFor(profile);
+
+		expect(
+			schema.safeParse({ command: `:${" ".repeat(maxCommandChars - 1)}` })
+				.success
+		).toBe(true);
+		expect(
+			schema.safeParse({ command: `:${" ".repeat(maxCommandChars)}` }).success
+		).toBe(false);
+		expect(z.toJSONSchema(schema)).toMatchObject({
+			properties: {
+				command: {
+					maxLength: maxCommandChars,
+				},
+			},
+		});
+	}
+});
+
 test("forwards cancellation to a running coding tool", async () => {
 	const [shellTool] = createGatedCodingTools({
 		agentTools: ["shell"],
@@ -168,7 +211,11 @@ test("coding tools execute only after the gate and remain Agent-selective", asyn
 			throw new Error("The selected write tool was not resolved.");
 		}
 		const allowed = await allowedTool.execute({
-			input: { content: "gated write\n", path: allowedPath },
+			input: {
+				content: "gated write\n",
+				expectedVersion: null,
+				path: allowedPath,
+			},
 			toolCallId: toolCallId("catalog-write-allowed"),
 		});
 		expect(allowed.type).toBe("success");
@@ -189,7 +236,11 @@ test("coding tools execute only after the gate and remain Agent-selective", asyn
 			throw new Error("The selected write tool was not resolved.");
 		}
 		const denied = await deniedTool.execute({
-			input: { content: "must not be written\n", path: deniedPath },
+			input: {
+				content: "must not be written\n",
+				expectedVersion: null,
+				path: deniedPath,
+			},
 			toolCallId: toolCallId("catalog-write-denied"),
 		});
 		expect(denied).toMatchObject({

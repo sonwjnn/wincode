@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { TOOL_RESOURCE_LIMITS } from "../resource-limits";
+import {
+	TOOL_RESOURCE_LIMITS,
+	type ToolResourceLimits,
+} from "../resource-limits";
 
 export const SHELL_COMMAND_MAX_CHARS =
 	TOOL_RESOURCE_LIMITS.deep.shell.maxCommandChars;
@@ -11,11 +14,21 @@ export const SHELL_TIMEOUT_MAX_SECONDS =
 export const SHELL_OUTPUT_TAIL_BYTES =
 	TOOL_RESOURCE_LIMITS.standard.shell.maxOutputBytes;
 
-export const shellInputSchema = z.object({
-	command: z.string().min(1).max(SHELL_COMMAND_MAX_CHARS),
-	cwd: z.string().min(1).max(SHELL_CWD_MAX_CHARS).optional(),
-	timeout: z.number().int().min(1).max(SHELL_TIMEOUT_MAX_SECONDS).optional(),
-});
+export const shellInputSchemaForLimits = (limits: ToolResourceLimits) =>
+	z.object({
+		command: z.string().min(1).max(limits.shell.maxCommandChars),
+		cwd: z.string().min(1).max(limits.shell.maxCwdChars).optional(),
+		timeout: z
+			.number()
+			.int()
+			.min(1)
+			.max(limits.shell.maxTimeoutSeconds)
+			.optional(),
+	});
+
+export const shellInputSchema = shellInputSchemaForLimits(
+	TOOL_RESOURCE_LIMITS.deep
+);
 
 export const shellOutputSchema = z.object({
 	exitCode: z.number().nullable(),
@@ -50,11 +63,17 @@ const SHELL_TOOL_BOUNDS_DESCRIPTION =
  */
 export const shellToolDescription = `Run a bounded shell command on the user's machine. Shell runs permissively by default: harmless commands like pwd, ls, and git status execute without approval. ${SHELL_TOOL_BOUNDS_DESCRIPTION}`;
 
-/** Composes the system-prompt tool description naming the active shell syntax. */
-export const composeShellToolDescription = (platform: ShellPlatform): string =>
-	platform === "win32"
-		? `Run a PowerShell command on the user's machine using powershell.exe -Command (Windows PowerShell syntax). ${SHELL_TOOL_BOUNDS_DESCRIPTION}`
-		: `Run a shell command on the user's machine using /bin/bash -c (macOS/Linux bash syntax). ${SHELL_TOOL_BOUNDS_DESCRIPTION}`;
+export const composeShellToolDescription = (
+	platform: ShellPlatform,
+	limits: ToolResourceLimits = TOOL_RESOURCE_LIMITS.standard
+): string => {
+	const commandGuidance = `The active ${limits.profile} resource profile limits shell commands to ${limits.shell.maxCommandChars} characters, cwd values to ${limits.shell.maxCwdChars} characters, and timeout values to ${limits.shell.maxTimeoutSeconds} seconds. Use the write tool for larger file contents instead of a shell heredoc.`;
+	const invocation =
+		platform === "win32"
+			? "Run a PowerShell command on the user's machine using powershell.exe -Command (Windows PowerShell syntax)."
+			: "Run a shell command on the user's machine using /bin/bash -c (macOS/Linux bash syntax).";
+	return `${invocation} ${SHELL_TOOL_BOUNDS_DESCRIPTION} ${commandGuidance}`;
+};
 
 export const shellToolSchema = {
 	description: shellToolDescription,

@@ -546,6 +546,9 @@ export const createSessionPorts = ({
 				tooling,
 				workspace: config.workspace,
 			});
+			const resourceLimits = await tooling.resolveResourceLimits?.(
+				execution.agent
+			);
 			const tools = createGatedCodingTools({
 				agentId: execution.agent,
 				agentTools: resolvedAgent.visibleCodingTools,
@@ -556,6 +559,7 @@ export const createSessionPorts = ({
 				gate: tooling.gate,
 				mcpSnapshot: snapshot,
 				parentTurnId: execution.turnId,
+				resourceLimits,
 				resolveResourceLimits: tooling.resolveResourceLimits,
 				skillExecution: scope.armedSkill?.execution,
 				skillTool: scope.armedSkill?.tool,
