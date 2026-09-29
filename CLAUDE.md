@@ -22,7 +22,7 @@
 When authorized to create or edit a PR, follow the checklist below.
 
 - MUST `.github/pull_request_template.md` first. Preserve the template sections and checklist, including when shortening an existing description.
-- MUST read back the published PR description after creating or editing it. Check only verified checklist items; explain skipped or inapplicable checks in `Testing`.
+- MUST read back the published PR description after creating or editing it. Check only verified checklist items; explain skipped or inapplicable checks in `Checklist`.
 ---
 
 ## Code Quality
