@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+- **Workspace branch display refreshes after checkout.** The session header
+  watches Git metadata in regular repositories and linked worktrees, updating
+  after an in-place checkout without polling or changing the workspace.
+
 - **Model Client routes through provider adapters and protocol strategies.** Each
   provider selects endpoint and authorization policy, then carries the selected
   protocol strategy through request serialization and streamed response parsing.
