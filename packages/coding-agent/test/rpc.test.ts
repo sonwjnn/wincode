@@ -111,6 +111,50 @@ test("JSONL RPC initialize is the first readiness frame and shutdown is clean", 
 	]);
 });
 
+test("RPC initialize preserves Session Writer lock infrastructure failures", async () => {
+	const failure = Object.assign(new Error("private lock setup detail"), {
+		code: "session_lock_failed",
+	});
+	const stdout = writer();
+	const stderr = writer();
+	const exitCode = await runRpc({
+		composeCapabilities: async () => {
+			throw failure;
+		},
+		input: [
+			new TextEncoder().encode(
+				`${JSON.stringify({
+					id: "initialize-lock-failure",
+					jsonrpc: "2.0",
+					method: "initialize",
+					params: {
+						capabilities: {},
+						clientInfo: { name: "test-client" },
+						cwd: process.cwd(),
+						protocolVersion: 1,
+					},
+				})}\n`
+			),
+		],
+		stderr,
+		stdout,
+	});
+
+	expect(exitCode).toBe(0);
+	expect(stderr.frames).toEqual([]);
+	expect(stdout.frames.map((frame) => JSON.parse(frame))).toEqual([
+		{
+			error: {
+				code: -32_000,
+				data: { code: "session_lock_failed" },
+				message: "The Session Writer OS lock could not be established.",
+			},
+			id: "initialize-lock-failure",
+			jsonrpc: "2.0",
+		},
+	]);
+});
+
 describe("RPC framing errors", () => {
 	test("a malformed frame does not prevent a later valid shutdown", async () => {
 		const stdout = writer();

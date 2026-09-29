@@ -34,7 +34,7 @@ import type {
 	ModelStreamPart,
 } from "@wincode/ai/model-client";
 import { act } from "react";
-import { SessionInUseError } from "@/modules/sessions/storage/session-lease";
+import { SessionInUseError } from "@/modules/sessions/storage/session-writer-lock";
 import type { FakeModelStepScript } from "@/test/support/e2e-fake-runtime";
 import {
 	createFakeModelClientModule,
@@ -265,8 +265,8 @@ test("settles an approval left pending when the session view unmounts", async ()
 		});
 		await waitForSessionCondition(async () => {
 			try {
-				const lease = await store.acquireSessionLease(sessionId);
-				lease.release();
+				const writer = await store.acquireSessionWriter(sessionId);
+				await writer.release();
 				return true;
 			} catch (error) {
 				if (error instanceof SessionInUseError) {

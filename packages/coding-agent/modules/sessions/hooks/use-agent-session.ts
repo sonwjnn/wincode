@@ -8,7 +8,7 @@ import { projectSessionApprovals } from "@/modules/sessions/approval-projection"
 import type { CompactSessionResult } from "@/modules/sessions/compaction/compaction";
 import type {
 	AgentSession,
-	SessionSnapshot,
+	LiveSessionSnapshot,
 	SessionWaitingMessage,
 	SessionWaitingMessageId,
 } from "@/modules/sessions/engine/types";
@@ -45,7 +45,7 @@ export type AgentSessionBinding = Readonly<{
 	send: (input: SessionSendInput) => Promise<SessionSendOutcome>;
 	steerNextQueuedSubmission: AgentSession["steerNextQueuedSubmission"];
 	/** The session facts the view renders at one moment. */
-	snapshot: SessionSnapshot;
+	snapshot: LiveSessionSnapshot;
 }>;
 
 /**

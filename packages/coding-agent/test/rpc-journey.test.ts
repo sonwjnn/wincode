@@ -2,6 +2,16 @@ import { afterAll, expect, mock, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { runRpc } from "../modules/application/rpc/runner";
+import {
+	LegacySessionLeaseError,
+	SessionWriterLockFailureError,
+} from "../modules/sessions/storage/session-writer-lock";
+import {
+	agentId,
+	agentTurnId,
+	modelId,
+	sessionMessageId,
+} from "./support/identifiers";
 
 const workspace = await mkdtemp(join("/tmp", "wincode-rpc-journey-"));
 const databasePath = join(workspace, "conversation.sqlite");
@@ -307,4 +317,224 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		)
 	).toBe(true);
 	expect(session.effort).toBe("high");
+});
+
+test("RPC session/open keeps a held Session Writer as a refusal", async () => {
+	const connections = {
+		authorize: async () => ({ kind: "api-key" as const, apiKey: "test-key" }),
+		connect: async () => undefined,
+		listProviders: async () => [
+			{
+				connected: true as const,
+				connectionMethod: "api-key" as const,
+				displayName: "OpenAI",
+				id: "openai" as const,
+				methods: ["api-key", "browser"] as const,
+			},
+		],
+	};
+	const conflictDatabasePath = join(workspace, "writer-conflict.sqlite");
+	const ownerDatabase = createDatabase(conflictDatabasePath);
+	const ownerStore = createDrizzleSessionStore(ownerDatabase.db, {
+		attachmentRoot: join(workspace, "writer-conflict-attachments"),
+		snapshotRoot: join(workspace, "writer-conflict-snapshots"),
+		workspaceRoot: workspace,
+	});
+	const { id: sessionId } = await ownerStore.createSession({
+		agent: agentId("build"),
+		message: {
+			id: sessionMessageId("writer-conflict-message"),
+			parts: [{ text: "existing session", type: "text" }],
+			role: "user",
+		},
+		model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
+		turnId: agentTurnId("writer-conflict-turn"),
+	});
+	const rpcAssembly = await createSessionCapabilities({
+		connections,
+		cwd: workspace,
+		databasePath: conflictDatabasePath,
+		workspace,
+	});
+	const ownerWriter = await ownerStore.acquireSessionWriter(sessionId, {
+		executionMode: "interactive",
+	});
+	const stdoutFrames: string[] = [];
+	const stderrFrames: string[] = [];
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	): string => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const input = [
+		new TextEncoder().encode(
+			`${request("initialize", "initialize", {
+				capabilities: {},
+				clientInfo: { name: "writer-conflict-test" },
+				cwd: workspace,
+				protocolVersion: 1,
+			})}\n`
+		),
+		new TextEncoder().encode(
+			`${request("open", "session/open", { sessionId })}\n`
+		),
+		new TextEncoder().encode(`${request("shutdown", "server/shutdown", {})}\n`),
+	];
+
+	try {
+		const exitCode = await runRpc({
+			composeCapabilities: async () => rpcAssembly,
+			input,
+			stderr: {
+				write: (text: string): undefined => {
+					stderrFrames.push(text);
+				},
+			},
+			stdout: {
+				write: (text: string): undefined => {
+					stdoutFrames.push(text);
+				},
+			},
+		});
+		const frames = stdoutFrames.map(
+			(frame) => JSON.parse(frame) as Record<string, unknown>
+		);
+		const openFrame = frames.find((frame) => frame.id === "open");
+
+		expect(exitCode).toBe(0);
+		expect(stderrFrames).toEqual([]);
+		expect(openFrame?.error).toMatchObject({
+			data: { code: "session_in_use" },
+		});
+	} finally {
+		await ownerWriter.release();
+		await rpcAssembly.shutdown();
+		ownerDatabase.sqlite.close();
+	}
+});
+
+test("RPC session opening keeps lock refusals request-scoped", async () => {
+	const connections = {
+		authorize: async () => ({ kind: "api-key" as const, apiKey: "test-key" }),
+		connect: async () => undefined,
+		listProviders: async () => [
+			{
+				connected: true as const,
+				connectionMethod: "api-key" as const,
+				displayName: "OpenAI",
+				id: "openai" as const,
+				methods: ["api-key", "browser"] as const,
+			},
+		],
+	};
+	const failureDatabasePath = join(workspace, "writer-lock-failure.sqlite");
+	const failureAssembly = await createSessionCapabilities({
+		connections,
+		cwd: workspace,
+		databasePath: failureDatabasePath,
+		workspace,
+	});
+	const { id: sessionId } = await failureAssembly.store.createSession({
+		agent: agentId("build"),
+		message: {
+			id: sessionMessageId("lock-failure-message"),
+			parts: [{ text: "existing session", type: "text" }],
+			role: "user",
+		},
+		model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
+		turnId: agentTurnId("lock-failure-turn"),
+	});
+	const { id: legacySessionId } = await failureAssembly.store.createSession({
+		agent: agentId("build"),
+		message: {
+			id: sessionMessageId("legacy-lock-message"),
+			parts: [{ text: "legacy session", type: "text" }],
+			role: "user",
+		},
+		model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
+		turnId: agentTurnId("legacy-lock-turn"),
+	});
+	const acquireSessionWriter = failureAssembly.store.acquireSessionWriter;
+	failureAssembly.store.acquireSessionWriter = async (requestedSessionId) => {
+		if (requestedSessionId === legacySessionId) {
+			throw new LegacySessionLeaseError();
+		}
+		throw new SessionWriterLockFailureError(new Error("lock unavailable"));
+	};
+	const stdoutFrames: string[] = [];
+	const stderrFrames: string[] = [];
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	): string => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const input = [
+		new TextEncoder().encode(
+			`${request("initialize", "initialize", {
+				capabilities: {},
+				clientInfo: { name: "lock-failure-test" },
+				cwd: workspace,
+				protocolVersion: 1,
+			})}\n`
+		),
+		new TextEncoder().encode(
+			`${request("open", "session/open", { sessionId })}\n`
+		),
+		new TextEncoder().encode(
+			`${request("legacy-open", "session/open", { sessionId: legacySessionId })}\n`
+		),
+		new TextEncoder().encode(
+			`${request("create", "session/create", {
+				initialSubmission: { text: "new RPC session" },
+				selection: {
+					agentId: "build",
+					model: { modelId: "gpt-5.6-luna", providerId: "openai" },
+				},
+			})}\n`
+		),
+		new TextEncoder().encode(`${request("shutdown", "server/shutdown", {})}\n`),
+	];
+
+	try {
+		const exitCode = await runRpc({
+			composeCapabilities: async () => failureAssembly,
+			input,
+			stderr: {
+				write: (text: string): undefined => {
+					stderrFrames.push(text);
+				},
+			},
+			stdout: {
+				write: (text: string): undefined => {
+					stdoutFrames.push(text);
+				},
+			},
+		});
+		const frames = stdoutFrames.map(
+			(frame) => JSON.parse(frame) as Record<string, unknown>
+		);
+		expect(exitCode).toBe(0);
+		expect(stderrFrames).toEqual([]);
+		expect(frames.find((frame) => frame.id === "open")?.error).toMatchObject({
+			data: { code: "session_lock_failed" },
+		});
+		expect(frames.find((frame) => frame.id === "create")?.error).toMatchObject({
+			data: { code: "session_lock_failed" },
+		});
+		expect(
+			frames.find((frame) => frame.id === "legacy-open")?.error
+		).toMatchObject({
+			data: {
+				code: "legacy_session_lease",
+				sessionId: legacySessionId,
+				stage: "host",
+			},
+			message:
+				"A legacy SQLite Session Lease exists. Stop older Wincode processes before clearing it.",
+		});
+		expect(frames.some((frame) => frame.method === "server/fatal")).toBe(false);
+	} finally {
+		failureAssembly.store.acquireSessionWriter = acquireSessionWriter;
+		await failureAssembly.shutdown();
+	}
 });

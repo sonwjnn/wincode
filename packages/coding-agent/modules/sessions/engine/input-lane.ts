@@ -19,10 +19,10 @@ import type {
 } from "../submission-types";
 import type {
 	AgentSessionPorts,
+	LiveSessionSnapshot,
 	SessionExecution,
 	SessionQueuedSendInput,
 	SessionQueuedSubmission,
-	SessionSnapshot,
 	SessionSteeringAdmission,
 	SessionSteeringMessage,
 	SessionSubmissionAdmission,
@@ -62,7 +62,7 @@ export type SessionInputLanePort = Readonly<{
 	getExternalization: (
 		id: SessionQueuedSubmission["id"]
 	) => AbortController | undefined;
-	getSnapshot: () => SessionSnapshot;
+	getSnapshot: () => LiveSessionSnapshot;
 	isClosed: () => boolean;
 	isExternalizing: (id: SessionQueuedSubmission["id"]) => boolean;
 	isQueueDraining: () => boolean;

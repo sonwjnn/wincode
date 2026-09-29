@@ -56,6 +56,7 @@ import {
 import { createDatabase, type SessionDatabase } from "./client";
 import { resolveLocalAttachmentRoot, resolveLocalSnapshotRoot } from "./path";
 import {
+	legacySessionLease,
 	promptHistory,
 	type SerializedJson,
 	session,
@@ -64,7 +65,6 @@ import {
 	sessionRecord,
 	sessionWorkspace,
 } from "./schema";
-import { createSessionLeaseStore } from "./session-lease";
 import {
 	getSessionRecordValidationError,
 	SessionRecordInvariantError,
@@ -79,6 +79,10 @@ import {
 	UNTITLED_SESSION_TITLE,
 	type UpdateSessionInput,
 } from "./session-store";
+import {
+	acquireSessionWriterLock,
+	LegacySessionLeaseError,
+} from "./session-writer-lock";
 import { createDrizzleFileObservationStore } from "./versioned-editing-store";
 
 const createSessionId = (): SessionId => toSessionId(randomUUIDv7());
@@ -644,8 +648,10 @@ export const createDrizzleSessionStore = (
 ): SessionStore => {
 	const db = database ?? createDatabase().db;
 
-	const attachmentRoot = options.attachmentRoot ?? resolveLocalAttachmentRoot();
-	const snapshotRoot = options.snapshotRoot ?? resolveLocalSnapshotRoot();
+	const attachmentRoot =
+		options.attachmentRoot ?? resolveLocalAttachmentRoot(db.$client.filename);
+	const snapshotRoot =
+		options.snapshotRoot ?? resolveLocalSnapshotRoot(db.$client.filename);
 	const attachmentStore =
 		options.attachmentStore ??
 		createSessionAttachmentStore({
@@ -673,9 +679,6 @@ export const createDrizzleSessionStore = (
 			: Promise.resolve([...messages]);
 	const promptHistoryStore = createPromptHistory(db, attachmentStore);
 	const workspace = ensureWorkspace(db, options.workspaceRoot ?? process.cwd());
-	const sessionLeaseStore = createSessionLeaseStore(db, {
-		workspaceId: workspace.id,
-	});
 	const fileObservationStore = createDrizzleFileObservationStore(
 		db,
 		snapshotRoot,
@@ -899,8 +902,27 @@ export const createDrizzleSessionStore = (
 
 			return Promise.resolve(toSession(row));
 		},
-		acquireSessionLease: (sessionId, leaseOptions) =>
-			sessionLeaseStore.acquire(sessionId, leaseOptions),
+		acquireSessionWriter: async (sessionId, writerOptions) => {
+			const legacyLease = db
+				.select({ sessionId: legacySessionLease.sessionId })
+				.from(legacySessionLease)
+				.innerJoin(session, eq(legacySessionLease.sessionId, session.id))
+				.where(
+					and(
+						eq(legacySessionLease.sessionId, sessionId),
+						eq(session.workspaceId, workspace.id)
+					)
+				)
+				.get();
+			if (legacyLease !== undefined) {
+				throw new LegacySessionLeaseError();
+			}
+			return acquireSessionWriterLock(
+				db.$client.filename,
+				sessionId,
+				writerOptions
+			);
+		},
 		getEditMode: async (sessionId: SessionId): Promise<EditMode> => {
 			const row = db
 				.select({ editMode: session.editMode })

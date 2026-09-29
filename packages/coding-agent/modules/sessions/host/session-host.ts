@@ -6,7 +6,6 @@ import type {
 } from "@wincode/ai/models";
 import { isNull, logger, omitUndefined } from "@wincode/runtime-utils";
 import { resolveActiveAgentId } from "@/modules/agents/registry";
-import { errorLogFields } from "@/shared/utils/error-log-fields";
 import { rebuildActiveMessages } from "../compaction/compaction";
 import type { SessionCompaction } from "../compaction/types";
 import { AgentSessionImpl } from "../engine/agent-session";
@@ -21,11 +20,6 @@ import {
 } from "../message";
 import { resolveSessionSelection } from "../selection";
 import {
-	SESSION_LEASE_RENEWAL_INTERVAL_MS,
-	type SessionLease,
-	SessionLeaseLostError,
-} from "../storage/session-lease";
-import {
 	isDelegatedSessionMessageId,
 	projectSessionRecords,
 } from "../storage/session-record";
@@ -33,7 +27,6 @@ import { createSessionPorts } from "./session-ports";
 import type {
 	SessionCapabilities,
 	SessionHost,
-	SessionHostFailure,
 	SessionHostOptions,
 } from "./types";
 
@@ -139,22 +132,20 @@ const withEventChannel = (
  */
 export const createSessionHost = async ({
 	capabilities,
-	lease: leaseOptions,
+	executionMode,
 	sessionId,
 }: SessionHostOptions): Promise<SessionHost> => {
 	await waitForClosingHost(sessionId);
-	const leaseClock = leaseOptions?.now ?? Date.now;
-	const sessionLease: SessionLease = await capabilities
+	const sessionWriter = await capabilities
 		.getStore()
-		.acquireSessionLease(sessionId, { now: leaseClock });
+		.acquireSessionWriter(
+			sessionId,
+			executionMode === undefined ? {} : { executionMode }
+		);
 	const eventListeners = new Set<(event: AgentTurnEvent) => void>();
-	const fatalListeners = new Set<(failure: SessionHostFailure) => void>();
 	let agentSession: AgentSession | undefined;
 	let agentSessionInternalPort: AgentSessionInternalPort | undefined;
 	let isShutDown = false;
-	let isLeaseLost = false;
-	let fatalFailure: SessionHostFailure | null = null;
-	let stopLeaseRenewal: (() => void) | undefined;
 	let shutdownPromise: Promise<void> | undefined;
 
 	/**
@@ -182,10 +173,6 @@ export const createSessionHost = async ({
 		}
 		return agentSessionInternalPort;
 	};
-	const stopRenewal = (): void => {
-		stopLeaseRenewal?.();
-		stopLeaseRenewal = undefined;
-	};
 	const shutdown = (): Promise<void> => {
 		if (shutdownPromise !== undefined) {
 			return shutdownPromise;
@@ -197,38 +184,30 @@ export const createSessionHost = async ({
 		});
 		const activeAgentSession = agentSession;
 		const activeInternalPort = agentSessionInternalPort;
-		let releaseImmediately = activeAgentSession === undefined;
-		let agentSessionShutdown = Promise.resolve();
+		let agentSessionShutdown: Promise<void> = Promise.resolve();
 		if (activeAgentSession !== undefined) {
 			const snapshot = activeAgentSession.getSnapshot();
-			releaseImmediately =
-				activeInternalPort === undefined ||
-				!activeInternalPort.hasPendingWork();
 			if (snapshot.isCompacting) {
 				activeAgentSession.cancelCompaction();
 			}
-			// Cancel rather than interrupt: the turn must unwind through its
-			// pipeline so its pending durable checkpoint holds the Session Lease.
+			// Cancellation must unwind through the Agent Turn before the OS lock
+			// is released, including any durable checkpoint already in progress.
 			if (snapshot.turnActive) {
 				activeAgentSession.cancel();
 			}
-			agentSessionShutdown =
-				activeInternalPort?.shutdown() ?? Promise.resolve();
+			try {
+				agentSessionShutdown =
+					activeInternalPort?.shutdown() ?? Promise.resolve();
+			} catch (error) {
+				agentSessionShutdown = Promise.reject(error);
+			}
 		}
 		eventListeners.clear();
-		fatalListeners.clear();
-		if (releaseImmediately) {
-			stopRenewal();
-			sessionLease.release();
-		}
 		const closingShutdown = (async () => {
 			try {
 				await agentSessionShutdown;
 			} finally {
-				if (!releaseImmediately) {
-					stopRenewal();
-					sessionLease.release();
-				}
+				await sessionWriter.release();
 			}
 		})();
 		shutdownPromise = closingShutdown;
@@ -251,82 +230,13 @@ export const createSessionHost = async ({
 		);
 		return closingShutdown;
 	};
-	const observeLeaseLossShutdown = async (
-		shutdownWork: Promise<void>
-	): Promise<void> => {
-		try {
-			await shutdownWork;
-		} catch (error) {
-			const fields = errorLogFields(error);
-			if (fields.errorCode !== "session_lease_lost") {
-				void logger.warn("Session Host cleanup after lease loss failed", {
-					...fields,
-					operation: "session-host.shutdown",
-					phase: "lease-loss",
-				});
-			}
-		}
-	};
-	const reportLeaseLoss = (): void => {
-		if (isLeaseLost || isShutDown) {
-			return;
-		}
-		isLeaseLost = true;
-		fatalFailure = { code: "session_lease_lost" };
-		void logger.error("Session Host lost its lease", {
-			errorCode: "session_lease_lost",
-			errorType: "SessionLeaseLostError",
-			operation: "session-host.lease",
-			phase: "lost",
-		});
-		const listeners = [...fatalListeners];
-		stopRenewal();
-		// Renewal callbacks are synchronous; start quiescence before notifying
-		// observers, and observe cleanup failures without detaching a rejection.
-		let shutdownWork: Promise<void>;
-		try {
-			shutdownWork = shutdown();
-		} catch (error) {
-			shutdownWork = Promise.reject(error);
-		}
-		shutdownPromise = observeLeaseLossShutdown(shutdownWork);
-		for (const listener of listeners) {
-			try {
-				listener(fatalFailure);
-			} catch {
-				// A failure observer cannot keep a lost Host alive.
-			}
-		}
-	};
-	const schedule =
-		leaseOptions?.schedule ??
-		((callback: () => void, intervalMs: number): (() => void) => {
-			const timer = setInterval(callback, intervalMs);
-			return () => clearInterval(timer);
-		});
-
 	try {
-		const scheduledStop = schedule(() => {
-			if (!sessionLease.renew()) {
-				reportLeaseLoss();
-			}
-		}, SESSION_LEASE_RENEWAL_INTERVAL_MS);
-		if (isShutDown) {
-			scheduledStop();
-		} else {
-			stopLeaseRenewal = scheduledStop;
-		}
 		const opened = await openSession(capabilities, sessionId);
-		if (isShutDown) {
-			throw new SessionLeaseLostError();
-		}
 		const ports: AgentSessionPorts = withEventChannel(
 			createSessionPorts({
 				capabilities,
 				agentSession: getAgentSessionInternalPort,
 				isShutDown: () => isShutDown,
-				onLeaseLost: reportLeaseLoss,
-				renewLease: sessionLease.renew,
 				sessionId,
 			}),
 			publish
@@ -362,9 +272,6 @@ export const createSessionHost = async ({
 		});
 		agentSessionInternalPort = openedAgentSession.internalPort;
 		agentSession = openedAgentSession;
-		if (isShutDown) {
-			throw new SessionLeaseLostError();
-		}
 		void logger.debug("Session Host opened", {
 			operation: "session-host",
 			phase: "opened",
@@ -392,17 +299,6 @@ export const createSessionHost = async ({
 				eventListeners.add(listener);
 				return () => eventListeners.delete(listener);
 			},
-			onFatal: (listener) => {
-				if (fatalFailure !== null) {
-					listener(fatalFailure);
-					return () => false;
-				}
-				if (isShutDown) {
-					return () => false;
-				}
-				fatalListeners.add(listener);
-				return () => fatalListeners.delete(listener);
-			},
 			shutdown,
 			subscribe: (listener) =>
 				openedAgentSession.subscribe(() => {
@@ -420,8 +316,5 @@ export const createSessionHost = async ({
 export type {
 	SessionCapabilities,
 	SessionHost,
-	SessionHostFailure,
-	SessionHostLeaseOptions,
 	SessionHostOptions,
-	SessionLeaseScheduler,
 } from "./types";

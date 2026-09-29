@@ -8,7 +8,6 @@ export const getReportableSessionFailureFields = (
 	errorCode = fields.errorCode
 ): LogFields | null =>
 	errorCode !== "cancelled" &&
-	errorCode !== "session_lease_lost" &&
 	errorCode !== "ENOENT" &&
 	fields.errorType !== "SessionClosedError" &&
 	fields.errorType !== "SessionSendCancelledError" &&

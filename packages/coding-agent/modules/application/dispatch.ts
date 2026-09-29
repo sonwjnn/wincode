@@ -1,6 +1,6 @@
+import type { ExecutionMode } from "@/shared/execution-mode";
 import type {
 	ApplicationContext,
-	ExecutionMode,
 	InvocationOptions,
 	TextWriter,
 } from "./modes/types";

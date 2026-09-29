@@ -2,20 +2,13 @@ import { createDatabase } from "../../modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "../../modules/sessions/storage/drizzle-session-store";
 import { toSessionId } from "../../shared/identifiers";
 
-const bunGlobal = globalThis as typeof globalThis & {
-	Bun: { stdin: { stream: () => ReadableStream<Uint8Array> } };
-};
-
-type AcquireMessage = Readonly<{
+const payload = JSON.parse(process.argv[2] ?? "") as Readonly<{
 	attachmentRoot: string;
 	databasePath: string;
-	now: number;
 	sessionId: string;
 	snapshotRoot: string;
 	workspaceRoot: string;
 }>;
-
-const payload = JSON.parse(process.argv[2] ?? "") as AcquireMessage;
 const connection = createDatabase(payload.databasePath);
 const store = createDrizzleSessionStore(connection.db, {
 	attachmentRoot: payload.attachmentRoot,
@@ -24,15 +17,15 @@ const store = createDrizzleSessionStore(connection.db, {
 });
 
 try {
-	const lease = await store.acquireSessionLease(
+	const writer = await store.acquireSessionWriter(
 		toSessionId(payload.sessionId),
 		{
-			now: () => payload.now,
+			executionMode: "interactive",
 		}
 	);
 	process.stdout.write(`${JSON.stringify({ kind: "acquired" })}\n`);
-	await new Response(bunGlobal.Bun.stdin.stream()).text();
-	lease.release();
+	await new Response(Bun.stdin.stream()).text();
+	await writer.release();
 } catch (error) {
 	const code =
 		typeof error === "object" &&

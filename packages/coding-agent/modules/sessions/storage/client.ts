@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { type BunSQLiteDatabase, drizzle } from "drizzle-orm/bun-sqlite";
-import { resolveLocalDatabasePath } from "./path";
+import { resolveLocalDatabasePath, resolveSessionDatabasePath } from "./path";
 import { sessionSchema } from "./schema";
 export type SessionDatabase = BunSQLiteDatabase<typeof sessionSchema> & {
 	$client: Database;
@@ -333,7 +333,9 @@ const openDatabase = (
 	path: string,
 	allowIncompatibleSessionSchema: boolean
 ): { db: SessionDatabase; sqlite: Database } => {
-	const sqlite = new Database(path, { create: true });
+	const sqlite = new Database(resolveSessionDatabasePath(path), {
+		create: true,
+	});
 	try {
 		applyPragmas(sqlite);
 		initializeSchema(sqlite, allowIncompatibleSessionSchema);

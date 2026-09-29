@@ -2,10 +2,10 @@ import type { ToolCallId } from "@wincode/agent-core";
 import { isUndefined } from "@wincode/runtime-utils";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import type {
+	LiveSessionSnapshot,
 	SessionApproval,
 	SessionApprovalOutcome,
 	SessionApprovalResult,
-	SessionSnapshot,
 } from "./types";
 
 type ApprovalSettlement = (outcome: SessionApprovalOutcome) => void;
@@ -16,7 +16,7 @@ export type SessionApprovalWorkflowPort = Readonly<{
 	allocateSessionApprovalId: () => string;
 	applyApprovals: (approvals: SessionApproval[]) => void;
 	getSettlement: (id: string) => ApprovalSettlement | undefined;
-	getSnapshot: () => SessionSnapshot;
+	getSnapshot: () => LiveSessionSnapshot;
 	isClosed: () => boolean;
 	removeSettlement: (id: string) => void;
 	saveSettlement: (id: string, resolve: ApprovalSettlement) => void;

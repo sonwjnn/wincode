@@ -2,7 +2,7 @@
 
 A Session Engine is the single owner of one session's live state, but SQLite WAL serialization alone does not prevent a TUI and an RPC process from opening separate Engines for the same durable Session and interleaving records. Every Session Host will therefore hold an exclusive renewable Session Lease for its full lifetime, extending the single-owner invariant across processes.
 
-Status: accepted
+Status: superseded by ADR-0034
 
 ## Decision
 

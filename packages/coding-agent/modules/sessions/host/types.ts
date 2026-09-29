@@ -5,26 +5,14 @@ import type { AgentRegistry } from "@/modules/agents/registry";
 import type { McpSessionCapability } from "@/modules/mcp/capability";
 import type { ToolPermissionRuntime } from "@/modules/permissions/tool-permission-runtime";
 import type { ConfigRuntime } from "@/shared/config/config-store";
+import type { ExecutionMode } from "@/shared/execution-mode";
 import type { SessionId } from "@/shared/identifiers";
 import type { SessionCompactionModule } from "../compaction/compaction";
 import type { ResolvedCompactionSettings } from "../compaction/config";
-import type { AgentSession, SessionSnapshot } from "../engine/types";
+import type { AgentSession, LiveSessionSnapshot } from "../engine/types";
 import type { ResolvedSessionSelection } from "../selection";
 import type { SessionStore } from "../storage/session-store";
 export type SessionApprovalMode = "interactive" | "non-interactive";
-export type SessionHostFailure = Readonly<{
-	code: "session_lease_lost";
-}>;
-
-export type SessionLeaseScheduler = (
-	callback: () => void,
-	intervalMs: number
-) => () => void;
-
-export type SessionHostLeaseOptions = Readonly<{
-	now?: () => number;
-	schedule?: SessionLeaseScheduler;
-}>;
 
 /**
  * What one Session Host needs from the surface that constructed it, as lazy
@@ -71,9 +59,7 @@ export type SessionHost = Readonly<{
 	 * source carries a model.
 	 */
 	getSelection: () => ResolvedSessionSelection | null;
-	getSnapshot: () => SessionSnapshot;
-	/** Reports a fatal Host lifecycle failure, such as losing its Session Lease. */
-	onFatal: (listener: (failure: SessionHostFailure) => void) => () => void;
+	getSnapshot: () => LiveSessionSnapshot;
 	/**
 	 * Observes Agent Turn Events the Agent Session emits, in order, terminal
 	 * ones included: the stream a consumer renders without reading full Snapshots
@@ -88,6 +74,6 @@ export type SessionHost = Readonly<{
 
 export type SessionHostOptions = Readonly<{
 	capabilities: SessionCapabilities;
+	executionMode?: ExecutionMode;
 	sessionId: SessionId;
-	lease?: SessionHostLeaseOptions;
 }>;

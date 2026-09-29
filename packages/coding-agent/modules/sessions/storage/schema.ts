@@ -65,7 +65,8 @@ export const session = sqliteTable(
 		index("idx_session_updated").on(table.updatedAt),
 	]
 );
-export const sessionLease = sqliteTable(
+/** Kept only to reject sessions still claimed by an older Wincode process. */
+export const legacySessionLease = sqliteTable(
 	"session_lease",
 	{
 		sessionId: text("session_id")
@@ -434,7 +435,7 @@ export const sessionSchema = {
 	recoveryArtifact,
 	recoveryArtifactPath,
 	sessionAttachment,
-	sessionLease,
+	legacySessionLease,
 	sessionCompaction,
 	sessionRecord,
 	session,

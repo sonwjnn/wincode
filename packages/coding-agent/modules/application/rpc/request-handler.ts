@@ -1,5 +1,6 @@
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { getErrorCode } from "@/shared/utils/error-log-fields";
 import type {
 	SessionHost,
 	SessionSendInput,
@@ -55,6 +56,30 @@ export type RpcRequestHandlerContext = Readonly<{
 	) => SessionSendInput;
 	state: RpcSessionState;
 }>;
+
+const mapSessionWriterError = (
+	error: unknown,
+	sessionId: string
+): RpcApplicationError | undefined => {
+	if (!(error instanceof Error)) {
+		return;
+	}
+	const errorCode = getErrorCode(error);
+	if (errorCode === "session_in_use") {
+		return appError(
+			"session_in_use",
+			"Session is already in use by another Host."
+		);
+	}
+	if (errorCode === "session_lock_failed") {
+		return appError(
+			"session_lock_failed",
+			"The Session Writer OS lock could not be established.",
+			{ sessionId, stage: "host" }
+		);
+	}
+	return;
+};
 
 export const createRpcRequestHandler = (
 	context: RpcRequestHandlerContext
@@ -153,7 +178,13 @@ export const createRpcRequestHandler = (
 					cwd: requestedCwd,
 					workspace,
 				});
-			} catch {
+			} catch (error) {
+				if (getErrorCode(error) === "session_lock_failed") {
+					throw appError(
+						"session_lock_failed",
+						"The Session Writer OS lock could not be established."
+					);
+				}
 				throw appError(
 					"workspace_unavailable",
 					"Workspace capabilities could not be composed."
@@ -292,25 +323,9 @@ export const createRpcRequestHandler = (
 				if (error instanceof RpcApplicationError) {
 					throw error;
 				}
-				if (
-					error instanceof Error &&
-					"code" in error &&
-					error.code === "session_lease_lost"
-				) {
-					throw appError(
-						"session_lease_lost",
-						"Session lease was lost while opening the Host."
-					);
-				}
-				if (
-					error instanceof Error &&
-					"code" in error &&
-					error.code === "session_in_use"
-				) {
-					throw appError(
-						"session_in_use",
-						"Session is already owned by another Host."
-					);
+				const writerError = mapSessionWriterError(error, createdId);
+				if (writerError !== undefined) {
+					throw writerError;
 				}
 				throw appError(
 					"session_created_but_unbound",
@@ -369,25 +384,18 @@ export const createRpcRequestHandler = (
 				bind(openedHost, sessionId);
 				return success(request.id, { sessionId, state: currentState() });
 			} catch (error) {
-				if (
-					error instanceof Error &&
-					"code" in error &&
-					error.code === "session_lease_lost"
-				) {
-					throw appError(
-						"session_lease_lost",
-						"Session lease was lost while opening the Host."
-					);
+				const writerError = mapSessionWriterError(error, sessionId);
+				if (writerError !== undefined) {
+					throw writerError;
 				}
 				if (
 					error instanceof Error &&
-					"code" in error &&
-					error.code === "session_in_use"
+					getErrorCode(error) === "legacy_session_lease"
 				) {
-					throw appError(
-						"session_in_use",
-						"Session is already owned by another Host."
-					);
+					throw appError("legacy_session_lease", error.message, {
+						sessionId,
+						stage: "host",
+					});
 				}
 				if (error instanceof Error && error.message === "Session not found") {
 					throw appError("session_not_found", "Session could not be opened.");

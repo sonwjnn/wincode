@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+- **Session Writers use process-owned OS locks.** Different Session IDs can
+  remain open concurrently; a same-session conflict offers manually refreshed,
+  read-only Stored Session History and requires explicit lock acquisition to edit.
+  OS-lock infrastructure failures remain distinct and fail closed.
+
 - **Workspace branch display refreshes after checkout.** The session header
   watches Git metadata in regular repositories and linked worktrees, updating
   after an in-place checkout without polling or changing the workspace.

@@ -86,6 +86,13 @@ const {
 
 const store = createE2eStore();
 const { sessionId } = await seedCompactionHistory(store, 2);
+const waitForInteractiveSession = async (
+	setup: TestRendererSetup
+): Promise<void> => {
+	await waitForSessionFrame(setup, (frame) =>
+		frame.includes("Ask anything...")
+	);
+};
 
 test("Tab opens a Built-in Command that does not accept invocation arguments", async () => {
 	let setup: TestRendererSetup | undefined;
@@ -97,16 +104,14 @@ test("Tab opens a Built-in Command that does not accept invocation arguments", a
 		const activeSetup = rendered.setup;
 		setup = activeSetup;
 		await rendered.registryReady;
+		await waitForInteractiveSession(activeSetup);
 
 		await act(async () => {
 			await activeSetup.mockInput.typeText("/models");
 		});
-		await act(async () => {
-			await activeSetup.waitForFrame(
-				(frame) => frame.includes("Select AI model for generation"),
-				{ maxPasses: 200 }
-			);
-		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Select AI model for generation")
+		);
 
 		await act(() => activeSetup.mockInput.pressTab());
 		await settleSessionUi(activeSetup);
@@ -130,6 +135,7 @@ test("bare slash queries fuzzy-match Skills without the namespace", async () => 
 		const activeSetup = rendered.setup;
 		setup = activeSetup;
 		await rendered.registryReady;
+		await waitForInteractiveSession(activeSetup);
 
 		await act(async () => {
 			await activeSetup.mockInput.typeText("/hlpr");
@@ -161,6 +167,7 @@ test("the aggregate Skill suggestion enters namespaced search before selection",
 		const activeSetup = rendered.setup;
 		setup = activeSetup;
 		await rendered.registryReady;
+		await waitForInteractiveSession(activeSetup);
 
 		await act(async () => {
 			await activeSetup.mockInput.typeText("/skill");
@@ -212,16 +219,14 @@ test("Tab completes a Built-in Command that accepts invocation arguments", async
 		const activeSetup = rendered.setup;
 		setup = activeSetup;
 		await rendered.registryReady;
+		await waitForInteractiveSession(activeSetup);
 
 		await act(async () => {
 			await activeSetup.mockInput.typeText("/compact");
 		});
-		await act(async () => {
-			await activeSetup.waitForFrame(
-				(frame) => frame.includes("Compact session history"),
-				{ maxPasses: 200 }
-			);
-		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Compact session history")
+		);
 
 		await act(() => activeSetup.mockInput.pressTab());
 		await settleSessionUi(activeSetup);
@@ -245,6 +250,7 @@ test("filters a transposed skill query and keeps folder mentions searchable", as
 		const activeSetup = rendered.setup;
 		setup = activeSetup;
 		await rendered.registryReady;
+		await waitForInteractiveSession(activeSetup);
 		await act(async () => {
 			await getFileMentionOptions();
 		});
@@ -256,12 +262,9 @@ test("filters a transposed skill query and keeps folder mentions searchable", as
 		await act(async () => {
 			await activeSetup.mockInput.typeText("/");
 		});
-		await act(async () => {
-			await activeSetup.waitForFrame(
-				(frame) => frame.includes("Start a new session"),
-				{ maxPasses: 200 }
-			);
-		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Start a new session")
+		);
 		// Built-ins precede the aggregate, which is below the visible eight-row
 		// window at the empty query.
 		const emptyQueryFrame = activeSetup.captureCharFrame();
@@ -271,12 +274,9 @@ test("filters a transposed skill query and keeps folder mentions searchable", as
 		await act(async () => {
 			await activeSetup.mockInput.typeText("mo");
 		});
-		await act(async () => {
-			await activeSetup.waitForFrame(
-				(frame) => frame.includes("Select AI model for generation"),
-				{ maxPasses: 200 }
-			);
-		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Select AI model for generation")
+		);
 		const builtinRowFrame = activeSetup.captureCharFrame();
 		expect(builtinRowFrame).toContain("models");
 		expect(builtinRowFrame).not.toContain("/models");
@@ -291,12 +291,9 @@ test("filters a transposed skill query and keeps folder mentions searchable", as
 		await act(async () => {
 			await activeSetup.mockInput.typeText("/skill:modelo4");
 		});
-		await act(async () => {
-			await activeSetup.waitForFrame(
-				(frame) => frame.includes("skill:model-4o"),
-				{ maxPasses: 200 }
-			);
-		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("skill:model-4o")
+		);
 		const skillRowFrame = activeSetup.captureCharFrame();
 		expect(skillRowFrame).toContain("skill:model-4o");
 		expect(skillRowFrame).toContain("Model helper skill");
@@ -325,12 +322,10 @@ test("filters a transposed skill query and keeps folder mentions searchable", as
 		const folderQuery = `@${mentionFixturePath}/utils`;
 		const folderLabel = `${mentionFixturePath}/utils/`;
 		const waitForFolderSuggestions = async () => {
-			await act(async () => {
-				await activeSetup.waitForFrame(
-					(frame) => frame.includes(folderLabel) && frame.includes("child.ts"),
-					{ maxPasses: 200 }
-				);
-			});
+			await waitForSessionFrame(
+				activeSetup,
+				(frame) => frame.includes(folderLabel) && frame.includes("child.ts")
+			);
 		};
 		await act(async () => {
 			await activeSetup.mockInput.typeText(folderQuery);
@@ -385,12 +380,9 @@ test("filters a transposed skill query and keeps folder mentions searchable", as
 		await act(async () => {
 			await activeSetup.mockInput.typeText("empty");
 		});
-		await act(async () => {
-			await activeSetup.waitForFrame(
-				(frame) => frame.includes(`${mentionFixturePath}/utils/empty/`),
-				{ maxPasses: 200 }
-			);
-		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes(`${mentionFixturePath}/utils/empty/`)
+		);
 		await act(() => activeSetup.mockInput.pressTab());
 		await settleSessionUi(activeSetup);
 		expect(activeSetup.captureCharFrame()).toContain(
@@ -427,6 +419,7 @@ test("bare queries still find Skills whose names start with skills", async () =>
 		const activeSetup = rendered.setup;
 		setup = activeSetup;
 		await rendered.registryReady;
+		await waitForInteractiveSession(activeSetup);
 
 		await act(async () => {
 			await activeSetup.mockInput.typeText("/skills-helper");
@@ -459,6 +452,7 @@ test("restoring command results after no matches keeps the item aligned", async 
 		const activeSetup = rendered.setup;
 		setup = activeSetup;
 		await rendered.registryReady;
+		await waitForInteractiveSession(activeSetup);
 
 		await act(async () => {
 			await activeSetup.mockInput.typeText("/models");
@@ -515,6 +509,7 @@ test("hides the aggregate Skill suggestion when no Skills are discovered", async
 		const activeSetup = rendered.setup;
 		setup = activeSetup;
 		await rendered.registryReady;
+		await waitForInteractiveSession(activeSetup);
 
 		await act(async () => {
 			await activeSetup.mockInput.typeText("/skill");
@@ -540,6 +535,7 @@ test("an unmatched slash prompt submits as ordinary text", async () => {
 		const activeSetup = rendered.setup;
 		setup = activeSetup;
 		await rendered.registryReady;
+		await waitForInteractiveSession(activeSetup);
 
 		await act(async () => {
 			await activeSetup.mockInput.typeText("/unmatched-command");
