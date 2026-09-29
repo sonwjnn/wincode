@@ -135,7 +135,7 @@
 | Model giả (seam integration chính) | faux provider (`providers/faux.ts`) | in-memory registry + VirtualTerminal | `TestLLMServer` (SSE, lỗi, hang) | chưa có (chưa cần — chưa test agent loop) |
 | E2E thật | Không (evals model-backed ngoài CI) | TUI e2e qua VirtualTerminal + `--smoke-test` | Playwright `packages/app/e2e` (regression/perf/smoke) | Không có |
 | CI test lane | 1 job build+check+test | 7 lane phân bucket + release_gate | unit matrix + httpapi + e2e job | **Không có CI** |
-| Gate nội dung test | Regression gắn số issue (AGENTS L38) | "Testing Guidance" contract-first + anti-pattern (AGENTS L273–304) | `test/AGENTS.md` + `e2e/AGENTS.md` + httpapi fail-on-missing | CLAUDE.md L107–113 (tối thiểu) |
+| Gate nội dung test | Regression gắn số issue (AGENTS L38) | "Testing Guidance" contract-first + anti-pattern (AGENTS L273–304) | `test/AGENTS.md` + `e2e/AGENTS.md` + httpapi fail-on-missing | AGENTS.md L53–57 (tối thiểu) |
 | Pre-commit/pre-push | check (không test) + browser-smoke có điều kiện | lint-staged/biome (không test) | typecheck (không test) | biome (không test) |
 | Flake policy | suite CI-safe, e2e key-gated | `retries = 0` (nextest); retry chỉ khi bun crash | Playwright `retries: 2` CI + trace; cấm sleep | chưa có chính sách |
 | Chống test rác | Triết lý "core minimal" + quy tắc regression | **Bộ quy tắc đầy đủ nhất** (L277–304) | "route-coverage" bắt buộc + hygiene e2e | chưa có văn bản |
@@ -161,7 +161,7 @@ Các khuyến nghị dưới đây là đề xuất của note này, dựa trên
 6. **Giữ Bun test runner; không đưa vitest vào** trừ khi một package cần (upstream chỉ dùng vitest khi đã có sẵn từ trước; Wincode đã thuần `bun test`). Áp dụng cờ `--only-failures` và `--timeout` (OpenCode dùng `--timeout 30000`; OMP 30s) để CI log gọn và chặn hang.
 7. **Vệ sinh hermetic**: giữ `skipIf(!DATABASE_URL)`; khi có CI, scrub `*_API_KEY`/`*_OAUTH_TOKEN` khỏi env test (mẫu OMP `SCRUBBED_ENV_*`); mặc định offline cho test gọi network (mẫu Pi `PI_OFFLINE=1` + `allowNetwork()` opt-in).
 8. **Flake policy**: unit/integration **không retry** (mẫu OMP `retries = 0`); nếu sau này có Playwright e2e thì theo OpenCode (`retries: 2` ở CI + `trace: on-first-retry` + cấm `waitForTimeout`). Chống flake bằng readiness signal (OpenCode test/AGENTS.md L163–173) — đặc biệt đúng cho test agent loop tương lai.
-9. **Khi nào không thêm test** (ghi vào CLAUDE.md): thay đổi nhỏ rủi ro thấp (OMP L304); plumbing thuần/passthrough; "package boots" smoke (OMP L300); test đọc text source (OMP L303); test trùng contract đã có ở nấc khác (OMP L295).
+9. **Khi nào không thêm test** (ghi vào AGENTS.md): thay đổi nhỏ rủi ro thấp (OMP L304); plumbing thuần/passthrough; "package boots" smoke (OMP L300); test đọc text source (OMP L303); test trùng contract đã có ở nấc khác (OMP L295).
 10. **E2E tương lai theo nhu cầu, không theo phong trào**: TUI của `wincode-cli` (opentui) nên test theo mẫu OMP `VirtualTerminal` (không cần tmux/PTTY thật); web `apps/web` chỉ thêm Playwright khi có user-flow thật cần bảo vệ (mẫu OpenCode `packages/app/e2e` + `webServer` tự khởi động + `e2e/AGENTS.md`). CLI smoke (`--version`/`--help` + một probe runtime) theo mẫu OMP `ci:test:smoke`.
 
 ## Skill OMP hiện có trong môi trường, áp dụng được ngay (đã xác minh cài đặt qua `skill://`)
