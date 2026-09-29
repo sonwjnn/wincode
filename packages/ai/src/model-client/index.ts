@@ -59,7 +59,7 @@ const streamModel = async function* (
 		throw await httpErrorFromResponse(response);
 	}
 	for await (const part of streamProviderResponse(
-		providerRequest.protocol,
+		providerRequest.strategy,
 		response,
 		request.signal
 	)) {
