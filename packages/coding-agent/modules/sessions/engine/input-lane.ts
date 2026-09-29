@@ -97,15 +97,20 @@ export type SessionInputLaneWorkflow = Readonly<{
 	acceptQueuedSubmission: (
 		input: SessionSendInput
 	) => Promise<SessionSendOutcome>;
-	acceptSteeringMessage: (input: SessionSendInput) => SessionSteeringAdmission;
+	acceptSteeringMessage: (
+		input: SessionSendInput,
+		queuedSubmissionId?: SessionQueuedSubmission["id"]
+	) => SessionSteeringAdmission;
 	drainQueuedSubmissions: () => Promise<void>;
 	fallbackSteeringMessages: (turnId?: SessionExecution["turnId"]) => void;
 	prompt: (input: SessionSendInput) => Promise<SessionSubmissionAdmission>;
+	recallFailedTurnMessages: () => SessionWaitingMessage[];
 	recallWaitingMessages: (
 		ids?: readonly SessionWaitingMessageId[]
 	) => SessionWaitingMessage[];
 	send: (input: SessionSendInput) => Promise<SessionSendOutcome>;
 	steer: (text: string) => SessionSteeringAdmission;
+	steerNextQueuedSubmission: () => SessionSteeringAdmission | undefined;
 }>;
 
 const queuedAttachmentIds = (input: SessionQueuedSendInput): string[] =>
@@ -145,7 +150,8 @@ const waitingMessageMatches = (
 	(submissionId !== undefined && ids.includes(submissionId));
 
 const recalledSubmissionEvent = (
-	message: SessionWaitingMessage
+	message: SessionWaitingMessage,
+	reason: "recall" | "turn-failed"
 ): SessionSubmissionEvent | undefined => {
 	const messageId =
 		"messageId" in message ? message.messageId : message.input.messageId;
@@ -159,9 +165,11 @@ const recalledSubmissionEvent = (
 	return {
 		kind: "recalled",
 		messageId,
-		reason: "recall",
+		reason,
 		submissionId,
 		...omitUndefined({
+			composition:
+				reason === "turn-failed" ? message.input.composition : undefined,
 			turnId:
 				"input" in message && message.input.turnId !== undefined
 					? message.input.turnId
@@ -217,7 +225,8 @@ export const createSessionInputLaneWorkflow = (
 				try {
 					await port.runSubmission(started.input);
 				} catch {
-					// A failed turn publishes its own error and cannot strand later work.
+					// A thrown turn failure cannot leave later waiting work to run.
+					recallFailedTurnMessages();
 				}
 				releaseQueuedAttachments([started]);
 			}
@@ -354,10 +363,11 @@ export const createSessionInputLaneWorkflow = (
 		});
 	};
 	const acceptSteeringMessage = (
-		input: SessionSendInput
+		input: SessionSendInput,
+		queuedSubmissionId?: SessionQueuedSubmission["id"]
 	): SessionSteeringAdmission => {
 		const composition: SessionSubmissionComposition = input.composition ?? {
-			files: [],
+			files: input.files ?? [],
 			text: input.userText ?? "",
 		};
 		if ((input.files ?? composition.files).length > 0) {
@@ -369,7 +379,8 @@ export const createSessionInputLaneWorkflow = (
 		if (!(isUndefined(input.messageId) && isUndefined(input.delegation))) {
 			return { rejected: true, reason: STEERING_INVOCATION_ERROR };
 		}
-		const execution = primaryEntry(port.getSnapshot().executions);
+		const snapshot = port.getSnapshot();
+		const execution = primaryEntry(snapshot.executions);
 		const submissionId =
 			input.submissionId ?? toSubmissionId(`submission-${crypto.randomUUID()}`);
 		const messageId =
@@ -396,7 +407,19 @@ export const createSessionInputLaneWorkflow = (
 				}),
 			},
 		};
-		port.appendSteeringMessage(steering);
+		if (queuedSubmissionId === undefined) {
+			port.appendSteeringMessage(steering);
+		} else if (snapshot.queuedSubmissions[0]?.id === queuedSubmissionId) {
+			port.replaceInputLanes(snapshot.queuedSubmissions.slice(1), [
+				...snapshot.steeringMessages,
+				steering,
+			]);
+		} else {
+			return {
+				rejected: true,
+				reason: "The queued Submission is no longer waiting.",
+			};
+		}
 		return {
 			rejected: false,
 			disposition: "steering",
@@ -404,6 +427,45 @@ export const createSessionInputLaneWorkflow = (
 			submissionId,
 			turnId,
 		};
+	};
+
+	const steerNextQueuedSubmission = ():
+		| SessionSteeringAdmission
+		| undefined => {
+		if (port.isClosed()) {
+			return { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
+		}
+		const snapshot = port.getSnapshot();
+		const queued = snapshot.queuedSubmissions[0];
+		if (queued === undefined) {
+			return;
+		}
+		const execution = primaryEntry(snapshot.executions);
+		if (!acceptsSteeringMessages(snapshot) || execution === undefined) {
+			return { rejected: true, reason: STEERING_INACTIVE_ERROR };
+		}
+		return acceptSteeringMessage(
+			{
+				agent: execution.agent,
+				composition: queued.input.composition,
+				model: execution.model,
+				sessionModel: execution.sessionModel,
+				submissionId: queued.submissionId,
+				reservedMessageId: queued.messageId,
+				turnId: execution.turnId,
+				userText: queued.input.userText ?? queued.input.composition.text,
+				...omitUndefined({
+					sessionEffort: execution.sessionEffort,
+					sessionReasoningMode: execution.sessionReasoningMode,
+					effort: execution.effort,
+					reasoningMode: execution.reasoningMode,
+					skill: queued.input.skill,
+					messageId: queued.input.messageId,
+					delegation: queued.input.delegation,
+				}),
+			},
+			queued.id
+		);
 	};
 	const fallbackSteeringMessages = (
 		turnId?: SessionExecution["turnId"]
@@ -457,8 +519,9 @@ export const createSessionInputLaneWorkflow = (
 			);
 		}
 	};
-	const recallWaitingMessages = (
-		ids?: readonly SessionWaitingMessageId[]
+	const recallWaitingMessagesWithReason = (
+		ids: readonly SessionWaitingMessageId[] | undefined,
+		reason: "recall" | "turn-failed"
 	): SessionWaitingMessage[] => {
 		const snapshot = port.getSnapshot();
 		const steering = snapshot.steeringMessages.filter((message) =>
@@ -481,13 +544,18 @@ export const createSessionInputLaneWorkflow = (
 		}
 		releaseQueuedAttachments(queued);
 		for (const message of [...steering, ...queued]) {
-			const event = recalledSubmissionEvent(message);
+			const event = recalledSubmissionEvent(message, reason);
 			if (event !== undefined) {
 				port.emitSubmissionEvent(event);
 			}
 		}
 		return [...steering, ...queued];
 	};
+	const recallWaitingMessages = (
+		ids?: readonly SessionWaitingMessageId[]
+	): SessionWaitingMessage[] => recallWaitingMessagesWithReason(ids, "recall");
+	const recallFailedTurnMessages = (): SessionWaitingMessage[] =>
+		recallWaitingMessagesWithReason(undefined, "turn-failed");
 	const prepareAdmission = (
 		input: SessionSendInput,
 		composition: SessionSubmissionComposition
@@ -595,8 +663,10 @@ export const createSessionInputLaneWorkflow = (
 		drainQueuedSubmissions,
 		fallbackSteeringMessages,
 		prompt,
+		recallFailedTurnMessages,
 		recallWaitingMessages,
 		send,
 		steer,
+		steerNextQueuedSubmission,
 	};
 };

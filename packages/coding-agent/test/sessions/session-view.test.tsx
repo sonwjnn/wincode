@@ -13,10 +13,11 @@ import {
 	RouterContextProvider,
 } from "@tanstack/react-router";
 import { fromPartial } from "@total-typescript/shoehorn";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { act, useCallback, useEffect, useRef, useState } from "react";
 import type {
 	SessionQueuedSubmission,
 	SessionSteeringMessage,
+	SessionSubmissionEvent,
 	SessionWaitingMessage,
 	SessionWaitingMessageId,
 } from "@/modules/sessions/engine/types";
@@ -112,6 +113,22 @@ let fakeRecalledPayload: SessionWaitingMessage[] | null = null;
 let fakeRunCompositions: SessionSubmissionComposition[] = [];
 /** How many times the view asked the session to recall its waiting messages. */
 let fakeSessionRecalls = 0;
+const fakeSubmissionEventListeners = new Set<
+	(event: SessionSubmissionEvent) => void
+>();
+const subscribeToFakeSubmissionEvents = (
+	listener: (event: SessionSubmissionEvent) => void
+): (() => void) => {
+	fakeSubmissionEventListeners.add(listener);
+	return () => {
+		fakeSubmissionEventListeners.delete(listener);
+	};
+};
+const emitFakeSubmissionEvent = (event: SessionSubmissionEvent): void => {
+	for (const listener of [...fakeSubmissionEventListeners]) {
+		listener(event);
+	}
+};
 
 mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
 	useAgentSession: (host: SessionHost) => {
@@ -164,6 +181,23 @@ mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
 			setTurnActive(false);
 			return { rejected: false as const };
 		}, []);
+		const steerNextQueuedSubmission = useCallback(() => {
+			if (!running.current) {
+				return;
+			}
+			const queued = queuedSubmissions[0];
+			if (!queued) {
+				return;
+			}
+			setQueuedSubmissions((submissions) => submissions.slice(1));
+			setSteeringMessages((messages) => [
+				...messages,
+				fromPartial<SessionSteeringMessage>({
+					id: steeringMessageId(`promoted-${queued.id}`),
+					input: { composition: queued.input.composition },
+				}),
+			]);
+		}, [queuedSubmissions]);
 		const recallWaitingMessages = useCallback(
 			(ids?: readonly SessionWaitingMessageId[]) => {
 				// The fake keeps what the real Agent Session keeps: the Steering
@@ -202,7 +236,9 @@ mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
 				throw new Error("Compaction is not part of this test.");
 			},
 			interrupt: () => [],
+			onSubmissionEvent: subscribeToFakeSubmissionEvents,
 			recallWaitingMessages,
+			steerNextQueuedSubmission,
 			send,
 			snapshot: {
 				...opened,
@@ -328,6 +364,7 @@ afterEach(() => {
 	fakeWaitingTexts = [];
 	fakeRecalledPayload = null;
 	fakeSessionRecalls = 0;
+	fakeSubmissionEventListeners.clear();
 });
 
 describe("SessionView initial submission", () => {
@@ -752,6 +789,48 @@ describe("SessionView waiting messages", () => {
 			setup.renderer.destroy();
 		}
 	});
+	test("restores turn-failed queue submissions to the composer in order", async () => {
+		const { release, setup } = await renderBusySessionView();
+		try {
+			const texts = [
+				"failed prompt one",
+				"failed prompt two",
+				"failed prompt three",
+				"failed prompt four",
+			];
+			act(() => {
+				for (const [index, text] of texts.entries()) {
+					emitFakeSubmissionEvent(
+						fromPartial<SessionSubmissionEvent>({
+							composition: { files: [], text },
+							kind: "recalled",
+							messageId: sessionMessageId(`failed-${index}`),
+							reason: "turn-failed",
+							submissionId: `failed-submission-${index}`,
+						})
+					);
+				}
+			});
+			await flushUi(setup);
+			await flushUi(setup);
+
+			const frame = setup.captureCharFrame();
+			let previousPosition = -1;
+			for (const text of texts) {
+				const position = frame.indexOf(text);
+				expect(position).toBeGreaterThan(previousPosition);
+				expect(frame.split(text)).toHaveLength(2);
+				previousPosition = position;
+			}
+			expect(frame).not.toMatch(WAITING_COUNT_PATTERN);
+		} finally {
+			await act(async () => {
+				release.resolve();
+				await flushUi(setup);
+				setup.renderer.destroy();
+			});
+		}
+	});
 
 	test("recalls the queue into the composer on Alt+Up", async () => {
 		const { release, setup } = await renderBusySessionView();
@@ -955,6 +1034,53 @@ describe("SessionView waiting messages", () => {
 		}
 	});
 
+	test("pressing Enter on an empty composer steers only one of four queued items", async () => {
+		fakeQueuedSeed = [
+			fromPartial<SessionQueuedSubmission>({
+				id: queuedSubmissionId("queued-first"),
+				input: { composition: { files: [], text: "first queued" } },
+			}),
+			fromPartial<SessionQueuedSubmission>({
+				id: queuedSubmissionId("queued-later-1"),
+				input: { composition: { files: [], text: "later queued 1" } },
+			}),
+			fromPartial<SessionQueuedSubmission>({
+				id: queuedSubmissionId("queued-later-2"),
+				input: { composition: { files: [], text: "later queued 2" } },
+			}),
+			fromPartial<SessionQueuedSubmission>({
+				id: queuedSubmissionId("queued-later-3"),
+				input: { composition: { files: [], text: "later queued 3" } },
+			}),
+		];
+		const { release, setup } = await renderBusySessionView();
+		try {
+			setup.mockInput.pressEnter();
+			await flushUi(setup);
+
+			let frame = setup.captureCharFrame();
+			expect(frame).toContain("▸ steering");
+			expect(frame).toMatch(LANE_ROW("steering", "first queued"));
+			expect(frame).toMatch(LANE_ROW("queued", "later queued 1"));
+			expect(frame).toMatch(LANE_ROW("queued", "later queued 2"));
+			expect(frame).toMatch(LANE_ROW("queued", "later queued 3"));
+
+			await typePrompt(setup, "ordinary input");
+			setup.mockInput.pressEnter();
+			await flushUi(setup);
+
+			frame = setup.captureCharFrame();
+			expect(frame).toMatch(LANE_ROW("steering", "ordinary input"));
+			expect(frame).toMatch(LANE_ROW("steering", "first queued"));
+			expect(frame).toMatch(LANE_ROW("queued", "later queued 1"));
+			expect(frame).toMatch(LANE_ROW("queued", "later queued 2"));
+			expect(frame).toMatch(LANE_ROW("queued", "later queued 3"));
+		} finally {
+			release.resolve();
+			await flushUi(setup);
+			setup.renderer.destroy();
+		}
+	});
 	test("leaves the queue alone while an overlay is open", async () => {
 		const { commandLayer, release, setup } = await renderBusySessionView();
 		try {

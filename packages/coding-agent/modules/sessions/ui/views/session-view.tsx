@@ -253,9 +253,11 @@ export function SessionView({
 	const {
 		cancelCompaction,
 		compact,
+		onSubmissionEvent,
 		interrupt,
 		recallWaitingMessages,
 		send,
+		steerNextQueuedSubmission,
 		snapshot,
 	} = useAgentSession(host);
 	/**
@@ -270,6 +272,38 @@ export function SessionView({
 		setRecalledSubmissions(recalled.map(({ input }) => input.composition));
 		setRecallRevision((revision) => revision + 1);
 	};
+	useEffect(() => {
+		const pending: SessionSubmissionComposition[] = [];
+		let flushScheduled = false;
+		let active = true;
+		const unsubscribe = onSubmissionEvent((event) => {
+			if (
+				event.kind !== "recalled" ||
+				event.reason !== "turn-failed" ||
+				event.composition === undefined
+			) {
+				return;
+			}
+			pending.push(event.composition);
+			if (flushScheduled) {
+				return;
+			}
+			flushScheduled = true;
+			queueMicrotask(() => {
+				flushScheduled = false;
+				if (!active || pending.length === 0) {
+					return;
+				}
+				setRecalledSubmissions(pending.splice(0));
+				setRecallRevision((revision) => revision + 1);
+			});
+		});
+		return () => {
+			active = false;
+			pending.length = 0;
+			unsubscribe();
+		};
+	}, [onSubmissionEvent]);
 	const activeMessages = snapshot.context;
 	const displayAnnotationsByMessage = useMemo(() => {
 		const annotations = new Map<
@@ -590,6 +624,12 @@ export function SessionView({
 			});
 		return true;
 	};
+	const steerQueuedHead = () => {
+		const admission = steerNextQueuedSubmission();
+		if (admission?.rejected) {
+			show({ message: admission.reason, variant: "error" });
+		}
+	};
 
 	const retryMessage = async (messageId: SessionMessageId): Promise<void> => {
 		if (isBusy || isNull(registry) || !isPromptConfigRestored) {
@@ -731,6 +771,7 @@ export function SessionView({
 					isInterruptArmed={isInterruptArmed}
 					messages={messages}
 					onCompact={executeCompactionCommand}
+					onEmptySubmit={steerQueuedHead}
 					onOpenSettings={openSettings}
 					onRetry={retryMessage}
 					onSubmit={submitMessage}

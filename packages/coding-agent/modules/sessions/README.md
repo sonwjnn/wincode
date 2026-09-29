@@ -36,15 +36,24 @@ message is committed when delivered, with the running turn's Agent and Model
 Target. A tool-less turn has no later boundary, so its undelivered Steering
 Messages become queued submissions ahead of newer prompts.
 
+When a queued submission is waiting, Enter on a fully empty composer calls
+`agentSession.steerNextQueuedSubmission()`: the Engine atomically promotes the
+oldest submission into the live turn's Steering Lane, preserving its message
+and submission IDs and leaving later entries FIFO. A head with attachments,
+a Skill, or other unsupported steering content stays queued and the UI reports
+the reason; queued work also stays put when no live execution can accept it.
+Non-empty composer content continues through the normal submission path.
+
 `agentSession.send(input)` remains the compatibility command: it automatically
 steers an active turn, queues when another submission or session command holds
 the session, and starts a turn when idle. Retrying a stored message reuses its
 identity rather than appending a duplicate user message.
 
 The Agent Session drains queued submissions oldest first after each terminal
-Agent Turn outcome, one turn per item. An interrupt or cancelled compaction
-recalls the Steering Lane and Submission Queue together to the composer instead
-of draining them. Recall restores each complete composition and releases the
+Agent Turn outcome unless that turn failed, one turn per item. A failed Agent
+Turn, an interrupt, or a cancelled compaction recalls the Steering Lane and
+Submission Queue together to the composer instead of draining them. Recall
+restores each complete composition and releases the
 attachment blobs held for queued submissions. `Alt+Up` (`Alt+Z` where a
 terminal cannot deliver Alt+Arrow) recalls everything; `Shift+Up` recalls only
 the next message — the Steering Lane's head when it has one, otherwise the

@@ -61,6 +61,7 @@ type ChatShellProps = {
 	onSubmit: (
 		submission: ChatPromptSubmission
 	) => boolean | Promise<boolean> | undefined;
+	onEmptySubmit?: () => void | Promise<void>;
 	/** Waiting submissions, oldest first; the strip shows them while they wait. */
 	queuedSubmissions?: readonly SessionQueuedSubmission[];
 	/** Compositions a Recall returned, waiting to enter the composer. */
@@ -138,6 +139,7 @@ export function ChatShell({
 	onRetry,
 	promptHistory,
 	onSubmit,
+	onEmptySubmit,
 	queuedSubmissions = EMPTY_QUEUED_SUBMISSIONS,
 	recalledSubmissions,
 	recallRevision,
@@ -287,6 +289,7 @@ export function ChatShell({
 						<box flexShrink={0} width="100%">
 							<ChatTextArea
 								onCompact={onCompact}
+								onEmptySubmit={onEmptySubmit}
 								onOpenSettings={onOpenSettings}
 								onSubmit={handleSubmit}
 								recalledSubmissions={recalledSubmissions}
