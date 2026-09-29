@@ -35,9 +35,24 @@ Reasoning options are translated once, in `packages/ai/src/model-provider-option
 
 The `providerChosenBudgetModels` set in that file is the one hand-maintained exception, for providers that pick their own reasoning budget. Adding a model there is a deliberate statement, not a default.
 
-Implement provider request serialization and stream parsing under `packages/ai/src/model-client/`. Route using the model's catalog entry; a connection provider can expose different protocols for different models.
+Register one adapter per Connection Provider in
+`packages/ai/src/model-client/provider-adapters/index.ts`. Each adapter owns its
+default Model Protocol, endpoint, authorization, headers, and provider-specific
+body policy; use existing Model Catalog protocol metadata only to override a
+provider default. Do not add route configuration to every model.
 
-Keep provider-specific wire formats in `@wincode/ai`. The Agent Runtime consumes only the provider-neutral Model Client stream.
+Implement request-body serialization and streamed response parsing together in a
+reusable Model Protocol strategy under
+`packages/ai/src/model-client/protocols/`, then bind that strategy in the
+provider adapter. The adapter carries the selected strategy through request
+serialization and response streaming, with no second protocol-name lookup. The
+provider-adapter registry is exhaustive and typed. A Connection Provider may
+reuse an existing strategy, and unsupported provider/protocol combinations
+must fail explicitly. Keep common SSE transport, usage normalization, and
+error translation shared.
+
+Keep callers on provider-neutral `ModelClient.stream()`. The Agent Runtime must
+not acquire provider-specific wire behavior.
 
 ## CLI credentials
 
