@@ -5,9 +5,10 @@ waiting for that turn to end, and without stopping it. A Steering Message is a
 second accepted-input lane beside the Submission Queue: it is delivered to the
 model at the next Model Step boundary inside the running Agent Turn, and it
 becomes a Session Record the moment it is delivered. This supersedes the
-"steering lane (mid-turn delivery)" rejection ADR-0021 recorded; the rest of
-that ADR — the Submission Queue, its drain boundary, and Recall — stands
-unchanged.
+"steering lane (mid-turn delivery)" rejection ADR-0021 recorded. The Submission
+Queue, FIFO order, and Recall gesture semantics remain; failed Agent Turns now
+recall both waiting lanes to the composer instead of draining them (see revised
+ADR-0021).
 
 Status: accepted
 
@@ -19,6 +20,10 @@ Runtime-mechanism note: [ADR-0029](0029-own-model-protocols-and-agent-runtime.md
   single entry point: it admits a submission to the Steering Lane while an Agent
   Turn is running, and to the Submission Queue when the session is busy any
   other way.
+- Enter on an empty composer can promote the oldest queued Submission into the
+  live turn's Steering Lane. This transfers the existing text-only submission,
+  not a duplicate correction; an unsupported head stays queued and the rest of
+  the queue retains its FIFO order.
 - A Steering Message is delivered at a Model Step boundary: the current Model
   Step and its Tool Call batch finish, then the message joins the Session
   Context before the next model call. Nothing interrupts a model call in

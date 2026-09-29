@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
-import type { SessionMessageId, SessionRecord } from "@wincode/agent-core";
+import type {
+	AgentTurnEvent,
+	AgentTurnTerminalEvent,
+	SessionMessageId,
+	SessionRecord,
+} from "@wincode/agent-core";
 import type {
 	ChatModelSelection,
 	Effort,
@@ -907,6 +912,15 @@ const createQueuedRuntime = ({
 						delivered: userPrompts(takeSteeringMessages()),
 						sourceUserMessageId: execution.sourceUserMessageId,
 					});
+					callbacks.onEvent(
+						fromPartial<AgentTurnEvent>({
+							modelId: execution.model.modelId,
+							sequence: 1,
+							stepId: `step-${execution.turnId}`,
+							turnId: execution.turnId,
+							type: "model-step-finished",
+						})
+					);
 				}
 				await callbacks.commitTerminal(
 					fromPartial<SessionRecord>({
@@ -993,6 +1007,223 @@ test("keeps admission identities across a Steering delivery lifecycle", async ()
 			turnId: steering.turnId,
 		},
 	]);
+});
+test("promotes only the oldest of four queued submissions into steering", async () => {
+	const runtime = createQueuedRuntime({ boundary: true });
+	const engine = createTestAgentSession([], undefined, {
+		turnRunner: runtime.runtime,
+	});
+	let activeStarted = false;
+
+	try {
+		const active = await engine.prompt(sendInput({ userText: "active turn" }));
+		if (active.rejected) {
+			throw new Error(active.reason);
+		}
+		await runtime.started(1);
+		activeStarted = true;
+
+		const queued = await engine.prompt(sendInput({ userText: "steer me" }));
+		if (queued.rejected) {
+			throw new Error(queued.reason);
+		}
+		for (const userText of ["run after 1", "run after 2", "run after 3"]) {
+			const later = await engine.prompt(sendInput({ userText }));
+			if (later.rejected) {
+				throw new Error(later.reason);
+			}
+		}
+
+		const promoted = engine.steerNextQueuedSubmission();
+
+		expect(promoted).toMatchObject({
+			disposition: "steering",
+			messageId: queued.messageId,
+			rejected: false,
+			submissionId: queued.submissionId,
+			turnId: active.turnId,
+		});
+		expect(engine.getSnapshot().steeringMessages).toMatchObject([
+			{
+				input: {
+					messageId: queued.messageId,
+					submissionId: queued.submissionId,
+					text: "steer me",
+					turnId: active.turnId,
+				},
+			},
+		]);
+		expect(
+			engine.getSnapshot().queuedSubmissions.map(({ input }) => input.userText)
+		).toEqual(["run after 1", "run after 2", "run after 3"]);
+
+		runtime.release();
+		await runtime.started(2);
+		expect(runtime.boundaries[0]?.delivered).toEqual(["steer me"]);
+		expect(runtime.prompts).toEqual(["active turn", "run after 1"]);
+		for (let turnCount = 3; turnCount <= 4; turnCount += 1) {
+			runtime.release();
+			await runtime.started(turnCount);
+		}
+		expect(runtime.prompts).toEqual([
+			"active turn",
+			"run after 1",
+			"run after 2",
+			"run after 3",
+		]);
+	} finally {
+		if (activeStarted) {
+			const totalTurns =
+				runtime.prompts.length + engine.getSnapshot().queuedSubmissions.length;
+			while (runtime.prompts.length < totalTurns) {
+				const nextTurnCount = runtime.prompts.length + 1;
+				runtime.release();
+				await runtime.started(nextTurnCount);
+			}
+			runtime.release();
+		}
+		await engine.internalPort.shutdown();
+	}
+});
+
+test("keeps unsupported queue heads and later submissions waiting when steering rejects them", async () => {
+	const file: SessionFilePart = fromPartial({
+		attachmentId: attachmentId("queued-attachment"),
+		filename: "queued.png",
+		mediaType: "image/png",
+		type: "file",
+		url: "attachment://queued-attachment",
+	});
+	const cases = [
+		{
+			expectedText: "with attachment",
+			input: sendInput({
+				composition: compositionOf("with attachment", [file]),
+				files: [file],
+				userText: "with attachment",
+			}),
+			reason:
+				"A Steering Message carries text only: attachments are not accepted.",
+		},
+		{
+			expectedText: "run the skill",
+			input: sendInput({
+				skill: fromPartial<NonNullable<SessionSendInput["skill"]>>({}),
+				userText: "run the skill",
+			}),
+			reason: "A Steering Message cannot invoke a Skill: it carries text only.",
+		},
+	];
+
+	for (const { input, reason, expectedText } of cases) {
+		const runtime = createQueuedRuntime({ boundary: true });
+		const engine = createTestAgentSession([], undefined, {
+			turnRunner: runtime.runtime,
+		});
+		let queuedCount = 0;
+
+		try {
+			const active = await engine.prompt(
+				sendInput({ userText: "active turn" })
+			);
+			if (active.rejected) {
+				throw new Error(active.reason);
+			}
+			await runtime.started(1);
+
+			const queued = await engine.prompt(input);
+			if (queued.rejected) {
+				throw new Error(queued.reason);
+			}
+			queuedCount += 1;
+			const later = await engine.prompt(sendInput({ userText: "run after" }));
+			if (later.rejected) {
+				throw new Error(later.reason);
+			}
+			queuedCount += 1;
+
+			expect(engine.steerNextQueuedSubmission()).toEqual({
+				rejected: true,
+				reason,
+			});
+			expect(
+				engine
+					.getSnapshot()
+					.queuedSubmissions.map(
+						({ input: queuedInput }) => queuedInput.composition.text
+					)
+			).toEqual([expectedText, "run after"]);
+			expect(engine.getSnapshot().steeringMessages).toEqual([]);
+		} finally {
+			for (let count = 1; count <= queuedCount + 1; count += 1) {
+				await runtime.started(count);
+				runtime.release();
+			}
+			await engine.internalPort.shutdown();
+		}
+	}
+});
+
+test("leaves queued work waiting until a busy session has a live execution", async () => {
+	const externalizeStarted = Promise.withResolvers<void>();
+	const allowExternalize = Promise.withResolvers<void>();
+	const runtime = createQueuedRuntime({ boundary: true });
+	const engine = createTestAgentSession([], undefined, {
+		attachments: {
+			externalize: async (messages) => {
+				externalizeStarted.resolve();
+				await allowExternalize.promise;
+				return [...messages];
+			},
+			hydrate: async ({ messages }) => [...messages],
+			release: () => undefined,
+			retain: () => undefined,
+		},
+		turnRunner: runtime.runtime,
+	});
+	const file: SessionFilePart = {
+		filename: "preparing.txt",
+		mediaType: "text/plain",
+		type: "file",
+		url: "data:text/plain;base64,QQ==",
+	};
+	let queued = false;
+
+	try {
+		const active = await engine.prompt(
+			sendInput({ files: [file], userText: "preparing" })
+		);
+		if (active.rejected) {
+			throw new Error(active.reason);
+		}
+		await externalizeStarted.promise;
+
+		const waiting = await engine.prompt(sendInput({ userText: "wait here" }));
+		if (waiting.rejected) {
+			throw new Error(waiting.reason);
+		}
+		queued = true;
+
+		expect(engine.getSnapshot().executions).toEqual([]);
+		expect(engine.steerNextQueuedSubmission()).toEqual({
+			rejected: true,
+			reason: "An active Agent Turn is required to accept a Steering Message.",
+		});
+		expect(
+			engine
+				.getSnapshot()
+				.queuedSubmissions.map(({ input }) => input.composition.text)
+		).toEqual(["wait here"]);
+	} finally {
+		allowExternalize.resolve();
+		await runtime.started(1);
+		runtime.release();
+		if (queued) {
+			await runtime.started(2);
+			runtime.release();
+		}
+		await engine.internalPort.shutdown();
+	}
 });
 
 test("prompt queues a second submission instead of steering a live turn", async () => {
@@ -1632,32 +1863,93 @@ test("drains submissions queued while a compaction was in flight", async () => {
 	runtime.release();
 });
 
-test("keeps draining the Submission Queue after a turn fails", async () => {
+test("recalls queued submissions after a failed Agent Turn", async () => {
+	const failedRunStarted = Promise.withResolvers<void>();
+	const failRun = Promise.withResolvers<void>();
+	const recalled = Promise.withResolvers<void>();
+	const queuedRunsDrained = Promise.withResolvers<void>();
 	const prompts: string[] = [];
-	const drained = Promise.withResolvers<void>();
+	const recalledSubmissionIds: string[] = [];
+	const queuedSubmissionIds: string[] = [];
+	const recalledCompositions: string[] = [];
+	const recalledReasons: string[] = [];
 	const engine = createTestAgentSession([], undefined, {
 		turnRunner: {
 			requestOverheadTokens: () => 0,
 			run: async ({ messages }) => {
 				prompts.push(promptOfTurn(messages));
 				if (prompts.length === 1) {
-					return { error: new Error("The provider refused the request.") };
+					failedRunStarted.resolve();
+					await failRun.promise;
+					return {
+						error: new Error("The model rejected the request."),
+					};
 				}
-				if (prompts.length === 2) {
-					drained.resolve();
+				if (prompts.length === 5) {
+					queuedRunsDrained.resolve();
 				}
 				return {};
 			},
 		},
 	});
+	engine.onSubmissionEvent((event) => {
+		if (event.kind !== "recalled") {
+			return;
+		}
+		recalledSubmissionIds.push(event.submissionId);
+		recalledCompositions.push(event.composition?.text ?? "");
+		recalledReasons.push(event.reason ?? "");
+		if (recalledSubmissionIds.length === 4) {
+			recalled.resolve();
+		}
+	});
 
-	const first = engine.send(sendInput({ userText: "one" }));
-	await first;
-	await engine.send(sendInput({ userText: "two" }));
+	try {
+		const active = await engine.prompt(sendInput({ userText: "active turn" }));
+		if (active.rejected) {
+			throw new Error(active.reason);
+		}
+		await failedRunStarted.promise;
 
-	await drained.promise;
-	expect(prompts).toEqual(["one", "two"]);
-	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
+		for (const userText of ["one", "two", "three", "four"]) {
+			const queued = await engine.prompt(sendInput({ userText }));
+			if (queued.rejected) {
+				throw new Error(queued.reason);
+			}
+			queuedSubmissionIds.push(queued.submissionId);
+		}
+
+		failRun.resolve();
+		await Promise.race([recalled.promise, queuedRunsDrained.promise]);
+
+		const snapshot = engine.getSnapshot();
+		expect({
+			prompts,
+			transcript: userPrompts(snapshot.transcript),
+			queued: snapshot.queuedSubmissions.map(({ input }) => input.userText),
+			recalledCompositions,
+			recalledCount: recalledSubmissionIds.length,
+			recalledReasons,
+			steering: snapshot.steeringMessages.map(({ input }) => input.text),
+		}).toEqual({
+			prompts: ["active turn"],
+			transcript: ["active turn"],
+			queued: [],
+			recalledCompositions: ["one", "two", "three", "four"],
+			recalledCount: 4,
+			recalledReasons: [
+				"turn-failed",
+				"turn-failed",
+				"turn-failed",
+				"turn-failed",
+			],
+			steering: [],
+		});
+		expect(recalledSubmissionIds).toEqual(queuedSubmissionIds);
+	} finally {
+		failRun.resolve();
+		await engine.internalPort.shutdown();
+	}
 });
 
 test("does not log operational cancellations as unexpected turn failures", async () => {
@@ -1900,6 +2192,56 @@ test("delivers a submission accepted while a turn is running into that turn", as
 	// answers the message that opened it.
 	expect(steering?.messages[0]?.metadata?.joinedTurnId).toBe(steering?.turnId);
 	expect(runtime.boundaries[0]?.sourceUserMessageId).toBe(opening?.id);
+});
+test("recalls Steering Messages delivered before a failed model step", async () => {
+	const turnStarted = Promise.withResolvers<void>();
+	const allowBoundary = Promise.withResolvers<void>();
+	const prompts: string[] = [];
+	const recalledTexts: string[] = [];
+	const engine = createTestAgentSession([], undefined, {
+		turnRunner: {
+			requestOverheadTokens: () => 0,
+			run: async ({ callbacks, execution, messages, takeSteeringMessages }) => {
+				prompts.push(promptOfTurn(messages));
+				turnStarted.resolve();
+				await allowBoundary.promise;
+				expect(userPrompts(takeSteeringMessages())).toEqual(["correction"]);
+				callbacks.onTerminal(
+					fromPartial<AgentTurnTerminalEvent>({
+						failure: { message: "The model rejected the next step." },
+						sequence: 2,
+						turnId: execution.turnId,
+						type: "agent-turn-failed",
+					})
+				);
+				return { error: new Error("The model rejected the next step.") };
+			},
+		},
+	});
+	engine.onSubmissionEvent((event) => {
+		if (event.kind === "recalled" && event.reason === "turn-failed") {
+			recalledTexts.push(event.composition?.text ?? "");
+		}
+	});
+
+	try {
+		const active = engine.send(sendInput({ userText: "active turn" }));
+		await turnStarted.promise;
+		await expect(
+			engine.send(sendInput({ userText: "correction" }))
+		).resolves.toEqual({ rejected: false });
+		allowBoundary.resolve();
+		await active;
+
+		expect(prompts).toEqual(["active turn"]);
+		expect(userPrompts(engine.getSnapshot().transcript)).toEqual([
+			"active turn",
+		]);
+		expect(recalledTexts).toEqual(["correction"]);
+	} finally {
+		allowBoundary.resolve();
+		await engine.internalPort.shutdown();
+	}
 });
 
 test("logs failed Steering checkpoints without Steering content", async () => {
@@ -2457,7 +2799,8 @@ test("does not retry an overflow recovery that overflows during continuation", a
 	const continuationStarted = Promise.withResolvers<void>();
 	const allowContinuation = Promise.withResolvers<void>();
 	const queuedTurnStarted = Promise.withResolvers<void>();
-	const allowQueuedTurn = Promise.withResolvers<void>();
+	const recalled = Promise.withResolvers<void>();
+	const recalledCompositions: string[] = [];
 	const prompts: string[] = [];
 	let runCount = 0;
 	const engine = createOverflowTestSession(compactionHistory(), {
@@ -2476,11 +2819,16 @@ test("does not retry an overflow recovery that overflows during continuation", a
 					return { error: overflowFailure() };
 				}
 				queuedTurnStarted.resolve();
-				await allowQueuedTurn.promise;
-				await completeRuntimeTurn(request);
 				return {};
 			},
 		},
+	});
+	engine.onSubmissionEvent((event) => {
+		if (event.kind !== "recalled" || event.reason !== "turn-failed") {
+			return;
+		}
+		recalledCompositions.push(event.composition?.text ?? "");
+		recalled.resolve();
 	});
 	const firstSend = engine.send(sendInput({ userText: "original request" }));
 
@@ -2490,20 +2838,17 @@ test("does not retry an overflow recovery that overflows during continuation", a
 			engine.send(sendInput({ userText: "next request" }))
 		).resolves.toEqual({ rejected: false });
 		allowContinuation.resolve();
-		await queuedTurnStarted.promise;
+		await Promise.race([recalled.promise, queuedTurnStarted.promise]);
 
-		expect(prompts).toEqual([
-			"original request",
-			"original request",
-			"next request",
-		]);
+		expect(prompts).toEqual(["original request", "original request"]);
+		expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
+		expect(recalledCompositions).toEqual(["next request"]);
 		expect(
 			engine.getSnapshot().compactions.map(({ trigger }) => trigger)
 		).toEqual(["overflow"]);
 		await firstSend;
 	} finally {
 		allowContinuation.resolve();
-		allowQueuedTurn.resolve();
 		await engine.internalPort.shutdown();
 	}
 });

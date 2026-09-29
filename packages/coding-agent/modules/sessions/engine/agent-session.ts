@@ -55,6 +55,7 @@ import type {
 	SessionOverflowRecoveryOutcome,
 	SessionQueuedSubmission,
 	SessionSnapshot,
+	SessionSteeringMessage,
 	SessionSubmissionEvent,
 	SessionViewState,
 } from "./types";
@@ -146,6 +147,11 @@ type AgentSessionRunState =
 	| {
 			readonly phase: "interrupted" | "preparing" | "running" | "settling";
 	  };
+type PendingSteeringDelivery = Readonly<{
+	execution: SessionExecution;
+	message: SessionMessage;
+	source: SessionSteeringMessage;
+}>;
 type AgentSessionOperationState = {
 	readonly approvals: {
 		nextId: number;
@@ -168,6 +174,7 @@ type AgentSessionOperationState = {
 	};
 	readonly executions: {
 		readonly endWaiters: Map<AgentTurnId, (() => void)[]>;
+		readonly pendingSteering: Map<AgentTurnId, PendingSteeringDelivery[]>;
 	};
 	readonly lane: {
 		activeTurnId: AgentTurnId | undefined;
@@ -218,6 +225,7 @@ export class AgentSessionImpl implements AgentSession {
 	readonly respondToApproval: AgentSession["respondToApproval"];
 	readonly send: AgentSession["send"];
 	readonly steer: AgentSession["steer"];
+	readonly steerNextQueuedSubmission: AgentSession["steerNextQueuedSubmission"];
 	readonly subscribe: AgentSession["subscribe"];
 	#activeSend: SessionActiveSend | undefined;
 	readonly #operationState: AgentSessionOperationState;
@@ -269,7 +277,10 @@ export class AgentSessionImpl implements AgentSession {
 				observers: new Set(),
 				submissionEvents: new Set(),
 			},
-			executions: { endWaiters: new Map() },
+			executions: {
+				endWaiters: new Map(),
+				pendingSteering: new Map(),
+			},
 			lane: {
 				activeTurnId: undefined,
 				idle: Promise.resolve(),
@@ -523,12 +534,64 @@ export class AgentSessionImpl implements AgentSession {
 		};
 
 		/**
-		 * Delivers the Steering Lane into the running Agent Turn: the lane is
-		 * popped and every message becomes a Session Record at this moment, so the
-		 * delivery point and the commit point are the same event. The message joins
-		 * the Session Context and the Session Transcript, and its metadata names
-		 * the Agent Turn it joined rather than moving the anchor Overflow Recovery
-		 * and retry walk.
+		 * A Steering Message is provisional until the model step that received
+		 * it finishes. This lets a provider rejection return content that was
+		 * already handed to the failed request instead of leaving it in context.
+		 */
+		const acknowledgeSteeringMessages = (turnId: AgentTurnId): void => {
+			const pending = sessionState.executions.pendingSteering.get(turnId);
+			if (pending === undefined) {
+				return;
+			}
+			sessionState.executions.pendingSteering.delete(turnId);
+			for (const { execution, message, source } of pending) {
+				if (
+					source.input.messageId !== undefined &&
+					source.input.submissionId !== undefined
+				) {
+					emitSubmissionEvent({
+						kind: "delivered",
+						messageId: source.input.messageId,
+						submissionId: source.input.submissionId,
+						turnId: execution.turnId,
+					});
+				}
+				commitSteeringRecord(execution, message);
+			}
+		};
+		const recallFailedSteeringMessages = (turnId: AgentTurnId): void => {
+			const pending = sessionState.executions.pendingSteering.get(turnId);
+			if (pending === undefined) {
+				return;
+			}
+			sessionState.executions.pendingSteering.delete(turnId);
+			const messageIds = new Set(pending.map(({ message }) => message.id));
+			publish({
+				context: this.#state.context.filter(({ id }) => !messageIds.has(id)),
+				transcript: this.#state.transcript.filter(
+					({ id }) => !messageIds.has(id)
+				),
+			});
+			for (const { execution, source } of pending) {
+				if (
+					source.input.messageId !== undefined &&
+					source.input.submissionId !== undefined
+				) {
+					emitSubmissionEvent({
+						composition: source.input.composition,
+						kind: "recalled",
+						messageId: source.input.messageId,
+						reason: "turn-failed",
+						submissionId: source.input.submissionId,
+						turnId: execution.turnId,
+					});
+				}
+			}
+		};
+		/**
+		 * Hands the Steering Lane to the running Agent Turn. The messages join
+		 * context immediately, but their durable records and delivered events
+		 * wait until the receiving Model Step succeeds.
 		 */
 		const takeSteeringMessages = (
 			execution: SessionExecution
@@ -542,9 +605,6 @@ export class AgentSessionImpl implements AgentSession {
 			}
 			const taken = this.#state.steeringMessages;
 			publish({ steeringMessages: [] });
-			// The message joins the turn it was sent to, so it records the Agent and
-			// Model Target that turn is already running with: a correction made
-			// mid-turn cannot switch a model under the user.
 			const delivered = taken.map(({ input }) =>
 				createSessionUserMessage(
 					input.text,
@@ -562,31 +622,23 @@ export class AgentSessionImpl implements AgentSession {
 					input.messageId
 				)
 			);
+			const pending =
+				sessionState.executions.pendingSteering.get(execution.turnId) ?? [];
+			sessionState.executions.pendingSteering.set(execution.turnId, [
+				...pending,
+				...taken.flatMap((source, index) => {
+					const message = delivered[index];
+					return message === undefined ? [] : [{ execution, message, source }];
+				}),
+			]);
 			applyContext([...this.#state.context, ...delivered]);
 			mergeTranscript(delivered);
-			for (const [index, message] of delivered.entries()) {
-				const source = taken[index];
-				if (
-					source !== undefined &&
-					source.input.messageId !== undefined &&
-					source.input.submissionId !== undefined
-				) {
-					emitSubmissionEvent({
-						kind: "delivered",
-						messageId: source.input.messageId,
-						submissionId: source.input.submissionId,
-						turnId: execution.turnId,
-					});
-				}
-				commitSteeringRecord(execution, message);
-			}
 			return delivered;
 		};
 		/**
-		 * Writes the Session Record of one delivered Steering Message. The write is
-		 * started at the delivery point and its failure is published, so a durable
-		 * commit that cannot land never rolls the delivered message back out of the
-		 * turn it already joined.
+		 * Writes the Session Record of a Steering Message after the model step
+		 * that received it succeeds. Failure handling removes the provisional
+		 * context/transcript message and recalls its composer composition instead.
 		 */
 		const commitSteeringRecord = (
 			execution: SessionExecution,
@@ -751,6 +803,12 @@ export class AgentSessionImpl implements AgentSession {
 			endExecution,
 			fallbackSteeringMessages: (turnId) =>
 				inputLane.fallbackSteeringMessages(turnId),
+			acknowledgeSteeringMessages: (turnId) =>
+				acknowledgeSteeringMessages(turnId),
+			recallFailedTurnMessages: (turnId) => {
+				recallFailedSteeringMessages(turnId);
+				inputLane.recallFailedTurnMessages();
+			},
 			getContext: () => this.#state.context,
 			getTranscript: () => this.#state.transcript,
 			isShutDown: () => sessionState.shutdown.closed,
@@ -1219,6 +1277,7 @@ export class AgentSessionImpl implements AgentSession {
 		};
 		this.send = inputLane.send;
 		this.steer = inputLane.steer;
+		this.steerNextQueuedSubmission = inputLane.steerNextQueuedSubmission;
 		this.subscribe = (listener) => {
 			sessionState.events.observers.add(listener);
 			return () => sessionState.events.observers.delete(listener);

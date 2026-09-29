@@ -9,3 +9,11 @@ Wincode will replace the private AI SDK adapter with provider-facing model clien
 The cutover removes `ai`, `@ai-sdk/*`, and `@wincode/agent-runtime-ai-sdk` after migrating all callers, including text generation for compaction, tests, and documentation. All currently supported model routes and OpenAI browser OAuth remain available. Agent Turn event and lifecycle behavior, including the existing step limits, tool results, steering boundaries, cancellation, deadlines, usage, and failure mapping, remains the observable contract. Do not introduce a compatibility adapter.
 
 Moving Connections does not itself change credential storage. If a new storage format is needed, use a new namespace without migration or deletion of the old credentials; reconnecting is acceptable in this development-stage project. Otherwise retain the existing credential store so package relocation alone does not force reconnecting.
+
+For OpenAI Responses, a streamed `response.output` continuation can be empty
+even when a tool call was emitted separately. When replaying a Model Step,
+serialize any tool calls missing from that continuation before their tool
+results; otherwise the provider rejects the next request because the
+`function_call_output` has no matching `function_call`. Reconciliation matches
+by `call_id`: an existing provider call wins, missing local calls are appended
+once, and provider continuation items retain their original order.

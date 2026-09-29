@@ -321,6 +321,156 @@ describe("native model client routes", () => {
 		]);
 	});
 
+	test("reconciles Responses calls by ID while preserving provider order and unique calls", async () => {
+		const continuation = [
+			{
+				encrypted_content: "signed-thought",
+				id: "rs_1",
+				summary: [],
+				type: "reasoning",
+			},
+			{
+				arguments: '{"query":"provider"}',
+				call_id: "call-existing",
+				id: "fc_1",
+				name: "provider-lookup",
+				status: "completed",
+				type: "function_call",
+			},
+			{
+				content: [{ text: "preserve this", type: "output_text" }],
+				id: "msg_1",
+				role: "assistant",
+				status: "completed",
+				type: "message",
+			},
+		];
+		const mock = mockFetch(
+			sseResponse(
+				'event: response.completed\ndata: {"response":{"output":[]}}\n\n'
+			)
+		);
+
+		await collect(
+			createModelClient({ fetch: mock.fetch }),
+			makeTarget("openai", "gpt-5.6-luna"),
+			[
+				{
+					content: [
+						{
+							input: { query: "local" },
+							toolCallId: "call-existing",
+							toolName: "lookup",
+							type: "tool-call",
+						},
+						{
+							input: { query: "missing" },
+							toolCallId: "call-missing",
+							toolName: "lookup",
+							type: "tool-call",
+						},
+						{
+							input: { query: "duplicate" },
+							toolCallId: "call-missing",
+							toolName: "duplicate-lookup",
+							type: "tool-call",
+						},
+					],
+					continuation,
+					role: "assistant",
+				},
+				{
+					content: [
+						{
+							output: { result: "existing" },
+							toolCallId: "call-existing",
+							toolName: "lookup",
+							type: "tool-result",
+						},
+						{
+							output: { result: "missing" },
+							toolCallId: "call-missing",
+							toolName: "lookup",
+							type: "tool-result",
+						},
+					],
+					role: "tool",
+				},
+			]
+		);
+
+		expect(responseBody(mock).input).toEqual([
+			...continuation,
+			{
+				arguments: '{"query":"missing"}',
+				call_id: "call-missing",
+				name: "lookup",
+				type: "function_call",
+			},
+			{
+				call_id: "call-existing",
+				output: '{"result":"existing"}',
+				type: "function_call_output",
+			},
+			{
+				call_id: "call-missing",
+				output: '{"result":"missing"}',
+				type: "function_call_output",
+			},
+		]);
+	});
+	test("restores an emitted function call before its failure result when Responses continuation is empty", async () => {
+		const mock = mockFetch(
+			sseResponse(
+				'event: response.completed\ndata: {"response":{"output":[]}}\n\n'
+			)
+		);
+
+		await collect(
+			createModelClient({ fetch: mock.fetch }),
+			makeTarget("openai", "gpt-5.6-luna"),
+			[
+				{
+					content: [
+						{
+							input: { path: "CONTEXT.md" },
+							toolCallId: "call-1",
+							toolName: "read",
+							type: "tool-call",
+						},
+					],
+					continuation: [],
+					role: "assistant",
+				},
+				{
+					content: [
+						{
+							errorText: "File Version mismatch",
+							toolCallId: "call-1",
+							toolName: "read",
+							type: "tool-failure",
+						},
+					],
+					role: "tool",
+				},
+			]
+		);
+
+		expect(responseBody(mock).input).toEqual([
+			{
+				arguments: '{"path":"CONTEXT.md"}',
+				call_id: "call-1",
+				name: "read",
+				type: "function_call",
+			},
+			{
+				call_id: "call-1",
+				output: "File Version mismatch",
+				type: "function_call_output",
+			},
+		]);
+	});
+
 	test("accepts a Responses incomplete event as a terminal result", async () => {
 		const mock = mockFetch(
 			sseResponse(

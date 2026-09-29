@@ -8,11 +8,11 @@ entry point and accepts instead of rejecting while the session is busy.
 
 Status: accepted
 
-Revised 2026-09-19: the steering-lane rejection under "Considered options" is
-superseded by ADR-0022, which accepts a Steering Lane that delivers inside a
-running Agent Turn at a Model Step boundary. Nothing else here changes — the
-Submission Queue, its drain boundary after each terminal Agent Turn outcome, and
-Recall all stand as decided.
+Revised 2026-09-19: The steering-lane rejection under "Considered options" is
+superseded by ADR-0022, which accepts a Steering Lane delivering inside a
+running Agent Turn at a Model Step boundary. Failed Agent Turns now recall the
+waiting Steering Lane and Submission Queue instead of draining them; other
+terminal Agent Turn outcomes continue to drain the queue FIFO.
 
 ## Decision
 
@@ -21,18 +21,25 @@ Recall all stand as decided.
   submission carries the composition and the Model Target selection resolved at
   acceptance, and runs unchanged if the selection changes while it waits.
 - The Engine drains the queue FIFO, one queued submission per Agent Turn, after
-  each terminal Agent Turn outcome. Threshold maintenance and overflow recovery
-  apply to each drained turn as they do today.
-- A user interrupt is the exception: interrupting the running turn, or
-  cancelling a compaction, recalls the whole queue into the composer instead of
-  draining it. Esc keeps its two-press confirmation for the interrupt.
+  a terminal Agent Turn outcome other than failure. If a turn fails, it recalls
+  all waiting Steering Messages and Queued Submissions to the composer instead.
+  Threshold maintenance and overflow recovery apply to each drained turn as
+  they do today.
+- A user interrupt or cancelled compaction also recalls the whole Steering
+  Lane and Submission Queue into the composer. Esc keeps its two-press
+  confirmation for the interrupt.
 - Recall answers to two gestures. `Alt+Up` (fallback `Alt+Z` where a terminal
   cannot deliver Alt+Arrow) recalls the whole queue; `Shift+Up` recalls only the
   submission that runs next — the oldest waiting one. Recalled submissions
-  return to the composer in order, with attachments and pasted text intact, and
-  the ones left behind keep waiting and draining. Queued items are recorded into
-  prompt history at acceptance, so a queue dropped by unmount or quit stays
-  recoverable.
+  return to the composer in order, with attachments and pasted text intact; the
+  ones left behind keep waiting and drain in order unless the current Agent
+  Turn fails, when they are recalled too. Queued items are recorded into prompt
+  history at acceptance, so a queue dropped by unmount or quit stays recoverable.
+- With a live Agent Turn and an empty composer, Enter promotes the oldest
+  queued Submission into the Steering Lane if the head is eligible for steering.
+  The transition preserves its message and submission identities and removes
+  only that head; the remaining queue stays FIFO. An ineligible head, or a
+  queue without a live execution, remains queued and reports why it cannot move.
 - The Engine retains a queued submission's attachment ids while it is queued
   and releases them when it leaves the queue, so attachment maintenance can
   never reclaim a queued item's blobs.

@@ -42,6 +42,10 @@ When authorized to create or edit a PR, follow the checklist below.
 ## Commands
 - NEVER commit unless asked.
 - NEVER use `tsc/npx tsc` — always `bun check`
+- Most formatting and common issues are automatically fixed. Run it before committing to ensure compliance - `bun fix`
+- Type check all workspaces — `bun check-types`
+- Run the Default test portfolio — `bun test`
+- Start the CLI in watch mode — `bun dev:cli`
 
 ---
 

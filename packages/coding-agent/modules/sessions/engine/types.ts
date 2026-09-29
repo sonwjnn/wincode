@@ -88,6 +88,8 @@ export type SessionSubmissionEvent = Readonly<{
 	kind: "started" | "delivered" | "recalled" | "failed";
 	messageId: SessionMessageId;
 	reason?: string;
+	/** Present on turn-failed recalls so listeners can restore composer content. */
+	composition?: SessionSubmissionComposition;
 	submissionId: SubmissionId;
 	turnId?: AgentTurnId;
 }>;
@@ -392,8 +394,9 @@ export type SessionTurnRequest = Readonly<{
 	/**
 	 * Hands the runtime the Steering Messages that joined this execution since
 	 * the last call, oldest first, at a Model Step boundary. The Agent Session
-	 * pops the Steering Lane and commits Session Records as it answers, so
-	 * delivery and commit are atomic.
+	 * includes them in the next model request immediately, but commits their
+	 * Session Records only after that Model Step succeeds; a failed step returns
+	 * them to the composer.
 	 */
 	takeSteeringMessages: () => readonly SessionMessage[];
 }>;
@@ -557,6 +560,8 @@ export type AgentSessionInternalPort = Readonly<{
 export type AgentSession = Readonly<{
 	/** Starts a new Submission or admits it to the FIFO Submission Queue. */
 	prompt: (input: SessionSendInput) => Promise<SessionSubmissionAdmission>;
+	/** Moves the oldest queued Submission into a running Agent Turn's Steering Lane. */
+	steerNextQueuedSubmission: () => SessionSteeringAdmission | undefined;
 	/** Delivers a text-only correction to a running Agent Turn. */
 	steer: (text: string) => SessionSteeringAdmission;
 	/** Resumes a valid idle context or starts the next waiting user input. */

@@ -100,6 +100,7 @@ type ChatTextAreaProps = {
 	disabled?: boolean;
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
+	onEmptySubmit?: () => void | Promise<void>;
 	/** Compositions a Recall returned, oldest first, waiting to enter the composer. */
 	recalledSubmissions?: readonly SessionSubmissionComposition[];
 	/** Changes whenever `recalledSubmissions` holds something new to restore. */
@@ -157,6 +158,7 @@ export function ChatTextArea({
 	onCompact,
 	onOpenSettings,
 	onSubmit,
+	onEmptySubmit,
 	recalledSubmissions = EMPTY_RECALLED_SUBMISSIONS,
 	recallRevision = 0,
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
@@ -181,6 +183,7 @@ export function ChatTextArea({
 	const lastTextSyncRevisionRef = useRef(0);
 	const programmaticTextRef = useRef<string | null>(null);
 	const onSubmitRef = useRef<() => Promise<void>>(async () => undefined);
+	const onEmptySubmitRef = useLatest(onEmptySubmit);
 	const pasteSequenceRef = useRef(0);
 	const attachmentsRef = useRef<ChatAttachment[]>([]);
 	const fileMentionExtmarkIdsRef = useRef<number[]>([]);
@@ -702,6 +705,16 @@ export function ChatTextArea({
 			? getTrackedPastedTexts(textarea, syncPastedTexts())
 			: [];
 		const attachments = syncAttachments();
+		const submitEmpty = onEmptySubmitRef.current;
+		if (
+			submitEmpty &&
+			rawText.trim().length === 0 &&
+			attachments.length === 0 &&
+			pastedTexts.length === 0
+		) {
+			await submitEmpty();
+			return;
+		}
 		const accepted = await actions.submit({
 			fileTokens: textarea
 				? normalizeFileTokensForTrimmedText(

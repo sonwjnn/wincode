@@ -131,7 +131,7 @@ The user-authored content one send accepts: text, attachments, pasted text, and 
 A Submission a busy session accepts and holds instead of running immediately. It is transient Agent Session state — not a Session Record, never replayed after a restart — and it enters the Session Transcript only when it starts running. _Avoid_: queued prompt, pending message, backlog item, steering (that is a Steering Message), interjection
 
 **Submission Queue**:
-The FIFO order of a session's Queued Submissions, exposed in the Session Snapshot. The Agent Session drains it after terminal Agent Turn outcomes; Steering Messages that missed their Model Step boundary are inserted ahead of newer queued prompts. A user interrupt recalls the queue instead of draining it. _Avoid_: message queue, follow-up list, outbox
+The FIFO order of a session's Queued Submissions, exposed in the Session Snapshot. The Agent Session drains it FIFO after non-failed terminal Agent Turn outcomes; a failed Agent Turn or user interrupt recalls both waiting lanes to the composer, while Steering Messages that missed their Model Step boundary are inserted ahead of newer queued prompts. _Avoid_: message queue, follow-up list, outbox
 
 **Recall**:
 Withdrawing a session's waiting user messages back into the composer in order, restoring their composition instead of running them. It withdraws the Steering Lane and the Submission Queue together. _Avoid_: dequeue, withdraw, unsend, retract, delete

@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { projectSessionApprovals } from "@/modules/sessions/approval-projection";
 import type { CompactSessionResult } from "@/modules/sessions/compaction/compaction";
 import type {
+	AgentSession,
 	SessionSnapshot,
 	SessionWaitingMessage,
 	SessionWaitingMessageId,
@@ -21,6 +22,8 @@ import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-p
 export type AgentSessionBinding = Readonly<{
 	/** Cancels the Agent Turn the session is running. */
 	cancel: () => void;
+	/** Observes transient submission lifecycle events from the Agent Session. */
+	onSubmissionEvent: AgentSession["onSubmissionEvent"];
 	/** Aborts the compaction command in flight and recalls the waiting messages with it. */
 	cancelCompaction: () => SessionWaitingMessage[];
 	/** Runs a manual compaction command against one Model Target. */
@@ -40,6 +43,7 @@ export type AgentSessionBinding = Readonly<{
 	) => SessionWaitingMessage[];
 	/** Sends one submission as a Session Command. */
 	send: (input: SessionSendInput) => Promise<SessionSendOutcome>;
+	steerNextQueuedSubmission: AgentSession["steerNextQueuedSubmission"];
 	/** The session facts the view renders at one moment. */
 	snapshot: SessionSnapshot;
 }>;
@@ -109,10 +113,12 @@ export function useAgentSession(host: SessionHost): AgentSessionBinding {
 	return {
 		cancel: agentSession.cancel,
 		cancelCompaction: agentSession.cancelCompaction,
+		onSubmissionEvent: agentSession.onSubmissionEvent,
 		compact,
 		interrupt: agentSession.interrupt,
 		recallWaitingMessages: agentSession.recallWaitingMessages,
 		send: agentSession.send,
+		steerNextQueuedSubmission: agentSession.steerNextQueuedSubmission,
 		snapshot,
 	};
 }

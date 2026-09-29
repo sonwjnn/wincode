@@ -80,6 +80,10 @@ export type SubmissionDeps = Readonly<{
 	 * entries are moved, so a newer turn can start while this one unwinds.
 	 */
 	fallbackSteeringMessages: (turnId?: AgentTurnId) => void;
+	/** Commits Steering Messages after the receiving Model Step succeeds. */
+	acknowledgeSteeringMessages: (turnId: AgentTurnId) => void;
+	/** Returns pending input-lane messages to the composer after turn failure. */
+	recallFailedTurnMessages: (turnId: AgentTurnId) => void;
 	getContext: () => readonly SessionMessage[];
 	getTranscript: () => readonly SessionMessage[];
 	mergeTranscript: (
@@ -107,9 +111,9 @@ export type SubmissionDeps = Readonly<{
 	 */
 	trackBackgroundTask: (task: Promise<unknown>) => void;
 	/**
-	 * Delivers the Steering Lane into one Agent Turn execution: the Agent Session
-	 * pops the lane, commits Session Records, and returns messages the runtime
-	 * inserts before its next model call.
+	 * Delivers Steering Messages into one Agent Turn execution. The Agent
+	 * Session pops the lane and includes the messages before the next model
+	 * call; persistence waits for that model step to succeed.
 	 */
 	takeSteeringMessages: (execution: SessionExecution) => SessionMessage[];
 }>;
@@ -1143,6 +1147,7 @@ const runTurn = async ({
 	deps,
 	execution,
 	modelMessages,
+	onTurnFailure,
 	signal,
 }: {
 	attachmentBudget: SessionAttachmentBudget;
@@ -1150,6 +1155,7 @@ const runTurn = async ({
 	deps: SubmissionDeps;
 	execution: SessionExecution;
 	modelMessages: readonly SessionMessage[];
+	onTurnFailure: () => void;
 	signal: AbortSignal;
 }): Promise<SessionSendOutcome> => {
 	let executionActive = true;
@@ -1178,6 +1184,9 @@ const runTurn = async ({
 				return;
 			}
 			executionStarted = true;
+			if (event.type === "model-step-finished") {
+				deps.acknowledgeSteeringMessages(execution.turnId);
+			}
 			const projected = projectAgentTurnEvent(
 				deps.getContext(),
 				execution,
@@ -1195,6 +1204,9 @@ const runTurn = async ({
 			}
 			executionStarted = true;
 			terminalObserved = true;
+			if (event.type !== "agent-turn-failed") {
+				deps.acknowledgeSteeringMessages(execution.turnId);
+			}
 			terminalFailure =
 				event.type === "agent-turn-failed" ? event.failure : undefined;
 			const messages = projectAgentTurnTerminal(
@@ -1229,6 +1241,7 @@ const runTurn = async ({
 		});
 		assertSessionOpen(deps);
 		if (!turnIsLive()) {
+			deps.acknowledgeSteeringMessages(execution.turnId);
 			return { rejected: false };
 		}
 		const outcome = await deps.ports.turnRunner.run({
@@ -1243,9 +1256,11 @@ const runTurn = async ({
 				turnIsLive() ? deps.takeSteeringMessages(execution) : [],
 		});
 		if (!turnIsLive()) {
+			deps.acknowledgeSteeringMessages(execution.turnId);
 			return { rejected: false };
 		}
 		if (isUndefined(outcome.error)) {
+			deps.acknowledgeSteeringMessages(execution.turnId);
 			void logger.debug("Agent turn completed", {
 				operation: "session.turn",
 				phase: "completed",
@@ -1261,6 +1276,7 @@ const runTurn = async ({
 			);
 			return { rejected: false };
 		}
+		onTurnFailure();
 		return handleTurnFailure({
 			commitRecord,
 			context,
@@ -1276,8 +1292,10 @@ const runTurn = async ({
 		});
 	} catch (error) {
 		if (deps.isShutDown() || signal.aborted || !executionActive) {
+			deps.acknowledgeSteeringMessages(execution.turnId);
 			return { rejected: false };
 		}
+		onTurnFailure();
 		return handleTurnFailure({
 			commitRecord,
 			context,
@@ -1335,6 +1353,7 @@ export const createSubmissionPipeline = (
 				: { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
 		}
 		deps.setCompactionError(null);
+		let failedTurnId: AgentTurnId | undefined;
 		deps.setRunPhase("preparing");
 		try {
 			const startedAt = Date.now();
@@ -1389,6 +1408,9 @@ export const createSubmissionPipeline = (
 				deps,
 				execution,
 				modelMessages,
+				onTurnFailure: () => {
+					failedTurnId = execution.turnId;
+				},
 				signal,
 			});
 		} catch (error) {
@@ -1400,11 +1422,12 @@ export const createSubmissionPipeline = (
 			}
 			throw error;
 		} finally {
-			// A turn that ended without delivering its Steering Lane — a
-			// tool-less one ran exactly one Model Step — hands it to the
-			// Submission Queue before the session reports the turn over, so the
-			// lane remains ordered even when the turn was interrupted.
+			// Return undelivered Steering messages to the queue first. A failed
+			// Agent Turn then recalls both lanes rather than draining that tail.
 			deps.fallbackSteeringMessages(input.turnId);
+			if (failedTurnId !== undefined) {
+				deps.recallFailedTurnMessages(failedTurnId);
+			}
 			deps.setRunPhase("settling");
 		}
 	};
