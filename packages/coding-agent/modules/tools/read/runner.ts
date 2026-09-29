@@ -960,7 +960,10 @@ export const runReadTool = async (
 						}
 					);
 				}
+				// A File Version becomes authoritative when this session first observes
+				// the path. On that first read, model-supplied versions may be placeholders.
 				if (
+					currentObservation !== null &&
 					input.expectedVersion !== undefined &&
 					input.expectedVersion !== currentState.fileVersion
 				) {

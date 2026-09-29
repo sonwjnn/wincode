@@ -253,7 +253,11 @@ test("persists observations across restart and gates sloppy edits separately", a
 		const newFilePath = join(root, "nested", "created.txt");
 		const writeResult = await sloppyTools.find("write").execute(
 			{
-				input: { content: "created\n", path: newFilePath },
+				input: {
+					content: "created\n",
+					expectedVersion: null,
+					path: newFilePath,
+				},
 				toolCallId: toolCallId("write-new"),
 			},
 			{}

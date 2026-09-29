@@ -436,6 +436,24 @@ describe("SessionView initial submission", () => {
 			setup.renderer.destroy();
 		}
 	});
+	/**
+	 * Types into the composer until the composition is really there. The test
+	 * renderer can deliver input before the submit-reset effect runs.
+	 */
+	const typePrompt = async (
+		setup: Awaited<ReturnType<typeof testRender>>,
+		text: string
+	) => {
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			await setup.mockInput.typeText(text);
+			await flushUi(setup);
+			if (setup.captureCharFrame().includes(text)) {
+				return;
+			}
+		}
+		throw new Error(`The composer never held "${text}".`);
+	};
+
 	test("clears the composer before the active turn completes", async () => {
 		const navigationRelease = deferred<void>();
 		const navigationStarted = deferred<void>();
@@ -507,8 +525,7 @@ describe("SessionView initial submission", () => {
 
 		try {
 			await setup.waitFor(() => registryIsReady);
-			await flushUi(setup);
-			await setup.mockInput.typeText("entered prompt");
+			await typePrompt(setup, "entered prompt");
 			await flushUi(setup);
 			setup.mockInput.pressEnter();
 			const sendOutcome = await Promise.race([
@@ -517,7 +534,7 @@ describe("SessionView initial submission", () => {
 			]);
 			expect(sendOutcome).toBe("sent");
 			await flushUi(setup);
-			await setup.mockInput.typeText("next draft");
+			await typePrompt(setup, "next draft");
 			await flushUi(setup);
 			const frameWhileSendIsPending = setup.captureCharFrame();
 			expect(frameWhileSendIsPending.match(/entered prompt/gu)).toHaveLength(1);

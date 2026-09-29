@@ -4,6 +4,10 @@ import { runGlobTool } from "./glob/runner";
 import { runGrepTool } from "./grep/runner";
 import { runReadTool } from "./read/runner";
 import { runRecoverTool } from "./recover/runner";
+import {
+	getToolResourceLimits,
+	type ToolResourceLimits,
+} from "./resource-limits";
 import type { CodingToolRunnerOptions } from "./runners";
 import {
 	type CodingToolInput,
@@ -17,6 +21,7 @@ import {
 	readToolSchema,
 	recoverToolSchema,
 	type ShellPlatform,
+	shellInputSchemaForLimits,
 	shellToolDescription,
 	writeToolSchema,
 } from "./schemas";
@@ -31,7 +36,10 @@ type CodingToolDescriptor<Name extends CodingToolName> = {
 		input: CodingToolInput<Name>,
 		options?: CodingToolRunnerOptions
 	) => Promise<CodingToolOutput<Name>>;
-	describe?: (platform: ShellPlatform) => string;
+	describe?: (
+		platform: ShellPlatform,
+		resourceLimits: ToolResourceLimits
+	) => string;
 };
 
 type CodingToolCatalog = {
@@ -85,12 +93,17 @@ export const codingToolNames: readonly CodingToolName[] = Object.freeze(
 /** Builds a model-facing definition while retaining the catalog's neutral description. */
 export const codingToolDefinitionFor = (
 	name: CodingToolName,
-	platform: ShellPlatform
+	platform: ShellPlatform,
+	resourceLimits: ToolResourceLimits = getToolResourceLimits()
 ): ToolDefinition => {
 	const descriptor = codingToolCatalog[name];
 	return {
-		description: descriptor.describe?.(platform) ?? descriptor.description,
-		inputSchema: descriptor.inputSchema,
+		description:
+			descriptor.describe?.(platform, resourceLimits) ?? descriptor.description,
+		inputSchema:
+			name === "shell"
+				? shellInputSchemaForLimits(resourceLimits)
+				: descriptor.inputSchema,
 		name,
 		outputSchema: descriptor.outputSchema,
 	};

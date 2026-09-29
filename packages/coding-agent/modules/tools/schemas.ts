@@ -41,6 +41,7 @@ export {
 	SHELL_TIMEOUT_DEFAULT_SECONDS,
 	SHELL_TIMEOUT_MAX_SECONDS,
 	shellInputSchema,
+	shellInputSchemaForLimits,
 	shellOutputSchema,
 	shellPlatformFromNode,
 	shellToolDescription,
