@@ -3,24 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getGitBranch } from "@/shared/git/get-git-branch";
-
-type BunSpawn = (
-	command: string[],
-	options: { cwd: string; stderr: "ignore"; stdout: "ignore" }
-) => { exited: Promise<number> };
-
-const bunGlobal = globalThis as typeof globalThis & {
-	Bun: { spawn: BunSpawn };
-};
-
-const run = async (cwd: string, command: string[]) => {
-	const process = bunGlobal.Bun.spawn(command, {
-		cwd,
-		stderr: "ignore",
-		stdout: "ignore",
-	});
-	await process.exited;
-};
+import { runGit } from "./support/git";
 
 describe("getGitBranch", () => {
 	let dir: string;
@@ -38,10 +21,10 @@ describe("getGitBranch", () => {
 	});
 
 	test("returns the current branch name inside a git repo", async () => {
-		await run(dir, ["git", "init", "--initial-branch=main"]);
+		await runGit(dir, ["init", "--initial-branch=main"]);
 		expect(await getGitBranch(dir)).toBe("main");
 
-		await run(dir, ["git", "checkout", "-b", "feature/sidebar"]);
+		await runGit(dir, ["checkout", "-b", "feature/sidebar"]);
 		expect(await getGitBranch(dir)).toBe("feature/sidebar");
 	});
 });
