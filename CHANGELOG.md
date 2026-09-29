@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+- **Workspace branch display refreshes after checkout.** The session header
+  watches Git metadata in regular repositories and linked worktrees, updating
+  after an in-place checkout without polling or changing the workspace.
+
 - **OpenAI Responses repairs missing continuation calls.** The model client
   restores tool calls omitted from provider continuations by `call_id`, keeps
   existing provider items and order, and emits duplicate local calls only once.
