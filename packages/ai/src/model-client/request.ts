@@ -8,6 +8,10 @@ import {
 	resolveModelProviderOptions,
 } from "../model-provider-options";
 import type { SupportedChatModel } from "../models";
+import {
+	type OpenAiResponsesFunctionCallItem,
+	reconcileOpenAiResponsesAssistantContinuation,
+} from "./openai-responses-continuation";
 import type {
 	ModelPromptMessage,
 	ModelPromptPart,
@@ -140,19 +144,42 @@ const appendOpenAiResponsesToolResults = (
 	}
 };
 
+const openAiResponsesFunctionCall = (
+	part: Extract<ModelPromptPart, { type: "tool-call" }>
+): OpenAiResponsesFunctionCallItem => ({
+	arguments: valueAsText(part.input),
+	call_id: part.toolCallId,
+	name: part.toolName,
+	type: "function_call",
+});
+
 const appendOpenAiResponsesToolCalls = (
 	input: unknown[],
-	content: readonly ModelPromptPart[]
+	content: readonly ModelPromptPart[],
+	continuation?: readonly unknown[]
 ): void => {
+	const toolCalls: OpenAiResponsesFunctionCallItem[] | undefined =
+		continuation === undefined ? undefined : [];
 	for (const part of content) {
-		if (part.type === "tool-call") {
-			input.push({
-				arguments: valueAsText(part.input),
-				call_id: part.toolCallId,
-				name: part.toolName,
-				type: "function_call",
-			});
+		if (part.type !== "tool-call") {
+			continue;
 		}
+		const toolCall = openAiResponsesFunctionCall(part);
+		if (toolCalls === undefined) {
+			input.push(toolCall);
+		} else {
+			toolCalls.push(toolCall);
+		}
+	}
+
+	if (continuation === undefined || toolCalls === undefined) {
+		return;
+	}
+	for (const item of reconcileOpenAiResponsesAssistantContinuation(
+		continuation,
+		toolCalls
+	)) {
+		input.push(item);
 	}
 };
 
@@ -166,9 +193,7 @@ const appendOpenAiResponsesMessage = (
 	}
 	const continuation = unknownArray(message.continuation);
 	if (message.role === "assistant" && continuation) {
-		for (const item of continuation) {
-			input.push(item);
-		}
+		appendOpenAiResponsesToolCalls(input, message.content, continuation);
 		return;
 	}
 

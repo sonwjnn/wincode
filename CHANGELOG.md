@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+- **OpenAI Responses repairs missing continuation calls.** The model client
+  restores tool calls omitted from provider continuations by `call_id`, keeps
+  existing provider items and order, and emits duplicate local calls only once.
+
 - **Failed Agent Turns recall waiting submissions.** Instead of draining the
   queued tail after a model failure, the Session restores all waiting Steering
   Messages and Queued Submissions to the composer in order; non-failed turns
