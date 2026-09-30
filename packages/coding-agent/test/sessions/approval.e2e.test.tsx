@@ -207,9 +207,24 @@ const submitPrompt = async (
 ): Promise<void> => {
 	await act(async () => {
 		await setup.mockInput.typeText(prompt);
+		await setup.flush();
+		setup.mockInput.pressEnter();
 	});
-	await setup.flush();
-	setup.mockInput.pressEnter();
+};
+
+const waitForSessionWriterRelease = async (): Promise<void> => {
+	await waitForSessionCondition(async () => {
+		try {
+			const writer = await store.acquireSessionWriter(sessionId);
+			await writer.release();
+			return true;
+		} catch (error) {
+			if (error instanceof SessionInUseError) {
+				return false;
+			}
+			throw error;
+		}
+	});
 };
 
 test("answers a pending approval and the gated Tool Call runs", async () => {
@@ -227,7 +242,7 @@ test("answers a pending approval and the gated Tool Call runs", async () => {
 		expect(pendingFrame).toContain("Allow once");
 
 		// Enter answers the pending approval through the session's command.
-		setup.mockInput.pressEnter();
+		await act(() => setup.mockInput.pressEnter());
 		await waitForSessionFrame(setup, (frame) => frame.includes("allowed once"));
 		await waitForSessionFrame(setup, (frame) => frame.includes("Notes read."));
 		const settledFrame = setup.captureCharFrame();
@@ -241,7 +256,10 @@ test("answers a pending approval and the gated Tool Call runs", async () => {
 		expect(JSON.stringify(record?.messages)).toContain(FILE_CONTENT);
 	} finally {
 		writeE2EFrame(setup);
-		setup.renderer.destroy();
+		await act(async () => {
+			setup.renderer.destroy();
+		});
+		await waitForSessionWriterRelease();
 		cleanupSessionRender();
 	}
 });
@@ -251,6 +269,7 @@ test("settles an approval left pending when the session view unmounts", async ()
 	const requestCountBefore = recorder.requests.filter(
 		(request) => request.kind === "chat"
 	).length;
+	let rendererDestroyed = false;
 	try {
 		await submitPrompt(setup, "read the notes again");
 		await waitForSessionFrame(setup, (frame) =>
@@ -263,18 +282,8 @@ test("settles an approval left pending when the session view unmounts", async ()
 		await act(async () => {
 			setup.renderer.destroy();
 		});
-		await waitForSessionCondition(async () => {
-			try {
-				const writer = await store.acquireSessionWriter(sessionId);
-				await writer.release();
-				return true;
-			} catch (error) {
-				if (error instanceof SessionInUseError) {
-					return false;
-				}
-				throw error;
-			}
-		});
+		rendererDestroyed = true;
+		await waitForSessionWriterRelease();
 		const records = await store.listSessionRecords(sessionId);
 		expect(
 			recorder.requests.filter((request) => request.kind === "chat")
@@ -282,6 +291,16 @@ test("settles an approval left pending when the session view unmounts", async ()
 		expect(completedToolRecords(records, UNMOUNT_CALL)).toHaveLength(0);
 		expect(completedToolRecords(records, AFTER_UNMOUNT_CALL)).toHaveLength(0);
 	} finally {
-		cleanupSessionRender();
+		try {
+			if (!rendererDestroyed) {
+				writeE2EFrame(setup);
+				await act(async () => {
+					setup.renderer.destroy();
+				});
+				await waitForSessionWriterRelease();
+			}
+		} finally {
+			cleanupSessionRender();
+		}
 	}
 });

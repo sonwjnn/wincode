@@ -89,7 +89,12 @@ afterEach(() => {
 	for (const fixture of fixtures.splice(0)) {
 		fixture.first.sqlite.close();
 		fixture.second.sqlite.close();
-		fs.rmSync(fixture.root, { force: true, recursive: true });
+		fs.rmSync(fixture.root, {
+			force: true,
+			maxRetries: 5,
+			recursive: true,
+			retryDelay: 100,
+		});
 	}
 });
 
