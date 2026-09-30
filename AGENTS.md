@@ -12,7 +12,7 @@
 | `packages/ai`                   | Model catalog, Multi-provider LLM client with streaming support                                                     |
 | `packages/coding-agent`         | Main CLI application, including Skills and concrete coding tools   |
 | `packages/config`               | Shared configuration contracts and loaders                         |
-| `packages/runtime-utils`        | Shared utilities                                                   |
+| `packages/utils`               | Shared utilities                                                   |
 
 ---
 ## GitHub

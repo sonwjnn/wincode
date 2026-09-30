@@ -40,7 +40,7 @@ import {
 	readLoggerRecords,
 	withDebugProject,
 	withLoggerHome,
-} from "../../../runtime-utils/test/logger-home";
+} from "../../../utils/test/logger-home";
 import { createHangingSummary } from "../support/hanging-summary";
 import {
 	agentId,

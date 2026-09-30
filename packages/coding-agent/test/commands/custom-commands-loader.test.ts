@@ -9,7 +9,7 @@ import { createConfigStore } from "@/shared/config/config-store";
 import {
 	readLoggerRecords,
 	withLoggerHome,
-} from "../../../runtime-utils/test/logger-home";
+} from "../../../utils/test/logger-home";
 
 const makeCandidates = async (
 	dirs: Array<{ dir: string; files: Record<string, string> }>

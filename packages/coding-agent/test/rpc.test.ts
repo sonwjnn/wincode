@@ -6,7 +6,7 @@ import {
 	type LoggerRecord,
 	readLoggerRecords,
 	withLoggerHome,
-} from "../../runtime-utils/test/logger-home";
+} from "../../utils/test/logger-home";
 import { SerializedWriter } from "../modules/application/rpc/output";
 import {
 	reportDeferredFlushFailure,

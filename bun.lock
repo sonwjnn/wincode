@@ -90,7 +90,7 @@
       "name": "@wincode/config",
       "version": "0.0.0",
     },
-    "packages/runtime-utils": {
+    "packages/utils": {
       "name": "@wincode/runtime-utils",
       "dependencies": {
         "type-fest": "catalog:",
@@ -397,7 +397,7 @@
 
     "@wincode/config": ["@wincode/config@workspace:packages/config"],
 
-    "@wincode/runtime-utils": ["@wincode/runtime-utils@workspace:packages/runtime-utils"],
+    "@wincode/runtime-utils": ["@wincode/runtime-utils@workspace:packages/utils"],
 
     "ansi-regex": ["ansi-regex@6.3.0", "", {}, "sha512-WpDfL7NO6j7tH88IDBNVdUJxDh9nmCteAVW9dsep846XdwF4naCBK+/tGLX3KJgcpgMRXCFlTM2hKGoK9FsdrQ=="],
 
