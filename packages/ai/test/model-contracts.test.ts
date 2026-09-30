@@ -120,6 +120,11 @@ describe("focused model contracts", () => {
 	test("resolves every requested direct model from the catalog", () => {
 		const requestedDirectModels = [
 			{ providerId: "openai", id: "gpt-6-sol", displayName: "GPT-6 Sol" },
+			{
+				providerId: "openai",
+				id: "gpt-6.1-sol",
+				displayName: "GPT-6.1 Sol",
+			},
 			{ providerId: "openai", id: "gpt-6-luna", displayName: "GPT-6 Luna" },
 			{ providerId: "openai", id: "gpt-6-terra", displayName: "GPT-6 Terra" },
 			{

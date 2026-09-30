@@ -120,6 +120,14 @@ export const modelCatalog = [
 	{
 		connectionProviderId: "openai",
 		route: "direct",
+		displayName: "GPT-6.1 Sol",
+		id: "gpt-6.1-sol",
+		provider: "openai",
+		lifecycle: "active",
+	},
+	{
+		connectionProviderId: "openai",
+		route: "direct",
 		displayName: "GPT-6 Luna",
 		id: "gpt-6-luna",
 		provider: "openai",
