@@ -1,59 +1,26 @@
-import type { CliRenderer } from "@opentui/core";
 import { useRenderer } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
-import { findSupportedChatModelSelection } from "@wincode/ai/models";
 import { getErrorMessage } from "@wincode/runtime-utils";
-import open from "open";
-import { createElement, useCallback, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useRefreshAgentRegistry } from "@/modules/agents";
-import {
-	AgentsAdapter,
-	CompactAdapter,
-	ConnectAdapter,
-	DialogAdapter,
-	EffortAdapter,
-	ExitAdapter,
-	ModelsAdapter,
-	NewAdapter,
-	SettingsAdapter,
-} from "@/modules/commands/adapters";
 import type { CommandSpec } from "@/modules/commands/commands";
-import { createCommandExecutor } from "@/modules/commands/execute-command";
 import {
-	CONNECTION_DIALOG_WIDTH,
-	ConnectDialogContent,
-	useConnections,
-} from "@/modules/connections";
-import { McpStatusDialogContent } from "@/modules/mcp";
+	type CommandHandlerMap,
+	createCommandExecutor,
+} from "@/modules/commands/execute-command";
+import { useConnections } from "@/modules/connections";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
-import { AgentsDialogContent } from "@/modules/prompt-settings/ui/agents-dialog";
-import { EffortDialogContent } from "@/modules/prompt-settings/ui/effort-dialog";
-import { ModelsDialogContent } from "@/modules/prompt-settings/ui/models-dialog";
-import { ThemeDialogContent } from "@/modules/prompt-settings/ui/theme-dialog";
-import { SessionsDialogContent } from "@/modules/sessions/ui/dialogs/sessions-dialog";
-import {
-	type ClipboardSpawn,
-	writeClipboard,
-} from "@/shared/clipboard/clipboard";
+import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import { createAppHandlers } from "./handlers/app-handlers";
+import { createSelectionHandlers } from "./handlers/selection-handlers";
+import { createSessionHandlers } from "./handlers/session-handlers";
 
 type UseCommandExecutorReturn = {
 	executeCommand: (spec: CommandSpec) => Promise<void>;
 };
-export async function copyBrowserAuthorizationUrl(
-	renderer: Pick<CliRenderer, "copyToClipboardOSC52">,
-	url: string,
-	spawnProcess?: ClipboardSpawn
-): Promise<void> {
-	if (await writeClipboard(renderer, url, spawnProcess)) {
-		return;
-	}
-	if (process.platform !== "darwin") {
-		throw new Error("Clipboard is not supported by this terminal.");
-	}
-	throw new Error("Failed to copy URL.");
-}
+
 type CommandExecutorOptions = {
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
@@ -68,206 +35,44 @@ export function useCommandExecutor(
 	const toast = useToast();
 	const connections = useConnections();
 	const refreshAgentRegistry = useRefreshAgentRegistry();
-	const {
-		agent,
-		effort,
-		model,
-		reasoningMode,
-		setAgent,
-		setEffort,
-		setModel,
-		setReasoningMode,
-	} = usePromptConfig();
-	const supportedModel = findSupportedChatModelSelection(model);
+	const config = usePromptConfig();
 
 	const execute = useMemo(
 		() =>
 			createCommandExecutor({
-				exit: new ExitAdapter({
-					destroy: () => renderer.destroy(),
+				...createAppHandlers({
+					connections,
+					dialog,
+					onOpenSettings: options.onOpenSettings,
+					refreshAgentRegistry,
+					renderer,
+					toast,
 				}),
-				connect: new ConnectAdapter({
-					open: async () => {
-						const connectedProviders = await connections.listProviders();
-						dialog.open({
-							children: createElement(ConnectDialogContent, {
-								connectedProviders,
-								onBrowserCopyUrl: async (url: string) => {
-									await copyBrowserAuthorizationUrl(renderer, url);
-									toast.show({
-										message: "Authorization URL copied.",
-										variant: "success",
-									});
-								},
-								onBrowserOpenUrl: async (url: string) => {
-									await open(url);
-								},
-								onConnected: (summary) => {
-									refreshAgentRegistry();
-									toast.show({
-										message: `${summary.displayName} connected.`,
-										variant: "success",
-									});
-								},
-							}),
-							padding: { bottom: 1, left: 0, right: 0, top: 1 },
-							title: "Connect",
-							titleMargin: { left: 4, right: 4 },
-							width: CONNECTION_DIALOG_WIDTH,
-						});
-					},
-				}),
-				new: new NewAdapter({
+				...createSessionHandlers({
+					dialog,
 					navigateHome: () => {
 						router.navigate({ to: "/" }).catch(() => undefined);
 					},
+					onCompact: options.onCompact,
 				}),
-				compact: new CompactAdapter({
-					execute:
-						options.onCompact ??
-						(() => {
-							throw new Error("Compaction is unavailable in this view.");
-						}),
+				...createSelectionHandlers({
+					config,
+					connections,
+					dialog,
+					getRecentModelSelections: (limit) =>
+						getSessionStore().listRecentModelSelections(limit),
 				}),
-				settings: new SettingsAdapter({
-					open:
-						options.onOpenSettings ??
-						(() => {
-							throw new Error("Settings are unavailable in this view.");
-						}),
-				}),
-				dialog: new DialogAdapter({
-					open: (key, title) => {
-						switch (key) {
-							case "sessions":
-								dialog.open({
-									children: <SessionsDialogContent />,
-									padding: { bottom: 1, right: 0, top: 1, left: 0 },
-									titleMargin: { left: 4, right: 4 },
-									title,
-									width: CONNECTION_DIALOG_WIDTH,
-								});
-								break;
-							case "theme":
-								dialog.open({
-									children: <ThemeDialogContent />,
-									padding: { bottom: 1, left: 0, right: 0, top: 1 },
-									title,
-									titleMargin: { left: 4, right: 4 },
-									width: CONNECTION_DIALOG_WIDTH,
-								});
-								break;
-							case "mcps":
-								dialog.open({
-									children: <McpStatusDialogContent />,
-									padding: { bottom: 1, left: 0, right: 0, top: 1 },
-									title,
-									titleMargin: { left: 4, right: 4 },
-									width: CONNECTION_DIALOG_WIDTH,
-								});
-								break;
-							default:
-								break;
-						}
-					},
-				}),
-				models: new ModelsAdapter({
-					open: ({ models, currentModel, recentSelections, onSelectModel }) =>
-						dialog.open({
-							children: (
-								<ModelsDialogContent
-									currentModel={currentModel}
-									models={models}
-									onSelectModel={onSelectModel}
-									recentSelections={recentSelections}
-								/>
-							),
-							padding: { bottom: 1, left: 0, right: 0, top: 1 },
-							title: "Select Model",
-							titleMargin: { left: 4, right: 4 },
-							width: CONNECTION_DIALOG_WIDTH,
-						}),
-					currentModel: model,
-					setModel,
-				}),
-				effort: supportedModel
-					? new EffortAdapter({
-							open: ({
-								currentEffort,
-								currentModel,
-								currentReasoningMode,
-								onSelectEffort,
-								onSelectReasoningMode,
-								onSelectDefault,
-							}) =>
-								dialog.open({
-									children: (
-										<EffortDialogContent
-											currentEffort={currentEffort}
-											currentModel={currentModel}
-											currentReasoningMode={currentReasoningMode}
-											onSelectDefault={onSelectDefault}
-											onSelectEffort={onSelectEffort}
-											onSelectReasoningMode={onSelectReasoningMode}
-										/>
-									),
-									padding: { bottom: 1, left: 0, right: 0, top: 1 },
-									title: "Select Effort",
-									titleMargin: { left: 4, right: 4 },
-									width: CONNECTION_DIALOG_WIDTH,
-								}),
-							currentEffort: effort,
-							currentModel: supportedModel,
-							currentReasoningMode: reasoningMode,
-							setEffort,
-							setReasoningMode,
-						})
-					: undefined,
-				agents: new AgentsAdapter({
-					open: async ({ currentAgent, onSelectAgent }) => {
-						const providers = await connections.listProviders();
-						dialog.open({
-							children: (
-								<AgentsDialogContent
-									connectedProviderIds={
-										new Set(
-											providers
-												.filter(({ connected }) => connected)
-												.map(({ id }) => id)
-										)
-									}
-									currentAgent={currentAgent}
-									onSelectAgent={onSelectAgent}
-								/>
-							),
-							padding: { bottom: 1, left: 0, right: 0, top: 1 },
-							title: "Select Agent",
-							titleMargin: { left: 4, right: 4 },
-							width: CONNECTION_DIALOG_WIDTH,
-						});
-					},
-					currentAgent: agent,
-					setAgent,
-				}),
-			}),
+			} satisfies CommandHandlerMap),
 		[
-			agent,
+			config,
 			connections,
 			dialog,
-			model,
 			options.onCompact,
 			options.onOpenSettings,
 			refreshAgentRegistry,
 			renderer,
 			router,
-			setAgent,
-			setModel,
-			setEffort,
-			setReasoningMode,
-			supportedModel,
-			toast.show,
-			effort,
-			reasoningMode,
+			toast,
 		]
 	);
 

@@ -1,27 +1,32 @@
 import { expect, mock, test } from "bun:test";
-import { CompactAdapter } from "@/modules/commands/adapters";
-import { createCommandExecutor } from "@/modules/commands/execute-command";
+import { COMMANDS } from "@/modules/commands/commands";
+import {
+	type CommandHandlerMap,
+	createCommandExecutor,
+} from "@/modules/commands/execute-command";
 
-test("dispatches manual compaction focus through its adapter", async () => {
+test("dispatches manual compaction focus to its registered action", async () => {
 	const compact = mock(async (_focus?: string) => undefined);
-	const execute = createCommandExecutor({
-		agents: { execute: () => undefined } as never,
-		compact: new CompactAdapter({ execute: compact }),
-		connect: { execute: () => undefined } as never,
-		dialog: { execute: () => undefined } as never,
-		exit: { execute: () => undefined } as never,
-		models: { execute: () => undefined } as never,
-		new: { execute: () => undefined } as never,
-		settings: { execute: () => undefined } as never,
-	});
+	const handlers = {
+		"agent.select": () => undefined,
+		"app.exit": () => undefined,
+		"connection.open": () => undefined,
+		"dialog.mcps": () => undefined,
+		"dialog.sessions": () => undefined,
+		"dialog.theme": () => undefined,
+		"effort.select": () => undefined,
+		"model.select": () => undefined,
+		"session.compact": compact,
+		"session.new": () => undefined,
+		"settings.open": () => undefined,
+	} satisfies CommandHandlerMap;
+	const execute = createCommandExecutor(handlers);
+	const command = COMMANDS.find(({ action }) => action === "session.compact");
+	if (!command || command.action !== "session.compact") {
+		throw new Error("Compaction command missing from the registry.");
+	}
 
-	await execute({
-		description: "",
-		focus: "preserve database decisions",
-		kind: "compact",
-		name: "compact",
-		value: "/compact",
-	});
+	await execute({ ...command, focus: "preserve database decisions" });
 
 	expect(compact).toHaveBeenCalledWith("preserve database decisions");
 	expect(compact).toHaveBeenCalledTimes(1);

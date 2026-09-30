@@ -9,8 +9,9 @@ import {
 } from "@/modules/commands/command-item";
 
 const MODELS: CommandItem = {
+	action: "model.select",
 	description: "Select AI model for generation",
-	kind: "models",
+	kind: "builtin",
 	name: "models",
 	value: "/models",
 };

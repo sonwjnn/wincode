@@ -1,94 +1,108 @@
-type BaseSpec = { value: string; name: string; description: string };
+import type { BaseSpec } from "./types";
 
-export type { BaseSpec };
-
-export type CommandSpec = BaseSpec &
-	(
-		| { kind: "exit" }
-		| { kind: "connect" }
-		| { kind: "new" }
-		| { kind: "compact"; focus?: string }
-		| { kind: "settings" }
-		| {
-				kind: "dialog";
-				dialogKey: "sessions" | "theme" | "mcps";
-		  }
-		| { kind: "models" }
-		| { kind: "effort" }
-		| { kind: "agents" }
-	);
-
-export const COMMANDS: CommandSpec[] = [
+export const COMMANDS = [
 	{
 		description: "Start a new session",
 		name: "new",
 		value: "/new",
-		kind: "new",
+		kind: "builtin",
+		action: "session.new",
 	},
 	{
 		description: "Compact session history",
 		name: "compact",
 		value: "/compact",
-		kind: "compact",
+		kind: "builtin",
+		action: "session.compact",
 	},
 	{
 		description: "Open application settings",
 		name: "settings",
 		value: "/settings",
-		kind: "settings",
+		kind: "builtin",
+		action: "settings.open",
 	},
 	{
 		description: "Switch agents",
 		name: "agents",
 		value: "/agents",
-		kind: "agents",
+		kind: "builtin",
+		action: "agent.select",
 	},
 	{
 		description: "Select AI model for generation",
 		name: "models",
 		value: "/models",
-		kind: "models",
+		kind: "builtin",
+		action: "model.select",
 	},
 	{
 		description: "Select Effort or Reasoning Mode",
 		name: "effort",
 		value: "/effort",
-		kind: "effort",
+		kind: "builtin",
+		action: "effort.select",
 	},
 	{
 		description: "Browse past sessions",
 		name: "sessions",
 		value: "/sessions",
-		kind: "dialog",
-		dialogKey: "sessions",
+		kind: "builtin",
+		action: "dialog.sessions",
 	},
 	{
 		description: "Change color theme",
 		name: "themes",
 		value: "/themes",
-		kind: "dialog",
-		dialogKey: "theme",
+		kind: "builtin",
+		action: "dialog.theme",
 	},
 	{
 		description: "Connect an account or API key",
 		name: "connect",
 		value: "/connect",
-		kind: "connect",
+		kind: "builtin",
+		action: "connection.open",
 	},
 	{
 		description: "Enable, disable, and inspect MCP servers",
 		name: "mcps",
 		value: "/mcps",
-		kind: "dialog",
-		dialogKey: "mcps",
+		kind: "builtin",
+		action: "dialog.mcps",
 	},
 	{
 		description: "Quit the application",
 		name: "exit",
 		value: "/exit",
-		kind: "exit",
+		kind: "builtin",
+		action: "app.exit",
 	},
-];
+] as const satisfies readonly (BaseSpec & {
+	kind: "builtin";
+	action: string;
+})[];
+
+const registeredActions = new Set<string>();
+const registeredNames = new Set<string>();
+for (const command of COMMANDS) {
+	const name = command.name.toLowerCase();
+	if (registeredActions.has(command.action)) {
+		throw new Error(`Duplicate built-in command action: ${command.action}`);
+	}
+	if (registeredNames.has(name)) {
+		throw new Error(`Duplicate built-in command name: ${command.name}`);
+	}
+	registeredActions.add(command.action);
+	registeredNames.add(name);
+}
+
+export type CommandActionId = (typeof COMMANDS)[number]["action"];
+
+export type CommandSpec = BaseSpec & { kind: "builtin" } & (
+		| { action: "session.compact"; focus?: string }
+		| { action: Exclude<CommandActionId, "session.compact"> }
+	);
 
 /**
  * Built-in Commands whose popover row is offered in the current view. Hidden
@@ -100,7 +114,7 @@ export const getVisibleCommands = (
 	COMMANDS.filter(
 		(command) =>
 			!(
-				(options.hideCompact && command.kind === "compact") ||
-				(options.hideEffort && command.kind === "effort")
+				(options.hideCompact && command.action === "session.compact") ||
+				(options.hideEffort && command.action === "effort.select")
 			)
 	);

@@ -1,11 +1,12 @@
-import type { CustomCommandSpec } from "@/modules/custom-commands/types";
+import type { CustomCommandSpec } from "@/modules/commands/custom/types";
 import {
 	getSkillSearchText,
 	SKILL_NAMESPACE_PREFIX,
 	type Skill,
 } from "@/modules/skills";
 import { fuzzyMatch } from "@/shared/fuzzy";
-import type { BaseSpec, CommandSpec } from "./commands";
+import type { CommandSpec } from "./commands";
+import type { BaseSpec } from "./types";
 
 /** A discovered Skill offered under the reserved `skill:` namespace. */
 export type SkillCommandSpec = BaseSpec & { kind: "skill" };

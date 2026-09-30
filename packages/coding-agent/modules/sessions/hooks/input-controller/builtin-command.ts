@@ -15,8 +15,10 @@ export function findBuiltinCommand(text: string): CommandSpec | null {
 	}
 	const compact = parseCompactCommand(trimmed);
 	if (compact) {
-		const spec = COMMANDS.find((command) => command.kind === "compact");
-		return spec?.kind === "compact" ? { ...spec, focus: compact.focus } : null;
+		const spec = COMMANDS.find(
+			(command) => command.action === "session.compact"
+		);
+		return spec ? { ...spec, focus: compact.focus } : null;
 	}
 	if (WHITESPACE_PATTERN.test(trimmed)) {
 		return null;

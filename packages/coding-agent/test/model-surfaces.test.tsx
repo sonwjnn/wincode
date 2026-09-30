@@ -3,11 +3,11 @@ import type { TestRendererSetup } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { modelCatalog } from "@wincode/ai/models";
 import { act, useEffect, useRef } from "react";
+import { EffortDialogContent } from "@/modules/prompt-settings/ui/effort-dialog";
 import {
 	getActiveModels,
 	getModelsForPicker,
-} from "@/modules/commands/adapters/models-adapter";
-import { EffortDialogContent } from "@/modules/prompt-settings/ui/effort-dialog";
+} from "@/modules/prompt-settings/ui/model-picker-options";
 import { ModelsDialogContent } from "@/modules/prompt-settings/ui/models-dialog";
 import { SessionUsageBar } from "@/modules/sessions/ui/components/session-usage-bar";
 import type { SessionUsageSummary } from "@/modules/sessions/usage/session-usage";

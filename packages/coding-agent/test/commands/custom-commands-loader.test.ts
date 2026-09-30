@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { mkdir } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { discoverCustomCommandCandidates } from "@/modules/custom-commands/discovery";
-import { loadCustomCommands } from "@/modules/custom-commands/loader";
-import type { CustomCommandCandidate } from "@/modules/custom-commands/types";
+import { discoverCustomCommandCandidates } from "@/modules/commands/custom/discovery";
+import { loadCustomCommands } from "@/modules/commands/custom/loader";
+import type { CustomCommandCandidate } from "@/modules/commands/custom/types";
 import { createConfigStore } from "@/shared/config/config-store";
 import {
 	readLoggerRecords,

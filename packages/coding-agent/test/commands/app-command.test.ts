@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { copyBrowserAuthorizationUrl } from "@/tui/commands/use-command-executor";
+import { copyBrowserAuthorizationUrl } from "@/tui/commands/handlers/app-handlers";
 
 describe("copyBrowserAuthorizationUrl", () => {
 	test("uses OSC52 when available", async () => {

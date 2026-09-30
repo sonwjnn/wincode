@@ -9,7 +9,7 @@ import {
 	type SkillCommandSpec,
 } from "@/modules/commands/command-item";
 import { getVisibleCommands } from "@/modules/commands/commands";
-import type { CustomCommandSpec } from "@/modules/custom-commands/types";
+import type { CustomCommandSpec } from "@/modules/commands/custom/types";
 import type { FileMentionOption } from "@/modules/file-mentions";
 import {
 	applyFileMentionReplacement,
@@ -731,11 +731,12 @@ export function useChatInputController({
 				return;
 			}
 
-			if (steering) {
-				return;
-			}
 			if (!shift && overlayKind === "command") {
-				if (resolveCommand(selectedIndex)?.kind === "compact") {
+				const selectedCommand = resolveCommand(selectedIndex);
+				if (
+					selectedCommand?.kind === "builtin" &&
+					selectedCommand.action === "session.compact"
+				) {
 					completeCommandAtIndex(selectedIndex);
 				} else {
 					executeCommandAtIndex(selectedIndex);
