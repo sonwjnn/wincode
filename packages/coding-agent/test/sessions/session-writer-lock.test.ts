@@ -85,16 +85,34 @@ const startWriterContender = (
 		workspaceRoot: fixture.root,
 	});
 
+const isBusyFileSystemError = (error: unknown): boolean =>
+	typeof error === "object" &&
+	error !== null &&
+	Reflect.get(error, "code") === "EBUSY";
+
+const removeFixtureDirectory = async (directory: string): Promise<void> => {
+	for (let attempt = 0; ; attempt += 1) {
+		try {
+			await fs.promises.rm(directory, { force: true, recursive: true });
+			return;
+		} catch (error) {
+			if (
+				process.platform !== "win32" ||
+				attempt === 20 ||
+				!isBusyFileSystemError(error)
+			) {
+				throw error;
+			}
+			await Bun.sleep(100);
+		}
+	}
+};
+
 afterEach(async () => {
 	for (const fixture of fixtures.splice(0)) {
 		fixture.first.sqlite.close();
 		fixture.second.sqlite.close();
-		await fs.promises.rm(fixture.root, {
-			force: true,
-			maxRetries: 20,
-			recursive: true,
-			retryDelay: 100,
-		});
+		await removeFixtureDirectory(fixture.root);
 	}
 });
 
