@@ -1,19 +1,14 @@
-import type { FileHandle } from "node:fs/promises";
-import { mkdir, open, realpath, stat } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { mkdir, realpath, stat } from "node:fs/promises";
 import * as path from "node:path";
-import { tryLockExclusive } from "@deepseek-ai/node-addon-system/flock";
-import type { FileLockGuard, NodeFileHandle, tryOpenLock } from "@lickle/lock";
 import { z } from "zod";
 import { EXECUTION_MODES, type ExecutionMode } from "@/shared/execution-mode";
 import type { SessionId } from "@/shared/identifiers";
-import { getErrorCode } from "@/shared/utils/error-log-fields";
-
-type NativeLockModule = Readonly<{
-	Lock: Readonly<{ Exclusive: 0 }>;
-	tryOpenLock: typeof tryOpenLock;
-}>;
-const require = createRequire(import.meta.url);
+import type {
+	SessionWriterLockAdapter,
+	SessionWriterLockAdapterHandle,
+} from "./session-writer-lock-adapter";
+import { posixSessionWriterLockAdapter } from "./session-writer-lock-posix-adapter";
+import { windowsSessionWriterLockAdapter } from "./session-writer-lock-windows-adapter";
 
 export type SessionWriterLockOwner = Readonly<{
 	executionMode?: ExecutionMode;
@@ -53,8 +48,11 @@ export class SessionInUseError extends Error {
 export class SessionWriterLockFailureError extends Error {
 	readonly code = "session_lock_failed" as const;
 
-	constructor(cause: unknown) {
-		super("The Session Writer OS lock could not be established.", { cause });
+	constructor(
+		cause: unknown,
+		message = "The Session Writer OS lock could not be established."
+	) {
+		super(message, { cause });
 		this.name = "SessionWriterLockFailureError";
 	}
 }
@@ -80,24 +78,38 @@ const readOwner = async (
 		return;
 	}
 };
-const acquirePosixLock = async (lockPath: string): Promise<FileHandle> => {
-	let handle: FileHandle;
-	try {
-		handle = await open(lockPath, "a+", 0o600);
-	} catch (error) {
-		throw new SessionWriterLockFailureError(error);
+const SESSION_WRITER_LOCK_ADAPTERS: Readonly<
+	Record<string, Readonly<Record<string, SessionWriterLockAdapter>>>
+> = {
+	darwin: {
+		arm64: posixSessionWriterLockAdapter,
+		x64: posixSessionWriterLockAdapter,
+	},
+	linux: {
+		arm64: posixSessionWriterLockAdapter,
+		x64: posixSessionWriterLockAdapter,
+	},
+	win32: {
+		x64: windowsSessionWriterLockAdapter,
+	},
+};
+
+export const resolveSessionWriterLockAdapter = (
+	platform: string,
+	arch: string
+): SessionWriterLockAdapter => {
+	const platformAdapters = Object.hasOwn(SESSION_WRITER_LOCK_ADAPTERS, platform)
+		? SESSION_WRITER_LOCK_ADAPTERS[platform]
+		: undefined;
+	const adapter =
+		platformAdapters !== undefined && Object.hasOwn(platformAdapters, arch)
+			? platformAdapters[arch]
+			: undefined;
+	if (adapter !== undefined) {
+		return adapter;
 	}
-	try {
-		await tryLockExclusive(handle.fd);
-	} catch (error) {
-		await handle.close().catch(() => undefined);
-		const errorCode = getErrorCode(error);
-		if (errorCode === "EAGAIN" || errorCode === "EWOULDBLOCK") {
-			throw new SessionInUseError(await readOwner(lockPath));
-		}
-		throw new SessionWriterLockFailureError(error);
-	}
-	return handle;
+	const message = `Unsupported Session Writer lock target: ${platform}/${arch}.`;
+	throw new SessionWriterLockFailureError(new Error(message), message);
 };
 
 /**
@@ -112,6 +124,10 @@ export const acquireSessionWriterLock = async (
 	sessionId: SessionId,
 	options: SessionWriterLockOptions = {}
 ): Promise<SessionWriterLock> => {
+	const adapter = resolveSessionWriterLockAdapter(
+		process.platform,
+		process.arch
+	);
 	let lockPath: string;
 	try {
 		const canonicalDatabasePath = await realpath(databasePath);
@@ -135,28 +151,16 @@ export const acquireSessionWriterLock = async (
 		throw new SessionWriterLockFailureError(error);
 	}
 
-	let guard: FileLockGuard<NodeFileHandle> | undefined;
-	let posixHandle: FileHandle | undefined;
-	if (process.platform === "linux" || process.platform === "darwin") {
-		posixHandle = await acquirePosixLock(lockPath);
-	} else {
-		try {
-			const nativeLock = require("@lickle/lock") as NativeLockModule;
-			guard = await nativeLock.tryOpenLock(lockPath, nativeLock.Lock.Exclusive);
-		} catch (error) {
-			throw new SessionWriterLockFailureError(error);
-		}
-		if (guard === undefined) {
-			throw new SessionInUseError(await readOwner(lockPath));
-		}
+	let acquiredLock: SessionWriterLockAdapterHandle | undefined;
+	try {
+		acquiredLock = await adapter.acquire(lockPath);
+	} catch (error) {
+		throw new SessionWriterLockFailureError(error);
+	}
+	if (acquiredLock === undefined) {
+		throw new SessionInUseError(await readOwner(lockPath));
 	}
 
-	const metadataHandle = posixHandle ?? guard?.handle;
-	if (metadataHandle === undefined) {
-		throw new SessionWriterLockFailureError(
-			new Error("The Session Writer lock handle is unavailable.")
-		);
-	}
 	const metadata = {
 		...(options.executionMode === undefined
 			? {}
@@ -166,8 +170,8 @@ export const acquireSessionWriterLock = async (
 		version: 1,
 	};
 	try {
-		await metadataHandle.truncate(0);
-		await metadataHandle.writeFile(JSON.stringify(metadata));
+		await acquiredLock.truncate(0);
+		await acquiredLock.writeFile(JSON.stringify(metadata));
 	} catch {
 		// Owner metadata is diagnostic; the held OS lock remains authoritative.
 	}
@@ -179,11 +183,7 @@ export const acquireSessionWriterLock = async (
 				return;
 			}
 			released = true;
-			if (posixHandle !== undefined) {
-				await posixHandle.close();
-			} else if (guard !== undefined) {
-				await guard.drop();
-			}
+			await acquiredLock.release();
 		},
 	};
 };
