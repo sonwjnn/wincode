@@ -85,13 +85,13 @@ const startWriterContender = (
 		workspaceRoot: fixture.root,
 	});
 
-afterEach(() => {
+afterEach(async () => {
 	for (const fixture of fixtures.splice(0)) {
 		fixture.first.sqlite.close();
 		fixture.second.sqlite.close();
-		fs.rmSync(fixture.root, {
+		await fs.promises.rm(fixture.root, {
 			force: true,
-			maxRetries: 5,
+			maxRetries: 20,
 			recursive: true,
 			retryDelay: 100,
 		});
