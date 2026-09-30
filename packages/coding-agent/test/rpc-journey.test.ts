@@ -2,10 +2,7 @@ import { afterAll, expect, mock, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { runRpc } from "../modules/application/rpc/runner";
-import {
-	LegacySessionLeaseError,
-	SessionWriterLockFailureError,
-} from "../modules/sessions/storage/session-writer-lock";
+import { SessionWriterLockFailureError } from "../modules/sessions/storage/session-writer-lock";
 import {
 	agentId,
 	agentTurnId,
@@ -444,21 +441,8 @@ test("RPC session opening keeps lock refusals request-scoped", async () => {
 		model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
 		turnId: agentTurnId("lock-failure-turn"),
 	});
-	const { id: legacySessionId } = await failureAssembly.store.createSession({
-		agent: agentId("build"),
-		message: {
-			id: sessionMessageId("legacy-lock-message"),
-			parts: [{ text: "legacy session", type: "text" }],
-			role: "user",
-		},
-		model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
-		turnId: agentTurnId("legacy-lock-turn"),
-	});
 	const acquireSessionWriter = failureAssembly.store.acquireSessionWriter;
-	failureAssembly.store.acquireSessionWriter = async (requestedSessionId) => {
-		if (requestedSessionId === legacySessionId) {
-			throw new LegacySessionLeaseError();
-		}
+	failureAssembly.store.acquireSessionWriter = async () => {
 		throw new SessionWriterLockFailureError(new Error("lock unavailable"));
 	};
 	const stdoutFrames: string[] = [];
@@ -479,9 +463,6 @@ test("RPC session opening keeps lock refusals request-scoped", async () => {
 		),
 		new TextEncoder().encode(
 			`${request("open", "session/open", { sessionId })}\n`
-		),
-		new TextEncoder().encode(
-			`${request("legacy-open", "session/open", { sessionId: legacySessionId })}\n`
 		),
 		new TextEncoder().encode(
 			`${request("create", "session/create", {
@@ -520,17 +501,6 @@ test("RPC session opening keeps lock refusals request-scoped", async () => {
 		});
 		expect(frames.find((frame) => frame.id === "create")?.error).toMatchObject({
 			data: { code: "session_lock_failed" },
-		});
-		expect(
-			frames.find((frame) => frame.id === "legacy-open")?.error
-		).toMatchObject({
-			data: {
-				code: "legacy_session_lease",
-				sessionId: legacySessionId,
-				stage: "host",
-			},
-			message:
-				"A legacy SQLite Session Lease exists. Stop older Wincode processes before clearing it.",
 		});
 		expect(frames.some((frame) => frame.method === "server/fatal")).toBe(false);
 	} finally {

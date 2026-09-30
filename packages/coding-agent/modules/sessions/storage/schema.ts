@@ -65,22 +65,6 @@ export const session = sqliteTable(
 		index("idx_session_updated").on(table.updatedAt),
 	]
 );
-/** Kept only to reject sessions still claimed by an older Wincode process. */
-export const legacySessionLease = sqliteTable(
-	"session_lease",
-	{
-		sessionId: text("session_id")
-			.primaryKey()
-			.references(() => session.id, {
-				onDelete: "cascade",
-				onUpdate: "cascade",
-			}),
-		ownerToken: text("owner_token").notNull(),
-		expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
-		renewedAt: integer("renewed_at", { mode: "timestamp_ms" }).notNull(),
-	},
-	(table) => [index("idx_session_lease_expiry").on(table.expiresAt)]
-);
 export const fileSnapshot = sqliteTable(
 	"file_snapshot",
 	{
@@ -435,7 +419,6 @@ export const sessionSchema = {
 	recoveryArtifact,
 	recoveryArtifactPath,
 	sessionAttachment,
-	legacySessionLease,
 	sessionCompaction,
 	sessionRecord,
 	session,

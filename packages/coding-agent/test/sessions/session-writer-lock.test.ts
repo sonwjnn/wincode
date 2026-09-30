@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -11,7 +11,6 @@ import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-se
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import {
 	acquireSessionWriterLock,
-	LegacySessionLeaseError,
 	SessionInUseError,
 } from "@/modules/sessions/storage/session-writer-lock";
 import {
@@ -95,6 +94,38 @@ afterEach(() => {
 });
 
 describe("Session Writer process locks", () => {
+	test("new Session databases omit the retired SQLite lease table", () => {
+		const fixture = createFixture();
+		const table = fixture.first.sqlite
+			.query(
+				"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_lease'"
+			)
+			.get();
+
+		expect(table).toBeNull();
+	});
+
+	test("an old SQLite lease row does not block Session Writer acquisition", async () => {
+		const fixture = createFixture();
+		const session = await createSession(fixture.firstStore);
+		fixture.first.sqlite.exec(`
+			CREATE TABLE session_lease (
+				session_id TEXT PRIMARY KEY NOT NULL REFERENCES session(id)
+					ON UPDATE CASCADE ON DELETE CASCADE,
+				owner_token TEXT NOT NULL,
+				expires_at INTEGER NOT NULL,
+				renewed_at INTEGER NOT NULL
+			);
+		`);
+		fixture.first.sqlite
+			.query(
+				"INSERT INTO session_lease (session_id, owner_token, expires_at, renewed_at) VALUES (?, ?, ?, ?)"
+			)
+			.run(session.id, "old-owner", 0, 0);
+
+		const writer = await fixture.firstStore.acquireSessionWriter(session.id);
+		await writer.release();
+	});
 	test("rejects a second writer with unverified owner details until release", async () => {
 		const fixture = createFixture();
 		const session = await createSession(fixture.firstStore);
@@ -315,69 +346,6 @@ describe("Session Writer process locks", () => {
 			await reopened.release();
 		} finally {
 			await owner.stop();
-		}
-	});
-
-	test("treats an expired legacy SQLite lease as an upgrade blocker", async () => {
-		const fixture = createFixture();
-		const session = await createSession(fixture.firstStore);
-		fixture.first.sqlite
-			.query(
-				`INSERT INTO session_lease
-					(session_id, owner_token, expires_at, renewed_at)
-					VALUES (?, ?, ?, ?)`
-			)
-			.run(session.id, "old-owner", 0, 0);
-		const result = await fixture.firstStore
-			.acquireSessionWriter(session.id)
-			.then(
-				() => undefined,
-				(error: unknown) => error
-			);
-
-		expect(result).toBeInstanceOf(LegacySessionLeaseError);
-	});
-
-	test("detects a legacy lease when reopening through a database symlink", async () => {
-		const fixture = createFixture();
-		const databasePath = path.join(fixture.root, "legacy-target.db");
-		const aliasPath = path.join(fixture.root, "legacy-alias.db");
-		fs.writeFileSync(databasePath, "");
-		await fs.promises.symlink(databasePath, aliasPath);
-		let seededDatabase: DatabaseHandle | undefined;
-		let legacyDatabase: Database | undefined;
-		let reopenedDatabase: DatabaseHandle | undefined;
-
-		try {
-			seededDatabase = createDatabase(aliasPath);
-			const seededStore = createDrizzleSessionStore(seededDatabase.db, {
-				workspaceRoot: fixture.root,
-			});
-			const session = await createSession(seededStore);
-			seededDatabase.sqlite.close();
-			seededDatabase = undefined;
-
-			legacyDatabase = new Database(aliasPath);
-			legacyDatabase.exec("PRAGMA journal_mode = WAL;");
-			legacyDatabase
-				.query(
-					`INSERT INTO session_lease
-						(session_id, owner_token, expires_at, renewed_at)
-						VALUES (?, ?, ?, ?)`
-				)
-				.run(session.id, "legacy-owner", 0, 0);
-
-			reopenedDatabase = createDatabase(aliasPath);
-			const reopenedStore = createDrizzleSessionStore(reopenedDatabase.db, {
-				workspaceRoot: fixture.root,
-			});
-			await expect(
-				reopenedStore.acquireSessionWriter(session.id)
-			).rejects.toBeInstanceOf(LegacySessionLeaseError);
-		} finally {
-			reopenedDatabase?.sqlite.close();
-			legacyDatabase?.close();
-			seededDatabase?.sqlite.close();
 		}
 	});
 

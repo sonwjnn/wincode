@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Session Writers use process-owned OS locks.** Different Session IDs can
   remain open concurrently; a same-session conflict offers manually refreshed,
   read-only Stored Session History and requires explicit lock acquisition to edit.
-  OS-lock infrastructure failures remain distinct and fail closed.
+  The old SQLite lease table and guard are removed; stop older Wincode processes
+  before upgrading. Lock infrastructure failures remain distinct and fail closed.
 
 - **Workspace branch display refreshes after checkout.** The session header
   watches Git metadata in regular repositories and linked worktrees, updating

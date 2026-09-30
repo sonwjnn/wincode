@@ -59,17 +59,6 @@ export class SessionWriterLockFailureError extends Error {
 	}
 }
 
-export class LegacySessionLeaseError extends Error {
-	readonly code = "legacy_session_lease" as const;
-
-	constructor() {
-		super(
-			"A legacy SQLite Session Lease exists. Stop older Wincode processes before clearing it."
-		);
-		this.name = "LegacySessionLeaseError";
-	}
-}
-
 const readOwner = async (
 	lockPath: string
 ): Promise<SessionWriterLockOwner | undefined> => {

@@ -56,7 +56,6 @@ import {
 import { createDatabase, type SessionDatabase } from "./client";
 import { resolveLocalAttachmentRoot, resolveLocalSnapshotRoot } from "./path";
 import {
-	legacySessionLease,
 	promptHistory,
 	type SerializedJson,
 	session,
@@ -79,10 +78,7 @@ import {
 	UNTITLED_SESSION_TITLE,
 	type UpdateSessionInput,
 } from "./session-store";
-import {
-	acquireSessionWriterLock,
-	LegacySessionLeaseError,
-} from "./session-writer-lock";
+import { acquireSessionWriterLock } from "./session-writer-lock";
 import { createDrizzleFileObservationStore } from "./versioned-editing-store";
 
 const createSessionId = (): SessionId => toSessionId(randomUUIDv7());
@@ -902,27 +898,8 @@ export const createDrizzleSessionStore = (
 
 			return Promise.resolve(toSession(row));
 		},
-		acquireSessionWriter: async (sessionId, writerOptions) => {
-			const legacyLease = db
-				.select({ sessionId: legacySessionLease.sessionId })
-				.from(legacySessionLease)
-				.innerJoin(session, eq(legacySessionLease.sessionId, session.id))
-				.where(
-					and(
-						eq(legacySessionLease.sessionId, sessionId),
-						eq(session.workspaceId, workspace.id)
-					)
-				)
-				.get();
-			if (legacyLease !== undefined) {
-				throw new LegacySessionLeaseError();
-			}
-			return acquireSessionWriterLock(
-				db.$client.filename,
-				sessionId,
-				writerOptions
-			);
-		},
+		acquireSessionWriter: (sessionId, writerOptions) =>
+			acquireSessionWriterLock(db.$client.filename, sessionId, writerOptions),
 		getEditMode: async (sessionId: SessionId): Promise<EditMode> => {
 			const row = db
 				.select({ editMode: session.editMode })

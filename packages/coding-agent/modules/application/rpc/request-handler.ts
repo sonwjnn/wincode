@@ -388,15 +388,6 @@ export const createRpcRequestHandler = (
 				if (writerError !== undefined) {
 					throw writerError;
 				}
-				if (
-					error instanceof Error &&
-					getErrorCode(error) === "legacy_session_lease"
-				) {
-					throw appError("legacy_session_lease", error.message, {
-						sessionId,
-						stage: "host",
-					});
-				}
 				if (error instanceof Error && error.message === "Session not found") {
 					throw appError("session_not_found", "Session could not be opened.");
 				}
