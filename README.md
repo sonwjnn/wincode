@@ -144,7 +144,7 @@ Detailed configuration references:
 - [Agents](packages/coding-agent/modules/agents/README.md)
 - [Tool permissions](packages/coding-agent/modules/permissions/README.md)
 - [Skills](packages/coding-agent/modules/skills/README.md)
-- [Custom commands](packages/coding-agent/modules/custom-commands/README.md)
+- [Custom commands](packages/coding-agent/modules/commands/custom/README.md)
 - [MCP servers](packages/coding-agent/modules/mcp/README.md)
 - [Configuration precedence](packages/coding-agent/shared/config/README.md)
 

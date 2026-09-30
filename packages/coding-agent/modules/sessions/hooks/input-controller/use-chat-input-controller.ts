@@ -65,7 +65,6 @@ export function useChatInputController({
 	onSubmit,
 	onTab,
 	sessionPromptHistory,
-	steering = false,
 }: ChatInputControllerOptions): ChatInputController {
 	const [textValue, setTextValue] = useState("");
 	const [selectedIndex, setSelectedIndex] = useState(0);
@@ -535,7 +534,6 @@ export function useChatInputController({
 							discoverSkills: getSkillsFromOptions,
 							onError,
 							onSubmit: onSubmitRef.current,
-							steering,
 						},
 						snapshot
 					)
@@ -574,7 +572,6 @@ export function useChatInputController({
 			rememberPrompt,
 			resetHistoryBaseline,
 			setProgrammaticText,
-			steering,
 		]
 	);
 
@@ -755,7 +752,6 @@ export function useChatInputController({
 			overlayKind,
 			resolveCommand,
 			selectedIndex,
-			steering,
 		]
 	);
 

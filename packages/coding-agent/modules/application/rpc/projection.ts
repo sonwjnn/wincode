@@ -1,16 +1,27 @@
+import {
+	DEFAULT_MODEL_ATTACHMENT_BUDGET,
+	MAX_ATTACHMENT_BYTES,
+} from "@/modules/sessions/storage/attachment-store";
+import type { SkillContext } from "@/modules/skills";
 import type {
 	LiveSessionSnapshot,
 	SessionHost,
 	SessionQueuedSubmission,
-	SessionSteeringMessage,
 	SessionWaitingMessage,
 } from "../../../modules/sessions/host/session-rpc";
+import type { SessionSubmissionComposition } from "../../../modules/sessions/submission-types";
 import {
 	AGENT_EVENT_TYPES,
 	SESSION_TOOL_PART_TYPES,
 	type Selection,
 } from "./types";
-import { asRecord, safeJson, selectionWire } from "./validation";
+import {
+	asRecord,
+	base64ByteLength,
+	isInlineAttachmentMediaType,
+	safeJson,
+	selectionWire,
+} from "./validation";
 
 const projectSelection = (
 	agentId: Selection["agentId"],
@@ -43,6 +54,84 @@ const projectFilePart = (
 		: {}),
 	...(typeof part.available === "boolean" ? { available: part.available } : {}),
 });
+
+const projectInlineCompositionFile = (
+	part: Record<string, unknown>,
+	maximumBytes: number
+): { byteLength: number; projected: Record<string, unknown> } | undefined => {
+	const { filename, mediaType, url } = part;
+	if (
+		part.attachmentId !== undefined ||
+		typeof filename !== "string" ||
+		filename.trim().length === 0 ||
+		filename.length > 128 ||
+		typeof mediaType !== "string" ||
+		!isInlineAttachmentMediaType(mediaType) ||
+		typeof url !== "string" ||
+		maximumBytes < 1
+	) {
+		return;
+	}
+	const prefix = `data:${mediaType};base64,`;
+	if (!url.startsWith(prefix)) {
+		return;
+	}
+	const data = url.slice(prefix.length);
+	if (data.length < 1 || data.length > Math.ceil(maximumBytes / 3) * 4) {
+		return;
+	}
+	const byteLength = base64ByteLength(data);
+	if (byteLength === undefined || byteLength > maximumBytes) {
+		return;
+	}
+	return {
+		byteLength,
+		projected: {
+			content: { data, encoding: "base64" },
+			filename,
+			mediaType,
+		},
+	};
+};
+
+const projectComposition = (
+	composition: SessionSubmissionComposition
+): Record<string, unknown> => {
+	let remainingBytes = MAX_ATTACHMENT_BYTES;
+	const canProjectInlineFiles =
+		composition.files.length <= DEFAULT_MODEL_ATTACHMENT_BUDGET.maxAttachments;
+	const files = composition.files.map((file) => {
+		const part = file as unknown as Record<string, unknown>;
+		if (part.attachmentId !== undefined) {
+			const byteLength = part.byteLength;
+			remainingBytes =
+				typeof byteLength === "number" &&
+				Number.isInteger(byteLength) &&
+				byteLength >= 0
+					? Math.max(0, remainingBytes - byteLength)
+					: 0;
+			return projectFilePart(part);
+		}
+		const inlineFile = canProjectInlineFiles
+			? projectInlineCompositionFile(part, remainingBytes)
+			: undefined;
+		if (inlineFile === undefined) {
+			return projectFilePart(part);
+		}
+		remainingBytes -= inlineFile.byteLength;
+		return inlineFile.projected;
+	});
+	return {
+		files,
+		...(composition.fileTokens === undefined
+			? {}
+			: { fileTokens: composition.fileTokens }),
+		...(composition.pastedText === undefined
+			? {}
+			: { pastedText: composition.pastedText }),
+		text: composition.text,
+	};
+};
 
 const projectSourcePart = (
 	record: Record<string, unknown>
@@ -148,6 +237,8 @@ export const projectMessage = (message: unknown): unknown => {
 						model: metadata.model,
 						responseTimeMs: metadata.responseTimeMs,
 						sourceUserMessageId: metadata.sourceUserMessageId,
+						submissionId: metadata.submissionId,
+						submissionStatus: metadata.submissionStatus,
 						terminalOutcome: metadata.terminalOutcome,
 						turnId: metadata.joinedTurnId,
 						usage: metadata.usage,
@@ -466,7 +557,14 @@ export const projectSubmissionEvent = (
 	if (
 		event === undefined ||
 		typeof event.kind !== "string" ||
-		!["started", "delivered", "recalled", "failed"].includes(event.kind)
+		![
+			"started",
+			"steered",
+			"delivered",
+			"processed",
+			"recalled",
+			"failed",
+		].includes(event.kind)
 	) {
 		throw new Error("Unknown Submission event discriminant.");
 	}
@@ -500,46 +598,46 @@ export const selectionFromHost = (host: SessionHost): unknown => {
 	};
 };
 
-export const submissionFromWaiting = (
-	message: SessionWaitingMessage
+const projectSkillIntent = (
+	skill: SkillContext | undefined
+): Record<string, string> | undefined =>
+	skill === undefined
+		? undefined
+		: { arguments: skill.arguments, name: skill.name };
+
+const projectQueuedSubmission = (
+	submission: SessionQueuedSubmission,
+	disposition?: "queued"
 ): Record<string, unknown> => {
-	if ("messageId" in message) {
-		const queued: SessionQueuedSubmission = message;
-		const input = queued.input;
-		return {
-			messageId: queued.messageId,
-			selection: {
-				agentId: input.agent,
-				model: input.model,
-				...(input.effort === undefined ? {} : { effort: input.effort }),
-				...(input.reasoningMode === undefined
-					? {}
-					: { reasoningMode: input.reasoningMode }),
-			},
-			submissionId: queued.submissionId,
-			disposition: "queued",
-			text: input.composition.text,
-			...(input.turnId === undefined ? {} : { turnId: input.turnId }),
-		};
-	}
-	const steering: SessionSteeringMessage = message;
-	const input = steering.input;
+	const input = submission.input;
+	const composition = input.composition ?? {
+		files: [],
+		text: input.userText ?? "",
+	};
+	const skill = projectSkillIntent(input.skill);
 	return {
-		messageId: input.messageId,
-		selection: {
-			agentId: input.agent,
-			model: input.model,
-			...(input.effort === undefined ? {} : { effort: input.effort }),
-			...(input.reasoningMode === undefined
-				? {}
-				: { reasoningMode: input.reasoningMode }),
-		},
-		submissionId: input.submissionId,
-		disposition: "steering",
-		text: input.text,
+		messageId: submission.messageId,
+		selection: selectionWire(
+			projectSelection(
+				input.agent,
+				input.model,
+				input.effort,
+				input.reasoningMode
+			)
+		),
+		submissionId: submission.submissionId,
+		...(disposition === undefined ? {} : { disposition }),
+		status: "queued",
+		composition: projectComposition(composition),
+		text: input.userText ?? composition.text,
+		...(skill === undefined ? {} : { skill }),
 		...(input.turnId === undefined ? {} : { turnId: input.turnId }),
 	};
 };
+
+export const submissionFromWaiting = (
+	message: SessionWaitingMessage
+): Record<string, unknown> => projectQueuedSubmission(message, "queued");
 export const projectExecution = (
 	execution: LiveSessionSnapshot["executions"][number]
 ): Record<string, unknown> => ({
@@ -572,40 +670,34 @@ export const projectApproval = (
 
 export const projectSteering = (
 	message: LiveSessionSnapshot["steeringMessages"][number]
-): Record<string, unknown> => ({
-	messageId: message.input.messageId,
-	selection: selectionWire(
-		projectSelection(
-			message.input.agent,
-			message.input.model,
-			message.input.effort,
-			message.input.reasoningMode
-		)
-	),
-	submissionId: message.input.submissionId,
-	text: message.input.text,
-	...(message.input.turnId === undefined
-		? {}
-		: { turnId: message.input.turnId }),
-});
+): Record<string, unknown> => {
+	const input = message.input;
+	const skill = projectSkillIntent(input.skill);
+	return {
+		steeringId: message.id,
+		messageId: input.messageId,
+		recordId: message.recordId,
+		selection: selectionWire(
+			projectSelection(
+				input.agent,
+				input.model,
+				input.effort,
+				input.reasoningMode
+			)
+		),
+		submissionId: input.submissionId,
+		status: message.status,
+		...(message.reason === undefined ? {} : { reason: message.reason }),
+		composition: projectComposition(input.composition),
+		text: input.userText ?? input.composition.text,
+		...(skill === undefined ? {} : { skill }),
+		message: projectMessage(message.message),
+		...(input.turnId === undefined ? {} : { turnId: input.turnId }),
+	};
+};
 export const projectQueued = (
 	submission: LiveSessionSnapshot["queuedSubmissions"][number]
-): Record<string, unknown> => ({
-	messageId: submission.messageId,
-	selection: selectionWire(
-		projectSelection(
-			submission.input.agent,
-			submission.input.model,
-			submission.input.effort,
-			submission.input.reasoningMode
-		)
-	),
-	submissionId: submission.submissionId,
-	text: submission.input.userText ?? submission.input.composition?.text ?? "",
-	...(submission.input.turnId === undefined
-		? {}
-		: { turnId: submission.input.turnId }),
-});
+): Record<string, unknown> => projectQueuedSubmission(submission);
 
 export const operationalStatus = (input: {
 	approvals: number;

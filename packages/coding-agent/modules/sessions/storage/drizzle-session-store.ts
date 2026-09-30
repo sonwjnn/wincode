@@ -38,7 +38,7 @@ import type {
 	AppendSessionCompactionInput,
 	SessionCompaction,
 } from "../compaction/types";
-import type { SessionMessage } from "../message";
+import { type SessionMessage, withSubmissionStatus } from "../message";
 import type {
 	AttachmentExternalizationOptions,
 	AttachmentHydrationOptions,
@@ -77,6 +77,7 @@ import {
 	type SessionStore,
 	UNTITLED_SESSION_TITLE,
 	type UpdateSessionInput,
+	type UpdateSessionSubmissionInput,
 } from "./session-store";
 import { acquireSessionWriterLock } from "./session-writer-lock";
 import { createDrizzleFileObservationStore } from "./versioned-editing-store";
@@ -611,6 +612,81 @@ const writeSessionRecordCheckpoint = (
 			.run();
 	});
 };
+const updateSessionSubmissionCheckpoint = (
+	db: SessionDatabase,
+	workspaceId: WorkspaceId,
+	input: UpdateSessionSubmissionInput
+): void => {
+	if (input.status === "failed" && !input.failure) {
+		throw new Error("A failed Submission requires a failure reason.");
+	}
+	db.transaction((tx) => {
+		const row = tx
+			.select({ record: sessionRecord })
+			.from(sessionRecord)
+			.innerJoin(session, eq(sessionRecord.sessionId, session.id))
+			.where(
+				and(
+					eq(sessionRecord.recordId, input.recordId),
+					eq(sessionRecord.sessionId, input.sessionId),
+					eq(session.workspaceId, workspaceId)
+				)
+			)
+			.get();
+		if (row === undefined) {
+			throw new Error("Steered Session Record not found.");
+		}
+		const record = toSessionRecord(row.record);
+		if (record.outcome.kind !== "user") {
+			throw new SessionRecordInvariantError(
+				"Only a user Submission Record can change processing state."
+			);
+		}
+		const messageIndex = record.messages.findIndex(
+			(message) => message.role === "user" && message.id === input.messageId
+		);
+		const message = record.messages[messageIndex];
+		if (
+			message === undefined ||
+			message.metadata?.submissionId !== input.submissionId
+		) {
+			throw new SessionRecordInvariantError(
+				"Steered Session Record identity does not match the Submission."
+			);
+		}
+		const updatedMessage = withSubmissionStatus(message, {
+			failure: input.failure,
+			status: input.status,
+			submissionId: input.submissionId,
+		});
+		const messages = [...record.messages];
+		messages[messageIndex] = updatedMessage;
+		const validationError = getSessionRecordValidationError({
+			...record,
+			messages,
+		});
+		if (!isNull(validationError)) {
+			throw new SessionRecordInvariantError(
+				`Invalid Submission state update: ${validationError}`,
+				{ cause: new Error(validationError) }
+			);
+		}
+		const updated = tx
+			.update(sessionRecord)
+			.set({ messagesJson: serializeJson(messages) })
+			.where(
+				and(
+					eq(sessionRecord.recordId, input.recordId),
+					eq(sessionRecord.sessionId, input.sessionId)
+				)
+			)
+			.returning({ recordId: sessionRecord.recordId })
+			.get();
+		if (updated === undefined) {
+			throw new Error("Steered Session Record update was not applied.");
+		}
+	});
+};
 
 const readSessionRecordRows = (
 	db: SessionDatabase,
@@ -883,6 +959,8 @@ export const createDrizzleSessionStore = (
 		},
 		listSessionRecords: async (sessionId: SessionId) =>
 			readSessionRecords(db, workspace.id, sessionId),
+		updateSessionSubmission: async (input) =>
+			updateSessionSubmissionCheckpoint(db, workspace.id, input),
 		getSession: (sessionId: SessionId) => {
 			const row = db
 				.select()

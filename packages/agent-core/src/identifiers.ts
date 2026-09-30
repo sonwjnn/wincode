@@ -7,6 +7,9 @@ export type ModelStepId = Tagged<string, "ModelStepId">;
 export type SessionMessageId = Tagged<string, "SessionMessageId">;
 export type SessionRecordId = Tagged<string, "SessionRecordId">;
 export type AttachmentId = Tagged<string, "AttachmentId">;
+export type SubmissionId = Tagged<string, "SubmissionId">;
+export const toSubmissionId = (value: string): SubmissionId =>
+	value as SubmissionId;
 export const toAgentTurnId = (value: string): AgentTurnId =>
 	value as AgentTurnId;
 export const toModelStepId = (value: string): ModelStepId =>

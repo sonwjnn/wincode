@@ -47,12 +47,16 @@ export type SessionSubmissionCommandPort = Readonly<{
 	waitForSubmissionLane: () => Promise<void>;
 }>;
 
+type RunSubmissionOptions = Readonly<{ reportFailure?: boolean }>;
 export type SessionSubmissionCommand = Readonly<{
 	abortActiveSend: (
 		reason: "cancelled" | "deadline-exceeded" | "interrupted"
 	) => void;
 	continueContext: (input: SessionSendInput) => Promise<SessionSendOutcome>;
-	runSubmission: (input: SessionSendInput) => Promise<SessionSendOutcome>;
+	runSubmission: (
+		input: SessionSendInput,
+		options?: RunSubmissionOptions
+	) => Promise<SessionSendOutcome>;
 	waitForActiveSend: () => Promise<void>;
 }>;
 
@@ -128,21 +132,24 @@ export const createSessionSubmissionCommand = (
 		}
 	};
 	const runSubmission = async (
-		input: SessionSendInput
+		input: SessionSendInput,
+		{ reportFailure = true }: RunSubmissionOptions = {}
 	): Promise<SessionSendOutcome> => {
 		const { messageId, ownsTurnReservation } = port.beginSubmission(input);
 		try {
 			const outcome = await runActiveSend(input);
-			if (outcome.rejected) {
+			if (outcome.rejected && reportFailure) {
 				port.reportSubmissionFailure(input, messageId, outcome.reason);
 			}
 			return outcome;
 		} catch (error) {
-			port.reportSubmissionFailure(
-				input,
-				messageId,
-				getErrorMessage(error, "The Submission failed.")
-			);
+			if (reportFailure) {
+				port.reportSubmissionFailure(
+					input,
+					messageId,
+					getErrorMessage(error, "The Submission failed.")
+				);
+			}
 			throw error;
 		} finally {
 			port.finishSubmission(input, ownsTurnReservation);

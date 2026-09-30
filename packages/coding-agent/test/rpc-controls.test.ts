@@ -1,22 +1,37 @@
 import { expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
-import type { RpcRequest } from "../modules/application/rpc/protocol";
+import {
+	RPC_ERROR_CODES,
+	type RpcRequest,
+} from "../modules/application/rpc/protocol";
 import { createRpcRequestHandler } from "../modules/application/rpc/request-handler";
 import type {
 	RpcSessionState,
+	RpcSubmissionDraft,
 	RuntimeModules,
 	Selection,
 } from "../modules/application/rpc/types";
+import { readSubmission } from "../modules/application/rpc/validation";
+import type {
+	SessionSteeringMessage,
+	SessionSubmissionEvent,
+} from "../modules/sessions/engine/types";
 import type {
 	SessionApprovalResult,
 	SessionHost,
 	SessionId,
 	SessionInterruptResult,
+	SessionMessage,
 	SessionSendInput,
 	SessionSteeringAdmission,
 	SessionStore,
 	SessionSubmissionAdmission,
 } from "../modules/sessions/host/session-rpc";
+import type {
+	AttachmentReference,
+	SessionAttachmentStore,
+} from "../modules/sessions/storage/attachment-store";
+import type { SessionSendOutcome } from "../modules/sessions/submission-types";
 
 type CapturedApproval = Readonly<{
 	id: string;
@@ -41,13 +56,12 @@ const createHandler = ({
 		rejected: false,
 		submissionId: "submission-1",
 	}),
-	steeringAdmission = fromPartial<SessionSteeringAdmission>({
-		disposition: "steering",
+	steeringAdmission = {
+		kind: "steered",
 		messageId: "steered-message-1",
-		rejected: false,
 		submissionId: "steered-submission-1",
 		turnId: "turn-1",
-	}),
+	} as unknown as SessionSteeringAdmission,
 	approvalResult = { applied: true } as SessionApprovalResult,
 	interruptResult = fromPartial<SessionInterruptResult>({
 		approvalsSettled: 0,
@@ -56,6 +70,8 @@ const createHandler = ({
 	}),
 	selected = true,
 	active = false,
+	retryableSubmission,
+	send,
 }: Readonly<{
 	admission?: SessionSubmissionAdmission;
 	approvalResult?: SessionApprovalResult;
@@ -63,19 +79,34 @@ const createHandler = ({
 	selected?: boolean;
 	active?: boolean;
 	steeringAdmission?: SessionSteeringAdmission;
+	retryableSubmission?: SessionSteeringMessage;
+	send?: (
+		input: SessionSendInput,
+		emit: (event: SessionSubmissionEvent) => void
+	) => Promise<SessionSendOutcome>;
 }> = {}): {
 	handler: (requestValue: RpcRequest) => Promise<unknown>;
 	approvals: CapturedApproval[];
+	drafts: RpcSubmissionDraft[];
 	inputs: SessionSendInput[];
 	recalledIds: Array<readonly string[] | undefined>;
-	steeredTexts: string[];
+	steerCalls: number;
 	setApprovalResult: (result: SessionApprovalResult) => void;
 } => {
 	const approvals: CapturedApproval[] = [];
 	const inputs: SessionSendInput[] = [];
 	const recalledIds: Array<readonly string[] | undefined> = [];
-	const steeredTexts: string[] = [];
+	const drafts: RpcSubmissionDraft[] = [];
+	const submissionEventListeners = new Set<
+		(event: SessionSubmissionEvent) => void
+	>();
+	let steerCalls = 0;
 	let currentApprovalResult = approvalResult;
+	const emitSubmissionEvent = (event: SessionSubmissionEvent): void => {
+		for (const listener of submissionEventListeners) {
+			listener(event);
+		}
+	};
 	const engine = {
 		prompt: async (
 			input: SessionSendInput
@@ -83,8 +114,21 @@ const createHandler = ({
 			inputs.push(input);
 			return admission;
 		},
-		steer: (text: string): SessionSteeringAdmission => {
-			steeredTexts.push(text);
+		send: (input: SessionSendInput): Promise<SessionSendOutcome> =>
+			send === undefined
+				? Promise.resolve({
+						rejected: true,
+						reason: "No retry behavior is configured.",
+					})
+				: send(input, emitSubmissionEvent),
+		onSubmissionEvent: (
+			listener: (event: SessionSubmissionEvent) => void
+		): (() => void) => {
+			submissionEventListeners.add(listener);
+			return () => submissionEventListeners.delete(listener);
+		},
+		steer: async (): Promise<SessionSteeringAdmission> => {
+			steerCalls += 1;
 			return steeringAdmission;
 		},
 		interruptAll: () => interruptResult,
@@ -112,7 +156,13 @@ const createHandler = ({
 						reasoningMode: undefined,
 					}
 				: null,
-		getSnapshot: () => fromPartial({ turnActive: active }),
+		getSnapshot: () =>
+			fromPartial({
+				isCompacting: false,
+				steeringMessages:
+					retryableSubmission === undefined ? [] : [retryableSubmission],
+				turnActive: active,
+			}),
 	} as unknown as SessionHost;
 	const state: RpcSessionState = {
 		boundSessionId: "session-1",
@@ -125,27 +175,41 @@ const createHandler = ({
 		currentState: () => ({}),
 		getRuntime: async () => undefined as unknown as RuntimeModules,
 		parseSelection: async (value): Promise<Selection> => value as Selection,
+		prepareSubmission: async (draft) => {
+			drafts.push(draft);
+			return {
+				composition: draft.composition,
+				files: draft.files,
+				userText: draft.composition.text,
+			};
+		},
 		processId: "process-1",
 		requireBound: () => host,
 		requireInitialized: () => undefined,
 		resolveApprovalId: (wireId) =>
 			wireId === "wire-approval-1" ? "engine-approval-1" : undefined,
-		sendInput: (selection, text): SessionSendInput => {
+		sendInput: (selection, submission, ids): SessionSendInput => {
 			const input = {
 				agent: selection.agentId,
+				composition: submission.composition,
+				files: submission.files,
 				model: selection.model,
 				sessionModel: selection.model,
-				userText: text,
+				userText: submission.userText,
+				...(submission.skill === undefined ? {} : { skill: submission.skill }),
+				...ids,
 			} as SessionSendInput;
-			inputs.push(input);
 			return input;
 		},
 		state,
 	});
 	return {
 		handler,
-		steeredTexts,
+		get steerCalls() {
+			return steerCalls;
+		},
 		approvals,
+		drafts,
 		inputs,
 		recalledIds,
 		setApprovalResult: (result) => {
@@ -197,24 +261,206 @@ test("session submit uses fallback selection and honors a complete override", as
 	});
 });
 
-test("session submit routes a live turn through explicit Steering", async () => {
-	const steeringAdmission = fromPartial<SessionSteeringAdmission>({
-		disposition: "steering",
-		messageId: "steered-message-1",
+test("session submit always prompts while active; explicit steer owns queue promotion", async () => {
+	const queuedAdmission = fromPartial<SessionSubmissionAdmission>({
+		disposition: "queued",
+		messageId: "queued-message-1",
 		rejected: false,
+		submissionId: "queued-submission-1",
+	});
+	const steeringAdmission = {
+		kind: "steered",
+		messageId: "steered-message-1",
 		submissionId: "steered-submission-1",
 		turnId: "turn-1",
+	} as unknown as SessionSteeringAdmission;
+	const controls = createHandler({
+		active: true,
+		admission: queuedAdmission,
+		steeringAdmission,
 	});
-	const controls = createHandler({ active: true, steeringAdmission });
 
 	await expect(
 		controls.handler(
-			request("submit-steering", "session/submit", {
+			request("submit-busy", "session/submit", {
 				submission: { text: "correction" },
 			})
 		)
+	).resolves.toMatchObject({ result: queuedAdmission });
+	expect(controls.inputs).toHaveLength(1);
+	expect(controls.inputs[0]).toMatchObject({ userText: "correction" });
+	expect(controls.steerCalls).toBe(0);
+
+	await expect(
+		controls.handler(request("steer-head", "session/steer", {}))
 	).resolves.toMatchObject({ result: steeringAdmission });
-	expect(controls.steeredTexts).toEqual(["correction"]);
+	expect(controls.steerCalls).toBe(1);
+});
+
+test("empty session steer explicitly reports that no message was accepted", async () => {
+	const emptyOutcome = { kind: "empty" } as unknown as SessionSteeringAdmission;
+	const controls = createHandler({ steeringAdmission: emptyOutcome });
+
+	await expect(
+		controls.handler(request("steer-empty", "session/steer", {}))
+	).resolves.toEqual({
+		id: "steer-empty",
+		jsonrpc: "2.0",
+		result: { kind: "empty" },
+	});
+	expect(controls.inputs).toHaveLength(0);
+	expect(controls.steerCalls).toBe(1);
+});
+
+test("session steer rejects caller-supplied content", async () => {
+	const controls = createHandler();
+
+	await expect(
+		controls.handler(
+			request("steer-with-text", "session/steer", {
+				text: "Do not steer this text",
+			})
+		)
+	).rejects.toMatchObject({ code: RPC_ERROR_CODES.invalidParams });
+	expect(controls.steerCalls).toBe(0);
+});
+
+test("session submit accepts structured bounded files and explicit Skill intent", async () => {
+	const controls = createHandler();
+	await controls.handler(
+		request("submit-structured", "session/submit", {
+			submission: {
+				composition: {
+					fileTokens: [{ start: 6, token: "[Image 1]" }],
+					files: [
+						{
+							content: { data: "AQID", encoding: "base64" },
+							filename: "diagram.png",
+							mediaType: "image/png",
+						},
+					],
+					text: "Check [Image 1]",
+				},
+				skill: { arguments: "only APIs", name: "review" },
+			},
+		})
+	);
+
+	expect(controls.drafts[0]).toMatchObject({
+		composition: {
+			fileTokens: [{ start: 6, token: "[Image 1]" }],
+			text: "Check [Image 1]",
+		},
+		files: [
+			{
+				filename: "diagram.png",
+				mediaType: "image/png",
+				url: "data:image/png;base64,AQID",
+			},
+		],
+		skillIntent: { arguments: "only APIs", name: "review" },
+	});
+	expect(controls.inputs[0]).toMatchObject({
+		composition: { text: "Check [Image 1]" },
+		files: [{ filename: "diagram.png" }],
+	});
+});
+
+test("session submit uses verified attachment dimensions instead of client metadata", async () => {
+	const attachmentId = `v1-${"a".repeat(64)}`;
+	const reference = {
+		attachmentId,
+		available: true,
+		byteLength: 3,
+		filename: "diagram.png",
+		height: 1,
+		mediaType: "image/png",
+		width: 1,
+	};
+	const submission = await readSubmission(
+		{
+			submission: {
+				files: [{ ...reference, type: "file" }],
+				text: "Review the diagram",
+			},
+		},
+		"submission",
+		fromPartial<SessionAttachmentStore>({
+			resolve: async (value: AttachmentReference) => ({
+				availability: "available",
+				bytes: Uint8Array.from([1, 2, 3]),
+				reference: { ...value, height: 1024, width: 1024 },
+			}),
+		})
+	);
+
+	expect(submission.files[0]).toMatchObject({
+		attachmentId,
+		height: 1024,
+		type: "file",
+		url: `attachment://${attachmentId}`,
+		width: 1024,
+	});
+});
+
+test("session submit rejects arbitrary attachment paths before admission", async () => {
+	const controls = createHandler();
+
+	await expect(
+		controls.handler(
+			request("submit-path", "session/submit", {
+				submission: {
+					files: [{ filename: "secret.txt", path: "/etc/passwd" }],
+					text: "Read this file",
+				},
+			})
+		)
+	).rejects.toMatchObject({ code: "submission_rejected" });
+	expect(controls.inputs).toHaveLength(0);
+});
+
+test("session retry responds at the durable start event before the turn settles", async () => {
+	const messageId = "steered-message-1";
+	const submissionId = "steered-submission-1";
+	const retryableSubmission = fromPartial<SessionSteeringMessage>({
+		input: fromPartial<SessionSendInput>({ messageId, submissionId }),
+		message: fromPartial<SessionMessage>({ id: messageId }),
+		status: "failed",
+	});
+	const sendCompletion = Promise.withResolvers<SessionSendOutcome>();
+	const sendFinished = Promise.withResolvers<void>();
+	let sendSettled = false;
+	const controls = createHandler({
+		retryableSubmission,
+		send: (_input, emit) => {
+			emit(
+				fromPartial<SessionSubmissionEvent>({
+					kind: "started",
+					messageId,
+					submissionId,
+				})
+			);
+			return sendCompletion.promise.then((outcome) => {
+				sendSettled = true;
+				sendFinished.resolve();
+				return outcome;
+			});
+		},
+	});
+	const response = await controls.handler(
+		request("retry", "session/retry", { submissionId })
+	);
+
+	expect(sendSettled).toBe(false);
+	sendCompletion.resolve({ rejected: false });
+	await sendFinished.promise;
+	expect(response).toMatchObject({
+		result: {
+			kind: "retrying",
+			messageId,
+			submissionId,
+		},
+	});
 });
 
 test("approval responses use wire identities and Engine authority", async () => {
@@ -331,6 +577,9 @@ test("failed Session creation stays durable and can be reopened", async () => {
 	const selection: Selection = { agentId: "build", model };
 	const store = fromPartial<SessionStore>({
 		createSession: async () => ({ id: "session-1" }),
+		externalizeAttachments: async (messages: readonly SessionMessage[]) => [
+			...messages,
+		],
 		getSession: async () => fromPartial({ id: "session-1" }),
 	});
 	const state: RpcSessionState = {
@@ -368,7 +617,12 @@ test("failed Session creation stays durable and can be reopened", async () => {
 			}
 			return host;
 		},
-		createSessionUserMessage: () => fromPartial({ id: "message-1" }),
+		createSessionUserMessage: () =>
+			({
+				id: "message-1",
+				parts: [],
+				role: "user",
+			}) as unknown as SessionMessage,
 		resolveWorkspaceRoot: (start: string): string => start,
 		toSessionId: (value: string): SessionId => value as SessionId,
 	});
@@ -382,6 +636,11 @@ test("failed Session creation stays durable and can be reopened", async () => {
 		currentState: () => ({}),
 		getRuntime: async () => runtime,
 		parseSelection: async () => selection,
+		prepareSubmission: async (draft) => ({
+			composition: draft.composition,
+			files: draft.files,
+			userText: draft.composition.text,
+		}),
 		processId: "process-1",
 		requireBound: () => {
 			if (state.host === undefined) {
@@ -391,8 +650,15 @@ test("failed Session creation stays durable and can be reopened", async () => {
 		},
 		requireInitialized: () => undefined,
 		resolveApprovalId: () => undefined,
-		sendInput: (_selected, text) =>
-			fromPartial({ model, sessionModel: model, userText: text }),
+		sendInput: (_selected, submission, ids) =>
+			fromPartial({
+				composition: submission.composition,
+				files: submission.files,
+				model,
+				sessionModel: model,
+				userText: submission.userText,
+				...ids,
+			}),
 		state,
 	});
 
@@ -401,7 +667,7 @@ test("failed Session creation stays durable and can be reopened", async () => {
 			capabilities: {},
 			clientInfo: { name: "test-client" },
 			cwd: process.cwd(),
-			protocolVersion: 1,
+			protocolVersion: 2,
 		})
 	);
 	await expect(

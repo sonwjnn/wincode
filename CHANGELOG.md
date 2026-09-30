@@ -30,10 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restores tool calls omitted from provider continuations by `call_id`, keeps
   existing provider items and order, and emits duplicate local calls only once.
 
-- **Failed Agent Turns recall waiting submissions.** Instead of draining the
-  queued tail after a model failure, the Session restores all waiting Steering
-  Messages and Queued Submissions to the composer in order; non-failed turns
-  retain FIFO draining.
+- **Queue-head steering is durable across execution modes.** Interactive empty
+  Enter and RPC `session/steer` commit the oldest queued Submission as a
+  distinct user message before acknowledgment; `session/submit` only admits or
+  queues new input. Attachments, Skills, and expanded Custom Commands share
+  preparation. Failed delivery blocks later inputs for deliberate retry and
+  never recalls or blindly replays committed messages.
 
 - **Session metadata groups as soon as a prompt is submitted.** An idle
   submission appears optimistically in the transcript on Enter and reconciles

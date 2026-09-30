@@ -27,6 +27,8 @@ export type FakeGenerationRequest =
 export type FakeModelClientRecorder = {
 	readonly requests: FakeGenerationRequest[];
 	readonly summaryText: string;
+	/** A per-test hook that can hold a real model request in flight. */
+	beforeStep?: (request: ModelStepRequest) => Promise<void>;
 };
 
 export type FakeModelStepScript = (
@@ -50,6 +52,7 @@ const defaultModelStepScript: FakeModelStepScript = async function* (
 			text: promptMessageText(message),
 		})),
 	});
+	await recorder.beforeStep?.(request);
 	yield { delta: "E2E chat response", type: "text-delta" };
 	yield {
 		type: "finish",

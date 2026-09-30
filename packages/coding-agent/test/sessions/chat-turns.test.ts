@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { toSubmissionId } from "@wincode/agent-core";
 import { prepareRetryMessages } from "@/modules/sessions/engine/submission";
 import { projectAgentTurnEvent } from "@/modules/sessions/engine/turn";
 import type { SessionExecution } from "@/modules/sessions/engine/types";
@@ -346,4 +347,41 @@ test("retries the message that opened the turn a Steering Message joined", () =>
 	expect(
 		retry.kind === "ready" ? retry.messages.map(({ id }) => id) : []
 	).toEqual([sessionMessageId("user-1"), sessionMessageId("user-steer")]);
+});
+
+test("retries the failed committed Steering Message without changing its identity", () => {
+	const steering: SessionMessage = {
+		...user("user-steer"),
+		metadata: {
+			joinedTurnId: agentTurnId("turn-1"),
+			submissionId: toSubmissionId("submission-steer"),
+			submissionStatus: "failed",
+		},
+	};
+	expect(
+		resolveRetryMessageId([
+			user("user-1"),
+			steering,
+			terminalAssistant("assistant-1", "failed"),
+		])
+	).toBe(sessionMessageId("user-steer"));
+});
+test("retries the oldest failed Steering Message before later failed inputs", () => {
+	const failedSteering = (id: string): SessionMessage => ({
+		...user(id),
+		metadata: {
+			joinedTurnId: agentTurnId("turn-1"),
+			submissionId: toSubmissionId(`submission-${id}`),
+			submissionStatus: "failed",
+		},
+	});
+
+	expect(
+		resolveRetryMessageId([
+			user("turn-input"),
+			failedSteering("steering-1"),
+			failedSteering("steering-2"),
+			terminalAssistant("turn-failed", "failed"),
+		])
+	).toBe(sessionMessageId("steering-1"));
 });

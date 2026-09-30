@@ -3,6 +3,7 @@ import type {
 	AgentTurnDelegation,
 	AgentTurnId,
 	SessionMessageId,
+	SubmissionId,
 } from "@wincode/agent-core";
 import type {
 	ChatModelSelection,
@@ -11,7 +12,6 @@ import type {
 } from "@wincode/ai/models";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import type { SkillContext } from "@/modules/skills";
-import type { SubmissionId } from "@/shared/identifiers";
 import type { SessionResolvedAgent } from "./engine/types";
 
 /**

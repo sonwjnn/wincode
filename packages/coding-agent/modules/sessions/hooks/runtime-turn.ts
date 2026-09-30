@@ -815,7 +815,9 @@ type AgentTurnEventConsumerOptions = {
 	onViewState?: (state: SessionViewState) => void;
 	runtime: AgentRuntime;
 	signal?: AbortSignal;
-	takeSteeringMessages?: () => readonly AgentTurnMessage[];
+	takeSteeringMessages?: () =>
+		| readonly AgentTurnMessage[]
+		| Promise<readonly AgentTurnMessage[]>;
 	turn: AgentTurn;
 	onEvent: (event: AgentTurnEvent) => void | Promise<void>;
 	onTerminal: (event: AgentTurnTerminalEvent) => void | Promise<void>;
@@ -983,7 +985,9 @@ export const runAgentTurnToText = async ({
 	runtime: AgentRuntime;
 	signal?: AbortSignal;
 	sourceUserMessageId?: SessionMessageId;
-	takeSteeringMessages?: () => readonly SessionMessage[];
+	takeSteeringMessages?: () =>
+		| readonly SessionMessage[]
+		| Promise<readonly SessionMessage[]>;
 	turn: AgentTurn;
 }): Promise<string> => {
 	let assistantText = "";
@@ -1050,7 +1054,8 @@ export const runAgentTurnToText = async ({
 		...omitUndefined({
 			takeSteeringMessages: isUndefined(takeSteeringMessages)
 				? undefined
-				: () => takeSteeringMessages().flatMap(toAgentTurnMessages),
+				: async () =>
+						(await takeSteeringMessages()).flatMap(toAgentTurnMessages),
 		}),
 		turn,
 	});

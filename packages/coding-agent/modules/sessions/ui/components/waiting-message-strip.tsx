@@ -4,15 +4,15 @@ import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import type {
 	SessionQueuedSubmission,
 	SessionSteeringMessage,
-	SessionWaitingMessageId,
 } from "../../engine/types";
+import { replaceTextRanges } from "../../pasted-text";
 import type { SessionSubmissionComposition } from "../../submission-types";
 
 /** How much of one waiting message fits on its line. */
 const MAX_ITEM_CHARS = 80;
 /** Maximum rows shown before the waiting list scrolls above the composer. */
 const QUEUE_VIEWPORT_ROWS = 5;
-/** Marks the message that the next Recall takes back; it has a fixed width. */
+/** Marks the next queued entry Recall can take back; it has a fixed width. */
 const NEXT_MARKER = "▸ ";
 /** Keeps an unmarked message's text in the column a marked one's starts in. */
 const NO_MARKER = "  ";
@@ -23,17 +23,20 @@ const NO_MARKER = "  ";
  */
 const STEERING_LANE_TAG = "steering";
 const QUEUED_LANE_TAG = "queued".padEnd(STEERING_LANE_TAG.length);
+/** Marks a committed Steering Message blocked by a delivery failure. */
+const FAILED_LANE_TAG = "failed".padEnd(STEERING_LANE_TAG.length);
 /** Line breaks and runs of spaces in a composition become one space. */
 const WHITESPACE_RUN = /\s+/gu;
 
 /** Which lane a waiting message belongs to, and the tag its row shows. */
-type WaitingLane = "queued" | "steering";
+type WaitingLane = "failed" | "queued" | "steering";
 
 /** One message waiting to run, as its row shows it. */
 type WaitingRow = {
 	readonly composition: SessionSubmissionComposition;
-	readonly id: SessionWaitingMessageId;
-	/** Whether the next Recall takes this message back. */
+	readonly failureReason: string | undefined;
+	readonly id: string;
+	/** Whether this uncommitted message is the next Recall will take back. */
 	readonly isNext: boolean;
 	readonly lane: WaitingLane;
 };
@@ -60,16 +63,12 @@ const describeSubmission = (
 		cursor = start + token.length;
 		markers.push({ start, token });
 	}
-	markers.sort((left, right) => right.start - left.start);
-	const text = markers
-		.reduce(
-			(remaining, { start, token }) =>
-				remaining.startsWith(token, start)
-					? `${remaining.slice(0, start)}${remaining.slice(start + token.length)}`
-					: remaining,
-			composition.text
-		)
-		.trim();
+	const replacements = markers.flatMap(({ start, token }) =>
+		composition.text.startsWith(token, start)
+			? [{ end: start + token.length, start, text: "" }]
+			: []
+	);
+	const text = replaceTextRanges(composition.text, replacements).trim();
 	const line = (value: string): string => value.replace(WHITESPACE_RUN, " ");
 	if (text.length > 0) {
 		return line(text);
@@ -85,12 +84,8 @@ const describeSubmission = (
 };
 
 /**
- * The live waiting lanes: a transparent strip with one line per message, the
- * Steering Lane's first and the Submission Queue's behind it. The message the
- * next Recall takes back wears the marker, and each row names its lane so a
- * user can tell what joins the running turn from what runs as its own turn.
- * The list scrolls when it grows beyond the available footer space, so no
- * waiting message is discarded and the composer remains reachable.
+ * Shows durable Steering Messages ahead of queued submissions. Only queue
+ * entries can be recalled.
  */
 export function WaitingMessageStrip({
 	queued,
@@ -100,25 +95,25 @@ export function WaitingMessageStrip({
 	steering: readonly SessionSteeringMessage[];
 }) {
 	const { colors } = useTheme();
-	// The waiting messages in the order they run: the Steering Lane first — its
-	// oldest joins the running Agent Turn at the next Model Step boundary — then
-	// the Submission Queue, whose oldest runs as its own Agent Turn. The head of
-	// the Steering Lane leads when it holds anything, so the message the next
-	// Recall takes back is the one that runs next.
+	// The Steering Lane precedes the Submission Queue. Its head joins the active
+	// turn at the next model boundary, or starts its own turn when the session is
+	// idle. Only the queue remains recall-able.
 	const rows: WaitingRow[] = [
 		...steering.map(
-			({ id, input }, index): WaitingRow => ({
+			({ id, input, reason, status }): WaitingRow => ({
 				composition: input.composition,
+				failureReason: status === "failed" ? reason : undefined,
 				id,
-				isNext: index === 0,
-				lane: "steering",
+				isNext: false,
+				lane: status === "failed" ? "failed" : "steering",
 			})
 		),
 		...queued.map(
 			({ id, input }, index): WaitingRow => ({
 				composition: input.composition,
+				failureReason: undefined,
 				id,
-				isNext: steering.length === 0 && index === 0,
+				isNext: index === 0,
 				lane: "queued",
 			})
 		),
@@ -126,6 +121,10 @@ export function WaitingMessageStrip({
 	if (rows.length === 0) {
 		return null;
 	}
+	const visibleLineCount = rows.reduce(
+		(count, row) => count + (row.failureReason === undefined ? 1 : 2),
+		0
+	);
 	return (
 		<box
 			backgroundColor="transparent"
@@ -146,29 +145,38 @@ export function WaitingMessageStrip({
 					<strong fg={colors.primary}>{rows.length}</strong>
 					<span fg={colors.textMuted}> waiting</span>
 				</text>
-				<box flexDirection="row" gap={2} marginLeft="auto">
-					<DialogFooterHint
-						label="next"
-						shortcut="Shift+Up"
-						shortcutColor={colors.primary}
-					/>
-					<DialogFooterHint
-						label="all"
-						shortcut="Alt+Up"
-						shortcutColor={colors.secondary}
-					/>
-				</box>
+				{queued.length > 0 && (
+					<box flexDirection="row" gap={2} marginLeft="auto">
+						<DialogFooterHint
+							label="next"
+							shortcut="Shift+Up"
+							shortcutColor={colors.primary}
+						/>
+						<DialogFooterHint
+							label="all"
+							shortcut="Alt+Up"
+							shortcutColor={colors.secondary}
+						/>
+					</box>
+				)}
 			</box>
 			<scrollbox
-				height={Math.min(QUEUE_VIEWPORT_ROWS, rows.length)}
+				height={Math.min(QUEUE_VIEWPORT_ROWS, visibleLineCount)}
 				verticalScrollbarOptions={{
-					visible: rows.length > QUEUE_VIEWPORT_ROWS,
+					visible: visibleLineCount > QUEUE_VIEWPORT_ROWS,
 				}}
 				width="100%"
 			>
 				{rows.map((row) => {
+					const isFailed = row.lane === "failed";
 					const isSteering = row.lane === "steering";
-					const laneTag = isSteering ? STEERING_LANE_TAG : QUEUED_LANE_TAG;
+					let laneTag = QUEUED_LANE_TAG;
+					if (isSteering) {
+						laneTag = STEERING_LANE_TAG;
+					}
+					if (isFailed) {
+						laneTag = FAILED_LANE_TAG;
+					}
 					const line = truncateWithOverflow(
 						`${row.isNext ? NEXT_MARKER : NO_MARKER}${laneTag} ${describeSubmission(row.composition)}`,
 						MAX_ITEM_CHARS
@@ -176,20 +184,34 @@ export function WaitingMessageStrip({
 					// The marker and the lane tag are fixed-width columns, so the
 					// coloured slices of the line always fall on the same columns.
 					const descriptionStart = NEXT_MARKER.length + laneTag.length + 1;
+					let laneColor = colors.textMuted;
+					if (isSteering) {
+						laneColor = colors.secondary;
+					}
+					if (isFailed) {
+						laneColor = colors.error;
+					}
 					return (
-						<text
-							fg={row.isNext ? colors.text : colors.textMuted}
-							key={row.id}
-							truncate
-						>
-							<span fg={colors.primary}>
-								{line.slice(0, NEXT_MARKER.length)}
-							</span>
-							<span fg={isSteering ? colors.secondary : colors.textMuted}>
-								{line.slice(NEXT_MARKER.length, descriptionStart)}
-							</span>
-							<span>{line.slice(descriptionStart)}</span>
-						</text>
+						<box flexDirection="column" key={row.id} width="100%">
+							<text fg={row.isNext ? colors.text : colors.textMuted} truncate>
+								<span fg={colors.primary}>
+									{line.slice(0, NEXT_MARKER.length)}
+								</span>
+								<span fg={laneColor}>
+									{line.slice(NEXT_MARKER.length, descriptionStart)}
+								</span>
+								<span>{line.slice(descriptionStart)}</span>
+							</text>
+							{row.failureReason === undefined ? null : (
+								<text fg={colors.error} truncate>
+									{" ".repeat(descriptionStart)}
+									{truncateWithOverflow(
+										`Reason: ${row.failureReason}`,
+										MAX_ITEM_CHARS - descriptionStart
+									)}
+								</text>
+							)}
+						</box>
 					);
 				})}
 			</scrollbox>

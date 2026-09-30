@@ -1,5 +1,6 @@
-import { realpath, stat } from "node:fs/promises";
-import path from "node:path";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { createSkillSnapshot } from "@/modules/skills";
 import { getErrorCode } from "@/shared/utils/error-log-fields";
 import type {
 	SessionHost,
@@ -7,6 +8,7 @@ import type {
 	SessionWaitingMessageId,
 } from "../../../modules/sessions/host/session-rpc";
 import { resolveWorkspaceRoot as resolveSessionWorkspaceRoot } from "../../../modules/sessions/host/session-rpc";
+import type { SessionFilePart } from "../../../modules/sessions/message";
 import { projectMessage, submissionFromWaiting } from "./projection";
 import {
 	RPC_ERROR_CODES,
@@ -17,11 +19,15 @@ import {
 import {
 	DEFAULT_TRANSCRIPT_LIMIT,
 	MAX_TRANSCRIPT_LIMIT,
+	RPC_PROTOCOL_VERSION,
 	RpcApplicationError,
 	type RpcAssembly,
 	type RpcCompositionInput,
+	type RpcPreparedSubmission,
 	RpcProtocolError,
 	type RpcSessionState,
+	type RpcSubmissionDraft,
+	type RpcSubmissionIdentifiers,
 	type RuntimeModules,
 	SERVER_VERSION,
 	SESSION_RPC_METHODS,
@@ -33,7 +39,7 @@ import {
 	decodeCursor,
 	encodeCursor,
 	paramsOf,
-	readTextSubmission,
+	readSubmission,
 	rpcInvalidParams,
 	stringValue,
 } from "./validation";
@@ -44,6 +50,9 @@ export type RpcRequestHandlerContext = Readonly<{
 	currentState: () => Record<string, unknown>;
 	getRuntime: () => Promise<RuntimeModules>;
 	parseSelection: (value: unknown) => Promise<Selection>;
+	prepareSubmission: (
+		draft: RpcSubmissionDraft
+	) => Promise<RpcPreparedSubmission>;
 	processId: string;
 	providedComposer?: (input: RpcCompositionInput) => Promise<RpcAssembly>;
 	requireBound: () => SessionHost;
@@ -51,8 +60,8 @@ export type RpcRequestHandlerContext = Readonly<{
 	resolveApprovalId: (wireApprovalId: string) => string | undefined;
 	sendInput: (
 		selection: Selection,
-		text: string,
-		ids: { messageId?: string; submissionId?: string; turnId?: string }
+		submission: RpcPreparedSubmission,
+		ids: RpcSubmissionIdentifiers
 	) => SessionSendInput;
 	state: RpcSessionState;
 }>;
@@ -90,6 +99,7 @@ export const createRpcRequestHandler = (
 		currentState,
 		getRuntime,
 		parseSelection,
+		prepareSubmission,
 		processId,
 		providedComposer,
 		requireBound,
@@ -109,12 +119,12 @@ export const createRpcRequestHandler = (
 			}
 			const params = paramsOf(request);
 			if (
-				params.protocolVersion !== 1 ||
+				params.protocolVersion !== RPC_PROTOCOL_VERSION ||
 				!Number.isInteger(params.protocolVersion)
 			) {
 				throw appError(
 					"unsupported_protocol_version",
-					"Protocol version 1 is required."
+					`Protocol version ${RPC_PROTOCOL_VERSION} is required.`
 				);
 			}
 			const clientInfo = asRecord(params.clientInfo);
@@ -141,7 +151,7 @@ export const createRpcRequestHandler = (
 				);
 			}
 			try {
-				const info = await stat(requestedCwd);
+				const info = await fs.stat(requestedCwd);
 				if (!info.isDirectory()) {
 					throw new Error("cwd is not a directory");
 				}
@@ -163,8 +173,8 @@ export const createRpcRequestHandler = (
 			}
 			let workspace: string;
 			try {
-				workspace = resolveWorkspaceRoot(await realpath(requestedCwd));
-				workspace = await realpath(workspace);
+				workspace = resolveWorkspaceRoot(await fs.realpath(requestedCwd));
+				workspace = await fs.realpath(workspace);
 			} catch {
 				throw appError(
 					"workspace_unavailable",
@@ -199,11 +209,14 @@ export const createRpcRequestHandler = (
 			return success(request.id, {
 				capabilities: {
 					approvalResponses: true,
+					explicitSteering: true,
+					failedSubmissionRetry: true,
 					stateNotifications: true,
+					structuredSubmissions: true,
 					submissionEvents: true,
 					transcriptPagination: true,
 				},
-				protocolVersion: 1,
+				protocolVersion: RPC_PROTOCOL_VERSION,
 				serverInfo: { name: "wincode", version: SERVER_VERSION },
 				workspace: {
 					id: state.assembly.workspaceId,
@@ -249,16 +262,47 @@ export const createRpcRequestHandler = (
 				);
 			}
 			const selection = await parseSelection(params.selection);
-			const text = readTextSubmission(params, "initialSubmission");
+			const draft = await readSubmission(
+				params,
+				"initialSubmission",
+				store.attachmentStore
+			);
+			const submission = await prepareSubmission(draft);
 			const turnId = activeRuntime.createAgentTurnId();
-			const message = activeRuntime.createSessionUserMessage(text, {
-				agent: selection.agentId as SessionSendInput["agent"],
-				model: selection.model,
-				...(selection.effort === undefined ? {} : { effort: selection.effort }),
-				...(selection.reasoningMode === undefined
-					? {}
-					: { reasoningMode: selection.reasoningMode }),
-			});
+			const baseMessage = activeRuntime.createSessionUserMessage(
+				submission.userText,
+				{
+					agent: selection.agentId as SessionSendInput["agent"],
+					model: selection.model,
+					...(selection.effort === undefined
+						? {}
+						: { effort: selection.effort }),
+					...(selection.reasoningMode === undefined
+						? {}
+						: { reasoningMode: selection.reasoningMode }),
+					...(submission.skill === undefined
+						? {}
+						: { skill: createSkillSnapshot(submission.skill, "explicit") }),
+				}
+			);
+			const initialMessage = {
+				...baseMessage,
+				parts: [...baseMessage.parts, ...submission.files],
+			};
+			const [externalizedMessage] = await store.externalizeAttachments(
+				[initialMessage],
+				undefined,
+				{ rejectInvalid: true }
+			);
+			const message = externalizedMessage ?? initialMessage;
+			const messageFiles = message.parts.filter(
+				(part): part is SessionFilePart => part.type === "file"
+			);
+			const storedSubmission: RpcPreparedSubmission = {
+				...submission,
+				composition: { ...submission.composition, files: messageFiles },
+				files: messageFiles,
+			};
 			const created = await store.createSession({
 				agent: selection.agentId as SessionSendInput["agent"],
 				message,
@@ -283,7 +327,7 @@ export const createRpcRequestHandler = (
 				}
 				bind(createdHost, createdId);
 				const admission = await state.host?.agentSession.prompt(
-					sendInput(selection, text, {
+					sendInput(selection, storedSubmission, {
 						messageId: message.id,
 						turnId,
 					})
@@ -400,7 +444,12 @@ export const createRpcRequestHandler = (
 		if (request.method === "session/submit") {
 			const activeHost = requireBound();
 			const params = paramsOf(request);
-			const text = readTextSubmission(params, "submission");
+			const draft = await readSubmission(
+				params,
+				"submission",
+				state.assembly?.store?.attachmentStore
+			);
+			const submission = await prepareSubmission(draft);
 			const selection =
 				params.selection === undefined
 					? await (async () => {
@@ -423,21 +472,86 @@ export const createRpcRequestHandler = (
 							});
 						})()
 					: await parseSelection(params.selection);
-			const steering = activeHost.getSnapshot().turnActive
-				? activeHost.agentSession.steer(text)
-				: undefined;
-			const admission =
-				steering === undefined || steering.rejected
-					? await activeHost.agentSession.prompt(sendInput(selection, text, {}))
-					: steering;
+			const admission = await activeHost.agentSession.prompt(
+				sendInput(selection, submission, {})
+			);
 			if (admission.rejected) {
 				throw appError("submission_rejected", admission.reason);
 			}
 			return success(request.id, admission);
 		}
+		if (request.method === "session/steer") {
+			if (Object.keys(paramsOf(request)).length > 0) {
+				throw rpcInvalidParams("session/steer does not accept parameters.");
+			}
+			const outcome = await requireBound().agentSession.steer();
+			return success(request.id, outcome);
+		}
+		if (request.method === "session/retry") {
+			const activeHost = requireBound();
+			const params = paramsOf(request);
+			const submissionId = stringValue(params.submissionId);
+			if (submissionId === undefined || Object.keys(params).length !== 1) {
+				throw rpcInvalidParams(
+					"session/retry requires exactly one submissionId."
+				);
+			}
+			const snapshot = activeHost.getSnapshot();
+			const failed = snapshot.steeringMessages[0];
+			if (
+				failed === undefined ||
+				failed.status !== "failed" ||
+				failed.input.submissionId !== submissionId ||
+				snapshot.turnActive ||
+				snapshot.isCompacting
+			) {
+				throw appError(
+					"submission_not_retryable",
+					"Only the failed head Submission can be retried while the Session is idle."
+				);
+			}
+			const started = Promise.withResolvers<void>();
+			const unsubscribe = activeHost.agentSession.onSubmissionEvent((event) => {
+				if (
+					event.kind === "started" &&
+					event.messageId === failed.message.id &&
+					event.submissionId === submissionId
+				) {
+					started.resolve();
+				}
+			});
+			try {
+				const retry = activeHost.agentSession.send(failed.input).then(
+					(outcome) => ({ kind: "outcome" as const, outcome }),
+					(error: unknown) => ({ error, kind: "error" as const })
+				);
+				const result = await Promise.race([
+					started.promise.then(() => ({ kind: "started" as const })),
+					retry,
+				]);
+				if (result.kind === "error") {
+					throw appError(
+						"submission_retry_failed",
+						result.error instanceof Error
+							? result.error.message
+							: "The committed Submission could not be retried."
+					);
+				}
+				if (result.kind === "outcome" && result.outcome.rejected) {
+					throw appError("submission_retry_failed", result.outcome.reason);
+				}
+				return success(request.id, {
+					kind: "retrying",
+					messageId: failed.message.id,
+					submissionId,
+				});
+			} finally {
+				unsubscribe();
+			}
+		}
 		if (request.method === "session/interrupt") {
 			const activeHost = requireBound();
-			const result = activeHost.agentSession.interruptAll();
+			const result = await activeHost.agentSession.interruptAll();
 			return success(request.id, {
 				recalled: result.recalled.map(submissionFromWaiting),
 				settledApprovals: result.approvalsSettled,
@@ -459,7 +573,7 @@ export const createRpcRequestHandler = (
 			if (ids !== undefined && new Set(ids).size !== ids.length) {
 				throw rpcInvalidParams("submissionIds must be unique.");
 			}
-			const recalled = activeHost.agentSession.recallWaitingMessages(
+			const recalled = await activeHost.agentSession.recallWaitingMessages(
 				ids as SessionWaitingMessageId[] | undefined
 			);
 			return success(request.id, {

@@ -585,9 +585,6 @@ const runLoop = async function* ({
 			);
 			return;
 		}
-		if (stepNumber > 1 && takeSteeringMessages) {
-			modelMessages.push(...takeSteeringMessages().map(modelPromptMessage));
-		}
 		const stepId = toModelStepId(`step-${stepNumber}`);
 		yield emit({
 			modelId: turn.model.modelId,
@@ -640,7 +637,20 @@ const runLoop = async function* ({
 			...omitUndefined({ usage: output.usage }),
 		});
 		totalUsage = sumUsage(totalUsage, output.usage);
-		if (output.toolCalls.length === 0) {
+		const steeringMessages = await takeSteeringMessages?.();
+		const hasSteeringMessages =
+			steeringMessages !== undefined && steeringMessages.length > 0;
+		if (hasSteeringMessages) {
+			if (output.toolCalls.length === 0) {
+				modelMessages.push({
+					...omitUndefined({ continuation: output.continuation }),
+					content: output.assistantParts,
+					role: "assistant",
+				});
+			}
+			modelMessages.push(...steeringMessages.map(modelPromptMessage));
+		}
+		if (output.toolCalls.length === 0 && !hasSteeringMessages) {
 			yield emit({
 				finishedAt: Date.now(),
 				sequence: emit.nextSequence(),

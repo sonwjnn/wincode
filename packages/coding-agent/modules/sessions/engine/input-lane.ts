@@ -2,15 +2,16 @@ import {
 	type AgentTurnId,
 	createAgentTurnId,
 	type SessionMessageId,
-	toSessionMessageId,
-} from "@wincode/agent-core";
-import { isUndefined, omitUndefined } from "@wincode/runtime-utils";
-import {
 	type SubmissionId,
-	toQueuedSubmissionId,
-	toSteeringMessageId,
+	toSessionMessageId,
 	toSubmissionId,
-} from "@/shared/identifiers";
+} from "@wincode/agent-core";
+import {
+	getErrorMessage,
+	isUndefined,
+	omitUndefined,
+} from "@wincode/runtime-utils";
+import { toQueuedSubmissionId } from "@/shared/identifiers";
 import { createSessionUserMessage, type SessionFilePart } from "../message";
 import type {
 	SessionSendInput,
@@ -20,7 +21,6 @@ import type {
 import type {
 	AgentSessionPorts,
 	LiveSessionSnapshot,
-	SessionExecution,
 	SessionQueuedSendInput,
 	SessionQueuedSubmission,
 	SessionSteeringAdmission,
@@ -30,18 +30,14 @@ import type {
 	SessionWaitingMessage,
 	SessionWaitingMessageId,
 } from "./types";
-import { acceptsSteeringMessages, primaryEntry } from "./utils";
 
 const SESSION_SHUT_DOWN_ERROR = "The session has ended.";
 const QUEUED_ATTACHMENT_ERROR = "Attachment data could not be stored.";
-const STEERING_ATTACHMENT_ERROR =
-	"A Steering Message carries text only: attachments are not accepted.";
-const STEERING_SKILL_ERROR =
-	"A Steering Message cannot invoke a Skill: it carries text only.";
-const STEERING_INVOCATION_ERROR =
-	"A Steering Message carries text only: it cannot resend or edit another message.";
-const STEERING_INACTIVE_ERROR =
-	"An active Agent Turn is required to accept a Steering Message.";
+
+export type SessionInputExternalization = Readonly<{
+	completion: Promise<SessionSendOutcome>;
+	controller: AbortController;
+}>;
 
 type PreparedAdmission = Readonly<{
 	admittedInput: SessionSendInput;
@@ -54,26 +50,33 @@ type PreparedAdmission = Readonly<{
 export type SessionInputLanePort = Readonly<{
 	addExternalization: (
 		id: SessionQueuedSubmission["id"],
-		controller: AbortController
+		controller: AbortController,
+		completion: Promise<SessionSendOutcome>
 	) => void;
 	appendQueuedSubmission: (submission: SessionQueuedSubmission) => void;
-	appendSteeringMessage: (message: SessionSteeringMessage) => void;
+	beginSteeringCommit: (id: SessionQueuedSubmission["id"]) => boolean;
 	canDrainQueue: () => boolean;
+	commitSteeringSubmission: (
+		submission: SessionQueuedSubmission
+	) => Promise<SessionSteeringAdmission>;
+	endSteeringCommit: (id: SessionQueuedSubmission["id"]) => void;
 	getExternalization: (
 		id: SessionQueuedSubmission["id"]
-	) => AbortController | undefined;
+	) => SessionInputExternalization | undefined;
 	getSnapshot: () => LiveSessionSnapshot;
 	isClosed: () => boolean;
+	isExecutionBusy: () => boolean;
 	isExternalizing: (id: SessionQueuedSubmission["id"]) => boolean;
 	isQueueDraining: () => boolean;
+	isSteeringCommitting: () => boolean;
 	isSubmissionBusy: () => boolean;
 	removeExternalization: (id: SessionQueuedSubmission["id"]) => void;
 	removeQueuedSubmission: (
 		id: SessionQueuedSubmission["id"]
 	) => SessionQueuedSubmission | undefined;
 	replaceInputLanes: (
-		queuedSubmissions: SessionQueuedSubmission[],
-		steeringMessages: SessionSteeringMessage[]
+		queuedSubmissions: readonly SessionQueuedSubmission[],
+		steeringMessages: readonly SessionSteeringMessage[]
 	) => void;
 	replaceQueuedSubmission: (submission: SessionQueuedSubmission) => void;
 	reportSubmissionFailure: (
@@ -84,6 +87,12 @@ export type SessionInputLanePort = Readonly<{
 	retainAttachments: (attachmentIds: readonly string[]) => void;
 	releaseAttachments: (attachmentIds: readonly string[]) => void;
 	runSubmission: (input: SessionSendInput) => Promise<SessionSendOutcome>;
+	runSteeringMessage: (
+		message: SessionSteeringMessage
+	) => Promise<SessionSendOutcome>;
+	retrySteeringMessage: (
+		message: SessionSteeringMessage
+	) => Promise<SessionSendOutcome>;
 	setQueueDraining: (draining: boolean) => void;
 	takeQueuedSubmission: (
 		id: SessionQueuedSubmission["id"]
@@ -97,20 +106,14 @@ export type SessionInputLaneWorkflow = Readonly<{
 	acceptQueuedSubmission: (
 		input: SessionSendInput
 	) => Promise<SessionSendOutcome>;
-	acceptSteeringMessage: (
-		input: SessionSendInput,
-		queuedSubmissionId?: SessionQueuedSubmission["id"]
-	) => SessionSteeringAdmission;
 	drainQueuedSubmissions: () => Promise<void>;
-	fallbackSteeringMessages: (turnId?: SessionExecution["turnId"]) => void;
 	prompt: (input: SessionSendInput) => Promise<SessionSubmissionAdmission>;
-	recallFailedTurnMessages: () => SessionWaitingMessage[];
+	recallFailedTurnMessages: () => void;
 	recallWaitingMessages: (
 		ids?: readonly SessionWaitingMessageId[]
-	) => SessionWaitingMessage[];
+	) => Promise<SessionWaitingMessage[]>;
 	send: (input: SessionSendInput) => Promise<SessionSendOutcome>;
-	steer: (text: string) => SessionSteeringAdmission;
-	steerNextQueuedSubmission: () => SessionSteeringAdmission | undefined;
+	steer: () => Promise<SessionSteeringAdmission>;
 }>;
 
 const queuedAttachmentIds = (input: SessionQueuedSendInput): string[] =>
@@ -152,31 +155,17 @@ const waitingMessageMatches = (
 const recalledSubmissionEvent = (
 	message: SessionWaitingMessage,
 	reason: "recall" | "turn-failed"
-): SessionSubmissionEvent | undefined => {
-	const messageId =
-		"messageId" in message ? message.messageId : message.input.messageId;
-	const submissionId =
-		"submissionId" in message
-			? message.submissionId
-			: message.input.submissionId;
-	if (messageId === undefined || submissionId === undefined) {
-		return;
-	}
-	return {
-		kind: "recalled",
-		messageId,
-		reason,
-		submissionId,
-		...omitUndefined({
-			composition:
-				reason === "turn-failed" ? message.input.composition : undefined,
-			turnId:
-				"input" in message && message.input.turnId !== undefined
-					? message.input.turnId
-					: undefined,
-		}),
-	};
-};
+): SessionSubmissionEvent => ({
+	kind: "recalled",
+	messageId: message.messageId,
+	reason,
+	submissionId: message.submissionId,
+	...omitUndefined({
+		composition:
+			reason === "turn-failed" ? message.input.composition : undefined,
+		turnId: message.input.turnId,
+	}),
+});
 
 /** Input-lane policy and queue orchestration; all authoritative transitions return to Agent Session. */
 export const createSessionInputLaneWorkflow = (
@@ -207,29 +196,73 @@ export const createSessionInputLaneWorkflow = (
 			(part): part is SessionFilePart => part.type === "file"
 		);
 	};
+	const drainSteeringHead = async (
+		steering: SessionSteeringMessage
+	): Promise<boolean> => {
+		if (steering.status !== "pending") {
+			return false;
+		}
+		const outcome = await port.runSteeringMessage(steering);
+		return !outcome.rejected;
+	};
+	const drainQueuedHead = async (
+		next: SessionQueuedSubmission
+	): Promise<boolean> => {
+		if (port.isExternalizing(next.id)) {
+			return false;
+		}
+		const started = port.takeQueuedSubmission(next.id);
+		if (started === undefined) {
+			return true;
+		}
+		try {
+			const outcome = await port.runSubmission(started.input);
+			if (outcome.rejected) {
+				return false;
+			}
+		} catch {
+			recallFailedTurnMessages();
+			return false;
+		} finally {
+			releaseQueuedAttachments([started]);
+		}
+		return true;
+	};
+	const drainQueueContents = async (): Promise<void> => {
+		while (true) {
+			if (port.isClosed() || port.isSteeringCommitting()) {
+				break;
+			}
+			const snapshot = port.getSnapshot();
+			const steering = snapshot.steeringMessages[0];
+			if (steering !== undefined) {
+				if (!(await drainSteeringHead(steering))) {
+					break;
+				}
+				continue;
+			}
+			const next = snapshot.queuedSubmissions[0];
+			if (next === undefined) {
+				break;
+			}
+			if (!(await drainQueuedHead(next))) {
+				break;
+			}
+		}
+	};
 	const drainQueuedSubmissions = async (): Promise<void> => {
-		if (port.isQueueDraining() || port.isClosed() || !port.canDrainQueue()) {
+		if (port.isQueueDraining()) {
+			return;
+		}
+		if (port.isClosed()) {
+			return;
+		}
+		if (!port.canDrainQueue()) {
 			return;
 		}
 		port.setQueueDraining(true);
 		try {
-			while (!port.isClosed()) {
-				const next = port.getSnapshot().queuedSubmissions[0];
-				if (next === undefined || port.isExternalizing(next.id)) {
-					break;
-				}
-				const started = port.takeQueuedSubmission(next.id);
-				if (started === undefined) {
-					continue;
-				}
-				try {
-					await port.runSubmission(started.input);
-				} catch {
-					// A thrown turn failure cannot leave later waiting work to run.
-					recallFailedTurnMessages();
-				}
-				releaseQueuedAttachments([started]);
-			}
+			await drainQueueContents();
 		} finally {
 			port.setQueueDraining(false);
 		}
@@ -350,212 +383,163 @@ export const createSessionInputLaneWorkflow = (
 			port.retainAttachments(originalAttachmentIds);
 		}
 		const attachmentController = new AbortController();
-		port.addExternalization(queued.id, attachmentController);
+		const completion = Promise.withResolvers<SessionSendOutcome>();
+		port.addExternalization(
+			queued.id,
+			attachmentController,
+			completion.promise
+		);
 		port.appendQueuedSubmission(queued);
 		const pending = finishQueuedSubmissionAttachments(
 			queued,
 			attachmentController,
 			originalAttachmentIds
 		);
+		void pending.then(completion.resolve, (error: unknown) =>
+			completion.resolve({
+				rejected: true,
+				reason: getErrorMessage(error, QUEUED_ATTACHMENT_ERROR),
+			})
+		);
 		return pending.finally(() => {
 			port.removeExternalization(queued.id);
 			port.trackBackgroundTask(drainQueuedSubmissions());
 		});
 	};
-	const acceptSteeringMessage = (
-		input: SessionSendInput,
-		queuedSubmissionId?: SessionQueuedSubmission["id"]
-	): SessionSteeringAdmission => {
-		const composition: SessionSubmissionComposition = input.composition ?? {
-			files: input.files ?? [],
-			text: input.userText ?? "",
-		};
-		if ((input.files ?? composition.files).length > 0) {
-			return { rejected: true, reason: STEERING_ATTACHMENT_ERROR };
-		}
-		if (!isUndefined(input.skill)) {
-			return { rejected: true, reason: STEERING_SKILL_ERROR };
-		}
-		if (!(isUndefined(input.messageId) && isUndefined(input.delegation))) {
-			return { rejected: true, reason: STEERING_INVOCATION_ERROR };
-		}
-		const snapshot = port.getSnapshot();
-		const execution = primaryEntry(snapshot.executions);
-		const submissionId =
-			input.submissionId ?? toSubmissionId(`submission-${crypto.randomUUID()}`);
-		const messageId =
-			input.reservedMessageId ??
-			toSessionMessageId(`msg-${crypto.randomUUID()}`);
-		const turnId = input.turnId ?? execution?.turnId ?? createAgentTurnId();
-		const steering: SessionSteeringMessage = {
-			id: toSteeringMessageId(crypto.randomUUID()),
-			input: {
-				agent: input.agent,
-				composition: { ...composition, files: [] },
-				messageId,
-				model: input.model,
-				sessionModel: input.sessionModel,
-				submissionId,
-				text: input.userText ?? composition.text,
-				turnId,
-				...omitUndefined({
-					resolvedAgent: input.resolvedAgent,
-					sessionEffort: input.sessionEffort,
-					sessionReasoningMode: input.sessionReasoningMode,
-					effort: input.effort,
-					reasoningMode: input.reasoningMode,
-				}),
-			},
-		};
-		if (queuedSubmissionId === undefined) {
-			port.appendSteeringMessage(steering);
-		} else if (snapshot.queuedSubmissions[0]?.id === queuedSubmissionId) {
-			port.replaceInputLanes(snapshot.queuedSubmissions.slice(1), [
-				...snapshot.steeringMessages,
-				steering,
-			]);
-		} else {
+	let steeringTail: Promise<void> = Promise.resolve();
+	const deferredRecalls: {
+		readonly ids: readonly SessionWaitingMessageId[] | undefined;
+		readonly reason: "recall" | "turn-failed";
+		readonly resolve: (messages: SessionWaitingMessage[]) => void;
+		readonly reject: (reason?: unknown) => void;
+	}[] = [];
+	const commitQueuedSteering = async (
+		queued: SessionQueuedSubmission
+	): Promise<SessionSteeringAdmission> => {
+		try {
+			const externalization = port.getExternalization(queued.id);
+			if (externalization !== undefined) {
+				const outcome = await externalization.completion;
+				if (outcome.rejected) {
+					return {
+						kind: "rejected",
+						messageId: queued.messageId,
+						reason: outcome.reason,
+						submissionId: queued.submissionId,
+					};
+				}
+			}
+			const current = port.getSnapshot().queuedSubmissions[0];
+			if (current?.id !== queued.id) {
+				return {
+					kind: "rejected",
+					messageId: queued.messageId,
+					reason: "The queued Submission is no longer waiting.",
+					submissionId: queued.submissionId,
+				};
+			}
+			return await port.commitSteeringSubmission(current);
+		} catch (error) {
 			return {
-				rejected: true,
-				reason: "The queued Submission is no longer waiting.",
+				kind: "rejected",
+				messageId: queued.messageId,
+				reason: getErrorMessage(error, "Could not commit the Submission."),
+				submissionId: queued.submissionId,
 			};
 		}
-		return {
-			rejected: false,
-			disposition: "steering",
-			messageId,
-			submissionId,
-			turnId,
-		};
 	};
-
-	const steerNextQueuedSubmission = ():
-		| SessionSteeringAdmission
-		| undefined => {
-		if (port.isClosed()) {
-			return { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
-		}
-		const snapshot = port.getSnapshot();
-		const queued = snapshot.queuedSubmissions[0];
-		if (queued === undefined) {
-			return;
-		}
-		const execution = primaryEntry(snapshot.executions);
-		if (!acceptsSteeringMessages(snapshot) || execution === undefined) {
-			return { rejected: true, reason: STEERING_INACTIVE_ERROR };
-		}
-		return acceptSteeringMessage(
-			{
-				agent: execution.agent,
-				composition: queued.input.composition,
-				model: execution.model,
-				sessionModel: execution.sessionModel,
-				submissionId: queued.submissionId,
-				reservedMessageId: queued.messageId,
-				turnId: execution.turnId,
-				userText: queued.input.userText ?? queued.input.composition.text,
-				...omitUndefined({
-					sessionEffort: execution.sessionEffort,
-					sessionReasoningMode: execution.sessionReasoningMode,
-					effort: execution.effort,
-					reasoningMode: execution.reasoningMode,
-					skill: queued.input.skill,
-					messageId: queued.input.messageId,
-					delegation: queued.input.delegation,
-				}),
-			},
-			queued.id
+	const steer = (): Promise<SessionSteeringAdmission> => {
+		const operation = steeringTail.then(
+			async (): Promise<SessionSteeringAdmission> => {
+				if (port.isClosed()) {
+					return { kind: "rejected", reason: SESSION_SHUT_DOWN_ERROR };
+				}
+				const queued = port.getSnapshot().queuedSubmissions[0];
+				if (queued === undefined) {
+					return { kind: "empty" };
+				}
+				if (!port.beginSteeringCommit(queued.id)) {
+					return {
+						kind: "rejected",
+						messageId: queued.messageId,
+						reason: "The queued Submission is no longer waiting.",
+						submissionId: queued.submissionId,
+					};
+				}
+				try {
+					return await commitQueuedSteering(queued);
+				} finally {
+					try {
+						port.endSteeringCommit(queued.id);
+					} finally {
+						flushDeferredRecalls();
+						port.trackBackgroundTask(drainQueuedSubmissions());
+					}
+				}
+			}
 		);
+		steeringTail = operation.then(
+			() => undefined,
+			() => undefined
+		);
+		return operation;
 	};
-	const fallbackSteeringMessages = (
-		turnId?: SessionExecution["turnId"]
-	): void => {
-		if (port.isClosed()) {
-			return;
-		}
-		const snapshot = port.getSnapshot();
-		if (snapshot.steeringMessages.length === 0) {
-			return;
-		}
-		const isOwnedByTurn = (message: SessionSteeringMessage): boolean =>
-			turnId === undefined || message.input.turnId === turnId;
-		const waiting = snapshot.steeringMessages
-			.filter(isOwnedByTurn)
-			.map(({ input }) => {
-				const messageId =
-					input.messageId ?? toSessionMessageId(`msg-${crypto.randomUUID()}`);
-				const submissionId =
-					input.submissionId ??
-					toSubmissionId(`submission-${crypto.randomUUID()}`);
-				const nextTurnId = createAgentTurnId();
-				return {
-					id: toQueuedSubmissionId(crypto.randomUUID()),
-					messageId,
-					submissionId,
-					input: {
-						agent: input.agent,
-						composition: input.composition,
-						files: input.composition.files,
-						model: input.model,
-						sessionModel: input.sessionModel,
-						submissionId,
-						reservedMessageId: messageId,
-						turnId: nextTurnId,
-						userText: input.text,
-						...omitUndefined({
-							resolvedAgent: input.resolvedAgent,
-							sessionEffort: input.sessionEffort,
-							sessionReasoningMode: input.sessionReasoningMode,
-							effort: input.effort,
-							reasoningMode: input.reasoningMode,
-						}),
-					},
-				};
-			});
-		if (waiting.length > 0) {
-			port.replaceInputLanes(
-				[...waiting, ...snapshot.queuedSubmissions],
-				snapshot.steeringMessages.filter((message) => !isOwnedByTurn(message))
-			);
-		}
-	};
-	const recallWaitingMessagesWithReason = (
+	const recallWaitingMessagesNow = (
 		ids: readonly SessionWaitingMessageId[] | undefined,
 		reason: "recall" | "turn-failed"
 	): SessionWaitingMessage[] => {
 		const snapshot = port.getSnapshot();
-		const steering = snapshot.steeringMessages.filter((message) =>
-			waitingMessageMatches(ids, message.id, message.input.submissionId)
-		);
 		const queued = snapshot.queuedSubmissions.filter((submission) =>
 			waitingMessageMatches(ids, submission.id, submission.submissionId)
 		);
-		if (steering.length === 0 && queued.length === 0) {
+		if (queued.length === 0) {
 			return [];
 		}
 		port.replaceInputLanes(
 			snapshot.queuedSubmissions.filter(
 				(submission) => !queued.includes(submission)
 			),
-			snapshot.steeringMessages.filter((message) => !steering.includes(message))
+			snapshot.steeringMessages
 		);
 		for (const submission of queued) {
-			port.getExternalization(submission.id)?.abort();
+			port.getExternalization(submission.id)?.controller.abort();
 		}
 		releaseQueuedAttachments(queued);
-		for (const message of [...steering, ...queued]) {
-			const event = recalledSubmissionEvent(message, reason);
-			if (event !== undefined) {
-				port.emitSubmissionEvent(event);
+		for (const submission of queued) {
+			port.emitSubmissionEvent(recalledSubmissionEvent(submission, reason));
+		}
+		return queued;
+	};
+	const flushDeferredRecalls = (): void => {
+		for (const recall of deferredRecalls.splice(0)) {
+			try {
+				recall.resolve(recallWaitingMessagesNow(recall.ids, recall.reason));
+			} catch (error) {
+				recall.reject(error);
 			}
 		}
-		return [...steering, ...queued];
+	};
+	const recallWaitingMessagesWithReason = (
+		ids: readonly SessionWaitingMessageId[] | undefined,
+		reason: "recall" | "turn-failed"
+	): Promise<SessionWaitingMessage[]> => {
+		if (!port.isSteeringCommitting()) {
+			return Promise.resolve(recallWaitingMessagesNow(ids, reason));
+		}
+		const { promise, resolve, reject } =
+			Promise.withResolvers<SessionWaitingMessage[]>();
+		deferredRecalls.push({ ids, reason, resolve, reject });
+		return promise;
 	};
 	const recallWaitingMessages = (
 		ids?: readonly SessionWaitingMessageId[]
-	): SessionWaitingMessage[] => recallWaitingMessagesWithReason(ids, "recall");
-	const recallFailedTurnMessages = (): SessionWaitingMessage[] =>
-		recallWaitingMessagesWithReason(undefined, "turn-failed");
+	): Promise<SessionWaitingMessage[]> =>
+		recallWaitingMessagesWithReason(ids, "recall");
+	const recallFailedTurnMessages = (): void => {
+		port.trackBackgroundTask(
+			recallWaitingMessagesWithReason(undefined, "turn-failed")
+		);
+	};
 	const prepareAdmission = (
 		input: SessionSendInput,
 		composition: SessionSubmissionComposition
@@ -618,55 +602,42 @@ export const createSessionInputLaneWorkflow = (
 			turnId,
 		};
 	};
-	const steer = (text: string): SessionSteeringAdmission => {
-		if (port.isClosed()) {
-			return { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
-		}
-		const snapshot = port.getSnapshot();
-		const execution = primaryEntry(snapshot.executions);
-		if (!acceptsSteeringMessages(snapshot) || execution === undefined) {
-			return { rejected: true, reason: STEERING_INACTIVE_ERROR };
-		}
-		return acceptSteeringMessage({
-			agent: execution.agent,
-			composition: { files: [], text },
-			model: execution.model,
-			sessionModel: execution.sessionModel,
-			userText: text,
-			turnId: execution.turnId,
-			...omitUndefined({
-				sessionEffort: execution.sessionEffort,
-				sessionReasoningMode: execution.sessionReasoningMode,
-				effort: execution.effort,
-				reasoningMode: execution.reasoningMode,
-			}),
-		});
-	};
 	const send = async (input: SessionSendInput): Promise<SessionSendOutcome> => {
 		if (port.isClosed()) {
 			return { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
 		}
-		if (acceptsSteeringMessages(port.getSnapshot())) {
-			const outcome = acceptSteeringMessage(input);
-			return outcome.rejected ? outcome : { rejected: false };
+		const composition: SessionSubmissionComposition = input.composition ?? {
+			files: input.files ?? [],
+			text: input.userText ?? "",
+		};
+		const { admittedInput } = prepareAdmission(input, composition);
+		const failedSteering = port.getSnapshot().steeringMessages[0];
+		if (
+			failedSteering?.status === "failed" &&
+			failedSteering.message.id === input.messageId
+		) {
+			if (port.isExecutionBusy()) {
+				return {
+					rejected: true,
+					reason: "The committed Submission can only be retried while idle.",
+				};
+			}
+			return await port.retrySteeringMessage(failedSteering);
 		}
 		if (port.isSubmissionBusy()) {
-			const pending = acceptQueuedSubmission(input);
+			const pending = acceptQueuedSubmission(admittedInput);
 			port.trackBackgroundTask(pending);
 			return await pending;
 		}
-		return await port.runSubmission(input);
+		return await port.runSubmission(admittedInput);
 	};
 	return {
 		acceptQueuedSubmission,
-		acceptSteeringMessage,
 		drainQueuedSubmissions,
-		fallbackSteeringMessages,
 		prompt,
 		recallFailedTurnMessages,
 		recallWaitingMessages,
 		send,
 		steer,
-		steerNextQueuedSubmission,
 	};
 };

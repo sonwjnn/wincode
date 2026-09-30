@@ -4,6 +4,7 @@ import {
 	createAgentTurnAbortEvent,
 	createAgentTurnId,
 	getAgentTurnAbortDisposition,
+	isOperationalFailure,
 	type OperationalFailure,
 	type SessionMessageId,
 	type SessionRecord,
@@ -32,6 +33,7 @@ import { logSessionPersistenceFailure } from "@/shared/utils/session-persistence
 import type { CompactSessionResult } from "../compaction/compaction";
 import type { ResolvedCompactionSettings } from "../compaction/config";
 import { SessionCompactionError } from "../compaction/error";
+import { isContextOverflowFailure } from "../compaction/overflow-recovery";
 import type { SessionViewState } from "../hooks/runtime-turn";
 import {
 	createSessionUserMessage,
@@ -74,15 +76,13 @@ export type SubmissionDeps = Readonly<{
 	compact: (command: SessionCompactionCommand) => Promise<CompactSessionResult>;
 	endExecution: (turnId: AgentTurnId) => void;
 	isShutDown: () => boolean;
-	/**
-	 * Hands anything still waiting in the Steering Lane to the Submission Queue
-	 * when the turn that would have delivered it ends. Only that turn's lane
-	 * entries are moved, so a newer turn can start while this one unwinds.
-	 */
-	fallbackSteeringMessages: (turnId?: AgentTurnId) => void;
-	/** Commits Steering Messages after the receiving Model Step succeeds. */
-	acknowledgeSteeringMessages: (turnId: AgentTurnId) => void;
-	/** Returns pending input-lane messages to the composer after turn failure. */
+	/** Persists delivered Steering Message state transitions. */
+	acknowledgeSteeringMessages: (
+		turnId: AgentTurnId,
+		status: "failed" | "processed",
+		failure?: string
+	) => Promise<void>;
+	/** Returns only uncommitted queued input to the composer after turn failure. */
 	recallFailedTurnMessages: (turnId: AgentTurnId) => void;
 	getContext: () => readonly SessionMessage[];
 	getTranscript: () => readonly SessionMessage[];
@@ -111,11 +111,14 @@ export type SubmissionDeps = Readonly<{
 	 */
 	trackBackgroundTask: (task: Promise<unknown>) => void;
 	/**
-	 * Delivers Steering Messages into one Agent Turn execution. The Agent
-	 * Session pops the lane and includes the messages before the next model
-	 * call; persistence waits for that model step to succeed.
+	 * Takes durable Steering Messages at a Model Step boundary, persists their
+	 * processing state and prepares attachments/Skill context for the runtime.
 	 */
-	takeSteeringMessages: (execution: SessionExecution) => SessionMessage[];
+	takeSteeringMessages: (
+		execution: SessionExecution,
+		armedSkill: SessionSkillCatalog,
+		signal: AbortSignal
+	) => Promise<SessionMessage[]>;
 }>;
 class SessionClosedError extends Error {
 	constructor() {
@@ -872,34 +875,74 @@ const proposeOverflowRecovery = ({
 }): void => {
 	const originalMessageId = execution.sourceUserMessageId;
 	if (isNull(originalMessageId)) {
+		deps.trackBackgroundTask(
+			deps.acknowledgeSteeringMessages(
+				execution.turnId,
+				"failed",
+				getErrorMessage(
+					failure,
+					"Context overflow recovery could not continue."
+				)
+			)
+		);
 		return;
 	}
 	deps.trackBackgroundTask(
-		deps.recoverOverflow({
-			error: failure,
-			originalMessageId,
-			continueContext: ({ originalMessageId: contextMessageId }) =>
-				continueOverflowContext({
-					context,
-					deps,
-					execution,
-					originalMessageId: contextMessageId,
-				}),
-			resolveTarget: async () => {
-				const settings = await deps.ports.resolveCompactionSettings(
-					execution.model
+		(async () => {
+			let outcome: SessionOverflowRecoveryOutcome;
+			try {
+				outcome = await deps.recoverOverflow({
+					error: failure,
+					originalMessageId,
+					continueContext: ({ originalMessageId: contextMessageId }) =>
+						continueOverflowContext({
+							context,
+							deps,
+							execution,
+							originalMessageId: contextMessageId,
+						}),
+					resolveTarget: async () => {
+						const settings = await deps.ports.resolveCompactionSettings(
+							execution.model
+						);
+						if (!settings.overflowRecoveryAvailable) {
+							return null;
+						}
+						return {
+							model: execution.model,
+							effort: execution.effort,
+							reasoningMode: execution.reasoningMode,
+						};
+					},
+					turnId: execution.turnId,
+				});
+			} catch (error) {
+				await deps.acknowledgeSteeringMessages(
+					execution.turnId,
+					"failed",
+					getErrorMessage(error, "Context overflow recovery failed.")
 				);
-				if (!settings.overflowRecoveryAvailable) {
-					return null;
+				return;
+			}
+			if (outcome.kind !== "recovered") {
+				let reason: string;
+				if (outcome.kind === "failed") {
+					reason = outcome.error.message;
+				} else if (isOperationalFailure(failure)) {
+					reason = failure.message;
+				} else {
+					reason = getErrorMessage(
+						failure,
+						"Context overflow recovery could not continue."
+					);
 				}
-				return {
-					model: execution.model,
-					effort: execution.effort,
-					reasoningMode: execution.reasoningMode,
-				};
-			},
-			turnId: execution.turnId,
-		})
+				await deps.acknowledgeSteeringMessages(
+					execution.turnId,
+					"failed",
+					reason
+				);
+			}
+		})()
 	);
 };
 
@@ -1179,13 +1222,13 @@ const runTurn = async ({
 	const callbacks: SessionTurnCallbacks = {
 		commitTerminal,
 		commitToolCall: commitRecord,
-		onEvent: (event) => {
+		onEvent: async (event) => {
 			if (!turnIsLive()) {
 				return;
 			}
 			executionStarted = true;
 			if (event.type === "model-step-finished") {
-				deps.acknowledgeSteeringMessages(execution.turnId);
+				await deps.acknowledgeSteeringMessages(execution.turnId, "processed");
 			}
 			const projected = projectAgentTurnEvent(
 				deps.getContext(),
@@ -1198,14 +1241,29 @@ const runTurn = async ({
 			deps.applyContext(projected.messages);
 			deps.mergeTranscript([projected.message]);
 		},
-		onTerminal: (event) => {
+		onTerminal: async (event) => {
 			if (!turnIsLive()) {
 				return;
 			}
 			executionStarted = true;
 			terminalObserved = true;
-			if (event.type !== "agent-turn-failed") {
-				deps.acknowledgeSteeringMessages(execution.turnId);
+			const failed = event.type !== "agent-turn-completed";
+			const deferSteeringFailure =
+				event.type === "agent-turn-failed" &&
+				isContextOverflowFailure(event.failure);
+			let steeringFailure: string | undefined;
+			if (event.type === "agent-turn-failed") {
+				steeringFailure = event.failure.message;
+			} else if (failed) {
+				steeringFailure =
+					"The Agent Turn ended before confirming the Steering Message.";
+			}
+			if (!deferSteeringFailure) {
+				await deps.acknowledgeSteeringMessages(
+					execution.turnId,
+					failed ? "failed" : "processed",
+					steeringFailure
+				);
 			}
 			terminalFailure =
 				event.type === "agent-turn-failed" ? event.failure : undefined;
@@ -1234,6 +1292,8 @@ const runTurn = async ({
 		deps.setError(null);
 		const hydrated = await deps.ports.attachments.hydrate({
 			budget: attachmentBudget,
+			failOnMissingAttachments:
+				context.anchoredMessage?.metadata?.submissionStatus === "processing",
 			messages: modelMessages,
 			priorityMessageId: modelMessages.findLast(({ role }) => role === "user")
 				?.id,
@@ -1241,7 +1301,6 @@ const runTurn = async ({
 		});
 		assertSessionOpen(deps);
 		if (!turnIsLive()) {
-			deps.acknowledgeSteeringMessages(execution.turnId);
 			return { rejected: false };
 		}
 		const outcome = await deps.ports.turnRunner.run({
@@ -1252,15 +1311,16 @@ const runTurn = async ({
 			resolvedAgent: context.resolvedAgent,
 			...omitUndefined({ skillRequest: context.skill }),
 			signal,
-			takeSteeringMessages: () =>
-				turnIsLive() ? deps.takeSteeringMessages(execution) : [],
+			takeSteeringMessages: async () =>
+				turnIsLive()
+					? deps.takeSteeringMessages(execution, context.armedSkill, signal)
+					: [],
 		});
 		if (!turnIsLive()) {
-			deps.acknowledgeSteeringMessages(execution.turnId);
+			await deps.acknowledgeSteeringMessages(execution.turnId, "failed");
 			return { rejected: false };
 		}
 		if (isUndefined(outcome.error)) {
-			deps.acknowledgeSteeringMessages(execution.turnId);
 			void logger.debug("Agent turn completed", {
 				operation: "session.turn",
 				phase: "completed",
@@ -1277,6 +1337,18 @@ const runTurn = async ({
 			return { rejected: false };
 		}
 		onTurnFailure();
+		if (
+			!(terminalObserved || (executionStarted && isUndefined(outcome.turn)))
+		) {
+			await deps.acknowledgeSteeringMessages(
+				execution.turnId,
+				"failed",
+				getErrorMessage(
+					outcome.error,
+					"The Agent Turn ended before confirming the Steering Message."
+				)
+			);
+		}
 		return handleTurnFailure({
 			commitRecord,
 			context,
@@ -1291,8 +1363,18 @@ const runTurn = async ({
 			terminalObserved,
 		});
 	} catch (error) {
-		if (deps.isShutDown() || signal.aborted || !executionActive) {
-			deps.acknowledgeSteeringMessages(execution.turnId);
+		if (!executionActive) {
+			return { rejected: false };
+		}
+		await deps.acknowledgeSteeringMessages(
+			execution.turnId,
+			"failed",
+			getErrorMessage(
+				error,
+				"The Agent Turn ended before confirming the Steering Message."
+			)
+		);
+		if (deps.isShutDown() || signal.aborted) {
 			return { rejected: false };
 		}
 		onTurnFailure();
@@ -1422,9 +1504,6 @@ export const createSubmissionPipeline = (
 			}
 			throw error;
 		} finally {
-			// Return undelivered Steering messages to the queue first. A failed
-			// Agent Turn then recalls both lanes rather than draining that tail.
-			deps.fallbackSteeringMessages(input.turnId);
 			if (failedTurnId !== undefined) {
 				deps.recallFailedTurnMessages(failedTurnId);
 			}

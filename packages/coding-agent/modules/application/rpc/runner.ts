@@ -1,10 +1,14 @@
 import { logger } from "@wincode/runtime-utils";
+import { getCustomCommands } from "@/modules/commands/custom/loader";
+import { expandPastedText } from "@/modules/sessions/pasted-text";
+import { discoverSkills } from "@/modules/skills";
 import { errorLogFields } from "@/shared/utils/error-log-fields";
 import type {
 	LiveSessionSnapshot,
 	SessionHost,
 	SessionSubmissionEvent,
 } from "../../../modules/sessions/host/session-rpc";
+import { resolveSubmissionPrompt } from "../../../modules/sessions/submission-preparation";
 import { type DeferredNotification, SerializedWriter } from "./output";
 import {
 	operationalStatus,
@@ -33,9 +37,11 @@ import {
 	MAX_OUTPUT_BYTES,
 	RpcApplicationError,
 	RpcOutputOverflowError,
+	type RpcPreparedSubmission,
 	RpcProtocolError,
 	type RpcRunnerOptions,
 	type RpcSessionState,
+	type RpcSubmissionDraft,
 	type RuntimeModules,
 	SESSION_RPC_METHODS,
 } from "./types";
@@ -390,6 +396,7 @@ export async function runRpc({
 			projectApproval(approval, wireApprovalId(approval))
 		);
 		const steering = snapshot.steeringMessages.map(projectSteering);
+		const pendingSteering = snapshot.steeringMessages.length > 0;
 		const queue = snapshot.queuedSubmissions.map(projectQueued);
 		const transcriptSignature =
 			snapshot.transcriptRevision === undefined
@@ -414,7 +421,7 @@ export async function runRpc({
 				approvals: approvals.length,
 				compacting: snapshot.isCompacting,
 				turnActive: snapshot.turnActive,
-				waiting: steering.length > 0 || queue.length > 0,
+				waiting: pendingSteering || queue.length > 0,
 			}),
 			steering,
 			transcript: {
@@ -512,6 +519,38 @@ export async function runRpc({
 		getAssembly: () => state.assembly,
 		getRuntime,
 	});
+	const prepareSubmission = async (
+		draft: RpcSubmissionDraft
+	): Promise<RpcPreparedSubmission> => {
+		const activeAssembly = state.assembly;
+		if (activeAssembly === undefined) {
+			throw appError("not_initialized", "Initialize before submitting.");
+		}
+		const config = activeAssembly.capabilities.getConfig();
+		const visibleText = draft.composition.text.trim();
+		const text = expandPastedText(
+			draft.composition.text,
+			draft.composition.pastedText ?? []
+		).trim();
+		const prepared = await resolveSubmissionPrompt({
+			text,
+			visibleText,
+			...(draft.skillIntent === undefined
+				? {}
+				: { skillInvocation: draft.skillIntent }),
+			discoverSkills: () => discoverSkills(config),
+			discoverCustomCommands: () => getCustomCommands(config),
+		});
+		if (prepared.kind === "rejected") {
+			throw appError("submission_rejected", prepared.reason);
+		}
+		return {
+			composition: draft.composition,
+			files: draft.files,
+			userText: prepared.text,
+			...(prepared.skill === undefined ? {} : { skill: prepared.skill }),
+		};
+	};
 	const handleRequest = createRpcRequestHandler({
 		autoApproval,
 		bind,
@@ -524,6 +563,7 @@ export async function runRpc({
 		requireInitialized,
 		resolveApprovalId: (wireApprovalId) =>
 			approvalEngineIdsByWire.get(wireApprovalId),
+		prepareSubmission,
 		sendInput,
 		state,
 	});

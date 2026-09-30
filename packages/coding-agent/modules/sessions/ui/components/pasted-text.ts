@@ -11,33 +11,3 @@ export const summarizePastedText = (value: string): PastedText | undefined => {
 	}
 	return { text, token: `[Pasted ~${trimmed.split("\n").length} lines]` };
 };
-
-/** Expand markers from right to left; offsets are UTF-16, never terminal columns. */
-export const expandPastedText = (
-	text: string,
-	markers: readonly PastedText[]
-): string => {
-	const occurrences: Array<{ end: number; start: number; value: string }> = [];
-	let cursor = 0;
-	for (const marker of markers) {
-		const start = text.indexOf(marker.token, cursor);
-		if (start === -1) {
-			continue;
-		}
-		occurrences.push({
-			end: start + marker.token.length,
-			start,
-			value: marker.text,
-		});
-		cursor = start + marker.token.length;
-	}
-	return occurrences
-		.toReversed()
-		.reduce(
-			(result, occurrence) =>
-				result.slice(0, occurrence.start) +
-				occurrence.value +
-				result.slice(occurrence.end),
-			text
-		);
-};

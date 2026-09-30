@@ -1402,7 +1402,7 @@ describe("approval settlement through the Agent Session", () => {
 		const evaluation = gate.gate(shellCall("git status", "call-close"));
 		await whenApprovalRequested(engine);
 
-		engine.interruptAll();
+		await engine.interruptAll();
 
 		await expect(evaluation).resolves.toEqual({
 			errorText: "Shell was not approved: git status",

@@ -7,6 +7,9 @@ import type {
 	ResolvedAgent,
 	SessionMessageId,
 	SessionRecord,
+	SessionRecordId,
+	SessionSubmissionStatus,
+	SubmissionId,
 	ToolCallId,
 } from "@wincode/agent-core";
 import type {
@@ -26,7 +29,6 @@ import type {
 	QueuedSubmissionId,
 	SessionId,
 	SteeringMessageId,
-	SubmissionId,
 } from "@/shared/identifiers";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import type {
@@ -65,13 +67,18 @@ export type SessionSubmissionAdmission =
 	  };
 
 export type SessionSteeringAdmission =
-	| { readonly rejected: true; readonly reason: string }
+	| { readonly kind: "empty" }
 	| {
-			readonly rejected: false;
-			readonly disposition: "steering";
+			readonly kind: "rejected";
+			readonly reason: string;
+			readonly messageId?: SessionMessageId;
+			readonly submissionId?: SubmissionId;
+	  }
+	| {
+			readonly kind: "steered";
 			readonly messageId: SessionMessageId;
 			readonly submissionId: SubmissionId;
-			readonly turnId: AgentTurnId;
+			readonly turnId?: AgentTurnId;
 	  };
 
 export type SessionContinuationOutcome =
@@ -85,7 +92,13 @@ export type SessionContinuationOutcome =
 	  };
 
 export type SessionSubmissionEvent = Readonly<{
-	kind: "started" | "delivered" | "recalled" | "failed";
+	kind:
+		| "started"
+		| "steered"
+		| "delivered"
+		| "processed"
+		| "recalled"
+		| "failed";
 	messageId: SessionMessageId;
 	reason?: string;
 	/** Present on turn-failed recalls so listeners can restore composer content. */
@@ -164,49 +177,34 @@ export type SessionQueuedSubmission = ReadonlyDeep<{
 	input: SessionQueuedSendInput;
 }>;
 
-/**
- * The send a Steering Message runs when the Agent Turn it joined reaches a
- * Model Step boundary: text only, on the Model Target the running turn already
- * runs with, so a mid-turn correction cannot switch anything under the user.
- * It keeps everything a fallback submission needs to run as its own Agent Turn
- * when the turn that accepted it reaches no boundary.
- */
-export type SessionSteeringSendInput = Readonly<{
-	agent: AgentId;
-	/** The composition the Strip shows and a Recall restores. */
+/** Durable processing state for a steered user message. */
+export type SessionSteeringStatus = SessionSubmissionStatus;
+
+/** The committed Submission a running or later Agent Turn must read. */
+export type SessionSteeringSendInput = SessionSendInput & {
 	composition: SessionSubmissionComposition;
-	model: ChatModelSelection;
-	resolvedAgent?: SessionResolvedAgent;
-	sessionModel: ChatModelSelection;
-	sessionEffort?: Effort;
-	sessionReasoningMode?: ReasoningMode;
-	submissionId?: SubmissionId;
-	messageId?: SessionMessageId;
-	text: string;
-	turnId?: AgentTurnId;
-	effort?: Effort;
-	reasoningMode?: ReasoningMode;
-}>;
+	messageId: SessionMessageId;
+	submissionId: SubmissionId;
+};
 
 /**
- * One Steering Message a running Agent Turn accepted and holds for its next
- * Model Step boundary. It is transient Agent Session state, never a Session
- * Record until it is delivered, and is never restored after a restart.
+ * A committed user message awaiting a safe Model Step, or the durable
+ * processing projection for that same message. Its identities survive both
+ * restart and deliberate retry.
  */
 export type SessionSteeringMessage = ReadonlyDeep<{
 	id: SteeringMessageId;
 	input: SessionSteeringSendInput;
+	message: SessionMessage;
+	recordId: SessionRecordId;
+	status: SessionSteeringStatus;
+	reason?: string;
 }>;
 
 /** One user message the Agent Session withdrew from a lane for the composer. */
-export type SessionWaitingMessage =
-	| SessionQueuedSubmission
-	| SessionSteeringMessage;
+export type SessionWaitingMessage = SessionQueuedSubmission;
 
-export type SessionWaitingMessageId =
-	| QueuedSubmissionId
-	| SteeringMessageId
-	| SubmissionId;
+export type SessionWaitingMessageId = QueuedSubmissionId | SubmissionId;
 
 /**
  * One approval request the Agent Session owns until it settles. `target` is
@@ -234,15 +232,11 @@ export type LiveSessionSnapshot = ReadonlyDeep<{
 	/** Live Agent Turn executions, oldest first. */
 	executions: SessionExecution[];
 	isCompacting: boolean;
-	/**
-	 * Submission Queue: the Queued Submissions waiting for their Agent Turn,
-	 * oldest first. It is drain order, never a Session Record.
-	 */
+	/** Accepted Submissions not yet started or explicitly steered. */
 	queuedSubmissions: SessionQueuedSubmission[];
 	/**
-	 * Steering Lane: the Steering Messages waiting for the next Model Step
-	 * boundary of the running Agent Turn, oldest first. It is delivery order,
-	 * never a Session Record until it is delivered.
+	 * Durable Submissions committed by steering, pending delivery or blocked
+	 * after failure. Unlike queued Submissions, these cannot be recalled.
 	 */
 	steeringMessages: SessionSteeringMessage[];
 	/** Whether the session is running a submission, from its command to its settle. */
@@ -296,6 +290,13 @@ export type SessionCommitInput = {
 	sessionEffort?: Effort;
 	sessionReasoningMode?: ReasoningMode;
 };
+export type SessionSubmissionStatusUpdate = Readonly<{
+	failure?: string;
+	messageId: SessionMessageId;
+	recordId: SessionRecordId;
+	status: SessionSteeringStatus;
+	submissionId: SubmissionId;
+}>;
 
 /** The attachment ceilings one submission resolved from its compaction settings. */
 export type SessionAttachmentBudget = ReadonlyDeep<{
@@ -307,6 +308,7 @@ export type SessionAttachmentBudget = ReadonlyDeep<{
 /** What one Agent Turn asks the host's attachment store to hydrate. */
 export type SessionHydrationRequest = ReadonlyDeep<{
 	budget: SessionAttachmentBudget;
+	failOnMissingAttachments?: boolean;
 	messages: readonly SessionMessage[];
 	priorityMessageId?: SessionMessageId;
 	signal: AbortSignal;
@@ -369,9 +371,9 @@ export type SessionTurnCallbacks = Readonly<{
 	/** Commits each completed Tool Call as its own Session Record. */
 	commitToolCall: (record: SessionRecord) => Promise<void>;
 	/** Reports one non-terminal Agent Turn event, in order. */
-	onEvent: (event: AgentTurnEvent) => void;
+	onEvent: (event: AgentTurnEvent) => void | Promise<void>;
 	/** Reports the terminal event the execution ended with. */
-	onTerminal: (event: AgentTurnTerminalEvent) => void;
+	onTerminal: (event: AgentTurnTerminalEvent) => void | Promise<void>;
 	/** Reports the execution's live Session View State. */
 	onViewState: (viewState: SessionViewState) => void;
 }>;
@@ -392,13 +394,10 @@ export type SessionTurnRequest = Readonly<{
 	skillRequest?: SkillRequestContext;
 	signal: AbortSignal;
 	/**
-	 * Hands the runtime the Steering Messages that joined this execution since
-	 * the last call, oldest first, at a Model Step boundary. The Agent Session
-	 * includes them in the next model request immediately, but commits their
-	 * Session Records only after that Model Step succeeds; a failed step returns
-	 * them to the composer.
+	 * Hands the runtime pending Steering Messages at a Model Step boundary,
+	 * after persisting their processing state and preparing their model input.
 	 */
-	takeSteeringMessages: () => readonly SessionMessage[];
+	takeSteeringMessages: () => Promise<readonly SessionMessage[]>;
 }>;
 
 /** What one Agent Turn execution reported to the Agent Session. */
@@ -427,6 +426,10 @@ export type AgentSessionPorts = Readonly<{
 	compaction: SessionCompactionPort;
 	/** Writes one durable Session Record. */
 	commitRecord: (input: SessionCommitInput) => Promise<void>;
+	/** Persists one exact committed Submission's processing state. */
+	updateSubmissionStatus: (
+		input: SessionSubmissionStatusUpdate
+	) => Promise<void>;
 	/** Resolves the Agent, Model, and reasoning selection when a Submission starts. */
 	resolveSubmission: (input: SessionSendInput) => SessionSendInput;
 	/** Resolves the @path file mentions of a prompt. */
@@ -439,13 +442,14 @@ export type AgentSessionPorts = Readonly<{
 	skills: SessionSkillPort;
 }>;
 
-export type AgentSessionOptions = ReadonlyDeep<{
+export type AgentSessionOptions = Readonly<{
 	initialCompactions?: readonly SessionCompaction[];
 	initialAgent?: AgentId;
 	initialContext?: readonly SessionMessage[];
 	initialSessionModel?: ChatModelSelection;
 	initialSessionEffort?: Effort;
 	initialSessionReasoningMode?: ReasoningMode;
+	initialSteeringMessages?: readonly SessionSteeringMessage[];
 	initialTranscript: readonly SessionMessage[];
 	ports: AgentSessionPorts;
 	sessionId: SessionId;
@@ -560,10 +564,8 @@ export type AgentSessionInternalPort = Readonly<{
 export type AgentSession = Readonly<{
 	/** Starts a new Submission or admits it to the FIFO Submission Queue. */
 	prompt: (input: SessionSendInput) => Promise<SessionSubmissionAdmission>;
-	/** Moves the oldest queued Submission into a running Agent Turn's Steering Lane. */
-	steerNextQueuedSubmission: () => SessionSteeringAdmission | undefined;
-	/** Delivers a text-only correction to a running Agent Turn. */
-	steer: (text: string) => SessionSteeringAdmission;
+	/** Durably accepts exactly the oldest Queued Submission for later delivery. */
+	steer: () => Promise<SessionSteeringAdmission>;
 	/** Resumes a valid idle context or starts the next waiting user input. */
 	continue: () => SessionContinuationOutcome;
 	/** Cancels the Agent Turn the session is running. */
@@ -572,14 +574,16 @@ export type AgentSession = Readonly<{
 	 * Aborts the compaction command in flight and recalls the waiting messages
 	 * with it.
 	 */
-	cancelCompaction: () => SessionWaitingMessage[];
+	cancelCompaction: () => Promise<SessionWaitingMessage[]>;
 	/** Runs a compaction command. */
 	compact: (command: SessionCompactionCommand) => Promise<CompactSessionResult>;
 	getSnapshot: () => LiveSessionSnapshot;
 	/** Interrupts the active Agent Turn and recalls all waiting work. */
-	interrupt: (preserveToolCallId?: ToolCallId) => SessionWaitingMessage[];
+	interrupt: (
+		preserveToolCallId?: ToolCallId
+	) => Promise<SessionWaitingMessage[]>;
 	/** Interrupts compaction or the active turn and recalls waiting work atomically. */
-	interruptAll: () => SessionInterruptResult;
+	interruptAll: () => Promise<SessionInterruptResult>;
 	/** Settles one pending approval; an already settled request is left alone. */
 	respondToApproval: (
 		id: string,
@@ -588,10 +592,10 @@ export type AgentSession = Readonly<{
 	/** Withdraws waiting user messages back to the composer. */
 	recallWaitingMessages: (
 		ids?: readonly SessionWaitingMessageId[]
-	) => SessionWaitingMessage[];
+	) => Promise<SessionWaitingMessage[]>;
 	/**
-	 * Compatibility entry point. A busy send still routes to steering or the
-	 * Submission Queue using the historical automatic policy.
+	 * Explicit terminal-execution path for one-shot modes and deliberate retries.
+	 * Busy input enters the Submission Queue; it never silently steers.
 	 */
 	send: (input: SessionSendInput) => Promise<SessionSendOutcome>;
 	onSubmissionEvent: (

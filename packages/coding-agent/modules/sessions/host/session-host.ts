@@ -1,4 +1,9 @@
-import type { AgentId, AgentTurnEvent } from "@wincode/agent-core";
+import {
+	type AgentId,
+	type AgentTurnEvent,
+	type SessionRecord,
+	toSubmissionId,
+} from "@wincode/agent-core";
 import type {
 	ChatModelSelection,
 	Effort,
@@ -6,6 +11,7 @@ import type {
 } from "@wincode/ai/models";
 import { isNull, logger, omitUndefined } from "@wincode/runtime-utils";
 import { resolveActiveAgentId } from "@/modules/agents/registry";
+import { toSteeringMessageId } from "@/shared/identifiers";
 import { rebuildActiveMessages } from "../compaction/compaction";
 import type { SessionCompaction } from "../compaction/types";
 import { AgentSessionImpl } from "../engine/agent-session";
@@ -13,6 +19,7 @@ import type {
 	AgentSession,
 	AgentSessionInternalPort,
 	AgentSessionPorts,
+	SessionSteeringMessage,
 } from "../engine/types";
 import {
 	type SessionMessage,
@@ -39,6 +46,7 @@ type OpenedSession = Readonly<{
 	compactions: SessionCompaction[];
 	context: SessionMessage[];
 	model: ChatModelSelection | undefined;
+	steeringMessages: SessionSteeringMessage[];
 	transcript: SessionMessage[];
 	effort: Effort | undefined;
 	reasoningMode: ReasoningMode | undefined;
@@ -53,6 +61,75 @@ const waitForClosingHost = async (
 		await closing.catch(() => undefined);
 	}
 };
+const interruptedSteeringFailure =
+	"Session closed before provider processing could be confirmed; deliberate retry required.";
+
+const restoreSteeringMessages = (
+	records: readonly SessionRecord[],
+	transcript: readonly SessionMessage[],
+	session: {
+		effort?: Effort;
+		model?: ChatModelSelection;
+		reasoningMode?: ReasoningMode;
+	}
+): SessionSteeringMessage[] =>
+	records.flatMap((record) =>
+		record.messages.flatMap((recordMessage) => {
+			const message = transcript.find(({ id }) => id === recordMessage.id);
+			const metadata = message?.metadata;
+			const status = metadata?.submissionStatus;
+			if (
+				message?.role !== "user" ||
+				metadata === undefined ||
+				(status !== "pending" && status !== "failed") ||
+				metadata.submissionId === undefined ||
+				metadata.model === undefined
+			) {
+				return [];
+			}
+			const text = message.parts
+				.filter(
+					(
+						part
+					): part is Extract<
+						SessionMessage["parts"][number],
+						{ type: "text" }
+					> => part.type === "text"
+				)
+				.map(({ text: partText }) => partText)
+				.join("");
+			const files = message.parts.flatMap((part) =>
+				part.type === "file" ? [part] : []
+			);
+			const model = metadata.model;
+			return [
+				{
+					id: toSteeringMessageId(`steering-${message.id}`),
+					input: {
+						agent: metadata.agent ?? record.agentId,
+						composition: { files, text },
+						files,
+						messageId: message.id,
+						model,
+						sessionEffort: session.effort ?? undefined,
+						sessionModel: session.model ?? model,
+						sessionReasoningMode: session.reasoningMode ?? undefined,
+						submissionId: toSubmissionId(metadata.submissionId),
+						turnId: record.turnId,
+						userText: text,
+						...omitUndefined({
+							effort: metadata.effort,
+							reasoningMode: metadata.reasoningMode,
+						}),
+					},
+					message,
+					recordId: record.id,
+					status,
+					...omitUndefined({ reason: metadata.submissionFailure }),
+				},
+			];
+		})
+	);
 
 /**
  * Reads one session's durable state and projects it into the Agent Session's
@@ -69,21 +146,57 @@ const openSession = async (
 	sessionId: SessionHostOptions["sessionId"]
 ): Promise<OpenedSession> => {
 	const store = capabilities.getStore();
-	const [session, compactions, records] = await Promise.all([
+	const [session, compactions, loadedRecords] = await Promise.all([
 		store.getSession(sessionId),
 		store.getCompactions(sessionId),
 		store.listSessionRecords(sessionId),
 	]);
+	const interrupted = loadedRecords.flatMap((record) =>
+		record.messages.flatMap((message) => {
+			const submissionId = message.metadata?.submissionId;
+			if (
+				message.role !== "user" ||
+				message.metadata?.submissionStatus !== "processing" ||
+				submissionId === undefined
+			) {
+				return [];
+			}
+			return [
+				{
+					failure: interruptedSteeringFailure,
+					messageId: message.id,
+					recordId: record.id,
+					status: "failed" as const,
+					submissionId: toSubmissionId(submissionId),
+				},
+			];
+		})
+	);
+	if (interrupted.length > 0) {
+		await Promise.all(
+			interrupted.map((submission) =>
+				store.updateSessionSubmission({ ...submission, sessionId })
+			)
+		);
+	}
+	const records =
+		interrupted.length === 0
+			? loadedRecords
+			: await store.listSessionRecords(sessionId);
 	const transcript = sanitizeInterruptedSessionMessages(
 		projectSessionRecords(records)
 	);
 	const active = transcript.filter(
-		(message) => !isDelegatedSessionMessageId(message.id)
+		(message) =>
+			!isDelegatedSessionMessageId(message.id) &&
+			message.metadata?.submissionStatus !== "pending" &&
+			message.metadata?.submissionStatus !== "failed"
 	);
 	return {
 		compactions,
 		context: rebuildActiveMessages(active, compactions.at(-1) ?? null),
 		model: session.model,
+		steeringMessages: restoreSteeringMessages(records, transcript, session),
 		transcript,
 		effort: session.effort,
 		reasoningMode: session.reasoningMode,
@@ -107,12 +220,12 @@ const withEventChannel = (
 				...request,
 				callbacks: {
 					...request.callbacks,
-					onEvent: (event) => {
-						request.callbacks.onEvent(event);
+					onEvent: async (event) => {
+						await request.callbacks.onEvent(event);
 						publish(event);
 					},
-					onTerminal: (event) => {
-						request.callbacks.onTerminal(event);
+					onTerminal: async (event) => {
+						await request.callbacks.onTerminal(event);
 						publish(event);
 					},
 				},
@@ -188,7 +301,7 @@ export const createSessionHost = async ({
 		if (activeAgentSession !== undefined) {
 			const snapshot = activeAgentSession.getSnapshot();
 			if (snapshot.isCompacting) {
-				activeAgentSession.cancelCompaction();
+				void activeAgentSession.cancelCompaction();
 			}
 			// Cancellation must unwind through the Agent Turn before the OS lock
 			// is released, including any durable checkpoint already in progress.
@@ -266,12 +379,18 @@ export const createSessionHost = async ({
 					opened.reasoningMode ?? initialSelection?.reasoningMode,
 			}),
 			initialContext: opened.context,
+			initialSteeringMessages: opened.steeringMessages,
 			initialTranscript: opened.transcript,
 			ports,
 			sessionId,
 		});
 		agentSessionInternalPort = openedAgentSession.internalPort;
 		agentSession = openedAgentSession;
+		if (
+			openedAgentSession.getSnapshot().steeringMessages[0]?.status === "pending"
+		) {
+			openedAgentSession.continue();
+		}
 		void logger.debug("Session Host opened", {
 			operation: "session-host",
 			phase: "opened",

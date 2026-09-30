@@ -1,81 +1,102 @@
-# Queued submissions are a Session Engine lane policy
+# Agent Session separates queued Submissions from durable steering
 
-A submission that arrives while its session is busy becomes a Queued Submission:
-transient Session Engine state that runs as its own Agent Turn when the command
-lane frees, never a Session Record until it starts, and never replayed after a
-restart. This is the lane policy ADR-0019 anticipated: `send` stays the single
-entry point and accepts instead of rejecting while the session is busy.
+`prompt()` always admits a new Submission: it starts a turn when idle and adds
+an uncommitted, transient Queued Submission when busy. `steer()` takes no
+arguments and promotes exactly the FIFO head into a durable Steering Message,
+committing its user Session Record before acknowledging acceptance. The
+Submission Queue remains process-local; committed Steering Messages remain
+pending until a safe Model Step consumes them or a later execution resumes them.
 
 Status: accepted
 
-Revised 2026-09-19: The steering-lane rejection under "Considered options" is
-superseded by ADR-0022, which accepts a Steering Lane delivering inside a
-running Agent Turn at a Model Step boundary. Failed Agent Turns now recall the
-waiting Steering Lane and Submission Queue instead of draining them; other
-terminal Agent Turn outcomes continue to drain the queue FIFO.
+Revised 2026-09-30 for issue #149: this decision supersedes the former
+text-only, delayed-commit Steering Lane and the rule that failures recalled
+committed steering. The Submission Queue remains transient and Recall-able;
+only committed Steering Messages survive restart reconciliation.
 
 ## Decision
 
-- While a session is busy — a running Agent Turn or a compaction in flight —
-  `send` accepts the submission into the Submission Queue. The queued
-  submission carries the composition and the Model Target selection resolved at
-  acceptance, and runs unchanged if the selection changes while it waits.
-- The Engine drains the queue FIFO, one queued submission per Agent Turn, after
-  a terminal Agent Turn outcome other than failure. If a turn fails, it recalls
-  all waiting Steering Messages and Queued Submissions to the composer instead.
-  Threshold maintenance and overflow recovery apply to each drained turn as
-  they do today.
-- A user interrupt or cancelled compaction also recalls the whole Steering
-  Lane and Submission Queue into the composer. Esc keeps its two-press
-  confirmation for the interrupt.
-- Recall answers to two gestures. `Alt+Up` (fallback `Alt+Z` where a terminal
-  cannot deliver Alt+Arrow) recalls the whole queue; `Shift+Up` recalls only the
-  submission that runs next — the oldest waiting one. Recalled submissions
-  return to the composer in order, with attachments and pasted text intact; the
-  ones left behind keep waiting and drain in order unless the current Agent
-  Turn fails, when they are recalled too. Queued items are recorded into prompt
-  history at acceptance, so a queue dropped by unmount or quit stays recoverable.
-- With a live Agent Turn and an empty composer, Enter promotes the oldest
-  queued Submission into the Steering Lane if the head is eligible for steering.
-  The transition preserves its message and submission identities and removes
-  only that head; the remaining queue stays FIFO. An ineligible head, or a
-  queue without a live execution, remains queued and reports why it cannot move.
-- The Engine retains a queued submission's attachment ids while it is queued
-  and releases them when it leaves the queue, so attachment maintenance can
-  never reclaim a queued item's blobs.
+- `prompt(input)` always admits a new Submission. An idle session starts its
+  Agent Turn; a busy session—including one with a running Agent Turn or
+  compaction in flight—places the Submission at the tail of the FIFO Submission
+  Queue. It never changes the meaning of input into steering. In Interactive
+  Mode, Enter on a non-empty composer calls `prompt()`; Enter on an empty
+  composer calls `steer()` once. A Queued Submission retains its complete text,
+  attachment, Skill, and expanded Custom Command composition while it waits.
+- `steer()` has no input payload. If the queue is empty, it accepts no message.
+  Otherwise it atomically takes exactly the oldest Queued Submission, preserves
+  its Submission and message identities, writes a distinct durable user Session
+  Record, and only then reports acceptance. The record immediately enters the
+  Session Transcript and Stored Session History; it is no longer Recall-able.
+- Each accepted Steering Message remains durable and pending until the Agent
+  Runtime prepares and consumes it. The Agent Session preserves the FIFO order
+  across messages; a turn ending before consumption leaves them ahead of
+  unsteered queued work for a later execution. Several messages accepted before
+  one safe boundary remain separate ordered user messages, even if the next
+  model request includes them together.
+- The current model request and its Tool Call batch finish before pending
+  Steering Messages are consumed. Preparation at that safe boundary supports
+  attachments and explicit Skill intent, uses the active Agent and Model Target
+  without switching the running turn, and uses the same Custom Command
+  expansion path as ordinary Submission preparation. A Custom Command's
+  expanded prompt is retained and is not expanded or executed a second time.
+  Attachment content remains available until the committed message is prepared.
+- Preparation or model-request failure marks the blocked Steering Message with
+  an observable failure and reason, preserves its committed identity, and stops
+  later pending messages from overtaking it. The Agent Session does not blindly
+  retry a possibly received request. A deliberate retry reuses the committed
+  message and Submission identities; it does not append a duplicate.
+- Only uncommitted Queued Submissions can be Recalled. `Alt+Up` (fallback
+  `Alt+Z` where a terminal cannot deliver Alt+Arrow) recalls the whole
+  Submission Queue; `Shift+Up` recalls only its oldest item. A user interrupt
+  or cancelled compaction may recall uncommitted queued work under the existing
+  policy, but never removes a committed Steering Message. A failed turn also
+  cannot Recall accepted input; unsteered queued work follows the existing
+  failure policy.
+- Queued items continue to be recorded in prompt history at acceptance as a
+  recovery aid, but the process-local Submission Queue is not restored or
+  replayed after restart. Restart reconciliation instead discovers committed,
+  unread Steering Messages from durable history and retains their identities.
+- The Agent Session retains attachment references while a Submission is
+  uncommitted and keeps committed attachment content available until
+  preparation completes, so storage maintenance cannot reclaim input still
+  awaiting processing.
 
-This revises the all-at-once recall decision this ADR first recorded: single-item
-recall is a second binding, not a replacement, so the whole-queue gesture, its
-fallback, and the interrupt path are unchanged.
+Normal unsteered queued work continues to drain FIFO under the existing
+terminal-outcome policy, one Submission per Agent Turn. Durable pending
+Steering Messages always precede that work.
 
-## Considered options
+The whole-queue and single-item Recall gestures remain separate bindings, but
+both withdraw only uncommitted Submissions; an interrupt cannot Recall a
+committed Steering Message.
 
-- **A steering lane (mid-turn delivery)** — rejected: delivery inside a running
-  Agent Turn changes Agent Turn semantics and needs its own safety model; this
-  design is follow-up-only.
-- **Pause-on-interrupt with an explicit resume** — rejected: adds a paused
-  state and a resume affordance; recalling the text makes Esc mean one thing —
-  stop, and give the user their text back.
-- **A durable queued state** — rejected: execution status is runtime state
-  (issue-86), the schema deliberately does not persist queued states, and a
-  restart must never replay.
-- **Single-item recall on its own binding** — rejected at first, on the grounds
-  that recalling the whole queue is one action and one key and that granular
-  withdrawal is recall-then-edit. Revised 2026-09-18: withdrawing only what runs
-  next is worth a second binding, because a user who wants to fix one prompt
-  should not have to withdraw the queue and rebuild it by hand. Editing a queued
-  submission in place stays rejected — recall-then-submit is the model, and the
-  resubmitted text joins the tail of the queue.
+- **Preempting a running model call or Tool Call batch** — rejected: it can
+  leave a Tool Call without its matching result. Steering waits for the next
+  safe Model Step boundary.
+- **One transient lane for all accepted input** — rejected: an unsteered
+  Queued Submission is Recall-able and may disappear on restart, while a
+  committed Steering Message is durable, not Recall-able, and must be
+  reconciled before later work.
+- **Persisting the entire Submission Queue** — rejected: unsteered work remains
+  process-local and must never be replayed after restart. Only a Submission
+  explicitly accepted by `steer()` becomes durable.
+- **Editing a Queued Submission in place** — rejected: Recall-then-submit keeps
+  editing separate from admission; the resubmitted input joins the queue tail.
+- **Automatically retrying a failed steered request** — rejected: the request
+  may already have received input or caused effects. Failure blocks later
+  pending messages until an explicit retry reuses the existing identity.
 
 ## Consequences
 
-- The Session Snapshot gains `queuedSubmissions`, and the send lane's busy
-  rejection becomes an acceptance path.
-- Interrupt is no longer drain-transparent: it recalls rather than letting the
-  queue continue.
-- The session view gains a compact queue strip above the composer; the Session
-  Transcript stays durable-only, and a queued submission enters it only when it
-  starts running. The strip marks the submission that runs next and names both
-  Recall gestures.
-- The queue is process-local: switching sessions, unmounting, or quitting drops
-  it into prompt history; nothing survives a restart.
+- The Live Session Snapshot and session view expose both uncommitted queued
+  Submissions and committed pending/failed Steering Messages with stable
+  identities and status.
+- The Session Transcript includes each steered user message as soon as its
+  durable commit succeeds; it does not wait for Model Step delivery. A queued
+  but unsteered Submission remains outside durable history.
+- Recall gestures apply only to uncommitted queued input. Failure and interrupt
+  cannot silently withdraw committed Steering Messages.
+- The Submission Queue remains process-local and is not replayed after restart.
+  Durable accepted-but-unread Steering Messages are reconciled from stored
+  history without reconstructing the interrupted Agent Turn or duplicating
+  their records.

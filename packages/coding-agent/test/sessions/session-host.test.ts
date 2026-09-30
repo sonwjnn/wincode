@@ -28,7 +28,14 @@ import type {
 	AppendSessionCompactionInput,
 	SummaryGenerator,
 } from "@/modules/sessions/compaction/types";
-import type { SessionCapabilities } from "@/modules/sessions/host/types";
+import type {
+	SessionSubmissionAdmission,
+	SessionSubmissionEvent,
+} from "@/modules/sessions/engine/types";
+import type {
+	SessionCapabilities,
+	SessionHost,
+} from "@/modules/sessions/host/types";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import type { SessionWriterLock } from "@/modules/sessions/storage/session-writer-lock";
@@ -496,6 +503,404 @@ describe("Session Host lifetime", () => {
 		expect(snapshotChanges).toBe(changesAtShutdown);
 		expect(events).toHaveLength(eventsAtShutdown);
 	});
+	test("commits each queue-head steer before acknowledging and delivers four user messages FIFO", async () => {
+		const seeded = await seedSession("durable-steer");
+		const capabilities = createCapabilities();
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		const queuedTexts = [
+			"steer correction one",
+			"steer correction two",
+			"steer correction three",
+			"steer correction four",
+		];
+		const activeStepStarted = Promise.withResolvers<void>();
+		const releaseActiveStep = Promise.withResolvers<void>();
+		const deliveredRequest = Promise.withResolvers<string[]>();
+		const completedTurn = Promise.withResolvers<void>();
+		const previousBeforeStep = recorder.beforeStep;
+		let heldActiveStep = false;
+		let activeTurnId: string | undefined;
+		const submissionEvents: SessionSubmissionEvent[] = [];
+		const unsubscribeSubmission = host.agentSession.onSubmissionEvent(
+			(event) => {
+				submissionEvents.push(event);
+			}
+		);
+		const unsubscribe = host.onEvent((event) => {
+			if (
+				event.type === "agent-turn-completed" &&
+				event.turnId === activeTurnId
+			) {
+				completedTurn.resolve();
+			}
+		});
+		recorder.beforeStep = async ({ messages }) => {
+			const userTexts = messages.flatMap(({ content, role }) =>
+				role === "user"
+					? content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+					: []
+			);
+			if (!heldActiveStep && userTexts.includes("durable active turn")) {
+				heldActiveStep = true;
+				activeStepStarted.resolve();
+				await releaseActiveStep.promise;
+				return;
+			}
+			if (queuedTexts.every((text) => userTexts.includes(text))) {
+				deliveredRequest.resolve(
+					userTexts.filter((text) => queuedTexts.includes(text))
+				);
+			}
+		};
+		const inputFor = (userText: string): SessionSendInput => ({
+			...sendInput(capabilities),
+			composition: { files: [], text: userText },
+			userText,
+		});
+
+		try {
+			const active = await host.agentSession.prompt(
+				inputFor("durable active turn")
+			);
+			if (active.rejected || active.turnId === undefined) {
+				throw new Error("The active Submission did not start.");
+			}
+			activeTurnId = active.turnId;
+			await activeStepStarted.promise;
+
+			const admissions: Array<{
+				admission: Extract<
+					SessionSubmissionAdmission,
+					{ readonly rejected: false }
+				>;
+				userText: string;
+			}> = [];
+			for (const userText of queuedTexts) {
+				const admission = await host.agentSession.prompt(inputFor(userText));
+				if (admission.rejected) {
+					throw new Error(admission.reason);
+				}
+				admissions.push({ admission, userText });
+			}
+			expect(
+				host
+					.getSnapshot()
+					.transcript.some(({ id }) =>
+						admissions.some(({ admission }) => admission.messageId === id)
+					)
+			).toBe(false);
+
+			for (const { admission, userText } of admissions) {
+				const outcome = await host.agentSession.steer();
+				if (outcome.kind !== "steered") {
+					throw new Error("The queued Submission was not steered.");
+				}
+				expect(outcome).toMatchObject({
+					kind: "steered",
+					messageId: admission.messageId,
+					submissionId: admission.submissionId,
+					turnId: active.turnId,
+				});
+				const message = host
+					.getSnapshot()
+					.transcript.find(({ id }) => id === admission.messageId);
+				if (message === undefined) {
+					throw new Error(
+						"The committed Submission was not in the transcript."
+					);
+				}
+				expect(textOf(message.parts)).toBe(userText);
+				const matchingRecords = (
+					await store.listSessionRecords(seeded.sessionId)
+				).filter((record) =>
+					record.messages.some(({ id }) => id === admission.messageId)
+				);
+				expect(matchingRecords).toHaveLength(1);
+				expect(matchingRecords[0]?.outcome.kind).toBe("user");
+				expect(matchingRecords[0]?.messages[0]?.id).toBe(admission.messageId);
+				expect(matchingRecords[0]?.messages[0]?.metadata?.submissionId).toBe(
+					admission.submissionId
+				);
+				expect(
+					matchingRecords[0]?.messages[0]?.metadata?.submissionStatus
+				).toBe("pending");
+				expect(
+					await host.agentSession.recallWaitingMessages([
+						admission.submissionId,
+					])
+				).toEqual([]);
+			}
+
+			const transcriptBeforeEmptySteer = host.getSnapshot().transcript;
+			const recordsBeforeEmptySteer = await store.listSessionRecords(
+				seeded.sessionId
+			);
+			expect(await host.agentSession.steer()).toEqual({ kind: "empty" });
+			expect(host.getSnapshot().transcript).toEqual(transcriptBeforeEmptySteer);
+			expect(await store.listSessionRecords(seeded.sessionId)).toEqual(
+				recordsBeforeEmptySteer
+			);
+
+			releaseActiveStep.resolve();
+			expect(await deliveredRequest.promise).toEqual(queuedTexts);
+			await completedTurn.promise;
+			const completedRecords = await store.listSessionRecords(seeded.sessionId);
+			for (const { admission } of admissions) {
+				const record = completedRecords.find((candidate) =>
+					candidate.messages.some(({ id }) => id === admission.messageId)
+				);
+				expect(record?.messages[0]?.metadata?.submissionStatus).toBe(
+					"processed"
+				);
+				expect(
+					submissionEvents
+						.filter((event) => event.messageId === admission.messageId)
+						.map(({ kind }) => kind)
+				).toEqual(["steered", "delivered", "processed"]);
+			}
+			expect(host.getSnapshot().steeringMessages).toEqual([]);
+		} finally {
+			releaseActiveStep.resolve();
+			recorder.beforeStep = previousBeforeStep;
+			unsubscribe();
+			unsubscribeSubmission();
+			await host.shutdown();
+		}
+	});
+	test("reconciles an unconfirmed processing submission as a retry blocker after restart", async () => {
+		const seeded = await seedSession("steer-restart");
+		const capabilities = createCapabilities();
+		let host: SessionHost = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		const activeStepStarted = Promise.withResolvers<void>();
+		const releaseActiveStep = Promise.withResolvers<void>();
+		const previousBeforeStep = recorder.beforeStep;
+		let heldActiveStep = false;
+		recorder.beforeStep = async ({ messages }) => {
+			const hasActivePrompt = messages.some(
+				({ content, role }) =>
+					role === "user" &&
+					content.some(
+						(part) =>
+							part.type === "text" && part.text === "restart active turn"
+					)
+			);
+			if (!heldActiveStep && hasActivePrompt) {
+				heldActiveStep = true;
+				activeStepStarted.resolve();
+				await releaseActiveStep.promise;
+			}
+		};
+		try {
+			const active = await host.agentSession.prompt({
+				...sendInput(capabilities),
+				composition: { files: [], text: "restart active turn" },
+				userText: "restart active turn",
+			});
+			if (active.rejected) {
+				throw new Error(active.reason);
+			}
+			await activeStepStarted.promise;
+			const queued = await host.agentSession.prompt({
+				...sendInput(capabilities),
+				composition: { files: [], text: "accepted before restart" },
+				userText: "accepted before restart",
+			});
+			if (queued.rejected) {
+				throw new Error(queued.reason);
+			}
+			const steered = await host.agentSession.steer();
+			if (steered.kind !== "steered") {
+				throw new Error("The queued Submission was not committed.");
+			}
+			const record = (await store.listSessionRecords(seeded.sessionId)).find(
+				(candidate) =>
+					candidate.messages.some(({ id }) => id === steered.messageId)
+			);
+			if (record === undefined) {
+				throw new Error("The committed Submission Record is unavailable.");
+			}
+			await store.updateSessionSubmission({
+				messageId: steered.messageId,
+				recordId: record.id,
+				sessionId: seeded.sessionId,
+				status: "processing",
+				submissionId: steered.submissionId,
+			});
+			host.agentSession.cancel();
+			releaseActiveStep.resolve();
+			await host.shutdown();
+			const callsBeforeReopen = recorder.requests.length;
+			host = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+
+			const snapshot = host.getSnapshot();
+			expect(snapshot.steeringMessages).toMatchObject([
+				{
+					message: {
+						id: steered.messageId,
+						metadata: {
+							submissionFailure:
+								"Session closed before provider processing could be confirmed; deliberate retry required.",
+							submissionStatus: "failed",
+						},
+					},
+					status: "failed",
+				},
+			]);
+			expect(snapshot.context.some(({ id }) => id === steered.messageId)).toBe(
+				false
+			);
+			expect(host.agentSession.continue()).toMatchObject({
+				kind: "rejected",
+			});
+			expect(recorder.requests).toHaveLength(callsBeforeReopen);
+			const recoveredRecord = (
+				await store.listSessionRecords(seeded.sessionId)
+			).find((candidate) =>
+				candidate.messages.some(({ id }) => id === steered.messageId)
+			);
+			expect(recoveredRecord?.messages[0]?.metadata?.submissionStatus).toBe(
+				"failed"
+			);
+		} finally {
+			releaseActiveStep.resolve();
+			recorder.beforeStep = previousBeforeStep;
+			await host.shutdown();
+		}
+	});
+
+	test("resumes an unread durable Submission once after restart", async () => {
+		const seeded = await seedSession("steer-unread-restart");
+		const capabilities = createCapabilities();
+		let host: SessionHost = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		const activeStepStarted = Promise.withResolvers<void>();
+		const releaseActiveStep = Promise.withResolvers<void>();
+		const resumedStepStarted = Promise.withResolvers<void>();
+		const releaseResumedStep = Promise.withResolvers<void>();
+		const processed = Promise.withResolvers<void>();
+		const previousBeforeStep = recorder.beforeStep;
+		let heldActiveStep = false;
+		const resumedRequests: string[][] = [];
+		const submissionEvents: SessionSubmissionEvent[] = [];
+		let unsubscribeResumed: () => void = () => undefined;
+		const unsubscribeInitial = host.agentSession.onSubmissionEvent((event) => {
+			submissionEvents.push(event);
+		});
+		const inputFor = (userText: string): SessionSendInput => ({
+			...sendInput(capabilities),
+			composition: { files: [], text: userText },
+			userText,
+		});
+		recorder.beforeStep = async ({ messages }) => {
+			const userTexts = messages.flatMap(({ content, role }) =>
+				role === "user"
+					? content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+					: []
+			);
+			if (!heldActiveStep && userTexts.includes("restart pending active")) {
+				heldActiveStep = true;
+				activeStepStarted.resolve();
+				await releaseActiveStep.promise;
+				return;
+			}
+			if (userTexts.includes("accepted before restart")) {
+				resumedRequests.push(
+					userTexts.filter((text) => text === "accepted before restart")
+				);
+				resumedStepStarted.resolve();
+				await releaseResumedStep.promise;
+			}
+		};
+
+		try {
+			const active = await host.agentSession.prompt(
+				inputFor("restart pending active")
+			);
+			if (active.rejected) {
+				throw new Error(active.reason);
+			}
+			await activeStepStarted.promise;
+			const admission = await host.agentSession.prompt(
+				inputFor("accepted before restart")
+			);
+			if (admission.rejected) {
+				throw new Error(admission.reason);
+			}
+			const steered = await host.agentSession.steer();
+			if (steered.kind !== "steered") {
+				throw new Error("The queued Submission was not committed.");
+			}
+
+			host.agentSession.cancel();
+			releaseActiveStep.resolve();
+			await host.shutdown();
+			const interruptedRecord = (
+				await store.listSessionRecords(seeded.sessionId)
+			).find((record) =>
+				record.messages.some(({ id }) => id === steered.messageId)
+			);
+			expect(interruptedRecord?.messages[0]?.metadata?.submissionStatus).toBe(
+				"pending"
+			);
+
+			host = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+			unsubscribeResumed = host.agentSession.onSubmissionEvent((event) => {
+				submissionEvents.push(event);
+				if (
+					event.kind === "processed" &&
+					event.submissionId === steered.submissionId
+				) {
+					processed.resolve();
+				}
+			});
+			await resumedStepStarted.promise;
+			releaseResumedStep.resolve();
+			await processed.promise;
+
+			expect(resumedRequests).toEqual([["accepted before restart"]]);
+			const matchingRecords = (
+				await store.listSessionRecords(seeded.sessionId)
+			).filter((record) =>
+				record.messages.some(({ id }) => id === steered.messageId)
+			);
+			expect(matchingRecords).toHaveLength(1);
+			expect(matchingRecords[0]?.messages[0]?.metadata?.submissionStatus).toBe(
+				"processed"
+			);
+			expect(
+				host
+					.getSnapshot()
+					.transcript.filter(({ id }) => id === steered.messageId)
+			).toHaveLength(1);
+			expect(
+				submissionEvents
+					.filter(({ submissionId }) => submissionId === steered.submissionId)
+					.map(({ kind }) => kind)
+			).toEqual(["steered", "started", "processed"]);
+		} finally {
+			releaseActiveStep.resolve();
+			releaseResumedStep.resolve();
+			recorder.beforeStep = previousBeforeStep;
+			unsubscribeInitial();
+			unsubscribeResumed();
+			await host.shutdown();
+		}
+	});
+
 	test("debug diagnostics mark host and turn lifecycle without session content", async () => {
 		const seeded = await seedSession("debug-lifecycle");
 		const capabilities = createCapabilities();

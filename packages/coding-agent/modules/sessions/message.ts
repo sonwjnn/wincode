@@ -3,7 +3,9 @@ import type {
 	AgentTurnId,
 	AttachmentId,
 	SessionMessageId,
+	SessionSubmissionStatus,
 	SkillActivationSource,
+	SubmissionId,
 	ToolCallId,
 	ToolFailureDetails,
 } from "@wincode/agent-core";
@@ -11,6 +13,7 @@ import {
 	agentIdSchema,
 	isToolCallId,
 	toSessionMessageId,
+	toSubmissionId,
 } from "@wincode/agent-core";
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import {
@@ -165,6 +168,9 @@ export type SessionMessageMetadata = {
 	readonly responseTimeMs?: number;
 	readonly skill?: SessionMessageSkill;
 	readonly sourceUserMessageId?: SessionMessageId;
+	readonly submissionFailure?: string;
+	readonly submissionId?: SubmissionId;
+	readonly submissionStatus?: SessionSubmissionStatus;
 	readonly terminalOutcome?: SessionMessageTerminalOutcome;
 	readonly usage?: SessionMessageUsage;
 	readonly effort?: Effort;
@@ -177,6 +183,41 @@ export type SessionMessage = ReadonlyDeep<{
 	parts: SessionPart[];
 	role: SessionMessageRole;
 }>;
+
+type SubmissionStatusMessage = {
+	readonly metadata?: {
+		readonly submissionFailure?: string;
+		readonly submissionId?: SubmissionId;
+		readonly submissionStatus?: SessionSubmissionStatus;
+	};
+};
+
+export const withSubmissionStatus = <TMessage extends SubmissionStatusMessage>(
+	message: TMessage,
+	{
+		failure,
+		status,
+		submissionId,
+	}: {
+		failure: string | undefined;
+		status: SessionSubmissionStatus;
+		submissionId?: SubmissionId;
+	}
+): TMessage => {
+	const { submissionFailure: _previousFailure, ...metadata } =
+		message.metadata ?? {};
+	return {
+		...message,
+		metadata: {
+			...metadata,
+			...omitUndefined({ submissionId }),
+			submissionStatus: status,
+			...omitUndefined({
+				submissionFailure: status === "failed" ? failure : undefined,
+			}),
+		},
+	} as TMessage;
+};
 
 export const sessionMessageSkillSchema = z.union([
 	skillActivationSchema,
@@ -216,6 +257,15 @@ export const sessionMessageMetadataSchema = z
 			.min(1)
 			.transform((value): SessionMessageId => value as SessionMessageId)
 			.optional(),
+		submissionFailure: z.string().min(1).optional(),
+		submissionId: z
+			.string()
+			.min(1)
+			.transform((value): SubmissionId => toSubmissionId(value))
+			.optional(),
+		submissionStatus: z
+			.enum(["pending", "processing", "processed", "failed"])
+			.optional(),
 		terminalOutcome: z.enum(["cancelled", "failed", "interrupted"]).optional(),
 		usage: sessionMessageUsageSchema.optional(),
 		effort: effortSchema.optional(),
@@ -231,6 +281,24 @@ export const sessionMessageMetadataSchema = z
 				message: "Select either Effort or Reasoning Mode, not both",
 			});
 			return;
+		}
+		if (
+			metadata.submissionStatus !== undefined &&
+			metadata.submissionId === undefined
+		) {
+			context.addIssue({
+				code: "custom",
+				message: "Submission processing state requires a Submission Identifier",
+			});
+		}
+		if (
+			metadata.submissionFailure !== undefined &&
+			metadata.submissionStatus !== "failed"
+		) {
+			context.addIssue({
+				code: "custom",
+				message: "Submission failure requires a failed processing state",
+			});
 		}
 		if (isUndefined(metadata.model)) {
 			if (

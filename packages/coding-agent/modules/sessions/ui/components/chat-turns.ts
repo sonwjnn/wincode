@@ -143,6 +143,15 @@ export const resolveRetryMessageId = (
 	const primaryMessages = messages.filter(
 		({ id }) => !isDelegatedSessionMessageId(id)
 	);
+	const failedSteering = primaryMessages.find(
+		(message) =>
+			message.role === "user" &&
+			message.metadata?.submissionStatus === "failed" &&
+			message.metadata.submissionId !== undefined
+	);
+	if (failedSteering !== undefined) {
+		return failedSteering.id;
+	}
 	const userIndex = primaryMessages.findLastIndex(
 		(message, index) =>
 			message.role === "user" &&

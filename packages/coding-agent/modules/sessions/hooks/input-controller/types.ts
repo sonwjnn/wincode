@@ -1,6 +1,6 @@
 import type { CommandItem } from "@/modules/commands/command-item";
 import type { CommandSpec } from "@/modules/commands/commands";
-import type { CustomCommandSpec } from "@/modules/custom-commands/types";
+import type { CustomCommandSpec } from "@/modules/commands/custom/types";
 import type { FileMentionOption } from "@/modules/file-mentions";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";
@@ -82,10 +82,4 @@ export type ChatInputControllerOptions = {
 	) => boolean | Promise<boolean> | void | Promise<void>;
 	onTab: (shift: boolean) => void;
 	sessionPromptHistory: PromptHistoryEntry[];
-	/**
-	 * Whether the composer is submitting into the running Agent Turn's Steering
-	 * Lane: it then accepts plain text only, so no attachment, Skill or Custom
-	 * Command can be armed inside a turn and no Agent change can happen there.
-	 */
-	steering?: boolean;
 };

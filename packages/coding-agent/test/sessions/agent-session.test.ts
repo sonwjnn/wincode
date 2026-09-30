@@ -1,8 +1,12 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import type {
 	AgentTurnEvent,
 	AgentTurnTerminalEvent,
+	OperationalFailure,
 	SessionMessageId,
 	SessionRecord,
 } from "@wincode/agent-core";
@@ -13,6 +17,11 @@ import type {
 } from "@wincode/ai/models";
 import { logger } from "@wincode/runtime-utils";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
+import {
+	attachmentReferenceToFilePart,
+	createMemoryAttachmentMetadataRepository,
+	createSessionAttachmentStore,
+} from "@/modules/sessions/attachments";
 import { createSessionCompaction } from "@/modules/sessions/compaction/compaction";
 import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
 import { compactionSummaryMessageId } from "@/modules/sessions/compaction/summary-message";
@@ -23,9 +32,12 @@ import type {
 import { AgentSessionImpl } from "@/modules/sessions/engine/agent-session";
 import type {
 	AgentSessionPorts,
+	SessionInterruptResult,
 	SessionSkillCatalog,
+	SessionSteeringAdmission,
 	SessionSubmissionEvent,
 	SessionTurnRequest,
+	SessionWaitingMessage,
 } from "@/modules/sessions/engine/types";
 import type {
 	SessionFilePart,
@@ -58,6 +70,9 @@ const model: ChatModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 };
+const PNG_BYTES = new Uint8Array([
+	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
+]);
 
 const message = (id: string, text = id): SessionMessage =>
 	fromPartial<SessionMessage>({
@@ -103,7 +118,6 @@ const createPorts = ({
 		release: () => undefined,
 		retain: () => undefined,
 	},
-	commitRecord: async () => undefined,
 	resolveSubmission: (input) => input,
 	compaction,
 	resolveCompactionSettings: async () =>
@@ -130,6 +144,9 @@ const createPorts = ({
 		resolveSkill: async () => ({ ok: true }),
 	},
 	...overrides,
+	commitRecord: overrides.commitRecord ?? (async () => undefined),
+	updateSubmissionStatus:
+		overrides.updateSubmissionStatus ?? (async () => undefined),
 });
 
 const createTestAgentSession = (
@@ -254,7 +271,7 @@ test("publishes snapshots only when public commands change session facts", async
 		notifications += 1;
 	});
 
-	expect(engine.interruptAll()).toMatchObject({
+	expect(await engine.interruptAll()).toMatchObject({
 		approvalsSettled: 0,
 		kind: "none",
 		recalled: [],
@@ -421,7 +438,7 @@ test("cancels the compaction command in flight without publishing its result", a
 		model,
 		trigger: "threshold",
 	});
-	engine.cancelCompaction();
+	await engine.cancelCompaction();
 
 	await expect(command).rejects.toMatchObject({ code: "cancelled" });
 	const snapshot = engine.getSnapshot();
@@ -440,7 +457,7 @@ test("interruptAll settles idle approvals and reports no stopped work", async ()
 		})
 	);
 
-	expect(engine.interruptAll()).toMatchObject({
+	expect(await engine.interruptAll()).toMatchObject({
 		approvalsSettled: 1,
 		kind: "none",
 		recalled: [],
@@ -466,7 +483,7 @@ test("interruptAll aborts compaction and recalls queued submissions", async () =
 	const compaction = engine.compact({ model, trigger: "manual" });
 	await engine.send(sendInput({ userText: "waiting" }));
 
-	const result = engine.interruptAll();
+	const result = await engine.interruptAll();
 
 	expect(result.kind).toBe("compaction");
 	expect(result.approvalsSettled).toBe(0);
@@ -652,7 +669,7 @@ test("gives a Tool-Call-less approval its own id and settles it with every sibli
 	expect(firstEntry?.id).toBeString();
 	expect(firstEntry?.id).not.toBe(secondEntry?.id);
 
-	engine.interruptAll();
+	await engine.interruptAll();
 	await expect(first).resolves.toEqual({ decision: "reject" });
 	await expect(second).resolves.toEqual({ decision: "reject" });
 });
@@ -662,7 +679,7 @@ test("interruptAll settles every pending approval", async () => {
 	const first = engine.internalPort.requestApproval(approvalRequest("call-1"));
 	const second = engine.internalPort.requestApproval(approvalRequest("call-2"));
 
-	engine.interruptAll();
+	await engine.interruptAll();
 
 	await expect(first).resolves.toEqual({ decision: "reject" });
 	await expect(second).resolves.toEqual({ decision: "reject" });
@@ -699,7 +716,7 @@ test("keeps the first settlement when an abort and a close race", async () => {
 	);
 
 	engine.respondToApproval("call-1", { decision: "abort" });
-	engine.interruptAll();
+	await engine.interruptAll();
 
 	await expect(aborted).resolves.toEqual({ decision: "abort" });
 	await expect(sibling).resolves.toEqual({ decision: "reject" });
@@ -708,6 +725,13 @@ test("keeps the first settlement when an abort and a close race", async () => {
 /** The provider's public context-window refusal. */
 const overflowFailure = (): Error =>
 	new Error("This model's maximum context length is 128000 tokens.");
+const overflowOperationalFailure = (): OperationalFailure => ({
+	code: "context-overflow",
+	message: "The model context is too large.",
+	retry: "never",
+	source: "model",
+	version: 1,
+});
 const overflowRecoverySettings = (): ResolvedCompactionSettings =>
 	fromPartial<ResolvedCompactionSettings>({
 		autoAvailable: false,
@@ -839,6 +863,7 @@ const createQueuedRuntime = ({
 	 */
 	readonly boundaries: Array<{
 		readonly delivered: string[];
+		readonly hydratedAttachmentCount: number;
 		readonly sourceUserMessageId: SessionMessageId | null;
 	}>;
 	/** The prompt each started turn answers, in start order. */
@@ -857,6 +882,7 @@ const createQueuedRuntime = ({
 } => {
 	const boundaries: Array<{
 		delivered: string[];
+		hydratedAttachmentCount: number;
 		sourceUserMessageId: SessionMessageId | null;
 	}> = [];
 	const gates: Array<() => void> = [];
@@ -908,8 +934,14 @@ const createQueuedRuntime = ({
 				gates.push(gate.resolve);
 				await gate.promise;
 				if (boundary) {
+					const deliveredMessages = await takeSteeringMessages();
 					boundaries.push({
-						delivered: userPrompts(takeSteeringMessages()),
+						delivered: userPrompts(deliveredMessages),
+						hydratedAttachmentCount: deliveredMessages
+							.flatMap(({ parts }) => parts)
+							.filter(
+								(part) => part.type === "file" && part.url.startsWith("data:")
+							).length,
 						sourceUserMessageId: execution.sourceUserMessageId,
 					});
 					callbacks.onEvent(
@@ -952,279 +984,6 @@ const createQueuedRuntime = ({
 		targets,
 	};
 };
-
-test("keeps admission identities across a Steering delivery lifecycle", async () => {
-	const runtime = createQueuedRuntime({ boundary: true });
-	const engine = createTestAgentSession([], undefined, {
-		turnRunner: runtime.runtime,
-	});
-	const events: SessionSubmissionEvent[] = [];
-	const delivered = Promise.withResolvers<void>();
-	engine.onSubmissionEvent((event) => {
-		events.push(event);
-		if (event.kind === "delivered") {
-			delivered.resolve();
-		}
-	});
-
-	const started = await engine.prompt(sendInput({ userText: "one" }));
-	if (started.rejected) {
-		throw new Error(started.reason);
-	}
-	await runtime.started(1);
-
-	const steering = engine.steer("correction");
-	if (steering.rejected) {
-		throw new Error(steering.reason);
-	}
-	expect(steering.disposition).toBe("steering");
-	expect(steering.submissionId).not.toBe(started.submissionId);
-	expect(steering.messageId).not.toBe(started.messageId);
-	expect(events).toEqual([
-		{
-			kind: "started",
-			messageId: started.messageId,
-			submissionId: started.submissionId,
-			turnId: started.turnId,
-		},
-	]);
-
-	runtime.release();
-	await delivered.promise;
-	await engine.internalPort.shutdown();
-
-	expect(events).toEqual([
-		{
-			kind: "started",
-			messageId: started.messageId,
-			submissionId: started.submissionId,
-			turnId: started.turnId,
-		},
-		{
-			kind: "delivered",
-			messageId: steering.messageId,
-			submissionId: steering.submissionId,
-			turnId: steering.turnId,
-		},
-	]);
-});
-test("promotes only the oldest of four queued submissions into steering", async () => {
-	const runtime = createQueuedRuntime({ boundary: true });
-	const engine = createTestAgentSession([], undefined, {
-		turnRunner: runtime.runtime,
-	});
-	let activeStarted = false;
-
-	try {
-		const active = await engine.prompt(sendInput({ userText: "active turn" }));
-		if (active.rejected) {
-			throw new Error(active.reason);
-		}
-		await runtime.started(1);
-		activeStarted = true;
-
-		const queued = await engine.prompt(sendInput({ userText: "steer me" }));
-		if (queued.rejected) {
-			throw new Error(queued.reason);
-		}
-		for (const userText of ["run after 1", "run after 2", "run after 3"]) {
-			const later = await engine.prompt(sendInput({ userText }));
-			if (later.rejected) {
-				throw new Error(later.reason);
-			}
-		}
-
-		const promoted = engine.steerNextQueuedSubmission();
-
-		expect(promoted).toMatchObject({
-			disposition: "steering",
-			messageId: queued.messageId,
-			rejected: false,
-			submissionId: queued.submissionId,
-			turnId: active.turnId,
-		});
-		expect(engine.getSnapshot().steeringMessages).toMatchObject([
-			{
-				input: {
-					messageId: queued.messageId,
-					submissionId: queued.submissionId,
-					text: "steer me",
-					turnId: active.turnId,
-				},
-			},
-		]);
-		expect(
-			engine.getSnapshot().queuedSubmissions.map(({ input }) => input.userText)
-		).toEqual(["run after 1", "run after 2", "run after 3"]);
-
-		runtime.release();
-		await runtime.started(2);
-		expect(runtime.boundaries[0]?.delivered).toEqual(["steer me"]);
-		expect(runtime.prompts).toEqual(["active turn", "run after 1"]);
-		for (let turnCount = 3; turnCount <= 4; turnCount += 1) {
-			runtime.release();
-			await runtime.started(turnCount);
-		}
-		expect(runtime.prompts).toEqual([
-			"active turn",
-			"run after 1",
-			"run after 2",
-			"run after 3",
-		]);
-	} finally {
-		if (activeStarted) {
-			const totalTurns =
-				runtime.prompts.length + engine.getSnapshot().queuedSubmissions.length;
-			while (runtime.prompts.length < totalTurns) {
-				const nextTurnCount = runtime.prompts.length + 1;
-				runtime.release();
-				await runtime.started(nextTurnCount);
-			}
-			runtime.release();
-		}
-		await engine.internalPort.shutdown();
-	}
-});
-
-test("keeps unsupported queue heads and later submissions waiting when steering rejects them", async () => {
-	const file: SessionFilePart = fromPartial({
-		attachmentId: attachmentId("queued-attachment"),
-		filename: "queued.png",
-		mediaType: "image/png",
-		type: "file",
-		url: "attachment://queued-attachment",
-	});
-	const cases = [
-		{
-			expectedText: "with attachment",
-			input: sendInput({
-				composition: compositionOf("with attachment", [file]),
-				files: [file],
-				userText: "with attachment",
-			}),
-			reason:
-				"A Steering Message carries text only: attachments are not accepted.",
-		},
-		{
-			expectedText: "run the skill",
-			input: sendInput({
-				skill: fromPartial<NonNullable<SessionSendInput["skill"]>>({}),
-				userText: "run the skill",
-			}),
-			reason: "A Steering Message cannot invoke a Skill: it carries text only.",
-		},
-	];
-
-	for (const { input, reason, expectedText } of cases) {
-		const runtime = createQueuedRuntime({ boundary: true });
-		const engine = createTestAgentSession([], undefined, {
-			turnRunner: runtime.runtime,
-		});
-		let queuedCount = 0;
-
-		try {
-			const active = await engine.prompt(
-				sendInput({ userText: "active turn" })
-			);
-			if (active.rejected) {
-				throw new Error(active.reason);
-			}
-			await runtime.started(1);
-
-			const queued = await engine.prompt(input);
-			if (queued.rejected) {
-				throw new Error(queued.reason);
-			}
-			queuedCount += 1;
-			const later = await engine.prompt(sendInput({ userText: "run after" }));
-			if (later.rejected) {
-				throw new Error(later.reason);
-			}
-			queuedCount += 1;
-
-			expect(engine.steerNextQueuedSubmission()).toEqual({
-				rejected: true,
-				reason,
-			});
-			expect(
-				engine
-					.getSnapshot()
-					.queuedSubmissions.map(
-						({ input: queuedInput }) => queuedInput.composition.text
-					)
-			).toEqual([expectedText, "run after"]);
-			expect(engine.getSnapshot().steeringMessages).toEqual([]);
-		} finally {
-			for (let count = 1; count <= queuedCount + 1; count += 1) {
-				await runtime.started(count);
-				runtime.release();
-			}
-			await engine.internalPort.shutdown();
-		}
-	}
-});
-
-test("leaves queued work waiting until a busy session has a live execution", async () => {
-	const externalizeStarted = Promise.withResolvers<void>();
-	const allowExternalize = Promise.withResolvers<void>();
-	const runtime = createQueuedRuntime({ boundary: true });
-	const engine = createTestAgentSession([], undefined, {
-		attachments: {
-			externalize: async (messages) => {
-				externalizeStarted.resolve();
-				await allowExternalize.promise;
-				return [...messages];
-			},
-			hydrate: async ({ messages }) => [...messages],
-			release: () => undefined,
-			retain: () => undefined,
-		},
-		turnRunner: runtime.runtime,
-	});
-	const file: SessionFilePart = {
-		filename: "preparing.txt",
-		mediaType: "text/plain",
-		type: "file",
-		url: "data:text/plain;base64,QQ==",
-	};
-	let queued = false;
-
-	try {
-		const active = await engine.prompt(
-			sendInput({ files: [file], userText: "preparing" })
-		);
-		if (active.rejected) {
-			throw new Error(active.reason);
-		}
-		await externalizeStarted.promise;
-
-		const waiting = await engine.prompt(sendInput({ userText: "wait here" }));
-		if (waiting.rejected) {
-			throw new Error(waiting.reason);
-		}
-		queued = true;
-
-		expect(engine.getSnapshot().executions).toEqual([]);
-		expect(engine.steerNextQueuedSubmission()).toEqual({
-			rejected: true,
-			reason: "An active Agent Turn is required to accept a Steering Message.",
-		});
-		expect(
-			engine
-				.getSnapshot()
-				.queuedSubmissions.map(({ input }) => input.composition.text)
-		).toEqual(["wait here"]);
-	} finally {
-		allowExternalize.resolve();
-		await runtime.started(1);
-		runtime.release();
-		if (queued) {
-			await runtime.started(2);
-			runtime.release();
-		}
-		await engine.internalPort.shutdown();
-	}
-});
 
 test("prompt queues a second submission instead of steering a live turn", async () => {
 	const runtime = createQueuedRuntime({ boundary: true });
@@ -1445,7 +1204,7 @@ test("interruptAll recalls queued attachments before externalization completes",
 		})
 	);
 	await externalizeStarted.promise;
-	const interrupted = engine.interruptAll();
+	const interruptedPromise = engine.interruptAll();
 	const externalizationAborted = externalizeSignal?.aborted ?? false;
 	const queueAfterInterrupt = engine.getSnapshot().queuedSubmissions;
 
@@ -1454,6 +1213,7 @@ test("interruptAll recalls queued attachments before externalization completes",
 	await expect(compaction).rejects.toMatchObject({ code: "cancelled" });
 	await engine.internalPort.shutdown();
 
+	const interrupted = await interruptedPromise;
 	expect(admission).toMatchObject({ disposition: "queued", rejected: false });
 	expect(
 		interrupted.recalled.map(({ input }) => input.composition.text)
@@ -1740,7 +1500,7 @@ test("recalls a queued admission before it creates a Session Record", async () =
 	if (queued.rejected) {
 		throw new Error(queued.reason);
 	}
-	const recalled = engine.recallWaitingMessages([queued.submissionId]);
+	const recalled = await engine.recallWaitingMessages([queued.submissionId]);
 
 	expect(recalled).toHaveLength(1);
 	const recalledQueued = recalled[0];
@@ -1930,7 +1690,7 @@ test("recalls queued submissions after a failed Agent Turn", async () => {
 			recalledCompositions,
 			recalledCount: recalledSubmissionIds.length,
 			recalledReasons,
-			steering: snapshot.steeringMessages.map(({ input }) => input.text),
+			steering: snapshot.steeringMessages.map(({ input }) => input.userText),
 		}).toEqual({
 			prompts: ["active turn"],
 			transcript: ["active turn"],
@@ -2044,7 +1804,7 @@ test("drains the Submission Queue after a cancelled turn", async () => {
 	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
 });
 
-test("interrupts a turn by recalling the Steering Lane instead of running it", async () => {
+test("interrupting an active turn recalls only uncommitted queued Submissions", async () => {
 	const runtime = createQueuedRuntime({ boundary: true });
 	const engine = createTestAgentSession([], undefined, {
 		turnRunner: runtime.runtime,
@@ -2063,13 +1823,13 @@ test("interrupts a turn by recalling the Steering Lane instead of running it", a
 		sendInput({ composition: compositionOf("three"), userText: "three" })
 	);
 
-	const recalled = engine.interrupt();
+	const recalled = await engine.interrupt();
 
-	// Everything waiting comes back, in the order it would have been delivered.
 	expect(recalled.map(({ input }) => input.composition.text)).toEqual([
 		marked.text,
 		"three",
 	]);
+	// Only queued, uncommitted submissions return, in delivery order.
 	// Recall restores the composition the message was composed with, markers and
 	// pasted text included.
 	expect(recalled[0]?.input.composition).toEqual(marked);
@@ -2078,72 +1838,18 @@ test("interrupts a turn by recalling the Steering Lane instead of running it", a
 
 	runtime.release();
 	await first;
-	// The interrupted turn delivered nothing, so no turn ran behind it and a
-	// fresh submission runs at once instead of waiting behind recalled work.
+	// The interrupted turn delivered nothing, so its queued messages stay
+	// recalled and a fresh submission runs without waiting behind them.
 	expect(runtime.boundaries.map(({ delivered }) => delivered)).toEqual([[]]);
 	void engine.send(sendInput({ userText: "fresh" }));
 	await runtime.started(2);
 	expect(runtime.prompts).toEqual(["one", "fresh"]);
 
 	runtime.release();
-	expect(engine.recallWaitingMessages()).toEqual([]);
+	expect(await engine.recallWaitingMessages()).toEqual([]);
 });
 
-test("recalls the Steering Lane ahead of the Submission Queue", async () => {
-	const { release, summaryGenerator } = createHangingSummary();
-	const runtime = createQueuedRuntime({ boundary: true });
-	const engine = createTestAgentSession(
-		compactionHistory(),
-		createCompactionModule(summaryGenerator),
-		{ turnRunner: runtime.runtime }
-	);
-
-	// Two submissions wait in the Submission Queue while the compaction holds
-	// the lane; the drain then runs the first of them with the second still
-	// waiting, which is the one moment both lanes can hold something.
-	const compaction = engine.compact({ model, trigger: "manual" });
-	await engine.send(sendInput({ userText: "queued-first" }));
-	await engine.send(sendInput({ userText: "queued-second" }));
-	release();
-	await compaction;
-	await runtime.started(1);
-	await engine.send(sendInput({ userText: "steer" }));
-
-	expect(
-		engine.getSnapshot().steeringMessages.map(({ input }) => input.text)
-	).toEqual(["steer"]);
-	expect(
-		engine
-			.getSnapshot()
-			.queuedSubmissions.map(({ input }) => input.composition.text)
-	).toEqual(["queued-second"]);
-
-	const head = engine.getSnapshot().steeringMessages[0];
-	expect(head).toBeDefined();
-	const recalledHead = engine.recallWaitingMessages(
-		head ? [head.id] : undefined
-	);
-	// The Steering head is what the next Model Step boundary delivers, so it is
-	// the message the next Recall takes back; the queued one keeps waiting.
-	expect(recalledHead.map(({ input }) => input.composition.text)).toEqual([
-		"steer",
-	]);
-	expect(
-		engine
-			.getSnapshot()
-			.queuedSubmissions.map(({ input }) => input.composition.text)
-	).toEqual(["queued-second"]);
-
-	const everything = engine.interrupt();
-	expect(everything.map(({ input }) => input.composition.text)).toEqual([
-		"queued-second",
-	]);
-	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
-
-	runtime.release();
-});
-
-test("delivers a submission accepted while a turn is running into that turn", async () => {
+test("commits a queue-head Submission before delivering it to the active turn", async () => {
 	const runtime = createQueuedRuntime({ boundary: true });
 	const commits: SessionRecord[] = [];
 	const engine = createTestAgentSession([], undefined, {
@@ -2156,20 +1862,23 @@ test("delivers a submission accepted while a turn is running into that turn", as
 	const first = engine.send(sendInput({ userText: "one" }));
 	await runtime.started(1);
 	const accepted = await engine.send(sendInput({ userText: "correction" }));
-
 	expect(accepted).toEqual({ rejected: false });
-	expect(
-		engine.getSnapshot().steeringMessages.map(({ input }) => input.text)
-	).toEqual(["correction"]);
+	expect(engine.getSnapshot().steeringMessages).toEqual([]);
+
+	const steered = await engine.steer();
+	if (steered.kind !== "steered") {
+		throw new Error("The queued Submission was not committed.");
+	}
 	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
-	// A Steering Message is not a Session Record until it is delivered.
-	expect(userPrompts(engine.getSnapshot().transcript)).toEqual(["one"]);
+	expect(userPrompts(engine.getSnapshot().transcript)).toEqual([
+		"one",
+		"correction",
+	]);
+	expect(commits[1]?.messages[0]?.metadata?.submissionStatus).toBe("pending");
 
 	runtime.release();
 	await first;
 
-	// The turn's Model Step boundary handed it over, and the Transcript holds it
-	// as a user message of that same turn.
 	expect(runtime.boundaries.map(({ delivered }) => delivered)).toEqual([
 		["correction"],
 	]);
@@ -2177,7 +1886,6 @@ test("delivers a submission accepted while a turn is running into that turn", as
 		"one",
 		"correction",
 	]);
-	// It ran inside the turn it joined instead of starting one of its own.
 	expect(runtime.prompts).toEqual(["one"]);
 	expect(engine.getSnapshot().steeringMessages).toEqual([]);
 
@@ -2188,16 +1896,435 @@ test("delivers a submission accepted while a turn is running into that turn", as
 		"user",
 		"assistant",
 	]);
-	// The delivered message names the Agent Turn it joined, and the turn still
-	// answers the message that opened it.
 	expect(steering?.messages[0]?.metadata?.joinedTurnId).toBe(steering?.turnId);
 	expect(runtime.boundaries[0]?.sourceUserMessageId).toBe(opening?.id);
 });
-test("recalls Steering Messages delivered before a failed model step", async () => {
+test("does not acknowledge a steer when shutdown wins the durable-write race", async () => {
+	const runtime = createQueuedRuntime();
+	const mentionsStarted = Promise.withResolvers<void>();
+	const mentions = Promise.withResolvers<[]>();
+	const commits: SessionRecord[] = [];
+	const events: SessionSubmissionEvent[] = [];
+	let shutdown: Promise<void> | undefined;
+	const engine = createTestAgentSession([], undefined, {
+		commitRecord: async ({ record }) => {
+			commits.push(record);
+		},
+		resolveFileMentions: async (text) => {
+			if (text === "correction") {
+				mentionsStarted.resolve();
+				return mentions.promise;
+			}
+			return [];
+		},
+		turnRunner: runtime.runtime,
+	});
+	engine.onSubmissionEvent((event) => events.push(event));
+
+	const active = engine.send(sendInput({ userText: "active turn" }));
+	let steering: Promise<unknown> | undefined;
+	try {
+		await runtime.started(1);
+		await engine.send(sendInput({ userText: "correction" }));
+		const queued = engine.getSnapshot().queuedSubmissions[0];
+		if (queued === undefined) {
+			throw new Error("The correction was not queued.");
+		}
+		const steeringOperation = engine.steer();
+		steering = steeringOperation;
+		await mentionsStarted.promise;
+
+		mentions.resolve([]);
+		queueMicrotask(() => {
+			shutdown = engine.internalPort.shutdown();
+		});
+		runtime.release();
+
+		expect(await steeringOperation).toMatchObject({
+			kind: "rejected",
+			messageId: queued.messageId,
+		});
+		if (shutdown === undefined) {
+			throw new Error("Shutdown did not enter its closing phase.");
+		}
+		await shutdown;
+		expect(
+			commits.flatMap(({ messages }) =>
+				messages.filter(({ id }) => id === queued.messageId)
+			)
+		).toHaveLength(0);
+		expect(
+			events.filter(
+				(event) =>
+					event.kind === "steered" && event.messageId === queued.messageId
+			)
+		).toHaveLength(0);
+	} finally {
+		mentions.resolve([]);
+		runtime.release();
+		shutdown ??= engine.internalPort.shutdown();
+		await steering?.catch(() => undefined);
+		await shutdown;
+		await active.catch(() => undefined);
+	}
+});
+test("shutdown defers queued attachment cleanup until steering commit settles", async () => {
+	for (const failCommit of [false, true]) {
+		const suffix = failCommit ? "failed" : "committed";
+		const headId = attachmentId(`shutdown-head-${suffix}`);
+		const laterId = attachmentId(`shutdown-later-${suffix}`);
+		const headFile = fromPartial<SessionFilePart>({
+			attachmentId: headId,
+			mediaType: "image/png",
+			type: "file",
+			url: `attachment://${headId}`,
+		});
+		const laterFile = fromPartial<SessionFilePart>({
+			attachmentId: laterId,
+			mediaType: "image/png",
+			type: "file",
+			url: `attachment://${laterId}`,
+		});
+		const runtime = createQueuedRuntime();
+		const commitStarted = Promise.withResolvers<void>();
+		const releaseCommit = Promise.withResolvers<void>();
+		const retained: string[] = [];
+		const released: string[] = [];
+		const engine = createTestAgentSession([], undefined, {
+			attachments: {
+				externalize: async (messages) => [...messages],
+				hydrate: async ({ messages }) => [...messages],
+				release: (ids) => released.push(...ids),
+				retain: (ids) => retained.push(...ids),
+			},
+			commitRecord: async ({ record }) => {
+				if (
+					record.outcome.kind !== "user" ||
+					record.messages[0]?.metadata?.joinedTurnId === undefined
+				) {
+					return;
+				}
+				commitStarted.resolve();
+				await releaseCommit.promise;
+				if (failCommit) {
+					throw new Error("The steering record could not be saved.");
+				}
+			},
+			turnRunner: runtime.runtime,
+		});
+		const active = engine.send(sendInput({ userText: "active turn" }));
+		let steering: Promise<unknown> | undefined;
+		let shutdown: Promise<void> | undefined;
+
+		try {
+			await runtime.started(1);
+			await engine.send(
+				sendInput({
+					composition: compositionOf("first correction", [headFile]),
+					files: [headFile],
+					userText: "first correction",
+				})
+			);
+			await engine.send(
+				sendInput({
+					composition: compositionOf("later correction", [laterFile]),
+					files: [laterFile],
+					userText: "later correction",
+				})
+			);
+			steering = engine.steer();
+			await commitStarted.promise;
+
+			shutdown = engine.internalPort.shutdown();
+			releaseCommit.resolve();
+			runtime.release();
+			if (failCommit) {
+				expect(await steering).toMatchObject({ kind: "rejected" });
+			} else {
+				expect(await steering).toMatchObject({ kind: "steered" });
+			}
+			await shutdown;
+			await active;
+
+			expect(retained).toEqual([headId, laterId]);
+			expect(released).toEqual([headId, laterId]);
+			expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
+			expect(engine.getSnapshot().steeringMessages).toMatchObject(
+				failCommit
+					? []
+					: [
+							{
+								input: { userText: "first correction" },
+								status: "pending",
+							},
+						]
+			);
+		} finally {
+			releaseCommit.resolve();
+			runtime.release();
+			shutdown ??= engine.internalPort.shutdown();
+			await steering?.catch(() => undefined);
+			await shutdown;
+			await active.catch(() => undefined);
+		}
+	}
+});
+
+test("applies the resolved attachment budget across a steering boundary", async () => {
+	const root = await mkdtemp(join(tmpdir(), "wincode-steering-budget-"));
+	const store = createSessionAttachmentStore({
+		repository: createMemoryAttachmentMetadataRepository(),
+		root,
+	});
+	const runtime = createQueuedRuntime({ boundary: true });
+	const files = await Promise.all(
+		Array.from({ length: 5 }, async (_, index) => {
+			const reference = await store.ingest({
+				bytes: new Uint8Array([...PNG_BYTES, index]),
+				filename: `image-${index}.png`,
+				mediaType: "image/png",
+			});
+			return attachmentReferenceToFilePart(reference);
+		})
+	);
+	const engine = createTestAgentSession([], undefined, {
+		attachments: {
+			externalize: async (messages) => [...messages],
+			hydrate: ({
+				budget,
+				failOnMissingAttachments,
+				messages,
+				priorityMessageId,
+				signal,
+			}) =>
+				store.hydrateMessages(messages, {
+					...budget,
+					...(failOnMissingAttachments ? { failOnMissing: true } : {}),
+					priorityMessageId,
+					purpose: "model",
+					signal,
+				}),
+			release: () => undefined,
+			retain: () => undefined,
+		},
+		resolveCompactionSettings: async () =>
+			fromPartial<ResolvedCompactionSettings>({
+				autoAvailable: false,
+				enabled: true,
+				maxMediaAttachments: 3,
+				maxMediaBytes: 1024,
+				maxMediaTokens: 10_000,
+			}),
+		turnRunner: runtime.runtime,
+	});
+
+	const active = engine.send(sendInput({ userText: "active turn" }));
+	try {
+		await runtime.started(1);
+		await engine.send(
+			sendInput({
+				composition: compositionOf("first correction", files),
+				files,
+				userText: "first correction",
+			})
+		);
+		await engine.steer();
+		await engine.send(
+			sendInput({
+				composition: compositionOf("second correction", files),
+				files,
+				userText: "second correction",
+			})
+		);
+		await engine.steer();
+
+		runtime.release();
+		await active;
+
+		const delivered = runtime.boundaries[0]?.delivered ?? [];
+		expect(
+			delivered.filter(
+				(text) => text === "first correction" || text === "second correction"
+			)
+		).toEqual(["first correction", "second correction"]);
+		expect(
+			delivered.filter((text) =>
+				text.startsWith("[Attachment payload omitted:")
+			)
+		).toHaveLength(7);
+		expect(runtime.boundaries[0]?.hydratedAttachmentCount).toBe(3);
+	} finally {
+		runtime.release();
+		await engine.internalPort.shutdown();
+		await active.catch(() => undefined);
+		await rm(root, { force: true, recursive: true });
+	}
+});
+
+test("blocks later steering when an accepted attachment is unavailable", async () => {
+	const runtime = createQueuedRuntime({ boundary: true });
+	const missingError = "One or more attachments are unavailable.";
+	const missingMessageId = sessionMessageId("missing-attachment-steer");
+	const laterMessageId = sessionMessageId("later-steer");
+	const fileId = attachmentId(`v1-${"a".repeat(64)}`);
+	const unavailableFile = fromPartial<SessionFilePart>({
+		attachmentId: fileId,
+		byteLength: 256,
+		filename: "missing.png",
+		mediaType: "image/png",
+		type: "file",
+		url: `attachment://${fileId}`,
+	});
+	const events: SessionSubmissionEvent[] = [];
+	const engine = createTestAgentSession([], undefined, {
+		attachments: {
+			externalize: async (messages) => [...messages],
+			hydrate: async ({ failOnMissingAttachments, messages }) => {
+				if (failOnMissingAttachments) {
+					throw new Error(missingError);
+				}
+				return [...messages];
+			},
+			release: () => undefined,
+			retain: () => undefined,
+		},
+		turnRunner: runtime.runtime,
+	});
+	engine.onSubmissionEvent((event) => events.push(event));
+
+	const active = engine.send(sendInput({ userText: "active turn" }));
+	await runtime.started(1);
+	await engine.send(
+		sendInput({
+			composition: compositionOf("[Image 1]", [unavailableFile]),
+			files: [unavailableFile],
+			messageId: missingMessageId,
+			userText: "[Image 1]",
+		})
+	);
+	await engine.steer();
+	await engine.send(
+		sendInput({ messageId: laterMessageId, userText: "later correction" })
+	);
+	await engine.steer();
+
+	runtime.release();
+	await active;
+
+	expect(runtime.boundaries[0]?.delivered).toEqual([]);
+	expect(
+		engine.getSnapshot().steeringMessages.map(({ message, status }) => ({
+			messageId: message.id,
+			status,
+		}))
+	).toEqual([
+		{ messageId: missingMessageId, status: "failed" },
+		{ messageId: laterMessageId, status: "pending" },
+	]);
+	expect(events.filter((event) => event.kind === "failed")).toMatchObject([
+		{
+			kind: "failed",
+			messageId: missingMessageId,
+			reason: missingError,
+		},
+	]);
+});
+test("rejects committed fallback when an accepted attachment is unavailable", async () => {
+	const runtime = createQueuedRuntime();
+	const missingError = "One or more attachments are unavailable.";
+	const missingMessageId = sessionMessageId("missing-fallback-attachment");
+	const fileId = attachmentId(`v1-${"a".repeat(64)}`);
+	const unavailableFile = fromPartial<SessionFilePart>({
+		attachmentId: fileId,
+		byteLength: 256,
+		filename: "missing.png",
+		mediaType: "image/png",
+		type: "file",
+		url: `attachment://${fileId}`,
+	});
+	const checkedHydration = Promise.withResolvers<boolean>();
+	const failedSteering = Promise.withResolvers<void>();
+	const events: SessionSubmissionEvent[] = [];
+	const engine = createTestAgentSession([], undefined, {
+		attachments: {
+			externalize: async (messages) => [...messages],
+			hydrate: async ({ failOnMissingAttachments, messages }) => {
+				if (messages.some(({ id }) => id === missingMessageId)) {
+					const strict = failOnMissingAttachments === true;
+					checkedHydration.resolve(strict);
+					if (strict) {
+						throw new Error(missingError);
+					}
+				}
+				return [...messages];
+			},
+			release: () => undefined,
+			retain: () => undefined,
+		},
+		turnRunner: runtime.runtime,
+	});
+	engine.onSubmissionEvent((event) => {
+		events.push(event);
+		if (event.kind === "failed" && event.messageId === missingMessageId) {
+			failedSteering.resolve();
+		}
+	});
+
+	const active = engine.send(sendInput({ userText: "active turn" }));
+	await runtime.started(1);
+	await engine.send(
+		sendInput({
+			composition: compositionOf("[Image 1]", [unavailableFile]),
+			files: [unavailableFile],
+			messageId: missingMessageId,
+			userText: "[Image 1]",
+		})
+	);
+	expect((await engine.steer()).kind).toBe("steered");
+
+	runtime.release();
+	const strict = await checkedHydration.promise;
+	if (!strict) {
+		await runtime.started(2);
+		runtime.release();
+	}
+	await active;
+
+	expect(strict).toBe(true);
+	await failedSteering.promise;
+	expect(runtime.prompts).toEqual(["active turn"]);
+	expect(
+		engine
+			.getSnapshot()
+			.steeringMessages.map(({ message, reason, status }) => ({
+				messageId: message.id,
+				reason,
+				status,
+			}))
+	).toEqual([
+		{
+			messageId: missingMessageId,
+			reason: missingError,
+			status: "failed",
+		},
+	]);
+	const failedEvents = events.filter(
+		(event) => event.kind === "failed" && event.messageId === missingMessageId
+	);
+	expect(failedEvents).toHaveLength(1);
+	expect(failedEvents[0]).toMatchObject({
+		kind: "failed",
+		messageId: missingMessageId,
+		reason: missingError,
+	});
+});
+
+test("preserves FIFO when committed Steering delivery fails without replaying later queued input", async () => {
 	const turnStarted = Promise.withResolvers<void>();
 	const allowBoundary = Promise.withResolvers<void>();
 	const prompts: string[] = [];
-	const recalledTexts: string[] = [];
+	const failures: string[] = [];
+	const observedEvents: SessionSubmissionEvent[] = [];
 	const engine = createTestAgentSession([], undefined, {
 		turnRunner: {
 			requestOverheadTokens: () => 0,
@@ -2205,8 +2332,11 @@ test("recalls Steering Messages delivered before a failed model step", async () 
 				prompts.push(promptOfTurn(messages));
 				turnStarted.resolve();
 				await allowBoundary.promise;
-				expect(userPrompts(takeSteeringMessages())).toEqual(["correction"]);
-				callbacks.onTerminal(
+				expect(userPrompts(await takeSteeringMessages())).toEqual([
+					"correction",
+					"second correction",
+				]);
+				await callbacks.onTerminal(
 					fromPartial<AgentTurnTerminalEvent>({
 						failure: { message: "The model rejected the next step." },
 						sequence: 2,
@@ -2219,27 +2349,199 @@ test("recalls Steering Messages delivered before a failed model step", async () 
 		},
 	});
 	engine.onSubmissionEvent((event) => {
-		if (event.kind === "recalled" && event.reason === "turn-failed") {
-			recalledTexts.push(event.composition?.text ?? "");
+		observedEvents.push(event);
+		if (event.kind === "failed") {
+			failures.push(event.reason ?? "unspecified");
 		}
 	});
 
 	try {
 		const active = engine.send(sendInput({ userText: "active turn" }));
 		await turnStarted.promise;
-		await expect(
-			engine.send(sendInput({ userText: "correction" }))
-		).resolves.toEqual({ rejected: false });
+		await engine.send(sendInput({ userText: "correction" }));
+		expect((await engine.steer()).kind).toBe("steered");
+		await engine.send(sendInput({ userText: "second correction" }));
+		expect((await engine.steer()).kind).toBe("steered");
+		await engine.send(sendInput({ userText: "later" }));
+		const laterSubmission = engine.getSnapshot().queuedSubmissions[0];
+		if (laterSubmission === undefined) {
+			throw new Error("The later input was not queued.");
+		}
 		allowBoundary.resolve();
 		await active;
 
 		expect(prompts).toEqual(["active turn"]);
 		expect(userPrompts(engine.getSnapshot().transcript)).toEqual([
 			"active turn",
+			"correction",
+			"second correction",
 		]);
-		expect(recalledTexts).toEqual(["correction"]);
+		expect(userPrompts(engine.getSnapshot().context)).not.toContain(
+			"correction"
+		);
+		const failedSteering = engine.getSnapshot().steeringMessages;
+		expect(failedSteering.map(({ input }) => input.userText)).toEqual([
+			"correction",
+			"second correction",
+		]);
+		expect(failedSteering.map(({ status }) => status)).toEqual([
+			"failed",
+			"failed",
+		]);
+		// Existing failure handling recalls uncommitted work rather than replaying it.
+		expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
+		expect(
+			observedEvents.filter(
+				({ submissionId }) => submissionId === laterSubmission.submissionId
+			)
+		).toMatchObject([{ kind: "recalled", reason: "turn-failed" }]);
+		expect(failures).toEqual([
+			"The model rejected the next step.",
+			"The model rejected the next step.",
+		]);
+		expect(engine.continue()).toMatchObject({ kind: "rejected" });
 	} finally {
 		allowBoundary.resolve();
+		await engine.internalPort.shutdown();
+	}
+});
+test("fails a committed Submission when Agent Turn setup errors before terminal", async () => {
+	const activeTurnStarted = Promise.withResolvers<void>();
+	const releaseActiveTurn = Promise.withResolvers<void>();
+	const failedTurnStarted = Promise.withResolvers<void>();
+	const failure = "The Host could not construct the Agent prompt.";
+	let runCount = 0;
+	const engine = createTestAgentSession([], undefined, {
+		turnRunner: {
+			requestOverheadTokens: () => 0,
+			run: async ({ callbacks, execution }) => {
+				runCount += 1;
+				if (runCount > 1) {
+					failedTurnStarted.resolve();
+					return { error: new Error(failure) };
+				}
+				activeTurnStarted.resolve();
+				await releaseActiveTurn.promise;
+				await callbacks.commitTerminal(
+					fromPartial<SessionRecord>({
+						messages: [
+							{
+								id: sessionMessageId(`assistant-${execution.turnId}`),
+								parts: [{ text: "answer", type: "text" }],
+								role: "assistant",
+							},
+						],
+						outcome: {
+							kind: "assistant",
+							terminal: { finishedAt: 2, kind: "completed" },
+						},
+						turnId: execution.turnId,
+					})
+				);
+				await callbacks.onTerminal({
+					finishedAt: 2,
+					sequence: 2,
+					turnId: execution.turnId,
+					type: "agent-turn-completed",
+					usage: { inputTokens: 1, outputTokens: 1 },
+				});
+				return {};
+			},
+		},
+	});
+	const events: SessionSubmissionEvent[] = [];
+	engine.onSubmissionEvent((event) => events.push(event));
+	const active = engine.send(sendInput({ userText: "active turn" }));
+
+	try {
+		await activeTurnStarted.promise;
+		await engine.send(sendInput({ userText: "committed correction" }));
+		expect((await engine.steer()).kind).toBe("steered");
+		const committed = engine.getSnapshot().steeringMessages[0];
+		if (committed === undefined) {
+			throw new Error("The steering Submission was not committed.");
+		}
+
+		releaseActiveTurn.resolve();
+		await active;
+		await failedTurnStarted.promise;
+		for (
+			let attempt = 0;
+			engine.internalPort.hasPendingWork() && attempt < 100;
+			attempt += 1
+		) {
+			await Bun.sleep(0);
+		}
+
+		expect(engine.internalPort.hasPendingWork()).toBe(false);
+		expect(engine.getSnapshot().steeringMessages).toMatchObject([
+			{
+				input: { userText: "committed correction" },
+				message: { metadata: { submissionStatus: "failed" } },
+				reason: failure,
+				status: "failed",
+			},
+		]);
+		expect(
+			events.filter(
+				(event) =>
+					event.kind === "failed" && event.messageId === committed.message.id
+			)
+		).toMatchObject([{ kind: "failed", reason: failure }]);
+	} finally {
+		releaseActiveTurn.resolve();
+		await engine.internalPort.shutdown();
+		await active.catch(() => undefined);
+	}
+});
+
+test("marks delivered steering failed when its active turn is interrupted", async () => {
+	const turnStarted = Promise.withResolvers<void>();
+	const allowBoundary = Promise.withResolvers<void>();
+	const delivered = Promise.withResolvers<void>();
+	const allowTurnEnd = Promise.withResolvers<void>();
+	const engine = createTestAgentSession([], undefined, {
+		turnRunner: {
+			requestOverheadTokens: () => 0,
+			run: async ({ takeSteeringMessages }) => {
+				turnStarted.resolve();
+				await allowBoundary.promise;
+				expect(userPrompts(await takeSteeringMessages())).toEqual([
+					"committed correction",
+				]);
+				delivered.resolve();
+				await allowTurnEnd.promise;
+				return { error: new Error("The interrupted model request ended.") };
+			},
+		},
+	});
+	const active = engine.send(sendInput({ userText: "active turn" }));
+
+	try {
+		await turnStarted.promise;
+		await engine.send(sendInput({ userText: "committed correction" }));
+		expect((await engine.steer()).kind).toBe("steered");
+		allowBoundary.resolve();
+		await delivered.promise;
+
+		expect(
+			engine.getSnapshot().transcript.at(-1)?.metadata?.submissionStatus
+		).toBe("processing");
+		await engine.interrupt();
+		allowTurnEnd.resolve();
+		await active;
+
+		expect(engine.getSnapshot().steeringMessages).toMatchObject([
+			{
+				input: { userText: "committed correction" },
+				message: { metadata: { submissionStatus: "failed" } },
+				status: "failed",
+			},
+		]);
+	} finally {
+		allowBoundary.resolve();
+		allowTurnEnd.resolve();
+		await active;
 		await engine.internalPort.shutdown();
 	}
 });
@@ -2265,6 +2567,11 @@ test("logs failed Steering checkpoints without Steering content", async () => {
 			const first = engine.send(sendInput({ userText: "opening prompt" }));
 			await runtime.started(1);
 			await engine.send(sendInput({ userText: "private steering text" }));
+			expect(await engine.steer()).toMatchObject({
+				kind: "rejected",
+				reason: "Could not durably commit the Submission.",
+			});
+			await engine.recallWaitingMessages();
 			runtime.release();
 			await first;
 
@@ -2296,7 +2603,7 @@ test("logs failed Steering checkpoints without Steering content", async () => {
 	});
 });
 
-test("waits for a delivered Steering checkpoint before shutdown settles", async () => {
+test("waits for a steering commit before shutdown settles", async () => {
 	const runtime = createQueuedRuntime({ boundary: true });
 	const commitStarted = Promise.withResolvers<void>();
 	const allowCommit = Promise.withResolvers<void>();
@@ -2319,8 +2626,9 @@ test("waits for a delivered Steering checkpoint before shutdown settles", async 
 	const first = engine.send(sendInput({ userText: "one" }));
 	await runtime.started(1);
 	await engine.send(sendInput({ userText: "correction" }));
-	runtime.release();
+	const steering = engine.steer();
 	await commitStarted.promise;
+	runtime.release();
 	await first;
 
 	const shutdown = engine.internalPort.shutdown();
@@ -2334,6 +2642,7 @@ test("waits for a delivered Steering checkpoint before shutdown settles", async 
 
 	allowCommit.resolve();
 	await shutdown;
+	expect(await steering).toMatchObject({ kind: "steered" });
 	expect(steeringCommitted).toBe(true);
 });
 
@@ -2347,9 +2656,11 @@ test("delivers Steering Messages in the order they were accepted", async () => {
 	await runtime.started(1);
 	await engine.send(sendInput({ userText: "two" }));
 	await engine.send(sendInput({ userText: "three" }));
+	expect((await engine.steer()).kind).toBe("steered");
+	expect((await engine.steer()).kind).toBe("steered");
 
 	expect(
-		engine.getSnapshot().steeringMessages.map(({ input }) => input.text)
+		engine.getSnapshot().steeringMessages.map(({ input }) => input.userText)
 	).toEqual(["two", "three"]);
 
 	runtime.release();
@@ -2384,6 +2695,7 @@ test("keeps the Model Target of the turn a Steering Message joined", async () =>
 	// The composer's selection changes while the turn runs: the correction still
 	// joins the turn on the Model Target that turn already runs with.
 	await engine.send(sendInput({ model: otherModel, userText: "correction" }));
+	expect((await engine.steer()).kind).toBe("steered");
 
 	runtime.release();
 	await first;
@@ -2396,9 +2708,8 @@ test("keeps the Model Target of the turn a Steering Message joined", async () =>
 	expect(commits[1]?.messages[0]?.metadata?.model).toEqual(model);
 });
 
-test("hands a Steering Message to the Submission Queue when the turn has no boundary", async () => {
-	// A tool-less turn runs exactly one Model Step, so its runtime never reaches
-	// a boundary to deliver at.
+test("runs a committed Submission in a new turn when the active run has no safe boundary", async () => {
+	// This fake runtime does not call its safe-boundary callback.
 	const runtime = createQueuedRuntime();
 	const engine = createTestAgentSession([], undefined, {
 		turnRunner: runtime.runtime,
@@ -2407,13 +2718,17 @@ test("hands a Steering Message to the Submission Queue when the turn has no boun
 	const first = engine.send(sendInput({ userText: "one" }));
 	await runtime.started(1);
 	await engine.send(sendInput({ userText: "correction" }));
-	expect(engine.getSnapshot().steeringMessages).toHaveLength(1);
+	expect((await engine.steer()).kind).toBe("steered");
 
 	runtime.release();
 	await runtime.started(2);
 
-	// Nothing was dropped: the message left the Steering Lane for the queue and
-	// now runs as its own Agent Turn.
+	// The committed Submission remains unread until the active turn ends, then
+	// becomes the next Agent Turn's opening user message.
+	const pendingMessage = engine
+		.getSnapshot()
+		.context.findLast(({ role }) => role === "user");
+	expect(pendingMessage?.metadata?.submissionStatus).toBe("processing");
 	expect(engine.getSnapshot().steeringMessages).toEqual([]);
 	expect(runtime.prompts).toEqual(["one", "correction"]);
 	runtime.release();
@@ -2425,7 +2740,7 @@ test("hands a Steering Message to the Submission Queue when the turn has no boun
 	]);
 });
 
-test("keeps a Steering Message that fell back on the Model Target it was accepted with", async () => {
+test("keeps the active Model Target when a committed Submission falls back to a new turn", async () => {
 	const runtime = createQueuedRuntime();
 	const engine = createTestAgentSession([], undefined, {
 		turnRunner: runtime.runtime,
@@ -2438,21 +2753,22 @@ test("keeps a Steering Message that fell back on the Model Target it was accepte
 	const first = engine.send(sendInput({ userText: "one" }));
 	await runtime.started(1);
 	await engine.send(sendInput({ model: otherModel, userText: "correction" }));
+	expect((await engine.steer()).kind).toBe("steered");
 
 	runtime.release();
 	await runtime.started(2);
 
-	// The fallback runs as a submission of its own, so it keeps the selection it
-	// was accepted with rather than inheriting the turn it could not join.
+	// The new turn uses the Model Target that committed the Submission, not the
+	// composer's changed selection.
 	expect(runtime.targets).toEqual([
 		{ model, effort: undefined, reasoningMode: undefined },
-		{ model: otherModel, effort: undefined, reasoningMode: undefined },
+		{ model, effort: undefined, reasoningMode: undefined },
 	]);
 	runtime.release();
 	await first;
 });
 
-test("hands a fallback Steering Message ahead of later queued work", async () => {
+test("prioritizes a committed queue head over later queued work", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
 	const engine = createTestAgentSession(
@@ -2468,51 +2784,16 @@ test("hands a fallback Steering Message ahead of later queued work", async () =>
 	await compaction;
 	await runtime.started(1);
 	await engine.send(sendInput({ userText: "steer" }));
+	expect((await engine.steer()).kind).toBe("steered");
 
 	runtime.release();
 	await runtime.started(2);
 	runtime.release();
 	await runtime.started(3);
 
-	// Steering that missed its delivery boundary becomes the next submission;
-	// it does not overtake the older queued prompt.
-	expect(runtime.prompts).toEqual(["queued-first", "steer", "queued-second"]);
+	// The committed queue head runs before the later uncommitted queue entry.
+	expect(runtime.prompts).toEqual(["queued-first", "queued-second", "steer"]);
 	runtime.release();
-});
-
-test("refuses a Steering Message that invokes a Skill or resends another message", async () => {
-	const runtime = createQueuedRuntime();
-	const engine = createTestAgentSession([], undefined, {
-		turnRunner: runtime.runtime,
-	});
-
-	const first = engine.send(sendInput({ userText: "one" }));
-	await runtime.started(1);
-
-	await expect(
-		engine.send(
-			sendInput({
-				skill: fromPartial<SessionSendInput["skill"]>({ name: "review" }),
-				userText: "review this",
-			})
-		)
-	).resolves.toEqual({
-		rejected: true,
-		reason: "A Steering Message cannot invoke a Skill: it carries text only.",
-	});
-	await expect(
-		engine.send(
-			sendInput({ messageId: sessionMessageId("stored"), userText: "" })
-		)
-	).resolves.toEqual({
-		rejected: true,
-		reason:
-			"A Steering Message carries text only: it cannot resend or edit another message.",
-	});
-	expect(engine.getSnapshot().steeringMessages).toEqual([]);
-
-	runtime.release();
-	await first;
 });
 
 test("recalls part of the queue by identifier and ignores an unknown one", async () => {
@@ -2534,15 +2815,15 @@ test("recalls part of the queue by identifier and ignores an unknown one", async
 	const third = waiting[1]?.id ?? queuedSubmissionId("missing");
 
 	expect(
-		engine
-			.recallWaitingMessages([second])
-			.map(({ input }) => input.composition.text)
+		(await engine.recallWaitingMessages([second])).map(
+			({ input }) => input.composition.text
+		)
 	).toEqual(["two"]);
 	expect(engine.getSnapshot().queuedSubmissions.map(({ id }) => id)).toEqual([
 		third,
 	]);
 	// An identifier that names nothing waiting changes nothing.
-	expect(engine.recallWaitingMessages([second])).toEqual([]);
+	expect(await engine.recallWaitingMessages([second])).toEqual([]);
 	expect(engine.getSnapshot().queuedSubmissions.map(({ id }) => id)).toEqual([
 		third,
 	]);
@@ -2553,6 +2834,112 @@ test("recalls part of the queue by identifier and ignores an unknown one", async
 	// Only the submission that was left behind runs.
 	expect(runtime.prompts).toEqual(["three"]);
 	runtime.release();
+});
+
+test("recall and interrupt withdraw the queue tail before steering drains it", async () => {
+	const summaryStarted = Promise.withResolvers<void>();
+	const steeringRecordStarted = Promise.withResolvers<void>();
+	const allowSteeringRecord = Promise.withResolvers<void>();
+	const steeringRunStarted = Promise.withResolvers<void>();
+	const allowSteeringRun = Promise.withResolvers<void>();
+	const runPrompts: string[][] = [];
+	const engine = createTestAgentSession(
+		compactionHistory(),
+		createCompactionModule(async ({ signal }) => {
+			summaryStarted.resolve();
+			const { promise, reject } = Promise.withResolvers<{ text: string }>();
+			const cancel = () => reject(new Error("summary cancelled"));
+			if (signal?.aborted) {
+				cancel();
+			} else {
+				signal?.addEventListener("abort", cancel, { once: true });
+			}
+			return promise;
+		}),
+		{
+			commitRecord: async ({ record }) => {
+				if (record.outcome.kind === "user") {
+					steeringRecordStarted.resolve();
+					await allowSteeringRecord.promise;
+				}
+			},
+			turnRunner: {
+				requestOverheadTokens: () => 0,
+				run: async (request) => {
+					reportTurnStarted(request);
+					runPrompts.push(userPrompts(request.messages));
+					steeringRunStarted.resolve();
+					await allowSteeringRun.promise;
+					await request.callbacks.onTerminal(
+						fromPartial<AgentTurnTerminalEvent>({
+							finishedAt: 2,
+							sequence: 2,
+							turnId: request.execution.turnId,
+							type: "agent-turn-completed",
+							usage: { inputTokens: 1, outputTokens: 1 },
+						})
+					);
+					return {};
+				},
+			},
+		}
+	);
+	const compaction = engine.compact({ model, trigger: "manual" });
+	let recall: Promise<SessionWaitingMessage[]> | undefined;
+	let steering: Promise<SessionSteeringAdmission> | undefined;
+	let interruption: Promise<SessionInterruptResult> | undefined;
+
+	try {
+		await summaryStarted.promise;
+		await engine.send(sendInput({ userText: "first" }));
+		await engine.send(sendInput({ userText: "second" }));
+		await engine.send(sendInput({ userText: "third" }));
+		const second = engine.getSnapshot().queuedSubmissions[1];
+		if (second === undefined) {
+			throw new Error("The second queued Submission was not accepted.");
+		}
+		const recallPromise = engine.recallWaitingMessages([second.id]);
+		recall = recallPromise;
+		const steeringPromise = engine.steer();
+		steering = steeringPromise;
+		await steeringRecordStarted.promise;
+		const interruptionPromise = engine.interruptAll();
+		interruption = interruptionPromise;
+		await expect(compaction).rejects.toMatchObject({ code: "cancelled" });
+
+		allowSteeringRecord.resolve();
+		const steeringResult = await steeringPromise;
+		if (steeringResult.kind !== "steered") {
+			throw new Error("The queue-head Submission was not committed.");
+		}
+		const recalledSecond = await recallPromise;
+		const interrupted = await interruptionPromise;
+		await steeringRunStarted.promise;
+
+		expect(recalledSecond.map(({ input }) => input.composition.text)).toEqual([
+			"second",
+		]);
+		expect(interrupted.kind).toBe("compaction");
+		expect(
+			interrupted.recalled.map(({ input }) => input.composition.text)
+		).toEqual(["third"]);
+		expect(runPrompts).toHaveLength(1);
+		expect(runPrompts[0]?.at(-1)).toBe("first");
+		expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
+		expect(
+			engine
+				.getSnapshot()
+				.transcript.find(({ id }) => id === steeringResult.messageId)?.metadata
+				?.submissionStatus
+		).toBe("processing");
+	} finally {
+		allowSteeringRecord.resolve();
+		await recall?.catch(() => undefined);
+		allowSteeringRun.resolve();
+		await steering?.catch(() => undefined);
+		await interruption?.catch(() => undefined);
+		await engine.internalPort.shutdown();
+	}
 });
 
 test("runs a queued submission with the Model Target selection it was accepted with", async () => {
@@ -2588,6 +2975,7 @@ test("steers the Agent Turn started by overflow context continuation", async () 
 	const prompts: string[] = [];
 	const delivered: string[][] = [];
 	const continuationStarted = Promise.withResolvers<void>();
+	const boundaryReached = Promise.withResolvers<void>();
 	const engine = createTestAgentSession(compactionHistory(), undefined, {
 		resolveCompactionSettings: async () => overflowRecoverySettings(),
 		turnRunner: {
@@ -2608,7 +2996,8 @@ test("steers the Agent Turn started by overflow context continuation", async () 
 				const gate = Promise.withResolvers<void>();
 				gates.push(gate.resolve);
 				await gate.promise;
-				delivered.push(userPrompts(takeSteeringMessages()));
+				delivered.push(userPrompts(await takeSteeringMessages()));
+				boundaryReached.resolve();
 				await callbacks.commitTerminal(
 					fromPartial<SessionRecord>({
 						messages: [
@@ -2642,21 +3031,176 @@ test("steers the Agent Turn started by overflow context continuation", async () 
 	// another user message to the Submission Queue or Transcript.
 	await continuationStarted.promise;
 	const accepted = await engine.send(sendInput({ userText: "second" }));
-
-	// The context continuation is the Agent Turn the session is running, so the
-	// submission joins its Steering Lane instead of waiting for it to end.
 	expect(accepted).toEqual({ rejected: false });
+	expect((await engine.steer()).kind).toBe("steered");
+
+	// The context continuation is the active turn, so steering adds a durable
+	// user record without opening or changing the turn.
 	expect(
-		engine.getSnapshot().steeringMessages.map(({ input }) => input.text)
+		engine.getSnapshot().steeringMessages.map(({ input }) => input.userText)
 	).toEqual(["second"]);
 	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
 
 	gates.shift()?.();
+	await boundaryReached.promise;
 	await send;
 	// The continuation delivers the correction at its Model Step boundary.
 	expect(delivered).toEqual([["second"]]);
 	expect(prompts).toEqual(["first", "first"]);
 	expect(userPrompts(engine.getSnapshot().transcript).at(-1)).toBe("second");
+});
+
+test("retains committed steering through context-overflow continuation", async () => {
+	const initialTurnStarted = Promise.withResolvers<void>();
+	const allowOverflow = Promise.withResolvers<void>();
+	const continuationFinished = Promise.withResolvers<void>();
+	const delivered: string[][] = [];
+	const continuationMessages: string[][] = [];
+	let runCount = 0;
+	const engine = createOverflowTestSession(compactionHistory(), {
+		turnRunner: {
+			requestOverheadTokens: () => 0,
+			run: async (request) => {
+				runCount += 1;
+				reportTurnStarted(request);
+				if (runCount === 1) {
+					initialTurnStarted.resolve();
+					await allowOverflow.promise;
+					expect(userPrompts(await request.takeSteeringMessages())).toEqual([
+						"correction",
+					]);
+					await request.callbacks.onTerminal(
+						fromPartial<AgentTurnTerminalEvent>({
+							failure: overflowOperationalFailure(),
+							finishedAt: 2,
+							sequence: 2,
+							turnId: request.execution.turnId,
+							type: "agent-turn-failed",
+						})
+					);
+					return { error: overflowFailure() };
+				}
+				continuationMessages.push(userPrompts(request.messages));
+				delivered.push(userPrompts(await request.takeSteeringMessages()));
+				await request.callbacks.onTerminal(
+					fromPartial<AgentTurnTerminalEvent>({
+						finishedAt: 2,
+						sequence: 2,
+						turnId: request.execution.turnId,
+						type: "agent-turn-completed",
+						usage: { inputTokens: 1, outputTokens: 1 },
+					})
+				);
+				continuationFinished.resolve();
+				return {};
+			},
+		},
+	});
+	const active = engine.send(sendInput({ userText: "original request" }));
+
+	try {
+		await initialTurnStarted.promise;
+		await engine.send(sendInput({ userText: "correction" }));
+		expect((await engine.steer()).kind).toBe("steered");
+		allowOverflow.resolve();
+		await active;
+		await continuationFinished.promise;
+		await engine.internalPort.shutdown();
+
+		expect(runCount).toBe(2);
+		expect(
+			[...(continuationMessages[0] ?? []), ...(delivered[0] ?? [])].filter(
+				(prompt) => prompt === "correction"
+			)
+		).toHaveLength(1);
+		const correction = engine
+			.getSnapshot()
+			.transcript.find(
+				({ role, parts }) =>
+					role === "user" &&
+					parts.some(
+						(part) => part.type === "text" && part.text === "correction"
+					)
+			);
+		expect(correction?.metadata?.submissionStatus).toBe("processed");
+		expect(
+			engine.getSnapshot().compactions.map(({ trigger }) => trigger)
+		).toEqual(["overflow"]);
+		expect(engine.getSnapshot().steeringMessages).toEqual([]);
+	} finally {
+		allowOverflow.resolve();
+		await active;
+		await engine.internalPort.shutdown();
+	}
+});
+
+test("fails delivered steering when overflow recovery is refused", async () => {
+	const initialTurnStarted = Promise.withResolvers<void>();
+	const allowOverflow = Promise.withResolvers<void>();
+	const steeringFailed = Promise.withResolvers<void>();
+	const correctionId = sessionMessageId("overflow-refused-correction");
+	const engine = createOverflowTestSession(compactionHistory(), {
+		resolveCompactionSettings: async () => ({
+			...overflowRecoverySettings(),
+			overflowRecoveryAvailable: false,
+		}),
+		turnRunner: {
+			requestOverheadTokens: () => 0,
+			run: async (request) => {
+				reportTurnStarted(request);
+				initialTurnStarted.resolve();
+				await allowOverflow.promise;
+				expect(userPrompts(await request.takeSteeringMessages())).toEqual([
+					"correction",
+				]);
+				await request.callbacks.onTerminal(
+					fromPartial<AgentTurnTerminalEvent>({
+						failure: overflowOperationalFailure(),
+						finishedAt: 2,
+						sequence: 2,
+						turnId: request.execution.turnId,
+						type: "agent-turn-failed",
+					})
+				);
+				return { error: overflowFailure() };
+			},
+		},
+	});
+	engine.onSubmissionEvent((event) => {
+		if (event.kind === "failed" && event.messageId === correctionId) {
+			steeringFailed.resolve();
+		}
+	});
+	const active = engine.send(sendInput({ userText: "original request" }));
+
+	try {
+		await initialTurnStarted.promise;
+		await engine.send(
+			sendInput({
+				messageId: correctionId,
+				userText: "correction",
+			})
+		);
+		expect((await engine.steer()).kind).toBe("steered");
+		allowOverflow.resolve();
+		await active;
+		await steeringFailed.promise;
+
+		expect(engine.getSnapshot().steeringMessages).toMatchObject([
+			{
+				message: {
+					id: correctionId,
+					metadata: { submissionStatus: "failed" },
+				},
+				reason: "The model context is too large.",
+				status: "failed",
+			},
+		]);
+	} finally {
+		allowOverflow.resolve();
+		await active;
+		await engine.internalPort.shutdown();
+	}
 });
 
 test("does not recover a context overflow after a completed Tool Call", async () => {
@@ -2889,7 +3433,7 @@ test("interrupting overflow target resolution prevents recovery compaction", asy
 		await engine.send(sendInput({ userText: "original request" }));
 		await targetResolutionStarted.promise;
 
-		expect(engine.interruptAll()).toMatchObject({ kind: "turn" });
+		expect(await engine.interruptAll()).toMatchObject({ kind: "turn" });
 		await engine.send(sendInput({ userText: "next request" }));
 		allowTargetResolution.resolve();
 		await nextTurnStarted.promise;
@@ -2938,7 +3482,7 @@ test("interrupting overflow recovery compaction prevents context continuation", 
 	try {
 		await engine.send(sendInput({ userText: "overflowing request" }));
 		await summaryStarted.promise;
-		expect(engine.interruptAll()).toMatchObject({ kind: "compaction" });
+		expect(await engine.interruptAll()).toMatchObject({ kind: "compaction" });
 		release();
 		await compactionStopped.promise;
 
@@ -3195,8 +3739,8 @@ test("retains a queued submission's attachments until its turn runs", async () =
 		},
 	];
 
-	// Attachments are refused on a Steering Message, so a submission that
-	// carries one waits for the queue: the compaction is what holds the lane.
+	// An active compaction keeps this queued Submission on the queue until it
+	// settles; the attachment hold prevents its blob from being reclaimed.
 	const compaction = engine.compact({ model, trigger: "manual" });
 	await engine.send(
 		sendInput({
@@ -3222,6 +3766,103 @@ test("retains a queued submission's attachments until its turn runs", async () =
 	// Running the turn puts the blobs in Session Records, so the hold ends then.
 	await holdEnded.promise;
 	expect(released).toEqual([["stored-blob"]]);
+});
+test("releases queued attachment holds when queued preparation rejects", async () => {
+	const activeTurnStarted = Promise.withResolvers<void>();
+	const allowActiveTurnEnd = Promise.withResolvers<void>();
+	const preparationRejected = Promise.withResolvers<void>();
+	const retained: string[][] = [];
+	const released: string[][] = [];
+	let runCount = 0;
+	let settingsCount = 0;
+	const files: SessionFilePart[] = [
+		{
+			filename: "clipboard.png",
+			mediaType: "image/png",
+			type: "file",
+			url: "data:image/png;base64,AAAA",
+		},
+	];
+	const engine = createTestAgentSession([], undefined, {
+		attachments: {
+			externalize: async (messages) =>
+				messages.map((sessionMessage) => ({
+					...sessionMessage,
+					parts: sessionMessage.parts.map((part) =>
+						part.type === "file"
+							? fromPartial<SessionFilePart>({
+									attachmentId: attachmentId("failed-queued-blob"),
+									mediaType: part.mediaType,
+									type: "file",
+									url: "attachment://failed-queued-blob",
+								})
+							: part
+					),
+				})),
+			hydrate: async ({ messages }) => [...messages],
+			release: (attachmentIds) => released.push([...attachmentIds]),
+			retain: (attachmentIds) => retained.push([...attachmentIds]),
+		},
+		resolveCompactionSettings: async () => {
+			settingsCount += 1;
+			if (settingsCount === 2) {
+				preparationRejected.resolve();
+				throw new Error("The queued Submission could not be prepared.");
+			}
+			return fromPartial<ResolvedCompactionSettings>({
+				autoAvailable: false,
+				enabled: true,
+				keepRecentTokens: 1,
+				maxMediaAttachments: 4,
+				maxMediaBytes: 1024,
+				maxMediaTokens: 128,
+				modelContextLimit: 10_000,
+				overflowRecoveryAvailable: false,
+				reserveTokens: 1000,
+				thresholdTokens: null,
+			});
+		},
+		turnRunner: {
+			requestOverheadTokens: () => 0,
+			run: async () => {
+				runCount += 1;
+				if (runCount === 1) {
+					activeTurnStarted.resolve();
+					await allowActiveTurnEnd.promise;
+					return {};
+				}
+				throw new Error(
+					"The queued model must not start after preparation fails."
+				);
+			},
+		},
+	});
+	const active = engine.send(sendInput({ userText: "active turn" }));
+
+	try {
+		await activeTurnStarted.promise;
+		const queued = await engine.send(
+			sendInput({
+				composition: compositionOf("[Image 1]", files),
+				files,
+				userText: "[Image 1]",
+			})
+		);
+		expect(queued).toMatchObject({ rejected: false });
+		expect(retained).toEqual([["failed-queued-blob"]]);
+		expect(released).toEqual([]);
+
+		allowActiveTurnEnd.resolve();
+		await preparationRejected.promise;
+		await active;
+		await engine.internalPort.shutdown();
+		expect(runCount).toBe(1);
+		expect(released).toEqual([["failed-queued-blob"]]);
+	} finally {
+		allowActiveTurnEnd.resolve();
+		await active;
+		await engine.internalPort.shutdown();
+	}
 });
 
 test("waits for queued attachment externalization before shutdown settles", async () => {
@@ -3260,10 +3901,11 @@ test("waits for queued attachment externalization before shutdown settles", asyn
 		sendInput({ composition: compositionOf("[Image 1]", files), files })
 	);
 	await externalizeStarted.promise;
-	engine.cancelCompaction();
+	const cancellation = engine.cancelCompaction();
 	const shutdown = engine.internalPort.shutdown();
 	release();
 	await expect(compaction).rejects.toMatchObject({ code: "cancelled" });
+	await cancellation;
 
 	const probe = Promise.withResolvers<"probe">();
 	const shutdownSettled = shutdown.then(() => "shutdown" as const);
@@ -3279,37 +3921,58 @@ test("waits for queued attachment externalization before shutdown settles", asyn
 	await shutdown;
 });
 
-test("refuses a submission that carries attachments into a running turn", async () => {
-	const runtime = createQueuedRuntime();
+test("steers a Submission with files without losing its attachment", async () => {
+	const runtime = createQueuedRuntime({ boundary: true });
+	const commits: SessionRecord[] = [];
 	const engine = createTestAgentSession([], undefined, {
+		commitRecord: async ({ record }) => {
+			commits.push(record);
+		},
 		turnRunner: runtime.runtime,
 	});
+	const fileId = attachmentId(`v1-${"a".repeat(64)}`);
+	const messageId = sessionMessageId("steered-file-message");
 	const files: SessionFilePart[] = [
 		fromPartial<SessionFilePart>({
-			attachmentId: attachmentId("unpaid-blob"),
+			attachmentId: fileId,
+			byteLength: 256,
+			filename: "diagram.png",
+			mediaType: "image/png",
 			type: "file",
-			url: "attachment://unpaid-blob",
+			url: `attachment://${fileId}`,
 		}),
 	];
 
-	const first = engine.send(sendInput({ userText: "one" }));
+	const active = engine.send(sendInput({ userText: "active" }));
 	await runtime.started(1);
-	const outcome = await engine.send(
-		sendInput({ composition: compositionOf("[Image 1]", files), files })
+	const accepted = await engine.send(
+		sendInput({
+			composition: compositionOf("[Image 1]", files),
+			files,
+			messageId,
+			userText: "[Image 1]",
+		})
 	);
+	expect(accepted).toEqual({ rejected: false });
 
-	// A Steering Message carries text only, so the running turn is never
-	// promised a delivery it cannot pay for.
-	expect(outcome).toEqual({
-		rejected: true,
-		reason:
-			"A Steering Message carries text only: attachments are not accepted.",
-	});
-	expect(engine.getSnapshot().steeringMessages).toEqual([]);
-	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
+	const steered = await engine.steer();
+	expect(steered).toMatchObject({ kind: "steered", messageId });
+	const record = commits.find((candidate) =>
+		candidate.messages.some(({ id }) => id === messageId)
+	);
+	expect(record?.messages[0]?.parts).toContainEqual(
+		expect.objectContaining({
+			attachmentId: fileId,
+			type: "attachment-reference",
+		})
+	);
+	expect(
+		engine.getSnapshot().transcript.find(({ id }) => id === messageId)?.parts
+	).toContainEqual(expect.objectContaining({ attachmentId: fileId }));
 
 	runtime.release();
-	await first;
+	await active;
+	expect(runtime.boundaries[0]?.delivered).toEqual(["[Image 1]"]);
 });
 
 test("drops the queue and its attachment holds when the session shuts down", async () => {
@@ -3411,7 +4074,7 @@ test("releases a recalled submission's attachment hold", async () => {
 		sendInput({ composition: compositionOf("[Image 1]", files), files })
 	);
 
-	engine.recallWaitingMessages();
+	await engine.recallWaitingMessages();
 
 	expect(released).toEqual([["held-blob"]]);
 	release();
@@ -3572,7 +4235,7 @@ test("ignores late provider callbacks after local interruption", async () => {
 
 	const send = engine.send(sendInput());
 	await live.promise;
-	engine.interrupt();
+	await engine.interrupt();
 	release.resolve();
 	await send;
 
@@ -3615,6 +4278,212 @@ test("retries a stored message without appending another user message", async ()
 			terminal: expect.objectContaining({ kind: "completed" }),
 		},
 	]);
+});
+
+test("retries a failed Steering Submission in place without duplicating its message", async () => {
+	const retryMessageId = sessionMessageId("retry-steering-attachment");
+	const fileId = attachmentId(`v1-${"b".repeat(64)}`);
+	const acceptedFile = fromPartial<SessionFilePart>({
+		attachmentId: fileId,
+		byteLength: 256,
+		filename: "retry.png",
+		mediaType: "image/png",
+		type: "file",
+		url: `attachment://${fileId}`,
+	});
+	const hydrationModes: boolean[] = [];
+	const turnStarted = Promise.withResolvers<void>();
+	const allowBoundary = Promise.withResolvers<void>();
+	const retryStarted = Promise.withResolvers<void>();
+	const allowRetry = Promise.withResolvers<void>();
+	const retryPersistenceStarted = Promise.withResolvers<void>();
+	const allowRetryPersistence = Promise.withResolvers<void>();
+	const commits: SessionRecord[] = [];
+	const submissionStatuses: string[] = [];
+	let failedStatusPersisted = false;
+	const prompts: string[][] = [];
+	let turnCount = 0;
+	let retry: Promise<unknown> | undefined;
+	const engine = createTestAgentSession([], undefined, {
+		attachments: {
+			externalize: async (messages) => [...messages],
+			hydrate: async ({ failOnMissingAttachments, messages }) => {
+				if (messages.some(({ id }) => id === retryMessageId)) {
+					hydrationModes.push(failOnMissingAttachments === true);
+				}
+				return [...messages];
+			},
+			release: () => undefined,
+			retain: () => undefined,
+		},
+		commitRecord: async ({ record }) => {
+			commits.push(record);
+		},
+		updateSubmissionStatus: async ({ messageId, status }) => {
+			if (messageId !== retryMessageId) {
+				return;
+			}
+			submissionStatuses.push(status);
+			if (status === "failed") {
+				failedStatusPersisted = true;
+			}
+			if (status === "processing" && failedStatusPersisted) {
+				retryPersistenceStarted.resolve();
+				await allowRetryPersistence.promise;
+			}
+		},
+		skills: {
+			createTurnSkill: async () =>
+				fromPartial<SessionSkillCatalog>({ diagnostic: null }),
+			resolveSkill: async () => ({
+				ok: true,
+				skill: {
+					arguments: "focus",
+					contentHash: "skill-hash",
+					instructions: "Review with focus.",
+					name: "review",
+					source: "explicit",
+				},
+			}),
+		},
+		turnRunner: {
+			requestOverheadTokens: () => 0,
+			run: async ({ callbacks, execution, messages, takeSteeringMessages }) => {
+				prompts.push(userPrompts(messages));
+				turnCount += 1;
+				if (turnCount === 1) {
+					turnStarted.resolve();
+					await allowBoundary.promise;
+					const delivered = await takeSteeringMessages();
+					expect(userPrompts(delivered)).toEqual([
+						'<untrusted-skill-context name="review" source="explicit" content-hash="skill-hash">\nReview with focus.\n<arguments>focus</arguments>\n</untrusted-skill-context>',
+						"correction",
+					]);
+					expect(delivered.at(-1)?.parts).toContainEqual(acceptedFile);
+					await callbacks.onTerminal(
+						fromPartial<AgentTurnTerminalEvent>({
+							failure: { message: "The receiving model request failed." },
+							sequence: 2,
+							turnId: execution.turnId,
+							type: "agent-turn-failed",
+						})
+					);
+					return { error: new Error("The receiving model request failed.") };
+				}
+				retryStarted.resolve();
+				await allowRetry.promise;
+				await callbacks.commitTerminal(
+					fromPartial<SessionRecord>({
+						messages: [
+							{
+								id: sessionMessageId(`assistant-${execution.turnId}`),
+								parts: [{ text: "answer", type: "text" }],
+								role: "assistant",
+							},
+						],
+						outcome: {
+							kind: "assistant",
+							terminal: { finishedAt: 2, kind: "completed" },
+						},
+						turnId: execution.turnId,
+					})
+				);
+				await callbacks.onTerminal(
+					fromPartial<AgentTurnTerminalEvent>({
+						sequence: 3,
+						turnId: execution.turnId,
+						type: "agent-turn-completed",
+					})
+				);
+				return {};
+			},
+		},
+	});
+	const active = engine.send(sendInput({ userText: "active turn" }));
+
+	try {
+		await turnStarted.promise;
+		await engine.send(
+			sendInput({
+				composition: compositionOf("correction", [acceptedFile]),
+				files: [acceptedFile],
+				messageId: retryMessageId,
+				skill: {
+					arguments: "focus",
+					instructions: "Review with focus.",
+					name: "review",
+				},
+				userText: "correction",
+			})
+		);
+		const steering = await engine.steer();
+		if (steering.kind !== "steered") {
+			throw new Error("The queued Submission was not committed.");
+		}
+		allowBoundary.resolve();
+		await active;
+
+		const failedSteering = engine.getSnapshot().steeringMessages[0];
+		if (failedSteering === undefined) {
+			throw new Error("The failed committed message was not retryable.");
+		}
+		expect(failedSteering).toMatchObject({
+			input: { submissionId: steering.submissionId, userText: "correction" },
+			message: {
+				id: steering.messageId,
+				metadata: { submissionStatus: "failed" },
+			},
+			status: "failed",
+		});
+		retry = engine.send(failedSteering.input);
+		await retryPersistenceStarted.promise;
+		const statusCountBeforeDuplicate = submissionStatuses.length;
+		const duplicateRetry = await engine.send(failedSteering.input);
+		expect(duplicateRetry).toEqual({
+			rejected: true,
+			reason: "The committed Submission is already being retried.",
+		});
+		expect(submissionStatuses).toHaveLength(statusCountBeforeDuplicate);
+		allowRetryPersistence.resolve();
+		await retryStarted.promise;
+		expect(hydrationModes).toEqual([true, true]);
+
+		const transcriptMessage = engine
+			.getSnapshot()
+			.transcript.find(({ id }) => id === steering.messageId);
+		expect(transcriptMessage?.metadata?.submissionStatus).toBe("processing");
+		expect(
+			prompts[1]?.filter((prompt) => prompt === "correction")
+		).toHaveLength(1);
+		allowRetry.resolve();
+		await retry;
+
+		expect(
+			engine
+				.getSnapshot()
+				.transcript.filter(({ id }) => id === steering.messageId)
+		).toHaveLength(1);
+		expect(
+			engine
+				.getSnapshot()
+				.transcript.find(({ id }) => id === steering.messageId)?.metadata
+				?.submissionStatus
+		).toBe("processed");
+		expect(
+			commits
+				.filter(({ outcome }) => outcome.kind === "user")
+				.flatMap(({ messages }) =>
+					messages.filter(({ id }) => id === steering.messageId)
+				)
+		).toHaveLength(1);
+	} finally {
+		allowRetryPersistence.resolve();
+		allowBoundary.resolve();
+		allowRetry.resolve();
+		await active;
+		await retry?.catch(() => undefined);
+		await engine.internalPort.shutdown();
+	}
 });
 
 test("cancels the submission it is running and returns to ready", async () => {
@@ -3683,31 +4552,32 @@ test("deadline expiration aborts a preparing Agent Session send", async () => {
 	await engine.internalPort.shutdown();
 });
 
-test("interrupts the turn, not the Steering Message it delivered", async () => {
+test("interrupts the Agent Turn without replaying its failed Steering Message", async () => {
 	const accepting = Promise.withResolvers<void>();
 	const corrected = Promise.withResolvers<void>();
+	const delivered = Promise.withResolvers<void>();
 	const parked = Promise.withResolvers<void>();
 	const engine = createTestAgentSession([], undefined, {
 		turnRunner: {
 			requestOverheadTokens: () => 0,
 			run: async ({ callbacks, execution, takeSteeringMessages }) => {
-				callbacks.onEvent({
+				await callbacks.onEvent({
 					agentId: execution.agent,
 					sequence: 0,
 					startedAt: 1,
 					turnId: execution.turnId,
 					type: "agent-turn-started",
 				});
-				callbacks.onEvent({
+				await callbacks.onEvent({
 					delta: "Working",
 					sequence: 1,
 					turnId: execution.turnId,
 					type: "text-delta",
 				});
-				// The test steers the turn, and the boundary takes what joined it.
 				accepting.resolve();
 				await corrected.promise;
-				takeSteeringMessages();
+				await takeSteeringMessages();
+				delivered.resolve();
 				await parked.promise;
 				return { error: new Error("The Agent Turn was interrupted.") };
 			},
@@ -3717,21 +4587,29 @@ test("interrupts the turn, not the Steering Message it delivered", async () => {
 	const send = engine.send(sendInput({ userText: "one" }));
 	await accepting.promise;
 	await engine.send(sendInput({ userText: "correction" }));
+	const steering = await engine.steer();
+	if (steering.kind !== "steered") {
+		throw new Error("The committed Steering Message was not accepted.");
+	}
 	corrected.resolve();
-	await Promise.resolve();
+	await delivered.promise;
 	engine.interrupt();
 	parked.resolve();
 	await send;
 
 	const context = engine.getSnapshot().context;
 	const assistant = context.findLast(({ role }) => role === "assistant");
-	const steering = context.findLast(({ role }) => role === "user");
-	// The turn's own message wears the interruption, and the message that joined
-	// it stays in the context as the user message it was delivered as.
+	const durableSteering = engine
+		.getSnapshot()
+		.transcript.find(({ id }) => id === steering.messageId);
 	expect(assistant?.metadata?.interrupted).toBe(true);
-	expect(userPrompts(context)).toContain("correction");
-	expect(steering?.metadata?.interrupted).toBeUndefined();
-	expect(steering?.metadata?.responseTimeMs).toBeUndefined();
+	expect(userPrompts(context)).not.toContain("correction");
+	expect(durableSteering).toMatchObject({
+		metadata: { submissionStatus: "failed" },
+		role: "user",
+	});
+	expect(durableSteering?.metadata?.interrupted).toBeUndefined();
+	expect(durableSteering?.metadata?.responseTimeMs).toBeUndefined();
 });
 
 test("interrupting a turn keeps the Assistant message it already streamed", async () => {

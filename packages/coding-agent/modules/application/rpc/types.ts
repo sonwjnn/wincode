@@ -3,6 +3,8 @@ import type {
 	ReasoningMode,
 	ReasoningSelection,
 } from "@wincode/ai/models";
+import type { SubmissionPromptSkillInvocation } from "@/modules/sessions/submission-preparation";
+import type { SkillContext } from "@/modules/skills";
 import type {
 	AgentTurnId,
 	ChatModelSelection,
@@ -14,17 +16,40 @@ import type {
 	SessionMessageMetadata,
 	SessionStore,
 } from "../../../modules/sessions/host/session-rpc";
+import type { SessionFilePart } from "../../../modules/sessions/message";
+import type { SessionSubmissionComposition } from "../../../modules/sessions/submission-types";
 import type { JsonlInput } from "./protocol";
+
+export type RpcSkillIntent = Readonly<SubmissionPromptSkillInvocation>;
+export type RpcSubmissionIdentifiers = Readonly<{
+	messageId?: string;
+	submissionId?: string;
+	turnId?: string;
+}>;
+export type RpcSubmissionDraft = Readonly<{
+	composition: SessionSubmissionComposition;
+	files: readonly SessionFilePart[];
+	skillIntent?: RpcSkillIntent;
+}>;
+export type RpcPreparedSubmission = Readonly<{
+	composition: SessionSubmissionComposition;
+	files: readonly SessionFilePart[];
+	skill?: SkillContext;
+	userText: string;
+}>;
 
 export const APPLICATION_ERROR_CODE = -32_000;
 export const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 export const OUTPUT_DRAIN_TIMEOUT_MS = 5000;
 export const DEFAULT_TRANSCRIPT_LIMIT = 100;
 export const MAX_TRANSCRIPT_LIMIT = 500;
+export const RPC_PROTOCOL_VERSION = 2;
 export const SERVER_VERSION = "0.1.0";
 export const SESSION_RPC_METHODS = new Set([
 	"session/create",
 	"session/open",
+	"session/retry",
+	"session/steer",
 	"session/submit",
 	"session/interrupt",
 	"session/recall",

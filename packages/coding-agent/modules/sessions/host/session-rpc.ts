@@ -1,5 +1,5 @@
-export type { AgentTurnId } from "@wincode/agent-core";
-export { createAgentTurnId } from "@wincode/agent-core";
+export type { AgentTurnId, SubmissionId } from "@wincode/agent-core";
+export { createAgentTurnId, toSubmissionId } from "@wincode/agent-core";
 export type { Connections } from "@wincode/ai/connections";
 export type {
 	ChatModelSelection,
@@ -15,8 +15,8 @@ export {
 	normalizeReasoningMode,
 } from "@wincode/ai/models";
 export { resolveWorkspaceRoot } from "@/modules/tools";
-export type { SessionId, SubmissionId } from "@/shared/identifiers";
-export { toSessionId, toSubmissionId } from "@/shared/identifiers";
+export type { SessionId } from "@/shared/identifiers";
+export { toSessionId } from "@/shared/identifiers";
 export type {
 	LiveSessionSnapshot,
 	SessionApprovalResult,
