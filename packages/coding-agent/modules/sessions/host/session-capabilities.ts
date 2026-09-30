@@ -42,6 +42,7 @@ import {
 	resolveLocalAttachmentRoot,
 	resolveLocalDatabasePath,
 	resolveLocalSnapshotRoot,
+	resolveSessionDatabasePath,
 } from "../storage/path";
 import { resetLocalSessionData } from "../storage/reset-local-session-data";
 import type { SessionStore } from "../storage/session-store";
@@ -98,7 +99,9 @@ const openSessionDatabase = async ({
 	databasePath,
 	workspace,
 }: OpenSessionDatabaseInput): Promise<OpenedSessionDatabase> => {
-	const localDatabasePath = databasePath ?? resolveLocalDatabasePath();
+	const localDatabasePath = resolveSessionDatabasePath(
+		databasePath ?? resolveLocalDatabasePath()
+	);
 	try {
 		return createDatabase(localDatabasePath);
 	} catch (error) {

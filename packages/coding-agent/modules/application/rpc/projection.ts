@@ -1,7 +1,7 @@
 import type {
+	LiveSessionSnapshot,
 	SessionHost,
 	SessionQueuedSubmission,
-	SessionSnapshot,
 	SessionSteeringMessage,
 	SessionWaitingMessage,
 } from "../../../modules/sessions/host/session-rpc";
@@ -541,7 +541,7 @@ export const submissionFromWaiting = (
 	};
 };
 export const projectExecution = (
-	execution: SessionSnapshot["executions"][number]
+	execution: LiveSessionSnapshot["executions"][number]
 ): Record<string, unknown> => ({
 	agentId: execution.agent,
 	model: execution.model,
@@ -556,7 +556,7 @@ export const projectExecution = (
 });
 
 export const projectApproval = (
-	approval: SessionSnapshot["approvals"][number],
+	approval: LiveSessionSnapshot["approvals"][number],
 	wireApprovalId: string
 ): Record<string, unknown> => ({
 	approvalId: wireApprovalId,
@@ -571,7 +571,7 @@ export const projectApproval = (
 });
 
 export const projectSteering = (
-	message: SessionSnapshot["steeringMessages"][number]
+	message: LiveSessionSnapshot["steeringMessages"][number]
 ): Record<string, unknown> => ({
 	messageId: message.input.messageId,
 	selection: selectionWire(
@@ -589,7 +589,7 @@ export const projectSteering = (
 		: { turnId: message.input.turnId }),
 });
 export const projectQueued = (
-	submission: SessionSnapshot["queuedSubmissions"][number]
+	submission: LiveSessionSnapshot["queuedSubmissions"][number]
 ): Record<string, unknown> => ({
 	messageId: submission.messageId,
 	selection: selectionWire(

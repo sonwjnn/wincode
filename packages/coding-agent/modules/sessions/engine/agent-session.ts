@@ -45,6 +45,7 @@ import type {
 	AgentSessionInternalPort,
 	AgentSessionOptions,
 	AgentSessionPorts,
+	LiveSessionSnapshot,
 	SessionApprovalOutcome,
 	SessionCompactionCommand,
 	SessionContinuationOutcome,
@@ -54,7 +55,6 @@ import type {
 	SessionOverflowRecoveryCommand,
 	SessionOverflowRecoveryOutcome,
 	SessionQueuedSubmission,
-	SessionSnapshot,
 	SessionSteeringMessage,
 	SessionSubmissionEvent,
 	SessionViewState,
@@ -63,18 +63,6 @@ import { exposedViewState, hasChanged, primaryEntry } from "./utils";
 
 /** The deadline one Agent Turn submission runs with. */
 const AGENT_TURN_DEADLINE_MS = 43_200_000;
-/** The maximum time local shutdown waits for abort-resistant work to settle. */
-const SESSION_SHUTDOWN_WAIT_TIMEOUT_MS = 5000;
-const waitForShutdownWork = async (work: Promise<void>): Promise<void> => {
-	let timeout: NodeJS.Timeout | undefined;
-	const deadline = Promise.withResolvers<void>();
-	timeout = setTimeout(deadline.resolve, SESSION_SHUTDOWN_WAIT_TIMEOUT_MS);
-	try {
-		await Promise.race([work, deadline.promise]);
-	} finally {
-		clearTimeout(timeout);
-	}
-};
 
 /** The reason a submission that arrives after the session ended is refused. */
 const SHUT_DOWN_SEND_ERROR = "The session has ended.";
@@ -229,7 +217,7 @@ export class AgentSessionImpl implements AgentSession {
 	readonly subscribe: AgentSession["subscribe"];
 	#activeSend: SessionActiveSend | undefined;
 	readonly #operationState: AgentSessionOperationState;
-	#state: SessionSnapshot;
+	#state: LiveSessionSnapshot;
 	#runState: AgentSessionRunState = { phase: "idle" };
 
 	constructor({
@@ -332,9 +320,9 @@ export class AgentSessionImpl implements AgentSession {
 		 * reach the durable store once the Agent Session has lost authority.
 		 */
 		const agentSessionPorts: AgentSessionPorts = { ...ports, commitRecord };
-		const publish = (changes: Partial<SessionSnapshot>): void => {
+		const publish = (changes: Partial<LiveSessionSnapshot>): void => {
 			const compactionPhase = sessionState.compaction.activeCommand?.phase;
-			const projectedChanges: Partial<SessionSnapshot> = {
+			const projectedChanges: Partial<LiveSessionSnapshot> = {
 				...changes,
 				isCompacting:
 					compactionPhase === "preparing" || compactionPhase === "running",
@@ -1205,26 +1193,24 @@ export class AgentSessionImpl implements AgentSession {
 			abortActiveSend("cancelled");
 			closeApprovals();
 			const compaction = sessionState.compaction.activeCommand?.promise;
-			const completion = waitForShutdownWork(
-				(async () => {
-					const activeSendSettled = waitForActiveSend();
-					const compactionSettled = (async (): Promise<void> => {
-						if (compaction === undefined) {
-							return;
-						}
-						try {
-							await compaction;
-						} catch {
-							// A shutdown-triggered compaction cancellation is expected.
-						}
-					})();
-					await activeSendSettled;
-					await compactionSettled;
-					await waitForBackgroundTasks();
-					await waitForCompactions();
-					await waitForDurableWrites();
-				})()
-			);
+			const completion = (async () => {
+				const activeSendSettled = waitForActiveSend();
+				const compactionSettled = (async (): Promise<void> => {
+					if (compaction === undefined) {
+						return;
+					}
+					try {
+						await compaction;
+					} catch {
+						// A shutdown-triggered compaction cancellation is expected.
+					}
+				})();
+				await activeSendSettled;
+				await compactionSettled;
+				await waitForBackgroundTasks();
+				await waitForCompactions();
+				await waitForDurableWrites();
+			})();
 			sessionState.shutdown.promise = completion.finally(() => {
 				sessionState.shutdown.phase = "closed";
 			});

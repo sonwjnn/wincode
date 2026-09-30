@@ -61,6 +61,60 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run test
 
+  session-writer-lock:
+    name: Session Writer lock (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            runner: ubuntu-latest
+            platform: linux
+            arch: x64
+          - name: Linux ARM64
+            runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - name: macOS x64
+            runner: macos-15-intel
+            platform: darwin
+            arch: x64
+          - name: macOS ARM64
+            runner: macos-15
+            platform: darwin
+            arch: arm64
+          - name: Windows x64
+            runner: windows-latest
+            platform: win32
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - name: Verify native runner target
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: >-
+          bun -e 'if (process.platform !== process.env.EXPECTED_PLATFORM ||
+          process.arch !== process.env.EXPECTED_ARCH) {
+          throw new Error("Expected " + process.env.EXPECTED_PLATFORM + "/" +
+          process.env.EXPECTED_ARCH + ", got " + process.platform + "/" +
+          process.arch);
+          }'
+      - run: bun test packages/coding-agent/test/sessions/session-writer-lock-target.test.ts
+      - name: Run native lock smoke and process contract
+        shell: bash
+        run: >-
+          bun test packages/coding-agent/test/sessions/session-writer-lock.test.ts
+          --timeout=15000
+          --test-name-pattern
+          'allows different Session IDs in one workspace to hold writers concurrently|allows separate processes to own different Session IDs in one database|refuses another process for the same Session ID while its writer is live|releases a Session Writer when its process exits'
+
   e2e:
     name: E2E tests
     runs-on: ubuntu-latest
@@ -118,12 +172,13 @@ jobs:
   gate:
     name: Required test gate
     if: always()
-    needs: [check-types, default, e2e]
+    needs: [check-types, default, e2e, session-writer-lock]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Require type checking, Default, and E2E
+      - name: Require type checking, Default, E2E, and Session Writer locks
         run: |
           test "${{ needs.check-types.result }}" = success
           test "${{ needs.default.result }}" = success
           test "${{ needs.e2e.result }}" = success
+          test "${{ needs.session-writer-lock.result }}" = success

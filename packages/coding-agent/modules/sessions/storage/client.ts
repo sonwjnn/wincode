@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { type BunSQLiteDatabase, drizzle } from "drizzle-orm/bun-sqlite";
-import { resolveLocalDatabasePath } from "./path";
+import { resolveLocalDatabasePath, resolveSessionDatabasePath } from "./path";
 import { sessionSchema } from "./schema";
 export type SessionDatabase = BunSQLiteDatabase<typeof sessionSchema> & {
 	$client: Database;
@@ -114,16 +114,6 @@ const initializeSchema = (
 			edit_mode TEXT DEFAULT 'hashline' NOT NULL
 		);
 
-		CREATE TABLE IF NOT EXISTS session_lease (
-			session_id TEXT PRIMARY KEY NOT NULL REFERENCES session(id)
-				ON UPDATE CASCADE ON DELETE CASCADE,
-			owner_token TEXT NOT NULL,
-			expires_at INTEGER NOT NULL,
-			renewed_at INTEGER NOT NULL
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_session_lease_expiry
-			ON session_lease (expires_at);
 
 		CREATE TABLE IF NOT EXISTS file_snapshot (
 			path TEXT NOT NULL,
@@ -333,7 +323,9 @@ const openDatabase = (
 	path: string,
 	allowIncompatibleSessionSchema: boolean
 ): { db: SessionDatabase; sqlite: Database } => {
-	const sqlite = new Database(path, { create: true });
+	const sqlite = new Database(resolveSessionDatabasePath(path), {
+		create: true,
+	});
 	try {
 		applyPragmas(sqlite);
 		initializeSchema(sqlite, allowIncompatibleSessionSchema);

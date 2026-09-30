@@ -222,7 +222,7 @@ export type SessionApproval = ReadonlyDeep<{
 }>;
 
 /** The session facts an observer reads at one moment. */
-export type SessionSnapshot = ReadonlyDeep<{
+export type LiveSessionSnapshot = ReadonlyDeep<{
 	/** Approval requests the Agent Session owns, oldest first, settled ones included. */
 	approvals: SessionApproval[];
 	catalogDiagnostic: string | null;
@@ -575,7 +575,7 @@ export type AgentSession = Readonly<{
 	cancelCompaction: () => SessionWaitingMessage[];
 	/** Runs a compaction command. */
 	compact: (command: SessionCompactionCommand) => Promise<CompactSessionResult>;
-	getSnapshot: () => SessionSnapshot;
+	getSnapshot: () => LiveSessionSnapshot;
 	/** Interrupts the active Agent Turn and recalls all waiting work. */
 	interrupt: (preserveToolCallId?: ToolCallId) => SessionWaitingMessage[];
 	/** Interrupts compaction or the active turn and recalls waiting work atomically. */

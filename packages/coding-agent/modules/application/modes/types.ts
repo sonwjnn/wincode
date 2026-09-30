@@ -1,11 +1,10 @@
+import type { ExecutionMode } from "@/shared/execution-mode";
 import type { JsonlInput } from "../rpc/protocol";
 import type { OutputWriter as RpcOutputWriter } from "../rpc/types";
 
 export type TextWriter = {
 	write: (text: string) => void;
 };
-
-export type ExecutionMode = "interactive" | "print" | "json" | "rpc";
 
 export type InvocationOptions = Readonly<{
 	agent?: string;

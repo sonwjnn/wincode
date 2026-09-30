@@ -73,8 +73,6 @@ export type SessionPortsOptions = Readonly<{
 	/** The Agent Session whose ports these are, available once it is constructed. */
 	agentSession: () => AgentSessionInternalPort;
 	isShutDown: () => boolean;
-	onLeaseLost: () => void;
-	renewLease: () => boolean;
 	sessionId: SessionId;
 }>;
 
@@ -185,27 +183,15 @@ export const createSessionPorts = ({
 	capabilities,
 	agentSession,
 	isShutDown,
-	onLeaseLost,
-	renewLease,
 	sessionId,
 }: SessionPortsOptions): AgentSessionPorts => {
-	const assertLease = (): void => {
+	const assertHostOpen = (): void => {
 		if (isShutDown()) {
 			throw new SessionCompactionError(
 				"cancelled",
-				"Session Lease was lost before durable compaction persistence."
+				"Session Host is shutting down before compaction persistence."
 			);
 		}
-		if (renewLease() && !isShutDown()) {
-			return;
-		}
-		if (!isShutDown()) {
-			onLeaseLost();
-		}
-		throw new SessionCompactionError(
-			"cancelled",
-			"Session Lease was lost before durable compaction persistence."
-		);
 	};
 	/**
 	 * The execution scopes the ports run, keyed by Agent Turn Identifier. A
@@ -637,10 +623,7 @@ export const createSessionPorts = ({
 				capabilities.getStore().attachmentStore?.retain(attachmentIds),
 		},
 		commitRecord: async (input) => {
-			if (isShutDown() || !renewLease()) {
-				if (!isShutDown()) {
-					onLeaseLost();
-				}
+			if (isShutDown()) {
 				return;
 			}
 			await capabilities.getStore().commitSessionRecord(input);
@@ -649,7 +632,7 @@ export const createSessionPorts = ({
 			compact: (input) =>
 				capabilities.getCompactionModule().compact({
 					...input,
-					assertAuthority: assertLease,
+					assertAuthority: assertHostOpen,
 				}),
 			getInFlight: (id) => capabilities.getCompactionModule().getInFlight(id),
 			needsCompaction: (messages, settings) =>

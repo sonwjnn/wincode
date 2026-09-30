@@ -18,10 +18,10 @@ export { resolveWorkspaceRoot } from "@/modules/tools";
 export type { SessionId, SubmissionId } from "@/shared/identifiers";
 export { toSessionId, toSubmissionId } from "@/shared/identifiers";
 export type {
+	LiveSessionSnapshot,
 	SessionApprovalResult,
 	SessionInterruptResult,
 	SessionQueuedSubmission,
-	SessionSnapshot,
 	SessionSteeringAdmission,
 	SessionSteeringMessage,
 	SessionSubmissionAdmission,
@@ -41,8 +41,4 @@ export type {
 	SessionCapabilitiesAssembly,
 	SessionCapabilitiesOptions,
 } from "./session-capabilities";
-export type {
-	SessionCapabilities,
-	SessionHost,
-	SessionHostFailure,
-} from "./types";
+export type { SessionCapabilities, SessionHost } from "./types";

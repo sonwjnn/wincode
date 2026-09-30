@@ -71,12 +71,15 @@ export const createE2ePricing = (context: number): ModelPricingTable => ({
 });
 
 const contextBody = "context detail ".repeat(120);
+const fixtureIdentifier = (prefix: string, value: string): string =>
+	prefix.length === 0 ? value : `${prefix}-${value}`;
 
 const createMessage = (
 	role: "assistant" | "user",
-	index: number
+	index: number,
+	identifierPrefix = ""
 ): SessionMessage => ({
-	id: sessionMessageId(`${role}-${index}`),
+	id: sessionMessageId(fixtureIdentifier(identifierPrefix, `${role}-${index}`)),
 	metadata: { agent: agentId("build"), model: E2E_MODEL },
 	parts: [
 		{
@@ -89,7 +92,8 @@ const createMessage = (
 
 const createAssistantRecord = (
 	message: SessionMessage,
-	turnIndex: number
+	turnIndex: number,
+	identifierPrefix: string
 ): SessionRecord => {
 	const textPart = message.parts.find((part) => part.type === "text");
 	const durableMessage: SessionMessageRecord = {
@@ -100,7 +104,9 @@ const createAssistantRecord = (
 	};
 	return {
 		agentId: agentId("build"),
-		id: sessionRecordId(`record-assistant-${turnIndex}`),
+		id: sessionRecordId(
+			fixtureIdentifier(identifierPrefix, `record-assistant-${turnIndex}`)
+		),
 		messages: [durableMessage],
 		model: E2E_MODEL,
 		outcome: {
@@ -111,7 +117,9 @@ const createAssistantRecord = (
 				usage: { inputTokens: 1, outputTokens: 1 },
 			},
 		},
-		turnId: agentTurnId(`turn-${turnIndex}`),
+		turnId: agentTurnId(
+			fixtureIdentifier(identifierPrefix, `turn-${turnIndex}`)
+		),
 		version: 1,
 	};
 };
@@ -195,21 +203,23 @@ export const createE2eStore = (): SessionStore => {
  */
 export const seedCompactionHistory = async (
 	store: SessionStore,
-	turnCount = 10
+	turnCount = 10,
+	identifierPrefix = ""
 ): Promise<{ sessionId: SessionId }> => {
-	const firstUser = createMessage("user", 1);
+	const firstUser = createMessage("user", 1, identifierPrefix);
 	const { id: sessionId } = await store.createSession({
 		agent: agentId("build"),
 		message: firstUser,
 		model: E2E_MODEL,
-		turnId: agentTurnId("turn-1"),
+		turnId: agentTurnId(fixtureIdentifier(identifierPrefix, "turn-1")),
 	});
 
 	for (let turnIndex = 1; turnIndex <= turnCount; turnIndex += 1) {
 		await store.commitSessionRecord({
 			record: createAssistantRecord(
-				createMessage("assistant", turnIndex),
-				turnIndex
+				createMessage("assistant", turnIndex, identifierPrefix),
+				turnIndex,
+				identifierPrefix
 			),
 			sessionId,
 		});
@@ -219,9 +229,11 @@ export const seedCompactionHistory = async (
 		await store.commitSessionRecord({
 			record: buildUserSessionRecord({
 				agentId: agentId("build"),
-				message: createMessage("user", turnIndex + 1),
+				message: createMessage("user", turnIndex + 1, identifierPrefix),
 				model: E2E_MODEL,
-				turnId: agentTurnId(`turn-${turnIndex + 1}`),
+				turnId: agentTurnId(
+					fixtureIdentifier(identifierPrefix, `turn-${turnIndex + 1}`)
+				),
 			}),
 			sessionId,
 		});

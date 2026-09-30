@@ -36,6 +36,8 @@
     "generate-routes": "tsr generate"
   },
   "dependencies": {
+    "@deepseek-ai/node-addon-system": "0.1.2",
+    "@lickle/lock": "0.0.1",
     "@modelcontextprotocol/client": "^2.0.0",
     "@opentui/core": "0.4.5",
     "@opentui/react": "0.4.5",
@@ -43,10 +45,10 @@
     "@wincode/agent-core": "workspace:*",
     "@wincode/ai": "workspace:*",
     "@wincode/runtime-utils": "workspace:*",
-    "drizzle-orm": "^0.45.2",
     "diff": "catalog:",
-    "jsonc-parser": "^3.3.1",
+    "drizzle-orm": "^0.45.2",
     "ignore": "^5.3.2",
+    "jsonc-parser": "^3.3.1",
     "open": "^10.2.0",
     "react": "catalog:",
     "tree-sitter-powershell": "^0.26.4",

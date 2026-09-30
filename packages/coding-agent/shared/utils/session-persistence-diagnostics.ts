@@ -7,8 +7,5 @@ export const logSessionPersistenceFailure = (
 	context: LogFields
 ): void => {
 	const fields = errorLogFields(error);
-	if (fields.errorCode === "session_lease_lost") {
-		return;
-	}
 	void logger.error(message, { ...fields, ...context });
 };

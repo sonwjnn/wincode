@@ -25,7 +25,10 @@ import type {
 	AttachmentMaintenanceReport,
 	SessionAttachmentStore,
 } from "./attachment-store";
-import type { SessionLease, SessionLeaseOptions } from "./session-lease";
+import type {
+	SessionWriterLock,
+	SessionWriterLockOptions,
+} from "./session-writer-lock";
 
 export type PromptHistoryEntry = {
 	fileTokens?: Array<{ start: number; token: string }>;
@@ -86,10 +89,10 @@ export type SessionStore = {
 		sessionId: SessionId
 	) => Promise<SessionCompaction | null>;
 	getSession: (sessionId: SessionId) => Promise<Session>;
-	acquireSessionLease: (
+	acquireSessionWriter: (
 		sessionId: SessionId,
-		options?: SessionLeaseOptions
-	) => Promise<SessionLease>;
+		options?: SessionWriterLockOptions
+	) => Promise<SessionWriterLock>;
 	listSessions: () => Promise<Session[]>;
 	listRecentModelSelections: (limit: number) => ChatModelSelection[];
 	commitSessionRecord: (input: CommitSessionRecordInput) => Promise<void>;

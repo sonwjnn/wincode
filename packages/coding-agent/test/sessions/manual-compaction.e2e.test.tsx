@@ -82,9 +82,9 @@ test("compacts manually through the UI and uses the summary on the next turn", a
 			await activeSetup.mockInput.typeText(
 				"/compact preserve database decisions"
 			);
+			await activeSetup.flush();
+			activeSetup.mockInput.pressEnter();
 		});
-		await activeSetup.flush();
-		activeSetup.mockInput.pressEnter();
 		await activeSetup.waitFor(
 			async () => (await store.getCompactions(sessionId)).length > 0,
 			{ maxPasses: 200 }

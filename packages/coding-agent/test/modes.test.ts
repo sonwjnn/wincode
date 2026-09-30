@@ -524,14 +524,14 @@ test("one-shot invalid explicit choices name their field and fail before send", 
 	}
 });
 
-test("Print mode reports an existing Session Lease conflict", async () => {
+test("Print and JSON modes report a held Session Writer conflict", async () => {
 	const seed = writer();
 	const seedErrors = writer();
 	expect(
 		await runPrintMode(
 			context(
 				"print",
-				"seed the lease conflict session",
+				"seed the writer conflict session",
 				seed.writer,
 				seedErrors.writer
 			),
@@ -551,7 +551,7 @@ test("Print mode reports an existing Session Lease conflict", async () => {
 	const sessionId = sessions.at(-1)?.id;
 	await lookup.shutdown();
 	if (sessionId === undefined) {
-		throw new Error("Expected a seeded Session for the lease conflict test.");
+		throw new Error("Expected a seeded Session for the writer conflict test.");
 	}
 
 	const holderAssembly = await composeCapabilities({
@@ -579,6 +579,23 @@ test("Print mode reports an existing Session Lease conflict", async () => {
 		expect(exitCode).toBe(1);
 		expect(stdout.text).toBe("");
 		expect(stderr.text).toContain("already in use");
+		const jsonStdout = writer();
+		const jsonStderr = writer();
+		const jsonExitCode = await runJsonMode(
+			context(
+				"json",
+				"should not acquire the held session",
+				jsonStdout.writer,
+				jsonStderr.writer,
+				sessionId
+			),
+			dependencies
+		);
+		expect(jsonExitCode).toBe(1);
+		expect(JSON.parse(jsonStdout.text)).toEqual({
+			error: "Session is already in use by another Session Host.",
+		});
+		expect(jsonStderr.text).toContain("already in use");
 	} finally {
 		await holder.shutdown();
 		await holderAssembly.shutdown();

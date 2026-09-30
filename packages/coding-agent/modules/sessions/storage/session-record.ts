@@ -612,6 +612,7 @@ const projectRecord = (record: SessionRecord): SessionMessage[] =>
 					...projected,
 					metadata: {
 						...(projected.metadata ?? {}),
+						...(terminalOutcome === "interrupted" ? { interrupted: true } : {}),
 						terminalOutcome,
 					},
 				};

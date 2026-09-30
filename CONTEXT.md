@@ -88,14 +88,13 @@ metadata, then prompt-config refs. _Avoid_: chat config, latest config
 ## Session Execution
 
 **Agent Session**:
-The single owner of one session's conversation, Session Context, waiting Submissions, approvals, compaction state, and Agent Turn execution state across turns. It is the only writer; observers read its immutable Session Snapshot. `prompt()` admits new user input, `steer()` delivers a text-only correction to a live turn, and `continue()` resumes valid idle context or starts waiting work. Its Agent and Model selection may change between turns. _Avoid_: Agent Controller, one Agent instance, Session Engine
+The single owner of one session's conversation, Session Context, waiting Submissions, approvals, compaction state, and Agent Turn execution state across turns. It is the only writer; observers read its immutable Live Session Snapshot. `prompt()` admits new user input, `steer()` delivers a text-only correction to a live turn, and `continue()` resumes valid idle context or starts waiting work. Its Agent and Model selection may change between turns. _Avoid_: Agent Controller, one Agent instance, Session Engine
 
 **Session Host**:
 The composition that opens one session, assembles capabilities, creates its Agent Session, exposes it as `agentSession`, and owns that assembly's lifetime. It carries no session state of its own and is UI-neutral, so Interactive and non-interactive modes use the same contract. _Avoid_: bootstrap, session manager, runtime, composition root
 
-**Session Lease**:
-The exclusive live claim a Session Host holds while its session is open, so only that Host's Agent Session may write the session. The claim ends with the Host and can be recovered after its owner disappears; losing it ends the Host rather than allowing two live writers.
-_Avoid_: session lock, presence, session status
+**Session Writer**:
+The Agent Session of the one Session Host authorized to write a Session ID while that Host is open. Another Agent Session cannot write that Session until the Host closes or disappears. _Avoid_: Session Lease, Session Writer Ownership, workspace writer
 
 **Session Command**:
 A request to change session state, such as submitting a prompt, steering or continuing a turn, interrupting, compacting, recovering from context overflow, or answering an approval. The Agent Session orders commands and no asynchronous continuation changes session state outside a Command. _Avoid_: operation, action, event, task
@@ -109,8 +108,11 @@ The one recovery a context-overflow refusal buys for the Agent Turn it ended: th
 **Approval Request**:
 One Tool Permission `ask` a waiting Tool Gate evaluation is registered for. The Agent Session owns it from registration to settlement: it is pending until exactly one settlement — allow, reject, or abort — whichever route triggers it, so no route can leave the evaluation waiting or settle the request twice. The session projects pending Approval Requests into the panel surface, and closing them, aborting them, or shutting the session down runs through the same path. _Avoid_: approval prompt, approval handle, approval queue
 
-**Session Snapshot**:
-The session facts an observer reads at one moment. Observers read Snapshots only, so none of them sees a partially applied Session Command. _Avoid_: full state, state dump
+**Live Session Snapshot**:
+The immutable view of one Agent Session's current conversation and transient execution state, including waiting work and approvals. Observers receive it from the live owner, never from persisted history alone. _Avoid_: Session Snapshot, Stored Session History, state dump
+
+**Stored Session History**:
+The committed Session Records and compactions read from storage without opening a Session Host. It excludes in-flight output and transient state, and reading it grants no authority to run Session Commands. _Avoid_: Live Session Snapshot, live transcript, session owner
 
 **Session Transcript**:
 The ordered messages a session presents to the user. Compaction summaries stay out of the Transcript even when they are part of the Session Context. _Avoid_: chat history, display messages, message log
@@ -122,7 +124,7 @@ The messages a session sends to the model for its next Agent Turn. It is derived
 One run of an Agent Turn and everything scoped to it: the Agent Turn Identifier, assistant message identity, source user message, start time, Agent and resolved Agent, Model Target selection, Effort, and Reasoning Mode, session-level selection its records carry, MCP snapshot, child abort registry, and Session View State. The Agent Session record carries the identity every observer reads, while the Host scope carries what only the Host owns — the resolved Agent, armed Skill catalog, MCP snapshot, child abort registry, and delegation bookkeeping. A delegated Subagent execution uses the same contract plus its parent linkage (`parentTurnId`, `parentToolCallId`), and is created and discarded with the turn rather than rebuilt on render. _Avoid_: turn context, session refs, current turn
 
 **Session View State**:
-The live, transient projection of one Agent Turn Execution for the session UI. It never becomes a Session Record, and executions never share one: the Session Snapshot exposes the Session View State of the most recently active execution, so a delegated Subagent's stream replaces the view while it runs and the parent's view returns when it ends. _Avoid_: streaming state, live buffer
+The live, transient projection of one Agent Turn Execution for the session UI. It never becomes a Session Record, and executions never share one: the Live Session Snapshot exposes the Session View State of the most recently active execution, so a delegated Subagent's stream replaces the view while it runs and the parent's view returns when it ends. _Avoid_: streaming state, live buffer
 
 **Submission**:
 The user-authored content one send accepts: text, attachments, pasted text, and an optional Skill or Custom Command invocation. _Avoid_: message, request
@@ -131,7 +133,7 @@ The user-authored content one send accepts: text, attachments, pasted text, and 
 A Submission a busy session accepts and holds instead of running immediately. It is transient Agent Session state — not a Session Record, never replayed after a restart — and it enters the Session Transcript only when it starts running. _Avoid_: queued prompt, pending message, backlog item, steering (that is a Steering Message), interjection
 
 **Submission Queue**:
-The FIFO order of a session's Queued Submissions, exposed in the Session Snapshot. The Agent Session drains it FIFO after non-failed terminal Agent Turn outcomes; a failed Agent Turn or user interrupt recalls both waiting lanes to the composer, while Steering Messages that missed their Model Step boundary are inserted ahead of newer queued prompts. _Avoid_: message queue, follow-up list, outbox
+The FIFO order of a session's Queued Submissions, exposed in the Live Session Snapshot. The Agent Session drains the queue FIFO after non-failed terminal Agent Turn outcomes; a failed Agent Turn or user interrupt recalls both waiting lanes to the composer, while Steering Messages that missed their Model Step boundary are inserted ahead of newer queued prompts. _Avoid_: message queue, follow-up list, outbox
 
 **Recall**:
 Withdrawing a session's waiting user messages back into the composer in order, restoring their composition instead of running them. It withdraws the Steering Lane and the Submission Queue together. _Avoid_: dequeue, withdraw, unsend, retract, delete
@@ -177,7 +179,7 @@ The durable Session opened or created for one Print Mode or JSON Mode invocation
 The Agent, Model, Effort, and Reasoning Mode resolved for one Print Mode or JSON Mode invocation. Explicit CLI selectors override a Session Selection; omitted selectors restore it or use configuration, and creating a One-Shot Session requires complete resolution before its first record. _Avoid_: command-line config, request selection
 
 **JSON Event Stream**:
-The ordered public Agent Turn events emitted by JSON Mode as JSONL. It uses the same event vocabulary and projection as RPC Mode but does not include JSON-RPC envelopes, request IDs, commands, or state notifications. _Avoid_: raw Session Snapshot, JSON-RPC stream
+The ordered public Agent Turn events emitted by JSON Mode as JSONL. It uses the same event vocabulary and projection as RPC Mode but does not include JSON-RPC envelopes, request IDs, commands, or state notifications. _Avoid_: raw Live Session Snapshot, JSON-RPC stream
 
 **Non-Interactive Approval**:
 A Tool Permission `ask` encountered by Print Mode or JSON Mode. Without explicit auto-approval it fails closed rather than waiting; `--auto` may allow ordinary asks, while safety asks and explicit denies remain blocked. _Avoid_: unattended approval, automatic permission

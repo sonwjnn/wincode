@@ -1,8 +1,8 @@
 import { logger } from "@wincode/runtime-utils";
 import { errorLogFields } from "@/shared/utils/error-log-fields";
 import type {
+	LiveSessionSnapshot,
 	SessionHost,
-	SessionSnapshot,
 	SessionSubmissionEvent,
 } from "../../../modules/sessions/host/session-rpc";
 import { type DeferredNotification, SerializedWriter } from "./output";
@@ -67,9 +67,6 @@ const logRpcFatalDiagnostic = (
 	code: string,
 	rpcMethod: string | undefined
 ): Promise<void> => {
-	if (code === "session_lease_lost") {
-		return logger.flush();
-	}
 	const context = {
 		...errorLogFields(error),
 		rpcErrorCode: code,
@@ -113,13 +110,13 @@ export async function runRpc({
 	const processId = crypto.randomUUID();
 	const seenRequestIds = new Set<string>();
 	const approvalWireIds = new WeakMap<
-		SessionSnapshot["approvals"][number],
+		LiveSessionSnapshot["approvals"][number],
 		string
 	>();
 	const approvalEngineIdsByWire = new Map<string, string>();
 	const activeApprovalWireIds = new Map<string, string>();
 	const wireApprovalId = (
-		approval: SessionSnapshot["approvals"][number]
+		approval: LiveSessionSnapshot["approvals"][number]
 	): string => {
 		const existing = approvalWireIds.get(approval);
 		if (existing !== undefined) {
@@ -273,7 +270,7 @@ export async function runRpc({
 			error instanceof Error && error === output.failureError
 				? error
 				: undefined;
-		if (code !== "session_lease_lost" && outputFailure !== undefined) {
+		if (outputFailure !== undefined) {
 			loggedOutputFailure = outputFailure;
 		}
 		const diagnosticWrite = logRpcFatalDiagnostic(error, code, activeRpcMethod);
@@ -377,7 +374,7 @@ export async function runRpc({
 		if (state.host === undefined || state.boundSessionId === undefined) {
 			throw appError("session_not_bound", "No Session Host is bound.");
 		}
-		const snapshot: SessionSnapshot = state.host.getSnapshot();
+		const snapshot: LiveSessionSnapshot = state.host.getSnapshot();
 		const executions = snapshot.executions.map(projectExecution);
 		const primary = [...snapshot.executions]
 			.reverse()
@@ -485,9 +482,6 @@ export async function runRpc({
 					}
 				}
 			),
-			nextHost.onFatal((failureValue) => {
-				void fatalShutdown(appError(failureValue.code, failureValue.code));
-			}),
 			nextHost.subscribe(notifyState)
 		);
 	};
@@ -596,24 +590,6 @@ export async function runRpc({
 				}
 				response = requestResult.value;
 			} catch (error) {
-				if (
-					error instanceof RpcApplicationError &&
-					error.code === "session_lease_lost"
-				) {
-					try {
-						await flushDeferred();
-					} catch (flushError) {
-						reportDeferredFlushFailure(
-							flushError,
-							loggedOutputFailure,
-							activeRpcMethod
-						);
-						resetDeferred();
-						handlingRequest = false;
-					}
-					await fatalShutdown(error);
-					break;
-				}
 				if (error instanceof RpcApplicationError) {
 					response = failure(
 						request.id,

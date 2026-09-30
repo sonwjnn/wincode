@@ -26,7 +26,8 @@ export const loadRuntime = async (): Promise<RuntimeModules> => ({
 			}),
 			workspace: input.workspace,
 		}),
-	createSessionHost,
+	createSessionHost: (input) =>
+		createSessionHost({ ...input, executionMode: "rpc" }),
 	createSessionUserMessage,
 	effortSchema,
 	isSupportedModelEffort,

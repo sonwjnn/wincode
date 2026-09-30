@@ -129,9 +129,9 @@ test("continues the compacted Session Context after a provider context overflow"
 
 		await act(async () => {
 			await activeSetup.mockInput.typeText(PROMPT);
+			await activeSetup.flush();
+			activeSetup.mockInput.pressEnter();
 		});
-		await activeSetup.flush();
-		activeSetup.mockInput.pressEnter();
 
 		// The refused turn proposes recovery, which compacts eligible history
 		// before continuing the existing Session Context.

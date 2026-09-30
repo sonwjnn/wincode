@@ -81,9 +81,9 @@ test("compacts automatically before sending and uses the rebuilt context", async
 			await activeSetup.mockInput.typeText(
 				"continue with the retained context"
 			);
+			await activeSetup.flush();
+			activeSetup.mockInput.pressEnter();
 		});
-		await activeSetup.flush();
-		activeSetup.mockInput.pressEnter();
 
 		await activeSetup.waitFor(
 			async () => (await store.getCompactions(sessionId)).length > 0,

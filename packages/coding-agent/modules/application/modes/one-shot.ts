@@ -393,10 +393,8 @@ const runOneShot = async (
 	});
 	let host: SessionHost | undefined;
 	let removeEventListener: (() => void) | undefined;
-	let removeFatalListener: (() => void) | undefined;
 	let terminalFailureMessage: string | undefined;
 	let terminalSucceeded = false;
-	let leaseLost = false;
 	try {
 		const { initialMessage, sessionId } = await initializeOneShotSession(
 			context,
@@ -405,6 +403,7 @@ const runOneShot = async (
 		);
 		host = await createSessionHost({
 			capabilities: assembly.capabilities,
+			executionMode: format,
 			sessionId,
 		});
 		const registry = assembly.capabilities.getRegistry();
@@ -416,11 +415,6 @@ const runOneShot = async (
 			registry,
 			restored,
 			reasoningModeOption: context.invocation.reasoningMode,
-		});
-		removeFatalListener = host.onFatal((failure) => {
-			if (failure.code === "session_lease_lost") {
-				leaseLost = true;
-			}
 		});
 		removeEventListener = host.onEvent((event) => {
 			if (
@@ -451,9 +445,6 @@ const runOneShot = async (
 			if (outcome.rejected) {
 				throw new Error(outcome.reason);
 			}
-			if (leaseLost) {
-				throw new Error("Session lease lost during the Agent Turn.");
-			}
 			if (!terminalSucceeded) {
 				if (format === "json" && terminalFailureMessage !== undefined) {
 					return { terminalFailureMessage, terminalSucceeded: false };
@@ -468,7 +459,6 @@ const runOneShot = async (
 		return { terminalSucceeded };
 	} finally {
 		removeEventListener?.();
-		removeFatalListener?.();
 		await host?.shutdown();
 		await assembly.shutdown();
 	}

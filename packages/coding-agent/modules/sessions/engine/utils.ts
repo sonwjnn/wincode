@@ -1,13 +1,13 @@
 import { isUndefined } from "@wincode/runtime-utils";
 import type { SessionViewState } from "../hooks/runtime-turn";
-import type { SessionExecution, SessionSnapshot } from "./types";
+import type { LiveSessionSnapshot, SessionExecution } from "./types";
 
 /** Whether a candidate snapshot changes any fact the current one holds. */
 export const hasChanged = (
-	state: SessionSnapshot,
-	changes: Partial<SessionSnapshot>
+	state: LiveSessionSnapshot,
+	changes: Partial<LiveSessionSnapshot>
 ): boolean =>
-	(Object.keys(changes) as (keyof SessionSnapshot)[]).some(
+	(Object.keys(changes) as (keyof LiveSessionSnapshot)[]).some(
 		(key) => !Object.is(state[key], changes[key])
 	);
 
@@ -50,7 +50,7 @@ export const primaryEntry = <T extends { readonly parent?: unknown }>(
  * from the snapshot's facts, so a view never keeps its own notion of a running
  * session.
  */
-export const isSessionBusy = (snapshot: SessionSnapshot): boolean =>
+export const isSessionBusy = (snapshot: LiveSessionSnapshot): boolean =>
 	snapshot.turnActive ||
 	snapshot.isCompacting ||
 	snapshot.approvals.some((approval) => isUndefined(approval.decision));
@@ -60,5 +60,6 @@ export const isSessionBusy = (snapshot: SessionSnapshot): boolean =>
  * Model Step boundary. A submission can be active while preparing or settling
  * without a live execution to steer.
  */
-export const acceptsSteeringMessages = (snapshot: SessionSnapshot): boolean =>
-	snapshot.turnActive && snapshot.executions.length > 0;
+export const acceptsSteeringMessages = (
+	snapshot: LiveSessionSnapshot
+): boolean => snapshot.turnActive && snapshot.executions.length > 0;

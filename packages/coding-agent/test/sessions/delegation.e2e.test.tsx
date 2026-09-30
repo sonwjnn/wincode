@@ -241,9 +241,9 @@ test("keeps the parent's live view while a Subagent streams and ends", async () 
 
 		await act(async () => {
 			await activeSetup.mockInput.typeText("delegate the inspection");
+			await activeSetup.flush();
+			activeSetup.mockInput.pressEnter();
 		});
-		await activeSetup.flush();
-		activeSetup.mockInput.pressEnter();
 
 		// Both Subagent executions stream while the parent is still running, and
 		// each holds its turn open until the journey ends it. The journey proves
