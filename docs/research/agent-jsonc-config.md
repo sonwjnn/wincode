@@ -23,7 +23,7 @@ Wincode already has a domain-neutral, provenance-aware config store (`wincode-cl
 
 The smallest clean seam for `agents` support is therefore:
 
-1. A new `wincode-cli/src/modules/agents/` module (discovery → loader → types → index), mirroring `modules/skills/` and `modules/custom-commands/`, consuming `ConfigRuntime` (`config-store.ts:36-40`).
+1. A new `wincode-cli/src/modules/agents/` module (discovery → loader → types → index), mirroring `modules/skills/` and `modules/commands/custom/`, consuming `ConfigRuntime` (`config-store.ts:36-40`).
 2. A widening of the closed `ModeType` / `codingModeNameSchema` union in `packages/ai/src/modes.ts:13-38` plus the mode-keyed instruction/tool lookups (`packages/ai/src/instructions.ts`, `packages/ai/src/server/agent.ts:43-62`) — this is the real coupling point, because "agents" today are exactly the two hard-coded `codingModes` surfaced in the `/agents` dialog.
 3. A decision about the config shape — the repo's own precedent (`{ commands: { paths } }`) is a path array, while upstream OpenCode uses a named record (`agents: { <name>: {...} }`). These are not compatible, and choosing is the primary unresolved product decision.
 
@@ -134,11 +134,11 @@ There is **no `agents` module** in this fork (`ls wincode-cli/src/modules` → a
 
 ### 3.2 The flow, config file → runtime
 
-1. `createConfigStore()` built in `root-layout.tsx:22`; snapshot obtained on demand via `ConfigRuntime.configStore.getSnapshot(workspace)` (e.g. `wincode-cli/src/modules/skills/index.ts:13-23` `discoverSkills`, `modules/custom-commands/loader.ts:45-56` `getCustomCommands`).
-2. `discovery.ts` per module: `configuredRoots(snapshot)` reads `snapshot.document.commands.paths` / `skills.paths` (`custom-commands/discovery.ts:31-53`, `wincode-cli/src/modules/skills/discovery.ts:30-52`), type-checks the section defensively, then for each string entry calls `resolveConfigRelativePath(snapshot, ["skills","paths",String(index)], configuredPath)`.
+1. `createConfigStore()` built in `root-layout.tsx:22`; snapshot obtained on demand via `ConfigRuntime.configStore.getSnapshot(workspace)` (e.g. `wincode-cli/src/modules/skills/index.ts:13-23` `discoverSkills`, `modules/commands/custom/loader.ts:45-56` `getCustomCommands`).
+2. `discovery.ts` per module: `configuredRoots(snapshot)` reads `snapshot.document.commands.paths` / `skills.paths` (`commands/custom/discovery.ts:31-53`, `wincode-cli/src/modules/skills/discovery.ts:30-52`), type-checks the section defensively, then for each string entry calls `resolveConfigRelativePath(snapshot, ["skills","paths",String(index)], configuredPath)`.
 3. `resolveConfigRelativePath` (`shared/config/resolve-config-relative-path.ts:9-22`) uses `snapshot.sourceFor(fieldPath)` to find the config file that supplied the entry and resolves relative paths from `dirname(origin.path)`; unknown provenance → entry skipped.
 4. Conventional folders always participate: `getProjectRoots(workspace)` (`shared/paths/project-roots.ts:4-19`) walks from the workspace up to the nearest `.git` root; skills also scan legacy dirs and sibling `skills` dirs of each global config source.
-5. `loader.ts` dedupes by name into a Map — later/higher-precedence candidates overwrite earlier ones — then sorts (custom-commands: built-in names checked first via `BUILTIN_NAMES` from `modules/commands/commands.ts`, collision → `logger.warn` + skip, `custom-commands/loader.ts:18-39`; Skills: same-name overwrite, `packages/skills/src/filesystem.ts:151-166`). Invalid files are skipped best-effort.
+5. `loader.ts` dedupes by name into a Map — later/higher-precedence candidates overwrite earlier ones — then sorts (custom commands: built-in names checked first via `BUILTIN_NAMES` from `modules/commands/commands.ts`, collision → `logger.warn` + skip, `commands/custom/loader.ts:18-39`; Skills: same-name overwrite, `packages/skills/src/filesystem.ts:151-166`). Invalid files are skipped best-effort.
 6. Consumers: `sessions/ui/components/chat-text-area.tsx:234-242` builds `discoverCustomCommands`/`discoverAvailableSkills` closures from `useConfig()` and passes them to the input controller (299-309); `resolveCustomCommandPrompt`/`resolveSkillPrompt` (78-120) expand `/name args` into the prompt at submit; `skills/ui/skills-dialog.tsx:43-64` loads the list on open.
 
 ### 3.3 Established semantics worth preserving
@@ -277,7 +277,7 @@ The store itself needs **no changes** — its README (`wincode-cli/src/shared/co
 - `wincode-cli/src/shared/config/config-store.ts` — store, locations (365-370), selection (270-295), parse/safety (297-336), merge+provenance (161-180, 136-159), `sourceFor` (394-401), memoization (422-434)
 - `wincode-cli/src/shared/config/README.md:16-23` — merge contract; agents named as a future capability on the snapshot
 - `wincode-cli/src/shared/config/config-provider.tsx`, `resolve-config-relative-path.ts:9-22`, `wincode-cli/src/shared/paths/project-roots.ts:4-19`
-- `wincode-cli/src/modules/custom-commands/discovery.ts:31-53`, `loader.ts:9-43`, `config.integration.test.ts`; `wincode-cli/src/modules/skills/discovery.ts:11-15,30-121`, `packages/skills/src/filesystem.ts:73-166`, `packages/skills/src/index.ts`, `packages/skills/src/frontmatter.ts:4-73`, `wincode-cli/src/modules/skills/config.integration.test.ts`, `skills-dialog.tsx:43-64`
+- `wincode-cli/src/modules/commands/custom/discovery.ts:31-53`, `loader.ts:9-43`, `config.integration.test.ts`; `wincode-cli/src/modules/skills/discovery.ts:11-15,30-121`, `packages/skills/src/filesystem.ts:73-166`, `packages/skills/src/index.ts`, `packages/skills/src/frontmatter.ts:4-73`, `wincode-cli/src/modules/skills/config.integration.test.ts`, `skills-dialog.tsx:43-64`
 - `wincode-cli/src/modules/mcp/config/schema.ts`, `config/resolve.ts:19-27,40-71,249-330`; `wincode-cli/src/modules/mcp/config.ts:31-50`
 - `wincode-cli/src/modules/prompt-settings/context/prompt-config-provider.tsx:59-85`, `prompt-settings/ui/agents-dialog.tsx:45`
 - `wincode-cli/src/modules/commands/commands.ts:17-33`, `commands/adapters/mode-adapter.ts`, `app/commands/use-app-command-executor.tsx:202-218`
