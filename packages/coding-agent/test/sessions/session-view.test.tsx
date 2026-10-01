@@ -341,7 +341,7 @@ function AgentRegistryReadyProbe({ onReady }: { onReady: () => void }) {
 /** The strip's count line, e.g. `2 waiting`; the workspace path never has one. */
 const WAITING_COUNT_PATTERN = /\d+ waiting/u;
 /** A strip row of one lane, so a lane tag is read off the row it belongs to. */
-const LANE_ROW = (lane: "queued" | "steering", description: string): RegExp =>
+const LANE_ROW = (lane: "queued", description: string): RegExp =>
 	new RegExp(`${lane}\\s+${description}`, "u");
 
 const userMessage = (id: string, text: string): SessionMessage => ({
@@ -1083,11 +1083,11 @@ describe("SessionView waiting messages", () => {
 			await flushUi(setup);
 			await flushUi(setup);
 
-			// Committed Steering Messages cannot be recalled; only the queue head
-			// wears the next Recall marker.
+			// Steered messages remain committed in the session, but only
+			// uncommitted work appears in the waiting strip.
 			const frame = setup.captureCharFrame();
-			expect(frame).not.toContain("▸ steering");
-			expect(frame).toMatch(LANE_ROW("steering", "steer me"));
+			expect(frame).toContain("1 waiting");
+			expect(frame).not.toContain("steer me");
 			expect(frame).toMatch(LANE_ROW("queued", "later prompt"));
 			expect(frame).toContain("▸ queued");
 
@@ -1096,12 +1096,12 @@ describe("SessionView waiting messages", () => {
 			await flushUi(setup);
 			await flushUi(setup);
 
-			// Recall withdraws only the later uncommitted prompt. Durable
-			// steering remains visible and cannot be returned to the composer.
+			// Recall withdraws the uncommitted prompt; committed steering stays
+			// out of the waiting strip.
 			expect(fakeWaitingTexts).toEqual(["steer me"]);
 			const afterRecall = setup.captureCharFrame();
-			expect(afterRecall).not.toContain("▸ steering");
-			expect(afterRecall).toMatch(LANE_ROW("steering", "steer me"));
+			expect(afterRecall).not.toMatch(WAITING_COUNT_PATTERN);
+			expect(afterRecall).not.toContain("steer me");
 		} finally {
 			release.resolve();
 			await flushUi(setup);
@@ -1109,7 +1109,7 @@ describe("SessionView waiting messages", () => {
 		}
 	});
 
-	test("pressing Enter on an empty composer steers only one of four queued items", async () => {
+	test("empty Enter removes one committed Submission from the waiting queue", async () => {
 		fakeQueuedSeed = [
 			fromPartial<SessionQueuedSubmission>({
 				id: queuedSubmissionId("queued-first"),
@@ -1134,8 +1134,9 @@ describe("SessionView waiting messages", () => {
 			await flushUi(setup);
 
 			let frame = setup.captureCharFrame();
-			expect(frame).not.toContain("▸ steering");
-			expect(frame).toMatch(LANE_ROW("steering", "first queued"));
+			expect(frame).toContain("3 waiting");
+			expect(frame).not.toContain("first queued");
+			expect(frame).not.toContain("steering");
 			expect(frame).toMatch(LANE_ROW("queued", "later queued 1"));
 			expect(frame).toMatch(LANE_ROW("queued", "later queued 2"));
 			expect(frame).toContain("▸ queued");
@@ -1146,8 +1147,9 @@ describe("SessionView waiting messages", () => {
 			await flushUi(setup);
 
 			frame = setup.captureCharFrame();
+			expect(frame).toContain("4 waiting");
+			expect(frame).not.toContain("first queued");
 			expect(frame).toMatch(LANE_ROW("queued", "ordinary input"));
-			expect(frame).toMatch(LANE_ROW("steering", "first queued"));
 			expect(frame).toMatch(LANE_ROW("queued", "later queued 1"));
 			expect(frame).toMatch(LANE_ROW("queued", "later queued 2"));
 			expect(frame).toMatch(LANE_ROW("queued", "later queued 3"));

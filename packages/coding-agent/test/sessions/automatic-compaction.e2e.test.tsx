@@ -167,6 +167,7 @@ test("compacts automatically before sending and uses the rebuilt context", async
 
 const QUEUED_CORRECTION = /queued\s+queued correction/u;
 const STEERING_CORRECTION = /steering\s+queued correction/u;
+const WAITING_COUNT_PATTERN = /\d+ waiting/u;
 
 test("busy composer queues a prompt until empty Enter promotes it into the same turn", async () => {
 	const seeded = await seedCompactionHistory(store, 1, "input-lane");
@@ -212,10 +213,15 @@ test("busy composer queues a prompt until empty Enter promotes it into the same 
 			activeSetup.mockInput.pressEnter();
 			await activeSetup.flush();
 		});
-		await waitForSessionFrame(activeSetup, (frame) =>
-			STEERING_CORRECTION.test(frame)
+		await waitForSessionFrame(
+			activeSetup,
+			(frame) =>
+				frame.includes("queued correction") && !QUEUED_CORRECTION.test(frame)
 		);
-		expect(activeSetup.captureCharFrame()).not.toMatch(QUEUED_CORRECTION);
+		const steeredFrame = activeSetup.captureCharFrame();
+		expect(steeredFrame).toContain("queued correction");
+		expect(steeredFrame).not.toMatch(QUEUED_CORRECTION);
+		expect(steeredFrame).not.toMatch(WAITING_COUNT_PATTERN);
 		expect(
 			recorder.requests
 				.slice(requestOffset)

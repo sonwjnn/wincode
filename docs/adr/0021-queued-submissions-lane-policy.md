@@ -88,9 +88,11 @@ committed Steering Message.
 
 ## Consequences
 
-- The Live Session Snapshot and session view expose both uncommitted queued
-  Submissions and committed pending/failed Steering Messages with stable
-  identities and status.
+- The Live Session Snapshot exposes both uncommitted queued Submissions and
+  committed pending/failed Steering Messages with stable identities and status.
+  The interactive waiting strip lists only uncommitted queue entries;
+  committed messages remain in the Session Transcript, with their stored
+  failure reasons.
 - The Session Transcript includes each steered user message as soon as its
   durable commit succeeds; it does not wait for Model Step delivery. A queued
   but unsteered Submission remains outside durable history.

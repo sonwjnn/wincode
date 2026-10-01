@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preparation. Failed delivery blocks later inputs for deliberate retry and
   never recalls or blindly replays committed messages.
 
+- **Committed steering is not waiting work in the interactive view.** The
+  waiting strip lists only uncommitted queue entries; committed messages stay
+  in the transcript, where a failed message retains its stored reason.
+
 - **Session metadata groups as soon as a prompt is submitted.** An idle
   submission appears optimistically in the transcript on Enter and reconciles
   with its stored message by ID. Streaming assistant messages carry the

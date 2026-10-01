@@ -804,7 +804,6 @@ export function SessionView({
 					queuedSubmissions={snapshot.queuedSubmissions}
 					recalledSubmissions={recalledSubmissions}
 					recallRevision={recallRevision}
-					steeringMessages={snapshot.steeringMessages}
 					viewState={snapshot.viewState}
 				/>
 			</box>

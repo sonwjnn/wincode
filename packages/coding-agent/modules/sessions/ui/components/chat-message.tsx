@@ -41,6 +41,7 @@ export function ChatMessage({
 								appliedSkill={getAppliedSkill(message.metadata)}
 								key={message.id}
 								parts={message.parts}
+								submissionFailure={message.metadata?.submissionFailure}
 							/>
 						);
 					}

@@ -10,6 +10,7 @@ import { ATTACHMENT_ID_DISPLAY_LENGTH } from "../../storage/attachment-store";
 type UserMessageProps = {
 	agent: AgentId;
 	appliedSkill?: AppliedSkill;
+	submissionFailure?: string;
 	parts: SessionMessage["parts"];
 };
 
@@ -105,7 +106,12 @@ const getImageBadgeKeys = (
 		return { key: `${id}:${occurrence}`, part };
 	});
 };
-export function UserMessage({ agent, appliedSkill, parts }: UserMessageProps) {
+export function UserMessage({
+	agent,
+	appliedSkill,
+	parts,
+	submissionFailure,
+}: UserMessageProps) {
 	const { colors } = useTheme();
 
 	const borderColor = getAgentColor(colors, agent);
@@ -201,6 +207,13 @@ export function UserMessage({ agent, appliedSkill, parts }: UserMessageProps) {
 					</box>
 				)}
 			</BorderedContentBlock>
+			{submissionFailure ? (
+				<box paddingX={2} width="100%">
+					<text fg={colors.error} truncate>
+						{`Submission failed: ${submissionFailure}`}
+					</text>
+				</box>
+			) : null}
 		</box>
 	);
 }
