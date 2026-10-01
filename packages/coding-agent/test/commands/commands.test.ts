@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
+import { findBuiltinCommand } from "@/modules/commands/builtin-invocation";
 import { COMMANDS, getVisibleCommands } from "@/modules/commands/commands";
-import { findBuiltinCommand } from "@/modules/sessions/hooks/input-controller/builtin-command";
 
 test("keeps built-in slash names routed to their action IDs", () => {
 	const expected = [
@@ -26,10 +26,14 @@ test("keeps built-in slash names routed to their action IDs", () => {
 test("suppresses popover rows for commands the view cannot run", () => {
 	expect(getVisibleCommands()).toHaveLength(COMMANDS.length);
 	expect(
-		getVisibleCommands({ hideCompact: true }).map((command) => command.action)
+		getVisibleCommands({ unavailableCapabilities: ["compaction"] }).map(
+			(command) => command.action
+		)
 	).not.toContain("session.compact");
 	expect(
-		getVisibleCommands({ hideEffort: true }).map((command) => command.action)
+		getVisibleCommands({ unavailableCapabilities: ["effort-selection"] }).map(
+			(command) => command.action
+		)
 	).not.toContain("effort.select");
 });
 
@@ -56,7 +60,7 @@ test("resolves typed built-in commands by exact name", () => {
 
 test("carries the compaction focus into the typed command", () => {
 	expect(findBuiltinCommand("/compact preserve decisions")).toMatchObject({
-		focus: "preserve decisions",
+		argument: "preserve decisions",
 		action: "session.compact",
 	});
 	expect(findBuiltinCommand("/compact")).toMatchObject({

@@ -1,10 +1,10 @@
-import type { CommandItem } from "@/modules/commands/command-item";
-import type { CommandSpec } from "@/modules/commands/commands";
-import type { CustomCommandSpec } from "@/modules/commands/custom/types";
+import type {
+	CommandController,
+	CommandSuggestion,
+} from "@/modules/commands/command-controller";
 import type { FileMentionOption } from "@/modules/file-mentions";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";
-import type { Skill } from "@/modules/skills";
 import type { ChatPromptSubmission } from "../../utils";
 import type { PromptHistoryEntry } from "./history";
 import type { SubmitSnapshot } from "./submit";
@@ -12,8 +12,8 @@ import type { SubmitSnapshot } from "./submit";
 export type InputOverlayState =
 	| { items: []; kind: null; selectedIndex: -1 }
 	| {
-			allItems: CommandItem[];
-			items: CommandItem[];
+			allItems: readonly CommandSuggestion[];
+			items: readonly CommandSuggestion[];
 			kind: "command";
 			selectedIndex: number;
 	  }
@@ -70,13 +70,8 @@ export type ChatInputController = {
 
 export type ChatInputControllerOptions = {
 	disabled: boolean;
-	executeCommand: (command: CommandSpec) => void | Promise<void>;
-	getCustomCommands: () => Promise<CustomCommandSpec[]>;
+	commandController: CommandController;
 	getFileMentionOptions: () => Promise<FileMentionOption[]>;
-	getSkills: () => Promise<Skill[]>;
-	hideEffort?: boolean;
-	hideCompact?: boolean;
-	onError: (message: string) => void;
 	onSubmit: (
 		submission: ChatPromptSubmission
 	) => boolean | Promise<boolean> | void | Promise<void>;

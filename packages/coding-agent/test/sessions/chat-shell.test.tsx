@@ -76,6 +76,9 @@ const { DEFAULT_THEME } = await import("@/shared/providers/theme/themes");
 const { ToastProvider } = await import(
 	"@/shared/providers/toast/toast-provider"
 );
+const { CommandControllerProvider } = await import(
+	"@/tui/commands/command-controller-provider"
+);
 const { ChatShell } = await import(
 	"@/modules/sessions/ui/components/chat-shell"
 );
@@ -338,19 +341,21 @@ const renderChatShell = async (
 														workspace={workspace}
 													>
 														<RouterContextProvider router={router}>
-															<ChatShellProbe
-																activeMessages={activeMessages}
-																agentHolder={agent}
-																holder={holder}
-																initialCompactions={initialCompactions}
-																initialMessages={initialMessages}
-																isBusy={isBusy}
-																isCompacting={isCompacting}
-																isInterruptArmed={isInterruptArmed}
-																onRetry={onRetry}
-																queuedSubmissions={queuedSubmissions}
-																steeringMessages={steeringMessages}
-															/>
+															<CommandControllerProvider>
+																<ChatShellProbe
+																	activeMessages={activeMessages}
+																	agentHolder={agent}
+																	holder={holder}
+																	initialCompactions={initialCompactions}
+																	initialMessages={initialMessages}
+																	isBusy={isBusy}
+																	isCompacting={isCompacting}
+																	isInterruptArmed={isInterruptArmed}
+																	onRetry={onRetry}
+																	queuedSubmissions={queuedSubmissions}
+																	steeringMessages={steeringMessages}
+																/>
+															</CommandControllerProvider>
 														</RouterContextProvider>
 													</McpProvider>
 												</DialogProvider>

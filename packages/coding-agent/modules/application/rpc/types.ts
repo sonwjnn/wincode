@@ -3,7 +3,7 @@ import type {
 	ReasoningMode,
 	ReasoningSelection,
 } from "@wincode/ai/models";
-import type { SubmissionPromptSkillInvocation } from "@/modules/sessions/submission-preparation";
+import type { SubmissionPromptSkillInvocation } from "@/modules/commands/submission-resolution";
 import type { SkillContext } from "@/modules/skills";
 import type {
 	AgentTurnId,

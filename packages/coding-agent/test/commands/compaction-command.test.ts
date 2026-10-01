@@ -26,7 +26,7 @@ test("dispatches manual compaction focus to its registered action", async () => 
 		throw new Error("Compaction command missing from the registry.");
 	}
 
-	await execute({ ...command, focus: "preserve database decisions" });
+	await execute({ ...command, argument: "preserve database decisions" });
 
 	expect(compact).toHaveBeenCalledWith("preserve database decisions");
 	expect(compact).toHaveBeenCalledTimes(1);

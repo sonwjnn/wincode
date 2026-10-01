@@ -1,12 +1,15 @@
 import { expect, test } from "bun:test";
-import { parseCompactCommand } from "@/modules/sessions/compaction/commands";
+import { findBuiltinCommand } from "@/modules/commands/builtin-invocation";
 
-test("parses exact compact commands and public focus text", () => {
-	expect(parseCompactCommand("/compact")).toEqual({});
-	expect(parseCompactCommand("  /compact preserve the API decision  ")).toEqual(
-		{
-			focus: "preserve the API decision",
-		}
-	);
-	expect(parseCompactCommand("/compactible")).toBeNull();
+test("optional text commands preserve arguments without consuming other command names", () => {
+	expect(findBuiltinCommand("/compact")).toMatchObject({
+		action: "session.compact",
+	});
+	expect(
+		findBuiltinCommand("  /compact preserve the API decision  ")
+	).toMatchObject({
+		action: "session.compact",
+		argument: "preserve the API decision",
+	});
+	expect(findBuiltinCommand("/compactible")).toBeNull();
 });

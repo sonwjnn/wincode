@@ -1,5 +1,6 @@
 import { logger } from "@wincode/runtime-utils";
 import { getCustomCommands } from "@/modules/commands/custom/loader";
+import { resolveSubmissionPrompt } from "@/modules/commands/submission-resolution";
 import { expandPastedText } from "@/modules/sessions/pasted-text";
 import { discoverSkills } from "@/modules/skills";
 import { errorLogFields } from "@/shared/utils/error-log-fields";
@@ -8,7 +9,6 @@ import type {
 	SessionHost,
 	SessionSubmissionEvent,
 } from "../../../modules/sessions/host/session-rpc";
-import { resolveSubmissionPrompt } from "../../../modules/sessions/submission-preparation";
 import { type DeferredNotification, SerializedWriter } from "./output";
 import {
 	operationalStatus,

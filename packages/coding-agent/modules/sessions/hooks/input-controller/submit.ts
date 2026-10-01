@@ -1,11 +1,8 @@
-import type { CommandSpec } from "@/modules/commands/commands";
-import type { CustomCommandSpec } from "@/modules/commands/custom/types";
+import type { CommandController } from "@/modules/commands/command-controller";
 import type { SessionFilePart } from "@/modules/sessions/message";
-import type { Skill } from "@/modules/skills";
 import { replaceTextRanges } from "../../pasted-text";
-import { resolveSubmissionPrompt } from "../../submission-preparation";
 import type { ChatPromptSubmission } from "../../utils";
-import { findBuiltinCommand } from "./builtin-command";
+
 export type TrackedPastedText = {
 	end: number;
 	start: number;
@@ -14,7 +11,7 @@ export type TrackedPastedText = {
 };
 
 /** Expand extmark-backed markers without replacing literal lookalikes. */
-const expandTrackedPastedText = (
+export const expandTrackedPastedText = (
 	text: string,
 	markers: readonly TrackedPastedText[]
 ): string => replaceTextRanges(text, markers);
@@ -28,73 +25,63 @@ export type SubmitSnapshot = {
 };
 
 export type SubmitDependencies = {
+	commandController: CommandController;
 	disabled: boolean;
-	discoverCustomCommands: () => Promise<CustomCommandSpec[]>;
-	discoverSkills: () => Promise<Skill[]>;
-	onError: (message: string) => void;
 	onSubmit: (
 		submission: ChatPromptSubmission
 	) => boolean | Promise<boolean> | void | Promise<void>;
 };
 
-/**
- * The Built-in Command one composition invokes, or null when the line is
- * ordinary prompt text. Pasted-text markers are expanded first, so a focus
- * pasted after `/compact ` reaches the command as the pasted content, and a
- * composition carrying attachments stays a prompt.
- */
-export const resolveBuiltinCommand = (
-	snapshot: SubmitSnapshot
-): CommandSpec | null =>
-	snapshot.files.length === 0
-		? findBuiltinCommand(
-				expandTrackedPastedText(snapshot.rawText, snapshot.pastedTexts)
-			)
-		: null;
+export type PreparedPromptSubmission = {
+	accepted: boolean;
+	execute: () => Promise<void>;
+};
 
-/**
- * Resolve Skill/Custom Command intent once for every surface, then hand the
- * prepared composition to its transport. History and input reset remain
- * acceptance-owned by the caller.
- */
-export async function submitPrompt(
+const REJECTED_SUBMISSION: PreparedPromptSubmission = {
+	accepted: false,
+	execute: async () => undefined,
+};
+
+/** Prepare slash intent and the accepted prompt payload without resetting input. */
+export async function preparePromptSubmission(
 	dependencies: SubmitDependencies,
 	snapshot: SubmitSnapshot
-): Promise<boolean> {
+): Promise<PreparedPromptSubmission> {
 	if (dependencies.disabled) {
-		return false;
+		return REJECTED_SUBMISSION;
 	}
 
 	const { files, fileTokens, pastedTexts, rawText } = snapshot;
 	const visibleText = rawText.trim();
-	// Markers carry offsets into the untrimmed composition, so expand before
-	// trimming or a leading space shifts every replacement.
+	// Marker offsets refer to the untrimmed text, so expand before trimming.
 	const text = expandTrackedPastedText(rawText, pastedTexts).trim();
 	if (!text && files.length === 0) {
-		return false;
+		return REJECTED_SUBMISSION;
 	}
 
-	const resolution = await resolveSubmissionPrompt({
+	const prepared = await dependencies.commandController.prepareSubmission({
+		hasAttachments: files.length > 0,
 		text,
 		visibleText,
-		discoverSkills: dependencies.discoverSkills,
-		discoverCustomCommands: dependencies.discoverCustomCommands,
 	});
-	if (resolution.kind === "rejected") {
-		dependencies.onError(resolution.reason);
-		return false;
+	if (!prepared) {
+		return REJECTED_SUBMISSION;
 	}
 
-	const accepted = await dependencies.onSubmit({
-		composition: {
-			fileTokens,
+	const accepted = await prepared.accept((prompt) =>
+		dependencies.onSubmit({
+			composition: {
+				fileTokens,
+				files,
+				pastedText: pastedTexts.map(({ text, token }) => ({ text, token })),
+				text: visibleText,
+			},
 			files,
-			pastedText: pastedTexts.map(({ text, token }) => ({ text, token })),
-			text: visibleText,
-		},
-		files,
-		text: resolution.text,
-		...(resolution.skill === undefined ? {} : { skill: resolution.skill }),
-	});
-	return accepted !== false;
+			text: prompt.text,
+			...(prompt.skill === undefined ? {} : { skill: prompt.skill }),
+		})
+	);
+	return accepted
+		? { accepted, execute: prepared.execute }
+		: REJECTED_SUBMISSION;
 }

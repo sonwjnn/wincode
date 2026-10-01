@@ -1,5 +1,11 @@
 import type { BaseSpec } from "./types";
 
+const NO_INPUT = { kind: "none" } as const;
+
+export const COMMAND_CAPABILITIES = ["compaction", "effort-selection"] as const;
+
+export type CommandCapability = (typeof COMMAND_CAPABILITIES)[number];
+
 export const COMMANDS = [
 	{
 		description: "Start a new session",
@@ -7,6 +13,7 @@ export const COMMANDS = [
 		value: "/new",
 		kind: "builtin",
 		action: "session.new",
+		input: NO_INPUT,
 	},
 	{
 		description: "Compact session history",
@@ -14,6 +21,8 @@ export const COMMANDS = [
 		value: "/compact",
 		kind: "builtin",
 		action: "session.compact",
+		input: { kind: "optional-text" as const, name: "focus" },
+		requires: ["compaction"],
 	},
 	{
 		description: "Open application settings",
@@ -21,6 +30,7 @@ export const COMMANDS = [
 		value: "/settings",
 		kind: "builtin",
 		action: "settings.open",
+		input: NO_INPUT,
 	},
 	{
 		description: "Switch agents",
@@ -28,6 +38,7 @@ export const COMMANDS = [
 		value: "/agents",
 		kind: "builtin",
 		action: "agent.select",
+		input: NO_INPUT,
 	},
 	{
 		description: "Select AI model for generation",
@@ -35,6 +46,7 @@ export const COMMANDS = [
 		value: "/models",
 		kind: "builtin",
 		action: "model.select",
+		input: NO_INPUT,
 	},
 	{
 		description: "Select Effort or Reasoning Mode",
@@ -42,6 +54,8 @@ export const COMMANDS = [
 		value: "/effort",
 		kind: "builtin",
 		action: "effort.select",
+		input: NO_INPUT,
+		requires: ["effort-selection"],
 	},
 	{
 		description: "Browse past sessions",
@@ -49,6 +63,7 @@ export const COMMANDS = [
 		value: "/sessions",
 		kind: "builtin",
 		action: "dialog.sessions",
+		input: NO_INPUT,
 	},
 	{
 		description: "Change color theme",
@@ -56,6 +71,7 @@ export const COMMANDS = [
 		value: "/themes",
 		kind: "builtin",
 		action: "dialog.theme",
+		input: NO_INPUT,
 	},
 	{
 		description: "Connect an account or API key",
@@ -63,6 +79,7 @@ export const COMMANDS = [
 		value: "/connect",
 		kind: "builtin",
 		action: "connection.open",
+		input: NO_INPUT,
 	},
 	{
 		description: "Enable, disable, and inspect MCP servers",
@@ -70,6 +87,7 @@ export const COMMANDS = [
 		value: "/mcps",
 		kind: "builtin",
 		action: "dialog.mcps",
+		input: NO_INPUT,
 	},
 	{
 		description: "Quit the application",
@@ -77,10 +95,13 @@ export const COMMANDS = [
 		value: "/exit",
 		kind: "builtin",
 		action: "app.exit",
+		input: NO_INPUT,
 	},
 ] as const satisfies readonly (BaseSpec & {
 	kind: "builtin";
 	action: string;
+	input: { kind: "none" } | { kind: "optional-text"; name: string };
+	requires?: readonly CommandCapability[];
 })[];
 
 const registeredActions = new Set<string>();
@@ -98,23 +119,42 @@ for (const command of COMMANDS) {
 }
 
 export type CommandActionId = (typeof COMMANDS)[number]["action"];
+export type CommandDefinition = (typeof COMMANDS)[number];
 
-export type CommandSpec = BaseSpec & { kind: "builtin" } & (
-		| { action: "session.compact"; focus?: string }
-		| { action: Exclude<CommandActionId, "session.compact"> }
-	);
+export type CommandDefinitionFor<Action extends CommandActionId> = Extract<
+	CommandDefinition,
+	{ action: Action }
+>;
+
+type CommandWithoutInput = Extract<
+	CommandDefinition,
+	{ input: { kind: "none" } }
+>;
+type OptionalTextCommand = Extract<
+	CommandDefinition,
+	{ input: { kind: "optional-text" } }
+>;
+
+export type CommandSpec =
+	| CommandWithoutInput
+	| (OptionalTextCommand & { argument?: string });
+
+export const isOptionalTextCommand = (
+	command: CommandSpec
+): command is OptionalTextCommand & { argument?: string } =>
+	command.input.kind === "optional-text";
 
 /**
  * Built-in Commands whose popover row is offered in the current view. Hidden
  * kinds stay reachable by typing their name; only the row is suppressed.
  */
 export const getVisibleCommands = (
-	options: { hideCompact?: boolean; hideEffort?: boolean } = {}
+	options: { unavailableCapabilities?: readonly CommandCapability[] } = {}
 ): CommandSpec[] =>
 	COMMANDS.filter(
 		(command) =>
-			!(
-				(options.hideCompact && command.action === "session.compact") ||
-				(options.hideEffort && command.action === "effort.select")
+			!("requires" in command) ||
+			command.requires.every(
+				(capability) => !options.unavailableCapabilities?.includes(capability)
 			)
 	);

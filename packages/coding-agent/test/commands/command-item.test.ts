@@ -12,6 +12,7 @@ const MODELS: CommandItem = {
 	action: "model.select",
 	description: "Select AI model for generation",
 	kind: "builtin",
+	input: { kind: "none" },
 	name: "models",
 	value: "/models",
 };

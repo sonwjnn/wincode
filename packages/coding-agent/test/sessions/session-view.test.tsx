@@ -74,6 +74,9 @@ const { DEFAULT_THEME } = await import("@/shared/providers/theme/themes");
 const { ToastProvider } = await import(
 	"@/shared/providers/toast/toast-provider"
 );
+const { CommandControllerProvider } = await import(
+	"@/tui/commands/command-controller-provider"
+);
 const { setMarkdownTreeSitterClientForTests } = await import(
 	"@/modules/sessions/ui/messages/markdown-message-part"
 );
@@ -465,22 +468,25 @@ describe("SessionView initial submission", () => {
 															workspace={workspace}
 														>
 															<RouterContextProvider router={router}>
-																<SessionView
-																	host={createFakeSessionHost(
-																		initialTranscript
-																	)}
-																	initialSubmission={{
-																		messageId: sessionMessageId("initial-user"),
-																	}}
-																	initialTranscript={initialTranscript}
-																	sessionId={sessionId("session-1")}
-																	sessionTitle="Create the session prompt"
-																/>
-																<AgentRegistryReadyProbe
-																	onReady={() => {
-																		registryIsReady = true;
-																	}}
-																/>
+																<CommandControllerProvider>
+																	<SessionView
+																		host={createFakeSessionHost(
+																			initialTranscript
+																		)}
+																		initialSubmission={{
+																			messageId:
+																				sessionMessageId("initial-user"),
+																		}}
+																		initialTranscript={initialTranscript}
+																		sessionId={sessionId("session-1")}
+																		sessionTitle="Create the session prompt"
+																	/>
+																	<AgentRegistryReadyProbe
+																		onReady={() => {
+																			registryIsReady = true;
+																		}}
+																	/>
+																</CommandControllerProvider>
 															</RouterContextProvider>
 														</McpProvider>
 													</DialogProvider>
@@ -578,17 +584,19 @@ describe("SessionView initial submission", () => {
 															workspace={workspace}
 														>
 															<RouterContextProvider router={router}>
-																<SessionView
-																	host={createFakeSessionHost([])}
-																	initialTranscript={[]}
-																	sessionId={sessionId("session-1")}
-																	sessionTitle="Send an entered prompt"
-																/>
-																<AgentRegistryReadyProbe
-																	onReady={() => {
-																		registryIsReady = true;
-																	}}
-																/>
+																<CommandControllerProvider>
+																	<SessionView
+																		host={createFakeSessionHost([])}
+																		initialTranscript={[]}
+																		sessionId={sessionId("session-1")}
+																		sessionTitle="Send an entered prompt"
+																	/>
+																	<AgentRegistryReadyProbe
+																		onReady={() => {
+																			registryIsReady = true;
+																		}}
+																	/>
+																</CommandControllerProvider>
 															</RouterContextProvider>
 														</McpProvider>
 													</DialogProvider>
@@ -674,22 +682,24 @@ const renderSessionView = async ({
 														workspace={workspace}
 													>
 														<RouterContextProvider router={router}>
-															<SessionView
-																host={createFakeSessionHost(liveTranscript)}
-																initialTranscript={initialTranscript}
-																sessionId={sessionId("session-1")}
-																sessionTitle="Queue a prompt"
-															/>
-															<AgentRegistryReadyProbe
-																onReady={() => {
-																	registryIsReady = true;
-																}}
-															/>
-															<KeyboardLayerProbe
-																onLayer={(isCommandLayer) => {
-																	commandLayer.isTop = isCommandLayer;
-																}}
-															/>
+															<CommandControllerProvider>
+																<SessionView
+																	host={createFakeSessionHost(liveTranscript)}
+																	initialTranscript={initialTranscript}
+																	sessionId={sessionId("session-1")}
+																	sessionTitle="Queue a prompt"
+																/>
+																<AgentRegistryReadyProbe
+																	onReady={() => {
+																		registryIsReady = true;
+																	}}
+																/>
+																<KeyboardLayerProbe
+																	onLayer={(isCommandLayer) => {
+																		commandLayer.isTop = isCommandLayer;
+																	}}
+																/>
+															</CommandControllerProvider>
 														</RouterContextProvider>
 													</McpProvider>
 												</DialogProvider>

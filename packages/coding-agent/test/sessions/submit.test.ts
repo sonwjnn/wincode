@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { findBuiltinCommand } from "@/modules/commands/builtin-invocation";
+import {
+	type CreateCommandControllerOptions,
+	createCommandController,
+} from "@/modules/commands/command-controller";
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
 import {
-	resolveBuiltinCommand,
+	expandTrackedPastedText,
+	preparePromptSubmission,
 	type SubmitDependencies,
 	type SubmitSnapshot,
-	submitPrompt,
 } from "@/modules/sessions/hooks/input-controller/submit";
 import type { Skill } from "@/modules/skills";
 
@@ -31,16 +36,48 @@ const emptySnapshot = (): SubmitSnapshot => ({
 	rawText: "",
 });
 
+type SubmitOverrides = {
+	disabled?: boolean;
+	discoverCustomCommands?: CreateCommandControllerOptions["discoverCustomCommands"];
+	discoverSkills?: CreateCommandControllerOptions["discoverSkills"];
+	executeCommand?: CreateCommandControllerOptions["executeCommand"];
+	onError?: CreateCommandControllerOptions["onError"];
+	onSubmit?: SubmitDependencies["onSubmit"];
+};
+
 const createDependencies = (
-	overrides: Partial<SubmitDependencies> = {}
+	overrides: SubmitOverrides = {}
 ): SubmitDependencies => ({
-	disabled: false,
-	discoverCustomCommands: async () => [],
-	discoverSkills: async () => [],
-	onError: () => undefined,
-	onSubmit: () => undefined,
-	...overrides,
+	commandController: createCommandController({
+		customCommands: [],
+		discoverCustomCommands:
+			overrides.discoverCustomCommands ?? (async () => []),
+		discoverSkills: overrides.discoverSkills ?? (async () => []),
+		executeCommand: overrides.executeCommand ?? (() => undefined),
+		onError: overrides.onError ?? (() => undefined),
+		skills: [],
+	}),
+	disabled: overrides.disabled ?? false,
+	onSubmit: overrides.onSubmit ?? (() => undefined),
 });
+
+const resolveBuiltinCommand = (snapshot: SubmitSnapshot) =>
+	snapshot.files.length === 0
+		? findBuiltinCommand(
+				expandTrackedPastedText(snapshot.rawText, snapshot.pastedTexts)
+			)
+		: null;
+
+const submitPrompt = async (
+	dependencies: SubmitDependencies,
+	snapshot: SubmitSnapshot
+): Promise<boolean> => {
+	const prepared = await preparePromptSubmission(dependencies, snapshot);
+	if (prepared.accepted) {
+		await prepared.execute();
+	}
+	return prepared.accepted;
+};
 
 describe("resolveBuiltinCommand", () => {
 	test("expands pasted-text markers before matching, so the focus is real text", () => {
@@ -61,7 +98,10 @@ describe("resolveBuiltinCommand", () => {
 				],
 				rawText,
 			})
-		).toMatchObject({ focus: "line one\nline two", action: "session.compact" });
+		).toMatchObject({
+			argument: "line one\nline two",
+			action: "session.compact",
+		});
 	});
 
 	test("keeps a composition carrying attachments a prompt", () => {
@@ -99,7 +139,10 @@ describe("resolveBuiltinCommand", () => {
 				],
 				rawText,
 			})
-		).toMatchObject({ focus: "line one\nline two", action: "session.compact" });
+		).toMatchObject({
+			argument: "line one\nline two",
+			action: "session.compact",
+		});
 	});
 });
 
