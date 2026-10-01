@@ -19,10 +19,7 @@ import {
 	isCompactionSummaryMessage,
 	type SessionCompaction,
 } from "../../compaction";
-import type {
-	SessionQueuedSubmission,
-	SessionSteeringMessage,
-} from "../../engine/types";
+import type { SessionQueuedSubmission } from "../../engine/types";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import type { SessionViewState } from "../../hooks/runtime-turn";
 import type { SessionSubmissionComposition } from "../../submission-types";
@@ -44,7 +41,6 @@ import { WaitingMessageStrip } from "./waiting-message-strip";
 import { WorkspacePath } from "./workspace-path";
 
 const EMPTY_QUEUED_SUBMISSIONS: readonly SessionQueuedSubmission[] = [];
-const EMPTY_STEERING_MESSAGES: readonly SessionSteeringMessage[] = [];
 
 type ChatShellProps = {
 	activeMessages?: readonly SessionMessage[];
@@ -68,10 +64,6 @@ type ChatShellProps = {
 	recalledSubmissions?: readonly SessionSubmissionComposition[];
 	/** Changes whenever `recalledSubmissions` holds something new to restore. */
 	recallRevision?: number;
-	/** Whether the composer submits into the running turn's Steering Lane. */
-	steering?: boolean;
-	/** Steering Messages, oldest first; the strip shows them ahead of the queue. */
-	steeringMessages?: readonly SessionSteeringMessage[];
 	viewState?: SessionViewState;
 };
 function ActivityFooter({
@@ -143,8 +135,6 @@ export function ChatShell({
 	queuedSubmissions = EMPTY_QUEUED_SUBMISSIONS,
 	recalledSubmissions,
 	recallRevision,
-	steering = false,
-	steeringMessages = EMPTY_STEERING_MESSAGES,
 	viewState,
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
@@ -167,10 +157,19 @@ export function ChatShell({
 	const timeline = buildSessionTimeline(displayMessages, historicalCompactions);
 	const footerMessages = resolveSessionTurnFooterMessages(turns);
 	const retryableMessages = activeMessages ?? displayMessages;
+	const canRetryMessage = (messageId: SessionMessageId): boolean =>
+		retryableMessages.some(({ id }) => id === messageId) ||
+		displayMessages.some(
+			(message) =>
+				message.id === messageId &&
+				message.role === "user" &&
+				message.metadata?.submissionStatus === "failed" &&
+				message.metadata.submissionId !== undefined
+		);
 	const latestRetryMessageId = resolveRetryMessageId(displayMessages);
 	const canRetry =
 		!(isBusy || isUndefined(latestRetryMessageId)) &&
-		retryableMessages.some(({ id }) => id === latestRetryMessageId) &&
+		canRetryMessage(latestRetryMessageId) &&
 		!isUndefined(onRetry);
 	const usage = useMemo(
 		() => summarizeSessionUsage(displayMessages, model, table),
@@ -249,7 +248,7 @@ export function ChatShell({
 							const turnRetryMessageId = resolveRetryMessageId(turn.messages);
 							const canRetryTurn =
 								!(isBusy || isUndefined(turnRetryMessageId)) &&
-								retryableMessages.some(({ id }) => id === turnRetryMessageId);
+								canRetryMessage(turnRetryMessageId);
 							return (
 								<box key={turn.id} marginTop={index === 0 ? 1 : 0} width="100%">
 									<ChatMessage
@@ -274,10 +273,7 @@ export function ChatShell({
 				paddingY={1}
 				width="100%"
 			>
-				<WaitingMessageStrip
-					queued={queuedSubmissions}
-					steering={steeringMessages}
-				/>
+				<WaitingMessageStrip queued={queuedSubmissions} />
 				{hasPendingApproval ? (
 					// The pending dock replaces the composer AND the session
 					// footer row while a decision is owed.
@@ -295,7 +291,6 @@ export function ChatShell({
 								recalledSubmissions={recalledSubmissions}
 								recallRevision={recallRevision}
 								sessionPromptHistory={promptHistory}
-								steering={steering}
 							/>
 						</box>
 						<box

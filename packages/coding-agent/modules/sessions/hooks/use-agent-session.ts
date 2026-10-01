@@ -1,4 +1,3 @@
-import type { ToolCallId } from "@wincode/agent-core";
 import type {
 	ChatModelSelection,
 	ReasoningSelection,
@@ -9,8 +8,6 @@ import type { CompactSessionResult } from "@/modules/sessions/compaction/compact
 import type {
 	AgentSession,
 	LiveSessionSnapshot,
-	SessionWaitingMessage,
-	SessionWaitingMessageId,
 } from "@/modules/sessions/engine/types";
 import type { SessionHost } from "@/modules/sessions/host/types";
 import type {
@@ -25,7 +22,7 @@ export type AgentSessionBinding = Readonly<{
 	/** Observes transient submission lifecycle events from the Agent Session. */
 	onSubmissionEvent: AgentSession["onSubmissionEvent"];
 	/** Aborts the compaction command in flight and recalls the waiting messages with it. */
-	cancelCompaction: () => SessionWaitingMessage[];
+	cancelCompaction: AgentSession["cancelCompaction"];
 	/** Runs a manual compaction command against one Model Target. */
 	compact: (
 		focus: string | undefined,
@@ -33,17 +30,18 @@ export type AgentSessionBinding = Readonly<{
 		reasoningSelection?: ReasoningSelection
 	) => Promise<CompactSessionResult>;
 	/** Interrupts the Agent Turn the session is running and recalls everything waiting. */
-	interrupt: (preserveToolCallId?: ToolCallId) => SessionWaitingMessage[];
+	interrupt: AgentSession["interrupt"];
 	/**
-	 * Withdraws the session's waiting user messages for the composer, in the
-	 * order they would run: the Steering Lane first, then the Submission Queue.
+	 * Withdraws only uncommitted queued submissions for the composer. Durable
+	 * Steering Messages cannot be recalled.
 	 */
-	recallWaitingMessages: (
-		ids?: readonly SessionWaitingMessageId[]
-	) => SessionWaitingMessage[];
-	/** Sends one submission as a Session Command. */
+	recallWaitingMessages: AgentSession["recallWaitingMessages"];
+	/** Admits a new prompt, queueing it while the session is busy. */
+	prompt: AgentSession["prompt"];
+	/** Runs an existing-message send through turn settlement. */
 	send: (input: SessionSendInput) => Promise<SessionSendOutcome>;
-	steerNextQueuedSubmission: AgentSession["steerNextQueuedSubmission"];
+	/** Commits the oldest queued submission as durable steering input. */
+	steer: AgentSession["steer"];
 	/** The session facts the view renders at one moment. */
 	snapshot: LiveSessionSnapshot;
 }>;
@@ -117,8 +115,9 @@ export function useAgentSession(host: SessionHost): AgentSessionBinding {
 		compact,
 		interrupt: agentSession.interrupt,
 		recallWaitingMessages: agentSession.recallWaitingMessages,
+		prompt: agentSession.prompt,
 		send: agentSession.send,
-		steerNextQueuedSubmission: agentSession.steerNextQueuedSubmission,
+		steer: agentSession.steer,
 		snapshot,
 	};
 }

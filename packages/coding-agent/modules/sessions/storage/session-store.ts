@@ -1,8 +1,12 @@
 import type {
 	AgentId,
 	AgentTurnId,
+	SessionMessageId,
 	SessionRecord,
+	SessionRecordId,
 	SessionRecordOutcome,
+	SessionSubmissionStatus,
+	SubmissionId,
 } from "@wincode/agent-core";
 import type {
 	ChatModelSelection,
@@ -77,6 +81,15 @@ export type CommitSessionRecordInput = {
 	sessionId: SessionId;
 };
 
+export type UpdateSessionSubmissionInput = {
+	failure?: string;
+	messageId: SessionMessageId;
+	recordId: SessionRecordId;
+	sessionId: SessionId;
+	status: SessionSubmissionStatus;
+	submissionId: SubmissionId;
+};
+
 export type SessionStore = {
 	appendCompaction: (
 		input: AppendSessionCompactionInput
@@ -97,6 +110,9 @@ export type SessionStore = {
 	listRecentModelSelections: (limit: number) => ChatModelSelection[];
 	commitSessionRecord: (input: CommitSessionRecordInput) => Promise<void>;
 	listSessionRecords: (sessionId: SessionId) => Promise<SessionRecord[]>;
+	updateSessionSubmission: (
+		input: UpdateSessionSubmissionInput
+	) => Promise<void>;
 	updateSession: (
 		sessionId: SessionId,
 		data: UpdateSessionInput

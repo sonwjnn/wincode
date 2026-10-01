@@ -1,4 +1,3 @@
-export { parseCompactCommand } from "./commands";
 export type {
 	CompactSessionInput,
 	CompactSessionResult,

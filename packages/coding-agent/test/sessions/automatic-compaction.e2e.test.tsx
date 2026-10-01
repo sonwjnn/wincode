@@ -26,8 +26,10 @@ import { join } from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { act } from "react";
 import {
+	createFakeModelClient,
 	createFakeModelClientModule,
 	createFakeModelClientRecorder,
+	type FakeModelStepScript,
 } from "@/test/support/e2e-fake-runtime";
 import { sessionMessageId } from "../support/identifiers";
 
@@ -44,8 +46,27 @@ afterAll(async () => {
 });
 
 const recorder = createFakeModelClientRecorder();
+let pausedStep: PromiseWithResolvers<void> | undefined;
+const pauseNextStep = (): (() => void) => {
+	const gate = Promise.withResolvers<void>();
+	pausedStep = gate;
+	return gate.resolve;
+};
+const controlledStep: FakeModelStepScript = async function* (
+	request,
+	recorder
+) {
+	const gate = pausedStep;
+	pausedStep = undefined;
+	for await (const part of createFakeModelClient(recorder).stream(request)) {
+		yield part;
+		if (part.type === "text-delta" && gate) {
+			await gate.promise;
+		}
+	}
+};
 await mock.module("@wincode/ai/model-client", () =>
-	createFakeModelClientModule(recorder)
+	createFakeModelClientModule(recorder, controlledStep)
 );
 
 // The module mock must be installed before the production SessionView graph loads.
@@ -56,6 +77,8 @@ const {
 	renderSession,
 	seedCompactionHistory,
 	settleSessionUi,
+	waitForSessionCondition,
+	waitForSessionFrame,
 	writeE2EFrame,
 } = await import("@/test/support/e2e-fixture");
 
@@ -72,10 +95,9 @@ test("compacts automatically before sending and uses the rebuilt context", async
 		const activeSetup = rendered.setup;
 		setup = activeSetup;
 		await rendered.registryReady;
-		await act(async () => {
-			await activeSetup.flush();
-			await activeSetup.flush();
-		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Ask anything")
+		);
 
 		await act(async () => {
 			await activeSetup.mockInput.typeText(
@@ -85,29 +107,19 @@ test("compacts automatically before sending and uses the rebuilt context", async
 			activeSetup.mockInput.pressEnter();
 		});
 
-		await activeSetup.waitFor(
-			async () => (await store.getCompactions(sessionId)).length > 0,
-			{ maxPasses: 200 }
+		await waitForSessionCondition(
+			async () => (await store.getCompactions(sessionId)).length > 0
 		);
-		await settleSessionUi(activeSetup);
-		await act(async () => {
-			await activeSetup.waitForFrame(
-				(frame) => frame.includes("Compacted (automatic)"),
-				{ maxPasses: 200 }
-			);
-		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Compacted (automatic)")
+		);
 
-		await activeSetup.waitFor(
-			() => recorder.requests.some((request) => request.kind === "chat"),
-			{ maxPasses: 200 }
+		await waitForSessionCondition(() =>
+			recorder.requests.some((request) => request.kind === "chat")
 		);
-		await settleSessionUi(activeSetup);
-		await act(async () => {
-			await activeSetup.waitForFrame(
-				(frame) => frame.includes("E2E chat response"),
-				{ maxPasses: 200 }
-			);
-		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("E2E chat response")
+		);
 
 		const compactions = await store.getCompactions(sessionId);
 		expect(compactions).toHaveLength(1);
@@ -147,6 +159,127 @@ test("compacts automatically before sending and uses the rebuilt context", async
 	} finally {
 		if (setup) {
 			writeE2EFrame(setup);
+			setup.renderer.destroy();
+		}
+		cleanupSessionRender();
+	}
+});
+
+const QUEUED_CORRECTION = /queued\s+queued correction/u;
+const STEERING_CORRECTION = /steering\s+queued correction/u;
+const WAITING_COUNT_PATTERN = /\d+ waiting/u;
+
+test("busy composer queues a prompt until empty Enter promotes it into the same turn", async () => {
+	const seeded = await seedCompactionHistory(store, 1, "input-lane");
+	const requestOffset = recorder.requests.length;
+	const release = pauseNextStep();
+	let setup: TestRendererSetup | undefined;
+	try {
+		const rendered = await renderSession({
+			pricing: createE2ePricing(100_000),
+			sessionId: seeded.sessionId,
+		});
+		const activeSetup = rendered.setup;
+		setup = activeSetup;
+		await rendered.registryReady;
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Ask anything")
+		);
+		const submit = async (text: string): Promise<void> => {
+			await act(async () => {
+				await activeSetup.mockInput.typeText(text);
+				await activeSetup.flush();
+				activeSetup.mockInput.pressEnter();
+			});
+			await settleSessionUi(activeSetup);
+		};
+		await submit("original live request");
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("E2E chat response")
+		);
+		await submit("queued correction");
+		await settleSessionUi(activeSetup);
+
+		const queuedFrame = activeSetup.captureCharFrame();
+		expect(queuedFrame).toMatch(QUEUED_CORRECTION);
+		expect(queuedFrame).not.toMatch(STEERING_CORRECTION);
+		expect(
+			recorder.requests
+				.slice(requestOffset)
+				.filter(({ kind }) => kind === "chat")
+		).toHaveLength(1);
+
+		await act(async () => {
+			activeSetup.mockInput.pressEnter();
+			await activeSetup.flush();
+		});
+		await waitForSessionFrame(
+			activeSetup,
+			(frame) =>
+				frame.includes("queued correction") && !QUEUED_CORRECTION.test(frame)
+		);
+		const steeredFrame = activeSetup.captureCharFrame();
+		expect(steeredFrame).toContain("queued correction");
+		expect(steeredFrame).not.toMatch(QUEUED_CORRECTION);
+		expect(steeredFrame).not.toMatch(WAITING_COUNT_PATTERN);
+		expect(
+			recorder.requests
+				.slice(requestOffset)
+				.filter(({ kind }) => kind === "chat")
+		).toHaveLength(1);
+
+		release();
+		await waitForSessionFrame(
+			activeSetup,
+			(frame) =>
+				!frame.includes("1 waiting") &&
+				recorder.requests
+					.slice(requestOffset)
+					.filter(({ kind }) => kind === "chat").length === 2
+		);
+		await waitForSessionCondition(async () =>
+			(await store.listSessionRecords(seeded.sessionId)).some(
+				(record) =>
+					record.outcome.kind === "assistant" &&
+					record.messages.some(
+						(message) =>
+							message.metadata?.sourceUserMessageId !== undefined &&
+							message.metadata.sourceUserMessageId !==
+								sessionMessageId("input-lane-user-1")
+					)
+			)
+		);
+		const records = await store.listSessionRecords(seeded.sessionId);
+		const correction = records.find((record) =>
+			record.messages.some(
+				(message) =>
+					message.role === "user" &&
+					message.parts.some(
+						(part) => part.type === "text" && part.text === "queued correction"
+					)
+			)
+		);
+		const terminal = records.find(
+			(record) =>
+				record.outcome.kind === "assistant" &&
+				record.turnId === correction?.turnId
+		);
+		expect(correction?.messages[0]?.metadata?.joinedTurnId).toBe(
+			terminal?.turnId
+		);
+		expect(
+			terminal?.messages.some((message) => message.role === "assistant")
+		).toBe(true);
+		const chats = recorder.requests
+			.slice(requestOffset)
+			.filter((request) => request.kind === "chat");
+		expect(
+			chats[1]?.messages.filter(({ role }) => role === "user").at(-1)?.text
+		).toBe("queued correction");
+	} finally {
+		release();
+		pausedStep = undefined;
+		if (setup) {
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();

@@ -1,14 +1,15 @@
 import { fromPartial } from "@total-typescript/shoehorn";
 import type { SessionMessageId } from "@wincode/agent-core";
+import { toSubmissionId } from "@wincode/agent-core";
 import { isUndefined } from "@wincode/runtime-utils";
 import {
+	agentTurnId,
 	compactionId,
 	toolCallId as makeToolCallId,
 	modelId,
 	queuedSubmissionId,
 	sessionId,
 	sessionMessageId,
-	steeringMessageId,
 } from "../support/identifiers";
 
 // The model pricing provider fetches a remote table unless offline mode is
@@ -22,10 +23,7 @@ import { RGBA, type ScrollBoxRenderable } from "@opentui/core";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import { act, useEffect, useState } from "react";
 import type { SessionCompaction } from "@/modules/sessions/compaction";
-import type {
-	SessionQueuedSubmission,
-	SessionSteeringMessage,
-} from "@/modules/sessions/engine/types";
+import type { SessionQueuedSubmission } from "@/modules/sessions/engine/types";
 import type {
 	SessionFilePart,
 	SessionMessage,
@@ -73,6 +71,9 @@ const { ThemeProvider } = await import(
 const { DEFAULT_THEME } = await import("@/shared/providers/theme/themes");
 const { ToastProvider } = await import(
 	"@/shared/providers/toast/toast-provider"
+);
+const { CommandControllerProvider } = await import(
+	"@/tui/commands/command-controller-provider"
 );
 const { ChatShell } = await import(
 	"@/modules/sessions/ui/components/chat-shell"
@@ -176,6 +177,7 @@ const buildTestRouter = () =>
 	});
 
 type ChatShellProbeProps = {
+	activeMessages?: readonly SessionMessage[];
 	agentHolder: { current: string };
 	holder: { current: ChatShellProbeHandle | null };
 	initialCompactions?: SessionCompaction[];
@@ -185,8 +187,6 @@ type ChatShellProbeProps = {
 	isInterruptArmed?: boolean;
 	onRetry?: (messageId: SessionMessageId) => void;
 	queuedSubmissions?: readonly SessionQueuedSubmission[];
-	steering?: boolean;
-	steeringMessages?: readonly SessionSteeringMessage[];
 };
 
 /**
@@ -201,6 +201,7 @@ function PromptConfigProbe({ holder }: { holder: { current: string } }) {
 }
 
 function ChatShellProbe({
+	activeMessages,
 	agentHolder,
 	holder,
 	initialCompactions = [],
@@ -210,8 +211,6 @@ function ChatShellProbe({
 	isInterruptArmed = false,
 	onRetry,
 	queuedSubmissions,
-	steering = false,
-	steeringMessages,
 }: ChatShellProbeProps) {
 	const { project: projectApprovals } = useApprovalPanels();
 	const [compactions, setCompactions] = useState(initialCompactions);
@@ -232,6 +231,7 @@ function ChatShellProbe({
 		<>
 			<PromptConfigProbe holder={agentHolder} />
 			<ChatShell
+				activeMessages={activeMessages}
 				compactions={compactions}
 				error={undefined}
 				isBusy={isBusy || isCompacting}
@@ -242,8 +242,6 @@ function ChatShellProbe({
 				onSubmit={() => true}
 				promptHistory={[]}
 				queuedSubmissions={queuedSubmissions}
-				steering={steering}
-				steeringMessages={steeringMessages}
 			/>
 		</>
 	);
@@ -256,6 +254,7 @@ type ChatShellSetup = {
 	setup: Awaited<ReturnType<typeof testRender>>;
 };
 type ChatShellRenderOptions = {
+	activeMessages?: readonly SessionMessage[];
 	height: number;
 	width: number;
 	initialCompactions?: SessionCompaction[];
@@ -265,13 +264,12 @@ type ChatShellRenderOptions = {
 	isInterruptArmed?: boolean;
 	onRetry?: (messageId: SessionMessageId) => void;
 	queuedSubmissions?: readonly SessionQueuedSubmission[];
-	steering?: boolean;
-	steeringMessages?: readonly SessionSteeringMessage[];
 };
 
 const renderChatShell = async (
 	initialMessages: SessionMessage[],
 	{
+		activeMessages,
 		height,
 		width,
 		initialCompactions = [],
@@ -281,8 +279,6 @@ const renderChatShell = async (
 		isInterruptArmed = false,
 		onRetry,
 		queuedSubmissions,
-		steering = false,
-		steeringMessages,
 	}: ChatShellRenderOptions
 ): Promise<ChatShellSetup> => {
 	const workspace = process.cwd();
@@ -336,19 +332,20 @@ const renderChatShell = async (
 														workspace={workspace}
 													>
 														<RouterContextProvider router={router}>
-															<ChatShellProbe
-																agentHolder={agent}
-																holder={holder}
-																initialCompactions={initialCompactions}
-																initialMessages={initialMessages}
-																isBusy={isBusy}
-																isCompacting={isCompacting}
-																isInterruptArmed={isInterruptArmed}
-																onRetry={onRetry}
-																queuedSubmissions={queuedSubmissions}
-																steering={steering}
-																steeringMessages={steeringMessages}
-															/>
+															<CommandControllerProvider>
+																<ChatShellProbe
+																	activeMessages={activeMessages}
+																	agentHolder={agent}
+																	holder={holder}
+																	initialCompactions={initialCompactions}
+																	initialMessages={initialMessages}
+																	isBusy={isBusy}
+																	isCompacting={isCompacting}
+																	isInterruptArmed={isInterruptArmed}
+																	onRetry={onRetry}
+																	queuedSubmissions={queuedSubmissions}
+																/>
+															</CommandControllerProvider>
 														</RouterContextProvider>
 													</McpProvider>
 												</DialogProvider>
@@ -491,6 +488,72 @@ describe("ChatShell retry controls", () => {
 			setup.mockInput.pressEnter();
 			await flushUi(setup);
 			expect(retries).toEqual(["user-1"]);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+	test("offers retry for failed committed input excluded from the active context", async () => {
+		const retries: string[] = [];
+		const primary = userMessage("user-1");
+		const steered: SessionMessage = {
+			...userMessage("user-steer"),
+			metadata: {
+				joinedTurnId: agentTurnId("turn-steering"),
+				submissionId: toSubmissionId("submission-steer"),
+				submissionStatus: "failed",
+			},
+		};
+		const messages = [
+			primary,
+			steered,
+			assistantMessage([{ text: "Request failed", type: "text" }]),
+		];
+		const { setup } = await renderChatShell(messages, {
+			activeMessages: [primary],
+			height: 30,
+			onRetry: (messageId) => {
+				retries.push(messageId);
+			},
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const retryControl =
+				setup.renderer.root.findDescendantById("retry-user-steer");
+			expect(retryControl?.focusable).toBe(true);
+			retryControl?.focus();
+			setup.mockInput.pressEnter();
+			await flushUi(setup);
+			expect(retries).toEqual(["user-steer"]);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("shows a failed Steering Message reason on its transcript message", async () => {
+		const reason = "The Agent Turn ended before confirming the Submission.";
+		const failedSteering = fromPartial<SessionMessage>({
+			id: sessionMessageId("failed-steering"),
+			metadata: {
+				submissionFailure: reason,
+				submissionId: toSubmissionId("failed-steering-submission"),
+				submissionStatus: "failed",
+			},
+			parts: [{ text: "revise the output", type: "text" }],
+			role: "user",
+		});
+		const { setup } = await renderChatShell([failedSteering], {
+			height: 16,
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain("revise the output");
+			expect(frame).toContain(reason);
+			expect(frame).not.toMatch(WAITING_COUNT_PATTERN);
 		} finally {
 			setup.renderer.destroy();
 		}
@@ -648,12 +711,6 @@ describe("ChatShell waiting message strip", () => {
 			},
 		});
 
-	const steeringMessage = (id: string, text: string): SessionSteeringMessage =>
-		fromPartial<SessionSteeringMessage>({
-			id: steeringMessageId(id),
-			input: { composition: { files: [], text } },
-		});
-
 	test("renders nothing while no message waits", async () => {
 		const { setup } = await renderChatShell([], { height: 12, width: 100 });
 
@@ -696,7 +753,7 @@ describe("ChatShell waiting message strip", () => {
 		}
 	});
 
-	test("marks the submission that the next Recall takes back", async () => {
+	test("marks the oldest queued submission as the next Recall target", async () => {
 		const { setup } = await renderChatShell([], {
 			height: 16,
 			queuedSubmissions: [
@@ -709,94 +766,9 @@ describe("ChatShell waiting message strip", () => {
 		try {
 			await flushUi(setup);
 			const frame = setup.captureCharFrame();
-			// The oldest waiting submission runs next, so it wears the marker and
-			// the one behind it does not.
+			// Recall operates only on the uncommitted queue.
 			expect(stripLine(frame, "rewrite the loader")).toContain("▸");
 			expect(stripLine(frame, "then run the tests")).not.toContain("▸");
-		} finally {
-			setup.renderer.destroy();
-		}
-	});
-
-	test("leads with the Steering Lane and marks its head", async () => {
-		const { setup } = await renderChatShell([], {
-			height: 18,
-			queuedSubmissions: [queuedSubmission("queued-1", "rewrite the loader")],
-			steeringMessages: [
-				steeringMessage("steering-1", "actually use the cache"),
-				steeringMessage("steering-2", "and keep the old name"),
-			],
-			width: 100,
-		});
-
-		try {
-			await flushUi(setup);
-			const frame = setup.captureCharFrame();
-			expect(frame).toContain("3 waiting");
-			// The Steering Lane's rows come first, in the order they run, and the
-			// queued submission follows them.
-			const firstSteeringAt = frame.indexOf("actually use the cache");
-			const secondSteeringAt = frame.indexOf("and keep the old name");
-			const queuedAt = frame.indexOf("rewrite the loader");
-			expect(firstSteeringAt).toBeGreaterThanOrEqual(0);
-			expect(secondSteeringAt).toBeGreaterThan(firstSteeringAt);
-			expect(queuedAt).toBeGreaterThan(secondSteeringAt);
-
-			const steeringHead = stripLine(frame, "actually use the cache");
-			expect(steeringHead).toContain("▸");
-			expect(steeringHead).toContain("steering");
-			// The rows behind the head, in either lane, wear no marker: the next
-			// Recall takes back the Steering Lane's head while it holds anything.
-			expect(stripLine(frame, "and keep the old name")).not.toContain("▸");
-			expect(stripLine(frame, "rewrite the loader")).not.toContain("▸");
-			expect(stripLine(frame, "rewrite the loader")).toContain("queued");
-			expect(stripLine(frame, "and keep the old name")).toContain("steering");
-		} finally {
-			setup.renderer.destroy();
-		}
-	});
-
-	test("paints the Steering Lane's tag apart from the queue's", async () => {
-		const { setup } = await renderChatShell([], {
-			height: 18,
-			queuedSubmissions: [queuedSubmission("queued-1", "rewrite the loader")],
-			steeringMessages: [
-				steeringMessage("steering-1", "actually use the cache"),
-			],
-			width: 100,
-		});
-
-		try {
-			await flushUi(setup);
-			const spans = setup.captureSpans().lines.flatMap((line) => line.spans);
-			const secondary = RGBA.fromHex(DEFAULT_THEME.colors.secondary);
-			const steeringTag = spans.find((span) =>
-				span.text.startsWith("steering")
-			);
-			const queuedTag = spans.find((span) => span.text.startsWith("queued"));
-			// The lanes are told apart at a glance: the Steering Lane's tag takes
-			// the theme's secondary colour, the queue's stays muted.
-			expect(steeringTag?.fg.equals(secondary)).toBe(true);
-			expect(queuedTag?.fg.equals(secondary)).toBe(false);
-		} finally {
-			setup.renderer.destroy();
-		}
-	});
-
-	test("shows the Steering Lane alone while the queue is empty", async () => {
-		const { setup } = await renderChatShell([], {
-			height: 16,
-			steeringMessages: [steeringMessage("steering-1", "keep the old name")],
-			width: 100,
-		});
-
-		try {
-			await flushUi(setup);
-			const frame = setup.captureCharFrame();
-			expect(frame).toContain("1 waiting");
-			expect(stripLine(frame, "keep the old name")).toContain("steering");
-			expect(stripLine(frame, "keep the old name")).toContain("▸");
-			expect(frame).not.toContain("queued");
 		} finally {
 			setup.renderer.destroy();
 		}
@@ -873,44 +845,6 @@ describe("ChatShell waiting message strip", () => {
 			}
 			expect(frame).not.toContain("+2");
 			expect(frame).not.toContain("+3");
-		} finally {
-			setup.renderer.destroy();
-		}
-	});
-
-	test("keeps one viewport across both lanes", async () => {
-		const { setup } = await renderChatShell([], {
-			height: 24,
-			queuedSubmissions: [
-				queuedSubmission("queued-1", "queued one"),
-				queuedSubmission("queued-2", "queued two"),
-			],
-			steeringMessages: [
-				steeringMessage("steering-1", "steering one"),
-				steeringMessage("steering-2", "steering two"),
-				steeringMessage("steering-3", "steering three"),
-				steeringMessage("steering-4", "steering four"),
-				steeringMessage("steering-5", "steering five"),
-			],
-			width: 100,
-		});
-
-		try {
-			await flushUi(setup);
-			const frame = setup.captureCharFrame();
-			// Seven rows wait, and the strip shows its first five: steering rows
-			// and queued rows share one viewport rather than growing separately.
-			expect(frame).toContain("7 waiting");
-			for (const text of [
-				"steering one",
-				"steering two",
-				"steering three",
-				"steering four",
-				"steering five",
-			]) {
-				expect(frame).toContain(text);
-			}
-			expect(frame).not.toContain("queued one");
 		} finally {
 			setup.renderer.destroy();
 		}

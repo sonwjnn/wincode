@@ -6,15 +6,21 @@ import type {
 	ChatModelSelection,
 	SessionSendInput,
 } from "../../../modules/sessions/host/session-rpc";
-import type { RpcAssembly, RuntimeModules, Selection } from "./types";
+import type {
+	RpcAssembly,
+	RpcPreparedSubmission,
+	RpcSubmissionIdentifiers,
+	RuntimeModules,
+	Selection,
+} from "./types";
 import { appError, asRecord, stringValue } from "./validation";
 
 export type RpcSelectionHelpers = Readonly<{
 	parseSelection: (value: unknown) => Promise<Selection>;
 	sendInput: (
 		selection: Selection,
-		text: string,
-		ids: { messageId?: string; submissionId?: string; turnId?: string }
+		submission: RpcPreparedSubmission,
+		ids: RpcSubmissionIdentifiers
 	) => SessionSendInput;
 }>;
 
@@ -183,8 +189,8 @@ export const createSelectionHelpers = (
 
 	const sendInput = (
 		selection: Selection,
-		text: string,
-		ids: { messageId?: string; submissionId?: string; turnId?: string }
+		submission: RpcPreparedSubmission,
+		ids: RpcSubmissionIdentifiers
 	): SessionSendInput => {
 		const registry = getAssembly()?.capabilities.getRegistry() as
 			| { agents: readonly { id: string }[] }
@@ -209,11 +215,13 @@ export const createSelectionHelpers = (
 		}
 		return {
 			agent: selection.agentId as SessionSendInput["agent"],
-			composition: { files: [], text },
+			composition: submission.composition,
+			files: submission.files,
 			model: selection.model as SessionSendInput["model"],
 			resolvedAgent: resolvedAgent as SessionSendInput["resolvedAgent"],
 			sessionModel: selection.model as SessionSendInput["sessionModel"],
-			userText: text,
+			userText: submission.userText,
+			...(submission.skill === undefined ? {} : { skill: submission.skill }),
 			...reasoningSelection,
 			...sessionReasoning,
 			...(ids.messageId === undefined

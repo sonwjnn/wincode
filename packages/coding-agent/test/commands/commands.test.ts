@@ -1,50 +1,55 @@
 import { expect, test } from "bun:test";
+import { findBuiltinCommand } from "@/modules/commands/builtin-invocation";
 import { COMMANDS, getVisibleCommands } from "@/modules/commands/commands";
-import { findBuiltinCommand } from "@/modules/sessions/hooks/input-controller/builtin-command";
 
-test("keeps built-in command kinds and dialog routing stable", () => {
+test("keeps built-in slash names routed to their action IDs", () => {
 	const expected = [
-		{ kind: "new", value: "/new" },
-		{ kind: "compact", value: "/compact" },
-		{ kind: "settings", value: "/settings" },
-		{ kind: "agents", value: "/agents" },
-		{ kind: "models", value: "/models" },
-		{ kind: "effort", value: "/effort" },
-		{ dialogKey: "sessions", kind: "dialog", value: "/sessions" },
-		{ dialogKey: "theme", kind: "dialog", value: "/themes" },
-		{ kind: "connect", value: "/connect" },
-		{ dialogKey: "mcps", kind: "dialog", value: "/mcps" },
-		{ kind: "exit", value: "/exit" },
+		{ action: "session.new", value: "/new" },
+		{ action: "session.compact", value: "/compact" },
+		{ action: "settings.open", value: "/settings" },
+		{ action: "agent.select", value: "/agents" },
+		{ action: "model.select", value: "/models" },
+		{ action: "effort.select", value: "/effort" },
+		{ action: "dialog.sessions", value: "/sessions" },
+		{ action: "dialog.theme", value: "/themes" },
+		{ action: "connection.open", value: "/connect" },
+		{ action: "dialog.mcps", value: "/mcps" },
+		{ action: "app.exit", value: "/exit" },
 	];
-	const actual = COMMANDS.map((command) =>
-		command.kind === "dialog"
-			? {
-					dialogKey: command.dialogKey,
-					kind: command.kind,
-					value: command.value,
-				}
-			: { kind: command.kind, value: command.value }
-	);
+	const actual = COMMANDS.map(({ action, value }) => ({ action, value }));
 
 	expect(actual).toHaveLength(expected.length);
 	expect(actual).toEqual(expect.arrayContaining(expected));
+	expect(COMMANDS.every((command) => command.kind === "builtin")).toBe(true);
 });
 
 test("suppresses popover rows for commands the view cannot run", () => {
 	expect(getVisibleCommands()).toHaveLength(COMMANDS.length);
 	expect(
-		getVisibleCommands({ hideCompact: true }).map((command) => command.kind)
-	).not.toContain("compact");
+		getVisibleCommands({ unavailableCapabilities: ["compaction"] }).map(
+			(command) => command.action
+		)
+	).not.toContain("session.compact");
 	expect(
-		getVisibleCommands({ hideEffort: true }).map((command) => command.kind)
-	).not.toContain("effort");
+		getVisibleCommands({ unavailableCapabilities: ["effort-selection"] }).map(
+			(command) => command.action
+		)
+	).not.toContain("effort.select");
 });
 
 test("resolves typed built-in commands by exact name", () => {
-	expect(findBuiltinCommand(" /models ")).toMatchObject({ kind: "models" });
-	expect(findBuiltinCommand(" /effort ")).toMatchObject({ kind: "effort" });
-	expect(findBuiltinCommand("/MODELS")).toMatchObject({ kind: "models" });
-	expect(findBuiltinCommand("/settings")).toMatchObject({ kind: "settings" });
+	expect(findBuiltinCommand(" /models ")).toMatchObject({
+		action: "model.select",
+	});
+	expect(findBuiltinCommand(" /effort ")).toMatchObject({
+		action: "effort.select",
+	});
+	expect(findBuiltinCommand("/MODELS")).toMatchObject({
+		action: "model.select",
+	});
+	expect(findBuiltinCommand("/settings")).toMatchObject({
+		action: "settings.open",
+	});
 	expect(findBuiltinCommand("/models now")).toBeNull();
 	expect(findBuiltinCommand("/settings now")).toBeNull();
 	expect(findBuiltinCommand("/variants")).toBeNull();
@@ -55,9 +60,11 @@ test("resolves typed built-in commands by exact name", () => {
 
 test("carries the compaction focus into the typed command", () => {
 	expect(findBuiltinCommand("/compact preserve decisions")).toMatchObject({
-		focus: "preserve decisions",
-		kind: "compact",
+		argument: "preserve decisions",
+		action: "session.compact",
 	});
-	expect(findBuiltinCommand("/compact")).toMatchObject({ kind: "compact" });
+	expect(findBuiltinCommand("/compact")).toMatchObject({
+		action: "session.compact",
+	});
 	expect(findBuiltinCommand("/compactible")).toBeNull();
 });

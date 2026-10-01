@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { expandCustomCommandTemplate } from "@/modules/custom-commands/expand";
+import { expandCustomCommandTemplate } from "@/modules/commands/custom/expand";
 
 describe("expandCustomCommandTemplate", () => {
 	test("substitutes all arguments into $ARGUMENTS", () => {

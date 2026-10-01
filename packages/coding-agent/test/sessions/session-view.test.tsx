@@ -13,6 +13,7 @@ import {
 	RouterContextProvider,
 } from "@tanstack/react-router";
 import { fromPartial } from "@total-typescript/shoehorn";
+import { toSubmissionId } from "@wincode/agent-core";
 import { act, useCallback, useEffect, useRef, useState } from "react";
 import type {
 	SessionQueuedSubmission,
@@ -72,6 +73,9 @@ const { ThemeProvider } = await import(
 const { DEFAULT_THEME } = await import("@/shared/providers/theme/themes");
 const { ToastProvider } = await import(
 	"@/shared/providers/toast/toast-provider"
+);
+const { CommandControllerProvider } = await import(
+	"@/tui/commands/command-controller-provider"
 );
 const { setMarkdownTreeSitterClientForTests } = await import(
 	"@/modules/sessions/ui/messages/markdown-message-part"
@@ -144,66 +148,106 @@ mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
 		const running = useRef(false);
 		running.current = turnActive;
 		const waiting = useRef<SessionWaitingMessage[]>([]);
-		waiting.current = [...steeringMessages, ...queuedSubmissions];
-		const send = useCallback(async (input: SessionSendInput) => {
-			const run = activeFakeSessionRun;
-			if (!run) {
-				throw new Error("No fake session run configured.");
-			}
+		const steeringMessagesRef = useRef(steeringMessages);
+		steeringMessagesRef.current = steeringMessages;
+		waiting.current = [...queuedSubmissions];
+		const enqueue = useCallback((input: SessionSendInput) => {
 			const composition = input.composition ?? {
 				files: input.files ?? [],
 				text: input.userText ?? "",
 			};
-			if (running.current) {
-				// The session steering a running Agent Turn accepts the message
-				// into its Steering Lane instead of queueing it.
-				fakeWaitingTexts = [...fakeWaitingTexts, composition.text];
-				fakeWaitingCompositions = [...fakeWaitingCompositions, composition];
-				setSteeringMessages((messages) => [
-					...messages,
-					{
-						id: steeringMessageId(`steering-${messages.length + 1}`),
-						input: {
-							agent: input.agent,
-							composition,
-							model: input.model,
-							sessionModel: input.sessionModel,
-							text: composition.text,
-						},
-					},
-				]);
-				return { rejected: false as const };
-			}
-			fakeRunCompositions = [...fakeRunCompositions, composition];
-			run.sendStarted.resolve();
-			setTurnActive(true);
-			await run.release.promise;
-			setTurnActive(false);
+			const sequence = fakeWaitingTexts.length + 1;
+			fakeWaitingTexts = [...fakeWaitingTexts, composition.text];
+			fakeWaitingCompositions = [...fakeWaitingCompositions, composition];
+			setQueuedSubmissions((submissions) => [
+				...submissions,
+				fromPartial<SessionQueuedSubmission>({
+					id: queuedSubmissionId(`queued-${sequence}`),
+					input: { ...input, composition },
+					messageId:
+						input.messageId ??
+						input.reservedMessageId ??
+						sessionMessageId(`queued-message-${sequence}`),
+					submissionId:
+						input.submissionId ??
+						toSubmissionId(`queued-submission-${sequence}`),
+				}),
+			]);
 			return { rejected: false as const };
 		}, []);
-		const steerNextQueuedSubmission = useCallback(() => {
+		const send = useCallback(
+			async (input: SessionSendInput) => {
+				const run = activeFakeSessionRun;
+				if (!run) {
+					throw new Error("No fake session run configured.");
+				}
+				if (running.current) {
+					return enqueue(input);
+				}
+				const composition = input.composition ?? {
+					files: input.files ?? [],
+					text: input.userText ?? "",
+				};
+				fakeRunCompositions = [...fakeRunCompositions, composition];
+				run.sendStarted.resolve();
+				setTurnActive(true);
+				await run.release.promise;
+				setTurnActive(false);
+				return { rejected: false as const };
+			},
+			[enqueue]
+		);
+		const prompt = useCallback(
+			async (input: SessionSendInput) =>
+				running.current ? enqueue(input) : await send(input),
+			[enqueue, send]
+		);
+		const steer = useCallback(async () => {
 			if (!running.current) {
-				return;
+				return { kind: "empty" as const };
 			}
 			const queued = queuedSubmissions[0];
-			if (!queued) {
-				return;
+			if (queued === undefined) {
+				return { kind: "empty" as const };
 			}
 			setQueuedSubmissions((submissions) => submissions.slice(1));
 			setSteeringMessages((messages) => [
 				...messages,
 				fromPartial<SessionSteeringMessage>({
-					id: steeringMessageId(`promoted-${queued.id}`),
-					input: { composition: queued.input.composition },
+					id: steeringMessageId(`steering-${queued.id}`),
+					input: {
+						...queued.input,
+						composition: queued.input.composition,
+						messageId: queued.messageId,
+						submissionId: queued.submissionId,
+					},
+					message: {
+						id: queued.messageId,
+						metadata: {
+							submissionId: queued.submissionId,
+							submissionStatus: "pending",
+						},
+						parts: [{ text: queued.input.composition.text, type: "text" }],
+						role: "user",
+					},
+					recordId: `record-${queued.id}`,
+					status: "pending",
 				}),
 			]);
+			return {
+				kind: "steered" as const,
+				messageId: queued.messageId,
+				submissionId: queued.submissionId,
+				...(queued.input.turnId === undefined
+					? {}
+					: { turnId: queued.input.turnId }),
+			};
 		}, [queuedSubmissions]);
 		const recallWaitingMessages = useCallback(
 			(ids?: readonly SessionWaitingMessageId[]) => {
-				// The fake keeps what the real Agent Session keeps: the Steering
-				// Lane first, then the Submission Queue, and a recall of one item
-				// leaves the others waiting.
 				const lanes = fakeRecalledPayload ?? waiting.current;
+				// Committed steering input is durable and cannot be recalled; only
+				// queued submissions return to the composer.
 				const recalled = isUndefined(ids)
 					? lanes
 					: lanes.filter((message) => ids.includes(message.id));
@@ -215,13 +259,16 @@ mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
 					(message) => !recalledIds.has(message.id)
 				);
 				fakeSessionRecalls += 1;
-				fakeWaitingCompositions = remaining.map(
-					({ input }) => input.composition
-				);
-				fakeWaitingTexts = remaining.map(({ input }) => input.composition.text);
-				setSteeringMessages((messages) =>
-					messages.filter(({ id }) => !recalledIds.has(id))
-				);
+				fakeWaitingCompositions = [
+					...steeringMessagesRef.current.map(({ input }) => input.composition),
+					...remaining.map(({ input }) => input.composition),
+				];
+				fakeWaitingTexts = [
+					...steeringMessagesRef.current.map(
+						({ input }) => input.composition.text
+					),
+					...remaining.map(({ input }) => input.composition.text),
+				];
 				setQueuedSubmissions((queue) =>
 					queue.filter(({ id }) => !recalledIds.has(id))
 				);
@@ -238,7 +285,8 @@ mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
 			interrupt: () => [],
 			onSubmissionEvent: subscribeToFakeSubmissionEvents,
 			recallWaitingMessages,
-			steerNextQueuedSubmission,
+			prompt,
+			steer,
 			send,
 			snapshot: {
 				...opened,
@@ -293,7 +341,7 @@ function AgentRegistryReadyProbe({ onReady }: { onReady: () => void }) {
 /** The strip's count line, e.g. `2 waiting`; the workspace path never has one. */
 const WAITING_COUNT_PATTERN = /\d+ waiting/u;
 /** A strip row of one lane, so a lane tag is read off the row it belongs to. */
-const LANE_ROW = (lane: "queued" | "steering", description: string): RegExp =>
+const LANE_ROW = (lane: "queued", description: string): RegExp =>
 	new RegExp(`${lane}\\s+${description}`, "u");
 
 const userMessage = (id: string, text: string): SessionMessage => ({
@@ -420,22 +468,25 @@ describe("SessionView initial submission", () => {
 															workspace={workspace}
 														>
 															<RouterContextProvider router={router}>
-																<SessionView
-																	host={createFakeSessionHost(
-																		initialTranscript
-																	)}
-																	initialSubmission={{
-																		messageId: sessionMessageId("initial-user"),
-																	}}
-																	initialTranscript={initialTranscript}
-																	sessionId={sessionId("session-1")}
-																	sessionTitle="Create the session prompt"
-																/>
-																<AgentRegistryReadyProbe
-																	onReady={() => {
-																		registryIsReady = true;
-																	}}
-																/>
+																<CommandControllerProvider>
+																	<SessionView
+																		host={createFakeSessionHost(
+																			initialTranscript
+																		)}
+																		initialSubmission={{
+																			messageId:
+																				sessionMessageId("initial-user"),
+																		}}
+																		initialTranscript={initialTranscript}
+																		sessionId={sessionId("session-1")}
+																		sessionTitle="Create the session prompt"
+																	/>
+																	<AgentRegistryReadyProbe
+																		onReady={() => {
+																			registryIsReady = true;
+																		}}
+																	/>
+																</CommandControllerProvider>
 															</RouterContextProvider>
 														</McpProvider>
 													</DialogProvider>
@@ -533,17 +584,19 @@ describe("SessionView initial submission", () => {
 															workspace={workspace}
 														>
 															<RouterContextProvider router={router}>
-																<SessionView
-																	host={createFakeSessionHost([])}
-																	initialTranscript={[]}
-																	sessionId={sessionId("session-1")}
-																	sessionTitle="Send an entered prompt"
-																/>
-																<AgentRegistryReadyProbe
-																	onReady={() => {
-																		registryIsReady = true;
-																	}}
-																/>
+																<CommandControllerProvider>
+																	<SessionView
+																		host={createFakeSessionHost([])}
+																		initialTranscript={[]}
+																		sessionId={sessionId("session-1")}
+																		sessionTitle="Send an entered prompt"
+																	/>
+																	<AgentRegistryReadyProbe
+																		onReady={() => {
+																			registryIsReady = true;
+																		}}
+																	/>
+																</CommandControllerProvider>
 															</RouterContextProvider>
 														</McpProvider>
 													</DialogProvider>
@@ -629,22 +682,24 @@ const renderSessionView = async ({
 														workspace={workspace}
 													>
 														<RouterContextProvider router={router}>
-															<SessionView
-																host={createFakeSessionHost(liveTranscript)}
-																initialTranscript={initialTranscript}
-																sessionId={sessionId("session-1")}
-																sessionTitle="Queue a prompt"
-															/>
-															<AgentRegistryReadyProbe
-																onReady={() => {
-																	registryIsReady = true;
-																}}
-															/>
-															<KeyboardLayerProbe
-																onLayer={(isCommandLayer) => {
-																	commandLayer.isTop = isCommandLayer;
-																}}
-															/>
+															<CommandControllerProvider>
+																<SessionView
+																	host={createFakeSessionHost(liveTranscript)}
+																	initialTranscript={initialTranscript}
+																	sessionId={sessionId("session-1")}
+																	sessionTitle="Queue a prompt"
+																/>
+																<AgentRegistryReadyProbe
+																	onReady={() => {
+																		registryIsReady = true;
+																	}}
+																/>
+																<KeyboardLayerProbe
+																	onLayer={(isCommandLayer) => {
+																		commandLayer.isTop = isCommandLayer;
+																	}}
+																/>
+															</CommandControllerProvider>
 														</RouterContextProvider>
 													</McpProvider>
 												</DialogProvider>
@@ -769,9 +824,8 @@ describe("SessionView waiting messages", () => {
 		try {
 			await submit(setup, "second prompt");
 
-			// The session accepted it into the Steering Lane instead of running
-			// it, so the strip shows it as a message that will join the turn, and
-			// the composer let the composition go.
+			// A busy composer admits an independent queued prompt; steering is
+			// requested only by another Enter after the composer has cleared.
 			await waitFor(setup, () => fakeWaitingTexts.length === 1);
 			await flushUi(setup);
 			await flushUi(setup);
@@ -779,8 +833,8 @@ describe("SessionView waiting messages", () => {
 			const frame = setup.captureCharFrame();
 			expect(fakeWaitingTexts).toEqual(["second prompt"]);
 			expect(frame).toMatch(WAITING_COUNT_PATTERN);
-			expect(frame).toContain("▸ steering");
-			expect(frame).toMatch(LANE_ROW("steering", "second prompt"));
+			expect(frame).toContain("▸ queued");
+			expect(frame).toMatch(LANE_ROW("queued", "second prompt"));
 			expect(frame).toContain("Alt+Up");
 			expect(frame.match(/second prompt/gu)).toHaveLength(1);
 		} finally {
@@ -829,6 +883,30 @@ describe("SessionView waiting messages", () => {
 				await flushUi(setup);
 				setup.renderer.destroy();
 			});
+		}
+	});
+
+	test("shows a failed Steering Submission's reason to the user", async () => {
+		const { release, setup } = await renderBusySessionView();
+		try {
+			const reason = "Attachment unavailable; resend without it.";
+			act(() => {
+				emitFakeSubmissionEvent(
+					fromPartial<SessionSubmissionEvent>({
+						kind: "failed",
+						messageId: sessionMessageId("failed-steering"),
+						reason,
+						submissionId: "failed-steering-submission",
+					})
+				);
+			});
+			await flushUi(setup);
+
+			expect(setup.captureCharFrame()).toContain(reason);
+		} finally {
+			release.resolve();
+			await flushUi(setup);
+			setup.renderer.destroy();
 		}
 	});
 
@@ -993,40 +1071,37 @@ describe("SessionView waiting messages", () => {
 		}
 	});
 
-	test("recalls the Steering head while the queue keeps waiting", async () => {
-		fakeQueuedSeed = [
-			fromPartial<SessionQueuedSubmission>({
-				id: queuedSubmissionId("queued-later"),
-				input: { composition: { files: [], text: "later prompt" } },
-			}),
-		];
-		fakeWaitingTexts = ["later prompt"];
+	test("Alt+Up recalls only uncommitted queue entries", async () => {
 		const { release, setup } = await renderBusySessionView();
 		try {
 			await submit(setup, "steer me");
+			await waitFor(setup, () => fakeWaitingTexts.length === 1);
+			setup.mockInput.pressEnter();
+			await flushUi(setup);
+			await submit(setup, "later prompt");
 			await waitFor(setup, () => fakeWaitingTexts.length === 2);
 			await flushUi(setup);
 			await flushUi(setup);
 
-			// Both lanes are shown and marked apart, and the Steering head wears
-			// the next marker because that is what the next Model Step boundary
-			// delivers.
+			// Steered messages remain committed in the session, but only
+			// uncommitted work appears in the waiting strip.
 			const frame = setup.captureCharFrame();
-			expect(frame).toContain("▸ steering");
-			expect(frame).toMatch(LANE_ROW("steering", "steer me"));
+			expect(frame).toContain("1 waiting");
+			expect(frame).not.toContain("steer me");
 			expect(frame).toMatch(LANE_ROW("queued", "later prompt"));
+			expect(frame).toContain("▸ queued");
 
 			setup.mockInput.pressArrow("up", { shift: true });
 			await waitFor(setup, () => fakeSessionRecalls === 1);
 			await flushUi(setup);
 			await flushUi(setup);
 
-			// Only the message that runs next came back; the queued submission
-			// still waits, and the marker has moved to it.
-			expect(fakeWaitingTexts).toEqual(["later prompt"]);
+			// Recall withdraws the uncommitted prompt; committed steering stays
+			// out of the waiting strip.
+			expect(fakeWaitingTexts).toEqual(["steer me"]);
 			const afterRecall = setup.captureCharFrame();
-			expect(afterRecall).toContain("▸ queued");
-			expect(afterRecall).toMatch(LANE_ROW("queued", "later prompt"));
+			expect(afterRecall).not.toMatch(WAITING_COUNT_PATTERN);
+			expect(afterRecall).not.toContain("steer me");
 		} finally {
 			release.resolve();
 			await flushUi(setup);
@@ -1034,7 +1109,7 @@ describe("SessionView waiting messages", () => {
 		}
 	});
 
-	test("pressing Enter on an empty composer steers only one of four queued items", async () => {
+	test("empty Enter removes one committed Submission from the waiting queue", async () => {
 		fakeQueuedSeed = [
 			fromPartial<SessionQueuedSubmission>({
 				id: queuedSubmissionId("queued-first"),
@@ -1059,10 +1134,12 @@ describe("SessionView waiting messages", () => {
 			await flushUi(setup);
 
 			let frame = setup.captureCharFrame();
-			expect(frame).toContain("▸ steering");
-			expect(frame).toMatch(LANE_ROW("steering", "first queued"));
+			expect(frame).toContain("3 waiting");
+			expect(frame).not.toContain("first queued");
+			expect(frame).not.toContain("steering");
 			expect(frame).toMatch(LANE_ROW("queued", "later queued 1"));
 			expect(frame).toMatch(LANE_ROW("queued", "later queued 2"));
+			expect(frame).toContain("▸ queued");
 			expect(frame).toMatch(LANE_ROW("queued", "later queued 3"));
 
 			await typePrompt(setup, "ordinary input");
@@ -1070,8 +1147,9 @@ describe("SessionView waiting messages", () => {
 			await flushUi(setup);
 
 			frame = setup.captureCharFrame();
-			expect(frame).toMatch(LANE_ROW("steering", "ordinary input"));
-			expect(frame).toMatch(LANE_ROW("steering", "first queued"));
+			expect(frame).toContain("4 waiting");
+			expect(frame).not.toContain("first queued");
+			expect(frame).toMatch(LANE_ROW("queued", "ordinary input"));
 			expect(frame).toMatch(LANE_ROW("queued", "later queued 1"));
 			expect(frame).toMatch(LANE_ROW("queued", "later queued 2"));
 			expect(frame).toMatch(LANE_ROW("queued", "later queued 3"));

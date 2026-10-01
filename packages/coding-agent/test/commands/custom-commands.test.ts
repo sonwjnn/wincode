@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { parseCustomCommandInvocation } from "@/modules/custom-commands/invocation";
+import { parseCustomCommandInvocation } from "@/modules/commands/custom/invocation";
 import {
 	CustomCommandValidationError,
 	parseCustomCommandFile,
-} from "@/modules/custom-commands/parse";
+} from "@/modules/commands/custom/parse";
 
 describe("parseCustomCommandInvocation", () => {
 	test("parses a bare invocation without arguments", () => {

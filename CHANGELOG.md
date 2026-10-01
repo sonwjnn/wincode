@@ -30,16 +30,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restores tool calls omitted from provider continuations by `call_id`, keeps
   existing provider items and order, and emits duplicate local calls only once.
 
-- **Failed Agent Turns recall waiting submissions.** Instead of draining the
-  queued tail after a model failure, the Session restores all waiting Steering
-  Messages and Queued Submissions to the composer in order; non-failed turns
-  retain FIFO draining.
+- **Queue-head steering is durable across execution modes.** Interactive empty
+  Enter and RPC `session/steer` commit the oldest queued Submission as a
+  distinct user message before acknowledgment; `session/submit` only admits or
+  queues new input. Attachments, Skills, and expanded Custom Commands share
+  preparation. Failed delivery blocks later inputs for deliberate retry and
+  never recalls or blindly replays committed messages.
+
+- **Committed steering is not waiting work in the interactive view.** The
+  waiting strip lists only uncommitted queue entries; committed messages stay
+  in the transcript, where a failed message retains its stored reason.
 
 - **Session metadata groups as soon as a prompt is submitted.** An idle
   submission appears optimistically in the transcript on Enter and reconciles
   with its stored message by ID. Streaming assistant messages carry the
   execution's reasoning selection from the start, so matching metadata stays
   only on the newest turn without waiting for completion.
+
+- **Live transcripts match durable Session Record order.** Agent Sessions
+  serialize record commits in queue order; streamed assistant rows stay visible
+  while pending and move to their stored position after commit. Failed writes
+  remove uncommitted transcript rows and retain the persistence error; delegated
+  rows remain grouped after primary turns.
 
 - **Shell permission flips to a permissive posture (0.1.0).** Shell commands
   default to `allow` instead of `ask`; `rm *` and `sudo *` deny by default as

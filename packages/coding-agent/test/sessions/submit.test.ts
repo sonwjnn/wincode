@@ -1,14 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import type { CustomCommandSpec } from "@/modules/custom-commands/types";
+import { findBuiltinCommand } from "@/modules/commands/builtin-invocation";
 import {
-	resolveBuiltinCommand,
-	resolveCustomCommandPrompt,
-	resolveSkillPrompt,
+	type CreateCommandControllerOptions,
+	createCommandController,
+} from "@/modules/commands/command-controller";
+import type { CustomCommandSpec } from "@/modules/commands/custom/types";
+import {
+	expandTrackedPastedText,
+	preparePromptSubmission,
 	type SubmitDependencies,
 	type SubmitSnapshot,
-	submitPrompt,
 } from "@/modules/sessions/hooks/input-controller/submit";
-import type { ChatPromptSubmission } from "@/modules/sessions/utils";
 import type { Skill } from "@/modules/skills";
 
 const TEST_SKILL: Skill = {
@@ -34,136 +36,48 @@ const emptySnapshot = (): SubmitSnapshot => ({
 	rawText: "",
 });
 
+type SubmitOverrides = {
+	disabled?: boolean;
+	discoverCustomCommands?: CreateCommandControllerOptions["discoverCustomCommands"];
+	discoverSkills?: CreateCommandControllerOptions["discoverSkills"];
+	executeCommand?: CreateCommandControllerOptions["executeCommand"];
+	onError?: CreateCommandControllerOptions["onError"];
+	onSubmit?: SubmitDependencies["onSubmit"];
+};
+
 const createDependencies = (
-	overrides: Partial<SubmitDependencies> = {}
+	overrides: SubmitOverrides = {}
 ): SubmitDependencies => ({
-	disabled: false,
-	discoverCustomCommands: async () => [],
-	discoverSkills: async () => [],
-	onError: () => undefined,
-	onSubmit: () => undefined,
-	...overrides,
+	commandController: createCommandController({
+		customCommands: [],
+		discoverCustomCommands:
+			overrides.discoverCustomCommands ?? (async () => []),
+		discoverSkills: overrides.discoverSkills ?? (async () => []),
+		executeCommand: overrides.executeCommand ?? (() => undefined),
+		onError: overrides.onError ?? (() => undefined),
+		skills: [],
+	}),
+	disabled: overrides.disabled ?? false,
+	onSubmit: overrides.onSubmit ?? (() => undefined),
 });
 
-describe("resolveSkillPrompt", () => {
-	test("resolves recognized skill invocations to request-scoped context", async () => {
-		await expect(
-			resolveSkillPrompt("/skill:review focus on auth", async () => [
-				TEST_SKILL,
-			])
-		).resolves.toEqual({
-			skill: {
-				arguments: "focus on auth",
-				instructions: TEST_SKILL.body,
-				name: "review",
-			},
-			text: "/skill:review focus on auth",
-		});
-	});
-
-	test("accepts recognized zero-argument skill invocations", async () => {
-		await expect(
-			resolveSkillPrompt("/skill:review", async () => [TEST_SKILL])
-		).resolves.toEqual({
-			skill: {
-				arguments: "",
-				instructions: TEST_SKILL.body,
-				name: "review",
-			},
-			text: "/skill:review",
-		});
-	});
-
-	test("resolves the namespace and name case-insensitively", async () => {
-		await expect(
-			resolveSkillPrompt("/SKILL:Review", async () => [TEST_SKILL])
-		).resolves.toEqual({
-			skill: {
-				arguments: "",
-				instructions: TEST_SKILL.body,
-				name: "review",
-			},
-			text: "/SKILL:Review",
-		});
-	});
-
-	test("keeps visible pasted-text tokens while resolving expanded skill args", async () => {
-		await expect(
-			resolveSkillPrompt(
-				"/skill:review expanded pasted content",
-				async () => [TEST_SKILL],
-				"/skill:review [Pasted Text 1]"
+const resolveBuiltinCommand = (snapshot: SubmitSnapshot) =>
+	snapshot.files.length === 0
+		? findBuiltinCommand(
+				expandTrackedPastedText(snapshot.rawText, snapshot.pastedTexts)
 			)
-		).resolves.toEqual({
-			skill: {
-				arguments: "expanded pasted content",
-				instructions: TEST_SKILL.body,
-				name: "review",
-			},
-			text: "/skill:review [Pasted Text 1]",
-		});
-	});
+		: null;
 
-	test("leaves a bare skill name as plain prompt text", async () => {
-		await expect(
-			resolveSkillPrompt("/review focus on auth", async () => [TEST_SKILL])
-		).resolves.toEqual({ text: "/review focus on auth" });
-	});
-
-	test("submits unknown slash text normally", async () => {
-		await expect(
-			resolveSkillPrompt("/unknown keep this", async () => [TEST_SKILL])
-		).resolves.toEqual({ text: "/unknown keep this" });
-	});
-
-	test("surfaces skill discovery failures", async () => {
-		const failure = new Error("Skill directory is unavailable");
-		await expect(
-			resolveSkillPrompt("/skill:review", async () => {
-				throw failure;
-			})
-		).rejects.toBe(failure);
-	});
-});
-
-describe("resolveCustomCommandPrompt", () => {
-	test("expands recognized custom command invocations into prompt text", async () => {
-		await expect(
-			resolveCustomCommandPrompt("/git-commit staged files", async () => [
-				TEST_CUSTOM_COMMAND,
-			])
-		).resolves.toEqual({
-			text: "Commit the staged changes with a conventional message.",
-		});
-	});
-
-	test("accepts recognized zero-argument custom command invocations", async () => {
-		await expect(
-			resolveCustomCommandPrompt("/git-commit", async () => [
-				TEST_CUSTOM_COMMAND,
-			])
-		).resolves.toEqual({
-			text: "Commit the staged changes with a conventional message.",
-		});
-	});
-
-	test("keeps unknown slash text as a plain prompt", async () => {
-		await expect(
-			resolveCustomCommandPrompt("/unknown keep this", async () => [
-				TEST_CUSTOM_COMMAND,
-			])
-		).resolves.toEqual({ text: "/unknown keep this" });
-	});
-
-	test("surfaces custom command discovery failures", async () => {
-		const failure = new Error("Command directory is unavailable");
-		await expect(
-			resolveCustomCommandPrompt("/git-commit", async () => {
-				throw failure;
-			})
-		).rejects.toBe(failure);
-	});
-});
+const submitPrompt = async (
+	dependencies: SubmitDependencies,
+	snapshot: SubmitSnapshot
+): Promise<boolean> => {
+	const prepared = await preparePromptSubmission(dependencies, snapshot);
+	if (prepared.accepted) {
+		await prepared.execute();
+	}
+	return prepared.accepted;
+};
 
 describe("resolveBuiltinCommand", () => {
 	test("expands pasted-text markers before matching, so the focus is real text", () => {
@@ -184,7 +98,10 @@ describe("resolveBuiltinCommand", () => {
 				],
 				rawText,
 			})
-		).toMatchObject({ focus: "line one\nline two", kind: "compact" });
+		).toMatchObject({
+			argument: "line one\nline two",
+			action: "session.compact",
+		});
 	});
 
 	test("keeps a composition carrying attachments a prompt", () => {
@@ -222,7 +139,10 @@ describe("resolveBuiltinCommand", () => {
 				],
 				rawText,
 			})
-		).toMatchObject({ focus: "line one\nline two", kind: "compact" });
+		).toMatchObject({
+			argument: "line one\nline two",
+			action: "session.compact",
+		});
 	});
 });
 
@@ -251,6 +171,39 @@ describe("submitPrompt", () => {
 		);
 
 		expect(accepted).toBe(true);
+	});
+
+	test("preserves expanded pasted content in a Skill Submission", async () => {
+		const token = "[Pasted ~2 lines]";
+		const rawText = `/skill:review ${token}`;
+		const start = rawText.indexOf(token);
+		let submissionText = "";
+		let skillArguments = "";
+		const accepted = await submitPrompt(
+			createDependencies({
+				discoverSkills: async () => [TEST_SKILL],
+				onSubmit: ({ skill, text }) => {
+					submissionText = text;
+					skillArguments = skill?.arguments ?? "";
+				},
+			}),
+			{
+				...emptySnapshot(),
+				pastedTexts: [
+					{
+						end: start + token.length,
+						start,
+						text: "focus on auth",
+						token,
+					},
+				],
+				rawText,
+			}
+		);
+
+		expect(accepted).toBe(true);
+		expect(submissionText).toBe("/skill:review focus on auth");
+		expect(skillArguments).toBe("focus on auth");
 	});
 
 	test("carries the visible composition into the submission", async () => {
@@ -348,6 +301,23 @@ describe("submitPrompt", () => {
 		expect(accepted).toBe(false);
 		expect(errors).toEqual(['Invalid skill invocation "/skill: review".']);
 		expect(calls).toBe(0);
+	});
+	test("caps malformed Skill rejection output instead of reflecting the prompt", async () => {
+		const errors: string[] = [];
+		const text = `/skill: ${"a".repeat(1024 * 1024)}`;
+		const accepted = await submitPrompt(
+			createDependencies({
+				onError: (message) => {
+					errors.push(message);
+				},
+			}),
+			{ ...emptySnapshot(), rawText: text }
+		);
+
+		expect(accepted).toBe(false);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.length).toBeLessThanOrEqual(256);
+		expect(errors[0]).not.toContain(text);
 	});
 
 	test("routes a bare name to the custom command and the namespace to the skill", async () => {
@@ -557,108 +527,5 @@ describe("submitPrompt", () => {
 			"Commit the staged changes with a conventional message.",
 		]);
 		expect(accepted).toBe(true);
-	});
-});
-
-describe("submitPrompt while steering a running Agent Turn", () => {
-	const imageFile = {
-		filename: "clipboard.png",
-		mediaType: "image/png",
-		type: "file" as const,
-		url: "data:image/png;base64,AAAA",
-	};
-
-	test("refuses attachments instead of promising the turn a delivery it cannot pay for", async () => {
-		const errors: string[] = [];
-		const submissions: ChatPromptSubmission[] = [];
-
-		const accepted = await submitPrompt(
-			createDependencies({
-				onError: (message) => errors.push(message),
-				onSubmit: (submission) => {
-					submissions.push(submission);
-				},
-				steering: true,
-			}),
-			{
-				...emptySnapshot(),
-				files: [imageFile],
-				rawText: "[Image 1] keep going",
-			}
-		);
-
-		expect(accepted).toBe(false);
-		expect(errors).toEqual(["Attachments cannot join a running Agent Turn."]);
-		expect(submissions).toEqual([]);
-	});
-
-	test("refuses a Skill invocation rather than arming a catalog inside the turn", async () => {
-		const errors: string[] = [];
-
-		const accepted = await submitPrompt(
-			createDependencies({
-				discoverSkills: async () => [TEST_SKILL],
-				onError: (message) => errors.push(message),
-				steering: true,
-			}),
-			{ ...emptySnapshot(), rawText: "/skill:review focus on auth" }
-		);
-
-		expect(accepted).toBe(false);
-		expect(errors).toEqual([
-			"A Skill cannot be invoked on a Steering Message.",
-		]);
-	});
-
-	test("refuses a Custom Command invocation", async () => {
-		const errors: string[] = [];
-
-		const accepted = await submitPrompt(
-			createDependencies({
-				discoverCustomCommands: async () => [TEST_CUSTOM_COMMAND],
-				onError: (message) => errors.push(message),
-				steering: true,
-			}),
-			{ ...emptySnapshot(), rawText: "/git-commit" }
-		);
-
-		expect(accepted).toBe(false);
-		expect(errors).toEqual([
-			"A Custom Command cannot be invoked on a Steering Message.",
-		]);
-	});
-
-	test("sends plain text with the composition it was written from", async () => {
-		const submissions: ChatPromptSubmission[] = [];
-
-		const accepted = await submitPrompt(
-			createDependencies({
-				discoverCustomCommands: async () => [TEST_CUSTOM_COMMAND],
-				onSubmit: (submission) => {
-					submissions.push(submission);
-				},
-				steering: true,
-			}),
-			{
-				...emptySnapshot(),
-				// A mention and an unknown slash word are ordinary text, not an
-				// invocation: the message carries them literally.
-				rawText: "use @src/index.ts and /unknown instead",
-			}
-		);
-
-		expect(accepted).toBe(true);
-		expect(submissions).toEqual([
-			{
-				composition: {
-					files: [],
-					fileTokens: [],
-					pastedText: [],
-					text: "use @src/index.ts and /unknown instead",
-				},
-				files: [],
-				text: "use @src/index.ts and /unknown instead",
-			},
-		]);
 	});
 });

@@ -641,7 +641,7 @@ test("hands Steering Messages to the runtime as Agent Turn messages", async () =
 				type: "agent-turn-started",
 			};
 			// The boundary the Agent Runtime reaches between Model Steps.
-			takenAtBoundary = options?.takeSteeringMessages?.() ?? [];
+			takenAtBoundary = (await options?.takeSteeringMessages?.()) ?? [];
 			yield {
 				delta: "Done",
 				sequence: 1,

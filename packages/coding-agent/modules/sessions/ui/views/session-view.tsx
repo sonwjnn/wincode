@@ -34,7 +34,7 @@ import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import type { SessionWaitingMessage } from "../../engine/types";
-import { acceptsSteeringMessages, isSessionBusy } from "../../engine/utils";
+import { isSessionBusy } from "../../engine/utils";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
 import { useAgentSession } from "../../hooks/use-agent-session";
 import type { ResolvedSessionSelection } from "../../selection";
@@ -256,8 +256,9 @@ export function SessionView({
 		onSubmissionEvent,
 		interrupt,
 		recallWaitingMessages,
+		prompt,
 		send,
-		steerNextQueuedSubmission,
+		steer,
 		snapshot,
 	} = useAgentSession(host);
 	/**
@@ -265,18 +266,38 @@ export function SessionView({
 	 * that returns nothing — empty lanes, or messages already running — changes
 	 * nothing.
 	 */
-	const recallIntoComposer = (recalled: readonly SessionWaitingMessage[]) => {
-		if (recalled.length === 0) {
-			return;
+	const recallIntoComposer = async (
+		recalledPromise: Promise<readonly SessionWaitingMessage[]>
+	): Promise<void> => {
+		try {
+			const recalled = await recalledPromise;
+			if (recalled.length === 0) {
+				return;
+			}
+			setRecalledSubmissions(recalled.map(({ input }) => input.composition));
+			setRecallRevision((revision) => revision + 1);
+		} catch (error) {
+			show({
+				message: getErrorMessage(
+					error,
+					"Could not recall waiting Submissions."
+				),
+				variant: "error",
+			});
 		}
-		setRecalledSubmissions(recalled.map(({ input }) => input.composition));
-		setRecallRevision((revision) => revision + 1);
 	};
 	useEffect(() => {
 		const pending: SessionSubmissionComposition[] = [];
 		let flushScheduled = false;
 		let active = true;
 		const unsubscribe = onSubmissionEvent((event) => {
+			if (event.kind === "failed") {
+				show({
+					message: event.reason ?? "Submission failed.",
+					variant: "error",
+				});
+				return;
+			}
 			if (
 				event.kind !== "recalled" ||
 				event.reason !== "turn-failed" ||
@@ -303,7 +324,7 @@ export function SessionView({
 			pending.length = 0;
 			unsubscribe();
 		};
-	}, [onSubmissionEvent]);
+	}, [onSubmissionEvent, show]);
 	const activeMessages = snapshot.context;
 	const displayAnnotationsByMessage = useMemo(() => {
 		const annotations = new Map<
@@ -416,7 +437,7 @@ export function SessionView({
 
 			interruptArmedRef.current = false;
 			setIsInterruptArmed(false);
-			recallIntoComposer(interrupt());
+			void recallIntoComposer(interrupt());
 			return;
 		}
 
@@ -432,10 +453,8 @@ export function SessionView({
 		}, INTERRUPT_CONFIRMATION_TIMEOUT_MS);
 	};
 	/**
-	 * The keyboard's Recall. `Alt` takes everything waiting; `Shift` takes only
-	 * the message that runs next — the Steering Lane's head while it holds
-	 * anything, else the Submission Queue's — so the ones behind it keep
-	 * draining. Reports whether the key was a Recall gesture.
+	 * Keyboard Recall. `Alt` recalls the uncommitted Submission Queue; `Shift`
+	 * recalls only its head. Committed Steering Messages are not recallable.
 	 */
 	const handleRecallKey = (key: RecallKeyEvent): boolean => {
 		// Terminals encode Alt differently: a modified arrow arrives as a CSI
@@ -443,17 +462,17 @@ export function SessionView({
 		// answers to either, so no terminal loses the binding.
 		if ((key.option || key.meta) && (key.name === "up" || key.name === "z")) {
 			key.preventDefault();
-			recallIntoComposer(recallWaitingMessages());
+			void recallIntoComposer(recallWaitingMessages());
 			return true;
 		}
 		if (!(key.shift && key.name === "up")) {
 			return false;
 		}
 		key.preventDefault();
-		// The strip marks the same head: whichever lane holds a message first.
-		const next = snapshot.steeringMessages[0] ?? snapshot.queuedSubmissions[0];
+		// Only uncommitted queue entries can be recalled.
+		const next = snapshot.queuedSubmissions[0];
 		if (!isUndefined(next)) {
-			recallIntoComposer(recallWaitingMessages([next.id]));
+			void recallIntoComposer(recallWaitingMessages([next.id]));
 		}
 		return true;
 	};
@@ -468,7 +487,7 @@ export function SessionView({
 		if (key.name === "escape") {
 			if (snapshot.isCompacting) {
 				key.preventDefault();
-				recallIntoComposer(cancelCompaction());
+				void recallIntoComposer(cancelCompaction());
 				return;
 			}
 			if (!isBusy) {
@@ -583,10 +602,9 @@ export function SessionView({
 		if (optimisticMessage) {
 			setOptimisticMessages((pending) => [...pending, optimisticMessage]);
 		}
-		// `send` resolves when the full turn completes; the composer should reset
-		// as soon as this session accepts the new send, and a busy session accepts
-		// it as a Queued Submission.
-		void send({
+		// Prompt admission resets the composer without waiting for turn completion;
+		// a busy session keeps the submission queued until explicitly steered.
+		void prompt({
 			agent: effective.agent,
 			sessionModel: model,
 			sessionEffort: effort,
@@ -624,10 +642,17 @@ export function SessionView({
 			});
 		return true;
 	};
-	const steerQueuedHead = () => {
-		const admission = steerNextQueuedSubmission();
-		if (admission?.rejected) {
-			show({ message: admission.reason, variant: "error" });
+	const steerQueuedHead = async () => {
+		try {
+			const admission = await steer();
+			if (admission.kind === "rejected") {
+				show({ message: admission.reason, variant: "error" });
+			}
+		} catch {
+			show({
+				message: "Could not steer the queued submission",
+				variant: "error",
+			});
 		}
 	};
 
@@ -779,8 +804,6 @@ export function SessionView({
 					queuedSubmissions={snapshot.queuedSubmissions}
 					recalledSubmissions={recalledSubmissions}
 					recallRevision={recallRevision}
-					steering={acceptsSteeringMessages(snapshot)}
-					steeringMessages={snapshot.steeringMessages}
 					viewState={snapshot.viewState}
 				/>
 			</box>

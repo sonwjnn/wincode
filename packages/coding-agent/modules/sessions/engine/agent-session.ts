@@ -1,11 +1,19 @@
 import {
 	type AgentTurnId,
 	createAgentTurnId,
+	isSessionToolCallPart,
 	type SessionMessageId,
+	type SessionRecord,
 	type ToolCallId,
 	toSessionMessageId,
 } from "@wincode/agent-core";
-import { isError, isUndefined, omitUndefined } from "@wincode/runtime-utils";
+import {
+	getErrorMessage,
+	isUndefined,
+	omitUndefined,
+} from "@wincode/runtime-utils";
+import { createSkillSnapshot, formatSkillUserContext } from "@/modules/skills";
+import { toSteeringMessageId } from "@/shared/identifiers";
 import { logSessionPersistenceFailure } from "@/shared/utils/session-persistence-diagnostics";
 import type { CompactSessionResult } from "../compaction/compaction";
 import { isCompactionSummaryMessage } from "../compaction/summary-message";
@@ -14,13 +22,19 @@ import {
 	createSessionUserMessage,
 	isSessionToolPart,
 	type SessionMessage,
+	type SessionMessageMetadata,
 	type SessionToolPart,
+	withSubmissionStatus,
 } from "../message";
-import { buildUserSessionRecord } from "../storage/session-record";
-import type { SessionSendInput } from "../submission-types";
+import {
+	buildUserSessionRecord,
+	projectSessionRecords,
+} from "../storage/session-record";
+import type { SessionSendInput, SessionSendOutcome } from "../submission-types";
 import { createSessionApprovalWorkflow } from "./approval-workflow";
 import {
 	createSessionInputLaneWorkflow,
+	type SessionInputExternalization,
 	type SessionInputLanePort,
 	type SessionInputLaneWorkflow,
 } from "./input-lane";
@@ -47,6 +61,7 @@ import type {
 	AgentSessionPorts,
 	LiveSessionSnapshot,
 	SessionApprovalOutcome,
+	SessionAttachmentBudget,
 	SessionCompactionCommand,
 	SessionContinuationOutcome,
 	SessionExecution,
@@ -55,7 +70,9 @@ import type {
 	SessionOverflowRecoveryCommand,
 	SessionOverflowRecoveryOutcome,
 	SessionQueuedSubmission,
+	SessionSkillCatalog,
 	SessionSteeringMessage,
+	SessionSteeringStatus,
 	SessionSubmissionEvent,
 	SessionViewState,
 } from "./types";
@@ -63,9 +80,25 @@ import { exposedViewState, hasChanged, primaryEntry } from "./utils";
 
 /** The deadline one Agent Turn submission runs with. */
 const AGENT_TURN_DEADLINE_MS = 43_200_000;
+const EMPTY_SESSION_MESSAGE_IDS: ReadonlySet<SessionMessageId> = new Set();
 
 /** The reason a submission that arrives after the session ended is refused. */
 const SHUT_DOWN_SEND_ERROR = "The session has ended.";
+type SteeringRecordPreparation =
+	| {
+			kind: "ready";
+			input: SessionSendInput;
+			message: SessionMessage;
+			record: SessionRecord;
+			text: string;
+			turnId?: AgentTurnId;
+	  }
+	| {
+			kind: "rejected";
+			messageId: SessionQueuedSubmission["messageId"];
+			reason: string;
+			submissionId: SessionQueuedSubmission["submissionId"];
+	  };
 
 type ContinuationContextMessages =
 	| {
@@ -81,6 +114,294 @@ const isCompleteToolCall = (part: SessionToolPart): boolean =>
 	(part.state === "output-error" &&
 		typeof part.errorText === "string" &&
 		part.errorText.length > 0);
+
+type PreparedSteeringMessage = {
+	readonly skillContext: SessionMessage[];
+	readonly source: SessionSteeringMessage;
+};
+
+type ReadySteeringMessage = PreparedSteeringMessage & {
+	readonly hydrated: SessionMessage;
+};
+
+type SteeringDeliveryFailure = {
+	readonly reason: string;
+	readonly source: SessionSteeringMessage;
+};
+
+type SteeringBatchPreparation = {
+	readonly failure?: SteeringDeliveryFailure;
+	readonly ready: ReadySteeringMessage[];
+};
+
+const STEERING_ATTACHMENT_PREPARATION_ERROR =
+	"Steered Submission attachments could not be prepared.";
+
+const hydrateSteeringBatch = (
+	prepared: readonly PreparedSteeringMessage[],
+	budget: SessionAttachmentBudget,
+	ports: AgentSessionPorts,
+	signal: AbortSignal
+): Promise<SessionMessage[]> =>
+	ports.attachments.hydrate({
+		budget,
+		failOnMissingAttachments: true,
+		messages: prepared.map(({ source }) => source.message),
+		signal,
+	});
+
+const readySteeringMessages = (
+	prepared: readonly PreparedSteeringMessage[],
+	hydrated: readonly SessionMessage[]
+): ReadySteeringMessage[] =>
+	prepared.flatMap((entry, index) => {
+		const message = hydrated[index];
+		return message === undefined ? [] : [{ ...entry, hydrated: message }];
+	});
+
+const findFirstSteeringAttachmentFailure = async (
+	prepared: readonly PreparedSteeringMessage[],
+	budget: SessionAttachmentBudget,
+	ports: AgentSessionPorts,
+	signal: AbortSignal
+): Promise<{ index: number; reason: string } | undefined> => {
+	for (const [index, entry] of prepared.entries()) {
+		try {
+			await hydrateSteeringBatch([entry], budget, ports, signal);
+		} catch (error) {
+			if (signal.aborted) {
+				return;
+			}
+			return {
+				index,
+				reason: getErrorMessage(error, STEERING_ATTACHMENT_PREPARATION_ERROR),
+			};
+		}
+	}
+};
+
+const prepareSteeringPrefix = async (
+	prefix: readonly PreparedSteeringMessage[],
+	budget: SessionAttachmentBudget,
+	ports: AgentSessionPorts,
+	signal: AbortSignal,
+	failure: SteeringDeliveryFailure
+): Promise<SteeringBatchPreparation> => {
+	const first = prefix[0];
+	if (first === undefined) {
+		return { failure, ready: [] };
+	}
+	try {
+		const hydrated = await hydrateSteeringBatch(prefix, budget, ports, signal);
+		if (signal.aborted) {
+			return { ready: [] };
+		}
+		const ready = readySteeringMessages(prefix, hydrated);
+		return ready.length === prefix.length
+			? { failure, ready }
+			: {
+					failure: {
+						reason: STEERING_ATTACHMENT_PREPARATION_ERROR,
+						source: first.source,
+					},
+					ready: [],
+				};
+	} catch (error) {
+		if (signal.aborted) {
+			return { ready: [] };
+		}
+		return {
+			failure: {
+				reason: getErrorMessage(error, STEERING_ATTACHMENT_PREPARATION_ERROR),
+				source: first.source,
+			},
+			ready: [],
+		};
+	}
+};
+
+const recoverSteeringBatch = async (
+	prepared: readonly PreparedSteeringMessage[],
+	budget: SessionAttachmentBudget,
+	ports: AgentSessionPorts,
+	signal: AbortSignal,
+	batchError: unknown
+): Promise<SteeringBatchPreparation> => {
+	const first = prepared[0];
+	if (first === undefined) {
+		return { ready: [] };
+	}
+	const unavailable = await findFirstSteeringAttachmentFailure(
+		prepared,
+		budget,
+		ports,
+		signal
+	);
+	if (signal.aborted) {
+		return { ready: [] };
+	}
+	if (unavailable === undefined) {
+		return {
+			failure: {
+				reason: getErrorMessage(
+					batchError,
+					STEERING_ATTACHMENT_PREPARATION_ERROR
+				),
+				source: first.source,
+			},
+			ready: [],
+		};
+	}
+	const failed = prepared[unavailable.index];
+	if (failed === undefined) {
+		return {
+			failure: {
+				reason: unavailable.reason,
+				source: first.source,
+			},
+			ready: [],
+		};
+	}
+	return prepareSteeringPrefix(
+		prepared.slice(0, unavailable.index),
+		budget,
+		ports,
+		signal,
+		{ reason: unavailable.reason, source: failed.source }
+	);
+};
+
+const prepareSteeringBatch = async (
+	prepared: readonly PreparedSteeringMessage[],
+	execution: SessionExecution,
+	ports: AgentSessionPorts,
+	signal: AbortSignal
+): Promise<SteeringBatchPreparation> => {
+	const first = prepared[0];
+	if (first === undefined) {
+		return { ready: [] };
+	}
+	let budget: SessionAttachmentBudget;
+	try {
+		const settings = await ports.resolveCompactionSettings(execution.model);
+		budget = {
+			maxAttachments: settings.maxMediaAttachments,
+			maxBytes: settings.maxMediaBytes,
+			maxTokens: settings.maxMediaTokens,
+		};
+	} catch (error) {
+		if (signal.aborted) {
+			return { ready: [] };
+		}
+		return {
+			failure: {
+				reason: getErrorMessage(error, STEERING_ATTACHMENT_PREPARATION_ERROR),
+				source: first.source,
+			},
+			ready: [],
+		};
+	}
+	try {
+		const hydrated = await hydrateSteeringBatch(
+			prepared,
+			budget,
+			ports,
+			signal
+		);
+		if (signal.aborted) {
+			return { ready: [] };
+		}
+		const ready = readySteeringMessages(prepared, hydrated);
+		return ready.length === prepared.length
+			? { ready }
+			: {
+					failure: {
+						reason: STEERING_ATTACHMENT_PREPARATION_ERROR,
+						source: first.source,
+					},
+					ready: [],
+				};
+	} catch (error) {
+		return signal.aborted
+			? { ready: [] }
+			: recoverSteeringBatch(prepared, budget, ports, signal, error);
+	}
+};
+
+type SteeringSkillPreparation =
+	| { readonly kind: "failed"; readonly reason: string }
+	| {
+			readonly kind: "ready";
+			readonly skillContext: SessionMessage[];
+	  };
+
+const prepareSteeringSkill = async (
+	source: SessionSteeringMessage,
+	armedSkill: SessionSkillCatalog,
+	ports: AgentSessionPorts
+): Promise<SteeringSkillPreparation> => {
+	const resolution = await ports.skills
+		.resolveSkill(source.input.skill, source.message, armedSkill)
+		.catch((error: unknown) => ({
+			ok: false as const,
+			reason: getErrorMessage(
+				error,
+				"The requested Skill could not be prepared."
+			),
+		}));
+	if (!resolution.ok) {
+		return { kind: "failed", reason: resolution.reason };
+	}
+	if (resolution.skill === undefined) {
+		return { kind: "ready", skillContext: [] };
+	}
+	return {
+		kind: "ready",
+		skillContext: [
+			{
+				id: toSessionMessageId(`skill-context-${source.message.id}`),
+				parts: [
+					{
+						text: formatSkillUserContext(resolution.skill),
+						type: "text" as const,
+					},
+				],
+				role: "user" as const,
+			},
+		],
+	};
+};
+
+type SteeringSkillBatchPreparation = {
+	readonly failure?: SteeringDeliveryFailure;
+	readonly prepared: PreparedSteeringMessage[];
+};
+
+const prepareSteeringSkills = async (
+	sources: readonly SessionSteeringMessage[],
+	armedSkill: SessionSkillCatalog,
+	ports: AgentSessionPorts,
+	signal: AbortSignal
+): Promise<SteeringSkillBatchPreparation> => {
+	const prepared: PreparedSteeringMessage[] = [];
+	for (const source of sources) {
+		if (source.status !== "pending" || signal.aborted) {
+			break;
+		}
+		const skill = await prepareSteeringSkill(source, armedSkill, ports);
+		if (signal.aborted) {
+			return { prepared: [] };
+		}
+		if (skill.kind === "failed") {
+			return {
+				failure: { reason: skill.reason, source },
+				prepared,
+			};
+		}
+		prepared.push({ skillContext: skill.skillContext, source });
+	}
+	return { prepared };
+};
 
 const findContinuationContextMessages = (
 	context: readonly SessionMessage[]
@@ -156,6 +477,8 @@ type AgentSessionOperationState = {
 	};
 	readonly continuationInputs: WeakSet<SessionSendInput>;
 	readonly durableWrites: Set<Promise<void>>;
+	readonly transcriptOrder: SessionTranscriptOrder;
+	recordCommitTail: Promise<void>;
 	readonly events: {
 		readonly observers: Set<() => void>;
 		readonly submissionEvents: Set<(event: SessionSubmissionEvent) => void>;
@@ -163,8 +486,11 @@ type AgentSessionOperationState = {
 	readonly executions: {
 		readonly endWaiters: Map<AgentTurnId, (() => void)[]>;
 		readonly pendingSteering: Map<AgentTurnId, PendingSteeringDelivery[]>;
+		readonly retryingSteering: Set<SessionSteeringMessage["id"]>;
+		readonly pendingSteeringStarts: Map<AgentTurnId, SessionSteeringMessage>;
 	};
 	readonly lane: {
+		activeInput: SessionSendInput | undefined;
 		activeTurnId: AgentTurnId | undefined;
 		idle: Promise<void>;
 		resolveIdle: (() => void) | undefined;
@@ -174,12 +500,14 @@ type AgentSessionOperationState = {
 		drainPhase: "idle" | "draining";
 		readonly externalizations: Map<
 			SessionQueuedSubmission["id"],
-			AbortController
+			SessionInputExternalization
 		>;
+		steeringCommitId: SessionQueuedSubmission["id"] | undefined;
 	};
 	readonly recovery: {
 		readonly activeRuns: Set<symbol>;
 		readonly attemptedMessages: Set<SessionMessageId>;
+		readonly steeringContinuations: Set<AgentTurnId>;
 		generation: number;
 	};
 	readonly shutdown: {
@@ -191,6 +519,363 @@ type AgentSessionOperationState = {
 };
 type AgentSessionConstructionOptions = AgentSessionOptions & {
 	readonly deadlineMs?: number;
+};
+type SessionTranscriptOrder = {
+	readonly committedMessageIds: Set<SessionMessageId>;
+	readonly delegatedMessageIds: SessionMessageId[];
+	readonly primaryMessageIds: SessionMessageId[];
+	readonly projectedMessageIdsByRecordMessageId: Map<
+		SessionMessageId,
+		SessionMessageId
+	>;
+	readonly toolMessagesByAssistantId: Map<
+		SessionMessageId,
+		Map<ToolCallId, SessionMessage>
+	>;
+};
+
+const createSessionTranscriptOrder = (
+	messages: readonly SessionMessage[],
+	delegatedMessageIds: ReadonlySet<SessionMessageId>
+): SessionTranscriptOrder => {
+	const order: SessionTranscriptOrder = {
+		committedMessageIds: new Set(),
+		delegatedMessageIds: [],
+		primaryMessageIds: [],
+		projectedMessageIdsByRecordMessageId: new Map(),
+		toolMessagesByAssistantId: new Map(),
+	};
+	for (const { id } of messages) {
+		order.committedMessageIds.add(id);
+		if (delegatedMessageIds.has(id)) {
+			order.delegatedMessageIds.push(id);
+		} else {
+			order.primaryMessageIds.push(id);
+		}
+	}
+	return order;
+};
+
+const registerCommittedSessionRecord = (
+	order: SessionTranscriptOrder,
+	record: SessionRecord
+): SessionMessage[] => {
+	const messageIds =
+		record.delegation === undefined
+			? order.primaryMessageIds
+			: order.delegatedMessageIds;
+	const projectedMessages =
+		record.model === undefined ? [] : projectSessionRecords([record]);
+	let projectedIndex = 0;
+	for (const recordMessage of record.messages) {
+		if (recordMessage.id === "skill-context") {
+			continue;
+		}
+		const projectedMessage = projectedMessages[projectedIndex];
+		projectedIndex += 1;
+		const recordMessageId = toSessionMessageId(recordMessage.id);
+		const committedMessageId =
+			record.delegation === undefined ? recordMessageId : projectedMessage?.id;
+		if (committedMessageId === undefined) {
+			continue;
+		}
+		if (committedMessageId !== recordMessageId) {
+			order.projectedMessageIdsByRecordMessageId.set(
+				recordMessageId,
+				committedMessageId
+			);
+		}
+		if (order.committedMessageIds.has(committedMessageId)) {
+			continue;
+		}
+		order.committedMessageIds.add(committedMessageId);
+		messageIds.push(committedMessageId);
+	}
+	if (record.outcome.kind !== "tool") {
+		return projectedMessages;
+	}
+	const assistantMessageId = toSessionMessageId(`assistant-${record.turnId}`);
+	const toolMessages =
+		order.toolMessagesByAssistantId.get(assistantMessageId) ??
+		new Map<ToolCallId, SessionMessage>();
+	for (const message of projectedMessages) {
+		const toolPart = message.parts.find(isSessionToolPart);
+		if (toolPart === undefined) {
+			continue;
+		}
+		toolMessages.set(toolPart.toolCallId, message);
+	}
+	if (toolMessages.size > 0) {
+		order.toolMessagesByAssistantId.set(assistantMessageId, toolMessages);
+	}
+	return projectedMessages;
+};
+
+const removeUncommittedToolCallPartsFromMessage = (
+	message: SessionMessage,
+	assistantMessageId: SessionMessageId,
+	toolCallIds: ReadonlySet<ToolCallId>
+): SessionMessage | undefined => {
+	if (
+		message.id !== assistantMessageId ||
+		!message.parts.some(
+			(part) => isSessionToolPart(part) && toolCallIds.has(part.toolCallId)
+		)
+	) {
+		return message;
+	}
+	const parts = message.parts.filter(
+		(part) => !(isSessionToolPart(part) && toolCallIds.has(part.toolCallId))
+	);
+	return parts.length === 0 ? undefined : { ...message, parts };
+};
+
+const removeUncommittedToolCallParts = (
+	messages: readonly SessionMessage[],
+	assistantMessageId: SessionMessageId,
+	toolCallIds: ReadonlySet<ToolCallId>
+): readonly SessionMessage[] => {
+	if (toolCallIds.size === 0) {
+		return messages;
+	}
+	let remainingMessages: SessionMessage[] | undefined;
+	for (
+		let messageIndex = 0;
+		messageIndex < messages.length;
+		messageIndex += 1
+	) {
+		const message = messages[messageIndex];
+		if (message === undefined) {
+			continue;
+		}
+		const remaining = removeUncommittedToolCallPartsFromMessage(
+			message,
+			assistantMessageId,
+			toolCallIds
+		);
+		if (remaining === message) {
+			remainingMessages?.push(message);
+			continue;
+		}
+		remainingMessages ??= messages.slice(0, messageIndex);
+		if (remaining !== undefined) {
+			remainingMessages.push(remaining);
+		}
+	}
+	return remainingMessages ?? messages;
+};
+
+const removeUncommittedSessionRecordMessages = (
+	messages: readonly SessionMessage[],
+	record: SessionRecord,
+	order: SessionTranscriptOrder
+): readonly SessionMessage[] => {
+	const assistantMessageId = toSessionMessageId(`assistant-${record.turnId}`);
+	const committedToolMessages =
+		order.toolMessagesByAssistantId.get(assistantMessageId);
+	const uncommittedMessageIds = new Set<SessionMessageId>();
+	const uncommittedToolCallIds = new Set<ToolCallId>();
+	for (const message of record.messages) {
+		if (message.id !== "skill-context") {
+			const messageId = toSessionMessageId(message.id);
+			if (!order.committedMessageIds.has(messageId)) {
+				uncommittedMessageIds.add(messageId);
+			}
+		}
+		for (const part of message.parts) {
+			if (
+				isSessionToolCallPart(part) &&
+				!committedToolMessages?.has(part.toolCallId)
+			) {
+				uncommittedToolCallIds.add(part.toolCallId);
+			}
+		}
+	}
+	const remainingMessages =
+		uncommittedMessageIds.size > 0 &&
+		messages.some(({ id }) => uncommittedMessageIds.has(id))
+			? messages.filter(({ id }) => !uncommittedMessageIds.has(id))
+			: messages;
+	return removeUncommittedToolCallParts(
+		remainingMessages,
+		assistantMessageId,
+		uncommittedToolCallIds
+	);
+};
+
+const committedToolMessageForPart = (
+	messageId: SessionMessageId,
+	part: SessionMessage["parts"][number],
+	order: SessionTranscriptOrder
+): SessionMessage | undefined =>
+	isSessionToolPart(part)
+		? order.toolMessagesByAssistantId.get(messageId)?.get(part.toolCallId)
+		: undefined;
+
+const projectCommittedToolPartsFromMessage = (
+	message: SessionMessage,
+	order: SessionTranscriptOrder
+): SessionMessage[] | undefined => {
+	let remainingParts: SessionMessage["parts"][number][] | undefined;
+	let toolMessages: SessionMessage[] | undefined;
+	for (let partIndex = 0; partIndex < message.parts.length; partIndex += 1) {
+		const part = message.parts[partIndex];
+		if (part === undefined) {
+			continue;
+		}
+		const toolMessage = committedToolMessageForPart(message.id, part, order);
+		if (toolMessage === undefined) {
+			remainingParts?.push(part);
+			continue;
+		}
+		remainingParts ??= message.parts.slice(0, partIndex);
+		if (toolMessages === undefined) {
+			toolMessages = [];
+		}
+		toolMessages.push(toolMessage);
+	}
+	if (toolMessages === undefined) {
+		return;
+	}
+	if (remainingParts !== undefined && remainingParts.length > 0) {
+		toolMessages.unshift({ ...message, parts: remainingParts });
+	}
+	return toolMessages;
+};
+
+const canonicalizeCommittedMessages = (
+	messages: readonly SessionMessage[],
+	order: SessionTranscriptOrder
+): readonly SessionMessage[] => {
+	let canonical: SessionMessage[] | undefined;
+	for (let index = 0; index < messages.length; index += 1) {
+		const message = messages[index];
+		if (message === undefined) {
+			continue;
+		}
+		const canonicalId = order.projectedMessageIdsByRecordMessageId.get(
+			message.id
+		);
+		if (canonicalId === undefined || canonicalId === message.id) {
+			canonical?.push(message);
+			continue;
+		}
+		canonical ??= messages.slice(0, index);
+		canonical.push({ ...message, id: canonicalId });
+	}
+	return canonical ?? messages;
+};
+
+const projectCommittedToolMessages = (
+	messages: readonly SessionMessage[],
+	order: SessionTranscriptOrder
+): readonly SessionMessage[] => {
+	let projected: SessionMessage[] | undefined;
+	for (
+		let messageIndex = 0;
+		messageIndex < messages.length;
+		messageIndex += 1
+	) {
+		const message = messages[messageIndex];
+		if (message === undefined) {
+			continue;
+		}
+		const projectedMessage = projectCommittedToolPartsFromMessage(
+			message,
+			order
+		);
+		if (projectedMessage === undefined) {
+			projected?.push(message);
+			continue;
+		}
+		projected ??= messages.slice(0, messageIndex);
+		projected.push(...projectedMessage);
+	}
+	return canonicalizeCommittedMessages(projected ?? messages, order);
+};
+const appendMissingCommittedRecordMessages = (
+	messages: readonly SessionMessage[],
+	committedMessages: readonly SessionMessage[]
+): readonly SessionMessage[] => {
+	let next: SessionMessage[] | undefined;
+	for (const committedMessage of committedMessages) {
+		if ((next ?? messages).some(({ id }) => id === committedMessage.id)) {
+			continue;
+		}
+		next ??= [...messages];
+		next.push(committedMessage);
+	}
+	return next ?? messages;
+};
+
+const committedMessagesInStoredOrder = (
+	messages: readonly SessionMessage[],
+	order: SessionTranscriptOrder
+): SessionMessage[] => {
+	const messagesById = new Map<SessionMessage["id"], SessionMessage>();
+	for (const message of messages) {
+		messagesById.set(message.id, message);
+	}
+	const ordered: SessionMessage[] = [];
+	for (const id of order.primaryMessageIds) {
+		const message = messagesById.get(id);
+		if (message !== undefined) {
+			ordered.push(message);
+		}
+	}
+	for (const id of order.delegatedMessageIds) {
+		const message = messagesById.get(id);
+		if (message !== undefined) {
+			ordered.push(message);
+		}
+	}
+	return ordered;
+};
+
+const orderSessionTranscript = (
+	messages: readonly SessionMessage[],
+	order: SessionTranscriptOrder
+): readonly SessionMessage[] => {
+	if (messages.length < 2) {
+		return messages;
+	}
+	const orderedCommittedMessages = committedMessagesInStoredOrder(
+		messages,
+		order
+	);
+	if (orderedCommittedMessages.length < 2) {
+		return messages;
+	}
+	let nextCommittedIndex = 0;
+	let needsReorder = false;
+	for (const message of messages) {
+		if (!order.committedMessageIds.has(message.id)) {
+			continue;
+		}
+		const orderedMessage = orderedCommittedMessages[nextCommittedIndex];
+		nextCommittedIndex += 1;
+		if (orderedMessage !== message) {
+			needsReorder = true;
+			break;
+		}
+	}
+	if (!needsReorder) {
+		return messages;
+	}
+	const ordered = [...messages];
+	nextCommittedIndex = 0;
+	for (let index = 0; index < messages.length; index += 1) {
+		const message = messages[index];
+		if (message === undefined || !order.committedMessageIds.has(message.id)) {
+			continue;
+		}
+		const orderedMessage = orderedCommittedMessages[nextCommittedIndex];
+		nextCommittedIndex += 1;
+		if (orderedMessage !== undefined) {
+			ordered[index] = orderedMessage;
+		}
+	}
+	return ordered;
 };
 
 /**
@@ -213,7 +898,6 @@ export class AgentSessionImpl implements AgentSession {
 	readonly respondToApproval: AgentSession["respondToApproval"];
 	readonly send: AgentSession["send"];
 	readonly steer: AgentSession["steer"];
-	readonly steerNextQueuedSubmission: AgentSession["steerNextQueuedSubmission"];
 	readonly subscribe: AgentSession["subscribe"];
 	#activeSend: SessionActiveSend | undefined;
 	readonly #operationState: AgentSessionOperationState;
@@ -225,9 +909,11 @@ export class AgentSessionImpl implements AgentSession {
 		initialCompactions = [],
 		initialAgent,
 		initialContext,
+		initialDelegatedMessageIds,
 		initialSessionModel,
 		initialSessionEffort,
 		initialSessionReasoningMode,
+		initialSteeringMessages = [],
 		initialTranscript,
 		ports,
 		sessionId,
@@ -245,7 +931,7 @@ export class AgentSessionImpl implements AgentSession {
 			executions: [],
 			isCompacting: false,
 			queuedSubmissions: [],
-			steeringMessages: [],
+			steeringMessages: [...initialSteeringMessages],
 			transcript: [...initialTranscript],
 			transcriptRevision: 0,
 			turnActive: false,
@@ -261,6 +947,11 @@ export class AgentSessionImpl implements AgentSession {
 			compaction: { activeCommand: undefined, requests: new Set() },
 			continuationInputs: new WeakSet(),
 			durableWrites: new Set(),
+			transcriptOrder: createSessionTranscriptOrder(
+				initialTranscript,
+				initialDelegatedMessageIds ?? EMPTY_SESSION_MESSAGE_IDS
+			),
+			recordCommitTail: Promise.resolve(),
 			events: {
 				observers: new Set(),
 				submissionEvents: new Set(),
@@ -268,8 +959,11 @@ export class AgentSessionImpl implements AgentSession {
 			executions: {
 				endWaiters: new Map(),
 				pendingSteering: new Map(),
+				pendingSteeringStarts: new Map(),
+				retryingSteering: new Set(),
 			},
 			lane: {
+				activeInput: undefined,
 				activeTurnId: undefined,
 				idle: Promise.resolve(),
 				resolveIdle: undefined,
@@ -278,10 +972,12 @@ export class AgentSessionImpl implements AgentSession {
 			queue: {
 				externalizations: new Map(),
 				drainPhase: "idle",
+				steeringCommitId: undefined,
 			},
 			recovery: {
 				activeRuns: new Set(),
 				attemptedMessages: new Set(),
+				steeringContinuations: new Set(),
 				generation: 0,
 			},
 			shutdown: {
@@ -307,7 +1003,45 @@ export class AgentSessionImpl implements AgentSession {
 			if (sessionState.shutdown.closed) {
 				return Promise.resolve();
 			}
-			const write = ports.commitRecord(input);
+			const write = sessionState.recordCommitTail
+				.then(() => ports.commitRecord(input))
+				.then(
+					() => {
+						const committedMessages = registerCommittedSessionRecord(
+							sessionState.transcriptOrder,
+							input.record
+						);
+						const projectedTranscript = projectCommittedToolMessages(
+							this.#state.transcript,
+							sessionState.transcriptOrder
+						);
+						const transcript = orderSessionTranscript(
+							appendMissingCommittedRecordMessages(
+								projectedTranscript,
+								committedMessages
+							),
+							sessionState.transcriptOrder
+						);
+						if (transcript !== this.#state.transcript) {
+							publish({ transcript });
+						}
+					},
+					(error) => {
+						const transcript = removeUncommittedSessionRecordMessages(
+							this.#state.transcript,
+							input.record,
+							sessionState.transcriptOrder
+						);
+						if (transcript !== this.#state.transcript) {
+							publish({ transcript });
+						}
+						throw error;
+					}
+				);
+			sessionState.recordCommitTail = write.then(
+				() => undefined,
+				() => undefined
+			);
 			sessionState.durableWrites.add(write);
 			void write.then(
 				() => sessionState.durableWrites.delete(write),
@@ -315,11 +1049,25 @@ export class AgentSessionImpl implements AgentSession {
 			);
 			return write;
 		};
+		const updateSubmissionStatus: AgentSessionPorts["updateSubmissionStatus"] =
+			(input) => {
+				const write = ports.updateSubmissionStatus(input);
+				sessionState.durableWrites.add(write);
+				void write.then(
+					() => sessionState.durableWrites.delete(write),
+					() => sessionState.durableWrites.delete(write)
+				);
+				return write;
+			};
 		/**
 		 * Late runtime callbacks can still settle after cancellation. They must not
 		 * reach the durable store once the Agent Session has lost authority.
 		 */
-		const agentSessionPorts: AgentSessionPorts = { ...ports, commitRecord };
+		const agentSessionPorts: AgentSessionPorts = {
+			...ports,
+			commitRecord,
+			updateSubmissionStatus,
+		};
 		const publish = (changes: Partial<LiveSessionSnapshot>): void => {
 			const compactionPhase = sessionState.compaction.activeCommand?.phase;
 			const projectedChanges: Partial<LiveSessionSnapshot> = {
@@ -388,19 +1136,31 @@ export class AgentSessionImpl implements AgentSession {
 			messages: readonly SessionMessage[]
 		): readonly SessionMessage[] => {
 			const merged = [...this.#state.transcript];
-			for (const message of messages) {
+			let hasNewCommittedMessage = false;
+			for (const message of projectCommittedToolMessages(
+				messages,
+				sessionState.transcriptOrder
+			)) {
 				if (isCompactionSummaryMessage(message)) {
 					continue;
 				}
 				const index = merged.findIndex(({ id }) => id === message.id);
 				if (index === -1) {
 					merged.push(message);
+					if (
+						sessionState.transcriptOrder.committedMessageIds.has(message.id)
+					) {
+						hasNewCommittedMessage = true;
+					}
 				} else {
 					merged[index] = message;
 				}
 			}
-			publish({ transcript: merged });
-			return merged;
+			const transcript = hasNewCommittedMessage
+				? orderSessionTranscript(merged, sessionState.transcriptOrder)
+				: merged;
+			publish({ transcript });
+			return transcript;
 		};
 		const recordCompaction = (entry: SessionCompaction): void => {
 			if (this.#state.compactions.some(({ id }) => id === entry.id)) {
@@ -436,10 +1196,18 @@ export class AgentSessionImpl implements AgentSession {
 		const cancelCompactionCommand = (): void => maintenance.cancelCompaction();
 		const settleCompaction = (): Promise<Error | null> =>
 			maintenance.settleCompaction();
-		const recoverOverflow = (
+		const recoverOverflow = async (
 			command: SessionOverflowRecoveryCommand
-		): Promise<SessionOverflowRecoveryOutcome> =>
-			maintenance.recoverOverflow(command);
+		): Promise<SessionOverflowRecoveryOutcome> => {
+			if (sessionState.executions.pendingSteering.has(command.turnId)) {
+				sessionState.recovery.steeringContinuations.add(command.turnId);
+			}
+			try {
+				return await maintenance.recoverOverflow(command);
+			} finally {
+				sessionState.recovery.steeringContinuations.delete(command.turnId);
+			}
+		};
 
 		/** Ends an execution and wakes everything waiting for it to end. */
 		const endExecution = (turnId: AgentTurnId): void => {
@@ -478,6 +1246,35 @@ export class AgentSessionImpl implements AgentSession {
 				startedAt: input.startedAt,
 				turnId,
 			};
+			const initialSteering =
+				sessionState.executions.pendingSteeringStarts.get(turnId);
+			if (initialSteering !== undefined) {
+				sessionState.executions.pendingSteeringStarts.delete(turnId);
+			}
+			const pendingSteering: PendingSteeringDelivery[] = [];
+			if (initialSteering !== undefined) {
+				pendingSteering.push({
+					execution,
+					message: initialSteering.message,
+					source: initialSteering,
+				});
+			}
+			for (const sourceTurnId of sessionState.recovery.steeringContinuations) {
+				const previous =
+					sessionState.executions.pendingSteering.get(sourceTurnId);
+				if (previous === undefined) {
+					continue;
+				}
+				sessionState.executions.pendingSteering.delete(sourceTurnId);
+				sessionState.recovery.steeringContinuations.delete(sourceTurnId);
+				for (const { message, source } of previous) {
+					pendingSteering.push({ execution, message, source });
+				}
+				break;
+			}
+			if (pendingSteering.length > 0) {
+				sessionState.executions.pendingSteering.set(turnId, pendingSteering);
+			}
 			publish({ executions: [...this.#state.executions, execution] });
 			return execution;
 		};
@@ -521,161 +1318,219 @@ export class AgentSessionImpl implements AgentSession {
 			mergeTranscript(next);
 		};
 
-		/**
-		 * A Steering Message is provisional until the model step that received
-		 * it finishes. This lets a provider rejection return content that was
-		 * already handed to the failed request instead of leaving it in context.
-		 */
-		const acknowledgeSteeringMessages = (turnId: AgentTurnId): void => {
-			const pending = sessionState.executions.pendingSteering.get(turnId);
-			if (pending === undefined) {
-				return;
+		const persistSteeringStatus = async (
+			source: SessionSteeringMessage,
+			status: SessionSteeringStatus,
+			reason?: string,
+			afterId?: SessionSteeringMessage["id"]
+		): Promise<SessionSteeringMessage> => {
+			const failure =
+				status === "failed"
+					? (reason ?? "The Agent Turn ended before confirming the Submission.")
+					: undefined;
+			await agentSessionPorts.updateSubmissionStatus({
+				failure,
+				messageId: source.message.id,
+				recordId: source.recordId,
+				status,
+				submissionId: source.input.submissionId,
+			});
+			const message = withSubmissionStatus(source.message, {
+				failure,
+				status,
+			});
+			const updated: SessionSteeringMessage = {
+				...source,
+				message,
+				status,
+				...omitUndefined({ reason: failure }),
+			};
+			const steeringMessages = this.#state.steeringMessages.filter(
+				(entry) => entry.id !== source.id
+			);
+			if (status === "failed") {
+				const previousIndex = isUndefined(afterId)
+					? -1
+					: steeringMessages.findIndex((entry) => entry.id === afterId);
+				steeringMessages.splice(previousIndex + 1, 0, updated);
 			}
-			sessionState.executions.pendingSteering.delete(turnId);
-			for (const { execution, message, source } of pending) {
-				if (
-					source.input.messageId !== undefined &&
-					source.input.submissionId !== undefined
-				) {
-					emitSubmissionEvent({
-						kind: "delivered",
-						messageId: source.input.messageId,
-						submissionId: source.input.submissionId,
-						turnId: execution.turnId,
-					});
-				}
-				commitSteeringRecord(execution, message);
-			}
-		};
-		const recallFailedSteeringMessages = (turnId: AgentTurnId): void => {
-			const pending = sessionState.executions.pendingSteering.get(turnId);
-			if (pending === undefined) {
-				return;
-			}
-			sessionState.executions.pendingSteering.delete(turnId);
-			const messageIds = new Set(pending.map(({ message }) => message.id));
 			publish({
-				context: this.#state.context.filter(({ id }) => !messageIds.has(id)),
-				transcript: this.#state.transcript.filter(
-					({ id }) => !messageIds.has(id)
+				context:
+					status === "failed"
+						? this.#state.context.filter((entry) => entry.id !== message.id)
+						: this.#state.context.map((entry) =>
+								entry.id === message.id ? message : entry
+							),
+				steeringMessages,
+				transcript: this.#state.transcript.map((entry) =>
+					entry.id === message.id ? message : entry
 				),
 			});
-			for (const { execution, source } of pending) {
-				if (
-					source.input.messageId !== undefined &&
-					source.input.submissionId !== undefined
-				) {
-					emitSubmissionEvent({
-						composition: source.input.composition,
-						kind: "recalled",
-						messageId: source.input.messageId,
-						reason: "turn-failed",
-						submissionId: source.input.submissionId,
-						turnId: execution.turnId,
-					});
-				}
-			}
+			return updated;
 		};
-		/**
-		 * Hands the Steering Lane to the running Agent Turn. The messages join
-		 * context immediately, but their durable records and delivered events
-		 * wait until the receiving Model Step succeeds.
-		 */
-		const takeSteeringMessages = (
-			execution: SessionExecution
-		): SessionMessage[] => {
-			if (
-				sessionState.shutdown.closed ||
-				!isUndefined(execution.parent) ||
-				this.#state.steeringMessages.length === 0
-			) {
+		const acknowledgeSteeringMessages = async (
+			turnId: AgentTurnId,
+			status: "failed" | "processed",
+			reason?: string
+		): Promise<void> => {
+			const pending = sessionState.executions.pendingSteering.get(turnId);
+			if (pending === undefined) {
+				return;
+			}
+			let previousFailureId: SessionSteeringMessage["id"] | undefined;
+			for (const { execution, source } of pending) {
+				const failure =
+					status === "failed"
+						? (reason ??
+							"The Agent Turn ended before confirming the Submission.")
+						: undefined;
+				await persistSteeringStatus(source, status, failure, previousFailureId);
+				if (status === "failed") {
+					previousFailureId = source.id;
+				}
+				emitSubmissionEvent({
+					kind: status,
+					messageId: source.message.id,
+					...omitUndefined({ reason: failure }),
+					submissionId: source.input.submissionId,
+					turnId: execution.turnId,
+				});
+			}
+			sessionState.executions.pendingSteering.delete(turnId);
+		};
+		const failSteeringDelivery = async (
+			execution: SessionExecution,
+			source: SessionSteeringMessage,
+			reason: string
+		): Promise<SessionMessage[]> => {
+			await persistSteeringStatus(source, "failed", reason);
+			emitSubmissionEvent({
+				kind: "failed",
+				messageId: source.message.id,
+				reason,
+				submissionId: source.input.submissionId,
+				turnId: execution.turnId,
+			});
+			return [];
+		};
+		const deliverSteeringMessages = async (
+			execution: SessionExecution,
+			ready: readonly ReadySteeringMessage[],
+			signal: AbortSignal
+		): Promise<SessionMessage[]> => {
+			const messages: SessionMessage[] = [];
+			for (const { hydrated, skillContext, source } of ready) {
+				if (sessionState.shutdown.closed || signal.aborted) {
+					return messages;
+				}
+				const processing = await persistSteeringStatus(source, "processing");
+				const pending =
+					sessionState.executions.pendingSteering.get(execution.turnId) ?? [];
+				const pendingIndex = pending.findIndex(
+					(entry) => entry.source.id === processing.id
+				);
+				const delivery = {
+					execution,
+					message: processing.message,
+					source: processing,
+				};
+				sessionState.executions.pendingSteering.set(
+					execution.turnId,
+					pendingIndex === -1
+						? [...pending, delivery]
+						: pending.map((entry, index) =>
+								index === pendingIndex ? delivery : entry
+							)
+				);
+				const context = this.#state.context.some(
+					(message) => message.id === processing.message.id
+				)
+					? this.#state.context.map((message) =>
+							message.id === processing.message.id
+								? processing.message
+								: message
+						)
+					: [...this.#state.context, processing.message];
+				publish({ context });
+				emitSubmissionEvent({
+					kind: "delivered",
+					messageId: processing.message.id,
+					submissionId: processing.input.submissionId,
+					turnId: execution.turnId,
+				});
+				messages.push(...skillContext, hydrated);
+			}
+			return messages;
+		};
+		const takeSteeringMessages = async (
+			execution: SessionExecution,
+			armedSkill: SessionSkillCatalog,
+			signal: AbortSignal
+		): Promise<SessionMessage[]> => {
+			if (sessionState.shutdown.closed || !isUndefined(execution.parent)) {
 				return [];
 			}
-			const taken = this.#state.steeringMessages;
-			publish({ steeringMessages: [] });
-			const delivered = taken.map(({ input }) =>
-				createSessionUserMessage(
-					input.text,
-					{
-						agent: execution.agent,
-						joinedTurnId: execution.turnId,
-						model: execution.model,
-						...omitUndefined({
-							effort: execution.effort,
-							reasoningMode: execution.reasoningMode,
-						}),
-					},
-					[],
-					[],
-					input.messageId
-				)
-			);
 			const pending =
 				sessionState.executions.pendingSteering.get(execution.turnId) ?? [];
-			sessionState.executions.pendingSteering.set(execution.turnId, [
-				...pending,
-				...taken.flatMap((source, index) => {
-					const message = delivered[index];
-					return message === undefined ? [] : [{ execution, message, source }];
-				}),
-			]);
-			applyContext([...this.#state.context, ...delivered]);
-			mergeTranscript(delivered);
-			return delivered;
-		};
-		/**
-		 * Writes the Session Record of a Steering Message after the model step
-		 * that received it succeeds. Failure handling removes the provisional
-		 * context/transcript message and recalls its composer composition instead.
-		 */
-		const commitSteeringRecord = (
-			execution: SessionExecution,
-			message: SessionMessage
-		): void => {
-			const write = agentSessionPorts
-				.commitRecord({
-					record: buildUserSessionRecord({
-						agentId: execution.agent,
-						message,
-						model: execution.model,
-						turnId: execution.turnId,
-						...omitUndefined({
-							effort: execution.effort,
-							reasoningMode: execution.reasoningMode,
-						}),
-					}),
-					sessionId,
-					sessionModel: execution.sessionModel,
-					...omitUndefined({
-						sessionEffort: execution.sessionEffort,
-						sessionReasoningMode: execution.sessionReasoningMode,
-					}),
-				})
-				.catch((error: unknown) => {
-					logSessionPersistenceFailure(
-						"Steering message persistence failed",
-						error,
-						{
-							operation: "session.steering",
-							phase: "persistence",
-							turnId: execution.turnId,
-						}
-					);
-					publish({
-						error: isError(error)
-							? error
-							: new Error("Could not save the Steering Message."),
-					});
-				});
-			sessionState.durableWrites.add(write);
-			void write.then(
-				() => sessionState.durableWrites.delete(write),
-				() => sessionState.durableWrites.delete(write)
+			const recoveredSources = pending.flatMap(({ source }) => {
+				if (
+					source.status !== "processing" ||
+					this.#state.context.some(
+						(message) => message.id === source.message.id
+					) ||
+					this.#state.steeringMessages.some(({ id }) => id === source.id)
+				) {
+					return [];
+				}
+				return [{ ...source, status: "pending" as const }];
+			});
+			const sources = [...recoveredSources, ...this.#state.steeringMessages];
+			const skills = await prepareSteeringSkills(
+				sources,
+				armedSkill,
+				ports,
+				signal
 			);
+			if (sessionState.shutdown.closed || signal.aborted) {
+				return [];
+			}
+			const preparation = await prepareSteeringBatch(
+				skills.prepared,
+				execution,
+				ports,
+				signal
+			);
+			if (sessionState.shutdown.closed || signal.aborted) {
+				return [];
+			}
+			const messages = await deliverSteeringMessages(
+				execution,
+				preparation.ready,
+				signal
+			);
+			if (sessionState.shutdown.closed || signal.aborted) {
+				return messages;
+			}
+			const failure = preparation.failure ?? skills.failure;
+			if (failure !== undefined) {
+				await failSteeringDelivery(execution, failure.source, failure.reason);
+			}
+			return messages;
 		};
 		const waitForDurableWrites = async (): Promise<void> => {
+			let firstFailure: { reason: unknown } | undefined;
 			while (sessionState.durableWrites.size > 0) {
-				await Promise.all([...sessionState.durableWrites]);
+				const results = await Promise.allSettled([
+					...sessionState.durableWrites,
+				]);
+				for (const result of results) {
+					if (result.status === "rejected" && firstFailure === undefined) {
+						firstFailure = { reason: result.reason };
+					}
+				}
+			}
+			if (firstFailure !== undefined) {
+				throw firstFailure.reason;
 			}
 		};
 		const waitForCompactions = async (): Promise<void> => {
@@ -789,14 +1644,10 @@ export class AgentSessionImpl implements AgentSession {
 			compact,
 			continueContext: (input) => submissionCommand.continueContext(input),
 			endExecution,
-			fallbackSteeringMessages: (turnId) =>
-				inputLane.fallbackSteeringMessages(turnId),
-			acknowledgeSteeringMessages: (turnId) =>
-				acknowledgeSteeringMessages(turnId),
-			recallFailedTurnMessages: (turnId) => {
-				recallFailedSteeringMessages(turnId);
-				inputLane.recallFailedTurnMessages();
-			},
+			acknowledgeSteeringMessages: (turnId, status, failure) =>
+				acknowledgeSteeringMessages(turnId, status, failure),
+			recallFailedTurnMessages: (_turnId) =>
+				inputLane.recallFailedTurnMessages(),
 			getContext: () => this.#state.context,
 			getTranscript: () => this.#state.transcript,
 			isShutDown: () => sessionState.shutdown.closed,
@@ -824,6 +1675,7 @@ export class AgentSessionImpl implements AgentSession {
 			ownsTurnReservation: boolean;
 		} => {
 			if (sessionState.lane.runs === 0) {
+				sessionState.lane.activeInput = input;
 				const idle = Promise.withResolvers<void>();
 				sessionState.lane.idle = idle.promise;
 				sessionState.lane.resolveIdle = idle.resolve;
@@ -877,6 +1729,9 @@ export class AgentSessionImpl implements AgentSession {
 			}
 			sessionState.lane.runs -= 1;
 			if (sessionState.lane.runs === 0) {
+				sessionState.lane.activeInput = undefined;
+			}
+			if (sessionState.lane.runs === 0) {
 				sessionState.lane.resolveIdle?.();
 				sessionState.lane.resolveIdle = undefined;
 			}
@@ -918,18 +1773,320 @@ export class AgentSessionImpl implements AgentSession {
 		const abortActiveSend = submissionCommand.abortActiveSend;
 		const runSubmission = submissionCommand.runSubmission;
 		const waitForActiveSend = submissionCommand.waitForActiveSend;
+		const persistSteeringRecord = async (
+			record: SessionRecord,
+			input: SessionSendInput
+		): Promise<boolean> => {
+			if (sessionState.shutdown.closed) {
+				return false;
+			}
+			try {
+				await agentSessionPorts.commitRecord({
+					record,
+					sessionId,
+					sessionModel: input.sessionModel,
+					...omitUndefined({
+						sessionEffort: input.sessionEffort,
+						sessionReasoningMode: input.sessionReasoningMode,
+					}),
+				});
+				return true;
+			} catch (error) {
+				logSessionPersistenceFailure(
+					"Steering message persistence failed",
+					error,
+					{
+						operation: "session.steering",
+						phase: "persistence",
+						turnId: record.turnId,
+					}
+				);
+				return false;
+			}
+		};
+		const prepareSteeringRecord = async (
+			queued: SessionQueuedSubmission,
+			execution: SessionExecution | undefined,
+			activeInput: SessionSendInput | undefined
+		): Promise<SteeringRecordPreparation> => {
+			if (sessionState.shutdown.closed) {
+				return {
+					kind: "rejected",
+					messageId: queued.messageId,
+					reason: SHUT_DOWN_SEND_ERROR,
+					submissionId: queued.submissionId,
+				};
+			}
+			const turnId =
+				execution?.turnId ?? activeInput?.turnId ?? queued.input.turnId;
+			const input = ports.resolveSubmission({
+				...queued.input,
+				agent: execution?.agent ?? activeInput?.agent ?? queued.input.agent,
+				model: execution?.model ?? activeInput?.model ?? queued.input.model,
+				sessionModel:
+					execution?.sessionModel ??
+					activeInput?.sessionModel ??
+					queued.input.sessionModel,
+				...omitUndefined({
+					effort: execution?.effort ?? activeInput?.effort,
+					reasoningMode: execution?.reasoningMode ?? activeInput?.reasoningMode,
+					sessionEffort: execution?.sessionEffort ?? activeInput?.sessionEffort,
+					sessionReasoningMode:
+						execution?.sessionReasoningMode ??
+						activeInput?.sessionReasoningMode,
+				}),
+				files: queued.input.composition.files,
+				messageId: queued.messageId,
+				reservedMessageId: undefined,
+				submissionId: queued.submissionId,
+				turnId,
+				userText: queued.input.userText ?? queued.input.composition.text,
+			});
+			const text = input.userText ?? queued.input.composition.text;
+			const fileMentions = await ports.resolveFileMentions(text);
+			if (sessionState.shutdown.closed) {
+				return {
+					kind: "rejected",
+					messageId: queued.messageId,
+					reason: SHUT_DOWN_SEND_ERROR,
+					submissionId: queued.submissionId,
+				};
+			}
+			const metadata: SessionMessageMetadata = {
+				agent: input.agent,
+				model: input.model,
+				...omitUndefined({
+					effort: input.effort,
+					joinedTurnId: execution?.turnId ?? activeInput?.turnId,
+					reasoningMode: input.reasoningMode,
+					skill: input.skill
+						? createSkillSnapshot(input.skill, "explicit")
+						: undefined,
+					submissionId: queued.submissionId,
+					submissionStatus: "pending" as const,
+				}),
+			};
+			const message = createSessionUserMessage(
+				text,
+				metadata,
+				fileMentions,
+				queued.input.composition.files,
+				queued.messageId
+			);
+			const record = buildUserSessionRecord({
+				agentId: input.agent,
+				message,
+				model: input.model,
+				turnId: turnId ?? createAgentTurnId(),
+				...omitUndefined({
+					effort: input.effort,
+					reasoningMode: input.reasoningMode,
+				}),
+			});
+			return {
+				kind: "ready",
+				input,
+				message,
+				record,
+				text,
+				...omitUndefined({ turnId }),
+			};
+		};
+		const commitSteeringSubmission: SessionInputLanePort["commitSteeringSubmission"] =
+			async (queued) => {
+				const prepared = await prepareSteeringRecord(
+					queued,
+					primaryExecution(),
+					sessionState.lane.activeInput
+				);
+				if (prepared.kind === "rejected") {
+					return prepared;
+				}
+				const { input, message, record, text, turnId } = prepared;
+				if (!(await persistSteeringRecord(record, input))) {
+					return {
+						kind: "rejected",
+						messageId: queued.messageId,
+						reason: "Could not durably commit the Submission.",
+						submissionId: queued.submissionId,
+					};
+				}
+				const steeringInput = {
+					...input,
+					composition: queued.input.composition,
+					files: queued.input.composition.files,
+					messageId: queued.messageId,
+					submissionId: queued.submissionId,
+					turnId,
+					userText: text,
+				};
+				const steeringMessage: SessionSteeringMessage = {
+					id: toSteeringMessageId(crypto.randomUUID()),
+					input: steeringInput,
+					message,
+					recordId: record.id,
+					status: "pending",
+				};
+				const queuedSubmissions = this.#state.queuedSubmissions.filter(
+					(submission) => submission.id !== queued.id
+				);
+				const attachmentIds = queued.input.composition.files.flatMap(
+					({ attachmentId }) =>
+						attachmentId === undefined ? [] : [attachmentId]
+				);
+				publish({
+					context: this.#state.context,
+					queuedSubmissions,
+					steeringMessages: [...this.#state.steeringMessages, steeringMessage],
+					transcript: appendMissingCommittedRecordMessages(
+						this.#state.transcript,
+						[steeringMessage.message]
+					),
+				});
+				if (attachmentIds.length > 0) {
+					ports.attachments.release(attachmentIds);
+				}
+				emitSubmissionEvent({
+					kind: "steered",
+					messageId: queued.messageId,
+					submissionId: queued.submissionId,
+					...omitUndefined({ turnId }),
+				});
+				return {
+					kind: "steered",
+					messageId: queued.messageId,
+					submissionId: queued.submissionId,
+					...omitUndefined({ turnId }),
+				};
+			};
+		const executeCommittedSteering = async (
+			source: SessionSteeringMessage
+		): Promise<SessionSendOutcome> => {
+			const turnId = createAgentTurnId();
+			const processing = await persistSteeringStatus(source, "processing");
+			const context = this.#state.context.some(
+				(message) => message.id === processing.message.id
+			)
+				? this.#state.context.map((message) =>
+						message.id === processing.message.id ? processing.message : message
+					)
+				: [...this.#state.context, processing.message];
+			publish({ context });
+			sessionState.executions.pendingSteeringStarts.set(turnId, processing);
+			try {
+				const outcome = await runSubmission(
+					{
+						...ports.resolveSubmission({
+							...processing.input,
+							turnId,
+						}),
+						turnId,
+					},
+					{ reportFailure: false }
+				);
+				if (!sessionState.executions.pendingSteeringStarts.has(turnId)) {
+					return outcome;
+				}
+				sessionState.executions.pendingSteeringStarts.delete(turnId);
+				const reason =
+					outcome.rejected === true
+						? outcome.reason
+						: "The committed Submission did not start an Agent Turn.";
+				await persistSteeringStatus(processing, "failed", reason);
+				emitSubmissionEvent({
+					kind: "failed",
+					messageId: source.message.id,
+					reason,
+					submissionId: source.input.submissionId,
+					turnId,
+				});
+				return { rejected: true, reason };
+			} catch (error) {
+				if (!sessionState.executions.pendingSteeringStarts.has(turnId)) {
+					throw error;
+				}
+				sessionState.executions.pendingSteeringStarts.delete(turnId);
+				const reason = getErrorMessage(
+					error,
+					"The committed Submission did not start an Agent Turn."
+				);
+				await persistSteeringStatus(processing, "failed", reason);
+				emitSubmissionEvent({
+					kind: "failed",
+					messageId: source.message.id,
+					reason,
+					submissionId: source.input.submissionId,
+					turnId,
+				});
+				return { rejected: true, reason };
+			}
+		};
+		const runCommittedSteering = async (
+			source: SessionSteeringMessage,
+			expectedStatus: "failed" | "pending"
+		): Promise<SessionSendOutcome> => {
+			if (
+				sessionState.shutdown.closed ||
+				this.#state.steeringMessages[0]?.id !== source.id ||
+				source.status !== expectedStatus
+			) {
+				return {
+					rejected: true,
+					reason: sessionState.shutdown.closed
+						? SHUT_DOWN_SEND_ERROR
+						: "The committed Submission is no longer waiting.",
+				};
+			}
+			const isRetry = expectedStatus === "failed";
+			if (isRetry && sessionState.executions.retryingSteering.has(source.id)) {
+				return {
+					rejected: true,
+					reason: "The committed Submission is already being retried.",
+				};
+			}
+			if (isRetry) {
+				sessionState.executions.retryingSteering.add(source.id);
+			}
+			try {
+				return await executeCommittedSteering(source);
+			} finally {
+				if (isRetry) {
+					sessionState.executions.retryingSteering.delete(source.id);
+				}
+			}
+		};
+		const runSteeringMessage: SessionInputLanePort["runSteeringMessage"] = (
+			message
+		) => runCommittedSteering(message, "pending");
+		const retrySteeringMessage: SessionInputLanePort["retrySteeringMessage"] = (
+			message
+		) => runCommittedSteering(message, "failed");
 		const inputLanePort: SessionInputLanePort = {
-			addExternalization: (id, controller) => {
-				sessionState.queue.externalizations.set(id, controller);
+			addExternalization: (id, controller, completion) => {
+				sessionState.queue.externalizations.set(id, { completion, controller });
 			},
 			appendQueuedSubmission: (submission) =>
 				publish({
 					queuedSubmissions: [...this.#state.queuedSubmissions, submission],
 				}),
-			appendSteeringMessage: (message) =>
-				publish({
-					steeringMessages: [...this.#state.steeringMessages, message],
-				}),
+			beginSteeringCommit: (id) => {
+				if (
+					sessionState.shutdown.closed ||
+					sessionState.queue.steeringCommitId !== undefined ||
+					this.#state.queuedSubmissions[0]?.id !== id
+				) {
+					return false;
+				}
+				sessionState.queue.steeringCommitId = id;
+				return true;
+			},
+			commitSteeringSubmission,
+			endSteeringCommit: (id) => {
+				if (sessionState.queue.steeringCommitId !== id) {
+					return;
+				}
+				sessionState.queue.steeringCommitId = undefined;
+			},
 			canDrainQueue: () =>
 				sessionState.lane.runs === 0 &&
 				!this.#state.turnActive &&
@@ -942,8 +2099,16 @@ export class AgentSessionImpl implements AgentSession {
 			getExternalization: (id) => sessionState.queue.externalizations.get(id),
 			getSnapshot: () => this.#state,
 			isClosed: () => sessionState.shutdown.closed,
+			isExecutionBusy: () =>
+				sessionState.lane.runs > 0 ||
+				this.#state.turnActive ||
+				this.#state.isCompacting ||
+				sessionState.compaction.activeCommand !== undefined ||
+				sessionState.recovery.activeRuns.size > 0,
 			isExternalizing: (id) => sessionState.queue.externalizations.has(id),
 			isQueueDraining: () => sessionState.queue.drainPhase === "draining",
+			isSteeringCommitting: () =>
+				sessionState.queue.steeringCommitId !== undefined,
 			isSubmissionBusy: () =>
 				sessionState.lane.runs > 0 ||
 				sessionState.queue.drainPhase === "draining" ||
@@ -952,10 +2117,13 @@ export class AgentSessionImpl implements AgentSession {
 				sessionState.compaction.activeCommand !== undefined ||
 				sessionState.recovery.activeRuns.size > 0 ||
 				sessionState.queue.externalizations.size > 0 ||
-				this.#state.queuedSubmissions.length > 0,
+				this.#state.queuedSubmissions.length > 0 ||
+				this.#state.steeringMessages.length > 0,
 			removeExternalization: (id) => {
 				sessionState.queue.externalizations.delete(id);
 			},
+			runSteeringMessage,
+			retrySteeringMessage,
 			removeQueuedSubmission: (id) => {
 				const queued = this.#state.queuedSubmissions.find(
 					(submission) => submission.id === id
@@ -971,7 +2139,10 @@ export class AgentSessionImpl implements AgentSession {
 				return queued;
 			},
 			replaceInputLanes: (queuedSubmissions, steeringMessages) =>
-				publish({ queuedSubmissions, steeringMessages }),
+				publish({
+					queuedSubmissions: [...queuedSubmissions],
+					steeringMessages: [...steeringMessages],
+				}),
 			replaceQueuedSubmission: (updated) =>
 				publish({
 					queuedSubmissions: this.#state.queuedSubmissions.map((submission) =>
@@ -1108,7 +2279,24 @@ export class AgentSessionImpl implements AgentSession {
 					reason: "The Agent Session is busy.",
 				};
 			}
-			inputLane.fallbackSteeringMessages();
+			const steering = this.#state.steeringMessages[0];
+			if (steering !== undefined) {
+				if (steering.status !== "pending") {
+					return {
+						kind: "rejected",
+						reason:
+							steering.reason ??
+							"A committed Submission failed; retry it before continuing.",
+					};
+				}
+				trackBackgroundTask(inputLane.drainQueuedSubmissions());
+				return {
+					kind: "started-submission",
+					messageId: steering.message.id,
+					submissionId: steering.input.submissionId,
+					...omitUndefined({ turnId: steering.input.turnId }),
+				};
+			}
 			const waiting = this.#state.queuedSubmissions[0];
 			if (waiting !== undefined) {
 				trackBackgroundTask(inputLane.drainQueuedSubmissions());
@@ -1134,7 +2322,7 @@ export class AgentSessionImpl implements AgentSession {
 			void runSubmission(continuation.input).catch(() => undefined);
 			return { kind: "resumed", turnId: continuation.turnId };
 		};
-		const interruptAll = (): SessionInterruptResult => {
+		const interruptAll = async (): Promise<SessionInterruptResult> => {
 			const approvalsSettled = this.#state.approvals.filter(
 				(approval) => approval.decision === undefined
 			).length;
@@ -1162,7 +2350,9 @@ export class AgentSessionImpl implements AgentSession {
 			if (hasTurn) {
 				interruptActiveWork();
 			}
-			const recalled = inputLane.recallWaitingMessages();
+			const recall = inputLane.recallWaitingMessages();
+			trackBackgroundTask(recall);
+			const recalled = await recall;
 			return { approvalsSettled, kind, recalled };
 		};
 		const hasPendingWork = (): boolean =>
@@ -1184,12 +2374,14 @@ export class AgentSessionImpl implements AgentSession {
 			}
 			sessionState.shutdown.phase = "closing";
 			sessionState.shutdown.controller.abort();
-			for (const controller of sessionState.queue.externalizations.values()) {
+			for (const {
+				controller,
+			} of sessionState.queue.externalizations.values()) {
 				controller.abort();
 			}
 			// Whatever was waiting is dropped with the session: its attachment
 			// holds end and nothing it held is ever run.
-			inputLane.recallWaitingMessages();
+			trackBackgroundTask(inputLane.recallWaitingMessages());
 			abortActiveSend("cancelled");
 			closeApprovals();
 			const compaction = sessionState.compaction.activeCommand?.promise;
@@ -1235,7 +2427,7 @@ export class AgentSessionImpl implements AgentSession {
 			sessionState.recovery.generation += 1;
 			abortActiveSend("cancelled");
 		};
-		this.cancelCompaction = () => {
+		this.cancelCompaction = async () => {
 			if (
 				sessionState.compaction.activeCommand !== undefined ||
 				this.#state.isCompacting ||
@@ -1244,14 +2436,18 @@ export class AgentSessionImpl implements AgentSession {
 				sessionState.recovery.generation += 1;
 			}
 			cancelCompactionCommand();
-			return inputLane.recallWaitingMessages();
+			const recall = inputLane.recallWaitingMessages();
+			trackBackgroundTask(recall);
+			return await recall;
 		};
 		this.compact = compact;
 		this.getSnapshot = () => this.#state;
-		this.interrupt = (preserveToolCallId) => {
+		this.interrupt = async (preserveToolCallId) => {
 			closeApprovals();
 			interruptActiveWork(preserveToolCallId);
-			return inputLane.recallWaitingMessages();
+			const recall = inputLane.recallWaitingMessages();
+			trackBackgroundTask(recall);
+			return await recall;
 		};
 		this.interruptAll = interruptAll;
 		this.recallWaitingMessages = inputLane.recallWaitingMessages;
@@ -1263,7 +2459,6 @@ export class AgentSessionImpl implements AgentSession {
 		};
 		this.send = inputLane.send;
 		this.steer = inputLane.steer;
-		this.steerNextQueuedSubmission = inputLane.steerNextQueuedSubmission;
 		this.subscribe = (listener) => {
 			sessionState.events.observers.add(listener);
 			return () => sessionState.events.observers.delete(listener);

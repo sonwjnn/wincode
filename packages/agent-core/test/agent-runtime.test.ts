@@ -156,9 +156,10 @@ test("Agent Runtime delivers steering after tool results and continues the same 
 		"Focus on the error path.",
 		toSessionMessageId("steering-message")
 	);
+	const pendingSteering = [steering];
 	const events = await consume(
 		createAgentRuntime({ modelClient: client }).run(buildTurn([tool]), {
-			takeSteeringMessages: () => [steering],
+			takeSteeringMessages: () => pendingSteering.splice(0),
 		})
 	);
 
@@ -199,6 +200,53 @@ test("Agent Runtime delivers steering after tool results and continues the same 
 		type: "agent-turn-completed",
 		usage: { inputTokens: 24, outputTokens: 7, totalTokens: 31 },
 	});
+});
+
+test("pending steering continues the same turn after a text-only model step", async () => {
+	const turn = buildTurn();
+	const steering = [
+		createAgentTurnMessage(
+			"user",
+			"Use the corrected request.",
+			toSessionMessageId("steering-text-only")
+		),
+	];
+	const { client, requests } = scriptedClient((_request, index) =>
+		scriptedParts(
+			{
+				delta: index === 0 ? "Original answer." : "Corrected answer.",
+				type: "text-delta",
+			},
+			{ type: "finish", usage: { inputTokens: 10, outputTokens: 4 } }
+		)
+	);
+	const events = await consume(
+		createAgentRuntime({ modelClient: client }).run(turn, {
+			takeSteeringMessages: () => steering.splice(0),
+		})
+	);
+
+	expect(requests).toHaveLength(2);
+	expect(requests[1]?.messages).toMatchObject([
+		{ role: "user", content: [{ type: "text", text: "Inspect the file" }] },
+		{
+			role: "assistant",
+			content: [{ type: "text", text: "Original answer." }],
+		},
+		{
+			role: "user",
+			content: [{ type: "text", text: "Use the corrected request." }],
+		},
+	]);
+	expect(
+		events.filter(({ type }) => type === "model-step-started")
+	).toMatchObject([{ turnId: turn.id }, { turnId: turn.id }]);
+	expect(events.filter(({ type }) => type === "agent-turn-completed")).toEqual([
+		expect.objectContaining({
+			turnId: turn.id,
+			usage: { inputTokens: 20, outputTokens: 8, totalTokens: 28 },
+		}),
+	]);
 });
 
 test("invalid model tool input fails visibly without executing the tool", async () => {

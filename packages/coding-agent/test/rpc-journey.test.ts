@@ -1,5 +1,5 @@
 import { afterAll, expect, mock, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { runRpc } from "../modules/application/rpc/runner";
 import { SessionWriterLockFailureError } from "../modules/sessions/storage/session-writer-lock";
@@ -11,6 +11,12 @@ import {
 } from "./support/identifiers";
 
 const workspace = await mkdtemp(join("/tmp", "wincode-rpc-journey-"));
+const commandDirectory = join(workspace, ".wincode", "commands");
+await mkdir(commandDirectory, { recursive: true });
+await Bun.write(
+	join(commandDirectory, "review.md"),
+	"---\ndescription: Review API changes\n---\nInspect only $ARGUMENTS."
+);
 const databasePath = join(workspace, "conversation.sqlite");
 const fakeSupport = await import("./support/e2e-fake-runtime");
 const recorder = fakeSupport.createFakeModelClientRecorder();
@@ -47,6 +53,24 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 	const initialized = Promise.withResolvers<void>();
 	const invalidSelectionRejected = Promise.withResolvers<void>();
 	const transcriptReady = Promise.withResolvers<void>();
+	const modelStepStarted = Promise.withResolvers<void>();
+	const releaseModelStep = Promise.withResolvers<void>();
+	const secondModelStepStarted = Promise.withResolvers<void>();
+	const releaseSecondModelStep = Promise.withResolvers<void>();
+	const queuedSubmitAccepted = Promise.withResolvers<void>();
+	const steeringAccepted = Promise.withResolvers<void>();
+	let modelStepCount = 0;
+	let secondModelStepReleased = false;
+	recorder.beforeStep = async () => {
+		modelStepCount += 1;
+		if (modelStepCount === 1) {
+			modelStepStarted.resolve();
+			await releaseModelStep.promise;
+		} else if (modelStepCount === 2) {
+			secondModelStepStarted.resolve();
+			await releaseSecondModelStep.promise;
+		}
+	};
 	const connections = {
 		authorize: async () => ({ kind: "api-key" as const, apiKey: "test-key" }),
 		connect: async () => undefined,
@@ -75,10 +99,15 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		capabilities: {},
 		clientInfo: { name: "journey-test" },
 		cwd: workspace,
-		protocolVersion: 1,
+		protocolVersion: 2,
 	})}\n`;
 	const create = `${request("create", "session/create", {
-		initialSubmission: { text: "hello from rpc" },
+		initialSubmission: {
+			composition: {
+				pastedText: [{ text: "API handlers", token: "[Pasted ~2 lines]" }],
+				text: "/review [Pasted ~2 lines]",
+			},
+		},
 		selection: {
 			agentId: "build",
 			model: { modelId: "gpt-5.6-luna", providerId: "openai" },
@@ -110,6 +139,10 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 			reasoningMode: "none",
 		},
 	})}\n`;
+	const queuedSubmit = `${request("queued-submit", "session/submit", {
+		submission: { text: "/review resource boundaries" },
+	})}\n`;
+	const steerQueued = `${request("steer-queued", "session/steer", {})}\n`;
 	const transcript = `${request("transcript", "session/getTranscript", {})}\n`;
 	const shutdown = `${request("shutdown", "server/shutdown", {})}\n`;
 	const input = (async function* (): AsyncGenerator<Uint8Array> {
@@ -120,11 +153,19 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		);
 		await invalidSelectionRejected.promise;
 		yield new TextEncoder().encode(create.slice(11));
+		await modelStepStarted.promise;
+		yield new TextEncoder().encode(queuedSubmit);
+		await queuedSubmitAccepted.promise;
+		yield new TextEncoder().encode(steerQueued);
+		await steeringAccepted.promise;
+		releaseModelStep.resolve();
+		await secondModelStepStarted.promise;
+		secondModelStepReleased = true;
+		releaseSecondModelStep.resolve();
 		await transcriptReady.promise;
 		yield new TextEncoder().encode(transcript + shutdown);
 	})();
 	stdout.write = (text: string): undefined => {
-		stdoutFrames.push(text);
 		const frame = JSON.parse(text) as {
 			id?: string;
 			method?: string;
@@ -135,16 +176,24 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 				};
 			};
 		};
+		stdoutFrames.push(text);
 		if (frame.id === "initialize") {
 			initialized.resolve();
 		}
 		if (frame.id === "invalid-create") {
 			invalidSelectionRejected.resolve();
 		}
+		if (frame.id === "queued-submit") {
+			queuedSubmitAccepted.resolve();
+		}
+		if (frame.id === "steer-queued") {
+			steeringAccepted.resolve();
+		}
 		if (
+			modelStepCount >= 2 &&
+			secondModelStepReleased &&
 			frame.method === "session/stateChanged" &&
-			frame.params?.state?.status === "idle" &&
-			(frame.params.state.transcript?.messageCount ?? 0) >= 2
+			frame.params?.state?.status === "idle"
 		) {
 			transcriptReady.resolve();
 		}
@@ -184,11 +233,30 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 	expect(stderrFrames).toEqual([]);
 	expect(createIndex).toBeGreaterThanOrEqual(0);
 	expect(firstEventIndex).toBeGreaterThan(createIndex);
+	const queuedSubmitFrame = frames.find(
+		(frame) => frame.id === "queued-submit"
+	);
+	expect(queuedSubmitFrame?.result).toMatchObject({
+		disposition: "queued",
+		rejected: false,
+	});
+	const steerFrame = frames.find((frame) => frame.id === "steer-queued");
+	expect(steerFrame?.result).toMatchObject({ kind: "steered" });
 	expect(frames.some((frame) => frame.id === "transcript")).toBe(true);
 	expect(frames.some((frame) => frame.id === "shutdown")).toBe(true);
+	const chatRequests = recorder.requests.filter(
+		(entry) => entry.kind === "chat"
+	);
 	expect(
-		recorder.requests.filter((entry) => entry.kind === "chat")
-	).toHaveLength(1);
+		chatRequests.some((entry) =>
+			JSON.stringify(entry).includes("Inspect only API handlers.")
+		)
+	).toBe(true);
+	expect(
+		chatRequests.some((entry) =>
+			JSON.stringify(entry).includes("Inspect only resource boundaries.")
+		)
+	).toBe(true);
 	const createFrame = frames[createIndex];
 	const createResult = createFrame?.result;
 	const sessionId =
@@ -218,7 +286,7 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 					capabilities: {},
 					clientInfo: { name: "reopen-test" },
 					cwd: workspace,
-					protocolVersion: 1,
+					protocolVersion: 2,
 				})}\n`
 			),
 			new TextEncoder().encode(
@@ -277,7 +345,9 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 	if (reopenMessages === undefined) {
 		throw new Error("The reopened RPC journey did not return a transcript.");
 	}
-	expect(reopenMessages.length).toBeGreaterThanOrEqual(2);
+	expect(JSON.stringify(reopenMessages)).toContain(
+		"Inspect only resource boundaries."
+	);
 	expect(reopenMessages).toEqual(
 		expect.arrayContaining([
 			expect.objectContaining({
@@ -369,7 +439,7 @@ test("RPC session/open keeps a held Session Writer as a refusal", async () => {
 				capabilities: {},
 				clientInfo: { name: "writer-conflict-test" },
 				cwd: workspace,
-				protocolVersion: 1,
+				protocolVersion: 2,
 			})}\n`
 		),
 		new TextEncoder().encode(
@@ -458,7 +528,7 @@ test("RPC session opening keeps lock refusals request-scoped", async () => {
 				capabilities: {},
 				clientInfo: { name: "lock-failure-test" },
 				cwd: workspace,
-				protocolVersion: 1,
+				protocolVersion: 2,
 			})}\n`
 		),
 		new TextEncoder().encode(

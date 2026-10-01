@@ -21,6 +21,7 @@ import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboar
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { getInteractiveRuntimeContext } from "@/shared/runtime-context";
 import { setInteractiveCleanup } from "@/shared/runtime-lifecycle";
+import { CommandControllerProvider } from "../commands/command-controller-provider";
 import { SettingsProviders } from "./settings-providers";
 
 const { args, cwd } = getInteractiveRuntimeContext();
@@ -71,7 +72,9 @@ export function RootLayout() {
 												>
 													<CopyOnSelectFromSettings />
 													<DialogProvider>
-														<Outlet key={currentPath} />
+														<CommandControllerProvider>
+															<Outlet key={currentPath} />
+														</CommandControllerProvider>
 													</DialogProvider>
 												</McpProvider>
 											</DialogProvider>

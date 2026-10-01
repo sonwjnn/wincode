@@ -158,12 +158,14 @@ export type AgentRuntimeRunOptions = Readonly<{
 	/**
 	 * Returns the messages that joined the running Agent Turn since the last
 	 * call, oldest first, and hands them over: a message this returns is no
-	 * longer the caller's. The runtime calls it at each Model Step boundary
-	 * after the first step and inserts what it returns before the next model
-	 * call, so a Steering Message reaches the model without interrupting the
-	 * call in flight. An empty result leaves the next step's prompt unchanged.
+	 * longer the caller's. The runtime calls it after each completed Model Step
+	 * and its Tool Calls, before deciding whether the turn is complete. Messages
+	 * it returns trigger the next model call in the same turn, even after a
+	 * text-only step, without interrupting the call in flight.
 	 */
-	takeSteeringMessages?: () => readonly AgentTurnMessage[];
+	takeSteeringMessages?: () =>
+		| readonly AgentTurnMessage[]
+		| Promise<readonly AgentTurnMessage[]>;
 }>;
 
 /**

@@ -10,6 +10,7 @@ import {
 	type AttachmentMetadataRepository,
 	attachmentReferenceToFilePart,
 	createSessionAttachmentStore,
+	estimateAttachmentTokens,
 	formatAttachmentUnavailableMarker,
 	getAttachmentReference,
 } from "@/modules/sessions/storage/attachment-store";
@@ -19,6 +20,10 @@ const PNG_BYTES = new Uint8Array([
 	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
 ]);
 const DATA_IMAGE_URL_PATTERN = /^data:image\/png;base64,/u;
+const LARGE_PNG_BYTES = new Uint8Array([
+	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44,
+	0x52, 0, 0, 4, 0, 0, 0, 4, 0,
+]);
 
 const createRepository = (): AttachmentMetadataRepository => {
 	const records = new Map<string, AttachmentMetadataRecord>();
@@ -55,14 +60,76 @@ test("ingests exact bytes once and preserves per-reference filenames", async () 
 	expect(second.filename).toBe("second.png");
 	expect(repository.list()).toHaveLength(1);
 
-	const resolved = await attachments.resolve(second);
+	const resolved = await attachments.resolve({
+		...second,
+		height: 1,
+		width: 1,
+	});
 	expect(resolved).toMatchObject({
 		availability: "available",
 		bytes: PNG_BYTES,
 		reference: second,
 	});
+
+	expect(resolved.reference).not.toHaveProperty("height");
+	expect(resolved.reference).not.toHaveProperty("width");
+
 	const blobPath = join(root, repository.list()[0]?.blobKey ?? "");
 	expect(await Bun.file(blobPath).bytes()).toEqual(PNG_BYTES);
+});
+
+test("verified attachment dimensions override forged token-budget metadata", async () => {
+	const root = await mkdtemp(join(tmpdir(), "wincode-attachments-"));
+	const attachments = createSessionAttachmentStore({
+		repository: createRepository(),
+		root,
+	});
+	const storedReference = await attachments.ingest({
+		bytes: LARGE_PNG_BYTES,
+		filename: "large.png",
+		mediaType: "image/png",
+	});
+	const forgedReference = {
+		...storedReference,
+		height: 1,
+		width: 1,
+	};
+	expect(estimateAttachmentTokens(forgedReference)).toBe(256);
+
+	const resolution = await attachments.resolve(forgedReference);
+	if (resolution.availability !== "available") {
+		throw new Error("verified attachment was not available");
+	}
+	const canonicalReference = resolution.reference;
+	expect(canonicalReference).toMatchObject({ height: 1024, width: 1024 });
+	expect(estimateAttachmentTokens(canonicalReference)).toBe(1024);
+
+	const hydrated = await attachments.hydrateMessagesWithStats(
+		[
+			fromPartial<SessionMessage>({
+				id: sessionMessageId("user-1"),
+				parts: [attachmentReferenceToFilePart(canonicalReference)],
+				role: "user",
+			}),
+		],
+		{ maxTokens: 512, purpose: "display" }
+	);
+
+	expect(hydrated.stats).toMatchObject({
+		omittedCount: 1,
+		retainedCount: 0,
+	});
+	const hydratedPart = hydrated.messages[0]?.parts[0];
+	expect(hydratedPart).toMatchObject({
+		height: 1024,
+		type: "file",
+		width: 1024,
+	});
+	const hydratedReference = getAttachmentReference(hydratedPart);
+	if (!hydratedReference) {
+		throw new Error("hydrated attachment reference was not available");
+	}
+	expect(estimateAttachmentTokens(hydratedReference)).toBe(1024);
 });
 
 test("externalizes inline image parts and hydrates them only on request", async () => {
@@ -148,6 +215,37 @@ test("returns bounded unavailable markers for missing or corrupted blobs", async
 	);
 	expect(hydrated[0]?.parts[0]).toMatchObject({ type: "text" });
 	expect(JSON.stringify(hydrated)).not.toContain("data:image");
+});
+
+test("rejects required hydration when a committed attachment is corrupt", async () => {
+	const root = await mkdtemp(join(tmpdir(), "wincode-attachments-"));
+	const repository = createRepository();
+	const attachments = createSessionAttachmentStore({ repository, root });
+	const reference = await attachments.ingest({
+		bytes: PNG_BYTES,
+		filename: "missing.png",
+		mediaType: "image/png",
+	});
+	const record = repository.get(reference.attachmentId);
+	if (!record) {
+		throw new Error("attachment metadata was not written");
+	}
+	const corruptedBytes = new Uint8Array(PNG_BYTES);
+	corruptedBytes[corruptedBytes.length - 1] = 0x02;
+	await Bun.write(join(root, record.blobKey), corruptedBytes);
+
+	await expect(
+		attachments.hydrateMessages(
+			[
+				{
+					id: sessionMessageId("steered-message"),
+					parts: [attachmentReferenceToFilePart(reference)],
+					role: "user",
+				},
+			],
+			{ failOnMissing: true, purpose: "model" }
+		)
+	).rejects.toThrow("One or more attachments are unavailable.");
 });
 
 test("keeps only newest attachments within an explicit media budget", async () => {

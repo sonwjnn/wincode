@@ -1,67 +1,25 @@
 import type {
-	AgentsAdapter,
-	CompactAdapter,
-	ConnectAdapter,
-	DialogAdapter,
-	EffortAdapter,
-	ExitAdapter,
-	ModelsAdapter,
-	NewAdapter,
-	SettingsAdapter,
-} from "./adapters";
-import type { CommandSpec } from "./commands";
+	CommandActionId,
+	CommandDefinitionFor,
+	CommandSpec,
+} from "./commands";
+import { isOptionalTextCommand } from "./commands";
 
-export type AdapterMap = {
-	agents: AgentsAdapter;
-	compact?: CompactAdapter;
-	connect: ConnectAdapter;
-	dialog: DialogAdapter;
-	effort?: EffortAdapter;
-	exit: ExitAdapter;
-	models: ModelsAdapter;
-	new: NewAdapter;
-	settings?: SettingsAdapter;
+type CommandHandler<Action extends CommandActionId> =
+	CommandDefinitionFor<Action>["input"] extends { kind: "optional-text" }
+		? (argument?: string) => unknown
+		: () => unknown;
+
+export type CommandHandlerMap = {
+	[Action in CommandActionId]: CommandHandler<Action>;
 };
 
-export function createCommandExecutor(adapters: AdapterMap) {
-	return function execute(spec: CommandSpec) {
-		switch (spec.kind) {
-			case "exit":
-				adapters.exit.execute(spec);
-				break;
-			case "connect":
-				return adapters.connect.execute(spec);
-			case "new":
-				adapters.new.execute(spec);
-				break;
-			case "compact":
-				if (!adapters.compact) {
-					throw new Error("Compaction is unavailable in this view.");
-				}
-				return adapters.compact.execute(spec);
-			case "settings":
-				if (!adapters.settings) {
-					throw new Error("Settings are unavailable in this view.");
-				}
-				return adapters.settings.execute(spec);
-			case "dialog":
-				adapters.dialog.execute(spec);
-				break;
-			case "models":
-				return adapters.models.execute(spec);
-			case "effort":
-				if (!adapters.effort) {
-					throw new Error("Effort selection is unavailable in this view.");
-				}
-				adapters.effort.execute(spec);
-				break;
-			case "agents":
-				adapters.agents.execute(spec);
-				break;
-			default: {
-				const _exhaustive: never = spec;
-				return _exhaustive;
-			}
+/** Dispatches a built-in command through the handler registered for its action. */
+export function createCommandExecutor(handlers: CommandHandlerMap) {
+	return (spec: CommandSpec) => {
+		if (isOptionalTextCommand(spec)) {
+			return handlers[spec.action](spec.argument);
 		}
+		return handlers[spec.action]();
 	};
 }

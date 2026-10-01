@@ -1,4 +1,4 @@
-import type { BaseSpec } from "@/modules/commands/commands";
+import type { BaseSpec } from "../types";
 
 export type CustomCommandCandidate = {
 	filePath: string;

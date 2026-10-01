@@ -24,6 +24,7 @@ import type {
 	AttachmentId,
 	SessionMessageId,
 	SessionRecordId,
+	SubmissionId,
 	ToolCallId,
 } from "./identifiers";
 import type { SkillActivationSource } from "./skill-activation";
@@ -99,6 +100,13 @@ export type SessionSkillActivationRecord = ReadonlyDeep<{
 	source: SkillActivationSource;
 }>;
 
+/** Durable processing state for one admitted user Submission. */
+export type SessionSubmissionStatus =
+	| "failed"
+	| "pending"
+	| "processed"
+	| "processing";
+
 /** Per-message metadata safe to retain outside a transient Model Target. */
 export type SessionMessageMetadataRecord = ReadonlyDeep<{
 	agent?: AgentId;
@@ -116,6 +124,9 @@ export type SessionMessageMetadataRecord = ReadonlyDeep<{
 	responseTimeMs?: number;
 	skill?: SessionSkillActivationRecord;
 	sourceUserMessageId?: SessionMessageId;
+	submissionFailure?: string;
+	submissionId?: SubmissionId;
+	submissionStatus?: SessionSubmissionStatus;
 	usage?: ModelUsage;
 	effort?: Effort;
 	reasoningMode?: ReasoningMode;
@@ -252,6 +263,9 @@ const isSessionMessageMetadataRecord = (
 				key === "responseTimeMs" ||
 				key === "skill" ||
 				key === "sourceUserMessageId" ||
+				key === "submissionFailure" ||
+				key === "submissionId" ||
+				key === "submissionStatus" ||
 				key === "usage" ||
 				key === "effort" ||
 				key === "reasoningMode"
@@ -264,6 +278,16 @@ const isSessionMessageMetadataRecord = (
 		(isUndefined(value.skill) || isSessionSkillActivationRecord(value.skill)) &&
 		(isUndefined(value.sourceUserMessageId) ||
 			isNonEmptyString(value.sourceUserMessageId)) &&
+		(isUndefined(value.submissionId) || isNonEmptyString(value.submissionId)) &&
+		(isUndefined(value.submissionStatus) ||
+			value.submissionStatus === "pending" ||
+			value.submissionStatus === "processing" ||
+			value.submissionStatus === "processed" ||
+			value.submissionStatus === "failed") &&
+		(isUndefined(value.submissionFailure) ||
+			(value.submissionStatus === "failed" &&
+				isNonEmptyString(value.submissionFailure))) &&
+		(isUndefined(value.submissionStatus) || !isUndefined(value.submissionId)) &&
 		(isUndefined(value.usage) ||
 			modelUsageSchema.safeParse(value.usage).success) &&
 		(isUndefined(value.effort) ||

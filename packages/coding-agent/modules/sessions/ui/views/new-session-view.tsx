@@ -53,6 +53,8 @@ export const hasChatPromptContent = ({
 }: ChatPromptSubmission): boolean =>
 	text.trim().length > 0 || files.length > 0 || !isUndefined(skill);
 
+const HOME_UNAVAILABLE_COMMAND_CAPABILITIES = ["compaction"] as const;
+
 export function NewSessionView() {
 	const router = useRouter();
 	const [_error, setError] = useState<string | null>(null);
@@ -251,6 +253,9 @@ export function NewSessionView() {
 						}}
 						onOpenSettings={openSettings}
 						onSubmit={handleSubmit}
+						unavailableCommandCapabilities={
+							HOME_UNAVAILABLE_COMMAND_CAPABILITIES
+						}
 					/>
 					<box
 						flexDirection="row"

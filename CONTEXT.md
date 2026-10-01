@@ -88,8 +88,7 @@ metadata, then prompt-config refs. _Avoid_: chat config, latest config
 ## Session Execution
 
 **Agent Session**:
-The single owner of one session's conversation, Session Context, waiting Submissions, approvals, compaction state, and Agent Turn execution state across turns. It is the only writer; observers read its immutable Live Session Snapshot. `prompt()` admits new user input, `steer()` delivers a text-only correction to a live turn, and `continue()` resumes valid idle context or starts waiting work. Its Agent and Model selection may change between turns. _Avoid_: Agent Controller, one Agent instance, Session Engine
-
+The single owner of one session's conversation, Session Context, uncommitted Submission Queue, committed Steering Messages and their processing state, approvals, compaction state, and Agent Turn execution across turns. It is the only writer; observers read its immutable Live Session Snapshot. `prompt()` admits new input and never steers; `steer()` takes no input, promotes exactly the FIFO head, and commits it before acknowledging; `continue()` resumes pending committed input before uncommitted queued work. Its Agent and Model selection may change between turns. _Avoid_: Agent Controller, one Agent instance, Session Engine
 **Session Host**:
 The composition that opens one session, assembles capabilities, creates its Agent Session, exposes it as `agentSession`, and owns that assembly's lifetime. It carries no session state of its own and is UI-neutral, so Interactive and non-interactive modes use the same contract. _Avoid_: bootstrap, session manager, runtime, composition root
 
@@ -109,13 +108,13 @@ The one recovery a context-overflow refusal buys for the Agent Turn it ended: th
 One Tool Permission `ask` a waiting Tool Gate evaluation is registered for. The Agent Session owns it from registration to settlement: it is pending until exactly one settlement — allow, reject, or abort — whichever route triggers it, so no route can leave the evaluation waiting or settle the request twice. The session projects pending Approval Requests into the panel surface, and closing them, aborting them, or shutting the session down runs through the same path. _Avoid_: approval prompt, approval handle, approval queue
 
 **Live Session Snapshot**:
-The immutable view of one Agent Session's current conversation and transient execution state, including waiting work and approvals. Observers receive it from the live owner, never from persisted history alone. _Avoid_: Session Snapshot, Stored Session History, state dump
+The immutable view of one Agent Session's current conversation and transient execution state, including uncommitted waiting Submissions, committed Steering Message status, and approvals. Observers receive it from the live owner, never from persisted history alone. _Avoid_: Session Snapshot, Stored Session History, state dump
 
 **Stored Session History**:
-The committed Session Records and compactions read from storage without opening a Session Host. It excludes in-flight output and transient state, and reading it grants no authority to run Session Commands. _Avoid_: Live Session Snapshot, live transcript, session owner
+The committed Session Records and compactions read from storage without opening a Session Host, including the durable status needed to reconcile accepted-but-unread Steering Messages. It excludes in-flight output and transient state, and reading it grants no authority to run Session Commands. _Avoid_: Live Session Snapshot, live transcript, session owner
 
 **Session Transcript**:
-The ordered messages a session presents to the user. Compaction summaries stay out of the Transcript even when they are part of the Session Context. _Avoid_: chat history, display messages, message log
+The ordered messages a session presents to the user. A steered Submission enters the Transcript when its durable record is committed, before the Agent Turn processes it; an unsteered Queued Submission does not. Compaction summaries stay out of the Transcript even when they are part of the Session Context. _Avoid_: chat history, display messages, message log
 
 **Session Context**:
 The messages a session sends to the model for its next Agent Turn. It is derived from the Session Transcript through compaction and interruption sanitation, so the two can differ. _Avoid_: active messages, prompt history, context window
@@ -127,27 +126,30 @@ One run of an Agent Turn and everything scoped to it: the Agent Turn Identifier,
 The live, transient projection of one Agent Turn Execution for the session UI. It never becomes a Session Record, and executions never share one: the Live Session Snapshot exposes the Session View State of the most recently active execution, so a delegated Subagent's stream replaces the view while it runs and the parent's view returns when it ends. _Avoid_: streaming state, live buffer
 
 **Submission**:
-The user-authored content one send accepts: text, attachments, pasted text, and an optional Skill or Custom Command invocation. _Avoid_: message, request
+An input unit admitted by a session: user-authored text, attachments, pasted text, explicit Skill intent, or a Custom Command invocation with its expanded prompt. _Avoid_: message, request
 
 **Queued Submission**:
-A Submission a busy session accepts and holds instead of running immediately. It is transient Agent Session state — not a Session Record, never replayed after a restart — and it enters the Session Transcript only when it starts running. _Avoid_: queued prompt, pending message, backlog item, steering (that is a Steering Message), interjection
+A busy session's accepted Submission that has not started a turn or been steered. It remains uncommitted, retains its composition, can be Recalled, and is process-local rather than replayed after restart. _Avoid_: queued prompt, pending message, backlog item, Steering Message
 
 **Submission Queue**:
-The FIFO order of a session's Queued Submissions, exposed in the Live Session Snapshot. The Agent Session drains the queue FIFO after non-failed terminal Agent Turn outcomes; a failed Agent Turn or user interrupt recalls both waiting lanes to the composer, while Steering Messages that missed their Model Step boundary are inserted ahead of newer queued prompts. _Avoid_: message queue, follow-up list, outbox
+The FIFO order of uncommitted Queued Submissions exposed in the Live Session Snapshot. `prompt()` always admits new input and never steers; `steer()` takes exactly the oldest item and commits it as a Steering Message. Unsteered work follows the existing drain/Recall policy, while committed Steering Messages stay ahead of it and cannot be recalled. _Avoid_: message queue, follow-up list, outbox
 
 **Recall**:
-Withdrawing a session's waiting user messages back into the composer in order, restoring their composition instead of running them. It withdraws the Steering Lane and the Submission Queue together. _Avoid_: dequeue, withdraw, unsend, retract, delete
+Withdrawing uncommitted Queued Submissions back into the composer in order, restoring their composition instead of running them. Recall never removes or changes a committed Steering Message. _Avoid_: dequeue, withdraw, unsend, retract, delete
+
+**Steer**:
+A no-argument session command that takes exactly the oldest Queued Submission, if one exists, and commits it as a distinct durable user message before reporting acceptance. With no queued Submission it accepts no message; it never accepts replacement text or an arbitrary message payload. _Avoid_: auto-steer, direct-text steer, promote-only
 
 **Steering Message**:
-A user-authored message a session accepts while an Agent Turn is running and delivers to the model inside that same turn, between Model Steps. It carries text only: it cannot carry attachments, invoke a Skill or Custom Command, or change the Agent. It becomes a Session Record and enters the Session Transcript when it is delivered. _Avoid_: mid-turn message, interjection, follow-up, steering prompt
+A durable user Session Record created when `steer()` accepts a Queued Submission. Its message and Submission identities remain stable while it is pending, processed, failed, or deliberately retried; a committed message is not Recall-able. _Avoid_: transient interjection, lane-only message, mid-turn message
 
 **Steering Lane**:
-The FIFO order of a session's Steering Messages. Its messages are delivered at Model Step boundaries inside the running Agent Turn, so they never wait for that Agent Turn to end. _Avoid_: steering queue, interjection lane, mid-turn queue
+The FIFO order of committed Steering Messages awaiting processing at a safe Model Step boundary or a later execution. Their durable pending or failed status is observable and survives restart reconciliation; a failed head blocks later pending messages until deliberate retry, never blind replay. _Avoid_: transient steering queue, interjection lane
 
 ## Agent Session API
 
 **Agent Continuation**:
-The resumption of an idle Agent Session without a caller-supplied Submission. It starts waiting Steering Messages before Queued Submissions; with no waiting input, it resumes only from a last user message or a complete retained Tool Call result. It appends no duplicate user message and does not rerun completed tools. Incomplete Tool Calls/results and other context endpoints are rejected. Overflow recovery uses this context-only path after compaction. _Avoid_: retry, resend, new prompt
+The resumption of an idle Agent Session without a caller-supplied Submission. It resumes committed pending Steering Messages before uncommitted Queued Submissions; with no waiting input, it resumes only from a last user message or a complete retained Tool Call result. It appends no duplicate user message and does not rerun completed tools. Incomplete Tool Calls/results and other context endpoints are rejected. Overflow recovery uses this context-only path after compaction. _Avoid_: retry, resend, new prompt
 
 ## Language
 
@@ -185,7 +187,7 @@ The ordered public Agent Turn events emitted by JSON Mode as JSONL. It uses the 
 A Tool Permission `ask` encountered by Print Mode or JSON Mode. Without explicit auto-approval it fails closed rather than waiting; `--auto` may allow ordinary asks, while safety asks and explicit denies remain blocked. _Avoid_: unattended approval, automatic permission
 
 **RPC Mode**:
-A long-lived mode that communicates over JSON-RPC 2.0 framed as JSONL. The client initializes the process and then creates or opens exactly one Session Host; the protocol remains independent of CLI mode selection. _Avoid_: JSON mode, session server
+A long-lived mode that communicates over JSON-RPC 2.0 framed as JSONL. `session/submit` admits new input without steering, while no-argument `session/steer` commits exactly the oldest Queued Submission; RPC shares Interactive Mode's Recall, preparation, and observable input status. Its first Submission supports the same composition. Attachments arrive only as bounded inline bytes or previously ingested references, never as implicit arbitrary-path reads. The client initializes the process and then creates or opens exactly one Session Host. _Avoid_: JSON mode, session server
 
 **CLI Command**:
 A user-invoked operation that is not an Execution Mode, such as help, version, or a future administrative command, dispatched by Wincode CLI. It may complete without running an Agent. _Avoid_: Execution Mode, Built-in Command, slash command
@@ -264,12 +266,11 @@ remain blocked until explicit reconciliation or destructive discard.
 _Avoid_: failed edit, stale lock
 
 **Built-in Command**:
-A fixed UI action the CLI ships with, dispatched by kind to an adapter
-(`/new`, `/models`, `/exit`). _Avoid_: Command, slash command
+A fixed UI control the CLI ships with, dispatched by kind to an adapter
+(`/new`, `/models`, `/exit`). It is not a user-message Submission. _Avoid_: Command, slash command
 
 **Custom Command**:
-A user-defined prompt template loaded from a command folder, inserted into the
-session as a user message when executed. _Avoid_: Command, slash command
+A user-defined prompt template whose invocation expands once into Submission content through shared input preparation. Its expanded prompt remains part of the Submission when queued or steered and is not re-executed during delivery or retry. _Avoid_: Command, slash command
 
 **Skill**:
 A named set of instructions that augments an Agent for one Agent Turn. Skill context is untrusted and turn-scoped; explicit Skill instructions have higher authority than Agent-loaded Skill instructions, but neither can override Wincode safety, Tool Permission, direct user intent, or Project Instructions. _Avoid_: Agent, session mode, Custom Command
@@ -337,12 +338,14 @@ The identity of one user or assistant message tracked by a session and reference
 _Avoid_: Tool Call Identifier
 
 **Submission Identifier**:
-The stable identity assigned when the Agent Session admits one Submission. It follows that Submission whether it starts immediately, waits in either lane, or changes disposition, and is distinct from both a lane-local waiting-message identifier and a transport request identifier.
-_Avoid_: RPC request identifier, Queued Submission Identifier, Steering Message Identifier
+The stable identity assigned when the Agent Session admits one Submission. It follows that Submission through queue admission, durable steering, model processing, and deliberate retry, and is distinct from the Session Message Identifier and transport request identifier. _Avoid_: RPC request identifier, queued-only identifier, lane-local identifier
 
 **Session Record Identifier**:
 The identity of one committed durable Session Record. It is distinct from the Session, its messages, and the Agent Turn that produced it.
 _Avoid_: Session Identifier
+
+**Steering Status**:
+The durable, observable processing lifecycle of a committed Steering Message: acceptance follows its durable commit, pending means it remains unread, and failed records a preparation or model-request failure. Failure preserves the message identity and blocks later pending input until deliberate retry; it does not imply automatic replay. _Avoid_: queue position, transient turn status
 
 **Attachment Identifier**:
 The identity of externally stored content referenced by a Session. It identifies the attachment content, not its filename or workspace path.

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getCustomCommands } from "@/modules/custom-commands/loader";
+import { getCustomCommands } from "@/modules/commands/custom/loader";
 import { createConfigStore } from "@/shared/config/config-store";
 import { writeFixture } from "@/test/support/filesystem";
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { expandPastedText } from "@/modules/sessions/pasted-text";
 import {
-	expandPastedText,
 	normalizePastedText,
 	summarizePastedText,
 } from "@/modules/sessions/ui/components/pasted-text";

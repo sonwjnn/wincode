@@ -17,11 +17,9 @@ import {
 import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import { spawn } from "bun";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import {
-	type CommandItem,
-	getCommandLabel,
-} from "@/modules/commands/command-item";
-import { getCustomCommands } from "@/modules/custom-commands/loader";
+import type { CommandSuggestion } from "@/modules/commands/command-controller";
+import { useCommandControllerFactory } from "@/modules/commands/command-controller-context";
+import type { CommandCapability } from "@/modules/commands/commands";
 import {
 	deleteFileMentionAfterTrailingCharacterDelete,
 	type FileMentionOption,
@@ -30,8 +28,6 @@ import {
 } from "@/modules/file-mentions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { StatusBar } from "@/modules/prompt-settings/ui/prompt-status-bar";
-import { discoverSkills } from "@/modules/skills";
-import { useConfig } from "@/shared/config/config-provider";
 import { useLatest } from "@/shared/hooks/use-latest";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -40,7 +36,6 @@ import { getAgentColor } from "@/shared/providers/theme/themes";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import { SelectableList } from "@/shared/ui/selectable-list";
-import { useCommandExecutor } from "@/tui/commands/use-command-executor";
 import {
 	areFileMentionExtmarksCurrent,
 	type ChatAttachment,
@@ -64,10 +59,11 @@ const MAX_IMAGE_ATTACHMENTS = 5;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const EMPTY_PROMPT_HISTORY: PromptHistoryEntry[] = [];
 const EMPTY_RECALLED_SUBMISSIONS: readonly SessionSubmissionComposition[] = [];
-const toSelectableCommandItem = (item: CommandItem) => ({
+const EMPTY_COMMAND_CAPABILITIES: readonly CommandCapability[] = [];
+const toSelectableCommandItem = (item: CommandSuggestion) => ({
 	description: item.description,
-	id: `${item.kind}:${item.value}`,
-	label: getCommandLabel(item),
+	id: item.id,
+	label: item.label,
 });
 
 const toSelectableFileMentionItem = (item: FileMentionOption) => ({
@@ -98,6 +94,7 @@ const getTrackedPastedTexts = (
 
 type ChatTextAreaProps = {
 	disabled?: boolean;
+	unavailableCommandCapabilities?: readonly CommandCapability[];
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
 	onEmptySubmit?: () => void | Promise<void>;
@@ -106,11 +103,6 @@ type ChatTextAreaProps = {
 	/** Changes whenever `recalledSubmissions` holds something new to restore. */
 	recallRevision?: number;
 	sessionPromptHistory?: PromptHistoryEntry[];
-	/**
-	 * Whether the composer is submitting into the running Agent Turn: it then
-	 * takes plain text only.
-	 */
-	steering?: boolean;
 	onSubmit: (
 		submission: ChatPromptSubmission
 	) => boolean | Promise<boolean> | void | Promise<void>;
@@ -155,6 +147,8 @@ const readPastedImageOrPath = async (pastedText: string) => {
 };
 export function ChatTextArea({
 	disabled = false,
+	unavailableCommandCapabilities:
+		viewUnavailableCapabilities = EMPTY_COMMAND_CAPABILITIES,
 	onCompact,
 	onOpenSettings,
 	onSubmit,
@@ -162,7 +156,6 @@ export function ChatTextArea({
 	recalledSubmissions = EMPTY_RECALLED_SUBMISSIONS,
 	recallRevision = 0,
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
-	steering = false,
 }: ChatTextAreaProps) {
 	const { agent, cycleReasoningChoice, model } = usePromptConfig();
 	const supportedModel = findSupportedChatModelSelection(model);
@@ -176,6 +169,16 @@ export function ChatTextArea({
 		chatModelSelection === null ||
 		(getSupportedModelEfforts(chatModelSelection).length === 0 &&
 			getSupportedReasoningModes(chatModelSelection).length === 0);
+	const unavailableCommandCapabilities = useMemo(() => {
+		const unavailable = new Set<CommandCapability>(viewUnavailableCapabilities);
+		if (!onCompact) {
+			unavailable.add("compaction");
+		}
+		if (hideEffort) {
+			unavailable.add("effort-selection");
+		}
+		return [...unavailable];
+	}, [hideEffort, onCompact, viewUnavailableCapabilities]);
 	const textAreaRef = useRef<TextareaRenderable>(null);
 	const ctrlCRef = useRef<() => boolean>(() => false);
 	const lastRecalledFilesRevisionRef = useRef(0);
@@ -201,19 +204,7 @@ export function ChatTextArea({
 	const { isTopLayer, pop, push, setResponder } = useKeyboardLayer();
 	const { colors } = useTheme();
 	const { show } = useToast();
-	const config = useConfig();
-	const discoverCustomCommands = useCallback(
-		() => getCustomCommands(config),
-		[config]
-	);
-	const discoverAvailableSkills = useCallback(
-		() => discoverSkills(config),
-		[config]
-	);
-	const { executeCommand } = useCommandExecutor({
-		onCompact,
-		onOpenSettings,
-	});
+	const commandControllerFactory = useCommandControllerFactory();
 	const mentionSyntaxStyle = useMemo(
 		() =>
 			SyntaxStyle.fromStyles({
@@ -263,14 +254,26 @@ export function ChatTextArea({
 		},
 		[show]
 	);
+	const commandController = useMemo(
+		() =>
+			commandControllerFactory.create({
+				unavailableCapabilities: unavailableCommandCapabilities,
+				onCompact,
+				onError: handleSubmitError,
+				onOpenSettings,
+			}),
+		[
+			commandControllerFactory,
+			handleSubmitError,
+			onCompact,
+			onOpenSettings,
+			unavailableCommandCapabilities,
+		]
+	);
 	const { actions, state } = useChatInputController({
 		disabled,
-		executeCommand,
-		getCustomCommands: discoverCustomCommands,
+		commandController,
 		getFileMentionOptions,
-		getSkills: discoverAvailableSkills,
-		hideEffort,
-		onError: handleSubmitError,
 		onSubmit,
 		onTab: (shift) => {
 			if (shift) {
@@ -278,7 +281,6 @@ export function ChatTextArea({
 			}
 		},
 		sessionPromptHistory,
-		steering,
 	});
 	const commandEscapeRef = useLatest(actions.onEscape);
 	const currentTextRef = useLatest(state.text);

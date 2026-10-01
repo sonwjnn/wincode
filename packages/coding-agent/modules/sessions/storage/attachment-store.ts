@@ -194,6 +194,7 @@ export type AttachmentResolution =
 export type AttachmentHydrationPurpose = "compaction" | "display" | "model";
 
 export type AttachmentHydrationOptions = {
+	failOnMissing?: boolean;
 	maxAttachments?: number;
 	maxBytes?: number;
 	maxTokens?: number;
@@ -787,7 +788,11 @@ const toUnavailableReference = (
 		mediaType: "image/unknown",
 	});
 
-type BlobReadResult = Uint8Array | "missing" | "corrupt";
+type VerifiedBlob = {
+	bytes: Uint8Array;
+	dimensions: ImageDimensions | undefined;
+};
+type BlobReadResult = VerifiedBlob | "missing" | "corrupt";
 
 const readVerifiedBlob = async (
 	root: string,
@@ -842,7 +847,11 @@ const readVerifiedBlob = async (
 		) {
 			return "corrupt";
 		}
-		return bytes.subarray(0, offset);
+		const verifiedBytes = bytes.subarray(0, offset);
+		return {
+			bytes: verifiedBytes,
+			dimensions: detectImageDimensions(verifiedBytes, reference.mediaType),
+		};
 	} catch (error) {
 		if (signal?.aborted) {
 			assertNotAborted(signal);
@@ -968,7 +977,7 @@ const selectAttachmentPayloadsWithinBudget = async (
 		}
 		selected.set(candidateKey, resolved.bytes);
 		attachmentCount += 1;
-		byteCount += candidate.reference.byteLength;
+		byteCount += resolved.reference.byteLength;
 		tokenCount += candidateTokens;
 	}
 	return { selected, unavailable };
@@ -1203,7 +1212,18 @@ export const createSessionAttachmentStore = ({
 		if (isString(result)) {
 			return { availability: result, reference };
 		}
-		return { availability: "available", bytes: result, reference };
+		const canonicalReference = freezeReference(
+			omitUndefined({
+				...reference,
+				height: result.dimensions?.height,
+				width: result.dimensions?.width,
+			})
+		);
+		return {
+			availability: "available",
+			bytes: result.bytes,
+			reference: canonicalReference,
+		};
 	};
 
 	const externalizeImagePart = async (
@@ -1296,8 +1316,13 @@ export const createSessionAttachmentStore = ({
 	const hydrateMessages = async (
 		messages: readonly SessionMessage[],
 		options: AttachmentHydrationOptions
-	): Promise<SessionMessage[]> =>
-		(await hydrateMessagesWithStats(messages, options)).messages;
+	): Promise<SessionMessage[]> => {
+		const hydration = await hydrateMessagesWithStats(messages, options);
+		if (options.failOnMissing && hydration.stats.missingCount > 0) {
+			throw new Error("One or more attachments are unavailable.");
+		}
+		return hydration.messages;
+	};
 
 	const getCompactionMetadata = async (
 		messages: readonly SessionMessage[],
@@ -1317,7 +1342,7 @@ export const createSessionAttachmentStore = ({
 			seen.add(reference.attachmentId);
 			const resolution = await resolveAttachment(reference, signal);
 			metadata.push({
-				...reference,
+				...resolution.reference,
 				available: resolution.availability === "available",
 				payloadOmitted: true,
 			});

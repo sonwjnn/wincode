@@ -53,6 +53,7 @@ import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboar
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
+import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
 import {
 	agentId,
 	agentTurnId,
@@ -301,13 +302,15 @@ export const renderSession = async ({
 														workspace={workspace}
 													>
 														<RouterContextProvider router={router}>
-															<SessionSurface
-																initialSubmission={initialSubmission}
-																sessionId={sessionId}
-															/>
-															<RegistryReadyProbe
-																onReady={resolveRegistryReady}
-															/>
+															<CommandControllerProvider>
+																<SessionSurface
+																	initialSubmission={initialSubmission}
+																	sessionId={sessionId}
+																/>
+																<RegistryReadyProbe
+																	onReady={resolveRegistryReady}
+																/>
+															</CommandControllerProvider>
 														</RouterContextProvider>
 													</McpProvider>
 												</DialogProvider>

@@ -610,9 +610,16 @@ export const createSessionPorts = ({
 				capabilities.getStore().externalizeAttachments(messages, signal, {
 					rejectInvalid: true,
 				}),
-			hydrate: ({ budget, messages, priorityMessageId, signal }) =>
+			hydrate: ({
+				budget,
+				failOnMissingAttachments,
+				messages,
+				priorityMessageId,
+				signal,
+			}) =>
 				capabilities.getStore().hydrateAttachments(messages, {
 					...budget,
+					...(failOnMissingAttachments ? { failOnMissing: true } : {}),
 					priorityMessageId,
 					purpose: "model",
 					signal,
@@ -622,12 +629,9 @@ export const createSessionPorts = ({
 			retain: (attachmentIds) =>
 				capabilities.getStore().attachmentStore?.retain(attachmentIds),
 		},
-		commitRecord: async (input) => {
-			if (isShutDown()) {
-				return;
-			}
-			await capabilities.getStore().commitSessionRecord(input);
-		},
+		commitRecord: (input) => capabilities.getStore().commitSessionRecord(input),
+		updateSubmissionStatus: (input) =>
+			capabilities.getStore().updateSessionSubmission({ ...input, sessionId }),
 		compaction: {
 			compact: (input) =>
 				capabilities.getCompactionModule().compact({
