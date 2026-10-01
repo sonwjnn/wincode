@@ -1,6 +1,7 @@
 import {
 	type AgentId,
 	type AgentTurnEvent,
+	type SessionMessageId,
 	type SessionRecord,
 	toSubmissionId,
 } from "@wincode/agent-core";
@@ -26,10 +27,7 @@ import {
 	sanitizeInterruptedSessionMessages,
 } from "../message";
 import { resolveSessionSelection } from "../selection";
-import {
-	isDelegatedSessionMessageId,
-	projectSessionRecords,
-} from "../storage/session-record";
+import { projectSessionRecords } from "../storage/session-record";
 import { createSessionPorts } from "./session-ports";
 import type {
 	SessionCapabilities,
@@ -45,6 +43,7 @@ import type {
 type OpenedSession = Readonly<{
 	compactions: SessionCompaction[];
 	context: SessionMessage[];
+	delegatedMessageIds: ReadonlySet<SessionMessageId>;
 	model: ChatModelSelection | undefined;
 	steeringMessages: SessionSteeringMessage[];
 	transcript: SessionMessage[];
@@ -186,15 +185,21 @@ const openSession = async (
 	const transcript = sanitizeInterruptedSessionMessages(
 		projectSessionRecords(records)
 	);
+	const delegatedMessageIds = new Set(
+		projectSessionRecords(
+			records.filter(({ delegation }) => delegation !== undefined)
+		).map(({ id }) => id)
+	);
 	const active = transcript.filter(
 		(message) =>
-			!isDelegatedSessionMessageId(message.id) &&
+			!delegatedMessageIds.has(message.id) &&
 			message.metadata?.submissionStatus !== "pending" &&
 			message.metadata?.submissionStatus !== "failed"
 	);
 	return {
 		compactions,
 		context: rebuildActiveMessages(active, compactions.at(-1) ?? null),
+		delegatedMessageIds,
 		model: session.model,
 		steeringMessages: restoreSteeringMessages(records, transcript, session),
 		transcript,
@@ -381,6 +386,7 @@ export const createSessionHost = async ({
 			initialContext: opened.context,
 			initialSteeringMessages: opened.steeringMessages,
 			initialTranscript: opened.transcript,
+			initialDelegatedMessageIds: opened.delegatedMessageIds,
 			ports,
 			sessionId,
 		});

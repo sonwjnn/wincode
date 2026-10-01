@@ -446,6 +446,7 @@ export type AgentSessionOptions = Readonly<{
 	initialCompactions?: readonly SessionCompaction[];
 	initialAgent?: AgentId;
 	initialContext?: readonly SessionMessage[];
+	initialDelegatedMessageIds?: ReadonlySet<SessionMessageId>;
 	initialSessionModel?: ChatModelSelection;
 	initialSessionEffort?: Effort;
 	initialSessionReasoningMode?: ReasoningMode;

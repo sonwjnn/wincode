@@ -1,6 +1,7 @@
 import {
 	type AgentTurnId,
 	createAgentTurnId,
+	isSessionToolCallPart,
 	type SessionMessageId,
 	type SessionRecord,
 	type ToolCallId,
@@ -25,7 +26,10 @@ import {
 	type SessionToolPart,
 	withSubmissionStatus,
 } from "../message";
-import { buildUserSessionRecord } from "../storage/session-record";
+import {
+	buildUserSessionRecord,
+	projectSessionRecords,
+} from "../storage/session-record";
 import type { SessionSendInput, SessionSendOutcome } from "../submission-types";
 import { createSessionApprovalWorkflow } from "./approval-workflow";
 import {
@@ -76,6 +80,7 @@ import { exposedViewState, hasChanged, primaryEntry } from "./utils";
 
 /** The deadline one Agent Turn submission runs with. */
 const AGENT_TURN_DEADLINE_MS = 43_200_000;
+const EMPTY_SESSION_MESSAGE_IDS: ReadonlySet<SessionMessageId> = new Set();
 
 /** The reason a submission that arrives after the session ended is refused. */
 const SHUT_DOWN_SEND_ERROR = "The session has ended.";
@@ -472,6 +477,8 @@ type AgentSessionOperationState = {
 	};
 	readonly continuationInputs: WeakSet<SessionSendInput>;
 	readonly durableWrites: Set<Promise<void>>;
+	readonly transcriptOrder: SessionTranscriptOrder;
+	recordCommitTail: Promise<void>;
 	readonly events: {
 		readonly observers: Set<() => void>;
 		readonly submissionEvents: Set<(event: SessionSubmissionEvent) => void>;
@@ -513,6 +520,363 @@ type AgentSessionOperationState = {
 type AgentSessionConstructionOptions = AgentSessionOptions & {
 	readonly deadlineMs?: number;
 };
+type SessionTranscriptOrder = {
+	readonly committedMessageIds: Set<SessionMessageId>;
+	readonly delegatedMessageIds: SessionMessageId[];
+	readonly primaryMessageIds: SessionMessageId[];
+	readonly projectedMessageIdsByRecordMessageId: Map<
+		SessionMessageId,
+		SessionMessageId
+	>;
+	readonly toolMessagesByAssistantId: Map<
+		SessionMessageId,
+		Map<ToolCallId, SessionMessage>
+	>;
+};
+
+const createSessionTranscriptOrder = (
+	messages: readonly SessionMessage[],
+	delegatedMessageIds: ReadonlySet<SessionMessageId>
+): SessionTranscriptOrder => {
+	const order: SessionTranscriptOrder = {
+		committedMessageIds: new Set(),
+		delegatedMessageIds: [],
+		primaryMessageIds: [],
+		projectedMessageIdsByRecordMessageId: new Map(),
+		toolMessagesByAssistantId: new Map(),
+	};
+	for (const { id } of messages) {
+		order.committedMessageIds.add(id);
+		if (delegatedMessageIds.has(id)) {
+			order.delegatedMessageIds.push(id);
+		} else {
+			order.primaryMessageIds.push(id);
+		}
+	}
+	return order;
+};
+
+const registerCommittedSessionRecord = (
+	order: SessionTranscriptOrder,
+	record: SessionRecord
+): SessionMessage[] => {
+	const messageIds =
+		record.delegation === undefined
+			? order.primaryMessageIds
+			: order.delegatedMessageIds;
+	const projectedMessages =
+		record.model === undefined ? [] : projectSessionRecords([record]);
+	let projectedIndex = 0;
+	for (const recordMessage of record.messages) {
+		if (recordMessage.id === "skill-context") {
+			continue;
+		}
+		const projectedMessage = projectedMessages[projectedIndex];
+		projectedIndex += 1;
+		const recordMessageId = toSessionMessageId(recordMessage.id);
+		const committedMessageId =
+			record.delegation === undefined ? recordMessageId : projectedMessage?.id;
+		if (committedMessageId === undefined) {
+			continue;
+		}
+		if (committedMessageId !== recordMessageId) {
+			order.projectedMessageIdsByRecordMessageId.set(
+				recordMessageId,
+				committedMessageId
+			);
+		}
+		if (order.committedMessageIds.has(committedMessageId)) {
+			continue;
+		}
+		order.committedMessageIds.add(committedMessageId);
+		messageIds.push(committedMessageId);
+	}
+	if (record.outcome.kind !== "tool") {
+		return projectedMessages;
+	}
+	const assistantMessageId = toSessionMessageId(`assistant-${record.turnId}`);
+	const toolMessages =
+		order.toolMessagesByAssistantId.get(assistantMessageId) ??
+		new Map<ToolCallId, SessionMessage>();
+	for (const message of projectedMessages) {
+		const toolPart = message.parts.find(isSessionToolPart);
+		if (toolPart === undefined) {
+			continue;
+		}
+		toolMessages.set(toolPart.toolCallId, message);
+	}
+	if (toolMessages.size > 0) {
+		order.toolMessagesByAssistantId.set(assistantMessageId, toolMessages);
+	}
+	return projectedMessages;
+};
+
+const removeUncommittedToolCallPartsFromMessage = (
+	message: SessionMessage,
+	assistantMessageId: SessionMessageId,
+	toolCallIds: ReadonlySet<ToolCallId>
+): SessionMessage | undefined => {
+	if (
+		message.id !== assistantMessageId ||
+		!message.parts.some(
+			(part) => isSessionToolPart(part) && toolCallIds.has(part.toolCallId)
+		)
+	) {
+		return message;
+	}
+	const parts = message.parts.filter(
+		(part) => !(isSessionToolPart(part) && toolCallIds.has(part.toolCallId))
+	);
+	return parts.length === 0 ? undefined : { ...message, parts };
+};
+
+const removeUncommittedToolCallParts = (
+	messages: readonly SessionMessage[],
+	assistantMessageId: SessionMessageId,
+	toolCallIds: ReadonlySet<ToolCallId>
+): readonly SessionMessage[] => {
+	if (toolCallIds.size === 0) {
+		return messages;
+	}
+	let remainingMessages: SessionMessage[] | undefined;
+	for (
+		let messageIndex = 0;
+		messageIndex < messages.length;
+		messageIndex += 1
+	) {
+		const message = messages[messageIndex];
+		if (message === undefined) {
+			continue;
+		}
+		const remaining = removeUncommittedToolCallPartsFromMessage(
+			message,
+			assistantMessageId,
+			toolCallIds
+		);
+		if (remaining === message) {
+			remainingMessages?.push(message);
+			continue;
+		}
+		remainingMessages ??= messages.slice(0, messageIndex);
+		if (remaining !== undefined) {
+			remainingMessages.push(remaining);
+		}
+	}
+	return remainingMessages ?? messages;
+};
+
+const removeUncommittedSessionRecordMessages = (
+	messages: readonly SessionMessage[],
+	record: SessionRecord,
+	order: SessionTranscriptOrder
+): readonly SessionMessage[] => {
+	const assistantMessageId = toSessionMessageId(`assistant-${record.turnId}`);
+	const committedToolMessages =
+		order.toolMessagesByAssistantId.get(assistantMessageId);
+	const uncommittedMessageIds = new Set<SessionMessageId>();
+	const uncommittedToolCallIds = new Set<ToolCallId>();
+	for (const message of record.messages) {
+		if (message.id !== "skill-context") {
+			const messageId = toSessionMessageId(message.id);
+			if (!order.committedMessageIds.has(messageId)) {
+				uncommittedMessageIds.add(messageId);
+			}
+		}
+		for (const part of message.parts) {
+			if (
+				isSessionToolCallPart(part) &&
+				!committedToolMessages?.has(part.toolCallId)
+			) {
+				uncommittedToolCallIds.add(part.toolCallId);
+			}
+		}
+	}
+	const remainingMessages =
+		uncommittedMessageIds.size > 0 &&
+		messages.some(({ id }) => uncommittedMessageIds.has(id))
+			? messages.filter(({ id }) => !uncommittedMessageIds.has(id))
+			: messages;
+	return removeUncommittedToolCallParts(
+		remainingMessages,
+		assistantMessageId,
+		uncommittedToolCallIds
+	);
+};
+
+const committedToolMessageForPart = (
+	messageId: SessionMessageId,
+	part: SessionMessage["parts"][number],
+	order: SessionTranscriptOrder
+): SessionMessage | undefined =>
+	isSessionToolPart(part)
+		? order.toolMessagesByAssistantId.get(messageId)?.get(part.toolCallId)
+		: undefined;
+
+const projectCommittedToolPartsFromMessage = (
+	message: SessionMessage,
+	order: SessionTranscriptOrder
+): SessionMessage[] | undefined => {
+	let remainingParts: SessionMessage["parts"][number][] | undefined;
+	let toolMessages: SessionMessage[] | undefined;
+	for (let partIndex = 0; partIndex < message.parts.length; partIndex += 1) {
+		const part = message.parts[partIndex];
+		if (part === undefined) {
+			continue;
+		}
+		const toolMessage = committedToolMessageForPart(message.id, part, order);
+		if (toolMessage === undefined) {
+			remainingParts?.push(part);
+			continue;
+		}
+		remainingParts ??= message.parts.slice(0, partIndex);
+		if (toolMessages === undefined) {
+			toolMessages = [];
+		}
+		toolMessages.push(toolMessage);
+	}
+	if (toolMessages === undefined) {
+		return;
+	}
+	if (remainingParts !== undefined && remainingParts.length > 0) {
+		toolMessages.unshift({ ...message, parts: remainingParts });
+	}
+	return toolMessages;
+};
+
+const canonicalizeCommittedMessages = (
+	messages: readonly SessionMessage[],
+	order: SessionTranscriptOrder
+): readonly SessionMessage[] => {
+	let canonical: SessionMessage[] | undefined;
+	for (let index = 0; index < messages.length; index += 1) {
+		const message = messages[index];
+		if (message === undefined) {
+			continue;
+		}
+		const canonicalId = order.projectedMessageIdsByRecordMessageId.get(
+			message.id
+		);
+		if (canonicalId === undefined || canonicalId === message.id) {
+			canonical?.push(message);
+			continue;
+		}
+		canonical ??= messages.slice(0, index);
+		canonical.push({ ...message, id: canonicalId });
+	}
+	return canonical ?? messages;
+};
+
+const projectCommittedToolMessages = (
+	messages: readonly SessionMessage[],
+	order: SessionTranscriptOrder
+): readonly SessionMessage[] => {
+	let projected: SessionMessage[] | undefined;
+	for (
+		let messageIndex = 0;
+		messageIndex < messages.length;
+		messageIndex += 1
+	) {
+		const message = messages[messageIndex];
+		if (message === undefined) {
+			continue;
+		}
+		const projectedMessage = projectCommittedToolPartsFromMessage(
+			message,
+			order
+		);
+		if (projectedMessage === undefined) {
+			projected?.push(message);
+			continue;
+		}
+		projected ??= messages.slice(0, messageIndex);
+		projected.push(...projectedMessage);
+	}
+	return canonicalizeCommittedMessages(projected ?? messages, order);
+};
+const appendMissingCommittedRecordMessages = (
+	messages: readonly SessionMessage[],
+	committedMessages: readonly SessionMessage[]
+): readonly SessionMessage[] => {
+	let next: SessionMessage[] | undefined;
+	for (const committedMessage of committedMessages) {
+		if ((next ?? messages).some(({ id }) => id === committedMessage.id)) {
+			continue;
+		}
+		next ??= [...messages];
+		next.push(committedMessage);
+	}
+	return next ?? messages;
+};
+
+const committedMessagesInStoredOrder = (
+	messages: readonly SessionMessage[],
+	order: SessionTranscriptOrder
+): SessionMessage[] => {
+	const messagesById = new Map<SessionMessage["id"], SessionMessage>();
+	for (const message of messages) {
+		messagesById.set(message.id, message);
+	}
+	const ordered: SessionMessage[] = [];
+	for (const id of order.primaryMessageIds) {
+		const message = messagesById.get(id);
+		if (message !== undefined) {
+			ordered.push(message);
+		}
+	}
+	for (const id of order.delegatedMessageIds) {
+		const message = messagesById.get(id);
+		if (message !== undefined) {
+			ordered.push(message);
+		}
+	}
+	return ordered;
+};
+
+const orderSessionTranscript = (
+	messages: readonly SessionMessage[],
+	order: SessionTranscriptOrder
+): readonly SessionMessage[] => {
+	if (messages.length < 2) {
+		return messages;
+	}
+	const orderedCommittedMessages = committedMessagesInStoredOrder(
+		messages,
+		order
+	);
+	if (orderedCommittedMessages.length < 2) {
+		return messages;
+	}
+	let nextCommittedIndex = 0;
+	let needsReorder = false;
+	for (const message of messages) {
+		if (!order.committedMessageIds.has(message.id)) {
+			continue;
+		}
+		const orderedMessage = orderedCommittedMessages[nextCommittedIndex];
+		nextCommittedIndex += 1;
+		if (orderedMessage !== message) {
+			needsReorder = true;
+			break;
+		}
+	}
+	if (!needsReorder) {
+		return messages;
+	}
+	const ordered = [...messages];
+	nextCommittedIndex = 0;
+	for (let index = 0; index < messages.length; index += 1) {
+		const message = messages[index];
+		if (message === undefined || !order.committedMessageIds.has(message.id)) {
+			continue;
+		}
+		const orderedMessage = orderedCommittedMessages[nextCommittedIndex];
+		nextCommittedIndex += 1;
+		if (orderedMessage !== undefined) {
+			ordered[index] = orderedMessage;
+		}
+	}
+	return ordered;
+};
 
 /**
  * The single owner of one session's live state and the only writer to it.
@@ -545,6 +909,7 @@ export class AgentSessionImpl implements AgentSession {
 		initialCompactions = [],
 		initialAgent,
 		initialContext,
+		initialDelegatedMessageIds,
 		initialSessionModel,
 		initialSessionEffort,
 		initialSessionReasoningMode,
@@ -582,6 +947,11 @@ export class AgentSessionImpl implements AgentSession {
 			compaction: { activeCommand: undefined, requests: new Set() },
 			continuationInputs: new WeakSet(),
 			durableWrites: new Set(),
+			transcriptOrder: createSessionTranscriptOrder(
+				initialTranscript,
+				initialDelegatedMessageIds ?? EMPTY_SESSION_MESSAGE_IDS
+			),
+			recordCommitTail: Promise.resolve(),
 			events: {
 				observers: new Set(),
 				submissionEvents: new Set(),
@@ -633,7 +1003,45 @@ export class AgentSessionImpl implements AgentSession {
 			if (sessionState.shutdown.closed) {
 				return Promise.resolve();
 			}
-			const write = ports.commitRecord(input);
+			const write = sessionState.recordCommitTail
+				.then(() => ports.commitRecord(input))
+				.then(
+					() => {
+						const committedMessages = registerCommittedSessionRecord(
+							sessionState.transcriptOrder,
+							input.record
+						);
+						const projectedTranscript = projectCommittedToolMessages(
+							this.#state.transcript,
+							sessionState.transcriptOrder
+						);
+						const transcript = orderSessionTranscript(
+							appendMissingCommittedRecordMessages(
+								projectedTranscript,
+								committedMessages
+							),
+							sessionState.transcriptOrder
+						);
+						if (transcript !== this.#state.transcript) {
+							publish({ transcript });
+						}
+					},
+					(error) => {
+						const transcript = removeUncommittedSessionRecordMessages(
+							this.#state.transcript,
+							input.record,
+							sessionState.transcriptOrder
+						);
+						if (transcript !== this.#state.transcript) {
+							publish({ transcript });
+						}
+						throw error;
+					}
+				);
+			sessionState.recordCommitTail = write.then(
+				() => undefined,
+				() => undefined
+			);
 			sessionState.durableWrites.add(write);
 			void write.then(
 				() => sessionState.durableWrites.delete(write),
@@ -728,19 +1136,31 @@ export class AgentSessionImpl implements AgentSession {
 			messages: readonly SessionMessage[]
 		): readonly SessionMessage[] => {
 			const merged = [...this.#state.transcript];
-			for (const message of messages) {
+			let hasNewCommittedMessage = false;
+			for (const message of projectCommittedToolMessages(
+				messages,
+				sessionState.transcriptOrder
+			)) {
 				if (isCompactionSummaryMessage(message)) {
 					continue;
 				}
 				const index = merged.findIndex(({ id }) => id === message.id);
 				if (index === -1) {
 					merged.push(message);
+					if (
+						sessionState.transcriptOrder.committedMessageIds.has(message.id)
+					) {
+						hasNewCommittedMessage = true;
+					}
 				} else {
 					merged[index] = message;
 				}
 			}
-			publish({ transcript: merged });
-			return merged;
+			const transcript = hasNewCommittedMessage
+				? orderSessionTranscript(merged, sessionState.transcriptOrder)
+				: merged;
+			publish({ transcript });
+			return transcript;
 		};
 		const recordCompaction = (entry: SessionCompaction): void => {
 			if (this.#state.compactions.some(({ id }) => id === entry.id)) {
@@ -1098,8 +1518,19 @@ export class AgentSessionImpl implements AgentSession {
 			return messages;
 		};
 		const waitForDurableWrites = async (): Promise<void> => {
+			let firstFailure: { reason: unknown } | undefined;
 			while (sessionState.durableWrites.size > 0) {
-				await Promise.all([...sessionState.durableWrites]);
+				const results = await Promise.allSettled([
+					...sessionState.durableWrites,
+				]);
+				for (const result of results) {
+					if (result.status === "rejected" && firstFailure === undefined) {
+						firstFailure = { reason: result.reason };
+					}
+				}
+			}
+			if (firstFailure !== undefined) {
+				throw firstFailure.reason;
 			}
 		};
 		const waitForCompactions = async (): Promise<void> => {
@@ -1507,7 +1938,10 @@ export class AgentSessionImpl implements AgentSession {
 					context: this.#state.context,
 					queuedSubmissions,
 					steeringMessages: [...this.#state.steeringMessages, steeringMessage],
-					transcript: [...this.#state.transcript, message],
+					transcript: appendMissingCommittedRecordMessages(
+						this.#state.transcript,
+						[steeringMessage.message]
+					),
 				});
 				if (attachmentIds.length > 0) {
 					ports.attachments.release(attachmentIds);

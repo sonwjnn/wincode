@@ -629,12 +629,7 @@ export const createSessionPorts = ({
 			retain: (attachmentIds) =>
 				capabilities.getStore().attachmentStore?.retain(attachmentIds),
 		},
-		commitRecord: async (input) => {
-			if (isShutDown()) {
-				return;
-			}
-			await capabilities.getStore().commitSessionRecord(input);
-		},
+		commitRecord: (input) => capabilities.getStore().commitSessionRecord(input),
 		updateSubmissionStatus: (input) =>
 			capabilities.getStore().updateSessionSubmission({ ...input, sessionId }),
 		compaction: {

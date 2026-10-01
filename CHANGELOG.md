@@ -43,6 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution's reasoning selection from the start, so matching metadata stays
   only on the newest turn without waiting for completion.
 
+- **Live transcripts match durable Session Record order.** Agent Sessions
+  serialize record commits in queue order; streamed assistant rows stay visible
+  while pending and move to their stored position after commit. Failed writes
+  remove uncommitted transcript rows and retain the persistence error; delegated
+  rows remain grouped after primary turns.
+
 - **Shell permission flips to a permissive posture (0.1.0).** Shell commands
   default to `allow` instead of `ask`; `rm *` and `sudo *` deny by default as
   overridable rules. Commands are matched as string globs and evaluated per

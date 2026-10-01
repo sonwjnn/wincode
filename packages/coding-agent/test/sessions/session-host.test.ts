@@ -37,6 +37,10 @@ import type {
 	SessionHost,
 } from "@/modules/sessions/host/types";
 import type { SessionMessage } from "@/modules/sessions/message";
+import {
+	buildUserSessionRecord,
+	projectSessionRecords,
+} from "@/modules/sessions/storage/session-record";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import type { SessionWriterLock } from "@/modules/sessions/storage/session-writer-lock";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
@@ -77,9 +81,6 @@ const { createSessionHost } = await import(
 const { createDatabase } = await import("@/modules/sessions/storage/client");
 const { createDrizzleSessionStore } = await import(
 	"@/modules/sessions/storage/drizzle-session-store"
-);
-const { buildUserSessionRecord } = await import(
-	"@/modules/sessions/storage/session-record"
 );
 const { createPermissionService } = await import(
 	"@/modules/permissions/permission-service"
@@ -481,10 +482,21 @@ describe("Session Host lifetime", () => {
 			"model-step-finished",
 			"agent-turn-completed",
 		]);
-		const sent = host.getSnapshot().transcript.slice(-2);
-		expect(sent.map(({ role }) => role)).toEqual(["user", "assistant"]);
-		expect(textOf(sent[0]?.parts ?? [])).toBe("third request");
-		expect(textOf(sent[1]?.parts ?? [])).toBe("E2E chat response");
+		const transcript = host.getSnapshot().transcript;
+		expect(transcript.map(({ id }) => id)).toEqual(
+			projectSessionRecords(
+				await store.listSessionRecords(seeded.sessionId)
+			).map(({ id }) => id)
+		);
+		const sentUserIndex = transcript.findIndex(
+			({ parts, role }) => role === "user" && textOf(parts) === "third request"
+		);
+		const sentAssistantIndex = transcript.findIndex(
+			({ parts, role }) =>
+				role === "assistant" && textOf(parts) === "E2E chat response"
+		);
+		expect(sentUserIndex).toBeGreaterThanOrEqual(0);
+		expect(sentAssistantIndex).toBeGreaterThan(sentUserIndex);
 
 		await host.shutdown();
 
@@ -502,6 +514,189 @@ describe("Session Host lifetime", () => {
 		).rejects.toMatchObject({ code: "cancelled" });
 		expect(snapshotChanges).toBe(changesAtShutdown);
 		expect(events).toHaveLength(eventsAtShutdown);
+	});
+	test("reorders a streamed assistant message to its durable position after a steer", async () => {
+		const { id: openedSessionId } = await store.createSession({
+			agent: buildId,
+			message: message(
+				"live-transcript-order-initial",
+				"user",
+				"initial request"
+			),
+			model,
+			turnId: agentTurnId("live-transcript-order-initial-turn"),
+		});
+		const capabilities = createCapabilities();
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: openedSessionId,
+		});
+		const assistantTextReachedSnapshot = Promise.withResolvers<void>();
+		const releaseAssistantStream = Promise.withResolvers<void>();
+		const completedTurn = Promise.withResolvers<void>();
+		const previousAfterTextDelta = recorder.afterTextDelta;
+		let activeTurnId: string | undefined;
+		const unsubscribe = host.onEvent((event) => {
+			if (
+				event.type === "agent-turn-completed" &&
+				event.turnId === activeTurnId
+			) {
+				completedTurn.resolve();
+			}
+		});
+		recorder.afterTextDelta = async () => {
+			assistantTextReachedSnapshot.resolve();
+			await releaseAssistantStream.promise;
+		};
+		const inputFor = (userText: string): SessionSendInput => ({
+			...sendInput(capabilities),
+			composition: { files: [], text: userText },
+			userText,
+		});
+
+		try {
+			const active = await host.agentSession.prompt(
+				inputFor("streamed answer before steer")
+			);
+			if (active.rejected || active.turnId === undefined) {
+				throw new Error("The active Submission did not start.");
+			}
+			activeTurnId = active.turnId;
+			await assistantTextReachedSnapshot.promise;
+
+			const streamedAssistant = host
+				.getSnapshot()
+				.transcript.findLast(({ role }) => role === "assistant");
+			if (streamedAssistant === undefined) {
+				throw new Error("The streamed assistant message was not visible.");
+			}
+			expect(textOf(streamedAssistant.parts)).toBe("E2E chat response");
+
+			const queued = await host.agentSession.prompt(
+				inputFor("steer after streamed answer")
+			);
+			expect(queued).toMatchObject({
+				disposition: "queued",
+				rejected: false,
+			});
+			expect(
+				host
+					.getSnapshot()
+					.transcript.some(
+						({ parts, role }) =>
+							role === "user" && textOf(parts) === "steer after streamed answer"
+					)
+			).toBe(false);
+			const steering = await host.agentSession.steer();
+			if (steering.kind !== "steered") {
+				throw new Error("The queued Submission was not steered.");
+			}
+
+			const liveBeforeAssistantCommit = host.getSnapshot().transcript;
+			const streamedAssistantIndex = liveBeforeAssistantCommit.findIndex(
+				({ id }) => id === streamedAssistant.id
+			);
+			const steeringIndex = liveBeforeAssistantCommit.findIndex(
+				({ id }) => id === steering.messageId
+			);
+			expect(streamedAssistantIndex).toBeGreaterThanOrEqual(0);
+			expect(steeringIndex).toBeGreaterThan(streamedAssistantIndex);
+
+			releaseAssistantStream.resolve();
+			await completedTurn.promise;
+
+			const storedTranscript = projectSessionRecords(
+				await store.listSessionRecords(openedSessionId)
+			);
+			const liveMessageIds = host.getSnapshot().transcript.map(({ id }) => id);
+			expect(liveMessageIds).toEqual(storedTranscript.map(({ id }) => id));
+			expect(liveMessageIds.indexOf(steering.messageId)).toBeLessThan(
+				liveMessageIds.indexOf(streamedAssistant.id)
+			);
+		} finally {
+			releaseAssistantStream.resolve();
+			recorder.afterTextDelta = previousAfterTextDelta;
+			unsubscribe();
+			await host.shutdown();
+		}
+	});
+	test("removes streamed assistant content when its durable record cannot be saved", async () => {
+		const { id: openedSessionId } = await store.createSession({
+			agent: buildId,
+			message: message(
+				"failed-stream-order-initial",
+				"user",
+				"initial request"
+			),
+			model,
+			turnId: agentTurnId("failed-stream-order-initial-turn"),
+		});
+		const failingStore: SessionStore = {
+			...store,
+			commitSessionRecord: async (input) => {
+				if (input.record.outcome.kind === "assistant") {
+					throw new Error("The assistant record could not be saved.");
+				}
+				await store.commitSessionRecord(input);
+			},
+		};
+		const capabilities = createCapabilities(failingStore);
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: openedSessionId,
+		});
+		const assistantTextReachedSnapshot = Promise.withResolvers<void>();
+		const releaseAssistantStream = Promise.withResolvers<void>();
+		const errorPublished = Promise.withResolvers<void>();
+		const previousAfterTextDelta = recorder.afterTextDelta;
+		const unsubscribe = host.subscribe(() => {
+			if (host.getSnapshot().error !== null) {
+				errorPublished.resolve();
+			}
+		});
+		recorder.afterTextDelta = async () => {
+			assistantTextReachedSnapshot.resolve();
+			await releaseAssistantStream.promise;
+		};
+
+		try {
+			const admission = await host.agentSession.prompt({
+				...sendInput(capabilities),
+				composition: { files: [], text: "answer whose record fails" },
+				userText: "answer whose record fails",
+			});
+			if (admission.rejected) {
+				throw new Error(admission.reason);
+			}
+			await assistantTextReachedSnapshot.promise;
+			expect(
+				host
+					.getSnapshot()
+					.transcript.some(
+						({ parts, role }) =>
+							role === "assistant" &&
+							textOf(parts).includes("E2E chat response")
+					)
+			).toBe(true);
+
+			releaseAssistantStream.resolve();
+			await errorPublished.promise;
+			const snapshot = host.getSnapshot();
+			expect(snapshot.error?.message).toBe(
+				"The Agent Turn outcome could not be persisted."
+			);
+			expect(
+				snapshot.transcript.some(
+					({ parts, role }) =>
+						role === "assistant" && textOf(parts).includes("E2E chat response")
+				)
+			).toBe(false);
+		} finally {
+			releaseAssistantStream.resolve();
+			recorder.afterTextDelta = previousAfterTextDelta;
+			unsubscribe();
+			await host.shutdown();
+		}
 	});
 	test("commits each queue-head steer before acknowledging and delivers four user messages FIFO", async () => {
 		const seeded = await seedSession("durable-steer");

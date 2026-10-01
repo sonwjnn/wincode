@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import type {
 	AgentTurnEvent,
+	AgentTurnId,
 	AgentTurnTerminalEvent,
 	OperationalFailure,
 	SessionMessageId,
@@ -43,6 +44,10 @@ import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
+import {
+	buildUserSessionRecord,
+	projectSessionRecords,
+} from "@/modules/sessions/storage/session-record";
 import type {
 	SessionSendInput,
 	SessionSubmissionComposition,
@@ -63,6 +68,7 @@ import {
 	queuedSubmissionId,
 	sessionId,
 	sessionMessageId,
+	sessionRecordId,
 	toolCallId,
 } from "../support/identifiers";
 
@@ -159,6 +165,488 @@ const createTestAgentSession = (
 		ports: createPorts({ compaction: compactionModule, ...overrides }),
 		sessionId: sessionId("agent-session-test"),
 	});
+test("serializes Session Record writes in Agent Session order after a failure", async () => {
+	const commitOrder: SessionMessageId[] = [];
+	const firstCommitStarted = Promise.withResolvers<void>();
+	const releaseFirstCommit = Promise.withResolvers<void>();
+	const sessionKey = sessionId("agent-session-test");
+	const recordInput = (id: string) => ({
+		record: buildUserSessionRecord({
+			agentId: agentId("build"),
+			message: message(id),
+			model,
+			turnId: agentTurnId(`write-${id}`),
+		}),
+		sessionId: sessionKey,
+	});
+	const firstInput = recordInput("first-write");
+	const secondInput = recordInput("second-write");
+	const firstMessageId = firstInput.record.messages[0]?.id;
+	const secondMessageId = secondInput.record.messages[0]?.id;
+	if (firstMessageId === undefined || secondMessageId === undefined) {
+		throw new Error("The test records need user messages.");
+	}
+	const engine = createTestAgentSession([], undefined, {
+		commitRecord: async ({ record }) => {
+			const messageId = record.messages[0]?.id;
+			if (messageId === undefined) {
+				throw new Error("The test record has no user message.");
+			}
+			commitOrder.push(messageId);
+			if (messageId === firstMessageId) {
+				firstCommitStarted.resolve();
+				await releaseFirstCommit.promise;
+				throw new Error("The first durable write failed.");
+			}
+		},
+	});
+
+	try {
+		const firstWrite = engine.internalPort.commitRecord(firstInput);
+		await firstCommitStarted.promise;
+		const secondWrite = engine.internalPort.commitRecord(secondInput);
+		expect(commitOrder).toEqual([firstMessageId]);
+
+		releaseFirstCommit.resolve();
+		await expect(firstWrite).rejects.toThrow("The first durable write failed.");
+		await secondWrite;
+		expect(commitOrder).toEqual([firstMessageId, secondMessageId]);
+	} finally {
+		releaseFirstCommit.resolve();
+		await engine.internalPort.shutdown();
+	}
+});
+test("reconciles primary records that finish writing during shutdown", async () => {
+	const firstCommitStarted = Promise.withResolvers<void>();
+	const releaseFirstCommit = Promise.withResolvers<void>();
+	const records: SessionRecord[] = [];
+	const commitOrder: SessionMessageId[] = [];
+	const sessionKey = sessionId("agent-session-test");
+	const recordInput = (id: string) => ({
+		record: buildUserSessionRecord({
+			agentId: agentId("build"),
+			message: message(id),
+			model,
+			turnId: agentTurnId(`shutdown-write-${id}`),
+		}),
+		sessionId: sessionKey,
+	});
+	const firstInput = recordInput("shutdown-first-write");
+	const secondInput = recordInput("shutdown-second-write");
+	const firstMessageId = firstInput.record.messages[0]?.id;
+	const secondMessageId = secondInput.record.messages[0]?.id;
+	if (firstMessageId === undefined || secondMessageId === undefined) {
+		throw new Error("The test records need user messages.");
+	}
+	const engine = createTestAgentSession([], undefined, {
+		commitRecord: async ({ record }) => {
+			const messageId = record.messages[0]?.id;
+			if (messageId === undefined) {
+				throw new Error("The test record has no user message.");
+			}
+			commitOrder.push(messageId);
+			if (messageId === firstMessageId) {
+				firstCommitStarted.resolve();
+				await releaseFirstCommit.promise;
+			}
+			records.push(record);
+		},
+	});
+
+	try {
+		const firstWrite = engine.internalPort.commitRecord(firstInput);
+		await firstCommitStarted.promise;
+		const secondWrite = engine.internalPort.commitRecord(secondInput);
+		const shutdown = engine.internalPort.shutdown();
+		releaseFirstCommit.resolve();
+		await Promise.all([firstWrite, secondWrite, shutdown]);
+
+		expect(commitOrder).toEqual([firstMessageId, secondMessageId]);
+		expect(engine.getSnapshot().transcript.map(({ id }) => id)).toEqual(
+			projectSessionRecords(records).map(({ id }) => id)
+		);
+	} finally {
+		releaseFirstCommit.resolve();
+		await engine.internalPort.shutdown();
+	}
+});
+test("keeps primary messages with delegated-prefixed IDs in stored order", async () => {
+	const initialMessage = message("delegated-turn:primary-message");
+	const nextRecord = {
+		record: buildUserSessionRecord({
+			agentId: agentId("build"),
+			message: message("next-primary-message"),
+			model,
+			turnId: agentTurnId("next-primary-turn"),
+		}),
+		sessionId: sessionId("agent-session-test"),
+	};
+	const engine = createTestAgentSession([initialMessage]);
+
+	try {
+		await engine.internalPort.commitRecord(nextRecord);
+		expect(engine.getSnapshot().transcript.map(({ id }) => id)).toEqual([
+			initialMessage.id,
+			...projectSessionRecords([nextRecord.record]).map(({ id }) => id),
+		]);
+	} finally {
+		await engine.internalPort.shutdown();
+	}
+});
+test("waits for every admitted record write before settling shutdown", async () => {
+	const firstCommitStarted = Promise.withResolvers<void>();
+	const releaseFirstCommit = Promise.withResolvers<void>();
+	const secondCommitStarted = Promise.withResolvers<void>();
+	const releaseSecondCommit = Promise.withResolvers<void>();
+	const sessionKey = sessionId("agent-session-test");
+	const recordInput = (id: string) => ({
+		record: buildUserSessionRecord({
+			agentId: agentId("build"),
+			message: message(id),
+			model,
+			turnId: agentTurnId(`drain-write-${id}`),
+		}),
+		sessionId: sessionKey,
+	});
+	const firstInput = recordInput("drain-first-write");
+	const secondInput = recordInput("drain-second-write");
+	const firstMessageId = firstInput.record.messages[0]?.id;
+	const secondMessageId = secondInput.record.messages[0]?.id;
+	if (firstMessageId === undefined || secondMessageId === undefined) {
+		throw new Error("The test records need user messages.");
+	}
+	const engine = createTestAgentSession([], undefined, {
+		commitRecord: async ({ record }) => {
+			const messageId = record.messages[0]?.id;
+			if (messageId === undefined) {
+				throw new Error("The test record has no user message.");
+			}
+			if (messageId === firstMessageId) {
+				firstCommitStarted.resolve();
+				await releaseFirstCommit.promise;
+				throw new Error("The first durable write failed.");
+			}
+			secondCommitStarted.resolve();
+			await releaseSecondCommit.promise;
+		},
+	});
+	const writes: Promise<void>[] = [];
+	let shutdown: Promise<void> | undefined;
+
+	try {
+		const firstWrite = engine.internalPort.commitRecord(firstInput);
+		writes.push(firstWrite);
+		await firstCommitStarted.promise;
+		const secondWrite = engine.internalPort.commitRecord(secondInput);
+		writes.push(secondWrite);
+		const shutdownPromise = engine.internalPort.shutdown();
+		shutdown = shutdownPromise;
+		releaseFirstCommit.resolve();
+		await expect(firstWrite).rejects.toThrow("The first durable write failed.");
+		await secondCommitStarted.promise;
+
+		expect(
+			await Promise.race([
+				shutdownPromise.then(
+					() => "settled" as const,
+					() => "settled" as const
+				),
+				Bun.sleep(0).then(() => "pending" as const),
+			])
+		).toBe("pending");
+
+		releaseSecondCommit.resolve();
+		await expect(secondWrite).resolves.toBeUndefined();
+		await expect(shutdownPromise).rejects.toThrow(
+			"The first durable write failed."
+		);
+	} finally {
+		releaseFirstCommit.resolve();
+		releaseSecondCommit.resolve();
+		await Promise.allSettled(writes);
+		await (shutdown ?? engine.internalPort.shutdown()).catch(() => undefined);
+	}
+});
+
+test("places a committed tool checkpoint before a later steered prompt", async () => {
+	const toolCall = toolCallId("order-checkpoint-call");
+	const checkpointCommitted = Promise.withResolvers<void>();
+	const releaseCheckpoint = Promise.withResolvers<void>();
+	const turnFinished = Promise.withResolvers<void>();
+	const records: SessionRecord[] = [];
+	let assistantMessageId: SessionMessageId | undefined;
+	let toolMessageId: SessionMessageId | undefined;
+	const toolRecordFor = (turnId: AgentTurnId): SessionRecord => ({
+		agentId: agentId("build"),
+		id: sessionRecordId(`tool-order-${turnId}`),
+		messages: [
+			{
+				id: sessionMessageId(`tool-${turnId}-${toolCall}`),
+				parts: [
+					{
+						input: { path: "src/index.ts" },
+						outcome: { kind: "success", output: "checkpoint output" },
+						sequence: 2,
+						toolCallId: toolCall,
+						toolName: "read",
+						type: "tool-call",
+					},
+				],
+				role: "assistant",
+			},
+		],
+		model,
+		outcome: { kind: "tool" },
+		turnId,
+		version: 1,
+	});
+	const assistantRecordFor = (turnId: AgentTurnId): SessionRecord => ({
+		agentId: agentId("build"),
+		id: sessionRecordId(`assistant-order-${turnId}`),
+		messages: [
+			{
+				id: sessionMessageId(`assistant-${turnId}`),
+				parts: [{ text: "final response", type: "text" }],
+				role: "assistant",
+			},
+		],
+		model,
+		outcome: {
+			kind: "assistant",
+			terminal: { finishedAt: 4, kind: "completed" },
+		},
+		turnId,
+		version: 1,
+	});
+	const engine = createTestAgentSession([], undefined, {
+		commitRecord: async ({ record }) => {
+			records.push(record);
+		},
+		turnRunner: {
+			requestOverheadTokens: () => 0,
+			run: async ({ callbacks, execution }) => {
+				const checkpointTurn = assistantMessageId === undefined;
+				if (checkpointTurn) {
+					const toolRecord = toolRecordFor(execution.turnId);
+					assistantMessageId = sessionMessageId(
+						`assistant-${execution.turnId}`
+					);
+					toolMessageId = toolRecord.messages[0]?.id;
+					await callbacks.onEvent({
+						input: { path: "src/index.ts" },
+						sequence: 1,
+						toolCallId: toolCall,
+						toolName: "read",
+						turnId: execution.turnId,
+						type: "tool-call-started",
+					});
+					await callbacks.commitToolCall(toolRecord);
+					checkpointCommitted.resolve();
+					await releaseCheckpoint.promise;
+					await callbacks.onEvent({
+						outcome: {
+							output: "checkpoint output",
+							type: "success",
+						},
+						sequence: 2,
+						toolCallId: toolCall,
+						toolName: "read",
+						turnId: execution.turnId,
+						type: "tool-call-finished",
+					});
+				}
+				await callbacks.onEvent({
+					delta: "final response",
+					sequence: checkpointTurn ? 3 : 1,
+					turnId: execution.turnId,
+					type: "text-delta",
+				});
+				await callbacks.commitTerminal(assistantRecordFor(execution.turnId));
+				await callbacks.onTerminal({
+					finishedAt: 4,
+					sequence: checkpointTurn ? 4 : 2,
+					turnId: execution.turnId,
+					type: "agent-turn-completed",
+				});
+				turnFinished.resolve();
+				return {};
+			},
+		},
+	});
+	const active = engine.send(
+		sendInput({ userText: "request before checkpoint" })
+	);
+
+	try {
+		await checkpointCommitted.promise;
+		if (toolMessageId === undefined) {
+			throw new Error("The tool checkpoint needs a message identity.");
+		}
+		expect(
+			engine.getSnapshot().transcript.some(({ id }) => id === toolMessageId)
+		).toBe(true);
+
+		const queued = await engine.send(
+			sendInput({ userText: "steer after tool checkpoint" })
+		);
+		expect(queued).toEqual({ rejected: false });
+		expect(userPrompts(engine.getSnapshot().transcript)).not.toContain(
+			"steer after tool checkpoint"
+		);
+		const steering = await engine.steer();
+		if (steering.kind !== "steered") {
+			throw new Error("The queued Submission was not committed as steering.");
+		}
+
+		releaseCheckpoint.resolve();
+		await turnFinished.promise;
+		await expect(active).resolves.toEqual({ rejected: false });
+
+		const transcript = engine.getSnapshot().transcript;
+		const storedTranscript = projectSessionRecords(records);
+		expect(transcript.map(({ id }) => id)).toEqual(
+			storedTranscript.map(({ id }) => id)
+		);
+		if (assistantMessageId === undefined) {
+			throw new Error("The active turn needs an assistant message identity.");
+		}
+		const toolIndex = transcript.findIndex(({ id }) => id === toolMessageId);
+		const steeringIndex = transcript.findIndex(
+			({ id }) => id === steering.messageId
+		);
+		const assistantIndex = transcript.findIndex(
+			({ id }) => id === assistantMessageId
+		);
+		expect(toolIndex).toBeLessThan(steeringIndex);
+		expect(steeringIndex).toBeLessThan(assistantIndex);
+	} finally {
+		releaseCheckpoint.resolve();
+		await engine.internalPort.shutdown();
+	}
+});
+test("appends a committed delegated row with durable identity and grouping", async () => {
+	const parentTurnId = agentTurnId("delegated-live-parent");
+	const parentToolCallId = toolCallId("delegated-live-parent-call");
+	const primaryRecord = buildUserSessionRecord({
+		agentId: agentId("build"),
+		message: message("delegated-live-primary", "primary request"),
+		model,
+		turnId: agentTurnId("delegated-live-primary-turn"),
+	});
+	const records: SessionRecord[] = [primaryRecord];
+	const initialTranscript = projectSessionRecords(records);
+	const delegatedRecord: SessionRecord = {
+		agentId: agentId("research"),
+		delegation: { parentToolCallId, parentTurnId },
+		id: sessionRecordId("delegated-live-assistant-record"),
+		messages: [
+			{
+				id: sessionMessageId("assistant-delegated-live-child"),
+				parts: [{ text: "delegated response", type: "text" }],
+				role: "assistant",
+			},
+		],
+		model,
+		outcome: {
+			kind: "assistant",
+			terminal: { finishedAt: 1, kind: "completed" },
+		},
+		turnId: agentTurnId("delegated-live-child"),
+		version: 1,
+	};
+	const engine = createTestAgentSession(initialTranscript, undefined, {
+		commitRecord: async ({ record }) => {
+			records.push(record);
+		},
+	});
+
+	try {
+		await engine.internalPort.commitRecord({
+			record: delegatedRecord,
+			sessionId: sessionId("agent-session-test"),
+		});
+
+		const transcript = engine.getSnapshot().transcript;
+		const storedTranscript = projectSessionRecords(records);
+		expect(transcript.map(({ id }) => id)).toEqual(
+			storedTranscript.map(({ id }) => id)
+		);
+		expect(transcript[0]?.id).toBe(initialTranscript[0]?.id);
+		expect(transcript.at(-1)?.id).toBe(storedTranscript.at(-1)?.id);
+	} finally {
+		await engine.internalPort.shutdown();
+	}
+});
+test("removes a failed tool checkpoint from the live transcript and retains its error", async () => {
+	const callId = toolCallId("failed-order-checkpoint-call");
+	const records: SessionRecord[] = [];
+	const engine = createTestAgentSession([], undefined, {
+		commitRecord: async ({ record }) => {
+			if (record.outcome.kind === "tool") {
+				throw new Error("tool checkpoint write failed");
+			}
+			records.push(record);
+		},
+		turnRunner: {
+			requestOverheadTokens: () => 0,
+			run: async ({ callbacks, execution }) => {
+				await callbacks.onEvent({
+					input: { path: "src/index.ts" },
+					sequence: 1,
+					toolCallId: callId,
+					toolName: "read",
+					turnId: execution.turnId,
+					type: "tool-call-started",
+				});
+				await callbacks.commitToolCall({
+					agentId: agentId("build"),
+					id: sessionRecordId("failed-order-checkpoint"),
+					messages: [
+						{
+							id: sessionMessageId("failed-order-checkpoint-message"),
+							parts: [
+								{
+									input: { path: "src/index.ts" },
+									outcome: {
+										kind: "success",
+										output: "checkpoint output",
+									},
+									sequence: 2,
+									toolCallId: callId,
+									toolName: "read",
+									type: "tool-call",
+								},
+							],
+							role: "assistant",
+						},
+					],
+					model,
+					outcome: { kind: "tool" },
+					turnId: execution.turnId,
+					version: 1,
+				});
+				return {};
+			},
+		},
+	});
+
+	try {
+		await expect(
+			engine.send(sendInput({ userText: "request before failed checkpoint" }))
+		).resolves.toEqual({ rejected: false });
+
+		const snapshot = engine.getSnapshot();
+		expect(snapshot.error?.message).toBe("tool checkpoint write failed");
+		expect(
+			snapshot.transcript.some(({ parts }) =>
+				parts.some((part) => "toolCallId" in part && part.toolCallId === callId)
+			)
+		).toBe(false);
+		expect(records.some(({ outcome }) => outcome.kind === "tool")).toBe(false);
+	} finally {
+		await engine.internalPort.shutdown();
+	}
+});
 
 test("logs unexpected submission preparation failures without user content", async () => {
 	await withLoggerHome(async (home) => {
@@ -2628,20 +3116,19 @@ test("waits for a steering commit before shutdown settles", async () => {
 	await engine.send(sendInput({ userText: "correction" }));
 	const steering = engine.steer();
 	await commitStarted.promise;
-	runtime.release();
-	await first;
-
 	const shutdown = engine.internalPort.shutdown();
+	runtime.release();
 	const probe = Promise.withResolvers<"probe">();
 	queueMicrotask(() => probe.resolve("probe"));
 	const result = await Promise.race([
 		shutdown.then(() => "shutdown" as const),
 		probe.promise,
 	]);
-	expect(result).toBe("probe");
 
 	allowCommit.resolve();
 	await shutdown;
+	await first;
+	expect(result).toBe("probe");
 	expect(await steering).toMatchObject({ kind: "steered" });
 	expect(steeringCommitted).toBe(true);
 });
