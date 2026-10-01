@@ -12,28 +12,34 @@ import {
 } from "@wincode/runtime-utils";
 import { eq } from "drizzle-orm";
 import type { Except, Merge, UnknownRecord } from "type-fest";
-import { z } from "zod";
 import type {
 	SessionFilePart,
 	SessionMessage,
 	SessionPart,
 } from "@/modules/sessions/message";
+import {
+	ATTACHMENT_ID_PATTERN,
+	type AttachmentReference,
+	type AttachmentReferenceFilePart,
+	attachmentIdSchema,
+	attachmentReferenceSchema,
+	attachmentReferenceToFilePart,
+	attachmentReferenceUrl,
+	DEFAULT_MODEL_ATTACHMENT_BUDGET,
+	MAX_ATTACHMENT_BYTES,
+	MAX_FILENAME_LENGTH,
+	MAX_IMAGE_DIMENSION,
+	MAX_MEDIA_TYPE_LENGTH,
+} from "../attachment-reference";
+
 import type { SessionDatabase } from "./client";
 import { sessionAttachment } from "./schema";
 
-export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
-export const ATTACHMENT_URL_PREFIX = "attachment://";
-export const ATTACHMENT_ID_PATTERN = /^v1-[0-9a-f]{64}$/u;
 export const ATTACHMENT_ID_DISPLAY_LENGTH = 16;
 export const DEFAULT_COMPACTION_ATTACHMENT_BUDGET = {
 	maxAttachments: 2,
 	maxBytes: 4 * 1024 * 1024,
 	maxTokens: 4096,
-} as const;
-export const DEFAULT_MODEL_ATTACHMENT_BUDGET = {
-	maxAttachments: 5,
-	maxBytes: MAX_ATTACHMENT_BYTES,
-	maxTokens: Number.MAX_SAFE_INTEGER,
 } as const;
 export const MAX_COMPACTION_ATTACHMENT_REFERENCES = 128;
 export const DEFAULT_ATTACHMENT_MAINTENANCE_LIMITS = {
@@ -41,12 +47,9 @@ export const DEFAULT_ATTACHMENT_MAINTENANCE_LIMITS = {
 	maxEntries: 100,
 } as const;
 
-const MAX_IMAGE_DIMENSION = 1_000_000;
 const IMAGE_TOKEN_TILE_SIZE = 512;
 const IMAGE_TOKENS_PER_TILE = 256;
 const MAX_DIMENSION_HEADER_BYTES = 4096;
-const MAX_FILENAME_LENGTH = 128;
-const MAX_MEDIA_TYPE_LENGTH = 64;
 const BLOB_KEY_PREFIX = "v1";
 const IMAGE_MEDIA_TYPES = {
 	"image/gif": true,
@@ -68,36 +71,6 @@ const IMAGE_MAGIC_PREFIXES = {
 	riff: [0x52, 0x49, 0x46, 0x46],
 	webp: [0x57, 0x45, 0x42, 0x50],
 } as const;
-
-export const attachmentIdSchema = z
-	.string()
-	.regex(ATTACHMENT_ID_PATTERN)
-	.transform((value): AttachmentId => value as AttachmentId);
-
-export const attachmentReferenceSchema = z
-	.object({
-		attachmentId: attachmentIdSchema,
-		available: z.boolean().optional(),
-		byteLength: z.number().int().nonnegative(),
-		filename: z.string().min(1).max(MAX_FILENAME_LENGTH),
-		height: z.number().int().positive().max(MAX_IMAGE_DIMENSION).optional(),
-		mediaType: z.string().min(1).max(MAX_MEDIA_TYPE_LENGTH),
-		width: z.number().int().positive().max(MAX_IMAGE_DIMENSION).optional(),
-	})
-	.strict();
-
-export type AttachmentReference = Readonly<
-	z.infer<typeof attachmentReferenceSchema>
->;
-
-export type AttachmentReferenceFilePart = Merge<
-	SessionFilePart,
-	AttachmentReference &
-		Readonly<{
-			displayAvailability?: "missing";
-			url: `${typeof ATTACHMENT_URL_PREFIX}${string}`;
-		}>
->;
 
 export type AttachmentMetadataRecord = {
 	attachmentId: AttachmentId;
@@ -518,32 +491,8 @@ const parseDataUrl = (
 	return { bytes, mediaType };
 };
 
-const refUrl = (
-	attachmentId: string
-): `${typeof ATTACHMENT_URL_PREFIX}${string}` =>
-	`${ATTACHMENT_URL_PREFIX}${attachmentId}`;
-
 const freezeReference = (reference: AttachmentReference): AttachmentReference =>
 	Object.freeze(reference);
-
-export const attachmentReferenceToFilePart = (
-	reference: AttachmentReference
-): AttachmentReferenceFilePart => {
-	const validated = attachmentReferenceSchema.parse(reference);
-	return {
-		attachmentId: validated.attachmentId,
-		...omitUndefined({
-			available: validated.available,
-			height: validated.height,
-			width: validated.width,
-		}),
-		byteLength: validated.byteLength,
-		filename: validated.filename,
-		mediaType: validated.mediaType,
-		type: "file",
-		url: refUrl(validated.attachmentId),
-	} as AttachmentReferenceFilePart;
-};
 
 export const isAttachmentReference = (
 	value: unknown
@@ -568,7 +517,10 @@ export const getAttachmentReference = (
 		filename: candidate.filename,
 		mediaType: candidate.mediaType,
 	});
-	if (!parsed.success || candidate.url !== refUrl(parsed.data.attachmentId)) {
+	if (
+		!parsed.success ||
+		candidate.url !== attachmentReferenceUrl(parsed.data.attachmentId)
+	) {
 		return null;
 	}
 	return parsed.data;

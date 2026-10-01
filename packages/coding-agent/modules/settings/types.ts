@@ -7,7 +7,6 @@ import type {
 	ConfigSnapshot,
 	ConfigStore,
 } from "@/shared/config/config-store";
-import type { SessionStore } from "../sessions/storage/session-store";
 
 export type SettingScope = ConfigScope | "runtime" | "session";
 export type SettingKind = "boolean" | "select" | "custom";
@@ -19,7 +18,7 @@ export type SettingRuntimeContext = {
 	readonly onCopyOnSelectChanged?: (enabled: boolean) => void;
 	readonly onEditModeChanged?: (mode: EditMode) => void;
 	readonly sessionId?: string;
-	readonly sessionStore?: SessionStore;
+	readonly setEditMode?: (mode: EditMode) => Promise<void>;
 };
 
 export type SettingSource =

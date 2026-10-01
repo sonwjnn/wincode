@@ -15,6 +15,7 @@ import {
 import { createSkillSnapshot, formatSkillUserContext } from "@/modules/skills";
 import { toSteeringMessageId } from "@/shared/identifiers";
 import { logSessionPersistenceFailure } from "@/shared/utils/session-persistence-diagnostics";
+import type { SessionApprovalOutcome } from "../approval-contract";
 import type { CompactSessionResult } from "../compaction/compaction";
 import { isCompactionSummaryMessage } from "../compaction/summary-message";
 import type { SessionCompaction } from "../compaction/types";
@@ -60,7 +61,6 @@ import type {
 	AgentSessionOptions,
 	AgentSessionPorts,
 	LiveSessionSnapshot,
-	SessionApprovalOutcome,
 	SessionAttachmentBudget,
 	SessionCompactionCommand,
 	SessionContinuationOutcome,

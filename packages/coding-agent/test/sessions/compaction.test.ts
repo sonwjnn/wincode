@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fromAny, fromPartial } from "@total-typescript/shoehorn";
 import type { ChatModelSelection } from "@wincode/ai/models";
+import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
 import {
 	createSessionCompaction,
 	rebuildActiveMessages,
@@ -22,7 +23,6 @@ import {
 import {
 	type AttachmentMetadataRecord,
 	type AttachmentMetadataRepository,
-	attachmentReferenceToFilePart,
 	createSessionAttachmentStore,
 	getAttachmentReference,
 } from "@/modules/sessions/storage/attachment-store";

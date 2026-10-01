@@ -46,6 +46,7 @@ import {
 import { randomUUIDv7 } from "bun";
 import type { UnknownRecord } from "type-fest";
 import { codingToolNames } from "@/modules/tools";
+import { attachmentReferenceToFilePart } from "../attachment-reference";
 import type {
 	SessionMessage,
 	SessionMessageMetadata,
@@ -58,10 +59,7 @@ import {
 	isTerminalSessionToolPart,
 	sessionMessageMetadataSchema,
 } from "../message";
-import {
-	attachmentReferenceToFilePart,
-	getAttachmentReference,
-} from "./attachment-store";
+import { getAttachmentReference } from "./attachment-store";
 
 const isRecordModel = (value: unknown): boolean => {
 	if (!isObjectLike(value)) {

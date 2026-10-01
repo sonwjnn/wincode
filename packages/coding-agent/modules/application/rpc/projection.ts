@@ -1,7 +1,7 @@
 import {
 	DEFAULT_MODEL_ATTACHMENT_BUDGET,
 	MAX_ATTACHMENT_BYTES,
-} from "@/modules/sessions/storage/attachment-store";
+} from "@/modules/sessions/attachment-reference";
 import type { SkillContext } from "@/modules/skills";
 import type {
 	LiveSessionSnapshot,

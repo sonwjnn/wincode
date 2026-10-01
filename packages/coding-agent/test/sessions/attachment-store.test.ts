@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { isObjectLike, isString } from "@wincode/runtime-utils";
+import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
 import type { SessionMessage } from "@/modules/sessions/message";
 import {
 	type AttachmentMetadataRecord,
 	type AttachmentMetadataRepository,
-	attachmentReferenceToFilePart,
 	createSessionAttachmentStore,
 	estimateAttachmentTokens,
 	formatAttachmentUnavailableMarker,

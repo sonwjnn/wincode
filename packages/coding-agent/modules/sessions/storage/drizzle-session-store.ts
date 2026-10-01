@@ -34,6 +34,10 @@ import {
 	toWorkspaceId,
 	type WorkspaceId,
 } from "@/shared/identifiers";
+import {
+	attachmentIdSchema,
+	attachmentReferenceSchema,
+} from "../attachment-reference";
 import type {
 	AppendSessionCompactionInput,
 	SessionCompaction,
@@ -46,8 +50,6 @@ import type {
 	SessionAttachmentStore,
 } from "./attachment-store";
 import {
-	attachmentIdSchema,
-	attachmentReferenceSchema,
 	createDrizzleAttachmentMetadataRepository,
 	createSessionAttachmentStore,
 	getAttachmentReference,

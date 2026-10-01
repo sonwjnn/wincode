@@ -1,10 +1,10 @@
 import type { ToolCallId } from "@wincode/agent-core";
 import { isUndefined } from "@wincode/runtime-utils";
 import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
+import type { SessionApprovalOutcome } from "../approval-contract";
 import type {
 	LiveSessionSnapshot,
 	SessionApproval,
-	SessionApprovalOutcome,
 	SessionApprovalResult,
 } from "./types";
 
