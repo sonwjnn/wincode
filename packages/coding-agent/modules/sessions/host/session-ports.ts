@@ -37,7 +37,6 @@ import {
 import type { SessionId } from "@/shared/identifiers";
 import { resolveChatModelTarget } from "../../model-target";
 import { createToolGate, type ToolGate } from "../../tool-gate/tool-gate";
-import { SessionCompactionError } from "../compaction/error";
 import type {
 	AgentSessionInternalPort,
 	AgentSessionPorts,
@@ -47,8 +46,9 @@ import type {
 	SessionSkillResolution,
 	SessionTurnOutcome,
 	SessionTurnRequest,
-} from "../engine/types";
-import { primaryEntry } from "../engine/utils";
+} from "../agent-session/types";
+import { primaryEntry } from "../agent-session/utils";
+import { SessionCompactionError } from "../compaction/error";
 import {
 	createDelegationExecutor,
 	delegationThrough,

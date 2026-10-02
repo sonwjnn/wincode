@@ -3,12 +3,12 @@ import type {
 	ReasoningSelection,
 } from "@wincode/ai/models";
 import { useEffect, useMemo, useState } from "react";
-import { projectSessionApprovals } from "@/modules/sessions/approval-projection";
-import type { CompactSessionResult } from "@/modules/sessions/compaction/compaction";
 import type {
 	AgentSession,
 	LiveSessionSnapshot,
-} from "@/modules/sessions/engine/types";
+} from "@/modules/sessions/agent-session/types";
+import { projectSessionApprovals } from "@/modules/sessions/approval-projection";
+import type { CompactSessionResult } from "@/modules/sessions/compaction/compaction";
 import type { SessionHost } from "@/modules/sessions/host/types";
 import type {
 	SessionSendInput,

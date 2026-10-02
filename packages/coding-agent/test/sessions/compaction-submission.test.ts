@@ -1,13 +1,13 @@
 import { expect, mock, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
 import type { ChatModelSelection } from "@wincode/ai/models";
+import { prepareCompactionBeforeSubmit } from "@/modules/sessions/agent-session/submission";
 import type {
 	CompactSessionResult,
 	SessionCompactionModule,
 } from "@/modules/sessions/compaction";
 import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
 import { SessionCompactionError } from "@/modules/sessions/compaction/error";
-import { prepareCompactionBeforeSubmit } from "@/modules/sessions/engine/submission";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { modelId, sessionMessageId } from "../support/identifiers";
 

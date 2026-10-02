@@ -22,8 +22,8 @@ import * as path from "node:path";
 import { RGBA, type ScrollBoxRenderable } from "@opentui/core";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import { act, useEffect, useState } from "react";
+import type { SessionQueuedSubmission } from "@/modules/sessions/agent-session/types";
 import type { SessionCompaction } from "@/modules/sessions/compaction";
-import type { SessionQueuedSubmission } from "@/modules/sessions/engine/types";
 import type {
 	SessionFilePart,
 	SessionMessage,

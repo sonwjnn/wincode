@@ -12,7 +12,7 @@ import type {
 } from "@wincode/ai/models";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import type { SkillContext } from "@/modules/skills";
-import type { SessionResolvedAgent } from "./engine/types";
+import type { SessionResolvedAgent } from "./agent-session/types";
 
 /**
  * The visible composition one Submission was composed from: the text the

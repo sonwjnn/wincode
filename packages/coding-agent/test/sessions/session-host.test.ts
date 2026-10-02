@@ -21,6 +21,10 @@ import type { ChatModelSelection } from "@wincode/ai/models";
 import { logger } from "@wincode/runtime-utils";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import { buildAgentRegistry } from "@/modules/agents/registry";
+import type {
+	SessionSubmissionAdmission,
+	SessionSubmissionEvent,
+} from "@/modules/sessions/agent-session/types";
 import { createSessionCompaction } from "@/modules/sessions/compaction/compaction";
 import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
 import { compactionSummaryMessageId } from "@/modules/sessions/compaction/summary-message";
@@ -28,10 +32,6 @@ import type {
 	AppendSessionCompactionInput,
 	SummaryGenerator,
 } from "@/modules/sessions/compaction/types";
-import type {
-	SessionSubmissionAdmission,
-	SessionSubmissionEvent,
-} from "@/modules/sessions/engine/types";
 import type {
 	SessionCapabilities,
 	SessionHost,

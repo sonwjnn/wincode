@@ -98,7 +98,7 @@
   },
   "overrides": [
     {
-      "includes": ["packages/coding-agent/modules/sessions/engine/**"],
+      "includes": ["packages/coding-agent/modules/sessions/agent-session/**"],
       "linter": {
         "rules": {
           "style": {

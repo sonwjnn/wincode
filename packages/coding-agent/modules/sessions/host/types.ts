@@ -7,9 +7,9 @@ import type { ToolPermissionRuntime } from "@/modules/permissions/tool-permissio
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { ExecutionMode } from "@/shared/execution-mode";
 import type { SessionId } from "@/shared/identifiers";
+import type { AgentSession, LiveSessionSnapshot } from "../agent-session/types";
 import type { SessionCompactionModule } from "../compaction/compaction";
 import type { ResolvedCompactionSettings } from "../compaction/config";
-import type { AgentSession, LiveSessionSnapshot } from "../engine/types";
 import type { ResolvedSessionSelection } from "../selection";
 import type { SessionStore } from "../storage/session-store";
 export type SessionApprovalMode = "interactive" | "non-interactive";

@@ -15,11 +15,11 @@ import {
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
 import { ProgressBar } from "@/shared/ui/progress-bar";
+import type { SessionQueuedSubmission } from "../../agent-session/types";
 import {
 	isCompactionSummaryMessage,
 	type SessionCompaction,
 } from "../../compaction";
-import type { SessionQueuedSubmission } from "../../engine/types";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import type { SessionViewState } from "../../hooks/runtime-turn";
 import type { SessionSubmissionComposition } from "../../submission-types";

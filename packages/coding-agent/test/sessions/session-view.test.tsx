@@ -21,7 +21,7 @@ import type {
 	SessionSubmissionEvent,
 	SessionWaitingMessage,
 	SessionWaitingMessageId,
-} from "@/modules/sessions/engine/types";
+} from "@/modules/sessions/agent-session/types";
 import type { SessionHost } from "@/modules/sessions/host/types";
 import type {
 	SessionFilePart,

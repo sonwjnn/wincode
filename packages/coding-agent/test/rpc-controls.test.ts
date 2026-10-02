@@ -14,13 +14,13 @@ import type {
 } from "../modules/application/rpc/types";
 import { readSubmission } from "../modules/application/rpc/validation";
 import type {
+	SessionSteeringMessage,
+	SessionSubmissionEvent,
+} from "../modules/sessions/agent-session/types";
+import type {
 	AttachmentReference,
 	AttachmentReferenceResolver,
 } from "../modules/sessions/attachment-reference";
-import type {
-	SessionSteeringMessage,
-	SessionSubmissionEvent,
-} from "../modules/sessions/engine/types";
 import type {
 	SessionApprovalResult,
 	SessionHost,

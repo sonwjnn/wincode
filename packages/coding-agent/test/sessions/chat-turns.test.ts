@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { toSubmissionId } from "@wincode/agent-core";
-import { prepareRetryMessages } from "@/modules/sessions/engine/submission";
-import { projectAgentTurnEvent } from "@/modules/sessions/engine/turn";
-import type { SessionExecution } from "@/modules/sessions/engine/types";
+import { prepareRetryMessages } from "@/modules/sessions/agent-session/submission";
+import { projectAgentTurnEvent } from "@/modules/sessions/agent-session/turn";
+import type { SessionExecution } from "@/modules/sessions/agent-session/types";
 import type {
 	SessionMessage,
 	SessionMessageTerminalOutcome,

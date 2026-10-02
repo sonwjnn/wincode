@@ -28,7 +28,7 @@ export type {
 	SessionSubmissionEvent,
 	SessionWaitingMessage,
 	SessionWaitingMessageId,
-} from "../engine/types";
+} from "../agent-session/types";
 export type {
 	FileMentionPart,
 	SessionMessage,

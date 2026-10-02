@@ -1,7 +1,7 @@
 import { truncateWithOverflow } from "@/shared/display-sanitize";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
-import type { SessionQueuedSubmission } from "../../engine/types";
+import type { SessionQueuedSubmission } from "../../agent-session/types";
 import { replaceTextRanges } from "../../pasted-text";
 import type { SessionSubmissionComposition } from "../../submission-types";
 

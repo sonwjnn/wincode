@@ -13,15 +13,15 @@ import type {
 import { isNull, logger, omitUndefined } from "@wincode/runtime-utils";
 import { resolveActiveAgentId } from "@/modules/agents/registry";
 import { toSteeringMessageId } from "@/shared/identifiers";
-import { rebuildActiveMessages } from "../compaction/compaction";
-import type { SessionCompaction } from "../compaction/types";
-import { AgentSessionImpl } from "../engine/agent-session";
+import { AgentSessionImpl } from "../agent-session/agent-session";
 import type {
 	AgentSession,
 	AgentSessionInternalPort,
 	AgentSessionPorts,
 	SessionSteeringMessage,
-} from "../engine/types";
+} from "../agent-session/types";
+import { rebuildActiveMessages } from "../compaction/compaction";
+import type { SessionCompaction } from "../compaction/types";
 import {
 	type SessionMessage,
 	sanitizeInterruptedSessionMessages,

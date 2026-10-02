@@ -25,7 +25,7 @@ const RESOLUTION_SUFFIXES = ["", ".ts", ".tsx", "/index.ts", "/index.tsx"];
 const ENTRIES = [
 	{
 		name: "Agent Session",
-		path: resolve(TUI_ROOT, "modules/sessions/engine/agent-session.ts"),
+		path: resolve(TUI_ROOT, "modules/sessions/agent-session/agent-session.ts"),
 	},
 	{
 		name: "Session Host",

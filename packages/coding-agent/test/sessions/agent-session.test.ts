@@ -18,15 +18,7 @@ import type {
 } from "@wincode/ai/models";
 import { logger } from "@wincode/runtime-utils";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
-import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
-import { createSessionCompaction } from "@/modules/sessions/compaction/compaction";
-import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
-import { compactionSummaryMessageId } from "@/modules/sessions/compaction/summary-message";
-import type {
-	AppendSessionCompactionInput,
-	SummaryGenerator,
-} from "@/modules/sessions/compaction/types";
-import { AgentSessionImpl } from "@/modules/sessions/engine/agent-session";
+import { AgentSessionImpl } from "@/modules/sessions/agent-session/agent-session";
 import type {
 	AgentSessionPorts,
 	SessionInterruptResult,
@@ -35,7 +27,15 @@ import type {
 	SessionSubmissionEvent,
 	SessionTurnRequest,
 	SessionWaitingMessage,
-} from "@/modules/sessions/engine/types";
+} from "@/modules/sessions/agent-session/types";
+import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
+import { createSessionCompaction } from "@/modules/sessions/compaction/compaction";
+import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
+import { compactionSummaryMessageId } from "@/modules/sessions/compaction/summary-message";
+import type {
+	AppendSessionCompactionInput,
+	SummaryGenerator,
+} from "@/modules/sessions/compaction/types";
 import type {
 	SessionFilePart,
 	SessionMessage,

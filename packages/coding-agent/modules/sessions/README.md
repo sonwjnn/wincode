@@ -233,11 +233,11 @@ It removes session records and attachment blobs while preserving prompt
 history and workspace/configuration data.
 
 - `submission-types.ts` — immutable Submission inputs, compositions, and outcomes shared by session commands and their consumers.
-- `engine/` (Agent Session) — the single class owner of session state and commands. `agent-session.ts` implements the public `AgentSession` API and keeps state-write capabilities in `AgentSessionInternalPort`; `types.ts` defines its Snapshot, internal Ports, `SessionTurnRunner`, and admission outcomes; `submission.ts` prepares and runs submissions.
-- `engine/input-lane.ts` — admission, explicit queue-head steering, durable pending-input ordering, queue draining, Recall, and attachment ownership orchestration through Agent Session callbacks.
-- `engine/submission-command.ts` — one Submission's run/cancellation/deadline ordering; active execution state remains on the owner.
-- `engine/maintenance-workflow.ts` — compaction and overflow-recovery orchestration through Agent Session callbacks.
-- `engine/approval-workflow.ts` — approval settlement policy; snapshots and settlement maps remain owner-owned.
+- `agent-session/` (Agent Session) — the single class owner of session state and commands. `agent-session.ts` implements the public `AgentSession` API and keeps state-write capabilities in `AgentSessionInternalPort`; `types.ts` defines its Snapshot, internal Ports, `SessionTurnRunner`, and admission outcomes; `submission.ts` prepares and runs submissions.
+- `agent-session/input-lane.ts` — admission, explicit queue-head steering, durable pending-input ordering, queue draining, Recall, and attachment ownership orchestration through Agent Session callbacks.
+- `agent-session/submission-command.ts` — one Submission's run/cancellation/deadline ordering; active execution state remains on the owner.
+- `agent-session/maintenance-workflow.ts` — compaction and overflow-recovery orchestration through Agent Session callbacks.
+- `agent-session/approval-workflow.ts` — approval settlement policy; snapshots and settlement maps remain owner-owned.
 - `turn-records.ts` — durable Session Records produced by Agent Turns, shared by the Agent Session and runtime consumer.
 - `hooks/runtime-turn.ts` — the Agent Runtime consumer: it processes Agent Turn events, owns their live Session View State, and synthesizes missing terminal events.
 - `host/session-host.ts` — opens transcript and context, assembles capabilities and the Agent Session, exposes only its public command/snapshot/event API, and owns the Host lifetime. React-free; exported through `@wincode/coding-agent/session-host`.
