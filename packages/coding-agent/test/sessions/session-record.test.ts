@@ -411,7 +411,6 @@ test("projects each ordinary row with references, metadata, and stable delegatio
 					agent: agentId("build"),
 					model,
 					skill: {
-						arguments: "focus",
 						contentHash: "hash-1",
 						name: "review",
 						source: "explicit",
@@ -474,7 +473,6 @@ test("projects each ordinary row with references, metadata, and stable delegatio
 			agent: agentId("build"),
 			model,
 			skill: {
-				arguments: "focus",
 				contentHash: "hash-1",
 				name: "review",
 				source: "explicit",

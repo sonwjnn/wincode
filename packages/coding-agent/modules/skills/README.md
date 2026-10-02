@@ -18,12 +18,8 @@ activation live in this module, including Node/Bun discovery and content loading
 
 - `parseSkillFile(source)` — parse frontmatter and body; throws `SkillValidationError` on invalid
   input.
-- `parseSkillInvocation(input)` — parse `/skill:name arguments` into `{ name, arguments }`, or
-  return `null`.
-- `hasSkillNamespace(input)` — whether the input claims the reserved `skill:` namespace, valid or
-  not; the CLI reports those lines instead of sending them as prompt text.
-- `SKILL_NAMESPACE_PREFIX` — the reserved namespace (`skill:`) a Skill row renders and a typed
-  invocation must carry.
+- `SKILL_NAMESPACE_PREFIX` — the reserved namespace (`skill:`) a Skill row renders and its
+  selection marker carries.
 - `buildSkillCatalog(skills, decideSkill)` — filter denied Skills, validate hard limits, and build
   the catalog (including the 24 KiB tool-description budget and diagnostics).
 - `buildSkillToolDefinition(catalog)` — the native `skill` tool definition sent to the model loop,
@@ -33,8 +29,8 @@ activation live in this module, including Node/Bun discovery and content loading
 - `createSkillSnapshot(skill, source)` — create a body-bearing, hashed request snapshot.
 - `sanitizeSkillToolResult(result)` / `sanitizeSkillToolPart(part)` — collapse live activation
   data to safe metadata.
-- Types: `Skill`, `SkillContext`, `SkillInvocation`, `SkillRequestContext`, `SkillCatalog`,
-  `SkillExecution`, `SkillActivationSnapshot`, `SkillToolResult`, `SanitizedSkillToolResult`.
+- Types: `Skill`, `SkillContext`, `SkillRequestContext`, `SkillCatalog`, `SkillExecution`,
+  `SkillActivationSnapshot`, `SkillToolResult`, `SanitizedSkillToolResult`.
 
 ## Filesystem discovery API
 
@@ -92,13 +88,14 @@ when Skills are discoverable. Selecting the aggregate enters `/skill:` search; S
 fuzzy-match names only, both there and in nonempty bare slash queries. `/skill` shows
 the namespace chooser rather than individual Skills. `/skills` is not a Built-in Command, but
 follows the same bare-query matching behavior.
-Selecting an individual Skill writes `/skill:<name> ` into the chat input.
+A `/` token inside prose opens the Skill list directly, without the namespace, and selecting an
+individual Skill writes `/skill:<name> ` into the chat input in place of that token.
 
-A bare `/name` is never a Skill invocation, so a Custom Command of the same name stays reachable.
-The selected Skill body and arguments propagate through both local and hosted chat execution
-paths. Text that claims the `skill:` namespace but names no discovered Skill (or is malformed) is
-reported as an input error and never sent as a prompt. Enter selects a matching row; when no
-command row matches, Enter submits the line normally.
+Only a selected row activates anything: typed or pasted `/skill:<name>` text stays ordinary
+prompt text. A submission may carry several selected Skills; every selected marker is validated
+and stripped from the prompt, and the leftmost selected Skill is the one activated. A selected
+Skill that no longer exists rejects the submission instead of falling back. Enter selects a
+matching row; when no command row matches, Enter submits the line normally.
 
 ## Skill Activation
 
@@ -106,14 +103,14 @@ A native `skill` tool is exposed to Primary Agents and Subagents whenever at lea
 is not denied. Its description carries the permission-filtered `<available_skills>` catalog; the
 Agent selects by exact name and the CLI executes the load — for local and hosted models alike.
 
-- Explicit `/skill:name arguments` is resolved and authorized before the first model call and
+- An explicitly selected Skill is resolved and authorized before the first model call and
   consumes one activation slot; rejection preserves the input and sends no prompt.
 - An execution turn may activate at most three distinct Skills. Re-loading an active Skill is
   idempotent; rejected or failed loads consume no slot; a fourth distinct load returns a
   non-retryable `SKILL_LIMIT_REACHED` result.
 - Skill bodies are snapshotted at activation and treated as untrusted, turn-scoped context. They
   are preserved through tool loops and compaction until the turn ends, then discarded. Durable
-  history stores only sanitized activation metadata (name, content hash, source, arguments).
+  history stores only sanitized activation metadata (name, content hash, source).
 - Bundled references, templates, and scripts resolve from the Skill directory; the tool result
   samples up to ten absolute resource paths. Resources outside the workspace require
   `external_directory` permission in addition to the underlying operation permission.

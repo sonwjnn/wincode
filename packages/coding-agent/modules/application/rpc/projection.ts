@@ -601,9 +601,7 @@ export const selectionFromHost = (host: SessionHost): unknown => {
 const projectSkillIntent = (
 	skill: SkillContext | undefined
 ): Record<string, string> | undefined =>
-	skill === undefined
-		? undefined
-		: { arguments: skill.arguments, name: skill.name };
+	skill === undefined ? undefined : { name: skill.name };
 
 const projectQueuedSubmission = (
 	submission: SessionQueuedSubmission,

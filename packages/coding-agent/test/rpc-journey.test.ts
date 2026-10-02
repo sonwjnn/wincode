@@ -99,14 +99,15 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		capabilities: {},
 		clientInfo: { name: "journey-test" },
 		cwd: workspace,
-		protocolVersion: 2,
+		protocolVersion: 3,
 	})}\n`;
 	const create = `${request("create", "session/create", {
 		initialSubmission: {
 			composition: {
 				pastedText: [{ text: "API handlers", token: "[Pasted ~2 lines]" }],
-				text: "/review [Pasted ~2 lines]",
+				text: "[Pasted ~2 lines]",
 			},
+			intent: { kind: "custom", name: "review" },
 		},
 		selection: {
 			agentId: "build",
@@ -140,7 +141,10 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		},
 	})}\n`;
 	const queuedSubmit = `${request("queued-submit", "session/submit", {
-		submission: { text: "/review resource boundaries" },
+		submission: {
+			intent: { kind: "custom", name: "review" },
+			text: "resource boundaries",
+		},
 	})}\n`;
 	const steerQueued = `${request("steer-queued", "session/steer", {})}\n`;
 	const transcript = `${request("transcript", "session/getTranscript", {})}\n`;
@@ -286,7 +290,7 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 					capabilities: {},
 					clientInfo: { name: "reopen-test" },
 					cwd: workspace,
-					protocolVersion: 2,
+					protocolVersion: 3,
 				})}\n`
 			),
 			new TextEncoder().encode(
@@ -439,7 +443,7 @@ test("RPC session/open keeps a held Session Writer as a refusal", async () => {
 				capabilities: {},
 				clientInfo: { name: "writer-conflict-test" },
 				cwd: workspace,
-				protocolVersion: 2,
+				protocolVersion: 3,
 			})}\n`
 		),
 		new TextEncoder().encode(
@@ -528,7 +532,7 @@ test("RPC session opening keeps lock refusals request-scoped", async () => {
 				capabilities: {},
 				clientInfo: { name: "lock-failure-test" },
 				cwd: workspace,
-				protocolVersion: 2,
+				protocolVersion: 3,
 			})}\n`
 		),
 		new TextEncoder().encode(

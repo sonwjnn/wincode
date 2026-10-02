@@ -18,16 +18,15 @@ Built-in Commands in the `/` overlay.
    list and are matched by `filterCommandItems` (see `modules/commands`).
 4. **Expand** — `expandCustomCommandTemplate` substitutes `$ARGUMENTS`,
    `$1..$n` (positional, split on whitespace), and `$$` (literal dollar).
-   Unknown `$TOKENS` are left untouched. Arguments come from the invocation
-   parsed from the submitted prompt.
-5. **Invoke** — `parseCustomCommandInvocation` parses `/name args` from the
-   submitted prompt text.
-6. **Execute** — selecting a custom command in the input controller inserts
-   `/<name> ` into the textarea. On submit the template is expanded into the
-   sent prompt, mirroring the skills flow; the visible invocation stays in
-   history. A bare `/name` always resolves to the Custom Command: Skills are only
-   reachable through `/skill:name`. There is no adapter dispatch for custom
-   commands.
+   Unknown `$TOKENS` are left untouched. A selected marker takes the text that
+   follows it as arguments; a wire intent carries them as the submitted text.
+5. **Invoke** — selecting a Custom Command row in the input controller inserts
+   `/<name> ` into the textarea and tracks it as a selection. Typed or pasted
+   `/name` text is never an invocation.
+6. **Execute** — on submit the template replaces the prompt, mirroring the
+   skills flow; the visible invocation stays in history. Skills are only
+   reachable through selected Skill rows, so a bare `/name` typed as text
+   stays text. There is no adapter dispatch for custom commands.
 
 ## Public API
 
@@ -36,7 +35,6 @@ Built-in Commands in the `/` overlay.
 - `discoverCustomCommandCandidates({ homeRoot, snapshot, workspace })` (`discovery.ts`),
   `loadCustomCommands` (`loader.ts`)
 - `parseCustomCommandFile`, `CustomCommandValidationError` (`parse.ts`)
-- `parseCustomCommandInvocation`, `CustomCommandInvocation` (`invocation.ts`)
 - `expandCustomCommandTemplate` (`expand.ts`)
 - Types: `CustomCommandSpec`, `CustomCommandCandidate` (`types.ts`)
 

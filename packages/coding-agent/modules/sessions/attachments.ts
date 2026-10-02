@@ -50,11 +50,18 @@ export const locateAttachmentTokens = (
 	});
 };
 
-export const mapOffsetThroughTextReplacement = (
+export type TextEditRegion = Readonly<{
+	/** Characters identical at the start of both texts. */
+	prefixLength: number;
+	/** Characters identical at the end of both texts, after the prefix. */
+	suffixLength: number;
+}>;
+
+/** The common-prefix/suffix region one text edit replaced or inserted. */
+export const resolveTextEditRegion = (
 	previousText: string,
-	nextText: string,
-	offset: number
-): number => {
+	nextText: string
+): TextEditRegion => {
 	let prefixLength = 0;
 	const maxPrefixLength = Math.min(previousText.length, nextText.length);
 	while (
@@ -72,6 +79,19 @@ export const mapOffsetThroughTextReplacement = (
 	) {
 		suffixLength += 1;
 	}
+
+	return { prefixLength, suffixLength };
+};
+
+export const mapOffsetThroughTextReplacement = (
+	previousText: string,
+	nextText: string,
+	offset: number
+): number => {
+	const { prefixLength, suffixLength } = resolveTextEditRegion(
+		previousText,
+		nextText
+	);
 
 	if (offset <= prefixLength) {
 		return offset;

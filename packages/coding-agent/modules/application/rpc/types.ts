@@ -3,7 +3,6 @@ import type {
 	ReasoningMode,
 	ReasoningSelection,
 } from "@wincode/ai/models";
-import type { SubmissionPromptSkillInvocation } from "@/modules/commands/submission-resolution";
 import type { SkillContext } from "@/modules/skills";
 import type {
 	AgentTurnId,
@@ -20,7 +19,10 @@ import type { SessionFilePart } from "../../../modules/sessions/message";
 import type { SessionSubmissionComposition } from "../../../modules/sessions/submission-types";
 import type { JsonlInput } from "./protocol";
 
-export type RpcSkillIntent = Readonly<SubmissionPromptSkillInvocation>;
+export type RpcSubmissionIntent = Readonly<{
+	kind: "custom" | "skill";
+	name: string;
+}>;
 export type RpcSubmissionIdentifiers = Readonly<{
 	messageId?: string;
 	submissionId?: string;
@@ -29,7 +31,7 @@ export type RpcSubmissionIdentifiers = Readonly<{
 export type RpcSubmissionDraft = Readonly<{
 	composition: SessionSubmissionComposition;
 	files: readonly SessionFilePart[];
-	skillIntent?: RpcSkillIntent;
+	intent?: RpcSubmissionIntent;
 }>;
 export type RpcPreparedSubmission = Readonly<{
 	composition: SessionSubmissionComposition;
@@ -43,7 +45,7 @@ export const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 export const OUTPUT_DRAIN_TIMEOUT_MS = 5000;
 export const DEFAULT_TRANSCRIPT_LIMIT = 100;
 export const MAX_TRANSCRIPT_LIMIT = 500;
-export const RPC_PROTOCOL_VERSION = 2;
+export const RPC_PROTOCOL_VERSION = 3;
 export const SERVER_VERSION = "0.1.0";
 export const SESSION_RPC_METHODS = new Set([
 	"session/create",

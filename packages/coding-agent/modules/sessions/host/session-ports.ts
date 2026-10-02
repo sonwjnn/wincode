@@ -131,26 +131,24 @@ const summarizeCatalogDiagnostics = (catalog: SkillCatalog): string | null => {
  * Skill is permitted exactly like an Agent-driven one.
  */
 const activateExplicitSkill = async (
-	skill: SkillContext,
+	name: string,
 	{ execution, gate }: { execution: SkillExecution; gate: ToolGate }
 ): Promise<SessionSkillResolution> => {
-	const entry = execution.catalog.entries.find(
-		({ name }) => name === skill.name
-	);
+	const entry = execution.catalog.entries.find((entry) => entry.name === name);
 	const policyOutcome = await gate.gate({
 		available: !isUndefined(entry),
-		description: entry?.description ?? `Activate Skill ${skill.name}`,
+		description: entry?.description ?? `Activate Skill ${name}`,
 		family: "skill",
-		name: skill.name,
+		name,
 	});
 	if (policyOutcome.kind !== "allow") {
-		execution.markRejected(skill.name);
+		execution.markRejected(name);
 		return { ok: false, reason: policyOutcome.errorText };
 	}
 	if (isUndefined(entry)) {
 		return {
 			ok: false,
-			reason: `Unknown or unavailable Skill "${skill.name}"`,
+			reason: `Unknown or unavailable Skill "${name}"`,
 		};
 	}
 	const result = execution.activate(entry.name, "explicit");
@@ -163,7 +161,6 @@ const activateExplicitSkill = async (
 	return {
 		ok: true,
 		skill: {
-			arguments: skill.arguments,
 			contentHash: result.snapshot.contentHash,
 			instructions: result.snapshot.body,
 			name: entry.name,
@@ -373,7 +370,7 @@ export const createSessionPorts = ({
 	): Promise<SessionSkillResolution> => {
 		const execution = armedSkill.execution;
 		if (!isUndefined(explicitSkill)) {
-			return activateExplicitSkill(explicitSkill, {
+			return activateExplicitSkill(explicitSkill.name, {
 				execution,
 				gate: toolGate,
 			});
@@ -397,16 +394,12 @@ export const createSessionPorts = ({
 					reason: `Skill "${parsedSkill.data.name}" is unavailable`,
 				};
 			}
-			return activateExplicitSkill(
-				{
-					arguments: parsedSkill.data.arguments ?? "",
-					instructions: "",
-					name: parsedSkill.data.name,
-				},
-				{ execution, gate: toolGate }
-			);
+			return activateExplicitSkill(parsedSkill.data.name, {
+				execution,
+				gate: toolGate,
+			});
 		}
-		return activateExplicitSkill(parsedSkill.data, {
+		return activateExplicitSkill(parsedSkill.data.name, {
 			execution,
 			gate: toolGate,
 		});

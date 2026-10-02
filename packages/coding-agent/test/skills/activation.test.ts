@@ -100,14 +100,12 @@ describe("createSkillSnapshot", () => {
 		expect(
 			createSkillSnapshot(
 				{
-					arguments: "focus",
 					instructions: "Review carefully.",
 					name: "review",
 				},
 				"explicit"
 			)
 		).toEqual({
-			arguments: "focus",
 			contentHash: hashSkillBody("Review carefully."),
 			instructions: "Review carefully.",
 			name: "review",

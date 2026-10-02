@@ -7,6 +7,7 @@ describe("removeTriggerText", () => {
 			removeTriggerText("/abc", {
 				end: 4,
 				kind: "command",
+				mode: "root",
 				query: "abc",
 				start: 0,
 			})
@@ -18,6 +19,7 @@ describe("removeTriggerText", () => {
 			removeTriggerText(" //review keep this", {
 				end: 2,
 				kind: "command",
+				mode: "root",
 				query: "",
 				start: 0,
 			})

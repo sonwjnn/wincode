@@ -6,7 +6,6 @@ export const skillContextSchema = z
 	.object({
 		name: z.string().trim().min(1).max(100),
 		instructions: z.string().max(12_000),
-		arguments: z.string().max(4000),
 	})
 	.strict();
 
@@ -30,7 +29,6 @@ export const skillActivationSchema = z
 		name: z.string().trim().min(1).max(100),
 		contentHash: z.string().min(1),
 		source: skillActivationSourceSchema,
-		arguments: z.string().max(4000).optional(),
 	})
 	.strict();
 
@@ -70,4 +68,4 @@ export const skillToolDefinitionSchema = z
 	.strict();
 
 export const formatSkillUserContext = (skill: SkillRequestContext): string =>
-	`<untrusted-skill-context name="${skill.name}" source="${skill.source}" content-hash="${skill.contentHash}">\n${skill.instructions}\n<arguments>${skill.arguments}</arguments>\n</untrusted-skill-context>`;
+	`<untrusted-skill-context name="${skill.name}" source="${skill.source}" content-hash="${skill.contentHash}">\n${skill.instructions}\n</untrusted-skill-context>`;

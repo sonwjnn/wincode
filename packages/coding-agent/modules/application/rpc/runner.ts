@@ -527,17 +527,13 @@ export async function runRpc({
 			throw appError("not_initialized", "Initialize before submitting.");
 		}
 		const config = activeAssembly.capabilities.getConfig();
-		const visibleText = draft.composition.text.trim();
 		const text = expandPastedText(
 			draft.composition.text,
 			draft.composition.pastedText ?? []
 		).trim();
 		const prepared = await resolveSubmissionPrompt({
+			intents: draft.intent === undefined ? [] : [draft.intent],
 			text,
-			visibleText,
-			...(draft.skillIntent === undefined
-				? {}
-				: { skillInvocation: draft.skillIntent }),
 			discoverSkills: () => discoverSkills(config),
 			discoverCustomCommands: () => getCustomCommands(config),
 		});

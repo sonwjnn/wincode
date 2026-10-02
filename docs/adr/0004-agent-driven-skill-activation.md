@@ -4,6 +4,12 @@ Wincode lets an Agent activate local Skills on demand through a native `skill` t
 
 Status: accepted
 
+Revision: explicit activation is selection-only and Wincode defines no Skill
+arguments. Selecting a Skill row authorizes and injects the Skill before the
+first model call; typed `/skill:<name>` text stays ordinary prompt text. The
+native tool still accepts only a Skill name. Durable activation records carry
+name, content hash, and source; the explicit-argument field is removed.
+
 ## Considered Options
 
 - **Model selection over keyword rules or a preflight router** - the active Agent decides

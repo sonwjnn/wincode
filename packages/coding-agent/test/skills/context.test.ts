@@ -7,7 +7,6 @@ import {
 describe("formatSkillUserContext", () => {
 	test("wraps the body with name, source, and content hash", () => {
 		const output = formatSkillUserContext({
-			arguments: "focus on auth",
 			contentHash: "hash-1",
 			instructions: "Review code thoroughly.",
 			name: "review",
@@ -17,7 +16,6 @@ describe("formatSkillUserContext", () => {
 			'<untrusted-skill-context name="review" source="explicit" content-hash="hash-1">'
 		);
 		expect(output).toContain("Review code thoroughly.");
-		expect(output).toContain("<arguments>focus on auth</arguments>");
 		expect(output).toContain("</untrusted-skill-context>");
 	});
 });
@@ -25,7 +23,6 @@ describe("formatSkillUserContext", () => {
 describe("skillActivationSchema", () => {
 	test("accepts sanitized activation metadata without instructions", () => {
 		const parsed = skillActivationSchema.safeParse({
-			arguments: "focus",
 			contentHash: "hash-1",
 			name: "review",
 			source: "agent",
@@ -36,7 +33,6 @@ describe("skillActivationSchema", () => {
 	test("rejects rows still carrying instructions", () => {
 		expect(
 			skillActivationSchema.safeParse({
-				arguments: "",
 				contentHash: "hash-1",
 				instructions: "body",
 				name: "review",

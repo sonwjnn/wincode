@@ -80,6 +80,7 @@ const {
 	renderSession,
 	seedCompactionHistory,
 	settleSessionUi,
+	waitForSessionCondition,
 	waitForSessionFrame,
 	writeE2EFrame,
 } = await import("@/test/support/e2e-fixture");
@@ -138,7 +139,7 @@ test("bare slash queries fuzzy-match Skills without the namespace", async () => 
 		await waitForInteractiveSession(activeSetup);
 
 		await act(async () => {
-			await activeSetup.mockInput.typeText("/hlpr");
+			await activeSetup.mockInput.typeText("/mdl");
 		});
 		await waitForSessionFrame(
 			activeSetup,
@@ -190,11 +191,11 @@ test("the aggregate Skill suggestion enters namespaced search before selection",
 		);
 
 		await act(async () => {
-			await activeSetup.mockInput.typeText("hlpr");
+			await activeSetup.mockInput.typeText("mdl");
 		});
 		await waitForSessionFrame(
 			activeSetup,
-			(frame) => frame.includes("hlpr") && frame.includes("Model helper skill")
+			(frame) => frame.includes("mdl") && frame.includes("Model helper skill")
 		);
 
 		await act(() => activeSetup.mockInput.pressEnter());
@@ -316,7 +317,10 @@ test("filters a transposed skill query and keeps folder mentions searchable", as
 			(frame) => frame.includes("Ask anything") && frame.includes("Skill")
 		);
 		const submittedFrame = activeSetup.captureCharFrame();
-		expect(submittedFrame).toContain("/skill:model-4o focus on auth");
+		// The selected marker is control syntax: the transcript keeps the prose
+		// the model received and the badge names the applied Skill.
+		expect(submittedFrame).toContain("focus on auth");
+		expect(submittedFrame).not.toContain("/skill:model-4o");
 		expect(submittedFrame).toContain("model-4o");
 
 		const folderQuery = `@${mentionFixturePath}/utils`;
@@ -495,36 +499,6 @@ test("restoring command results after no matches keeps the item aligned", async 
 	}
 });
 
-test("hides the aggregate Skill suggestion when no Skills are discovered", async () => {
-	await rm(join(testDirectory, ".wincode", "skills"), {
-		force: true,
-		recursive: true,
-	});
-	let setup: TestRendererSetup | undefined;
-	try {
-		const rendered = await renderSession({
-			pricing: createE2ePricing(20_000),
-			sessionId,
-		});
-		const activeSetup = rendered.setup;
-		setup = activeSetup;
-		await rendered.registryReady;
-		await waitForInteractiveSession(activeSetup);
-
-		await act(async () => {
-			await activeSetup.mockInput.typeText("/skill");
-		});
-		await settleSessionUi(activeSetup);
-		const frame = activeSetup.captureCharFrame();
-		expect(frame).toContain("No matching commands");
-	} finally {
-		if (setup) {
-			writeE2EFrame(setup);
-			setup.renderer.destroy();
-		}
-		cleanupSessionRender();
-	}
-});
 test("an unmatched slash prompt submits as ordinary text", async () => {
 	let setup: TestRendererSetup | undefined;
 	try {
@@ -549,6 +523,177 @@ test("an unmatched slash prompt submits as ordinary text", async () => {
 		const submittedFrame = activeSetup.captureCharFrame();
 		expect(submittedFrame).toContain("/unmatched-command");
 		expect(submittedFrame).toContain("Ask anything");
+	} finally {
+		if (setup) {
+			writeE2EFrame(setup);
+			setup.renderer.destroy();
+		}
+		cleanupSessionRender();
+	}
+});
+test("a typed Skill invocation stays ordinary text", async () => {
+	let setup: TestRendererSetup | undefined;
+	try {
+		const rendered = await renderSession({
+			pricing: createE2ePricing(20_000),
+			sessionId,
+		});
+		const activeSetup = rendered.setup;
+		setup = activeSetup;
+		await rendered.registryReady;
+		await waitForInteractiveSession(activeSetup);
+
+		await act(async () => {
+			await activeSetup.mockInput.typeText("/skill:model-4o focus on auth");
+		});
+		await settleSessionUi(activeSetup);
+		await act(() => activeSetup.mockInput.pressEnter());
+		await waitForSessionFrame(
+			activeSetup,
+			(frame) =>
+				frame.includes("Ask anything") &&
+				frame.includes("/skill:model-4o focus on auth")
+		);
+		const submittedFrame = activeSetup.captureCharFrame();
+		expect(submittedFrame).toContain("/skill:model-4o focus on auth");
+		// Typed text never activates a Skill: the model request carries the
+		// literal line and no Skill context.
+		await waitForSessionCondition(() =>
+			recorder.requests.some(
+				(entry) =>
+					entry.kind === "chat" &&
+					JSON.stringify(entry).includes("/skill:model-4o focus on auth")
+			)
+		);
+		const request = JSON.stringify(
+			recorder.requests
+				.filter((entry) => entry.kind === "chat")
+				.findLast((entry) =>
+					JSON.stringify(entry).includes("/skill:model-4o focus on auth")
+				)
+		);
+		expect(request).not.toContain("untrusted-skill-context");
+	} finally {
+		if (setup) {
+			writeE2EFrame(setup);
+			setup.renderer.destroy();
+		}
+		cleanupSessionRender();
+	}
+});
+test("selecting a Skill keeps the prose around the trigger", async () => {
+	let setup: TestRendererSetup | undefined;
+	try {
+		const rendered = await renderSession({
+			pricing: createE2ePricing(20_000),
+			sessionId,
+		});
+		const activeSetup = rendered.setup;
+		setup = activeSetup;
+		await rendered.registryReady;
+		await waitForInteractiveSession(activeSetup);
+
+		await act(async () => {
+			await activeSetup.mockInput.typeText("please review /mdl");
+		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Model helper skill")
+		);
+		await act(() => activeSetup.mockInput.pressEnter());
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("please review /skill:model-4o")
+		);
+		// Only the trigger token is replaced: the prose before it survives.
+		expect(activeSetup.captureCharFrame()).toContain(
+			"please review /skill:model-4o "
+		);
+	} finally {
+		if (setup) {
+			writeE2EFrame(setup);
+			setup.renderer.destroy();
+		}
+		cleanupSessionRender();
+	}
+});
+test("a slash inside prose opens Skill search and Escape keeps the text", async () => {
+	let setup: TestRendererSetup | undefined;
+	try {
+		const rendered = await renderSession({
+			pricing: createE2ePricing(20_000),
+			sessionId,
+		});
+		const activeSetup = rendered.setup;
+		setup = activeSetup;
+		await rendered.registryReady;
+		await waitForInteractiveSession(activeSetup);
+
+		await act(async () => {
+			await activeSetup.mockInput.typeText("please review /mdl");
+		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("skill:model-4o")
+		);
+
+		// A lone ESC byte reaches the key parser only after its
+		// escape-sequence timeout, so give it real time before asserting.
+		await act(() => activeSetup.mockInput.pressEscape());
+		await Bun.sleep(120);
+		await settleSessionUi(activeSetup);
+		expect(activeSetup.captureCharFrame()).toContain("please review /mdl");
+
+		await act(() => activeSetup.mockInput.pressEnter());
+		await waitForSessionFrame(
+			activeSetup,
+			(frame) =>
+				frame.includes("Ask anything") && frame.includes("please review /mdl")
+		);
+		const submittedFrame = activeSetup.captureCharFrame();
+		expect(submittedFrame).toContain("please review /mdl");
+		await waitForSessionCondition(() =>
+			recorder.requests.some(
+				(entry) =>
+					entry.kind === "chat" &&
+					JSON.stringify(entry).includes("please review /mdl")
+			)
+		);
+		const request = JSON.stringify(
+			recorder.requests
+				.filter((entry) => entry.kind === "chat")
+				.findLast((entry) =>
+					JSON.stringify(entry).includes("please review /mdl")
+				)
+		);
+		expect(request).not.toContain("untrusted-skill-context");
+	} finally {
+		if (setup) {
+			writeE2EFrame(setup);
+			setup.renderer.destroy();
+		}
+		cleanupSessionRender();
+	}
+});
+test("hides the aggregate Skill suggestion when no Skills are discovered", async () => {
+	await rm(join(testDirectory, ".wincode", "skills"), {
+		force: true,
+		recursive: true,
+	});
+	let setup: TestRendererSetup | undefined;
+	try {
+		const rendered = await renderSession({
+			pricing: createE2ePricing(20_000),
+			sessionId,
+		});
+		const activeSetup = rendered.setup;
+		setup = activeSetup;
+		await rendered.registryReady;
+		await waitForInteractiveSession(activeSetup);
+
+		await act(async () => {
+			await activeSetup.mockInput.typeText("/skill");
+		});
+		await settleSessionUi(activeSetup);
+		const frame = activeSetup.captureCharFrame();
+		expect(frame).toContain("No matching commands");
 	} finally {
 		if (setup) {
 			writeE2EFrame(setup);

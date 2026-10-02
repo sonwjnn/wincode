@@ -60,7 +60,7 @@ test("JSONL RPC initialize is the first readiness frame and shutdown is clean", 
 					capabilities: {},
 					clientInfo: { name: "test-client" },
 					cwd: process.cwd(),
-					protocolVersion: 2,
+					protocolVersion: 3,
 				},
 			})}\n`
 		),
@@ -101,7 +101,7 @@ test("JSONL RPC initialize is the first readiness frame and shutdown is clean", 
 					submissionEvents: true,
 					transcriptPagination: true,
 				},
-				protocolVersion: 2,
+				protocolVersion: 3,
 				serverInfo: { name: "wincode", version: "0.1.0" },
 				workspace: { id: "workspace-test", root: process.cwd() },
 			},
@@ -134,7 +134,7 @@ test("RPC initialize preserves Session Writer lock infrastructure failures", asy
 						capabilities: {},
 						clientInfo: { name: "test-client" },
 						cwd: process.cwd(),
-						protocolVersion: 2,
+						protocolVersion: 3,
 					},
 				})}\n`
 			),
@@ -230,7 +230,7 @@ test("lifecycle guards use stable application and JSON-RPC errors", async () => 
 				capabilities: {},
 				clientInfo: {},
 				cwd: process.cwd(),
-				protocolVersion: 2,
+				protocolVersion: 3,
 			})
 		),
 		new TextEncoder().encode(
@@ -246,7 +246,7 @@ test("lifecycle guards use stable application and JSON-RPC errors", async () => 
 				capabilities: {},
 				clientInfo: { name: "test-client" },
 				cwd: process.cwd(),
-				protocolVersion: 2,
+				protocolVersion: 3,
 			})
 		),
 		new TextEncoder().encode(
@@ -254,7 +254,7 @@ test("lifecycle guards use stable application and JSON-RPC errors", async () => 
 				capabilities: {},
 				clientInfo: { name: "test-client" },
 				cwd: process.cwd(),
-				protocolVersion: 2,
+				protocolVersion: 3,
 			})
 		),
 		new TextEncoder().encode(request("shutdown-1", "server/shutdown", {})),
@@ -303,7 +303,7 @@ test("lifecycle guards use stable application and JSON-RPC errors", async () => 
 			error: {
 				code: -32_000,
 				data: { code: "unsupported_protocol_version" },
-				message: "Protocol version 2 is required.",
+				message: "Protocol version 3 is required.",
 			},
 			id: "old-protocol",
 			jsonrpc: "2.0",
@@ -601,7 +601,7 @@ test("a stdout failure during shutdown response remains fatal", async () => {
 						capabilities: {},
 						clientInfo: { name: "test-client" },
 						cwd: process.cwd(),
-						protocolVersion: 2,
+						protocolVersion: 3,
 					},
 				})}\n`
 			),
@@ -695,7 +695,7 @@ test("a response beyond the exact output bound emits output_overflow", async () 
 						capabilities: {},
 						clientInfo: { name: "test-client" },
 						cwd: process.cwd(),
-						protocolVersion: 2,
+						protocolVersion: 3,
 					},
 				})}\n`
 			),
@@ -771,7 +771,7 @@ test("ignored aborts finish cleanup at one bounded deadline", async () => {
 						capabilities: {},
 						clientInfo: { name: "test-client" },
 						cwd: process.cwd(),
-						protocolVersion: 2,
+						protocolVersion: 3,
 					},
 				})}\n`
 			),
@@ -811,7 +811,7 @@ test("records shutdown failures without writing diagnostics to RPC stderr", asyn
 				capabilities: {},
 				clientInfo: { name: "test-client" },
 				cwd: process.cwd(),
-				protocolVersion: 2,
+				protocolVersion: 3,
 			},
 		},
 		{ id: "shutdown-1", jsonrpc: "2.0", method: "server/shutdown", params: {} },

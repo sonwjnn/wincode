@@ -21,12 +21,9 @@ export type Skill = SkillFrontmatter & {
 };
 
 export type SkillContext = {
-	arguments: string;
 	instructions: string;
 	name: string;
 };
-
-export type SkillInvocation = { name: string; arguments: string };
 
 /**
  * The body-bearing snapshot used to inject a Skill into one model turn.
@@ -38,7 +35,6 @@ export type SkillRequestContext = SkillContext & {
 };
 
 export type SkillActivation = {
-	arguments?: string;
 	contentHash: string;
 	name: string;
 	source: SkillActivationSource;

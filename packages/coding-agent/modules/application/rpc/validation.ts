@@ -15,8 +15,8 @@ import { RPC_ERROR_CODES } from "./protocol";
 import {
 	RpcApplicationError,
 	RpcProtocolError,
-	type RpcSkillIntent,
 	type RpcSubmissionDraft,
+	type RpcSubmissionIntent,
 	type Selection,
 	type WireValue,
 } from "./types";
@@ -299,24 +299,25 @@ const readCompositionMarkers = (
 	};
 };
 
-const readSkillIntent = (value: unknown): RpcSkillIntent | undefined => {
+const readSubmissionIntent = (
+	value: unknown
+): RpcSubmissionIntent | undefined => {
 	if (value === undefined) {
 		return;
 	}
 	const record = asRecord(value);
 	if (
 		record === undefined ||
-		!exactFields(record, ["arguments", "name"]) ||
+		!exactFields(record, ["kind", "name"]) ||
+		(record.kind !== "custom" && record.kind !== "skill") ||
 		typeof record.name !== "string" ||
-		!SKILL_NAME_PATTERN.test(record.name) ||
-		(record.arguments !== undefined && typeof record.arguments !== "string")
+		(record.kind === "skill"
+			? !SKILL_NAME_PATTERN.test(record.name)
+			: record.name.length === 0)
 	) {
-		throw rejectedSubmission("Skill intent is invalid.");
+		throw rejectedSubmission("Submission intent is invalid.");
 	}
-	return {
-		name: record.name,
-		...(record.arguments === undefined ? {} : { arguments: record.arguments }),
-	};
+	return { kind: record.kind, name: record.name };
 };
 
 export const readSubmission = async (
@@ -327,7 +328,7 @@ export const readSubmission = async (
 	const value = asRecord(params[key]);
 	if (
 		value === undefined ||
-		!exactFields(value, ["composition", "files", "skill", "text"])
+		!exactFields(value, ["composition", "files", "intent", "text"])
 	) {
 		throw rejectedSubmission(`Missing or invalid ${key}.`);
 	}
@@ -345,12 +346,10 @@ export const readSubmission = async (
 	) {
 		throw rejectedSubmission("Submission composition is invalid.");
 	}
-	const skillIntent = readSkillIntent(value.skill);
+	const intent = readSubmissionIntent(value.intent);
 	const submittedText = compositionRecord?.text ?? value.text;
 	const text =
-		submittedText === undefined && skillIntent !== undefined
-			? ""
-			: submittedText;
+		submittedText === undefined && intent !== undefined ? "" : submittedText;
 	if (
 		typeof text !== "string" ||
 		(value.text !== undefined &&
@@ -368,14 +367,8 @@ export const readSubmission = async (
 		compositionRecord?.files ?? value.files,
 		resolver
 	);
-	if (
-		text.trim().length === 0 &&
-		files.length === 0 &&
-		skillIntent === undefined
-	) {
-		throw rejectedSubmission(
-			"Submission must contain text, files, or Skill intent."
-		);
+	if (text.trim().length === 0 && files.length === 0 && intent === undefined) {
+		throw rejectedSubmission("Submission must contain text, files, or intent.");
 	}
 	const markers =
 		compositionRecord === undefined
@@ -384,7 +377,7 @@ export const readSubmission = async (
 	return {
 		composition: { ...markers, files, text },
 		files,
-		...(skillIntent === undefined ? {} : { skillIntent }),
+		...(intent === undefined ? {} : { intent }),
 	};
 };
 

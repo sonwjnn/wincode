@@ -351,7 +351,7 @@ test("session submit accepts structured bounded files and explicit Skill intent"
 					],
 					text: "Check [Image 1]",
 				},
-				skill: { arguments: "only APIs", name: "review" },
+				intent: { kind: "skill", name: "review" },
 			},
 		})
 	);
@@ -368,7 +368,7 @@ test("session submit accepts structured bounded files and explicit Skill intent"
 				url: "data:image/png;base64,AQID",
 			},
 		],
-		skillIntent: { arguments: "only APIs", name: "review" },
+		intent: { kind: "skill", name: "review" },
 	});
 	expect(controls.inputs[0]).toMatchObject({
 		composition: { text: "Check [Image 1]" },
@@ -712,7 +712,7 @@ test("failed Session creation stays durable and can be reopened", async () => {
 			capabilities: {},
 			clientInfo: { name: "test-client" },
 			cwd: process.cwd(),
-			protocolVersion: 2,
+			protocolVersion: 3,
 		})
 	);
 	await expect(
