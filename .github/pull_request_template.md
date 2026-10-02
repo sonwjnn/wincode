@@ -32,9 +32,8 @@
 - [ ] Code follows the project's style guidelines
 - [ ] Self-reviewed the code for obvious errors
 - [ ] Added or updated tests where applicable
-- [ ] Local Default portfolio passes (`bun run test`)
-- [ ] Local E2E portfolio passes when applicable (`bun run test:e2e`)
-- [ ] Required PR CI test gate passes
+- [ ] Required local tests passes
+- [ ] Required PR CI tests passes
 - [ ] Updated documentation if needed
 - [ ] No new warnings or console errors introduced
 

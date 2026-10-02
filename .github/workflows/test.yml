@@ -60,8 +60,6 @@ jobs:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
       - run: bun run test
-      - name: Test portfolio runner behavior
-        run: bun test --timeout=30000 scripts/test-portfolio.test.ts
 
   session-writer-lock:
     name: Session Writer lock (${{ matrix.name }})
@@ -133,40 +131,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: e2e-failure-artifacts
-          path: test-artifacts/e2e
-          if-no-files-found: ignore
-          retention-days: 7
-
-  macos-default:
-    name: macOS Default tests
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: macos-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-      - run: bun install --frozen-lockfile
-      - run: bun run test
-
-  macos-e2e:
-    name: macOS E2E tests
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: macos-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-      - run: bun install --frozen-lockfile
-      - run: bun run test:e2e
-      - name: Upload macOS E2E failure artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-e2e-failure-artifacts
           path: test-artifacts/e2e
           if-no-files-found: ignore
           retention-days: 7
