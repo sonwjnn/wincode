@@ -170,8 +170,9 @@ records remain owned by the Agent Session, not by the workflow or panel.
 `useChatInputController` detects `/` command and `@path` file-mention triggers. The shared
 `SelectableList` renders both overlays and supports keyboard selection. The controller resolves
 the selected command row — executing a Built-in Command through the app command executor, or
-writing a Custom Command (`/name `) or Skill (`/skill:name `) invocation into the input — and
-dispatches a typed Built-in Command through that same executor before the view's submit guards.
+writing a Custom Command (`/name `) or Skill (`/skill:name `) invocation into the input. Only
+those tracked selections carry command intent: typed text stays literal, and a selected Built-in
+never resolves co-selected Skill or Custom Command intents.
 
 ### Session management
 

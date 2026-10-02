@@ -1,25 +1,26 @@
-export type TextReplacementRange = Readonly<{
-	end: number;
-	start: number;
-	text: string;
-}>;
+import {
+	replaceTextRanges,
+	type TextReplacementRange,
+} from "@/shared/utils/text-ranges";
 
-export const replaceTextRanges = (
-	text: string,
-	ranges: readonly TextReplacementRange[]
-): string =>
-	ranges
-		.toSorted((left, right) => right.start - left.start)
-		.reduce(
-			(result, range) =>
-				result.slice(0, range.start) + range.text + result.slice(range.end),
-			text
-		);
+export type PastedText = { token: string; text: string };
+
+export const normalizePastedText = (text: string): string =>
+	text.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+
+export const summarizePastedText = (value: string): PastedText | undefined => {
+	const text = normalizePastedText(value);
+	const trimmed = text.trim();
+	if (trimmed.split("\n").length < 3 && trimmed.length <= 150) {
+		return;
+	}
+	return { text, token: `[Pasted ~${trimmed.split("\n").length} lines]` };
+};
 
 /** Expands each composition marker once while preserving the remaining offsets. */
 export const expandPastedText = (
 	text: string,
-	markers: readonly { token: string; text: string }[]
+	markers: readonly PastedText[]
 ): string => {
 	const occurrences: TextReplacementRange[] = [];
 	let cursor = 0;

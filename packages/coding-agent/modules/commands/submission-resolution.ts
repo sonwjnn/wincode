@@ -2,7 +2,11 @@ import { getErrorMessage } from "@wincode/runtime-utils";
 import { expandCustomCommandTemplate } from "@/modules/commands/custom/expand";
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
 import type { Skill, SkillContext } from "@/modules/skills";
-import { shiftOffsetThroughRanges } from "@/shared/utils/text-offsets";
+import {
+	type OffsetRange,
+	replaceTextRanges,
+	shiftOffsetThroughRanges,
+} from "@/shared/utils/text-ranges";
 
 /**
  * One command or Skill selection a submission carries. The range is the
@@ -44,8 +48,6 @@ const rejectedSubmissionPrompt = (
 			: reason,
 });
 
-type TextSpan = Readonly<{ end: number; start: number }>;
-
 type RangedIntent = SubmissionIntent & {
 	readonly end: number;
 	readonly marker: string;
@@ -66,7 +68,7 @@ const WHITESPACE_PATTERN = /\s/u;
 const markerRemovals = (
 	text: string,
 	intents: readonly RangedIntent[]
-): TextSpan[] => {
+): OffsetRange[] => {
 	const spans = intents
 		.map(({ start, end }) => {
 			const following = text[end] ?? "";
@@ -95,13 +97,13 @@ const markerRemovals = (
 	return merged;
 };
 
-const stripSpans = (text: string, spans: readonly TextSpan[]): string =>
-	spans.reduceRight(
-		(result, { start, end }) => result.slice(0, start) + result.slice(end),
-		text
+const stripSpans = (text: string, spans: readonly OffsetRange[]): string =>
+	replaceTextRanges(
+		text,
+		spans.map(({ start, end }) => ({ end, start, text: "" }))
 	);
 
-const removalDelta = ({ start, end }: TextSpan): number => -(end - start);
+const removalDelta = ({ start, end }: OffsetRange): number => -(end - start);
 
 type LeftmostSkillResolution =
 	| { readonly reason: string }

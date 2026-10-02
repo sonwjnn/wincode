@@ -34,8 +34,7 @@ export const skillActivationSchema = z
 
 /**
  * The single model-supplied input of the native `skill` tool: the exact name
- * of a Skill from the permission-filtered catalog. Explicit invocation remains
- * the only argument path.
+ * of a Skill from the permission-filtered catalog.
  */
 export const skillToolInputSchema = z
 	.object({ name: z.string().trim().min(1) })

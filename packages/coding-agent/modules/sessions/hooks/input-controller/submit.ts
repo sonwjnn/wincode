@@ -1,8 +1,10 @@
 import type { CommandController } from "@/modules/commands/command-controller";
 import type { SubmissionIntent } from "@/modules/commands/submission-resolution";
 import type { SessionFilePart } from "@/modules/sessions/message";
-import { shiftOffsetThroughRanges } from "@/shared/utils/text-offsets";
-import { replaceTextRanges } from "../../pasted-text";
+import {
+	replaceTextRanges,
+	shiftOffsetThroughRanges,
+} from "@/shared/utils/text-ranges";
 import type { ChatPromptSubmission } from "../../utils";
 import type { TrackedCommandSelection } from "./selections";
 
