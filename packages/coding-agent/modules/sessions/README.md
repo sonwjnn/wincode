@@ -238,6 +238,7 @@ history and workspace/configuration data.
 - `agent-session/submission-command.ts` — one Submission's run/cancellation/deadline ordering; active execution state remains on the owner.
 - `agent-session/maintenance-workflow.ts` — compaction and overflow-recovery orchestration through Agent Session callbacks.
 - `agent-session/approval-workflow.ts` — approval settlement policy; snapshots and settlement maps remain owner-owned.
+- `agent-session/steering-workflow.ts` — committed Steering Message preparation, delivery, processing status, and retry through Agent Session callbacks; delivery bookkeeping and every state transition remain owner-owned.
 - `turn-records.ts` — durable Session Records produced by Agent Turns, shared by the Agent Session and runtime consumer.
 - `hooks/runtime-turn.ts` — the Agent Runtime consumer: it processes Agent Turn events, owns their live Session View State, and synthesizes missing terminal events.
 - `host/session-host.ts` — opens transcript and context, assembles capabilities and the Agent Session, exposes only its public command/snapshot/event API, and owns the Host lifetime. React-free; exported through `@wincode/coding-agent/session-host`.
