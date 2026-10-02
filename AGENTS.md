@@ -52,9 +52,9 @@ When authorized to create or edit a PR, follow the checklist below.
 
 ## Testing Guidance
 
-Tests are contract-first. Every test must defend one externally observable behavior,
+Tests **MUST BE** contract-first. Every test **MUST** defend one externally observable behavior,
 state transition, error mapping, precedence rule, or regression-prone boundary, and
-its name or nearby rationale must state the consumer-visible failure mode. If you cannot name the contract, do not add the test.
+its name or nearby rationale must state the consumer-visible failure mode. If you cannot name the contract, **DO NOT** add the test.
 
 ---
 ## Central Utilities
