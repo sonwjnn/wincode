@@ -189,6 +189,44 @@ test("appends the Skill context when the current user message is absent", () => 
 	]);
 });
 
+test("appends the Skill context when the current user message is empty", () => {
+	const turn = buildAgentTurn({
+		agent: agentId("build"),
+		modelMessages: [
+			{
+				id: sessionMessageId("older-user"),
+				parts: [{ text: "earlier request", type: "text" }],
+				role: "user",
+			},
+			{
+				id: sessionMessageId("empty-user"),
+				parts: [{ text: "", type: "text" }],
+				role: "user",
+			},
+		],
+		modelTarget: createTurn().model,
+		resolvedAgent: buildAgent,
+		skill: {
+			contentHash: "hash-1",
+			instructions: "Review carefully.",
+			name: "review",
+			source: "explicit",
+		},
+		turnId: agentTurnId("turn-skill-empty"),
+	});
+
+	// The empty user message never reaches the model input, so the context must
+	// not splice before the older user message.
+	expect(turn.input.messages.map(({ role }) => role)).toEqual(["user", "user"]);
+	expect(turn.input.messages[0]?.id).toBe(sessionMessageId("older-user"));
+	expect(turn.input.messages[1]?.parts).toEqual([
+		{
+			text: expect.stringContaining('name="review"'),
+			type: "text",
+		},
+	]);
+});
+
 class AbortOnSecondReadSignal extends EventTarget implements AbortSignal {
 	private readCount = 0;
 	readonly onabort: AbortSignal["onabort"] = null;

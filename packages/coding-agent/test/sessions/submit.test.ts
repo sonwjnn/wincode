@@ -261,6 +261,46 @@ describe("preparePromptSubmission", () => {
 		expect(submissions).toBe(0);
 	});
 
+	test("executes a selected Built-in even when the submission carries attachments", async () => {
+		const executed: Array<{ argument?: string; name: string }> = [];
+		let submissions = 0;
+		const accepted = await submitPrompt(
+			createDependencies({
+				executeCommand: (command) => {
+					executed.push({
+						name: command.name,
+						...("argument" in command && command.argument !== undefined
+							? { argument: command.argument }
+							: {}),
+					});
+				},
+				onSubmit: () => {
+					submissions += 1;
+					return true;
+				},
+				selections: [selection("builtin", "compact", "/compact", 0)],
+			}),
+			{
+				...emptySnapshot(),
+				files: [
+					{
+						filename: "clipboard.png",
+						mediaType: "image/png",
+						type: "file" as const,
+						url: "data:image/png;base64,AAAA",
+					},
+				],
+				rawText: "/compact preserve decisions",
+			}
+		);
+
+		expect(accepted).toBe(true);
+		expect(executed).toEqual([
+			{ argument: "preserve decisions", name: "compact" },
+		]);
+		expect(submissions).toBe(0);
+	});
+
 	test("expands pasted-text markers before matching a selected marker", async () => {
 		const token = "[Pasted ~2 lines]";
 		const rawText = `/skill:review ${token}`;
