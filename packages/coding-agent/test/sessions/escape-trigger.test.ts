@@ -27,27 +27,17 @@ describe("removeTriggerText", () => {
 	});
 
 	test("keeps one space between the surviving prose", () => {
+		// A root Built-in executes with Enter and leaves text typed after the
+		// cursor in the composer.
 		expect(
-			removeTriggerText("aaa /compact bbb", {
-				end: 12,
+			removeTriggerText("/compact bbb", {
+				end: 8,
 				kind: "command",
-				mode: "skill",
+				mode: "root",
 				query: "compact",
-				start: 4,
+				start: 0,
 			})
-		).toEqual({ text: "aaa bbb", cursorOffset: 4 });
-	});
-
-	test("drops the preceding space when the trigger ends the prompt", () => {
-		expect(
-			removeTriggerText("aaa /compact", {
-				end: 12,
-				kind: "command",
-				mode: "skill",
-				query: "compact",
-				start: 4,
-			})
-		).toEqual({ text: "aaa", cursorOffset: 3 });
+		).toEqual({ text: "bbb", cursorOffset: 0 });
 	});
 
 	test("removes mention range and preserves surrounding text", () => {

@@ -19,6 +19,30 @@ const AUDIT_SKILL: Skill = {
 };
 
 describe("resolveSubmissionPrompt", () => {
+	test("strips a trailing marker with its preceding space", async () => {
+		const text = "please review /skill:review";
+		const resolution = await resolveSubmissionPrompt({
+			discoverCustomCommands: async () => [],
+			discoverSkills: async () => [REVIEW_SKILL],
+			intents: [
+				{
+					end: 27,
+					kind: "skill",
+					marker: "/skill:review",
+					name: "review",
+					start: 14,
+				},
+			],
+			text,
+		});
+
+		expect(resolution).toEqual({
+			kind: "ready",
+			skill: { instructions: REVIEW_SKILL.body, name: "review" },
+			text: "please review",
+		});
+	});
+
 	test("strips every selected marker regardless of intent order", async () => {
 		const text = "please /skill:audit and /skill:review now";
 		const resolution = await resolveSubmissionPrompt({
