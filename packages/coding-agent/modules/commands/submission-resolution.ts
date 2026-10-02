@@ -2,6 +2,7 @@ import { getErrorMessage } from "@wincode/runtime-utils";
 import { expandCustomCommandTemplate } from "@/modules/commands/custom/expand";
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
 import type { Skill, SkillContext } from "@/modules/skills";
+import { shiftOffsetThroughRanges } from "@/shared/utils/text-offsets";
 
 /**
  * One command or Skill selection a submission carries. The range is the
@@ -100,13 +101,7 @@ const stripSpans = (text: string, spans: readonly TextSpan[]): string =>
 		text
 	);
 
-/** Shifts an offset left by every removal that ends at or before it. */
-const mapOffset = (offset: number, spans: readonly TextSpan[]): number =>
-	spans.reduce(
-		(mapped, { start, end }) =>
-			end <= offset ? mapped - (end - start) : mapped,
-		offset
-	);
+const removalDelta = ({ start, end }: TextSpan): number => -(end - start);
 
 type LeftmostSkillResolution =
 	| { readonly reason: string }
@@ -190,7 +185,11 @@ export const resolveSubmissionPrompt = async ({
 			// A ranged marker takes the text that follows it; a wire intent
 			// carries its arguments as the submitted text itself.
 			const argument = isRangedIntent(customIntent)
-				? stripped.slice(mapOffset(customIntent.end, removals)).trim()
+				? stripped
+						.slice(
+							shiftOffsetThroughRanges(customIntent.end, removals, removalDelta)
+						)
+						.trim()
 				: stripped.trim();
 			return {
 				kind: "ready",

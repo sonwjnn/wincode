@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	applyTextEdit,
+	commandInsertionSeparator,
 	type TrackedCommandSelection,
 } from "@/modules/sessions/hooks/input-controller/selections";
 
@@ -51,5 +52,19 @@ describe("applyTextEdit", () => {
 		expect(
 			applyTextEdit([review(0)], "/skill:review", "/skill:review")
 		).toEqual([review(0)]);
+	});
+});
+
+describe("commandInsertionSeparator", () => {
+	test("adds a trailing space at the end of the prompt", () => {
+		expect(commandInsertionSeparator("please /mdl", 11, false)).toBe(" ");
+	});
+
+	test("keeps the existing whitespace after a mid-prose trigger", () => {
+		expect(commandInsertionSeparator("please /mdl review", 11, false)).toBe("");
+	});
+
+	test("adds no separator when the namespace chooser reopens", () => {
+		expect(commandInsertionSeparator("/skill", 6, true)).toBe("");
 	});
 });

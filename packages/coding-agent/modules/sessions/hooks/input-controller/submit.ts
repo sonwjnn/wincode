@@ -1,6 +1,7 @@
 import type { CommandController } from "@/modules/commands/command-controller";
 import type { SubmissionIntent } from "@/modules/commands/submission-resolution";
 import type { SessionFilePart } from "@/modules/sessions/message";
+import { shiftOffsetThroughRanges } from "@/shared/utils/text-offsets";
 import { replaceTextRanges } from "../../pasted-text";
 import type { ChatPromptSubmission } from "../../utils";
 import type { TrackedCommandSelection } from "./selections";
@@ -45,16 +46,8 @@ const REJECTED_SUBMISSION: PreparedPromptSubmission = {
 	execute: async () => undefined,
 };
 
-/** Shifts an offset through the pasted-text expansions before it. */
-const mapThroughPastedText = (
-	offset: number,
-	pastedTexts: readonly TrackedPastedText[]
-): number =>
-	pastedTexts.reduce(
-		(mapped, { start, end, text }) =>
-			end <= offset ? mapped + (text.length - (end - start)) : mapped,
-		offset
-	);
+const pastedTextDelta = ({ start, end, text }: TrackedPastedText): number =>
+	text.length - (end - start);
 
 /**
  * Prepare selected command intent and the accepted prompt payload without
@@ -79,9 +72,14 @@ export async function preparePromptSubmission(
 	const intents = dependencies.selections
 		.flatMap((selection): SubmissionIntent[] => {
 			const start =
-				mapThroughPastedText(selection.start, pastedTexts) - leadingTrim;
+				shiftOffsetThroughRanges(
+					selection.start,
+					pastedTexts,
+					pastedTextDelta
+				) - leadingTrim;
 			const end =
-				mapThroughPastedText(selection.end, pastedTexts) - leadingTrim;
+				shiftOffsetThroughRanges(selection.end, pastedTexts, pastedTextDelta) -
+				leadingTrim;
 			if (
 				start < 0 ||
 				end > text.length ||

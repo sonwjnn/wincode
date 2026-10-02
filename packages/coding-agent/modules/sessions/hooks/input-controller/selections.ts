@@ -1,5 +1,6 @@
 import type { CommandSelectionIntent } from "@/modules/commands/command-controller";
 import { resolveTextEditRegion } from "@/modules/sessions/attachments";
+import { isWhitespace } from "./triggers";
 
 /** A composer selection tracked by the marker it inserted into the text. */
 export type TrackedCommandSelection = Readonly<{
@@ -9,6 +10,17 @@ export type TrackedCommandSelection = Readonly<{
 	name: string;
 	start: number;
 }>;
+
+/**
+ * The trailing separator a completed invocation needs. The namespace chooser
+ * reopens without one, and a trigger that already sits before whitespace keeps
+ * that single space instead of gaining a second.
+ */
+export const commandInsertionSeparator = (
+	text: string,
+	end: number,
+	reopen: boolean
+): string => (reopen || isWhitespace(text[end]) ? "" : " ");
 
 /**
  * Shifts every tracking range through a text edit and drops each selection

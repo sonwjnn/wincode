@@ -24,7 +24,7 @@ export type FileMentionTrigger = {
 
 export type ActiveTrigger = CommandTrigger | FileMentionTrigger;
 
-const isWhitespace = (character: string | undefined): boolean =>
+export const isWhitespace = (character: string | undefined): boolean =>
 	character !== undefined && WHITESPACE_PATTERN.test(character);
 
 export const detectCommandTrigger = (

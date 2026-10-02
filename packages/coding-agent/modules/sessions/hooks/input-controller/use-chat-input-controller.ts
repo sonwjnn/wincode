@@ -29,7 +29,11 @@ import {
 	resetHistoryNavigation,
 	shouldRecordCtrlC,
 } from "./history";
-import { applyTextEdit, type TrackedCommandSelection } from "./selections";
+import {
+	applyTextEdit,
+	commandInsertionSeparator,
+	type TrackedCommandSelection,
+} from "./selections";
 import { preparePromptSubmission, type SubmitSnapshot } from "./submit";
 import { type ActiveTrigger, detectTrigger } from "./triggers";
 import type {
@@ -346,9 +350,16 @@ export function useChatInputController({
 	const applyCommandInsertion = useCallback(
 		(selection: Extract<CommandSelection, { kind: "insert" }>) => {
 			const trigger = activeTrigger?.kind === "command" ? activeTrigger : null;
-			const invocation = `${selection.invocation}${selection.reopen ? "" : " "}`;
 			const start = trigger?.start ?? textValue.length;
 			const end = trigger?.end ?? textValue.length;
+			// Keep one separator: the trailing space is only needed when the
+			// trigger did not already sit before whitespace.
+			const separator = commandInsertionSeparator(
+				textValue,
+				end,
+				selection.reopen
+			);
+			const invocation = `${selection.invocation}${separator}`;
 			const nextText = `${textValue.slice(0, start)}${invocation}${textValue.slice(end)}`;
 			const cursor = start + invocation.length;
 			const tracked =
