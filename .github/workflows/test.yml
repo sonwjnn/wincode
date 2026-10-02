@@ -60,6 +60,8 @@ jobs:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
       - run: bun run test
+      - name: Test portfolio runner behavior
+        run: bun test --timeout=30000 scripts/test-portfolio.test.ts
 
   session-writer-lock:
     name: Session Writer lock (${{ matrix.name }})

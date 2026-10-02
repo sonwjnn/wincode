@@ -44,7 +44,10 @@ When authorized to create or edit a PR, follow the checklist below.
 - NEVER use `tsc/npx tsc` — always `bun check`
 - Most formatting and common issues are automatically fixed. Run it before committing to ensure compliance - `bun fix`
 - Type check all workspaces — `bun check-types`
-- Run the Default test portfolio — `bun test`
+- Run the Default test portfolio (CI Default lane) — `bun run test`
+- Run the E2E test portfolio (CI E2E lane) — `bun run test:e2e`
+- Focus Default tests to Coding-Agent — `bun run test -- --package coding-agent`
+- Run one test file only for focused development — `bun test --timeout=30000 path/to/file.test.ts`; this bypasses portfolio discovery and setup.
 - Start the CLI in watch mode — `bun dev:cli`
 
 ---
