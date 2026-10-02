@@ -56,6 +56,23 @@ describe("chat input controller triggers", () => {
 		});
 	});
 
+	test("ends the trigger at the cursor so later text survives", () => {
+		expect(detectCommandTrigger("aaa /bbb", 5)).toEqual({
+			end: 5,
+			kind: "command",
+			mode: "skill",
+			query: "",
+			start: 4,
+		});
+		expect(detectCommandTrigger("aaa /bbb", 6)).toEqual({
+			end: 6,
+			kind: "command",
+			mode: "skill",
+			query: "b",
+			start: 4,
+		});
+	});
+
 	test("ignores tokens that are not standalone command slashes", () => {
 		expect(detectCommandTrigger("hello")).toBeNull();
 		expect(detectCommandTrigger("/new session")).toBeNull();

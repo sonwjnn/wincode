@@ -26,6 +26,30 @@ describe("removeTriggerText", () => {
 		).toEqual({ text: "/review keep this", cursorOffset: 0 });
 	});
 
+	test("keeps one space between the surviving prose", () => {
+		expect(
+			removeTriggerText("aaa /compact bbb", {
+				end: 12,
+				kind: "command",
+				mode: "skill",
+				query: "compact",
+				start: 4,
+			})
+		).toEqual({ text: "aaa bbb", cursorOffset: 4 });
+	});
+
+	test("drops the preceding space when the trigger ends the prompt", () => {
+		expect(
+			removeTriggerText("aaa /compact", {
+				end: 12,
+				kind: "command",
+				mode: "skill",
+				query: "compact",
+				start: 4,
+			})
+		).toEqual({ text: "aaa", cursorOffset: 3 });
+	});
+
 	test("removes mention range and preserves surrounding text", () => {
 		expect(
 			removeTriggerText("prefix @src/file suffix", {

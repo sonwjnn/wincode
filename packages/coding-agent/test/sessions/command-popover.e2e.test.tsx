@@ -615,6 +615,62 @@ test("selecting a Skill keeps the prose around the trigger", async () => {
 		cleanupSessionRender();
 	}
 });
+test("selecting a Skill keeps the text after the cursor", async () => {
+	let setup: TestRendererSetup | undefined;
+	try {
+		const rendered = await renderSession({
+			pricing: createE2ePricing(20_000),
+			sessionId,
+		});
+		const activeSetup = rendered.setup;
+		setup = activeSetup;
+		await rendered.registryReady;
+		await waitForInteractiveSession(activeSetup);
+
+		await act(async () => {
+			await activeSetup.mockInput.typeText("aaa bbb");
+		});
+		// Put the cursor before "bbb" and insert "/" to open Skill search, so
+		// "bbb" sits after the trigger and must survive the selection.
+		await act(() => activeSetup.mockInput.pressArrow("left"));
+		await act(() => activeSetup.mockInput.pressArrow("left"));
+		await act(() => activeSetup.mockInput.pressArrow("left"));
+		await act(async () => {
+			await activeSetup.mockInput.typeText("/");
+		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Model helper skill")
+		);
+		await act(() => activeSetup.mockInput.pressEnter());
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("aaa /skill:model-4o bbb")
+		);
+		expect(activeSetup.captureCharFrame()).toContain("aaa /skill:model-4o bbb");
+
+		await act(() => activeSetup.mockInput.pressEnter());
+		await waitForSessionCondition(() =>
+			recorder.requests.some(
+				(entry) =>
+					entry.kind === "chat" && JSON.stringify(entry).includes("aaa bbb")
+			)
+		);
+		const request = JSON.stringify(
+			recorder.requests
+				.filter((entry) => entry.kind === "chat")
+				.findLast((entry) => JSON.stringify(entry).includes("aaa bbb"))
+		);
+		// The prose survived and the selected Skill still activated.
+		expect(request).toContain("aaa bbb");
+		expect(request).toContain("untrusted-skill-context");
+		expect(request).toContain("model-4o");
+	} finally {
+		if (setup) {
+			writeE2EFrame(setup);
+			setup.renderer.destroy();
+		}
+		cleanupSessionRender();
+	}
+});
 test("a slash inside prose opens Skill search and Escape keeps the text", async () => {
 	let setup: TestRendererSetup | undefined;
 	try {

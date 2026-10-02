@@ -1,5 +1,26 @@
 export type OffsetRange = Readonly<{ end: number; start: number }>;
 
+const WHITESPACE_PATTERN = /\s/u;
+
+/**
+ * Extends a range over one neighbouring space — the following one when
+ * present, otherwise the preceding one — so removing the range keeps prose
+ * single-spaced.
+ */
+export const expandRangeOverNeighbouringSpace = (
+	text: string,
+	range: OffsetRange
+): OffsetRange => {
+	if (WHITESPACE_PATTERN.test(text[range.end] ?? "")) {
+		return { end: range.end + 1, start: range.start };
+	}
+	const preceding = range.start > 0 ? (text[range.start - 1] ?? "") : "";
+	if (WHITESPACE_PATTERN.test(preceding)) {
+		return { end: range.end, start: range.start - 1 };
+	}
+	return range;
+};
+
 export type TextReplacementRange = Readonly<OffsetRange & { text: string }>;
 
 /** Splices each range's replacement text into the original, right to left. */

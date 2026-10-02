@@ -49,13 +49,10 @@ export const detectCommandTrigger = (
 		return null;
 	}
 
-	let end = slashIndex + 1;
-	while (end < text.length && !isWhitespace(text[end])) {
-		end += 1;
-	}
-
+	// The trigger spans only what the user has typed up to the cursor: text
+	// after it is prose that a selection must not consume.
 	return {
-		end,
+		end: cursorOffset,
 		kind: "command",
 		mode: isRoot ? "root" : "skill",
 		query,

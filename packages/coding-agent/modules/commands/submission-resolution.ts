@@ -3,6 +3,7 @@ import { expandCustomCommandTemplate } from "@/modules/commands/custom/expand";
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
 import type { Skill, SkillContext } from "@/modules/skills";
 import {
+	expandRangeOverNeighbouringSpace,
 	type OffsetRange,
 	replaceTextRanges,
 	shiftOffsetThroughRanges,
@@ -59,8 +60,6 @@ const isRangedIntent = (intent: SubmissionIntent): intent is RangedIntent =>
 	intent.end !== undefined &&
 	intent.marker !== undefined;
 
-const WHITESPACE_PATTERN = /\s/u;
-
 /**
  * The marker plus one neighbouring space, so stripping it leaves readable
  * prose instead of a double space. Adjacent or overlapping spans merge.
@@ -70,17 +69,9 @@ const markerRemovals = (
 	intents: readonly RangedIntent[]
 ): OffsetRange[] => {
 	const spans = intents
-		.map(({ start, end }) => {
-			const following = text[end] ?? "";
-			const preceding = start > 0 ? (text[start - 1] ?? "") : "";
-			if (WHITESPACE_PATTERN.test(following)) {
-				return { end: end + 1, start };
-			}
-			if (WHITESPACE_PATTERN.test(preceding)) {
-				return { end, start: start - 1 };
-			}
-			return { end, start };
-		})
+		.map(({ start, end }) =>
+			expandRangeOverNeighbouringSpace(text, { start, end })
+		)
 		.toSorted((left, right) => left.start - right.start);
 	const merged: Array<{ end: number; start: number }> = [];
 	for (const span of spans) {
