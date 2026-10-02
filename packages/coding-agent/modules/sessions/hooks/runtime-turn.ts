@@ -775,7 +775,9 @@ export const buildAgentTurn = ({
 		: "subagent";
 	if (!isUndefined(skill)) {
 		// The Skill context belongs to the user message it was selected for:
-		// the model reads the instructions first, then the prose.
+		// the model reads the instructions first, then the prose. A Skill-only
+		// submission records an empty user message that the model input drops,
+		// so the context is appended instead of attaching to a stale message.
 		const skillContext = {
 			id: toSessionMessageId("skill-context"),
 			parts: [{ text: formatSkillUserContext(skill), type: "text" }],
@@ -784,10 +786,10 @@ export const buildAgentTurn = ({
 		const userIndex = messages.findLastIndex(
 			(message) => message.role === "user"
 		);
-		if (userIndex === -1) {
-			messages.push(skillContext);
-		} else {
+		if (userIndex === messages.length - 1) {
 			messages.splice(userIndex, 0, skillContext);
+		} else {
+			messages.push(skillContext);
 		}
 	}
 	return {
