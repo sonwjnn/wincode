@@ -196,6 +196,15 @@ export function SessionView({
 		editModeLoadRevisionRef.current += 1;
 		setEditMode(mode);
 	}, []);
+	const persistSessionEditMode = useCallback(
+		async (mode: EditMode) => {
+			if (sessionStore.setEditMode === undefined) {
+				throw new Error("Session storage does not support Edit Mode.");
+			}
+			await sessionStore.setEditMode(sessionId, mode);
+		},
+		[sessionId, sessionStore]
+	);
 	useEffect(() => {
 		let active = true;
 		const loadRevision = ++editModeLoadRevisionRef.current;
@@ -224,9 +233,9 @@ export function SessionView({
 			model,
 			onEditModeChanged: setSessionEditMode,
 			sessionId,
-			sessionStore,
+			setEditMode: persistSessionEditMode,
 		}),
-		[editMode, model, sessionId, sessionStore, setSessionEditMode]
+		[editMode, model, persistSessionEditMode, sessionId, setSessionEditMode]
 	);
 	const { show } = useToast();
 	const openSettings = useSettingsHubDialog(settingsRuntime);

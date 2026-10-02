@@ -5,21 +5,19 @@ import {
 	isUndefined,
 } from "@wincode/runtime-utils";
 import type { UnknownRecord } from "type-fest";
-import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
 import {
 	DEFAULT_COMPACTION_SETTINGS,
 	getCompactionSettingSource,
+	type ResolvedCompactionSettings,
 	resolveCompactionSettingPath,
 	resolveCompactionSettings,
-} from "@/modules/sessions/compaction/config";
-import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
+} from "@/modules/sessions/compaction";
 import { type EditMode, editModeSchema } from "@/modules/tools";
 import type {
 	ConfigDocument,
 	ConfigScope,
 	ConfigSnapshot,
 } from "@/shared/config/config-store";
-import type { SessionId } from "@/shared/identifiers";
 import type {
 	BooleanSettingDescriptor,
 	SelectSettingDescriptor,
@@ -440,16 +438,14 @@ const changeEditMode = async (
 	value: EditMode | undefined,
 	context: SettingOperationContext
 ): Promise<void> => {
-	const sessionId = context.runtime.sessionId;
-	if (sessionId === undefined) {
+	if (context.runtime.sessionId === undefined) {
 		throw new Error("Edit Mode requires an open session.");
 	}
-	const store = context.runtime.sessionStore ?? getSessionStore();
-	if (store.setEditMode === undefined) {
+	if (context.runtime.setEditMode === undefined) {
 		throw new Error("Session storage does not support Edit Mode.");
 	}
 	const next = value ?? "hashline";
-	await store.setEditMode(sessionId as SessionId, next);
+	await context.runtime.setEditMode(next);
 	context.runtime.onEditModeChanged?.(next);
 };
 

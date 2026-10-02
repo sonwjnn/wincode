@@ -6,12 +6,17 @@ import {
 } from "../modules/application/rpc/protocol";
 import { createRpcRequestHandler } from "../modules/application/rpc/request-handler";
 import type {
+	RpcAssembly,
 	RpcSessionState,
 	RpcSubmissionDraft,
 	RuntimeModules,
 	Selection,
 } from "../modules/application/rpc/types";
 import { readSubmission } from "../modules/application/rpc/validation";
+import type {
+	AttachmentReference,
+	AttachmentReferenceResolver,
+} from "../modules/sessions/attachment-reference";
 import type {
 	SessionSteeringMessage,
 	SessionSubmissionEvent,
@@ -27,10 +32,6 @@ import type {
 	SessionStore,
 	SessionSubmissionAdmission,
 } from "../modules/sessions/host/session-rpc";
-import type {
-	AttachmentReference,
-	SessionAttachmentStore,
-} from "../modules/sessions/storage/attachment-store";
 import type { SessionSendOutcome } from "../modules/sessions/submission-types";
 
 type CapturedApproval = Readonly<{
@@ -71,6 +72,7 @@ const createHandler = ({
 	selected = true,
 	active = false,
 	retryableSubmission,
+	attachmentStore,
 	send,
 }: Readonly<{
 	admission?: SessionSubmissionAdmission;
@@ -80,6 +82,7 @@ const createHandler = ({
 	active?: boolean;
 	steeringAdmission?: SessionSteeringAdmission;
 	retryableSubmission?: SessionSteeringMessage;
+	attachmentStore?: NonNullable<SessionStore["attachmentStore"]>;
 	send?: (
 		input: SessionSendInput,
 		emit: (event: SessionSubmissionEvent) => void
@@ -165,6 +168,13 @@ const createHandler = ({
 			}),
 	} as unknown as SessionHost;
 	const state: RpcSessionState = {
+		...(attachmentStore === undefined
+			? {}
+			: {
+					assembly: fromPartial<RpcAssembly>({
+						store: fromPartial<SessionStore>({ attachmentStore }),
+					}),
+				}),
 		boundSessionId: "session-1",
 		lifecycle: "bound",
 		shutdownRequested: false,
@@ -385,13 +395,12 @@ test("session submit uses verified attachment dimensions instead of client metad
 			},
 		},
 		"submission",
-		fromPartial<SessionAttachmentStore>({
+		{
 			resolve: async (value: AttachmentReference) => ({
 				availability: "available",
-				bytes: Uint8Array.from([1, 2, 3]),
 				reference: { ...value, height: 1024, width: 1024 },
 			}),
-		})
+		} satisfies AttachmentReferenceResolver
 	);
 
 	expect(submission.files[0]).toMatchObject({
@@ -401,6 +410,42 @@ test("session submit uses verified attachment dimensions instead of client metad
 		url: `attachment://${attachmentId}`,
 		width: 1024,
 	});
+});
+
+test("session submit rejects missing or corrupt stored attachments before admission", async () => {
+	const attachmentId = `v1-${"a".repeat(64)}`;
+	for (const availability of ["missing", "corrupt"] as const) {
+		const controls = createHandler({
+			attachmentStore: fromPartial<
+				NonNullable<SessionStore["attachmentStore"]>
+			>({
+				resolve: async (reference: AttachmentReference) => ({
+					availability,
+					reference,
+				}),
+			}),
+		});
+
+		await expect(
+			controls.handler(
+				request("submit-reference", "session/submit", {
+					submission: {
+						files: [
+							{
+								attachmentId,
+								byteLength: 3,
+								filename: "diagram.png",
+								mediaType: "image/png",
+								type: "file",
+							},
+						],
+						text: "Review the diagram",
+					},
+				})
+			)
+		).rejects.toMatchObject({ code: "submission_rejected" });
+		expect(controls.inputs).toHaveLength(0);
+	}
 });
 
 test("session submit rejects arbitrary attachment paths before admission", async () => {

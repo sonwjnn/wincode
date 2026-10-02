@@ -32,7 +32,8 @@
 - [ ] Code follows the project's style guidelines
 - [ ] Self-reviewed the code for obvious errors
 - [ ] Added or updated tests where applicable
-- [ ] Existing tests pass locally
+- [ ] Required local tests passes
+- [ ] Required PR CI tests passes
 - [ ] Updated documentation if needed
 - [ ] No new warnings or console errors introduced
 

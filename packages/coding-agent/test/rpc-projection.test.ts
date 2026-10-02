@@ -5,7 +5,7 @@ import {
 	submissionFromWaiting,
 } from "../modules/application/rpc/projection";
 import { readSubmission } from "../modules/application/rpc/validation";
-import { MAX_ATTACHMENT_BYTES } from "../modules/sessions/storage/attachment-store";
+import { MAX_ATTACHMENT_BYTES } from "../modules/sessions/attachment-reference";
 
 test("public Agent Turn projection preserves empty delta events", () => {
 	for (const type of ["text-delta", "reasoning-delta"] as const) {

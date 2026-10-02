@@ -131,6 +131,26 @@
           }
         }
       }
+    },
+    {
+      "includes": ["packages/coding-agent/modules/application/rpc/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@/modules/sessions/storage/attachment-store": "Resolve attachment references through the Session-owned contract instead of importing blob storage.",
+                  "@/modules/sessions/storage/attachment-store.ts": "Resolve attachment references through the Session-owned contract instead of importing blob storage.",
+                  "../../sessions/storage/attachment-store": "Resolve attachment references through the Session-owned contract instead of importing blob storage.",
+                  "../../sessions/storage/attachment-store.ts": "Resolve attachment references through the Session-owned contract instead of importing blob storage."
+                }
+              }
+            }
+          }
+        }
+      }
     }
   ],
   "extends": ["ultracite/biome/core", "ultracite/biome/react"]

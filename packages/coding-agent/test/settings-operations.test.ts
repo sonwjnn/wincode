@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { isBoolean, isUndefined } from "@wincode/runtime-utils";
+import {
+	EDIT_MODE_SETTING,
+	EDIT_MODE_SETTING_ID,
+} from "@/modules/settings/catalog";
 import { createSettingsOperations } from "@/modules/settings/operations";
 import type {
 	BooleanSettingDescriptor,
 	SettingRuntimeContext,
 } from "@/modules/settings/types";
+import type { EditMode } from "@/modules/tools";
 import { createConfigStore } from "@/shared/config/config-store";
 import {
 	TEST_CONFIG_ROOT as CONFIG_ROOT,
@@ -124,6 +129,36 @@ describe("createSettingsOperations", () => {
 
 		await operations.resetValue("clipboard.copyOnSelect");
 		expect(changes).toEqual([false, true]);
+	});
+	test("writes and resets Edit Mode through the session callback before notifying the view", async () => {
+		const writes: EditMode[] = [];
+		const order: string[] = [];
+		const operations = createSettingsOperations({
+			catalog: [EDIT_MODE_SETTING],
+			configStore: createTestStore({}),
+			runtime: {
+				onEditModeChanged: (mode) => {
+					order.push(`notify:${mode}`);
+				},
+				sessionId: "session-1",
+				setEditMode: async (mode) => {
+					writes.push(mode);
+					order.push(`persist:${mode}`);
+				},
+			},
+			workspace: WORKSPACE,
+		});
+
+		await operations.setValue(EDIT_MODE_SETTING_ID, "replace");
+		await operations.resetValue(EDIT_MODE_SETTING_ID);
+
+		expect(writes).toEqual(["replace", "hashline"]);
+		expect(order).toEqual([
+			"persist:replace",
+			"notify:replace",
+			"persist:hashline",
+			"notify:hashline",
+		]);
 	});
 
 	test("resolves Auto-compact without a model and migrates project overrides to global", async () => {

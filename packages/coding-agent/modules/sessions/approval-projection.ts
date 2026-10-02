@@ -1,7 +1,8 @@
 import { isUndefined, omitUndefined } from "@wincode/runtime-utils";
 import type { ApprovalPanelEntry } from "@/shared/providers/approval/approval-panels-provider";
 import type { ApprovalOutcome } from "@/shared/providers/approval/types";
-import type { SessionApproval, SessionApprovalOutcome } from "./engine/types";
+import type { SessionApprovalOutcome } from "./approval-contract";
+import type { SessionApproval } from "./engine/types";
 
 /** The panel's vocabulary for one approval settlement. */
 const approvalOutcomeOf = (

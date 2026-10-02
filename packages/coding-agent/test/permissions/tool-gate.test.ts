@@ -12,11 +12,11 @@ import {
 	externalParentDirectoryGlob,
 	type PermissionService,
 } from "@/modules/permissions";
+import type { SessionApprovalOutcome } from "@/modules/sessions/approval-contract";
 import { AgentSessionImpl } from "@/modules/sessions/engine/agent-session";
 import type {
 	AgentSession,
 	AgentSessionPorts,
-	SessionApprovalOutcome,
 } from "@/modules/sessions/engine/types";
 import {
 	createToolGate,

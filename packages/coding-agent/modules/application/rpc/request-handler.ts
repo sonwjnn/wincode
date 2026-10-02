@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import type { AttachmentReferenceResolver } from "@/modules/sessions/attachment-reference";
 import { createSkillSnapshot } from "@/modules/skills";
 import { getErrorCode } from "@/shared/utils/error-log-fields";
 import type {
@@ -88,6 +89,25 @@ const mapSessionWriterError = (
 		);
 	}
 	return;
+};
+const createAttachmentReferenceResolver = (
+	attachmentStore: NonNullable<RpcAssembly["store"]>["attachmentStore"]
+): AttachmentReferenceResolver | undefined => {
+	if (attachmentStore === undefined) {
+		return;
+	}
+	return {
+		resolve: async (reference) => {
+			const resolution = await attachmentStore.resolve(reference);
+			if (resolution.availability !== "available") {
+				return { availability: "unavailable" };
+			}
+			return {
+				availability: "available",
+				reference: resolution.reference,
+			};
+		},
+	};
 };
 
 export const createRpcRequestHandler = (
@@ -265,7 +285,7 @@ export const createRpcRequestHandler = (
 			const draft = await readSubmission(
 				params,
 				"initialSubmission",
-				store.attachmentStore
+				createAttachmentReferenceResolver(store.attachmentStore)
 			);
 			const submission = await prepareSubmission(draft);
 			const turnId = activeRuntime.createAgentTurnId();
@@ -447,7 +467,9 @@ export const createRpcRequestHandler = (
 			const draft = await readSubmission(
 				params,
 				"submission",
-				state.assembly?.store?.attachmentStore
+				createAttachmentReferenceResolver(
+					state.assembly?.store?.attachmentStore
+				)
 			);
 			const submission = await prepareSubmission(draft);
 			const selection =

@@ -375,9 +375,12 @@ outcomes. Token deltas and other incomplete Agent Turn Events are not Session
 Records. _Avoid_: stream chunk, event log
 
 **Attachment Reference**:
-A durable Session content part that identifies externally stored or
-workspace-backed content without embedding its transient model expansion.
-_Avoid_: expanded attachment, file-content message
+A durable Session content part that identifies externally stored content by its Attachment Identifier and metadata, without carrying attachment bytes.
+_Avoid_: File Mention, expanded attachment, file-content message
+
+**File Mention**:
+A workspace-scoped reference to a file or directory whose bounded content is retained with the Session and can be expanded into model context.
+_Avoid_: Attachment Reference, arbitrary filesystem path
 
 **Operational Failure**:
 An expected failure during an Agent Turn, represented with a stable code, source,

@@ -18,11 +18,7 @@ import type {
 } from "@wincode/ai/models";
 import { logger } from "@wincode/runtime-utils";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
-import {
-	attachmentReferenceToFilePart,
-	createMemoryAttachmentMetadataRepository,
-	createSessionAttachmentStore,
-} from "@/modules/sessions/attachments";
+import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
 import { createSessionCompaction } from "@/modules/sessions/compaction/compaction";
 import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
 import { compactionSummaryMessageId } from "@/modules/sessions/compaction/summary-message";
@@ -44,6 +40,10 @@ import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
+import {
+	createMemoryAttachmentMetadataRepository,
+	createSessionAttachmentStore,
+} from "@/modules/sessions/storage/attachment-store";
 import {
 	buildUserSessionRecord,
 	projectSessionRecords,

@@ -31,7 +31,7 @@ import {
 	parseShellCommandNodes,
 	type ShellCommandNode,
 } from "@/modules/permissions/shell-command";
-import type { SessionApprovalOutcome } from "@/modules/sessions/engine/types";
+import type { SessionApprovalOutcome } from "@/modules/sessions/approval-contract";
 import type { WorkspacePolicy } from "@/modules/tools";
 import {
 	byteLength,

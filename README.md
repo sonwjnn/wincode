@@ -217,10 +217,13 @@ bun install --frozen-lockfile
 | `bun run dev:cli` | Run the CLI in watch mode |
 | `bun run test` | Run the repository Default test portfolio |
 | `bun run test:e2e` | Run each E2E journey in its own process |
-| `bun test path/to/file.test.ts` | Run one test file directly during development |
+| `bun test --timeout=30000 path/to/file.test.ts` | Run one test file directly during development, not the full portfolio |
 | `bun run check-types` | Type-check every workspace package |
 | `bun run check` | Run Ultracite checks |
 | `bun run fix` | Apply Ultracite formatting and safe fixes |
+
+Use `bun run test` and `bun run test:e2e` for full portfolios. Bare `bun test` uses Bun's 5-second default timeout and bypasses the repository runner's discovery and environment setup.
+
 
 Tests belong to the owning package's `test/` tree. Keep small package test trees
 flat; add only shallow product-area directories when test volume or cohesive

@@ -1,15 +1,15 @@
 import { isPlainObject } from "@wincode/runtime-utils";
-import type { SessionFilePart } from "@/modules/sessions/message";
 import type {
 	AttachmentReference,
-	SessionAttachmentStore,
-} from "@/modules/sessions/storage/attachment-store";
+	AttachmentReferenceResolver,
+} from "@/modules/sessions/attachment-reference";
 import {
 	attachmentReferenceSchema,
 	attachmentReferenceToFilePart,
 	DEFAULT_MODEL_ATTACHMENT_BUDGET,
 	MAX_ATTACHMENT_BYTES,
-} from "@/modules/sessions/storage/attachment-store";
+} from "@/modules/sessions/attachment-reference";
+import type { SessionFilePart } from "@/modules/sessions/message";
 import type { RpcParams, RpcRequest } from "./protocol";
 import { RPC_ERROR_CODES } from "./protocol";
 import {
@@ -176,7 +176,7 @@ const readInlineFile = (
 
 const readAttachmentReference = async (
 	value: unknown,
-	attachmentStore: SessionAttachmentStore | undefined,
+	resolver: AttachmentReferenceResolver | undefined,
 	maximumBytes: number
 ): Promise<{ file: SessionFilePart; byteLength: number }> => {
 	const record = asRecord(value);
@@ -191,13 +191,13 @@ const readAttachmentReference = async (
 		!parsed.success ||
 		parsed.data.byteLength > MAX_ATTACHMENT_BYTES ||
 		parsed.data.byteLength > maximumBytes ||
-		attachmentStore === undefined
+		resolver === undefined
 	) {
 		throw rejectedSubmission("Attachment reference is invalid or unavailable.");
 	}
 	let resolvedReference: AttachmentReference = parsed.data;
 	try {
-		const resolved = await attachmentStore.resolve(parsed.data);
+		const resolved = await resolver.resolve(parsed.data);
 		if (resolved.availability !== "available") {
 			throw rejectedSubmission("Attachment reference is not available.");
 		}
@@ -216,7 +216,7 @@ const readAttachmentReference = async (
 
 const readSubmissionFiles = async (
 	value: unknown,
-	attachmentStore: SessionAttachmentStore | undefined
+	resolver: AttachmentReferenceResolver | undefined
 ): Promise<SessionFilePart[]> => {
 	if (value === undefined) {
 		return [];
@@ -234,7 +234,7 @@ const readSubmissionFiles = async (
 		const parsed =
 			record?.attachmentId === undefined
 				? readInlineFile(candidate, maximumBytes)
-				: await readAttachmentReference(record, attachmentStore, maximumBytes);
+				: await readAttachmentReference(record, resolver, maximumBytes);
 		totalBytes += parsed.byteLength;
 		if (totalBytes > MAX_ATTACHMENT_BYTES) {
 			throw rejectedSubmission(
@@ -322,7 +322,7 @@ const readSkillIntent = (value: unknown): RpcSkillIntent | undefined => {
 export const readSubmission = async (
 	params: RpcParams,
 	key: "initialSubmission" | "submission",
-	attachmentStore?: SessionAttachmentStore
+	resolver?: AttachmentReferenceResolver
 ): Promise<RpcSubmissionDraft> => {
 	const value = asRecord(params[key]);
 	if (
@@ -366,7 +366,7 @@ export const readSubmission = async (
 	}
 	const files = await readSubmissionFiles(
 		compositionRecord?.files ?? value.files,
-		attachmentStore
+		resolver
 	);
 	if (
 		text.trim().length === 0 &&
