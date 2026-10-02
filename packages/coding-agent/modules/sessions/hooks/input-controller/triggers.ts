@@ -1,3 +1,4 @@
+import type { CommandSuggestionScope } from "@/modules/commands/command-controller";
 import { detectFileMentionAtCursor } from "@/modules/file-mentions";
 
 const WHITESPACE_PATTERN = /\s/u;
@@ -6,7 +7,7 @@ const WHITESPACE_PATTERN = /\s/u;
  * Where the slash stands: `root` opens the full command menu at the start of
  * the prompt, `skill` opens the Skill list on a `/` token inside prose.
  */
-export type CommandTriggerMode = "root" | "skill";
+export type CommandTriggerMode = CommandSuggestionScope;
 
 export type CommandTrigger = {
 	end: number;

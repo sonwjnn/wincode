@@ -66,17 +66,19 @@ const markerRemovals = (
 	text: string,
 	intents: readonly RangedIntent[]
 ): TextSpan[] => {
-	const spans = intents.map(({ start, end }) => {
-		const following = text[end] ?? "";
-		const preceding = start > 0 ? (text[start - 1] ?? "") : "";
-		if (WHITESPACE_PATTERN.test(following)) {
-			return { end: end + 1, start };
-		}
-		if (WHITESPACE_PATTERN.test(preceding)) {
-			return { end, start: start - 1 };
-		}
-		return { end, start };
-	});
+	const spans = intents
+		.map(({ start, end }) => {
+			const following = text[end] ?? "";
+			const preceding = start > 0 ? (text[start - 1] ?? "") : "";
+			if (WHITESPACE_PATTERN.test(following)) {
+				return { end: end + 1, start };
+			}
+			if (WHITESPACE_PATTERN.test(preceding)) {
+				return { end, start: start - 1 };
+			}
+			return { end, start };
+		})
+		.toSorted((left, right) => left.start - right.start);
 	const merged: Array<{ end: number; start: number }> = [];
 	for (const span of spans) {
 		const previous = merged.at(-1);

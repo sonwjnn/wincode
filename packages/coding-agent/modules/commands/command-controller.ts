@@ -207,6 +207,9 @@ export function createCommandController(
 			const builtinIntent = input.hasAttachments
 				? undefined
 				: input.intents.find((intent) => intent.kind === "builtin");
+			// A selected Built-in runs independently: its trailing text becomes
+			// the command argument, and co-selected Skill or Custom Command
+			// intents are not resolved or stripped.
 			const builtin =
 				builtinIntent === undefined
 					? undefined
