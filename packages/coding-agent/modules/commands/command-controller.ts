@@ -114,10 +114,12 @@ export function createCommandController(
 		}),
 		...options.customCommands,
 	];
+	const skillSearch =
+		skills.length > 0 ? createSkillSearchCommandSpec(skills.length) : undefined;
 	const allSuggestions = [
+		...(skillSearch === undefined ? [] : [skillSearch]),
 		...baseCommands,
 		...skills,
-		...(skills.length > 0 ? [createSkillSearchCommandSpec(skills.length)] : []),
 	];
 	const itemById = new Map(
 		allSuggestions.map((item) => [getSuggestionId(item), item])
@@ -133,11 +135,9 @@ export function createCommandController(
 			const candidates = isSkillSearch
 				? skills
 				: [
+						...(skillSearch === undefined ? [] : [skillSearch]),
 						...baseCommands,
 						...(isBareSkillSearch ? skills : []),
-						...(skills.length > 0
-							? [createSkillSearchCommandSpec(skills.length)]
-							: []),
 					];
 			const matches = filterCommandItems(candidates, query);
 			return {

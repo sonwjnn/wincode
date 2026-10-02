@@ -13,8 +13,8 @@ Slash-command registry and dispatch for the CLI chat input.
    capabilities to hide those rows without action-specific filter flags.
 2. **Items** — `CommandController` builds the `/` overlay from Built-in Commands
    and Custom Commands, adding one `skill:` aggregate when Skills are discoverable.
-   Selecting the aggregate enters `/skill:` search. Skills fuzzy-match names and
-   descriptions in that namespace search and in nonempty bare slash queries. `/skill`
+   Selecting the aggregate enters `/skill:` search. Skills fuzzy-match names only
+   in that namespace search and in nonempty bare slash queries. `/skill`
    (the namespace chooser) is excluded; `/skills` has no built-in command of its own
    but may fuzzy-match Skill rows like any other bare query.
 3. **Interaction** — `createCommandController` owns suggestion discovery and

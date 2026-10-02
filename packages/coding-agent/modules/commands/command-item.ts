@@ -1,9 +1,5 @@
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
-import {
-	getSkillSearchText,
-	SKILL_NAMESPACE_PREFIX,
-	type Skill,
-} from "@/modules/skills";
+import { SKILL_NAMESPACE_PREFIX, type Skill } from "@/modules/skills";
 import { fuzzyMatch } from "@/shared/fuzzy";
 import type { CommandSpec } from "./commands";
 import type { BaseSpec } from "./types";
@@ -56,7 +52,7 @@ export const createSkillSearchCommandSpec = (
 });
 
 /**
- * Commands match by label prefix. Skills fuzzy-match names and descriptions,
+ * Commands match by label prefix. Skills fuzzy-match names only,
  * with or without the `skill:` namespace in the query.
  */
 const matchesCommandQuery = (item: CommandItem, query: string): boolean => {
@@ -72,7 +68,7 @@ const matchesCommandQuery = (item: CommandItem, query: string): boolean => {
 	const skillQuery = normalized.startsWith(SKILL_NAMESPACE_PREFIX)
 		? normalized.slice(SKILL_NAMESPACE_PREFIX.length)
 		: normalized;
-	return fuzzyMatch(skillQuery, getSkillSearchText(item)).matches;
+	return fuzzyMatch(skillQuery, item.name).matches;
 };
 
 export const filterCommandItems = (
