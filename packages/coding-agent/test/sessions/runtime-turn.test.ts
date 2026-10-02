@@ -112,6 +112,39 @@ test("keeps inline file parts in the Agent Turn model input", () => {
 	]);
 });
 
+test("places the Skill context before the user message it was selected for", () => {
+	const turn = buildAgentTurn({
+		agent: agentId("build"),
+		modelMessages: [
+			{
+				id: sessionMessageId("skill-message"),
+				parts: [{ text: "Review the auth flow", type: "text" }],
+				role: "user",
+			},
+		],
+		modelTarget: createTurn().model,
+		resolvedAgent: buildAgent,
+		skill: {
+			contentHash: "hash-1",
+			instructions: "Review carefully.",
+			name: "review",
+			source: "explicit",
+		},
+		turnId: agentTurnId("turn-skill-order"),
+	});
+
+	expect(turn.input.messages.map(({ role }) => role)).toEqual(["user", "user"]);
+	expect(turn.input.messages[0]?.parts).toEqual([
+		{
+			text: '<untrusted-skill-context name="review" source="explicit" content-hash="hash-1">\nReview carefully.\n</untrusted-skill-context>',
+			type: "text",
+		},
+	]);
+	expect(turn.input.messages[1]?.parts).toEqual([
+		{ text: "Review the auth flow", type: "text" },
+	]);
+});
+
 class AbortOnSecondReadSignal extends EventTarget implements AbortSignal {
 	private readCount = 0;
 	readonly onabort: AbortSignal["onabort"] = null;

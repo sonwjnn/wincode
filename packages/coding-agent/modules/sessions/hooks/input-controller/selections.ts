@@ -24,8 +24,8 @@ export const commandInsertionSeparator = (
 
 /**
  * Shifts every tracking range through a text edit and drops each selection
- * whose marker the edit touched, so a tracked intent always matches the marker
- * the user can still see.
+ * whose marker no longer stands at the shifted range, so a tracked intent
+ * always matches the marker the user can still see.
  */
 export const applyTextEdit = (
 	selections: readonly TrackedCommandSelection[],
@@ -35,17 +35,14 @@ export const applyTextEdit = (
 	if (previousText === nextText) {
 		return [...selections];
 	}
-	const { prefixLength, suffixLength } = resolveTextEditRegion(
-		previousText,
-		nextText
-	);
+	const { prefixLength } = resolveTextEditRegion(previousText, nextText);
 	const delta = nextText.length - previousText.length;
 	return selections.flatMap((selection) => {
 		let { start, end } = selection;
+		// An edit before the marker can repeat its opening characters and still
+		// leave the marker intact, so the shifted marker check below decides
+		// instead of the prefix/suffix split alone.
 		if (end > prefixLength) {
-			if (start < previousText.length - suffixLength) {
-				return [];
-			}
 			start += delta;
 			end += delta;
 		}

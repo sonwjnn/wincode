@@ -774,11 +774,21 @@ export const buildAgentTurn = ({
 		? (role ?? "primary")
 		: "subagent";
 	if (!isUndefined(skill)) {
-		messages.push({
+		// The Skill context belongs to the user message it was selected for:
+		// the model reads the instructions first, then the prose.
+		const skillContext = {
 			id: toSessionMessageId("skill-context"),
 			parts: [{ text: formatSkillUserContext(skill), type: "text" }],
 			role: "user",
-		});
+		} satisfies (typeof messages)[number];
+		const userIndex = messages.findLastIndex(
+			(message) => message.role === "user"
+		);
+		if (userIndex === -1) {
+			messages.push(skillContext);
+		} else {
+			messages.splice(userIndex, 0, skillContext);
+		}
 	}
 	return {
 		agent: {

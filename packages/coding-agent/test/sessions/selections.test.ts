@@ -28,6 +28,13 @@ describe("applyTextEdit", () => {
 		expect(applyTextEdit([review(0)], previous, next)).toEqual([review(0)]);
 	});
 
+	test("keeps the intent when an insertion repeats the marker's opening characters", () => {
+		const previous = "/skill:review please review the auth flow";
+		const next = `/${previous}`;
+
+		expect(applyTextEdit([review(0)], previous, next)).toEqual([review(1)]);
+	});
+
 	test("drops the intent when the marker itself is edited", () => {
 		const previous = "please /skill:review";
 		const next = "please /skill:reviw";
