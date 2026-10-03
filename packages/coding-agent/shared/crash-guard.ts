@@ -86,9 +86,7 @@ export const createCrashHandler = (deps: CrashGuardDeps) => {
 };
 
 /** Install the process-level crash net for every application mode. */
-export const installCrashGuard = (
-	overrides: Partial<CrashGuardDeps> = {}
-): void => {
+export const installCrashGuard = (): void => {
 	const deps: CrashGuardDeps = {
 		exit: (code) => process.exit(code),
 		flushLogs: () => logger.flush(),
@@ -97,7 +95,6 @@ export const installCrashGuard = (
 		writeStderr: (text) => {
 			process.stderr.write(text);
 		},
-		...overrides,
 	};
 	const handleFatal = createCrashHandler(deps);
 	process.on("uncaughtException", (error) => {

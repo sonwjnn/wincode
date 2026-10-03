@@ -22,18 +22,18 @@ const MAX_OCCURRENCE_KEYS = 64;
 
 const occurrenceCounts = new Map<string, number>();
 
-const occurrenceKey = (error: unknown): string | null => {
+const occurrenceKey = (error: unknown, scope: UiErrorScope): string | null => {
 	if (isError(error)) {
-		return `${error.name}: ${error.message}`;
+		return `${scope}\u0000${error.name}: ${error.message}`;
 	}
 	if (isString(error)) {
-		return `string: ${error}`;
+		return `${scope}\u0000string: ${error}`;
 	}
 	return null;
 };
 
-const countOccurrence = (error: unknown): number => {
-	const key = occurrenceKey(error);
+const countOccurrence = (error: unknown, scope: UiErrorScope): number => {
+	const key = occurrenceKey(error, scope);
 	if (key === null) {
 		return 1;
 	}
@@ -69,11 +69,11 @@ export function ErrorFallbackView({
 	useEffect(() => {
 		// Count committed mounts only: React discards some concurrent renders, so
 		// counting during render would over-report.
-		const count = countOccurrence(error);
+		const count = countOccurrence(error, scope);
 		if (count > 1) {
 			setOccurrence(count);
 		}
-	}, [error]);
+	}, [error, scope]);
 
 	// Depend on the stable push/pop callbacks, not the context object: the
 	// provider recreates its value on every render, and re-registering from an

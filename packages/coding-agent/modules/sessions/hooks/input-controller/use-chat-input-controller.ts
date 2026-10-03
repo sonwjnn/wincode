@@ -67,7 +67,9 @@ export function useChatInputController({
 	const [activeTrigger, setActiveTrigger] = useState<ActiveTrigger | null>(
 		null
 	);
-	const [cursorOffset, setCursorOffset] = useState<number | null>(null);
+	const [cursorOffset, setCursorOffset] = useState<number | null>(
+		initialDraft.length === 0 ? null : initialDraft.length
+	);
 	const [fileMentionOptions, setFileMentionOptions] = useState<
 		FileMentionOption[]
 	>([]);

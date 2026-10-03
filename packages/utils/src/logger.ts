@@ -187,10 +187,11 @@ const dateString = (date: Date): string => date.toISOString().slice(0, 10);
 const isMissingPathError = (error: unknown): boolean =>
 	isObjectLike(error) && "code" in error && error.code === "ENOENT";
 
+/** Whether verbose debug diagnostics are enabled for this process. */
+export const isDebugMode = (): boolean => process.env.WINCODE_DEBUG === "1";
+
 const resolveLogRoot = (): string =>
-	process.env.WINCODE_DEBUG === "1"
-		? process.cwd()
-		: process.env.HOME || os.homedir();
+	isDebugMode() ? process.cwd() : process.env.HOME || os.homedir();
 
 const resolveLogDirectory = (): string =>
 	path.join(resolveLogRoot(), ".wincode", "logs");
@@ -200,9 +201,6 @@ const logFileName = (date: Date): string => `wincode.${dateString(date)}.log`;
 /** Absolute path of the diagnostics file that today's writes land in. */
 export const resolveLogFilePath = (): string =>
 	path.join(resolveLogDirectory(), logFileName(new Date()));
-
-/** Whether verbose debug diagnostics are enabled for this process. */
-export const isDebugMode = (): boolean => process.env.WINCODE_DEBUG === "1";
 
 let lastRetentionCheck: string | undefined;
 const removeExpiredLogs = async (

@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { readUtf8File } from "@wincode/runtime-utils";
@@ -12,7 +11,7 @@ const crashGuardModule = path.join(
 );
 
 const runCrashingProcess = async (script: string) => {
-	const home = mkdtempSync(path.join(tmpdir(), "wincode-crash-guard-"));
+	const home = await mkdtemp(path.join(tmpdir(), "wincode-crash-guard-"));
 	const environment: Record<string, string> = {};
 	for (const [key, value] of Object.entries(process.env)) {
 		if (value !== undefined && key !== "WINCODE_DEBUG") {

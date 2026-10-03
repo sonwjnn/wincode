@@ -1574,6 +1574,16 @@ describe("ChatShell composer draft", () => {
 					frame.includes("draft survives remount")
 				)
 			).toContain("draft survives remount");
+
+			// The restored draft must leave the caret at the end, not at offset 0.
+			await act(async () => {
+				await setup.setup.mockInput.typeText("!");
+			});
+			expect(
+				await setup.setup.waitForFrame((frame) =>
+					frame.includes("draft survives remount!")
+				)
+			).toContain("draft survives remount!");
 		} finally {
 			writeComposerDraft("draft-test-key", "");
 			setup.setup.renderer.destroy();
