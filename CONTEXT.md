@@ -470,3 +470,7 @@ _Avoid_: System Prompt, prompt renderer, Agent Turn
 **Compaction Prompt**:
 The instruction content used to summarize completed Session Records for a later Agent Turn. It is separate from the System Prompt and does not become part of the coding Agent's turn-scoped instructions.
 _Avoid_: System Prompt, session instructions
+
+**Compaction Summary**:
+A concise handoff of the user's goal, constraints, completed/current/blocked work, decisions, next steps, critical context, and relevant files, derived from the messages selected for compaction. It helps a later Agent Turn continue the work; message coverage and compaction boundaries are separate metadata.
+_Avoid_: summary text, compacted transcript

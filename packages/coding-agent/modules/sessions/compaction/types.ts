@@ -67,7 +67,6 @@ export type SummaryGeneratorInput = {
 	reasoningMode?: ReasoningMode;
 	previousSummary?: CompactionSummary;
 	serializedMessages: string;
-	summaryMessages?: SessionMessage[];
 	focus?: string;
 	maxOutputTokens?: number;
 	signal?: AbortSignal;

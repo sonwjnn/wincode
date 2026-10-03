@@ -128,7 +128,7 @@ test("compacts manually through the UI and uses the summary on the next turn", a
 			throw new Error("The summary provider was not called.");
 		}
 		expect(summaryRequest.text).toContain(
-			"Public focus: preserve database decisions"
+			"Focus (emphasis only):\n<wincode-focus>preserve database decisions</wincode-focus>"
 		);
 
 		await act(async () => {
