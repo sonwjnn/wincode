@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import {
@@ -15,6 +15,17 @@ import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { ErrorBoundary } from "@/shared/ui/error-boundary";
 import { ErrorFallbackView } from "@/shared/ui/error-fallback";
+import {
+	createLoggerHome,
+	withDebugProject,
+} from "../../../utils/test/logger-home";
+
+// Boundary logging must not append to the developer's real diagnostics file.
+const loggerHome = await createLoggerHome("wincode-boundary-");
+
+afterAll(async () => {
+	await loggerHome.cleanup();
+});
 
 const flushUi = async (setup: TestRendererSetup): Promise<void> => {
 	await act(async () => {
@@ -206,32 +217,33 @@ describe("root error boundary", () => {
 	});
 
 	test("debug mode rethrows to the outer boundary instead of rendering the fallback", async () => {
-		process.env.WINCODE_DEBUG = "1";
 		const Child = createFailingChild(new Error("first render failed"));
-		const setup = await testRender(
-			<ThemeProvider themeName={DEFAULT_THEME.name}>
-				<ErrorRecoveryProvider quit={() => undefined}>
-					<ErrorBoundary renderFallback={() => <text>outer caught</text>}>
-						<ErrorBoundary
-							renderFallback={({ error, reset }) => (
-								<ErrorFallbackView error={error} reset={reset} scope="root" />
-							)}
-						>
-							<Child />
+		await withDebugProject(loggerHome.home, async () => {
+			const setup = await testRender(
+				<ThemeProvider themeName={DEFAULT_THEME.name}>
+					<ErrorRecoveryProvider quit={() => undefined}>
+						<ErrorBoundary renderFallback={() => <text>outer caught</text>}>
+							<ErrorBoundary
+								renderFallback={({ error, reset }) => (
+									<ErrorFallbackView error={error} reset={reset} scope="root" />
+								)}
+							>
+								<Child />
+							</ErrorBoundary>
 						</ErrorBoundary>
-					</ErrorBoundary>
-				</ErrorRecoveryProvider>
-			</ThemeProvider>,
-			{ height: 24, kittyKeyboard: true, width: 90 }
-		);
-		try {
-			const frame = await setup.waitForFrame((current) =>
-				current.includes("outer caught")
+					</ErrorRecoveryProvider>
+				</ThemeProvider>,
+				{ height: 24, kittyKeyboard: true, width: 90 }
 			);
-			expect(frame).not.toContain("Something went wrong");
-		} finally {
-			setup.renderer.destroy();
-		}
+			try {
+				const frame = await setup.waitForFrame((current) =>
+					current.includes("outer caught")
+				);
+				expect(frame).not.toContain("Something went wrong");
+			} finally {
+				setup.renderer.destroy();
+			}
+		});
 	});
 });
 
