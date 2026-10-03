@@ -55,14 +55,14 @@ const describeFatal = (error: unknown): string => {
 
 /**
  * Build the handler that turns an escaping error into diagnostics, teardown,
- * and a non-zero exit. Re-entry exits immediately: a second fatal error while
- * the first is still being handled must not duplicate writes or teardowns.
+ * and a non-zero exit. A fatal error arriving while the first is still being
+ * handled is ignored: aborting the in-flight handler would drop its log write,
+ * teardown, and exit.
  */
 export const createCrashHandler = (deps: CrashGuardDeps) => {
 	let handling = false;
 	return async (kind: FatalErrorKind, error: unknown): Promise<void> => {
 		if (handling) {
-			deps.exit(1);
 			return;
 		}
 		handling = true;
@@ -78,10 +78,13 @@ export const createCrashHandler = (deps: CrashGuardDeps) => {
 			}
 		}
 		await deps.flushLogs().catch(() => undefined);
-		deps.writeStderr(
-			`wincode: unexpected error: ${singleLine(describeFatal(error))} (log: ${logPath})\n`
-		);
-		deps.exit(1);
+		try {
+			deps.writeStderr(
+				`wincode: unexpected error: ${singleLine(describeFatal(error))} (log: ${logPath})\n`
+			);
+		} finally {
+			deps.exit(1);
+		}
 	};
 };
 

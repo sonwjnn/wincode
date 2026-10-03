@@ -106,7 +106,7 @@ describe("crash guard", () => {
 		expect(harness.exitCodes).toEqual([1]);
 	});
 
-	test("a second fatal error does not repeat diagnostics or teardown", async () => {
+	test("a duplicate fatal error does not repeat diagnostics, teardown, or exit", async () => {
 		const harness = createHarness();
 		await runWithTeardown(
 			() => {
@@ -123,8 +123,45 @@ describe("crash guard", () => {
 		expect(harness.events.filter((event) => event === "teardown")).toHaveLength(
 			1
 		);
+		expect(harness.events.filter((event) => event === "stderr")).toHaveLength(
+			1
+		);
 		expect(harness.stderr).toContain("first");
-		expect(harness.exitCodes).toEqual([1, 1]);
+		expect(harness.exitCodes).toEqual([1]);
+	});
+
+	test("a fatal error arriving while the first is handled does not abort it", async () => {
+		const harness = createHarness();
+		const logStarted = Promise.withResolvers<void>();
+		const releaseLog = Promise.withResolvers<void>();
+		const baseLogError = harness.deps.logError;
+		harness.deps.logError = async (message, fields) => {
+			logStarted.resolve(undefined);
+			await releaseLog.promise;
+			await baseLogError(message, fields);
+		};
+		await runWithTeardown(
+			() => {
+				harness.events.push("teardown");
+			},
+			async () => {
+				const handle = createCrashHandler(harness.deps);
+				const first = handle("uncaught-exception", new Error("first"));
+				await logStarted.promise;
+				await handle("unhandled-rejection", new Error("second"));
+				releaseLog.resolve(undefined);
+				await first;
+			}
+		);
+
+		expect(harness.events).toEqual([
+			"log",
+			"teardown",
+			"flush",
+			"stderr",
+			"exit:1",
+		]);
+		expect(harness.exitCodes).toEqual([1]);
 	});
 
 	test("a throwing teardown or log flush still writes diagnostics and exits 1", async () => {
