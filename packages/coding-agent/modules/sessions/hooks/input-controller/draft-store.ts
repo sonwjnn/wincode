@@ -1,3 +1,4 @@
+import { replaceTextRanges } from "@/shared/utils/text-ranges";
 import { findImageTokenRanges } from "../../attachments";
 import { stripPastedTextTokens } from "../../pasted-text";
 
@@ -11,14 +12,15 @@ const composerDrafts = new Map<string, string>();
  * would silently submit the marker literal, so those markers are removed.
  */
 const stripUnrecoverableTokens = (text: string): string => {
-	let stripped = stripPastedTextTokens(text);
-	const ranges = findImageTokenRanges(stripped);
-	for (const range of ranges.toReversed()) {
-		stripped = `${stripped.slice(0, range.start)}${stripped.slice(
-			range.start + range.token.length
-		)}`;
-	}
-	return stripped;
+	const stripped = stripPastedTextTokens(text);
+	return replaceTextRanges(
+		stripped,
+		findImageTokenRanges(stripped).map(({ start, token }) => ({
+			end: start + token.length,
+			start,
+			text: "",
+		}))
+	);
 };
 
 /**
