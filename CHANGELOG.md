@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+- **Chat composer regains focus on terminal activation.** Wincode focuses the
+  visible new-session or session composer at startup and when OpenTUI reports
+  terminal focus-in; it preserves other focused controls and remains
+  best-effort where the terminal does not report focus.
+
 - **Test lanes distinguish full portfolios from direct Bun runs.** Local and CI commands now identify Default and E2E portfolios explicitly, and CI exercises the portfolio runner contract.
 
 - **Session-owned contracts keep cross-module capabilities narrow.** RPC consumes

@@ -20,7 +20,12 @@ process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { homedir } from "node:os";
 import * as path from "node:path";
-import { RGBA, type ScrollBoxRenderable } from "@opentui/core";
+import {
+	CliRenderEvents,
+	RGBA,
+	type ScrollBoxRenderable,
+	TextareaRenderable,
+} from "@opentui/core";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import { act, useEffect, useState } from "react";
 import type { SessionQueuedSubmission } from "@/modules/sessions/agent-session/types";
@@ -468,6 +473,66 @@ const assertSummaryDiffClipping = async ({
 		setup.renderer.destroy();
 	}
 };
+describe("ChatShell composer focus", () => {
+	test("routes typing to the composer when terminal focus returns", async () => {
+		const { setup } = await renderChatShell([], { height: 20, width: 100 });
+
+		try {
+			await flushUi(setup);
+			const composer = setup.renderer.currentFocusedRenderable;
+			expect(composer).toBeInstanceOf(TextareaRenderable);
+			if (!(composer instanceof TextareaRenderable)) {
+				throw new Error("The chat composer did not receive startup focus.");
+			}
+
+			composer.blur();
+			await act(async () => {
+				setup.renderer.emit(CliRenderEvents.FOCUS);
+				await setup.mockInput.typeText("focus return prompt");
+			});
+			await flushUi(setup);
+
+			expect(setup.captureCharFrame()).toContain("focus return prompt");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+	test("preserves another focused control when terminal focus returns", async () => {
+		const retries: string[] = [];
+		const { setup } = await renderChatShell(
+			[
+				userMessage("user-1"),
+				userMessage("user-2"),
+				assistantMessage([{ text: "done", type: "text" }], "assistant-2"),
+			],
+			{
+				height: 30,
+				onRetry: (messageId) => {
+					retries.push(messageId);
+				},
+				width: 100,
+			}
+		);
+
+		try {
+			await flushUi(setup);
+			const retryControl =
+				setup.renderer.root.findDescendantById("retry-user-1");
+			expect(retryControl?.focusable).toBe(true);
+			await act(async () => {
+				retryControl?.focus();
+				setup.renderer.emit(CliRenderEvents.FOCUS);
+				setup.mockInput.pressEnter();
+			});
+			await flushUi(setup);
+
+			expect(retries).toEqual(["user-1"]);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+});
+
 describe("ChatShell retry controls", () => {
 	test("keeps older unanswered turns retryable and keyboard activatable", async () => {
 		const retries: string[] = [];
