@@ -94,7 +94,6 @@ const getTrackedPastedTexts = (
 
 type ChatTextAreaProps = {
 	disabled?: boolean;
-	/** Key whose composer text survives a remount (e.g. a session id). */
 	draftKey?: string;
 	unavailableCommandCapabilities?: readonly CommandCapability[];
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;

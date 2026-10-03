@@ -45,7 +45,6 @@ const EMPTY_QUEUED_SUBMISSIONS: readonly SessionQueuedSubmission[] = [];
 type ChatShellProps = {
 	activeMessages?: readonly SessionMessage[];
 	compactions?: readonly SessionCompaction[];
-	/** Key whose composer text survives a remount (e.g. a session id). */
 	draftKey?: string;
 	error?: unknown;
 	isBusy: boolean;
