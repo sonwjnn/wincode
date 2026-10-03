@@ -799,10 +799,12 @@ export function SessionView({
 				<ChatShell
 					activeMessages={activeMessages}
 					compactions={snapshot.compactions}
+					draftKey={sessionId}
 					error={error}
 					isBusy={isBusy}
 					isCompacting={snapshot.isCompacting}
 					isInterruptArmed={isInterruptArmed}
+					key={sessionId}
 					messages={messages}
 					onCompact={executeCompactionCommand}
 					onEmptySubmit={steerQueuedHead}

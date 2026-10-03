@@ -35,6 +35,7 @@ import {
 	PermissionServiceProvider,
 } from "@/modules/permissions";
 import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
+import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
@@ -263,6 +264,8 @@ export const renderSession = async ({
 	const homeRoot = process.env.WINCODE_E2E_HOME ?? homedir();
 	const router = buildRouter(sessionId);
 	await router.load();
+	// Each rendered app owns a fresh process lifetime, so its composer starts empty.
+	writeComposerDraft(sessionId, "");
 	setMarkdownTreeSitterClientForTests(
 		new MockTreeSitterClient({ autoResolveTimeout: 0 })
 	);

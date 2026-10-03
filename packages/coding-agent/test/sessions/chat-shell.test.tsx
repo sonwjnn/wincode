@@ -78,6 +78,9 @@ const { CommandControllerProvider } = await import(
 const { ChatShell } = await import(
 	"@/modules/sessions/ui/components/chat-shell"
 );
+const { writeComposerDraft } = await import(
+	"@/modules/sessions/hooks/input-controller/draft-store"
+);
 const { setMarkdownTreeSitterClientForTests } = await import(
 	"@/modules/sessions/ui/messages/markdown-message-part"
 );
@@ -165,6 +168,7 @@ const lines = (prefix: string, count: number): string =>
 
 type ChatShellProbeHandle = {
 	projectApprovals: (entries: readonly ApprovalPanelEntry[]) => void;
+	remountComposer: () => void;
 	setCompactions: (compactions: SessionCompaction[]) => void;
 	setCompacting: (isCompacting: boolean) => void;
 	setMessages: (messages: SessionMessage[]) => void;
@@ -214,11 +218,13 @@ function ChatShellProbe({
 }: ChatShellProbeProps) {
 	const { project: projectApprovals } = useApprovalPanels();
 	const [compactions, setCompactions] = useState(initialCompactions);
+	const [composerRevision, setComposerRevision] = useState(0);
 	const [isCompacting, setCompacting] = useState(initialIsCompacting);
 	const [messages, setMessages] = useState(initialMessages);
 	useEffect(() => {
 		holder.current = {
 			projectApprovals,
+			remountComposer: () => setComposerRevision((revision) => revision + 1),
 			setCompactions,
 			setCompacting,
 			setMessages,
@@ -233,10 +239,12 @@ function ChatShellProbe({
 			<ChatShell
 				activeMessages={activeMessages}
 				compactions={compactions}
+				draftKey="draft-test-key"
 				error={undefined}
 				isBusy={isBusy || isCompacting}
 				isCompacting={isCompacting}
 				isInterruptArmed={isInterruptArmed}
+				key={composerRevision}
 				messages={messages}
 				onRetry={onRetry}
 				onSubmit={() => true}
@@ -306,6 +314,8 @@ const renderChatShell = async (
 		: createConfigStore();
 	const holder: { current: ChatShellProbeHandle | null } = { current: null };
 	const router = buildTestRouter();
+	// Each rendered shell owns its composer draft key; drop drafts earlier cases left.
+	writeComposerDraft("draft-test-key", "");
 	const setup = await testRender(
 		<ThemeProvider themeName={DEFAULT_THEME.name}>
 			<ConfigProvider value={{ configStore, homeRoot: homedir(), workspace }}>
@@ -1538,6 +1548,34 @@ describe("ChatShell Agent keyboard shortcuts", () => {
 			expect(before).toBe("build");
 			expect(after).toBe("build");
 		} finally {
+			setup.setup.renderer.destroy();
+		}
+	});
+});
+
+describe("ChatShell composer draft", () => {
+	test("keeps typed composer text when the composer subtree remounts", async () => {
+		const setup = await renderChatShell([], { height: 24, width: 100 });
+		try {
+			await act(async () => {
+				await setup.setup.mockInput.typeText("draft survives remount");
+			});
+			expect(
+				await setup.setup.waitForFrame((frame) =>
+					frame.includes("draft survives remount")
+				)
+			).toContain("draft survives remount");
+
+			await act(async () => {
+				setup.holder.current?.remountComposer();
+			});
+			expect(
+				await setup.setup.waitForFrame((frame) =>
+					frame.includes("draft survives remount")
+				)
+			).toContain("draft survives remount");
+		} finally {
+			writeComposerDraft("draft-test-key", "");
 			setup.setup.renderer.destroy();
 		}
 	});

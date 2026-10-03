@@ -55,6 +55,8 @@ export const hasChatPromptContent = ({
 
 const HOME_UNAVAILABLE_COMMAND_CAPABILITIES = ["compaction"] as const;
 
+const NEW_SESSION_DRAFT_KEY = "new-session";
+
 export function NewSessionView() {
 	const router = useRouter();
 	const [_error, setError] = useState<string | null>(null);
@@ -244,6 +246,7 @@ export function NewSessionView() {
 				>
 					<ChatTextArea
 						disabled={isCreatingSession}
+						draftKey={NEW_SESSION_DRAFT_KEY}
 						onCompact={() => {
 							show({
 								message: "Compaction is unavailable without an active session.",

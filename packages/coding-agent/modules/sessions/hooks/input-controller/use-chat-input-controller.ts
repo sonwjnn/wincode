@@ -18,6 +18,7 @@ import type { SessionSubmissionComposition } from "@/modules/sessions/submission
 import { useLatest } from "@/shared/hooks/use-latest";
 import { normalizeFileTokensForTrimmedText } from "../../attachments";
 import { getSessionStore } from "../../storage/get-session-store";
+import { readComposerDraft, writeComposerDraft } from "./draft-store";
 import { removeTriggerText } from "./escape-trigger";
 import {
 	decideDownAction,
@@ -51,12 +52,15 @@ const EMPTY_OVERLAY: InputOverlayState = {
 export function useChatInputController({
 	disabled,
 	commandController,
+	draftKey,
 	getFileMentionOptions: getFileMentionOptionsFromOptions,
 	onSubmit,
 	onTab,
 	sessionPromptHistory,
 }: ChatInputControllerOptions): ChatInputController {
-	const [textValue, setTextValue] = useState("");
+	const initialDraft =
+		draftKey === undefined ? "" : readComposerDraft(draftKey);
+	const [textValue, setTextValue] = useState(initialDraft);
 	const [selectedIndex, setSelectedIndex] = useState(0);
 	const [overlayKind, setOverlayKind] =
 		useState<InputOverlayState["kind"]>(null);
@@ -67,13 +71,26 @@ export function useChatInputController({
 	const [fileMentionOptions, setFileMentionOptions] = useState<
 		FileMentionOption[]
 	>([]);
-	const [textSyncRevision, setTextSyncRevision] = useState(0);
+	// A restored draft must reach the textarea, whose sync effect skips the
+	// initial revision.
+	const [textSyncRevision, setTextSyncRevision] = useState(
+		initialDraft.length === 0 ? 0 : 1
+	);
 	const historyRef = useRef<PromptHistoryEntry[]>([]);
 	const historyIndexRef = useRef(-1);
-	const draftRef = useRef<PromptHistoryEntry>({ text: "", files: [] });
+	const draftRef = useRef<PromptHistoryEntry>({
+		files: [],
+		text: initialDraft,
+	});
 	const promptRecordQueueRef = useRef(Promise.resolve());
 	const selectionsRef = useRef<TrackedCommandSelection[]>([]);
-	const textRef = useRef("");
+	const textRef = useRef(initialDraft);
+	useEffect(() => {
+		if (draftKey === undefined) {
+			return;
+		}
+		writeComposerDraft(draftKey, textValue);
+	}, [draftKey, textValue]);
 	const resetHistoryBaseline = useCallback((draft: string) => {
 		const baseline = resetHistoryNavigation(draft);
 		historyIndexRef.current = baseline.index;
@@ -535,6 +552,11 @@ export function useChatInputController({
 			}
 			resetHistoryBaseline("");
 			setProgrammaticText("", null, null);
+			if (draftKey !== undefined) {
+				// Submitting consumes the draft even if navigation unmounts this
+				// composer before the write-back effect commits.
+				writeComposerDraft(draftKey, "");
+			}
 			closeOverlay();
 			await prepared.execute();
 			return true;
@@ -543,6 +565,7 @@ export function useChatInputController({
 			commandController,
 			closeOverlay,
 			disabled,
+			draftKey,
 			rememberPrompt,
 			resetHistoryBaseline,
 			setProgrammaticText,

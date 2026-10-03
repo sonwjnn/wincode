@@ -17,3 +17,14 @@ export const errorLogFields = (error: unknown): LogFields => {
 		...(errorCode === undefined ? {} : { errorCode }),
 	};
 };
+
+/** Diagnostics for an escaping error: structured type/code plus message and stack. */
+export const errorDiagnosticFields = (error: unknown): LogFields => ({
+	...errorLogFields(error),
+	...(isError(error)
+		? {
+				errorMessage: error.message,
+				...(error.stack === undefined ? {} : { stack: error.stack }),
+			}
+		: {}),
+});

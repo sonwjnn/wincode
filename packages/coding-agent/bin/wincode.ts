@@ -5,7 +5,10 @@ import {
 	dispatch,
 } from "../modules/application/dispatch";
 import type { ApplicationContext } from "../modules/application/modes/types";
+import { installCrashGuard } from "../shared/crash-guard";
 import { setInteractiveRuntimeContext } from "../shared/runtime-context";
+
+installCrashGuard();
 
 const stdout = {
 	write: (text: string): void => {
