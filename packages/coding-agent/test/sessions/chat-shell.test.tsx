@@ -2,6 +2,7 @@ import { fromPartial } from "@total-typescript/shoehorn";
 import type { SessionMessageId } from "@wincode/agent-core";
 import { toSubmissionId } from "@wincode/agent-core";
 import { isUndefined } from "@wincode/runtime-utils";
+import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
 import {
 	agentTurnId,
 	compactionId,
@@ -77,9 +78,6 @@ const { CommandControllerProvider } = await import(
 );
 const { ChatShell } = await import(
 	"@/modules/sessions/ui/components/chat-shell"
-);
-const { writeComposerDraft } = await import(
-	"@/modules/sessions/hooks/input-controller/draft-store"
 );
 const { setMarkdownTreeSitterClientForTests } = await import(
 	"@/modules/sessions/ui/messages/markdown-message-part"

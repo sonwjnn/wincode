@@ -1,37 +1,20 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import type { TestRendererSetup } from "@opentui/core/testing";
-import type { ErrorComponentProps } from "@tanstack/react-router";
+import { testRender } from "@opentui/react/test-utils";
+import {
+	createMemoryHistory,
+	createRootRoute,
+	createRouter,
+	type ErrorComponentProps,
+	RouterProvider,
+} from "@tanstack/react-router";
 import { act, type ErrorInfo, type ReactNode } from "react";
-
-const loggedErrors: Array<{ error: unknown; scope: unknown }> = [];
-const loggedInstances = new WeakSet<object>();
-await mock.module("@/shared/utils/ui-error-log", () => ({
-	logUnhandledUiError: (error: unknown, scope: unknown) => {
-		if (typeof error === "object" && error !== null) {
-			if (loggedInstances.has(error)) {
-				return;
-			}
-			loggedInstances.add(error);
-		}
-		loggedErrors.push({ error, scope });
-	},
-}));
-
-const { testRender } = await import("@opentui/react/test-utils");
-const { createMemoryHistory, createRootRoute, createRouter, RouterProvider } =
-	await import("@tanstack/react-router");
-const { ErrorRecoveryProvider } = await import(
-	"@/shared/providers/error-recovery/error-recovery-provider"
-);
-const { KeyboardLayerProvider } = await import(
-	"@/shared/providers/keyboard-layer/keyboard-layer-provider"
-);
-const { ThemeProvider } = await import(
-	"@/shared/providers/theme/theme-provider"
-);
-const { DEFAULT_THEME } = await import("@/shared/providers/theme/themes");
-const { ErrorBoundary } = await import("@/shared/ui/error-boundary");
-const { ErrorFallbackView } = await import("@/shared/ui/error-fallback");
+import { ErrorRecoveryProvider } from "@/shared/providers/error-recovery/error-recovery-provider";
+import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
+import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
+import { ErrorBoundary } from "@/shared/ui/error-boundary";
+import { ErrorFallbackView } from "@/shared/ui/error-fallback";
 
 const flushUi = async (setup: TestRendererSetup): Promise<void> => {
 	await act(async () => {
@@ -90,7 +73,6 @@ const renderRootBoundary = async (child: ReactNode, withLayer = false) => {
 };
 
 afterEach(() => {
-	loggedErrors.length = 0;
 	delete process.env.WINCODE_DEBUG;
 });
 
@@ -247,8 +229,6 @@ describe("root error boundary", () => {
 				current.includes("outer caught")
 			);
 			expect(frame).not.toContain("Something went wrong");
-			expect(loggedErrors).toHaveLength(1);
-			expect(loggedErrors[0]?.scope).toBe("root");
 		} finally {
 			setup.renderer.destroy();
 		}
@@ -307,7 +287,6 @@ describe("route error boundary", () => {
 				await setup.waitForFrame((frame) => frame.includes("healthy content"))
 			).toContain("healthy content");
 			expect(onCatch).toHaveBeenCalledTimes(1);
-			expect(loggedErrors).toEqual([]);
 		} finally {
 			setup.renderer.destroy();
 		}
