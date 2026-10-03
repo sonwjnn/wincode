@@ -17,12 +17,12 @@ export function WorkspacePath() {
 	const branch = useGitBranch(cwd);
 
 	return (
-		<text fg={colors.textMuted}>
+		<text bg={colors.filePathBackground} fg={colors.filePath}>
 			<span>{shortenPath(cwd)}</span>
 			{branch ? (
 				<>
 					<span>:</span>
-					<b>{branch}</b>
+					<b fg={colors.success}>{branch}</b>
 				</>
 			) : null}
 		</text>
