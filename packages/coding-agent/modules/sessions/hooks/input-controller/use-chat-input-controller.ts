@@ -18,7 +18,7 @@ import type { SessionSubmissionComposition } from "@/modules/sessions/submission
 import { useLatest } from "@/shared/hooks/use-latest";
 import { normalizeFileTokensForTrimmedText } from "../../attachments";
 import { getSessionStore } from "../../storage/get-session-store";
-import { readComposerDraft, writeComposerDraft } from "./draft-store";
+import { restoreComposerDraft, writeComposerDraft } from "./draft-store";
 import { removeTriggerText } from "./escape-trigger";
 import {
 	decideDownAction,
@@ -59,7 +59,7 @@ export function useChatInputController({
 	sessionPromptHistory,
 }: ChatInputControllerOptions): ChatInputController {
 	const initialDraft =
-		draftKey === undefined ? "" : readComposerDraft(draftKey);
+		draftKey === undefined ? "" : restoreComposerDraft(draftKey);
 	const [textValue, setTextValue] = useState(initialDraft);
 	const [selectedIndex, setSelectedIndex] = useState(0);
 	const [overlayKind, setOverlayKind] =

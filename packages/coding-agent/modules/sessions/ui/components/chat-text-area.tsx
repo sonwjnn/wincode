@@ -51,9 +51,9 @@ import { readClipboardImage, readImagePath } from "../../clipboard-image";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import type { TrackedPastedText } from "../../hooks/input-controller/submit";
 import { useChatInputController } from "../../hooks/input-controller/use-chat-input-controller";
+import { summarizePastedText } from "../../pasted-text";
 import type { SessionSubmissionComposition } from "../../submission-types";
 import type { ChatPromptSubmission } from "../../utils";
-import { summarizePastedText } from "./pasted-text";
 
 const MAX_IMAGE_ATTACHMENTS = 5;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
