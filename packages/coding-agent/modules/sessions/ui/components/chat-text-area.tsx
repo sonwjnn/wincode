@@ -2,13 +2,12 @@ import { rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import {
-	CliRenderEvents,
 	decodePasteBytes,
 	type PasteEvent,
 	SyntaxStyle,
 	type TextareaRenderable,
 } from "@opentui/core";
-import { useKeyboard, usePaste, useRenderer } from "@opentui/react";
+import { useFocus, useKeyboard, usePaste, useRenderer } from "@opentui/react";
 import {
 	findSupportedChatModelSelection,
 	getSupportedModelEfforts,
@@ -977,27 +976,20 @@ export function ChatTextArea({
 	});
 
 	const isFocused = !disabled && (isTopLayer("base") || isTopLayer("command"));
-	useEffect(() => {
+	useFocus(() => {
 		if (!isFocused) {
 			return;
 		}
 
-		const focusComposer = () => {
-			const textarea = textAreaRef.current;
-			const focusedRenderable = renderer.currentFocusedRenderable;
-			if (
-				textarea &&
-				(focusedRenderable === null || focusedRenderable === textarea)
-			) {
-				textarea.focus();
-			}
-		};
-
-		renderer.on(CliRenderEvents.FOCUS, focusComposer);
-		return () => {
-			renderer.off(CliRenderEvents.FOCUS, focusComposer);
-		};
-	}, [isFocused, renderer]);
+		const textarea = textAreaRef.current;
+		const focusedRenderable = renderer.currentFocusedRenderable;
+		if (
+			textarea &&
+			(focusedRenderable === null || focusedRenderable === textarea)
+		) {
+			textarea.focus();
+		}
+	});
 
 	return (
 		<box
