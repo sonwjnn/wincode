@@ -97,11 +97,11 @@ describe("crash guard", () => {
 		);
 
 		expect(harness.logFields).toMatchObject({
+			errorMessage: "string failure",
 			errorType: "string",
 			operation: "process",
 			phase: "unhandled-rejection",
 		});
-		expect(harness.logFields).not.toHaveProperty("errorMessage");
 		expect(harness.stderr).toContain("string failure");
 		expect(harness.exitCodes).toEqual([1]);
 	});

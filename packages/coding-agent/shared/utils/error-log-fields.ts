@@ -18,13 +18,27 @@ export const errorLogFields = (error: unknown): LogFields => {
 	};
 };
 
+const describeReason = (error: unknown): string | undefined => {
+	if (isError(error)) {
+		return error.message;
+	}
+	if (isString(error)) {
+		return error;
+	}
+	if (isObjectLike(error) && "message" in error && isString(error.message)) {
+		return error.message;
+	}
+	return;
+};
+
 /** Diagnostics for an escaping error: structured type/code plus message and stack. */
-export const errorDiagnosticFields = (error: unknown): LogFields => ({
-	...errorLogFields(error),
-	...(isError(error)
-		? {
-				errorMessage: error.message,
-				...(error.stack === undefined ? {} : { stack: error.stack }),
-			}
-		: {}),
-});
+export const errorDiagnosticFields = (error: unknown): LogFields => {
+	const message = describeReason(error);
+	return {
+		...errorLogFields(error),
+		...(message === undefined ? {} : { errorMessage: message }),
+		...(isError(error) && error.stack !== undefined
+			? { stack: error.stack }
+			: {}),
+	};
+};
