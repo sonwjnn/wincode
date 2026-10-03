@@ -767,7 +767,7 @@ const getSummarySpan = (
 	}
 	// A split-turn boundary keeps the user turn plus an assistant suffix; the
 	// assistant prefix was already summarized, so resume from that suffix
-	// instead of re-summarizing (and re-hydrating) the covered portion.
+	// instead of summarizing the covered portion again.
 	const throughIndex = findMessageIndex(messages, previous.throughMessageUiId);
 	if (throughIndex < previousIndex || throughIndex > cutPoint.throughIndex) {
 		return messages.slice(previousIndex, cutPoint.throughIndex + 1);
@@ -1059,36 +1059,6 @@ const chooseCompactionSpan = (
 	return { cutPoint, summarySpan };
 };
 
-const prepareCompactionSummary = async (
-	attachmentStore: SessionAttachmentStore | undefined,
-	summarySpan: SessionMessage[],
-	settings: CompactSessionInput["settings"],
-	signal?: AbortSignal
-): Promise<{
-	attachmentMetadata?: CompactionAttachmentMetadata[];
-	summaryMessages: SessionMessage[];
-}> => {
-	if (!attachmentStore) {
-		return { summaryMessages: summarySpan };
-	}
-	const summaryMessages = await attachmentStore.hydrateMessages(summarySpan, {
-		maxAttachments:
-			settings.maxMediaAttachments ??
-			DEFAULT_COMPACTION_ATTACHMENT_BUDGET.maxAttachments,
-		maxBytes:
-			settings.maxMediaBytes ?? DEFAULT_COMPACTION_ATTACHMENT_BUDGET.maxBytes,
-		maxTokens:
-			settings.maxMediaTokens ?? DEFAULT_COMPACTION_ATTACHMENT_BUDGET.maxTokens,
-		purpose: "compaction",
-		signal,
-	});
-	const attachmentMetadata = await attachmentStore.getCompactionMetadata(
-		summarySpan,
-		signal
-	);
-	return { attachmentMetadata, summaryMessages };
-};
-
 const generateCompactionSummary = async (
 	summaryGenerator: SummaryGenerator,
 	input: SummaryGeneratorInput
@@ -1270,14 +1240,9 @@ export const createSessionCompaction = ({
 				`Compaction summary budget is ${maxOutputTokens} tokens; at least ${MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS} are required.`
 			);
 		}
-		const preparedSummary = attachmentStore
-			? await prepareCompactionSummary(
-					attachmentStore,
-					summarySpan,
-					input.settings,
-					input.signal
-				)
-			: { summaryMessages: summarySpan };
+		const attachmentMetadata = attachmentStore
+			? await attachmentStore.getCompactionMetadata(summarySpan, input.signal)
+			: undefined;
 		const focus = normalizeFocus(input.focus);
 		const generatorInput: SummaryGeneratorInput = {
 			...omitUndefined({
@@ -1287,12 +1252,7 @@ export const createSessionCompaction = ({
 			}),
 			model: input.model,
 			previousSummary: previous?.summary,
-			serializedMessages: serializeMessagesForCompaction(
-				preparedSummary.summaryMessages
-			),
-			...(attachmentStore
-				? { summaryMessages: preparedSummary.summaryMessages }
-				: {}),
+			serializedMessages: serializeMessagesForCompaction(summarySpan),
 			maxOutputTokens,
 			signal: input.signal,
 		};
@@ -1303,7 +1263,7 @@ export const createSessionCompaction = ({
 		assertNotAborted(input.signal);
 		const { activeMessages, entry } = await persistCompactionEntry({
 			assertAuthority: input.assertAuthority,
-			attachmentMetadata: preparedSummary.attachmentMetadata,
+			attachmentMetadata,
 			messages: externalizedMessages,
 			sessionId: input.session.sessionId,
 			cutPoint,

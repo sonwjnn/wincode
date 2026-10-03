@@ -40,7 +40,6 @@ const model: ChatModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 };
-const DATA_IMAGE_URL_PATTERN = /^data:image\/png;base64,/u;
 test("rejects a skill tool part without a Tool Call Identifier", () => {
 	expect(() =>
 		sanitizeSessionSkillToolPart({
@@ -869,12 +868,14 @@ test("serializes old attachments as bounded metadata", () => {
 	expect(serialized.length).toBeLessThan(500);
 });
 
-test("hydrates current-window attachments once and persists bounded metadata", async () => {
+test("serializes current-window attachments without hydrating payloads and persists metadata", async () => {
 	const root = await mkdtemp(join(tmpdir(), "wincode-compaction-attachments-"));
 	const attachmentStore = createSessionAttachmentStore({
 		repository: createAttachmentRepository(),
 		root,
 	});
+	const hydrateMessages = mock(attachmentStore.hydrateMessages);
+	attachmentStore.hydrateMessages = hydrateMessages;
 	const reference = await attachmentStore.ingest({
 		bytes: new Uint8Array([
 			0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
@@ -889,12 +890,12 @@ test("hydrates current-window attachments once and persists bounded metadata", a
 			attachmentReferenceToFilePart(reference),
 		],
 	});
-	let summaryMessages: SessionMessage[] | undefined;
+	let serializedSummary = "";
 	const compaction = createSessionCompaction({
 		attachmentStore,
 		store: makeStore(),
 		summaryGenerator: async (input) => {
-			summaryMessages = input.summaryMessages;
+			serializedSummary = input.serializedMessages;
 			return { text: "image summary data:image/png;base64,aG Vs\nbG8=." };
 		},
 		estimateTokens: (messages) =>
@@ -922,9 +923,10 @@ test("hydrates current-window attachments once and persists bounded metadata", a
 		},
 		trigger: "manual",
 	});
-	expect(summaryMessages?.[0]?.parts[1]).toMatchObject({
-		url: expect.stringMatching(DATA_IMAGE_URL_PATTERN),
-	});
+	expect(serializedSummary).toContain("design.png");
+	expect(serializedSummary).toContain("payloadOmitted");
+	expect(serializedSummary).not.toContain("data:image/png;base64");
+	expect(hydrateMessages).not.toHaveBeenCalled();
 	expect(result.entry.summary.attachments).toMatchObject([
 		{
 			attachmentId: reference.attachmentId,
