@@ -71,6 +71,8 @@ export type ChatInputController = {
 export type ChatInputControllerOptions = {
 	disabled: boolean;
 	commandController: CommandController;
+	/** Ephemeral key whose composer text survives a remount (e.g. a session id). */
+	draftKey?: string;
 	getFileMentionOptions: () => Promise<FileMentionOption[]>;
 	onSubmit: (
 		submission: ChatPromptSubmission

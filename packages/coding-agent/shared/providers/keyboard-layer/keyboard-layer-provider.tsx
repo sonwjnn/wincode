@@ -20,7 +20,7 @@ type ToggleKeyEvent = {
 	preventDefault: () => void;
 };
 
-type KeyboardLayerContextValue = {
+export type KeyboardLayerContextValue = {
 	push: (id: string, responder?: Responder) => void;
 	pop: (id: string) => void;
 	isTopLayer: (id: string) => boolean;
@@ -158,8 +158,12 @@ export function KeyboardLayerProvider({
 	);
 }
 
+/** Read the layer context when a provider is mounted, else `null`. */
+export const useOptionalKeyboardLayer = (): KeyboardLayerContextValue | null =>
+	useContext(KeyboardLayerContext);
+
 export function useKeyboardLayer() {
-	const context = useContext(KeyboardLayerContext);
+	const context = useOptionalKeyboardLayer();
 	if (!context) {
 		throw new Error(
 			"useKeyboardLayer must be used within a KeyboardLayerProvider"

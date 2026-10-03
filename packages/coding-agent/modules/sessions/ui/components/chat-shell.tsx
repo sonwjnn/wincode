@@ -45,6 +45,7 @@ const EMPTY_QUEUED_SUBMISSIONS: readonly SessionQueuedSubmission[] = [];
 type ChatShellProps = {
 	activeMessages?: readonly SessionMessage[];
 	compactions?: readonly SessionCompaction[];
+	draftKey?: string;
 	error?: unknown;
 	isBusy: boolean;
 	isCompacting: boolean;
@@ -121,6 +122,7 @@ const findNewestCompaction = (
 export function ChatShell({
 	activeMessages,
 	compactions = [],
+	draftKey,
 	error,
 	isBusy,
 	isCompacting,
@@ -284,6 +286,7 @@ export function ChatShell({
 					<>
 						<box flexShrink={0} width="100%">
 							<ChatTextArea
+								draftKey={draftKey}
 								onCompact={onCompact}
 								onEmptySubmit={onEmptySubmit}
 								onOpenSettings={onOpenSettings}

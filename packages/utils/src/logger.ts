@@ -187,6 +187,21 @@ const dateString = (date: Date): string => date.toISOString().slice(0, 10);
 const isMissingPathError = (error: unknown): boolean =>
 	isObjectLike(error) && "code" in error && error.code === "ENOENT";
 
+/** Whether verbose debug diagnostics are enabled for this process. */
+export const isDebugMode = (): boolean => process.env.WINCODE_DEBUG === "1";
+
+const resolveLogRoot = (): string =>
+	isDebugMode() ? process.cwd() : process.env.HOME || os.homedir();
+
+const resolveLogDirectory = (): string =>
+	path.join(resolveLogRoot(), ".wincode", "logs");
+
+const logFileName = (date: Date): string => `wincode.${dateString(date)}.log`;
+
+/** Absolute path of the diagnostics file that today's writes land in. */
+export const resolveLogFilePath = (): string =>
+	path.join(resolveLogDirectory(), logFileName(new Date()));
+
 let lastRetentionCheck: string | undefined;
 const removeExpiredLogs = async (
 	directory: string,
@@ -241,20 +256,18 @@ const writeRecord = (
 	message: string,
 	fields?: LogFields
 ): Promise<void> => {
-	if (level === "debug" && process.env.WINCODE_DEBUG !== "1") {
+	if (level === "debug" && !isDebugMode()) {
 		return logQueue;
 	}
 	let directory: string;
 	let currentDate: string;
+	let fileName: string;
 	let line: string;
 	try {
 		const timestamp = new Date();
 		currentDate = dateString(timestamp);
-		const logRoot =
-			process.env.WINCODE_DEBUG === "1"
-				? process.cwd()
-				: process.env.HOME || os.homedir();
-		directory = path.join(logRoot, ".wincode", "logs");
+		directory = resolveLogDirectory();
+		fileName = logFileName(timestamp);
 		const record = {
 			timestamp: timestamp.toISOString(),
 			level,
@@ -274,7 +287,7 @@ const writeRecord = (
 			await mkdir(directory, { mode: 0o700, recursive: true });
 			await removeExpiredLogs(directory, currentDate);
 			await chmod(directory, 0o700);
-			const logFile = path.join(directory, `wincode.${currentDate}.log`);
+			const logFile = path.join(directory, fileName);
 			try {
 				await chmod(logFile, 0o600);
 			} catch (error) {
