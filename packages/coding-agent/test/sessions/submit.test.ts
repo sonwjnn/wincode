@@ -1,12 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { findBuiltinCommand } from "@/modules/commands/builtin-invocation";
 import {
 	type CreateCommandControllerOptions,
 	createCommandController,
 } from "@/modules/commands/command-controller";
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
+import type { TrackedCommandSelection } from "@/modules/sessions/hooks/input-controller/selections";
 import {
-	expandTrackedPastedText,
 	preparePromptSubmission,
 	type SubmitDependencies,
 	type SubmitSnapshot,
@@ -18,6 +17,14 @@ const TEST_SKILL: Skill = {
 	description: "Reviews implementation",
 	filePath: "/tmp/review/SKILL.md",
 	name: "review",
+	scope: "project",
+};
+
+const AUDIT_SKILL: Skill = {
+	body: "Audit the dependency graph.",
+	description: "Audits dependencies",
+	filePath: "/tmp/audit/SKILL.md",
+	name: "audit",
 	scope: "project",
 };
 
@@ -36,6 +43,19 @@ const emptySnapshot = (): SubmitSnapshot => ({
 	rawText: "",
 });
 
+const selection = (
+	kind: TrackedCommandSelection["kind"],
+	name: string,
+	marker: string,
+	start: number
+): TrackedCommandSelection => ({
+	end: start + marker.length,
+	kind,
+	marker,
+	name,
+	start,
+});
+
 type SubmitOverrides = {
 	disabled?: boolean;
 	discoverCustomCommands?: CreateCommandControllerOptions["discoverCustomCommands"];
@@ -43,6 +63,7 @@ type SubmitOverrides = {
 	executeCommand?: CreateCommandControllerOptions["executeCommand"];
 	onError?: CreateCommandControllerOptions["onError"];
 	onSubmit?: SubmitDependencies["onSubmit"];
+	selections?: readonly TrackedCommandSelection[];
 };
 
 const createDependencies = (
@@ -59,14 +80,8 @@ const createDependencies = (
 	}),
 	disabled: overrides.disabled ?? false,
 	onSubmit: overrides.onSubmit ?? (() => undefined),
+	selections: overrides.selections ?? [],
 });
-
-const resolveBuiltinCommand = (snapshot: SubmitSnapshot) =>
-	snapshot.files.length === 0
-		? findBuiltinCommand(
-				expandTrackedPastedText(snapshot.rawText, snapshot.pastedTexts)
-			)
-		: null;
 
 const submitPrompt = async (
 	dependencies: SubmitDependencies,
@@ -79,113 +94,230 @@ const submitPrompt = async (
 	return prepared.accepted;
 };
 
-describe("resolveBuiltinCommand", () => {
-	test("expands pasted-text markers before matching, so the focus is real text", () => {
-		const token = "[Pasted ~2 lines]";
-		const rawText = `/compact ${token}`;
-		const start = rawText.indexOf(token);
-
-		expect(
-			resolveBuiltinCommand({
-				...emptySnapshot(),
-				pastedTexts: [
-					{
-						end: start + token.length,
-						start,
-						text: "line one\nline two",
-						token,
-					},
-				],
-				rawText,
-			})
-		).toMatchObject({
-			argument: "line one\nline two",
-			action: "session.compact",
-		});
-	});
-
-	test("keeps a composition carrying attachments a prompt", () => {
-		expect(
-			resolveBuiltinCommand({
-				...emptySnapshot(),
-				files: [
-					{
-						filename: "clipboard",
-						mediaType: "image/png",
-						type: "file",
-						url: "data:image/png;base64,aGVsbG8=",
-					},
-				],
-				rawText: "/models",
-			})
-		).toBeNull();
-	});
-
-	test("expands markers at their untrimmed offsets when the line is indented", () => {
-		const token = "[Pasted ~2 lines]";
-		const rawText = `  /compact ${token}`;
-		const start = rawText.indexOf(token);
-
-		expect(
-			resolveBuiltinCommand({
-				...emptySnapshot(),
-				pastedTexts: [
-					{
-						end: start + token.length,
-						start,
-						text: "line one\nline two",
-						token,
-					},
-				],
-				rawText,
-			})
-		).toMatchObject({
-			argument: "line one\nline two",
-			action: "session.compact",
-		});
-	});
-});
-
-describe("submitPrompt", () => {
-	test("passes the visible skill command text to the transport", async () => {
-		const onSubmit = (submission: {
-			files: SubmitSnapshot["files"];
-			skill?: unknown;
-			text: string;
-		}) => {
-			expect(submission.text).toBe("/skill:review focus on auth");
-			expect(submission.skill).toEqual({
-				arguments: "focus on auth",
-				instructions: TEST_SKILL.body,
-				name: "review",
-			});
-			expect(submission.files).toEqual([]);
-		};
-
+describe("preparePromptSubmission", () => {
+	test("sends typed command lookalikes as literal prompt text", async () => {
+		const submissions: Array<{ skill?: unknown; text: string }> = [];
 		const accepted = await submitPrompt(
 			createDependencies({
+				discoverCustomCommands: async () => [TEST_CUSTOM_COMMAND],
 				discoverSkills: async () => [TEST_SKILL],
-				onSubmit,
+				onSubmit: (submission) => {
+					submissions.push({
+						...("skill" in submission && submission.skill !== undefined
+							? { skill: submission.skill }
+							: {}),
+						text: submission.text,
+					});
+				},
 			}),
 			{ ...emptySnapshot(), rawText: "/skill:review focus on auth" }
 		);
 
 		expect(accepted).toBe(true);
+		expect(submissions).toEqual([{ text: "/skill:review focus on auth" }]);
 	});
 
-	test("preserves expanded pasted content in a Skill Submission", async () => {
-		const token = "[Pasted ~2 lines]";
-		const rawText = `/skill:review ${token}`;
-		const start = rawText.indexOf(token);
-		let submissionText = "";
-		let skillArguments = "";
+	test("activates the leftmost selected Skill and strips every selected marker", async () => {
+		const rawText = "please /skill:audit and /skill:review now";
+		const auditAt = rawText.indexOf("/skill:audit");
+		const reviewAt = rawText.indexOf("/skill:review");
+		const submissions: Array<{ skill?: unknown; text: string }> = [];
+		const accepted = await submitPrompt(
+			createDependencies({
+				discoverSkills: async () => [TEST_SKILL, AUDIT_SKILL],
+				onSubmit: (submission) => {
+					submissions.push({
+						...(submission.skill === undefined
+							? {}
+							: { skill: submission.skill }),
+						text: submission.text,
+					});
+				},
+				selections: [
+					selection("skill", "audit", "/skill:audit", auditAt),
+					selection("skill", "review", "/skill:review", reviewAt),
+				],
+			}),
+			{ ...emptySnapshot(), rawText }
+		);
+
+		expect(accepted).toBe(true);
+		expect(submissions).toEqual([
+			{
+				skill: { instructions: AUDIT_SKILL.body, name: "audit" },
+				text: "please and now",
+			},
+		]);
+	});
+
+	test("rejects the submission when any selected Skill is unknown", async () => {
+		const errors: string[] = [];
+		let calls = 0;
+		const rawText = "/skill:review then /skill:missing";
 		const accepted = await submitPrompt(
 			createDependencies({
 				discoverSkills: async () => [TEST_SKILL],
-				onSubmit: ({ skill, text }) => {
-					submissionText = text;
-					skillArguments = skill?.arguments ?? "";
+				onError: (message) => {
+					errors.push(message);
 				},
+				onSubmit: () => {
+					calls += 1;
+					return true;
+				},
+				selections: [
+					selection("skill", "review", "/skill:review", 0),
+					selection(
+						"skill",
+						"missing",
+						"/skill:missing",
+						rawText.indexOf("/skill:missing")
+					),
+				],
+			}),
+			{ ...emptySnapshot(), rawText }
+		);
+
+		expect(accepted).toBe(false);
+		expect(errors).toEqual(['Unknown skill "/skill:missing".']);
+		expect(calls).toBe(0);
+	});
+
+	test("drops a selection whose marker the user edited", async () => {
+		const submissions: Array<{ skill?: unknown; text: string }> = [];
+		const accepted = await submitPrompt(
+			createDependencies({
+				discoverSkills: async () => [TEST_SKILL],
+				onSubmit: (submission) => {
+					submissions.push({
+						...(submission.skill === undefined
+							? {}
+							: { skill: submission.skill }),
+						text: submission.text,
+					});
+				},
+				// The tracked range points at a marker the user since edited.
+				selections: [
+					{
+						end: 13,
+						kind: "skill",
+						marker: "/skill:review",
+						name: "review",
+						start: 0,
+					},
+				],
+			}),
+			{ ...emptySnapshot(), rawText: "/skil:review do it" }
+		);
+
+		expect(accepted).toBe(true);
+		expect(submissions).toEqual([{ text: "/skil:review do it" }]);
+	});
+
+	test("expands a selected Custom Command with the text that follows it", async () => {
+		const seen: string[] = [];
+		const accepted = await submitPrompt(
+			createDependencies({
+				discoverCustomCommands: async () => [TEST_CUSTOM_COMMAND],
+				onSubmit: (submission) => {
+					seen.push(submission.text);
+				},
+				selections: [selection("custom", "git-commit", "/git-commit", 0)],
+			}),
+			{ ...emptySnapshot(), rawText: "/git-commit staged files" }
+		);
+
+		expect(accepted).toBe(true);
+		expect(seen).toEqual([
+			"Commit the staged changes with a conventional message.",
+		]);
+	});
+
+	test("executes a selected Built-in with the text that follows it", async () => {
+		const executed: Array<{ argument?: string; name: string }> = [];
+		let submissions = 0;
+		const accepted = await submitPrompt(
+			createDependencies({
+				executeCommand: (command) => {
+					executed.push({
+						name: command.name,
+						...("argument" in command && command.argument !== undefined
+							? { argument: command.argument }
+							: {}),
+					});
+				},
+				onSubmit: () => {
+					submissions += 1;
+					return true;
+				},
+				selections: [selection("builtin", "compact", "/compact", 0)],
+			}),
+			{ ...emptySnapshot(), rawText: "/compact preserve decisions" }
+		);
+
+		expect(accepted).toBe(true);
+		expect(executed).toEqual([
+			{ argument: "preserve decisions", name: "compact" },
+		]);
+		expect(submissions).toBe(0);
+	});
+
+	test("executes a selected Built-in even when the submission carries attachments", async () => {
+		const executed: Array<{ argument?: string; name: string }> = [];
+		let submissions = 0;
+		const accepted = await submitPrompt(
+			createDependencies({
+				executeCommand: (command) => {
+					executed.push({
+						name: command.name,
+						...("argument" in command && command.argument !== undefined
+							? { argument: command.argument }
+							: {}),
+					});
+				},
+				onSubmit: () => {
+					submissions += 1;
+					return true;
+				},
+				selections: [selection("builtin", "compact", "/compact", 0)],
+			}),
+			{
+				...emptySnapshot(),
+				files: [
+					{
+						filename: "clipboard.png",
+						mediaType: "image/png",
+						type: "file" as const,
+						url: "data:image/png;base64,AAAA",
+					},
+				],
+				rawText: "/compact preserve decisions",
+			}
+		);
+
+		expect(accepted).toBe(true);
+		expect(executed).toEqual([
+			{ argument: "preserve decisions", name: "compact" },
+		]);
+		expect(submissions).toBe(0);
+	});
+
+	test("expands pasted-text markers before matching a selected marker", async () => {
+		const token = "[Pasted ~2 lines]";
+		const rawText = `/skill:review ${token}`;
+		const start = rawText.indexOf(token);
+		const submissions: Array<{ skill?: unknown; text: string }> = [];
+		const accepted = await submitPrompt(
+			createDependencies({
+				discoverSkills: async () => [TEST_SKILL],
+				onSubmit: (submission) => {
+					submissions.push({
+						...(submission.skill === undefined
+							? {}
+							: { skill: submission.skill }),
+						text: submission.text,
+					});
+				},
+				selections: [selection("skill", "review", "/skill:review", 0)],
 			}),
 			{
 				...emptySnapshot(),
@@ -202,8 +334,12 @@ describe("submitPrompt", () => {
 		);
 
 		expect(accepted).toBe(true);
-		expect(submissionText).toBe("/skill:review focus on auth");
-		expect(skillArguments).toBe("focus on auth");
+		expect(submissions).toEqual([
+			{
+				skill: { instructions: TEST_SKILL.body, name: "review" },
+				text: "focus on auth",
+			},
+		]);
 	});
 
 	test("carries the visible composition into the submission", async () => {
@@ -257,99 +393,6 @@ describe("submitPrompt", () => {
 			],
 			text: "[Image 1] [Pasted ~2 lines] explain",
 		});
-	});
-
-	test("reports an unknown skill instead of submitting its text", async () => {
-		const errors: string[] = [];
-		let calls = 0;
-		const accepted = await submitPrompt(
-			createDependencies({
-				discoverSkills: async () => [TEST_SKILL],
-				onError: (message) => {
-					errors.push(message);
-				},
-				onSubmit: () => {
-					calls += 1;
-					return true;
-				},
-			}),
-			{ ...emptySnapshot(), rawText: "/skill:missing focus" }
-		);
-
-		expect(accepted).toBe(false);
-		expect(errors).toEqual(['Unknown skill "/skill:missing".']);
-		expect(calls).toBe(0);
-	});
-
-	test("reports a malformed skill invocation instead of submitting its text", async () => {
-		const errors: string[] = [];
-		let calls = 0;
-		const accepted = await submitPrompt(
-			createDependencies({
-				discoverSkills: async () => [TEST_SKILL],
-				onError: (message) => {
-					errors.push(message);
-				},
-				onSubmit: () => {
-					calls += 1;
-					return true;
-				},
-			}),
-			{ ...emptySnapshot(), rawText: "/skill: review" }
-		);
-
-		expect(accepted).toBe(false);
-		expect(errors).toEqual(['Invalid skill invocation "/skill: review".']);
-		expect(calls).toBe(0);
-	});
-	test("caps malformed Skill rejection output instead of reflecting the prompt", async () => {
-		const errors: string[] = [];
-		const text = `/skill: ${"a".repeat(1024 * 1024)}`;
-		const accepted = await submitPrompt(
-			createDependencies({
-				onError: (message) => {
-					errors.push(message);
-				},
-			}),
-			{ ...emptySnapshot(), rawText: text }
-		);
-
-		expect(accepted).toBe(false);
-		expect(errors).toHaveLength(1);
-		expect(errors[0]?.length).toBeLessThanOrEqual(256);
-		expect(errors[0]).not.toContain(text);
-	});
-
-	test("routes a bare name to the custom command and the namespace to the skill", async () => {
-		const customReview: CustomCommandSpec = {
-			description: "Local review template",
-			kind: "custom",
-			name: "review",
-			template: "Review with the project checklist.",
-			value: "/review",
-		};
-		const seen: string[] = [];
-		const dependencies = createDependencies({
-			discoverCustomCommands: async () => [customReview],
-			discoverSkills: async () => [TEST_SKILL],
-			onSubmit: (submission) => {
-				seen.push(submission.text);
-			},
-		});
-
-		await submitPrompt(dependencies, {
-			...emptySnapshot(),
-			rawText: "/review",
-		});
-		await submitPrompt(dependencies, {
-			...emptySnapshot(),
-			rawText: "/skill:review",
-		});
-
-		expect(seen).toEqual([
-			"Review with the project checklist.",
-			"/skill:review",
-		]);
 	});
 
 	test("expands tracked pasted-text tokens before transport", async () => {
@@ -406,6 +449,54 @@ describe("submitPrompt", () => {
 
 		expect(seen).toEqual(["line one\nline two summarize"]);
 		expect(accepted).toBe(true);
+	});
+
+	test("maps a selected marker through pasted-text expansion", async () => {
+		const token = "[Pasted ~2 lines]";
+		const rawText = `  ${token} /skill:review`;
+		const start = rawText.indexOf(token);
+		const seen: Array<{ skill?: unknown; text: string }> = [];
+		const accepted = await submitPrompt(
+			createDependencies({
+				discoverSkills: async () => [TEST_SKILL],
+				onSubmit: (submission) => {
+					seen.push({
+						...(submission.skill === undefined
+							? {}
+							: { skill: submission.skill }),
+						text: submission.text,
+					});
+				},
+				selections: [
+					selection(
+						"skill",
+						"review",
+						"/skill:review",
+						rawText.indexOf("/skill:review")
+					),
+				],
+			}),
+			{
+				...emptySnapshot(),
+				pastedTexts: [
+					{
+						end: start + token.length,
+						start,
+						text: "line one\nline two",
+						token,
+					},
+				],
+				rawText,
+			}
+		);
+
+		expect(accepted).toBe(true);
+		expect(seen).toEqual([
+			{
+				skill: { instructions: TEST_SKILL.body, name: "review" },
+				text: "line one\nline two",
+			},
+		]);
 	});
 
 	test("rejects empty submissions without calling the transport", async () => {
@@ -501,6 +592,7 @@ describe("submitPrompt", () => {
 					calls += 1;
 					return true;
 				},
+				selections: [selection("skill", "review", "/skill:review", 0)],
 			}),
 			{ ...emptySnapshot(), rawText: "/skill:review" }
 		);
@@ -508,24 +600,5 @@ describe("submitPrompt", () => {
 		expect(accepted).toBe(false);
 		expect(errors).toEqual([failure.message]);
 		expect(calls).toBe(0);
-	});
-
-	test("expands custom commands before transport", async () => {
-		const seen: string[] = [];
-		const accepted = await submitPrompt(
-			createDependencies({
-				discoverCustomCommands: async () => [TEST_CUSTOM_COMMAND],
-				onSubmit: (submission) => {
-					seen.push(submission.text);
-					return;
-				},
-			}),
-			{ ...emptySnapshot(), rawText: "/git-commit staged files" }
-		);
-
-		expect(seen).toEqual([
-			"Commit the staged changes with a conventional message.",
-		]);
-		expect(accepted).toBe(true);
 	});
 });

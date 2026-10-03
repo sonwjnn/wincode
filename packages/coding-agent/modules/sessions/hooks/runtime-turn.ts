@@ -774,11 +774,26 @@ export const buildAgentTurn = ({
 		? (role ?? "primary")
 		: "subagent";
 	if (!isUndefined(skill)) {
-		messages.push({
+		// The Skill context belongs to the submission's own user message, which
+		// is the last model message; a Skill-only submission records an empty
+		// user message that the model input drops, so the context is appended
+		// after history instead of attaching to a stale message.
+		const skillContext = {
 			id: toSessionMessageId("skill-context"),
 			parts: [{ text: formatSkillUserContext(skill), type: "text" }],
 			role: "user",
-		});
+		} satisfies (typeof messages)[number];
+		const currentUserMessage = modelMessages.at(-1);
+		const lastMessage = messages.at(-1);
+		if (
+			currentUserMessage?.role === "user" &&
+			lastMessage !== undefined &&
+			lastMessage.id === currentUserMessage.id
+		) {
+			messages.splice(messages.length - 1, 0, skillContext);
+		} else {
+			messages.push(skillContext);
+		}
 	}
 	return {
 		agent: {

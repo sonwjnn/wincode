@@ -150,7 +150,6 @@ export const getOriginatingUserSkill = (
 		return;
 	}
 	return {
-		arguments: skill.arguments,
 		contentHash: skill.contentHash,
 		instructions: skill.instructions,
 		name: skill.name,

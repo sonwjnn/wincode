@@ -1,6 +1,10 @@
 import { isNull, isUndefined } from "@wincode/runtime-utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CommandSuggestion } from "@/modules/commands/command-controller";
+import type {
+	CommandSelection,
+	CommandSuggestion,
+	CommandSuggestionScope,
+} from "@/modules/commands/command-controller";
 import type { FileMentionOption } from "@/modules/file-mentions";
 import {
 	applyFileMentionReplacement,
@@ -25,6 +29,11 @@ import {
 	resetHistoryNavigation,
 	shouldRecordCtrlC,
 } from "./history";
+import {
+	applyTextEdit,
+	commandInsertionSeparator,
+	type TrackedCommandSelection,
+} from "./selections";
 import { preparePromptSubmission, type SubmitSnapshot } from "./submit";
 import { type ActiveTrigger, detectTrigger } from "./triggers";
 import type {
@@ -63,6 +72,8 @@ export function useChatInputController({
 	const historyIndexRef = useRef(-1);
 	const draftRef = useRef<PromptHistoryEntry>({ text: "", files: [] });
 	const promptRecordQueueRef = useRef(Promise.resolve());
+	const selectionsRef = useRef<TrackedCommandSelection[]>([]);
+	const textRef = useRef("");
 	const resetHistoryBaseline = useCallback((draft: string) => {
 		const baseline = resetHistoryNavigation(draft);
 		historyIndexRef.current = baseline.index;
@@ -122,7 +133,16 @@ export function useChatInputController({
 	const selectedIndexRef = useLatest(selectedIndex);
 	const onSubmitRef = useLatest(onSubmit);
 	const setProgrammaticText = useCallback(
-		(text: string, nextCursorOffset: number | null) => {
+		(
+			text: string,
+			nextCursorOffset: number | null,
+			nextSelections?: readonly TrackedCommandSelection[] | null
+		) => {
+			selectionsRef.current =
+				nextSelections === undefined
+					? applyTextEdit(selectionsRef.current, textRef.current, text)
+					: [...(nextSelections ?? [])];
+			textRef.current = text;
 			setTextValue(text);
 			setCursorOffset(nextCursorOffset);
 			setTextSyncRevision((revision) => revision + 1);
@@ -166,12 +186,16 @@ export function useChatInputController({
 		activeTrigger?.kind === "command" ? activeTrigger.query : undefined;
 	const fileMentionQuery =
 		activeTrigger?.kind === "file-mention" ? activeTrigger.query : undefined;
+	const commandScope: CommandSuggestionScope =
+		activeTrigger?.kind === "command" && activeTrigger.mode === "skill"
+			? "skill"
+			: "root";
 	const commandSuggestions = useMemo(
 		() =>
 			isUndefined(commandQuery)
 				? { allItems: [], items: [] }
-				: commandController.getSuggestions(commandQuery),
-		[commandController, commandQuery]
+				: commandController.getSuggestions(commandQuery, commandScope),
+		[commandController, commandQuery, commandScope]
 	);
 	const filteredCommands = commandSuggestions.items;
 	const filteredFileMentions = useMemo(
@@ -197,6 +221,12 @@ export function useChatInputController({
 		) => {
 			historyIndexRef.current = -1;
 			draftRef.current = { fileTokens, files, text };
+			selectionsRef.current = applyTextEdit(
+				selectionsRef.current,
+				textRef.current,
+				text
+			);
+			textRef.current = text;
 			setTextValue(text);
 			setCursorOffset(null);
 			setSelectedIndex(0);
@@ -209,6 +239,12 @@ export function useChatInputController({
 	);
 	const onProgrammaticTextChange = useCallback(
 		(text: string, cursor: number) => {
+			selectionsRef.current = applyTextEdit(
+				selectionsRef.current,
+				textRef.current,
+				text
+			);
+			textRef.current = text;
 			setTextValue(text);
 			setCursorOffset(cursor);
 		},
@@ -231,7 +267,8 @@ export function useChatInputController({
 			historyIndexRef.current = result.state.index;
 			setProgrammaticText(
 				result.entry.text,
-				direction < 0 ? 0 : result.entry.text.length
+				direction < 0 ? 0 : result.entry.text.length,
+				null
 			);
 			setRecalledFiles(result.entry.files);
 			setRecalledFileTokens(result.entry.fileTokens ?? []);
@@ -289,7 +326,7 @@ export function useChatInputController({
 
 			historyIndexRef.current = -1;
 			draftRef.current = { fileTokens, files, text };
-			setProgrammaticText(text, 0);
+			setProgrammaticText(text, 0, null);
 			setRecalledFiles(files);
 			setRecalledFileTokens(fileTokens);
 			setRecalledFilesRevision((revision) => revision + 1);
@@ -310,6 +347,48 @@ export function useChatInputController({
 		[filteredCommands, overlayKind]
 	);
 
+	const applyCommandInsertion = useCallback(
+		(selection: Extract<CommandSelection, { kind: "insert" }>) => {
+			const trigger = activeTrigger?.kind === "command" ? activeTrigger : null;
+			const start = trigger?.start ?? textValue.length;
+			const end = trigger?.end ?? textValue.length;
+			// Keep one separator: the trailing space is only needed when the
+			// trigger did not already sit before whitespace.
+			const separator = commandInsertionSeparator(
+				textValue,
+				end,
+				selection.reopen
+			);
+			const invocation = `${selection.invocation}${separator}`;
+			const nextText = `${textValue.slice(0, start)}${invocation}${textValue.slice(end)}`;
+			const cursor = start + invocation.length;
+			const tracked =
+				selection.intent === undefined || selection.reopen
+					? undefined
+					: {
+							end: start + selection.invocation.length,
+							kind: selection.intent.kind,
+							marker: selection.invocation,
+							name: selection.intent.name,
+							start,
+						};
+			const nextSelections = [
+				...applyTextEdit(selectionsRef.current, textValue, nextText),
+				...(tracked === undefined ? [] : [tracked]),
+			];
+			setProgrammaticText(nextText, cursor, nextSelections);
+			if (selection.reopen) {
+				const nextTrigger = detectTrigger(nextText, cursor);
+				setActiveTrigger(nextTrigger);
+				setOverlayKind(nextTrigger?.kind ?? null);
+				setSelectedIndex(0);
+				return;
+			}
+			closeOverlay();
+		},
+		[activeTrigger, closeOverlay, setProgrammaticText, textValue]
+	);
+
 	const selectCommandAtIndex = useCallback(
 		(index: number, source: "enter" | "tab") => {
 			const suggestion = resolveCommand(index);
@@ -323,16 +402,7 @@ export function useChatInputController({
 			}
 
 			if (selection.kind === "insert") {
-				const invocation = `${selection.invocation}${selection.reopen ? "" : " "}`;
-				setProgrammaticText(invocation, invocation.length);
-				if (selection.reopen) {
-					const trigger = detectTrigger(invocation, invocation.length);
-					setActiveTrigger(trigger);
-					setOverlayKind(trigger?.kind ?? null);
-					setSelectedIndex(0);
-					return;
-				}
-				closeOverlay();
+				applyCommandInsertion(selection);
 				return;
 			}
 
@@ -345,6 +415,7 @@ export function useChatInputController({
 		},
 		[
 			activeTrigger,
+			applyCommandInsertion,
 			closeOverlay,
 			commandController,
 			resolveCommand,
@@ -424,7 +495,7 @@ export function useChatInputController({
 	]);
 
 	const onEscape = useCallback(() => {
-		if (activeTrigger) {
+		if (activeTrigger?.kind === "file-mention") {
 			const result = removeTriggerText(textValue, activeTrigger);
 			setProgrammaticText(result.text, result.cursorOffset);
 		}
@@ -442,6 +513,7 @@ export function useChatInputController({
 					commandController,
 					disabled,
 					onSubmit: onSubmitRef.current,
+					selections: selectionsRef.current,
 				},
 				snapshot
 			);
@@ -462,7 +534,7 @@ export function useChatInputController({
 				});
 			}
 			resetHistoryBaseline("");
-			setProgrammaticText("", null);
+			setProgrammaticText("", null, null);
 			closeOverlay();
 			await prepared.execute();
 			return true;
@@ -493,7 +565,7 @@ export function useChatInputController({
 			}
 
 			resetHistoryBaseline("");
-			setProgrammaticText("", null);
+			setProgrammaticText("", null, null);
 			closeOverlay();
 			return true;
 		},

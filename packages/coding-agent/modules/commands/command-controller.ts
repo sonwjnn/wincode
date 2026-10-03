@@ -1,7 +1,6 @@
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
 import type { Skill, SkillContext } from "@/modules/skills";
 import { SKILL_NAMESPACE_PREFIX } from "@/modules/skills";
-import { findBuiltinCommand } from "./builtin-invocation";
 import {
 	type CommandItem,
 	createSkillCommandSpecs,
@@ -11,11 +10,16 @@ import {
 	getCommandLabel,
 } from "./command-item";
 import {
+	COMMANDS,
 	type CommandCapability,
 	type CommandSpec,
 	getVisibleCommands,
+	isOptionalTextCommand,
 } from "./commands";
-import { resolveSubmissionPrompt } from "./submission-resolution";
+import {
+	resolveSubmissionPrompt,
+	type SubmissionIntent,
+} from "./submission-resolution";
 
 declare const commandSuggestionIdBrand: unique symbol;
 
@@ -34,8 +38,24 @@ export type CommandSuggestions = {
 	items: readonly CommandSuggestion[];
 };
 
+/**
+ * Where the composer opened the command overlay: `root` at the start of an
+ * empty prompt, `skill` on a `/` token inside prose.
+ */
+export type CommandSuggestionScope = "root" | "skill";
+
+export type CommandSelectionIntent = Readonly<{
+	kind: "builtin" | "custom" | "skill";
+	name: string;
+}>;
+
 export type CommandSelection =
-	| { kind: "insert"; invocation: string; reopen: boolean }
+	| {
+			kind: "insert";
+			intent?: CommandSelectionIntent;
+			invocation: string;
+			reopen: boolean;
+	  }
 	| { execute: () => Promise<void>; kind: "execute" };
 
 export type CommandPrompt = {
@@ -54,12 +74,15 @@ export type CommandSubmissionPlan = {
 
 export type CommandSubmissionInput = {
 	hasAttachments: boolean;
+	intents: readonly SubmissionIntent[];
 	text: string;
-	visibleText: string;
 };
 
 export type CommandController = {
-	getSuggestions: (query: string) => CommandSuggestions;
+	getSuggestions: (
+		query: string,
+		scope?: CommandSuggestionScope
+	) => CommandSuggestions;
 	prepareSubmission: (
 		input: CommandSubmissionInput
 	) => Promise<CommandSubmissionPlan | undefined>;
@@ -100,6 +123,27 @@ const toSuggestion = (item: CommandItem): CommandSuggestion => ({
 	label: getCommandLabel(item),
 });
 
+const itemIntent = (item: CommandItem): CommandSelectionIntent | undefined =>
+	item.kind === "skill-search"
+		? undefined
+		: { kind: item.kind, name: item.name };
+
+/** Resolves the tracked Built-in selection into its command spec. */
+const builtinFromIntent = (
+	intent: SubmissionIntent,
+	text: string
+): CommandSpec | undefined => {
+	const spec: CommandSpec | undefined = COMMANDS.find(
+		(command) => command.name === intent.name
+	);
+	if (spec === undefined || !isOptionalTextCommand(spec)) {
+		return spec;
+	}
+	const argument =
+		intent.end === undefined ? "" : text.slice(intent.end).trim();
+	return argument ? { ...spec, argument } : spec;
+};
+
 /**
  * Owns slash-command discovery, matching, selection, and submission intent.
  * Input surfaces only render the suggestions and apply the returned plans.
@@ -126,7 +170,14 @@ export function createCommandController(
 	);
 
 	return {
-		getSuggestions(query) {
+		getSuggestions(query, scope = "root") {
+			if (scope === "skill") {
+				return {
+					allItems: skills.map(toSuggestion),
+					items: filterCommandItems(skills, query).map(toSuggestion),
+				};
+			}
+
 			const normalizedQuery = query.toLowerCase();
 			const isSkillSearch = normalizedQuery.startsWith(SKILL_NAMESPACE_PREFIX);
 			const isBareSkillSearch =
@@ -139,21 +190,33 @@ export function createCommandController(
 						...baseCommands,
 						...(isBareSkillSearch ? skills : []),
 					];
-			const matches = filterCommandItems(candidates, query);
 			return {
 				allItems: candidates.map(toSuggestion),
-				items: matches.map(toSuggestion),
+				items: filterCommandItems(candidates, query).map(toSuggestion),
 			};
 		},
 		async prepareSubmission(input) {
-			if (input.text.length === 0 && !input.hasAttachments) {
+			if (
+				input.text.length === 0 &&
+				!input.hasAttachments &&
+				input.intents.length === 0
+			) {
 				return;
 			}
 
-			const builtin = input.hasAttachments
-				? null
-				: findBuiltinCommand(input.text);
-			if (builtin) {
+			// A selected Built-in runs independently: its trailing text becomes
+			// the command argument, and co-selected Skill or Custom Command
+			// intents are not resolved or stripped. Attachments ride along with
+			// the composer, not with the command, exactly like a selected
+			// Built-in whose input capability is `none`.
+			const builtinIntent = input.intents.find(
+				(intent) => intent.kind === "builtin"
+			);
+			const builtin =
+				builtinIntent === undefined
+					? undefined
+					: builtinFromIntent(builtinIntent, input.text);
+			if (builtin !== undefined) {
 				return {
 					accept: async () => true,
 					execute: async () => {
@@ -165,8 +228,8 @@ export function createCommandController(
 			const resolution = await resolveSubmissionPrompt({
 				discoverCustomCommands: options.discoverCustomCommands,
 				discoverSkills: options.discoverSkills,
+				intents: input.intents,
 				text: input.text,
-				visibleText: input.visibleText,
 			});
 			if (resolution.kind === "rejected") {
 				options.onError(resolution.reason);
@@ -202,8 +265,10 @@ export function createCommandController(
 					item.kind === "builtin" &&
 					item.input.kind !== "none")
 			) {
+				const intent = itemIntent(item);
 				return {
 					kind: "insert",
+					...(intent === undefined ? {} : { intent }),
 					invocation: getCommandInvocation(item),
 					reopen: false,
 				};

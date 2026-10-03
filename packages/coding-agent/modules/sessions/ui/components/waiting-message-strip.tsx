@@ -1,8 +1,8 @@
 import { truncateWithOverflow } from "@/shared/display-sanitize";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
+import { replaceTextRanges } from "@/shared/utils/text-ranges";
 import type { SessionQueuedSubmission } from "../../agent-session/types";
-import { replaceTextRanges } from "../../pasted-text";
 import type { SessionSubmissionComposition } from "../../submission-types";
 
 /** How much of one waiting message fits on its line. */

@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { findBuiltinCommand } from "@/modules/commands/builtin-invocation";
 import { COMMANDS, getVisibleCommands } from "@/modules/commands/commands";
 
 test("keeps built-in slash names routed to their action IDs", () => {
@@ -35,36 +34,4 @@ test("suppresses popover rows for commands the view cannot run", () => {
 			(command) => command.action
 		)
 	).not.toContain("effort.select");
-});
-
-test("resolves typed built-in commands by exact name", () => {
-	expect(findBuiltinCommand(" /models ")).toMatchObject({
-		action: "model.select",
-	});
-	expect(findBuiltinCommand(" /effort ")).toMatchObject({
-		action: "effort.select",
-	});
-	expect(findBuiltinCommand("/MODELS")).toMatchObject({
-		action: "model.select",
-	});
-	expect(findBuiltinCommand("/settings")).toMatchObject({
-		action: "settings.open",
-	});
-	expect(findBuiltinCommand("/models now")).toBeNull();
-	expect(findBuiltinCommand("/settings now")).toBeNull();
-	expect(findBuiltinCommand("/variants")).toBeNull();
-	expect(findBuiltinCommand("models")).toBeNull();
-	expect(findBuiltinCommand("/skill:review")).toBeNull();
-	expect(findBuiltinCommand("/unknown")).toBeNull();
-});
-
-test("carries the compaction focus into the typed command", () => {
-	expect(findBuiltinCommand("/compact preserve decisions")).toMatchObject({
-		argument: "preserve decisions",
-		action: "session.compact",
-	});
-	expect(findBuiltinCommand("/compact")).toMatchObject({
-		action: "session.compact",
-	});
-	expect(findBuiltinCommand("/compactible")).toBeNull();
 });

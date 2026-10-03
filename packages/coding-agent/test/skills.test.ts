@@ -4,10 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	discoverSkillCandidates,
-	hasSkillNamespace,
 	loadSkills,
 	parseSkillFile,
-	parseSkillInvocation,
 } from "@/modules/skills";
 import { createConfigStore } from "@/shared/config/config-store";
 
@@ -136,25 +134,5 @@ describe("skills", () => {
 			},
 		]);
 		expect(skills.map((skill) => skill.name)).toEqual(["good"]);
-	});
-
-	test("parses namespaced slash invocation arguments", () => {
-		expect(parseSkillInvocation("/skill:review focus on auth")).toEqual({
-			name: "review",
-			arguments: "focus on auth",
-		});
-		expect(parseSkillInvocation("/skill:review")).toEqual({
-			name: "review",
-			arguments: "",
-		});
-		expect(parseSkillInvocation("/review focus on auth")).toBeNull();
-		expect(parseSkillInvocation("/skill: review")).toBeNull();
-		expect(parseSkillInvocation("plain text")).toBeNull();
-	});
-
-	test("recognizes the reserved namespace even when the name is malformed", () => {
-		expect(hasSkillNamespace("/skill:review")).toBe(true);
-		expect(hasSkillNamespace("  /SKILL:")).toBe(true);
-		expect(hasSkillNamespace("/review")).toBe(false);
 	});
 });

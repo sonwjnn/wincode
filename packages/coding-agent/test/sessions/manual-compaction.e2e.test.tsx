@@ -57,6 +57,7 @@ const {
 	seedCompactionHistory,
 	settleSessionUi,
 	waitForSessionCondition,
+	waitForSessionFrame,
 	writeE2EFrame,
 } = await import("@/test/support/e2e-fixture");
 
@@ -79,12 +80,21 @@ test("compacts manually through the UI and uses the summary on the next turn", a
 		});
 
 		await act(async () => {
-			await activeSetup.mockInput.typeText(
-				"/compact preserve database decisions"
-			);
-			await activeSetup.flush();
-			activeSetup.mockInput.pressEnter();
+			await activeSetup.mockInput.typeText("/compact");
 		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Compact session history")
+		);
+		// Commands run only when the composer selects them; Tab completes the
+		// row and tracks its intent, and the trailing text becomes the
+		// compaction focus.
+		await act(() => activeSetup.mockInput.pressTab());
+		await settleSessionUi(activeSetup);
+		await act(async () => {
+			await activeSetup.mockInput.typeText("preserve database decisions");
+		});
+		await settleSessionUi(activeSetup);
+		await act(() => activeSetup.mockInput.pressEnter());
 		await activeSetup.waitFor(
 			async () => (await store.getCompactions(sessionId)).length > 0,
 			{ maxPasses: 200 }

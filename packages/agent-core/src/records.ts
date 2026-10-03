@@ -94,7 +94,6 @@ export type SessionFileMentionPart = ReadonlyDeep<{
 
 /** Sanitized Skill activation metadata retained in a Session Record. */
 export type SessionSkillActivationRecord = ReadonlyDeep<{
-	arguments?: string;
 	contentHash: string;
 	name: string;
 	source: SkillActivationSource;
@@ -226,16 +225,11 @@ const isSessionSkillActivationRecord = (
 	}
 	return (
 		Object.keys(value).every(
-			(key) =>
-				key === "arguments" ||
-				key === "contentHash" ||
-				key === "name" ||
-				key === "source"
+			(key) => key === "contentHash" || key === "name" || key === "source"
 		) &&
 		isNonEmptyString(value.name) &&
 		isNonEmptyString(value.contentHash) &&
-		(value.source === "agent" || value.source === "explicit") &&
-		(isUndefined(value.arguments) || isString(value.arguments))
+		(value.source === "agent" || value.source === "explicit")
 	);
 };
 

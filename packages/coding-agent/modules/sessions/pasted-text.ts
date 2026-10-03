@@ -1,20 +1,7 @@
-export type TextReplacementRange = Readonly<{
-	end: number;
-	start: number;
-	text: string;
-}>;
-
-export const replaceTextRanges = (
-	text: string,
-	ranges: readonly TextReplacementRange[]
-): string =>
-	ranges
-		.toSorted((left, right) => right.start - left.start)
-		.reduce(
-			(result, range) =>
-				result.slice(0, range.start) + range.text + result.slice(range.end),
-			text
-		);
+import {
+	replaceTextRanges,
+	type TextReplacementRange,
+} from "@/shared/utils/text-ranges";
 
 /** Expands each composition marker once while preserving the remaining offsets. */
 export const expandPastedText = (

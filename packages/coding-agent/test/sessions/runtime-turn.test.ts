@@ -112,6 +112,121 @@ test("keeps inline file parts in the Agent Turn model input", () => {
 	]);
 });
 
+test("places the Skill context before the user message it was selected for", () => {
+	const turn = buildAgentTurn({
+		agent: agentId("build"),
+		modelMessages: [
+			{
+				id: sessionMessageId("skill-message"),
+				parts: [{ text: "Review the auth flow", type: "text" }],
+				role: "user",
+			},
+		],
+		modelTarget: createTurn().model,
+		resolvedAgent: buildAgent,
+		skill: {
+			contentHash: "hash-1",
+			instructions: "Review carefully.",
+			name: "review",
+			source: "explicit",
+		},
+		turnId: agentTurnId("turn-skill-order"),
+	});
+
+	expect(turn.input.messages.map(({ role }) => role)).toEqual(["user", "user"]);
+	expect(turn.input.messages[0]?.parts).toEqual([
+		{
+			text: '<untrusted-skill-context name="review" source="explicit" content-hash="hash-1">\nReview carefully.\n</untrusted-skill-context>',
+			type: "text",
+		},
+	]);
+	expect(turn.input.messages[1]?.parts).toEqual([
+		{ text: "Review the auth flow", type: "text" },
+	]);
+});
+
+test("appends the Skill context when the current user message is absent", () => {
+	const turn = buildAgentTurn({
+		agent: agentId("build"),
+		modelMessages: [
+			{
+				id: sessionMessageId("older-user"),
+				parts: [{ text: "earlier request", type: "text" }],
+				role: "user",
+			},
+			{
+				id: sessionMessageId("assistant-1"),
+				parts: [{ text: "earlier answer", type: "text" }],
+				role: "assistant",
+			},
+		],
+		modelTarget: createTurn().model,
+		resolvedAgent: buildAgent,
+		skill: {
+			contentHash: "hash-1",
+			instructions: "Review carefully.",
+			name: "review",
+			source: "explicit",
+		},
+		turnId: agentTurnId("turn-skill-append"),
+	});
+
+	// A Skill-only submission records an empty user message that the model
+	// input drops: the context must not attach to the older user message.
+	expect(turn.input.messages.map(({ role }) => role)).toEqual([
+		"user",
+		"assistant",
+		"user",
+	]);
+	expect(turn.input.messages[0]?.parts).toEqual([
+		{ text: "earlier request", type: "text" },
+	]);
+	expect(turn.input.messages[2]?.parts).toEqual([
+		{
+			text: expect.stringContaining('name="review"'),
+			type: "text",
+		},
+	]);
+});
+
+test("appends the Skill context when the current user message is empty", () => {
+	const turn = buildAgentTurn({
+		agent: agentId("build"),
+		modelMessages: [
+			{
+				id: sessionMessageId("older-user"),
+				parts: [{ text: "earlier request", type: "text" }],
+				role: "user",
+			},
+			{
+				id: sessionMessageId("empty-user"),
+				parts: [{ text: "", type: "text" }],
+				role: "user",
+			},
+		],
+		modelTarget: createTurn().model,
+		resolvedAgent: buildAgent,
+		skill: {
+			contentHash: "hash-1",
+			instructions: "Review carefully.",
+			name: "review",
+			source: "explicit",
+		},
+		turnId: agentTurnId("turn-skill-empty"),
+	});
+
+	// The empty user message never reaches the model input, so the context must
+	// not splice before the older user message.
+	expect(turn.input.messages.map(({ role }) => role)).toEqual(["user", "user"]);
+	expect(turn.input.messages[0]?.id).toBe(sessionMessageId("older-user"));
+	expect(turn.input.messages[1]?.parts).toEqual([
+		{
+			text: expect.stringContaining('name="review"'),
+			type: "text",
+		},
+	]);
+});
+
 class AbortOnSecondReadSignal extends EventTarget implements AbortSignal {
 	private readCount = 0;
 	readonly onabort: AbortSignal["onabort"] = null;

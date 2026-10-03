@@ -15,7 +15,6 @@ type UserMessageProps = {
 };
 
 export type AppliedSkill = {
-	arguments?: string;
 	contentHash: string;
 	name: string;
 	source?: "agent" | "explicit";
@@ -80,7 +79,6 @@ export const getAppliedSkill = (
 	}
 
 	return {
-		...(isString(skill.arguments) ? { arguments: skill.arguments } : {}),
 		contentHash: skill.contentHash,
 		name: skill.name,
 		...(skill.source === "agent" || skill.source === "explicit"

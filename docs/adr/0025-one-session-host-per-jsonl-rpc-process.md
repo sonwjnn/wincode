@@ -11,6 +11,13 @@ the CLI package into RPC Mode of `@wincode/coding-agent` without changing the
 one-Host-per-process lifecycle. This decision's wire contract is revised for
 issue #149 below.
 
+Wire-contract revision: Submission input carries one explicit
+`intent: { kind: "custom" | "skill", name }`. Text inference for commands and
+Skills is gone — typed or composed text stays literal, and a client names the
+Skill to activate or the Custom Command to expand. The former Skill-only
+intent with an argument string is removed, so the negotiated protocol major
+version is 3 and version 1 and 2 clients are rejected.
+
 ## Decision
 
 - The client calls `initialize` with protocol major version, capabilities,
@@ -24,11 +31,11 @@ issue #149 below.
   Workspace. A second bind is refused rather than replacing or multiplexing
   the Host.
 - Submission input is structured and shared with Interactive Mode: text,
-  supported attachments, explicit Skill intent, and Custom Command
-  composition. Attachments are transported only as bounded inline bytes or
+  supported attachments, and an explicit command intent naming a Skill or a
+  Custom Command. Attachments are transported only as bounded inline bytes or
   previously ingested Attachment References; an untrusted filesystem path never
-  implicitly authorizes a local read. Custom Commands expand through shared
-  Submission preparation, retaining their expanded prompt rather than being
+  implicitly authorizes a local read. A Custom Command expands through shared
+  Submission preparation, retaining its expanded prompt rather than being
   re-executed during steering or retry.
 - `session/submit` always admits a new Submission. It starts a turn when idle
   and enters the FIFO Submission Queue when busy; it never steers. The response
@@ -116,10 +123,12 @@ issue #149 below.
 - Interactive and RPC adapters use the same Agent Session admission,
   queue-head steering, preparation, Recall, persistence, and failure behavior;
   neither adapter selects a lane on the caller's behalf.
-- The breaking change is reflected in negotiated protocol major version 2:
-  `initialize` advertises structured Submission input, explicit steering, and
-  failed-Submission retry. Version 1 clients are rejected; the former text-only,
-  submit-driven auto-steering contract is not retained.
+- The breaking change is reflected in the negotiated protocol major version:
+  version 2 introduced structured Submission input, explicit steering, and
+  failed-Submission retry; version 3 replaced text-inferred command intent with
+  one explicit `intent` naming a Skill or Custom Command. Version 1 and 2
+  clients are rejected; the former text-only, submit-driven auto-steering
+  contract is not retained.
 - The Coding-Agent Application gains one lazily loaded non-interactive RPC
   Mode without loading OpenTUI. `stdout` is protocol-only and human-readable
   diagnostics use `stderr`.

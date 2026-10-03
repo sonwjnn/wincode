@@ -429,7 +429,6 @@ const toDurableMetadata = (
 	const durableSkill = isUndefined(skill)
 		? undefined
 		: {
-				arguments: skill.arguments,
 				contentHash: skill.contentHash,
 				name: skill.name,
 				source: skill.source ?? "explicit",

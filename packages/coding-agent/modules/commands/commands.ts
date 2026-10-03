@@ -146,7 +146,7 @@ export const isOptionalTextCommand = (
 
 /**
  * Built-in Commands whose popover row is offered in the current view. Hidden
- * kinds stay reachable by typing their name; only the row is suppressed.
+ * kinds cannot be selected, so they cannot run in that view.
  */
 export const getVisibleCommands = (
 	options: { unavailableCapabilities?: readonly CommandCapability[] } = {}

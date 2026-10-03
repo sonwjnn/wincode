@@ -12,6 +12,14 @@ Skills now live in a reserved namespace inside the chat input grammar.
 
 Status: accepted
 
+Revision: typed command dispatch is gone. Built-in Commands, Custom Commands,
+and Skills run only when the composer selects their overlay row; typed or
+pasted text — including `/skill:review` and `/compact focus` — stays ordinary
+prompt text. A selected Skill row still writes `/skill:<name>` as a tracked
+selection, and the reserved namespace, the aggregate row, and the bare-name
+reachability rule are unchanged. The namespace-mismatch input error went away
+with the typed parser. Skill search now matches names only.
+
 ## Decision
 
 `skill:` is the namespace a Skill invocation must carry: a row renders as

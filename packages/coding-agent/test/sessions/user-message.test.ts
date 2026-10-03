@@ -19,14 +19,13 @@ describe("getAppliedSkill", () => {
 		expect(
 			getAppliedSkill({
 				skill: {
-					arguments: "focus",
 					contentHash: "sha256:abc",
+					instructions: "Review carefully.",
 					name: "review",
 					source: "explicit",
 				},
 			})
 		).toEqual({
-			arguments: "focus",
 			contentHash: "sha256:abc",
 			name: "review",
 			source: "explicit",
@@ -51,8 +50,6 @@ describe("getAppliedSkill", () => {
 
 	test("rejects missing or incomplete skill metadata", () => {
 		expect(getAppliedSkill({ mode: "plan" })).toBeUndefined();
-		expect(
-			getAppliedSkill({ skill: { name: "review", arguments: "" } })
-		).toBeUndefined();
+		expect(getAppliedSkill({ skill: { name: "review" } })).toBeUndefined();
 	});
 });

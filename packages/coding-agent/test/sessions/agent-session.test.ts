@@ -4825,7 +4825,6 @@ test("retries a failed Steering Submission in place without duplicating its mess
 			resolveSkill: async () => ({
 				ok: true,
 				skill: {
-					arguments: "focus",
 					contentHash: "skill-hash",
 					instructions: "Review with focus.",
 					name: "review",
@@ -4843,7 +4842,7 @@ test("retries a failed Steering Submission in place without duplicating its mess
 					await allowBoundary.promise;
 					const delivered = await takeSteeringMessages();
 					expect(userPrompts(delivered)).toEqual([
-						'<untrusted-skill-context name="review" source="explicit" content-hash="skill-hash">\nReview with focus.\n<arguments>focus</arguments>\n</untrusted-skill-context>',
+						'<untrusted-skill-context name="review" source="explicit" content-hash="skill-hash">\nReview with focus.\n</untrusted-skill-context>',
 						"correction",
 					]);
 					expect(delivered.at(-1)?.parts).toContainEqual(acceptedFile);
@@ -4896,7 +4895,6 @@ test("retries a failed Steering Submission in place without duplicating its mess
 				files: [acceptedFile],
 				messageId: retryMessageId,
 				skill: {
-					arguments: "focus",
 					instructions: "Review with focus.",
 					name: "review",
 				},
