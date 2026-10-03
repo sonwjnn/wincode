@@ -39,6 +39,7 @@ import {
 } from "@/shared/display-sanitize";
 import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
 import { ToolApprovalPanel } from "@/shared/providers/approval/ui/tool-approval-panel";
+import { useToggleShortcut } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import {
 	getAgentColor,
@@ -456,8 +457,8 @@ const MemoizedToolMessagePart = memo(ToolMessagePart);
  * command header, execution status, and a preview of the beginning of the
  * sanitized result. Collapsed output is bounded to six visual rows measured
  * against the block's content width, and only overflowing blocks are
- * expandable; clicking the block toggles between the preview and the full
- * bounded result. Sanitization and preview layout are memoized on the raw
+ * expandable with Ctrl+O; the shortcut also scrolls the transcript to its
+ * latest content. Sanitization and preview layout are memoized on the raw
  * output and the measured width, so streamed updates of neighboring parts
  * never re-sanitize or re-lay-out settled results.
  */
@@ -490,6 +491,7 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 	);
 	const indicator = resolveOverflowIndicator(preview);
 	const canExpand = preview.hasOverflow;
+	useToggleShortcut("ctrl+o", () => setExpanded((value) => !value), canExpand);
 
 	// The measured content width drives preview wrapping and the header bound.
 	// Reflowing on real size changes (terminal resize, sidebar toggle) keeps the
@@ -518,11 +520,6 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 		<BorderedContentBlock
 			blockRef={blockRef}
 			colors={colors}
-			onMouseDown={() => {
-				if (canExpand) {
-					setExpanded((value) => !value);
-				}
-			}}
 			onSizeChange={handleBlockResize}
 			paddingX={SHELL_BLOCK_PADDING_X}
 		>
@@ -535,9 +532,12 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 			<text fg={colors.text} wrapMode="char">
 				{expanded ? sanitizedText : preview.text}
 			</text>
-			{expanded || isNull(indicator) ? null : (
-				<text fg={colors.textMuted}>{indicator}</text>
-			)}
+			{canExpand ? (
+				<text fg={colors.textMuted}>
+					{expanded ? "(Ctrl+O: Collapse)" : indicator}
+					{expanded ? null : " (Ctrl+O: Expand)"}
+				</text>
+			) : null}
 		</BorderedContentBlock>
 	);
 }

@@ -1,4 +1,3 @@
-import { TextAttributes } from "@opentui/core";
 import {
 	formatModelTokenCount,
 	formatModelUsdAmount,
@@ -21,7 +20,7 @@ export function SessionUsageBar({ summary }: { summary: SessionUsageSummary }) {
 
 	return (
 		<box flexDirection="row" flexShrink={0}>
-			<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+			<text fg={colors.textMuted}>
 				{!(isNull(summary.contextPercent) || isNull(summary.contextLimit)) &&
 				summary.contextLimit > 0 ? (
 					<>

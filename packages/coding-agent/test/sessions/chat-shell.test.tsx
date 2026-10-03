@@ -20,7 +20,12 @@ process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { homedir } from "node:os";
 import * as path from "node:path";
-import { RGBA, type ScrollBoxRenderable } from "@opentui/core";
+import {
+	CliRenderEvents,
+	RGBA,
+	type ScrollBoxRenderable,
+	TextareaRenderable,
+} from "@opentui/core";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import { act, useEffect, useState } from "react";
 import type { SessionQueuedSubmission } from "@/modules/sessions/agent-session/types";
@@ -34,6 +39,10 @@ import type {
 	ToolApprovalActions,
 	ToolApprovalRequest,
 } from "@/shared/providers/approval/types";
+import {
+	KeyboardLayerProvider,
+	useKeyboardLayer,
+} from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 
 import { approvalPanelEntry } from "../support/approval-panel-entry";
 
@@ -62,9 +71,6 @@ const { ConfigProvider } = await import("@/shared/config/config-provider");
 const { createConfigStore } = await import("@/shared/config/config-store");
 const { DialogProvider } = await import(
 	"@/shared/providers/dialog/dialog-provider"
-);
-const { KeyboardLayerProvider } = await import(
-	"@/shared/providers/keyboard-layer/keyboard-layer-provider"
 );
 const { ThemeProvider } = await import(
 	"@/shared/providers/theme/theme-provider"
@@ -165,6 +171,8 @@ const lines = (prefix: string, count: number): string =>
 	);
 
 type ChatShellProbeHandle = {
+	pushKeyboardLayer: (id: string) => void;
+	popKeyboardLayer: (id: string) => void;
 	projectApprovals: (entries: readonly ApprovalPanelEntry[]) => void;
 	remountComposer: () => void;
 	setCompactions: (compactions: SessionCompaction[]) => void;
@@ -214,6 +222,7 @@ function ChatShellProbe({
 	onRetry,
 	queuedSubmissions,
 }: ChatShellProbeProps) {
+	const { pop, push } = useKeyboardLayer();
 	const { project: projectApprovals } = useApprovalPanels();
 	const [compactions, setCompactions] = useState(initialCompactions);
 	const [composerRevision, setComposerRevision] = useState(0);
@@ -222,6 +231,8 @@ function ChatShellProbe({
 	useEffect(() => {
 		holder.current = {
 			projectApprovals,
+			popKeyboardLayer: pop,
+			pushKeyboardLayer: push,
 			remountComposer: () => setComposerRevision((revision) => revision + 1),
 			setCompactions,
 			setCompacting,
@@ -230,7 +241,7 @@ function ChatShellProbe({
 		return () => {
 			holder.current = null;
 		};
-	}, [holder, projectApprovals]);
+	}, [holder, pop, projectApprovals, push]);
 	return (
 		<>
 			<PromptConfigProbe holder={agentHolder} />
@@ -248,6 +259,7 @@ function ChatShellProbe({
 				onSubmit={() => true}
 				promptHistory={[]}
 				queuedSubmissions={queuedSubmissions}
+				viewId="test"
 			/>
 		</>
 	);
@@ -432,7 +444,7 @@ const assertSummaryDiffClipping = async ({
 		await setup.renderOnce();
 		await flushUi(setup);
 		const scrollbox = setup.renderer.root.findDescendantById(
-			"session-scrollbox"
+			"chat-shell-test-transcript"
 		) as ScrollBoxRenderable | undefined;
 		expect(scrollbox).toBeDefined();
 		scrollbox?.scrollTo(0);
@@ -468,6 +480,225 @@ const assertSummaryDiffClipping = async ({
 		setup.renderer.destroy();
 	}
 };
+describe("ChatShell composer focus", () => {
+	test("routes typing to the composer when terminal focus returns", async () => {
+		const { setup } = await renderChatShell([], { height: 20, width: 100 });
+
+		try {
+			await flushUi(setup);
+			const composer = setup.renderer.currentFocusedRenderable;
+			expect(composer).toBeInstanceOf(TextareaRenderable);
+			if (!(composer instanceof TextareaRenderable)) {
+				throw new Error("The chat composer did not receive startup focus.");
+			}
+
+			composer.blur();
+			await act(async () => {
+				setup.renderer.emit(CliRenderEvents.FOCUS);
+				await setup.mockInput.typeText("focus return prompt");
+			});
+			await flushUi(setup);
+
+			expect(setup.captureCharFrame()).toContain("focus return prompt");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+	test("routes typing to the composer when the pointer moves inside the view", async () => {
+		const { setup } = await renderChatShell([], { height: 20, width: 100 });
+
+		try {
+			await flushUi(setup);
+			const composer = setup.renderer.currentFocusedRenderable;
+			expect(composer).toBeInstanceOf(TextareaRenderable);
+			if (!(composer instanceof TextareaRenderable)) {
+				throw new Error("The chat composer did not receive startup focus.");
+			}
+
+			composer.blur();
+			await act(async () => {
+				await setup.mockMouse.moveTo(10, 5);
+				await setup.mockInput.typeText("hover return prompt");
+			});
+			await flushUi(setup);
+
+			expect(setup.captureCharFrame()).toContain("hover return prompt");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+	test("keeps the composer focus and caret after a background click", async () => {
+		const { setup } = await renderChatShell([], { height: 24, width: 100 });
+
+		try {
+			await flushUi(setup);
+			const composer = setup.renderer.currentFocusedRenderable;
+			expect(composer).toBeInstanceOf(TextareaRenderable);
+			if (!(composer instanceof TextareaRenderable)) {
+				throw new Error("The chat composer did not receive startup focus.");
+			}
+
+			await act(async () => {
+				await setup.mockInput.typeText("before");
+			});
+			expect(composer.cursorOffset).toBe(6);
+			const transcriptRow = setup
+				.captureCharFrame()
+				.split("\n")
+				.findIndex((row) => row.includes("No messages yet."));
+			expect(transcriptRow).toBeGreaterThanOrEqual(0);
+			await act(async () => {
+				await setup.mockMouse.moveTo(3, transcriptRow);
+				composer.blur();
+				await setup.mockMouse.pressDown(3, transcriptRow);
+				await setup.mockMouse.release(3, transcriptRow);
+				await setup.mockInput.typeText("-after");
+			});
+			await flushUi(setup);
+
+			expect(composer.plainText).toBe("before-after");
+			expect(composer.cursorOffset).toBe(12);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+	test("preserves another focused control when the pointer moves inside the view", async () => {
+		const retries: string[] = [];
+		const { setup } = await renderChatShell(
+			[
+				userMessage("user-1"),
+				userMessage("user-2"),
+				assistantMessage([{ text: "done", type: "text" }], "assistant-2"),
+			],
+			{
+				height: 30,
+				onRetry: (messageId) => {
+					retries.push(messageId);
+				},
+				width: 100,
+			}
+		);
+
+		try {
+			await flushUi(setup);
+			const retryControl =
+				setup.renderer.root.findDescendantById("retry-user-1");
+			expect(retryControl?.focusable).toBe(true);
+			await act(async () => {
+				retryControl?.focus();
+				await setup.mockMouse.moveTo(10, 5);
+				setup.mockInput.pressEnter();
+			});
+			await flushUi(setup);
+
+			expect(retries).toEqual(["user-1"]);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+	test("keeps a focusable retry control active after a mouse click", async () => {
+		const retries: string[] = [];
+		const { setup } = await renderChatShell(
+			[
+				userMessage("user-1"),
+				userMessage("user-2"),
+				assistantMessage([{ text: "done", type: "text" }], "assistant-2"),
+			],
+			{
+				height: 30,
+				onRetry: (messageId) => {
+					retries.push(messageId);
+				},
+				width: 100,
+			}
+		);
+
+		try {
+			await flushUi(setup);
+			const retryControl =
+				setup.renderer.root.findDescendantById("retry-user-1");
+			expect(retryControl?.focusable).toBe(true);
+			if (!retryControl) {
+				throw new Error("The older turn retry control was not rendered.");
+			}
+			await act(async () => {
+				await setup.mockMouse.click(retryControl.x + 1, retryControl.y);
+			});
+			await flushUi(setup);
+
+			expect(retries).toEqual(["user-1"]);
+			expect(setup.renderer.currentFocusedRenderable).toBe(retryControl);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+	test("preserves another focused control when terminal focus returns", async () => {
+		const retries: string[] = [];
+		const { setup } = await renderChatShell(
+			[
+				userMessage("user-1"),
+				userMessage("user-2"),
+				assistantMessage([{ text: "done", type: "text" }], "assistant-2"),
+			],
+			{
+				height: 30,
+				onRetry: (messageId) => {
+					retries.push(messageId);
+				},
+				width: 100,
+			}
+		);
+
+		try {
+			await flushUi(setup);
+			const retryControl =
+				setup.renderer.root.findDescendantById("retry-user-1");
+			expect(retryControl?.focusable).toBe(true);
+			await act(async () => {
+				retryControl?.focus();
+				setup.renderer.emit(CliRenderEvents.FOCUS);
+				setup.mockInput.pressEnter();
+			});
+			await flushUi(setup);
+
+			expect(retries).toEqual(["user-1"]);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+	test("keeps background clicks from stealing focus while another keyboard layer is active", async () => {
+		const { holder, setup } = await renderChatShell([], {
+			height: 24,
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			await act(async () => {
+				holder.current?.pushKeyboardLayer("dialog");
+			});
+			await flushUi(setup);
+			const transcriptRow = setup
+				.captureCharFrame()
+				.split("\n")
+				.findIndex((row) => row.includes("No messages yet."));
+			expect(transcriptRow).toBeGreaterThanOrEqual(0);
+			await act(async () => {
+				await setup.mockMouse.moveTo(3, transcriptRow);
+				await setup.mockMouse.click(3, transcriptRow);
+			});
+			await flushUi(setup);
+
+			expect(setup.renderer.currentFocusedRenderable).toBeNull();
+		} finally {
+			await act(async () => {
+				holder.current?.popKeyboardLayer("dialog");
+			});
+			setup.renderer.destroy();
+		}
+	});
+});
+
 describe("ChatShell retry controls", () => {
 	test("keeps older unanswered turns retryable and keyboard activatable", async () => {
 		const retries: string[] = [];
@@ -633,7 +864,7 @@ describe("ChatShell approval dock", () => {
 			expect(frame).toContain("First queued approval.");
 			expect(frame).not.toContain("Second queued approval.");
 			expect(
-				setup.renderer.root.findDescendantById("session-scrollbox")
+				setup.renderer.root.findDescendantById("chat-shell-test-transcript")
 			).toBeDefined();
 			expect(cancelFirstApproval).not.toHaveBeenCalled();
 			setup.mockInput.pressEnter();
@@ -1177,8 +1408,11 @@ describe("ChatShell shell output blocks", () => {
 	});
 
 	test("sanitizes ANSI escapes and control characters in preview and expanded output", async () => {
-		const raw =
-			"line1\r\n\u001b[31mline2\u001b[0m\b\u0000done\n\u001b]0;title\u0007tail";
+		const raw = [
+			"line1\r\n\u001b[31mline2\u001b[0m\b\u0000done",
+			lines("tail", 8),
+			"\u001b]0;title\u0007tail",
+		].join("\n");
 		const { setup } = await renderChatShell(
 			[assistantMessage([shellPart({ output: { exitCode: 0, output: raw } })])],
 			{ height: 40, width: 100 }
@@ -1192,19 +1426,16 @@ describe("ChatShell shell output blocks", () => {
 			expect(frame).toContain("line1");
 			expect(frame).toContain("line2");
 			expect(frame).toContain("done");
-			expect(frame).toContain("tail");
+			expect(frame).not.toContain("tail 8");
 			expect(frame).not.toContain("\u001b[31m");
 			expect(frame).not.toContain("\u0000");
 
-			const blockRow = frame
-				.split("\n")
-				.findIndex((row) => row.includes("$ bun test"));
-			await setup.mockMouse.click(10, blockRow);
+			setup.mockInput.pressKey("o", { ctrl: true });
 			await flushUi(setup);
 			frame = setup.captureCharFrame();
 
-			expect(frame).toContain("line2");
-			expect(frame).toContain("done");
+			expect(frame).toContain("tail 8");
+			expect(frame).toContain("tail");
 			expect(frame).not.toContain("\u001b[31m");
 			expect(frame).not.toContain("\u001b]0;title");
 			expect(frame).not.toContain("\u0007");
@@ -1214,14 +1445,12 @@ describe("ChatShell shell output blocks", () => {
 	});
 
 	test("redacts secret-looking output in preview and expanded output", async () => {
+		const output = `Authorization: Bearer hidden-token\n${lines("safe", 8)}`;
 		const { setup } = await renderChatShell(
 			[
 				assistantMessage([
 					shellPart({
-						output: {
-							exitCode: 0,
-							output: "Authorization: Bearer hidden-token",
-						},
+						output: { exitCode: 0, output },
 					}),
 				]),
 			],
@@ -1235,22 +1464,21 @@ describe("ChatShell shell output blocks", () => {
 
 			expect(frame).toContain("[redacted]");
 			expect(frame).not.toContain("hidden-token");
+			expect(frame).not.toContain("safe 8");
 
-			const blockRow = frame
-				.split("\n")
-				.findIndex((row) => row.includes("$ bun test"));
-			await setup.mockMouse.click(10, blockRow);
+			setup.mockInput.pressKey("o", { ctrl: true });
 			await flushUi(setup);
 			frame = setup.captureCharFrame();
 
 			expect(frame).toContain("[redacted]");
+			expect(frame).toContain("safe 8");
 			expect(frame).not.toContain("hidden-token");
 		} finally {
 			setup.renderer.destroy();
 		}
 	});
 
-	test("toggles only overflowing blocks on click", async () => {
+	test("toggles only overflowing shell output with Ctrl+O", async () => {
 		const { setup } = await renderChatShell(
 			[
 				assistantMessage([
@@ -1265,6 +1493,7 @@ describe("ChatShell shell output blocks", () => {
 			await flushUi(setup);
 			let frame = setup.captureCharFrame();
 			expect(frame).toContain("… 4 more lines");
+			expect(frame).toContain("(Ctrl+O: Expand)");
 			expect(frame).not.toContain("long 7");
 
 			const blockRow = frame
@@ -1274,11 +1503,20 @@ describe("ChatShell shell output blocks", () => {
 			await flushUi(setup);
 			frame = setup.captureCharFrame();
 
+			expect(frame).toContain("… 4 more lines");
+			expect(frame).toContain("(Ctrl+O: Expand)");
+			expect(frame).not.toContain("long 7");
+
+			setup.mockInput.pressKey("o", { ctrl: true });
+			await flushUi(setup);
+			frame = setup.captureCharFrame();
+
 			expect(frame).toContain("long 7");
 			expect(frame).toContain("long 10");
+			expect(frame).toContain("(Ctrl+O: Collapse)");
 			expect(frame).not.toContain("… 4 more lines");
 
-			await setup.mockMouse.click(10, blockRow);
+			setup.mockInput.pressKey("o", { ctrl: true });
 			await flushUi(setup);
 			frame = setup.captureCharFrame();
 
@@ -1298,17 +1536,13 @@ describe("ChatShell shell output blocks", () => {
 		try {
 			await setup.renderOnce();
 			await flushUi(setup);
-			let frame = setup.captureCharFrame();
-			const blockRow = frame
-				.split("\n")
-				.findIndex((row) => row.includes("$ bun test"));
-
-			await setup.mockMouse.click(10, blockRow);
+			setup.mockInput.pressKey("o", { ctrl: true });
 			await flushUi(setup);
-			frame = setup.captureCharFrame();
+			const frame = setup.captureCharFrame();
 
 			expect(frame).toContain("1 passing");
 			expect(frame).toContain("2 passing");
+			expect(frame).not.toContain("(Ctrl+O: Expand)");
 		} finally {
 			setup.renderer.destroy();
 		}
@@ -1330,10 +1564,7 @@ describe("ChatShell shell output blocks", () => {
 			let frame = setup.captureCharFrame();
 			expect(frame).toContain("… 4 more lines");
 
-			const blockRow = frame
-				.split("\n")
-				.findIndex((row) => row.includes("$ bun test"));
-			await setup.mockMouse.click(10, blockRow);
+			setup.mockInput.pressKey("o", { ctrl: true });
 			await flushUi(setup);
 			frame = setup.captureCharFrame();
 			expect(frame).toContain("row 10");
@@ -1346,15 +1577,48 @@ describe("ChatShell shell output blocks", () => {
 			expect(frame).not.toContain("more lines");
 
 			// Collapsing after the resize restores a preview for the new width.
-			const resizedBlockRow = frame
-				.split("\n")
-				.findIndex((row) => row.includes("$ bun test"));
-			await setup.mockMouse.click(10, resizedBlockRow);
+			setup.mockInput.pressKey("o", { ctrl: true });
 			await flushUi(setup);
 			frame = setup.captureCharFrame();
 			expect(frame).toContain("row 1");
 			expect(frame).not.toContain("row 7");
 			expect(frame).toContain("… 4 more lines");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+	test("scrolls to expanded shell output when Ctrl+O expands it", async () => {
+		const messages = [
+			...Array.from({ length: 12 }, (_, index) =>
+				userMessage(`history ${index + 1}`)
+			),
+			assistantMessage([
+				shellPart({ output: { exitCode: 0, output: lines("tail", 12) } }),
+			]),
+		];
+		const { setup } = await renderChatShell(messages, {
+			height: 20,
+			width: 100,
+		});
+
+		try {
+			await setup.renderOnce();
+			await flushUi(setup);
+			const scrollbox = setup.renderer.root.findDescendantById(
+				"chat-shell-test-transcript"
+			) as ScrollBoxRenderable | undefined;
+			expect(scrollbox).toBeDefined();
+			scrollbox?.scrollTo(0);
+			await setup.renderOnce();
+			let frame = setup.captureCharFrame();
+			expect(frame).toContain("history 1");
+			expect(frame).not.toContain("tail 12");
+
+			setup.mockInput.pressKey("o", { ctrl: true });
+			await flushUi(setup);
+			frame = setup.captureCharFrame();
+
+			expect(frame).toContain("tail 12");
 		} finally {
 			setup.renderer.destroy();
 		}
@@ -1455,7 +1719,7 @@ describe("ChatShell edit diff blocks", () => {
 			await setup.renderOnce();
 			await flushUi(setup);
 			const scrollbox = setup.renderer.root.findDescendantById(
-				"session-scrollbox"
+				"chat-shell-test-transcript"
 			) as ScrollBoxRenderable | undefined;
 			expect(scrollbox).toBeDefined();
 			const addedBackground = RGBA.fromHex(DEFAULT_THEME.colors.diffAddedBg);

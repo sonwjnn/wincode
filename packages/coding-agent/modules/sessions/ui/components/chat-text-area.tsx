@@ -93,6 +93,7 @@ const getTrackedPastedTexts = (
 	});
 
 type ChatTextAreaProps = {
+	id: string;
 	disabled?: boolean;
 	draftKey?: string;
 	unavailableCommandCapabilities?: readonly CommandCapability[];
@@ -147,6 +148,7 @@ const readPastedImageOrPath = async (pastedText: string) => {
 	};
 };
 export function ChatTextArea({
+	id,
 	disabled = false,
 	draftKey,
 	unavailableCommandCapabilities:
@@ -1042,6 +1044,7 @@ export function ChatTextArea({
 				<textarea
 					focused={isFocused}
 					focusedTextColor={disabled ? colors.textDisabled : colors.text}
+					id={id}
 					keyBindings={CHAT_TEXT_AREA_KEY_BINDINGS}
 					onContentChange={handleTextareaContentChange}
 					placeholder={`Ask anything... "Fix broken tests"`}

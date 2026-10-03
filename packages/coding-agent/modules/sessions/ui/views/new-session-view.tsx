@@ -18,6 +18,7 @@ import { createSkillSnapshot } from "@/modules/skills";
 import { APP_VERSION } from "@/shared/app-info";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import { useUiComponentFocus } from "@/shared/ui/ui-component-registry";
 import { resolveLastUsedSessionSelection } from "../../selection";
 import { getSessionStore } from "../../storage/get-session-store";
 import { projectSessionRecords } from "../../storage/session-record";
@@ -56,11 +57,18 @@ export const hasChatPromptContent = ({
 const HOME_UNAVAILABLE_COMMAND_CAPABILITIES = ["compaction"] as const;
 
 const NEW_SESSION_DRAFT_KEY = "new-session";
+const NEW_SESSION_VIEW_ID = "new-session-view";
+const NEW_SESSION_COMPOSER_ID = `${NEW_SESSION_VIEW_ID}-composer`;
 
 export function NewSessionView() {
 	const router = useRouter();
 	const [_error, setError] = useState<string | null>(null);
 	const [isCreatingSession, setIsCreatingSession] = useState(false);
+	const focusHandlers = useUiComponentFocus({
+		componentId: NEW_SESSION_COMPOSER_ID,
+		enabled: !isCreatingSession,
+		scopeId: NEW_SESSION_VIEW_ID,
+	});
 	const [isPromptConfigRestored, setIsPromptConfigRestored] = useState(false);
 	const [initializedDefaultAgentId, setInitializedDefaultAgentId] = useState<
 		string | undefined
@@ -227,7 +235,15 @@ export function NewSessionView() {
 	};
 
 	return (
-		<box flexDirection="column" height="100%" width="100%">
+		// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events.
+		<box
+			flexDirection="column"
+			height="100%"
+			id={NEW_SESSION_VIEW_ID}
+			onMouseDown={focusHandlers.onMouseDown}
+			onMouseMove={focusHandlers.onMouseMove}
+			width="100%"
+		>
 			<box
 				alignItems="center"
 				flexGrow={1}
@@ -247,6 +263,7 @@ export function NewSessionView() {
 					<ChatTextArea
 						disabled={isCreatingSession}
 						draftKey={NEW_SESSION_DRAFT_KEY}
+						id={NEW_SESSION_COMPOSER_ID}
 						onCompact={() => {
 							show({
 								message: "Compaction is unavailable without an active session.",

@@ -79,8 +79,10 @@ export const runInteractive = async (): Promise<number> => {
 	router._rendered ??= [];
 
 	const renderer = await createCliRenderer({
+		enableMouseMovement: true,
 		exitOnCtrlC: false,
 		targetFps: 60,
+		useMouse: true,
 	});
 	const exited = Promise.withResolvers<number>();
 	const destroy = renderer.destroy.bind(renderer);

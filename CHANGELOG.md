@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+- **A view-scoped focus registry keeps the composer reachable.** Session and
+  new-session views resolve composers by OpenTUI IDs instead of callback refs.
+  Terminal activation and pointer movement restore focus; non-control background
+  clicks restore the composer without moving its caret, while focusable controls
+  and higher-priority keyboard layers retain focus. Mouse-motion events remain
+  best-effort when the terminal does not report them.
+
 - **Test lanes distinguish full portfolios from direct Bun runs.** Local and CI commands now identify Default and E2E portfolios explicitly, and CI exercises the portfolio runner contract.
 
 - **Session-owned contracts keep cross-module capabilities narrow.** RPC consumes
