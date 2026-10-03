@@ -15,6 +15,7 @@ import {
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
 import { ProgressBar } from "@/shared/ui/progress-bar";
+import { useUiComponentFocus } from "@/shared/ui/ui-component-registry";
 import type { SessionQueuedSubmission } from "../../agent-session/types";
 import {
 	isCompactionSummaryMessage,
@@ -65,6 +66,7 @@ type ChatShellProps = {
 	recalledSubmissions?: readonly SessionSubmissionComposition[];
 	/** Changes whenever `recalledSubmissions` holds something new to restore. */
 	recallRevision?: number;
+	viewId: string;
 	viewState?: SessionViewState;
 };
 function ActivityFooter({
@@ -138,8 +140,13 @@ export function ChatShell({
 	recalledSubmissions,
 	recallRevision,
 	viewState,
+	viewId,
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
+	const focusScopeId = `chat-shell-${viewId}`;
+	const composerId = `${focusScopeId}-composer`;
+	const transcriptId = `${focusScopeId}-transcript`;
+	const backgroundComponentIds = useMemo(() => [transcriptId], [transcriptId]);
 	const { isTopLayer } = useKeyboardLayer();
 	const [scrollRequest, setScrollRequest] = useState(0);
 	const { agent, model } = usePromptConfig();
@@ -148,6 +155,12 @@ export function ChatShell({
 	const hasPendingApproval = useApprovalPanels().entries.some((entry) =>
 		isUndefined(entry.resolution)
 	);
+	const focusHandlers = useUiComponentFocus({
+		backgroundComponentIds,
+		componentId: composerId,
+		enabled: !hasPendingApproval,
+		scopeId: focusScopeId,
+	});
 	const displayMessages = messages.filter(
 		(message) => !isCompactionSummaryMessage(message)
 	);
@@ -214,10 +227,14 @@ export function ChatShell({
 	};
 
 	return (
+		// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events.
 		<box
 			flexDirection="column"
 			flexGrow={1}
 			height="100%"
+			id={focusScopeId}
+			onMouseDown={focusHandlers.onMouseDown}
+			onMouseMove={focusHandlers.onMouseMove}
 			paddingTop={0}
 			paddingX={1}
 			width="100%"
@@ -225,7 +242,7 @@ export function ChatShell({
 			<scrollbox
 				flexGrow={1}
 				height="100%"
-				id="session-scrollbox"
+				id={transcriptId}
 				ref={scrollboxRef}
 				stickyScroll
 				stickyStart="bottom"
@@ -287,6 +304,7 @@ export function ChatShell({
 						<box flexShrink={0} width="100%">
 							<ChatTextArea
 								draftKey={draftKey}
+								id={composerId}
 								onCompact={onCompact}
 								onEmptySubmit={onEmptySubmit}
 								onOpenSettings={onOpenSettings}

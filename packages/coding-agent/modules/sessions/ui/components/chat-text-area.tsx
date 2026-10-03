@@ -7,7 +7,7 @@ import {
 	SyntaxStyle,
 	type TextareaRenderable,
 } from "@opentui/core";
-import { useFocus, useKeyboard, usePaste, useRenderer } from "@opentui/react";
+import { useKeyboard, usePaste } from "@opentui/react";
 import {
 	findSupportedChatModelSelection,
 	getSupportedModelEfforts,
@@ -93,6 +93,7 @@ const getTrackedPastedTexts = (
 	});
 
 type ChatTextAreaProps = {
+	id: string;
 	disabled?: boolean;
 	draftKey?: string;
 	unavailableCommandCapabilities?: readonly CommandCapability[];
@@ -147,6 +148,7 @@ const readPastedImageOrPath = async (pastedText: string) => {
 	};
 };
 export function ChatTextArea({
+	id,
 	disabled = false,
 	draftKey,
 	unavailableCommandCapabilities:
@@ -204,7 +206,6 @@ export function ChatTextArea({
 	const syncFileMentionExtmarksRef = useRef<() => void>(() => undefined);
 
 	const { isTopLayer, pop, push, setResponder } = useKeyboardLayer();
-	const renderer = useRenderer();
 	const { colors } = useTheme();
 	const { show } = useToast();
 	const commandControllerFactory = useCommandControllerFactory();
@@ -976,20 +977,6 @@ export function ChatTextArea({
 	});
 
 	const isFocused = !disabled && (isTopLayer("base") || isTopLayer("command"));
-	useFocus(() => {
-		if (!isFocused) {
-			return;
-		}
-
-		const textarea = textAreaRef.current;
-		const focusedRenderable = renderer.currentFocusedRenderable;
-		if (
-			textarea &&
-			(focusedRenderable === null || focusedRenderable === textarea)
-		) {
-			textarea.focus();
-		}
-	});
 
 	return (
 		<box
@@ -1057,6 +1044,7 @@ export function ChatTextArea({
 				<textarea
 					focused={isFocused}
 					focusedTextColor={disabled ? colors.textDisabled : colors.text}
+					id={id}
 					keyBindings={CHAT_TEXT_AREA_KEY_BINDINGS}
 					onContentChange={handleTextareaContentChange}
 					placeholder={`Ask anything... "Fix broken tests"`}

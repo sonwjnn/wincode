@@ -815,6 +815,7 @@ export function SessionView({
 					queuedSubmissions={snapshot.queuedSubmissions}
 					recalledSubmissions={recalledSubmissions}
 					recallRevision={recallRevision}
+					viewId={sessionId}
 					viewState={snapshot.viewState}
 				/>
 			</box>
