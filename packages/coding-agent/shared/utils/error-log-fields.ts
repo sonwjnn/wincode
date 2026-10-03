@@ -18,7 +18,8 @@ export const errorLogFields = (error: unknown): LogFields => {
 	};
 };
 
-const describeReason = (error: unknown): string | undefined => {
+/** Human-readable reason for an escaped value, when one exists. */
+export const describeReason = (error: unknown): string | undefined => {
 	if (isError(error)) {
 		return error.message;
 	}

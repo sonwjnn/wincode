@@ -1,11 +1,12 @@
 import {
-	isError,
-	isString,
 	type LogFields,
 	logger,
 	resolveLogFilePath,
 } from "@wincode/runtime-utils";
-import { errorDiagnosticFields } from "./utils/error-log-fields";
+import {
+	describeReason,
+	errorDiagnosticFields,
+} from "./utils/error-log-fields";
 
 export type FatalErrorKind = "uncaught-exception" | "unhandled-rejection";
 
@@ -43,16 +44,6 @@ const crashFields = (kind: FatalErrorKind, error: unknown): LogFields => ({
 
 const singleLine = (text: string): string => text.split("\n").join(" ");
 
-const describeFatal = (error: unknown): string => {
-	if (isError(error)) {
-		return error.message;
-	}
-	if (isString(error)) {
-		return error;
-	}
-	return "Unknown error";
-};
-
 /**
  * Build the handler that turns an escaping error into diagnostics, teardown,
  * and a non-zero exit. A fatal error arriving while the first is still being
@@ -80,7 +71,7 @@ export const createCrashHandler = (deps: CrashGuardDeps) => {
 		await deps.flushLogs().catch(() => undefined);
 		try {
 			deps.writeStderr(
-				`wincode: unexpected error: ${singleLine(describeFatal(error))} (log: ${logPath})\n`
+				`wincode: unexpected error: ${singleLine(describeReason(error) ?? "Unknown error")} (log: ${logPath})\n`
 			);
 		} finally {
 			deps.exit(1);
