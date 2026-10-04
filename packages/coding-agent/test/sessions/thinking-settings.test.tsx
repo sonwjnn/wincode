@@ -21,17 +21,13 @@ import {
 	TEST_CONFIG_ROOT,
 	TEST_HOME_ROOT,
 } from "../support/config-store";
+import { flushTestRenderer } from "../support/opentui";
 
 const WORKSPACE = "/workspace";
 
 const flushRenders = async (setup: TestRendererSetup): Promise<void> => {
-	await act(async () => {
-		for (let pass = 0; pass < 3; pass += 1) {
-			await Bun.sleep(20);
-			await setup.renderOnce();
-		}
-		await setup.flush({ maxPasses: 20 });
-	});
+	await flushTestRenderer(setup, 3);
+	await setup.flush({ maxPasses: 20 });
 };
 
 test("global Hide thinking replaces live and historical reasoning and reset restores it", async () => {
@@ -116,6 +112,65 @@ test("global Hide thinking replaces live and historical reasoning and reset rest
 		const resetFrame = setup.captureCharFrame();
 		expect(resetFrame).toContain("previous thought");
 		expect(resetFrame).toContain("current thought");
+	} finally {
+		act(() => setup.renderer.destroy());
+		setMarkdownTreeSitterClientForTests(previousTreeSitterClient);
+	}
+});
+
+test("keeps reasoning visible until a saved Hide thinking preference loads", async () => {
+	const configFile = `${TEST_CONFIG_ROOT}/wincode.json`;
+	const files: Record<string, string> = {
+		[configFile]: '{"display":{"hideThinking":true}}',
+	};
+	const baseConfigStore = createInMemoryConfigStore(files);
+	const initialReadStarted = Promise.withResolvers<void>();
+	const releaseInitialRead = Promise.withResolvers<void>();
+	const configStore = {
+		...baseConfigStore,
+		getSnapshot: async (workspace: string) => {
+			initialReadStarted.resolve();
+			await releaseInitialRead.promise;
+			return baseConfigStore.getSnapshot(workspace);
+		},
+	};
+	const configValue = {
+		configStore,
+		homeRoot: TEST_HOME_ROOT,
+		workspace: WORKSPACE,
+	};
+	const previousTreeSitterClient = setMarkdownTreeSitterClientForTests(
+		new MockTreeSitterClient({ autoResolveTimeout: 0 })
+	);
+	const setup = await testRender(
+		<ConfigProvider value={configValue}>
+			<ThemeProvider>
+				<KeyboardLayerProvider>
+					<ApprovalPanelsProvider>
+						<HideThinkingSettingsProvider>
+							<BotMessageContent
+								parts={[{ text: "stored thought", type: "reasoning" }]}
+							/>
+						</HideThinkingSettingsProvider>
+					</ApprovalPanelsProvider>
+				</KeyboardLayerProvider>
+			</ThemeProvider>
+		</ConfigProvider>,
+		{ height: 8, width: 100 }
+	);
+
+	try {
+		await initialReadStarted.promise;
+		await flushRenders(setup);
+		const pendingFrame = setup.captureCharFrame();
+		expect(pendingFrame).toContain("stored thought");
+		expect(pendingFrame).not.toContain("Thinking...");
+
+		releaseInitialRead.resolve();
+		await flushRenders(setup);
+		const loadedFrame = setup.captureCharFrame();
+		expect(loadedFrame).toContain("Thinking...");
+		expect(loadedFrame).not.toContain("stored thought");
 	} finally {
 		act(() => setup.renderer.destroy());
 		setMarkdownTreeSitterClientForTests(previousTreeSitterClient);

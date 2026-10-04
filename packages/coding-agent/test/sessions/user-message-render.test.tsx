@@ -4,6 +4,7 @@ import { act } from "react";
 import { buildAgent } from "@/modules/agents";
 import { UserMessage } from "@/modules/sessions/ui/messages/user-message";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+import { flushTestRenderer as flush } from "../support/opentui";
 
 test("renders Markdown syntax in user messages instead of showing raw markers", async () => {
 	const setup = await testRender(
@@ -17,12 +18,7 @@ test("renders Markdown syntax in user messages instead of showing raw markers", 
 	);
 
 	try {
-		await act(async () => {
-			for (let pass = 0; pass < 3; pass += 1) {
-				await Bun.sleep(20);
-				await setup.renderOnce();
-			}
-		});
+		await flush(setup, 3);
 		const frame = setup.captureCharFrame();
 
 		expect(frame).toContain("Review this patch");

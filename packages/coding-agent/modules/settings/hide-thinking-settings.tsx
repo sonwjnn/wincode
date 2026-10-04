@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
-import { createContext, useContext, useEffect, useState } from "react";
-import { useConfig } from "@/shared/config/config-provider";
+import { createContext, useContext } from "react";
 import { HIDE_THINKING_SETTING } from "./catalog";
+import { useGlobalBooleanPreference } from "./global-boolean-preference";
 
 export type HideThinkingSettingsState = {
 	readonly hidden: boolean | null;
@@ -16,31 +16,10 @@ export function HideThinkingSettingsProvider({
 }: {
 	children: ReactNode;
 }) {
-	const { configStore, workspace } = useConfig();
-	const [hidden, setHidden] = useState<boolean | null>(null);
-
-	useEffect(() => {
-		let active = true;
-		const loadPreference = async (): Promise<void> => {
-			try {
-				const snapshot = await configStore.getSnapshot(workspace);
-				if (active) {
-					setHidden(
-						(current) =>
-							current ?? HIDE_THINKING_SETTING.read(snapshot, {}).value
-					);
-				}
-			} catch {
-				if (active) {
-					setHidden((current) => current ?? false);
-				}
-			}
-		};
-		void loadPreference();
-		return () => {
-			active = false;
-		};
-	}, [configStore, workspace]);
+	const { value: hidden, setValue: setHidden } = useGlobalBooleanPreference(
+		HIDE_THINKING_SETTING,
+		false
+	);
 
 	return (
 		<HideThinkingSettingsContext.Provider value={{ hidden, setHidden }}>
@@ -55,5 +34,5 @@ export function useHideThinkingSettings(): HideThinkingSettingsState | null {
 
 export function useHideThinking(): boolean {
 	const settings = useHideThinkingSettings();
-	return settings === null ? false : (settings.hidden ?? true);
+	return settings?.hidden ?? false;
 }

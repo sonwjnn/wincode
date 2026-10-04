@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { TextAttributes } from "@opentui/core";
-import { MockTreeSitterClient } from "@opentui/core/testing";
+import {
+	MockTreeSitterClient,
+	type TestRendererSetup,
+} from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { fromAny } from "@total-typescript/shoehorn";
 import { act, useEffect, useMemo, useState } from "react";
@@ -22,6 +25,7 @@ import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboar
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { approvalPanelEntry } from "../support/approval-panel-entry";
 import { toolCallId } from "../support/identifiers";
+import { flushTestRenderer as flushUi } from "../support/opentui";
 
 const { BotMessageContent } = await import(
 	"@/modules/sessions/ui/messages/bot-message"
@@ -57,17 +61,6 @@ class RecordingTreeSitterClient extends MockTreeSitterClient {
 	}
 }
 
-const flushRenderPasses = async (
-	setup: Awaited<ReturnType<typeof testRender>>
-) => {
-	// Markdown blocks resolve their (mocked) highlight asynchronously, so
-	// settle a few passes before capturing the frame.
-	for (let pass = 0; pass < 3; pass += 1) {
-		await Bun.sleep(10);
-		await setup.renderOnce();
-	}
-};
-
 const renderFrame = async (
 	parts: SessionMessage["parts"],
 	height = 4,
@@ -85,23 +78,16 @@ const renderFrame = async (
 	);
 
 	try {
-		await flushRenderPasses(setup);
+		await flushUi(setup, 3);
 		return setup.captureCharFrame();
 	} finally {
 		setup.renderer.destroy();
 	}
 };
 
-const flushUi = async (
-	setup: Awaited<ReturnType<typeof testRender>>
-): Promise<void> => {
-	await Bun.sleep(20);
-	await setup.renderOnce();
-};
-
 type ApprovalFrame = {
 	project: ApprovalPanelsContextValue["project"];
-	setup: Awaited<ReturnType<typeof testRender>>;
+	setup: TestRendererSetup;
 };
 
 /** Answers a projected request the way the session's settlement would. */
@@ -241,7 +227,7 @@ describe("BotMessageContent", () => {
 		);
 
 		try {
-			await flushRenderPasses(setup);
+			await flushUi(setup, 3);
 			const frame = setup.captureCharFrame();
 			expect(frame).toContain("← Edit src/lifecycle.ts +40 −1");
 			expect(frame).toContain("(Ctrl+O: Expand)");
@@ -281,7 +267,7 @@ describe("BotMessageContent", () => {
 			{ height: 60, width: 120 }
 		);
 		try {
-			await flushRenderPasses(setup);
+			await flushUi(setup, 3);
 			let frame = setup.captureCharFrame();
 			expect(frame).toContain("Writing src/generated.ts");
 			expect(frame).not.toContain("Write src/generated.ts · 48 lines");
@@ -293,7 +279,7 @@ describe("BotMessageContent", () => {
 			expect(frame).toContain("… 38 more lines (Ctrl+O: Expand)");
 
 			setup.mockInput.pressKey("o", { ctrl: true });
-			await flushUi(setup);
+			await flushUi(setup, 3);
 			frame = setup.captureCharFrame();
 			expect(frame).toContain("const line48 = 48;");
 			expect(frame).toContain("48 + const line48 = 48;");
@@ -568,7 +554,7 @@ describe("BotMessageContent", () => {
 		);
 
 		try {
-			await flushRenderPasses(setup);
+			await flushUi(setup, 3);
 			let frame = setup.captureCharFrame();
 			expect(frame).toContain("← Edit src/large.ts +1001 −1");
 			expect(frame).not.toContain("▸");
@@ -586,7 +572,7 @@ describe("BotMessageContent", () => {
 			expect(frame).toContain("+ line 14");
 
 			setup.mockInput.pressKey("o", { ctrl: true });
-			await flushUi(setup);
+			await flushUi(setup, 3);
 			frame = setup.captureCharFrame();
 			expect(frame).toContain("+ line 14");
 			expect(frame).not.toContain("▸");
@@ -1038,7 +1024,7 @@ describe("BotMessageContent", () => {
 		);
 
 		try {
-			await flushRenderPasses(setup);
+			await flushUi(setup, 3);
 			const frame = setup.captureCharFrame();
 			const bodySpans = setup
 				.captureSpans()
@@ -1060,6 +1046,35 @@ describe("BotMessageContent", () => {
 					({ attributes }) => (attributes & TextAttributes.ITALIC) !== 0
 				)
 			).toBe(true);
+		} finally {
+			act(() => setup.renderer.destroy());
+			setMarkdownTreeSitterClientForTests(previousTreeSitterClient);
+		}
+	});
+
+	test("preserves indentation that makes thinking Markdown a code block", async () => {
+		const previousTreeSitterClient = setMarkdownTreeSitterClientForTests(null);
+		const setup = await testRender(
+			<ThemeProvider>
+				<KeyboardLayerProvider>
+					<ApprovalPanelsProvider>
+						<BotMessageContent
+							parts={[
+								{
+									text: "    **indented code**\n\nVisible prose",
+									type: "reasoning",
+								},
+							]}
+						/>
+					</ApprovalPanelsProvider>
+				</KeyboardLayerProvider>
+			</ThemeProvider>,
+			{ height: 8, width: 120 }
+		);
+
+		try {
+			await flushUi(setup, 3);
+			expect(setup.captureCharFrame()).toContain("**indented code**");
 		} finally {
 			act(() => setup.renderer.destroy());
 			setMarkdownTreeSitterClientForTests(previousTreeSitterClient);

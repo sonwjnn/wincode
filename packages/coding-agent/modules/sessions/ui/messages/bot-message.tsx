@@ -713,12 +713,17 @@ export function BotMessageContent({
 								</box>
 							) : (
 								<MarkdownMessagePart
-									text={group.parts
-										.map((part) =>
-											part.type === "reasoning" ? part.text.trim() : ""
-										)
-										.filter((text) => text.length > 0)
-										.join("\n\n")}
+									text={group.parts.reduce((text, part) => {
+										if (
+											part.type !== "reasoning" ||
+											part.text.trim().length === 0
+										) {
+											return text;
+										}
+										return text.length === 0
+											? part.text
+											: `${text}\n\n${part.text}`;
+									}, "")}
 									variant="thinking"
 								/>
 							)}
