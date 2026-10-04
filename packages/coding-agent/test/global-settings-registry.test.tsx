@@ -2,12 +2,14 @@ import { expect, test } from "bun:test";
 import { testRender } from "@opentui/react/test-utils";
 import { act } from "react";
 import {
-	AUTO_COMPACT_SETTING_ID,
-	COPY_ON_SELECT_SETTING_ID,
-	GlobalBooleanPreferencesProvider,
-	HIDE_THINKING_SETTING_ID,
+	AUTO_COMPACT_SETTING,
+	COPY_ON_SELECT_SETTING,
+	createSettingsRegistry,
+	HIDE_THINKING_SETTING,
+	type SettingRegistryItem,
 	type SettingsOperations,
-	useGlobalBooleanPreference,
+	SettingsRegistryProvider,
+	useSettingRegistryValue,
 	useSettingsOperations,
 } from "@/modules/settings";
 import { ConfigProvider } from "@/shared/config/config-provider";
@@ -20,6 +22,39 @@ import { flushTestRenderer } from "./support/opentui";
 
 const WORKSPACE = "/workspace";
 
+const DENSITY_SETTING: SettingRegistryItem<
+	"comfortable" | "compact",
+	"display.density"
+> = {
+	id: "display.density",
+	registry: {
+		defaultValue: "comfortable",
+		path: ["display", "density"],
+	},
+	validate: (value): value is "comfortable" | "compact" =>
+		value === "comfortable" || value === "compact",
+};
+
+test("registry stores select values using the item's declared value type", () => {
+	const registry = createSettingsRegistry([DENSITY_SETTING]);
+	expect(registry.get(DENSITY_SETTING)).toEqual({ status: "loading" });
+
+	registry.initialize(DENSITY_SETTING.id, "compact");
+	const initialized = registry.get(DENSITY_SETTING);
+	if (initialized.status !== "ready") {
+		throw new Error("Density preference did not initialize.");
+	}
+	const density: "comfortable" | "compact" = initialized.value;
+	expect(density).toBe("compact");
+
+	registry.publish(DENSITY_SETTING.id, "comfortable");
+	const updated = registry.get(DENSITY_SETTING);
+	if (updated.status !== "ready") {
+		throw new Error("Density preference did not update.");
+	}
+	expect(updated.value).toBe("comfortable");
+});
+
 test("one registry serves catalogued global preferences and settings writes", async () => {
 	const configStore = createInMemoryConfigStore();
 	const configValue = {
@@ -31,11 +66,11 @@ test("one registry serves catalogued global preferences and settings writes", as
 
 	function Harness() {
 		operations = useSettingsOperations();
-		const autoCompact = useGlobalBooleanPreference(AUTO_COMPACT_SETTING_ID);
+		const autoCompact = useSettingRegistryValue(AUTO_COMPACT_SETTING);
 		let label = "loading";
-		if (autoCompact === true) {
+		if (autoCompact.status === "ready" && autoCompact.value) {
 			label = "on";
-		} else if (autoCompact === false) {
+		} else if (autoCompact.status === "ready") {
 			label = "off";
 		}
 		return <text>Auto-compact: {label}</text>;
@@ -43,9 +78,9 @@ test("one registry serves catalogued global preferences and settings writes", as
 
 	const setup = await testRender(
 		<ConfigProvider value={configValue}>
-			<GlobalBooleanPreferencesProvider>
+			<SettingsRegistryProvider>
 				<Harness />
-			</GlobalBooleanPreferencesProvider>
+			</SettingsRegistryProvider>
 		</ConfigProvider>,
 		{ height: 3, width: 40 }
 	);
@@ -65,13 +100,13 @@ test("one registry serves catalogued global preferences and settings writes", as
 		}
 
 		await act(async () => {
-			await settings.setValue(AUTO_COMPACT_SETTING_ID, false);
+			await settings.setValue(AUTO_COMPACT_SETTING.id, false);
 		});
 		await flush();
 		expect(setup.captureCharFrame()).toContain("Auto-compact: off");
 
 		await act(async () => {
-			await settings.resetValue(AUTO_COMPACT_SETTING_ID);
+			await settings.resetValue(AUTO_COMPACT_SETTING.id);
 		});
 		await flush();
 		expect(setup.captureCharFrame()).toContain("Auto-compact: on");
@@ -110,15 +145,20 @@ test("a late registry load cannot overwrite a preference written while loading",
 
 	function Harness() {
 		operations = useSettingsOperations();
-		const hideThinking = useGlobalBooleanPreference(HIDE_THINKING_SETTING_ID);
-		return <text>Hide thinking: {hideThinking === true ? "on" : "off"}</text>;
+		const hideThinking = useSettingRegistryValue(HIDE_THINKING_SETTING);
+		return (
+			<text>
+				Hide thinking:{" "}
+				{hideThinking.status === "ready" && hideThinking.value ? "on" : "off"}
+			</text>
+		);
 	}
 
 	const setup = await testRender(
 		<ConfigProvider value={configValue}>
-			<GlobalBooleanPreferencesProvider>
+			<SettingsRegistryProvider>
 				<Harness />
-			</GlobalBooleanPreferencesProvider>
+			</SettingsRegistryProvider>
 		</ConfigProvider>,
 		{ height: 3, width: 40 }
 	);
@@ -131,7 +171,7 @@ test("a late registry load cannot overwrite a preference written while loading",
 		}
 
 		await act(async () => {
-			await settings.setValue(HIDE_THINKING_SETTING_ID, true);
+			await settings.setValue(HIDE_THINKING_SETTING.id, true);
 		});
 		await flushTestRenderer(setup, 3);
 		await setup.flush({ maxPasses: 20 });
@@ -166,11 +206,11 @@ test("registry uses descriptor defaults when the initial config read fails", asy
 	};
 
 	function Harness() {
-		const copyOnSelect = useGlobalBooleanPreference(COPY_ON_SELECT_SETTING_ID);
+		const copyOnSelect = useSettingRegistryValue(COPY_ON_SELECT_SETTING);
 		let label = "loading";
-		if (copyOnSelect === true) {
+		if (copyOnSelect.status === "ready" && copyOnSelect.value) {
 			label = "on";
-		} else if (copyOnSelect === false) {
+		} else if (copyOnSelect.status === "ready") {
 			label = "off";
 		}
 		return <text>Copy on select: {label}</text>;
@@ -178,9 +218,9 @@ test("registry uses descriptor defaults when the initial config read fails", asy
 
 	const setup = await testRender(
 		<ConfigProvider value={configValue}>
-			<GlobalBooleanPreferencesProvider>
+			<SettingsRegistryProvider>
 				<Harness />
-			</GlobalBooleanPreferencesProvider>
+			</SettingsRegistryProvider>
 		</ConfigProvider>,
 		{ height: 3, width: 40 }
 	);
@@ -196,6 +236,73 @@ test("registry uses descriptor defaults when the initial config read fails", asy
 		expect(setup.captureCharFrame()).toContain("Copy on select: on");
 	} finally {
 		failInitialRead.resolve();
+		act(() => setup.renderer.destroy());
+	}
+});
+
+test("registry publishes persisted writes before a failed snapshot refresh", async () => {
+	const configFile = `${TEST_CONFIG_ROOT}/wincode.json`;
+	const files: Record<string, string> = {};
+	const baseConfigStore = createInMemoryConfigStore(files);
+	const configStore = {
+		...baseConfigStore,
+		refreshSnapshot: async () => {
+			throw new Error("Could not refresh settings.");
+		},
+	};
+	const configValue = {
+		configStore,
+		homeRoot: TEST_HOME_ROOT,
+		workspace: WORKSPACE,
+	};
+	let operations: SettingsOperations | undefined;
+
+	function Harness() {
+		operations = useSettingsOperations();
+		const hideThinking = useSettingRegistryValue(HIDE_THINKING_SETTING);
+		return (
+			<text>
+				Hide thinking:{" "}
+				{hideThinking.status === "ready" && hideThinking.value ? "on" : "off"}
+			</text>
+		);
+	}
+
+	const setup = await testRender(
+		<ConfigProvider value={configValue}>
+			<SettingsRegistryProvider>
+				<Harness />
+			</SettingsRegistryProvider>
+		</ConfigProvider>,
+		{ height: 3, width: 40 }
+	);
+
+	try {
+		await flushTestRenderer(setup, 3);
+		await setup.flush({ maxPasses: 20 });
+		expect(setup.captureCharFrame()).toContain("Hide thinking: off");
+
+		const settings = operations;
+		if (settings === undefined) {
+			throw new Error("Settings operations did not initialize.");
+		}
+		let writeError: unknown;
+		await act(async () => {
+			try {
+				await settings.setValue(HIDE_THINKING_SETTING.id, true);
+			} catch (error) {
+				writeError = error;
+			}
+		});
+		await flushTestRenderer(setup, 3);
+		await setup.flush({ maxPasses: 20 });
+
+		expect(writeError).toBeInstanceOf(Error);
+		expect(setup.captureCharFrame()).toContain("Hide thinking: on");
+		expect(JSON.parse(files[configFile] ?? "{}")).toEqual({
+			display: { hideThinking: true },
+		});
+	} finally {
 		act(() => setup.renderer.destroy());
 	}
 });

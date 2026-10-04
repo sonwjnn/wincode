@@ -1,9 +1,9 @@
 import { useCallback, useMemo } from "react";
 import { useConfig } from "@/shared/config/config-provider";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
-import { useGlobalBooleanPreferenceRegistry } from "./global-boolean-preference";
 import { createSettingsOperations } from "./operations";
 import { SettingsDialogContent } from "./settings-dialog";
+import { useSettingsRegistry } from "./settings-registry";
 import type { SettingRuntimeContext, SettingsOperations } from "./types";
 
 const EMPTY_SETTING_RUNTIME_CONTEXT: SettingRuntimeContext = {};
@@ -14,26 +14,21 @@ export function useSettingsOperations(
 	runtime: SettingRuntimeContext = EMPTY_SETTING_RUNTIME_CONTEXT
 ): SettingsOperations {
 	const config = useConfig();
-	const globalBooleanPreferences = useGlobalBooleanPreferenceRegistry();
+	const settingsRegistry = useSettingsRegistry();
 	return useMemo(
 		() =>
 			createSettingsOperations({
 				configStore: config.configStore,
 				runtime: {
 					...runtime,
-					onGlobalBooleanPreferenceChanged: (id, value) => {
-						runtime.onGlobalBooleanPreferenceChanged?.(id, value);
-						globalBooleanPreferences?.publish(id, value);
+					onRegisteredSettingChanged: (id, value) => {
+						settingsRegistry?.publish(id, value);
+						runtime.onRegisteredSettingChanged?.(id, value);
 					},
 				},
 				workspace: config.workspace,
 			}),
-		[
-			config.configStore,
-			config.workspace,
-			globalBooleanPreferences?.publish,
-			runtime,
-		]
+		[config.configStore, config.workspace, settingsRegistry?.publish, runtime]
 	);
 }
 

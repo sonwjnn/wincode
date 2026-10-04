@@ -1,6 +1,7 @@
-import { HIDE_THINKING_SETTING_ID } from "./catalog";
-import { useGlobalBooleanPreference } from "./global-boolean-preference";
+import { HIDE_THINKING_SETTING } from "./catalog";
+import { useSettingRegistryValue } from "./settings-registry";
 
 export function useHideThinking(): boolean {
-	return useGlobalBooleanPreference(HIDE_THINKING_SETTING_ID) ?? false;
+	const setting = useSettingRegistryValue(HIDE_THINKING_SETTING);
+	return setting.status === "ready" ? setting.value : false;
 }

@@ -8,8 +8,8 @@ import { act } from "react";
 import { BotMessageContent } from "@/modules/sessions/ui/messages/bot-message";
 import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
 import {
-	GlobalBooleanPreferencesProvider,
 	type SettingsOperations,
+	SettingsRegistryProvider,
 	useSettingsOperations,
 } from "@/modules/settings";
 import { ConfigProvider } from "@/shared/config/config-provider";
@@ -64,9 +64,9 @@ test("global Hide thinking replaces live and historical reasoning and reset rest
 			<ThemeProvider>
 				<KeyboardLayerProvider>
 					<ApprovalPanelsProvider>
-						<GlobalBooleanPreferencesProvider>
+						<SettingsRegistryProvider>
 							<Harness />
-						</GlobalBooleanPreferencesProvider>
+						</SettingsRegistryProvider>
 					</ApprovalPanelsProvider>
 				</KeyboardLayerProvider>
 			</ThemeProvider>
@@ -147,11 +147,11 @@ test("keeps reasoning visible until a saved Hide thinking preference loads", asy
 			<ThemeProvider>
 				<KeyboardLayerProvider>
 					<ApprovalPanelsProvider>
-						<GlobalBooleanPreferencesProvider>
+						<SettingsRegistryProvider>
 							<BotMessageContent
 								parts={[{ text: "stored thought", type: "reasoning" }]}
 							/>
-						</GlobalBooleanPreferencesProvider>
+						</SettingsRegistryProvider>
 					</ApprovalPanelsProvider>
 				</KeyboardLayerProvider>
 			</ThemeProvider>

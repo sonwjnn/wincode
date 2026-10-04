@@ -114,13 +114,12 @@ describe("createSettingsOperations", () => {
 		});
 	});
 
-	test("notifies the global preference registry by ID after write and reset", async () => {
-		const changes: { readonly id: string; readonly value: boolean }[] = [];
+	test("notifies the registered setting after successful writes and resets", async () => {
+		const changes: { readonly id: string; readonly value: unknown }[] = [];
 		const operations = createSettingsOperations({
 			configStore: createTestStore({}),
 			runtime: {
-				onGlobalBooleanPreferenceChanged: (id, value) =>
-					changes.push({ id, value }),
+				onRegisteredSettingChanged: (id, value) => changes.push({ id, value }),
 			},
 			workspace: WORKSPACE,
 		});
