@@ -1,34 +1,23 @@
-import type { ReactNode } from "react";
-import { createContext, useContext } from "react";
 import type { CopyOnSelectProps } from "@/shared/clipboard/copy-on-select";
 import { CopyOnSelect } from "@/shared/clipboard/copy-on-select";
 import { COPY_ON_SELECT_SETTING } from "./catalog";
-import { useGlobalBooleanPreference } from "./global-boolean-preference";
+import { createGlobalBooleanPreferenceContext } from "./global-boolean-preference";
 
 export type CopyOnSelectSettingsState = {
 	readonly enabled: boolean | null;
 	readonly setEnabled: (enabled: boolean) => void;
 };
 
-const CopyOnSelectSettingsContext =
-	createContext<CopyOnSelectSettingsState | null>(null);
+const copyOnSelectSettings = createGlobalBooleanPreferenceContext(
+	COPY_ON_SELECT_SETTING,
+	true,
+	({ value, setValue }): CopyOnSelectSettingsState => ({
+		enabled: value,
+		setEnabled: setValue,
+	})
+);
 
-export function CopyOnSelectSettingsProvider({
-	children,
-}: {
-	children: ReactNode;
-}) {
-	const { value: enabled, setValue: setEnabled } = useGlobalBooleanPreference(
-		COPY_ON_SELECT_SETTING,
-		true
-	);
-
-	return (
-		<CopyOnSelectSettingsContext.Provider value={{ enabled, setEnabled }}>
-			{children}
-		</CopyOnSelectSettingsContext.Provider>
-	);
-}
+export const CopyOnSelectSettingsProvider = copyOnSelectSettings.Provider;
 
 export function CopyOnSelectFromSettings({
 	write,
@@ -40,6 +29,4 @@ export function CopyOnSelectFromSettings({
 	return <CopyOnSelect enabled={settings.enabled} write={write} />;
 }
 
-export function useCopyOnSelectSettings(): CopyOnSelectSettingsState | null {
-	return useContext(CopyOnSelectSettingsContext);
-}
+export const useCopyOnSelectSettings = copyOnSelectSettings.usePreference;

@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { useConfig } from "@/shared/config/config-provider";
 import type { BooleanSettingDescriptor } from "./types";
 
@@ -35,4 +36,25 @@ export function useGlobalBooleanPreference(
 	}, [configStore, descriptor, fallback, workspace]);
 
 	return { value, setValue };
+}
+
+export function createGlobalBooleanPreferenceContext<State>(
+	descriptor: BooleanSettingDescriptor,
+	fallback: boolean,
+	mapState: (state: GlobalBooleanPreferenceState) => State
+) {
+	const Context = createContext<State | null>(null);
+
+	function Provider({ children }: { children: ReactNode }) {
+		const state = useGlobalBooleanPreference(descriptor, fallback);
+		return (
+			<Context.Provider value={mapState(state)}>{children}</Context.Provider>
+		);
+	}
+
+	function usePreference(): State | null {
+		return useContext(Context);
+	}
+
+	return { Provider, usePreference };
 }
