@@ -6,6 +6,7 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
 import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import { ATTACHMENT_ID_DISPLAY_LENGTH } from "../../storage/attachment-store";
+import { MarkdownContent } from "./markdown-message-part";
 
 type UserMessageProps = {
 	agent: AgentId;
@@ -139,7 +140,7 @@ export function UserMessage({
 			>
 				{body && (
 					<box justifyContent="center" paddingX={2} paddingY={1} width="100%">
-						<text fg={colors.text}>{body}</text>
+						<MarkdownContent text={body} />
 					</box>
 				)}
 

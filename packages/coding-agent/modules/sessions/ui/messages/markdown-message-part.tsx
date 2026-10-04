@@ -28,34 +28,49 @@ const stripMarkdownControlCharacters = (value: string): string =>
 	).join("");
 
 /**
- * Renders one assistant text part as mapped markdown: headings, emphasis,
- * inline code, fenced code blocks, tables, links and lists are laid out by
- * OpenTUI's `MarkdownRenderable` instead of surfacing raw syntax. Control
- * characters are stripped so output cannot inject layout or escape sequences.
- * Streaming uses top-level block mode: completed blocks are frozen while only
- * the unfinished tail is reparsed. This prevents settled headings and lists
- * from alternating between raw and concealed frames on later token updates.
+ * Renders message content through OpenTUI Markdown after sanitizing terminal
+ * controls. Thinking content keeps Markdown formatting while italicizing the
+ * complete block; user and assistant content use the standard theme.
  */
-export const MarkdownMessagePart = memo(function MarkdownMessagePart({
+export const MarkdownContent = memo(function MarkdownContent({
 	text,
+	variant = "standard",
 }: {
 	text: string;
+	variant?: "standard" | "thinking";
 }) {
 	const { colors } = useTheme();
-	const syntaxStyle = useMemo(() => resolveSyntaxStyle(colors), [colors]);
+	const syntaxStyle = useMemo(
+		() => resolveSyntaxStyle(colors, variant),
+		[colors, variant]
+	);
 	const sanitized = useMemo(() => stripMarkdownControlCharacters(text), [text]);
 
 	return (
+		<markdown
+			conceal
+			content={sanitized}
+			internalBlockMode="top-level"
+			streaming
+			syntaxStyle={syntaxStyle}
+			treeSitterClient={getTreeSitterClientForTests()}
+			width="100%"
+		/>
+	);
+});
+
+export const MarkdownMessagePart = memo(function MarkdownMessagePart({
+	text,
+	variant = "standard",
+}: {
+	text: string;
+	variant?: "standard" | "thinking";
+}) {
+	const { colors } = useTheme();
+
+	return (
 		<box backgroundColor={colors.background} paddingX={3} width="100%">
-			<markdown
-				conceal
-				content={sanitized}
-				internalBlockMode="top-level"
-				streaming
-				syntaxStyle={syntaxStyle}
-				treeSitterClient={getTreeSitterClientForTests()}
-				width="100%"
-			/>
+			<MarkdownContent text={text} variant={variant} />
 		</box>
 	);
 });

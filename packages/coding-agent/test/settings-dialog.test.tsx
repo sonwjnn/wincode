@@ -321,6 +321,54 @@ test("Ctrl+R removes the persisted copy preference and restores the default", as
 	act(() => setup.renderer.destroy());
 });
 
+test("global Hide thinking defaults visible and resets its persisted preference", async () => {
+	const configFile = `${TEST_CONFIG_ROOT}/wincode.json`;
+	const files: Record<string, string> = {};
+	const configStore = createInMemoryConfigStore(files);
+	const operations = createSettingsOperations({
+		configStore,
+		workspace: "/workspace",
+	});
+
+	const initialSettings = await operations.getSettings();
+	const initial = initialSettings.find(
+		({ descriptor }) => descriptor.id === "display.hideThinking"
+	);
+	expect(initial).toMatchObject({
+		descriptor: {
+			id: "display.hideThinking",
+			kind: "boolean",
+			label: "Hide thinking",
+			persistence: "config",
+			scope: "global",
+		},
+		source: { kind: "default" },
+		value: false,
+	});
+	if (initial === undefined) {
+		throw new Error("Hide thinking setting was missing from the catalog.");
+	}
+	const setup = await renderSettingsDialog(operations, [initial]);
+	expect(setup.captureCharFrame()).toContain("Hide thinking: off");
+	await act(() => setup.renderer.destroy());
+
+	const hidden = await operations.setValue("display.hideThinking", true);
+	expect(hidden).toMatchObject({
+		source: { kind: "config", scope: "global" },
+		value: true,
+	});
+	expect(JSON.parse(files[configFile] ?? "{}")).toEqual({
+		display: { hideThinking: true },
+	});
+
+	const reset = await operations.resetValue("display.hideThinking");
+	expect(reset).toMatchObject({
+		source: { kind: "default" },
+		value: false,
+	});
+	expect(JSON.parse(files[configFile] ?? "{}")).toEqual({ display: {} });
+});
+
 test("keeps the persisted value visible while a write is pending and reports errors", async () => {
 	const write = Promise.withResolvers<ResolvedSetting>();
 	const operations: SettingsOperations = {
