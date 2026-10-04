@@ -1,24 +1,6 @@
-import { HIDE_THINKING_SETTING } from "./catalog";
-import { createGlobalBooleanPreferenceContext } from "./global-boolean-preference";
-
-export type HideThinkingSettingsState = {
-	readonly hidden: boolean | null;
-	readonly setHidden: (hidden: boolean) => void;
-};
-
-const hideThinkingSettings = createGlobalBooleanPreferenceContext(
-	HIDE_THINKING_SETTING,
-	false,
-	({ value, setValue }): HideThinkingSettingsState => ({
-		hidden: value,
-		setHidden: setValue,
-	})
-);
-
-export const HideThinkingSettingsProvider = hideThinkingSettings.Provider;
-export const useHideThinkingSettings = hideThinkingSettings.usePreference;
+import { HIDE_THINKING_SETTING_ID } from "./catalog";
+import { useGlobalBooleanPreference } from "./global-boolean-preference";
 
 export function useHideThinking(): boolean {
-	const settings = useHideThinkingSettings();
-	return settings?.hidden ?? false;
+	return useGlobalBooleanPreference(HIDE_THINKING_SETTING_ID) ?? false;
 }

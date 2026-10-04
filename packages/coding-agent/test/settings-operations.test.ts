@@ -114,21 +114,25 @@ describe("createSettingsOperations", () => {
 		});
 	});
 
-	test("notifies the live copy preference after global writes and reset", async () => {
-		const changes: boolean[] = [];
+	test("notifies the global preference registry by ID after write and reset", async () => {
+		const changes: { readonly id: string; readonly value: boolean }[] = [];
 		const operations = createSettingsOperations({
 			configStore: createTestStore({}),
 			runtime: {
-				onCopyOnSelectChanged: (enabled: boolean) => changes.push(enabled),
+				onGlobalBooleanPreferenceChanged: (id, value) =>
+					changes.push({ id, value }),
 			},
 			workspace: WORKSPACE,
 		});
 
 		await operations.setValue("clipboard.copyOnSelect", false);
-		expect(changes).toEqual([false]);
+		expect(changes).toEqual([{ id: "clipboard.copyOnSelect", value: false }]);
 
 		await operations.resetValue("clipboard.copyOnSelect");
-		expect(changes).toEqual([false, true]);
+		expect(changes).toEqual([
+			{ id: "clipboard.copyOnSelect", value: false },
+			{ id: "clipboard.copyOnSelect", value: true },
+		]);
 	});
 	test("writes and resets Edit Mode through the session callback before notifying the view", async () => {
 		const writes: EditMode[] = [];

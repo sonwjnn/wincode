@@ -19,7 +19,8 @@ import type {
 	ConfigSnapshot,
 } from "@/shared/config/config-store";
 import type {
-	BooleanSettingDescriptor,
+	GlobalBooleanPreferenceDescriptor,
+	GlobalBooleanPreferenceMetadata,
 	SelectSettingDescriptor,
 	SettingOperationContext,
 	SettingResolution,
@@ -30,8 +31,13 @@ import type {
 export const AUTO_COMPACT_SETTING_ID = "compaction.auto";
 export const AUTO_COMPACT_GLOBAL_PATH = ["compaction", "auto"] as const;
 const LEGACY_AUTO_COMPACT_PATH = ["auto"] as const;
+
+const AUTO_COMPACT_GLOBAL_PREFERENCE = {
+	defaultValue: DEFAULT_COMPACTION_SETTINGS.auto,
+	path: AUTO_COMPACT_GLOBAL_PATH,
+} as const;
 const AUTO_COMPACT_PATHS = [
-	AUTO_COMPACT_GLOBAL_PATH,
+	AUTO_COMPACT_GLOBAL_PREFERENCE.path,
 	LEGACY_AUTO_COMPACT_PATH,
 ] as const;
 const AUTO_COMPACT_DESCRIPTION =
@@ -215,7 +221,7 @@ const changeAutoCompact = async (
 			current = await context.configStore.setValue(
 				context.workspace,
 				"global",
-				AUTO_COMPACT_GLOBAL_PATH,
+				AUTO_COMPACT_GLOBAL_PREFERENCE.path,
 				value
 			);
 			current = await clearAutoCompactValues(context, current, markMutation, [
@@ -233,7 +239,7 @@ const changeAutoCompact = async (
 			context.workspace
 		);
 		const resolved = resolveCompactionSettings({ snapshot: refreshed });
-		const expected = value ?? DEFAULT_COMPACTION_SETTINGS.auto;
+		const expected = value ?? AUTO_COMPACT_GLOBAL_PREFERENCE.defaultValue;
 		if (resolved.resolved.auto !== expected) {
 			throw new Error(
 				`Auto-compact resolved to ${resolved.resolved.auto ? "on" : "off"} instead of the requested value.`
@@ -259,8 +265,11 @@ const changeAutoCompact = async (
 	}
 };
 
-export const AUTO_COMPACT_SETTING: BooleanSettingDescriptor = {
+export const AUTO_COMPACT_SETTING: GlobalBooleanPreferenceDescriptor<
+	typeof AUTO_COMPACT_SETTING_ID
+> = {
 	description: AUTO_COMPACT_DESCRIPTION,
+	globalPreference: AUTO_COMPACT_GLOBAL_PREFERENCE,
 	id: AUTO_COMPACT_SETTING_ID,
 	kind: "boolean",
 	label: "Auto-compact",
@@ -286,6 +295,15 @@ export const COPY_ON_SELECT_GLOBAL_PATH = [
 export const HIDE_THINKING_SETTING_ID = "display.hideThinking";
 export const HIDE_THINKING_GLOBAL_PATH = ["display", "hideThinking"] as const;
 
+const COPY_ON_SELECT_PREFERENCE = {
+	defaultValue: true,
+	path: COPY_ON_SELECT_GLOBAL_PATH,
+} as const;
+const HIDE_THINKING_PREFERENCE = {
+	defaultValue: false,
+	path: HIDE_THINKING_GLOBAL_PATH,
+} as const;
+
 const getGlobalValueAtPath = (
 	snapshot: ConfigSnapshot,
 	configPath: readonly string[]
@@ -307,21 +325,20 @@ const getGlobalValueAtPath = (
 
 const readGlobalBooleanSetting = (
 	snapshot: ConfigSnapshot,
-	configPath: readonly string[],
-	defaultValue: boolean
+	preference: GlobalBooleanPreferenceMetadata
 ): SettingResolution<boolean> => {
-	const entry = getGlobalValueAtPath(snapshot, configPath);
+	const entry = getGlobalValueAtPath(snapshot, preference.path);
 	if (!isBoolean(entry.value) || entry.sourcePath === undefined) {
 		return {
 			available: true,
 			source: { kind: "default" },
-			value: defaultValue,
+			value: preference.defaultValue,
 		};
 	}
 	return {
 		available: true,
 		source: {
-			configPath,
+			configPath: preference.path,
 			kind: "config",
 			path: entry.sourcePath,
 			scope: "global",
@@ -332,22 +349,18 @@ const readGlobalBooleanSetting = (
 
 type GlobalBooleanSettingChange = {
 	readonly context: SettingOperationContext;
-	readonly defaultValue: boolean;
 	readonly label: string;
-	readonly onChange?: (value: boolean) => void;
-	readonly path: readonly string[];
+	readonly preference: GlobalBooleanPreferenceMetadata;
 	readonly value: boolean | undefined;
 };
 
 const changeGlobalBooleanSetting = async ({
 	context,
-	defaultValue,
 	label,
-	onChange,
-	path,
+	preference,
 	value,
 }: GlobalBooleanSettingChange): Promise<void> => {
-	const paths = [path];
+	const paths = [preference.path];
 	const previous = collectPersistedValues(context.snapshot, paths).filter(
 		(entry) => entry.scope === "global"
 	);
@@ -360,7 +373,7 @@ const changeGlobalBooleanSetting = async ({
 			await clearPath(
 				context,
 				"global",
-				path,
+				preference.path,
 				markMutation,
 				context.snapshot,
 				paths
@@ -370,11 +383,10 @@ const changeGlobalBooleanSetting = async ({
 			await context.configStore.setValue(
 				context.workspace,
 				"global",
-				path,
+				preference.path,
 				value
 			);
 		}
-		onChange?.(value ?? defaultValue);
 	} catch (error) {
 		if (mutated) {
 			try {
@@ -399,10 +411,8 @@ const changeCopyOnSelect = (
 ): Promise<void> =>
 	changeGlobalBooleanSetting({
 		context,
-		defaultValue: true,
 		label: "Copy on select",
-		onChange: context.runtime.onCopyOnSelectChanged,
-		path: COPY_ON_SELECT_GLOBAL_PATH,
+		preference: COPY_ON_SELECT_PREFERENCE,
 		value,
 	});
 
@@ -412,22 +422,23 @@ const changeHideThinking = (
 ): Promise<void> =>
 	changeGlobalBooleanSetting({
 		context,
-		defaultValue: false,
 		label: "Hide thinking",
-		onChange: context.runtime.onHideThinkingChanged,
-		path: HIDE_THINKING_GLOBAL_PATH,
+		preference: HIDE_THINKING_PREFERENCE,
 		value,
 	});
 
-export const COPY_ON_SELECT_SETTING: BooleanSettingDescriptor = {
+export const COPY_ON_SELECT_SETTING: GlobalBooleanPreferenceDescriptor<
+	typeof COPY_ON_SELECT_SETTING_ID
+> = {
 	description: "Copy selected terminal text to the clipboard automatically.",
+	globalPreference: COPY_ON_SELECT_PREFERENCE,
 	id: COPY_ON_SELECT_SETTING_ID,
 	kind: "boolean",
 	label: "Copy on select",
 	persistence: "config",
 	requiredContext: "none",
 	read: (snapshot) =>
-		readGlobalBooleanSetting(snapshot, COPY_ON_SELECT_GLOBAL_PATH, true),
+		readGlobalBooleanSetting(snapshot, COPY_ON_SELECT_PREFERENCE),
 	reset: (context) => changeCopyOnSelect(undefined, context),
 	scope: "global",
 	section: "Clipboard",
@@ -440,16 +451,19 @@ export const COPY_ON_SELECT_SETTING: BooleanSettingDescriptor = {
 	},
 };
 
-export const HIDE_THINKING_SETTING: BooleanSettingDescriptor = {
+export const HIDE_THINKING_SETTING: GlobalBooleanPreferenceDescriptor<
+	typeof HIDE_THINKING_SETTING_ID
+> = {
 	description:
 		"Hide assistant thinking content in the conversation transcript.",
+	globalPreference: HIDE_THINKING_PREFERENCE,
 	id: HIDE_THINKING_SETTING_ID,
 	kind: "boolean",
 	label: "Hide thinking",
 	persistence: "config",
 	requiredContext: "none",
 	read: (snapshot) =>
-		readGlobalBooleanSetting(snapshot, HIDE_THINKING_GLOBAL_PATH, false),
+		readGlobalBooleanSetting(snapshot, HIDE_THINKING_PREFERENCE),
 	reset: (context) => changeHideThinking(undefined, context),
 	scope: "global",
 	section: "Display",

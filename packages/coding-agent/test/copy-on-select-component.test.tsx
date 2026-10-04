@@ -4,7 +4,7 @@ import { testRender } from "@opentui/react/test-utils";
 import { act } from "react";
 import {
 	CopyOnSelectFromSettings,
-	CopyOnSelectSettingsProvider,
+	GlobalBooleanPreferencesProvider,
 	type SettingsOperations,
 	useSettingsOperations,
 } from "@/modules/settings";
@@ -73,9 +73,9 @@ test("a Settings write immediately changes the root selection handler", async ()
 		<ConfigProvider value={configValue}>
 			<ThemeProvider>
 				<ToastProvider>
-					<CopyOnSelectSettingsProvider>
+					<GlobalBooleanPreferencesProvider>
 						<Harness />
-					</CopyOnSelectSettingsProvider>
+					</GlobalBooleanPreferencesProvider>
 				</ToastProvider>
 			</ThemeProvider>
 		</ConfigProvider>,
@@ -148,9 +148,9 @@ test("does not copy until a saved disabled preference loads", async () => {
 		<ConfigProvider value={configValue}>
 			<ThemeProvider>
 				<ToastProvider>
-					<CopyOnSelectSettingsProvider>
+					<GlobalBooleanPreferencesProvider>
 						<Harness />
-					</CopyOnSelectSettingsProvider>
+					</GlobalBooleanPreferencesProvider>
 				</ToastProvider>
 			</ThemeProvider>
 		</ConfigProvider>,

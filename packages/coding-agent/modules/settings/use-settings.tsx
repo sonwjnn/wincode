@@ -1,8 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { useConfig } from "@/shared/config/config-provider";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
-import { useCopyOnSelectSettings } from "./copy-on-select-settings";
-import { useHideThinkingSettings } from "./hide-thinking-settings";
+import { useGlobalBooleanPreferenceRegistry } from "./global-boolean-preference";
 import { createSettingsOperations } from "./operations";
 import { SettingsDialogContent } from "./settings-dialog";
 import type { SettingRuntimeContext, SettingsOperations } from "./types";
@@ -15,21 +14,16 @@ export function useSettingsOperations(
 	runtime: SettingRuntimeContext = EMPTY_SETTING_RUNTIME_CONTEXT
 ): SettingsOperations {
 	const config = useConfig();
-	const copyOnSelectSettings = useCopyOnSelectSettings();
-	const hideThinkingSettings = useHideThinkingSettings();
+	const globalBooleanPreferences = useGlobalBooleanPreferenceRegistry();
 	return useMemo(
 		() =>
 			createSettingsOperations({
 				configStore: config.configStore,
 				runtime: {
 					...runtime,
-					onCopyOnSelectChanged: (enabled) => {
-						runtime.onCopyOnSelectChanged?.(enabled);
-						copyOnSelectSettings?.setEnabled(enabled);
-					},
-					onHideThinkingChanged: (hidden) => {
-						runtime.onHideThinkingChanged?.(hidden);
-						hideThinkingSettings?.setHidden(hidden);
+					onGlobalBooleanPreferenceChanged: (id, value) => {
+						runtime.onGlobalBooleanPreferenceChanged?.(id, value);
+						globalBooleanPreferences?.publish(id, value);
 					},
 				},
 				workspace: config.workspace,
@@ -37,8 +31,7 @@ export function useSettingsOperations(
 		[
 			config.configStore,
 			config.workspace,
-			copyOnSelectSettings?.setEnabled,
-			hideThinkingSettings?.setHidden,
+			globalBooleanPreferences?.publish,
 			runtime,
 		]
 	);

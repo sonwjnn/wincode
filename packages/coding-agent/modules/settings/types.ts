@@ -15,8 +15,10 @@ export type SettingPersistence = "config" | "runtime" | "session";
 export type SettingRuntimeContext = {
 	readonly editMode?: EditMode;
 	readonly model?: ChatModelSelection;
-	readonly onCopyOnSelectChanged?: (enabled: boolean) => void;
-	readonly onHideThinkingChanged?: (hidden: boolean) => void;
+	readonly onGlobalBooleanPreferenceChanged?: (
+		id: string,
+		value: boolean
+	) => void;
 	readonly onEditModeChanged?: (mode: EditMode) => void;
 	readonly sessionId?: string;
 	readonly setEditMode?: (mode: EditMode) => Promise<void>;
@@ -78,6 +80,20 @@ export type BooleanSettingDescriptor = SettingDescriptorBase<
 	boolean,
 	"boolean"
 >;
+
+export type GlobalBooleanPreferenceMetadata = {
+	readonly defaultValue: boolean;
+	readonly path: readonly string[];
+};
+
+export type GlobalBooleanPreferenceDescriptor<Id extends string = string> =
+	BooleanSettingDescriptor & {
+		readonly globalPreference: GlobalBooleanPreferenceMetadata;
+		readonly id: Id;
+		readonly persistence: "config";
+		readonly requiredContext: "none";
+		readonly scope: "global";
+	};
 
 export type SelectSettingDescriptor<Value extends string = string> =
 	SettingDescriptorBase<Value, "select"> & {

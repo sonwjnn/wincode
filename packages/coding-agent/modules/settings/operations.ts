@@ -71,7 +71,18 @@ export const createSettingsOperations = ({
 					workspace,
 				});
 				const refreshed = await configStore.refreshSnapshot(workspace);
-				return resolveSetting(descriptor, refreshed, runtime);
+				const resolved = resolveSetting(descriptor, refreshed, runtime);
+				if (
+					descriptor.kind === "boolean" &&
+					"globalPreference" in descriptor &&
+					descriptor.validate(resolved.value)
+				) {
+					runtime.onGlobalBooleanPreferenceChanged?.(
+						descriptor.id,
+						resolved.value
+					);
+				}
+				return resolved;
 			});
 		mutationQueues[id] = current;
 		try {
