@@ -133,7 +133,10 @@ describe("NewSessionView composer focus", () => {
 
 			await act(async () => {
 				composer.blur();
-				await setup.mockMouse.moveTo(0, 0);
+				const position = setup.mockMouse.getCurrentPosition();
+				const targetX = position.x === 0 ? 1 : 0;
+				const targetY = position.y === 0 ? 1 : 0;
+				await setup.mockMouse.moveTo(targetX, targetY);
 			});
 			await setup.flush({ maxPasses: 20 });
 			expect(setup.renderer.currentFocusedRenderable).toBe(composer);
