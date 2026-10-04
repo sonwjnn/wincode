@@ -5,11 +5,11 @@ import {
 	isSensitiveKey as isSensitiveRuntimeKey,
 	isString,
 	isUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 
 const URL_LIKE_PATTERN = /https?:\/\/[^\s,;]+/gi;
 
-export { isSensitiveKey } from "@wincode/runtime-utils";
+export { isSensitiveKey } from "@wincode/utils";
 
 const SECRET_VALUE_PATTERN =
 	/\b(?:(api[ _-]?key|auth(?:orization)?|cookie|credential|password|private[ _-]?key|secret|session|token)\s*[:=]\s*(?:bearer\s+)?[^\s,;}\]]+|bearer\s+[^\s,;}\]]+)/gi;

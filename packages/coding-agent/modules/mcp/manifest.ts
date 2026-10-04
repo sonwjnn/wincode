@@ -3,7 +3,7 @@ import {
 	isJsonObject as isRuntimeJsonObject,
 	isJsonValue as isRuntimeJsonValue,
 	isString,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import type { JsonObject, JsonValue, UnknownRecord } from "type-fest";
 import { z } from "zod";
 

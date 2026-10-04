@@ -1,4 +1,4 @@
-import { getErrorMessage } from "@wincode/runtime-utils";
+import { getErrorMessage } from "@wincode/utils";
 import { expandCustomCommandTemplate } from "@/modules/commands/custom/expand";
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
 import type { Skill, SkillContext } from "@/modules/skills";

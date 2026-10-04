@@ -22,7 +22,7 @@ import {
 	isUndefined,
 	logger,
 	omitUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import {
 	createSkillSnapshot,
 	type SkillRequestContext,
@@ -847,7 +847,6 @@ const handleSafeAssistantOutcome = async ({
 const failureRecordInput = (execution: SessionExecution) => ({
 	agentId: execution.agent,
 	...omitUndefined({
-		delegation: execution.parent,
 		sourceUserMessageId: execution.sourceUserMessageId ?? undefined,
 		effort: execution.effort,
 		reasoningMode: execution.reasoningMode,

@@ -44,7 +44,7 @@ import {
 	isString,
 	isUndefined,
 	omitUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import type { ReadonlyDeep, UnknownRecord } from "type-fest";
 import { z } from "zod";
 import type { McpCatalogSnapshot, McpSnapshotTool } from "@/modules/mcp";
@@ -70,8 +70,13 @@ import {
 	toCodingToolFailure,
 	type VersionedEditingContext,
 } from "@/modules/tools";
+import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
 import type { ResolvedCodingAgent } from "../../agents/built-ins";
 import type { GateOutcome, ToolGate } from "../../tool-gate/tool-gate";
+import {
+	type DelegationResult,
+	delegationResultSchema,
+} from "../delegation/types";
 import type { SessionMessage } from "../message";
 import { expandSessionMessagesForModel } from "../message";
 import {
@@ -196,6 +201,8 @@ export type GatedCodingToolsDeps = {
 	skillExecution?: SkillExecution;
 	skillTool?: SkillToolDefinition;
 	delegate?: DelegationExecutor;
+	submitResult?: SubmitResultExecutor;
+	delegationTaskId?: DelegationTaskId;
 	parentTurnId?: AgentTurnId;
 	versionedEditing?: VersionedEditingContext;
 };
@@ -208,6 +215,8 @@ export type RuntimeGatedTooling = {
 	gate: ToolGate;
 	resolveResourceLimits?: (agentId?: AgentId) => Promise<ToolResourceLimits>;
 	delegate?: DelegationExecutor;
+	submitResult?: SubmitResultExecutor;
+	delegationTaskId?: DelegationTaskId;
 	registerChildAbort?: (
 		toolCallId: ToolCallId,
 		abort: () => void
@@ -226,7 +235,15 @@ export type DelegationRequest = {
 export type DelegationExecutor = (
 	request: DelegationRequest,
 	signal: AbortSignal | undefined
-) => Promise<string>;
+) => Promise<DelegationTaskStart>;
+export type DelegationTaskStart = Readonly<{
+	childSessionId: SessionId;
+	status: "active";
+	taskId: DelegationTaskId;
+}>;
+export type SubmitResultExecutor = (
+	report: DelegationResult
+) => Promise<boolean>;
 
 const ABORTED_TOOL_TEXT = "Tool call aborted";
 
@@ -283,7 +300,7 @@ const createDelegationTool = (
 ): ResolvedTool => ({
 	definition: {
 		description:
-			"Delegate a focused task to a configured Subagent and return its result.",
+			"Start a durable child Session and return its Task ID and Session ID immediately. The child reports through submit_result; its report never starts the parent automatically.",
 		inputSchema: {
 			jsonSchema: {
 				additionalProperties: false,
@@ -332,6 +349,62 @@ const createDelegationTool = (
 			}
 			return {
 				errorText: getErrorMessage(error, "Tool execution failed."),
+				type: "failure",
+			};
+		}
+	},
+});
+const createSubmitResultTool = (
+	taskId: DelegationTaskId,
+	submitResult: SubmitResultExecutor
+): ResolvedTool => ({
+	definition: {
+		description:
+			"Submit this task's structured Delegation Report as the only Tool Call in the batch. A successful durable commit ends this task turn; later child prompts cannot report again.",
+		exclusiveInBatch: true,
+		inputSchema: {
+			jsonSchema: {
+				additionalProperties: false,
+				properties: {
+					details: { type: "string" },
+					summary: { minLength: 1, type: "string" },
+				},
+				required: ["summary"],
+				type: "object",
+			},
+		},
+		name: "submit_result",
+	},
+	execute: async ({ input }): Promise<ToolCallOutput> => {
+		const parsed = delegationResultSchema.safeParse(input);
+		if (!parsed.success) {
+			return {
+				errorText:
+					"Invalid task result; expected { summary: string, details?: string }",
+				type: "failure",
+			};
+		}
+		try {
+			if (!(await submitResult(parsed.data))) {
+				return {
+					errorText: "This delegated task no longer accepts a result.",
+					type: "failure",
+				};
+			}
+			return {
+				output: { status: "succeeded", taskId },
+				stopTurn: true,
+				type: "success",
+			};
+		} catch (error) {
+			if (isAgentInvariantError(error)) {
+				throw error;
+			}
+			return {
+				errorText: getErrorMessage(
+					error,
+					"Task result could not be committed."
+				),
 				type: "failure",
 			};
 		}
@@ -406,6 +479,7 @@ export const createGatedCodingTools = ({
 	agentId,
 	agentTools,
 	delegate,
+	delegationTaskId,
 	executeMcpTool,
 	gate,
 	mcpSnapshot,
@@ -414,6 +488,7 @@ export const createGatedCodingTools = ({
 	resourceLimits,
 	skillExecution,
 	skillTool,
+	submitResult,
 	versionedEditing,
 }: GatedCodingToolsDeps): readonly ResolvedTool[] => {
 	const codingTools = agentTools.map((name) => ({
@@ -467,10 +542,13 @@ export const createGatedCodingTools = ({
 		...codingTools,
 		...createMcpTools(mcpSnapshot, executeMcpTool, gate, agentId),
 	];
+	if (!(isUndefined(delegate) || isUndefined(parentTurnId))) {
+		tools.push(createDelegationTool(delegate, parentTurnId));
+	}
+	if (!(isUndefined(submitResult) || isUndefined(delegationTaskId))) {
+		tools.push(createSubmitResultTool(delegationTaskId, submitResult));
+	}
 	if (isUndefined(skillTool) || isUndefined(skillExecution)) {
-		if (!(isUndefined(delegate) || isUndefined(parentTurnId))) {
-			tools.push(createDelegationTool(delegate, parentTurnId));
-		}
 		return tools;
 	}
 	const skill = {
@@ -532,9 +610,6 @@ export const createGatedCodingTools = ({
 		},
 	} satisfies ResolvedTool;
 	tools.push(skill);
-	if (!(isUndefined(delegate) || isUndefined(parentTurnId))) {
-		tools.push(createDelegationTool(delegate, parentTurnId));
-	}
 	return tools;
 };
 
@@ -545,8 +620,18 @@ const settledToolName = (
 	if (type === "dynamic-tool") {
 		return isNonEmptyString(toolName) ? toolName : undefined;
 	}
-	if (type === "tool-skill" || type === "tool-delegate") {
-		return type === "tool-skill" ? "skill" : "delegate";
+	if (
+		type === "tool-skill" ||
+		type === "tool-delegate" ||
+		type === "tool-submit_result"
+	) {
+		if (type === "tool-skill") {
+			return "skill";
+		}
+		if (type === "tool-delegate") {
+			return "delegate";
+		}
+		return "submit_result";
 	}
 	if (type === "tool-read") {
 		return "read";

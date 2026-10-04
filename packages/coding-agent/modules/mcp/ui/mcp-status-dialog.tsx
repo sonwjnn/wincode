@@ -1,5 +1,5 @@
 import { TextAttributes } from "@opentui/core";
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { redactSensitiveText } from "@/shared/display-sanitize";
 import { useDialogEscape } from "@/shared/providers/dialog/dialog-provider";

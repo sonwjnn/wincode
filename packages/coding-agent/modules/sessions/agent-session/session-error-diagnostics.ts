@@ -1,4 +1,4 @@
-import type { LogFields } from "@wincode/runtime-utils";
+import type { LogFields } from "@wincode/utils";
 import { errorLogFields } from "@/shared/utils/error-log-fields";
 import { isExpectedCompactionError } from "../compaction/error";
 

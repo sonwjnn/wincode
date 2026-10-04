@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { fromAny } from "@total-typescript/shoehorn";
 import type { AgentTurnDelegation, ResolvedTool } from "@wincode/agent-core";
-import { isString, isUndefined } from "@wincode/runtime-utils";
+import { isString, isUndefined } from "@wincode/utils";
 import {
 	applyManualApprovalSafetyCeiling,
 	createResolvedToolPermission,

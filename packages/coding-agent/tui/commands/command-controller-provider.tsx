@@ -1,6 +1,6 @@
 import { useRenderer } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
-import { getErrorMessage } from "@wincode/runtime-utils";
+import { getErrorMessage } from "@wincode/utils";
 import {
 	type ReactNode,
 	useCallback,

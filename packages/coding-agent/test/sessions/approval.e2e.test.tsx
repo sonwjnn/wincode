@@ -1,4 +1,4 @@
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 
 const previousEnvironment = {
 	WINCODE_E2E_HOME: process.env.WINCODE_E2E_HOME,
@@ -50,12 +50,6 @@ process.env.WINCODE_E2E_WORKSPACE = testDirectory;
 // The coding Tools resolve relative paths against the process working
 // directory, so the workspace is also the workspace the Tools run in.
 process.chdir(testDirectory);
-afterAll(async () => {
-	mock.restore();
-	process.chdir(previousWorkingDirectory);
-	restoreEnvironment();
-	await rm(testDirectory, { force: true, recursive: true });
-});
 
 const READ_CALL = toolCallId("read-approval-1");
 /** The turn a journey ends by unmounting carries its own Tool Call Identifiers. */
@@ -164,9 +158,18 @@ const {
 	renderSession,
 	seedCompactionHistory,
 	waitForSessionCondition,
+	shutdownSessionHosts,
 	waitForSessionFrame,
 	writeE2EFrame,
 } = await import("@/test/support/e2e-fixture");
+
+afterAll(async () => {
+	await shutdownSessionHosts();
+	mock.restore();
+	process.chdir(previousWorkingDirectory);
+	restoreEnvironment();
+	await rm(testDirectory, { force: true, recursive: true });
+});
 
 const store = createE2eStore();
 const { sessionId } = await seedCompactionHistory(store, 1);
@@ -194,6 +197,11 @@ const renderApprovalJourney = async (): Promise<TestRendererSetup> => {
 	});
 	const { setup } = rendered;
 	await rendered.registryReady;
+	await waitForSessionFrame(
+		setup,
+		(frame) =>
+			frame.includes("Ask anything...") || frame.includes("Permission required")
+	);
 	await act(async () => {
 		await setup.flush();
 		await setup.flush();
@@ -248,6 +256,14 @@ test("answers a pending approval and the gated Tool Call runs", async () => {
 		const settledFrame = setup.captureCharFrame();
 		expect(settledFrame).not.toContain("Permission required");
 
+		await waitForSessionCondition(
+			async () =>
+				completedToolRecords(
+					await store.listSessionRecords(sessionId),
+					READ_CALL
+				).length === 1
+		);
+
 		// The approved Tool Call ran and its result is durable.
 		const [record] = completedToolRecords(
 			await store.listSessionRecords(sessionId),
@@ -264,43 +280,68 @@ test("answers a pending approval and the gated Tool Call runs", async () => {
 	}
 });
 
-test("settles an approval left pending when the session view unmounts", async () => {
+test("keeps a pending approval live across view closure until shutdown", async () => {
 	const setup = await renderApprovalJourney();
 	const requestCountBefore = recorder.requests.filter(
 		(request) => request.kind === "chat"
 	).length;
-	let rendererDestroyed = false;
+	let setupDestroyed = false;
+	let reopenedSetup: TestRendererSetup | undefined;
+	let reopenedSetupDestroyed = false;
 	try {
 		await submitPrompt(setup, "read the notes again");
 		await waitForSessionFrame(setup, (frame) =>
 			frame.includes("Permission required")
 		);
 
-		// Session shutdown aborts the waiting Tool Gate evaluation. The Agent
-		// Turn ends as cancelled without another Model Step or gated Tool Call.
 		writeE2EFrame(setup);
 		await act(async () => {
 			setup.renderer.destroy();
 		});
-		rendererDestroyed = true;
-		await waitForSessionWriterRelease();
-		const records = await store.listSessionRecords(sessionId);
+		setupDestroyed = true;
+
+		const reopened = await renderApprovalJourney();
+		reopenedSetup = reopened;
+		await waitForSessionFrame(reopened, (frame) =>
+			frame.includes("Permission required")
+		);
 		expect(
 			recorder.requests.filter((request) => request.kind === "chat")
 		).toHaveLength(requestCountBefore + 1);
-		expect(completedToolRecords(records, UNMOUNT_CALL)).toHaveLength(0);
-		expect(completedToolRecords(records, AFTER_UNMOUNT_CALL)).toHaveLength(0);
+		expect(
+			completedToolRecords(
+				await store.listSessionRecords(sessionId),
+				UNMOUNT_CALL
+			)
+		).toHaveLength(0);
+		expect(
+			completedToolRecords(
+				await store.listSessionRecords(sessionId),
+				AFTER_UNMOUNT_CALL
+			)
+		).toHaveLength(0);
+
+		writeE2EFrame(reopened);
+		await act(async () => {
+			reopened.renderer.destroy();
+		});
+		reopenedSetupDestroyed = true;
+		await shutdownSessionHosts();
+		await waitForSessionWriterRelease();
 	} finally {
-		try {
-			if (!rendererDestroyed) {
-				writeE2EFrame(setup);
-				await act(async () => {
-					setup.renderer.destroy();
-				});
-				await waitForSessionWriterRelease();
-			}
-		} finally {
-			cleanupSessionRender();
+		if (!setupDestroyed) {
+			writeE2EFrame(setup);
+			await act(async () => {
+				setup.renderer.destroy();
+			});
 		}
+		const activeReopenedSetup = reopenedSetup;
+		if (activeReopenedSetup !== undefined && !reopenedSetupDestroyed) {
+			writeE2EFrame(activeReopenedSetup);
+			await act(async () => {
+				activeReopenedSetup.renderer.destroy();
+			});
+		}
+		cleanupSessionRender();
 	}
 });

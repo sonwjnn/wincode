@@ -15,7 +15,7 @@ import {
 	isPositiveInteger,
 	isString,
 	isUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import type { ReadonlyDeep } from "type-fest";
 import { isAgentId } from "./agent";
 import type { OperationalFailure } from "./failures";
@@ -30,7 +30,6 @@ import type {
 import type { SkillActivationSource } from "./skill-activation";
 import { isToolFailureDetails, type ToolFailureDetails } from "./tools";
 import type {
-	AgentTurnDelegation,
 	AgentTurnId,
 	AgentTurnInterruptionReason,
 	AgentTurnTextPart,
@@ -203,7 +202,6 @@ export type SessionRecordOutcome = ReadonlyDeep<
  */
 export type SessionRecord = ReadonlyDeep<{
 	agentId: AgentId;
-	delegation?: AgentTurnDelegation;
 	id: SessionRecordId;
 	messages: SessionMessageRecord[];
 	model: {

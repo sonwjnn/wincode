@@ -1,8 +1,11 @@
 import { afterAll, expect, mock, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { fromPartial } from "@total-typescript/shoehorn";
+import { buildAgentRegistry } from "../modules/agents/registry";
 import { runRpc } from "../modules/application/rpc/runner";
 import { SessionWriterLockFailureError } from "../modules/sessions/storage/session-writer-lock";
+import type { ConfigSnapshot } from "../shared/config/config-store";
 import {
 	agentId,
 	agentTurnId,
@@ -99,7 +102,7 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		capabilities: {},
 		clientInfo: { name: "journey-test" },
 		cwd: workspace,
-		protocolVersion: 3,
+		protocolVersion: 4,
 	})}\n`;
 	const create = `${request("create", "session/create", {
 		initialSubmission: {
@@ -290,7 +293,7 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 					capabilities: {},
 					clientInfo: { name: "reopen-test" },
 					cwd: workspace,
-					protocolVersion: 3,
+					protocolVersion: 4,
 				})}\n`
 			),
 			new TextEncoder().encode(
@@ -443,7 +446,7 @@ test("RPC session/open keeps a held Session Writer as a refusal", async () => {
 				capabilities: {},
 				clientInfo: { name: "writer-conflict-test" },
 				cwd: workspace,
-				protocolVersion: 3,
+				protocolVersion: 4,
 			})}\n`
 		),
 		new TextEncoder().encode(
@@ -532,7 +535,7 @@ test("RPC session opening keeps lock refusals request-scoped", async () => {
 				capabilities: {},
 				clientInfo: { name: "lock-failure-test" },
 				cwd: workspace,
-				protocolVersion: 3,
+				protocolVersion: 4,
 			})}\n`
 		),
 		new TextEncoder().encode(
@@ -581,4 +584,432 @@ test("RPC session opening keeps lock refusals request-scoped", async () => {
 		failureAssembly.store.acquireSessionWriter = acquireSessionWriter;
 		await failureAssembly.shutdown();
 	}
+});
+
+test("raw JSONL target switches retain background Sessions but stream only the active target", async () => {
+	const switchAssembly = await createSessionCapabilities({
+		connections: {
+			authorize: async () => ({
+				kind: "api-key" as const,
+				apiKey: "switch-test-key",
+			}),
+			connect: async () => undefined,
+			listProviders: async () => [
+				{
+					connected: true as const,
+					connectionMethod: "api-key" as const,
+					displayName: "OpenAI",
+					id: "openai" as const,
+					methods: ["api-key", "browser"] as const,
+				},
+			],
+		},
+		cwd: workspace,
+		databasePath: join(workspace, "session-switch.sqlite"),
+		workspace,
+	});
+	const model = {
+		modelId: modelId("gpt-5.6-luna"),
+		providerId: "openai" as const,
+	};
+	const createSeededSession = async (key: string) =>
+		switchAssembly.store.createSession({
+			agent: agentId("build"),
+			message: {
+				id: sessionMessageId(`${key}-seed`),
+				parts: [{ text: `${key} seed`, type: "text" }],
+				role: "user",
+			},
+			model,
+			turnId: agentTurnId(`${key}-seed-turn`),
+		});
+	const firstSession = await createSeededSession("background");
+	const secondSession = await createSeededSession("active");
+	const initialized = Promise.withResolvers<void>();
+	const firstBound = Promise.withResolvers<void>();
+	const firstModelStarted = Promise.withResolvers<void>();
+	const secondBound = Promise.withResolvers<void>();
+	const secondModelStarted = Promise.withResolvers<void>();
+	const secondModelCompleted = Promise.withResolvers<void>();
+	const backgroundModelCompleted = Promise.withResolvers<void>();
+	const firstRebound = Promise.withResolvers<void>();
+	const thirdModelStarted = Promise.withResolvers<void>();
+	const thirdModelCompleted = Promise.withResolvers<void>();
+	const releaseFirstModel = Promise.withResolvers<void>();
+	let firstModelHeld = false;
+	let secondModelSeen = false;
+	let thirdModelSeen = false;
+	const previousBeforeStep = recorder.beforeStep;
+	recorder.beforeStep = async (request) => {
+		const latestUserText = request.messages
+			.filter(({ role }) => role === "user")
+			.at(-1)
+			?.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+			.join("\n");
+		if (latestUserText === "pause the background Session" && !firstModelHeld) {
+			firstModelHeld = true;
+			firstModelStarted.resolve();
+			await releaseFirstModel.promise;
+		} else if (latestUserText === "run the active Session") {
+			secondModelSeen = true;
+			secondModelStarted.resolve();
+		} else if (latestUserText === "run the background Session again") {
+			thirdModelSeen = true;
+			thirdModelStarted.resolve();
+		}
+	};
+	const unsubscribeManager = switchAssembly.capabilities
+		.getSessionHostManager()
+		.onEvent((event) => {
+			if (
+				event.type === "agent-turn-event" &&
+				event.sessionId === firstSession.id &&
+				event.event.type === "agent-turn-completed"
+			) {
+				backgroundModelCompleted.resolve();
+			}
+		});
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	): string => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const initialize = `${request("initialize", "initialize", {
+		capabilities: {},
+		clientInfo: { name: "session-switch-test" },
+		cwd: workspace,
+		protocolVersion: 4,
+	})}\n`;
+	const openFirst = `${request("open-first", "session/open", {
+		sessionId: firstSession.id,
+	})}\n`;
+	const submitFirst = `${request("submit-first", "session/submit", {
+		submission: { text: "pause the background Session" },
+	})}\n`;
+	const openSecond = `${request("open-second", "session/open", {
+		sessionId: secondSession.id,
+	})}\n`;
+	const submitSecond = `${request("submit-second", "session/submit", {
+		submission: { text: "run the active Session" },
+	})}\n`;
+	const reopenFirst = `${request("reopen-first", "session/open", {
+		sessionId: firstSession.id,
+	})}\n`;
+	const submitThird = `${request("submit-third", "session/submit", {
+		submission: { text: "run the background Session again" },
+	})}\n`;
+	const shutdown = `${request("shutdown-switch-test", "server/shutdown", {})}\n`;
+	const input = (async function* (): AsyncGenerator<Uint8Array> {
+		yield new TextEncoder().encode(initialize);
+		await initialized.promise;
+		yield new TextEncoder().encode(openFirst);
+		await firstBound.promise;
+		yield new TextEncoder().encode(submitFirst);
+		await firstModelStarted.promise;
+		yield new TextEncoder().encode(openSecond);
+		await secondBound.promise;
+		yield new TextEncoder().encode(submitSecond);
+		await secondModelStarted.promise;
+		await secondModelCompleted.promise;
+		releaseFirstModel.resolve();
+		await backgroundModelCompleted.promise;
+		yield new TextEncoder().encode(reopenFirst);
+		await firstRebound.promise;
+		yield new TextEncoder().encode(submitThird);
+		await thirdModelStarted.promise;
+		await thirdModelCompleted.promise;
+		yield new TextEncoder().encode(shutdown);
+	})();
+	const stdoutFrames: string[] = [];
+	const stderrFrames: string[] = [];
+	let exitCode: number | undefined;
+	const run = runRpc({
+		composeCapabilities: async () => switchAssembly,
+		input,
+		stderr: {
+			write: (text: string): undefined => {
+				stderrFrames.push(text);
+			},
+		},
+		stdout: {
+			write: (text: string): undefined => {
+				stdoutFrames.push(text);
+				const frame = JSON.parse(text) as {
+					id?: string;
+					method?: string;
+					params?: {
+						event?: {
+							kind?: string;
+							sessionId?: string;
+						};
+						state?: {
+							sessionId?: string;
+							status?: string;
+						};
+					};
+				};
+				if (frame.id === "initialize") {
+					initialized.resolve();
+				} else if (frame.id === "open-first") {
+					firstBound.resolve();
+				} else if (frame.id === "open-second") {
+					secondBound.resolve();
+				} else if (frame.id === "reopen-first") {
+					firstRebound.resolve();
+				}
+				if (
+					frame.method === "session/stateChanged" &&
+					frame.params?.state?.status === "idle"
+				) {
+					if (
+						secondModelSeen &&
+						frame.params.state.sessionId === secondSession.id
+					) {
+						secondModelCompleted.resolve();
+					}
+					if (
+						thirdModelSeen &&
+						frame.params.state.sessionId === firstSession.id
+					) {
+						thirdModelCompleted.resolve();
+					}
+				}
+			},
+		},
+	});
+	try {
+		exitCode = await run;
+	} finally {
+		releaseFirstModel.resolve();
+		recorder.beforeStep = previousBeforeStep;
+		unsubscribeManager();
+		await switchAssembly.shutdown();
+	}
+	const frames = stdoutFrames.map(
+		(frame) => JSON.parse(frame) as Record<string, unknown>
+	);
+	expect(exitCode).toBe(0);
+	expect(stderrFrames).toEqual([]);
+	expect(frames.some((frame) => frame.id === "open-first")).toBe(true);
+	expect(frames.some((frame) => frame.id === "open-second")).toBe(true);
+	expect(frames.some((frame) => frame.id === "reopen-first")).toBe(true);
+	expect(
+		frames.some((frame) => {
+			const params = frame.params as
+				| { event?: { kind?: string; sessionId?: string } }
+				| undefined;
+			return (
+				frame.method === "session/event" &&
+				(params?.event?.kind === "background-agent-turn" ||
+					params?.event?.kind === "delegated-agent-turn") &&
+				params.event.sessionId === firstSession.id
+			);
+		})
+	).toBe(false);
+});
+
+test("RPC reports a pending background approval after switching Sessions", async () => {
+	const approvalRegistry = buildAgentRegistry(
+		fromPartial<ConfigSnapshot>({
+			diagnostics: [],
+			document: {},
+			sourceFor: () => undefined,
+			sources: [
+				{
+					document: fromPartial<ConfigSnapshot["document"]>({
+						agents: {
+							build: { permission: { read: "ask" } },
+						},
+					}),
+					path: join(workspace, "wincode.json"),
+					scope: "project",
+				},
+			],
+		})
+	);
+	const approvalAssembly = await createSessionCapabilities({
+		connections: {
+			authorize: async () => ({
+				kind: "api-key" as const,
+				apiKey: "approval-switch-key",
+			}),
+			connect: async () => undefined,
+			listProviders: async () => [
+				{
+					connected: true as const,
+					connectionMethod: "api-key" as const,
+					displayName: "OpenAI",
+					id: "openai" as const,
+					methods: ["api-key", "browser"] as const,
+				},
+			],
+		},
+		cwd: workspace,
+		databasePath: join(workspace, "approval-switch.sqlite"),
+		registry: approvalRegistry,
+		workspace,
+	});
+	const model = {
+		modelId: modelId("gpt-5.6-luna"),
+		providerId: "openai" as const,
+	};
+	const firstSession = await approvalAssembly.store.createSession({
+		agent: agentId("build"),
+		message: {
+			id: sessionMessageId("approval-background-seed"),
+			parts: [{ text: "seed", type: "text" }],
+			role: "user",
+		},
+		model,
+		turnId: agentTurnId("approval-background-seed-turn"),
+	});
+	const secondSession = await approvalAssembly.store.createSession({
+		agent: agentId("build"),
+		message: {
+			id: sessionMessageId("approval-active-seed"),
+			parts: [{ text: "seed", type: "text" }],
+			role: "user",
+		},
+		model,
+		turnId: agentTurnId("approval-active-seed-turn"),
+	});
+	const previousScript = recorder.stepScript;
+	recorder.stepScript = async function* (request) {
+		const latestUserText = request.messages
+			.filter(({ role }) => role === "user")
+			.at(-1)
+			?.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+			.join("\n");
+		if (latestUserText === "request a background approval") {
+			yield {
+				input: { path: "package.json" },
+				toolCallId: "rpc-background-approval-call",
+				toolName: "read",
+				type: "tool-call",
+			};
+			yield { type: "finish" };
+			return;
+		}
+		yield { delta: "Active Session response.", type: "text-delta" };
+		yield { type: "finish" };
+	};
+	const initialized = Promise.withResolvers<void>();
+	const firstOpened = Promise.withResolvers<void>();
+	const approvalVisible = Promise.withResolvers<void>();
+	const secondOpened = Promise.withResolvers<void>();
+	const noticeReceived = Promise.withResolvers<void>();
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	): string => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const init = `${request("initialize", "initialize", {
+		capabilities: {},
+		clientInfo: { name: "background-approval-test" },
+		cwd: workspace,
+		protocolVersion: 4,
+	})}\n`;
+	const openFirst = `${request("open-first", "session/open", {
+		sessionId: firstSession.id,
+	})}\n`;
+	const submit = `${request("submit-approval", "session/submit", {
+		submission: { text: "request a background approval" },
+	})}\n`;
+	const openSecond = `${request("open-second", "session/open", {
+		sessionId: secondSession.id,
+	})}\n`;
+	const shutdown = `${request("shutdown-approval-test", "server/shutdown", {})}\n`;
+	const input = (async function* (): AsyncGenerator<Uint8Array> {
+		yield new TextEncoder().encode(init);
+		await initialized.promise;
+		yield new TextEncoder().encode(openFirst);
+		await firstOpened.promise;
+		yield new TextEncoder().encode(submit);
+		await approvalVisible.promise;
+		yield new TextEncoder().encode(openSecond);
+		await secondOpened.promise;
+		await noticeReceived.promise;
+		yield new TextEncoder().encode(shutdown);
+	})();
+	const stdoutFrames: string[] = [];
+	const stderrFrames: string[] = [];
+	const run = runRpc({
+		composeCapabilities: async () => approvalAssembly,
+		input,
+		stderr: {
+			write: (text: string): undefined => {
+				stderrFrames.push(text);
+			},
+		},
+		stdout: {
+			write: (text: string): undefined => {
+				stdoutFrames.push(text);
+				const frame = JSON.parse(text) as {
+					id?: string;
+					method?: string;
+					params?: {
+						event?: {
+							kind?: string;
+							pendingApprovalCount?: number;
+							sessionId?: string;
+						};
+						state?: {
+							approvals?: readonly unknown[];
+							sessionId?: string;
+						};
+					};
+				};
+				if (frame.id === "initialize") {
+					initialized.resolve();
+				} else if (frame.id === "open-first") {
+					firstOpened.resolve();
+				} else if (frame.id === "open-second") {
+					secondOpened.resolve();
+				}
+				if (
+					frame.method === "session/stateChanged" &&
+					frame.params?.state?.sessionId === firstSession.id &&
+					(frame.params.state.approvals?.length ?? 0) > 0
+				) {
+					approvalVisible.resolve();
+				}
+				if (
+					frame.method === "session/event" &&
+					frame.params?.event?.kind === "session-approval-notice" &&
+					frame.params.event.sessionId === firstSession.id
+				) {
+					noticeReceived.resolve();
+				}
+			},
+		},
+	});
+	try {
+		expect(await run).toBe(0);
+	} finally {
+		recorder.stepScript = previousScript;
+		await approvalAssembly.shutdown();
+	}
+	const frames = stdoutFrames.map(
+		(frame) => JSON.parse(frame) as Record<string, unknown>
+	);
+	const noticeFrame = frames.find((frame) => {
+		const params = frame.params as
+			| { event?: { kind?: string; sessionId?: string } }
+			| undefined;
+		return (
+			frame.method === "session/event" &&
+			params?.event?.kind === "session-approval-notice" &&
+			params.event.sessionId === firstSession.id
+		);
+	});
+	expect(stderrFrames).toEqual([]);
+	expect(noticeFrame?.params).toMatchObject({
+		event: {
+			kind: "session-approval-notice",
+			pendingApprovalCount: 1,
+			sessionId: firstSession.id,
+		},
+	});
+	expect(JSON.stringify(noticeFrame)).not.toContain("package.json");
+	expect(JSON.stringify(noticeFrame)).not.toContain("toolCallId");
 });

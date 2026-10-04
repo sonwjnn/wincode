@@ -9,7 +9,7 @@ import {
 	isString,
 	isUndefined,
 	omitUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import { eq } from "drizzle-orm";
 import type { Except, Merge, UnknownRecord } from "type-fest";
 import type {

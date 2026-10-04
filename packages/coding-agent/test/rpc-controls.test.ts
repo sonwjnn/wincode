@@ -32,6 +32,7 @@ import type {
 	SessionStore,
 	SessionSubmissionAdmission,
 } from "../modules/sessions/host/session-rpc";
+import type { SessionHostManager } from "../modules/sessions/host/types";
 import type { SessionSendOutcome } from "../modules/sessions/submission-types";
 
 type CapturedApproval = Readonly<{
@@ -175,13 +176,14 @@ const createHandler = ({
 						store: fromPartial<SessionStore>({ attachmentStore }),
 					}),
 				}),
-		boundSessionId: "session-1",
+		boundSessionId: "session-1" as SessionId,
 		lifecycle: "bound",
 		shutdownRequested: false,
 		signalRequested: false,
 	};
 	const handler = createRpcRequestHandler({
 		bind: () => undefined,
+		unbind: () => undefined,
 		currentState: () => ({}),
 		getRuntime: async () => undefined as unknown as RuntimeModules,
 		parseSelection: async (value): Promise<Selection> => value as Selection,
@@ -649,7 +651,12 @@ test("failed Session creation stays durable and can be reopened", async () => {
 		createAgentTurnId: () => "turn-1",
 		createSessionCapabilities: async () =>
 			fromPartial({
-				capabilities: {},
+				capabilities: {
+					getSessionHostManager: () =>
+						fromPartial<SessionHostManager>({
+							releaseView: async () => undefined,
+						}),
+				},
 				shutdown: async () => undefined,
 				store,
 				workspace: process.cwd(),
@@ -671,13 +678,18 @@ test("failed Session creation stays durable and can be reopened", async () => {
 		resolveWorkspaceRoot: (start: string): string => start,
 		toSessionId: (value: string): SessionId => value as SessionId,
 	});
-	const bind = (nextHost: SessionHost, sessionId: string): void => {
+	const bind = (nextHost: SessionHost, sessionId: SessionId): void => {
 		state.host = nextHost;
 		state.boundSessionId = sessionId;
 		state.lifecycle = "bound";
 	};
 	const handler = createRpcRequestHandler({
 		bind,
+		unbind: () => {
+			state.host = undefined;
+			state.boundSessionId = undefined;
+			state.lifecycle = "initialized";
+		},
 		currentState: () => ({}),
 		getRuntime: async () => runtime,
 		parseSelection: async () => selection,
@@ -712,7 +724,7 @@ test("failed Session creation stays durable and can be reopened", async () => {
 			capabilities: {},
 			clientInfo: { name: "test-client" },
 			cwd: process.cwd(),
-			protocolVersion: 3,
+			protocolVersion: 4,
 		})
 	);
 	await expect(

@@ -3,7 +3,7 @@ import {
 	isObjectLike,
 	isString,
 	type LogFields,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 
 export const getErrorCode = (error: unknown): string | undefined =>
 	isObjectLike(error) && "code" in error && isString(error.code)

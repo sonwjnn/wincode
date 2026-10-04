@@ -1,4 +1,4 @@
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 
 const previousEnvironment = {
 	WINCODE_E2E_HOME: process.env.WINCODE_E2E_HOME,
@@ -74,6 +74,9 @@ test("compacts manually through the UI and uses the summary on the next turn", a
 		const activeSetup = rendered.setup;
 		setup = activeSetup;
 		await rendered.registryReady;
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Ask anything...")
+		);
 		await act(async () => {
 			await activeSetup.flush();
 			await activeSetup.flush();

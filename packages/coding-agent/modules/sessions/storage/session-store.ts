@@ -7,6 +7,7 @@ import type {
 	SessionRecordOutcome,
 	SessionSubmissionStatus,
 	SubmissionId,
+	ToolCallId,
 } from "@wincode/agent-core";
 import type {
 	ChatModelSelection,
@@ -18,11 +19,16 @@ import type {
 	SessionMessage,
 } from "@/modules/sessions/message";
 import type { EditMode, FileObservationStore } from "@/modules/tools";
-import type { SessionId } from "@/shared/identifiers";
+import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
 import type {
 	AppendSessionCompactionInput,
 	SessionCompaction,
 } from "../compaction/types";
+import type {
+	DelegationReportEnvelope,
+	DelegationTask,
+	DelegationTaskOutcome,
+} from "../delegation/types";
 import type {
 	AttachmentExternalizationOptions,
 	AttachmentHydrationOptions,
@@ -60,6 +66,16 @@ export type CreateSessionInput = {
 	turnId: AgentTurnId;
 	effort?: Effort;
 	reasoningMode?: ReasoningMode;
+};
+export type CreateDelegationTaskInput = CreateSessionInput & {
+	parentSessionId: SessionId;
+	parentToolCallId: ToolCallId;
+	parentTurnId: AgentTurnId;
+};
+export type ConsumeDelegationReportInput = {
+	parentSessionId: SessionId;
+	record: SessionRecord;
+	taskId: DelegationTaskId;
 };
 
 export type UpdateSessionInput = {
@@ -110,6 +126,32 @@ export type SessionStore = {
 	listRecentModelSelections: (limit: number) => ChatModelSelection[];
 	commitSessionRecord: (input: CommitSessionRecordInput) => Promise<void>;
 	listSessionRecords: (sessionId: SessionId) => Promise<SessionRecord[]>;
+	createDelegatedTask: (
+		input: CreateDelegationTaskInput
+	) => Promise<DelegationTask>;
+	consumeDelegationReport: (
+		input: ConsumeDelegationReportInput
+	) => Promise<boolean>;
+	getDelegationTask: (
+		taskId: DelegationTaskId
+	) => Promise<DelegationTask | null>;
+	getDelegationTaskForChild: (
+		childSessionId: SessionId
+	) => Promise<DelegationTask | null>;
+	listDelegationTasks: (
+		parentSessionId: SessionId
+	) => Promise<DelegationTask[]>;
+	listPendingDelegationReports: (
+		parentSessionId: SessionId
+	) => Promise<DelegationReportEnvelope[]>;
+	markDelegationTaskAwaitingReport: (taskId: DelegationTaskId) => Promise<void>;
+	recoverUncleanDelegationTasks: (
+		excludeTaskIds?: readonly DelegationTaskId[]
+	) => Promise<void>;
+	settleDelegationTask: (input: {
+		outcome: DelegationTaskOutcome;
+		taskId: DelegationTaskId;
+	}) => Promise<DelegationReportEnvelope | null>;
 	updateSessionSubmission: (
 		input: UpdateSessionSubmissionInput
 	) => Promise<void>;

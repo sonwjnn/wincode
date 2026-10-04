@@ -38,7 +38,7 @@
     "test": "bun ../../scripts/test-portfolio.ts default --package ai"
   },
   "dependencies": {
-    "@wincode/runtime-utils": "workspace:*",
+    "@wincode/utils": "workspace:*",
     "oauth4webapi": "^3.8.3",
     "open": "^10.2.0",
     "type-fest": "catalog:",

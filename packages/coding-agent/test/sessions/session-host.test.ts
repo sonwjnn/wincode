@@ -14,11 +14,14 @@ import { fromPartial } from "@total-typescript/shoehorn";
 import {
 	type AgentTurnEvent,
 	createOperationalFailure,
-	type SessionMessageId,
 	type SessionRecord,
 } from "@wincode/agent-core";
+import type {
+	ModelStepRequest,
+	ModelStreamPart,
+} from "@wincode/ai/model-client";
 import type { ChatModelSelection } from "@wincode/ai/models";
-import { logger } from "@wincode/runtime-utils";
+import { logger } from "@wincode/utils";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import { buildAgentRegistry } from "@/modules/agents/registry";
 import type {
@@ -32,9 +35,12 @@ import type {
 	AppendSessionCompactionInput,
 	SummaryGenerator,
 } from "@/modules/sessions/compaction/types";
+import type { DelegationTask } from "@/modules/sessions/delegation/types";
+import { createSessionHostManager } from "@/modules/sessions/host/session-host-manager";
 import type {
 	SessionCapabilities,
 	SessionHost,
+	SessionHostManager,
 } from "@/modules/sessions/host/types";
 import type { SessionMessage } from "@/modules/sessions/message";
 import {
@@ -87,13 +93,13 @@ const { createPermissionService } = await import(
 );
 const { createToolPermissionPolicyState, createToolPermissionRuntime } =
 	await import("@/modules/permissions/tool-permission-runtime");
+const sessionHostManager = createSessionHostManager();
 
 const model: ChatModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 };
 const buildId = agentId("build");
-const parentTurnId = agentTurnId("turn-parent");
 const COMPACTION_SUMMARY_TEXT = "the first turn, summarized";
 const store = createDrizzleSessionStore(
 	createDatabase(join(testDirectory, "sessions.db")).db,
@@ -124,14 +130,13 @@ const completedOutcome = (): SessionRecord["outcome"] => ({
 
 /**
  * Seeds one session whose durable records exercise what opening must project:
- * a completed turn, an interrupted turn, a delegated Subagent row, and a
- * compaction whose boundary sits between them.
+ * a completed turn, an interrupted turn, and a compaction whose boundary sits
+ * between them.
  */
 const seedSession = async (
 	prefix: string
 ): Promise<{
 	compaction: CompactionId;
-	delegatedMessageId: SessionMessageId;
 	sessionId: SessionId;
 }> => {
 	const firstUser = message(`${prefix}-user-1`, "user", "first request");
@@ -199,25 +204,6 @@ const seedSession = async (
 		},
 		sessionId,
 	});
-	await store.commitSessionRecord({
-		record: {
-			agentId: buildId,
-			delegation: { parentToolCallId: toolCallId("call-1"), parentTurnId },
-			id: sessionRecordId(`${prefix}-record-4`),
-			messages: [
-				{
-					id: sessionMessageId(`${prefix}-assistant-delegated`),
-					parts: [{ text: "delegated answer", type: "text" }],
-					role: "assistant",
-				},
-			],
-			model,
-			outcome: completedOutcome(),
-			turnId: agentTurnId(`${prefix}-turn-child`),
-			version: 1,
-		},
-		sessionId,
-	});
 	const compaction = await store.appendCompaction({
 		estimatedTokensAfter: 100,
 		firstKeptUiMessageId: sessionMessageId(`${prefix}-user-2`),
@@ -234,9 +220,6 @@ const seedSession = async (
 	} satisfies AppendSessionCompactionInput);
 	return {
 		compaction: compaction.id,
-		delegatedMessageId: sessionMessageId(
-			`delegated-turn:${prefix}-turn-child:0:${sessionMessageId(`${prefix}-assistant-delegated`)}`
-		),
 		sessionId,
 	};
 };
@@ -265,13 +248,15 @@ const compactionModule = (summaryGenerator: SummaryGenerator) =>
  * Compaction module the Agent Session contract tests fake the same way.
  */
 const createCapabilities = (
-	sessionStore: SessionStore = store
+	sessionStore: SessionStore = store,
+	document: ConfigSnapshot["document"] = {},
+	manager: SessionHostManager = sessionHostManager
 ): SessionCapabilities => {
 	const workspace = process.cwd();
 	const registry = buildAgentRegistry(
 		fromPartial<ConfigSnapshot>({
 			diagnostics: [],
-			document: {},
+			document,
 			sourceFor: () => undefined,
 			sources: [],
 		})
@@ -331,6 +316,7 @@ const createCapabilities = (
 		}),
 		getRegistry: () => registry,
 		getStore: () => sessionStore,
+		getSessionHostManager: () => manager,
 		getToolPermission: () => toolPermission,
 	};
 };
@@ -364,19 +350,23 @@ const resolvedAgentOf = (
 	return fromPartial<ResolvedCodingAgent>({ ...agent });
 };
 
-const sendInput = (capabilities: SessionCapabilities): SessionSendInput => ({
+const sendInput = (
+	capabilities: SessionCapabilities,
+	userText = "third request"
+): SessionSendInput => ({
 	agent: buildId,
-	composition: { files: [], text: "third request" },
+	composition: { files: [], text: userText },
 	model,
 	resolvedAgent: resolvedAgentOf(capabilities),
 	sessionModel: model,
-	userText: "third request",
+	userText,
 });
 
 const textOf = (parts: SessionMessage["parts"]): string =>
 	parts.map((part) => (part.type === "text" ? part.text : "")).join("");
 
-afterAll(() => {
+afterAll(async () => {
+	await sessionHostManager.shutdownAll();
 	rmSync(testDirectory, { force: true, recursive: true });
 });
 
@@ -396,15 +386,13 @@ describe("Session Host opening", () => {
 			sessionMessageId("open-assistant-1"),
 			sessionMessageId("open-user-2"),
 			sessionMessageId("open-assistant-2"),
-			seeded.delegatedMessageId,
 		]);
 		// An interrupted turn keeps its Session Record and reads as interrupted.
 		expect(snapshot.transcript[3]?.metadata?.terminalOutcome).toBe(
 			"interrupted"
 		);
-		// The Session Context is rebuilt around the latest compaction — the
-		// summary stands in for the messages it covers — and leaves the
-		// delegated Subagent row out of what the model is sent.
+		// The Session Context is rebuilt around the latest compaction: its summary
+		// stands in for covered messages, and only primary records remain.
 		expect(snapshot.context.map(({ id }) => id)).toEqual([
 			compactionSummaryMessageId(seeded.compaction),
 			sessionMessageId("open-user-2"),
@@ -1396,4 +1384,550 @@ describe("Session Host lifetime", () => {
 			).toEqual([]);
 		});
 	});
+
+	test("releases a completed idle Session writer after its last view", async () => {
+		const seeded = await seedSession("idle-view-release");
+		const manager = createSessionHostManager();
+		const capabilities = createCapabilities(store, {}, manager);
+		try {
+			const host = await manager.openHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+				view: true,
+			});
+			await host.agentSession.send(
+				sendInput(capabilities, "complete before release")
+			);
+			await manager.releaseView(seeded.sessionId);
+			const writer = await store.acquireSessionWriter(seeded.sessionId);
+			await writer.release();
+		} finally {
+			await manager.shutdownAll();
+		}
+	});
+});
+test("keeps delegated Sessions live across navigation and consumes one durable report on explicit continuation", async () => {
+	const manager = createSessionHostManager();
+	let reopenedManager: SessionHostManager | undefined;
+	const parentDelegationPrompt = "Delegate an independent inspection to scout.";
+	const childInitialPrompt = "Inspect the repository state.";
+	const childSteeringPrompt = "Focus on the session host lifecycle.";
+	const childReportPrompt = "Submit the final report.";
+	const childMixedPrompt =
+		"Submit a report only if spawning another child is refused.";
+	const delegationCallId = toolCallId("durable-delegation-call");
+	const childInitialStarted = Promise.withResolvers<void>();
+	const releaseChildInitial = Promise.withResolvers<void>();
+	const parentResultStarted = Promise.withResolvers<void>();
+	const releaseParentResult = Promise.withResolvers<void>();
+	const parentInterrupted = Promise.withResolvers<void>();
+	const taskCreated = Promise.withResolvers<DelegationTask>();
+	const taskAwaitingReport = Promise.withResolvers<DelegationTask>();
+	const taskSucceeded = Promise.withResolvers<DelegationTask>();
+	const parentContinuationRequested = Promise.withResolvers<void>();
+	const mixedBatchCompleted = Promise.withResolvers<void>();
+	const parentReportPublished = Promise.withResolvers<void>();
+	const parentContinuationCompleted = Promise.withResolvers<void>();
+	const configDocument = {
+		agents: {
+			scout: {
+				description: "Inspect and report findings.",
+				role: "subagent",
+			},
+		},
+	};
+	const capabilities = createCapabilities(store, configDocument, manager);
+	const { id: parentSessionId } = await store.createSession({
+		agent: buildId,
+		message: message("durable-delegation-parent-seed", "user", "Start here."),
+		model,
+		turnId: agentTurnId("durable-delegation-parent-seed-turn"),
+	});
+	const parent = await manager.openHost({
+		capabilities,
+		sessionId: parentSessionId,
+		view: true,
+	});
+	const priorStepScript = recorder.stepScript;
+	const parentReportPrompts: string[] = [];
+	let unsubscribeChild: (() => void) | undefined;
+	recorder.stepScript = async function* (
+		request: ModelStepRequest,
+		fakeRecorder
+	): AsyncGenerator<ModelStreamPart> {
+		fakeRecorder.requests.push({
+			kind: "chat",
+			messages: request.messages.map(({ content, role }) => ({
+				role,
+				text: content
+					.flatMap((part) => (part.type === "text" ? [part.text] : []))
+					.join("\\n"),
+			})),
+		});
+		const latestUserText =
+			request.messages
+				.filter(({ role }) => role === "user")
+				.at(-1)
+				?.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+				.join("\\n") ?? "";
+		const hasDelegationResult = request.messages.some(
+			({ role }) => role === "tool"
+		);
+		if (latestUserText.includes("Durable report for delegated Task")) {
+			parentReportPrompts.push(latestUserText);
+			parentContinuationRequested.resolve();
+			yield {
+				delta: "Parent incorporated the durable report.",
+				type: "text-delta",
+			};
+			yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+			return;
+		}
+		if (latestUserText === childMixedPrompt) {
+			const hasToolResults = request.messages.some(
+				({ role }) => role === "tool"
+			);
+			if (hasToolResults) {
+				yield { delta: "The mixed batch was refused.", type: "text-delta" };
+			} else {
+				yield {
+					input: {
+						details: "This report must not be committed.",
+						summary: "This report must be refused.",
+					},
+					toolCallId: toolCallId("mixed-submit-result-call"),
+					toolName: "submit_result",
+					type: "tool-call",
+				};
+				yield {
+					input: {
+						agent: "scout",
+						prompt: "This child must never be spawned.",
+					},
+					toolCallId: toolCallId("mixed-delegation-call"),
+					toolName: "delegate",
+					type: "tool-call",
+				};
+			}
+			yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+			return;
+		}
+		if (latestUserText === childReportPrompt) {
+			yield {
+				input: {
+					details: "The child Session confirmed its findings.",
+					summary: "The delegated inspection is complete.",
+				},
+				toolCallId: toolCallId("durable-submit-result-call"),
+				toolName: "submit_result",
+				type: "tool-call",
+			};
+			yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+			return;
+		}
+		if (latestUserText === childSteeringPrompt) {
+			yield {
+				delta: "The child followed the steering message.",
+				type: "text-delta",
+			};
+			yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+			return;
+		}
+		if (latestUserText === childInitialPrompt) {
+			yield { delta: "Initial child investigation.", type: "text-delta" };
+			childInitialStarted.resolve();
+			await releaseChildInitial.promise;
+			yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+			return;
+		}
+		if (hasDelegationResult) {
+			const signal = request.signal;
+			if (signal === undefined) {
+				throw new Error("The parent model request has no cancellation signal.");
+			}
+			parentResultStarted.resolve();
+			await releaseParentResult.promise;
+			signal.throwIfAborted();
+			yield { delta: "Parent task started.", type: "text-delta" };
+			yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+			return;
+		}
+		if (latestUserText === parentDelegationPrompt) {
+			yield {
+				input: { agent: "scout", prompt: childInitialPrompt },
+				toolCallId: delegationCallId,
+				toolName: "delegate",
+				type: "tool-call",
+			};
+			yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+			return;
+		}
+		throw new Error(
+			`Unexpected model prompt in delegation journey: ${latestUserText}`
+		);
+	};
+	const unsubscribeManager = manager.onEvent((event) => {
+		if (
+			event.type !== "delegation-task" ||
+			event.task.parentSessionId !== parentSessionId
+		) {
+			return;
+		}
+		if (event.task.status === "active") {
+			taskCreated.resolve(event.task);
+		} else if (event.task.status === "awaiting_report") {
+			taskAwaitingReport.resolve(event.task);
+		} else if (event.task.status === "succeeded") {
+			taskSucceeded.resolve(event.task);
+		}
+	});
+	const unsubscribeParent = parent.onEvent((event) => {
+		if (event.type === "agent-turn-interrupted") {
+			parentInterrupted.resolve();
+		}
+		if (
+			event.type === "agent-turn-completed" &&
+			parentReportPrompts.length > 0
+		) {
+			parentContinuationCompleted.resolve();
+		}
+	});
+	const unsubscribeParentSnapshot = parent.subscribe(() => {
+		if (parent.agentSession.getSnapshot().pendingDelegationReports.length > 0) {
+			parentReportPublished.resolve();
+		}
+	});
+	try {
+		const parentSend = parent.agentSession.send(
+			sendInput(capabilities, parentDelegationPrompt)
+		);
+		const activeTask = await taskCreated.promise;
+		expect(activeTask).toMatchObject({
+			parentSessionId,
+			parentToolCallId: delegationCallId,
+			status: "active",
+		});
+		expect(activeTask.childSessionId).not.toBe(parentSessionId);
+		const child = await manager.openHost({
+			capabilities,
+			sessionId: activeTask.childSessionId,
+			view: true,
+		});
+		await childInitialStarted.promise;
+		await parentResultStarted.promise;
+		expect(parent.agentSession.getSnapshot().turnActive).toBe(true);
+		expect(await parent.agentSession.interruptAll()).toMatchObject({
+			kind: "turn",
+		});
+		releaseParentResult.resolve();
+		await parentInterrupted.promise;
+		expect(parent.agentSession.getSnapshot().turnActive).toBe(false);
+		expect(child.agentSession.getSnapshot().turnActive).toBe(true);
+		expect(await store.getDelegationTask(activeTask.id)).toMatchObject({
+			status: "active",
+		});
+		await parentSend;
+
+		await manager.releaseView(parentSessionId);
+		expect(
+			await manager.openHost({
+				capabilities,
+				sessionId: parentSessionId,
+				view: true,
+			})
+		).toBe(parent);
+		const queuedPrompt = await child.agentSession.send(
+			sendInput(capabilities, childSteeringPrompt)
+		);
+		expect(queuedPrompt).toMatchObject({ rejected: false });
+		expect(await child.agentSession.steer()).toMatchObject({ kind: "steered" });
+		releaseChildInitial.resolve();
+		await taskAwaitingReport.promise;
+		expect(await store.getDelegationTask(activeTask.id)).toMatchObject({
+			status: "awaiting_report",
+		});
+
+		unsubscribeChild = child.onEvent((event) => {
+			if (event.type === "agent-turn-completed") {
+				mixedBatchCompleted.resolve();
+			}
+		});
+		await child.agentSession.send(sendInput(capabilities, childMixedPrompt));
+		await mixedBatchCompleted.promise;
+		expect(await store.getDelegationTask(activeTask.id)).toMatchObject({
+			outcome: null,
+			status: "awaiting_report",
+		});
+		expect(await store.listDelegationTasks(parentSessionId)).toHaveLength(1);
+		expect(
+			await store.listPendingDelegationReports(parentSessionId)
+		).toHaveLength(0);
+		unsubscribeChild();
+		unsubscribeChild = undefined;
+		await child.agentSession.send(sendInput(capabilities, childReportPrompt));
+		const succeeded = await taskSucceeded.promise;
+		expect(succeeded).toMatchObject({
+			childSessionId: activeTask.childSessionId,
+			status: "succeeded",
+		});
+		await parentReportPublished.promise;
+		expect(
+			await store.listPendingDelegationReports(parentSessionId)
+		).toHaveLength(1);
+		expect(
+			parent.agentSession.getSnapshot().pendingDelegationReports
+		).toHaveLength(1);
+		expect(parentReportPrompts).toEqual([]);
+
+		await manager.releaseView(activeTask.childSessionId);
+
+		expect(parent.agentSession.continue()).toMatchObject({ kind: "resumed" });
+		await parentContinuationRequested.promise;
+		await parentContinuationCompleted.promise;
+		expect(parentReportPrompts).toHaveLength(1);
+		expect(
+			parent.agentSession.getSnapshot().pendingDelegationReports
+		).toHaveLength(0);
+		const parentMessages = parent.getSnapshot().transcript;
+		expect(
+			parentMessages.some(({ parts }) =>
+				textOf(parts).includes("Parent incorporated the durable report.")
+			)
+		).toBe(true);
+		expect(
+			parentMessages.some(({ parts }) =>
+				textOf(parts).includes("Initial child investigation.")
+			)
+		).toBe(false);
+		expect(
+			await store.listPendingDelegationReports(parentSessionId)
+		).toHaveLength(0);
+
+		await manager.shutdownAll();
+		reopenedManager = createSessionHostManager();
+		const reopenedCapabilities = createCapabilities(
+			store,
+			configDocument,
+			reopenedManager
+		);
+		const reopenedChild = await reopenedManager.openHost({
+			capabilities: reopenedCapabilities,
+			sessionId: activeTask.childSessionId,
+			view: true,
+		});
+		expect(reopenedChild).not.toBe(child);
+		expect(
+			reopenedChild
+				.getSnapshot()
+				.transcript.some(({ parts }) =>
+					textOf(parts).includes("The child followed the steering message.")
+				)
+		).toBe(true);
+		expect(reopenedChild.getSnapshot().turnActive).toBe(false);
+		await reopenedManager.releaseView(activeTask.childSessionId);
+		const reopenedParent = await reopenedManager.openHost({
+			capabilities: reopenedCapabilities,
+			sessionId: parentSessionId,
+			view: true,
+		});
+		expect(
+			reopenedParent.agentSession.getSnapshot().pendingDelegationReports
+		).toHaveLength(0);
+		expect(
+			reopenedParent
+				.getSnapshot()
+				.transcript.some(({ parts }) =>
+					textOf(parts).includes("Parent incorporated the durable report.")
+				)
+		).toBe(true);
+		expect(parentReportPrompts).toHaveLength(1);
+		await reopenedManager.shutdownAll();
+	} finally {
+		unsubscribeChild?.();
+		releaseChildInitial.resolve();
+		releaseParentResult.resolve();
+		unsubscribeManager();
+		await reopenedManager?.shutdownAll();
+		unsubscribeParent();
+		unsubscribeParentSnapshot();
+		recorder.stepScript = priorStepScript;
+		await manager.shutdownAll();
+	}
+}, 15_000);
+test("graceful shutdown records cancellation and retains an active child Session", async () => {
+	const manager = createSessionHostManager();
+	const parentPrompt =
+		"Delegate an inspection that will be interrupted by shutdown.";
+	const childPrompt = "Keep inspecting until the application shuts down.";
+	const childRequestStarted = Promise.withResolvers<void>();
+	const priorStepScript = recorder.stepScript;
+	const configDocument = {
+		agents: {
+			scout: {
+				description: "Inspect and report findings.",
+				role: "subagent",
+			},
+		},
+	};
+	const capabilities = createCapabilities(store, configDocument, manager);
+	const { id: parentSessionId } = await store.createSession({
+		agent: buildId,
+		message: message("shutdown-delegation-parent-seed", "user", "Start here."),
+		model,
+		turnId: agentTurnId("shutdown-delegation-parent-turn"),
+	});
+	recorder.stepScript = async function* (
+		request: ModelStepRequest
+	): AsyncGenerator<ModelStreamPart> {
+		const latestUserText =
+			request.messages
+				.filter(({ role }) => role === "user")
+				.at(-1)
+				?.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+				.join("\n") ?? "";
+		if (latestUserText === childPrompt) {
+			childRequestStarted.resolve();
+			const signal = request.signal;
+			if (signal === undefined) {
+				throw new Error("The child model request has no cancellation signal.");
+			}
+			const aborted = Promise.withResolvers<never>();
+			const rejectOnAbort = (): void => aborted.reject(signal.reason);
+			signal.addEventListener("abort", rejectOnAbort, { once: true });
+			if (signal.aborted) {
+				rejectOnAbort();
+			}
+			try {
+				await aborted.promise;
+			} finally {
+				signal.removeEventListener("abort", rejectOnAbort);
+			}
+			return;
+		}
+		if (latestUserText !== parentPrompt) {
+			throw new Error(
+				`Unexpected model prompt during shutdown: ${latestUserText}`
+			);
+		}
+		yield {
+			input: { agent: "scout", prompt: childPrompt },
+			toolCallId: toolCallId("shutdown-delegation-call"),
+			toolName: "delegate",
+			type: "tool-call",
+		};
+		yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+	};
+	try {
+		const parent = await manager.openHost({
+			capabilities,
+			sessionId: parentSessionId,
+			view: true,
+		});
+		await parent.agentSession.send(sendInput(capabilities, parentPrompt));
+		await childRequestStarted.promise;
+		const task = (await store.listDelegationTasks(parentSessionId))[0];
+		if (task === undefined) {
+			throw new Error("The running child Task was not durably recorded.");
+		}
+		expect(task).toMatchObject({ status: "active" });
+
+		await manager.shutdownAll();
+
+		expect(await store.getDelegationTask(task.id)).toMatchObject({
+			outcome: { kind: "cancelled" },
+			status: "cancelled",
+		});
+		expect(
+			await store.listPendingDelegationReports(parentSessionId)
+		).toMatchObject([{ outcome: { kind: "cancelled" }, taskId: task.id }]);
+		expect(await store.getSession(task.childSessionId)).not.toBeNull();
+	} finally {
+		recorder.stepScript = priorStepScript;
+		await manager.shutdownAll();
+	}
+});
+
+test("unclean recovery marks active Delegated Tasks interrupted without replay", async () => {
+	const { id: parentSessionId } = await store.createSession({
+		agent: buildId,
+		message: message("unclean-delegation-parent-seed", "user", "Start here."),
+		model,
+		turnId: agentTurnId("unclean-delegation-parent-turn"),
+	});
+	const task = await store.createDelegatedTask({
+		agent: buildId,
+		message: message(
+			"unclean-delegation-child-prompt",
+			"user",
+			"Inspect without replaying unconfirmed work."
+		),
+		model,
+		parentSessionId,
+		parentToolCallId: toolCallId("unclean-delegation-call"),
+		parentTurnId: agentTurnId("unclean-delegation-parent-turn"),
+		turnId: agentTurnId("unclean-delegation-child-turn"),
+	});
+	const requestsBeforeOpen = recorder.requests.length;
+	await store.recoverUncleanDelegationTasks();
+
+	expect(await store.getDelegationTask(task.id)).toMatchObject({
+		outcome: { kind: "interrupted" },
+		status: "interrupted",
+	});
+	expect(
+		await store.listPendingDelegationReports(parentSessionId)
+	).toMatchObject([{ outcome: { kind: "interrupted" }, taskId: task.id }]);
+	expect(await store.getSession(task.childSessionId)).not.toBeNull();
+
+	const manager = createSessionHostManager();
+	const capabilities = createCapabilities(store, {}, manager);
+	try {
+		const reopenedChild = await manager.openHost({
+			capabilities,
+			sessionId: task.childSessionId,
+			view: true,
+		});
+		expect(reopenedChild.getSnapshot().turnActive).toBe(false);
+		expect(recorder.requests.length).toBe(requestsBeforeOpen);
+	} finally {
+		await manager.shutdownAll();
+	}
+});
+
+test("preserves active Delegated Tasks while either Session Writer is held", async () => {
+	const { id: parentSessionId } = await store.createSession({
+		agent: buildId,
+		message: message("live-delegation-parent-seed", "user", "Start here."),
+		model,
+		turnId: agentTurnId("live-delegation-parent-turn"),
+	});
+	const task = await store.createDelegatedTask({
+		agent: buildId,
+		message: message(
+			"live-delegation-child-prompt",
+			"user",
+			"Keep this active task reportable."
+		),
+		model,
+		parentSessionId,
+		parentToolCallId: toolCallId("live-delegation-call"),
+		parentTurnId: agentTurnId("live-delegation-parent-turn"),
+		turnId: agentTurnId("live-delegation-child-turn"),
+	});
+	for (const sessionId of [parentSessionId, task.childSessionId]) {
+		const writerLock = await store.acquireSessionWriter(sessionId);
+		try {
+			await store.recoverUncleanDelegationTasks();
+
+			expect(await store.getDelegationTask(task.id)).toMatchObject({
+				outcome: null,
+				status: "active",
+			});
+			expect(await store.listPendingDelegationReports(parentSessionId)).toEqual(
+				[]
+			);
+		} finally {
+			await writerLock.release();
+		}
+	}
 });

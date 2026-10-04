@@ -4,7 +4,7 @@ import {
 	isNonEmptyString,
 	isPlainObject,
 	isUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { resolveConfigRelativePath } from "@/shared/config/resolve-config-relative-path";
 import { getProjectRoots } from "@/shared/paths/project-roots";

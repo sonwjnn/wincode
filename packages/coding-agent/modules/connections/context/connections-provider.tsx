@@ -1,5 +1,5 @@
 import type { Connections } from "@wincode/ai/connections";
-import { isNull } from "@wincode/runtime-utils";
+import { isNull } from "@wincode/utils";
 import type { ReactNode } from "react";
 import { createContext, useContext, useRef } from "react";
 

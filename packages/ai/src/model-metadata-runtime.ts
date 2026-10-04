@@ -1,4 +1,4 @@
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 // Read path over the generated model metadata snapshot. Kept separate from
 // ./catalog so the catalog stays a compile-time constant that cannot depend on
 // generated output, and so removal of the snapshot never breaks selection.

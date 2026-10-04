@@ -10,7 +10,7 @@ had to land in four places and could only be verified through rendered frames.
 The `display-sanitize` module owns the display-specific shared core — the
 free-text secret regex family, replacement literal, control-character and ANSI
 stripping, cell measurement, wrapping, and preview bounds — behind a public
-seam. The generic sensitive-key predicate lives in `@wincode/runtime-utils`,
+seam. The generic sensitive-key predicate lives in `@wincode/utils`,
 so structured diagnostic fields and display trees share one classifier without
 a dependency from the lower-level runtime package on Coding-Agent. The chat
 renderer, approval panels, and MCP dialogs are thin adapters over
@@ -23,7 +23,7 @@ Status: accepted
 - **One module, parameterized site budgets (accepted)** - A single free-text
   display regex family, replacement, and operation order (strip, then redact)
   live in `packages/coding-agent/shared/display-sanitize`; generic structured
-  key-name matching lives in `@wincode/runtime-utils` for runtime diagnostics
+  key-name matching lives in `@wincode/utils` for runtime diagnostics
   and display trees. Contexts that genuinely show different amounts keep their
   budgets as named options: chat tool arguments
   stay at 512 chars / depth 2 / 12 entries with a `[…]` depth marker, the

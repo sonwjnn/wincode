@@ -9,7 +9,7 @@ import type {
 } from "@wincode/agent-core";
 import { createOperationalFailure } from "@wincode/agent-core";
 import { createModelTarget } from "@wincode/ai/model-target";
-import { isObjectLike, isUndefined } from "@wincode/runtime-utils";
+import { isObjectLike, isUndefined } from "@wincode/utils";
 import { z } from "zod";
 import { buildAgent } from "@/modules/agents/built-ins";
 import { RetiredModelError } from "@/modules/model-target";

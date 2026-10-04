@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+- **Delegated work runs in durable child Sessions.** A process-owned Session Host
+  Manager retains one Stateful Agent per live Session, while each delegated task
+  receives a linked child Session and durable lifecycle. Reports enter an atomic
+  parent inbox and are consumed only by explicit continuation. Print waits for
+  children, JSON tags child events, and RPC protocol v4 reports background
+  approval notices.
+
 - **A view-scoped focus registry keeps the composer reachable.** Session and
   new-session views resolve composers by OpenTUI IDs instead of callback refs.
   Terminal activation and pointer movement restore focus; non-control background
@@ -64,8 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Live transcripts match durable Session Record order.** Agent Sessions
   serialize record commits in queue order; streamed assistant rows stay visible
   while pending and move to their stored position after commit. Failed writes
-  remove uncommitted transcript rows and retain the persistence error; delegated
-  rows remain grouped after primary turns.
+  remove uncommitted transcript rows and retain the persistence error.
 
 - **Shell permission flips to a permissive posture (0.1.0).** Shell commands
   default to `allow` instead of `ask`; `rm *` and `sudo *` deny by default as

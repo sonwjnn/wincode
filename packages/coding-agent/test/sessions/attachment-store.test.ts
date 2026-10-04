@@ -3,7 +3,7 @@ import { mkdtemp, stat, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
-import { isObjectLike, isString } from "@wincode/runtime-utils";
+import { isObjectLike, isString } from "@wincode/utils";
 import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
 import type { SessionMessage } from "@/modules/sessions/message";
 import {

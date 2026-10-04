@@ -1,4 +1,4 @@
-import { isNull, isUndefined } from "@wincode/runtime-utils";
+import { isNull, isUndefined } from "@wincode/utils";
 
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 

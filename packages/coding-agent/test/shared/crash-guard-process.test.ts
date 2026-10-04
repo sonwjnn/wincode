@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, readdir } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { readUtf8File } from "@wincode/runtime-utils";
+import { readUtf8File } from "@wincode/utils";
 import { spawnSync } from "bun";
 
 const crashGuardModule = path.join(

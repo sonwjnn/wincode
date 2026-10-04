@@ -3,7 +3,7 @@ import {
 	createAgentTurnId,
 	type SessionMessageId,
 } from "@wincode/agent-core";
-import { getErrorMessage, isError } from "@wincode/runtime-utils";
+import { getErrorMessage, isError } from "@wincode/utils";
 import type { SessionSendInput, SessionSendOutcome } from "../submission-types";
 import { sessionSendCancelled } from "./submission";
 

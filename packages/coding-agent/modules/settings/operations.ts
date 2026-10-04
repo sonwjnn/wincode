@@ -1,4 +1,4 @@
-import { isUndefined, omitUndefined } from "@wincode/runtime-utils";
+import { isUndefined, omitUndefined } from "@wincode/utils";
 import type { ConfigSnapshot, ConfigStore } from "@/shared/config/config-store";
 import { SETTINGS_CATALOG } from "./catalog";
 import type {

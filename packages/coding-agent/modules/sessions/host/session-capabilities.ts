@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { homedir } from "node:os";
 import type { AgentRuntime } from "@wincode/agent-core";
 import { type Connections, createConnections } from "@wincode/ai/connections";
-import { logger } from "@wincode/runtime-utils";
+import { logger } from "@wincode/utils";
 import { DEFAULT_AGENT_ID } from "@/modules/agents/built-ins";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import { resolveAgentRegistry } from "@/modules/agents/registry";
@@ -46,6 +46,7 @@ import {
 } from "../storage/path";
 import { resetLocalSessionData } from "../storage/reset-local-session-data";
 import type { SessionStore } from "../storage/session-store";
+import { createSessionHostManager } from "./session-host-manager";
 import type { SessionCapabilities } from "./types";
 
 export type SessionCapabilitiesOptions = Readonly<{
@@ -211,20 +212,28 @@ export const createSessionCapabilities = async ({
 			store,
 			summaryGenerator: createDirectSummaryGenerator(connections),
 		});
+		const sessionHostManager = createSessionHostManager();
 		const ownsMcp = providedMcp === undefined;
 		if (ownsMcp) {
 			await mcp.initialize();
 		}
-		let isShutdown = false;
-		const shutdown = async (): Promise<void> => {
-			if (isShutdown) {
-				return;
+		let shutdownPromise: Promise<void> | undefined;
+		const shutdown = (): Promise<void> => {
+			if (shutdownPromise !== undefined) {
+				return shutdownPromise;
 			}
-			isShutdown = true;
-			if (ownsMcp) {
-				await closeOwnedMcp(mcp, "shutdown");
-			}
-			ownedDatabase?.sqlite.close();
+			const closing = (async () => {
+				try {
+					await sessionHostManager.shutdownAll();
+				} finally {
+					if (ownsMcp) {
+						await closeOwnedMcp(mcp, "shutdown");
+					}
+					ownedDatabase?.sqlite.close();
+				}
+			})();
+			shutdownPromise = closing;
+			return closing;
 		};
 		const capabilities: SessionCapabilities = {
 			getApprovalMode: () => approvalMode ?? "interactive",
@@ -235,6 +244,7 @@ export const createSessionCapabilities = async ({
 			getMcp: () => asMcpCapability(mcp),
 			getRegistry: () => registry,
 			getStore: () => store,
+			getSessionHostManager: () => sessionHostManager,
 			getToolPermission: () => toolPermission,
 			...(runtimeFactory === undefined ? {} : { getRuntime: runtimeFactory }),
 		};

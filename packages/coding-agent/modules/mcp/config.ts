@@ -1,4 +1,4 @@
-import { omitUndefined } from "@wincode/runtime-utils";
+import { omitUndefined } from "@wincode/utils";
 import {
 	type ConfigStore,
 	createConfigStore,

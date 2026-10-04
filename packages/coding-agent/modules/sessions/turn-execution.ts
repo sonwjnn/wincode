@@ -12,7 +12,7 @@ import type {
 	Effort,
 	ReasoningMode,
 } from "@wincode/ai/models";
-import { omitUndefined } from "@wincode/runtime-utils";
+import { omitUndefined } from "@wincode/utils";
 import type { McpCatalogSnapshot } from "@/modules/mcp";
 import type {
 	SkillExecution,

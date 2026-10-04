@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 import { loadMcpConfig } from "@/modules/mcp/config";
 
 const CONFIG_ROOT = "/home/user/.config/wincode";

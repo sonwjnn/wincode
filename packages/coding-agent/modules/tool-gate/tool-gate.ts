@@ -6,7 +6,7 @@ import {
 	isPlainObject,
 	isString,
 	isUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import {
 	MCP_PERMISSION_RESOURCE,
 	mcpDeniedByPolicyText,

@@ -1,4 +1,4 @@
-import { isString } from "@wincode/runtime-utils";
+import { isString } from "@wincode/utils";
 // Model selection over the Model Catalog. Catalog data, entry lookups, and
 // types live in ./catalog; metadata that comes from the generated models.dev
 // snapshot lives in ./model-metadata-runtime. This module is the selection

@@ -2,11 +2,12 @@ import { mkdir, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
 	agentIdSchema,
-	isAgentTurnDelegation,
 	isSessionAttachmentReferencePart,
+	isToolCallId,
 	SESSION_RECORD_VERSION,
 	type SessionRecord,
 	type SessionRecordId,
+	type ToolCallId,
 	toAgentTurnId,
 	toSessionMessageId,
 	toSessionRecordId,
@@ -17,19 +18,22 @@ import {
 } from "@wincode/ai/models";
 import {
 	isArray,
+	isNonEmptyString,
 	isNull,
 	isUndefined,
 	omitUndefined,
 	pickTruthy,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNull as isSqlNull, or } from "drizzle-orm";
 import { z } from "zod";
 import type { EditMode } from "@/modules/tools";
 import {
 	type CompactionId,
+	type DelegationTaskId,
 	type SessionId,
 	toCompactionId,
+	toDelegationTaskId,
 	toSessionId,
 	toWorkspaceId,
 	type WorkspaceId,
@@ -42,6 +46,14 @@ import type {
 	AppendSessionCompactionInput,
 	SessionCompaction,
 } from "../compaction/types";
+import {
+	type DelegationReportEnvelope,
+	type DelegationTask,
+	type DelegationTaskOutcome,
+	type DelegationTaskStatus,
+	delegationTaskOutcomeSchema,
+	delegationTaskStatusSchema,
+} from "../delegation/types";
 import { type SessionMessage, withSubmissionStatus } from "../message";
 import type {
 	AttachmentExternalizationOptions,
@@ -58,6 +70,8 @@ import {
 import { createDatabase, type SessionDatabase } from "./client";
 import { resolveLocalAttachmentRoot, resolveLocalSnapshotRoot } from "./path";
 import {
+	delegationInbox,
+	delegationTask,
 	promptHistory,
 	type SerializedJson,
 	session,
@@ -73,6 +87,8 @@ import {
 } from "./session-record";
 import {
 	type CommitSessionRecordInput,
+	type ConsumeDelegationReportInput,
+	type CreateDelegationTaskInput,
 	type CreateSessionInput,
 	type PromptHistoryEntry,
 	type Session,
@@ -81,13 +97,35 @@ import {
 	type UpdateSessionInput,
 	type UpdateSessionSubmissionInput,
 } from "./session-store";
-import { acquireSessionWriterLock } from "./session-writer-lock";
+import {
+	acquireSessionWriterLock,
+	SessionInUseError,
+	type SessionWriterLock,
+} from "./session-writer-lock";
 import { createDrizzleFileObservationStore } from "./versioned-editing-store";
 
 const createSessionId = (): SessionId => toSessionId(randomUUIDv7());
 const createCompactionId = (): CompactionId => toCompactionId(randomUUIDv7());
 const createSessionRecordId = (): SessionRecordId =>
 	toSessionRecordId(randomUUIDv7());
+const createDelegationTaskId = (): DelegationTaskId =>
+	toDelegationTaskId(randomUUIDv7());
+const statusForOutcome = (
+	outcome: DelegationTaskOutcome
+): DelegationTaskStatus => {
+	switch (outcome.kind) {
+		case "result":
+			return "succeeded";
+		case "failure":
+			return "failed";
+		case "cancelled":
+			return "cancelled";
+		case "interrupted":
+			return "interrupted";
+		default:
+			throw new Error("Unknown delegated task outcome.");
+	}
+};
 
 const serializeJson = <T>(value: T): SerializedJson<T> =>
 	value as SerializedJson<T>;
@@ -423,18 +461,8 @@ const toSessionRecordModel = (
 	...omitUndefined({ effort, reasoningMode }),
 });
 const toSessionRecord = (row: SessionRecordRow): SessionRecord => {
-	let delegation: SessionRecord["delegation"];
-	if (!isNull(row.delegationJson)) {
-		if (!isAgentTurnDelegation(row.delegationJson)) {
-			throw new SessionRecordInvariantError(
-				"Invalid persisted Session Record delegation."
-			);
-		}
-		delegation = row.delegationJson;
-	}
 	const record = {
 		agentId: agentIdSchema.parse(row.agentId),
-		...omitUndefined({ delegation }),
 		id: toSessionRecordId(row.recordId),
 		messages: row.messagesJson,
 		model: row.modelJson,
@@ -449,6 +477,40 @@ const toSessionRecord = (row: SessionRecordRow): SessionRecord => {
 		);
 	}
 	return record as unknown as SessionRecord;
+};
+const toDelegationTask = (
+	row: typeof delegationTask.$inferSelect
+): DelegationTask => {
+	if (
+		!(isNonEmptyString(row.parentTurnId) && isToolCallId(row.parentToolCallId))
+	) {
+		throw new Error("Invalid persisted delegation task identity.");
+	}
+	const status = delegationTaskStatusSchema.parse(row.status);
+	const outcome =
+		row.outcomeJson === null
+			? null
+			: delegationTaskOutcomeSchema.parse(row.outcomeJson);
+	const expectedStatus = outcome === null ? null : statusForOutcome(outcome);
+	if (
+		(expectedStatus !== null && expectedStatus !== status) ||
+		(expectedStatus === null &&
+			(status === "succeeded" || status === "failed" || status === "cancelled"))
+	) {
+		throw new Error("Persisted delegation task status and outcome disagree.");
+	}
+	return {
+		agentId: agentIdSchema.parse(row.agentId),
+		childSessionId: row.childSessionId,
+		createdAt: row.createdAt,
+		id: toDelegationTaskId(row.id),
+		outcome,
+		parentSessionId: row.parentSessionId,
+		parentToolCallId: row.parentToolCallId as ToolCallId,
+		parentTurnId: toAgentTurnId(row.parentTurnId),
+		status,
+		updatedAt: row.updatedAt,
+	};
 };
 
 const collectLiveAttachmentIds = (db: SessionDatabase): Set<string> => {
@@ -584,7 +646,6 @@ const writeSessionRecordCheckpoint = (
 		const sessionRecordValues: typeof sessionRecord.$inferInsert = {
 			createdAt: now,
 			agentId: record.agentId,
-			delegationJson: serializeJson(record.delegation ?? null),
 			messagesJson: serializeJson([...record.messages]),
 			modelJson,
 			outcomeJson: serializeJson(record.outcome),
@@ -797,6 +858,442 @@ export const createDrizzleSessionStore = (
 		throw error;
 	};
 
+	const createDelegatedTask = async ({
+		agent,
+		effort,
+		message,
+		model,
+		parentSessionId,
+		parentToolCallId,
+		parentTurnId,
+		reasoningMode,
+		turnId,
+	}: CreateDelegationTaskInput): Promise<DelegationTask> => {
+		const durableMessage = toDurableSessionMessageRecord(message);
+		if (isUndefined(durableMessage) || durableMessage.role !== "user") {
+			throw new Error(
+				"Initial delegated Session message has no durable parts."
+			);
+		}
+		const taskId = createDelegationTaskId();
+		const childSessionId = createSessionId();
+		const now = new Date();
+		const hasMessageChoice = !(
+			isUndefined(message.metadata?.effort) &&
+			isUndefined(message.metadata?.reasoningMode)
+		);
+		const recordModel = toSessionRecordModel(
+			message.metadata?.model ?? model,
+			hasMessageChoice ? message.metadata?.effort : effort,
+			hasMessageChoice ? message.metadata?.reasoningMode : reasoningMode
+		);
+
+		db.transaction((tx) => {
+			const parent = tx
+				.select({ id: session.id })
+				.from(session)
+				.where(
+					and(
+						eq(session.id, parentSessionId),
+						eq(session.workspaceId, workspace.id)
+					)
+				)
+				.get();
+			if (parent === undefined) {
+				throw new Error("Parent Session not found.");
+			}
+			tx.insert(session)
+				.values({
+					createdAt: now,
+					id: childSessionId,
+					lastMessageAt: now,
+					modelJson: serializeJson(model),
+					pinned: false,
+					title: deriveSessionTitle([message]),
+					updatedAt: now,
+					effort,
+					reasoningMode,
+					workspaceId: workspace.id,
+				})
+				.run();
+			tx.insert(sessionRecord)
+				.values({
+					agentId: agent,
+					createdAt: now,
+					messagesJson: serializeJson([durableMessage]),
+					modelJson: serializeJson(recordModel),
+					outcomeJson: serializeJson({ kind: "user" }),
+					position: 0,
+					recordId: createSessionRecordId(),
+					sessionId: childSessionId,
+					turnId,
+					version: SESSION_RECORD_VERSION,
+				})
+				.run();
+			tx.insert(delegationTask)
+				.values({
+					agentId: agent,
+					childSessionId,
+					createdAt: now,
+					id: taskId,
+					outcomeJson: null,
+					parentSessionId,
+					parentToolCallId,
+					parentTurnId,
+					status: "active",
+					updatedAt: now,
+				})
+				.run();
+		});
+
+		return {
+			agentId: agent,
+			childSessionId,
+			createdAt: now,
+			id: taskId,
+			outcome: null,
+			parentSessionId,
+			parentToolCallId,
+			parentTurnId,
+			status: "active",
+			updatedAt: now,
+		};
+	};
+	const getDelegationTask = async (
+		taskId: DelegationTaskId
+	): Promise<DelegationTask | null> => {
+		const row = db
+			.select({ task: delegationTask })
+			.from(delegationTask)
+			.innerJoin(session, eq(delegationTask.parentSessionId, session.id))
+			.where(
+				and(
+					eq(delegationTask.id, taskId),
+					eq(session.workspaceId, workspace.id)
+				)
+			)
+			.get()?.task;
+		return row === undefined ? null : toDelegationTask(row);
+	};
+	const getDelegationTaskForChild = async (
+		childSessionId: SessionId
+	): Promise<DelegationTask | null> => {
+		const row = db
+			.select({ task: delegationTask })
+			.from(delegationTask)
+			.innerJoin(session, eq(delegationTask.parentSessionId, session.id))
+			.where(
+				and(
+					eq(delegationTask.childSessionId, childSessionId),
+					eq(session.workspaceId, workspace.id)
+				)
+			)
+			.get()?.task;
+		return row === undefined ? null : toDelegationTask(row);
+	};
+	const listDelegationTasks = async (
+		parentSessionId: SessionId
+	): Promise<DelegationTask[]> =>
+		db
+			.select({ task: delegationTask })
+			.from(delegationTask)
+			.innerJoin(session, eq(delegationTask.parentSessionId, session.id))
+			.where(
+				and(
+					eq(delegationTask.parentSessionId, parentSessionId),
+					eq(session.workspaceId, workspace.id)
+				)
+			)
+			.orderBy(desc(delegationTask.createdAt))
+			.all()
+			.map(({ task }) => toDelegationTask(task));
+	const listPendingDelegationReports = async (
+		parentSessionId: SessionId
+	): Promise<DelegationReportEnvelope[]> =>
+		db
+			.select({
+				createdAt: delegationInbox.createdAt,
+				task: delegationTask,
+			})
+			.from(delegationInbox)
+			.innerJoin(delegationTask, eq(delegationInbox.taskId, delegationTask.id))
+			.innerJoin(session, eq(delegationInbox.parentSessionId, session.id))
+			.where(
+				and(
+					eq(delegationInbox.parentSessionId, parentSessionId),
+					isSqlNull(delegationInbox.consumedAt),
+					eq(session.workspaceId, workspace.id)
+				)
+			)
+			.orderBy(asc(delegationInbox.createdAt))
+			.all()
+			.map(({ createdAt, task: row }) => {
+				const task = toDelegationTask(row);
+				if (task.outcome === null) {
+					throw new Error("A committed delegation report has no outcome.");
+				}
+				return {
+					childSessionId: task.childSessionId,
+					createdAt,
+					outcome: task.outcome,
+					parentSessionId: task.parentSessionId,
+					parentToolCallId: task.parentToolCallId,
+					parentTurnId: task.parentTurnId,
+					taskId: task.id,
+				};
+			});
+	const markDelegationTaskAwaitingReport = async (
+		taskId: DelegationTaskId
+	): Promise<void> => {
+		db.transaction((tx) => {
+			const row = tx
+				.select({ task: delegationTask })
+				.from(delegationTask)
+				.where(eq(delegationTask.id, taskId))
+				.get()?.task;
+			if (row === undefined || row.status !== "active") {
+				return;
+			}
+			tx.update(delegationTask)
+				.set({ status: "awaiting_report", updatedAt: new Date() })
+				.where(eq(delegationTask.id, taskId))
+				.run();
+		});
+	};
+	const acquireSessionWriterIfAvailable = async (
+		sessionId: SessionId
+	): Promise<SessionWriterLock | null> => {
+		try {
+			return await acquireSessionWriterLock(db.$client.filename, sessionId);
+		} catch (error) {
+			if (error instanceof SessionInUseError) {
+				return null;
+			}
+			throw error;
+		}
+	};
+	const recoverUncleanDelegationTask = async (
+		task: typeof delegationTask.$inferSelect
+	): Promise<void> => {
+		const parentWriterLock = await acquireSessionWriterIfAvailable(
+			toSessionId(task.parentSessionId)
+		);
+		if (parentWriterLock === null) {
+			return;
+		}
+		try {
+			const childWriterLock = await acquireSessionWriterIfAvailable(
+				toSessionId(task.childSessionId)
+			);
+			if (childWriterLock === null) {
+				return;
+			}
+			try {
+				const outcome: DelegationTaskOutcome = {
+					kind: "interrupted",
+					reason:
+						"The process stopped before a result was committed; the task outcome is unknown.",
+				};
+				const now = new Date();
+				db.transaction((tx) => {
+					const current = tx
+						.select({ task: delegationTask })
+						.from(delegationTask)
+						.where(eq(delegationTask.id, task.id))
+						.get()?.task;
+					if (current === undefined || current.status !== "active") {
+						return;
+					}
+					tx.update(delegationTask)
+						.set({
+							outcomeJson: serializeJson(outcome),
+							status: "interrupted",
+							updatedAt: now,
+						})
+						.where(eq(delegationTask.id, task.id))
+						.run();
+					tx.insert(delegationInbox)
+						.values({
+							createdAt: now,
+							parentSessionId: current.parentSessionId,
+							taskId: toDelegationTaskId(current.id),
+							consumedAt: null,
+						})
+						.run();
+				});
+			} finally {
+				await childWriterLock.release();
+			}
+		} finally {
+			await parentWriterLock.release();
+		}
+	};
+	const recoverUncleanDelegationTasks = async (
+		excludeTaskIds: readonly DelegationTaskId[] = []
+	): Promise<void> => {
+		const excluded = new Set(excludeTaskIds);
+		const activeTasks = db
+			.select({ task: delegationTask })
+			.from(delegationTask)
+			.innerJoin(session, eq(delegationTask.parentSessionId, session.id))
+			.where(
+				and(
+					eq(delegationTask.status, "active"),
+					eq(session.workspaceId, workspace.id)
+				)
+			)
+			.all();
+		for (const { task } of activeTasks) {
+			if (!excluded.has(toDelegationTaskId(task.id))) {
+				await recoverUncleanDelegationTask(task);
+			}
+		}
+	};
+	const settleDelegationTask = async ({
+		outcome: rawOutcome,
+		taskId,
+	}: {
+		outcome: DelegationTaskOutcome;
+		taskId: DelegationTaskId;
+	}): Promise<DelegationReportEnvelope | null> => {
+		const outcome = delegationTaskOutcomeSchema.parse(rawOutcome);
+		const status = statusForOutcome(outcome);
+		const now = new Date();
+		return db.transaction((tx) => {
+			const row = tx
+				.select({ task: delegationTask })
+				.from(delegationTask)
+				.where(eq(delegationTask.id, taskId))
+				.get()?.task;
+			if (row === undefined) {
+				throw new Error("Delegation Task not found.");
+			}
+			const task = toDelegationTask(row);
+			if (
+				task.outcome !== null ||
+				(task.status !== "active" &&
+					task.status !== "awaiting_report" &&
+					task.status !== "interrupted")
+			) {
+				return null;
+			}
+			tx.update(delegationTask)
+				.set({
+					outcomeJson: serializeJson(outcome),
+					status,
+					updatedAt: now,
+				})
+				.where(
+					and(
+						eq(delegationTask.id, taskId),
+						eq(delegationTask.status, task.status)
+					)
+				)
+				.run();
+			tx.insert(delegationInbox)
+				.values({
+					createdAt: now,
+					parentSessionId: task.parentSessionId,
+					taskId,
+					consumedAt: null,
+				})
+				.run();
+			return {
+				childSessionId: task.childSessionId,
+				createdAt: now,
+				outcome,
+				parentSessionId: task.parentSessionId,
+				parentToolCallId: task.parentToolCallId,
+				parentTurnId: task.parentTurnId,
+				taskId,
+			};
+		});
+	};
+	const consumeDelegationReport = async ({
+		parentSessionId,
+		record,
+		taskId,
+	}: ConsumeDelegationReportInput): Promise<boolean> => {
+		const validationError = getSessionRecordValidationError(record);
+		if (!isNull(validationError)) {
+			throw new SessionRecordInvariantError(
+				`Invalid Session Record: ${validationError}`
+			);
+		}
+		const modelJson = serializeJson(
+			toSessionRecordModel(
+				record.model,
+				record.model.effort,
+				record.model.reasoningMode
+			)
+		);
+		const now = new Date();
+		return db.transaction((tx) => {
+			const parent = tx
+				.select({ id: session.id })
+				.from(session)
+				.where(
+					and(
+						eq(session.id, parentSessionId),
+						eq(session.workspaceId, workspace.id)
+					)
+				)
+				.get();
+			if (parent === undefined) {
+				throw new Error("Parent Session not found.");
+			}
+			const pendingInbox = tx
+				.select({ taskId: delegationInbox.taskId })
+				.from(delegationInbox)
+				.where(
+					and(
+						eq(delegationInbox.taskId, taskId),
+						eq(delegationInbox.parentSessionId, parentSessionId),
+						isSqlNull(delegationInbox.consumedAt)
+					)
+				)
+				.get();
+			if (pendingInbox === undefined) {
+				return false;
+			}
+			tx.update(delegationInbox)
+				.set({ consumedAt: now })
+				.where(
+					and(
+						eq(delegationInbox.taskId, taskId),
+						eq(delegationInbox.parentSessionId, parentSessionId),
+						isSqlNull(delegationInbox.consumedAt)
+					)
+				)
+				.run();
+			const latest = tx
+				.select({ position: sessionRecord.position })
+				.from(sessionRecord)
+				.where(eq(sessionRecord.sessionId, parentSessionId))
+				.orderBy(desc(sessionRecord.position))
+				.limit(1)
+				.get();
+			tx.insert(sessionRecord)
+				.values({
+					createdAt: now,
+					agentId: record.agentId,
+					messagesJson: serializeJson([...record.messages]),
+					modelJson,
+					outcomeJson: serializeJson(record.outcome),
+					position: (latest?.position ?? -1) + 1,
+					recordId: record.id,
+					sessionId: parentSessionId,
+					turnId: record.turnId,
+					version: record.version,
+				})
+				.run();
+			tx.update(session)
+				.set({ lastMessageAt: now, updatedAt: now })
+				.where(eq(session.id, parentSessionId))
+				.run();
+			return true;
+		});
+	};
 	return {
 		appendCompaction: (input) =>
 			Promise.resolve(appendCompaction(db, workspace.id, input)),
@@ -852,7 +1349,6 @@ export const createDrizzleSessionStore = (
 					.values({
 						agentId: agent,
 						createdAt: now,
-						delegationJson: null,
 						messagesJson: serializeJson([durableMessage]),
 						modelJson: serializeJson(recordModel),
 						outcomeJson: serializeJson({ kind: "user" }),
@@ -868,13 +1364,55 @@ export const createDrizzleSessionStore = (
 			return { id };
 		},
 
+		createDelegatedTask,
+		consumeDelegationReport,
+		getDelegationTask,
+		getDelegationTaskForChild,
+		listDelegationTasks,
+		listPendingDelegationReports,
+		markDelegationTaskAwaitingReport,
+		recoverUncleanDelegationTasks,
+		settleDelegationTask,
 		deleteSession: async (sessionId: SessionId) => {
 			await assertRecoveryResolvedForSessionDeletion(sessionId);
-			db.delete(session)
-				.where(
-					and(eq(session.id, sessionId), eq(session.workspaceId, workspace.id))
-				)
-				.run();
+			db.transaction((tx) => {
+				const linkedTasks = tx
+					.select({ id: delegationTask.id, status: delegationTask.status })
+					.from(delegationTask)
+					.where(
+						or(
+							eq(delegationTask.parentSessionId, sessionId),
+							eq(delegationTask.childSessionId, sessionId)
+						)
+					)
+					.all();
+				if (linkedTasks.some(({ status }) => status === "active")) {
+					throw new Error(
+						"Cannot delete a Session while it has an active Delegated Task."
+					);
+				}
+				for (const { id } of linkedTasks) {
+					tx.delete(delegationInbox)
+						.where(eq(delegationInbox.taskId, toDelegationTaskId(id)))
+						.run();
+				}
+				tx.delete(delegationTask)
+					.where(
+						or(
+							eq(delegationTask.parentSessionId, sessionId),
+							eq(delegationTask.childSessionId, sessionId)
+						)
+					)
+					.run();
+				tx.delete(session)
+					.where(
+						and(
+							eq(session.id, sessionId),
+							eq(session.workspaceId, workspace.id)
+						)
+					)
+					.run();
+			});
 			await collectAttachments().catch(() => undefined);
 			const prune = fileObservationStore.pruneSnapshots;
 			if (prune) {
@@ -893,6 +1431,8 @@ export const createDrizzleSessionStore = (
 				}
 			}
 			db.transaction((tx) => {
+				tx.delete(delegationInbox).run();
+				tx.delete(delegationTask).run();
 				tx.delete(sessionCompaction).run();
 				tx.delete(sessionRecord).run();
 				tx.delete(session).run();

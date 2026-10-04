@@ -45,7 +45,7 @@ export const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 export const OUTPUT_DRAIN_TIMEOUT_MS = 5000;
 export const DEFAULT_TRANSCRIPT_LIMIT = 100;
 export const MAX_TRANSCRIPT_LIMIT = 500;
-export const RPC_PROTOCOL_VERSION = 3;
+export const RPC_PROTOCOL_VERSION = 4;
 export const SERVER_VERSION = "0.1.0";
 export const SESSION_RPC_METHODS = new Set([
 	"session/create",
@@ -217,7 +217,7 @@ export type RpcSessionState = {
 	lifecycle: RpcLifecycle;
 	assembly?: RpcAssembly;
 	host?: SessionHost;
-	boundSessionId?: string;
+	boundSessionId?: SessionId;
 	signalRequested: boolean;
 	shutdownRequested: boolean;
 };

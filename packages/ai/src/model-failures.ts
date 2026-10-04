@@ -6,7 +6,7 @@ import {
 	isString,
 	isUndefined,
 	omitUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 
 import { z } from "zod";
 import {

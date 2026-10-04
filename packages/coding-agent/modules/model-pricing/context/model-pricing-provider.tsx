@@ -2,7 +2,7 @@ import {
 	modelMetadataSnapshotDate,
 	supportedChatModelIds,
 } from "@wincode/ai/models";
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 import {
 	createContext,
 	type ReactNode,

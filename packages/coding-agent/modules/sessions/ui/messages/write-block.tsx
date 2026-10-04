@@ -1,7 +1,7 @@
 import { isAbsolute } from "node:path";
 import { pathToFiletype } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
-import { isNull, isPlainObject, isString } from "@wincode/runtime-utils";
+import { isNull, isPlainObject, isString } from "@wincode/utils";
 import { useMemo, useState } from "react";
 import type { UnknownRecord } from "type-fest";
 import type { SessionMessage } from "@/modules/sessions/message";

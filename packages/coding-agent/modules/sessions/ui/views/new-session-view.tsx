@@ -2,7 +2,7 @@ import { TextAttributes } from "@opentui/core";
 import { useRouter } from "@tanstack/react-router";
 import { createAgentTurnId } from "@wincode/agent-core";
 import { createReasoningSelection } from "@wincode/ai/models";
-import { isNull, isUndefined } from "@wincode/runtime-utils";
+import { isNull, isUndefined } from "@wincode/utils";
 import { useEffect, useState } from "react";
 import {
 	resolveActiveAgentId,

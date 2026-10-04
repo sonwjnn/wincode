@@ -7,7 +7,7 @@ import {
 	isPlainObject,
 	isString,
 	isUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import type { JsonValue } from "type-fest";
 import { MAX_MCP_RESULT_BYTES } from "./manifest";
 import type { McpCatalogSnapshot } from "./registry";

@@ -1,12 +1,11 @@
 import type { SessionMessageId } from "@wincode/agent-core";
 import { normalizeChatModelSelection } from "@wincode/ai/models";
-import { isNull, isString, isUndefined } from "@wincode/runtime-utils";
+import { isNull, isString, isUndefined } from "@wincode/utils";
 import type { SessionMessage } from "@/modules/sessions/message";
 import {
 	getSessionAttemptMessages,
 	hasCompletedToolArtifact,
 } from "@/modules/sessions/session-retry";
-import { isDelegatedSessionMessageId } from "@/modules/sessions/storage/session-record";
 
 export type SessionTurn = {
 	id: string;
@@ -111,7 +110,7 @@ export const groupMessagesBySessionTurn = (
 
 	return turns;
 };
-const canRetryPrimaryUser = (
+const canRetryUser = (
 	messages: readonly SessionMessage[],
 	userIndex: number
 ): boolean => {
@@ -130,8 +129,8 @@ const canRetryPrimaryUser = (
 };
 
 /**
- * Returns the latest logical primary user message whose attempt can be retried.
- * An attempt ends at the next primary user — the message that opened its turn,
+ * Returns the latest logical user message whose attempt can be retried. An
+ * attempt ends at the next user message — the message that opened its turn,
  * never one that joined a running turn — because retry replays the turn from
  * the input that started it. Completed Tool Calls suppress replay because
  * repeating them can duplicate side effects. Persisted failure outcomes remain
@@ -140,10 +139,7 @@ const canRetryPrimaryUser = (
 export const resolveRetryMessageId = (
 	messages: readonly SessionMessage[]
 ): SessionMessageId | undefined => {
-	const primaryMessages = messages.filter(
-		({ id }) => !isDelegatedSessionMessageId(id)
-	);
-	const failedSteering = primaryMessages.find(
+	const failedSteering = messages.find(
 		(message) =>
 			message.role === "user" &&
 			message.metadata?.submissionStatus === "failed" &&
@@ -152,13 +148,13 @@ export const resolveRetryMessageId = (
 	if (failedSteering !== undefined) {
 		return failedSteering.id;
 	}
-	const userIndex = primaryMessages.findLastIndex(
+	const userIndex = messages.findLastIndex(
 		(message, index) =>
 			message.role === "user" &&
 			isUndefined(message.metadata?.joinedTurnId) &&
-			canRetryPrimaryUser(primaryMessages, index)
+			canRetryUser(messages, index)
 	);
-	return userIndex === -1 ? undefined : primaryMessages[userIndex]?.id;
+	return userIndex === -1 ? undefined : messages[userIndex]?.id;
 };
 
 export const resolveSessionTurnFooterMessages = (

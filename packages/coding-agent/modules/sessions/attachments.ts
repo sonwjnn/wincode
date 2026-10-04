@@ -1,5 +1,5 @@
 import type { Extmark } from "@opentui/core";
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 import type { SessionFilePart } from "@/modules/sessions/message";
 
 export type ChatAttachment = {

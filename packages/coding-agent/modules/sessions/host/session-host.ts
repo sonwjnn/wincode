@@ -1,8 +1,9 @@
 import {
 	type AgentId,
 	type AgentTurnEvent,
-	type SessionMessageId,
+	createStatefulAgent,
 	type SessionRecord,
+	type StatefulAgent,
 	toSubmissionId,
 } from "@wincode/agent-core";
 import type {
@@ -10,7 +11,7 @@ import type {
 	Effort,
 	ReasoningMode,
 } from "@wincode/ai/models";
-import { isNull, logger, omitUndefined } from "@wincode/runtime-utils";
+import { isNull, logger, omitUndefined } from "@wincode/utils";
 import { resolveActiveAgentId } from "@/modules/agents/registry";
 import { toSteeringMessageId } from "@/shared/identifiers";
 import { AgentSessionImpl } from "../agent-session/agent-session";
@@ -22,6 +23,11 @@ import type {
 } from "../agent-session/types";
 import { rebuildActiveMessages } from "../compaction/compaction";
 import type { SessionCompaction } from "../compaction/types";
+import type {
+	DelegationReportEnvelope,
+	DelegationTask,
+} from "../delegation/types";
+import { defaultRuntimeFactory } from "../hooks/runtime-turn";
 import {
 	type SessionMessage,
 	sanitizeInterruptedSessionMessages,
@@ -43,8 +49,9 @@ import type {
 type OpenedSession = Readonly<{
 	compactions: SessionCompaction[];
 	context: SessionMessage[];
-	delegatedMessageIds: ReadonlySet<SessionMessageId>;
+	delegationTask: DelegationTask | undefined;
 	model: ChatModelSelection | undefined;
+	pendingDelegationReports: DelegationReportEnvelope[];
 	steeringMessages: SessionSteeringMessage[];
 	transcript: SessionMessage[];
 	effort: Effort | undefined;
@@ -136,19 +143,25 @@ const restoreSteeringMessages = (
  * Session Context rebuilt around the latest compaction, and compaction history.
  *
  * The Context is derived from the un-annotated projection — display annotation
- * is the surface's, and never reaches what the model is sent — and delegated
- * Subagent rows are grouped out of it, so transcript presentation and model
- * context stay separate concerns.
+ * is the surface's, and never reaches what the model is sent.
  */
 const openSession = async (
 	capabilities: SessionCapabilities,
 	sessionId: SessionHostOptions["sessionId"]
 ): Promise<OpenedSession> => {
 	const store = capabilities.getStore();
-	const [session, compactions, loadedRecords] = await Promise.all([
+	const [
+		session,
+		compactions,
+		loadedRecords,
+		pendingDelegationReports,
+		delegationTask,
+	] = await Promise.all([
 		store.getSession(sessionId),
 		store.getCompactions(sessionId),
 		store.listSessionRecords(sessionId),
+		store.listPendingDelegationReports(sessionId),
+		store.getDelegationTaskForChild(sessionId),
 	]);
 	const interrupted = loadedRecords.flatMap((record) =>
 		record.messages.flatMap((message) => {
@@ -185,22 +198,17 @@ const openSession = async (
 	const transcript = sanitizeInterruptedSessionMessages(
 		projectSessionRecords(records)
 	);
-	const delegatedMessageIds = new Set(
-		projectSessionRecords(
-			records.filter(({ delegation }) => delegation !== undefined)
-		).map(({ id }) => id)
-	);
 	const active = transcript.filter(
 		(message) =>
-			!delegatedMessageIds.has(message.id) &&
 			message.metadata?.submissionStatus !== "pending" &&
 			message.metadata?.submissionStatus !== "failed"
 	);
 	return {
 		compactions,
 		context: rebuildActiveMessages(active, compactions.at(-1) ?? null),
-		delegatedMessageIds,
+		delegationTask: delegationTask ?? undefined,
 		model: session.model,
+		pendingDelegationReports,
 		steeringMessages: restoreSteeringMessages(records, transcript, session),
 		transcript,
 		effort: session.effort,
@@ -265,6 +273,7 @@ export const createSessionHost = async ({
 	let agentSessionInternalPort: AgentSessionInternalPort | undefined;
 	let isShutDown = false;
 	let shutdownPromise: Promise<void> | undefined;
+	let statefulAgent: StatefulAgent | undefined;
 
 	/**
 	 * Reports one event to the Host's observers. Everything the Agent Session
@@ -323,7 +332,17 @@ export const createSessionHost = async ({
 		eventListeners.clear();
 		const closingShutdown = (async () => {
 			try {
-				await agentSessionShutdown;
+				const results = await Promise.allSettled([
+					agentSessionShutdown,
+					statefulAgent?.shutdown() ?? Promise.resolve(),
+				]);
+				const failure = results.find(
+					(result): result is PromiseRejectedResult =>
+						result.status === "rejected"
+				);
+				if (failure !== undefined) {
+					throw failure.reason;
+				}
 			} finally {
 				await sessionWriter.release();
 			}
@@ -350,12 +369,18 @@ export const createSessionHost = async ({
 	};
 	try {
 		const opened = await openSession(capabilities, sessionId);
+		statefulAgent = createStatefulAgent({
+			runtime: capabilities.getRuntime?.() ?? defaultRuntimeFactory(),
+		});
 		const ports: AgentSessionPorts = withEventChannel(
 			createSessionPorts({
 				capabilities,
 				agentSession: getAgentSessionInternalPort,
 				isShutDown: () => isShutDown,
 				sessionId,
+				executionMode,
+				delegationTask: opened.delegationTask,
+				statefulAgent,
 			}),
 			publish
 		);
@@ -386,8 +411,8 @@ export const createSessionHost = async ({
 			initialContext: opened.context,
 			initialSteeringMessages: opened.steeringMessages,
 			initialTranscript: opened.transcript,
-			initialDelegatedMessageIds: opened.delegatedMessageIds,
 			ports,
+			initialPendingDelegationReports: opened.pendingDelegationReports,
 			sessionId,
 		});
 		agentSessionInternalPort = openedAgentSession.internalPort;
@@ -423,6 +448,11 @@ export const createSessionHost = async ({
 			onEvent: (listener) => {
 				eventListeners.add(listener);
 				return () => eventListeners.delete(listener);
+			},
+			publishDelegationReport: (report) => {
+				if (!isShutDown && report.parentSessionId === sessionId) {
+					agentSessionInternalPort?.publishDelegationReport(report);
+				}
 			},
 			shutdown,
 			subscribe: (listener) =>

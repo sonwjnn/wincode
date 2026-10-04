@@ -380,3 +380,76 @@ test("runtime deadlines fail the turn with the deadline disposition", async () =
 		type: "agent-turn-failed",
 	});
 });
+
+test("refuses every Tool Call in a batch that includes an exclusive submit_result", async () => {
+	const executions: string[] = [];
+	const submitResultTool: ResolvedTool = {
+		definition: {
+			...readDefinition,
+			exclusiveInBatch: true,
+			name: "submit_result",
+		},
+		execute: async () => {
+			executions.push("submit_result");
+			return { output: "unexpected", type: "success" };
+		},
+	};
+	const readTool: ResolvedTool = {
+		definition: readDefinition,
+		execute: async () => {
+			executions.push("read");
+			return { output: "unexpected", type: "success" };
+		},
+	};
+	const { client } = scriptedClient((_request, index) =>
+		index === 0
+			? scriptedParts(
+					{
+						input: { path: "final report" },
+						toolCallId: "call-submit-result",
+						toolName: "submit_result",
+						type: "tool-call",
+					},
+					{
+						input: { path: "src/main.ts" },
+						toolCallId: "call-read",
+						toolName: "read",
+						type: "tool-call",
+					},
+					{ type: "finish" }
+				)
+			: scriptedParts(
+					{ delta: "No batch side effect ran.", type: "text-delta" },
+					{ type: "finish" }
+				)
+	);
+	const events = await consume(
+		createAgentRuntime({ modelClient: client }).run(
+			buildTurn([submitResultTool, readTool])
+		)
+	);
+	const outcomes = events.filter(
+		(event) => event.type === "tool-call-finished"
+	);
+
+	expect(executions).toEqual([]);
+	expect(outcomes).toMatchObject([
+		{
+			outcome: {
+				errorText:
+					"submit_result must be the only Tool Call in this Model Step; no Tool Calls in the batch ran.",
+				type: "failure",
+			},
+			toolCallId: "call-submit-result",
+		},
+		{
+			outcome: {
+				errorText:
+					"submit_result must be the only Tool Call in this Model Step; no Tool Calls in the batch ran.",
+				type: "failure",
+			},
+			toolCallId: "call-read",
+		},
+	]);
+	expect(events.at(-1)?.type).toBe("agent-turn-completed");
+});

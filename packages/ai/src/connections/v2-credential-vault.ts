@@ -2,12 +2,7 @@ import { chmod, lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ConnectionProviderId } from "@wincode/ai/models";
-import {
-	isError,
-	isNull,
-	isUndefined,
-	readUtf8File,
-} from "@wincode/runtime-utils";
+import { isError, isNull, isUndefined, readUtf8File } from "@wincode/utils";
 import type { CredentialByProvider } from "./contract";
 import { defaultProviderRegistry } from "./provider-registry";
 

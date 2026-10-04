@@ -84,6 +84,7 @@ export {
 	getAgentTurnFailureDetails,
 } from "./runtime";
 export * from "./skill-activation";
+export * from "./stateful-agent";
 export type {
 	ResolvedTool,
 	ToolCallFailure,

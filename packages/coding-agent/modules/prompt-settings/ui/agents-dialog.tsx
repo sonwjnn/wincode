@@ -1,7 +1,7 @@
 import { TextAttributes } from "@opentui/core";
 import type { AgentDefinition, AgentId } from "@wincode/agent-core";
 import type { ConnectionProviderId } from "@wincode/ai/models";
-import { isNull, isUndefined } from "@wincode/runtime-utils";
+import { isNull, isUndefined } from "@wincode/utils";
 import { useCallback } from "react";
 import {
 	type AgentDiagnostic,

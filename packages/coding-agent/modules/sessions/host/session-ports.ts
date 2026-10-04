@@ -2,8 +2,8 @@ import type {
 	AgentTurn,
 	AgentTurnEvent,
 	AgentTurnTerminalEvent,
+	StatefulAgent,
 } from "@wincode/agent-core";
-import type { ModelTarget } from "@wincode/ai/model";
 import {
 	type ChatModelSelection,
 	effortSchema,
@@ -12,7 +12,7 @@ import {
 	type ReasoningSelection,
 	reasoningModeSchema,
 } from "@wincode/ai/models";
-import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
+import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import { resolveEffectiveAgentSelection } from "@/modules/agents/agent-call";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
 import { createMcpToolExecutor } from "@/modules/mcp/result";
@@ -34,6 +34,7 @@ import {
 	codingToolCatalog,
 	type VersionedEditingContext,
 } from "@/modules/tools";
+import type { ExecutionMode } from "@/shared/execution-mode";
 import type { SessionId } from "@/shared/identifiers";
 import { resolveChatModelTarget } from "../../model-target";
 import { createToolGate, type ToolGate } from "../../tool-gate/tool-gate";
@@ -49,18 +50,20 @@ import type {
 } from "../agent-session/types";
 import { primaryEntry } from "../agent-session/utils";
 import { SessionCompactionError } from "../compaction/error";
-import {
-	createDelegationExecutor,
-	delegationThrough,
-} from "../hooks/delegation";
+import type {
+	DelegationResult,
+	DelegationTask,
+	DelegationTaskOutcome,
+} from "../delegation/types";
+import { createDelegationExecutor } from "../hooks/delegation";
 import {
 	buildAgentTurn,
 	createGatedCodingTools,
-	defaultRuntimeFactory,
 	type RuntimeGatedTooling,
 	runAgentTurnToText,
 } from "../hooks/runtime-turn";
 import type { SessionMessage } from "../message";
+import type { SessionStore } from "../storage/session-store";
 import {
 	createTurnExecution,
 	type TurnExecution,
@@ -72,8 +75,11 @@ export type SessionPortsOptions = Readonly<{
 	capabilities: SessionCapabilities;
 	/** The Agent Session whose ports these are, available once it is constructed. */
 	agentSession: () => AgentSessionInternalPort;
+	executionMode?: ExecutionMode;
+	delegationTask?: DelegationTask;
 	isShutDown: () => boolean;
 	sessionId: SessionId;
+	statefulAgent: StatefulAgent;
 }>;
 
 const strictReasoningSelection = (
@@ -179,8 +185,11 @@ const activateExplicitSkill = async (
 export const createSessionPorts = ({
 	capabilities,
 	agentSession,
+	executionMode,
+	delegationTask,
 	isShutDown,
 	sessionId,
+	statefulAgent,
 }: SessionPortsOptions): AgentSessionPorts => {
 	const assertHostOpen = (): void => {
 		if (isShutDown()) {
@@ -189,6 +198,21 @@ export const createSessionPorts = ({
 				"Session Host is shutting down before compaction persistence."
 			);
 		}
+	};
+	const publishTaskOutcome = async (
+		taskId: DelegationTask["id"],
+		outcome: DelegationTaskOutcome
+	): Promise<boolean> => {
+		const store = capabilities.getStore();
+		const report = await store.settleDelegationTask({ outcome, taskId });
+		if (report === null) {
+			return false;
+		}
+		const task = await store.getDelegationTask(taskId);
+		if (task !== null) {
+			capabilities.getSessionHostManager().publishDelegationTask(task, report);
+		}
+		return true;
 	};
 	/**
 	 * The execution scopes the ports run, keyed by Agent Turn Identifier. A
@@ -405,6 +429,181 @@ export const createSessionPorts = ({
 		});
 	};
 
+	const prepareAgentTurn = async (
+		request: SessionTurnRequest,
+		scope: TurnExecution,
+		delegationTask: DelegationTask | null,
+		sessionStore: SessionStore
+	): Promise<AgentTurn> => {
+		const { execution, messages, resolvedAgent, signal } = request;
+		const config = capabilities.getConfig();
+		const connections = capabilities.getConnections();
+		const mcp = capabilities.getMcp();
+		const toolPermission = capabilities.getToolPermission();
+		const versionedEditing: VersionedEditingContext | undefined =
+			sessionStore.fileObservationStore === undefined
+				? undefined
+				: {
+						editMode:
+							(await sessionStore.getEditMode?.(sessionId)) ?? "hashline",
+						sessionId,
+						store: sessionStore.fileObservationStore,
+					};
+		const reasoningSelection = strictReasoningSelection(
+			execution.model,
+			execution.effort,
+			execution.reasoningMode
+		);
+		const modelTarget = await resolveChatModelTarget(
+			execution.model,
+			connections,
+			{ ...reasoningSelection, signal }
+		);
+		const mcpPolicy = await toolPermission.resolveMcpPolicyForAgent(
+			execution.agent
+		);
+		const snapshot = await mcp.createSnapshot(execution.agent, mcpPolicy);
+		scope.mcpSnapshot = snapshot;
+		const executeMcpTool = createMcpToolExecutor(mcp.execute);
+		const tooling: RuntimeGatedTooling = {
+			gate: toolGate,
+			mcpSnapshot: snapshot,
+			executeMcpTool,
+			registerChildAbort: (toolCallId, abort) => {
+				scope.childAborts.set(toolCallId, abort);
+				return () => scope.childAborts.delete(toolCallId);
+			},
+			resolveResourceLimits: (agentId) =>
+				isUndefined(agentId)
+					? toolPermission.resolveResourceLimits()
+					: toolPermission.resolveResourceLimitsForAgent(agentId),
+			versionedEditing,
+		};
+		scope.delegate = hasDelegationTargets(capabilities)
+			? createDelegationExecutor({
+					capabilities,
+					execution: scope,
+					executionMode,
+					sessionId,
+				})
+			: undefined;
+		const submitTask =
+			delegationTask !== null &&
+			(delegationTask.status === "active" ||
+				delegationTask.status === "awaiting_report")
+				? delegationTask
+				: null;
+		const submitResult =
+			submitTask === null
+				? undefined
+				: (report: DelegationResult) =>
+						publishTaskOutcome(submitTask.id, {
+							kind: "result",
+							report,
+						});
+		const resourceLimits = await tooling.resolveResourceLimits?.(
+			execution.agent
+		);
+		const tools = createGatedCodingTools({
+			agentId: execution.agent,
+			agentTools: resolvedAgent.visibleCodingTools,
+			delegate: scope.delegate,
+			delegationTaskId: submitTask?.id,
+			executeMcpTool,
+			gate: tooling.gate,
+			mcpSnapshot: snapshot,
+			parentTurnId: execution.turnId,
+			resourceLimits,
+			resolveResourceLimits: tooling.resolveResourceLimits,
+			skillExecution: scope.armedSkill?.execution,
+			skillTool: scope.armedSkill?.tool,
+			submitResult,
+			versionedEditing,
+		});
+		const agentPermission = await toolPermission.resolvePermissionForAgent(
+			execution.agent
+		);
+		const prompt = await prepareAgentTurnPrompt({
+			agent: resolvedAgent,
+			cwd: config.cwd,
+			delegation: execution.parent,
+			mcpTools: snapshot.tools,
+			model: {
+				modelId: modelTarget.modelId,
+				providerId: modelTarget.providerId,
+			},
+			permission: agentPermission,
+			tools,
+			workspace: config.workspace,
+		});
+		return buildAgentTurn({
+			agent: execution.agent,
+			delegation: execution.parent,
+			modelMessages: messages,
+			modelTarget,
+			resolvedAgent,
+			skill: request.skillRequest,
+			systemInstructions: prompt.instructions,
+			tools,
+			turnId: execution.turnId,
+		});
+	};
+	const settleDelegatedTask = async (
+		sessionStore: SessionStore,
+		task: DelegationTask,
+		event: AgentTurnTerminalEvent
+	): Promise<void> => {
+		if (event.type === "agent-turn-completed") {
+			await sessionStore.markDelegationTaskAwaitingReport(task.id);
+			const current = await sessionStore.getDelegationTask(task.id);
+			if (current?.status === "awaiting_report") {
+				capabilities.getSessionHostManager().publishDelegationTask(current);
+			}
+			return;
+		}
+		let outcome: DelegationTaskOutcome;
+		if (event.type === "agent-turn-cancelled") {
+			outcome = { kind: "cancelled", reason: event.failure.message };
+		} else if (event.type === "agent-turn-interrupted") {
+			outcome = { kind: "interrupted", reason: event.failure.message };
+		} else {
+			outcome = { kind: "failure", reason: event.failure.message };
+		}
+		await publishTaskOutcome(task.id, outcome);
+	};
+	const handleTurnTerminal = async (
+		callbacks: SessionTurnRequest["callbacks"],
+		sessionStore: SessionStore,
+		task: DelegationTask | null,
+		event: AgentTurnTerminalEvent
+	): Promise<void> => {
+		await callbacks.onTerminal(event);
+		if (task === null) {
+			return;
+		}
+		try {
+			await settleDelegatedTask(sessionStore, task, event);
+		} catch {
+			capabilities.getSessionHostManager().finishDelegatedTask(task.id);
+		}
+	};
+	const handleTurnFailure = async (
+		task: DelegationTask | null,
+		error: unknown
+	): Promise<void> => {
+		if (task === null) {
+			return;
+		}
+		const reason =
+			error instanceof Error && error.message.length > 0
+				? error.message
+				: "Delegated task failed.";
+		try {
+			await publishTaskOutcome(task.id, { kind: "failure", reason });
+		} catch {
+			capabilities.getSessionHostManager().finishDelegatedTask(task.id);
+		}
+	};
 	/**
 	 * Runs one Agent Turn execution: it resolves the Model Target, snapshots
 	 * MCP, composes the Tools and prompt, and consumes the Agent Runtime,
@@ -413,11 +612,7 @@ export const createSessionPorts = ({
 	const runTurn = async (
 		request: SessionTurnRequest
 	): Promise<SessionTurnOutcome> => {
-		const { callbacks, execution, messages, resolvedAgent, signal } = request;
-		const config = capabilities.getConfig();
-		const connections = capabilities.getConnections();
-		const mcp = capabilities.getMcp();
-		const toolPermission = capabilities.getToolPermission();
+		const { callbacks, execution, resolvedAgent, signal } = request;
 		const scope = scopeOf(execution, {
 			armedSkill: request.armedSkill,
 			resolvedAgent,
@@ -425,160 +620,30 @@ export const createSessionPorts = ({
 		});
 		scopes.set(execution.turnId, scope);
 		let turn: AgentTurn | undefined;
+		let delegationTaskForTurn: DelegationTask | null = null;
 		try {
 			const sessionStore = capabilities.getStore();
-			const versionedEditing: VersionedEditingContext | undefined =
-				sessionStore.fileObservationStore === undefined
-					? undefined
-					: {
-							editMode:
-								(await sessionStore.getEditMode?.(sessionId)) ?? "hashline",
-							sessionId,
-							store: sessionStore.fileObservationStore,
-						};
-			const reasoningSelection = strictReasoningSelection(
-				execution.model,
-				execution.effort,
-				execution.reasoningMode
+			delegationTaskForTurn =
+				await sessionStore.getDelegationTaskForChild(sessionId);
+			turn = await prepareAgentTurn(
+				request,
+				scope,
+				delegationTaskForTurn,
+				sessionStore
 			);
-			let modelTarget: ModelTarget;
-			if (reasoningSelection.effort !== undefined) {
-				modelTarget = await resolveChatModelTarget(
-					execution.model,
-					connections,
-					{ effort: reasoningSelection.effort, signal }
-				);
-			} else if (reasoningSelection.reasoningMode === undefined) {
-				modelTarget = await resolveChatModelTarget(
-					execution.model,
-					connections,
-					{
-						signal,
-					}
-				);
-			} else {
-				modelTarget = await resolveChatModelTarget(
-					execution.model,
-					connections,
-					{
-						reasoningMode: reasoningSelection.reasoningMode,
-						signal,
-					}
-				);
-			}
-			const mcpPolicy = await toolPermission.resolveMcpPolicyForAgent(
-				execution.agent
-			);
-			const snapshot = await mcp.createSnapshot(execution.agent, mcpPolicy);
-			scope.mcpSnapshot = snapshot;
-			const executeMcpTool = createMcpToolExecutor(mcp.execute);
-			const tooling: RuntimeGatedTooling = {
-				gate: toolGate,
-				mcpSnapshot: snapshot,
-				executeMcpTool,
-				registerChildAbort: (toolCallId, abort) => {
-					scope.childAborts.set(toolCallId, abort);
-					return () => scope.childAborts.delete(toolCallId);
-				},
-				resolveResourceLimits: (agentId) =>
-					isUndefined(agentId)
-						? toolPermission.resolveResourceLimits()
-						: toolPermission.resolveResourceLimitsForAgent(agentId),
-				versionedEditing,
-			};
-			scope.delegate = createDelegationExecutor({
-				commitRecord: (input) => agentSession().commitRecord(input),
-				isShutDown,
-				connections,
-				createSkillContext: async (agentId) => {
-					const catalog = await armSkillCatalog(
-						await toolPermission.resolvePermissionForAgent(agentId)
-					);
-					return isUndefined(catalog.tool) ? undefined : catalog;
-				},
-				cwd: config.cwd,
-				execution: scope,
-				host: {
-					begin: (input) => {
-						const child = scopeOf(agentSession().beginExecution(input), {
-							armedSkill: input.armedSkill,
-							resolvedAgent: input.resolvedAgent,
-							skillRequest: input.skillRequest,
-						});
-						scopes.set(child.turnId, child);
-						return child;
-					},
-					end: (ended) => {
-						releaseScope(ended);
-						agentSession().endExecution(ended.turnId);
-					},
-					publishViewState: (published, viewState) =>
-						agentSession().setExecutionViewState(published.turnId, viewState),
-				},
-				mcp,
-				registry: capabilities.getRegistry(),
-				resolveMcpPolicyForAgent: (agentId) =>
-					toolPermission.resolveMcpPolicyForAgent(agentId),
-				resolvePermissionForAgent: (agentId) =>
-					toolPermission.resolvePermissionForAgent(agentId),
-				sessionId,
-				tooling,
-				workspace: config.workspace,
-			});
-			const resourceLimits = await tooling.resolveResourceLimits?.(
-				execution.agent
-			);
-			const tools = createGatedCodingTools({
-				agentId: execution.agent,
-				agentTools: resolvedAgent.visibleCodingTools,
-				delegate: hasDelegationTargets(capabilities)
-					? delegationThrough(scope)
-					: undefined,
-				executeMcpTool,
-				gate: tooling.gate,
-				mcpSnapshot: snapshot,
-				parentTurnId: execution.turnId,
-				resourceLimits,
-				resolveResourceLimits: tooling.resolveResourceLimits,
-				skillExecution: scope.armedSkill?.execution,
-				skillTool: scope.armedSkill?.tool,
-				versionedEditing,
-			});
-			const agentPermission = await toolPermission.resolvePermissionForAgent(
-				execution.agent
-			);
-			const prompt = await prepareAgentTurnPrompt({
-				agent: resolvedAgent,
-				cwd: config.cwd,
-				delegation: execution.parent,
-				mcpTools: snapshot.tools,
-				model: {
-					modelId: modelTarget.modelId,
-					providerId: modelTarget.providerId,
-				},
-				permission: agentPermission,
-				tools,
-				workspace: config.workspace,
-			});
-			turn = buildAgentTurn({
-				agent: execution.agent,
-				delegation: execution.parent,
-				modelMessages: messages,
-				modelTarget,
-				resolvedAgent,
-				skill: request.skillRequest,
-				systemInstructions: prompt.instructions,
-				tools,
-				turnId: execution.turnId,
-			});
 			await runAgentTurnToText({
 				onCheckpoint: callbacks.commitTerminal,
+				onToolCheckpoint: callbacks.commitToolCall,
 				onEvent: (event: AgentTurnEvent) => callbacks.onEvent(event),
 				onTerminal: (event: AgentTurnTerminalEvent) =>
-					callbacks.onTerminal(event),
-				onToolCheckpoint: callbacks.commitToolCall,
+					handleTurnTerminal(
+						callbacks,
+						sessionStore,
+						delegationTaskForTurn,
+						event
+					),
 				onViewState: (viewState) => callbacks.onViewState(viewState),
-				runtime: capabilities.getRuntime?.() ?? defaultRuntimeFactory(),
+				runtime: statefulAgent,
 				signal,
 				...omitUndefined({
 					sourceUserMessageId: execution.sourceUserMessageId ?? undefined,
@@ -591,6 +656,7 @@ export const createSessionPorts = ({
 			});
 			return { turn };
 		} catch (error) {
+			await handleTurnFailure(delegationTaskForTurn, error);
 			return { error, turn };
 		} finally {
 			releaseScope(scope);
@@ -623,6 +689,12 @@ export const createSessionPorts = ({
 				capabilities.getStore().attachmentStore?.retain(attachmentIds),
 		},
 		commitRecord: (input) => capabilities.getStore().commitSessionRecord(input),
+		consumeDelegationReport: ({ record, taskId }) =>
+			capabilities.getStore().consumeDelegationReport({
+				parentSessionId: sessionId,
+				record,
+				taskId,
+			}),
 		updateSubmissionStatus: (input) =>
 			capabilities.getStore().updateSessionSubmission({ ...input, sessionId }),
 		compaction: {
@@ -636,24 +708,34 @@ export const createSessionPorts = ({
 				capabilities.getCompactionModule().needsCompaction(messages, settings),
 		},
 		resolveSubmission: (input) => {
+			const delegatedInput =
+				delegationTask === undefined
+					? input
+					: {
+							...input,
+							delegation: {
+								parentToolCallId: delegationTask.parentToolCallId,
+								parentTurnId: delegationTask.parentTurnId,
+							},
+						};
 			const selection = strictReasoningSelection(
-				input.model,
-				input.effort,
-				input.reasoningMode
+				delegatedInput.model,
+				delegatedInput.effort,
+				delegatedInput.reasoningMode
 			);
 			strictReasoningSelection(
-				input.sessionModel,
-				input.sessionEffort,
-				input.sessionReasoningMode
+				delegatedInput.sessionModel,
+				delegatedInput.sessionEffort,
+				delegatedInput.sessionReasoningMode
 			);
 			const registry = capabilities.getRegistry();
 			if (isNull(registry)) {
-				return input;
+				return delegatedInput;
 			}
 			const effective = resolveEffectiveAgentSelection(
 				registry,
-				input.agent,
-				input.model,
+				delegatedInput.agent,
+				delegatedInput.model,
 				selection
 			);
 			strictReasoningSelection(
@@ -666,7 +748,7 @@ export const createSessionPorts = ({
 				effort: _effort,
 				reasoningMode: _reasoningMode,
 				...unresolvedInput
-			} = input;
+			} = delegatedInput;
 			return {
 				...unresolvedInput,
 				agent: effective.agent,

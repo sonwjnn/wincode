@@ -6,10 +6,14 @@ import type { McpSessionCapability } from "@/modules/mcp/capability";
 import type { ToolPermissionRuntime } from "@/modules/permissions/tool-permission-runtime";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { ExecutionMode } from "@/shared/execution-mode";
-import type { SessionId } from "@/shared/identifiers";
+import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
 import type { AgentSession, LiveSessionSnapshot } from "../agent-session/types";
 import type { SessionCompactionModule } from "../compaction/compaction";
 import type { ResolvedCompactionSettings } from "../compaction/config";
+import type {
+	DelegationReportEnvelope,
+	DelegationTask,
+} from "../delegation/types";
 import type { ResolvedSessionSelection } from "../selection";
 import type { SessionStore } from "../storage/session-store";
 export type SessionApprovalMode = "interactive" | "non-interactive";
@@ -38,6 +42,7 @@ export type SessionCapabilities = Readonly<{
 	getToolPermission: () => ToolPermissionRuntime;
 	/** Optional runtime factory for non-default application adapters and tests. */
 	getRuntime?: () => AgentRuntime;
+	getSessionHostManager: () => SessionHostManager;
 	/**
 	 * Approval settlement policy for surfaces without an interactive approval
 	 * channel. Omitted means the historical interactive behavior.
@@ -68,8 +73,47 @@ export type SessionHost = Readonly<{
 	onEvent: (listener: (event: AgentTurnEvent) => void) => () => void;
 	/** Ends the session and resolves after active durable cleanup completes. */
 	shutdown: () => Promise<void>;
+	/** Adds one committed report to the parent's pending input without running it. */
+	publishDelegationReport: (report: DelegationReportEnvelope) => void;
 	/** Notifies that session facts changed; no payload, as the Agent Session publishes. */
 	subscribe: (listener: () => void) => () => void;
+}>;
+export type SessionHostManagerEvent =
+	| Readonly<{
+			event: AgentTurnEvent;
+			sessionId: SessionId;
+			type: "agent-turn-event";
+	  }>
+	| Readonly<{
+			report?: DelegationReportEnvelope;
+			task: DelegationTask;
+			type: "delegation-task";
+	  }>
+	| Readonly<{
+			pendingApprovalCount: number;
+			sessionId: SessionId;
+			type: "session-approval-notice";
+	  }>;
+export type SessionHostManager = Readonly<{
+	onEvent: (listener: (event: SessionHostManagerEvent) => void) => () => void;
+	publishDelegationTask: (
+		task: DelegationTask,
+		report?: DelegationReportEnvelope
+	) => void;
+	finishDelegatedTask: (taskId: DelegationTaskId) => void;
+	openHost: (input: {
+		capabilities: SessionCapabilities;
+		executionMode?: ExecutionMode;
+		sessionId: SessionId;
+		view?: boolean;
+	}) => Promise<SessionHost>;
+	registerDelegatedTask: (task: DelegationTask) => void;
+	releaseView: (sessionId: SessionId) => Promise<void>;
+	shutdownAll: () => Promise<void>;
+	waitForDelegatedTasks: (
+		store: SessionStore,
+		parentSessionId: SessionId
+	) => Promise<DelegationTask[]>;
 }>;
 
 export type SessionHostOptions = Readonly<{

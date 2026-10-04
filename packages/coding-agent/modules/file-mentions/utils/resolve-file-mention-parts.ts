@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
-import { decodeUtf8, getErrorMessage, isError } from "@wincode/runtime-utils";
+import { decodeUtf8, getErrorMessage, isError } from "@wincode/utils";
 import type { FileMentionPart } from "@/modules/sessions/message";
 import { createWorkspaceSandbox, type WorkspacePolicy } from "@/modules/tools";
 import type { FileMentionOption } from "../types";

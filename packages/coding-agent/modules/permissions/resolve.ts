@@ -1,4 +1,4 @@
-import { isPlainObject, isUndefined } from "@wincode/runtime-utils";
+import { isPlainObject, isUndefined } from "@wincode/utils";
 import type {
 	ConfigDocument,
 	ConfigOrigin,

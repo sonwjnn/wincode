@@ -1,4 +1,4 @@
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 // End-to-end MCP transport integration tests using real SDK v2 clients and
 // real servers (no mocks of @modelcontextprotocol/client|server).
 //

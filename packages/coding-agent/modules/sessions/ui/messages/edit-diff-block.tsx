@@ -7,7 +7,7 @@ import {
 	isString,
 	isUndefined,
 	omitUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import { type ReactNode, useMemo, useRef, useState } from "react";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { type EditDiff, isRenderableEditDiff } from "@/modules/tools";

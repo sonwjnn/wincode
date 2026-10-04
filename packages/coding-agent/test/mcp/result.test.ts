@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isObjectLike, isString, isUndefined } from "@wincode/runtime-utils";
+import { isObjectLike, isString, isUndefined } from "@wincode/utils";
 import type { McpCatalogSnapshot } from "@/modules/mcp/registry";
 import {
 	createMcpToolExecutor,

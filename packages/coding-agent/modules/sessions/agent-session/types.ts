@@ -26,6 +26,7 @@ import type {
 } from "@/modules/skills";
 import type { CodingToolName } from "@/modules/tools";
 import type {
+	DelegationTaskId,
 	QueuedSubmissionId,
 	SessionId,
 	SteeringMessageId,
@@ -42,6 +43,7 @@ import type {
 	CompactionTriggerReason,
 	SessionCompaction,
 } from "../compaction/types";
+import type { DelegationReportEnvelope } from "../delegation/types";
 import type { SessionViewState } from "../hooks/runtime-turn";
 import type { FileMentionPart, SessionMessage } from "../message";
 import type {
@@ -234,6 +236,8 @@ export type LiveSessionSnapshot = ReadonlyDeep<{
 	 * after failure. Unlike queued Submissions, these cannot be recalled.
 	 */
 	steeringMessages: SessionSteeringMessage[];
+	/** Committed reports awaiting explicit parent continuation. */
+	pendingDelegationReports: DelegationReportEnvelope[];
 	/** Whether the session is running a submission, from its command to its settle. */
 	turnActive: boolean;
 	/** Session Transcript: the messages the session presents to the user. */
@@ -421,6 +425,10 @@ export type AgentSessionPorts = Readonly<{
 	compaction: SessionCompactionPort;
 	/** Writes one durable Session Record. */
 	commitRecord: (input: SessionCommitInput) => Promise<void>;
+	consumeDelegationReport: (input: {
+		record: SessionRecord;
+		taskId: DelegationTaskId;
+	}) => Promise<boolean>;
 	/** Persists one exact committed Submission's processing state. */
 	updateSubmissionStatus: (
 		input: SessionSubmissionStatusUpdate
@@ -441,7 +449,7 @@ export type AgentSessionOptions = Readonly<{
 	initialCompactions?: readonly SessionCompaction[];
 	initialAgent?: AgentId;
 	initialContext?: readonly SessionMessage[];
-	initialDelegatedMessageIds?: ReadonlySet<SessionMessageId>;
+	initialPendingDelegationReports?: readonly DelegationReportEnvelope[];
 	initialSessionModel?: ChatModelSelection;
 	initialSessionEffort?: Effort;
 	initialSessionReasoningMode?: ReasoningMode;
@@ -547,6 +555,8 @@ export type AgentSessionInternalPort = Readonly<{
 	requestApproval: (
 		request: ToolApprovalRequest
 	) => Promise<SessionApprovalOutcome>;
+	/** Adds a committed child report as pending input without steering the turn. */
+	publishDelegationReport: (report: DelegationReportEnvelope) => void;
 	/** Ends the session after active durable cleanup has completed. */
 	shutdown: () => Promise<void>;
 	/** Replaces one execution's Session View State, never another's. */

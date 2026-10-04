@@ -3,7 +3,7 @@ import {
 	isPlainObject,
 	isString,
 	isUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import { createTwoFilesPatch, parsePatch } from "diff";
 import type { UnknownRecord } from "type-fest";
 import {

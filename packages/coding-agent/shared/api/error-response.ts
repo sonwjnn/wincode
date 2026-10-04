@@ -1,4 +1,4 @@
-import { isNonEmptyString } from "@wincode/runtime-utils";
+import { isNonEmptyString } from "@wincode/utils";
 
 export type ErrorResponse = {
 	json: () => Promise<unknown>;

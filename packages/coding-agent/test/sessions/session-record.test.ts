@@ -10,7 +10,7 @@ import type {
 	SessionRecord,
 } from "@wincode/agent-core";
 import type { ChatModelSelection } from "@wincode/ai/models";
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
@@ -167,6 +167,21 @@ const createSession = async (
 	return { id, initialRecord };
 };
 
+const createTestDelegationTask = (
+	store: SessionStore,
+	parentSessionId: SessionId,
+	prefix: string
+) =>
+	store.createDelegatedTask({
+		agent: agentId("build"),
+		message: userMessage(`${prefix} child prompt`, `${prefix}-child-user`),
+		model,
+		parentSessionId,
+		parentToolCallId: toolCallId(`${prefix}-parent-call`),
+		parentTurnId: agentTurnId(`${prefix}-parent-turn`),
+		turnId: agentTurnId(`${prefix}-child-turn`),
+	});
+
 test("persists the accepted user message as an ordinary record", async () => {
 	const { store } = await createTestStore();
 	const { id, initialRecord } = await createSession(store, "first");
@@ -250,23 +265,6 @@ test("round-trips assistant and tool records independently", async () => {
 		tool,
 		assistant,
 	]);
-});
-
-test("round-trips delegated correlation independently from the parent turn", async () => {
-	const { store } = await createTestStore();
-	const { id, initialRecord } = await createSession(store);
-	const record: SessionRecord = {
-		...assistantRecord("record-subagent", "delegated result"),
-		agentId: agentId("research"),
-		delegation: {
-			parentToolCallId: toolCallId("call-1"),
-			parentTurnId: agentTurnId("turn-parent"),
-		},
-	};
-
-	await store.commitSessionRecord({ record, sessionId: id });
-
-	expect(await store.listSessionRecords(id)).toEqual([initialRecord, record]);
 });
 
 test("round-trips a failed assistant record with its safe failure", async () => {
@@ -399,7 +397,78 @@ test("deletes Conversation Records with their session", async () => {
 	expect(await store.listSessionRecords(id)).toEqual([]);
 });
 
-test("projects each ordinary row with references, metadata, and stable delegation ids", () => {
+test("deleting a parent Session removes settled task links but retains the child", async () => {
+	const { store } = await createTestStore();
+	const { id: parentSessionId } = await createSession(
+		store,
+		"delegation parent"
+	);
+	const task = await createTestDelegationTask(
+		store,
+		parentSessionId,
+		"delete-parent"
+	);
+	await store.settleDelegationTask({
+		outcome: { kind: "failure", reason: "The task has settled." },
+		taskId: task.id,
+	});
+
+	await store.deleteSession(parentSessionId);
+
+	expect(await store.getSession(task.childSessionId)).not.toBeNull();
+	expect(await store.listPendingDelegationReports(parentSessionId)).toEqual([]);
+	await store.deleteSession(task.childSessionId);
+});
+
+test("deleting a child Session removes its settled parent task and inbox", async () => {
+	const { store } = await createTestStore();
+	const { id: parentSessionId } = await createSession(
+		store,
+		"delegation parent"
+	);
+	const task = await createTestDelegationTask(
+		store,
+		parentSessionId,
+		"delete-child"
+	);
+	await store.settleDelegationTask({
+		outcome: { kind: "failure", reason: "The task has settled." },
+		taskId: task.id,
+	});
+
+	await store.deleteSession(task.childSessionId);
+
+	expect(await store.getSession(parentSessionId)).not.toBeNull();
+	expect(await store.listPendingDelegationReports(parentSessionId)).toEqual([]);
+	await store.deleteSession(parentSessionId);
+});
+
+test("refuses to delete Sessions linked to an active Delegated Task", async () => {
+	const { store } = await createTestStore();
+	const { id: parentSessionId } = await createSession(
+		store,
+		"active delegation parent"
+	);
+	const task = await createTestDelegationTask(
+		store,
+		parentSessionId,
+		"active-delete"
+	);
+
+	await expect(store.deleteSession(parentSessionId)).rejects.toThrow(
+		"Cannot delete a Session while it has an active Delegated Task."
+	);
+	await expect(store.deleteSession(task.childSessionId)).rejects.toThrow(
+		"Cannot delete a Session while it has an active Delegated Task."
+	);
+	expect(await store.getSession(parentSessionId)).not.toBeNull();
+	expect(await store.getSession(task.childSessionId)).not.toBeNull();
+	expect(await store.getDelegationTask(task.id)).toMatchObject({
+		status: "active",
+	});
+});
+
+test("projects user attachments and metadata into stable transcript messages", () => {
 	const attachmentReferenceId = `v1-${"a".repeat(64)}`;
 	const userRecord: SessionRecord = {
 		agentId: agentId("build"),
@@ -444,28 +513,13 @@ test("projects each ordinary row with references, metadata, and stable delegatio
 		turnId: agentTurnId("turn-user"),
 		version: 1,
 	};
-	const delegated = {
-		...assistantRecord("record-delegated", "delegated result"),
-		agentId: agentId("research"),
-		delegation: {
-			parentToolCallId: toolCallId("call-1"),
-			parentTurnId: agentTurnId("turn-parent"),
-		},
-	};
 	const primaryAssistant = assistantRecord("record-primary", "parent result");
 
-	const projected = projectSessionRecords([
-		userRecord,
-		delegated,
-		primaryAssistant,
-	]);
-	const [user, , delegatedAssistant] = projected;
+	const projected = projectSessionRecords([userRecord, primaryAssistant]);
+	const [user] = projected;
 	expect(projected.map(({ id }) => id)).toEqual([
 		sessionMessageId("user-1"),
 		sessionMessageId("assistant-primary"),
-		sessionMessageId(
-			"delegated-turn:turn-record-delegated:0:assistant-delegated"
-		),
 	]);
 	expect(user).toMatchObject({
 		id: sessionMessageId("user-1"),
@@ -497,39 +551,6 @@ test("projects each ordinary row with references, metadata, and stable delegatio
 		},
 		type: "data-fileMention",
 	});
-	expect(delegatedAssistant?.id).toBe(
-		sessionMessageId(
-			"delegated-turn:turn-record-delegated:0:assistant-delegated"
-		)
-	);
-});
-
-test("persists delegated child prompts as correlated user rows", async () => {
-	const { store } = await createTestStore();
-	const { id } = await createSession(store);
-	const delegation = {
-		parentToolCallId: toolCallId("call-parent"),
-		parentTurnId: agentTurnId("turn-parent"),
-	};
-	const record = buildUserSessionRecord({
-		agentId: agentId("subagent"),
-		delegation,
-		message: userMessage("child prompt", "child-user"),
-		model,
-		turnId: agentTurnId("child-turn"),
-	});
-
-	await store.commitSessionRecord({ record, sessionId: id });
-
-	expect(await store.listSessionRecords(id)).toContainEqual(record);
-	expect(projectSessionRecords([record])).toEqual([
-		{
-			id: sessionMessageId("delegated-turn:child-turn:0:child-user"),
-			metadata: { agent: agentId("subagent"), model },
-			parts: [{ text: "child prompt", type: "text" }],
-			role: "user",
-		},
-	]);
 });
 
 test("projects a failed assistant row as its safe transcript message", () => {

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isUndefined, readUtf8File } from "@wincode/runtime-utils";
+import { isUndefined, readUtf8File } from "@wincode/utils";
 import { MAX_PERMISSION_PATTERN_LENGTH } from "@/modules/permissions/policy";
 import { resolveTopLevelPermission } from "@/modules/permissions/schema";
 import type { ConfigSnapshot } from "@/shared/config/config-store";

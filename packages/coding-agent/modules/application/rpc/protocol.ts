@@ -1,4 +1,4 @@
-import { isPlainObject } from "@wincode/runtime-utils";
+import { isPlainObject } from "@wincode/utils";
 
 export const JSON_RPC_VERSION = "2.0" as const;
 export const MAX_JSONL_RECORD_BYTES = 16 * 1024 * 1024;

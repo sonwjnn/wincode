@@ -75,7 +75,6 @@ test("requires resetting local data instead of converting an incompatible reason
 				session_id TEXT NOT NULL,
 				turn_id TEXT NOT NULL,
 				agent_id TEXT NOT NULL,
-				delegation_json TEXT,
 				model_json TEXT NOT NULL,
 				outcome_json TEXT NOT NULL,
 				messages_json TEXT NOT NULL,
@@ -84,7 +83,7 @@ test("requires resetting local data instead of converting an incompatible reason
 				created_at INTEGER NOT NULL
 			);
 			INSERT INTO session_record VALUES (
-				'record-a', 'session-a', 'turn-a', 'build', NULL,
+				'record-a', 'session-a', 'turn-a', 'build',
 				'{"providerId":"provider-a","modelId":"model-a","variant":"high"}',
 				'{"kind":"assistant"}',
 				'[{"id":"assistant-a","role":"assistant","metadata":{"variant":"none"},"parts":[{"type":"text","text":"kept"}]}]',

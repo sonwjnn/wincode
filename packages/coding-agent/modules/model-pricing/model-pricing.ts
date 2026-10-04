@@ -5,7 +5,7 @@ import {
 	type ModelRuntimeProviderId,
 } from "@wincode/ai/models";
 import type { ModelMetadataEntry } from "@wincode/ai/models-dev";
-import { omitUndefined, pickTruthy } from "@wincode/runtime-utils";
+import { omitUndefined, pickTruthy } from "@wincode/utils";
 
 /**
  * A runtime override table over the generated catalog metadata. Both sides are

@@ -15,7 +15,7 @@ import {
 	isPlainObject,
 	isUndefined,
 	readUtf8File,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import {
 	applyEdits,
 	modify,

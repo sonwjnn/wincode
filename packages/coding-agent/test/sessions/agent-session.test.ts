@@ -16,7 +16,7 @@ import type {
 	Effort,
 	ReasoningMode,
 } from "@wincode/ai/models";
-import { logger } from "@wincode/runtime-utils";
+import { logger } from "@wincode/utils";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import { AgentSessionImpl } from "@/modules/sessions/agent-session/agent-session";
 import type {
@@ -151,6 +151,8 @@ const createPorts = ({
 	},
 	...overrides,
 	commitRecord: overrides.commitRecord ?? (async () => undefined),
+	consumeDelegationReport:
+		overrides.consumeDelegationReport ?? (async () => true),
 	updateSubmissionStatus:
 		overrides.updateSubmissionStatus ?? (async () => undefined),
 });
@@ -267,29 +269,6 @@ test("reconciles primary records that finish writing during shutdown", async () 
 		);
 	} finally {
 		releaseFirstCommit.resolve();
-		await engine.internalPort.shutdown();
-	}
-});
-test("keeps primary messages with delegated-prefixed IDs in stored order", async () => {
-	const initialMessage = message("delegated-turn:primary-message");
-	const nextRecord = {
-		record: buildUserSessionRecord({
-			agentId: agentId("build"),
-			message: message("next-primary-message"),
-			model,
-			turnId: agentTurnId("next-primary-turn"),
-		}),
-		sessionId: sessionId("agent-session-test"),
-	};
-	const engine = createTestAgentSession([initialMessage]);
-
-	try {
-		await engine.internalPort.commitRecord(nextRecord);
-		expect(engine.getSnapshot().transcript.map(({ id }) => id)).toEqual([
-			initialMessage.id,
-			...projectSessionRecords([nextRecord.record]).map(({ id }) => id),
-		]);
-	} finally {
 		await engine.internalPort.shutdown();
 	}
 });
@@ -521,59 +500,6 @@ test("places a committed tool checkpoint before a later steered prompt", async (
 		expect(steeringIndex).toBeLessThan(assistantIndex);
 	} finally {
 		releaseCheckpoint.resolve();
-		await engine.internalPort.shutdown();
-	}
-});
-test("appends a committed delegated row with durable identity and grouping", async () => {
-	const parentTurnId = agentTurnId("delegated-live-parent");
-	const parentToolCallId = toolCallId("delegated-live-parent-call");
-	const primaryRecord = buildUserSessionRecord({
-		agentId: agentId("build"),
-		message: message("delegated-live-primary", "primary request"),
-		model,
-		turnId: agentTurnId("delegated-live-primary-turn"),
-	});
-	const records: SessionRecord[] = [primaryRecord];
-	const initialTranscript = projectSessionRecords(records);
-	const delegatedRecord: SessionRecord = {
-		agentId: agentId("research"),
-		delegation: { parentToolCallId, parentTurnId },
-		id: sessionRecordId("delegated-live-assistant-record"),
-		messages: [
-			{
-				id: sessionMessageId("assistant-delegated-live-child"),
-				parts: [{ text: "delegated response", type: "text" }],
-				role: "assistant",
-			},
-		],
-		model,
-		outcome: {
-			kind: "assistant",
-			terminal: { finishedAt: 1, kind: "completed" },
-		},
-		turnId: agentTurnId("delegated-live-child"),
-		version: 1,
-	};
-	const engine = createTestAgentSession(initialTranscript, undefined, {
-		commitRecord: async ({ record }) => {
-			records.push(record);
-		},
-	});
-
-	try {
-		await engine.internalPort.commitRecord({
-			record: delegatedRecord,
-			sessionId: sessionId("agent-session-test"),
-		});
-
-		const transcript = engine.getSnapshot().transcript;
-		const storedTranscript = projectSessionRecords(records);
-		expect(transcript.map(({ id }) => id)).toEqual(
-			storedTranscript.map(({ id }) => id)
-		);
-		expect(transcript[0]?.id).toBe(initialTranscript[0]?.id);
-		expect(transcript.at(-1)?.id).toBe(storedTranscript.at(-1)?.id);
-	} finally {
 		await engine.internalPort.shutdown();
 	}
 });

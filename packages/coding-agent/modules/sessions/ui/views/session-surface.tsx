@@ -1,8 +1,7 @@
-import { getErrorMessage } from "@wincode/runtime-utils";
+import { getErrorMessage } from "@wincode/utils";
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SessionCompaction } from "@/modules/sessions/compaction/types";
-import { createSessionHost } from "@/modules/sessions/host/session-host";
 import type { SessionHost } from "@/modules/sessions/host/types";
 import { useSessionCapabilities } from "@/modules/sessions/host/use-session-capabilities";
 import {
@@ -100,44 +99,10 @@ const loadStoredSessionHistory = async (
 	return { compactions, sessionTitle: row.title, transcript };
 };
 
-const pendingSurfaceClosures = new Map<SessionId, Promise<void>>();
-
-const waitForPendingSurfaceClosure = async (
-	sessionId: SessionId
-): Promise<void> => {
-	const pending = pendingSurfaceClosures.get(sessionId);
-	if (pending !== undefined) {
-		await pending;
-	}
-};
-
-const trackSurfaceClosure = (
-	sessionId: SessionId,
-	closing: Promise<void>
-): void => {
-	const observed = closing.catch(() => undefined);
-	pendingSurfaceClosures.set(sessionId, observed);
-	void observed.then(() => {
-		if (pendingSurfaceClosures.get(sessionId) === observed) {
-			pendingSurfaceClosures.delete(sessionId);
-		}
-	});
-};
-
 /**
- * Opens a session and renders it. This surface owns the asynchronous
- * boundary: it constructs the Session Host and shows the opening state until
- * the session exists, then offers read-only Stored Session History only when a
- * Session Writer conflict prevents opening. Other failures remain errors; an
- * Agent Session does not exist until opening completes.
- *
- * It owns the session's presentation-only facts as well: the title read from the
- * session row, and the display-only annotation of the Transcript, which marks
- * attachment parts whose content is gone. Annotation never reaches the Session
- * Context, which the Host derives from the un-annotated projection.
- *
- * The consumer that constructs a Host owns calling `shutdown`, so this surface
- * shuts the session down when it unmounts or when the session it shows changes.
+ * Renders one Session view. The process-level Session Host manager owns loaded
+ * runtimes; the surface holds a view reference and releases it on navigation.
+ * The manager preserves active Sessions and unloads durable idle ones.
  */
 export function SessionSurface({
 	initialSubmission,
@@ -151,9 +116,33 @@ export function SessionSurface({
 	const [surface, setSurface] = useState<SessionSurfaceState>({
 		kind: "opening",
 	});
+	const [backgroundApprovalNotice, setBackgroundApprovalNotice] = useState<{
+		pendingApprovalCount: number;
+		sessionId: SessionId;
+	} | null>(null);
 	const refreshHistoryRef = useRef<(() => void) | null>(null);
 	const retryOpenRef = useRef<(() => void) | null>(null);
 	const viewHistoryRef = useRef<(() => void) | null>(null);
+	useEffect(() => {
+		const manager = capabilities.getSessionHostManager();
+		return manager.onEvent((event) => {
+			if (
+				event.type !== "session-approval-notice" ||
+				event.sessionId === sessionId
+			) {
+				return;
+			}
+			setBackgroundApprovalNotice(
+				event.pendingApprovalCount === 0
+					? (current) =>
+							current?.sessionId === event.sessionId ? null : current
+					: {
+							pendingApprovalCount: event.pendingApprovalCount,
+							sessionId: event.sessionId,
+						}
+			);
+		});
+	}, [capabilities, sessionId]);
 	const handleRefreshHistory = useCallback(() => {
 		refreshHistoryRef.current?.();
 	}, []);
@@ -169,26 +158,31 @@ export function SessionSurface({
 		let opening = false;
 		let historyActionInFlight = false;
 		let contentionOwner: SessionWriterLockOwner | undefined;
-		let openedHost: SessionHost | null = null;
-		let openingHost: Promise<SessionHost> | null = null;
+		let viewAcquired = false;
+		let releaseRequested = false;
+		const manager = capabilities.getSessionHostManager();
 		setSurface({ kind: "opening" });
 
+		const releaseView = (): void => {
+			releaseRequested = true;
+			if (!viewAcquired) {
+				return;
+			}
+			viewAcquired = false;
+			void manager.releaseView(sessionId).catch(() => undefined);
+		};
 		const open = async (): Promise<OpenedSession | null> => {
-			const pendingOpen = (async (): Promise<SessionHost> => {
-				await waitForPendingSurfaceClosure(sessionId);
-				return createSessionHost({
-					capabilities,
-					executionMode: "interactive",
-					sessionId,
-				});
-			})();
-			openingHost = pendingOpen;
-			const host = await pendingOpen;
-			if (ignore) {
-				await host.shutdown();
+			const host = await manager.openHost({
+				capabilities,
+				executionMode: "interactive",
+				sessionId,
+				view: true,
+			});
+			viewAcquired = true;
+			if (ignore || releaseRequested) {
+				releaseView();
 				return null;
 			}
-			openedHost = host;
 			try {
 				const store = getSessionStore();
 				const [row, transcript] = await Promise.all([
@@ -208,10 +202,7 @@ export function SessionSurface({
 					transcript,
 				};
 			} catch (error) {
-				openedHost = null;
-				if (!ignore) {
-					await host.shutdown();
-				}
+				releaseView();
 				throw error;
 			}
 		};
@@ -326,18 +317,7 @@ export function SessionSurface({
 			refreshHistoryRef.current = null;
 			retryOpenRef.current = null;
 			viewHistoryRef.current = null;
-			const closingHost = openedHost;
-			let closing: Promise<void> | undefined;
-			try {
-				closing =
-					closingHost?.shutdown() ??
-					openingHost?.then((host) => host.shutdown());
-			} catch {
-				closing = Promise.resolve();
-			}
-			if (closing !== undefined) {
-				trackSurfaceClosure(sessionId, closing);
-			}
+			releaseView();
 		};
 	}, [capabilities, sessionId]);
 
@@ -390,12 +370,22 @@ export function SessionSurface({
 	}
 
 	return (
-		<SessionView
-			host={surface.session.host}
-			initialSubmission={initialSubmission}
-			initialTranscript={surface.session.transcript}
-			sessionId={sessionId}
-			sessionTitle={surface.session.sessionTitle}
-		/>
+		<box flexDirection="column" flexGrow={1} width="100%">
+			{backgroundApprovalNotice && (
+				<text fg={colors.warning}>
+					Session {backgroundApprovalNotice.sessionId} has{" "}
+					{backgroundApprovalNotice.pendingApprovalCount} pending approval
+					{backgroundApprovalNotice.pendingApprovalCount === 1 ? "" : "s"}. Open
+					that Session to review; its Agent is paused.
+				</text>
+			)}
+			<SessionView
+				host={surface.session.host}
+				initialSubmission={initialSubmission}
+				initialTranscript={surface.session.transcript}
+				sessionId={sessionId}
+				sessionTitle={surface.session.sessionTitle}
+			/>
+		</box>
 	);
 }

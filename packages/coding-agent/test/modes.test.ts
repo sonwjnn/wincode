@@ -3,6 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { agentIdSchema, createAgentRuntime } from "@wincode/agent-core";
+import type {
+	ModelStepRequest,
+	ModelStreamPart,
+} from "@wincode/ai/model-client";
 import {
 	type AgentRegistry,
 	buildAgentRegistry,
@@ -26,6 +30,7 @@ import type { ConfigSnapshot } from "../shared/config/config-store";
 import {
 	createFakeModelClient,
 	createFakeModelClientRecorder,
+	type FakeModelStepScript,
 } from "./support/e2e-fake-runtime";
 
 const fakeRecorder = createFakeModelClientRecorder();
@@ -769,3 +774,129 @@ const noCapabilities: OneShotDependencies = {
 		throw new Error("capabilities should not be composed");
 	},
 };
+
+test("one-shot waits for delegated outcomes, tags JSON child events, and keeps Print output parent-only", async () => {
+	const printWorkspace = await mkdtemp(
+		path.join("/tmp", "wincode-one-shot-delegation-print-")
+	);
+	const jsonWorkspace = await mkdtemp(
+		path.join("/tmp", "wincode-one-shot-delegation-json-")
+	);
+	const delegatedRegistry = buildConfiguredAgentRegistry({
+		scout: {
+			description: "Inspect work and report findings.",
+			role: "subagent",
+		},
+	});
+	const composeDelegated = composeCapabilitiesFor(delegatedRegistry);
+	const dependencies: OneShotDependencies = {
+		composeCapabilities: async (input) => composeDelegated(input),
+	};
+	const previousScript = fakeRecorder.stepScript;
+	let callSequence = 0;
+	const script: FakeModelStepScript = async function* (
+		request: ModelStepRequest
+	): AsyncGenerator<ModelStreamPart> {
+		const latestUserText =
+			request.messages
+				.filter(({ role }) => role === "user")
+				.at(-1)
+				?.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+				.join("\n") ?? "";
+		const hasToolResult = request.messages.some(({ role }) => role === "tool");
+		if (latestUserText === "Inspect one-shot child work.") {
+			yield { delta: "Child internal output.", type: "text-delta" };
+			yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+			return;
+		}
+		if (hasToolResult) {
+			yield { delta: "Parent-only result.", type: "text-delta" };
+			yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+			return;
+		}
+		callSequence += 1;
+		yield {
+			input: {
+				agent: "scout",
+				prompt: "Inspect one-shot child work.",
+			},
+			toolCallId: `one-shot-delegate-${callSequence}`,
+			toolName: "delegate",
+			type: "tool-call",
+		};
+		yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+	};
+	fakeRecorder.stepScript = script;
+	try {
+		const printStdout = writer();
+		const printStderr = writer();
+		const printExitCode = await runPrintMode(
+			context(
+				"print",
+				"Delegate work to scout.",
+				printStdout.writer,
+				printStderr.writer,
+				undefined,
+				undefined,
+				true,
+				{},
+				printWorkspace
+			),
+			dependencies
+		);
+		expect(printExitCode).toBe(1);
+		expect(printStdout.text).toBe("Parent-only result.");
+		expect(printStdout.text).not.toContain("Child internal output.");
+		expect(printStderr.text).toContain("awaiting_report");
+		expect(printStderr.text).toContain(
+			"will not continue the parent Session automatically"
+		);
+
+		const jsonStdout = writer();
+		const jsonStderr = writer();
+		const jsonExitCode = await runJsonMode(
+			context(
+				"json",
+				"Delegate work to scout.",
+				jsonStdout.writer,
+				jsonStderr.writer,
+				undefined,
+				undefined,
+				true,
+				{},
+				jsonWorkspace
+			),
+			dependencies
+		);
+		const events = jsonStdout.text
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as Record<string, unknown>);
+		expect(jsonExitCode).toBe(1);
+		expect(events).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					type: "delegated-agent-turn-event",
+					event: expect.objectContaining({
+						delta: "Child internal output.",
+						type: "text-delta",
+					}),
+				}),
+				expect.objectContaining({
+					type: "delegation-task",
+					task: expect.objectContaining({ status: "awaiting_report" }),
+				}),
+			])
+		);
+		expect(jsonStderr.text).toContain("awaiting_report");
+		expect(jsonStderr.text).toContain(
+			"will not continue the parent Session automatically"
+		);
+	} finally {
+		fakeRecorder.stepScript = previousScript;
+		await Promise.all([
+			rm(printWorkspace, { force: true, recursive: true }),
+			rm(jsonWorkspace, { force: true, recursive: true }),
+		]);
+	}
+});

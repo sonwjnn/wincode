@@ -1,4 +1,4 @@
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 
 const previousEnvironment = {
 	WINCODE_E2E_HOME: process.env.WINCODE_E2E_HOME,

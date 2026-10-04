@@ -5,7 +5,7 @@ import {
 	isString,
 	isUndefined,
 	omitUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import type { Merge, OverrideProperties } from "type-fest";
 import type { ZodError } from "zod";
 import type {

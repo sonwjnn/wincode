@@ -1,7 +1,7 @@
 import { fromPartial } from "@total-typescript/shoehorn";
 import type { SessionMessageId } from "@wincode/agent-core";
 import { toSubmissionId } from "@wincode/agent-core";
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
 import {
 	agentTurnId,

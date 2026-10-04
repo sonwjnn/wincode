@@ -21,7 +21,7 @@ import type {
 	ChatModelSelection,
 	ConnectionProviderId,
 } from "@wincode/ai/models";
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 import { act, useEffect } from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
@@ -36,6 +36,7 @@ import {
 } from "@/modules/permissions";
 import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
+import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
@@ -335,6 +336,9 @@ export const renderSession = async ({
 export const cleanupSessionRender = (): void => {
 	setMarkdownTreeSitterClientForTests(null);
 };
+
+export const shutdownSessionHosts = (): Promise<void> =>
+	getInteractiveSessionHostManager().shutdownAll();
 
 export const writeE2EFrame = (setup: TestRendererSetup): void => {
 	const framePath = process.env.WINCODE_E2E_FRAME_PATH;

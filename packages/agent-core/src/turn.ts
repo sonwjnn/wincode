@@ -1,9 +1,5 @@
 import type { ModelTarget } from "@wincode/ai/model-target";
-import {
-	isNonEmptyString,
-	isObjectLike,
-	isString,
-} from "@wincode/runtime-utils";
+import { isNonEmptyString, isObjectLike, isString } from "@wincode/utils";
 import type { ReadonlyDeep, UnknownRecord } from "type-fest";
 import type { ResolvedAgent } from "./agent";
 import {

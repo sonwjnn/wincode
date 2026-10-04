@@ -1,4 +1,4 @@
-import { isUndefined, omitUndefined } from "@wincode/runtime-utils";
+import { isUndefined, omitUndefined } from "@wincode/utils";
 import type { ApprovalPanelEntry } from "@/shared/providers/approval/approval-panels-provider";
 import type { ApprovalOutcome } from "@/shared/providers/approval/types";
 import type { SessionApproval } from "./agent-session/types";

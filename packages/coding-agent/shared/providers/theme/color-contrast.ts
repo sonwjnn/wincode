@@ -1,4 +1,4 @@
-import { isNull } from "@wincode/runtime-utils";
+import { isNull } from "@wincode/utils";
 
 const HEX_COLOR_RE = /^#?([\da-f]{3,4}|[\da-f]{6}(?:[\da-f]{2})?)$/iu;
 

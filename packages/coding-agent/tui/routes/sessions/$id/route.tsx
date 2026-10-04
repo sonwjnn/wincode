@@ -1,6 +1,6 @@
 import { createFileRoute, useLocation } from "@tanstack/react-router";
 import { toSessionMessageId } from "@wincode/agent-core";
-import { isNonEmptyString, isObjectLike } from "@wincode/runtime-utils";
+import { isNonEmptyString, isObjectLike } from "@wincode/utils";
 import { useMemo } from "react";
 import { SessionSurface } from "@/modules/sessions/ui/views/session-surface";
 import type { SessionInitialSubmission } from "@/modules/sessions/ui/views/session-view";

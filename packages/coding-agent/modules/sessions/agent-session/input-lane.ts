@@ -6,11 +6,7 @@ import {
 	toSessionMessageId,
 	toSubmissionId,
 } from "@wincode/agent-core";
-import {
-	getErrorMessage,
-	isUndefined,
-	omitUndefined,
-} from "@wincode/runtime-utils";
+import { getErrorMessage, isUndefined, omitUndefined } from "@wincode/utils";
 import { toQueuedSubmissionId } from "@/shared/identifiers";
 import { createSessionUserMessage, type SessionFilePart } from "../message";
 import type {
@@ -228,26 +224,27 @@ export const createSessionInputLaneWorkflow = (
 		}
 		return true;
 	};
+	const drainQueueHead = async (): Promise<boolean> => {
+		if (port.isClosed() || port.isSteeringCommitting()) {
+			return false;
+		}
+		const snapshot = port.getSnapshot();
+		const steering = snapshot.steeringMessages[0];
+		if (steering !== undefined) {
+			return drainSteeringHead(steering);
+		}
+		if (snapshot.pendingDelegationReports.length > 0) {
+			return false;
+		}
+		const next = snapshot.queuedSubmissions[0];
+		if (next === undefined) {
+			return false;
+		}
+		return drainQueuedHead(next);
+	};
 	const drainQueueContents = async (): Promise<void> => {
-		while (true) {
-			if (port.isClosed() || port.isSteeringCommitting()) {
-				break;
-			}
-			const snapshot = port.getSnapshot();
-			const steering = snapshot.steeringMessages[0];
-			if (steering !== undefined) {
-				if (!(await drainSteeringHead(steering))) {
-					break;
-				}
-				continue;
-			}
-			const next = snapshot.queuedSubmissions[0];
-			if (next === undefined) {
-				break;
-			}
-			if (!(await drainQueuedHead(next))) {
-				break;
-			}
+		while (await drainQueueHead()) {
+			// Continue only after the current head has been delivered.
 		}
 	};
 	const drainQueuedSubmissions = async (): Promise<void> => {

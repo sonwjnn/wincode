@@ -2,7 +2,7 @@ import type { Dirent } from "node:fs";
 import { readdirSync, statSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { readUtf8File } from "@wincode/runtime-utils";
+import { readUtf8File } from "@wincode/utils";
 import type { SetReadonly, SetRequired } from "type-fest";
 import { parseSkillFile } from "./frontmatter";
 import { hashSkillBody } from "./hash";

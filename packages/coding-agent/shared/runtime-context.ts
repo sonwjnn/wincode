@@ -1,4 +1,4 @@
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 export type StartInteractiveInput = {
 	args: readonly string[];
 	cwd: string;

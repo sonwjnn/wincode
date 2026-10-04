@@ -1,5 +1,5 @@
 {
-  "name": "@wincode/runtime-utils",
+  "name": "@wincode/utils",
   "type": "module",
   "exports": {
     ".": {
@@ -17,7 +17,7 @@
   },
   "scripts": {
     "check-types": "tsc --noEmit",
-    "test": "bun ../../scripts/test-portfolio.ts default --package runtime-utils"
+    "test": "bun ../../scripts/test-portfolio.ts default --package utils"
   },
   "dependencies": {
     "type-fest": "catalog:"

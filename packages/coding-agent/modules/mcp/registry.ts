@@ -1,5 +1,5 @@
 import type { AgentId } from "@wincode/agent-core";
-import { isUndefined, pickTruthy } from "@wincode/runtime-utils";
+import { isUndefined, pickTruthy } from "@wincode/utils";
 import type { JsonObject } from "type-fest";
 import {
 	composePermissionDecisions,

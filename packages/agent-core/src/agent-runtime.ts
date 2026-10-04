@@ -18,7 +18,7 @@ import {
 	isString,
 	isUndefined,
 	omitUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import type { JsonObject } from "type-fest";
 import { z } from "zod";
 import { AgentInvariantError, isAgentInvariantError } from "./errors";
@@ -481,22 +481,35 @@ const executeToolCalls = async function* ({
 	turnId,
 }: ExecuteToolCallsOptions): AsyncGenerator<
 	AgentTurnEvent,
-	readonly ModelPromptMessage[],
+	{ messages: readonly ModelPromptMessage[]; stopTurn: boolean },
 	undefined
 > {
+	const exclusive =
+		calls.length > 1 &&
+		calls.find((call) => call.tool.definition.exclusiveInBatch === true);
 	const outcomes = await awaitWithAbort(
-		Promise.all(
-			calls.map((call) =>
-				executeToolCall(
-					call.tool,
-					{ input: call.input, toolCallId: call.toolCallId },
-					signal
+		exclusive
+			? Promise.resolve(
+					calls.map(
+						(): ToolCallOutput => ({
+							errorText: `${exclusive.tool.definition.name} must be the only Tool Call in this Model Step; no Tool Calls in the batch ran.`,
+							type: "failure",
+						})
+					)
 				)
-			)
-		),
+			: Promise.all(
+					calls.map((call) =>
+						executeToolCall(
+							call.tool,
+							{ input: call.input, toolCallId: call.toolCallId },
+							signal
+						)
+					)
+				),
 		signal
 	);
 	const messages: ModelPromptMessage[] = [];
+	let stopTurn = false;
 	for (const [index, call] of calls.entries()) {
 		const outcome = outcomes[index];
 		if (isUndefined(outcome)) {
@@ -506,8 +519,13 @@ const executeToolCalls = async function* ({
 				{ cause: call }
 			);
 		}
+		stopTurn ||= outcome.type === "success" && outcome.stopTurn === true;
+		const publicOutcome =
+			outcome.type === "success" && outcome.stopTurn === true
+				? { output: outcome.output, type: "success" as const }
+				: outcome;
 		yield emit({
-			outcome,
+			outcome: publicOutcome,
 			sequence: emit.nextSequence(),
 			toolCallId: call.toolCallId,
 			toolName: call.tool.definition.name,
@@ -531,7 +549,7 @@ const executeToolCalls = async function* ({
 					};
 		messages.push({ content: [resultPart], role: "tool" });
 	}
-	return messages;
+	return { messages, stopTurn };
 };
 
 const createToolsByName = (
@@ -613,20 +631,21 @@ const runLoop = async function* ({
 			yield lifecycle.interrupt(emit.nextSequence(), "lost-execution");
 			return;
 		}
+		let stopTurn = false;
 		if (output.toolCalls.length > 0) {
 			modelMessages.push({
 				...omitUndefined({ continuation: output.continuation }),
 				content: output.assistantParts,
 				role: "assistant",
 			});
-			modelMessages.push(
-				...(yield* executeToolCalls({
-					calls: output.toolCalls,
-					emit,
-					...omitUndefined({ signal: runtimeSignal }),
-					turnId: turn.id,
-				}))
-			);
+			const execution = yield* executeToolCalls({
+				calls: output.toolCalls,
+				emit,
+				...omitUndefined({ signal: runtimeSignal }),
+				turnId: turn.id,
+			});
+			modelMessages.push(...execution.messages);
+			stopTurn = execution.stopTurn;
 		}
 		yield emit({
 			modelId: turn.model.modelId,
@@ -637,6 +656,16 @@ const runLoop = async function* ({
 			...omitUndefined({ usage: output.usage }),
 		});
 		totalUsage = sumUsage(totalUsage, output.usage);
+		if (stopTurn) {
+			yield emit({
+				finishedAt: Date.now(),
+				sequence: emit.nextSequence(),
+				turnId: turn.id,
+				type: "agent-turn-completed",
+				...omitUndefined({ usage: totalUsage }),
+			});
+			return;
+		}
 		const steeringMessages = await takeSteeringMessages?.();
 		const hasSteeringMessages =
 			steeringMessages !== undefined && steeringMessages.length > 0;

@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import { readUtf8File } from "@wincode/runtime-utils";
+import { readUtf8File } from "@wincode/utils";
 import { truncateUtf8 } from "../output-bounds";
 import { getToolResourceLimits } from "../resource-limits";
 import { traverseWorkspace } from "../traversal";

@@ -2,7 +2,6 @@ import {
 	type AgentId,
 	AgentInvariantError,
 	type AgentTurn,
-	type AgentTurnDelegation,
 	type AgentTurnEvent,
 	type AgentTurnId,
 	type AgentTurnOutcomeRecord,
@@ -20,7 +19,7 @@ import {
 	toSessionRecordId,
 } from "@wincode/agent-core";
 import { type ModelUsage, normalizeModelUsage } from "@wincode/ai/model-usage";
-import { omitUndefined } from "@wincode/runtime-utils";
+import { omitUndefined } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 import { RetiredModelError } from "../model-target";
 
@@ -179,7 +178,6 @@ export const buildTerminalSessionRecord = ({
 
 	return {
 		agentId: turn.agent.id,
-		...omitUndefined({ delegation: turn.delegation }),
 		id: toSessionRecordId(`record-${randomUUIDv7()}`),
 		messages: [
 			{
@@ -197,7 +195,6 @@ export const buildTerminalSessionRecord = ({
 };
 const buildAssistantOutcomeSessionRecord = ({
 	agentId,
-	delegation,
 	model,
 	sourceUserMessageId,
 	text,
@@ -207,7 +204,6 @@ const buildAssistantOutcomeSessionRecord = ({
 	reasoningMode,
 }: {
 	agentId: AgentId;
-	delegation?: AgentTurnDelegation;
 	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
 	sourceUserMessageId?: SessionMessageId;
 	text: string;
@@ -217,7 +213,6 @@ const buildAssistantOutcomeSessionRecord = ({
 	reasoningMode?: SessionRecord["model"]["reasoningMode"];
 }): SessionRecord => ({
 	agentId,
-	...omitUndefined({ delegation }),
 	id: toSessionRecordId(`record-${randomUUIDv7()}`),
 	messages: [
 		{
@@ -246,7 +241,6 @@ const buildAssistantOutcomeSessionRecord = ({
 
 export const buildAssistantFailureSessionRecord = ({
 	agentId,
-	delegation,
 	error,
 	model,
 	sourceUserMessageId,
@@ -255,7 +249,6 @@ export const buildAssistantFailureSessionRecord = ({
 	reasoningMode,
 }: {
 	agentId: AgentId;
-	delegation?: AgentTurnDelegation;
 	error: unknown;
 	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
 	sourceUserMessageId?: SessionMessageId;
@@ -271,7 +264,6 @@ export const buildAssistantFailureSessionRecord = ({
 		error instanceof RetiredModelError ? error.message : failure.message;
 	return buildAssistantOutcomeSessionRecord({
 		agentId,
-		delegation,
 		model,
 		sourceUserMessageId,
 		terminal: {
@@ -288,7 +280,6 @@ export const buildAssistantFailureSessionRecord = ({
 
 export const buildAssistantCancelledSessionRecord = ({
 	agentId,
-	delegation,
 	model,
 	sourceUserMessageId,
 	turnId,
@@ -296,7 +287,6 @@ export const buildAssistantCancelledSessionRecord = ({
 	reasoningMode,
 }: {
 	agentId: AgentId;
-	delegation?: AgentTurnDelegation;
 	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
 	sourceUserMessageId?: SessionMessageId;
 	turnId: AgentTurnId;
@@ -314,7 +304,6 @@ export const buildAssistantCancelledSessionRecord = ({
 	});
 	return buildAssistantOutcomeSessionRecord({
 		agentId,
-		delegation,
 		model,
 		sourceUserMessageId,
 		terminal: {
@@ -341,7 +330,6 @@ export const buildToolSessionRecord = ({
 	turn: AgentTurn;
 }): SessionRecord => ({
 	agentId: turn.agent.id,
-	...omitUndefined({ delegation: turn.delegation }),
 	id: toSessionRecordId(`record-${randomUUIDv7()}`),
 	messages: [
 		{

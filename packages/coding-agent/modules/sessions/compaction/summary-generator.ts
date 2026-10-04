@@ -5,7 +5,7 @@ import {
 	type ModelTextGenerationOptions,
 } from "@wincode/ai/model-client";
 import type { Effort, ReasoningMode } from "@wincode/ai/models";
-import { omitUndefined } from "@wincode/runtime-utils";
+import { omitUndefined } from "@wincode/utils";
 import { resolveChatModelTarget } from "../../model-target";
 import { escapeXml } from "../../prompt-composition/project-instructions";
 import {

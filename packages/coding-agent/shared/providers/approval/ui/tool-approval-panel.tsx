@@ -1,6 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 import { useEffect, useRef, useState } from "react";
 import { sanitizeText } from "@/shared/display-sanitize";
 import { useLatest } from "@/shared/hooks/use-latest";

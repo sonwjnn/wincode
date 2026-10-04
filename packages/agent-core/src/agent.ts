@@ -1,4 +1,4 @@
-import { isNonEmptyString, isString } from "@wincode/runtime-utils";
+import { isNonEmptyString, isString } from "@wincode/utils";
 import { z } from "zod";
 import type { AgentId } from "./identifiers";
 

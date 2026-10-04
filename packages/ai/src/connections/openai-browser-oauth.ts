@@ -1,4 +1,4 @@
-import { isString } from "@wincode/runtime-utils";
+import { isString } from "@wincode/utils";
 import { serve } from "bun";
 import {
 	calculatePKCECodeChallenge,

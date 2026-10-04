@@ -1,4 +1,4 @@
-import { isNull } from "@wincode/runtime-utils";
+import { isNull } from "@wincode/utils";
 // The Model Catalog: Wincode's curated product definition of supported
 // models. Retired entries stay in the array so Session Records keep their
 // model identity; see ADR-0012. Metadata that is not a product decision

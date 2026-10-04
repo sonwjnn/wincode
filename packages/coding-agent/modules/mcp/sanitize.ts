@@ -1,4 +1,4 @@
-import { getErrorMessage, isUndefined } from "@wincode/runtime-utils";
+import { getErrorMessage, isUndefined } from "@wincode/utils";
 import { sanitizeText } from "@/shared/display-sanitize";
 import type { ResolvedMcpServerConfig } from "./config";
 

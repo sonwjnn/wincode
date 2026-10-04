@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@wincode/ai": "workspace:*",
-    "@wincode/runtime-utils": "workspace:*",
+    "@wincode/utils": "workspace:*",
     "type-fest": "catalog:",
     "zod": "catalog:"
   },

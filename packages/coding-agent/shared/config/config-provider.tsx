@@ -1,4 +1,4 @@
-import { isNull } from "@wincode/runtime-utils";
+import { isNull } from "@wincode/utils";
 import { createContext, type ReactNode, useContext } from "react";
 import type { ConfigRuntime } from "./config-store";
 

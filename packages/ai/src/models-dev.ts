@@ -1,4 +1,4 @@
-import { isArray, isString, isUndefined } from "@wincode/runtime-utils";
+import { isArray, isString, isUndefined } from "@wincode/utils";
 // The single models.dev -> Wincode metadata converter. Both the offline
 // generator (`scripts/sync-model-metadata.ts`) and the runtime pricing refresh
 // call this, so a fact can only ever be interpreted one way. See ADR-0014.
@@ -16,7 +16,7 @@ import {
 	omitUndefined,
 	pickBy,
 	pickTruthy,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import type { UnknownRecord } from "type-fest";
 import {
 	type Effort,

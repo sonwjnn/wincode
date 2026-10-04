@@ -1,6 +1,6 @@
 import { RGBA } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
-import { isNull } from "@wincode/runtime-utils";
+import { isNull } from "@wincode/utils";
 import { useEffect, useMemo, useState } from "react";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";

@@ -6,7 +6,7 @@ import {
 	isNull,
 	isUndefined,
 	omitUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDialogEscape } from "@/shared/providers/dialog/dialog-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";

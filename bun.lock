@@ -9,7 +9,7 @@
         "@total-typescript/shoehorn": "^0.1.2",
         "@types/bun": "catalog:",
         "@wincode/config": "workspace:*",
-        "@wincode/runtime-utils": "workspace:*",
+        "@wincode/utils": "workspace:*",
         "lefthook": "latest",
         "typescript": "catalog:",
         "ultracite": "7.6.5",
@@ -19,7 +19,7 @@
       "name": "@wincode/agent-core",
       "dependencies": {
         "@wincode/ai": "workspace:*",
-        "@wincode/runtime-utils": "workspace:*",
+        "@wincode/utils": "workspace:*",
         "type-fest": "catalog:",
         "zod": "catalog:",
       },
@@ -32,7 +32,7 @@
     "packages/ai": {
       "name": "@wincode/ai",
       "dependencies": {
-        "@wincode/runtime-utils": "workspace:*",
+        "@wincode/utils": "workspace:*",
         "oauth4webapi": "^3.8.3",
         "open": "^10.2.0",
         "type-fest": "catalog:",
@@ -59,7 +59,7 @@
         "@tanstack/react-router": "catalog:",
         "@wincode/agent-core": "workspace:*",
         "@wincode/ai": "workspace:*",
-        "@wincode/runtime-utils": "workspace:*",
+        "@wincode/utils": "workspace:*",
         "diff": "catalog:",
         "drizzle-orm": "^0.45.2",
         "ignore": "^5.3.2",
@@ -91,7 +91,7 @@
       "version": "0.0.0",
     },
     "packages/utils": {
-      "name": "@wincode/runtime-utils",
+      "name": "@wincode/utils",
       "dependencies": {
         "type-fest": "catalog:",
       },
@@ -397,7 +397,7 @@
 
     "@wincode/config": ["@wincode/config@workspace:packages/config"],
 
-    "@wincode/runtime-utils": ["@wincode/runtime-utils@workspace:packages/utils"],
+    "@wincode/utils": ["@wincode/utils@workspace:packages/utils"],
 
     "ansi-regex": ["ansi-regex@6.3.0", "", {}, "sha512-WpDfL7NO6j7tH88IDBNVdUJxDh9nmCteAVW9dsep846XdwF4naCBK+/tGLX3KJgcpgMRXCFlTM2hKGoK9FsdrQ=="],
 

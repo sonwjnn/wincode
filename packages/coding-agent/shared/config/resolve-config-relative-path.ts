@@ -1,5 +1,5 @@
 import { dirname, resolve } from "node:path";
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 import type { ConfigScope, ConfigSnapshot } from "./config-store";
 
 export type ResolvedConfigPath = {

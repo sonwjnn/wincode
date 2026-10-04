@@ -1,5 +1,5 @@
 import { expect, mock, test } from "bun:test";
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 import type { SessionApproval } from "@/modules/sessions/agent-session/types";
 import type { SessionApprovalOutcome } from "@/modules/sessions/approval-contract";
 import { projectSessionApprovals } from "@/modules/sessions/approval-projection";

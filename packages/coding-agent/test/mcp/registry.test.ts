@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CallToolResult } from "@modelcontextprotocol/client";
 import { fromAny } from "@total-typescript/shoehorn";
-import { isNull, isUndefined } from "@wincode/runtime-utils";
+import { isNull, isUndefined } from "@wincode/utils";
 import type { McpClient, McpClientTool } from "@/modules/mcp/client";
 import type {
 	LocalMcpServerConfig,

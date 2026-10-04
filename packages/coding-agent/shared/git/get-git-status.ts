@@ -1,4 +1,4 @@
-import { isNull, isUndefined } from "@wincode/runtime-utils";
+import { isNull, isUndefined } from "@wincode/utils";
 
 type BunSpawnProcess = {
 	exited: Promise<number>;

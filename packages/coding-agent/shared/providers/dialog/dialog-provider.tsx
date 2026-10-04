@@ -1,7 +1,7 @@
 import type { BoxRenderable } from "@opentui/core";
 import { RGBA, TextAttributes } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
-import { isNull, isUndefined } from "@wincode/runtime-utils";
+import { isNull, isUndefined } from "@wincode/utils";
 import type { ReactNode } from "react";
 import {
 	createContext,

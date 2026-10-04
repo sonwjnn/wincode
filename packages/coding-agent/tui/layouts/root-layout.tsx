@@ -10,6 +10,7 @@ import {
 	createPermissionService,
 	PermissionServiceProvider,
 } from "@/modules/permissions";
+import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
 import { CopyOnSelectFromSettings } from "@/modules/settings";
 import { resolveWorkspaceRoot } from "@/modules/tools";
 import { parseCliOptions } from "@/shared/cli-options";
@@ -37,6 +38,7 @@ const configContext = Object.freeze({
 const mcpRegistry = createMcpRegistry({ configStore, workspace });
 const permissionService = createPermissionService(parseCliOptions(args));
 setInteractiveCleanup(async () => {
+	await getInteractiveSessionHostManager().shutdownAll();
 	await mcpRegistry.close();
 });
 

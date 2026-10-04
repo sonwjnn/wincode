@@ -21,14 +21,18 @@ import {
 	type ReasoningMode,
 	type ReasoningSelection,
 } from "@wincode/ai/models";
-import { getErrorMessage } from "@wincode/runtime-utils";
+import { getErrorMessage } from "@wincode/utils";
 import { resolveWorkspaceRoot } from "@/modules/tools";
 import type { AgentRegistry } from "../../../modules/agents/registry";
 import { createPermissionService } from "../../../modules/permissions/permission-service";
+import type { DelegationTask } from "../../../modules/sessions/delegation/types";
 import type { SessionCapabilitiesAssembly } from "../../../modules/sessions/host/session-capabilities";
 import { createSessionCapabilities } from "../../../modules/sessions/host/session-capabilities";
-import { createSessionHost } from "../../../modules/sessions/host/session-host";
-import type { SessionHost } from "../../../modules/sessions/host/types";
+import type {
+	SessionHost,
+	SessionHostManager,
+	SessionHostManagerEvent,
+} from "../../../modules/sessions/host/types";
 import type { SessionMessage } from "../../../modules/sessions/message";
 import { createSessionUserMessage } from "../../../modules/sessions/message";
 import type { ResolvedSessionSelection } from "../../../modules/sessions/selection";
@@ -319,6 +323,27 @@ const emitJsonEvent = (
 ): void => {
 	context.stdout.write(`${JSON.stringify(projectAgentEvent(event))}\n`);
 };
+const emitJsonManagerEvent = (
+	context: ApplicationContext,
+	event: SessionHostManagerEvent
+): void => {
+	if (event.type === "session-approval-notice") {
+		return;
+	}
+	const projected =
+		event.type === "agent-turn-event"
+			? {
+					event: projectAgentEvent(event.event),
+					sessionId: event.sessionId,
+					type: "delegated-agent-turn-event",
+				}
+			: {
+					...(event.report === undefined ? {} : { report: event.report }),
+					task: event.task,
+					type: "delegation-task",
+				};
+	context.stdout.write(`${JSON.stringify(projected)}\n`);
+};
 const initializeOneShotSession = async (
 	context: ApplicationContext,
 	assembly: SessionCapabilitiesAssembly,
@@ -392,7 +417,9 @@ const runOneShot = async (
 		workspace,
 	});
 	let host: SessionHost | undefined;
+	let manager: SessionHostManager | undefined;
 	let removeEventListener: (() => void) | undefined;
+	let removeManagerEventListener: (() => void) | undefined;
 	let terminalFailureMessage: string | undefined;
 	let terminalSucceeded = false;
 	try {
@@ -401,7 +428,8 @@ const runOneShot = async (
 			assembly,
 			text
 		);
-		host = await createSessionHost({
+		manager = assembly.capabilities.getSessionHostManager();
+		host = await manager.openHost({
 			capabilities: assembly.capabilities,
 			executionMode: format,
 			sessionId,
@@ -416,6 +444,31 @@ const runOneShot = async (
 			restored,
 			reasoningModeOption: context.invocation.reasoningMode,
 		});
+		const taskSessions = new Set<SessionId>([sessionId]);
+		const seenTaskStatuses = new Map<
+			DelegationTask["id"],
+			DelegationTask["status"]
+		>();
+		if (format === "json") {
+			removeManagerEventListener = manager.onEvent((event) => {
+				if (
+					event.type === "agent-turn-event" &&
+					event.sessionId !== sessionId &&
+					taskSessions.has(event.sessionId)
+				) {
+					emitJsonManagerEvent(context, event);
+					return;
+				}
+				if (
+					event.type === "delegation-task" &&
+					taskSessions.has(event.task.parentSessionId)
+				) {
+					taskSessions.add(event.task.childSessionId);
+					seenTaskStatuses.set(event.task.id, event.task.status);
+					emitJsonManagerEvent(context, event);
+				}
+			});
+		}
 		removeEventListener = host.onEvent((event) => {
 			if (
 				event.type === "agent-turn-completed" ||
@@ -445,6 +498,30 @@ const runOneShot = async (
 			if (outcome.rejected) {
 				throw new Error(outcome.reason);
 			}
+			const tasks = await manager.waitForDelegatedTasks(
+				assembly.store,
+				sessionId
+			);
+			for (const task of tasks) {
+				if (seenTaskStatuses.get(task.id) !== task.status) {
+					seenTaskStatuses.set(task.id, task.status);
+					taskSessions.add(task.childSessionId);
+					if (format === "json") {
+						emitJsonManagerEvent(context, {
+							task,
+							type: "delegation-task",
+						});
+					}
+				}
+			}
+			const unfinishedTask = tasks.find((task) => task.status !== "succeeded");
+			if (unfinishedTask !== undefined) {
+				terminalSucceeded = false;
+				terminalFailureMessage =
+					unfinishedTask.status === "awaiting_report"
+						? `Delegation Task ${unfinishedTask.id} is awaiting_report. One-Shot mode will not continue the parent Session automatically; submit its report explicitly.`
+						: `Delegation Task ${unfinishedTask.id} ended with status '${unfinishedTask.status}'.`;
+			}
 			if (!terminalSucceeded) {
 				if (format === "json" && terminalFailureMessage !== undefined) {
 					return { terminalFailureMessage, terminalSucceeded: false };
@@ -459,7 +536,7 @@ const runOneShot = async (
 		return { terminalSucceeded };
 	} finally {
 		removeEventListener?.();
-		await host?.shutdown();
+		removeManagerEventListener?.();
 		await assembly.shutdown();
 	}
 };
