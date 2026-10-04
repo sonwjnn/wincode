@@ -2,6 +2,7 @@ import { useCallback, useMemo } from "react";
 import { useConfig } from "@/shared/config/config-provider";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useCopyOnSelectSettings } from "./copy-on-select-settings";
+import { useHideThinkingSettings } from "./hide-thinking-settings";
 import { createSettingsOperations } from "./operations";
 import { SettingsDialogContent } from "./settings-dialog";
 import type { SettingRuntimeContext, SettingsOperations } from "./types";
@@ -15,6 +16,7 @@ export function useSettingsOperations(
 ): SettingsOperations {
 	const config = useConfig();
 	const copyOnSelectSettings = useCopyOnSelectSettings();
+	const hideThinkingSettings = useHideThinkingSettings();
 	return useMemo(
 		() =>
 			createSettingsOperations({
@@ -25,6 +27,10 @@ export function useSettingsOperations(
 						runtime.onCopyOnSelectChanged?.(enabled);
 						copyOnSelectSettings?.setEnabled(enabled);
 					},
+					onHideThinkingChanged: (hidden) => {
+						runtime.onHideThinkingChanged?.(hidden);
+						hideThinkingSettings?.setHidden(hidden);
+					},
 				},
 				workspace: config.workspace,
 			}),
@@ -32,6 +38,7 @@ export function useSettingsOperations(
 			config.configStore,
 			config.workspace,
 			copyOnSelectSettings?.setEnabled,
+			hideThinkingSettings?.setHidden,
 			runtime,
 		]
 	);

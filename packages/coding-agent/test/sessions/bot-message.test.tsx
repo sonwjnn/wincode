@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { TextAttributes } from "@opentui/core";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { fromAny } from "@total-typescript/shoehorn";
@@ -1012,8 +1013,57 @@ describe("BotMessageContent", () => {
 			4
 		);
 
-		expect(frame).toContain("Thinking:");
+		expect(frame).not.toContain("Thinking:");
 		expect(frame).toContain("The model is still thinking.");
+	});
+
+	test("renders thinking as italic Markdown without a Thinking prefix", async () => {
+		const previousTreeSitterClient = setMarkdownTreeSitterClientForTests(null);
+		const setup = await testRender(
+			<ThemeProvider>
+				<KeyboardLayerProvider>
+					<ApprovalPanelsProvider>
+						<BotMessageContent
+							parts={[
+								{
+									text: "**Evaluating alias management**\n\nChecking the `asset` alias.",
+									type: "reasoning",
+								},
+							]}
+						/>
+					</ApprovalPanelsProvider>
+				</KeyboardLayerProvider>
+			</ThemeProvider>,
+			{ height: 8, width: 120 }
+		);
+
+		try {
+			await flushRenderPasses(setup);
+			const frame = setup.captureCharFrame();
+			const bodySpans = setup
+				.captureSpans()
+				.lines.flatMap((line) => line.spans)
+				.filter(({ text }) =>
+					["Evaluating", "Checking", "asset"].some((word) =>
+						text.includes(word)
+					)
+				);
+
+			expect(frame).toContain("Evaluating alias management");
+			expect(frame).not.toContain("**");
+			expect(frame).not.toContain("`");
+			expect(frame).not.toContain("Thinking:");
+			expect(bodySpans.length).toBeGreaterThan(0);
+			expect(
+				bodySpans.every(
+					// biome-ignore lint/suspicious/noBitwiseOperators: OpenTUI attributes are bit flags.
+					({ attributes }) => (attributes & TextAttributes.ITALIC) !== 0
+				)
+			).toBe(true);
+		} finally {
+			act(() => setup.renderer.destroy());
+			setMarkdownTreeSitterClientForTests(previousTreeSitterClient);
+		}
 	});
 
 	test("renders repeated tool call ids", async () => {

@@ -16,6 +16,7 @@ export type SettingRuntimeContext = {
 	readonly editMode?: EditMode;
 	readonly model?: ChatModelSelection;
 	readonly onCopyOnSelectChanged?: (enabled: boolean) => void;
+	readonly onHideThinkingChanged?: (hidden: boolean) => void;
 	readonly onEditModeChanged?: (mode: EditMode) => void;
 	readonly sessionId?: string;
 	readonly setEditMode?: (mode: EditMode) => Promise<void>;
