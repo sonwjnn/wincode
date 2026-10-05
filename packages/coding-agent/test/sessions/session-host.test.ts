@@ -2283,6 +2283,8 @@ test("delivers child reports after busy parent work and before queued submission
 		);
 		expect(checkpointMessageIndex).toBeLessThan(reportMessageIndex);
 		expect(reportMessageIndex).toBeLessThan(responseMessageIndex);
+		const reportMessage = durableTranscript[reportMessageIndex];
+		expect(reportMessage?.metadata?.joinedTurnId).toBe(task.parentTurnId);
 		expect(
 			await store.listPendingDelegationReports(parentSessionId)
 		).toHaveLength(0);

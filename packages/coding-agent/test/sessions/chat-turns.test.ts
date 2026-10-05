@@ -181,6 +181,38 @@ test("keeps ordinary user, tool, and assistant rows in one rendered turn", () =>
 		[sessionMessageId("user-2")],
 	]);
 });
+test("renders an in-turn report before its answer without a spurious retry", () => {
+	const parentPrompt = user("parent-prompt");
+	const inTurnReport: SessionMessage = {
+		...user("report"),
+		metadata: { joinedTurnId: agentTurnId("parent-turn") },
+	};
+	const answer: SessionMessage = {
+		...assistant("parent-answer"),
+		metadata: { sourceUserMessageId: parentPrompt.id },
+	};
+	const messages = [
+		parentPrompt,
+		assistant("parent-progress"),
+		inTurnReport,
+		answer,
+	];
+
+	expect(
+		groupMessagesBySessionTurn(messages).map((turn) =>
+			turn.messages.map(({ id }) => id)
+		)
+	).toEqual([
+		[
+			sessionMessageId("parent-prompt"),
+			sessionMessageId("parent-progress"),
+			sessionMessageId("report"),
+			sessionMessageId("parent-answer"),
+		],
+	]);
+	expect(resolveRetryMessageId(messages)).toBeUndefined();
+});
+
 test("attaches a retried result to its logical user turn", () => {
 	const retryResult: SessionMessage = {
 		...assistant("assistant-retry"),

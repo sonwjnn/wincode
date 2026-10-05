@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Interactive/RPC restores continuation from that durable report record.
   An explicit parent interrupt keeps pending report continuation paused across
   reopen until the user resumes.
+  An active-turn report joins the parent turn in transcript order, avoiding a
+  spurious Retry action after a successful response.
 
 - **Thinking and user messages render Markdown in the transcript.** Thinking
   blocks keep provider-supplied content, render in italics without a `Thinking:`

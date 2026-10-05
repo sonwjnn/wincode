@@ -157,7 +157,8 @@ type BusyDelegationReportOutcome =
 const prepareDelegationReport = (
 	report: DelegationReportEnvelope,
 	selection: DelegationReportSelection,
-	turnId: AgentTurnId
+	turnId: AgentTurnId,
+	joinedTurnId?: AgentTurnId
 ): PreparedDelegationReport => {
 	const reportText = [
 		`Durable report for delegated Task ${report.taskId} from child Session ${report.childSessionId}.`,
@@ -169,6 +170,7 @@ const prepareDelegationReport = (
 		model: selection.model,
 		...omitUndefined({
 			effort: selection.effort,
+			joinedTurnId,
 			reasoningMode: selection.reasoningMode,
 		}),
 	});
@@ -1849,6 +1851,7 @@ export class AgentSessionImpl implements AgentSession {
 		};
 		const consumeBusyDelegationReport = async (
 			report: DelegationReportEnvelope,
+			joinedTurnId: AgentTurnId,
 			assistantCheckpoint?: SessionRecord
 		): Promise<BusyDelegationReportOutcome> => {
 			const resolved = resolveBusyReportSelection();
@@ -1858,7 +1861,8 @@ export class AgentSessionImpl implements AgentSession {
 			const prepared = prepareDelegationReport(
 				report,
 				resolved.selection,
-				resolved.turnId
+				resolved.turnId,
+				joinedTurnId
 			);
 			try {
 				await waitForSessionRecordCommits();
@@ -1951,6 +1955,7 @@ export class AgentSessionImpl implements AgentSession {
 			for (const report of reports) {
 				const outcome = await consumeBusyDelegationReport(
 					report,
+					execution.turnId,
 					createAssistantCheckpoint(execution)
 				);
 				if (outcome.kind === "stale") {
