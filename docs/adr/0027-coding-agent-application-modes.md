@@ -4,6 +4,8 @@ Status: accepted
 
 Wincode's private application boundary is `@wincode/coding-agent`, which owns the `wincode` executable entrypoint, application composition, and four peer execution modes: Interactive, Print, JSON, and RPC. A bare invocation runs Interactive Mode; `--mode`/`-m` selects a non-interactive mode, while `--prompt`/`-p` supplies one-shot input. This supersedes ADR-0011's separate `@wincode/cli` → `@wincode/tui` application boundary without changing the reusable `@wincode/agent-core` boundary.
 
+Mode-lifetime revision: ADR-0035 requires Print and JSON to wait for active delegated tasks after the initial Agent Turn, identifies child events in JSON output, and makes external RPC able to switch among concurrently running Sessions without shutting them down. The one-Host-per-RPC-process and one-shot terminal-turn-exit clauses below are superseded.
+
 ## Decision
 
 - `@wincode/coding-agent` replaces the private `@wincode/cli` and `@wincode/tui` packages. Inside the package, `bin/` is the executable composition root, `tui/` is the Interactive adapter, and `modules/application/` owns mode orchestration. The package also owns CLI parsing, help/version, process exit-status mapping, OpenTUI, persistence, connections, MCP, permissions, Session Hosts, and mode adapters.

@@ -2,6 +2,8 @@
 
 Status: accepted
 
+Ownership revision: ADR-0035 moves the sole live conversation-state owner to the Stateful Agent in `@wincode/agent-core`. The `AgentSession` class no longer owns an independent copy of that state; the prompt, FIFO steering, durable acceptance, continuation, and failure contracts recorded below remain accepted.
+
 The session state owner in `@wincode/coding-agent` is an Agent Session. One
 Agent Session owns the Session Context, Session Transcript, committed pending
 and failed Steering Messages, transient Submission Queue, approvals, compaction

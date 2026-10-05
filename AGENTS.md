@@ -6,15 +6,18 @@
 
 ### Package Structure
 
-| Package                         | Description                                                        |
-| ------------------------------- | ------------------------------------------------------------------ |
-| `packages/agent-core`           | Agent Turns, records, events, runtime and generic tool contracts  |
-| `packages/ai`                   | Model catalog, Multi-provider LLM client with streaming support                                                     |
-| `packages/coding-agent`         | Main CLI application, including Skills and concrete coding tools   |
-| `packages/config`               | Shared configuration contracts and loaders                         |
-| `packages/utils`               | Shared utilities                                                   |
+
+| Package                 | Description                                                      |
+| ----------------------- | ---------------------------------------------------------------- |
+| `packages/agent-core`   | Agent Turns, records, events, runtime and generic tool contracts |
+| `packages/ai`           | Model catalog, Multi-provider LLM client with streaming support  |
+| `packages/coding-agent` | Main CLI application, including Skills and concrete coding tools |
+| `packages/config`       | Shared configuration contracts and loaders                       |
+| `packages/utils`        | Shared utilities                                                 |
+
 
 ---
+
 ## GitHub
 
 ### Pull requests
@@ -23,6 +26,7 @@ When authorized to create or edit a PR, follow the checklist below.
 
 - MUST `.github/pull_request_template.md` first. Preserve the template sections and checklist, including when shortening an existing description.
 - MUST read back the published PR description after creating or editing it. Check only verified checklist items; explain skipped or inapplicable checks in `Testing`.
+
 ---
 
 ## Code Quality
@@ -40,6 +44,7 @@ When authorized to create or edit a PR, follow the checklist below.
 ---
 
 ## Commands
+
 - NEVER commit unless asked.
 - NEVER use `tsc/npx tsc` — always `bun check`
 - Most formatting and common issues are automatically fixed. Run it before committing to ensure compliance - `bun fix`
@@ -57,9 +62,10 @@ state transition, error mapping, precedence rule, or regression-prone boundary, 
 its name or nearby rationale must state the consumer-visible failure mode. If you cannot name the contract, **DO NOT** add the test.
 
 ---
+
 ## Central Utilities
 
-Before writing a helper, check whether one already exists — `packages/coding-agent/shared/utils/`, `@wincode/runtime-utils`, and the domain modules next to your callsite. This applies to **everything**.
+Before writing a helper, check whether one already exists — `packages/coding-agent/shared/utils/`, `@wincode/utils`, and the domain modules next to your callsite. This applies to **everything**.
 
 - Search first: `grep` for the operation before implementing it. Two implementations of the same thing is a bug even when both work.
 - Missing capability? Extend the central helper (new option, new sub-function on the namespace) and call it — don't fork its logic locally.
@@ -72,28 +78,29 @@ Prefer Bun-native APIs whenever they preserve the required observable behavior; 
 
 ### Quick reference
 
-| Operation       | Use                                       | Not                                |
-| --------------- | ----------------------------------------- | ---------------------------------- |
-| File read/write | `readUtf8File()` / `decodeUtf8()` (`@wincode/runtime-utils`); `Bun.file().bytes()`, `Bun.write()` | `readFileSync`, `writeFileSync` |
-| Spawn process   | `$cmd`, `Bun.spawn()`                     | `child_process`                    |
-| Sleep           | `Bun.sleep(ms)`                           | `setTimeout` promise               |
-| Binary lookup   | `$which("git")` from `@oh-my-pi/pi-utils` | `spawnSync(["which", "git"])`      |
-| HTTP server     | `Bun.serve()`                             | `http.createServer()`              |
-| SQLite          | `bun:sqlite`                              | `better-sqlite3`                   |
-| Hashing         | `Bun.CryptoHasher` / Web Crypto (cryptographic); `Bun.hash` (non-cryptographic); `Bun.password.*` (passwords) | `node:crypto` when an equivalent Bun API exists |
-| UUID generation | `crypto.randomUUID()`                   | `node:crypto.randomUUID()` when Bun exposes the same contract |
-| Base64          | `Uint8Array.fromBase64()` / `.toBase64()` for validated data | `Buffer.from(..., "base64")` when permissive decoding is required |
-| Path resolution | `import.meta.dir`, `import.meta.path` for current module | `fileURLToPath(import.meta.url)` |
-| JSON5           | `Bun.JSON5.parse()` / `.stringify()`      | `json5` package                    |
-| JSONL           | `Bun.JSONL.parse()` / `.parseChunk()`     | `text.split("\n").map(JSON.parse)` |
-| Deep equality   | `Bun.deepEquals(a, b, true)` for strict JSON-shaped values | `node:util.isDeepStrictEqual` when Bun preserves the needed semantics |
-| String width    | `Bun.stringWidth()`                       | `get-east-asian-width`, custom     |
-| Text wrapping   | `Bun.wrapAnsi()` when word, whitespace, and Unicode boundaries match | custom layout semantics |
+
+| Operation       | Use                                                                                                           | Not                                                                   |
+| --------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| File read/write | `readUtf8File()` / `decodeUtf8()` (`@wincode/utils`); `Bun.file().bytes()`, `Bun.write()`             | `readFileSync`, `writeFileSync`                                       |
+| Spawn process   | `$cmd`, `Bun.spawn()`                                                                                         | `child_process`                                                       |
+| Sleep           | `Bun.sleep(ms)`                                                                                               | `setTimeout` promise                                                  |
+| Binary lookup   | `$which("git")` from `@oh-my-pi/pi-utils`                                                                     | `spawnSync(["which", "git"])`                                         |
+| HTTP server     | `Bun.serve()`                                                                                                 | `http.createServer()`                                                 |
+| SQLite          | `bun:sqlite`                                                                                                  | `better-sqlite3`                                                      |
+| Hashing         | `Bun.CryptoHasher` / Web Crypto (cryptographic); `Bun.hash` (non-cryptographic); `Bun.password.*` (passwords) | `node:crypto` when an equivalent Bun API exists                       |
+| UUID generation | `crypto.randomUUID()`                                                                                         | `node:crypto.randomUUID()` when Bun exposes the same contract         |
+| Base64          | `Uint8Array.fromBase64()` / `.toBase64()` for validated data                                                  | `Buffer.from(..., "base64")` when permissive decoding is required     |
+| Path resolution | `import.meta.dir`, `import.meta.path` for current module                                                      | `fileURLToPath(import.meta.url)`                                      |
+| JSON5           | `Bun.JSON5.parse()` / `.stringify()`                                                                          | `json5` package                                                       |
+| JSONL           | `Bun.JSONL.parse()` / `.parseChunk()`                                                                         | `text.split("\n").map(JSON.parse)`                                    |
+| Deep equality   | `Bun.deepEquals(a, b, true)` for strict JSON-shaped values                                                    | `node:util.isDeepStrictEqual` when Bun preserves the needed semantics |
+| String width    | `Bun.stringWidth()`                                                                                           | `get-east-asian-width`, custom                                        |
+| Text wrapping   | `Bun.wrapAnsi()` when word, whitespace, and Unicode boundaries match                                          | custom layout semantics                                               |
+
 
 `Bun.file(path).text()` strips a leading UTF-8 BOM, unlike Node UTF-8 reads. Use `readUtf8File()` when preserving that behavior; `Bun.write()` creates missing parent directories and does not provide Node's exclusive, permission, or append semantics.
 
 `import.meta.path` identifies only the current module; use `fileURLToPath()` for a resolved asset URL when an OS path is required.
-
 
 ### Process execution
 
@@ -150,7 +157,6 @@ Use `node:fs/promises` for directory ops (`fs.mkdir`, `fs.rm`, `fs.readdir`) —
 
 - `existsSync`/`readFileSync`/`writeFileSync` in async code → Bun.file() APIs.
 - `mkdir(dirname(path), …)` before `Bun.write(path, …)` → redundant; Bun.write handles it.
-
 - Multiple `Bun.file(path)` handles for the same path (including across `checkX`/`loadX` helpers).
 - `Buffer.from(await Bun.file(x).arrayBuffer())` → `await fs.readFile(path)`.
 - Existence check + try-catch around the same read → drop the existence check.
@@ -163,6 +169,24 @@ Use `node:fs/promises` for directory ops (`fs.mkdir`, `fs.rm`, `fs.readdir`) —
 - **Password hashing**: `Bun.password.hash(pw, "bcrypt")` / `Bun.password.verify(pw, hash)`.
 - **String width**: `Bun.stringWidth(text, { countAnsiEscapeCodes?: false })`.
 - **Wrapping**: `Bun.wrapAnsi(text, width, { wordWrap, hard, trim })`.
+
+---
+
+## Logging and CLI Output
+
+Code that may run while the TUI, RPC or background runtimes are active **MUST NOT** use `console.log`/`error`/`warn`; it corrupts rendering or protocols. Use the centralized logger:
+
+```
+import { logger } from "@wincode/utils";
+
+logger.error("MCP request failed", { url, method });
+logger.warn("Theme file invalid, using fallback", { path });
+logger.debug("LSP fallback triggered", { reason });
+```
+
+Logs go to `~/.wincode/logs/wincode.YYYY-MM-DD.log`  or with WINCODE_DEBUG go to `./.wincode/logs/wincode.YYYY-MM-DD.log` with automatic rotation. Standalone CLI commands that exit without entering the TUI MAY use `console.*` or process streams for intentional user-facing output. Keep structured stdout clean. This exception is semantic, not filename-based; shared code must use `logger` or an explicit output sink.
+
+---
 
 ## Persistence rule
 
