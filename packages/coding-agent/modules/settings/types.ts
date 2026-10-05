@@ -15,7 +15,7 @@ export type SettingPersistence = "config" | "runtime" | "session";
 export type SettingRuntimeContext = {
 	readonly editMode?: EditMode;
 	readonly model?: ChatModelSelection;
-	readonly onCopyOnSelectChanged?: (enabled: boolean) => void;
+	readonly onRegisteredSettingChanged?: (id: string, value: unknown) => void;
 	readonly onEditModeChanged?: (mode: EditMode) => void;
 	readonly sessionId?: string;
 	readonly setEditMode?: (mode: EditMode) => Promise<void>;
@@ -51,6 +51,16 @@ export type SettingRendererProps<Value> = {
 	readonly resolution: SettingResolution<Value>;
 };
 
+export type SettingsRegistryMetadata<Value> = {
+	readonly defaultValue: Value;
+	readonly path: readonly string[];
+};
+export type SettingRegistryItem<Value, Id extends string = string> = {
+	readonly id: Id;
+	readonly registry: SettingsRegistryMetadata<Value>;
+	readonly validate: (value: unknown) => value is Value;
+};
+
 type SettingDescriptorBase<Value, Kind extends SettingKind> = {
 	readonly description: string;
 	readonly section: string;
@@ -66,6 +76,7 @@ type SettingDescriptorBase<Value, Kind extends SettingKind> = {
 	readonly scope: SettingScope;
 	readonly persistence: SettingPersistence;
 	readonly requiredContext: SettingContextRequirement;
+	readonly registry?: SettingsRegistryMetadata<Value>;
 	readonly validate: (value: unknown) => value is Value;
 	readonly write: (
 		value: unknown,
@@ -98,6 +109,50 @@ export type SettingDescriptor =
 	| BooleanSettingDescriptor
 	| CustomSettingDescriptor
 	| SelectSettingDescriptor;
+
+export type SettingDescriptorValue<Descriptor extends SettingDescriptor> =
+	Descriptor extends {
+		readonly read: (
+			snapshot: ConfigSnapshot,
+			runtime: SettingRuntimeContext
+		) => SettingResolution<infer Value>;
+	}
+		? Value
+		: never;
+
+export type SettingsRegistryDescriptor<
+	Descriptor extends SettingDescriptor,
+	Id extends string = string,
+> = Descriptor &
+	SettingRegistryItem<SettingDescriptorValue<Descriptor>, Id> & {
+		readonly persistence: "config";
+		readonly requiredContext: "none";
+		readonly scope: "global";
+	};
+
+export type RegisteredSettingDescriptor<
+	Descriptor extends SettingDescriptor = SettingDescriptor,
+> = Descriptor & {
+	readonly persistence: "config";
+	readonly registry: SettingsRegistryMetadata<
+		SettingDescriptorValue<Descriptor>
+	>;
+	readonly requiredContext: "none";
+	readonly scope: "global";
+};
+
+export function isRegisteredSettingDescriptor<
+	Descriptor extends SettingDescriptor,
+>(
+	descriptor: Descriptor
+): descriptor is RegisteredSettingDescriptor<Descriptor> {
+	return (
+		descriptor.persistence === "config" &&
+		descriptor.registry !== undefined &&
+		descriptor.requiredContext === "none" &&
+		descriptor.scope === "global"
+	);
+}
 
 export type SettingsCatalog = readonly SettingDescriptor[];
 

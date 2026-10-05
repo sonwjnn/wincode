@@ -1,13 +1,13 @@
 import { isUndefined, omitUndefined } from "@wincode/utils";
 import type { ConfigSnapshot, ConfigStore } from "@/shared/config/config-store";
 import { SETTINGS_CATALOG } from "./catalog";
-import type {
-	ResolvedSetting,
-	SettingDescriptor,
-	SettingOperationContext,
-	SettingRuntimeContext,
-	SettingsCatalog,
-	SettingsOperations,
+import {
+	isRegisteredSettingDescriptor,
+	type ResolvedSetting,
+	type SettingDescriptor,
+	type SettingRuntimeContext,
+	type SettingsCatalog,
+	type SettingsOperations,
 } from "./types";
 
 export type SettingsOperationsDependencies = {
@@ -17,10 +17,9 @@ export type SettingsOperationsDependencies = {
 	readonly workspace: string;
 };
 
-type SettingsMutation = (
-	descriptor: SettingDescriptor,
-	context: SettingOperationContext
-) => Promise<void>;
+type SettingsMutation =
+	| { readonly kind: "reset" }
+	| { readonly kind: "set"; readonly value: unknown };
 
 const resolveSetting = (
 	descriptor: SettingDescriptor,
@@ -56,7 +55,7 @@ export const createSettingsOperations = ({
 
 	const runMutation = async (
 		id: string,
-		mutation: SettingsMutation
+		change: SettingsMutation
 	): Promise<ResolvedSetting> => {
 		const descriptor = findDescriptor(id);
 		const previous = mutationQueues[id] ?? Promise.resolve();
@@ -64,12 +63,27 @@ export const createSettingsOperations = ({
 			.catch(() => undefined)
 			.then(async () => {
 				const snapshot = await configStore.getSnapshot(workspace);
-				await mutation(descriptor, {
+				const context = {
 					configStore,
 					runtime,
 					snapshot,
 					workspace,
-				});
+				};
+				if (change.kind === "set") {
+					if (!descriptor.validate(change.value)) {
+						throw new Error(`${descriptor.label} received an invalid value.`);
+					}
+					await descriptor.write(change.value, context);
+				} else {
+					await descriptor.reset(context);
+				}
+				if (isRegisteredSettingDescriptor(descriptor)) {
+					const value =
+						change.kind === "set"
+							? change.value
+							: descriptor.registry.defaultValue;
+					runtime.onRegisteredSettingChanged?.(descriptor.id, value);
+				}
 				const refreshed = await configStore.refreshSnapshot(workspace);
 				return resolveSetting(descriptor, refreshed, runtime);
 			});
@@ -91,16 +105,7 @@ export const createSettingsOperations = ({
 				resolveSetting(descriptor, snapshot, runtime)
 			);
 		},
-		resetValue: (id) =>
-			runMutation(id, async (descriptor, context) => {
-				await descriptor.reset(context);
-			}),
-		setValue: (id, value) =>
-			runMutation(id, async (descriptor, context) => {
-				if (!descriptor.validate(value)) {
-					throw new Error(`${descriptor.label} received an invalid value.`);
-				}
-				await descriptor.write(value, context);
-			}),
+		resetValue: (id) => runMutation(id, { kind: "reset" }),
+		setValue: (id, value) => runMutation(id, { kind: "set", value }),
 	};
 };

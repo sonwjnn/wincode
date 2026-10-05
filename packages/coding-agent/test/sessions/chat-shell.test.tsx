@@ -1466,8 +1466,11 @@ describe("ChatShell shell output blocks", () => {
 			expect(frame).not.toContain("hidden-token");
 			expect(frame).not.toContain("safe 8");
 
-			setup.mockInput.pressKey("o", { ctrl: true });
-			await flushUi(setup);
+			await act(async () => {
+				setup.mockInput.pressKey("o", { ctrl: true });
+				await flushUi(setup);
+			});
+			await setup.flush({ maxPasses: 20 });
 			frame = setup.captureCharFrame();
 
 			expect(frame).toContain("[redacted]");

@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   An explicit parent interrupt keeps pending report continuation paused across
   reopen until the user resumes.
 
+- **Thinking and user messages render Markdown in the transcript.** Thinking
+  blocks keep provider-supplied content, render in italics without a `Thinking:`
+  prefix, and can be replaced by an italic `Thinking...` placeholder with the
+  global `Hide thinking` setting (`display.hideThinking`, off by default). User
+  messages render Markdown formatting as well.
+
 - **A view-scoped focus registry keeps the composer reachable.** Session and
   new-session views resolve composers by OpenTUI IDs instead of callback refs.
   Terminal activation and pointer movement restore focus; non-control background

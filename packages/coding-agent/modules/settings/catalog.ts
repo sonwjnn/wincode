@@ -26,12 +26,19 @@ import type {
 	SettingRuntimeContext,
 	SettingSource,
 	SettingsCatalog,
+	SettingsRegistryDescriptor,
+	SettingsRegistryMetadata,
 } from "./types";
 export const AUTO_COMPACT_SETTING_ID = "compaction.auto";
 export const AUTO_COMPACT_GLOBAL_PATH = ["compaction", "auto"] as const;
 const LEGACY_AUTO_COMPACT_PATH = ["auto"] as const;
+
+const AUTO_COMPACT_REGISTRY_ENTRY = {
+	defaultValue: DEFAULT_COMPACTION_SETTINGS.auto,
+	path: AUTO_COMPACT_GLOBAL_PATH,
+} as const;
 const AUTO_COMPACT_PATHS = [
-	AUTO_COMPACT_GLOBAL_PATH,
+	AUTO_COMPACT_REGISTRY_ENTRY.path,
 	LEGACY_AUTO_COMPACT_PATH,
 ] as const;
 const AUTO_COMPACT_DESCRIPTION =
@@ -215,7 +222,7 @@ const changeAutoCompact = async (
 			current = await context.configStore.setValue(
 				context.workspace,
 				"global",
-				AUTO_COMPACT_GLOBAL_PATH,
+				AUTO_COMPACT_REGISTRY_ENTRY.path,
 				value
 			);
 			current = await clearAutoCompactValues(context, current, markMutation, [
@@ -233,7 +240,7 @@ const changeAutoCompact = async (
 			context.workspace
 		);
 		const resolved = resolveCompactionSettings({ snapshot: refreshed });
-		const expected = value ?? DEFAULT_COMPACTION_SETTINGS.auto;
+		const expected = value ?? AUTO_COMPACT_REGISTRY_ENTRY.defaultValue;
 		if (resolved.resolved.auto !== expected) {
 			throw new Error(
 				`Auto-compact resolved to ${resolved.resolved.auto ? "on" : "off"} instead of the requested value.`
@@ -259,8 +266,12 @@ const changeAutoCompact = async (
 	}
 };
 
-export const AUTO_COMPACT_SETTING: BooleanSettingDescriptor = {
+export const AUTO_COMPACT_SETTING: SettingsRegistryDescriptor<
+	BooleanSettingDescriptor,
+	typeof AUTO_COMPACT_SETTING_ID
+> = {
 	description: AUTO_COMPACT_DESCRIPTION,
+	registry: AUTO_COMPACT_REGISTRY_ENTRY,
 	id: AUTO_COMPACT_SETTING_ID,
 	kind: "boolean",
 	label: "Auto-compact",
@@ -283,13 +294,22 @@ export const COPY_ON_SELECT_GLOBAL_PATH = [
 	"clipboard",
 	"copyOnSelect",
 ] as const;
-const COPY_ON_SELECT_PATHS = [COPY_ON_SELECT_GLOBAL_PATH] as const;
+export const HIDE_THINKING_SETTING_ID = "display.hideThinking";
+export const HIDE_THINKING_GLOBAL_PATH = ["display", "hideThinking"] as const;
+
+const COPY_ON_SELECT_REGISTRY_ENTRY = {
+	defaultValue: true,
+	path: COPY_ON_SELECT_GLOBAL_PATH,
+} as const;
+const HIDE_THINKING_REGISTRY_ENTRY = {
+	defaultValue: false,
+	path: HIDE_THINKING_GLOBAL_PATH,
+} as const;
 
 const getGlobalValueAtPath = (
 	snapshot: ConfigSnapshot,
 	configPath: readonly string[]
 ) => {
-	let found = false;
 	let value: unknown;
 	let sourcePath: string | undefined;
 	for (const source of snapshot.sources) {
@@ -298,29 +318,29 @@ const getGlobalValueAtPath = (
 		}
 		const entry = getValueAtPath(source.document, configPath);
 		if (entry.found) {
-			found = true;
 			value = entry.value;
 			sourcePath = source.path;
 		}
 	}
-	return { found, sourcePath, value };
+	return { sourcePath, value };
 };
 
-const readCopyOnSelect = (
-	snapshot: ConfigSnapshot
+const readGlobalBooleanSetting = (
+	snapshot: ConfigSnapshot,
+	preference: SettingsRegistryMetadata<boolean>
 ): SettingResolution<boolean> => {
-	const entry = getGlobalValueAtPath(snapshot, COPY_ON_SELECT_GLOBAL_PATH);
+	const entry = getGlobalValueAtPath(snapshot, preference.path);
 	if (!isBoolean(entry.value) || entry.sourcePath === undefined) {
 		return {
 			available: true,
 			source: { kind: "default" },
-			value: true,
+			value: preference.defaultValue,
 		};
 	}
 	return {
 		available: true,
 		source: {
-			configPath: COPY_ON_SELECT_GLOBAL_PATH,
+			configPath: preference.path,
 			kind: "config",
 			path: entry.sourcePath,
 			scope: "global",
@@ -329,14 +349,23 @@ const readCopyOnSelect = (
 	};
 };
 
-const changeCopyOnSelect = async (
-	value: boolean | undefined,
-	context: SettingOperationContext
-): Promise<void> => {
-	const previous = collectPersistedValues(
-		context.snapshot,
-		COPY_ON_SELECT_PATHS
-	).filter((entry) => entry.scope === "global");
+type GlobalBooleanSettingChange = {
+	readonly context: SettingOperationContext;
+	readonly label: string;
+	readonly preference: SettingsRegistryMetadata<boolean>;
+	readonly value: boolean | undefined;
+};
+
+const changeGlobalBooleanSetting = async ({
+	context,
+	label,
+	preference,
+	value,
+}: GlobalBooleanSettingChange): Promise<void> => {
+	const paths = [preference.path];
+	const previous = collectPersistedValues(context.snapshot, paths).filter(
+		(entry) => entry.scope === "global"
+	);
 	let mutated = false;
 	const markMutation = () => {
 		mutated = true;
@@ -346,49 +375,73 @@ const changeCopyOnSelect = async (
 			await clearPath(
 				context,
 				"global",
-				COPY_ON_SELECT_GLOBAL_PATH,
+				preference.path,
 				markMutation,
 				context.snapshot,
-				COPY_ON_SELECT_PATHS
+				paths
 			);
 		} else {
 			markMutation();
 			await context.configStore.setValue(
 				context.workspace,
 				"global",
-				COPY_ON_SELECT_GLOBAL_PATH,
+				preference.path,
 				value
 			);
 		}
-		context.runtime.onCopyOnSelectChanged?.(value ?? true);
 	} catch (error) {
 		if (mutated) {
 			try {
-				await restorePersistedValues(context, previous, COPY_ON_SELECT_PATHS, [
-					"global",
-				]);
+				await restorePersistedValues(context, previous, paths, ["global"]);
 			} catch (rollbackError) {
 				throw new Error(
-					`Could not save Copy on select: ${getErrorMessage(error, "Unknown settings error.")} Rollback failed: ${getErrorMessage(rollbackError, "Unknown settings error.")}`,
+					`Could not save ${label}: ${getErrorMessage(error, "Unknown settings error.")} Rollback failed: ${getErrorMessage(rollbackError, "Unknown settings error.")}`,
 					{ cause: error }
 				);
 			}
 		}
 		throw new Error(
-			`Could not save Copy on select: ${getErrorMessage(error, "Unknown settings error.")}`,
+			`Could not save ${label}: ${getErrorMessage(error, "Unknown settings error.")}`,
 			{ cause: error }
 		);
 	}
 };
 
-export const COPY_ON_SELECT_SETTING: BooleanSettingDescriptor = {
+const changeCopyOnSelect = (
+	value: boolean | undefined,
+	context: SettingOperationContext
+): Promise<void> =>
+	changeGlobalBooleanSetting({
+		context,
+		label: "Copy on select",
+		preference: COPY_ON_SELECT_REGISTRY_ENTRY,
+		value,
+	});
+
+const changeHideThinking = (
+	value: boolean | undefined,
+	context: SettingOperationContext
+): Promise<void> =>
+	changeGlobalBooleanSetting({
+		context,
+		label: "Hide thinking",
+		preference: HIDE_THINKING_REGISTRY_ENTRY,
+		value,
+	});
+
+export const COPY_ON_SELECT_SETTING: SettingsRegistryDescriptor<
+	BooleanSettingDescriptor,
+	typeof COPY_ON_SELECT_SETTING_ID
+> = {
 	description: "Copy selected terminal text to the clipboard automatically.",
+	registry: COPY_ON_SELECT_REGISTRY_ENTRY,
 	id: COPY_ON_SELECT_SETTING_ID,
 	kind: "boolean",
 	label: "Copy on select",
 	persistence: "config",
 	requiredContext: "none",
-	read: readCopyOnSelect,
+	read: (snapshot) =>
+		readGlobalBooleanSetting(snapshot, COPY_ON_SELECT_REGISTRY_ENTRY),
 	reset: (context) => changeCopyOnSelect(undefined, context),
 	scope: "global",
 	section: "Clipboard",
@@ -398,6 +451,32 @@ export const COPY_ON_SELECT_SETTING: BooleanSettingDescriptor = {
 			throw new Error("Copy on select must be a boolean.");
 		}
 		return changeCopyOnSelect(value, context);
+	},
+};
+
+export const HIDE_THINKING_SETTING: SettingsRegistryDescriptor<
+	BooleanSettingDescriptor,
+	typeof HIDE_THINKING_SETTING_ID
+> = {
+	description:
+		"Hide assistant thinking content in the conversation transcript.",
+	registry: HIDE_THINKING_REGISTRY_ENTRY,
+	id: HIDE_THINKING_SETTING_ID,
+	kind: "boolean",
+	label: "Hide thinking",
+	persistence: "config",
+	requiredContext: "none",
+	read: (snapshot) =>
+		readGlobalBooleanSetting(snapshot, HIDE_THINKING_REGISTRY_ENTRY),
+	reset: (context) => changeHideThinking(undefined, context),
+	scope: "global",
+	section: "Display",
+	validate: (value): value is boolean => isBoolean(value),
+	write: (value, context) => {
+		if (!isBoolean(value)) {
+			throw new Error("Hide thinking must be a boolean.");
+		}
+		return changeHideThinking(value, context);
 	},
 };
 
@@ -475,4 +554,5 @@ export const SETTINGS_CATALOG = [
 	AUTO_COMPACT_SETTING,
 	EDIT_MODE_SETTING,
 	COPY_ON_SELECT_SETTING,
+	HIDE_THINKING_SETTING,
 ] as const satisfies SettingsCatalog;

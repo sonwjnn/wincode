@@ -12,6 +12,7 @@ import { memo, type ReactNode, useMemo, useRef, useState } from "react";
 import type { UnknownRecord } from "type-fest";
 import { buildAgent } from "@/modules/agents";
 import type { SessionMessage } from "@/modules/sessions/message";
+import { useHideThinking } from "@/modules/settings/hide-thinking-settings";
 import {
 	type CodingToolRecovery,
 	isCodingToolRecovery,
@@ -679,6 +680,7 @@ export function BotMessageContent({
 	parts: SessionMessage["parts"];
 }) {
 	const { colors } = useTheme();
+	const hideThinking = useHideThinking();
 	const groups = groupConsecutiveParts(parts).filter(
 		(group) => group.type !== "step-start"
 	);
@@ -697,43 +699,63 @@ export function BotMessageContent({
 					}
 					width="100%"
 				>
-					{group.parts.map((part, index) => {
-						if (part.type === "reasoning") {
-							return (
+					{group.type === "reasoning" ? (
+						<box marginBottom={1} width="100%">
+							{hideThinking ? (
 								<box
-									key={getContentPartKey(part, index)}
-									marginBottom={1}
+									backgroundColor={colors.background}
 									paddingX={3}
 									width="100%"
 								>
 									<text fg={colors.thinkingText}>
-										<em fg={colors.thinking}>Thinking:</em> {part.text}
+										<em>Thinking...</em>
 									</text>
 								</box>
-							);
-						}
-
-						if (isToolPart(part)) {
-							return (
-								<MemoizedToolMessagePart
-									agent={agent}
-									key={getToolKey(part, index)}
-									part={part}
-								/>
-							);
-						}
-
-						if (part.type === "text") {
-							return (
+							) : (
 								<MarkdownMessagePart
-									key={getContentPartKey(part, index)}
-									text={part.text}
+									text={group.parts.reduce((text, part) => {
+										if (
+											part.type !== "reasoning" ||
+											part.text.trim().length === 0
+										) {
+											return text;
+										}
+										return text.length === 0
+											? part.text
+											: `${text}\n\n${part.text}`;
+									}, "")}
+									variant="thinking"
 								/>
-							);
-						}
+							)}
+						</box>
+					) : (
+						group.parts.map((part, index) => {
+							if (part.type === "reasoning") {
+								return null;
+							}
 
-						return null;
-					})}
+							if (isToolPart(part)) {
+								return (
+									<MemoizedToolMessagePart
+										agent={agent}
+										key={getToolKey(part, index)}
+										part={part}
+									/>
+								);
+							}
+
+							if (part.type === "text") {
+								return (
+									<MarkdownMessagePart
+										key={getContentPartKey(part, index)}
+										text={part.text}
+									/>
+								);
+							}
+
+							return null;
+						})
+					)}
 				</box>
 			))}
 		</box>
