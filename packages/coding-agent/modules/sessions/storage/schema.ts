@@ -4,6 +4,7 @@ import type {
 	Effort,
 	ReasoningMode,
 } from "@wincode/ai/models";
+import { sql } from "drizzle-orm";
 import {
 	index,
 	integer,
@@ -52,6 +53,11 @@ export const session = sqliteTable(
 		}),
 		title: text("title"),
 		pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
+		reportContinuationPaused: integer("report_continuation_paused", {
+			mode: "boolean",
+		})
+			.notNull()
+			.default(sql`0`),
 		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 		updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 		lastMessageAt: integer("last_message_at", { mode: "timestamp_ms" }),

@@ -1,6 +1,6 @@
 import { AgentInvariantError } from "./errors";
 import type { AgentTurnEvent, AgentTurnTerminalEvent } from "./events";
-import { toSessionMessageId } from "./identifiers";
+import { agentTurnAssistantMessageId, toSessionMessageId } from "./identifiers";
 import type {
 	AgentRuntime,
 	AgentRuntimeRunOptions,
@@ -13,6 +13,8 @@ import type {
 	AgentTurnPart,
 } from "./turn";
 
+const EMPTY_AGENT_TURN_MESSAGES: readonly AgentTurnMessage[] = [];
+
 export type StatefulAgentSnapshot = Readonly<{
 	activeTurnId: AgentTurnId | null;
 	closed: boolean;
@@ -23,6 +25,10 @@ export type StatefulAgentSnapshot = Readonly<{
 
 export type StatefulAgent = Readonly<{
 	abort: () => void;
+	/** Queues prepared input for the next safe Model Step boundary. */
+	steer: (message: AgentTurnMessage) => void;
+	/** Queues prepared input for a safe follow-up boundary without starting or interrupting a turn. */
+	followUp: (message: AgentTurnMessage) => void;
 	getSnapshot: () => StatefulAgentSnapshot;
 	run: AgentRuntime["run"];
 	shutdown: () => Promise<void>;
@@ -35,15 +41,52 @@ export type StatefulAgentOptions = Readonly<{
 }>;
 
 type AgentTurnContextProjector = Readonly<{
+	appendFollowUpMessages: (messages: readonly AgentTurnMessage[]) => void;
 	appendSteeringMessages: (messages: readonly AgentTurnMessage[]) => void;
 	observe: (event: AgentTurnEvent) => void;
 }>;
+type AgentTurnMessageSource = () =>
+	| readonly AgentTurnMessage[]
+	| Promise<readonly AgentTurnMessage[]>;
+
+const takePreparedAgentTurnMessages = async ({
+	append,
+	context,
+	queue,
+	requested,
+}: {
+	append: (messages: readonly AgentTurnMessage[]) => void;
+	context: readonly AgentTurnMessage[];
+	queue: AgentTurnMessage[];
+	requested: AgentTurnMessageSource | undefined;
+}): Promise<readonly AgentTurnMessage[]> => {
+	const requestedMessages = (await requested?.()) ?? EMPTY_AGENT_TURN_MESSAGES;
+	const queuedMessages =
+		queue.length === 0 ? EMPTY_AGENT_TURN_MESSAGES : queue.splice(0);
+	if (queuedMessages.length === 0 && requestedMessages.length === 0) {
+		return EMPTY_AGENT_TURN_MESSAGES;
+	}
+	let candidates: readonly AgentTurnMessage[] = queuedMessages;
+	if (queuedMessages.length === 0) {
+		candidates = requestedMessages;
+	} else if (requestedMessages.length > 0) {
+		candidates = [...queuedMessages, ...requestedMessages];
+	}
+	const messages = candidates.filter(
+		(message) => !context.some((existing) => existing.id === message.id)
+	);
+	if (messages.length > 0) {
+		append(messages);
+	}
+	return messages;
+};
 
 const createAgentTurnContextProjector = (
 	turn: AgentTurn,
 	getContext: () => readonly AgentTurnMessage[],
 	setContext: (context: readonly AgentTurnMessage[]) => void
 ): AgentTurnContextProjector => {
+	let assistantSegmentIndex = 0;
 	let assistantParts: AgentTurnPart[] = [];
 	let toolResults: AgentTurnMessage[] = [];
 	const flushModelStep = (): void => {
@@ -52,7 +95,10 @@ const createAgentTurnContextProjector = (
 		}
 		const messages = [...getContext()];
 		if (assistantParts.length > 0) {
-			const assistantId = toSessionMessageId(`assistant-${turn.id}`);
+			const assistantId = agentTurnAssistantMessageId(
+				turn.id,
+				assistantSegmentIndex
+			);
 			const assistantIndex = messages.findIndex(
 				(message) => message.id === assistantId
 			);
@@ -78,13 +124,23 @@ const createAgentTurnContextProjector = (
 		assistantParts = [];
 		toolResults = [];
 	};
+	const appendMessages = (messages: readonly AgentTurnMessage[]): void => {
+		flushModelStep();
+		if (messages.length > 0) {
+			setContext([...getContext(), ...messages]);
+		}
+	};
+	const appendFollowUpMessages = (
+		messages: readonly AgentTurnMessage[]
+	): void => {
+		appendMessages(messages);
+		if (messages.length > 0) {
+			assistantSegmentIndex += 1;
+		}
+	};
 	return {
-		appendSteeringMessages: (messages) => {
-			flushModelStep();
-			if (messages.length > 0) {
-				setContext([...getContext(), ...messages]);
-			}
-		},
+		appendFollowUpMessages,
+		appendSteeringMessages: appendMessages,
 		observe: (event) => {
 			switch (event.type) {
 				case "model-step-started":
@@ -158,12 +214,13 @@ export const createStatefulAgent = ({
 	let activeTurnId: AgentTurnId | null = null;
 	let closed = false;
 	let context: readonly AgentTurnMessage[] = [];
+	const followUpMessages: AgentTurnMessage[] = [];
+	const steeringMessages: AgentTurnMessage[] = [];
 	let lastTerminalEvent: AgentTurnTerminalEvent | null = null;
 	let turnCount = 0;
 	let idle = Promise.resolve();
 	let resolveIdle: (() => void) | undefined;
 	const listeners = new Set<() => void>();
-
 	const publish = (): void => {
 		for (const listener of [...listeners]) {
 			try {
@@ -181,6 +238,8 @@ export const createStatefulAgent = ({
 		turnCount,
 	});
 	const abort = (): void => {
+		followUpMessages.length = 0;
+		steeringMessages.length = 0;
 		activeController?.abort();
 	};
 	const waitForIdle = (): Promise<void> => idle;
@@ -193,6 +252,24 @@ export const createStatefulAgent = ({
 		abort();
 		publish();
 		await idle;
+	};
+	const steer = (message: AgentTurnMessage): void => {
+		if (closed) {
+			throw new AgentInvariantError(
+				"invalid-runtime",
+				"A closed Stateful Agent cannot accept a Steering Message."
+			);
+		}
+		steeringMessages.push(message);
+	};
+	const followUp = (message: AgentTurnMessage): void => {
+		if (closed) {
+			throw new AgentInvariantError(
+				"invalid-runtime",
+				"A closed Stateful Agent cannot accept a follow-up message."
+			);
+		}
+		followUpMessages.push(message);
 	};
 	const assertCanStartTurn = (): void => {
 		if (closed) {
@@ -291,15 +368,47 @@ export const createStatefulAgent = ({
 				options.signal === undefined
 					? controller.signal
 					: AbortSignal.any([controller.signal, options.signal]);
+			let followUpsAwaitingSteering = EMPTY_AGENT_TURN_MESSAGES;
+			const takeRuntimeSteeringMessages = async (): Promise<
+				readonly AgentTurnMessage[]
+			> => {
+				const deferredFollowUps = followUpsAwaitingSteering;
+				const steering = await takePreparedAgentTurnMessages({
+					append:
+						deferredFollowUps.length === 0
+							? projector.appendSteeringMessages
+							: () => undefined,
+					context,
+					queue: steeringMessages,
+					requested: options.takeSteeringMessages,
+				});
+				if (deferredFollowUps.length > 0) {
+					if (steering.length > 0) {
+						projector.appendSteeringMessages(steering);
+					}
+					projector.appendFollowUpMessages(deferredFollowUps);
+					followUpsAwaitingSteering = EMPTY_AGENT_TURN_MESSAGES;
+				}
+				return steering;
+			};
+			const takeRuntimeFollowUpMessages = async (): Promise<
+				readonly AgentTurnMessage[]
+			> => {
+				const messages = await takePreparedAgentTurnMessages({
+					append: () => undefined,
+					context,
+					queue: followUpMessages,
+					requested: options.takeFollowUpMessages,
+				});
+				followUpsAwaitingSteering = messages;
+				return messages;
+			};
 			try {
 				for await (const event of runtime.run(runtimeTurn, {
 					...options,
 					signal,
-					takeSteeringMessages: async () => {
-						const messages = (await options.takeSteeringMessages?.()) ?? [];
-						projector.appendSteeringMessages(messages);
-						return messages;
-					},
+					takeFollowUpMessages: takeRuntimeFollowUpMessages,
+					takeSteeringMessages: takeRuntimeSteeringMessages,
 				})) {
 					projector.observe(event);
 					if (
@@ -328,9 +437,11 @@ export const createStatefulAgent = ({
 
 	return {
 		abort,
+		followUp,
 		getSnapshot,
 		run,
 		shutdown,
+		steer,
 		subscribe: (listener) => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);

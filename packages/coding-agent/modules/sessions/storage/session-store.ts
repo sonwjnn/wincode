@@ -54,6 +54,7 @@ export type Session = {
 	lastMessageAt: Date | null;
 	model?: ChatModelSelection;
 	pinned: boolean;
+	reportContinuationPaused: boolean;
 	title: string;
 	effort?: Effort;
 	reasoningMode?: ReasoningMode;
@@ -73,6 +74,7 @@ export type CreateDelegationTaskInput = CreateSessionInput & {
 	parentTurnId: AgentTurnId;
 };
 export type ConsumeDelegationReportInput = {
+	assistantCheckpoint?: SessionRecord;
 	parentSessionId: SessionId;
 	record: SessionRecord;
 	taskId: DelegationTaskId;
@@ -80,6 +82,7 @@ export type ConsumeDelegationReportInput = {
 
 export type UpdateSessionInput = {
 	pinned?: boolean;
+	reportContinuationPaused?: boolean;
 	title?: string;
 };
 

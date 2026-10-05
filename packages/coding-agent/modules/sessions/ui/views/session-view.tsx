@@ -144,14 +144,23 @@ const resolveInitialSessionSelection = ({
 	);
 	const persistedAgentId =
 		initialMessage.metadata?.agent ?? restoredConfig?.agent ?? agent;
-	const persistedAgentIsAvailable = registry.selectableAgents.some(
-		({ id, isAvailable }) => id === persistedAgentId && isAvailable
-	);
+	const persistedSubagentIsAvailable =
+		restoredConfig?.agent === persistedAgentId &&
+		registry.agents.some(
+			({ id, isAvailable, role }) =>
+				id === persistedAgentId && isAvailable && role === "subagent"
+		);
+	const persistedAgentIsAvailable =
+		persistedSubagentIsAvailable ||
+		registry.selectableAgents.some(
+			({ id, isAvailable }) => id === persistedAgentId && isAvailable
+		);
 	const effective = resolveEffectiveAgentSelection(
 		registry,
 		persistedAgentId,
 		persistedAgentIsAvailable ? resolvedModel : sessionModel,
-		persistedAgentIsAvailable ? persistedSelection : sessionReasoningSelection
+		persistedAgentIsAvailable ? persistedSelection : sessionReasoningSelection,
+		persistedSubagentIsAvailable
 	);
 	return {
 		agent: effective.agent,

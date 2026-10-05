@@ -73,7 +73,7 @@ export type SessionHost = Readonly<{
 	onEvent: (listener: (event: AgentTurnEvent) => void) => () => void;
 	/** Ends the session and resolves after active durable cleanup completes. */
 	shutdown: () => Promise<void>;
-	/** Adds one committed report to the parent's pending input without running it. */
+	/** Publishes a committed report; active Hosts queue follow-up, idle Hosts retain it. */
 	publishDelegationReport: (report: DelegationReportEnvelope) => void;
 	/** Notifies that session facts changed; no payload, as the Agent Session publishes. */
 	subscribe: (listener: () => void) => () => void;

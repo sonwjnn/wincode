@@ -2,10 +2,10 @@ import {
 	type AgentId,
 	type AgentTurnDelegation,
 	type AgentTurnId,
+	agentTurnAssistantMessageId,
 	createAgentTurnId,
 	type SessionMessageId,
 	type ToolCallId,
-	toSessionMessageId,
 } from "@wincode/agent-core";
 import type {
 	ChatModelSelection,
@@ -46,7 +46,7 @@ export type TurnExecutionSkill = {
 export type TurnExecution = {
 	/** The Agent the execution runs as. */
 	readonly agent: AgentId;
-	/** The assistant Session Message the execution streams into. */
+	/** The first assistant Session Message for this execution. */
 	readonly assistantId: SessionMessageId;
 	/**
 	 * Abort index for this execution tree's in-flight delegated Tool Calls. A
@@ -136,7 +136,7 @@ export const createTurnExecution = ({
 			effort,
 			reasoningMode,
 		}),
-		assistantId: toSessionMessageId(`assistant-${turnId}`),
+		assistantId: agentTurnAssistantMessageId(turnId),
 		childAborts: childAborts ?? new Map(),
 		mcpSnapshot: null,
 		model,

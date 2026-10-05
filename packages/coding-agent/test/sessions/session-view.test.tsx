@@ -22,6 +22,7 @@ import type {
 	SessionWaitingMessage,
 	SessionWaitingMessageId,
 } from "@/modules/sessions/agent-session/types";
+import type { DelegationReportEnvelope } from "@/modules/sessions/delegation/types";
 import type { SessionHost } from "@/modules/sessions/host/types";
 import type {
 	SessionFilePart,
@@ -31,13 +32,16 @@ import type {
 	SessionSendInput,
 	SessionSubmissionComposition,
 } from "@/modules/sessions/submission-types";
+import { toDelegationTaskId } from "@/shared/identifiers";
 import {
 	agentId,
+	agentTurnId,
 	attachmentId,
 	queuedSubmissionId,
 	sessionId,
 	sessionMessageId,
 	steeringMessageId,
+	toolCallId,
 } from "../support/identifiers";
 
 const { testRender } = await import("@opentui/react/test-utils");
@@ -117,6 +121,7 @@ let fakeRecalledPayload: SessionWaitingMessage[] | null = null;
 let fakeRunCompositions: SessionSubmissionComposition[] = [];
 /** How many times the view asked the session to recall its waiting messages. */
 let fakeSessionRecalls = 0;
+let fakeReportContinuationCalls = 0;
 const fakeSubmissionEventListeners = new Set<
 	(event: SessionSubmissionEvent) => void
 >();
@@ -370,9 +375,19 @@ const buildRouter = () => {
  * Agent Session is never reached from this test.
  */
 const createFakeSessionHost = (
-	transcript: readonly SessionMessage[]
+	transcript: readonly SessionMessage[],
+	pendingReport = false
 ): SessionHost =>
 	fromPartial<SessionHost>({
+		agentSession: {
+			continue: () => {
+				fakeReportContinuationCalls += 1;
+				return {
+					kind: "resumed",
+					turnId: agentTurnId("report-continuation"),
+				};
+			},
+		},
 		getSelection: () => null,
 		getSnapshot: () => ({
 			approvals: [],
@@ -384,6 +399,22 @@ const createFakeSessionHost = (
 			executions: [],
 			isCompacting: false,
 			queuedSubmissions: [],
+			pendingDelegationReports: pendingReport
+				? [
+						{
+							childSessionId: sessionId("child-session"),
+							createdAt: new Date("2026-10-04T00:00:00.000Z"),
+							outcome: {
+								kind: "result",
+								report: { summary: "Inspection complete." },
+							},
+							parentSessionId: sessionId("session-1"),
+							parentToolCallId: toolCallId("report-call"),
+							parentTurnId: agentTurnId("report-parent-turn"),
+							taskId: toDelegationTaskId("report-task"),
+						} satisfies DelegationReportEnvelope,
+					]
+				: [],
 			steeringMessages: [],
 			transcript,
 			turnActive: false,
@@ -412,6 +443,7 @@ afterEach(() => {
 	fakeWaitingTexts = [];
 	fakeRecalledPayload = null;
 	fakeSessionRecalls = 0;
+	fakeReportContinuationCalls = 0;
 	fakeSubmissionEventListeners.clear();
 });
 
@@ -643,11 +675,13 @@ const renderSessionView = async ({
 	height,
 	initialTranscript,
 	liveTranscript = initialTranscript,
+	pendingReport = false,
 	width,
 }: {
 	height: number;
 	initialTranscript: SessionMessage[];
 	liveTranscript?: SessionMessage[];
+	pendingReport?: boolean;
 	width: number;
 }) => {
 	const router = buildRouter();
@@ -684,7 +718,10 @@ const renderSessionView = async ({
 														<RouterContextProvider router={router}>
 															<CommandControllerProvider>
 																<SessionView
-																	host={createFakeSessionHost(liveTranscript)}
+																	host={createFakeSessionHost(
+																		liveTranscript,
+																		pendingReport
+																	)}
 																	initialTranscript={initialTranscript}
 																	sessionId={sessionId("session-1")}
 																	sessionTitle="Queue a prompt"
@@ -719,6 +756,23 @@ const renderSessionView = async ({
 	await flushUi(setup);
 	return { commandLayer, setup };
 };
+
+test("does not offer a manual continuation control for a pending report", async () => {
+	const { setup } = await renderSessionView({
+		height: 20,
+		initialTranscript: [],
+		pendingReport: true,
+		width: 100,
+	});
+	try {
+		expect(setup.captureCharFrame()).not.toContain("Continue with report");
+		expect(fakeReportContinuationCalls).toBe(0);
+		expect(fakeRunCompositions).toEqual([]);
+		expect(fakeWaitingTexts).toEqual([]);
+	} finally {
+		setup.renderer.destroy();
+	}
+});
 
 test("renders unavailable attachment annotations over the unannotated Host transcript", async () => {
 	const id = attachmentId("missing");

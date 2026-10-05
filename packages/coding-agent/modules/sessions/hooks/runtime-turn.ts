@@ -300,7 +300,7 @@ const createDelegationTool = (
 ): ResolvedTool => ({
 	definition: {
 		description:
-			"Start a durable child Session and return its Task ID and Session ID immediately. The child reports through submit_result; its report never starts the parent automatically.",
+			"Start a durable child Session and return its Task ID and Session ID immediately. The child reports through submit_result; a live parent receives the report at a safe follow-up boundary, and an idle Interactive/RPC parent continues automatically.",
 		inputSchema: {
 			jsonSchema: {
 				additionalProperties: false,
@@ -918,6 +918,9 @@ type AgentTurnEventConsumerOptions = {
 	takeSteeringMessages?: () =>
 		| readonly AgentTurnMessage[]
 		| Promise<readonly AgentTurnMessage[]>;
+	takeFollowUpMessages?: () =>
+		| readonly AgentTurnMessage[]
+		| Promise<readonly AgentTurnMessage[]>;
 	turn: AgentTurn;
 	onEvent: (event: AgentTurnEvent) => void | Promise<void>;
 	onTerminal: (event: AgentTurnTerminalEvent) => void | Promise<void>;
@@ -943,6 +946,7 @@ const consumeAgentTurnEvents = async ({
 	runtime,
 	signal,
 	takeSteeringMessages,
+	takeFollowUpMessages,
 	turn,
 }: AgentTurnEventConsumerOptions): Promise<void> => {
 	const lifecycle = providedLifecycle ?? createAgentTurnLifecycle(turn.id);
@@ -986,7 +990,7 @@ const consumeAgentTurnEvents = async ({
 		}
 	};
 	for await (const event of runtime.run(turn, {
-		...omitUndefined({ takeSteeringMessages }),
+		...omitUndefined({ takeFollowUpMessages, takeSteeringMessages }),
 		signal,
 	})) {
 		if (
@@ -1066,6 +1070,7 @@ const terminalEventForOutcome = (
 		: event;
 
 export const runAgentTurnToText = async ({
+	getAssistantMessageId,
 	onCheckpoint,
 	onEvent,
 	onTerminal,
@@ -1075,8 +1080,10 @@ export const runAgentTurnToText = async ({
 	signal,
 	sourceUserMessageId,
 	takeSteeringMessages,
+	takeFollowUpMessages,
 	turn,
 }: {
+	getAssistantMessageId?: () => SessionMessageId;
 	onCheckpoint?: CheckpointCommitter;
 	onEvent?: (event: AgentTurnEvent) => void | Promise<void>;
 	onTerminal?: (event: AgentTurnTerminalEvent) => void | Promise<void>;
@@ -1088,9 +1095,13 @@ export const runAgentTurnToText = async ({
 	takeSteeringMessages?: () =>
 		| readonly SessionMessage[]
 		| Promise<readonly SessionMessage[]>;
+	takeFollowUpMessages?: () =>
+		| readonly SessionMessage[]
+		| Promise<readonly SessionMessage[]>;
 	turn: AgentTurn;
 }): Promise<string> => {
 	let assistantText = "";
+	let checkpointedAssistantTextLength = 0;
 	let terminal: AgentTurnTerminalEvent | undefined;
 	let lastSequence = -1;
 	let completedToolCalls = 0;
@@ -1152,6 +1163,15 @@ export const runAgentTurnToText = async ({
 		runtime,
 		signal,
 		...omitUndefined({
+			takeFollowUpMessages: isUndefined(takeFollowUpMessages)
+				? undefined
+				: async () => {
+						const messages = await takeFollowUpMessages();
+						if (messages.length > 0) {
+							checkpointedAssistantTextLength = assistantText.length;
+						}
+						return messages.flatMap(toAgentTurnMessages);
+					},
 			takeSteeringMessages: isUndefined(takeSteeringMessages)
 				? undefined
 				: async () =>
@@ -1165,7 +1185,8 @@ export const runAgentTurnToText = async ({
 		signal
 	);
 	const record = buildTerminalSessionRecord({
-		assistantText,
+		assistantMessageId: getAssistantMessageId?.(),
+		assistantText: assistantText.slice(checkpointedAssistantTextLength),
 		hasCompletedToolCalls: completedToolCalls > 0,
 		event: terminalEvent,
 		sourceUserMessageId,

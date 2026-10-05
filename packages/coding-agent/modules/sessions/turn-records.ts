@@ -6,6 +6,7 @@ import {
 	type AgentTurnId,
 	type AgentTurnOutcomeRecord,
 	type AgentTurnTerminalEvent,
+	agentTurnAssistantMessageId,
 	createOperationalFailure,
 	normalizeOperationalFailure,
 	SESSION_RECORD_VERSION,
@@ -22,13 +23,14 @@ import { type ModelUsage, normalizeModelUsage } from "@wincode/ai/model-usage";
 import { omitUndefined } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 import { RetiredModelError } from "../model-target";
+import type { SessionMessage } from "./message";
+import { toDurableSessionMessageRecord } from "./storage/session-record";
 
 /**
- * Durable Session Record synthesis for one Agent Turn: the assistant row a
- * terminal Agent Turn Event produces, the safe assistant rows a failed or
- * cancelled turn produces, and the tool row each completed Tool Call produces.
- * The Agent Session and the Agent Runtime consumer both write through these,
- * so the durable shape of a turn is defined once.
+ * Durable Session Record synthesis for one Agent Turn: non-terminal assistant
+ * output checkpoints, terminal assistant outcomes, and completed Tool Calls.
+ * The Agent Session and Agent Runtime consumer both write through these, so the
+ * durable shape of a turn is defined once.
  */
 
 const normalizeTerminalEvent = (
@@ -103,18 +105,76 @@ const assistantRecordMetadata = (
 	},
 });
 
+/** Persists assistant text emitted before a non-terminal follow-up boundary. */
+export const buildAssistantCheckpointSessionRecord = ({
+	assistantMessage,
+	agentId,
+	effort,
+	model,
+	reasoningMode,
+	sourceUserMessageId,
+	turnId,
+}: {
+	assistantMessage: SessionMessage;
+	agentId: AgentId;
+	effort?: SessionRecord["model"]["effort"];
+	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
+	reasoningMode?: SessionRecord["model"]["reasoningMode"];
+	sourceUserMessageId?: SessionMessageId;
+	turnId: AgentTurnId;
+}): SessionRecord | undefined => {
+	const durableMessage = toDurableSessionMessageRecord({
+		...assistantMessage,
+		metadata: {
+			agent: agentId,
+			...omitUndefined({
+				effort,
+				model: assistantMessage.metadata?.model,
+				reasoningMode,
+				sourceUserMessageId,
+			}),
+		},
+		parts: assistantMessage.parts.filter(
+			(part) => part.type === "text" && part.text.length > 0
+		),
+		role: "assistant",
+	});
+	if (
+		durableMessage === undefined ||
+		durableMessage.role !== "assistant" ||
+		durableMessage.parts.length === 0
+	) {
+		return;
+	}
+	return {
+		agentId,
+		id: toSessionRecordId(`record-${randomUUIDv7()}`),
+		messages: [durableMessage],
+		model: {
+			modelId: model.modelId,
+			providerId: model.providerId,
+			...omitUndefined({ effort, reasoningMode }),
+		},
+		outcome: { kind: "assistant-checkpoint" },
+		turnId,
+		version: SESSION_RECORD_VERSION,
+	};
+};
+
 /**
  * Builds one durable assistant row for a terminal Agent Turn. Tool Call rows
  * are committed separately at their completion boundaries, so a successful
  * tool-only turn intentionally returns no assistant row.
  */
 export const buildTerminalSessionRecord = ({
+	assistantMessageId,
 	assistantText,
 	event,
 	hasCompletedToolCalls = false,
 	sourceUserMessageId,
 	turn,
 }: {
+	assistantMessageId?: SessionMessageId;
 	assistantText: string;
 	event: AgentTurnTerminalEvent;
 	hasCompletedToolCalls?: boolean;
@@ -181,7 +241,7 @@ export const buildTerminalSessionRecord = ({
 		id: toSessionRecordId(`record-${randomUUIDv7()}`),
 		messages: [
 			{
-				id: toSessionMessageId(`assistant-${turn.id}`),
+				id: assistantMessageId ?? agentTurnAssistantMessageId(turn.id),
 				metadata: assistantRecordMetadata(turn, safeUsage, sourceUserMessageId),
 				parts: [{ text, type: "text" }],
 				role: "assistant",
@@ -195,6 +255,7 @@ export const buildTerminalSessionRecord = ({
 };
 const buildAssistantOutcomeSessionRecord = ({
 	agentId,
+	assistantMessageId,
 	model,
 	sourceUserMessageId,
 	text,
@@ -204,6 +265,7 @@ const buildAssistantOutcomeSessionRecord = ({
 	reasoningMode,
 }: {
 	agentId: AgentId;
+	assistantMessageId?: SessionMessageId;
 	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
 	sourceUserMessageId?: SessionMessageId;
 	text: string;
@@ -216,7 +278,7 @@ const buildAssistantOutcomeSessionRecord = ({
 	id: toSessionRecordId(`record-${randomUUIDv7()}`),
 	messages: [
 		{
-			id: toSessionMessageId(`assistant-${turnId}`),
+			id: assistantMessageId ?? agentTurnAssistantMessageId(turnId),
 			metadata: {
 				agent: agentId,
 				model: {
@@ -241,6 +303,7 @@ const buildAssistantOutcomeSessionRecord = ({
 
 export const buildAssistantFailureSessionRecord = ({
 	agentId,
+	assistantMessageId,
 	error,
 	model,
 	sourceUserMessageId,
@@ -249,6 +312,7 @@ export const buildAssistantFailureSessionRecord = ({
 	reasoningMode,
 }: {
 	agentId: AgentId;
+	assistantMessageId?: SessionMessageId;
 	error: unknown;
 	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
 	sourceUserMessageId?: SessionMessageId;
@@ -263,6 +327,7 @@ export const buildAssistantFailureSessionRecord = ({
 	const failureText =
 		error instanceof RetiredModelError ? error.message : failure.message;
 	return buildAssistantOutcomeSessionRecord({
+		assistantMessageId,
 		agentId,
 		model,
 		sourceUserMessageId,
@@ -280,6 +345,7 @@ export const buildAssistantFailureSessionRecord = ({
 
 export const buildAssistantCancelledSessionRecord = ({
 	agentId,
+	assistantMessageId,
 	model,
 	sourceUserMessageId,
 	turnId,
@@ -287,6 +353,7 @@ export const buildAssistantCancelledSessionRecord = ({
 	reasoningMode,
 }: {
 	agentId: AgentId;
+	assistantMessageId?: SessionMessageId;
 	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
 	sourceUserMessageId?: SessionMessageId;
 	turnId: AgentTurnId;
@@ -303,6 +370,7 @@ export const buildAssistantCancelledSessionRecord = ({
 		source: "runtime",
 	});
 	return buildAssistantOutcomeSessionRecord({
+		assistantMessageId,
 		agentId,
 		model,
 		sourceUserMessageId,

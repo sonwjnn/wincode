@@ -178,16 +178,20 @@ export type AgentTurnOutcomeRecord = ReadonlyDeep<
 >;
 
 /**
- * Durable meaning of one Session Record row. User and Tool rows are
- * ordinary content checkpoints; assistant rows also carry the terminal Agent
- * Turn outcome that produced the assistant content.
+ * Durable meaning of one Session Record row. User and Tool rows are ordinary
+ * content checkpoints; assistant rows are either non-terminal output
+ * checkpoints or terminal Agent Turn outcomes.
  */
 export type SessionRecordOutcome = ReadonlyDeep<
 	| {
+			delegationReportTaskId?: string;
 			kind: "user";
 	  }
 	| {
 			kind: "tool";
+	  }
+	| {
+			kind: "assistant-checkpoint";
 	  }
 	| {
 			kind: "assistant";

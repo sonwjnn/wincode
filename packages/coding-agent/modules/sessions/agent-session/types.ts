@@ -125,7 +125,7 @@ export type SessionExecution = ReadonlyDeep<{
 	submissionId?: SubmissionId;
 	/** The Agent the execution runs as. */
 	agent: AgentId;
-	/** The assistant Session Message the execution streams into. */
+	/** The first assistant Session Message for this execution. */
 	assistantId: SessionMessageId;
 	/** The Model Target selection the execution runs against. */
 	model: ChatModelSelection;
@@ -236,7 +236,7 @@ export type LiveSessionSnapshot = ReadonlyDeep<{
 	 * after failure. Unlike queued Submissions, these cannot be recalled.
 	 */
 	steeringMessages: SessionSteeringMessage[];
-	/** Committed reports awaiting explicit parent continuation. */
+	/** Inbox reports not yet consumed as parent Session input. */
 	pendingDelegationReports: DelegationReportEnvelope[];
 	/** Whether the session is running a submission, from its command to its settle. */
 	turnActive: boolean;
@@ -385,9 +385,10 @@ export type SessionTurnRequest = Readonly<{
 	callbacks: SessionTurnCallbacks;
 	/** The Agent Turn execution the host runs. */
 	execution: SessionExecution;
+	/** The assistant message ID for the current follow-up segment. */
+	getAssistantMessageId?: () => SessionMessageId;
 	/** The hydrated messages the Agent Turn sends to the model. */
 	messages: readonly SessionMessage[];
-	/** The resolved Agent the execution runs as. */
 	resolvedAgent: SessionResolvedAgent;
 	/** The Skill this execution's turn must load, when the submission asked for one. */
 	skillRequest?: SkillRequestContext;
@@ -397,6 +398,8 @@ export type SessionTurnRequest = Readonly<{
 	 * after persisting their processing state and preparing their model input.
 	 */
 	takeSteeringMessages: () => Promise<readonly SessionMessage[]>;
+	/** Takes committed Delegation Reports for delivery as safe Stateful Agent follow-ups. */
+	takeFollowUpMessages: () => Promise<readonly SessionMessage[]>;
 }>;
 
 /** What one Agent Turn execution reported to the Agent Session. */
@@ -426,13 +429,16 @@ export type AgentSessionPorts = Readonly<{
 	/** Writes one durable Session Record. */
 	commitRecord: (input: SessionCommitInput) => Promise<void>;
 	consumeDelegationReport: (input: {
+		assistantCheckpoint?: SessionRecord;
 		record: SessionRecord;
 		taskId: DelegationTaskId;
 	}) => Promise<boolean>;
+	listPendingDelegationReports: () => Promise<DelegationReportEnvelope[]>;
 	/** Persists one exact committed Submission's processing state. */
 	updateSubmissionStatus: (
 		input: SessionSubmissionStatusUpdate
 	) => Promise<void>;
+	persistReportContinuationPaused: (paused: boolean) => Promise<void>;
 	/** Resolves the Agent, Model, and reasoning selection when a Submission starts. */
 	resolveSubmission: (input: SessionSendInput) => SessionSendInput;
 	/** Resolves the @path file mentions of a prompt. */
@@ -449,7 +455,10 @@ export type AgentSessionOptions = Readonly<{
 	initialCompactions?: readonly SessionCompaction[];
 	initialAgent?: AgentId;
 	initialContext?: readonly SessionMessage[];
+	/** Enables automatic idle report continuation for this Session Host. */
+	autoContinueDelegationReports?: boolean;
 	initialPendingDelegationReports?: readonly DelegationReportEnvelope[];
+	initialReportContinuationSuppressed?: boolean;
 	initialSessionModel?: ChatModelSelection;
 	initialSessionEffort?: Effort;
 	initialSessionReasoningMode?: ReasoningMode;
@@ -555,7 +564,7 @@ export type AgentSessionInternalPort = Readonly<{
 	requestApproval: (
 		request: ToolApprovalRequest
 	) => Promise<SessionApprovalOutcome>;
-	/** Adds a committed child report as pending input without steering the turn. */
+	/** Publishes a committed report for safe active-turn delivery or idle continuation. */
 	publishDelegationReport: (report: DelegationReportEnvelope) => void;
 	/** Ends the session after active durable cleanup has completed. */
 	shutdown: () => Promise<void>;

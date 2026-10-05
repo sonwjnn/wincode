@@ -1364,6 +1364,7 @@ describe("approval settlement through the Agent Session", () => {
 			initialTranscript: [],
 			ports: fromPartial<AgentSessionPorts>({
 				turnRunner: { requestOverheadTokens: () => 0 },
+				persistReportContinuationPaused: async () => undefined,
 				// Compaction is not part of this seam; the Agent Session only needs the port.
 				compaction: {
 					compact: () =>

@@ -72,6 +72,14 @@ const ensureSessionEditModeColumn = (sqlite: Database): void => {
 		"ALTER TABLE session ADD COLUMN edit_mode TEXT DEFAULT 'hashline' NOT NULL;"
 	);
 };
+const ensureReportContinuationPausedColumn = (sqlite: Database): void => {
+	if (columnNames(sqlite, "session").has("report_continuation_paused")) {
+		return;
+	}
+	sqlite.exec(
+		"ALTER TABLE session ADD COLUMN report_continuation_paused INTEGER DEFAULT 0 NOT NULL;"
+	);
+};
 const initializeSchema = (
 	sqlite: Database,
 	allowIncompatibleSessionSchema: boolean
@@ -111,6 +119,7 @@ const initializeSchema = (
 			model_json TEXT,
 			effort TEXT,
 			reasoning_mode TEXT,
+			report_continuation_paused INTEGER DEFAULT 0 NOT NULL,
 			edit_mode TEXT DEFAULT 'hashline' NOT NULL
 		);
 
@@ -349,6 +358,7 @@ const initializeSchema = (
 	}
 	ensureSessionEditModeColumn(sqlite);
 	ensureReasoningSelectionColumns(sqlite);
+	ensureReportContinuationPausedColumn(sqlite);
 };
 
 const openDatabase = (

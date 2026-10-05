@@ -9,8 +9,9 @@ Chat session lifecycle: creation, messaging, streaming display, compaction, and 
 `NewSessionView` collects user input and writes the accepted user message as
 an ordinary durable Session Record in the local SQLite store.
 It then navigates to `/sessions/$id` with transient startup state. That state
-starts the first Agent Turn once; opening the same session later only restores
-durable records and never runs the Agent.
+starts the first Agent Turn once. Opening later restores durable records.
+Interactive/RPC Hosts automatically continue from pending reports unless an
+explicit parent interrupt has paused delivery.
 ### Join a session
 
 `SessionSurface` opens the session and renders it: it constructs the Session Host, which loads the transcript and ordered local compaction entries, validates the messages, rebuilds the Session Context around the latest compaction, and constructs the Agent Session with all three. The Host exposes it as `agentSession`, shows the opening state until loading resolves, and hands the open Host to `SessionView`.
@@ -64,19 +65,35 @@ under the existing policy but never withdraw a committed Steering Message.
 Recalled compositions land below the composer's draft, oldest first.
 
 `agentSession.continue()` rejects while the Agent Session is active or
-compacting. When idle, it delivers committed Steering Messages first. If a
-child report is pending, it atomically consumes the oldest report as a parent
-user message and starts an explicit continuation with it before queued input
-can start. Without a report, it starts the oldest unsteered queued Submission.
-Child completion never starts a parent turn. With no waiting work, continuation
-resumes only from a last user message or a complete retained Tool Call result;
-incomplete Tool Calls/results and other context endpoints are rejected.
-Overflow recovery uses this context-only continuation after compaction.
+compacting. When idle, it processes committed Steering Messages first, then the
+oldest Delegation Report, then queued Submissions. Consuming a report atomically
+writes it as an ordinary parent Session Record and starts a continuation.
+Interactive/RPC Hosts invoke this automatically when a report arrives or is
+found in the inbox on open. A normal prompt accepted while a report waits is
+queued behind it and cannot bypass it.
+An explicit `continue()`, `prompt()`, or `send()` resumes the paused queue after
+reopen, preserving Steering Message, report, then Submission ordering.
 
-One-shot consumers wait for delegated child outcomes without auto-prompting the
-parent. Print waits for the child but writes only parent-turn text to stdout.
-JSON tags child events and task outcomes; `awaiting_report` is an explicit
-nonzero error rather than a hidden follow-up prompt.
+While the parent is active, the Agent Session consumes the oldest committed
+report at the runtime's safe follow-up boundary and supplies it to the
+Stateful Agent's follow-up queue. The same turn processes it after committed
+steering and current model/Tool Call work; it never interrupts an in-flight
+request or tool. If a report arrives after the last safe boundary, the idle
+Host starts a continuation after the active turn ends. Reports are delivered
+oldest-first and consumed exactly once; the durable parent record survives
+runtime unload or restart.
+
+Without a report, continuation starts the oldest unsteered queued Submission.
+With no waiting work, it resumes only from a last user message or a complete
+retained Tool Call result; incomplete Tool Calls/results and other context
+endpoints are rejected. Overflow recovery uses this context-only continuation
+after compaction.
+
+One-shot consumers do not auto-start an idle report continuation. Print waits
+for the child but writes only parent assistant text to stdout. JSON tags child
+events and task outcomes; `awaiting_report` is an explicit nonzero error rather
+than a hidden follow-up prompt. Reports that arrive during an already-running
+parent turn are still delivered at safe runtime boundaries.
 
 The Agent Runtime consumer lives with the Stateful Agent it consumes
 (`hooks/runtime-turn.ts`), and the Interactive TUI projects its events into
@@ -84,8 +101,10 @@ OpenTUI message state.
 
 `AgentSession` owns the app-facing Session Transcript, transient Submission
 Queue, committed Steering Message status, approvals, compaction and recovery
-attempts, and operation maps. `StatefulAgent` owns the live model context,
-serializes Agent Runtime turns, and owns turn cancellation and shutdown for one
+attempts, the durable Delegation Report inbox, and operation maps.
+`StatefulAgent` owns the live model context, serializes Agent Runtime turns, and
+schedules distinct steering and follow-up messages without interrupting active
+model or Tool Call work. It also owns turn cancellation and shutdown for one
 Session Host. The Host publishes immutable Snapshots and ordered events through
 the Agent Session interface; it does not expose state-write capabilities.
 `useAgentSession` binds an already-open Host, mirrors its Snapshot in React
@@ -97,12 +116,14 @@ Each process-scoped `SessionHostManager` retains Hosts across view switches and
 enforces one writer for each Session. A delegated task has a separate durable
 child Session and Stateful Agent, linked to the parent Session, Turn, and
 delegation Tool Call. The child starts from its explicit task prompt and
-instructions, not a copy of the parent transcript. Spawning returns task and
-Session IDs promptly; the parent turn does not wait for child completion. A
-view can open the child, submit input, or steer it through its one writer.
-Interrupting the parent does not cancel a child. Interrupting a running child
-Session aborts its run and records cancellation; process shutdown cancels live
-children; a crash marks unfinished tasks interrupted without replay.
+instructions, not a copy of the parent transcript. Its Agent identity and
+instructions come from the Delegated Task, including subagent roles, and survive
+opening, steering, and restore. Spawning returns task and Session IDs promptly;
+the parent turn does not wait for child completion. A view can open the child,
+submit input, or steer it through its one writer. Interrupting the parent does
+not cancel a child. Interrupting a running child Session aborts its run and
+records cancellation; process shutdown cancels live children; a crash marks
+unfinished tasks interrupted without replay.
 
 Deleting a Session removes settled task links and inbox rows; a Session linked
 to an active task cannot be deleted. Deleting a parent leaves its child as an
@@ -187,18 +208,25 @@ never resolves co-selected Skill or Custom Command intents.
 `storage/` isolates local persistence behind the `SessionStore` interface.
 The local Drizzle store persists sessions, ordinary Wincode Session Records,
 compactions, and content-addressed attachment blobs.
-`session_record` rows contain one durable user, assistant, or completed Tool
-Call message and its semantic outcome. Delegated execution is stored separately:
+`session_record` rows contain one durable user message, an assistant output
+checkpoint or terminal outcome, or a completed Tool Call. Active report
+checkpoints precede their report record so reopening preserves output order.
 `delegation_task` links a parent Session/Turn/Tool Call to a dedicated child
 Session, prompt, and lifecycle outcome; `delegation_inbox` holds a committed
-report until the parent explicitly continues.
+report until consumption. Interactive/RPC Hosts automatically consume it
+through continuation, with committed Steering Messages first and queued
+Submissions after reports. They also resume from a committed report record on
+reopen if shutdown precedes its first model response. Print/JSON leave an idle
+report pending; active parents consume it at the safe follow-up boundary.
 
 Each Session projects only its own records in storage order and rebuilds model
 context from successful history and completed Tool Calls. Child output never
 enters the parent transcript automatically. Consuming a report atomically
-appends it as a parent user message and marks the inbox item consumed, so a
-restart cannot replay it. An interrupted Agent Turn is not reconstructed or
-replayed. The durable pending/failed processing status of committed Steering
+appends it as a parent user message and marks the inbox item consumed. A
+restart retains that record in context without replaying child work or
+duplicating the report. An interrupted Agent Turn is not reconstructed or
+replayed.
+The durable pending/failed processing status of committed Steering
 Messages is reconciled from history so accepted-but-unread input continues
 with the same message identity and without duplication.
 

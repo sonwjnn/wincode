@@ -12,7 +12,10 @@ import type {
 	ReasoningMode,
 } from "@wincode/ai/models";
 import { isNull, logger, omitUndefined } from "@wincode/utils";
-import { resolveActiveAgentId } from "@/modules/agents/registry";
+import {
+	type AgentRegistry,
+	resolveActiveAgentId,
+} from "@/modules/agents/registry";
 import { toSteeringMessageId } from "@/shared/identifiers";
 import { AgentSessionImpl } from "../agent-session/agent-session";
 import type {
@@ -50,6 +53,8 @@ type OpenedSession = Readonly<{
 	compactions: SessionCompaction[];
 	context: SessionMessage[];
 	delegationTask: DelegationTask | undefined;
+	hasUnansweredDelegationReport: boolean;
+	reportContinuationSuppressed: boolean;
 	model: ChatModelSelection | undefined;
 	pendingDelegationReports: DelegationReportEnvelope[];
 	steeringMessages: SessionSteeringMessage[];
@@ -136,6 +141,47 @@ const restoreSteeringMessages = (
 			];
 		})
 	);
+const hasUnresolvedUserInterrupt = (
+	records: readonly SessionRecord[]
+): boolean => {
+	const interruptionIndex = records.findLastIndex(
+		({ outcome }) =>
+			outcome.kind === "assistant" &&
+			outcome.terminal.kind === "interrupted" &&
+			outcome.terminal.reason === "user"
+	);
+	return (
+		interruptionIndex !== -1 &&
+		!records
+			.slice(interruptionIndex + 1)
+			.some(
+				({ outcome }) =>
+					outcome.kind === "user" &&
+					outcome.delegationReportTaskId === undefined
+			)
+	);
+};
+const hasUnansweredDelegationReport = (
+	records: readonly SessionRecord[]
+): boolean => {
+	const reportIndex = records.findLastIndex(
+		({ outcome }) =>
+			outcome.kind === "user" && outcome.delegationReportTaskId !== undefined
+	);
+	if (reportIndex === -1) {
+		return false;
+	}
+	const recordsAfterReport = records.slice(reportIndex + 1);
+	if (hasUnresolvedUserInterrupt(recordsAfterReport)) {
+		return false;
+	}
+	return !recordsAfterReport.some(
+		({ outcome }) =>
+			outcome.kind === "tool" ||
+			outcome.kind === "assistant-checkpoint" ||
+			(outcome.kind === "assistant" && outcome.terminal.kind === "completed")
+	);
+};
 
 /**
  * Reads one session's durable state and projects it into the Agent Session's
@@ -209,6 +255,9 @@ const openSession = async (
 		delegationTask: delegationTask ?? undefined,
 		model: session.model,
 		pendingDelegationReports,
+		hasUnansweredDelegationReport: hasUnansweredDelegationReport(records),
+		reportContinuationSuppressed:
+			session.reportContinuationPaused || hasUnresolvedUserInterrupt(records),
 		steeringMessages: restoreSteeringMessages(records, transcript, session),
 		transcript,
 		effort: session.effort,
@@ -317,11 +366,8 @@ export const createSessionHost = async ({
 			if (snapshot.isCompacting) {
 				void activeAgentSession.cancelCompaction();
 			}
-			// Cancellation must unwind through the Agent Turn before the OS lock
-			// is released, including any durable checkpoint already in progress.
-			if (snapshot.turnActive) {
-				activeAgentSession.cancel();
-			}
+			// Session shutdown aborts provider work and waits for it to unwind before
+			// releasing the writer, including any durable checkpoint in progress.
 			try {
 				agentSessionShutdown =
 					activeInternalPort?.shutdown() ?? Promise.resolve();
@@ -369,6 +415,8 @@ export const createSessionHost = async ({
 	};
 	try {
 		const opened = await openSession(capabilities, sessionId);
+		const autoContinueDelegationReports =
+			executionMode !== "print" && executionMode !== "json";
 		statefulAgent = createStatefulAgent({
 			runtime: capabilities.getRuntime?.() ?? defaultRuntimeFactory(),
 		});
@@ -385,22 +433,35 @@ export const createSessionHost = async ({
 			publish
 		);
 		const initialRegistry = capabilities.getRegistry();
-		const initialSelection = resolveSessionSelection({
-			messages: [...opened.transcript],
-			sessionModel: opened.model,
-			sessionEffort: opened.effort,
-			sessionReasoningMode: opened.reasoningMode,
-			...(isNull(initialRegistry)
-				? {}
-				: {
-						resolveAgent: (agentId: AgentId | undefined) =>
-							resolveActiveAgentId(initialRegistry, agentId),
-					}),
-		});
-		const initialAgent = isNull(initialRegistry)
-			? initialSelection?.agent
-			: resolveActiveAgentId(initialRegistry, initialSelection?.agent);
+		const resolveOpenedSelection = (registry: AgentRegistry | null) => {
+			const selection = resolveSessionSelection({
+				messages: [...opened.transcript],
+				sessionModel: opened.model,
+				sessionEffort: opened.effort,
+				sessionReasoningMode: opened.reasoningMode,
+				...(isNull(registry)
+					? {}
+					: {
+							resolveAgent: (agentId: AgentId | undefined) =>
+								opened.delegationTask === undefined
+									? resolveActiveAgentId(registry, agentId)
+									: opened.delegationTask.agentId,
+						}),
+			});
+			if (selection === null || opened.delegationTask === undefined) {
+				return selection;
+			}
+			return {
+				...selection,
+				agent: opened.delegationTask.agentId,
+				persistedAgent: opened.delegationTask.agentId,
+			};
+		};
+		const initialSelection = resolveOpenedSelection(initialRegistry);
+		const initialAgent =
+			initialSelection?.agent ?? opened.delegationTask?.agentId;
 		const openedAgentSession = new AgentSessionImpl({
+			autoContinueDelegationReports,
 			initialCompactions: opened.compactions,
 			...omitUndefined({
 				initialAgent,
@@ -413,12 +474,18 @@ export const createSessionHost = async ({
 			initialTranscript: opened.transcript,
 			ports,
 			initialPendingDelegationReports: opened.pendingDelegationReports,
+			initialReportContinuationSuppressed: opened.reportContinuationSuppressed,
 			sessionId,
 		});
 		agentSessionInternalPort = openedAgentSession.internalPort;
 		agentSession = openedAgentSession;
+		const initialSnapshot = openedAgentSession.getSnapshot();
 		if (
-			openedAgentSession.getSnapshot().steeringMessages[0]?.status === "pending"
+			!opened.reportContinuationSuppressed &&
+			(initialSnapshot.steeringMessages[0]?.status === "pending" ||
+				(autoContinueDelegationReports &&
+					(initialSnapshot.pendingDelegationReports.length > 0 ||
+						opened.hasUnansweredDelegationReport)))
 		) {
 			openedAgentSession.continue();
 		}
@@ -429,21 +496,7 @@ export const createSessionHost = async ({
 
 		return {
 			agentSession: openedAgentSession,
-			getSelection: () => {
-				const registry = capabilities.getRegistry();
-				return resolveSessionSelection({
-					messages: [...opened.transcript],
-					sessionModel: opened.model,
-					sessionEffort: opened.effort,
-					sessionReasoningMode: opened.reasoningMode,
-					...(isNull(registry)
-						? {}
-						: {
-								resolveAgent: (agentId: AgentId | undefined) =>
-									resolveActiveAgentId(registry, agentId),
-							}),
-				});
-			},
+			getSelection: () => resolveOpenedSelection(capabilities.getRegistry()),
 			getSnapshot: openedAgentSession.getSnapshot,
 			onEvent: (listener) => {
 				eventListeners.add(listener);

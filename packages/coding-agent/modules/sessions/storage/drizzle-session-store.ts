@@ -443,6 +443,7 @@ const toSession = (row: SessionRow): Session => {
 		id: toSessionId(row.id),
 		lastMessageAt: row.lastMessageAt ?? null,
 		pinned: row.pinned,
+		reportContinuationPaused: row.reportContinuationPaused,
 		title: row.title ?? UNTITLED_SESSION_TITLE,
 		...omitUndefined({
 			model: parsedModel?.data,
@@ -1025,7 +1026,7 @@ export const createDrizzleSessionStore = (
 					eq(session.workspaceId, workspace.id)
 				)
 			)
-			.orderBy(asc(delegationInbox.createdAt))
+			.orderBy(asc(delegationInbox.createdAt), asc(delegationInbox.taskId))
 			.all()
 			.map(({ createdAt, task: row }) => {
 				const task = toDelegationTask(row);
@@ -1210,23 +1211,40 @@ export const createDrizzleSessionStore = (
 		});
 	};
 	const consumeDelegationReport = async ({
+		assistantCheckpoint,
 		parentSessionId,
 		record,
 		taskId,
 	}: ConsumeDelegationReportInput): Promise<boolean> => {
-		const validationError = getSessionRecordValidationError(record);
-		if (!isNull(validationError)) {
+		const committedRecords =
+			assistantCheckpoint === undefined
+				? [record]
+				: [assistantCheckpoint, record];
+		for (const committedRecord of committedRecords) {
+			const validationError = getSessionRecordValidationError(committedRecord);
+			if (!isNull(validationError)) {
+				throw new SessionRecordInvariantError(
+					`Invalid Session Record: ${validationError}`
+				);
+			}
+		}
+		if (
+			assistantCheckpoint !== undefined &&
+			(assistantCheckpoint.outcome.kind !== "assistant-checkpoint" ||
+				assistantCheckpoint.turnId !== record.turnId)
+		) {
 			throw new SessionRecordInvariantError(
-				`Invalid Session Record: ${validationError}`
+				"The report checkpoint must belong to the same Agent Turn."
 			);
 		}
-		const modelJson = serializeJson(
-			toSessionRecordModel(
-				record.model,
-				record.model.effort,
-				record.model.reasoningMode
-			)
-		);
+		if (
+			record.outcome.kind !== "user" ||
+			record.outcome.delegationReportTaskId !== taskId
+		) {
+			throw new SessionRecordInvariantError(
+				"The report record must identify the consumed Delegated Task."
+			);
+		}
 		const now = new Date();
 		return db.transaction((tx) => {
 			const parent = tx
@@ -1273,20 +1291,30 @@ export const createDrizzleSessionStore = (
 				.orderBy(desc(sessionRecord.position))
 				.limit(1)
 				.get();
-			tx.insert(sessionRecord)
-				.values({
-					createdAt: now,
-					agentId: record.agentId,
-					messagesJson: serializeJson([...record.messages]),
-					modelJson,
-					outcomeJson: serializeJson(record.outcome),
-					position: (latest?.position ?? -1) + 1,
-					recordId: record.id,
-					sessionId: parentSessionId,
-					turnId: record.turnId,
-					version: record.version,
-				})
-				.run();
+			let position = (latest?.position ?? -1) + 1;
+			for (const committedRecord of committedRecords) {
+				tx.insert(sessionRecord)
+					.values({
+						createdAt: now,
+						agentId: committedRecord.agentId,
+						messagesJson: serializeJson([...committedRecord.messages]),
+						modelJson: serializeJson(
+							toSessionRecordModel(
+								committedRecord.model,
+								committedRecord.model.effort,
+								committedRecord.model.reasoningMode
+							)
+						),
+						outcomeJson: serializeJson(committedRecord.outcome),
+						position,
+						recordId: committedRecord.id,
+						sessionId: parentSessionId,
+						turnId: committedRecord.turnId,
+						version: committedRecord.version,
+					})
+					.run();
+				position += 1;
+			}
 			tx.update(session)
 				.set({ lastMessageAt: now, updatedAt: now })
 				.where(eq(session.id, parentSessionId))
@@ -1594,7 +1622,11 @@ export const createDrizzleSessionStore = (
 			db.update(session)
 				.set({
 					updatedAt: new Date(),
-					...omitUndefined({ title: data.title, pinned: data.pinned }),
+					...omitUndefined({
+						title: data.title,
+						pinned: data.pinned,
+						reportContinuationPaused: data.reportContinuationPaused,
+					}),
 				})
 				.where(
 					and(eq(session.id, sessionId), eq(session.workspaceId, workspace.id))

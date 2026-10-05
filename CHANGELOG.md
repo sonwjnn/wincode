@@ -8,10 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Delegated work runs in durable child Sessions.** A process-owned Session Host
   Manager retains one Stateful Agent per live Session, while each delegated task
-  receives a linked child Session and durable lifecycle. Reports enter an atomic
-  parent inbox and are consumed only by explicit continuation. Print waits for
-  children, JSON tags child events, and RPC protocol v4 reports background
+  receives a linked child Session and durable lifecycle. The child Agent
+  identity is restored from its Delegated Task, including subagent roles.
+  Reports enter the parent inbox before acknowledgment. An active parent
+  receives a report in the same turn at a safe follow-up boundary, after
+  committed steering and current assistant/Tool Call work. An idle
+  Interactive/RPC Host automatically continues from the oldest report,
+  including after reopening, before queued Submissions. Each consumed report
+  becomes one ordinary parent Session message. Print and JSON preserve one-shot
+  behavior and do not auto-prompt an idle report inbox; RPC reports background
   approval notices.
+  Non-terminal assistant checkpoints keep output before a report ahead of its
+  record in reopened history.
+  If shutdown lands after report commit but before its first model response,
+  Interactive/RPC restores continuation from that durable report record.
+  An explicit parent interrupt keeps pending report continuation paused across
+  reopen until the user resumes.
 
 - **A view-scoped focus registry keeps the composer reachable.** Session and
   new-session views resolve composers by OpenTUI IDs instead of callback refs.

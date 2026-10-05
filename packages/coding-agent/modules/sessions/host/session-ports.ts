@@ -643,15 +643,17 @@ export const createSessionPorts = ({
 						event
 					),
 				onViewState: (viewState) => callbacks.onViewState(viewState),
+				getAssistantMessageId: request.getAssistantMessageId,
 				runtime: statefulAgent,
 				signal,
 				...omitUndefined({
 					sourceUserMessageId: execution.sourceUserMessageId ?? undefined,
 				}),
-				// The Agent Session hands this turn its waiting Steering Messages;
-				// the Host only forwards them, leaving translation at the Agent
-				// Runtime boundary.
+				// The Agent Session prepares durable Steering and Delegation inputs.
+				// Stateful Agent owns their runtime queues and polls each source only
+				// at the corresponding safe boundary.
 				takeSteeringMessages: request.takeSteeringMessages,
+				takeFollowUpMessages: request.takeFollowUpMessages,
 				turn,
 			});
 			return { turn };
@@ -689,14 +691,21 @@ export const createSessionPorts = ({
 				capabilities.getStore().attachmentStore?.retain(attachmentIds),
 		},
 		commitRecord: (input) => capabilities.getStore().commitSessionRecord(input),
-		consumeDelegationReport: ({ record, taskId }) =>
+		consumeDelegationReport: ({ assistantCheckpoint, record, taskId }) =>
 			capabilities.getStore().consumeDelegationReport({
+				assistantCheckpoint,
 				parentSessionId: sessionId,
 				record,
 				taskId,
 			}),
+		listPendingDelegationReports: () =>
+			capabilities.getStore().listPendingDelegationReports(sessionId),
 		updateSubmissionStatus: (input) =>
 			capabilities.getStore().updateSessionSubmission({ ...input, sessionId }),
+		persistReportContinuationPaused: (paused) =>
+			capabilities
+				.getStore()
+				.updateSession(sessionId, { reportContinuationPaused: paused }),
 		compaction: {
 			compact: (input) =>
 				capabilities.getCompactionModule().compact({
@@ -713,6 +722,7 @@ export const createSessionPorts = ({
 					? input
 					: {
 							...input,
+							agent: delegationTask.agentId,
 							delegation: {
 								parentToolCallId: delegationTask.parentToolCallId,
 								parentTurnId: delegationTask.parentTurnId,
@@ -730,13 +740,29 @@ export const createSessionPorts = ({
 			);
 			const registry = capabilities.getRegistry();
 			if (isNull(registry)) {
-				return delegatedInput;
+				if (delegationTask === undefined) {
+					return delegatedInput;
+				}
+				const { resolvedAgent: _resolvedAgent, ...unresolvedInput } =
+					delegatedInput;
+				return unresolvedInput;
+			}
+			if (
+				delegationTask !== undefined &&
+				!registry.agents.some(
+					({ id, isAvailable }) => id === delegationTask.agentId && isAvailable
+				)
+			) {
+				const { resolvedAgent: _resolvedAgent, ...unresolvedInput } =
+					delegatedInput;
+				return unresolvedInput;
 			}
 			const effective = resolveEffectiveAgentSelection(
 				registry,
 				delegatedInput.agent,
 				delegatedInput.model,
-				selection
+				selection,
+				delegationTask !== undefined
 			);
 			strictReasoningSelection(
 				effective.model,
