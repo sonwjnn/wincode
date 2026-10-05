@@ -42,6 +42,7 @@ import type {
 	AgentSessionInternalPort,
 	AgentSessionPorts,
 	SessionExecution,
+	SessionQueuedSubmission,
 	SessionResolvedAgent,
 	SessionSkillCatalog,
 	SessionSkillResolution,
@@ -79,7 +80,7 @@ export type SessionPortsOptions = Readonly<{
 	delegationTask?: DelegationTask;
 	isShutDown: () => boolean;
 	sessionId: SessionId;
-	statefulAgent: StatefulAgent;
+	statefulAgent: StatefulAgent<SessionQueuedSubmission>;
 }>;
 
 const strictReasoningSelection = (
@@ -666,6 +667,7 @@ export const createSessionPorts = ({
 	};
 
 	return {
+		inputScheduler: statefulAgent,
 		attachments: {
 			externalize: (messages, signal) =>
 				capabilities.getStore().externalizeAttachments(messages, signal, {

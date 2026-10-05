@@ -1,11 +1,13 @@
-# Agent Session separates queued Submissions from durable steering
+# Stateful Agent schedules queued Submissions separately from durable Steering Messages
 
-`prompt()` always admits a new Submission: it starts a turn when idle and adds
-an uncommitted, transient Queued Submission when busy. `steer()` takes no
-arguments and promotes exactly the FIFO head into a durable Steering Message,
-committing its user Session Record before acknowledging acceptance. The
-Submission Queue remains process-local; committed Steering Messages remain
-pending until a safe Model Step consumes them or a later execution resumes them.
+`prompt()` always admits a new Submission: it starts a turn when idle and asks
+the Stateful Agent to append an opaque, uncommitted Queued Submission when
+busy. `steer()` takes no arguments and asks that same owner to reserve exactly
+the FIFO head while the Coding-Agent Application commits its user Session
+Record. The Stateful Agent removes the head only after the durable commit
+succeeds. The Submission Queue remains process-local; committed Steering
+Messages remain pending until a safe Model Step consumes them or a later
+execution resumes them.
 
 Status: accepted
 
@@ -24,16 +26,21 @@ only committed Steering Messages survive restart reconciliation.
   composer calls `steer()` once. A Queued Submission retains its complete text,
   attachment, Skill, and expanded Custom Command composition while it waits.
 - `steer()` has no input payload. If the queue is empty, it accepts no message.
-  Otherwise it atomically takes exactly the oldest Queued Submission, preserves
-  its Submission and message identities, writes a distinct durable user Session
-  Record, and only then reports acceptance. The record immediately enters the
-  Session Transcript and Stored Session History; it is no longer Recall-able.
+  Otherwise the Stateful Agent reserves exactly the oldest Queued Submission
+  and serializes competing Steer and Recall operations around the application
+  commit decision. The application preserves its Submission and message
+  identities and writes a distinct durable user Session Record; the Stateful
+  Agent removes the reserved head only after that commit succeeds. Acceptance
+  then enters the Session Transcript and Stored Session History, and is no
+  longer Recall-able. A failed commit leaves the same head queued.
 - Each accepted Steering Message remains durable and pending until the Agent
-  Runtime prepares and consumes it. The Agent Session preserves the FIFO order
-  across messages; a turn ending before consumption leaves them ahead of
-  unsteered queued work for a later execution. Several messages accepted before
-  one safe boundary remain separate ordered user messages, even if the next
-  model request includes them together.
+  Runtime prepares and consumes it. The Stateful Agent schedules committed
+  Steering Messages before Delegation Reports and unsteered Queued Submissions;
+  a turn ending before consumption leaves Steering Messages ahead of later
+  work. Several messages accepted before one safe boundary remain separate
+  ordered user messages, even if the next model request includes them together.
+  An idle continuation is still requested by the application; enqueueing alone
+  never starts an Agent Turn.
 - The current model request and its Tool Call batch finish before pending
   Steering Messages are consumed. Preparation at that safe boundary supports
   attachments and explicit Skill intent, uses the active Agent and Model Target
@@ -57,10 +64,12 @@ only committed Steering Messages survive restart reconciliation.
   recovery aid, but the process-local Submission Queue is not restored or
   replayed after restart. Restart reconciliation instead discovers committed,
   unread Steering Messages from durable history and retains their identities.
-- The Agent Session retains attachment references while a Submission is
-  uncommitted and keeps committed attachment content available until
-  preparation completes, so storage maintenance cannot reclaim input still
-  awaiting processing.
+- The Coding-Agent Application retains attachment references while a
+  Submission is uncommitted and keeps committed attachment content available
+  until preparation completes, so storage maintenance cannot reclaim input
+  still awaiting processing. It owns composition, preparation, durable records,
+  status, and presentation; the Stateful Agent owns the transient FIFO and
+  scheduling decisions.
 
 Normal unsteered queued work continues to drain FIFO under the existing
 terminal-outcome policy, one Submission per Agent Turn. Durable pending

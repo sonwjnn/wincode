@@ -51,6 +51,115 @@ const consume = async (
 	}
 };
 
+test("a failed queued-input commit stays Recall-able and Recall waits for the next commit", async () => {
+	const runtime: AgentRuntime = {
+		run: () => ({
+			async *[Symbol.asyncIterator]() {
+				// Queue contract coverage does not invoke the model runtime.
+			},
+		}),
+	};
+	const agent = createStatefulAgent<{ id: string; text: string }>({
+		getQueuedSubmissionId: ({ id }) => id,
+		runtime,
+	});
+	const first = { id: "first", text: "first submission" };
+	const second = { id: "second", text: "second submission" };
+	agent.enqueueSubmission(first);
+	agent.enqueueSubmission(second);
+
+	const failed = await agent.steerQueuedSubmission(async () => ({
+		committed: false,
+		receipt: "storage refused the first submission",
+	}));
+	expect(failed).toMatchObject({ kind: "settled", committed: false });
+	expect(agent.getSnapshot().queuedSubmissions).toEqual([first, second]);
+
+	const commitStarted = Promise.withResolvers<void>();
+	const releaseCommit = Promise.withResolvers<void>();
+	const steered = agent.steerQueuedSubmission(async (submission) => {
+		commitStarted.resolve();
+		await releaseCommit.promise;
+		return { committed: true, receipt: submission.id };
+	});
+	await commitStarted.promise;
+	const recalled = agent.recallQueuedSubmissions();
+	expect(agent.getSnapshot().queuedSubmissions).toEqual([first, second]);
+
+	releaseCommit.resolve();
+	expect(await steered).toEqual({
+		kind: "settled",
+		committed: true,
+		receipt: "first",
+	});
+	expect(await recalled).toEqual([second]);
+	expect(agent.getSnapshot().queuedSubmissions).toEqual([]);
+	await agent.shutdown();
+});
+
+test("an empty queue-head Steer cannot claim a Submission admitted afterward", async () => {
+	const agent = createStatefulAgent<{ id: string; text: string }>({
+		getQueuedSubmissionId: ({ id }) => id,
+		runtime: {
+			run: () => ({
+				async *[Symbol.asyncIterator]() {
+					// This contract does not invoke the model runtime.
+				},
+			}),
+		},
+	});
+	const later = { id: "later", text: "later submission" };
+	const steer = agent.steerQueuedSubmission(async () => ({
+		committed: true,
+		receipt: "committed",
+	}));
+	agent.enqueueSubmission(later);
+
+	expect(await steer).toEqual({ kind: "empty" });
+	expect(agent.getQueuedSubmissions()).toEqual([later]);
+	await agent.shutdown();
+});
+
+test("idle input selection prioritizes steering, reports, then FIFO Submissions", async () => {
+	let runtimeStarts = 0;
+	const agent = createStatefulAgent<{ id: string; text: string }>({
+		getQueuedSubmissionId: ({ id }) => id,
+		runtime: {
+			run: () => {
+				runtimeStarts += 1;
+				return {
+					async *[Symbol.asyncIterator]() {
+						// This selection contract does not execute a turn.
+					},
+				};
+			},
+		},
+	});
+	agent.enqueueSubmission({ id: "first", text: "first submission" });
+	agent.enqueueSubmission({ id: "second", text: "second submission" });
+
+	expect(
+		agent.selectNextInput({
+			hasSteeringMessages: true,
+			hasDelegationReports: true,
+		})
+	).toBe("steering");
+	expect(
+		agent.selectNextInput({
+			hasSteeringMessages: false,
+			hasDelegationReports: true,
+		})
+	).toBe("delegation-report");
+	expect(
+		agent.selectNextInput({
+			hasSteeringMessages: false,
+			hasDelegationReports: false,
+		})
+	).toBe("submission");
+	expect(runtimeStarts).toBe(0);
+	await agent.shutdown();
+});
+
 test("Stateful Agent owns live model context across turns and rebases compacted history", async () => {
 	const runtimeInputs: (readonly AgentTurnMessage[])[] = [];
 	const runtime: AgentRuntime = {

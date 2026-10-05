@@ -22,6 +22,7 @@ import type {
 	AgentSession,
 	AgentSessionInternalPort,
 	AgentSessionPorts,
+	SessionQueuedSubmission,
 	SessionSteeringMessage,
 } from "../agent-session/types";
 import { rebuildActiveMessages } from "../compaction/compaction";
@@ -322,7 +323,7 @@ export const createSessionHost = async ({
 	let agentSessionInternalPort: AgentSessionInternalPort | undefined;
 	let isShutDown = false;
 	let shutdownPromise: Promise<void> | undefined;
-	let statefulAgent: StatefulAgent | undefined;
+	let statefulAgent: StatefulAgent<SessionQueuedSubmission> | undefined;
 
 	/**
 	 * Reports one event to the Host's observers. Everything the Agent Session
@@ -417,7 +418,8 @@ export const createSessionHost = async ({
 		const opened = await openSession(capabilities, sessionId);
 		const autoContinueDelegationReports =
 			executionMode !== "print" && executionMode !== "json";
-		statefulAgent = createStatefulAgent({
+		statefulAgent = createStatefulAgent<SessionQueuedSubmission>({
+			getQueuedSubmissionId: ({ id }) => id,
 			runtime: capabilities.getRuntime?.() ?? defaultRuntimeFactory(),
 		});
 		const ports: AgentSessionPorts = withEventChannel(

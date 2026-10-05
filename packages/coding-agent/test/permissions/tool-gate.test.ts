@@ -32,6 +32,7 @@ import {
 	toolCallId as makeToolCallId,
 	sessionId,
 } from "../support/identifiers";
+import { createTestInputScheduler } from "../support/stateful-agent";
 
 const createGate = (
 	permission = createToolPermission(),
@@ -1363,6 +1364,7 @@ describe("approval settlement through the Agent Session", () => {
 		new AgentSessionImpl({
 			initialTranscript: [],
 			ports: fromPartial<AgentSessionPorts>({
+				inputScheduler: createTestInputScheduler(),
 				turnRunner: { requestOverheadTokens: () => 0 },
 				persistReportContinuationPaused: async () => undefined,
 				// Compaction is not part of this seam; the Agent Session only needs the port.
