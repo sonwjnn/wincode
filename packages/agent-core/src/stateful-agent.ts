@@ -15,28 +15,86 @@ import type {
 
 const EMPTY_AGENT_TURN_MESSAGES: readonly AgentTurnMessage[] = [];
 
-export type StatefulAgentSnapshot = Readonly<{
+export type StatefulAgentSnapshot<TQueuedSubmission = never> = Readonly<{
 	activeTurnId: AgentTurnId | null;
 	closed: boolean;
 	context: readonly AgentTurnMessage[];
 	lastTerminalEvent: AgentTurnTerminalEvent | null;
+	queuedSubmissions: readonly TQueuedSubmission[];
 	turnCount: number;
 }>;
 
-export type StatefulAgent = Readonly<{
+export type StatefulAgentNextInput =
+	| "steering"
+	| "delegation-report"
+	| "submission"
+	| "none";
+
+export type StatefulAgentQueueCommit<TReceipt> = Readonly<{
+	committed: boolean;
+	receipt: TReceipt;
+}>;
+
+export type StatefulAgentQueueSteerResult<TReceipt> =
+	| { readonly kind: "empty" }
+	| {
+			readonly kind: "settled";
+			readonly committed: boolean;
+			readonly receipt: TReceipt;
+	  };
+
+export type StatefulAgent<TQueuedSubmission = never> = Readonly<{
 	abort: () => void;
+	/** Adds an opaque Submission to the transient FIFO without starting a turn. */
+	enqueueSubmission: (submission: TQueuedSubmission) => boolean;
 	/** Queues prepared input for the next safe Model Step boundary. */
 	steer: (message: AgentTurnMessage) => void;
 	/** Queues prepared input for a safe follow-up boundary without starting or interrupting a turn. */
 	followUp: (message: AgentTurnMessage) => void;
-	getSnapshot: () => StatefulAgentSnapshot;
+	getQueuedSubmissions: () => readonly TQueuedSubmission[];
+	getSnapshot: () => StatefulAgentSnapshot<TQueuedSubmission>;
+	hasPendingSubmissionTransition: () => boolean;
+	/** Selects the next idle input lane when an application explicitly requests execution. */
+	selectNextInput: (pending: {
+		hasSteeringMessages: boolean;
+		hasDelegationReports: boolean;
+	}) => StatefulAgentNextInput;
+	/** Replaces the payload for a waiting Submission without changing its FIFO position. */
+	replaceQueuedSubmission: (submission: TQueuedSubmission) => boolean;
+	/** Takes only the FIFO head when no serialized queue operation is pending. */
+	takeQueuedSubmission: (id: string) => TQueuedSubmission | undefined;
+	/** Commits exactly the FIFO head; failed commits leave it queued and recalls serialize behind the decision. */
+	steerQueuedSubmission: <TReceipt>(
+		commit: (
+			submission: TQueuedSubmission
+		) => Promise<StatefulAgentQueueCommit<TReceipt>>,
+		onCommitted?: (submission: TQueuedSubmission, receipt: TReceipt) => void
+	) => Promise<StatefulAgentQueueSteerResult<TReceipt>>;
+	/** Recalls matching uncommitted Submissions after an in-flight commit decision settles. */
+	recallQueuedSubmissions: (
+		shouldRecall?: (submission: TQueuedSubmission) => boolean,
+		onRecalled?: (submissions: readonly TQueuedSubmission[]) => void
+	) => Promise<readonly TQueuedSubmission[]>;
 	run: AgentRuntime["run"];
 	shutdown: () => Promise<void>;
 	subscribe: (listener: () => void) => () => void;
 	waitForIdle: () => Promise<void>;
 }>;
 
-export type StatefulAgentOptions = Readonly<{
+export type StatefulAgentInputScheduler<TQueuedSubmission> = Pick<
+	StatefulAgent<TQueuedSubmission>,
+	| "enqueueSubmission"
+	| "getQueuedSubmissions"
+	| "hasPendingSubmissionTransition"
+	| "recallQueuedSubmissions"
+	| "replaceQueuedSubmission"
+	| "selectNextInput"
+	| "steerQueuedSubmission"
+	| "takeQueuedSubmission"
+>;
+
+export type StatefulAgentOptions<TQueuedSubmission = never> = Readonly<{
+	getQueuedSubmissionId?: (submission: TQueuedSubmission) => string;
 	runtime: AgentRuntime;
 }>;
 
@@ -207,15 +265,20 @@ const createAgentTurnContextProjector = (
  * current model context and turn lifecycle across invocations while the caller
  * supplies application-owned Session preparation and persistence.
  */
-export const createStatefulAgent = ({
+export const createStatefulAgent = <TQueuedSubmission = never>({
+	getQueuedSubmissionId,
 	runtime,
-}: StatefulAgentOptions): StatefulAgent => {
+}: StatefulAgentOptions<TQueuedSubmission>): StatefulAgent<TQueuedSubmission> => {
 	let activeController: AbortController | undefined;
 	let activeTurnId: AgentTurnId | null = null;
 	let closed = false;
 	let context: readonly AgentTurnMessage[] = [];
 	const followUpMessages: AgentTurnMessage[] = [];
 	const steeringMessages: AgentTurnMessage[] = [];
+	const queuedSubmissions: TQueuedSubmission[] = [];
+	let queuedSubmissionCommitId: string | undefined;
+	let pendingQueueTransitions = 0;
+	let queueTransitionTail: Promise<void> = Promise.resolve();
 	let lastTerminalEvent: AgentTurnTerminalEvent | null = null;
 	let turnCount = 0;
 	let idle = Promise.resolve();
@@ -230,11 +293,23 @@ export const createStatefulAgent = ({
 			}
 		}
 	};
-	const getSnapshot = (): StatefulAgentSnapshot => ({
+	const getQueuedSubmissionIdOrThrow = (
+		submission: TQueuedSubmission
+	): string => {
+		if (getQueuedSubmissionId === undefined) {
+			throw new AgentInvariantError(
+				"invalid-transition",
+				"A Stateful Agent needs a queued Submission identity before it can schedule input."
+			);
+		}
+		return getQueuedSubmissionId(submission);
+	};
+	const getSnapshot = (): StatefulAgentSnapshot<TQueuedSubmission> => ({
 		activeTurnId,
 		closed,
 		context,
 		lastTerminalEvent,
+		queuedSubmissions: [...queuedSubmissions],
 		turnCount,
 	});
 	const abort = (): void => {
@@ -270,6 +345,197 @@ export const createStatefulAgent = ({
 			);
 		}
 		followUpMessages.push(message);
+	};
+	const scheduleQueueTransition = <TResult>(
+		transition: () => Promise<TResult>
+	): Promise<TResult> => {
+		pendingQueueTransitions += 1;
+		const operation = queueTransitionTail.then(async () => {
+			try {
+				return await transition();
+			} finally {
+				pendingQueueTransitions -= 1;
+				publish();
+			}
+		});
+		queueTransitionTail = operation.then(
+			() => undefined,
+			() => undefined
+		);
+		return operation;
+	};
+	const enqueueSubmission = (submission: TQueuedSubmission): boolean => {
+		if (closed) {
+			return false;
+		}
+		const id = getQueuedSubmissionIdOrThrow(submission);
+		if (
+			queuedSubmissions.some(
+				(queued) => getQueuedSubmissionIdOrThrow(queued) === id
+			)
+		) {
+			throw new AgentInvariantError(
+				"invalid-transition",
+				"A Stateful Agent cannot queue the same Submission identity twice."
+			);
+		}
+		queuedSubmissions.push(submission);
+		publish();
+		return true;
+	};
+	const getQueuedSubmissions = (): readonly TQueuedSubmission[] => [
+		...queuedSubmissions,
+	];
+	const hasPendingSubmissionTransition = (): boolean =>
+		pendingQueueTransitions > 0;
+	const replaceQueuedSubmission = (submission: TQueuedSubmission): boolean => {
+		const id = getQueuedSubmissionIdOrThrow(submission);
+		const index = queuedSubmissions.findIndex(
+			(queued) => getQueuedSubmissionIdOrThrow(queued) === id
+		);
+		if (index < 0) {
+			return false;
+		}
+		queuedSubmissions[index] = submission;
+		publish();
+		return true;
+	};
+	const takeQueuedSubmission = (id: string): TQueuedSubmission | undefined => {
+		if (pendingQueueTransitions > 0 || queuedSubmissionCommitId !== undefined) {
+			return;
+		}
+		const head = queuedSubmissions[0];
+		if (head === undefined || getQueuedSubmissionIdOrThrow(head) !== id) {
+			return;
+		}
+		queuedSubmissions.shift();
+		publish();
+		return head;
+	};
+	const recallQueuedSubmissions = (
+		shouldRecall: (submission: TQueuedSubmission) => boolean = () => true,
+		onRecalled?: (submissions: readonly TQueuedSubmission[]) => void
+	): Promise<readonly TQueuedSubmission[]> => {
+		const recall = (): readonly TQueuedSubmission[] => {
+			const recalled = queuedSubmissions.filter(shouldRecall);
+			if (recalled.length === 0) {
+				return recalled;
+			}
+			const recalledIds = new Set(
+				recalled.map((submission) => getQueuedSubmissionIdOrThrow(submission))
+			);
+			for (let index = queuedSubmissions.length - 1; index >= 0; index -= 1) {
+				const submission = queuedSubmissions[index];
+				if (
+					submission !== undefined &&
+					recalledIds.has(getQueuedSubmissionIdOrThrow(submission))
+				) {
+					queuedSubmissions.splice(index, 1);
+				}
+			}
+			try {
+				onRecalled?.(recalled);
+			} catch {
+				// A recall observer cannot restore a removed Submission.
+			}
+			publish();
+			return recalled;
+		};
+		if (pendingQueueTransitions === 0) {
+			return Promise.resolve(recall());
+		}
+		return scheduleQueueTransition(async () => recall());
+	};
+	const commitQueuedSubmission = async <TReceipt>(
+		submission: TQueuedSubmission,
+		commit: (
+			submission: TQueuedSubmission
+		) => Promise<StatefulAgentQueueCommit<TReceipt>>,
+		onCommitted:
+			| ((submission: TQueuedSubmission, receipt: TReceipt) => void)
+			| undefined
+	): Promise<StatefulAgentQueueSteerResult<TReceipt>> => {
+		const id = getQueuedSubmissionIdOrThrow(submission);
+		queuedSubmissionCommitId = id;
+		publish();
+		try {
+			const outcome = await commit(submission);
+			if (outcome.committed) {
+				const currentHead = queuedSubmissions[0];
+				if (
+					currentHead === undefined ||
+					getQueuedSubmissionIdOrThrow(currentHead) !== id
+				) {
+					throw new AgentInvariantError(
+						"invalid-transition",
+						"A committed Submission must remain the Stateful Agent queue head."
+					);
+				}
+				queuedSubmissions.shift();
+				try {
+					onCommitted?.(submission, outcome.receipt);
+				} catch {
+					// A durable commit cannot be rolled back by a projection observer.
+				}
+				publish();
+			}
+			return {
+				kind: "settled",
+				committed: outcome.committed,
+				receipt: outcome.receipt,
+			};
+		} finally {
+			queuedSubmissionCommitId = undefined;
+			publish();
+		}
+	};
+	const steerQueuedSubmission = <TReceipt>(
+		commit: (
+			submission: TQueuedSubmission
+		) => Promise<StatefulAgentQueueCommit<TReceipt>>,
+		onCommitted?: (submission: TQueuedSubmission, receipt: TReceipt) => void
+	): Promise<StatefulAgentQueueSteerResult<TReceipt>> => {
+		const submission = queuedSubmissions[0];
+		if (submission === undefined) {
+			return Promise.resolve({ kind: "empty" });
+		}
+		if (pendingQueueTransitions > 0) {
+			return scheduleQueueTransition(async () => {
+				const next = queuedSubmissions[0];
+				return next === undefined
+					? { kind: "empty" }
+					: commitQueuedSubmission(next, commit, onCommitted);
+			});
+		}
+		pendingQueueTransitions += 1;
+		const operation = commitQueuedSubmission(
+			submission,
+			commit,
+			onCommitted
+		).finally(() => {
+			pendingQueueTransitions -= 1;
+			publish();
+		});
+		queueTransitionTail = operation.then(
+			() => undefined,
+			() => undefined
+		);
+		return operation;
+	};
+	const selectNextInput = (pending: {
+		hasSteeringMessages: boolean;
+		hasDelegationReports: boolean;
+	}): StatefulAgentNextInput => {
+		if (pending.hasSteeringMessages) {
+			return "steering";
+		}
+		if (pending.hasDelegationReports) {
+			return "delegation-report";
+		}
+		if (queuedSubmissions.length > 0) {
+			return "submission";
+		}
+		return "none";
 	};
 	const assertCanStartTurn = (): void => {
 		if (closed) {
@@ -437,8 +703,16 @@ export const createStatefulAgent = ({
 
 	return {
 		abort,
+		enqueueSubmission,
 		followUp,
+		getQueuedSubmissions,
 		getSnapshot,
+		hasPendingSubmissionTransition,
+		selectNextInput,
+		replaceQueuedSubmission,
+		takeQueuedSubmission,
+		steerQueuedSubmission,
+		recallQueuedSubmissions,
 		run,
 		shutdown,
 		steer,

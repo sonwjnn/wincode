@@ -5,6 +5,7 @@ import {
 	isSessionToolCallPart,
 	type SessionMessageId,
 	type SessionRecord,
+	type StatefulAgentNextInput,
 	type ToolCallId,
 	toSessionMessageId,
 } from "@wincode/agent-core";
@@ -242,7 +243,6 @@ type AgentSessionOperationState = {
 			SessionQueuedSubmission["id"],
 			SessionInputExternalization
 		>;
-		steeringCommitId: SessionQueuedSubmission["id"] | undefined;
 	};
 	readonly recovery: {
 		readonly activeRuns: Set<symbol>;
@@ -655,7 +655,7 @@ export class AgentSessionImpl implements AgentSession {
 			error: null,
 			executions: [],
 			isCompacting: false,
-			queuedSubmissions: [],
+			queuedSubmissions: [...ports.inputScheduler.getQueuedSubmissions()],
 			pendingDelegationReports: [...initialPendingDelegationReports],
 			steeringMessages: [...initialSteeringMessages],
 			transcript: [...initialTranscript],
@@ -697,7 +697,6 @@ export class AgentSessionImpl implements AgentSession {
 			queue: {
 				externalizations: new Map(),
 				drainPhase: "idle",
-				steeringCommitId: undefined,
 			},
 			recovery: {
 				activeRuns: new Set(),
@@ -819,8 +818,18 @@ export class AgentSessionImpl implements AgentSession {
 		let scheduleDelegationReportFollowUps = (): void => undefined;
 		const publish = (changes: Partial<LiveSessionSnapshot>): void => {
 			const compactionPhase = sessionState.compaction.activeCommand?.phase;
+			const scheduledSubmissions = ports.inputScheduler.getQueuedSubmissions();
+			const currentSubmissions = this.#state.queuedSubmissions;
+			const queuedSubmissionsUnchanged =
+				currentSubmissions.length === scheduledSubmissions.length &&
+				currentSubmissions.every(
+					(submission, index) => submission === scheduledSubmissions[index]
+				);
 			const projectedChanges: Partial<LiveSessionSnapshot> = {
 				...changes,
+				queuedSubmissions: queuedSubmissionsUnchanged
+					? currentSubmissions
+					: [...scheduledSubmissions],
 				isCompacting:
 					compactionPhase === "preparing" || compactionPhase === "running",
 				turnActive:
@@ -1366,15 +1375,18 @@ export class AgentSessionImpl implements AgentSession {
 					sessionState.lane.activeInput
 				);
 				if (prepared.kind === "rejected") {
-					return prepared;
+					return { kind: "rejected", admission: prepared };
 				}
 				const { input, message, record, text, turnId } = prepared;
 				if (!(await steering.persistRecord(record, input))) {
 					return {
 						kind: "rejected",
-						messageId: queued.messageId,
-						reason: "Could not durably commit the Submission.",
-						submissionId: queued.submissionId,
+						admission: {
+							kind: "rejected",
+							messageId: queued.messageId,
+							reason: "Could not durably commit the Submission.",
+							submissionId: queued.submissionId,
+						},
 					};
 				}
 				const steeringInput = {
@@ -1393,16 +1405,29 @@ export class AgentSessionImpl implements AgentSession {
 					recordId: record.id,
 					status: "pending",
 				};
-				const queuedSubmissions = this.#state.queuedSubmissions.filter(
-					(submission) => submission.id !== queued.id
-				);
-				const attachmentIds = queued.input.composition.files.flatMap(
+				return {
+					kind: "committed",
+					admission: {
+						kind: "steered",
+						messageId: queued.messageId,
+						submissionId: queued.submissionId,
+						...omitUndefined({ turnId }),
+					},
+					steeringMessage,
+				};
+			};
+		const completeSteeringSubmission: SessionInputLanePort["completeSteeringSubmission"] =
+			(queued, receipt) => {
+				if (receipt.kind !== "committed") {
+					return;
+				}
+				const { admission, steeringMessage } = receipt;
+				const attachmentIds = steeringMessage.input.composition.files.flatMap(
 					({ attachmentId }) =>
 						attachmentId === undefined ? [] : [attachmentId]
 				);
 				publish({
 					context: this.#state.context,
-					queuedSubmissions,
 					steeringMessages: [...this.#state.steeringMessages, steeringMessage],
 					transcript: appendMissingCommittedRecordMessages(
 						this.#state.transcript,
@@ -1416,14 +1441,8 @@ export class AgentSessionImpl implements AgentSession {
 					kind: "steered",
 					messageId: queued.messageId,
 					submissionId: queued.submissionId,
-					...omitUndefined({ turnId }),
+					...omitUndefined({ turnId: admission.turnId }),
 				});
-				return {
-					kind: "steered",
-					messageId: queued.messageId,
-					submissionId: queued.submissionId,
-					...omitUndefined({ turnId }),
-				};
 			};
 		steering = createSessionSteeringWorkflow({
 			attachments: ports.attachments,
@@ -1468,41 +1487,23 @@ export class AgentSessionImpl implements AgentSession {
 			addExternalization: (id, controller, completion) => {
 				sessionState.queue.externalizations.set(id, { completion, controller });
 			},
-			appendQueuedSubmission: (submission) =>
-				publish({
-					queuedSubmissions: [...this.#state.queuedSubmissions, submission],
-				}),
-			beginSteeringCommit: (id) => {
-				if (
-					sessionState.shutdown.closed ||
-					sessionState.queue.steeringCommitId !== undefined ||
-					this.#state.queuedSubmissions[0]?.id !== id
-				) {
-					return false;
-				}
-				sessionState.queue.steeringCommitId = id;
-				return true;
-			},
-			commitSteeringSubmission,
-			endSteeringCommit: (id) => {
-				if (sessionState.queue.steeringCommitId !== id) {
-					return;
-				}
-				sessionState.queue.steeringCommitId = undefined;
-			},
 			canDrainQueue: () =>
 				sessionState.lane.runs === 0 &&
 				!this.#state.turnActive &&
 				!this.#state.isCompacting &&
 				sessionState.compaction.activeCommand === undefined &&
 				sessionState.recovery.activeRuns.size === 0 &&
+				!ports.inputScheduler.hasPendingSubmissionTransition() &&
 				(this.#state.pendingDelegationReports.length === 0 ||
 					this.#state.steeringMessages.length > 0),
+			commitSteeringSubmission,
+			completeSteeringSubmission,
 			emitSubmissionEvent,
 			externalizeAttachments: (messages, signal) =>
 				ports.attachments.externalize(messages, signal),
 			getExternalization: (id) => sessionState.queue.externalizations.get(id),
 			getSnapshot: () => this.#state,
+			inputScheduler: ports.inputScheduler,
 			isClosed: () => sessionState.shutdown.closed,
 			isExecutionBusy: () =>
 				sessionState.lane.runs > 0 ||
@@ -1512,8 +1513,6 @@ export class AgentSessionImpl implements AgentSession {
 				sessionState.recovery.activeRuns.size > 0,
 			isExternalizing: (id) => sessionState.queue.externalizations.has(id),
 			isQueueDraining: () => sessionState.queue.drainPhase === "draining",
-			isSteeringCommitting: () =>
-				sessionState.queue.steeringCommitId !== undefined,
 			isSubmissionBusy: () =>
 				sessionState.lane.runs > 0 ||
 				sessionState.queue.drainPhase === "draining" ||
@@ -1522,60 +1521,26 @@ export class AgentSessionImpl implements AgentSession {
 				sessionState.compaction.activeCommand !== undefined ||
 				sessionState.recovery.activeRuns.size > 0 ||
 				sessionState.queue.externalizations.size > 0 ||
-				this.#state.queuedSubmissions.length > 0 ||
+				ports.inputScheduler.getQueuedSubmissions().length > 0 ||
 				this.#state.steeringMessages.length > 0 ||
 				this.#state.pendingDelegationReports.length > 0,
+			publishQueueChange: () => publish({}),
 			removeExternalization: (id) => {
 				sessionState.queue.externalizations.delete(id);
 			},
-			runSteeringMessage: (message) => steering.runPendingMessage(message),
-			retrySteeringMessage: (message) => steering.retryFailedMessage(message),
-			removeQueuedSubmission: (id) => {
-				const queued = this.#state.queuedSubmissions.find(
-					(submission) => submission.id === id
-				);
-				if (queued === undefined) {
-					return;
-				}
-				publish({
-					queuedSubmissions: this.#state.queuedSubmissions.filter(
-						(submission) => submission.id !== id
-					),
-				});
-				return queued;
-			},
-			replaceInputLanes: (queuedSubmissions, steeringMessages) =>
-				publish({
-					queuedSubmissions: [...queuedSubmissions],
-					steeringMessages: [...steeringMessages],
-				}),
-			replaceQueuedSubmission: (updated) =>
-				publish({
-					queuedSubmissions: this.#state.queuedSubmissions.map((submission) =>
-						submission.id === updated.id ? updated : submission
-					),
-				}),
 			reportSubmissionFailure,
 			retainAttachments: (attachmentIds) =>
 				ports.attachments.retain(attachmentIds),
 			releaseAttachments: (attachmentIds) =>
 				ports.attachments.release(attachmentIds),
 			runSubmission,
+			runSteeringMessage: (message) => steering.runPendingMessage(message),
+			retrySteeringMessage: (message) => steering.retryFailedMessage(message),
 			setQueueDraining: (draining) => {
 				sessionState.queue.drainPhase = draining ? "draining" : "idle";
 				if (!draining) {
 					scheduleDelegationReportFollowUps();
 				}
-			},
-			takeQueuedSubmission: (id) => {
-				const [queued] = this.#state.queuedSubmissions;
-				if (queued?.id !== id) {
-					return;
-				}
-				publish({
-					queuedSubmissions: this.#state.queuedSubmissions.slice(1),
-				});
-				return queued;
 			},
 			trackBackgroundTask,
 		};
@@ -1867,7 +1832,7 @@ export class AgentSessionImpl implements AgentSession {
 			try {
 				await waitForSessionRecordCommits();
 				if (
-					sessionState.queue.steeringCommitId !== undefined ||
+					ports.inputScheduler.hasPendingSubmissionTransition() ||
 					sessionState.executions.pendingSteering.size > 0 ||
 					sessionState.executions.pendingSteeringStarts.size > 0 ||
 					this.#state.steeringMessages.length > 0
@@ -2091,6 +2056,50 @@ export class AgentSessionImpl implements AgentSession {
 				finish();
 			});
 		};
+		const startScheduledInput = (
+			nextInput: StatefulAgentNextInput
+		): SessionContinuationOutcome | undefined => {
+			if (nextInput === "steering") {
+				const steering = this.#state.steeringMessages[0];
+				if (steering === undefined || steering.status !== "pending") {
+					return {
+						kind: "rejected",
+						reason:
+							steering?.reason ??
+							"A committed Submission failed; retry it before continuing.",
+					};
+				}
+				trackBackgroundTask(inputLane.drainQueuedSubmissions());
+				return {
+					kind: "started-submission",
+					messageId: steering.message.id,
+					submissionId: steering.input.submissionId,
+					...omitUndefined({ turnId: steering.input.turnId }),
+				};
+			}
+			if (nextInput === "delegation-report") {
+				const report = this.#state.pendingDelegationReports[0];
+				return report === undefined
+					? { kind: "rejected", reason: "No Delegation Report is pending." }
+					: consumeDelegationReport(report);
+			}
+			if (nextInput === "submission") {
+				const waiting = ports.inputScheduler.getQueuedSubmissions()[0];
+				if (waiting === undefined) {
+					return {
+						kind: "rejected",
+						reason: "No Queued Submission is available.",
+					};
+				}
+				trackBackgroundTask(inputLane.drainQueuedSubmissions());
+				return {
+					kind: "started-submission",
+					messageId: waiting.messageId,
+					submissionId: waiting.submissionId,
+					...omitUndefined({ turnId: waiting.input.turnId }),
+				};
+			}
+		};
 		const continueSession = (): SessionContinuationOutcome => {
 			if (sessionState.shutdown.closed) {
 				return { kind: "rejected", reason: SHUT_DOWN_SEND_ERROR };
@@ -2098,6 +2107,7 @@ export class AgentSessionImpl implements AgentSession {
 			if (
 				sessionState.lane.runs > 0 ||
 				sessionState.queue.drainPhase === "draining" ||
+				ports.inputScheduler.hasPendingSubmissionTransition() ||
 				this.#state.turnActive ||
 				this.#state.isCompacting ||
 				sessionState.compaction.activeCommand !== undefined ||
@@ -2110,37 +2120,14 @@ export class AgentSessionImpl implements AgentSession {
 					reason: "The Agent Session is busy.",
 				};
 			}
-			const steering = this.#state.steeringMessages[0];
-			if (steering !== undefined) {
-				if (steering.status !== "pending") {
-					return {
-						kind: "rejected",
-						reason:
-							steering.reason ??
-							"A committed Submission failed; retry it before continuing.",
-					};
-				}
-				trackBackgroundTask(inputLane.drainQueuedSubmissions());
-				return {
-					kind: "started-submission",
-					messageId: steering.message.id,
-					submissionId: steering.input.submissionId,
-					...omitUndefined({ turnId: steering.input.turnId }),
-				};
-			}
-			const report = this.#state.pendingDelegationReports[0];
-			if (report !== undefined) {
-				return consumeDelegationReport(report);
-			}
-			const waiting = this.#state.queuedSubmissions[0];
-			if (waiting !== undefined) {
-				trackBackgroundTask(inputLane.drainQueuedSubmissions());
-				return {
-					kind: "started-submission",
-					messageId: waiting.messageId,
-					submissionId: waiting.submissionId,
-					...omitUndefined({ turnId: waiting.input.turnId }),
-				};
+			const scheduledInput = startScheduledInput(
+				ports.inputScheduler.selectNextInput({
+					hasSteeringMessages: this.#state.steeringMessages.length > 0,
+					hasDelegationReports: this.#state.pendingDelegationReports.length > 0,
+				})
+			);
+			if (scheduledInput !== undefined) {
+				return scheduledInput;
 			}
 			const messages = findContinuationContextMessages(this.#state.context);
 			if (messages.kind === "rejected") {
@@ -2248,6 +2235,8 @@ export class AgentSessionImpl implements AgentSession {
 			sessionState.backgroundTasks.size > 0 ||
 			sessionState.recovery.activeRuns.size > 0 ||
 			sessionState.queue.externalizations.size > 0 ||
+			ports.inputScheduler.hasPendingSubmissionTransition() ||
+			ports.inputScheduler.getQueuedSubmissions().length > 0 ||
 			this.#state.turnActive ||
 			this.#state.isCompacting ||
 			this.#state.executions.length > 0;

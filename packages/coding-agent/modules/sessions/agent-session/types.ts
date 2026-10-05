@@ -9,6 +9,7 @@ import type {
 	SessionRecord,
 	SessionRecordId,
 	SessionSubmissionStatus,
+	StatefulAgentInputScheduler,
 	SubmissionId,
 	ToolCallId,
 } from "@wincode/agent-core";
@@ -83,6 +84,18 @@ export type SessionSteeringAdmission =
 			readonly submissionId: SubmissionId;
 			readonly turnId?: AgentTurnId;
 	  };
+
+/** Application data published after the Stateful Agent removes a committed head. */
+export type SessionSteeringCommitReceipt =
+	| Readonly<{
+			kind: "rejected";
+			admission: Extract<SessionSteeringAdmission, { kind: "rejected" }>;
+	  }>
+	| Readonly<{
+			kind: "committed";
+			admission: Extract<SessionSteeringAdmission, { kind: "steered" }>;
+			steeringMessage: SessionSteeringMessage;
+	  }>;
 
 export type SessionContinuationOutcome =
 	| { readonly kind: "rejected"; readonly reason: string }
@@ -163,9 +176,9 @@ export type SessionQueuedSendInput = SessionSendInput & {
 
 /**
  * One Submission a busy session accepted and holds instead of running: the send
- * it will run, and its identifier. It is transient Agent Session state, never
- * a Session Record, and it enters the Session Transcript only when it starts
- * running.
+ * it will run, and its identifier. The Stateful Agent holds this opaque
+ * application payload transiently; it is never a Session Record and enters the
+ * Session Transcript only when it starts running.
  */
 export type SessionQueuedSubmission = ReadonlyDeep<{
 	id: QueuedSubmissionId;
@@ -424,6 +437,8 @@ export type SessionTurnRunner = Readonly<{
  */
 export type AgentSessionPorts = Readonly<{
 	attachments: SessionAttachmentPort;
+	/** The Stateful Agent's transient Submission queue and lane selector. */
+	inputScheduler: StatefulAgentInputScheduler<SessionQueuedSubmission>;
 	/** The Session Compaction module whose per-session in-flight map owns admission. */
 	compaction: SessionCompactionPort;
 	/** Writes one durable Session Record. */

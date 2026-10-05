@@ -88,7 +88,7 @@ metadata, then prompt-config refs. _Avoid_: chat config, latest config
 ## Session Execution
 
 **Stateful Agent**:
-The in-memory runtime of one loaded conversation, including a delegated conversation, across multiple Agent Turns. It can keep running without an open UI, while an idle conversation can be unloaded and later restored from durable history. It owns live conversation state, tool execution, lifecycle events, approval settlement, and steering/follow-up scheduling; durable history and coding-specific policies remain outside it. _Avoid_: one Agent Turn, Session Store
+The in-memory runtime of one loaded conversation, including a delegated conversation, across multiple Agent Turns. It can keep running without an open UI, while an idle conversation can be unloaded and later restored from durable history. It owns live conversation state, tool execution, lifecycle events, approval settlement, the transient FIFO of opaque Queued Submissions, and input scheduling. At an explicit idle continuation it selects committed Steering Messages, then Delegation Reports, then Queued Submissions; enqueueing alone never starts a turn. Durable history, composition, attachment preparation, and coding-specific policy remain outside it. _Avoid_: one Agent Turn, Session Store
 
 **Delegated Conversation**:
 A separately identified, durable Session created for a Subagent's delegated work, linked to its parent Session and Tool Call. It can continue without a visible UI, be opened to observe its live execution, and accept the user's Submissions through its own Stateful Agent like a parent Session; a successful delegated task is reported only through an acknowledged `submit_result`. _Avoid_: branch of the parent's transcript, transient Subagent execution
@@ -106,7 +106,7 @@ The observable state of one assigned task, distinct from whether its child Sessi
 An explicit tool action the parent Agent may choose to stop one delegated task or all active descendant tasks without aborting its own turn. A user prompt does not itself cancel child work, and cancellation does not delete child Sessions or their history. _Avoid_: automatic cancellation on parent prompt, closing a child Session
 
 **Agent Session**:
-The application-level conversation boundary that connects the Stateful Agent to durable session history and coding-specific policies. It does not independently own a second copy of the live runtime state. _Avoid_: Stateful Agent, Session Store
+The application-level conversation boundary that connects the Stateful Agent to durable session history and coding-specific policies. It owns composition, attachment preparation, durable status and presentation, while projecting the Stateful Agent's transient queue without maintaining a second queue authority. _Avoid_: Stateful Agent, Session Store
 
 **Session Host**:
 The application-level composition that opens one Session and connects its Stateful Agent to session capabilities. Its lifetime is independent of which conversation the UI displays; it may release an idle runtime without deleting durable history. _Avoid_: UI view, Session Store, Stateful Agent
@@ -127,7 +127,7 @@ The one recovery a context-overflow refusal buys for the Agent Turn it ended: th
 One Tool Permission `ask` awaiting a decision. The Stateful Agent owns it through exactly one settlement; a request from a background child remains associated with that child Session and is signaled across sessions so a user can find and decide it. The coding application owns permission policy and presentation. _Avoid_: global approval without Session identity, approval prompt
 
 **Live Session Snapshot**:
-The immutable view of one Stateful Agent's current conversation and transient execution state, including uncommitted waiting Submissions, committed Steering Message status, and approvals. Observers receive it from the live owner, never from persisted history alone. _Avoid_: Session Snapshot, Stored Session History, state dump
+The immutable application-facing view of one Stateful Agent's current conversation and transient execution state, including the core-owned uncommitted Submission queue, committed Steering Message status, and approvals. Observers receive it from the live owner, never from persisted history alone. _Avoid_: Session Snapshot, Stored Session History, state dump
 
 **Stored Session History**:
 The committed Session Records and compactions read from storage without opening a Session Host, including the durable status needed to reconcile accepted-but-unread Steering Messages. It excludes in-flight output and transient state, and reading it grants no authority to run Session Commands. _Avoid_: Live Session Snapshot, live transcript, session owner
@@ -148,16 +148,16 @@ The live, transient projection of one Agent Turn Execution for its conversation'
 An input unit admitted by a session: user-authored text, attachments, pasted text, explicit Skill intent, or a Custom Command invocation with its expanded prompt. _Avoid_: message, request
 
 **Queued Submission**:
-A busy session's accepted Submission that has not started a turn or been steered. It remains uncommitted, retains its composition, can be Recalled, and is process-local rather than replayed after restart. _Avoid_: queued prompt, pending message, backlog item, Steering Message
+A busy session's accepted Submission that has not started a turn or been steered. The Stateful Agent holds its opaque application-prepared payload; it remains uncommitted, retains its composition, can be Recalled, and is process-local rather than replayed after restart. _Avoid_: queued prompt, pending message, backlog item, Steering Message
 
 **Submission Queue**:
-The FIFO order of uncommitted Queued Submissions exposed in the Live Session Snapshot. `prompt()` always admits a new input and never steers; `steer()` takes exactly the oldest item and commits it as a Steering Message. Unsteered work follows the existing drain/Recall policy; committed Steering Messages keep priority, and Delegation Reports precede unsteered Queued Submissions. Committed Steering Messages cannot be recalled. _Avoid_: message queue, follow-up list, outbox
+The Stateful Agent-owned FIFO of uncommitted Queued Submissions, projected in the Live Session Snapshot. `prompt()` always admits a new input and never steers; `steer()` reserves exactly the oldest item for application commit and removes it only after durable success. Unsteered work follows the existing drain/Recall policy; committed Steering Messages keep priority, and Delegation Reports precede unsteered Queued Submissions. The application requests continuation; queue admission alone does not run a turn. Committed Steering Messages cannot be recalled. _Avoid_: message queue, follow-up list, outbox
 
 **Recall**:
 Withdrawing uncommitted Queued Submissions back into the composer in order, restoring their composition instead of running them. Recall never removes or changes a committed Steering Message. _Avoid_: dequeue, withdraw, unsend, retract, delete
 
 **Steer**:
-A no-argument session command that takes exactly the oldest Queued Submission, if one exists, and commits it as a distinct durable user message before reporting acceptance. With no queued Submission it accepts no message; it never accepts replacement text or an arbitrary message payload. _Avoid_: auto-steer, direct-text steer, promote-only
+A no-argument session command that reserves exactly the oldest Queued Submission, if one exists, for the application to commit as a distinct durable user message. The Stateful Agent removes it only after commit success; a failed commit leaves it at the FIFO head, and Recall waits for the commit decision. With no queued Submission it accepts no message; it never accepts replacement text or an arbitrary message payload. _Avoid_: auto-steer, direct-text steer, promote-only
 
 **Steering Message**:
 A durable user Session Record created when `steer()` accepts a Queued Submission. Its message and Submission identities remain stable while it is pending, processed, failed, or deliberately retried; a committed message is not Recall-able. _Avoid_: transient interjection, lane-only message, mid-turn message
@@ -168,7 +168,7 @@ The FIFO order of committed Steering Messages awaiting processing at a safe Mode
 ## Agent Session API
 
 **Agent Continuation**:
-The resumption of an idle Agent Session without a caller-supplied Submission. It processes committed pending Steering Messages first, then Delegation Reports, then uncommitted Queued Submissions; with no waiting input, it resumes only from a last user message or a complete retained Tool Call result. It appends no duplicate user message and does not rerun completed tools. Incomplete Tool Calls/results and other context endpoints are rejected. Overflow recovery uses this context-only path after compaction. _Avoid_: retry, resend, new prompt
+The resumption of an idle Agent Session without a caller-supplied Submission. The Stateful Agent selects committed pending Steering Messages first, then Delegation Reports, then uncommitted Queued Submissions; with no waiting input, the application may resume only from a last user message or a complete retained Tool Call result. It appends no duplicate user message and does not rerun completed tools. Incomplete Tool Calls/results and other context endpoints are rejected. Overflow recovery uses this context-only path after compaction. _Avoid_: retry, resend, new prompt
 
 ## Language
 

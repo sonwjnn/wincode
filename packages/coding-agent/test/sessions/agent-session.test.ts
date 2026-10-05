@@ -72,6 +72,7 @@ import {
 	sessionRecordId,
 	toolCallId,
 } from "../support/identifiers";
+import { createTestInputScheduler } from "../support/stateful-agent";
 
 const model: ChatModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
@@ -125,6 +126,7 @@ const createPorts = ({
 		release: () => undefined,
 		retain: () => undefined,
 	},
+	inputScheduler: createTestInputScheduler(),
 	resolveSubmission: (input) => input,
 	listPendingDelegationReports: async () => [],
 	compaction,

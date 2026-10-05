@@ -26,6 +26,7 @@ import { logger } from "@wincode/utils";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import { buildAgentRegistry } from "@/modules/agents/registry";
 import type {
+	SessionSteeringAdmission,
 	SessionSubmissionAdmission,
 	SessionSubmissionEvent,
 } from "@/modules/sessions/agent-session/types";
@@ -43,7 +44,10 @@ import type {
 	SessionHost,
 	SessionHostManager,
 } from "@/modules/sessions/host/types";
-import type { SessionMessage } from "@/modules/sessions/message";
+import type {
+	SessionFilePart,
+	SessionMessage,
+} from "@/modules/sessions/message";
 import {
 	buildUserSessionRecord,
 	projectSessionRecords,
@@ -700,7 +704,25 @@ describe("Session Host lifetime", () => {
 	});
 	test("commits each queue-head steer before acknowledging and delivers four user messages FIFO", async () => {
 		const seeded = await seedSession("durable-steer");
-		const capabilities = createCapabilities();
+		const attachmentExternalizationStarted = Promise.withResolvers<void>();
+		const releaseAttachmentExternalization = Promise.withResolvers<void>();
+		const delayedAttachmentStore: SessionStore = {
+			...store,
+			externalizeAttachments: async (messages, signal, options) => {
+				const hasQueuedImage = messages.some(({ parts }) =>
+					parts.some(
+						(part) =>
+							part.type === "file" && part.filename === "queued-steer.png"
+					)
+				);
+				if (hasQueuedImage) {
+					attachmentExternalizationStarted.resolve();
+					await releaseAttachmentExternalization.promise;
+				}
+				return await store.externalizeAttachments(messages, signal, options);
+			},
+		};
+		const capabilities = createCapabilities(delayedAttachmentStore);
 		const host = await createSessionHost({
 			capabilities,
 			sessionId: seeded.sessionId,
@@ -750,11 +772,21 @@ describe("Session Host lifetime", () => {
 				);
 			}
 		};
-		const inputFor = (userText: string): SessionSendInput => ({
+		const inputFor = (
+			userText: string,
+			files: readonly SessionFilePart[] = []
+		): SessionSendInput => ({
 			...sendInput(capabilities),
-			composition: { files: [], text: userText },
+			composition: { files: [...files], text: userText },
+			files: [...files],
 			userText,
 		});
+		const queuedImage: SessionFilePart = {
+			filename: "queued-steer.png",
+			mediaType: "image/png",
+			type: "file",
+			url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=",
+		};
 
 		try {
 			const active = await host.agentSession.prompt(
@@ -774,7 +806,10 @@ describe("Session Host lifetime", () => {
 				userText: string;
 			}> = [];
 			for (const userText of queuedTexts) {
-				const admission = await host.agentSession.prompt(inputFor(userText));
+				const files = userText === queuedTexts[0] ? [queuedImage] : [];
+				const admission = await host.agentSession.prompt(
+					inputFor(userText, files)
+				);
 				if (admission.rejected) {
 					throw new Error(admission.reason);
 				}
@@ -788,10 +823,35 @@ describe("Session Host lifetime", () => {
 					)
 			).toBe(false);
 
-			for (const { admission, userText } of admissions) {
-				const outcome = await host.agentSession.steer();
+			const firstAdmission = admissions[0];
+			if (firstAdmission === undefined) {
+				throw new Error("The first queued Submission was not accepted.");
+			}
+			const firstSteering = host.agentSession.steer();
+			await attachmentExternalizationStarted.promise;
+			expect(
+				host
+					.getSnapshot()
+					.queuedSubmissions.map(({ input }) => input.composition.text)
+			).toEqual(queuedTexts);
+			expect(
+				(await store.listSessionRecords(seeded.sessionId)).some((record) =>
+					record.messages.some(
+						({ id }) => id === firstAdmission.admission.messageId
+					)
+				)
+			).toBe(false);
+			releaseAttachmentExternalization.resolve();
+
+			const assertSteered = async (
+				queued: (typeof admissions)[number],
+				outcome: SessionSteeringAdmission
+			): Promise<void> => {
+				const { admission, userText } = queued;
 				if (outcome.kind !== "steered") {
-					throw new Error("The queued Submission was not steered.");
+					throw new Error(
+						`The queued Submission was not steered: ${JSON.stringify(outcome)}`
+					);
 				}
 				expect(outcome).toMatchObject({
 					kind: "steered",
@@ -827,6 +887,10 @@ describe("Session Host lifetime", () => {
 						admission.submissionId,
 					])
 				).toEqual([]);
+			};
+			await assertSteered(firstAdmission, await firstSteering);
+			for (const queued of admissions.slice(1)) {
+				await assertSteered(queued, await host.agentSession.steer());
 			}
 
 			const transcriptBeforeEmptySteer = host.getSnapshot().transcript;
@@ -859,6 +923,7 @@ describe("Session Host lifetime", () => {
 			expect(host.getSnapshot().steeringMessages).toEqual([]);
 		} finally {
 			releaseActiveStep.resolve();
+			releaseAttachmentExternalization.resolve();
 			recorder.beforeStep = previousBeforeStep;
 			unsubscribe();
 			unsubscribeSubmission();
